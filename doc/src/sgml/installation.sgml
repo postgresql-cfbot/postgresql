@@ -1061,6 +1061,20 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
+      <varlistentry id="configure-option-with-krb-srvnam">
+       <term><option>--with-krb-srvnam=<replaceable>NAME</replaceable></option></term>
+       <listitem>
+        <para>
+         The default name of the Kerberos service principal used
+         by GSSAPI.
+         <literal>postgres</literal> is the default. There's usually no
+         reason to change this unless you are building for a Windows
+         environment, in which case it must be set to upper case
+         <literal>POSTGRES</literal>.
+        </para>
+       </listitem>
+      </varlistentry>
+
       <varlistentry id="configure-option-with-ldap">
        <term><option>--with-ldap</option></term>
        <listitem>
@@ -1214,23 +1228,6 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-     </variablelist>
-
-   </sect3>
-
-   <sect3 id="configure-options-anti-features">
-    <title>Anti-Features</title>
-
-    <para>
-     The options described in this section allow disabling
-     certain <productname>PostgreSQL</productname> features that are built
-     by default, but which might need to be turned off if the required
-     software or system features are not available.  Using these options is
-     not recommended unless really necessary.
-    </para>
-
-     <variablelist>
-
       <varlistentry id="configure-option-without-readline">
        <term><option>--without-readline</option></term>
        <listitem>
@@ -1270,30 +1267,17 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry id="configure-option-disable-spinlocks">
-       <term><option>--disable-spinlocks</option></term>
+      <varlistentry id="configure-option-with-pgport">
+       <term><option>--with-pgport=<replaceable>NUMBER</replaceable></option></term>
        <listitem>
         <para>
-         Allow the build to succeed even if <productname>PostgreSQL</productname>
-         has no CPU spinlock support for the platform.  The lack of
-         spinlock support will result in very poor performance; therefore,
-         this option should only be used if the build aborts and
-         informs you that the platform lacks spinlock support. If this
-         option is required to build <productname>PostgreSQL</productname> on
-         your platform, please report the problem to the
-         <productname>PostgreSQL</productname> developers.
-        </para>
-       </listitem>
-      </varlistentry>
-
-      <varlistentry id="configure-option-disable-atomics">
-       <term><option>--disable-atomics</option></term>
-       <listitem>
-        <para>
-         Disable use of CPU atomic operations.  This option does nothing on
-         platforms that lack such operations.  On platforms that do have
-         them, this will result in poor performance.  This option is only
-         useful for debugging or making performance comparisons.
+         Set <replaceable>NUMBER</replaceable> as the default port number for
+         server and clients. The default is 5432. The port can always
+         be changed later on, but if you specify it here then both
+         server and clients will have the same default compiled in,
+         which can be very convenient.  Usually the only good reason
+         to select a non-default value is if you intend to run multiple
+         <productname>PostgreSQL</productname> servers on the same machine.
         </para>
        </listitem>
       </varlistentry>
@@ -1429,43 +1413,27 @@ build-postgresql:
 
    </sect3>
 
-   <sect3 id="configure-options-misc">
-    <title>Miscellaneous</title>
+   <sect3 id="configure-options-data-layout">
+    <title>Data Layout</title>
 
-    <para>
-     It's fairly common, particularly for test builds, to adjust the
-     default port number with <option>--with-pgport</option>.
-     The other options in this section are recommended only for advanced
-     users.
-    </para>
+     <para>
+      These options affect how PostgreSQL lays out data on disk.
+      Note that changing these breaks on-disk database compatibility,
+      meaning you cannot use these binaries with data directories
+      created with different values of these options.
+     </para>
 
      <variablelist>
 
-      <varlistentry id="configure-option-with-pgport">
-       <term><option>--with-pgport=<replaceable>NUMBER</replaceable></option></term>
+      <varlistentry id="configure-option-with-blocksize">
+       <term><option>--with-blocksize=<replaceable>BLOCKSIZE</replaceable></option></term>
        <listitem>
         <para>
-         Set <replaceable>NUMBER</replaceable> as the default port number for
-         server and clients. The default is 5432. The port can always
-         be changed later on, but if you specify it here then both
-         server and clients will have the same default compiled in,
-         which can be very convenient.  Usually the only good reason
-         to select a non-default value is if you intend to run multiple
-         <productname>PostgreSQL</productname> servers on the same machine.
-        </para>
-       </listitem>
-      </varlistentry>
-
-      <varlistentry id="configure-option-with-krb-srvnam">
-       <term><option>--with-krb-srvnam=<replaceable>NAME</replaceable></option></term>
-       <listitem>
-        <para>
-         The default name of the Kerberos service principal used
-         by GSSAPI.
-         <literal>postgres</literal> is the default. There's usually no
-         reason to change this unless you are building for a Windows
-         environment, in which case it must be set to upper case
-         <literal>POSTGRES</literal>.
+         Set the <firstterm>block size</firstterm>, in kilobytes.  This is the unit
+         of storage and I/O within tables.  The default, 8 kilobytes,
+         is suitable for most situations; but other values may be useful
+         in special cases.
+         The value must be a power of 2 between 1 and 32 (kilobytes).
         </para>
        </listitem>
       </varlistentry>
@@ -1488,25 +1456,6 @@ build-postgresql:
          also set limits on the usable file size.
          It is recommended, though not absolutely required, that this value
          be a power of 2.
-         Note that changing this value breaks on-disk database compatibility,
-         meaning you cannot use <command>pg_upgrade</command> to upgrade to
-         a build with a different segment size.
-        </para>
-       </listitem>
-      </varlistentry>
-
-      <varlistentry id="configure-option-with-blocksize">
-       <term><option>--with-blocksize=<replaceable>BLOCKSIZE</replaceable></option></term>
-       <listitem>
-        <para>
-         Set the <firstterm>block size</firstterm>, in kilobytes.  This is the unit
-         of storage and I/O within tables.  The default, 8 kilobytes,
-         is suitable for most situations; but other values may be useful
-         in special cases.
-         The value must be a power of 2 between 1 and 32 (kilobytes).
-         Note that changing this value breaks on-disk database compatibility,
-         meaning you cannot use <command>pg_upgrade</command> to upgrade to
-         a build with a different block size.
         </para>
        </listitem>
       </varlistentry>
@@ -1520,9 +1469,6 @@ build-postgresql:
          is suitable for most situations; but other values may be useful
          in special cases.
          The value must be a power of 2 between 1 and 64 (kilobytes).
-         Note that changing this value breaks on-disk database compatibility,
-         meaning you cannot use <command>pg_upgrade</command> to upgrade to
-         a build with a different WAL block size.
         </para>
        </listitem>
       </varlistentry>
@@ -1691,6 +1637,34 @@ build-postgresql:
          option wins.
 
          This option is only for developers, to test segment related code.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry id="configure-option-disable-spinlocks">
+       <term><option>--disable-spinlocks</option></term>
+       <listitem>
+        <para>
+         Allow the build to succeed even if <productname>PostgreSQL</productname>
+         has no CPU spinlock support for the platform.  The lack of
+         spinlock support will result in very poor performance; therefore,
+         this option should only be used if the build aborts and
+         informs you that the platform lacks spinlock support. If this
+         option is required to build <productname>PostgreSQL</productname> on
+         your platform, please report the problem to the
+         <productname>PostgreSQL</productname> developers.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry id="configure-option-disable-atomics">
+       <term><option>--disable-atomics</option></term>
+       <listitem>
+        <para>
+         Disable use of CPU atomic operations.  This option does nothing on
+         platforms that lack such operations.  On platforms that do have
+         them, this will result in poor performance.  This option is only
+         useful for debugging or making performance comparisons.
         </para>
        </listitem>
       </varlistentry>
@@ -1993,19 +1967,39 @@ build-postgresql:
 
   <para>
 <synopsis>
-meson setup build --prefix=/usr/local/pgsql
+# create working directory
+mkdir postgres
+cd postgres
+
+# fetch source code
+git clone https://git.postgresql.org/git/postgresql.git src
+
+# setup and enter build directory (done only first time)
+## Unix based platforms
+meson setup build src --prefix=$PWD/install
+
+## Windows
+meson setup build src --prefix=%cd%/install
+
 cd build
+
+# Compile source
 ninja
-su
+
+# Install to the prefix directory specified above
 ninja install
-adduser postgres
-mkdir -p /usr/local/pgsql/data
-chown postgres /usr/local/pgsql/data
-su - postgres
-/usr/local/pgsql/bin/initdb -D /usr/local/pgsql/data
-/usr/local/pgsql/bin/pg_ctl -D /usr/local/pgsql/data -l logfile start
-/usr/local/pgsql/bin/createdb test
-/usr/local/pgsql/bin/psql test
+
+# Run all tests (optional, takes time)
+meson test
+
+# Initialize a new database
+../install/bin/initdb -D ../data
+
+# Start database
+../install/bin/pg_ctl -D ../data/ -l logfile start
+
+# Connect to the database
+../install/bin/psql -d postgres
 </synopsis>
    The long version is the rest of this
    <phrase>section</phrase>.
@@ -2057,8 +2051,7 @@ meson setup build -Dssl=openssl
 <screen>
 meson configure -Dcassert=true
 </screen>
-    <command>meson configure</command>'s commonly used command-line options
-    are explained in <xref linkend="meson-options"/>.
+    Commonly used build options for <command>meson configure</command> (and <command>meson setup</command>) are explained in <xref linkend="meson-options"/>.
    </para>
   </step>
 
@@ -2076,6 +2069,13 @@ ninja
     Ninja will automatically detect the number of CPUs in your computer and
     parallelize itself accordingly. You can override the number of parallel
     processes used with the command line argument <literal>-j</literal>.
+   </para>
+
+   <para>
+    If you want to build the docs, you can type:
+<screen>
+ninja docs
+</screen>
    </para>
 
    <para>
@@ -2118,9 +2118,9 @@ ninja
 <userinput>meson test</userinput>
 </screen>
     (This won't work as root; do it as an unprivileged user.)
-    See <xref linkend="regress"/> for
-    detailed information about interpreting the test results. You can
-    repeat this test at any later time by issuing the same command.
+    You can repeat this test at any later time by issuing the same command.
+    You can also see <xref linkend="regress"/> for
+    detailed information about interpreting the test results.
    </para>
 
    <para>
@@ -2191,16 +2191,16 @@ ninja install
   </sect2>
 
   <sect2 id="meson-options">
-   <title><literal>meson setup</literal> Options</title>
+   <title>Configuration Options</title>
 
    <para>
-    <command>meson setup</command>'s command-line options are explained below.
+    <command>meson setup</command> and <command>meson configure</command>
+    support several command-line options which are explained below.
     This list is not exhaustive (use <literal>meson configure --help</literal>
     to get one that is).  The options not covered here are meant for advanced
     use-cases, and are documented in the standard <ulink
     url="https://mesonbuild.com/Commands.html#configure">Meson
-    documentation</ulink>.  These arguments can be used with <command>meson
-    setup</command> as well.
+    documentation</ulink>.
    </para>
 
    <sect3 id="meson-options-locations">
@@ -2510,6 +2510,20 @@ ninja install
       </listitem>
      </varlistentry>
 
+     <varlistentry id="configure-krb-srvnam-meson">
+      <term><option>-Dkrb_srvnam=<replaceable>NAME</replaceable></option></term>
+      <listitem>
+       <para>
+        The default name of the Kerberos service principal used
+        by GSSAPI.
+        <literal>postgres</literal> is the default. There's usually no
+        reason to change this unless you are building for a Windows
+        environment, in which case it must be set to upper case
+        <literal>POSTGRES</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="configure-with-ldap-meson">
       <term><option>-Dldap={ auto | enabled | disabled }</option></term>
       <listitem>
@@ -2644,13 +2658,6 @@ ninja install
        </para>
       </listitem>
      </varlistentry>
-    </variablelist>
-   </sect3>
-
-   <sect3 id="meson-options-anti-features">
-    <title>Anti-Features</title>
-
-    <variablelist>
      <varlistentry id="configure-readline-meson">
       <term><option>-Dreadline={ auto | enabled | disabled }</option></term>
       <listitem>
@@ -2691,35 +2698,21 @@ ninja install
       </listitem>
      </varlistentry>
 
-     <varlistentry id="configure-spinlocks-meson">
-      <term><option>-Dspinlocks={ true | false }</option></term>
+     <varlistentry id="configure-pgport-meson">
+      <term><option>-Dpgport=<replaceable>NUMBER</replaceable></option></term>
       <listitem>
        <para>
-        This option is set to true by default; setting it to false will
-        allow the build to succeed even if <productname>PostgreSQL</productname>
-        has no CPU spinlock support for the platform.  The lack of
-        spinlock support will result in very poor performance; therefore,
-        this option should only be changed if the build aborts and
-        informs you that the platform lacks spinlock support. If setting this
-        option to false is required to build <productname>PostgreSQL</productname> on
-        your platform, please report the problem to the
-        <productname>PostgreSQL</productname> developers.
+        Set <replaceable>NUMBER</replaceable> as the default port number for
+        server and clients. The default is 5432. The port can always
+        be changed later on, but if you specify it here then both
+        server and clients will have the same default compiled in,
+        which can be very convenient.  Usually the only good reason
+        to select a non-default value is if you intend to run multiple
+        <productname>PostgreSQL</productname> servers on the same machine.
        </para>
       </listitem>
      </varlistentry>
 
-     <varlistentry id="configure-atomics-meson">
-      <term><option>-Datomics={ true | false }</option></term>
-      <listitem>
-       <para>
-        This option is set to true by default; setting it to false will
-        disable use of CPU atomic operations.  The option does nothing on
-        platforms that lack such operations.  On platforms that do have
-        them, disabling atomics will result in poor performance.  Changing
-        this option is only useful for debugging or making performance comparisons.
-       </para>
-      </listitem>
-     </varlistentry>
     </variablelist>
    </sect3>
 
@@ -2938,87 +2931,68 @@ ninja install
     </variablelist>
    </sect3>
 
-   <sect3 id="meson-options-misc">
-    <title>Miscellaneous</title>
+   <sect3 id="meson-options-data-layout">
+    <title>Data Layout</title>
 
-    <variablelist>
-     <varlistentry id="configure-pgport-meson">
-      <term><option>-Dpgport=<replaceable>NUMBER</replaceable></option></term>
-      <listitem>
-       <para>
-        Set <replaceable>NUMBER</replaceable> as the default port number for
-        server and clients. The default is 5432. The port can always
-        be changed later on, but if you specify it here then both
-        server and clients will have the same default compiled in,
-        which can be very convenient.  Usually the only good reason
-        to select a non-default value is if you intend to run multiple
-        <productname>PostgreSQL</productname> servers on the same machine.
-       </para>
-      </listitem>
-     </varlistentry>
+     <para>
+      These options affect how PostgreSQL lays out data on disk.
+      Note that changing these breaks on-disk database compatibility,
+      meaning you cannot use these binaries with data directories
+      created with different values of these options.
+     </para>
 
-     <varlistentry id="configure-krb-srvnam-meson">
-      <term><option>-Dkrb_srvnam=<replaceable>NAME</replaceable></option></term>
-      <listitem>
-       <para>
-        The default name of the Kerberos service principal used
-        by GSSAPI.
-        <literal>postgres</literal> is the default. There's usually no
-        reason to change this unless you are building for a Windows
-        environment, in which case it must be set to upper case
-        <literal>POSTGRES</literal>.
-       </para>
-      </listitem>
-     </varlistentry>
+     <variablelist>
 
-     <varlistentry id="configure-segsize-meson">
-      <term><option>-Dsegsize=<replaceable>SEGSIZE</replaceable></option></term>
-      <listitem>
-       <para>
-        Set the <firstterm>segment size</firstterm>, in gigabytes.  Large tables are
-        divided into multiple operating-system files, each of size equal
-        to the segment size.  This avoids problems with file size limits
-        that exist on many platforms.  The default segment size, 1 gigabyte,
-        is safe on all supported platforms.  If your operating system has
-        <quote>largefile</quote> support (which most do, nowadays), you can use
-        a larger segment size.  This can be helpful to reduce the number of
-        file descriptors consumed when working with very large tables.
-        But be careful not to select a value larger than is supported
-        by your platform and the file systems you intend to use.  Other
-        tools you might wish to use, such as <application>tar</application>, could
-        also set limits on the usable file size.
-        It is recommended, though not absolutely required, that this value
-        be a power of 2.
-       </para>
-      </listitem>
-     </varlistentry>
+      <varlistentry id="meson-option-with-blocksize">
+       <term><option>-Dblocksize=<replaceable>BLOCKSIZE</replaceable></option></term>
+       <listitem>
+        <para>
+         Set the <firstterm>block size</firstterm>, in kilobytes.  This is the unit
+         of storage and I/O within tables.  The default, 8 kilobytes,
+         is suitable for most situations; but other values may be useful
+         in special cases.
+         The value must be a power of 2 between 1 and 32 (kilobytes).
+        </para>
+       </listitem>
+      </varlistentry>
 
-     <varlistentry id="configure-blocksize-meson">
-      <term><option>-Dblocksize=<replaceable>BLOCKSIZE</replaceable></option></term>
-      <listitem>
-       <para>
-        Set the <firstterm>block size</firstterm>, in kilobytes.  This is the unit
-        of storage and I/O within tables.  The default, 8 kilobytes,
-        is suitable for most situations; but other values may be useful
-        in special cases.
-        The value must be a power of 2 between 1 and 32 (kilobytes).
-       </para>
-      </listitem>
-     </varlistentry>
+      <varlistentry id="meson-option-with-segsize">
+       <term><option>-Dsegsize=<replaceable>SEGSIZE</replaceable></option></term>
+       <listitem>
+        <para>
+         Set the <firstterm>segment size</firstterm>, in gigabytes.  Large tables are
+         divided into multiple operating-system files, each of size equal
+         to the segment size.  This avoids problems with file size limits
+         that exist on many platforms.  The default segment size, 1 gigabyte,
+         is safe on all supported platforms.  If your operating system has
+         <quote>largefile</quote> support (which most do, nowadays), you can use
+         a larger segment size.  This can be helpful to reduce the number of
+         file descriptors consumed when working with very large tables.
+         But be careful not to select a value larger than is supported
+         by your platform and the file systems you intend to use.  Other
+         tools you might wish to use, such as <application>tar</application>, could
+         also set limits on the usable file size.
+         It is recommended, though not absolutely required, that this value
+         be a power of 2.
+        </para>
+       </listitem>
+      </varlistentry>
 
-     <varlistentry id="configure-wal-blocksize-meson">
-      <term><option>-Dwal_blocksize=<replaceable>BLOCKSIZE</replaceable></option></term>
-      <listitem>
-       <para>
-        Set the <firstterm>WAL block size</firstterm>, in kilobytes.  This is the unit
-        of storage and I/O within the WAL log.  The default, 8 kilobytes,
-        is suitable for most situations; but other values may be useful
-        in special cases.
-        The value must be a power of 2 between 1 and 64 (kilobytes).
-       </para>
-      </listitem>
-     </varlistentry>
-    </variablelist>
+      <varlistentry id="meson-option-with-wal-blocksize">
+       <term><option>-Dwal_blocksize=<replaceable>BLOCKSIZE</replaceable></option></term>
+       <listitem>
+        <para>
+         Set the <firstterm>WAL block size</firstterm>, in kilobytes.  This is the unit
+         of storage and I/O within the WAL log.  The default, 8 kilobytes,
+         is suitable for most situations; but other values may be useful
+         in special cases.
+         The value must be a power of 2 between 1 and 64 (kilobytes).
+        </para>
+       </listitem>
+      </varlistentry>
+
+     </variablelist>
+
    </sect3>
 
    <sect3 id="meson-options-devel">
@@ -3190,9 +3164,38 @@ ninja install
         </para>
        </listitem>
       </varlistentry>
+      <varlistentry id="configure-spinlocks-meson">
+       <term><option>-Dspinlocks={ true | false }</option></term>
+       <listitem>
+        <para>
+         This option is set to true by default; setting it to false will
+         allow the build to succeed even if <productname>PostgreSQL</productname>
+         has no CPU spinlock support for the platform.  The lack of
+         spinlock support will result in very poor performance; therefore,
+         this option should only be changed if the build aborts and
+         informs you that the platform lacks spinlock support. If setting this
+         option to false is required to build <productname>PostgreSQL</productname> on
+         your platform, please report the problem to the
+         <productname>PostgreSQL</productname> developers.
+        </para>
+       </listitem>
+      </varlistentry>
 
-    </variablelist>
+      <varlistentry id="configure-atomics-meson">
+       <term><option>-Datomics={ true | false }</option></term>
+       <listitem>
+        <para>
+         This option is set to true by default; setting it to false will
+         disable use of CPU atomic operations.  The option does nothing on
+         platforms that lack such operations.  On platforms that do have
+         them, disabling atomics will result in poor performance.  Changing
+         this option is only useful for debugging or making performance comparisons.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
    </sect3>
+
   </sect2>
  </sect1>
 

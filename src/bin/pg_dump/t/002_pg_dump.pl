@@ -4453,13 +4453,25 @@ my %tests = (
 		create_sql   => '
 			CREATE TABLE dump_test.regress_pg_dump_table_am_0() USING heap;
 			CREATE TABLE dump_test.regress_pg_dump_table_am_1 (col1 int) USING regress_table_am;
-			CREATE TABLE dump_test.regress_pg_dump_table_am_2() USING heap;',
+			CREATE TABLE dump_test.regress_pg_dump_table_am_2() USING heap;
+			CREATE TABLE dump_test.regress_pg_dump_table_am_parent (id int) PARTITION BY RANGE (id) USING regress_table_am;
+			CREATE TABLE dump_test.regress_pg_dump_table_am_child PARTITION OF dump_test.regress_pg_dump_table_am_parent DEFAULT',
 		regexp => qr/^
 			\QSET default_table_access_method = regress_table_am;\E
 			(\n(?!SET[^;]+;)[^\n]*)*
 			\n\QCREATE TABLE dump_test.regress_pg_dump_table_am_1 (\E
 			\n\s+\Qcol1 integer\E
-			\n\);/xm,
+			\n\);
+			(.*\n)*
+			\QSET default_table_access_method = heap;\E
+			(\n(?!SET[^;]+;)[^\n]*)*
+			\n\QCREATE TABLE dump_test.regress_pg_dump_table_am_2 (\E
+			(.*\n)*
+			\QSET default_table_access_method = regress_table_am;\E
+			(\n(?!SET[^;]+;)[^\n]*)*
+			\n\QCREATE TABLE dump_test.regress_pg_dump_table_am_parent (\E
+			(\n(?!SET[^;]+;)[^\n]*)*
+			\n\QCREATE TABLE dump_test.regress_pg_dump_table_am_child (\E/xm,
 		like => {
 			%full_runs, %dump_test_schema_runs, section_pre_data => 1,
 		},

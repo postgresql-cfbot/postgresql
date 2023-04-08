@@ -1115,10 +1115,21 @@ drop table bool_rp;
 create table range_parted (a int, b int, c int) partition by range(a, b);
 create table range_parted1 partition of range_parted for values from (0,0) to (10,10);
 create table range_parted2 partition of range_parted for values from (10,10) to (20,20);
-create index on range_parted (a,b,c);
+create index range_parted_a_b_c_idx on range_parted (a,b,c);
 
 explain (costs off) select * from range_parted order by a,b,c;
 explain (costs off) select * from range_parted order by a desc,b desc,c desc;
+
+drop index range_parted_a_b_c_idx;
+
+-- Ensure we make use of an Append scan even when no index exists to provide
+-- presorted input.  We expect we can push a Sort below the Append.
+explain (costs off) select * from range_parted order by a;
+explain (costs off) select * from range_parted order by a desc;
+
+-- As above but with a more strict ordering requirement
+explain (costs off) select * from range_parted order by a,b;
+explain (costs off) select * from range_parted order by a desc,b desc;
 
 drop table range_parted;
 

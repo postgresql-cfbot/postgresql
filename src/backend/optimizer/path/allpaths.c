@@ -1321,6 +1321,43 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 	pa_subpaths_valid = enable_parallel_append && rel->consider_parallel;
 
 	/*
+	 * When the partitioned table is partitioned in a way that naturally
+	 * guarantees some ordering, we'll add the pathkeys for that order to
+	 * all_child_pathkeys.  In generate_orderedappend_paths this may allow
+	 * sorts to be pushed below an Append in more cases.
+	 */
+	if (rel->part_scheme != NULL && IS_SIMPLE_REL(rel) &&
+		partitions_are_ordered(rel->boundinfo, rel->live_parts))
+	{
+		List	   *partition_pathkeys;
+		bool		partial;
+
+		partition_pathkeys = build_partition_pathkeys(root, rel,
+														ForwardScanDirection,
+														&partial);
+
+		partition_pathkeys = truncate_useless_pathkeys(root, rel,
+													   partition_pathkeys);
+
+		/* we need not pay attention to partial matches */
+		if (partition_pathkeys != NULL)
+			all_child_pathkeys = lappend(all_child_pathkeys,
+										 partition_pathkeys);
+
+		/* as above but for DESC ordering */
+		partition_pathkeys = build_partition_pathkeys(root, rel,
+													  BackwardScanDirection,
+													  &partial);
+
+		partition_pathkeys = truncate_useless_pathkeys(root, rel,
+													   partition_pathkeys);
+
+		if (partition_pathkeys != NULL)
+			all_child_pathkeys = lappend(all_child_pathkeys,
+										 partition_pathkeys);
+	}
+
+	/*
 	 * For every non-dummy child, remember the cheapest path.  Also, identify
 	 * all pathkeys (orderings) and parameterizations (required_outer sets)
 	 * available for the non-dummy member relations.

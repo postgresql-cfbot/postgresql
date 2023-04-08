@@ -4969,6 +4969,32 @@ to_hex64(PG_FUNCTION_ARGS)
 	PG_RETURN_TEXT_P(cstring_to_text(ptr));
 }
 
+#define OCT_DIGIT_BITS 3
+#define OCT_DIGIT_BITMASK 0x7
+/*
+ * Convert an int32 to a string containing a base 8 (oct) representation of
+ * the number.
+ */
+Datum
+to_oct32(PG_FUNCTION_ARGS)
+{
+	uint32		value = (uint32) PG_GETARG_INT32(0);
+	char	    *ptr;
+	const char *digits = "01234567";
+	char		buf[32];		/* bigger than needed, but reasonable */
+
+	ptr = buf + sizeof(buf) - 1;
+	*ptr = '\0';
+
+	do
+	{
+		*--ptr = digits[value & OCT_DIGIT_BITMASK];
+		value >>= OCT_DIGIT_BITS;
+	} while (value);
+
+	PG_RETURN_TEXT_P(cstring_to_text(ptr));
+}
+
 /*
  * Return the size of a datum, possibly compressed
  *

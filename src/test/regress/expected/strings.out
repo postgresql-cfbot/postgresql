@@ -2144,6 +2144,15 @@ select to_hex(256::bigint*256::bigint*256::bigint*256::bigint - 1) AS "ffffffff"
 (1 row)
 
 --
+-- test to_oct
+--
+select to_oct(256*256*256 - 1) AS "77777777";
+ 77777777 
+----------
+ 77777777
+(1 row)
+
+--
 -- SHA-2
 --
 SET bytea_output TO hex;

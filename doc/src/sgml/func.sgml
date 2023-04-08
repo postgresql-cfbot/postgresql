@@ -3704,6 +3704,23 @@ repeat('Pg', 4) <returnvalue>PgPgPgPg</returnvalue>
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>to_oct</primary>
+        </indexterm>
+        <function>to_oct</function> ( <type>integer</type> )
+        <returnvalue>text</returnvalue>
+       </para>
+       <para>
+        Converts the number to its equivalent octal representation.
+       </para>
+       <para>
+        <literal>to_oct(32)</literal>
+        <returnvalue>40</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>to_ascii</primary>
         </indexterm>
         <function>to_ascii</function> ( <parameter>string</parameter> <type>text</type> )

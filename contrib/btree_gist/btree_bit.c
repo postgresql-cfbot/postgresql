@@ -7,6 +7,7 @@
 #include "btree_utils_var.h"
 #include "utils/builtins.h"
 #include "utils/bytea.h"
+#include "utils/sortsupport.h"
 #include "utils/varbit.h"
 
 
@@ -19,9 +20,16 @@ PG_FUNCTION_INFO_V1(gbt_bit_picksplit);
 PG_FUNCTION_INFO_V1(gbt_bit_consistent);
 PG_FUNCTION_INFO_V1(gbt_bit_penalty);
 PG_FUNCTION_INFO_V1(gbt_bit_same);
+PG_FUNCTION_INFO_V1(gbt_bit_sortsupport);
 
 
 /* define for comparison */
+
+static int
+bit_fast_cmp(Datum x, Datum y, SortSupport ssup)
+{
+	return DatumGetInt32(DirectFunctionCall2(byteacmp, x, y));
+}
 
 static bool
 gbt_bitgt(const void *a, const void *b, Oid collation, FmgrInfo *flinfo)
@@ -207,4 +215,15 @@ gbt_bit_penalty(PG_FUNCTION_ARGS)
 
 	PG_RETURN_POINTER(gbt_var_penalty(result, o, n, PG_GET_COLLATION(),
 									  &tinfo, fcinfo->flinfo));
+}
+
+Datum
+gbt_bit_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = bit_fast_cmp;
+	ssup->ssup_extra = NULL;
+
+	PG_RETURN_VOID();
 }

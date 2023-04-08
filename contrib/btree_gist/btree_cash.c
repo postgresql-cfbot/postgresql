@@ -7,6 +7,7 @@
 #include "btree_utils_num.h"
 #include "common/int.h"
 #include "utils/cash.h"
+#include "utils/sortsupport.h"
 
 typedef struct
 {
@@ -25,6 +26,16 @@ PG_FUNCTION_INFO_V1(gbt_cash_consistent);
 PG_FUNCTION_INFO_V1(gbt_cash_distance);
 PG_FUNCTION_INFO_V1(gbt_cash_penalty);
 PG_FUNCTION_INFO_V1(gbt_cash_same);
+PG_FUNCTION_INFO_V1(gbt_cash_sortsupport);
+
+static int
+cash_fast_cmp(Datum x, Datum y, SortSupport ssup)
+{
+	bool	arg1 = DatumGetCash(x);
+	bool	arg2 = DatumGetCash(y);
+
+	return arg1 - arg2;
+}
 
 static bool
 gbt_cashgt(const void *a, const void *b, FmgrInfo *flinfo)
@@ -214,4 +225,15 @@ gbt_cash_same(PG_FUNCTION_ARGS)
 
 	*result = gbt_num_same((void *) b1, (void *) b2, &tinfo, fcinfo->flinfo);
 	PG_RETURN_POINTER(result);
+}
+
+Datum
+gbt_cash_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = cash_fast_cmp;
+	ssup->ssup_extra = NULL;
+
+	PG_RETURN_VOID();
 }

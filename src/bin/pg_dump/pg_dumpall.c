@@ -26,6 +26,7 @@
 #include "common/string.h"
 #include "dumputils.h"
 #include "fe_utils/string_utils.h"
+#include "filter.h"
 #include "getopt_long.h"
 #include "pg_backup.h"
 
@@ -81,6 +82,7 @@ static PGresult *executeQuery(PGconn *conn, const char *query);
 static void executeCommand(PGconn *conn, const char *query);
 static void expand_dbname_patterns(PGconn *conn, SimpleStringList *patterns,
 								   SimpleStringList *names);
+static void read_dumpall_filters(const char *filename, SimpleStringList *patterns);
 
 static char pg_dump_bin[MAXPGPATH];
 static const char *progname;
@@ -158,6 +160,7 @@ main(int argc, char *argv[])
 		{"disable-triggers", no_argument, &disable_triggers, 1},
 		{"exclude-database", required_argument, NULL, 6},
 		{"extra-float-digits", required_argument, NULL, 5},
+		{"filter", required_argument, NULL, 8},
 		{"if-exists", no_argument, &if_exists, 1},
 		{"inserts", no_argument, &inserts, 1},
 		{"lock-wait-timeout", required_argument, NULL, 2},
@@ -358,6 +361,10 @@ main(int argc, char *argv[])
 			case 7:
 				appendPQExpBufferStr(pgdumpopts, " --rows-per-insert ");
 				appendShellString(pgdumpopts, optarg);
+				break;
+
+			case 8:
+				read_dumpall_filters(optarg, &database_exclude_patterns);
 				break;
 
 			default:
@@ -653,6 +660,7 @@ help(void)
 	printf(_("  --disable-triggers           disable triggers during data-only restore\n"));
 	printf(_("  --exclude-database=PATTERN   exclude databases whose name matches PATTERN\n"));
 	printf(_("  --extra-float-digits=NUM     override default setting for extra_float_digits\n"));
+	printf(_("  --filter=FILENAME            exclude databases specified in filter file\n"));
 	printf(_("  --if-exists                  use IF EXISTS when dropping objects\n"));
 	printf(_("  --inserts                    dump data as INSERT commands, rather than COPY\n"));
 	printf(_("  --load-via-partition-root    load partitions via the root table\n"));
@@ -1908,7 +1916,6 @@ executeCommand(PGconn *conn, const char *query)
 	PQclear(res);
 }
 
-
 /*
  * dumpTimestamp
  */
@@ -1931,4 +1938,55 @@ hash_string_pointer(char *s)
 	unsigned char *ss = (unsigned char *) s;
 
 	return hash_bytes(ss, strlen(s));
+}
+
+/*
+ * read_dumpall_filters - retrieve database identifier patterns from file
+ *
+ * Parse the specified filter file for include and exclude patterns, and add
+ * them to the relevant lists.  If the filename is "-" then filters will be
+ * read from STDIN rather than a file.
+ *
+ * At the moment, the only allowed filter is for database exclusion.
+ */
+static void
+read_dumpall_filters(const char *filename, SimpleStringList *pattern)
+{
+	FilterStateData fstate;
+	bool		is_include;
+	char	   *objname;
+	FilterObjectType objtype;
+
+	if (!filter_init(&fstate, filename))
+		exit_nicely(1);
+
+	while (filter_read_item(&fstate, &is_include, &objname, &objtype))
+	{
+		if (objtype == FILTER_OBJECT_TYPE_NONE)
+			continue;
+
+		if (objtype == FILTER_OBJECT_TYPE_DATABASE)
+		{
+			if (!is_include)
+				simple_string_list_append(pattern, objname);
+			else
+			{
+				log_unallowed_filter_type(&fstate, objtype, is_include);
+				break;
+			}
+		}
+		else
+		{
+			log_unsupported_filter_object_type(&fstate, "pg_dumpall", objtype);
+			break;
+		}
+
+		if (objname)
+			free(objname);
+	}
+
+	filter_free(&fstate);
+
+	if (fstate.is_error)
+		exit_nicely(1);
 }

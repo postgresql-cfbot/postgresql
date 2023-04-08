@@ -133,6 +133,12 @@ select range_intersect_agg(nr) from numrange_test;
 select range_intersect_agg(nr) from numrange_test where false;
 select range_intersect_agg(nr) from numrange_test where nr @> 4.0;
 
+select ranges_lower(ARRAY[1,2,3]); -- should fail
+select ranges_lower(array_agg(nr order by nr)), ranges_upper(array_agg(nr order by nr)) from numrange_test;
+select ranges_lower(a), ranges_upper(a) from (
+  select ARRAY[ array_agg(nr order by nr), array_agg(nr order by nr desc) ] from numrange_test
+) t(a);
+
 analyze numrange_test;
 
 create table numrange_test2(nr numrange);
@@ -195,6 +201,7 @@ select * from textrange_test where tr = '("b","g")';
 select * from textrange_test where tr = '["b","g")';
 select * from textrange_test where tr < 'empty';
 
+select ranges_lower(array_agg(tr order by tr)), ranges_upper(array_agg(tr order by tr)) from textrange_test;
 
 -- test canonical form for int4range
 select int4range(1, 10, '[]');

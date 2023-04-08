@@ -26,6 +26,8 @@
 
 #include "catalog/pg_operator.h"
 #include "commands/vacuum.h"
+#include "utils/array.h"
+#include "utils/arrayaccess.h"
 #include "utils/float.h"
 #include "utils/fmgrprotos.h"
 #include "utils/lsyscache.h"
@@ -38,6 +40,7 @@ static int	range_bound_qsort_cmp(const void *a1, const void *a2, void *arg);
 static void compute_range_stats(VacAttrStats *stats,
 								AnalyzeAttrFetchFunc fetchfunc, int samplerows,
 								double totalrows);
+static Datum ranges_bounds_common(TypeCacheEntry *typentry, AnyArrayType *array, bool need_lower);
 
 /*
  * range_typanalyze -- typanalyze function for range columns
@@ -427,3 +430,107 @@ compute_range_stats(VacAttrStats *stats, AnalyzeAttrFetchFunc fetchfunc,
 	 * hashtable should also go away, as it used a child memory context.
 	 */
 }
+
+/*
+ * ranges_bounds_common() -- for ranges_upper_bounds() and ranges_lower_bounds()
+ */
+Datum
+ranges_bounds_common(TypeCacheEntry *typentry, AnyArrayType *array, bool need_lower)
+{
+	int			ndims = AARR_NDIM(array);
+	int		   *dims = AARR_DIMS(array);
+	int		   *lbs = AARR_LBOUND(array);
+	int			i;
+	array_iter	iter;
+	int			nelems;
+	Datum	   *elems;
+	bool	   *nulls;
+	TypeCacheEntry *typentry_element;
+
+	if (typentry->typtype != TYPTYPE_RANGE)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATATYPE_MISMATCH),
+				 errmsg("expected array of ranges")));
+
+	ndims = AARR_NDIM(array);
+	dims = AARR_DIMS(array);
+	nelems = ArrayGetNItems(ndims, dims);
+
+	elems = (Datum *) palloc(nelems * sizeof(Datum));
+	nulls = (bool *) palloc(nelems * sizeof(bool));
+
+	array_iter_setup(&iter, array);
+
+	for (i = 0; i < nelems; i++)
+	{
+		Datum		itemvalue;
+		bool		isnull;
+		RangeBound	lower;
+		RangeBound	upper;
+		RangeBound *bound;
+		bool		empty;
+
+		/* Get source element, checking for NULL */
+		itemvalue = array_iter_next(&iter, &isnull, i,
+									typentry->typlen, typentry->typbyval,
+									typentry->typalign);
+
+		Assert(!isnull);
+
+		range_deserialize(typentry, (RangeType *) itemvalue, &lower, &upper, &empty);
+		bound = need_lower ? &lower : &upper;
+	    /* NULL if there's no finite bound - for consistency with range_lower/range_upper */
+		if (empty || bound->infinite)
+		{
+			nulls[i] = true;
+			elems[i] = (Datum) 0;
+		}
+		else
+		{
+			nulls[i] = false;
+			elems[i] = bound->val;
+		}
+	}
+
+	typentry_element = typentry->rngelemtype;
+
+	PG_RETURN_ARRAYTYPE_P(construct_md_array(elems, nulls,
+						  ndims, dims, lbs,
+						  typentry_element->type_id,
+						  typentry_element->typlen,
+						  typentry_element->typbyval,
+						  typentry_element->typalign));
+}
+
+/*
+ * ranges_lower_bounds() -- return array of lower bounds for ranges
+ */
+Datum
+ranges_lower_bounds(PG_FUNCTION_ARGS)
+{
+	AnyArrayType   *array = PG_GETARG_ANY_ARRAY_P(0);
+	Oid				element_type = AARR_ELEMTYPE(array);
+	TypeCacheEntry *typentry;
+
+	/* Get information about range type; note column might be a domain */
+	typentry = range_get_typcache(fcinfo, getBaseType(element_type));
+
+	return ranges_bounds_common(typentry, array, true);
+}
+
+/*
+ * ranges_upper_bounds() -- return array of upper bounds for ranges
+ */
+Datum
+ranges_upper_bounds(PG_FUNCTION_ARGS)
+{
+	AnyArrayType   *array = PG_GETARG_ANY_ARRAY_P(0);
+	Oid				element_type = AARR_ELEMTYPE(array);
+	TypeCacheEntry *typentry;
+
+	/* Get information about range type; note column might be a domain */
+	typentry = range_get_typcache(fcinfo, getBaseType(element_type));
+
+	return ranges_bounds_common(typentry, array, false);
+}
+

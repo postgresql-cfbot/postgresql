@@ -597,6 +597,22 @@ select range_intersect_agg(nr) from numrange_test where nr @> 4.0;
  [3,5)
 (1 row)
 
+select ranges_lower(ARRAY[1,2,3]); -- should fail
+ERROR:  type 23 is not a range type
+select ranges_lower(array_agg(nr order by nr)), ranges_upper(array_agg(nr order by nr)) from numrange_test;
+        ranges_lower        |        ranges_upper        
+----------------------------+----------------------------
+ {NULL,NULL,NULL,1.1,1.7,3} | {NULL,5,NULL,2.2,1.7,NULL}
+(1 row)
+
+select ranges_lower(a), ranges_upper(a) from (
+  select ARRAY[ array_agg(nr order by nr), array_agg(nr order by nr desc) ] from numrange_test
+) t(a);
+                      ranges_lower                       |                      ranges_upper                       
+---------------------------------------------------------+---------------------------------------------------------
+ {{NULL,NULL,NULL,1.1,1.7,3},{3,1.7,1.1,NULL,NULL,NULL}} | {{NULL,5,NULL,2.2,1.7,NULL},{NULL,1.7,2.2,NULL,5,NULL}}
+(1 row)
+
 analyze numrange_test;
 create table numrange_test2(nr numrange);
 create index numrange_test2_hash_idx on numrange_test2 using hash (nr);
@@ -750,6 +766,12 @@ select * from textrange_test where tr < 'empty';
  tr 
 ----
 (0 rows)
+
+select ranges_lower(array_agg(tr order by tr)), ranges_upper(array_agg(tr order by tr)) from textrange_test;
+      ranges_lower      |      ranges_upper      
+------------------------+------------------------
+ {NULL,NULL,NULL,a,b,d} | {NULL,q,NULL,NULL,g,d}
+(1 row)
 
 -- test canonical form for int4range
 select int4range(1, 10, '[]');

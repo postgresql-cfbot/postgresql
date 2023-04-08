@@ -24,6 +24,7 @@
 #include "catalog/pg_enum.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
+#include "commands/progress.h"
 #include "commands/vacuum.h"
 #include "executor/execParallel.h"
 #include "libpq/libpq.h"
@@ -1195,6 +1196,17 @@ HandleParallelMessage(ParallelContext *pcxt, int i, StringInfo msg)
 				pq_endmessage(msg);
 
 				NotifyMyFrontEnd(channel, payload, pid);
+
+				break;
+			}
+
+		case 'P':				/* Parallel progress reporting */
+			{
+				/* update progress */
+				int index = pq_getmsgint(msg, 4);
+				int incr = pq_getmsgint(msg, 1);
+
+				pgstat_progress_incr_param(index, incr);
 
 				break;
 			}

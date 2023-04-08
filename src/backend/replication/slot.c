@@ -181,7 +181,16 @@ ReplicationSlotShmemExit(int code, Datum arg)
 {
 	/* Make sure active replication slots are released */
 	if (MyReplicationSlot != NULL)
+	{
+		bool	is_physical;
+		char	*slotname;
+
+		is_physical = SlotIsPhysical(MyReplicationSlot);
+		slotname = pstrdup(NameStr(MyReplicationSlot->data.name));
 		ReplicationSlotRelease();
+		LogReplicationSlotRelease(is_physical, slotname);
+		pfree(slotname);
+	}
 
 	/* Also cleanup all the temporary slots. */
 	ReplicationSlotCleanup();
@@ -446,6 +455,9 @@ ReplicationSlotName(int index, Name name)
  *
  * An error is raised if nowait is true and the slot is currently in use. If
  * nowait is false, we sleep until the slot is released by the owning process.
+ *
+ * Note: use LogReplicationSlotAcquire() if needed, to log a message after
+ * acquiring the replication slot.
  */
 void
 ReplicationSlotAcquire(const char *name, bool nowait)
@@ -543,6 +555,9 @@ retry:
  *
  * This or another backend can re-acquire the slot later.
  * Resources this slot requires will be preserved.
+ *
+ * Note: use LogReplicationSlotRelease() if needed, to log a message after
+ * releasing the replication slot.
  */
 void
 ReplicationSlotRelease(void)
@@ -595,6 +610,42 @@ ReplicationSlotRelease(void)
 	MyProc->statusFlags &= ~PROC_IN_LOGICAL_DECODING;
 	ProcGlobal->statusFlags[MyProc->pgxactoff] = MyProc->statusFlags;
 	LWLockRelease(ProcArrayLock);
+}
+
+/*
+ * Helper function to log a message after replication slot acquisition.
+ */
+void
+LogReplicationSlotAcquire(bool is_physical, const char *slotname)
+{
+	Assert(MyReplicationSlot != NULL);
+
+	if (is_physical)
+		ereport(log_replication_commands ? LOG : DEBUG3,
+				errmsg("physical replication slot \"%s\" is acquired",
+					   slotname));
+	else
+		ereport(log_replication_commands ? LOG : DEBUG3,
+				errmsg("logical replication slot \"%s\" is acquired",
+						slotname));
+}
+
+/*
+ * Helper function to log a message after replication slot release.
+ */
+void
+LogReplicationSlotRelease(bool is_physical, const char *slotname)
+{
+	Assert(MyReplicationSlot == NULL);
+
+	if (is_physical)
+		ereport(log_replication_commands ? LOG : DEBUG3,
+				errmsg("physical replication slot \"%s\" is released",
+						slotname));
+	else
+		ereport(log_replication_commands ? LOG : DEBUG3,
+				errmsg("logical replication slot \"%s\" is released",
+						slotname));
 }
 
 /*

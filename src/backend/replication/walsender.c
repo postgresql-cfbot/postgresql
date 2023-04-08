@@ -322,7 +322,16 @@ WalSndErrorCleanup(void)
 		wal_segment_close(xlogreader);
 
 	if (MyReplicationSlot != NULL)
+	{
+		bool	is_physical;
+		char	*slotname;
+
+		is_physical = SlotIsPhysical(MyReplicationSlot);
+		slotname = pstrdup(NameStr(MyReplicationSlot->data.name));
 		ReplicationSlotRelease();
+		LogReplicationSlotRelease(is_physical, slotname);
+		pfree(slotname);
+	}
 
 	ReplicationSlotCleanup();
 
@@ -703,6 +712,8 @@ StartReplication(StartReplicationCmd *cmd)
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 					 errmsg("cannot use a logical replication slot for physical replication")));
 
+		LogReplicationSlotAcquire(true, cmd->slotname);
+
 		/*
 		 * We don't need to verify the slot's restart_lsn here; instead we
 		 * rely on the caller requesting the starting point to use.  If the
@@ -843,7 +854,10 @@ StartReplication(StartReplicationCmd *cmd)
 	}
 
 	if (cmd->slotname)
+	{
 		ReplicationSlotRelease();
+		LogReplicationSlotRelease(true, cmd->slotname);
+	}
 
 	/*
 	 * Copy is finished now. Send a single-row result set indicating the next
@@ -1264,6 +1278,8 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 
 	ReplicationSlotAcquire(cmd->slotname, true);
 
+	LogReplicationSlotAcquire(false, cmd->slotname);
+
 	/*
 	 * Force a disconnect, so that the decoding code doesn't need to care
 	 * about an eventual switch from running in recovery, to running in a
@@ -1325,6 +1341,7 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 
 	FreeDecodingContext(logical_decoding_ctx);
 	ReplicationSlotRelease();
+	LogReplicationSlotRelease(false, cmd->slotname);
 
 	replication_active = false;
 	if (got_STOPPING)

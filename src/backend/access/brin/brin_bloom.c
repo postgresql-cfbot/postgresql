@@ -125,9 +125,11 @@
 #include "access/stratnum.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_amop.h"
+#include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/lsyscache.h"
+#include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
 
@@ -150,6 +152,13 @@
  * (Must be equal to minimum of private procnums).
  */
 #define		PROCNUM_BASE			11
+
+/*
+ * We use some private sk_flags bits in preprocessed scan keys.  We're allowed
+ * to use bits 16-31 (see skey.h).  The uppermost bits are copied from the
+ * index's indoption[] array entry for the index attribute.
+ */
+#define SK_BRIN_HASHES	0x00010000	/* deconstructed array, calculated hashes */
 
 /*
  * Storage type for BRIN's reloptions.
@@ -259,6 +268,48 @@ typedef struct BloomFilter
 	char		data[FLEXIBLE_ARRAY_MEMBER];
 } BloomFilter;
 
+/*
+ * bloom_filter_size
+ *		Calculate Bloom filter parameters (nbits, nbytes, nhashes).
+ *
+ * Given expected number of distinct values and desired false positive rate,
+ * calculates the optimal parameters of the Bloom filter.
+ *
+ * The resulting parameters are returned through nbytesp (number of bytes),
+ * nbitsp (number of bits) and nhashesp (number of hash functions). If a
+ * pointer is NULL, the parameter is not returned.
+ */
+static void
+bloom_filter_size(int ndistinct, double false_positive_rate,
+				  int *nbytesp, int *nbitsp, int *nhashesp)
+{
+	double	k;
+	int		nbits,
+			nbytes;
+
+	/* sizing bloom filter: -(n * ln(p)) / (ln(2))^2 */
+	nbits = ceil(-(ndistinct * log(false_positive_rate)) / pow(log(2.0), 2));
+
+	/* round m to whole bytes */
+	nbytes = ((nbits + 7) / 8);
+	nbits = nbytes * 8;
+
+	/*
+	 * round(log(2.0) * m / ndistinct), but assume round() may not be
+	 * available on Windows
+	 */
+	k = log(2.0) * nbits / ndistinct;
+	k = (k - floor(k) >= 0.5) ? ceil(k) : floor(k);
+
+	if (nbytesp)
+		*nbytesp = nbytes;
+
+	if (nbitsp)
+		*nbitsp = nbits;
+
+	if (nhashesp)
+		*nhashesp = (int) k;
+}
 
 /*
  * bloom_init
@@ -275,19 +326,15 @@ bloom_init(int ndistinct, double false_positive_rate)
 
 	int			nbits;			/* size of filter / number of bits */
 	int			nbytes;			/* size of filter / number of bytes */
-
-	double		k;				/* number of hash functions */
+	int			nhashes;		/* number of hash functions */
 
 	Assert(ndistinct > 0);
 	Assert((false_positive_rate >= BLOOM_MIN_FALSE_POSITIVE_RATE) &&
 		   (false_positive_rate < BLOOM_MAX_FALSE_POSITIVE_RATE));
 
-	/* sizing bloom filter: -(n * ln(p)) / (ln(2))^2 */
-	nbits = ceil(-(ndistinct * log(false_positive_rate)) / pow(log(2.0), 2));
-
-	/* round m to whole bytes */
-	nbytes = ((nbits + 7) / 8);
-	nbits = nbytes * 8;
+	/* calculate bloom filter size / parameters */
+	bloom_filter_size(ndistinct, false_positive_rate,
+					  &nbytes, &nbits, &nhashes);
 
 	/*
 	 * Reject filters that are obviously too large to store on a page.
@@ -311,13 +358,6 @@ bloom_init(int ndistinct, double false_positive_rate)
 			 BloomMaxFilterSize);
 
 	/*
-	 * round(log(2.0) * m / ndistinct), but assume round() may not be
-	 * available on Windows
-	 */
-	k = log(2.0) * nbits / ndistinct;
-	k = (k - floor(k) >= 0.5) ? ceil(k) : floor(k);
-
-	/*
 	 * We allocate the whole filter. Most of it is going to be 0 bits, so the
 	 * varlena is easy to compress.
 	 */
@@ -326,7 +366,7 @@ bloom_init(int ndistinct, double false_positive_rate)
 	filter = (BloomFilter *) palloc0(len);
 
 	filter->flags = 0;
-	filter->nhashes = (int) k;
+	filter->nhashes = nhashes;
 	filter->nbits = nbits;
 
 	SET_VARSIZE(filter, len);
@@ -371,21 +411,14 @@ bloom_add_value(BloomFilter *filter, uint32 value, bool *updated)
 	return filter;
 }
 
-
 /*
  * bloom_contains_value
  * 		Check if the bloom filter contains a particular value.
  */
 static bool
-bloom_contains_value(BloomFilter *filter, uint32 value)
+bloom_contains_hashes(BloomFilter *filter, uint64 h1, uint64 h2)
 {
 	int			i;
-	uint64		h1,
-				h2;
-
-	/* calculate the two hashes */
-	h1 = hash_bytes_uint32_extended(value, BLOOM_SEED_1) % filter->nbits;
-	h2 = hash_bytes_uint32_extended(value, BLOOM_SEED_2) % filter->nbits;
 
 	/* compute the requested number of hashes */
 	for (i = 0; i < filter->nhashes; i++)
@@ -559,6 +592,104 @@ brin_bloom_add_value(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(updated);
 }
 
+typedef struct HashCache {
+	int		nelements;
+	uint64 *h1;
+	uint64 *h2;
+} HashCache;
+
+Datum
+brin_bloom_preprocess(PG_FUNCTION_ARGS)
+{
+	BrinDesc   *bdesc = (BrinDesc *) PG_GETARG_POINTER(0);
+	ScanKey		key = (ScanKey) PG_GETARG_POINTER(1);
+	BloomOptions *opts = (BloomOptions *) PG_GET_OPCLASS_OPTIONS();
+	ScanKey		newkey;
+	HashCache  *cache = palloc0(sizeof(HashCache));
+
+	int			nbits;
+	FmgrInfo   *finfo;
+	uint32		hashValue;
+
+	/* we'll need to calculate hashes, so get the proc */
+	finfo = bloom_get_procinfo(bdesc, key->sk_attno, PROCNUM_HASH);
+
+	/*
+	 * We don't have a filter from any range yet, so we just re-calculate
+	 * the size (number of bits) just like bloom_init.
+	 */
+	bloom_filter_size(brin_bloom_get_ndistinct(bdesc, opts),
+					  BloomGetFalsePositiveRate(opts),
+					  NULL, &nbits, NULL);
+
+	/* precalculate the hash even for simple scan keys */
+	if (!(key->sk_flags & SK_SEARCHARRAY))
+	{
+		Datum value = key->sk_argument;
+
+		cache->nelements = 1;
+		cache->h1 = (uint64 *) palloc0(sizeof(uint64));
+		cache->h2 = (uint64 *) palloc0(sizeof(uint64));
+
+		hashValue = DatumGetUInt32(FunctionCall1Coll(finfo, key->sk_collation, value));
+
+		cache->h1[0] = hash_bytes_uint32_extended(hashValue, BLOOM_SEED_1) % nbits;
+		cache->h2[0] = hash_bytes_uint32_extended(hashValue, BLOOM_SEED_2) % nbits;
+	}
+	else
+	{
+		ArrayType  *arrayval;
+		int16		elmlen;
+		bool		elmbyval;
+		char		elmalign;
+		int			num_elems;
+		Datum	   *elem_values;
+		bool	   *elem_nulls;
+
+		arrayval = DatumGetArrayTypeP(key->sk_argument);
+
+		get_typlenbyvalalign(ARR_ELEMTYPE(arrayval),
+							 &elmlen, &elmbyval, &elmalign);
+
+		deconstruct_array(arrayval,
+						  ARR_ELEMTYPE(arrayval),
+						  elmlen, elmbyval, elmalign,
+						  &elem_values, &elem_nulls, &num_elems);
+
+		cache->h1 = (uint64 *) palloc0(sizeof(uint64) * num_elems);
+		cache->h2 = (uint64 *) palloc0(sizeof(uint64) * num_elems);
+
+		for (int i = 0; i < num_elems; i++)
+		{
+			Datum	element = elem_values[i];
+
+			/* ignore NULL elements */
+			if (elem_nulls[i])
+				continue;
+
+			hashValue = DatumGetUInt32(FunctionCall1Coll(finfo, key->sk_collation, element));
+
+			cache->h1[cache->nelements] = hash_bytes_uint32_extended(hashValue, BLOOM_SEED_1) % nbits;
+			cache->h2[cache->nelements] = hash_bytes_uint32_extended(hashValue, BLOOM_SEED_2) % nbits;
+
+			cache->nelements++;
+		}
+	}
+
+	newkey = palloc0(sizeof(ScanKeyData));
+
+	ScanKeyEntryInitializeWithInfo(newkey,
+								   (key->sk_flags | SK_BRIN_HASHES),
+								   key->sk_attno,
+								   key->sk_strategy,
+								   key->sk_subtype,
+								   key->sk_collation,
+								   &key->sk_func,
+								   PointerGetDatum(cache));
+
+	PG_RETURN_POINTER(newkey);
+}
+
 /*
  * Given an index tuple corresponding to a certain page range and a scan key,
  * return whether the scan key is consistent with the index tuple's bloom
@@ -567,16 +698,10 @@ brin_bloom_add_value(PG_FUNCTION_ARGS)
 Datum
 brin_bloom_consistent(PG_FUNCTION_ARGS)
 {
-	BrinDesc   *bdesc = (BrinDesc *) PG_GETARG_POINTER(0);
 	BrinValues *column = (BrinValues *) PG_GETARG_POINTER(1);
 	ScanKey    *keys = (ScanKey *) PG_GETARG_POINTER(2);
 	int			nkeys = PG_GETARG_INT32(3);
-	Oid			colloid = PG_GET_COLLATION();
-	AttrNumber	attno;
-	Datum		value;
-	Datum		matches;
-	FmgrInfo   *finfo;
-	uint32		hashValue;
+	bool		matches;
 	BloomFilter *filter;
 	int			keyno;
 
@@ -584,6 +709,7 @@ brin_bloom_consistent(PG_FUNCTION_ARGS)
 
 	Assert(filter);
 
+	/* assume all scan keys match */
 	matches = true;
 
 	for (keyno = 0; keyno < nkeys; keyno++)
@@ -593,28 +719,47 @@ brin_bloom_consistent(PG_FUNCTION_ARGS)
 		/* NULL keys are handled and filtered-out in bringetbitmap */
 		Assert(!(key->sk_flags & SK_ISNULL));
 
-		attno = key->sk_attno;
-		value = key->sk_argument;
+		/*
+		 * Keys should be preprocessed into a hash cache (even a single
+		 * value scan keys, not just SK_SEARCHARRAY ones).
+		 */
+		Assert(key->sk_flags & SK_BRIN_HASHES);
 
 		switch (key->sk_strategy)
 		{
 			case BloomEqualStrategyNumber:
+				{
+					HashCache  *cache = (HashCache *) key->sk_argument;
 
-				/*
-				 * In the equality case (WHERE col = someval), we want to
-				 * return the current page range if the minimum value in the
-				 * range <= scan key, and the maximum value >= scan key.
-				 */
-				finfo = bloom_get_procinfo(bdesc, attno, PROCNUM_HASH);
+					/* assume no match */
+					matches = false;
 
-				hashValue = DatumGetUInt32(FunctionCall1Coll(finfo, colloid, value));
-				matches &= bloom_contains_value(filter, hashValue);
+					/*
+					 * We want to return the current page range if the bloom filter
+					 * seems to contain any of the values (or a single value).
+					 *
+					 * XXX With empty cache (which can happen for IN clause with
+					 * only NULL values), we leave the matches flag set to false.
+					 */
+					for (int i = 0; i < cache->nelements; i++)
+					{
+						bool	tmp = false;
 
+						tmp = bloom_contains_hashes(filter, cache->h1[i], cache->h2[i]);
+
+						/* if we found a matching value, we have a match */
+						if (DatumGetBool(tmp))
+						{
+							matches = BoolGetDatum(true);
+							break;
+						}
+					}
+				}
 				break;
 			default:
 				/* shouldn't happen */
 				elog(ERROR, "invalid strategy number %d", key->sk_strategy);
-				matches = 0;
+				matches = false;
 				break;
 		}
 
@@ -622,7 +767,7 @@ brin_bloom_consistent(PG_FUNCTION_ARGS)
 			break;
 	}
 
-	PG_RETURN_DATUM(matches);
+	PG_RETURN_BOOL(matches);
 }
 
 /*

@@ -30,6 +30,7 @@
 #include "access/skey.h"
 #include "catalog/pg_amop.h"
 #include "catalog/pg_type.h"
+#include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/lsyscache.h"
@@ -71,6 +72,13 @@
 #define INCLUSION_UNION				0
 #define INCLUSION_UNMERGEABLE		1
 #define INCLUSION_CONTAINS_EMPTY	2
+
+/*
+ * We use some private sk_flags bits in preprocessed scan keys.  We're allowed
+ * to use bits 16-31 (see skey.h).  The uppermost bits are copied from the
+ * index's indoption[] array entry for the index attribute.
+ */
+#define SK_BRIN_ARRAY	0x00010000	/* deconstructed array */
 
 
 typedef struct InclusionOpaque
@@ -238,44 +246,94 @@ brin_inclusion_add_value(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(true);
 }
 
-/*
- * BRIN inclusion consistent function
- *
- * We're no longer dealing with NULL keys in the consistent function, that is
- * now handled by the AM code. That means we should not get any all-NULL ranges
- * either, because those can't be consistent with regular (not [IS] NULL) keys.
- *
- * All of the strategies are optional.
- */
+typedef struct ScanKeyArray {
+	int		nelements;
+	Datum  *elements;
+} ScanKeyArray;
+
 Datum
-brin_inclusion_consistent(PG_FUNCTION_ARGS)
+brin_inclusion_preprocess(PG_FUNCTION_ARGS)
 {
-	BrinDesc   *bdesc = (BrinDesc *) PG_GETARG_POINTER(0);
-	BrinValues *column = (BrinValues *) PG_GETARG_POINTER(1);
-	ScanKey		key = (ScanKey) PG_GETARG_POINTER(2);
-	Oid			colloid = PG_GET_COLLATION(),
-				subtype;
-	Datum		unionval;
-	AttrNumber	attno;
-	Datum		query;
+	// BrinDesc   *bdesc = (BrinDesc *) PG_GETARG_POINTER(0);
+	ScanKey		key = (ScanKey) PG_GETARG_POINTER(1);
+	ScanKey		newkey;
+	ScanKeyArray *scanarray;
+
+	ArrayType  *arrayval;
+	int16		elmlen;
+	bool		elmbyval;
+	char		elmalign;
+	int			num_elems;
+	Datum	   *elem_values;
+	bool	   *elem_nulls;
+
+	/* number of non-null elements in the array */
+	int			num_nonnulls;
+
+	/* ignore scalar keys */
+	if (!(key->sk_flags & SK_SEARCHARRAY))
+		PG_RETURN_POINTER(key);
+
+	arrayval = DatumGetArrayTypeP(key->sk_argument);
+
+	get_typlenbyvalalign(ARR_ELEMTYPE(arrayval),
+						 &elmlen, &elmbyval, &elmalign);
+
+	deconstruct_array(arrayval,
+					  ARR_ELEMTYPE(arrayval),
+					  elmlen, elmbyval, elmalign,
+					  &elem_values, &elem_nulls, &num_elems);
+
+	/* eliminate NULL elements */
+	num_nonnulls = 0;
+	for (int i = 0; i < num_elems; i++)
+	{
+		/* skip NULL elements */
+		if (elem_nulls[i])
+			continue;
+
+		/* if needed, move the non-NULL ones */
+		if (num_nonnulls != i)
+			elem_values[num_nonnulls] = elem_values[i];
+
+		num_nonnulls++;
+	}
+
+	num_elems = num_nonnulls;
+
+	scanarray = palloc0(sizeof(ScanKeyArray));
+	scanarray->nelements = num_elems;
+	scanarray->elements = elem_values;
+
+	newkey = palloc0(sizeof(ScanKeyData));
+
+	ScanKeyEntryInitializeWithInfo(newkey,
+								   (key->sk_flags | SK_BRIN_ARRAY),
+								   key->sk_attno,
+								   key->sk_strategy,
+								   key->sk_subtype,
+								   key->sk_collation,
+								   &key->sk_func,
+								   PointerGetDatum(scanarray));
+
+	PG_RETURN_POINTER(newkey);
+}
+
+/*
+ * Check consistency of a single scalar value with the BRIN range.
+ *
+ * Called for both scalar scankeys and for each value in SK_SEARCHARRAY.
+ */
+static bool
+brin_inclusion_consistent_value(BrinDesc *bdesc, BrinValues *column,
+								AttrNumber attno,
+								StrategyNumber strategy, Oid subtype,
+								Oid colloid, Datum unionval, Datum query)
+{
 	FmgrInfo   *finfo;
 	Datum		result;
 
-	/* This opclass uses the old signature with only three arguments. */
-	Assert(PG_NARGS() == 3);
-
-	/* Should not be dealing with all-NULL ranges. */
-	Assert(!column->bv_allnulls);
-
-	/* It has to be checked, if it contains elements that are not mergeable. */
-	if (DatumGetBool(column->bv_values[INCLUSION_UNMERGEABLE]))
-		PG_RETURN_BOOL(true);
-
-	attno = key->sk_attno;
-	subtype = key->sk_subtype;
-	query = key->sk_argument;
-	unionval = column->bv_values[INCLUSION_UNION];
-	switch (key->sk_strategy)
+	switch (strategy)
 	{
 			/*
 			 * Placement strategies
@@ -294,49 +352,49 @@ brin_inclusion_consistent(PG_FUNCTION_ARGS)
 			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
 													RTOverRightStrategyNumber);
 			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_BOOL(!DatumGetBool(result));
+			return (!DatumGetBool(result));
 
 		case RTOverLeftStrategyNumber:
 			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
 													RTRightStrategyNumber);
 			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_BOOL(!DatumGetBool(result));
+			return (!DatumGetBool(result));
 
 		case RTOverRightStrategyNumber:
 			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
 													RTLeftStrategyNumber);
 			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_BOOL(!DatumGetBool(result));
+			return (!DatumGetBool(result));
 
 		case RTRightStrategyNumber:
 			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
 													RTOverLeftStrategyNumber);
 			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_BOOL(!DatumGetBool(result));
+			return (!DatumGetBool(result));
 
 		case RTBelowStrategyNumber:
 			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
 													RTOverAboveStrategyNumber);
 			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_BOOL(!DatumGetBool(result));
+			return (!DatumGetBool(result));
 
 		case RTOverBelowStrategyNumber:
 			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
 													RTAboveStrategyNumber);
 			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_BOOL(!DatumGetBool(result));
+			return (!DatumGetBool(result));
 
 		case RTOverAboveStrategyNumber:
 			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
 													RTBelowStrategyNumber);
 			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_BOOL(!DatumGetBool(result));
+			return (!DatumGetBool(result));
 
 		case RTAboveStrategyNumber:
 			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
 													RTOverBelowStrategyNumber);
 			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_BOOL(!DatumGetBool(result));
+			return (!DatumGetBool(result));
 
 			/*
 			 * Overlap and contains strategies
@@ -352,9 +410,9 @@ brin_inclusion_consistent(PG_FUNCTION_ARGS)
 		case RTSubStrategyNumber:
 		case RTSubEqualStrategyNumber:
 			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
-													key->sk_strategy);
+													strategy);
 			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_DATUM(result);
+			return (DatumGetBool(result));
 
 			/*
 			 * Contained by strategies
@@ -374,9 +432,9 @@ brin_inclusion_consistent(PG_FUNCTION_ARGS)
 													RTOverlapStrategyNumber);
 			result = FunctionCall2Coll(finfo, colloid, unionval, query);
 			if (DatumGetBool(result))
-				PG_RETURN_BOOL(true);
+				return (true);
 
-			PG_RETURN_DATUM(column->bv_values[INCLUSION_CONTAINS_EMPTY]);
+			return (column->bv_values[INCLUSION_CONTAINS_EMPTY]);
 
 			/*
 			 * Adjacent strategy
@@ -393,12 +451,12 @@ brin_inclusion_consistent(PG_FUNCTION_ARGS)
 													RTOverlapStrategyNumber);
 			result = FunctionCall2Coll(finfo, colloid, unionval, query);
 			if (DatumGetBool(result))
-				PG_RETURN_BOOL(true);
+				return (true);
 
 			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
 													RTAdjacentStrategyNumber);
 			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_DATUM(result);
+			return (DatumGetBool(result));
 
 			/*
 			 * Basic comparison strategies
@@ -428,9 +486,9 @@ brin_inclusion_consistent(PG_FUNCTION_ARGS)
 													RTRightStrategyNumber);
 			result = FunctionCall2Coll(finfo, colloid, unionval, query);
 			if (!DatumGetBool(result))
-				PG_RETURN_BOOL(true);
+				return (true);
 
-			PG_RETURN_DATUM(column->bv_values[INCLUSION_CONTAINS_EMPTY]);
+			return (column->bv_values[INCLUSION_CONTAINS_EMPTY]);
 
 		case RTSameStrategyNumber:
 		case RTEqualStrategyNumber:
@@ -438,30 +496,110 @@ brin_inclusion_consistent(PG_FUNCTION_ARGS)
 													RTContainsStrategyNumber);
 			result = FunctionCall2Coll(finfo, colloid, unionval, query);
 			if (DatumGetBool(result))
-				PG_RETURN_BOOL(true);
+				return (true);
 
-			PG_RETURN_DATUM(column->bv_values[INCLUSION_CONTAINS_EMPTY]);
+			return (column->bv_values[INCLUSION_CONTAINS_EMPTY]);
 
 		case RTGreaterEqualStrategyNumber:
 			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
 													RTLeftStrategyNumber);
 			result = FunctionCall2Coll(finfo, colloid, unionval, query);
 			if (!DatumGetBool(result))
-				PG_RETURN_BOOL(true);
+				return (true);
 
-			PG_RETURN_DATUM(column->bv_values[INCLUSION_CONTAINS_EMPTY]);
+			return (column->bv_values[INCLUSION_CONTAINS_EMPTY]);
 
 		case RTGreaterStrategyNumber:
 			/* no need to check for empty elements */
 			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
 													RTLeftStrategyNumber);
 			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_BOOL(!DatumGetBool(result));
+			return (!DatumGetBool(result));
 
 		default:
 			/* shouldn't happen */
-			elog(ERROR, "invalid strategy number %d", key->sk_strategy);
-			PG_RETURN_BOOL(false);
+			elog(ERROR, "invalid strategy number %d", strategy);
+			return (false);
+	}
+}
+
+/*
+ * BRIN inclusion consistent function
+ *
+ * We're no longer dealing with NULL keys in the consistent function, that is
+ * now handled by the AM code. That means we should not get any all-NULL ranges
+ * either, because those can't be consistent with regular (not [IS] NULL) keys.
+ *
+ * All of the strategies are optional.
+ */
+Datum
+brin_inclusion_consistent(PG_FUNCTION_ARGS)
+{
+	BrinDesc   *bdesc = (BrinDesc *) PG_GETARG_POINTER(0);
+	BrinValues *column = (BrinValues *) PG_GETARG_POINTER(1);
+	ScanKey		key = (ScanKey) PG_GETARG_POINTER(2);
+	Oid			colloid = PG_GET_COLLATION(),
+				subtype;
+	Datum		unionval;
+	AttrNumber	attno;
+	Datum		query;
+
+	/* This opclass uses the old signature with only three arguments. */
+	Assert(PG_NARGS() == 3);
+
+	/* Should not be dealing with all-NULL ranges. */
+	Assert(!column->bv_allnulls);
+
+	/* It has to be checked, if it contains elements that are not mergeable. */
+	if (DatumGetBool(column->bv_values[INCLUSION_UNMERGEABLE]))
+		PG_RETURN_BOOL(true);
+
+	attno = key->sk_attno;
+	subtype = key->sk_subtype;
+	query = key->sk_argument;
+	unionval = column->bv_values[INCLUSION_UNION];
+
+	/*
+	 * For regular (scalar) scan keys, we simply compare the value to the
+	 * range min/max values, and we're done. For SK_SEARCHARRAY keys we
+	 * need to deparse the array and loop through the values.
+	 */
+	if (likely(!(key->sk_flags & SK_SEARCHARRAY)))
+	{
+		bool tmp;
+
+		tmp = brin_inclusion_consistent_value(bdesc, column, attno,
+											  key->sk_strategy,
+											  subtype, colloid,
+											  unionval, query);
+		PG_RETURN_BOOL(tmp);
+	}
+	else
+	{
+		ScanKeyArray *array = (ScanKeyArray *) query;
+		bool		matches = false;
+
+		/*
+		 * Loop through all pre-calculated hashes, check the bloom filter.
+		 *
+		 * XXX With empty cache (which can happen for IN clause with only NULL
+		 * values), we leave the matches flag set to false.
+		 */
+		for (int i = 0; i < array->nelements; i++)
+		{
+			Datum 	query_element = array->elements[i];
+
+			matches = brin_inclusion_consistent_value(bdesc, column, attno,
+													  key->sk_strategy,
+													  subtype, colloid,
+													  unionval, query_element);
+
+			if (matches)
+				break;
+		}
+
+		/* we could get here for empty array, e.g. with "@> '{}'::point[]" */
+		PG_RETURN_BOOL(matches);
 	}
 }
 

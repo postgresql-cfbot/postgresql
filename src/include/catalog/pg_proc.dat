@@ -8552,6 +8552,9 @@
 { oid => '3386', descr => 'BRIN minmax support',
   proname => 'brin_minmax_union', prorettype => 'bool',
   proargtypes => 'internal internal internal', prosrc => 'brin_minmax_union' },
+{ oid => '9327', descr => 'BRIN minmax support',
+  proname => 'brin_minmax_preprocess', prorettype => 'internal',
+  proargtypes => 'internal internal', prosrc => 'brin_minmax_preprocess' },
 
 # BRIN minmax multi
 { oid => '4616', descr => 'BRIN multi minmax support',
@@ -8573,6 +8576,10 @@
   proname => 'brin_minmax_multi_options', proisstrict => 'f',
   prorettype => 'void', proargtypes => 'internal',
   prosrc => 'brin_minmax_multi_options' },
+{ oid => '9326', descr => 'BRIN multi minmax support',
+  proname => 'brin_minmax_multi_preprocess', proisstrict => 'f',
+  prorettype => 'internal', proargtypes => 'internal internal',
+  prosrc => 'brin_minmax_multi_preprocess' },
 
 { oid => '4621', descr => 'BRIN multi minmax int2 distance',
   proname => 'brin_minmax_multi_distance_int2', prorettype => 'float8',
@@ -8659,6 +8666,10 @@
   proname => 'brin_inclusion_union', prorettype => 'bool',
   proargtypes => 'internal internal internal',
   prosrc => 'brin_inclusion_union' },
+{ oid => '9324', descr => 'BRIN inclusion support',
+  proname => 'brin_inclusion_preprocess', proisstrict => 'f',
+  prorettype => 'internal', proargtypes => 'internal internal',
+  prosrc => 'brin_inclusion_preprocess' },
 
 # BRIN bloom
 { oid => '4591', descr => 'BRIN bloom support',
@@ -8678,6 +8689,9 @@
 { oid => '4595', descr => 'BRIN bloom support',
   proname => 'brin_bloom_options', proisstrict => 'f', prorettype => 'void',
   proargtypes => 'internal', prosrc => 'brin_bloom_options' },
+{ oid => '9325', descr => 'BRIN bloom support',
+  proname => 'brin_bloom_preprocess', proisstrict => 'f', prorettype => 'internal',
+  proargtypes => 'internal internal', prosrc => 'brin_bloom_preprocess' },
 
 # userlock replacements
 { oid => '2880', descr => 'obtain exclusive advisory lock',

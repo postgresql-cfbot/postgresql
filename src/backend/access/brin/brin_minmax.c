@@ -16,11 +16,21 @@
 #include "access/stratnum.h"
 #include "catalog/pg_amop.h"
 #include "catalog/pg_type.h"
+#include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
+#include "utils/sortsupport.h"
+
+/*
+ * We use some private sk_flags bits in preprocessed scan keys.  We're allowed
+ * to use bits 16-31 (see skey.h).  The uppermost bits are copied from the
+ * index's indoption[] array entry for the index attribute.
+ */
+#define SK_BRIN_SORTED	0x00010000	/* deconstructed and sorted array */
+
 
 typedef struct MinmaxOpaque
 {
@@ -126,6 +136,158 @@ brin_minmax_add_value(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(updated);
 }
 
+
+static int
+compare_array_values(const void *a, const void *b, void *arg)
+{
+	Datum	da = * (Datum *) a;
+	Datum	db = * (Datum *) b;
+	SortSupport	ssup = (SortSupport) arg;
+
+	return ApplySortComparator(da, false, db, false, ssup);
+}
+
+/*
+ * lower_boundary
+ *		Determine lowest index so that (values[index] >= minvalue).
+ *
+ * The array of values is expected to be sorted, so this is the first value
+ * that may fall into the [minvalue, maxvalue] range, as it exceeds minval.
+ * It's not guaranteed, though, as it might exceed maxvalue too.
+ */
+static int
+lower_boundary(Datum *values, int nvalues, Datum minvalue, SortSupport ssup)
+{
+	int		start = 0,
+			end = (nvalues - 1);
+
+	/* everything exceeds minval and might match */
+	if (compare_array_values(&minvalue, &values[start], ssup) <= 0)
+		return 0;
+
+	/* nothing could match */
+	if (compare_array_values(&minvalue, &values[end], ssup) > 0)
+		return nvalues;
+
+	while ((end - start) > 0)
+	{
+		int midpoint;
+		int r;
+
+		midpoint = start + (end - start) / 2;
+
+		r = compare_array_values(&minvalue, &values[midpoint], ssup);
+
+		if (r > 0)
+			start = Max(midpoint, start + 1);
+		else
+			end = midpoint;
+	}
+
+	/* the value should meet the (v >=minvalue) requirement */
+	Assert(compare_array_values(&values[start], &minvalue, ssup) >= 0);
+
+	/* we know start can't be 0, so it's legal to subtract 1 */
+	Assert(compare_array_values(&values[start-1], &minvalue, ssup) < 0);
+
+	return start;
+}
+
+typedef struct ScanKeyArray {
+	Oid		typeid;
+	int		nelements;
+	Datum  *elements;
+} ScanKeyArray;
+
+Datum
+brin_minmax_preprocess(PG_FUNCTION_ARGS)
+{
+	// BrinDesc   *bdesc = (BrinDesc *) PG_GETARG_POINTER(0);
+	ScanKey		key = (ScanKey) PG_GETARG_POINTER(1);
+	ScanKey		newkey;
+	ScanKeyArray *scanarray;
+
+	ArrayType  *arrayval;
+	int16		elmlen;
+	bool		elmbyval;
+	char		elmalign;
+	int			num_elems;
+	Datum	   *elem_values;
+	bool	   *elem_nulls;
+	TypeCacheEntry *type;
+	SortSupportData ssup;
+
+	/* number of non-null elements in the array */
+	int			num_nonnulls;
+
+	/*
+	 * ignore scalar keys
+	 *
+	 * XXX Maybe we should preprocess scalar keys too. It'd make the consistent
+	 * function simpler by removing the branching.
+	 */
+	if (!(key->sk_flags & SK_SEARCHARRAY))
+		PG_RETURN_POINTER(key);
+
+	arrayval = DatumGetArrayTypeP(key->sk_argument);
+
+	get_typlenbyvalalign(ARR_ELEMTYPE(arrayval),
+						 &elmlen, &elmbyval, &elmalign);
+
+	deconstruct_array(arrayval,
+					  ARR_ELEMTYPE(arrayval),
+					  elmlen, elmbyval, elmalign,
+					  &elem_values, &elem_nulls, &num_elems);
+
+	/* eliminate NULL elements */
+	num_nonnulls = 0;
+	for (int i = 0; i < num_elems; i++)
+	{
+		/* skip NULL elements */
+		if (elem_nulls[i])
+			continue;
+
+		/* if needed, move the non-NULL ones */
+		if (num_nonnulls != i)
+			elem_values[num_nonnulls] = elem_values[i];
+
+		num_nonnulls++;
+	}
+
+	num_elems = num_nonnulls;
+
+	type = lookup_type_cache(ARR_ELEMTYPE(arrayval), TYPECACHE_LT_OPR);
+
+	memset(&ssup, 0, sizeof(SortSupportData));
+
+	ssup.ssup_collation = key->sk_collation;
+	ssup.ssup_cxt = CurrentMemoryContext;
+
+	PrepareSortSupportFromOrderingOp(type->lt_opr, &ssup);
+
+	qsort_interruptible(elem_values, num_elems, sizeof(Datum),
+						compare_array_values, &ssup);
+
+	scanarray = palloc0(sizeof(ScanKeyArray));
+	scanarray->typeid = ARR_ELEMTYPE(arrayval);
+	scanarray->nelements = num_elems;
+	scanarray->elements = elem_values;
+
+	newkey = palloc0(sizeof(ScanKeyData));
+
+	ScanKeyEntryInitializeWithInfo(newkey,
+								   (key->sk_flags | SK_BRIN_SORTED),
+								   key->sk_attno,
+								   key->sk_strategy,
+								   key->sk_subtype,
+								   key->sk_collation,
+								   &key->sk_func,
+								   PointerGetDatum(scanarray));
+
+	PG_RETURN_POINTER(newkey);
+}
+
+
 /*
  * Given an index tuple corresponding to a certain page range and a scan key,
  * return whether the scan key is consistent with the index tuple's min/max
@@ -157,46 +319,183 @@ brin_minmax_consistent(PG_FUNCTION_ARGS)
 	attno = key->sk_attno;
 	subtype = key->sk_subtype;
 	value = key->sk_argument;
-	switch (key->sk_strategy)
-	{
-		case BTLessStrategyNumber:
-		case BTLessEqualStrategyNumber:
-			finfo = minmax_get_strategy_procinfo(bdesc, attno, subtype,
-												 key->sk_strategy);
-			matches = FunctionCall2Coll(finfo, colloid, column->bv_values[0],
-										value);
-			break;
-		case BTEqualStrategyNumber:
 
-			/*
-			 * In the equality case (WHERE col = someval), we want to return
-			 * the current page range if the minimum value in the range <=
-			 * scan key, and the maximum value >= scan key.
-			 */
-			finfo = minmax_get_strategy_procinfo(bdesc, attno, subtype,
-												 BTLessEqualStrategyNumber);
-			matches = FunctionCall2Coll(finfo, colloid, column->bv_values[0],
-										value);
-			if (!DatumGetBool(matches))
+	/*
+	 * For regular (scalar) scan keys, we simply compare the value to the
+	 * range min/max values, and we're done. For preprocessed SK_SEARCHARRAY
+	 * keys we need to loop through the deparsed values.
+	 */
+	if (likely(!(key->sk_flags & SK_BRIN_SORTED)))
+	{
+		switch (key->sk_strategy)
+		{
+			case BTLessStrategyNumber:
+			case BTLessEqualStrategyNumber:
+				finfo = minmax_get_strategy_procinfo(bdesc, attno, subtype,
+													 key->sk_strategy);
+				matches = FunctionCall2Coll(finfo, colloid, column->bv_values[0],
+											value);
 				break;
-			/* max() >= scankey */
-			finfo = minmax_get_strategy_procinfo(bdesc, attno, subtype,
-												 BTGreaterEqualStrategyNumber);
-			matches = FunctionCall2Coll(finfo, colloid, column->bv_values[1],
-										value);
-			break;
-		case BTGreaterEqualStrategyNumber:
-		case BTGreaterStrategyNumber:
-			finfo = minmax_get_strategy_procinfo(bdesc, attno, subtype,
-												 key->sk_strategy);
-			matches = FunctionCall2Coll(finfo, colloid, column->bv_values[1],
-										value);
-			break;
-		default:
-			/* shouldn't happen */
-			elog(ERROR, "invalid strategy number %d", key->sk_strategy);
-			matches = 0;
-			break;
+			case BTEqualStrategyNumber:
+
+				/*
+				 * In the equality case (WHERE col = someval), we want to return
+				 * the current page range if the minimum value in the range <=
+				 * scan key, and the maximum value >= scan key.
+				 */
+				finfo = minmax_get_strategy_procinfo(bdesc, attno, subtype,
+													 BTLessEqualStrategyNumber);
+				matches = FunctionCall2Coll(finfo, colloid, column->bv_values[0],
+											value);
+				if (!DatumGetBool(matches))
+					break;
+				/* max() >= scankey */
+				finfo = minmax_get_strategy_procinfo(bdesc, attno, subtype,
+													 BTGreaterEqualStrategyNumber);
+				matches = FunctionCall2Coll(finfo, colloid, column->bv_values[1],
+											value);
+				break;
+			case BTGreaterEqualStrategyNumber:
+			case BTGreaterStrategyNumber:
+				finfo = minmax_get_strategy_procinfo(bdesc, attno, subtype,
+													 key->sk_strategy);
+				matches = FunctionCall2Coll(finfo, colloid, column->bv_values[1],
+											value);
+				break;
+			default:
+				/* shouldn't happen */
+				elog(ERROR, "invalid strategy number %d", key->sk_strategy);
+				matches = 0;
+				break;
+		}
+	}
+	else
+	{
+		ScanKeyArray *array = (ScanKeyArray *) value;
+
+		/* can happen if the IN list contained just NULLs */
+		if (array->nelements == 0)
+			PG_RETURN_BOOL(false);
+
+		switch (key->sk_strategy)
+		{
+			case BTLessStrategyNumber:
+			case BTLessEqualStrategyNumber:
+				/*
+				 * Check the last (largest) value in the array - at least this
+				 * value has to exceed the range minval.
+				 */
+				finfo = minmax_get_strategy_procinfo(bdesc, attno, subtype,
+													 key->sk_strategy);
+				matches = FunctionCall2Coll(finfo, colloid, column->bv_values[0],
+											array->elements[array->nelements-1]);
+				break;
+			case BTEqualStrategyNumber:
+
+				/*
+				 * In the equality case (WHERE col = someval), we want to return
+				 * the current page range if the minimum value in the range <=
+				 * scan key, and the maximum value >= scan key.
+				 *
+				 * We do this in two phases. We check the array min/max values to see
+				 * if there even can be a matching value, and if yes we do a binary
+				 * search to find the first value that exceeds range minval. And then
+				 * we check if it actually matches the range.
+				 *
+				 * XXX The first phase is probably unnecessary, because lower_bound()
+				 * does pretty much exactly that too.
+				 */
+				{
+					Datum val;
+					SortSupportData ssup;
+					int			lower;
+					TypeCacheEntry *type;
+
+					/* Is the first (smallest) value after the BRIN range? */
+					val = array->elements[0];
+
+					finfo = minmax_get_strategy_procinfo(bdesc, attno, subtype,
+														 BTLessEqualStrategyNumber);
+					matches = FunctionCall2Coll(finfo, colloid, val, column->bv_values[1]);
+
+					/* minval > max(range values) */
+					if (!DatumGetBool(matches))
+						break;
+
+					/* Is the last (largest) value before the BRIN range? */
+					val = array->elements[array->nelements-1];
+
+					finfo = minmax_get_strategy_procinfo(bdesc, attno, subtype,
+														 BTGreaterEqualStrategyNumber);
+					matches = FunctionCall2Coll(finfo, colloid, val, column->bv_values[0]);
+
+					/* maxval < min(range values) */
+					if (!DatumGetBool(matches))
+						break;
+
+					/*
+					 * OK, there might be some values matching the range. We have
+					 * to search them one by one, or perhaps try binsearch.
+					 */
+					type = lookup_type_cache(array->typeid, TYPECACHE_LT_OPR);
+
+					memset(&ssup, 0, sizeof(SortSupportData));
+
+					ssup.ssup_collation = key->sk_collation;
+					ssup.ssup_cxt = CurrentMemoryContext;
+
+					PrepareSortSupportFromOrderingOp(type->lt_opr, &ssup);
+
+					lower = lower_boundary(array->elements, array->nelements, column->bv_values[0], &ssup);
+
+					/* no elements can possibly match */
+					if (lower == array->nelements)
+					{
+						matches = BoolGetDatum(false);
+						break;
+					}
+
+					/*
+					 * OK, the first element must match the upper boundary too
+					 * (if it does not, no following elements can).
+					 */
+					val = array->elements[lower];
+
+					/*
+					 * In the equality case (WHERE col = someval), we want to return
+					 * the current page range if the minimum value in the range <=
+					 * scan key, and the maximum value >= scan key.
+					 */
+					finfo = minmax_get_strategy_procinfo(bdesc, attno, subtype,
+														 BTLessEqualStrategyNumber);
+					matches = FunctionCall2Coll(finfo, colloid, column->bv_values[0],
+												val);
+					if (!DatumGetBool(matches))
+						break;
+					/* max() >= scankey */
+					finfo = minmax_get_strategy_procinfo(bdesc, attno, subtype,
+														 BTGreaterEqualStrategyNumber);
+					matches = FunctionCall2Coll(finfo, colloid, column->bv_values[1],
+												val);
+					break;
+				}
+			case BTGreaterEqualStrategyNumber:
+			case BTGreaterStrategyNumber:
+				/*
+				 * Check the first (smallest) value in the array - at least this
+				 * value has to be smaller than the range maxval.
+				 */
+				finfo = minmax_get_strategy_procinfo(bdesc, attno, subtype,
+													 key->sk_strategy);
+				matches = FunctionCall2Coll(finfo, colloid, column->bv_values[1],
+											array->elements[0]);
+				break;
+			default:
+				/* shouldn't happen */
+				elog(ERROR, "invalid strategy number %d", key->sk_strategy);
+				matches = 0;
+				break;
+		}
 	}
 
 	PG_RETURN_DATUM(matches);

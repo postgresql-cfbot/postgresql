@@ -190,6 +190,8 @@ CreateSharedMemoryAndSemaphores(void)
 		 */
 		seghdr = PGSharedMemoryCreate(size, &shim);
 
+		Assert(strcmp("unknown", GetConfigOption("huge_pages_status", false, false)) != 0);
+
 		InitShmemAccess(seghdr);
 
 		/*

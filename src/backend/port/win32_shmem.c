@@ -327,6 +327,10 @@ retry:
 			Sleep(1000);
 			continue;
 		}
+
+		SetConfigOption("huge_pages_status", (flProtect & SEC_LARGE_PAGES) ?
+						"on" : "off", PGC_INTERNAL, PGC_S_DYNAMIC_DEFAULT);
+
 		break;
 	}
 

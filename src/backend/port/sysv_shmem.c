@@ -627,6 +627,9 @@ CreateAnonymousSegment(Size *size)
 	}
 #endif
 
+	SetConfigOption("huge_pages_status", ptr == MAP_FAILED ? "off" : "on",
+					PGC_INTERNAL, PGC_S_DYNAMIC_DEFAULT);
+
 	if (ptr == MAP_FAILED && huge_pages != HUGE_PAGES_ON)
 	{
 		/*
@@ -737,7 +740,11 @@ PGSharedMemoryCreate(Size size,
 		sysvsize = sizeof(PGShmemHeader);
 	}
 	else
+	{
 		sysvsize = size;
+		SetConfigOption("huge_pages_status", "off",
+						PGC_INTERNAL, PGC_S_DYNAMIC_DEFAULT);
+	}
 
 	/*
 	 * Loop till we find a free IPC key.  Trust CreateDataDirLockFile() to

@@ -15,6 +15,7 @@
 
 #include "access/xlogreader.h"
 #include "catalog/objectaddress.h"
+#include "catalog/pg_sequence.h"
 #include "fmgr.h"
 #include "lib/stringinfo.h"
 #include "nodes/parsenodes.h"
@@ -51,9 +52,17 @@ typedef struct xl_seq_rec
 	/* SEQUENCE TUPLE DATA FOLLOWS AT THE END */
 } xl_seq_rec;
 
+/* Information needed to define a sequence. */
+typedef struct Sequence_values
+{
+	Form_pg_sequence seqform;
+	int64		last_value;
+} Sequence_values;
+
 extern int64 nextval_internal(Oid relid, bool check_permissions);
 extern Datum nextval(PG_FUNCTION_ARGS);
 extern List *sequence_options(Oid relid);
+extern Sequence_values *get_sequence_values(Oid sequenceId);
 
 extern ObjectAddress DefineSequence(ParseState *pstate, CreateSeqStmt *seq);
 extern ObjectAddress AlterSequence(ParseState *pstate, AlterSeqStmt *stmt);

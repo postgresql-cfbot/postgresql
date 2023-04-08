@@ -34,6 +34,7 @@
 #include "catalog/namespace.h"
 #include "catalog/toasting.h"
 #include "commands/createas.h"
+#include "commands/event_trigger.h"
 #include "commands/matview.h"
 #include "commands/prepare.h"
 #include "commands/tablecmds.h"
@@ -142,6 +143,15 @@ create_ctas_internal(List *attrList, IntoClause *into)
 
 		StoreViewQuery(intoRelationAddr.objectId, query, false);
 		CommandCounterIncrement();
+	}
+	else
+	{
+		/*
+		 * Fire the trigger for table_init_write after creating the table so
+		 * that we can access the catalog info about the newly created table
+		 * in the trigger function.
+		 */
+		EventTriggerTableInitWrite((Node *) create, intoRelationAddr);
 	}
 
 	return intoRelationAddr;

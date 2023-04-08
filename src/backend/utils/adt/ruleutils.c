@@ -35,6 +35,7 @@
 #include "catalog/pg_operator.h"
 #include "catalog/pg_partitioned_table.h"
 #include "catalog/pg_proc.h"
+#include "catalog/pg_rewrite.h"
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
@@ -341,6 +342,8 @@ static char *pg_get_triggerdef_worker(Oid trigid, bool pretty);
 static int	decompile_column_index_array(Datum column_index_array, Oid relId,
 										 StringInfo buf);
 static char *pg_get_ruledef_worker(Oid ruleoid, int prettyFlags);
+static void pg_get_rule_whereclause(char *qualstr, Query *query,
+									 StringInfo buf, int prettyFlags);
 static char *pg_get_indexdef_worker(Oid indexrelid, int colno,
 									const Oid *excludeOps,
 									bool attrsOnly, bool keysOnly,
@@ -358,7 +361,6 @@ static int	print_function_arguments(StringInfo buf, HeapTuple proctup,
 									 bool print_table_args, bool print_defaults);
 static void print_function_rettype(StringInfo buf, HeapTuple proctup);
 static void print_function_trftypes(StringInfo buf, HeapTuple proctup);
-static void print_function_sqlbody(StringInfo buf, HeapTuple proctup);
 static void set_rtable_names(deparse_namespace *dpns, List *parent_namespaces,
 							 Bitmapset *rels_used);
 static void set_deparse_for_query(deparse_namespace *dpns, Query *query,
@@ -499,22 +501,15 @@ static void get_from_clause_coldeflist(RangeTblFunction *rtfunc,
 									   deparse_context *context);
 static void get_tablesample_def(TableSampleClause *tablesample,
 								deparse_context *context);
-static void get_opclass_name(Oid opclass, Oid actual_datatype,
-							 StringInfo buf);
 static Node *processIndirection(Node *node, deparse_context *context);
 static void printSubscripts(SubscriptingRef *sbsref, deparse_context *context);
 static char *get_relation_name(Oid relid);
 static char *generate_relation_name(Oid relid, List *namespaces);
 static char *generate_qualified_relation_name(Oid relid);
-static char *generate_function_name(Oid funcid, int nargs,
-									List *argnames, Oid *argtypes,
-									bool has_variadic, bool *use_variadic_p,
-									ParseExprKind special_exprkind);
 static char *generate_operator_name(Oid operid, Oid arg1, Oid arg2);
 static void add_cast_to(StringInfo buf, Oid typid);
 static char *generate_qualified_type_name(Oid typid);
 static text *string_to_text(char *str);
-static char *flatten_reloptions(Oid relid);
 static void get_reloptions(StringInfo buf, Datum reloptions);
 
 #define only_marker(rte)  ((rte)->inh ? "" : "ONLY ")
@@ -562,6 +557,80 @@ pg_get_ruledef_ext(PG_FUNCTION_ARGS)
 	PG_RETURN_TEXT_P(string_to_text(res));
 }
 
+/*
+ * Given a pair of Datum corresponding to a rule's pg_rewrite.ev_qual and
+ * ev_action columns, return their text representation; ev_qual as a single
+ * string in whereClause and ev_action as a List of strings (which might be
+ * NIL, signalling NOTHING) in actions.
+ */
+void
+pg_get_ruledef_detailed(Datum ev_qual, Datum ev_action,
+						char **whereClause, List **actions)
+{
+	int			prettyFlags = 0;
+	char	   *qualstr = TextDatumGetCString(ev_qual);
+	char	   *actionstr = TextDatumGetCString(ev_action);
+	List	   *actionNodeList = (List *) stringToNode(actionstr);
+	StringInfoData buf;
+
+	*whereClause = NULL;
+	*actions = NIL;
+	initStringInfo(&buf);
+
+	if (strcmp(qualstr, "<>") != 0)
+	{
+		Query	   *query = (Query *) linitial(actionNodeList);
+
+		pg_get_rule_whereclause(qualstr, query, &buf, 0);
+		*whereClause = pstrdup(buf.data);
+	}
+
+	if (list_length(actionNodeList) > 0)
+	{
+		ListCell   *cell;
+
+		foreach(cell, actionNodeList)
+		{
+			Query	   *query = (Query *) lfirst(cell);
+
+			resetStringInfo(&buf);
+			get_query_def(query, &buf, NIL, NULL, true,
+						  prettyFlags, WRAP_COLUMN_DEFAULT, 0);
+			*actions = lappend(*actions, pstrdup(buf.data));
+		}
+	}
+}
+
+/*
+ * To get the rewrite rule of a view when the CREATE VIEW command execution is
+ * still in progress: we search the system cache RULERELNAME to get the rewrite
+ * rule of the view as opposed to querying pg_rewrite as in pg_get_viewdef_worker(),
+ * which will return empty result.
+ */
+char *
+pg_get_viewdef_string(Oid viewoid)
+{
+	StringInfoData buf;
+	Relation	pg_rewrite;
+	HeapTuple	ruletup;
+	TupleDesc	rulettc;
+
+	initStringInfo(&buf);
+	pg_rewrite = table_open(RewriteRelationId, AccessShareLock);
+
+	ruletup = SearchSysCache2(RULERELNAME,
+							  ObjectIdGetDatum(viewoid),
+							  PointerGetDatum(ViewSelectRuleName));
+	if (!HeapTupleIsValid(ruletup))
+		elog(ERROR, "cache lookup failed for rewrite rule for view with OID %u", viewoid);
+
+	rulettc = pg_rewrite->rd_att;
+	make_viewdef(&buf, ruletup, rulettc, 0, WRAP_COLUMN_DEFAULT);
+	ReleaseSysCache(ruletup);
+	table_close(pg_rewrite, AccessShareLock);
+
+	return buf.data;
+}
 
 static char *
 pg_get_ruledef_worker(Oid ruleoid, int prettyFlags)
@@ -1032,65 +1101,12 @@ pg_get_triggerdef_worker(Oid trigid, bool pretty)
 	if (!isnull)
 	{
 		Node	   *qual;
-		char		relkind;
-		deparse_context context;
-		deparse_namespace dpns;
-		RangeTblEntry *oldrte;
-		RangeTblEntry *newrte;
-
-		appendStringInfoString(&buf, "WHEN (");
+		char	   *qualstr;
 
 		qual = stringToNode(TextDatumGetCString(value));
+		qualstr = pg_get_trigger_whenclause(trigrec, qual, pretty);
 
-		relkind = get_rel_relkind(trigrec->tgrelid);
-
-		/* Build minimal OLD and NEW RTEs for the rel */
-		oldrte = makeNode(RangeTblEntry);
-		oldrte->rtekind = RTE_RELATION;
-		oldrte->relid = trigrec->tgrelid;
-		oldrte->relkind = relkind;
-		oldrte->rellockmode = AccessShareLock;
-		oldrte->alias = makeAlias("old", NIL);
-		oldrte->eref = oldrte->alias;
-		oldrte->lateral = false;
-		oldrte->inh = false;
-		oldrte->inFromCl = true;
-
-		newrte = makeNode(RangeTblEntry);
-		newrte->rtekind = RTE_RELATION;
-		newrte->relid = trigrec->tgrelid;
-		newrte->relkind = relkind;
-		newrte->rellockmode = AccessShareLock;
-		newrte->alias = makeAlias("new", NIL);
-		newrte->eref = newrte->alias;
-		newrte->lateral = false;
-		newrte->inh = false;
-		newrte->inFromCl = true;
-
-		/* Build two-element rtable */
-		memset(&dpns, 0, sizeof(dpns));
-		dpns.rtable = list_make2(oldrte, newrte);
-		dpns.subplans = NIL;
-		dpns.ctes = NIL;
-		dpns.appendrels = NULL;
-		set_rtable_names(&dpns, NIL, NULL);
-		set_simple_column_names(&dpns);
-
-		/* Set up context with one-deep namespace stack */
-		context.buf = &buf;
-		context.namespaces = list_make1(&dpns);
-		context.windowClause = NIL;
-		context.windowTList = NIL;
-		context.varprefix = true;
-		context.prettyFlags = GET_PRETTY_FLAGS(pretty);
-		context.wrapColumn = WRAP_COLUMN_DEFAULT;
-		context.indentLevel = PRETTYINDENT_STD;
-		context.special_exprkind = EXPR_KIND_NONE;
-		context.appendparents = NULL;
-
-		get_rule_expr(qual, &context, false);
-
-		appendStringInfoString(&buf, ") ");
+		appendStringInfo(&buf, "WHEN (%s) ", qualstr);
 	}
 
 	appendStringInfo(&buf, "EXECUTE FUNCTION %s(",
@@ -1127,6 +1143,74 @@ pg_get_triggerdef_worker(Oid trigid, bool pretty)
 	systable_endscan(tgscan);
 
 	table_close(tgrel, AccessShareLock);
+
+	return buf.data;
+}
+
+/*
+ * Pass back the TriggerWhen clause of a trigger given the pg_trigger record and
+ * the expression tree (in nodeToString() representation) from pg_trigger.tgqual
+ * for the trigger's WHEN condition.
+ */
+char *
+pg_get_trigger_whenclause(Form_pg_trigger trigrec, Node *whenClause, bool pretty)
+{
+	StringInfoData buf;
+	char		relkind;
+	deparse_context context;
+	deparse_namespace dpns;
+	RangeTblEntry *oldrte;
+	RangeTblEntry *newrte;
+
+	initStringInfo(&buf);
+
+	relkind = get_rel_relkind(trigrec->tgrelid);
+
+	/* Build minimal OLD and NEW RTEs for the rel */
+	oldrte = makeNode(RangeTblEntry);
+	oldrte->rtekind = RTE_RELATION;
+	oldrte->relid = trigrec->tgrelid;
+	oldrte->relkind = relkind;
+	oldrte->rellockmode = AccessShareLock;
+	oldrte->alias = makeAlias("old", NIL);
+	oldrte->eref = oldrte->alias;
+	oldrte->lateral = false;
+	oldrte->inh = false;
+	oldrte->inFromCl = true;
+
+	newrte = makeNode(RangeTblEntry);
+	newrte->rtekind = RTE_RELATION;
+	newrte->relid = trigrec->tgrelid;
+	newrte->relkind = relkind;
+	newrte->rellockmode = AccessShareLock;
+	newrte->alias = makeAlias("new", NIL);
+	newrte->eref = newrte->alias;
+	newrte->lateral = false;
+	newrte->inh = false;
+	newrte->inFromCl = true;
+
+	/* Build two-element rtable */
+	memset(&dpns, 0, sizeof(dpns));
+	dpns.rtable = list_make2(oldrte, newrte);
+	dpns.subplans = NIL;
+	dpns.ctes = NIL;
+	dpns.appendrels = NULL;
+	set_rtable_names(&dpns, NIL, NULL);
+	set_simple_column_names(&dpns);
+
+	/* Set up context with one-deep namespace stack */
+	context.buf = &buf;
+	context.namespaces = list_make1(&dpns);
+	context.windowClause = NIL;
+	context.windowTList = NIL;
+	context.varprefix = true;
+	context.prettyFlags = GET_PRETTY_FLAGS(pretty);
+	context.wrapColumn = WRAP_COLUMN_DEFAULT;
+	context.indentLevel = PRETTYINDENT_STD;
+	context.special_exprkind = EXPR_KIND_NONE;
+	context.appendparents = NULL;
+
+	get_rule_expr(whenClause, &context, false);
 
 	return buf.data;
 }
@@ -1883,6 +1967,14 @@ pg_get_partkeydef_columns(Oid relid, bool pretty)
 	return pg_get_partkeydef_worker(relid, prettyFlags, true, false);
 }
 
+/* Internal version that reports the full partition key definition */
+char *
+pg_get_partkeydef_string(Oid relid)
+{
+	return pg_get_partkeydef_worker(relid, GET_PRETTY_FLAGS(false), false,
+									false);
+}
+
 /*
  * Internal workhorse to decompile a partition key definition.
  */
@@ -2128,6 +2220,16 @@ pg_get_constraintdef_ext(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 
 	PG_RETURN_TEXT_P(string_to_text(res));
+}
+
+/*
+ * Internal version that returns the definition of a CONSTRAINT command
+ */
+char *
+pg_get_constraintdef_string(Oid constraintId)
+{
+	return pg_get_constraintdef_worker(constraintId, false,
+									   GET_PRETTY_FLAGS(false), false);
 }
 
 /*
@@ -3489,7 +3591,12 @@ pg_get_function_arg_default(PG_FUNCTION_ARGS)
 	PG_RETURN_TEXT_P(string_to_text(str));
 }
 
-static void
+/*
+ * Produce the formatted SQL body (not the whole function definition)
+ * of a function given the pg_proc tuple. Save the formatted SQL in the
+ * given StringInfo.
+ */
+void
 print_function_sqlbody(StringInfo buf, HeapTuple proctup)
 {
 	int			numargs;
@@ -5234,48 +5341,18 @@ make_ruledef(StringInfo buf, HeapTuple ruletup, TupleDesc rulettc,
 	/* If the rule has an event qualification, add it */
 	if (strcmp(ev_qual, "<>") != 0)
 	{
-		Node	   *qual;
-		Query	   *query;
-		deparse_context context;
-		deparse_namespace dpns;
-
-		if (prettyFlags & PRETTYFLAG_INDENT)
-			appendStringInfoString(buf, "\n  ");
-		appendStringInfoString(buf, " WHERE ");
-
-		qual = stringToNode(ev_qual);
-
 		/*
 		 * We need to make a context for recognizing any Vars in the qual
 		 * (which can only be references to OLD and NEW).  Use the rtable of
 		 * the first query in the action list for this purpose.
 		 */
-		query = (Query *) linitial(actions);
+		Query	   *query = (Query *) linitial(actions);
 
-		/*
-		 * If the action is INSERT...SELECT, OLD/NEW have been pushed down
-		 * into the SELECT, and that's what we need to look at. (Ugly kluge
-		 * ... try to fix this when we redesign querytrees.)
-		 */
-		query = getInsertSelectQuery(query, NULL);
+		if (prettyFlags & PRETTYFLAG_INDENT)
+			appendStringInfoString(buf, "\n  ");
+		appendStringInfoString(buf, " WHERE ");
 
-		/* Must acquire locks right away; see notes in get_query_def() */
-		AcquireRewriteLocks(query, false, false);
-
-		context.buf = buf;
-		context.namespaces = list_make1(&dpns);
-		context.windowClause = NIL;
-		context.windowTList = NIL;
-		context.varprefix = (list_length(query->rtable) != 1);
-		context.prettyFlags = prettyFlags;
-		context.wrapColumn = WRAP_COLUMN_DEFAULT;
-		context.indentLevel = PRETTYINDENT_STD;
-		context.special_exprkind = EXPR_KIND_NONE;
-		context.appendparents = NULL;
-
-		set_deparse_for_query(&dpns, query, NIL);
-
-		get_rule_expr(qual, &context, false);
+		pg_get_rule_whereclause(ev_qual, query, buf, prettyFlags);
 	}
 
 	appendStringInfoString(buf, " DO ");
@@ -5316,6 +5393,47 @@ make_ruledef(StringInfo buf, HeapTuple ruletup, TupleDesc rulettc,
 	table_close(ev_relation, AccessShareLock);
 }
 
+/*
+ * Given a string corresponding to a rule's pg_rewrite.ev_qual and a query
+ * parsetree, append ev_qual's text representation into the output buf.
+ *
+ * Tries to pretty up the output according to prettyFlags.
+ */
+static void
+pg_get_rule_whereclause(char *qualstr, Query *query, StringInfo buf,
+						int prettyFlags)
+{
+	Node	   *qual;
+	deparse_context context;
+	deparse_namespace dpns;
+
+	qual = stringToNode(qualstr);
+
+	/*
+	 * If the action is INSERT...SELECT, OLD/NEW have been pushed down
+	 * into the SELECT, and that's what we need to look at. (Ugly kluge
+	 * ... try to fix this when we redesign querytrees.)
+	 */
+	query = getInsertSelectQuery(query, NULL);
+
+	/* Must acquire locks right away; see notes in get_query_def() */
+	AcquireRewriteLocks(query, false, false);
+
+	context.buf = buf;
+	context.namespaces = list_make1(&dpns);
+	context.windowClause = NIL;
+	context.windowTList = NIL;
+	context.varprefix = (list_length(query->rtable) != 1);
+	context.prettyFlags = prettyFlags;
+	context.wrapColumn = WRAP_COLUMN_DEFAULT;
+	context.indentLevel = PRETTYINDENT_STD;
+	context.special_exprkind = EXPR_KIND_NONE;
+	context.appendparents = NULL;
+
+	set_deparse_for_query(&dpns, query, NIL);
+
+	get_rule_expr(qual, &context, false);
+}
 
 /* ----------
  * make_viewdef			- reconstruct the SELECT part of a
@@ -11630,7 +11748,7 @@ get_tablesample_def(TableSampleClause *tablesample, deparse_context *context)
  * actual_datatype.  (If you don't want this behavior, just pass
  * InvalidOid for actual_datatype.)
  */
-static void
+void
 get_opclass_name(Oid opclass, Oid actual_datatype,
 				 StringInfo buf)
 {
@@ -12024,7 +12142,7 @@ generate_qualified_relation_name(Oid relid)
  *
  * The result includes all necessary quoting and schema-prefixing.
  */
-static char *
+char *
 generate_function_name(Oid funcid, int nargs, List *argnames, Oid *argtypes,
 					   bool has_variadic, bool *use_variadic_p,
 					   ParseExprKind special_exprkind)
@@ -12410,7 +12528,7 @@ get_reloptions(StringInfo buf, Datum reloptions)
 /*
  * Generate a C string representing a relation's reloptions, or NULL if none.
  */
-static char *
+char *
 flatten_reloptions(Oid relid)
 {
 	char	   *result = NULL;

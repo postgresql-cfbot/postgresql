@@ -29,6 +29,7 @@
 #include "nodes/makefuncs.h"
 #include "replication/decode.h"
 #include "replication/logical.h"
+#include "replication/ddlmessage.h"
 #include "replication/message.h"
 #include "storage/fd.h"
 #include "utils/array.h"
@@ -387,4 +388,27 @@ pg_logical_emit_message_text(PG_FUNCTION_ARGS)
 {
 	/* bytea and text are compatible */
 	return pg_logical_emit_message_bytea(fcinfo);
+}
+
+/*
+ * SQL function for writing logical decoding DDL message into WAL.
+ */
+Datum
+pg_logical_emit_ddl_message_bytea(PG_FUNCTION_ARGS)
+{
+	char	   *prefix = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	Oid			relid = PG_GETARG_OID(1);
+	DeparsedCommandType cmdtype = PG_GETARG_INT16(2);
+	char	   *data = text_to_cstring(PG_GETARG_TEXT_PP(3));
+	XLogRecPtr	lsn;
+
+	lsn = LogLogicalDDLMessage(prefix, relid, cmdtype, data, strlen(data));
+	PG_RETURN_LSN(lsn);
+}
+
+Datum
+pg_logical_emit_ddl_message_text(PG_FUNCTION_ARGS)
+{
+	/* bytea and text are compatible */
+	return pg_logical_emit_ddl_message_bytea(fcinfo);
 }

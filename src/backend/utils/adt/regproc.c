@@ -308,6 +308,57 @@ format_procedure_qualified(Oid procedure_oid)
 }
 
 /*
+ * Append the parenthesized arguments of the given pg_proc row into the output
+ * buffer. force_qualify indicates whether to schema-qualify type names
+ * regardless of visibility.
+ */
+static void
+format_procedure_args_internal(Form_pg_proc procform, StringInfo buf,
+							   bool force_qualify)
+{
+	int			i;
+	char	   *(*func[2]) (Oid) = {format_type_be, format_type_be_qualified};
+
+	appendStringInfoChar(buf, '(');
+	for (i = 0; i < procform->pronargs; i++)
+	{
+		Oid			thisargtype = procform->proargtypes.values[i];
+		char	   *argtype;
+
+		if (i > 0)
+			appendStringInfoChar(buf, ',');
+
+		argtype = func[force_qualify] (thisargtype);
+		appendStringInfoString(buf, argtype);
+		pfree(argtype);
+	}
+	appendStringInfoChar(buf, ')');
+}
+
+/*
+ * format_procedure_args   - converts proc OID to "(args)"
+ */
+char *
+format_procedure_args(Oid procedure_oid, bool force_qualify)
+{
+	StringInfoData buf;
+	HeapTuple	proctup;
+	Form_pg_proc procform;
+
+	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(procedure_oid));
+	if (!HeapTupleIsValid(proctup))
+		elog(ERROR, "cache lookup failed for procedure %u", procedure_oid);
+	procform = (Form_pg_proc) GETSTRUCT(proctup);
+
+	initStringInfo(&buf);
+	format_procedure_args_internal(procform, &buf, force_qualify);
+
+	ReleaseSysCache(proctup);
+
+	return buf.data;
+}
+
+/*
  * format_procedure_extended - converts procedure OID to "pro_name(args)"
  *
  * This exports the useful functionality of regprocedureout for use

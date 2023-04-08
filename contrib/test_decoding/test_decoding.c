@@ -14,9 +14,11 @@
 
 #include "catalog/pg_type.h"
 
+#include "replication/ddlmessage.h"
 #include "replication/logical.h"
 #include "replication/origin.h"
 
+#include "tcop/ddl_deparse.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
@@ -72,6 +74,12 @@ static void pg_decode_message(LogicalDecodingContext *ctx,
 							  ReorderBufferTXN *txn, XLogRecPtr lsn,
 							  bool transactional, const char *prefix,
 							  Size sz, const char *message);
+static void pg_decode_ddl_message(LogicalDecodingContext *ctx,
+								  ReorderBufferTXN *txn,
+								  XLogRecPtr message_lsn,
+								  const char *prefix, Oid relid,
+								  DeparsedCommandType cmdtype,
+								  Size sz, const char *message);
 static bool pg_decode_filter_prepare(LogicalDecodingContext *ctx,
 									 TransactionId xid,
 									 const char *gid);
@@ -135,6 +143,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->filter_by_origin_cb = pg_decode_filter;
 	cb->shutdown_cb = pg_decode_shutdown;
 	cb->message_cb = pg_decode_message;
+	cb->ddl_cb = pg_decode_ddl_message;
 	cb->filter_prepare_cb = pg_decode_filter_prepare;
 	cb->begin_prepare_cb = pg_decode_begin_prepare_txn;
 	cb->prepare_cb = pg_decode_prepare_txn;
@@ -746,6 +755,44 @@ pg_decode_message(LogicalDecodingContext *ctx,
 	OutputPluginPrepareWrite(ctx, true);
 	appendStringInfo(ctx->out, "message: transactional: %d prefix: %s, sz: %zu content:",
 					 transactional, prefix, sz);
+	appendBinaryStringInfo(ctx->out, message, sz);
+	OutputPluginWrite(ctx, true);
+}
+
+static void
+pg_decode_ddl_message(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+					  XLogRecPtr message_lsn, const char *prefix, Oid relid,
+					  DeparsedCommandType cmdtype, Size sz, const char *message)
+{
+	OutputPluginPrepareWrite(ctx, true);
+	appendStringInfo(ctx->out, "message: prefix: %s, relid: %u, ",
+					 prefix, relid);
+
+	switch(cmdtype)
+	{
+	case DCT_SimpleCmd:
+		appendStringInfo(ctx->out, "cmdtype: Simple, ");
+		break;
+	case DCT_TableDropStart:
+	case DCT_ObjectDropStart:
+		appendStringInfo(ctx->out, "cmdtype: Drop start, ");
+		break;
+	case DCT_TableDropEnd:
+	case DCT_ObjectDropEnd:
+		appendStringInfo(ctx->out, "cmdtype: Drop end, ");
+		break;
+	case DCT_TableAlter:
+		appendStringInfo(ctx->out, "cmdtype: Alter table, ");
+		break;
+	case DCT_ObjectCreate:
+		appendStringInfo(ctx->out, "cmdtype: Create, ");
+		break;
+	default:
+		appendStringInfo(ctx->out, "cmdtype: Invalid, ");
+		break;
+	}
+
+	appendStringInfo(ctx->out, "sz: %zu content:", sz);
 	appendBinaryStringInfo(ctx->out, message, sz);
 	OutputPluginWrite(ctx, true);
 }

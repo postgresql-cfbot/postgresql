@@ -29,7 +29,9 @@ typedef enum CollectedCommandType
 	SCT_AlterOpFamily,
 	SCT_AlterDefaultPrivileges,
 	SCT_CreateOpClass,
-	SCT_AlterTSConfig
+	SCT_AlterTSConfig,
+	SCT_SecurityLabel,
+	SCT_CreateTableAs
 } CollectedCommandType;
 
 /*
@@ -39,6 +41,7 @@ typedef struct CollectedATSubcmd
 {
 	ObjectAddress address;		/* affected column, constraint, index, ... */
 	Node	   *parsetree;
+	char	   *usingexpr;
 } CollectedATSubcmd;
 
 typedef struct CollectedCommand
@@ -46,6 +49,7 @@ typedef struct CollectedCommand
 	CollectedCommandType type;
 
 	bool		in_extension;
+	char	   *role;
 	Node	   *parsetree;
 
 	union
@@ -62,6 +66,7 @@ typedef struct CollectedCommand
 		{
 			Oid			objectId;
 			Oid			classId;
+			bool		rewrite;
 			List	   *subcmds;
 		}			alterTable;
 
@@ -100,6 +105,20 @@ typedef struct CollectedCommand
 		{
 			ObjectType	objtype;
 		}			defprivs;
+
+		/* SECURITY LABEL */
+		struct
+		{
+			ObjectAddress address;
+			char		 *provider;
+		}			seclabel;
+
+		/* CREATE TABLE AS */
+		struct
+		{
+			ObjectAddress address;
+			Node		 *real_create;
+		}			ctas;
 	}			d;
 
 	struct CollectedCommand *parent;	/* when nested */

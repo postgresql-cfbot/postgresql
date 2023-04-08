@@ -36,6 +36,7 @@
 #include "access/xlogutils.h"
 #include "catalog/pg_control.h"
 #include "replication/decode.h"
+#include "replication/ddlmessage.h"
 #include "replication/logical.h"
 #include "replication/message.h"
 #include "replication/origin.h"
@@ -611,6 +612,46 @@ logicalmsg_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 												 * prefix */
 							  message->message_size,
 							  message->message + message->prefix_size);
+}
+
+/*
+ * Handle rmgr LOGICALDDLMSG_ID records for DecodeRecordIntoReorderBuffer().
+ */
+void
+logicalddl_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+{
+	SnapBuild  *builder = ctx->snapshot_builder;
+	XLogReaderState *r = buf->record;
+	TransactionId xid = XLogRecGetXid(r);
+	uint8		info = XLogRecGetInfo(r) & ~XLR_INFO_MASK;
+	RepOriginId origin_id = XLogRecGetOrigin(r);
+	xl_logical_ddl_message *message;
+
+	if (info != XLOG_LOGICAL_DDL_MESSAGE)
+		elog(ERROR, "unexpected RM_LOGICALDDLMSG_ID record type: %u", info);
+
+	ReorderBufferProcessXid(ctx->reorder, XLogRecGetXid(r), buf->origptr);
+
+	/*
+	 * If we don't have snapshot or we are just fast-forwarding, there is no
+	 * point in decoding ddl messages.
+	 */
+	if (SnapBuildCurrentState(builder) < SNAPBUILD_FULL_SNAPSHOT ||
+		ctx->fast_forward)
+		return;
+
+	message = (xl_logical_ddl_message *) XLogRecGetData(r);
+
+	if (message->dbId != ctx->slot->data.database ||
+		FilterByOrigin(ctx, origin_id))
+		return;
+
+	if (SnapBuildProcessChange(builder, xid, buf->origptr))
+		ReorderBufferQueueDDLMessage(ctx->reorder, xid, buf->endptr,
+									 message->message, /* first part of message is prefix */
+									 message->message_size,
+									 message->message + message->prefix_size,
+									 message->relid, message->cmdtype);
 }
 
 /*

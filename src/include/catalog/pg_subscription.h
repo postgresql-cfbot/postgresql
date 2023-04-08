@@ -93,6 +93,9 @@ CATALOG(pg_subscription,6100,SubscriptionRelationId) BKI_SHARED_RELATION BKI_ROW
 	bool		subrunasowner;		/* True if replication should execute as
 									 * the subscription owner */
 
+	bool		submatchddlowner;	/* True if replicated objects by DDL replication
+									 * should match the original owner on the publisher */
+
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 	/* Connection string to the publisher */
 	text		subconninfo BKI_FORCE_NOT_NULL;
@@ -144,6 +147,8 @@ typedef struct Subscription
 	List	   *publications;	/* List of publication names to subscribe to */
 	char	   *origin;			/* Only publish data originating from the
 								 * specified origin */
+	bool		matchddlowner;  /* Indicates if replicated objects by DDL replication
+								 * should match the original owner on the publisher */
 } Subscription;
 
 /* Disallow streaming in-progress transactions. */

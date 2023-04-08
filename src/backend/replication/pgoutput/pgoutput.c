@@ -18,6 +18,7 @@
 #include "catalog/pg_publication_rel.h"
 #include "catalog/pg_subscription.h"
 #include "commands/defrem.h"
+#include "commands/publicationcmds.h"
 #include "commands/subscriptioncmds.h"
 #include "executor/executor.h"
 #include "fmgr.h"
@@ -55,6 +56,11 @@ static void pgoutput_message(LogicalDecodingContext *ctx,
 							 ReorderBufferTXN *txn, XLogRecPtr message_lsn,
 							 bool transactional, const char *prefix,
 							 Size sz, const char *message);
+static void pgoutput_ddl(LogicalDecodingContext *ctx,
+						 ReorderBufferTXN *txn, XLogRecPtr message_lsn,
+						 const char *prefix, Oid relid,
+						 DeparsedCommandType cmdtype,
+						 Size sz, const char *message);
 static bool pgoutput_origin_filter(LogicalDecodingContext *ctx,
 								   RepOriginId origin_id);
 static void pgoutput_begin_prepare_txn(LogicalDecodingContext *ctx,
@@ -207,15 +213,27 @@ typedef struct RelationSyncEntry
 typedef struct PGOutputTxnData
 {
 	bool		sent_begin_txn; /* flag indicating whether BEGIN has been sent */
+	List	   *deleted_relids;
 } PGOutputTxnData;
 
 /* Map used to remember which relation schemas we sent. */
 static HTAB *RelationSyncCache = NULL;
 
+/* Struct to cache the published DDL. */
+typedef struct DDLSyncCache
+{
+	bool		valid;
+	bool		pubindex;
+	bool		puball;
+} DDLSyncCache;
+
+static DDLSyncCache *ddlcache = NULL;
+
 static void init_rel_sync_cache(MemoryContext cachectx);
 static void cleanup_rel_sync_cache(TransactionId xid, bool is_commit);
 static RelationSyncEntry *get_rel_sync_entry(PGOutputData *data,
 											 Relation relation);
+static void build_ddl_sync_cache(PGOutputData *data);
 static void rel_sync_cache_relation_cb(Datum arg, Oid relid);
 static void rel_sync_cache_publication_cb(Datum arg, int cacheid,
 										  uint32 hashvalue);
@@ -254,6 +272,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->change_cb = pgoutput_change;
 	cb->truncate_cb = pgoutput_truncate;
 	cb->message_cb = pgoutput_message;
+	cb->ddl_cb = pgoutput_ddl;
 	cb->commit_cb = pgoutput_commit_txn;
 
 	cb->begin_prepare_cb = pgoutput_begin_prepare_txn;
@@ -270,6 +289,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->stream_commit_cb = pgoutput_stream_commit;
 	cb->stream_change_cb = pgoutput_change;
 	cb->stream_message_cb = pgoutput_message;
+	cb->stream_ddl_cb = pgoutput_ddl;
 	cb->stream_truncate_cb = pgoutput_truncate;
 	/* transaction streaming - two-phase commit */
 	cb->stream_prepare_cb = pgoutput_stream_prepare_txn;
@@ -425,6 +445,7 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 
 	/* This plugin uses binary protocol. */
 	opt->output_type = OUTPUT_PLUGIN_BINARY_OUTPUT;
+	opt->receive_rewrites = true;
 
 	/*
 	 * This is replication start and not slot initialization.
@@ -505,6 +526,7 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 
 		/* Init publication state. */
 		data->publications = NIL;
+		data->deleted_relids = NIL;
 		publications_valid = false;
 
 		/*
@@ -533,6 +555,34 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 	}
 }
 
+/* Initialize the per-transaction level variable for the given transaction. */
+static void
+init_txn_data(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
+{
+	PGOutputTxnData *txndata;
+
+	if (txn->output_plugin_private != NULL)
+		return;
+
+	txndata = MemoryContextAllocZero(ctx->context, sizeof(PGOutputTxnData));
+
+	txn->output_plugin_private = txndata;
+}
+
+/* Clean up the per-transaction level variable for the given transaction. */
+static void
+clean_txn_data(ReorderBufferTXN *txn)
+{
+	PGOutputTxnData *txndata = (PGOutputTxnData *) txn->output_plugin_private;
+
+	if (txndata == NULL)
+		return;
+
+	list_free(txndata->deleted_relids);
+	pfree(txndata);
+	txn->output_plugin_private = NULL;
+}
+
 /*
  * BEGIN callback.
  *
@@ -546,10 +596,7 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 static void
 pgoutput_begin_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
 {
-	PGOutputTxnData *txndata = MemoryContextAllocZero(ctx->context,
-													  sizeof(PGOutputTxnData));
-
-	txn->output_plugin_private = txndata;
+	init_txn_data(ctx, txn);
 }
 
 /*
@@ -594,8 +641,7 @@ pgoutput_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	 */
 	sent_begin_txn = txndata->sent_begin_txn;
 	OutputPluginUpdateProgress(ctx, !sent_begin_txn);
-	pfree(txndata);
-	txn->output_plugin_private = NULL;
+	clean_txn_data(txn);
 
 	if (!sent_begin_txn)
 	{
@@ -637,6 +683,8 @@ pgoutput_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	OutputPluginPrepareWrite(ctx, true);
 	logicalrep_write_prepare(ctx->out, txn, prepare_lsn);
 	OutputPluginWrite(ctx, true);
+
+	clean_txn_data(txn);
 }
 
 /*
@@ -1411,6 +1459,19 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	ReorderBufferChangeType action = change->action;
 	TupleTableSlot *old_slot = NULL;
 	TupleTableSlot *new_slot = NULL;
+	bool			table_rewrite = false;
+
+	/*
+	 * For heap rewrites, we might need to replicate them if the rewritten
+	 * table publishes rewrite ddl message. So get the actual relation here
+	 * and check the pubaction later.
+	 */
+	if (relation->rd_rel->relrewrite)
+	{
+		table_rewrite = true;
+		relation = RelationIdGetRelation(relation->rd_rel->relrewrite);
+		targetrel = relation;
+	}
 
 	if (!is_publishable_relation(relation))
 		return;
@@ -1455,6 +1516,13 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 		default:
 			Assert(false);
 	}
+
+	/*
+	 * We don't publish table rewrite change unless we publish the rewrite ddl
+	 * message.
+	 */
+	if (table_rewrite && !relentry->pubactions.pubddl_table)
+		return;
 
 	/* Avoid leaking memory by using and resetting our own context */
 	old = MemoryContextSwitchTo(data->context);
@@ -1503,7 +1571,8 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	 * Updates could be transformed to inserts or deletes based on the results
 	 * of the row filter for old and new tuple.
 	 */
-	if (!pgoutput_row_filter(targetrel, old_slot, &new_slot, relentry, &action))
+	if (!table_rewrite &&
+		!pgoutput_row_filter(targetrel, old_slot, &new_slot, relentry, &action))
 		goto cleanup;
 
 	/*
@@ -1528,8 +1597,18 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	switch (action)
 	{
 		case REORDER_BUFFER_CHANGE_INSERT:
-			logicalrep_write_insert(ctx->out, xid, targetrel, new_slot,
-									data->binary, relentry->columns);
+			/*
+			 * Convert the rewrite inserts to updates so that the subscriber
+			 * can replay it. This is needed to make sure the data between
+			 * publisher and subscriber is consistent.
+			 */
+			if (table_rewrite)
+				logicalrep_write_update(ctx->out, xid, targetrel,
+										NULL, new_slot, data->binary,
+										relentry->columns);
+			else
+				logicalrep_write_insert(ctx->out, xid, targetrel, new_slot,
+										data->binary, relentry->columns);
 			break;
 		case REORDER_BUFFER_CHANGE_UPDATE:
 			logicalrep_write_update(ctx->out, xid, targetrel, old_slot,
@@ -1551,6 +1630,9 @@ cleanup:
 		RelationClose(ancestor);
 		ancestor = NULL;
 	}
+
+	if (table_rewrite)
+		RelationClose(relation);
 
 	MemoryContextSwitchTo(old);
 	MemoryContextReset(data->context);
@@ -1665,6 +1747,166 @@ pgoutput_message(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	OutputPluginWrite(ctx, true);
 }
 
+/* Check if the given object is published. */
+static bool
+is_object_published(LogicalDecodingContext *ctx, Oid objid)
+{
+	Relation	relation = NULL;
+	RelationSyncEntry *relentry;
+	PGOutputData *data = (PGOutputData *) ctx->output_plugin_private;
+
+	build_ddl_sync_cache(data);
+
+	/* First check the DDL command filter. */
+	switch (get_rel_relkind(objid))
+	{
+		case RELKIND_RELATION:
+			relation = RelationIdGetRelation(objid);
+			relentry = get_rel_sync_entry(data, relation);
+			RelationClose(relation);
+
+			/*
+			 * Skip sending this ddl if we don't publish ddl message or the ddl
+			 * need to be published via its root relation.
+			 */
+			if ((!relentry->pubactions.pubddl_table &&
+				!ddlcache->puball) ||
+				relentry->publish_as_relid != objid)
+				return false;
+
+			break;
+		case RELKIND_INDEX:
+			if (!ddlcache->pubindex && !ddlcache->puball)
+				return false;
+
+			/* Get the table OID that the index is for. */
+			relation = RelationIdGetRelation(objid);
+			objid = relation->rd_index->indrelid;
+			RelationClose(relation);
+
+			/* Filter the index DDLs if the index's table was not published. */
+			relation = RelationIdGetRelation(objid);
+			relentry = get_rel_sync_entry(data, relation);
+			RelationClose(relation);
+
+			if ((!relentry->pubactions.pubddl_table &&
+				!ddlcache->puball) ||
+				relentry->publish_as_relid != objid)
+				return false;
+
+			break;
+		default:
+			/* unsupported objects */
+			return false;
+	}
+
+	return true;
+}
+
+/*
+ * Send the decoded DDL over wire.
+ */
+static void
+pgoutput_ddl(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+			 XLogRecPtr message_lsn,
+			 const char *prefix, Oid relid, DeparsedCommandType cmdtype,
+			 Size sz, const char *message)
+{
+	PGOutputTxnData *txndata = (PGOutputTxnData *) txn->output_plugin_private;
+
+	/*
+	 * Check if the given object is published. Note that for dropped objects,
+	 * we cannot get the required information from the catalog, so we skip the
+	 * check for them.
+	 */
+	if (cmdtype != DCT_TableDropEnd && cmdtype != DCT_ObjectDropEnd &&
+		!is_object_published(ctx, relid))
+		return;
+
+	switch (cmdtype)
+	{
+		case DCT_TableDropStart:
+		case DCT_ObjectDropStart:
+			{
+				MemoryContext	old;
+
+				init_txn_data(ctx, txn);
+
+				txndata = (PGOutputTxnData *) txn->output_plugin_private;
+
+				/*
+				 * On DROP start, add the relid to a deleted_relid list if the
+				 * relid is part of a publication that supports ddl
+				 * publication. We need this because on DROP end, the relid
+				 * will no longer be valid. Later on Drop end, verify that the
+				 * drop is for a relid that is on the deleted_rid list, and
+				 * only then send the ddl message.
+				 */
+				old = MemoryContextSwitchTo(ctx->context);
+				txndata->deleted_relids = lappend_oid(txndata->deleted_relids,
+													  relid);
+				MemoryContextSwitchTo(old);
+			}
+			return;
+
+		case DCT_TableDropEnd:
+		case DCT_ObjectDropEnd:
+			if (!list_member_oid(txndata->deleted_relids, relid))
+				return;
+
+			txndata->deleted_relids = list_delete_oid(txndata->deleted_relids,
+													  relid);
+			break;
+
+		case DCT_TableAlter:
+
+			/*
+			 * For table rewrite ddl, we first send the original ddl message
+			 * to subscriber, then convert the upcoming rewrite INSERT to
+			 * UPDATE and send them to subscriber so that the data between
+			 * publisher and subscriber can always be consistent.
+			 *
+			 * We do this way because of two reason:
+			 *
+			 * (1) The data before the rewrite ddl could already be different
+			 * among publisher and subscriber. To make sure the extra data in
+			 * subscriber which doesn't exist in publisher also get rewritten,
+			 * we need to let the subscriber execute the original rewrite ddl
+			 * to rewrite all the data at first.
+			 *
+			 * (2) the data after executing rewrite ddl could be different
+			 * among publisher and subscriber(due to different
+			 * functions/operators used during rewrite), so we need to
+			 * replicate the rewrite UPDATEs to keep the data consistent.
+			 *
+			 * TO IMPROVE: We could improve this by letting the subscriber
+			 * only rewrite the extra data instead of doing fully rewrite and
+			 * use the upcoming rewrite UPDATEs to rewrite the rest data.
+			 * Besides, we may not need to send rewrite changes for all type
+			 * of rewrite ddl, for example, it seems fine to skip sending
+			 * rewrite changes for ALTER TABLE SET LOGGED as the data in the
+			 * table doesn't actually be changed.
+			 */
+			break;
+
+		case DCT_SimpleCmd:
+			/* do nothing */
+			break;
+
+		default:
+			elog(ERROR, "unsupported type %d", cmdtype);
+			break;
+	}
+
+	/* Send BEGIN if we haven't yet */
+	if (txndata && !txndata->sent_begin_txn)
+		pgoutput_send_begin(ctx, txn);
+
+	OutputPluginPrepareWrite(ctx, true);
+	logicalrep_write_ddl(ctx->out, message_lsn, prefix, sz, message);
+	OutputPluginWrite(ctx, true);
+}
+
 /*
  * Return true if the data is associated with an origin and the user has
  * requested the changes that don't have an origin, false otherwise.
@@ -1731,6 +1973,9 @@ publication_invalidation_cb(Datum arg, int cacheid, uint32 hashvalue)
 	 * is checked it will be updated with the new publication settings.
 	 */
 	rel_sync_cache_publication_cb(arg, cacheid, hashvalue);
+
+	if (ddlcache != NULL)
+		ddlcache->valid = false;
 }
 
 /*
@@ -1813,6 +2058,7 @@ pgoutput_stream_abort(struct LogicalDecodingContext *ctx,
 	OutputPluginWrite(ctx, true);
 
 	cleanup_rel_sync_cache(toptxn->xid, false);
+	clean_txn_data(txn);
 }
 
 /*
@@ -1838,6 +2084,7 @@ pgoutput_stream_commit(struct LogicalDecodingContext *ctx,
 	OutputPluginWrite(ctx, true);
 
 	cleanup_rel_sync_cache(txn->xid, true);
+	clean_txn_data(txn);
 }
 
 /*
@@ -1856,6 +2103,8 @@ pgoutput_stream_prepare_txn(LogicalDecodingContext *ctx,
 	OutputPluginPrepareWrite(ctx, true);
 	logicalrep_write_stream_prepare(ctx->out, txn, prepare_lsn);
 	OutputPluginWrite(ctx, true);
+
+	clean_txn_data(txn);
 }
 
 /*
@@ -1941,6 +2190,27 @@ set_schema_sent_in_streamed_txn(RelationSyncEntry *entry, TransactionId xid)
 	MemoryContextSwitchTo(oldctx);
 }
 
+/* Reload publications if needed. */
+static void
+reload_publications(PGOutputData *data)
+{
+	MemoryContext oldctx;
+
+	if (!publications_valid)
+	{
+		oldctx = MemoryContextSwitchTo(CacheMemoryContext);
+		if (data->publications)
+		{
+			list_free_deep(data->publications);
+			data->publications = NIL;
+		}
+		data->publications = LoadPublications(data->publication_names);
+		MemoryContextSwitchTo(oldctx);
+		publications_valid = true;
+	}
+}
+
+
 /*
  * Find or create entry in the relation schema cache.
  *
@@ -1955,7 +2225,6 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 {
 	RelationSyncEntry *entry;
 	bool		found;
-	MemoryContext oldctx;
 	Oid			relid = RelationGetRelid(relation);
 
 	Assert(RelationSyncCache != NULL);
@@ -1973,7 +2242,9 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 		entry->schema_sent = false;
 		entry->streamed_txns = NIL;
 		entry->pubactions.pubinsert = entry->pubactions.pubupdate =
-			entry->pubactions.pubdelete = entry->pubactions.pubtruncate = false;
+			entry->pubactions.pubdelete = entry->pubactions.pubtruncate =
+			entry->pubactions.pubddl_table = entry->pubactions.pubddl_index =
+			entry->pubactions.pubddl_all = false;
 		entry->new_slot = NULL;
 		entry->old_slot = NULL;
 		memset(entry->exprstate, 0, sizeof(entry->exprstate));
@@ -2002,19 +2273,7 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 		char		relkind = get_rel_relkind(relid);
 		List	   *rel_publications = NIL;
 
-		/* Reload publications if needed before use. */
-		if (!publications_valid)
-		{
-			oldctx = MemoryContextSwitchTo(CacheMemoryContext);
-			if (data->publications)
-			{
-				list_free_deep(data->publications);
-				data->publications = NIL;
-			}
-			data->publications = LoadPublications(data->publication_names);
-			MemoryContextSwitchTo(oldctx);
-			publications_valid = true;
-		}
+		reload_publications(data);
 
 		/*
 		 * Reset schema_sent status as the relation definition may have
@@ -2031,6 +2290,9 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 		entry->pubactions.pubupdate = false;
 		entry->pubactions.pubdelete = false;
 		entry->pubactions.pubtruncate = false;
+		entry->pubactions.pubddl_table = false;
+		entry->pubactions.pubddl_index = false;
+		entry->pubactions.pubddl_all = false;
 
 		/*
 		 * Tuple slots cleanups. (Will be rebuilt later if needed).
@@ -2144,6 +2406,9 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 				entry->pubactions.pubupdate |= pub->pubactions.pubupdate;
 				entry->pubactions.pubdelete |= pub->pubactions.pubdelete;
 				entry->pubactions.pubtruncate |= pub->pubactions.pubtruncate;
+				entry->pubactions.pubddl_table |= pub->pubactions.pubddl_table;
+				entry->pubactions.pubddl_index |= pub->pubactions.pubddl_index;
+				entry->pubactions.pubddl_all |= pub->pubactions.pubddl_all;
 
 				/*
 				 * We want to publish the changes as the top-most ancestor
@@ -2206,6 +2471,44 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 	}
 
 	return entry;
+}
+
+/*
+ * This looks up all publications and build the cache about which DDLs to
+ * publish.
+ */
+static void
+build_ddl_sync_cache(PGOutputData *data)
+{
+	ListCell	 *lc;
+	MemoryContext oldctx;
+
+	if (ddlcache == NULL)
+	{
+		oldctx = MemoryContextSwitchTo(CacheMemoryContext);
+		ddlcache = (DDLSyncCache *) palloc0(sizeof(DDLSyncCache));
+		MemoryContextSwitchTo(oldctx);
+	}
+
+	if (ddlcache->valid)
+		return;
+
+	ddlcache->pubindex = false;
+	ddlcache->puball = false;
+
+	reload_publications(data);
+
+	foreach(lc, data->publications)
+	{
+		Publication *pub = lfirst(lc);
+
+		ddlcache->pubindex |= pub->pubactions.pubddl_index;
+		ddlcache->puball |= pub->pubactions.pubddl_all;
+	}
+
+	ddlcache->valid = true;
+
+	return;
 }
 
 /*

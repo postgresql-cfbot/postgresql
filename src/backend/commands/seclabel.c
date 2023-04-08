@@ -18,6 +18,7 @@
 #include "catalog/indexing.h"
 #include "catalog/pg_seclabel.h"
 #include "catalog/pg_shseclabel.h"
+#include "commands/event_trigger.h"
 #include "commands/seclabel.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
@@ -212,6 +213,11 @@ ExecSecLabelStmt(SecLabelStmt *stmt)
 	 */
 	if (relation != NULL)
 		relation_close(relation, NoLock);
+
+	/* Pass the info to event triggers about the SECURITY LABEL. */
+	if (EventTriggerSupportsObjectType(stmt->objtype))
+		EventTriggerCollectSecLabel(address, pstrdup(provider->provider_name),
+									stmt);
 
 	return address;
 }

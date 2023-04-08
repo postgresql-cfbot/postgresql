@@ -71,6 +71,7 @@
 #define SUBOPT_RUN_AS_OWNER			0x00001000
 #define SUBOPT_LSN					0x00002000
 #define SUBOPT_ORIGIN				0x00004000
+#define SUBOPT_MATCH_DDL_OWNER		0x00008000
 
 /* check if the 'val' has 'bits' set */
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
@@ -95,6 +96,7 @@ typedef struct SubOpts
 	bool		disableonerr;
 	bool		passwordrequired;
 	bool		runasowner;
+	bool		matchddlowner;
 	char	   *origin;
 	XLogRecPtr	lsn;
 } SubOpts;
@@ -157,6 +159,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 		opts->runasowner = false;
 	if (IsSet(supported_opts, SUBOPT_ORIGIN))
 		opts->origin = pstrdup(LOGICALREP_ORIGIN_ANY);
+	if (IsSet(supported_opts, SUBOPT_MATCH_DDL_OWNER))
+		opts->matchddlowner = true;
 
 	/* Parse options */
 	foreach(lc, stmt_options)
@@ -352,6 +356,15 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 
 			opts->specified_opts |= SUBOPT_LSN;
 			opts->lsn = lsn;
+		}
+		else if (IsSet(supported_opts, SUBOPT_MATCH_DDL_OWNER) &&
+				 strcmp(defel->defname, "match_ddl_owner") == 0)
+		{
+			if (IsSet(opts->specified_opts, SUBOPT_MATCH_DDL_OWNER))
+				errorConflictingDefElem(defel, pstate);
+
+			opts->specified_opts |= SUBOPT_MATCH_DDL_OWNER;
+			opts->matchddlowner = defGetBoolean(defel);
 		}
 		else
 			ereport(ERROR,
@@ -591,7 +604,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 					  SUBOPT_SYNCHRONOUS_COMMIT | SUBOPT_BINARY |
 					  SUBOPT_STREAMING | SUBOPT_TWOPHASE_COMMIT |
 					  SUBOPT_DISABLE_ON_ERR | SUBOPT_PASSWORD_REQUIRED |
-					  SUBOPT_RUN_AS_OWNER | SUBOPT_ORIGIN);
+					  SUBOPT_RUN_AS_OWNER | SUBOPT_MATCH_DDL_OWNER |
+					  SUBOPT_ORIGIN);
 	parse_subscription_options(pstate, stmt->options, supported_opts, &opts);
 
 	/*
@@ -708,6 +722,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 		publicationListToArray(publications);
 	values[Anum_pg_subscription_suborigin - 1] =
 		CStringGetTextDatum(opts.origin);
+	values[Anum_pg_subscription_submatchddlowner - 1] = BoolGetDatum(opts.matchddlowner);
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
@@ -1130,7 +1145,8 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 								  SUBOPT_SYNCHRONOUS_COMMIT | SUBOPT_BINARY |
 								  SUBOPT_STREAMING | SUBOPT_DISABLE_ON_ERR |
 								  SUBOPT_PASSWORD_REQUIRED |
-								  SUBOPT_RUN_AS_OWNER | SUBOPT_ORIGIN);
+								  SUBOPT_RUN_AS_OWNER | SUBOPT_MATCH_DDL_OWNER |
+								  SUBOPT_ORIGIN);
 
 				parse_subscription_options(pstate, stmt->options,
 										   supported_opts, &opts);
@@ -1207,6 +1223,14 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 					values[Anum_pg_subscription_suborigin - 1] =
 						CStringGetTextDatum(opts.origin);
 					replaces[Anum_pg_subscription_suborigin - 1] = true;
+				}
+
+				if (IsSet(opts.specified_opts, SUBOPT_MATCH_DDL_OWNER))
+				{
+					values[Anum_pg_subscription_submatchddlowner - 1]
+						= BoolGetDatum(opts.matchddlowner);
+					replaces[Anum_pg_subscription_submatchddlowner - 1]
+						= true;
 				}
 
 				update_tuple = true;

@@ -2877,7 +2877,7 @@ my %tests = (
 		create_order => 50,
 		create_sql   => 'CREATE PUBLICATION pub2
 						 FOR ALL TABLES
-						 WITH (publish = \'\');',
+						 WITH (publish = \'\', ddl = \'\');',
 		regexp => qr/^
 			\QCREATE PUBLICATION pub2 FOR ALL TABLES WITH (publish = '');\E
 			/xm,

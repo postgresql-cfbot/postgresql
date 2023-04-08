@@ -431,6 +431,11 @@ SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL, NULL, 'inc
 -- done, free logical replication slot
 SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL, NULL, 'include-xids', '0', 'skip-empty-xacts', '1');
 
+SELECT 'ddl msg1' FROM pg_logical_emit_ddl_message('ddl msg1', 16394, 1, 'msg1');
+SELECT 'ddl msg2' FROM pg_logical_emit_ddl_message('ddl msg2', 16394, 1, '{"fmt": "CREATE SCHEMA %{if_not_exists}s %{name}I %{authorization}s", "name": "foo", "authorization": {"fmt": "AUTHORIZATION %{authorization_role}I", "present": false, "authorization_role": null}, "if_not_exists": ""}');
+SELECT 'ddl msg3' FROM pg_logical_emit_ddl_message('ddl msg3', 16394, 1, '{"fmt": "CREATE %{persistence}s TABLE %{if_not_exists}s %{identity}D (%{table_elements:, }s) %{inherits}s %{tablespace}s %{on_commit}s %{partition_by}s %{access_method}s %{with_clause}s", "identity": {"objname": "foo", "schemaname": "element_test"}, "inherits": {"fmt": "INHERITS (%{parents:, }D)", "parents": null, "present": false}, "on_commit": {"fmt": "ON COMMIT %{on_commit_value}s", "present": false, "on_commit_value": null}, "tablespace": {"fmt": "TABLESPACE %{tablespace}I", "present": false, "tablespace": null}, "persistence": "", "with_clause": {"fmt": "WITH", "present": false}, "partition_by": {"fmt": "PARTITION BY %{definition}s", "present": false, "definition": null}, "access_method": {"fmt": "USING %{access_method}I", "present": false, "access_method": null}, "if_not_exists": "", "table_elements": [{"fmt": "%{name}I %{coltype}T STORAGE %{colstorage}s %{compression}s %{collation}s %{not_null}s %{default}s %{generated_column}s", "name": "id", "type": "column", "coltype": {"typmod": "", "typarray": false, "typename": "int4", "schemaname": "pg_catalog"}, "default": {"fmt": "DEFAULT", "present": false}, "not_null": "", "collation": {"fmt": "COLLATE", "present": false}, "colstorage": "plain", "compression": {"fmt": "COMPRESSION %{compression_method}I", "present": false, "compression_method": null}, "generated_column": {"fmt": "GENERATED ALWAYS AS", "present": false}}]}}');
+SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL, NULL, 'include-xids', '0', 'skip-empty-xacts', '1');
+
 SELECT pg_drop_replication_slot('regression_slot');
 
 /* check that the slot is gone */

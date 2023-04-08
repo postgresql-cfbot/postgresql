@@ -14,6 +14,7 @@
 #include "postgres.h"
 
 #include "miscadmin.h"
+#include "nodes/pg_list.h"
 #include "tcop/cmdtag.h"
 #include "utils/builtins.h"
 
@@ -26,10 +27,11 @@ typedef struct CommandTagBehavior
 	const bool	table_rewrite_ok;
 	const bool	display_rowcount;	/* should the number of rows affected be
 									 * shown in the command completion string */
+	const bool	ddl_replication_ok;
 } CommandTagBehavior;
 
-#define PG_CMDTAG(tag, name, evtrgok, rwrok, rowcnt) \
-	{ name, (uint8) (sizeof(name) - 1), evtrgok, rwrok, rowcnt },
+#define PG_CMDTAG(tag, name, evtrgok, rwrok, rowcnt, ddlreplok) \
+	{ name, (uint8) (sizeof(name) - 1), evtrgok, rwrok, rowcnt, ddlreplok },
 
 static const CommandTagBehavior tag_behavior[COMMAND_TAG_NEXTTAG] = {
 #include "tcop/cmdtaglist.h"
@@ -57,6 +59,20 @@ GetCommandTagNameAndLen(CommandTag commandTag, Size *len)
 	return tag_behavior[commandTag].name;
 }
 
+List *
+GetCommandTagsForDDLRepl(void)
+{
+	List *ddlrepl_commands = NIL;
+
+	for(int i = 0; i < COMMAND_TAG_NEXTTAG; i++)
+	{
+		if (tag_behavior[i].ddl_replication_ok)
+			ddlrepl_commands = lappend_int(ddlrepl_commands, i);
+	}
+
+	return ddlrepl_commands;
+}
+
 bool
 command_tag_display_rowcount(CommandTag commandTag)
 {
@@ -73,6 +89,12 @@ bool
 command_tag_table_rewrite_ok(CommandTag commandTag)
 {
 	return tag_behavior[commandTag].table_rewrite_ok;
+}
+
+bool
+command_tag_ddl_replication_ok(CommandTag commandTag)
+{
+	return tag_behavior[commandTag].ddl_replication_ok;
 }
 
 /*

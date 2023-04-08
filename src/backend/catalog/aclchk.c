@@ -129,7 +129,6 @@ static void expand_all_col_privileges(Oid table_oid, Form_pg_class classForm,
 									  AclMode *col_privileges,
 									  int num_col_privileges);
 static AclMode string_to_privilege(const char *privname);
-static const char *privilege_to_string(AclMode privilege);
 static AclMode restrict_and_check_grant(bool is_grant, AclMode avail_goptions,
 										bool all_privs, AclMode privileges,
 										Oid objectId, Oid grantorId,
@@ -385,11 +384,10 @@ ExecuteGrantStmt(GrantStmt *stmt)
 	ListCell   *cell;
 	const char *errormsg;
 	AclMode		all_privileges;
+	Oid			grantor = InvalidOid;
 
 	if (stmt->grantor)
 	{
-		Oid			grantor;
-
 		grantor = get_rolespec_oid(stmt->grantor, false);
 
 		/*
@@ -407,6 +405,9 @@ ExecuteGrantStmt(GrantStmt *stmt)
 	 */
 	istmt.is_grant = stmt->is_grant;
 	istmt.objtype = stmt->objtype;
+
+	/* Copy the grantor id needed for DDL deparsing of Grant */
+	istmt.grantor_uid = grantor;
 
 	/* Collect the OIDs of the target objects */
 	switch (stmt->targtype)
@@ -2622,7 +2623,7 @@ string_to_privilege(const char *privname)
 	return 0;					/* appease compiler */
 }
 
-static const char *
+const char *
 privilege_to_string(AclMode privilege)
 {
 	switch (privilege)

@@ -38,10 +38,12 @@
 #include "commands/publicationcmds.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "parser/parse_clause.h"
 #include "parser/parse_collate.h"
 #include "parser/parse_relation.h"
+#include "parser/parser.h"
 #include "storage/lmgr.h"
 #include "utils/acl.h"
 #include "utils/array.h"
@@ -82,21 +84,27 @@ static void PublicationDropSchemas(Oid pubid, List *schemas, bool missing_ok);
 static void
 parse_publication_options(ParseState *pstate,
 						  List *options,
+						  bool for_all_tables,
 						  bool *publish_given,
 						  PublicationActions *pubactions,
 						  bool *publish_via_partition_root_given,
-						  bool *publish_via_partition_root)
+						  bool *publish_via_partition_root,
+						  bool *ddl_type_given)
 {
 	ListCell   *lc;
 
 	*publish_given = false;
 	*publish_via_partition_root_given = false;
+	*ddl_type_given = false;
 
 	/* defaults */
 	pubactions->pubinsert = true;
 	pubactions->pubupdate = true;
 	pubactions->pubdelete = true;
 	pubactions->pubtruncate = true;
+	pubactions->pubddl_table = false;
+	pubactions->pubddl_index = false;
+	pubactions->pubddl_all = false;
 	*publish_via_partition_root = false;
 
 	/* Parse options */
@@ -123,7 +131,7 @@ parse_publication_options(ParseState *pstate,
 			pubactions->pubtruncate = false;
 
 			*publish_given = true;
-			publish = defGetString(defel);
+			publish = pstrdup(defGetString(defel));
 
 			if (!SplitIdentifierString(publish, ',', &publish_list))
 				ereport(ERROR,
@@ -157,6 +165,48 @@ parse_publication_options(ParseState *pstate,
 				errorConflictingDefElem(defel, pstate);
 			*publish_via_partition_root_given = true;
 			*publish_via_partition_root = defGetBoolean(defel);
+		}
+		else if (strcmp(defel->defname, "ddl") == 0)
+		{
+			char	   *ddl_level;
+			List	   *ddl_list;
+			ListCell   *lc3;
+
+			if (*ddl_type_given)
+				errorConflictingDefElem(defel, pstate);
+
+			/*
+			 * If ddl option was given only the explicitly listed ddl types
+			 * should be published.
+			 */
+			pubactions->pubddl_table = false;
+			pubactions->pubddl_index = false;
+			pubactions->pubddl_all = false;
+
+			*ddl_type_given = true;
+			ddl_level = defGetString(defel);
+
+			if (!SplitIdentifierString(ddl_level, ',', &ddl_list))
+				ereport(ERROR,
+						errcode(ERRCODE_SYNTAX_ERROR),
+						errmsg("invalid list syntax for \"ddl\" option"));
+
+			/* Process the option list. */
+			foreach(lc3, ddl_list)
+			{
+				char	   *publish_opt = (char *) lfirst(lc3);
+
+				if (strcmp(publish_opt, "all") == 0)
+					pubactions->pubddl_all = true;
+				else if (strcmp(publish_opt, "table") == 0)
+					pubactions->pubddl_table = true;
+				else if (strcmp(publish_opt, "index") == 0)
+					pubactions->pubddl_index = true;
+				else
+					ereport(ERROR,
+							errcode(ERRCODE_SYNTAX_ERROR),
+							errmsg("unrecognized \"ddl\" value: \"%s\"", publish_opt));
+			}
 		}
 		else
 			ereport(ERROR,
@@ -600,13 +650,55 @@ check_simple_rowfilter_expr(Node *node, ParseState *pstate)
 }
 
 /*
+ * Helper function to tranform a where clause.
+ *
+ * Also check the publication row filter expression and throw an error if
+ * anything not permitted or unexpected is encountered.
+ */
+static Node *
+GetTransformWhereClauses(const char *queryString, Relation relation,
+						 Node *whereClause, bool check_expr)
+{
+	Node	   *transformedWhereClause = NULL;
+	ParseNamespaceItem *nsitem;
+	ParseState *pstate;
+
+	/*
+	 * A fresh pstate is required so that we only have "this" table in its
+	 * rangetable
+	 */
+	pstate = make_parsestate(NULL);
+	pstate->p_sourcetext = queryString;
+	nsitem = addRangeTableEntryForRelation(pstate, relation,
+										   AccessShareLock, NULL,
+										   false, false);
+	addNSItemToQuery(pstate, nsitem, false, true, true);
+
+	transformedWhereClause = transformWhereClause(pstate,
+												  copyObject(whereClause),
+												  EXPR_KIND_WHERE,
+												  "PUBLICATION WHERE");
+
+	/* Fix up collation information */
+	assign_expr_collations(pstate, transformedWhereClause);
+
+	/*
+	 * We allow only simple expressions in row filters. See
+	 * check_simple_rowfilter_expr_walker.
+	 */
+	if (check_expr)
+		check_simple_rowfilter_expr(transformedWhereClause, pstate);
+
+	free_parsestate(pstate);
+
+	return transformedWhereClause;
+}
+
+/*
  * Transform the publication WHERE expression for all the relations in the list,
  * ensuring it is coerced to boolean and necessary collation information is
  * added if required, and add a new nsitem/RTE for the associated relation to
  * the ParseState's namespace list.
- *
- * Also check the publication row filter expression and throw an error if
- * anything not permitted or unexpected is encountered.
  */
 static void
 TransformPubWhereClauses(List *tables, const char *queryString,
@@ -616,9 +708,6 @@ TransformPubWhereClauses(List *tables, const char *queryString,
 
 	foreach(lc, tables)
 	{
-		ParseNamespaceItem *nsitem;
-		Node	   *whereclause = NULL;
-		ParseState *pstate;
 		PublicationRelInfo *pri = (PublicationRelInfo *) lfirst(lc);
 
 		if (pri->whereClause == NULL)
@@ -638,34 +727,8 @@ TransformPubWhereClauses(List *tables, const char *queryString,
 					 errdetail("WHERE clause cannot be used for a partitioned table when %s is false.",
 							   "publish_via_partition_root")));
 
-		/*
-		 * A fresh pstate is required so that we only have "this" table in its
-		 * rangetable
-		 */
-		pstate = make_parsestate(NULL);
-		pstate->p_sourcetext = queryString;
-		nsitem = addRangeTableEntryForRelation(pstate, pri->relation,
-											   AccessShareLock, NULL,
-											   false, false);
-		addNSItemToQuery(pstate, nsitem, false, true, true);
-
-		whereclause = transformWhereClause(pstate,
-										   copyObject(pri->whereClause),
-										   EXPR_KIND_WHERE,
-										   "PUBLICATION WHERE");
-
-		/* Fix up collation information */
-		assign_expr_collations(pstate, whereclause);
-
-		/*
-		 * We allow only simple expressions in row filters. See
-		 * check_simple_rowfilter_expr_walker.
-		 */
-		check_simple_rowfilter_expr(whereclause, pstate);
-
-		free_parsestate(pstate);
-
-		pri->whereClause = whereclause;
+		pri->whereClause = GetTransformWhereClauses(queryString, pri->relation,
+													pri->whereClause, true);
 	}
 }
 
@@ -729,6 +792,160 @@ CheckPubRelationColumnList(char *pubname, List *tables,
 }
 
 /*
+ * Helper function to create a event trigger for DDL replication.
+ */
+static void
+CreateDDLReplicaEventTrigger(char *eventname, List *commands, Oid puboid)
+{
+	List	   *tags = NIL;
+	ListCell   *lc;
+	Oid			trigger_id;
+	ObjectAddress referenced;
+	ObjectAddress pubaddress;
+	CreateEventTrigStmt *ddl_trigger;
+	char		trigger_name[NAMEDATALEN];
+	char		trigger_func_name[NAMEDATALEN];
+	static const char *trigger_func_prefix = "publication_deparse_%s";
+
+	ddl_trigger = makeNode(CreateEventTrigStmt);
+
+	snprintf(trigger_name, sizeof(trigger_name), PUB_EVENT_TRIG_PREFIX,
+			 eventname, puboid);
+	snprintf(trigger_func_name, sizeof(trigger_func_name), trigger_func_prefix,
+			 eventname);
+
+	ddl_trigger->trigname = pstrdup(trigger_name);
+	ddl_trigger->eventname = eventname;
+	ddl_trigger->funcname = SystemFuncName(trigger_func_name);
+
+	foreach(lc, commands)
+	{
+		CommandTag cmdtag = lfirst_int(lc);
+		String	   *tag = makeString(pstrdup(GetCommandTagName(cmdtag)));
+
+		tags = lappend(tags, tag);
+	}
+
+	ddl_trigger->whenclause = list_make1(makeDefElem("tag", (Node *) tags, -1));
+
+	trigger_id = CreateEventTrigger(ddl_trigger);
+
+	ObjectAddressSet(pubaddress, PublicationRelationId, puboid);
+
+	/*
+	 * Register the event triggers as internally dependent on the publication.
+	 */
+	ObjectAddressSet(referenced, EventTriggerRelationId, trigger_id);
+	recordDependencyOn(&referenced, &pubaddress, DEPENDENCY_INTERNAL);
+}
+
+/*
+ * If DDL replication is enabled, create event triggers to capture and log any
+ * relevant events.
+ */
+static void
+CreateDDLReplicaEventTriggers(PublicationActions pubactions, Oid puboid)
+{
+	List	   *start_commands = NIL;
+	List	   *rewrite_commands = NIL;
+	List	   *init_commands = NIL;
+	List	   *end_commands = NIL;
+
+	if (pubactions.pubddl_all)
+	{
+		start_commands = end_commands = init_commands =
+		GetCommandTagsForDDLRepl();
+
+		rewrite_commands = lappend_int(rewrite_commands, CMDTAG_ALTER_TABLE);
+	}
+	else
+	{
+		if (pubactions.pubddl_table)
+		{
+			start_commands = lappend_int(start_commands, CMDTAG_DROP_TABLE);
+			rewrite_commands = lappend_int(rewrite_commands, CMDTAG_ALTER_TABLE);
+
+			init_commands = lappend_int(init_commands, CMDTAG_CREATE_TABLE_AS);
+			init_commands = lappend_int(init_commands, CMDTAG_SELECT_INTO);
+
+			end_commands = lappend_int(end_commands, CMDTAG_CREATE_TABLE);
+			end_commands = lappend_int(end_commands, CMDTAG_ALTER_TABLE);
+			end_commands = lappend_int(end_commands, CMDTAG_DROP_TABLE);
+		}
+
+		if (pubactions.pubddl_index)
+		{
+			start_commands = lappend_int(start_commands, CMDTAG_DROP_INDEX);
+
+			end_commands = lappend_int(end_commands, CMDTAG_CREATE_INDEX);
+			end_commands = lappend_int(end_commands, CMDTAG_ALTER_INDEX);
+			end_commands = lappend_int(end_commands, CMDTAG_DROP_INDEX);
+		}
+	}
+
+
+	/* Create the ddl_command_end event trigger */
+	if (end_commands != NIL)
+		CreateDDLReplicaEventTrigger(PUB_TRIG_EVENT1, end_commands, puboid);
+
+	/* Create the ddl_command_start event trigger */
+	if (start_commands != NIL)
+		CreateDDLReplicaEventTrigger(PUB_TRIG_EVENT2, start_commands, puboid);
+
+	/* Create the table_rewrite event trigger */
+	if (rewrite_commands != NIL)
+		CreateDDLReplicaEventTrigger(PUB_TRIG_EVENT3, rewrite_commands, puboid);
+
+	/* Create the table_init_write event trigger */
+	if (init_commands != NIL)
+		CreateDDLReplicaEventTrigger(PUB_TRIG_EVENT4, init_commands, puboid);
+}
+
+/*
+ * Helper function to drop a event trigger for DDL replication.
+ */
+static void
+DropDDLReplicaEventTrigger(char *event, Oid puboid)
+{
+	char			trigger_name[NAMEDATALEN];
+	Oid				evtoid;
+	ObjectAddress	obj;
+
+	snprintf(trigger_name, sizeof(trigger_name), PUB_EVENT_TRIG_PREFIX,
+			 event, puboid);
+
+	evtoid = get_event_trigger_oid(trigger_name, true);
+	if (!OidIsValid(evtoid))
+		return;
+
+	deleteDependencyRecordsForClass(EventTriggerRelationId, evtoid,
+									PublicationRelationId,
+									DEPENDENCY_INTERNAL);
+
+	/*
+	 * Ensure that the dependency removal is visible, so that we can drop the
+	 * event trigger.
+	 */
+	CommandCounterIncrement();
+
+	ObjectAddressSet(obj, EventTriggerRelationId, evtoid);
+	performDeletion(&obj, DROP_RESTRICT, PERFORM_DELETION_INTERNAL);
+}
+
+/*
+ * Drop all the event triggers which are used for DDL replication.
+ */
+static void
+DropDDLReplicaEventTriggers(Oid puboid)
+{
+	DropDDLReplicaEventTrigger(PUB_TRIG_EVENT1, puboid);
+	DropDDLReplicaEventTrigger(PUB_TRIG_EVENT2, puboid);
+	DropDDLReplicaEventTrigger(PUB_TRIG_EVENT3, puboid);
+	DropDDLReplicaEventTrigger(PUB_TRIG_EVENT4, puboid);
+}
+
+
+/*
  * Create new publication.
  */
 ObjectAddress
@@ -741,6 +958,7 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 	Datum		values[Natts_pg_publication];
 	HeapTuple	tup;
 	bool		publish_given;
+	bool		ddl_type_given;
 	PublicationActions pubactions;
 	bool		publish_via_partition_root_given;
 	bool		publish_via_partition_root;
@@ -781,9 +999,11 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 
 	parse_publication_options(pstate,
 							  stmt->options,
+							  stmt->for_all_tables,
 							  &publish_given, &pubactions,
 							  &publish_via_partition_root_given,
-							  &publish_via_partition_root);
+							  &publish_via_partition_root,
+							  &ddl_type_given);
 
 	puboid = GetNewOidWithIndex(rel, PublicationObjectIndexId,
 								Anum_pg_publication_oid);
@@ -798,6 +1018,12 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 		BoolGetDatum(pubactions.pubdelete);
 	values[Anum_pg_publication_pubtruncate - 1] =
 		BoolGetDatum(pubactions.pubtruncate);
+	values[Anum_pg_publication_pubddl_table - 1] =
+	BoolGetDatum(pubactions.pubddl_table);
+	values[Anum_pg_publication_pubddl_index - 1] =
+	BoolGetDatum(pubactions.pubddl_index);
+	values[Anum_pg_publication_pubddl_all - 1] =
+		BoolGetDatum(pubactions.pubddl_all);
 	values[Anum_pg_publication_pubviaroot - 1] =
 		BoolGetDatum(publish_via_partition_root);
 
@@ -835,6 +1061,12 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 		{
 			List	   *rels;
 
+			if (pubactions.pubddl_table || pubactions.pubddl_index)
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("cannot add table to publication \"%s\" if DDL replication is enabled",
+							   stmt->pubname));
+
 			rels = OpenTableList(relations);
 			TransformPubWhereClauses(rels, pstate->p_sourcetext,
 									 publish_via_partition_root);
@@ -857,6 +1089,11 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 			PublicationAddSchemas(puboid, schemaidlist, true, NULL);
 		}
 	}
+
+	/*
+	 * Create event triggers to allow logging of DDL statements.
+	 */
+	CreateDDLReplicaEventTriggers(pubactions, puboid);
 
 	table_close(rel, RowExclusiveLock);
 
@@ -882,6 +1119,7 @@ AlterPublicationOptions(ParseState *pstate, AlterPublicationStmt *stmt,
 	bool		replaces[Natts_pg_publication];
 	Datum		values[Natts_pg_publication];
 	bool		publish_given;
+	bool		ddl_type_given;
 	PublicationActions pubactions;
 	bool		publish_via_partition_root_given;
 	bool		publish_via_partition_root;
@@ -890,11 +1128,15 @@ AlterPublicationOptions(ParseState *pstate, AlterPublicationStmt *stmt,
 	List	   *root_relids = NIL;
 	ListCell   *lc;
 
+	pubform = (Form_pg_publication) GETSTRUCT(tup);
+
 	parse_publication_options(pstate,
 							  stmt->options,
+							  pubform->puballtables,
 							  &publish_given, &pubactions,
 							  &publish_via_partition_root_given,
-							  &publish_via_partition_root);
+							  &publish_via_partition_root,
+							  &ddl_type_given);
 
 	pubform = (Form_pg_publication) GETSTRUCT(tup);
 
@@ -978,6 +1220,20 @@ AlterPublicationOptions(ParseState *pstate, AlterPublicationStmt *stmt,
 		}
 	}
 
+	if (ddl_type_given &&
+		(pubactions.pubddl_table || pubactions.pubddl_index ||
+		pubactions.pubddl_all))
+	{
+		if (root_relids == NIL)
+			root_relids = GetPublicationRelations(pubform->oid,
+												  PUBLICATION_PART_ROOT);
+
+		if (root_relids)
+			ereport(ERROR,
+					errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("DDL replication is only supported in FOR ALL TABLES or FOR TABLES IN SCHEMA publication"));
+	}
+
 	/* Everything ok, form a new tuple. */
 	memset(values, 0, sizeof(values));
 	memset(nulls, false, sizeof(nulls));
@@ -996,6 +1252,27 @@ AlterPublicationOptions(ParseState *pstate, AlterPublicationStmt *stmt,
 
 		values[Anum_pg_publication_pubtruncate - 1] = BoolGetDatum(pubactions.pubtruncate);
 		replaces[Anum_pg_publication_pubtruncate - 1] = true;
+	}
+
+	if (ddl_type_given)
+	{
+		/* Recreate the event triggers if the ddl option is changed. */
+		if (pubform->pubddl_table != pubactions.pubddl_table ||
+			pubform->pubddl_index != pubactions.pubddl_index ||
+			pubform->pubddl_all != pubactions.pubddl_all)
+		{
+			DropDDLReplicaEventTriggers(pubform->oid);
+			CreateDDLReplicaEventTriggers(pubactions, pubform->oid);
+		}
+
+		values[Anum_pg_publication_pubddl_table - 1] = BoolGetDatum(pubactions.pubddl_table);
+		replaces[Anum_pg_publication_pubddl_table - 1] = true;
+
+		values[Anum_pg_publication_pubddl_index - 1] = BoolGetDatum(pubactions.pubddl_index);
+		replaces[Anum_pg_publication_pubddl_index - 1] = true;
+
+		values[Anum_pg_publication_pubddl_all - 1] = BoolGetDatum(pubactions.pubddl_all);
+		replaces[Anum_pg_publication_pubddl_all - 1] = true;
 	}
 
 	if (publish_via_partition_root_given)
@@ -1103,6 +1380,13 @@ AlterPublicationTables(AlterPublicationStmt *stmt, HeapTuple tup,
 
 	if (stmt->action == AP_AddObjects)
 	{
+		if (pubform->pubddl_table || pubform->pubddl_index ||
+			pubform->pubddl_all)
+			ereport(ERROR,
+					errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("cannot add table to publication \"%s\" if DDL replication is enabled",
+						   stmt->pubname));
+
 		TransformPubWhereClauses(rels, queryString, pubform->pubviaroot);
 
 		publish_schema |= is_schema_publication(pubid);
@@ -1120,6 +1404,13 @@ AlterPublicationTables(AlterPublicationStmt *stmt, HeapTuple tup,
 														PUBLICATION_PART_ROOT);
 		List	   *delrels = NIL;
 		ListCell   *oldlc;
+
+		if (pubform->pubddl_table || pubform->pubddl_index ||
+			pubform->pubddl_all)
+			ereport(ERROR,
+					errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("cannot add table to publication \"%s\" if DDL replication is enabled",
+						   stmt->pubname));
 
 		TransformPubWhereClauses(rels, queryString, pubform->pubviaroot);
 

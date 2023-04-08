@@ -1707,6 +1707,49 @@ process_owned_by(Relation seqrel, List *owned_by, bool for_identity)
 		relation_close(tablerel, NoLock);
 }
 
+/*
+ * Return sequence parameters, detailed
+ */
+Sequence_values *
+get_sequence_values(Oid sequenceId)
+{
+	Buffer      buf;
+	SeqTable    elm;
+	Relation    seqrel;
+	HeapTuple	seqtuple;
+	HeapTupleData seqtupledata;
+	Form_pg_sequence seqform;
+	Form_pg_sequence_data seq;
+	Sequence_values *seqvalues;
+
+	seqtuple = SearchSysCache1(SEQRELID, sequenceId);
+	if (!HeapTupleIsValid(seqtuple))
+		elog(ERROR, "cache lookup failed for sequence %u", sequenceId);
+	seqform = (Form_pg_sequence) GETSTRUCT(seqtuple);
+
+	ReleaseSysCache(seqtuple);
+
+	/* Open and lock sequence */
+	init_sequence(sequenceId, &elm, &seqrel);
+
+	if (pg_class_aclcheck(sequenceId, GetUserId(),
+		ACL_SELECT | ACL_USAGE) != ACLCHECK_OK)
+		ereport(ERROR,
+				errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				errmsg("permission denied for sequence %s",
+					   RelationGetRelationName(seqrel)));
+
+	seq = read_seq_tuple(seqrel, &buf, &seqtupledata);
+
+	seqvalues = (Sequence_values *) palloc(sizeof(Sequence_values));
+	seqvalues->last_value = seq->last_value;
+	seqvalues->seqform = seqform;
+
+	UnlockReleaseBuffer(buf);
+	relation_close(seqrel, NoLock);
+
+	return seqvalues;
+}
 
 /*
  * Return sequence parameters in a list of the form created by the parser.

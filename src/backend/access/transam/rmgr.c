@@ -27,6 +27,7 @@
 #include "fmgr.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "replication/ddlmessage.h"
 #include "replication/decode.h"
 #include "replication/message.h"
 #include "replication/origin.h"

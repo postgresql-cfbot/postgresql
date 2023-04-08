@@ -620,6 +620,9 @@ typedef struct _PublicationInfo
 	bool		pubupdate;
 	bool		pubdelete;
 	bool		pubtruncate;
+	bool		pubddl_table;
+	bool		pubddl_index;
+	bool		pubddl_all;
 	bool		pubviaroot;
 } PublicationInfo;
 
@@ -664,6 +667,7 @@ typedef struct _SubscriptionInfo
 	char	   *subsynccommit;
 	char	   *subpublications;
 	char	   *subpasswordrequired;
+	char	   *submatchddlowner;
 } SubscriptionInfo;
 
 /*

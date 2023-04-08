@@ -656,32 +656,40 @@ SELECT datname, age(datfrozenxid) FROM pg_database;
 
 <programlisting>
 WARNING:  database "mydb" must be vacuumed within 39985967 transactions
-HINT:  To avoid a database shutdown, execute a database-wide VACUUM in that database.
+HINT:  To prevent entering read-only mode, execute a database-wide VACUUM in that database.
 </programlisting>
 
     (A manual <command>VACUUM</command> should fix the problem, as suggested by the
     hint; but note that the <command>VACUUM</command> must be performed by a
     superuser, else it will fail to process system catalogs and thus not
     be able to advance the database's <structfield>datfrozenxid</structfield>.)
-    If these warnings are
-    ignored, the system will shut down and refuse to start any new
-    transactions once there are fewer than three million transactions left
-    until wraparound:
+    If these warnings are ignored, the system will refuse to allocate new XIDs
+    once there are fewer than three million transactions left until wraparound:
 
 <programlisting>
-ERROR:  database is not accepting commands to avoid wraparound data loss in database "mydb"
-HINT:  Stop the postmaster and vacuum that database in single-user mode.
+ERROR:  database is not accepting commands that generate new XIDs to avoid wraparound data loss in database "mydb"
+HINT:  Execute a database-wide VACUUM in that database.
 </programlisting>
+
+    In this condition any transactions already started can continue.
+    Only new read-only transactions can be started.
 
     The three-million-transaction safety margin exists to let the
     administrator recover without data loss, by manually executing the
-    required <command>VACUUM</command> commands.  However, since the system will not
-    execute commands once it has gone into the safety shutdown mode,
-    the only way to do this is to stop the server and start the server in single-user
-    mode to execute <command>VACUUM</command>.  The shutdown mode is not enforced
-    in single-user mode.  See the <xref linkend="app-postgres"/> reference
-    page for details about using single-user mode.
+    required <command>VACUUM</command> commands.
    </para>
+
+   <note>
+    <para>
+     Previously it was required to stop the postmaster and
+     <command>VACUUM</command> the database in a single-user mode. There is no
+     need to use a single-user mode anymore unless the resolution needs to be
+     speeded up by performing <command>TRUNCATE</command> or
+     <command>DROP</command>. Except for this scenario it's strongly advised
+     against using a single-user mode: it requires downtime, can't be monitored,
+     disables replication, disables safeguards against wraparound, etc.
+    </para>
+   </note>
 
    <sect3 id="vacuum-for-multixact-wraparound">
     <title>Multixacts and Wraparound</title>

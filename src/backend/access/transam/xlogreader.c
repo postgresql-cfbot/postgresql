@@ -1486,8 +1486,7 @@ err:
  * Returns true if succeeded, false if an error occurs, in which case
  * 'errinfo' receives error details.
  *
- * XXX probably this should be improved to suck data directly from the
- * WAL buffers when possible.
+ * When possible, this function reads data directly from WAL buffers.
  */
 bool
 WALRead(XLogReaderState *state,
@@ -1497,6 +1496,45 @@ WALRead(XLogReaderState *state,
 	char	   *p;
 	XLogRecPtr	recptr;
 	Size		nbytes;
+
+#ifndef FRONTEND
+	/* Frontend tools have no idea of WAL buffers. */
+	Size        nread;
+
+	/*
+	 * Try reading WAL from WAL buffers. We skip this step and continue the
+	 * usual way, that is to read from WAL file, either when server is in
+	 * recovery (standby mode, archive or crash recovery), in which case the
+	 * WAL buffers are not used or when the server is inserting in a different
+	 * timeline from that of the timeline that we're trying to read WAL from.
+	 */
+	if (!RecoveryInProgress() &&
+		tli == GetWALInsertionTimeLine())
+	{
+		nread = XLogReadFromBuffers(state, startptr, tli, count, buf);
+
+		Assert(nread >= 0);
+
+		/*
+		 * Check if we have read fully (hit), partially (partial hit) or
+		 * nothing (miss) from WAL buffers. If we have read either partially or
+		 * nothing, then continue to read the remaining bytes the usual way,
+		 * that is, read from WAL file.
+		 */
+		if (count == nread)
+			return true;	/* Buffer hit, so return. */
+		else if (count > nread)
+		{
+			/*
+			 * Buffer partial hit, so reset the state to count the read bytes
+			 * and continue.
+			 */
+			buf += nread;
+			startptr += nread;
+			count -= nread;
+		}
+	}
+#endif	/* FRONTEND */
 
 	p = buf;
 	recptr = startptr;

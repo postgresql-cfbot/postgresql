@@ -1,0 +1,4 @@
+comment = 'Test code for veryfing WAL read from WAL buffers'
+default_version = '1.0'
+module_pathname = '$libdir/test_wal_read_from_buffers'
+relocatable = true

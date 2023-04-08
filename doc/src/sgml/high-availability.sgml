@@ -637,6 +637,13 @@ protocol to make nodes agree on a serializable transactional order.
    </para>
 
    <para>
+    The standby server can attempt to switch to streaming replication after
+    reading WAL from archive, see
+    <xref linkend="guc-streaming-replication-retry-interval"/> for more
+    details.
+   </para>
+
+   <para>
     At startup, the standby begins by restoring all WAL available in the
     archive location, calling <varname>restore_command</varname>. Once it
     reaches the end of WAL available there and <varname>restore_command</varname>

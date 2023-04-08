@@ -872,6 +872,21 @@ CREATE VIEW pg_stat_activity AS
         LEFT JOIN pg_database AS D ON (S.datid = D.oid)
         LEFT JOIN pg_authid AS U ON (S.usesysid = U.oid);
 
+CREATE VIEW pg_stat_session AS
+    SELECT
+            s.pid,
+            s.total_running_time,
+            s.total_running_count,
+            s.total_idle_time,
+            s.total_idle_count,
+            s.total_transaction_idle_time,
+            s.total_transaction_idle_count,
+            s.total_transaction_idle_aborted_time,
+            s.total_transaction_idle_aborted_count,
+            s.total_fastpath_time,
+            s.total_fastpath_count
+     FROM pg_stat_get_session(NULL) as s;
+
 CREATE VIEW pg_stat_replication AS
     SELECT
             S.pid,

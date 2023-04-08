@@ -338,6 +338,8 @@ pgstat_bestart(void)
 	lbeentry.st_xact_start_timestamp = 0;
 	lbeentry.st_databaseid = MyDatabaseId;
 
+	MemSet(&lbeentry.st_session, 0, sizeof(lbeentry.st_session));
+
 	/* We have userid for client-backends, wal-sender and bgworker processes */
 	if (lbeentry.st_backendType == B_BACKEND
 		|| lbeentry.st_backendType == B_WAL_SENDER
@@ -526,6 +528,9 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 	TimestampTz current_timestamp;
 	int			len = 0;
 
+	PgBackendSessionStatus st_session_diff;
+	MemSet(&st_session_diff, 0, sizeof(st_session_diff));
+
 	TRACE_POSTGRESQL_STATEMENT_STATUS(cmd_str);
 
 	if (!beentry)
@@ -551,6 +556,7 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 			beentry->st_xact_start_timestamp = 0;
 			beentry->st_query_id = UINT64CONST(0);
 			proc->wait_event_info = 0;
+			MemSet(&beentry->st_session, 0, sizeof(beentry->st_session));
 			PGSTAT_END_WRITE_ACTIVITY(beentry);
 		}
 		return;
@@ -573,27 +579,46 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 	current_timestamp = GetCurrentTimestamp();
 
 	/*
-	 * If the state has changed from "active" or "idle in transaction",
-	 * calculate the duration.
+	 * If the state has changed, update per-database and per-session counters.
 	 */
-	if ((beentry->st_state == STATE_RUNNING ||
-		 beentry->st_state == STATE_FASTPATH ||
-		 beentry->st_state == STATE_IDLEINTRANSACTION ||
-		 beentry->st_state == STATE_IDLEINTRANSACTION_ABORTED) &&
+	if ((PGSTAT_IS_ACTIVE(beentry) ||
+		 PGSTAT_IS_IDLEINTRANSACTION(beentry) ||
+		 PGSTAT_IS_IDLEINTRANSACTION_ABORTED(beentry) || 
+		 PGSTAT_IS_IDLE(beentry)) &&
 		state != beentry->st_state)
 	{
 		long		secs;
 		int			usecs;
+		int64		usecs_diff;
 
 		TimestampDifference(beentry->st_state_start_timestamp,
 							current_timestamp,
 							&secs, &usecs);
+		usecs_diff = secs * 1000000 + usecs;
 
-		if (beentry->st_state == STATE_RUNNING ||
-			beentry->st_state == STATE_FASTPATH)
+		/* Keep statistics for pg_stat_database intact */
+		if (PGSTAT_IS_ACTIVE(beentry))
 			pgstat_count_conn_active_time((PgStat_Counter) secs * 1000000 + usecs);
-		else
+		else if (PGSTAT_IS_IDLEINTRANSACTION(beentry) ||
+				 PGSTAT_IS_IDLEINTRANSACTION_ABORTED(beentry))
 			pgstat_count_conn_txn_idle_time((PgStat_Counter) secs * 1000000 + usecs);
+
+		if (PGSTAT_IS_RUNNING(beentry)) {
+			st_session_diff.total_running_time = usecs_diff;
+			st_session_diff.total_running_count += 1;
+		} else if (PGSTAT_IS_IDLE(beentry)){
+			st_session_diff.total_idle_time = usecs_diff;
+			st_session_diff.total_idle_count += 1;
+		} else if (PGSTAT_IS_IDLEINTRANSACTION(beentry)){
+			st_session_diff.total_transaction_idle_time = usecs_diff;
+			st_session_diff.total_transaction_idle_count += 1;
+		} else if (PGSTAT_IS_IDLEINTRANSACTION_ABORTED(beentry)){
+			st_session_diff.total_transaction_idle_aborted_time = usecs_diff;
+			st_session_diff.total_transaction_idle_aborted_count += 1;
+		} else if (PGSTAT_IS_FASTPATH(beentry)){
+			st_session_diff.total_fastpath_time = usecs_diff;
+			st_session_diff.total_fastpath_count += 1;
+		}
 	}
 
 	/*
@@ -618,6 +643,21 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 		beentry->st_activity_raw[len] = '\0';
 		beentry->st_activity_start_timestamp = start_timestamp;
 	}
+
+	beentry->st_session.total_running_time += st_session_diff.total_running_time;
+	beentry->st_session.total_running_count += st_session_diff.total_running_count;
+
+	beentry->st_session.total_idle_time += st_session_diff.total_idle_time;
+	beentry->st_session.total_idle_count += st_session_diff.total_idle_count;
+
+	beentry->st_session.total_transaction_idle_time += st_session_diff.total_transaction_idle_time;
+	beentry->st_session.total_transaction_idle_count += st_session_diff.total_transaction_idle_count;
+
+	beentry->st_session.total_transaction_idle_aborted_time += st_session_diff.total_transaction_idle_aborted_time;
+	beentry->st_session.total_transaction_idle_aborted_count += st_session_diff.total_transaction_idle_aborted_count;
+
+	beentry->st_session.total_fastpath_time += st_session_diff.total_fastpath_time;
+	beentry->st_session.total_fastpath_count += st_session_diff.total_fastpath_count;
 
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }

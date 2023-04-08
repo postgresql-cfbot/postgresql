@@ -298,6 +298,76 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 }
 
 /*
+ * Returns accumulated statistics of current PG backends.
+ */
+Datum
+pg_stat_get_session(PG_FUNCTION_ARGS)
+{
+#define PG_STAT_GET_SESSION_COLS	11
+	int			num_backends = pgstat_fetch_stat_numbackends();
+	int			curr_backend;
+	int			pid = PG_ARGISNULL(0) ? -1 : PG_GETARG_INT32(0);
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+
+	InitMaterializedSRF(fcinfo, 0);
+
+	/* 1-based index */
+	for (curr_backend = 1; curr_backend <= num_backends; curr_backend++)
+	{
+		/* for each row */
+		Datum		values[PG_STAT_GET_SESSION_COLS] = {0};
+		bool		nulls[PG_STAT_GET_SESSION_COLS] = {0};
+		LocalPgBackendStatus *local_beentry;
+		PgBackendStatus *beentry;
+
+		/* Get the next one in the list */
+		local_beentry = pgstat_fetch_stat_local_beentry(curr_backend);
+		beentry = &local_beentry->backendStatus;
+
+		/* If looking for specific PID, ignore all the others */
+		if (pid != -1 && beentry->st_procpid != pid)
+			continue;
+
+		/* Values available to all callers */
+		values[0] = Int32GetDatum(beentry->st_procpid);
+
+		/* Values only available to role member or pg_read_all_stats */
+		if (HAS_PGSTAT_PERMISSIONS(beentry->st_userid)){
+			/* convert to msec */
+			values[1] = Float8GetDatum(beentry->st_session.total_running_time / 1000.0);
+			values[2] = Int64GetDatum(beentry->st_session.total_running_count);
+			values[3] = Float8GetDatum(beentry->st_session.total_idle_time / 1000.0);
+			values[4] = Int64GetDatum(beentry->st_session.total_idle_count);
+			values[5] = Float8GetDatum(beentry->st_session.total_transaction_idle_time / 1000.0);
+			values[6] = Int64GetDatum(beentry->st_session.total_transaction_idle_count);
+			values[7] = Float8GetDatum(beentry->st_session.total_transaction_idle_aborted_time / 1000.0);
+			values[8] = Int64GetDatum(beentry->st_session.total_transaction_idle_aborted_count);
+			values[9] = Float8GetDatum(beentry->st_session.total_fastpath_time / 1000.0);
+			values[10] = Int64GetDatum(beentry->st_session.total_fastpath_count);
+		} else {
+			nulls[1] = true;
+			nulls[2] = true;
+			nulls[3] = true;
+			nulls[4] = true;
+			nulls[5] = true;
+			nulls[6] = true;
+			nulls[7] = true;
+			nulls[8] = true;
+			nulls[9] = true;
+			nulls[10] = true;
+		}
+
+		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+
+		/* If only a single backend was requested, and we found it, break. */
+		if (pid != -1)
+			break;
+	}
+
+	return (Datum) 0;
+}
+
+/*
  * Returns activity of PG backends.
  */
 Datum

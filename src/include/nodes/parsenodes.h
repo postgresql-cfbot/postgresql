@@ -185,6 +185,8 @@ typedef struct Query
 	List	   *mergeActionList;	/* list of actions for MERGE (only) */
 	/* whether to use outer join */
 	bool		mergeUseOuterJoin pg_node_attr(query_jumble_ignore);
+	/* rtable index of target relation that MERGE pulls data from */
+	int			mergeTargetSrcIdx pg_node_attr(query_jumble_ignore);
 
 	List	   *targetList;		/* target list (of TargetEntry) */
 

@@ -165,6 +165,41 @@ get_prompt(promptStatus_t status, ConditionalStack cstack)
 					if (pset.db)
 						strlcpy(buf, session_username(), sizeof(buf));
 					break;
+					/* DB server user role */
+				case 'N':
+					if (pset.db)
+					{
+						int			minServerMajor;
+						int			serverMajor;
+						const char *rolename;
+
+						/*
+						 * This feature requires GUC "role" to be marked
+						 * as GUC_REPORT. Without it is hard to specify fallback
+						 * result. Returning empty value can be messy, returning
+						 * PQuser like session_username can be messy too.
+						 * Exec query is not too practical too, because it doesn't
+						 * work when session is not in transactional state, and
+						 * CURRENT_ROLE returns different result when role is not
+						 * explicitly specified by SET ROLE.
+						 */
+						minServerMajor = 1600;
+						serverMajor = PQserverVersion(pset.db) / 100;
+						if (serverMajor >= minServerMajor)
+						{
+							rolename  = PQparameterStatus(pset.db, "role");
+
+							/* fallback when role is not set yet */
+							if (strcmp(rolename, "none") == 0)
+								rolename = session_username();
+						}
+
+						if (rolename)
+							strlcpy(buf, rolename, sizeof(buf));
+						else
+							buf[0] = '\0';
+					}
+					break;
 					/* backend pid */
 				case 'p':
 					if (pset.db)

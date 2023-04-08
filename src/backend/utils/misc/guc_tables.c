@@ -4196,7 +4196,7 @@ struct config_string ConfigureNamesString[] =
 		{"role", PGC_USERSET, UNGROUPED,
 			gettext_noop("Sets the current role."),
 			NULL,
-			GUC_IS_NAME | GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_NOT_WHILE_SEC_REST
+			GUC_IS_NAME | GUC_REPORT | GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_NOT_WHILE_SEC_REST
 		},
 		&role_string,
 		"none",

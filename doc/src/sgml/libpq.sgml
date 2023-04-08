@@ -2518,6 +2518,7 @@ const char *PQparameterStatus(const PGconn *conn, const char *paramName);
        <varname>in_hot_standby</varname>,
        <varname>is_superuser</varname>,
        <varname>session_authorization</varname>,
+       <varname>role</varname>,
        <varname>DateStyle</varname>,
        <varname>IntervalStyle</varname>,
        <varname>TimeZone</varname>,
@@ -2532,7 +2533,8 @@ const char *PQparameterStatus(const PGconn *conn, const char *paramName);
        9.0;
        <varname>default_transaction_read_only</varname> and
        <varname>in_hot_standby</varname> were not reported by releases before
-       14.)
+       14;
+       <varname>role</varname> was not reported by releases before 16;)
        Note that
        <varname>server_version</varname>,
        <varname>server_encoding</varname> and

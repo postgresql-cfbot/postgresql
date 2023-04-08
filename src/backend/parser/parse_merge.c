@@ -43,9 +43,9 @@ static void setNamespaceVisibilityForRTE(List *namespace, RangeTblEntry *rte,
  * Make appropriate changes to the namespace visibility while transforming
  * individual action's quals and targetlist expressions. In particular, for
  * INSERT actions we must only see the source relation (since INSERT action is
- * invoked for NOT MATCHED tuples and hence there is no target tuple to deal
- * with). On the other hand, UPDATE and DELETE actions can see both source and
- * target relations.
+ * invoked for NOT MATCHED [BY TARGET] tuples and hence there is no target
+ * tuple to deal with). On the other hand, UPDATE and DELETE actions can see
+ * both source and target relations, unless invoked for NOT MATCH BY SOURCE.
  *
  * Also, since the internal join node can hide the source and target
  * relations, we must explicitly make the respective relation as visible so
@@ -61,7 +61,7 @@ setNamespaceForMergeWhen(ParseState *pstate, MergeWhenClause *mergeWhenClause,
 	targetRelRTE = rt_fetch(targetRTI, pstate->p_rtable);
 	sourceRelRTE = rt_fetch(sourceRTI, pstate->p_rtable);
 
-	if (mergeWhenClause->matched)
+	if (mergeWhenClause->matchKind == MERGE_WHEN_MATCHED)
 	{
 		Assert(mergeWhenClause->commandType == CMD_UPDATE ||
 			   mergeWhenClause->commandType == CMD_DELETE ||
@@ -73,11 +73,25 @@ setNamespaceForMergeWhen(ParseState *pstate, MergeWhenClause *mergeWhenClause,
 		setNamespaceVisibilityForRTE(pstate->p_namespace,
 									 sourceRelRTE, true, true);
 	}
-	else
+	else if (mergeWhenClause->matchKind == MERGE_WHEN_NOT_MATCHED_BY_SOURCE)
 	{
 		/*
-		 * NOT MATCHED actions can't see target relation, but they can see
-		 * source relation.
+		 * NOT MATCHED BY SOURCE actions can see the target relation, but they
+		 * can't see the source relation.
+		 */
+		Assert(mergeWhenClause->commandType == CMD_UPDATE ||
+			   mergeWhenClause->commandType == CMD_DELETE ||
+			   mergeWhenClause->commandType == CMD_NOTHING);
+		setNamespaceVisibilityForRTE(pstate->p_namespace,
+									 targetRelRTE, true, true);
+		setNamespaceVisibilityForRTE(pstate->p_namespace,
+									 sourceRelRTE, false, false);
+	}
+	else	/* mergeWhenClause->matchKind == MERGE_WHEN_NOT_MATCHED_BY_TARGET */
+	{
+		/*
+		 * NOT MATCHED [BY TARGET] actions can't see target relation, but they
+		 * can see source relation.
 		 */
 		Assert(mergeWhenClause->commandType == CMD_INSERT ||
 			   mergeWhenClause->commandType == CMD_NOTHING);
@@ -98,7 +112,8 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 	Query	   *qry = makeNode(Query);
 	ListCell   *l;
 	AclMode		targetPerms = ACL_NO_RIGHTS;
-	bool		is_terminal[2];
+	bool		is_terminal[3];
+	bool		tgt_only_tuples;
 	Index		sourceRTI;
 	List	   *mergeActionList;
 	Node	   *joinExpr;
@@ -125,12 +140,13 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 	/*
 	 * Check WHEN clauses for permissions and sanity
 	 */
-	is_terminal[0] = false;
-	is_terminal[1] = false;
+	is_terminal[MERGE_WHEN_MATCHED] = false;
+	is_terminal[MERGE_WHEN_NOT_MATCHED_BY_SOURCE] = false;
+	is_terminal[MERGE_WHEN_NOT_MATCHED_BY_TARGET] = false;
+	tgt_only_tuples = false;
 	foreach(l, stmt->mergeWhenClauses)
 	{
 		MergeWhenClause *mergeWhenClause = (MergeWhenClause *) lfirst(l);
-		int			when_type = (mergeWhenClause->matched ? 0 : 1);
 
 		/*
 		 * Collect action types so we can check target permissions
@@ -155,12 +171,22 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 		/*
 		 * Check for unreachable WHEN clauses
 		 */
-		if (is_terminal[when_type])
+		if (is_terminal[mergeWhenClause->matchKind])
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
 					 errmsg("unreachable WHEN clause specified after unconditional WHEN clause")));
 		if (mergeWhenClause->condition == NULL)
-			is_terminal[when_type] = true;
+			is_terminal[mergeWhenClause->matchKind] = true;
+
+		/*
+		 * Test if we have a WHEN NOT MATCHED BY SOURCE action that processes
+		 * unmatched tuples from the target relation.  If so, additional WHEN
+		 * conditions are added below to differentiate the various match
+		 * kinds.
+		 */
+		if (mergeWhenClause->commandType != CMD_NOTHING &&
+			mergeWhenClause->matchKind == MERGE_WHEN_NOT_MATCHED_BY_SOURCE)
+			tgt_only_tuples = true;
 	}
 
 	/*
@@ -255,11 +281,7 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 
 		action = makeNode(MergeAction);
 		action->commandType = mergeWhenClause->commandType;
-		action->matched = mergeWhenClause->matched;
-
-		/* Use an outer join if any INSERT actions exist in the command. */
-		if (action->commandType == CMD_INSERT)
-			qry->mergeUseOuterJoin = true;
+		action->matchKind = mergeWhenClause->matchKind;
 
 		/*
 		 * Set namespace for the specific action. This must be done before
@@ -278,6 +300,51 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 		 */
 		action->qual = transformWhereClause(pstate, mergeWhenClause->condition,
 											EXPR_KIND_MERGE_WHEN, "WHEN");
+
+		/*
+		 * If there any WHEN NOT MATCHED BY SOURCE actions that require
+		 * unmatched tuples from the target relation to be processed, add
+		 * additional WHEN conditions to every action to check that tuples
+		 * from the source match or do not match, as necessary.
+		 *
+		 * This distinguishes NOT MATCHED BY SOURCE actions (identified by a
+		 * "source IS NOT DISTINCT FROM NULL" clause) from MATCHED actions
+		 * (identified by a "source IS DISTINCT FROM NULL" clause).
+		 *
+		 * Additionally, a "source IS DISTINCT FROM NULL" clause is required
+		 * for NOT MATCHED [BY TARGET] actions in case the executor attempts
+		 * to invoke such an action for a concurrently deleted target row that
+		 * ends up matching neither source nor target.
+		 */
+		if (tgt_only_tuples)
+		{
+			bool		src_null;
+			NullTest   *ntest;
+
+			/* Make a "source IS [NOT] DISTINCT FROM NULL" clause */
+			src_null = action->matchKind == MERGE_WHEN_NOT_MATCHED_BY_SOURCE;
+
+			ntest = makeNode(NullTest);
+
+			ntest->arg = (Expr *) makeVar(sourceRTI,
+										  InvalidAttrNumber,
+										  RECORDOID,
+										  -1,
+										  InvalidOid,
+										  0);
+			ntest->nulltesttype = src_null ? IS_NULL : IS_NOT_NULL;
+			ntest->argisrow = false;
+			ntest->location = -1;
+
+			/* Combine it with the action's WHEN condition */
+			if (action->qual == NULL)
+				action->qual = (Node *) ntest;
+			else
+				action->qual =
+					(Node *) makeBoolExpr(AND_EXPR,
+										  list_make2(ntest, action->qual),
+										  -1);
+		}
 
 		/*
 		 * Transform target lists for each INSERT and UPDATE action stmt

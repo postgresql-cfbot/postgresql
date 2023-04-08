@@ -153,6 +153,9 @@ transform_MERGE_to_join(Query *parse)
 {
 	RangeTblEntry *joinrte;
 	JoinExpr   *joinexpr;
+	ListCell   *lc;
+	bool		src_only_tuples;
+	bool		tgt_only_tuples;
 	JoinType	jointype;
 	int			joinrti;
 	List	   *vars;
@@ -164,12 +167,32 @@ transform_MERGE_to_join(Query *parse)
 	vars = NIL;
 
 	/*
-	 * When any WHEN NOT MATCHED THEN INSERT clauses exist, we need to use an
-	 * outer join so that we process all unmatched tuples from the source
-	 * relation.  If none exist, we can use an inner join.
+	 * Work out what kind of join is required.  If there any WHEN NOT MATCHED
+	 * BY SOURCE/TARGET clauses, an outer join is required so that we process
+	 * all unmatched tuples from the source and/or target relations.
+	 * Otherwise, we can use an inner join.
 	 */
-	if (parse->mergeUseOuterJoin)
+	src_only_tuples = false;
+	tgt_only_tuples = false;
+	foreach(lc, parse->mergeActionList)
+	{
+		MergeAction *action = lfirst_node(MergeAction, lc);
+
+		if (action->commandType != CMD_NOTHING)
+		{
+			if (action->matchKind == MERGE_WHEN_NOT_MATCHED_BY_SOURCE)
+				tgt_only_tuples = true;
+			if (action->matchKind == MERGE_WHEN_NOT_MATCHED_BY_TARGET)
+				src_only_tuples = true;
+		}
+	}
+
+	if (src_only_tuples && tgt_only_tuples)
+		jointype = JOIN_FULL;
+	else if (src_only_tuples)
 		jointype = JOIN_RIGHT;
+	else if (tgt_only_tuples)
+		jointype = JOIN_LEFT;
 	else
 		jointype = JOIN_INNER;
 

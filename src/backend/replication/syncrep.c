@@ -89,6 +89,7 @@
 
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
+int			SyncRepNapTimeBeforeCancel = 0;
 
 #define SyncStandbysDefined() \
 	(SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0')
@@ -120,6 +121,7 @@ static void SyncRepGetNthLatestSyncRecPtr(XLogRecPtr *writePtr,
 static int	SyncRepGetStandbyPriority(void);
 static int	standby_priority_comparator(const void *a, const void *b);
 static int	cmp_lsn(const void *a, const void *b);
+static bool SyncRepNapBeforeCancel(void);
 
 #ifdef USE_ASSERT_CHECKING
 static bool SyncRepQueueIsOrderedByLSN(int mode);
@@ -130,6 +132,42 @@ static bool SyncRepQueueIsOrderedByLSN(int mode);
  * Synchronous Replication functions for normal user backends
  * ===========================================================
  */
+
+/*
+ * Wait for synchronous replication before cancelling, if requested by user.
+ */
+static bool
+SyncRepNapBeforeCancel(void)
+{
+	int wait_time;
+
+	if (SyncRepNapTimeBeforeCancel <= 0)
+		return false;
+
+	ereport(WARNING,
+			(errmsg_plural("waiting %d millisecond for synchronous replication before cancelling",
+						   "waiting %d milliseconds for synchronous replication before cancelling",
+							SyncRepNapTimeBeforeCancel,
+							SyncRepNapTimeBeforeCancel)));
+
+	wait_time = SyncRepNapTimeBeforeCancel;
+
+	while (wait_time > 0)
+	{
+		/*
+		 * Wait in intervals of 1 millisecond so that we can frequently check
+		 * for the acknowledgement.
+		 */
+		pg_usleep(1 * 1000L);
+
+		wait_time--;
+
+		if (MyProc->syncRepState == SYNC_REP_WAIT_COMPLETE)
+			return true;
+	}
+
+	return true;
+}
 
 /*
  * Wait for synchronous replication, if requested by user.
@@ -257,6 +295,12 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 		 */
 		if (ProcDiePending)
 		{
+			if (SyncRepNapBeforeCancel())
+			{
+				if (MyProc->syncRepState == SYNC_REP_WAIT_COMPLETE)
+					break;
+			}
+
 			ereport(WARNING,
 					(errcode(ERRCODE_ADMIN_SHUTDOWN),
 					 errmsg("canceling the wait for synchronous replication and terminating connection due to administrator command"),
@@ -274,6 +318,12 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 		 */
 		if (QueryCancelPending)
 		{
+			if (SyncRepNapBeforeCancel())
+			{
+				if (MyProc->syncRepState == SYNC_REP_WAIT_COMPLETE)
+					break;
+			}
+
 			QueryCancelPending = false;
 			ereport(WARNING,
 					(errmsg("canceling wait for synchronous replication due to user request"),

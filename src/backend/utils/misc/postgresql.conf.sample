@@ -329,6 +329,8 @@
 				# and comma-separated list of application_name
 				# from standby(s); '*' = all
 #vacuum_defer_cleanup_age = 0	# number of xacts by which cleanup is delayed
+#synchronous_replication_naptime_before_cancel = 0 # amount of time to wait for
+				# synchronous replictaion before cancelling; 0 or -1 disables
 
 # - Standby Servers -
 

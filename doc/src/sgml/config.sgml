@@ -4449,6 +4449,36 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-synchronous-replication-naptime-before-cancel" xreflabel="synchronous_replication_naptime_before_cancel">
+      <term><varname>synchronous_replication_naptime_before_cancel</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>synchronous_replication_naptime_before_cancel</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the amount of time in milliseconds to wait for synchronous
+        replication before cancelling. Default value is 0, a value of -1 or 0
+        disables this feature. In <productname>PostgreSQL</productname> high
+        availability setup with synchronous replication, typically all the
+        transactions first locally get committed, then streamed to the
+        synchronous standbys and the backends that generated the transaction
+        will wait for acknowledgement from synchronous standbys. While waiting
+        for acknowledgement, it may happen that the query or the transaction
+        gets canceled or the backend that's waiting for acknowledgement is
+        asked to exit. In either of these cases, the wait for acknowledgement
+        gets canceled and leaves transaction in an inconsistent state as it got
+        committed locally but not on the standbys. When set the
+        <varname>synchronous_replication_naptime_before_cancel</varname>
+        parameter, it will let the backends wait for the acknowledgement
+        before canceling the wait for acknowledgement so that the transaction
+        can be available in synchronous standbys as well. This parameter can
+        only be set in the <filename>postgresql.conf</filename> file or on the
+        server command line.
+        </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
     </sect2>
 

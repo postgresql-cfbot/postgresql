@@ -24,10 +24,22 @@ PgStat_CheckpointerStats PendingCheckpointerStats = {0};
 
 
 /*
- * Report checkpointer and IO statistics
+ * Report checkpointer, IO, WAL and SLRU statistics
  */
 void
 pgstat_report_checkpointer(void)
+{
+	pgstat_flush_checkpointer();
+	pgstat_flush_wal(true);
+	pgstat_flush_io(true);
+	pgstat_slru_flush(true);
+}
+
+/*
+ * Flush out locally pending checkpointer stats
+ */
+void
+pgstat_flush_checkpointer(void)
 {
 	/* We assume this initializes to zeroes */
 	static const PgStat_CheckpointerStats all_zeroes;
@@ -62,11 +74,6 @@ pgstat_report_checkpointer(void)
 	 * Clear out the statistics buffer, so it can be re-used.
 	 */
 	MemSet(&PendingCheckpointerStats, 0, sizeof(PendingCheckpointerStats));
-
-	/*
-	 * Report IO statistics
-	 */
-	pgstat_flush_io(false);
 }
 
 /*

@@ -1593,9 +1593,13 @@ SlruScanDirectory(SlruCtl ctl, SlruScanCallback callback, void *data)
 int
 SlruSyncFileTag(SlruCtl ctl, const FileTag *ftag, char *path)
 {
+	SlruShared	shared = ctl->shared;
 	int			fd;
 	int			save_errno;
 	int			result;
+
+	/* update the stats counter of flushes */
+	pgstat_count_slru_flush(shared->slru_stats_idx);
 
 	SlruFileName(ctl, path, ftag->segno);
 

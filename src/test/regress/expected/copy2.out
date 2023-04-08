@@ -82,6 +82,8 @@ COPY x to stdin (format BINARY, delimiter ',');
 ERROR:  cannot specify DELIMITER in BINARY mode
 COPY x to stdin (format BINARY, null 'x');
 ERROR:  cannot specify NULL in BINARY mode
+COPY x to stdin (format BINARY, ignore_datatype_errors);
+ERROR:  cannot specify IGNORE_DATATYPE_ERRORS in BINARY mode
 COPY x to stdin (format TEXT, force_quote(a));
 ERROR:  COPY force quote available only in CSV mode
 COPY x from stdin (format CSV, force_quote(a));
@@ -666,6 +668,25 @@ SELECT * FROM instead_of_insert_tbl;
 (2 rows)
 
 COMMIT;
+-- tests for IGNORE_DATATYPE_ERRORS option
+CREATE TABLE check_ign_err (n int, m int[], k int);
+COPY check_ign_err FROM STDIN WITH (IGNORE_DATATYPE_ERRORS);
+WARNING:  invalid input syntax for type integer: "a"
+WARNING:  value "3333333333" is out of range for type integer
+WARNING:  invalid input syntax for type integer: "a"
+WARNING:  invalid input syntax for type integer: ""
+WARNING:  4 rows were skipped due to data type incompatibility
+SELECT * FROM check_ign_err;
+ n |  m  | k 
+---+-----+---
+ 1 | {1} | 1
+ 5 | {5} | 5
+(2 rows)
+
+-- test missing data: should fail
+COPY check_ign_err FROM STDIN WITH (IGNORE_DATATYPE_ERRORS);
+ERROR:  missing data for column "k"
+CONTEXT:  COPY check_ign_err, line 1: "1	{1}"
 -- clean up
 DROP TABLE forcetest;
 DROP TABLE vistest;
@@ -680,6 +701,7 @@ DROP TABLE instead_of_insert_tbl;
 DROP VIEW instead_of_insert_tbl_view;
 DROP VIEW instead_of_insert_tbl_view_2;
 DROP FUNCTION fun_instead_of_insert_tbl();
+DROP TABLE check_ign_err;
 --
 -- COPY FROM ... DEFAULT
 --

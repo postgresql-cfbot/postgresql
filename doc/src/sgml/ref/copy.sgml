@@ -34,6 +34,7 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
 
     FORMAT <replaceable class="parameter">format_name</replaceable>
     FREEZE [ <replaceable class="parameter">boolean</replaceable> ]
+    IGNORE_DATATYPE_ERRORS [ <replaceable class="parameter">boolean</replaceable> ]
     DELIMITER '<replaceable class="parameter">delimiter_character</replaceable>'
     NULL '<replaceable class="parameter">null_string</replaceable>'
     HEADER [ <replaceable class="parameter">boolean</replaceable> | MATCH ]
@@ -230,6 +231,18 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       once it has been successfully loaded. This violates the normal rules
       of MVCC visibility and users should be aware of the
       potential problems this might cause.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>IGNORE_DATATYPE_ERRORS</literal></term>
+    <listitem>
+     <para>
+      Drops rows that contain malformed data while copying. These are rows
+      with columns where the data type's input-function raises an error.
+      This option is not allowed when using binary format.  Note that this
+      is only supported in current <command>COPY</command> syntax.
      </para>
     </listitem>
    </varlistentry>

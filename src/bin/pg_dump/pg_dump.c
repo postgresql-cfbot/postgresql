@@ -1234,6 +1234,8 @@ setup_connection(Archive *AH, const char *dumpencoding,
 		ExecuteSqlStatement(AH, "SET lock_timeout = 0");
 	if (AH->remoteVersion >= 90600)
 		ExecuteSqlStatement(AH, "SET idle_in_transaction_session_timeout = 0");
+	if (AH->remoteVersion >= 160000)
+		ExecuteSqlStatement(AH, "SET transaction_timeout = 0");
 
 	/*
 	 * Quote all identifiers, if requested.

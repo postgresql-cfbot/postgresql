@@ -2750,6 +2750,9 @@ start_xact_command(void)
 	{
 		StartTransactionCommand();
 
+		if (TransactionTimeout > 0 && !get_timeout_active(TRANSACTION_TIMEOUT))
+			enable_timeout_after(TRANSACTION_TIMEOUT, TransactionTimeout);
+
 		xact_started = true;
 	}
 
@@ -3333,40 +3336,43 @@ ProcessInterrupts(void)
 	{
 		bool		lock_timeout_occurred;
 		bool		stmt_timeout_occurred;
+		bool		tx_timeout_occurred;
+		int			err_code = ERRCODE_QUERY_CANCELED;
 
 		QueryCancelPending = false;
 
 		/*
-		 * If LOCK_TIMEOUT and STATEMENT_TIMEOUT indicators are both set, we
-		 * need to clear both, so always fetch both.
+		 * If LOCK_TIMEOUT, STATEMENT_TIMEOUT and TRANSACTION indicators are set, we
+		 * need to clear all of them, so always fetch each one.
 		 */
 		lock_timeout_occurred = get_timeout_indicator(LOCK_TIMEOUT, true);
 		stmt_timeout_occurred = get_timeout_indicator(STATEMENT_TIMEOUT, true);
-
-		/*
-		 * If both were set, we want to report whichever timeout completed
-		 * earlier; this ensures consistent behavior if the machine is slow
-		 * enough that the second timeout triggers before we get here.  A tie
-		 * is arbitrarily broken in favor of reporting a lock timeout.
-		 */
-		if (lock_timeout_occurred && stmt_timeout_occurred &&
-			get_timeout_finish_time(STATEMENT_TIMEOUT) < get_timeout_finish_time(LOCK_TIMEOUT))
-			lock_timeout_occurred = false;	/* report stmt timeout */
+		tx_timeout_occurred = get_timeout_indicator(TRANSACTION_TIMEOUT, true);
 
 		if (lock_timeout_occurred)
+			err_code = ERRCODE_LOCK_NOT_AVAILABLE;
+
+
+		if (lock_timeout_occurred || stmt_timeout_occurred || tx_timeout_occurred)
 		{
+			/* Report all reasons for timeout */
+			char* lock_reason = lock_timeout_occurred ?
+									_("lock timeout") : "";
+			char* stmt_reason = stmt_timeout_occurred ?
+									_("statement timeout") : "";
+			char* tx_reason = tx_timeout_occurred ?
+									_("transaction timeout") : "";
+			char* comma1 = lock_timeout_occurred && stmt_timeout_occurred ?
+									"," : "";
+			char* comma2 = (lock_timeout_occurred || stmt_timeout_occurred)
+									&& tx_timeout_occurred ? "," : "";
 			LockErrorCleanup();
 			ereport(ERROR,
-					(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
-					 errmsg("canceling statement due to lock timeout")));
+					(errcode(err_code),
+					 errmsg("canceling statement due to %s%s%s%s%s", lock_reason, comma1,
+					 			stmt_reason, comma2, tx_reason)));
 		}
-		if (stmt_timeout_occurred)
-		{
-			LockErrorCleanup();
-			ereport(ERROR,
-					(errcode(ERRCODE_QUERY_CANCELED),
-					 errmsg("canceling statement due to statement timeout")));
-		}
+
 		if (IsAutoVacuumWorkerProcess())
 		{
 			LockErrorCleanup();
@@ -4541,6 +4547,9 @@ PostgresMain(const char *dbname, const char *username)
 					enable_timeout_after(IDLE_SESSION_TIMEOUT,
 										 IdleSessionTimeout);
 				}
+
+				if (get_timeout_active(TRANSACTION_TIMEOUT))
+					disable_timeout(TRANSACTION_TIMEOUT, false);
 			}
 
 			/* Report any recently-changed GUC options */

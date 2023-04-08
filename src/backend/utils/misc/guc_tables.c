@@ -2516,6 +2516,17 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"transaction_timeout", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Sets the maximum allowed in a transaction."),
+			gettext_noop("A value of 0 turns off the timeout."),
+			GUC_UNIT_MS
+		},
+		&TransactionTimeout,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"idle_session_timeout", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Sets the maximum allowed idle time between queries, when not in a transaction."),
 			gettext_noop("A value of 0 turns off the timeout."),

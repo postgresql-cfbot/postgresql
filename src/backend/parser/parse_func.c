@@ -31,6 +31,7 @@
 #include "parser/parse_target.h"
 #include "parser/parse_type.h"
 #include "utils/builtins.h"
+#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
@@ -347,6 +348,15 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 							NameListToString(funcname)),
 					 parser_errposition(pstate, location)));
 	}
+
+	/* Merge support functions are only allowed in MERGE's RETURNING list */
+	if (IsMergeSupportFunction(funcid) &&
+		pstate->p_expr_kind != EXPR_KIND_MERGE_RETURNING)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("merge support function %s can only be called from the RETURNING list of a MERGE command",
+						NameListToString(funcname)),
+				 parser_errposition(pstate, location)));
 
 	/*
 	 * So far so good, so do some fdresult-type-specific processing.
@@ -2599,6 +2609,7 @@ check_srf_call_placement(ParseState *pstate, Node *last_srf, int location)
 			errkind = true;
 			break;
 		case EXPR_KIND_RETURNING:
+		case EXPR_KIND_MERGE_RETURNING:
 			errkind = true;
 			break;
 		case EXPR_KIND_VALUES:

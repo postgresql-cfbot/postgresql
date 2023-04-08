@@ -123,20 +123,20 @@ ON tid = tid
 WHEN MATCHED THEN DO NOTHING;
 ERROR:  name "target" specified more than once
 DETAIL:  The name is used both as MERGE target table and data source.
--- used in a CTE
+-- used in a CTE without RETURNING
 WITH foo AS (
   MERGE INTO target USING source ON (true)
   WHEN MATCHED THEN DELETE
 ) SELECT * FROM foo;
-ERROR:  MERGE not supported in WITH query
-LINE 1: WITH foo AS (
-             ^
--- used in COPY
+ERROR:  WITH query "foo" does not have a RETURNING clause
+LINE 4: ) SELECT * FROM foo;
+                        ^
+-- used in COPY without RETURNING
 COPY (
   MERGE INTO target USING source ON (true)
   WHEN MATCHED THEN DELETE
 ) TO stdout;
-ERROR:  MERGE not supported in COPY
+ERROR:  COPY query must have a RETURNING clause
 -- unsupported relation types
 -- view
 CREATE VIEW tv AS SELECT * FROM target;
@@ -1304,20 +1304,187 @@ WHEN MATCHED AND tid < 2 THEN
 ROLLBACK;
 -- RETURNING
 BEGIN;
-INSERT INTO sq_source (sid, balance, delta) VALUES (-1, -1, -10);
 MERGE INTO sq_target t
-USING v
+USING sq_source s
 ON tid = sid
-WHEN MATCHED AND tid > 2 THEN
+WHEN MATCHED AND tid >= 2 THEN
     UPDATE SET balance = t.balance + delta
 WHEN NOT MATCHED THEN
-	INSERT (balance, tid) VALUES (balance + delta, sid)
+    INSERT (balance, tid) VALUES (balance + delta, sid)
 WHEN MATCHED AND tid < 2 THEN
-	DELETE
-RETURNING *;
-ERROR:  syntax error at or near "RETURNING"
-LINE 10: RETURNING *;
-         ^
+    DELETE
+RETURNING pg_merge_when_clause() AS when_clause,
+          pg_merge_action() AS merge_action,
+          t.*,
+          CASE pg_merge_action()
+              WHEN 'INSERT' THEN 'Inserted '||t
+              WHEN 'UPDATE' THEN 'Added '||delta||' to balance'
+              WHEN 'DELETE' THEN 'Removed '||t
+          END AS description;
+ when_clause | merge_action | tid | balance |     description     
+-------------+--------------+-----+---------+---------------------
+           3 | DELETE       |   1 |     100 | Removed (1,100)
+           1 | UPDATE       |   2 |     220 | Added 20 to balance
+           2 | INSERT       |   4 |      40 | Inserted (4,40)
+(3 rows)
+
+ROLLBACK;
+-- error when using MERGE support functions outside MERGE
+SELECT pg_merge_action() FROM sq_target;
+ERROR:  merge support function pg_merge_action can only be called from the RETURNING list of a MERGE command
+LINE 1: SELECT pg_merge_action() FROM sq_target;
+               ^
+UPDATE sq_target SET balance = balance + 1 RETURNING pg_merge_when_clause();
+ERROR:  merge support function pg_merge_when_clause can only be called from the RETURNING list of a MERGE command
+LINE 1: ...ATE sq_target SET balance = balance + 1 RETURNING pg_merge_w...
+                                                             ^
+-- RETURNING in CTEs
+CREATE TABLE sq_target_merge_log (tid integer NOT NULL, last_change text);
+INSERT INTO sq_target_merge_log VALUES (1, 'Original value');
+BEGIN;
+WITH m AS (
+    MERGE INTO sq_target t
+    USING sq_source s
+    ON tid = sid
+    WHEN MATCHED AND tid >= 2 THEN
+        UPDATE SET balance = t.balance + delta
+    WHEN NOT MATCHED THEN
+        INSERT (balance, tid) VALUES (balance + delta, sid)
+    WHEN MATCHED AND tid < 2 THEN
+        DELETE
+    RETURNING pg_merge_when_clause() AS when_clause,
+              pg_merge_action() AS merge_action,
+              t.*,
+              CASE pg_merge_action()
+                  WHEN 'INSERT' THEN 'Inserted '||t
+                  WHEN 'UPDATE' THEN 'Added '||delta||' to balance'
+                  WHEN 'DELETE' THEN 'Removed '||t
+              END AS description
+), m2 AS (
+    MERGE INTO sq_target_merge_log l
+    USING m
+    ON l.tid = m.tid
+    WHEN MATCHED THEN
+        UPDATE SET last_change = description
+    WHEN NOT MATCHED THEN
+        INSERT VALUES (m.tid, description)
+    RETURNING merge_action, pg_merge_action() AS merge_log_action, l.*
+)
+SELECT * FROM m2;
+ merge_action | merge_log_action | tid |     last_change     
+--------------+------------------+-----+---------------------
+ DELETE       | UPDATE           |   1 | Removed (1,100)
+ UPDATE       | INSERT           |   2 | Added 20 to balance
+ INSERT       | INSERT           |   4 | Inserted (4,40)
+(3 rows)
+
+SELECT * FROM sq_target_merge_log ORDER BY tid;
+ tid |     last_change     
+-----+---------------------
+   1 | Removed (1,100)
+   2 | Added 20 to balance
+   4 | Inserted (4,40)
+(3 rows)
+
+ROLLBACK;
+-- COPY (MERGE ... RETURNING) TO ...
+BEGIN;
+COPY (
+    MERGE INTO sq_target t
+    USING v
+    ON tid = sid
+    WHEN MATCHED AND tid > 2 THEN
+        UPDATE SET balance = t.balance + delta
+    WHEN NOT MATCHED THEN
+        INSERT (balance, tid) VALUES (balance + delta, sid)
+    WHEN MATCHED AND tid < 2 THEN
+        DELETE
+    RETURNING pg_merge_action(), t.*
+) TO stdout;
+DELETE	1	100
+ROLLBACK;
+-- SQL function with MERGE ... RETURNING
+BEGIN;
+CREATE FUNCTION merge_into_sq_target(sid int, balance int, delta int,
+                                     OUT action text, OUT tid int, OUT new_balance int)
+LANGUAGE sql AS
+$$
+    MERGE INTO sq_target t
+    USING (VALUES ($1, $2, $3)) AS v(sid, balance, delta)
+    ON tid = v.sid
+    WHEN MATCHED AND tid > 2 THEN
+        UPDATE SET balance = t.balance + v.delta
+    WHEN NOT MATCHED THEN
+        INSERT (balance, tid) VALUES (v.balance + v.delta, v.sid)
+    WHEN MATCHED AND tid < 2 THEN
+        DELETE
+    RETURNING pg_merge_action(), t.*;
+$$;
+SELECT m.*
+FROM (VALUES (1, 0, 0), (3, 0, 20), (4, 100, 10)) AS v(sid, balance, delta),
+LATERAL (SELECT action, tid, new_balance FROM merge_into_sq_target(sid, balance, delta)) m;
+ action | tid | new_balance 
+--------+-----+-------------
+ DELETE |   1 |         100
+ UPDATE |   3 |         320
+ INSERT |   4 |         110
+(3 rows)
+
+ROLLBACK;
+-- SQL SRF with MERGE ... RETURNING
+BEGIN;
+CREATE FUNCTION merge_sq_source_into_sq_target()
+RETURNS TABLE (action text, tid int, balance int)
+LANGUAGE sql AS
+$$
+    MERGE INTO sq_target t
+    USING sq_source s
+    ON tid = sid
+    WHEN MATCHED AND tid > 2 THEN
+        UPDATE SET balance = t.balance + delta
+    WHEN NOT MATCHED THEN
+        INSERT (balance, tid) VALUES (balance + delta, sid)
+    WHEN MATCHED AND tid < 2 THEN
+        DELETE
+    RETURNING pg_merge_action(), t.*;
+$$;
+SELECT * FROM merge_sq_source_into_sq_target();
+ action | tid | balance 
+--------+-----+---------
+ DELETE |   1 |     100
+ INSERT |   4 |      40
+(2 rows)
+
+ROLLBACK;
+-- PL/pgSQL function with MERGE ... RETURNING ... INTO
+BEGIN;
+CREATE FUNCTION merge_into_sq_target(sid int, balance int, delta int,
+                                     OUT r_action text, OUT r_tid int, OUT r_balance int)
+LANGUAGE plpgsql AS
+$$
+BEGIN
+    MERGE INTO sq_target t
+    USING (VALUES ($1, $2, $3)) AS v(sid, balance, delta)
+    ON tid = v.sid
+    WHEN MATCHED AND tid > 2 THEN
+        UPDATE SET balance = t.balance + v.delta
+    WHEN NOT MATCHED THEN
+        INSERT (balance, tid) VALUES (v.balance + v.delta, v.sid)
+    WHEN MATCHED AND tid < 2 THEN
+        DELETE
+    RETURNING pg_merge_action(), t.* INTO r_action, r_tid, r_balance;
+END;
+$$;
+SELECT m.*
+FROM (VALUES (1, 0, 0), (3, 0, 20), (4, 100, 10)) AS v(sid, balance, delta),
+LATERAL (SELECT r_action, r_tid, r_balance FROM merge_into_sq_target(sid, balance, delta)) m;
+ r_action | r_tid | r_balance 
+----------+-------+-----------
+ DELETE   |     1 |       100
+ UPDATE   |     3 |       320
+ INSERT   |     4 |       110
+(3 rows)
+
 ROLLBACK;
 -- EXPLAIN
 CREATE TABLE ex_mtarget (a int, b int)
@@ -1514,7 +1681,7 @@ SELECT * FROM sq_target WHERE tid = 1;
 (1 row)
 
 ROLLBACK;
-DROP TABLE sq_target, sq_source CASCADE;
+DROP TABLE sq_target, sq_target_merge_log, sq_source CASCADE;
 NOTICE:  drop cascades to view v
 CREATE TABLE pa_target (tid integer, balance float, val text)
 	PARTITION BY LIST (tid);
@@ -1640,6 +1807,32 @@ SELECT * FROM pa_target ORDER BY tid;
 (14 rows)
 
 ROLLBACK;
+-- update partition key to partition not initially scanned
+BEGIN;
+MERGE INTO pa_target t
+  USING pa_source s
+  ON t.tid = s.sid AND t.tid = 1
+  WHEN MATCHED THEN
+    UPDATE SET tid = tid + 1, balance = balance + delta, val = val || ' updated by merge'
+  RETURNING pg_merge_action(), pg_merge_when_clause(), t.*;
+ pg_merge_action | pg_merge_when_clause | tid | balance |           val            
+-----------------+----------------------+-----+---------+--------------------------
+ UPDATE          |                    1 |   2 |     110 | initial updated by merge
+(1 row)
+
+SELECT * FROM pa_target ORDER BY tid;
+ tid | balance |           val            
+-----+---------+--------------------------
+   2 |     110 | initial updated by merge
+   3 |     300 | initial
+   5 |     500 | initial
+   7 |     700 | initial
+   9 |     900 | initial
+  11 |    1100 | initial
+  13 |    1300 | initial
+(7 rows)
+
+ROLLBACK;
 DROP TABLE pa_target CASCADE;
 -- The target table is partitioned in the same way, but this time by attaching
 -- partitions which have columns in different order, dropped columns etc.
@@ -1731,7 +1924,26 @@ MERGE INTO pa_target t
   WHEN MATCHED THEN
     UPDATE SET tid = tid + 1, balance = balance + delta, val = val || ' updated by merge'
   WHEN NOT MATCHED THEN
-    INSERT VALUES (sid, delta, 'inserted by merge');
+    INSERT VALUES (sid, delta, 'inserted by merge')
+  RETURNING pg_merge_action(), pg_merge_when_clause(), t.*;
+ pg_merge_action | pg_merge_when_clause | tid | balance |           val            
+-----------------+----------------------+-----+---------+--------------------------
+ UPDATE          |                    1 |   2 |     110 | initial updated by merge
+ INSERT          |                    2 |   2 |      20 | inserted by merge
+ UPDATE          |                    1 |   4 |     330 | initial updated by merge
+ INSERT          |                    2 |   4 |      40 | inserted by merge
+ UPDATE          |                    1 |   6 |     550 | initial updated by merge
+ INSERT          |                    2 |   6 |      60 | inserted by merge
+ UPDATE          |                    1 |   8 |     770 | initial updated by merge
+ INSERT          |                    2 |   8 |      80 | inserted by merge
+ UPDATE          |                    1 |  10 |     990 | initial updated by merge
+ INSERT          |                    2 |  10 |     100 | inserted by merge
+ UPDATE          |                    1 |  12 |    1210 | initial updated by merge
+ INSERT          |                    2 |  12 |     120 | inserted by merge
+ UPDATE          |                    1 |  14 |    1430 | initial updated by merge
+ INSERT          |                    2 |  14 |     140 | inserted by merge
+(14 rows)
+
 SELECT * FROM pa_target ORDER BY tid;
  tid | balance |           val            
 -----+---------+--------------------------
@@ -1798,7 +2010,21 @@ MERGE INTO pa_target t
   WHEN MATCHED THEN
     UPDATE SET balance = balance + delta, val = val || ' updated by merge'
   WHEN NOT MATCHED THEN
-    INSERT VALUES (slogts::timestamp, sid, delta, 'inserted by merge');
+    INSERT VALUES (slogts::timestamp, sid, delta, 'inserted by merge')
+  RETURNING pg_merge_action(), pg_merge_when_clause(), t.*;
+ pg_merge_action | pg_merge_when_clause |          logts           | tid | balance |           val            
+-----------------+----------------------+--------------------------+-----+---------+--------------------------
+ UPDATE          |                    1 | Tue Jan 31 00:00:00 2017 |   1 |     110 | initial updated by merge
+ UPDATE          |                    1 | Tue Feb 28 00:00:00 2017 |   2 |     220 | initial updated by merge
+ INSERT          |                    2 | Sun Jan 15 00:00:00 2017 |   3 |      30 | inserted by merge
+ UPDATE          |                    1 | Tue Jan 31 00:00:00 2017 |   4 |     440 | initial updated by merge
+ UPDATE          |                    1 | Tue Feb 28 00:00:00 2017 |   5 |     550 | initial updated by merge
+ INSERT          |                    2 | Sun Jan 15 00:00:00 2017 |   6 |      60 | inserted by merge
+ UPDATE          |                    1 | Tue Jan 31 00:00:00 2017 |   7 |     770 | initial updated by merge
+ UPDATE          |                    1 | Tue Feb 28 00:00:00 2017 |   8 |     880 | initial updated by merge
+ INSERT          |                    2 | Sun Jan 15 00:00:00 2017 |   9 |      90 | inserted by merge
+(9 rows)
+
 SELECT * FROM pa_target ORDER BY tid;
           logts           | tid | balance |           val            
 --------------------------+-----+---------+--------------------------

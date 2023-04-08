@@ -182,6 +182,11 @@ DECLARE_UNIQUE_INDEX(pg_proc_proname_args_nsp_index, 2691, ProcedureNameArgsNspI
 #define PROARGMODE_VARIADIC 'v'
 #define PROARGMODE_TABLE	't'
 
+/* Is this a merge support function?  (Requires fmgroids.h) */
+#define IsMergeSupportFunction(oid) \
+	((oid) == F_PG_MERGE_ACTION || \
+	 (oid) == F_PG_MERGE_WHEN_CLAUSE)
+
 #endif							/* EXPOSE_TO_CLIENT_CODE */
 
 

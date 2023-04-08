@@ -3655,7 +3655,8 @@ RewriteQuery(Query *parsetree, List *rewrite_events, int orig_rt_length)
 			if (!(ctequery->commandType == CMD_SELECT ||
 				  ctequery->commandType == CMD_UPDATE ||
 				  ctequery->commandType == CMD_INSERT ||
-				  ctequery->commandType == CMD_DELETE))
+				  ctequery->commandType == CMD_DELETE ||
+				  ctequery->commandType == CMD_MERGE))
 			{
 				/*
 				 * Currently it could only be NOTIFY; this error message will

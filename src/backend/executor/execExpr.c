@@ -48,6 +48,7 @@
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
+#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/typcache.h"
 
@@ -2591,6 +2592,22 @@ ExecInitFunc(ExprEvalStep *scratch, Expr *node, List *args, Oid funcid,
 	/* Initialize function call parameter structure too */
 	InitFunctionCallInfoData(*fcinfo, flinfo,
 							 nargs, inputcollid, NULL, NULL);
+
+	/*
+	 * Merge support functions should only be called directly from a MERGE
+	 * command, and need access to the parent ModifyTableState.  The parser
+	 * should have checked that such functions only appear in the RETURNING
+	 * list of a MERGE, so this should never fail.
+	 */
+	if (IsMergeSupportFunction(funcid))
+	{
+		if (!state->parent ||
+			!IsA(state->parent, ModifyTableState) ||
+			((ModifyTableState *) state->parent)->operation != CMD_MERGE)
+			elog(ERROR, "merge support function called in non-merge context");
+
+		fcinfo->context = (Node *) state->parent;
+	}
 
 	/* Keep extra copies of this info to save an indirection at runtime */
 	scratch->d.func.fn_addr = flinfo->fn_addr;

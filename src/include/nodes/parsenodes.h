@@ -1687,6 +1687,7 @@ typedef struct MergeWhenClause
 typedef struct MergeAction
 {
 	NodeTag		type;
+	int			index;			/* 1-based index of the clause */
 	bool		matched;		/* true=MATCHED, false=NOT MATCHED */
 	CmdType		commandType;	/* INSERT/UPDATE/DELETE/DO NOTHING */
 	/* OVERRIDING clause */
@@ -1913,6 +1914,7 @@ typedef struct MergeStmt
 	Node	   *sourceRelation; /* source relation */
 	Node	   *joinCondition;	/* join condition between source and target */
 	List	   *mergeWhenClauses;	/* list of MergeWhenClause(es) */
+	List	   *returningList;	/* list of expressions to return */
 	WithClause *withClause;		/* WITH clause */
 } MergeStmt;
 

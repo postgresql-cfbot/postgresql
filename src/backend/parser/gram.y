@@ -12280,6 +12280,7 @@ MergeStmt:
 			USING table_ref
 			ON a_expr
 			merge_when_list
+			returning_clause
 				{
 					MergeStmt  *m = makeNode(MergeStmt);
 
@@ -12288,6 +12289,7 @@ MergeStmt:
 					m->sourceRelation = $6;
 					m->joinCondition = $8;
 					m->mergeWhenClauses = $9;
+					m->returningList = $10;
 
 					$$ = (Node *) m;
 				}

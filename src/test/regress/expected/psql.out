@@ -6607,3 +6607,52 @@ cross-database references are not implemented: "no.such.database"."no.such.schem
 cross-database references are not implemented: "no.such.database"."no.such.schema"."no.such.data.type"
 \dX "no.such.database"."no.such.schema"."no.such.extended.statistics"
 cross-database references are not implemented: "no.such.database"."no.such.schema"."no.such.extended.statistics"
+-- check \du
+CREATE ROLE regress_du_role0;
+CREATE ROLE regress_du_role1;
+CREATE ROLE regress_du_role2;
+CREATE ROLE regress_du_admin LOGIN CREATEROLE;
+COMMENT ON ROLE regress_du_role0 IS 'Description for regress_du_role0';
+COMMENT ON ROLE regress_du_role1 IS 'Description for regress_du_role1';
+COMMENT ON ROLE regress_du_role2 IS 'Description for regress_du_role2';
+COMMENT ON ROLE regress_du_admin IS 'Description for regress_du_admin';
+GRANT regress_du_role0 TO regress_du_admin WITH ADMIN TRUE;
+GRANT regress_du_role1 TO regress_du_admin WITH ADMIN TRUE;
+GRANT regress_du_role2 TO regress_du_admin WITH ADMIN TRUE;
+GRANT regress_du_role0 TO regress_du_role1 WITH ADMIN TRUE,  INHERIT TRUE,  SET TRUE  GRANTED BY regress_du_admin;
+GRANT regress_du_role0 TO regress_du_role2 WITH ADMIN TRUE,  INHERIT FALSE, SET FALSE GRANTED BY regress_du_admin;
+GRANT regress_du_role1 TO regress_du_role2 WITH ADMIN TRUE , INHERIT FALSE, SET TRUE  GRANTED BY regress_du_admin;
+GRANT regress_du_role0 TO regress_du_role1 WITH ADMIN FALSE, INHERIT TRUE,  SET FALSE GRANTED BY regress_du_role1;
+GRANT regress_du_role0 TO regress_du_role2 WITH ADMIN FALSE, INHERIT TRUE , SET TRUE  GRANTED BY regress_du_role1;
+GRANT regress_du_role0 TO regress_du_role1 WITH ADMIN FALSE, INHERIT FALSE, SET TRUE  GRANTED BY regress_du_role2;
+GRANT regress_du_role0 TO regress_du_role2 WITH ADMIN FALSE, INHERIT FALSE, SET FALSE GRANTED BY regress_du_role2;
+\du regress_du_role*
+                                   List of roles
+    Role name     |  Attributes  |                    Member of                     
+------------------+--------------+--------------------------------------------------
+ regress_du_role0 | Cannot login | 
+ regress_du_role1 | Cannot login | regress_du_role0 from regress_du_admin (a, i, s)+
+                  |              | regress_du_role0 from regress_du_role1 (i)      +
+                  |              | regress_du_role0 from regress_du_role2 (s)
+ regress_du_role2 | Cannot login | regress_du_role0 from regress_du_admin (a)      +
+                  |              | regress_du_role0 from regress_du_role1 (i, s)   +
+                  |              | regress_du_role0 from regress_du_role2 (empty)  +
+                  |              | regress_du_role1 from regress_du_admin (a, s)
+
+\du+ regress_du_role*
+                                                     List of roles
+    Role name     |  Attributes  |                    Member of                     |           Description            
+------------------+--------------+--------------------------------------------------+----------------------------------
+ regress_du_role0 | Cannot login |                                                  | Description for regress_du_role0
+ regress_du_role1 | Cannot login | regress_du_role0 from regress_du_admin (a, i, s)+| Description for regress_du_role1
+                  |              | regress_du_role0 from regress_du_role1 (i)      +| 
+                  |              | regress_du_role0 from regress_du_role2 (s)       | 
+ regress_du_role2 | Cannot login | regress_du_role0 from regress_du_admin (a)      +| Description for regress_du_role2
+                  |              | regress_du_role0 from regress_du_role1 (i, s)   +| 
+                  |              | regress_du_role0 from regress_du_role2 (empty)  +| 
+                  |              | regress_du_role1 from regress_du_admin (a, s)    | 
+
+DROP ROLE regress_du_role0;
+DROP ROLE regress_du_role1;
+DROP ROLE regress_du_role2;
+DROP ROLE regress_du_admin;

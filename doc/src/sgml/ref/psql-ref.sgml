@@ -1727,9 +1727,18 @@ INSERT INTO tbl1 VALUES ($1, $2) \bind 'first value' 'second value' \g
         <literal>S</literal> modifier to include system roles.
         If <replaceable class="parameter">pattern</replaceable> is specified,
         only those roles whose names match the pattern are listed.
-        If the form <literal>\dg+</literal> is used, additional information
-        is shown about each role; currently this adds the comment for each
-        role.
+        </para>
+        <para>
+        Shown within each row, in newline-separated format, are the memberships granted to
+        the role.  The presentation includes both the name of the grantor
+        as well as the membership permissions (in an abbreviated format:
+        <literal>a</literal> for admin option, <literal>i</literal> for inherit option,
+        <literal>s</literal> for set option.) The word <literal>empty</literal> is printed in
+        the case that none of those permissions are granted.
+        See the <link linkend="sql-grant"><command>GRANT</command></link> command for their meaning.
+        </para>
+        <para>
+        If the form <literal>\dg+</literal> is used the comment attached to the role is shown.
         </para>
         </listitem>
       </varlistentry>
@@ -1969,9 +1978,18 @@ INSERT INTO tbl1 VALUES ($1, $2) \bind 'first value' 'second value' \g
         <literal>S</literal> modifier to include system roles.
         If <replaceable class="parameter">pattern</replaceable> is specified,
         only those roles whose names match the pattern are listed.
-        If the form <literal>\du+</literal> is used, additional information
-        is shown about each role; currently this adds the comment for each
-        role.
+        </para>
+        <para>
+        Shown within each row, in newline-separated format, are the memberships granted to
+        the role.  The presentation includes both the name of the grantor
+        as well as the membership permissions (in an abbreviated format:
+        <literal>a</literal> for admin option, <literal>i</literal> for inherit option,
+        <literal>s</literal> for set option.) The word <literal>empty</literal> is printed in
+        the case that none of those permissions are granted.
+        See the <link linkend="sql-grant"><command>GRANT</command></link> command for their meaning.
+        </para>
+        <para>
+        If the form <literal>\du+</literal> is used the comment attached to the role is shown.
         </para>
         </listitem>
       </varlistentry>

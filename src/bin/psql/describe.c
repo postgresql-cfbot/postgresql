@@ -3631,22 +3631,40 @@ describeRoles(const char *pattern, bool verbose, bool showSystem)
 	printfPQExpBuffer(&buf,
 					  "SELECT r.rolname, r.rolsuper, r.rolinherit,\n"
 					  "  r.rolcreaterole, r.rolcreatedb, r.rolcanlogin,\n"
-					  "  r.rolconnlimit, r.rolvaliduntil,\n"
-					  "  ARRAY(SELECT b.rolname\n"
-					  "        FROM pg_catalog.pg_auth_members m\n"
-					  "        JOIN pg_catalog.pg_roles b ON (m.roleid = b.oid)\n"
-					  "        WHERE m.member = r.oid) as memberof");
+					  "  r.rolconnlimit, r.rolvaliduntil, r.rolreplication,\n");
+
+	if (pset.sversion >= 160000)
+		appendPQExpBufferStr(&buf,
+							 "  (SELECT pg_catalog.string_agg(\n"
+							 "    pg_catalog.format('%I from %I (%s)',\n"
+							 "      b.rolname, m.grantor::pg_catalog.regrole::pg_catalog.text,\n"
+							 "      pg_catalog.regexp_replace(\n"
+							 "        pg_catalog.concat_ws(', ',\n"
+							 "          CASE WHEN m.admin_option THEN 'a' END,\n"
+							 "          CASE WHEN m.inherit_option THEN 'i' END,\n"
+							 "          CASE WHEN m.set_option THEN 's' END),\n"
+							 "      '^$', 'empty')\n"
+							 "    ), E'\\n'\n"
+							 "    ORDER BY b.rolname, m.grantor::pg_catalog.regrole::pg_catalog.text)\n"
+							 "  FROM pg_catalog.pg_auth_members m\n"
+							 "       JOIN pg_catalog.pg_roles b ON (m.roleid = b.oid)\n"
+							 "  WHERE m.member = r.oid) as memberof");
+	else
+		appendPQExpBufferStr(&buf,
+							 "  ARRAY(SELECT b.rolname\n"
+							 "        FROM pg_catalog.pg_auth_members m\n"
+							 "        JOIN pg_catalog.pg_roles b ON (m.roleid = b.oid)\n"
+							 "        WHERE m.member = r.oid) as memberof");
+
+	if (pset.sversion >= 90500)
+	{
+		appendPQExpBufferStr(&buf, "\n, r.rolbypassrls");
+	}
 
 	if (verbose)
 	{
 		appendPQExpBufferStr(&buf, "\n, pg_catalog.shobj_description(r.oid, 'pg_authid') AS description");
 		ncols++;
-	}
-	appendPQExpBufferStr(&buf, "\n, r.rolreplication");
-
-	if (pset.sversion >= 90500)
-	{
-		appendPQExpBufferStr(&buf, "\n, r.rolbypassrls");
 	}
 
 	appendPQExpBufferStr(&buf, "\nFROM pg_catalog.pg_roles r\n");
@@ -3701,13 +3719,6 @@ describeRoles(const char *pattern, bool verbose, bool showSystem)
 		if (strcmp(PQgetvalue(res, i, 5), "t") != 0)
 			add_role_attribute(&buf, _("Cannot login"));
 
-		if (strcmp(PQgetvalue(res, i, (verbose ? 10 : 9)), "t") == 0)
-			add_role_attribute(&buf, _("Replication"));
-
-		if (pset.sversion >= 90500)
-			if (strcmp(PQgetvalue(res, i, (verbose ? 11 : 10)), "t") == 0)
-				add_role_attribute(&buf, _("Bypass RLS"));
-
 		conns = atoi(PQgetvalue(res, i, 6));
 		if (conns >= 0)
 		{
@@ -3735,10 +3746,22 @@ describeRoles(const char *pattern, bool verbose, bool showSystem)
 
 		printTableAddCell(&cont, attr[i], false, false);
 
-		printTableAddCell(&cont, PQgetvalue(res, i, 8), false, false);
+		if (strcmp(PQgetvalue(res, i, 8), "t") == 0)
+			add_role_attribute(&buf, _("Replication"));
+
+		printTableAddCell(&cont, PQgetvalue(res, i, 9), false, false);
+
+		if (pset.sversion >= 90500)
+			if (strcmp(PQgetvalue(res, i, 10), "t") == 0)
+				add_role_attribute(&buf, _("Bypass RLS"));
 
 		if (verbose)
-			printTableAddCell(&cont, PQgetvalue(res, i, 9), false, false);
+		{
+			if (pset.sversion >= 90500)
+				printTableAddCell(&cont, PQgetvalue(res, i, 11), false, false);
+			else
+				printTableAddCell(&cont, PQgetvalue(res, i, 10), false, false);
+		}
 	}
 	termPQExpBuffer(&buf);
 

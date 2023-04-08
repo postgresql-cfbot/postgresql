@@ -752,6 +752,8 @@ PageRepairFragmentation(Page page)
 				else
 					presorted = false;
 
+				pg_prefetch_mem((HeapTupleHeader) PageGetItem(page, lp));
+
 				if (unlikely(itemidptr->itemoff < (int) pd_upper ||
 							 itemidptr->itemoff >= (int) pd_special))
 					ereport(ERROR,

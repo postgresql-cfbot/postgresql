@@ -3344,6 +3344,18 @@ retry:
 	Assert(targetPageOff == readOff);
 	Assert(reqLen <= readLen);
 
+#if defined(USE_POSIX_FADVISE) && defined(POSIX_FADV_WILLNEED)
+	/*
+	 *  Prefetch next wal blocks to avoid page misses on next read iterations.
+	 */
+#define RACHUNK (128*1024)
+	if (readOff % RACHUNK == 0) {
+		pgstat_report_wait_start(WAIT_EVENT_WAL_PREFETCH);
+		posix_fadvise(readFile, readOff + RACHUNK, RACHUNK, POSIX_FADV_WILLNEED);
+		pgstat_report_wait_end();
+	}
+#endif
+
 	xlogreader->seg.ws_tli = curFileTLI;
 
 	/*

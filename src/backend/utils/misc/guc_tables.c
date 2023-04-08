@@ -1090,6 +1090,15 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"ssl_enable_alpn", PGC_SIGHUP, CONN_AUTH_SSL,
+			gettext_noop("Respond to TLS ALPN Extension Requests."),
+			NULL,
+		},
+		&ssl_enable_alpn,
+		true,
+		NULL, NULL, NULL
+	},
+	{
 		{"fsync", PGC_SIGHUP, WAL_SETTINGS,
 			gettext_noop("Forces synchronization of updates to disk."),
 			gettext_noop("The server will use the fsync() system call in several places to make "

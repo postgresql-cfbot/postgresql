@@ -390,6 +390,7 @@ struct pg_conn
 	char	   *keepalives_count;	/* maximum number of TCP keepalive
 									 * retransmits */
 	char	   *sslmode;		/* SSL mode (require,prefer,allow,disable) */
+	char	   *sslnegotiation;	/* SSL initiation style (postgres,direct,requiredirect) */
 	char	   *sslcompression; /* SSL compression (0 or 1) */
 	char	   *sslkey;			/* client key filename */
 	char	   *sslcert;		/* client certificate filename */
@@ -399,6 +400,7 @@ struct pg_conn
 	char	   *sslcrl;			/* certificate revocation list filename */
 	char	   *sslcrldir;		/* certificate revocation list directory name */
 	char	   *sslsni;			/* use SSL SNI extension (0 or 1) */
+	char       *sslalpn;        /* use SSL ALPN extension (0 or 1) */
 	char	   *requirepeer;	/* required peer credentials for local sockets */
 	char	   *gssencmode;		/* GSS mode (require,prefer,disable) */
 	char	   *krbsrvname;		/* Kerberos service name */
@@ -551,6 +553,8 @@ struct pg_conn
 	bool		ssl_cert_sent;	/* Did we send one in reply? */
 
 #ifdef USE_SSL
+	bool		allow_direct_ssl_try; /* Try to make a direct SSL connection
+									   * without an "SSL negotiation packet" */
 	bool		allow_ssl_try;	/* Allowed to try SSL negotiation */
 	bool		wait_ssl_try;	/* Delay SSL negotiation until after
 								 * attempting normal connection */

@@ -274,6 +274,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"SSL-Mode", "", 12,		/* sizeof("verify-full") == 12 */
 	offsetof(struct pg_conn, sslmode)},
 
+	{"sslnegotiation", "PGSSLNEGOTIATION", "postgres", NULL,
+		"SSL-Negotiation", "", 14,		/* strlen("requiredirect") == 14 */
+	offsetof(struct pg_conn, sslnegotiation)},
+
 	{"sslcompression", "PGSSLCOMPRESSION", "0", NULL,
 		"SSL-Compression", "", 1,
 	offsetof(struct pg_conn, sslcompression)},
@@ -309,6 +313,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 	{"sslsni", "PGSSLSNI", "1", NULL,
 		"SSL-SNI", "", 1,
 	offsetof(struct pg_conn, sslsni)},
+
+	{"sslalpn", "PGSSLALPN", "1", NULL,
+		"SSL-ALPN", "", 1,
+	offsetof(struct pg_conn, sslalpn)},
 
 	{"requirepeer", "PGREQUIREPEER", NULL, NULL,
 		"Require-Peer", "", 10,
@@ -1526,11 +1534,36 @@ connectOptions2(PGconn *conn)
 		}
 #endif
 	}
+
+	/*
+	 * validate sslnegotiation option, default is "postgres" for the postgres
+	 * style negotiated connection with an extra round trip but more options.
+	 */
+	if (conn->sslnegotiation)
+	{
+		if (strcmp(conn->sslnegotiation, "postgres") != 0
+			&& strcmp(conn->sslnegotiation, "direct") != 0
+			&& strcmp(conn->sslnegotiation, "requiredirect") != 0)
+		{
+			conn->status = CONNECTION_BAD;
+			libpq_append_conn_error(conn, "invalid %s value: \"%s\"",
+									"sslnegotiation", conn->sslnegotiation);
+			return false;
+		}
+
+#ifndef USE_SSL
+		if (conn->sslnegotiation[0] != 'p') {
+			conn->status = CONNECTION_BAD;
+			libpq_append_conn_error(conn, "sslnegotiation value \"%s\" invalid when SSL support is not compiled in",
+									conn->sslnegotiation);
+			return false;
+		}
+#endif
+	}
 	else
 	{
-		conn->sslmode = strdup(DefaultSSLMode);
-		if (!conn->sslmode)
-			goto oom_error;
+		libpq_append_conn_error(conn, "sslnegotiation missing?");
+		return false;
 	}
 
 #ifdef USE_SSL
@@ -1649,6 +1682,18 @@ connectOptions2(PGconn *conn)
 		{
 			conn->status = CONNECTION_BAD;
 			libpq_append_conn_error(conn, "gssencmode value \"%s\" invalid when GSSAPI support is not compiled in",
+									conn->gssencmode);
+			return false;
+		}
+#endif
+#ifdef USE_SSL
+		/* GSS is incompatible with direct SSL connections so it requires the
+		 * default postgres style connection ssl negotiation  */
+		if (strcmp(conn->gssencmode, "require") == 0 &&
+			strcmp(conn->sslnegotiation, "postgres") != 0)
+		{
+			conn->status = CONNECTION_BAD;
+			libpq_append_conn_error(conn, "gssencmode value \"%s\" invalid when Direct SSL negotiation is enabled",
 									conn->gssencmode);
 			return false;
 		}
@@ -2785,11 +2830,12 @@ keep_going:						/* We will come back to here until there is
 		/* initialize these values based on SSL mode */
 		conn->allow_ssl_try = (conn->sslmode[0] != 'd');	/* "disable" */
 		conn->wait_ssl_try = (conn->sslmode[0] == 'a'); /* "allow" */
+		/* direct ssl is incompatible with "allow" or "disabled" ssl */
+		conn->allow_direct_ssl_try = conn->allow_ssl_try && !conn->wait_ssl_try && (conn->sslnegotiation[0] != 'p');
 #endif
 #ifdef ENABLE_GSS
 		conn->try_gss = (conn->gssencmode[0] != 'd');	/* "disable" */
 #endif
-
 		reset_connection_state_machine = false;
 		need_new_connection = true;
 	}
@@ -3247,6 +3293,28 @@ keep_going:						/* We will come back to here until there is
 				if (pqsecure_initialize(conn, false, true) < 0)
 					goto error_return;
 
+				/* If SSL is enabled and direct SSL connections are enabled
+				 * and we haven't already established an SSL connection (or
+				 * already tried a direct connection and failed or succeeded)
+				 * then try just enabling SSL directly.
+				 *
+				 * If we fail then we'll either fail the connection (if
+				 * sslnegotiation is set to requiredirect or turn
+				 * allow_direct_ssl_try to false
+				 */
+				if (conn->allow_ssl_try
+					&& !conn->wait_ssl_try
+					&& conn->allow_direct_ssl_try
+					&& !conn->ssl_in_use
+#ifdef ENABLE_GSS
+					&& !conn->gssenc
+#endif
+					)
+				{
+					conn->status = CONNECTION_SSL_STARTUP;
+					return PGRES_POLLING_WRITING;
+				}
+
 				/*
 				 * If SSL is enabled and we haven't already got encryption of
 				 * some sort running, request SSL instead of sending the
@@ -3323,9 +3391,11 @@ keep_going:						/* We will come back to here until there is
 
 				/*
 				 * On first time through, get the postmaster's response to our
-				 * SSL negotiation packet.
+				 * SSL negotiation packet. If we are trying a direct ssl
+				 * connection skip reading the negotiation packet and go
+				 * straight to initiating an ssl connection.
 				 */
-				if (!conn->ssl_in_use)
+				if (!conn->ssl_in_use && !conn->allow_direct_ssl_try)
 				{
 					/*
 					 * We use pqReadData here since it has the logic to
@@ -3431,6 +3501,18 @@ keep_going:						/* We will come back to here until there is
 				}
 				if (pollres == PGRES_POLLING_FAILED)
 				{
+					/* Failed direct ssl connection, possibly try a new connection with postgres negotiation */
+					if (conn->allow_direct_ssl_try)
+					{
+						/* if it's requiredirect then it's a hard failure */
+						if (conn->sslnegotiation[0] == 'r')
+							goto error_return;
+						/* otherwise only retry using postgres connection */
+						conn->allow_direct_ssl_try = false;
+						need_new_connection = true;
+						goto keep_going;
+					}
+
 					/*
 					 * Failed ... if sslmode is "prefer" then do a non-SSL
 					 * retry
@@ -4433,6 +4515,7 @@ freePGconn(PGconn *conn)
 	free(conn->keepalives_interval);
 	free(conn->keepalives_count);
 	free(conn->sslmode);
+	free(conn->sslnegotiation);
 	free(conn->sslcert);
 	free(conn->sslkey);
 	if (conn->sslpassword)
@@ -4446,6 +4529,7 @@ freePGconn(PGconn *conn)
 	free(conn->sslcrldir);
 	free(conn->sslcompression);
 	free(conn->sslsni);
+	free(conn->sslalpn);
 	free(conn->requirepeer);
 	free(conn->require_auth);
 	free(conn->ssl_min_protocol_version);

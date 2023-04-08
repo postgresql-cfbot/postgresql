@@ -422,6 +422,7 @@ static void BackendRun(Port *port) pg_attribute_noreturn();
 static void ExitPostmaster(int status) pg_attribute_noreturn();
 static int	ServerLoop(void);
 static int	BackendStartup(Port *port);
+static int	ProcessSSLStartup(Port *port);
 static int	ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done);
 static void SendNegotiateProtocolVersion(List *unrecognized_protocol_options);
 static void processCancelRequest(Port *port, void *pkt);
@@ -1927,6 +1928,123 @@ ServerLoop(void)
 }
 
 /*
+ * Check for a native direct SSL connection.
+ *
+ * This happens before startup packets so we are careful not to actual read
+ * any bytes from the stream if it's not a direct SSL connection.
+ */
+
+#ifdef USE_SSL
+static const char *expected_alpn_protocol = PG_ALPN_PROTOCOL;
+#endif
+
+static int
+ProcessSSLStartup(Port *port)
+{
+	int		firstbyte;
+
+	pq_startmsgread();
+
+	firstbyte = pq_peekbyte();
+	if (firstbyte == EOF)
+	{
+		/*
+		 * If we get no data at all, don't clutter the log with a complaint;
+		 * such cases often occur for legitimate reasons.  An example is that
+		 * we might be here after responding to NEGOTIATE_SSL_CODE, and if the
+		 * client didn't like our response, it'll probably just drop the
+		 * connection.  Service-monitoring software also often just opens and
+		 * closes a connection without sending anything.  (So do port
+		 * scanners, which may be less benign, but it's not really our job to
+		 * notice those.)
+		 */
+		return STATUS_ERROR;
+	}
+
+	/*
+	 * First byte indicates standard SSL handshake message
+	 *
+	 * (It can't be a Postgres startup length because in network byte order
+	 * that would be a startup packet hundreds of megabytes long)
+	 */
+	if (firstbyte == 0x16)
+	{
+#ifdef USE_SSL
+		ssize_t len;
+		char *buf = NULL;
+		elog(LOG, "Detected direct SSL handshake");
+
+		if (!ssl_enable_alpn) {
+			elog(WARNING, "Received direct SSL connection without ssl_enable_alpn enabled");
+		}
+
+		/* push unencrypted buffered data back through SSL setup */
+		len = pq_buffer_has_data();
+		if (len > 0)
+		{
+			buf = palloc(len);
+			if (pq_getbytes(buf, len) == EOF)
+				return STATUS_ERROR; /* shouldn't be possible */
+			port->raw_buf = buf;
+			port->raw_buf_remaining = len;
+			port->raw_buf_consumed = 0;
+		}
+
+		Assert(pq_buffer_has_data() == 0);
+		if (secure_open_server(port) == -1)
+		{
+			ereport(COMMERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("SSL Protocol Error during direct SSL connection initiation")));
+			return STATUS_ERROR;
+		}
+
+		if (port->raw_buf_remaining > 0)
+		{
+			ereport(COMMERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("received unencrypted data after SSL request"),
+					 errdetail("This could be either a client-software bug or evidence of an attempted man-in-the-middle attack.")));
+			return STATUS_ERROR;
+		}
+		if (port->raw_buf)
+			pfree(port->raw_buf);
+
+		if (port->ssl_alpn_protocol == NULL)
+		{
+			ereport(COMMERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("Received direct SSL connection request without required ALPN protocol negotiation extension")));
+			return STATUS_ERROR;
+		}
+		if (strcmp(port->ssl_alpn_protocol, expected_alpn_protocol) != 0)
+		{
+			ereport(COMMERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("Received direct SSL connection request with unexpected ALPN protocol \"%s\" expected \"%s\"",
+							port->ssl_alpn_protocol,
+							expected_alpn_protocol)));
+			return STATUS_ERROR;
+		}
+#else
+		ereport(COMMERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("Received direct SSL connection request with no SSL support")));
+		return STATUS_ERROR;
+#endif
+	}
+
+	pq_endmsgread();
+
+	if (port->ssl_in_use)
+		ereport(DEBUG2,
+				(errmsg_internal("Direct SSL connection established")));
+
+	return STATUS_OK;
+}
+
+
+/*
  * Read a client's startup packet and do something according to it.
  *
  * Returns STATUS_OK or STATUS_ERROR, or might call ereport(FATAL) and
@@ -1954,28 +2072,7 @@ ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done)
 
 	pq_startmsgread();
 
-	/*
-	 * Grab the first byte of the length word separately, so that we can tell
-	 * whether we have no data at all or an incomplete packet.  (This might
-	 * sound inefficient, but it's not really, because of buffering in
-	 * pqcomm.c.)
-	 */
-	if (pq_getbytes((char *) &len, 1) == EOF)
-	{
-		/*
-		 * If we get no data at all, don't clutter the log with a complaint;
-		 * such cases often occur for legitimate reasons.  An example is that
-		 * we might be here after responding to NEGOTIATE_SSL_CODE, and if the
-		 * client didn't like our response, it'll probably just drop the
-		 * connection.  Service-monitoring software also often just opens and
-		 * closes a connection without sending anything.  (So do port
-		 * scanners, which may be less benign, but it's not really our job to
-		 * notice those.)
-		 */
-		return STATUS_ERROR;
-	}
-
-	if (pq_getbytes(((char *) &len) + 1, 3) == EOF)
+	if (pq_getbytes(((char *) &len), 4) == EOF)
 	{
 		/* Got a partial length word, so bleat about that */
 		if (!ssl_done && !gss_done)
@@ -2039,8 +2136,11 @@ ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done)
 		char		SSLok;
 
 #ifdef USE_SSL
-		/* No SSL when disabled or on Unix sockets */
-		if (!LoadedSSL || port->laddr.addr.ss_family == AF_UNIX)
+		/* No SSL when disabled or on Unix sockets.
+		 *
+		 * Also no SSL negotiation if we already have a direct SSL connection
+		 */
+		if (!LoadedSSL || port->laddr.addr.ss_family == AF_UNIX || port->ssl_in_use)
 			SSLok = 'N';
 		else
 			SSLok = 'S';		/* Support for SSL */
@@ -2048,11 +2148,10 @@ ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done)
 		SSLok = 'N';			/* No support for SSL */
 #endif
 
-retry1:
-		if (send(port->sock, &SSLok, 1, 0) != 1)
+		while (secure_write(port, &SSLok, 1) != 1)
 		{
 			if (errno == EINTR)
-				goto retry1;	/* if interrupted, just retry */
+				continue;	/* if interrupted, just retry */
 			ereport(COMMERROR,
 					(errcode_for_socket_access(),
 					 errmsg("failed to send SSL negotiation response: %m")));
@@ -2060,15 +2159,44 @@ retry1:
 		}
 
 #ifdef USE_SSL
-		if (SSLok == 'S' && secure_open_server(port) == -1)
-			return STATUS_ERROR;
+		if (SSLok == 'S')
+		{
+			/* push unencrypted buffered data back through SSL setup */
+			len = pq_buffer_has_data();
+			if (len > 0)
+			{
+				buf = palloc(len);
+				if (pq_getbytes(buf, len) == EOF)
+					return STATUS_ERROR; /* shouldn't be possible */
+				port->raw_buf = buf;
+				port->raw_buf_remaining = len;
+				port->raw_buf_consumed = 0;
+			}
+			Assert(pq_buffer_has_data() == 0);
+
+			if (secure_open_server(port) == -1)
+				return STATUS_ERROR;
+			
+			/*
+			 * At this point we should have no data already buffered.  If we do,
+			 * it was received before we performed the SSL handshake, so it wasn't
+			 * encrypted and indeed may have been injected by a man-in-the-middle.
+			 * We report this case to the client.
+			 */
+			if (port->raw_buf_remaining > 0)
+				ereport(FATAL,
+						(errcode(ERRCODE_PROTOCOL_VIOLATION),
+						 errmsg("received unencrypted data after SSL request"),
+						 errdetail("This could be either a client-software bug or evidence of an attempted man-in-the-middle attack.")));
+			if (port->raw_buf)
+				pfree(port->raw_buf);
+		}
 #endif
 
-		/*
-		 * At this point we should have no data already buffered.  If we do,
-		 * it was received before we performed the SSL handshake, so it wasn't
-		 * encrypted and indeed may have been injected by a man-in-the-middle.
-		 * We report this case to the client.
+		/* This can only really occur now if there was data pipelined after
+		 * the SSL Request but we have refused to do SSL. In that case we need
+		 * to give up because the client has presumably assumed the SSL
+		 * request would be accepted.
 		 */
 		if (pq_buffer_has_data())
 			ereport(FATAL,
@@ -2093,7 +2221,7 @@ retry1:
 			GSSok = 'G';
 #endif
 
-		while (send(port->sock, &GSSok, 1, 0) != 1)
+		while (secure_write(port, &GSSok, 1) != 1)
 		{
 			if (errno == EINTR)
 				continue;
@@ -4396,7 +4524,9 @@ BackendInitialize(Port *port)
 	 * Receive the startup packet (which might turn out to be a cancel request
 	 * packet).
 	 */
-	status = ProcessStartupPacket(port, false, false);
+	status = ProcessSSLStartup(port);
+	if (status == STATUS_OK)
+		status = ProcessStartupPacket(port, false, false);
 
 	/*
 	 * Disable the timeout, and prevent SIGTERM again.

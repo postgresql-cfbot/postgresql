@@ -72,6 +72,7 @@ typedef enum
 	CONNECTION_AUTH_OK,			/* Received authentication; waiting for
 								 * backend startup. */
 	CONNECTION_SETENV,			/* This state is no longer used. */
+	CONNECTION_DIRECT_SSL_STARTUP, /* Starting SSL without PG Negotiation. */
 	CONNECTION_SSL_STARTUP,		/* Negotiating SSL. */
 	CONNECTION_NEEDED,			/* Internal state: connect() needed */
 	CONNECTION_CHECK_WRITABLE,	/* Checking if session is read-write. */

@@ -91,6 +91,12 @@ typedef struct LogicalDecodingContext
 	bool		twophase;
 
 	/*
+	 * Does the output pluging support decoding of sequence increments, and
+	 * is it enabled?
+	 */
+	bool		sequences;
+
+	/*
 	 * Is two-phase option given by output plugin?
 	 *
 	 * This flag indicates that the plugin passed in the two-phase option as
@@ -99,6 +105,15 @@ typedef struct LogicalDecodingContext
 	 * necessary two-phase callbacks.
 	 */
 	bool		twophase_opt_given;
+
+	/*
+	 * Is sequences option given by output plugin?
+	 *
+	 * This indicates the plugin passed the sequences option as part of the
+	 * START_STREAMING command.  We can't rely solely on the sequences flag
+	 * which only tells whether the plugin provided the necessary callback.
+	 */
+	bool		sequences_opt_given;
 
 	/*
 	 * State for writing output.

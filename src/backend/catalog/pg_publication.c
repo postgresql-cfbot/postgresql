@@ -63,9 +63,10 @@ static void publication_translate_columns(Relation targetrel, List *columns,
 static void
 check_publication_add_relation(Relation targetrel)
 {
-	/* Must be a regular or partitioned table */
+	/* Must be a regular or partitioned table, or a sequence */
 	if (RelationGetForm(targetrel)->relkind != RELKIND_RELATION &&
-		RelationGetForm(targetrel)->relkind != RELKIND_PARTITIONED_TABLE)
+		RelationGetForm(targetrel)->relkind != RELKIND_PARTITIONED_TABLE &&
+		RelationGetForm(targetrel)->relkind != RELKIND_SEQUENCE)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("cannot add relation \"%s\" to publication",
@@ -142,7 +143,8 @@ static bool
 is_publishable_class(Oid relid, Form_pg_class reltuple)
 {
 	return (reltuple->relkind == RELKIND_RELATION ||
-			reltuple->relkind == RELKIND_PARTITIONED_TABLE) &&
+			reltuple->relkind == RELKIND_PARTITIONED_TABLE ||
+			reltuple->relkind == RELKIND_SEQUENCE) &&
 		!IsCatalogRelationOid(relid) &&
 		reltuple->relpersistence == RELPERSISTENCE_PERMANENT &&
 		relid >= FirstNormalObjectId;
@@ -234,6 +236,52 @@ filter_partitions(List *table_infos)
 }
 
 /*
+ * Check the character is a valid object type for schema publication.
+ *
+ * This recognizes either 't' for tables or 's' for sequences. Places that
+ * need to handle 'u' for unsupported relkinds need to do that explicitlyl
+ */
+static void
+AssertObjectTypeValid(char objectType)
+{
+#ifdef USE_ASSERT_CHECKING
+	Assert(objectType == PUB_OBJTYPE_SEQUENCE || objectType == PUB_OBJTYPE_TABLE);
+#endif
+}
+
+/*
+ * Determine object type matching a given a relkind value.
+ */
+char
+pub_get_object_type_for_relkind(char relkind)
+{
+	/* sequence maps directly to sequence relkind */
+	if (relkind == RELKIND_SEQUENCE)
+		return PUB_OBJTYPE_SEQUENCE;
+
+	/* for table, we match either regular or partitioned table */
+	if (relkind == RELKIND_RELATION ||
+		relkind == RELKIND_PARTITIONED_TABLE)
+		return PUB_OBJTYPE_TABLE;
+
+	return PUB_OBJTYPE_UNSUPPORTED;
+}
+
+/*
+ * Determine if publication object type matches the relkind.
+ *
+ * Returns true if the relation matches object type replicated by this schema,
+ * false otherwise.
+ */
+static bool
+pub_object_type_matches_relkind(char objectType, char relkind)
+{
+	AssertObjectTypeValid(objectType);
+
+	return (pub_get_object_type_for_relkind(relkind) == objectType);
+}
+
+/*
  * Returns true if any schema is associated with the publication, false if no
  * schema is associated with the publication.
  */
@@ -253,7 +301,7 @@ is_schema_publication(Oid pubid)
 				ObjectIdGetDatum(pubid));
 
 	scan = systable_beginscan(pubschsrel,
-							  PublicationNamespacePnnspidPnpubidIndexId,
+							  PublicationNamespacePnnspidPnpubidPntypeIndexId,
 							  true, NULL, 1, &scankey);
 	tup = systable_getnext(scan);
 	result = HeapTupleIsValid(tup);
@@ -339,7 +387,9 @@ GetTopMostAncestorInPublication(Oid puboid, List *ancestors, int *ancestor_level
 		}
 		else
 		{
-			aschemaPubids = GetSchemaPublications(get_rel_namespace(ancestor));
+			/* we only search for ancestors of tables, so PUB_OBJTYPE_TABLE */
+			aschemaPubids = GetSchemaPublications(get_rel_namespace(ancestor),
+												  PUB_OBJTYPE_TABLE);
 			if (list_member_oid(aschemaPubids, puboid))
 			{
 				topmost_relid = ancestor;
@@ -608,7 +658,7 @@ pub_collist_to_bitmapset(Bitmapset *columns, Datum pubcols, MemoryContext mcxt)
  * Insert new publication / schema mapping.
  */
 ObjectAddress
-publication_add_schema(Oid pubid, Oid schemaid, bool if_not_exists)
+publication_add_schema(Oid pubid, Oid schemaid, char objectType, bool if_not_exists)
 {
 	Relation	rel;
 	HeapTuple	tup;
@@ -620,6 +670,8 @@ publication_add_schema(Oid pubid, Oid schemaid, bool if_not_exists)
 	ObjectAddress myself,
 				referenced;
 
+	AssertObjectTypeValid(objectType);
+
 	rel = table_open(PublicationNamespaceRelationId, RowExclusiveLock);
 
 	/*
@@ -627,9 +679,10 @@ publication_add_schema(Oid pubid, Oid schemaid, bool if_not_exists)
 	 * duplicates, it's here just to provide nicer error message in common
 	 * case. The real protection is the unique key on the catalog.
 	 */
-	if (SearchSysCacheExists2(PUBLICATIONNAMESPACEMAP,
+	if (SearchSysCacheExists3(PUBLICATIONNAMESPACEMAP,
 							  ObjectIdGetDatum(schemaid),
-							  ObjectIdGetDatum(pubid)))
+							  ObjectIdGetDatum(pubid),
+							  CharGetDatum(objectType)))
 	{
 		table_close(rel, RowExclusiveLock);
 
@@ -655,6 +708,8 @@ publication_add_schema(Oid pubid, Oid schemaid, bool if_not_exists)
 		ObjectIdGetDatum(pubid);
 	values[Anum_pg_publication_namespace_pnnspid - 1] =
 		ObjectIdGetDatum(schemaid);
+	values[Anum_pg_publication_namespace_pntype - 1] =
+		CharGetDatum(objectType);
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
@@ -680,7 +735,7 @@ publication_add_schema(Oid pubid, Oid schemaid, bool if_not_exists)
 	 * publication_add_relation for why we need to consider all the
 	 * partitions.
 	 */
-	schemaRels = GetSchemaPublicationRelations(schemaid,
+	schemaRels = GetSchemaPublicationRelations(schemaid, objectType,
 											   PUBLICATION_PART_ALL);
 	InvalidatePublicationRels(schemaRels);
 
@@ -714,17 +769,22 @@ GetRelationPublications(Oid relid)
 /*
  * Gets list of relation oids for a publication.
  *
- * This should only be used FOR TABLE publications, the FOR ALL TABLES
- * should use GetAllTablesPublicationRelations().
+ * This should only be used FOR TABLE / FOR SEQUENCE publications, the FOR
+ * ALL TABLES / SEQUENCES should use GetAllTablesPublicationRelations()
+ * and GetAllSequencesPublicationRelations().
+ *
+ * XXX pub_partopt only matters for tables, not sequences.
  */
 List *
-GetPublicationRelations(Oid pubid, PublicationPartOpt pub_partopt)
+GetPublicationRelations(Oid pubid, char objectType, PublicationPartOpt pub_partopt)
 {
 	List	   *result;
 	Relation	pubrelsrel;
 	ScanKeyData scankey;
 	SysScanDesc scan;
 	HeapTuple	tup;
+
+	AssertObjectTypeValid(objectType);
 
 	/* Find all publications associated with the relation. */
 	pubrelsrel = table_open(PublicationRelRelationId, AccessShareLock);
@@ -740,11 +800,29 @@ GetPublicationRelations(Oid pubid, PublicationPartOpt pub_partopt)
 	result = NIL;
 	while (HeapTupleIsValid(tup = systable_getnext(scan)))
 	{
+		char	relkind;
 		Form_pg_publication_rel pubrel;
 
 		pubrel = (Form_pg_publication_rel) GETSTRUCT(tup);
-		result = GetPubPartitionOptionRelations(result, pub_partopt,
-												pubrel->prrelid);
+		relkind = get_rel_relkind(pubrel->prrelid);
+
+		/*
+		 * If the relkind does not match the requested object type, ignore the
+		 * relation. For example we might be interested only in sequences, so
+		 * we ignore tables.
+		 */
+		if (!pub_object_type_matches_relkind(objectType, relkind))
+			continue;
+
+		/*
+		 * We don't have partitioned sequences, so just add them to the list.
+		 * Otherwise consider adding all child relations, if requested.
+		 */
+		if (relkind == RELKIND_SEQUENCE)
+			result = lappend_oid(result, pubrel->prrelid);
+		else
+			result = GetPubPartitionOptionRelations(result, pub_partopt,
+													pubrel->prrelid);
 	}
 
 	systable_endscan(scan);
@@ -774,6 +852,43 @@ GetAllTablesPublications(void)
 
 	ScanKeyInit(&scankey,
 				Anum_pg_publication_puballtables,
+				BTEqualStrategyNumber, F_BOOLEQ,
+				BoolGetDatum(true));
+
+	scan = systable_beginscan(rel, InvalidOid, false,
+							  NULL, 1, &scankey);
+
+	result = NIL;
+	while (HeapTupleIsValid(tup = systable_getnext(scan)))
+	{
+		Oid			oid = ((Form_pg_publication) GETSTRUCT(tup))->oid;
+
+		result = lappend_oid(result, oid);
+	}
+
+	systable_endscan(scan);
+	table_close(rel, AccessShareLock);
+
+	return result;
+}
+
+/*
+ * Gets list of publication oids for publications marked as FOR ALL SEQUENCES.
+ */
+List *
+GetAllSequencesPublications(void)
+{
+	List	   *result;
+	Relation	rel;
+	ScanKeyData scankey;
+	SysScanDesc scan;
+	HeapTuple	tup;
+
+	/* Find all publications that are marked as for all sequences. */
+	rel = table_open(PublicationRelationId, AccessShareLock);
+
+	ScanKeyInit(&scankey,
+				Anum_pg_publication_puballsequences,
 				BTEqualStrategyNumber, F_BOOLEQ,
 				BoolGetDatum(true));
 
@@ -860,28 +975,38 @@ GetAllTablesPublicationRelations(bool pubviaroot)
 /*
  * Gets the list of schema oids for a publication.
  *
- * This should only be used FOR TABLES IN SCHEMA publications.
+ * This should only be used FOR TABLES IN SCHEMA and FOR SEQUENCES IN SCHEMA
+ * publications.
+ *
+ * 'objectType' determines whether to get FOR TABLE or FOR SEQUENCES schemas
  */
 List *
-GetPublicationSchemas(Oid pubid)
+GetPublicationSchemas(Oid pubid, char objectType)
 {
 	List	   *result = NIL;
 	Relation	pubschsrel;
-	ScanKeyData scankey;
+	ScanKeyData scankey[2];
 	SysScanDesc scan;
 	HeapTuple	tup;
+
+	AssertObjectTypeValid(objectType);
 
 	/* Find all schemas associated with the publication */
 	pubschsrel = table_open(PublicationNamespaceRelationId, AccessShareLock);
 
-	ScanKeyInit(&scankey,
+	ScanKeyInit(&scankey[0],
 				Anum_pg_publication_namespace_pnpubid,
 				BTEqualStrategyNumber, F_OIDEQ,
 				ObjectIdGetDatum(pubid));
 
+	ScanKeyInit(&scankey[1],
+				Anum_pg_publication_namespace_pntype,
+				BTEqualStrategyNumber, F_CHAREQ,
+				CharGetDatum(objectType));
+
 	scan = systable_beginscan(pubschsrel,
-							  PublicationNamespacePnnspidPnpubidIndexId,
-							  true, NULL, 1, &scankey);
+							  PublicationNamespacePnnspidPnpubidPntypeIndexId,
+							  true, NULL, 2, scankey);
 	while (HeapTupleIsValid(tup = systable_getnext(scan)))
 	{
 		Form_pg_publication_namespace pubsch;
@@ -899,13 +1024,25 @@ GetPublicationSchemas(Oid pubid)
 
 /*
  * Gets the list of publication oids associated with a specified schema.
+ *
+ * objectType specifies whether we're looking for schemas including tables or
+ * sequences.
+ *
+ * Note: relcache calls this for all object types, not just tables and sequences.
+ * Which is why we handle the PUB_OBJTYPE_UNSUPPORTED object type too.
  */
 List *
-GetSchemaPublications(Oid schemaid)
+GetSchemaPublications(Oid schemaid, char objectType)
 {
 	List	   *result = NIL;
 	CatCList   *pubschlist;
 	int			i;
+
+	/* unsupported object type */
+	if (objectType == PUB_OBJTYPE_UNSUPPORTED)
+		return result;
+
+	AssertObjectTypeValid(objectType);
 
 	/* Find all publications associated with the schema */
 	pubschlist = SearchSysCacheList1(PUBLICATIONNAMESPACEMAP,
@@ -914,6 +1051,11 @@ GetSchemaPublications(Oid schemaid)
 	{
 		HeapTuple	tup = &pubschlist->members[i]->tuple;
 		Oid			pubid = ((Form_pg_publication_namespace) GETSTRUCT(tup))->pnpubid;
+		char		pntype = ((Form_pg_publication_namespace) GETSTRUCT(tup))->pntype;
+
+		/* Skip schemas publishing a different object type. */
+		if (pntype != objectType)
+			continue;
 
 		result = lappend_oid(result, pubid);
 	}
@@ -925,9 +1067,13 @@ GetSchemaPublications(Oid schemaid)
 
 /*
  * Get the list of publishable relation oids for a specified schema.
+ *
+ * objectType specifies whether this is FOR ALL TABLES IN SCHEMA or FOR ALL
+ * SEQUENCES IN SCHEMA
  */
 List *
-GetSchemaPublicationRelations(Oid schemaid, PublicationPartOpt pub_partopt)
+GetSchemaPublicationRelations(Oid schemaid, char objectType,
+							  PublicationPartOpt pub_partopt)
 {
 	Relation	classRel;
 	ScanKeyData key[1];
@@ -936,6 +1082,7 @@ GetSchemaPublicationRelations(Oid schemaid, PublicationPartOpt pub_partopt)
 	List	   *result = NIL;
 
 	Assert(OidIsValid(schemaid));
+	AssertObjectTypeValid(objectType);
 
 	classRel = table_open(RelationRelationId, AccessShareLock);
 
@@ -956,9 +1103,16 @@ GetSchemaPublicationRelations(Oid schemaid, PublicationPartOpt pub_partopt)
 			continue;
 
 		relkind = get_rel_relkind(relid);
-		if (relkind == RELKIND_RELATION)
-			result = lappend_oid(result, relid);
-		else if (relkind == RELKIND_PARTITIONED_TABLE)
+
+		/* Skip if the relkind does not match FOR ALL TABLES / SEQUENCES. */
+		if (!pub_object_type_matches_relkind(objectType, relkind))
+			continue;
+
+		/*
+		 * If the object is a partitioned table, lookup all the child relations
+		 * (if requested). Otherwise just add the object to the list.
+		 */
+		if (relkind == RELKIND_PARTITIONED_TABLE)
 		{
 			List	   *partitionrels = NIL;
 
@@ -971,7 +1125,11 @@ GetSchemaPublicationRelations(Oid schemaid, PublicationPartOpt pub_partopt)
 														   pub_partopt,
 														   relForm->oid);
 			result = list_concat_unique_oid(result, partitionrels);
+			continue;
 		}
+
+		/* non-partitioned tables and sequences */
+		result = lappend_oid(result, relid);
 	}
 
 	table_endscan(scan);
@@ -980,25 +1138,65 @@ GetSchemaPublicationRelations(Oid schemaid, PublicationPartOpt pub_partopt)
 }
 
 /*
- * Gets the list of all relations published by FOR TABLES IN SCHEMA
- * publication.
+ * Gets the list of all relations published by FOR TABLES IN SCHEMA or
+ * FOR SEQUENCES IN SCHEMA publication.
  */
 List *
-GetAllSchemaPublicationRelations(Oid pubid, PublicationPartOpt pub_partopt)
+GetAllSchemaPublicationRelations(Oid pubid, char objectType,
+								 PublicationPartOpt pub_partopt)
 {
 	List	   *result = NIL;
-	List	   *pubschemalist = GetPublicationSchemas(pubid);
+	List	   *pubschemalist = GetPublicationSchemas(pubid, objectType);
 	ListCell   *cell;
+
+	AssertObjectTypeValid(objectType);
 
 	foreach(cell, pubschemalist)
 	{
 		Oid			schemaid = lfirst_oid(cell);
 		List	   *schemaRels = NIL;
 
-		schemaRels = GetSchemaPublicationRelations(schemaid, pub_partopt);
+		schemaRels = GetSchemaPublicationRelations(schemaid, objectType,
+												   pub_partopt);
 		result = list_concat(result, schemaRels);
 	}
 
+	return result;
+}
+
+/*
+ * Gets list of all relation published by FOR ALL SEQUENCES publication(s).
+ */
+List *
+GetAllSequencesPublicationRelations(void)
+{
+	Relation	classRel;
+	ScanKeyData key[1];
+	TableScanDesc scan;
+	HeapTuple	tuple;
+	List	   *result = NIL;
+
+	classRel = table_open(RelationRelationId, AccessShareLock);
+
+	ScanKeyInit(&key[0],
+				Anum_pg_class_relkind,
+				BTEqualStrategyNumber, F_CHAREQ,
+				CharGetDatum(RELKIND_SEQUENCE));
+
+	scan = table_beginscan_catalog(classRel, 1, key);
+
+	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	{
+		Form_pg_class relForm = (Form_pg_class) GETSTRUCT(tuple);
+		Oid			relid = relForm->oid;
+
+		if (is_publishable_class(relid, relForm))
+			result = lappend_oid(result, relid);
+	}
+
+	table_endscan(scan);
+
+	table_close(classRel, AccessShareLock);
 	return result;
 }
 
@@ -1024,10 +1222,12 @@ GetPublication(Oid pubid)
 	pub->oid = pubid;
 	pub->name = pstrdup(NameStr(pubform->pubname));
 	pub->alltables = pubform->puballtables;
+	pub->allsequences = pubform->puballsequences;
 	pub->pubactions.pubinsert = pubform->pubinsert;
 	pub->pubactions.pubupdate = pubform->pubupdate;
 	pub->pubactions.pubdelete = pubform->pubdelete;
 	pub->pubactions.pubtruncate = pubform->pubtruncate;
+	pub->pubactions.pubsequence = pubform->pubsequence;
 	pub->pubviaroot = pubform->pubviaroot;
 
 	ReleaseSysCache(tup);
@@ -1108,10 +1308,12 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 						   *schemarelids;
 
 				relids = GetPublicationRelations(pub_elem->oid,
+												 PUB_OBJTYPE_TABLE,
 												 pub_elem->pubviaroot ?
 												 PUBLICATION_PART_ROOT :
 												 PUBLICATION_PART_LEAF);
 				schemarelids = GetAllSchemaPublicationRelations(pub_elem->oid,
+																PUB_OBJTYPE_TABLE,
 																pub_elem->pubviaroot ?
 																PUBLICATION_PART_ROOT :
 																PUBLICATION_PART_LEAF);
@@ -1197,9 +1399,10 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 		 * FOR TABLES IN SCHEMA publications.
 		 */
 		if (!pub->alltables &&
-			!SearchSysCacheExists2(PUBLICATIONNAMESPACEMAP,
+			!SearchSysCacheExists3(PUBLICATIONNAMESPACEMAP,
 								   ObjectIdGetDatum(schemaid),
-								   ObjectIdGetDatum(pub->oid)))
+								   ObjectIdGetDatum(pub->oid),
+								   PUB_OBJTYPE_TABLE))
 			pubtuple = SearchSysCacheCopy2(PUBLICATIONRELMAP,
 										   ObjectIdGetDatum(relid),
 										   ObjectIdGetDatum(pub->oid));
@@ -1255,6 +1458,74 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 		rettuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
 
 		SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(rettuple));
+	}
+
+	SRF_RETURN_DONE(funcctx);
+}
+
+/*
+ * Returns Oids of sequences in a publication.
+ */
+Datum
+pg_get_publication_sequences(PG_FUNCTION_ARGS)
+{
+	FuncCallContext *funcctx;
+	char	   *pubname = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	Publication *publication;
+	List	   *sequences;
+
+	/* stuff done only on the first call of the function */
+	if (SRF_IS_FIRSTCALL())
+	{
+		MemoryContext oldcontext;
+
+		/* create a function context for cross-call persistence */
+		funcctx = SRF_FIRSTCALL_INIT();
+
+		/* switch to memory context appropriate for multiple function calls */
+		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+		publication = GetPublicationByName(pubname, false);
+
+		/*
+		 * Publications support partitioned tables, although all changes are
+		 * replicated using leaf partition identity and schema, so we only
+		 * need those.
+		 */
+		if (publication->allsequences)
+			sequences = GetAllSequencesPublicationRelations();
+		else
+		{
+			List	   *relids,
+					   *schemarelids;
+
+			relids = GetPublicationRelations(publication->oid,
+											 PUB_OBJTYPE_SEQUENCE,
+											 publication->pubviaroot ?
+											 PUBLICATION_PART_ROOT :
+											 PUBLICATION_PART_LEAF);
+			schemarelids = GetAllSchemaPublicationRelations(publication->oid,
+															PUB_OBJTYPE_SEQUENCE,
+															publication->pubviaroot ?
+															PUBLICATION_PART_ROOT :
+															PUBLICATION_PART_LEAF);
+			sequences = list_concat_unique_oid(relids, schemarelids);
+		}
+
+		funcctx->user_fctx = (void *) sequences;
+
+		MemoryContextSwitchTo(oldcontext);
+	}
+
+	/* stuff done on every call of the function */
+	funcctx = SRF_PERCALL_SETUP();
+	sequences = (List *) funcctx->user_fctx;
+
+	if (funcctx->call_cntr < list_length(sequences))
+	{
+		Oid			relid = list_nth_oid(sequences, funcctx->call_cntr);
+
+		SRF_RETURN_NEXT(funcctx, ObjectIdGetDatum(relid));
 	}
 
 	SRF_RETURN_DONE(funcctx);

@@ -68,6 +68,7 @@ GetSubscription(Oid subid, bool missing_ok)
 	sub->owner = subform->subowner;
 	sub->enabled = subform->subenabled;
 	sub->binary = subform->subbinary;
+	sub->sequences = subform->subsequences;
 	sub->stream = subform->substream;
 	sub->twophasestate = subform->subtwophasestate;
 	sub->disableonerr = subform->subdisableonerr;

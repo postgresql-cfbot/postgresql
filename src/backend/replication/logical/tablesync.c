@@ -100,6 +100,7 @@
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_type.h"
 #include "commands/copy.h"
+#include "commands/sequence.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "parser/parse_relation.h"
@@ -1208,6 +1209,111 @@ copy_table(Relation rel)
 }
 
 /*
+ * Fetch sequence data (current state) from the remote node.
+ */
+static void
+fetch_sequence_data(char *nspname, char *relname,
+					int64 *last_value, int64 *log_cnt, bool *is_called)
+{
+	WalRcvExecResult *res;
+	StringInfoData cmd;
+	TupleTableSlot *slot;
+	Oid			tableRow[3] = {INT8OID, INT8OID, BOOLOID};
+
+	initStringInfo(&cmd);
+	appendStringInfo(&cmd, "SELECT last_value, log_cnt, is_called\n"
+					   "  FROM %s", quote_qualified_identifier(nspname, relname));
+
+	res = walrcv_exec(LogRepWorkerWalRcvConn, cmd.data, 3, tableRow);
+	pfree(cmd.data);
+
+	if (res->status != WALRCV_OK_TUPLES)
+		ereport(ERROR,
+				(errmsg("could not receive list of replicated tables from the publisher: %s",
+						res->err)));
+
+	/* Process the sequence. */
+	slot = MakeSingleTupleTableSlot(res->tupledesc, &TTSOpsMinimalTuple);
+	while (tuplestore_gettupleslot(res->tuplestore, true, false, slot))
+	{
+		bool		isnull;
+
+		*last_value = DatumGetInt64(slot_getattr(slot, 1, &isnull));
+		Assert(!isnull);
+
+		*log_cnt = DatumGetInt64(slot_getattr(slot, 2, &isnull));
+		Assert(!isnull);
+
+		*is_called = DatumGetBool(slot_getattr(slot, 3, &isnull));
+		Assert(!isnull);
+
+		ExecClearTuple(slot);
+	}
+	ExecDropSingleTupleTableSlot(slot);
+
+	walrcv_clear_result(res);
+}
+
+/*
+ * Copy existing data of a sequence from publisher.
+ *
+ * Caller is responsible for locking the local relation.
+ */
+static void
+copy_sequence(Relation rel)
+{
+	LogicalRepRelMapEntry *relmapentry;
+	LogicalRepRelation lrel;
+	List	   *qual = NIL;
+	StringInfoData cmd;
+	int64		last_value = 0,
+				log_cnt = 0;
+	bool		is_called = 0;
+
+	/* Get the publisher relation info. */
+	fetch_remote_table_info(get_namespace_name(RelationGetNamespace(rel)),
+							RelationGetRelationName(rel), &lrel, &qual);
+
+	/* sequences don't have row filters */
+	Assert(!qual);
+
+	/* Put the relation into relmap. */
+	logicalrep_relmap_update(&lrel);
+
+	/* Map the publisher relation to local one. */
+	relmapentry = logicalrep_rel_open(lrel.remoteid, NoLock);
+	Assert(rel == relmapentry->localrel);
+
+	/* Start copy on the publisher. */
+	initStringInfo(&cmd);
+
+	Assert(lrel.relkind == RELKIND_SEQUENCE);
+
+	fetch_sequence_data(lrel.nspname, lrel.relname, &last_value, &log_cnt, &is_called);
+
+	/*
+	 * Logical replication of sequences is based on decoding WAL records,
+	 * describing the "next" state of the sequence, a the current state
+	 * in the relfilenode is yet to reach. But that's what we read during
+	 * the initial sync, so we need to reconstruct the WAL record when we
+	 * started this batch of values.
+	 *
+	 * Otherwise we might get duplicate values (on subscriber) if we failed
+	 * over right after the sync.
+	 */
+	if (is_called)
+	{
+		last_value += log_cnt;
+		log_cnt = 0;
+	}
+
+	/* tablesync sets the sequences in non-transactional way */
+	SetSequence(RelationGetRelid(rel), false, last_value, log_cnt, is_called);
+
+	logicalrep_rel_close(relmapentry, NoLock);
+}
+
+/*
  * Determine the tablesync slot name.
  *
  * The name must not exceed NAMEDATALEN - 1 because of remote node constraints
@@ -1424,6 +1530,41 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 					   CRS_USE_SNAPSHOT, origin_startpos);
 
 	/*
+	 * If we're syncing a sequence, lock it on the source to prevent concurrent
+	 * ALTER SEQUENCE changes that might be written to WAL before the slot gets
+	 * created (so not replicated), but invisible to the copy.
+	 *
+	 * XXX Has to happen after creating the slot, because it also installs a
+	 * snapshot and so there must not be any queries before it.
+	 *
+	 * XXX Does this need a version check? Probably not, because for older
+	 * versions we don't replicate sequences.
+	 */
+	if (get_rel_relkind(RelationGetRelid(rel)) == RELKIND_SEQUENCE)
+	{
+		StringInfoData	cmd;
+
+		initStringInfo(&cmd);
+
+		/*
+		 * XXX maybe this should do fetch_remote_table_info and use the relation
+		 * and namespace names from the result?
+		 */
+		appendStringInfo(&cmd, "LOCK %s IN ROW EXCLUSIVE MODE",
+						 quote_qualified_identifier(get_namespace_name(RelationGetNamespace(rel)),
+													RelationGetRelationName(rel)));
+
+		res = walrcv_exec(LogRepWorkerWalRcvConn, cmd.data, 0, NULL);
+
+		if (res->status != WALRCV_OK_COMMAND)
+			ereport(ERROR,
+					(errcode(ERRCODE_CONNECTION_FAILURE),
+					 errmsg("sequence copy failed to lock on publisher: %s",
+							res->err)));
+		walrcv_clear_result(res);
+	}
+
+	/*
 	 * Setup replication origin tracking. The purpose of doing this before the
 	 * copy is to avoid doing the copy again due to any error in setting up
 	 * origin tracking.
@@ -1456,10 +1597,21 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 						originname)));
 	}
 
-	/* Now do the initial data copy */
-	PushActiveSnapshot(GetTransactionSnapshot());
-	copy_table(rel);
-	PopActiveSnapshot();
+	/* Do the right action depending on the relation kind. */
+	if (get_rel_relkind(RelationGetRelid(rel)) == RELKIND_SEQUENCE)
+	{
+		/* Now do the initial sequence copy */
+		PushActiveSnapshot(GetTransactionSnapshot());
+		copy_sequence(rel);
+		PopActiveSnapshot();
+	}
+	else
+	{
+		/* Now do the initial data copy */
+		PushActiveSnapshot(GetTransactionSnapshot());
+		copy_table(rel);
+		PopActiveSnapshot();
+	}
 
 	res = walrcv_exec(LogRepWorkerWalRcvConn, "COMMIT", 0, NULL);
 	if (res->status != WALRCV_OK_COMMAND)

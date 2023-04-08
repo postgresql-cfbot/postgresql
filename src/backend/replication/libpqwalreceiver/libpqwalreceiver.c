@@ -461,6 +461,14 @@ libpqrcv_startstreaming(WalReceiverConn *conn,
 			appendStringInfo(&cmd, ", streaming '%s'",
 							 options->proto.logical.streaming_str);
 
+		if (PQserverVersion(conn->streamConn) >= 160000)
+		{
+			if (options->proto.logical.sequences)
+				appendStringInfoString(&cmd, ", sequences 'on'");
+			else
+				appendStringInfoString(&cmd, ", sequences 'off'");
+		}
+
 		if (options->proto.logical.twophase &&
 			PQserverVersion(conn->streamConn) >= 150000)
 			appendStringInfoString(&cmd, ", two_phase 'on'");

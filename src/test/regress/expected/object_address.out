@@ -47,6 +47,7 @@ CREATE TRANSFORM FOR int LANGUAGE SQL (
 SET client_min_messages = 'ERROR';
 CREATE PUBLICATION addr_pub FOR TABLE addr_nsp.gentable;
 CREATE PUBLICATION addr_pub_schema FOR TABLES IN SCHEMA addr_nsp;
+CREATE PUBLICATION addr_pub_schema2 FOR SEQUENCES IN SCHEMA addr_nsp;
 RESET client_min_messages;
 CREATE SUBSCRIPTION regress_addr_sub CONNECTION '' PUBLICATION bar WITH (connect = false, slot_name = NONE);
 WARNING:  subscription was created, but is not connected
@@ -315,12 +316,12 @@ WARNING:  error for function of access method,{addr_nsp,zwei},{}: name list leng
 WARNING:  error for function of access method,{addr_nsp,zwei},{integer}: name list length must be at least 3
 WARNING:  error for function of access method,{eins,zwei,drei},{}: argument list length must be exactly 2
 WARNING:  error for function of access method,{eins,zwei,drei},{integer}: argument list length must be exactly 2
-WARNING:  error for publication namespace,{eins},{}: argument list length must be exactly 1
-WARNING:  error for publication namespace,{eins},{integer}: schema "eins" does not exist
-WARNING:  error for publication namespace,{addr_nsp,zwei},{}: name list length must be exactly 1
-WARNING:  error for publication namespace,{addr_nsp,zwei},{integer}: name list length must be exactly 1
-WARNING:  error for publication namespace,{eins,zwei,drei},{}: name list length must be exactly 1
-WARNING:  error for publication namespace,{eins,zwei,drei},{integer}: name list length must be exactly 1
+WARNING:  error for publication namespace,{eins},{}: argument list length must be exactly 2
+WARNING:  error for publication namespace,{eins},{integer}: argument list length must be exactly 2
+WARNING:  error for publication namespace,{addr_nsp,zwei},{}: argument list length must be exactly 2
+WARNING:  error for publication namespace,{addr_nsp,zwei},{integer}: argument list length must be exactly 2
+WARNING:  error for publication namespace,{eins,zwei,drei},{}: argument list length must be exactly 2
+WARNING:  error for publication namespace,{eins,zwei,drei},{integer}: argument list length must be exactly 2
 WARNING:  error for publication relation,{eins},{}: argument list length must be exactly 1
 WARNING:  error for publication relation,{eins},{integer}: relation "eins" does not exist
 WARNING:  error for publication relation,{addr_nsp,zwei},{}: argument list length must be exactly 1
@@ -441,7 +442,8 @@ WITH objects (type, name, args) AS (VALUES
     ('transform', '{int}', '{sql}'),
     ('access method', '{btree}', '{}'),
     ('publication', '{addr_pub}', '{}'),
-    ('publication namespace', '{addr_nsp}', '{addr_pub_schema}'),
+    ('publication namespace', '{addr_nsp}', '{addr_pub_schema, t}'),
+    ('publication namespace', '{addr_nsp}', '{addr_pub_schema2, s}'),
     ('publication relation', '{addr_nsp, gentable}', '{addr_pub}'),
     ('subscription', '{regress_addr_sub}', '{}'),
     ('statistics object', '{addr_nsp, gentable_stat}', '{}')
@@ -504,7 +506,8 @@ text search template|addr_nsp|addr_ts_temp|addr_nsp.addr_ts_temp|t
 subscription|NULL|regress_addr_sub|regress_addr_sub|t
 publication|NULL|addr_pub|addr_pub|t
 publication relation|NULL|NULL|addr_nsp.gentable in publication addr_pub|t
-publication namespace|NULL|NULL|addr_nsp in publication addr_pub_schema|t
+publication namespace|NULL|NULL|addr_nsp in publication addr_pub_schema type t|t
+publication namespace|NULL|NULL|addr_nsp in publication addr_pub_schema2 type s|t
 ---
 --- Cleanup resources
 ---
@@ -516,6 +519,7 @@ drop cascades to server integer
 drop cascades to user mapping for regress_addr_user on server integer
 DROP PUBLICATION addr_pub;
 DROP PUBLICATION addr_pub_schema;
+DROP PUBLICATION addr_pub_schema2;
 DROP SUBSCRIPTION regress_addr_sub;
 DROP SCHEMA addr_nsp CASCADE;
 NOTICE:  drop cascades to 14 other objects

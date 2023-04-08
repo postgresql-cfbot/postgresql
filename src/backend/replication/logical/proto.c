@@ -664,6 +664,59 @@ logicalrep_write_message(StringInfo out, TransactionId xid, XLogRecPtr lsn,
 }
 
 /*
+ * Write SEQUENCE to stream
+ */
+void
+logicalrep_write_sequence(StringInfo out, Relation rel, TransactionId xid,
+						  XLogRecPtr lsn, bool transactional,
+						  int64 last_value, int64 log_cnt, bool is_called)
+{
+	uint8		flags = 0;
+
+	pq_sendbyte(out, LOGICAL_REP_MSG_SEQUENCE);
+
+	/* transaction ID (if not valid, we're not streaming) */
+	if (TransactionIdIsValid(xid))
+		pq_sendint32(out, xid);
+
+	pq_sendint8(out, flags);
+	pq_sendint64(out, lsn);
+
+	/* use Oid as relation identifier */
+	pq_sendint32(out, RelationGetRelid(rel));
+
+	/* write sequence info */
+	pq_sendint8(out, transactional);
+	pq_sendint64(out, last_value);
+	pq_sendint64(out, log_cnt);
+	pq_sendint8(out, is_called);
+}
+
+/*
+ * Read SEQUENCE from the stream.
+ */
+LogicalRepRelId
+logicalrep_read_sequence(StringInfo in, LogicalRepSequence *seqdata)
+{
+	LogicalRepRelId relid;
+
+	/* XXX skipping flags and lsn */
+	pq_getmsgint(in, 1);
+	pq_getmsgint64(in);
+
+	/* read the relation id */
+	relid = pq_getmsgint(in, 4);
+
+	/* info about the sequence */
+	seqdata->transactional = pq_getmsgint(in, 1);
+	seqdata->last_value = pq_getmsgint64(in);
+	seqdata->log_cnt = pq_getmsgint64(in);
+	seqdata->is_called = pq_getmsgint(in, 1);
+
+	return relid;
+}
+
+/*
  * Write relation description to the output stream.
  */
 void
@@ -1256,6 +1309,8 @@ logicalrep_message_type(LogicalRepMsgType action)
 			return "STREAM ABORT";
 		case LOGICAL_REP_MSG_STREAM_PREPARE:
 			return "STREAM PREPARE";
+		case LOGICAL_REP_MSG_SEQUENCE:
+			return "SEQUENCE";
 	}
 
 	elog(ERROR, "invalid logical replication message type \"%c\"", action);

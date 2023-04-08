@@ -185,6 +185,7 @@ typedef struct
 			char	   *streaming_str;	/* Streaming of large transactions */
 			bool		twophase;	/* Streaming of two-phase transactions at
 									 * prepare time */
+			bool		sequences;	/* Replication of sequences. */
 			char	   *origin; /* Only publish data originating from the
 								 * specified origin */
 		}			logical;

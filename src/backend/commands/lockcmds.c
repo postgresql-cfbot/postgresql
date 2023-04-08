@@ -85,9 +85,9 @@ RangeVarCallbackForLockTable(const RangeVar *rv, Oid relid, Oid oldrelid,
 		return;					/* woops, concurrently dropped; no permissions
 								 * check */
 
-	/* Currently, we only allow plain tables or views to be locked */
+	/* Currently, we only allow plain tables, views or sequences to be locked */
 	if (relkind != RELKIND_RELATION && relkind != RELKIND_PARTITIONED_TABLE &&
-		relkind != RELKIND_VIEW)
+		relkind != RELKIND_VIEW && relkind != RELKIND_SEQUENCE)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("cannot lock relation \"%s\"",

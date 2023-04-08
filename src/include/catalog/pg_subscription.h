@@ -83,6 +83,9 @@ CATALOG(pg_subscription,6100,SubscriptionRelationId) BKI_SHARED_RELATION BKI_ROW
 	char		substream;		/* Stream in-progress transactions. See
 								 * LOGICALREP_STREAM_xxx constants. */
 
+	bool		subsequences;	/* True if the subscription wants the
+								 * publisher to send sequence data */
+
 	char		subtwophasestate;	/* Stream two-phase transactions */
 
 	bool		subdisableonerr;	/* True if a worker error should cause the
@@ -133,6 +136,7 @@ typedef struct Subscription
 	char		stream;			/* Allow streaming in-progress transactions.
 								 * See LOGICALREP_STREAM_xxx constants. */
 	char		twophasestate;	/* Allow streaming two-phase transactions */
+	bool		sequences;		/* Allow replication of sequence increments. */
 	bool		disableonerr;	/* Indicates if the subscription should be
 								 * automatically disabled if a worker error
 								 * occurs */

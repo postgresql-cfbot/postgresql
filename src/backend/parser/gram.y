@@ -450,7 +450,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				transform_element_list transform_type_list
 				TriggerTransitions TriggerReferencing
 				vacuum_relation_list opt_vacuum_relation_list
-				drop_option_list pub_obj_list
+				drop_option_list pub_obj_list pub_obj_type_list
 
 %type <node>	opt_routine_body
 %type <groupclause> group_clause
@@ -584,6 +584,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	var_value zone_value
 %type <rolespec> auth_ident RoleSpec opt_granted_by
 %type <publicationobjectspec> PublicationObjSpec
+%type <node>	pub_obj_type
 
 %type <keyword> unreserved_keyword type_func_name_keyword
 %type <keyword> col_name_keyword reserved_keyword
@@ -10393,12 +10394,16 @@ AlterOwnerStmt: ALTER AGGREGATE aggregate_with_argtypes OWNER TO RoleSpec
  *
  * CREATE PUBLICATION FOR ALL TABLES [WITH options]
  *
+ * CREATE PUBLICATION FOR ALL SEQUENCES [WITH options]
+ *
  * CREATE PUBLICATION FOR pub_obj [, ...] [WITH options]
  *
  * pub_obj is one of:
  *
  *		TABLE table [, ...]
+ *		SEQUENCE table [, ...]
  *		TABLES IN SCHEMA schema [, ...]
+ *		SEQUENCES IN SCHEMA schema [, ...]
  *
  *****************************************************************************/
 
@@ -10411,13 +10416,13 @@ CreatePublicationStmt:
 					n->options = $4;
 					$$ = (Node *) n;
 				}
-			| CREATE PUBLICATION name FOR ALL TABLES opt_definition
+			| CREATE PUBLICATION name FOR ALL pub_obj_type_list opt_definition
 				{
 					CreatePublicationStmt *n = makeNode(CreatePublicationStmt);
 
 					n->pubname = $3;
 					n->options = $7;
-					n->for_all_tables = true;
+					n->for_all_objects = $6;
 					$$ = (Node *) n;
 				}
 			| CREATE PUBLICATION name FOR pub_obj_list opt_definition
@@ -10466,6 +10471,26 @@ PublicationObjSpec:
 				{
 					$$ = makeNode(PublicationObjSpec);
 					$$->pubobjtype = PUBLICATIONOBJ_TABLES_IN_CUR_SCHEMA;
+					$$->location = @4;
+				}
+			| SEQUENCE relation_expr
+				{
+					$$ = makeNode(PublicationObjSpec);
+					$$->pubobjtype = PUBLICATIONOBJ_SEQUENCE;
+					$$->pubtable = makeNode(PublicationTable);
+					$$->pubtable->relation = $2;
+				}
+			| SEQUENCES IN_P SCHEMA ColId
+				{
+					$$ = makeNode(PublicationObjSpec);
+					$$->pubobjtype = PUBLICATIONOBJ_SEQUENCES_IN_SCHEMA;
+					$$->name = $4;
+					$$->location = @4;
+				}
+			| SEQUENCES IN_P SCHEMA CURRENT_SCHEMA
+				{
+					$$ = makeNode(PublicationObjSpec);
+					$$->pubobjtype = PUBLICATIONOBJ_SEQUENCES_IN_CUR_SCHEMA;
 					$$->location = @4;
 				}
 			| ColId opt_column_list OptWhereClause
@@ -10529,6 +10554,19 @@ pub_obj_list:	PublicationObjSpec
 					{ $$ = lappend($1, $3); }
 	;
 
+pub_obj_type:	TABLES
+					{ $$ = (Node *) makeString("tables"); }
+				| SEQUENCES
+					{ $$ = (Node *) makeString("sequences"); }
+	;
+
+pub_obj_type_list:	pub_obj_type
+					{ $$ = list_make1($1); }
+				| pub_obj_type_list ',' pub_obj_type
+					{ $$ = lappend($1, $3); }
+	;
+
+
 /*****************************************************************************
  *
  * ALTER PUBLICATION name SET ( options )
@@ -10542,7 +10580,9 @@ pub_obj_list:	PublicationObjSpec
  * pub_obj is one of:
  *
  *		TABLE table_name [, ...]
+ *		SEQUENCE table_name [, ...]
  *		TABLES IN SCHEMA schema_name [, ...]
+ *		SEQUENCES IN SCHEMA schema_name [, ...]
  *
  *****************************************************************************/
 
@@ -18839,7 +18879,8 @@ preprocess_pubobj_list(List *pubobjspec_list, core_yyscan_t yyscanner)
 		if (pubobj->pubobjtype == PUBLICATIONOBJ_CONTINUATION)
 			pubobj->pubobjtype = prevobjtype;
 
-		if (pubobj->pubobjtype == PUBLICATIONOBJ_TABLE)
+		if (pubobj->pubobjtype == PUBLICATIONOBJ_TABLE ||
+			pubobj->pubobjtype == PUBLICATIONOBJ_SEQUENCE)
 		{
 			/* relation name or pubtable must be set for this type of object */
 			if (!pubobj->name && !pubobj->pubtable)
@@ -18884,6 +18925,30 @@ preprocess_pubobj_list(List *pubobjspec_list, core_yyscan_t yyscanner)
 				pubobj->pubobjtype = PUBLICATIONOBJ_TABLES_IN_SCHEMA;
 			else if (!pubobj->name && !pubobj->pubtable)
 				pubobj->pubobjtype = PUBLICATIONOBJ_TABLES_IN_CUR_SCHEMA;
+			else
+				ereport(ERROR,
+						errcode(ERRCODE_SYNTAX_ERROR),
+						errmsg("invalid schema name at or near"),
+						parser_errposition(pubobj->location));
+		}
+		else if (pubobj->pubobjtype == PUBLICATIONOBJ_SEQUENCES_IN_SCHEMA ||
+				 pubobj->pubobjtype == PUBLICATIONOBJ_SEQUENCES_IN_CUR_SCHEMA)
+		{
+			/* WHERE clause is not allowed on a schema object */
+			if (pubobj->pubtable && pubobj->pubtable->whereClause)
+				ereport(ERROR,
+						errcode(ERRCODE_SYNTAX_ERROR),
+						errmsg("WHERE clause not allowed for schema"),
+						parser_errposition(pubobj->location));
+
+			/*
+			 * We can distinguish between the different type of schema
+			 * objects based on whether name and pubtable is set.
+			 */
+			if (pubobj->name)
+				pubobj->pubobjtype = PUBLICATIONOBJ_SEQUENCES_IN_SCHEMA;
+			else if (!pubobj->name && !pubobj->pubtable)
+				pubobj->pubobjtype = PUBLICATIONOBJ_SEQUENCES_IN_CUR_SCHEMA;
 			else
 				ereport(ERROR,
 						errcode(ERRCODE_SYNTAX_ERROR),

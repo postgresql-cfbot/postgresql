@@ -71,6 +71,7 @@
 #define SUBOPT_RUN_AS_OWNER			0x00001000
 #define SUBOPT_LSN					0x00002000
 #define SUBOPT_ORIGIN				0x00004000
+#define SUBOPT_SEQUENCES			0x00004000
 
 /* check if the 'val' has 'bits' set */
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
@@ -92,6 +93,7 @@ typedef struct SubOpts
 	bool		binary;
 	char		streaming;
 	bool		twophase;
+	bool		sequences;
 	bool		disableonerr;
 	bool		passwordrequired;
 	bool		runasowner;
@@ -100,6 +102,7 @@ typedef struct SubOpts
 } SubOpts;
 
 static List *fetch_table_list(WalReceiverConn *wrconn, List *publications);
+static List *fetch_sequence_list(WalReceiverConn *wrconn, List *publications);
 static void check_publications_origin(WalReceiverConn *wrconn,
 									  List *publications, bool copydata,
 									  char *origin, Oid *subrel_local_oids,
@@ -145,6 +148,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 		opts->refresh = true;
 	if (IsSet(supported_opts, SUBOPT_BINARY))
 		opts->binary = false;
+	if (IsSet(supported_opts, SUBOPT_SEQUENCES))
+		opts->sequences = true;
 	if (IsSet(supported_opts, SUBOPT_STREAMING))
 		opts->streaming = LOGICALREP_STREAM_OFF;
 	if (IsSet(supported_opts, SUBOPT_TWOPHASE_COMMIT))
@@ -254,6 +259,15 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 
 			opts->specified_opts |= SUBOPT_STREAMING;
 			opts->streaming = defGetStreamingMode(defel);
+		}
+		else if (IsSet(supported_opts, SUBOPT_SEQUENCES) &&
+				 strcmp(defel->defname, "sequences") == 0)
+		{
+			if (IsSet(opts->specified_opts, SUBOPT_SEQUENCES))
+				errorConflictingDefElem(defel, pstate);
+
+			opts->specified_opts |= SUBOPT_SEQUENCES;
+			opts->sequences = defGetBoolean(defel);
 		}
 		else if (strcmp(defel->defname, "two_phase") == 0)
 		{
@@ -591,7 +605,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 					  SUBOPT_SYNCHRONOUS_COMMIT | SUBOPT_BINARY |
 					  SUBOPT_STREAMING | SUBOPT_TWOPHASE_COMMIT |
 					  SUBOPT_DISABLE_ON_ERR | SUBOPT_PASSWORD_REQUIRED |
-					  SUBOPT_RUN_AS_OWNER | SUBOPT_ORIGIN);
+					  SUBOPT_RUN_AS_OWNER | SUBOPT_ORIGIN | SUBOPT_SEQUENCES);
 	parse_subscription_options(pstate, stmt->options, supported_opts, &opts);
 
 	/*
@@ -688,6 +702,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	values[Anum_pg_subscription_subenabled - 1] = BoolGetDatum(opts.enabled);
 	values[Anum_pg_subscription_subbinary - 1] = BoolGetDatum(opts.binary);
 	values[Anum_pg_subscription_substream - 1] = CharGetDatum(opts.streaming);
+	values[Anum_pg_subscription_subsequences - 1] = CharGetDatum(opts.sequences);
 	values[Anum_pg_subscription_subtwophasestate - 1] =
 		CharGetDatum(opts.twophase ?
 					 LOGICALREP_TWOPHASE_STATE_PENDING :
@@ -728,9 +743,9 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	{
 		char	   *err;
 		WalReceiverConn *wrconn;
-		List	   *tables;
+		List	   *relations;
 		ListCell   *lc;
-		char		table_state;
+		char		sync_state;
 		bool		must_use_password;
 
 		/* Try to connect to the publisher. */
@@ -752,14 +767,17 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 			 * Set sync state based on if we were asked to do data copy or
 			 * not.
 			 */
-			table_state = opts.copy_data ? SUBREL_STATE_INIT : SUBREL_STATE_READY;
+			sync_state = opts.copy_data ? SUBREL_STATE_INIT : SUBREL_STATE_READY;
 
 			/*
-			 * Get the table list from publisher and build local table status
-			 * info.
+			 * Get the table and sequence list from publisher and build
+			 * local relation sync status info.
 			 */
-			tables = fetch_table_list(wrconn, publications);
-			foreach(lc, tables)
+			relations = fetch_table_list(wrconn, publications);
+			relations = list_concat(relations,
+									fetch_sequence_list(wrconn, publications));
+
+			foreach(lc, relations)
 			{
 				RangeVar   *rv = (RangeVar *) lfirst(lc);
 				Oid			relid;
@@ -770,7 +788,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 				CheckSubscriptionRelkind(get_rel_relkind(relid),
 										 rv->schemaname, rv->relname);
 
-				AddSubscriptionRelState(subid, relid, table_state,
+				AddSubscriptionRelState(subid, relid, sync_state,
 										InvalidXLogRecPtr);
 			}
 
@@ -796,12 +814,12 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 				 *
 				 * Note that if tables were specified but copy_data is false
 				 * then it is safe to enable two_phase up-front because those
-				 * tables are already initially in READY state. When the
-				 * subscription has no tables, we leave the twophase state as
-				 * PENDING, to allow ALTER SUBSCRIPTION ... REFRESH
+				 * relations are already initially in READY state. When the
+				 * subscription has no relations, we leave the twophase state
+				 * as PENDING, to allow ALTER SUBSCRIPTION ... REFRESH
 				 * PUBLICATION to work.
 				 */
-				if (opts.twophase && !opts.copy_data && tables != NIL)
+				if (opts.twophase && !opts.copy_data && relations != NIL)
 					twophase_enabled = true;
 
 				walrcv_create_slot(wrconn, opts.slot_name, false, twophase_enabled,
@@ -880,8 +898,10 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 		if (validate_publications)
 			check_publications(wrconn, validate_publications);
 
-		/* Get the table list from publisher. */
+		/* Get the list of relations from publisher. */
 		pubrel_names = fetch_table_list(wrconn, sub->publications);
+		pubrel_names = list_concat(pubrel_names,
+								   fetch_sequence_list(wrconn, sub->publications));
 
 		/* Get local table list. */
 		subrel_states = GetSubscriptionRelations(sub->oid, false);
@@ -1170,6 +1190,13 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 					values[Anum_pg_subscription_subbinary - 1] =
 						BoolGetDatum(opts.binary);
 					replaces[Anum_pg_subscription_subbinary - 1] = true;
+				}
+
+				if (IsSet(opts.specified_opts, SUBOPT_SEQUENCES))
+				{
+					values[Anum_pg_subscription_subsequences - 1] =
+						BoolGetDatum(opts.sequences);
+					replaces[Anum_pg_subscription_subsequences - 1] = true;
 				}
 
 				if (IsSet(opts.specified_opts, SUBOPT_STREAMING))
@@ -2134,6 +2161,75 @@ fetch_table_list(WalReceiverConn *wrconn, List *publications)
 						   nspname, relname));
 		else
 			tablelist = lappend(tablelist, rv);
+
+		ExecClearTuple(slot);
+	}
+	ExecDropSingleTupleTableSlot(slot);
+
+	walrcv_clear_result(res);
+
+	return tablelist;
+}
+
+/*
+ * Get the list of sequences which belong to specified publications on the
+ * publisher connection.
+ */
+static List *
+fetch_sequence_list(WalReceiverConn *wrconn, List *publications)
+{
+	WalRcvExecResult *res;
+	StringInfoData cmd;
+	TupleTableSlot *slot;
+	Oid			tableRow[2] = {TEXTOID, TEXTOID};
+	ListCell   *lc;
+	bool		first;
+	List	   *tablelist = NIL;
+
+	Assert(list_length(publications) > 0);
+
+	initStringInfo(&cmd);
+	appendStringInfoString(&cmd, "SELECT DISTINCT s.schemaname, s.sequencename\n"
+						   "  FROM pg_catalog.pg_publication_sequences s\n"
+						   " WHERE s.pubname IN (");
+	first = true;
+	foreach(lc, publications)
+	{
+		char	   *pubname = strVal(lfirst(lc));
+
+		if (first)
+			first = false;
+		else
+			appendStringInfoString(&cmd, ", ");
+
+		appendStringInfoString(&cmd, quote_literal_cstr(pubname));
+	}
+	appendStringInfoChar(&cmd, ')');
+
+	res = walrcv_exec(wrconn, cmd.data, 2, tableRow);
+	pfree(cmd.data);
+
+	if (res->status != WALRCV_OK_TUPLES)
+		ereport(ERROR,
+				(errmsg("could not receive list of replicated sequences from the publisher: %s",
+						res->err)));
+
+	/* Process sequences. */
+	slot = MakeSingleTupleTableSlot(res->tupledesc, &TTSOpsMinimalTuple);
+	while (tuplestore_gettupleslot(res->tuplestore, true, false, slot))
+	{
+		char	   *nspname;
+		char	   *relname;
+		bool		isnull;
+		RangeVar   *rv;
+
+		nspname = TextDatumGetCString(slot_getattr(slot, 1, &isnull));
+		Assert(!isnull);
+		relname = TextDatumGetCString(slot_getattr(slot, 2, &isnull));
+		Assert(!isnull);
+
+		rv = makeRangeVar(nspname, relname, -1);
+		tablelist = lappend(tablelist, rv);
 
 		ExecClearTuple(slot);
 	}

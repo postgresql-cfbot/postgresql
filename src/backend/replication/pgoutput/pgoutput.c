@@ -15,6 +15,7 @@
 #include "access/tupconvert.h"
 #include "catalog/partition.h"
 #include "catalog/pg_publication.h"
+#include "catalog/pg_publication_namespace.h"
 #include "catalog/pg_publication_rel.h"
 #include "catalog/pg_subscription.h"
 #include "commands/defrem.h"
@@ -55,6 +56,10 @@ static void pgoutput_message(LogicalDecodingContext *ctx,
 							 ReorderBufferTXN *txn, XLogRecPtr message_lsn,
 							 bool transactional, const char *prefix,
 							 Size sz, const char *message);
+static void pgoutput_sequence(LogicalDecodingContext *ctx,
+							  ReorderBufferTXN *txn, XLogRecPtr sequence_lsn,
+							  Relation relation, bool transactional,
+							  int64 last_value, int64 log_cnt, bool is_called);
 static bool pgoutput_origin_filter(LogicalDecodingContext *ctx,
 								   RepOriginId origin_id);
 static void pgoutput_begin_prepare_txn(LogicalDecodingContext *ctx,
@@ -254,6 +259,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->change_cb = pgoutput_change;
 	cb->truncate_cb = pgoutput_truncate;
 	cb->message_cb = pgoutput_message;
+	cb->sequence_cb = pgoutput_sequence;
 	cb->commit_cb = pgoutput_commit_txn;
 
 	cb->begin_prepare_cb = pgoutput_begin_prepare_txn;
@@ -270,6 +276,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->stream_commit_cb = pgoutput_stream_commit;
 	cb->stream_change_cb = pgoutput_change;
 	cb->stream_message_cb = pgoutput_message;
+	cb->stream_sequence_cb = pgoutput_sequence;
 	cb->stream_truncate_cb = pgoutput_truncate;
 	/* transaction streaming - two-phase commit */
 	cb->stream_prepare_cb = pgoutput_stream_prepare_txn;
@@ -283,6 +290,7 @@ parse_output_parameters(List *options, PGOutputData *data)
 	bool		publication_names_given = false;
 	bool		binary_option_given = false;
 	bool		messages_option_given = false;
+	bool		sequences_option_given = false;
 	bool		streaming_given = false;
 	bool		two_phase_option_given = false;
 	bool		origin_option_given = false;
@@ -291,6 +299,7 @@ parse_output_parameters(List *options, PGOutputData *data)
 	data->streaming = LOGICALREP_STREAM_OFF;
 	data->messages = false;
 	data->two_phase = false;
+	data->sequences = false;
 
 	foreach(lc, options)
 	{
@@ -358,6 +367,16 @@ parse_output_parameters(List *options, PGOutputData *data)
 			messages_option_given = true;
 
 			data->messages = defGetBoolean(defel);
+		}
+		else if (strcmp(defel->defname, "sequences") == 0)
+		{
+			if (sequences_option_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			sequences_option_given = true;
+
+			data->sequences = defGetBoolean(defel);
 		}
 		else if (strcmp(defel->defname, "streaming") == 0)
 		{
@@ -502,6 +521,27 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 					 errmsg("two-phase commit requested, but not supported by output plugin")));
 		else
 			ctx->twophase_opt_given = true;
+
+		/*
+		 * Here, we just check whether the sequences decoding option is passed
+		 * by plugin and decide whether to enable it at later point of time. It
+		 * remains enabled if the previous start-up has done so. But we only
+		 * allow the option to be passed in with sufficient version of the
+		 * protocol, and when the output plugin supports it.
+		 */
+		if (!data->sequences)
+			ctx->sequences_opt_given = false;
+		else if (data->protocol_version < LOGICALREP_PROTO_SEQUENCES_VERSION_NUM)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("requested proto_version=%d does not support sequences, need %d or higher",
+							data->protocol_version, LOGICALREP_PROTO_SEQUENCES_VERSION_NUM)));
+		else if (!ctx->sequences)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("sequences requested, but not supported by output plugin")));
+		else
+			ctx->sequences_opt_given = true;
 
 		/* Init publication state. */
 		data->publications = NIL;
@@ -676,7 +716,7 @@ pgoutput_rollback_prepared_txn(LogicalDecodingContext *ctx,
  */
 static void
 maybe_send_schema(LogicalDecodingContext *ctx,
-				  ReorderBufferChange *change,
+				  ReorderBufferTXN *txn,
 				  Relation relation, RelationSyncEntry *relentry)
 {
 	bool		schema_sent;
@@ -692,10 +732,10 @@ maybe_send_schema(LogicalDecodingContext *ctx,
 	 * the write methods will not include it.
 	 */
 	if (in_streaming)
-		xid = change->txn->xid;
+		xid = txn->xid;
 
-	if (rbtxn_is_subtxn(change->txn))
-		topxid = rbtxn_get_toptxn(change->txn)->xid;
+	if (rbtxn_is_subtxn(txn))
+		topxid = rbtxn_get_toptxn(txn)->xid;
 	else
 		topxid = xid;
 
@@ -904,9 +944,10 @@ pgoutput_row_filter_init(PGOutputData *data, List *publications,
 		 * (even if other publications have a row filter).
 		 */
 		if (!pub->alltables &&
-			!SearchSysCacheExists2(PUBLICATIONNAMESPACEMAP,
+			!SearchSysCacheExists3(PUBLICATIONNAMESPACEMAP,
 								   ObjectIdGetDatum(schemaid),
-								   ObjectIdGetDatum(pub->oid)))
+								   ObjectIdGetDatum(pub->oid),
+								   PUB_OBJTYPE_TABLE))
 		{
 			/*
 			 * Check for the presence of a row filter in this publication.
@@ -1520,7 +1561,7 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	 * Schema should be sent using the original relation because it also sends
 	 * the ancestor's relation.
 	 */
-	maybe_send_schema(ctx, change, relation, relentry);
+	maybe_send_schema(ctx, txn, relation, relentry);
 
 	OutputPluginPrepareWrite(ctx, true);
 
@@ -1605,7 +1646,7 @@ pgoutput_truncate(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 		if (txndata && !txndata->sent_begin_txn)
 			pgoutput_send_begin(ctx, txn);
 
-		maybe_send_schema(ctx, change, relation, relentry);
+		maybe_send_schema(ctx, change->txn, relation, relentry);
 	}
 
 	if (nrelids > 0)
@@ -1662,6 +1703,70 @@ pgoutput_message(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 							 prefix,
 							 sz,
 							 message);
+	OutputPluginWrite(ctx, true);
+}
+
+static void
+pgoutput_sequence(LogicalDecodingContext *ctx,
+				  ReorderBufferTXN *txn, XLogRecPtr sequence_lsn,
+				  Relation relation, bool transactional,
+				  int64 last_value, int64 log_cnt, bool is_called)
+{
+	PGOutputData *data = (PGOutputData *) ctx->output_plugin_private;
+	TransactionId xid = InvalidTransactionId;
+	RelationSyncEntry *relentry;
+
+	if (!data->sequences)
+		return;
+
+	if (!is_publishable_relation(relation))
+		return;
+
+	/*
+	 * Remember the xid for the message in streaming mode. See
+	 * pgoutput_change.
+	 */
+	if (in_streaming)
+		xid = txn->xid;
+
+	relentry = get_rel_sync_entry(data, relation);
+
+	/*
+	 * First check the sequence filter.
+	 *
+	 * We handle just REORDER_BUFFER_CHANGE_SEQUENCE here.
+	 */
+	if (!relentry->pubactions.pubsequence)
+		return;
+
+	/*
+	 * Output BEGIN if we haven't yet. Avoid for non-transactional
+	 * sequence changes.
+	 */
+	if (transactional)
+	{
+		PGOutputTxnData *txndata = (PGOutputTxnData *) txn->output_plugin_private;
+
+		/* Send BEGIN if we haven't yet */
+		if (txndata && !txndata->sent_begin_txn)
+			pgoutput_send_begin(ctx, txn);
+	}
+
+	/*
+	 * Schema should be sent using the original relation because it
+	 * also sends the ancestor's relation.
+	 */
+	maybe_send_schema(ctx, txn, relation, relentry);
+
+	OutputPluginPrepareWrite(ctx, true);
+	logicalrep_write_sequence(ctx->out,
+							  relation,
+							  xid,
+							  sequence_lsn,
+							  transactional,
+							  last_value,
+							  log_cnt,
+							  is_called);
 	OutputPluginWrite(ctx, true);
 }
 
@@ -1973,7 +2078,8 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 		entry->schema_sent = false;
 		entry->streamed_txns = NIL;
 		entry->pubactions.pubinsert = entry->pubactions.pubupdate =
-			entry->pubactions.pubdelete = entry->pubactions.pubtruncate = false;
+			entry->pubactions.pubdelete = entry->pubactions.pubtruncate =
+			entry->pubactions.pubsequence = false;
 		entry->new_slot = NULL;
 		entry->old_slot = NULL;
 		memset(entry->exprstate, 0, sizeof(entry->exprstate));
@@ -1988,18 +2094,18 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 	{
 		Oid			schemaId = get_rel_namespace(relid);
 		List	   *pubids = GetRelationPublications(relid);
-
+		char		relkind = get_rel_relkind(relid);
+		char		objectType = pub_get_object_type_for_relkind(relkind);
 		/*
 		 * We don't acquire a lock on the namespace system table as we build
 		 * the cache entry using a historic snapshot and all the later changes
 		 * are absorbed while decoding WAL.
 		 */
-		List	   *schemaPubids = GetSchemaPublications(schemaId);
+		List	   *schemaPubids = GetSchemaPublications(schemaId, objectType);
 		ListCell   *lc;
 		Oid			publish_as_relid = relid;
 		int			publish_ancestor_level = 0;
 		bool		am_partition = get_rel_relispartition(relid);
-		char		relkind = get_rel_relkind(relid);
 		List	   *rel_publications = NIL;
 
 		/* Reload publications if needed before use. */
@@ -2031,6 +2137,7 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 		entry->pubactions.pubupdate = false;
 		entry->pubactions.pubdelete = false;
 		entry->pubactions.pubtruncate = false;
+		entry->pubactions.pubsequence = false;
 
 		/*
 		 * Tuple slots cleanups. (Will be rebuilt later if needed).
@@ -2078,9 +2185,11 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 
 			/*
 			 * If this is a FOR ALL TABLES publication, pick the partition
-			 * root and set the ancestor level accordingly.
+			 * root and set the ancestor level accordingly. If this is a
+			 * FOR ALL SEQUENCES publication, we publish it too but we
+			 * don't need to pick the partition root etc.
 			 */
-			if (pub->alltables)
+			if (pub->alltables && (objectType == PUB_OBJTYPE_TABLE))
 			{
 				publish = true;
 				if (pub->pubviaroot && am_partition)
@@ -2090,6 +2199,10 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 					pub_relid = llast_oid(ancestors);
 					ancestor_level = list_length(ancestors);
 				}
+			}
+			else if (pub->allsequences && (objectType == PUB_OBJTYPE_SEQUENCE))
+			{
+				publish = true;
 			}
 
 			if (!publish)
@@ -2144,6 +2257,7 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 				entry->pubactions.pubupdate |= pub->pubactions.pubupdate;
 				entry->pubactions.pubdelete |= pub->pubactions.pubdelete;
 				entry->pubactions.pubtruncate |= pub->pubactions.pubtruncate;
+				entry->pubactions.pubsequence |= pub->pubactions.pubsequence;
 
 				/*
 				 * We want to publish the changes as the top-most ancestor

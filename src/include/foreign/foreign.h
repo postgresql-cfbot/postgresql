@@ -70,6 +70,7 @@ extern ForeignServer *GetForeignServerExtended(Oid serverid,
 extern ForeignServer *GetForeignServerByName(const char *srvname,
 											 bool missing_ok);
 extern UserMapping *GetUserMapping(Oid userid, Oid serverid);
+extern UserMapping *GetUserMappingFromOid(Oid usermappigid);
 extern ForeignDataWrapper *GetForeignDataWrapper(Oid fdwid);
 extern ForeignDataWrapper *GetForeignDataWrapperExtended(Oid fdwid,
 														 bits16 flags);

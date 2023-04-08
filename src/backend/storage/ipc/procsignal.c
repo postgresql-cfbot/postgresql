@@ -16,6 +16,9 @@
 
 #include <signal.h>
 #include <unistd.h>
+#ifdef HAVE_EXECINFO_H
+#include <execinfo.h>
+#endif
 
 #include "access/parallel.h"
 #include "port/pg_bitutils.h"
@@ -96,6 +99,10 @@ typedef struct
 /* Clear the relevant type bit from the flags. */
 #define BARRIER_CLEAR_BIT(flags, type) \
 	((flags) &= ~(((uint32) 1) << (uint32) (type)))
+
+#ifdef HAVE_BACKTRACE_SYMBOLS
+static bool	backtrace_functions_loaded = false;
+#endif
 
 static ProcSignalHeader *ProcSignal = NULL;
 static ProcSignalSlot *MyProcSignalSlot = NULL;
@@ -610,6 +617,76 @@ ResetProcSignalBarrierBits(uint32 flags)
 }
 
 /*
+ * HandleLogBacktraceInterrupt - Handle receipt of an interrupt requesting to
+ * log a backtrace.
+ *
+ * We capture the backtrace within this signal handler and emit to stderr. Note
+ * that we ensured the backtrace-related functions are signal-safe, see
+ * LoadBacktraceFunctions() for more details.
+ *
+ * Emitting backtrace to stderr as opposed to writing to server log has an
+ * advantage - we don't need to allocate any dynamic memory while capturing
+ * backtrace which makes the signal handler safe.
+ */
+static void
+HandleLogBacktraceInterrupt(void)
+{
+#ifdef HAVE_BACKTRACE_SYMBOLS
+	void	   *buf[100];
+	int			nframes;
+
+	/* Quickly exit if backtrace-related functions aren't loaded. */
+	if (!backtrace_functions_loaded)
+		return;
+
+	nframes = backtrace(buf, lengthof(buf));
+
+	write_stderr("logging current backtrace of process with PID %d:\n",
+				 MyProcPid);
+	backtrace_symbols_fd(buf, nframes, fileno(stderr));
+#endif
+}
+
+/*
+ * LoadBacktraceFunctions - call a backtrace-related function to ensure the
+ * shared library implementing them is loaded beforehand.
+ *
+ * Any backtrace-related functions when called for the first time dynamically
+ * loads the shared library, which usually triggers a call to malloc, making
+ * them unsafe to use in signal handlers.
+ *
+ * This functions is an attempt to make backtrace-related functions signal
+ * safe.
+ *
+ * NOTE: This function is supposed to be called in the early life of a process,
+ * preferably after SIGUSR1 handler is setup and before the backtrace-related
+ * functions are used in signal handlers. It is not supposed to be called from
+ * within a signal handler.
+ */
+void
+LoadBacktraceFunctions(void)
+{
+#ifdef HAVE_BACKTRACE_SYMBOLS
+	void	   *buf[100];
+
+	/*
+	 * XXX: It is a bit of overkill to check if the shared library implementing
+	 * backtrace-related functions is loaded already. Instead, we go ahead and
+	 * call one function.
+	 */
+
+	/*
+	 * It is enough to call any one backtrace-related function to ensure that
+	 * the corresponding shared library is dynamically loaded if not done
+	 * already.
+	 */
+	backtrace(buf, lengthof(buf));
+
+	backtrace_functions_loaded = true;
+#endif
+}
+
+/*
  * CheckProcSignal - check to see if a particular reason has been
  * signaled, and clear the signal flag.  Should be called after receiving
  * SIGUSR1.
@@ -660,6 +737,16 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 
 	if (CheckProcSignal(PROCSIG_PARALLEL_APPLY_MESSAGE))
 		HandleParallelApplyMessageInterrupt();
+
+	/*
+	 * XXX: Since the log backtrace signal handler itself does the required
+	 * job, returning without setting the latch may be a good idea here.
+	 * However, it is better not to deviate from the tradition of a signal
+	 * handler setting the latch to wake up the processes that are waiting on
+	 * it.
+	 */
+	if (CheckProcSignal(PROCSIG_LOG_BACKTRACE))
+		HandleLogBacktraceInterrupt();
 
 	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_DATABASE))
 		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_DATABASE);

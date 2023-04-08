@@ -112,6 +112,8 @@ BackgroundWriterMain(void)
 	 */
 	pqsignal(SIGCHLD, SIG_DFL);
 
+	LoadBacktraceFunctions();
+
 	/*
 	 * We just started, assume there has been either a shutdown or
 	 * end-of-recovery snapshot.

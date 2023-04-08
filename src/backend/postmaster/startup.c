@@ -261,6 +261,8 @@ StartupProcessMain(void)
 	 */
 	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
 
+	LoadBacktraceFunctions();
+
 	/*
 	 * Do what we came for.
 	 */

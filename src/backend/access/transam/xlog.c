@@ -350,7 +350,8 @@ typedef struct XLogwrtResult
  * wait for all currently in-progress insertions to finish, but the
  * insertingAt indicator allows you to ignore insertions to later in the WAL,
  * so that you only wait for the insertions that are modifying the buffers
- * you're about to write out.
+ * you're about to write out. Using an atomic variable for insertingAt avoids
+ * taking any explicit lock for reads and writes.
  *
  * This isn't just an optimization. If all the WAL buffers are dirty, an
  * inserter that's holding a WAL insert lock might need to evict an old WAL
@@ -376,7 +377,7 @@ typedef struct XLogwrtResult
 typedef struct
 {
 	LWLock		lock;
-	XLogRecPtr	insertingAt;
+	pg_atomic_uint64	insertingAt;
 	XLogRecPtr	lastImportantAt;
 } WALInsertLock;
 
@@ -1495,6 +1496,13 @@ WaitXLogInsertionsToFinish(XLogRecPtr upto)
 			 * calling LWLockUpdateVar.  But if it has to sleep, it will
 			 * advertise the insertion point with LWLockUpdateVar before
 			 * sleeping.
+			 *
+			 * XXX: Use of a spinlock at the beginning of this function to read
+			 * current insert position implies memory ordering. That means that
+			 * the immediate loads and stores to shared memory (for instance,
+			 * in LWLockUpdateVar called via LWLockWaitForVar) don't need an
+			 * explicit memory barrier as far as the current usage is
+			 * concerned. But that might not be safe in general.
 			 */
 			if (LWLockWaitForVar(&WALInsertLocks[i].l.lock,
 								 &WALInsertLocks[i].l.insertingAt,
@@ -4611,7 +4619,7 @@ XLOGShmemInit(void)
 	for (i = 0; i < NUM_XLOGINSERT_LOCKS; i++)
 	{
 		LWLockInitialize(&WALInsertLocks[i].l.lock, LWTRANCHE_WAL_INSERT);
-		WALInsertLocks[i].l.insertingAt = InvalidXLogRecPtr;
+		pg_atomic_init_u64(&WALInsertLocks[i].l.insertingAt, InvalidXLogRecPtr);
 		WALInsertLocks[i].l.lastImportantAt = InvalidXLogRecPtr;
 	}
 

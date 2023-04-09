@@ -118,7 +118,10 @@ dir_open_for_write(WalWriteMethod *wwmethod, const char *pathname,
 				   const char *temp_suffix, size_t pad_to_size)
 {
 	DirectoryMethodData *dir_data = (DirectoryMethodData *) wwmethod;
+	char		targetpath[MAXPGPATH];
 	char		tmppath[MAXPGPATH];
+	char	   *path;
+	bool		createtempfile = false;
 	char	   *filename;
 	int			fd;
 	DirectoryMethodFile *f;
@@ -134,7 +137,7 @@ dir_open_for_write(WalWriteMethod *wwmethod, const char *pathname,
 	clear_error(wwmethod);
 
 	filename = dir_get_file_name(wwmethod, pathname, temp_suffix);
-	snprintf(tmppath, sizeof(tmppath), "%s/%s",
+	snprintf(targetpath, sizeof(targetpath), "%s/%s",
 			 dir_data->basedir, filename);
 	pg_free(filename);
 
@@ -143,8 +146,32 @@ dir_open_for_write(WalWriteMethod *wwmethod, const char *pathname,
 	 * the file descriptor is important for dir_sync() method as gzflush()
 	 * does not do any system calls to fsync() to make changes permanent on
 	 * disk.
+	 *
+	 * Create file atomically for padding and non-compression cases. This is
+	 * done by first creating a temporary file, initializing it and renaming it
+	 * to the actual file name.
 	 */
-	fd = open(tmppath, O_WRONLY | O_CREAT | PG_BINARY, pg_file_create_mode);
+	if (pad_to_size > 0 &&
+		wwmethod->compression_algorithm == PG_COMPRESSION_NONE)
+	{
+		snprintf(tmppath, MAXPGPATH, "%s/xlog.tmp", dir_data->basedir);
+
+		/*
+		 * Remove temporary file possibly left over from a crash or a previous
+		 * failure in this function.
+		 */
+		unlink(tmppath);
+
+		path = tmppath;
+		createtempfile = true;
+	}
+	else
+	{
+		path = targetpath;
+		createtempfile = false;
+	}
+
+	fd = open(path, O_WRONLY | O_CREAT | PG_BINARY, pg_file_create_mode);
 	if (fd < 0)
 	{
 		wwmethod->lasterrno = errno;
@@ -243,16 +270,37 @@ dir_open_for_write(WalWriteMethod *wwmethod, const char *pathname,
 		}
 	}
 
+	/* Rename the temporary file to actual file */
+	if (createtempfile)
+	{
+		int rc;
+
+		if (wwmethod->sync)
+			rc = durable_rename(tmppath, targetpath);
+		else
+			rc = rename(tmppath, targetpath);
+
+		if (rc != 0)
+		{
+			wwmethod->lasterrno = errno;
+			close(fd);
+			return NULL;
+		}
+	}
+
 	/*
 	 * fsync WAL file and containing directory, to ensure the file is
 	 * persistently created and zeroed (if padded). That's particularly
 	 * important when using synchronous mode, where the file is modified and
 	 * fsynced in-place, without a directory fsync.
+	 *
+	 * For padding/temporary file case, durable_rename would have already
+	 * fsynced file and containing directory.
 	 */
-	if (wwmethod->sync)
+	if (!createtempfile && wwmethod->sync)
 	{
-		if (fsync_fname(tmppath, false) != 0 ||
-			fsync_parent_path(tmppath) != 0)
+		if (fsync_fname(targetpath, false) != 0 ||
+			fsync_parent_path(targetpath) != 0)
 		{
 			wwmethod->lasterrno = errno;
 #ifdef HAVE_LIBZ
@@ -293,7 +341,7 @@ dir_open_for_write(WalWriteMethod *wwmethod, const char *pathname,
 	f->base.currpos = 0;
 	f->base.pathname = pg_strdup(pathname);
 	f->fd = fd;
-	f->fullpath = pg_strdup(tmppath);
+	f->fullpath = pg_strdup(targetpath);
 	if (temp_suffix)
 		f->temp_suffix = pg_strdup(temp_suffix);
 

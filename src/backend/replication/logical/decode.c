@@ -694,6 +694,7 @@ DecodeCommit(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 		}
 		ReorderBufferForget(ctx->reorder, xid, buf->origptr);
 
+		UpdateDecodingProgressAndKeepalive(ctx, xid, buf->endptr, true);
 		return;
 	}
 
@@ -791,6 +792,8 @@ DecodePrepare(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 	{
 		ReorderBufferSkipPrepare(ctx->reorder, xid);
 		ReorderBufferInvalidate(ctx->reorder, xid, buf->origptr);
+
+		UpdateDecodingProgressAndKeepalive(ctx, xid, buf->endptr, true);
 		return;
 	}
 

@@ -544,12 +544,6 @@ typedef void (*ReorderBufferStreamTruncateCB) (
 											   Relation relations[],
 											   ReorderBufferChange *change);
 
-/* update progress txn callback signature */
-typedef void (*ReorderBufferUpdateProgressTxnCB) (
-												  ReorderBuffer *rb,
-												  ReorderBufferTXN *txn,
-												  XLogRecPtr lsn);
-
 struct ReorderBuffer
 {
 	/*
@@ -612,12 +606,6 @@ struct ReorderBuffer
 	ReorderBufferStreamChangeCB stream_change;
 	ReorderBufferStreamMessageCB stream_message;
 	ReorderBufferStreamTruncateCB stream_truncate;
-
-	/*
-	 * Callback to be called when updating progress during sending data of a
-	 * transaction (and its subtransactions) to the output plugin.
-	 */
-	ReorderBufferUpdateProgressTxnCB update_progress_txn;
 
 	/*
 	 * Pointer that will be passed untouched to the callbacks.

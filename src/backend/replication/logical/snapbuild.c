@@ -1953,6 +1953,12 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 	/* consistent snapshots have no next phase */
 	Assert(ondisk.builder.next_phase_at == InvalidTransactionId);
 
+	/* 
+	 * We are now in consistent point and have no next phase, copy the state
+	 * from the snapshot in disk.
+	 */
+	builder->next_phase_at = ondisk.builder.next_phase_at;
+
 	/* ok, we think the snapshot is sensible, copy over everything important */
 	builder->xmin = ondisk.builder.xmin;
 	builder->xmax = ondisk.builder.xmax;

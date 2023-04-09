@@ -71,7 +71,7 @@ DiscardAll(bool isTopLevel)
 	ResetAllOptions();
 	DropAllPreparedStatements();
 	Async_UnlistenAll();
-	LockReleaseAll(USER_LOCKMETHOD, true);
+	LockReleaseSession(USER_LOCKMETHOD);
 	ResetPlanCache();
 	ResetTempTableNamespace();
 	ResetSequenceCaches();

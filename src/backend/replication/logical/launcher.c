@@ -798,7 +798,7 @@ logicalrep_worker_onexit(int code, Datum arg)
 	 * parallel apply mode and will not be released when the worker
 	 * terminates, so manually release all locks before the worker exits.
 	 */
-	LockReleaseAll(DEFAULT_LOCKMETHOD, true);
+	ProcReleaseLocks(false);
 
 	ApplyLauncherWakeup();
 }

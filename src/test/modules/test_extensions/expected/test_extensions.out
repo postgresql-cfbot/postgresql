@@ -389,3 +389,19 @@ SELECT test_s_dep.dep_req2();
 
 DROP EXTENSION test_ext_req_schema1 CASCADE;
 NOTICE:  drop cascades to extension test_ext_req_schema2
+
+CREATE EXTENSION test_ext_wildcard1;
+SELECT ext_wildcard1_version();
+ ext_wildcard1_version 
+-----------------------
+ 1.0
+(1 row)
+
+ALTER EXTENSION test_ext_wildcard1 UPDATE TO '2.0';
+SELECT ext_wildcard1_version();
+ ext_wildcard1_version 
+-----------------------
+ 2.0
+(1 row)
+
+DROP EXTENSION test_ext_wildcard1;

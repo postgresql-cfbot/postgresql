@@ -232,3 +232,12 @@ ALTER EXTENSION test_ext_req_schema1 SET SCHEMA test_s_dep2;  -- now ok
 SELECT test_s_dep2.dep_req1();
 SELECT test_s_dep.dep_req2();
 DROP EXTENSION test_ext_req_schema1 CASCADE;
+
+--
+-- Test wildcard upgrade 
+--
+CREATE EXTENSION test_ext_wildcard1;
+SELECT ext_wildcard1_version();
+ALTER EXTENSION test_ext_wildcard1 UPDATE TO '2.0';
+SELECT ext_wildcard1_version();
+DROP EXTENSION test_ext_wildcard1;

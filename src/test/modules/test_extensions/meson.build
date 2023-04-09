@@ -36,6 +36,9 @@ test_install_data += files(
   'test_ext_req_schema2.control',
   'test_ext_req_schema3--1.0.sql',
   'test_ext_req_schema3.control',
+  'test_ext_wildcard1--1.0.sql',
+  'test_ext_wildcard1--%--2.0.sql',
+  'test_ext_wildcard1.control',
 )
 
 tests += {

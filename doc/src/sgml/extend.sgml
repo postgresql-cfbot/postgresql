@@ -1121,6 +1121,14 @@ SELECT pg_catalog.pg_extension_config_dump('my_config', 'WHERE NOT standard_entr
     </para>
 
     <para>
+     The literal value <literal>%</literal> can be used as the
+     <replaceable>old_version</replaceable> component in an extension
+     update script for it to match any version. Such wildcard update
+     scripts will only be used when no explicit path is found from
+     old to target version.
+    </para>
+
+    <para>
      Given that a suitable update script is available, the command
      <command>ALTER EXTENSION UPDATE</command> will update an installed extension
      to the specified new version.  The update script is run in the same

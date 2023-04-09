@@ -199,7 +199,7 @@ $node->append_conf(
 	'postgresql.conf', qq{
 listen_addresses = '$hostaddr'
 krb_server_keyfile = '$keytab'
-log_connections = on
+log_connection_messages = all
 lc_messages = 'C'
 });
 $node->start;

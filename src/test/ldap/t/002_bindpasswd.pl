@@ -44,7 +44,7 @@ note "setting up PostgreSQL instance";
 
 my $node = PostgreSQL::Test::Cluster->new('node');
 $node->init;
-$node->append_conf('postgresql.conf', "log_connections = on\n");
+$node->append_conf('postgresql.conf', "log_connection_messages = all\n");
 $node->start;
 
 $node->safe_psql('postgres', 'CREATE USER test0;');

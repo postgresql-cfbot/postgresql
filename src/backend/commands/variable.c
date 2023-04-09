@@ -993,6 +993,74 @@ show_role(void)
 }
 
 
+/* check_hook: validate new log_connection_messages value
+ *
+ * The implementation follows the check_log_destination hook.
+ */
+bool
+check_log_connection_messages(char **newval, void **extra, GucSource source)
+{
+	char		*rawname;
+	List		*namelist;
+	ListCell	*l;
+	int			newlogconnect = 0;
+	int			*myextra;
+
+	if (pg_strcasecmp(*newval, "all") == 0)
+	{
+		newlogconnect |= LOG_CONNECTION_ALL;
+		myextra = (int *) guc_malloc(ERROR, sizeof(int));
+		*myextra = newlogconnect;
+		*extra = (void *) myextra;
+		return true;
+	}
+
+	/* Need a modifiable copy of string */
+	rawname = pstrdup(*newval);
+
+	/* Parse string into list of identifiers */
+	/* We rely on SplitIdentifierString to downcase and strip whitespace */
+	if (!SplitIdentifierString(rawname, ',', &namelist))
+	{
+		/* syntax error in name list */
+		GUC_check_errdetail("List syntax is invalid.");
+		pfree(rawname);
+		list_free(namelist);
+		return false;
+	}
+
+	foreach(l, namelist)
+	{
+		char		*stage = (char *) lfirst(l);
+		if (pg_strcasecmp(stage, "received") == 0)
+			newlogconnect |= LOG_CONNECTION_RECEIVED;
+		else if (pg_strcasecmp(stage, "authenticated") == 0)
+			newlogconnect |= LOG_CONNECTION_AUTHENTICATED;
+		else if (pg_strcasecmp(stage, "authorized") == 0)
+			newlogconnect |= LOG_CONNECTION_AUTHORIZED;
+		else if (pg_strcasecmp(stage, "disconnected") == 0)
+			newlogconnect |= LOG_CONNECTION_DISCONNECTED;
+		else {
+			GUC_check_errcode(ERRCODE_INVALID_PARAMETER_VALUE);
+			GUC_check_errmsg("invalid value '%s'", stage);
+			GUC_check_errdetail("Valid values to use in the list are 'all', 'received', 'authenticated', 'authorized', and 'disconnected'."
+			" If 'all' is present, it must be the only value in the list.");
+			pfree(rawname);
+			list_free(namelist);
+			return false;
+		}
+	}
+
+	pfree(rawname);
+	list_free(namelist);
+
+	myextra = (int *) guc_malloc(ERROR, sizeof(int));
+	*myextra = newlogconnect;
+	*extra = (void *) myextra;
+
+	return true;
+}
+
 /*
  * PATH VARIABLES
  *
@@ -1015,6 +1083,15 @@ check_canonical_path(char **newval, void **extra, GucSource source)
 
 
 /*
+ * assign_log_connection_messages: GUC assign_hook for log_connection_messages
+ */
+void
+assign_log_connection_messages(const char *newval, void *extra)
+{
+	Log_connection_messages = *((int *) extra);
+}
+
+ /*
  * MISCELLANEOUS
  */
 

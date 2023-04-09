@@ -11,7 +11,7 @@ $node_primary->init(allows_streaming => 1);
 $node_primary->append_conf(
 	'postgresql.conf', q[
 allow_in_place_tablespaces = true
-log_connections=on
+log_connection_messages=all
 # to avoid "repairing" corruption
 full_page_writes=off
 log_min_messages=debug2

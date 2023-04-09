@@ -140,7 +140,7 @@
      An example of what this file might look like is:
 <programlisting>
 # This is a comment
-log_connections = yes
+log_connection_messages = all
 log_destination = 'syslog'
 search_path = '"$user", public'
 shared_buffers = 128MB
@@ -335,7 +335,7 @@ UPDATE pg_settings SET setting = reset_val WHERE name = 'configuration_parameter
        passed to the <command>postgres</command> command via the
        <option>-c</option> command-line parameter.  For example,
 <programlisting>
-postgres -c log_connections=yes -c log_destination='syslog'
+postgres -c log_connection_messages=all -c log_destination='syslog'
 </programlisting>
        Settings provided in this way override those set via
        <filename>postgresql.conf</filename> or <command>ALTER SYSTEM</command>,
@@ -7142,22 +7142,73 @@ local0.*    /var/log/postgresql
       </listitem>
      </varlistentry>
 
-     <varlistentry id="guc-log-connections" xreflabel="log_connections">
-      <term><varname>log_connections</varname> (<type>boolean</type>)
+     <varlistentry id="guc-log-connection-messages" xreflabel="log_connection_messages">
+      <term><varname>log_connection_messages</varname> (<type>string</type>)
       <indexterm>
-       <primary><varname>log_connections</varname> configuration parameter</primary>
+       <primary><varname>log_connection_messages</varname> configuration parameter</primary>
       </indexterm>
       </term>
       <listitem>
        <para>
-        Causes each attempted connection to the server to be logged,
-        as well as successful completion of both client authentication (if
-        necessary) and authorization.
+        Causes the specified stages of each connection attempt to the server to be logged. Example: <literal>authorized,disconnected</literal>.
+        The default is the empty string, which means that nothing is logged.
         Only superusers and users with the appropriate <literal>SET</literal>
         privilege can change this parameter at session start,
         and it cannot be changed at all within a session.
-        The default is <literal>off</literal>.
        </para>
+
+    <table id="connection-messages">
+     <title>Connection messages</title>
+     <tgroup cols="2">
+      <colspec colname="col1" colwidth="1*"/>
+      <colspec colname="col2" colwidth="2*"/>
+      <thead>
+       <row>
+        <entry>Name</entry>
+        <entry>Description</entry>
+       </row>
+      </thead>
+      <tbody>
+       <row>
+        <entry><literal>received</literal></entry>
+        <entry>Logs receipt of a connection. At this point a connection has been
+        received, but no further work has been done: PostgreSQL is about to start
+        interacting with a client.</entry>
+       </row>
+
+       <row>
+        <entry><literal>authenticated</literal></entry>
+        <entry>Logs the original identity used by an authentication method
+        to identify a user. In most cases, the identity string matches the
+        PostgreSQL username, but some third-party authentication methods may
+        alter the original user identifier before the server stores it. Failed
+        authentication is always logged regardless of the value of this setting.
+        </entry>
+       </row>
+
+       <row>
+        <entry><literal>authorized</literal></entry>
+        <entry>Logs successful completion of authorization. At this point the
+        connection has been fully established.
+        </entry>
+       </row>
+
+       <row>
+        <entry><literal>disconnected</literal></entry>
+        <entry>Logs session termination. The log output provides information
+        similar to <literal>authorized</literal>, plus the duration of the session.
+        </entry>
+       </row>
+
+       <row>
+        <entry><literal>all</literal></entry>
+        <entry>A convenience alias. If present, it must be the only value in the
+        list.</entry>
+       </row>
+
+      </tbody>
+     </tgroup>
+    </table>
 
        <note>
         <para>
@@ -7169,26 +7220,6 @@ local0.*    /var/log/postgresql
        </note>
       </listitem>
      </varlistentry>
-
-     <varlistentry id="guc-log-disconnections" xreflabel="log_disconnections">
-      <term><varname>log_disconnections</varname> (<type>boolean</type>)
-      <indexterm>
-       <primary><varname>log_disconnections</varname> configuration parameter</primary>
-      </indexterm>
-      </term>
-      <listitem>
-       <para>
-        Causes session terminations to be logged.  The log output
-        provides information similar to <varname>log_connections</varname>,
-        plus the duration of the session.
-        Only superusers and users with the appropriate <literal>SET</literal>
-        privilege can change this parameter at session start,
-        and it cannot be changed at all within a session.
-        The default is <literal>off</literal>.
-       </para>
-      </listitem>
-     </varlistentry>
-
 
      <varlistentry id="guc-log-duration" xreflabel="log_duration">
       <term><varname>log_duration</varname> (<type>boolean</type>)

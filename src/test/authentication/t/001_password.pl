@@ -63,7 +63,7 @@ sub test_conn
 # Initialize primary node
 my $node = PostgreSQL::Test::Cluster->new('primary');
 $node->init;
-$node->append_conf('postgresql.conf', "log_connections = on\n");
+$node->append_conf('postgresql.conf', "log_connection_messages = all\n");
 $node->start;
 
 # Create 3 roles with different password methods for each one. The same

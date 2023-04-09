@@ -87,8 +87,8 @@ const char *debug_query_string; /* client-supplied query string */
 /* Note: whereToSendOutput is initialized for the bootstrap/standalone case */
 CommandDest whereToSendOutput = DestDebug;
 
-/* flag for logging end of session */
-bool		Log_disconnections = false;
+/* flags for logging information about session state */
+int			Log_connection_messages = 0;
 
 int			log_statement = LOGSTMT_NONE;
 
@@ -3650,8 +3650,7 @@ set_debug_options(int debug_flag, GucContext context, GucSource source)
 
 	if (debug_flag >= 1 && context == PGC_POSTMASTER)
 	{
-		SetConfigOption("log_connections", "true", context, source);
-		SetConfigOption("log_disconnections", "true", context, source);
+		SetConfigOption("log_connection_messages", "all", context, source);
 	}
 	if (debug_flag >= 2)
 		SetConfigOption("log_statement", "all", context, source);
@@ -4221,9 +4220,9 @@ PostgresMain(const char *dbname, const char *username)
 
 	/*
 	 * Also set up handler to log session end; we have to wait till now to be
-	 * sure Log_disconnections has its final value.
+	 * sure Log_connection_messages has its final value.
 	 */
-	if (IsUnderPostmaster && Log_disconnections)
+	if (IsUnderPostmaster && (Log_connection_messages & LOG_CONNECTION_DISCONNECTED))
 		on_proc_exit(log_disconnections, 0);
 
 	pgstat_report_connect(MyDatabaseId);

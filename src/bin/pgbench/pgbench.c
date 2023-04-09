@@ -169,8 +169,8 @@ typedef struct socket_set
 /********************************************************************
  * some configurable parameters */
 
-#define DEFAULT_INIT_STEPS "dtgvp"	/* default -I setting */
-#define ALL_INIT_STEPS "dtgGvpf"	/* all possible steps */
+#define DEFAULT_INIT_STEPS "dYtgvpy"	/* default -I setting */
+#define ALL_INIT_STEPS "dYtgGvpfy"	/* all possible steps */
 
 #define LOG_STEP_SECONDS	5	/* seconds between log messages */
 #define DEFAULT_NXACTS	10		/* default nxacts */
@@ -801,6 +801,15 @@ static const BuiltinScript builtin_script[] =
 		"END;\n"
 	},
 	{
+		"plpgsql-tpcb-like",
+		"<builtin: TPC-B (sort of) as a pl/pgsql function>",
+		"\\set aid random(1, " CppAsString2(naccounts) " * :scale)\n"
+		"\\set bid random(1, " CppAsString2(nbranches) " * :scale)\n"
+		"\\set tid random(1, " CppAsString2(ntellers) " * :scale)\n"
+		"\\set delta random(-5000, 5000)\n"
+		"SELECT 1 FROM pgbench_tpcb_like(:aid, :bid, :tid, :delta);\n"
+	},
+	{
 		"simple-update",
 		"<builtin: simple update>",
 		"\\set aid random(1, " CppAsString2(naccounts) " * :scale)\n"
@@ -812,6 +821,15 @@ static const BuiltinScript builtin_script[] =
 		"SELECT abalance FROM pgbench_accounts WHERE aid = :aid;\n"
 		"INSERT INTO pgbench_history (tid, bid, aid, delta, mtime) VALUES (:tid, :bid, :aid, :delta, CURRENT_TIMESTAMP);\n"
 		"END;\n"
+	},
+	{
+		"plpgsql-simple-update",
+		"<builtin: simple update as a pl/pgsql function>",
+		"\\set aid random(1, " CppAsString2(naccounts) " * :scale)\n"
+		"\\set bid random(1, " CppAsString2(nbranches) " * :scale)\n"
+		"\\set tid random(1, " CppAsString2(ntellers) " * :scale)\n"
+		"\\set delta random(-5000, 5000)\n"
+		"SELECT 1 FROM pgbench_simple_update(:aid, :bid, :tid, :delta);\n"
 	},
 	{
 		"select-only",
@@ -885,6 +903,7 @@ usage(void)
 		   "  -q, --quiet              quiet logging (one message each 5 seconds)\n"
 		   "  -s, --scale=NUM          scaling factor\n"
 		   "  --foreign-keys           create foreign key constraints between tables\n"
+		   "  --no-functions           do not create pl/pgsql functions for internal scripts\n"
 		   "  --index-tablespace=TABLESPACE\n"
 		   "                           create indexes in the specified tablespace\n"
 		   "  --partition-method=(range|hash)\n"
@@ -4862,6 +4881,54 @@ initTruncateTables(PGconn *con)
 }
 
 /*
+ * Create the functions needed for plpgsql-* builting scripts
+ */
+static void
+initCreateFuntions(PGconn *con)
+{
+	fprintf(stderr, "creating functions...\n");
+
+	executeStatement(con, 
+		"CREATE FUNCTION pgbench_tpcb_like(_aid int, _bid int, _tid int, _delta int)\n"
+		"RETURNS void\n"
+		"LANGUAGE plpgsql\n"
+		"AS $plpgsql$\n"
+		"BEGIN\n"
+		"    UPDATE pgbench_accounts SET abalance = abalance + _delta WHERE aid = _aid;\n"
+		"    PERFORM abalance FROM pgbench_accounts WHERE aid = _aid;\n"
+		"    UPDATE pgbench_tellers SET tbalance = tbalance + _delta WHERE tid = _tid;\n"
+		"    UPDATE pgbench_branches SET bbalance = bbalance + _delta WHERE bid = _bid;\n"
+		"    INSERT INTO pgbench_history (tid, bid, aid, delta, mtime) VALUES (_tid, _bid, _aid, _delta, CURRENT_TIMESTAMP);\n"
+		"END;\n"
+		"$plpgsql$;\n");
+	executeStatement(con,
+		"CREATE FUNCTION pgbench_simple_update(_aid int, _bid int, _tid int, _delta int)\n"
+		"RETURNS void\n"
+		"LANGUAGE plpgsql\n"
+		"AS $plpgsql$\n"
+		"BEGIN\n"
+		"    UPDATE pgbench_accounts SET abalance = abalance + _delta WHERE aid = _aid;\n"
+		"    PERFORM abalance FROM pgbench_accounts WHERE aid = _aid;\n"
+		"    INSERT INTO pgbench_history (tid, bid, aid, delta, mtime) VALUES (_tid, _bid, _aid, _delta, CURRENT_TIMESTAMP);\n"
+		"END;\n"
+		"$plpgsql$;\n");
+}
+
+/*
+ * Remove old pgbench functions, if any exist
+ */
+static void
+initDropFunctions(PGconn *con)
+{
+	fprintf(stderr, "dropping old functions...\n");
+
+	executeStatement(con, 
+		"DROP FUNCTION IF EXISTS pgbench_tpcb_like(_aid int, _bid int, _tid int, _delta int);\n");
+	executeStatement(con,
+		"DROP FUNCTION IF EXISTS pgbench_simple_update(_aid int, _bid int, _tid int, _delta int);\n");
+}
+
+/*
  * Fill the standard tables with some data generated and sent from the client
  */
 static void
@@ -5193,6 +5260,14 @@ runInitSteps(const char *initialize_steps)
 			case 'f':
 				op = "foreign keys";
 				initCreateFKeys(con);
+				break;
+			case 'Y':
+				op = "drop functions";
+				initDropFunctions(con);
+				break;
+			case 'y':
+				op = "create functions";
+				initCreateFuntions(con);
 				break;
 			case ' ':
 				break;			/* ignore */
@@ -6033,7 +6108,7 @@ listAvailableScripts(void)
 
 	fprintf(stderr, "Available builtin scripts:\n");
 	for (i = 0; i < lengthof(builtin_script); i++)
-		fprintf(stderr, "  %13s: %s\n", builtin_script[i].name, builtin_script[i].desc);
+		fprintf(stderr, "  %21s: %s\n", builtin_script[i].name, builtin_script[i].desc);
 	fprintf(stderr, "\n");
 }
 
@@ -6583,6 +6658,7 @@ main(int argc, char **argv)
 		{"failures-detailed", no_argument, NULL, 13},
 		{"max-tries", required_argument, NULL, 14},
 		{"verbose-errors", no_argument, NULL, 15},
+		{"no-functions", no_argument, NULL, 16},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -6590,6 +6666,7 @@ main(int argc, char **argv)
 	bool		is_init_mode = false;	/* initialize mode? */
 	char	   *initialize_steps = NULL;
 	bool		foreign_keys = false;
+	bool		no_functions = false;
 	bool		is_no_vacuum = false;
 	bool		do_vacuum_accounts = false; /* vacuum accounts table? */
 	int			optindex;
@@ -6920,6 +6997,10 @@ main(int argc, char **argv)
 				benchmarking_option_set = true;
 				verbose_errors = true;
 				break;
+			case 16:				/* no-functions */
+				initialization_option_set = true;
+				no_functions = true;
+				break;
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -7011,6 +7092,15 @@ main(int argc, char **argv)
 			char	   *p;
 
 			while ((p = strchr(initialize_steps, 'v')) != NULL)
+				*p = ' ';
+		}
+
+		if (no_functions)
+		{
+			/* Remove create function step in initialize_steps */
+			char	   *p;
+
+			while ((p = strchr(initialize_steps, 'y')) != NULL)
 				*p = ' ';
 		}
 

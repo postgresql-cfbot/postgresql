@@ -41,6 +41,7 @@
  *			or a ! if session is not connected to a database;
  *		in prompt2 -, *, ', or ";
  *		in prompt3 nothing
+ * %T - time in HH24:MI:SS format
  * %x - transaction status: empty, *, !, ? (unknown or no connection)
  * %l - The line number inside the current statement, starting from 1.
  * %? - the error code of the last query (not yet implemented)
@@ -223,7 +224,14 @@ get_prompt(promptStatus_t status, ConditionalStack cstack)
 							break;
 					}
 					break;
-
+					/* output HH24:MI:SS */
+				case 'T':
+					{
+						time_t current_time = time(NULL);
+						struct tm *tm_info = localtime(&current_time);
+						sprintf(buf, "%02d:%02d:%02d", tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec);
+					}
+					break;
 				case 'x':
 					if (!pset.db)
 						buf[0] = '?';

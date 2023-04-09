@@ -1,0 +1,5 @@
+# dsa_test extension
+comment = 'Tests for DSA'
+default_version = '1.0'
+module_pathname = '$libdir/test_dsa'
+relocatable = true

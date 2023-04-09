@@ -3740,8 +3740,12 @@ symbol
 tablespaceinfo
 teSection
 temp_tablespaces_extra
+test_hello
+test_mode
+test_parameters
 test_re_flags
 test_regex_ctx
+test_result
 test_shm_mq_header
 test_spec
 test_start_function

@@ -23,10 +23,19 @@ env:
   CHECKFLAGS: -Otarget
   PROVE_FLAGS: --timer
   MTEST_ARGS: --print-errorlogs --no-rebuild -C build
+  PG_FAILED_TESTDIR: ${CIRRUS_WORKING_DIR}/failed.build
   PGCTLTIMEOUT: 120 # avoids spurious failures during parallel tests
   TEMP_CONFIG: ${CIRRUS_WORKING_DIR}/src/tools/ci/pg_ci_base.conf
   PG_TEST_EXTRA: kerberos ldap ssl load_balance
 
+  # The commit that this branch is rebased on.  There's no easy way to find this.
+  # This does the right thing for cfbot, which always squishes all patches into a single commit.
+  # And does the right thing for any 1-patch commits.
+  # Patch series manually submitted to cirrus would benefit from setting this to the
+  # number of patches in the series (or directly to the commit the series was rebased on).
+  #BASE_COMMIT: HEAD~1
+  # For demo purposes:
+  BASE_COMMIT: HEAD~22
 
 # What files to preserve in case tests fail
 on_failure_ac: &on_failure_ac
@@ -40,9 +49,9 @@ on_failure_ac: &on_failure_ac
 on_failure_meson: &on_failure_meson
   testrun_artifacts:
     paths:
-      - "build*/testrun/**/*.log"
-      - "build*/testrun/**/*.diffs"
-      - "build*/testrun/**/regress_log_*"
+      - "failed.build*/**/*.log"
+      - "failed.build*/**/*.diffs"
+      - "failed.build*/**/regress_log_*"
     type: text/plain
 
   # In theory it'd be nice to upload the junit files meson generates, so that
@@ -131,15 +140,14 @@ task:
   name: FreeBSD - 13 - Meson
 
   env:
-    # FreeBSD on GCP is slow when running with larger number of CPUS /
-    # jobs. Using one more job than cpus seems to work best.
-    CPUS: 2
-    BUILD_JOBS: 3
-    TEST_JOBS: 3
+    CPUS: 4
+    BUILD_JOBS: 4
+    TEST_JOBS: 6
 
     CCACHE_DIR: /tmp/ccache_dir
-    CPPFLAGS: -DRELCACHE_FORCE_RELEASE -DCOPY_PARSE_PLAN_TREES -DWRITE_READ_PARSE_PLAN_TREES -DRAW_EXPRESSION_COVERAGE_TEST
+    CPPFLAGS: -DRELCACHE_FORCE_RELEASE -DCOPY_PARSE_PLAN_TREES -DWRITE_READ_PARSE_PLAN_TREES -DRAW_EXPRESSION_COVERAGE_TEST -DENFORCE_REGRESSION_TEST_NAME_RESTRICTIONS
     CFLAGS: -Og -ggdb
+    PG_TEST_PG_UPGRADE_MODE: --link
 
   depends_on: SanityCheck
   only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*freebsd.*'
@@ -157,11 +165,10 @@ task:
     uname -a
     ulimit -a -H && ulimit -a -S
     export
+    git diff --name-only "$BASE_COMMIT"
 
   ccache_cache:
     folder: $CCACHE_DIR
-  # Work around performance issues due to 32KB block size
-  repartition_script: src/tools/ci/gcp_freebsd_repartition.sh
   create_user_script: |
     pw useradd postgres
     chown -R postgres:postgres .
@@ -172,15 +179,15 @@ task:
     chown root:postgres /tmp/cores
     sysctl kern.corefile='/tmp/cores/%N.%P.core'
   setup_additional_packages_script: |
-    #pkg install -y ...
+    pkg install -y lcov
 
   # NB: Intentionally build without -Dllvm. The freebsd image size is already
-  # large enough to make VM startup slow, and even without llvm freebsd
-  # already takes longer than other platforms except for windows.
+  # large enough to make VM startup slow
   configure_script: |
     su postgres <<-EOF
       meson setup \
         --buildtype=debug \
+        -Db_coverage=true \
         -Dcassert=true -Duuid=bsd -Dtcl_version=tcl86 -Ddtrace=auto \
         -DPG_TEST_EXTRA="$PG_TEST_EXTRA" \
         -Dextra_lib_dirs=/usr/local/lib -Dextra_include_dirs=/usr/local/include/ \
@@ -191,9 +198,17 @@ task:
 
   test_world_script: |
     su postgres <<-EOF
+      set -e
       ulimit -c unlimited
+      # Write initial coverage files before running tests:
+      time ./src/tools/ci/code-coverage-report "$BASE_COMMIT" ./build ./coverage "--initial"
       meson test $MTEST_ARGS --num-processes ${TEST_JOBS}
+      # Create coverage report for files changed since the base commit.
+      time ./src/tools/ci/code-coverage-report "$BASE_COMMIT" ./build ./coverage
     EOF
+
+  coverage_artifacts:
+    path: 'coverage/**'
 
   # test runningcheck, freebsd chosen because it's currently fast enough
   test_running_script: |
@@ -202,10 +217,10 @@ task:
       ulimit -c unlimited
       meson test $MTEST_ARGS --quiet --suite setup
       export LD_LIBRARY_PATH="$(pwd)/build/tmp_install/usr/local/pgsql/lib/:$LD_LIBRARY_PATH"
-      mkdir -p build/testrun
+      mkdir -p build/testrun ${PG_FAILED_TESTDIR}
       build/tmp_install/usr/local/pgsql/bin/initdb -N build/runningcheck --no-instructions -A trust
       echo "include '$(pwd)/src/tools/ci/pg_ci_base.conf'" >> build/runningcheck/postgresql.conf
-      build/tmp_install/usr/local/pgsql/bin/pg_ctl -c -o '-c fsync=off' -D build/runningcheck -l build/testrun/runningcheck.log start
+      build/tmp_install/usr/local/pgsql/bin/pg_ctl -c -o '-c fsync=off' -D build/runningcheck -l ${PG_FAILED_TESTDIR}/runningcheck.log start
       meson test $MTEST_ARGS --num-processes ${TEST_JOBS} --setup running
       build/tmp_install/usr/local/pgsql/bin/pg_ctl -D build/runningcheck stop
     EOF
@@ -406,7 +421,7 @@ task:
       test_world_32_script: |
         su postgres <<-EOF
           ulimit -c unlimited
-          PYTHONCOERCECLOCALE=0 LANG=C meson test $MTEST_ARGS -C build-32 --num-processes ${TEST_JOBS}
+          PYTHONCOERCECLOCALE=0 LANG=C PG_FAILED_TESTDIR=`pwd`/failed.build-32 meson test $MTEST_ARGS -C build-32 --num-processes ${TEST_JOBS}
         EOF
 
       on_failure:
@@ -437,6 +452,7 @@ task:
     CPPFLAGS: -DRANDOMIZE_ALLOCATED_MEMORY
     CFLAGS: -Og -ggdb
     CXXFLAGS: -Og -ggdb
+    PG_TEST_PG_UPGRADE_MODE: --clone
 
   depends_on: SanityCheck
   only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*(macos|darwin|osx).*'
@@ -597,11 +613,20 @@ task:
 
   build_script: |
     vcvarsall x64
-    ninja -C build
+    ninja -C build |tee build.txt
+    REM Since pipes lose the exit status of the preceding command, rerun the compilation
+    REM without the pipe, exiting now if it fails, to avoid trying to run checks
+    ninja -C build > nul
 
   check_world_script: |
     vcvarsall x64
     meson test %MTEST_ARGS% --num-processes %TEST_JOBS%
+
+  # This should be last, so check_world is run even if there are warnings
+  always:
+    compiler_warnings_script:
+      # this avoids using metachars which would be interpretted by the windows shell
+      - sh -c 'if grep ": warning " build.txt; then exit 1; fi; exit 0'
 
   on_failure:
     <<: *on_failure_meson
@@ -682,7 +707,7 @@ task:
   # use always: to continue after failures. Task that did not run count as a
   # success, so we need to recheck SanityChecks's condition here ...
   depends_on: SanityCheck
-  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*'
+  # only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*'
 
   env:
     CPUS: 4
@@ -708,6 +733,7 @@ task:
     gcc -v
     clang -v
     export
+    git diff --name-only "$BASE_COMMIT"
 
   ccache_cache:
     folder: $CCACHE_DIR
@@ -782,7 +808,7 @@ task:
       time make -s -j${BUILD_JOBS} world-bin
 
   ###
-  # Verify docs can be built
+  # Verify docs can be built, and upload changed docs as artifacts
   ###
   # XXX: Only do this if there have been changes in doc/ since last build
   always:
@@ -794,6 +820,19 @@ task:
         CLANG="ccache clang"
       make -s -j${BUILD_JOBS} clean
       time make -s -j${BUILD_JOBS} -C doc
+      cp -r doc new-docs
+
+      # Re-build HTML docs from the base commit.
+      git checkout "$BASE_COMMIT" -- doc
+      make -s -C doc clean
+      time make -s -C doc html
+      cp -r doc old-docs
+
+    copy_changed_docs_script:
+      - src/tools/ci/copy-changed-docs "old-docs" "new-docs" "html_docs"
+
+    html_docs_artifacts:
+      paths: ['html_docs/*.html', 'html_docs/*.png', 'html_docs/*.css']
 
   ###
   # Verify headerscheck / cpluspluscheck succeed

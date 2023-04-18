@@ -19,15 +19,6 @@ option('segsize_blocks', type : 'integer', value: 0,
   description : '''Segment size, in blocks''')
 
 
-# Miscellaneous options
-
-option('krb_srvnam', type : 'string', value : 'postgres',
-  description : '''Default Kerberos service principal for GSSAPI''')
-
-option('system_tzdata', type: 'string', value: '',
-  description: 'use system time zone data in specified directory')
-
-
 # Defaults
 
 option('pgport', type : 'integer', value : 5432,
@@ -69,6 +60,9 @@ option('darwin_sysroot', type : 'string', value: '',
 
 option('rpath', type : 'boolean', value: true,
   description: 'whether to embed shared library search path in executables')
+
+option('system_tzdata', type: 'string', value: '',
+  description: 'use system time zone data in specified directory')
 
 
 # External dependencies
@@ -114,6 +108,9 @@ option('llvm', type : 'feature', value: 'disabled',
 
 option('lz4', type : 'feature', value: 'auto',
   description: 'LZ4 support')
+
+option('krb_srvnam', type : 'string', value : 'postgres',
+  description : '''Default Kerberos service principal for GSSAPI''')
 
 option('nls', type: 'feature', value: 'auto',
   description: 'native language support')

@@ -86,6 +86,24 @@ ok( pump_until(
 $killme_stdout = '';
 $killme_stderr = '';
 
+#create a table that should *not* survive, but has rows.
+#the table's contents is requried to cause access to the storage file
+#after a restart.
+$killme_stdin .= q[
+CREATE TABLE not_alive AS SELECT 1 as a;
+SELECT pg_relation_filepath('not_alive');
+];
+ok( pump_until(
+		$killme,         $psql_timeout,
+		\$killme_stdout, qr/[[:alnum:]\/]+[\r\n]$/m),
+	'added in-creation table');
+my $not_alive_relfile = $node->data_dir . "/" . $killme_stdout;
+chomp($not_alive_relfile);
+$killme_stdout = '';
+$killme_stderr = '';
+
+# The relfile must be exists now
+ok ( -e $not_alive_relfile, 'relfile for in-creation table');
 
 # Start longrunning query in second session; its failure will signal that
 # crash-restart has occurred.  The initial wait for the trivial select is to
@@ -144,6 +162,9 @@ $killme->run();
 ($monitor_stdin, $monitor_stdout, $monitor_stderr) = ('', '', '');
 $monitor->run();
 
+# The relfile must have been removed due to the recent restart.
+ok ( ! -e $not_alive_relfile,
+	 'relfile for the in-creation table should be removed after restart');
 
 # Acquire pid of new backend
 $killme_stdin .= q[

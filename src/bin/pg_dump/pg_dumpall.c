@@ -1044,6 +1044,9 @@ dumpRoleMembership(PGconn *conn)
 			 * graph whose vertices are grants and whose edges point from
 			 * grantors to members should be connected and acyclic. If we fail
 			 * to make progress, either we or the server have messed up.
+			 * Initially $prev_remaining is 0, while initially $remaining can't
+			 * be 0. If a subsequent loop produces no new results the loop
+			 * aborts here.
 			 */
 			if (remaining == prev_remaining)
 			{
@@ -1052,6 +1055,7 @@ dumpRoleMembership(PGconn *conn)
 				PQfinish(conn);
 				exit_nicely(1);
 			}
+			prev_remaining = remaining;
 
 			/* Make one pass over the grants for this role. */
 			for (i = start; i < end; ++i)

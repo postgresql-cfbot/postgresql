@@ -705,7 +705,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	DATA_P DATABASE DAY_P DEALLOCATE DEC DECIMAL_P DECLARE DEFAULT DEFAULTS
 	DEFERRABLE DEFERRED DEFINER DELETE_P DELIMITER DELIMITERS DEPENDS DEPTH DESC
 	DETACH DICTIONARY DISABLE_P DISCARD DISTINCT DO DOCUMENT_P DOMAIN_P
-	DOUBLE_P DROP
+	DOUBLE_P DROP DYNAMIC
 
 	EACH ELSE ENABLE_P ENCODING ENCRYPTED END_P ENUM_P ESCAPE EVENT EXCEPT
 	EXCLUDE EXCLUDING EXCLUSIVE EXECUTE EXISTS EXPLAIN EXPRESSION
@@ -752,7 +752,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	RANGE READ REAL REASSIGN RECHECK RECURSIVE REF_P REFERENCES REFERENCING
 	REFRESH REINDEX RELATIVE_P RELEASE RENAME REPEATABLE REPLACE REPLICA
-	RESET RESTART RESTRICT RETURN RETURNING RETURNS REVOKE RIGHT ROLE ROLLBACK ROLLUP
+	RESET RESTART RESTRICT RESULT RETURN RETURNING RETURNS REVOKE RIGHT ROLE ROLLBACK ROLLUP
 	ROUTINE ROUTINES ROW ROWS RULE
 
 	SAVEPOINT SCALAR SCHEMA SCHEMAS SCROLL SEARCH SECOND_P SECURITY SELECT
@@ -8557,6 +8557,10 @@ common_func_opt_item:
 				{
 					$$ = makeDefElem("parallel", (Node *) makeString($2), @1);
 				}
+			| DYNAMIC RESULT SETS Iconst
+				{
+					$$ = makeDefElem("dynamic_result_sets", (Node *)makeInteger($4), @1);
+				}
 		;
 
 createfunc_opt_item:
@@ -12447,6 +12451,12 @@ cursor_options: /*EMPTY*/					{ $$ = 0; }
 opt_hold: /* EMPTY */						{ $$ = 0; }
 			| WITH HOLD						{ $$ = CURSOR_OPT_HOLD; }
 			| WITHOUT HOLD					{ $$ = 0; }
+			| WITH HOLD WITH RETURN			{ $$ = CURSOR_OPT_HOLD | CURSOR_OPT_RETURN; }
+			| WITHOUT HOLD WITH RETURN		{ $$ = CURSOR_OPT_RETURN; }
+			| WITH HOLD WITHOUT RETURN		{ $$ = CURSOR_OPT_HOLD; }
+			| WITHOUT HOLD WITHOUT RETURN	{ $$ = 0; }
+			| WITH RETURN					{ $$ = CURSOR_OPT_RETURN; }
+			| WITHOUT RETURN				{ $$ = 0; }
 		;
 
 /*****************************************************************************
@@ -17076,6 +17086,7 @@ unreserved_keyword:
 			| DOMAIN_P
 			| DOUBLE_P
 			| DROP
+			| DYNAMIC
 			| EACH
 			| ENABLE_P
 			| ENCODING
@@ -17225,6 +17236,7 @@ unreserved_keyword:
 			| RESET
 			| RESTART
 			| RESTRICT
+			| RESULT
 			| RETURN
 			| RETURNS
 			| REVOKE
@@ -17631,6 +17643,7 @@ bare_label_keyword:
 			| DOMAIN_P
 			| DOUBLE_P
 			| DROP
+			| DYNAMIC
 			| EACH
 			| ELSE
 			| ENABLE_P
@@ -17826,6 +17839,7 @@ bare_label_keyword:
 			| RESET
 			| RESTART
 			| RESTRICT
+			| RESULT
 			| RETURN
 			| RETURNS
 			| REVOKE

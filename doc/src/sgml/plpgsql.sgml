@@ -3134,7 +3134,7 @@ CONTEXT:  PL/pgSQL function outer_func() line 3 at RETURN
      Another way is to use the cursor declaration syntax,
      which in general is:
 <synopsis>
-<replaceable>name</replaceable> <optional> <optional> NO </optional> SCROLL </optional> CURSOR <optional> ( <replaceable>arguments</replaceable> ) </optional> FOR <replaceable>query</replaceable>;
+<replaceable>name</replaceable> <optional> <optional> NO </optional> SCROLL </optional> CURSOR <optional> <optional> WITH RETURN </optional> ( <replaceable>arguments</replaceable> ) </optional> FOR <replaceable>query</replaceable>;
 </synopsis>
      (<literal>FOR</literal> can be replaced by <literal>IS</literal> for
      <productname>Oracle</productname> compatibility.)
@@ -3142,6 +3142,10 @@ CONTEXT:  PL/pgSQL function outer_func() line 3 at RETURN
      scrolling backward; if <literal>NO SCROLL</literal> is specified, backward
      fetches will be rejected; if neither specification appears, it is
      query-dependent whether backward fetches will be allowed.
+     If <literal>WITH RETURN</literal> is specified, the results of the
+     cursor, after it is opened, will be returned as a dynamic result set; see
+     <xref linkend="sql-declare"/> for details.  (<literal>WITHOUT
+     RETURN</literal> can also be specified but has no effect.)
      <replaceable>arguments</replaceable>, if specified, is a
      comma-separated list of pairs <literal><replaceable>name</replaceable>
      <replaceable>datatype</replaceable></literal> that define names to be
@@ -3221,7 +3225,7 @@ DECLARE
      <title><command>OPEN FOR</command> <replaceable>query</replaceable></title>
 
 <synopsis>
-OPEN <replaceable>unbound_cursorvar</replaceable> <optional> <optional> NO </optional> SCROLL </optional> FOR <replaceable>query</replaceable>;
+OPEN <replaceable>unbound_cursorvar</replaceable> <optional> <optional> NO </optional> SCROLL </optional> <optional> WITH RETURN </optional> FOR <replaceable>query</replaceable>;
 </synopsis>
 
        <para>
@@ -3239,8 +3243,9 @@ OPEN <replaceable>unbound_cursorvar</replaceable> <optional> <optional> NO </opt
         substituted is the one it has at the time of the <command>OPEN</command>;
         subsequent changes to the variable will not affect the cursor's
         behavior.
-        The <literal>SCROLL</literal> and <literal>NO SCROLL</literal>
-        options have the same meanings as for a bound cursor.
+        The options <literal>SCROLL</literal>, <literal>NO SCROLL</literal>,
+        and <literal>WITH RETURN</literal> have the same meanings as for a
+        bound cursor.
        </para>
 
        <para>
@@ -3618,6 +3623,20 @@ FETCH ALL FROM b;
 COMMIT;
 </programlisting>
        </para>
+
+       <note>
+        <para>
+         Returning a cursor from a function as described here is a separate
+         mechanism from declaring a cursor <literal>WITH RETURN</literal>,
+         which automatically produces a result set for the client if the
+         cursor is left open when returning from the procedure.  Both
+         mechanisms can be used to achieve similar effects.  The differences
+         are mainly how the client application prefers to manage the cursors.
+         Furthermore, other SQL implementations have other programming models
+         that might map more easily to one or the other mechanism when doing a
+         migration.
+        </para>
+       </note>
      </sect3>
    </sect2>
 

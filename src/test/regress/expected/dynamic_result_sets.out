@@ -1,0 +1,152 @@
+CREATE TABLE drs_test1 (a int);
+INSERT INTO drs_test1 VALUES (1), (2), (3);
+CREATE TABLE drs_test2 (x text, y text);
+INSERT INTO drs_test2 VALUES ('abc', 'def'), ('foo', 'bar');
+-- return a couple of result sets from a procedure
+CREATE PROCEDURE pdrstest1()
+LANGUAGE SQL
+DYNAMIC RESULT SETS 2
+AS $$
+DECLARE c1 CURSOR WITH RETURN FOR SELECT * FROM drs_test1;
+DECLARE c2 CURSOR WITH RETURN FOR SELECT * FROM drs_test2;
+$$;
+CALL pdrstest1();
+ a 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+  x  |  y  
+-----+-----
+ abc | def
+ foo | bar
+(2 rows)
+
+CALL pdrstest1() \bind \g
+ a 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+server sent data ("D" message) without prior row description ("T" message)
+-- return too many result sets from a procedure
+CREATE PROCEDURE pdrstest2()
+LANGUAGE SQL
+DYNAMIC RESULT SETS 1
+AS $$
+DECLARE c1 CURSOR WITH RETURN FOR SELECT * FROM drs_test1;
+DECLARE c2 CURSOR WITH RETURN FOR SELECT * FROM drs_test2;
+$$;
+CALL pdrstest2();
+WARNING:  attempt to return too many result sets
+ a 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+  x  |  y  
+-----+-----
+ abc | def
+ foo | bar
+(2 rows)
+
+CALL pdrstest2() \bind \g
+WARNING:  attempt to return too many result sets
+ a 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+server sent data ("D" message) without prior row description ("T" message)
+-- nested calls
+CREATE PROCEDURE pdrstest3()
+LANGUAGE SQL
+DYNAMIC RESULT SETS 1
+AS $$
+CALL pdrstest1();
+DECLARE c3 CURSOR WITH RETURN FOR SELECT * FROM drs_test1 WHERE a < 2;
+$$;
+-- (The result sets of the called procedure are not returned.)
+CALL pdrstest3();
+ a 
+---
+ 1
+(1 row)
+
+CALL pdrstest3() \bind \g
+ a 
+---
+ 1
+(1 row)
+
+-- both out parameter and result sets
+CREATE PROCEDURE pdrstest4(INOUT a text)
+LANGUAGE SQL
+DYNAMIC RESULT SETS 1
+AS $$
+DECLARE c4 CURSOR WITH RETURN FOR SELECT * FROM drs_test1;
+SELECT a || a;
+$$;
+CALL pdrstest4('x');
+ a  
+----
+ xx
+(1 row)
+
+ a 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+CALL pdrstest4($1) \bind 'y' \g
+ a  
+----
+ yy
+(1 row)
+
+server sent data ("D" message) without prior row description ("T" message)
+-- test the nested error handling
+CREATE TABLE drs_test_dummy (a int);
+CREATE PROCEDURE pdrstest5a()
+LANGUAGE SQL
+DYNAMIC RESULT SETS 1
+AS $$
+DECLARE c5a CURSOR WITH RETURN FOR SELECT * FROM drs_test_dummy;
+$$;
+CREATE PROCEDURE pdrstest5b()
+LANGUAGE SQL
+DYNAMIC RESULT SETS 1
+AS $$
+CALL pdrstest5a();
+$$;
+DROP TABLE drs_test_dummy;
+CALL pdrstest5b();
+ERROR:  relation "drs_test_dummy" does not exist
+LINE 2: DECLARE c5a CURSOR WITH RETURN FOR SELECT * FROM drs_test_du...
+                                                         ^
+QUERY:  
+DECLARE c5a CURSOR WITH RETURN FOR SELECT * FROM drs_test_dummy;
+
+CONTEXT:  SQL function "pdrstest5a" during startup
+SQL function "pdrstest5b" statement 1
+CALL pdrstest5b() \bind \g
+ERROR:  relation "drs_test_dummy" does not exist
+LINE 2: DECLARE c5a CURSOR WITH RETURN FOR SELECT * FROM drs_test_du...
+                                                         ^
+QUERY:  
+DECLARE c5a CURSOR WITH RETURN FOR SELECT * FROM drs_test_dummy;
+
+CONTEXT:  SQL function "pdrstest5a" during startup
+SQL function "pdrstest5b" statement 1
+-- cleanup
+DROP TABLE drs_test1, drs_test2;

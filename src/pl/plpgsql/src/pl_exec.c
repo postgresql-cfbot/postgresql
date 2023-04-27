@@ -4797,6 +4797,12 @@ exec_stmt_open(PLpgSQL_execstate *estate, PLpgSQL_stmt_open *stmt)
 		elog(ERROR, "could not open cursor: %s",
 			 SPI_result_code_string(SPI_result));
 
+	if (portal->cursorOptions & CURSOR_OPT_RETURN)
+	{
+		portal->procId = estate->func->fn_oid;
+		portal->createCid = GetCurrentCommandId(true);
+	}
+
 	/*
 	 * If cursor variable was NULL, store the generated portal name in it,
 	 * after verifying it's okay to assign to.

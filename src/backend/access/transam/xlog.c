@@ -7463,6 +7463,15 @@ KeepLogSeg(XLogRecPtr recptr, XLogSegNo *logSegNo)
 	{
 		XLByteToSeg(keep, segno, wal_segment_size);
 
+		/*
+		 * It's possible for the slot minimum LSN to be greater than the recptr
+		 * given to the function.  This means that the segno we just calculated
+		 * might be greater than currSegno, which would cause some subsequent
+		 * calculations to underflow.  To avoid this, cap segno at currSegNo.
+		 */
+		if (segno > currSegNo)
+			segno = currSegNo;
+
 		/* Cap by max_slot_wal_keep_size ... */
 		if (max_slot_wal_keep_size_mb >= 0)
 		{

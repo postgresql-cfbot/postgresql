@@ -23,6 +23,7 @@
 
 #include "nodes/pg_list.h"
 #include "storage/lock.h"
+#include "utils/snapshot.h"
 
 /* ----------------
  *		pg_inherits definition.  cpp turns this into
@@ -49,8 +50,10 @@ DECLARE_INDEX(pg_inherits_parent_index, 2187, InheritsParentIndexId, on pg_inher
 
 
 extern List *find_inheritance_children(Oid parentrelId, LOCKMODE lockmode);
-extern List *find_inheritance_children_extended(Oid parentrelId, bool omit_detached,
-												LOCKMODE lockmode, bool *detached_exist, TransactionId *detached_xmin);
+extern List *find_inheritance_children_extended(Oid parentrelId,
+												Snapshot omit_detached_snapshot,
+												LOCKMODE lockmode, bool *detached_exist,
+												TransactionId *detached_xmin);
 
 extern List *find_all_inheritors(Oid parentrelId, LOCKMODE lockmode,
 								 List **numparents);

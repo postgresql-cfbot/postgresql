@@ -24,6 +24,7 @@
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
 #include "utils/timestamp.h"
+#include "lib/ilist.h"
 
 /* struct PGPROC is declared in proc.h, but must forward-reference it */
 typedef struct PGPROC PGPROC;
@@ -349,10 +350,6 @@ typedef struct LOCK
  * Otherwise, proclock objects whose holdMasks are zero are recycled
  * as soon as convenient.
  *
- * releaseMask is workspace for LockReleaseAll(): it shows the locks due
- * to be released during the current call.  This must only be examined or
- * set by the backend owning the PROCLOCK.
- *
  * Each PROCLOCK object is linked into lists for both the associated LOCK
  * object and the owning PGPROC object.  Note that the PROCLOCK is entered
  * into these lists as soon as it is created, even if no lock has yet been
@@ -374,7 +371,6 @@ typedef struct PROCLOCK
 	/* data */
 	PGPROC	   *groupLeader;	/* proc's lock group leader, or proc itself */
 	LOCKMASK	holdMask;		/* bitmask for lock types currently held */
-	LOCKMASK	releaseMask;	/* bitmask for lock types to be released */
 	dlist_node	lockLink;		/* list link in LOCK's list of proclocks */
 	dlist_node	procLink;		/* list link in PGPROC's list of proclocks */
 } PROCLOCK;
@@ -420,6 +416,13 @@ typedef struct LOCALLOCKOWNER
 	 * Must use a forward struct reference to avoid circularity.
 	 */
 	struct ResourceOwnerData *owner;
+
+	dlist_node	resowner_node;	/* dlist link for ResourceOwner.locks */
+
+	dlist_node	locallock_node;	/* dlist link for LOCALLOCK.locallockowners */
+
+	struct LOCALLOCK *locallock;	/* pointer to the corresponding LOCALLOCK */
+
 	int64		nLocks;			/* # of times held by this owner */
 } LOCALLOCKOWNER;
 
@@ -433,9 +436,9 @@ typedef struct LOCALLOCK
 	LOCK	   *lock;			/* associated LOCK object, if any */
 	PROCLOCK   *proclock;		/* associated PROCLOCK object, if any */
 	int64		nLocks;			/* total number of times lock is held */
-	int			numLockOwners;	/* # of relevant ResourceOwners */
-	int			maxLockOwners;	/* allocated size of array */
-	LOCALLOCKOWNER *lockOwners; /* dynamically resizable array */
+
+	dlist_head	locallockowners;	/* dlist of LOCALLOCKOWNER */
+
 	bool		holdsStrongLockCount;	/* bumped FastPathStrongRelationLocks */
 	bool		lockCleared;	/* we read all sinval msgs for lock */
 } LOCALLOCK;
@@ -564,10 +567,16 @@ extern void AbortStrongLockAcquire(void);
 extern void MarkLockClear(LOCALLOCK *locallock);
 extern bool LockRelease(const LOCKTAG *locktag,
 						LOCKMODE lockmode, bool sessionLock);
-extern void LockReleaseAll(LOCKMETHODID lockmethodid, bool allLocks);
+
+#ifdef USE_ASSERT_CHECKING
+extern void LockAssertNoneHeld(bool isCommit);
+#endif
+
 extern void LockReleaseSession(LOCKMETHODID lockmethodid);
-extern void LockReleaseCurrentOwner(LOCALLOCK **locallocks, int nlocks);
-extern void LockReassignCurrentOwner(LOCALLOCK **locallocks, int nlocks);
+struct ResourceOwnerData;
+extern void LockReleaseCurrentOwner(struct ResourceOwnerData *owner,
+									LOCALLOCKOWNER *locallockowner);
+extern void LockReassignCurrentOwner(LOCALLOCKOWNER *locallockowner);
 extern bool LockHeldByMe(const LOCKTAG *locktag, LOCKMODE lockmode);
 #ifdef USE_ASSERT_CHECKING
 extern HTAB *GetLockMethodLocalHash(void);

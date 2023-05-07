@@ -292,6 +292,7 @@ create_toast_table(Relation rel, Oid toastOid, Oid toastIndexOid,
 	indexInfo->ii_NumIndexKeyAttrs = 2;
 	indexInfo->ii_IndexAttrNumbers[0] = 1;
 	indexInfo->ii_IndexAttrNumbers[1] = 2;
+	indexInfo->ii_Period = NULL;
 	indexInfo->ii_Expressions = NIL;
 	indexInfo->ii_ExpressionsState = NIL;
 	indexInfo->ii_Predicate = NIL;

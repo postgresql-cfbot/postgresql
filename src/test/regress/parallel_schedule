@@ -28,7 +28,7 @@ test: strings md5 numerology point lseg line box path polygon circle date time t
 # geometry depends on point, lseg, line, box, path, polygon, circle
 # horology depends on date, time, timetz, timestamp, timestamptz, interval
 # ----------
-test: geometry horology tstypes regex type_sanity opr_sanity misc_sanity comments expressions unicode xid mvcc
+test: geometry horology tstypes regex type_sanity opr_sanity misc_sanity comments expressions unicode xid mvcc without_overlaps
 
 # ----------
 # Load huge amounts of data
@@ -48,7 +48,7 @@ test: create_index create_index_spgist create_view index_including index_includi
 # ----------
 # Another group of parallel tests
 # ----------
-test: create_aggregate create_function_sql create_cast constraints triggers select inherit typed_table vacuum drop_if_exists updatable_views roleattributes create_am hash_func errors infinite_recurse
+test: create_aggregate create_function_sql create_cast constraints triggers select inherit typed_table periods vacuum drop_if_exists updatable_views roleattributes create_am hash_func errors infinite_recurse for_portion_of
 
 # ----------
 # sanity_check does a vacuum, affecting the sort order of SELECT *

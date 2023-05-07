@@ -37,6 +37,7 @@
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_operator.h"
+#include "catalog/pg_period.h"
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_type.h"
 #include "commands/comment.h"
@@ -80,6 +81,7 @@ typedef struct
 	bool		isforeign;		/* true if CREATE/ALTER FOREIGN TABLE */
 	bool		isalter;		/* true if altering existing table */
 	List	   *columns;		/* ColumnDef items */
+	List	   *periods;		/* PeriodDef items */
 	List	   *ckconstraints;	/* CHECK constraints */
 	List	   *fkconstraints;	/* FOREIGN KEY constraints */
 	List	   *ixconstraints;	/* index-creating constraints */
@@ -110,6 +112,8 @@ typedef struct
 
 static void transformColumnDefinition(CreateStmtContext *cxt,
 									  ColumnDef *column);
+static void transformTablePeriod(CreateStmtContext *cxt,
+								 PeriodDef *period);
 static void transformTableConstraint(CreateStmtContext *cxt,
 									 Constraint *constraint);
 static void transformTableLikeClause(CreateStmtContext *cxt,
@@ -123,6 +127,8 @@ static List *get_opclass(Oid opclass, Oid actual_datatype);
 static void transformIndexConstraints(CreateStmtContext *cxt);
 static IndexStmt *transformIndexConstraint(Constraint *constraint,
 										   CreateStmtContext *cxt);
+static bool findNewOrOldColumn(CreateStmtContext *cxt, char *colname, char **typname,
+							   Oid *typid);
 static void transformExtendedStatistics(CreateStmtContext *cxt);
 static void transformFKConstraints(CreateStmtContext *cxt,
 								   bool skipValidation,
@@ -239,6 +245,7 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	cxt.inhRelations = stmt->inhRelations;
 	cxt.isalter = false;
 	cxt.columns = NIL;
+	cxt.periods = NIL;
 	cxt.ckconstraints = NIL;
 	cxt.fkconstraints = NIL;
 	cxt.ixconstraints = NIL;
@@ -276,6 +283,10 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 		{
 			case T_ColumnDef:
 				transformColumnDefinition(&cxt, (ColumnDef *) element);
+				break;
+
+			case T_PeriodDef:
+				transformTablePeriod(&cxt, (PeriodDef *) element);
 				break;
 
 			case T_Constraint:
@@ -345,6 +356,7 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	 * Output results.
 	 */
 	stmt->tableElts = cxt.columns;
+	stmt->periods = cxt.periods;
 	stmt->constraints = cxt.ckconstraints;
 
 	result = lappend(cxt.blist, stmt);
@@ -862,6 +874,102 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 
 		cxt->alist = lappend(cxt->alist, stmt);
 	}
+}
+
+void
+transformPeriodOptions(PeriodDef *period)
+{
+	ListCell   *option;
+	DefElem	   *dconstraintname = NULL;
+	DefElem	   *drangetypename = NULL;
+
+	foreach(option, period->options)
+	{
+		DefElem    *defel = (DefElem *) lfirst(option);
+
+		if (strcmp(defel->defname, "check_constraint_name") == 0)
+		{
+			if (dconstraintname)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			dconstraintname = defel;
+		}
+		else if (strcmp(defel->defname, "rangetype") == 0)
+		{
+			if (drangetypename)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			drangetypename = defel;
+		}
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("option \"%s\" not recognized", defel->defname)));
+	}
+
+	if (dconstraintname != NULL)
+		period->constraintname = defGetString(dconstraintname);
+	else
+		period->constraintname = NULL;
+
+	if (drangetypename != NULL)
+		period->rangetypename = defGetString(drangetypename);
+	else
+		period->rangetypename = NULL;
+}
+
+/*
+ * transformTablePeriod
+ *		transform a PeriodDef node within CREATE TABLE or ALTER TABLE
+ */
+static void
+transformTablePeriod(CreateStmtContext *cxt, PeriodDef *period)
+{
+	Oid			coltypid;
+	ColumnDef  *col;
+	ListCell   *columns;
+
+	if (strcmp(period->periodname, "system_time") == 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("PERIOD FOR SYSTEM_TIME is not supported"),
+					 parser_errposition(cxt->pstate,
+										period->location)));
+
+	/*
+	 * Determine the column info and range type so that transformIndexConstraints
+	 * knows how to create PRIMARY KEY/UNIQUE constraints using this PERIOD.
+	 */
+	transformPeriodOptions(period);
+
+	/*
+	 * Find a suitable range type for operations involving this period.
+	 * Use the rangetype option if provided, otherwise try to find a
+	 * non-ambiguous existing type.
+	 */
+	coltypid = InvalidOid;
+
+	/* First find out the type of the period's columns */
+	period->rngtypid = InvalidOid;
+	foreach (columns, cxt->columns)
+	{
+		col = (ColumnDef *) lfirst(columns);
+		if (strcmp(col->colname, period->startcolname) == 0)
+		{
+			coltypid = typenameTypeId(cxt->pstate, col->typeName);
+			break;
+		}
+	}
+	if (coltypid == InvalidOid)
+		ereport(ERROR, (errmsg("column \"%s\" of relation \"%s\" does not exist",
+						period->startcolname, cxt->relation->relname)));
+
+	/* Now make sure it matches rangetypename or we can find a matching range */
+	period->rngtypid = choose_rangetype_for_period(period, coltypid);
+
+	cxt->periods = lappend(cxt->periods, period);
 }
 
 /*
@@ -1537,6 +1645,7 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 	Oid			keycoltype;
 	Datum		datum;
 	bool		isnull;
+	PeriodDef  *period;
 
 	if (constraintOid)
 		*constraintOid = InvalidOid;
@@ -1588,10 +1697,16 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 	index->unique = idxrec->indisunique;
 	index->nulls_not_distinct = idxrec->indnullsnotdistinct;
 	index->primary = idxrec->indisprimary;
+	index->istemporal = idxrec->indisprimary && idxrec->indisexclusion;
 	index->transformed = true;	/* don't need transformIndexStmt */
 	index->concurrent = false;
 	index->if_not_exists = false;
 	index->reset_default_tblspc = false;
+
+	/* Copy the period */
+	period = makeNode(PeriodDef);
+	period->oid = idxrec->indperiod;
+	index->period = period;
 
 	/*
 	 * We don't try to preserve the name of the source index; instead, just
@@ -1637,7 +1752,7 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 				int			nElems;
 				int			i;
 
-				Assert(conrec->contype == CONSTRAINT_EXCLUSION);
+				Assert(conrec->contype == CONSTRAINT_EXCLUSION || conrec->contype == CONSTRAINT_PRIMARY);
 				/* Extract operator OIDs from the pg_constraint tuple */
 				datum = SysCacheGetAttrNotNull(CONSTROID, ht_constr,
 											   Anum_pg_constraint_conexclop);
@@ -2179,6 +2294,7 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 	}
 	index->nulls_not_distinct = constraint->nulls_not_distinct;
 	index->isconstraint = true;
+	index->istemporal = constraint->without_overlaps != NULL;
 	index->deferrable = constraint->deferrable;
 	index->initdeferred = constraint->initdeferred;
 
@@ -2271,6 +2387,11 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 					 errmsg("index \"%s\" is not valid", index_name),
 					 parser_errposition(cxt->pstate, constraint->location)));
 
+		/*
+		 * Today we forbid non-unique indexes, but we could permit GiST
+		 * indexes whose last entry is a range type and use that to create a
+		 * WITHOUT OVERLAPS constraint (i.e. a temporal constraint).
+		 */
 		if (!index_form->indisunique)
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
@@ -2559,6 +2680,152 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 				notnullcmds = lappend(notnullcmds, notnullcmd);
 			}
 		}
+
+		/*
+		 * Anything in without_overlaps should be included,
+		 * but with the overlaps operator (&&) instead of equality.
+		 */
+		if (constraint->without_overlaps != NULL) {
+			char *without_overlaps_str = strVal(constraint->without_overlaps);
+			IndexElem *iparam = makeNode(IndexElem);
+			char   *typname;
+			Oid		typid;
+
+			/*
+			 * Iterate through the table's columns
+			 * (like just a little bit above).
+			 * If we find one whose name is the same as without_overlaps,
+			 * validate that it's a range type.
+			 *
+			 * Otherwise iterate through the table's non-system PERIODs,
+			 * and if we find one then use its start/end columns
+			 * to construct a range expression.
+			 *
+			 * Otherwise report an error.
+			 */
+
+			if (findNewOrOldColumn(cxt, without_overlaps_str, &typname, &typid))
+			{
+				if (type_is_range(typid))
+				{
+					AlterTableCmd *notnullcmd;
+
+					iparam->name = pstrdup(without_overlaps_str);
+					iparam->expr = NULL;
+
+					/*
+					 * Force the column to NOT NULL since it is part of the primary key.
+					 */
+					notnullcmd = makeNode(AlterTableCmd);
+
+					notnullcmd->subtype = AT_SetNotNull;
+					notnullcmd->name = pstrdup(without_overlaps_str);
+					notnullcmds = lappend(notnullcmds, notnullcmd);
+				}
+				else
+					ereport(ERROR,
+							(errcode(ERRCODE_DATATYPE_MISMATCH),
+							 errmsg("column \"%s\" named in WITHOUT OVERLAPS is not a range type",
+									without_overlaps_str)));
+			}
+			else
+			{
+				/* Look for a PERIOD, first newly-defined */
+				char *startcolname = NULL;
+				char *endcolname = NULL;
+				ListCell *periods = NULL;
+				foreach(periods, cxt->periods)
+				{
+					PeriodDef *period = castNode(PeriodDef, lfirst(periods));
+					if (strcmp(period->periodname, without_overlaps_str) == 0)
+					{
+						startcolname = period->startcolname;
+						endcolname = period->endcolname;
+						/* The period has no oid yet, but transformIndexStmt will look it up */
+						index->period = period;
+						index->period->oid = InvalidOid;
+						index->period->periodname = without_overlaps_str;
+						break;
+					}
+				}
+
+				if (startcolname == NULL && cxt->rel)
+				{
+					/* Look for an already-existing PERIOD */
+					// TODO: locking? releasing?
+					HeapTuple perTuple;
+					Oid relid = RelationGetRelid(cxt->rel);
+					perTuple = SearchSysCache2(PERIODNAME,
+							ObjectIdGetDatum(relid),
+							PointerGetDatum(without_overlaps_str));
+					if (HeapTupleIsValid(perTuple))
+					{
+						Form_pg_period per = (Form_pg_period) GETSTRUCT(perTuple);
+						startcolname = get_attname(relid, per->perstart, false);
+						endcolname = get_attname(relid, per->perend, false);
+						index->period = makeNode(PeriodDef);
+						index->period->oid = per->oid;
+						index->period->periodname = without_overlaps_str;
+
+						ReleaseSysCache(perTuple);
+					}
+				}
+				if (startcolname != NULL)
+				{
+					ColumnRef *start, *end;
+					Oid rngtypid;
+					char *range_type_name;
+
+					if (!findNewOrOldColumn(cxt, startcolname, &typname, &typid))
+						elog(ERROR, "Missing startcol %s for period %s",
+							 startcolname, without_overlaps_str);
+					if (!findNewOrOldColumn(cxt, endcolname, &typname, &typid))
+						elog(ERROR, "Missing endcol %s for period %s",
+							 endcolname, without_overlaps_str);
+
+					/* Use the start/end columns */
+
+					start = makeNode(ColumnRef);
+					start->fields = list_make1(makeString(startcolname));
+					start->location = constraint->location;
+
+					end = makeNode(ColumnRef);
+					end->fields = list_make1(makeString(endcolname));
+					end->location = constraint->location;
+
+					rngtypid = get_subtype_range(typid);
+					if (rngtypid == InvalidOid)
+						ereport(ERROR,
+								(errcode(ERRCODE_UNDEFINED_OBJECT),
+								 errmsg("PERIOD \"%s\" cannot be used in a constraint without a corresponding range type",
+										without_overlaps_str)));
+
+					range_type_name = get_typname(rngtypid);
+
+					/* Build a range to represent the PERIOD. */
+					iparam->name = NULL;
+					iparam->expr = (Node *) makeFuncCall(SystemFuncName(range_type_name),
+														 list_make2(start, end),
+														 COERCE_EXPLICIT_CALL,
+														 -1);
+				}
+				else
+					ereport(ERROR,
+							(errcode(ERRCODE_UNDEFINED_COLUMN),
+							 errmsg("range or PERIOD \"%s\" named in WITHOUT OVERLAPS does not exist",
+									without_overlaps_str)));
+			}
+
+			iparam->indexcolname = NULL;
+			iparam->collation = NIL;
+			iparam->opclass = NIL;
+			iparam->ordering = SORTBY_DEFAULT;
+			iparam->nulls_ordering = SORTBY_NULLS_DEFAULT;
+			index->indexParams = lappend(index->indexParams, iparam);
+
+			index->accessMethod = "gist";
+			constraint->access_method = "gist";
+		}
 	}
 
 	/*
@@ -2676,6 +2943,55 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 	}
 
 	return index;
+}
+
+/*
+ * Tries to find a column by name among the existing ones (if it's an ALTER TABLE)
+ * and the new ones. Sets typname and typid if one is found. Returns false if we
+ * couldn't find a match.
+ */
+static bool
+findNewOrOldColumn(CreateStmtContext *cxt, char *colname, char **typname, Oid *typid)
+{
+	/* Check the new columns first in case their type is changing. */
+
+	ColumnDef  *column = NULL;
+	ListCell   *columns;
+
+	foreach(columns, cxt->columns)
+	{
+		column = lfirst_node(ColumnDef, columns);
+		if (strcmp(column->colname, colname) == 0)
+		{
+			*typid = typenameTypeId(NULL, column->typeName);
+			*typname = TypeNameToString(column->typeName);
+			return true;
+		}
+	}
+
+	// TODO: should I consider DROP COLUMN?
+
+	/* Look up columns on existing table. */
+
+	if (cxt->isalter)
+	{
+		Relation rel = cxt->rel;
+		for (int i = 0; i < rel->rd_att->natts; i++)
+		{
+			Form_pg_attribute attr = TupleDescAttr(rel->rd_att, i);
+			const char *attname = NameStr(attr->attname);
+			if (strcmp(attname, colname) == 0)
+			{
+				Type type = typeidType(attr->atttypid);
+				*typid = attr->atttypid;
+				*typname = pstrdup(typeTypeName(type));
+				ReleaseSysCache(type);
+				return true;
+			}
+		}
+	}
+
+	return false;
 }
 
 /*
@@ -2867,6 +3183,10 @@ transformIndexStmt(Oid relid, IndexStmt *stmt, const char *queryString)
 			 */
 		}
 	}
+
+	/* take care of the period */
+	if (stmt->period)
+		stmt->period->oid = get_period_oid(relid, stmt->period->periodname, false);
 
 	/*
 	 * Check that only the base rel is mentioned.  (This should be dead code
@@ -3325,6 +3645,7 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 	cxt.inhRelations = NIL;
 	cxt.isalter = true;
 	cxt.columns = NIL;
+	cxt.periods = NIL;
 	cxt.ckconstraints = NIL;
 	cxt.fkconstraints = NIL;
 	cxt.ixconstraints = NIL;
@@ -3385,6 +3706,12 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 					elog(ERROR, "unrecognized node type: %d",
 						 (int) nodeTag(cmd->def));
 				break;
+
+			case AT_AddPeriod:
+				{
+					newcmds = lappend(newcmds, cmd);
+					break;
+				}
 
 			case AT_AlterColumnType:
 				{

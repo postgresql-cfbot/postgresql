@@ -745,7 +745,7 @@ make_ands_implicit(Expr *clause)
 IndexInfo *
 makeIndexInfo(int numattrs, int numkeyattrs, Oid amoid, List *expressions,
 			  List *predicates, bool unique, bool nulls_not_distinct,
-			  bool isready, bool concurrent, bool summarizing)
+			  bool isready, bool concurrent, bool summarizing, bool temporal)
 {
 	IndexInfo  *n = makeNode(IndexInfo);
 
@@ -755,6 +755,7 @@ makeIndexInfo(int numattrs, int numkeyattrs, Oid amoid, List *expressions,
 	Assert(n->ii_NumIndexKeyAttrs <= n->ii_NumIndexAttrs);
 	n->ii_Unique = unique;
 	n->ii_NullsNotDistinct = nulls_not_distinct;
+	n->ii_Temporal = temporal;
 	n->ii_ReadyForInserts = isready;
 	n->ii_CheckedUnchanged = false;
 	n->ii_IndexUnchanged = false;

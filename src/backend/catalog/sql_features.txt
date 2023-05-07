@@ -449,7 +449,7 @@ T176	Sequence generator support			NO	supported except for NEXT VALUE FOR
 T177	Sequence generator support: simple restart option			YES	
 T178	Identity columns: simple restart option			YES	
 T180	System-versioned tables			NO	
-T181	Application-time period tables			NO	
+T181	Application-time period tables			YES	
 T191	Referential action RESTRICT			YES	
 T200	Trigger DDL			NO	similar but not fully compatible
 T201	Comparable data types for referential constraints			YES	

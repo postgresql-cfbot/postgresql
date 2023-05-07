@@ -31,6 +31,8 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_operator.h"
+#include "catalog/pg_period.h"
+#include "catalog/pg_range.h"
 #include "catalog/pg_type.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
@@ -48,6 +50,7 @@
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/period.h"
 #include "utils/rel.h"
 #include "utils/rls.h"
 #include "utils/ruleutils.h"
@@ -81,6 +84,12 @@
 #define RI_PLAN_SETNULL_ONUPDATE		7
 #define RI_PLAN_SETDEFAULT_ONDELETE		8
 #define RI_PLAN_SETDEFAULT_ONUPDATE		9
+#define TRI_PLAN_CASCADE_ONDELETE		10
+#define TRI_PLAN_CASCADE_ONUPDATE		11
+#define TRI_PLAN_SETNULL_ONUPDATE		12
+// TODO: Need TRI SETNULL_ONDELETE
+#define TRI_PLAN_SETDEFAULT_ONUPDATE	13
+// TODO: Need TRI SETDEFAULT_ONDELETE
 
 #define MAX_QUOTED_NAME_LEN  (NAMEDATALEN*2+3)
 #define MAX_QUOTED_REL_NAME_LEN  (MAX_QUOTED_NAME_LEN*2)
@@ -118,7 +127,18 @@ typedef struct RI_ConstraintInfo
 	int16		confdelsetcols[RI_MAX_NUMKEYS]; /* attnums of cols to set on
 												 * delete */
 	char		confmatchtype;	/* foreign key's match type */
+	bool		temporal;		/* if the foreign key is temporal */
 	int			nkeys;			/* number of key columns */
+	Oid			pk_period;		/* set if the temporal primary key has a period */
+	Oid			fk_period;		/* set if the temporal foreign key has a period */
+	Oid			pk_period_rangetype;		/* set if the temporal primary key has a period */
+	Oid			fk_period_rangetype;		/* set if the temporal foreign key has a period */
+	char		pk_period_rangetype_name[NAMEDATALEN];	/* pk period's rangetype's name */
+	char		fk_period_rangetype_name[NAMEDATALEN];	/* fk period's rangetype's name */
+	Oid			pk_period_collation;		/* pk period's rangetype's collation */
+	Oid			fk_period_collation;		/* fk period's rangetype's collation */
+	int16		pk_period_attnums[2];		/* attnums of the referenced period cols */
+	int16		fk_period_attnums[2];		/* attnums of the referencing period cols */
 	int16		pk_attnums[RI_MAX_NUMKEYS]; /* attnums of referenced cols */
 	int16		fk_attnums[RI_MAX_NUMKEYS]; /* attnums of referencing cols */
 	Oid			pf_eq_oprs[RI_MAX_NUMKEYS]; /* equality operators (PK = FK) */
@@ -187,6 +207,8 @@ static bool ri_Check_Pk_Match(Relation pk_rel, Relation fk_rel,
 							  const RI_ConstraintInfo *riinfo);
 static Datum ri_restrict(TriggerData *trigdata, bool is_no_action);
 static Datum ri_set(TriggerData *trigdata, bool is_set_null, int tgkind);
+static Datum tri_set(TriggerData *trigdata, bool is_set_null, int tgkind);
+static Datum restrict_cascading_range(Datum pkRecordRange, Datum targetedRange);
 static void quoteOneName(char *buffer, const char *name);
 static void quoteRelationName(char *buffer, Relation rel);
 static void ri_GenerateQual(StringInfo buf,
@@ -200,7 +222,7 @@ static int	ri_NullCheck(TupleDesc tupDesc, TupleTableSlot *slot,
 static void ri_BuildQueryKey(RI_QueryKey *key,
 							 const RI_ConstraintInfo *riinfo,
 							 int32 constr_queryno);
-static bool ri_KeysEqual(Relation rel, TupleTableSlot *oldslot, TupleTableSlot *newslot,
+static bool ri_KeysStable(Relation rel, TupleTableSlot *oldslot, TupleTableSlot *newslot,
 						 const RI_ConstraintInfo *riinfo, bool rel_is_pk);
 static bool ri_AttributesEqual(Oid eq_opr, Oid typeid,
 							   Datum oldvalue, Datum newvalue);
@@ -215,6 +237,7 @@ static void ri_CheckTrigger(FunctionCallInfo fcinfo, const char *funcname,
 							int tgkind);
 static const RI_ConstraintInfo *ri_FetchConstraintInfo(Trigger *trigger,
 													   Relation trig_rel, bool rel_is_pk);
+static void DeconstructFkConstraintPeriod(Oid periodid, Oid *rangetypeid, char *rangetypename, Oid *rngcollation, int16 *attnums);
 static const RI_ConstraintInfo *ri_LoadConstraintInfo(Oid constraintOid);
 static Oid	get_ri_constraint_root(Oid constrOid);
 static SPIPlanPtr ri_PlanCheck(const char *querystr, int nargs, Oid *argtypes,
@@ -223,15 +246,71 @@ static bool ri_PerformCheck(const RI_ConstraintInfo *riinfo,
 							RI_QueryKey *qkey, SPIPlanPtr qplan,
 							Relation fk_rel, Relation pk_rel,
 							TupleTableSlot *oldslot, TupleTableSlot *newslot,
+							bool hasForPortionOf, Datum forPortionOf,
 							bool detectNewRows, int expect_OK);
 static void ri_ExtractValues(Relation rel, TupleTableSlot *slot,
 							 const RI_ConstraintInfo *riinfo, bool rel_is_pk,
+							 bool hasForPortionOf, Datum forPortionOf,
 							 Datum *vals, char *nulls);
 static void ri_ReportViolation(const RI_ConstraintInfo *riinfo,
 							   Relation pk_rel, Relation fk_rel,
 							   TupleTableSlot *violatorslot, TupleDesc tupdesc,
 							   int queryno, bool partgone) pg_attribute_noreturn();
+static Datum tupleRange(TupleTableSlot *slot, const RI_ConstraintInfo *riinfo);
+static bool references_period(const ForPortionOfState *tg_temporal, const RI_ConstraintInfo *riinfo);
 
+
+/*
+ * query_period_range
+ *
+ * Builds a SQL string to construct a range from a period's start and end columns.
+ */
+static char *
+query_period_range(const RI_ConstraintInfo *riinfo, Relation rel, const char *table_name, bool rel_is_pk)
+{
+	StringInfo str = makeStringInfo();
+	char attname[MAX_QUOTED_NAME_LEN + 3];
+	int table_name_len = strlen(table_name);
+
+	Assert(table_name_len <= 3);
+
+	strcpy(attname, table_name);
+	if (rel_is_pk)
+	{
+		appendStringInfo(str, "%s(", riinfo->pk_period_rangetype_name);
+
+		quoteOneName(attname + table_name_len,
+					 RIAttName(rel, riinfo->pk_period_attnums[0]));
+		appendStringInfo(str, "%s, ", attname);
+
+		quoteOneName(attname + table_name_len,
+					 RIAttName(rel, riinfo->pk_period_attnums[1]));
+		appendStringInfo(str, "%s)", attname);
+	}
+	else
+	{
+		appendStringInfo(str, "%s(", riinfo->fk_period_rangetype_name);
+
+		quoteOneName(attname + table_name_len,
+					 RIAttName(rel, riinfo->fk_period_attnums[0]));
+		appendStringInfo(str, "%s, ", attname);
+
+		quoteOneName(attname + table_name_len,
+					 RIAttName(rel, riinfo->fk_period_attnums[1]));
+		appendStringInfo(str, "%s)", attname);
+	}
+
+	return pstrdup(str->data);
+}
+
+
+static Datum
+build_period_range(const RI_ConstraintInfo *riinfo, TupleTableSlot *slot, bool rel_is_pk)
+{
+	const int16 *period_attnums = rel_is_pk ? riinfo->pk_period_attnums : riinfo->fk_period_attnums;
+	Oid	rangetype = rel_is_pk ? riinfo->pk_period_rangetype : riinfo->fk_period_rangetype;
+	return period_to_range(slot, period_attnums[0], period_attnums[1], rangetype);
+}
 
 /*
  * RI_FKey_check -
@@ -354,6 +433,7 @@ RI_FKey_check(TriggerData *trigdata)
 		StringInfoData querybuf;
 		char		pkrelname[MAX_QUOTED_REL_NAME_LEN];
 		char		attname[MAX_QUOTED_NAME_LEN];
+		char	   *attstr;
 		char		paramname[16];
 		const char *querysep;
 		Oid			queryoids[RI_MAX_NUMKEYS];
@@ -361,35 +441,86 @@ RI_FKey_check(TriggerData *trigdata)
 
 		/* ----------
 		 * The query string built is
-		 *	SELECT 1 FROM [ONLY] <pktable> x WHERE pkatt1 = $1 [AND ...]
-		 *		   FOR KEY SHARE OF x
+		 *	SELECT 1
+		 *	FROM [ONLY] <pktable> x WHERE pkatt1 = $1 [AND ...]
+		 *	FOR KEY SHARE OF x
 		 * The type id's for the $ parameters are those of the
 		 * corresponding FK attributes.
+		 *
+		 * But for temporal FKs we need to make sure
+		 * the FK's range is completely covered.
+		 * So we use this query instead:
+		 *  SELECT 1
+		 *	FROM	(
+		 *		SELECT pkperiodatt AS r
+		 *		FROM   [ONLY] pktable x
+		 *		WHERE  pkatt1 = $1 [AND ...]
+		 *		AND    pkperiodatt && $n
+		 *		FOR KEY SHARE OF x
+		 *	) x1
+		 *  HAVING $n <@ range_agg(x1.r)
+		 * Note if FOR KEY SHARE ever allows GROUP BY and HAVING
+		 * we can make this a bit simpler.
 		 * ----------
 		 */
 		initStringInfo(&querybuf);
 		pk_only = pk_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ?
 			"" : "ONLY ";
 		quoteRelationName(pkrelname, pk_rel);
-		appendStringInfo(&querybuf, "SELECT 1 FROM %s%s x",
-						 pk_only, pkrelname);
+		if (riinfo->temporal)
+		{
+			if (riinfo->pk_period == InvalidOid)
+			{
+				quoteOneName(attname,
+						RIAttName(pk_rel, riinfo->pk_attnums[riinfo->nkeys - 1]));
+				attstr = attname;
+			}
+			else
+				attstr = query_period_range(riinfo, pk_rel, "x.", true);
+
+			appendStringInfo(&querybuf,
+					"SELECT 1 FROM (SELECT %s AS r FROM %s%s x",
+					attstr, pk_only, pkrelname);
+		}
+		else {
+			appendStringInfo(&querybuf, "SELECT 1 FROM %s%s x",
+							 pk_only, pkrelname);
+		}
 		querysep = "WHERE";
 		for (int i = 0; i < riinfo->nkeys; i++)
 		{
-			Oid			pk_type = RIAttType(pk_rel, riinfo->pk_attnums[i]);
-			Oid			fk_type = RIAttType(fk_rel, riinfo->fk_attnums[i]);
+			Oid	pk_type;
+			Oid	fk_type;
 
-			quoteOneName(attname,
-						 RIAttName(pk_rel, riinfo->pk_attnums[i]));
+			if (riinfo->pk_attnums[i] == InvalidOid)
+			{
+				pk_type = riinfo->pk_period_rangetype;
+				attstr = query_period_range(riinfo, pk_rel, "x.", true);
+			}
+			else
+			{
+				pk_type = RIAttType(pk_rel, riinfo->pk_attnums[i]);
+				quoteOneName(attname,
+							 RIAttName(pk_rel, riinfo->pk_attnums[i]));
+				attstr = attname;
+			}
+
+			if (riinfo->fk_attnums[i] == InvalidOid)
+				fk_type = riinfo->fk_period_rangetype;
+			else
+				fk_type = RIAttType(fk_rel, riinfo->fk_attnums[i]);
+
 			sprintf(paramname, "$%d", i + 1);
 			ri_GenerateQual(&querybuf, querysep,
-							attname, pk_type,
+							attstr, pk_type,
 							riinfo->pf_eq_oprs[i],
 							paramname, fk_type);
 			querysep = "AND";
 			queryoids[i] = fk_type;
 		}
 		appendStringInfoString(&querybuf, " FOR KEY SHARE OF x");
+		if (riinfo->temporal)
+			appendStringInfo(&querybuf, ") x1 HAVING $%d <@ pg_catalog.range_agg(x1.r)", riinfo->nkeys);
 
 		/* Prepare and save the plan */
 		qplan = ri_PlanCheck(querybuf.data, riinfo->nkeys, queryoids,
@@ -406,6 +537,7 @@ RI_FKey_check(TriggerData *trigdata)
 	ri_PerformCheck(riinfo, &qkey, qplan,
 					fk_rel, pk_rel,
 					NULL, newslot,
+					false, 0,
 					pk_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE,
 					SPI_OK_SELECT);
 
@@ -508,13 +640,24 @@ ri_Check_Pk_Match(Relation pk_rel, Relation fk_rel,
 		querysep = "WHERE";
 		for (int i = 0; i < riinfo->nkeys; i++)
 		{
-			Oid			pk_type = RIAttType(pk_rel, riinfo->pk_attnums[i]);
+			Oid		pk_type;
+			char   *attstr;
+			if (riinfo->pk_attnums[i] == InvalidOid)
+			{
+				pk_type = riinfo->pk_period_rangetype;
+				attstr = query_period_range(riinfo, pk_rel, "x.", true);
+			}
+			else
+			{
+				pk_type = RIAttType(pk_rel, riinfo->pk_attnums[i]);
+				quoteOneName(attname,
+							 RIAttName(pk_rel, riinfo->pk_attnums[i]));
+				attstr = attname;
+			}
 
-			quoteOneName(attname,
-						 RIAttName(pk_rel, riinfo->pk_attnums[i]));
 			sprintf(paramname, "$%d", i + 1);
 			ri_GenerateQual(&querybuf, querysep,
-							attname, pk_type,
+							attstr, pk_type,
 							riinfo->pp_eq_oprs[i],
 							paramname, pk_type);
 			querysep = "AND";
@@ -533,6 +676,7 @@ ri_Check_Pk_Match(Relation pk_rel, Relation fk_rel,
 	result = ri_PerformCheck(riinfo, &qkey, qplan,
 							 fk_rel, pk_rel,
 							 oldslot, NULL,
+							 false, 0,
 							 true,	/* treat like update */
 							 SPI_OK_SELECT);
 
@@ -673,6 +817,7 @@ ri_restrict(TriggerData *trigdata, bool is_no_action)
 		StringInfoData querybuf;
 		char		fkrelname[MAX_QUOTED_REL_NAME_LEN];
 		char		attname[MAX_QUOTED_NAME_LEN];
+		char	   *attstr;
 		char		paramname[16];
 		const char *querysep;
 		Oid			queryoids[RI_MAX_NUMKEYS];
@@ -695,18 +840,46 @@ ri_restrict(TriggerData *trigdata, bool is_no_action)
 		querysep = "WHERE";
 		for (int i = 0; i < riinfo->nkeys; i++)
 		{
-			Oid			pk_type = RIAttType(pk_rel, riinfo->pk_attnums[i]);
-			Oid			fk_type = RIAttType(fk_rel, riinfo->fk_attnums[i]);
-			Oid			pk_coll = RIAttCollation(pk_rel, riinfo->pk_attnums[i]);
-			Oid			fk_coll = RIAttCollation(fk_rel, riinfo->fk_attnums[i]);
+			Oid		pk_type;
+			Oid		fk_type;
+			Oid		pk_coll;
+			Oid		fk_coll;
 
-			quoteOneName(attname,
-						 RIAttName(fk_rel, riinfo->fk_attnums[i]));
+			if (riinfo->pk_attnums[i] != InvalidOid)
+			{
+				pk_type = RIAttType(pk_rel, riinfo->pk_attnums[i]);
+				pk_coll = RIAttCollation(pk_rel, riinfo->pk_attnums[i]);
+			}
+			else
+			{
+				pk_type = riinfo->pk_period_rangetype;
+				pk_coll = riinfo->pk_period_collation;
+			}
+
+			if (riinfo->fk_attnums[i] != InvalidOid)
+			{
+				fk_type = RIAttType(fk_rel, riinfo->fk_attnums[i]);
+				fk_coll = RIAttCollation(fk_rel, riinfo->fk_attnums[i]);
+			}
+			else
+			{
+				fk_type = riinfo->fk_period_rangetype;
+				fk_coll = riinfo->fk_period_collation;
+			}
+
+			if (riinfo->fk_attnums[i] == InvalidOid)
+				attstr = query_period_range(riinfo, fk_rel, "x.", false);
+			else
+			{
+				quoteOneName(attname,
+							 RIAttName(fk_rel, riinfo->fk_attnums[i]));
+				attstr = attname;
+			}
 			sprintf(paramname, "$%d", i + 1);
 			ri_GenerateQual(&querybuf, querysep,
 							paramname, pk_type,
 							riinfo->pf_eq_oprs[i],
-							attname, fk_type);
+							attstr, fk_type);
 			if (pk_coll != fk_coll && !get_collation_isdeterministic(pk_coll))
 				ri_GenerateQualCollation(&querybuf, pk_coll);
 			querysep = "AND";
@@ -725,6 +898,7 @@ ri_restrict(TriggerData *trigdata, bool is_no_action)
 	ri_PerformCheck(riinfo, &qkey, qplan,
 					fk_rel, pk_rel,
 					oldslot, NULL,
+					false, 0,
 					true,		/* must detect new rows */
 					SPI_OK_SELECT);
 
@@ -831,6 +1005,7 @@ RI_FKey_cascade_del(PG_FUNCTION_ARGS)
 	ri_PerformCheck(riinfo, &qkey, qplan,
 					fk_rel, pk_rel,
 					oldslot, NULL,
+					false, 0,
 					true,		/* must detect new rows */
 					SPI_OK_DELETE);
 
@@ -952,6 +1127,7 @@ RI_FKey_cascade_upd(PG_FUNCTION_ARGS)
 	ri_PerformCheck(riinfo, &qkey, qplan,
 					fk_rel, pk_rel,
 					oldslot, newslot,
+					false, 0,
 					true,		/* must detect new rows */
 					SPI_OK_UPDATE);
 
@@ -1184,6 +1360,779 @@ ri_set(TriggerData *trigdata, bool is_set_null, int tgkind)
 	ri_PerformCheck(riinfo, &qkey, qplan,
 					fk_rel, pk_rel,
 					oldslot, NULL,
+					false, 0,
+					true,		/* must detect new rows */
+					SPI_OK_UPDATE);
+
+	if (SPI_finish() != SPI_OK_FINISH)
+		elog(ERROR, "SPI_finish failed");
+
+	table_close(fk_rel, RowExclusiveLock);
+
+	if (is_set_null)
+		return PointerGetDatum(NULL);
+	else
+	{
+		/*
+		 * If we just deleted or updated the PK row whose key was equal to the
+		 * FK columns' default values, and a referencing row exists in the FK
+		 * table, we would have updated that row to the same values it already
+		 * had --- and RI_FKey_fk_upd_check_required would hence believe no
+		 * check is necessary.  So we need to do another lookup now and in
+		 * case a reference still exists, abort the operation.  That is
+		 * already implemented in the NO ACTION trigger, so just run it. (This
+		 * recheck is only needed in the SET DEFAULT case, since CASCADE would
+		 * remove such rows in case of a DELETE operation or would change the
+		 * FK key values in case of an UPDATE, while SET NULL is certain to
+		 * result in rows that satisfy the FK constraint.)
+		 */
+		return ri_restrict(trigdata, true);
+	}
+}
+
+/* ----------
+ * TRI_FKey_check_ins -
+ *
+ *	Check temporal foreign key existence at insert event on FK table.
+ * ----------
+ */
+Datum
+TRI_FKey_check_ins(PG_FUNCTION_ARGS)
+{
+	/*
+	 * Check that this is a valid trigger call on the right time and event.
+	 */
+	ri_CheckTrigger(fcinfo, "RI_FKey_check_ins", RI_TRIGTYPE_INSERT);
+
+	/*
+	 * Share code with UPDATE case.
+	 */
+	return RI_FKey_check((TriggerData *) fcinfo->context);
+}
+
+
+/* ----------
+ * TRI_FKey_check_upd -
+ *
+ *	Check temporal foreign key existence at update event on FK table.
+ * ----------
+ */
+Datum
+TRI_FKey_check_upd(PG_FUNCTION_ARGS)
+{
+	/*
+	 * Check that this is a valid trigger call on the right time and event.
+	 */
+	ri_CheckTrigger(fcinfo, "RI_FKey_check_upd", RI_TRIGTYPE_UPDATE);
+
+	/*
+	 * Share code with INSERT case.
+	 */
+	return RI_FKey_check((TriggerData *) fcinfo->context);
+}
+
+
+/* ----------
+ * TRI_FKey_noaction_del -
+ *
+ *	Give an error and roll back the current transaction if the
+ *	delete has resulted in a violation of the given temporal
+ *	referential integrity constraint.
+ * ----------
+ */
+Datum
+TRI_FKey_noaction_del(PG_FUNCTION_ARGS)
+{
+	/*
+	 * Check that this is a valid trigger call on the right time and event.
+	 */
+	ri_CheckTrigger(fcinfo, "TRI_FKey_noaction_del", RI_TRIGTYPE_DELETE);
+
+	/*
+	 * Share code with RESTRICT/UPDATE cases.
+	 */
+	return ri_restrict((TriggerData *) fcinfo->context, true);
+}
+
+/*
+ * TRI_FKey_restrict_del -
+ *
+ * Restrict delete from PK table to rows unreferenced by foreign key.
+ *
+ * The SQL standard intends that this referential action occur exactly when
+ * the delete is performed, rather than after.  This appears to be
+ * the only difference between "NO ACTION" and "RESTRICT".  In Postgres
+ * we still implement this as an AFTER trigger, but it's non-deferrable.
+ */
+Datum
+TRI_FKey_restrict_del(PG_FUNCTION_ARGS)
+{
+	/* Check that this is a valid trigger call on the right time and event. */
+	ri_CheckTrigger(fcinfo, "TRI_FKey_restrict_del", RI_TRIGTYPE_DELETE);
+
+	/* Share code with NO ACTION/UPDATE cases. */
+	return ri_restrict((TriggerData *) fcinfo->context, false);
+}
+
+/*
+ * TRI_FKey_cascade_del -
+ *
+ * Cascaded delete foreign key references at delete event on temporal PK table.
+ */
+Datum
+TRI_FKey_cascade_del(PG_FUNCTION_ARGS)
+{
+	TriggerData *trigdata = (TriggerData *) fcinfo->context;
+	const RI_ConstraintInfo *riinfo;
+	Relation	fk_rel;
+	Relation	pk_rel;
+	TupleTableSlot *oldslot;
+	RI_QueryKey qkey;
+	SPIPlanPtr	qplan;
+	Datum targetRange;
+
+	/* Check that this is a valid trigger call on the right time and event. */
+	ri_CheckTrigger(fcinfo, "TRI_FKey_cascade_del", RI_TRIGTYPE_DELETE);
+
+	riinfo = ri_FetchConstraintInfo(trigdata->tg_trigger,
+									trigdata->tg_relation, true);
+
+	/*
+	 * Get the relation descriptors of the FK and PK tables and the old tuple.
+	 *
+	 * fk_rel is opened in RowExclusiveLock mode since that's what our
+	 * eventual DELETE will get on it.
+	 */
+	fk_rel = table_open(riinfo->fk_relid, RowExclusiveLock);
+	pk_rel = trigdata->tg_relation;
+	oldslot = trigdata->tg_trigslot;
+
+	/*
+	 * If this is a FOR PORTION OF delete,
+	 * restrict the casacde to just the targeted portion.
+	 */
+	targetRange = tupleRange(oldslot, riinfo);
+	if (references_period(trigdata->tg_temporal, riinfo))
+		targetRange = restrict_cascading_range(targetRange,
+											   trigdata->tg_temporal->fp_targetRange);
+
+	if (SPI_connect() != SPI_OK_CONNECT)
+		elog(ERROR, "SPI_connect failed");
+
+	/* Fetch or prepare a saved plan for the cascaded delete */
+	ri_BuildQueryKey(&qkey, riinfo, TRI_PLAN_CASCADE_ONDELETE);
+
+	if ((qplan = ri_FetchPreparedPlan(&qkey)) == NULL)
+	{
+		bool		pkHasRange;
+		bool		fkHasRange;
+		StringInfoData querybuf;
+		char		fkrelname[MAX_QUOTED_REL_NAME_LEN];
+		char		attname[MAX_QUOTED_NAME_LEN];
+		char	   *attstr;
+		char		paramname[16];
+		const char *querysep;
+		Oid			queryoids[RI_MAX_NUMKEYS];
+		const char *fk_only;
+
+		pkHasRange = riinfo->pk_period == InvalidOid;
+		fkHasRange = riinfo->fk_period == InvalidOid;
+
+		/* ----------
+		 * The query string built is
+		 *	DELETE FROM [ONLY] <fktable>
+		 *	FOR PORTION OF $fkatt FROM lower($n+1) TO upper($n+1)
+		 *	WHERE $1 = fkatt1 [AND ...]
+		 * The type id's for the $ parameters are those of the
+		 * corresponding PK attributes.
+		 * ----------
+		 */
+		initStringInfo(&querybuf);
+		fk_only = fk_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ?
+			"" : "ONLY ";
+		quoteRelationName(fkrelname, fk_rel);
+		if (fkHasRange)
+			quoteOneName(attname, RIAttName(fk_rel, riinfo->fk_attnums[riinfo->nkeys - 1]));
+		else
+			quoteOneName(attname, get_periodname(riinfo->fk_period, false));
+
+		appendStringInfo(&querybuf, "DELETE FROM %s%s FOR PORTION OF %s FROM lower($%d) TO upper($%d)",
+						 fk_only, fkrelname, attname, riinfo->nkeys + 1, riinfo->nkeys + 1);
+		querysep = "WHERE";
+		for (int i = 0; i < riinfo->nkeys; i++)
+		{
+			Oid		pk_type;
+			Oid		fk_type;
+			Oid		pk_coll;
+			Oid		fk_coll;
+
+			if (riinfo->pk_attnums[i] != InvalidOid)
+			{
+				pk_type = RIAttType(pk_rel, riinfo->pk_attnums[i]);
+				pk_coll = RIAttCollation(pk_rel, riinfo->pk_attnums[i]);
+			}
+			else
+			{
+				pk_type = riinfo->pk_period_rangetype;
+				pk_coll = riinfo->pk_period_collation;
+			}
+
+			if (riinfo->fk_attnums[i] != InvalidOid)
+			{
+				fk_type = RIAttType(fk_rel, riinfo->fk_attnums[i]);
+				fk_coll = RIAttCollation(fk_rel, riinfo->fk_attnums[i]);
+			}
+			else
+			{
+				fk_type = riinfo->fk_period_rangetype;
+				fk_coll = riinfo->fk_period_collation;
+			}
+
+			if (riinfo->fk_attnums[i] == InvalidOid)
+				attstr = query_period_range(riinfo, fk_rel, "", false);
+			else
+			{
+				quoteOneName(attname,
+							 RIAttName(fk_rel, riinfo->fk_attnums[i]));
+				attstr = attname;
+			}
+			sprintf(paramname, "$%d", i + 1);
+			ri_GenerateQual(&querybuf, querysep,
+							paramname, pk_type,
+							riinfo->pf_eq_oprs[i],
+							attstr, fk_type);
+			if (pk_coll != fk_coll && !get_collation_isdeterministic(pk_coll))
+				ri_GenerateQualCollation(&querybuf, pk_coll);
+			querysep = "AND";
+			queryoids[i] = pk_type;
+		}
+
+		if (pkHasRange)
+			queryoids[riinfo->nkeys] = RIAttType(pk_rel, riinfo->pk_attnums[riinfo->nkeys - 1]);
+		else
+			queryoids[riinfo->nkeys] = riinfo->pk_period_rangetype;
+
+		/* Prepare and save the plan */
+		qplan = ri_PlanCheck(querybuf.data, riinfo->nkeys + 1, queryoids,
+							 &qkey, fk_rel, pk_rel);
+	}
+
+	/*
+	 * We have a plan now. Build up the arguments from the key values in the
+	 * deleted PK tuple and delete the referencing rows
+	 */
+	ri_PerformCheck(riinfo, &qkey, qplan,
+					fk_rel, pk_rel,
+					oldslot, NULL,
+					true, targetRange,
+					true,		/* must detect new rows */
+					SPI_OK_DELETE);
+
+	if (SPI_finish() != SPI_OK_FINISH)
+		elog(ERROR, "SPI_finish failed");
+
+	table_close(fk_rel, RowExclusiveLock);
+
+	return PointerGetDatum(NULL);
+}
+
+
+/*
+ * TRI_FKey_noaction_upd -
+ *
+ * Give an error and roll back the current transaction if the
+ * update has resulted in a violation of the given referential
+ * integrity constraint.
+ */
+Datum
+TRI_FKey_noaction_upd(PG_FUNCTION_ARGS)
+{
+	/* Check that this is a valid trigger call on the right time and event. */
+	ri_CheckTrigger(fcinfo, "TRI_FKey_noaction_upd", RI_TRIGTYPE_UPDATE);
+
+	/* Share code with RESTRICT/DELETE cases. */
+	return ri_restrict((TriggerData *) fcinfo->context, true);
+}
+
+/*
+ * TRI_FKey_restrict_upd -
+ *
+ * Restrict update of PK to rows unreferenced by foreign key.
+ *
+ * The SQL standard intends that this referential action occur exactly when
+ * the update is performed, rather than after.  This appears to be
+ * the only difference between "NO ACTION" and "RESTRICT".  In Postgres
+ * we still implement this as an AFTER trigger, but it's non-deferrable.
+ */
+Datum
+TRI_FKey_restrict_upd(PG_FUNCTION_ARGS)
+{
+	/* Check that this is a valid trigger call on the right time and event. */
+	ri_CheckTrigger(fcinfo, "TRI_FKey_restrict_upd", RI_TRIGTYPE_UPDATE);
+
+	/* Share code with NO ACTION/DELETE cases. */
+	return ri_restrict((TriggerData *) fcinfo->context, false);
+}
+
+/*
+ * TRI_FKey_cascade_upd -
+ *
+ * Cascaded update foreign key references at update event on temporal PK table.
+ */
+Datum
+TRI_FKey_cascade_upd(PG_FUNCTION_ARGS)
+{
+	TriggerData *trigdata = (TriggerData *) fcinfo->context;
+	const RI_ConstraintInfo *riinfo;
+	Relation	fk_rel;
+	Relation	pk_rel;
+	TupleTableSlot *oldslot;
+	TupleTableSlot *newslot;
+	RI_QueryKey qkey;
+	SPIPlanPtr	qplan;
+	Datum targetRange;
+
+	/* Check that this is a valid trigger call on the right time and event. */
+	ri_CheckTrigger(fcinfo, "TRI_FKey_cascade_upd", RI_TRIGTYPE_UPDATE);
+
+	riinfo = ri_FetchConstraintInfo(trigdata->tg_trigger,
+									trigdata->tg_relation, true);
+
+	/*
+	 * Get the relation descriptors of the FK and PK tables and the new and
+	 * old tuple.
+	 *
+	 * fk_rel is opened in RowExclusiveLock mode since that's what our
+	 * eventual UPDATE will get on it.
+	 */
+	fk_rel = table_open(riinfo->fk_relid, RowExclusiveLock);
+	pk_rel = trigdata->tg_relation;
+	newslot = trigdata->tg_newslot;
+	oldslot = trigdata->tg_trigslot;
+
+	/*
+	 * If this is a FOR PORTION OF update,
+	 * restrict the casacde to just the targeted portion.
+	 */
+	targetRange = tupleRange(oldslot, riinfo);
+	if (references_period(trigdata->tg_temporal, riinfo))
+		targetRange = restrict_cascading_range(targetRange,
+											   trigdata->tg_temporal->fp_targetRange);
+
+	if (SPI_connect() != SPI_OK_CONNECT)
+		elog(ERROR, "SPI_connect failed");
+
+	/* Fetch or prepare a saved plan for the cascaded update */
+	ri_BuildQueryKey(&qkey, riinfo, TRI_PLAN_CASCADE_ONUPDATE);
+
+	if ((qplan = ri_FetchPreparedPlan(&qkey)) == NULL)
+	{
+		bool		pkHasRange;
+		bool		fkHasRange;
+		StringInfoData querybuf;
+		StringInfoData qualbuf;
+		char		fkrelname[MAX_QUOTED_REL_NAME_LEN];
+		char		attname[MAX_QUOTED_NAME_LEN];
+		char	   *attstr;
+		char		paramname[16];
+		const char *querysep;
+		const char *qualsep;
+		Oid			queryoids[RI_MAX_NUMKEYS];
+		const char *fk_only;
+
+		pkHasRange = riinfo->pk_period == InvalidOid;
+		fkHasRange = riinfo->fk_period == InvalidOid;
+
+		/* ----------
+		 * The query string built is
+		 *	UPDATE [ONLY] <fktable>
+		 *	        FOR PORTION OF $fkatt FROM lower($n+1) TO upper($n+1)
+		 *	        SET fkatt1 = $1, [, ...]
+		 *	        WHERE $n = fkatt1 [AND ...]
+		 * The type id's for the $ parameters are those of the
+		 * corresponding PK attributes.  Note that we are assuming
+		 * there is an assignment cast from the PK to the FK type;
+		 * else the parser will fail.
+		 * ----------
+		 */
+		initStringInfo(&querybuf);
+		initStringInfo(&qualbuf);
+		fk_only = fk_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ?
+			"" : "ONLY ";
+		quoteRelationName(fkrelname, fk_rel);
+		if (fkHasRange)
+			quoteOneName(attname, RIAttName(fk_rel, riinfo->fk_attnums[riinfo->nkeys - 1]));
+		else
+			quoteOneName(attname, get_periodname(riinfo->fk_period, false));
+
+		appendStringInfo(&querybuf, "UPDATE %s%s FOR PORTION OF %s FROM lower($%d) TO upper($%d) SET",
+						 fk_only, fkrelname, attname, 2 * riinfo->nkeys + 1, 2 * riinfo->nkeys + 1);
+
+		querysep = "";
+		qualsep = "WHERE";
+		for (int i = 0, j = riinfo->nkeys; i < riinfo->nkeys; i++, j++)
+		{
+			Oid		pk_type;
+			Oid		fk_type;
+			Oid		pk_coll;
+			Oid		fk_coll;
+
+			if (riinfo->pk_attnums[i] != InvalidOid)
+			{
+				pk_type = RIAttType(pk_rel, riinfo->pk_attnums[i]);
+				pk_coll = RIAttCollation(pk_rel, riinfo->pk_attnums[i]);
+			}
+			else
+			{
+				pk_type = riinfo->pk_period_rangetype;
+				pk_coll = riinfo->pk_period_collation;
+			}
+
+			if (riinfo->fk_attnums[i] != InvalidOid)
+			{
+				fk_type = RIAttType(fk_rel, riinfo->fk_attnums[i]);
+				fk_coll = RIAttCollation(fk_rel, riinfo->fk_attnums[i]);
+			}
+			else
+			{
+				fk_type = riinfo->fk_period_rangetype;
+				fk_coll = riinfo->fk_period_collation;
+			}
+
+			if (riinfo->fk_attnums[i] == InvalidOid)
+				attstr = query_period_range(riinfo, fk_rel, "", false);
+			else
+			{
+				quoteOneName(attname,
+							 RIAttName(fk_rel, riinfo->fk_attnums[i]));
+				attstr = attname;
+			}
+			/*
+			 * Don't set the temporal column(s).
+			 * FOR PORTION OF will take care of that.
+			 */
+			if (i < riinfo->nkeys - 1)
+				appendStringInfo(&querybuf,
+								 "%s %s = $%d",
+								 querysep, attstr, i + 1);
+			sprintf(paramname, "$%d", j + 1);
+			ri_GenerateQual(&qualbuf, qualsep,
+							paramname, pk_type,
+							riinfo->pf_eq_oprs[i],
+							attstr, fk_type);
+			if (pk_coll != fk_coll && !get_collation_isdeterministic(pk_coll))
+				ri_GenerateQualCollation(&querybuf, pk_coll);
+			querysep = ",";
+			qualsep = "AND";
+			queryoids[i] = pk_type;
+			queryoids[j] = pk_type;
+		}
+		appendBinaryStringInfo(&querybuf, qualbuf.data, qualbuf.len);
+
+		if (pkHasRange)
+			queryoids[2 * riinfo->nkeys] = RIAttType(pk_rel, riinfo->pk_attnums[riinfo->nkeys - 1]);
+		else
+			queryoids[2 * riinfo->nkeys] = riinfo->pk_period_rangetype;
+
+		/* Prepare and save the plan */
+		qplan = ri_PlanCheck(querybuf.data, 2 * riinfo->nkeys + 1, queryoids,
+							 &qkey, fk_rel, pk_rel);
+	}
+
+	/*
+	 * We have a plan now. Build up the arguments from the key values in the
+	 * updated PK tuple and update the referencing rows
+	 */
+	ri_PerformCheck(riinfo, &qkey, qplan,
+					fk_rel, pk_rel,
+					oldslot, newslot,
+					true, targetRange,
+					true,		/* must detect new rows */
+					SPI_OK_UPDATE);
+
+	if (SPI_finish() != SPI_OK_FINISH)
+		elog(ERROR, "SPI_finish failed");
+
+	table_close(fk_rel, RowExclusiveLock);
+
+	return PointerGetDatum(NULL);
+}
+
+/*
+ * TRI_FKey_setnull_del -
+ *
+ * Set foreign key references to NULL values at delete event on PK table.
+ */
+Datum
+TRI_FKey_setnull_del(PG_FUNCTION_ARGS)
+{
+	/* Check that this is a valid trigger call on the right time and event. */
+	ri_CheckTrigger(fcinfo, "TRI_FKey_setnull_del", RI_TRIGTYPE_DELETE);
+
+	/* Share code with UPDATE case */
+	return tri_set((TriggerData *) fcinfo->context, true, RI_TRIGTYPE_DELETE);
+}
+
+/*
+ * TRI_FKey_setnull_upd -
+ *
+ * Set foreign key references to NULL at update event on PK table.
+ */
+Datum
+TRI_FKey_setnull_upd(PG_FUNCTION_ARGS)
+{
+	/* Check that this is a valid trigger call on the right time and event. */
+	ri_CheckTrigger(fcinfo, "TRI_FKey_setnull_upd", RI_TRIGTYPE_UPDATE);
+
+	/* Share code with DELETE case */
+	return tri_set((TriggerData *) fcinfo->context, true, RI_TRIGTYPE_UPDATE);
+}
+
+/*
+ * TRI_FKey_setdefault_del -
+ *
+ * Set foreign key references to defaults at delete event on PK table.
+ */
+Datum
+TRI_FKey_setdefault_del(PG_FUNCTION_ARGS)
+{
+	/* Check that this is a valid trigger call on the right time and event. */
+	ri_CheckTrigger(fcinfo, "TRI_FKey_setdefault_del", RI_TRIGTYPE_DELETE);
+
+	/* Share code with UPDATE case */
+	return tri_set((TriggerData *) fcinfo->context, false, RI_TRIGTYPE_DELETE);
+}
+
+/*
+ * TRI_FKey_setdefault_upd -
+ *
+ * Set foreign key references to defaults at update event on PK table.
+ */
+Datum
+TRI_FKey_setdefault_upd(PG_FUNCTION_ARGS)
+{
+	/* Check that this is a valid trigger call on the right time and event. */
+	ri_CheckTrigger(fcinfo, "TRI_FKey_setdefault_upd", RI_TRIGTYPE_UPDATE);
+
+	/* Share code with DELETE case */
+	return tri_set((TriggerData *) fcinfo->context, false, RI_TRIGTYPE_UPDATE);
+}
+
+
+/*
+ * restrict_cascading_range -
+ *
+ * When we cascade an UPDATE or DELETE on a temporal record,
+ * we only touch the temporal portion of the child record
+ * that matches the temporal span of the updated/deleted parent record.
+ * But if the original UPDATE or DELETE also had a FOR PORTION OF clause,
+ * then we should further restrict the cascaded effect accordingly.
+ */
+static Datum
+restrict_cascading_range(Datum pkRecordRange, Datum targetedRange)
+{
+	RangeType *r1 = DatumGetRangeTypeP(pkRecordRange);
+	RangeType *r2 = DatumGetRangeTypeP(targetedRange);
+	Oid rngtypid = RangeTypeGetOid(r1);
+	TypeCacheEntry *typcache = lookup_type_cache(rngtypid, TYPECACHE_RANGE_INFO);
+	return RangeTypePGetDatum(range_intersect_internal(typcache, r1, r2));
+}
+
+/*
+ * references_period
+ *
+ * Returns true iff the primary key referenced by riinfo includes the range
+ * column or PERIOD targeted by the FOR PORTION OF clause (according to
+ * tg_temporal).
+ */
+static bool
+references_period(const ForPortionOfState *tg_temporal, const RI_ConstraintInfo *riinfo)
+{
+	if (tg_temporal == NULL)
+		return false;
+
+	if (tg_temporal->fp_hasPeriod)
+	{
+		return riinfo->pk_period != InvalidOid &&
+			   riinfo->pk_period_attnums[0] == tg_temporal->fp_periodStartAttno &&
+			   riinfo->pk_period_attnums[1] == tg_temporal->fp_periodEndAttno;
+	} else {
+		return riinfo->pk_period == InvalidOid &&
+			   riinfo->pk_attnums[riinfo->nkeys - 1] == tg_temporal->fp_rangeAttno;
+	}
+}
+
+/*
+ * tri_set -
+ *
+ * Common code for temporal ON DELETE SET NULL, ON DELETE SET DEFAULT, ON
+ * UPDATE SET NULL, and ON UPDATE SET DEFAULT.
+ */
+static Datum
+tri_set(TriggerData *trigdata, bool is_set_null, int tgkind)
+{
+	const RI_ConstraintInfo *riinfo;
+	Relation	fk_rel;
+	Relation	pk_rel;
+	TupleTableSlot *oldslot;
+	RI_QueryKey qkey;
+	SPIPlanPtr	qplan;
+	Datum targetRange;
+
+	riinfo = ri_FetchConstraintInfo(trigdata->tg_trigger,
+									trigdata->tg_relation, true);
+
+	/*
+	 * Get the relation descriptors of the FK and PK tables and the old tuple.
+	 *
+	 * fk_rel is opened in RowExclusiveLock mode since that's what our
+	 * eventual UPDATE will get on it.
+	 */
+	fk_rel = table_open(riinfo->fk_relid, RowExclusiveLock);
+	pk_rel = trigdata->tg_relation;
+	oldslot = trigdata->tg_trigslot;
+
+	/*
+	 * If this is a FOR PORTION OF update/delete,
+	 * restrict the casacde to just the targeted portion.
+	 */
+	targetRange = tupleRange(oldslot, riinfo);
+	if (references_period(trigdata->tg_temporal, riinfo))
+		targetRange = restrict_cascading_range(targetRange,
+											   trigdata->tg_temporal->fp_targetRange);
+
+	if (SPI_connect() != SPI_OK_CONNECT)
+		elog(ERROR, "SPI_connect failed");
+
+	/*
+	 * Fetch or prepare a saved plan for the set null/default operation (it's
+	 * the same query for delete and update cases)
+	 */
+	ri_BuildQueryKey(&qkey, riinfo,
+					  is_set_null
+						? TRI_PLAN_SETNULL_ONUPDATE
+						: TRI_PLAN_SETDEFAULT_ONUPDATE);
+
+	if ((qplan = ri_FetchPreparedPlan(&qkey)) == NULL)
+	{
+		bool		pkHasRange;
+		bool		fkHasRange;
+		StringInfoData querybuf;
+		StringInfoData qualbuf;
+		char		fkrelname[MAX_QUOTED_REL_NAME_LEN];
+		char		attname[MAX_QUOTED_NAME_LEN];
+		char	   *attstr;
+		char		paramname[16];
+		const char *querysep;
+		const char *qualsep;
+		Oid			queryoids[RI_MAX_NUMKEYS];
+		const char *fk_only;
+
+		pkHasRange = riinfo->pk_period == InvalidOid;
+		fkHasRange = riinfo->fk_period == InvalidOid;
+
+		// TODO: Use tgkind to handle setting a specific list of cols (like ri_set)
+
+		/* ----------
+		 * The query string built is
+		 *	UPDATE [ONLY] <fktable>
+		 *			FOR PORTION OF $fkatt FROM lower($n+1) TO upper($n+1)
+		 *			SET fkatt1 = {NULL|DEFAULT} [, ...]
+		 *			WHERE $1 = fkatt1 [AND ...]
+		 * The type id's for the $ parameters are those of the
+		 * corresponding PK attributes.
+		 * ----------
+		 */
+		initStringInfo(&querybuf);
+		initStringInfo(&qualbuf);
+		fk_only = fk_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ?
+			"" : "ONLY ";
+		quoteRelationName(fkrelname, fk_rel);
+		if (fkHasRange)
+			quoteOneName(attname, RIAttName(fk_rel, riinfo->fk_attnums[riinfo->nkeys - 1]));
+		else
+			quoteOneName(attname, get_periodname(riinfo->fk_period, false));
+
+		appendStringInfo(&querybuf, "UPDATE %s%s FOR PORTION OF %s FROM lower($%d) TO upper($%d) SET",
+						 fk_only, fkrelname, attname, riinfo->nkeys + 1, riinfo->nkeys + 1);
+
+		querysep = "";
+		qualsep = "WHERE";
+		for (int i = 0; i < riinfo->nkeys; i++)
+		{
+			Oid		pk_type;
+			Oid		fk_type;
+			Oid		pk_coll;
+			Oid		fk_coll;
+
+			if (riinfo->pk_attnums[i] != InvalidOid)
+			{
+				pk_type = RIAttType(pk_rel, riinfo->pk_attnums[i]);
+				pk_coll = RIAttCollation(pk_rel, riinfo->pk_attnums[i]);
+			}
+			else
+			{
+				pk_type = riinfo->pk_period_rangetype;
+				pk_coll = riinfo->pk_period_collation;
+			}
+
+			if (riinfo->fk_attnums[i] != InvalidOid)
+			{
+				fk_type = RIAttType(fk_rel, riinfo->fk_attnums[i]);
+				fk_coll = RIAttCollation(fk_rel, riinfo->fk_attnums[i]);
+			}
+			else
+			{
+				fk_type = riinfo->fk_period_rangetype;
+				fk_coll = riinfo->fk_period_collation;
+			}
+
+			if (riinfo->fk_attnums[i] == InvalidOid)
+				attstr = query_period_range(riinfo, fk_rel, "", false);
+			else
+			{
+				quoteOneName(attname,
+							 RIAttName(fk_rel, riinfo->fk_attnums[i]));
+				attstr = attname;
+			}
+
+			/*
+			 * Don't set the temporal column(s).
+			 * FOR PORTION OF will take care of that.
+			 */
+			if (i < riinfo->nkeys - 1)
+				appendStringInfo(&querybuf,
+								 "%s %s = %s",
+								 querysep, attstr,
+								 is_set_null ? "NULL" : "DEFAULT");
+			sprintf(paramname, "$%d", i + 1);
+			ri_GenerateQual(&querybuf, qualsep,
+							paramname, pk_type,
+							riinfo->pf_eq_oprs[i],
+							attstr, fk_type);
+			if (pk_coll != fk_coll && !get_collation_isdeterministic(pk_coll))
+				ri_GenerateQualCollation(&querybuf, pk_coll);
+			qualsep = "AND";
+			queryoids[i] = pk_type;
+		}
+
+		if (pkHasRange)
+			queryoids[riinfo->nkeys] = RIAttType(pk_rel, riinfo->pk_attnums[riinfo->nkeys - 1]);
+		else
+			queryoids[riinfo->nkeys] = riinfo->pk_period_rangetype;
+
+		/* Prepare and save the plan */
+		qplan = ri_PlanCheck(querybuf.data, riinfo->nkeys + 1, queryoids,
+							 &qkey, fk_rel, pk_rel);
+	}
+
+	/*
+	 * We have a plan now. Run it to update the existing references.
+	 */
+	ri_PerformCheck(riinfo, &qkey, qplan,
+					fk_rel, pk_rel,
+					oldslot, NULL,
+					true, targetRange,
 					true,		/* must detect new rows */
 					SPI_OK_UPDATE);
 
@@ -1241,7 +2190,7 @@ RI_FKey_pk_upd_check_required(Trigger *trigger, Relation pk_rel,
 		return false;
 
 	/* If all old and new key values are equal, no check is needed */
-	if (newslot && ri_KeysEqual(pk_rel, oldslot, newslot, riinfo, true))
+	if (newslot && ri_KeysStable(pk_rel, oldslot, newslot, riinfo, true))
 		return false;
 
 	/* Else we need to fire the trigger. */
@@ -1340,7 +2289,7 @@ RI_FKey_fk_upd_check_required(Trigger *trigger, Relation fk_rel,
 		return true;
 
 	/* If all old and new key values are equal, no check is needed */
-	if (ri_KeysEqual(fk_rel, oldslot, newslot, riinfo, false))
+	if (ri_KeysStable(fk_rel, oldslot, newslot, riinfo, false))
 		return false;
 
 	/* Else we need to fire the trigger. */
@@ -1371,6 +2320,8 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	StringInfoData querybuf;
 	char		pkrelname[MAX_QUOTED_REL_NAME_LEN];
 	char		fkrelname[MAX_QUOTED_REL_NAME_LEN];
+	char	   *pkattpart;
+	char	   *fkattpart;
 	char		pkattname[MAX_QUOTED_NAME_LEN + 3];
 	char		fkattname[MAX_QUOTED_NAME_LEN + 3];
 	RangeTblEntry *rte;
@@ -1467,10 +2418,24 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	sep = "";
 	for (int i = 0; i < riinfo->nkeys; i++)
 	{
-		quoteOneName(fkattname,
-					 RIAttName(fk_rel, riinfo->fk_attnums[i]));
-		appendStringInfo(&querybuf, "%sfk.%s", sep, fkattname);
-		sep = ", ";
+		if (riinfo->fk_attnums[i] != InvalidOid)
+		{
+			quoteOneName(fkattname,
+						 RIAttName(fk_rel, riinfo->fk_attnums[i]));
+			appendStringInfo(&querybuf, "%sfk.%s", sep, fkattname);
+			sep = ", ";
+		}
+		else
+		{
+			quoteOneName(fkattname,
+						 RIAttName(fk_rel, riinfo->fk_period_attnums[0]));
+			appendStringInfo(&querybuf, "%sfk.%s", sep, fkattname);
+			sep = ", ";
+
+			quoteOneName(fkattname,
+						 RIAttName(fk_rel, riinfo->fk_period_attnums[1]));
+			appendStringInfo(&querybuf, "%sfk.%s", sep, fkattname);
+		}
 	}
 
 	quoteRelationName(pkrelname, pk_rel);
@@ -1488,19 +2453,47 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	sep = "(";
 	for (int i = 0; i < riinfo->nkeys; i++)
 	{
-		Oid			pk_type = RIAttType(pk_rel, riinfo->pk_attnums[i]);
-		Oid			fk_type = RIAttType(fk_rel, riinfo->fk_attnums[i]);
-		Oid			pk_coll = RIAttCollation(pk_rel, riinfo->pk_attnums[i]);
-		Oid			fk_coll = RIAttCollation(fk_rel, riinfo->fk_attnums[i]);
+		Oid			pk_type;
+		Oid			fk_type;
+		Oid			pk_coll;
+		Oid			fk_coll;
 
-		quoteOneName(pkattname + 3,
-					 RIAttName(pk_rel, riinfo->pk_attnums[i]));
-		quoteOneName(fkattname + 3,
-					 RIAttName(fk_rel, riinfo->fk_attnums[i]));
+		if (riinfo->pk_attnums[i] != InvalidOid)
+		{
+			pk_type = RIAttType(pk_rel, riinfo->pk_attnums[i]);
+			pk_coll = RIAttCollation(pk_rel, riinfo->pk_attnums[i]);
+
+			quoteOneName(pkattname + 3,
+						 RIAttName(pk_rel, riinfo->pk_attnums[i]));
+			pkattpart = pkattname;
+		}
+		else
+		{
+			pk_type = riinfo->pk_period_rangetype;
+			pk_coll = riinfo->pk_period_collation;
+			pkattpart = query_period_range(riinfo, pk_rel, "pk.", true);
+		}
+
+		if (riinfo->fk_attnums[i] != InvalidOid)
+		{
+			fk_type = RIAttType(fk_rel, riinfo->fk_attnums[i]);
+			fk_coll = RIAttCollation(fk_rel, riinfo->fk_attnums[i]);
+
+			quoteOneName(fkattname + 3,
+						 RIAttName(fk_rel, riinfo->fk_attnums[i]));
+			fkattpart = fkattname;
+		}
+		else
+		{
+			fk_type = riinfo->fk_period_rangetype;
+			fk_coll = riinfo->fk_period_collation;
+			fkattpart = query_period_range(riinfo, pk_rel, "fk.", false);
+		}
+
 		ri_GenerateQual(&querybuf, sep,
-						pkattname, pk_type,
+						pkattpart, pk_type,
 						riinfo->pf_eq_oprs[i],
-						fkattname, fk_type);
+						fkattpart, fk_type);
 		if (pk_coll != fk_coll)
 			ri_GenerateQualCollation(&querybuf, pk_coll);
 		sep = "AND";
@@ -2114,6 +3107,43 @@ ri_FetchConstraintInfo(Trigger *trigger, Relation trig_rel, bool rel_is_pk)
 	return riinfo;
 }
 
+static void DeconstructFkConstraintPeriod(Oid periodid, Oid *rangetypeid, char *rangetypename, Oid *rngcollation, int16 *attnums)
+{
+	HeapTuple pertuple = SearchSysCache1(PERIODOID, periodid);
+	Form_pg_period period;
+	Form_pg_range rangetype;
+	Form_pg_type type;
+	HeapTuple rngtuple;
+	HeapTuple typtuple;
+
+	if (!HeapTupleIsValid(pertuple))
+		elog(ERROR, "cache lookup failed for period %d", periodid);
+
+	period = (Form_pg_period) GETSTRUCT(pertuple);
+
+	*rangetypeid = period->perrngtype;
+	attnums[0] = period->perstart;
+	attnums[1] = period->perend;
+	ReleaseSysCache(pertuple);
+
+	rngtuple = SearchSysCache1(RANGETYPE, *rangetypeid);
+	if (!HeapTupleIsValid(rngtuple))
+		elog(ERROR, "cache lookup failed for range %d", *rangetypeid);
+
+	rangetype = (Form_pg_range) GETSTRUCT(rngtuple);
+
+	*rngcollation = rangetype->rngcollation;
+	ReleaseSysCache(rngtuple);
+
+	typtuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(*rangetypeid));
+	if (!HeapTupleIsValid(typtuple))
+		elog(ERROR, "cache lookup failed for type %u", *rangetypeid);
+
+	type = (Form_pg_type) GETSTRUCT(typtuple);
+	strcpy(rangetypename, NameStr(type->typname));
+	ReleaseSysCache(typtuple);
+}
+
 /*
  * Fetch or create the RI_ConstraintInfo struct for an FK constraint.
  */
@@ -2137,6 +3167,7 @@ ri_LoadConstraintInfo(Oid constraintOid)
 	riinfo = (RI_ConstraintInfo *) hash_search(ri_constraint_cache,
 											   &constraintOid,
 											   HASH_ENTER, &found);
+
 	if (!found)
 		riinfo->valid = false;
 	else if (riinfo->valid)
@@ -2171,6 +3202,24 @@ ri_LoadConstraintInfo(Oid constraintOid)
 	riinfo->confupdtype = conForm->confupdtype;
 	riinfo->confdeltype = conForm->confdeltype;
 	riinfo->confmatchtype = conForm->confmatchtype;
+	riinfo->temporal = conForm->contemporal;
+	riinfo->pk_period = conForm->confperiod;
+	riinfo->pk_period_rangetype = InvalidOid;
+	riinfo->pk_period_collation = InvalidOid;
+	strcpy(riinfo->pk_period_rangetype_name, "");
+	memset(riinfo->pk_period_attnums, 0, sizeof(riinfo->pk_period_attnums));
+	riinfo->fk_period = conForm->conperiod;
+	riinfo->fk_period_rangetype = InvalidOid;
+	riinfo->fk_period_collation = InvalidOid;
+	strcpy(riinfo->fk_period_rangetype_name, "");
+	memset(riinfo->fk_period_attnums, 0, sizeof(riinfo->fk_period_attnums));
+
+	if (conForm->confperiod != InvalidOid)
+	{
+		DeconstructFkConstraintPeriod(conForm->confperiod, &riinfo->pk_period_rangetype, riinfo->pk_period_rangetype_name, &riinfo->pk_period_collation, riinfo->pk_period_attnums);
+	}
+	if (conForm->conperiod != InvalidOid)
+		DeconstructFkConstraintPeriod(conForm->conperiod, &riinfo->fk_period_rangetype, riinfo->fk_period_rangetype_name, &riinfo->fk_period_collation, riinfo->fk_period_attnums);
 
 	DeconstructFkConstraintRow(tup,
 							   &riinfo->nkeys,
@@ -2322,6 +3371,7 @@ ri_PerformCheck(const RI_ConstraintInfo *riinfo,
 				RI_QueryKey *qkey, SPIPlanPtr qplan,
 				Relation fk_rel, Relation pk_rel,
 				TupleTableSlot *oldslot, TupleTableSlot *newslot,
+				bool hasForPortionOf, Datum forPortionOf,
 				bool detectNewRows, int expect_OK)
 {
 	Relation	query_rel,
@@ -2367,15 +3417,16 @@ ri_PerformCheck(const RI_ConstraintInfo *riinfo,
 	if (newslot)
 	{
 		ri_ExtractValues(source_rel, newslot, riinfo, source_is_pk,
-						 vals, nulls);
+						 hasForPortionOf, forPortionOf, vals, nulls);
 		if (oldslot)
 			ri_ExtractValues(source_rel, oldslot, riinfo, source_is_pk,
+							 hasForPortionOf, forPortionOf,
 							 vals + riinfo->nkeys, nulls + riinfo->nkeys);
 	}
 	else
 	{
 		ri_ExtractValues(source_rel, oldslot, riinfo, source_is_pk,
-						 vals, nulls);
+						 hasForPortionOf, forPortionOf, vals, nulls);
 	}
 
 	/*
@@ -2457,6 +3508,7 @@ ri_PerformCheck(const RI_ConstraintInfo *riinfo,
 static void
 ri_ExtractValues(Relation rel, TupleTableSlot *slot,
 				 const RI_ConstraintInfo *riinfo, bool rel_is_pk,
+				 bool hasForPortionOf, Datum forPortionOf,
 				 Datum *vals, char *nulls)
 {
 	const int16 *attnums;
@@ -2469,8 +3521,22 @@ ri_ExtractValues(Relation rel, TupleTableSlot *slot,
 
 	for (int i = 0; i < riinfo->nkeys; i++)
 	{
-		vals[i] = slot_getattr(slot, attnums[i], &isnull);
-		nulls[i] = isnull ? 'n' : ' ';
+		if (attnums[i] != InvalidAttrNumber)
+		{
+			vals[i] = slot_getattr(slot, attnums[i], &isnull);
+			nulls[i] = isnull ? 'n' : ' ';
+		}
+		else
+		{
+			vals[i] = build_period_range(riinfo, slot, rel_is_pk);
+			nulls[i] = ' ';
+		}
+	}
+
+	if (hasForPortionOf)
+	{
+		vals[riinfo->nkeys] = forPortionOf;
+		nulls[riinfo->nkeys] = ' ';
 	}
 }
 
@@ -2493,6 +3559,7 @@ ri_ReportViolation(const RI_ConstraintInfo *riinfo,
 	StringInfoData key_values;
 	bool		onfk;
 	const int16 *attnums;
+	const int16 *period_attnums;
 	Oid			rel_oid;
 	AclResult	aclresult;
 	bool		has_perm = true;
@@ -2505,6 +3572,7 @@ ri_ReportViolation(const RI_ConstraintInfo *riinfo,
 	if (onfk)
 	{
 		attnums = riinfo->fk_attnums;
+		period_attnums = riinfo->fk_period_attnums;
 		rel_oid = fk_rel->rd_id;
 		if (tupdesc == NULL)
 			tupdesc = fk_rel->rd_att;
@@ -2512,6 +3580,7 @@ ri_ReportViolation(const RI_ConstraintInfo *riinfo,
 	else
 	{
 		attnums = riinfo->pk_attnums;
+		period_attnums = riinfo->pk_period_attnums;
 		rel_oid = pk_rel->rd_id;
 		if (tupdesc == NULL)
 			tupdesc = pk_rel->rd_att;
@@ -2564,11 +3633,17 @@ ri_ReportViolation(const RI_ConstraintInfo *riinfo,
 		for (int idx = 0; idx < riinfo->nkeys; idx++)
 		{
 			int			fnum = attnums[idx];
-			Form_pg_attribute att = TupleDescAttr(tupdesc, fnum - 1);
+			bool		has_period = fnum == InvalidOid;
 			char	   *name,
 					   *val;
+			Form_pg_attribute att;
 			Datum		datum;
 			bool		isnull;
+
+			if (has_period)
+				fnum = period_attnums[0];
+
+			att = TupleDescAttr(tupdesc, fnum - 1);
 
 			name = NameStr(att->attname);
 
@@ -2591,6 +3666,32 @@ ri_ReportViolation(const RI_ConstraintInfo *riinfo,
 			}
 			appendStringInfoString(&key_names, name);
 			appendStringInfoString(&key_values, val);
+
+			if (has_period)
+			{
+				fnum = period_attnums[1];
+
+				att = TupleDescAttr(tupdesc, fnum - 1);
+
+				name = NameStr(att->attname);
+
+				datum = slot_getattr(violatorslot, fnum, &isnull);
+				if (!isnull)
+				{
+					Oid			foutoid;
+					bool		typisvarlena;
+
+					getTypeOutputInfo(att->atttypid, &foutoid, &typisvarlena);
+					val = OidOutputFunctionCall(foutoid, datum);
+				}
+				else
+					val = "null";
+
+				appendStringInfoString(&key_names, ", ");
+				appendStringInfoString(&key_values, ", ");
+				appendStringInfoString(&key_names, name);
+				appendStringInfoString(&key_values, val);
+			}
 		}
 	}
 
@@ -2657,10 +3758,21 @@ ri_NullCheck(TupleDesc tupDesc,
 
 	for (int i = 0; i < riinfo->nkeys; i++)
 	{
-		if (slot_attisnull(slot, attnums[i]))
-			nonenull = false;
-		else
+		if (attnums[i] == InvalidOid)
+		{
+			/*
+			 * Never treat a period as null, because even if start and end
+			 * are both null, that just signifies an unbounded range.
+			 */
 			allnull = false;
+		}
+		else
+		{
+			if (slot_attisnull(slot, attnums[i]))
+				nonenull = false;
+			else
+				allnull = false;
+		}
 	}
 
 	if (allnull)
@@ -2791,9 +3903,12 @@ ri_HashPreparedPlan(RI_QueryKey *key, SPIPlanPtr plan)
 
 
 /*
- * ri_KeysEqual -
+ * ri_KeysStable -
  *
- * Check if all key values in OLD and NEW are equal.
+ * Check if all key values in OLD and NEW are "equivalent":
+ * For normal FKs we check for equality.
+ * For temporal FKs we check that the PK side is a superset of its old value,
+ * or the FK side is a subset.
  *
  * Note: at some point we might wish to redefine this as checking for
  * "IS NOT DISTINCT" rather than "=", that is, allow two nulls to be
@@ -2801,7 +3916,7 @@ ri_HashPreparedPlan(RI_QueryKey *key, SPIPlanPtr plan)
  * previously found at least one of the rows to contain no nulls.
  */
 static bool
-ri_KeysEqual(Relation rel, TupleTableSlot *oldslot, TupleTableSlot *newslot,
+ri_KeysStable(Relation rel, TupleTableSlot *oldslot, TupleTableSlot *newslot,
 			 const RI_ConstraintInfo *riinfo, bool rel_is_pk)
 {
 	const int16 *attnums;
@@ -2818,19 +3933,32 @@ ri_KeysEqual(Relation rel, TupleTableSlot *oldslot, TupleTableSlot *newslot,
 		Datum		newvalue;
 		bool		isnull;
 
-		/*
-		 * Get one attribute's oldvalue. If it is NULL - they're not equal.
-		 */
-		oldvalue = slot_getattr(oldslot, attnums[i], &isnull);
-		if (isnull)
-			return false;
+		if (riinfo->temporal && attnums[i] == InvalidAttrNumber)
+		{
+			/*
+			 * We have a period, so we have to get the start/end columns
+			 * and build a range.
+			 */
+			oldvalue = build_period_range(riinfo, oldslot, rel_is_pk);
+			newvalue = build_period_range(riinfo, newslot, rel_is_pk);
+		}
+		else
+		{
+			/*
+			 * Get one attribute's oldvalue. If it is NULL - they're not equal.
+			 */
+			oldvalue = slot_getattr(oldslot, attnums[i], &isnull);
+			if (isnull)
+				return false;
 
-		/*
-		 * Get one attribute's newvalue. If it is NULL - they're not equal.
-		 */
-		newvalue = slot_getattr(newslot, attnums[i], &isnull);
-		if (isnull)
-			return false;
+			/*
+			 * Get one attribute's newvalue. If it is NULL - they're not equal.
+			 */
+			newvalue = slot_getattr(newslot, attnums[i], &isnull);
+			if (isnull)
+				return false;
+
+		}
 
 		if (rel_is_pk)
 		{
@@ -3029,4 +4157,18 @@ RI_FKey_trigger_type(Oid tgfoid)
 	}
 
 	return RI_TRIGGER_NONE;
+}
+
+static Datum
+tupleRange(TupleTableSlot *slot, const RI_ConstraintInfo *riinfo)
+{
+	bool	isnull;
+	int16	attnum = riinfo->pk_attnums[riinfo->nkeys - 1];
+
+	if (attnum == InvalidOid)
+		/* Build a range from the PERIOD start and end columns */
+		return build_period_range(riinfo, slot, true);
+	else
+		/* Get the range from the range column */
+		return slot_getattr(slot, attnum, &isnull);
 }

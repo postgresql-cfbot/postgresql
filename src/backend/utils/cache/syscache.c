@@ -49,6 +49,7 @@
 #include "catalog/pg_opfamily.h"
 #include "catalog/pg_parameter_acl.h"
 #include "catalog/pg_partitioned_table.h"
+#include "catalog/pg_period.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_publication.h"
 #include "catalog/pg_publication_namespace.h"
@@ -422,6 +423,19 @@ static const struct cachedesc cacheinfo[] = {
 		KEY(Anum_pg_partitioned_table_partrelid),
 		32
 	},
+	[PERIODNAME] = {
+		PeriodRelationId,
+		PeriodRelidNameIndexId,
+		KEY(Anum_pg_period_perrelid,
+			Anum_pg_period_pername),
+		32
+	},
+	[PERIODOID] = {
+		PeriodRelationId,
+		PeriodObjectIndexId,
+		KEY(Anum_pg_period_oid),
+		32
+	},
 	[PROCNAMEARGSNSP] = {
 		ProcedureRelationId,
 		ProcedureNameArgsNspIndexId,
@@ -478,6 +492,13 @@ static const struct cachedesc cacheinfo[] = {
 		RangeRelationId,
 		RangeMultirangeTypidIndexId,
 		KEY(Anum_pg_range_rngmultitypid),
+		4
+	},
+	[RANGESUBTYPE] = {
+		RangeRelationId,
+		RangeSubTypidTypidIndexId,
+		KEY(Anum_pg_range_rngsubtype,
+			Anum_pg_range_rngtypid),
 		4
 	},
 	[RANGETYPE] = {

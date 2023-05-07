@@ -23,6 +23,7 @@ PostgreSQL documentation
 <synopsis>
 [ WITH [ RECURSIVE ] <replaceable class="parameter">with_query</replaceable> [, ...] ]
 UPDATE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] [ [ AS ] <replaceable class="parameter">alias</replaceable> ]
+    [ FOR PORTION OF <replaceable class="parameter">range_or_period_name</replaceable> FROM <replaceable class="parameter">start_time</replaceable> TO <replaceable class="parameter">end_time</replaceable> ]
     SET { <replaceable class="parameter">column_name</replaceable> = { <replaceable class="parameter">expression</replaceable> | DEFAULT } |
           ( <replaceable class="parameter">column_name</replaceable> [, ...] ) = [ ROW ] ( { <replaceable class="parameter">expression</replaceable> | DEFAULT } [, ...] ) |
           ( <replaceable class="parameter">column_name</replaceable> [, ...] ) = ( <replaceable class="parameter">sub-SELECT</replaceable> )
@@ -49,6 +50,16 @@ UPDATE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] [ 
    additional tables in the <literal>FROM</literal> clause. Which
    technique is more appropriate depends on the specific
    circumstances.
+  </para>
+
+  <para>
+   If the table has a <link linkend="ddl-periods-application-periods">temporal
+   primary key</link>, you may supply a
+   <literal>FOR PORTION OF</literal> clause, and your update will only affect rows
+   that overlap the given interval. Furthermore, if a row's span extends outside
+   the <literal>FOR PORTION OF</literal> bounds, then it will be truncated to fit
+   within the bounds, and new rows spanning the "cut off" duration will be
+   inserted to preserve the old values.
   </para>
 
   <para>
@@ -110,6 +121,42 @@ UPDATE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] [ 
       example, given <literal>UPDATE foo AS f</literal>, the remainder of the
       <command>UPDATE</command> statement must refer to this table as
       <literal>f</literal> not <literal>foo</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">range_or_period_name</replaceable></term>
+    <listitem>
+     <para>
+      The range column or period to use when performing a temporal update. This
+      must match the range or period used in the table's temporal primary key.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">start_time</replaceable></term>
+    <listitem>
+     <para>
+      The earliest time (inclusive) to change in a temporal update.
+      This must be a value matching the base type of the range or period from
+      <replaceable class="parameter">range_or_period_name</replaceable>. It may also
+      be the special value <literal>MINVALUE</literal> to indicate an update whose
+      beginning is unbounded.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">end_time</replaceable></term>
+    <listitem>
+     <para>
+      The latest time (exclusive) to change in a temporal update.
+      This must be a value matching the base type of the range or period from
+      <replaceable class="parameter">range_or_period_name</replaceable>. It may also
+      be the special value <literal>MAXVALUE</literal> to indicate an update whose
+      end is unbounded.
      </para>
     </listitem>
    </varlistentry>

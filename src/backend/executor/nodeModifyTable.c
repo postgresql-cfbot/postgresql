@@ -61,6 +61,9 @@
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/memutils.h"
+#include "utils/period.h"
+#include "utils/rangetypes.h"
+#include "utils/lsyscache.h"
 #include "utils/rel.h"
 
 
@@ -141,6 +144,10 @@ static bool ExecOnConflictUpdate(ModifyTableContext *context,
 								 TupleTableSlot *excludedSlot,
 								 bool canSetTag,
 								 TupleTableSlot **returning);
+static void ExecForPortionOfLeftovers(ModifyTableContext *context,
+									  EState *estate,
+									  ResultRelInfo *resultRelInfo,
+									  ItemPointer tupleid);
 static TupleTableSlot *ExecPrepareTupleRouting(ModifyTableState *mtstate,
 											   EState *estate,
 											   PartitionTupleRouting *proute,
@@ -1206,6 +1213,164 @@ ExecInsert(ModifyTableContext *context,
 }
 
 /* ----------------------------------------------------------------
+ *		set_leftover_tuple_bounds
+ *
+ *		Saves the new bounds into either the range attribute or the
+ *		PERIOD start/end attributes.
+ * ----------------------------------------------------------------
+ */
+static void set_leftover_tuple_bounds(TupleTableSlot *leftoverTuple,
+									  ForPortionOfExpr *forPortionOf,
+									  TypeCacheEntry *typcache,
+									  RangeType *leftoverRangeType)
+{
+	if (forPortionOf->rangeVar == NULL)
+	{
+		/* Store the lower/upper bounds to the PERIOD start/end cols */
+
+		RangeBound	lower;
+		RangeBound	upper;
+		bool		empty;
+
+		range_deserialize(typcache, leftoverRangeType, &lower, &upper, &empty);
+
+		if (empty || lower.infinite)
+			leftoverTuple->tts_isnull[forPortionOf->startVar->varattno - 1] = true;
+		else
+		{
+			leftoverTuple->tts_values[forPortionOf->startVar->varattno - 1] = lower.val;
+			leftoverTuple->tts_isnull[forPortionOf->startVar->varattno - 1] = false;
+		}
+
+		if (empty || upper.infinite)
+			leftoverTuple->tts_isnull[forPortionOf->endVar->varattno - 1] = true;
+		else
+		{
+			leftoverTuple->tts_values[forPortionOf->endVar->varattno - 1] = upper.val;
+			leftoverTuple->tts_isnull[forPortionOf->endVar->varattno - 1] = false;
+		}
+	}
+	else
+	{
+		/* Store the range directly */
+
+		leftoverTuple->tts_values[forPortionOf->rangeVar->varattno - 1] = RangeTypePGetDatum(leftoverRangeType);
+		leftoverTuple->tts_isnull[forPortionOf->rangeVar->varattno - 1] = false;
+	}
+
+}
+
+/* ----------------------------------------------------------------
+ *		ExecForPortionOfLeftovers
+ *
+ *		Insert tuples for the untouched timestamp of a row in a FOR
+ *		PORTION OF UPDATE/DELETE
+ * ----------------------------------------------------------------
+ */
+static void
+ExecForPortionOfLeftovers(ModifyTableContext *context,
+						  EState *estate,
+						  ResultRelInfo *resultRelInfo,
+						  ItemPointer tupleid)
+{
+	// TODO: figure out if I need to make a coyp of the slot somehow in order to insert it...
+
+	ModifyTableState *mtstate = context->mtstate;
+	ModifyTable *node = (ModifyTable *) mtstate->ps.plan;
+	ForPortionOfExpr *forPortionOf = (ForPortionOfExpr *) node->forPortionOf;
+	Datum oldRange;
+	RangeType *oldRangeType;
+	RangeType *targetRangeType;
+	RangeType *leftoverRangeType1;
+	RangeType *leftoverRangeType2;
+	Oid rangeTypeOid = forPortionOf->rangeType;
+	bool isNull = false;
+	TypeCacheEntry *typcache;
+	TupleTableSlot *oldtupleSlot = resultRelInfo->ri_forPortionOf->fp_Existing;
+	TupleTableSlot *leftoverTuple1 = resultRelInfo->ri_forPortionOf->fp_Leftover1;
+	TupleTableSlot *leftoverTuple2 = resultRelInfo->ri_forPortionOf->fp_Leftover2;
+
+	/* Get the range of the existing pre-UPDATE/DELETE tuple */
+
+	// TODO: Seems like we shouldn't have to do this,
+	// because the old tuple should already be available somehow?
+	// But this is what triggers do.... (Are you sure this is how they get the OLD tuple?)
+	// And even if we do have to do this, is SnapshotAny really correct?
+	// Shouldn't it be the snapshot of the UPDATE?
+	if (!table_tuple_fetch_row_version(resultRelInfo->ri_RelationDesc, tupleid, SnapshotAny, oldtupleSlot))
+		elog(ERROR, "failed to fetch tuple for FOR PORTION OF");
+
+	if (forPortionOf->rangeVar == NULL)
+		oldRange = period_to_range(oldtupleSlot, forPortionOf->startVar->varattno, forPortionOf->endVar->varattno, rangeTypeOid);
+	else
+		oldRange = slot_getattr(oldtupleSlot, forPortionOf->rangeVar->varattno, &isNull);
+
+
+	if (isNull)
+		elog(ERROR, "found a NULL range in a temporal table");
+	oldRangeType = DatumGetRangeTypeP(oldRange);
+
+	/* Evaluate the target range if we haven't yet */
+
+	targetRangeType = DatumGetRangeTypeP(resultRelInfo->ri_forPortionOf->fp_targetRange);
+
+	/*
+	 * Get the range's type cache entry. This is worth caching for the whole UPDATE
+	 * like range functions do.
+	 */
+
+	typcache = resultRelInfo->ri_forPortionOf->fp_rangetypcache;
+	if (typcache == NULL)
+	{
+		typcache = lookup_type_cache(rangeTypeOid, TYPECACHE_RANGE_INFO);
+		if (typcache->rngelemtype == NULL)
+			elog(ERROR, "type %u is not a range type", rangeTypeOid);
+		resultRelInfo->ri_forPortionOf->fp_rangetypcache = typcache;
+	}
+
+	/* Get the ranges to the left/right of the targeted range. */
+
+	range_leftover_internal(typcache, oldRangeType, targetRangeType, &leftoverRangeType1,
+			&leftoverRangeType2);
+
+	/*
+	 * Insert a copy of the tuple with the lower leftover range.
+	 * Even if the table is partitioned,
+	 * our insert won't extend past the current row, so we don't need to re-route.
+	 */
+
+	if (!RangeIsEmpty(leftoverRangeType1))
+	{
+		MinimalTuple oldtuple = ExecFetchSlotMinimalTuple(oldtupleSlot, NULL);
+		ExecForceStoreMinimalTuple(oldtuple, leftoverTuple1, false);
+
+		set_leftover_tuple_bounds(leftoverTuple1, forPortionOf, typcache, leftoverRangeType1);
+		ExecMaterializeSlot(leftoverTuple1);
+
+		// TODO: Need to save context->mtstate->mt_transition_capture? (See comment on ExecInsert)
+		ExecInsert(context, resultRelInfo, leftoverTuple1, node->canSetTag, NULL, NULL);
+	}
+
+	/*
+	 * Insert a copy of the tuple with the upper leftover range
+	 * Even if the table is partitioned,
+	 * our insert won't extend past the current row, so we don't need to re-route.
+	 */
+
+	if (!RangeIsEmpty(leftoverRangeType2))
+	{
+		MinimalTuple oldtuple = ExecFetchSlotMinimalTuple(oldtupleSlot, NULL);
+		ExecForceStoreMinimalTuple(oldtuple, leftoverTuple2, false);
+
+		set_leftover_tuple_bounds(leftoverTuple2, forPortionOf, typcache, leftoverRangeType2);
+		ExecMaterializeSlot(leftoverTuple2);
+
+		// TODO: Need to save context->mtstate->mt_transition_capture? (See comment on ExecInsert)
+		ExecInsert(context, resultRelInfo, leftoverTuple2, node->canSetTag, NULL, NULL);
+	}
+}
+
+/* ----------------------------------------------------------------
  *		ExecBatchInsert
  *
  *		Insert multiple tuples in an efficient way.
@@ -1357,11 +1522,13 @@ ExecDeleteAct(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
  *
  * Closing steps of tuple deletion; this invokes AFTER FOR EACH ROW triggers,
  * including the UPDATE triggers if the deletion is being done as part of a
- * cross-partition tuple move.
+ * cross-partition tuple move. It also inserts leftovers from a FOR PORTION OF
+ * delete.
  */
 static void
 ExecDeleteEpilogue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
-				   ItemPointer tupleid, HeapTuple oldtuple, bool changingPart)
+				   ItemPointer tupleid, HeapTuple oldtuple, bool changingPart,
+				   ForPortionOfExpr *forPortionOf)
 {
 	ModifyTableState *mtstate = context->mtstate;
 	EState	   *estate = context->estate;
@@ -1389,6 +1556,11 @@ ExecDeleteEpilogue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 		 */
 		ar_delete_trig_tcs = NULL;
 	}
+
+	/* Compute leftovers in FOR PORTION OF */
+	// TODO: Skip this for FDW deletes?
+	if (forPortionOf)
+		ExecForPortionOfLeftovers(context, estate, resultRelInfo, tupleid);
 
 	/* AFTER ROW DELETE Triggers */
 	ExecARDeleteTriggers(estate, resultRelInfo, tupleid, oldtuple,
@@ -1661,7 +1833,8 @@ ldelete:
 	if (tupleDeleted)
 		*tupleDeleted = true;
 
-	ExecDeleteEpilogue(context, resultRelInfo, tupleid, oldtuple, changingPart);
+	ExecDeleteEpilogue(context, resultRelInfo, tupleid, oldtuple, changingPart,
+			(ForPortionOfExpr *)((ModifyTable *) context->mtstate->ps.plan)->forPortionOf);
 
 	/* Process RETURNING if present and if requested */
 	if (processReturning && resultRelInfo->ri_projectReturning)
@@ -2120,7 +2293,8 @@ lreplace:
 static void
 ExecUpdateEpilogue(ModifyTableContext *context, UpdateContext *updateCxt,
 				   ResultRelInfo *resultRelInfo, ItemPointer tupleid,
-				   HeapTuple oldtuple, TupleTableSlot *slot)
+				   HeapTuple oldtuple, TupleTableSlot *slot,
+				   ForPortionOfExpr *forPortionOf)
 {
 	ModifyTableState *mtstate = context->mtstate;
 	List	   *recheckIndexes = NIL;
@@ -2132,6 +2306,11 @@ ExecUpdateEpilogue(ModifyTableContext *context, UpdateContext *updateCxt,
 											   true, false,
 											   NULL, NIL,
 											   (updateCxt->updateIndexes == TU_Summarizing));
+
+	/* Compute leftovers in FOR PORTION OF */
+	// TODO: Skip this for FDW updates?
+	if (forPortionOf)
+		ExecForPortionOfLeftovers(context, context->estate, resultRelInfo, tupleid);
 
 	/* AFTER ROW UPDATE Triggers */
 	ExecARUpdateTriggers(context->estate, resultRelInfo,
@@ -2476,7 +2655,8 @@ redo_act:
 		(estate->es_processed)++;
 
 	ExecUpdateEpilogue(context, &updateCxt, resultRelInfo, tupleid, oldtuple,
-					   slot);
+					   slot,
+					   (ForPortionOfExpr *) ((ModifyTable *) context->mtstate->ps.plan)->forPortionOf);
 
 	/* Process RETURNING if present */
 	if (resultRelInfo->ri_projectReturning)
@@ -2901,7 +3081,7 @@ lmerge_matched:
 				if (result == TM_Ok && updateCxt.updated)
 				{
 					ExecUpdateEpilogue(context, &updateCxt, resultRelInfo,
-									   tupleid, NULL, newslot);
+									   tupleid, NULL, newslot, NULL);
 					mtstate->mt_merge_updated += 1;
 				}
 				break;
@@ -2919,7 +3099,7 @@ lmerge_matched:
 				if (result == TM_Ok)
 				{
 					ExecDeleteEpilogue(context, resultRelInfo, tupleid, NULL,
-									   false);
+									   false, NULL);
 					mtstate->mt_merge_deleted += 1;
 				}
 				break;
@@ -4278,6 +4458,63 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 									&mtstate->ps);
 			onconfl->oc_WhereClause = qualexpr;
 		}
+	}
+
+	/*
+	 * If needed, initialize the target range for FOR PORTION OF.
+	 */
+	if (node->forPortionOf)
+	{
+		TupleDesc tupDesc = resultRelInfo->ri_RelationDesc->rd_att;
+		ForPortionOfExpr *forPortionOf = (ForPortionOfExpr *) node->forPortionOf;
+		Datum	targetRange;
+		bool	isNull;
+		ExprContext *econtext;
+		ExprState *exprState;
+
+		/* Eval the FOR PORTION OF target */
+		if (mtstate->ps.ps_ExprContext == NULL)
+			ExecAssignExprContext(estate, &mtstate->ps);
+		econtext = mtstate->ps.ps_ExprContext;
+
+		exprState = ExecPrepareExpr((Expr *) forPortionOf->targetRange, estate);
+		targetRange = ExecEvalExpr(exprState, econtext, &isNull);
+		if (isNull)
+			elog(ERROR, "Got a NULL FOR PORTION OF target range");
+
+		/* Create state for FOR PORTION OF operation */
+
+		resultRelInfo->ri_forPortionOf = makeNode(ForPortionOfState);
+		resultRelInfo->ri_forPortionOf->fp_rangeName = forPortionOf->range_name;
+		resultRelInfo->ri_forPortionOf->fp_rangeType = forPortionOf->rangeType;
+		if (forPortionOf->rangeVar == NULL)
+		{
+			resultRelInfo->ri_forPortionOf->fp_hasPeriod = true;
+			resultRelInfo->ri_forPortionOf->fp_rangeAttno = InvalidAttrNumber;
+			resultRelInfo->ri_forPortionOf->fp_periodStartAttno = forPortionOf->startVar->varattno;
+			resultRelInfo->ri_forPortionOf->fp_periodEndAttno = forPortionOf->endVar->varattno;
+		} else {
+			resultRelInfo->ri_forPortionOf->fp_hasPeriod = false;
+			resultRelInfo->ri_forPortionOf->fp_rangeAttno = forPortionOf->rangeVar->varattno;
+			resultRelInfo->ri_forPortionOf->fp_periodStartAttno = InvalidAttrNumber;
+			resultRelInfo->ri_forPortionOf->fp_periodEndAttno = InvalidAttrNumber;
+		}
+		resultRelInfo->ri_forPortionOf->fp_targetRange = targetRange;
+
+		/* Initialize slot for the existing tuple */
+
+		resultRelInfo->ri_forPortionOf->fp_Existing =
+			table_slot_create(resultRelInfo->ri_RelationDesc,
+							  &mtstate->ps.state->es_tupleTable);
+
+		/* Create the tuple slots for INSERTing the leftovers */
+
+		resultRelInfo->ri_forPortionOf->fp_Leftover1 =
+			ExecInitExtraTupleSlot(mtstate->ps.state, tupDesc, &TTSOpsVirtual);
+		resultRelInfo->ri_forPortionOf->fp_Leftover2 =
+			ExecInitExtraTupleSlot(mtstate->ps.state, tupDesc, &TTSOpsVirtual);
+
+		/* Don't free the ExprContext here because the result must last for the whole query */
 	}
 
 	/*

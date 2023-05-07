@@ -41,12 +41,14 @@
 #include "storage/condition_variable.h"
 #include "utils/hsearch.h"
 #include "utils/queryenvironment.h"
+#include "utils/rangetypes.h"
 #include "utils/reltrigger.h"
 #include "utils/sharedtuplestore.h"
 #include "utils/snapshot.h"
 #include "utils/sortsupport.h"
 #include "utils/tuplesort.h"
 #include "utils/tuplestore.h"
+#include "utils/typcache.h"
 
 struct PlanState;				/* forward references in this file */
 struct ParallelHashJoinState;
@@ -144,6 +146,7 @@ typedef struct ExprState
  *		IndexAttrNumbers	underlying-rel attribute numbers used as keys
  *							(zeroes indicate expressions). It also contains
  * 							info about included columns.
+ *		Period				period used in the index, or NULL if none
  *		Expressions			expr trees for expression entries, or NIL if none
  *		ExpressionsState	exec state for expressions, or NIL if none
  *		Predicate			partial-index predicate, or NIL if none
@@ -155,6 +158,7 @@ typedef struct ExprState
  *		UniqueProcs
  *		UniqueStrats
  *		Unique				is it a unique index?
+ *		Temporal			is it for a temporal constraint?
  *		OpclassOptions		opclass-specific options, or NULL if none
  *		ReadyForInserts		is it valid for inserts?
  *		CheckedUnchanged	IndexUnchanged status determined yet?
@@ -177,6 +181,7 @@ typedef struct IndexInfo
 	int			ii_NumIndexAttrs;	/* total number of columns in index */
 	int			ii_NumIndexKeyAttrs;	/* number of key columns in index */
 	AttrNumber	ii_IndexAttrNumbers[INDEX_MAX_KEYS];
+	Node	   *ii_Period;	/* period used in the index */
 	List	   *ii_Expressions; /* list of Expr */
 	List	   *ii_ExpressionsState;	/* list of ExprState */
 	List	   *ii_Predicate;	/* list of Expr */
@@ -190,6 +195,7 @@ typedef struct IndexInfo
 	Datum	   *ii_OpclassOptions;	/* array with one entry per column */
 	bool		ii_Unique;
 	bool		ii_NullsNotDistinct;
+	bool		ii_Temporal;
 	bool		ii_ReadyForInserts;
 	bool		ii_CheckedUnchanged;
 	bool		ii_IndexUnchanged;
@@ -423,6 +429,28 @@ typedef struct MergeActionState
 } MergeActionState;
 
 /*
+ * ForPortionOfState
+ *
+ * Executor state of a FOR PORTION OF operation.
+ */
+typedef struct ForPortionOfState
+{
+	NodeTag		type;
+
+	char   *fp_rangeName;		/* the column/PERIOD named in FOR PORTION OF */
+	Oid		fp_rangeType;		/* the type of the FOR PORTION OF expression */
+	bool	fp_hasPeriod;		/* true iff this is a PERIOD not a range */
+	int		fp_rangeAttno;		/* the attno of the range column (or 0 for a PERIOD) */
+	int		fp_periodStartAttno;	/* the attno of the PERIOD start column (or 0 for a range) */
+	int		fp_periodEndAttno;		/* the attno of the PERIOD end column (or 0 for a range) */
+	Datum	fp_targetRange;		/* the range from FOR PORTION OF */
+	TypeCacheEntry *fp_rangetypcache;	/* type cache entry of the range */
+	TupleTableSlot *fp_Existing;		/* slot to store existing target tuple in */
+	TupleTableSlot *fp_Leftover1;		/* slot to store leftover below the target range */
+	TupleTableSlot *fp_Leftover2;		/* slot to store leftover above the target range */
+} ForPortionOfState;
+
+/*
  * ResultRelInfo
  *
  * Whenever we update an existing relation, we have to update indexes on the
@@ -541,6 +569,9 @@ typedef struct ResultRelInfo
 	/* for MERGE, lists of MergeActionState */
 	List	   *ri_matchedMergeAction;
 	List	   *ri_notMatchedMergeAction;
+
+	/* FOR PORTION OF evaluation state */
+	ForPortionOfState *ri_forPortionOf;
 
 	/* partition check expression state (NULL if not set up yet) */
 	ExprState  *ri_PartitionCheckExpr;

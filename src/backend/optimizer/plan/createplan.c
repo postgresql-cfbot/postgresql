@@ -311,7 +311,8 @@ static ModifyTable *make_modifytable(PlannerInfo *root, Plan *subplan,
 									 List *updateColnosLists,
 									 List *withCheckOptionLists, List *returningLists,
 									 List *rowMarks, OnConflictExpr *onconflict,
-									 List *mergeActionLists, int epqParam);
+									 List *mergeActionLists, ForPortionOfExpr *forPortionOf,
+									 int epqParam);
 static GatherMerge *create_gather_merge_plan(PlannerInfo *root,
 											 GatherMergePath *best_path);
 
@@ -2821,6 +2822,7 @@ create_modifytable_plan(PlannerInfo *root, ModifyTablePath *best_path)
 							best_path->rowMarks,
 							best_path->onconflict,
 							best_path->mergeActionLists,
+							best_path->forPortionOf,
 							best_path->epqParam);
 
 	copy_generic_path_info(&plan->plan, &best_path->path);
@@ -6984,7 +6986,8 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 				 List *updateColnosLists,
 				 List *withCheckOptionLists, List *returningLists,
 				 List *rowMarks, OnConflictExpr *onconflict,
-				 List *mergeActionLists, int epqParam)
+				 List *mergeActionLists, ForPortionOfExpr *forPortionOf,
+				 int epqParam)
 {
 	ModifyTable *node = makeNode(ModifyTable);
 	List	   *fdw_private_list;
@@ -7050,6 +7053,7 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 		node->exclRelTlist = onconflict->exclRelTlist;
 	}
 	node->updateColnosLists = updateColnosLists;
+	node->forPortionOf = (Node *) forPortionOf;
 	node->withCheckOptionLists = withCheckOptionLists;
 	node->returningLists = returningLists;
 	node->rowMarks = rowMarks;

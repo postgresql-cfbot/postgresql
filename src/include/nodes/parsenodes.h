@@ -149,6 +149,9 @@ typedef struct Query
 	 */
 	int			resultRelation pg_node_attr(query_jumble_ignore);
 
+	/* FOR PORTION OF clause for UPDATE/DELETE */
+	ForPortionOfExpr *forPortionOf;
+
 	/* has aggregates in tlist or havingQual */
 	bool		hasAggs pg_node_attr(query_jumble_ignore);
 	/* has window functions in tlist */
@@ -1537,6 +1540,19 @@ typedef struct RowMarkClause
 } RowMarkClause;
 
 /*
+ * ForPortionOfClause
+ *		representation of FOR PORTION OF <period-name> FROM <t1> TO <t2>
+ */
+typedef struct ForPortionOfClause
+{
+	NodeTag		type;
+	char	   *range_name;
+	int			range_name_location;
+	Node	   *target_start;
+	Node	   *target_end;
+} ForPortionOfClause;
+
+/*
  * WithClause -
  *	   representation of WITH clause
  *
@@ -1879,12 +1895,13 @@ typedef struct InsertStmt
  */
 typedef struct DeleteStmt
 {
-	NodeTag		type;
-	RangeVar   *relation;		/* relation to delete from */
-	List	   *usingClause;	/* optional using clause for more tables */
-	Node	   *whereClause;	/* qualifications */
-	List	   *returningList;	/* list of expressions to return */
-	WithClause *withClause;		/* WITH clause */
+	NodeTag				type;
+	RangeVar		   *relation;		/* relation to delete from */
+	ForPortionOfClause *forPortionOf;	/* FOR PORTION OF clause */
+	List			   *usingClause;	/* optional using clause for more tables */
+	Node			   *whereClause;	/* qualifications */
+	List			   *returningList;	/* list of expressions to return */
+	WithClause		   *withClause;		/* WITH clause */
 } DeleteStmt;
 
 /* ----------------------
@@ -1893,13 +1910,14 @@ typedef struct DeleteStmt
  */
 typedef struct UpdateStmt
 {
-	NodeTag		type;
-	RangeVar   *relation;		/* relation to update */
-	List	   *targetList;		/* the target list (of ResTarget) */
-	Node	   *whereClause;	/* qualifications */
-	List	   *fromClause;		/* optional from clause for more tables */
-	List	   *returningList;	/* list of expressions to return */
-	WithClause *withClause;		/* WITH clause */
+	NodeTag				type;
+	RangeVar		   *relation;		/* relation to update */
+	ForPortionOfClause *forPortionOf;	/* FOR PORTION OF clause */
+	List			   *targetList;		/* the target list (of ResTarget) */
+	Node			   *whereClause;	/* qualifications */
+	List			   *fromClause;		/* optional from clause for more tables */
+	List			   *returningList;	/* list of expressions to return */
+	WithClause		   *withClause;		/* WITH clause */
 } UpdateStmt;
 
 /* ----------------------
@@ -2107,6 +2125,7 @@ typedef enum ObjectType
 	OBJECT_OPERATOR,
 	OBJECT_OPFAMILY,
 	OBJECT_PARAMETER_ACL,
+	OBJECT_PERIOD,
 	OBJECT_POLICY,
 	OBJECT_PROCEDURE,
 	OBJECT_PUBLICATION,
@@ -2194,6 +2213,8 @@ typedef enum AlterTableType
 	AT_ValidateConstraint,		/* validate constraint */
 	AT_AddIndexConstraint,		/* add constraint using existing index */
 	AT_DropConstraint,			/* drop constraint */
+	AT_AddPeriod,				/* ADD PERIOD */
+	AT_DropPeriod,				/* DROP PERIOD */
 	AT_ReAddComment,			/* internal to commands/tablecmds.c */
 	AT_AlterColumnType,			/* alter column type */
 	AT_AlterColumnGenericOptions,	/* alter column OPTIONS (...) */
@@ -2461,9 +2482,9 @@ typedef struct VariableShowStmt
 /* ----------------------
  *		Create Table Statement
  *
- * NOTE: in the raw gram.y output, ColumnDef and Constraint nodes are
- * intermixed in tableElts, and constraints is NIL.  After parse analysis,
- * tableElts contains just ColumnDefs, and constraints contains just
+ * NOTE: in the raw gram.y output, ColumnDef, PeriodDef, and Constraint nodes are
+ * intermixed in tableElts; periods and constraints are NIL.  After parse analysis,
+ * tableElts contains just ColumnDefs, periods contains just PeriodDef nodes, and constraints contains just
  * Constraint nodes (in fact, only CONSTR_CHECK nodes, in the present
  * implementation).
  * ----------------------
@@ -2474,6 +2495,7 @@ typedef struct CreateStmt
 	NodeTag		type;
 	RangeVar   *relation;		/* relation to create */
 	List	   *tableElts;		/* column definitions (list of ColumnDef) */
+	List	   *periods;		/* periods (list of PeriodDef nodes) */
 	List	   *inhRelations;	/* relations to inherit from (list of
 								 * RangeVar) */
 	PartitionBoundSpec *partbound;	/* FOR VALUES clause */
@@ -2486,6 +2508,26 @@ typedef struct CreateStmt
 	char	   *accessMethod;	/* table access method */
 	bool		if_not_exists;	/* just do nothing if it already exists? */
 } CreateStmt;
+
+
+/* ----------
+ * Definitions for periods in CreateStmt
+ * ----------
+ */
+
+typedef struct PeriodDef
+{
+	NodeTag		type;
+	Oid			oid;			/* period oid, once it's transformed */
+	char	   *periodname;		/* period name */
+	char	   *startcolname;	/* name of start column */
+	char	   *endcolname;		/* name of end column */
+	List	   *options;		/* options from WITH clause */
+	char	   *constraintname;	/* name of the CHECK constraint */
+	char	   *rangetypename;	/* name of the range type */
+	Oid			rngtypid;		/* the range type to use */
+	int			location;		/* token location, or -1 if unknown */
+} PeriodDef;
 
 /* ----------
  * Definitions for constraints in CreateStmt
@@ -2591,7 +2633,9 @@ typedef struct Constraint
 	/* Fields used for FOREIGN KEY constraints: */
 	RangeVar   *pktable;		/* Primary key table */
 	List	   *fk_attrs;		/* Attributes of foreign key */
+	Node	   *fk_period;		/* String node naming Period or range column */
 	List	   *pk_attrs;		/* Corresponding attrs in PK table */
+	Node	   *pk_period;		/* String node naming Period or range column */
 	char		fk_matchtype;	/* FULL, PARTIAL, SIMPLE */
 	char		fk_upd_action;	/* ON UPDATE action */
 	char		fk_del_action;	/* ON DELETE action */
@@ -2599,6 +2643,9 @@ typedef struct Constraint
 	List	   *old_conpfeqop;	/* pg_constraint.conpfeqop of my former self */
 	Oid			old_pktable_oid;	/* pg_constraint.confrelid of my former
 									 * self */
+
+  /* Fields used for temporal PRIMARY KEY and FOREIGN KEY constraints: */
+	Node	   *without_overlaps; /* String node naming PERIOD or range column */
 
 	/* Fields used for constraints that allow a NOT VALID specification */
 	bool		skip_validation;	/* skip validation of existing rows? */
@@ -3188,6 +3235,7 @@ typedef struct IndexStmt
 	List	   *indexParams;	/* columns to index: a list of IndexElem */
 	List	   *indexIncludingParams;	/* additional columns to index: a list
 										 * of IndexElem */
+	PeriodDef  *period;			/* The period included in the index */
 	List	   *options;		/* WITH clause options: a list of DefElem */
 	Node	   *whereClause;	/* qualification (partial-index predicate) */
 	List	   *excludeOpNames; /* exclusion operator names, or NIL if none */
@@ -3201,6 +3249,7 @@ typedef struct IndexStmt
 	bool		nulls_not_distinct; /* null treatment for UNIQUE constraints */
 	bool		primary;		/* is index a primary key? */
 	bool		isconstraint;	/* is it for a pkey/unique constraint? */
+	bool		istemporal;		/* is it for a temporal pkey? */
 	bool		deferrable;		/* is the constraint DEFERRABLE? */
 	bool		initdeferred;	/* is the constraint INITIALLY DEFERRED? */
 	bool		transformed;	/* true when transformIndexStmt is finished */

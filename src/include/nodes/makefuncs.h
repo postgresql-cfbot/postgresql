@@ -98,7 +98,7 @@ extern IndexInfo *makeIndexInfo(int numattrs, int numkeyattrs, Oid amoid,
 								List *expressions, List *predicates,
 								bool unique, bool nulls_not_distinct,
 								bool isready, bool concurrent,
-								bool summarizing);
+								bool summarizing, bool temporal);
 
 extern DefElem *makeDefElem(char *name, Node *arg, int location);
 extern DefElem *makeDefElemExtended(char *nameSpace, char *name, Node *arg,

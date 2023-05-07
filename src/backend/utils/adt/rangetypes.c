@@ -1206,6 +1206,48 @@ range_split_internal(TypeCacheEntry *typcache, const RangeType *r1, const RangeT
 	return false;
 }
 
+/*
+ * range_leftover_internal - Sets output1 and output2 to the remaining parts of r1
+ * after subtracting r2, or if nothing is left then to the empty range.
+ * output1 will always be "before" r2 and output2 "after".
+ */
+void
+range_leftover_internal(TypeCacheEntry *typcache, const RangeType *r1,
+						const RangeType *r2, RangeType **output1, RangeType **output2)
+{
+	RangeBound	lower1,
+				lower2;
+	RangeBound	upper1,
+				upper2;
+	bool		empty1,
+				empty2;
+
+	range_deserialize(typcache, r1, &lower1, &upper1, &empty1);
+	range_deserialize(typcache, r2, &lower2, &upper2, &empty2);
+
+	if (range_cmp_bounds(typcache, &lower1, &lower2) < 0)
+	{
+		lower2.inclusive = !lower2.inclusive;
+		lower2.lower = false;
+		*output1 = make_range(typcache, &lower1, &lower2, false, NULL);
+	}
+	else
+	{
+		*output1 = make_empty_range(typcache);
+	}
+
+	if (range_cmp_bounds(typcache, &upper1, &upper2) > 0)
+	{
+		upper2.inclusive = !upper2.inclusive;
+		upper2.lower = true;
+		*output2 = make_range(typcache, &upper2, &upper1, false, NULL);
+	}
+	else
+	{
+		*output2 = make_empty_range(typcache);
+	}
+}
+
 /* range -> range aggregate functions */
 
 Datum

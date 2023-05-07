@@ -508,6 +508,7 @@ does_not_exist_skipping(ObjectType objtype, Node *object)
 		case OBJECT_DOMCONSTRAINT:
 		case OBJECT_LARGEOBJECT:
 		case OBJECT_PARAMETER_ACL:
+		case OBJECT_PERIOD:
 		case OBJECT_PUBLICATION_NAMESPACE:
 		case OBJECT_PUBLICATION_REL:
 		case OBJECT_TABCONSTRAINT:

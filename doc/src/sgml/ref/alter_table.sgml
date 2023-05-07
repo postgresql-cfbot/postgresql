@@ -60,6 +60,8 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
     ALTER CONSTRAINT <replaceable class="parameter">constraint_name</replaceable> [ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
     VALIDATE CONSTRAINT <replaceable class="parameter">constraint_name</replaceable>
     DROP CONSTRAINT [ IF EXISTS ]  <replaceable class="parameter">constraint_name</replaceable> [ RESTRICT | CASCADE ]
+    ADD PERIOD FOR <replaceable class="parameter">period_name</replaceable> ( <replaceable class="parameter">start_column</replaceable>, <replaceable class="parameter">end_column</replaceable> ) [ WITH ( <replaceable class="parameter">period_option</replaceable> = <replaceable class="parameter">value</replaceable> [, ... ] ) ]
+    DROP PERIOD FOR <replaceable class="parameter">period_name</replaceable> [ RESTRICT | CASCADE ]
     DISABLE TRIGGER [ <replaceable class="parameter">trigger_name</replaceable> | ALL | USER ]
     ENABLE TRIGGER [ <replaceable class="parameter">trigger_name</replaceable> | ALL | USER ]
     ENABLE REPLICA TRIGGER <replaceable class="parameter">trigger_name</replaceable>
@@ -566,6 +568,29 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       any index underlying the constraint.
       If <literal>IF EXISTS</literal> is specified and the constraint
       does not exist, no error is thrown. In this case a notice is issued instead.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-altertable-desc-add-period">
+    <term><literal>ADD PERIOD FOR</literal></term>
+    <listitem>
+     <para>
+      This form adds a new period to a table using the same syntax as
+      <xref linkend="sql-createtable"/>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>DROP PERIOD FOR</literal></term>
+    <listitem>
+     <para>
+      This form drops the specified period on a table.  The start and end
+      columns will not be dropped by this command but the
+      <literal>CHECK</literal> constraint will be.  You will need to say
+      <literal>CASCADE</literal> if anything outside the table depends on the
+      column.
      </para>
     </listitem>
    </varlistentry>

@@ -3472,6 +3472,30 @@ rewriteTargetView(Query *parsetree, Relation view)
 									  &parsetree->hasSubLinks);
 	}
 
+	if (parsetree->forPortionOf && parsetree->commandType == CMD_UPDATE)
+	{
+		/*
+		 * Like the INSERT/UPDATE code above, update the resnos in the
+		 * auxiliary UPDATE targetlist to refer to columns of the base
+		 * relation.
+		 */
+		foreach(lc, parsetree->forPortionOf->rangeSet)
+		{
+			TargetEntry *tle = (TargetEntry *) lfirst(lc);
+			TargetEntry *view_tle;
+
+			if (tle->resjunk)
+				continue;
+
+			view_tle = get_tle_by_resno(view_targetlist, tle->resno);
+			if (view_tle != NULL && !view_tle->resjunk && IsA(view_tle->expr, Var))
+				tle->resno = ((Var *) view_tle->expr)->varattno;
+			else
+				elog(ERROR, "attribute number %d not found in view targetlist",
+					 tle->resno);
+		}
+	}
+
 	/*
 	 * For UPDATE/DELETE, pull up any WHERE quals from the view.  We know that
 	 * any Vars in the quals must reference the one base relation, so we need
@@ -3810,6 +3834,22 @@ RewriteQuery(Query *parsetree, List *rewrite_events, int orig_rt_length)
 		else if (event == CMD_UPDATE)
 		{
 			Assert(parsetree->override == OVERRIDING_NOT_SET);
+			/*
+			 * Update FOR PORTION OF column(s) automatically. Don't
+			 * do this until we're done rewriting a view update, so
+			 * that we don't add the same update on the recursion.
+			 */
+			if (parsetree->forPortionOf &&
+				rt_entry_relation->rd_rel->relkind != RELKIND_VIEW)
+			{
+				ListCell *tl;
+				foreach(tl, parsetree->forPortionOf->rangeSet)
+				{
+					TargetEntry *tle = (TargetEntry *) lfirst(tl);
+					parsetree->targetList = lappend(parsetree->targetList, tle);
+				}
+			}
+
 			parsetree->targetList =
 				rewriteTargetListIU(parsetree->targetList,
 									parsetree->commandType,

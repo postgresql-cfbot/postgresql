@@ -40,5 +40,6 @@ extern IndexStmt *generateClonedIndexStmt(RangeVar *heapRel,
 										  Relation source_idx,
 										  const struct AttrMap *attmap,
 										  Oid *constraintOid);
+extern void transformPeriodOptions(PeriodDef *period);
 
 #endif							/* PARSE_UTILCMD_H */

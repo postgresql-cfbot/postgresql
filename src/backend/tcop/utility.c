@@ -1559,7 +1559,7 @@ ProcessUtilitySlow(ParseState *pstate,
 									true,	/* check_rights */
 									true,	/* check_not_in_use */
 									false,	/* skip_build */
-									false); /* quiet */
+									false);	/* quiet */
 
 					/*
 					 * Add the CREATE INDEX node itself to stash right away;

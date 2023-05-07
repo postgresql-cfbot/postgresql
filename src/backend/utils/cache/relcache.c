@@ -4792,9 +4792,15 @@ RelationGetIndexList(Relation relation)
 		 * interesting for either oid indexes or replication identity indexes,
 		 * so don't check them.
 		 */
-		if (!index->indisvalid || !index->indisunique ||
-			!index->indimmediate ||
+		if (!index->indisvalid || !index->indimmediate ||
 			!heap_attisnull(htup, Anum_pg_index_indpred, NULL))
+			continue;
+
+		/*
+		 * Non-unique indexes aren't interesting either,
+		 * except when they are temporal primary keys.
+		 */
+		if (!index->indisunique && !index->indisprimary)
 			continue;
 
 		/* remember primary key index if any */
@@ -5507,8 +5513,9 @@ RelationGetIdentityKeyBitmap(Relation relation)
  * RelationGetExclusionInfo -- get info about index's exclusion constraint
  *
  * This should be called only for an index that is known to have an
- * associated exclusion constraint.  It returns arrays (palloc'd in caller's
- * context) of the exclusion operator OIDs, their underlying functions'
+ * associated exclusion constraint or temporal primary key/unique
+ * constraint. It returns arrays (palloc'd in caller's context)
+ * of the exclusion operator OIDs, their underlying functions'
  * OIDs, and their strategy numbers in the index's opclasses.  We cache
  * all this information since it requires a fair amount of work to get.
  */
@@ -5574,7 +5581,10 @@ RelationGetExclusionInfo(Relation indexRelation,
 		int			nelem;
 
 		/* We want the exclusion constraint owning the index */
-		if (conform->contype != CONSTRAINT_EXCLUSION ||
+		if ((conform->contype != CONSTRAINT_EXCLUSION &&
+					!(conform->contemporal && (
+							conform->contype == CONSTRAINT_PRIMARY
+							|| conform->contype == CONSTRAINT_UNIQUE))) ||
 			conform->conindid != RelationGetRelid(indexRelation))
 			continue;
 

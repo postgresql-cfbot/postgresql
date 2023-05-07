@@ -231,6 +231,11 @@
      </row>
 
      <row>
+      <entry><link linkend="catalog-pg-period"><structname>pg_period</structname></link></entry>
+      <entry>periods</entry>
+     </row>
+
+     <row>
       <entry><link linkend="catalog-pg-policy"><structname>pg_policy</structname></link></entry>
       <entry>row-security policies</entry>
      </row>
@@ -5710,6 +5715,113 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
        are simple references.
       </para></entry>
      </row>
+
+    </tbody>
+   </tgroup>
+  </table>
+ </sect1>
+
+
+ <sect1 id="catalog-pg-period">
+  <title><structname>pg_period</structname></title>
+
+  <indexterm zone="catalog-pg-period">
+   <primary>pg_period</primary>
+  </indexterm>
+
+  <para>
+   The catalog <structname>pg_period</structname> stores
+   information about system and application time periods.
+  </para>
+
+  <para>
+   Periods are described in <xref linkend="ddl-periods"/>.
+  </para>
+
+  <table>
+   <title><structname>pg_period</structname> Columns</title>
+
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>oid</structfield> <type>oid</type>
+      </para>
+      <para>
+       Row identifier
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>pername</structfield> <type>text</type>
+      </para>
+      <para>
+       Period name
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>perrelid</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-class"><structname>pg_class</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       The table this period belongs to
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>perstart</structfield> <type>int2</type>
+       (references <link linkend="catalog-pg-attribute"><structname>pg_attribute</structname></link>.<structfield>attnum</structfield>)
+      </para>
+      <para>
+       The number of the start column
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>perend</structfield> <type>int2</type>
+       (references <link linkend="catalog-pg-attribute"><structname>pg_attribute</structname></link>.<structfield>attnum</structfield>)
+      </para>
+      <para>
+       The number of the end column
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>perrngtype</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-type"><structname>pg_type</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       The OID of the range type associated with this period
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>perconstraint</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-constraint"><structname>pg_constraint</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       The OID of the period's <literal>CHECK</literal> constraint
+      </para></entry>
+     </row>
+
     </tbody>
    </tgroup>
   </table>

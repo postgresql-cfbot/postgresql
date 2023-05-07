@@ -23,6 +23,7 @@ PostgreSQL documentation
 <synopsis>
 [ WITH [ RECURSIVE ] <replaceable class="parameter">with_query</replaceable> [, ...] ]
 DELETE FROM [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] [ [ AS ] <replaceable class="parameter">alias</replaceable> ]
+    [ FOR PORTION OF <replaceable class="parameter">range_or_period_name</replaceable> FROM <replaceable class="parameter">start_time</replaceable> TO <replaceable class="parameter">end_time</replaceable> ]
     [ USING <replaceable class="parameter">from_item</replaceable> [, ...] ]
     [ WHERE <replaceable class="parameter">condition</replaceable> | WHERE CURRENT OF <replaceable class="parameter">cursor_name</replaceable> ]
     [ RETURNING * | <replaceable class="parameter">output_expression</replaceable> [ [ AS ] <replaceable class="parameter">output_name</replaceable> ] [, ...] ]
@@ -52,6 +53,15 @@ DELETE FROM [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ *
    specifying additional tables in the <literal>USING</literal> clause.
    Which technique is more appropriate depends on the specific
    circumstances.
+  </para>
+
+  <para>
+   If the table has a <link linkend="ddl-periods-application-periods">temporal
+   primary key</link>, you may supply a
+   <literal>FOR PORTION OF</literal> clause, and your delete will only affect rows
+   that overlap the given interval. Furthermore, if a row's span extends outside
+   the <literal>FOR PORTION OF</literal> bounds, then new rows spanning the "cut
+   off" duration will be inserted to preserve the old values.
   </para>
 
   <para>
@@ -112,6 +122,42 @@ DELETE FROM [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ *
       example, given <literal>DELETE FROM foo AS f</literal>, the remainder
       of the <command>DELETE</command> statement must refer to this
       table as <literal>f</literal> not <literal>foo</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">range_or_period_name</replaceable></term>
+    <listitem>
+     <para>
+      The range column or period to use when performing a temporal delete. This
+      must match the range or period used in the table's temporal primary key.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">start_time</replaceable></term>
+    <listitem>
+     <para>
+      The earliest time (inclusive) to change in a temporal delete.
+      This must be a value matching the base type of the range or period from
+      <replaceable class="parameter">range_or_period_name</replaceable>. It may also
+      be the special value <literal>MINVALUE</literal> to indicate a delete whose
+      beginning is unbounded.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">end_time</replaceable></term>
+    <listitem>
+     <para>
+      The latest time (exclusive) to change in a temporal delete.
+      This must be a value matching the base type of the range or period from
+      <replaceable class="parameter">range_or_period_name</replaceable>. It may also
+      be the special value <literal>MAXVALUE</literal> to indicate a delete whose
+      end is unbounded.
      </para>
     </listitem>
    </varlistentry>

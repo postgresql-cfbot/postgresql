@@ -3515,6 +3515,7 @@ _getObjectDescription(PQExpBuffer buf, const TocEntry *te)
 			 strcmp(type, "DATABASE PROPERTIES") == 0 ||
 			 strcmp(type, "DEFAULT") == 0 ||
 			 strcmp(type, "FK CONSTRAINT") == 0 ||
+			 strcmp(type, "PERIOD") == 0 ||
 			 strcmp(type, "INDEX") == 0 ||
 			 strcmp(type, "RULE") == 0 ||
 			 strcmp(type, "TRIGGER") == 0 ||

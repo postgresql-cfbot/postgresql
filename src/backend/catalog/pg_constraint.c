@@ -25,6 +25,7 @@
 #include "catalog/objectaccess.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_operator.h"
+#include "catalog/pg_period.h"
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
 #include "commands/tablecmds.h"
@@ -77,6 +78,9 @@ CreateConstraintEntry(const char *constraintName,
 					  bool conIsLocal,
 					  int conInhCount,
 					  bool conNoInherit,
+					  bool conTemporal,
+					  Oid period,
+					  Oid fperiod,
 					  bool is_internal)
 {
 	Relation	conDesc;
@@ -192,6 +196,9 @@ CreateConstraintEntry(const char *constraintName,
 	values[Anum_pg_constraint_conislocal - 1] = BoolGetDatum(conIsLocal);
 	values[Anum_pg_constraint_coninhcount - 1] = Int16GetDatum(conInhCount);
 	values[Anum_pg_constraint_connoinherit - 1] = BoolGetDatum(conNoInherit);
+	values[Anum_pg_constraint_contemporal - 1] = BoolGetDatum(conTemporal);
+	values[Anum_pg_constraint_conperiod - 1] = ObjectIdGetDatum(period);
+	values[Anum_pg_constraint_confperiod - 1] = ObjectIdGetDatum(fperiod);
 
 	if (conkeyArray)
 		values[Anum_pg_constraint_conkey - 1] = PointerGetDatum(conkeyArray);
@@ -248,7 +255,7 @@ CreateConstraintEntry(const char *constraintName,
 	{
 		/*
 		 * Register auto dependency from constraint to owning relation, or to
-		 * specific column(s) if any are mentioned.
+		 * specific column(s) and period if any are mentioned.
 		 */
 		ObjectAddress relobject;
 
@@ -265,6 +272,14 @@ CreateConstraintEntry(const char *constraintName,
 		{
 			ObjectAddressSet(relobject, RelationRelationId, relId);
 			add_exact_object_address(&relobject, addrs_auto);
+		}
+
+		if (OidIsValid(period))
+		{
+			ObjectAddress periodobject;
+
+			ObjectAddressSet(periodobject, PeriodRelationId, period);
+			add_exact_object_address(&periodobject, addrs_auto);
 		}
 	}
 
@@ -290,7 +305,7 @@ CreateConstraintEntry(const char *constraintName,
 	{
 		/*
 		 * Register normal dependency from constraint to foreign relation, or
-		 * to specific column(s) if any are mentioned.
+		 * to specific column(s) and period if any are mentioned.
 		 */
 		ObjectAddress relobject;
 
@@ -307,6 +322,14 @@ CreateConstraintEntry(const char *constraintName,
 		{
 			ObjectAddressSet(relobject, RelationRelationId, foreignRelId);
 			add_exact_object_address(&relobject, addrs_normal);
+		}
+
+		if (OidIsValid(fperiod))
+		{
+			ObjectAddress periodobject;
+
+			ObjectAddressSet(periodobject, PeriodRelationId, fperiod);
+			add_exact_object_address(&periodobject, addrs_normal);
 		}
 	}
 

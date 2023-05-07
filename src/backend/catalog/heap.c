@@ -49,6 +49,7 @@
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_partitioned_table.h"
+#include "catalog/pg_period.h"
 #include "catalog/pg_statistic.h"
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_tablespace.h"
@@ -2053,6 +2054,70 @@ SetAttrMissing(Oid relid, char *attname, char *value)
 }
 
 /*
+ * Store a period of relation rel.
+ *
+ * Returns the OID of the new pg_period tuple.
+ */
+Oid
+StorePeriod(Relation rel, const char *periodname, AttrNumber startnum,
+			AttrNumber endnum, Oid rngtypid, Oid conoid)
+{
+	Datum		values[Natts_pg_period];
+	bool		nulls[Natts_pg_period];
+	Relation	pg_period;
+	HeapTuple	tuple;
+	Oid			oid;
+	NameData	pername;
+	ObjectAddress	myself, referenced;
+
+	namestrcpy(&pername, periodname);
+
+	MemSet(values, 0, sizeof(values));
+	MemSet(nulls, false, sizeof(nulls));
+
+	pg_period = table_open(PeriodRelationId, RowExclusiveLock);
+
+	oid = GetNewOidWithIndex(pg_period, AttrDefaultOidIndexId, Anum_pg_period_oid);
+	values[Anum_pg_period_oid - 1] = ObjectIdGetDatum(oid);
+	values[Anum_pg_period_pername - 1] = NameGetDatum(&pername);
+	values[Anum_pg_period_perrelid - 1] = RelationGetRelid(rel);
+	values[Anum_pg_period_perstart - 1] = startnum;
+	values[Anum_pg_period_perend - 1] = endnum;
+	values[Anum_pg_period_perrngtype - 1] = rngtypid;
+	values[Anum_pg_period_perconstraint - 1] = conoid;
+
+	tuple = heap_form_tuple(RelationGetDescr(pg_period), values, nulls);
+	CatalogTupleInsert(pg_period, tuple);
+
+	ObjectAddressSet(myself, PeriodRelationId, oid);
+
+	/* Drop the period when the table is dropped. */
+	ObjectAddressSet(referenced, RelationRelationId, RelationGetRelid(rel));
+	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
+
+	/* Forbid dropping the columns of the period. */
+	ObjectAddressSubSet(referenced, RelationRelationId, RelationGetRelid(rel), startnum);
+	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+	ObjectAddressSubSet(referenced, RelationRelationId, RelationGetRelid(rel), endnum);
+	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+
+	/* Make sure we don't lose our rangetype. */
+	ObjectAddressSet(referenced, TypeRelationId, rngtypid);
+	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+
+	/*
+	 * The constraint is an implementation detail, so we mark it as such.
+	 * (Note that myself and referenced are reversed for this one.)
+	 */
+	ObjectAddressSet(referenced, ConstraintRelationId, conoid);
+	recordDependencyOn(&referenced, &myself, DEPENDENCY_INTERNAL);
+
+	table_close(pg_period, RowExclusiveLock);
+
+	return oid;
+}
+
+/*
  * Store a check-constraint expression for the given relation.
  *
  * Caller is responsible for updating the count of constraints
@@ -2153,6 +2218,9 @@ StoreRelCheck(Relation rel, const char *ccname, Node *expr,
 							  is_local, /* conislocal */
 							  inhcount, /* coninhcount */
 							  is_no_inherit,	/* connoinherit */
+							  false,	/* contemporal */
+							  InvalidOid,	/* conperiod */
+							  InvalidOid,	/* confperiod */
 							  is_internal); /* internally constructed? */
 
 	pfree(ccbin);

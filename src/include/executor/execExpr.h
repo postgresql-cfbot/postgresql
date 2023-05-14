@@ -159,6 +159,8 @@ typedef enum ExprEvalOp
 	EEOP_PARAM_EXEC,
 	EEOP_PARAM_EXTERN,
 	EEOP_PARAM_CALLBACK,
+	/* set PARAM_EXEC value */
+	EEOP_PARAM_SET,
 
 	/* return CaseTestExpr value */
 	EEOP_CASE_TESTVAL,
@@ -377,7 +379,7 @@ typedef struct ExprEvalStep
 			ExprEvalRowtypeCache rowcache;
 		}			nulltest_row;
 
-		/* for EEOP_PARAM_EXEC/EXTERN */
+		/* for EEOP_PARAM_EXEC/EXTERN and EEOP_PARAM_SET */
 		struct
 		{
 			int			paramid;	/* numeric ID for parameter */
@@ -769,6 +771,8 @@ extern void ExecEvalParamExec(ExprState *state, ExprEvalStep *op,
 							  ExprContext *econtext);
 extern void ExecEvalParamExtern(ExprState *state, ExprEvalStep *op,
 								ExprContext *econtext);
+extern void ExecEvalParamSet(ExprState *state, ExprEvalStep *op,
+							 ExprContext *econtext);
 extern void ExecEvalCurrentOfExpr(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalNextValueExpr(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalRowNull(ExprState *state, ExprEvalStep *op,

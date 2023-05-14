@@ -87,6 +87,9 @@ static void ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 								  FunctionCallInfo fcinfo, AggStatePerTrans pertrans,
 								  int transno, int setno, int setoff, bool ishash,
 								  bool nullcheck);
+static void ExecInitSubPlanExpr(SubPlan *subplan,
+								ExprState *state,
+								Datum *resv, bool *resnull);
 
 
 /*
@@ -1388,7 +1391,6 @@ ExecInitExprRec(Expr *node, ExprState *state,
 		case T_SubPlan:
 			{
 				SubPlan    *subplan = (SubPlan *) node;
-				SubPlanState *sstate;
 
 				/*
 				 * Real execution of a MULTIEXPR SubPlan has already been
@@ -1405,19 +1407,7 @@ ExecInitExprRec(Expr *node, ExprState *state,
 					break;
 				}
 
-				if (!state->parent)
-					elog(ERROR, "SubPlan found with no parent plan");
-
-				sstate = ExecInitSubPlan(subplan, state->parent);
-
-				/* add SubPlanState nodes to state->parent->subPlan */
-				state->parent->subPlan = lappend(state->parent->subPlan,
-												 sstate);
-
-				scratch.opcode = EEOP_SUBPLAN;
-				scratch.d.subplan.sstate = sstate;
-
-				ExprEvalPushStep(state, &scratch);
+				ExecInitSubPlanExpr(subplan, state, resv, resnull);
 				break;
 			}
 
@@ -2722,29 +2712,12 @@ ExecPushExprSetupSteps(ExprState *state, ExprSetupInfo *info)
 	foreach(lc, info->multiexpr_subplans)
 	{
 		SubPlan    *subplan = (SubPlan *) lfirst(lc);
-		SubPlanState *sstate;
 
 		Assert(subplan->subLinkType == MULTIEXPR_SUBLINK);
 
-		/* This should match what ExecInitExprRec does for other SubPlans: */
-
-		if (!state->parent)
-			elog(ERROR, "SubPlan found with no parent plan");
-
-		sstate = ExecInitSubPlan(subplan, state->parent);
-
-		/* add SubPlanState nodes to state->parent->subPlan */
-		state->parent->subPlan = lappend(state->parent->subPlan,
-										 sstate);
-
-		scratch.opcode = EEOP_SUBPLAN;
-		scratch.d.subplan.sstate = sstate;
-
 		/* The result can be ignored, but we better put it somewhere */
-		scratch.resvalue = &state->resvalue;
-		scratch.resnull = &state->resnull;
-
-		ExprEvalPushStep(state, &scratch);
+		ExecInitSubPlanExpr(subplan, state,
+							&state->resvalue, &state->resnull);
 	}
 }
 
@@ -4149,4 +4122,58 @@ ExecBuildParamSetEqual(TupleDesc desc,
 	ExecReadyExpr(state);
 
 	return state;
+}
+
+static void
+ExecInitSubPlanExpr(SubPlan *subplan,
+					ExprState *state,
+					Datum *resv, bool *resnull)
+{
+	ExprEvalStep scratch = {0};
+	SubPlanState *sstate;
+	ListCell   *pvar;
+	ListCell   *l;
+
+	if (!state->parent)
+		elog(ERROR, "SubPlan found with no parent plan");
+
+	/*
+	 * Generate steps to evaluate input arguments for the subplan.
+	 *
+	 * We evaluate the argument expressions into ExprState's resvalue/resnull,
+	 * and then use PARAM_SET to update the parameter. We do that, instead of
+	 * evaluating directly into the param, to avoid depending on the pointer
+	 * value remaining stable / being included in the generated expression. No
+	 * danger of conflicts with other uses of resvalue/resnull as storing and
+	 * using the value always is in subsequent steps.
+	 *
+	 * Any calculation we have to do can be done in the parent econtext, since
+	 * the Param values don't need to have per-query lifetime.
+	 */
+	forboth(l, subplan->parParam, pvar, subplan->args)
+	{
+		int			paramid = lfirst_int(l);
+
+		ExecInitExprRec(lfirst(pvar), state,
+						&state->resvalue, &state->resnull);
+
+		scratch.opcode = EEOP_PARAM_SET;
+		scratch.d.param.paramid = paramid;
+		/* type isn't needed, but an old value could be confusing */
+		scratch.d.param.paramtype = InvalidOid;
+		ExprEvalPushStep(state, &scratch);
+	}
+
+	sstate = ExecInitSubPlan(subplan, state->parent);
+
+	/* add SubPlanState nodes to state->parent->subPlan */
+	state->parent->subPlan = lappend(state->parent->subPlan,
+									 sstate);
+
+	scratch.opcode = EEOP_SUBPLAN;
+	scratch.resvalue = resv;
+	scratch.resnull = resnull;
+	scratch.d.subplan.sstate = sstate;
+
+	ExprEvalPushStep(state, &scratch);
 }

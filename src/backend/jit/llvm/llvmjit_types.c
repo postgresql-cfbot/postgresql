@@ -123,6 +123,7 @@ void	   *referenced_functions[] =
 	ExecEvalNextValueExpr,
 	ExecEvalParamExec,
 	ExecEvalParamExtern,
+	ExecEvalParamSet,
 	ExecEvalRow,
 	ExecEvalRowNotNull,
 	ExecEvalRowNull,

@@ -2123,12 +2123,24 @@ do_autovacuum(void)
 		bool		dovacuum;
 		bool		doanalyze;
 		bool		wraparound;
+		TempNamespaceStatus temp_status;
+		pid_t		temp_pid;
 
 		if (classForm->relkind != RELKIND_RELATION &&
 			classForm->relkind != RELKIND_MATVIEW)
 			continue;
 
 		relid = classForm->oid;
+
+		/* Fetch reloptions and the pgstat entry for this table */
+		relopts = extract_autovac_opts(tuple, pg_class_desc);
+		tabentry = pgstat_fetch_stat_tabentry_ext(classForm->relisshared,
+												  relid);
+
+		/* Check if it needs vacuum or analyze */
+		relation_needs_vacanalyze(relid, relopts, classForm, tabentry,
+								  effective_multixact_freeze_max_age,
+								  &dovacuum, &doanalyze, &wraparound);
 
 		/*
 		 * Check if it is a temp table (presumably, of some other backend's).
@@ -2141,7 +2153,8 @@ do_autovacuum(void)
 			 * using the temporary schema.  Also, for safety, ignore it if the
 			 * namespace doesn't exist or isn't a temp namespace after all.
 			 */
-			if (checkTempNamespaceStatus(classForm->relnamespace) == TEMP_NAMESPACE_IDLE)
+			temp_status = checkTempNamespaceStatusAndPid(classForm->relnamespace, &temp_pid);
+			if (temp_status == TEMP_NAMESPACE_IDLE)
 			{
 				/*
 				 * The table seems to be orphaned -- although it might be that
@@ -2152,18 +2165,33 @@ do_autovacuum(void)
 				 */
 				orphan_oids = lappend_oid(orphan_oids, relid);
 			}
+			else if (temp_status == TEMP_NAMESPACE_NOT_TEMP)
+			{
+				elog(LOG, "autovacuum: found temporary table \"%s.%s.%s\" in non-temporary namespace",
+					 get_database_name(MyDatabaseId),
+					 get_namespace_name(classForm->relnamespace),
+					 NameStr(classForm->relname));
+			}
+			else if (temp_status == TEMP_NAMESPACE_IN_USE && wraparound)
+			{
+				/* The table is not orphaned -- however it seems to be in need
+				 * of a wraparound vacuum which we cannot do. Sessions using
+				 * long-lived temporary tables need to be responsible for
+				 * vacuuming them and failing to do so is endangering the
+				 * whole cluster.
+				 */
+				ereport(LOG,
+						(errmsg("autovacuum: cannot vacuum temporary table \"%s.%s.%s\" in danger of causing transaction wraparound",
+								get_database_name(MyDatabaseId),
+								get_namespace_name(classForm->relnamespace),
+								NameStr(classForm->relname)),
+						 errhint("Long-lived clients must vacuum temporary tables themselves periodically.\n"
+								 "As super-user drop this table or terminate this session with pg_terminate_backend(%lu).",
+								 (unsigned long)temp_pid)
+							));
+			}
 			continue;
 		}
-
-		/* Fetch reloptions and the pgstat entry for this table */
-		relopts = extract_autovac_opts(tuple, pg_class_desc);
-		tabentry = pgstat_fetch_stat_tabentry_ext(classForm->relisshared,
-												  relid);
-
-		/* Check if it needs vacuum or analyze */
-		relation_needs_vacanalyze(relid, relopts, classForm, tabentry,
-								  effective_multixact_freeze_max_age,
-								  &dovacuum, &doanalyze, &wraparound);
 
 		/* Relations that need work are added to table_oids */
 		if (dovacuum || doanalyze)
@@ -2311,7 +2339,7 @@ do_autovacuum(void)
 			continue;
 		}
 
-		if (checkTempNamespaceStatus(classForm->relnamespace) != TEMP_NAMESPACE_IDLE)
+		if (checkTempNamespaceStatusAndPid(classForm->relnamespace, NULL) != TEMP_NAMESPACE_IDLE)
 		{
 			UnlockRelationOid(relid, AccessExclusiveLock);
 			continue;

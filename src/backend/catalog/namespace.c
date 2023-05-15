@@ -3269,15 +3269,18 @@ isOtherTempNamespace(Oid namespaceId)
 
 /*
  * checkTempNamespaceStatus - is the given namespace owned and actively used
- * by a backend?
+ * by a backend? Optionally return the pid of the owning backend if there is
+ * one. Returned pid is only meaningful when TEMP_NAMESPACE_IN_USE but note
+ * below about race conditions.
  *
  * Note: this can be used while scanning relations in pg_class to detect
  * orphaned temporary tables or namespaces with a backend connected to a
  * given database.  The result may be out of date quickly, so the caller
  * must be careful how to handle this information.
+ *
  */
 TempNamespaceStatus
-checkTempNamespaceStatus(Oid namespaceId)
+checkTempNamespaceStatusAndPid(Oid namespaceId, pid_t *pid)
 {
 	PGPROC	   *proc;
 	int			backendId;
@@ -3304,6 +3307,8 @@ checkTempNamespaceStatus(Oid namespaceId)
 		return TEMP_NAMESPACE_IDLE;
 
 	/* Yup, so namespace is busy */
+	if (pid)
+		*pid = proc->pid;
 	return TEMP_NAMESPACE_IN_USE;
 }
 

@@ -586,11 +586,15 @@ heapam_relation_set_new_filelocator(Relation rel,
 	SMgrRelation srel;
 
 	/*
-	 * Initialize to the minimum XID that could put tuples in the table. We
-	 * know that no xacts older than RecentXmin are still running, so that
-	 * will do.
+	 * Initialize to the minimum XID that could put tuples in the
+	 * table. Anything "removable" can't be inserted later or it would be
+	 * immediately removable.
 	 */
-	*freezeXid = RecentXmin;
+	if (IsBootstrapProcessingMode())
+		*freezeXid = FirstNormalTransactionId;
+	else
+		*freezeXid = GetOldestNonRemovableTransactionId(rel);
+	Assert(TransactionIdIsNormal(*freezeXid));
 
 	/*
 	 * Similarly, initialize the minimum Multixact to the first value that
@@ -598,9 +602,18 @@ heapam_relation_set_new_filelocator(Relation rel,
 	 * could reuse values from their local cache, so we are careful to
 	 * consider all currently running multis.
 	 *
-	 * XXX this could be refined further, but is it worth the hassle?
+	 * In the case of temporary tables we can refine this slightly and use a
+	 * our own oldest visible MultiXactId. This is also cheaper to calculate
+	 * which is nice since temporary tables might be getting created often.
 	 */
-	*minmulti = GetOldestMultiXactId();
+	if (persistence == RELPERSISTENCE_TEMP)
+	{
+		*minmulti = GetOurOldestMultiXactId();
+	}
+	else
+	{
+		*minmulti = GetOldestMultiXactId();
+	}
 
 	srel = RelationCreateStorage(*newrlocator, persistence, true);
 

@@ -544,25 +544,26 @@ clause_is_computable_at(PlannerInfo *root,
 						Relids clause_relids,
 						Relids eval_relids)
 {
-	ListCell   *lc;
+	Relids		relevant_relids;
+	int			i;
 
 	/* Nothing to do if no outer joins have been performed yet. */
 	if (!bms_overlap(eval_relids, root->outer_join_rels))
 		return true;
 
-	foreach(lc, root->join_info_list)
+	/*
+	 * Calculate relevant_relids as being the outer joins that have been
+	 * evaluated and not listed in the clause's nullingrels.
+	 */
+	relevant_relids = bms_intersect(eval_relids, root->outer_join_rels);
+	relevant_relids = bms_difference(relevant_relids, clause_relids);
+
+	i = -1;
+	while ((i = bms_next_member(relevant_relids, i)) >= 0)
 	{
-		SpecialJoinInfo *sjinfo = (SpecialJoinInfo *) lfirst(lc);
+		SpecialJoinInfo *sjinfo = root->join_info_array[i];
 
-		/* Ignore outer joins that are not yet performed. */
-		if (!bms_is_member(sjinfo->ojrelid, eval_relids))
-			continue;
-
-		/* OK if clause lists it (we assume all Vars in it agree). */
-		if (bms_is_member(sjinfo->ojrelid, clause_relids))
-			continue;
-
-		/* Else, trouble if clause mentions any nullable Vars. */
+		/* Trouble if clause mentions any nullable Vars. */
 		if (bms_overlap(clause_relids, sjinfo->min_righthand) ||
 			(sjinfo->jointype == JOIN_FULL &&
 			 bms_overlap(clause_relids, sjinfo->min_lefthand)))

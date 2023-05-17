@@ -390,30 +390,29 @@ have_unsafe_outer_join_ref(PlannerInfo *root,
 	bool		result = false;
 	Relids		unsatisfied = bms_difference(inner_paramrels, outerrelids);
 	Relids		satisfied = bms_intersect(inner_paramrels, outerrelids);
+	Relids		unsatisfied_ojrelids;
+	int			i;
 
-	if (bms_overlap(unsatisfied, root->outer_join_rels))
+	unsatisfied_ojrelids = bms_intersect(unsatisfied, root->outer_join_rels);
+
+	i = -1;
+	while ((i = bms_next_member(unsatisfied_ojrelids, i)) >= 0)
 	{
-		ListCell   *lc;
+		SpecialJoinInfo *sjinfo = root->join_info_array[i];
 
-		foreach(lc, root->join_info_list)
+		if (bms_overlap(satisfied, sjinfo->min_righthand) ||
+			(sjinfo->jointype == JOIN_FULL &&
+			 bms_overlap(satisfied, sjinfo->min_lefthand)))
 		{
-			SpecialJoinInfo *sjinfo = (SpecialJoinInfo *) lfirst(lc);
-
-			if (!bms_is_member(sjinfo->ojrelid, unsatisfied))
-				continue;		/* not relevant */
-			if (bms_overlap(satisfied, sjinfo->min_righthand) ||
-				(sjinfo->jointype == JOIN_FULL &&
-				 bms_overlap(satisfied, sjinfo->min_lefthand)))
-			{
-				result = true;	/* doesn't work */
-				break;
-			}
+			result = true;	/* doesn't work */
+			break;
 		}
 	}
 
 	/* Waste no memory when we reject a path here */
 	bms_free(unsatisfied);
 	bms_free(satisfied);
+	bms_free(unsatisfied_ojrelids);
 
 	return result;
 }

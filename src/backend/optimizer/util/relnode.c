@@ -117,6 +117,13 @@ setup_simple_rel_arrays(PlannerInfo *root)
 		root->simple_rte_array[rti++] = rte;
 	}
 
+	/*
+	 * join_info_array is initialized to all NULLs and will be filled by
+	 * later calls to deconstruct_distribute().
+	 */
+	root->join_info_array = (SpecialJoinInfo **)
+		palloc0(size * sizeof(SpecialJoinInfo *));
+
 	/* append_rel_array is not needed if there are no AppendRelInfos */
 	if (root->append_rel_list == NIL)
 	{

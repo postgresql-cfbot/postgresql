@@ -107,6 +107,8 @@ restart:
 		 * immediately, we don't bother with foreach_delete_current.)
 		 */
 		root->join_info_list = list_delete_cell(root->join_info_list, lc);
+		if (sjinfo->ojrelid != 0)
+			root->join_info_array[sjinfo->ojrelid] = NULL;
 
 		/*
 		 * Restart the scan.  This is necessary to ensure we find all
@@ -676,6 +678,10 @@ reduce_unique_semijoins(PlannerInfo *root)
 
 		/* OK, remove the SpecialJoinInfo from the list. */
 		root->join_info_list = foreach_delete_current(root->join_info_list, lc);
+		/*
+		 * There is no need to change join_info_array since we do not store
+		 * SpecialJoinInfos for semijoins there.
+		 */
 	}
 }
 

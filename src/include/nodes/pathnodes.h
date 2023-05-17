@@ -246,6 +246,15 @@ struct PlannerInfo
 	struct AppendRelInfo **append_rel_array pg_node_attr(read_write_ignore);
 
 	/*
+	 * join_info_array is the same length as the above arrays, and holds
+	 * pointers to the corresponding SpecialJoinInfo entry indexed by ojrelid,
+	 * or NULL if the RTE is not an outer join.  Note that we do not store
+	 * SpecialJoinInfos with 0 ojrelid in this array.  (Not printed because
+	 * it'd be redundant with join_info_list.)
+	 */
+	struct SpecialJoinInfo **join_info_array pg_node_attr(read_write_ignore);
+
+	/*
 	 * all_baserels is a Relids set of all base relids (but not joins or
 	 * "other" rels) in the query.  This is computed in deconstruct_jointree.
 	 */

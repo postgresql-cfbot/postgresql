@@ -1232,7 +1232,12 @@ deconstruct_distribute(PlannerInfo *root, JoinTreeItem *jtitem)
 
 		/* And add the SpecialJoinInfo to join_info_list */
 		if (sjinfo)
+		{
 			root->join_info_list = lappend(root->join_info_list, sjinfo);
+
+			if (sjinfo->ojrelid != 0)
+				root->join_info_array[sjinfo->ojrelid] = sjinfo;
+		}
 	}
 	else
 	{
@@ -1661,18 +1666,24 @@ make_outerjoininfo(PlannerInfo *root,
 		commute_below = bms_union(commute_below_l, commute_below_r);
 		if (!bms_is_empty(commute_below))
 		{
+			int		i;
 			/* Yup, so we must update the data structures */
 			sjinfo->commute_below = commute_below;
-			foreach(l, root->join_info_list)
+			i = -1;
+			while ((i = bms_next_member(commute_below_l, i)) >= 0)
 			{
-				SpecialJoinInfo *otherinfo = (SpecialJoinInfo *) lfirst(l);
+				SpecialJoinInfo *otherinfo = root->join_info_array[i];
 
-				if (bms_is_member(otherinfo->ojrelid, commute_below_l))
-					otherinfo->commute_above_l =
-						bms_add_member(otherinfo->commute_above_l, ojrelid);
-				else if (bms_is_member(otherinfo->ojrelid, commute_below_r))
-					otherinfo->commute_above_r =
-						bms_add_member(otherinfo->commute_above_r, ojrelid);
+				otherinfo->commute_above_l =
+					bms_add_member(otherinfo->commute_above_l, ojrelid);
+			}
+			i = -1;
+			while ((i = bms_next_member(commute_below_r, i)) >= 0)
+			{
+				SpecialJoinInfo *otherinfo = root->join_info_array[i];
+
+				otherinfo->commute_above_r =
+					bms_add_member(otherinfo->commute_above_r, ojrelid);
 			}
 		}
 	}
@@ -2550,7 +2561,7 @@ static bool
 check_redundant_nullability_qual(PlannerInfo *root, Node *clause)
 {
 	Var		   *forced_null_var;
-	ListCell   *lc;
+	int			i;
 
 	/* Check for IS NULL, and identify the Var forced to NULL */
 	forced_null_var = find_forced_null_var(clause);
@@ -2560,23 +2571,27 @@ check_redundant_nullability_qual(PlannerInfo *root, Node *clause)
 	/*
 	 * If the Var comes from the nullable side of a lower antijoin, the IS
 	 * NULL condition is necessarily true.  If it's not nulled by anything,
-	 * there is no point in searching the join_info_list.  Otherwise, we need
-	 * to find out whether the nulling rel is an antijoin.
+	 * there is no point in searching the SpecialJoinInfos.  Otherwise, we
+	 * need to find out whether the nulling rel is an antijoin.
 	 */
 	if (forced_null_var->varnullingrels == NULL)
 		return false;
 
-	foreach(lc, root->join_info_list)
+	/*
+	 * An antijoin that was converted from a semijoin will have zero
+	 * sjinfo->ojrelid; but in such a case the Var couldn't have come from
+	 * its nullable side.  So we can just ignore such antijoins and search
+	 * the join_info_array directly with indexes from the Var's nulling
+	 * bitmap.
+	 */
+	i = -1;
+	while ((i = bms_next_member(forced_null_var->varnullingrels, i)) >= 0)
 	{
-		SpecialJoinInfo *sjinfo = (SpecialJoinInfo *) lfirst(lc);
+		SpecialJoinInfo *sjinfo = root->join_info_array[i];
 
-		/*
-		 * This test will not succeed if sjinfo->ojrelid is zero, which is
-		 * possible for an antijoin that was converted from a semijoin; but in
-		 * such a case the Var couldn't have come from its nullable side.
-		 */
-		if (sjinfo->jointype == JOIN_ANTI && sjinfo->ojrelid != 0 &&
-			bms_is_member(sjinfo->ojrelid, forced_null_var->varnullingrels))
+		Assert(sjinfo->ojrelid != 0);
+
+		if (sjinfo->jointype == JOIN_ANTI)
 			return true;
 	}
 
@@ -2889,19 +2904,22 @@ static Relids
 get_join_domain_min_rels(PlannerInfo *root, Relids domain_relids)
 {
 	Relids		result = bms_copy(domain_relids);
-	ListCell   *lc;
+	Relids		domain_ojrelids;
+	int			i;
 
 	/* Top-level join domain? */
 	if (bms_equal(result, root->all_query_rels))
 		return result;
 
-	/* Nope, look for lower outer joins that could potentially commute out */
-	foreach(lc, root->join_info_list)
-	{
-		SpecialJoinInfo *sjinfo = (SpecialJoinInfo *) lfirst(lc);
+	domain_ojrelids = bms_intersect(result, root->outer_join_rels);
 
-		if (sjinfo->jointype == JOIN_LEFT &&
-			bms_is_member(sjinfo->ojrelid, result))
+	/* Nope, look for lower outer joins that could potentially commute out */
+	i = -1;
+	while ((i = bms_next_member(domain_ojrelids, i)) >= 0)
+	{
+		SpecialJoinInfo *sjinfo = root->join_info_array[i];
+
+		if (sjinfo->jointype == JOIN_LEFT)
 		{
 			result = bms_del_member(result, sjinfo->ojrelid);
 			result = bms_del_members(result, sjinfo->syn_righthand);

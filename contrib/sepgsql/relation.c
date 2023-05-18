@@ -490,7 +490,7 @@ sepgsql_relation_drop(Oid relOid)
 		HeapTuple	atttup;
 		int			i;
 
-		attrList = SearchSysCacheList1(ATTNUM, ObjectIdGetDatum(relOid));
+		attrList = SearchSysCacheList(ATTNUM, ObjectIdGetDatum(relOid));
 		for (i = 0; i < attrList->n_members; i++)
 		{
 			atttup = &attrList->members[i]->tuple;
@@ -667,7 +667,7 @@ sepgsql_relation_setattr(Oid relOid)
 	/*
 	 * Fetch older catalog
 	 */
-	oldtup = SearchSysCache1(RELOID, ObjectIdGetDatum(relOid));
+	oldtup = SearchSysCache(RELOID, ObjectIdGetDatum(relOid));
 	if (!HeapTupleIsValid(oldtup))
 		elog(ERROR, "cache lookup failed for relation %u", relOid);
 	oldform = (Form_pg_class) GETSTRUCT(oldtup);

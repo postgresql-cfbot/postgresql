@@ -167,7 +167,7 @@ CreateEventTrigger(CreateEventTrigStmt *stmt)
 	 * Give user a nice error message if an event trigger of the same name
 	 * already exists.
 	 */
-	tuple = SearchSysCache1(EVENTTRIGGERNAME, CStringGetDatum(stmt->trigname));
+	tuple = SearchSysCache(EVENTTRIGGERNAME, CStringGetDatum(stmt->trigname));
 	if (HeapTupleIsValid(tuple))
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
@@ -368,8 +368,8 @@ AlterEventTrigger(AlterEventTrigStmt *stmt)
 
 	tgrel = table_open(EventTriggerRelationId, RowExclusiveLock);
 
-	tup = SearchSysCacheCopy1(EVENTTRIGGERNAME,
-							  CStringGetDatum(stmt->trigname));
+	tup = SearchSysCacheCopy(EVENTTRIGGERNAME,
+							 CStringGetDatum(stmt->trigname));
 	if (!HeapTupleIsValid(tup))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -412,7 +412,7 @@ AlterEventTriggerOwner(const char *name, Oid newOwnerId)
 
 	rel = table_open(EventTriggerRelationId, RowExclusiveLock);
 
-	tup = SearchSysCacheCopy1(EVENTTRIGGERNAME, CStringGetDatum(name));
+	tup = SearchSysCacheCopy(EVENTTRIGGERNAME, CStringGetDatum(name));
 
 	if (!HeapTupleIsValid(tup))
 		ereport(ERROR,
@@ -444,7 +444,7 @@ AlterEventTriggerOwner_oid(Oid trigOid, Oid newOwnerId)
 
 	rel = table_open(EventTriggerRelationId, RowExclusiveLock);
 
-	tup = SearchSysCacheCopy1(EVENTTRIGGEROID, ObjectIdGetDatum(trigOid));
+	tup = SearchSysCacheCopy(EVENTTRIGGEROID, ObjectIdGetDatum(trigOid));
 
 	if (!HeapTupleIsValid(tup))
 		ereport(ERROR,
@@ -506,8 +506,8 @@ get_event_trigger_oid(const char *trigname, bool missing_ok)
 {
 	Oid			oid;
 
-	oid = GetSysCacheOid1(EVENTTRIGGERNAME, Anum_pg_event_trigger_oid,
-						  CStringGetDatum(trigname));
+	oid = GetSysCacheOid(EVENTTRIGGERNAME, Anum_pg_event_trigger_oid,
+						 CStringGetDatum(trigname));
 	if (!OidIsValid(oid) && !missing_ok)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),

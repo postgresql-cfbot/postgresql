@@ -398,7 +398,7 @@ oper(ParseState *pstate, List *opname, Oid ltypeId, Oid rtypeId,
 		operOid = find_oper_cache_entry(&key);
 		if (OidIsValid(operOid))
 		{
-			tup = SearchSysCache1(OPEROID, ObjectIdGetDatum(operOid));
+			tup = SearchSysCache(OPEROID, ObjectIdGetDatum(operOid));
 			if (HeapTupleIsValid(tup))
 				return (Operator) tup;
 		}
@@ -438,7 +438,7 @@ oper(ParseState *pstate, List *opname, Oid ltypeId, Oid rtypeId,
 	}
 
 	if (OidIsValid(operOid))
-		tup = SearchSysCache1(OPEROID, ObjectIdGetDatum(operOid));
+		tup = SearchSysCache(OPEROID, ObjectIdGetDatum(operOid));
 
 	if (HeapTupleIsValid(tup))
 	{
@@ -545,7 +545,7 @@ left_oper(ParseState *pstate, List *op, Oid arg, bool noError, int location)
 		operOid = find_oper_cache_entry(&key);
 		if (OidIsValid(operOid))
 		{
-			tup = SearchSysCache1(OPEROID, ObjectIdGetDatum(operOid));
+			tup = SearchSysCache(OPEROID, ObjectIdGetDatum(operOid));
 			if (HeapTupleIsValid(tup))
 				return (Operator) tup;
 		}
@@ -589,7 +589,7 @@ left_oper(ParseState *pstate, List *op, Oid arg, bool noError, int location)
 	}
 
 	if (OidIsValid(operOid))
-		tup = SearchSysCache1(OPEROID, ObjectIdGetDatum(operOid));
+		tup = SearchSysCache(OPEROID, ObjectIdGetDatum(operOid));
 
 	if (HeapTupleIsValid(tup))
 	{

@@ -168,7 +168,7 @@ indexam_property(FunctionCallInfo fcinfo,
 		Form_pg_class rd_rel;
 
 		Assert(!OidIsValid(amoid));
-		tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(index_oid));
+		tuple = SearchSysCache(RELOID, ObjectIdGetDatum(index_oid));
 		if (!HeapTupleIsValid(tuple))
 			PG_RETURN_NULL();
 		rd_rel = (Form_pg_class) GETSTRUCT(tuple);
@@ -223,7 +223,7 @@ indexam_property(FunctionCallInfo fcinfo,
 		 * (which we also need to use to check for nonkey atts) so we fetch
 		 * that first.
 		 */
-		tuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(index_oid));
+		tuple = SearchSysCache(INDEXRELID, ObjectIdGetDatum(index_oid));
 		if (!HeapTupleIsValid(tuple))
 			PG_RETURN_NULL();
 		rd_index = (Form_pg_index) GETSTRUCT(tuple);

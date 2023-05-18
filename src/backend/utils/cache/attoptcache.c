@@ -125,9 +125,9 @@ get_attribute_options(Oid attrelid, int attnum)
 	{
 		AttributeOpts *opts;
 
-		tp = SearchSysCache2(ATTNUM,
-							 ObjectIdGetDatum(attrelid),
-							 Int16GetDatum(attnum));
+		tp = SearchSysCache(ATTNUM,
+							ObjectIdGetDatum(attrelid),
+							Int16GetDatum(attnum));
 
 		/*
 		 * If we don't find a valid HeapTuple, it must mean someone has

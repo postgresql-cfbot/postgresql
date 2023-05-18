@@ -1687,7 +1687,7 @@ dropdb(const char *dbname, bool missing_ok, bool force)
 	/*
 	 * Remove the database's tuple from pg_database.
 	 */
-	tup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(db_id));
+	tup = SearchSysCache(DATABASEOID, ObjectIdGetDatum(db_id));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for database %u", db_id);
 
@@ -1844,7 +1844,7 @@ RenameDatabase(const char *oldname, const char *newname)
 				 errdetail_busy_db(notherbackends, npreparedxacts)));
 
 	/* rename */
-	newtup = SearchSysCacheCopy1(DATABASEOID, ObjectIdGetDatum(db_id));
+	newtup = SearchSysCacheCopy(DATABASEOID, ObjectIdGetDatum(db_id));
 	if (!HeapTupleIsValid(newtup))
 		elog(ERROR, "cache lookup failed for database %u", db_id);
 	namestrcpy(&(((Form_pg_database) GETSTRUCT(newtup))->datname), newname);
@@ -2619,7 +2619,7 @@ pg_database_collation_actual_version(PG_FUNCTION_ARGS)
 	Datum		datum;
 	char	   *version;
 
-	tp = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(dbid));
+	tp = SearchSysCache(DATABASEOID, ObjectIdGetDatum(dbid));
 	if (!HeapTupleIsValid(tp))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -2715,7 +2715,7 @@ get_db_info(const char *name, LOCKMODE lockmode,
 		 * the same name, we win; else, drop the lock and loop back to try
 		 * again.
 		 */
-		tuple = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(dbOid));
+		tuple = SearchSysCache(DATABASEOID, ObjectIdGetDatum(dbOid));
 		if (HeapTupleIsValid(tuple))
 		{
 			Form_pg_database dbform = (Form_pg_database) GETSTRUCT(tuple);
@@ -2814,7 +2814,7 @@ have_createdb_privilege(void)
 	if (superuser())
 		return true;
 
-	utup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(GetUserId()));
+	utup = SearchSysCache(AUTHOID, ObjectIdGetDatum(GetUserId()));
 	if (HeapTupleIsValid(utup))
 	{
 		result = ((Form_pg_authid) GETSTRUCT(utup))->rolcreatedb;
@@ -3045,7 +3045,7 @@ get_database_name(Oid dbid)
 	HeapTuple	dbtuple;
 	char	   *result;
 
-	dbtuple = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(dbid));
+	dbtuple = SearchSysCache(DATABASEOID, ObjectIdGetDatum(dbid));
 	if (HeapTupleIsValid(dbtuple))
 	{
 		result = pstrdup(NameStr(((Form_pg_database) GETSTRUCT(dbtuple))->datname));

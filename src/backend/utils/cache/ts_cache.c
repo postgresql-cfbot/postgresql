@@ -150,7 +150,7 @@ lookup_ts_parser_cache(Oid prsId)
 		HeapTuple	tp;
 		Form_pg_ts_parser prs;
 
-		tp = SearchSysCache1(TSPARSEROID, ObjectIdGetDatum(prsId));
+		tp = SearchSysCache(TSPARSEROID, ObjectIdGetDatum(prsId));
 		if (!HeapTupleIsValid(tp))
 			elog(ERROR, "cache lookup failed for text search parser %u",
 				 prsId);
@@ -250,7 +250,7 @@ lookup_ts_dictionary_cache(Oid dictId)
 		Form_pg_ts_template template;
 		MemoryContext saveCtx;
 
-		tpdict = SearchSysCache1(TSDICTOID, ObjectIdGetDatum(dictId));
+		tpdict = SearchSysCache(TSDICTOID, ObjectIdGetDatum(dictId));
 		if (!HeapTupleIsValid(tpdict))
 			elog(ERROR, "cache lookup failed for text search dictionary %u",
 				 dictId);
@@ -265,8 +265,8 @@ lookup_ts_dictionary_cache(Oid dictId)
 		/*
 		 * Retrieve dictionary's template
 		 */
-		tptmpl = SearchSysCache1(TSTEMPLATEOID,
-								 ObjectIdGetDatum(dict->dicttemplate));
+		tptmpl = SearchSysCache(TSTEMPLATEOID,
+								ObjectIdGetDatum(dict->dicttemplate));
 		if (!HeapTupleIsValid(tptmpl))
 			elog(ERROR, "cache lookup failed for text search template %u",
 				 dict->dicttemplate);
@@ -420,7 +420,7 @@ lookup_ts_config_cache(Oid cfgId)
 		int			ndicts;
 		int			i;
 
-		tp = SearchSysCache1(TSCONFIGOID, ObjectIdGetDatum(cfgId));
+		tp = SearchSysCache(TSCONFIGOID, ObjectIdGetDatum(cfgId));
 		if (!HeapTupleIsValid(tp))
 			elog(ERROR, "cache lookup failed for text search configuration %u",
 				 cfgId);
@@ -643,7 +643,7 @@ check_default_text_search_config(char **newval, void **extra, GucSource source)
 		 * Modify the actually stored value to be fully qualified, to ensure
 		 * later changes of search_path don't affect it.
 		 */
-		tuple = SearchSysCache1(TSCONFIGOID, ObjectIdGetDatum(cfgId));
+		tuple = SearchSysCache(TSCONFIGOID, ObjectIdGetDatum(cfgId));
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for text search configuration %u",
 				 cfgId);

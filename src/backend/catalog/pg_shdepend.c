@@ -1171,7 +1171,7 @@ shdepLockAndCheckObject(Oid classId, Oid objectId)
 	switch (classId)
 	{
 		case AuthIdRelationId:
-			if (!SearchSysCacheExists1(AUTHOID, ObjectIdGetDatum(objectId)))
+			if (!SearchSysCacheExists(AUTHOID, ObjectIdGetDatum(objectId)))
 				ereport(ERROR,
 						(errcode(ERRCODE_UNDEFINED_OBJECT),
 						 errmsg("role %u was concurrently dropped",

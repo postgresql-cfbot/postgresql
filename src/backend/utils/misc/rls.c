@@ -63,7 +63,7 @@ check_enable_rls(Oid relid, Oid checkAsUser, bool noError)
 		return RLS_NONE;
 
 	/* Fetch relation's relrowsecurity and relforcerowsecurity flags */
-	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+	tuple = SearchSysCache(RELOID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(tuple))
 		return RLS_NONE;
 	classform = (Form_pg_class) GETSTRUCT(tuple);

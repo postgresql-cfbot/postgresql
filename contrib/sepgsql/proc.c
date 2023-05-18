@@ -265,7 +265,7 @@ sepgsql_proc_setattr(Oid functionId)
 	/*
 	 * Fetch older catalog
 	 */
-	oldtup = SearchSysCache1(PROCOID, ObjectIdGetDatum(functionId));
+	oldtup = SearchSysCache(PROCOID, ObjectIdGetDatum(functionId));
 	if (!HeapTupleIsValid(oldtup))
 		elog(ERROR, "cache lookup failed for function %u", functionId);
 	oldform = (Form_pg_proc) GETSTRUCT(oldtup);

@@ -713,7 +713,7 @@ has_rolreplication(Oid roleid)
 	if (superuser_arg(roleid))
 		return true;
 
-	utup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(roleid));
+	utup = SearchSysCache(AUTHOID, ObjectIdGetDatum(roleid));
 	if (HeapTupleIsValid(utup))
 	{
 		result = ((Form_pg_authid) GETSTRUCT(utup))->rolreplication;
@@ -750,7 +750,7 @@ InitializeSessionUserId(const char *rolename, Oid roleid)
 
 	if (rolename != NULL)
 	{
-		roleTup = SearchSysCache1(AUTHNAME, PointerGetDatum(rolename));
+		roleTup = SearchSysCache(AUTHNAME, PointerGetDatum(rolename));
 		if (!HeapTupleIsValid(roleTup))
 			ereport(FATAL,
 					(errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
@@ -758,7 +758,7 @@ InitializeSessionUserId(const char *rolename, Oid roleid)
 	}
 	else
 	{
-		roleTup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(roleid));
+		roleTup = SearchSysCache(AUTHOID, ObjectIdGetDatum(roleid));
 		if (!HeapTupleIsValid(roleTup))
 			ereport(FATAL,
 					(errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
@@ -986,7 +986,7 @@ GetUserNameFromId(Oid roleid, bool noerr)
 	HeapTuple	tuple;
 	char	   *result;
 
-	tuple = SearchSysCache1(AUTHOID, ObjectIdGetDatum(roleid));
+	tuple = SearchSysCache(AUTHOID, ObjectIdGetDatum(roleid));
 	if (!HeapTupleIsValid(tuple))
 	{
 		if (!noerr)

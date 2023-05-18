@@ -32,9 +32,9 @@
 bool
 IsDefinedRewriteRule(Oid owningRel, const char *ruleName)
 {
-	return SearchSysCacheExists2(RULERELNAME,
-								 ObjectIdGetDatum(owningRel),
-								 PointerGetDatum(ruleName));
+	return SearchSysCacheExists(RULERELNAME,
+								ObjectIdGetDatum(owningRel),
+								PointerGetDatum(ruleName));
 }
 
 
@@ -61,7 +61,7 @@ SetRelationRuleStatus(Oid relationId, bool relHasRules)
 	 * Find the tuple to update in pg_class, using syscache for the lookup.
 	 */
 	relationRelation = table_open(RelationRelationId, RowExclusiveLock);
-	tuple = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(relationId));
+	tuple = SearchSysCacheCopy(RELOID, ObjectIdGetDatum(relationId));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for relation %u", relationId);
 	classForm = (Form_pg_class) GETSTRUCT(tuple);
@@ -97,9 +97,9 @@ get_rewrite_oid(Oid relid, const char *rulename, bool missing_ok)
 	Oid			ruleoid;
 
 	/* Find the rule's pg_rewrite tuple, get its OID */
-	tuple = SearchSysCache2(RULERELNAME,
-							ObjectIdGetDatum(relid),
-							PointerGetDatum(rulename));
+	tuple = SearchSysCache(RULERELNAME,
+						   ObjectIdGetDatum(relid),
+						   PointerGetDatum(rulename));
 	if (!HeapTupleIsValid(tuple))
 	{
 		if (missing_ok)

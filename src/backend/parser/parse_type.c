@@ -178,9 +178,9 @@ LookupTypeNameExtended(ParseState *pstate,
 
 			namespaceId = LookupExplicitNamespace(schemaname, missing_ok);
 			if (OidIsValid(namespaceId))
-				typoid = GetSysCacheOid2(TYPENAMENSP, Anum_pg_type_oid,
-										 PointerGetDatum(typname),
-										 ObjectIdGetDatum(namespaceId));
+				typoid = GetSysCacheOid(TYPENAMENSP, Anum_pg_type_oid,
+										PointerGetDatum(typname),
+										ObjectIdGetDatum(namespaceId));
 			else
 				typoid = InvalidOid;
 
@@ -204,7 +204,7 @@ LookupTypeNameExtended(ParseState *pstate,
 		return NULL;
 	}
 
-	tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typoid));
+	tup = SearchSysCache(TYPEOID, ObjectIdGetDatum(typoid));
 	if (!HeapTupleIsValid(tup)) /* should not happen */
 		elog(ERROR, "cache lookup failed for type %u", typoid);
 
@@ -579,7 +579,7 @@ typeidType(Oid id)
 {
 	HeapTuple	tup;
 
-	tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(id));
+	tup = SearchSysCache(TYPEOID, ObjectIdGetDatum(id));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for type %u", id);
 	return (Type) tup;
@@ -671,7 +671,7 @@ typeidTypeRelid(Oid type_id)
 	Form_pg_type type;
 	Oid			result;
 
-	typeTuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_id));
+	typeTuple = SearchSysCache(TYPEOID, ObjectIdGetDatum(type_id));
 	if (!HeapTupleIsValid(typeTuple))
 		elog(ERROR, "cache lookup failed for type %u", type_id);
 	type = (Form_pg_type) GETSTRUCT(typeTuple);
@@ -694,7 +694,7 @@ typeOrDomainTypeRelid(Oid type_id)
 
 	for (;;)
 	{
-		typeTuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_id));
+		typeTuple = SearchSysCache(TYPEOID, ObjectIdGetDatum(type_id));
 		if (!HeapTupleIsValid(typeTuple))
 			elog(ERROR, "cache lookup failed for type %u", type_id);
 		type = (Form_pg_type) GETSTRUCT(typeTuple);

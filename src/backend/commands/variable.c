@@ -822,7 +822,7 @@ check_session_authorization(char **newval, void **extra, GucSource source)
 	}
 
 	/* Look up the username */
-	roleTup = SearchSysCache1(AUTHNAME, PointerGetDatum(*newval));
+	roleTup = SearchSysCache(AUTHNAME, PointerGetDatum(*newval));
 	if (!HeapTupleIsValid(roleTup))
 	{
 		/*
@@ -913,7 +913,7 @@ check_role(char **newval, void **extra, GucSource source)
 		 */
 
 		/* Look up the username */
-		roleTup = SearchSysCache1(AUTHNAME, PointerGetDatum(*newval));
+		roleTup = SearchSysCache(AUTHNAME, PointerGetDatum(*newval));
 		if (!HeapTupleIsValid(roleTup))
 		{
 			if (source == PGC_S_TEST)

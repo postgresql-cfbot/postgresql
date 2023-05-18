@@ -574,7 +574,7 @@ RemoveConstraintById(Oid conId)
 
 	conDesc = table_open(ConstraintRelationId, RowExclusiveLock);
 
-	tup = SearchSysCache1(CONSTROID, ObjectIdGetDatum(conId));
+	tup = SearchSysCache(CONSTROID, ObjectIdGetDatum(conId));
 	if (!HeapTupleIsValid(tup)) /* should not happen */
 		elog(ERROR, "cache lookup failed for constraint %u", conId);
 	con = (Form_pg_constraint) GETSTRUCT(tup);
@@ -604,8 +604,8 @@ RemoveConstraintById(Oid conId)
 			Form_pg_class classForm;
 
 			pgrel = table_open(RelationRelationId, RowExclusiveLock);
-			relTup = SearchSysCacheCopy1(RELOID,
-										 ObjectIdGetDatum(con->conrelid));
+			relTup = SearchSysCacheCopy(RELOID,
+										ObjectIdGetDatum(con->conrelid));
 			if (!HeapTupleIsValid(relTup))
 				elog(ERROR, "cache lookup failed for relation %u",
 					 con->conrelid);
@@ -665,7 +665,7 @@ RenameConstraintById(Oid conId, const char *newname)
 
 	conDesc = table_open(ConstraintRelationId, RowExclusiveLock);
 
-	tuple = SearchSysCacheCopy1(CONSTROID, ObjectIdGetDatum(conId));
+	tuple = SearchSysCacheCopy(CONSTROID, ObjectIdGetDatum(conId));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for constraint %u", conId);
 	con = (Form_pg_constraint) GETSTRUCT(tuple);
@@ -790,7 +790,7 @@ ConstraintSetParentConstraint(Oid childConstrId,
 	ObjectAddress referenced;
 
 	constrRel = table_open(ConstraintRelationId, RowExclusiveLock);
-	tuple = SearchSysCache1(CONSTROID, ObjectIdGetDatum(childConstrId));
+	tuple = SearchSysCache(CONSTROID, ObjectIdGetDatum(childConstrId));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for constraint %u", childConstrId);
 	newtup = heap_copytuple(tuple);

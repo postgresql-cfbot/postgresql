@@ -77,10 +77,10 @@ CollationCreate(const char *collname, Oid collnamespace,
 	 * friendlier error message.  The unique index provides a backstop against
 	 * race conditions.
 	 */
-	oid = GetSysCacheOid3(COLLNAMEENCNSP,
-						  Anum_pg_collation_oid,
-						  PointerGetDatum(collname),
-						  Int32GetDatum(collencoding),
+	oid = GetSysCacheOid(COLLNAMEENCNSP,
+						 Anum_pg_collation_oid,
+						 PointerGetDatum(collname),
+						 Int32GetDatum(collencoding),
 						  ObjectIdGetDatum(collnamespace));
 	if (OidIsValid(oid))
 	{
@@ -126,17 +126,17 @@ CollationCreate(const char *collname, Oid collnamespace,
 	 * concurrent changes fooling this check.
 	 */
 	if (collencoding == -1)
-		oid = GetSysCacheOid3(COLLNAMEENCNSP,
-							  Anum_pg_collation_oid,
-							  PointerGetDatum(collname),
-							  Int32GetDatum(GetDatabaseEncoding()),
-							  ObjectIdGetDatum(collnamespace));
+		oid = GetSysCacheOid(COLLNAMEENCNSP,
+							 Anum_pg_collation_oid,
+							 PointerGetDatum(collname),
+							 Int32GetDatum(GetDatabaseEncoding()),
+							 ObjectIdGetDatum(collnamespace));
 	else
-		oid = GetSysCacheOid3(COLLNAMEENCNSP,
-							  Anum_pg_collation_oid,
-							  PointerGetDatum(collname),
-							  Int32GetDatum(-1),
-							  ObjectIdGetDatum(collnamespace));
+		oid = GetSysCacheOid(COLLNAMEENCNSP,
+							 Anum_pg_collation_oid,
+							 PointerGetDatum(collname),
+							 Int32GetDatum(-1),
+							 ObjectIdGetDatum(collnamespace));
 	if (OidIsValid(oid))
 	{
 		if (quiet)

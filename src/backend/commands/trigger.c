@@ -1015,8 +1015,8 @@ CreateTriggerFiringOn(CreateTrigStmt *stmt, const char *queryString,
 	 * message to make other backends (and this one) rebuild relcache entries.
 	 */
 	pgrel = table_open(RelationRelationId, RowExclusiveLock);
-	tuple = SearchSysCacheCopy1(RELOID,
-								ObjectIdGetDatum(RelationGetRelid(rel)));
+	tuple = SearchSysCacheCopy(RELOID,
+							   ObjectIdGetDatum(RelationGetRelid(rel)));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for relation %u",
 			 RelationGetRelid(rel));
@@ -1425,7 +1425,7 @@ RangeVarCallbackForRenameTrigger(const RangeVar *rv, Oid relid, Oid oldrelid,
 	HeapTuple	tuple;
 	Form_pg_class form;
 
-	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+	tuple = SearchSysCache(RELOID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(tuple))
 		return;					/* concurrently dropped */
 	form = (Form_pg_class) GETSTRUCT(tuple);

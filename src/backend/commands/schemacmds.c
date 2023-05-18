@@ -80,7 +80,7 @@ CreateSchemaCommand(CreateSchemaStmt *stmt, const char *queryString,
 	{
 		HeapTuple	tuple;
 
-		tuple = SearchSysCache1(AUTHOID, ObjectIdGetDatum(owner_uid));
+		tuple = SearchSysCache(AUTHOID, ObjectIdGetDatum(owner_uid));
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for role %u", owner_uid);
 		schemaName =
@@ -257,7 +257,7 @@ RenameSchema(const char *oldname, const char *newname)
 
 	rel = table_open(NamespaceRelationId, RowExclusiveLock);
 
-	tup = SearchSysCacheCopy1(NAMESPACENAME, CStringGetDatum(oldname));
+	tup = SearchSysCacheCopy(NAMESPACENAME, CStringGetDatum(oldname));
 	if (!HeapTupleIsValid(tup))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_SCHEMA),
@@ -311,7 +311,7 @@ AlterSchemaOwner_oid(Oid schemaoid, Oid newOwnerId)
 
 	rel = table_open(NamespaceRelationId, RowExclusiveLock);
 
-	tup = SearchSysCache1(NAMESPACEOID, ObjectIdGetDatum(schemaoid));
+	tup = SearchSysCache(NAMESPACEOID, ObjectIdGetDatum(schemaoid));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for schema %u", schemaoid);
 
@@ -337,7 +337,7 @@ AlterSchemaOwner(const char *name, Oid newOwnerId)
 
 	rel = table_open(NamespaceRelationId, RowExclusiveLock);
 
-	tup = SearchSysCache1(NAMESPACENAME, CStringGetDatum(name));
+	tup = SearchSysCache(NAMESPACENAME, CStringGetDatum(name));
 	if (!HeapTupleIsValid(tup))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_SCHEMA),

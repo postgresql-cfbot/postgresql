@@ -218,7 +218,7 @@ find_inheritance_children_extended(Oid parentrelId, bool omit_detached,
 			 * really exists or not.  If not, assume it was dropped while we
 			 * waited to acquire lock, and ignore it.
 			 */
-			if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(inhrelid)))
+			if (!SearchSysCacheExists(RELOID, ObjectIdGetDatum(inhrelid)))
 			{
 				/* Release useless lock */
 				UnlockRelationOid(inhrelid, lockmode);
@@ -358,7 +358,7 @@ has_subclass(Oid relationId)
 	HeapTuple	tuple;
 	bool		result;
 
-	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relationId));
+	tuple = SearchSysCache(RELOID, ObjectIdGetDatum(relationId));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for relation %u", relationId);
 

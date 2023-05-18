@@ -227,7 +227,7 @@ replorigin_by_name(const char *roname, bool missing_ok)
 
 	roname_d = CStringGetTextDatum(roname);
 
-	tuple = SearchSysCache1(REPLORIGNAME, roname_d);
+	tuple = SearchSysCache(REPLORIGNAME, roname_d);
 	if (HeapTupleIsValid(tuple))
 	{
 		ident = (Form_pg_replication_origin) GETSTRUCT(tuple);
@@ -424,7 +424,7 @@ replorigin_drop_by_name(const char *name, bool missing_ok, bool nowait)
 	LockSharedObject(ReplicationOriginRelationId, roident, 0,
 					 AccessExclusiveLock);
 
-	tuple = SearchSysCache1(REPLORIGIDENT, ObjectIdGetDatum(roident));
+	tuple = SearchSysCache(REPLORIGIDENT, ObjectIdGetDatum(roident));
 	if (!HeapTupleIsValid(tuple))
 	{
 		if (!missing_ok)
@@ -471,7 +471,7 @@ replorigin_by_oid(RepOriginId roident, bool missing_ok, char **roname)
 	Assert(roident != InvalidRepOriginId);
 	Assert(roident != DoNotReplicateId);
 
-	tuple = SearchSysCache1(REPLORIGIDENT,
+	tuple = SearchSysCache(REPLORIGIDENT,
 							ObjectIdGetDatum((Oid) roident));
 
 	if (HeapTupleIsValid(tuple))

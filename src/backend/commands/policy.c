@@ -71,7 +71,7 @@ RangeVarCallbackForPolicy(const RangeVar *rv, Oid relid, Oid oldrelid,
 	Form_pg_class classform;
 	char		relkind;
 
-	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+	tuple = SearchSysCache(RELOID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(tuple))
 		return;
 
@@ -541,7 +541,7 @@ RemoveRoleFromObjectPolicy(Oid roleid, Oid classid, Oid policy_id)
 		 * redoing any dependent plans.  In case of a race condition where the
 		 * rel was just dropped, we need do nothing.
 		 */
-		reltup = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+		reltup = SearchSysCache(RELOID, ObjectIdGetDatum(relid));
 		if (HeapTupleIsValid(reltup))
 		{
 			CacheInvalidateRelcacheByTuple(reltup);

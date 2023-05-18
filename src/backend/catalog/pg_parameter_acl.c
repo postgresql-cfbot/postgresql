@@ -44,8 +44,8 @@ ParameterAclLookup(const char *parameter, bool missing_ok)
 	parname = convert_GUC_name_for_parameter_acl(parameter);
 
 	/* ... and look it up */
-	oid = GetSysCacheOid1(PARAMETERACLNAME, Anum_pg_parameter_acl_oid,
-						  PointerGetDatum(cstring_to_text(parname)));
+	oid = GetSysCacheOid(PARAMETERACLNAME, Anum_pg_parameter_acl_oid,
+						 PointerGetDatum(cstring_to_text(parname)));
 
 	if (!OidIsValid(oid) && !missing_ok)
 		ereport(ERROR,

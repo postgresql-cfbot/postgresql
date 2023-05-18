@@ -183,7 +183,7 @@ RelationBuildPartitionDesc(Relation rel, bool omit_detached)
 		PartitionBoundSpec *boundspec = NULL;
 
 		/* Try fetching the tuple from the catcache, for speed. */
-		tuple = SearchSysCache1(RELOID, inhrelid);
+		tuple = SearchSysCache(RELOID, inhrelid);
 		if (HeapTupleIsValid(tuple))
 		{
 			Datum		datum;

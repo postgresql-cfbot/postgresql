@@ -983,11 +983,11 @@ gistproperty(Oid index_oid, int attno,
 
 	/* And now we can check whether the function is provided. */
 
-	*res = SearchSysCacheExists4(AMPROCNUM,
-								 ObjectIdGetDatum(opfamily),
-								 ObjectIdGetDatum(opcintype),
-								 ObjectIdGetDatum(opcintype),
-								 Int16GetDatum(procno));
+	*res = SearchSysCacheExists(AMPROCNUM,
+								ObjectIdGetDatum(opfamily),
+								ObjectIdGetDatum(opcintype),
+								ObjectIdGetDatum(opcintype),
+								Int16GetDatum(procno));
 
 	/*
 	 * Special case: even without a fetch function, AMPROP_RETURNABLE is true
@@ -995,11 +995,11 @@ gistproperty(Oid index_oid, int attno,
 	 */
 	if (prop == AMPROP_RETURNABLE && !*res)
 	{
-		*res = !SearchSysCacheExists4(AMPROCNUM,
-									  ObjectIdGetDatum(opfamily),
-									  ObjectIdGetDatum(opcintype),
-									  ObjectIdGetDatum(opcintype),
-									  Int16GetDatum(GIST_COMPRESS_PROC));
+		*res = !SearchSysCacheExists(AMPROCNUM,
+									 ObjectIdGetDatum(opfamily),
+									 ObjectIdGetDatum(opcintype),
+									 ObjectIdGetDatum(opcintype),
+									 Int16GetDatum(GIST_COMPRESS_PROC));
 	}
 
 	*isnull = false;

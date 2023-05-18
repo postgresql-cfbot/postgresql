@@ -97,9 +97,9 @@ InsertRule(const char *rulname,
 	/*
 	 * Check to see if we are replacing an existing tuple
 	 */
-	oldtup = SearchSysCache2(RULERELNAME,
-							 ObjectIdGetDatum(eventrel_oid),
-							 PointerGetDatum(rulname));
+	oldtup = SearchSysCache(RULERELNAME,
+							ObjectIdGetDatum(eventrel_oid),
+							PointerGetDatum(rulname));
 
 	if (HeapTupleIsValid(oldtup))
 	{
@@ -709,9 +709,9 @@ EnableDisableRule(Relation rel, const char *rulename,
 	 * Find the rule tuple to change.
 	 */
 	pg_rewrite_desc = table_open(RewriteRelationId, RowExclusiveLock);
-	ruletup = SearchSysCacheCopy2(RULERELNAME,
-								  ObjectIdGetDatum(owningRel),
-								  PointerGetDatum(rulename));
+	ruletup = SearchSysCacheCopy(RULERELNAME,
+								 ObjectIdGetDatum(owningRel),
+								 PointerGetDatum(rulename));
 	if (!HeapTupleIsValid(ruletup))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -766,7 +766,7 @@ RangeVarCallbackForRenameRule(const RangeVar *rv, Oid relid, Oid oldrelid,
 	HeapTuple	tuple;
 	Form_pg_class form;
 
-	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+	tuple = SearchSysCache(RELOID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(tuple))
 		return;					/* concurrently dropped */
 	form = (Form_pg_class) GETSTRUCT(tuple);
@@ -824,9 +824,9 @@ RenameRewriteRule(RangeVar *relation, const char *oldName,
 	pg_rewrite_desc = table_open(RewriteRelationId, RowExclusiveLock);
 
 	/* Fetch the rule's entry (it had better exist) */
-	ruletup = SearchSysCacheCopy2(RULERELNAME,
-								  ObjectIdGetDatum(relid),
-								  PointerGetDatum(oldName));
+	ruletup = SearchSysCacheCopy(RULERELNAME,
+								 ObjectIdGetDatum(relid),
+								 PointerGetDatum(oldName));
 	if (!HeapTupleIsValid(ruletup))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),

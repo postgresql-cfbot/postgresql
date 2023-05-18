@@ -135,7 +135,7 @@ fetch_fp_info(Oid func_id, struct fp_info *fip)
 	MemSet(fip, 0, sizeof(struct fp_info));
 	fip->funcid = InvalidOid;
 
-	func_htp = SearchSysCache1(PROCOID, ObjectIdGetDatum(func_id));
+	func_htp = SearchSysCache(PROCOID, ObjectIdGetDatum(func_id));
 	if (!HeapTupleIsValid(func_htp))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_FUNCTION),

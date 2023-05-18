@@ -1615,7 +1615,7 @@ UpdateTwoPhaseState(Oid suboid, char new_state)
 		   new_state == LOGICALREP_TWOPHASE_STATE_ENABLED);
 
 	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
-	tup = SearchSysCacheCopy1(SUBSCRIPTIONOID, ObjectIdGetDatum(suboid));
+	tup = SearchSysCacheCopy(SUBSCRIPTIONOID, ObjectIdGetDatum(suboid));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR,
 			 "cache lookup failed for subscription oid %u",

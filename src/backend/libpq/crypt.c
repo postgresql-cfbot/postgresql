@@ -43,7 +43,7 @@ get_role_password(const char *role, const char **logdetail)
 	char	   *shadow_pass;
 
 	/* Get role info from pg_authid */
-	roleTup = SearchSysCache1(AUTHNAME, PointerGetDatum(role));
+	roleTup = SearchSysCache(AUTHNAME, PointerGetDatum(role));
 	if (!HeapTupleIsValid(roleTup))
 	{
 		*logdetail = psprintf(_("Role \"%s\" does not exist."),

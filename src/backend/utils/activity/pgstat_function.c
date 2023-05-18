@@ -110,7 +110,7 @@ pgstat_init_function_usage(FunctionCallInfo fcinfo,
 	if (created_entry)
 	{
 		AcceptInvalidationMessages();
-		if (!SearchSysCacheExists1(PROCOID, ObjectIdGetDatum(fcinfo->flinfo->fn_oid)))
+		if (!SearchSysCacheExists(PROCOID, ObjectIdGetDatum(fcinfo->flinfo->fn_oid)))
 		{
 			pgstat_drop_entry(PGSTAT_KIND_FUNCTION, MyDatabaseId,
 							  fcinfo->flinfo->fn_oid);

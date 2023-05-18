@@ -210,7 +210,7 @@ CheckIndexCompatible(Oid oldId,
 	Assert(numberOfAttributes <= INDEX_MAX_KEYS);
 
 	/* look up the access method */
-	tuple = SearchSysCache1(AMNAME, PointerGetDatum(accessMethodName));
+	tuple = SearchSysCache(AMNAME, PointerGetDatum(accessMethodName));
 	if (!HeapTupleIsValid(tuple))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -248,7 +248,7 @@ CheckIndexCompatible(Oid oldId,
 
 
 	/* Get the soon-obsolete pg_index tuple. */
-	tuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(oldId));
+	tuple = SearchSysCache(INDEXRELID, ObjectIdGetDatum(oldId));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for index %u", oldId);
 	indexForm = (Form_pg_index) GETSTRUCT(tuple);
@@ -819,7 +819,7 @@ DefineIndex(Oid relationId,
 	 * look up the access method, verify it can handle the requested features
 	 */
 	accessMethodName = stmt->accessMethod;
-	tuple = SearchSysCache1(AMNAME, PointerGetDatum(accessMethodName));
+	tuple = SearchSysCache(AMNAME, PointerGetDatum(accessMethodName));
 	if (!HeapTupleIsValid(tuple))
 	{
 		/*
@@ -831,7 +831,7 @@ DefineIndex(Oid relationId,
 			ereport(NOTICE,
 					(errmsg("substituting access method \"gist\" for obsolete method \"rtree\"")));
 			accessMethodName = "gist";
-			tuple = SearchSysCache1(AMNAME, PointerGetDatum(accessMethodName));
+			tuple = SearchSysCache(AMNAME, PointerGetDatum(accessMethodName));
 		}
 
 		if (!HeapTupleIsValid(tuple))
@@ -1496,8 +1496,8 @@ DefineIndex(Oid relationId,
 				HeapTuple	tup,
 							newtup;
 
-				tup = SearchSysCache1(INDEXRELID,
-									  ObjectIdGetDatum(indexRelationId));
+				tup = SearchSysCache(INDEXRELID,
+									 ObjectIdGetDatum(indexRelationId));
 				if (!HeapTupleIsValid(tup))
 					elog(ERROR, "cache lookup failed for index %u",
 						 indexRelationId);
@@ -2111,8 +2111,8 @@ ComputeIndexAttrs(IndexInfo *indexInfo,
 				 * so fetch the name of the selected opfamily for use in the
 				 * error message.
 				 */
-				opftuple = SearchSysCache1(OPFAMILYOID,
-										   ObjectIdGetDatum(opfamily));
+				opftuple = SearchSysCache(OPFAMILYOID,
+										  ObjectIdGetDatum(opfamily));
 				if (!HeapTupleIsValid(opftuple))
 					elog(ERROR, "cache lookup failed for opfamily %u",
 						 opfamily);
@@ -2228,10 +2228,10 @@ ResolveOpClass(List *opclass, Oid attrType,
 		Oid			namespaceId;
 
 		namespaceId = LookupExplicitNamespace(schemaname, false);
-		tuple = SearchSysCache3(CLAAMNAMENSP,
-								ObjectIdGetDatum(accessMethodId),
-								PointerGetDatum(opcname),
-								ObjectIdGetDatum(namespaceId));
+		tuple = SearchSysCache(CLAAMNAMENSP,
+							   ObjectIdGetDatum(accessMethodId),
+							   PointerGetDatum(opcname),
+							   ObjectIdGetDatum(namespaceId));
 	}
 	else
 	{
@@ -2242,7 +2242,7 @@ ResolveOpClass(List *opclass, Oid attrType,
 					(errcode(ERRCODE_UNDEFINED_OBJECT),
 					 errmsg("operator class \"%s\" does not exist for access method \"%s\"",
 							opcname, accessMethodName)));
-		tuple = SearchSysCache1(CLAOID, ObjectIdGetDatum(opClassId));
+		tuple = SearchSysCache(CLAOID, ObjectIdGetDatum(opClassId));
 	}
 
 	if (!HeapTupleIsValid(tuple))
@@ -3293,7 +3293,7 @@ ReindexMultipleInternal(List *relids, ReindexParams *params)
 		PushActiveSnapshot(GetTransactionSnapshot());
 
 		/* check if the relation still exists */
-		if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relid)))
+		if (!SearchSysCacheExists(RELOID, ObjectIdGetDatum(relid)))
 		{
 			PopActiveSnapshot();
 			CommitTransactionCommand();
@@ -4372,7 +4372,7 @@ update_relispartition(Oid relationId, bool newval)
 	Relation	classRel;
 
 	classRel = table_open(RelationRelationId, RowExclusiveLock);
-	tup = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(relationId));
+	tup = SearchSysCacheCopy(RELOID, ObjectIdGetDatum(relationId));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for relation %u", relationId);
 	Assert(((Form_pg_class) GETSTRUCT(tup))->relispartition != newval);

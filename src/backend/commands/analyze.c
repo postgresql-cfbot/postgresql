@@ -1052,8 +1052,8 @@ examine_attribute(Relation onerel, int attnum, Node *index_expr)
 		stats->attrcollid = attr->attcollation;
 	}
 
-	typtuple = SearchSysCacheCopy1(TYPEOID,
-								   ObjectIdGetDatum(stats->attrtypid));
+	typtuple = SearchSysCacheCopy(TYPEOID,
+								  ObjectIdGetDatum(stats->attrtypid));
 	if (!HeapTupleIsValid(typtuple))
 		elog(ERROR, "cache lookup failed for type %u", stats->attrtypid);
 	stats->attrtype = (Form_pg_type) GETSTRUCT(typtuple);
@@ -1723,10 +1723,10 @@ update_attstats(Oid relid, bool inh, int natts, VacAttrStats **vacattrstats)
 		}
 
 		/* Is there already a pg_statistic tuple for this attribute? */
-		oldtup = SearchSysCache3(STATRELATTINH,
-								 ObjectIdGetDatum(relid),
-								 Int16GetDatum(stats->attr->attnum),
-								 BoolGetDatum(inh));
+		oldtup = SearchSysCache(STATRELATTINH,
+								ObjectIdGetDatum(relid),
+								Int16GetDatum(stats->attr->attnum),
+								BoolGetDatum(inh));
 
 		/* Open index information when we know we need it */
 		if (indstate == NULL)

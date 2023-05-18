@@ -2055,7 +2055,7 @@ do_autovacuum(void)
 	 * zero in template and nonconnectable databases, else the system-wide
 	 * default.
 	 */
-	tuple = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
+	tuple = SearchSysCache(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
 	dbForm = (Form_pg_database) GETSTRUCT(tuple);
@@ -2289,7 +2289,7 @@ do_autovacuum(void)
 		 * be an orphaned temp table.  If it's not there or no longer the same
 		 * relation, ignore it.
 		 */
-		tuple = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(relid));
+		tuple = SearchSysCacheCopy(RELOID, ObjectIdGetDatum(relid));
 		if (!HeapTupleIsValid(tuple))
 		{
 			/* be sure to drop useless lock so we don't bloat lock table */
@@ -2406,7 +2406,7 @@ do_autovacuum(void)
 		 * tuple here and passing it to table_recheck_autovac, but that
 		 * increases the odds of that function working with stale data.)
 		 */
-		classTup = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+		classTup = SearchSysCache(RELOID, ObjectIdGetDatum(relid));
 		if (!HeapTupleIsValid(classTup))
 			continue;			/* somebody deleted the rel, forget it */
 		isshared = ((Form_pg_class) GETSTRUCT(classTup))->relisshared;
@@ -2837,7 +2837,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 	AutoVacOpts *avopts;
 
 	/* fetch the relation's relcache entry */
-	classTup = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(relid));
+	classTup = SearchSysCacheCopy(RELOID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(classTup))
 		return NULL;
 	classForm = (Form_pg_class) GETSTRUCT(classTup);

@@ -343,11 +343,11 @@ make_new_connection(ConnCacheEntry *entry, UserMapping *user)
 	entry->invalidated = false;
 	entry->serverid = server->serverid;
 	entry->server_hashvalue =
-		GetSysCacheHashValue1(FOREIGNSERVEROID,
-							  ObjectIdGetDatum(server->serverid));
+		GetSysCacheHashValue(FOREIGNSERVEROID,
+							 ObjectIdGetDatum(server->serverid));
 	entry->mapping_hashvalue =
-		GetSysCacheHashValue1(USERMAPPINGOID,
-							  ObjectIdGetDatum(user->umid));
+		GetSysCacheHashValue(USERMAPPINGOID,
+							 ObjectIdGetDatum(user->umid));
 	memset(&entry->state, 0, sizeof(entry->state));
 
 	/*

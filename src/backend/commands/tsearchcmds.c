@@ -349,7 +349,7 @@ verify_dictoptions(Oid tmplId, List *dictoptions)
 	if (!IsUnderPostmaster)
 		return;
 
-	tup = SearchSysCache1(TSTEMPLATEOID, ObjectIdGetDatum(tmplId));
+	tup = SearchSysCache(TSTEMPLATEOID, ObjectIdGetDatum(tmplId));
 	if (!HeapTupleIsValid(tup)) /* should not happen */
 		elog(ERROR, "cache lookup failed for text search template %u",
 			 tmplId);
@@ -503,7 +503,7 @@ AlterTSDictionary(AlterTSDictionaryStmt *stmt)
 
 	rel = table_open(TSDictionaryRelationId, RowExclusiveLock);
 
-	tup = SearchSysCache1(TSDICTOID, ObjectIdGetDatum(dictId));
+	tup = SearchSysCache(TSDICTOID, ObjectIdGetDatum(dictId));
 
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for text search dictionary %u",
@@ -787,7 +787,7 @@ GetTSConfigTuple(List *names)
 	if (!OidIsValid(cfgId))
 		return NULL;
 
-	tup = SearchSysCache1(TSCONFIGOID, ObjectIdGetDatum(cfgId));
+	tup = SearchSysCache(TSCONFIGOID, ObjectIdGetDatum(cfgId));
 
 	if (!HeapTupleIsValid(tup)) /* should not happen */
 		elog(ERROR, "cache lookup failed for text search configuration %u",
@@ -954,7 +954,7 @@ DefineTSConfiguration(List *names, List *parameters, ObjectAddress *copied)
 	{
 		Form_pg_ts_config cfg;
 
-		tup = SearchSysCache1(TSCONFIGOID, ObjectIdGetDatum(sourceOid));
+		tup = SearchSysCache(TSCONFIGOID, ObjectIdGetDatum(sourceOid));
 		if (!HeapTupleIsValid(tup))
 			elog(ERROR, "cache lookup failed for text search configuration %u",
 				 sourceOid);
@@ -1110,7 +1110,7 @@ RemoveTSConfigurationById(Oid cfgId)
 	/* Remove the pg_ts_config entry */
 	relCfg = table_open(TSConfigRelationId, RowExclusiveLock);
 
-	tup = SearchSysCache1(TSCONFIGOID, ObjectIdGetDatum(cfgId));
+	tup = SearchSysCache(TSCONFIGOID, ObjectIdGetDatum(cfgId));
 
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for text search dictionary %u",

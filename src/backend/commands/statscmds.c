@@ -175,9 +175,9 @@ CreateStatistics(CreateStatsStmt *stmt)
 	/*
 	 * Deal with the possibility that the statistics object already exists.
 	 */
-	if (SearchSysCacheExists2(STATEXTNAMENSP,
-							  CStringGetDatum(namestr),
-							  ObjectIdGetDatum(namespaceId)))
+	if (SearchSysCacheExists(STATEXTNAMENSP,
+							 CStringGetDatum(namestr),
+							 ObjectIdGetDatum(namespaceId)))
 	{
 		if (stmt->if_not_exists)
 		{
@@ -660,7 +660,7 @@ AlterStatistics(AlterStatsStmt *stmt)
 	/* Search pg_statistic_ext */
 	rel = table_open(StatisticExtRelationId, RowExclusiveLock);
 
-	oldtup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(stxoid));
+	oldtup = SearchSysCache(STATEXTOID, ObjectIdGetDatum(stxoid));
 	if (!HeapTupleIsValid(oldtup))
 		elog(ERROR, "cache lookup failed for extended statistics object %u", stxoid);
 
@@ -713,8 +713,8 @@ RemoveStatisticsDataById(Oid statsOid, bool inh)
 
 	relation = table_open(StatisticExtDataRelationId, RowExclusiveLock);
 
-	tup = SearchSysCache2(STATEXTDATASTXOID, ObjectIdGetDatum(statsOid),
-						  BoolGetDatum(inh));
+	tup = SearchSysCache(STATEXTDATASTXOID, ObjectIdGetDatum(statsOid),
+						 BoolGetDatum(inh));
 
 	/* We don't know if the data row for inh value exists. */
 	if (HeapTupleIsValid(tup))
@@ -752,7 +752,7 @@ RemoveStatisticsById(Oid statsOid)
 	 */
 	relation = table_open(StatisticExtRelationId, RowExclusiveLock);
 
-	tup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(statsOid));
+	tup = SearchSysCache(STATEXTOID, ObjectIdGetDatum(statsOid));
 
 	if (!HeapTupleIsValid(tup)) /* should not happen */
 		elog(ERROR, "cache lookup failed for statistics object %u", statsOid);
@@ -802,8 +802,8 @@ ChooseExtendedStatisticName(const char *name1, const char *name2,
 
 		stxname = makeObjectName(name1, name2, modlabel);
 
-		existingstats = GetSysCacheOid2(STATEXTNAMENSP, Anum_pg_statistic_ext_oid,
-										PointerGetDatum(stxname),
+		existingstats = GetSysCacheOid(STATEXTNAMENSP, Anum_pg_statistic_ext_oid,
+									   PointerGetDatum(stxname),
 										ObjectIdGetDatum(namespaceid));
 		if (!OidIsValid(existingstats))
 			break;
@@ -881,7 +881,7 @@ StatisticsGetRelation(Oid statId, bool missing_ok)
 	Form_pg_statistic_ext stx;
 	Oid			result;
 
-	tuple = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(statId));
+	tuple = SearchSysCache(STATEXTOID, ObjectIdGetDatum(statId));
 	if (!HeapTupleIsValid(tuple))
 	{
 		if (missing_ok)

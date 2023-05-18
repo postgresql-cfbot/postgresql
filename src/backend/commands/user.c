@@ -1127,7 +1127,7 @@ DropRole(DropRoleStmt *stmt)
 					 errmsg("cannot use special role specifier in DROP ROLE")));
 		role = rolspec->rolename;
 
-		tuple = SearchSysCache1(AUTHNAME, PointerGetDatum(role));
+		tuple = SearchSysCache(AUTHNAME, PointerGetDatum(role));
 		if (!HeapTupleIsValid(tuple))
 		{
 			if (!stmt->missing_ok)
@@ -1287,7 +1287,7 @@ DropRole(DropRoleStmt *stmt)
 		 * for the tuple to have been deleted -- or for that matter updated --
 		 * unless the user is manually modifying the system catalogs.
 		 */
-		tuple = SearchSysCache1(AUTHOID, ObjectIdGetDatum(roleid));
+		tuple = SearchSysCache(AUTHOID, ObjectIdGetDatum(roleid));
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "could not find tuple for role %u", roleid);
 		roleform = (Form_pg_authid) GETSTRUCT(tuple);
@@ -1357,7 +1357,7 @@ RenameRole(const char *oldname, const char *newname)
 	rel = table_open(AuthIdRelationId, RowExclusiveLock);
 	dsc = RelationGetDescr(rel);
 
-	oldtuple = SearchSysCache1(AUTHNAME, CStringGetDatum(oldname));
+	oldtuple = SearchSysCache(AUTHNAME, CStringGetDatum(oldname));
 	if (!HeapTupleIsValid(oldtuple))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -1411,7 +1411,7 @@ RenameRole(const char *oldname, const char *newname)
 #endif
 
 	/* make sure the new name doesn't exist */
-	if (SearchSysCacheExists1(AUTHNAME, CStringGetDatum(newname)))
+	if (SearchSysCacheExists(AUTHNAME, CStringGetDatum(newname)))
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
 				 errmsg("role \"%s\" already exists", newname)));
@@ -1775,8 +1775,8 @@ AddRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
 		int			i;
 
 		/* Get the list of members for this role. */
-		memlist = SearchSysCacheList1(AUTHMEMROLEMEM,
-									  ObjectIdGetDatum(roleid));
+		memlist = SearchSysCacheList(AUTHMEMROLEMEM,
+									 ObjectIdGetDatum(roleid));
 
 		/*
 		 * Figure out what would happen if we removed all existing grants to
@@ -1842,10 +1842,10 @@ AddRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
 			ObjectIdGetDatum(grantorId);
 
 		/* Find any existing tuple */
-		authmem_tuple = SearchSysCache3(AUTHMEMROLEMEM,
-										ObjectIdGetDatum(roleid),
-										ObjectIdGetDatum(memberid),
-										ObjectIdGetDatum(grantorId));
+		authmem_tuple = SearchSysCache(AUTHMEMROLEMEM,
+									   ObjectIdGetDatum(roleid),
+									   ObjectIdGetDatum(memberid),
+									   ObjectIdGetDatum(grantorId));
 
 		/*
 		 * If we found a tuple, update it with new option values, unless
@@ -1935,7 +1935,7 @@ AddRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
 				HeapTuple		mrtup;
 				Form_pg_authid	mrform;
 
-				mrtup = SearchSysCache1(AUTHOID, memberid);
+				mrtup = SearchSysCache(AUTHOID, memberid);
 				if (!HeapTupleIsValid(mrtup))
 					elog(ERROR, "cache lookup failed for role %u", memberid);
 				mrform = (Form_pg_authid) GETSTRUCT(mrtup);
@@ -2010,7 +2010,7 @@ DelRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
 	LockSharedObject(AuthIdRelationId, roleid, 0,
 					 ShareUpdateExclusiveLock);
 
-	memlist = SearchSysCacheList1(AUTHMEMROLEMEM, ObjectIdGetDatum(roleid));
+	memlist = SearchSysCacheList(AUTHMEMROLEMEM, ObjectIdGetDatum(roleid));
 	actions = initialize_revoke_actions(memlist);
 
 	/*

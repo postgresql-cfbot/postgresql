@@ -3076,7 +3076,7 @@ prepare_column_cache(ColumnIOData *column,
 	column->typid = typid;
 	column->typmod = typmod;
 
-	tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
+	tup = SearchSysCache(TYPEOID, ObjectIdGetDatum(typid));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for type %u", typid);
 

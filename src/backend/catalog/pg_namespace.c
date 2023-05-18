@@ -58,7 +58,7 @@ NamespaceCreate(const char *nspName, Oid ownerId, bool isTemp)
 		elog(ERROR, "no namespace name supplied");
 
 	/* make sure there is no existing namespace of same name */
-	if (SearchSysCacheExists1(NAMESPACENAME, PointerGetDatum(nspName)))
+	if (SearchSysCacheExists(NAMESPACENAME, PointerGetDatum(nspName)))
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_SCHEMA),
 				 errmsg("schema \"%s\" already exists", nspName)));

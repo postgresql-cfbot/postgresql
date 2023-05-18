@@ -1436,8 +1436,8 @@ RelationInitIndexAccessInfo(Relation relation)
 	 * contains variable-length and possibly-null fields, we have to do this
 	 * honestly rather than just treating it as a Form_pg_index struct.
 	 */
-	tuple = SearchSysCache1(INDEXRELID,
-							ObjectIdGetDatum(RelationGetRelid(relation)));
+	tuple = SearchSysCache(INDEXRELID,
+						   ObjectIdGetDatum(RelationGetRelid(relation)));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for index %u",
 			 RelationGetRelid(relation));
@@ -1451,7 +1451,7 @@ RelationInitIndexAccessInfo(Relation relation)
 	 * Look up the index's access method, save the OID of its handler function
 	 */
 	Assert(relation->rd_rel->relam != InvalidOid);
-	tuple = SearchSysCache1(AMOID, ObjectIdGetDatum(relation->rd_rel->relam));
+	tuple = SearchSysCache(AMOID, ObjectIdGetDatum(relation->rd_rel->relam));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for access method %u",
 			 relation->rd_rel->relam);
@@ -1828,8 +1828,8 @@ RelationInitTableAccessMethod(Relation relation)
 		 * function.
 		 */
 		Assert(relation->rd_rel->relam != InvalidOid);
-		tuple = SearchSysCache1(AMOID,
-								ObjectIdGetDatum(relation->rd_rel->relam));
+		tuple = SearchSysCache(AMOID,
+							   ObjectIdGetDatum(relation->rd_rel->relam));
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for access method %u",
 				 relation->rd_rel->relam);
@@ -2282,8 +2282,8 @@ RelationReloadIndexInfo(Relation relation)
 		HeapTuple	tuple;
 		Form_pg_index index;
 
-		tuple = SearchSysCache1(INDEXRELID,
-								ObjectIdGetDatum(RelationGetRelid(relation)));
+		tuple = SearchSysCache(INDEXRELID,
+							   ObjectIdGetDatum(RelationGetRelid(relation)));
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for index %u",
 				 RelationGetRelid(relation));
@@ -3752,8 +3752,8 @@ RelationSetNewRelfilenumber(Relation relation, char persistence)
 	 */
 	pg_class = table_open(RelationRelationId, RowExclusiveLock);
 
-	tuple = SearchSysCacheCopy1(RELOID,
-								ObjectIdGetDatum(RelationGetRelid(relation)));
+	tuple = SearchSysCacheCopy(RELOID,
+							   ObjectIdGetDatum(RelationGetRelid(relation)));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "could not find tuple for relation %u",
 			 RelationGetRelid(relation));
@@ -4196,8 +4196,8 @@ RelationCacheInitializePhase3(void)
 			HeapTuple	htup;
 			Form_pg_class relp;
 
-			htup = SearchSysCache1(RELOID,
-								   ObjectIdGetDatum(RelationGetRelid(relation)));
+			htup = SearchSysCache(RELOID,
+								  ObjectIdGetDatum(RelationGetRelid(relation)));
 			if (!HeapTupleIsValid(htup))
 				elog(FATAL, "cache lookup failed for relation %u",
 					 RelationGetRelid(relation));
@@ -5709,7 +5709,7 @@ RelationBuildPublicationDesc(Relation relation, PublicationDesc *pubdesc)
 		HeapTuple	tup;
 		Form_pg_publication pubform;
 
-		tup = SearchSysCache1(PUBLICATIONOID, ObjectIdGetDatum(pubid));
+		tup = SearchSysCache(PUBLICATIONOID, ObjectIdGetDatum(pubid));
 
 		if (!HeapTupleIsValid(tup))
 			elog(ERROR, "cache lookup failed for publication %u", pubid);

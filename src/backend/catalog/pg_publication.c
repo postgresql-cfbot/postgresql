@@ -171,7 +171,7 @@ pg_relation_is_publishable(PG_FUNCTION_ARGS)
 	HeapTuple	tuple;
 	bool		result;
 
-	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+	tuple = SearchSysCache(RELOID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(tuple))
 		PG_RETURN_NULL();
 	result = is_publishable_class(relid, (Form_pg_class) GETSTRUCT(tuple));
@@ -384,8 +384,8 @@ publication_add_relation(Oid pubid, PublicationRelInfo *pri,
 	 * duplicates, it's here just to provide nicer error message in common
 	 * case. The real protection is the unique key on the catalog.
 	 */
-	if (SearchSysCacheExists2(PUBLICATIONRELMAP, ObjectIdGetDatum(relid),
-							  ObjectIdGetDatum(pubid)))
+	if (SearchSysCacheExists(PUBLICATIONRELMAP, ObjectIdGetDatum(relid),
+							 ObjectIdGetDatum(pubid)))
 	{
 		table_close(rel, RowExclusiveLock);
 
@@ -627,9 +627,9 @@ publication_add_schema(Oid pubid, Oid schemaid, bool if_not_exists)
 	 * duplicates, it's here just to provide nicer error message in common
 	 * case. The real protection is the unique key on the catalog.
 	 */
-	if (SearchSysCacheExists2(PUBLICATIONNAMESPACEMAP,
-							  ObjectIdGetDatum(schemaid),
-							  ObjectIdGetDatum(pubid)))
+	if (SearchSysCacheExists(PUBLICATIONNAMESPACEMAP,
+							 ObjectIdGetDatum(schemaid),
+							 ObjectIdGetDatum(pubid)))
 	{
 		table_close(rel, RowExclusiveLock);
 
@@ -696,8 +696,8 @@ GetRelationPublications(Oid relid)
 	int			i;
 
 	/* Find all publications associated with the relation. */
-	pubrellist = SearchSysCacheList1(PUBLICATIONRELMAP,
-									 ObjectIdGetDatum(relid));
+	pubrellist = SearchSysCacheList(PUBLICATIONRELMAP,
+									ObjectIdGetDatum(relid));
 	for (i = 0; i < pubrellist->n_members; i++)
 	{
 		HeapTuple	tup = &pubrellist->members[i]->tuple;
@@ -908,8 +908,8 @@ GetSchemaPublications(Oid schemaid)
 	int			i;
 
 	/* Find all publications associated with the schema */
-	pubschlist = SearchSysCacheList1(PUBLICATIONNAMESPACEMAP,
-									 ObjectIdGetDatum(schemaid));
+	pubschlist = SearchSysCacheList(PUBLICATIONNAMESPACEMAP,
+									ObjectIdGetDatum(schemaid));
 	for (i = 0; i < pubschlist->n_members; i++)
 	{
 		HeapTuple	tup = &pubschlist->members[i]->tuple;
@@ -1014,7 +1014,7 @@ GetPublication(Oid pubid)
 	Publication *pub;
 	Form_pg_publication pubform;
 
-	tup = SearchSysCache1(PUBLICATIONOID, ObjectIdGetDatum(pubid));
+	tup = SearchSysCache(PUBLICATIONOID, ObjectIdGetDatum(pubid));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for publication %u", pubid);
 
@@ -1197,12 +1197,12 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 		 * FOR TABLES IN SCHEMA publications.
 		 */
 		if (!pub->alltables &&
-			!SearchSysCacheExists2(PUBLICATIONNAMESPACEMAP,
-								   ObjectIdGetDatum(schemaid),
-								   ObjectIdGetDatum(pub->oid)))
-			pubtuple = SearchSysCacheCopy2(PUBLICATIONRELMAP,
-										   ObjectIdGetDatum(relid),
-										   ObjectIdGetDatum(pub->oid));
+			!SearchSysCacheExists(PUBLICATIONNAMESPACEMAP,
+								  ObjectIdGetDatum(schemaid),
+								  ObjectIdGetDatum(pub->oid)))
+			pubtuple = SearchSysCacheCopy(PUBLICATIONRELMAP,
+										  ObjectIdGetDatum(relid),
+										  ObjectIdGetDatum(pub->oid));
 
 		if (HeapTupleIsValid(pubtuple))
 		{

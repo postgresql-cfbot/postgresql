@@ -1545,7 +1545,7 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 	 * Fetch pg_class tuple of source index.  We can't use the copy in the
 	 * relcache entry because it doesn't include optional fields.
 	 */
-	ht_idxrel = SearchSysCache1(RELOID, ObjectIdGetDatum(source_relid));
+	ht_idxrel = SearchSysCache(RELOID, ObjectIdGetDatum(source_relid));
 	if (!HeapTupleIsValid(ht_idxrel))
 		elog(ERROR, "cache lookup failed for relation %u", source_relid);
 	idxrelrec = (Form_pg_class) GETSTRUCT(ht_idxrel);
@@ -1556,7 +1556,7 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 	indrelid = idxrec->indrelid;
 
 	/* Fetch the pg_am tuple of the index' access method */
-	ht_am = SearchSysCache1(AMOID, ObjectIdGetDatum(idxrelrec->relam));
+	ht_am = SearchSysCache(AMOID, ObjectIdGetDatum(idxrelrec->relam));
 	if (!HeapTupleIsValid(ht_am))
 		elog(ERROR, "cache lookup failed for access method %u",
 			 idxrelrec->relam);
@@ -1619,8 +1619,8 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 			if (constraintOid)
 				*constraintOid = constraintId;
 
-			ht_constr = SearchSysCache1(CONSTROID,
-										ObjectIdGetDatum(constraintId));
+			ht_constr = SearchSysCache(CONSTROID,
+									   ObjectIdGetDatum(constraintId));
 			if (!HeapTupleIsValid(ht_constr))
 				elog(ERROR, "cache lookup failed for constraint %u",
 					 constraintId);
@@ -1652,8 +1652,8 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 					char	   *nspname;
 					List	   *namelist;
 
-					opertup = SearchSysCache1(OPEROID,
-											  ObjectIdGetDatum(operid));
+					opertup = SearchSysCache(OPEROID,
+											 ObjectIdGetDatum(operid));
 					if (!HeapTupleIsValid(opertup))
 						elog(ERROR, "cache lookup failed for operator %u",
 							 operid);
@@ -1885,7 +1885,7 @@ generateClonedExtStatsStmt(RangeVar *heapRel, Oid heapRelid,
 	/*
 	 * Fetch pg_statistic_ext tuple of source statistics object.
 	 */
-	ht_stats = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(source_statsid));
+	ht_stats = SearchSysCache(STATEXTOID, ObjectIdGetDatum(source_statsid));
 	if (!HeapTupleIsValid(ht_stats))
 		elog(ERROR, "cache lookup failed for statistics object %u", source_statsid);
 	statsrec = (Form_pg_statistic_ext) GETSTRUCT(ht_stats);
@@ -1996,7 +1996,7 @@ get_collation(Oid collation, Oid actual_datatype)
 	if (collation == get_typcollation(actual_datatype))
 		return NIL;				/* just let it default */
 
-	ht_coll = SearchSysCache1(COLLOID, ObjectIdGetDatum(collation));
+	ht_coll = SearchSysCache(COLLOID, ObjectIdGetDatum(collation));
 	if (!HeapTupleIsValid(ht_coll))
 		elog(ERROR, "cache lookup failed for collation %u", collation);
 	coll_rec = (Form_pg_collation) GETSTRUCT(ht_coll);
@@ -2023,7 +2023,7 @@ get_opclass(Oid opclass, Oid actual_datatype)
 	HeapTuple	ht_opc;
 	Form_pg_opclass opc_rec;
 
-	ht_opc = SearchSysCache1(CLAOID, ObjectIdGetDatum(opclass));
+	ht_opc = SearchSysCache(CLAOID, ObjectIdGetDatum(opclass));
 	if (!HeapTupleIsValid(ht_opc))
 		elog(ERROR, "cache lookup failed for opclass %u", opclass);
 	opc_rec = (Form_pg_opclass) GETSTRUCT(ht_opc);

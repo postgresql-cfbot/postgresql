@@ -48,7 +48,7 @@ GetSubscription(Oid subid, bool missing_ok)
 	Datum		datum;
 	bool		isnull;
 
-	tup = SearchSysCache1(SUBSCRIPTIONOID, ObjectIdGetDatum(subid));
+	tup = SearchSysCache(SUBSCRIPTIONOID, ObjectIdGetDatum(subid));
 
 	if (!HeapTupleIsValid(tup))
 	{
@@ -174,7 +174,7 @@ DisableSubscription(Oid subid)
 
 	/* Look up the subscription in the catalog */
 	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
-	tup = SearchSysCacheCopy1(SUBSCRIPTIONOID, ObjectIdGetDatum(subid));
+	tup = SearchSysCacheCopy(SUBSCRIPTIONOID, ObjectIdGetDatum(subid));
 
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for subscription %u", subid);
@@ -240,9 +240,9 @@ AddSubscriptionRelState(Oid subid, Oid relid, char state,
 	rel = table_open(SubscriptionRelRelationId, RowExclusiveLock);
 
 	/* Try finding existing mapping. */
-	tup = SearchSysCacheCopy2(SUBSCRIPTIONRELMAP,
-							  ObjectIdGetDatum(relid),
-							  ObjectIdGetDatum(subid));
+	tup = SearchSysCacheCopy(SUBSCRIPTIONRELMAP,
+							 ObjectIdGetDatum(relid),
+							 ObjectIdGetDatum(subid));
 	if (HeapTupleIsValid(tup))
 		elog(ERROR, "subscription table %u in subscription %u already exists",
 			 relid, subid);
@@ -287,9 +287,9 @@ UpdateSubscriptionRelState(Oid subid, Oid relid, char state,
 	rel = table_open(SubscriptionRelRelationId, RowExclusiveLock);
 
 	/* Try finding existing mapping. */
-	tup = SearchSysCacheCopy2(SUBSCRIPTIONRELMAP,
-							  ObjectIdGetDatum(relid),
-							  ObjectIdGetDatum(subid));
+	tup = SearchSysCacheCopy(SUBSCRIPTIONRELMAP,
+							 ObjectIdGetDatum(relid),
+							 ObjectIdGetDatum(subid));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "subscription table %u in subscription %u does not exist",
 			 relid, subid);
@@ -339,9 +339,9 @@ GetSubscriptionRelState(Oid subid, Oid relid, XLogRecPtr *sublsn)
 	rel = table_open(SubscriptionRelRelationId, AccessShareLock);
 
 	/* Try finding the mapping. */
-	tup = SearchSysCache2(SUBSCRIPTIONRELMAP,
-						  ObjectIdGetDatum(relid),
-						  ObjectIdGetDatum(subid));
+	tup = SearchSysCache(SUBSCRIPTIONRELMAP,
+						 ObjectIdGetDatum(relid),
+						 ObjectIdGetDatum(subid));
 
 	if (!HeapTupleIsValid(tup))
 	{

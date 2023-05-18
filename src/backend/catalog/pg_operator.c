@@ -136,11 +136,11 @@ OperatorGet(const char *operatorName,
 	HeapTuple	tup;
 	Oid			operatorObjectId;
 
-	tup = SearchSysCache4(OPERNAMENSP,
-						  PointerGetDatum(operatorName),
-						  ObjectIdGetDatum(leftObjectId),
-						  ObjectIdGetDatum(rightObjectId),
-						  ObjectIdGetDatum(operatorNamespace));
+	tup = SearchSysCache(OPERNAMENSP,
+						 PointerGetDatum(operatorName),
+						 ObjectIdGetDatum(leftObjectId),
+						 ObjectIdGetDatum(rightObjectId),
+						 ObjectIdGetDatum(operatorNamespace));
 	if (HeapTupleIsValid(tup))
 	{
 		Form_pg_operator oprform = (Form_pg_operator) GETSTRUCT(tup);
@@ -515,8 +515,8 @@ OperatorCreate(const char *operatorName,
 	{
 		isUpdate = true;
 
-		tup = SearchSysCacheCopy1(OPEROID,
-								  ObjectIdGetDatum(operatorObjectId));
+		tup = SearchSysCacheCopy(OPEROID,
+								 ObjectIdGetDatum(operatorObjectId));
 		if (!HeapTupleIsValid(tup))
 			elog(ERROR, "cache lookup failed for operator %u",
 				 operatorObjectId);
@@ -670,7 +670,7 @@ OperatorUpd(Oid baseId, Oid commId, Oid negId, bool isDelete)
 
 	/* Get a writable copy of the commutator's tuple. */
 	if (OidIsValid(commId))
-		tup = SearchSysCacheCopy1(OPEROID, ObjectIdGetDatum(commId));
+		tup = SearchSysCacheCopy(OPEROID, ObjectIdGetDatum(commId));
 	else
 		tup = NULL;
 
@@ -716,7 +716,7 @@ OperatorUpd(Oid baseId, Oid commId, Oid negId, bool isDelete)
 	 * Similarly find and update the negator, if any.
 	 */
 	if (OidIsValid(negId))
-		tup = SearchSysCacheCopy1(OPEROID, ObjectIdGetDatum(negId));
+		tup = SearchSysCacheCopy(OPEROID, ObjectIdGetDatum(negId));
 	else
 		tup = NULL;
 

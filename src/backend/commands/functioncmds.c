@@ -1097,7 +1097,7 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 	}
 
 	/* Look up the language and validate permissions */
-	languageTuple = SearchSysCache1(LANGNAME, PointerGetDatum(language));
+	languageTuple = SearchSysCache(LANGNAME, PointerGetDatum(language));
 	if (!HeapTupleIsValid(languageTuple))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -1306,7 +1306,7 @@ RemoveFunctionById(Oid funcOid)
 	 */
 	relation = table_open(ProcedureRelationId, RowExclusiveLock);
 
-	tup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcOid));
+	tup = SearchSysCache(PROCOID, ObjectIdGetDatum(funcOid));
 	if (!HeapTupleIsValid(tup)) /* should not happen */
 		elog(ERROR, "cache lookup failed for function %u", funcOid);
 
@@ -1327,7 +1327,7 @@ RemoveFunctionById(Oid funcOid)
 	{
 		relation = table_open(AggregateRelationId, RowExclusiveLock);
 
-		tup = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(funcOid));
+		tup = SearchSysCache(AGGFNOID, ObjectIdGetDatum(funcOid));
 		if (!HeapTupleIsValid(tup)) /* should not happen */
 			elog(ERROR, "cache lookup failed for pg_aggregate tuple for function %u", funcOid);
 
@@ -1370,7 +1370,7 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 
 	ObjectAddressSet(address, ProcedureRelationId, funcOid);
 
-	tup = SearchSysCacheCopy1(PROCOID, ObjectIdGetDatum(funcOid));
+	tup = SearchSysCacheCopy(PROCOID, ObjectIdGetDatum(funcOid));
 	if (!HeapTupleIsValid(tup)) /* should not happen */
 		elog(ERROR, "cache lookup failed for function %u", funcOid);
 
@@ -1595,7 +1595,7 @@ CreateCast(CreateCastStmt *stmt)
 
 		funcid = LookupFuncWithArgs(OBJECT_FUNCTION, stmt->func, false);
 
-		tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+		tuple = SearchSysCache(PROCOID, ObjectIdGetDatum(funcid));
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for function %u", funcid);
 
@@ -1868,7 +1868,7 @@ CreateTransform(CreateTransformStmt *stmt)
 		if (aclresult != ACLCHECK_OK)
 			aclcheck_error(aclresult, OBJECT_FUNCTION, NameListToString(stmt->fromsql->objname));
 
-		tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(fromsqlfuncid));
+		tuple = SearchSysCache(PROCOID, ObjectIdGetDatum(fromsqlfuncid));
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for function %u", fromsqlfuncid);
 		procstruct = (Form_pg_proc) GETSTRUCT(tuple);
@@ -1894,7 +1894,7 @@ CreateTransform(CreateTransformStmt *stmt)
 		if (aclresult != ACLCHECK_OK)
 			aclcheck_error(aclresult, OBJECT_FUNCTION, NameListToString(stmt->tosql->objname));
 
-		tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(tosqlfuncid));
+		tuple = SearchSysCache(PROCOID, ObjectIdGetDatum(tosqlfuncid));
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for function %u", tosqlfuncid);
 		procstruct = (Form_pg_proc) GETSTRUCT(tuple);
@@ -1918,9 +1918,9 @@ CreateTransform(CreateTransformStmt *stmt)
 
 	relation = table_open(TransformRelationId, RowExclusiveLock);
 
-	tuple = SearchSysCache2(TRFTYPELANG,
-							ObjectIdGetDatum(typeid),
-							ObjectIdGetDatum(langid));
+	tuple = SearchSysCache(TRFTYPELANG,
+						   ObjectIdGetDatum(typeid),
+						   ObjectIdGetDatum(langid));
 	if (HeapTupleIsValid(tuple))
 	{
 		Form_pg_transform form = (Form_pg_transform) GETSTRUCT(tuple);
@@ -2008,9 +2008,9 @@ get_transform_oid(Oid type_id, Oid lang_id, bool missing_ok)
 {
 	Oid			oid;
 
-	oid = GetSysCacheOid2(TRFTYPELANG, Anum_pg_transform_oid,
-						  ObjectIdGetDatum(type_id),
-						  ObjectIdGetDatum(lang_id));
+	oid = GetSysCacheOid(TRFTYPELANG, Anum_pg_transform_oid,
+						 ObjectIdGetDatum(type_id),
+						 ObjectIdGetDatum(lang_id));
 	if (!OidIsValid(oid) && !missing_ok)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -2032,10 +2032,10 @@ IsThereFunctionInNamespace(const char *proname, int pronargs,
 						   oidvector *proargtypes, Oid nspOid)
 {
 	/* check for duplicate name (more friendly than unique-index failure) */
-	if (SearchSysCacheExists3(PROCNAMEARGSNSP,
-							  CStringGetDatum(proname),
-							  PointerGetDatum(proargtypes),
-							  ObjectIdGetDatum(nspOid)))
+	if (SearchSysCacheExists(PROCNAMEARGSNSP,
+							 CStringGetDatum(proname),
+							 PointerGetDatum(proargtypes),
+							 ObjectIdGetDatum(nspOid)))
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_FUNCTION),
 				 errmsg("function %s already exists in schema \"%s\"",
@@ -2098,7 +2098,7 @@ ExecuteDoStmt(ParseState *pstate, DoStmt *stmt, bool atomic)
 		language = "plpgsql";
 
 	/* Look up the language and validate permissions */
-	languageTuple = SearchSysCache1(LANGNAME, PointerGetDatum(language));
+	languageTuple = SearchSysCache(LANGNAME, PointerGetDatum(language));
 	if (!HeapTupleIsValid(languageTuple))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -2201,7 +2201,7 @@ ExecuteCallStmt(CallStmt *stmt, ParamListInfo params, bool atomic, DestReceiver 
 	callcontext = makeNode(CallContext);
 	callcontext->atomic = atomic;
 
-	tp = SearchSysCache1(PROCOID, ObjectIdGetDatum(fexpr->funcid));
+	tp = SearchSysCache(PROCOID, ObjectIdGetDatum(fexpr->funcid));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for function %u", fexpr->funcid);
 
@@ -2358,7 +2358,7 @@ CallStmtResultDesc(CallStmt *stmt)
 
 	fexpr = stmt->funcexpr;
 
-	tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(fexpr->funcid));
+	tuple = SearchSysCache(PROCOID, ObjectIdGetDatum(fexpr->funcid));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for procedure %u", fexpr->funcid);
 

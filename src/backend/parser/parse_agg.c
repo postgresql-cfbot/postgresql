@@ -1964,7 +1964,7 @@ agg_args_support_sendreceive(Aggref *aggref)
 		TargetEntry *tle = (TargetEntry *) lfirst(lc);
 		Oid			type = exprType((Node *) tle->expr);
 
-		typeTuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type));
+		typeTuple = SearchSysCache(TYPEOID, ObjectIdGetDatum(type));
 		if (!HeapTupleIsValid(typeTuple))
 			elog(ERROR, "cache lookup failed for type %u", type);
 

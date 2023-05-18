@@ -275,9 +275,9 @@ AddEnumLabel(Oid enumTypeOid,
 	 * catch this anyway, but we prefer a friendlier error message, and
 	 * besides we need a check to support IF NOT EXISTS.
 	 */
-	enum_tup = SearchSysCache2(ENUMTYPOIDNAME,
-							   ObjectIdGetDatum(enumTypeOid),
-							   CStringGetDatum(newVal));
+	enum_tup = SearchSysCache(ENUMTYPOIDNAME,
+							  ObjectIdGetDatum(enumTypeOid),
+							  CStringGetDatum(newVal));
 	if (HeapTupleIsValid(enum_tup))
 	{
 		ReleaseSysCache(enum_tup);
@@ -302,8 +302,8 @@ AddEnumLabel(Oid enumTypeOid,
 restart:
 
 	/* Get the list of existing members of the enum */
-	list = SearchSysCacheList1(ENUMTYPOIDNAME,
-							   ObjectIdGetDatum(enumTypeOid));
+	list = SearchSysCacheList(ENUMTYPOIDNAME,
+							  ObjectIdGetDatum(enumTypeOid));
 	nelems = list->n_members;
 
 	/* Sort the existing members by enumsortorder */
@@ -567,8 +567,8 @@ RenameEnumLabel(Oid enumTypeOid,
 	pg_enum = table_open(EnumRelationId, RowExclusiveLock);
 
 	/* Get the list of existing members of the enum */
-	list = SearchSysCacheList1(ENUMTYPOIDNAME,
-							   ObjectIdGetDatum(enumTypeOid));
+	list = SearchSysCacheList(ENUMTYPOIDNAME,
+							  ObjectIdGetDatum(enumTypeOid));
 	nelems = list->n_members;
 
 	/*

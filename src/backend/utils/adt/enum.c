@@ -122,9 +122,9 @@ enum_in(PG_FUNCTION_ARGS)
 						format_type_be(enumtypoid),
 						name)));
 
-	tup = SearchSysCache2(ENUMTYPOIDNAME,
-						  ObjectIdGetDatum(enumtypoid),
-						  CStringGetDatum(name));
+	tup = SearchSysCache(ENUMTYPOIDNAME,
+						 ObjectIdGetDatum(enumtypoid),
+						 CStringGetDatum(name));
 	if (!HeapTupleIsValid(tup))
 		ereturn(escontext, (Datum) 0,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
@@ -159,7 +159,7 @@ enum_out(PG_FUNCTION_ARGS)
 	HeapTuple	tup;
 	Form_pg_enum en;
 
-	tup = SearchSysCache1(ENUMOID, ObjectIdGetDatum(enumval));
+	tup = SearchSysCache(ENUMOID, ObjectIdGetDatum(enumval));
 	if (!HeapTupleIsValid(tup))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),
@@ -195,9 +195,9 @@ enum_recv(PG_FUNCTION_ARGS)
 						format_type_be(enumtypoid),
 						name)));
 
-	tup = SearchSysCache2(ENUMTYPOIDNAME,
-						  ObjectIdGetDatum(enumtypoid),
-						  CStringGetDatum(name));
+	tup = SearchSysCache(ENUMTYPOIDNAME,
+						 ObjectIdGetDatum(enumtypoid),
+						 CStringGetDatum(name));
 	if (!HeapTupleIsValid(tup))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
@@ -225,7 +225,7 @@ enum_send(PG_FUNCTION_ARGS)
 	HeapTuple	tup;
 	Form_pg_enum en;
 
-	tup = SearchSysCache1(ENUMOID, ObjectIdGetDatum(enumval));
+	tup = SearchSysCache(ENUMOID, ObjectIdGetDatum(enumval));
 	if (!HeapTupleIsValid(tup))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),
@@ -284,7 +284,7 @@ enum_cmp_internal(Oid arg1, Oid arg2, FunctionCallInfo fcinfo)
 		Oid			typeoid;
 
 		/* Get the OID of the enum type containing arg1 */
-		enum_tup = SearchSysCache1(ENUMOID, ObjectIdGetDatum(arg1));
+		enum_tup = SearchSysCache(ENUMOID, ObjectIdGetDatum(arg1));
 		if (!HeapTupleIsValid(enum_tup))
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),

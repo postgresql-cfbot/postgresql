@@ -38,7 +38,7 @@ check_rel_can_be_partition(Oid relid)
 	bool		relispartition;
 
 	/* Check if relation exists */
-	if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relid)))
+	if (!SearchSysCacheExists(RELOID, ObjectIdGetDatum(relid)))
 		return false;
 
 	relkind = get_rel_relkind(relid);

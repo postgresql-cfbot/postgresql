@@ -2004,7 +2004,7 @@ plperl_validator(PG_FUNCTION_ARGS)
 		PG_RETURN_VOID();
 
 	/* Get the new function's pg_proc entry */
-	tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcoid));
+	tuple = SearchSysCache(PROCOID, ObjectIdGetDatum(funcoid));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for function %u", funcoid);
 	proc = (Form_pg_proc) GETSTRUCT(tuple);
@@ -2727,7 +2727,7 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
 	ErrorContextCallback plperl_error_context;
 
 	/* We'll need the pg_proc tuple in any case... */
-	procTup = SearchSysCache1(PROCOID, ObjectIdGetDatum(fn_oid));
+	procTup = SearchSysCache(PROCOID, ObjectIdGetDatum(fn_oid));
 	if (!HeapTupleIsValid(procTup))
 		elog(ERROR, "cache lookup failed for function %u", fn_oid);
 	procStruct = (Form_pg_proc) GETSTRUCT(procTup);
@@ -2826,8 +2826,8 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
 		/************************************************************
 		 * Lookup the pg_language tuple by Oid
 		 ************************************************************/
-		langTup = SearchSysCache1(LANGOID,
-								  ObjectIdGetDatum(procStruct->prolang));
+		langTup = SearchSysCache(LANGOID,
+								 ObjectIdGetDatum(procStruct->prolang));
 		if (!HeapTupleIsValid(langTup))
 			elog(ERROR, "cache lookup failed for language %u",
 				 procStruct->prolang);
@@ -2844,7 +2844,7 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
 		{
 			Oid			rettype = procStruct->prorettype;
 
-			typeTup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(rettype));
+			typeTup = SearchSysCache(TYPEOID, ObjectIdGetDatum(rettype));
 			if (!HeapTupleIsValid(typeTup))
 				elog(ERROR, "cache lookup failed for type %u", rettype);
 			typeStruct = (Form_pg_type) GETSTRUCT(typeTup);
@@ -2893,7 +2893,7 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
 			{
 				Oid			argtype = procStruct->proargtypes.values[i];
 
-				typeTup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(argtype));
+				typeTup = SearchSysCache(TYPEOID, ObjectIdGetDatum(argtype));
 				if (!HeapTupleIsValid(typeTup))
 					elog(ERROR, "cache lookup failed for type %u", argtype);
 				typeStruct = (Form_pg_type) GETSTRUCT(typeTup);

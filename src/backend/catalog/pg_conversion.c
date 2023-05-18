@@ -59,9 +59,9 @@ ConversionCreate(const char *conname, Oid connamespace,
 		elog(ERROR, "no conversion name supplied");
 
 	/* make sure there is no existing conversion of same name */
-	if (SearchSysCacheExists2(CONNAMENSP,
-							  PointerGetDatum(conname),
-							  ObjectIdGetDatum(connamespace)))
+	if (SearchSysCacheExists(CONNAMENSP,
+							 PointerGetDatum(conname),
+							 ObjectIdGetDatum(connamespace)))
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
 				 errmsg("conversion \"%s\" already exists", conname)));
@@ -160,10 +160,10 @@ FindDefaultConversion(Oid name_space, int32 for_encoding, int32 to_encoding)
 	Oid			proc = InvalidOid;
 	int			i;
 
-	catlist = SearchSysCacheList3(CONDEFAULT,
-								  ObjectIdGetDatum(name_space),
-								  Int32GetDatum(for_encoding),
-								  Int32GetDatum(to_encoding));
+	catlist = SearchSysCacheList(CONDEFAULT,
+								 ObjectIdGetDatum(name_space),
+								 Int32GetDatum(for_encoding),
+								 Int32GetDatum(to_encoding));
 
 	for (i = 0; i < catlist->n_members; i++)
 	{

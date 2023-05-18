@@ -131,7 +131,7 @@ triggered_change_notification(PG_FUNCTION_ARGS)
 		HeapTuple	indexTuple;
 		Form_pg_index index;
 
-		indexTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indexoid));
+		indexTuple = SearchSysCache(INDEXRELID, ObjectIdGetDatum(indexoid));
 		if (!HeapTupleIsValid(indexTuple))	/* should not happen */
 			elog(ERROR, "cache lookup failed for index %u", indexoid);
 		index = (Form_pg_index) GETSTRUCT(indexTuple);

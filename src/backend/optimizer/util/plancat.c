@@ -1344,8 +1344,8 @@ get_relation_statistics_worker(List **stainfos, RelOptInfo *rel,
 	Form_pg_statistic_ext_data dataForm;
 	HeapTuple	dtup;
 
-	dtup = SearchSysCache2(STATEXTDATASTXOID,
-						   ObjectIdGetDatum(statOid), BoolGetDatum(inh));
+	dtup = SearchSysCache(STATEXTDATASTXOID,
+						  ObjectIdGetDatum(statOid), BoolGetDatum(inh));
 	if (!HeapTupleIsValid(dtup))
 		return;
 
@@ -1438,7 +1438,7 @@ get_relation_statistics(RelOptInfo *rel, Relation relation)
 		List	   *exprs = NIL;
 		int			i;
 
-		htup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(statOid));
+		htup = SearchSysCache(STATEXTOID, ObjectIdGetDatum(statOid));
 		if (!HeapTupleIsValid(htup))
 			elog(ERROR, "cache lookup failed for statistics object %u", statOid);
 		staForm = (Form_pg_statistic_ext) GETSTRUCT(htup);
@@ -2044,7 +2044,7 @@ add_function_cost(PlannerInfo *root, Oid funcid, Node *node,
 	HeapTuple	proctup;
 	Form_pg_proc procform;
 
-	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+	proctup = SearchSysCache(PROCOID, ObjectIdGetDatum(funcid));
 	if (!HeapTupleIsValid(proctup))
 		elog(ERROR, "cache lookup failed for function %u", funcid);
 	procform = (Form_pg_proc) GETSTRUCT(proctup);
@@ -2105,7 +2105,7 @@ get_function_rows(PlannerInfo *root, Oid funcid, Node *node)
 	Form_pg_proc procform;
 	double		result;
 
-	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+	proctup = SearchSysCache(PROCOID, ObjectIdGetDatum(funcid));
 	if (!HeapTupleIsValid(proctup))
 		elog(ERROR, "cache lookup failed for function %u", funcid);
 	procform = (Form_pg_proc) GETSTRUCT(proctup);

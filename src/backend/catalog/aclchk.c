@@ -1267,10 +1267,10 @@ SetDefaultACL(InternalDefaultACL *iacls)
 	}
 
 	/* Search for existing row for this object type in catalog */
-	tuple = SearchSysCache3(DEFACLROLENSPOBJ,
-							ObjectIdGetDatum(iacls->roleid),
-							ObjectIdGetDatum(iacls->nspid),
-							CharGetDatum(objtype));
+	tuple = SearchSysCache(DEFACLROLENSPOBJ,
+						   ObjectIdGetDatum(iacls->roleid),
+						   ObjectIdGetDatum(iacls->nspid),
+						   CharGetDatum(objtype));
 
 	if (HeapTupleIsValid(tuple))
 	{
@@ -1631,9 +1631,9 @@ expand_all_col_privileges(Oid table_oid, Form_pg_class classForm,
 		if (classForm->relkind == RELKIND_VIEW && curr_att < 0)
 			continue;
 
-		attTuple = SearchSysCache2(ATTNUM,
-								   ObjectIdGetDatum(table_oid),
-								   Int16GetDatum(curr_att));
+		attTuple = SearchSysCache(ATTNUM,
+								  ObjectIdGetDatum(table_oid),
+								  Int16GetDatum(curr_att));
 		if (!HeapTupleIsValid(attTuple))
 			elog(ERROR, "cache lookup failed for attribute %d of relation %u",
 				 curr_att, table_oid);
@@ -1678,9 +1678,9 @@ ExecGrant_Attribute(InternalGrant *istmt, Oid relOid, const char *relname,
 	Oid		   *oldmembers;
 	Oid		   *newmembers;
 
-	attr_tuple = SearchSysCache2(ATTNUM,
-								 ObjectIdGetDatum(relOid),
-								 Int16GetDatum(attnum));
+	attr_tuple = SearchSysCache(ATTNUM,
+								ObjectIdGetDatum(relOid),
+								Int16GetDatum(attnum));
 	if (!HeapTupleIsValid(attr_tuple))
 		elog(ERROR, "cache lookup failed for attribute %d of relation %u",
 			 attnum, relOid);
@@ -1827,7 +1827,7 @@ ExecGrant_Relation(InternalGrant *istmt)
 		HeapTuple	tuple;
 		ListCell   *cell_colprivs;
 
-		tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relOid));
+		tuple = SearchSysCache(RELOID, ObjectIdGetDatum(relOid));
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for relation %u", relOid);
 		pg_class_tuple = (Form_pg_class) GETSTRUCT(tuple);
@@ -2164,7 +2164,7 @@ ExecGrant_common(InternalGrant *istmt, Oid classid, AclMode default_privs,
 		Oid		   *oldmembers;
 		Oid		   *newmembers;
 
-		tuple = SearchSysCache1(cacheid, ObjectIdGetDatum(objectid));
+		tuple = SearchSysCache(cacheid, ObjectIdGetDatum(objectid));
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for %s %u", get_object_class_descr(classid), objectid);
 
@@ -2466,7 +2466,7 @@ ExecGrant_Parameter(InternalGrant *istmt)
 		Oid		   *oldmembers;
 		Oid		   *newmembers;
 
-		tuple = SearchSysCache1(PARAMETERACLOID, ObjectIdGetDatum(parameterId));
+		tuple = SearchSysCache(PARAMETERACLOID, ObjectIdGetDatum(parameterId));
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for parameter ACL %u",
 				 parameterId);
@@ -3101,7 +3101,7 @@ object_aclmask(Oid classid, Oid objectid, Oid roleid,
 
 	cacheid = get_object_catcache_oid(classid);
 
-	tuple = SearchSysCache1(cacheid, ObjectIdGetDatum(objectid));
+	tuple = SearchSysCache(cacheid, ObjectIdGetDatum(objectid));
 	if (!HeapTupleIsValid(tuple))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_DATABASE),
@@ -3175,9 +3175,9 @@ pg_attribute_aclmask_ext(Oid table_oid, AttrNumber attnum, Oid roleid,
 	/*
 	 * First, get the column's ACL from its pg_attribute entry
 	 */
-	attTuple = SearchSysCache2(ATTNUM,
-							   ObjectIdGetDatum(table_oid),
-							   Int16GetDatum(attnum));
+	attTuple = SearchSysCache(ATTNUM,
+							  ObjectIdGetDatum(table_oid),
+							  Int16GetDatum(attnum));
 	if (!HeapTupleIsValid(attTuple))
 	{
 		if (is_missing != NULL)
@@ -3234,7 +3234,7 @@ pg_attribute_aclmask_ext(Oid table_oid, AttrNumber attnum, Oid roleid,
 	 * privileges" rather than failing in such a case, so as to avoid unwanted
 	 * failures in has_column_privilege() tests.
 	 */
-	classTuple = SearchSysCache1(RELOID, ObjectIdGetDatum(table_oid));
+	classTuple = SearchSysCache(RELOID, ObjectIdGetDatum(table_oid));
 	if (!HeapTupleIsValid(classTuple))
 	{
 		ReleaseSysCache(attTuple);
@@ -3291,7 +3291,7 @@ pg_class_aclmask_ext(Oid table_oid, Oid roleid, AclMode mask,
 	/*
 	 * Must get the relation's tuple from pg_class
 	 */
-	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(table_oid));
+	tuple = SearchSysCache(RELOID, ObjectIdGetDatum(table_oid));
 	if (!HeapTupleIsValid(tuple))
 	{
 		if (is_missing != NULL)
@@ -3423,7 +3423,7 @@ pg_parameter_aclmask(const char *name, Oid roleid, AclMode mask, AclMaskHow how)
 	partext = cstring_to_text(parname);
 
 	/* ... and look it up */
-	tuple = SearchSysCache1(PARAMETERACLNAME, PointerGetDatum(partext));
+	tuple = SearchSysCache(PARAMETERACLNAME, PointerGetDatum(partext));
 
 	if (!HeapTupleIsValid(tuple))
 	{
@@ -3484,7 +3484,7 @@ pg_parameter_acl_aclmask(Oid acl_oid, Oid roleid, AclMode mask, AclMaskHow how)
 		return mask;
 
 	/* Get the ACL from pg_parameter_acl */
-	tuple = SearchSysCache1(PARAMETERACLOID, ObjectIdGetDatum(acl_oid));
+	tuple = SearchSysCache(PARAMETERACLOID, ObjectIdGetDatum(acl_oid));
 	if (!HeapTupleIsValid(tuple))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -3648,7 +3648,7 @@ pg_namespace_aclmask(Oid nsp_oid, Oid roleid,
 	/*
 	 * Get the schema's ACL from pg_namespace
 	 */
-	tuple = SearchSysCache1(NAMESPACEOID, ObjectIdGetDatum(nsp_oid));
+	tuple = SearchSysCache(NAMESPACEOID, ObjectIdGetDatum(nsp_oid));
 	if (!HeapTupleIsValid(tuple))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_SCHEMA),
@@ -3713,7 +3713,7 @@ pg_type_aclmask(Oid type_oid, Oid roleid, AclMode mask, AclMaskHow how)
 	/*
 	 * Must get the type's tuple from pg_type
 	 */
-	tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_oid));
+	tuple = SearchSysCache(TYPEOID, ObjectIdGetDatum(type_oid));
 	if (!HeapTupleIsValid(tuple))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -3731,7 +3731,7 @@ pg_type_aclmask(Oid type_oid, Oid roleid, AclMode mask, AclMaskHow how)
 
 		ReleaseSysCache(tuple);
 
-		tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(elttype_oid));
+		tuple = SearchSysCache(TYPEOID, ObjectIdGetDatum(elttype_oid));
 		/* this case is not a user-facing error, so elog not ereport */
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for type %u", elttype_oid);
@@ -3849,7 +3849,7 @@ pg_attribute_aclcheck_all(Oid table_oid, Oid roleid, AclMode mode,
 	 * pg_attribute_aclmask, we prefer to return "no privileges" instead of
 	 * throwing an error if we get any unexpected lookup errors.
 	 */
-	classTuple = SearchSysCache1(RELOID, ObjectIdGetDatum(table_oid));
+	classTuple = SearchSysCache(RELOID, ObjectIdGetDatum(table_oid));
 	if (!HeapTupleIsValid(classTuple))
 		return ACLCHECK_NO_PRIV;
 	classForm = (Form_pg_class) GETSTRUCT(classTuple);
@@ -3869,9 +3869,9 @@ pg_attribute_aclcheck_all(Oid table_oid, Oid roleid, AclMode mode,
 		HeapTuple	attTuple;
 		AclMode		attmask;
 
-		attTuple = SearchSysCache2(ATTNUM,
-								   ObjectIdGetDatum(table_oid),
-								   Int16GetDatum(curr_att));
+		attTuple = SearchSysCache(ATTNUM,
+								  ObjectIdGetDatum(table_oid),
+								  Int16GetDatum(curr_att));
 		if (!HeapTupleIsValid(attTuple))
 			continue;
 
@@ -3987,7 +3987,7 @@ object_ownercheck(Oid classid, Oid objectid, Oid roleid)
 	{
 		HeapTuple	tuple;
 
-		tuple = SearchSysCache1(cacheid, ObjectIdGetDatum(objectid));
+		tuple = SearchSysCache(cacheid, ObjectIdGetDatum(objectid));
 		if (!HeapTupleIsValid(tuple))
 			ereport(ERROR,
 					(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -4059,7 +4059,7 @@ has_createrole_privilege(Oid roleid)
 	if (superuser_arg(roleid))
 		return true;
 
-	utup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(roleid));
+	utup = SearchSysCache(AUTHOID, ObjectIdGetDatum(roleid));
 	if (HeapTupleIsValid(utup))
 	{
 		result = ((Form_pg_authid) GETSTRUCT(utup))->rolcreaterole;
@@ -4078,7 +4078,7 @@ has_bypassrls_privilege(Oid roleid)
 	if (superuser_arg(roleid))
 		return true;
 
-	utup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(roleid));
+	utup = SearchSysCache(AUTHOID, ObjectIdGetDatum(roleid));
 	if (HeapTupleIsValid(utup))
 	{
 		result = ((Form_pg_authid) GETSTRUCT(utup))->rolbypassrls;
@@ -4098,10 +4098,10 @@ get_default_acl_internal(Oid roleId, Oid nsp_oid, char objtype)
 	Acl		   *result = NULL;
 	HeapTuple	tuple;
 
-	tuple = SearchSysCache3(DEFACLROLENSPOBJ,
-							ObjectIdGetDatum(roleId),
-							ObjectIdGetDatum(nsp_oid),
-							CharGetDatum(objtype));
+	tuple = SearchSysCache(DEFACLROLENSPOBJ,
+						   ObjectIdGetDatum(roleId),
+						   ObjectIdGetDatum(nsp_oid),
+						   CharGetDatum(objtype));
 
 	if (HeapTupleIsValid(tuple))
 	{
@@ -4247,7 +4247,7 @@ recordExtObjInitPriv(Oid objoid, Oid classoid)
 		bool		isNull;
 		HeapTuple	tuple;
 
-		tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(objoid));
+		tuple = SearchSysCache(RELOID, ObjectIdGetDatum(objoid));
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for relation %u", objoid);
 		pg_class_tuple = (Form_pg_class) GETSTRUCT(tuple);
@@ -4279,9 +4279,9 @@ recordExtObjInitPriv(Oid objoid, Oid classoid)
 				HeapTuple	attTuple;
 				Datum		attaclDatum;
 
-				attTuple = SearchSysCache2(ATTNUM,
-										   ObjectIdGetDatum(objoid),
-										   Int16GetDatum(curr_att));
+				attTuple = SearchSysCache(ATTNUM,
+										  ObjectIdGetDatum(objoid),
+										  Int16GetDatum(curr_att));
 
 				if (!HeapTupleIsValid(attTuple))
 					continue;
@@ -4370,8 +4370,8 @@ recordExtObjInitPriv(Oid objoid, Oid classoid)
 		bool		isNull;
 		HeapTuple	tuple;
 
-		tuple = SearchSysCache1(get_object_catcache_oid(classoid),
-								ObjectIdGetDatum(objoid));
+		tuple = SearchSysCache(get_object_catcache_oid(classoid),
+							   ObjectIdGetDatum(objoid));
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for %s %u",
 				 get_object_class_descr(classoid), objoid);
@@ -4406,7 +4406,7 @@ removeExtObjInitPriv(Oid objoid, Oid classoid)
 		Form_pg_class pg_class_tuple;
 		HeapTuple	tuple;
 
-		tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(objoid));
+		tuple = SearchSysCache(RELOID, ObjectIdGetDatum(objoid));
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for relation %u", objoid);
 		pg_class_tuple = (Form_pg_class) GETSTRUCT(tuple);
@@ -4437,9 +4437,9 @@ removeExtObjInitPriv(Oid objoid, Oid classoid)
 			{
 				HeapTuple	attTuple;
 
-				attTuple = SearchSysCache2(ATTNUM,
-										   ObjectIdGetDatum(objoid),
-										   Int16GetDatum(curr_att));
+				attTuple = SearchSysCache(ATTNUM,
+										  ObjectIdGetDatum(objoid),
+										  Int16GetDatum(curr_att));
 
 				if (!HeapTupleIsValid(attTuple))
 					continue;

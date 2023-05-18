@@ -153,8 +153,8 @@ statext_ndistinct_load(Oid mvoid, bool inh)
 	Datum		ndist;
 	HeapTuple	htup;
 
-	htup = SearchSysCache2(STATEXTDATASTXOID,
-						   ObjectIdGetDatum(mvoid), BoolGetDatum(inh));
+	htup = SearchSysCache(STATEXTDATASTXOID,
+						  ObjectIdGetDatum(mvoid), BoolGetDatum(inh));
 	if (!HeapTupleIsValid(htup))
 		elog(ERROR, "cache lookup failed for statistics object %u", mvoid);
 

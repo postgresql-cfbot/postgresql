@@ -3681,8 +3681,8 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 		peragg->transno = aggref->aggtransno;
 
 		/* Fetch the pg_aggregate row */
-		aggTuple = SearchSysCache1(AGGFNOID,
-								   ObjectIdGetDatum(aggref->aggfnoid));
+		aggTuple = SearchSysCache(AGGFNOID,
+								  ObjectIdGetDatum(aggref->aggfnoid));
 		if (!HeapTupleIsValid(aggTuple))
 			elog(ERROR, "cache lookup failed for aggregate %u",
 				 aggref->aggfnoid);
@@ -3746,8 +3746,8 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 		{
 			HeapTuple	procTuple;
 
-			procTuple = SearchSysCache1(PROCOID,
-										ObjectIdGetDatum(aggref->aggfnoid));
+			procTuple = SearchSysCache(PROCOID,
+									   ObjectIdGetDatum(aggref->aggfnoid));
 			if (!HeapTupleIsValid(procTuple))
 				elog(ERROR, "cache lookup failed for function %u",
 					 aggref->aggfnoid);

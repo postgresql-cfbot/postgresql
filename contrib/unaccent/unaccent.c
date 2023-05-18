@@ -386,9 +386,9 @@ unaccent_dict(PG_FUNCTION_ARGS)
 		Oid			procnspid = get_func_namespace(fcinfo->flinfo->fn_oid);
 		const char *dictname = "unaccent";
 
-		dictOid = GetSysCacheOid2(TSDICTNAMENSP, Anum_pg_ts_dict_oid,
-								  PointerGetDatum(dictname),
-								  ObjectIdGetDatum(procnspid));
+		dictOid = GetSysCacheOid(TSDICTNAMENSP, Anum_pg_ts_dict_oid,
+								 PointerGetDatum(dictname),
+								 ObjectIdGetDatum(procnspid));
 		if (!OidIsValid(dictOid))
 			ereport(ERROR,
 					(errcode(ERRCODE_UNDEFINED_OBJECT),

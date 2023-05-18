@@ -3425,8 +3425,8 @@ record_plan_function_dependency(PlannerInfo *root, Oid funcid)
 		 * that plancache.c knows we use PROCOID.
 		 */
 		inval_item->cacheId = PROCOID;
-		inval_item->hashValue = GetSysCacheHashValue1(PROCOID,
-													  ObjectIdGetDatum(funcid));
+		inval_item->hashValue = GetSysCacheHashValue(PROCOID,
+													 ObjectIdGetDatum(funcid));
 
 		root->glob->invalItems = lappend(root->glob->invalItems, inval_item);
 	}
@@ -3461,8 +3461,8 @@ record_plan_type_dependency(PlannerInfo *root, Oid typid)
 		 * plancache.c knows we use TYPEOID.
 		 */
 		inval_item->cacheId = TYPEOID;
-		inval_item->hashValue = GetSysCacheHashValue1(TYPEOID,
-													  ObjectIdGetDatum(typid));
+		inval_item->hashValue = GetSysCacheHashValue(TYPEOID,
+													 ObjectIdGetDatum(typid));
 
 		root->glob->invalItems = lappend(root->glob->invalItems, inval_item);
 	}

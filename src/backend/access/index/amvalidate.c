@@ -158,7 +158,7 @@ check_amproc_signature(Oid funcid, Oid restype, bool exact,
 	va_list		ap;
 	int			i;
 
-	tp = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+	tp = SearchSysCache(PROCOID, ObjectIdGetDatum(funcid));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for function %u", funcid);
 	procform = (Form_pg_proc) GETSTRUCT(tp);
@@ -209,7 +209,7 @@ check_amop_signature(Oid opno, Oid restype, Oid lefttype, Oid righttype)
 	HeapTuple	tp;
 	Form_pg_operator opform;
 
-	tp = SearchSysCache1(OPEROID, ObjectIdGetDatum(opno));
+	tp = SearchSysCache(OPEROID, ObjectIdGetDatum(opno));
 	if (!HeapTupleIsValid(tp))	/* shouldn't happen */
 		elog(ERROR, "cache lookup failed for operator %u", opno);
 	opform = (Form_pg_operator) GETSTRUCT(tp);
@@ -244,7 +244,7 @@ opclass_for_family_datatype(Oid amoid, Oid opfamilyoid, Oid datatypeoid)
 	 * is a bit inefficient but there is no better index available.  It also
 	 * saves making an explicit check that the opfamily belongs to the AM.
 	 */
-	opclist = SearchSysCacheList1(CLAAMNAMENSP, ObjectIdGetDatum(amoid));
+	opclist = SearchSysCacheList(CLAAMNAMENSP, ObjectIdGetDatum(amoid));
 
 	for (i = 0; i < opclist->n_members; i++)
 	{

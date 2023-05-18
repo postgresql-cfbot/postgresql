@@ -734,7 +734,7 @@ logicalrep_write_typ(StringInfo out, TransactionId xid, Oid typoid)
 	if (TransactionIdIsValid(xid))
 		pq_sendint32(out, xid);
 
-	tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(basetypoid));
+	tup = SearchSysCache(TYPEOID, ObjectIdGetDatum(basetypoid));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for type %u", basetypoid);
 	typtup = (Form_pg_type) GETSTRUCT(tup);
@@ -825,7 +825,7 @@ logicalrep_write_tuple(StringInfo out, Relation rel, TupleTableSlot *slot,
 			continue;
 		}
 
-		typtup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(att->atttypid));
+		typtup = SearchSysCache(TYPEOID, ObjectIdGetDatum(att->atttypid));
 		if (!HeapTupleIsValid(typtup))
 			elog(ERROR, "cache lookup failed for type %u", att->atttypid);
 		typclass = (Form_pg_type) GETSTRUCT(typtup);

@@ -60,7 +60,7 @@ GetIndexAmRoutineByAmId(Oid amoid, bool noerror)
 	regproc		amhandler;
 
 	/* Get handler function OID for the access method */
-	tuple = SearchSysCache1(AMOID, ObjectIdGetDatum(amoid));
+	tuple = SearchSysCache(AMOID, ObjectIdGetDatum(amoid));
 	if (!HeapTupleIsValid(tuple))
 	{
 		if (noerror)
@@ -120,7 +120,7 @@ amvalidate(PG_FUNCTION_ARGS)
 	Oid			amoid;
 	IndexAmRoutine *amroutine;
 
-	classtup = SearchSysCache1(CLAOID, ObjectIdGetDatum(opclassoid));
+	classtup = SearchSysCache(CLAOID, ObjectIdGetDatum(opclassoid));
 	if (!HeapTupleIsValid(classtup))
 		elog(ERROR, "cache lookup failed for operator class %u", opclassoid);
 	classform = (Form_pg_opclass) GETSTRUCT(classtup);

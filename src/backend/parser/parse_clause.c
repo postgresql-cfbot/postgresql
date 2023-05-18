@@ -3730,9 +3730,9 @@ transformFrameOffset(ParseState *pstate, int frameOptions,
 		preferredType = (nodeType != UNKNOWNOID) ? nodeType : rangeopcintype;
 
 		/* Find the in_range support functions applicable to this case */
-		proclist = SearchSysCacheList2(AMPROCNUM,
-									   ObjectIdGetDatum(rangeopfamily),
-									   ObjectIdGetDatum(rangeopcintype));
+		proclist = SearchSysCacheList(AMPROCNUM,
+									  ObjectIdGetDatum(rangeopfamily),
+									  ObjectIdGetDatum(rangeopcintype));
 		for (i = 0; i < proclist->n_members; i++)
 		{
 			HeapTuple	proctup = &proclist->members[i]->tuple;

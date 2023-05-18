@@ -556,8 +556,8 @@ examine_attribute(Node *expr)
 	stats->attrtypmod = exprTypmod(expr);
 	stats->attrcollid = exprCollation(expr);
 
-	typtuple = SearchSysCacheCopy1(TYPEOID,
-								   ObjectIdGetDatum(stats->attrtypid));
+	typtuple = SearchSysCacheCopy(TYPEOID,
+								  ObjectIdGetDatum(stats->attrtypid));
 	if (!HeapTupleIsValid(typtuple))
 		elog(ERROR, "cache lookup failed for type %u", stats->attrtypid);
 	stats->attrtype = (Form_pg_type) GETSTRUCT(typtuple);
@@ -657,8 +657,8 @@ examine_expression(Node *expr, int stattarget)
 	stats->attr->attnum = InvalidAttrNumber;
 	stats->attr->atttypid = stats->attrtypid;
 
-	typtuple = SearchSysCacheCopy1(TYPEOID,
-								   ObjectIdGetDatum(stats->attrtypid));
+	typtuple = SearchSysCacheCopy(TYPEOID,
+								  ObjectIdGetDatum(stats->attrtypid));
 	if (!HeapTupleIsValid(typtuple))
 		elog(ERROR, "cache lookup failed for type %u", stats->attrtypid);
 
@@ -2457,8 +2457,8 @@ statext_expressions_load(Oid stxoid, bool inh, int idx)
 	HeapTupleData tmptup;
 	HeapTuple	tup;
 
-	htup = SearchSysCache2(STATEXTDATASTXOID,
-						   ObjectIdGetDatum(stxoid), BoolGetDatum(inh));
+	htup = SearchSysCache(STATEXTDATASTXOID,
+						  ObjectIdGetDatum(stxoid), BoolGetDatum(inh));
 	if (!HeapTupleIsValid(htup))
 		elog(ERROR, "cache lookup failed for statistics object %u", stxoid);
 

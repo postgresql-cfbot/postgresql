@@ -1762,11 +1762,11 @@ get_object_address_opf_member(ObjectType objtype,
 				ObjectAddressSet(address, AccessMethodOperatorRelationId,
 								 InvalidOid);
 
-				tp = SearchSysCache4(AMOPSTRATEGY,
-									 ObjectIdGetDatum(famaddr.objectId),
-									 ObjectIdGetDatum(typeoids[0]),
-									 ObjectIdGetDatum(typeoids[1]),
-									 Int16GetDatum(membernum));
+				tp = SearchSysCache(AMOPSTRATEGY,
+									ObjectIdGetDatum(famaddr.objectId),
+									ObjectIdGetDatum(typeoids[0]),
+									ObjectIdGetDatum(typeoids[1]),
+									Int16GetDatum(membernum));
 				if (!HeapTupleIsValid(tp))
 				{
 					if (!missing_ok)
@@ -1793,11 +1793,11 @@ get_object_address_opf_member(ObjectType objtype,
 				ObjectAddressSet(address, AccessMethodProcedureRelationId,
 								 InvalidOid);
 
-				tp = SearchSysCache4(AMPROCNUM,
-									 ObjectIdGetDatum(famaddr.objectId),
-									 ObjectIdGetDatum(typeoids[0]),
-									 ObjectIdGetDatum(typeoids[1]),
-									 Int16GetDatum(membernum));
+				tp = SearchSysCache(AMPROCNUM,
+									ObjectIdGetDatum(famaddr.objectId),
+									ObjectIdGetDatum(typeoids[0]),
+									ObjectIdGetDatum(typeoids[1]),
+									Int16GetDatum(membernum));
 				if (!HeapTupleIsValid(tp))
 				{
 					if (!missing_ok)
@@ -1847,8 +1847,8 @@ get_object_address_usermapping(List *object, bool missing_ok)
 		userid = InvalidOid;
 	else
 	{
-		tp = SearchSysCache1(AUTHNAME,
-							 CStringGetDatum(username));
+		tp = SearchSysCache(AUTHNAME,
+							CStringGetDatum(username));
 		if (!HeapTupleIsValid(tp))
 		{
 			if (!missing_ok)
@@ -1872,9 +1872,9 @@ get_object_address_usermapping(List *object, bool missing_ok)
 					 errmsg("server \"%s\" does not exist", servername)));
 		return address;
 	}
-	tp = SearchSysCache2(USERMAPPINGUSERSERVER,
-						 ObjectIdGetDatum(userid),
-						 ObjectIdGetDatum(server->serverid));
+	tp = SearchSysCache(USERMAPPINGUSERSERVER,
+						ObjectIdGetDatum(userid),
+						ObjectIdGetDatum(server->serverid));
 	if (!HeapTupleIsValid(tp))
 	{
 		if (!missing_ok)
@@ -1928,9 +1928,9 @@ get_object_address_publication_rel(List *object,
 
 	/* Find the publication relation mapping in syscache. */
 	address.objectId =
-		GetSysCacheOid2(PUBLICATIONRELMAP, Anum_pg_publication_rel_oid,
-						ObjectIdGetDatum(RelationGetRelid(relation)),
-						ObjectIdGetDatum(pub->oid));
+		GetSysCacheOid(PUBLICATIONRELMAP, Anum_pg_publication_rel_oid,
+					   ObjectIdGetDatum(RelationGetRelid(relation)),
+					   ObjectIdGetDatum(pub->oid));
 	if (!OidIsValid(address.objectId))
 	{
 		if (!missing_ok)
@@ -1976,9 +1976,9 @@ get_object_address_publication_schema(List *object, bool missing_ok)
 
 	/* Find the publication schema mapping in syscache */
 	address.objectId =
-		GetSysCacheOid2(PUBLICATIONNAMESPACEMAP,
-						Anum_pg_publication_namespace_oid,
-						ObjectIdGetDatum(schemaid),
+		GetSysCacheOid(PUBLICATIONNAMESPACEMAP,
+					   Anum_pg_publication_namespace_oid,
+					   ObjectIdGetDatum(schemaid),
 						ObjectIdGetDatum(pub->oid));
 	if (!OidIsValid(address.objectId) && !missing_ok)
 		ereport(ERROR,
@@ -2054,8 +2054,8 @@ get_object_address_defacl(List *object, bool missing_ok)
 	 * Look up user ID.  Behave as "default ACL not found" if the user doesn't
 	 * exist.
 	 */
-	tp = SearchSysCache1(AUTHNAME,
-						 CStringGetDatum(username));
+	tp = SearchSysCache(AUTHNAME,
+						CStringGetDatum(username));
 	if (!HeapTupleIsValid(tp))
 		goto not_found;
 	userid = ((Form_pg_authid) GETSTRUCT(tp))->oid;
@@ -2075,10 +2075,10 @@ get_object_address_defacl(List *object, bool missing_ok)
 		schemaid = InvalidOid;
 
 	/* Finally, look up the pg_default_acl object */
-	tp = SearchSysCache3(DEFACLROLENSPOBJ,
-						 ObjectIdGetDatum(userid),
-						 ObjectIdGetDatum(schemaid),
-						 CharGetDatum(objtype));
+	tp = SearchSysCache(DEFACLROLENSPOBJ,
+						ObjectIdGetDatum(userid),
+						ObjectIdGetDatum(schemaid),
+						CharGetDatum(objtype));
 	if (!HeapTupleIsValid(tp))
 		goto not_found;
 
@@ -2448,8 +2448,8 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 				HeapTuple	tuple;
 				Oid			contypid;
 
-				tuple = SearchSysCache1(CONSTROID,
-										ObjectIdGetDatum(address.objectId));
+				tuple = SearchSysCache(CONSTROID,
+									   ObjectIdGetDatum(address.objectId));
 				if (!HeapTupleIsValid(tuple))
 					elog(ERROR, "constraint with OID %u does not exist",
 						 address.objectId);
@@ -2616,7 +2616,7 @@ get_object_namespace(const ObjectAddress *address)
 	Assert(cache != -1);
 
 	/* Fetch tuple from syscache and extract namespace attribute. */
-	tuple = SearchSysCache1(cache, ObjectIdGetDatum(address->objectId));
+	tuple = SearchSysCache(cache, ObjectIdGetDatum(address->objectId));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for cache %d oid %u",
 			 cache, address->objectId);
@@ -2824,7 +2824,7 @@ get_catalog_object_by_oid(Relation catalog, AttrNumber oidcol, Oid objectId)
 
 	if (oidCacheId > 0)
 	{
-		tuple = SearchSysCacheCopy1(oidCacheId, ObjectIdGetDatum(objectId));
+		tuple = SearchSysCacheCopy(oidCacheId, ObjectIdGetDatum(objectId));
 		if (!HeapTupleIsValid(tuple))	/* should not happen */
 			return NULL;
 	}
@@ -2871,8 +2871,8 @@ getPublicationSchemaInfo(const ObjectAddress *object, bool missing_ok,
 	HeapTuple	tup;
 	Form_pg_publication_namespace pnform;
 
-	tup = SearchSysCache1(PUBLICATIONNAMESPACE,
-						  ObjectIdGetDatum(object->objectId));
+	tup = SearchSysCache(PUBLICATIONNAMESPACE,
+						 ObjectIdGetDatum(object->objectId));
 	if (!HeapTupleIsValid(tup))
 	{
 		if (!missing_ok)
@@ -3018,8 +3018,8 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				Form_pg_collation coll;
 				char	   *nspname;
 
-				collTup = SearchSysCache1(COLLOID,
-										  ObjectIdGetDatum(object->objectId));
+				collTup = SearchSysCache(COLLOID,
+										 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(collTup))
 				{
 					if (!missing_ok)
@@ -3048,8 +3048,8 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				HeapTuple	conTup;
 				Form_pg_constraint con;
 
-				conTup = SearchSysCache1(CONSTROID,
-										 ObjectIdGetDatum(object->objectId));
+				conTup = SearchSysCache(CONSTROID,
+										ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(conTup))
 				{
 					if (!missing_ok)
@@ -3087,8 +3087,8 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				Form_pg_conversion conv;
 				char	   *nspname;
 
-				conTup = SearchSysCache1(CONVOID,
-										 ObjectIdGetDatum(object->objectId));
+				conTup = SearchSysCache(CONVOID,
+										ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(conTup))
 				{
 					if (!missing_ok)
@@ -3171,8 +3171,8 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				Form_pg_am	amForm;
 				char	   *nspname;
 
-				opcTup = SearchSysCache1(CLAOID,
-										 ObjectIdGetDatum(object->objectId));
+				opcTup = SearchSysCache(CLAOID,
+										ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(opcTup))
 				{
 					if (!missing_ok)
@@ -3183,8 +3183,8 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 
 				opcForm = (Form_pg_opclass) GETSTRUCT(opcTup);
 
-				amTup = SearchSysCache1(AMOID,
-										ObjectIdGetDatum(opcForm->opcmethod));
+				amTup = SearchSysCache(AMOID,
+									   ObjectIdGetDatum(opcForm->opcmethod));
 				if (!HeapTupleIsValid(amTup))
 					elog(ERROR, "cache lookup failed for access method %u",
 						 opcForm->opcmethod);
@@ -3214,8 +3214,8 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 			{
 				HeapTuple	tup;
 
-				tup = SearchSysCache1(AMOID,
-									  ObjectIdGetDatum(object->objectId));
+				tup = SearchSysCache(AMOID,
+									 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -3458,8 +3458,8 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				Form_pg_statistic_ext stxForm;
 				char	   *nspname;
 
-				stxTup = SearchSysCache1(STATEXTOID,
-										 ObjectIdGetDatum(object->objectId));
+				stxTup = SearchSysCache(STATEXTOID,
+										ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(stxTup))
 				{
 					if (!missing_ok)
@@ -3490,8 +3490,8 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				Form_pg_ts_parser prsForm;
 				char	   *nspname;
 
-				tup = SearchSysCache1(TSPARSEROID,
-									  ObjectIdGetDatum(object->objectId));
+				tup = SearchSysCache(TSPARSEROID,
+									 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -3520,8 +3520,8 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				Form_pg_ts_dict dictForm;
 				char	   *nspname;
 
-				tup = SearchSysCache1(TSDICTOID,
-									  ObjectIdGetDatum(object->objectId));
+				tup = SearchSysCache(TSDICTOID,
+									 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -3551,8 +3551,8 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				Form_pg_ts_template tmplForm;
 				char	   *nspname;
 
-				tup = SearchSysCache1(TSTEMPLATEOID,
-									  ObjectIdGetDatum(object->objectId));
+				tup = SearchSysCache(TSTEMPLATEOID,
+									 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -3582,8 +3582,8 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				Form_pg_ts_config cfgForm;
 				char	   *nspname;
 
-				tup = SearchSysCache1(TSCONFIGOID,
-									  ObjectIdGetDatum(object->objectId));
+				tup = SearchSysCache(TSCONFIGOID,
+									 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -3720,8 +3720,8 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				Form_pg_user_mapping umform;
 				ForeignServer *srv;
 
-				tup = SearchSysCache1(USERMAPPINGOID,
-									  ObjectIdGetDatum(object->objectId));
+				tup = SearchSysCache(USERMAPPINGOID,
+									 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -3874,8 +3874,8 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 			{
 				HeapTuple	tup;
 
-				tup = SearchSysCache1(EVENTTRIGGEROID,
-									  ObjectIdGetDatum(object->objectId));
+				tup = SearchSysCache(EVENTTRIGGEROID,
+									 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -3895,8 +3895,8 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				Datum		nameDatum;
 				char	   *parname;
 
-				tup = SearchSysCache1(PARAMETERACLOID,
-									  ObjectIdGetDatum(object->objectId));
+				tup = SearchSysCache(PARAMETERACLOID,
+									 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -3991,8 +3991,8 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				Form_pg_publication_rel prform;
 				StringInfoData rel;
 
-				tup = SearchSysCache1(PUBLICATIONREL,
-									  ObjectIdGetDatum(object->objectId));
+				tup = SearchSysCache(PUBLICATIONREL,
+									 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -4030,8 +4030,8 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				HeapTuple	trfTup;
 				Form_pg_transform trfForm;
 
-				trfTup = SearchSysCache1(TRFOID,
-										 ObjectIdGetDatum(object->objectId));
+				trfTup = SearchSysCache(TRFOID,
+										ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(trfTup))
 				{
 					if (!missing_ok)
@@ -4091,8 +4091,8 @@ getRelationDescription(StringInfo buffer, Oid relid, bool missing_ok)
 	char	   *nspname;
 	char	   *relname;
 
-	relTup = SearchSysCache1(RELOID,
-							 ObjectIdGetDatum(relid));
+	relTup = SearchSysCache(RELOID,
+							ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(relTup))
 	{
 		if (!missing_ok)
@@ -4167,7 +4167,7 @@ getOpFamilyDescription(StringInfo buffer, Oid opfid, bool missing_ok)
 	Form_pg_am	amForm;
 	char	   *nspname;
 
-	opfTup = SearchSysCache1(OPFAMILYOID, ObjectIdGetDatum(opfid));
+	opfTup = SearchSysCache(OPFAMILYOID, ObjectIdGetDatum(opfid));
 	if (!HeapTupleIsValid(opfTup))
 	{
 		if (!missing_ok)
@@ -4176,7 +4176,7 @@ getOpFamilyDescription(StringInfo buffer, Oid opfid, bool missing_ok)
 	}
 	opfForm = (Form_pg_opfamily) GETSTRUCT(opfTup);
 
-	amTup = SearchSysCache1(AMOID, ObjectIdGetDatum(opfForm->opfmethod));
+	amTup = SearchSysCache(AMOID, ObjectIdGetDatum(opfForm->opfmethod));
 	if (!HeapTupleIsValid(amTup))
 		elog(ERROR, "cache lookup failed for access method %u",
 			 opfForm->opfmethod);
@@ -4607,8 +4607,8 @@ getRelationTypeDescription(StringInfo buffer, Oid relid, int32 objectSubId,
 	HeapTuple	relTup;
 	Form_pg_class relForm;
 
-	relTup = SearchSysCache1(RELOID,
-							 ObjectIdGetDatum(relid));
+	relTup = SearchSysCache(RELOID,
+							ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(relTup))
 	{
 		if (!missing_ok)
@@ -4707,8 +4707,8 @@ getProcedureTypeDescription(StringInfo buffer, Oid procid,
 	HeapTuple	procTup;
 	Form_pg_proc procForm;
 
-	procTup = SearchSysCache1(PROCOID,
-							  ObjectIdGetDatum(procid));
+	procTup = SearchSysCache(PROCOID,
+							 ObjectIdGetDatum(procid));
 	if (!HeapTupleIsValid(procTup))
 	{
 		if (!missing_ok)
@@ -4884,8 +4884,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 				Form_pg_collation coll;
 				char	   *schema;
 
-				collTup = SearchSysCache1(COLLOID,
-										  ObjectIdGetDatum(object->objectId));
+				collTup = SearchSysCache(COLLOID,
+										 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(collTup))
 				{
 					if (!missing_ok)
@@ -4910,8 +4910,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 				HeapTuple	conTup;
 				Form_pg_constraint con;
 
-				conTup = SearchSysCache1(CONSTROID,
-										 ObjectIdGetDatum(object->objectId));
+				conTup = SearchSysCache(CONSTROID,
+										ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(conTup))
 				{
 					if (!missing_ok)
@@ -4958,8 +4958,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 				Form_pg_conversion conForm;
 				char	   *schema;
 
-				conTup = SearchSysCache1(CONVOID,
-										 ObjectIdGetDatum(object->objectId));
+				conTup = SearchSysCache(CONVOID,
+										ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(conTup))
 				{
 					if (!missing_ok)
@@ -5005,8 +5005,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 				HeapTuple	langTup;
 				Form_pg_language langForm;
 
-				langTup = SearchSysCache1(LANGOID,
-										  ObjectIdGetDatum(object->objectId));
+				langTup = SearchSysCache(LANGOID,
+										 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(langTup))
 				{
 					if (!missing_ok)
@@ -5054,8 +5054,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 				Form_pg_am	amForm;
 				char	   *schema;
 
-				opcTup = SearchSysCache1(CLAOID,
-										 ObjectIdGetDatum(object->objectId));
+				opcTup = SearchSysCache(CLAOID,
+										ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(opcTup))
 				{
 					if (!missing_ok)
@@ -5066,8 +5066,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 				opcForm = (Form_pg_opclass) GETSTRUCT(opcTup);
 				schema = get_namespace_name_or_temp(opcForm->opcnamespace);
 
-				amTup = SearchSysCache1(AMOID,
-										ObjectIdGetDatum(opcForm->opcmethod));
+				amTup = SearchSysCache(AMOID,
+									   ObjectIdGetDatum(opcForm->opcmethod));
 				if (!HeapTupleIsValid(amTup))
 					elog(ERROR, "cache lookup failed for access method %u",
 						 opcForm->opcmethod);
@@ -5325,8 +5325,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 				Form_pg_statistic_ext formStatistic;
 				char	   *schema;
 
-				tup = SearchSysCache1(STATEXTOID,
-									  ObjectIdGetDatum(object->objectId));
+				tup = SearchSysCache(STATEXTOID,
+									 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -5352,8 +5352,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 				Form_pg_ts_parser formParser;
 				char	   *schema;
 
-				tup = SearchSysCache1(TSPARSEROID,
-									  ObjectIdGetDatum(object->objectId));
+				tup = SearchSysCache(TSPARSEROID,
+									 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -5379,8 +5379,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 				Form_pg_ts_dict formDict;
 				char	   *schema;
 
-				tup = SearchSysCache1(TSDICTOID,
-									  ObjectIdGetDatum(object->objectId));
+				tup = SearchSysCache(TSDICTOID,
+									 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -5406,8 +5406,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 				Form_pg_ts_template formTmpl;
 				char	   *schema;
 
-				tup = SearchSysCache1(TSTEMPLATEOID,
-									  ObjectIdGetDatum(object->objectId));
+				tup = SearchSysCache(TSTEMPLATEOID,
+									 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -5433,8 +5433,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 				Form_pg_ts_config formCfg;
 				char	   *schema;
 
-				tup = SearchSysCache1(TSCONFIGOID,
-									  ObjectIdGetDatum(object->objectId));
+				tup = SearchSysCache(TSCONFIGOID,
+									 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -5588,8 +5588,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 				ForeignServer *srv;
 				const char *usename;
 
-				tup = SearchSysCache1(USERMAPPINGOID,
-									  ObjectIdGetDatum(object->objectId));
+				tup = SearchSysCache(USERMAPPINGOID,
+									 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -5731,8 +5731,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 				Form_pg_event_trigger trigForm;
 				char	   *evtname;
 
-				tup = SearchSysCache1(EVENTTRIGGEROID,
-									  ObjectIdGetDatum(object->objectId));
+				tup = SearchSysCache(EVENTTRIGGEROID,
+									 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -5755,8 +5755,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 				Datum		nameDatum;
 				char	   *parname;
 
-				tup = SearchSysCache1(PARAMETERACLOID,
-									  ObjectIdGetDatum(object->objectId));
+				tup = SearchSysCache(PARAMETERACLOID,
+									 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -5852,8 +5852,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 				char	   *pubname;
 				Form_pg_publication_rel prform;
 
-				tup = SearchSysCache1(PUBLICATIONREL,
-									  ObjectIdGetDatum(object->objectId));
+				tup = SearchSysCache(PUBLICATIONREL,
+									 ObjectIdGetDatum(object->objectId));
 				if (!HeapTupleIsValid(tup))
 				{
 					if (!missing_ok)
@@ -5973,7 +5973,7 @@ getOpFamilyIdentity(StringInfo buffer, Oid opfid, List **object,
 	Form_pg_am	amForm;
 	char	   *schema;
 
-	opfTup = SearchSysCache1(OPFAMILYOID, ObjectIdGetDatum(opfid));
+	opfTup = SearchSysCache(OPFAMILYOID, ObjectIdGetDatum(opfid));
 	if (!HeapTupleIsValid(opfTup))
 	{
 		if (!missing_ok)
@@ -5982,7 +5982,7 @@ getOpFamilyIdentity(StringInfo buffer, Oid opfid, List **object,
 	}
 	opfForm = (Form_pg_opfamily) GETSTRUCT(opfTup);
 
-	amTup = SearchSysCache1(AMOID, ObjectIdGetDatum(opfForm->opfmethod));
+	amTup = SearchSysCache(AMOID, ObjectIdGetDatum(opfForm->opfmethod));
 	if (!HeapTupleIsValid(amTup))
 		elog(ERROR, "cache lookup failed for access method %u",
 			 opfForm->opfmethod);
@@ -6015,8 +6015,8 @@ getRelationIdentity(StringInfo buffer, Oid relid, List **object,
 	Form_pg_class relForm;
 	char	   *schema;
 
-	relTup = SearchSysCache1(RELOID,
-							 ObjectIdGetDatum(relid));
+	relTup = SearchSysCache(RELOID,
+							ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(relTup))
 	{
 		if (!missing_ok)

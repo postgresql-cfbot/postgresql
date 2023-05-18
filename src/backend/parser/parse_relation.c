@@ -862,9 +862,9 @@ scanRTEForColumn(ParseState *pstate, RangeTblEntry *rte,
 		if (attnum != InvalidAttrNumber)
 		{
 			/* now check to see if column actually is defined */
-			if (SearchSysCacheExists2(ATTNUM,
-									  ObjectIdGetDatum(rte->relid),
-									  Int16GetDatum(attnum)))
+			if (SearchSysCacheExists(ATTNUM,
+									 ObjectIdGetDatum(rte->relid),
+									 Int16GetDatum(attnum)))
 				result = attnum;
 		}
 	}
@@ -3302,9 +3302,9 @@ get_rte_attribute_is_dropped(RangeTblEntry *rte, AttrNumber attnum)
 				HeapTuple	tp;
 				Form_pg_attribute att_tup;
 
-				tp = SearchSysCache2(ATTNUM,
-									 ObjectIdGetDatum(rte->relid),
-									 Int16GetDatum(attnum));
+				tp = SearchSysCache(ATTNUM,
+									ObjectIdGetDatum(rte->relid),
+									Int16GetDatum(attnum));
 				if (!HeapTupleIsValid(tp))	/* shouldn't happen */
 					elog(ERROR, "cache lookup failed for attribute %d of relation %u",
 						 attnum, rte->relid);

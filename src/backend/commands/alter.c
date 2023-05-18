@@ -186,7 +186,7 @@ AlterObjectRename_internal(Relation rel, Oid objectId, const char *new_name)
 	bool	   *replaces;
 	NameData	nameattrdata;
 
-	oldtup = SearchSysCache1(oidCacheId, ObjectIdGetDatum(objectId));
+	oldtup = SearchSysCache(oidCacheId, ObjectIdGetDatum(objectId));
 	if (!HeapTupleIsValid(oldtup))
 		elog(ERROR, "cache lookup failed for object %u of catalog \"%s\"",
 			 objectId, RelationGetRelationName(rel));
@@ -295,8 +295,8 @@ AlterObjectRename_internal(Relation rel, Oid objectId, const char *new_name)
 	}
 	else if (classId == SubscriptionRelationId)
 	{
-		if (SearchSysCacheExists2(SUBSCRIPTIONNAME, MyDatabaseId,
-								  CStringGetDatum(new_name)))
+		if (SearchSysCacheExists(SUBSCRIPTIONNAME, MyDatabaseId,
+								 CStringGetDatum(new_name)))
 			report_name_conflict(classId, new_name);
 
 		/* Also enforce regression testing naming rules, if enabled */
@@ -312,15 +312,15 @@ AlterObjectRename_internal(Relation rel, Oid objectId, const char *new_name)
 	{
 		if (OidIsValid(namespaceId))
 		{
-			if (SearchSysCacheExists2(nameCacheId,
-									  CStringGetDatum(new_name),
-									  ObjectIdGetDatum(namespaceId)))
+			if (SearchSysCacheExists(nameCacheId,
+									 CStringGetDatum(new_name),
+									 ObjectIdGetDatum(namespaceId)))
 				report_namespace_conflict(classId, new_name, namespaceId);
 		}
 		else
 		{
-			if (SearchSysCacheExists1(nameCacheId,
-									  CStringGetDatum(new_name)))
+			if (SearchSysCacheExists(nameCacheId,
+									 CStringGetDatum(new_name)))
 				report_name_conflict(classId, new_name);
 		}
 	}
@@ -736,7 +736,7 @@ AlterObjectNamespace_internal(Relation rel, Oid objid, Oid nspOid)
 	bool	   *nulls;
 	bool	   *replaces;
 
-	tup = SearchSysCacheCopy1(oidCacheId, ObjectIdGetDatum(objid));
+	tup = SearchSysCacheCopy(oidCacheId, ObjectIdGetDatum(objid));
 	if (!HeapTupleIsValid(tup)) /* should not happen */
 		elog(ERROR, "cache lookup failed for object %u of catalog \"%s\"",
 			 objid, RelationGetRelationName(rel));
@@ -824,8 +824,8 @@ AlterObjectNamespace_internal(Relation rel, Oid objid, Oid nspOid)
 								   opf->opfmethod, nspOid);
 	}
 	else if (nameCacheId >= 0 &&
-			 SearchSysCacheExists2(nameCacheId, name,
-								   ObjectIdGetDatum(nspOid)))
+			 SearchSysCacheExists(nameCacheId, name,
+								  ObjectIdGetDatum(nspOid)))
 		report_namespace_conflict(classId,
 								  NameStr(*(DatumGetName(name))),
 								  nspOid);

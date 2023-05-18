@@ -638,7 +638,7 @@ aclitemout(PG_FUNCTION_ARGS)
 
 	if (aip->ai_grantee != ACL_ID_PUBLIC)
 	{
-		htup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(aip->ai_grantee));
+		htup = SearchSysCache(AUTHOID, ObjectIdGetDatum(aip->ai_grantee));
 		if (HeapTupleIsValid(htup))
 		{
 			putid(p, NameStr(((Form_pg_authid) GETSTRUCT(htup))->rolname));
@@ -666,7 +666,7 @@ aclitemout(PG_FUNCTION_ARGS)
 	*p++ = '/';
 	*p = '\0';
 
-	htup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(aip->ai_grantor));
+	htup = SearchSysCache(AUTHOID, ObjectIdGetDatum(aip->ai_grantor));
 	if (HeapTupleIsValid(htup))
 	{
 		putid(p, NameStr(((Form_pg_authid) GETSTRUCT(htup))->rolname));
@@ -1925,7 +1925,7 @@ has_table_privilege_name_id(PG_FUNCTION_ARGS)
 	roleid = get_role_oid_or_public(NameStr(*username));
 	mode = convert_table_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(tableoid)))
+	if (!SearchSysCacheExists(RELOID, ObjectIdGetDatum(tableoid)))
 		PG_RETURN_NULL();
 
 	aclresult = pg_class_aclcheck(tableoid, roleid, mode);
@@ -1951,7 +1951,7 @@ has_table_privilege_id(PG_FUNCTION_ARGS)
 	roleid = GetUserId();
 	mode = convert_table_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(tableoid)))
+	if (!SearchSysCacheExists(RELOID, ObjectIdGetDatum(tableoid)))
 		PG_RETURN_NULL();
 
 	aclresult = pg_class_aclcheck(tableoid, roleid, mode);
@@ -1998,7 +1998,7 @@ has_table_privilege_id_id(PG_FUNCTION_ARGS)
 
 	mode = convert_table_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(tableoid)))
+	if (!SearchSysCacheExists(RELOID, ObjectIdGetDatum(tableoid)))
 		PG_RETURN_NULL();
 
 	aclresult = pg_class_aclcheck(tableoid, roleid, mode);
@@ -2357,7 +2357,7 @@ has_any_column_privilege_name_id(PG_FUNCTION_ARGS)
 	roleid = get_role_oid_or_public(NameStr(*username));
 	mode = convert_column_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(tableoid)))
+	if (!SearchSysCacheExists(RELOID, ObjectIdGetDatum(tableoid)))
 		PG_RETURN_NULL();
 
 	/* First check at table level, then examine each column if needed */
@@ -2387,7 +2387,7 @@ has_any_column_privilege_id(PG_FUNCTION_ARGS)
 	roleid = GetUserId();
 	mode = convert_column_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(tableoid)))
+	if (!SearchSysCacheExists(RELOID, ObjectIdGetDatum(tableoid)))
 		PG_RETURN_NULL();
 
 	/* First check at table level, then examine each column if needed */
@@ -2442,7 +2442,7 @@ has_any_column_privilege_id_id(PG_FUNCTION_ARGS)
 
 	mode = convert_column_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(tableoid)))
+	if (!SearchSysCacheExists(RELOID, ObjectIdGetDatum(tableoid)))
 		PG_RETURN_NULL();
 
 	/* First check at table level, then examine each column if needed */
@@ -2852,9 +2852,9 @@ convert_column_name(Oid tableoid, text *column)
 	 * columns don't exist.  We need to treat dropped columns differently from
 	 * nonexistent columns.
 	 */
-	attTuple = SearchSysCache2(ATTNAME,
-							   ObjectIdGetDatum(tableoid),
-							   CStringGetDatum(colname));
+	attTuple = SearchSysCache(ATTNAME,
+							  ObjectIdGetDatum(tableoid),
+							  CStringGetDatum(colname));
 	if (HeapTupleIsValid(attTuple))
 	{
 		Form_pg_attribute attributeForm;
@@ -2993,7 +2993,7 @@ has_database_privilege_name_id(PG_FUNCTION_ARGS)
 	roleid = get_role_oid_or_public(NameStr(*username));
 	mode = convert_database_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(DATABASEOID, ObjectIdGetDatum(databaseoid)))
+	if (!SearchSysCacheExists(DATABASEOID, ObjectIdGetDatum(databaseoid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(DatabaseRelationId, databaseoid, roleid, mode);
@@ -3019,7 +3019,7 @@ has_database_privilege_id(PG_FUNCTION_ARGS)
 	roleid = GetUserId();
 	mode = convert_database_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(DATABASEOID, ObjectIdGetDatum(databaseoid)))
+	if (!SearchSysCacheExists(DATABASEOID, ObjectIdGetDatum(databaseoid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(DatabaseRelationId, databaseoid, roleid, mode);
@@ -3066,7 +3066,7 @@ has_database_privilege_id_id(PG_FUNCTION_ARGS)
 
 	mode = convert_database_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(DATABASEOID, ObjectIdGetDatum(databaseoid)))
+	if (!SearchSysCacheExists(DATABASEOID, ObjectIdGetDatum(databaseoid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(DatabaseRelationId, databaseoid, roleid, mode);
@@ -3190,7 +3190,7 @@ has_foreign_data_wrapper_privilege_name_id(PG_FUNCTION_ARGS)
 	roleid = get_role_oid_or_public(NameStr(*username));
 	mode = convert_foreign_data_wrapper_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(FOREIGNDATAWRAPPEROID, ObjectIdGetDatum(fdwid)))
+	if (!SearchSysCacheExists(FOREIGNDATAWRAPPEROID, ObjectIdGetDatum(fdwid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(ForeignDataWrapperRelationId, fdwid, roleid, mode);
@@ -3216,7 +3216,7 @@ has_foreign_data_wrapper_privilege_id(PG_FUNCTION_ARGS)
 	roleid = GetUserId();
 	mode = convert_foreign_data_wrapper_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(FOREIGNDATAWRAPPEROID, ObjectIdGetDatum(fdwid)))
+	if (!SearchSysCacheExists(FOREIGNDATAWRAPPEROID, ObjectIdGetDatum(fdwid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(ForeignDataWrapperRelationId, fdwid, roleid, mode);
@@ -3263,7 +3263,7 @@ has_foreign_data_wrapper_privilege_id_id(PG_FUNCTION_ARGS)
 
 	mode = convert_foreign_data_wrapper_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(FOREIGNDATAWRAPPEROID, ObjectIdGetDatum(fdwid)))
+	if (!SearchSysCacheExists(FOREIGNDATAWRAPPEROID, ObjectIdGetDatum(fdwid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(ForeignDataWrapperRelationId, fdwid, roleid, mode);
@@ -3381,7 +3381,7 @@ has_function_privilege_name_id(PG_FUNCTION_ARGS)
 	roleid = get_role_oid_or_public(NameStr(*username));
 	mode = convert_function_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(PROCOID, ObjectIdGetDatum(functionoid)))
+	if (!SearchSysCacheExists(PROCOID, ObjectIdGetDatum(functionoid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(ProcedureRelationId, functionoid, roleid, mode);
@@ -3407,7 +3407,7 @@ has_function_privilege_id(PG_FUNCTION_ARGS)
 	roleid = GetUserId();
 	mode = convert_function_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(PROCOID, ObjectIdGetDatum(functionoid)))
+	if (!SearchSysCacheExists(PROCOID, ObjectIdGetDatum(functionoid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(ProcedureRelationId, functionoid, roleid, mode);
@@ -3454,7 +3454,7 @@ has_function_privilege_id_id(PG_FUNCTION_ARGS)
 
 	mode = convert_function_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(PROCOID, ObjectIdGetDatum(functionoid)))
+	if (!SearchSysCacheExists(PROCOID, ObjectIdGetDatum(functionoid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(ProcedureRelationId, functionoid, roleid, mode);
@@ -3581,7 +3581,7 @@ has_language_privilege_name_id(PG_FUNCTION_ARGS)
 	roleid = get_role_oid_or_public(NameStr(*username));
 	mode = convert_language_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(LANGOID, ObjectIdGetDatum(languageoid)))
+	if (!SearchSysCacheExists(LANGOID, ObjectIdGetDatum(languageoid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(LanguageRelationId, languageoid, roleid, mode);
@@ -3607,7 +3607,7 @@ has_language_privilege_id(PG_FUNCTION_ARGS)
 	roleid = GetUserId();
 	mode = convert_language_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(LANGOID, ObjectIdGetDatum(languageoid)))
+	if (!SearchSysCacheExists(LANGOID, ObjectIdGetDatum(languageoid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(LanguageRelationId, languageoid, roleid, mode);
@@ -3654,7 +3654,7 @@ has_language_privilege_id_id(PG_FUNCTION_ARGS)
 
 	mode = convert_language_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(LANGOID, ObjectIdGetDatum(languageoid)))
+	if (!SearchSysCacheExists(LANGOID, ObjectIdGetDatum(languageoid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(LanguageRelationId, languageoid, roleid, mode);
@@ -3772,7 +3772,7 @@ has_schema_privilege_name_id(PG_FUNCTION_ARGS)
 	roleid = get_role_oid_or_public(NameStr(*username));
 	mode = convert_schema_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(NAMESPACEOID, ObjectIdGetDatum(schemaoid)))
+	if (!SearchSysCacheExists(NAMESPACEOID, ObjectIdGetDatum(schemaoid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(NamespaceRelationId, schemaoid, roleid, mode);
@@ -3798,7 +3798,7 @@ has_schema_privilege_id(PG_FUNCTION_ARGS)
 	roleid = GetUserId();
 	mode = convert_schema_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(NAMESPACEOID, ObjectIdGetDatum(schemaoid)))
+	if (!SearchSysCacheExists(NAMESPACEOID, ObjectIdGetDatum(schemaoid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(NamespaceRelationId, schemaoid, roleid, mode);
@@ -3845,7 +3845,7 @@ has_schema_privilege_id_id(PG_FUNCTION_ARGS)
 
 	mode = convert_schema_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(NAMESPACEOID, ObjectIdGetDatum(schemaoid)))
+	if (!SearchSysCacheExists(NAMESPACEOID, ObjectIdGetDatum(schemaoid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(NamespaceRelationId, schemaoid, roleid, mode);
@@ -3965,7 +3965,7 @@ has_server_privilege_name_id(PG_FUNCTION_ARGS)
 	roleid = get_role_oid_or_public(NameStr(*username));
 	mode = convert_server_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(FOREIGNSERVEROID, ObjectIdGetDatum(serverid)))
+	if (!SearchSysCacheExists(FOREIGNSERVEROID, ObjectIdGetDatum(serverid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(ForeignServerRelationId, serverid, roleid, mode);
@@ -3991,7 +3991,7 @@ has_server_privilege_id(PG_FUNCTION_ARGS)
 	roleid = GetUserId();
 	mode = convert_server_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(FOREIGNSERVEROID, ObjectIdGetDatum(serverid)))
+	if (!SearchSysCacheExists(FOREIGNSERVEROID, ObjectIdGetDatum(serverid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(ForeignServerRelationId, serverid, roleid, mode);
@@ -4038,7 +4038,7 @@ has_server_privilege_id_id(PG_FUNCTION_ARGS)
 
 	mode = convert_server_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(FOREIGNSERVEROID, ObjectIdGetDatum(serverid)))
+	if (!SearchSysCacheExists(FOREIGNSERVEROID, ObjectIdGetDatum(serverid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(ForeignServerRelationId, serverid, roleid, mode);
@@ -4156,7 +4156,7 @@ has_tablespace_privilege_name_id(PG_FUNCTION_ARGS)
 	roleid = get_role_oid_or_public(NameStr(*username));
 	mode = convert_tablespace_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(TABLESPACEOID, ObjectIdGetDatum(tablespaceoid)))
+	if (!SearchSysCacheExists(TABLESPACEOID, ObjectIdGetDatum(tablespaceoid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(TableSpaceRelationId, tablespaceoid, roleid, mode);
@@ -4182,7 +4182,7 @@ has_tablespace_privilege_id(PG_FUNCTION_ARGS)
 	roleid = GetUserId();
 	mode = convert_tablespace_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(TABLESPACEOID, ObjectIdGetDatum(tablespaceoid)))
+	if (!SearchSysCacheExists(TABLESPACEOID, ObjectIdGetDatum(tablespaceoid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(TableSpaceRelationId, tablespaceoid, roleid, mode);
@@ -4229,7 +4229,7 @@ has_tablespace_privilege_id_id(PG_FUNCTION_ARGS)
 
 	mode = convert_tablespace_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(TABLESPACEOID, ObjectIdGetDatum(tablespaceoid)))
+	if (!SearchSysCacheExists(TABLESPACEOID, ObjectIdGetDatum(tablespaceoid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(TableSpaceRelationId, tablespaceoid, roleid, mode);
@@ -4346,7 +4346,7 @@ has_type_privilege_name_id(PG_FUNCTION_ARGS)
 	roleid = get_role_oid_or_public(NameStr(*username));
 	mode = convert_type_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(TYPEOID, ObjectIdGetDatum(typeoid)))
+	if (!SearchSysCacheExists(TYPEOID, ObjectIdGetDatum(typeoid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(TypeRelationId, typeoid, roleid, mode);
@@ -4372,7 +4372,7 @@ has_type_privilege_id(PG_FUNCTION_ARGS)
 	roleid = GetUserId();
 	mode = convert_type_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(TYPEOID, ObjectIdGetDatum(typeoid)))
+	if (!SearchSysCacheExists(TYPEOID, ObjectIdGetDatum(typeoid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(TypeRelationId, typeoid, roleid, mode);
@@ -4419,7 +4419,7 @@ has_type_privilege_id_id(PG_FUNCTION_ARGS)
 
 	mode = convert_type_priv_string(priv_type_text);
 
-	if (!SearchSysCacheExists1(TYPEOID, ObjectIdGetDatum(typeoid)))
+	if (!SearchSysCacheExists(TYPEOID, ObjectIdGetDatum(typeoid)))
 		PG_RETURN_NULL();
 
 	aclresult = object_aclcheck(TypeRelationId, typeoid, roleid, mode);
@@ -4781,8 +4781,8 @@ initialize_acl(void)
 	if (!IsBootstrapProcessingMode())
 	{
 		cached_db_hash =
-			GetSysCacheHashValue1(DATABASEOID,
-								  ObjectIdGetDatum(MyDatabaseId));
+			GetSysCacheHashValue(DATABASEOID,
+								 ObjectIdGetDatum(MyDatabaseId));
 
 		/*
 		 * In normal mode, set a callback on any syscache invalidation of rows
@@ -4870,7 +4870,7 @@ roles_is_member_of(Oid roleid, enum RoleRecurseType type,
 	{
 		HeapTuple	dbtup;
 
-		dbtup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
+		dbtup = SearchSysCache(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
 		if (!HeapTupleIsValid(dbtup))
 			elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
 		dba = ((Form_pg_database) GETSTRUCT(dbtup))->datdba;
@@ -4897,8 +4897,8 @@ roles_is_member_of(Oid roleid, enum RoleRecurseType type,
 		int			i;
 
 		/* Find roles that memberid is directly a member of */
-		memlist = SearchSysCacheList1(AUTHMEMMEMROLE,
-									  ObjectIdGetDatum(memberid));
+		memlist = SearchSysCacheList(AUTHMEMMEMROLE,
+									 ObjectIdGetDatum(memberid));
 		for (i = 0; i < memlist->n_members; i++)
 		{
 			HeapTuple	tup = &memlist->members[i]->tuple;
@@ -5256,8 +5256,8 @@ get_role_oid(const char *rolname, bool missing_ok)
 {
 	Oid			oid;
 
-	oid = GetSysCacheOid1(AUTHNAME, Anum_pg_authid_oid,
-						  CStringGetDatum(rolname));
+	oid = GetSysCacheOid(AUTHNAME, Anum_pg_authid_oid,
+						 CStringGetDatum(rolname));
 	if (!OidIsValid(oid) && !missing_ok)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -5333,7 +5333,7 @@ get_rolespec_tuple(const RoleSpec *role)
 	{
 		case ROLESPEC_CSTRING:
 			Assert(role->rolename);
-			tuple = SearchSysCache1(AUTHNAME, CStringGetDatum(role->rolename));
+			tuple = SearchSysCache(AUTHNAME, CStringGetDatum(role->rolename));
 			if (!HeapTupleIsValid(tuple))
 				ereport(ERROR,
 						(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -5342,13 +5342,13 @@ get_rolespec_tuple(const RoleSpec *role)
 
 		case ROLESPEC_CURRENT_ROLE:
 		case ROLESPEC_CURRENT_USER:
-			tuple = SearchSysCache1(AUTHOID, GetUserId());
+			tuple = SearchSysCache(AUTHOID, GetUserId());
 			if (!HeapTupleIsValid(tuple))
 				elog(ERROR, "cache lookup failed for role %u", GetUserId());
 			break;
 
 		case ROLESPEC_SESSION_USER:
-			tuple = SearchSysCache1(AUTHOID, GetSessionUserId());
+			tuple = SearchSysCache(AUTHOID, GetSessionUserId());
 			if (!HeapTupleIsValid(tuple))
 				elog(ERROR, "cache lookup failed for role %u", GetSessionUserId());
 			break;

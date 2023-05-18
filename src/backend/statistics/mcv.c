@@ -564,8 +564,8 @@ statext_mcv_load(Oid mvoid, bool inh)
 	MCVList    *result;
 	bool		isnull;
 	Datum		mcvlist;
-	HeapTuple	htup = SearchSysCache2(STATEXTDATASTXOID,
-									   ObjectIdGetDatum(mvoid), BoolGetDatum(inh));
+	HeapTuple	htup = SearchSysCache(STATEXTDATASTXOID,
+									  ObjectIdGetDatum(mvoid), BoolGetDatum(inh));
 
 	if (!HeapTupleIsValid(htup))
 		elog(ERROR, "cache lookup failed for statistics object %u", mvoid);

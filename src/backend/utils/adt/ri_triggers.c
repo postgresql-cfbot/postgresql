@@ -1956,7 +1956,7 @@ ri_GenerateQualCollation(StringInfo buf, Oid collation)
 	if (!OidIsValid(collation))
 		return;
 
-	tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collation));
+	tp = SearchSysCache(COLLOID, ObjectIdGetDatum(collation));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for collation %u", collation);
 	colltup = (Form_pg_collation) GETSTRUCT(tp);
@@ -2145,7 +2145,7 @@ ri_LoadConstraintInfo(Oid constraintOid)
 	/*
 	 * Fetch the pg_constraint row so we can fill in the entry.
 	 */
-	tup = SearchSysCache1(CONSTROID, ObjectIdGetDatum(constraintOid));
+	tup = SearchSysCache(CONSTROID, ObjectIdGetDatum(constraintOid));
 	if (!HeapTupleIsValid(tup)) /* should not happen */
 		elog(ERROR, "cache lookup failed for constraint %u", constraintOid);
 	conForm = (Form_pg_constraint) GETSTRUCT(tup);
@@ -2161,10 +2161,10 @@ ri_LoadConstraintInfo(Oid constraintOid)
 			get_ri_constraint_root(conForm->conparentid);
 	else
 		riinfo->constraint_root_id = constraintOid;
-	riinfo->oidHashValue = GetSysCacheHashValue1(CONSTROID,
-												 ObjectIdGetDatum(constraintOid));
-	riinfo->rootHashValue = GetSysCacheHashValue1(CONSTROID,
-												  ObjectIdGetDatum(riinfo->constraint_root_id));
+	riinfo->oidHashValue = GetSysCacheHashValue(CONSTROID,
+												ObjectIdGetDatum(constraintOid));
+	riinfo->rootHashValue = GetSysCacheHashValue(CONSTROID,
+												 ObjectIdGetDatum(riinfo->constraint_root_id));
 	memcpy(&riinfo->conname, &conForm->conname, sizeof(NameData));
 	riinfo->pk_relid = conForm->confrelid;
 	riinfo->fk_relid = conForm->conrelid;
@@ -2207,7 +2207,7 @@ get_ri_constraint_root(Oid constrOid)
 		HeapTuple	tuple;
 		Oid			constrParentOid;
 
-		tuple = SearchSysCache1(CONSTROID, ObjectIdGetDatum(constrOid));
+		tuple = SearchSysCache(CONSTROID, ObjectIdGetDatum(constrOid));
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for constraint %u", constrOid);
 		constrParentOid = ((Form_pg_constraint) GETSTRUCT(tuple))->conparentid;

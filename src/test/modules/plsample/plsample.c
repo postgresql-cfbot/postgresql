@@ -112,8 +112,8 @@ plsample_func_handler(PG_FUNCTION_ARGS)
 	int			numargs;
 
 	/* Fetch the function's pg_proc entry. */
-	pl_tuple = SearchSysCache1(PROCOID,
-							   ObjectIdGetDatum(fcinfo->flinfo->fn_oid));
+	pl_tuple = SearchSysCache(PROCOID,
+							  ObjectIdGetDatum(fcinfo->flinfo->fn_oid));
 	if (!HeapTupleIsValid(pl_tuple))
 		elog(ERROR, "cache lookup failed for function %u",
 			 fcinfo->flinfo->fn_oid);
@@ -153,7 +153,7 @@ plsample_func_handler(PG_FUNCTION_ARGS)
 		Oid			argtype = pl_struct->proargtypes.values[i];
 		char	   *value;
 
-		type_tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(argtype));
+		type_tuple = SearchSysCache(TYPEOID, ObjectIdGetDatum(argtype));
 		if (!HeapTupleIsValid(type_tuple))
 			elog(ERROR, "cache lookup failed for type %u", argtype);
 
@@ -182,8 +182,8 @@ plsample_func_handler(PG_FUNCTION_ARGS)
 	if (prorettype != TEXTOID)
 		PG_RETURN_NULL();
 
-	type_tuple = SearchSysCache1(TYPEOID,
-								 ObjectIdGetDatum(prorettype));
+	type_tuple = SearchSysCache(TYPEOID,
+								ObjectIdGetDatum(prorettype));
 	if (!HeapTupleIsValid(type_tuple))
 		elog(ERROR, "cache lookup failed for type %u", prorettype);
 	pg_type_entry = (Form_pg_type) GETSTRUCT(type_tuple);
@@ -227,8 +227,8 @@ plsample_trigger_handler(PG_FUNCTION_ARGS)
 	Assert(rc >= 0);
 
 	/* Fetch the function's pg_proc entry. */
-	pl_tuple = SearchSysCache1(PROCOID,
-							   ObjectIdGetDatum(fcinfo->flinfo->fn_oid));
+	pl_tuple = SearchSysCache(PROCOID,
+							  ObjectIdGetDatum(fcinfo->flinfo->fn_oid));
 	if (!HeapTupleIsValid(pl_tuple))
 		elog(ERROR, "cache lookup failed for function %u",
 			 fcinfo->flinfo->fn_oid);

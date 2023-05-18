@@ -850,7 +850,7 @@ build_coercion_expression(Node *node,
 		HeapTuple	tp;
 		Form_pg_proc procstruct;
 
-		tp = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcId));
+		tp = SearchSysCache(PROCOID, ObjectIdGetDatum(funcId));
 		if (!HeapTupleIsValid(tp))
 			elog(ERROR, "cache lookup failed for function %u", funcId);
 		procstruct = (Form_pg_proc) GETSTRUCT(tp);
@@ -3069,9 +3069,9 @@ IsBinaryCoercibleWithCast(Oid srctype, Oid targettype,
 			return true;
 
 	/* Else look in pg_cast */
-	tuple = SearchSysCache2(CASTSOURCETARGET,
-							ObjectIdGetDatum(srctype),
-							ObjectIdGetDatum(targettype));
+	tuple = SearchSysCache(CASTSOURCETARGET,
+						   ObjectIdGetDatum(srctype),
+						   ObjectIdGetDatum(targettype));
 	if (!HeapTupleIsValid(tuple))
 		return false;			/* no cast */
 	castForm = (Form_pg_cast) GETSTRUCT(tuple);
@@ -3135,9 +3135,9 @@ find_coercion_pathway(Oid targetTypeId, Oid sourceTypeId,
 		return COERCION_PATH_RELABELTYPE;
 
 	/* Look in pg_cast */
-	tuple = SearchSysCache2(CASTSOURCETARGET,
-							ObjectIdGetDatum(sourceTypeId),
-							ObjectIdGetDatum(targetTypeId));
+	tuple = SearchSysCache(CASTSOURCETARGET,
+						   ObjectIdGetDatum(sourceTypeId),
+						   ObjectIdGetDatum(targetTypeId));
 
 	if (HeapTupleIsValid(tuple))
 	{
@@ -3302,9 +3302,9 @@ find_typmod_coercion_function(Oid typeId,
 	ReleaseSysCache(targetType);
 
 	/* Look in pg_cast */
-	tuple = SearchSysCache2(CASTSOURCETARGET,
-							ObjectIdGetDatum(typeId),
-							ObjectIdGetDatum(typeId));
+	tuple = SearchSysCache(CASTSOURCETARGET,
+						   ObjectIdGetDatum(typeId),
+						   ObjectIdGetDatum(typeId));
 
 	if (HeapTupleIsValid(tuple))
 	{
@@ -3352,7 +3352,7 @@ typeIsOfTypedTable(Oid reltypeId, Oid reloftypeId)
 		HeapTuple	tp;
 		Form_pg_class reltup;
 
-		tp = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+		tp = SearchSysCache(RELOID, ObjectIdGetDatum(relid));
 		if (!HeapTupleIsValid(tp))
 			elog(ERROR, "cache lookup failed for relation %u", relid);
 

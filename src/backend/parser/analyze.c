@@ -3067,7 +3067,7 @@ transformCallStmt(ParseState *pstate, CallStmt *stmt)
 
 	fexpr = castNode(FuncExpr, node);
 
-	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(fexpr->funcid));
+	proctup = SearchSysCache(PROCOID, ObjectIdGetDatum(fexpr->funcid));
 	if (!HeapTupleIsValid(proctup))
 		elog(ERROR, "cache lookup failed for function %u", fexpr->funcid);
 

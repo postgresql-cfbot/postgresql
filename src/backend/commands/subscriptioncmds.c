@@ -648,8 +648,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
 
 	/* Check if name is used */
-	subid = GetSysCacheOid2(SUBSCRIPTIONNAME, Anum_pg_subscription_oid,
-							MyDatabaseId, CStringGetDatum(stmt->subname));
+	subid = GetSysCacheOid(SUBSCRIPTIONNAME, Anum_pg_subscription_oid,
+						   MyDatabaseId, CStringGetDatum(stmt->subname));
 	if (OidIsValid(subid))
 	{
 		ereport(ERROR,
@@ -1087,8 +1087,8 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
 
 	/* Fetch the existing tuple. */
-	tup = SearchSysCacheCopy2(SUBSCRIPTIONNAME, MyDatabaseId,
-							  CStringGetDatum(stmt->subname));
+	tup = SearchSysCacheCopy(SUBSCRIPTIONNAME, MyDatabaseId,
+							 CStringGetDatum(stmt->subname));
 
 	if (!HeapTupleIsValid(tup))
 		ereport(ERROR,
@@ -1489,8 +1489,8 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	 */
 	rel = table_open(SubscriptionRelationId, AccessExclusiveLock);
 
-	tup = SearchSysCache2(SUBSCRIPTIONNAME, MyDatabaseId,
-						  CStringGetDatum(stmt->subname));
+	tup = SearchSysCache(SUBSCRIPTIONNAME, MyDatabaseId,
+						 CStringGetDatum(stmt->subname));
 
 	if (!HeapTupleIsValid(tup))
 	{
@@ -1876,8 +1876,8 @@ AlterSubscriptionOwner(const char *name, Oid newOwnerId)
 
 	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
 
-	tup = SearchSysCacheCopy2(SUBSCRIPTIONNAME, MyDatabaseId,
-							  CStringGetDatum(name));
+	tup = SearchSysCacheCopy(SUBSCRIPTIONNAME, MyDatabaseId,
+							 CStringGetDatum(name));
 
 	if (!HeapTupleIsValid(tup))
 		ereport(ERROR,
@@ -1909,7 +1909,7 @@ AlterSubscriptionOwner_oid(Oid subid, Oid newOwnerId)
 
 	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
 
-	tup = SearchSysCacheCopy1(SUBSCRIPTIONOID, ObjectIdGetDatum(subid));
+	tup = SearchSysCacheCopy(SUBSCRIPTIONOID, ObjectIdGetDatum(subid));
 
 	if (!HeapTupleIsValid(tup))
 		ereport(ERROR,

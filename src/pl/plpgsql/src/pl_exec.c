@@ -2308,8 +2308,8 @@ make_callstmt_target(PLpgSQL_execstate *estate, PLpgSQL_expr *expr)
 
 	funcexpr = stmt->funcexpr;
 
-	func_tuple = SearchSysCache1(PROCOID,
-								 ObjectIdGetDatum(funcexpr->funcid));
+	func_tuple = SearchSysCache(PROCOID,
+								ObjectIdGetDatum(funcexpr->funcid));
 	if (!HeapTupleIsValid(func_tuple))
 		elog(ERROR, "cache lookup failed for function %u",
 			 funcexpr->funcid);

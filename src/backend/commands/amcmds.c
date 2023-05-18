@@ -62,7 +62,7 @@ CreateAccessMethod(CreateAmStmt *stmt)
 				 errhint("Must be superuser to create an access method.")));
 
 	/* Check if name is used */
-	amoid = GetSysCacheOid1(AMNAME, Anum_pg_am_oid,
+	amoid = GetSysCacheOid(AMNAME, Anum_pg_am_oid,
 							CStringGetDatum(stmt->amname));
 	if (OidIsValid(amoid))
 	{
@@ -131,7 +131,7 @@ get_am_type_oid(const char *amname, char amtype, bool missing_ok)
 	HeapTuple	tup;
 	Oid			oid = InvalidOid;
 
-	tup = SearchSysCache1(AMNAME, CStringGetDatum(amname));
+	tup = SearchSysCache(AMNAME, CStringGetDatum(amname));
 	if (HeapTupleIsValid(tup))
 	{
 		Form_pg_am	amform = (Form_pg_am) GETSTRUCT(tup);
@@ -194,7 +194,7 @@ get_am_name(Oid amOid)
 	HeapTuple	tup;
 	char	   *result = NULL;
 
-	tup = SearchSysCache1(AMOID, ObjectIdGetDatum(amOid));
+	tup = SearchSysCache(AMOID, ObjectIdGetDatum(amOid));
 	if (HeapTupleIsValid(tup))
 	{
 		Form_pg_am	amform = (Form_pg_am) GETSTRUCT(tup);

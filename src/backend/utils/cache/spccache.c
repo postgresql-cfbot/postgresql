@@ -133,7 +133,7 @@ get_tablespace(Oid spcid)
 	 * details for a non-existent tablespace.  We'll just treat that case as
 	 * if no options were specified.
 	 */
-	tp = SearchSysCache1(TABLESPACEOID, ObjectIdGetDatum(spcid));
+	tp = SearchSysCache(TABLESPACEOID, ObjectIdGetDatum(spcid));
 	if (!HeapTupleIsValid(tp))
 		opts = NULL;
 	else

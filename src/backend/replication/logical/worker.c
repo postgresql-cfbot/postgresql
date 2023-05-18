@@ -4859,8 +4859,8 @@ clear_subscription_skip_lsn(XLogRecPtr finish_lsn)
 	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
 
 	/* Fetch the existing tuple. */
-	tup = SearchSysCacheCopy1(SUBSCRIPTIONOID,
-							  ObjectIdGetDatum(MySubscription->oid));
+	tup = SearchSysCacheCopy(SUBSCRIPTIONOID,
+							 ObjectIdGetDatum(MySubscription->oid));
 
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "subscription \"%s\" does not exist", MySubscription->name);

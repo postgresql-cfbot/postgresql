@@ -3141,7 +3141,7 @@ deparseOpExpr(OpExpr *node, deparse_expr_cxt *context)
 	char		oprkind;
 
 	/* Retrieve information about the operator from system catalog. */
-	tuple = SearchSysCache1(OPEROID, ObjectIdGetDatum(node->opno));
+	tuple = SearchSysCache(OPEROID, ObjectIdGetDatum(node->opno));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for operator %u", node->opno);
 	form = (Form_pg_operator) GETSTRUCT(tuple);
@@ -3316,7 +3316,7 @@ deparseScalarArrayOpExpr(ScalarArrayOpExpr *node, deparse_expr_cxt *context)
 	Expr	   *arg2;
 
 	/* Retrieve information about the operator from system catalog. */
-	tuple = SearchSysCache1(OPEROID, ObjectIdGetDatum(node->opno));
+	tuple = SearchSysCache(OPEROID, ObjectIdGetDatum(node->opno));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for operator %u", node->opno);
 	form = (Form_pg_operator) GETSTRUCT(tuple);
@@ -3655,7 +3655,7 @@ appendOrderBySuffix(Oid sortop, Oid sortcoltype, bool nulls_first,
 		appendStringInfoString(buf, " USING ");
 
 		/* Append operator name. */
-		opertup = SearchSysCache1(OPEROID, ObjectIdGetDatum(sortop));
+		opertup = SearchSysCache(OPEROID, ObjectIdGetDatum(sortop));
 		if (!HeapTupleIsValid(opertup))
 			elog(ERROR, "cache lookup failed for operator %u", sortop);
 		operform = (Form_pg_operator) GETSTRUCT(opertup);
@@ -3877,7 +3877,7 @@ appendFunctionName(Oid funcid, deparse_expr_cxt *context)
 	Form_pg_proc procform;
 	const char *proname;
 
-	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+	proctup = SearchSysCache(PROCOID, ObjectIdGetDatum(funcid));
 	if (!HeapTupleIsValid(proctup))
 		elog(ERROR, "cache lookup failed for function %u", funcid);
 	procform = (Form_pg_proc) GETSTRUCT(proctup);

@@ -357,10 +357,10 @@ ProcedureCreate(const char *procedureName,
 	tupDesc = RelationGetDescr(rel);
 
 	/* Check for pre-existing definition */
-	oldtup = SearchSysCache3(PROCNAMEARGSNSP,
-							 PointerGetDatum(procedureName),
-							 PointerGetDatum(parameterTypes),
-							 ObjectIdGetDatum(procNamespace));
+	oldtup = SearchSysCache(PROCNAMEARGSNSP,
+							PointerGetDatum(procedureName),
+							PointerGetDatum(parameterTypes),
+							ObjectIdGetDatum(procNamespace));
 
 	if (HeapTupleIsValid(oldtup))
 	{
@@ -739,7 +739,7 @@ fmgr_internal_validator(PG_FUNCTION_ARGS)
 	 * name will be found later if it isn't there now.
 	 */
 
-	tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcoid));
+	tuple = SearchSysCache(PROCOID, ObjectIdGetDatum(funcoid));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for function %u", funcoid);
 
@@ -785,7 +785,7 @@ fmgr_c_validator(PG_FUNCTION_ARGS)
 	 * and for pg_dump loading it's much better if we *do* check.
 	 */
 
-	tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcoid));
+	tuple = SearchSysCache(PROCOID, ObjectIdGetDatum(funcoid));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for function %u", funcoid);
 
@@ -829,7 +829,7 @@ fmgr_sql_validator(PG_FUNCTION_ARGS)
 	if (!CheckFunctionValidatorAccess(fcinfo->flinfo->fn_oid, funcoid))
 		PG_RETURN_VOID();
 
-	tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcoid));
+	tuple = SearchSysCache(PROCOID, ObjectIdGetDatum(funcoid));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for function %u", funcoid);
 	proc = (Form_pg_proc) GETSTRUCT(tuple);

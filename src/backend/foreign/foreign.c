@@ -54,7 +54,7 @@ GetForeignDataWrapperExtended(Oid fdwid, bits16 flags)
 	HeapTuple	tp;
 	bool		isnull;
 
-	tp = SearchSysCache1(FOREIGNDATAWRAPPEROID, ObjectIdGetDatum(fdwid));
+	tp = SearchSysCache(FOREIGNDATAWRAPPEROID, ObjectIdGetDatum(fdwid));
 
 	if (!HeapTupleIsValid(tp))
 	{
@@ -128,7 +128,7 @@ GetForeignServerExtended(Oid serverid, bits16 flags)
 	Datum		datum;
 	bool		isnull;
 
-	tp = SearchSysCache1(FOREIGNSERVEROID, ObjectIdGetDatum(serverid));
+	tp = SearchSysCache(FOREIGNSERVEROID, ObjectIdGetDatum(serverid));
 
 	if (!HeapTupleIsValid(tp))
 	{
@@ -204,16 +204,16 @@ GetUserMapping(Oid userid, Oid serverid)
 	bool		isnull;
 	UserMapping *um;
 
-	tp = SearchSysCache2(USERMAPPINGUSERSERVER,
-						 ObjectIdGetDatum(userid),
-						 ObjectIdGetDatum(serverid));
+	tp = SearchSysCache(USERMAPPINGUSERSERVER,
+						ObjectIdGetDatum(userid),
+						ObjectIdGetDatum(serverid));
 
 	if (!HeapTupleIsValid(tp))
 	{
 		/* Not found for the specific user -- try PUBLIC */
-		tp = SearchSysCache2(USERMAPPINGUSERSERVER,
-							 ObjectIdGetDatum(InvalidOid),
-							 ObjectIdGetDatum(serverid));
+		tp = SearchSysCache(USERMAPPINGUSERSERVER,
+							ObjectIdGetDatum(InvalidOid),
+							ObjectIdGetDatum(serverid));
 	}
 
 	if (!HeapTupleIsValid(tp))
@@ -255,7 +255,7 @@ GetForeignTable(Oid relid)
 	Datum		datum;
 	bool		isnull;
 
-	tp = SearchSysCache1(FOREIGNTABLEREL, ObjectIdGetDatum(relid));
+	tp = SearchSysCache(FOREIGNTABLEREL, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for foreign table %u", relid);
 	tableform = (Form_pg_foreign_table) GETSTRUCT(tp);
@@ -292,9 +292,9 @@ GetForeignColumnOptions(Oid relid, AttrNumber attnum)
 	Datum		datum;
 	bool		isnull;
 
-	tp = SearchSysCache2(ATTNUM,
-						 ObjectIdGetDatum(relid),
-						 Int16GetDatum(attnum));
+	tp = SearchSysCache(ATTNUM,
+						ObjectIdGetDatum(relid),
+						Int16GetDatum(attnum));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for attribute %d of relation %u",
 			 attnum, relid);
@@ -345,7 +345,7 @@ GetForeignServerIdByRelId(Oid relid)
 	Form_pg_foreign_table tableform;
 	Oid			serverid;
 
-	tp = SearchSysCache1(FOREIGNTABLEREL, ObjectIdGetDatum(relid));
+	tp = SearchSysCache(FOREIGNTABLEREL, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for foreign table %u", relid);
 	tableform = (Form_pg_foreign_table) GETSTRUCT(tp);
@@ -370,7 +370,7 @@ GetFdwRoutineByServerId(Oid serverid)
 	Oid			fdwhandler;
 
 	/* Get foreign-data wrapper OID for the server. */
-	tp = SearchSysCache1(FOREIGNSERVEROID, ObjectIdGetDatum(serverid));
+	tp = SearchSysCache(FOREIGNSERVEROID, ObjectIdGetDatum(serverid));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for foreign server %u", serverid);
 	serverform = (Form_pg_foreign_server) GETSTRUCT(tp);
@@ -378,7 +378,7 @@ GetFdwRoutineByServerId(Oid serverid)
 	ReleaseSysCache(tp);
 
 	/* Get handler function OID for the FDW. */
-	tp = SearchSysCache1(FOREIGNDATAWRAPPEROID, ObjectIdGetDatum(fdwid));
+	tp = SearchSysCache(FOREIGNDATAWRAPPEROID, ObjectIdGetDatum(fdwid));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for foreign-data wrapper %u", fdwid);
 	fdwform = (Form_pg_foreign_data_wrapper) GETSTRUCT(tp);
@@ -669,9 +669,9 @@ get_foreign_data_wrapper_oid(const char *fdwname, bool missing_ok)
 {
 	Oid			oid;
 
-	oid = GetSysCacheOid1(FOREIGNDATAWRAPPERNAME,
-						  Anum_pg_foreign_data_wrapper_oid,
-						  CStringGetDatum(fdwname));
+	oid = GetSysCacheOid(FOREIGNDATAWRAPPERNAME,
+						 Anum_pg_foreign_data_wrapper_oid,
+						 CStringGetDatum(fdwname));
 	if (!OidIsValid(oid) && !missing_ok)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -692,8 +692,8 @@ get_foreign_server_oid(const char *servername, bool missing_ok)
 {
 	Oid			oid;
 
-	oid = GetSysCacheOid1(FOREIGNSERVERNAME, Anum_pg_foreign_server_oid,
-						  CStringGetDatum(servername));
+	oid = GetSysCacheOid(FOREIGNSERVERNAME, Anum_pg_foreign_server_oid,
+						 CStringGetDatum(servername));
 	if (!OidIsValid(oid) && !missing_ok)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),

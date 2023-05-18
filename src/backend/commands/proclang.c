@@ -120,7 +120,7 @@ CreateProceduralLanguage(CreatePLangStmt *stmt)
 	nulls[Anum_pg_language_lanacl - 1] = true;
 
 	/* Check for pre-existing definition */
-	oldtup = SearchSysCache1(LANGNAME, PointerGetDatum(languageName));
+	oldtup = SearchSysCache(LANGNAME, PointerGetDatum(languageName));
 
 	if (HeapTupleIsValid(oldtup))
 	{
@@ -229,8 +229,8 @@ get_language_oid(const char *langname, bool missing_ok)
 {
 	Oid			oid;
 
-	oid = GetSysCacheOid1(LANGNAME, Anum_pg_language_oid,
-						  CStringGetDatum(langname));
+	oid = GetSysCacheOid(LANGNAME, Anum_pg_language_oid,
+						 CStringGetDatum(langname));
 	if (!OidIsValid(oid) && !missing_ok)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),

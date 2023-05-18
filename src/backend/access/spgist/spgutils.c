@@ -161,7 +161,7 @@ fillTypeDesc(SpGistTypeDesc *desc, Oid type)
 	Form_pg_type typtup;
 
 	desc->type = type;
-	tp = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type));
+	tp = SearchSysCache(TYPEOID, ObjectIdGetDatum(type));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for type %u", type);
 	typtup = (Form_pg_type) GETSTRUCT(tp);
@@ -1312,8 +1312,8 @@ spgproperty(Oid index_oid, int attno,
 	}
 
 	/* And now we can check whether the operator is provided. */
-	catlist = SearchSysCacheList1(AMOPSTRATEGY,
-								  ObjectIdGetDatum(opfamily));
+	catlist = SearchSysCacheList(AMOPSTRATEGY,
+								 ObjectIdGetDatum(opfamily));
 
 	*res = false;
 

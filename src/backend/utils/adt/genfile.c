@@ -696,7 +696,7 @@ pg_ls_tmpdir(FunctionCallInfo fcinfo, Oid tblspc)
 {
 	char		path[MAXPGPATH];
 
-	if (!SearchSysCacheExists1(TABLESPACEOID, ObjectIdGetDatum(tblspc)))
+	if (!SearchSysCacheExists(TABLESPACEOID, ObjectIdGetDatum(tblspc)))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
 				 errmsg("tablespace with OID %u does not exist",

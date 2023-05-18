@@ -178,7 +178,7 @@ fmgr_info_cxt_security(Oid functionId, FmgrInfo *finfo, MemoryContext mcxt,
 	}
 
 	/* Otherwise we need the pg_proc entry */
-	procedureTuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(functionId));
+	procedureTuple = SearchSysCache(PROCOID, ObjectIdGetDatum(functionId));
 	if (!HeapTupleIsValid(procedureTuple))
 		elog(ERROR, "cache lookup failed for function %u", functionId);
 	procedureStruct = (Form_pg_proc) GETSTRUCT(procedureTuple);
@@ -285,7 +285,7 @@ fmgr_symbol(Oid functionId, char **mod, char **fn)
 	Datum		prosrcattr;
 	Datum		probinattr;
 
-	procedureTuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(functionId));
+	procedureTuple = SearchSysCache(PROCOID, ObjectIdGetDatum(functionId));
 	if (!HeapTupleIsValid(procedureTuple))
 		elog(ERROR, "cache lookup failed for function %u", functionId);
 	procedureStruct = (Form_pg_proc) GETSTRUCT(procedureTuple);
@@ -423,7 +423,7 @@ fmgr_info_other_lang(Oid functionId, FmgrInfo *finfo, HeapTuple procedureTuple)
 	Form_pg_language languageStruct;
 	FmgrInfo	plfinfo;
 
-	languageTuple = SearchSysCache1(LANGOID, ObjectIdGetDatum(language));
+	languageTuple = SearchSysCache(LANGOID, ObjectIdGetDatum(language));
 	if (!HeapTupleIsValid(languageTuple))
 		elog(ERROR, "cache lookup failed for language %u", language);
 	languageStruct = (Form_pg_language) GETSTRUCT(languageTuple);
@@ -652,8 +652,8 @@ fmgr_security_definer(PG_FUNCTION_ARGS)
 							   fcinfo->flinfo->fn_mcxt, true);
 		fcache->flinfo.fn_expr = fcinfo->flinfo->fn_expr;
 
-		tuple = SearchSysCache1(PROCOID,
-								ObjectIdGetDatum(fcinfo->flinfo->fn_oid));
+		tuple = SearchSysCache(PROCOID,
+							   ObjectIdGetDatum(fcinfo->flinfo->fn_oid));
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "cache lookup failed for function %u",
 				 fcinfo->flinfo->fn_oid);
@@ -2125,7 +2125,7 @@ CheckFunctionValidatorAccess(Oid validatorOid, Oid functionOid)
 	 * Get the function's pg_proc entry.  Throw a user-facing error for bad
 	 * OID, because validators can be called with user-specified OIDs.
 	 */
-	procTup = SearchSysCache1(PROCOID, ObjectIdGetDatum(functionOid));
+	procTup = SearchSysCache(PROCOID, ObjectIdGetDatum(functionOid));
 	if (!HeapTupleIsValid(procTup))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_FUNCTION),
@@ -2136,7 +2136,7 @@ CheckFunctionValidatorAccess(Oid validatorOid, Oid functionOid)
 	 * Fetch pg_language entry to know if this is the correct validation
 	 * function for that pg_proc entry.
 	 */
-	langTup = SearchSysCache1(LANGOID, ObjectIdGetDatum(procStruct->prolang));
+	langTup = SearchSysCache(LANGOID, ObjectIdGetDatum(procStruct->prolang));
 	if (!HeapTupleIsValid(langTup))
 		elog(ERROR, "cache lookup failed for language %u", procStruct->prolang);
 	langStruct = (Form_pg_language) GETSTRUCT(langTup);

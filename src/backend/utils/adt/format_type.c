@@ -126,7 +126,7 @@ format_type_extended(Oid type_oid, int32 typemod, bits16 flags)
 			return pstrdup("-");
 	}
 
-	tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_oid));
+	tuple = SearchSysCache(TYPEOID, ObjectIdGetDatum(type_oid));
 	if (!HeapTupleIsValid(tuple))
 	{
 		if ((flags & FORMAT_TYPE_INVALID_AS_NULL) != 0)
@@ -151,7 +151,7 @@ format_type_extended(Oid type_oid, int32 typemod, bits16 flags)
 	{
 		/* Switch our attention to the array element type */
 		ReleaseSysCache(tuple);
-		tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(array_base_type));
+		tuple = SearchSysCache(TYPEOID, ObjectIdGetDatum(array_base_type));
 		if (!HeapTupleIsValid(tuple))
 		{
 			if ((flags & FORMAT_TYPE_INVALID_AS_NULL) != 0)

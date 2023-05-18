@@ -293,10 +293,10 @@ minmax_get_strategy_procinfo(BrinDesc *bdesc, uint16 attno, Oid subtype,
 
 		opfamily = bdesc->bd_index->rd_opfamily[attno - 1];
 		attr = TupleDescAttr(bdesc->bd_tupdesc, attno - 1);
-		tuple = SearchSysCache4(AMOPSTRATEGY, ObjectIdGetDatum(opfamily),
-								ObjectIdGetDatum(attr->atttypid),
-								ObjectIdGetDatum(subtype),
-								Int16GetDatum(strategynum));
+		tuple = SearchSysCache(AMOPSTRATEGY, ObjectIdGetDatum(opfamily),
+							   ObjectIdGetDatum(attr->atttypid),
+							   ObjectIdGetDatum(subtype),
+							   Int16GetDatum(strategynum));
 
 		if (!HeapTupleIsValid(tuple))
 			elog(ERROR, "missing operator %d(%u,%u) in opfamily %u",

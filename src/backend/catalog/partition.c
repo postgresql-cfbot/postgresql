@@ -184,7 +184,7 @@ index_get_partition(Relation partition, Oid indexId)
 		Form_pg_class classForm;
 		bool		ispartition;
 
-		tup = SearchSysCache1(RELOID, ObjectIdGetDatum(partIdx));
+		tup = SearchSysCache(RELOID, ObjectIdGetDatum(partIdx));
 		if (!HeapTupleIsValid(tup))
 			elog(ERROR, "cache lookup failed for relation %u", partIdx);
 		classForm = (Form_pg_class) GETSTRUCT(tup);
@@ -316,7 +316,7 @@ get_default_partition_oid(Oid parentId)
 	HeapTuple	tuple;
 	Oid			defaultPartId = InvalidOid;
 
-	tuple = SearchSysCache1(PARTRELID, ObjectIdGetDatum(parentId));
+	tuple = SearchSysCache(PARTRELID, ObjectIdGetDatum(parentId));
 
 	if (HeapTupleIsValid(tuple))
 	{
@@ -344,7 +344,7 @@ update_default_partition_oid(Oid parentId, Oid defaultPartId)
 
 	pg_partitioned_table = table_open(PartitionedRelationId, RowExclusiveLock);
 
-	tuple = SearchSysCacheCopy1(PARTRELID, ObjectIdGetDatum(parentId));
+	tuple = SearchSysCacheCopy(PARTRELID, ObjectIdGetDatum(parentId));
 
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for partition key of relation %u",

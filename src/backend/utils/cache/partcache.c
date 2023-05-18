@@ -94,8 +94,8 @@ RelationBuildPartitionKey(Relation relation)
 				oldcxt;
 	int16		procnum;
 
-	tuple = SearchSysCache1(PARTRELID,
-							ObjectIdGetDatum(RelationGetRelid(relation)));
+	tuple = SearchSysCache(PARTRELID,
+						   ObjectIdGetDatum(RelationGetRelid(relation)));
 
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for partition key of relation %u",
@@ -199,8 +199,8 @@ RelationBuildPartitionKey(Relation relation)
 		Oid			funcid;
 
 		/* Collect opfamily information */
-		opclasstup = SearchSysCache1(CLAOID,
-									 ObjectIdGetDatum(opclass->values[i]));
+		opclasstup = SearchSysCache(CLAOID,
+									ObjectIdGetDatum(opclass->values[i]));
 		if (!HeapTupleIsValid(opclasstup))
 			elog(ERROR, "cache lookup failed for opclass %u", opclass->values[i]);
 
@@ -365,7 +365,7 @@ generate_partition_qual(Relation rel)
 	parent = relation_open(parentrelid, AccessShareLock);
 
 	/* Get pg_class.relpartbound */
-	tuple = SearchSysCache1(RELOID, RelationGetRelid(rel));
+	tuple = SearchSysCache(RELOID, RelationGetRelid(rel));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for relation %u",
 			 RelationGetRelid(rel));

@@ -904,16 +904,16 @@ pgoutput_row_filter_init(PGOutputData *data, List *publications,
 		 * (even if other publications have a row filter).
 		 */
 		if (!pub->alltables &&
-			!SearchSysCacheExists2(PUBLICATIONNAMESPACEMAP,
-								   ObjectIdGetDatum(schemaid),
-								   ObjectIdGetDatum(pub->oid)))
+			!SearchSysCacheExists(PUBLICATIONNAMESPACEMAP,
+								  ObjectIdGetDatum(schemaid),
+								  ObjectIdGetDatum(pub->oid)))
 		{
 			/*
 			 * Check for the presence of a row filter in this publication.
 			 */
-			rftuple = SearchSysCache2(PUBLICATIONRELMAP,
-									  ObjectIdGetDatum(entry->publish_as_relid),
-									  ObjectIdGetDatum(pub->oid));
+			rftuple = SearchSysCache(PUBLICATIONRELMAP,
+									 ObjectIdGetDatum(entry->publish_as_relid),
+									 ObjectIdGetDatum(pub->oid));
 
 			if (HeapTupleIsValid(rftuple))
 			{
@@ -1055,9 +1055,9 @@ pgoutput_column_list_init(PGOutputData *data, List *publications,
 			 * defined for a whole schema, so it can't have a column list,
 			 * just like a FOR ALL TABLES publication.
 			 */
-			cftuple = SearchSysCache2(PUBLICATIONRELMAP,
-									  ObjectIdGetDatum(entry->publish_as_relid),
-									  ObjectIdGetDatum(pub->oid));
+			cftuple = SearchSysCache(PUBLICATIONRELMAP,
+									 ObjectIdGetDatum(entry->publish_as_relid),
+									 ObjectIdGetDatum(pub->oid));
 
 			if (HeapTupleIsValid(cftuple))
 			{

@@ -502,7 +502,7 @@ fetch_agg_sort_op(Oid aggfnoid)
 	Oid			aggsortop;
 
 	/* fetch aggregate entry from pg_aggregate */
-	aggTuple = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(aggfnoid));
+	aggTuple = SearchSysCache(AGGFNOID, ObjectIdGetDatum(aggfnoid));
 	if (!HeapTupleIsValid(aggTuple))
 		return InvalidOid;
 	aggform = (Form_pg_aggregate) GETSTRUCT(aggTuple);

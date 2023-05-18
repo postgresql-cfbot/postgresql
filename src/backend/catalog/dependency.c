@@ -1250,7 +1250,7 @@ DropObjectById(const ObjectAddress *object)
 	 */
 	if (cacheId >= 0)
 	{
-		tup = SearchSysCache1(cacheId, ObjectIdGetDatum(object->objectId));
+		tup = SearchSysCache(cacheId, ObjectIdGetDatum(object->objectId));
 		if (!HeapTupleIsValid(tup))
 			elog(ERROR, "cache lookup failed for %s %u",
 				 get_object_class_descr(object->classId), object->objectId);
@@ -1832,59 +1832,59 @@ find_expr_references_walker(Node *node,
 				case REGPROCOID:
 				case REGPROCEDUREOID:
 					objoid = DatumGetObjectId(con->constvalue);
-					if (SearchSysCacheExists1(PROCOID,
-											  ObjectIdGetDatum(objoid)))
+					if (SearchSysCacheExists(PROCOID,
+											 ObjectIdGetDatum(objoid)))
 						add_object_address(OCLASS_PROC, objoid, 0,
 										   context->addrs);
 					break;
 				case REGOPEROID:
 				case REGOPERATOROID:
 					objoid = DatumGetObjectId(con->constvalue);
-					if (SearchSysCacheExists1(OPEROID,
-											  ObjectIdGetDatum(objoid)))
+					if (SearchSysCacheExists(OPEROID,
+											 ObjectIdGetDatum(objoid)))
 						add_object_address(OCLASS_OPERATOR, objoid, 0,
 										   context->addrs);
 					break;
 				case REGCLASSOID:
 					objoid = DatumGetObjectId(con->constvalue);
-					if (SearchSysCacheExists1(RELOID,
-											  ObjectIdGetDatum(objoid)))
+					if (SearchSysCacheExists(RELOID,
+											 ObjectIdGetDatum(objoid)))
 						add_object_address(OCLASS_CLASS, objoid, 0,
 										   context->addrs);
 					break;
 				case REGTYPEOID:
 					objoid = DatumGetObjectId(con->constvalue);
-					if (SearchSysCacheExists1(TYPEOID,
-											  ObjectIdGetDatum(objoid)))
+					if (SearchSysCacheExists(TYPEOID,
+											 ObjectIdGetDatum(objoid)))
 						add_object_address(OCLASS_TYPE, objoid, 0,
 										   context->addrs);
 					break;
 				case REGCOLLATIONOID:
 					objoid = DatumGetObjectId(con->constvalue);
-					if (SearchSysCacheExists1(COLLOID,
-											  ObjectIdGetDatum(objoid)))
+					if (SearchSysCacheExists(COLLOID,
+											 ObjectIdGetDatum(objoid)))
 						add_object_address(OCLASS_COLLATION, objoid, 0,
 										   context->addrs);
 					break;
 				case REGCONFIGOID:
 					objoid = DatumGetObjectId(con->constvalue);
-					if (SearchSysCacheExists1(TSCONFIGOID,
-											  ObjectIdGetDatum(objoid)))
+					if (SearchSysCacheExists(TSCONFIGOID,
+											 ObjectIdGetDatum(objoid)))
 						add_object_address(OCLASS_TSCONFIG, objoid, 0,
 										   context->addrs);
 					break;
 				case REGDICTIONARYOID:
 					objoid = DatumGetObjectId(con->constvalue);
-					if (SearchSysCacheExists1(TSDICTOID,
-											  ObjectIdGetDatum(objoid)))
+					if (SearchSysCacheExists(TSDICTOID,
+											 ObjectIdGetDatum(objoid)))
 						add_object_address(OCLASS_TSDICT, objoid, 0,
 										   context->addrs);
 					break;
 
 				case REGNAMESPACEOID:
 					objoid = DatumGetObjectId(con->constvalue);
-					if (SearchSysCacheExists1(NAMESPACEOID,
-											  ObjectIdGetDatum(objoid)))
+					if (SearchSysCacheExists(NAMESPACEOID,
+											 ObjectIdGetDatum(objoid)))
 						add_object_address(OCLASS_SCHEMA, objoid, 0,
 										   context->addrs);
 					break;

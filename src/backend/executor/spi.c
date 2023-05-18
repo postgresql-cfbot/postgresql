@@ -1283,7 +1283,7 @@ SPI_gettype(TupleDesc tupdesc, int fnumber)
 	else
 		typoid = (SystemAttributeDefinition(fnumber))->atttypid;
 
-	typeTuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typoid));
+	typeTuple = SearchSysCache(TYPEOID, ObjectIdGetDatum(typoid));
 
 	if (!HeapTupleIsValid(typeTuple))
 	{

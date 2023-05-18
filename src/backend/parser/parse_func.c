@@ -364,7 +364,7 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 		Form_pg_aggregate classForm;
 		int			catDirectArgs;
 
-		tup = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(funcid));
+		tup = SearchSysCache(AGGFNOID, ObjectIdGetDatum(funcid));
 		if (!HeapTupleIsValid(tup)) /* should not happen */
 			elog(ERROR, "cache lookup failed for aggregate %u", funcid);
 		classForm = (Form_pg_aggregate) GETSTRUCT(tup);
@@ -1619,8 +1619,8 @@ func_get_detail(List *funcname,
 			}
 		}
 
-		ftup = SearchSysCache1(PROCOID,
-							   ObjectIdGetDatum(best_candidate->oid));
+		ftup = SearchSysCache(PROCOID,
+							  ObjectIdGetDatum(best_candidate->oid));
 		if (!HeapTupleIsValid(ftup))	/* should not happen */
 			elog(ERROR, "cache lookup failed for function %u",
 				 best_candidate->oid);

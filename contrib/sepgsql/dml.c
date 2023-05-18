@@ -50,7 +50,7 @@ fixup_whole_row_references(Oid relOid, Bitmapset *columns)
 		return columns;
 
 	/* obtain number of attributes */
-	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relOid));
+	tuple = SearchSysCache(RELOID, ObjectIdGetDatum(relOid));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for relation %u", relOid);
 	natts = ((Form_pg_class) GETSTRUCT(tuple))->relnatts;
@@ -62,9 +62,9 @@ fixup_whole_row_references(Oid relOid, Bitmapset *columns)
 
 	for (attno = 1; attno <= natts; attno++)
 	{
-		tuple = SearchSysCache2(ATTNUM,
-								ObjectIdGetDatum(relOid),
-								Int16GetDatum(attno));
+		tuple = SearchSysCache(ATTNUM,
+							   ObjectIdGetDatum(relOid),
+							   Int16GetDatum(attno));
 		if (!HeapTupleIsValid(tuple))
 			continue;			/* unexpected case, should we error? */
 

@@ -715,7 +715,7 @@ RelationIsVisible(Oid relid)
 	Oid			relnamespace;
 	bool		visible;
 
-	reltup = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+	reltup = SearchSysCache(RELOID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(reltup))
 		elog(ERROR, "cache lookup failed for relation %u", relid);
 	relform = (Form_pg_class) GETSTRUCT(reltup);
@@ -798,9 +798,9 @@ TypenameGetTypidExtended(const char *typname, bool temp_ok)
 		if (!temp_ok && namespaceId == myTempNamespace)
 			continue;			/* do not look in temp namespace */
 
-		typid = GetSysCacheOid2(TYPENAMENSP, Anum_pg_type_oid,
-								PointerGetDatum(typname),
-								ObjectIdGetDatum(namespaceId));
+		typid = GetSysCacheOid(TYPENAMENSP, Anum_pg_type_oid,
+							   PointerGetDatum(typname),
+							   ObjectIdGetDatum(namespaceId));
 		if (OidIsValid(typid))
 			return typid;
 	}
@@ -823,7 +823,7 @@ TypeIsVisible(Oid typid)
 	Oid			typnamespace;
 	bool		visible;
 
-	typtup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
+	typtup = SearchSysCache(TYPEOID, ObjectIdGetDatum(typid));
 	if (!HeapTupleIsValid(typtup))
 		elog(ERROR, "cache lookup failed for type %u", typid);
 	typform = (Form_pg_type) GETSTRUCT(typtup);
@@ -860,9 +860,9 @@ TypeIsVisible(Oid typid)
 				visible = true;
 				break;
 			}
-			if (SearchSysCacheExists2(TYPENAMENSP,
-									  PointerGetDatum(typname),
-									  ObjectIdGetDatum(namespaceId)))
+			if (SearchSysCacheExists(TYPENAMENSP,
+									 PointerGetDatum(typname),
+									 ObjectIdGetDatum(namespaceId)))
 			{
 				/* Found something else first in path */
 				break;
@@ -982,7 +982,7 @@ FuncnameGetCandidates(List *names, int nargs, List *argnames,
 	}
 
 	/* Search syscache by name only */
-	catlist = SearchSysCacheList1(PROCNAMEARGSNSP, CStringGetDatum(funcname));
+	catlist = SearchSysCacheList(PROCNAMEARGSNSP, CStringGetDatum(funcname));
 
 	for (i = 0; i < catlist->n_members; i++)
 	{
@@ -1460,7 +1460,7 @@ FunctionIsVisible(Oid funcid)
 	Oid			pronamespace;
 	bool		visible;
 
-	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+	proctup = SearchSysCache(PROCOID, ObjectIdGetDatum(funcid));
 	if (!HeapTupleIsValid(proctup))
 		elog(ERROR, "cache lookup failed for function %u", funcid);
 	procform = (Form_pg_proc) GETSTRUCT(proctup);
@@ -1543,11 +1543,11 @@ OpernameGetOprid(List *names, Oid oprleft, Oid oprright)
 		{
 			HeapTuple	opertup;
 
-			opertup = SearchSysCache4(OPERNAMENSP,
-									  CStringGetDatum(opername),
-									  ObjectIdGetDatum(oprleft),
-									  ObjectIdGetDatum(oprright),
-									  ObjectIdGetDatum(namespaceId));
+			opertup = SearchSysCache(OPERNAMENSP,
+									 CStringGetDatum(opername),
+									 ObjectIdGetDatum(oprleft),
+									 ObjectIdGetDatum(oprright),
+									 ObjectIdGetDatum(namespaceId));
 			if (HeapTupleIsValid(opertup))
 			{
 				Form_pg_operator operclass = (Form_pg_operator) GETSTRUCT(opertup);
@@ -1562,10 +1562,10 @@ OpernameGetOprid(List *names, Oid oprleft, Oid oprright)
 	}
 
 	/* Search syscache by name and argument types */
-	catlist = SearchSysCacheList3(OPERNAMENSP,
-								  CStringGetDatum(opername),
-								  ObjectIdGetDatum(oprleft),
-								  ObjectIdGetDatum(oprright));
+	catlist = SearchSysCacheList(OPERNAMENSP,
+								 CStringGetDatum(opername),
+								 ObjectIdGetDatum(oprleft),
+								 ObjectIdGetDatum(oprright));
 
 	if (catlist->n_members == 0)
 	{
@@ -1655,7 +1655,7 @@ OpernameGetCandidates(List *names, char oprkind, bool missing_schema_ok)
 	}
 
 	/* Search syscache by name only */
-	catlist = SearchSysCacheList1(OPERNAMENSP, CStringGetDatum(opername));
+	catlist = SearchSysCacheList(OPERNAMENSP, CStringGetDatum(opername));
 
 	/*
 	 * In typical scenarios, most if not all of the operators found by the
@@ -1794,7 +1794,7 @@ OperatorIsVisible(Oid oprid)
 	Oid			oprnamespace;
 	bool		visible;
 
-	oprtup = SearchSysCache1(OPEROID, ObjectIdGetDatum(oprid));
+	oprtup = SearchSysCache(OPEROID, ObjectIdGetDatum(oprid));
 	if (!HeapTupleIsValid(oprtup))
 		elog(ERROR, "cache lookup failed for operator %u", oprid);
 	oprform = (Form_pg_operator) GETSTRUCT(oprtup);
@@ -1854,10 +1854,10 @@ OpclassnameGetOpcid(Oid amid, const char *opcname)
 		if (namespaceId == myTempNamespace)
 			continue;			/* do not look in temp namespace */
 
-		opcid = GetSysCacheOid3(CLAAMNAMENSP, Anum_pg_opclass_oid,
-								ObjectIdGetDatum(amid),
-								PointerGetDatum(opcname),
-								ObjectIdGetDatum(namespaceId));
+		opcid = GetSysCacheOid(CLAAMNAMENSP, Anum_pg_opclass_oid,
+							   ObjectIdGetDatum(amid),
+							   PointerGetDatum(opcname),
+							   ObjectIdGetDatum(namespaceId));
 		if (OidIsValid(opcid))
 			return opcid;
 	}
@@ -1880,7 +1880,7 @@ OpclassIsVisible(Oid opcid)
 	Oid			opcnamespace;
 	bool		visible;
 
-	opctup = SearchSysCache1(CLAOID, ObjectIdGetDatum(opcid));
+	opctup = SearchSysCache(CLAOID, ObjectIdGetDatum(opcid));
 	if (!HeapTupleIsValid(opctup))
 		elog(ERROR, "cache lookup failed for opclass %u", opcid);
 	opcform = (Form_pg_opclass) GETSTRUCT(opctup);
@@ -1937,10 +1937,10 @@ OpfamilynameGetOpfid(Oid amid, const char *opfname)
 		if (namespaceId == myTempNamespace)
 			continue;			/* do not look in temp namespace */
 
-		opfid = GetSysCacheOid3(OPFAMILYAMNAMENSP, Anum_pg_opfamily_oid,
-								ObjectIdGetDatum(amid),
-								PointerGetDatum(opfname),
-								ObjectIdGetDatum(namespaceId));
+		opfid = GetSysCacheOid(OPFAMILYAMNAMENSP, Anum_pg_opfamily_oid,
+							   ObjectIdGetDatum(amid),
+							   PointerGetDatum(opfname),
+							   ObjectIdGetDatum(namespaceId));
 		if (OidIsValid(opfid))
 			return opfid;
 	}
@@ -1963,7 +1963,7 @@ OpfamilyIsVisible(Oid opfid)
 	Oid			opfnamespace;
 	bool		visible;
 
-	opftup = SearchSysCache1(OPFAMILYOID, ObjectIdGetDatum(opfid));
+	opftup = SearchSysCache(OPFAMILYOID, ObjectIdGetDatum(opfid));
 	if (!HeapTupleIsValid(opftup))
 		elog(ERROR, "cache lookup failed for opfamily %u", opfid);
 	opfform = (Form_pg_opfamily) GETSTRUCT(opftup);
@@ -2010,10 +2010,10 @@ lookup_collation(const char *collname, Oid collnamespace, int32 encoding)
 	Form_pg_collation collform;
 
 	/* Check for encoding-specific entry (exact match) */
-	collid = GetSysCacheOid3(COLLNAMEENCNSP, Anum_pg_collation_oid,
-							 PointerGetDatum(collname),
-							 Int32GetDatum(encoding),
-							 ObjectIdGetDatum(collnamespace));
+	collid = GetSysCacheOid(COLLNAMEENCNSP, Anum_pg_collation_oid,
+							PointerGetDatum(collname),
+							Int32GetDatum(encoding),
+							ObjectIdGetDatum(collnamespace));
 	if (OidIsValid(collid))
 		return collid;
 
@@ -2023,10 +2023,10 @@ lookup_collation(const char *collname, Oid collnamespace, int32 encoding)
 	 * collations only work with certain encodings, so we have to check that
 	 * aspect before deciding it's a match.
 	 */
-	colltup = SearchSysCache3(COLLNAMEENCNSP,
-							  PointerGetDatum(collname),
-							  Int32GetDatum(-1),
-							  ObjectIdGetDatum(collnamespace));
+	colltup = SearchSysCache(COLLNAMEENCNSP,
+							 PointerGetDatum(collname),
+							 Int32GetDatum(-1),
+							 ObjectIdGetDatum(collnamespace));
 	if (!HeapTupleIsValid(colltup))
 		return InvalidOid;
 	collform = (Form_pg_collation) GETSTRUCT(colltup);
@@ -2095,7 +2095,7 @@ CollationIsVisible(Oid collid)
 	Oid			collnamespace;
 	bool		visible;
 
-	colltup = SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
+	colltup = SearchSysCache(COLLOID, ObjectIdGetDatum(collid));
 	if (!HeapTupleIsValid(colltup))
 		elog(ERROR, "cache lookup failed for collation %u", collid);
 	collform = (Form_pg_collation) GETSTRUCT(colltup);
@@ -2153,9 +2153,9 @@ ConversionGetConid(const char *conname)
 		if (namespaceId == myTempNamespace)
 			continue;			/* do not look in temp namespace */
 
-		conid = GetSysCacheOid2(CONNAMENSP, Anum_pg_conversion_oid,
-								PointerGetDatum(conname),
-								ObjectIdGetDatum(namespaceId));
+		conid = GetSysCacheOid(CONNAMENSP, Anum_pg_conversion_oid,
+							   PointerGetDatum(conname),
+							   ObjectIdGetDatum(namespaceId));
 		if (OidIsValid(conid))
 			return conid;
 	}
@@ -2178,7 +2178,7 @@ ConversionIsVisible(Oid conid)
 	Oid			connamespace;
 	bool		visible;
 
-	contup = SearchSysCache1(CONVOID, ObjectIdGetDatum(conid));
+	contup = SearchSysCache(CONVOID, ObjectIdGetDatum(conid));
 	if (!HeapTupleIsValid(contup))
 		elog(ERROR, "cache lookup failed for conversion %u", conid);
 	conform = (Form_pg_conversion) GETSTRUCT(contup);
@@ -2236,9 +2236,9 @@ get_statistics_object_oid(List *names, bool missing_ok)
 		if (missing_ok && !OidIsValid(namespaceId))
 			stats_oid = InvalidOid;
 		else
-			stats_oid = GetSysCacheOid2(STATEXTNAMENSP, Anum_pg_statistic_ext_oid,
-										PointerGetDatum(stats_name),
-										ObjectIdGetDatum(namespaceId));
+			stats_oid = GetSysCacheOid(STATEXTNAMENSP, Anum_pg_statistic_ext_oid,
+									   PointerGetDatum(stats_name),
+									   ObjectIdGetDatum(namespaceId));
 	}
 	else
 	{
@@ -2251,9 +2251,9 @@ get_statistics_object_oid(List *names, bool missing_ok)
 
 			if (namespaceId == myTempNamespace)
 				continue;		/* do not look in temp namespace */
-			stats_oid = GetSysCacheOid2(STATEXTNAMENSP, Anum_pg_statistic_ext_oid,
-										PointerGetDatum(stats_name),
-										ObjectIdGetDatum(namespaceId));
+			stats_oid = GetSysCacheOid(STATEXTNAMENSP, Anum_pg_statistic_ext_oid,
+									   PointerGetDatum(stats_name),
+									   ObjectIdGetDatum(namespaceId));
 			if (OidIsValid(stats_oid))
 				break;
 		}
@@ -2282,7 +2282,7 @@ StatisticsObjIsVisible(Oid relid)
 	Oid			stxnamespace;
 	bool		visible;
 
-	stxtup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(relid));
+	stxtup = SearchSysCache(STATEXTOID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(stxtup))
 		elog(ERROR, "cache lookup failed for statistics object %u", relid);
 	stxform = (Form_pg_statistic_ext) GETSTRUCT(stxtup);
@@ -2319,9 +2319,9 @@ StatisticsObjIsVisible(Oid relid)
 				visible = true;
 				break;
 			}
-			if (SearchSysCacheExists2(STATEXTNAMENSP,
-									  PointerGetDatum(stxname),
-									  ObjectIdGetDatum(namespaceId)))
+			if (SearchSysCacheExists(STATEXTNAMENSP,
+									 PointerGetDatum(stxname),
+									 ObjectIdGetDatum(namespaceId)))
 			{
 				/* Found something else first in path */
 				break;
@@ -2358,9 +2358,9 @@ get_ts_parser_oid(List *names, bool missing_ok)
 		if (missing_ok && !OidIsValid(namespaceId))
 			prsoid = InvalidOid;
 		else
-			prsoid = GetSysCacheOid2(TSPARSERNAMENSP, Anum_pg_ts_parser_oid,
-									 PointerGetDatum(parser_name),
-									 ObjectIdGetDatum(namespaceId));
+			prsoid = GetSysCacheOid(TSPARSERNAMENSP, Anum_pg_ts_parser_oid,
+									PointerGetDatum(parser_name),
+									ObjectIdGetDatum(namespaceId));
 	}
 	else
 	{
@@ -2374,7 +2374,7 @@ get_ts_parser_oid(List *names, bool missing_ok)
 			if (namespaceId == myTempNamespace)
 				continue;		/* do not look in temp namespace */
 
-			prsoid = GetSysCacheOid2(TSPARSERNAMENSP, Anum_pg_ts_parser_oid,
+			prsoid = GetSysCacheOid(TSPARSERNAMENSP, Anum_pg_ts_parser_oid,
 									 PointerGetDatum(parser_name),
 									 ObjectIdGetDatum(namespaceId));
 			if (OidIsValid(prsoid))
@@ -2405,7 +2405,7 @@ TSParserIsVisible(Oid prsId)
 	Oid			namespace;
 	bool		visible;
 
-	tup = SearchSysCache1(TSPARSEROID, ObjectIdGetDatum(prsId));
+	tup = SearchSysCache(TSPARSEROID, ObjectIdGetDatum(prsId));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for text search parser %u", prsId);
 	form = (Form_pg_ts_parser) GETSTRUCT(tup);
@@ -2445,9 +2445,9 @@ TSParserIsVisible(Oid prsId)
 				visible = true;
 				break;
 			}
-			if (SearchSysCacheExists2(TSPARSERNAMENSP,
-									  PointerGetDatum(name),
-									  ObjectIdGetDatum(namespaceId)))
+			if (SearchSysCacheExists(TSPARSERNAMENSP,
+									 PointerGetDatum(name),
+									 ObjectIdGetDatum(namespaceId)))
 			{
 				/* Found something else first in path */
 				break;
@@ -2484,9 +2484,9 @@ get_ts_dict_oid(List *names, bool missing_ok)
 		if (missing_ok && !OidIsValid(namespaceId))
 			dictoid = InvalidOid;
 		else
-			dictoid = GetSysCacheOid2(TSDICTNAMENSP, Anum_pg_ts_dict_oid,
-									  PointerGetDatum(dict_name),
-									  ObjectIdGetDatum(namespaceId));
+			dictoid = GetSysCacheOid(TSDICTNAMENSP, Anum_pg_ts_dict_oid,
+									 PointerGetDatum(dict_name),
+									 ObjectIdGetDatum(namespaceId));
 	}
 	else
 	{
@@ -2500,9 +2500,9 @@ get_ts_dict_oid(List *names, bool missing_ok)
 			if (namespaceId == myTempNamespace)
 				continue;		/* do not look in temp namespace */
 
-			dictoid = GetSysCacheOid2(TSDICTNAMENSP, Anum_pg_ts_dict_oid,
-									  PointerGetDatum(dict_name),
-									  ObjectIdGetDatum(namespaceId));
+			dictoid = GetSysCacheOid(TSDICTNAMENSP, Anum_pg_ts_dict_oid,
+									 PointerGetDatum(dict_name),
+									 ObjectIdGetDatum(namespaceId));
 			if (OidIsValid(dictoid))
 				break;
 		}
@@ -2531,7 +2531,7 @@ TSDictionaryIsVisible(Oid dictId)
 	Oid			namespace;
 	bool		visible;
 
-	tup = SearchSysCache1(TSDICTOID, ObjectIdGetDatum(dictId));
+	tup = SearchSysCache(TSDICTOID, ObjectIdGetDatum(dictId));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for text search dictionary %u",
 			 dictId);
@@ -2572,9 +2572,9 @@ TSDictionaryIsVisible(Oid dictId)
 				visible = true;
 				break;
 			}
-			if (SearchSysCacheExists2(TSDICTNAMENSP,
-									  PointerGetDatum(name),
-									  ObjectIdGetDatum(namespaceId)))
+			if (SearchSysCacheExists(TSDICTNAMENSP,
+									 PointerGetDatum(name),
+									 ObjectIdGetDatum(namespaceId)))
 			{
 				/* Found something else first in path */
 				break;
@@ -2611,9 +2611,9 @@ get_ts_template_oid(List *names, bool missing_ok)
 		if (missing_ok && !OidIsValid(namespaceId))
 			tmploid = InvalidOid;
 		else
-			tmploid = GetSysCacheOid2(TSTEMPLATENAMENSP, Anum_pg_ts_template_oid,
-									  PointerGetDatum(template_name),
-									  ObjectIdGetDatum(namespaceId));
+			tmploid = GetSysCacheOid(TSTEMPLATENAMENSP, Anum_pg_ts_template_oid,
+									 PointerGetDatum(template_name),
+									 ObjectIdGetDatum(namespaceId));
 	}
 	else
 	{
@@ -2627,9 +2627,9 @@ get_ts_template_oid(List *names, bool missing_ok)
 			if (namespaceId == myTempNamespace)
 				continue;		/* do not look in temp namespace */
 
-			tmploid = GetSysCacheOid2(TSTEMPLATENAMENSP, Anum_pg_ts_template_oid,
-									  PointerGetDatum(template_name),
-									  ObjectIdGetDatum(namespaceId));
+			tmploid = GetSysCacheOid(TSTEMPLATENAMENSP, Anum_pg_ts_template_oid,
+									 PointerGetDatum(template_name),
+									 ObjectIdGetDatum(namespaceId));
 			if (OidIsValid(tmploid))
 				break;
 		}
@@ -2658,7 +2658,7 @@ TSTemplateIsVisible(Oid tmplId)
 	Oid			namespace;
 	bool		visible;
 
-	tup = SearchSysCache1(TSTEMPLATEOID, ObjectIdGetDatum(tmplId));
+	tup = SearchSysCache(TSTEMPLATEOID, ObjectIdGetDatum(tmplId));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for text search template %u", tmplId);
 	form = (Form_pg_ts_template) GETSTRUCT(tup);
@@ -2698,9 +2698,9 @@ TSTemplateIsVisible(Oid tmplId)
 				visible = true;
 				break;
 			}
-			if (SearchSysCacheExists2(TSTEMPLATENAMENSP,
-									  PointerGetDatum(name),
-									  ObjectIdGetDatum(namespaceId)))
+			if (SearchSysCacheExists(TSTEMPLATENAMENSP,
+									 PointerGetDatum(name),
+									 ObjectIdGetDatum(namespaceId)))
 			{
 				/* Found something else first in path */
 				break;
@@ -2737,9 +2737,9 @@ get_ts_config_oid(List *names, bool missing_ok)
 		if (missing_ok && !OidIsValid(namespaceId))
 			cfgoid = InvalidOid;
 		else
-			cfgoid = GetSysCacheOid2(TSCONFIGNAMENSP, Anum_pg_ts_config_oid,
-									 PointerGetDatum(config_name),
-									 ObjectIdGetDatum(namespaceId));
+			cfgoid = GetSysCacheOid(TSCONFIGNAMENSP, Anum_pg_ts_config_oid,
+									PointerGetDatum(config_name),
+									ObjectIdGetDatum(namespaceId));
 	}
 	else
 	{
@@ -2753,9 +2753,9 @@ get_ts_config_oid(List *names, bool missing_ok)
 			if (namespaceId == myTempNamespace)
 				continue;		/* do not look in temp namespace */
 
-			cfgoid = GetSysCacheOid2(TSCONFIGNAMENSP, Anum_pg_ts_config_oid,
-									 PointerGetDatum(config_name),
-									 ObjectIdGetDatum(namespaceId));
+			cfgoid = GetSysCacheOid(TSCONFIGNAMENSP, Anum_pg_ts_config_oid,
+									PointerGetDatum(config_name),
+									ObjectIdGetDatum(namespaceId));
 			if (OidIsValid(cfgoid))
 				break;
 		}
@@ -2784,7 +2784,7 @@ TSConfigIsVisible(Oid cfgid)
 	Oid			namespace;
 	bool		visible;
 
-	tup = SearchSysCache1(TSCONFIGOID, ObjectIdGetDatum(cfgid));
+	tup = SearchSysCache(TSCONFIGOID, ObjectIdGetDatum(cfgid));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for text search configuration %u",
 			 cfgid);
@@ -2825,9 +2825,9 @@ TSConfigIsVisible(Oid cfgid)
 				visible = true;
 				break;
 			}
-			if (SearchSysCacheExists2(TSCONFIGNAMENSP,
-									  PointerGetDatum(name),
-									  ObjectIdGetDatum(namespaceId)))
+			if (SearchSysCacheExists(TSCONFIGNAMENSP,
+									 PointerGetDatum(name),
+									 ObjectIdGetDatum(namespaceId)))
 			{
 				/* Found something else first in path */
 				break;
@@ -3087,8 +3087,8 @@ get_namespace_oid(const char *nspname, bool missing_ok)
 {
 	Oid			oid;
 
-	oid = GetSysCacheOid1(NAMESPACENAME, Anum_pg_namespace_oid,
-						  CStringGetDatum(nspname));
+	oid = GetSysCacheOid(NAMESPACENAME, Anum_pg_namespace_oid,
+						 CStringGetDatum(nspname));
 	if (!OidIsValid(oid) && !missing_ok)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_SCHEMA),
@@ -3717,9 +3717,9 @@ get_conversion_oid(List *conname, bool missing_ok)
 		if (missing_ok && !OidIsValid(namespaceId))
 			conoid = InvalidOid;
 		else
-			conoid = GetSysCacheOid2(CONNAMENSP, Anum_pg_conversion_oid,
-									 PointerGetDatum(conversion_name),
-									 ObjectIdGetDatum(namespaceId));
+			conoid = GetSysCacheOid(CONNAMENSP, Anum_pg_conversion_oid,
+									PointerGetDatum(conversion_name),
+									ObjectIdGetDatum(namespaceId));
 	}
 	else
 	{
@@ -3733,9 +3733,9 @@ get_conversion_oid(List *conname, bool missing_ok)
 			if (namespaceId == myTempNamespace)
 				continue;		/* do not look in temp namespace */
 
-			conoid = GetSysCacheOid2(CONNAMENSP, Anum_pg_conversion_oid,
-									 PointerGetDatum(conversion_name),
-									 ObjectIdGetDatum(namespaceId));
+			conoid = GetSysCacheOid(CONNAMENSP, Anum_pg_conversion_oid,
+									PointerGetDatum(conversion_name),
+									ObjectIdGetDatum(namespaceId));
 			if (OidIsValid(conoid))
 				return conoid;
 		}
@@ -3831,7 +3831,7 @@ recomputeNamespacePath(void)
 			/* $user --- substitute namespace matching user name, if any */
 			HeapTuple	tuple;
 
-			tuple = SearchSysCache1(AUTHOID, ObjectIdGetDatum(roleid));
+			tuple = SearchSysCache(AUTHOID, ObjectIdGetDatum(roleid));
 			if (HeapTupleIsValid(tuple))
 			{
 				char	   *rname;
@@ -4510,7 +4510,7 @@ pg_table_is_visible(PG_FUNCTION_ARGS)
 {
 	Oid			oid = PG_GETARG_OID(0);
 
-	if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(oid)))
+	if (!SearchSysCacheExists(RELOID, ObjectIdGetDatum(oid)))
 		PG_RETURN_NULL();
 
 	PG_RETURN_BOOL(RelationIsVisible(oid));
@@ -4521,7 +4521,7 @@ pg_type_is_visible(PG_FUNCTION_ARGS)
 {
 	Oid			oid = PG_GETARG_OID(0);
 
-	if (!SearchSysCacheExists1(TYPEOID, ObjectIdGetDatum(oid)))
+	if (!SearchSysCacheExists(TYPEOID, ObjectIdGetDatum(oid)))
 		PG_RETURN_NULL();
 
 	PG_RETURN_BOOL(TypeIsVisible(oid));
@@ -4532,7 +4532,7 @@ pg_function_is_visible(PG_FUNCTION_ARGS)
 {
 	Oid			oid = PG_GETARG_OID(0);
 
-	if (!SearchSysCacheExists1(PROCOID, ObjectIdGetDatum(oid)))
+	if (!SearchSysCacheExists(PROCOID, ObjectIdGetDatum(oid)))
 		PG_RETURN_NULL();
 
 	PG_RETURN_BOOL(FunctionIsVisible(oid));
@@ -4543,7 +4543,7 @@ pg_operator_is_visible(PG_FUNCTION_ARGS)
 {
 	Oid			oid = PG_GETARG_OID(0);
 
-	if (!SearchSysCacheExists1(OPEROID, ObjectIdGetDatum(oid)))
+	if (!SearchSysCacheExists(OPEROID, ObjectIdGetDatum(oid)))
 		PG_RETURN_NULL();
 
 	PG_RETURN_BOOL(OperatorIsVisible(oid));
@@ -4554,7 +4554,7 @@ pg_opclass_is_visible(PG_FUNCTION_ARGS)
 {
 	Oid			oid = PG_GETARG_OID(0);
 
-	if (!SearchSysCacheExists1(CLAOID, ObjectIdGetDatum(oid)))
+	if (!SearchSysCacheExists(CLAOID, ObjectIdGetDatum(oid)))
 		PG_RETURN_NULL();
 
 	PG_RETURN_BOOL(OpclassIsVisible(oid));
@@ -4565,7 +4565,7 @@ pg_opfamily_is_visible(PG_FUNCTION_ARGS)
 {
 	Oid			oid = PG_GETARG_OID(0);
 
-	if (!SearchSysCacheExists1(OPFAMILYOID, ObjectIdGetDatum(oid)))
+	if (!SearchSysCacheExists(OPFAMILYOID, ObjectIdGetDatum(oid)))
 		PG_RETURN_NULL();
 
 	PG_RETURN_BOOL(OpfamilyIsVisible(oid));
@@ -4576,7 +4576,7 @@ pg_collation_is_visible(PG_FUNCTION_ARGS)
 {
 	Oid			oid = PG_GETARG_OID(0);
 
-	if (!SearchSysCacheExists1(COLLOID, ObjectIdGetDatum(oid)))
+	if (!SearchSysCacheExists(COLLOID, ObjectIdGetDatum(oid)))
 		PG_RETURN_NULL();
 
 	PG_RETURN_BOOL(CollationIsVisible(oid));
@@ -4587,7 +4587,7 @@ pg_conversion_is_visible(PG_FUNCTION_ARGS)
 {
 	Oid			oid = PG_GETARG_OID(0);
 
-	if (!SearchSysCacheExists1(CONVOID, ObjectIdGetDatum(oid)))
+	if (!SearchSysCacheExists(CONVOID, ObjectIdGetDatum(oid)))
 		PG_RETURN_NULL();
 
 	PG_RETURN_BOOL(ConversionIsVisible(oid));
@@ -4598,7 +4598,7 @@ pg_statistics_obj_is_visible(PG_FUNCTION_ARGS)
 {
 	Oid			oid = PG_GETARG_OID(0);
 
-	if (!SearchSysCacheExists1(STATEXTOID, ObjectIdGetDatum(oid)))
+	if (!SearchSysCacheExists(STATEXTOID, ObjectIdGetDatum(oid)))
 		PG_RETURN_NULL();
 
 	PG_RETURN_BOOL(StatisticsObjIsVisible(oid));
@@ -4609,7 +4609,7 @@ pg_ts_parser_is_visible(PG_FUNCTION_ARGS)
 {
 	Oid			oid = PG_GETARG_OID(0);
 
-	if (!SearchSysCacheExists1(TSPARSEROID, ObjectIdGetDatum(oid)))
+	if (!SearchSysCacheExists(TSPARSEROID, ObjectIdGetDatum(oid)))
 		PG_RETURN_NULL();
 
 	PG_RETURN_BOOL(TSParserIsVisible(oid));
@@ -4620,7 +4620,7 @@ pg_ts_dict_is_visible(PG_FUNCTION_ARGS)
 {
 	Oid			oid = PG_GETARG_OID(0);
 
-	if (!SearchSysCacheExists1(TSDICTOID, ObjectIdGetDatum(oid)))
+	if (!SearchSysCacheExists(TSDICTOID, ObjectIdGetDatum(oid)))
 		PG_RETURN_NULL();
 
 	PG_RETURN_BOOL(TSDictionaryIsVisible(oid));
@@ -4631,7 +4631,7 @@ pg_ts_template_is_visible(PG_FUNCTION_ARGS)
 {
 	Oid			oid = PG_GETARG_OID(0);
 
-	if (!SearchSysCacheExists1(TSTEMPLATEOID, ObjectIdGetDatum(oid)))
+	if (!SearchSysCacheExists(TSTEMPLATEOID, ObjectIdGetDatum(oid)))
 		PG_RETURN_NULL();
 
 	PG_RETURN_BOOL(TSTemplateIsVisible(oid));
@@ -4642,7 +4642,7 @@ pg_ts_config_is_visible(PG_FUNCTION_ARGS)
 {
 	Oid			oid = PG_GETARG_OID(0);
 
-	if (!SearchSysCacheExists1(TSCONFIGOID, ObjectIdGetDatum(oid)))
+	if (!SearchSysCacheExists(TSCONFIGOID, ObjectIdGetDatum(oid)))
 		PG_RETURN_NULL();
 
 	PG_RETURN_BOOL(TSConfigIsVisible(oid));

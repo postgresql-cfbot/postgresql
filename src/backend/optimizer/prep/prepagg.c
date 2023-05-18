@@ -147,8 +147,8 @@ preprocess_aggref(Aggref *aggref, PlannerInfo *root)
 	 * ignore the moving-aggregate variant, since what we're concerned with
 	 * here is aggregates not window functions.
 	 */
-	aggTuple = SearchSysCache1(AGGFNOID,
-							   ObjectIdGetDatum(aggref->aggfnoid));
+	aggTuple = SearchSysCache(AGGFNOID,
+							  ObjectIdGetDatum(aggref->aggfnoid));
 	if (!HeapTupleIsValid(aggTuple))
 		elog(ERROR, "cache lookup failed for aggregate %u",
 			 aggref->aggfnoid);

@@ -150,7 +150,7 @@ LockTableRecurse(Oid reloid, LOCKMODE lockmode, bool nowait)
 		 * Even if we got the lock, child might have been concurrently
 		 * dropped. If so, we can skip it.
 		 */
-		if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(childreloid)))
+		if (!SearchSysCacheExists(RELOID, ObjectIdGetDatum(childreloid)))
 		{
 			/* Release useless lock */
 			UnlockRelationOid(childreloid, lockmode);

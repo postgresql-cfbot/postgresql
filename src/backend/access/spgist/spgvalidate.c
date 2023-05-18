@@ -61,7 +61,7 @@ spgvalidate(Oid opclassoid)
 	Oid			configOutLeafType = InvalidOid;
 
 	/* Fetch opclass information */
-	classtup = SearchSysCache1(CLAOID, ObjectIdGetDatum(opclassoid));
+	classtup = SearchSysCache(CLAOID, ObjectIdGetDatum(opclassoid));
 	if (!HeapTupleIsValid(classtup))
 		elog(ERROR, "cache lookup failed for operator class %u", opclassoid);
 	classform = (Form_pg_opclass) GETSTRUCT(classtup);
@@ -72,7 +72,7 @@ spgvalidate(Oid opclassoid)
 	opclassname = NameStr(classform->opcname);
 
 	/* Fetch opfamily information */
-	familytup = SearchSysCache1(OPFAMILYOID, ObjectIdGetDatum(opfamilyoid));
+	familytup = SearchSysCache(OPFAMILYOID, ObjectIdGetDatum(opfamilyoid));
 	if (!HeapTupleIsValid(familytup))
 		elog(ERROR, "cache lookup failed for operator family %u", opfamilyoid);
 	familyform = (Form_pg_opfamily) GETSTRUCT(familytup);
@@ -80,8 +80,8 @@ spgvalidate(Oid opclassoid)
 	opfamilyname = NameStr(familyform->opfname);
 
 	/* Fetch all operators and support functions of the opfamily */
-	oprlist = SearchSysCacheList1(AMOPSTRATEGY, ObjectIdGetDatum(opfamilyoid));
-	proclist = SearchSysCacheList1(AMPROCNUM, ObjectIdGetDatum(opfamilyoid));
+	oprlist = SearchSysCacheList(AMOPSTRATEGY, ObjectIdGetDatum(opfamilyoid));
+	proclist = SearchSysCacheList(AMPROCNUM, ObjectIdGetDatum(opfamilyoid));
 	grouplist = identify_opfamily_groups(oprlist, proclist);
 
 	/* Check individual support functions */

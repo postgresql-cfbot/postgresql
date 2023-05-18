@@ -75,7 +75,7 @@ PLy_procedure_get(Oid fn_oid, Oid fn_rel, bool is_trigger)
 	PLyProcedure *volatile proc = NULL;
 	bool		found = false;
 
-	procTup = SearchSysCache1(PROCOID, ObjectIdGetDatum(fn_oid));
+	procTup = SearchSysCache(PROCOID, ObjectIdGetDatum(fn_oid));
 	if (!HeapTupleIsValid(procTup))
 		elog(ERROR, "cache lookup failed for function %u", fn_oid);
 
@@ -208,7 +208,7 @@ PLy_procedure_create(HeapTuple procTup, Oid fn_oid, bool is_trigger)
 			HeapTuple	rvTypeTup;
 			Form_pg_type rvTypeStruct;
 
-			rvTypeTup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(rettype));
+			rvTypeTup = SearchSysCache(TYPEOID, ObjectIdGetDatum(rettype));
 			if (!HeapTupleIsValid(rvTypeTup))
 				elog(ERROR, "cache lookup failed for type %u", rettype);
 			rvTypeStruct = (Form_pg_type) GETSTRUCT(rvTypeTup);
@@ -294,8 +294,8 @@ PLy_procedure_create(HeapTuple procTup, Oid fn_oid, bool is_trigger)
 
 				Assert(types[i] == procStruct->proargtypes.values[pos]);
 
-				argTypeTup = SearchSysCache1(TYPEOID,
-											 ObjectIdGetDatum(types[i]));
+				argTypeTup = SearchSysCache(TYPEOID,
+											ObjectIdGetDatum(types[i]));
 				if (!HeapTupleIsValid(argTypeTup))
 					elog(ERROR, "cache lookup failed for type %u", types[i]);
 				argTypeStruct = (Form_pg_type) GETSTRUCT(argTypeTup);

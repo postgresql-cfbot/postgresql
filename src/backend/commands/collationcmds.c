@@ -139,7 +139,7 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 		bool		isnull;
 
 		collid = get_collation_oid(defGetQualifiedName(fromEl), false);
-		tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
+		tp = SearchSysCache(COLLOID, ObjectIdGetDatum(collid));
 		if (!HeapTupleIsValid(tp))
 			elog(ERROR, "cache lookup failed for collation %u", collid);
 
@@ -373,10 +373,10 @@ void
 IsThereCollationInNamespace(const char *collname, Oid nspOid)
 {
 	/* make sure the name doesn't already exist in new schema */
-	if (SearchSysCacheExists3(COLLNAMEENCNSP,
-							  CStringGetDatum(collname),
-							  Int32GetDatum(GetDatabaseEncoding()),
-							  ObjectIdGetDatum(nspOid)))
+	if (SearchSysCacheExists(COLLNAMEENCNSP,
+							 CStringGetDatum(collname),
+							 Int32GetDatum(GetDatabaseEncoding()),
+							 ObjectIdGetDatum(nspOid)))
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
 				 errmsg("collation \"%s\" for encoding \"%s\" already exists in schema \"%s\"",
@@ -384,10 +384,10 @@ IsThereCollationInNamespace(const char *collname, Oid nspOid)
 						get_namespace_name(nspOid))));
 
 	/* mustn't match an any-encoding entry, either */
-	if (SearchSysCacheExists3(COLLNAMEENCNSP,
-							  CStringGetDatum(collname),
-							  Int32GetDatum(-1),
-							  ObjectIdGetDatum(nspOid)))
+	if (SearchSysCacheExists(COLLNAMEENCNSP,
+							 CStringGetDatum(collname),
+							 Int32GetDatum(-1),
+							 ObjectIdGetDatum(nspOid)))
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
 				 errmsg("collation \"%s\" already exists in schema \"%s\"",
@@ -422,7 +422,7 @@ AlterCollation(AlterCollationStmt *stmt)
 		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_COLLATION,
 					   NameListToString(stmt->collname));
 
-	tup = SearchSysCacheCopy1(COLLOID, ObjectIdGetDatum(collOid));
+	tup = SearchSysCacheCopy(COLLOID, ObjectIdGetDatum(collOid));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for collation %u", collOid);
 
@@ -486,7 +486,7 @@ pg_collation_actual_version(PG_FUNCTION_ARGS)
 	{
 		/* retrieve from pg_database */
 
-		HeapTuple	dbtup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
+		HeapTuple	dbtup = SearchSysCache(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
 		if (!HeapTupleIsValid(dbtup))
 			ereport(ERROR,
 					(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -506,7 +506,7 @@ pg_collation_actual_version(PG_FUNCTION_ARGS)
 	{
 		/* retrieve from pg_collation */
 
-		HeapTuple	colltp		= SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
+		HeapTuple	colltp		= SearchSysCache(COLLOID, ObjectIdGetDatum(collid));
 		if (!HeapTupleIsValid(colltp))
 			ereport(ERROR,
 					(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -802,7 +802,7 @@ pg_import_system_collations(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("must be superuser to import system collations")));
 
-	if (!SearchSysCacheExists1(NAMESPACEOID, ObjectIdGetDatum(nspid)))
+	if (!SearchSysCacheExists(NAMESPACEOID, ObjectIdGetDatum(nspid)))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_SCHEMA),
 				 errmsg("schema with OID %u does not exist", nspid)));

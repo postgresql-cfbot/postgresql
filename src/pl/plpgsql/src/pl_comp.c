@@ -146,7 +146,7 @@ plpgsql_compile(FunctionCallInfo fcinfo, bool forValidator)
 	/*
 	 * Lookup the pg_proc tuple by Oid; we'll need it in any case
 	 */
-	procTup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcOid));
+	procTup = SearchSysCache(PROCOID, ObjectIdGetDatum(funcOid));
 	if (!HeapTupleIsValid(procTup))
 		elog(ERROR, "cache lookup failed for function %u", funcOid);
 	procStruct = (Form_pg_proc) GETSTRUCT(procTup);
@@ -538,7 +538,7 @@ do_compile(FunctionCallInfo fcinfo,
 			/*
 			 * Lookup the function's return type
 			 */
-			typeTup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(rettypeid));
+			typeTup = SearchSysCache(TYPEOID, ObjectIdGetDatum(rettypeid));
 			if (!HeapTupleIsValid(typeTup))
 				elog(ERROR, "cache lookup failed for type %u", rettypeid);
 			typeStruct = (Form_pg_type) GETSTRUCT(typeTup);
@@ -1728,7 +1728,7 @@ plpgsql_parse_cwordtype(List *idents)
 	else
 		goto done;
 
-	classtup = SearchSysCache1(RELOID, ObjectIdGetDatum(classOid));
+	classtup = SearchSysCache(RELOID, ObjectIdGetDatum(classOid));
 	if (!HeapTupleIsValid(classtup))
 		goto done;
 	classStruct = (Form_pg_class) GETSTRUCT(classtup);
@@ -1754,8 +1754,8 @@ plpgsql_parse_cwordtype(List *idents)
 		goto done;
 	attrStruct = (Form_pg_attribute) GETSTRUCT(attrtup);
 
-	typetup = SearchSysCache1(TYPEOID,
-							  ObjectIdGetDatum(attrStruct->atttypid));
+	typetup = SearchSysCache(TYPEOID,
+							 ObjectIdGetDatum(attrStruct->atttypid));
 	if (!HeapTupleIsValid(typetup))
 		elog(ERROR, "cache lookup failed for type %u", attrStruct->atttypid);
 
@@ -2084,7 +2084,7 @@ plpgsql_build_datatype(Oid typeOid, int32 typmod,
 	HeapTuple	typeTup;
 	PLpgSQL_type *typ;
 
-	typeTup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typeOid));
+	typeTup = SearchSysCache(TYPEOID, ObjectIdGetDatum(typeOid));
 	if (!HeapTupleIsValid(typeTup))
 		elog(ERROR, "cache lookup failed for type %u", typeOid);
 

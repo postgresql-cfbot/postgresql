@@ -1223,7 +1223,7 @@ lookup_collation_cache(Oid collation, bool set_flags)
 		HeapTuple	tp;
 		Form_pg_collation collform;
 
-		tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collation));
+		tp = SearchSysCache(COLLOID, ObjectIdGetDatum(collation));
 		if (!HeapTupleIsValid(tp))
 			elog(ERROR, "cache lookup failed for collation %u", collation);
 		collform = (Form_pg_collation) GETSTRUCT(tp);
@@ -1503,7 +1503,7 @@ pg_newlocale_from_collation(Oid collid)
 		Datum		datum;
 		bool		isnull;
 
-		tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
+		tp = SearchSysCache(COLLOID, ObjectIdGetDatum(collid));
 		if (!HeapTupleIsValid(tp))
 			elog(ERROR, "cache lookup failed for collation %u", collid);
 		collform = (Form_pg_collation) GETSTRUCT(tp);

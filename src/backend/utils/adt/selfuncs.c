@@ -5152,10 +5152,10 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 						else if (index->indpred == NIL)
 						{
 							vardata->statsTuple =
-								SearchSysCache3(STATRELATTINH,
-												ObjectIdGetDatum(index->indexoid),
-												Int16GetDatum(pos + 1),
-												BoolGetDatum(false));
+								SearchSysCache(STATRELATTINH,
+											   ObjectIdGetDatum(index->indexoid),
+											   Int16GetDatum(pos + 1),
+											   BoolGetDatum(false));
 							vardata->freefunc = ReleaseSysCache;
 
 							if (HeapTupleIsValid(vardata->statsTuple))
@@ -5388,10 +5388,10 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 		 * Plain table or parent of an inheritance appendrel, so look up the
 		 * column in pg_statistic
 		 */
-		vardata->statsTuple = SearchSysCache3(STATRELATTINH,
-											  ObjectIdGetDatum(rte->relid),
-											  Int16GetDatum(var->varattno),
-											  BoolGetDatum(rte->inh));
+		vardata->statsTuple = SearchSysCache(STATRELATTINH,
+											 ObjectIdGetDatum(rte->relid),
+											 Int16GetDatum(var->varattno),
+											 BoolGetDatum(rte->inh));
 		vardata->freefunc = ReleaseSysCache;
 
 		if (HeapTupleIsValid(vardata->statsTuple))
@@ -6895,10 +6895,10 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 		}
 		else
 		{
-			vardata.statsTuple = SearchSysCache3(STATRELATTINH,
-												 ObjectIdGetDatum(relid),
-												 Int16GetDatum(colnum),
-												 BoolGetDatum(rte->inh));
+			vardata.statsTuple = SearchSysCache(STATRELATTINH,
+												ObjectIdGetDatum(relid),
+												Int16GetDatum(colnum),
+												BoolGetDatum(rte->inh));
 			vardata.freefunc = ReleaseSysCache;
 		}
 	}
@@ -6921,10 +6921,10 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 		}
 		else
 		{
-			vardata.statsTuple = SearchSysCache3(STATRELATTINH,
-												 ObjectIdGetDatum(relid),
-												 Int16GetDatum(colnum),
-												 BoolGetDatum(false));
+			vardata.statsTuple = SearchSysCache(STATRELATTINH,
+												ObjectIdGetDatum(relid),
+												Int16GetDatum(colnum),
+												BoolGetDatum(false));
 			vardata.freefunc = ReleaseSysCache;
 		}
 	}
@@ -7905,10 +7905,10 @@ brincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 			else
 			{
 				vardata.statsTuple =
-					SearchSysCache3(STATRELATTINH,
-									ObjectIdGetDatum(rte->relid),
-									Int16GetDatum(attnum),
-									BoolGetDatum(false));
+					SearchSysCache(STATRELATTINH,
+								   ObjectIdGetDatum(rte->relid),
+								   Int16GetDatum(attnum),
+								   BoolGetDatum(false));
 				vardata.freefunc = ReleaseSysCache;
 			}
 		}
@@ -7935,10 +7935,10 @@ brincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 			}
 			else
 			{
-				vardata.statsTuple = SearchSysCache3(STATRELATTINH,
-													 ObjectIdGetDatum(index->indexoid),
-													 Int16GetDatum(attnum),
-													 BoolGetDatum(false));
+				vardata.statsTuple = SearchSysCache(STATRELATTINH,
+													ObjectIdGetDatum(index->indexoid),
+													Int16GetDatum(attnum),
+													BoolGetDatum(false));
 				vardata.freefunc = ReleaseSysCache;
 			}
 		}

@@ -94,8 +94,8 @@ SetMatViewPopulatedState(Relation relation, bool newstate)
 	 * entries.
 	 */
 	pgrel = table_open(RelationRelationId, RowExclusiveLock);
-	tuple = SearchSysCacheCopy1(RELOID,
-								ObjectIdGetDatum(RelationGetRelid(relation)));
+	tuple = SearchSysCacheCopy(RELOID,
+							   ObjectIdGetDatum(RelationGetRelid(relation)));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for relation %u",
 			 RelationGetRelid(relation));
@@ -719,7 +719,7 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 				 * Identify the equality operator associated with this index
 				 * column.  First we need to look up the column's opclass.
 				 */
-				cla_ht = SearchSysCache1(CLAOID, ObjectIdGetDatum(opclass));
+				cla_ht = SearchSysCache(CLAOID, ObjectIdGetDatum(opclass));
 				if (!HeapTupleIsValid(cla_ht))
 					elog(ERROR, "cache lookup failed for opclass %u", opclass);
 				cla_tup = (Form_pg_opclass) GETSTRUCT(cla_ht);

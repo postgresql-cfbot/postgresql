@@ -378,7 +378,7 @@ lookup_type_cache(Oid type_id, int flags)
 		HeapTuple	tp;
 		Form_pg_type typtup;
 
-		tp = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_id));
+		tp = SearchSysCache(TYPEOID, ObjectIdGetDatum(type_id));
 		if (!HeapTupleIsValid(tp))
 			ereport(ERROR,
 					(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -400,8 +400,8 @@ lookup_type_cache(Oid type_id, int flags)
 
 		/* These fields can never change, by definition */
 		typentry->type_id = type_id;
-		typentry->type_id_hash = GetSysCacheHashValue1(TYPEOID,
-													   ObjectIdGetDatum(type_id));
+		typentry->type_id_hash = GetSysCacheHashValue(TYPEOID,
+													  ObjectIdGetDatum(type_id));
 
 		/* Keep this part in sync with the code below */
 		typentry->typlen = typtup->typlen;
@@ -433,7 +433,7 @@ lookup_type_cache(Oid type_id, int flags)
 		HeapTuple	tp;
 		Form_pg_type typtup;
 
-		tp = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_id));
+		tp = SearchSysCache(TYPEOID, ObjectIdGetDatum(type_id));
 		if (!HeapTupleIsValid(tp))
 			ereport(ERROR,
 					(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -917,7 +917,7 @@ load_rangetype_info(TypeCacheEntry *typentry)
 	Oid			cmpFnOid;
 
 	/* get information from pg_range */
-	tup = SearchSysCache1(RANGETYPE, ObjectIdGetDatum(typentry->type_id));
+	tup = SearchSysCache(RANGETYPE, ObjectIdGetDatum(typentry->type_id));
 	/* should not fail, since we already checked typtype ... */
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for range type %u",
@@ -1029,7 +1029,7 @@ load_domaintype_info(TypeCacheEntry *typentry)
 		ScanKeyData key[1];
 		SysScanDesc scan;
 
-		tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typeOid));
+		tup = SearchSysCache(TYPEOID, ObjectIdGetDatum(typeOid));
 		if (!HeapTupleIsValid(tup))
 			elog(ERROR, "cache lookup failed for type %u", typeOid);
 		typTup = (Form_pg_type) GETSTRUCT(tup);

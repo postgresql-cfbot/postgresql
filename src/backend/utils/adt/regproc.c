@@ -145,7 +145,7 @@ regprocout(PG_FUNCTION_ARGS)
 		PG_RETURN_CSTRING(result);
 	}
 
-	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(proid));
+	proctup = SearchSysCache(PROCOID, ObjectIdGetDatum(proid));
 
 	if (HeapTupleIsValid(proctup))
 	{
@@ -328,7 +328,7 @@ format_procedure_extended(Oid procedure_oid, bits16 flags)
 	char	   *result;
 	HeapTuple	proctup;
 
-	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(procedure_oid));
+	proctup = SearchSysCache(PROCOID, ObjectIdGetDatum(procedure_oid));
 
 	if (HeapTupleIsValid(proctup))
 	{
@@ -403,7 +403,7 @@ format_procedure_parts(Oid procedure_oid, List **objnames, List **objargs,
 	int			nargs;
 	int			i;
 
-	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(procedure_oid));
+	proctup = SearchSysCache(PROCOID, ObjectIdGetDatum(procedure_oid));
 
 	if (!HeapTupleIsValid(proctup))
 	{
@@ -554,7 +554,7 @@ regoperout(PG_FUNCTION_ARGS)
 		PG_RETURN_CSTRING(result);
 	}
 
-	opertup = SearchSysCache1(OPEROID, ObjectIdGetDatum(oprid));
+	opertup = SearchSysCache(OPEROID, ObjectIdGetDatum(oprid));
 
 	if (HeapTupleIsValid(opertup))
 	{
@@ -724,7 +724,7 @@ format_operator_extended(Oid operator_oid, bits16 flags)
 	char	   *result;
 	HeapTuple	opertup;
 
-	opertup = SearchSysCache1(OPEROID, ObjectIdGetDatum(operator_oid));
+	opertup = SearchSysCache(OPEROID, ObjectIdGetDatum(operator_oid));
 
 	if (HeapTupleIsValid(opertup))
 	{
@@ -809,7 +809,7 @@ format_operator_parts(Oid operator_oid, List **objnames, List **objargs,
 	HeapTuple	opertup;
 	Form_pg_operator oprForm;
 
-	opertup = SearchSysCache1(OPEROID, ObjectIdGetDatum(operator_oid));
+	opertup = SearchSysCache(OPEROID, ObjectIdGetDatum(operator_oid));
 	if (!HeapTupleIsValid(opertup))
 	{
 		if (!missing_ok)
@@ -952,7 +952,7 @@ regclassout(PG_FUNCTION_ARGS)
 		PG_RETURN_CSTRING(result);
 	}
 
-	classtup = SearchSysCache1(RELOID, ObjectIdGetDatum(classid));
+	classtup = SearchSysCache(RELOID, ObjectIdGetDatum(classid));
 
 	if (HeapTupleIsValid(classtup))
 	{
@@ -1095,7 +1095,7 @@ regcollationout(PG_FUNCTION_ARGS)
 		PG_RETURN_CSTRING(result);
 	}
 
-	collationtup = SearchSysCache1(COLLOID, ObjectIdGetDatum(collationid));
+	collationtup = SearchSysCache(COLLOID, ObjectIdGetDatum(collationid));
 
 	if (HeapTupleIsValid(collationtup))
 	{
@@ -1236,7 +1236,7 @@ regtypeout(PG_FUNCTION_ARGS)
 		PG_RETURN_CSTRING(result);
 	}
 
-	typetup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
+	typetup = SearchSysCache(TYPEOID, ObjectIdGetDatum(typid));
 
 	if (HeapTupleIsValid(typetup))
 	{
@@ -1348,7 +1348,7 @@ regconfigout(PG_FUNCTION_ARGS)
 		PG_RETURN_CSTRING(result);
 	}
 
-	cfgtup = SearchSysCache1(TSCONFIGOID, ObjectIdGetDatum(cfgid));
+	cfgtup = SearchSysCache(TSCONFIGOID, ObjectIdGetDatum(cfgid));
 
 	if (HeapTupleIsValid(cfgtup))
 	{
@@ -1458,7 +1458,7 @@ regdictionaryout(PG_FUNCTION_ARGS)
 		PG_RETURN_CSTRING(result);
 	}
 
-	dicttup = SearchSysCache1(TSDICTOID, ObjectIdGetDatum(dictid));
+	dicttup = SearchSysCache(TSDICTOID, ObjectIdGetDatum(dictid));
 
 	if (HeapTupleIsValid(dicttup))
 	{

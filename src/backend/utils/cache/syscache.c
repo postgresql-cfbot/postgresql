@@ -802,60 +802,18 @@ InitCatalogCachePhase2(void)
  *	CAUTION: The tuple that is returned must NOT be freed by the caller!
  */
 HeapTuple
-SearchSysCache(int cacheId,
-			   Datum key1,
-			   Datum key2,
-			   Datum key3,
-			   Datum key4)
+SearchSysCacheImpl(int cacheId,
+				   int nkeys,
+				   Datum key1,
+				   Datum key2,
+				   Datum key3,
+				   Datum key4)
 {
 	Assert(cacheId >= 0 && cacheId < SysCacheSize &&
 		   PointerIsValid(SysCache[cacheId]));
+	Assert(SysCache[cacheId]->cc_nkeys == nkeys);
 
 	return SearchCatCache(SysCache[cacheId], key1, key2, key3, key4);
-}
-
-HeapTuple
-SearchSysCache1(int cacheId,
-				Datum key1)
-{
-	Assert(cacheId >= 0 && cacheId < SysCacheSize &&
-		   PointerIsValid(SysCache[cacheId]));
-	Assert(SysCache[cacheId]->cc_nkeys == 1);
-
-	return SearchCatCache1(SysCache[cacheId], key1);
-}
-
-HeapTuple
-SearchSysCache2(int cacheId,
-				Datum key1, Datum key2)
-{
-	Assert(cacheId >= 0 && cacheId < SysCacheSize &&
-		   PointerIsValid(SysCache[cacheId]));
-	Assert(SysCache[cacheId]->cc_nkeys == 2);
-
-	return SearchCatCache2(SysCache[cacheId], key1, key2);
-}
-
-HeapTuple
-SearchSysCache3(int cacheId,
-				Datum key1, Datum key2, Datum key3)
-{
-	Assert(cacheId >= 0 && cacheId < SysCacheSize &&
-		   PointerIsValid(SysCache[cacheId]));
-	Assert(SysCache[cacheId]->cc_nkeys == 3);
-
-	return SearchCatCache3(SysCache[cacheId], key1, key2, key3);
-}
-
-HeapTuple
-SearchSysCache4(int cacheId,
-				Datum key1, Datum key2, Datum key3, Datum key4)
-{
-	Assert(cacheId >= 0 && cacheId < SysCacheSize &&
-		   PointerIsValid(SysCache[cacheId]));
-	Assert(SysCache[cacheId]->cc_nkeys == 4);
-
-	return SearchCatCache4(SysCache[cacheId], key1, key2, key3, key4);
 }
 
 /*
@@ -877,16 +835,17 @@ ReleaseSysCache(HeapTuple tuple)
  * heap_freetuple() the result when done with it.
  */
 HeapTuple
-SearchSysCacheCopy(int cacheId,
-				   Datum key1,
-				   Datum key2,
-				   Datum key3,
-				   Datum key4)
+SearchSysCacheCopyImpl(int cacheId,
+					   int nkey,
+					   Datum key1,
+					   Datum key2,
+					   Datum key3,
+					   Datum key4)
 {
 	HeapTuple	tuple,
 				newtuple;
 
-	tuple = SearchSysCache(cacheId, key1, key2, key3, key4);
+	tuple = SearchSysCacheImpl(cacheId, nkey, key1, key2, key3, key4);
 	if (!HeapTupleIsValid(tuple))
 		return tuple;
 	newtuple = heap_copytuple(tuple);
@@ -901,15 +860,16 @@ SearchSysCacheCopy(int cacheId,
  * No lock is retained on the syscache entry.
  */
 bool
-SearchSysCacheExists(int cacheId,
-					 Datum key1,
-					 Datum key2,
-					 Datum key3,
-					 Datum key4)
+SearchSysCacheExistsImpl(int cacheId,
+						 int nkey,
+						 Datum key1,
+						 Datum key2,
+						 Datum key3,
+						 Datum key4)
 {
 	HeapTuple	tuple;
 
-	tuple = SearchSysCache(cacheId, key1, key2, key3, key4);
+	tuple = SearchSysCacheImpl(cacheId, nkey, key1, key2, key3, key4);
 	if (!HeapTupleIsValid(tuple))
 		return false;
 	ReleaseSysCache(tuple);
@@ -924,18 +884,19 @@ SearchSysCacheExists(int cacheId,
  * No lock is retained on the syscache entry.
  */
 Oid
-GetSysCacheOid(int cacheId,
-			   AttrNumber oidcol,
-			   Datum key1,
-			   Datum key2,
-			   Datum key3,
-			   Datum key4)
+GetSysCacheOidImpl(int cacheId,
+				   AttrNumber oidcol,
+				   int nkey,
+				   Datum key1,
+				   Datum key2,
+				   Datum key3,
+				   Datum key4)
 {
 	HeapTuple	tuple;
 	bool		isNull;
 	Oid			result;
 
-	tuple = SearchSysCache(cacheId, key1, key2, key3, key4);
+	tuple = SearchSysCacheImpl(cacheId, nkey, key1, key2, key3, key4);
 	if (!HeapTupleIsValid(tuple))
 		return InvalidOid;
 	result = heap_getattr(tuple, oidcol,
@@ -960,9 +921,9 @@ SearchSysCacheAttName(Oid relid, const char *attname)
 {
 	HeapTuple	tuple;
 
-	tuple = SearchSysCache2(ATTNAME,
-							ObjectIdGetDatum(relid),
-							CStringGetDatum(attname));
+	tuple = SearchSysCache(ATTNAME,
+						   ObjectIdGetDatum(relid),
+						   CStringGetDatum(attname));
 	if (!HeapTupleIsValid(tuple))
 		return NULL;
 	if (((Form_pg_attribute) GETSTRUCT(tuple))->attisdropped)
@@ -1023,9 +984,9 @@ SearchSysCacheAttNum(Oid relid, int16 attnum)
 {
 	HeapTuple	tuple;
 
-	tuple = SearchSysCache2(ATTNUM,
-							ObjectIdGetDatum(relid),
-							Int16GetDatum(attnum));
+	tuple = SearchSysCache(ATTNUM,
+						   ObjectIdGetDatum(relid),
+						   Int16GetDatum(attnum));
 	if (!HeapTupleIsValid(tuple))
 		return NULL;
 	if (((Form_pg_attribute) GETSTRUCT(tuple))->attisdropped)
@@ -1127,7 +1088,7 @@ SysCacheGetAttrNotNull(int cacheId, HeapTuple tup,
 }
 
 /*
- * GetSysCacheHashValue
+ * GetSysCacheHashValueImpl
  *
  * Get the hash value that would be used for a tuple in the specified cache
  * with the given search keys.
@@ -1137,11 +1098,11 @@ SysCacheGetAttrNotNull(int cacheId, HeapTuple tup,
  * catcache code that need to be able to compute the hash values.
  */
 uint32
-GetSysCacheHashValue(int cacheId,
-					 Datum key1,
-					 Datum key2,
-					 Datum key3,
-					 Datum key4)
+GetSysCacheHashValueImpl(int cacheId,
+						 Datum key1,
+						 Datum key2,
+						 Datum key3,
+						 Datum key4)
 {
 	if (cacheId < 0 || cacheId >= SysCacheSize ||
 		!PointerIsValid(SysCache[cacheId]))
@@ -1154,8 +1115,8 @@ GetSysCacheHashValue(int cacheId,
  * List-search interface
  */
 struct catclist *
-SearchSysCacheList(int cacheId, int nkeys,
-				   Datum key1, Datum key2, Datum key3)
+SearchSysCacheListImpl(int cacheId, int nkeys,
+					   Datum key1, Datum key2, Datum key3)
 {
 	if (cacheId < 0 || cacheId >= SysCacheSize ||
 		!PointerIsValid(SysCache[cacheId]))

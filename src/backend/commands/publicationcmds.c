@@ -296,9 +296,9 @@ pub_rf_contains_invalid_column(Oid pubid, Relation relation, List *ancestors,
 			publish_as_relid = relid;
 	}
 
-	rftuple = SearchSysCache2(PUBLICATIONRELMAP,
-							  ObjectIdGetDatum(publish_as_relid),
-							  ObjectIdGetDatum(pubid));
+	rftuple = SearchSysCache(PUBLICATIONRELMAP,
+							 ObjectIdGetDatum(publish_as_relid),
+							 ObjectIdGetDatum(pubid));
 
 	if (!HeapTupleIsValid(rftuple))
 		return false;
@@ -364,9 +364,9 @@ pub_collist_contains_invalid_column(Oid pubid, Relation relation, List *ancestor
 			publish_as_relid = relid;
 	}
 
-	tuple = SearchSysCache2(PUBLICATIONRELMAP,
-							ObjectIdGetDatum(publish_as_relid),
-							ObjectIdGetDatum(pubid));
+	tuple = SearchSysCache(PUBLICATIONRELMAP,
+						   ObjectIdGetDatum(publish_as_relid),
+						   ObjectIdGetDatum(pubid));
 
 	if (!HeapTupleIsValid(tuple))
 		return false;
@@ -763,8 +763,8 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 	rel = table_open(PublicationRelationId, RowExclusiveLock);
 
 	/* Check if name is used */
-	puboid = GetSysCacheOid1(PUBLICATIONNAME, Anum_pg_publication_oid,
-							 CStringGetDatum(stmt->pubname));
+	puboid = GetSysCacheOid(PUBLICATIONNAME, Anum_pg_publication_oid,
+							CStringGetDatum(stmt->pubname));
 	if (OidIsValid(puboid))
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
@@ -933,9 +933,9 @@ AlterPublicationOptions(ParseState *pstate, AlterPublicationStmt *stmt,
 			 * with the cache lookups returning NULL.
 			 */
 
-			rftuple = SearchSysCache2(PUBLICATIONRELMAP,
-									  ObjectIdGetDatum(relid),
-									  ObjectIdGetDatum(pubform->oid));
+			rftuple = SearchSysCache(PUBLICATIONRELMAP,
+									 ObjectIdGetDatum(relid),
+									 ObjectIdGetDatum(pubform->oid));
 			if (!HeapTupleIsValid(rftuple))
 				continue;
 			has_rowfilter = !heap_attisnull(rftuple, Anum_pg_publication_rel_prqual, NULL);
@@ -1141,9 +1141,9 @@ AlterPublicationTables(AlterPublicationStmt *stmt, HeapTuple tup,
 			Bitmapset  *oldcolumns = NULL;
 
 			/* look up the cache for the old relmap */
-			rftuple = SearchSysCache2(PUBLICATIONRELMAP,
-									  ObjectIdGetDatum(oldrelid),
-									  ObjectIdGetDatum(pubid));
+			rftuple = SearchSysCache(PUBLICATIONRELMAP,
+									 ObjectIdGetDatum(oldrelid),
+									 ObjectIdGetDatum(pubid));
 
 			/*
 			 * See if the existing relation currently has a WHERE clause or a
@@ -1282,9 +1282,9 @@ AlterPublicationSchemas(AlterPublicationStmt *stmt,
 		{
 			HeapTuple	coltuple;
 
-			coltuple = SearchSysCache2(PUBLICATIONRELMAP,
-									   ObjectIdGetDatum(lfirst_oid(lc)),
-									   ObjectIdGetDatum(pubform->oid));
+			coltuple = SearchSysCache(PUBLICATIONRELMAP,
+									  ObjectIdGetDatum(lfirst_oid(lc)),
+									  ObjectIdGetDatum(pubform->oid));
 
 			if (!HeapTupleIsValid(coltuple))
 				continue;
@@ -1383,8 +1383,8 @@ AlterPublication(ParseState *pstate, AlterPublicationStmt *stmt)
 
 	rel = table_open(PublicationRelationId, RowExclusiveLock);
 
-	tup = SearchSysCacheCopy1(PUBLICATIONNAME,
-							  CStringGetDatum(stmt->pubname));
+	tup = SearchSysCacheCopy(PUBLICATIONNAME,
+							 CStringGetDatum(stmt->pubname));
 
 	if (!HeapTupleIsValid(tup))
 		ereport(ERROR,
@@ -1424,7 +1424,7 @@ AlterPublication(ParseState *pstate, AlterPublicationStmt *stmt)
 		 * existence of publication. We get the tuple again to avoid the risk
 		 * of any publication option getting changed.
 		 */
-		tup = SearchSysCacheCopy1(PUBLICATIONOID, ObjectIdGetDatum(pubid));
+		tup = SearchSysCacheCopy(PUBLICATIONOID, ObjectIdGetDatum(pubid));
 		if (!HeapTupleIsValid(tup))
 			ereport(ERROR,
 					errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -1454,7 +1454,7 @@ RemovePublicationRelById(Oid proid)
 
 	rel = table_open(PublicationRelRelationId, RowExclusiveLock);
 
-	tup = SearchSysCache1(PUBLICATIONREL, ObjectIdGetDatum(proid));
+	tup = SearchSysCache(PUBLICATIONREL, ObjectIdGetDatum(proid));
 
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for publication table %u",
@@ -1494,7 +1494,7 @@ RemovePublicationById(Oid pubid)
 
 	rel = table_open(PublicationRelationId, RowExclusiveLock);
 
-	tup = SearchSysCache1(PUBLICATIONOID, ObjectIdGetDatum(pubid));
+	tup = SearchSysCache(PUBLICATIONOID, ObjectIdGetDatum(pubid));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for publication %u", pubid);
 
@@ -1524,7 +1524,7 @@ RemovePublicationSchemaById(Oid psoid)
 
 	rel = table_open(PublicationNamespaceRelationId, RowExclusiveLock);
 
-	tup = SearchSysCache1(PUBLICATIONNAMESPACE, ObjectIdGetDatum(psoid));
+	tup = SearchSysCache(PUBLICATIONNAMESPACE, ObjectIdGetDatum(psoid));
 
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for publication schema %u", psoid);
@@ -1740,7 +1740,7 @@ LockSchemaList(List *schemalist)
 		 * concurrent DDL has removed it. We can test this by checking the
 		 * existence of schema.
 		 */
-		if (!SearchSysCacheExists1(NAMESPACEOID, ObjectIdGetDatum(schemaid)))
+		if (!SearchSysCacheExists(NAMESPACEOID, ObjectIdGetDatum(schemaid)))
 			ereport(ERROR,
 					errcode(ERRCODE_UNDEFINED_SCHEMA),
 					errmsg("schema with OID %u does not exist", schemaid));
@@ -1802,9 +1802,9 @@ PublicationDropTables(Oid pubid, List *rels, bool missing_ok)
 					errcode(ERRCODE_SYNTAX_ERROR),
 					errmsg("column list must not be specified in ALTER PUBLICATION ... DROP"));
 
-		prid = GetSysCacheOid2(PUBLICATIONRELMAP, Anum_pg_publication_rel_oid,
-							   ObjectIdGetDatum(relid),
-							   ObjectIdGetDatum(pubid));
+		prid = GetSysCacheOid(PUBLICATIONRELMAP, Anum_pg_publication_rel_oid,
+							  ObjectIdGetDatum(relid),
+							  ObjectIdGetDatum(pubid));
 		if (!OidIsValid(prid))
 		{
 			if (missing_ok)
@@ -1868,10 +1868,10 @@ PublicationDropSchemas(Oid pubid, List *schemas, bool missing_ok)
 	{
 		Oid			schemaid = lfirst_oid(lc);
 
-		psid = GetSysCacheOid2(PUBLICATIONNAMESPACEMAP,
-							   Anum_pg_publication_namespace_oid,
-							   ObjectIdGetDatum(schemaid),
-							   ObjectIdGetDatum(pubid));
+		psid = GetSysCacheOid(PUBLICATIONNAMESPACEMAP,
+							  Anum_pg_publication_namespace_oid,
+							  ObjectIdGetDatum(schemaid),
+							  ObjectIdGetDatum(pubid));
 		if (!OidIsValid(psid))
 		{
 			if (missing_ok)
@@ -1960,7 +1960,7 @@ AlterPublicationOwner(const char *name, Oid newOwnerId)
 
 	rel = table_open(PublicationRelationId, RowExclusiveLock);
 
-	tup = SearchSysCacheCopy1(PUBLICATIONNAME, CStringGetDatum(name));
+	tup = SearchSysCacheCopy(PUBLICATIONNAME, CStringGetDatum(name));
 
 	if (!HeapTupleIsValid(tup))
 		ereport(ERROR,
@@ -1992,7 +1992,7 @@ AlterPublicationOwner_oid(Oid subid, Oid newOwnerId)
 
 	rel = table_open(PublicationRelationId, RowExclusiveLock);
 
-	tup = SearchSysCacheCopy1(PUBLICATIONOID, ObjectIdGetDatum(subid));
+	tup = SearchSysCacheCopy(PUBLICATIONOID, ObjectIdGetDatum(subid));
 
 	if (!HeapTupleIsValid(tup))
 		ereport(ERROR,

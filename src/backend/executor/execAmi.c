@@ -609,7 +609,7 @@ IndexSupportsBackwardScan(Oid indexid)
 	IndexAmRoutine *amroutine;
 
 	/* Fetch the pg_class tuple of the index relation */
-	ht_idxrel = SearchSysCache1(RELOID, ObjectIdGetDatum(indexid));
+	ht_idxrel = SearchSysCache(RELOID, ObjectIdGetDatum(indexid));
 	if (!HeapTupleIsValid(ht_idxrel))
 		elog(ERROR, "cache lookup failed for relation %u", indexid);
 	idxrelrec = (Form_pg_class) GETSTRUCT(ht_idxrel);

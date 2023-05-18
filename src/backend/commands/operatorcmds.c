@@ -371,7 +371,7 @@ RemoveOperatorById(Oid operOid)
 
 	relation = table_open(OperatorRelationId, RowExclusiveLock);
 
-	tup = SearchSysCache1(OPEROID, ObjectIdGetDatum(operOid));
+	tup = SearchSysCache(OPEROID, ObjectIdGetDatum(operOid));
 	if (!HeapTupleIsValid(tup)) /* should not happen */
 		elog(ERROR, "cache lookup failed for operator %u", operOid);
 	op = (Form_pg_operator) GETSTRUCT(tup);
@@ -388,7 +388,7 @@ RemoveOperatorById(Oid operOid)
 		if (operOid == op->oprcom || operOid == op->oprnegate)
 		{
 			ReleaseSysCache(tup);
-			tup = SearchSysCache1(OPEROID, ObjectIdGetDatum(operOid));
+			tup = SearchSysCache(OPEROID, ObjectIdGetDatum(operOid));
 			if (!HeapTupleIsValid(tup)) /* should not happen */
 				elog(ERROR, "cache lookup failed for operator %u", operOid);
 		}
@@ -430,7 +430,7 @@ AlterOperator(AlterOperatorStmt *stmt)
 	/* Look up the operator */
 	oprId = LookupOperWithArgs(stmt->opername, false);
 	catalog = table_open(OperatorRelationId, RowExclusiveLock);
-	tup = SearchSysCacheCopy1(OPEROID, ObjectIdGetDatum(oprId));
+	tup = SearchSysCacheCopy(OPEROID, ObjectIdGetDatum(oprId));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for operator %u", oprId);
 	oprForm = (Form_pg_operator) GETSTRUCT(tup);

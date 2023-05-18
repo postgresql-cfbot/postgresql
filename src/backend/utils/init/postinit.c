@@ -321,7 +321,7 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 	char	   *iculocale;
 
 	/* Fetch our pg_database row normally, via syscache */
-	tup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
+	tup = SearchSysCache(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
 	dbform = (Form_pg_database) GETSTRUCT(tup);

@@ -1,0 +1,154 @@
+SET extra_float_digits = -1;
+-- float8_array_is_vector
+SELECT float8_array_is_vector(ARRAY[]::float8[]);
+ float8_array_is_vector 
+------------------------
+ f
+(1 row)
+
+SELECT float8_array_is_vector('{{1.0},{1.0}}');
+ float8_array_is_vector 
+------------------------
+ f
+(1 row)
+
+SELECT float8_array_is_vector(ARRAY[NULL]::float8[]);
+ float8_array_is_vector 
+------------------------
+ f
+(1 row)
+
+SELECT float8_array_is_vector('{1,2,3}');
+ float8_array_is_vector 
+------------------------
+ t
+(1 row)
+
+-- euclidean_norm
+SELECT euclidean_norm('{1,2,3}');
+ euclidean_norm  
+-----------------
+ 3.7416573867739
+(1 row)
+
+-- normalize_vector
+SELECT normalize_vector('{0,0,0}');
+ERROR:  division by zero
+SELECT normalize_vector('{1,2,3}');
+                   normalize_vector                   
+------------------------------------------------------
+ {0.26726124191242,0.53452248382485,0.80178372573727}
+(1 row)
+
+-- dot_product
+SELECT dot_product('{1,2,3}', '{4,5,6}');
+ dot_product 
+-------------
+          32
+(1 row)
+
+-- squared_euclidean_distance
+SELECT squared_euclidean_distance('{1,2}', '{4,5,6}');
+ERROR:  vectors must have the same number of elements
+SELECT squared_euclidean_distance('{1,2,3}', '{4,5,6}');
+ squared_euclidean_distance 
+----------------------------
+                         27
+(1 row)
+
+-- euclidean_distance
+SELECT euclidean_distance('{1,2}', '{4,5,6}');
+ERROR:  vectors must have the same number of elements
+SELECT euclidean_distance('{1,2,3}', '{4,5,6}');
+ euclidean_distance 
+--------------------
+    5.1961524227066
+(1 row)
+
+-- cosine_distance
+SELECT cosine_distance('{1,2}', '{4,5,6}');
+ERROR:  vectors must have the same number of elements
+SELECT cosine_distance('{1,2,3}', '{4,5,6}');
+  cosine_distance  
+-------------------
+ 0.025368153802924
+(1 row)
+
+-- taxicab_distance
+SELECT taxicab_distance('{1,2}', '{4,5,6}');
+ERROR:  vectors must have the same number of elements
+SELECT taxicab_distance('{1,2,3}', '{4,5,6}');
+ taxicab_distance 
+------------------
+                9
+(1 row)
+
+-- chebyshev_distance
+SELECT chebyshev_distance('{1,2}', '{4,5,6}');
+ERROR:  vectors must have the same number of elements
+SELECT chebyshev_distance('{1,2,3}', '{4,5,6}');
+ chebyshev_distance 
+--------------------
+                  3
+(1 row)
+
+-- standard_unit_vector
+SELECT standard_unit_vector(0, 0);
+ERROR:  standard unit vectors must have at least one element
+SELECT standard_unit_vector(1, 0);
+ERROR:  cannot set nonexistent element to one
+SELECT standard_unit_vector(1, 2);
+ERROR:  cannot set nonexistent element to one
+SELECT standard_unit_vector(3, 1);
+ standard_unit_vector 
+----------------------
+ {1,0,0}
+(1 row)
+
+SELECT standard_unit_vector(3, 3);
+ standard_unit_vector 
+----------------------
+ {0,0,1}
+(1 row)
+
+-- kmeans
+SELECT * FROM kmeans(0, '{{1,2,3},{4,5,6},{7,8,9},{10,11,12}}', 1);
+ERROR:  must request at least one center
+SELECT * FROM kmeans(5, '{{1,2,3},{4,5,6},{7,8,9},{10,11,12}}', 1);
+ERROR:  number of sample vectors must be greater than or equal to the number of requested centers
+SELECT * FROM kmeans(2, '{{1,2,3},{4,5,6},{7,8,9},{10,11,NULL}}', 1);
+ERROR:  vectors must not contain nulls
+SELECT * FROM kmeans(2, ARRAY[[],[]]::float8[][], 1);
+ERROR:  number of sample vectors must be greater than or equal to the number of requested centers
+SELECT * FROM kmeans(2, '{{1,2,3},{4,5,6},{7,8,9},{10,11,12}}', -1);
+ERROR:  must request at least one iteration
+SELECT * FROM kmeans(2, '{{1,2,3},{4,5,6},{7,8,9},{10,11,12}}', 1) ORDER BY 1;
+     kmeans     
+----------------
+ {2.5,3.5,4.5}
+ {8.5,9.5,10.5}
+(2 rows)
+
+-- closest_vector
+SELECT closest_vector('{{1,2,3},{4,5,6},{7,8,9}}', ARRAY[]::float8[]);
+ERROR:  vectors must have at least one element
+SELECT closest_vector(ARRAY[]::float8[], '{1,2,3}');
+ERROR:  must provide at least one candidate vector
+SELECT closest_vector('{{1,2,3},{4,5,6},{7,8,NULL}}', '{1,2,3}');
+ERROR:  vectors must not contain nulls
+SELECT closest_vector('{{1,2,3},{4,5,6},{7,8,9}}', '{1,2}');
+ERROR:  vectors must have the same number of elements
+SELECT closest_vector('{1,2,3}', '{1,2}');
+ERROR:  vectors must have the same number of elements
+SELECT closest_vector('{{1,2,3},{4,5,6},{7,8,9}}', '{10,11,12}');
+ closest_vector 
+----------------
+              2
+(1 row)
+
+SELECT closest_vector('{1,2,3}', '{2,3,4}');
+ closest_vector 
+----------------
+              0
+(1 row)
+

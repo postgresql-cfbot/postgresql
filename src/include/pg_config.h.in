@@ -322,6 +322,9 @@
 /* Define to 1 if you have the `mkdtemp' function. */
 #undef HAVE_MKDTEMP
 
+/* Define to 1 if you have the 'OpenBLAS' library (-lopenblas). */
+#undef HAVE_OPENBLAS
+
 /* Define to 1 if you have the `OPENSSL_init_ssl' function. */
 #undef HAVE_OPENSSL_INIT_SSL
 
@@ -729,6 +732,9 @@
 
 /* Define to select named POSIX semaphores. */
 #undef USE_NAMED_POSIX_SEMAPHORES
+
+/* Define to 1 to build with OpenBLAS support. (--with-openblas) */
+#undef USE_OPENBLAS
 
 /* Define to 1 to build with OpenSSL support. (--with-ssl=openssl) */
 #undef USE_OPENSSL

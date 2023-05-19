@@ -114,6 +114,7 @@ OBJS = \
 	varbit.o \
 	varchar.o \
 	varlena.o \
+	vector.o \
 	version.o \
 	windowfuncs.o \
 	xid.o \

@@ -649,6 +649,7 @@ PG_CRC32C_OBJS
 CFLAGS_CRC
 LIBOBJS
 OPENSSL
+OPENBLAS
 ZSTD
 LZ4
 UUID_LIBS
@@ -695,6 +696,9 @@ STRIP_STATIC_LIB
 STRIP
 LDFLAGS_SL
 LDFLAGS_EX
+OPENBLAS_LIBS
+OPENBLAS_CFLAGS
+with_openblas
 ZSTD_LIBS
 ZSTD_CFLAGS
 with_zstd
@@ -872,6 +876,7 @@ with_system_tzdata
 with_zlib
 with_lz4
 with_zstd
+with_openblas
 with_ssl
 with_openssl
 enable_largefile
@@ -902,6 +907,8 @@ LZ4_CFLAGS
 LZ4_LIBS
 ZSTD_CFLAGS
 ZSTD_LIBS
+OPENBLAS_CFLAGS
+OPENBLAS_LIBS
 LDFLAGS_EX
 LDFLAGS_SL
 PERL
@@ -1584,6 +1591,7 @@ Optional Packages:
   --without-zlib          do not use Zlib
   --with-lz4              build with LZ4 support
   --with-zstd             build with ZSTD support
+  --with-openblas         build with OpenBLAS support
   --with-ssl=LIB          use LIB for SSL/TLS support (openssl)
   --with-openssl          obsolete spelling of --with-ssl=openssl
 
@@ -1614,6 +1622,10 @@ Some influential environment variables:
   LZ4_LIBS    linker flags for LZ4, overriding pkg-config
   ZSTD_CFLAGS C compiler flags for ZSTD, overriding pkg-config
   ZSTD_LIBS   linker flags for ZSTD, overriding pkg-config
+  OPENBLAS_CFLAGS
+              C compiler flags for OPENBLAS, overriding pkg-config
+  OPENBLAS_LIBS
+              linker flags for OPENBLAS, overriding pkg-config
   LDFLAGS_EX  extra linker flags for linking executables only
   LDFLAGS_SL  extra linker flags for linking shared libraries only
   PERL        Perl program
@@ -9605,6 +9617,148 @@ fi
     esac
   done
 fi
+
+#
+# OpenBLAS
+#
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with OpenBLAS support" >&5
+$as_echo_n "checking whether to build with OpenBLAS support... " >&6; }
+
+
+
+# Check whether --with-openblas was given.
+if test "${with_openblas+set}" = set; then :
+  withval=$with_openblas;
+  case $withval in
+    yes)
+
+$as_echo "#define USE_OPENBLAS 1" >>confdefs.h
+
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --with-openblas option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  with_openblas=no
+
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $with_openblas" >&5
+$as_echo "$with_openblas" >&6; }
+
+
+if test "$with_openblas" = yes; then
+
+pkg_failed=no
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for openblas" >&5
+$as_echo_n "checking for openblas... " >&6; }
+
+if test -n "$OPENBLAS_CFLAGS"; then
+    pkg_cv_OPENBLAS_CFLAGS="$OPENBLAS_CFLAGS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"openblas\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "openblas") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_OPENBLAS_CFLAGS=`$PKG_CONFIG --cflags "openblas" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+if test -n "$OPENBLAS_LIBS"; then
+    pkg_cv_OPENBLAS_LIBS="$OPENBLAS_LIBS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"openblas\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "openblas") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_OPENBLAS_LIBS=`$PKG_CONFIG --libs "openblas" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+
+
+
+if test $pkg_failed = yes; then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
+        _pkg_short_errors_supported=yes
+else
+        _pkg_short_errors_supported=no
+fi
+        if test $_pkg_short_errors_supported = yes; then
+	        OPENBLAS_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "openblas" 2>&1`
+        else
+	        OPENBLAS_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "openblas" 2>&1`
+        fi
+	# Put the nasty error message in config.log where it belongs
+	echo "$OPENBLAS_PKG_ERRORS" >&5
+
+	as_fn_error $? "Package requirements (openblas) were not met:
+
+$OPENBLAS_PKG_ERRORS
+
+Consider adjusting the PKG_CONFIG_PATH environment variable if you
+installed software in a non-standard prefix.
+
+Alternatively, you may set the environment variables OPENBLAS_CFLAGS
+and OPENBLAS_LIBS to avoid the need to call pkg-config.
+See the pkg-config man page for more details." "$LINENO" 5
+elif test $pkg_failed = untried; then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+	{ { $as_echo "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
+$as_echo "$as_me: error: in \`$ac_pwd':" >&2;}
+as_fn_error $? "The pkg-config script could not be found or is too old.  Make sure it
+is in your PATH or set the PKG_CONFIG environment variable to the full
+path to pkg-config.
+
+Alternatively, you may set the environment variables OPENBLAS_CFLAGS
+and OPENBLAS_LIBS to avoid the need to call pkg-config.
+See the pkg-config man page for more details.
+
+To get pkg-config, see <http://pkg-config.freedesktop.org/>.
+See \`config.log' for more details" "$LINENO" 5; }
+else
+	OPENBLAS_CFLAGS=$pkg_cv_OPENBLAS_CFLAGS
+	OPENBLAS_LIBS=$pkg_cv_OPENBLAS_LIBS
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+
+fi
+  # We only care about -I, -D, and -L switches;
+  # note that -lopenblas will be added by AC_CHECK_LIB below.
+  for pgac_option in $OPENBLAS_CFLAGS; do
+    case $pgac_option in
+      -I*|-D*) CPPFLAGS="$CPPFLAGS $pgac_option";;
+    esac
+  done
+  for pgac_option in $OPENBLAS_LIBS; do
+    case $pgac_option in
+      -L*) LDFLAGS="$LDFLAGS $pgac_option";;
+    esac
+  done
+fi
+
 #
 # Assignments
 #
@@ -13276,6 +13430,56 @@ fi
 
 fi
 
+if test "$with_openblas" = yes ; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for cblas_dnrm2 in -lopenblas" >&5
+$as_echo_n "checking for cblas_dnrm2 in -lopenblas... " >&6; }
+if ${ac_cv_lib_openblas_cblas_dnrm2+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lopenblas  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char cblas_dnrm2 ();
+int
+main ()
+{
+return cblas_dnrm2 ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_openblas_cblas_dnrm2=yes
+else
+  ac_cv_lib_openblas_cblas_dnrm2=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_openblas_cblas_dnrm2" >&5
+$as_echo "$ac_cv_lib_openblas_cblas_dnrm2" >&6; }
+if test "x$ac_cv_lib_openblas_cblas_dnrm2" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBOPENBLAS 1
+_ACEOF
+
+  LIBS="-lopenblas $LIBS"
+
+else
+  as_fn_error $? "library 'openblas' is required for OPENBLAS support" "$LINENO" 5
+fi
+
+fi
+
 # Note: We can test for libldap_r only after we know PTHREAD_LIBS;
 # also, on AIX, we may need to have openssl in LIBS for this step.
 if test "$with_ldap" = yes ; then
@@ -14061,6 +14265,71 @@ if test "x$ac_cv_header_zstd_h" = xyes; then :
 
 else
   as_fn_error $? "zstd.h header file is required for ZSTD" "$LINENO" 5
+fi
+
+
+fi
+
+if test -z "$OPENBLAS"; then
+  for ac_prog in openblas
+do
+  # Extract the first word of "$ac_prog", so it can be a program name with args.
+set dummy $ac_prog; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_path_OPENBLAS+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  case $OPENBLAS in
+  [\\/]* | ?:[\\/]*)
+  ac_cv_path_OPENBLAS="$OPENBLAS" # Let the user override the test with a path.
+  ;;
+  *)
+  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_path_OPENBLAS="$as_dir/$ac_word$ac_exec_ext"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  ;;
+esac
+fi
+OPENBLAS=$ac_cv_path_OPENBLAS
+if test -n "$OPENBLAS"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $OPENBLAS" >&5
+$as_echo "$OPENBLAS" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+  test -n "$OPENBLAS" && break
+done
+
+else
+  # Report the value of OPENBLAS in configure's output in all cases.
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for OPENBLAS" >&5
+$as_echo_n "checking for OPENBLAS... " >&6; }
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $OPENBLAS" >&5
+$as_echo "$OPENBLAS" >&6; }
+fi
+
+if test "$with_openblas" = yes; then
+  ac_fn_c_check_header_mongrel "$LINENO" "cblas.h" "ac_cv_header_cblas_h" "$ac_includes_default"
+if test "x$ac_cv_header_cblas_h" = xyes; then :
+
+else
+  as_fn_error $? "cblas.h header file is required for OPENBLAS" "$LINENO" 5
 fi
 
 

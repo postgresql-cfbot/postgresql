@@ -16,6 +16,7 @@ our $config = {
 	icu       => undef,    # --with-icu=<path>
 	lz4       => undef,    # --with-lz4=<path>
 	zstd      => undef,    # --with-zstd=<path>
+	openblas  => undef,    # --with-openblas=<path>
 	nls       => undef,    # --enable-nls=<path>
 	tap_tests => undef,    # --enable-tap-tests
 	tcl       => undef,    # --with-tcl=<path>

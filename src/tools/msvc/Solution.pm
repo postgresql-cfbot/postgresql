@@ -304,6 +304,7 @@ sub GenerateFiles
 		HAVE_MEMORY_H               => 1,
 		HAVE_MEMSET_S               => undef,
 		HAVE_MKDTEMP                => undef,
+		HAVE_OPENBLAS               => undef,
 		HAVE_OPENSSL_INIT_SSL       => undef,
 		HAVE_OSSP_UUID_H            => undef,
 		HAVE_PAM_PAM_APPL_H         => undef,
@@ -436,6 +437,7 @@ sub GenerateFiles
 		USE_LDAP                   => $self->{options}->{ldap} ? 1 : undef,
 		USE_LLVM                   => undef,
 		USE_NAMED_POSIX_SEMAPHORES => undef,
+		USE_OPENBLAS               => undef,
 		USE_OPENSSL                => undef,
 		USE_PAM                    => undef,
 		USE_SLICING_BY_8_CRC32C    => undef,
@@ -484,6 +486,11 @@ sub GenerateFiles
 	{
 		$define{HAVE_LIBZSTD} = 1;
 		$define{USE_ZSTD}     = 1;
+	}
+	if ($self->{options}->{openblas})
+	{
+		$define{HAVE_OPENBLAS} = 1;
+		$define{USE_OPENBLAS}  = 1;
 	}
 	if ($self->{options}->{openssl})
 	{
@@ -1092,6 +1099,11 @@ sub AddProject
 		$proj->AddIncludeDir($self->{options}->{zstd} . '\include');
 		$proj->AddLibrary($self->{options}->{zstd} . '\lib\libzstd.lib');
 	}
+	if ($self->{options}->{openblas})
+	{
+		$proj->AddIncludeDir($self->{options}->{openblas} . '\include');
+		$proj->AddLibrary($self->{options}->{openblas} . '\lib\openblas.lib');
+	}
 	if ($self->{options}->{uuid})
 	{
 		$proj->AddIncludeDir($self->{options}->{uuid} . '\include');
@@ -1205,6 +1217,7 @@ sub GetFakeConfigure
 	$cfg .= ' --with-libxslt'       if ($self->{options}->{xslt});
 	$cfg .= ' --with-lz4'           if ($self->{options}->{lz4});
 	$cfg .= ' --with-zstd'          if ($self->{options}->{zstd});
+	$cfg .= ' --with-openblas'      if ($self->{options}->{openblas});
 	$cfg .= ' --with-gssapi'        if ($self->{options}->{gss});
 	$cfg .= ' --with-icu'           if ($self->{options}->{icu});
 	$cfg .= ' --with-tcl'           if ($self->{options}->{tcl});

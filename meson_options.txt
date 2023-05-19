@@ -118,6 +118,9 @@ option('lz4', type : 'feature', value: 'auto',
 option('nls', type: 'feature', value: 'auto',
   description: 'native language support')
 
+option('openblas', type: 'feature', value: 'auto',
+  description: 'OpenBLAS support')
+
 option('pam', type : 'feature', value: 'auto',
   description: 'build with PAM support')
 

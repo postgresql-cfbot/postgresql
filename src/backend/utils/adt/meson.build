@@ -101,6 +101,7 @@ backend_sources += files(
   'varbit.c',
   'varchar.c',
   'varlena.c',
+  'vector.c',
   'version.c',
   'windowfuncs.c',
   'xid.c',

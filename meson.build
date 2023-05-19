@@ -839,6 +839,25 @@ endif
 
 
 ###############################################################
+# Library: OpenBLAS
+###############################################################
+
+openblasopt = get_option('openblas')
+if not openblasopt.disabled()
+  openblas = dependency('openblas', required: openblasopt)
+
+  if openblas.found()
+    cdata.set('USE_OPENBLAS', 1)
+    cdata.set('HAVE_OPENBLAS', 1)
+  endif
+
+else
+  openblas = not_found_dep
+endif
+
+
+
+###############################################################
 # Library: Tcl (for pltcl)
 #
 # NB: tclConfig.sh is used in autoconf build for getting
@@ -2848,6 +2867,7 @@ backend_both_deps += [
   libintl,
   libxml,
   lz4,
+  openblas,
   pam,
   ssl,
   systemd,
@@ -3378,6 +3398,7 @@ if meson.version().version_compare('>=0.57')
       'llvm': llvm,
       'lz4': lz4,
       'nls': libintl,
+      'openblas': openblas,
       'openssl': ssl,
       'pam': pam,
       'plperl': perl_dep,

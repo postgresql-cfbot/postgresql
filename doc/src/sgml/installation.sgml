@@ -1009,6 +1009,15 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
+      <varlistentry id="configure-option-with-openblas">
+       <term><option>--with-openblas</option></term>
+       <listitem>
+        <para>
+         Build with <productname>OpenBLAS</productname> support.
+        </para>
+       </listitem>
+      </varlistentry>
+
       <varlistentry id="configure-option-with-ssl">
        <term><option>--with-ssl=<replaceable>LIBRARY</replaceable></option>
        <indexterm>
@@ -2477,6 +2486,16 @@ ninja install
        <para>
         Build with <productname>Zstandard</productname> compression support.
         Defaults to auto.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="configure-with-openblas-meson">
+      <term><option>-Dopenblas={ auto | enabled | disabled }</option></term>
+      <listitem>
+       <para>
+        Build with <productname>OpenBLAS</productname> support.  Defaults to
+        auto.
        </para>
       </listitem>
      </varlistentry>

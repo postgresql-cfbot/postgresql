@@ -250,6 +250,25 @@ float8_div(const float8 val1, const float8 val2)
 	return result;
 }
 
+static inline float8
+float8_sqrt(const float8 val)
+{
+	float8		result;
+
+	if (unlikely(val < 0))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION),
+				 errmsg("cannot take square root of a negative number")));
+
+	result = sqrt(val);
+	if (unlikely(isinf(result)) && !isinf(val))
+		float_overflow_error();
+	if (unlikely(result == 0.0) && val != 0.0)
+		float_underflow_error();
+
+	return result;
+}
+
 /*
  * Routines for NaN-aware comparisons
  *

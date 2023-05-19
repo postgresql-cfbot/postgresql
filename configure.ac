@@ -1147,6 +1147,32 @@ if test "$with_zstd" = yes; then
     esac
   done
 fi
+
+#
+# OpenBLAS
+#
+AC_MSG_CHECKING([whether to build with OpenBLAS support])
+PGAC_ARG_BOOL(with, openblas, no, [build with OpenBLAS support],
+              [AC_DEFINE([USE_OPENBLAS], 1, [Define to 1 to build with OpenBLAS support. (--with-openblas)])])
+AC_MSG_RESULT([$with_openblas])
+AC_SUBST(with_openblas)
+
+if test "$with_openblas" = yes; then
+  PKG_CHECK_MODULES(OPENBLAS, openblas)
+  # We only care about -I, -D, and -L switches;
+  # note that -lopenblas will be added by AC_CHECK_LIB below.
+  for pgac_option in $OPENBLAS_CFLAGS; do
+    case $pgac_option in
+      -I*|-D*) CPPFLAGS="$CPPFLAGS $pgac_option";;
+    esac
+  done
+  for pgac_option in $OPENBLAS_LIBS; do
+    case $pgac_option in
+      -L*) LDFLAGS="$LDFLAGS $pgac_option";;
+    esac
+  done
+fi
+
 #
 # Assignments
 #
@@ -1418,6 +1444,10 @@ if test "$with_zstd" = yes ; then
   AC_CHECK_LIB(zstd, ZSTD_compress, [], [AC_MSG_ERROR([library 'zstd' is required for ZSTD support])])
 fi
 
+if test "$with_openblas" = yes ; then
+  AC_CHECK_LIB(openblas, cblas_dnrm2, [], [AC_MSG_ERROR([library 'openblas' is required for OPENBLAS support])])
+fi
+
 # Note: We can test for libldap_r only after we know PTHREAD_LIBS;
 # also, on AIX, we may need to have openssl in LIBS for this step.
 if test "$with_ldap" = yes ; then
@@ -1561,6 +1591,11 @@ fi
 PGAC_PATH_PROGS(ZSTD, zstd)
 if test "$with_zstd" = yes; then
   AC_CHECK_HEADER(zstd.h, [], [AC_MSG_ERROR([zstd.h header file is required for ZSTD])])
+fi
+
+PGAC_PATH_PROGS(OPENBLAS, openblas)
+if test "$with_openblas" = yes; then
+  AC_CHECK_HEADER(cblas.h, [], [AC_MSG_ERROR([cblas.h header file is required for OPENBLAS])])
 fi
 
 if test "$with_gssapi" = yes ; then

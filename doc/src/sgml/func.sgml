@@ -18950,6 +18950,247 @@ SELECT NULLIF(value, '(none)') ...
 </programlisting>
        </para></entry>
       </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>array_is_vector</primary>
+        </indexterm>
+        <function>array_is_vector</function> ( <type>float8[]</type> )
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Returns whether the array is a vector (i.e., a one-dimensional array of
+        <type>float8</type> with no NULL values and at least one element).  The
+        values in such arrays are treated as Cartesian coordinates in
+        <literal>n</literal>-dimensional Euclidean space, where
+        <literal>n</literal> is the cardinality of the array.
+       </para>
+       <para>
+        <literal>array_is_vector{'1,2,3}')</literal>
+        <returnvalue>t</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>euclidean_norm</primary>
+        </indexterm>
+        <function>euclidean_norm</function> ( <type>float8[]</type> )
+        <returnvalue>float8</returnvalue>
+       </para>
+       <para>
+        Returns the Euclidean norm of the array.  The array must be a vector
+        (see <function>array_is_vector</function> for details about what
+        constitutes a vector).
+       </para>
+       <para>
+        <literal>euclidean_norm('{1,2,3}')</literal>
+        <returnvalue>3.7416573867739413</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>normalize_vector</primary>
+        </indexterm>
+        <function>normalize_vector</function> ( <type>float8[]</type> )
+        <returnvalue>float8[]</returnvalue>
+       </para>
+       <para>
+        Returns a normalized version of the array.  The array must be a vector
+        (see <function>array_is_vector</function> for details about what
+        constitutes a vector), and its Euclidean norm must be nonzero.
+       </para>
+       <para>
+        <literal>normalize_vector('{1,2,3}')</literal>
+        <returnvalue>{0.2672612419124244,0.5345224838248488,0.8017837257372732}</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>dot_product</primary>
+        </indexterm>
+        <function>dot_product</function> ( <type>float8[]</type>, <type>float8[]</type> )
+        <returnvalue>float8</returnvalue>
+       </para>
+       <para>
+        Returns the dot product of the arrays.  The arrays must be vectors (see
+        <function>array_is_vector</function> for details about what constitutes
+        a vector).
+       </para>
+       <para>
+        <literal>dot_product('{1,2,3}', '{4,5,6}')</literal>
+        <returnvalue>32</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>squared_euclidean_distance</primary>
+        </indexterm>
+        <function>squared_euclidean_distance</function> ( <type>float8[]</type>, <type>float8[]</type> )
+        <returnvalue>float8</returnvalue>
+       </para>
+       <para>
+        Returns the squared Euclidean distance between the arrays.  The arrays
+        must be vectors (see <function>array_is_vector</function> for details
+        about what constitutes a vector).
+       </para>
+       <para>
+        <literal>squared_euclidean_distance('{1,2,3}', '{4,5,6}')</literal>
+        <returnvalue>27</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>euclidean_distance</primary>
+        </indexterm>
+        <function>euclidean_distance</function> ( <type>float8[]</type>, <type>float8[]</type> )
+        <returnvalue>float8</returnvalue>
+       </para>
+       <para>
+        Returns the Euclidean distance between the arrays.  The arrays must be
+        vectors (see <function>array_is_vector</function> for details about
+        what constitutes a vector).
+       </para>
+       <para>
+        <literal>euclidean_distance('{1,2,3}', '{4,5,6}')</literal>
+        <returnvalue>5.196152422706632</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>cosine_distance</primary>
+        </indexterm>
+        <function>cosine_distance</function> ( <type>float8[]</type>, <type>float8[]</type> )
+        <returnvalue>float8</returnvalue>
+       </para>
+       <para>
+        Returns the cosine distance between the arrays.  The arrays must be
+        vectors (see <function>array_is_vector</function> for details about
+        what constitutes a vector).
+       </para>
+       <para>
+        <literal>cosine_distance('{1,2,3}', '{4,5,6}')</literal>
+        <returnvalue>0.025368153802923787</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>taxicab_distance</primary>
+        </indexterm>
+        <function>taxicab_distance</function> ( <type>float8[]</type>, <type>float8[]</type> )
+        <returnvalue>float8</returnvalue>
+       </para>
+       <para>
+        Returns the taxicab distance between the arrays.  The arrays must be
+        vectors (see <function>array_is_vector</function> for details about
+        what constitutes a vector).
+       </para>
+       <para>
+        <literal>taxicab_distance('{1,2,3}', '{4,5,6}')</literal>
+        <returnvalue>9</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>chebyshev_distance</primary>
+        </indexterm>
+        <function>chebyshev_distance</function> ( <type>float8[]</type>, <type>float8[]</type> )
+        <returnvalue>float8</returnvalue>
+       </para>
+       <para>
+        Returns the Chebyshev distance between the arrays.  The arrays must be
+        vectors (see <function>array_is_vector</function> for details about
+        what constitutes a vector).
+       </para>
+       <para>
+        <literal>chebyshev_distance('{1,2,3}', '{4,5,6}')</literal>
+        <returnvalue>3</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>standard_unit_vector</primary>
+        </indexterm>
+        <function>standard_unit_vector</function> ( <parameter>d</parameter> <type>integer</type>, <parameter>n</parameter> <type>integer</type> )
+        <returnvalue>float8[]</returnvalue>
+       </para>
+       <para>
+        Returns an array of <type>float8</type> with <parameter>d</parameter>
+        elements.  All elements are set to <literal>0</literal> except for the
+        <parameter>n</parameter>th element, which is set to
+        <literal>1</literal>.
+       </para>
+       <para>
+        <literal>standard_unit_vector(3, 1)</literal>
+        <returnvalue>{1,0,0}</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>kmeans</primary>
+        </indexterm>
+        <function>kmeans</function> ( <parameter>n</parameter> <type>integer</type>, <parameter>v</parameter> <type>float8[]</type>, <parameter>i</parameter> <type>integer</type> )
+        <returnvalue>setof float8[]</returnvalue>
+       </para>
+       <para>
+        Returns <parameter>n</parameter> centers calculated via
+        <parameter>i</parameter> iterations of the <literal>kmeans++</literal>
+        algorithm on the array of vectors <parameter>v</parameter> (see
+        <function>array_is_vector</function> for details about what constitutes
+        a vector).
+       </para>
+       <para>
+        <literal>kmeans(2, '{{1,2,3},{4,5,6},{7,8,9},{10,11,12}}', 1)</literal>
+        <returnvalue></returnvalue>
+<programlisting>
+     kmeans
+----------------
+ {2.5,3.5,4.5}
+ {8.5,9.5,10.5}
+</programlisting>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>closest_vector</primary>
+        </indexterm>
+        <function>closest_vector</function> ( <parameter>c</parameter> <type>float8[]</type>, <parameter>v</parameter> <type>float8[]</type> )
+        <returnvalue>integer</returnvalue>
+       </para>
+       <para>
+        Returns the index of the vector in <parameter>c</parameter> that is
+        closest to <parameter>v</parameter>.  <parameter>c</parameter> must be
+        an array of vectors, and <parameter>v</parameter> must be a vector (see
+        <function>array_is_vector</function> for details about what constitutes
+        a vector).
+       </para>
+       <para>
+        <literal>closest_vector('{{1,2,3},{4,5,6},{7,8,9}}', '{10,11,12}')</literal>
+        <returnvalue>2</returnvalue>
+       </para></entry>
+      </row>
      </tbody>
     </tgroup>
    </table>

@@ -1445,21 +1445,7 @@ dtrunc(PG_FUNCTION_ARGS)
 Datum
 dsqrt(PG_FUNCTION_ARGS)
 {
-	float8		arg1 = PG_GETARG_FLOAT8(0);
-	float8		result;
-
-	if (arg1 < 0)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION),
-				 errmsg("cannot take square root of a negative number")));
-
-	result = sqrt(arg1);
-	if (unlikely(isinf(result)) && !isinf(arg1))
-		float_overflow_error();
-	if (unlikely(result == 0.0) && arg1 != 0.0)
-		float_underflow_error();
-
-	PG_RETURN_FLOAT8(result);
+	PG_RETURN_FLOAT8(float8_sqrt(PG_GETARG_FLOAT8(0)));
 }
 
 

@@ -64,4 +64,21 @@ $node->issues_sql_like(
 $node->command_fails([ 'createuser', 'regress_user1' ],
 	'fails if role already exists');
 
+$node->issues_sql_like(
+	[ 'createuser', 'regress_user9', '--with-admin', 'regress_user1' ],
+	qr/statement: CREATE ROLE regress_user9 NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT LOGIN NOREPLICATION NOBYPASSRLS ADMIN regress_user1;/,
+	'--with-admin');
+$node->issues_sql_like(
+	[ 'createuser', 'regress_user10', '--with-member', 'regress_user1' ],
+	qr/statement: CREATE ROLE regress_user10 NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT LOGIN NOREPLICATION NOBYPASSRLS ROLE regress_user1;/,
+	'--with-member');
+$node->issues_sql_like(
+	[ 'createuser', 'regress_user11', '--role', 'regress_user1' ],
+	qr/statement: CREATE ROLE regress_user11 NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT LOGIN NOREPLICATION NOBYPASSRLS IN ROLE regress_user1;/,
+	'--role (for backward compatibility)');
+$node->issues_sql_like(
+	[ 'createuser', 'regress_user12', '--member-of', 'regress_user1' ],
+	qr/statement: CREATE ROLE regress_user12 NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT LOGIN NOREPLICATION NOBYPASSRLS IN ROLE regress_user1;/,
+	'--member-of');
+
 done_testing();

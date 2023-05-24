@@ -1993,20 +1993,24 @@ reconsider_outer_join_clauses(PlannerInfo *root)
 			if (reconsider_outer_join_clause(root, ojcinfo, true))
 			{
 				RestrictInfo *rinfo = ojcinfo->rinfo;
+				RestrictInfo *ninfo;
 
 				found = true;
 				/* remove it from the list */
 				root->left_join_clauses =
 					foreach_delete_current(root->left_join_clauses, cell);
 				/* throw back a dummy replacement clause (see notes above) */
-				rinfo = make_restrictinfo(root,
+				ninfo = make_restrictinfo(root,
 										  (Expr *) makeBoolConst(true, false),
-										  true, /* is_pushed_down */
-										  false,	/* pseudoconstant */
+										  rinfo->is_pushed_down,
+										  false,	/* !pseudoconstant */
 										  0,	/* security_level */
 										  rinfo->required_relids,
 										  rinfo->outer_relids);
-				distribute_restrictinfo_to_rels(root, rinfo);
+				/* copy clone marking, too */
+				ninfo->has_clone = rinfo->has_clone;
+				ninfo->is_clone = rinfo->is_clone;
+				distribute_restrictinfo_to_rels(root, ninfo);
 			}
 		}
 
@@ -2018,20 +2022,24 @@ reconsider_outer_join_clauses(PlannerInfo *root)
 			if (reconsider_outer_join_clause(root, ojcinfo, false))
 			{
 				RestrictInfo *rinfo = ojcinfo->rinfo;
+				RestrictInfo *ninfo;
 
 				found = true;
 				/* remove it from the list */
 				root->right_join_clauses =
 					foreach_delete_current(root->right_join_clauses, cell);
 				/* throw back a dummy replacement clause (see notes above) */
-				rinfo = make_restrictinfo(root,
+				ninfo = make_restrictinfo(root,
 										  (Expr *) makeBoolConst(true, false),
-										  true, /* is_pushed_down */
-										  false,	/* pseudoconstant */
+										  rinfo->is_pushed_down,
+										  false,	/* !pseudoconstant */
 										  0,	/* security_level */
 										  rinfo->required_relids,
 										  rinfo->outer_relids);
-				distribute_restrictinfo_to_rels(root, rinfo);
+				/* copy clone marking, too */
+				ninfo->has_clone = rinfo->has_clone;
+				ninfo->is_clone = rinfo->is_clone;
+				distribute_restrictinfo_to_rels(root, ninfo);
 			}
 		}
 
@@ -2043,20 +2051,24 @@ reconsider_outer_join_clauses(PlannerInfo *root)
 			if (reconsider_full_join_clause(root, ojcinfo))
 			{
 				RestrictInfo *rinfo = ojcinfo->rinfo;
+				RestrictInfo *ninfo;
 
 				found = true;
 				/* remove it from the list */
 				root->full_join_clauses =
 					foreach_delete_current(root->full_join_clauses, cell);
 				/* throw back a dummy replacement clause (see notes above) */
-				rinfo = make_restrictinfo(root,
+				ninfo = make_restrictinfo(root,
 										  (Expr *) makeBoolConst(true, false),
-										  true, /* is_pushed_down */
-										  false,	/* pseudoconstant */
+										  rinfo->is_pushed_down,
+										  false,	/* !pseudoconstant */
 										  0,	/* security_level */
 										  rinfo->required_relids,
 										  rinfo->outer_relids);
-				distribute_restrictinfo_to_rels(root, rinfo);
+				/* copy clone marking, too */
+				ninfo->has_clone = rinfo->has_clone;
+				ninfo->is_clone = rinfo->is_clone;
+				distribute_restrictinfo_to_rels(root, ninfo);
 			}
 		}
 	} while (found);

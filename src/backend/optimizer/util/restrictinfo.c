@@ -513,8 +513,8 @@ extract_actual_join_clauses(List *restrictinfo_list,
 		{
 			/* joinquals shouldn't have been marked pseudoconstant */
 			Assert(!rinfo->pseudoconstant);
-			Assert(!rinfo_is_constant_true(rinfo));
-			*joinquals = lappend(*joinquals, rinfo->clause);
+			if (!rinfo_is_constant_true(rinfo))
+				*joinquals = lappend(*joinquals, rinfo->clause);
 		}
 	}
 }

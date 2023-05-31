@@ -12208,4 +12208,14 @@
   proargnames => '{summarized_tli,summarized_lsn,pending_lsn,summarizer_pid}',
   prosrc => 'pg_get_wal_summarizer_state' },
 
+# IVM
+{ oid => '786', descr => 'ivm trigger (before)',
+  proname => 'IVM_immediate_before', provolatile => 'v', prorettype => 'trigger',
+  proargtypes => '', prosrc => 'IVM_immediate_before' },
+{ oid => '787', descr => 'ivm trigger (after)',
+  proname => 'IVM_immediate_maintenance', provolatile => 'v', prorettype => 'trigger',
+  proargtypes => '', prosrc => 'IVM_immediate_maintenance' },
+{ oid => '788', descr => 'ivm filetring ',
+  proname => 'ivm_visible_in_prestate', provolatile => 's', prorettype => 'bool',
+  proargtypes => 'oid tid oid', prosrc => 'ivm_visible_in_prestate' },
 ]

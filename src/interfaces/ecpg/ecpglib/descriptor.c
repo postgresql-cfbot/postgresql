@@ -7,11 +7,11 @@
 #include "postgres_fe.h"
 
 #include "catalog/pg_type_d.h"
-#include "ecpg-pthread-win32.h"
 #include "ecpgerrno.h"
 #include "ecpglib.h"
 #include "ecpglib_extern.h"
 #include "ecpgtype.h"
+#include "port/pg_threads.h"
 #include "sql3types.h"
 #include "sqlca.h"
 #include "sqlda.h"
@@ -19,8 +19,8 @@
 static void descriptor_free(struct descriptor *desc);
 
 /* We manage descriptors separately for each thread. */
-static pthread_key_t descriptor_key;
-static pthread_once_t descriptor_once = PTHREAD_ONCE_INIT;
+static pg_tss_t descriptor_key;
+static pg_once_flag descriptor_once = PG_ONCE_FLAG_INIT;
 
 static void descriptor_deallocate_all(struct descriptor *list);
 
@@ -33,20 +33,20 @@ descriptor_destructor(void *arg)
 static void
 descriptor_key_init(void)
 {
-	pthread_key_create(&descriptor_key, descriptor_destructor);
+	pg_tss_create(&descriptor_key, descriptor_destructor);
 }
 
 static struct descriptor *
 get_descriptors(void)
 {
-	pthread_once(&descriptor_once, descriptor_key_init);
-	return (struct descriptor *) pthread_getspecific(descriptor_key);
+	pg_call_once(&descriptor_once, descriptor_key_init);
+	return (struct descriptor *) pg_tss_get(descriptor_key);
 }
 
 static void
 set_descriptors(struct descriptor *value)
 {
-	pthread_setspecific(descriptor_key, value);
+	pg_tss_set(descriptor_key, value);
 }
 
 /* old internal convenience function that might go away later */

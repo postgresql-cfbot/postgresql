@@ -169,7 +169,7 @@ bool		ecpg_get_data(const PGresult *, int, int, int, enum ECPGttype type,
 						  enum ECPGttype, char *, char *, long, long, long,
 						  enum ARRAY_TYPE, enum COMPAT_MODE, bool);
 
-void		ecpg_pthreads_init(void);
+#define ecpg_pthreads_init()
 struct connection *ecpg_get_connection(const char *connection_name);
 char	   *ecpg_alloc(long size, int lineno);
 char	   *ecpg_auto_alloc(long size, int lineno);

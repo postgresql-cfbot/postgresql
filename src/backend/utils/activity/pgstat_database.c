@@ -20,6 +20,7 @@
 #include "storage/procsignal.h"
 #include "utils/pgstat_internal.h"
 #include "utils/timestamp.h"
+#include "access/xlog.h"
 
 
 static bool pgstat_should_report_connstat(void);
@@ -281,6 +282,13 @@ pgstat_update_dbstats(TimestampTz ts)
 	dbentry = pgstat_prep_database_pending(MyDatabaseId);
 
 	/*
+	 * Track the LSN of the most recent commit. Since we're local to the
+	 * current backend we don't have to worry if we're advancing or not.
+	 */
+	if (!XLogRecPtrIsInvalid(XactLastCommitEnd))
+		dbentry->last_commit_lsn = XactLastCommitEnd;
+
+	/*
 	 * Accumulate xact commit/rollback and I/O timings to stats entry of the
 	 * current database.
 	 */
@@ -426,6 +434,10 @@ pgstat_database_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
 	PGSTAT_ACCUM_DBCOUNT(sessions_fatal);
 	PGSTAT_ACCUM_DBCOUNT(sessions_killed);
 #undef PGSTAT_ACCUM_DBCOUNT
+
+	/* Only update last_commit_lsn if our backend has the newest commit. */
+	if (pendingent->last_commit_lsn > sharedent->stats.last_commit_lsn)
+		sharedent->stats.last_commit_lsn = pendingent->last_commit_lsn;
 
 	pgstat_unlock_entry(entry_ref);
 

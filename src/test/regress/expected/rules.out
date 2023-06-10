@@ -1839,6 +1839,7 @@ pg_stat_database| SELECT oid AS datid,
             WHEN (oid = (0)::oid) THEN 0
             ELSE pg_stat_get_db_numbackends(oid)
         END AS numbackends,
+    pg_stat_get_db_last_commit_lsn(oid) AS last_commit_lsn,
     pg_stat_get_db_xact_commit(oid) AS xact_commit,
     pg_stat_get_db_xact_rollback(oid) AS xact_rollback,
     (pg_stat_get_db_blocks_fetched(oid) - pg_stat_get_db_blocks_hit(oid)) AS blks_read,

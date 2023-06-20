@@ -13,7 +13,6 @@
 #include "lib/stringinfo.h"
 #include "libpq/pqformat.h"
 #include "nodes/miscnodes.h"
-#include "parser/scansup.h"
 #include "utils/builtins.h"
 #include "utils/json.h"
 #include "utils/jsonb.h"
@@ -41,6 +40,7 @@ typedef struct
 	int			plen;
 } HSParser;
 
+static bool hstore_isspace(char ch);
 static bool hstoreCheckKeyLength(size_t len, HSParser *state);
 static bool hstoreCheckValLength(size_t len, HSParser *state);
 
@@ -82,6 +82,26 @@ prseof(HSParser *state)
 	return false;
 }
 
+/*
+ * hstore_isspace() --- a non-locale-dependent isspace()
+ *
+ * We used to use isspace() for parsing hstore values, but that has
+ * undesirable results: a hstore value might be silently interpreted
+ * differently depending on the locale setting.  Now we just hard-wire
+ * the traditional ASCII definition of isspace().
+ */
+static bool
+hstore_isspace(char ch)
+{
+	if (ch == ' ' ||
+		ch == '\t' ||
+		ch == '\n' ||
+		ch == '\r' ||
+		ch == '\v' ||
+		ch == '\f')
+		return true;
+	return false;
+}
 
 #define GV_WAITVAL 0
 #define GV_INVAL 1
@@ -119,7 +139,7 @@ get_val(HSParser *state, bool ignoreeq, bool *escaped)
 			{
 				st = GV_WAITESCIN;
 			}
-			else if (!scanner_isspace((unsigned char) *(state->ptr)))
+			else if (!hstore_isspace((unsigned char) *(state->ptr)))
 			{
 				*(state->cur) = *(state->ptr);
 				state->cur++;
@@ -142,7 +162,7 @@ get_val(HSParser *state, bool ignoreeq, bool *escaped)
 				state->ptr--;
 				return true;
 			}
-			else if (scanner_isspace((unsigned char) *(state->ptr)))
+			else if (hstore_isspace((unsigned char) *(state->ptr)))
 			{
 				return true;
 			}
@@ -256,7 +276,7 @@ parse_hstore(HSParser *state)
 			{
 				PRSEOF;
 			}
-			else if (!scanner_isspace((unsigned char) *(state->ptr)))
+			else if (!hstore_isspace((unsigned char) *(state->ptr)))
 			{
 				PRSSYNTAXERROR;
 			}
@@ -310,7 +330,7 @@ parse_hstore(HSParser *state)
 			{
 				return true;
 			}
-			else if (!scanner_isspace((unsigned char) *(state->ptr)))
+			else if (!hstore_isspace((unsigned char) *(state->ptr)))
 			{
 				PRSSYNTAXERROR;
 			}

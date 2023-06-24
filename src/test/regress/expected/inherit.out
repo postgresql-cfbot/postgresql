@@ -2533,7 +2533,7 @@ drop table bool_rp;
 create table range_parted (a int, b int, c int) partition by range(a, b);
 create table range_parted1 partition of range_parted for values from (0,0) to (10,10);
 create table range_parted2 partition of range_parted for values from (10,10) to (20,20);
-create index on range_parted (a,b,c);
+create index range_parted_a_b_c_idx on range_parted (a,b,c);
 explain (costs off) select * from range_parted order by a,b,c;
                                      QUERY PLAN                                      
 -------------------------------------------------------------------------------------
@@ -2549,6 +2549,58 @@ explain (costs off) select * from range_parted order by a desc,b desc,c desc;
    ->  Index Only Scan Backward using range_parted2_a_b_c_idx on range_parted2 range_parted_2
    ->  Index Only Scan Backward using range_parted1_a_b_c_idx on range_parted1 range_parted_1
 (3 rows)
+
+drop index range_parted_a_b_c_idx;
+-- Ensure we make use of an Append scan even when no index exists to provide
+-- presorted input.  We expect we can push a Sort below the Append.
+explain (costs off) select * from range_parted order by a;
+                      QUERY PLAN                      
+------------------------------------------------------
+ Append
+   ->  Sort
+         Sort Key: range_parted_1.a
+         ->  Seq Scan on range_parted1 range_parted_1
+   ->  Sort
+         Sort Key: range_parted_2.a
+         ->  Seq Scan on range_parted2 range_parted_2
+(7 rows)
+
+explain (costs off) select * from range_parted order by a desc;
+                      QUERY PLAN                      
+------------------------------------------------------
+ Append
+   ->  Sort
+         Sort Key: range_parted_2.a DESC
+         ->  Seq Scan on range_parted2 range_parted_2
+   ->  Sort
+         Sort Key: range_parted_1.a DESC
+         ->  Seq Scan on range_parted1 range_parted_1
+(7 rows)
+
+-- As above but with a more strict ordering requirement
+explain (costs off) select * from range_parted order by a,b;
+                      QUERY PLAN                      
+------------------------------------------------------
+ Append
+   ->  Sort
+         Sort Key: range_parted_1.a, range_parted_1.b
+         ->  Seq Scan on range_parted1 range_parted_1
+   ->  Sort
+         Sort Key: range_parted_2.a, range_parted_2.b
+         ->  Seq Scan on range_parted2 range_parted_2
+(7 rows)
+
+explain (costs off) select * from range_parted order by a desc,b desc;
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Append
+   ->  Sort
+         Sort Key: range_parted_2.a DESC, range_parted_2.b DESC
+         ->  Seq Scan on range_parted2 range_parted_2
+   ->  Sort
+         Sort Key: range_parted_1.a DESC, range_parted_1.b DESC
+         ->  Seq Scan on range_parted1 range_parted_1
+(7 rows)
 
 drop table range_parted;
 -- Check that we allow access to a child table's statistics when the user

@@ -127,3 +127,23 @@ SELECT pg_partition_root('ptif_li_child');
 DROP VIEW ptif_test_view;
 DROP MATERIALIZED VIEW ptif_test_matview;
 DROP TABLE ptif_li_parent, ptif_li_child;
+
+-- Check that invalid indexes are not selected when attaching a partition.
+CREATE TABLE ptif_inval_tab (a int) PARTITION BY RANGE (a);
+CREATE INDEX ptif_inval_idx ON ptif_inval_tab (a);
+CREATE TABLE ptif_inval_tab_1 (a int) PARTITION BY RANGE (a);
+CREATE TABLE ptif_inval_tab_1_1 PARTITION OF ptif_inval_tab_1
+  FOR VALUES FROM (0) TO (10);
+CREATE TABLE ptif_inval_tab_1_2 PARTITION OF ptif_inval_tab_1
+  FOR VALUES FROM (10) TO (20);
+-- This creates an invalid index.
+CREATE INDEX ptif_inval_ixd_1 ON ONLY ptif_inval_tab_1 (a);
+-- This creates new indexes for all the partitions of ptif_inval_tab_1,
+-- discarding the invalid index created previously as something to choose.
+ALTER TABLE ptif_inval_tab ATTACH PARTITION ptif_inval_tab_1
+  FOR VALUES FROM (1) to (100);
+SELECT indexrelid::regclass, indisvalid FROM pg_index
+  WHERE indexrelid::regclass::text ~ 'ptif_inval_'
+  ORDER BY indexrelid::regclass::text;
+SELECT * FROM pg_partition_tree('ptif_inval_idx');
+DROP TABLE ptif_inval_tab;

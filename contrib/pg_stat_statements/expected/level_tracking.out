@@ -2,10 +2,10 @@
 -- Statement level tracking
 --
 SET pg_stat_statements.track_utility = TRUE;
-SELECT pg_stat_statements_reset();
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 
 -- DO block - top-level tracking.
@@ -29,10 +29,10 @@ SELECT toplevel, calls, query FROM pg_stat_statements
           |       | $$ LANGUAGE plpgsql
 (2 rows)
 
-SELECT pg_stat_statements_reset();
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 
 -- DO block - all-level tracking.
@@ -49,31 +49,31 @@ BEGIN
 END; $$;
 SELECT toplevel, calls, query FROM pg_stat_statements
   ORDER BY query COLLATE "C", toplevel;
- toplevel | calls |                query                 
-----------+-------+--------------------------------------
+ toplevel | calls |                       query                        
+----------+-------+----------------------------------------------------
  f        |     1 | DELETE FROM stats_track_tab
  t        |     1 | DELETE FROM stats_track_tab
- t        |     1 | DO $$                               +
-          |       | BEGIN                               +
-          |       |   DELETE FROM stats_track_tab;      +
+ t        |     1 | DO $$                                             +
+          |       | BEGIN                                             +
+          |       |   DELETE FROM stats_track_tab;                    +
           |       | END; $$
- t        |     1 | DO LANGUAGE plpgsql $$              +
-          |       | BEGIN                               +
-          |       |   -- this is a SELECT               +
-          |       |   PERFORM 'hello world'::TEXT;      +
+ t        |     1 | DO LANGUAGE plpgsql $$                            +
+          |       | BEGIN                                             +
+          |       |   -- this is a SELECT                             +
+          |       |   PERFORM 'hello world'::TEXT;                    +
           |       | END; $$
  f        |     1 | SELECT $1::TEXT
- t        |     1 | SELECT pg_stat_statements_reset()
+ t        |     1 | SELECT pg_stat_statements_reset() IS NOT NULL AS t
  t        |     1 | SET pg_stat_statements.track = 'all'
 (7 rows)
 
 -- PL/pgSQL function - top-level tracking.
 SET pg_stat_statements.track = 'top';
 SET pg_stat_statements.track_utility = FALSE;
-SELECT pg_stat_statements_reset();
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 
 CREATE FUNCTION PLUS_TWO(i INTEGER) RETURNS INTEGER AS $$
@@ -111,19 +111,19 @@ SELECT PLUS_ONE(10);
 (1 row)
 
 SELECT calls, rows, query FROM pg_stat_statements ORDER BY query COLLATE "C";
- calls | rows |               query               
--------+------+-----------------------------------
+ calls | rows |                       query                        
+-------+------+----------------------------------------------------
      2 |    2 | SELECT PLUS_ONE($1)
      2 |    2 | SELECT PLUS_TWO($1)
-     1 |    1 | SELECT pg_stat_statements_reset()
+     1 |    1 | SELECT pg_stat_statements_reset() IS NOT NULL AS t
 (3 rows)
 
 -- PL/pgSQL function - all-level tracking.
 SET pg_stat_statements.track = 'all';
-SELECT pg_stat_statements_reset();
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 
 -- we drop and recreate the functions to avoid any caching funnies
@@ -165,13 +165,13 @@ SELECT PLUS_ONE(1);
 (1 row)
 
 SELECT calls, rows, query FROM pg_stat_statements ORDER BY query COLLATE "C";
- calls | rows |               query               
--------+------+-----------------------------------
+ calls | rows |                       query                        
+-------+------+----------------------------------------------------
      2 |    2 | SELECT (i + $2 + $3)::INTEGER
      2 |    2 | SELECT (i + $2)::INTEGER LIMIT $3
      2 |    2 | SELECT PLUS_ONE($1)
      2 |    2 | SELECT PLUS_TWO($1)
-     1 |    1 | SELECT pg_stat_statements_reset()
+     1 |    1 | SELECT pg_stat_statements_reset() IS NOT NULL AS t
 (5 rows)
 
 DROP FUNCTION PLUS_ONE(INTEGER);
@@ -179,10 +179,10 @@ DROP FUNCTION PLUS_ONE(INTEGER);
 -- pg_stat_statements.track = none
 --
 SET pg_stat_statements.track = 'none';
-SELECT pg_stat_statements_reset();
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 
 SELECT 1 AS "one";
@@ -202,9 +202,9 @@ SELECT calls, rows, query FROM pg_stat_statements ORDER BY query COLLATE "C";
 -------+------+-------
 (0 rows)
 
-SELECT pg_stat_statements_reset();
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 

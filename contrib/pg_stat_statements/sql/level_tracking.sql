@@ -3,7 +3,7 @@
 --
 
 SET pg_stat_statements.track_utility = TRUE;
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 
 -- DO block - top-level tracking.
 CREATE TABLE stats_track_tab (x int);
@@ -16,7 +16,7 @@ END;
 $$ LANGUAGE plpgsql;
 SELECT toplevel, calls, query FROM pg_stat_statements
   WHERE query LIKE '%DELETE%' ORDER BY query COLLATE "C", toplevel;
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 
 -- DO block - all-level tracking.
 SET pg_stat_statements.track = 'all';
@@ -36,7 +36,7 @@ SELECT toplevel, calls, query FROM pg_stat_statements
 -- PL/pgSQL function - top-level tracking.
 SET pg_stat_statements.track = 'top';
 SET pg_stat_statements.track_utility = FALSE;
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 CREATE FUNCTION PLUS_TWO(i INTEGER) RETURNS INTEGER AS $$
 DECLARE
   r INTEGER;
@@ -59,7 +59,7 @@ SELECT calls, rows, query FROM pg_stat_statements ORDER BY query COLLATE "C";
 
 -- PL/pgSQL function - all-level tracking.
 SET pg_stat_statements.track = 'all';
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 
 -- we drop and recreate the functions to avoid any caching funnies
 DROP FUNCTION PLUS_ONE(INTEGER);
@@ -91,10 +91,10 @@ DROP FUNCTION PLUS_ONE(INTEGER);
 -- pg_stat_statements.track = none
 --
 SET pg_stat_statements.track = 'none';
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 
 SELECT 1 AS "one";
 SELECT 1 + 1 AS "two";
 
 SELECT calls, rows, query FROM pg_stat_statements ORDER BY query COLLATE "C";
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;

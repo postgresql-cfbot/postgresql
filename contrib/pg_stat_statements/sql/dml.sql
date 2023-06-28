@@ -46,7 +46,7 @@ SELECT * FROM pgss_dml_tab ORDER BY a;
 SELECT * FROM pgss_dml_tab WHERE a IN (1, 2, 3, 4, 5);
 
 SELECT calls, rows, query FROM pg_stat_statements ORDER BY query COLLATE "C";
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 
 -- MERGE
 MERGE INTO pgss_dml_tab USING pgss_dml_tab st ON (st.a = pgss_dml_tab.a AND st.a >= 4)
@@ -73,4 +73,4 @@ MERGE INTO pgss_dml_tab USING pgss_dml_tab st ON (st.a = pgss_dml_tab.a AND st.a
 DROP TABLE pgss_dml_tab;
 
 SELECT calls, rows, query FROM pg_stat_statements ORDER BY query COLLATE "C";
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;

@@ -2568,6 +2568,25 @@ endif
 
 
 ###############################################################
+# abidw/abidiff
+###############################################################
+
+
+abidiff = find_program('abidiff', required: get_option('abidiff'))
+
+abidw = find_program('abidw', required: get_option('abidw'), disabler: true)
+abidw_flags = [
+  '--drop-undefined-syms',
+  '--no-comp-dir-path',
+  '--no-elf-needed',
+  '--no-show-locs',
+  '--type-id-style', 'hash',
+]
+abidw_cmd = [abidw, abidw_flags, '--out-file', '@OUTPUT@', '@INPUT@']
+
+
+
+###############################################################
 # Build
 ###############################################################
 

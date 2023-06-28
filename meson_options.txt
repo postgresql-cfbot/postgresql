@@ -73,6 +73,12 @@ option('rpath', type : 'boolean', value: true,
 
 # External dependencies
 
+option('abidiff', type : 'feature', value: 'disabled',
+  description: 'enable abidiff tests')
+
+option('abidw', type : 'feature', value: 'disabled',
+  description: 'build ELF ABI serializations')
+
 option('bonjour', type : 'feature', value: 'auto',
   description: 'build with Bonjour support')
 

@@ -172,7 +172,7 @@ task:
     chown root:postgres /tmp/cores
     sysctl kern.corefile='/tmp/cores/%N.%P.core'
   setup_additional_packages_script: |
-    #pkg install -y ...
+    pkg install -y libabigail
 
   # NB: Intentionally build without -Dllvm. The freebsd image size is already
   # large enough to make VM startup slow, and even without llvm freebsd
@@ -181,6 +181,7 @@ task:
     su postgres <<-EOF
       meson setup \
         --buildtype=debug \
+        -Dabidw=enabled \
         -Dcassert=true -Duuid=bsd -Dtcl_version=tcl86 -Ddtrace=auto \
         -DPG_TEST_EXTRA="$PG_TEST_EXTRA" \
         -Dextra_lib_dirs=/usr/local/lib -Dextra_include_dirs=/usr/local/include/ \
@@ -209,6 +210,11 @@ task:
       meson test $MTEST_ARGS --num-processes ${TEST_JOBS} --setup running
       build/tmp_install/usr/local/pgsql/bin/pg_ctl -D build/runningcheck stop
     EOF
+
+  always:
+    abidw_artifacts:
+      path: "build/**/*.abi.xml"
+      type: application/xml
 
   on_failure:
     # if the server continues running, it often causes cirrus-ci to fail
@@ -322,8 +328,8 @@ task:
     EOF
 
   setup_additional_packages_script: |
-    #apt-get update
-    #DEBIAN_FRONTEND=noninteractive apt-get -y install ...
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get -y install abigail-tools
 
   matrix:
     - name: Linux - Debian Bullseye - Autoconf
@@ -364,6 +370,7 @@ task:
         su postgres <<-EOF
           meson setup \
             --buildtype=debug \
+            -Dabidiff=enabled -Dabidw=enabled \
             -Dcassert=true \
             ${LINUX_MESON_FEATURES} \
             -DPG_TEST_EXTRA="$PG_TEST_EXTRA" \
@@ -377,6 +384,7 @@ task:
           export CC='ccache gcc -m32'
           meson setup \
             --buildtype=debug \
+            -Dabidw=enabled \
             -Dcassert=true \
             ${LINUX_MESON_FEATURES} \
             -Dllvm=disabled \
@@ -408,6 +416,11 @@ task:
           ulimit -c unlimited
           PYTHONCOERCECLOCALE=0 LANG=C meson test $MTEST_ARGS -C build-32 --num-processes ${TEST_JOBS}
         EOF
+
+      always:
+        abidw_artifacts:
+          path: "build/**/*.abi.xml"
+          type: application/xml
 
       on_failure:
         <<: *on_failure_meson

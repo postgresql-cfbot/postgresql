@@ -1,0 +1,482 @@
+<abi-corpus path='src/interfaces/ecpg/ecpglib/libecpg.so.6.16' architecture='elf-amd-x86_64' soname='libecpg.so.6'>
+  <elf-function-symbols>
+    <elf-symbol name='ECPGallocate_desc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGconnect' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGdeallocate' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGdeallocate_all' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGdeallocate_desc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGdebug' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGdescribe' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGdisconnect' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGdo' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGdo_descriptor' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGfree_auto_mem' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGget_PGconn' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGget_desc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGget_desc_header' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGget_sqlca' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGget_var' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGis_noind_null' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGprepare' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGprepared_statement' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGset_desc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGset_desc_header' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGset_noind_null' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGset_var' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGsetcommit' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGsetconn' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGstatus' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGtrans' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='ECPGtransactionStatus' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='sqlprint' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+  </elf-function-symbols>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/ecpg/ecpglib/connect.c' language='LANG_C99'>
+    <array-type-def dimensions='1' type-id='38b51b3c' size-in-bits='832' id='02b72c00'>
+      <subrange length='13' type-id='7359adad' id='487fded1'/>
+    </array-type-def>
+    <type-decl name='bool' size-in-bits='8' id='c894953d'/>
+    <type-decl name='char' size-in-bits='8' id='a84c031d'/>
+    <class-decl name='__locale_data' is-struct='yes' visibility='default' is-declaration-only='yes' id='23de8b96'/>
+    <class-decl name='pg_conn' is-struct='yes' visibility='default' is-declaration-only='yes' id='491f6917'/>
+    <array-type-def dimensions='1' type-id='80f4b756' size-in-bits='832' id='39e6f84a'>
+      <subrange length='13' type-id='7359adad' id='487fded1'/>
+    </array-type-def>
+    <type-decl name='int' size-in-bits='32' id='95e97e5e'/>
+    <type-decl name='unsigned long int' size-in-bits='64' id='7359adad'/>
+    <type-decl name='unsigned short int' size-in-bits='16' id='8efea9e5'/>
+    <typedef-decl name='locale_t' type-id='b7ac9b5f' id='973a4f8d'/>
+    <typedef-decl name='__locale_t' type-id='f01e1813' id='b7ac9b5f'/>
+    <class-decl name='__locale_struct' size-in-bits='1856' is-struct='yes' visibility='default' id='90cc1ce3'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='__locales' type-id='02b72c00' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='832'>
+        <var-decl name='__ctype_b' type-id='31347b7a' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='896'>
+        <var-decl name='__ctype_tolower' type-id='6d60f45d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='960'>
+        <var-decl name='__ctype_toupper' type-id='6d60f45d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1024'>
+        <var-decl name='__names' type-id='39e6f84a' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='PGconn' type-id='491f6917' id='51b05e3b'/>
+    <pointer-type-def type-id='51b05e3b' size-in-bits='64' id='ec15dfe4'/>
+    <pointer-type-def type-id='23de8b96' size-in-bits='64' id='38b51b3c'/>
+    <pointer-type-def type-id='90cc1ce3' size-in-bits='64' id='f01e1813'/>
+    <qualified-type-def type-id='a84c031d' const='yes' id='9b45d938'/>
+    <pointer-type-def type-id='9b45d938' size-in-bits='64' id='80f4b756'/>
+    <qualified-type-def type-id='95e97e5e' const='yes' id='2448a865'/>
+    <pointer-type-def type-id='2448a865' size-in-bits='64' id='6d60f45d'/>
+    <qualified-type-def type-id='8efea9e5' const='yes' id='3beb2af4'/>
+    <pointer-type-def type-id='3beb2af4' size-in-bits='64' id='31347b7a'/>
+    <var-decl name='ecpg_clocale' type-id='973a4f8d' visibility='default'/>
+    <function-decl name='ECPGget_PGconn' mangled-name='ECPGget_PGconn' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGget_PGconn'>
+      <parameter type-id='80f4b756' name='connection_name'/>
+      <return type-id='ec15dfe4'/>
+    </function-decl>
+    <function-decl name='ECPGdisconnect' mangled-name='ECPGdisconnect' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGdisconnect'>
+      <parameter type-id='95e97e5e' name='lineno'/>
+      <parameter type-id='80f4b756' name='connection_name'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+    <function-decl name='ECPGconnect' mangled-name='ECPGconnect' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGconnect'>
+      <parameter type-id='95e97e5e' name='lineno'/>
+      <parameter type-id='95e97e5e' name='c'/>
+      <parameter type-id='80f4b756' name='name'/>
+      <parameter type-id='80f4b756' name='user'/>
+      <parameter type-id='80f4b756' name='passwd'/>
+      <parameter type-id='80f4b756' name='connection_name'/>
+      <parameter type-id='95e97e5e' name='autocommit'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+    <function-decl name='ECPGsetconn' mangled-name='ECPGsetconn' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGsetconn'>
+      <parameter type-id='95e97e5e' name='lineno'/>
+      <parameter type-id='80f4b756' name='connection_name'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+    <function-decl name='ECPGsetcommit' mangled-name='ECPGsetcommit' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGsetcommit'>
+      <parameter type-id='95e97e5e' name='lineno'/>
+      <parameter type-id='80f4b756' name='mode'/>
+      <parameter type-id='80f4b756' name='connection_name'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/ecpg/ecpglib/descriptor.c' language='LANG_C99'>
+    <type-decl name='variadic parameter type' id='2c1145c5'/>
+    <pointer-type-def type-id='95e97e5e' size-in-bits='64' id='7292109c'/>
+    <function-decl name='ECPGdescribe' mangled-name='ECPGdescribe' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGdescribe'>
+      <parameter type-id='95e97e5e' name='line'/>
+      <parameter type-id='95e97e5e' name='compat'/>
+      <parameter type-id='c894953d' name='input'/>
+      <parameter type-id='80f4b756' name='connection_name'/>
+      <parameter type-id='80f4b756' name='stmt_name'/>
+      <parameter is-variadic='yes'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+    <function-decl name='ECPGallocate_desc' mangled-name='ECPGallocate_desc' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGallocate_desc'>
+      <parameter type-id='95e97e5e' name='line'/>
+      <parameter type-id='80f4b756' name='name'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+    <function-decl name='ECPGdeallocate_desc' mangled-name='ECPGdeallocate_desc' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGdeallocate_desc'>
+      <parameter type-id='95e97e5e' name='line'/>
+      <parameter type-id='80f4b756' name='name'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+    <function-decl name='ECPGset_desc' mangled-name='ECPGset_desc' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGset_desc'>
+      <parameter type-id='95e97e5e' name='lineno'/>
+      <parameter type-id='80f4b756' name='desc_name'/>
+      <parameter type-id='95e97e5e' name='index'/>
+      <parameter is-variadic='yes'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+    <function-decl name='ECPGset_desc_header' mangled-name='ECPGset_desc_header' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGset_desc_header'>
+      <parameter type-id='95e97e5e' name='lineno'/>
+      <parameter type-id='80f4b756' name='desc_name'/>
+      <parameter type-id='95e97e5e' name='count'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+    <function-decl name='ECPGget_desc' mangled-name='ECPGget_desc' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGget_desc'>
+      <parameter type-id='95e97e5e' name='lineno'/>
+      <parameter type-id='80f4b756' name='desc_name'/>
+      <parameter type-id='95e97e5e' name='index'/>
+      <parameter is-variadic='yes'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+    <function-decl name='ECPGget_desc_header' mangled-name='ECPGget_desc_header' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGget_desc_header'>
+      <parameter type-id='95e97e5e' name='lineno'/>
+      <parameter type-id='80f4b756' name='desc_name'/>
+      <parameter type-id='7292109c' name='count'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/ecpg/ecpglib/error.c' language='LANG_C99'>
+    <type-decl name='void' id='48b5725f'/>
+    <function-decl name='sqlprint' mangled-name='sqlprint' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='sqlprint'>
+      <return type-id='48b5725f'/>
+    </function-decl>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/ecpg/ecpglib/execute.c' language='LANG_C99'>
+    <qualified-type-def type-id='c894953d' const='yes' id='4ab96a04'/>
+    <function-decl name='ECPGdo_descriptor' mangled-name='ECPGdo_descriptor' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGdo_descriptor'>
+      <parameter type-id='95e97e5e' name='line'/>
+      <parameter type-id='80f4b756' name='connection'/>
+      <parameter type-id='80f4b756' name='descriptor'/>
+      <parameter type-id='80f4b756' name='query'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+    <function-decl name='ECPGdo' mangled-name='ECPGdo' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGdo'>
+      <parameter type-id='2448a865' name='lineno'/>
+      <parameter type-id='2448a865' name='compat'/>
+      <parameter type-id='2448a865' name='force_indicator'/>
+      <parameter type-id='80f4b756' name='connection_name'/>
+      <parameter type-id='4ab96a04' name='questionmarks'/>
+      <parameter type-id='2448a865' name='st'/>
+      <parameter type-id='80f4b756' name='query'/>
+      <parameter is-variadic='yes'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/ecpg/ecpglib/memory.c' language='LANG_C99'>
+    <function-decl name='ECPGfree_auto_mem' mangled-name='ECPGfree_auto_mem' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGfree_auto_mem'>
+      <return type-id='48b5725f'/>
+    </function-decl>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/ecpg/ecpglib/misc.c' language='LANG_C99'>
+    <array-type-def dimensions='1' type-id='a84c031d' size-in-bits='1200' id='8ba463b3'>
+      <subrange length='150' type-id='7359adad' id='c75c987b'/>
+    </array-type-def>
+    <array-type-def dimensions='1' type-id='a84c031d' size-in-bits='8' id='89feb1ec'>
+      <subrange length='1' type-id='7359adad' id='52f813b4'/>
+    </array-type-def>
+    <array-type-def dimensions='1' type-id='a84c031d' size-in-bits='160' id='664ac0b7'>
+      <subrange length='20' type-id='7359adad' id='fdca39cf'/>
+    </array-type-def>
+    <array-type-def dimensions='1' type-id='a84c031d' size-in-bits='40' id='4a08da88'>
+      <subrange length='5' type-id='7359adad' id='53010e10'/>
+    </array-type-def>
+    <array-type-def dimensions='1' type-id='a84c031d' size-in-bits='64' id='8e100159'>
+      <subrange length='8' type-id='7359adad' id='56e0c0b1'/>
+    </array-type-def>
+    <class-decl name='_IO_codecvt' is-struct='yes' visibility='default' is-declaration-only='yes' id='a4036571'/>
+    <class-decl name='_IO_marker' is-struct='yes' visibility='default' is-declaration-only='yes' id='010ae0b9'/>
+    <class-decl name='_IO_wide_data' is-struct='yes' visibility='default' is-declaration-only='yes' id='79bd3751'/>
+    <type-decl name='long int' size-in-bits='64' id='bd54fe1a'/>
+    <array-type-def dimensions='1' type-id='bd54fe1a' size-in-bits='384' id='613ff906'>
+      <subrange length='6' type-id='7359adad' id='52fa524b'/>
+    </array-type-def>
+    <type-decl name='signed char' size-in-bits='8' id='28577a57'/>
+    <type-decl name='unnamed-enum-underlying-type-32' is-anonymous='yes' size-in-bits='32' alignment-in-bits='32' id='9cac1fee'/>
+    <class-decl name='var_list' size-in-bits='192' is-struct='yes' visibility='default' id='60257153'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='number' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='pointer' type-id='eaa32e2f' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='next' type-id='c181a543' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <enum-decl name='ECPGttype' id='acb9f267'>
+      <underlying-type type-id='9cac1fee'/>
+      <enumerator name='ECPGt_char' value='1'/>
+      <enumerator name='ECPGt_unsigned_char' value='2'/>
+      <enumerator name='ECPGt_short' value='3'/>
+      <enumerator name='ECPGt_unsigned_short' value='4'/>
+      <enumerator name='ECPGt_int' value='5'/>
+      <enumerator name='ECPGt_unsigned_int' value='6'/>
+      <enumerator name='ECPGt_long' value='7'/>
+      <enumerator name='ECPGt_unsigned_long' value='8'/>
+      <enumerator name='ECPGt_long_long' value='9'/>
+      <enumerator name='ECPGt_unsigned_long_long' value='10'/>
+      <enumerator name='ECPGt_bool' value='11'/>
+      <enumerator name='ECPGt_float' value='12'/>
+      <enumerator name='ECPGt_double' value='13'/>
+      <enumerator name='ECPGt_varchar' value='14'/>
+      <enumerator name='ECPGt_varchar2' value='15'/>
+      <enumerator name='ECPGt_numeric' value='16'/>
+      <enumerator name='ECPGt_decimal' value='17'/>
+      <enumerator name='ECPGt_date' value='18'/>
+      <enumerator name='ECPGt_timestamp' value='19'/>
+      <enumerator name='ECPGt_interval' value='20'/>
+      <enumerator name='ECPGt_array' value='21'/>
+      <enumerator name='ECPGt_struct' value='22'/>
+      <enumerator name='ECPGt_union' value='23'/>
+      <enumerator name='ECPGt_descriptor' value='24'/>
+      <enumerator name='ECPGt_char_variable' value='25'/>
+      <enumerator name='ECPGt_const' value='26'/>
+      <enumerator name='ECPGt_EOIT' value='27'/>
+      <enumerator name='ECPGt_EORT' value='28'/>
+      <enumerator name='ECPGt_NO_INDICATOR' value='29'/>
+      <enumerator name='ECPGt_string' value='30'/>
+      <enumerator name='ECPGt_sqlda' value='31'/>
+      <enumerator name='ECPGt_bytea' value='32'/>
+    </enum-decl>
+    <typedef-decl name='FILE' type-id='ec1ed955' id='aa12d1ba'/>
+    <class-decl name='_IO_FILE' size-in-bits='1728' is-struct='yes' visibility='default' id='ec1ed955'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='_flags' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='_IO_read_ptr' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='_IO_read_end' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='192'>
+        <var-decl name='_IO_read_base' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='256'>
+        <var-decl name='_IO_write_base' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='320'>
+        <var-decl name='_IO_write_ptr' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='384'>
+        <var-decl name='_IO_write_end' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='448'>
+        <var-decl name='_IO_buf_base' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='512'>
+        <var-decl name='_IO_buf_end' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='576'>
+        <var-decl name='_IO_save_base' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='640'>
+        <var-decl name='_IO_backup_base' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='704'>
+        <var-decl name='_IO_save_end' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='768'>
+        <var-decl name='_markers' type-id='e4c6fa61' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='832'>
+        <var-decl name='_chain' type-id='dca988a5' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='896'>
+        <var-decl name='_fileno' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='928'>
+        <var-decl name='_flags2' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='960'>
+        <var-decl name='_old_offset' type-id='79989e9c' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1024'>
+        <var-decl name='_cur_column' type-id='8efea9e5' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1040'>
+        <var-decl name='_vtable_offset' type-id='28577a57' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1048'>
+        <var-decl name='_shortbuf' type-id='89feb1ec' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1088'>
+        <var-decl name='_lock' type-id='cecf4ea7' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1152'>
+        <var-decl name='_offset' type-id='724e4de6' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1216'>
+        <var-decl name='_codecvt' type-id='570f8c59' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1280'>
+        <var-decl name='_wide_data' type-id='c65a1f29' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1344'>
+        <var-decl name='_freeres_list' type-id='dca988a5' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1408'>
+        <var-decl name='_freeres_buf' type-id='eaa32e2f' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1472'>
+        <var-decl name='__pad5' type-id='b59d7dce' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1536'>
+        <var-decl name='_mode' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1568'>
+        <var-decl name='_unused2' type-id='664ac0b7' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='__off_t' type-id='bd54fe1a' id='79989e9c'/>
+    <typedef-decl name='_IO_lock_t' type-id='48b5725f' id='bb4788fa'/>
+    <typedef-decl name='__off64_t' type-id='bd54fe1a' id='724e4de6'/>
+    <typedef-decl name='size_t' type-id='7359adad' id='b59d7dce'/>
+    <typedef-decl name='PGTransactionStatusType' type-id='08f5ca17' id='280022c9'/>
+    <enum-decl name='__anonymous_enum__' is-anonymous='yes' id='08f5ca17'>
+      <underlying-type type-id='9cac1fee'/>
+      <enumerator name='PQTRANS_IDLE' value='0'/>
+      <enumerator name='PQTRANS_ACTIVE' value='1'/>
+      <enumerator name='PQTRANS_INTRANS' value='2'/>
+      <enumerator name='PQTRANS_INERROR' value='3'/>
+      <enumerator name='PQTRANS_UNKNOWN' value='4'/>
+    </enum-decl>
+    <class-decl name='sqlca_t' size-in-bits='2048' is-struct='yes' visibility='default' id='80bcc684'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='sqlcaid' type-id='8e100159' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='sqlabc' type-id='bd54fe1a' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='sqlcode' type-id='bd54fe1a' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='192'>
+        <var-decl name='sqlerrm' type-id='568eb3f1' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1440'>
+        <var-decl name='sqlerrp' type-id='8e100159' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1536'>
+        <var-decl name='sqlerrd' type-id='613ff906' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1920'>
+        <var-decl name='sqlwarn' type-id='8e100159' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1984'>
+        <var-decl name='sqlstate' type-id='4a08da88' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <class-decl name='__anonymous_struct__' size-in-bits='1248' is-struct='yes' is-anonymous='yes' visibility='default' id='568eb3f1'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='sqlerrml' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='32'>
+        <var-decl name='sqlerrmc' type-id='8ba463b3' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <pointer-type-def type-id='aa12d1ba' size-in-bits='64' id='822cd80b'/>
+    <pointer-type-def type-id='ec1ed955' size-in-bits='64' id='dca988a5'/>
+    <pointer-type-def type-id='a4036571' size-in-bits='64' id='570f8c59'/>
+    <pointer-type-def type-id='bb4788fa' size-in-bits='64' id='cecf4ea7'/>
+    <pointer-type-def type-id='010ae0b9' size-in-bits='64' id='e4c6fa61'/>
+    <pointer-type-def type-id='79bd3751' size-in-bits='64' id='c65a1f29'/>
+    <pointer-type-def type-id='a84c031d' size-in-bits='64' id='26a90f95'/>
+    <pointer-type-def type-id='80bcc684' size-in-bits='64' id='43f96bf2'/>
+    <pointer-type-def type-id='60257153' size-in-bits='64' id='c181a543'/>
+    <pointer-type-def type-id='48b5725f' size-in-bits='64' id='eaa32e2f'/>
+    <var-decl name='ecpg_internal_regression_mode' type-id='c894953d' visibility='default'/>
+    <var-decl name='ivlist' type-id='c181a543' visibility='default'/>
+    <function-decl name='ECPGget_var' mangled-name='ECPGget_var' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGget_var'>
+      <parameter type-id='95e97e5e' name='number'/>
+      <return type-id='eaa32e2f'/>
+    </function-decl>
+    <function-decl name='ECPGset_var' mangled-name='ECPGset_var' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGset_var'>
+      <parameter type-id='95e97e5e' name='number'/>
+      <parameter type-id='eaa32e2f' name='pointer'/>
+      <parameter type-id='95e97e5e' name='lineno'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='ECPGis_noind_null' mangled-name='ECPGis_noind_null' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGis_noind_null'>
+      <parameter type-id='acb9f267' name='type'/>
+      <parameter type-id='eaa32e2f' name='ptr'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+    <function-decl name='ECPGset_noind_null' mangled-name='ECPGset_noind_null' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGset_noind_null'>
+      <parameter type-id='acb9f267' name='type'/>
+      <parameter type-id='eaa32e2f' name='ptr'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='ECPGdebug' mangled-name='ECPGdebug' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGdebug'>
+      <parameter type-id='95e97e5e' name='n'/>
+      <parameter type-id='822cd80b' name='dbgs'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='ECPGtrans' mangled-name='ECPGtrans' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGtrans'>
+      <parameter type-id='95e97e5e' name='lineno'/>
+      <parameter type-id='80f4b756' name='connection_name'/>
+      <parameter type-id='80f4b756' name='transaction'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+    <function-decl name='ECPGtransactionStatus' mangled-name='ECPGtransactionStatus' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGtransactionStatus'>
+      <parameter type-id='80f4b756' name='connection_name'/>
+      <return type-id='280022c9'/>
+    </function-decl>
+    <function-decl name='ECPGstatus' mangled-name='ECPGstatus' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGstatus'>
+      <parameter type-id='95e97e5e' name='lineno'/>
+      <parameter type-id='80f4b756' name='connection_name'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+    <function-decl name='ECPGget_sqlca' mangled-name='ECPGget_sqlca' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGget_sqlca'>
+      <return type-id='43f96bf2'/>
+    </function-decl>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/ecpg/ecpglib/prepare.c' language='LANG_C99'>
+    <function-decl name='ECPGprepared_statement' mangled-name='ECPGprepared_statement' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGprepared_statement'>
+      <parameter type-id='80f4b756' name='connection_name'/>
+      <parameter type-id='80f4b756' name='name'/>
+      <parameter type-id='95e97e5e' name='lineno'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='ECPGdeallocate_all' mangled-name='ECPGdeallocate_all' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGdeallocate_all'>
+      <parameter type-id='95e97e5e' name='lineno'/>
+      <parameter type-id='95e97e5e' name='compat'/>
+      <parameter type-id='80f4b756' name='connection_name'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+    <function-decl name='ECPGdeallocate' mangled-name='ECPGdeallocate' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGdeallocate'>
+      <parameter type-id='95e97e5e' name='lineno'/>
+      <parameter type-id='95e97e5e' name='c'/>
+      <parameter type-id='80f4b756' name='connection_name'/>
+      <parameter type-id='80f4b756' name='name'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+    <function-decl name='ECPGprepare' mangled-name='ECPGprepare' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ECPGprepare'>
+      <parameter type-id='95e97e5e' name='lineno'/>
+      <parameter type-id='80f4b756' name='connection_name'/>
+      <parameter type-id='4ab96a04' name='questionmarks'/>
+      <parameter type-id='80f4b756' name='name'/>
+      <parameter type-id='80f4b756' name='variable'/>
+      <return type-id='c894953d'/>
+    </function-decl>
+  </abi-instr>
+</abi-corpus>

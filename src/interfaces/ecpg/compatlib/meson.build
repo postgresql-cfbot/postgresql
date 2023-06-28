@@ -41,6 +41,20 @@ ecpg_compat_so = shared_library('libecpg_compat',
 )
 ecpg_targets += ecpg_compat_so
 
+custom_target('libecpg_compat.abi.xml',
+              input: ecpg_compat_so,
+              output: 'libecpg_compat.@0@-@1@.abi.xml'.format(host_cpu, host_system),
+              command: abidw_cmd,
+              build_by_default: true)
+
+if get_option('abidiff').enabled()
+  test('libecpg_compat.abidiff',
+       abidiff,
+       args: [files('libecpg_compat.@0@-@1@.abi.xml'.format(host_cpu, host_system)),
+              ecpg_compat_so],
+       suite: 'abidiff')
+endif
+
 pkgconfig.generate(
   name: 'libecpg_compat',
   description: 'PostgreSQL libecpg_compat library',

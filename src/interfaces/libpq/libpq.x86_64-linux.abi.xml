@@ -1,0 +1,2634 @@
+<abi-corpus path='src/interfaces/libpq/libpq.so.5.16' architecture='elf-amd-x86_64' soname='libpq.so.5'>
+  <elf-function-symbols>
+    <elf-symbol name='PQbackendPID' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQbinaryTuples' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQcancel' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQclear' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQclientEncoding' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQcmdStatus' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQcmdTuples' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQconndefaults' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQconnectPoll' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQconnectStart' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQconnectStartParams' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQconnectdb' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQconnectdbParams' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQconnectionNeedsPassword' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQconnectionUsedGSSAPI' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQconnectionUsedPassword' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQconninfo' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQconninfoFree' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQconninfoParse' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQconsumeInput' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQcopyResult' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQdb' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQdefaultSSLKeyPassHook_OpenSSL' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQdescribePortal' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQdescribePrepared' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQdisplayTuples' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQdsplen' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQencryptPassword' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQencryptPasswordConn' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQendcopy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQenterPipelineMode' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQenv2encoding' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQerrorMessage' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQescapeBytea' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQescapeByteaConn' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQescapeIdentifier' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQescapeLiteral' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQescapeString' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQescapeStringConn' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQexec' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQexecParams' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQexecPrepared' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQexitPipelineMode' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQfformat' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQfinish' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQfireResultCreateEvents' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQflush' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQfmod' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQfn' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQfname' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQfnumber' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQfreeCancel' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQfreeNotify' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQfreemem' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQfsize' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQftable' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQftablecol' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQftype' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQgetCancel' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQgetCopyData' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQgetResult' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQgetSSLKeyPassHook_OpenSSL' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQgetgssctx' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQgetisnull' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQgetlength' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQgetline' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQgetlineAsync' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQgetssl' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQgetvalue' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQgssEncInUse' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQhost' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQhostaddr' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQinitOpenSSL' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQinitSSL' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQinstanceData' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQisBusy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQisnonblocking' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQisthreadsafe' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQlibVersion' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQmakeEmptyPGresult' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQmblen' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQmblenBounded' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQnfields' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQnotifies' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQnparams' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQntuples' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQoidStatus' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQoidValue' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQoptions' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQparameterStatus' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQparamtype' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQpass' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQping' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQpingParams' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQpipelineStatus' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQpipelineSync' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQport' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQprepare' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQprint' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQprintTuples' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQprotocolVersion' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQputCopyData' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQputCopyEnd' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQputline' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQputnbytes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQregisterEventProc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQregisterThreadLock' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQrequestCancel' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQresStatus' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQreset' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQresetPoll' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQresetStart' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQresultAlloc' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQresultErrorField' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQresultErrorMessage' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQresultInstanceData' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQresultMemorySize' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQresultSetInstanceData' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQresultStatus' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQresultVerboseErrorMessage' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsendDescribePortal' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsendDescribePrepared' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsendFlushRequest' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsendPrepare' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsendQuery' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsendQueryParams' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsendQueryPrepared' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQserverVersion' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsetClientEncoding' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsetErrorContextVisibility' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsetErrorVerbosity' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsetInstanceData' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsetNoticeProcessor' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsetNoticeReceiver' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsetResultAttrs' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsetSSLKeyPassHook_OpenSSL' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsetSingleRowMode' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsetTraceFlags' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsetdbLogin' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsetnonblocking' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsetvalue' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsocket' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsslAttribute' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsslAttributeNames' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsslInUse' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQsslStruct' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQstatus' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQtrace' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQtransactionStatus' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQtty' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQunescapeBytea' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQuntrace' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='PQuser' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='appendBinaryPQExpBuffer' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='appendPQExpBuffer' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='appendPQExpBufferChar' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='appendPQExpBufferStr' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='createPQExpBuffer' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='destroyPQExpBuffer' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='enlargePQExpBuffer' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='initPQExpBuffer' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='lo_close' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='lo_creat' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='lo_create' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='lo_export' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='lo_import' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='lo_import_with_oid' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='lo_lseek' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='lo_lseek64' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='lo_open' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='lo_read' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='lo_tell' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='lo_tell64' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='lo_truncate' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='lo_truncate64' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='lo_unlink' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='lo_write' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='pg_char_to_encoding' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='pg_encoding_to_char' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='pg_utf_mblen' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='pg_valid_server_encoding' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='pg_valid_server_encoding_id' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='pqsignal' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='printfPQExpBuffer' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='resetPQExpBuffer' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='termPQExpBuffer' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+  </elf-function-symbols>
+  <elf-variable-symbols>
+    <elf-symbol name='pgresStatus' size='96' type='object-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+  </elf-variable-symbols>
+  <abi-instr version='1.0' address-size='64' path='../src/common/encnames.c' language='LANG_C99'>
+    <array-type-def dimensions='1' type-id='c8dedbef' size-in-bits='5376' id='752c85d9'>
+      <subrange length='42' type-id='7359adad' id='cb7c937f'/>
+    </array-type-def>
+    <array-type-def dimensions='1' type-id='c8dedbef' size-in-bits='infinite' id='ac835593'>
+      <subrange length='infinite' id='031f2035'/>
+    </array-type-def>
+    <array-type-def dimensions='1' type-id='56ef96d7' size-in-bits='5376' id='728d2ee1'>
+      <subrange length='42' type-id='7359adad' id='cb7c937f'/>
+    </array-type-def>
+    <array-type-def dimensions='1' type-id='56ef96d7' size-in-bits='infinite' id='a01b33bb'>
+      <subrange length='infinite' id='031f2035'/>
+    </array-type-def>
+    <typedef-decl name='pg_enc2name' type-id='79f06fd8' id='7a4268c7'/>
+    <class-decl name='pg_enc2name' size-in-bits='128' is-struct='yes' visibility='default' id='79f06fd8'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='name' type-id='80f4b756' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='encoding' type-id='66325df6' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='pg_enc' type-id='ea65169a' id='66325df6'/>
+    <enum-decl name='pg_enc' id='ea65169a'>
+      <underlying-type type-id='9cac1fee'/>
+      <enumerator name='PG_SQL_ASCII' value='0'/>
+      <enumerator name='PG_EUC_JP' value='1'/>
+      <enumerator name='PG_EUC_CN' value='2'/>
+      <enumerator name='PG_EUC_KR' value='3'/>
+      <enumerator name='PG_EUC_TW' value='4'/>
+      <enumerator name='PG_EUC_JIS_2004' value='5'/>
+      <enumerator name='PG_UTF8' value='6'/>
+      <enumerator name='PG_MULE_INTERNAL' value='7'/>
+      <enumerator name='PG_LATIN1' value='8'/>
+      <enumerator name='PG_LATIN2' value='9'/>
+      <enumerator name='PG_LATIN3' value='10'/>
+      <enumerator name='PG_LATIN4' value='11'/>
+      <enumerator name='PG_LATIN5' value='12'/>
+      <enumerator name='PG_LATIN6' value='13'/>
+      <enumerator name='PG_LATIN7' value='14'/>
+      <enumerator name='PG_LATIN8' value='15'/>
+      <enumerator name='PG_LATIN9' value='16'/>
+      <enumerator name='PG_LATIN10' value='17'/>
+      <enumerator name='PG_WIN1256' value='18'/>
+      <enumerator name='PG_WIN1258' value='19'/>
+      <enumerator name='PG_WIN866' value='20'/>
+      <enumerator name='PG_WIN874' value='21'/>
+      <enumerator name='PG_KOI8R' value='22'/>
+      <enumerator name='PG_WIN1251' value='23'/>
+      <enumerator name='PG_WIN1252' value='24'/>
+      <enumerator name='PG_ISO_8859_5' value='25'/>
+      <enumerator name='PG_ISO_8859_6' value='26'/>
+      <enumerator name='PG_ISO_8859_7' value='27'/>
+      <enumerator name='PG_ISO_8859_8' value='28'/>
+      <enumerator name='PG_WIN1250' value='29'/>
+      <enumerator name='PG_WIN1253' value='30'/>
+      <enumerator name='PG_WIN1254' value='31'/>
+      <enumerator name='PG_WIN1255' value='32'/>
+      <enumerator name='PG_WIN1257' value='33'/>
+      <enumerator name='PG_KOI8U' value='34'/>
+      <enumerator name='PG_SJIS' value='35'/>
+      <enumerator name='PG_BIG5' value='36'/>
+      <enumerator name='PG_GBK' value='37'/>
+      <enumerator name='PG_UHC' value='38'/>
+      <enumerator name='PG_GB18030' value='39'/>
+      <enumerator name='PG_JOHAB' value='40'/>
+      <enumerator name='PG_SHIFT_JIS_2004' value='41'/>
+      <enumerator name='_PG_LAST_ENCODING_' value='42'/>
+    </enum-decl>
+    <typedef-decl name='pg_enc2gettext' type-id='6257fe06' id='61c38b7f'/>
+    <class-decl name='pg_enc2gettext' size-in-bits='128' is-struct='yes' visibility='default' id='6257fe06'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='encoding' type-id='66325df6' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='name' type-id='80f4b756' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <qualified-type-def type-id='61c38b7f' const='yes' id='c8dedbef'/>
+    <qualified-type-def type-id='7a4268c7' const='yes' id='56ef96d7'/>
+    <var-decl name='pg_enc2name_tbl' type-id='a01b33bb' visibility='default'/>
+    <var-decl name='pg_enc2gettext_tbl' type-id='ac835593' visibility='default'/>
+    <function-decl name='pg_encoding_to_char' mangled-name='pg_encoding_to_char' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pg_encoding_to_char'>
+      <parameter type-id='95e97e5e' name='encoding'/>
+      <return type-id='80f4b756'/>
+    </function-decl>
+    <function-decl name='pg_char_to_encoding' mangled-name='pg_char_to_encoding' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pg_char_to_encoding'>
+      <parameter type-id='80f4b756' name='name'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='pg_valid_server_encoding_id' mangled-name='pg_valid_server_encoding_id' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pg_valid_server_encoding_id'>
+      <parameter type-id='95e97e5e' name='encoding'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='pg_valid_server_encoding' mangled-name='pg_valid_server_encoding' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pg_valid_server_encoding'>
+      <parameter type-id='80f4b756' name='name'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <pointer-type-def type-id='9b45d938' size-in-bits='64' id='80f4b756'/>
+    <type-decl name='int' size-in-bits='32' id='95e97e5e'/>
+    <type-decl name='unsigned long int' size-in-bits='64' id='7359adad'/>
+    <qualified-type-def type-id='a84c031d' const='yes' id='9b45d938'/>
+    <type-decl name='char' size-in-bits='8' id='a84c031d'/>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/common/pg_prng.c' language='LANG_C99'>
+    <var-decl name='pg_global_prng_state' type-id='db52f759' visibility='default'/>
+    <typedef-decl name='pg_prng_state' type-id='4bc32f5a' id='db52f759'/>
+    <class-decl name='pg_prng_state' size-in-bits='128' is-struct='yes' visibility='default' id='4bc32f5a'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='s0' type-id='f69d0a36' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='s1' type-id='f69d0a36' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='uint64' type-id='7359adad' id='f69d0a36'/>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/common/wchar.c' language='LANG_C99'>
+    <array-type-def dimensions='1' type-id='2eb933aa' size-in-bits='18816' id='f73e14c8'>
+      <subrange length='42' type-id='7359adad' id='cb7c937f'/>
+    </array-type-def>
+    <array-type-def dimensions='1' type-id='2eb933aa' size-in-bits='infinite' id='7598ed9a'>
+      <subrange length='infinite' id='031f2035'/>
+    </array-type-def>
+    <typedef-decl name='pg_wchar_tbl' type-id='2832bee7' id='4b73dd9a'/>
+    <class-decl name='__anonymous_struct__' size-in-bits='448' is-struct='yes' is-anonymous='yes' naming-typedef-id='4b73dd9a' visibility='default' id='2832bee7'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='mb2wchar_with_len' type-id='45ccecaa' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='wchar2mb_with_len' type-id='d418da4c' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='mblen' type-id='62162475' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='192'>
+        <var-decl name='dsplen' type-id='ba643f05' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='256'>
+        <var-decl name='mbverifychar' type-id='357adbda' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='320'>
+        <var-decl name='mbverifystr' type-id='69a9e845' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='384'>
+        <var-decl name='maxmblen' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='mb2wchar_with_len_converter' type-id='94c68999' id='45ccecaa'/>
+    <typedef-decl name='pg_wchar' type-id='f0981eeb' id='69e7d197'/>
+    <typedef-decl name='wchar2mb_with_len_converter' type-id='a8ce94cb' id='d418da4c'/>
+    <typedef-decl name='mblen_converter' type-id='ea6d1a71' id='62162475'/>
+    <typedef-decl name='mbdisplaylen_converter' type-id='ea6d1a71' id='ba643f05'/>
+    <typedef-decl name='mbchar_verifier' type-id='e164bb78' id='357adbda'/>
+    <typedef-decl name='mbstr_verifier' type-id='e164bb78' id='69a9e845'/>
+    <qualified-type-def type-id='69e7d197' const='yes' id='3073fb67'/>
+    <pointer-type-def type-id='3073fb67' size-in-bits='64' id='93949a37'/>
+    <qualified-type-def type-id='4b73dd9a' const='yes' id='2eb933aa'/>
+    <pointer-type-def type-id='404f73b7' size-in-bits='64' id='a8ce94cb'/>
+    <pointer-type-def type-id='343b086d' size-in-bits='64' id='ea6d1a71'/>
+    <pointer-type-def type-id='67c02f4e' size-in-bits='64' id='e164bb78'/>
+    <pointer-type-def type-id='18f2237d' size-in-bits='64' id='94c68999'/>
+    <pointer-type-def type-id='69e7d197' size-in-bits='64' id='37422e90'/>
+    <var-decl name='pg_wchar_table' type-id='7598ed9a' visibility='default'/>
+    <function-decl name='pg_utf_mblen' mangled-name='pg_utf_mblen' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pg_utf_mblen'>
+      <parameter type-id='354f7eb9' name='s'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <pointer-type-def type-id='ea86de29' size-in-bits='64' id='354f7eb9'/>
+    <function-type size-in-bits='64' id='404f73b7'>
+      <parameter type-id='93949a37'/>
+      <parameter type-id='cf536864'/>
+      <parameter type-id='95e97e5e'/>
+      <return type-id='95e97e5e'/>
+    </function-type>
+    <function-type size-in-bits='64' id='343b086d'>
+      <parameter type-id='354f7eb9'/>
+      <return type-id='95e97e5e'/>
+    </function-type>
+    <function-type size-in-bits='64' id='67c02f4e'>
+      <parameter type-id='354f7eb9'/>
+      <parameter type-id='95e97e5e'/>
+      <return type-id='95e97e5e'/>
+    </function-type>
+    <function-type size-in-bits='64' id='18f2237d'>
+      <parameter type-id='354f7eb9'/>
+      <parameter type-id='37422e90'/>
+      <parameter type-id='95e97e5e'/>
+      <return type-id='95e97e5e'/>
+    </function-type>
+    <type-decl name='unsigned int' size-in-bits='32' id='f0981eeb'/>
+    <qualified-type-def type-id='002ac4a6' const='yes' id='ea86de29'/>
+    <pointer-type-def type-id='002ac4a6' size-in-bits='64' id='cf536864'/>
+    <type-decl name='unsigned char' size-in-bits='8' id='002ac4a6'/>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/libpq/fe-auth-scram.c' language='LANG_C99'>
+    <type-decl name='bool' size-in-bits='8' id='c894953d'/>
+    <type-decl name='char' size-in-bits='8' id='a84c031d'/>
+    <array-type-def dimensions='1' type-id='a84c031d' size-in-bits='944' id='d8449f07'>
+      <subrange length='118' type-id='7359adad' id='d3d55f9f'/>
+    </array-type-def>
+    <array-type-def dimensions='1' type-id='a84c031d' size-in-bits='8' id='89feb1ec'>
+      <subrange length='1' type-id='7359adad' id='52f813b4'/>
+    </array-type-def>
+    <array-type-def dimensions='1' type-id='a84c031d' size-in-bits='160' id='664ac0b7'>
+      <subrange length='20' type-id='7359adad' id='fdca39cf'/>
+    </array-type-def>
+    <array-type-def dimensions='1' type-id='a84c031d' size-in-bits='512' id='59daf3ef'>
+      <subrange length='64' type-id='7359adad' id='b10be967'/>
+    </array-type-def>
+    <array-type-def dimensions='1' type-id='a84c031d' size-in-bits='48' id='4a008bc3'>
+      <subrange length='6' type-id='7359adad' id='52fa524b'/>
+    </array-type-def>
+    <array-type-def dimensions='1' type-id='a84c031d' size-in-bits='infinite' id='e84913bd'>
+      <subrange length='infinite' type-id='7359adad' id='031f2035'/>
+    </array-type-def>
+    <class-decl name='_IO_codecvt' is-struct='yes' visibility='default' is-declaration-only='yes' id='a4036571'/>
+    <class-decl name='_IO_marker' is-struct='yes' visibility='default' is-declaration-only='yes' id='010ae0b9'/>
+    <class-decl name='_IO_wide_data' is-struct='yes' visibility='default' is-declaration-only='yes' id='79bd3751'/>
+    <class-decl name='engine_st' is-struct='yes' visibility='default' is-declaration-only='yes' id='36ec5173'/>
+    <class-decl name='gss_cred_id_struct' is-struct='yes' visibility='default' is-declaration-only='yes' id='3fdd6c45'/>
+    <class-decl name='gss_ctx_id_struct' is-struct='yes' visibility='default' is-declaration-only='yes' id='9ee227fe'/>
+    <class-decl name='gss_name_struct' is-struct='yes' visibility='default' is-declaration-only='yes' id='a8e0a566'/>
+    <class-decl name='ssl_st' is-struct='yes' visibility='default' is-declaration-only='yes' id='64a5a649'/>
+    <class-decl name='x509_st' is-struct='yes' visibility='default' is-declaration-only='yes' id='704a7505'/>
+    <type-decl name='int' size-in-bits='32' id='95e97e5e'/>
+    <type-decl name='long int' size-in-bits='64' id='bd54fe1a'/>
+    <type-decl name='signed char' size-in-bits='8' id='28577a57'/>
+    <type-decl name='unnamed-enum-underlying-type-32' is-anonymous='yes' size-in-bits='32' alignment-in-bits='32' id='9cac1fee'/>
+    <type-decl name='unsigned int' size-in-bits='32' id='f0981eeb'/>
+    <type-decl name='unsigned long int' size-in-bits='64' id='7359adad'/>
+    <type-decl name='unsigned short int' size-in-bits='16' id='8efea9e5'/>
+    <type-decl name='void' id='48b5725f'/>
+    <class-decl name='pg_fe_sasl_mech' size-in-bits='256' is-struct='yes' visibility='default' id='f3f3632a'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='init' type-id='4196f317' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='exchange' type-id='fe1afc54' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='channel_bound' type-id='0bec2760' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='192'>
+        <var-decl name='free' type-id='b7f9d8e6' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='PGconn' type-id='491f6917' id='51b05e3b'/>
+    <class-decl name='pg_conn' size-in-bits='9536' is-struct='yes' visibility='default' id='491f6917'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='pghost' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='pghostaddr' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='pgport' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='192'>
+        <var-decl name='connect_timeout' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='256'>
+        <var-decl name='pgtcp_user_timeout' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='320'>
+        <var-decl name='client_encoding_initial' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='384'>
+        <var-decl name='pgoptions' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='448'>
+        <var-decl name='appname' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='512'>
+        <var-decl name='fbappname' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='576'>
+        <var-decl name='dbName' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='640'>
+        <var-decl name='replication' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='704'>
+        <var-decl name='pguser' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='768'>
+        <var-decl name='pgpass' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='832'>
+        <var-decl name='pgpassfile' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='896'>
+        <var-decl name='channel_binding' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='960'>
+        <var-decl name='keepalives' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1024'>
+        <var-decl name='keepalives_idle' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1088'>
+        <var-decl name='keepalives_interval' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1152'>
+        <var-decl name='keepalives_count' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1216'>
+        <var-decl name='sslmode' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1280'>
+        <var-decl name='sslcompression' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1344'>
+        <var-decl name='sslkey' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1408'>
+        <var-decl name='sslcert' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1472'>
+        <var-decl name='sslpassword' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1536'>
+        <var-decl name='sslcertmode' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1600'>
+        <var-decl name='sslrootcert' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1664'>
+        <var-decl name='sslcrl' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1728'>
+        <var-decl name='sslcrldir' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1792'>
+        <var-decl name='sslsni' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1856'>
+        <var-decl name='requirepeer' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1920'>
+        <var-decl name='gssencmode' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1984'>
+        <var-decl name='krbsrvname' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='2048'>
+        <var-decl name='gsslib' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='2112'>
+        <var-decl name='gssdelegation' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='2176'>
+        <var-decl name='ssl_min_protocol_version' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='2240'>
+        <var-decl name='ssl_max_protocol_version' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='2304'>
+        <var-decl name='target_session_attrs' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='2368'>
+        <var-decl name='require_auth' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='2432'>
+        <var-decl name='load_balance_hosts' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='2496'>
+        <var-decl name='Pfdebug' type-id='822cd80b' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='2560'>
+        <var-decl name='traceFlags' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='2624'>
+        <var-decl name='noticeHooks' type-id='76336d7b' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='2880'>
+        <var-decl name='events' type-id='2f038e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='2944'>
+        <var-decl name='nEvents' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='2976'>
+        <var-decl name='eventArraySize' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3008'>
+        <var-decl name='status' type-id='0b876eb4' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3040'>
+        <var-decl name='asyncStatus' type-id='4847ce6d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3072'>
+        <var-decl name='xactStatus' type-id='280022c9' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3104'>
+        <var-decl name='last_sqlstate' type-id='4a008bc3' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3152'>
+        <var-decl name='options_valid' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3160'>
+        <var-decl name='nonblocking' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3168'>
+        <var-decl name='pipelineStatus' type-id='7691cfc1' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3200'>
+        <var-decl name='singleRowMode' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3208'>
+        <var-decl name='copy_is_binary' type-id='a84c031d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3232'>
+        <var-decl name='copy_already_done' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3264'>
+        <var-decl name='notifyHead' type-id='ecf4f711' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3328'>
+        <var-decl name='notifyTail' type-id='ecf4f711' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3392'>
+        <var-decl name='nconnhost' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3424'>
+        <var-decl name='whichhost' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3456'>
+        <var-decl name='connhost' type-id='ee46afa8' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3520'>
+        <var-decl name='connip' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3584'>
+        <var-decl name='cmd_queue_head' type-id='60c7de09' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3648'>
+        <var-decl name='cmd_queue_tail' type-id='60c7de09' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3712'>
+        <var-decl name='cmd_queue_recycle' type-id='60c7de09' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3776'>
+        <var-decl name='sock' type-id='f5001928' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='3840'>
+        <var-decl name='laddr' type-id='8c37a12f' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='4928'>
+        <var-decl name='raddr' type-id='8c37a12f' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6016'>
+        <var-decl name='pversion' type-id='812180e4' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6048'>
+        <var-decl name='sversion' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6080'>
+        <var-decl name='auth_req_received' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6088'>
+        <var-decl name='password_needed' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6096'>
+        <var-decl name='gssapi_used' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6104'>
+        <var-decl name='sigpipe_so' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6112'>
+        <var-decl name='sigpipe_flag' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6120'>
+        <var-decl name='write_failed' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6144'>
+        <var-decl name='write_err_msg' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6208'>
+        <var-decl name='auth_required' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6240'>
+        <var-decl name='allowed_auth_methods' type-id='7aa912f5' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6272'>
+        <var-decl name='client_finished_auth' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6304'>
+        <var-decl name='target_server_type' type-id='6a71e347' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6336'>
+        <var-decl name='load_balance_type' type-id='05687e13' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6368'>
+        <var-decl name='try_next_addr' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6376'>
+        <var-decl name='try_next_host' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6400'>
+        <var-decl name='naddr' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6432'>
+        <var-decl name='whichaddr' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6464'>
+        <var-decl name='addr' type-id='abeb6880' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6528'>
+        <var-decl name='send_appname' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6560'>
+        <var-decl name='be_pid' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6592'>
+        <var-decl name='be_key' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6656'>
+        <var-decl name='pstatus' type-id='6ac21be1' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6720'>
+        <var-decl name='client_encoding' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6752'>
+        <var-decl name='std_strings' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6784'>
+        <var-decl name='default_transaction_read_only' type-id='cd92c2cc' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6816'>
+        <var-decl name='in_hot_standby' type-id='cd92c2cc' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6848'>
+        <var-decl name='verbosity' type-id='602f6566' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6880'>
+        <var-decl name='show_context' type-id='0534f30c' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6912'>
+        <var-decl name='lobjfuncs' type-id='35ec5596' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='6976'>
+        <var-decl name='prng_state' type-id='db52f759' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7104'>
+        <var-decl name='inBuffer' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7168'>
+        <var-decl name='inBufSize' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7200'>
+        <var-decl name='inStart' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7232'>
+        <var-decl name='inCursor' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7264'>
+        <var-decl name='inEnd' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7296'>
+        <var-decl name='outBuffer' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7360'>
+        <var-decl name='outBufSize' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7392'>
+        <var-decl name='outCount' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7424'>
+        <var-decl name='outMsgStart' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7456'>
+        <var-decl name='outMsgEnd' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7488'>
+        <var-decl name='rowBuf' type-id='af5f5041' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7552'>
+        <var-decl name='rowBufLen' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7616'>
+        <var-decl name='result' type-id='15e678b1' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7680'>
+        <var-decl name='error_result' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7744'>
+        <var-decl name='next_result' type-id='15e678b1' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7808'>
+        <var-decl name='sasl' type-id='3a81f511' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7872'>
+        <var-decl name='sasl_state' type-id='eaa32e2f' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7936'>
+        <var-decl name='scram_sha_256_iterations' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7968'>
+        <var-decl name='ssl_in_use' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7976'>
+        <var-decl name='ssl_cert_requested' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7984'>
+        <var-decl name='ssl_cert_sent' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='7992'>
+        <var-decl name='allow_ssl_try' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8000'>
+        <var-decl name='wait_ssl_try' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8064'>
+        <var-decl name='ssl' type-id='1e269bf5' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8128'>
+        <var-decl name='peer' type-id='02f57381' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8192'>
+        <var-decl name='engine' type-id='827f5e03' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8256'>
+        <var-decl name='crypto_loaded' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8320'>
+        <var-decl name='gctx' type-id='84c6b9b8' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8384'>
+        <var-decl name='gtarg_nam' type-id='1abde390' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8448'>
+        <var-decl name='try_gss' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8456'>
+        <var-decl name='gssenc' type-id='c894953d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8512'>
+        <var-decl name='gcred' type-id='e771909b' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8576'>
+        <var-decl name='gss_SendBuffer' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8640'>
+        <var-decl name='gss_SendLength' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8672'>
+        <var-decl name='gss_SendNext' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8704'>
+        <var-decl name='gss_SendConsumed' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8768'>
+        <var-decl name='gss_RecvBuffer' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8832'>
+        <var-decl name='gss_RecvLength' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8896'>
+        <var-decl name='gss_ResultBuffer' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8960'>
+        <var-decl name='gss_ResultLength' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8992'>
+        <var-decl name='gss_ResultNext' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='9024'>
+        <var-decl name='gss_MaxPktSize' type-id='7aa912f5' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='9088'>
+        <var-decl name='errorMessage' type-id='d22d5d08' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='9280'>
+        <var-decl name='errorReported' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='9344'>
+        <var-decl name='workBuffer' type-id='d22d5d08' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='FILE' type-id='ec1ed955' id='aa12d1ba'/>
+    <class-decl name='_IO_FILE' size-in-bits='1728' is-struct='yes' visibility='default' id='ec1ed955'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='_flags' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='_IO_read_ptr' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='_IO_read_end' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='192'>
+        <var-decl name='_IO_read_base' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='256'>
+        <var-decl name='_IO_write_base' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='320'>
+        <var-decl name='_IO_write_ptr' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='384'>
+        <var-decl name='_IO_write_end' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='448'>
+        <var-decl name='_IO_buf_base' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='512'>
+        <var-decl name='_IO_buf_end' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='576'>
+        <var-decl name='_IO_save_base' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='640'>
+        <var-decl name='_IO_backup_base' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='704'>
+        <var-decl name='_IO_save_end' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='768'>
+        <var-decl name='_markers' type-id='e4c6fa61' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='832'>
+        <var-decl name='_chain' type-id='dca988a5' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='896'>
+        <var-decl name='_fileno' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='928'>
+        <var-decl name='_flags2' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='960'>
+        <var-decl name='_old_offset' type-id='79989e9c' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1024'>
+        <var-decl name='_cur_column' type-id='8efea9e5' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1040'>
+        <var-decl name='_vtable_offset' type-id='28577a57' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1048'>
+        <var-decl name='_shortbuf' type-id='89feb1ec' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1088'>
+        <var-decl name='_lock' type-id='cecf4ea7' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1152'>
+        <var-decl name='_offset' type-id='724e4de6' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1216'>
+        <var-decl name='_codecvt' type-id='570f8c59' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1280'>
+        <var-decl name='_wide_data' type-id='c65a1f29' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1344'>
+        <var-decl name='_freeres_list' type-id='dca988a5' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1408'>
+        <var-decl name='_freeres_buf' type-id='eaa32e2f' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1472'>
+        <var-decl name='__pad5' type-id='b59d7dce' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1536'>
+        <var-decl name='_mode' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1568'>
+        <var-decl name='_unused2' type-id='664ac0b7' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='__off_t' type-id='bd54fe1a' id='79989e9c'/>
+    <typedef-decl name='_IO_lock_t' type-id='48b5725f' id='bb4788fa'/>
+    <typedef-decl name='__off64_t' type-id='bd54fe1a' id='724e4de6'/>
+    <typedef-decl name='size_t' type-id='7359adad' id='b59d7dce'/>
+    <class-decl name='__anonymous_struct__' size-in-bits='256' is-struct='yes' is-anonymous='yes' naming-typedef-id='76336d7b' visibility='default' id='8b36bd1c'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='noticeRec' type-id='d6489eba' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='noticeRecArg' type-id='eaa32e2f' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='noticeProc' type-id='af31ca99' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='192'>
+        <var-decl name='noticeProcArg' type-id='eaa32e2f' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='PQnoticeReceiver' type-id='92c74605' id='d6489eba'/>
+    <typedef-decl name='PGresult' type-id='5be59f1c' id='7bcca728'/>
+    <class-decl name='pg_result' size-in-bits='1728' is-struct='yes' visibility='default' id='5be59f1c'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='ntups' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='32'>
+        <var-decl name='numAttributes' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='attDescs' type-id='d614db7e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='tuples' type-id='d60ac47e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='192'>
+        <var-decl name='tupArrSize' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='224'>
+        <var-decl name='numParameters' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='256'>
+        <var-decl name='paramDescs' type-id='297c0d38' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='320'>
+        <var-decl name='resultStatus' type-id='921cdb17' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='352'>
+        <var-decl name='cmdStatus' type-id='59daf3ef' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='864'>
+        <var-decl name='binary' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='896'>
+        <var-decl name='noticeHooks' type-id='76336d7b' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1152'>
+        <var-decl name='events' type-id='2f038e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1216'>
+        <var-decl name='nEvents' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1248'>
+        <var-decl name='client_encoding' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1280'>
+        <var-decl name='errMsg' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1344'>
+        <var-decl name='errFields' type-id='0c5c8941' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1408'>
+        <var-decl name='errQuery' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1472'>
+        <var-decl name='null_field' type-id='89feb1ec' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1536'>
+        <var-decl name='curBlock' type-id='ae741ce0' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1600'>
+        <var-decl name='curOffset' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1632'>
+        <var-decl name='spaceLeft' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1664'>
+        <var-decl name='memorySize' type-id='b59d7dce' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='PGresAttDesc' type-id='efc88a28' id='0edd802d'/>
+    <class-decl name='pgresAttDesc' size-in-bits='256' is-struct='yes' visibility='default' id='efc88a28'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='name' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='tableid' type-id='63cf087c' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='96'>
+        <var-decl name='columnid' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='format' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='160'>
+        <var-decl name='typid' type-id='63cf087c' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='192'>
+        <var-decl name='typlen' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='224'>
+        <var-decl name='atttypmod' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='Oid' type-id='f0981eeb' id='63cf087c'/>
+    <typedef-decl name='PGresAttValue' type-id='e2f3e732' id='7ceef345'/>
+    <class-decl name='pgresAttValue' size-in-bits='128' is-struct='yes' visibility='default' id='e2f3e732'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='len' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='value' type-id='26a90f95' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='PGresParamDesc' type-id='569b18fa' id='034c2f9b'/>
+    <class-decl name='pgresParamDesc' size-in-bits='32' is-struct='yes' visibility='default' id='569b18fa'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='typid' type-id='63cf087c' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='ExecStatusType' type-id='08f5ca17' id='921cdb17'/>
+    <enum-decl name='__anonymous_enum__' is-anonymous='yes' id='08f5ca17'>
+      <underlying-type type-id='9cac1fee'/>
+      <enumerator name='PGRES_EMPTY_QUERY' value='0'/>
+      <enumerator name='PGRES_COMMAND_OK' value='1'/>
+      <enumerator name='PGRES_TUPLES_OK' value='2'/>
+      <enumerator name='PGRES_COPY_OUT' value='3'/>
+      <enumerator name='PGRES_COPY_IN' value='4'/>
+      <enumerator name='PGRES_BAD_RESPONSE' value='5'/>
+      <enumerator name='PGRES_NONFATAL_ERROR' value='6'/>
+      <enumerator name='PGRES_FATAL_ERROR' value='7'/>
+      <enumerator name='PGRES_COPY_BOTH' value='8'/>
+      <enumerator name='PGRES_SINGLE_TUPLE' value='9'/>
+      <enumerator name='PGRES_PIPELINE_SYNC' value='10'/>
+      <enumerator name='PGRES_PIPELINE_ABORTED' value='11'/>
+    </enum-decl>
+    <typedef-decl name='PGNoticeHooks' type-id='8b36bd1c' id='76336d7b'/>
+    <typedef-decl name='PGEvent' type-id='02f7e048' id='33aa0ae3'/>
+    <class-decl name='PGEvent' size-in-bits='320' is-struct='yes' visibility='default' id='02f7e048'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='proc' type-id='a945da4b' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='name' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='passThrough' type-id='eaa32e2f' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='192'>
+        <var-decl name='data' type-id='eaa32e2f' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='256'>
+        <var-decl name='resultInitialized' type-id='c894953d' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='PGEventProc' type-id='d2d9538c' id='a945da4b'/>
+    <typedef-decl name='PGEventId' type-id='40ed39d2' id='e727f48e'/>
+    <enum-decl name='__anonymous_enum__1' is-anonymous='yes' id='40ed39d2'>
+      <underlying-type type-id='9cac1fee'/>
+      <enumerator name='PGEVT_REGISTER' value='0'/>
+      <enumerator name='PGEVT_CONNRESET' value='1'/>
+      <enumerator name='PGEVT_CONNDESTROY' value='2'/>
+      <enumerator name='PGEVT_RESULTCREATE' value='3'/>
+      <enumerator name='PGEVT_RESULTCOPY' value='4'/>
+      <enumerator name='PGEVT_RESULTDESTROY' value='5'/>
+    </enum-decl>
+    <typedef-decl name='PGMessageField' type-id='a39f2929' id='2c6470ac'/>
+    <class-decl name='pgMessageField' size-in-bits='128' is-struct='yes' visibility='default' id='a39f2929'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='next' type-id='5297b901' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='code' type-id='a84c031d' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='72'>
+        <var-decl name='contents' type-id='e84913bd' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <union-decl name='pgresult_data' size-in-bits='64' visibility='default' id='d0998e85'>
+      <data-member access='private'>
+        <var-decl name='next' type-id='ae741ce0' visibility='default'/>
+      </data-member>
+      <data-member access='private'>
+        <var-decl name='space' type-id='89feb1ec' visibility='default'/>
+      </data-member>
+    </union-decl>
+    <typedef-decl name='PGresult_data' type-id='d0998e85' id='97dd0d15'/>
+    <typedef-decl name='PQnoticeProcessor' type-id='8102f025' id='af31ca99'/>
+    <typedef-decl name='ConnStatusType' type-id='3fed383f' id='0b876eb4'/>
+    <enum-decl name='__anonymous_enum__2' is-anonymous='yes' id='3fed383f'>
+      <underlying-type type-id='9cac1fee'/>
+      <enumerator name='CONNECTION_OK' value='0'/>
+      <enumerator name='CONNECTION_BAD' value='1'/>
+      <enumerator name='CONNECTION_STARTED' value='2'/>
+      <enumerator name='CONNECTION_MADE' value='3'/>
+      <enumerator name='CONNECTION_AWAITING_RESPONSE' value='4'/>
+      <enumerator name='CONNECTION_AUTH_OK' value='5'/>
+      <enumerator name='CONNECTION_SETENV' value='6'/>
+      <enumerator name='CONNECTION_SSL_STARTUP' value='7'/>
+      <enumerator name='CONNECTION_NEEDED' value='8'/>
+      <enumerator name='CONNECTION_CHECK_WRITABLE' value='9'/>
+      <enumerator name='CONNECTION_CONSUME' value='10'/>
+      <enumerator name='CONNECTION_GSS_STARTUP' value='11'/>
+      <enumerator name='CONNECTION_CHECK_TARGET' value='12'/>
+      <enumerator name='CONNECTION_CHECK_STANDBY' value='13'/>
+    </enum-decl>
+    <typedef-decl name='PGAsyncStatusType' type-id='3eed36ac' id='4847ce6d'/>
+    <enum-decl name='__anonymous_enum__3' is-anonymous='yes' id='3eed36ac'>
+      <underlying-type type-id='9cac1fee'/>
+      <enumerator name='PGASYNC_IDLE' value='0'/>
+      <enumerator name='PGASYNC_BUSY' value='1'/>
+      <enumerator name='PGASYNC_READY' value='2'/>
+      <enumerator name='PGASYNC_READY_MORE' value='3'/>
+      <enumerator name='PGASYNC_COPY_IN' value='4'/>
+      <enumerator name='PGASYNC_COPY_OUT' value='5'/>
+      <enumerator name='PGASYNC_COPY_BOTH' value='6'/>
+      <enumerator name='PGASYNC_PIPELINE_IDLE' value='7'/>
+    </enum-decl>
+    <typedef-decl name='PGTransactionStatusType' type-id='3ded3519' id='280022c9'/>
+    <enum-decl name='__anonymous_enum__4' is-anonymous='yes' id='3ded3519'>
+      <underlying-type type-id='9cac1fee'/>
+      <enumerator name='PQTRANS_IDLE' value='0'/>
+      <enumerator name='PQTRANS_ACTIVE' value='1'/>
+      <enumerator name='PQTRANS_INTRANS' value='2'/>
+      <enumerator name='PQTRANS_INERROR' value='3'/>
+      <enumerator name='PQTRANS_UNKNOWN' value='4'/>
+    </enum-decl>
+    <typedef-decl name='PGpipelineStatus' type-id='3ced3386' id='7691cfc1'/>
+    <enum-decl name='__anonymous_enum__5' is-anonymous='yes' id='3ced3386'>
+      <underlying-type type-id='9cac1fee'/>
+      <enumerator name='PQ_PIPELINE_OFF' value='0'/>
+      <enumerator name='PQ_PIPELINE_ON' value='1'/>
+      <enumerator name='PQ_PIPELINE_ABORTED' value='2'/>
+    </enum-decl>
+    <typedef-decl name='PGnotify' type-id='7d78c1a9' id='90054450'/>
+    <class-decl name='pgNotify' size-in-bits='256' is-struct='yes' visibility='default' id='7d78c1a9'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='relname' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='be_pid' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='extra' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='192'>
+        <var-decl name='next' type-id='b9ecfcf1' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='pg_conn_host' type-id='df7265ca' id='23727e97'/>
+    <class-decl name='pg_conn_host' size-in-bits='320' is-struct='yes' visibility='default' id='df7265ca'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='type' type-id='2203a010' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='host' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='hostaddr' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='192'>
+        <var-decl name='port' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='256'>
+        <var-decl name='password' type-id='26a90f95' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='pg_conn_host_type' type-id='f050b1c4' id='2203a010'/>
+    <enum-decl name='pg_conn_host_type' id='f050b1c4'>
+      <underlying-type type-id='9cac1fee'/>
+      <enumerator name='CHT_HOST_NAME' value='0'/>
+      <enumerator name='CHT_HOST_ADDRESS' value='1'/>
+      <enumerator name='CHT_UNIX_SOCKET' value='2'/>
+    </enum-decl>
+    <typedef-decl name='PGcmdQueueEntry' type-id='d58085c1' id='d127ebe6'/>
+    <class-decl name='PGcmdQueueEntry' size-in-bits='192' is-struct='yes' visibility='default' id='d58085c1'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='queryclass' type-id='e0c60a21' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='query' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='next' type-id='60c7de09' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='PGQueryClass' type-id='3bed31f3' id='e0c60a21'/>
+    <enum-decl name='__anonymous_enum__6' is-anonymous='yes' id='3bed31f3'>
+      <underlying-type type-id='9cac1fee'/>
+      <enumerator name='PGQUERY_SIMPLE' value='0'/>
+      <enumerator name='PGQUERY_EXTENDED' value='1'/>
+      <enumerator name='PGQUERY_PREPARE' value='2'/>
+      <enumerator name='PGQUERY_DESCRIBE' value='3'/>
+      <enumerator name='PGQUERY_SYNC' value='4'/>
+      <enumerator name='PGQUERY_CLOSE' value='5'/>
+    </enum-decl>
+    <typedef-decl name='pgsocket' type-id='95e97e5e' id='f5001928'/>
+    <typedef-decl name='SockAddr' type-id='cdb5e8f8' id='8c37a12f'/>
+    <class-decl name='__anonymous_struct__1' size-in-bits='1088' is-struct='yes' is-anonymous='yes' naming-typedef-id='8c37a12f' visibility='default' id='cdb5e8f8'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='addr' type-id='06b72fe4' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1024'>
+        <var-decl name='salen' type-id='6b2697b0' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <class-decl name='sockaddr_storage' size-in-bits='1024' is-struct='yes' visibility='default' id='06b72fe4'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='ss_family' type-id='376fda66' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='16'>
+        <var-decl name='__ss_padding' type-id='d8449f07' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='960'>
+        <var-decl name='__ss_align' type-id='7359adad' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='sa_family_t' type-id='8efea9e5' id='376fda66'/>
+    <typedef-decl name='socklen_t' type-id='83f97a0a' id='6b2697b0'/>
+    <typedef-decl name='__socklen_t' type-id='f0981eeb' id='83f97a0a'/>
+    <typedef-decl name='ProtocolVersion' type-id='7aa912f5' id='812180e4'/>
+    <typedef-decl name='uint32' type-id='f0981eeb' id='7aa912f5'/>
+    <typedef-decl name='PGTargetServerType' type-id='3aed3060' id='6a71e347'/>
+    <enum-decl name='__anonymous_enum__7' is-anonymous='yes' id='3aed3060'>
+      <underlying-type type-id='9cac1fee'/>
+      <enumerator name='SERVER_TYPE_ANY' value='0'/>
+      <enumerator name='SERVER_TYPE_READ_WRITE' value='1'/>
+      <enumerator name='SERVER_TYPE_READ_ONLY' value='2'/>
+      <enumerator name='SERVER_TYPE_PRIMARY' value='3'/>
+      <enumerator name='SERVER_TYPE_STANDBY' value='4'/>
+      <enumerator name='SERVER_TYPE_PREFER_STANDBY' value='5'/>
+      <enumerator name='SERVER_TYPE_PREFER_STANDBY_PASS2' value='6'/>
+    </enum-decl>
+    <typedef-decl name='PGLoadBalanceType' type-id='49ed47fd' id='05687e13'/>
+    <enum-decl name='__anonymous_enum__8' is-anonymous='yes' id='49ed47fd'>
+      <underlying-type type-id='9cac1fee'/>
+      <enumerator name='LOAD_BALANCE_DISABLE' value='0'/>
+      <enumerator name='LOAD_BALANCE_RANDOM' value='1'/>
+    </enum-decl>
+    <typedef-decl name='AddrInfo' type-id='fd08561c' id='79c324ab'/>
+    <class-decl name='__anonymous_struct__2' size-in-bits='1152' is-struct='yes' is-anonymous='yes' naming-typedef-id='79c324ab' visibility='default' id='fd08561c'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='family' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='addr' type-id='8c37a12f' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='pgParameterStatus' type-id='1b4efcd9' id='85458fd6'/>
+    <class-decl name='pgParameterStatus' size-in-bits='192' is-struct='yes' visibility='default' id='1b4efcd9'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='next' type-id='6ac21be1' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='name' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='value' type-id='26a90f95' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='PGTernaryBool' type-id='48ed466a' id='cd92c2cc'/>
+    <enum-decl name='__anonymous_enum__9' is-anonymous='yes' id='48ed466a'>
+      <underlying-type type-id='9cac1fee'/>
+      <enumerator name='PG_BOOL_UNKNOWN' value='0'/>
+      <enumerator name='PG_BOOL_YES' value='1'/>
+      <enumerator name='PG_BOOL_NO' value='2'/>
+    </enum-decl>
+    <typedef-decl name='PGVerbosity' type-id='17721ec6' id='602f6566'/>
+    <enum-decl name='__anonymous_enum__10' is-anonymous='yes' id='17721ec6'>
+      <underlying-type type-id='9cac1fee'/>
+      <enumerator name='PQERRORS_TERSE' value='0'/>
+      <enumerator name='PQERRORS_DEFAULT' value='1'/>
+      <enumerator name='PQERRORS_VERBOSE' value='2'/>
+      <enumerator name='PQERRORS_SQLSTATE' value='3'/>
+    </enum-decl>
+    <typedef-decl name='PGContextVisibility' type-id='18722059' id='0534f30c'/>
+    <enum-decl name='__anonymous_enum__11' is-anonymous='yes' id='18722059'>
+      <underlying-type type-id='9cac1fee'/>
+      <enumerator name='PQSHOW_CONTEXT_NEVER' value='0'/>
+      <enumerator name='PQSHOW_CONTEXT_ERRORS' value='1'/>
+      <enumerator name='PQSHOW_CONTEXT_ALWAYS' value='2'/>
+    </enum-decl>
+    <typedef-decl name='PGlobjfuncs' type-id='566fb0d0' id='fb034143'/>
+    <class-decl name='pgLobjfuncs' size-in-bits='416' is-struct='yes' visibility='default' id='566fb0d0'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='fn_lo_open' type-id='63cf087c' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='32'>
+        <var-decl name='fn_lo_close' type-id='63cf087c' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='fn_lo_creat' type-id='63cf087c' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='96'>
+        <var-decl name='fn_lo_create' type-id='63cf087c' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='fn_lo_unlink' type-id='63cf087c' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='160'>
+        <var-decl name='fn_lo_lseek' type-id='63cf087c' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='192'>
+        <var-decl name='fn_lo_lseek64' type-id='63cf087c' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='224'>
+        <var-decl name='fn_lo_tell' type-id='63cf087c' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='256'>
+        <var-decl name='fn_lo_tell64' type-id='63cf087c' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='288'>
+        <var-decl name='fn_lo_truncate' type-id='63cf087c' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='320'>
+        <var-decl name='fn_lo_truncate64' type-id='63cf087c' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='352'>
+        <var-decl name='fn_lo_read' type-id='63cf087c' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='384'>
+        <var-decl name='fn_lo_write' type-id='63cf087c' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='pg_prng_state' type-id='4bc32f5a' id='db52f759'/>
+    <class-decl name='pg_prng_state' size-in-bits='128' is-struct='yes' visibility='default' id='4bc32f5a'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='s0' type-id='f69d0a36' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='s1' type-id='f69d0a36' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='uint64' type-id='7359adad' id='f69d0a36'/>
+    <typedef-decl name='PGdataValue' type-id='0e688e59' id='ff7d8966'/>
+    <class-decl name='pgDataValue' size-in-bits='128' is-struct='yes' visibility='default' id='0e688e59'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='len' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='value' type-id='80f4b756' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='pg_fe_sasl_mech' type-id='f3f3632a' id='52868a31'/>
+    <typedef-decl name='SSL' type-id='64a5a649' id='785e1b42'/>
+    <typedef-decl name='X509' type-id='704a7505' id='3ee76568'/>
+    <typedef-decl name='ENGINE' type-id='36ec5173' id='8796dda6'/>
+    <typedef-decl name='gss_ctx_id_t' type-id='037bfd74' id='84c6b9b8'/>
+    <typedef-decl name='gss_name_t' type-id='79306dcc' id='1abde390'/>
+    <typedef-decl name='gss_cred_id_t' type-id='2d82dc55' id='e771909b'/>
+    <typedef-decl name='PQExpBufferData' type-id='d45baed3' id='d22d5d08'/>
+    <class-decl name='PQExpBufferData' size-in-bits='192' is-struct='yes' visibility='default' id='d45baed3'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='data' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='len' type-id='b59d7dce' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='maxlen' type-id='b59d7dce' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <pointer-type-def type-id='79c324ab' size-in-bits='64' id='abeb6880'/>
+    <pointer-type-def type-id='8796dda6' size-in-bits='64' id='827f5e03'/>
+    <pointer-type-def type-id='aa12d1ba' size-in-bits='64' id='822cd80b'/>
+    <pointer-type-def type-id='33aa0ae3' size-in-bits='64' id='2f038e5e'/>
+    <pointer-type-def type-id='2c6470ac' size-in-bits='64' id='0c5c8941'/>
+    <pointer-type-def type-id='d58085c1' size-in-bits='64' id='60c7de09'/>
+    <pointer-type-def type-id='51b05e3b' size-in-bits='64' id='ec15dfe4'/>
+    <pointer-type-def type-id='ff7d8966' size-in-bits='64' id='af5f5041'/>
+    <pointer-type-def type-id='fb034143' size-in-bits='64' id='35ec5596'/>
+    <pointer-type-def type-id='90054450' size-in-bits='64' id='ecf4f711'/>
+    <pointer-type-def type-id='0edd802d' size-in-bits='64' id='d614db7e'/>
+    <pointer-type-def type-id='7ceef345' size-in-bits='64' id='477e7060'/>
+    <pointer-type-def type-id='477e7060' size-in-bits='64' id='d60ac47e'/>
+    <pointer-type-def type-id='034c2f9b' size-in-bits='64' id='297c0d38'/>
+    <pointer-type-def type-id='7bcca728' size-in-bits='64' id='15e678b1'/>
+    <pointer-type-def type-id='97dd0d15' size-in-bits='64' id='ae741ce0'/>
+    <pointer-type-def type-id='785e1b42' size-in-bits='64' id='1e269bf5'/>
+    <pointer-type-def type-id='3ee76568' size-in-bits='64' id='02f57381'/>
+    <pointer-type-def type-id='ec1ed955' size-in-bits='64' id='dca988a5'/>
+    <pointer-type-def type-id='a4036571' size-in-bits='64' id='570f8c59'/>
+    <pointer-type-def type-id='bb4788fa' size-in-bits='64' id='cecf4ea7'/>
+    <pointer-type-def type-id='010ae0b9' size-in-bits='64' id='e4c6fa61'/>
+    <pointer-type-def type-id='79bd3751' size-in-bits='64' id='c65a1f29'/>
+    <pointer-type-def type-id='9b3b543e' size-in-bits='64' id='0bec2760'/>
+    <pointer-type-def type-id='c894953d' size-in-bits='64' id='d8e6b335'/>
+    <pointer-type-def type-id='a84c031d' size-in-bits='64' id='26a90f95'/>
+    <pointer-type-def type-id='26a90f95' size-in-bits='64' id='9b23c9ad'/>
+    <qualified-type-def type-id='7bcca728' const='yes' id='d1184b98'/>
+    <pointer-type-def type-id='d1184b98' size-in-bits='64' id='db3f2936'/>
+    <qualified-type-def type-id='a84c031d' const='yes' id='9b45d938'/>
+    <pointer-type-def type-id='9b45d938' size-in-bits='64' id='80f4b756'/>
+    <qualified-type-def type-id='52868a31' const='yes' id='cd23e561'/>
+    <pointer-type-def type-id='cd23e561' size-in-bits='64' id='3a81f511'/>
+    <pointer-type-def type-id='3fdd6c45' size-in-bits='64' id='2d82dc55'/>
+    <pointer-type-def type-id='9ee227fe' size-in-bits='64' id='037bfd74'/>
+    <pointer-type-def type-id='a8e0a566' size-in-bits='64' id='79306dcc'/>
+    <pointer-type-def type-id='f1e4fd3a' size-in-bits='64' id='d2d9538c'/>
+    <pointer-type-def type-id='95e97e5e' size-in-bits='64' id='7292109c'/>
+    <pointer-type-def type-id='a39f2929' size-in-bits='64' id='5297b901'/>
+    <pointer-type-def type-id='7d78c1a9' size-in-bits='64' id='b9ecfcf1'/>
+    <pointer-type-def type-id='1b4efcd9' size-in-bits='64' id='6ac21be1'/>
+    <pointer-type-def type-id='23727e97' size-in-bits='64' id='ee46afa8'/>
+    <pointer-type-def type-id='c5c76c9c' size-in-bits='64' id='b7f9d8e6'/>
+    <pointer-type-def type-id='68909e7a' size-in-bits='64' id='fe1afc54'/>
+    <pointer-type-def type-id='6343bba1' size-in-bits='64' id='92c74605'/>
+    <pointer-type-def type-id='fda39aa9' size-in-bits='64' id='8102f025'/>
+    <pointer-type-def type-id='48b5725f' size-in-bits='64' id='eaa32e2f'/>
+    <pointer-type-def type-id='3196721b' size-in-bits='64' id='4196f317'/>
+    <var-decl name='pg_scram_mech' type-id='cd23e561' visibility='default'/>
+    <function-type size-in-bits='64' id='9b3b543e'>
+      <parameter type-id='eaa32e2f'/>
+      <return type-id='c894953d'/>
+    </function-type>
+    <function-type size-in-bits='64' id='f1e4fd3a'>
+      <parameter type-id='e727f48e'/>
+      <parameter type-id='eaa32e2f'/>
+      <parameter type-id='eaa32e2f'/>
+      <return type-id='95e97e5e'/>
+    </function-type>
+    <function-type size-in-bits='64' id='c5c76c9c'>
+      <parameter type-id='eaa32e2f'/>
+      <return type-id='48b5725f'/>
+    </function-type>
+    <function-type size-in-bits='64' id='68909e7a'>
+      <parameter type-id='eaa32e2f'/>
+      <parameter type-id='26a90f95'/>
+      <parameter type-id='95e97e5e'/>
+      <parameter type-id='9b23c9ad'/>
+      <parameter type-id='7292109c'/>
+      <parameter type-id='d8e6b335'/>
+      <parameter type-id='d8e6b335'/>
+      <return type-id='48b5725f'/>
+    </function-type>
+    <function-type size-in-bits='64' id='6343bba1'>
+      <parameter type-id='eaa32e2f'/>
+      <parameter type-id='db3f2936'/>
+      <return type-id='48b5725f'/>
+    </function-type>
+    <function-type size-in-bits='64' id='fda39aa9'>
+      <parameter type-id='eaa32e2f'/>
+      <parameter type-id='80f4b756'/>
+      <return type-id='48b5725f'/>
+    </function-type>
+    <function-type size-in-bits='64' id='3196721b'>
+      <parameter type-id='ec15dfe4'/>
+      <parameter type-id='80f4b756'/>
+      <parameter type-id='80f4b756'/>
+      <return type-id='eaa32e2f'/>
+    </function-type>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/libpq/fe-auth.c' language='LANG_C99'>
+    <function-decl name='PQencryptPasswordConn' mangled-name='PQencryptPasswordConn' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQencryptPasswordConn'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='passwd'/>
+      <parameter type-id='80f4b756' name='user'/>
+      <parameter type-id='80f4b756' name='algorithm'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQencryptPassword' mangled-name='PQencryptPassword' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQencryptPassword'>
+      <parameter type-id='80f4b756' name='passwd'/>
+      <parameter type-id='80f4b756' name='user'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/libpq/fe-connect.c' language='LANG_C99'>
+    <typedef-decl name='pgthreadlock_t' type-id='03347643' id='df5023a1'/>
+    <typedef-decl name='PQconninfoOption' type-id='274fb2ba' id='9c44ab40'/>
+    <class-decl name='_PQconninfoOption' size-in-bits='448' is-struct='yes' visibility='default' id='274fb2ba'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='keyword' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='envvar' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='compiled' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='192'>
+        <var-decl name='val' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='256'>
+        <var-decl name='label' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='320'>
+        <var-decl name='dispchar' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='384'>
+        <var-decl name='dispsize' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='PGcancel' type-id='bb26c323' id='55bea9a7'/>
+    <class-decl name='pg_cancel' size-in-bits='1344' is-struct='yes' visibility='default' id='bb26c323'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='raddr' type-id='8c37a12f' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1088'>
+        <var-decl name='be_pid' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1120'>
+        <var-decl name='be_key' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1152'>
+        <var-decl name='pgtcp_user_timeout' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1184'>
+        <var-decl name='keepalives' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1216'>
+        <var-decl name='keepalives_idle' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1248'>
+        <var-decl name='keepalives_interval' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='1280'>
+        <var-decl name='keepalives_count' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='PostgresPollingStatusType' type-id='08f5ca18' id='d716a268'/>
+    <enum-decl name='__anonymous_enum__' is-anonymous='yes' id='08f5ca18'>
+      <underlying-type type-id='9cac1fee'/>
+      <enumerator name='PGRES_POLLING_FAILED' value='0'/>
+      <enumerator name='PGRES_POLLING_READING' value='1'/>
+      <enumerator name='PGRES_POLLING_WRITING' value='2'/>
+      <enumerator name='PGRES_POLLING_OK' value='3'/>
+      <enumerator name='PGRES_POLLING_ACTIVE' value='4'/>
+    </enum-decl>
+    <typedef-decl name='PGPing' type-id='40ed39d3' id='1a5758dd'/>
+    <enum-decl name='__anonymous_enum__1' is-anonymous='yes' id='40ed39d3'>
+      <underlying-type type-id='9cac1fee'/>
+      <enumerator name='PQPING_OK' value='0'/>
+      <enumerator name='PQPING_REJECT' value='1'/>
+      <enumerator name='PQPING_NO_RESPONSE' value='2'/>
+      <enumerator name='PQPING_NO_ATTEMPT' value='3'/>
+    </enum-decl>
+    <pointer-type-def type-id='55bea9a7' size-in-bits='64' id='d2029528'/>
+    <pointer-type-def type-id='9c44ab40' size-in-bits='64' id='871381b5'/>
+    <qualified-type-def type-id='51b05e3b' const='yes' id='9245a0eb'/>
+    <pointer-type-def type-id='9245a0eb' size-in-bits='64' id='049c0fd3'/>
+    <qualified-type-def type-id='80f4b756' const='yes' id='b99c00c9'/>
+    <pointer-type-def type-id='b99c00c9' size-in-bits='64' id='13956559'/>
+    <pointer-type-def type-id='f712e2b7' size-in-bits='64' id='03347643'/>
+    <var-decl name='pg_g_threadlock' type-id='df5023a1' visibility='default'/>
+    <function-decl name='PQregisterThreadLock' mangled-name='PQregisterThreadLock' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQregisterThreadLock'>
+      <parameter type-id='df5023a1' name='newhandler'/>
+      <return type-id='df5023a1'/>
+    </function-decl>
+    <function-decl name='PQsetNoticeProcessor' mangled-name='PQsetNoticeProcessor' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsetNoticeProcessor'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='af31ca99' name='proc'/>
+      <parameter type-id='eaa32e2f' name='arg'/>
+      <return type-id='af31ca99'/>
+    </function-decl>
+    <function-decl name='PQsetNoticeReceiver' mangled-name='PQsetNoticeReceiver' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsetNoticeReceiver'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='d6489eba' name='proc'/>
+      <parameter type-id='eaa32e2f' name='arg'/>
+      <return type-id='d6489eba'/>
+    </function-decl>
+    <function-decl name='PQsetErrorContextVisibility' mangled-name='PQsetErrorContextVisibility' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsetErrorContextVisibility'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='0534f30c' name='show_context'/>
+      <return type-id='0534f30c'/>
+    </function-decl>
+    <function-decl name='PQsetErrorVerbosity' mangled-name='PQsetErrorVerbosity' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsetErrorVerbosity'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='602f6566' name='verbosity'/>
+      <return type-id='602f6566'/>
+    </function-decl>
+    <function-decl name='PQsetClientEncoding' mangled-name='PQsetClientEncoding' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsetClientEncoding'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='encoding'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQclientEncoding' mangled-name='PQclientEncoding' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQclientEncoding'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQconnectionUsedGSSAPI' mangled-name='PQconnectionUsedGSSAPI' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQconnectionUsedGSSAPI'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQconnectionUsedPassword' mangled-name='PQconnectionUsedPassword' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQconnectionUsedPassword'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQconnectionNeedsPassword' mangled-name='PQconnectionNeedsPassword' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQconnectionNeedsPassword'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQpipelineStatus' mangled-name='PQpipelineStatus' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQpipelineStatus'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='7691cfc1'/>
+    </function-decl>
+    <function-decl name='PQbackendPID' mangled-name='PQbackendPID' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQbackendPID'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQsocket' mangled-name='PQsocket' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsocket'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQerrorMessage' mangled-name='PQerrorMessage' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQerrorMessage'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQserverVersion' mangled-name='PQserverVersion' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQserverVersion'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQprotocolVersion' mangled-name='PQprotocolVersion' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQprotocolVersion'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQparameterStatus' mangled-name='PQparameterStatus' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQparameterStatus'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <parameter type-id='80f4b756' name='paramName'/>
+      <return type-id='80f4b756'/>
+    </function-decl>
+    <function-decl name='PQtransactionStatus' mangled-name='PQtransactionStatus' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQtransactionStatus'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='280022c9'/>
+    </function-decl>
+    <function-decl name='PQstatus' mangled-name='PQstatus' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQstatus'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='0b876eb4'/>
+    </function-decl>
+    <function-decl name='PQoptions' mangled-name='PQoptions' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQoptions'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQtty' mangled-name='PQtty' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQtty'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQport' mangled-name='PQport' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQport'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQhostaddr' mangled-name='PQhostaddr' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQhostaddr'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQhost' mangled-name='PQhost' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQhost'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQpass' mangled-name='PQpass' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQpass'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQuser' mangled-name='PQuser' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQuser'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQdb' mangled-name='PQdb' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQdb'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQconninfoFree' mangled-name='PQconninfoFree' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQconninfoFree'>
+      <parameter type-id='871381b5' name='connOptions'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='PQconninfo' mangled-name='PQconninfo' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQconninfo'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='871381b5'/>
+    </function-decl>
+    <function-decl name='PQconninfoParse' mangled-name='PQconninfoParse' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQconninfoParse'>
+      <parameter type-id='80f4b756' name='conninfo'/>
+      <parameter type-id='9b23c9ad' name='errmsg'/>
+      <return type-id='871381b5'/>
+    </function-decl>
+    <function-decl name='PQrequestCancel' mangled-name='PQrequestCancel' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQrequestCancel'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQcancel' mangled-name='PQcancel' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQcancel'>
+      <parameter type-id='d2029528' name='cancel'/>
+      <parameter type-id='26a90f95' name='errbuf'/>
+      <parameter type-id='95e97e5e' name='errbufsize'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQfreeCancel' mangled-name='PQfreeCancel' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQfreeCancel'>
+      <parameter type-id='d2029528' name='cancel'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='PQgetCancel' mangled-name='PQgetCancel' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQgetCancel'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='d2029528'/>
+    </function-decl>
+    <function-decl name='PQresetPoll' mangled-name='PQresetPoll' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQresetPoll'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='d716a268'/>
+    </function-decl>
+    <function-decl name='PQresetStart' mangled-name='PQresetStart' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQresetStart'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQreset' mangled-name='PQreset' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQreset'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='PQfinish' mangled-name='PQfinish' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQfinish'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='PQconnectPoll' mangled-name='PQconnectPoll' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQconnectPoll'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='d716a268'/>
+    </function-decl>
+    <function-decl name='PQsetdbLogin' mangled-name='PQsetdbLogin' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsetdbLogin'>
+      <parameter type-id='80f4b756' name='pghost'/>
+      <parameter type-id='80f4b756' name='pgport'/>
+      <parameter type-id='80f4b756' name='pgoptions'/>
+      <parameter type-id='80f4b756' name='pgtty'/>
+      <parameter type-id='80f4b756' name='dbName'/>
+      <parameter type-id='80f4b756' name='login'/>
+      <parameter type-id='80f4b756' name='pwd'/>
+      <return type-id='ec15dfe4'/>
+    </function-decl>
+    <function-decl name='PQconndefaults' mangled-name='PQconndefaults' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQconndefaults'>
+      <return type-id='871381b5'/>
+    </function-decl>
+    <function-decl name='PQconnectStart' mangled-name='PQconnectStart' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQconnectStart'>
+      <parameter type-id='80f4b756' name='conninfo'/>
+      <return type-id='ec15dfe4'/>
+    </function-decl>
+    <function-decl name='PQconnectStartParams' mangled-name='PQconnectStartParams' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQconnectStartParams'>
+      <parameter type-id='13956559' name='keywords'/>
+      <parameter type-id='13956559' name='values'/>
+      <parameter type-id='95e97e5e' name='expand_dbname'/>
+      <return type-id='ec15dfe4'/>
+    </function-decl>
+    <function-decl name='PQping' mangled-name='PQping' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQping'>
+      <parameter type-id='80f4b756' name='conninfo'/>
+      <return type-id='1a5758dd'/>
+    </function-decl>
+    <function-decl name='PQconnectdb' mangled-name='PQconnectdb' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQconnectdb'>
+      <parameter type-id='80f4b756' name='conninfo'/>
+      <return type-id='ec15dfe4'/>
+    </function-decl>
+    <function-decl name='PQpingParams' mangled-name='PQpingParams' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQpingParams'>
+      <parameter type-id='13956559' name='keywords'/>
+      <parameter type-id='13956559' name='values'/>
+      <parameter type-id='95e97e5e' name='expand_dbname'/>
+      <return type-id='1a5758dd'/>
+    </function-decl>
+    <function-decl name='PQconnectdbParams' mangled-name='PQconnectdbParams' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQconnectdbParams'>
+      <parameter type-id='13956559' name='keywords'/>
+      <parameter type-id='13956559' name='values'/>
+      <parameter type-id='95e97e5e' name='expand_dbname'/>
+      <return type-id='ec15dfe4'/>
+    </function-decl>
+    <function-type size-in-bits='64' id='f712e2b7'>
+      <parameter type-id='95e97e5e'/>
+      <return type-id='48b5725f'/>
+    </function-type>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/libpq/fe-exec.c' language='LANG_C99'>
+    <array-type-def dimensions='1' type-id='57de658a' size-in-bits='768' id='459dd743'>
+      <subrange length='12' type-id='7359adad' id='84827bdc'/>
+    </array-type-def>
+    <array-type-def dimensions='1' type-id='57de658a' size-in-bits='infinite' id='335febfa'>
+      <subrange length='infinite' id='031f2035'/>
+    </array-type-def>
+    <type-decl name='unsigned char' size-in-bits='8' id='002ac4a6'/>
+    <typedef-decl name='PQArgBlock' type-id='cf97e9fc' id='d2328d0a'/>
+    <class-decl name='__anonymous_struct__' size-in-bits='128' is-struct='yes' is-anonymous='yes' naming-typedef-id='d2328d0a' visibility='default' id='cf97e9fc'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='len' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='32'>
+        <var-decl name='isint' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='u' type-id='691be1d8' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <union-decl name='__anonymous_union__' size-in-bits='64' is-anonymous='yes' visibility='default' id='691be1d8'>
+      <data-member access='private'>
+        <var-decl name='ptr' type-id='7292109c' visibility='default'/>
+      </data-member>
+      <data-member access='private'>
+        <var-decl name='integer' type-id='95e97e5e' visibility='default'/>
+      </data-member>
+    </union-decl>
+    <qualified-type-def type-id='26a90f95' const='yes' id='57de658a'/>
+    <qualified-type-def type-id='63cf087c' const='yes' id='97b155ac'/>
+    <pointer-type-def type-id='97b155ac' size-in-bits='64' id='5229a1f2'/>
+    <qualified-type-def type-id='d2328d0a' const='yes' id='22803e3a'/>
+    <pointer-type-def type-id='22803e3a' size-in-bits='64' id='5fe1b330'/>
+    <qualified-type-def type-id='95e97e5e' const='yes' id='2448a865'/>
+    <pointer-type-def type-id='2448a865' size-in-bits='64' id='6d60f45d'/>
+    <qualified-type-def type-id='002ac4a6' const='yes' id='ea86de29'/>
+    <pointer-type-def type-id='ea86de29' size-in-bits='64' id='354f7eb9'/>
+    <pointer-type-def type-id='b59d7dce' size-in-bits='64' id='78c01427'/>
+    <pointer-type-def type-id='002ac4a6' size-in-bits='64' id='cf536864'/>
+    <var-decl name='pgresStatus' type-id='335febfa' mangled-name='pgresStatus' visibility='default' elf-symbol-id='pgresStatus'/>
+    <function-decl name='PQunescapeBytea' mangled-name='PQunescapeBytea' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQunescapeBytea'>
+      <parameter type-id='354f7eb9' name='strtext'/>
+      <parameter type-id='78c01427' name='retbuflen'/>
+      <return type-id='cf536864'/>
+    </function-decl>
+    <function-decl name='PQescapeBytea' mangled-name='PQescapeBytea' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQescapeBytea'>
+      <parameter type-id='354f7eb9' name='from'/>
+      <parameter type-id='b59d7dce' name='from_length'/>
+      <parameter type-id='78c01427' name='to_length'/>
+      <return type-id='cf536864'/>
+    </function-decl>
+    <function-decl name='PQescapeByteaConn' mangled-name='PQescapeByteaConn' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQescapeByteaConn'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='354f7eb9' name='from'/>
+      <parameter type-id='b59d7dce' name='from_length'/>
+      <parameter type-id='78c01427' name='to_length'/>
+      <return type-id='cf536864'/>
+    </function-decl>
+    <function-decl name='PQescapeIdentifier' mangled-name='PQescapeIdentifier' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQescapeIdentifier'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='str'/>
+      <parameter type-id='b59d7dce' name='len'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQescapeLiteral' mangled-name='PQescapeLiteral' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQescapeLiteral'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='str'/>
+      <parameter type-id='b59d7dce' name='len'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQescapeString' mangled-name='PQescapeString' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQescapeString'>
+      <parameter type-id='26a90f95' name='to'/>
+      <parameter type-id='80f4b756' name='from'/>
+      <parameter type-id='b59d7dce' name='length'/>
+      <return type-id='b59d7dce'/>
+    </function-decl>
+    <function-decl name='PQescapeStringConn' mangled-name='PQescapeStringConn' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQescapeStringConn'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='26a90f95' name='to'/>
+      <parameter type-id='80f4b756' name='from'/>
+      <parameter type-id='b59d7dce' name='length'/>
+      <parameter type-id='7292109c' name='error'/>
+      <return type-id='b59d7dce'/>
+    </function-decl>
+    <function-decl name='PQfreeNotify' mangled-name='PQfreeNotify' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQfreeNotify'>
+      <parameter type-id='ecf4f711' name='notify'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='PQfreemem' mangled-name='PQfreemem' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQfreemem'>
+      <parameter type-id='eaa32e2f' name='ptr'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='PQflush' mangled-name='PQflush' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQflush'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQisthreadsafe' mangled-name='PQisthreadsafe' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQisthreadsafe'>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQisnonblocking' mangled-name='PQisnonblocking' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQisnonblocking'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQsetnonblocking' mangled-name='PQsetnonblocking' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsetnonblocking'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='95e97e5e' name='arg'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQparamtype' mangled-name='PQparamtype' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQparamtype'>
+      <parameter type-id='db3f2936' name='res'/>
+      <parameter type-id='95e97e5e' name='param_num'/>
+      <return type-id='63cf087c'/>
+    </function-decl>
+    <function-decl name='PQnparams' mangled-name='PQnparams' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQnparams'>
+      <parameter type-id='db3f2936' name='res'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQgetisnull' mangled-name='PQgetisnull' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQgetisnull'>
+      <parameter type-id='db3f2936' name='res'/>
+      <parameter type-id='95e97e5e' name='tup_num'/>
+      <parameter type-id='95e97e5e' name='field_num'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQgetlength' mangled-name='PQgetlength' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQgetlength'>
+      <parameter type-id='db3f2936' name='res'/>
+      <parameter type-id='95e97e5e' name='tup_num'/>
+      <parameter type-id='95e97e5e' name='field_num'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQgetvalue' mangled-name='PQgetvalue' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQgetvalue'>
+      <parameter type-id='db3f2936' name='res'/>
+      <parameter type-id='95e97e5e' name='tup_num'/>
+      <parameter type-id='95e97e5e' name='field_num'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQcmdTuples' mangled-name='PQcmdTuples' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQcmdTuples'>
+      <parameter type-id='15e678b1' name='res'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQoidValue' mangled-name='PQoidValue' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQoidValue'>
+      <parameter type-id='db3f2936' name='res'/>
+      <return type-id='63cf087c'/>
+    </function-decl>
+    <function-decl name='PQoidStatus' mangled-name='PQoidStatus' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQoidStatus'>
+      <parameter type-id='db3f2936' name='res'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQcmdStatus' mangled-name='PQcmdStatus' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQcmdStatus'>
+      <parameter type-id='15e678b1' name='res'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQfmod' mangled-name='PQfmod' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQfmod'>
+      <parameter type-id='db3f2936' name='res'/>
+      <parameter type-id='95e97e5e' name='field_num'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQfsize' mangled-name='PQfsize' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQfsize'>
+      <parameter type-id='db3f2936' name='res'/>
+      <parameter type-id='95e97e5e' name='field_num'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQftype' mangled-name='PQftype' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQftype'>
+      <parameter type-id='db3f2936' name='res'/>
+      <parameter type-id='95e97e5e' name='field_num'/>
+      <return type-id='63cf087c'/>
+    </function-decl>
+    <function-decl name='PQfformat' mangled-name='PQfformat' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQfformat'>
+      <parameter type-id='db3f2936' name='res'/>
+      <parameter type-id='95e97e5e' name='field_num'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQftablecol' mangled-name='PQftablecol' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQftablecol'>
+      <parameter type-id='db3f2936' name='res'/>
+      <parameter type-id='95e97e5e' name='field_num'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQftable' mangled-name='PQftable' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQftable'>
+      <parameter type-id='db3f2936' name='res'/>
+      <parameter type-id='95e97e5e' name='field_num'/>
+      <return type-id='63cf087c'/>
+    </function-decl>
+    <function-decl name='PQfnumber' mangled-name='PQfnumber' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQfnumber'>
+      <parameter type-id='db3f2936' name='res'/>
+      <parameter type-id='80f4b756' name='field_name'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQfname' mangled-name='PQfname' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQfname'>
+      <parameter type-id='db3f2936' name='res'/>
+      <parameter type-id='95e97e5e' name='field_num'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQbinaryTuples' mangled-name='PQbinaryTuples' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQbinaryTuples'>
+      <parameter type-id='db3f2936' name='res'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQnfields' mangled-name='PQnfields' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQnfields'>
+      <parameter type-id='db3f2936' name='res'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQntuples' mangled-name='PQntuples' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQntuples'>
+      <parameter type-id='db3f2936' name='res'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQresultErrorField' mangled-name='PQresultErrorField' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQresultErrorField'>
+      <parameter type-id='db3f2936' name='res'/>
+      <parameter type-id='95e97e5e' name='fieldcode'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQresultVerboseErrorMessage' mangled-name='PQresultVerboseErrorMessage' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQresultVerboseErrorMessage'>
+      <parameter type-id='db3f2936' name='res'/>
+      <parameter type-id='602f6566' name='verbosity'/>
+      <parameter type-id='0534f30c' name='show_context'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQresultErrorMessage' mangled-name='PQresultErrorMessage' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQresultErrorMessage'>
+      <parameter type-id='db3f2936' name='res'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQresStatus' mangled-name='PQresStatus' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQresStatus'>
+      <parameter type-id='921cdb17' name='status'/>
+      <return type-id='26a90f95'/>
+    </function-decl>
+    <function-decl name='PQresultStatus' mangled-name='PQresultStatus' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQresultStatus'>
+      <parameter type-id='db3f2936' name='res'/>
+      <return type-id='921cdb17'/>
+    </function-decl>
+    <function-decl name='PQsendFlushRequest' mangled-name='PQsendFlushRequest' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsendFlushRequest'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQpipelineSync' mangled-name='PQpipelineSync' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQpipelineSync'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQexitPipelineMode' mangled-name='PQexitPipelineMode' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQexitPipelineMode'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQenterPipelineMode' mangled-name='PQenterPipelineMode' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQenterPipelineMode'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQfn' mangled-name='PQfn' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQfn'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='95e97e5e' name='fnid'/>
+      <parameter type-id='7292109c' name='result_buf'/>
+      <parameter type-id='7292109c' name='result_len'/>
+      <parameter type-id='95e97e5e' name='result_is_int'/>
+      <parameter type-id='5fe1b330' name='args'/>
+      <parameter type-id='95e97e5e' name='nargs'/>
+      <return type-id='15e678b1'/>
+    </function-decl>
+    <function-decl name='PQendcopy' mangled-name='PQendcopy' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQendcopy'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQputnbytes' mangled-name='PQputnbytes' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQputnbytes'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='buffer'/>
+      <parameter type-id='95e97e5e' name='nbytes'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQputline' mangled-name='PQputline' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQputline'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='string'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQgetlineAsync' mangled-name='PQgetlineAsync' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQgetlineAsync'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='26a90f95' name='buffer'/>
+      <parameter type-id='95e97e5e' name='bufsize'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQgetline' mangled-name='PQgetline' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQgetline'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='26a90f95' name='buffer'/>
+      <parameter type-id='95e97e5e' name='length'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQgetCopyData' mangled-name='PQgetCopyData' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQgetCopyData'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='9b23c9ad' name='buffer'/>
+      <parameter type-id='95e97e5e' name='async'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQputCopyEnd' mangled-name='PQputCopyEnd' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQputCopyEnd'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='errormsg'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQputCopyData' mangled-name='PQputCopyData' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQputCopyData'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='buffer'/>
+      <parameter type-id='95e97e5e' name='nbytes'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQnotifies' mangled-name='PQnotifies' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQnotifies'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='ecf4f711'/>
+    </function-decl>
+    <function-decl name='PQsendDescribePortal' mangled-name='PQsendDescribePortal' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsendDescribePortal'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='portal'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQsendDescribePrepared' mangled-name='PQsendDescribePrepared' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsendDescribePrepared'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='stmt'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQdescribePortal' mangled-name='PQdescribePortal' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQdescribePortal'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='portal'/>
+      <return type-id='15e678b1'/>
+    </function-decl>
+    <function-decl name='PQdescribePrepared' mangled-name='PQdescribePrepared' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQdescribePrepared'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='stmt'/>
+      <return type-id='15e678b1'/>
+    </function-decl>
+    <function-decl name='PQexecPrepared' mangled-name='PQexecPrepared' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQexecPrepared'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='stmtName'/>
+      <parameter type-id='95e97e5e' name='nParams'/>
+      <parameter type-id='13956559' name='paramValues'/>
+      <parameter type-id='6d60f45d' name='paramLengths'/>
+      <parameter type-id='6d60f45d' name='paramFormats'/>
+      <parameter type-id='95e97e5e' name='resultFormat'/>
+      <return type-id='15e678b1'/>
+    </function-decl>
+    <function-decl name='PQprepare' mangled-name='PQprepare' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQprepare'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='stmtName'/>
+      <parameter type-id='80f4b756' name='query'/>
+      <parameter type-id='95e97e5e' name='nParams'/>
+      <parameter type-id='5229a1f2' name='paramTypes'/>
+      <return type-id='15e678b1'/>
+    </function-decl>
+    <function-decl name='PQexecParams' mangled-name='PQexecParams' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQexecParams'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='command'/>
+      <parameter type-id='95e97e5e' name='nParams'/>
+      <parameter type-id='5229a1f2' name='paramTypes'/>
+      <parameter type-id='13956559' name='paramValues'/>
+      <parameter type-id='6d60f45d' name='paramLengths'/>
+      <parameter type-id='6d60f45d' name='paramFormats'/>
+      <parameter type-id='95e97e5e' name='resultFormat'/>
+      <return type-id='15e678b1'/>
+    </function-decl>
+    <function-decl name='PQexec' mangled-name='PQexec' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQexec'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='query'/>
+      <return type-id='15e678b1'/>
+    </function-decl>
+    <function-decl name='PQgetResult' mangled-name='PQgetResult' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQgetResult'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='15e678b1'/>
+    </function-decl>
+    <function-decl name='PQisBusy' mangled-name='PQisBusy' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQisBusy'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQconsumeInput' mangled-name='PQconsumeInput' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQconsumeInput'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQsetSingleRowMode' mangled-name='PQsetSingleRowMode' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsetSingleRowMode'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQsendQueryPrepared' mangled-name='PQsendQueryPrepared' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsendQueryPrepared'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='stmtName'/>
+      <parameter type-id='95e97e5e' name='nParams'/>
+      <parameter type-id='13956559' name='paramValues'/>
+      <parameter type-id='6d60f45d' name='paramLengths'/>
+      <parameter type-id='6d60f45d' name='paramFormats'/>
+      <parameter type-id='95e97e5e' name='resultFormat'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQsendPrepare' mangled-name='PQsendPrepare' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsendPrepare'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='stmtName'/>
+      <parameter type-id='80f4b756' name='query'/>
+      <parameter type-id='95e97e5e' name='nParams'/>
+      <parameter type-id='5229a1f2' name='paramTypes'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQsendQueryParams' mangled-name='PQsendQueryParams' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsendQueryParams'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='command'/>
+      <parameter type-id='95e97e5e' name='nParams'/>
+      <parameter type-id='5229a1f2' name='paramTypes'/>
+      <parameter type-id='13956559' name='paramValues'/>
+      <parameter type-id='6d60f45d' name='paramLengths'/>
+      <parameter type-id='6d60f45d' name='paramFormats'/>
+      <parameter type-id='95e97e5e' name='resultFormat'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQsendQuery' mangled-name='PQsendQuery' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsendQuery'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='query'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQclear' mangled-name='PQclear' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQclear'>
+      <parameter type-id='15e678b1' name='res'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='PQresultMemorySize' mangled-name='PQresultMemorySize' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQresultMemorySize'>
+      <parameter type-id='db3f2936' name='res'/>
+      <return type-id='b59d7dce'/>
+    </function-decl>
+    <function-decl name='PQresultAlloc' mangled-name='PQresultAlloc' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQresultAlloc'>
+      <parameter type-id='15e678b1' name='res'/>
+      <parameter type-id='b59d7dce' name='nBytes'/>
+      <return type-id='eaa32e2f'/>
+    </function-decl>
+    <function-decl name='PQsetvalue' mangled-name='PQsetvalue' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsetvalue'>
+      <parameter type-id='15e678b1' name='res'/>
+      <parameter type-id='95e97e5e' name='tup_num'/>
+      <parameter type-id='95e97e5e' name='field_num'/>
+      <parameter type-id='26a90f95' name='value'/>
+      <parameter type-id='95e97e5e' name='len'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQcopyResult' mangled-name='PQcopyResult' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQcopyResult'>
+      <parameter type-id='db3f2936' name='src'/>
+      <parameter type-id='95e97e5e' name='flags'/>
+      <return type-id='15e678b1'/>
+    </function-decl>
+    <function-decl name='PQsetResultAttrs' mangled-name='PQsetResultAttrs' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsetResultAttrs'>
+      <parameter type-id='15e678b1' name='res'/>
+      <parameter type-id='95e97e5e' name='numAttributes'/>
+      <parameter type-id='d614db7e' name='attDescs'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQmakeEmptyPGresult' mangled-name='PQmakeEmptyPGresult' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQmakeEmptyPGresult'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='921cdb17' name='status'/>
+      <return type-id='15e678b1'/>
+    </function-decl>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/libpq/fe-lobj.c' language='LANG_C99'>
+    <typedef-decl name='pg_int64' type-id='bd54fe1a' id='e95912f9'/>
+    <function-decl name='lo_export' mangled-name='lo_export' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lo_export'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='63cf087c' name='lobjId'/>
+      <parameter type-id='80f4b756' name='filename'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='lo_import_with_oid' mangled-name='lo_import_with_oid' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lo_import_with_oid'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='filename'/>
+      <parameter type-id='63cf087c' name='lobjId'/>
+      <return type-id='63cf087c'/>
+    </function-decl>
+    <function-decl name='lo_import' mangled-name='lo_import' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lo_import'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='filename'/>
+      <return type-id='63cf087c'/>
+    </function-decl>
+    <function-decl name='lo_unlink' mangled-name='lo_unlink' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lo_unlink'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='63cf087c' name='lobjId'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='lo_tell64' mangled-name='lo_tell64' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lo_tell64'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='95e97e5e' name='fd'/>
+      <return type-id='e95912f9'/>
+    </function-decl>
+    <function-decl name='lo_tell' mangled-name='lo_tell' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lo_tell'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='95e97e5e' name='fd'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='lo_create' mangled-name='lo_create' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lo_create'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='63cf087c' name='lobjId'/>
+      <return type-id='63cf087c'/>
+    </function-decl>
+    <function-decl name='lo_creat' mangled-name='lo_creat' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lo_creat'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='95e97e5e' name='mode'/>
+      <return type-id='63cf087c'/>
+    </function-decl>
+    <function-decl name='lo_lseek64' mangled-name='lo_lseek64' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lo_lseek64'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='95e97e5e' name='fd'/>
+      <parameter type-id='e95912f9' name='offset'/>
+      <parameter type-id='95e97e5e' name='whence'/>
+      <return type-id='e95912f9'/>
+    </function-decl>
+    <function-decl name='lo_lseek' mangled-name='lo_lseek' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lo_lseek'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='95e97e5e' name='fd'/>
+      <parameter type-id='95e97e5e' name='offset'/>
+      <parameter type-id='95e97e5e' name='whence'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='lo_write' mangled-name='lo_write' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lo_write'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='95e97e5e' name='fd'/>
+      <parameter type-id='80f4b756' name='buf'/>
+      <parameter type-id='b59d7dce' name='len'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='lo_read' mangled-name='lo_read' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lo_read'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='95e97e5e' name='fd'/>
+      <parameter type-id='26a90f95' name='buf'/>
+      <parameter type-id='b59d7dce' name='len'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='lo_truncate64' mangled-name='lo_truncate64' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lo_truncate64'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='95e97e5e' name='fd'/>
+      <parameter type-id='e95912f9' name='len'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='lo_truncate' mangled-name='lo_truncate' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lo_truncate'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='95e97e5e' name='fd'/>
+      <parameter type-id='b59d7dce' name='len'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='lo_close' mangled-name='lo_close' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lo_close'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='95e97e5e' name='fd'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='lo_open' mangled-name='lo_open' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='lo_open'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='63cf087c' name='lobjId'/>
+      <parameter type-id='95e97e5e' name='mode'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/libpq/fe-misc.c' language='LANG_C99'>
+    <function-decl name='PQenv2encoding' mangled-name='PQenv2encoding' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQenv2encoding'>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQdsplen' mangled-name='PQdsplen' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQdsplen'>
+      <parameter type-id='80f4b756' name='s'/>
+      <parameter type-id='95e97e5e' name='encoding'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQmblenBounded' mangled-name='PQmblenBounded' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQmblenBounded'>
+      <parameter type-id='80f4b756' name='s'/>
+      <parameter type-id='95e97e5e' name='encoding'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQmblen' mangled-name='PQmblen' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQmblen'>
+      <parameter type-id='80f4b756' name='s'/>
+      <parameter type-id='95e97e5e' name='encoding'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQlibVersion' mangled-name='PQlibVersion' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQlibVersion'>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/libpq/fe-print.c' language='LANG_C99'>
+    <typedef-decl name='PQprintOpt' type-id='2d5a9ab5' id='4f41284f'/>
+    <class-decl name='_PQprintOpt' size-in-bits='320' is-struct='yes' visibility='default' id='2d5a9ab5'>
+      <data-member access='public' layout-offset-in-bits='0'>
+        <var-decl name='header' type-id='194f51db' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='8'>
+        <var-decl name='align' type-id='194f51db' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='16'>
+        <var-decl name='standard' type-id='194f51db' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='24'>
+        <var-decl name='html3' type-id='194f51db' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='32'>
+        <var-decl name='expanded' type-id='194f51db' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='40'>
+        <var-decl name='pager' type-id='194f51db' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='64'>
+        <var-decl name='fieldSep' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='128'>
+        <var-decl name='tableOpt' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='192'>
+        <var-decl name='caption' type-id='26a90f95' visibility='default'/>
+      </data-member>
+      <data-member access='public' layout-offset-in-bits='256'>
+        <var-decl name='fieldName' type-id='9b23c9ad' visibility='default'/>
+      </data-member>
+    </class-decl>
+    <typedef-decl name='pqbool' type-id='a84c031d' id='194f51db'/>
+    <qualified-type-def type-id='4f41284f' const='yes' id='709b887f'/>
+    <pointer-type-def type-id='709b887f' size-in-bits='64' id='99d79dcf'/>
+    <function-decl name='PQprintTuples' mangled-name='PQprintTuples' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQprintTuples'>
+      <parameter type-id='db3f2936' name='res'/>
+      <parameter type-id='822cd80b' name='fout'/>
+      <parameter type-id='95e97e5e' name='PrintAttNames'/>
+      <parameter type-id='95e97e5e' name='TerseOutput'/>
+      <parameter type-id='95e97e5e' name='colWidth'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='PQdisplayTuples' mangled-name='PQdisplayTuples' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQdisplayTuples'>
+      <parameter type-id='db3f2936' name='res'/>
+      <parameter type-id='822cd80b' name='fp'/>
+      <parameter type-id='95e97e5e' name='fillAlign'/>
+      <parameter type-id='80f4b756' name='fieldSep'/>
+      <parameter type-id='95e97e5e' name='printHeader'/>
+      <parameter type-id='95e97e5e' name='quiet'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='PQprint' mangled-name='PQprint' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQprint'>
+      <parameter type-id='822cd80b' name='fout'/>
+      <parameter type-id='db3f2936' name='res'/>
+      <parameter type-id='99d79dcf' name='po'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/libpq/fe-secure-gssapi.c' language='LANG_C99'>
+    <function-decl name='PQgssEncInUse' mangled-name='PQgssEncInUse' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQgssEncInUse'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQgetgssctx' mangled-name='PQgetgssctx' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQgetgssctx'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='eaa32e2f'/>
+    </function-decl>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/libpq/fe-secure-openssl.c' language='LANG_C99'>
+    <typedef-decl name='PQsslKeyPassHook_OpenSSL_type' type-id='365bb6cb' id='769874b6'/>
+    <pointer-type-def type-id='690257ef' size-in-bits='64' id='365bb6cb'/>
+    <function-decl name='PQsetSSLKeyPassHook_OpenSSL' mangled-name='PQsetSSLKeyPassHook_OpenSSL' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsetSSLKeyPassHook_OpenSSL'>
+      <parameter type-id='769874b6' name='hook'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='PQgetSSLKeyPassHook_OpenSSL' mangled-name='PQgetSSLKeyPassHook_OpenSSL' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQgetSSLKeyPassHook_OpenSSL'>
+      <return type-id='769874b6'/>
+    </function-decl>
+    <function-decl name='PQdefaultSSLKeyPassHook_OpenSSL' mangled-name='PQdefaultSSLKeyPassHook_OpenSSL' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQdefaultSSLKeyPassHook_OpenSSL'>
+      <parameter type-id='26a90f95' name='buf'/>
+      <parameter type-id='95e97e5e' name='size'/>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQsslAttribute' mangled-name='PQsslAttribute' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsslAttribute'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='attribute_name'/>
+      <return type-id='80f4b756'/>
+    </function-decl>
+    <function-decl name='PQsslAttributeNames' mangled-name='PQsslAttributeNames' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsslAttributeNames'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='13956559'/>
+    </function-decl>
+    <function-decl name='PQsslStruct' mangled-name='PQsslStruct' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsslStruct'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='80f4b756' name='struct_name'/>
+      <return type-id='eaa32e2f'/>
+    </function-decl>
+    <function-decl name='PQgetssl' mangled-name='PQgetssl' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQgetssl'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='eaa32e2f'/>
+    </function-decl>
+    <function-type size-in-bits='64' id='690257ef'>
+      <parameter type-id='26a90f95'/>
+      <parameter type-id='95e97e5e'/>
+      <parameter type-id='ec15dfe4'/>
+      <return type-id='95e97e5e'/>
+    </function-type>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/libpq/fe-secure.c' language='LANG_C99'>
+    <function-decl name='PQinitOpenSSL' mangled-name='PQinitOpenSSL' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQinitOpenSSL'>
+      <parameter type-id='95e97e5e' name='do_ssl'/>
+      <parameter type-id='95e97e5e' name='do_crypto'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='PQinitSSL' mangled-name='PQinitSSL' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQinitSSL'>
+      <parameter type-id='95e97e5e' name='do_init'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='PQsslInUse' mangled-name='PQsslInUse' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsslInUse'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/libpq/fe-trace.c' language='LANG_C99'>
+    <function-decl name='PQsetTraceFlags' mangled-name='PQsetTraceFlags' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsetTraceFlags'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='95e97e5e' name='flags'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='PQuntrace' mangled-name='PQuntrace' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQuntrace'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='PQtrace' mangled-name='PQtrace' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQtrace'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='822cd80b' name='debug_port'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/libpq/legacy-pqsignal.c' language='LANG_C99'>
+    <typedef-decl name='pqsigfunc' type-id='03347643' id='b52123e6'/>
+    <function-decl name='pqsignal' mangled-name='pqsignal' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pqsignal'>
+      <parameter type-id='95e97e5e' name='signo'/>
+      <parameter type-id='b52123e6' name='func'/>
+      <return type-id='b52123e6'/>
+    </function-decl>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/libpq/libpq-events.c' language='LANG_C99'>
+    <function-decl name='PQfireResultCreateEvents' mangled-name='PQfireResultCreateEvents' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQfireResultCreateEvents'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='15e678b1' name='res'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQresultInstanceData' mangled-name='PQresultInstanceData' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQresultInstanceData'>
+      <parameter type-id='db3f2936' name='result'/>
+      <parameter type-id='a945da4b' name='proc'/>
+      <return type-id='eaa32e2f'/>
+    </function-decl>
+    <function-decl name='PQresultSetInstanceData' mangled-name='PQresultSetInstanceData' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQresultSetInstanceData'>
+      <parameter type-id='15e678b1' name='result'/>
+      <parameter type-id='a945da4b' name='proc'/>
+      <parameter type-id='eaa32e2f' name='data'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQinstanceData' mangled-name='PQinstanceData' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQinstanceData'>
+      <parameter type-id='049c0fd3' name='conn'/>
+      <parameter type-id='a945da4b' name='proc'/>
+      <return type-id='eaa32e2f'/>
+    </function-decl>
+    <function-decl name='PQsetInstanceData' mangled-name='PQsetInstanceData' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQsetInstanceData'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='a945da4b' name='proc'/>
+      <parameter type-id='eaa32e2f' name='data'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='PQregisterEventProc' mangled-name='PQregisterEventProc' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='PQregisterEventProc'>
+      <parameter type-id='ec15dfe4' name='conn'/>
+      <parameter type-id='a945da4b' name='proc'/>
+      <parameter type-id='80f4b756' name='name'/>
+      <parameter type-id='eaa32e2f' name='passThrough'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+  </abi-instr>
+  <abi-instr version='1.0' address-size='64' path='../src/interfaces/libpq/pqexpbuffer.c' language='LANG_C99'>
+    <type-decl name='variadic parameter type' id='2c1145c5'/>
+    <typedef-decl name='PQExpBuffer' type-id='34de0453' id='974bea20'/>
+    <pointer-type-def type-id='d22d5d08' size-in-bits='64' id='34de0453'/>
+    <function-decl name='appendBinaryPQExpBuffer' mangled-name='appendBinaryPQExpBuffer' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='appendBinaryPQExpBuffer'>
+      <parameter type-id='974bea20' name='str'/>
+      <parameter type-id='80f4b756' name='data'/>
+      <parameter type-id='b59d7dce' name='datalen'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='appendPQExpBufferChar' mangled-name='appendPQExpBufferChar' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='appendPQExpBufferChar'>
+      <parameter type-id='974bea20' name='str'/>
+      <parameter type-id='a84c031d' name='ch'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='appendPQExpBufferStr' mangled-name='appendPQExpBufferStr' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='appendPQExpBufferStr'>
+      <parameter type-id='974bea20' name='str'/>
+      <parameter type-id='80f4b756' name='data'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='appendPQExpBuffer' mangled-name='appendPQExpBuffer' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='appendPQExpBuffer'>
+      <parameter type-id='974bea20' name='str'/>
+      <parameter type-id='80f4b756' name='fmt'/>
+      <parameter is-variadic='yes'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='printfPQExpBuffer' mangled-name='printfPQExpBuffer' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='printfPQExpBuffer'>
+      <parameter type-id='974bea20' name='str'/>
+      <parameter type-id='80f4b756' name='fmt'/>
+      <parameter is-variadic='yes'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='enlargePQExpBuffer' mangled-name='enlargePQExpBuffer' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='enlargePQExpBuffer'>
+      <parameter type-id='974bea20' name='str'/>
+      <parameter type-id='b59d7dce' name='needed'/>
+      <return type-id='95e97e5e'/>
+    </function-decl>
+    <function-decl name='resetPQExpBuffer' mangled-name='resetPQExpBuffer' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='resetPQExpBuffer'>
+      <parameter type-id='974bea20' name='str'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='termPQExpBuffer' mangled-name='termPQExpBuffer' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='termPQExpBuffer'>
+      <parameter type-id='974bea20' name='str'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='destroyPQExpBuffer' mangled-name='destroyPQExpBuffer' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='destroyPQExpBuffer'>
+      <parameter type-id='974bea20' name='str'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='initPQExpBuffer' mangled-name='initPQExpBuffer' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='initPQExpBuffer'>
+      <parameter type-id='974bea20' name='str'/>
+      <return type-id='48b5725f'/>
+    </function-decl>
+    <function-decl name='createPQExpBuffer' mangled-name='createPQExpBuffer' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='createPQExpBuffer'>
+      <return type-id='974bea20'/>
+    </function-decl>
+  </abi-instr>
+</abi-corpus>

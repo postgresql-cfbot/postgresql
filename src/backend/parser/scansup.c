@@ -125,3 +125,65 @@ scanner_isspace(char ch)
 		return true;
 	return false;
 }
+
+/*
+ * validNamedOperator() -- return true if name adheres to the scanner rule
+ * {namedop}
+ */
+bool
+validNamedOperator(const char *name)
+{
+	size_t	len = strlen(name);
+	bool	valid_identifier;
+
+	if (len < 4 || len >= NAMEDATALEN)
+	   return false;
+
+	if (name[0] != '\\' || name[1] != '{' || name[len-1] != '}')
+		return false;
+
+	// Disregard the delimiters
+	valid_identifier = validIdentifier(name + 2, len - 3);
+
+	return valid_identifier;
+}
+
+/*
+ * validIdentifier() -- return true if name adheres to the scanner rule
+ * {identifier}
+ *
+ * Note: this function does not check if the identifier length
+ * is less than NAMEDATALEN.
+ */
+bool
+validIdentifier(const char *name, size_t len)
+{
+	uint8	c;
+	size_t	i;
+
+	// Reject if first character is not part of ident_start
+	c = name[0];
+	if ( !(c == '_'
+		|| (c >='A' && c <= 'Z')
+		|| (c >='a' && c <= 'z')
+		|| (c >= 0200 && c <= 0377)))
+	{
+		return false;
+	}
+
+	// Reject if other characters are not part of ident_cont
+	for (i = 1; i < len; ++i)
+	{
+		c = name[i];
+		if ( !(c == '_' || c == '$'
+			|| (c >='A' && c <= 'Z')
+			|| (c >='a' && c <= 'z')
+			|| (c >='0' && c <= '9')
+			|| (c >= 0200 && c <= 0377)))
+		{
+			return false;
+		}
+	}
+
+	return true;
+}

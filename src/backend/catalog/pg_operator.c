@@ -31,6 +31,7 @@
 #include "catalog/pg_type.h"
 #include "miscadmin.h"
 #include "parser/parse_oper.h"
+#include "parser/scansup.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
@@ -78,6 +79,10 @@ validOperatorName(const char *name)
 	/* Can't be empty or too long */
 	if (len == 0 || len >= NAMEDATALEN)
 		return false;
+
+	/* Is this a Named Operator? */
+	if (validNamedOperator(name))
+		return true;
 
 	/* Can't contain any invalid characters */
 	/* Test string here should match op_chars in scan.l */

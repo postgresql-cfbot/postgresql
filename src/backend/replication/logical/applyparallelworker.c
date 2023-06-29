@@ -1479,7 +1479,7 @@ pa_stream_abort(LogicalRepStreamAbortData *abort_data)
 		 */
 		for (i = list_length(subxactlist) - 1; i >= 0; i--)
 		{
-			TransactionId xid_tmp = lfirst_xid(list_nth_cell(subxactlist, i));
+			TransactionId xid_tmp = list_nth_xid(subxactlist, i);
 
 			if (xid_tmp == subxid)
 			{

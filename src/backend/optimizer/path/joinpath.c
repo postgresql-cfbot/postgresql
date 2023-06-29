@@ -1354,7 +1354,6 @@ sort_inner_and_outer(PlannerInfo *root,
 
 	foreach(l, all_pathkeys)
 	{
-		PathKey    *front_pathkey = (PathKey *) lfirst(l);
 		List	   *cur_mergeclauses;
 		List	   *outerkeys;
 		List	   *innerkeys;
@@ -1362,9 +1361,8 @@ sort_inner_and_outer(PlannerInfo *root,
 
 		/* Make a pathkey list with this guy first */
 		if (l != list_head(all_pathkeys))
-			outerkeys = lcons(front_pathkey,
-							  list_delete_nth_cell(list_copy(all_pathkeys),
-												   foreach_current_index(l)));
+			outerkeys = list_copy_move_nth_to_head(all_pathkeys,
+												   foreach_current_index(l));
 		else
 			outerkeys = all_pathkeys;	/* no work at first one... */
 

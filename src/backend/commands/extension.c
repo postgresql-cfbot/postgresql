@@ -1710,7 +1710,7 @@ get_required_extension(char *reqExtensionName,
 							reqExtensionName)));
 
 			/* Add current extension to list of parents to pass down. */
-			cascade_parents = lappend(list_copy(parents), extensionName);
+			cascade_parents = lappend_copy(parents, extensionName);
 
 			/*
 			 * Create the required extension.  We propagate the SCHEMA option

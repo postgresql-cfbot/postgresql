@@ -350,6 +350,36 @@ lappend(List *list, void *datum)
 }
 
 /*
+ * Form a new list by appending a new element to a shallow copy of the
+ * specified list.
+ *
+ * The input list is not modified.
+ *
+ * This is equivalent to, but more efficient than,
+ * lappend(list_copy(list), datum).
+ */
+List *
+lappend_copy(const List *list, void *datum)
+{
+	List	   *result;
+
+	Assert(IsPointerList(list));
+
+	if (list == NIL)
+		result = new_list(T_List, 1);
+	else
+	{
+		result = new_list(list->type, list->length + 1);
+		memcpy(result->elements, list->elements,
+			   list->length * sizeof(ListCell));
+	}
+
+	llast(result) = datum;
+	check_list_invariants(result);
+	return result;
+}
+
+/*
  * Append an integer to the specified list. See lappend()
  */
 List *
@@ -503,6 +533,36 @@ lcons(void *datum, List *list)
 	linitial(list) = datum;
 	check_list_invariants(list);
 	return list;
+}
+
+/*
+ * Form a new list by prepending a new element to a shallow copy of the
+ * specified list.
+ *
+ * The input list is not modified.
+ *
+ * This is equivalent to, but more efficient than,
+ * lcons(datum, list_copy(list)).
+ */
+List *
+lcons_copy(void *datum, const List *list)
+{
+	List	   *result;
+
+	Assert(IsPointerList(list));
+
+	if (list == NIL)
+		result = new_list(T_List, 1);
+	else
+	{
+		result = new_list(list->type, list->length + 1);
+		memcpy(result->elements + 1, list->elements,
+			   list->length * sizeof(ListCell));
+	}
+
+	linitial(result) = datum;
+	check_list_invariants(result);
+	return result;
 }
 
 /*
@@ -1649,6 +1709,32 @@ list_copy_deep(const List *oldlist)
 	for (int i = 0; i < newlist->length; i++)
 		lfirst(&newlist->elements[i]) =
 			copyObjectImpl(lfirst(&oldlist->elements[i]));
+
+	check_list_invariants(newlist);
+	return newlist;
+}
+
+/*
+ * Return a shallow copy of the specified list with nth element being moved to
+ * the head.
+ */
+List *
+list_copy_move_nth_to_head(const List *oldlist, int n)
+{
+	List	   *newlist;
+
+	if (oldlist == NIL)
+		return NIL;
+
+	Assert(n >= 0 && n < oldlist->length);
+
+	newlist = new_list(oldlist->type, oldlist->length);
+
+	newlist->elements[0] = oldlist->elements[n];
+	memcpy(newlist->elements + 1, oldlist->elements,
+		   n * sizeof(ListCell));
+	memcpy(newlist->elements + 1 + n, oldlist->elements + 1 + n,
+		   (newlist->length - 1 - n) * sizeof(ListCell));
 
 	check_list_invariants(newlist);
 	return newlist;

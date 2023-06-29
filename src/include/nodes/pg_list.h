@@ -324,6 +324,17 @@ list_nth_oid(const List *list, int n)
 	return lfirst_oid(list_nth_cell(list, n));
 }
 
+/*
+ * Return the Xid value contained in the n'th element of the specified
+ * list.
+ */
+static inline TransactionId
+list_nth_xid(const List *list, int n)
+{
+	Assert(IsA(list, XidList));
+	return lfirst_xid(list_nth_cell(list, n));
+}
+
 #define list_nth_node(type,list,n)	castNode(type, list_nth(list, n))
 
 /*
@@ -558,6 +569,7 @@ extern List *list_make5_impl(NodeTag t, ListCell datum1, ListCell datum2,
 							 ListCell datum5);
 
 extern pg_nodiscard List *lappend(List *list, void *datum);
+extern pg_nodiscard List *lappend_copy(const List *list, void *datum);
 extern pg_nodiscard List *lappend_int(List *list, int datum);
 extern pg_nodiscard List *lappend_oid(List *list, Oid datum);
 extern pg_nodiscard List *lappend_xid(List *list, TransactionId datum);
@@ -567,6 +579,7 @@ extern pg_nodiscard List *list_insert_nth_int(List *list, int pos, int datum);
 extern pg_nodiscard List *list_insert_nth_oid(List *list, int pos, Oid datum);
 
 extern pg_nodiscard List *lcons(void *datum, List *list);
+extern pg_nodiscard List *lcons_copy(void *datum, const List *list);
 extern pg_nodiscard List *lcons_int(int datum, List *list);
 extern pg_nodiscard List *lcons_oid(Oid datum, List *list);
 
@@ -625,6 +638,7 @@ extern pg_nodiscard List *list_copy(const List *oldlist);
 extern pg_nodiscard List *list_copy_head(const List *oldlist, int len);
 extern pg_nodiscard List *list_copy_tail(const List *oldlist, int nskip);
 extern pg_nodiscard List *list_copy_deep(const List *oldlist);
+extern pg_nodiscard List *list_copy_move_nth_to_head(const List *oldlist, int n);
 
 typedef int (*list_sort_comparator) (const ListCell *a, const ListCell *b);
 extern void list_sort(List *list, list_sort_comparator cmp);

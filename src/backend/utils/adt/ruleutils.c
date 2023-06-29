@@ -5435,7 +5435,7 @@ get_query_def(Query *query, StringInfo buf, List *parentnamespace,
 	AcquireRewriteLocks(query, false, false);
 
 	context.buf = buf;
-	context.namespaces = lcons(&dpns, list_copy(parentnamespace));
+	context.namespaces = lcons_copy(&dpns, parentnamespace);
 	context.windowClause = NIL;
 	context.windowTList = NIL;
 	context.varprefix = (parentnamespace != NIL ||

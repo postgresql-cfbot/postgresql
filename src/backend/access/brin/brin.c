@@ -38,6 +38,7 @@
 #include "utils/datum.h"
 #include "utils/guc.h"
 #include "utils/index_selfuncs.h"
+#include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
@@ -66,6 +67,12 @@ typedef struct BrinOpaque
 	BlockNumber bo_pagesPerRange;
 	BrinRevmap *bo_rmAccess;
 	BrinDesc   *bo_bdesc;
+
+	/* preprocessed scan keys */
+	int			bo_numScanKeys;		/* number of (preprocessed) scan keys */
+	ScanKey	   *bo_scanKeys;		/* modified copy of scan->keyData */
+	MemoryContext bo_scanKeysCxt;	/* scan-lifespan context for key data */
+
 } BrinOpaque;
 
 #define BRIN_ALL_BLOCKRANGES	InvalidBlockNumber
@@ -101,7 +108,7 @@ brinhandler(PG_FUNCTION_ARGS)
 	amroutine->amcanunique = false;
 	amroutine->amcanmulticol = true;
 	amroutine->amoptionalkey = true;
-	amroutine->amsearcharray = false;
+	amroutine->amsearcharray = true;
 	amroutine->amsearchnulls = true;
 	amroutine->amstorage = true;
 	amroutine->amclusterable = false;
@@ -335,6 +342,11 @@ brinbeginscan(Relation r, int nkeys, int norderbys)
 	opaque->bo_rmAccess = brinRevmapInitialize(r, &opaque->bo_pagesPerRange,
 											   scan->xs_snapshot);
 	opaque->bo_bdesc = brin_build_desc(r);
+
+	opaque->bo_numScanKeys = 0;
+	opaque->bo_scanKeys = NULL;
+	opaque->bo_scanKeysCxt = NULL;
+
 	scan->opaque = opaque;
 
 	return scan;
@@ -457,7 +469,7 @@ bringetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 	/* Preprocess the scan keys - split them into per-attribute arrays. */
 	for (int keyno = 0; keyno < scan->numberOfKeys; keyno++)
 	{
-		ScanKey		key = &scan->keyData[keyno];
+		ScanKey		key = opaque->bo_scanKeys[keyno];
 		AttrNumber	keyattno = key->sk_attno;
 
 		/*
@@ -747,17 +759,76 @@ void
 brinrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 		   ScanKey orderbys, int norderbys)
 {
-	/*
-	 * Other index AMs preprocess the scan keys at this point, or sometime
-	 * early during the scan; this lets them optimize by removing redundant
-	 * keys, or doing early returns when they are impossible to satisfy; see
-	 * _bt_preprocess_keys for an example.  Something like that could be added
-	 * here someday, too.
-	 */
+	BrinOpaque *bo = (BrinOpaque *) scan->opaque;
+	Relation	idxRel = scan->indexRelation;
+	MemoryContext	oldcxt;
 
 	if (scankey && scan->numberOfKeys > 0)
 		memmove(scan->keyData, scankey,
 				scan->numberOfKeys * sizeof(ScanKeyData));
+
+	/*
+	 * Use the BRIN_PROCNUM_PREPROCESS procedure (if defined) to preprocess
+	 * the scan keys. The procedure may do anything, as long as the result
+	 * looks like a ScanKey. If there's no procedure, we keep the original
+	 * scan key.
+	 *
+	 * FIXME Probably need fixes to handle NULLs correctly.
+	 */
+	if (bo->bo_scanKeysCxt == NULL)
+		bo->bo_scanKeysCxt = AllocSetContextCreate(CurrentMemoryContext,
+												   "BRIN scan keys context",
+												   ALLOCSET_SMALL_SIZES);
+	else
+		MemoryContextReset(bo->bo_scanKeysCxt);
+
+	oldcxt = MemoryContextSwitchTo(bo->bo_scanKeysCxt);
+
+	bo->bo_scanKeys = palloc0(sizeof(ScanKey) * nscankeys);
+
+	for (int i = 0; i < nscankeys; i++)
+	{
+		FmgrInfo   *finfo;
+		ScanKey		key = &scan->keyData[i];
+		Oid			procid;
+		Datum		ret;
+
+		/*
+		 * If the scan argument is NULL, nothing to preprocess.
+		 *
+		 * XXX Maybe we should leave these checks up to the _preprocess
+		 * procedures, in case there's something smart they wan to do?
+		 * But SK_ISNULL is handled by bringetbitmap() so doing it here
+		 * seems reasonable.
+		 */
+		if (key->sk_flags & SK_ISNULL)
+		{
+			bo->bo_scanKeys[i] = key;
+			continue;
+		}
+
+		/* fetch key preprocess support procedure if specified */
+		procid = index_getprocid(idxRel, key->sk_attno,
+								 BRIN_PROCNUM_PREPROCESS);
+
+		/* not specified, just point to the original key */
+		if (!OidIsValid(procid))
+		{
+			bo->bo_scanKeys[i] = key;
+			continue;
+		}
+
+		finfo = index_getprocinfo(idxRel, key->sk_attno,
+								  BRIN_PROCNUM_PREPROCESS);
+
+		ret = FunctionCall2(finfo,
+							PointerGetDatum(bo->bo_bdesc),
+							PointerGetDatum(key));
+
+		bo->bo_scanKeys[i] = (ScanKey) DatumGetPointer(ret);
+	}
+
+	MemoryContextSwitchTo(oldcxt);
 }
 
 /*

@@ -374,3 +374,138 @@ VACUUM ANALYZE brin_test_bloom;
 EXPLAIN (COSTS OFF) SELECT * FROM brin_test_bloom WHERE a = 1;
 -- Ensure brin index is not used when values are not correlated
 EXPLAIN (COSTS OFF) SELECT * FROM brin_test_bloom WHERE b = 1;
+
+
+-- do some tests on IN clauses for simple data types
+CREATE TABLE brin_in_test_bloom_1 (a INT, b BIGINT) WITH (fillfactor=10);
+INSERT INTO brin_in_test_bloom_1
+SELECT i/5 + mod(991 * i + 617, 20),
+       i/10 + mod(853 * i + 491, 30)
+  FROM generate_series(1,1000) s(i);
+
+CREATE INDEX brin_in_test_bloom_1_idx_1 ON brin_in_test_bloom_1 USING brin (a int4_bloom_ops(n_distinct_per_range=50)) WITH (pages_per_range=1);
+CREATE INDEX brin_in_test_bloom_1_idx_2 ON brin_in_test_bloom_1 USING brin (b int8_bloom_ops(n_distinct_per_range=50)) WITH (pages_per_range=1);
+
+SET enable_seqscan=off;
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE a IN (113);
+
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE a IN (113);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE a IN (113, NULL);
+
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE a IN (113, NULL);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE a IN (NULL, NULL);
+
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE a IN (NULL, NULL);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE a IN (113, 177);
+
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE a IN (113, 177);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE a IN (113, 177, NULL);
+
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE a IN (113, 177, NULL);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE a IN (113, 177, 25);
+
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE a IN (113, 177, 25);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE a IN (NULL, 113, 177, 25);
+
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE a IN (NULL, 113, 177, 25);
+
+-- a bit weird this requires a cast to bigint, unlike multi-value IN clause
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE b IN (82::bigint);
+
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE b IN (82::bigint);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE b IN (82, NULL);
+
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE b IN (82, NULL);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE b IN (NULL, NULL);
+
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE b IN (NULL, NULL);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE b IN (82, 41);
+
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE b IN (82, 41);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE b IN (82, 41, NULL);
+
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE b IN (82, 41, NULL);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE b IN (82, 41, 15);
+
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE b IN (82, 41, 15);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE b IN (NULL, 82, 41, 15);
+
+SELECT COUNT(*) FROM brin_in_test_bloom_1 WHERE b IN (NULL, 82, 41, 15);
+
+DROP TABLE brin_in_test_bloom_1;
+RESET enable_seqscan;
+
+
+-- do some tests on IN clauses for varlena data types
+CREATE TABLE brin_in_test_bloom_2 (a TEXT) WITH (fillfactor=10);
+INSERT INTO brin_in_test_bloom_2
+SELECT v FROM (SELECT row_number() OVER (ORDER BY v) c, v FROM (SELECT md5((i/13)::text) AS v FROM generate_series(1,1000) s(i)) foo) bar ORDER BY c + 25 * random();
+
+CREATE INDEX brin_in_test_bloom_2_idx ON brin_in_test_bloom_2 USING brin (a text_bloom_ops(n_distinct_per_range=50)) WITH (pages_per_range=1);
+
+SET enable_seqscan=off;
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189');
+
+SELECT COUNT(*) FROM brin_in_test_bloom_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189');
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', NULL);
+
+SELECT COUNT(*) FROM brin_in_test_bloom_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', NULL);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_2 WHERE a IN (NULL, NULL);
+
+SELECT COUNT(*) FROM brin_in_test_bloom_2 WHERE a IN (NULL, NULL);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0');
+
+SELECT COUNT(*) FROM brin_in_test_bloom_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0');
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0', NULL);
+
+SELECT COUNT(*) FROM brin_in_test_bloom_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0', NULL);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0', 'c51ce410c124a10e0db5e4b97fc2af39');
+
+SELECT COUNT(*) FROM brin_in_test_bloom_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0', 'c51ce410c124a10e0db5e4b97fc2af39');
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_bloom_2 WHERE a IN (NULL, '33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0', 'c51ce410c124a10e0db5e4b97fc2af39');
+
+SELECT COUNT(*) FROM brin_in_test_bloom_2 WHERE a IN (NULL, '33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0', 'c51ce410c124a10e0db5e4b97fc2af39');
+
+DROP TABLE brin_in_test_bloom_2;
+RESET enable_seqscan;

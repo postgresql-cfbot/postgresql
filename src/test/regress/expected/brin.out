@@ -572,3 +572,993 @@ CREATE UNLOGGED TABLE brintest_unlogged (n numrange);
 CREATE INDEX brinidx_unlogged ON brintest_unlogged USING brin (n);
 INSERT INTO brintest_unlogged VALUES (numrange(0, 2^1000::numeric));
 DROP TABLE brintest_unlogged;
+-- do some tests on IN clauses for simple data types
+CREATE TABLE brin_in_test_1 (a INT, b BIGINT) WITH (fillfactor=10);
+INSERT INTO brin_in_test_1
+SELECT i/5 + mod(991 * i + 617, 20),
+       i/10 + mod(853 * i + 491, 30)
+  FROM generate_series(1,1000) s(i);
+CREATE INDEX brin_in_test_1_idx_1 ON brin_in_test_1 USING brin (a int4_minmax_ops) WITH (pages_per_range=1);
+CREATE INDEX brin_in_test_1_idx_2 ON brin_in_test_1 USING brin (b int8_minmax_ops) WITH (pages_per_range=1);
+SET enable_seqscan=off;
+-- int: equalities
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113);
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a = 113)
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a = 113)
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113);
+ count 
+-------
+     8
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113, NULL);
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a = ANY ('{113,NULL}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a = ANY ('{113,NULL}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113, NULL);
+ count 
+-------
+     8
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (NULL, NULL);
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a = ANY ('{NULL,NULL}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a = ANY ('{NULL,NULL}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (NULL, NULL);
+ count 
+-------
+     0
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113, 177);
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a = ANY ('{113,177}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a = ANY ('{113,177}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113, 177);
+ count 
+-------
+    16
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113, 177, NULL);
+                            QUERY PLAN                             
+-------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a = ANY ('{113,177,NULL}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a = ANY ('{113,177,NULL}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113, 177, NULL);
+ count 
+-------
+    16
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113, 177, 25);
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a = ANY ('{113,177,25}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a = ANY ('{113,177,25}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113, 177, 25);
+ count 
+-------
+    24
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (NULL, 113, 177, 25);
+                              QUERY PLAN                              
+----------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a = ANY ('{NULL,113,177,25}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a = ANY ('{NULL,113,177,25}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (NULL, 113, 177, 25);
+ count 
+-------
+    24
+(1 row)
+
+-- int: less than
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[30]);
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a < ANY ('{30}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a < ANY ('{30}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[30]);
+ count 
+-------
+   103
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[20, NULL]);
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a < ANY ('{20,NULL}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a < ANY ('{20,NULL}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[20, NULL]);
+ count 
+-------
+    51
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[NULL, NULL]::int[]);
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a < ANY ('{NULL,NULL}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a < ANY ('{NULL,NULL}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[NULL, NULL]::int[]);
+ count 
+-------
+     0
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[35, 29]);
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a < ANY ('{35,29}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a < ANY ('{35,29}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[35, 29]);
+ count 
+-------
+   127
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a <= ANY (ARRAY[45, 60, NULL]);
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a <= ANY ('{45,60,NULL}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a <= ANY ('{45,60,NULL}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a <= ANY (ARRAY[45, 60, NULL]);
+ count 
+-------
+   255
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[41, 37, 55]);
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a < ANY ('{41,37,55}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a < ANY ('{41,37,55}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[41, 37, 55]);
+ count 
+-------
+   227
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a <= ANY (ARRAY[NULL, 60, 43, 94]);
+                             QUERY PLAN                              
+---------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a <= ANY ('{NULL,60,43,94}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a <= ANY ('{NULL,60,43,94}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a <= ANY (ARRAY[NULL, 60, 43, 94]);
+ count 
+-------
+   427
+(1 row)
+
+-- int: greater than
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[200]);
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a > ANY ('{200}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a > ANY ('{200}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[200]);
+ count 
+-------
+    45
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[177, NULL]);
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a > ANY ('{177,NULL}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a > ANY ('{177,NULL}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[177, NULL]);
+ count 
+-------
+   157
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[NULL, NULL]::int[]);
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a > ANY ('{NULL,NULL}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a > ANY ('{NULL,NULL}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[NULL, NULL]::int[]);
+ count 
+-------
+     0
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[153, 140]);
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a > ANY ('{153,140}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a > ANY ('{153,140}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[153, 140]);
+ count 
+-------
+   345
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a >= ANY (ARRAY[173, 191, NULL]);
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a >= ANY ('{173,191,NULL}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a >= ANY ('{173,191,NULL}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a >= ANY (ARRAY[173, 191, NULL]);
+ count 
+-------
+   185
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[120, 184, 164]);
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a > ANY ('{120,184,164}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a > ANY ('{120,184,164}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[120, 184, 164]);
+ count 
+-------
+   445
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a >= ANY (ARRAY[NULL, 130, 181, 169]);
+                               QUERY PLAN                               
+------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (a >= ANY ('{NULL,130,181,169}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_1
+               Index Cond: (a >= ANY ('{NULL,130,181,169}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a >= ANY (ARRAY[NULL, 130, 181, 169]);
+ count 
+-------
+   397
+(1 row)
+
+-- bigint: eqalities
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82);
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b = 82)
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b = 82)
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82);
+ count 
+-------
+    10
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82, NULL);
+                         QUERY PLAN                          
+-------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b = ANY ('{82,NULL}'::bigint[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b = ANY ('{82,NULL}'::bigint[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82, NULL);
+ count 
+-------
+    10
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (NULL, NULL);
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b = ANY ('{NULL,NULL}'::bigint[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b = ANY ('{NULL,NULL}'::bigint[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (NULL, NULL);
+ count 
+-------
+     0
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82, 41);
+                        QUERY PLAN                         
+-----------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b = ANY ('{82,41}'::bigint[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b = ANY ('{82,41}'::bigint[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82, 41);
+ count 
+-------
+    20
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82, 41, NULL);
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b = ANY ('{82,41,NULL}'::bigint[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b = ANY ('{82,41,NULL}'::bigint[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82, 41, NULL);
+ count 
+-------
+    20
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82, 41, 15);
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b = ANY ('{82,41,15}'::bigint[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b = ANY ('{82,41,15}'::bigint[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82, 41, 15);
+ count 
+-------
+    25
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (NULL, 82, 41, 15);
+                            QUERY PLAN                             
+-------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b = ANY ('{NULL,82,41,15}'::bigint[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b = ANY ('{NULL,82,41,15}'::bigint[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (NULL, 82, 41, 15);
+ count 
+-------
+    25
+(1 row)
+
+-- bigint: less than
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[31]);
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b < ANY ('{31}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b < ANY ('{31}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[31]);
+ count 
+-------
+   164
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[55, NULL]);
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b < ANY ('{55,NULL}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b < ANY ('{55,NULL}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[55, NULL]);
+ count 
+-------
+   404
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[NULL, NULL]::bigint[]);
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b < ANY ('{NULL,NULL}'::bigint[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b < ANY ('{NULL,NULL}'::bigint[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[NULL, NULL]::bigint[]);
+ count 
+-------
+     0
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b <= ANY (ARRAY[73, 51]);
+                         QUERY PLAN                          
+-------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b <= ANY ('{73,51}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b <= ANY ('{73,51}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b <= ANY (ARRAY[73, 51]);
+ count 
+-------
+   594
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[69, 87, NULL]);
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b < ANY ('{69,87,NULL}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b < ANY ('{69,87,NULL}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[69, 87, NULL]);
+ count 
+-------
+   724
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b <= ANY (ARRAY[82, 91, 35]);
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b <= ANY ('{82,91,35}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b <= ANY ('{82,91,35}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b <= ANY (ARRAY[82, 91, 35]);
+ count 
+-------
+   774
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[NULL, 63, 21, 85]);
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b < ANY ('{NULL,63,21,85}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b < ANY ('{NULL,63,21,85}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[NULL, 63, 21, 85]);
+ count 
+-------
+   704
+(1 row)
+
+-- bigint: greater than
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[94]);
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b > ANY ('{94}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b > ANY ('{94}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[94]);
+ count 
+-------
+   196
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[80, NULL]);
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b > ANY ('{80,NULL}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b > ANY ('{80,NULL}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[80, NULL]);
+ count 
+-------
+   336
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[NULL, NULL]::bigint[]);
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b > ANY ('{NULL,NULL}'::bigint[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b > ANY ('{NULL,NULL}'::bigint[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[NULL, NULL]::bigint[]);
+ count 
+-------
+     0
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[199, 107]);
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b > ANY ('{199,107}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b > ANY ('{199,107}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[199, 107]);
+ count 
+-------
+    78
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b >= ANY (ARRAY[182, 101, NULL]);
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b >= ANY ('{182,101,NULL}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b >= ANY ('{182,101,NULL}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b >= ANY (ARRAY[182, 101, NULL]);
+ count 
+-------
+   137
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[300, 106, 251]);
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b > ANY ('{300,106,251}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b > ANY ('{300,106,251}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[300, 106, 251]);
+ count 
+-------
+    86
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[NULL, 182, 101, 155]);
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_1
+         Recheck Cond: (b > ANY ('{NULL,182,101,155}'::integer[]))
+         ->  Bitmap Index Scan on brin_in_test_1_idx_2
+               Index Cond: (b > ANY ('{NULL,182,101,155}'::integer[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[NULL, 182, 101, 155]);
+ count 
+-------
+   127
+(1 row)
+
+DROP TABLE brin_in_test_1;
+RESET enable_seqscan;
+-- do some tests on IN clauses for varlena data types
+CREATE TABLE brin_in_test_2 (a TEXT) WITH (fillfactor=10);
+INSERT INTO brin_in_test_2
+SELECT v FROM (SELECT row_number() OVER (ORDER BY v) c, v FROM (SELECT md5((i/13)::text) AS v FROM generate_series(1,1000) s(i)) foo) bar ORDER BY c + 25 * random();
+CREATE INDEX brin_in_test_2_idx ON brin_in_test_2 USING brin (a text_minmax_ops) WITH (pages_per_range=1);
+SET enable_seqscan=off;
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189');
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_2
+         Recheck Cond: (a = '33e75ff09dd601bbe69f351039152189'::text)
+         ->  Bitmap Index Scan on brin_in_test_2_idx
+               Index Cond: (a = '33e75ff09dd601bbe69f351039152189'::text)
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189');
+ count 
+-------
+    13
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', NULL);
+                                       QUERY PLAN                                        
+-----------------------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_2
+         Recheck Cond: (a = ANY ('{33e75ff09dd601bbe69f351039152189,NULL}'::text[]))
+         ->  Bitmap Index Scan on brin_in_test_2_idx
+               Index Cond: (a = ANY ('{33e75ff09dd601bbe69f351039152189,NULL}'::text[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', NULL);
+ count 
+-------
+    13
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN (NULL, NULL);
+                         QUERY PLAN                          
+-------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_2
+         Recheck Cond: (a = ANY ('{NULL,NULL}'::text[]))
+         ->  Bitmap Index Scan on brin_in_test_2_idx
+               Index Cond: (a = ANY ('{NULL,NULL}'::text[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN (NULL, NULL);
+ count 
+-------
+     0
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0');
+                                                     QUERY PLAN                                                      
+---------------------------------------------------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_2
+         Recheck Cond: (a = ANY ('{33e75ff09dd601bbe69f351039152189,f457c545a9ded88f18ecee47145a72c0}'::text[]))
+         ->  Bitmap Index Scan on brin_in_test_2_idx
+               Index Cond: (a = ANY ('{33e75ff09dd601bbe69f351039152189,f457c545a9ded88f18ecee47145a72c0}'::text[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0');
+ count 
+-------
+    26
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0', NULL);
+                                                        QUERY PLAN                                                        
+--------------------------------------------------------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_2
+         Recheck Cond: (a = ANY ('{33e75ff09dd601bbe69f351039152189,f457c545a9ded88f18ecee47145a72c0,NULL}'::text[]))
+         ->  Bitmap Index Scan on brin_in_test_2_idx
+               Index Cond: (a = ANY ('{33e75ff09dd601bbe69f351039152189,f457c545a9ded88f18ecee47145a72c0,NULL}'::text[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0', NULL);
+ count 
+-------
+    26
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0', 'c51ce410c124a10e0db5e4b97fc2af39');
+                                                                      QUERY PLAN                                                                      
+------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_2
+         Recheck Cond: (a = ANY ('{33e75ff09dd601bbe69f351039152189,f457c545a9ded88f18ecee47145a72c0,c51ce410c124a10e0db5e4b97fc2af39}'::text[]))
+         ->  Bitmap Index Scan on brin_in_test_2_idx
+               Index Cond: (a = ANY ('{33e75ff09dd601bbe69f351039152189,f457c545a9ded88f18ecee47145a72c0,c51ce410c124a10e0db5e4b97fc2af39}'::text[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0', 'c51ce410c124a10e0db5e4b97fc2af39');
+ count 
+-------
+    39
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN (NULL, '33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0', 'c51ce410c124a10e0db5e4b97fc2af39');
+                                                                        QUERY PLAN                                                                         
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_2
+         Recheck Cond: (a = ANY ('{NULL,33e75ff09dd601bbe69f351039152189,f457c545a9ded88f18ecee47145a72c0,c51ce410c124a10e0db5e4b97fc2af39}'::text[]))
+         ->  Bitmap Index Scan on brin_in_test_2_idx
+               Index Cond: (a = ANY ('{NULL,33e75ff09dd601bbe69f351039152189,f457c545a9ded88f18ecee47145a72c0,c51ce410c124a10e0db5e4b97fc2af39}'::text[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN (NULL, '33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0', 'c51ce410c124a10e0db5e4b97fc2af39');
+ count 
+-------
+    39
+(1 row)
+
+DROP TABLE brin_in_test_2;
+RESET enable_seqscan;
+-- do some tests on IN clauses for boxes and points
+CREATE TABLE brin_in_test_3 (a BOX) WITH (fillfactor=10);
+INSERT INTO brin_in_test_3
+SELECT format('((%s,%s), (%s,%s))', x - mod(i,17), y - mod(i,13), x + mod(i,19), y + mod(i,11))::box FROM (
+  SELECT i,
+         i/10 + mod(991 * i + 617, 20) AS x,
+         i/10 + mod(853 * i + 491, 30) AS y
+    FROM generate_series(1,1000) s(i)
+) foo;
+CREATE INDEX brin_in_test_3_idx ON brin_in_test_3 USING brin (a box_inclusion_ops) WITH (pages_per_range=1);
+SET enable_seqscan=off;
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point]);
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_3
+         Recheck Cond: (a @> ANY ('{"(10,10)"}'::point[]))
+         ->  Bitmap Index Scan on brin_in_test_3_idx
+               Index Cond: (a @> ANY ('{"(10,10)"}'::point[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point]);
+ count 
+-------
+    26
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point, NULL]);
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_3
+         Recheck Cond: (a @> ANY ('{"(10,10)",NULL}'::point[]))
+         ->  Bitmap Index Scan on brin_in_test_3_idx
+               Index Cond: (a @> ANY ('{"(10,10)",NULL}'::point[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point, NULL]);
+ count 
+-------
+    26
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY[NULL::point, NULL::point]);
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_3
+         Recheck Cond: (a @> ANY ('{NULL,NULL}'::point[]))
+         ->  Bitmap Index Scan on brin_in_test_3_idx
+               Index Cond: (a @> ANY ('{NULL,NULL}'::point[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY[NULL::point, NULL::point]);
+ count 
+-------
+     0
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point, '(50,50)'::point]);
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_3
+         Recheck Cond: (a @> ANY ('{"(10,10)","(50,50)"}'::point[]))
+         ->  Bitmap Index Scan on brin_in_test_3_idx
+               Index Cond: (a @> ANY ('{"(10,10)","(50,50)"}'::point[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point, '(50,50)'::point]);
+ count 
+-------
+    80
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point, '(50,50)'::point, NULL]);
+                                  QUERY PLAN                                  
+------------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_3
+         Recheck Cond: (a @> ANY ('{"(10,10)","(50,50)",NULL}'::point[]))
+         ->  Bitmap Index Scan on brin_in_test_3_idx
+               Index Cond: (a @> ANY ('{"(10,10)","(50,50)",NULL}'::point[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point, '(50,50)'::point, NULL]);
+ count 
+-------
+    80
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point, '(50,50)'::point, '(25,25)'::point]);
+                                    QUERY PLAN                                     
+-----------------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_3
+         Recheck Cond: (a @> ANY ('{"(10,10)","(50,50)","(25,25)"}'::point[]))
+         ->  Bitmap Index Scan on brin_in_test_3_idx
+               Index Cond: (a @> ANY ('{"(10,10)","(50,50)","(25,25)"}'::point[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point, '(50,50)'::point, '(25,25)'::point]);
+ count 
+-------
+   129
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY[NULL, '(10,10)'::point, '(50,50)'::point, '(25,25)'::point]);
+                                       QUERY PLAN                                       
+----------------------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on brin_in_test_3
+         Recheck Cond: (a @> ANY ('{NULL,"(10,10)","(50,50)","(25,25)"}'::point[]))
+         ->  Bitmap Index Scan on brin_in_test_3_idx
+               Index Cond: (a @> ANY ('{NULL,"(10,10)","(50,50)","(25,25)"}'::point[]))
+(5 rows)
+
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY[NULL, '(10,10)'::point, '(50,50)'::point, '(25,25)'::point]);
+ count 
+-------
+   129
+(1 row)
+
+DROP TABLE brin_in_test_3;
+RESET enable_seqscan;

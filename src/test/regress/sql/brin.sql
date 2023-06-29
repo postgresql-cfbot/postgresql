@@ -515,3 +515,339 @@ CREATE UNLOGGED TABLE brintest_unlogged (n numrange);
 CREATE INDEX brinidx_unlogged ON brintest_unlogged USING brin (n);
 INSERT INTO brintest_unlogged VALUES (numrange(0, 2^1000::numeric));
 DROP TABLE brintest_unlogged;
+
+-- do some tests on IN clauses for simple data types
+CREATE TABLE brin_in_test_1 (a INT, b BIGINT) WITH (fillfactor=10);
+INSERT INTO brin_in_test_1
+SELECT i/5 + mod(991 * i + 617, 20),
+       i/10 + mod(853 * i + 491, 30)
+  FROM generate_series(1,1000) s(i);
+
+CREATE INDEX brin_in_test_1_idx_1 ON brin_in_test_1 USING brin (a int4_minmax_ops) WITH (pages_per_range=1);
+CREATE INDEX brin_in_test_1_idx_2 ON brin_in_test_1 USING brin (b int8_minmax_ops) WITH (pages_per_range=1);
+
+SET enable_seqscan=off;
+
+-- int: equalities
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113, NULL);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113, NULL);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (NULL, NULL);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (NULL, NULL);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113, 177);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113, 177);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113, 177, NULL);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113, 177, NULL);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113, 177, 25);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (113, 177, 25);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (NULL, 113, 177, 25);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a IN (NULL, 113, 177, 25);
+
+-- int: less than
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[30]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[30]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[20, NULL]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[20, NULL]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[NULL, NULL]::int[]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[NULL, NULL]::int[]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[35, 29]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[35, 29]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a <= ANY (ARRAY[45, 60, NULL]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a <= ANY (ARRAY[45, 60, NULL]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[41, 37, 55]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a < ANY (ARRAY[41, 37, 55]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a <= ANY (ARRAY[NULL, 60, 43, 94]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a <= ANY (ARRAY[NULL, 60, 43, 94]);
+
+
+-- int: greater than
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[200]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[200]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[177, NULL]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[177, NULL]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[NULL, NULL]::int[]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[NULL, NULL]::int[]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[153, 140]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[153, 140]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a >= ANY (ARRAY[173, 191, NULL]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a >= ANY (ARRAY[173, 191, NULL]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[120, 184, 164]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a > ANY (ARRAY[120, 184, 164]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a >= ANY (ARRAY[NULL, 130, 181, 169]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE a >= ANY (ARRAY[NULL, 130, 181, 169]);
+
+
+-- bigint: eqalities
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82, NULL);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82, NULL);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (NULL, NULL);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (NULL, NULL);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82, 41);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82, 41);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82, 41, NULL);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82, 41, NULL);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82, 41, 15);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (82, 41, 15);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (NULL, 82, 41, 15);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b IN (NULL, 82, 41, 15);
+
+
+-- bigint: less than
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[31]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[31]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[55, NULL]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[55, NULL]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[NULL, NULL]::bigint[]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[NULL, NULL]::bigint[]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b <= ANY (ARRAY[73, 51]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b <= ANY (ARRAY[73, 51]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[69, 87, NULL]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[69, 87, NULL]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b <= ANY (ARRAY[82, 91, 35]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b <= ANY (ARRAY[82, 91, 35]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[NULL, 63, 21, 85]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b < ANY (ARRAY[NULL, 63, 21, 85]);
+
+
+-- bigint: greater than
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[94]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[94]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[80, NULL]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[80, NULL]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[NULL, NULL]::bigint[]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[NULL, NULL]::bigint[]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[199, 107]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[199, 107]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b >= ANY (ARRAY[182, 101, NULL]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b >= ANY (ARRAY[182, 101, NULL]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[300, 106, 251]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[300, 106, 251]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[NULL, 182, 101, 155]);
+
+SELECT COUNT(*) FROM brin_in_test_1 WHERE b > ANY (ARRAY[NULL, 182, 101, 155]);
+
+
+DROP TABLE brin_in_test_1;
+RESET enable_seqscan;
+
+-- do some tests on IN clauses for varlena data types
+CREATE TABLE brin_in_test_2 (a TEXT) WITH (fillfactor=10);
+INSERT INTO brin_in_test_2
+SELECT v FROM (SELECT row_number() OVER (ORDER BY v) c, v FROM (SELECT md5((i/13)::text) AS v FROM generate_series(1,1000) s(i)) foo) bar ORDER BY c + 25 * random();
+
+CREATE INDEX brin_in_test_2_idx ON brin_in_test_2 USING brin (a text_minmax_ops) WITH (pages_per_range=1);
+
+SET enable_seqscan=off;
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189');
+
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189');
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', NULL);
+
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', NULL);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN (NULL, NULL);
+
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN (NULL, NULL);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0');
+
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0');
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0', NULL);
+
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0', NULL);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0', 'c51ce410c124a10e0db5e4b97fc2af39');
+
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN ('33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0', 'c51ce410c124a10e0db5e4b97fc2af39');
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN (NULL, '33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0', 'c51ce410c124a10e0db5e4b97fc2af39');
+
+SELECT COUNT(*) FROM brin_in_test_2 WHERE a IN (NULL, '33e75ff09dd601bbe69f351039152189', 'f457c545a9ded88f18ecee47145a72c0', 'c51ce410c124a10e0db5e4b97fc2af39');
+
+DROP TABLE brin_in_test_2;
+RESET enable_seqscan;
+
+
+-- do some tests on IN clauses for boxes and points
+CREATE TABLE brin_in_test_3 (a BOX) WITH (fillfactor=10);
+INSERT INTO brin_in_test_3
+SELECT format('((%s,%s), (%s,%s))', x - mod(i,17), y - mod(i,13), x + mod(i,19), y + mod(i,11))::box FROM (
+  SELECT i,
+         i/10 + mod(991 * i + 617, 20) AS x,
+         i/10 + mod(853 * i + 491, 30) AS y
+    FROM generate_series(1,1000) s(i)
+) foo;
+
+CREATE INDEX brin_in_test_3_idx ON brin_in_test_3 USING brin (a box_inclusion_ops) WITH (pages_per_range=1);
+
+SET enable_seqscan=off;
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point]);
+
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point, NULL]);
+
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point, NULL]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY[NULL::point, NULL::point]);
+
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY[NULL::point, NULL::point]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point, '(50,50)'::point]);
+
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point, '(50,50)'::point]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point, '(50,50)'::point, NULL]);
+
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point, '(50,50)'::point, NULL]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point, '(50,50)'::point, '(25,25)'::point]);
+
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY['(10,10)'::point, '(50,50)'::point, '(25,25)'::point]);
+
+EXPLAIN (COSTS OFF)
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY[NULL, '(10,10)'::point, '(50,50)'::point, '(25,25)'::point]);
+
+SELECT COUNT(*) FROM brin_in_test_3 WHERE a @> ANY (ARRAY[NULL, '(10,10)'::point, '(50,50)'::point, '(25,25)'::point]);
+
+DROP TABLE brin_in_test_3;
+RESET enable_seqscan;

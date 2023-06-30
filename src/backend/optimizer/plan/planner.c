@@ -17,6 +17,7 @@
 
 #include <limits.h>
 #include <math.h>
+#include <time.h>
 
 #include "access/genam.h"
 #include "access/htup_details.h"
@@ -274,11 +275,22 @@ planner(Query *parse, const char *query_string, int cursorOptions,
 		ParamListInfo boundParams)
 {
 	PlannedStmt *result;
+	struct timespec start, end;
+
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start);
 
 	if (planner_hook)
 		result = (*planner_hook) (parse, query_string, cursorOptions, boundParams);
 	else
 		result = standard_planner(parse, query_string, cursorOptions, boundParams);
+
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end);
+
+	elog(LOG,
+		 "planning time in %f nanoseconds",
+		 ((double) (end.tv_sec * 1000000000 + end.tv_nsec) -
+				 (double) (start.tv_sec * 1000000000 + start.tv_nsec)));
+
 	return result;
 }
 

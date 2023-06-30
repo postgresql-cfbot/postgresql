@@ -46,7 +46,7 @@
     <row>
      <entry>relation size</entry>
      <entry>32 TB</entry>
-     <entry>with the default <symbol>BLCKSZ</symbol> of 8192 bytes</entry>
+     <entry>with the default <symbol>CLUSTER_BLOCK_SIZE</symbol> of 8192 bytes</entry>
     </row>
 
     <row>

@@ -569,7 +569,7 @@ ginbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	BlockNumber blkno = GIN_ROOT_BLKNO;
 	GinVacuumState gvs;
 	Buffer		buffer;
-	BlockNumber rootOfPostingTree[BLCKSZ / (sizeof(IndexTupleData) + sizeof(ItemId))];
+	BlockNumber rootOfPostingTree[MAX_BLOCK_SIZE / (sizeof(IndexTupleData) + sizeof(ItemId))];
 	uint32		nRoot;
 
 	gvs.tmpCxt = AllocSetContextCreate(CurrentMemoryContext,

@@ -298,6 +298,7 @@ extern bool ConfigOptionIsVisible(struct config_generic *conf);
 /* get the current set of variables */
 extern struct config_generic **get_guc_variables(int *num_vars);
 
+extern void update_dynamic_gucs(void);
 extern void build_guc_variables(void);
 
 /* search in enum options */

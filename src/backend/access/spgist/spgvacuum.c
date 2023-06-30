@@ -128,14 +128,14 @@ vacuumLeafPage(spgBulkDeleteState *bds, Relation index, Buffer buffer,
 {
 	Page		page = BufferGetPage(buffer);
 	spgxlogVacuumLeaf xlrec;
-	OffsetNumber toDead[MaxIndexTuplesPerPage];
-	OffsetNumber toPlaceholder[MaxIndexTuplesPerPage];
-	OffsetNumber moveSrc[MaxIndexTuplesPerPage];
-	OffsetNumber moveDest[MaxIndexTuplesPerPage];
-	OffsetNumber chainSrc[MaxIndexTuplesPerPage];
-	OffsetNumber chainDest[MaxIndexTuplesPerPage];
-	OffsetNumber predecessor[MaxIndexTuplesPerPage + 1];
-	bool		deletable[MaxIndexTuplesPerPage + 1];
+	OffsetNumber toDead[MaxIndexTuplesPerPageLimit];
+	OffsetNumber toPlaceholder[MaxIndexTuplesPerPageLimit];
+	OffsetNumber moveSrc[MaxIndexTuplesPerPageLimit];
+	OffsetNumber moveDest[MaxIndexTuplesPerPageLimit];
+	OffsetNumber chainSrc[MaxIndexTuplesPerPageLimit];
+	OffsetNumber chainDest[MaxIndexTuplesPerPageLimit];
+	OffsetNumber predecessor[MaxIndexTuplesPerPageLimit + 1];
+	bool		deletable[MaxIndexTuplesPerPageLimit + 1];
 	int			nDeletable;
 	OffsetNumber i,
 				max = PageGetMaxOffsetNumber(page);
@@ -408,7 +408,7 @@ vacuumLeafRoot(spgBulkDeleteState *bds, Relation index, Buffer buffer)
 {
 	Page		page = BufferGetPage(buffer);
 	spgxlogVacuumRoot xlrec;
-	OffsetNumber toDelete[MaxIndexTuplesPerPage];
+	OffsetNumber toDelete[MaxIndexTuplesPerPageLimit];
 	OffsetNumber i,
 				max = PageGetMaxOffsetNumber(page);
 
@@ -498,8 +498,8 @@ vacuumRedirectAndPlaceholder(Relation index, Relation heaprel, Buffer buffer)
 				firstPlaceholder = InvalidOffsetNumber;
 	bool		hasNonPlaceholder = false;
 	bool		hasUpdate = false;
-	OffsetNumber itemToPlaceholder[MaxIndexTuplesPerPage];
-	OffsetNumber itemnos[MaxIndexTuplesPerPage];
+	OffsetNumber itemToPlaceholder[MaxIndexTuplesPerPageLimit];
+	OffsetNumber itemnos[MaxIndexTuplesPerPageLimit];
 	spgxlogVacuumRedirect xlrec;
 	GlobalVisState *vistest;
 

@@ -866,10 +866,10 @@ _hash_squeezebucket(Relation rel,
 	{
 		OffsetNumber roffnum;
 		OffsetNumber maxroffnum;
-		OffsetNumber deletable[MaxOffsetNumber];
-		IndexTuple	itups[MaxIndexTuplesPerPage];
-		Size		tups_size[MaxIndexTuplesPerPage];
-		OffsetNumber itup_offsets[MaxIndexTuplesPerPage];
+		OffsetNumber deletable[MaxOffsetNumberLimit];
+		IndexTuple	itups[MaxIndexTuplesPerPageLimit];
+		Size		tups_size[MaxIndexTuplesPerPageLimit];
+		OffsetNumber itup_offsets[MaxIndexTuplesPerPageLimit];
 		uint16		ndeletable = 0;
 		uint16		nitups = 0;
 		Size		all_tups_size = 0;

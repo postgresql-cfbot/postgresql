@@ -54,9 +54,9 @@ typedef struct
 	int			ndead;
 	int			nunused;
 	/* arrays that accumulate indexes of items to be changed */
-	OffsetNumber redirected[MaxHeapTuplesPerPage * 2];
-	OffsetNumber nowdead[MaxHeapTuplesPerPage];
-	OffsetNumber nowunused[MaxHeapTuplesPerPage];
+	OffsetNumber redirected[MaxHeapTuplesPerPageLimit * 2];
+	OffsetNumber nowdead[MaxHeapTuplesPerPageLimit];
+	OffsetNumber nowunused[MaxHeapTuplesPerPageLimit];
 
 	/*
 	 * marked[i] is true if item i is entered in one of the above arrays.
@@ -64,7 +64,7 @@ typedef struct
 	 * This needs to be MaxHeapTuplesPerPage + 1 long as FirstOffsetNumber is
 	 * 1. Otherwise every access would need to subtract 1.
 	 */
-	bool		marked[MaxHeapTuplesPerPage + 1];
+	bool		marked[MaxHeapTuplesPerPageLimit + 1];
 
 	/*
 	 * Tuple visibility is only computed once for each tuple, for correctness
@@ -74,7 +74,7 @@ typedef struct
 	 *
 	 * Same indexing as ->marked.
 	 */
-	int8		htsv[MaxHeapTuplesPerPage + 1];
+	int8		htsv[MaxHeapTuplesPerPageLimit + 1];
 } PruneState;
 
 /* Local functions */
@@ -187,7 +187,7 @@ heap_page_prune_opt(Relation relation, Buffer buffer)
 	 */
 	minfree = RelationGetTargetPageFreeSpace(relation,
 											 HEAP_DEFAULT_FILLFACTOR);
-	minfree = Max(minfree, BLCKSZ / 10);
+	minfree = Max(minfree, CLUSTER_BLOCK_SIZE / 10);
 
 	if (PageIsFull(page) || PageGetHeapFreeSpace(page) < minfree)
 	{
@@ -598,7 +598,7 @@ heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
 	OffsetNumber latestdead = InvalidOffsetNumber,
 				maxoff = PageGetMaxOffsetNumber(dp),
 				offnum;
-	OffsetNumber chainitems[MaxHeapTuplesPerPage];
+	OffsetNumber chainitems[MaxHeapTuplesPerPageLimit];
 	int			nchain = 0,
 				i;
 

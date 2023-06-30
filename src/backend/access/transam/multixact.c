@@ -93,7 +93,7 @@
 
 
 /*
- * Defines for MultiXactOffset page sizes.  A page is the same BLCKSZ as is
+ * Defines for MultiXactOffset page sizes.  A page is the same CLUSTER_BLOCK_SIZE as is
  * used everywhere else in Postgres.
  *
  * Note: because MultiXactOffsets are 32 bits and wrap around at 0xFFFFFFFF,
@@ -106,7 +106,7 @@
  */
 
 /* We need four bytes per offset */
-#define MULTIXACT_OFFSETS_PER_PAGE (BLCKSZ / sizeof(MultiXactOffset))
+#define MULTIXACT_OFFSETS_PER_PAGE (CLUSTER_BLOCK_SIZE / sizeof(MultiXactOffset))
 
 #define MultiXactIdToOffsetPage(xid) \
 	((xid) / (MultiXactOffset) MULTIXACT_OFFSETS_PER_PAGE)
@@ -119,7 +119,7 @@
  * additional flag bits for each TransactionId.  To do this without getting
  * into alignment issues, we store four bytes of flags, and then the
  * corresponding 4 Xids.  Each such 5-word (20-byte) set we call a "group", and
- * are stored as a whole in pages.  Thus, with 8kB BLCKSZ, we keep 409 groups
+ * are stored as a whole in pages.  Thus, with 8kB CLUSTER_BLOCK_SIZE, we keep 409 groups
  * per page.  This wastes 12 bytes per page, but that's OK -- simplicity (and
  * performance) trumps space efficiency here.
  *
@@ -138,7 +138,7 @@
 /* size in bytes of a complete group */
 #define MULTIXACT_MEMBERGROUP_SIZE \
 	(sizeof(TransactionId) * MULTIXACT_MEMBERS_PER_MEMBERGROUP + MULTIXACT_FLAGBYTES_PER_GROUP)
-#define MULTIXACT_MEMBERGROUPS_PER_PAGE (BLCKSZ / MULTIXACT_MEMBERGROUP_SIZE)
+#define MULTIXACT_MEMBERGROUPS_PER_PAGE (CLUSTER_BLOCK_SIZE / MULTIXACT_MEMBERGROUP_SIZE)
 #define MULTIXACT_MEMBERS_PER_PAGE	\
 	(MULTIXACT_MEMBERGROUPS_PER_PAGE * MULTIXACT_MEMBERS_PER_MEMBERGROUP)
 
@@ -2072,7 +2072,7 @@ TrimMultiXact(void)
 		offptr = (MultiXactOffset *) MultiXactOffsetCtl->shared->page_buffer[slotno];
 		offptr += entryno;
 
-		MemSet(offptr, 0, BLCKSZ - (entryno * sizeof(MultiXactOffset)));
+		MemSet(offptr, 0, CLUSTER_BLOCK_SIZE - (entryno * sizeof(MultiXactOffset)));
 
 		MultiXactOffsetCtl->shared->page_dirty[slotno] = true;
 	}
@@ -2104,7 +2104,7 @@ TrimMultiXact(void)
 		xidptr = (TransactionId *)
 			(MultiXactMemberCtl->shared->page_buffer[slotno] + memberoff);
 
-		MemSet(xidptr, 0, BLCKSZ - memberoff);
+		MemSet(xidptr, 0, CLUSTER_BLOCK_SIZE - memberoff);
 
 		/*
 		 * Note: we don't need to zero out the flag bits in the remaining

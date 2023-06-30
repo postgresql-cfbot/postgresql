@@ -851,7 +851,7 @@ we won't be able to hint its outputs until the second xact is sync'd, up to
 three walwriter cycles later.  This argues for keeping N (the group size)
 as small as possible.  For the moment we are setting the group size to 32,
 which makes the LSN cache space the same size as the actual clog buffer
-space (independently of BLCKSZ).
+space (independently of CLUSTER_BLOCK_SIZE).
 
 It is useful that we can run both synchronous and asynchronous commit
 transactions concurrently, but the safety of this is perhaps not

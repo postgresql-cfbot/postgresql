@@ -1089,8 +1089,8 @@ msgstr "cluster database sepertinya menggunakan format nomor floating-point yang
 
 #: access/transam/xlog.c:3648
 #, c-format
-msgid "The database cluster was initialized with BLCKSZ %d, but the server was compiled with BLCKSZ %d."
-msgstr "cluster database telah diinisialkan dengan BLCKSZ %d, tapi server telah dikompilasi dengan BLCKSZ %d."
+msgid "The database cluster was initialized with CLUSTER_BLOCK_SIZE %d, but the server was compiled with CLUSTER_BLOCK_SIZE %d."
+msgstr "cluster database telah diinisialkan dengan CLUSTER_BLOCK_SIZE %d, tapi server telah dikompilasi dengan CLUSTER_BLOCK_SIZE %d."
 
 #: access/transam/xlog.c:3651 access/transam/xlog.c:3658 access/transam/xlog.c:3665 access/transam/xlog.c:3672 access/transam/xlog.c:3679 access/transam/xlog.c:3686 access/transam/xlog.c:3693 access/transam/xlog.c:3701 access/transam/xlog.c:3708 access/transam/xlog.c:3717 access/transam/xlog.c:3724 access/transam/xlog.c:3733 access/transam/xlog.c:3740
 #, c-format

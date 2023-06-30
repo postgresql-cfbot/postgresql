@@ -77,7 +77,7 @@ test_slru_page_write(PG_FUNCTION_ARGS)
 
 	/* write given data to the page, up to the limit of the page */
 	strncpy(TestSlruCtl->shared->page_buffer[slotno], data,
-			BLCKSZ - 1);
+			CLUSTER_BLOCK_SIZE - 1);
 
 	SimpleLruWritePage(TestSlruCtl, slotno);
 	LWLockRelease(TestSLRULock);

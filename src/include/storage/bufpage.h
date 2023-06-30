@@ -325,7 +325,7 @@ static inline void
 PageValidateSpecialPointer(Page page)
 {
 	Assert(page);
-	Assert(((PageHeader) page)->pd_special <= BLCKSZ);
+	Assert(((PageHeader) page)->pd_special <= CLUSTER_BLOCK_SIZE);
 	Assert(((PageHeader) page)->pd_special >= SizeOfPageHeaderData);
 }
 
@@ -475,15 +475,15 @@ do { \
 	PageIsVerifiedExtended(page, blkno, \
 						   PIV_LOG_WARNING | PIV_REPORT_STAT)
 
-/*
- * Check that BLCKSZ is a multiple of sizeof(size_t).  In
- * PageIsVerifiedExtended(), it is much faster to check if a page is
- * full of zeroes using the native word size.  Note that this assertion
- * is kept within a header to make sure that StaticAssertDecl() works
- * across various combinations of platforms and compilers.
- */
-StaticAssertDecl(BLCKSZ == ((BLCKSZ / sizeof(size_t)) * sizeof(size_t)),
-				 "BLCKSZ has to be a multiple of sizeof(size_t)");
+/* /\* */
+/*  * Check that CLUSTER_BLOCK_SIZE is a multiple of sizeof(size_t).  In */
+/*  * PageIsVerifiedExtended(), it is much faster to check if a page is */
+/*  * full of zeroes using the native word size.  Note that this assertion */
+/*  * is kept within a header to make sure that StaticAssertDecl() works */
+/*  * across various combinations of platforms and compilers. */
+/*  *\/ */
+/* StaticAssertDecl(CLUSTER_BLOCK_SIZE == ((CLUSTER_BLOCK_SIZE / sizeof(size_t)) * sizeof(size_t)), */
+/* 				 "CLUSTER_BLOCK_SIZE has to be a multiple of sizeof(size_t)"); */
 
 extern void PageInit(Page page, Size pageSize, Size specialSize);
 extern bool PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags);

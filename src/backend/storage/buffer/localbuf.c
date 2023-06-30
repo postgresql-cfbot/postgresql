@@ -335,7 +335,7 @@ ExtendBufferedRelLocal(ExtendBufferedWhat eb,
 		buf_block = LocalBufHdrGetBlock(buf_hdr);
 
 		/* new buffers are zero-filled */
-		MemSet((char *) buf_block, 0, BLCKSZ);
+		MemSet((char *) buf_block, 0, CLUSTER_BLOCK_SIZE);
 	}
 
 	first_block = smgrnblocks(eb.smgr, fork);
@@ -745,19 +745,19 @@ GetLocalBufferStorage(void)
 		/* But not more than what we need for all remaining local bufs */
 		num_bufs = Min(num_bufs, NLocBuffer - total_bufs_allocated);
 		/* And don't overflow MaxAllocSize, either */
-		num_bufs = Min(num_bufs, MaxAllocSize / BLCKSZ);
+		num_bufs = Min(num_bufs, MaxAllocSize / CLUSTER_BLOCK_SIZE);
 
 		/* Buffers should be I/O aligned. */
 		cur_block = (char *)
 			TYPEALIGN(PG_IO_ALIGN_SIZE,
 					  MemoryContextAlloc(LocalBufferContext,
-										 num_bufs * BLCKSZ + PG_IO_ALIGN_SIZE));
+										 num_bufs * CLUSTER_BLOCK_SIZE + PG_IO_ALIGN_SIZE));
 		next_buf_in_block = 0;
 		num_bufs_in_block = num_bufs;
 	}
 
 	/* Allocate next buffer in current memory block */
-	this_buf = cur_block + next_buf_in_block * BLCKSZ;
+	this_buf = cur_block + next_buf_in_block * CLUSTER_BLOCK_SIZE;
 	next_buf_in_block++;
 	total_bufs_allocated++;
 

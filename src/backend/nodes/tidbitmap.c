@@ -13,7 +13,7 @@
  * fact that a particular page needs to be visited.
  *
  * The "lossy" storage uses one bit per disk page, so at the standard 8K
- * BLCKSZ, we can represent all pages in 64Gb of disk space in about 1Mb
+ * CLUSTER_BLOCK_SIZE, we can represent all pages in 64Gb of disk space in about 1Mb
  * of memory.  People pushing around tables of that size should have a
  * couple of Mb to spare, so we don't worry about providing a second level
  * of lossiness.  In theory we could fall back to page ranges at some
@@ -53,7 +53,7 @@
  * the per-page bitmaps variable size.  We just legislate that the size
  * is this:
  */
-#define MAX_TUPLES_PER_PAGE  MaxHeapTuplesPerPage
+#define MAX_TUPLES_PER_PAGE  MaxHeapTuplesPerPageLimit
 
 /*
  * When we have to switch over to lossy storage, we use a data structure
@@ -70,7 +70,7 @@
  * too different.  But we also want PAGES_PER_CHUNK to be a power of 2 to
  * avoid expensive integer remainder operations.  So, define it like this:
  */
-#define PAGES_PER_CHUNK  (BLCKSZ / 32)
+#define PAGES_PER_CHUNK  (MAX_BLOCK_SIZE / 32)
 
 /* We use BITS_PER_BITMAPWORD and typedef bitmapword from nodes/bitmapset.h */
 

@@ -216,8 +216,8 @@
  *
  *	  Tapes' buffers can take up substantial memory when many tapes are open at
  *	  once. We only need one tape open at a time in read mode (using a buffer
- *	  that's a multiple of BLCKSZ); but we need one tape open in write mode (each
- *	  requiring a buffer of size BLCKSZ) for each partition.
+ *	  that's a multiple of CLUSTER_BLOCK_SIZE); but we need one tape open in write mode (each
+ *	  requiring a buffer of size CLUSTER_BLOCK_SIZE) for each partition.
  *
  *	  Note that it's possible for transition states to start small but then
  *	  grow very large; for instance in the case of ARRAY_AGG. In such cases,
@@ -299,12 +299,12 @@
 
 /*
  * For reading from tapes, the buffer size must be a multiple of
- * BLCKSZ. Larger values help when reading from multiple tapes concurrently,
- * but that doesn't happen in HashAgg, so we simply use BLCKSZ. Writing to a
- * tape always uses a buffer of size BLCKSZ.
+ * CLUSTER_BLOCK_SIZE. Larger values help when reading from multiple tapes concurrently,
+ * but that doesn't happen in HashAgg, so we simply use CLUSTER_BLOCK_SIZE. Writing to a
+ * tape always uses a buffer of size CLUSTER_BLOCK_SIZE.
  */
-#define HASHAGG_READ_BUFFER_SIZE BLCKSZ
-#define HASHAGG_WRITE_BUFFER_SIZE BLCKSZ
+#define HASHAGG_READ_BUFFER_SIZE CLUSTER_BLOCK_SIZE
+#define HASHAGG_WRITE_BUFFER_SIZE CLUSTER_BLOCK_SIZE
 
 /*
  * HyperLogLog is used for estimating the cardinality of the spilled tuples in
@@ -1945,7 +1945,7 @@ hash_agg_update_metrics(AggState *aggstate, bool from_tape, int npartitions)
 	/* update disk usage */
 	if (aggstate->hash_tapeset != NULL)
 	{
-		uint64		disk_used = LogicalTapeSetBlocks(aggstate->hash_tapeset) * (BLCKSZ / 1024);
+		uint64		disk_used = LogicalTapeSetBlocks(aggstate->hash_tapeset) * (CLUSTER_BLOCK_SIZE / 1024);
 
 		if (aggstate->hash_disk_used < disk_used)
 			aggstate->hash_disk_used = disk_used;

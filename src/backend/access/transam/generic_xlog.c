@@ -45,7 +45,7 @@
  */
 #define FRAGMENT_HEADER_SIZE	(2 * sizeof(OffsetNumber))
 #define MATCH_THRESHOLD			FRAGMENT_HEADER_SIZE
-#define MAX_DELTA_SIZE			(BLCKSZ + 2 * FRAGMENT_HEADER_SIZE)
+#define MAX_DELTA_SIZE			(MAX_BLOCK_SIZE + 2 * FRAGMENT_HEADER_SIZE)
 
 /* Struct of generic xlog data for single page */
 typedef struct
@@ -241,8 +241,8 @@ computeDelta(PageData *pageData, Page curpage, Page targetpage)
 					   0, curLower);
 	/* ... and for upper part, ignoring what's between */
 	computeRegionDelta(pageData, curpage, targetpage,
-					   targetUpper, BLCKSZ,
-					   curUpper, BLCKSZ);
+					   targetUpper, CLUSTER_BLOCK_SIZE,
+					   curUpper, CLUSTER_BLOCK_SIZE);
 
 	/*
 	 * If xlog debug is enabled, then check produced delta.  Result of delta
@@ -253,11 +253,11 @@ computeDelta(PageData *pageData, Page curpage, Page targetpage)
 	{
 		PGAlignedBlock tmp;
 
-		memcpy(tmp.data, curpage, BLCKSZ);
+		memcpy(tmp.data, curpage, CLUSTER_BLOCK_SIZE);
 		applyPageRedo(tmp.data, pageData->delta, pageData->deltaLen);
 		if (memcmp(tmp.data, targetpage, targetLower) != 0 ||
 			memcmp(tmp.data + targetUpper, targetpage + targetUpper,
-				   BLCKSZ - targetUpper) != 0)
+				   CLUSTER_BLOCK_SIZE - targetUpper) != 0)
 			elog(ERROR, "result of generic xlog apply does not match");
 	}
 #endif
@@ -311,7 +311,7 @@ GenericXLogRegisterBuffer(GenericXLogState *state, Buffer buffer, int flags)
 			/* Empty slot, so use it (there cannot be a match later) */
 			page->buffer = buffer;
 			page->flags = flags;
-			memcpy(page->image, BufferGetPage(buffer), BLCKSZ);
+			memcpy(page->image, BufferGetPage(buffer), CLUSTER_BLOCK_SIZE);
 			return (Page) page->image;
 		}
 		else if (page->buffer == buffer)
@@ -373,7 +373,7 @@ GenericXLogFinish(GenericXLogState *state)
 					   pageHeader->pd_upper - pageHeader->pd_lower);
 				memcpy(page + pageHeader->pd_upper,
 					   pageData->image + pageHeader->pd_upper,
-					   BLCKSZ - pageHeader->pd_upper);
+					   CLUSTER_BLOCK_SIZE - pageHeader->pd_upper);
 
 				XLogRegisterBuffer(i, pageData->buffer,
 								   REGBUF_FORCE_IMAGE | REGBUF_STANDARD);
@@ -392,7 +392,7 @@ GenericXLogFinish(GenericXLogState *state)
 					   pageHeader->pd_upper - pageHeader->pd_lower);
 				memcpy(page + pageHeader->pd_upper,
 					   pageData->image + pageHeader->pd_upper,
-					   BLCKSZ - pageHeader->pd_upper);
+					   CLUSTER_BLOCK_SIZE - pageHeader->pd_upper);
 
 				XLogRegisterBuffer(i, pageData->buffer, REGBUF_STANDARD);
 				XLogRegisterBufData(i, pageData->delta, pageData->deltaLen);
@@ -426,7 +426,7 @@ GenericXLogFinish(GenericXLogState *state)
 				continue;
 			memcpy(BufferGetPage(pageData->buffer),
 				   pageData->image,
-				   BLCKSZ);
+				   CLUSTER_BLOCK_SIZE);
 			/* We don't worry about zeroing the "hole" in this case */
 			MarkBufferDirty(pageData->buffer);
 		}

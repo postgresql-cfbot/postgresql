@@ -13,6 +13,7 @@
 #define STREAMUTIL_H
 
 #include "access/xlogdefs.h"
+#include "common/blocksize.h"
 #include "datatype/timestamp.h"
 #include "libpq-fe.h"
 #include "pqexpbuffer.h"
@@ -25,6 +26,7 @@ extern char *dbport;
 extern char *dbname;
 extern int	dbgetpassword;
 extern int	WalSegSz;
+extern int	BlockSize;
 
 /* Connection kept global so we can disconnect easily */
 extern PGconn *conn;
@@ -56,6 +58,7 @@ extern bool GetSlotInformation(PGconn *conn, const char *slot_name,
 							   XLogRecPtr *restart_lsn,
 							   TimeLineID *restart_tli);
 extern bool RetrieveWalSegSize(PGconn *conn);
+extern bool RetrieveBlockSize(PGconn *conn);
 extern TimestampTz feGetCurrentTimestamp(void);
 extern void feTimestampDifference(TimestampTz start_time, TimestampTz stop_time,
 								  long *secs, int *microsecs);

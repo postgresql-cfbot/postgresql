@@ -800,7 +800,7 @@ smgrDoPendingSyncs(bool isCommit, bool isParallelWorker)
 		 * main fork is longer than ever but FSM fork gets shorter.
 		 */
 		if (pendingsync->is_truncated ||
-			total_blocks * BLCKSZ / 1024 >= wal_skip_threshold)
+			total_blocks * CLUSTER_BLOCK_SIZE / 1024 >= wal_skip_threshold)
 		{
 			/* allocate the initial array, or extend it, if needed */
 			if (maxrels == 0)

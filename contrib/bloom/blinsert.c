@@ -52,7 +52,7 @@ flushCachedPage(Relation index, BloomBuildState *buildstate)
 
 	state = GenericXLogStart(index);
 	page = GenericXLogRegisterBuffer(state, buffer, GENERIC_XLOG_FULL_IMAGE);
-	memcpy(page, buildstate->data.data, BLCKSZ);
+	memcpy(page, buildstate->data.data, CLUSTER_BLOCK_SIZE);
 	GenericXLogFinish(state);
 	UnlockReleaseBuffer(buffer);
 }
@@ -166,7 +166,7 @@ blbuildempty(Relation index)
 	Page		metapage;
 
 	/* Construct metapage. */
-	metapage = (Page) palloc_aligned(BLCKSZ, PG_IO_ALIGN_SIZE, 0);
+	metapage = (Page) palloc_aligned(CLUSTER_BLOCK_SIZE, PG_IO_ALIGN_SIZE, 0);
 	BloomFillMetapage(index, metapage);
 
 	/*

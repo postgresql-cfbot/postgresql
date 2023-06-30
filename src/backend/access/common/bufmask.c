@@ -76,7 +76,7 @@ mask_unused_space(Page page)
 
 	/* Sanity check */
 	if (pd_lower > pd_upper || pd_special < pd_upper ||
-		pd_lower < SizeOfPageHeaderData || pd_special > BLCKSZ)
+		pd_lower < SizeOfPageHeaderData || pd_special > CLUSTER_BLOCK_SIZE)
 	{
 		elog(ERROR, "invalid page pd_lower %u pd_upper %u pd_special %u",
 			 pd_lower, pd_upper, pd_special);
@@ -120,7 +120,7 @@ mask_page_content(Page page)
 {
 	/* Mask Page Content */
 	memset(page + SizeOfPageHeaderData, MASK_MARKER,
-		   BLCKSZ - SizeOfPageHeaderData);
+		   CLUSTER_BLOCK_SIZE - SizeOfPageHeaderData);
 
 	/* Mask pd_lower and pd_upper */
 	memset(&((PageHeader) page)->pd_lower, MASK_MARKER,

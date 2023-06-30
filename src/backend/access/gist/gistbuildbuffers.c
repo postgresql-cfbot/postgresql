@@ -187,11 +187,11 @@ gistAllocateNewPageBuffer(GISTBuildBuffers *gfbb)
 	GISTNodeBufferPage *pageBuffer;
 
 	pageBuffer = (GISTNodeBufferPage *) MemoryContextAllocZero(gfbb->context,
-															   BLCKSZ);
+															   CLUSTER_BLOCK_SIZE);
 	pageBuffer->prev = InvalidBlockNumber;
 
 	/* Set page free space */
-	PAGE_FREE_SPACE(pageBuffer) = BLCKSZ - BUFFER_PAGE_DATA_OFFSET;
+	PAGE_FREE_SPACE(pageBuffer) = CLUSTER_BLOCK_SIZE - BUFFER_PAGE_DATA_OFFSET;
 	return pageBuffer;
 }
 
@@ -379,7 +379,7 @@ gistPushItupToNodeBuffer(GISTBuildBuffers *gfbb, GISTNodeBuffer *nodeBuffer,
 		 * the new page by storing its block number in the prev-link.
 		 */
 		PAGE_FREE_SPACE(nodeBuffer->pageBuffer) =
-			BLCKSZ - MAXALIGN(offsetof(GISTNodeBufferPage, tupledata));
+			CLUSTER_BLOCK_SIZE - MAXALIGN(offsetof(GISTNodeBufferPage, tupledata));
 		nodeBuffer->pageBuffer->prev = blkno;
 
 		/* We've just added one more page */
@@ -755,7 +755,7 @@ ReadTempFileBlock(BufFile *file, long blknum, void *ptr)
 {
 	if (BufFileSeekBlock(file, blknum) != 0)
 		elog(ERROR, "could not seek to block %ld in temporary file", blknum);
-	BufFileReadExact(file, ptr, BLCKSZ);
+	BufFileReadExact(file, ptr, CLUSTER_BLOCK_SIZE);
 }
 
 static void
@@ -763,5 +763,5 @@ WriteTempFileBlock(BufFile *file, long blknum, const void *ptr)
 {
 	if (BufFileSeekBlock(file, blknum) != 0)
 		elog(ERROR, "could not seek to block %ld in temporary file", blknum);
-	BufFileWrite(file, ptr, BLCKSZ);
+	BufFileWrite(file, ptr, CLUSTER_BLOCK_SIZE);
 }

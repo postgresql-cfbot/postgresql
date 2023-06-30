@@ -179,8 +179,8 @@ get_raw_page_internal(text *relname, ForkNumber forknum, BlockNumber blkno)
 						blkno, RelationGetRelationName(rel))));
 
 	/* Initialize buffer to copy to */
-	raw_page = (bytea *) palloc(BLCKSZ + VARHDRSZ);
-	SET_VARSIZE(raw_page, BLCKSZ + VARHDRSZ);
+	raw_page = (bytea *) palloc(CLUSTER_BLOCK_SIZE + VARHDRSZ);
+	SET_VARSIZE(raw_page, CLUSTER_BLOCK_SIZE + VARHDRSZ);
 	raw_page_data = VARDATA(raw_page);
 
 	/* Take a verbatim copy of the page */
@@ -188,7 +188,7 @@ get_raw_page_internal(text *relname, ForkNumber forknum, BlockNumber blkno)
 	buf = ReadBufferExtended(rel, forknum, blkno, RBM_NORMAL, NULL);
 	LockBuffer(buf, BUFFER_LOCK_SHARE);
 
-	memcpy(raw_page_data, BufferGetPage(buf), BLCKSZ);
+	memcpy(raw_page_data, BufferGetPage(buf), CLUSTER_BLOCK_SIZE);
 
 	LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 	ReleaseBuffer(buf);
@@ -219,12 +219,12 @@ get_page_from_raw(bytea *raw_page)
 
 	raw_page_size = VARSIZE_ANY_EXHDR(raw_page);
 
-	if (raw_page_size != BLCKSZ)
+	if (raw_page_size != CLUSTER_BLOCK_SIZE)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("invalid page size"),
 				 errdetail("Expected %d bytes, got %d.",
-						   BLCKSZ, raw_page_size)));
+						   CLUSTER_BLOCK_SIZE, raw_page_size)));
 
 	page = palloc(raw_page_size);
 
@@ -357,7 +357,7 @@ page_checksum_internal(PG_FUNCTION_ARGS, enum pageinspect_version ext_version)
 	if (PageIsNew(page))
 		PG_RETURN_NULL();
 
-	PG_RETURN_INT16(pg_checksum_page((char *) page, blkno));
+	PG_RETURN_INT16(pg_checksum_page((char *) page, blkno, CLUSTER_BLOCK_SIZE));
 }
 
 Datum

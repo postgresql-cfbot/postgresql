@@ -1852,8 +1852,8 @@ msgstr "数据库集群在使用与服务器执行部分不同的浮点数格式
 
 #: access/transam/xlog.c:4677
 #, c-format
-msgid "The database cluster was initialized with BLCKSZ %d, but the server was compiled with BLCKSZ %d."
-msgstr "数据库簇是以 BLCKSZ %d 初始化的, 但是 服务器是以 BLCKSZ %d 编译的."
+msgid "The database cluster was initialized with CLUSTER_BLOCK_SIZE %d, but the server was compiled with CLUSTER_BLOCK_SIZE %d."
+msgstr "数据库簇是以 CLUSTER_BLOCK_SIZE %d 初始化的, 但是 服务器是以 CLUSTER_BLOCK_SIZE %d 编译的."
 
 #: access/transam/xlog.c:4680 access/transam/xlog.c:4687
 #: access/transam/xlog.c:4694 access/transam/xlog.c:4701

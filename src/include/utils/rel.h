@@ -368,14 +368,14 @@ typedef struct StdRdOptions
  *		Returns the relation's desired space usage per page in bytes.
  */
 #define RelationGetTargetPageUsage(relation, defaultff) \
-	(BLCKSZ * RelationGetFillFactor(relation, defaultff) / 100)
+	(CLUSTER_BLOCK_SIZE * RelationGetFillFactor(relation, defaultff) / 100)
 
 /*
  * RelationGetTargetPageFreeSpace
  *		Returns the relation's desired freespace per page in bytes.
  */
 #define RelationGetTargetPageFreeSpace(relation, defaultff) \
-	(BLCKSZ * (100 - RelationGetFillFactor(relation, defaultff)) / 100)
+	(CLUSTER_BLOCK_SIZE * (100 - RelationGetFillFactor(relation, defaultff)) / 100)
 
 /*
  * RelationIsUsedAsCatalogTable

@@ -636,7 +636,7 @@ table_block_relation_size(Relation rel, ForkNumber forkNumber)
 	else
 		nblocks = smgrnblocks(RelationGetSmgr(rel), forkNumber);
 
-	return nblocks * BLCKSZ;
+	return nblocks * CLUSTER_BLOCK_SIZE;
 }
 
 /*

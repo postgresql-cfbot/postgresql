@@ -277,6 +277,22 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
+     <varlistentry id="app-initdb-blocksize" xreflabel="blocksize">
+      <term><option>-b <replaceable>blocksize</replaceable></option></term>
+      <term><option>--block-size=<replaceable>blocksize</replaceable></option></term>
+      <listitem>
+       <para>
+        Sets the cluster's database block size
+        to <replaceable>blocksize</replaceable> kilobytes.  This should be one
+        of 1, 2, 4, 8, 16, or 32.  Many database limits are defined relative
+        to this parameter.  If unspecified, defaults to 8.
+       </para>
+       <para>
+        This used to be the compile-time parameter <literal>BLCKSZ</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="app-initdb-option-locale">
       <term><option>--locale=<replaceable>locale</replaceable></option></term>
       <listitem>

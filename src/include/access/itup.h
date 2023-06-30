@@ -163,8 +163,7 @@ index_getattr(IndexTuple tup, int attnum, TupleDesc tupleDesc, bool *isnull)
  * estimated here, seemingly allowing one more tuple than estimated here.
  * But such a page always has at least MAXALIGN special space, so we're safe.
  */
-#define MaxIndexTuplesPerPage	\
-	((int) ((BLCKSZ - SizeOfPageHeaderData) / \
-			(MAXALIGN(sizeof(IndexTupleData) + 1) + sizeof(ItemIdData))))
+#define MaxIndexTuplesPerPage GetBlockSize(BS_MAX_INDEX_TUPLES_PER_PAGE)
+#define MaxIndexTuplesPerPageLimit CalcMaxIndexTuplesPerPage(MAX_BLOCK_SIZE)
 
 #endif							/* ITUP_H */

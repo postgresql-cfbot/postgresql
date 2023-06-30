@@ -53,20 +53,20 @@
  * In the worst case, an inner tuple in a text radix tree could have as many
  * as 258 nodes (one for each possible byte value, plus the two special
  * cases).  Each node can take 16 bytes on MAXALIGN=8 machines.  The inner
- * tuple must fit on an index page of size BLCKSZ.  Rather than assuming we
+ * tuple must fit on an index page of size CLUSTER_BLOCK_SIZE.  Rather than assuming we
  * know the exact amount of overhead imposed by page headers, tuple headers,
  * etc, we leave 100 bytes for that (the actual overhead should be no more
  * than 56 bytes at this writing, so there is slop in this number).
- * So we can safely create prefixes up to BLCKSZ - 258 * 16 - 100 bytes long.
+ * So we can safely create prefixes up to CLUSTER_BLOCK_SIZE - 258 * 16 - 100 bytes long.
  * Unfortunately, because 258 * 16 is over 4K, there is no safe prefix length
- * when BLCKSZ is less than 8K; it is always possible to get "SPGiST inner
+ * when CLUSTER_BLOCK_SIZE is less than 8K; it is always possible to get "SPGiST inner
  * tuple size exceeds maximum" if there are too many distinct next-byte values
  * at a given place in the tree.  Since use of nonstandard block sizes appears
  * to be negligible in the field, we just live with that fact for now,
- * choosing a max prefix size of 32 bytes when BLCKSZ is configured smaller
+ * choosing a max prefix size of 32 bytes when CLUSTER_BLOCK_SIZE is configured smaller
  * than default.
  */
-#define SPGIST_MAX_PREFIX_LENGTH	Max((int) (BLCKSZ - 258 * 16 - 100), 32)
+#define SPGIST_MAX_PREFIX_LENGTH	Max((int) (CLUSTER_BLOCK_SIZE - 258 * 16 - 100), 32)
 
 /*
  * Strategy for collation aware operator on text is equal to btree strategy

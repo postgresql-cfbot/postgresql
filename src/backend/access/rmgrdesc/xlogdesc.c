@@ -271,7 +271,7 @@ XLogRecGetBlockRefInfo(XLogReaderState *record, bool pretty,
 									 "" : " for WAL verification",
 									 XLogRecGetBlock(record, block_id)->hole_offset,
 									 XLogRecGetBlock(record, block_id)->hole_length,
-									 BLCKSZ -
+									 CLUSTER_BLOCK_SIZE -
 									 XLogRecGetBlock(record, block_id)->hole_length -
 									 XLogRecGetBlock(record, block_id)->bimg_len,
 									 method);

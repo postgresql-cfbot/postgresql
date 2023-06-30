@@ -1890,7 +1890,7 @@ cost_tuplesort(Cost *startup_cost, Cost *run_cost,
 		/*
 		 * We'll have to use a disk-based sort of all the tuples
 		 */
-		double		npages = ceil(input_bytes / BLCKSZ);
+		double		npages = ceil(input_bytes / CLUSTER_BLOCK_SIZE);
 		double		nruns = input_bytes / sort_mem_bytes;
 		double		mergeorder = tuplesort_merge_order(sort_mem_bytes);
 		double		log_runs;
@@ -2455,7 +2455,7 @@ cost_material(Path *path,
 	 */
 	if (nbytes > work_mem_bytes)
 	{
-		double		npages = ceil(nbytes / BLCKSZ);
+		double		npages = ceil(nbytes / CLUSTER_BLOCK_SIZE);
 
 		run_cost += seq_page_cost * npages;
 	}
@@ -2764,7 +2764,7 @@ cost_agg(Path *path, PlannerInfo *root,
 		 * Estimate number of pages read and written. For each level of
 		 * recursion, a tuple must be written and then later read.
 		 */
-		pages = relation_byte_size(input_tuples, input_width) / BLCKSZ;
+		pages = relation_byte_size(input_tuples, input_width) / CLUSTER_BLOCK_SIZE;
 		pages_written = pages_read = pages * depth;
 
 		/*
@@ -4310,7 +4310,7 @@ cost_rescan(PlannerInfo *root, Path *path,
 				if (nbytes > work_mem_bytes)
 				{
 					/* It will spill, so account for re-read cost */
-					double		npages = ceil(nbytes / BLCKSZ);
+					double		npages = ceil(nbytes / CLUSTER_BLOCK_SIZE);
 
 					run_cost += seq_page_cost * npages;
 				}
@@ -4337,7 +4337,7 @@ cost_rescan(PlannerInfo *root, Path *path,
 				if (nbytes > work_mem_bytes)
 				{
 					/* It will spill, so account for re-read cost */
-					double		npages = ceil(nbytes / BLCKSZ);
+					double		npages = ceil(nbytes / CLUSTER_BLOCK_SIZE);
 
 					run_cost += seq_page_cost * npages;
 				}
@@ -6115,7 +6115,7 @@ relation_byte_size(double tuples, int width)
 static double
 page_size(double tuples, int width)
 {
-	return ceil(relation_byte_size(tuples, width) / BLCKSZ);
+	return ceil(relation_byte_size(tuples, width) / CLUSTER_BLOCK_SIZE);
 }
 
 /*

@@ -50,3 +50,55 @@ to relfilelocator and block number, to identify which relation fork you want to
 access. Since most code wants to access the main fork, a shortcut version of
 ReadBuffer that accesses MAIN_FORKNUM is provided in the buffer manager for
 convenience.
+
+
+Adjustments for Variable Block Sizes
+====================================
+
+Prior to 17, the disk block size (aka BLCKSZ) was set at compile-time. While
+each database cluster still has a fixed block size, this is now selected at
+`initdb` time, meaning that a single PostgreSQL binary installation can support
+clusters of varying sizes.
+
+As this is now a per-cluster setting, the block size is set in the pg_control
+file. There are multiple computed settings which rely on the cluster block size,
+so these also need to be initialized at cluster start.  This is managed via
+BlockSizeInit() in src/common/blocksize.c.  This routine computes a table for
+all values which would have been computed at compile time.
+
+The expressions used to calculate the values in this table have been moved from
+their original locations and parameterized based on blocksize; these are named
+CalcXXXX(blocksize), and are stored in src/include/common/blocksize.h.
+
+In order to minimize code changes, we have kept the names of former constants
+(such as MaxHeapTuplesPerPage) and replaced their definitions with an
+appropriate lookup in this table.  Since these lookups are now handled at
+runtime, it is important to initialize these as early as possible so any code
+usage of these constants uses the computed value after it has been initialized
+instead of 0.  This applies to any piece of the code which needs to know about
+the block size or uses any value which was based on it.
+
+To ensure that any code that depended on the old behavior is properly adjusted,
+we have removed BLCKSZ as a constant, which will ensure that external code will
+fail to compile.  When writing new code which cases about the block size, you
+should use one of the following values:
+
+- CLUSTER_BLOCK_SIZE - evaluates to the cluster's block size as initialized by
+  BlockSizeInit().
+
+- DEFAULT_BLOCK_SIZE - the compiled-in default block size; 8k
+
+- MIN_BLOCK_SIZE - the smallest supported block size; 1k
+
+- MAX_BLOCK_SIZE - the largest supported block size; 32k
+
+In general, you should use CLUSTER_BLOCK_SIZE unless you are allocating space on
+the stack, and even then you should be careful to allocate based on
+MAX_BLOCK_SIZE, but still limit accesses to these structs based on the /actual/
+runtime cluster block size.  The core code has bene modified to follow these
+standards.
+
+Occasionally, we had been using BLCKSZ as a "big enough buffer" rather than
+caring about any specific size correlated with the cluster.  In those cases, you
+should just use DEFAULT_BLOCK_SIZE.
+

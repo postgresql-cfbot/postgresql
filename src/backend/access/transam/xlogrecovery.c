@@ -293,7 +293,7 @@ static bool backupEndRequired = false;
  */
 bool		reachedConsistency = false;
 
-/* Buffers dedicated to consistency checks of size BLCKSZ */
+/* Buffers dedicated to consistency checks of size CLUSTER_BLOCK_SIZE */
 static char *replay_image_masked = NULL;
 static char *primary_image_masked = NULL;
 
@@ -606,8 +606,8 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 	 * (2) a static char array isn't guaranteed to have any particular
 	 * alignment, whereas palloc() will provide MAXALIGN'd storage.
 	 */
-	replay_image_masked = (char *) palloc(BLCKSZ);
-	primary_image_masked = (char *) palloc(BLCKSZ);
+	replay_image_masked = (char *) palloc(CLUSTER_BLOCK_SIZE);
+	primary_image_masked = (char *) palloc(CLUSTER_BLOCK_SIZE);
 
 	if (read_backup_label(&CheckPointLoc, &CheckPointTLI, &backupEndRequired,
 						  &backupFromStandby))
@@ -2432,7 +2432,7 @@ verifyBackupPageConsistency(XLogReaderState *record)
 		 * Take a copy of the local page where WAL has been applied to have a
 		 * comparison base before masking it...
 		 */
-		memcpy(replay_image_masked, page, BLCKSZ);
+		memcpy(replay_image_masked, page, CLUSTER_BLOCK_SIZE);
 
 		/* No need for this page anymore now that a copy is in. */
 		UnlockReleaseBuffer(buf);
@@ -2467,7 +2467,7 @@ verifyBackupPageConsistency(XLogReaderState *record)
 		}
 
 		/* Time to compare the primary and replay images. */
-		if (memcmp(replay_image_masked, primary_image_masked, BLCKSZ) != 0)
+		if (memcmp(replay_image_masked, primary_image_masked, CLUSTER_BLOCK_SIZE) != 0)
 		{
 			elog(FATAL,
 				 "inconsistent page found, rel %u/%u/%u, forknum %u, blkno %u",

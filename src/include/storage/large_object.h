@@ -54,7 +54,7 @@ typedef struct LargeObjectDesc
 /*
  * Each "page" (tuple) of a large object can hold this much data
  *
- * We could set this as high as BLCKSZ less some overhead, but it seems
+ * We could set this as high as CLUSTER_BLOCK_SIZE less some overhead, but it seems
  * better to make it a smaller value, so that not as much space is used
  * up when a page-tuple is updated.  Note that the value is deliberately
  * chosen large enough to trigger the tuple toaster, so that we will
@@ -67,7 +67,9 @@ typedef struct LargeObjectDesc
  *
  * NB: Changing LOBLKSIZE requires an initdb.
  */
-#define LOBLKSIZE		(BLCKSZ / 4)
+#define CalcLOBLKSIZE(size) (size/4)
+#define LOBLKSIZE		(CLUSTER_BLOCK_SIZE / 4)
+#define LOBLKSIZE_LIMIT		CalcLOBLKSIZE(MAX_BLOCK_SIZE)
 
 /*
  * Maximum length in bytes for a large object.  To make this larger, we'd

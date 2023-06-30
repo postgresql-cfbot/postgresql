@@ -755,8 +755,8 @@ spgGetNextQueueItem(SpGistScanOpaque so)
 enum SpGistSpecialOffsetNumbers
 {
 	SpGistBreakOffsetNumber = InvalidOffsetNumber,
-	SpGistRedirectOffsetNumber = MaxOffsetNumber + 1,
-	SpGistErrorOffsetNumber = MaxOffsetNumber + 2
+	SpGistRedirectOffsetNumber = MaxOffsetNumberLimit + 1,
+	SpGistErrorOffsetNumber = MaxOffsetNumberLimit + 2
 };
 
 static OffsetNumber

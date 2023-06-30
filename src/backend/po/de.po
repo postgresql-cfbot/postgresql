@@ -2314,8 +2314,8 @@ msgstr "Der Datenbank-Cluster verwendet anscheinend ein anderes Fließkommazahle
 
 #: access/transam/xlog.c:4070
 #, c-format
-msgid "The database cluster was initialized with BLCKSZ %d, but the server was compiled with BLCKSZ %d."
-msgstr "Der Datenbank-Cluster wurde mit BLCKSZ %d initialisiert, aber der Server wurde mit BLCKSZ %d kompiliert."
+msgid "The database cluster was initialized with CLUSTER_BLOCK_SIZE %d, but the server was compiled with CLUSTER_BLOCK_SIZE %d."
+msgstr "Der Datenbank-Cluster wurde mit CLUSTER_BLOCK_SIZE %d initialisiert, aber der Server wurde mit CLUSTER_BLOCK_SIZE %d kompiliert."
 
 #: access/transam/xlog.c:4073 access/transam/xlog.c:4080
 #: access/transam/xlog.c:4087 access/transam/xlog.c:4094
@@ -22111,8 +22111,8 @@ msgstr "debug_io_direct wird für WAL nicht unterstützt, weil XLOG_BLCKSZ zu kl
 
 #: storage/file/fd.c:3951
 #, c-format
-msgid "debug_io_direct is not supported for data because BLCKSZ is too small"
-msgstr "debug_io_direct wird für Daten nicht unterstützt, weil BLCKSZ zu klein ist"
+msgid "debug_io_direct is not supported for data because CLUSTER_BLOCK_SIZE is too small"
+msgstr "debug_io_direct wird für Daten nicht unterstützt, weil CLUSTER_BLOCK_SIZEs zu klein ist"
 
 #: storage/file/reinit.c:145
 #, c-format

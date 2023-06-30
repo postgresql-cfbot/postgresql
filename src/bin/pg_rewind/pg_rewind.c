@@ -18,6 +18,7 @@
 #include "access/xlog_internal.h"
 #include "catalog/catversion.h"
 #include "catalog/pg_control.h"
+#include "common/blocksize.h"
 #include "common/controldata_utils.h"
 #include "common/file_perm.h"
 #include "common/restricted_token.h"
@@ -340,6 +341,13 @@ main(int argc, char **argv)
 
 	sanityChecks();
 
+	if (IsValidBlockSize(ControlFile_source.blcksz) &&
+		ControlFile_source.blcksz == ControlFile_target.blcksz)
+		BlockSizeInit(ControlFile_source.blcksz);
+	else
+		pg_fatal("cluster block sizes do not match or are invalid: %d",
+				 ControlFile_source.blcksz);
+
 	/*
 	 * Usually, the TLI can be found in the latest checkpoint record. But if
 	 * the source server is just being promoted (or it's a standby that's
@@ -571,8 +579,8 @@ perform_rewind(filemap_t *filemap, rewind_source *source,
 			iter = datapagemap_iterate(&entry->target_pages_to_overwrite);
 			while (datapagemap_next(iter, &blkno))
 			{
-				offset = blkno * BLCKSZ;
-				source->queue_fetch_range(source, entry->path, offset, BLCKSZ);
+				offset = blkno * CLUSTER_BLOCK_SIZE;
+				source->queue_fetch_range(source, entry->path, offset, CLUSTER_BLOCK_SIZE);
 			}
 			pg_free(iter);
 		}

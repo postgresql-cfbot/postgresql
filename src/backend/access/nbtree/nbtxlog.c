@@ -40,8 +40,8 @@ _bt_restore_page(Page page, char *from, int len)
 	IndexTupleData itupdata;
 	Size		itemsz;
 	char	   *end = from + len;
-	Item		items[MaxIndexTuplesPerPage];
-	uint16		itemsizes[MaxIndexTuplesPerPage];
+	Item		items[MaxIndexTuplesPerPageLimit];
+	uint16		itemsizes[MaxIndexTuplesPerPageLimit];
 	int			i;
 	int			nitems;
 

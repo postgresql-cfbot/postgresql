@@ -14,8 +14,8 @@ It is important to keep the map small so that it can be searched rapidly.
 Therefore, we don't attempt to record the exact free space on a page.
 We allocate one map byte to each page, allowing us to record free space
 at a granularity of 1/256th of a page.  Another way to say it is that
-the stored value is the free space divided by BLCKSZ/256 (rounding down).
-We assume that the free space must always be less than BLCKSZ, since
+the stored value is the free space divided by CLUSTER_BLOCK_SIZE/256 (rounding down).
+We assume that the free space must always be less than CLUSTER_BLOCK_SIZE, since
 all pages have some overhead; so the maximum map value is 255.
 
 To assist in fast searching, the map isn't simply an array of per-page
@@ -97,7 +97,7 @@ has the same value as the corresponding leaf node on its parent page.
 The root page is always stored at physical block 0.
 
 For example, assuming each FSM page can hold information about 4 pages (in
-reality, it holds (BLCKSZ - headers) / 2, or ~4000 with default BLCKSZ),
+reality, it holds (CLUSTER_BLOCK_SIZE - headers) / 2, or ~4000 with default CLUSTER_BLOCK_SIZE),
 we get a disk layout like this:
 
  0     <-- page 0 at level 2 (root page)
@@ -136,7 +136,7 @@ and so forth.
 
 To keep things simple, the tree is always constant height. To cover the
 maximum relation size of 2^32-1 blocks, three levels is enough with the default
-BLCKSZ (4000^3 > 2^32).
+CLUSTER_BLOCK_SIZE (4000^3 > 2^32).
 
 Addressing
 ----------

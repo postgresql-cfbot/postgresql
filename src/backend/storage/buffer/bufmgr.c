@@ -60,7 +60,7 @@
 
 
 /* Note: these two macros only work on shared buffers, not local ones! */
-#define BufHdrGetBlock(bufHdr)	((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ))
+#define BufHdrGetBlock(bufHdr)	((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * CLUSTER_BLOCK_SIZE))
 #define BufferGetLSN(bufHdr)	(PageGetLSN(BufHdrGetBlock(bufHdr)))
 
 /* Note: this macro only works on local buffers, not shared ones! */
@@ -1116,7 +1116,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	 * wants us to allocate a buffer.
 	 */
 	if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
-		MemSet((char *) bufBlock, 0, BLCKSZ);
+		MemSet((char *) bufBlock, 0, CLUSTER_BLOCK_SIZE);
 	else
 	{
 		instr_time	io_start = pgstat_prepare_io_time();
@@ -1137,7 +1137,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 						 errmsg("invalid page in block %u of relation %s; zeroing out page",
 								blockNum,
 								relpath(smgr->smgr_rlocator, forkNum))));
-				MemSet((char *) bufBlock, 0, BLCKSZ);
+				MemSet((char *) bufBlock, 0, CLUSTER_BLOCK_SIZE);
 			}
 			else
 				ereport(ERROR,
@@ -1856,7 +1856,7 @@ ExtendBufferedRelShared(ExtendBufferedWhat eb,
 		buf_block = BufHdrGetBlock(GetBufferDescriptor(buffers[i] - 1));
 
 		/* new buffers are zero-filled */
-		MemSet((char *) buf_block, 0, BLCKSZ);
+		MemSet((char *) buf_block, 0, CLUSTER_BLOCK_SIZE);
 	}
 
 	/* in case we need to pin an existing buffer below */
@@ -2285,7 +2285,7 @@ PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy)
 				 * not generally guaranteed to be marked undefined or
 				 * non-accessible in any case.
 				 */
-				VALGRIND_MAKE_MEM_DEFINED(BufHdrGetBlock(buf), BLCKSZ);
+				VALGRIND_MAKE_MEM_DEFINED(BufHdrGetBlock(buf), CLUSTER_BLOCK_SIZE);
 				break;
 			}
 		}
@@ -2350,7 +2350,7 @@ PinBuffer_Locked(BufferDesc *buf)
 	 * Valgrind (this is similar to the PinBuffer() case where the backend
 	 * doesn't already have a buffer pin)
 	 */
-	VALGRIND_MAKE_MEM_DEFINED(BufHdrGetBlock(buf), BLCKSZ);
+	VALGRIND_MAKE_MEM_DEFINED(BufHdrGetBlock(buf), CLUSTER_BLOCK_SIZE);
 
 	/*
 	 * Since we hold the buffer spinlock, we can update the buffer state and
@@ -2403,7 +2403,7 @@ UnpinBuffer(BufferDesc *buf)
 		 * within access method code that enforces that buffers are only
 		 * accessed while a buffer lock is held.
 		 */
-		VALGRIND_MAKE_MEM_NOACCESS(BufHdrGetBlock(buf), BLCKSZ);
+		VALGRIND_MAKE_MEM_NOACCESS(BufHdrGetBlock(buf), CLUSTER_BLOCK_SIZE);
 
 		/* I'd better not still hold the buffer content lock */
 		Assert(!LWLockHeldByMe(BufferDescriptorGetContentLock(buf)));
@@ -3491,7 +3491,7 @@ RelationGetNumberOfBlocksInFork(Relation relation, ForkNumber forkNum)
 	if (RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind))
 	{
 		/*
-		 * Not every table AM uses BLCKSZ wide fixed size blocks. Therefore
+		 * Not every table AM uses CLUSTER_BLOCK_SIZE wide fixed size blocks. Therefore
 		 * tableam returns the size in bytes - but for the purpose of this
 		 * routine, we want the number of blocks. Therefore divide, rounding
 		 * up.
@@ -3500,7 +3500,7 @@ RelationGetNumberOfBlocksInFork(Relation relation, ForkNumber forkNum)
 
 		szbytes = table_relation_size(relation, forkNum);
 
-		return (szbytes + (BLCKSZ - 1)) / BLCKSZ;
+		return (szbytes + (CLUSTER_BLOCK_SIZE - 1)) / CLUSTER_BLOCK_SIZE;
 	}
 	else if (RELKIND_HAS_STORAGE(relation->rd_rel->relkind))
 	{
@@ -4288,7 +4288,7 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 	 * Bulk extend the destination relation of the same size as the source
 	 * relation before starting to copy block by block.
 	 */
-	memset(buf.data, 0, BLCKSZ);
+	memset(buf.data, 0, CLUSTER_BLOCK_SIZE);
 	smgrextend(smgropen(dstlocator, InvalidBackendId), forkNum, nblocks - 1,
 			   buf.data, true);
 
@@ -4316,7 +4316,7 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 		START_CRIT_SECTION();
 
 		/* Copy page data from the source to the destination. */
-		memcpy(dstPage, srcPage, BLCKSZ);
+		memcpy(dstPage, srcPage, CLUSTER_BLOCK_SIZE);
 		MarkBufferDirty(dstBuf);
 
 		/* WAL-log the copied page. */

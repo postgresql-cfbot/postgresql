@@ -37,7 +37,7 @@
 #include "utils/timestamp.h"
 
 /*
- * Defines for CommitTs page sizes.  A page is the same BLCKSZ as is used
+ * Defines for CommitTs page sizes.  A page is the same CLUSTER_BLOCK_SIZE as is used
  * everywhere else in Postgres.
  *
  * Note: because TransactionIds are 32 bits and wrap around at 0xFFFFFFFF,
@@ -63,7 +63,7 @@ typedef struct CommitTimestampEntry
 									sizeof(RepOriginId))
 
 #define COMMIT_TS_XACTS_PER_PAGE \
-	(BLCKSZ / SizeOfCommitTimestampEntry)
+	(CLUSTER_BLOCK_SIZE / SizeOfCommitTimestampEntry)
 
 #define TransactionIdToCTsPage(xid) \
 	((xid) / (TransactionId) COMMIT_TS_XACTS_PER_PAGE)
@@ -898,7 +898,7 @@ AdvanceOldestCommitTsXid(TransactionId oldestXact)
  * Decide whether a commitTS page number is "older" for truncation purposes.
  * Analogous to CLOGPagePrecedes().
  *
- * At default BLCKSZ, (1 << 31) % COMMIT_TS_XACTS_PER_PAGE == 128.  This
+ * At default CLUSTER_BLOCK_SIZE, (1 << 31) % COMMIT_TS_XACTS_PER_PAGE == 128.  This
  * introduces differences compared to CLOG and the other SLRUs having (1 <<
  * 31) % per_page == 0.  This function never tests exactly
  * TransactionIdPrecedes(x-2^31, x).  When the system reaches xidStopLimit,

@@ -32,6 +32,7 @@
 #define ERRCODE_DUPLICATE_OBJECT  "42710"
 
 int			WalSegSz;
+int			BlockSize;
 
 static bool RetrieveDataDirCreatePerm(PGconn *conn);
 
@@ -325,6 +326,64 @@ RetrieveWalSegSize(PGconn *conn)
 							  "WAL segment size must be a power of two between 1 MB and 1 GB, but the remote server reported a value of %d bytes",
 							  WalSegSz),
 					 WalSegSz);
+		return false;
+	}
+
+	return true;
+}
+
+/*
+ * Use SHOW block_size since ControlFile is not accessible here.
+ */
+bool
+RetrieveBlockSize(PGconn *conn)
+{
+	PGresult   *res;
+
+	/* check connection existence */
+	Assert(conn != NULL);
+
+	/* for previous versions set the default xlog seg size */
+	if (PQserverVersion(conn) < MINIMUM_VERSION_FOR_SHOW_CMD)
+	{
+		BlockSize = DEFAULT_BLOCK_SIZE;
+		return true;
+	}
+
+	res = PQexec(conn, "SHOW block_size");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		pg_log_error("could not send replication command \"%s\": %s",
+					 "SHOW block_size", PQerrorMessage(conn));
+
+		PQclear(res);
+		return false;
+	}
+	if (PQntuples(res) != 1 || PQnfields(res) < 1)
+	{
+		pg_log_error("could not fetch block size: got %d rows and %d fields, expected %d rows and %d or more fields",
+					 PQntuples(res), PQnfields(res), 1, 1);
+
+		PQclear(res);
+		return false;
+	}
+
+	/* fetch xlog value and unit from the result */
+	if (sscanf(PQgetvalue(res, 0, 0), "%d", &BlockSize) != 1)
+	{
+		pg_log_error("block size could not be parsed");
+		PQclear(res);
+		return false;
+	}
+
+	PQclear(res);
+
+	if (!IsValidBlockSize(BlockSize))
+	{
+		pg_log_error(ngettext("Block size must be a power of two between 1k and 32k, but the remote server reported a value of %d byte",
+							  "Block size must be a power of two between 1k and 32k, but the remote server reported a value of %d bytes",
+							  BlockSize),
+					 BlockSize);
 		return false;
 	}
 

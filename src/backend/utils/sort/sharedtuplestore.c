@@ -37,7 +37,7 @@
  */
 #define STS_CHUNK_PAGES 4
 #define STS_CHUNK_HEADER_SIZE offsetof(SharedTuplestoreChunk, data)
-#define STS_CHUNK_DATA_SIZE (STS_CHUNK_PAGES * BLCKSZ - STS_CHUNK_HEADER_SIZE)
+#define STS_CHUNK_DATA_SIZE (STS_CHUNK_PAGES * CLUSTER_BLOCK_SIZE - STS_CHUNK_HEADER_SIZE)
 
 /* Chunk written to disk. */
 typedef struct SharedTuplestoreChunk
@@ -198,7 +198,7 @@ sts_flush_chunk(SharedTuplestoreAccessor *accessor)
 {
 	size_t		size;
 
-	size = STS_CHUNK_PAGES * BLCKSZ;
+	size = STS_CHUNK_PAGES * CLUSTER_BLOCK_SIZE;
 	BufFileWrite(accessor->write_file, accessor->write_chunk, size);
 	memset(accessor->write_chunk, 0, size);
 	accessor->write_pointer = &accessor->write_chunk->data[0];
@@ -332,11 +332,11 @@ sts_puttuple(SharedTuplestoreAccessor *accessor, void *meta_data,
 			/* First time through.  Allocate chunk. */
 			accessor->write_chunk = (SharedTuplestoreChunk *)
 				MemoryContextAllocZero(accessor->context,
-									   STS_CHUNK_PAGES * BLCKSZ);
+									   STS_CHUNK_PAGES * CLUSTER_BLOCK_SIZE);
 			accessor->write_chunk->ntuples = 0;
 			accessor->write_pointer = &accessor->write_chunk->data[0];
 			accessor->write_end = (char *)
-				accessor->write_chunk + STS_CHUNK_PAGES * BLCKSZ;
+				accessor->write_chunk + STS_CHUNK_PAGES * CLUSTER_BLOCK_SIZE;
 		}
 		else
 		{
@@ -445,7 +445,7 @@ sts_read_tuple(SharedTuplestoreAccessor *accessor, void *meta_data)
 	}
 	remaining_size = size - sizeof(uint32);
 	this_chunk_size = Min(remaining_size,
-						  BLCKSZ * STS_CHUNK_PAGES - accessor->read_bytes);
+						  CLUSTER_BLOCK_SIZE * STS_CHUNK_PAGES - accessor->read_bytes);
 	destination = accessor->read_buffer + sizeof(uint32);
 	BufFileReadExact(accessor->read_file, destination, this_chunk_size);
 	accessor->read_bytes += this_chunk_size;
@@ -468,7 +468,7 @@ sts_read_tuple(SharedTuplestoreAccessor *accessor, void *meta_data)
 					 errdetail_internal("Expected overflow chunk.")));
 		accessor->read_next_page += STS_CHUNK_PAGES;
 		this_chunk_size = Min(remaining_size,
-							  BLCKSZ * STS_CHUNK_PAGES -
+							  CLUSTER_BLOCK_SIZE * STS_CHUNK_PAGES -
 							  STS_CHUNK_HEADER_SIZE);
 		BufFileReadExact(accessor->read_file, destination, this_chunk_size);
 		accessor->read_bytes += this_chunk_size;

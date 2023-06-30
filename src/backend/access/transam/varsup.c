@@ -370,7 +370,7 @@ SetTransactionIdLimit(TransactionId oldest_datfrozenxid, Oid oldest_datoid)
 	 * being significant compared to total XID space. (VACUUM requires an XID
 	 * if it truncates at wal_level!=minimal.  "VACUUM (ANALYZE)", which a DBA
 	 * might do by reflex, assigns an XID.  Hence, we had better be sure
-	 * there's lots of XIDs left...)  Also, at default BLCKSZ, this leaves two
+	 * there's lots of XIDs left...)  Also, at default CLUSTER_BLOCK_SIZE, this leaves two
 	 * completely-idle segments.  In the event of edge-case bugs involving
 	 * page or segment arithmetic, idle segments render the bugs unreachable
 	 * outside of single-user mode.

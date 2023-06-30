@@ -1927,8 +1927,8 @@ msgstr "Klaster bazy danych wydaje się używać innego formatu liczb zmiennoprz
 
 #: access/transam/xlog.c:4550
 #, c-format
-msgid "The database cluster was initialized with BLCKSZ %d, but the server was compiled with BLCKSZ %d."
-msgstr "Klaster bazy danych został zainicjowany z BLCKSZ %d, ale serwer był skompilowany z BLCKSZ %d."
+msgid "The database cluster was initialized with CLUSTER_BLOCK_SIZE %d, but the server was compiled with CLUSTER_BLOCK_SIZE %d."
+msgstr "Klaster bazy danych został zainicjowany z CLUSTER_BLOCK_SIZE %d, ale serwer był skompilowany z CLUSTER_BLOCK_SIZE %d."
 
 #: access/transam/xlog.c:4553 access/transam/xlog.c:4560
 #: access/transam/xlog.c:4567 access/transam/xlog.c:4574

@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #include "access/xlog_internal.h"
+#include "common/blocksize.h"
 #include "common/controldata_utils.h"
 #include "common/file_perm.h"
 #include "common/file_utils.h"
@@ -204,18 +205,18 @@ scan_file(const char *fn, int segmentno)
 	for (blockno = 0;; blockno++)
 	{
 		uint16		csum;
-		int			r = read(f, buf.data, BLCKSZ);
+		int			r = read(f, buf.data, CLUSTER_BLOCK_SIZE);
 
 		if (r == 0)
 			break;
-		if (r != BLCKSZ)
+		if (r != CLUSTER_BLOCK_SIZE)
 		{
 			if (r < 0)
 				pg_fatal("could not read block %u in file \"%s\": %m",
 						 blockno, fn);
 			else
 				pg_fatal("could not read block %u in file \"%s\": read %d of %d",
-						 blockno, fn, r, BLCKSZ);
+						 blockno, fn, r, CLUSTER_BLOCK_SIZE);
 		}
 		blocks_scanned++;
 
@@ -231,14 +232,14 @@ scan_file(const char *fn, int segmentno)
 		if (PageIsNew(buf.data))
 			continue;
 
-		csum = pg_checksum_page(buf.data, blockno + segmentno * RELSEG_SIZE);
+		csum = pg_checksum_page(buf.data, blockno + segmentno * RELSEG_SIZE, CLUSTER_BLOCK_SIZE);
 		if (mode == PG_MODE_CHECK)
 		{
 			if (csum != header->pd_checksum)
 			{
 				if (ControlFile->data_checksum_version == PG_DATA_CHECKSUM_VERSION)
-					pg_log_error("checksum verification failed in file \"%s\", block %u: calculated checksum %X but block contains %X",
-								 fn, blockno, csum, header->pd_checksum);
+					pg_log_error("checksum verification failed in file \"%s\", block %u, block_size: %u: calculated checksum %X but block contains %X",
+								 fn, blockno, CLUSTER_BLOCK_SIZE, csum, header->pd_checksum);
 				badblocks++;
 			}
 		}
@@ -259,19 +260,19 @@ scan_file(const char *fn, int segmentno)
 			header->pd_checksum = csum;
 
 			/* Seek back to beginning of block */
-			if (lseek(f, -BLCKSZ, SEEK_CUR) < 0)
+			if (lseek(f, -(int)CLUSTER_BLOCK_SIZE, SEEK_CUR) < 0)
 				pg_fatal("seek failed for block %u in file \"%s\": %m", blockno, fn);
 
 			/* Write block with checksum */
-			w = write(f, buf.data, BLCKSZ);
-			if (w != BLCKSZ)
+			w = write(f, buf.data, CLUSTER_BLOCK_SIZE);
+			if (w != CLUSTER_BLOCK_SIZE)
 			{
 				if (w < 0)
 					pg_fatal("could not write block %u in file \"%s\": %m",
 							 blockno, fn);
 				else
 					pg_fatal("could not write block %u in file \"%s\": wrote %d of %d",
-							 blockno, fn, w, BLCKSZ);
+							 blockno, fn, w, CLUSTER_BLOCK_SIZE);
 			}
 		}
 
@@ -551,14 +552,6 @@ main(int argc, char *argv[])
 	if (ControlFile->pg_control_version != PG_CONTROL_VERSION)
 		pg_fatal("cluster is not compatible with this version of pg_checksums");
 
-	if (ControlFile->blcksz != BLCKSZ)
-	{
-		pg_log_error("database cluster is not compatible");
-		pg_log_error_detail("The database cluster was initialized with block size %u, but pg_checksums was compiled with block size %u.",
-							ControlFile->blcksz, BLCKSZ);
-		exit(1);
-	}
-
 	/*
 	 * Check if cluster is running.  A clean shutdown is required to avoid
 	 * random checksum failures caused by torn pages.  Note that this doesn't
@@ -579,6 +572,11 @@ main(int argc, char *argv[])
 	if (ControlFile->data_checksum_version > 0 &&
 		mode == PG_MODE_ENABLE)
 		pg_fatal("data checksums are already enabled in cluster");
+
+	if (IsValidBlockSize(ControlFile->blcksz))
+		BlockSizeInit(ControlFile->blcksz);
+	else
+		pg_fatal("invalid cluster block size in control file");
 
 	/* Operate on all files if checking or enabling checksums */
 	if (mode == PG_MODE_CHECK || mode == PG_MODE_ENABLE)

@@ -124,7 +124,7 @@ typedef struct HashScanPosData
 	int			lastItem;		/* last valid index in items[] */
 	int			itemIndex;		/* current index in items[] */
 
-	HashScanPosItem items[MaxIndexTuplesPerPage];	/* MUST BE LAST */
+	HashScanPosItem items[MaxIndexTuplesPerPageLimit];	/* MUST BE LAST */
 } HashScanPosData;
 
 #define HashScanPosIsPinned(scanpos) \
@@ -224,10 +224,10 @@ typedef HashScanOpaqueData *HashScanOpaque;
  * needing to fit into the metapage.  (With 8K block size, 1024 bitmaps
  * limit us to 256 GB of overflow space...).  For smaller block size we
  * can not use 1024 bitmaps as it will lead to the meta page data crossing
- * the block size boundary.  So we use BLCKSZ to determine the maximum number
+ * the block size boundary.  So we use CLUSTER_BLOCK_SIZE to determine the maximum number
  * of bitmaps.
  */
-#define HASH_MAX_BITMAPS			Min(BLCKSZ / 8, 1024)
+#define HASH_MAX_BITMAPS			Min(DEFAULT_BLOCK_SIZE / 8, 1024)
 
 #define HASH_SPLITPOINT_PHASE_BITS	2
 #define HASH_SPLITPOINT_PHASES_PER_GRP	(1 << HASH_SPLITPOINT_PHASE_BITS)
@@ -279,7 +279,7 @@ typedef struct HashOptions
 	 ((HashOptions *) (relation)->rd_options)->fillfactor :	\
 	 HASH_DEFAULT_FILLFACTOR)
 #define HashGetTargetPageUsage(relation) \
-	(BLCKSZ * HashGetFillFactor(relation) / 100)
+	(CLUSTER_BLOCK_SIZE * HashGetFillFactor(relation) / 100)
 
 /*
  * Maximum size of a hash index item (it's okay to have only one per page)

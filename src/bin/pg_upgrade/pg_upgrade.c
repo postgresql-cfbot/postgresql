@@ -63,6 +63,7 @@ static void setup(char *argv0, bool *live_check);
 ClusterInfo old_cluster,
 			new_cluster;
 OSInfo		os_info;
+uint32		BlockSize;
 
 char	   *output_files[] = {
 	SERVER_LOG_FILE,
@@ -125,6 +126,8 @@ main(int argc, char **argv)
 	get_sock_dir(&new_cluster, false);
 
 	check_cluster_compatibility(live_check);
+
+	BlockSize = old_cluster.controldata.blocksz;
 
 	check_and_dump_old_cluster(live_check);
 

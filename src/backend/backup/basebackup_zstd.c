@@ -143,10 +143,10 @@ bbsink_zstd_begin_backup(bbsink *sink)
 	output_buffer_bound = ZSTD_compressBound(mysink->base.bbs_buffer_length);
 
 	/*
-	 * The buffer length is expected to be a multiple of BLCKSZ, so round up.
+	 * The buffer length is expected to be a multiple of CLUSTER_BLOCK_SIZE, so round up.
 	 */
-	output_buffer_bound = output_buffer_bound + BLCKSZ -
-		(output_buffer_bound % BLCKSZ);
+	output_buffer_bound = output_buffer_bound + CLUSTER_BLOCK_SIZE -
+		(output_buffer_bound % CLUSTER_BLOCK_SIZE);
 
 	bbsink_begin_backup(sink->bbs_next, sink->bbs_state, output_buffer_bound);
 }

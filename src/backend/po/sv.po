@@ -2306,8 +2306,8 @@ msgstr "Databasklustret verkar använda en annan flyttalsrepresentation än vad 
 
 #: access/transam/xlog.c:4096
 #, c-format
-msgid "The database cluster was initialized with BLCKSZ %d, but the server was compiled with BLCKSZ %d."
-msgstr "Databasklustret initierades med BLCKSZ %d, men servern kompilerades med BLCKSZ %d."
+msgid "The database cluster was initialized with CLUSTER_BLOCK_SIZE %d, but the server was compiled with CLUSTER_BLOCK_SIZE %d."
+msgstr "Databasklustret initierades med CLUSTER_BLOCK_SIZE %d, men servern kompilerades med CLUSTER_BLOCK_SIZE %d."
 
 #: access/transam/xlog.c:4099 access/transam/xlog.c:4106
 #: access/transam/xlog.c:4113 access/transam/xlog.c:4120

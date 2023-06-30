@@ -1642,7 +1642,7 @@ freeGISTstate(GISTSTATE *giststate)
 static void
 gistprunepage(Relation rel, Page page, Buffer buffer, Relation heapRel)
 {
-	OffsetNumber deletable[MaxIndexTuplesPerPage];
+	OffsetNumber deletable[MaxIndexTuplesPerPageLimit];
 	int			ndeletable = 0;
 	OffsetNumber offnum,
 				maxoff;

@@ -2348,10 +2348,10 @@ msgstr ""
 #: access/transam/xlog.c:4802
 #, c-format
 msgid ""
-"The database cluster was initialized with BLCKSZ %d, but the server was "
-"compiled with BLCKSZ %d."
+"The database cluster was initialized with CLUSTER_BLOCK_SIZE %d, but the server was "
+"compiled with CLUSTER_BLOCK_SIZE %d."
 msgstr ""
-"이 데이터베이스 클러스터는 BLCKSZ %d (으)로 초기화 되었지만, 서버는 BLCKSZ "
+"이 데이터베이스 클러스터는 CLUSTER_BLOCK_SIZE %d (으)로 초기화 되었지만, 서버는 CLUSTER_BLOCK_SIZE "
 "%d (으)로 컴파일 되어있습니다."
 
 #: access/transam/xlog.c:4805 access/transam/xlog.c:4812

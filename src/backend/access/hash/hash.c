@@ -152,7 +152,7 @@ hashbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	 * one page.  Also, "initial index size" accounting does not include the
 	 * metapage, nor the first bitmap page.
 	 */
-	sort_threshold = (maintenance_work_mem * 1024L) / BLCKSZ;
+	sort_threshold = (maintenance_work_mem * 1024L) / CLUSTER_BLOCK_SIZE;
 	if (index->rd_rel->relpersistence != RELPERSISTENCE_TEMP)
 		sort_threshold = Min(sort_threshold, NBuffers);
 	else
@@ -709,7 +709,7 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 		OffsetNumber maxoffno;
 		Buffer		next_buf;
 		Page		page;
-		OffsetNumber deletable[MaxOffsetNumber];
+		OffsetNumber deletable[MaxOffsetNumberLimit];
 		int			ndeletable = 0;
 		bool		retain_pin = false;
 		bool		clear_dead_marking = false;

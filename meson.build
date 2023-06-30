@@ -440,14 +440,15 @@ else
   segsize = (get_option('segsize') * 1024 * 1024 * 1024) / blocksize
 endif
 
-cdata.set('BLCKSZ', blocksize, description:
-'''Size of a disk block --- this also limits the size of a tuple. You can set
+cdata.set('DEFAULT_BLOCK_SIZE', blocksize, description:
+'''Default size of a disk block --- this also limits the size of a tuple. You can set
    it bigger if you need bigger tuples (although TOAST should reduce the need
    to have large tuples, since fields can be spread across multiple tuples).
-   BLCKSZ must be a power of 2. The maximum possible value of BLCKSZ is
+   DEFAULT_BLOCK_SIZE must be a power of 2. The maximum possible value of DEFAULT_BLOCK_SIZE is
    currently 2^15 (32768). This is determined by the 15-bit widths of the
    lp_off and lp_len fields in ItemIdData (see include/storage/itemid.h).
-   Changing BLCKSZ requires an initdb.''')
+   Changing DEFAULT_BLOCK_SIZE requires an initdb, however individual clusters
+   can have different values for block size (CLUSTER_BLOCK_SIZE)''')
 
 cdata.set('XLOG_BLCKSZ', get_option('wal_blocksize').to_int() * 1024)
 cdata.set('RELSEG_SIZE', segsize)
@@ -3311,7 +3312,7 @@ if meson.version().version_compare('>=0.57')
 
   summary(
     {
-      'data block size': '@0@ kB'.format(cdata.get('BLCKSZ') / 1024),
+      'data block size': '@0@ kB'.format(cdata.get('DEFAULT_BLOCK_SIZE') / 1024),
       'WAL block size': '@0@ kB'.format(cdata.get('XLOG_BLCKSZ') / 1024),
       'segment size': get_option('segsize_blocks') != 0 ?
         '@0@ blocks'.format(cdata.get('RELSEG_SIZE')) :

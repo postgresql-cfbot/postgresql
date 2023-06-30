@@ -255,7 +255,7 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	 * Calculate target amount of free space to leave on pages.
 	 */
 	fillfactor = options ? options->fillfactor : GIST_DEFAULT_FILLFACTOR;
-	buildstate.freespace = BLCKSZ * (100 - fillfactor) / 100;
+	buildstate.freespace = CLUSTER_BLOCK_SIZE * (100 - fillfactor) / 100;
 
 	/*
 	 * Build the index using the chosen strategy.
@@ -415,7 +415,7 @@ gist_indexsortbuild(GISTBuildState *state)
 	 * Write an empty page as a placeholder for the root page. It will be
 	 * replaced with the real root page at the end.
 	 */
-	page = palloc_aligned(BLCKSZ, PG_IO_ALIGN_SIZE, MCXT_ALLOC_ZERO);
+	page = palloc_aligned(CLUSTER_BLOCK_SIZE, PG_IO_ALIGN_SIZE, MCXT_ALLOC_ZERO);
 	smgrextend(RelationGetSmgr(state->indexrel), MAIN_FORKNUM, GIST_ROOT_BLKNO,
 			   page, true);
 	state->pages_allocated++;
@@ -510,7 +510,7 @@ gist_indexsortbuild_levelstate_add(GISTBuildState *state,
 
 		if (levelstate->pages[levelstate->current_page] == NULL)
 			levelstate->pages[levelstate->current_page] =
-				palloc_aligned(BLCKSZ, PG_IO_ALIGN_SIZE, 0);
+				palloc_aligned(CLUSTER_BLOCK_SIZE, PG_IO_ALIGN_SIZE, 0);
 
 		newPage = levelstate->pages[levelstate->current_page];
 		gistinitpage(newPage, old_page_flags);
@@ -580,7 +580,7 @@ gist_indexsortbuild_levelstate_flush(GISTBuildState *state,
 
 		/* Create page and copy data */
 		data = (char *) (dist->list);
-		target = palloc_aligned(BLCKSZ, PG_IO_ALIGN_SIZE, MCXT_ALLOC_ZERO);
+		target = palloc_aligned(CLUSTER_BLOCK_SIZE, PG_IO_ALIGN_SIZE, MCXT_ALLOC_ZERO);
 		gistinitpage(target, isleaf ? F_LEAF : 0);
 		for (int i = 0; i < dist->block.num; i++)
 		{
@@ -631,7 +631,7 @@ gist_indexsortbuild_levelstate_flush(GISTBuildState *state,
 		if (parent == NULL)
 		{
 			parent = palloc0(sizeof(GistSortedBuildLevelState));
-			parent->pages[0] = (Page) palloc_aligned(BLCKSZ, PG_IO_ALIGN_SIZE, 0);
+			parent->pages[0] = (Page) palloc_aligned(CLUSTER_BLOCK_SIZE, PG_IO_ALIGN_SIZE, 0);
 			parent->parent = NULL;
 			gistinitpage(parent->pages[0], 0);
 
@@ -702,7 +702,7 @@ gistInitBuffering(GISTBuildState *buildstate)
 	int			levelStep;
 
 	/* Calc space of index page which is available for index tuples */
-	pageFreeSpace = BLCKSZ - SizeOfPageHeaderData - sizeof(GISTPageOpaqueData)
+	pageFreeSpace = CLUSTER_BLOCK_SIZE - SizeOfPageHeaderData - sizeof(GISTPageOpaqueData)
 		- sizeof(ItemIdData)
 		- buildstate->freespace;
 
@@ -799,7 +799,7 @@ gistInitBuffering(GISTBuildState *buildstate)
 			break;
 
 		/* each node in the lowest level of a subtree has one page in memory */
-		if (maxlowestlevelpages > ((double) maintenance_work_mem * 1024) / BLCKSZ)
+		if (maxlowestlevelpages > ((double) maintenance_work_mem * 1024) / CLUSTER_BLOCK_SIZE)
 			break;
 
 		/* Good, we can handle this levelStep. See if we can go one higher. */
@@ -858,7 +858,7 @@ calculatePagesPerBuffer(GISTBuildState *buildstate, int levelStep)
 	Size		pageFreeSpace;
 
 	/* Calc space of index page which is available for index tuples */
-	pageFreeSpace = BLCKSZ - SizeOfPageHeaderData - sizeof(GISTPageOpaqueData)
+	pageFreeSpace = CLUSTER_BLOCK_SIZE - SizeOfPageHeaderData - sizeof(GISTPageOpaqueData)
 		- sizeof(ItemIdData)
 		- buildstate->freespace;
 

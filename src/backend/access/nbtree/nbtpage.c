@@ -70,7 +70,7 @@ _bt_initmetapage(Page page, BlockNumber rootbknum, uint32 level,
 	BTMetaPageData *metad;
 	BTPageOpaque metaopaque;
 
-	_bt_pageinit(page, BLCKSZ);
+	_bt_pageinit(page, CLUSTER_BLOCK_SIZE);
 
 	metad = BTPageGetMeta(page);
 	metad->btm_magic = BTREE_MAGIC;
@@ -977,7 +977,7 @@ _bt_allocbuf(Relation rel, Relation heaprel)
 	 */
 	buf = ExtendBufferedRel(EB_REL(rel), MAIN_FORKNUM, NULL, EB_LOCK_FIRST);
 	if (!RelationUsesLocalBuffers(rel))
-		VALGRIND_MAKE_MEM_DEFINED(BufferGetPage(buf), BLCKSZ);
+		VALGRIND_MAKE_MEM_DEFINED(BufferGetPage(buf), CLUSTER_BLOCK_SIZE);
 
 	/* Initialize the new page before returning it */
 	page = BufferGetPage(buf);
@@ -1060,7 +1060,7 @@ _bt_lockbuf(Relation rel, Buffer buf, int access)
 	 * lock/pin held, though.
 	 */
 	if (!RelationUsesLocalBuffers(rel))
-		VALGRIND_MAKE_MEM_DEFINED(BufferGetPage(buf), BLCKSZ);
+		VALGRIND_MAKE_MEM_DEFINED(BufferGetPage(buf), CLUSTER_BLOCK_SIZE);
 }
 
 /*
@@ -1073,13 +1073,13 @@ _bt_unlockbuf(Relation rel, Buffer buf)
 	 * Buffer is pinned and locked, which means that it is expected to be
 	 * defined and addressable.  Check that proactively.
 	 */
-	VALGRIND_CHECK_MEM_IS_DEFINED(BufferGetPage(buf), BLCKSZ);
+	VALGRIND_CHECK_MEM_IS_DEFINED(BufferGetPage(buf), CLUSTER_BLOCK_SIZE);
 
 	/* LockBuffer() asserts that pin is held by this backend */
 	LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 
 	if (!RelationUsesLocalBuffers(rel))
-		VALGRIND_MAKE_MEM_NOACCESS(BufferGetPage(buf), BLCKSZ);
+		VALGRIND_MAKE_MEM_NOACCESS(BufferGetPage(buf), CLUSTER_BLOCK_SIZE);
 }
 
 /*
@@ -1097,7 +1097,7 @@ _bt_conditionallockbuf(Relation rel, Buffer buf)
 		return false;
 
 	if (!RelationUsesLocalBuffers(rel))
-		VALGRIND_MAKE_MEM_DEFINED(BufferGetPage(buf), BLCKSZ);
+		VALGRIND_MAKE_MEM_DEFINED(BufferGetPage(buf), CLUSTER_BLOCK_SIZE);
 
 	return true;
 }
@@ -1112,7 +1112,7 @@ _bt_upgradelockbufcleanup(Relation rel, Buffer buf)
 	 * Buffer is pinned and locked, which means that it is expected to be
 	 * defined and addressable.  Check that proactively.
 	 */
-	VALGRIND_CHECK_MEM_IS_DEFINED(BufferGetPage(buf), BLCKSZ);
+	VALGRIND_CHECK_MEM_IS_DEFINED(BufferGetPage(buf), CLUSTER_BLOCK_SIZE);
 
 	/* LockBuffer() asserts that pin is held by this backend */
 	LockBuffer(buf, BUFFER_LOCK_UNLOCK);
@@ -1160,7 +1160,7 @@ _bt_delitems_vacuum(Relation rel, Buffer buf,
 	bool		needswal = RelationNeedsWAL(rel);
 	char	   *updatedbuf = NULL;
 	Size		updatedbuflen = 0;
-	OffsetNumber updatedoffsets[MaxIndexTuplesPerPage];
+	OffsetNumber updatedoffsets[MaxIndexTuplesPerPageLimit];
 
 	/* Shouldn't be called unless there's something to do */
 	Assert(ndeletable > 0 || nupdatable > 0);
@@ -1291,7 +1291,7 @@ _bt_delitems_delete(Relation rel, Buffer buf,
 	bool		needswal = RelationNeedsWAL(rel);
 	char	   *updatedbuf = NULL;
 	Size		updatedbuflen = 0;
-	OffsetNumber updatedoffsets[MaxIndexTuplesPerPage];
+	OffsetNumber updatedoffsets[MaxIndexTuplesPerPageLimit];
 
 	/* Shouldn't be called unless there's something to do */
 	Assert(ndeletable > 0 || nupdatable > 0);
@@ -1524,8 +1524,8 @@ _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
 	OffsetNumber postingidxoffnum = InvalidOffsetNumber;
 	int			ndeletable = 0,
 				nupdatable = 0;
-	OffsetNumber deletable[MaxIndexTuplesPerPage];
-	BTVacuumPosting updatable[MaxIndexTuplesPerPage];
+	OffsetNumber deletable[MaxIndexTuplesPerPageLimit];
+	BTVacuumPosting updatable[MaxIndexTuplesPerPageLimit];
 
 	/* Use tableam interface to determine which tuples to delete first */
 	snapshotConflictHorizon = table_index_delete_tuples(heapRel, delstate);

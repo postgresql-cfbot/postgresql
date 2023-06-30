@@ -681,7 +681,7 @@ SpGistInitPage(Page page, uint16 f)
 {
 	SpGistPageOpaque opaque;
 
-	PageInit(page, BLCKSZ, sizeof(SpGistPageOpaqueData));
+	PageInit(page, CLUSTER_BLOCK_SIZE, sizeof(SpGistPageOpaqueData));
 	opaque = SpGistPageGetOpaque(page);
 	opaque->flags = f;
 	opaque->spgist_page_id = SPGIST_PAGE_ID;
@@ -693,7 +693,7 @@ SpGistInitPage(Page page, uint16 f)
 void
 SpGistInitBuffer(Buffer b, uint16 f)
 {
-	Assert(BufferGetPageSize(b) == BLCKSZ);
+	Assert(BufferGetPageSize(b) == CLUSTER_BLOCK_SIZE);
 	SpGistInitPage(BufferGetPage(b), f);
 }
 

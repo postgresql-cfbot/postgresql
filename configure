@@ -3714,12 +3714,12 @@ fi
 
 
 case ${blocksize} in
-  1) BLCKSZ=1024;;
-  2) BLCKSZ=2048;;
-  4) BLCKSZ=4096;;
-  8) BLCKSZ=8192;;
- 16) BLCKSZ=16384;;
- 32) BLCKSZ=32768;;
+  1) DEFAULT_BLOCK_SIZE=1024;;
+  2) DEFAULT_BLOCK_SIZE=2048;;
+  4) DEFAULT_BLOCK_SIZE=4096;;
+  8) DEFAULT_BLOCK_SIZE=8192;;
+ 16) DEFAULT_BLOCK_SIZE=16384;;
+ 32) DEFAULT_BLOCK_SIZE=32768;;
   *) as_fn_error $? "Invalid block size. Allowed values are 1,2,4,8,16,32." "$LINENO" 5
 esac
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: ${blocksize}kB" >&5
@@ -3727,7 +3727,7 @@ $as_echo "${blocksize}kB" >&6; }
 
 
 cat >>confdefs.h <<_ACEOF
-#define BLCKSZ ${BLCKSZ}
+#define DEFAULT_BLOCK_SIZE ${DEFAULT_BLOCK_SIZE}
 _ACEOF
 
 

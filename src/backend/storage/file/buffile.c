@@ -60,7 +60,7 @@
  * tablespaces when available.
  */
 #define MAX_PHYSICAL_FILESIZE	0x40000000
-#define BUFFILE_SEG_SIZE		(MAX_PHYSICAL_FILESIZE / BLCKSZ)
+#define BUFFILE_SEG_SIZE		(MAX_PHYSICAL_FILESIZE / CLUSTER_BLOCK_SIZE)
 
 /*
  * This data structure represents a buffered file that consists of one or
@@ -681,7 +681,7 @@ BufFileWrite(BufFile *file, const void *ptr, size_t size)
 
 	while (size > 0)
 	{
-		if (file->pos >= BLCKSZ)
+		if (file->pos >= CLUSTER_BLOCK_SIZE)
 		{
 			/* Buffer full, dump it out */
 			if (file->dirty)
@@ -695,7 +695,7 @@ BufFileWrite(BufFile *file, const void *ptr, size_t size)
 			}
 		}
 
-		nthistime = BLCKSZ - file->pos;
+		nthistime = CLUSTER_BLOCK_SIZE - file->pos;
 		if (nthistime > size)
 			nthistime = size;
 		Assert(nthistime > 0);
@@ -839,9 +839,9 @@ BufFileTell(BufFile *file, int *fileno, off_t *offset)
 /*
  * BufFileSeekBlock --- block-oriented seek
  *
- * Performs absolute seek to the start of the n'th BLCKSZ-sized block of
+ * Performs absolute seek to the start of the n'th CLUSTER_BLOCK_SIZE-sized block of
  * the file.  Note that users of this interface will fail if their files
- * exceed BLCKSZ * LONG_MAX bytes, but that is quite a lot; we don't work
+ * exceed CLUSTER_BLOCK_SIZE * LONG_MAX bytes, but that is quite a lot; we don't work
  * with tables bigger than that, either...
  *
  * Result is 0 if OK, EOF if not.  Logical position is not moved if an
@@ -852,7 +852,7 @@ BufFileSeekBlock(BufFile *file, long blknum)
 {
 	return BufFileSeek(file,
 					   (int) (blknum / BUFFILE_SEG_SIZE),
-					   (off_t) (blknum % BUFFILE_SEG_SIZE) * BLCKSZ,
+					   (off_t) (blknum % BUFFILE_SEG_SIZE) * CLUSTER_BLOCK_SIZE,
 					   SEEK_SET);
 }
 
@@ -867,7 +867,7 @@ BufFileTellBlock(BufFile *file)
 {
 	long		blknum;
 
-	blknum = (file->curOffset + file->pos) / BLCKSZ;
+	blknum = (file->curOffset + file->pos) / CLUSTER_BLOCK_SIZE;
 	blknum += file->curFile * BUFFILE_SEG_SIZE;
 	return blknum;
 }

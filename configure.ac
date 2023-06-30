@@ -258,28 +258,29 @@ PGAC_ARG_REQ(with, blocksize, [BLOCKSIZE], [set table block size in kB [8]],
              [blocksize=$withval],
              [blocksize=8])
 case ${blocksize} in
-  1) BLCKSZ=1024;;
-  2) BLCKSZ=2048;;
-  4) BLCKSZ=4096;;
-  8) BLCKSZ=8192;;
- 16) BLCKSZ=16384;;
- 32) BLCKSZ=32768;;
+  1) DEFAULT_BLOCK_SIZE=1024;;
+  2) DEFAULT_BLOCK_SIZE=2048;;
+  4) DEFAULT_BLOCK_SIZE=4096;;
+  8) DEFAULT_BLOCK_SIZE=8192;;
+ 16) DEFAULT_BLOCK_SIZE=16384;;
+ 32) DEFAULT_BLOCK_SIZE=32768;;
   *) AC_MSG_ERROR([Invalid block size. Allowed values are 1,2,4,8,16,32.])
 esac
 AC_MSG_RESULT([${blocksize}kB])
 
-AC_DEFINE_UNQUOTED([BLCKSZ], ${BLCKSZ}, [
+AC_DEFINE_UNQUOTED([DEFAULT_BLOCK_SIZE], ${DEFAULT_BLOCK_SIZE}, [
  Size of a disk block --- this also limits the size of a tuple.  You
  can set it bigger if you need bigger tuples (although TOAST should
  reduce the need to have large tuples, since fields can be spread
  across multiple tuples).
 
- BLCKSZ must be a power of 2.  The maximum possible value of BLCKSZ
+ DEFAULT_BLOCK_SIZE must be a power of 2.  The maximum possible value of DEFAULT_BLOCK_SIZE
  is currently 2^15 (32768).  This is determined by the 15-bit widths
  of the lp_off and lp_len fields in ItemIdData (see
  include/storage/itemid.h).
 
- Changing BLCKSZ requires an initdb.
+ Changing DEFAULT_BLOCK_SIZE requires an initdb, however an individual cluster
+ can have its block size set.
 ])
 
 #
@@ -313,10 +314,10 @@ fi
 
 AC_DEFINE_UNQUOTED([RELSEG_SIZE], ${RELSEG_SIZE}, [
  RELSEG_SIZE is the maximum number of blocks allowed in one disk file.
- Thus, the maximum size of a single file is RELSEG_SIZE * BLCKSZ;
+ Thus, the maximum size of a single file is RELSEG_SIZE * CLUSTER_BLOCK_SIZE;
  relations bigger than that are divided into multiple files.
 
- RELSEG_SIZE * BLCKSZ must be less than your OS' limit on file size.
+ RELSEG_SIZE * CLUSTER_BLOCK_SIZE must be less than your OS' limit on file size.
  This is often 2 GB or 4GB in a 32-bit operating system, unless you
  have large file support enabled.  By default, we make the limit 1 GB
  to avoid any possible integer-overflow problems within the OS.
@@ -350,7 +351,7 @@ esac
 AC_MSG_RESULT([${wal_blocksize}kB])
 
 AC_DEFINE_UNQUOTED([XLOG_BLCKSZ], ${XLOG_BLCKSZ}, [
- Size of a WAL file block.  This need have no particular relation to BLCKSZ.
+ Size of a WAL file block.  This need have no particular relation to CLUSTER_BLOCK_SIZE.
  XLOG_BLCKSZ must be a power of 2, and if your system supports O_DIRECT I/O,
  XLOG_BLCKSZ must be a multiple of the alignment requirement for direct-I/O
  buffers, else direct I/O may fail.

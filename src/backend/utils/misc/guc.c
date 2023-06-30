@@ -30,6 +30,7 @@
 
 #include "access/xact.h"
 #include "access/xlog.h"
+#include "access/xlog_internal.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_parameter_acl.h"
@@ -105,8 +106,8 @@ typedef struct
 } unit_conversion;
 
 /* Ensure that the constants in the tables don't overflow or underflow */
-#if BLCKSZ < 1024 || BLCKSZ > (1024*1024)
-#error BLCKSZ must be between 1KB and 1MB
+#if DEFAULT_BLOCK_SIZE < 1024 || DEFAULT_BLOCK_SIZE > (1024*1024)
+#error DEFAULT_BLOCK_SIZE must be between 1KB and 1MB
 #endif
 #if XLOG_BLCKSZ < 1024 || XLOG_BLCKSZ > (1024*1024)
 #error XLOG_BLCKSZ must be between 1KB and 1MB
@@ -134,11 +135,11 @@ static const unit_conversion memory_unit_conversion_table[] =
 	{"kB", GUC_UNIT_MB, 1.0 / 1024.0},
 	{"B", GUC_UNIT_MB, 1.0 / (1024.0 * 1024.0)},
 
-	{"TB", GUC_UNIT_BLOCKS, (1024.0 * 1024.0 * 1024.0) / (BLCKSZ / 1024)},
-	{"GB", GUC_UNIT_BLOCKS, (1024.0 * 1024.0) / (BLCKSZ / 1024)},
-	{"MB", GUC_UNIT_BLOCKS, 1024.0 / (BLCKSZ / 1024)},
-	{"kB", GUC_UNIT_BLOCKS, 1.0 / (BLCKSZ / 1024)},
-	{"B", GUC_UNIT_BLOCKS, 1.0 / BLCKSZ},
+	{"TB", GUC_UNIT_BLOCKS, (1024.0 * 1024.0 * 1024.0) / (DEFAULT_BLOCK_SIZE / 1024)},
+	{"GB", GUC_UNIT_BLOCKS, (1024.0 * 1024.0) / (DEFAULT_BLOCK_SIZE / 1024)},
+	{"MB", GUC_UNIT_BLOCKS, 1024.0 / (DEFAULT_BLOCK_SIZE / 1024)},
+	{"kB", GUC_UNIT_BLOCKS, 1.0 / (DEFAULT_BLOCK_SIZE / 1024)},
+	{"B", GUC_UNIT_BLOCKS, 1.0 / DEFAULT_BLOCK_SIZE},
 
 	{"TB", GUC_UNIT_XBLOCKS, (1024.0 * 1024.0 * 1024.0) / (XLOG_BLCKSZ / 1024)},
 	{"GB", GUC_UNIT_XBLOCKS, (1024.0 * 1024.0) / (XLOG_BLCKSZ / 1024)},
@@ -1503,6 +1504,16 @@ InitializeGUCOptions(void)
 	 */
 	pg_timezone_initialize();
 
+	/* Load our block size -- no valid in Bootstrap or init mode, since control file hasn't been written */
+	if (!(IsInitProcessingMode() || IsBootstrapProcessingMode()))
+	{
+		BlockSizeInit(ClusterBlockSize());
+		/*
+		 * Ensure GUCs with dynamic limits have been properly initialized
+		 */
+		update_dynamic_gucs();
+	}
+
 	/*
 	 * Create GUCMemoryContext and build hash table of all GUC variables.
 	 */
@@ -2782,7 +2793,7 @@ get_config_unit_name(int flags)
 
 				/* initialize if first time through */
 				if (bbuf[0] == '\0')
-					snprintf(bbuf, sizeof(bbuf), "%dkB", BLCKSZ / 1024);
+					snprintf(bbuf, sizeof(bbuf), "%dkB", CLUSTER_BLOCK_SIZE / 1024);
 				return bbuf;
 			}
 		case GUC_UNIT_XBLOCKS:

@@ -27,6 +27,7 @@
 #include <unistd.h>
 
 #include "catalog/pg_tablespace_d.h"
+#include "common/blocksize.h"
 #include "common/hashfn.h"
 #include "common/string.h"
 #include "datapagemap.h"
@@ -333,7 +334,7 @@ process_target_wal_block_change(ForkNumber forknum, RelFileLocator rlocator,
 			{
 				off_t		end_offset;
 
-				end_offset = (blkno_inseg + 1) * BLCKSZ;
+				end_offset = (blkno_inseg + 1) * CLUSTER_BLOCK_SIZE;
 				if (end_offset <= entry->source_size && end_offset <= entry->target_size)
 					datapagemap_add(&entry->target_pages_to_overwrite, blkno_inseg);
 			}
@@ -468,7 +469,7 @@ calculate_totals(filemap_t *filemap)
 
 			iter = datapagemap_iterate(&entry->target_pages_to_overwrite);
 			while (datapagemap_next(iter, &blk))
-				filemap->fetch_size += BLCKSZ;
+				filemap->fetch_size += CLUSTER_BLOCK_SIZE;
 
 			pg_free(iter);
 		}

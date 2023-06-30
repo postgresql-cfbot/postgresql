@@ -3927,8 +3927,8 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
        </para>
        <para>
         Relation data reads, writes, and extends are done in
-        <varname>block_size</varname> units, derived from the build-time
-        parameter <symbol>BLCKSZ</symbol>, which is <literal>8192</literal> by
+        <varname>block_size</varname> units, derived from the cluster init-time
+        parameter <symbol>CLUSTER_BLOCK_SIZE</symbol>, which is <literal>8192</literal> by
         default.
        </para>
       </entry>

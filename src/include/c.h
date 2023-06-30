@@ -1118,7 +1118,7 @@ extern void ExceptionalCondition(const char *conditionName,
 	((var) = ((var) < 0) ? 1 : -(var))
 
 /*
- * Use this, not "char buf[BLCKSZ]", to declare a field or local variable
+ * Use this, not "char buf[MAX_BLOCK_SIZE]", to declare a field or local variable
  * holding a page buffer, if that page might be accessed as a page.  Otherwise
  * the variable might be under-aligned, causing problems on alignment-picky
  * hardware.  We include both "double" and "int64" in the union to ensure that
@@ -1127,7 +1127,7 @@ extern void ExceptionalCondition(const char *conditionName,
  */
 typedef union PGAlignedBlock
 {
-	char		data[BLCKSZ];
+	char		data[MAX_BLOCK_SIZE];
 	double		force_align_d;
 	int64		force_align_i64;
 } PGAlignedBlock;
@@ -1145,7 +1145,7 @@ typedef union PGIOAlignedBlock
 #ifdef pg_attribute_aligned
 	pg_attribute_aligned(PG_IO_ALIGN_SIZE)
 #endif
-	char		data[BLCKSZ];
+	char		data[MAX_BLOCK_SIZE];
 	double		force_align_d;
 	int64		force_align_i64;
 } PGIOAlignedBlock;

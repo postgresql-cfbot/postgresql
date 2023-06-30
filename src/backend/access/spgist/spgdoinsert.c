@@ -135,7 +135,7 @@ spgPageIndexMultiDelete(SpGistState *state, Page page,
 						BlockNumber blkno, OffsetNumber offnum)
 {
 	OffsetNumber firstItem;
-	OffsetNumber sortednos[MaxIndexTuplesPerPage];
+	OffsetNumber sortednos[MaxIndexTuplesPerPageLimit];
 	SpGistDeadTuple tuple = NULL;
 	int			i;
 
@@ -341,8 +341,8 @@ checkSplitConditions(Relation index, SpGistState *state,
 	if (SpGistBlockIsRoot(current->blkno))
 	{
 		/* return impossible values to force split */
-		*nToSplit = BLCKSZ;
-		return BLCKSZ;
+		*nToSplit = CLUSTER_BLOCK_SIZE;
+		return CLUSTER_BLOCK_SIZE;
 	}
 
 	i = current->offnum;

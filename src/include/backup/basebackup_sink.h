@@ -80,7 +80,7 @@ typedef struct bbsink_state
  * 'bbs_ops' is the relevant callback table.
  *
  * 'bbs_buffer' is the buffer into which data destined for the bbsink
- * should be stored. It must be a multiple of BLCKSZ.
+ * should be stored. It must be a multiple of CLUSTER_BLOCK_SIZE.
  *
  * 'bbs_buffer_length' is the allocated length of the buffer.
  *
@@ -183,7 +183,7 @@ bbsink_begin_backup(bbsink *sink, bbsink_state *state, int buffer_length)
 	sink->bbs_ops->begin_backup(sink);
 
 	Assert(sink->bbs_buffer != NULL);
-	Assert((sink->bbs_buffer_length % BLCKSZ) == 0);
+	Assert((sink->bbs_buffer_length % CLUSTER_BLOCK_SIZE) == 0);
 }
 
 /* Begin an archive. */

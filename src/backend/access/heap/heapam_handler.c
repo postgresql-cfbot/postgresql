@@ -1195,7 +1195,7 @@ heapam_index_build_range_scan(Relation heapRelation,
 	TransactionId OldestXmin;
 	BlockNumber previous_blkno = InvalidBlockNumber;
 	BlockNumber root_blkno = InvalidBlockNumber;
-	OffsetNumber root_offsets[MaxHeapTuplesPerPage];
+	OffsetNumber root_offsets[MaxHeapTuplesPerPageLimit];
 
 	/*
 	 * sanity checks
@@ -1758,8 +1758,8 @@ heapam_index_validate_scan(Relation heapRelation,
 	EState	   *estate;
 	ExprContext *econtext;
 	BlockNumber root_blkno = InvalidBlockNumber;
-	OffsetNumber root_offsets[MaxHeapTuplesPerPage];
-	bool		in_index[MaxHeapTuplesPerPage];
+	OffsetNumber root_offsets[MaxHeapTuplesPerPageLimit];
+	bool		in_index[MaxHeapTuplesPerPageLimit];
 	BlockNumber previous_blkno = InvalidBlockNumber;
 
 	/* state variables for the merge */
@@ -2096,7 +2096,7 @@ heapam_relation_toast_am(Relation rel)
 #define HEAP_OVERHEAD_BYTES_PER_TUPLE \
 	(MAXALIGN(SizeofHeapTupleHeader) + sizeof(ItemIdData))
 #define HEAP_USABLE_BYTES_PER_PAGE \
-	(BLCKSZ - SizeOfPageHeaderData)
+	(CLUSTER_BLOCK_SIZE - SizeOfPageHeaderData)
 
 static void
 heapam_estimate_rel_size(Relation rel, int32 *attr_widths,

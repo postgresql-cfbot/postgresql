@@ -54,7 +54,7 @@ typedef struct
 /* Returns free space in node buffer page */
 #define PAGE_FREE_SPACE(nbp) (nbp->freespace)
 /* Checks if node buffer page is empty */
-#define PAGE_IS_EMPTY(nbp) (nbp->freespace == BLCKSZ - BUFFER_PAGE_DATA_OFFSET)
+#define PAGE_IS_EMPTY(nbp) (nbp->freespace == CLUSTER_BLOCK_SIZE - BUFFER_PAGE_DATA_OFFSET)
 /* Checks if node buffers page don't contain sufficient space for index tuple */
 #define PAGE_NO_SPACE(nbp, itup) (PAGE_FREE_SPACE(nbp) < \
 										MAXALIGN(IndexTupleSize(itup)))
@@ -171,7 +171,7 @@ typedef struct GISTScanOpaqueData
 	GistNSN		curPageLSN;		/* pos in the WAL stream when page was read */
 
 	/* In a non-ordered search, returnable heap items are stored here: */
-	GISTSearchHeapItem pageData[BLCKSZ / sizeof(IndexTupleData)];
+	GISTSearchHeapItem pageData[MAX_BLOCK_SIZE / sizeof(IndexTupleData)];
 	OffsetNumber nPageData;		/* number of valid items in array */
 	OffsetNumber curPageData;	/* next item to return */
 	MemoryContext pageDataCxt;	/* context holding the fetched tuples, for
@@ -474,7 +474,7 @@ extern void gistadjustmembers(Oid opfamilyoid,
 /* gistutil.c */
 
 #define GiSTPageSize   \
-	( BLCKSZ - SizeOfPageHeaderData - MAXALIGN(sizeof(GISTPageOpaqueData)) )
+	( CLUSTER_BLOCK_SIZE - SizeOfPageHeaderData - MAXALIGN(sizeof(GISTPageOpaqueData)) )
 
 #define GIST_MIN_FILLFACTOR			10
 #define GIST_DEFAULT_FILLFACTOR		90

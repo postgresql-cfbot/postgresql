@@ -51,7 +51,7 @@
  * Every time we process this much WAL, we'll update the values in
  * pg_stat_recovery_prefetch.
  */
-#define XLOGPREFETCHER_STATS_DISTANCE BLCKSZ
+#define XLOGPREFETCHER_STATS_DISTANCE CLUSTER_BLOCK_SIZE
 
 /*
  * To detect repeated access to the same block and skip useless extra system

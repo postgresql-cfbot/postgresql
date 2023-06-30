@@ -2022,7 +2022,7 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
       </para>
       <para>
        Size of the on-disk representation of this table in pages (of size
-       <symbol>BLCKSZ</symbol>).  This is only an estimate used by the
+       <symbol>CLUSTER_BLOCK_SIZE</symbol>).  This is only an estimate used by the
        planner.  It is updated by <link linkend="sql-vacuum"><command>VACUUM</command></link>,
        <link linkend="sql-analyze"><command>ANALYZE</command></link>, and a few DDL commands such as
        <link linkend="sql-createindex"><command>CREATE INDEX</command></link>.
@@ -4885,7 +4885,7 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
    segments or <quote>pages</quote> small enough to be conveniently stored as rows
    in <structname>pg_largeobject</structname>.
    The amount of data per page is defined to be <symbol>LOBLKSIZE</symbol> (which is currently
-   <literal>BLCKSZ/4</literal>, or typically 2 kB).
+   <literal>CLUSTER_BLOCK_SIZE/4</literal>, or typically 2 kB).
   </para>
 
   <para>

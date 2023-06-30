@@ -23,6 +23,8 @@
 #include "access/xlogreader.h"
 #include "access/xlogrecord.h"
 #include "access/xlogstats.h"
+#include "common/blocksize.h"
+#include "common/controldata_utils.h"
 #include "common/fe_memutils.h"
 #include "common/file_perm.h"
 #include "common/file_utils.h"
@@ -38,8 +40,10 @@
  */
 
 static const char *progname;
+static char *pgdata;
 
 static int	WalSegSz;
+static int	BlockSize;
 static volatile sig_atomic_t time_to_stop = false;
 
 static const RelFileLocator emptyRelFileLocator = {0, 0, 0};
@@ -527,7 +531,7 @@ XLogRecordSaveFPWs(XLogReaderState *record, const char *savepath)
 		if (!file)
 			pg_fatal("could not open file \"%s\": %m", filename);
 
-		if (fwrite(page, BLCKSZ, 1, file) != 1)
+		if (fwrite(page, BlockSize, 1, file) != 1)
 			pg_fatal("could not write file \"%s\": %m", filename);
 
 		if (fclose(file) != 0)
@@ -808,6 +812,7 @@ main(int argc, char **argv)
 		{"help", no_argument, NULL, '?'},
 		{"limit", required_argument, NULL, 'n'},
 		{"path", required_argument, NULL, 'p'},
+		{"pgdata", required_argument, NULL, 'D'},
 		{"quiet", no_argument, NULL, 'q'},
 		{"relation", required_argument, NULL, 'R'},
 		{"rmgr", required_argument, NULL, 'r'},
@@ -881,7 +886,7 @@ main(int argc, char **argv)
 		goto bad_argument;
 	}
 
-	while ((option = getopt_long(argc, argv, "bB:e:fF:n:p:qr:R:s:t:wx:z",
+	while ((option = getopt_long(argc, argv, "bB:D:e:fF:n:p:qr:R:s:t:wx:z",
 								 long_options, &optindex)) != -1)
 	{
 		switch (option)
@@ -898,6 +903,9 @@ main(int argc, char **argv)
 				}
 				config.filter_by_relation_block_enabled = true;
 				config.filter_by_extended = true;
+				break;
+			case 'D':
+				pgdata = pg_strdup(optarg);
 				break;
 			case 'e':
 				if (sscanf(optarg, "%X/%X", &xlogid, &xrecoff) != 2)
@@ -1103,7 +1111,31 @@ main(int argc, char **argv)
 	}
 
 	if (config.save_fullpage_path != NULL)
+	{
+		ControlFileData *ControlFile;
+		bool	crc_ok_p;
+
+		/* parse the control file if we're saving the fullpage images */
+
+		if (!pgdata)
+			pgdata = getenv("PGDATA");
+		if (!pgdata || strlen(pgdata) == 0)
+			pg_fatal("Must provide data directory via -D or PGDATA envvar");
+
+		ControlFile = get_controlfile(pgdata, &crc_ok_p);
+
+		if (!ControlFile)
+			pg_fatal("Could not locate control file");
+
+		BlockSize = ControlFile->blcksz;
+
+		if (!IsValidBlockSize(BlockSize))
+			pg_fatal("read invalid block size from control file");
+
+		BlockSizeInit(BlockSize);
+
 		create_fullpage_directory(config.save_fullpage_path);
+	}
 
 	/* parse files as start/end boundaries, extract path if not specified */
 	if (optind < argc)

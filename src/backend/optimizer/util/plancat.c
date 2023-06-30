@@ -1089,7 +1089,7 @@ estimate_rel_size(Relation rel, int32 *attr_widths,
 			tuple_width += MAXALIGN(SizeofHeapTupleHeader);
 			tuple_width += sizeof(ItemIdData);
 			/* note: integer division is intentional here */
-			density = (BLCKSZ - SizeOfPageHeaderData) / tuple_width;
+			density = (CLUSTER_BLOCK_SIZE - SizeOfPageHeaderData) / tuple_width;
 		}
 		*tuples = rint(density * (double) curpages);
 

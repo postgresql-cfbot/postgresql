@@ -19,7 +19,7 @@
 
 
 /*
- * Define SLRU segment size.  A page is the same BLCKSZ as is used everywhere
+ * Define SLRU segment size.  A page is the same CLUSTER_BLOCK_SIZE as is used everywhere
  * else in Postgres.  The segment size can be chosen somewhat arbitrarily;
  * we make it 32 pages by default, or 256Kb, i.e. 1M transactions for CLOG
  * or 64K transactions for SUBTRANS.

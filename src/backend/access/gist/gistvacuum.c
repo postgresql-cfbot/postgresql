@@ -309,7 +309,7 @@ restart:
 	}
 	else if (GistPageIsLeaf(page))
 	{
-		OffsetNumber todelete[MaxOffsetNumber];
+		OffsetNumber todelete[MaxOffsetNumberLimit];
 		int			ntodelete = 0;
 		int			nremain;
 		GISTPageOpaque opaque = GistPageGetOpaque(page);
@@ -476,8 +476,8 @@ gistvacuum_delete_empty_pages(IndexVacuumInfo *info, GistVacState *vstate)
 		Page		page;
 		OffsetNumber off,
 					maxoff;
-		OffsetNumber todelete[MaxOffsetNumber];
-		BlockNumber leafs_to_delete[MaxOffsetNumber];
+		OffsetNumber todelete[MaxOffsetNumberLimit];
+		BlockNumber leafs_to_delete[MaxOffsetNumberLimit];
 		int			ntodelete;
 		int			deleted;
 

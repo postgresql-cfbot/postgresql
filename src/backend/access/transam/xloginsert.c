@@ -46,18 +46,18 @@
  * backup block image.
  */
 #ifdef USE_LZ4
-#define	LZ4_MAX_BLCKSZ		LZ4_COMPRESSBOUND(BLCKSZ)
+#define	LZ4_MAX_BLCKSZ		LZ4_COMPRESSBOUND(MAX_BLOCK_SIZE)
 #else
 #define LZ4_MAX_BLCKSZ		0
 #endif
 
 #ifdef USE_ZSTD
-#define ZSTD_MAX_BLCKSZ		ZSTD_COMPRESSBOUND(BLCKSZ)
+#define ZSTD_MAX_BLCKSZ		ZSTD_COMPRESSBOUND(MAX_BLOCK_SIZE)
 #else
 #define ZSTD_MAX_BLCKSZ		0
 #endif
 
-#define PGLZ_MAX_BLCKSZ		PGLZ_MAX_OUTPUT(BLCKSZ)
+#define PGLZ_MAX_BLCKSZ		PGLZ_MAX_OUTPUT(MAX_BLOCK_SIZE)
 
 /* Buffer size required to store a compressed version of backup block image */
 #define COMPRESS_BUFSIZE	Max(Max(PGLZ_MAX_BLCKSZ, LZ4_MAX_BLCKSZ), ZSTD_MAX_BLCKSZ)
@@ -383,7 +383,7 @@ XLogRegisterData(char *data, uint32 len)
  * block_id, the data is appended.
  *
  * The maximum amount of data that can be registered per block is 65535
- * bytes. That should be plenty; if you need more than BLCKSZ bytes to
+ * bytes. That should be plenty; if you need more than CLUSTER_BLOCK_SIZE bytes to
  * reconstruct the changes to the page, you might as well just log a full
  * copy of it. (the "main data" that's not associated with a block is not
  * limited)
@@ -650,7 +650,7 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 
 				if (lower >= SizeOfPageHeaderData &&
 					upper > lower &&
-					upper <= BLCKSZ)
+					upper <= CLUSTER_BLOCK_SIZE)
 				{
 					bimg.hole_offset = lower;
 					cbimg.hole_length = upper - lower;
@@ -746,12 +746,12 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 			}
 			else
 			{
-				bimg.length = BLCKSZ - cbimg.hole_length;
+				bimg.length = CLUSTER_BLOCK_SIZE - cbimg.hole_length;
 
 				if (cbimg.hole_length == 0)
 				{
 					rdt_datas_last->data = page;
-					rdt_datas_last->len = BLCKSZ;
+					rdt_datas_last->len = CLUSTER_BLOCK_SIZE;
 				}
 				else
 				{
@@ -765,7 +765,7 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 					rdt_datas_last->data =
 						page + (bimg.hole_offset + cbimg.hole_length);
 					rdt_datas_last->len =
-						BLCKSZ - (bimg.hole_offset + cbimg.hole_length);
+						CLUSTER_BLOCK_SIZE - (bimg.hole_offset + cbimg.hole_length);
 				}
 			}
 
@@ -932,7 +932,7 @@ static bool
 XLogCompressBackupBlock(char *page, uint16 hole_offset, uint16 hole_length,
 						char *dest, uint16 *dlen)
 {
-	int32		orig_len = BLCKSZ - hole_length;
+	int32		orig_len = CLUSTER_BLOCK_SIZE - hole_length;
 	int32		len = -1;
 	int32		extra_bytes = 0;
 	char	   *source;
@@ -945,7 +945,7 @@ XLogCompressBackupBlock(char *page, uint16 hole_offset, uint16 hole_length,
 		memcpy(source, page, hole_offset);
 		memcpy(source + hole_offset,
 			   page + (hole_offset + hole_length),
-			   BLCKSZ - (hole_length + hole_offset));
+			   CLUSTER_BLOCK_SIZE - (hole_length + hole_offset));
 
 		/*
 		 * Extra data needs to be stored in WAL record for the compressed
@@ -1096,10 +1096,10 @@ XLogSaveBufferForHint(Buffer buffer, bool buffer_std)
 			uint16		upper = ((PageHeader) page)->pd_upper;
 
 			memcpy(copied_buffer.data, origdata, lower);
-			memcpy(copied_buffer.data + upper, origdata + upper, BLCKSZ - upper);
+			memcpy(copied_buffer.data + upper, origdata + upper, CLUSTER_BLOCK_SIZE - upper);
 		}
 		else
-			memcpy(copied_buffer.data, origdata, BLCKSZ);
+			memcpy(copied_buffer.data, origdata, CLUSTER_BLOCK_SIZE);
 
 		XLogBeginInsert();
 

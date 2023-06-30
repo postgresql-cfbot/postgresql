@@ -336,7 +336,7 @@ extern UserOpts user_opts;
 extern ClusterInfo old_cluster,
 			new_cluster;
 extern OSInfo os_info;
-
+extern uint32 BlockSize;
 
 /* check.c */
 

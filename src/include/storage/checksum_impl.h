@@ -101,6 +101,7 @@
  */
 
 #include "storage/bufpage.h"
+#include "common/blocksize.h"
 
 /* number of checksums to calculate in parallel */
 #define N_SUMS 32
@@ -111,7 +112,7 @@
 typedef union
 {
 	PageHeaderData phdr;
-	uint32		data[BLCKSZ / (sizeof(uint32) * N_SUMS)][N_SUMS];
+	uint32		data[MAX_BLOCK_SIZE / (sizeof(uint32) * N_SUMS)][N_SUMS];
 } PGChecksummablePage;
 
 /*
@@ -143,7 +144,7 @@ do { \
  * (at least on 4-byte boundary).
  */
 static uint32
-pg_checksum_block(const PGChecksummablePage *page)
+pg_checksum_block(const PGChecksummablePage *page, Size blocksize)
 {
 	uint32		sums[N_SUMS];
 	uint32		result = 0;
@@ -151,13 +152,13 @@ pg_checksum_block(const PGChecksummablePage *page)
 				j;
 
 	/* ensure that the size is compatible with the algorithm */
-	Assert(sizeof(PGChecksummablePage) == BLCKSZ);
+	Assert(CLUSTER_BLOCK_SIZE == blocksize);
 
 	/* initialize partial checksums to their corresponding offsets */
 	memcpy(sums, checksumBaseOffsets, sizeof(checksumBaseOffsets));
 
 	/* main checksum calculation */
-	for (i = 0; i < (uint32) (BLCKSZ / (sizeof(uint32) * N_SUMS)); i++)
+	for (i = 0; i < (uint32) (blocksize / (sizeof(uint32) * N_SUMS)); i++)
 		for (j = 0; j < N_SUMS; j++)
 			CHECKSUM_COMP(sums[j], page->data[i][j]);
 
@@ -184,7 +185,7 @@ pg_checksum_block(const PGChecksummablePage *page)
  * checksum itself), and the page data.
  */
 uint16
-pg_checksum_page(char *page, BlockNumber blkno)
+pg_checksum_page(char *page, BlockNumber blkno, Size pagesize)
 {
 	PGChecksummablePage *cpage = (PGChecksummablePage *) page;
 	uint16		save_checksum;
@@ -201,7 +202,7 @@ pg_checksum_page(char *page, BlockNumber blkno)
 	 */
 	save_checksum = cpage->phdr.pd_checksum;
 	cpage->phdr.pd_checksum = 0;
-	checksum = pg_checksum_block(cpage);
+	checksum = pg_checksum_block(cpage, pagesize);
 	cpage->phdr.pd_checksum = save_checksum;
 
 	/* Mix in the block number to detect transposed pages */

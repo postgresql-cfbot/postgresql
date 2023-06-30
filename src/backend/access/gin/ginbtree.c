@@ -510,7 +510,7 @@ ginPlaceToPage(GinBtree btree, GinBtreeStack *stack,
 			 * critical section yet.)
 			 */
 			newrootpg = PageGetTempPage(newrpage);
-			GinInitPage(newrootpg, GinPageGetOpaque(newlpage)->flags & ~(GIN_LEAF | GIN_COMPRESSED), BLCKSZ);
+			GinInitPage(newrootpg, GinPageGetOpaque(newlpage)->flags & ~(GIN_LEAF | GIN_COMPRESSED), CLUSTER_BLOCK_SIZE);
 
 			btree->fillRoot(btree, newrootpg,
 							BufferGetBlockNumber(lbuffer), newlpage,
@@ -567,15 +567,15 @@ ginPlaceToPage(GinBtree btree, GinBtreeStack *stack,
 		{
 			/* Splitting the root, three pages to update */
 			MarkBufferDirty(lbuffer);
-			memcpy(page, newrootpg, BLCKSZ);
-			memcpy(BufferGetPage(lbuffer), newlpage, BLCKSZ);
-			memcpy(BufferGetPage(rbuffer), newrpage, BLCKSZ);
+			memcpy(page, newrootpg, CLUSTER_BLOCK_SIZE);
+			memcpy(BufferGetPage(lbuffer), newlpage, CLUSTER_BLOCK_SIZE);
+			memcpy(BufferGetPage(rbuffer), newrpage, CLUSTER_BLOCK_SIZE);
 		}
 		else
 		{
 			/* Normal split, only two pages to update */
-			memcpy(page, newlpage, BLCKSZ);
-			memcpy(BufferGetPage(rbuffer), newrpage, BLCKSZ);
+			memcpy(page, newlpage, CLUSTER_BLOCK_SIZE);
+			memcpy(BufferGetPage(rbuffer), newrpage, CLUSTER_BLOCK_SIZE);
 		}
 
 		/* We also clear childbuf's INCOMPLETE_SPLIT flag, if passed */

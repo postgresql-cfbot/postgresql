@@ -598,7 +598,7 @@ inv_write(LargeObjectDesc *obj_desc, const char *buf, int nbytes)
 	{
 		bytea		hdr;
 		/* this is to make the union big enough for a LO data chunk: */
-		char		data[LOBLKSIZE + VARHDRSZ];
+		char		data[LOBLKSIZE_LIMIT + VARHDRSZ];
 		/* ensure union is aligned well enough: */
 		int32		align_it;
 	}			workbuf;
@@ -789,7 +789,7 @@ inv_truncate(LargeObjectDesc *obj_desc, int64 len)
 	{
 		bytea		hdr;
 		/* this is to make the union big enough for a LO data chunk: */
-		char		data[LOBLKSIZE + VARHDRSZ];
+		char		data[LOBLKSIZE_LIMIT + VARHDRSZ];
 		/* ensure union is aligned well enough: */
 		int32		align_it;
 	}			workbuf;

@@ -1630,9 +1630,9 @@ collectMatchesForHeapRow(IndexScanDesc scan, pendingPosition *pos)
 	 */
 	for (;;)
 	{
-		Datum		datum[BLCKSZ / sizeof(IndexTupleData)];
-		GinNullCategory category[BLCKSZ / sizeof(IndexTupleData)];
-		bool		datumExtracted[BLCKSZ / sizeof(IndexTupleData)];
+		Datum		datum[MAX_BLOCK_SIZE / sizeof(IndexTupleData)];
+		GinNullCategory category[MAX_BLOCK_SIZE / sizeof(IndexTupleData)];
+		bool		datumExtracted[MAX_BLOCK_SIZE / sizeof(IndexTupleData)];
 
 		Assert(pos->lastOffset > pos->firstOffset);
 		memset(datumExtracted + pos->firstOffset - 1, 0,

@@ -212,7 +212,7 @@ typedef struct BloomOptions
  * be larger because the index has multiple columns.
  */
 #define BloomMaxFilterSize \
-	MAXALIGN_DOWN(BLCKSZ - \
+	MAXALIGN_DOWN(CLUSTER_BLOCK_SIZE - \
 				  (MAXALIGN(SizeOfPageHeaderData + \
 							sizeof(ItemIdData)) + \
 				   MAXALIGN(sizeof(BrinSpecialSpace)) + \

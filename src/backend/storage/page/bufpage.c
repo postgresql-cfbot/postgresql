@@ -45,7 +45,7 @@ PageInit(Page page, Size pageSize, Size specialSize)
 
 	specialSize = MAXALIGN(specialSize);
 
-	Assert(pageSize == BLCKSZ);
+	Assert(pageSize == CLUSTER_BLOCK_SIZE);
 	Assert(pageSize > specialSize + SizeOfPageHeaderData);
 
 	/* Make sure all fields of page are zero, as well as unused space */
@@ -102,7 +102,7 @@ PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags)
 	{
 		if (DataChecksumsEnabled())
 		{
-			checksum = pg_checksum_page((char *) page, blkno);
+			checksum = pg_checksum_page((char *) page, blkno, CLUSTER_BLOCK_SIZE);
 
 			if (checksum != p->pd_checksum)
 				checksum_failure = true;
@@ -117,7 +117,7 @@ PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags)
 		if ((p->pd_flags & ~PD_VALID_FLAG_BITS) == 0 &&
 			p->pd_lower <= p->pd_upper &&
 			p->pd_upper <= p->pd_special &&
-			p->pd_special <= BLCKSZ &&
+			p->pd_special <= CLUSTER_BLOCK_SIZE &&
 			p->pd_special == MAXALIGN(p->pd_special))
 			header_sane = true;
 
@@ -128,7 +128,7 @@ PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags)
 	/* Check all-zeroes case */
 	all_zeroes = true;
 	pagebytes = (size_t *) page;
-	for (i = 0; i < (BLCKSZ / sizeof(size_t)); i++)
+	for (i = 0; i < (CLUSTER_BLOCK_SIZE / sizeof(size_t)); i++)
 	{
 		if (pagebytes[i] != 0)
 		{
@@ -211,7 +211,7 @@ PageAddItemExtended(Page page,
 	if (phdr->pd_lower < SizeOfPageHeaderData ||
 		phdr->pd_lower > phdr->pd_upper ||
 		phdr->pd_upper > phdr->pd_special ||
-		phdr->pd_special > BLCKSZ)
+		phdr->pd_special > CLUSTER_BLOCK_SIZE)
 		ereport(PANIC,
 				(errcode(ERRCODE_DATA_CORRUPTED),
 				 errmsg("corrupted page pointers: lower = %u, upper = %u, special = %u",
@@ -702,7 +702,7 @@ PageRepairFragmentation(Page page)
 	Offset		pd_upper = ((PageHeader) page)->pd_upper;
 	Offset		pd_special = ((PageHeader) page)->pd_special;
 	Offset		last_offset;
-	itemIdCompactData itemidbase[MaxHeapTuplesPerPage];
+	itemIdCompactData itemidbase[MaxHeapTuplesPerPageLimit];
 	itemIdCompact itemidptr;
 	ItemId		lp;
 	int			nline,
@@ -723,7 +723,7 @@ PageRepairFragmentation(Page page)
 	if (pd_lower < SizeOfPageHeaderData ||
 		pd_lower > pd_upper ||
 		pd_upper > pd_special ||
-		pd_special > BLCKSZ ||
+		pd_special > CLUSTER_BLOCK_SIZE ||
 		pd_special != MAXALIGN(pd_special))
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
@@ -1066,7 +1066,7 @@ PageIndexTupleDelete(Page page, OffsetNumber offnum)
 	if (phdr->pd_lower < SizeOfPageHeaderData ||
 		phdr->pd_lower > phdr->pd_upper ||
 		phdr->pd_upper > phdr->pd_special ||
-		phdr->pd_special > BLCKSZ ||
+		phdr->pd_special > CLUSTER_BLOCK_SIZE ||
 		phdr->pd_special != MAXALIGN(phdr->pd_special))
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
@@ -1165,8 +1165,8 @@ PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems)
 	Offset		pd_upper = phdr->pd_upper;
 	Offset		pd_special = phdr->pd_special;
 	Offset		last_offset;
-	itemIdCompactData itemidbase[MaxIndexTuplesPerPage];
-	ItemIdData	newitemids[MaxIndexTuplesPerPage];
+	itemIdCompactData itemidbase[MaxIndexTuplesPerPageLimit];
+	ItemIdData	newitemids[MaxIndexTuplesPerPageLimit];
 	itemIdCompact itemidptr;
 	ItemId		lp;
 	int			nline,
@@ -1201,7 +1201,7 @@ PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems)
 	if (pd_lower < SizeOfPageHeaderData ||
 		pd_lower > pd_upper ||
 		pd_upper > pd_special ||
-		pd_special > BLCKSZ ||
+		pd_special > CLUSTER_BLOCK_SIZE ||
 		pd_special != MAXALIGN(pd_special))
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
@@ -1307,7 +1307,7 @@ PageIndexTupleDeleteNoCompact(Page page, OffsetNumber offnum)
 	if (phdr->pd_lower < SizeOfPageHeaderData ||
 		phdr->pd_lower > phdr->pd_upper ||
 		phdr->pd_upper > phdr->pd_special ||
-		phdr->pd_special > BLCKSZ ||
+		phdr->pd_special > CLUSTER_BLOCK_SIZE ||
 		phdr->pd_special != MAXALIGN(phdr->pd_special))
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
@@ -1419,7 +1419,7 @@ PageIndexTupleOverwrite(Page page, OffsetNumber offnum,
 	if (phdr->pd_lower < SizeOfPageHeaderData ||
 		phdr->pd_lower > phdr->pd_upper ||
 		phdr->pd_upper > phdr->pd_special ||
-		phdr->pd_special > BLCKSZ ||
+		phdr->pd_special > CLUSTER_BLOCK_SIZE ||
 		phdr->pd_special != MAXALIGN(phdr->pd_special))
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
@@ -1523,12 +1523,12 @@ PageSetChecksumCopy(Page page, BlockNumber blkno)
 	 */
 	if (pageCopy == NULL)
 		pageCopy = MemoryContextAllocAligned(TopMemoryContext,
-											 BLCKSZ,
+											 CLUSTER_BLOCK_SIZE,
 											 PG_IO_ALIGN_SIZE,
 											 0);
 
-	memcpy(pageCopy, (char *) page, BLCKSZ);
-	((PageHeader) pageCopy)->pd_checksum = pg_checksum_page(pageCopy, blkno);
+	memcpy(pageCopy, (char *) page, CLUSTER_BLOCK_SIZE);
+	((PageHeader) pageCopy)->pd_checksum = pg_checksum_page(pageCopy, blkno, CLUSTER_BLOCK_SIZE);
 	return pageCopy;
 }
 
@@ -1545,5 +1545,5 @@ PageSetChecksumInplace(Page page, BlockNumber blkno)
 	if (PageIsNew(page) || !DataChecksumsEnabled())
 		return;
 
-	((PageHeader) page)->pd_checksum = pg_checksum_page((char *) page, blkno);
+	((PageHeader) page)->pd_checksum = pg_checksum_page((char *) page, blkno, CLUSTER_BLOCK_SIZE);
 }

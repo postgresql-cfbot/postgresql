@@ -2081,8 +2081,8 @@ msgstr "データベースクラスタはサーバー実行ファイルと異な
 
 #: access/transam/xlog.c:4070
 #, c-format
-msgid "The database cluster was initialized with BLCKSZ %d, but the server was compiled with BLCKSZ %d."
-msgstr "データベースクラスタは BLCKSZ %d で初期化されましたが、サーバーは BLCKSZ %d でコンパイルされています。"
+msgid "The database cluster was initialized with CLUSTER_BLOCK_SIZE %d, but the server was compiled with CLUSTER_BLOCK_SIZE %d."
+msgstr "データベースクラスタは CLUSTER_BLOCK_SIZE %d で初期化されましたが、サーバーは CLUSTER_BLOCK_SIZE %d でコンパイルされています。"
 
 #: access/transam/xlog.c:4073 access/transam/xlog.c:4080 access/transam/xlog.c:4087 access/transam/xlog.c:4094 access/transam/xlog.c:4101 access/transam/xlog.c:4108 access/transam/xlog.c:4115 access/transam/xlog.c:4123 access/transam/xlog.c:4130
 #, c-format
@@ -21426,8 +21426,8 @@ msgstr "XLOG_BLCKSZが小さすぎるためdebug_io_directはWALに対しては�
 
 #: storage/file/fd.c:3901
 #, c-format
-msgid "debug_io_direct is not supported for data because BLCKSZ is too small"
-msgstr "BLCKSZが小さすぎるためdebug_io_directはデータに対してサポートされません"
+msgid "debug_io_direct is not supported for data because CLUSTER_BLOCK_SIZE is too small"
+msgstr "CLUSTER_BLOCK_SIZEが小さすぎるためdebug_io_directはデータに対してサポートされません"
 
 #: storage/file/reinit.c:145
 #, c-format

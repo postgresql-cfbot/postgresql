@@ -154,7 +154,7 @@ btbuildempty(Relation index)
 	Page		metapage;
 
 	/* Construct metapage. */
-	metapage = (Page) palloc_aligned(BLCKSZ, PG_IO_ALIGN_SIZE, 0);
+	metapage = (Page) palloc_aligned(CLUSTER_BLOCK_SIZE, PG_IO_ALIGN_SIZE, 0);
 	_bt_initmetapage(metapage, P_NONE, 0, _bt_allequalimage(index, false));
 
 	/*
@@ -425,8 +425,8 @@ btrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 	 */
 	if (scan->xs_want_itup && so->currTuples == NULL)
 	{
-		so->currTuples = (char *) palloc(BLCKSZ * 2);
-		so->markTuples = so->currTuples + BLCKSZ;
+		so->currTuples = (char *) palloc(CLUSTER_BLOCK_SIZE * 2);
+		so->markTuples = so->currTuples + CLUSTER_BLOCK_SIZE;
 	}
 
 	/*
@@ -1154,9 +1154,9 @@ backtrack:
 	}
 	else if (P_ISLEAF(opaque))
 	{
-		OffsetNumber deletable[MaxIndexTuplesPerPage];
+		OffsetNumber deletable[MaxIndexTuplesPerPageLimit];
 		int			ndeletable;
-		BTVacuumPosting updatable[MaxIndexTuplesPerPage];
+		BTVacuumPosting updatable[MaxIndexTuplesPerPageLimit];
 		int			nupdatable;
 		OffsetNumber offnum,
 					minoff,

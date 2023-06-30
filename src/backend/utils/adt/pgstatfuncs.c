@@ -1404,12 +1404,12 @@ pg_stat_get_io(PG_FUNCTION_ARGS)
 				values[IO_COL_RESET_TIME] = TimestampTzGetDatum(reset_time);
 
 				/*
-				 * Hard-code this to the value of BLCKSZ for now. Future
+				 * Hard-code this to the value of CLUSTER_BLOCK_SIZE for now. Future
 				 * values could include XLOG_BLCKSZ, once WAL IO is tracked,
 				 * and constant multipliers, once non-block-oriented IO (e.g.
 				 * temporary file IO) is tracked.
 				 */
-				values[IO_COL_CONVERSION] = Int64GetDatum(BLCKSZ);
+				values[IO_COL_CONVERSION] = Int64GetDatum(CLUSTER_BLOCK_SIZE);
 
 				for (int io_op = 0; io_op < IOOP_NUM_TYPES; io_op++)
 				{

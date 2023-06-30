@@ -60,7 +60,8 @@
 
   <para>
    The values stored in the free space map are not exact. They're rounded
-   to precision of 1/256th of <symbol>BLCKSZ</symbol> (32 bytes with default <symbol>BLCKSZ</symbol>), and
+   to precision of 1/256th of <symbol>CLUSTER_BLOCK_SIZE</symbol> (32 bytes
+   with default <symbol>CLUSTER_BLOCK_SIZE</symbol>), and
    they're not kept fully up-to-date as tuples are inserted and updated.
   </para>
 

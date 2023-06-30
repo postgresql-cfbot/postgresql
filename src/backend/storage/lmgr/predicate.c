@@ -321,7 +321,7 @@ static SlruCtlData SerialSlruCtlData;
 
 #define SerialSlruCtl			(&SerialSlruCtlData)
 
-#define SERIAL_PAGESIZE			BLCKSZ
+#define SERIAL_PAGESIZE			CLUSTER_BLOCK_SIZE
 #define SERIAL_ENTRYSIZE			sizeof(SerCommitSeqNo)
 #define SERIAL_ENTRIESPERPAGE	(SERIAL_PAGESIZE / SERIAL_ENTRYSIZE)
 

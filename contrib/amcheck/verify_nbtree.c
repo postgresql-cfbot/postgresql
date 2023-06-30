@@ -2962,7 +2962,7 @@ palloc_btree_page(BtreeCheckState *state, BlockNumber blocknum)
 	BTPageOpaque opaque;
 	OffsetNumber maxoffset;
 
-	page = palloc(BLCKSZ);
+	page = palloc(CLUSTER_BLOCK_SIZE);
 
 	/*
 	 * We copy the page into local storage to avoid holding pin on the buffer
@@ -2979,7 +2979,7 @@ palloc_btree_page(BtreeCheckState *state, BlockNumber blocknum)
 	_bt_checkpage(state->rel, buffer);
 
 	/* Only use copy of page in palloc()'d memory */
-	memcpy(page, BufferGetPage(buffer), BLCKSZ);
+	memcpy(page, BufferGetPage(buffer), CLUSTER_BLOCK_SIZE);
 	UnlockReleaseBuffer(buffer);
 
 	opaque = BTPageGetOpaque(page);
@@ -3163,7 +3163,7 @@ PageGetItemIdCareful(BtreeCheckState *state, BlockNumber block, Page page,
 	ItemId		itemid = PageGetItemId(page, offset);
 
 	if (ItemIdGetOffset(itemid) + ItemIdGetLength(itemid) >
-		BLCKSZ - MAXALIGN(sizeof(BTPageOpaqueData)))
+		CLUSTER_BLOCK_SIZE - MAXALIGN(sizeof(BTPageOpaqueData)))
 		ereport(ERROR,
 				(errcode(ERRCODE_INDEX_CORRUPTED),
 				 errmsg("line pointer points past end of tuple space in index \"%s\"",

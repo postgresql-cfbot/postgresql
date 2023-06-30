@@ -386,7 +386,7 @@ pgstat_heap(Relation rel, FunctionCallInfo fcinfo)
 	table_endscan(scan);
 	relation_close(rel, AccessShareLock);
 
-	stat.table_len = (uint64) nblocks * BLCKSZ;
+	stat.table_len = (uint64) nblocks * CLUSTER_BLOCK_SIZE;
 
 	return build_pgstattuple_type(&stat, fcinfo);
 }
@@ -409,7 +409,7 @@ pgstat_btree_page(pgstattuple_type *stat, Relation rel, BlockNumber blkno,
 	if (PageIsNew(page))
 	{
 		/* fully empty page */
-		stat->free_space += BLCKSZ;
+		stat->free_space += CLUSTER_BLOCK_SIZE;
 	}
 	else
 	{
@@ -419,7 +419,7 @@ pgstat_btree_page(pgstattuple_type *stat, Relation rel, BlockNumber blkno,
 		if (P_IGNORE(opaque))
 		{
 			/* deleted or half-dead page */
-			stat->free_space += BLCKSZ;
+			stat->free_space += CLUSTER_BLOCK_SIZE;
 		}
 		else if (P_ISLEAF(opaque))
 		{
@@ -456,7 +456,7 @@ pgstat_hash_page(pgstattuple_type *stat, Relation rel, BlockNumber blkno,
 		switch (opaque->hasho_flag & LH_PAGE_TYPE)
 		{
 			case LH_UNUSED_PAGE:
-				stat->free_space += BLCKSZ;
+				stat->free_space += CLUSTER_BLOCK_SIZE;
 				break;
 			case LH_BUCKET_PAGE:
 			case LH_OVERFLOW_PAGE:
@@ -531,7 +531,7 @@ pgstat_index(Relation rel, BlockNumber start, pgstat_page pagefn,
 		/* Quit if we've scanned the whole relation */
 		if (blkno >= nblocks)
 		{
-			stat.table_len = (uint64) nblocks * BLCKSZ;
+			stat.table_len = (uint64) nblocks * CLUSTER_BLOCK_SIZE;
 
 			break;
 		}

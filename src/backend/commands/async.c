@@ -163,7 +163,7 @@
  * than that, so changes in that data structure won't affect user-visible
  * restrictions.
  */
-#define NOTIFY_PAYLOAD_MAX_LENGTH	(BLCKSZ - NAMEDATALEN - 128)
+#define NOTIFY_PAYLOAD_MAX_LENGTH	(DEFAULT_BLOCK_SIZE - NAMEDATALEN - 128)
 
 /*
  * Struct representing an entry in the global notify queue
@@ -311,7 +311,7 @@ static AsyncQueueControl *asyncQueueControl;
 static SlruCtlData NotifyCtlData;
 
 #define NotifyCtl					(&NotifyCtlData)
-#define QUEUE_PAGESIZE				BLCKSZ
+#define QUEUE_PAGESIZE				DEFAULT_BLOCK_SIZE
 #define QUEUE_FULL_WARN_INTERVAL	5000	/* warn at most once every 5s */
 
 /*
@@ -322,7 +322,7 @@ static SlruCtlData NotifyCtlData;
  *
  * The most data we can have in the queue at a time is QUEUE_MAX_PAGE/2
  * pages, because more than that would confuse slru.c into thinking there
- * was a wraparound condition.  With the default BLCKSZ this means there
+ * was a wraparound condition.  With the default CLUSTER_BLOCK_SIZE this means there
  * can be up to 8GB of queued-and-not-read data.
  *
  * Note: it's possible to redefine QUEUE_MAX_PAGE with a smaller multiple of

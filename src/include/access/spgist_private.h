@@ -36,7 +36,7 @@ typedef struct SpGistOptions
 	 ((SpGistOptions *) (relation)->rd_options)->fillfactor : \
 	 SPGIST_DEFAULT_FILLFACTOR)
 #define SpGistGetTargetPageFreeSpace(relation) \
-	(BLCKSZ * (100 - SpGistGetFillFactor(relation)) / 100)
+	(CLUSTER_BLOCK_SIZE * (100 - SpGistGetFillFactor(relation)) / 100)
 
 
 /* SPGiST leaf tuples have one key column, optionally have included columns */
@@ -226,14 +226,14 @@ typedef struct SpGistScanOpaqueData
 	TupleDesc	reconTupDesc;	/* if so, descriptor for reconstructed tuples */
 	int			nPtrs;			/* number of TIDs found on current page */
 	int			iPtr;			/* index for scanning through same */
-	ItemPointerData heapPtrs[MaxIndexTuplesPerPage];	/* TIDs from cur page */
-	bool		recheck[MaxIndexTuplesPerPage]; /* their recheck flags */
-	bool		recheckDistances[MaxIndexTuplesPerPage];	/* distance recheck
+	ItemPointerData heapPtrs[MaxIndexTuplesPerPageLimit];	/* TIDs from cur page */
+	bool		recheck[MaxIndexTuplesPerPageLimit]; /* their recheck flags */
+	bool		recheckDistances[MaxIndexTuplesPerPageLimit];	/* distance recheck
 															 * flags */
-	HeapTuple	reconTups[MaxIndexTuplesPerPage];	/* reconstructed tuples */
+	HeapTuple	reconTups[MaxIndexTuplesPerPageLimit];	/* reconstructed tuples */
 
 	/* distances (for recheck) */
-	IndexOrderByDistance *distances[MaxIndexTuplesPerPage];
+	IndexOrderByDistance *distances[MaxIndexTuplesPerPageLimit];
 
 	/*
 	 * Note: using MaxIndexTuplesPerPage above is a bit hokey since
@@ -445,7 +445,7 @@ typedef SpGistDeadTupleData *SpGistDeadTuple;
 
 /* Page capacity after allowing for fixed header and special space */
 #define SPGIST_PAGE_CAPACITY  \
-	MAXALIGN_DOWN(BLCKSZ - \
+	MAXALIGN_DOWN(CLUSTER_BLOCK_SIZE - \
 				  SizeOfPageHeaderData - \
 				  MAXALIGN(sizeof(SpGistPageOpaqueData)))
 

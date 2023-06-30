@@ -2364,7 +2364,7 @@ deparseAnalyzeSizeSql(StringInfo buf, Relation rel)
 
 	appendStringInfoString(buf, "SELECT pg_catalog.pg_relation_size(");
 	deparseStringLiteral(buf, relname.data);
-	appendStringInfo(buf, "::pg_catalog.regclass) / %d", BLCKSZ);
+	appendStringInfo(buf, "::pg_catalog.regclass) / %d", CLUSTER_BLOCK_SIZE);
 }
 
 /*

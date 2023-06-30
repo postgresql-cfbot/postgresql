@@ -67,6 +67,7 @@
 #include "catalog/catversion.h"
 #include "catalog/pg_control.h"
 #include "catalog/pg_database.h"
+#include "common/blocksize.h"
 #include "common/controldata_utils.h"
 #include "common/file_utils.h"
 #include "executor/instrument.h"
@@ -3900,8 +3901,8 @@ WriteControlFile(void)
 	ControlFile->maxAlign = MAXIMUM_ALIGNOF;
 	ControlFile->floatFormat = FLOATFORMAT_VALUE;
 
-	ControlFile->blcksz = BLCKSZ;
-	ControlFile->relseg_size = RELSEG_SIZE;
+	ControlFile->blcksz = CLUSTER_BLOCK_SIZE;
+	ControlFile->relseg_size = CLUSTER_RELSEG_SIZE;
 	ControlFile->xlog_blcksz = XLOG_BLCKSZ;
 	ControlFile->xlog_seg_size = wal_segment_size;
 
@@ -3967,14 +3968,104 @@ WriteControlFile(void)
 						XLOG_CONTROL_FILE)));
 }
 
+extern int block_size;
+
+/*
+ * This routine reads and returns the block size from the control file as
+ * needed; since this is the only field we care about and it needs to be
+ * handled early in the process, we don't worry about locks and the like; this
+ * is static for the life of the cluster.
+ */
+uint32
+ClusterBlockSize(void)
+{
+	pg_crc32c	crc;
+	int fd, r;
+	ControlFileData cluster_control;
+
+	if (block_size)
+		return block_size;
+
+	if (ControlFile)
+		return ControlFile->blcksz;
+
+	// TODO: check for bootstrap mode, since that's passed in the param?
+
+	/* neither shortcut worked, so go ahead and open the control file and
+	 * parse out only basic field */
+	fd = BasicOpenFile(XLOG_CONTROL_FILE,
+					   O_RDONLY | PG_BINARY);
+	if (fd < 0)
+		ereport(PANIC,
+				(errcode_for_file_access(),
+				 errmsg("could not open file \"%s\": %m",
+						XLOG_CONTROL_FILE)));
+
+	r = read(fd, &cluster_control, sizeof(ControlFileData));
+	if (r != sizeof(ControlFileData))
+	{
+		if (r < 0)
+			ereport(PANIC,
+					(errcode_for_file_access(),
+					 errmsg("could not read file \"%s\": %m",
+							XLOG_CONTROL_FILE)));
+		else
+			ereport(PANIC,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg("could not read file \"%s\": read %d of %zu",
+							XLOG_CONTROL_FILE, r, sizeof(ControlFileData))));
+	}
+	close(fd);
+
+	/*
+	 * Check for expected pg_control format version.  If this is wrong, the
+	 * CRC check will likely fail because we'll be checking the wrong number
+	 * of bytes.  Complaining about wrong version will probably be more
+	 * enlightening than complaining about wrong CRC.
+	 */
+
+	if (cluster_control.pg_control_version != PG_CONTROL_VERSION && cluster_control.pg_control_version % 65536 == 0 && cluster_control.pg_control_version / 65536 != 0)
+		ereport(FATAL,
+				(errmsg("database files are incompatible with server"),
+				 errdetail("The database cluster was initialized with PG_CONTROL_VERSION %d (0x%08x),"
+						   " but the server was compiled with PG_CONTROL_VERSION %d (0x%08x).",
+						   cluster_control.pg_control_version, cluster_control.pg_control_version,
+						   PG_CONTROL_VERSION, PG_CONTROL_VERSION),
+				 errhint("This could be a problem of mismatched byte ordering.  It looks like you need to initdb.")));
+
+	if (cluster_control.pg_control_version != PG_CONTROL_VERSION)
+		ereport(FATAL,
+				(errmsg("database files are incompatible with server"),
+				 errdetail("The database cluster was initialized with PG_CONTROL_VERSION %d,"
+						   " but the server was compiled with PG_CONTROL_VERSION %d.",
+						   cluster_control.pg_control_version, PG_CONTROL_VERSION),
+				 errhint("It looks like you need to initdb.")));
+
+	/* Now check the CRC. */
+	INIT_CRC32C(crc);
+	COMP_CRC32C(crc,
+				(char *) &cluster_control,
+				offsetof(ControlFileData, crc));
+	FIN_CRC32C(crc);
+
+	if (!EQ_CRC32C(crc, cluster_control.crc))
+		ereport(FATAL,
+				(errmsg("incorrect checksum in control file")));
+
+	block_size = cluster_control.blcksz;
+
+	return block_size;
+}
+
 static void
 ReadControlFile(void)
 {
 	pg_crc32c	crc;
 	int			fd;
 	static char wal_segsz_str[20];
+	static char block_size_str[20];
 	int			r;
-
+	int block_size;
 	/*
 	 * Read data...
 	 */
@@ -4041,6 +4132,26 @@ ReadControlFile(void)
 				(errmsg("incorrect checksum in control file")));
 
 	/*
+	 * Block size computations affect a number of things that are later
+	 * checked, so ensure that we calculate as soon as CRC has been validated
+	 * before checking other things that may depend on it.
+	 */
+
+	block_size = ControlFile->blcksz;
+
+	if (!IsValidBlockSize(block_size))
+		ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg_plural("Block size must be a power of two between 1k and 32k, but the control file specifies %d byte",
+									  "Block size must be a power of two between 1k and 32k, but the control file specifies %d bytes",
+									  block_size,
+									  block_size)));
+
+	BlockSizeInit(block_size);
+	snprintf(block_size_str, sizeof(block_size_str), "%d", block_size);
+	SetConfigOption("block_size", block_size_str, PGC_INTERNAL,
+					PGC_S_DYNAMIC_DEFAULT);
+
+	/*
 	 * Do compatibility checking immediately.  If the database isn't
 	 * compatible with the backend executable, we want to abort before we can
 	 * possibly do any damage.
@@ -4064,19 +4175,12 @@ ReadControlFile(void)
 				(errmsg("database files are incompatible with server"),
 				 errdetail("The database cluster appears to use a different floating-point number format than the server executable."),
 				 errhint("It looks like you need to initdb.")));
-	if (ControlFile->blcksz != BLCKSZ)
+	if (ControlFile->relseg_size != CLUSTER_RELSEG_SIZE)
 		ereport(FATAL,
 				(errmsg("database files are incompatible with server"),
-				 errdetail("The database cluster was initialized with BLCKSZ %d,"
-						   " but the server was compiled with BLCKSZ %d.",
-						   ControlFile->blcksz, BLCKSZ),
-				 errhint("It looks like you need to recompile or initdb.")));
-	if (ControlFile->relseg_size != RELSEG_SIZE)
-		ereport(FATAL,
-				(errmsg("database files are incompatible with server"),
-				 errdetail("The database cluster was initialized with RELSEG_SIZE %d,"
-						   " but the server was compiled with RELSEG_SIZE %d.",
-						   ControlFile->relseg_size, RELSEG_SIZE),
+				 errdetail("The database cluster was initialized with CLUSTER_RELSEG_SIZE %d,"
+						   " but the server was compiled with CLUSTER_RELSEG_SIZE %d.",
+						   ControlFile->relseg_size, CLUSTER_RELSEG_SIZE),
 				 errhint("It looks like you need to recompile or initdb.")));
 	if (ControlFile->xlog_blcksz != XLOG_BLCKSZ)
 		ereport(FATAL,

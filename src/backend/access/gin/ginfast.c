@@ -39,7 +39,7 @@
 int			gin_pending_list_limit = 0;
 
 #define GIN_PAGE_FREESIZE \
-	( BLCKSZ - MAXALIGN(SizeOfPageHeaderData) - MAXALIGN(sizeof(GinPageOpaqueData)) )
+	( CLUSTER_BLOCK_SIZE - MAXALIGN(SizeOfPageHeaderData) - MAXALIGN(sizeof(GinPageOpaqueData)) )
 
 typedef struct KeyArray
 {
@@ -92,7 +92,7 @@ writeListPage(Relation index, Buffer buffer,
 		off++;
 	}
 
-	Assert(size <= BLCKSZ);		/* else we overran workspace */
+	Assert(size <= CLUSTER_BLOCK_SIZE);		/* else we overran workspace */
 
 	GinPageGetOpaque(page)->rightlink = rightlink;
 

@@ -371,7 +371,7 @@ _hash_pgaddmultitup(Relation rel, Buffer buf, IndexTuple *itups,
 static void
 _hash_vacuum_one_page(Relation rel, Relation hrel, Buffer metabuf, Buffer buf)
 {
-	OffsetNumber deletable[MaxOffsetNumber];
+	OffsetNumber deletable[MaxOffsetNumberLimit];
 	int			ndeletable = 0;
 	OffsetNumber offnum,
 				maxoff;

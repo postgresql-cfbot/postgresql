@@ -1029,7 +1029,7 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 
 	/* Each parallel VACUUM worker gets its own access strategy. */
 	pvs.bstrategy = GetAccessStrategyWithSize(BAS_VACUUM,
-											  shared->ring_nbuffers * (BLCKSZ / 1024));
+											  shared->ring_nbuffers * (CLUSTER_BLOCK_SIZE / 1024));
 
 	/* Setup error traceback support for ereport() */
 	errcallback.callback = parallel_vacuum_error_callback;

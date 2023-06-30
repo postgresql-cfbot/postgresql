@@ -1264,7 +1264,7 @@ msgstr "O agrupamento de banco de dados parece utilizar um formato de número de
 
 #: access/transam/xlog.c:4506
 #, c-format
-msgid "The database cluster was initialized with BLCKSZ %d, but the server was compiled with BLCKSZ %d."
+msgid "The database cluster was initialized with CLUSTER_BLOCK_SIZE %d, but the server was compiled with CLUSTER_BLOCK_SIZE %d."
 msgstr "O agrupamento de banco de dados foi inicializado com BLCSZ %d, mas o servidor foi compilado com BLCSZ %d."
 
 #: access/transam/xlog.c:4509 access/transam/xlog.c:4516

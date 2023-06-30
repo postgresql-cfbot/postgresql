@@ -28,6 +28,7 @@
 #include "access/xlog_internal.h"
 #include "backup/basebackup.h"
 #include "bbstreamer.h"
+#include "common/blocksize.h"
 #include "common/compression.h"
 #include "common/file_perm.h"
 #include "common/file_utils.h"
@@ -2734,6 +2735,12 @@ main(int argc, char **argv)
 	/* determine remote server's xlog segment size */
 	if (!RetrieveWalSegSize(conn))
 		exit(1);
+
+	/* detect and set remote server's block size */
+	if (!RetrieveBlockSize(conn))
+		exit(1);
+
+	BlockSizeInit(BlockSize);
 
 	/* Create pg_wal symlink, if required */
 	if (xlog_dir)

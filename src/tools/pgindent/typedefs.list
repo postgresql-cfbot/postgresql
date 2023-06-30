@@ -893,7 +893,6 @@ Form_pg_ts_template
 Form_pg_type
 Form_pg_user_mapping
 FormatNode
-FreeBlockNumberArray
 FreeListData
 FreePageBtree
 FreePageBtreeHeader

@@ -515,7 +515,7 @@ RelationGetBufferForTuple(Relation relation, Size len,
 		ereport(ERROR,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("row is too big: size %zu, maximum size %zu",
-						len, MaxHeapTupleSize)));
+						len, (Size)MaxHeapTupleSize)));
 
 	/* Compute desired extra freespace due to fillfactor option */
 	saveFreeSpace = RelationGetTargetPageFreeSpace(relation,

@@ -133,7 +133,7 @@ toast_save_datum(Relation rel, Datum value,
 	{
 		struct varlena hdr;
 		/* this is to make the union big enough for a chunk: */
-		char		data[TOAST_MAX_CHUNK_SIZE + VARHDRSZ];
+		char		data[TOAST_MAX_CHUNK_SIZE_LIMIT + VARHDRSZ];
 		/* ensure union is aligned well enough: */
 		int32		align_it;
 	}			chunk_data;

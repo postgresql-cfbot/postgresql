@@ -28,6 +28,7 @@
 #include "catalog/index.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
+#include "common/blocksize.h"
 #include "common/link-canary.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
@@ -46,6 +47,7 @@
 #include "utils/relmapper.h"
 
 uint32		bootstrap_data_checksum_version = 0;	/* No checksum */
+uint32		bootstrap_blocksize = DEFAULT_BLOCK_SIZE;
 
 
 static void CheckerModeMain(void);
@@ -221,10 +223,18 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	argv++;
 	argc--;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:X:-:")) != -1)
+	while ((flag = getopt(argc, argv, "b:B:c:d:D:Fkr:X:-:")) != -1)
 	{
 		switch (flag)
 		{
+			case 'b':
+				bootstrap_blocksize = strtol(optarg, NULL, 0);
+				if (!IsValidBlockSize(bootstrap_blocksize))
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("invalid block size: %s; must be power of two between 1k and 32k",
+									optarg)));
+				break;
 			case 'B':
 				SetConfigOption("shared_buffers", optarg, PGC_POSTMASTER, PGC_S_ARGV);
 				break;
@@ -308,6 +318,8 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	/* Acquire configuration parameters */
 	if (!SelectConfigFiles(userDoption, progname))
 		proc_exit(1);
+
+	BlockSizeInit(bootstrap_blocksize);
 
 	/*
 	 * Validate we have been given a reasonable-looking DataDir and change

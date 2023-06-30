@@ -105,7 +105,7 @@
  * extra headers, so the whole page minus the standard page header is
  * used for the bitmap.
  */
-#define MAPSIZE (BLCKSZ - MAXALIGN(SizeOfPageHeaderData))
+#define MAPSIZE (CLUSTER_BLOCK_SIZE - MAXALIGN(SizeOfPageHeaderData))
 
 /* Number of heap blocks we can represent in one byte */
 #define HEAPBLOCKS_PER_BYTE (BITS_PER_BYTE / BITS_PER_HEAPBLOCK)
@@ -414,8 +414,8 @@ visibilitymap_count(Relation rel, BlockNumber *all_visible, BlockNumber *all_fro
 		 */
 		map = (uint64 *) PageGetContents(BufferGetPage(mapBuffer));
 
-		StaticAssertStmt(MAPSIZE % sizeof(uint64) == 0,
-						 "unsupported MAPSIZE");
+		Assert(MAPSIZE % sizeof(uint64) == 0);
+
 		if (all_frozen == NULL)
 		{
 			for (i = 0; i < MAPSIZE / sizeof(uint64); i++)
@@ -613,7 +613,7 @@ vm_readbuf(Relation rel, BlockNumber blkno, bool extend)
 	{
 		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 		if (PageIsNew(BufferGetPage(buf)))
-			PageInit(BufferGetPage(buf), BLCKSZ, 0);
+			PageInit(BufferGetPage(buf), CLUSTER_BLOCK_SIZE, 0);
 		LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 	}
 	return buf;

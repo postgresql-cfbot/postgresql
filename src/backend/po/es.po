@@ -2387,8 +2387,8 @@ msgstr "Los archivos de la base de datos parecen usar un formato de número de c
 
 #: access/transam/xlog.c:4070
 #, c-format
-msgid "The database cluster was initialized with BLCKSZ %d, but the server was compiled with BLCKSZ %d."
-msgstr "Los archivos de base de datos fueron inicializados con BLCKSZ %d, pero el servidor fue compilado con BLCKSZ %d."
+msgid "The database cluster was initialized with CLUSTER_BLOCK_SIZE %d, but the server was compiled with CLUSTER_BLOCK_SIZE %d."
+msgstr "Los archivos de base de datos fueron inicializados con CLUSTER_BLOCK_SIZE %d, pero el servidor fue compilado con CLUSTER_BLOCK_SIZE %d."
 
 #: access/transam/xlog.c:4073 access/transam/xlog.c:4080
 #: access/transam/xlog.c:4087 access/transam/xlog.c:4094
@@ -21808,7 +21808,7 @@ msgstr ""
 
 #: storage/file/fd.c:3901
 #, c-format
-msgid "io_direct is not supported for data because BLCKSZ is too small"
+msgid "io_direct is not supported for data because CLUSTER_BLOCK_SIZE is too small"
 msgstr ""
 
 #: storage/file/reinit.c:145

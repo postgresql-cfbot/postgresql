@@ -23,6 +23,7 @@
 #include "backup/basebackup_sink.h"
 #include "backup/basebackup_target.h"
 #include "commands/defrem.h"
+#include "common/blocksize.h"
 #include "common/compression.h"
 #include "common/file_perm.h"
 #include "lib/stringinfo.h"
@@ -55,7 +56,7 @@
  * NB: The buffer size is required to be a multiple of the system block
  * size, so use that value instead if it's bigger than our preference.
  */
-#define SINK_BUFFER_LENGTH			Max(32768, BLCKSZ)
+#define SINK_BUFFER_LENGTH			Max(32768, CLUSTER_BLOCK_SIZE)
 
 typedef struct
 {
@@ -370,8 +371,8 @@ perform_base_backup(basebackup_options *opt, bbsink *sink)
 			else
 			{
 				/* Properly terminate the tarfile. */
-				StaticAssertDecl(2 * TAR_BLOCK_SIZE <= BLCKSZ,
-								 "BLCKSZ too small for 2 tar blocks");
+				StaticAssertDecl(2 * TAR_BLOCK_SIZE <= MAX_BLOCK_SIZE,
+								 "CLUSTER_BLOCK_SIZE too small for 2 tar blocks");
 				memset(sink->bbs_buffer, 0, 2 * TAR_BLOCK_SIZE);
 				bbsink_archive_contents(sink, 2 * TAR_BLOCK_SIZE);
 
@@ -623,8 +624,8 @@ perform_base_backup(basebackup_options *opt, bbsink *sink)
 		}
 
 		/* Properly terminate the tar file. */
-		StaticAssertStmt(2 * TAR_BLOCK_SIZE <= BLCKSZ,
-						 "BLCKSZ too small for 2 tar blocks");
+		StaticAssertStmt(2 * TAR_BLOCK_SIZE <= MAX_BLOCK_SIZE,
+						 "CLUSTER_BLOCK_SIZE too small for 2 tar blocks");
 		memset(sink->bbs_buffer, 0, 2 * TAR_BLOCK_SIZE);
 		bbsink_archive_contents(sink, 2 * TAR_BLOCK_SIZE);
 
@@ -1562,27 +1563,27 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 
 		/*
 		 * The checksums are verified at block level, so we iterate over the
-		 * buffer in chunks of BLCKSZ, after making sure that
-		 * TAR_SEND_SIZE/buf is divisible by BLCKSZ and we read a multiple of
-		 * BLCKSZ bytes.
+		 * buffer in chunks of CLUSTER_BLOCK_SIZE, after making sure that
+		 * TAR_SEND_SIZE/buf is divisible by CLUSTER_BLOCK_SIZE and we read a multiple of
+		 * CLUSTER_BLOCK_SIZE bytes.
 		 */
-		Assert((sink->bbs_buffer_length % BLCKSZ) == 0);
+		Assert((sink->bbs_buffer_length % CLUSTER_BLOCK_SIZE) == 0);
 
-		if (verify_checksum && (cnt % BLCKSZ != 0))
+		if (verify_checksum && (cnt % CLUSTER_BLOCK_SIZE != 0))
 		{
 			ereport(WARNING,
 					(errmsg("could not verify checksum in file \"%s\", block "
 							"%u: read buffer size %d and page size %d "
 							"differ",
-							readfilename, blkno, (int) cnt, BLCKSZ)));
+							readfilename, blkno, (int) cnt, CLUSTER_BLOCK_SIZE)));
 			verify_checksum = false;
 		}
 
 		if (verify_checksum)
 		{
-			for (i = 0; i < cnt / BLCKSZ; i++)
+			for (i = 0; i < cnt / CLUSTER_BLOCK_SIZE; i++)
 			{
-				page = sink->bbs_buffer + BLCKSZ * i;
+				page = sink->bbs_buffer + CLUSTER_BLOCK_SIZE * i;
 
 				/*
 				 * Only check pages which have not been modified since the
@@ -1594,7 +1595,7 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 				 */
 				if (!PageIsNew(page) && PageGetLSN(page) < sink->bbs_state->startptr)
 				{
-					checksum = pg_checksum_page((char *) page, blkno + segmentno * RELSEG_SIZE);
+					checksum = pg_checksum_page((char *) page, blkno + segmentno * RELSEG_SIZE, CLUSTER_BLOCK_SIZE);
 					phdr = (PageHeader) page;
 					if (phdr->pd_checksum != checksum)
 					{
@@ -1625,8 +1626,8 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 							/* Reread the failed block */
 							reread_cnt =
 								basebackup_read_file(fd,
-													 sink->bbs_buffer + BLCKSZ * i,
-													 BLCKSZ, len + BLCKSZ * i,
+													 sink->bbs_buffer + CLUSTER_BLOCK_SIZE * i,
+													 CLUSTER_BLOCK_SIZE, len + CLUSTER_BLOCK_SIZE * i,
 													 readfilename,
 													 false);
 							if (reread_cnt == 0)
@@ -1639,7 +1640,7 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 								 * code that handles that case. (We must fix
 								 * up cnt first, though.)
 								 */
-								cnt = BLCKSZ * i;
+								cnt = CLUSTER_BLOCK_SIZE * i;
 								break;
 							}
 
@@ -1745,12 +1746,12 @@ _tarWriteHeader(bbsink *sink, const char *filename, const char *linktarget,
 		/*
 		 * As of this writing, the smallest supported block size is 1kB, which
 		 * is twice TAR_BLOCK_SIZE. Since the buffer size is required to be a
-		 * multiple of BLCKSZ, it should be safe to assume that the buffer is
+		 * multiple of CLUSTER_BLOCK_SIZE, it should be safe to assume that the buffer is
 		 * large enough to fit an entire tar block. We double-check by means
 		 * of these assertions.
 		 */
-		StaticAssertDecl(TAR_BLOCK_SIZE <= BLCKSZ,
-						 "BLCKSZ too small for tar block");
+		StaticAssertDecl(TAR_BLOCK_SIZE <= DEFAULT_BLOCK_SIZE,
+						 "DEFAULT_BLOCK_SIZE too small for tar block");
 		Assert(sink->bbs_buffer_length >= TAR_BLOCK_SIZE);
 
 		rc = tarCreateHeader(sink->bbs_buffer, filename, linktarget,

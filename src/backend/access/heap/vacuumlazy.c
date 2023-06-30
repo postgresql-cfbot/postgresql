@@ -98,7 +98,7 @@
  * (Note that this is deliberately kept to a power-of-two, usually 2^19.)
  */
 #define FAILSAFE_EVERY_PAGES \
-	((BlockNumber) (((uint64) 4 * 1024 * 1024 * 1024) / BLCKSZ))
+	((BlockNumber) (((uint64) 4 * 1024 * 1024 * 1024) / CLUSTER_BLOCK_SIZE))
 
 /*
  * When a table has no indexes, vacuum the FSM after every 8GB, approximately
@@ -107,7 +107,7 @@
  * and we vacuum FSM after each index/heap cleaning pass.
  */
 #define VACUUM_FSM_EVERY_PAGES \
-	((BlockNumber) (((uint64) 8 * 1024 * 1024 * 1024) / BLCKSZ))
+	((BlockNumber) (((uint64) 8 * 1024 * 1024 * 1024) / CLUSTER_BLOCK_SIZE))
 
 /*
  * Before we consider skipping a page that's marked as clean in
@@ -749,9 +749,9 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 			}
 			if (secs_dur > 0 || usecs_dur > 0)
 			{
-				read_rate = (double) BLCKSZ * PageMissOp / (1024 * 1024) /
+				read_rate = (double) CLUSTER_BLOCK_SIZE * PageMissOp / (1024 * 1024) /
 					(secs_dur + usecs_dur / 1000000.0);
-				write_rate = (double) BLCKSZ * PageDirtyOp / (1024 * 1024) /
+				write_rate = (double) CLUSTER_BLOCK_SIZE * PageDirtyOp / (1024 * 1024) /
 					(secs_dur + usecs_dur / 1000000.0);
 			}
 			appendStringInfo(&buf, _("avg read rate: %.3f MB/s, avg write rate: %.3f MB/s\n"),
@@ -1439,7 +1439,7 @@ lazy_scan_new_or_empty(LVRelState *vacrel, Buffer buf, BlockNumber blkno,
 
 		if (GetRecordedFreeSpace(vacrel->rel, blkno) == 0)
 		{
-			freespace = BLCKSZ - SizeOfPageHeaderData;
+			freespace = CLUSTER_BLOCK_SIZE - SizeOfPageHeaderData;
 
 			RecordPageWithFreeSpace(vacrel->rel, blkno, freespace);
 		}
@@ -1552,8 +1552,8 @@ lazy_scan_prune(LVRelState *vacrel,
 	int			nnewlpdead;
 	HeapPageFreeze pagefrz;
 	int64		fpi_before = pgWalUsage.wal_fpi;
-	OffsetNumber deadoffsets[MaxHeapTuplesPerPage];
-	HeapTupleFreeze frozen[MaxHeapTuplesPerPage];
+	OffsetNumber deadoffsets[MaxHeapTuplesPerPageLimit];
+	HeapTupleFreeze frozen[MaxHeapTuplesPerPageLimit];
 
 	Assert(BufferGetBlockNumber(buf) == blkno);
 
@@ -1972,7 +1972,7 @@ lazy_scan_noprune(LVRelState *vacrel,
 	HeapTupleHeader tupleheader;
 	TransactionId NoFreezePageRelfrozenXid = vacrel->NewRelfrozenXid;
 	MultiXactId NoFreezePageRelminMxid = vacrel->NewRelminMxid;
-	OffsetNumber deadoffsets[MaxHeapTuplesPerPage];
+	OffsetNumber deadoffsets[MaxHeapTuplesPerPageLimit];
 
 	Assert(BufferGetBlockNumber(buf) == blkno);
 
@@ -2504,7 +2504,7 @@ lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno, Buffer buffer,
 {
 	VacDeadItems *dead_items = vacrel->dead_items;
 	Page		page = BufferGetPage(buffer);
-	OffsetNumber unused[MaxHeapTuplesPerPage];
+	OffsetNumber unused[MaxHeapTuplesPerPageLimit];
 	int			nunused = 0;
 	TransactionId visibility_cutoff_xid;
 	bool		all_frozen;

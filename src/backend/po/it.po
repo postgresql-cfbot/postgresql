@@ -2067,8 +2067,8 @@ msgstr "Il cluster di database sta usando un formato per i numeri in virgola mob
 
 #: access/transam/xlog.c:4096
 #, c-format
-msgid "The database cluster was initialized with BLCKSZ %d, but the server was compiled with BLCKSZ %d."
-msgstr "Il cluster di database è stato inizializzato con BLCKSZ %d, ma il server è stato compilato con BLCKSZ %d."
+msgid "The database cluster was initialized with CLUSTER_BLOCK_SIZE %d, but the server was compiled with CLUSTER_BLOCK_SIZE %d."
+msgstr "Il cluster di database è stato inizializzato con CLUSTER_BLOCK_SIZE %d, ma il server è stato compilato con CLUSTER_BLOCK_SIZE %d."
 
 #: access/transam/xlog.c:4099 access/transam/xlog.c:4106 access/transam/xlog.c:4113 access/transam/xlog.c:4120 access/transam/xlog.c:4127 access/transam/xlog.c:4134 access/transam/xlog.c:4141 access/transam/xlog.c:4149 access/transam/xlog.c:4156
 #, c-format

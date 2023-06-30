@@ -589,7 +589,7 @@ GetAccessStrategyWithSize(BufferAccessStrategyType btype, int ring_size_kb)
 	Assert(ring_size_kb >= 0);
 
 	/* Figure out how many buffers ring_size_kb is */
-	ring_buffers = ring_size_kb / (BLCKSZ / 1024);
+	ring_buffers = ring_size_kb / (CLUSTER_BLOCK_SIZE / 1024);
 
 	/* 0 means unlimited, so no BufferAccessStrategy required */
 	if (ring_buffers == 0)

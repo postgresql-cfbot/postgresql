@@ -7760,7 +7760,7 @@ gincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 	 * around 3 bytes per item is fairly typical.
 	 */
 	dataPagesFetchedBySel = ceil(*indexSelectivity *
-								 (numTuples / (BLCKSZ / 3)));
+								 (numTuples / (CLUSTER_BLOCK_SIZE / 3)));
 	if (dataPagesFetchedBySel > dataPagesFetched)
 		dataPagesFetched = dataPagesFetchedBySel;
 

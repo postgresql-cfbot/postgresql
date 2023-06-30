@@ -45,7 +45,7 @@
 #include "storage/sync.h"
 
 /*
- * Defines for CLOG page sizes.  A page is the same BLCKSZ as is used
+ * Defines for CLOG page sizes.  A page is the same CLUSTER_BLOCK_SIZE as is used
  * everywhere else in Postgres.
  *
  * Note: because TransactionIds are 32 bits and wrap around at 0xFFFFFFFF,
@@ -59,7 +59,7 @@
 /* We need two bits per xact, so four xacts fit in a byte */
 #define CLOG_BITS_PER_XACT	2
 #define CLOG_XACTS_PER_BYTE 4
-#define CLOG_XACTS_PER_PAGE (BLCKSZ * CLOG_XACTS_PER_BYTE)
+#define CLOG_XACTS_PER_PAGE (CLUSTER_BLOCK_SIZE * CLOG_XACTS_PER_BYTE)
 #define CLOG_XACT_BITMASK	((1 << CLOG_BITS_PER_XACT) - 1)
 
 #define TransactionIdToPage(xid)	((xid) / (TransactionId) CLOG_XACTS_PER_PAGE)
@@ -802,7 +802,7 @@ TrimCLOG(void)
 		/* Zero so-far-unused positions in the current byte */
 		*byteptr &= (1 << bshift) - 1;
 		/* Zero the rest of the page */
-		MemSet(byteptr + 1, 0, BLCKSZ - byteno - 1);
+		MemSet(byteptr + 1, 0, CLUSTER_BLOCK_SIZE - byteno - 1);
 
 		XactCtl->shared->page_dirty[slotno] = true;
 	}

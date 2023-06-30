@@ -18,6 +18,7 @@
 #include "access/transam.h"
 #include "access/tupdesc.h"
 #include "access/tupmacs.h"
+#include "common/blocksize.h"
 #include "storage/bufpage.h"
 #include "varatt.h"
 
@@ -427,8 +428,8 @@ do { \
 	(tup)->t_choice.t_heap.t_field3.t_xvac = (xid); \
 } while (0)
 
-StaticAssertDecl(MaxOffsetNumber < SpecTokenOffsetNumber,
-				 "invalid speculative token constant");
+/* StaticAssertDecl(MaxOffsetNumber < SpecTokenOffsetNumber, */
+/* 				 "invalid speculative token constant"); */
 
 #define HeapTupleHeaderIsSpeculative(tup) \
 ( \
@@ -551,7 +552,7 @@ StaticAssertDecl(MaxOffsetNumber < SpecTokenOffsetNumber,
 
 /*
  * MaxHeapTupleSize is the maximum allowed size of a heap tuple, including
- * header and MAXALIGN alignment padding.  Basically it's BLCKSZ minus the
+ * header and MAXALIGN alignment padding.  Basically it's CLUSTER_BLOCK_SIZE minus the
  * other stuff that has to be on a disk page.  Since heap pages use no
  * "special space", there's no deduction for that.
  *
@@ -560,7 +561,8 @@ StaticAssertDecl(MaxOffsetNumber < SpecTokenOffsetNumber,
  * ItemIds and tuples have different alignment requirements, don't assume that
  * you can, say, fit 2 tuples of size MaxHeapTupleSize/2 on the same page.
  */
-#define MaxHeapTupleSize  (BLCKSZ - MAXALIGN(SizeOfPageHeaderData + sizeof(ItemIdData)))
+#define MaxHeapTupleSize GetBlockSize(BS_MAX_HEAP_TUPLES)
+#define MaxHeapTupleSizeLimit CalcMaxHeapTupleSize(MAX_BLOCK_SIZE)
 #define MinHeapTupleSize  MAXALIGN(SizeofHeapTupleHeader)
 
 /*
@@ -574,9 +576,9 @@ StaticAssertDecl(MaxOffsetNumber < SpecTokenOffsetNumber,
  * pointers to this anyway, to avoid excessive line-pointer bloat and not
  * require increases in the size of work arrays.
  */
-#define MaxHeapTuplesPerPage	\
-	((int) ((BLCKSZ - SizeOfPageHeaderData) / \
-			(MAXALIGN(SizeofHeapTupleHeader) + sizeof(ItemIdData))))
+
+#define MaxHeapTuplesPerPage GetBlockSize(BS_MAX_HEAP_TUPLES_PER_PAGE)
+#define MaxHeapTuplesPerPageLimit CalcMaxHeapTuplesPerPage(MAX_BLOCK_SIZE)
 
 /*
  * MaxAttrSize is a somewhat arbitrary upper limit on the declared size of

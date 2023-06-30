@@ -297,7 +297,7 @@ pgstatindex_impl(Relation rel, FunctionCallInfo fcinfo)
 		{
 			int			max_avail;
 
-			max_avail = BLCKSZ - (BLCKSZ - ((PageHeader) page)->pd_special + SizeOfPageHeaderData);
+			max_avail = CLUSTER_BLOCK_SIZE - (CLUSTER_BLOCK_SIZE - ((PageHeader) page)->pd_special + SizeOfPageHeaderData);
 			indexStat.max_avail += max_avail;
 			indexStat.free_space += PageGetFreeSpace(page);
 
@@ -342,7 +342,7 @@ pgstatindex_impl(Relation rel, FunctionCallInfo fcinfo)
 								indexStat.leaf_pages +
 								indexStat.internal_pages +
 								indexStat.deleted_pages +
-								indexStat.empty_pages) * BLCKSZ);
+								indexStat.empty_pages) * CLUSTER_BLOCK_SIZE);
 		values[j++] = psprintf("%u", indexStat.root_blkno);
 		values[j++] = psprintf(INT64_FORMAT, indexStat.internal_pages);
 		values[j++] = psprintf(INT64_FORMAT, indexStat.leaf_pages);

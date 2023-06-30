@@ -353,7 +353,7 @@ SELECT lo_lseek(fd, 0, 2) FROM lotest_stash_values;
    670800
 (1 row)
 
--- with the default BLCKSZ, LOBLKSIZE = 2048, so this positions us for a block
+-- with the default CLUSTER_BLOCK_SIZE, LOBLKSIZE = 2048, so this positions us for a block
 -- edge case
 SELECT lo_lseek(fd, 2030, 0) FROM lotest_stash_values;
  lo_lseek 

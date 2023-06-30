@@ -1683,8 +1683,8 @@ include_dir 'conf.d'
         settings significantly higher than the minimum are usually needed
         for good performance.
         If this value is specified without units, it is taken as blocks,
-        that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
-        (Non-default values of <symbol>BLCKSZ</symbol> change the minimum
+        that is <symbol>CLUSTER_BLOCK_SIZE</symbol> bytes, typically 8kB.
+        (Non-default values of <symbol>CLUSTER_BLOCK_SIZE</symbol> change the minimum
         value.)
         This parameter can only be set at server start.
        </para>
@@ -1812,9 +1812,9 @@ include_dir 'conf.d'
         each database session.  These are session-local buffers used only
         for access to temporary tables.
         If this value is specified without units, it is taken as blocks,
-        that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
+        that is <symbol>CLUSTER_BLOCK_SIZE</symbol> bytes, typically 8kB.
         The default is eight megabytes (<literal>8MB</literal>).
-        (If <symbol>BLCKSZ</symbol> is not 8kB, the default value scales
+        (If <symbol>CLUSTER_BLOCK_SIZE</symbol> is not 8kB, the default value scales
         proportionally to it.)
         This setting can be changed within individual
         sessions, but only before the first use of temporary tables
@@ -1829,7 +1829,7 @@ include_dir 'conf.d'
         buffers is only a buffer descriptor, or about 64 bytes, per
         increment in <varname>temp_buffers</varname>.  However if a buffer is
         actually used an additional 8192 bytes will be consumed for it
-        (or in general, <symbol>BLCKSZ</symbol> bytes).
+        (or in general, <symbol>CLUSTER_BLOCK_SIZE</symbol> bytes).
        </para>
       </listitem>
      </varlistentry>
@@ -2486,11 +2486,11 @@ include_dir 'conf.d'
          cache, where performance might degrade.  This setting may have no
          effect on some platforms.
          If this value is specified without units, it is taken as blocks,
-         that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
+         that is <symbol>CLUSTER_BLOCK_SIZE</symbol> bytes, typically 8kB.
          The valid range is between
          <literal>0</literal>, which disables forced writeback, and
          <literal>2MB</literal>.  The default is <literal>512kB</literal> on Linux,
-         <literal>0</literal> elsewhere.  (If <symbol>BLCKSZ</symbol> is not 8kB,
+         <literal>0</literal> elsewhere.  (If <symbol>CLUSTER_BLOCK_SIZE</symbol> is not 8kB,
          the default and maximum values scale proportionally to it.)
          This parameter can only be set in the <filename>postgresql.conf</filename>
          file or on the server command line.
@@ -2532,11 +2532,11 @@ include_dir 'conf.d'
          than the OS's page cache, where performance might degrade.  This
          setting may have no effect on some platforms.
          If this value is specified without units, it is taken as blocks,
-         that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
+         that is <symbol>CLUSTER_BLOCK_SIZE</symbol> bytes, typically 8kB.
          The valid range is
          between <literal>0</literal>, which disables forced writeback,
          and <literal>2MB</literal>.  The default is <literal>0</literal>, i.e., no
-         forced writeback.  (If <symbol>BLCKSZ</symbol> is not 8kB,
+         forced writeback.  (If <symbol>CLUSTER_BLOCK_SIZE</symbol> is not 8kB,
          the maximum value scales proportionally to it.)
         </para>
        </listitem>
@@ -3539,11 +3539,11 @@ include_dir 'conf.d'
         than the OS's page cache, where performance might degrade.  This
         setting may have no effect on some platforms.
         If this value is specified without units, it is taken as blocks,
-        that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
+        that is <symbol>CLUSTER_BLOCK_SIZE</symbol> bytes, typically 8kB.
         The valid range is
         between <literal>0</literal>, which disables forced writeback,
         and <literal>2MB</literal>.  The default is <literal>256kB</literal> on
-        Linux, <literal>0</literal> elsewhere.  (If <symbol>BLCKSZ</symbol> is not
+        Linux, <literal>0</literal> elsewhere.  (If <symbol>CLUSTER_BLOCK_SIZE</symbol> is not
         8kB, the default and maximum values scale proportionally to it.)
         This parameter can only be set in the <filename>postgresql.conf</filename>
         file or on the server command line.
@@ -5665,7 +5665,7 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
         table, but when indexes are used the amount of table data
         scanned will normally be less.
         If this value is specified without units, it is taken as blocks,
-        that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
+        that is <symbol>CLUSTER_BLOCK_SIZE</symbol> bytes, typically 8kB.
         The default is 8 megabytes (<literal>8MB</literal>).
        </para>
       </listitem>
@@ -5687,7 +5687,7 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
         particular index can participate in a parallel vacuum.  See
         <xref linkend="sql-vacuum"/>.
         If this value is specified without units, it is taken as blocks,
-        that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
+        that is <symbol>CLUSTER_BLOCK_SIZE</symbol> bytes, typically 8kB.
         The default is 512 kilobytes (<literal>512kB</literal>).
        </para>
       </listitem>
@@ -5719,9 +5719,9 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
         purposes.  The system also does not assume data remains in
         the disk cache between queries.
         If this value is specified without units, it is taken as blocks,
-        that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
+        that is <symbol>CLUSTER_BLOCK_SIZE</symbol> bytes, typically 8kB.
         The default is 4 gigabytes (<literal>4GB</literal>).
-        (If <symbol>BLCKSZ</symbol> is not 8kB, the default value scales
+        (If <symbol>CLUSTER_BLOCK_SIZE</symbol> is not 8kB, the default value scales
         proportionally to it.)
        </para>
       </listitem>
@@ -10676,12 +10676,13 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </term>
       <listitem>
        <para>
-        Reports the size of a disk block.  It is determined by the value
-        of <literal>BLCKSZ</literal> when building the server. The default
-        value is 8192 bytes.  The meaning of some configuration
+        Reports the size of a disk block for this cluster.
+        The default value is 8192 bytes.  The meaning of some configuration
         variables (such as <xref linkend="guc-shared-buffers"/>) is
         influenced by <varname>block_size</varname>. See <xref
-        linkend="runtime-config-resource"/> for information.
+        linkend="runtime-config-resource"/> for information on GUC configuration
+        or <xref linkend="app-initdb-blocksize"/> for more information on
+        selecting a cluster's block size.
        </para>
       </listitem>
      </varlistentry>

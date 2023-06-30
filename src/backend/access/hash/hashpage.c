@@ -1012,7 +1012,7 @@ _hash_alloc_buckets(Relation rel, BlockNumber firstblock, uint32 nblocks)
 	 * _hash_freeovflpage for similar usage.  We take care to make the special
 	 * space valid for the benefit of tools such as pageinspect.
 	 */
-	_hash_pageinit(page, BLCKSZ);
+	_hash_pageinit(page, CLUSTER_BLOCK_SIZE);
 
 	ovflopaque = HashPageGetOpaque(page);
 
@@ -1087,8 +1087,8 @@ _hash_splitbucket(Relation rel,
 	Page		npage;
 	HashPageOpaque oopaque;
 	HashPageOpaque nopaque;
-	OffsetNumber itup_offsets[MaxIndexTuplesPerPage];
-	IndexTuple	itups[MaxIndexTuplesPerPage];
+	OffsetNumber itup_offsets[MaxIndexTuplesPerPageLimit];
+	IndexTuple	itups[MaxIndexTuplesPerPageLimit];
 	Size		all_tups_size = 0;
 	int			i;
 	uint16		nitups = 0;

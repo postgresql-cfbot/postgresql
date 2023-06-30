@@ -73,6 +73,7 @@ $node->command_ok(
 	[
 		'pg_waldump', '--quiet',
 		'--save-fullpage', "$tmp_folder/raw",
+		'-D', $node->data_dir,
 		'--relation', $relation,
 		$walfile
 	],

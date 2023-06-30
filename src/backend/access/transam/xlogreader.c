@@ -189,7 +189,7 @@ XLogReaderFree(XLogReaderState *state)
  * readRecordBufSize is set to the new buffer size.
  *
  * To avoid useless small increases, round its size to a multiple of
- * XLOG_BLCKSZ, and make sure it's at least 5*Max(BLCKSZ, XLOG_BLCKSZ) to start
+ * XLOG_BLCKSZ, and make sure it's at least 5*Max(CLUSTER_BLOCK_SIZE, XLOG_BLCKSZ) to start
  * with.  (That is enough for all "normal" records, but very large commit or
  * abort records might need more space.)
  */
@@ -199,7 +199,7 @@ allocate_recordbuf(XLogReaderState *state, uint32 reclength)
 	uint32		newSize = reclength;
 
 	newSize += XLOG_BLCKSZ - (newSize % XLOG_BLCKSZ);
-	newSize = Max(newSize, 5 * Max(BLCKSZ, XLOG_BLCKSZ));
+	newSize = Max(newSize, 5 * Max(CLUSTER_BLOCK_SIZE, XLOG_BLCKSZ));
 
 #ifndef FRONTEND
 
@@ -1790,17 +1790,17 @@ DecodeXLogRecord(XLogReaderState *state,
 						blk->hole_length = 0;
 				}
 				else
-					blk->hole_length = BLCKSZ - blk->bimg_len;
+					blk->hole_length = CLUSTER_BLOCK_SIZE - blk->bimg_len;
 				datatotal += blk->bimg_len;
 
 				/*
 				 * cross-check that hole_offset > 0, hole_length > 0 and
-				 * bimg_len < BLCKSZ if the HAS_HOLE flag is set.
+				 * bimg_len < CLUSTER_BLOCK_SIZE if the HAS_HOLE flag is set.
 				 */
 				if ((blk->bimg_info & BKPIMAGE_HAS_HOLE) &&
 					(blk->hole_offset == 0 ||
 					 blk->hole_length == 0 ||
-					 blk->bimg_len == BLCKSZ))
+					 blk->bimg_len == CLUSTER_BLOCK_SIZE))
 				{
 					report_invalid_record(state,
 										  "BKPIMAGE_HAS_HOLE set, but hole offset %u length %u block image length %u at %X/%X",
@@ -1827,10 +1827,10 @@ DecodeXLogRecord(XLogReaderState *state,
 				}
 
 				/*
-				 * Cross-check that bimg_len < BLCKSZ if it is compressed.
+				 * Cross-check that bimg_len < CLUSTER_BLOCK_SIZE if it is compressed.
 				 */
 				if (BKPIMAGE_COMPRESSED(blk->bimg_info) &&
-					blk->bimg_len == BLCKSZ)
+					blk->bimg_len == CLUSTER_BLOCK_SIZE)
 				{
 					report_invalid_record(state,
 										  "BKPIMAGE_COMPRESSED set, but block image length %u at %X/%X",
@@ -1840,12 +1840,12 @@ DecodeXLogRecord(XLogReaderState *state,
 				}
 
 				/*
-				 * cross-check that bimg_len = BLCKSZ if neither HAS_HOLE is
+				 * cross-check that bimg_len = CLUSTER_BLOCK_SIZE if neither HAS_HOLE is
 				 * set nor COMPRESSED().
 				 */
 				if (!(blk->bimg_info & BKPIMAGE_HAS_HOLE) &&
 					!BKPIMAGE_COMPRESSED(blk->bimg_info) &&
-					blk->bimg_len != BLCKSZ)
+					blk->bimg_len != CLUSTER_BLOCK_SIZE)
 				{
 					report_invalid_record(state,
 										  "neither BKPIMAGE_HAS_HOLE nor BKPIMAGE_COMPRESSED set, but block image length is %u at %X/%X",
@@ -2077,14 +2077,14 @@ RestoreBlockImage(XLogReaderState *record, uint8 block_id, char *page)
 		if ((bkpb->bimg_info & BKPIMAGE_COMPRESS_PGLZ) != 0)
 		{
 			if (pglz_decompress(ptr, bkpb->bimg_len, tmp.data,
-								BLCKSZ - bkpb->hole_length, true) < 0)
+								CLUSTER_BLOCK_SIZE - bkpb->hole_length, true) < 0)
 				decomp_success = false;
 		}
 		else if ((bkpb->bimg_info & BKPIMAGE_COMPRESS_LZ4) != 0)
 		{
 #ifdef USE_LZ4
 			if (LZ4_decompress_safe(ptr, tmp.data,
-									bkpb->bimg_len, BLCKSZ - bkpb->hole_length) <= 0)
+									bkpb->bimg_len, CLUSTER_BLOCK_SIZE - bkpb->hole_length) <= 0)
 				decomp_success = false;
 #else
 			report_invalid_record(record, "could not restore image at %X/%X compressed with %s not supported by build, block %d",
@@ -2098,7 +2098,7 @@ RestoreBlockImage(XLogReaderState *record, uint8 block_id, char *page)
 		{
 #ifdef USE_ZSTD
 			size_t		decomp_result = ZSTD_decompress(tmp.data,
-														BLCKSZ - bkpb->hole_length,
+														CLUSTER_BLOCK_SIZE - bkpb->hole_length,
 														ptr, bkpb->bimg_len);
 
 			if (ZSTD_isError(decomp_result))
@@ -2133,7 +2133,7 @@ RestoreBlockImage(XLogReaderState *record, uint8 block_id, char *page)
 	/* generate page, taking into account hole if necessary */
 	if (bkpb->hole_length == 0)
 	{
-		memcpy(page, ptr, BLCKSZ);
+		memcpy(page, ptr, CLUSTER_BLOCK_SIZE);
 	}
 	else
 	{
@@ -2142,7 +2142,7 @@ RestoreBlockImage(XLogReaderState *record, uint8 block_id, char *page)
 		MemSet(page + bkpb->hole_offset, 0, bkpb->hole_length);
 		memcpy(page + (bkpb->hole_offset + bkpb->hole_length),
 			   ptr + bkpb->hole_offset,
-			   BLCKSZ - (bkpb->hole_offset + bkpb->hole_length));
+			   CLUSTER_BLOCK_SIZE - (bkpb->hole_offset + bkpb->hole_length));
 	}
 
 	return true;

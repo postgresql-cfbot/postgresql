@@ -818,9 +818,11 @@ exec_object_restorecon(struct selabel_handle *sehnd, Oid catalogId)
 				 * Check SELinux permission to relabel the fetched object,
 				 * then do the actual relabeling.
 				 */
-				sepgsql_object_relabel(&object, context);
+				if (strcmp(context, "<<none>>")) {
+					sepgsql_object_relabel(&object, context);
 
-				SetSecurityLabel(&object, SEPGSQL_LABEL_TAG, context);
+					SetSecurityLabel(&object, SEPGSQL_LABEL_TAG, context);
+				}
 			}
 			PG_FINALLY();
 			{

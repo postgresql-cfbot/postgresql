@@ -2090,10 +2090,6 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       <entry>Waiting to allocate a new OID.</entry>
      </row>
      <row>
-      <entry><literal>OldSnapshotTimeMap</literal></entry>
-      <entry>Waiting to read or update old snapshot control information.</entry>
-     </row>
-     <row>
       <entry><literal>ParallelAppend</literal></entry>
       <entry>Waiting to choose the next subplan during Parallel Append plan
        execution.</entry>

@@ -277,7 +277,6 @@ _bt_moveright(Relation rel,
 	for (;;)
 	{
 		page = BufferGetPage(buf);
-		TestForOldSnapshot(snapshot, rel, page);
 		opaque = BTPageGetOpaque(page);
 
 		if (P_RIGHTMOST(opaque))
@@ -2016,7 +2015,6 @@ _bt_readnextpage(IndexScanDesc scan, BlockNumber blkno, ScanDirection dir)
 			/* step right one page */
 			so->currPos.buf = _bt_getbuf(rel, blkno, BT_READ);
 			page = BufferGetPage(so->currPos.buf);
-			TestForOldSnapshot(scan->xs_snapshot, rel, page);
 			opaque = BTPageGetOpaque(page);
 			/* check for deleted page */
 			if (!P_IGNORE(opaque))
@@ -2119,7 +2117,6 @@ _bt_readnextpage(IndexScanDesc scan, BlockNumber blkno, ScanDirection dir)
 			 * and do it all again.
 			 */
 			page = BufferGetPage(so->currPos.buf);
-			TestForOldSnapshot(scan->xs_snapshot, rel, page);
 			opaque = BTPageGetOpaque(page);
 			if (!P_IGNORE(opaque))
 			{
@@ -2225,7 +2222,6 @@ _bt_walk_left(Relation rel, Buffer buf, Snapshot snapshot)
 		CHECK_FOR_INTERRUPTS();
 		buf = _bt_getbuf(rel, blkno, BT_READ);
 		page = BufferGetPage(buf);
-		TestForOldSnapshot(snapshot, rel, page);
 		opaque = BTPageGetOpaque(page);
 
 		/*
@@ -2252,14 +2248,12 @@ _bt_walk_left(Relation rel, Buffer buf, Snapshot snapshot)
 			blkno = opaque->btpo_next;
 			buf = _bt_relandgetbuf(rel, buf, blkno, BT_READ);
 			page = BufferGetPage(buf);
-			TestForOldSnapshot(snapshot, rel, page);
 			opaque = BTPageGetOpaque(page);
 		}
 
 		/* Return to the original page to see what's up */
 		buf = _bt_relandgetbuf(rel, buf, obknum, BT_READ);
 		page = BufferGetPage(buf);
-		TestForOldSnapshot(snapshot, rel, page);
 		opaque = BTPageGetOpaque(page);
 		if (P_ISDELETED(opaque))
 		{
@@ -2277,7 +2271,6 @@ _bt_walk_left(Relation rel, Buffer buf, Snapshot snapshot)
 				blkno = opaque->btpo_next;
 				buf = _bt_relandgetbuf(rel, buf, blkno, BT_READ);
 				page = BufferGetPage(buf);
-				TestForOldSnapshot(snapshot, rel, page);
 				opaque = BTPageGetOpaque(page);
 				if (!P_ISDELETED(opaque))
 					break;
@@ -2338,7 +2331,6 @@ _bt_get_endpoint(Relation rel, uint32 level, bool rightmost,
 		return InvalidBuffer;
 
 	page = BufferGetPage(buf);
-	TestForOldSnapshot(snapshot, rel, page);
 	opaque = BTPageGetOpaque(page);
 
 	for (;;)
@@ -2358,7 +2350,6 @@ _bt_get_endpoint(Relation rel, uint32 level, bool rightmost,
 					 RelationGetRelationName(rel));
 			buf = _bt_relandgetbuf(rel, buf, blkno, BT_READ);
 			page = BufferGetPage(buf);
-			TestForOldSnapshot(snapshot, rel, page);
 			opaque = BTPageGetOpaque(page);
 		}
 

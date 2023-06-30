@@ -156,7 +156,6 @@ collectMatchBitmap(GinBtreeData *btree, GinBtreeStack *stack,
 			return true;
 
 		page = BufferGetPage(stack->buffer);
-		TestForOldSnapshot(snapshot, btree->index, page);
 		itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, stack->off));
 
 		/*
@@ -1458,7 +1457,6 @@ scanGetCandidate(IndexScanDesc scan, pendingPosition *pos)
 	for (;;)
 	{
 		page = BufferGetPage(pos->pendingBuffer);
-		TestForOldSnapshot(scan->xs_snapshot, scan->indexRelation, page);
 
 		maxoff = PageGetMaxOffsetNumber(page);
 		if (pos->firstOffset > maxoff)
@@ -1639,7 +1637,6 @@ collectMatchesForHeapRow(IndexScanDesc scan, pendingPosition *pos)
 			   sizeof(bool) * (pos->lastOffset - pos->firstOffset));
 
 		page = BufferGetPage(pos->pendingBuffer);
-		TestForOldSnapshot(scan->xs_snapshot, scan->indexRelation, page);
 
 		for (i = 0; i < so->nkeys; i++)
 		{
@@ -1842,7 +1839,6 @@ scanPendingInsert(IndexScanDesc scan, TIDBitmap *tbm, int64 *ntids)
 
 	LockBuffer(metabuffer, GIN_SHARE);
 	page = BufferGetPage(metabuffer);
-	TestForOldSnapshot(scan->xs_snapshot, scan->indexRelation, page);
 	blkno = GinPageGetMeta(page)->head;
 
 	/*

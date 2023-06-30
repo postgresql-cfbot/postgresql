@@ -84,6 +84,7 @@ typedef enum
 #define BGW_DEFAULT_RESTART_INTERVAL	60
 #define BGW_NEVER_RESTART				-1
 #define BGW_MAXLEN						96
+#define BGW_LIBLEN						1024
 #define BGW_EXTRALEN					128
 
 typedef struct BackgroundWorker
@@ -93,7 +94,7 @@ typedef struct BackgroundWorker
 	int			bgw_flags;
 	BgWorkerStartTime bgw_start_time;
 	int			bgw_restart_time;	/* in seconds, or BGW_NEVER_RESTART */
-	char		bgw_library_name[BGW_MAXLEN];
+	char		bgw_library_name[BGW_LIBLEN];
 	char		bgw_function_name[BGW_MAXLEN];
 	Datum		bgw_main_arg;
 	char		bgw_extra[BGW_EXTRALEN];

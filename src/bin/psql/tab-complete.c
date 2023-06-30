@@ -1608,6 +1608,65 @@ HeadMatchesImpl(bool case_sensitive,
 }
 
 /*
+ * Implementation of PartialMatches and PartialMatchesCS macros: do parts of
+ * the words in previous_words match the variadic arguments?
+ */
+static bool
+PartialMatchesImpl(bool case_sensitive,
+				   int previous_words_count, char **previous_words,
+				   int narg,...)
+{
+	va_list		args;
+	char	   *firstarg = NULL;
+
+	if (previous_words_count < narg)
+		return false;
+
+	for (int startpos = 0; startpos < previous_words_count; startpos++)
+	{
+		int			argno;
+
+		if (firstarg == NULL)
+		{
+			va_start(args, narg);
+			firstarg = va_arg(args, char *);
+		}
+
+		if (!word_matches(firstarg,
+						  previous_words[previous_words_count - startpos - 1],
+						  case_sensitive))
+			continue;
+
+		if (previous_words_count - startpos < narg)
+		{
+			va_end(args);
+			return false;
+		}
+
+		for (argno = 1; argno < narg; argno++)
+		{
+			const char *arg = va_arg(args, const char *);
+
+			if (!word_matches(arg,
+							  previous_words[previous_words_count - argno - startpos - 1],
+							  case_sensitive))
+				break;
+		}
+
+		va_end(args);
+		firstarg = NULL;
+
+		if (argno == narg)
+			return true;
+	}
+
+	if (firstarg != NULL)
+		va_end(args);
+
+	return false;
+}
+
+/*
  * Check if the final character of 's' is 'c'.
  */
 static bool
@@ -1686,6 +1745,16 @@ psql_completion(const char *text, int start, int end)
 	/* Match the first N words on the line, case-sensitively. */
 #define HeadMatchesCS(...) \
 	HeadMatchesImpl(true, previous_words_count, previous_words, \
+					VA_ARGS_NARGS(__VA_ARGS__), __VA_ARGS__)
+
+	/* Match N words on the line partially, case-insensitively. */
+#define PartialMatches(...)	\
+	PartialMatchesImpl(false, previous_words_count, previous_words, \
+					VA_ARGS_NARGS(__VA_ARGS__), __VA_ARGS__)
+
+	/* Match N words on the line partially, case-sensitively. */
+#define PartialMatchesCS(...)	\
+	PartialMatchesImpl(true, previous_words_count, previous_words, \
 					VA_ARGS_NARGS(__VA_ARGS__), __VA_ARGS__)
 
 	/* Known command-starting keywords. */
@@ -4242,46 +4311,51 @@ psql_completion(const char *text, int start, int end)
 			 TailMatches("MERGE", "INTO", MatchAny, MatchAny, "USING", MatchAny, MatchAnyExcept("ON|AS")))
 		COMPLETE_WITH("ON");
 
-	/* Complete MERGE INTO ... ON with target table attributes */
-	else if (TailMatches("INTO", MatchAny, "USING", MatchAny, "ON"))
-		COMPLETE_WITH_ATTR(prev4_wd);
-	else if (TailMatches("INTO", MatchAny, "AS", MatchAny, "USING", MatchAny, "AS", MatchAny, "ON"))
-		COMPLETE_WITH_ATTR(prev8_wd);
-	else if (TailMatches("INTO", MatchAny, MatchAny, "USING", MatchAny, MatchAny, "ON"))
-		COMPLETE_WITH_ATTR(prev6_wd);
+	else if (PartialMatches("MERGE", "INTO", MatchAny, "USING") ||
+			 PartialMatches("MERGE", "INTO", MatchAny, "AS", MatchAny, "USING") ||
+			 PartialMatches("MERGE", "INTO", MatchAny, MatchAny, "USING"))
+	{
+		/* Complete MERGE INTO ... ON with target table attributes */
+		if (TailMatches("INTO", MatchAny, "USING", MatchAny, "ON"))
+			COMPLETE_WITH_ATTR(prev4_wd);
+		else if (TailMatches("INTO", MatchAny, "AS", MatchAny, "USING", MatchAny, "AS", MatchAny, "ON"))
+			COMPLETE_WITH_ATTR(prev8_wd);
+		else if (TailMatches("INTO", MatchAny, MatchAny, "USING", MatchAny, MatchAny, "ON"))
+			COMPLETE_WITH_ATTR(prev6_wd);
 
-	/*
-	 * Complete ... USING <relation> [[AS] alias] ON join condition
-	 * (consisting of one or three words typically used) with WHEN [NOT]
-	 * MATCHED
-	 */
-	else if (TailMatches("USING", MatchAny, "ON", MatchAny) ||
-			 TailMatches("USING", MatchAny, "AS", MatchAny, "ON", MatchAny) ||
-			 TailMatches("USING", MatchAny, MatchAny, "ON", MatchAny) ||
-			 TailMatches("USING", MatchAny, "ON", MatchAny, MatchAnyExcept("WHEN"), MatchAnyExcept("WHEN")) ||
-			 TailMatches("USING", MatchAny, "AS", MatchAny, "ON", MatchAny, MatchAnyExcept("WHEN"), MatchAnyExcept("WHEN")) ||
-			 TailMatches("USING", MatchAny, MatchAny, "ON", MatchAny, MatchAnyExcept("WHEN"), MatchAnyExcept("WHEN")))
-		COMPLETE_WITH("WHEN MATCHED", "WHEN NOT MATCHED");
-	else if (TailMatches("USING", MatchAny, "ON", MatchAny, "WHEN") ||
-			 TailMatches("USING", MatchAny, "AS", MatchAny, "ON", MatchAny, "WHEN") ||
-			 TailMatches("USING", MatchAny, MatchAny, "ON", MatchAny, "WHEN") ||
-			 TailMatches("USING", MatchAny, "ON", MatchAny, MatchAny, MatchAny, "WHEN") ||
-			 TailMatches("USING", MatchAny, "AS", MatchAny, "ON", MatchAny, MatchAny, MatchAny, "WHEN") ||
-			 TailMatches("USING", MatchAny, MatchAny, "ON", MatchAny, MatchAny, MatchAny, "WHEN"))
-		COMPLETE_WITH("MATCHED", "NOT MATCHED");
+		/*
+		 * Complete ... USING <relation> [[AS] alias] ON join condition
+		 * (consisting of one or three words typically used) with WHEN [NOT]
+		 * MATCHED
+		 */
+		else if (TailMatches("USING", MatchAny, "ON", MatchAny) ||
+				 TailMatches("USING", MatchAny, "AS", MatchAny, "ON", MatchAny) ||
+				 TailMatches("USING", MatchAny, MatchAny, "ON", MatchAny) ||
+				 TailMatches("USING", MatchAny, "ON", MatchAny, MatchAnyExcept("WHEN"), MatchAnyExcept("WHEN")) ||
+				 TailMatches("USING", MatchAny, "AS", MatchAny, "ON", MatchAny, MatchAnyExcept("WHEN"), MatchAnyExcept("WHEN")) ||
+				 TailMatches("USING", MatchAny, MatchAny, "ON", MatchAny, MatchAnyExcept("WHEN"), MatchAnyExcept("WHEN")))
+			COMPLETE_WITH("WHEN MATCHED", "WHEN NOT MATCHED");
+		else if (TailMatches("USING", MatchAny, "ON", MatchAny, "WHEN") ||
+				 TailMatches("USING", MatchAny, "AS", MatchAny, "ON", MatchAny, "WHEN") ||
+				 TailMatches("USING", MatchAny, MatchAny, "ON", MatchAny, "WHEN") ||
+				 TailMatches("USING", MatchAny, "ON", MatchAny, MatchAny, MatchAny, "WHEN") ||
+				 TailMatches("USING", MatchAny, "AS", MatchAny, "ON", MatchAny, MatchAny, MatchAny, "WHEN") ||
+				 TailMatches("USING", MatchAny, MatchAny, "ON", MatchAny, MatchAny, MatchAny, "WHEN"))
+			COMPLETE_WITH("MATCHED", "NOT MATCHED");
 
-	/* Complete ... WHEN [NOT] MATCHED with THEN/AND */
-	else if (TailMatches("WHEN", "MATCHED") ||
-			 TailMatches("WHEN", "NOT", "MATCHED"))
-		COMPLETE_WITH("THEN", "AND");
+		/* Complete ... WHEN [NOT] MATCHED with THEN/AND */
+		else if (TailMatches("WHEN", "MATCHED") ||
+				 TailMatches("WHEN", "NOT", "MATCHED"))
+			COMPLETE_WITH("THEN", "AND");
 
-	/* Complete ... WHEN MATCHED THEN with UPDATE SET/DELETE/DO NOTHING */
-	else if (TailMatches("WHEN", "MATCHED", "THEN"))
-		COMPLETE_WITH("UPDATE SET", "DELETE", "DO NOTHING");
+		/* Complete ... WHEN MATCHED THEN with UPDATE SET/DELETE/DO NOTHING */
+		else if (TailMatches("WHEN", "MATCHED", "THEN"))
+			COMPLETE_WITH("UPDATE SET", "DELETE", "DO NOTHING");
 
-	/* Complete ... WHEN NOT MATCHED THEN with INSERT/DO NOTHING */
-	else if (TailMatches("WHEN", "NOT", "MATCHED", "THEN"))
-		COMPLETE_WITH("INSERT", "DO NOTHING");
+		/* Complete ... WHEN NOT MATCHED THEN with INSERT/DO NOTHING */
+		else if (TailMatches("WHEN", "NOT", "MATCHED", "THEN"))
+			COMPLETE_WITH("INSERT", "DO NOTHING");
+	}
 
 /* NOTIFY --- can be inside EXPLAIN, RULE, etc */
 	else if (TailMatches("NOTIFY"))

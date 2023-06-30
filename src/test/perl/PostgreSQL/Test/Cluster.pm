@@ -1637,7 +1637,7 @@ END
 		$node->teardown_node(fail_ok => 1);
 
 		# skip clean if we are requested to retain the basedir
-		next if defined $ENV{'PG_TEST_NOCLEAN'};
+		next if $ENV{PG_TEST_NOCLEAN};
 
 		# clean basedir on clean test invocation
 		$node->clean_node

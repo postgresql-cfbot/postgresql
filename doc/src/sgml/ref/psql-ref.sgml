@@ -4611,6 +4611,15 @@ testdb=&gt; <userinput>INSERT INTO my_table VALUES (:'content');</userinput>
         </listitem>
       </varlistentry>
 
+      <varlistentry id="app-psql-prompting-t-uc">
+        <term><literal>%T</literal></term>
+        <listitem>
+         <para>
+          The current time on the client in HH24:MI:SS format.
+         </para>
+        </listitem>
+      </varlistentry>
+
       <varlistentry id="app-psql-prompting-x">
         <term><literal>%x</literal></term>
         <listitem>

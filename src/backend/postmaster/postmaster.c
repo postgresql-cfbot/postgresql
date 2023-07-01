@@ -2183,9 +2183,25 @@ retry1:
 			valptr = buf + valoffset;
 
 			if (strcmp(nameptr, "database") == 0)
+			{
+				/* Overlength database name has been provided. */
+				if (strlen(valptr) >= NAMEDATALEN)
+					ereport(FATAL,
+							(errcode(ERRCODE_UNDEFINED_DATABASE),
+							 errmsg("database \"%s\" does not exist", valptr)));
+
 				port->database_name = pstrdup(valptr);
+			}
 			else if (strcmp(nameptr, "user") == 0)
+			{
+				/* Overlength user name has been provided. */
+				if (strlen(valptr) >= NAMEDATALEN)
+					ereport(FATAL,
+							(errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+							 errmsg("role \"%s\" does not exist", valptr)));
+
 				port->user_name = pstrdup(valptr);
+			}
 			else if (strcmp(nameptr, "options") == 0)
 				port->cmdline_options = pstrdup(valptr);
 			else if (strcmp(nameptr, "replication") == 0)
@@ -2289,15 +2305,6 @@ retry1:
 			port->user_name = psprintf("%s@%s", port->user_name, port->database_name);
 		}
 	}
-
-	/*
-	 * Truncate given database and user names to length of a Postgres name.
-	 * This avoids lookup failures when overlength names are given.
-	 */
-	if (strlen(port->database_name) >= NAMEDATALEN)
-		port->database_name[NAMEDATALEN - 1] = '\0';
-	if (strlen(port->user_name) >= NAMEDATALEN)
-		port->user_name[NAMEDATALEN - 1] = '\0';
 
 	if (am_walsender)
 		MyBackendType = B_WAL_SENDER;

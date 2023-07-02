@@ -1660,3 +1660,33 @@ order by 1, 2;
                ->  Function Scan on generate_series
 (7 rows)
 
+-- Incremental sort for not ordered indexes, but with AM order operator
+set enable_incremental_sort = on;
+-- table with GiST index supports closest points retrieval,
+-- but has not sorted index
+create table t (a point, b int);
+create index on t using gist(a);
+insert into t select point(mod(i, 7), mod(i, 11)), i from generate_series(1, 1000) s(i);
+analyze t;
+explain (costs off) select a, b, a <-> point(5, 5) dist from t order by dist, b limit 1;
+                   QUERY PLAN                    
+-------------------------------------------------
+ Limit
+   ->  Incremental Sort
+         Sort Key: ((a <-> '(5,5)'::point)), b
+         Presorted Key: ((a <-> '(5,5)'::point))
+         ->  Index Scan using t_a_idx on t
+               Order By: (a <-> '(5,5)'::point)
+(6 rows)
+
+explain (costs off) select a, b, a <-> point(5, 5) dist from t order by dist, b desc limit 1;
+                     QUERY PLAN                     
+----------------------------------------------------
+ Limit
+   ->  Incremental Sort
+         Sort Key: ((a <-> '(5,5)'::point)), b DESC
+         Presorted Key: ((a <-> '(5,5)'::point))
+         ->  Index Scan using t_a_idx on t
+               Order By: (a <-> '(5,5)'::point)
+(6 rows)
+

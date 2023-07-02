@@ -276,3 +276,14 @@ from tenk1, lateral (select tenk1.unique1 from generate_series(1, 1000)) as sub;
 explain (costs off) select sub.unique1, stringu1 || random()::text
 from tenk1, lateral (select tenk1.unique1 from generate_series(1, 1000)) as sub
 order by 1, 2;
+
+-- Incremental sort for not ordered indexes, but with AM order operator
+set enable_incremental_sort = on;
+-- table with GiST index supports closest points retrieval,
+-- but has not sorted index
+create table t (a point, b int);
+create index on t using gist(a);
+insert into t select point(mod(i, 7), mod(i, 11)), i from generate_series(1, 1000) s(i);
+analyze t;
+explain (costs off) select a, b, a <-> point(5, 5) dist from t order by dist, b limit 1;
+explain (costs off) select a, b, a <-> point(5, 5) dist from t order by dist, b desc limit 1;

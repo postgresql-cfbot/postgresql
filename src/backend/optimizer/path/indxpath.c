@@ -972,16 +972,14 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 		orderbyclauses = NIL;
 		orderbyclausecols = NIL;
 	}
-	else if (index->amcanorderbyop && pathkeys_possibly_useful)
+	else if (index->amcanorderbyop && root->query_pathkeys && pathkeys_possibly_useful)
 	{
 		/* see if we can generate ordering operators for query_pathkeys */
 		match_pathkeys_to_index(index, root->query_pathkeys,
 								&orderbyclauses,
 								&orderbyclausecols);
-		if (orderbyclauses)
-			useful_pathkeys = root->query_pathkeys;
-		else
-			useful_pathkeys = NIL;
+		useful_pathkeys = list_copy_head(root->query_pathkeys,
+										 list_length(orderbyclauses));
 	}
 	else
 	{
@@ -3059,16 +3057,14 @@ expand_indexqual_rowcompare(PlannerInfo *root,
  * index column numbers (zero based) that each clause would be used with.
  * NIL lists are returned if the ordering is not achievable this way.
  *
- * On success, the result list is ordered by pathkeys, and in fact is
- * one-to-one with the requested pathkeys.
+ * On success, the result list is ordered by pathkeys. Result can be shorter
+ * than pathkeys on partial prefix match.
  */
 static void
 match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
 						List **orderby_clauses_p,
 						List **clause_columns_p)
 {
-	List	   *orderby_clauses = NIL;
-	List	   *clause_columns = NIL;
 	ListCell   *lc1;
 
 	*orderby_clauses_p = NIL;	/* set default results */
@@ -3133,8 +3129,8 @@ match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
 												   pathkey->pk_opfamily);
 				if (expr)
 				{
-					orderby_clauses = lappend(orderby_clauses, expr);
-					clause_columns = lappend_int(clause_columns, indexcol);
+					*orderby_clauses_p = lappend(*orderby_clauses_p, expr);
+					*clause_columns_p = lappend_int(*clause_columns_p, indexcol);
 					found = true;
 					break;
 				}
@@ -3144,12 +3140,9 @@ match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
 				break;
 		}
 
-		if (!found)				/* fail if no match for this pathkey */
+		if (!found)				/* end after first not matching expression */
 			return;
 	}
-
-	*orderby_clauses_p = orderby_clauses;	/* success! */
-	*clause_columns_p = clause_columns;
 }
 
 /*

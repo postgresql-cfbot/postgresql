@@ -89,6 +89,8 @@ typedef struct
 {
 	char		max_hazard;		/* worst proparallel hazard found so far */
 	char		max_interesting;	/* worst proparallel hazard of interest */
+	bool		check_params;
+	Bitmapset **required_params;
 	List	   *safe_param_ids; /* PARAM_EXEC Param IDs to treat as safe */
 } max_parallel_hazard_context;
 
@@ -737,6 +739,7 @@ max_parallel_hazard(Query *parse)
 
 	context.max_hazard = PROPARALLEL_SAFE;
 	context.max_interesting = PROPARALLEL_UNSAFE;
+	context.check_params = true;
 	context.safe_param_ids = NIL;
 	(void) max_parallel_hazard_walker((Node *) parse, &context);
 	return context.max_hazard;
@@ -753,8 +756,6 @@ bool
 is_parallel_safe(PlannerInfo *root, Node *node)
 {
 	max_parallel_hazard_context context;
-	PlannerInfo *proot;
-	ListCell   *l;
 
 	/*
 	 * Even if the original querytree contained nothing unsafe, we need to
@@ -768,6 +769,43 @@ is_parallel_safe(PlannerInfo *root, Node *node)
 	/* Else use max_parallel_hazard's search logic, but stop on RESTRICTED */
 	context.max_hazard = PROPARALLEL_SAFE;
 	context.max_interesting = PROPARALLEL_RESTRICTED;
+	context.check_params = false;
+	context.required_params = NULL;
+
+	return !max_parallel_hazard_walker(node, &context);
+}
+
+/*
+ * is_parallel_safe_with_params
+ *		As above, but additionally tracking what PARAM_EXEC params required to
+ *		be provided within a worker for a gather to be inserted at this level
+ *		of the query. Those required params are passed to the caller through
+ *		the required_params argument.
+ *
+ *		Note: required_params is only valid if node is otherwise parallel safe.
+ */
+bool
+is_parallel_safe_with_params(PlannerInfo *root, Node *node, Bitmapset **required_params)
+{
+	max_parallel_hazard_context context;
+	PlannerInfo *proot;
+	ListCell   *l;
+
+	/*
+	 * Even if the original querytree contained nothing unsafe, we need to
+	 * search the expression if we have generated any PARAM_EXEC Params while
+	 * planning, because those will have to be provided for the expression to
+	 * remain parallel safe and there might be one in this expression.  But
+	 * otherwise we don't need to look.
+	 */
+	if (root->glob->maxParallelHazard == PROPARALLEL_SAFE &&
+		root->glob->paramExecTypes == NIL)
+		return true;
+	/* Else use max_parallel_hazard's search logic, but stop on RESTRICTED */
+	context.max_hazard = PROPARALLEL_SAFE;
+	context.max_interesting = PROPARALLEL_RESTRICTED;
+	context.check_params = false;
+	context.required_params = required_params;
 	context.safe_param_ids = NIL;
 
 	/*
@@ -907,13 +945,22 @@ max_parallel_hazard_walker(Node *node, max_parallel_hazard_context *context)
 		if (!subplan->parallel_safe &&
 			max_parallel_hazard_test(PROPARALLEL_RESTRICTED, context))
 			return true;
-		save_safe_param_ids = context->safe_param_ids;
-		context->safe_param_ids = list_concat_copy(context->safe_param_ids,
-												   subplan->paramIds);
+
+		if (context->check_params || context->required_params != NULL)
+		{
+			save_safe_param_ids = context->safe_param_ids;
+			context->safe_param_ids = list_concat_copy(context->safe_param_ids,
+													   subplan->paramIds);
+		}
 		if (max_parallel_hazard_walker(subplan->testexpr, context))
 			return true;		/* no need to restore safe_param_ids */
-		list_free(context->safe_param_ids);
-		context->safe_param_ids = save_safe_param_ids;
+
+		if (context->check_params || context->required_params != NULL)
+		{
+			list_free(context->safe_param_ids);
+			context->safe_param_ids = save_safe_param_ids;
+		}
+
 		/* we must also check args, but no special Param treatment there */
 		if (max_parallel_hazard_walker((Node *) subplan->args, context))
 			return true;
@@ -932,14 +979,18 @@ max_parallel_hazard_walker(Node *node, max_parallel_hazard_context *context)
 	{
 		Param	   *param = (Param *) node;
 
-		if (param->paramkind == PARAM_EXTERN)
+		if (param->paramkind != PARAM_EXEC || !(context->check_params || context->required_params != NULL))
 			return false;
 
-		if (param->paramkind != PARAM_EXEC ||
-			!list_member_int(context->safe_param_ids, param->paramid))
+		if (!list_member_int(context->safe_param_ids, param->paramid))
 		{
 			if (max_parallel_hazard_test(PROPARALLEL_RESTRICTED, context))
-				return true;
+			{
+				if (context->required_params != NULL)
+					*context->required_params = bms_add_member(*context->required_params, param->paramid);
+				if (context->check_params)
+					return true;
+			}
 		}
 		return false;			/* nothing to recurse to */
 	}

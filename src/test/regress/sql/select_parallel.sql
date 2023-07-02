@@ -53,13 +53,17 @@ $$ select 'foo'::varchar union all select 'bar'::varchar $$
 language sql stable;
 select sp_test_func() order by 1;
 
--- Parallel Append is not to be used when the subpath depends on the outer param
+-- Parallel Append is can be used when the subpath depends on the outer params
+-- when those params are consumed within the worker that generates them.
 create table part_pa_test(a int, b int) partition by range(a);
 create table part_pa_test_p1 partition of part_pa_test for values from (minvalue) to (0);
 create table part_pa_test_p2 partition of part_pa_test for values from (0) to (maxvalue);
-explain (costs off)
+explain (costs off, verbose)
 	select (select max((select pa1.b from part_pa_test pa1 where pa1.a = pa2.a)))
 	from part_pa_test pa2;
+insert into part_pa_test(a, b) values (-1, 1), (1, 3);
+select (select max((select pa1.b from part_pa_test pa1 where pa1.a = pa2.a)))
+from part_pa_test pa2;
 drop table part_pa_test;
 
 -- test with leader participation disabled

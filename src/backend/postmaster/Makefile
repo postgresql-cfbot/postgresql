@@ -18,6 +18,7 @@ OBJS = \
 	bgworker.o \
 	bgwriter.o \
 	checkpointer.o \
+	custodian.o \
 	fork_process.o \
 	interrupt.o \
 	pgarch.o \

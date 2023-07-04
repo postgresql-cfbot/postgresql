@@ -234,6 +234,9 @@ pgstat_get_wait_activity(WaitEventActivity w)
 		case WAIT_EVENT_CHECKPOINTER_MAIN:
 			event_name = "CheckpointerMain";
 			break;
+		case WAIT_EVENT_CUSTODIAN_MAIN:
+			event_name = "CustodianMain";
+			break;
 		case WAIT_EVENT_LOGICAL_APPLY_MAIN:
 			event_name = "LogicalApplyMain";
 			break;

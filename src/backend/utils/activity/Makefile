@@ -33,3 +33,13 @@ OBJS = \
 	wait_event.o
 
 include $(top_srcdir)/src/backend/common.mk
+
+wait_event.o: pgstat_wait_event.c
+pgstat_wait_event.c: wait_event_types.h
+	touch $@
+
+wait_event_types.h: $(top_srcdir)/src/backend/utils/activity/wait_event_names.txt generate-wait_event_types.pl
+	$(PERL) $(srcdir)/generate-wait_event_types.pl --code $<
+
+maintainer-clean: clean
+	rm -f wait_event_types.h pgstat_wait_event.c

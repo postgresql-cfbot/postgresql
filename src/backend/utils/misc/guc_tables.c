@@ -1871,6 +1871,17 @@ struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
+		{"extended_checksums", PGC_INTERNAL, PRESET_OPTIONS,
+			gettext_noop("Shows whether extended checksums are turned on for this cluster."),
+			NULL,
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_RUNTIME_COMPUTED
+		},
+		&page_feature_extended_checksums,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"syslog_sequence_numbers", PGC_SIGHUP, LOGGING_WHERE,
 			gettext_noop("Add sequence number to syslog messages to avoid duplicate suppression."),
 			NULL
@@ -2708,6 +2719,19 @@ struct config_int ConfigureNamesInt[] =
 		2, MAX_KILOBYTES,
 		NULL, assign_max_wal_size, NULL
 	},
+
+	{
+		{"reserved_page_size", PGC_INTERNAL, PRESET_OPTIONS,
+			gettext_noop("Shows the size of reserved space for extended pages."),
+			NULL,
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			},
+		&reserved_page_size,
+		0,
+		0,
+		PG_UINT8_MAX,
+		NULL, NULL, NULL
+		},
 
 	{
 		{"checkpoint_timeout", PGC_SIGHUP, WAL_CHECKPOINTS,

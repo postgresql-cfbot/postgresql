@@ -131,7 +131,7 @@ typedef struct BloomMetaPageData
 #define BLOOM_MAGICK_NUMBER (0xDBAC0DED)
 
 /* Number of blocks numbers fit in BloomMetaPageData */
-#define BloomMetaBlockN		(sizeof(FreeBlockNumberArray) / sizeof(BlockNumber))
+#define BloomMetaBlockN()		((sizeof(FreeBlockNumberArray) - SizeOfPageReservedSpace())/ sizeof(BlockNumber))
 
 #define BloomPageGetMeta(page)	((BloomMetaPageData *) PageGetContents(page))
 
@@ -151,6 +151,7 @@ typedef struct BloomState
 
 #define BloomPageGetFreeSpace(state, page) \
 	(BLCKSZ - MAXALIGN(SizeOfPageHeaderData) \
+		- SizeOfPageReservedSpace()								  \
 		- BloomPageGetMaxOffset(page) * (state)->sizeOfBloomTuple \
 		- MAXALIGN(sizeof(BloomPageOpaqueData)))
 

@@ -37,12 +37,12 @@
  * We use just one byte to store the amount of free space on a page, so we
  * divide the amount of free space a page can have into 256 different
  * categories. The highest category, 255, represents a page with at least
- * MaxFSMRequestSize bytes of free space, and the second highest category
+ * MaxFSMRequestSize() bytes of free space, and the second highest category
  * represents the range from 254 * FSM_CAT_STEP, inclusive, to
- * MaxFSMRequestSize, exclusive.
+ * MaxFSMRequestSize(), exclusive.
  *
- * MaxFSMRequestSize depends on the architecture and BLCKSZ, but assuming
- * default 8k BLCKSZ, and that MaxFSMRequestSize is 8164 bytes, the
+ * MaxFSMRequestSize() depends on the architecture and BLCKSZ, but assuming
+ * default 8k BLCKSZ, and that MaxFSMRequestSize() is 8164 bytes, the
  * categories look like this:
  *
  *
@@ -54,16 +54,16 @@
  * 8128 - 8163 254
  * 8164 - 8192 255
  *
- * The reason that MaxFSMRequestSize is special is that if MaxFSMRequestSize
- * isn't equal to a range boundary, a page with exactly MaxFSMRequestSize
- * bytes of free space wouldn't satisfy a request for MaxFSMRequestSize
- * bytes. If there isn't more than MaxFSMRequestSize bytes of free space on a
+ * The reason that MaxFSMRequestSize() is special is that if MaxFSMRequestSize()
+ * isn't equal to a range boundary, a page with exactly MaxFSMRequestSize()
+ * bytes of free space wouldn't satisfy a request for MaxFSMRequestSize()
+ * bytes. If there isn't more than MaxFSMRequestSize() bytes of free space on a
  * completely empty page, that would mean that we could never satisfy a
- * request of exactly MaxFSMRequestSize bytes.
+ * request of exactly MaxFSMRequestSize() bytes.
  */
 #define FSM_CATEGORIES	256
 #define FSM_CAT_STEP	(BLCKSZ / FSM_CATEGORIES)
-#define MaxFSMRequestSize	MaxHeapTupleSize
+#define MaxFSMRequestSize()	MaxHeapTupleSize()
 
 /*
  * Depth of the on-disk tree. We need to be able to address 2^32-1 blocks,
@@ -217,7 +217,7 @@ XLogRecordPageWithFreeSpace(RelFileLocator rlocator, BlockNumber heapBlk,
 
 	page = BufferGetPage(buf);
 	if (PageIsNew(page))
-		PageInit(page, BLCKSZ, 0);
+		PageInit(page, BLCKSZ, 0, cluster_page_features);
 
 	if (fsm_set_avail(page, slot, new_cat))
 		MarkBufferDirtyHint(buf, false);
@@ -372,13 +372,13 @@ fsm_space_avail_to_cat(Size avail)
 
 	Assert(avail < BLCKSZ);
 
-	if (avail >= MaxFSMRequestSize)
+	if (avail >= MaxFSMRequestSize())
 		return 255;
 
 	cat = avail / FSM_CAT_STEP;
 
 	/*
-	 * The highest category, 255, is reserved for MaxFSMRequestSize bytes or
+	 * The highest category, 255, is reserved for MaxFSMRequestSize() bytes or
 	 * more.
 	 */
 	if (cat > 254)
@@ -394,9 +394,9 @@ fsm_space_avail_to_cat(Size avail)
 static Size
 fsm_space_cat_to_avail(uint8 cat)
 {
-	/* The highest category represents exactly MaxFSMRequestSize bytes. */
+	/* The highest category represents exactly MaxFSMRequestSize() bytes. */
 	if (cat == 255)
-		return MaxFSMRequestSize;
+		return MaxFSMRequestSize();
 	else
 		return cat * FSM_CAT_STEP;
 }
@@ -411,7 +411,7 @@ fsm_space_needed_to_cat(Size needed)
 	int			cat;
 
 	/* Can't ask for more space than the highest category represents */
-	if (needed > MaxFSMRequestSize)
+	if (needed > MaxFSMRequestSize())
 		elog(ERROR, "invalid FSM request size %zu", needed);
 
 	if (needed == 0)
@@ -598,7 +598,7 @@ fsm_readbuf(Relation rel, FSMAddress addr, bool extend)
 	{
 		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 		if (PageIsNew(BufferGetPage(buf)))
-			PageInit(BufferGetPage(buf), BLCKSZ, 0);
+			PageInit(BufferGetPage(buf), BLCKSZ, 0, cluster_page_features);
 		LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 	}
 	return buf;

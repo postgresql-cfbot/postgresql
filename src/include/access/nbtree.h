@@ -162,29 +162,43 @@ typedef struct BTMetaPageData
  * attribute, which we account for here.
  */
 #define BTMaxItemSize(page) \
-	(MAXALIGN_DOWN((PageGetPageSize(page) - \
+	(MAXALIGN_DOWN((PageGetPageSize(page) - SizeOfPageReservedSpace() - \
 					MAXALIGN(SizeOfPageHeaderData + 3*sizeof(ItemIdData)) - \
 					MAXALIGN(sizeof(BTPageOpaqueData))) / 3) - \
 					MAXALIGN(sizeof(ItemPointerData)))
 #define BTMaxItemSizeNoHeapTid(page) \
-	MAXALIGN_DOWN((PageGetPageSize(page) - \
+	MAXALIGN_DOWN((PageGetPageSize(page) - SizeOfPageReservedSpace() - \
 				   MAXALIGN(SizeOfPageHeaderData + 3*sizeof(ItemIdData)) - \
 				   MAXALIGN(sizeof(BTPageOpaqueData))) / 3)
 
 /*
- * MaxTIDsPerBTreePage is an upper bound on the number of heap TIDs tuples
- * that may be stored on a btree leaf page.  It is used to size the
- * per-page temporary buffers.
+ * MaxTIDsPerBTreePage() is an upper bound on the number of heap TIDs tuples
+ * that may be stored on a btree leaf page.  It is used to size the per-page
+ * temporary buffers.  This accounts for PageReservedSpace limit as well, so
+ * is a dynamic value depending on cluster settings.
+ *
+ * MaxTIDsPerBTreePageLimit is the same value without considering
+ * PageReservedSpace limit as well, so is used for fixed-size buffers, however
+ * code accessing these buffers should consider only MaxTIDsPerBTreePage() when
+ * iterating over then.
  *
  * Note: we don't bother considering per-tuple overheads here to keep
  * things simple (value is based on how many elements a single array of
  * heap TIDs must have to fill the space between the page header and
  * special area).  The value is slightly higher (i.e. more conservative)
  * than necessary as a result, which is considered acceptable.
+ *
+ * Since this is a fixed-size upper limit we restrict to the max size of page
+ * reserved space; this does mean that we pay a cost of
+ * (MaxSizeOfPageReservedSpace / sizeof(ItemPointerData)) less tuples stored
+ * on a page.
  */
-#define MaxTIDsPerBTreePage \
-	(int) ((BLCKSZ - SizeOfPageHeaderData - sizeof(BTPageOpaqueData)) / \
-		   sizeof(ItemPointerData))
+#define MaxTIDsPerBTreePage() \
+	(int) ((BLCKSZ - SizeOfPageHeaderData - SizeOfPageReservedSpace() - \
+			sizeof(BTPageOpaqueData)) / sizeof(ItemPointerData))
+#define MaxTIDsPerBTreePageLimit \
+	(int) ((BLCKSZ - SizeOfPageHeaderData - \
+			sizeof(BTPageOpaqueData)) / sizeof(ItemPointerData))
 
 /*
  * The leaf-page fillfactor defaults to 90% but is user-adjustable.
@@ -987,7 +1001,7 @@ typedef struct BTScanPosData
 	int			lastItem;		/* last valid index in items[] */
 	int			itemIndex;		/* current index in items[] */
 
-	BTScanPosItem items[MaxTIDsPerBTreePage];	/* MUST BE LAST */
+	BTScanPosItem items[MaxTIDsPerBTreePageLimit];	/* MUST BE LAST */
 } BTScanPosData;
 
 typedef BTScanPosData *BTScanPos;

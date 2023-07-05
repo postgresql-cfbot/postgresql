@@ -1691,7 +1691,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 		if (!continuescan)
 			so->currPos.moreRight = false;
 
-		Assert(itemIndex <= MaxTIDsPerBTreePage);
+		Assert(itemIndex <= MaxTIDsPerBTreePage());
 		so->currPos.firstItem = 0;
 		so->currPos.lastItem = itemIndex - 1;
 		so->currPos.itemIndex = 0;
@@ -1699,7 +1699,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 	else
 	{
 		/* load items[] in descending order */
-		itemIndex = MaxTIDsPerBTreePage;
+		itemIndex = MaxTIDsPerBTreePage();
 
 		offnum = Min(offnum, maxoff);
 
@@ -1788,8 +1788,8 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 
 		Assert(itemIndex >= 0);
 		so->currPos.firstItem = itemIndex;
-		so->currPos.lastItem = MaxTIDsPerBTreePage - 1;
-		so->currPos.itemIndex = MaxTIDsPerBTreePage - 1;
+		so->currPos.lastItem = MaxTIDsPerBTreePage() - 1;
+		so->currPos.itemIndex = MaxTIDsPerBTreePage() - 1;
 	}
 
 	return (so->currPos.firstItem <= so->currPos.lastItem);

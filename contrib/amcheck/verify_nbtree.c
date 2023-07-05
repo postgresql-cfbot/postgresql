@@ -488,12 +488,12 @@ bt_check_every_level(Relation rel, Relation heaprel, bool heapkeyspace,
 		/*
 		 * Size Bloom filter based on estimated number of tuples in index,
 		 * while conservatively assuming that each block must contain at least
-		 * MaxTIDsPerBTreePage / 3 "plain" tuples -- see
+		 * MaxTIDsPerBTreePage() / 3 "plain" tuples -- see
 		 * bt_posting_plain_tuple() for definition, and details of how posting
 		 * list tuples are handled.
 		 */
 		total_pages = RelationGetNumberOfBlocks(rel);
-		total_elems = Max(total_pages * (MaxTIDsPerBTreePage / 3),
+		total_elems = Max(total_pages * (MaxTIDsPerBTreePage() / 3),
 						  (int64) state->rel->rd_rel->reltuples);
 		/* Generate a random seed to avoid repetition */
 		seed = pg_prng_uint64(&pg_global_prng_state);

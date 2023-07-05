@@ -3,6 +3,11 @@ src/backend/storage/page/README
 Checksums
 ---------
 
+Note: The description of the page checksums described in this section are
+relevant only when the database cluster has been initialized without page
+features; see the section on Page Features below for full details on
+interpretation.
+
 Checksums on data pages are designed to detect corruption by the I/O system.
 We do not protect buffers against uncorrectable memory errors, since these
 have a very low measured incidence according to research on large server farms,
@@ -19,7 +24,7 @@ We set the checksum on a buffer in the shared pool immediately before we
 flush the buffer. As a result we implicitly invalidate the page's checksum
 when we modify the page for a data change or even a hint. This means that
 many or even most pages in shared buffers have invalid page checksums,
-so be careful how you interpret the pd_checksum field.
+so be careful how you interpret the pd_feat.checksum field.
 
 That means that WAL-logged changes to a page do NOT update the page checksum,
 so full page images may not have a valid checksum. But those page images have
@@ -62,3 +67,159 @@ checksums are enabled.  Systems in Hot-Standby mode may benefit from hint bits
 being set, but with checksums enabled, a page cannot be dirtied after setting a
 hint bit (due to the torn page risk). So, it must wait for full-page images
 containing the hint bit updates to arrive from the primary.
+
+
+Page Features
+-------------
+
+As described above, the use and interpretation of checksums on the page level
+are conditional depending on whether any Page Features had been enabled at
+initdb time.
+
+A Page Feature is an optional boolean parameter that will allocate a fixed-size
+amount of space from the end of a Page. All enabled Page Features are known as
+a Page Feature Set, and the control file contains the cluster-wide initial
+state. Future work here could expand out which features are utilized.
+
+Changes to the Page structure itself involve a new `pd_flags` bit and, if set, a
+reinterpretation of the `pd_checksums` field as a copy of this Page's enabled
+page features. This gives us both a sanity-check against the pg_control
+cluster_page_features as well as being a backwards-compatible change with
+existing disk pages with or without checksums enabled, meaning that pg_upgrade
+should work still.
+
+Future upgrades for clusters using Page Features should continue to work, as
+long as the initdb options for the future clusters are still compatible and as
+long as we keep the set of existing Page Features well-defined in terms of bit
+offsets and reserved length. (This does not seem like an unreasonable
+restriction.)
+
+Since we are taking over the pd_checksums field on the Page structure when Page
+Features are in use, it would seem that this would introduce some potential data
+corruption concerns, however one of the available page features is an extended
+checksum, which itself obviates the need for the checksums field and expands the
+available storage space for this checksum to a full 64-bits. This should be
+sufficient to address this concern, and the checksum-related code paths have
+already been updated to handle either the standard checksums or the extended
+checksums transparently.
+
+In addition to extended checksums, there is also a Page Feature which we use to
+store the GCM tag for authenticated encryption for TDE. This reserved space
+provides both storage and validation of Additional Authenticated Data so we can
+be sure that if a page decrypts appropriately is is cryptographically impossible
+to have twiddled any bits on this page outside of through Postgres itself, which
+serves as a stronger alternative to the checksum validation. The encryption
+tags and the extended checksums would both have validation guarantees, so there
+is no need for a cluster to include both (and in fact combining them makes no
+sense) so the options are considered incompatible.
+
+
+Developing new Page Features
+----------------------------
+
+The goal of Page Features is to make it easy to have space-occupying optional
+features without it being a huge pain for developers to create new features,
+probe for the use of said features or to provide unnecessary boilerplate.
+
+As such, defining a new page feature consists of making changes to the following
+files:
+
+pagefeat.h:
+
+- create an `extern bool page_feature_<foo>` to expose the feature to the GUC
+  system.
+
+- a new feature flag should be defined for the feature; new features should
+  always be added at the end of the list since where these appear in the list
+  determines their relative offset in the page and features that already exist
+  in a cluster must appear at the same offset.
+
+pagefeat.c:
+
+- define the `bool page_feature_<foo>` variable to store the status field
+
+- add a new PageFeatureDesc entry to the corresponding index in the
+  `feature_descs` structure for this feature, including the size of space to be
+  reserved and the name of the GUC to expose the status.
+
+guc_tables.c:
+
+- add a boolean computed field linking the variable name and the GUC name for
+  the feature.  Should be basically the same as any existing page feature GUC
+  such as "extended_checksums".
+
+initdb.c:
+
+- add whatever required getopt handling to optionally enable the feature at
+  initdb time.  This should eventually pass a `-e <feature_name>` to the
+  bootstrap process, at which point everything else should work.
+
+
+Page Feature Space Usage
+------------------------
+
+Page Features only consume space for the features that are enabled.  The total
+per-page space usage is exposed via the `reserved_page_space` GUC, which itself
+is MAXALIGN()ed.
+
+A design choice was made in which the checking for a page feature's enabling and
+accessing the memory area for said page feature could be combined in a single
+call, PageGetFeatureOffset().  This routine is passed a Page and a PageFeature,
+and if this specific page feature has been enabled it will return the memory
+offset inside this Page, otherwise it will return NULL.
+
+Using an example from basebackup.c:
+
+    char *extended_checksum_loc = NULL;
+
+    /* are we using extended checksums? */
+    if ((extended_checksum_loc = PageGetFeatureOffset(page, PF_EXT_CHECKSUMS)))
+    {
+        /* 64-bit checksum */
+        page_checksum = pg_get_checksum64_page(page, (uint64*)extended_checksum_loc);
+        checksum = pg_checksum64_page(page, blkno + segmentno * RELSEG_SIZE, (uint64*)extended_checksum_loc);
+    }
+    else
+    {
+        phdr = (PageHeader) page;
+        page_checksum = phdr->pd_feat.checksum;
+        checksum = pg_checksum_page(page, blkno + segmentno * RELSEG_SIZE);
+    }
+
+Above you can see that the pointer returned from the PageGetFeatureOffset() is
+being used as the validity check and the assignment of the corresponding memory
+location at the same time.
+
+The PageFeatureSet for the cluster is a bitfield, with the enabled features on
+the page being numbers from the low bits, so for a cluster initialized with the
+following feature for hypothetical Page Features with lengths of 8 except for
+feature 0 with length 16, you would have the following offsets calcuated for the
+page features:
+
+| 00110101 |
+
+0 -> page + BLCKSZ - 16
+1 -> NULL
+2 -> page + BLCKSZ - 16 - 8
+3 -> NULL
+4 -> page + BLCKSZ - 16 - 8 - 8
+5 -> page + BLCKSZ - 16 - 8 - 8 - 8
+6 -> NULL
+7 -> NULL
+
+Note that there are some definite performance improvements related to how we are
+currently calculating the feature offsets; these can be precalculated based on
+the enabled features in the table and turned into a simple LUT.
+
+
+It is worth noting that since we are allocating space from the end of the page,
+we must adjust (transparently) the pd_special pointers to account for the
+reserved_page_size.  This has been fixed in all core or contrib code, but since
+this is now calculated at runtime instead of compile time (due to the
+requirement that we be able to enable/disable features at initdb time) this
+means that a lot of things which had been static compile-time constants are now
+instead calculated.  This cost, unlike the space costs, must unfortunately be
+paid by all users of the code whether or not we are using any features at all.
+It is hoped that the utility of the page features and the extensibility it
+provides will outweigh any performance changes here.
+

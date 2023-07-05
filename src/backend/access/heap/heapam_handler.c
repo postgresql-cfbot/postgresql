@@ -1195,7 +1195,7 @@ heapam_index_build_range_scan(Relation heapRelation,
 	TransactionId OldestXmin;
 	BlockNumber previous_blkno = InvalidBlockNumber;
 	BlockNumber root_blkno = InvalidBlockNumber;
-	OffsetNumber root_offsets[MaxHeapTuplesPerPage];
+	OffsetNumber root_offsets[MaxHeapTuplesPerPageLimit];
 
 	/*
 	 * sanity checks
@@ -1758,8 +1758,8 @@ heapam_index_validate_scan(Relation heapRelation,
 	EState	   *estate;
 	ExprContext *econtext;
 	BlockNumber root_blkno = InvalidBlockNumber;
-	OffsetNumber root_offsets[MaxHeapTuplesPerPage];
-	bool		in_index[MaxHeapTuplesPerPage];
+	OffsetNumber root_offsets[MaxHeapTuplesPerPageLimit];
+	bool		in_index[MaxHeapTuplesPerPageLimit];
 	BlockNumber previous_blkno = InvalidBlockNumber;
 
 	/* state variables for the merge */
@@ -2224,7 +2224,7 @@ heapam_scan_bitmap_next_block(TableScanDesc scan,
 
 	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 
-	Assert(ntup <= MaxHeapTuplesPerPage);
+	Assert(ntup <= MaxHeapTuplesPerPage());
 	hscan->rs_ntuples = ntup;
 
 	return ntup > 0;

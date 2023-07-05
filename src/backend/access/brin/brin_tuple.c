@@ -217,7 +217,7 @@ brin_form_tuple(BrinDesc *brdesc, BlockNumber blkno, BrinMemTuple *tuple,
 			 * datatype, try to compress it in-line.
 			 */
 			if (!VARATT_IS_EXTENDED(DatumGetPointer(value)) &&
-				VARSIZE(DatumGetPointer(value)) > TOAST_INDEX_TARGET &&
+				VARSIZE(DatumGetPointer(value)) > TOAST_INDEX_TARGET() &&
 				(atttype->typstorage == TYPSTORAGE_EXTENDED ||
 				 atttype->typstorage == TYPSTORAGE_MAIN))
 			{

@@ -39,11 +39,18 @@ bool		ignore_checksum_failure = false;
  *		until it's time to write.
  */
 void
-PageInit(Page page, Size pageSize, Size specialSize)
+PageInit(Page page, Size pageSize, Size specialSize, PageFeatureSet features)
 {
 	PageHeader	p = (PageHeader) page;
 
 	specialSize = MAXALIGN(specialSize);
+
+	if (features)
+	{
+		Size reserved_size = PageFeatureSetCalculateSize(features);
+		Assert(reserved_size == MAXALIGN(reserved_size));
+		specialSize += reserved_size;
+	}
 
 	Assert(pageSize == BLCKSZ);
 	Assert(pageSize > specialSize + SizeOfPageHeaderData);
@@ -51,7 +58,13 @@ PageInit(Page page, Size pageSize, Size specialSize)
 	/* Make sure all fields of page are zero, as well as unused space */
 	MemSet(p, 0, pageSize);
 
-	p->pd_flags = 0;
+	if (features)
+	{
+		p->pd_flags = PD_EXTENDED_FEATS;
+		p->pd_feat.features = features;
+	}
+	else
+		p->pd_flags = 0; /* redundant w/MemSet? */
 	p->pd_lower = SizeOfPageHeaderData;
 	p->pd_upper = pageSize - specialSize;
 	p->pd_special = pageSize - specialSize;
@@ -93,8 +106,9 @@ PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags)
 	bool		checksum_failure = false;
 	bool		header_sane = false;
 	bool		all_zeroes = false;
-	uint16		checksum = 0;
-
+	uint64		checksum = 0;
+	uint64		page_checksum = 0;
+	char       *extended_checksum_loc = NULL;
 	/*
 	 * Don't verify page data unless the page passes basic non-zero test
 	 */
@@ -102,9 +116,19 @@ PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags)
 	{
 		if (DataChecksumsEnabled())
 		{
-			checksum = pg_checksum_page((char *) page, blkno);
-
-			if (checksum != p->pd_checksum)
+			/* are we using extended checksums? */
+			if ((extended_checksum_loc = PageGetFeatureOffset(page, PF_EXT_CHECKSUMS)))
+			{
+				page_checksum = pg_get_checksum64_page(page, (uint64*)extended_checksum_loc);
+				checksum = pg_checksum64_page(page, blkno, (uint64*)extended_checksum_loc);
+			}
+			else
+			{
+				/* traditional checksums in the pd_checksum field */
+				page_checksum = p->pd_feat.checksum;
+				checksum = pg_checksum_page((char *) page, blkno);
+			}
+			if (checksum != page_checksum)
 				checksum_failure = true;
 		}
 
@@ -117,7 +141,7 @@ PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags)
 		if ((p->pd_flags & ~PD_VALID_FLAG_BITS) == 0 &&
 			p->pd_lower <= p->pd_upper &&
 			p->pd_upper <= p->pd_special &&
-			p->pd_special <= BLCKSZ &&
+			p->pd_special + reserved_page_size <= BLCKSZ &&
 			p->pd_special == MAXALIGN(p->pd_special))
 			header_sane = true;
 
@@ -149,8 +173,9 @@ PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags)
 		if ((flags & PIV_LOG_WARNING) != 0)
 			ereport(WARNING,
 					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("page verification failed, calculated checksum %u but expected %u",
-							checksum, p->pd_checksum)));
+					 errmsg("page verification failed, calculated checksum "
+							UINT64_FORMAT " but expected " UINT64_FORMAT,
+							checksum, page_checksum)));
 
 		if ((flags & PIV_REPORT_STAT) != 0)
 			pgstat_report_checksum_failure();
@@ -186,7 +211,7 @@ PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags)
  *	one that is both unused and deallocated.
  *
  *	If flag PAI_IS_HEAP is set, we enforce that there can't be more than
- *	MaxHeapTuplesPerPage line pointers on the page.
+ *	MaxHeapTuplesPerPage() line pointers on the page.
  *
  *	!!! EREPORT(ERROR) IS DISALLOWED HERE !!!
  */
@@ -211,7 +236,7 @@ PageAddItemExtended(Page page,
 	if (phdr->pd_lower < SizeOfPageHeaderData ||
 		phdr->pd_lower > phdr->pd_upper ||
 		phdr->pd_upper > phdr->pd_special ||
-		phdr->pd_special > BLCKSZ)
+		phdr->pd_special + reserved_page_size > BLCKSZ)
 		ereport(PANIC,
 				(errcode(ERRCODE_DATA_CORRUPTED),
 				 errmsg("corrupted page pointers: lower = %u, upper = %u, special = %u",
@@ -295,9 +320,9 @@ PageAddItemExtended(Page page,
 	}
 
 	/* Reject placing items beyond heap boundary, if heap */
-	if ((flags & PAI_IS_HEAP) != 0 && offsetNumber > MaxHeapTuplesPerPage)
+	if ((flags & PAI_IS_HEAP) != 0 && offsetNumber > MaxHeapTuplesPerPage())
 	{
-		elog(WARNING, "can't put more than MaxHeapTuplesPerPage items in a heap page");
+		elog(WARNING, "can't put more than MaxHeapTuplesPerPage() items in a heap page");
 		return InvalidOffsetNumber;
 	}
 
@@ -407,7 +432,7 @@ PageGetTempPageCopySpecial(Page page)
 	pageSize = PageGetPageSize(page);
 	temp = (Page) palloc(pageSize);
 
-	PageInit(temp, pageSize, PageGetSpecialSize(page));
+	PageInit(temp, pageSize, PageGetSpecialSize(page), PageGetPageFeatures(page));
 	memcpy(PageGetSpecialPointer(temp),
 		   PageGetSpecialPointer(page),
 		   PageGetSpecialSize(page));
@@ -702,7 +727,7 @@ PageRepairFragmentation(Page page)
 	Offset		pd_upper = ((PageHeader) page)->pd_upper;
 	Offset		pd_special = ((PageHeader) page)->pd_special;
 	Offset		last_offset;
-	itemIdCompactData itemidbase[MaxHeapTuplesPerPage];
+	itemIdCompactData itemidbase[MaxHeapTuplesPerPageLimit];
 	itemIdCompact itemidptr;
 	ItemId		lp;
 	int			nline,
@@ -723,7 +748,7 @@ PageRepairFragmentation(Page page)
 	if (pd_lower < SizeOfPageHeaderData ||
 		pd_lower > pd_upper ||
 		pd_upper > pd_special ||
-		pd_special > BLCKSZ ||
+		pd_special + reserved_page_size > BLCKSZ ||
 		pd_special != MAXALIGN(pd_special))
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
@@ -979,12 +1004,12 @@ PageGetExactFreeSpace(Page page)
  *		reduced by the space needed for a new line pointer.
  *
  * The difference between this and PageGetFreeSpace is that this will return
- * zero if there are already MaxHeapTuplesPerPage line pointers in the page
+ * zero if there are already MaxHeapTuplesPerPage() line pointers in the page
  * and none are free.  We use this to enforce that no more than
- * MaxHeapTuplesPerPage line pointers are created on a heap page.  (Although
+ * MaxHeapTuplesPerPage() line pointers are created on a heap page.  (Although
  * no more tuples than that could fit anyway, in the presence of redirected
  * or dead line pointers it'd be possible to have too many line pointers.
- * To avoid breaking code that assumes MaxHeapTuplesPerPage is a hard limit
+ * To avoid breaking code that assumes MaxHeapTuplesPerPage() is a hard limit
  * on the number of line pointers, we make this extra check.)
  */
 Size
@@ -999,10 +1024,10 @@ PageGetHeapFreeSpace(Page page)
 					nline;
 
 		/*
-		 * Are there already MaxHeapTuplesPerPage line pointers in the page?
+		 * Are there already MaxHeapTuplesPerPage() line pointers in the page?
 		 */
 		nline = PageGetMaxOffsetNumber(page);
-		if (nline >= MaxHeapTuplesPerPage)
+		if (nline >= MaxHeapTuplesPerPage())
 		{
 			if (PageHasFreeLinePointers(page))
 			{
@@ -1066,7 +1091,7 @@ PageIndexTupleDelete(Page page, OffsetNumber offnum)
 	if (phdr->pd_lower < SizeOfPageHeaderData ||
 		phdr->pd_lower > phdr->pd_upper ||
 		phdr->pd_upper > phdr->pd_special ||
-		phdr->pd_special > BLCKSZ ||
+		phdr->pd_special + reserved_page_size > BLCKSZ ||
 		phdr->pd_special != MAXALIGN(phdr->pd_special))
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
@@ -1201,7 +1226,7 @@ PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems)
 	if (pd_lower < SizeOfPageHeaderData ||
 		pd_lower > pd_upper ||
 		pd_upper > pd_special ||
-		pd_special > BLCKSZ ||
+		pd_special + reserved_page_size > BLCKSZ ||
 		pd_special != MAXALIGN(pd_special))
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
@@ -1307,7 +1332,7 @@ PageIndexTupleDeleteNoCompact(Page page, OffsetNumber offnum)
 	if (phdr->pd_lower < SizeOfPageHeaderData ||
 		phdr->pd_lower > phdr->pd_upper ||
 		phdr->pd_upper > phdr->pd_special ||
-		phdr->pd_special > BLCKSZ ||
+		phdr->pd_special + reserved_page_size > BLCKSZ ||
 		phdr->pd_special != MAXALIGN(phdr->pd_special))
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
@@ -1419,7 +1444,7 @@ PageIndexTupleOverwrite(Page page, OffsetNumber offnum,
 	if (phdr->pd_lower < SizeOfPageHeaderData ||
 		phdr->pd_lower > phdr->pd_upper ||
 		phdr->pd_upper > phdr->pd_special ||
-		phdr->pd_special > BLCKSZ ||
+		phdr->pd_special + reserved_page_size > BLCKSZ ||
 		phdr->pd_special != MAXALIGN(phdr->pd_special))
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
@@ -1510,6 +1535,7 @@ char *
 PageSetChecksumCopy(Page page, BlockNumber blkno)
 {
 	static char *pageCopy = NULL;
+	char *extended_checksum_loc = NULL;
 
 	/* If we don't need a checksum, just return the passed-in data */
 	if (PageIsNew(page) || !DataChecksumsEnabled())
@@ -1528,7 +1554,13 @@ PageSetChecksumCopy(Page page, BlockNumber blkno)
 											 0);
 
 	memcpy(pageCopy, (char *) page, BLCKSZ);
-	((PageHeader) pageCopy)->pd_checksum = pg_checksum_page(pageCopy, blkno);
+
+	if ((extended_checksum_loc = PageGetFeatureOffset(pageCopy, PF_EXT_CHECKSUMS)))
+		pg_set_checksum64_page(pageCopy,
+							   pg_checksum64_page(pageCopy, blkno, (uint64*)extended_checksum_loc),
+							   (uint64*)extended_checksum_loc);
+	else
+		((PageHeader) pageCopy)->pd_feat.checksum = pg_checksum_page(pageCopy, blkno);
 	return pageCopy;
 }
 
@@ -1541,9 +1573,17 @@ PageSetChecksumCopy(Page page, BlockNumber blkno)
 void
 PageSetChecksumInplace(Page page, BlockNumber blkno)
 {
+	char *extended_checksum_loc = NULL;
+
 	/* If we don't need a checksum, just return */
 	if (PageIsNew(page) || !DataChecksumsEnabled())
 		return;
 
-	((PageHeader) page)->pd_checksum = pg_checksum_page((char *) page, blkno);
+	/* are we using extended checksums? */
+	if ((extended_checksum_loc = PageGetFeatureOffset(page, PF_EXT_CHECKSUMS)))
+		pg_set_checksum64_page(page,
+							   pg_checksum64_page(page, blkno, (uint64*)extended_checksum_loc),
+							   (uint64*)extended_checksum_loc);
+	else
+		((PageHeader) page)->pd_feat.checksum = pg_checksum_page(page, blkno);
 }

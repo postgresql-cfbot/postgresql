@@ -234,11 +234,11 @@ scan_file(const char *fn, int segmentno)
 		csum = pg_checksum_page(buf.data, blockno + segmentno * RELSEG_SIZE);
 		if (mode == PG_MODE_CHECK)
 		{
-			if (csum != header->pd_checksum)
+			if (csum != header->pd_feat.checksum)
 			{
 				if (ControlFile->data_checksum_version == PG_DATA_CHECKSUM_VERSION)
 					pg_log_error("checksum verification failed in file \"%s\", block %u: calculated checksum %X but block contains %X",
-								 fn, blockno, csum, header->pd_checksum);
+								 fn, blockno, csum, header->pd_feat.checksum);
 				badblocks++;
 			}
 		}
@@ -250,13 +250,13 @@ scan_file(const char *fn, int segmentno)
 			 * Do not rewrite if the checksum is already set to the expected
 			 * value.
 			 */
-			if (header->pd_checksum == csum)
+			if (header->pd_feat.checksum == csum)
 				continue;
 
 			blocks_written_in_file++;
 
 			/* Set checksum in page header */
-			header->pd_checksum = csum;
+			header->pd_feat.checksum = csum;
 
 			/* Seek back to beginning of block */
 			if (lseek(f, -BLCKSZ, SEEK_CUR) < 0)
@@ -550,6 +550,9 @@ main(int argc, char *argv[])
 
 	if (ControlFile->pg_control_version != PG_CONTROL_VERSION)
 		pg_fatal("cluster is not compatible with this version of pg_checksums");
+
+	if (ControlFile->page_features != 0)
+		pg_fatal("pg_checksums cannot be used on a cluster with enabled page features");
 
 	if (ControlFile->blcksz != BLCKSZ)
 	{

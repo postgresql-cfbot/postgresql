@@ -414,8 +414,6 @@ sub GenerateFiles
 		  qq{"PostgreSQL $package_version$extraver, compiled by Visual C++ build " CppAsString2(_MSC_VER) ", $bits-bit"},
 		PROFILE_PID_DIR => undef,
 		PTHREAD_CREATE_JOINABLE => undef,
-		RELSEG_SIZE => (1024 / $self->{options}->{blocksize}) *
-		  $self->{options}->{segsize} * 1024,
 		SIZEOF_BOOL => 1,
 		SIZEOF_LONG => 4,
 		SIZEOF_OFF_T => undef,

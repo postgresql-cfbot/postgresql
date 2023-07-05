@@ -283,54 +283,6 @@ AC_DEFINE_UNQUOTED([BLCKSZ], ${BLCKSZ}, [
 ])
 
 #
-# Relation segment size
-#
-PGAC_ARG_REQ(with, segsize, [SEGSIZE], [set table segment size in GB [1]],
-             [segsize=$withval],
-             [segsize=1])
-PGAC_ARG_REQ(with, segsize-blocks, [SEGSIZE_BLOCKS], [set table segment size in blocks [0]],
-             [segsize_blocks=$withval],
-             [segsize_blocks=0])
-
-# If --with-segsize-blocks is non-zero, it is used, --with-segsize
-# otherwise. segsize-blocks is only really useful for developers wanting to
-# test segment related code. Warn if both are used.
-if test $segsize_blocks -ne 0 -a $segsize -ne 1; then
-  AC_MSG_WARN([both --with-segsize and --with-segsize-blocks specified, --with-segsize-blocks wins])
-fi
-
-AC_MSG_CHECKING([for segment size])
-if test $segsize_blocks -eq 0; then
-  # this expression is set up to avoid unnecessary integer overflow
-  # blocksize is already guaranteed to be a factor of 1024
-  RELSEG_SIZE=`expr '(' 1024 / ${blocksize} ')' '*' ${segsize} '*' 1024`
-  test $? -eq 0 || exit 1
-  AC_MSG_RESULT([${segsize}GB])
-else
-  RELSEG_SIZE=$segsize_blocks
-  AC_MSG_RESULT([${RELSEG_SIZE} blocks])
-fi
-
-AC_DEFINE_UNQUOTED([RELSEG_SIZE], ${RELSEG_SIZE}, [
- RELSEG_SIZE is the maximum number of blocks allowed in one disk file.
- Thus, the maximum size of a single file is RELSEG_SIZE * BLCKSZ;
- relations bigger than that are divided into multiple files.
-
- RELSEG_SIZE * BLCKSZ must be less than your OS' limit on file size.
- This is often 2 GB or 4GB in a 32-bit operating system, unless you
- have large file support enabled.  By default, we make the limit 1 GB
- to avoid any possible integer-overflow problems within the OS.
- A limit smaller than necessary only means we divide a large
- relation into more chunks than necessary, so it seems best to err
- in the direction of a small limit.
-
- A power-of-2 value is recommended to save a few cycles in md.c,
- but is not absolutely required.
-
- Changing RELSEG_SIZE requires an initdb.
-])
-
-#
 # WAL block size
 #
 AC_MSG_CHECKING([for WAL block size])
@@ -1756,13 +1708,6 @@ fi
 
 dnl Check for largefile support (must be after AC_SYS_LARGEFILE)
 AC_CHECK_SIZEOF([off_t])
-
-# If we don't have largefile support, can't handle segment size >= 2GB.
-if test "$ac_cv_sizeof_off_t" -lt 8; then
-  if expr $RELSEG_SIZE '*' $blocksize '>=' 2 '*' 1024 '*' 1024; then
-    AC_MSG_ERROR([Large file support is not enabled. Segment size cannot be larger than 1GB.])
-  fi
-fi
 
 AC_CHECK_SIZEOF([bool], [],
 [#ifdef HAVE_STDBOOL_H

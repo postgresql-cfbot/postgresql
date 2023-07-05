@@ -24,6 +24,7 @@ extern bool showprogress;
 extern bool dry_run;
 extern bool do_sync;
 extern int	WalSegSz;
+extern int64 rel_segment_size;
 
 /* Target history */
 extern TimeLineHistoryEntry *targetHistory;

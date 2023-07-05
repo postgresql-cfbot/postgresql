@@ -231,7 +231,7 @@ scan_file(const char *fn, int segmentno)
 		if (PageIsNew(buf.data))
 			continue;
 
-		csum = pg_checksum_page(buf.data, blockno + segmentno * RELSEG_SIZE);
+		csum = pg_checksum_page(buf.data, blockno + segmentno * ControlFile->relseg_size);
 		if (mode == PG_MODE_CHECK)
 		{
 			if (csum != header->pd_checksum)

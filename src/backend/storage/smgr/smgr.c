@@ -24,9 +24,17 @@
 #include "storage/ipc.h"
 #include "storage/md.h"
 #include "storage/smgr.h"
+#include "utils/guc_tables.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 
+
+/*
+ * The number of blocks that should be in a segment file.  Has a wider type
+ * than BlockNumber, so that can represent the case the whole relation fits in
+ * one file.
+ */
+int64		rel_segment_size;
 
 /*
  * This struct of function pointers defines the API between smgr.c and
@@ -763,4 +771,10 @@ ProcessBarrierSmgrRelease(void)
 {
 	smgrreleaseall();
 	return true;
+}
+
+const char *
+show_segment_size(void)
+{
+	return ShowGUCInt64WithUnits(rel_segment_size, GUC_UNIT_BLOCKS);
 }

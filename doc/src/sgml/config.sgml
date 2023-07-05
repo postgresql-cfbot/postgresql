@@ -10827,10 +10827,9 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       <listitem>
        <para>
         Reports the number of blocks (pages) that can be stored within a file
-        segment.  It is determined by the value of <literal>RELSEG_SIZE</literal>
-        when building the server.  The maximum size of a segment file in bytes
-        is equal to <varname>segment_size</varname> multiplied by
-        <varname>block_size</varname>; by default this is 1GB.
+        segment.  It is changeable with the <literal>--rel-segsize</literal> option
+        with a cluster is initialized with <application>initdb</application>.
+        By default this is 1GB.
        </para>
       </listitem>
      </varlistentry>

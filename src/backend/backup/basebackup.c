@@ -40,6 +40,7 @@
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/reinit.h"
+#include "storage/smgr.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/ps_status.h"
@@ -1594,7 +1595,7 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 				 */
 				if (!PageIsNew(page) && PageGetLSN(page) < sink->bbs_state->startptr)
 				{
-					checksum = pg_checksum_page((char *) page, blkno + segmentno * RELSEG_SIZE);
+					checksum = pg_checksum_page((char *) page, blkno + segmentno * rel_segment_size);
 					phdr = (PageHeader) page;
 					if (phdr->pd_checksum != checksum)
 					{

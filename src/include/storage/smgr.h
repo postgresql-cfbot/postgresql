@@ -18,6 +18,8 @@
 #include "storage/block.h"
 #include "storage/relfilelocator.h"
 
+extern int64 rel_segment_size;
+
 /*
  * smgr.c maintains a table of SMgrRelation objects, which are essentially
  * cached file handles.  An SMgrRelation is created (if not already present)
@@ -109,5 +111,6 @@ extern void smgrtruncate(SMgrRelation reln, ForkNumber *forknum,
 extern void smgrimmedsync(SMgrRelation reln, ForkNumber forknum);
 extern void AtEOXact_SMgr(void);
 extern bool ProcessBarrierSmgrRelease(void);
+extern const char *show_segment_size(void);
 
 #endif							/* SMGR_H */

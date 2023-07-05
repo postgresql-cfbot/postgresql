@@ -5274,6 +5274,22 @@ GetConfigOptionByName(const char *name, const char **varname, bool missing_ok)
 }
 
 /*
+ * Show unit-based values with appropriate unit, as ShowGUCOption() would.
+ * This can be used by custom show hooks.
+ */
+char *
+ShowGUCInt64WithUnits(int64 value, int flags)
+{
+	int64		number;
+	const char *unit;
+	char		buffer[256];
+
+	convert_int_from_base_unit(value, flags & GUC_UNIT, &number, &unit);
+	snprintf(buffer, sizeof(buffer), INT64_FORMAT "%s", number, unit);
+	return pstrdup(buffer);
+}
+
+/*
  * ShowGUCOption: get string value of variable
  *
  * We express a numeric value in appropriate units if it has units and

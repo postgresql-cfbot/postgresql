@@ -3901,7 +3901,7 @@ WriteControlFile(void)
 	ControlFile->floatFormat = FLOATFORMAT_VALUE;
 
 	ControlFile->blcksz = BLCKSZ;
-	ControlFile->relseg_size = RELSEG_SIZE;
+	ControlFile->relseg_size = rel_segment_size;
 	ControlFile->xlog_blcksz = XLOG_BLCKSZ;
 	ControlFile->xlog_seg_size = wal_segment_size;
 
@@ -4071,13 +4071,6 @@ ReadControlFile(void)
 						   " but the server was compiled with BLCKSZ %d.",
 						   ControlFile->blcksz, BLCKSZ),
 				 errhint("It looks like you need to recompile or initdb.")));
-	if (ControlFile->relseg_size != RELSEG_SIZE)
-		ereport(FATAL,
-				(errmsg("database files are incompatible with server"),
-				 errdetail("The database cluster was initialized with RELSEG_SIZE %d,"
-						   " but the server was compiled with RELSEG_SIZE %d.",
-						   ControlFile->relseg_size, RELSEG_SIZE),
-				 errhint("It looks like you need to recompile or initdb.")));
 	if (ControlFile->xlog_blcksz != XLOG_BLCKSZ)
 		ereport(FATAL,
 				(errmsg("database files are incompatible with server"),
@@ -4157,6 +4150,8 @@ ReadControlFile(void)
 		(SizeOfXLogLongPHD - SizeOfXLogShortPHD);
 
 	CalculateCheckpointSegments();
+
+	rel_segment_size = ControlFile->relseg_size;
 
 	/* Make the initdb settings visible as GUC variables, too */
 	SetConfigOption("data_checksums", DataChecksumsEnabled() ? "yes" : "no",

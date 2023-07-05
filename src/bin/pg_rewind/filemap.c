@@ -296,8 +296,8 @@ process_target_wal_block_change(ForkNumber forknum, RelFileLocator rlocator,
 	BlockNumber blkno_inseg;
 	int			segno;
 
-	segno = blkno / RELSEG_SIZE;
-	blkno_inseg = blkno % RELSEG_SIZE;
+	segno = blkno / rel_segment_size;
+	blkno_inseg = blkno % rel_segment_size;;
 
 	path = datasegpath(rlocator, forknum, segno);
 	entry = lookup_filehash_entry(path);

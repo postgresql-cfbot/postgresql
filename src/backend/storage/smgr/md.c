@@ -32,6 +32,7 @@
 #include "pg_trace.h"
 #include "pgstat.h"
 #include "postmaster/bgwriter.h"
+#include "port/pg_bitutils.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/md.h"
@@ -45,15 +46,15 @@
  * The magnetic disk storage manager keeps track of open file
  * descriptors in its own descriptor pool.  This is done to make it
  * easier to support relations that are larger than the operating
- * system's file size limit (often 2GBytes).  In order to do that,
- * we break relations up into "segment" files that are each shorter than
- * the OS file size limit.  The segment size is set by the RELSEG_SIZE
- * configuration constant in pg_config.h.
+ * system's file size limit (historically 2GB, sometimes much larger but still
+ * smaller than the maximum possible relation size).  In order to do that, we
+ * break relations up into "segment" files of a user-specified size chosen at
+ * initdb time and accessed as rel_segment_size.
  *
  * On disk, a relation must consist of consecutively numbered segment
  * files in the pattern
- *	-- Zero or more full segments of exactly RELSEG_SIZE blocks each
- *	-- Exactly one partial segment of size 0 <= size < RELSEG_SIZE blocks
+ *	-- Zero or more full segments of exactly rel_segment_size blocks each
+ *	-- Exactly one partial segment of size 0 <= size < rel_segment_size blocks
  *	-- Optionally, any number of inactive segments of size 0 blocks.
  * The full and partial segments are collectively the "active" segments.
  * Inactive segments are those that once contained data but are currently
@@ -110,7 +111,7 @@ static MemoryContext MdCxt;		/* context for all MdfdVec objects */
 #define EXTENSION_CREATE_RECOVERY	(1 << 3)
 /*
  * Allow opening segments which are preceded by segments smaller than
- * RELSEG_SIZE, e.g. inactive segments (see above). Note that this breaks
+ * rel_segment_size, e.g. inactive segments (see above). Note that this breaks
  * mdnblocks() and related functionality henceforth - which currently is ok,
  * because this is only required in the checkpointer which never uses
  * mdnblocks().
@@ -141,6 +142,31 @@ static MdfdVec *_mdfd_getseg(SMgrRelation reln, ForkNumber forknum,
 							 BlockNumber blkno, bool skipFsync, int behavior);
 static BlockNumber _mdnblocks(SMgrRelation reln, ForkNumber forknum,
 							  MdfdVec *seg);
+
+/* Given a block number, which segment is it in? */
+static inline uint32
+blockno_to_segno(BlockNumber blockno)
+{
+	/* Because it's a power of two, we can use a shift instead of "/". */
+	Assert(pg_popcount64(rel_segment_size) == 1);
+	return (uint64) blockno >> pg_leftmost_one_pos64(rel_segment_size);
+}
+
+/* Given a block number, which block is that within its segment? */
+static inline BlockNumber
+blockno_within_segment(BlockNumber blockno)
+{
+	/* Because it's a power of two, we can use a mask instead of "%". */
+	Assert(pg_popcount64(rel_segment_size) == 1);
+	return blockno & (rel_segment_size - 1);
+}
+
+/* Given a block number, convert it to byte offset within a segment. */
+static inline off_t
+blockno_to_seekpos(BlockNumber blockno)
+{
+	return blockno_within_segment(blockno) * (off_t) BLCKSZ;
+}
 
 static inline int
 _mdfd_open_flags(void)
@@ -490,9 +516,9 @@ mdextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 
 	v = _mdfd_getseg(reln, forknum, blocknum, skipFsync, EXTENSION_CREATE);
 
-	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
+	seekpos = blockno_to_seekpos(blocknum);
 
-	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
+	Assert(seekpos < (off_t) BLCKSZ * rel_segment_size);
 
 	if ((nbytes = FileWrite(v->mdfd_vfd, buffer, BLCKSZ, seekpos, WAIT_EVENT_DATA_FILE_EXTEND)) != BLCKSZ)
 	{
@@ -514,7 +540,7 @@ mdextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	if (!skipFsync && !SmgrIsTemp(reln))
 		register_dirty_segment(reln, forknum, v);
 
-	Assert(_mdnblocks(reln, forknum, v) <= ((BlockNumber) RELSEG_SIZE));
+	Assert(_mdnblocks(reln, forknum, v) <= rel_segment_size);
 }
 
 /*
@@ -552,19 +578,19 @@ mdzeroextend(SMgrRelation reln, ForkNumber forknum,
 
 	while (remblocks > 0)
 	{
-		BlockNumber segstartblock = curblocknum % ((BlockNumber) RELSEG_SIZE);
-		off_t		seekpos = (off_t) BLCKSZ * segstartblock;
+		BlockNumber segstartblock = blockno_within_segment(blocknum);
+		off_t		seekpos = blockno_to_seekpos(blocknum);
 		int			numblocks;
 
-		if (segstartblock + remblocks > RELSEG_SIZE)
-			numblocks = RELSEG_SIZE - segstartblock;
+		if (segstartblock + remblocks > rel_segment_size)
+			numblocks = rel_segment_size - segstartblock;
 		else
 			numblocks = remblocks;
 
 		v = _mdfd_getseg(reln, forknum, curblocknum, skipFsync, EXTENSION_CREATE);
 
-		Assert(segstartblock < RELSEG_SIZE);
-		Assert(segstartblock + numblocks <= RELSEG_SIZE);
+		Assert(segstartblock < rel_segment_size);
+		Assert(segstartblock + numblocks <= rel_segment_size);
 
 		/*
 		 * If available and useful, use posix_fallocate() (via
@@ -618,7 +644,7 @@ mdzeroextend(SMgrRelation reln, ForkNumber forknum,
 		if (!skipFsync && !SmgrIsTemp(reln))
 			register_dirty_segment(reln, forknum, v);
 
-		Assert(_mdnblocks(reln, forknum, v) <= ((BlockNumber) RELSEG_SIZE));
+		Assert(_mdnblocks(reln, forknum, v) <= rel_segment_size);
 
 		remblocks -= numblocks;
 		curblocknum += numblocks;
@@ -670,7 +696,7 @@ mdopenfork(SMgrRelation reln, ForkNumber forknum, int behavior)
 	mdfd->mdfd_vfd = fd;
 	mdfd->mdfd_segno = 0;
 
-	Assert(_mdnblocks(reln, forknum, mdfd) <= ((BlockNumber) RELSEG_SIZE));
+	Assert(_mdnblocks(reln, forknum, mdfd) <= rel_segment_size);
 
 	return mdfd;
 }
@@ -726,9 +752,9 @@ mdprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 	if (v == NULL)
 		return false;
 
-	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
+	seekpos = blockno_to_seekpos(blocknum);
 
-	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
+	Assert(seekpos < (off_t) BLCKSZ * rel_segment_size);
 
 	(void) FilePrefetch(v->mdfd_vfd, seekpos, BLCKSZ, WAIT_EVENT_DATA_FILE_PREFETCH);
 #endif							/* USE_PREFETCH */
@@ -760,9 +786,9 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	v = _mdfd_getseg(reln, forknum, blocknum, false,
 					 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
 
-	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
+	seekpos = blockno_to_seekpos(blocknum);
 
-	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
+	Assert(seekpos < (off_t) BLCKSZ * rel_segment_size);
 
 	nbytes = FileRead(v->mdfd_vfd, buffer, BLCKSZ, seekpos, WAIT_EVENT_DATA_FILE_READ);
 
@@ -834,9 +860,9 @@ mdwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	v = _mdfd_getseg(reln, forknum, blocknum, skipFsync,
 					 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
 
-	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
+	seekpos = blockno_to_seekpos(blocknum);
 
-	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
+	Assert(seekpos < (off_t) BLCKSZ * rel_segment_size);
 
 	nbytes = FileWrite(v->mdfd_vfd, buffer, BLCKSZ, seekpos, WAIT_EVENT_DATA_FILE_WRITE);
 
@@ -907,17 +933,17 @@ mdwriteback(SMgrRelation reln, ForkNumber forknum,
 			return;
 
 		/* compute offset inside the current segment */
-		segnum_start = blocknum / RELSEG_SIZE;
+		segnum_start = blockno_to_segno(blocknum);
 
 		/* compute number of desired writes within the current segment */
-		segnum_end = (blocknum + nblocks - 1) / RELSEG_SIZE;
+		segnum_end = blockno_to_segno(blocknum + nblocks - 1);
 		if (segnum_start != segnum_end)
-			nflush = RELSEG_SIZE - (blocknum % ((BlockNumber) RELSEG_SIZE));
+			nflush = rel_segment_size - blockno_within_segment(blocknum);
 
 		Assert(nflush >= 1);
 		Assert(nflush <= nblocks);
 
-		seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
+		seekpos = blockno_to_seekpos(blocknum);
 
 		FileWriteback(v->mdfd_vfd, seekpos, (off_t) BLCKSZ * nflush, WAIT_EVENT_DATA_FILE_FLUSH);
 
@@ -948,8 +974,8 @@ mdnblocks(SMgrRelation reln, ForkNumber forknum)
 
 	/*
 	 * Start from the last open segments, to avoid redundant seeks.  We have
-	 * previously verified that these segments are exactly RELSEG_SIZE long,
-	 * and it's useless to recheck that each time.
+	 * previously verified that these segments are exactly rel_segment_size
+	 * long, and it's useless to recheck that each time.
 	 *
 	 * NOTE: this assumption could only be wrong if another backend has
 	 * truncated the relation.  We rely on higher code levels to handle that
@@ -965,13 +991,13 @@ mdnblocks(SMgrRelation reln, ForkNumber forknum)
 	for (;;)
 	{
 		nblocks = _mdnblocks(reln, forknum, v);
-		if (nblocks > ((BlockNumber) RELSEG_SIZE))
+		if (nblocks > rel_segment_size)
 			elog(FATAL, "segment too big");
-		if (nblocks < ((BlockNumber) RELSEG_SIZE))
-			return (segno * ((BlockNumber) RELSEG_SIZE)) + nblocks;
+		if (nblocks < rel_segment_size)
+			return (segno * rel_segment_size) + nblocks;
 
 		/*
-		 * If segment is exactly RELSEG_SIZE, advance to next one.
+		 * If segment is exactly rel_segment_size, advance to next one.
 		 */
 		segno++;
 
@@ -984,7 +1010,7 @@ mdnblocks(SMgrRelation reln, ForkNumber forknum)
 		 */
 		v = _mdfd_openseg(reln, forknum, segno, 0);
 		if (v == NULL)
-			return segno * ((BlockNumber) RELSEG_SIZE);
+			return segno * rel_segment_size;
 	}
 }
 
@@ -1025,7 +1051,7 @@ mdtruncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 	{
 		MdfdVec    *v;
 
-		priorblocks = (curopensegs - 1) * RELSEG_SIZE;
+		priorblocks = (curopensegs - 1) * rel_segment_size;
 
 		v = &reln->md_seg_fds[forknum][curopensegs - 1];
 
@@ -1050,13 +1076,13 @@ mdtruncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 			FileClose(v->mdfd_vfd);
 			_fdvec_resize(reln, forknum, curopensegs - 1);
 		}
-		else if (priorblocks + ((BlockNumber) RELSEG_SIZE) > nblocks)
+		else if (priorblocks + rel_segment_size > nblocks)
 		{
 			/*
 			 * This is the last segment we want to keep. Truncate the file to
 			 * the right length. NOTE: if nblocks is exactly a multiple K of
-			 * RELSEG_SIZE, we will truncate the K+1st segment to 0 length but
-			 * keep it. This adheres to the invariant given in the header
+			 * rel_setment_size, we will truncate the K+1st segment to 0 length
+			 * but keep it. This adheres to the invariant given in the header
 			 * comments.
 			 */
 			BlockNumber lastsegblocks = nblocks - priorblocks;
@@ -1372,7 +1398,7 @@ _mdfd_openseg(SMgrRelation reln, ForkNumber forknum, BlockNumber segno,
 	v->mdfd_vfd = fd;
 	v->mdfd_segno = segno;
 
-	Assert(_mdnblocks(reln, forknum, v) <= ((BlockNumber) RELSEG_SIZE));
+	Assert(_mdnblocks(reln, forknum, v) <= rel_segment_size);
 
 	/* all done */
 	return v;
@@ -1399,7 +1425,7 @@ _mdfd_getseg(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 		   (EXTENSION_FAIL | EXTENSION_CREATE | EXTENSION_RETURN_NULL |
 			EXTENSION_DONT_OPEN));
 
-	targetseg = blkno / ((BlockNumber) RELSEG_SIZE);
+	targetseg = blockno_to_segno(blkno);
 
 	/* if an existing and opened segment, we're done */
 	if (targetseg < reln->md_num_open_segs[forknum])
@@ -1436,7 +1462,7 @@ _mdfd_getseg(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 
 		Assert(nextsegno == v->mdfd_segno + 1);
 
-		if (nblocks > ((BlockNumber) RELSEG_SIZE))
+		if (nblocks > rel_segment_size)
 			elog(FATAL, "segment too big");
 
 		if ((behavior & EXTENSION_CREATE) ||
@@ -1451,31 +1477,31 @@ _mdfd_getseg(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 			 * ahead and create the segments so we can finish out the replay.
 			 *
 			 * We have to maintain the invariant that segments before the last
-			 * active segment are of size RELSEG_SIZE; therefore, if
+			 * active segment are of size rel_segment_size; therefore, if
 			 * extending, pad them out with zeroes if needed.  (This only
 			 * matters if in recovery, or if the caller is extending the
 			 * relation discontiguously, but that can happen in hash indexes.)
 			 */
-			if (nblocks < ((BlockNumber) RELSEG_SIZE))
+			if (nblocks < rel_segment_size)
 			{
 				char	   *zerobuf = palloc_aligned(BLCKSZ, PG_IO_ALIGN_SIZE,
 													 MCXT_ALLOC_ZERO);
 
 				mdextend(reln, forknum,
-						 nextsegno * ((BlockNumber) RELSEG_SIZE) - 1,
+						 nextsegno * rel_segment_size - 1,
 						 zerobuf, skipFsync);
 				pfree(zerobuf);
 			}
 			flags = O_CREAT;
 		}
 		else if (!(behavior & EXTENSION_DONT_CHECK_SIZE) &&
-				 nblocks < ((BlockNumber) RELSEG_SIZE))
+				 nblocks < rel_segment_size)
 		{
 			/*
 			 * When not extending (or explicitly including truncated
 			 * segments), only open the next segment if the current one is
-			 * exactly RELSEG_SIZE.  If not (this branch), either return NULL
-			 * or fail.
+			 * exactly rel_segment_size.  If not (this branch), either return
+			 * NULL or fail.
 			 */
 			if (behavior & EXTENSION_RETURN_NULL)
 			{

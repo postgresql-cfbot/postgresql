@@ -448,6 +448,30 @@ PostgreSQL documentation
        </para>
       </listitem>
      </varlistentry>
+
+     <varlistentry id="app-initdb-option-rel-segsize">
+      <term><option>--rel-segsize=<replaceable>size</replaceable></option></term>
+      <listitem>
+       <para>
+        Set the maximum size of relation segment files.  The size must have a suffix
+        <literal>kB</literal>, <literal>MB</literal>, <literal>GB</literal> or
+        <literal>TB</literal>.  The default size is 1GB, which was chosen to
+        support large relations on operating systems without large file support.
+        This option can only be set during initialization, and cannot be
+        changed later.
+       </para>
+
+       <para>
+        Setting this to a value higher than the default reduces the
+        number of file descriptors that must be managed while accessing very large
+        tables.  Note that values higher than the file system can support may
+        result in errors while trying to extend a table (for example Linux ext4
+        limits files to 16TB), and values above 2GB are not supported on
+        operating systems without a large <literal>off_t</literal> data type
+        (notably Windows).
+       </para>
+      </listitem>
+     </varlistentry>
     </variablelist>
    </para>
 

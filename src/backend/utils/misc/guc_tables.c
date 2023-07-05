@@ -581,10 +581,10 @@ static int	max_function_args;
 static int	max_index_keys;
 static int	max_identifier_length;
 static int	block_size;
-static int	segment_size;
 static int	shared_memory_size_mb;
 static int	shared_memory_size_in_huge_pages;
 static int	wal_block_size;
+static int	phony_segment_size;
 static bool data_checksums;
 static bool integer_datetimes;
 
@@ -3120,15 +3120,19 @@ struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	/*
+	 * We used a phony GUC with a custome show function, because we don't
+	 * support GUCs with a wide enough type.
+	 */
 	{
 		{"segment_size", PGC_INTERNAL, PRESET_OPTIONS,
 			gettext_noop("Shows the number of pages per disk file."),
 			NULL,
 			GUC_UNIT_BLOCKS | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
-		&segment_size,
-		RELSEG_SIZE, RELSEG_SIZE, RELSEG_SIZE,
-		NULL, NULL, NULL
+		&phony_segment_size,
+		0, 0, 0,
+		NULL, NULL, show_segment_size
 	},
 
 	{

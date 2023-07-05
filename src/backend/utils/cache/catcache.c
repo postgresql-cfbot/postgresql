@@ -31,12 +31,13 @@
 #endif
 #include "storage/lmgr.h"
 #include "utils/builtins.h"
+#include "utils/catcache.h"
 #include "utils/datum.h"
 #include "utils/fmgroids.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
-#include "utils/resowner_private.h"
+#include "utils/resowner.h"
 #include "utils/syscache.h"
 
 
@@ -94,6 +95,8 @@ static CatCTup *CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp,
 										uint32 hashValue, Index hashIndex,
 										bool negative);
 
+static void ReleaseCatCacheWithOwner(HeapTuple tuple, ResourceOwner resowner);
+static void ReleaseCatCacheListWithOwner(CatCList *list, ResourceOwner resowner);
 static void CatCacheFreeKeys(TupleDesc tupdesc, int nkeys, int *attnos,
 							 Datum *keys);
 static void CatCacheCopyKeys(TupleDesc tupdesc, int nkeys, int *attnos,
@@ -103,6 +106,44 @@ static void CatCacheCopyKeys(TupleDesc tupdesc, int nkeys, int *attnos,
 /*
  *					internal support functions
  */
+
+/* ResourceOwner callbacks to hold catcache references */
+
+static void ResOwnerReleaseCatCache(Datum res);
+static void ResOwnerPrintCatCacheLeakWarning(Datum res);
+static void ResOwnerReleaseCatCacheList(Datum res);
+static void ResOwnerPrintCatCacheListLeakWarning(Datum res);
+
+static ResourceOwnerFuncs catcache_resowner_funcs =
+{
+	/* catcache references */
+	.name = "catcache reference",
+	.release_phase = RESOURCE_RELEASE_AFTER_LOCKS,
+	.release_priority = RELEASE_PRIO_CATCACHE_REFS,
+	.ReleaseResource = ResOwnerReleaseCatCache,
+	.PrintLeakWarning = ResOwnerPrintCatCacheLeakWarning
+};
+
+static ResourceOwnerFuncs catlistref_resowner_funcs =
+{
+	/* catcache-list pins */
+	.name = "catcache list reference",
+	.release_phase = RESOURCE_RELEASE_AFTER_LOCKS,
+	.release_priority = RELEASE_PRIO_CATCACHE_LIST_REFS,
+	.ReleaseResource = ResOwnerReleaseCatCacheList,
+	.PrintLeakWarning = ResOwnerPrintCatCacheListLeakWarning
+};
+
+/* Convenience wrappers over ResourceOwnerRemember/Forget */
+#define ResourceOwnerRememberCatCacheRef(owner, tuple) \
+	ResourceOwnerRemember(owner, PointerGetDatum(tuple), &catcache_resowner_funcs)
+#define ResourceOwnerForgetCatCacheRef(owner, tuple) \
+	ResourceOwnerForget(owner, PointerGetDatum(tuple), &catcache_resowner_funcs)
+#define ResourceOwnerRememberCatCacheListRef(owner, list) \
+	ResourceOwnerRemember(owner, PointerGetDatum(list), &catlistref_resowner_funcs)
+#define ResourceOwnerForgetCatCacheListRef(owner, list) \
+	ResourceOwnerForget(owner, PointerGetDatum(list), &catlistref_resowner_funcs)
+
 
 /*
  * Hash and equality functions for system types that are used as cache key
@@ -1265,7 +1306,7 @@ SearchCatCacheInternal(CatCache *cache,
 		 */
 		if (!ct->negative)
 		{
-			ResourceOwnerEnlargeCatCacheRefs(CurrentResourceOwner);
+			ResourceOwnerEnlarge(CurrentResourceOwner);
 			ct->refcount++;
 			ResourceOwnerRememberCatCacheRef(CurrentResourceOwner, &ct->tuple);
 
@@ -1366,7 +1407,7 @@ SearchCatCacheMiss(CatCache *cache,
 									 hashValue, hashIndex,
 									 false);
 		/* immediately set the refcount to 1 */
-		ResourceOwnerEnlargeCatCacheRefs(CurrentResourceOwner);
+		ResourceOwnerEnlarge(CurrentResourceOwner);
 		ct->refcount++;
 		ResourceOwnerRememberCatCacheRef(CurrentResourceOwner, &ct->tuple);
 		break;					/* assume only one match */
@@ -1434,6 +1475,12 @@ SearchCatCacheMiss(CatCache *cache,
 void
 ReleaseCatCache(HeapTuple tuple)
 {
+	ReleaseCatCacheWithOwner(tuple, CurrentResourceOwner);
+}
+
+static void
+ReleaseCatCacheWithOwner(HeapTuple tuple, ResourceOwner resowner)
+{
 	CatCTup    *ct = (CatCTup *) (((char *) tuple) -
 								  offsetof(CatCTup, tuple));
 
@@ -1442,7 +1489,8 @@ ReleaseCatCache(HeapTuple tuple)
 	Assert(ct->refcount > 0);
 
 	ct->refcount--;
-	ResourceOwnerForgetCatCacheRef(CurrentResourceOwner, &ct->tuple);
+	if (resowner)
+		ResourceOwnerForgetCatCacheRef(CurrentResourceOwner, &ct->tuple);
 
 	if (
 #ifndef CATCACHE_FORCE_RELEASE
@@ -1578,7 +1626,7 @@ SearchCatCacheList(CatCache *cache,
 		dlist_move_head(&cache->cc_lists, &cl->cache_elem);
 
 		/* Bump the list's refcount and return it */
-		ResourceOwnerEnlargeCatCacheListRefs(CurrentResourceOwner);
+		ResourceOwnerEnlarge(CurrentResourceOwner);
 		cl->refcount++;
 		ResourceOwnerRememberCatCacheListRef(CurrentResourceOwner, cl);
 
@@ -1602,8 +1650,6 @@ SearchCatCacheList(CatCache *cache,
 	 * block to ensure we can undo those refcounts if we get an error before
 	 * we finish constructing the CatCList.
 	 */
-	ResourceOwnerEnlargeCatCacheListRefs(CurrentResourceOwner);
-
 	ctlist = NIL;
 
 	PG_TRY();
@@ -1691,6 +1737,9 @@ SearchCatCacheList(CatCache *cache,
 
 		table_close(relation, AccessShareLock);
 
+		/* Make sure the resource owner has room to remember this entry. */
+		ResourceOwnerEnlarge(CurrentResourceOwner);
+
 		/* Now we can build the CatCList entry. */
 		oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
 		nmembers = list_length(ctlist);
@@ -1775,11 +1824,18 @@ SearchCatCacheList(CatCache *cache,
 void
 ReleaseCatCacheList(CatCList *list)
 {
+	ReleaseCatCacheListWithOwner(list, CurrentResourceOwner);
+}
+
+static void
+ReleaseCatCacheListWithOwner(CatCList *list, ResourceOwner resowner)
+{
 	/* Safety checks to ensure we were handed a cache entry */
 	Assert(list->cl_magic == CL_MAGIC);
 	Assert(list->refcount > 0);
 	list->refcount--;
-	ResourceOwnerForgetCatCacheListRef(CurrentResourceOwner, list);
+	if (resowner)
+		ResourceOwnerForgetCatCacheListRef(CurrentResourceOwner, list);
 
 	if (
 #ifndef CATCACHE_FORCE_RELEASE
@@ -2055,14 +2111,18 @@ PrepareToInvalidateCacheTuple(Relation relation,
 	}
 }
 
+/* ResourceOwner callbacks */
 
-/*
- * Subroutines for warning about reference leaks.  These are exported so
- * that resowner.c can call them.
- */
-void
-PrintCatCacheLeakWarning(HeapTuple tuple)
+static void
+ResOwnerReleaseCatCache(Datum res)
 {
+	ReleaseCatCacheWithOwner((HeapTuple) DatumGetPointer(res), NULL);
+}
+
+static void
+ResOwnerPrintCatCacheLeakWarning(Datum res)
+{
+	HeapTuple	tuple = (HeapTuple) DatumGetPointer(res);
 	CatCTup    *ct = (CatCTup *) (((char *) tuple) -
 								  offsetof(CatCTup, tuple));
 
@@ -2076,9 +2136,17 @@ PrintCatCacheLeakWarning(HeapTuple tuple)
 		 ct->refcount);
 }
 
-void
-PrintCatCacheListLeakWarning(CatCList *list)
+static void
+ResOwnerReleaseCatCacheList(Datum res)
 {
+	ReleaseCatCacheListWithOwner((CatCList *) DatumGetPointer(res), NULL);
+}
+
+static void
+ResOwnerPrintCatCacheListLeakWarning(Datum res)
+{
+	CatCList   *list = (CatCList *) DatumGetPointer(res);
+
 	elog(WARNING, "cache reference leak: cache %s (%d), list %p has count %d",
 		 list->my_cache->cc_relname, list->my_cache->id,
 		 list, list->refcount);

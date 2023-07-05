@@ -383,6 +383,20 @@ typedef struct CkptSortItem
 
 extern PGDLLIMPORT CkptSortItem *CkptBufferIds;
 
+/* ResourceOwner callbacks to hold buffer I/Os and pins */
+extern ResourceOwnerFuncs buffer_io_resowner_funcs;
+extern ResourceOwnerFuncs buffer_pin_resowner_funcs;
+
+/* Convenience wrappers over ResourceOwnerRemember/Forget */
+#define ResourceOwnerRememberBuffer(owner, buffer) \
+	ResourceOwnerRemember(owner, Int32GetDatum(buffer), &buffer_pin_resowner_funcs)
+#define ResourceOwnerForgetBuffer(owner, buffer) \
+	ResourceOwnerForget(owner, Int32GetDatum(buffer), &buffer_pin_resowner_funcs)
+#define ResourceOwnerRememberBufferIO(owner, buffer) \
+	ResourceOwnerRemember(owner, Int32GetDatum(buffer), &buffer_io_resowner_funcs)
+#define ResourceOwnerForgetBufferIO(owner, buffer) \
+	ResourceOwnerForget(owner, Int32GetDatum(buffer), &buffer_io_resowner_funcs)
+
 /*
  * Internal buffer management routines
  */
@@ -418,6 +432,7 @@ extern void BufTableDelete(BufferTag *tagPtr, uint32 hashcode);
 /* localbuf.c */
 extern bool PinLocalBuffer(BufferDesc *buf_hdr, bool adjust_usagecount);
 extern void UnpinLocalBuffer(Buffer buffer);
+extern void UnpinLocalBufferNoOwner(Buffer buffer);
 extern PrefetchBufferResult PrefetchLocalBuffer(SMgrRelation smgr,
 												ForkNumber forkNum,
 												BlockNumber blockNum);

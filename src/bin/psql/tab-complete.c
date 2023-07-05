@@ -1329,6 +1329,13 @@ static const char *const table_storage_parameters[] = {
 	NULL
 };
 
+/* Optional parameters for CREATE VIEW and ALTER VIEW */
+static const char *const view_optional_parameters[] = {
+	"check_option",
+	"security_barrier",
+	"security_invoker",
+	NULL
+};
 
 /* Forward declaration of functions */
 static char **psql_completion(const char *text, int start, int end);
@@ -2217,7 +2224,7 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER VIEW <name> */
 	else if (Matches("ALTER", "VIEW", MatchAny))
 		COMPLETE_WITH("ALTER COLUMN", "OWNER TO", "RENAME",
-					  "SET SCHEMA");
+					  "SET SCHEMA", "SET (", "RESET (");
 	/* ALTER VIEW xxx RENAME */
 	else if (Matches("ALTER", "VIEW", MatchAny, "RENAME"))
 		COMPLETE_WITH_ATTR_PLUS(prev2_wd, "COLUMN", "TO");
@@ -2233,6 +2240,13 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER VIEW xxx RENAME COLUMN yyy */
 	else if (Matches("ALTER", "VIEW", MatchAny, "RENAME", "COLUMN", MatchAnyExcept("TO")))
 		COMPLETE_WITH("TO");
+	/* ALTER VIEW xxx SET|RESET ( yyy [= zzz] ) */
+	else if (Matches("ALTER", "VIEW", MatchAny, "SET|RESET", "("))
+		COMPLETE_WITH_LIST(view_optional_parameters);
+	else if (Matches("ALTER", "VIEW", MatchAny, "SET", "(", "check_option", "="))
+		COMPLETE_WITH("local", "cascaded");
+	else if (Matches("ALTER", "VIEW", MatchAny, "SET", "(", "security_barrier|security_invoker", "="))
+		COMPLETE_WITH("true", "false");
 
 	/* ALTER MATERIALIZED VIEW <name> */
 	else if (Matches("ALTER", "MATERIALIZED", "VIEW", MatchAny))
@@ -3525,13 +3539,23 @@ psql_completion(const char *text, int start, int end)
 	}
 
 /* CREATE VIEW --- is allowed inside CREATE SCHEMA, so use TailMatches */
-	/* Complete CREATE [ OR REPLACE ] VIEW <name> with AS */
+	/* Complete CREATE [ OR REPLACE ] VIEW <name> with AS or WITH ( */
 	else if (TailMatches("CREATE", "VIEW", MatchAny) ||
 			 TailMatches("CREATE", "OR", "REPLACE", "VIEW", MatchAny))
+		COMPLETE_WITH("AS", "WITH (");
+	/* Complete CREATE [ OR REPLACE ] VIEW <name> WITH ( with supported options */
+	else if (TailMatches("CREATE", "VIEW", MatchAny, "WITH", "(") ||
+			 TailMatches("CREATE", "OR", "REPLACE", "VIEW", MatchAny, "WITH", "("))
+		COMPLETE_WITH_LIST(view_optional_parameters);
+	/* Complete CREATE [ OR REPLACE ] VIEW <name> WITH ( ... ) with "AS" */
+	else if (TailMatches("CREATE", "VIEW", MatchAny, "WITH", "(*)") ||
+			 TailMatches("CREATE", "OR", "REPLACE", "VIEW", MatchAny, "WITH", "(*)"))
 		COMPLETE_WITH("AS");
-	/* Complete "CREATE [ OR REPLACE ] VIEW <sth> AS with "SELECT" */
+	/* Complete "CREATE [ OR REPLACE ] VIEW <sth> [ WITH ( ... ) ] AS with "SELECT" */
 	else if (TailMatches("CREATE", "VIEW", MatchAny, "AS") ||
-			 TailMatches("CREATE", "OR", "REPLACE", "VIEW", MatchAny, "AS"))
+			 TailMatches("CREATE", "VIEW", MatchAny, "WITH", "(*)", "AS") ||
+			 TailMatches("CREATE", "OR", "REPLACE", "VIEW", MatchAny, "AS") ||
+			 TailMatches("CREATE", "OR", "REPLACE", "VIEW", MatchAny, "WITH", "(*)", "AS"))
 		COMPLETE_WITH("SELECT");
 
 /* CREATE MATERIALIZED VIEW */

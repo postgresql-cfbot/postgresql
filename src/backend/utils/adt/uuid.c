@@ -13,6 +13,8 @@
 
 #include "postgres.h"
 
+#include <sys/time.h>
+
 #include "common/hashfn.h"
 #include "lib/hyperloglog.h"
 #include "libpq/pqformat.h"
@@ -418,6 +420,42 @@ gen_random_uuid(PG_FUNCTION_ARGS)
 	 */
 	uuid->data[6] = (uuid->data[6] & 0x0f) | 0x40;	/* time_hi_and_version */
 	uuid->data[8] = (uuid->data[8] & 0x3f) | 0x80;	/* clock_seq_hi_and_reserved */
+
+	PG_RETURN_UUID_P(uuid);
+}
+
+Datum
+gen_uuid_v7(PG_FUNCTION_ARGS)
+{
+	pg_uuid_t  *uuid = palloc(UUID_LEN);
+	struct timeval tp;
+	uint64_t tms;
+
+	gettimeofday(&tp, NULL);
+
+	tms = ((uint64_t)tp.tv_sec) * 1000;
+	tms += ((uint64_t)tp.tv_usec) / 1000;
+
+	tms = pg_hton64(tms<<16);
+
+	/* Fill in time part */
+	memcpy(&uuid->data[0], &tms, 6);
+
+	/* fill everything after the timestamp with random bytes */
+	if (!pg_strong_random(&uuid->data[6], UUID_LEN - 6))
+		ereport(ERROR,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("could not generate random values")));
+
+	/*
+	 * Set magic numbers for a "version 7" (pseudorandom) UUID, see
+	 * http://tools.ietf.org/html/rfc ???
+	 * https://datatracker.ietf.org/doc/html/draft-peabody-dispatch-new-uuid-format#name-creating-a-uuidv7-value
+	 */
+	/* set version field, top four bits are 0, 1, 1, 1 */
+	uuid->data[6] = (uuid->data[6] & 0x0f) | 0x70;
+	/* set variant field, top two bits are 1, 0 */
+	uuid->data[8] = (uuid->data[8] & 0x3f) | 0x80;
 
 	PG_RETURN_UUID_P(uuid);
 }

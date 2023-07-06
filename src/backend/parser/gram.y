@@ -651,6 +651,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <partboundspec> PartitionBoundSpec
 %type <list>		hash_partbound
 %type <defelt>		hash_partbound_elem
+%type <node>		OptSessionVarDefExpr
 
 %type <node>	json_format_clause
 				json_format_clause_opt
@@ -5229,28 +5230,34 @@ create_extension_opt_item:
  *****************************************************************************/
 
 CreateSessionVarStmt:
-			CREATE OptTemp VARIABLE qualified_name opt_as Typename opt_collate_clause XactEndActionOption
+			CREATE OptTemp VARIABLE qualified_name opt_as Typename opt_collate_clause OptSessionVarDefExpr XactEndActionOption
 				{
 					CreateSessionVarStmt *n = makeNode(CreateSessionVarStmt);
 					$4->relpersistence = $2;
 					n->variable = $4;
 					n->typeName = $6;
 					n->collClause = (CollateClause *) $7;
-					n->XactEndAction = $8;
+					n->defexpr = $8;
+					n->XactEndAction = $9;
 					n->if_not_exists = false;
 					$$ = (Node *) n;
 				}
-			| CREATE OptTemp VARIABLE IF_P NOT EXISTS qualified_name opt_as Typename opt_collate_clause XactEndActionOption
+			| CREATE OptTemp VARIABLE IF_P NOT EXISTS qualified_name opt_as Typename opt_collate_clause OptSessionVarDefExpr XactEndActionOption
 				{
 					CreateSessionVarStmt *n = makeNode(CreateSessionVarStmt);
 					$7->relpersistence = $2;
 					n->variable = $7;
 					n->typeName = $9;
 					n->collClause = (CollateClause *) $10;
-					n->XactEndAction = $11;
+					n->defexpr = $11;
+					n->XactEndAction = $12;
 					n->if_not_exists = true;
 					$$ = (Node *) n;
 				}
+		;
+
+OptSessionVarDefExpr: DEFAULT b_expr					{ $$ = $2; }
+			| /* EMPTY */							{ $$ = NULL; }
 		;
 
 /*

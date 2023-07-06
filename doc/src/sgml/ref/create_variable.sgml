@@ -27,7 +27,7 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 CREATE [ { TEMPORARY | TEMP } ] VARIABLE [ IF NOT EXISTS ] <replaceable class="parameter">name</replaceable> [ AS ] <replaceable class="parameter">data_type</replaceable> ] [ COLLATE <replaceable class="parameter">collation</replaceable> ]
-    [ { ON COMMIT DROP | ON TRANSACTION END RESET } ]
+    [ DEFAULT <replaceable class="parameter">default_expr</replaceable> ] [ { ON COMMIT DROP | ON TRANSACTION END RESET } ]
 </synopsis>
  </refsynopsisdiv>
  <refsect1>
@@ -41,10 +41,10 @@ CREATE [ { TEMPORARY | TEMP } ] VARIABLE [ IF NOT EXISTS ] <replaceable class="p
 
   <para>
    The value of a session variable is local to the current session.  Retrieving
-   a session variable's value returns NULL, unless its value is set to
-   something else in the current session with a <command>LET</command> command.
-   The content of a session variable is not transactional. This is the same as
-   regular variables in procedural languages.
+   a session variable's value returns NULL or a default value, unless its value
+   is set to something else in the current session with a <command>LET</command>
+   command.  The content of a session variable is not transactional.  This is the
+   same as regular variables in procedural languages.
   </para>
 
   <para>
@@ -101,6 +101,17 @@ CREATE [ { TEMPORARY | TEMP } ] VARIABLE [ IF NOT EXISTS ] <replaceable class="p
       The <literal>COLLATE</literal> clause assigns a collation to the session
       variable (which must be of a collatable data type).  If not specified,
       the data type's default collation is used.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-createvariable-default">
+    <term><literal>DEFAULT <replaceable>default_expr</replaceable></literal></term>
+    <listitem>
+     <para>
+      The <literal>DEFAULT</literal> clause can be used to assign a default
+      value to a session variable. This expression is evaluated when the session
+      variable is first accessed for reading and had not yet been assigned a value.
      </para>
     </listitem>
    </varlistentry>

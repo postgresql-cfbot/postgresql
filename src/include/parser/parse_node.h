@@ -84,6 +84,7 @@ typedef enum ParseExprKind
 	EXPR_KIND_CYCLE_MARK,		/* cycle mark value */
 	EXPR_KIND_ASSIGN_TARGET,	/* PL/pgSQL assignment target */
 	EXPR_KIND_LET_TARGET,		/* LET target */
+	EXPR_KIND_VARIABLE_DEFAULT, /* default value for session variable */
 } ParseExprKind;
 
 

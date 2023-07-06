@@ -3995,6 +3995,42 @@ my %tests = (
 		},
 	},
 
+	'CREATE VARIABLE test_variable DEFAULT' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 61,
+		create_sql   => 'CREATE VARIABLE dump_test.variable3 AS integer DEFAULT 10;',
+		regexp => qr/^
+			\QCREATE VARIABLE dump_test.variable3 AS integer DEFAULT 10;\E/xm,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			section_pre_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement    => 1,
+		},
+	},
+
+	'CREATE VARIABLE test_variable DEFAULT ON TRANSACTION END RESET' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 61,
+		create_sql   => 'CREATE VARIABLE dump_test.variable4 AS integer DEFAULT 10 ON TRANSACTION END RESET',
+		regexp => qr/^
+			\QCREATE VARIABLE dump_test.variable4 AS integer DEFAULT 10 ON TRANSACTION END RESET;\E/xm,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			section_pre_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement    => 1,
+		},
+	},
+
 	'CREATE VIEW test_view' => {
 		create_order => 61,
 		create_sql => 'CREATE VIEW dump_test.test_view

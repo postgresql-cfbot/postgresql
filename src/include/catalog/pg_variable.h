@@ -67,6 +67,9 @@ CATALOG(pg_variable,9222,VariableRelationId)
 	/* access permissions */
 	aclitem		varacl[1] BKI_DEFAULT(_null_);
 
+	/* list of expression trees for variable default (NULL if none) */
+	pg_node_tree vardefexpr BKI_DEFAULT(_null_);
+
 #endif
 } FormData_pg_variable;
 

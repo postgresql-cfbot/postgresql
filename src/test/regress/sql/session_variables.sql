@@ -1037,3 +1037,51 @@ ROLLBACK;
 SELECT var1 IS NULL;
 
 DROP VARIABLE var1;
+
+CREATE OR REPLACE FUNCTION vartest_fx()
+RETURNS int AS $$
+BEGIN
+  RAISE NOTICE 'vartest_fx executed';
+  RETURN 0;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE VARIABLE var1 AS int DEFAULT vartest_fx();
+
+-- vartest_fx should be protected by dep, should fail
+DROP FUNCTION vartest_fx();
+
+-- should be ok
+SELECT var1;
+
+-- the defexpr should be evaluated only once
+SELECT var1;
+
+DISCARD VARIABLES;
+
+-- in this case, the defexpr should not be evaluated
+LET var1 = 100;
+SELECT var1;
+
+DISCARD VARIABLES;
+
+CREATE OR REPLACE FUNCTION vartest_fx()
+RETURNS int AS $$
+BEGIN
+  RAISE EXCEPTION 'vartest_fx is executing';
+  RETURN 0;
+END;
+$$ LANGUAGE plpgsql;
+
+-- should to fail, but not to crash
+SELECT var1;
+
+-- again
+SELECT var1;
+
+-- but we can write
+LET var1 = 100;
+SELECT var1;
+
+DROP VARIABLE var1;
+DROP FUNCTION vartest_fx();

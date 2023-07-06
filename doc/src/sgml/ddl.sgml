@@ -5304,14 +5304,14 @@ SELECT current_user_id;
 
    <para>
     The value of a session variable is local to the current session. Retrieving
-    a variable's value returns a <literal>NULL</literal>, unless its value has
-    been set to something else in the current session using the
-    <command>LET</command> command.  Session variables are not transactional:
-    any changes made to the value of a session variable in a transaction won't
-    be undone if the transaction is rolled back (just like variables in
-    procedural languages).  Session variables themselves can be persistent
-    or temporary, but their values are neither persistent nor shared (like the
-    content of temporary tables).
+    a variable's value returns a <literal>NULL</literal> or a default value,
+    unless its value has  been set to something else in the current session
+    using the <command>LET</command> command.  Session variables are not
+    transactional: any changes made to the value of a session variable in
+    a transaction won't be undone if the transaction is rolled back (just like
+    variables in procedural languages).  Session variables themselves can be
+    persistent or temporary, but their values are neither persistent nor shared
+    (like the content of temporary tables).
    </para>
 
    <para>

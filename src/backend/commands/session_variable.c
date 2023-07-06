@@ -22,6 +22,7 @@
 #include "executor/svariableReceiver.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "optimizer/optimizer.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/lmgr.h"
 #include "storage/proc.h"
@@ -514,10 +515,67 @@ AtEOSubXact_SessionVariables(bool isCommit,
 }
 
 /*
+ * evaluate an expression
+ */
+static void
+eval_assign_defexpr(SVariable svar, HeapTuple tup)
+{
+	Datum		defexpr_value;
+	bool		isnull;
+
+	Assert(svar);
+	Assert(svar->is_valid);
+	Assert(HeapTupleIsValid(tup));
+
+	defexpr_value = SysCacheGetAttr(VARIABLEOID,
+									tup,
+									Anum_pg_variable_vardefexpr,
+									&isnull);
+
+	if (!isnull)
+	{
+		EState	   *estate;
+		ExprState  *defexprs;
+		Expr	   *defexpr;
+		char	   *defexpr_str;
+		Datum		value;
+		MemoryContext oldcxt;
+
+		estate = CreateExecutorState();
+
+		defexpr_str = TextDatumGetCString(defexpr_value);
+		defexpr = (Expr *) stringToNode(defexpr_str);
+
+		oldcxt = MemoryContextSwitchTo(estate->es_query_cxt);
+
+		defexpr = expression_planner((Expr *) defexpr);
+		defexprs = ExecInitExpr(defexpr, NULL);
+
+		value = ExecEvalExprSwitchContext(defexprs,
+										  GetPerTupleExprContext(estate),
+										  &isnull);
+
+		MemoryContextSwitchTo(oldcxt);
+
+		if (!isnull)
+		{
+			oldcxt = MemoryContextSwitchTo(SVariableMemoryContext);
+
+			svar->value = datumCopy(value, svar->typbyval, svar->typlen);
+			svar->isnull = false;
+
+			MemoryContextSwitchTo(oldcxt);
+		}
+
+		FreeExecutorState(estate);
+	}
+}
+
+/*
  * Initialize attributes cached in "svar"
  */
 static void
-setup_session_variable(SVariable svar, Oid varid)
+setup_session_variable(SVariable svar, Oid varid, bool is_write)
 {
 	HeapTuple	tup;
 	Form_pg_variable varform;
@@ -567,6 +625,9 @@ setup_session_variable(SVariable svar, Oid varid)
 	svar->hashvalue = GetSysCacheHashValue1(VARIABLEOID,
 											ObjectIdGetDatum(varid));
 
+	if (!is_write)
+		eval_assign_defexpr(svar, tup);
+
 	ReleaseSysCache(tup);
 }
 
@@ -596,7 +657,7 @@ set_session_variable(SVariable svar, Datum value, bool isnull)
 	 */
 	if (!svar->is_valid)
 	{
-		setup_session_variable(&locsvar, svar->varid);
+		setup_session_variable(&locsvar, svar->varid, false);
 		_svar = &locsvar;
 	}
 	else
@@ -731,7 +792,25 @@ get_session_variable(Oid varid)
 	 */
 	if (!svar->is_valid)
 	{
-		setup_session_variable(svar, varid);
+		/* in this case we want to use defexp if it is defined */
+		PG_TRY();
+		{
+			/*
+			 * In this case, the setup can execute default expression. When
+			 * the execution of default expression fails, then we need to
+			 * remove entry from session vars.
+			 */
+			setup_session_variable(svar, varid, false);
+		}
+		PG_CATCH();
+		{
+			/* this entry cannot be valid, remove from sessionvars */
+			hash_search(sessionvars, &varid, HASH_REMOVE, NULL);
+
+			/* propagate the error */
+			PG_RE_THROW();
+		}
+		PG_END_TRY();
 
 		elog(DEBUG1, "session variable \"%s.%s\" (oid:%u) has assigned entry in memory (emitted by READ)",
 			 get_namespace_name(get_session_variable_namespace(varid)),
@@ -795,7 +874,7 @@ SetSessionVariable(Oid varid, Datum value, bool isNull)
 
 	if (!found)
 	{
-		setup_session_variable(svar, varid);
+		setup_session_variable(svar, varid, true);
 
 		elog(DEBUG1, "session variable \"%s.%s\" (oid:%u) has assigned entry in memory (emitted by WRITE)",
 			 get_namespace_name(get_session_variable_namespace(svar->varid)),

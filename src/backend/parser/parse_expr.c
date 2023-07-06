@@ -584,6 +584,7 @@ expr_kind_allows_session_variables(ParseExprKind p_expr_kind)
 		case EXPR_KIND_JOIN_USING:
 		case EXPR_KIND_CYCLE_MARK:
 		case EXPR_KIND_ASSIGN_TARGET:
+		case EXPR_KIND_VARIABLE_DEFAULT:
 			result = false;
 			break;
 	}
@@ -669,6 +670,7 @@ transformColumnRef(ParseState *pstate, ColumnRef *cref)
 		case EXPR_KIND_CYCLE_MARK:
 		case EXPR_KIND_ASSIGN_TARGET:
 		case EXPR_KIND_LET_TARGET:
+		case EXPR_KIND_VARIABLE_DEFAULT:
 			/* okay */
 			break;
 
@@ -2077,6 +2079,7 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 			break;
 		case EXPR_KIND_COLUMN_DEFAULT:
 		case EXPR_KIND_FUNCTION_DEFAULT:
+		case EXPR_KIND_VARIABLE_DEFAULT:
 			err = _("cannot use subquery in DEFAULT expression");
 			break;
 		case EXPR_KIND_INDEX_EXPRESSION:
@@ -3429,6 +3432,7 @@ ParseExprKindName(ParseExprKind exprKind)
 			return "CHECK";
 		case EXPR_KIND_COLUMN_DEFAULT:
 		case EXPR_KIND_FUNCTION_DEFAULT:
+		case EXPR_KIND_VARIABLE_DEFAULT:
 			return "DEFAULT";
 		case EXPR_KIND_INDEX_EXPRESSION:
 			return "index expression";

@@ -55,6 +55,12 @@ CATALOG(pg_variable,9222,VariableRelationId)
 	/* typmod for variable's type */
 	int32		vartypmod BKI_DEFAULT(-1);
 
+	/* don't allow NULL */
+	bool		varnotnull BKI_DEFAULT(f);
+
+	/* don't allow changes */
+	bool		varisimmutable BKI_DEFAULT(f);
+
 	/* action on transaction end */
 	char		varxactendaction BKI_DEFAULT(n);
 

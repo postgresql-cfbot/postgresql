@@ -6044,7 +6044,8 @@ $$ LANGUAGE plpgsql STRICT IMMUTABLE;
      You can consider translating an Oracle package into a schema in
      <productname>PostgreSQL</productname>.  Package functions and procedures
      would then become functions and procedures in that schema, and package
-     variables could be translated to session variables in that schema.
+     variables could be translated to session variables or immutable session
+     variables in that schema.
      (see <xref linkend="ddl-session-variables"/>).
     </para>
    </sect3>

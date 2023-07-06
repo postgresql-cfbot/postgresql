@@ -4031,6 +4031,42 @@ my %tests = (
 		},
 	},
 
+	'CREATE IMMUTABLE VARIABLE test_variable' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 61,
+		create_sql   => 'CREATE IMMUTABLE VARIABLE dump_test.variable5 AS integer',
+		regexp => qr/^
+			\QCREATE IMMUTABLE VARIABLE dump_test.variable5 AS integer;\E/xm,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			section_pre_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement    => 1,
+		},
+	},
+
+	'CREATE IMMUTABLE VARIABLE test_variable NOT NULL DEFAULT' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 61,
+		create_sql   => 'CREATE IMMUTABLE VARIABLE dump_test.variable7 AS integer NOT NULL DEFAULT 10',
+		regexp => qr/^
+			\QCREATE IMMUTABLE VARIABLE dump_test.variable7 AS integer NOT NULL DEFAULT 10;\E/xm,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			section_pre_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement    => 1,
+		},
+	},
+
 	'CREATE VIEW test_view' => {
 		create_order => 61,
 		create_sql => 'CREATE VIEW dump_test.test_view

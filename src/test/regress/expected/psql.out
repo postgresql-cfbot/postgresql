@@ -5935,20 +5935,20 @@ CREATE ROLE regress_variable_owner;
 SET ROLE TO regress_variable_owner;
 CREATE VARIABLE var1 AS varchar COLLATE "C";
 \dV+ var1
-                                                               List of variables
- Schema | Name |       Type        | Collation |         Owner          | Default | Transactional end action | Access privileges | Description 
---------+------+-------------------+-----------+------------------------+---------+--------------------------+-------------------+-------------
- public | var1 | character varying | C         | regress_variable_owner |         |                          |                   | 
+                                                                         List of variables
+ Schema | Name |       Type        | Collation |         Owner          | Nullable | Mutable | Default | Transactional end action | Access privileges | Description 
+--------+------+-------------------+-----------+------------------------+----------+---------+---------+--------------------------+-------------------+-------------
+ public | var1 | character varying | C         | regress_variable_owner | t        | t       |         |                          |                   | 
 (1 row)
 
 GRANT SELECT ON VARIABLE var1 TO PUBLIC;
 COMMENT ON VARIABLE var1 IS 'some description';
 \dV+ var1
-                                                                                 List of variables
- Schema | Name |       Type        | Collation |         Owner          | Default | Transactional end action |                Access privileges                 |   Description    
---------+------+-------------------+-----------+------------------------+---------+--------------------------+--------------------------------------------------+------------------
- public | var1 | character varying | C         | regress_variable_owner |         |                          | regress_variable_owner=rw/regress_variable_owner+| some description
-        |      |                   |           |                        |         |                          | =r/regress_variable_owner                        | 
+                                                                                           List of variables
+ Schema | Name |       Type        | Collation |         Owner          | Nullable | Mutable | Default | Transactional end action |                Access privileges                 |   Description    
+--------+------+-------------------+-----------+------------------------+----------+---------+---------+--------------------------+--------------------------------------------------+------------------
+ public | var1 | character varying | C         | regress_variable_owner | t        | t       |         |                          | regress_variable_owner=rw/regress_variable_owner+| some description
+        |      |                   |           |                        |          |         |         |                          | =r/regress_variable_owner                        | 
 (1 row)
 
 DROP VARIABLE var1;
@@ -6416,9 +6416,9 @@ List of schemas
 (0 rows)
 
 \dV "no.such.variable"
-                               List of variables
- Schema | Name | Type | Collation | Owner | Default | Transactional end action 
---------+------+------+-----------+-------+---------+--------------------------
+                                         List of variables
+ Schema | Name | Type | Collation | Owner | Nullable | Mutable | Default | Transactional end action 
+--------+------+------+-----------+-------+----------+---------+---------+--------------------------
 (0 rows)
 
 -- again, but with dotted schema qualifications.
@@ -6591,9 +6591,9 @@ improper qualified name (too many dotted names): "no.such.schema"."no.such.insta
 \dy "no.such.schema"."no.such.event.trigger"
 improper qualified name (too many dotted names): "no.such.schema"."no.such.event.trigger"
 \dV "no.such.schema"."no.such.variable"
-                               List of variables
- Schema | Name | Type | Collation | Owner | Default | Transactional end action 
---------+------+------+-----------+-------+---------+--------------------------
+                                         List of variables
+ Schema | Name | Type | Collation | Owner | Nullable | Mutable | Default | Transactional end action 
+--------+------+------+-----------+-------+----------+---------+---------+--------------------------
 (0 rows)
 
 -- again, but with current database and dotted schema qualifications.
@@ -6730,9 +6730,9 @@ List of text search templates
 (0 rows)
 
 \dV regression."no.such.schema"."no.such.variable"
-                               List of variables
- Schema | Name | Type | Collation | Owner | Default | Transactional end action 
---------+------+------+-----------+-------+---------+--------------------------
+                                         List of variables
+ Schema | Name | Type | Collation | Owner | Nullable | Mutable | Default | Transactional end action 
+--------+------+------+-----------+-------+----------+---------+---------+--------------------------
 (0 rows)
 
 -- again, but with dotted database and dotted schema qualifications.

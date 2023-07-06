@@ -1085,3 +1085,125 @@ SELECT var1;
 
 DROP VARIABLE var1;
 DROP FUNCTION vartest_fx();
+
+-- test NOT NULL
+-- should be ok
+CREATE VARIABLE var1 AS int NOT NULL;
+-- should to fail
+SELECT var1;
+
+--should be ok
+LET var1 = 10;
+SELECT var1;
+
+DROP VARIABLE var1;
+
+-- should be ok
+CREATE VARIABLE var1 AS int NOT NULL DEFAULT 0;
+
+--should be ok
+SELECT var1;
+
+-- should be ok
+LET var1 = 10;
+SELECT var1;
+
+DISCARD VARIABLES;
+
+-- should to fail
+LET var1 = NULL;
+
+DROP VARIABLE var1;
+
+-- test NOT NULL
+CREATE OR REPLACE FUNCTION vartest_fx()
+RETURNS int AS $$
+BEGIN
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE VARIABLE var1 AS int NOT NULL DEFAULT vartest_fx();
+
+-- should to fail
+SELECT var1;
+
+DISCARD VARIABLES;
+
+-- should be ok
+LET var1 = 10;
+SELECT var1;
+
+CREATE OR REPLACE FUNCTION vartest_fx()
+RETURNS int AS $$
+BEGIN
+  RETURN 0;
+END;
+$$ LANGUAGE plpgsql;
+
+DISCARD VARIABLES;
+
+-- should be ok
+SELECT var1;
+
+DROP VARIABLE var1;
+DROP FUNCTION vartest_fx();
+
+-- test IMMUTBLE
+CREATE IMMUTABLE VARIABLE var1 AS int;
+
+-- should be ok
+SELECT var1;
+-- first write should ok
+-- should be ok
+LET var1 = 10;
+-- should fail
+LET var1 = 20;
+
+DISCARD VARIABLES;
+
+-- should be ok
+LET var1 = 10;
+-- should fail
+LET var1 = 20;
+
+DISCARD VARIABLES;
+
+-- should be ok
+SELECT var1;
+-- should be ok
+LET var1 = NULL;
+-- should fail
+LET var1 = 20;
+
+DROP VARIABLE var1;
+
+CREATE IMMUTABLE VARIABLE var1 AS int DEFAULT 10;
+
+-- don't allow change when variable has DEFAULT value
+-- should to fail
+LET var1 = 20;
+
+DISCARD VARIABLES;
+
+-- should be ok
+SELECT var1;
+-- should fail
+LET var1 = 20;
+
+DROP VARIABLE var1;
+
+-- should be ok
+CREATE IMMUTABLE VARIABLE var1 AS INT NOT NULL DEFAULT 10;
+
+-- should to fail
+LET var1 = 10;
+LET var1 = 20;
+
+-- should be ok
+SELECT var1;
+
+-- should to fail
+LET var1 = 30;
+
+DROP VARIABLE var1;

@@ -9845,6 +9845,26 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>varnotnull</structfield> <type>boolean</type>
+      </para>
+      <para>
+       True if the session variable doesn't allow null values. The default value is false.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>varisimmutable</structfield> <type>boolean</type>
+      </para>
+      <para>
+       True if the variable is <link linkend="sql-createvariable-immutable">immutable</link> (cannot be modified).
+       The default value is false.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>vareoxaction</structfield> <type>char</type>
        <structfield>varxactendaction</structfield> <type>char</type>
       </para>
       <para>

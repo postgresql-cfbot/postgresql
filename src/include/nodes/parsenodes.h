@@ -142,6 +142,9 @@ typedef struct Query
 	 */
 	int			resultRelation pg_node_attr(query_jumble_ignore);
 
+	/* target variable of LET statement */
+	Oid			resultVariable;
+
 	/* has aggregates in tlist or havingQual */
 	bool		hasAggs pg_node_attr(query_jumble_ignore);
 	/* has window functions in tlist */
@@ -162,6 +165,8 @@ typedef struct Query
 	bool		hasRowSecurity pg_node_attr(query_jumble_ignore);
 	/* parser has added an RTE_GROUP RTE */
 	bool		hasGroupRTE pg_node_attr(query_jumble_ignore);
+	/* uses session variables */
+	bool		hasSessionVariables pg_node_attr(query_jumble_ignore);
 	/* is a RETURN statement */
 	bool		isReturn pg_node_attr(query_jumble_ignore);
 
@@ -2091,6 +2096,18 @@ typedef struct MergeStmt
 	List	   *returningList;	/* list of expressions to return */
 	WithClause *withClause;		/* WITH clause */
 } MergeStmt;
+
+/* ----------------------
+ *		Let Statement
+ * ----------------------
+ */
+typedef struct LetStmt
+{
+	NodeTag		type;
+	List	   *target;			/* target variable */
+	Node	   *query;			/* source expression */
+	int			location;
+} LetStmt;
 
 /* ----------------------
  *		Select Statement

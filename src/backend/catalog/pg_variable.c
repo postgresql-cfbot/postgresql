@@ -26,6 +26,7 @@
 #include "parser/parse_type.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_lsn.h"
 #include "utils/syscache.h"
 
 static ObjectAddress create_variable(const char *varName,
@@ -101,6 +102,7 @@ create_variable(const char *varName,
 	varid = GetNewOidWithIndex(rel, VariableOidIndexId, Anum_pg_variable_oid);
 
 	values[Anum_pg_variable_oid - 1] = ObjectIdGetDatum(varid);
+	values[Anum_pg_variable_varcreate_lsn - 1] = LSNGetDatum(GetXLogInsertRecPtr());
 	values[Anum_pg_variable_varname - 1] = NameGetDatum(&varname);
 	values[Anum_pg_variable_varnamespace - 1] = ObjectIdGetDatum(varNamespace);
 	values[Anum_pg_variable_vartype - 1] = ObjectIdGetDatum(varType);

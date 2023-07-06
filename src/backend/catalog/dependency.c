@@ -1864,6 +1864,11 @@ find_expr_references_walker(Node *node,
 	{
 		Param	   *param = (Param *) node;
 
+		/* a variable parameter depends on the session variable */
+		if (param->paramkind == PARAM_VARIABLE)
+			add_object_address(VariableRelationId, param->paramvarid, 0,
+							   context->addrs);
+
 		/* A parameter must depend on the parameter's datatype */
 		add_object_address(TypeRelationId, param->paramtype, 0,
 						   context->addrs);

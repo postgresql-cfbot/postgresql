@@ -5283,6 +5283,38 @@ EXPLAIN SELECT count(*) FROM measurement WHERE logdate &gt;= DATE '2008-01-01';
    </para>
 
    <para>
+    The value of a session variable is set with the SQL statement
+    <command>LET</command>.  The value of a session variable can be retrieved
+    with the SQL statement <command>SELECT</command>.
+<programlisting>
+CREATE VARIABLE var1 AS date;
+LET var1 = current_date;
+SELECT var1;
+</programlisting>
+
+    or
+
+<programlisting>
+CREATE VARIABLE public.current_user_id AS integer;
+GRANT READ ON VARIABLE public.current_user_id TO PUBLIC;
+LET current_user_id = (SELECT id FROM users WHERE usename = session_user);
+SELECT current_user_id;
+</programlisting>
+   </para>
+
+   <para>
+    The value of a session variable is local to the current session. Retrieving
+    a variable's value returns a <literal>NULL</literal>, unless its value has
+    been set to something else in the current session using the
+    <command>LET</command> command.  Session variables are not transactional:
+    any changes made to the value of a session variable in a transaction won't
+    be undone if the transaction is rolled back (just like variables in
+    procedural languages).  Session variables themselves are persistent, but
+    their values are neither persistent nor shared (like the content of
+    temporary tables).
+   </para>
+
+   <para>
     Inside a query or an expression, a session variable can be
     <quote>shadowed</quote> by a column with the same name.  Similarly, the
     name of a function or procedure argument or a PL/pgSQL variable (see

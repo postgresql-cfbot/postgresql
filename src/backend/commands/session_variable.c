@@ -1,0 +1,571 @@
+/*-------------------------------------------------------------------------
+ *
+ * session_variable.c
+ *	  session variable creation/manipulation commands
+ *
+ * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1994, Regents of the University of California
+ *
+ *
+ * IDENTIFICATION
+ *	  src/backend/commands/session_variable.c
+ *
+ *-------------------------------------------------------------------------
+ */
+#include "postgres.h"
+
+#include "catalog/pg_variable.h"
+#include "commands/session_variable.h"
+#include "executor/svariableReceiver.h"
+#include "funcapi.h"
+#include "miscadmin.h"
+#include "rewrite/rewriteHandler.h"
+#include "storage/lmgr.h"
+#include "storage/proc.h"
+#include "tcop/tcopprot.h"
+#include "utils/builtins.h"
+#include "utils/datum.h"
+#include "utils/inval.h"
+#include "utils/lsyscache.h"
+#include "utils/snapmgr.h"
+#include "utils/syscache.h"
+
+/*
+ * The values of session variables are stored in the backend's private memory
+ * in the dedicated memory context SVariableMemoryContext in binary format.
+ * They are stored in the "sessionvars" hash table, whose key is the OID of the
+ * variable.  However, the OID is not good enough to identify a session
+ * variable: concurrent sessions could drop the session variable and create a
+ * new one, which could be assigned the same OID.  To ensure that the values
+ * stored in memory and the catalog definition match, we also keep track of
+ * the "create_lsn".  Before any access to the variable values, we need to
+ * check if the LSN stored in memory matches the LSN in the catalog.  If there
+ * is a mismatch between the LSNs, or if the OID is not present in pg_variable
+ * at all, the value stored in memory is released.
+ */
+typedef struct SVariableData
+{
+	Oid			varid;			/* pg_variable OID of the variable (hash key) */
+	XLogRecPtr	create_lsn;
+
+	bool		isnull;
+	Datum		value;
+
+	Oid			typid;
+	int16		typlen;
+	bool		typbyval;
+
+	bool		is_domain;
+
+	/*
+	 * domain_check_extra holds cached domain metadata.  This "extra" is
+	 * usually stored in fn_mcxt.  We do not have access to that memory context
+	 * for session variables, but we can use TopTransactionContext instead.
+	 * A fresh value is forced when we detect we are in a different transaction
+	 * (the local transaction ID differs from domain_check_extra_lxid).
+	 */
+	void	   *domain_check_extra;
+	LocalTransactionId domain_check_extra_lxid;
+
+	/*
+	 * Stored value and type description can be outdated when we receive a
+	 * sinval message.  We then have to check if the stored data are still
+	 * trustworthy.
+	 */
+	bool		is_valid;
+
+	uint32		hashvalue;		/* used for pairing sinval message */
+} SVariableData;
+
+typedef SVariableData *SVariable;
+
+static HTAB *sessionvars = NULL;	/* hash table for session variables */
+
+static MemoryContext SVariableMemoryContext = NULL;
+
+/*
+ * Callback function for session variable invalidation.
+ */
+static void
+pg_variable_cache_callback(Datum arg, int cacheid, uint32 hashvalue)
+{
+	HASH_SEQ_STATUS status;
+	SVariable	svar;
+
+	elog(DEBUG1, "pg_variable_cache_callback %u %u", cacheid, hashvalue);
+
+	Assert(sessionvars);
+
+	/*
+	 * If the hashvalue is not specified, we have to recheck all currently
+	 * used session variables.  Since we can't tell the exact session variable
+	 * from its hashvalue, we have to iterate over all items in the hash bucket.
+	 */
+	hash_seq_init(&status, sessionvars);
+
+	while ((svar = (SVariable) hash_seq_search(&status)) != NULL)
+	{
+		if (hashvalue == 0 || svar->hashvalue == hashvalue)
+		{
+			svar->is_valid = false;
+		}
+	}
+}
+
+/*
+ * Release stored value, free memory
+ */
+static void
+free_session_variable_value(SVariable svar)
+{
+	/* clean the current value */
+	if (!svar->isnull)
+	{
+		if (!svar->typbyval)
+			pfree(DatumGetPointer(svar->value));
+
+		svar->isnull = true;
+	}
+
+	svar->value = (Datum) 0;
+}
+
+/*
+ * Returns true when the entry in pg_variable is consistent with the given
+ * session variable.
+ */
+static bool
+is_session_variable_valid(SVariable svar)
+{
+	HeapTuple	tp;
+	bool		result = false;
+
+	Assert(OidIsValid(svar->varid));
+
+	tp = SearchSysCache1(VARIABLEOID, ObjectIdGetDatum(svar->varid));
+
+	if (HeapTupleIsValid(tp))
+	{
+		/*
+		 * The OID alone is not enough as an unique identifier, because OID
+		 * values get recycled, and a new session variable could have got
+		 * the same OID.  We do a second check against the 64-bit LSN when
+		 * the variable was created.
+		 */
+		if (svar->create_lsn == ((Form_pg_variable) GETSTRUCT(tp))->varcreate_lsn)
+			result = true;
+
+		ReleaseSysCache(tp);
+	}
+
+	return result;
+}
+
+/*
+ * Initialize attributes cached in "svar"
+ */
+static void
+setup_session_variable(SVariable svar, Oid varid)
+{
+	HeapTuple	tup;
+	Form_pg_variable varform;
+
+	Assert(OidIsValid(varid));
+
+	tup = SearchSysCache1(VARIABLEOID, ObjectIdGetDatum(varid));
+
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "cache lookup failed for session variable %u", varid);
+
+	varform = (Form_pg_variable) GETSTRUCT(tup);
+
+	svar->varid = varid;
+	svar->create_lsn = varform->varcreate_lsn;
+
+	svar->typid = varform->vartype;
+
+	get_typlenbyval(svar->typid, &svar->typlen, &svar->typbyval);
+
+	svar->is_domain = (get_typtype(varform->vartype) == TYPTYPE_DOMAIN);
+	svar->domain_check_extra = NULL;
+	svar->domain_check_extra_lxid = InvalidLocalTransactionId;
+
+	svar->isnull = true;
+	svar->value = (Datum) 0;
+
+	svar->is_valid = true;
+
+	svar->hashvalue = GetSysCacheHashValue1(VARIABLEOID,
+											ObjectIdGetDatum(varid));
+
+	ReleaseSysCache(tup);
+}
+
+/*
+ * Assign a new value to the session variable.  It is copied to
+ * SVariableMemoryContext if necessary.
+ *
+ * If any error happens, the existing value won't be modified.
+ */
+static void
+set_session_variable(SVariable svar, Datum value, bool isnull)
+{
+	Datum		newval;
+	SVariableData locsvar,
+			   *_svar;
+
+	Assert(svar);
+	Assert(!isnull || value == (Datum) 0);
+
+	/*
+	 * Use typbyval, typbylen from session variable only when they are
+	 * trustworthy (the invalidation message was not accepted for this
+	 * variable).  If the variable might be invalid, force setup.
+	 *
+	 * Do not overwrite the passed session variable until we can be certain
+	 * that no error can be thrown.
+	 */
+	if (!svar->is_valid)
+	{
+		setup_session_variable(&locsvar, svar->varid);
+		_svar = &locsvar;
+	}
+	else
+		_svar = svar;
+
+	if (!isnull)
+	{
+		MemoryContext oldcxt = MemoryContextSwitchTo(SVariableMemoryContext);
+
+		newval = datumCopy(value, _svar->typbyval, _svar->typlen);
+
+		MemoryContextSwitchTo(oldcxt);
+	}
+	else
+		newval = value;
+
+	free_session_variable_value(svar);
+
+	elog(DEBUG1, "session variable \"%s.%s\" (oid:%u) has new value",
+		 get_namespace_name(get_session_variable_namespace(svar->varid)),
+		 get_session_variable_name(svar->varid),
+		 svar->varid);
+
+	/* no more error expected, so we can overwrite the old variable now */
+	if (svar != _svar)
+		memcpy(svar, _svar, sizeof(SVariableData));
+
+	svar->value = newval;
+	svar->isnull = isnull;
+}
+
+/*
+ * Create the hash table for storing session variables.
+ */
+static void
+create_sessionvars_hashtables(void)
+{
+	HASHCTL		vars_ctl;
+
+	Assert(!sessionvars);
+
+	if (!SVariableMemoryContext)
+	{
+		/* read sinval messages */
+		CacheRegisterSyscacheCallback(VARIABLEOID,
+									  pg_variable_cache_callback,
+									  (Datum) 0);
+
+		/* we need our own long-lived memory context */
+		SVariableMemoryContext =
+			AllocSetContextCreate(TopMemoryContext,
+								  "session variables",
+								  ALLOCSET_START_SMALL_SIZES);
+	}
+
+	memset(&vars_ctl, 0, sizeof(vars_ctl));
+	vars_ctl.keysize = sizeof(Oid);
+	vars_ctl.entrysize = sizeof(SVariableData);
+	vars_ctl.hcxt = SVariableMemoryContext;
+
+	sessionvars = hash_create("Session variables", 64, &vars_ctl,
+							  HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+}
+
+/*
+ * Search a session variable in the hash table given its OID.  If it
+ * doesn't exist, then insert it there.
+ *
+ * The caller is responsible for doing permission checks.
+ *
+ * As a side effect, this function acquires a AccessShareLock on the
+ * session variable until the end of the transaction.
+ */
+static SVariable
+get_session_variable(Oid varid)
+{
+	SVariable	svar;
+	bool		found;
+
+	/* protect the used session variable against DROP */
+	LockDatabaseObject(VariableRelationId, varid, 0, AccessShareLock);
+
+	if (!sessionvars)
+		create_sessionvars_hashtables();
+
+	svar = (SVariable) hash_search(sessionvars, &varid,
+								   HASH_ENTER, &found);
+
+	if (found)
+	{
+		if (!svar->is_valid)
+		{
+			/*
+			 * If there was an invalidation message, the variable might still be
+			 * valid, but we have to check with the system catalog.
+			 */
+			if (is_session_variable_valid(svar))
+				svar->is_valid = true;
+			else
+				/* if the value cannot be validated, we have to discard it */
+				free_session_variable_value(svar);
+		}
+	}
+	else
+		svar->is_valid = false;
+
+	/*
+	 * Force setup for not yet initialized variables or variables that cannot
+	 * be validated.
+	 */
+	if (!svar->is_valid)
+	{
+		setup_session_variable(svar, varid);
+
+		elog(DEBUG1, "session variable \"%s.%s\" (oid:%u) has assigned entry in memory (emitted by READ)",
+			 get_namespace_name(get_session_variable_namespace(varid)),
+			 get_session_variable_name(varid),
+			 varid);
+	}
+
+	/* ensure the returned data is still of the correct domain */
+	if (svar->is_domain)
+	{
+		/*
+		 * Store "extra" for domain_check() in TopTransactionContext.  When we
+		 * are in a new transaction, domain_check_extra cache is not valid any
+		 * more.
+		 */
+		if (svar->domain_check_extra_lxid != MyProc->vxid.lxid)
+			svar->domain_check_extra = NULL;
+
+		domain_check(svar->value, svar->isnull,
+					 svar->typid, &svar->domain_check_extra,
+					 TopTransactionContext);
+
+		svar->domain_check_extra_lxid = MyProc->vxid.lxid;
+	}
+
+	return svar;
+}
+
+/*
+ * Store the given value in a session variable in the cache.
+ *
+ * The caller is responsible for doing permission checks.
+ *
+ * As a side effect, this function acquires a AccessShareLock on the session
+ * variable until the end of the transaction.
+ */
+void
+SetSessionVariable(Oid varid, Datum value, bool isNull)
+{
+	SVariable	svar;
+	bool		found;
+
+	/* protect used session variable against DROP */
+	LockDatabaseObject(VariableRelationId, varid, 0, AccessShareLock);
+
+	if (!sessionvars)
+		create_sessionvars_hashtables();
+
+	svar = (SVariable) hash_search(sessionvars, &varid,
+								   HASH_ENTER, &found);
+
+	if (!found)
+	{
+		setup_session_variable(svar, varid);
+
+		elog(DEBUG1, "session variable \"%s.%s\" (oid:%u) has assigned entry in memory (emitted by WRITE)",
+			 get_namespace_name(get_session_variable_namespace(svar->varid)),
+			 get_session_variable_name(svar->varid),
+			 varid);
+	}
+
+	/* if this fails, it won't change the stored value */
+	set_session_variable(svar, value, isNull);
+}
+
+/*
+ * Wrapper around SetSessionVariable with permission checks.
+ */
+void
+SetSessionVariableWithSecurityCheck(Oid varid, Datum value, bool isNull)
+{
+	AclResult	aclresult;
+
+	/* is the caller allowed to update the session variable? */
+	aclresult = object_aclcheck(VariableRelationId, varid, GetUserId(), ACL_UPDATE);
+	if (aclresult != ACLCHECK_OK)
+		aclcheck_error(aclresult, OBJECT_VARIABLE, get_session_variable_name(varid));
+
+	SetSessionVariable(varid, value, isNull);
+}
+
+/*
+ * Returns a copy of the value stored in a variable.
+ */
+static inline Datum
+copy_session_variable_value(SVariable svar, bool *isNull)
+{
+	Datum		value;
+
+	/* force copy of non NULL value */
+	if (!svar->isnull)
+	{
+		value = datumCopy(svar->value, svar->typbyval, svar->typlen);
+		*isNull = false;
+	}
+	else
+	{
+		value = (Datum) 0;
+		*isNull = true;
+	}
+
+	return value;
+}
+
+/*
+ * Returns a copy of the value of the session variable (in the current memory
+ * context).  The caller is responsible for permission checks.
+ */
+Datum
+GetSessionVariable(Oid varid, bool *isNull, Oid *typid)
+{
+	SVariable	svar;
+
+	svar = get_session_variable(varid);
+
+	/*
+	 * Although "svar" is freshly validated in this point, svar->is_valid can
+	 * be false, if an invalidation message ws processed during the domain check.
+	 * But the variable and all its dependencies are locked now, so we don't need
+	 * to repeat the validation.
+	 */
+	Assert(svar);
+
+	*typid = svar->typid;
+
+	return copy_session_variable_value(svar, isNull);
+}
+
+/*
+ * Returns a copy of the value of the session variable after checking if the
+ * type is the same as "expected_typid".  The caller is responsible for
+ * permission checks.
+ */
+Datum
+GetSessionVariableWithTypeCheck(Oid varid, bool *isNull, Oid expected_typid)
+{
+	SVariable	svar;
+
+	svar = get_session_variable(varid);
+
+	Assert(svar && svar->is_valid);
+
+	if (expected_typid != svar->typid)
+		elog(ERROR, "type of variable \"%s.%s\" is different than expected",
+			 get_namespace_name(get_session_variable_namespace(varid)),
+			 get_session_variable_name(varid));
+
+	return copy_session_variable_value(svar, isNull);
+}
+
+/*
+ * Assign the result of the evaluated expression to the session variable
+ */
+void
+ExecuteLetStmt(ParseState *pstate,
+			   LetStmt *stmt,
+			   ParamListInfo params,
+			   QueryEnvironment *queryEnv,
+			   QueryCompletion *qc)
+{
+	Query	   *query = castNode(Query, stmt->query);
+	List	   *rewritten;
+	DestReceiver *dest;
+	AclResult	aclresult;
+	PlannedStmt *plan;
+	QueryDesc  *queryDesc;
+	Oid			varid = query->resultVariable;
+
+	Assert(OidIsValid(varid));
+
+	/* do we have permission to write to the session variable? */
+	aclresult = object_aclcheck(VariableRelationId, varid, GetUserId(), ACL_UPDATE);
+	if (aclresult != ACLCHECK_OK)
+		aclcheck_error(aclresult, OBJECT_VARIABLE, get_session_variable_name(varid));
+
+	/* create a dest receiver for LET */
+	dest = CreateVariableDestReceiver(varid);
+
+	/* run the query rewriter */
+	query = copyObject(query);
+
+	rewritten = QueryRewrite(query);
+
+	Assert(list_length(rewritten) == 1);
+
+	query = linitial_node(Query, rewritten);
+	Assert(query->commandType == CMD_SELECT);
+
+	/* plan the query */
+	plan = pg_plan_query(query, pstate->p_sourcetext,
+						 CURSOR_OPT_PARALLEL_OK, params);
+
+	/*
+	 * Use a snapshot with an updated command ID to ensure this query sees the
+	 * results of any previously executed queries.  (This could only matter if
+	 * the planner executed an allegedly-stable function that changed the
+	 * database contents, but let's do it anyway to be parallel to the EXPLAIN
+	 * code path.)
+	 */
+	PushCopiedSnapshot(GetActiveSnapshot());
+	UpdateActiveSnapshotCommandId();
+
+	/* create a QueryDesc, redirecting output to our tuple receiver */
+	queryDesc = CreateQueryDesc(plan, pstate->p_sourcetext,
+								GetActiveSnapshot(), InvalidSnapshot,
+								dest, params, queryEnv, 0);
+
+	/* call ExecutorStart to prepare the plan for execution */
+	ExecutorStart(queryDesc, 0);
+
+	/*
+	 * Run the plan to completion.  The result should be only one row.  To
+	 * check if there are too many result rows, we try to fetch two.
+	 */
+	ExecutorRun(queryDesc, ForwardScanDirection, 2L, true);
+
+	/* save the rowcount if we're given a QueryCompletion to fill */
+	if (qc)
+		SetQueryCompletion(qc, CMDTAG_LET, queryDesc->estate->es_processed);
+
+	/* and clean up */
+	ExecutorFinish(queryDesc);
+	ExecutorEnd(queryDesc);
+
+	FreeQueryDesc(queryDesc);
+
+	PopActiveSnapshot();
+}

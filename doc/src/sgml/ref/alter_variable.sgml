@@ -173,6 +173,7 @@ ALTER VARIABLE boo SET SCHEMA private;
   <simplelist type="inline">
    <member><xref linkend="sql-createvariable"/></member>
    <member><xref linkend="sql-dropvariable"/></member>
+   <member><xref linkend="sql-let"/></member>
   </simplelist>
  </refsect1>
 </refentry>

@@ -186,6 +186,7 @@
    &grant;
    &importForeignSchema;
    &insert;
+   &let;
    &listen;
    &load;
    &lock;

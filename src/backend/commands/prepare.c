@@ -338,6 +338,14 @@ EvaluateParams(ParseState *pstate, PreparedStatement *pstmt, List *params,
 		i++;
 	}
 
+	/*
+	 * The arguments of EXECUTE are evaluated by a direct expression
+	 * executor call.  This mode doesn't support session variables yet.
+	 * It will be enabled later.
+	 */
+	if (pstate->p_hasSessionVariables)
+		elog(ERROR, "session variable cannot be used as an argument");
+
 	/* Prepare the expressions for execution */
 	exprstates = ExecPrepareExprList(params, estate);
 

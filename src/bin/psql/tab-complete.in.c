@@ -1214,8 +1214,8 @@ static const char *const sql_commands[] = {
 	"ABORT", "ALTER", "ANALYZE", "BEGIN", "CALL", "CHECKPOINT", "CLOSE", "CLUSTER",
 	"COMMENT", "COMMIT", "COPY", "CREATE", "DEALLOCATE", "DECLARE",
 	"DELETE FROM", "DISCARD", "DO", "DROP", "END", "EXECUTE", "EXPLAIN",
-	"FETCH", "GRANT", "IMPORT FOREIGN SCHEMA", "INSERT INTO", "LISTEN", "LOAD", "LOCK",
-	"MERGE INTO", "MOVE", "NOTIFY", "PREPARE",
+	"FETCH", "GRANT", "IMPORT FOREIGN SCHEMA", "INSERT INTO", "LET",
+	"LISTEN", "LOAD", "LOCK", "MERGE INTO", "MOVE", "NOTIFY", "PREPARE",
 	"REASSIGN", "REFRESH MATERIALIZED VIEW", "REINDEX", "RELEASE",
 	"RESET", "REVOKE", "ROLLBACK",
 	"SAVEPOINT", "SECURITY LABEL", "SELECT", "SET", "SHOW", "START",
@@ -4628,6 +4628,14 @@ match_previous_words(int pattern_id,
 	/* Insert an open parenthesis after "VALUES" */
 	else if (TailMatches("VALUES") && !TailMatches("DEFAULT", "VALUES"))
 		COMPLETE_WITH("(");
+
+/* LET */
+	/* If prev. word is LET suggest a list of variables */
+	else if (Matches("LET"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_variables);
+	/* Complete LET <variable> with "=" */
+	else if (TailMatches("LET", MatchAny))
+		COMPLETE_WITH("=");
 
 /* LOCK */
 	/* Complete LOCK [TABLE] [ONLY] with a list of tables */

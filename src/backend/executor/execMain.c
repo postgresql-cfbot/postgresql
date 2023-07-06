@@ -43,7 +43,9 @@
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
+#include "catalog/pg_variable.h"
 #include "commands/matview.h"
+#include "commands/session_variable.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
 #include "executor/nodeSubplan.h"
@@ -193,6 +195,61 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	/* We now require all callers to provide sourceText */
 	Assert(queryDesc->sourceText != NULL);
 	estate->es_sourceText = queryDesc->sourceText;
+
+	/*
+	 * The executor doesn't work with session variables directly. Values of
+	 * related session variables are copied to a dedicated array, and this array
+	 * is passed to the executor. This array is stable "snapshot" of values of
+	 * used session variables. There are three benefits of this strategy:
+	 *
+	 * - consistency with external parameters and plpgsql variables,
+	 *
+	 * - session variables can be parallel safe,
+	 *
+	 * - we don't need make fresh copy for any read of session variable
+	 *    (this is necessary because the internally the session variable can
+	 *    be changed inside query execution time, and then a reference to
+	 *    previously returned value can be corrupted).
+	 */
+	if (queryDesc->plannedstmt->sessionVariables)
+	{
+		ListCell   *lc;
+		int			nSessionVariables;
+		int			i = 0;
+
+		/*
+		 * In this case, the query uses session variables, but we have to
+		 * prepare the array with passed values (of used session variables)
+		 * first.
+		 */
+		Assert(!IsParallelWorker());
+		nSessionVariables = list_length(queryDesc->plannedstmt->sessionVariables);
+
+		/* create the array used for passing values of used session variables */
+		estate->es_session_variables = (SessionVariableValue *)
+			palloc(nSessionVariables * sizeof(SessionVariableValue));
+
+		/* fill the array */
+		foreach(lc, queryDesc->plannedstmt->sessionVariables)
+		{
+			AclResult	aclresult;
+			Oid			varid = lfirst_oid(lc);
+
+			aclresult = object_aclcheck(VariableRelationId, varid, GetUserId(), ACL_SELECT);
+			if (aclresult != ACLCHECK_OK)
+				aclcheck_error(aclresult, OBJECT_VARIABLE,
+							   get_session_variable_name(varid));
+
+			estate->es_session_variables[i].varid = varid;
+			estate->es_session_variables[i].value = GetSessionVariable(varid,
+																	   &estate->es_session_variables[i].isnull,
+																	   &estate->es_session_variables[i].typid);
+
+			i++;
+		}
+
+		estate->es_num_session_variables = nSessionVariables;
+	}
 
 	/*
 	 * Fill in the query environment, if any, from queryDesc.

@@ -35,6 +35,14 @@ CATALOG(pg_variable,9222,VariableRelationId)
 	/* OID of entry in pg_type for variable's type */
 	Oid			vartype BKI_LOOKUP(pg_type);
 
+	/*
+	 * Used for identity check [oid, create_lsn].
+	 *
+	 * This column of the 8-byte XlogRecPtr type should be at an address that
+	 * is divisible by 8, but before any column of type NameData.
+	 */
+	XLogRecPtr	varcreate_lsn;
+
 	/* variable name */
 	NameData	varname;
 

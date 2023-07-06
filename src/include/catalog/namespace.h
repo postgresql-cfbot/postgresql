@@ -171,7 +171,9 @@ extern SearchPathMatcher *GetSearchPathMatcher(MemoryContext context);
 extern SearchPathMatcher *CopySearchPathMatcher(SearchPathMatcher *path);
 extern bool SearchPathMatchesCurrentEnvironment(SearchPathMatcher *path);
 
+extern List *NamesFromList(List *names);
 extern Oid	LookupVariable(const char *nspname, const char *varname, bool missing_ok);
+extern Oid	IdentifyVariable(List *names, char **attrname, bool *not_unique, bool noerror);
 
 extern Oid	get_collation_oid(List *collname, bool missing_ok);
 extern Oid	get_conversion_oid(List *conname, bool missing_ok);

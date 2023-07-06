@@ -26,8 +26,8 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-CREATE [ { TEMPORARY | TEMP } ] VARIABLE [ IF NOT EXISTS ] <replaceable class="parameter">name</replaceable> [ AS ] <replaceable class="parameter">data_type</replaceable> ] [ COLLATE <replaceable class="parameter">collation</replaceable> ]
-    [ DEFAULT <replaceable class="parameter">default_expr</replaceable> ] [ { ON COMMIT DROP | ON TRANSACTION END RESET } ]
+CREATE [ { TEMPORARY | TEMP } ] [ IMMUTABLE ] VARIABLE [ IF NOT EXISTS ] <replaceable class="parameter">name</replaceable> [ AS ] <replaceable class="parameter">data_type</replaceable> ] [ COLLATE <replaceable class="parameter">collation</replaceable> ]
+    [ NOT NULL ] [ DEFAULT <replaceable class="parameter">default_expr</replaceable> ] [ { ON COMMIT DROP | ON TRANSACTION END RESET } ]
 </synopsis>
  </refsynopsisdiv>
  <refsect1>
@@ -65,6 +65,22 @@ CREATE [ { TEMPORARY | TEMP } ] VARIABLE [ IF NOT EXISTS ] <replaceable class="p
 
   <variablelist>
 
+   <varlistentry id="sql-createvariable-immutable">
+    <term><literal>IMMUTABLE</literal></term>
+    <listitem>
+     <para>
+      The assigned value of the session variable can not be changed.
+      Only if the session variable doesn't have a default value, a single
+      initialization is allowed using the <command>LET</command> command. Once
+      done, no further change is allowed until end of transaction
+      if the session variable was created with clause <literal>ON TRANSACTION
+      END RESET</literal>, or until reset of all session variables by
+      <command>DISCARD VARIABLES</command>, or until reset of all session
+      objects by command <command>DISCARD ALL</command>.
+     </para>
+    </listitem>
+   </varlistentry>
+
    <varlistentry  id="sql-createvariable-if-not-exists">
     <term><literal>IF NOT EXISTS</literal></term>
     <listitem>
@@ -101,6 +117,18 @@ CREATE [ { TEMPORARY | TEMP } ] VARIABLE [ IF NOT EXISTS ] <replaceable class="p
       The <literal>COLLATE</literal> clause assigns a collation to the session
       variable (which must be of a collatable data type).  If not specified,
       the data type's default collation is used.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-createvariable-not-null">
+    <term><literal>NOT NULL</literal></term>
+    <listitem>
+     <para>
+      The <literal>NOT NULL</literal> clause forbids setting the session
+      variable to a null value. A session variable created as NOT NULL
+      should not to have a declared default value, and if the variable
+      has not assigned value, then the reading of this variable fails.
      </para>
     </listitem>
    </varlistentry>

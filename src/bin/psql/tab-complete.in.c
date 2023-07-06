@@ -1273,6 +1273,8 @@ static const pgsql_thing_t words_after_create[] = {
 	{"FOREIGN TABLE", NULL, NULL, NULL},
 	{"FUNCTION", NULL, NULL, Query_for_list_of_functions},
 	{"GROUP", Query_for_list_of_roles},
+	{"IMMUTABLE VARIABLE", NULL, NULL, NULL, NULL, THING_NO_DROP | THING_NO_ALTER}, /* for CREATE IMMUTABLE
+																					 * VARIABLE ... */
 	{"INDEX", NULL, NULL, &Query_for_list_of_indexes},
 	{"LANGUAGE", Query_for_list_of_languages},
 	{"LARGE OBJECT", NULL, NULL, NULL, NULL, THING_NO_CREATE | THING_NO_DROP},
@@ -3593,7 +3595,8 @@ match_previous_words(int pattern_id,
 /* CREATE TABLE --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	/* Complete "CREATE TEMP/TEMPORARY" with the possible temp objects */
 	else if (TailMatches("CREATE", "TEMP|TEMPORARY"))
-		COMPLETE_WITH("SEQUENCE", "TABLE", "VARIABLE", "VIEW");
+		COMPLETE_WITH("IMMUTABLE VARIABLE", "SEQUENCE", "TABLE", "VARIABLE",
+					  "VIEW");
 	/* Complete "CREATE UNLOGGED" with TABLE or SEQUENCE */
 	else if (TailMatches("CREATE", "UNLOGGED"))
 		COMPLETE_WITH("TABLE", "SEQUENCE");
@@ -3945,7 +3948,8 @@ match_previous_words(int pattern_id,
 /* CREATE VARIABLE --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	/* Complete CREATE VARIABLE <name> with AS */
 	else if (TailMatches("CREATE", "VARIABLE", MatchAny) ||
-			 TailMatches("TEMP|TEMPORARY", "VARIABLE", MatchAny))
+			 TailMatches("TEMP|TEMPORARY", "VARIABLE", MatchAny) ||
+			 TailMatches("IMMUTABLE", "VARIABLE", MatchAny))
 		COMPLETE_WITH("AS");
 	else if (TailMatches("VARIABLE", MatchAny, "AS"))
 		/* Complete CREATE VARIABLE <name> with AS types */
@@ -4588,6 +4592,10 @@ match_previous_words(int pattern_id,
 		COMPLETE_WITH_QUERY(Query_for_list_of_schemas);
 	else if (TailMatches("FROM", "SERVER", MatchAny, "INTO", MatchAny))
 		COMPLETE_WITH("OPTIONS (");
+
+/* IMMUTABLE -- can be expend to IMMUTABLE VARIABLE */
+	else if (TailMatches("CREATE", "IMMUTABLE"))
+		COMPLETE_WITH("VARIABLE");
 
 /* INSERT --- can be inside EXPLAIN, RULE, etc */
 	/* Complete NOT MATCHED THEN INSERT */

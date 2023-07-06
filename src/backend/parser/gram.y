@@ -681,6 +681,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				json_object_constructor_null_clause_opt
 				json_array_constructor_null_clause_opt
 
+%type <boolean>		OptNotNull OptImmutable
 
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
@@ -5230,27 +5231,31 @@ create_extension_opt_item:
  *****************************************************************************/
 
 CreateSessionVarStmt:
-			CREATE OptTemp VARIABLE qualified_name opt_as Typename opt_collate_clause OptSessionVarDefExpr XactEndActionOption
+			CREATE OptTemp OptImmutable VARIABLE qualified_name opt_as Typename opt_collate_clause OptNotNull OptSessionVarDefExpr XactEndActionOption
 				{
 					CreateSessionVarStmt *n = makeNode(CreateSessionVarStmt);
-					$4->relpersistence = $2;
-					n->variable = $4;
-					n->typeName = $6;
-					n->collClause = (CollateClause *) $7;
-					n->defexpr = $8;
-					n->XactEndAction = $9;
+					$5->relpersistence = $2;
+					n->is_immutable = $3;
+					n->variable = $5;
+					n->typeName = $7;
+					n->collClause = (CollateClause *) $8;
+					n->not_null = $9;
+					n->defexpr = $10;
+					n->XactEndAction = $11;
 					n->if_not_exists = false;
 					$$ = (Node *) n;
 				}
-			| CREATE OptTemp VARIABLE IF_P NOT EXISTS qualified_name opt_as Typename opt_collate_clause OptSessionVarDefExpr XactEndActionOption
+			| CREATE OptTemp OptImmutable VARIABLE IF_P NOT EXISTS qualified_name opt_as Typename opt_collate_clause OptNotNull OptSessionVarDefExpr XactEndActionOption
 				{
 					CreateSessionVarStmt *n = makeNode(CreateSessionVarStmt);
-					$7->relpersistence = $2;
-					n->variable = $7;
-					n->typeName = $9;
-					n->collClause = (CollateClause *) $10;
-					n->defexpr = $11;
-					n->XactEndAction = $12;
+					$8->relpersistence = $2;
+					n->is_immutable = $3;
+					n->variable = $8;
+					n->typeName = $10;
+					n->collClause = (CollateClause *) $11;
+					n->not_null = $12;
+					n->defexpr = $13;
+					n->XactEndAction = $14;
 					n->if_not_exists = true;
 					$$ = (Node *) n;
 				}
@@ -5269,6 +5274,14 @@ XactEndActionOption:  ON COMMIT DROP				{ $$ = VARIABLE_XACTEND_DROP; }
 			| /*EMPTY*/								{ $$ = VARIABLE_XACTEND_NOOP; }
 		;
 
+
+OptNotNull: NOT NULL_P								{ $$ = true; }
+			| /* EMPTY */							{ $$ = false; }
+		;
+
+OptImmutable: IMMUTABLE								{ $$ = true; }
+			| /* EMPTY */							{ $$ = false; }
+		;
 
 /*****************************************************************************
  *

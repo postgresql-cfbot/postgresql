@@ -45,11 +45,11 @@ SET ROLE TO regress_variable_owner;
 CREATE VARIABLE svartest.var1 AS int;
 SET ROLE TO DEFAULT;
 \dV+ svartest.var1
-                                                                          List of variables
-  Schema  | Name |  Type   | Collation |         Owner          | Default | Transactional end action |                Access privileges                 | Description 
-----------+------+---------+-----------+------------------------+---------+--------------------------+--------------------------------------------------+-------------
- svartest | var1 | integer |           | regress_variable_owner |         |                          | regress_variable_owner=rw/regress_variable_owner+| 
-          |      |         |           |                        |         |                          | regress_variable_reader=r/regress_variable_owner | 
+                                                                                     List of variables
+  Schema  | Name |  Type   | Collation |         Owner          | Nullable | Mutable | Default | Transactional end action |                Access privileges                 | Description 
+----------+------+---------+-----------+------------------------+----------+---------+---------+--------------------------+--------------------------------------------------+-------------
+ svartest | var1 | integer |           | regress_variable_owner | t        | t       |         |                          | regress_variable_owner=rw/regress_variable_owner+| 
+          |      |         |           |                        |          |         |         |                          | regress_variable_reader=r/regress_variable_owner | 
 (1 row)
 
 DROP VARIABLE svartest.var1;
@@ -1614,3 +1614,148 @@ SELECT var1;
 
 DROP VARIABLE var1;
 DROP FUNCTION vartest_fx();
+-- test NOT NULL
+-- should be ok
+CREATE VARIABLE var1 AS int NOT NULL;
+-- should to fail
+SELECT var1;
+ERROR:  null value is not allowed for NOT NULL session variable "public.var1"
+DETAIL:  The session variable was not initialized yet.
+--should be ok
+LET var1 = 10;
+SELECT var1;
+ var1 
+------
+   10
+(1 row)
+
+DROP VARIABLE var1;
+-- should be ok
+CREATE VARIABLE var1 AS int NOT NULL DEFAULT 0;
+--should be ok
+SELECT var1;
+ var1 
+------
+    0
+(1 row)
+
+-- should be ok
+LET var1 = 10;
+SELECT var1;
+ var1 
+------
+   10
+(1 row)
+
+DISCARD VARIABLES;
+-- should to fail
+LET var1 = NULL;
+ERROR:  null value is not allowed for NOT NULL session variable "public.var1"
+DROP VARIABLE var1;
+-- test NOT NULL
+CREATE OR REPLACE FUNCTION vartest_fx()
+RETURNS int AS $$
+BEGIN
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+CREATE VARIABLE var1 AS int NOT NULL DEFAULT vartest_fx();
+-- should to fail
+SELECT var1;
+ERROR:  null value is not allowed for NOT NULL session variable "public.var1"
+DETAIL:  The result of DEFAULT expression is NULL.
+DISCARD VARIABLES;
+-- should be ok
+LET var1 = 10;
+SELECT var1;
+ var1 
+------
+   10
+(1 row)
+
+CREATE OR REPLACE FUNCTION vartest_fx()
+RETURNS int AS $$
+BEGIN
+  RETURN 0;
+END;
+$$ LANGUAGE plpgsql;
+DISCARD VARIABLES;
+-- should be ok
+SELECT var1;
+ var1 
+------
+    0
+(1 row)
+
+DROP VARIABLE var1;
+DROP FUNCTION vartest_fx();
+-- test IMMUTBLE
+CREATE IMMUTABLE VARIABLE var1 AS int;
+-- should be ok
+SELECT var1;
+ var1 
+------
+     
+(1 row)
+
+-- first write should ok
+-- should be ok
+LET var1 = 10;
+-- should fail
+LET var1 = 20;
+ERROR:  session variable "public.var1" is declared IMMUTABLE
+DISCARD VARIABLES;
+-- should be ok
+LET var1 = 10;
+-- should fail
+LET var1 = 20;
+ERROR:  session variable "public.var1" is declared IMMUTABLE
+DISCARD VARIABLES;
+-- should be ok
+SELECT var1;
+ var1 
+------
+     
+(1 row)
+
+-- should be ok
+LET var1 = NULL;
+-- should fail
+LET var1 = 20;
+ERROR:  session variable "public.var1" is declared IMMUTABLE
+DROP VARIABLE var1;
+CREATE IMMUTABLE VARIABLE var1 AS int DEFAULT 10;
+-- don't allow change when variable has DEFAULT value
+-- should to fail
+LET var1 = 20;
+ERROR:  session variable "public.var1" is declared IMMUTABLE
+DISCARD VARIABLES;
+-- should be ok
+SELECT var1;
+ var1 
+------
+   10
+(1 row)
+
+-- should fail
+LET var1 = 20;
+ERROR:  session variable "public.var1" is declared IMMUTABLE
+DROP VARIABLE var1;
+-- should be ok
+CREATE IMMUTABLE VARIABLE var1 AS INT NOT NULL DEFAULT 10;
+-- should to fail
+LET var1 = 10;
+ERROR:  session variable "public.var1" is declared IMMUTABLE
+LET var1 = 20;
+ERROR:  session variable "public.var1" is declared IMMUTABLE
+-- should be ok
+SELECT var1;
+ var1 
+------
+   10
+(1 row)
+
+-- should to fail
+LET var1 = 30;
+ERROR:  session variable "public.var1" is declared IMMUTABLE
+DROP VARIABLE var1;

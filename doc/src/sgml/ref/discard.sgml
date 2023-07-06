@@ -71,7 +71,8 @@ DISCARD { ALL | PLANS | SEQUENCES | TEMPORARY | TEMP | VARIABLES }
     <listitem>
      <para>
       Resets the value of all session variables. If a variable
-      is later reused, it is re-initialized to <literal>NULL</literal>.
+      is later reused, it is re-initialized to either
+      <literal>NULL</literal> or its default value.
      </para>
     </listitem>
    </varlistentry>

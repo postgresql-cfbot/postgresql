@@ -34,6 +34,7 @@
 #include "catalog/objectaccess.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_variable.h"
 #include "executor/execExpr.h"
 #include "executor/nodeSubplan.h"
 #include "funcapi.h"
@@ -991,6 +992,41 @@ ExecInitExprRec(Expr *node, ExprState *state,
 						scratch.d.param.paramtype = param->paramtype;
 						ExprEvalPushStep(state, &scratch);
 						break;
+
+					case PARAM_VARIABLE:
+						{
+							int			es_num_session_variables = 0;
+							SessionVariableValue *es_session_variables = NULL;
+							SessionVariableValue *var;
+
+							if (state->parent && state->parent->state)
+							{
+								es_session_variables = state->parent->state->es_session_variables;
+								es_num_session_variables = state->parent->state->es_num_session_variables;
+							}
+
+							Assert(es_session_variables);
+
+							/* parameter sanity checks */
+							if (param->paramid >= es_num_session_variables)
+								elog(ERROR, "paramid of PARAM_VARIABLE param is out of range");
+
+							var = &es_session_variables[param->paramid];
+
+							if (var->typid != param->paramtype)
+								elog(ERROR, "type of buffered value is different than PARAM_VARIABLE type");
+
+							/*
+							 * In this case, pass the value like a
+							 * constant.
+							 */
+							scratch.opcode = EEOP_CONST;
+							scratch.d.constval.value = var->value;
+							scratch.d.constval.isnull = var->isnull;
+							ExprEvalPushStep(state, &scratch);
+						}
+						break;
+
 					case PARAM_EXTERN:
 
 						/*

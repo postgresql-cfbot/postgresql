@@ -59,3 +59,640 @@ DROP VARIABLE svartest.var1;
 DROP SCHEMA svartest;
 
 DROP ROLE regress_variable_owner;
+
+-- check access rights
+CREATE ROLE regress_noowner;
+
+CREATE VARIABLE var1 AS int;
+
+CREATE OR REPLACE FUNCTION sqlfx(int)
+RETURNS int AS $$ SELECT $1 + var1 $$ LANGUAGE sql;
+
+CREATE OR REPLACE FUNCTION sqlfx_sd(int)
+RETURNS int AS $$ SELECT $1 + var1 $$ LANGUAGE sql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION plpgsqlfx(int)
+RETURNS int AS $$ BEGIN RETURN $1 + var1; END $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION plpgsqlfx_sd(int)
+RETURNS int AS $$ BEGIN RETURN $1 + var1; END $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+LET var1 = 10;
+-- should be ok
+SELECT var1;
+SELECT sqlfx(20);
+SELECT sqlfx_sd(20);
+SELECT plpgsqlfx(20);
+SELECT plpgsqlfx_sd(20);
+
+-- should fail
+SET ROLE TO regress_noowner;
+
+SELECT var1;
+SELECT sqlfx(20);
+SELECT plpgsqlfx(20);
+
+-- should be ok
+SELECT sqlfx_sd(20);
+SELECT plpgsqlfx_sd(20);
+
+SET ROLE TO DEFAULT;
+GRANT SELECT ON VARIABLE var1 TO regress_noowner;
+
+-- should be ok
+SET ROLE TO regress_noowner;
+
+SELECT var1;
+SELECT sqlfx(20);
+SELECT plpgsqlfx(20);
+
+SET ROLE TO DEFAULT;
+DROP VARIABLE var1;
+DROP FUNCTION sqlfx(int);
+DROP FUNCTION plpgsqlfx(int);
+DROP FUNCTION sqlfx_sd(int);
+DROP FUNCTION plpgsqlfx_sd(int);
+
+DROP ROLE regress_noowner;
+
+-- use variables inside views
+CREATE VARIABLE var1 AS numeric;
+
+-- use variables in views
+CREATE VIEW test_view AS SELECT COALESCE(var1 + v, 0) AS result FROM generate_series(1,2) g(v);
+SELECT * FROM test_view;
+LET var1 = 3.14;
+SELECT * FROM test_view;
+
+-- start a new session
+\c
+
+SELECT * FROM test_view;
+LET var1 = 3.14;
+SELECT * FROM test_view;
+
+-- should fail, dependency
+DROP VARIABLE var1;
+
+-- should be ok
+DROP VARIABLE var1 CASCADE;
+
+CREATE VARIABLE var1 text;
+CREATE VARIABLE var2 text;
+
+-- use variables in SQL functions
+CREATE OR REPLACE FUNCTION sqlfx1(varchar)
+RETURNS varchar AS $$ SELECT var1 || ', ' || $1 $$ LANGUAGE sql;
+
+CREATE OR REPLACE FUNCTION sqlfx2( varchar)
+RETURNS varchar AS $$ SELECT var2 || ', ' || $1 $$ LANGUAGE sql;
+
+LET var1 = 'str1';
+LET var2 = 'str2';
+
+SELECT sqlfx1(sqlfx2('Hello'));
+
+-- inlining is blocked
+EXPLAIN (COSTS OFF, VERBOSE) SELECT sqlfx1(sqlfx2('Hello'));
+
+DROP FUNCTION sqlfx1(varchar);
+DROP FUNCTION sqlfx2(varchar);
+DROP VARIABLE var1;
+DROP VARIABLE var2;
+
+-- access from cached plans should work
+CREATE VARIABLE var1 AS numeric;
+
+CREATE OR REPLACE FUNCTION plpgsqlfx()
+RETURNS numeric AS $$ BEGIN RETURN var1; END $$ LANGUAGE plpgsql;
+
+set plan_cache_mode TO force_generic_plan;
+
+LET var1 = 3.14;
+SELECT plpgsqlfx();
+LET var1 = 3.14 * 2;
+SELECT plpgsqlfx();
+
+DROP VARIABLE var1;
+
+-- dependency (plan invalidation) should work
+CREATE VARIABLE var1 AS numeric;
+
+LET var1 = 3.14 * 3;
+SELECT plpgsqlfx();
+LET var1 = 3.14 * 4;
+SELECT plpgsqlfx();
+
+DROP VARIABLE var1;
+DROP FUNCTION plpgsqlfx();
+
+set plan_cache_mode TO DEFAULT;
+
+-- usage LET statement in plpgsql should work
+CREATE VARIABLE var1 int;
+CREATE VARIABLE var2 numeric[];
+
+DO $$
+BEGIN
+  LET var2 = '{}'::int[];
+  FOR i IN 1..10
+  LOOP
+    LET var1 = i;
+    LET var2[var1] = i;
+  END LOOP;
+  RAISE NOTICE 'result array: %', var2;
+END;
+$$;
+
+DROP VARIABLE var1;
+DROP VARIABLE var2;
+
+-- CALL statement is not supported yet
+-- requires direct access to session variable from expression executor
+CREATE VARIABLE v int;
+
+CREATE PROCEDURE p(arg int) AS $$ BEGIN RAISE NOTICE '%', arg; END $$ LANGUAGE plpgsql;
+
+-- should not crash (but is not supported yet)
+CALL p(v);
+
+DO $$ BEGIN CALL p(v); END $$;
+
+DROP PROCEDURE p(int);
+DROP VARIABLE v;
+
+-- EXECUTE statement is not supported yet
+-- requires direct access to session variable from expression executor
+CREATE VARIABLE v int;
+LET v = 20;
+PREPARE ptest(int) AS SELECT $1;
+
+-- should fail
+EXECUTE ptest(v);
+
+DEALLOCATE ptest;
+DROP VARIABLE v;
+
+-- test search path
+CREATE SCHEMA svartest;
+CREATE VARIABLE svartest.var1 AS numeric;
+
+-- should fail
+LET var1 = pi();
+SELECT var1;
+
+-- should be ok
+LET svartest.var1 = pi();
+SELECT svartest.var1;
+
+SET search_path TO svartest;
+
+-- should be ok
+LET var1 = pi() + 10;
+SELECT var1;
+
+RESET search_path;
+DROP SCHEMA svartest CASCADE;
+
+CREATE VARIABLE var1 AS text;
+
+-- variables can be updated under RO transaction
+BEGIN;
+SET TRANSACTION READ ONLY;
+LET var1 = 'hello';
+COMMIT;
+
+SELECT var1;
+
+DROP VARIABLE var1;
+
+-- test of domains
+CREATE DOMAIN int_domain AS int NOT NULL CHECK (VALUE > 100);
+CREATE VARIABLE var1 AS int_domain;
+
+-- should fail
+SELECT var1;
+
+-- should be ok
+LET var1 = 1000;
+SELECT var1;
+
+-- should fail
+LET var1 = 10;
+
+-- should fail
+LET var1 = NULL;
+
+-- note - domain defaults are not supported yet (like PLpgSQL)
+
+DROP VARIABLE var1;
+DROP DOMAIN int_domain;
+
+-- the expression should remain "unknown"
+CREATE VARIABLE var1 AS int4multirange[];
+-- should be ok
+LET var1 = NULL;
+LET var1 = '{"{[2,8),[11,14)}","{[5,8),[12,14)}"}';
+LET var1[2] = '{[5,8),[12,100)}';
+SELECT var1;
+
+--It should work in plpgsql too
+DO $$
+BEGIN
+  LET var1 = NULL;
+  LET var1 = '{"{[2,8),[11,14)}","{[5,8),[12,14)}"}';
+  LET var1[2] = '{[5,8),[12,100)}';
+
+  RAISE NOTICE '%', var1;
+END;
+$$;
+
+DROP VARIABLE var1;
+
+CREATE SCHEMA svartest CREATE VARIABLE var1 AS int CREATE TABLE foo(a int);
+LET svartest.var1 = 100;
+SELECT svartest.var1;
+
+SET search_path to public, svartest;
+
+SELECT var1;
+
+DROP SCHEMA svartest CASCADE;
+
+CREATE VARIABLE var1 AS int;
+CREATE VARIABLE var2 AS int[];
+
+LET var1 = 2;
+LET var2 = '{}'::int[];
+
+LET var2[var1] = 0;
+
+SELECT var2;
+
+DROP VARIABLE var1, var2;
+
+CREATE VARIABLE var1 AS int;
+CREATE VARIABLE var2 AS int[];
+
+LET var1 = 2;
+LET var2 = '{}'::int[];
+
+SELECT var2;
+
+DROP VARIABLE var1, var2;
+
+-- the LET statement should be disallowed in CTE
+CREATE VARIABLE var1 AS int;
+WITH x AS (LET var1 = 100) SELECT * FROM x;
+
+-- should be ok
+LET var1 = generate_series(1, 1);
+
+-- should fail
+LET var1 = generate_series(1, 2);
+LET var1 = generate_series(1, 0);
+
+DROP VARIABLE var1;
+
+-- composite variables
+CREATE TYPE sv_xyz AS (x int, y int, z numeric(10,2));
+
+CREATE VARIABLE v1 AS sv_xyz;
+CREATE VARIABLE v2 AS sv_xyz;
+
+LET v1 = (1, 2, 3.14);
+LET v2 = (10, 20, 3.14 * 10);
+
+-- should work too - there are prepared casts
+LET v1 = (1, 2, 3);
+
+SELECT v1;
+SELECT v2;
+SELECT (v1).*;
+SELECT (v2).*;
+
+SELECT v1.x + v1.z;
+SELECT v2.x + v2.z;
+
+-- access to composite fields should be safe too
+CREATE ROLE regress_var_test_role;
+
+SET ROLE TO regress_var_test_role;
+
+-- should fail
+SELECT v2.x;
+
+SET ROLE TO DEFAULT;
+
+DROP VARIABLE v1;
+DROP VARIABLE v2;
+
+DROP ROLE regress_var_test_role;
+
+CREATE TYPE t1 AS (a int, b numeric, c text);
+
+CREATE VARIABLE v1 AS t1;
+LET v1 = (1, pi(), 'hello');
+SELECT v1;
+LET v1.b = 10.2222;
+SELECT v1;
+
+-- should fail, attribute doesn't exist
+LET v1.x = 10;
+
+-- should fail, don't allow multi column query
+LET v1 = (NULL::t1).*;
+
+-- allow DROP or ADD ATTRIBUTE on composite types
+-- should be ok
+ALTER TYPE t1 DROP ATTRIBUTE c;
+SELECT v1;
+
+-- should be ok
+ALTER TYPE t1 ADD ATTRIBUTE c int;
+SELECT v1;
+
+LET v1 = (10, 10.3, 20);
+SELECT v1;
+
+-- should be ok
+ALTER TYPE t1 DROP ATTRIBUTE b;
+SELECT v1;
+
+-- should fail, disallow data type change
+ALTER TYPE t1 ALTER ATTRIBUTE c TYPE int;
+
+DROP VARIABLE v1;
+DROP TYPE t1;
+
+-- the table type can be used as composite type too
+CREATE TABLE svar_test(a int, b numeric, c date);
+CREATE VARIABLE var1 AS svar_test;
+
+LET var1 = (10, pi(), '2023-05-26');
+SELECT var1;
+
+-- should fail due dependency
+ALTER TABLE svar_test ALTER COLUMN a TYPE text;
+
+-- should fail
+DROP TABLE svar_test;
+
+DROP VARIABLE var1;
+DROP TABLE svar_test;
+
+-- arrays are supported
+CREATE VARIABLE var1 AS numeric[];
+LET var1 = ARRAY[1.1,2.1];
+LET var1[1] = 10.1;
+SELECT var1;
+
+-- LET target doesn't allow srf, should fail
+LET var1[generate_series(1,3)] = 100;
+
+DROP VARIABLE var1;
+
+-- arrays inside composite
+CREATE TYPE t1 AS (a numeric, b numeric[]);
+CREATE VARIABLE var1 AS t1;
+LET var1 = (10.1, ARRAY[0.0, 0.0]);
+LET var1.a = 10.2;
+SELECT var1;
+LET var1.b[1] = 10.3;
+SELECT var1;
+
+DROP VARIABLE var1;
+DROP TYPE t1;
+
+-- Encourage use of parallel plans
+SET parallel_setup_cost = 0;
+SET parallel_tuple_cost = 0;
+SET min_parallel_table_scan_size = 0;
+SET max_parallel_workers_per_gather = 2;
+
+-- test on query with workers
+CREATE TABLE svar_test(a int);
+INSERT INTO svar_test SELECT * FROM generate_series(1,1000);
+ANALYZE svar_test;
+CREATE VARIABLE zero int;
+LET zero = 0;
+
+-- result should be 100
+SELECT count(*) FROM svar_test WHERE a%10 = zero;
+
+-- parallel execution is not supported yet
+EXPLAIN (COSTS OFF) SELECT count(*) FROM svar_test WHERE a%10 = zero;
+
+LET zero = (SELECT count(*) FROM svar_test);
+
+-- result should be 1000
+SELECT zero;
+
+DROP VARIABLE zero;
+DROP TABLE svar_test;
+
+RESET parallel_setup_cost;
+RESET parallel_tuple_cost;
+RESET min_parallel_table_scan_size;
+RESET max_parallel_workers_per_gather;
+
+-- the result of view should be same in parallel mode too
+CREATE VARIABLE var1 AS int;
+LET var1 = 10;
+
+CREATE VIEW var1view AS SELECT COALESCE(var1, 0) AS result;
+
+SELECT * FROM var1view;
+
+SET debug_parallel_query TO on;
+
+SELECT * FROM var1view;
+
+SET debug_parallel_query TO off;
+
+DROP VIEW var1view;
+DROP VARIABLE var1;
+
+CREATE VARIABLE varid int;
+CREATE TABLE svar_test(id int, v int);
+
+LET varid = 1;
+INSERT INTO svar_test VALUES(varid, 100);
+SELECT * FROM svar_test;
+UPDATE svar_test SET v = 200 WHERE id = varid;
+SELECT * FROM svar_test;
+DELETE FROM svar_test WHERE id = varid;
+SELECT * FROM svar_test;
+
+DROP TABLE svar_test;
+DROP VARIABLE varid;
+
+
+-- visibility check
+-- variables should be shadowed always
+CREATE VARIABLE var1 AS text;
+SELECT var1.relname FROM pg_class var1 WHERE var1.relname = 'pg_class';
+
+DROP VARIABLE var1;
+
+CREATE TABLE xxtab(avar int);
+
+INSERT INTO xxtab VALUES(333);
+
+CREATE TYPE xxtype AS (avar int);
+
+CREATE VARIABLE xxtab AS xxtype;
+
+INSERT INTO xxtab VALUES(10);
+
+-- it is ambiguous, but columns are preferred
+SELECT xxtab.avar FROM xxtab;
+
+-- should be ok
+SELECT avar FROM xxtab;
+
+CREATE VARIABLE public.avar AS int;
+
+-- should be ok, see the table
+SELECT avar FROM xxtab;
+
+-- should be ok
+SELECT public.avar FROM xxtab;
+
+DROP VARIABLE xxtab;
+
+SELECT xxtab.avar FROM xxtab;
+
+DROP VARIABLE public.avar;
+
+DROP TYPE xxtype;
+
+DROP TABLE xxtab;
+
+-- The variable can be shadowed by table or by alias
+CREATE TYPE public.svar_type AS (a int, b int, c int);
+CREATE VARIABLE public.svar AS public.svar_type;
+
+CREATE TABLE public.svar(a int, b int);
+
+INSERT INTO public.svar VALUES(10, 20);
+
+LET public.svar = (100, 200, 300);
+
+-- should be ok
+-- show table
+SELECT * FROM public.svar;
+SELECT svar.a FROM public.svar;
+SELECT svar.* FROM public.svar;
+
+-- show variable
+SELECT public.svar;
+SELECT public.svar.c;
+SELECT (public.svar).*;
+
+-- the variable is shadowed, raise error
+SELECT public.svar.c FROM public.svar;
+
+-- can be fixed by alias
+SELECT public.svar.c FROM public.svar x;
+
+SELECT svar.a FROM public.svar;
+SELECT svar.* FROM public.svar;
+
+-- show variable
+SELECT public.svar;
+SELECT public.svar.c;
+SELECT (public.svar).*;
+
+-- the variable is shadowed, raise error
+SELECT public.svar.c FROM public.svar;
+
+-- can be fixed by alias
+SELECT public.svar.c FROM public.svar x;
+
+DROP VARIABLE public.svar;
+DROP TABLE public.svar;
+DROP TYPE public.svar_type;
+
+CREATE TYPE ab AS (a integer, b integer);
+
+CREATE VARIABLE v_ab AS ab;
+
+CREATE TABLE v_ab (a integer, b integer);
+INSERT INTO v_ab VALUES(10,20);
+
+-- we should see table
+SELECT v_ab.a FROM v_ab;
+
+CREATE SCHEMA v_ab;
+
+CREATE VARIABLE v_ab.a AS integer;
+
+-- we should see table
+SELECT v_ab.a FROM v_ab;
+
+DROP VARIABLE v_ab;
+DROP TABLE v_ab;
+DROP TYPE ab;
+
+CREATE TYPE t_am_type AS (b int);
+CREATE SCHEMA xxx_am;
+
+SET search_path TO public;
+
+CREATE VARIABLE xxx_am AS t_am_type;
+LET xxx_am = ROW(10);
+
+-- should be ok
+SELECT xxx_am;
+
+CREATE VARIABLE xxx_am.b AS int;
+LET :"DBNAME".xxx_am.b = 20;
+
+-- should be still ok
+SELECT xxx_am;
+
+-- should fail, the reference should be ambiguous
+SELECT xxx_am.b;
+
+-- enhanced references should be ok
+SELECT public.xxx_am.b;
+SELECT :"DBNAME".xxx_am.b;
+
+CREATE TABLE xxx_am(b  int);
+INSERT INTO xxx_am VALUES(10);
+
+-- we should see table
+SELECT xxx_am.b FROM xxx_am;
+SELECT x.b FROM xxx_am x;
+
+DROP TABLE xxx_am;
+DROP VARIABLE public.xxx_am;
+DROP VARIABLE xxx_am.b;
+DROP SCHEMA xxx_am;
+
+CREATE SCHEMA :"DBNAME";
+
+CREATE VARIABLE :"DBNAME".:"DBNAME".:"DBNAME" AS t_am_type;
+CREATE VARIABLE :"DBNAME".:"DBNAME".b AS int;
+
+SET search_path TO :"DBNAME";
+
+-- should be ambiguous
+SELECT :"DBNAME".b;
+
+-- should be ambiguous too
+SELECT :"DBNAME".:"DBNAME".b;
+
+CREATE TABLE :"DBNAME"(b int);
+
+-- should be ok
+SELECT :"DBNAME".b FROM :"DBNAME";
+
+DROP TABLE :"DBNAME";
+
+DROP VARIABLE :"DBNAME".:"DBNAME".b;
+DROP VARIABLE :"DBNAME".:"DBNAME".:"DBNAME";
+DROP SCHEMA :"DBNAME";
+
+RESET search_path;

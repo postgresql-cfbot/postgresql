@@ -515,6 +515,12 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
         Plan nodes that reference a correlated <literal>SubPlan</literal>.
       </para>
     </listitem>
+
+    <listitem>
+      <para>
+        Plan nodes that use a session variable.
+      </para>
+    </listitem>
   </itemizedlist>
 
  <sect2 id="parallel-labeling">

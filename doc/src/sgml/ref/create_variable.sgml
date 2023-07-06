@@ -145,6 +145,7 @@ SELECT var1;
   <simplelist type="inline">
    <member><xref linkend="sql-altervariable"/></member>
    <member><xref linkend="sql-dropvariable"/></member>
+   <member><xref linkend="sql-let"/></member>
   </simplelist>
  </refsect1>
 

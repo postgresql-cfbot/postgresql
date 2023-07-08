@@ -2955,7 +2955,7 @@ wchar2char(char *to, const wchar_t *from, size_t tolen, pg_locale_t locale)
 	}
 	else
 	{
-#ifdef HAVE_LOCALE_T
+#ifdef HAVE_USELOCALE
 #ifdef HAVE_WCSTOMBS_L
 		/* Use wcstombs_l for nondefault locales */
 		result = wcstombs_l(to, from, tolen, locale->info.lt);
@@ -2967,11 +2967,11 @@ wchar2char(char *to, const wchar_t *from, size_t tolen, pg_locale_t locale)
 
 		uselocale(save_locale);
 #endif							/* HAVE_WCSTOMBS_L */
-#else							/* !HAVE_LOCALE_T */
-		/* Can't have locale != 0 without HAVE_LOCALE_T */
+#else							/* !HAVE_USELOCALE */
+		/* Can't have locale != 0 without HAVE_LOCALE_T, which HAVE_USELOCALE implies */
 		elog(ERROR, "wcstombs_l is not available");
 		result = 0;				/* keep compiler quiet */
-#endif							/* HAVE_LOCALE_T */
+#endif							/* HAVE_USELOCALE */
 	}
 
 	return result;
@@ -3032,7 +3032,7 @@ char2wchar(wchar_t *to, size_t tolen, const char *from, size_t fromlen,
 		}
 		else
 		{
-#ifdef HAVE_LOCALE_T
+#ifdef HAVE_USELOCALE
 #ifdef HAVE_MBSTOWCS_L
 			/* Use mbstowcs_l for nondefault locales */
 			result = mbstowcs_l(to, str, tolen, locale->info.lt);
@@ -3044,11 +3044,11 @@ char2wchar(wchar_t *to, size_t tolen, const char *from, size_t fromlen,
 
 			uselocale(save_locale);
 #endif							/* HAVE_MBSTOWCS_L */
-#else							/* !HAVE_LOCALE_T */
-			/* Can't have locale != 0 without HAVE_LOCALE_T */
+#else							/* !HAVE_USELOCALE */
+			/* Can't have locale != 0 without HAVE_LOCALE_T, which HAVE_USELOCALE implies */
 			elog(ERROR, "mbstowcs_l is not available");
 			result = 0;			/* keep compiler quiet */
-#endif							/* HAVE_LOCALE_T */
+#endif							/* HAVE_USELOCALE */
 		}
 
 		pfree(str);

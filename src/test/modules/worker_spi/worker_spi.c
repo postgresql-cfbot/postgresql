@@ -74,8 +74,8 @@ initialize_worker_spi(worktable *table)
 
 	SetCurrentStatementStartTimestamp();
 	StartTransactionCommand();
-	SPI_connect();
 	PushActiveSnapshot(GetTransactionSnapshot());
+	SPI_connect();
 	pgstat_report_activity(STATE_RUNNING, "initializing worker_spi schema");
 
 	/* XXX could we use CREATE SCHEMA IF NOT EXISTS? */
@@ -222,17 +222,17 @@ worker_spi_main(Datum main_arg)
 		 * preceded by SetCurrentStatementStartTimestamp(), so that statement
 		 * start time is always up to date.
 		 *
-		 * The SPI_connect() call lets us run queries through the SPI manager,
-		 * and the PushActiveSnapshot() call creates an "active" snapshot
+		 * The PushActiveSnapshot() call creates an "active" snapshot,
 		 * which is necessary for queries to have MVCC data to work on.
+		 * The SPI_connect() call lets us run queries through the SPI manager.
 		 *
 		 * The pgstat_report_activity() call makes our activity visible
 		 * through the pgstat views.
 		 */
 		SetCurrentStatementStartTimestamp();
 		StartTransactionCommand();
-		SPI_connect();
 		PushActiveSnapshot(GetTransactionSnapshot());
+		SPI_connect();
 		debug_query_string = buf.data;
 		pgstat_report_activity(STATE_RUNNING, buf.data);
 
@@ -282,6 +282,9 @@ _PG_init(void)
 {
 	BackgroundWorker worker;
 
+	if (!process_shared_preload_libraries_in_progress)
+		return;
+
 	/* get the configuration */
 	DefineCustomIntVariable("worker_spi.naptime",
 							"Duration between each check (in seconds).",
@@ -295,9 +298,6 @@ _PG_init(void)
 							NULL,
 							NULL,
 							NULL);
-
-	if (!process_shared_preload_libraries_in_progress)
-		return;
 
 	DefineCustomIntVariable("worker_spi.total_workers",
 							"Number of workers.",

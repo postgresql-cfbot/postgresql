@@ -32,6 +32,7 @@
 #define USE_SSE2
 typedef __m128i Vector8;
 typedef __m128i Vector32;
+typedef __m128i Vector64;
 
 #elif defined(__aarch64__) && defined(__ARM_NEON)
 /*
@@ -46,15 +47,16 @@ typedef __m128i Vector32;
 #define USE_NEON
 typedef uint8x16_t Vector8;
 typedef uint32x4_t Vector32;
+typedef uint64x2_t Vector64;
 
 #else
 /*
  * If no SIMD instructions are available, we can in some cases emulate vector
  * operations using bitwise operations on unsigned integers.  Note that many
  * of the functions in this file presently do not have non-SIMD
- * implementations.  In particular, none of the functions involving Vector32
- * are implemented without SIMD since it's likely not worthwhile to represent
- * two 32-bit integers using a uint64.
+ * implementations.  For example, none of the functions involving Vector32 are
+ * implemented without SIMD since it's likely not worthwhile to represent two
+ * 32-bit integers using a uint64.
  */
 #define USE_NO_SIMD
 typedef uint64 Vector8;
@@ -64,12 +66,14 @@ typedef uint64 Vector8;
 static inline void vector8_load(Vector8 *v, const uint8 *s);
 #ifndef USE_NO_SIMD
 static inline void vector32_load(Vector32 *v, const uint32 *s);
+static inline void vector64_load(Vector64 *v, const uint64 *s);
 #endif
 
 /* assignment operations */
 static inline Vector8 vector8_broadcast(const uint8 c);
 #ifndef USE_NO_SIMD
 static inline Vector32 vector32_broadcast(const uint32 c);
+static inline Vector64 vector64_broadcast(const uint64 c);
 #endif
 
 /* element-wise comparisons to a scalar */
@@ -79,12 +83,15 @@ static inline bool vector8_has_le(const Vector8 v, const uint8 c);
 static inline bool vector8_is_highbit_set(const Vector8 v);
 #ifndef USE_NO_SIMD
 static inline bool vector32_is_highbit_set(const Vector32 v);
+static inline bool vector64_is_highbit_set(const Vector64 v);
 #endif
 
 /* arithmetic operations */
 static inline Vector8 vector8_or(const Vector8 v1, const Vector8 v2);
 #ifndef USE_NO_SIMD
 static inline Vector32 vector32_or(const Vector32 v1, const Vector32 v2);
+static inline Vector64 vector64_or(const Vector64 v1, const Vector64 v2);
+static inline Vector32 vector32_and(const Vector32 v1, const Vector32 v2);
 static inline Vector8 vector8_ssub(const Vector8 v1, const Vector8 v2);
 #endif
 
@@ -97,6 +104,7 @@ static inline Vector8 vector8_ssub(const Vector8 v1, const Vector8 v2);
 #ifndef USE_NO_SIMD
 static inline Vector8 vector8_eq(const Vector8 v1, const Vector8 v2);
 static inline Vector32 vector32_eq(const Vector32 v1, const Vector32 v2);
+static inline Vector64 vector64_eq(const Vector64 v1, const Vector64 v2);
 #endif
 
 /*
@@ -126,6 +134,18 @@ vector32_load(Vector32 *v, const uint32 *s)
 }
 #endif							/* ! USE_NO_SIMD */
 
+#ifndef USE_NO_SIMD
+static inline void
+vector64_load(Vector64 *v, const uint64 *s)
+{
+#ifdef USE_SSE2
+	*v = _mm_loadu_si128((const __m128i *) s);
+#elif defined(USE_NEON)
+	*v = vld1q_u64((const uint64_t *) s);
+#endif
+}
+#endif							/* ! USE_NO_SIMD */
+
 /*
  * Create a vector with all elements set to the same value.
  */
@@ -149,6 +169,18 @@ vector32_broadcast(const uint32 c)
 	return _mm_set1_epi32(c);
 #elif defined(USE_NEON)
 	return vdupq_n_u32(c);
+#endif
+}
+#endif							/* ! USE_NO_SIMD */
+
+#ifndef USE_NO_SIMD
+static inline Vector64
+vector64_broadcast(const uint64 c)
+{
+#ifdef USE_SSE2
+	return _mm_set1_epi64x(c);
+#elif defined(USE_NEON)
+	return vdupq_n_u64(c);
 #endif
 }
 #endif							/* ! USE_NO_SIMD */
@@ -300,6 +332,23 @@ vector32_is_highbit_set(const Vector32 v)
 #endif							/* ! USE_NO_SIMD */
 
 /*
+ * Exactly like vector8_is_highbit_set except for the input type, so it
+ * looks at each byte separately.  See the comment above
+ * vector32_is_highbit_set for more information.
+ */
+#ifndef USE_NO_SIMD
+static inline bool
+vector64_is_highbit_set(const Vector64 v)
+{
+#if defined(USE_NEON)
+	return vector8_is_highbit_set((Vector8) v);
+#else
+	return vector8_is_highbit_set(v);
+#endif
+}
+#endif							/* ! USE_NO_SIMD */
+
+/*
  * Return the bitwise OR of the inputs
  */
 static inline Vector8
@@ -322,6 +371,30 @@ vector32_or(const Vector32 v1, const Vector32 v2)
 	return _mm_or_si128(v1, v2);
 #elif defined(USE_NEON)
 	return vorrq_u32(v1, v2);
+#endif
+}
+#endif							/* ! USE_NO_SIMD */
+
+#ifndef USE_NO_SIMD
+static inline Vector64
+vector64_or(const Vector64 v1, const Vector64 v2)
+{
+#ifdef USE_SSE2
+	return _mm_or_si128(v1, v2);
+#elif defined(USE_NEON)
+	return vorrq_u64(v1, v2);
+#endif
+}
+#endif							/* ! USE_NO_SIMD */
+
+#ifndef USE_NO_SIMD
+static inline Vector32
+vector32_and(const Vector32 v1, const Vector32 v2)
+{
+#ifdef USE_SSE2
+	return _mm_and_si128(v1, v2);
+#elif defined(USE_NEON)
+	return vandq_u32(v1, v2);
 #endif
 }
 #endif							/* ! USE_NO_SIMD */
@@ -368,6 +441,23 @@ vector32_eq(const Vector32 v1, const Vector32 v2)
 	return _mm_cmpeq_epi32(v1, v2);
 #elif defined(USE_NEON)
 	return vceqq_u32(v1, v2);
+#endif
+}
+#endif							/* ! USE_NO_SIMD */
+
+#ifndef USE_NO_SIMD
+static inline Vector64
+vector64_eq(const Vector64 v1, const Vector64 v2)
+{
+#ifdef USE_SSE2
+	/* We have to work around SSE2's lack of _mm_cmpeq_epi64. */
+	const Vector32 cmp = vector32_eq(v1, v2);
+	const Vector32 hi = _mm_shuffle_epi32(cmp, _MM_SHUFFLE(3, 3, 1, 1));
+	const Vector32 lo = _mm_shuffle_epi32(cmp, _MM_SHUFFLE(2, 2, 0, 0));
+
+	return vector32_and(hi, lo);
+#elif defined(USE_NEON)
+	return vceqq_u64(v1, v2);
 #endif
 }
 #endif							/* ! USE_NO_SIMD */

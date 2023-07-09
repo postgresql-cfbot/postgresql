@@ -8,3 +8,5 @@ CREATE EXTENSION test_lfind;
 SELECT test_lfind8();
 SELECT test_lfind8_le();
 SELECT test_lfind32();
+SELECT test_lfind64();
+SELECT test_lfind64_idx();

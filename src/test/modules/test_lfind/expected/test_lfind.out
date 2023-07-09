@@ -22,3 +22,15 @@ SELECT test_lfind32();
  
 (1 row)
 
+SELECT test_lfind64();
+ test_lfind64 
+--------------
+ 
+(1 row)
+
+SELECT test_lfind64_idx();
+ test_lfind64_idx 
+------------------
+ 
+(1 row)
+

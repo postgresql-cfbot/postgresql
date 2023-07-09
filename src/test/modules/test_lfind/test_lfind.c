@@ -146,3 +146,65 @@ test_lfind32(PG_FUNCTION_ARGS)
 
 	PG_RETURN_VOID();
 }
+
+PG_FUNCTION_INFO_V1(test_lfind64);
+Datum
+test_lfind64(PG_FUNCTION_ARGS)
+{
+	uint64		test_array[TEST_ARRAY_SIZE] = {0};
+
+	test_array[8] = 1;
+	test_array[64] = 2;
+	test_array[TEST_ARRAY_SIZE - 1] = 3;
+
+	if (pg_lfind64(1, test_array, 4))
+		elog(ERROR, "pg_lfind64() found nonexistent element");
+	if (!pg_lfind64(1, test_array, TEST_ARRAY_SIZE))
+		elog(ERROR, "pg_lfind64() did not find existing element");
+
+	if (pg_lfind64(2, test_array, 32))
+		elog(ERROR, "pg_lfind64() found nonexistent element");
+	if (!pg_lfind64(2, test_array, TEST_ARRAY_SIZE))
+		elog(ERROR, "pg_lfind64() did not find existing element");
+
+	if (pg_lfind64(3, test_array, 96))
+		elog(ERROR, "pg_lfind64() found nonexistent element");
+	if (!pg_lfind64(3, test_array, TEST_ARRAY_SIZE))
+		elog(ERROR, "pg_lfind64() did not find existing element");
+
+	if (pg_lfind64(4, test_array, TEST_ARRAY_SIZE))
+		elog(ERROR, "pg_lfind64() found nonexistent element");
+
+	PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(test_lfind64_idx);
+Datum
+test_lfind64_idx(PG_FUNCTION_ARGS)
+{
+	uint64		test_array[TEST_ARRAY_SIZE] = {0};
+
+	test_array[8] = 1;
+	test_array[64] = 2;
+	test_array[TEST_ARRAY_SIZE - 1] = 3;
+
+	if (pg_lfind64_idx(1, test_array, 4) != NULL)
+		elog(ERROR, "pg_lfind64_idx() found nonexistent element");
+	if (pg_lfind64_idx(1, test_array, TEST_ARRAY_SIZE) != &test_array[8])
+		elog(ERROR, "pg_lfind64_idx() did not find existing element");
+
+	if (pg_lfind64_idx(2, test_array, 32) != NULL)
+		elog(ERROR, "pg_lfind6_idx4() found nonexistent element");
+	if (pg_lfind64_idx(2, test_array, TEST_ARRAY_SIZE) != &test_array[64])
+		elog(ERROR, "pg_lfind64_idx() did not find existing element");
+
+	if (pg_lfind64_idx(3, test_array, 96) != NULL)
+		elog(ERROR, "pg_lfind64_idx() found nonexistent element");
+	if (pg_lfind64_idx(3, test_array, TEST_ARRAY_SIZE) != &test_array[TEST_ARRAY_SIZE - 1])
+		elog(ERROR, "pg_lfind64_idx() did not find existing element");
+
+	if (pg_lfind64_idx(4, test_array, TEST_ARRAY_SIZE) != NULL)
+		elog(ERROR, "pg_lfind64_idx() found nonexistent element");
+
+	PG_RETURN_VOID();
+}

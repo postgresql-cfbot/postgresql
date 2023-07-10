@@ -453,7 +453,7 @@ pgarch_ArchiverCopyLoop(void)
 				}
 
 				/* wait a bit before retrying */
-				pg_usleep(1000000L);
+				pg_sleep(1, HandlePgArchInterrupts);
 				continue;
 			}
 
@@ -485,7 +485,7 @@ pgarch_ArchiverCopyLoop(void)
 									xlog)));
 					return;		/* give up archiving for now */
 				}
-				pg_usleep(1000000L);	/* wait a bit before retrying */
+				pg_sleep(1, HandlePgArchInterrupts);	/* wait a bit before retrying */
 			}
 		}
 	}

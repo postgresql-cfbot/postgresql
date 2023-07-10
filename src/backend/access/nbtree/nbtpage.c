@@ -3013,7 +3013,7 @@ _bt_pendingfsm_finalize(Relation rel, BTVacState *vstate)
 	 * never be effective without some other backend concurrently consuming an
 	 * XID.
 	 */
-	pg_usleep(5000000L);
+	pg_sleep(5, NULL);
 #endif
 
 	/*

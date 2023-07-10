@@ -227,6 +227,10 @@ extern PGDLLIMPORT bool in_remote_transaction;
 
 extern PGDLLIMPORT bool InitializingApplyWorker;
 
+extern TimestampTz LogRepWorkerGetSyncStartWakeup(void);
+extern void LogRepWorkerUpdateSyncStartWakeup(TimestampTz next_sync_start);
+extern void LogRepWorkerClearSyncStartWakeup(void);
+
 extern void logicalrep_worker_attach(int slot);
 extern LogicalRepWorker *logicalrep_worker_find(Oid subid, Oid relid,
 												bool only_running);

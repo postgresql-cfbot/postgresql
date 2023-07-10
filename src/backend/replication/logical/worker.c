@@ -209,8 +209,6 @@
 #include "utils/timeout.h"
 #include "utils/usercontext.h"
 
-#define NAPTIME_PER_CYCLE 1000	/* max sleep time between cycles (1s) */
-
 typedef struct FlushPosition
 {
 	dlist_node	node;
@@ -354,6 +352,26 @@ static XLogRecPtr skip_xact_finish_lsn = InvalidXLogRecPtr;
 
 /* BufFile handle of the current streaming file */
 static BufFile *stream_fd = NULL;
+
+/*
+ * Reasons to wake up and perform periodic tasks.
+ */
+typedef enum LogRepWorkerWakeupReason
+{
+	LRW_WAKEUP_TERMINATE,
+	LRW_WAKEUP_PING,
+	LRW_WAKEUP_STATUS,
+	LRW_WAKEUP_SYNC_START
+#define NUM_LRW_WAKEUPS (LRW_WAKEUP_SYNC_START + 1)
+} LogRepWorkerWakeupReason;
+
+/*
+ * Wake up times for periodic tasks.
+ */
+static TimestampTz wakeup[NUM_LRW_WAKEUPS];
+
+static void LogRepWorkerComputeNextWakeup(LogRepWorkerWakeupReason reason,
+										  TimestampTz now);
 
 typedef struct SubXactInfo
 {
@@ -3490,10 +3508,9 @@ UpdateWorkerStats(XLogRecPtr last_lsn, TimestampTz send_time, bool reply)
 static void
 LogicalRepApplyLoop(XLogRecPtr last_received)
 {
-	TimestampTz last_recv_timestamp = GetCurrentTimestamp();
-	bool		ping_sent = false;
 	TimeLineID	tli;
 	ErrorContextCallback errcallback;
+	TimestampTz now;
 
 	/*
 	 * Init the ApplyMessageContext which we clean up after each replication
@@ -3522,6 +3539,11 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 	errcallback.previous = error_context_stack;
 	error_context_stack = &errcallback;
 	apply_error_context_stack = error_context_stack;
+
+	/* Initialize nap wakeup times. */
+	now = GetCurrentTimestamp();
+	for (int i = 0; i < NUM_LRW_WAKEUPS; i++)
+		LogRepWorkerComputeNextWakeup(i, now);
 
 	/* This outer loop iterates once per wait. */
 	for (;;)
@@ -3568,9 +3590,10 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 						ProcessConfigFile(PGC_SIGHUP);
 					}
 
-					/* Reset timeout. */
-					last_recv_timestamp = GetCurrentTimestamp();
-					ping_sent = false;
+					/* Adjust the ping and terminate wakeup times. */
+					now = GetCurrentTimestamp();
+					LogRepWorkerComputeNextWakeup(LRW_WAKEUP_TERMINATE, now);
+					LogRepWorkerComputeNextWakeup(LRW_WAKEUP_PING, now);
 
 					/* Ensure we are reading the data into our memory context. */
 					MemoryContextSwitchTo(ApplyMessageContext);
@@ -3662,7 +3685,29 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 		if (!dlist_is_empty(&lsn_mapping))
 			wait_time = WalWriterDelay;
 		else
-			wait_time = NAPTIME_PER_CYCLE;
+		{
+			TimestampTz nextWakeup = TIMESTAMP_INFINITY;
+
+			/*
+			 * Since process_syncing_tables() is called conditionally, the
+			 * tablesync worker start wakeup time might be in the past, and we
+			 * can't know for sure when it will be updated again.  Rather than
+			 * spinning in a tight loop in this case, bump this wakeup time by
+			 * a second.
+			 */
+			now = GetCurrentTimestamp();
+			if (wakeup[LRW_WAKEUP_SYNC_START] < now)
+				wakeup[LRW_WAKEUP_SYNC_START] = TimestampTzPlusSeconds(wakeup[LRW_WAKEUP_SYNC_START], 1);
+
+			/* Find soonest wakeup time, to limit our nap. */
+			for (int i = 0; i < NUM_LRW_WAKEUPS; i++)
+				nextWakeup = Min(wakeup[i], nextWakeup);
+
+			/*
+			 * Calculate the nap time, clamping as necessary.
+			 */
+			wait_time = TimestampDifferenceMilliseconds(now, nextWakeup);
+		}
 
 		rc = WaitLatchOrSocket(MyLatch,
 							   WL_SOCKET_READABLE | WL_LATCH_SET |
@@ -3680,6 +3725,21 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 		{
 			ConfigReloadPending = false;
 			ProcessConfigFile(PGC_SIGHUP);
+			/* recompute wakeup times */
+			now = GetCurrentTimestamp();
+			for (int i = 0; i < NUM_LRW_WAKEUPS; i++)
+				LogRepWorkerComputeNextWakeup(i, now);
+
+			/*
+			 * LogRepWorkerComputeNextWakeup() will have cleared the tablesync
+			 * worker start wakeup time, so we might not wake up to start a new
+			 * worker at the appropriate time.  To deal with this, we set the
+			 * wakeup time to right now so that
+			 * process_syncing_tables_for_apply() recalculates it as soon as
+			 * possible.
+			 */
+			if (!am_tablesync_worker())
+				LogRepWorkerUpdateSyncStartWakeup(now);
 		}
 
 		if (rc & WL_TIMEOUT)
@@ -3698,31 +3758,17 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 			 * Check if time since last receive from primary has reached the
 			 * configured limit.
 			 */
-			if (wal_receiver_timeout > 0)
+			now = GetCurrentTimestamp();
+			if (now >= wakeup[LRW_WAKEUP_TERMINATE])
+				ereport(ERROR,
+						(errcode(ERRCODE_CONNECTION_FAILURE),
+						 errmsg("terminating logical replication worker due to timeout")));
+
+			/* Check to see if it's time for a ping. */
+			if (now >= wakeup[LRW_WAKEUP_PING])
 			{
-				TimestampTz now = GetCurrentTimestamp();
-				TimestampTz timeout;
-
-				timeout =
-					TimestampTzPlusMilliseconds(last_recv_timestamp,
-												wal_receiver_timeout);
-
-				if (now >= timeout)
-					ereport(ERROR,
-							(errcode(ERRCODE_CONNECTION_FAILURE),
-							 errmsg("terminating logical replication worker due to timeout")));
-
-				/* Check to see if it's time for a ping. */
-				if (!ping_sent)
-				{
-					timeout = TimestampTzPlusMilliseconds(last_recv_timestamp,
-														  (wal_receiver_timeout / 2));
-					if (now >= timeout)
-					{
-						requestReply = true;
-						ping_sent = true;
-					}
-				}
+				requestReply = true;
+				wakeup[LRW_WAKEUP_PING] = TIMESTAMP_INFINITY;
 			}
 
 			send_feedback(last_received, requestReply, requestReply);
@@ -3758,7 +3804,6 @@ static void
 send_feedback(XLogRecPtr recvpos, bool force, bool requestReply)
 {
 	static StringInfo reply_message = NULL;
-	static TimestampTz send_time = 0;
 
 	static XLogRecPtr last_recvpos = InvalidXLogRecPtr;
 	static XLogRecPtr last_writepos = InvalidXLogRecPtr;
@@ -3801,10 +3846,11 @@ send_feedback(XLogRecPtr recvpos, bool force, bool requestReply)
 	if (!force &&
 		writepos == last_writepos &&
 		flushpos == last_flushpos &&
-		!TimestampDifferenceExceeds(send_time, now,
-									wal_receiver_status_interval * 1000))
+		now < wakeup[LRW_WAKEUP_STATUS])
 		return;
-	send_time = now;
+
+	/* Make sure we wake up when it's time to send another status update. */
+	LogRepWorkerComputeNextWakeup(LRW_WAKEUP_STATUS, now);
 
 	if (!reply_message)
 	{
@@ -5116,4 +5162,75 @@ get_transaction_apply_action(TransactionId xid, ParallelApplyWorkerInfo **winfo)
 	{
 		return TRANS_LEADER_APPLY;
 	}
+}
+
+/*
+ * Compute the next wakeup time for a given wakeup reason.  Can be called to
+ * initialize a wakeup time, to adjust it for the next wakeup, or to
+ * reinitialize it when GUCs have changed.  We ask the caller to pass in the
+ * value of "now" because this frequently avoids multiple calls of
+ * GetCurrentTimestamp().  It had better be a reasonably up-to-date value
+ * though.
+ */
+static void
+LogRepWorkerComputeNextWakeup(LogRepWorkerWakeupReason reason, TimestampTz now)
+{
+	switch (reason)
+	{
+		case LRW_WAKEUP_TERMINATE:
+			if (wal_receiver_timeout <= 0)
+				wakeup[reason] = TIMESTAMP_INFINITY;
+			else
+				wakeup[reason] = TimestampTzPlusMilliseconds(now, wal_receiver_timeout);
+			break;
+		case LRW_WAKEUP_PING:
+			if (wal_receiver_timeout <= 0)
+				wakeup[reason] = TIMESTAMP_INFINITY;
+			else
+				wakeup[reason] = TimestampTzPlusMilliseconds(now, wal_receiver_timeout / 2);
+			break;
+		case LRW_WAKEUP_STATUS:
+			if (wal_receiver_status_interval <= 0)
+				wakeup[reason] = TIMESTAMP_INFINITY;
+			else
+				wakeup[reason] = TimestampTzPlusSeconds(now, wal_receiver_status_interval);
+			break;
+		case LRW_WAKEUP_SYNC_START:
+			/*
+			 * This wakeup time is manually set as needed.  This function can
+			 * only be used to initialize its value.
+			 */
+			wakeup[reason] = TIMESTAMP_INFINITY;
+			break;
+			/* there's intentionally no default: here */
+	}
+}
+
+/*
+ * Retrieve the current wakeup time for starting tablesync workers.
+ */
+TimestampTz
+LogRepWorkerGetSyncStartWakeup(void)
+{
+	return wakeup[LRW_WAKEUP_SYNC_START];
+}
+
+/*
+ * Update the current wakeup time for starting tablesync workers.  If the
+ * current wakeup time is <= next_sync_start, no action is taken.
+ */
+void
+LogRepWorkerUpdateSyncStartWakeup(TimestampTz next_sync_start)
+{
+	if (next_sync_start < wakeup[LRW_WAKEUP_SYNC_START])
+		wakeup[LRW_WAKEUP_SYNC_START] = next_sync_start;
+}
+
+/*
+ * Clear the current wakeup time for starting tablesync workers.
+ */
+void
+LogRepWorkerClearSyncStartWakeup(void)
+{
+	wakeup[LRW_WAKEUP_SYNC_START] = TIMESTAMP_INFINITY;
 }

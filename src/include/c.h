@@ -1371,6 +1371,13 @@ typedef intptr_t sigjmp_buf[5];
 #endif							/* __MINGW64__ */
 #endif							/* WIN32 */
 
+/*
+ * Settings that were historically compile-time options, but are no longer.
+ * We retain these macros for the benefit of extension code and client code
+ * that might test them.
+ */
+#define ENABLE_THREAD_SAFETY 1
+
 /* /port compatibility functions */
 #include "port.h"
 

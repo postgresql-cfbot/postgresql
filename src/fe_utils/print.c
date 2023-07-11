@@ -484,12 +484,8 @@ print_unaligned_text(const printTableContent *cont, FILE *fout)
 			for (f = footers; f; f = f->next)
 			{
 				if (need_recordsep)
-				{
 					print_separator(cont->opt->recordSep, fout);
-					need_recordsep = false;
-				}
 				fputs(f->data, fout);
-				need_recordsep = true;
 			}
 		}
 

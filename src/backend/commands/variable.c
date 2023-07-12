@@ -1158,6 +1158,21 @@ check_bonjour(bool *newval, void **extra, GucSource source)
 }
 
 bool
+check_db_user_namespace(bool *newval, void **extra, GucSource source)
+{
+	if (*newval)
+	{
+		/* check the GUC's definition for an explanation */
+		GUC_check_errcode(ERRCODE_FEATURE_NOT_SUPPORTED);
+		GUC_check_errmsg("db_user_namespace is not supported");
+
+		return false;
+	}
+
+	return true;
+}
+
+bool
 check_default_with_oids(bool *newval, void **extra, GucSource source)
 {
 	if (*newval)

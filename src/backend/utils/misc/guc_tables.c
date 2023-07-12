@@ -512,6 +512,7 @@ bool		check_function_bodies = true;
  */
 bool		default_with_oids = false;
 bool		session_auth_is_superuser;
+bool		Db_user_namespace = false;
 
 int			log_min_error_statement = ERROR;
 int			log_min_messages = WARNING;
@@ -1542,14 +1543,21 @@ struct config_bool ConfigureNamesBool[] =
 		false,
 		NULL, NULL, NULL
 	},
+
+	/*
+	 * db_user_namespace was removed in PostgreSQL 17, but we tolerate the
+	 * parameter being set to false to avoid unnecessarily breaking older dump
+	 * files.
+	 */
 	{
-		{"db_user_namespace", PGC_SIGHUP, CONN_AUTH_AUTH,
-			gettext_noop("Enables per-database user names."),
-			NULL
+		{"db_user_namespace", PGC_SIGHUP, COMPAT_OPTIONS_PREVIOUS,
+			gettext_noop("db_user_namespace is no longer supported; this can only be false."),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
 		},
 		&Db_user_namespace,
 		false,
-		NULL, NULL, NULL
+		check_db_user_namespace, NULL, NULL
 	},
 	{
 		{"default_transaction_read_only", PGC_USERSET, CLIENT_CONN_STATEMENT,

@@ -31,6 +31,9 @@ SET autovacuum = OFF;  -- fail, requires reload
 RESET autovacuum;  -- fail, requires reload
 ALTER SYSTEM SET autovacuum = OFF;  -- ok
 ALTER SYSTEM RESET autovacuum;  -- ok
+ALTER SYSTEM SET db_user_namespace = OFF;  -- ok
+ALTER SYSTEM SET db_user_namespace = ON;  -- fail, cannot be changed
+ALTER SYSTEM RESET db_user_namespace;  -- ok
 -- PGC_SUSET
 SET lc_messages = 'C';  -- ok
 RESET lc_messages;  -- ok

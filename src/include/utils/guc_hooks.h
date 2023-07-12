@@ -49,6 +49,7 @@ extern bool check_cluster_name(char **newval, void **extra, GucSource source);
 extern const char *show_data_directory_mode(void);
 extern bool check_datestyle(char **newval, void **extra, GucSource source);
 extern void assign_datestyle(const char *newval, void *extra);
+extern bool check_db_user_namespace(bool *newval, void **extra, GucSource source);
 extern bool check_default_table_access_method(char **newval, void **extra,
 											  GucSource source);
 extern bool check_default_tablespace(char **newval, void **extra,

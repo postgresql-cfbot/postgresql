@@ -187,6 +187,9 @@ CATALOG(pg_type,1247,TypeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(71,TypeRelati
 	 *
 	 * Note that 'm' fields can also be moved out to secondary storage,
 	 * but only as a last resort ('e' and 'x' fields are moved first).
+	 *
+	 * For types that are not variable-length (that is, typlen != -1), this
+	 * must be set to 'p'.
 	 * ----------------
 	 */
 	char		typstorage BKI_DEFAULT(p) BKI_ARRAY_DEFAULT(x);

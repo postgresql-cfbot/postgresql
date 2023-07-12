@@ -108,11 +108,11 @@ CATALOG(pg_attribute,1249,AttributeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(75,
 	 */
 	char		attalign;
 
-	/*----------
-	 * attstorage tells for VARLENA attributes, what the heap access
-	 * methods can do to it if a given tuple doesn't fit into a page.
-	 * Possible values are as for pg_type.typstorage (see TYPSTORAGE macros).
-	 *----------
+	/*
+	 * attstorage tells for VARLENA attributes, what the heap access methods
+	 * can do to it if a given tuple doesn't fit into a page.  Possible values
+	 * are as for pg_type.typstorage (see TYPSTORAGE macros).  This is never
+	 * '\0', even for fixed-length types.
 	 */
 	char		attstorage;
 

@@ -2197,6 +2197,36 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-max-total-backend-memory" xreflabel="max_total_backend_memory">
+      <term><varname>max_total_backend_memory</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>max_total_backend_memory</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies a limit to the amount of memory (MB) that may be allocated to
+        backends in total (i.e. this is not a per user or per backend limit).
+        If unset, or set to 0 it is disabled.  At databse startup
+        max_total_backend_memory is reduced by shared_memory_size_mb
+        (includes shared buffers and other memory required for initialization).
+        Each backend process is intialized with a 1MB local allowance which
+        also reduces total_bkend_mem_bytes_available. Keep this in mind when
+        setting this value. A backend request that would exhaust the limit will
+        be denied with an out of memory error causing that backend's current
+        query/transaction to fail. Further requests will not be allocated until
+        dropping below the limit.  This limit does not affect auxiliary backend
+        processes
+        <xref linkend="glossary-auxiliary-proc"/> or the postmaster process.
+        Backend memory allocations (<varname>allocated_bytes</varname>) are
+        displayed in the
+        <link linkend="monitoring-pg-stat-memory-allocation-view"><structname>pg_stat_memory_allocation</structname></link>
+        view.  Due to the dynamic nature of memory allocations, this limit is
+        not exact.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
      </sect2>
 

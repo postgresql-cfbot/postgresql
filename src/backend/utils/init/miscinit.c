@@ -171,6 +171,17 @@ InitPostmasterChild(void)
 				(errcode_for_socket_access(),
 				 errmsg_internal("could not set postmaster death monitoring pipe to FD_CLOEXEC mode: %m")));
 #endif
+
+	/*
+	 * Init pgstat allocated bytes counters here for forked backends.
+	 * Fork/exec backends have not yet reattached to shared memory at this
+	 * point. They will init pgstat allocated bytes counters in
+	 * PGSharedMemoryReAttach.
+	 */
+#ifndef EXEC_BACKEND
+	/* Init allocated bytes to avoid double counting parent allocation */
+	pgstat_init_allocated_bytes();
+#endif
 }
 
 /*

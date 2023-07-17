@@ -193,7 +193,7 @@ sub configure_test_server_for_ssl
 	# enable logging etc.
 	open my $conf, '>>', "$pgdata/postgresql.conf";
 	print $conf "fsync=off\n";
-	print $conf "log_connections=on\n";
+	print $conf "log_connection_messages=all\n";
 	print $conf "log_hostname=on\n";
 	print $conf "listen_addresses='$serverhost'\n";
 	print $conf "log_statement=all\n";

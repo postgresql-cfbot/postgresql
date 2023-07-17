@@ -332,7 +332,8 @@ auth_failed(Port *port, int status, const char *logdetail)
 /*
  * Sets the authenticated identity for the current user.  The provided string
  * will be stored into MyClientConnectionInfo, alongside the current HBA
- * method in use.  The ID will be logged if log_connections is enabled.
+ * method in use.  The ID will be logged if
+ * log_connection_messages contains the 'authenticated' value.
  *
  * Auth methods should call this routine exactly once, as soon as the user is
  * successfully authenticated, even if they have reasons to know that
@@ -364,7 +365,7 @@ set_authn_id(Port *port, const char *id)
 	MyClientConnectionInfo.authn_id = MemoryContextStrdup(TopMemoryContext, id);
 	MyClientConnectionInfo.auth_method = port->hba->auth_method;
 
-	if (Log_connections)
+	if (Log_connection_messages & LOG_CONNECTION_AUTHENTICATED)
 	{
 		ereport(LOG,
 				errmsg("connection authenticated: identity=\"%s\" method=%s "

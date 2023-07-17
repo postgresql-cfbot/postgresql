@@ -71,7 +71,7 @@ sub test_role
 
 my $node = PostgreSQL::Test::Cluster->new('node');
 $node->init;
-$node->append_conf('postgresql.conf', "log_connections = on\n");
+$node->append_conf('postgresql.conf', "log_connection_messages = all\n");
 $node->start;
 
 # Set pg_hba.conf with the peer authentication.

@@ -27765,6 +27765,45 @@ postgres=# SELECT '0/0'::pg_lsn + pd.segment_number * ps.setting::int + :offset 
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>pg_namespace_size</primary>
+        </indexterm>
+        <function>pg_namespace_size</function> ( <type>name</type> )
+        <returnvalue>bigint</returnvalue>
+       </para>
+       <para role="func_signature">
+        <function>pg_namespace_size</function> ( <type>oid</type> )
+        <returnvalue>bigint</returnvalue>
+       </para>
+       <para>
+        Computes the total disk space used by relations in the namespace (schema)
+        with the specified name or OID. To use this function, you must
+        have <literal>CREATE</literal> privilege on the specified namespace
+        or have privileges of the <literal>pg_read_all_stats</literal> role,
+        unless it is the default namespace for the current database.
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_am_size</primary>
+        </indexterm>
+        <function>pg_am_size</function> ( <type>name</type> )
+        <returnvalue>bigint</returnvalue>
+       </para>
+       <para role="func_signature">
+        <function>pg_am_size</function> ( <type>oid</type> )
+        <returnvalue>bigint</returnvalue>
+       </para>
+       <para>
+        Computes the total disk space used by relations using the access method
+        with the specified name or OID.
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>pg_total_relation_size</primary>
         </indexterm>
         <function>pg_total_relation_size</function> ( <type>regclass</type> )

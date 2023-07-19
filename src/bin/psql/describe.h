@@ -34,6 +34,9 @@ extern bool describeOperators(const char *oper_pattern,
 /* \du, \dg */
 extern bool describeRoles(const char *pattern, bool verbose, bool showSystem);
 
+/* \drg */
+extern bool describeRoleGrants(const char *pattern, bool showSystem);
+
 /* \drds */
 extern bool listDbRoleSettings(const char *pattern, const char *pattern2);
 

@@ -17,6 +17,7 @@
 #include "executor/execAsync.h"
 #include "executor/executor.h"
 #include "executor/nodeAppend.h"
+#include "executor/nodeMergeAppend.h"
 #include "executor/nodeForeignscan.h"
 
 /*
@@ -120,6 +121,9 @@ ExecAsyncResponse(AsyncRequest *areq)
 	{
 		case T_AppendState:
 			ExecAsyncAppendResponse(areq);
+			break;
+		case T_MergeAppendState:
+			ExecAsyncMergeAppendResponse(areq);
 			break;
 		default:
 			/* If the node doesn't support async, caller messed up. */

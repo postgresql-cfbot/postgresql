@@ -987,6 +987,16 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"enable_async_merge_append", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables the planner's use of async merge append plans."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&enable_async_merge_append,
+		true,
+		NULL, NULL, NULL
+	},
+	{
 		{"enable_group_by_reordering", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables reordering of GROUP BY keys."),
 			NULL,

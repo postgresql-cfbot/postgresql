@@ -1499,9 +1499,65 @@ typedef struct MergeAppendState
 	TupleTableSlot **ms_slots;	/* array of length ms_nplans */
 	struct binaryheap *ms_heap; /* binary heap of slot indices */
 	bool		ms_initialized; /* are subplans started? */
+	Bitmapset  *ms_asyncplans;	/* asynchronous plans indexes */
+	int			ms_nasyncplans; /* # of asynchronous plans */
+	AsyncRequest **ms_asyncrequests;	/* array of AsyncRequests */
+	TupleTableSlot **ms_asyncresults;	/* unreturned results of async plans */
+	Bitmapset   *ms_has_asyncresults;	/* plans which have async results */
+	Bitmapset  *ms_asyncremain; /* remaining asynchronous plans */
+	Bitmapset  *ms_needrequest; /* asynchronous plans needing a new request */
+	struct WaitEventSet *ms_eventset;	/* WaitEventSet used to configure file
+										 * descriptor wait events */
 	struct PartitionPruneState *ms_prune_state;
+	bool		ms_valid_subplans_identified;   /* is ms_valid_subplans valid? */
 	Bitmapset  *ms_valid_subplans;
+	Bitmapset  *ms_valid_asyncplans;	/* valid asynchronous plans indexes */
 } MergeAppendState;
+
+/* Getters for AppendState and MergeAppendState */
+static inline struct WaitEventSet *
+GetAppendEventSet(PlanState *ps)
+{
+	Assert (IsA(ps, AppendState) || IsA(ps, MergeAppendState));
+
+	if (IsA(ps, AppendState))
+		return ((AppendState *)ps)->as_eventset;
+	else
+		return ((MergeAppendState *)ps)->ms_eventset;
+}
+
+static inline Bitmapset *
+GetNeedRequest(PlanState *ps)
+{
+	Assert (IsA(ps, AppendState) || IsA(ps, MergeAppendState));
+
+	if (IsA(ps, AppendState))
+		return ((AppendState *)ps)->as_needrequest;
+	else
+		return ((MergeAppendState *)ps)->ms_needrequest;
+}
+
+static inline Bitmapset *
+GetValidAsyncplans(PlanState *ps)
+{
+	Assert (IsA(ps, AppendState) || IsA(ps, MergeAppendState));
+
+	if (IsA(ps, AppendState))
+		return ((AppendState *)ps)->as_valid_asyncplans;
+	else
+		return ((MergeAppendState *)ps)->ms_valid_asyncplans;
+}
+
+static inline AsyncRequest*
+GetValidAsyncRequest(PlanState *ps, int nreq)
+{
+	Assert (IsA(ps, AppendState) || IsA(ps, MergeAppendState));
+
+	if (IsA(ps, AppendState))
+		return ((AppendState *)ps)->as_asyncrequests[nreq];
+	else
+		return ((MergeAppendState *)ps)->ms_asyncrequests[nreq];
+}
 
 /* ----------------
  *	 RecursiveUnionState information

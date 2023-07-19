@@ -7294,11 +7294,15 @@ postgresForeignAsyncConfigureWait(AsyncRequest *areq)
 	ForeignScanState *node = (ForeignScanState *) areq->requestee;
 	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
 	AsyncRequest *pendingAreq = fsstate->conn_state->pendingAreq;
-	AppendState *requestor = (AppendState *) areq->requestor;
-	WaitEventSet *set = requestor->as_eventset;
+	PlanState  *requestor = areq->requestor;
+	WaitEventSet *set;
+	Bitmapset  *needrequest;
 
 	/* This should not be called unless callback_pending */
 	Assert(areq->callback_pending);
+
+	set = GetAppendEventSet(requestor);
+	needrequest = GetNeedRequest(requestor);
 
 	/*
 	 * If process_pending_request() has been invoked on the given request
@@ -7337,7 +7341,7 @@ postgresForeignAsyncConfigureWait(AsyncRequest *areq)
 		 * below, because we might otherwise end up with no configured events
 		 * other than the postmaster death event.
 		 */
-		if (!bms_is_empty(requestor->as_needrequest))
+		if (!bms_is_empty(needrequest))
 			return;
 		if (GetNumRegisteredWaitEvents(set) > 1)
 			return;

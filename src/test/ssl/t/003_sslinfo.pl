@@ -78,8 +78,8 @@ my $default_ssl_connstr =
   "sslkey=invalid sslcert=invalid sslrootcert=invalid sslcrl=invalid sslcrldir=invalid";
 
 $common_connstr =
-  "$default_ssl_connstr sslrootcert=ssl/root+server_ca.crt sslmode=require dbname=certdb hostaddr=$SERVERHOSTADDR host=localhost "
-  . "user=ssltestuser sslcert=ssl/client_ext.crt "
+  "$default_ssl_connstr sslrootcert=ssl/root+server_ca.crt sslmode=require dbname=regression_certdb hostaddr=$SERVERHOSTADDR host=localhost "
+  . "user=regress_ssltestuser sslcert=ssl/client_ext.crt "
   . sslkey('client_ext.key');
 
 # Make sure we can connect even though previous test suites have established this
@@ -91,13 +91,13 @@ $node->connect_ok(
 my $result;
 
 $result = $node->safe_psql(
-	"certdb",
+	"regression_certdb",
 	"SELECT ssl_is_used();",
 	connstr => $common_connstr);
 is($result, 't', "ssl_is_used() for TLS connection");
 
 $result = $node->safe_psql(
-	"certdb",
+	"regression_certdb",
 	"SELECT ssl_version();",
 	connstr => $common_connstr
 	  . " ssl_min_protocol_version=TLSv1.2 "
@@ -105,68 +105,68 @@ $result = $node->safe_psql(
 is($result, 'TLSv1.2', "ssl_version() correctly returning TLS protocol");
 
 $result = $node->safe_psql(
-	"certdb",
+	"regression_certdb",
 	"SELECT ssl_cipher() = cipher FROM pg_stat_ssl WHERE pid = pg_backend_pid();",
 	connstr => $common_connstr);
 is($result, 't', "ssl_cipher() compared with pg_stat_ssl");
 
 $result = $node->safe_psql(
-	"certdb",
+	"regression_certdb",
 	"SELECT ssl_client_cert_present();",
 	connstr => $common_connstr);
 is($result, 't', "ssl_client_cert_present() for connection with cert");
 
 $result = $node->safe_psql(
-	"trustdb",
+	"regression_trustdb",
 	"SELECT ssl_client_cert_present();",
 	connstr =>
 	  "$default_ssl_connstr sslrootcert=ssl/root+server_ca.crt sslmode=require "
-	  . "dbname=trustdb hostaddr=$SERVERHOSTADDR user=ssltestuser host=localhost"
+	  . "dbname=regression_trustdb hostaddr=$SERVERHOSTADDR user=regress_ssltestuser host=localhost"
 );
 is($result, 'f', "ssl_client_cert_present() for connection without cert");
 
 $result = $node->safe_psql(
-	"certdb",
+	"regression_certdb",
 	"SELECT ssl_client_serial() = client_serial FROM pg_stat_ssl WHERE pid = pg_backend_pid();",
 	connstr => $common_connstr);
 is($result, 't', "ssl_client_serial() compared with pg_stat_ssl");
 
 # Must not use safe_psql since we expect an error here
 $result = $node->psql(
-	"certdb",
+	"regression_certdb",
 	"SELECT ssl_client_dn_field('invalid');",
 	connstr => $common_connstr);
 is($result, '3', "ssl_client_dn_field() for an invalid field");
 
 $result = $node->safe_psql(
-	"trustdb",
+	"regression_trustdb",
 	"SELECT ssl_client_dn_field('commonName');",
 	connstr =>
 	  "$default_ssl_connstr sslrootcert=ssl/root+server_ca.crt sslmode=require "
-	  . "dbname=trustdb hostaddr=$SERVERHOSTADDR user=ssltestuser host=localhost"
+	  . "dbname=regression_trustdb hostaddr=$SERVERHOSTADDR user=regress_ssltestuser host=localhost"
 );
 is($result, '', "ssl_client_dn_field() for connection without cert");
 
 $result = $node->safe_psql(
-	"certdb",
+	"regression_certdb",
 	"SELECT '/CN=' || ssl_client_dn_field('commonName') = client_dn FROM pg_stat_ssl WHERE pid = pg_backend_pid();",
 	connstr => $common_connstr);
 is($result, 't', "ssl_client_dn_field() for commonName");
 
 $result = $node->safe_psql(
-	"certdb",
+	"regression_certdb",
 	"SELECT ssl_issuer_dn() = issuer_dn FROM pg_stat_ssl WHERE pid = pg_backend_pid();",
 	connstr => $common_connstr);
 is($result, 't', "ssl_issuer_dn() for connection with cert");
 
 $result = $node->safe_psql(
-	"certdb",
+	"regression_certdb",
 	"SELECT '/CN=' || ssl_issuer_field('commonName') = issuer_dn FROM pg_stat_ssl WHERE pid = pg_backend_pid();",
 	connstr => $common_connstr);
 is($result, 't', "ssl_issuer_field() for commonName");
 
 $result = $node->safe_psql(
-	"certdb",
+	"regression_certdb",
 	"SELECT value, critical FROM ssl_extension_info() WHERE name = 'basicConstraints';",
 	connstr => $common_connstr);
 is($result, 'CA:FALSE|t', 'extract extension from cert');
@@ -184,9 +184,9 @@ if ($supports_sslcertmode_require)
 foreach my $c (@cases)
 {
 	$result = $node->safe_psql(
-		"trustdb",
+		"regression_trustdb",
 		"SELECT ssl_client_cert_present();",
-		connstr => "$common_connstr dbname=trustdb $c->{'opts'}");
+		connstr => "$common_connstr dbname=regression_trustdb $c->{'opts'}");
 	is($result, $c->{'present'},
 		"ssl_client_cert_present() for $c->{'opts'}");
 }

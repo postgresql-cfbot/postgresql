@@ -73,26 +73,26 @@ $ssl_server->configure_test_server_for_ssl(
 switch_server_cert($node, certfile => 'server-cn-only');
 $ENV{PGPASSWORD} = "pass";
 $common_connstr =
-  "dbname=trustdb sslmode=require sslcert=invalid sslrootcert=invalid hostaddr=$SERVERHOSTADDR host=localhost";
+  "dbname=regression_trustdb sslmode=require sslcert=invalid sslrootcert=invalid hostaddr=$SERVERHOSTADDR host=localhost";
 
 # Default settings
 $node->connect_ok(
-	"$common_connstr user=ssltestuser",
+	"$common_connstr user=regress_ssltestuser",
 	"Basic SCRAM authentication with SSL");
 
 # Test channel_binding
 $node->connect_fails(
-	"$common_connstr user=ssltestuser channel_binding=invalid_value",
+	"$common_connstr user=regress_ssltestuser channel_binding=invalid_value",
 	"SCRAM with SSL and channel_binding=invalid_value",
 	expected_stderr => qr/invalid channel_binding value: "invalid_value"/);
-$node->connect_ok("$common_connstr user=ssltestuser channel_binding=disable",
+$node->connect_ok("$common_connstr user=regress_ssltestuser channel_binding=disable",
 	"SCRAM with SSL and channel_binding=disable");
-$node->connect_ok("$common_connstr user=ssltestuser channel_binding=require",
+$node->connect_ok("$common_connstr user=regress_ssltestuser channel_binding=require",
 	"SCRAM with SSL and channel_binding=require");
 
 # Now test when the user has an MD5-encrypted password; should fail
 $node->connect_fails(
-	"$common_connstr user=md5testuser channel_binding=require",
+	"$common_connstr user=regress_md5testuser channel_binding=require",
 	"MD5 with SSL and channel_binding=require",
 	expected_stderr =>
 	  qr/channel binding required but not supported by server's authentication request/
@@ -111,7 +111,7 @@ chmod 0600, "$cert_tempdir/client_scram.key"
   or die "failed to change permissions on $cert_tempdir/client_scram.key: $!";
 $client_tmp_key =~ s!\\!/!g if $PostgreSQL::Test::Utils::windows_os;
 $node->connect_fails(
-	"sslcert=ssl/client.crt sslkey=$client_tmp_key sslrootcert=invalid hostaddr=$SERVERHOSTADDR host=localhost dbname=certdb user=ssltestuser channel_binding=require",
+	"sslcert=ssl/client.crt sslkey=$client_tmp_key sslrootcert=invalid hostaddr=$SERVERHOSTADDR host=localhost dbname=regression_certdb user=regress_ssltestuser channel_binding=require",
 	"Cert authentication and channel_binding=require",
 	expected_stderr =>
 	  qr/channel binding required, but server authenticated client without channel binding/
@@ -119,25 +119,25 @@ $node->connect_fails(
 
 # Certificate verification at the connection level should still work fine.
 $node->connect_ok(
-	"sslcert=ssl/client.crt sslkey=$client_tmp_key sslrootcert=invalid hostaddr=$SERVERHOSTADDR host=localhost dbname=verifydb user=ssltestuser",
+	"sslcert=ssl/client.crt sslkey=$client_tmp_key sslrootcert=invalid hostaddr=$SERVERHOSTADDR host=localhost dbname=regression_verifydb user=regress_ssltestuser",
 	"SCRAM with clientcert=verify-full",
 	log_like => [
-		qr/connection authenticated: identity="ssltestuser" method=scram-sha-256/
+		qr/connection authenticated: identity="regress_ssltestuser" method=scram-sha-256/
 	]);
 
 # channel_binding should continue to work independently of require_auth.
 $node->connect_ok(
-	"$common_connstr user=ssltestuser channel_binding=disable require_auth=scram-sha-256",
+	"$common_connstr user=regress_ssltestuser channel_binding=disable require_auth=scram-sha-256",
 	"SCRAM with SSL, channel_binding=disable, and require_auth=scram-sha-256"
 );
 $node->connect_fails(
-	"$common_connstr user=md5testuser require_auth=md5 channel_binding=require",
+	"$common_connstr user=regress_md5testuser require_auth=md5 channel_binding=require",
 	"channel_binding can fail even when require_auth succeeds",
 	expected_stderr =>
 	  qr/channel binding required but not supported by server's authentication request/
 );
 $node->connect_ok(
-	"$common_connstr user=ssltestuser channel_binding=require require_auth=scram-sha-256",
+	"$common_connstr user=regress_ssltestuser channel_binding=require require_auth=scram-sha-256",
 	"SCRAM with SSL, channel_binding=require, and require_auth=scram-sha-256"
 );
 
@@ -148,10 +148,10 @@ if ($supports_rsapss_certs)
 {
 	switch_server_cert($node, certfile => 'server-rsapss');
 	$node->connect_ok(
-		"$common_connstr user=ssltestuser channel_binding=require",
+		"$common_connstr user=regress_ssltestuser channel_binding=require",
 		"SCRAM with SSL and channel_binding=require, server certificate uses 'rsassaPss'",
 		log_like => [
-			qr/connection authenticated: identity="ssltestuser" method=scram-sha-256/
+			qr/connection authenticated: identity="regress_ssltestuser" method=scram-sha-256/
 		]);
 }
 done_testing();

@@ -127,14 +127,16 @@ sub sslkey
 =item $server->configure_test_server_for_ssl(node, host, cidr, auth, params)
 
 Configure the cluster specified by B<node> or listening on SSL connections.
-The following databases will be created in the cluster: trustdb, certdb,
-certdb_dn, certdb_dn_re, certdb_cn, verifydb. The following users will be
-created in the cluster: ssltestuser, md5testuser, anotheruser, yetanotheruser.
-If B<< $params{password} >> is set, it will be used as password for all users
-with the password encoding B<< $params{password_enc} >> (except for md5testuser
-which always have MD5).  Extensions defined in B<< @{$params{extension}} >>
-will be created in all the above created databases. B<host> is used for
-C<listen_addresses> and B<cidr> for configuring C<pg_hba.conf>.
+The following databases will be created in the cluster: regression_trustdb,
+regression_certdb, regression_certdb_dn, regression_certdb_dn_re,
+regression_certdb_cn and regressiomn_verifydb. The following users will be
+created in the cluster: regress_ssltestuser, regress_md5testuser,
+regress_anotheruser and regress_yetanotheruser.  If B<< $params{password} >> is
+set, it will be used as password for all users with the password encoding B<<
+$params{password_enc} >> (except for regress_md5testuser which always have
+MD5).  Extensions defined in B<< @{$params{extension}} >> will be created in
+all the above created databases. B<host> is used for C<listen_addresses> and
+B<cidr> for configuring C<pg_hba.conf>.
 
 =cut
 
@@ -146,14 +148,15 @@ sub configure_test_server_for_ssl
 	my $pgdata = $node->data_dir;
 
 	my @databases = (
-		'trustdb', 'certdb', 'certdb_dn', 'certdb_dn_re',
-		'certdb_cn', 'verifydb');
+		'regression_trustdb', 'regression_certdb', 'regression_certdb_dn',
+		'regression_certdb_dn_re', 'regression_certdb_cn',
+		'regression_verifydb');
 
 	# Create test users and databases
-	$node->psql('postgres', "CREATE USER ssltestuser");
-	$node->psql('postgres', "CREATE USER md5testuser");
-	$node->psql('postgres', "CREATE USER anotheruser");
-	$node->psql('postgres', "CREATE USER yetanotheruser");
+	$node->psql('postgres', "CREATE USER regress_ssltestuser");
+	$node->psql('postgres', "CREATE USER regress_md5testuser");
+	$node->psql('postgres', "CREATE USER regress_anotheruser");
+	$node->psql('postgres', "CREATE USER regress_yetanotheruser");
 
 	foreach my $db (@databases)
 	{
@@ -167,14 +170,14 @@ sub configure_test_server_for_ssl
 		  unless defined($params{password_enc});
 
 		$node->psql('postgres',
-			"SET password_encryption='$params{password_enc}'; ALTER USER ssltestuser PASSWORD '$params{password}';"
+			"SET password_encryption='$params{password_enc}'; ALTER USER regress_ssltestuser PASSWORD '$params{password}';"
 		);
 		# A special user that always has an md5-encrypted password
 		$node->psql('postgres',
-			"SET password_encryption='md5'; ALTER USER md5testuser PASSWORD '$params{password}';"
+			"SET password_encryption='md5'; ALTER USER regress_md5testuser PASSWORD '$params{password}';"
 		);
 		$node->psql('postgres',
-			"SET password_encryption='$params{password_enc}'; ALTER USER anotheruser PASSWORD '$params{password}';"
+			"SET password_encryption='$params{password_enc}'; ALTER USER regress_anotheruser PASSWORD '$params{password}';"
 		);
 	}
 
@@ -314,35 +317,35 @@ sub _configure_hba_for_ssl
 	# Only accept SSL connections from $servercidr. Our tests don't depend on this
 	# but seems best to keep it as narrow as possible for security reasons.
 	#
-	# When connecting to certdb, also check the client certificate.
+	# When connecting to regression_certdb, also check the client certificate.
 	open my $hba, '>', "$pgdata/pg_hba.conf";
 	print $hba
 	  "# TYPE  DATABASE        USER            ADDRESS                 METHOD             OPTIONS\n";
 	print $hba
-	  "hostssl trustdb         md5testuser     $servercidr            md5\n";
+	  "hostssl regression_trustdb         regress_md5testuser     $servercidr            md5\n";
 	print $hba
-	  "hostssl trustdb         all             $servercidr            $authmethod\n";
+	  "hostssl regression_trustdb         all             $servercidr            $authmethod\n";
 	print $hba
-	  "hostssl verifydb        ssltestuser     $servercidr            $authmethod        clientcert=verify-full\n";
+	  "hostssl regression_verifydb        regress_ssltestuser     $servercidr            $authmethod        clientcert=verify-full\n";
 	print $hba
-	  "hostssl verifydb        anotheruser     $servercidr            $authmethod        clientcert=verify-full\n";
+	  "hostssl regression_verifydb        regress_anotheruser     $servercidr            $authmethod        clientcert=verify-full\n";
 	print $hba
-	  "hostssl verifydb        yetanotheruser  $servercidr            $authmethod        clientcert=verify-ca\n";
+	  "hostssl regression_verifydb        regress_yetanotheruser  $servercidr            $authmethod        clientcert=verify-ca\n";
 	print $hba
-	  "hostssl certdb          all             $servercidr            cert\n";
+	  "hostssl regression_certdb          all             $servercidr            cert\n";
 	print $hba
-	  "hostssl certdb_dn       all             $servercidr            cert clientname=DN map=dn\n",
-	  "hostssl certdb_dn_re    all             $servercidr            cert clientname=DN map=dnre\n",
-	  "hostssl certdb_cn       all             $servercidr            cert clientname=CN map=cn\n";
+	  "hostssl regression_certdb_dn       all             $servercidr            cert clientname=DN map=dn\n",
+	  "hostssl regression_certdb_dn_re    all             $servercidr            cert clientname=DN map=dnre\n",
+	  "hostssl regression_certdb_cn       all             $servercidr            cert clientname=CN map=cn\n";
 	close $hba;
 
 	# Also set the ident maps. Note: fields with commas must be quoted
 	open my $map, ">", "$pgdata/pg_ident.conf";
 	print $map
 	  "# MAPNAME       SYSTEM-USERNAME                           PG-USERNAME\n",
-	  "dn             \"CN=ssltestuser-dn,OU=Testing,OU=Engineering,O=PGDG\"    ssltestuser\n",
-	  "dnre           \"/^.*OU=Testing,.*\$\"                    ssltestuser\n",
-	  "cn              ssltestuser-dn                            ssltestuser\n";
+	  "dn             \"CN=regress_ssltestuser-dn,OU=Testing,OU=Engineering,O=PGDG\"    regress_ssltestuser\n",
+	  "dnre           \"/^.*OU=Testing,.*\$\"                    regress_ssltestuser\n",
+	  "cn              regress_ssltestuser-dn                            regress_ssltestuser\n";
 
 	return;
 }

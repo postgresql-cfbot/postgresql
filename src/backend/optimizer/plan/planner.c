@@ -206,7 +206,7 @@ static PathTarget *make_group_input_target(PlannerInfo *root,
 										   PathTarget *final_target);
 static PathTarget *make_partial_grouping_target(PlannerInfo *root,
 												PathTarget *grouping_target,
-												Node *havingQual);
+												GroupPathExtraData *extra);
 static List *postprocess_setop_tlist(List *new_tlist, List *orig_tlist);
 static void optimize_window_clauses(PlannerInfo *root,
 									WindowFuncLists *wflists);
@@ -5421,6 +5421,64 @@ make_group_input_target(PlannerInfo *root, PathTarget *final_target)
 }
 
 /*
+ * setGroupClausePartial
+ *	  Generate a groupClause for partial aggregate and set it to GroupPathExtraData.
+ */
+static void
+setGroupClausePartial(PathTarget *partial_target, List *non_group_exprs,
+					  List *groupClause, GroupPathExtraData *extra)
+{
+	int			exprno,
+				refno;
+	ListCell   *lc;
+	Index		maxRef = 0;
+	List	   *exprs_processed = NIL;
+
+	foreach(lc, groupClause)
+	{
+		SortGroupClause *sgc = (SortGroupClause *) lfirst(lc);
+
+		if (sgc->tleSortGroupRef > maxRef)
+			maxRef = sgc->tleSortGroupRef;
+	}
+	maxRef++;
+
+	extra->groupClausePartial = list_copy_deep(groupClause);
+	extra->partial_target = copy_pathtarget(partial_target);
+
+	if (!partial_target->exprs)
+		return;
+
+	foreach(lc, non_group_exprs)
+	{
+		Expr	   *expr = (Expr *) lfirst(lc);
+
+		refno = -1;
+		if (list_member(exprs_processed, expr) || !IsA(expr, Var))
+			continue;
+		exprs_processed = lappend(exprs_processed, expr);
+		for (exprno = 0; exprno < partial_target->exprs->length; exprno++)
+		{
+			Expr	   *target_expr = (Expr *) list_nth(partial_target->exprs, exprno);
+
+			if (equal(target_expr, expr))
+			{
+				refno = exprno;
+				break;
+			}
+		}
+		if (refno < 0)
+		{
+			SortGroupClause *grpcl = makeNode(SortGroupClause);
+
+			grpcl->tleSortGroupRef = maxRef++;
+			extra->groupClausePartial = lappend(extra->groupClausePartial, grpcl);
+			add_column_to_pathtarget(extra->partial_target, expr, grpcl->tleSortGroupRef);
+		}
+	}
+}
+
+/*
  * make_partial_grouping_target
  *	  Generate appropriate PathTarget for output of partial aggregate
  *	  (or partial grouping, if there are no aggregates) nodes.
@@ -5439,7 +5497,7 @@ make_group_input_target(PlannerInfo *root, PathTarget *final_target)
 static PathTarget *
 make_partial_grouping_target(PlannerInfo *root,
 							 PathTarget *grouping_target,
-							 Node *havingQual)
+							 GroupPathExtraData *extra)
 {
 	PathTarget *partial_target;
 	List	   *non_group_cols;
@@ -5481,8 +5539,8 @@ make_partial_grouping_target(PlannerInfo *root,
 	/*
 	 * If there's a HAVING clause, we'll need the Vars/Aggrefs it uses, too.
 	 */
-	if (havingQual)
-		non_group_cols = lappend(non_group_cols, havingQual);
+	if (extra->havingQual)
+		non_group_cols = lappend(non_group_cols, extra->havingQual);
 
 	/*
 	 * Pull out all the Vars, PlaceHolderVars, and Aggrefs mentioned in
@@ -5495,7 +5553,7 @@ make_partial_grouping_target(PlannerInfo *root,
 									  PVC_INCLUDE_AGGREGATES |
 									  PVC_RECURSE_WINDOWFUNCS |
 									  PVC_INCLUDE_PLACEHOLDERS);
-
+	setGroupClausePartial(partial_target, non_group_exprs, root->parse->groupClause, extra);
 	add_new_columns_to_pathtarget(partial_target, non_group_exprs);
 
 	/*
@@ -5524,6 +5582,7 @@ make_partial_grouping_target(PlannerInfo *root,
 			lfirst(lc) = newaggref;
 		}
 	}
+	extra->partial_target->exprs = partial_target->exprs;
 
 	/* clean up cruft */
 	list_free(non_group_exprs);
@@ -7153,7 +7212,7 @@ create_partial_grouping_paths(PlannerInfo *root,
 	 */
 	partially_grouped_rel->reltarget =
 		make_partial_grouping_target(root, grouped_rel->reltarget,
-									 extra->havingQual);
+									 extra);
 
 	if (!extra->partial_costs_set)
 	{

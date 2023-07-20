@@ -126,7 +126,8 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 			strcmp(def->defname, "async_capable") == 0 ||
 			strcmp(def->defname, "parallel_commit") == 0 ||
 			strcmp(def->defname, "parallel_abort") == 0 ||
-			strcmp(def->defname, "keep_connections") == 0)
+			strcmp(def->defname, "keep_connections") == 0 ||
+			strcmp(def->defname, "check_partial_aggregate_support") == 0)
 		{
 			/* these accept only boolean values */
 			(void) defGetBoolean(def);
@@ -268,6 +269,7 @@ InitPgFdwOptions(void)
 		/* batch_size is available on both server and table */
 		{"batch_size", ForeignServerRelationId, false},
 		{"batch_size", ForeignTableRelationId, false},
+		{"check_partial_aggregate_support", ForeignServerRelationId, false},
 		/* async_capable is available on both server and table */
 		{"async_capable", ForeignServerRelationId, false},
 		{"async_capable", ForeignTableRelationId, false},

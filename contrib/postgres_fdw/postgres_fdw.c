@@ -36,6 +36,7 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/planmain.h"
+#include "optimizer/planner.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
 #include "optimizer/tlist.h"
@@ -519,7 +520,7 @@ static bool foreign_join_ok(PlannerInfo *root, RelOptInfo *joinrel,
 							JoinType jointype, RelOptInfo *outerrel, RelOptInfo *innerrel,
 							JoinPathExtraData *extra);
 static bool foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
-								Node *havingQual);
+								GroupPathExtraData *extra);
 static List *get_useful_pathkeys_for_relation(PlannerInfo *root,
 											  RelOptInfo *rel);
 static List *get_useful_ecs_for_relation(PlannerInfo *root, RelOptInfo *rel);
@@ -650,6 +651,8 @@ postgresGetForeignRelSize(PlannerInfo *root,
 	fpinfo->fdw_tuple_cost = DEFAULT_FDW_TUPLE_COST;
 	fpinfo->shippable_extensions = NIL;
 	fpinfo->fetch_size = 100;
+	fpinfo->check_partial_aggregate_support = false;
+	fpinfo->remoteversion = 0;
 	fpinfo->async_capable = false;
 
 	apply_server_options(fpinfo);
@@ -661,7 +664,7 @@ postgresGetForeignRelSize(PlannerInfo *root,
 	 * should match what ExecCheckPermissions() does.  If we fail due to lack
 	 * of permissions, the query would have failed at runtime anyway.
 	 */
-	if (fpinfo->use_remote_estimate)
+	if (fpinfo->use_remote_estimate || fpinfo->check_partial_aggregate_support)
 	{
 		Oid			userid;
 
@@ -5946,9 +5949,10 @@ foreign_join_ok(PlannerInfo *root, RelOptInfo *joinrel, JoinType jointype,
 	fpinfo->pushdown_safe = true;
 
 	/* Get user mapping */
-	if (fpinfo->use_remote_estimate)
+	if (fpinfo->use_remote_estimate || fpinfo->check_partial_aggregate_support)
 	{
-		if (fpinfo_o->use_remote_estimate)
+		if (fpinfo_o->use_remote_estimate ||
+			fpinfo_o->check_partial_aggregate_support)
 			fpinfo->user = fpinfo_o->user;
 		else
 			fpinfo->user = fpinfo_i->user;
@@ -6127,6 +6131,8 @@ apply_server_options(PgFdwRelationInfo *fpinfo)
 				ExtractExtensionList(defGetString(def), false);
 		else if (strcmp(def->defname, "fetch_size") == 0)
 			(void) parse_int(defGetString(def), &fpinfo->fetch_size, 0, NULL);
+		else if (strcmp(def->defname, "check_partial_aggregate_support") == 0)
+			fpinfo->check_partial_aggregate_support = defGetBoolean(def);
 		else if (strcmp(def->defname, "async_capable") == 0)
 			fpinfo->async_capable = defGetBoolean(def);
 	}
@@ -6186,6 +6192,8 @@ merge_fdw_options(PgFdwRelationInfo *fpinfo,
 	fpinfo->shippable_extensions = fpinfo_o->shippable_extensions;
 	fpinfo->use_remote_estimate = fpinfo_o->use_remote_estimate;
 	fpinfo->fetch_size = fpinfo_o->fetch_size;
+	fpinfo->check_partial_aggregate_support = fpinfo_o->check_partial_aggregate_support;
+	fpinfo->remoteversion = fpinfo_o->remoteversion;
 	fpinfo->async_capable = fpinfo_o->async_capable;
 
 	/* Merge the table level options from either side of the join. */
@@ -6366,7 +6374,7 @@ postgresGetForeignJoinPaths(PlannerInfo *root,
  */
 static bool
 foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
-					Node *havingQual)
+					GroupPathExtraData *extra)
 {
 	Query	   *query = root->parse;
 	PgFdwRelationInfo *fpinfo = (PgFdwRelationInfo *) grouped_rel->fdw_private;
@@ -6375,6 +6383,7 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
 	ListCell   *lc;
 	int			i;
 	List	   *tlist = NIL;
+	bool		partial = extra->patype == PARTITIONWISE_AGGREGATE_PARTIAL;
 
 	/* We currently don't support pushing Grouping Sets. */
 	if (query->groupingSets)
@@ -6408,6 +6417,12 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
 	 * a node, as long as it's not at top level; then no match is possible.
 	 */
 	i = 0;
+	fpinfo->group_clause = query->groupClause;
+	if (partial)
+	{
+		fpinfo->group_clause = extra->groupClausePartial;
+		grouping_target = extra->partial_target;
+	}
 	foreach(lc, grouping_target->exprs)
 	{
 		Expr	   *expr = (Expr *) lfirst(lc);
@@ -6419,7 +6434,7 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
 		 * check the whole GROUP BY clause not just processed_groupClause,
 		 * because we will ship all of it, cf. appendGroupByClause.
 		 */
-		if (sgref && get_sortgroupref_clause_noerr(sgref, query->groupClause))
+		if (sgref && get_sortgroupref_clause_noerr(sgref, fpinfo->group_clause))
 		{
 			TargetEntry *tle;
 
@@ -6505,9 +6520,9 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
 	 * Classify the pushable and non-pushable HAVING clauses and save them in
 	 * remote_conds and local_conds of the grouped rel's fpinfo.
 	 */
-	if (havingQual)
+	if (extra->havingQual)
 	{
-		foreach(lc, (List *) havingQual)
+		foreach(lc, (List *) extra->havingQual)
 		{
 			Expr	   *expr = (Expr *) lfirst(lc);
 			RestrictInfo *rinfo;
@@ -6527,7 +6542,7 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
 									  grouped_rel->relids,
 									  NULL,
 									  NULL);
-			if (is_foreign_expr(root, grouped_rel, expr))
+			if (is_foreign_expr(root, grouped_rel, expr) && !partial)
 				fpinfo->remote_conds = lappend(fpinfo->remote_conds, rinfo);
 			else
 				fpinfo->local_conds = lappend(fpinfo->local_conds, rinfo);
@@ -6545,6 +6560,12 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
 		foreach(lc, fpinfo->local_conds)
 		{
 			RestrictInfo *rinfo = lfirst_node(RestrictInfo, lc);
+
+			if (partial)
+			{
+				rinfo = copyObject(rinfo);
+				lfirst(lc) = rinfo;
+			}
 
 			aggvars = list_concat(aggvars,
 								  pull_var_clause((Node *) rinfo->clause,
@@ -6564,7 +6585,12 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
 			 */
 			if (IsA(expr, Aggref))
 			{
-				if (!is_foreign_expr(root, grouped_rel, expr))
+				if (partial)
+				{
+					mark_partial_aggref((Aggref *) expr, AGGSPLIT_INITIAL_SERIAL);
+					continue;
+				}
+				else if (!is_foreign_expr(root, grouped_rel, expr))
 					return false;
 
 				tlist = add_to_flat_tlist(tlist, list_make1(expr));
@@ -6621,6 +6647,7 @@ postgresGetForeignUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 
 	/* Ignore stages we don't support; and skip any duplicate calls. */
 	if ((stage != UPPERREL_GROUP_AGG &&
+		 stage != UPPERREL_PARTIAL_GROUP_AGG &&
 		 stage != UPPERREL_ORDERED &&
 		 stage != UPPERREL_FINAL) ||
 		output_rel->fdw_private)
@@ -6634,6 +6661,10 @@ postgresGetForeignUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 	switch (stage)
 	{
 		case UPPERREL_GROUP_AGG:
+			add_foreign_grouping_paths(root, input_rel, output_rel,
+									   (GroupPathExtraData *) extra);
+			break;
+		case UPPERREL_PARTIAL_GROUP_AGG:
 			add_foreign_grouping_paths(root, input_rel, output_rel,
 									   (GroupPathExtraData *) extra);
 			break;
@@ -6677,7 +6708,8 @@ add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 		return;
 
 	Assert(extra->patype == PARTITIONWISE_AGGREGATE_NONE ||
-		   extra->patype == PARTITIONWISE_AGGREGATE_FULL);
+		   extra->patype == PARTITIONWISE_AGGREGATE_FULL ||
+		   extra->patype == PARTITIONWISE_AGGREGATE_PARTIAL);
 
 	/* save the input_rel as outerrel in fpinfo */
 	fpinfo->outerrel = input_rel;
@@ -6697,7 +6729,7 @@ add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	 * Use HAVING qual from extra. In case of child partition, it will have
 	 * translated Vars.
 	 */
-	if (!foreign_grouping_ok(root, grouped_rel, extra->havingQual))
+	if (!foreign_grouping_ok(root, grouped_rel, extra))
 		return;
 
 	/*

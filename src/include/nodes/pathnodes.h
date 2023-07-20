@@ -3244,6 +3244,8 @@ typedef struct
 	Node	   *havingQual;
 	List	   *targetList;
 	PartitionwiseAggregateType patype;
+	List	   *groupClausePartial;
+	PathTarget *partial_target;
 } GroupPathExtraData;
 
 /*

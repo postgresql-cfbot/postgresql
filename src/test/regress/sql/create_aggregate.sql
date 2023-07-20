@@ -328,3 +328,186 @@ CREATE AGGREGATE case_agg(float8)
 	"Finalfunc_modify" = read_write,
 	"Parallel" = safe
 );
+
+-- invalid: finalfunc is specified and stype is not internal
+--   even though aggpartialfunc is equal to the aggregate name
+CREATE AGGREGATE udf_avg_int4_invalid(int4) (
+	sfunc = int4_avg_accum,
+	stype = _int8,
+	finalfunc = int8_avg,
+	combinefunc = int4_avg_combine,
+	initcond = '{0,0}',
+	aggpartialfunc = udf_avg_int4_invalid
+);
+
+-- invalid: finalfunc is not equal to serialfunc and stype is internal
+--   even though aggpartialfunc is equal to the aggregate name
+CREATE AGGREGATE udf_avg_int8_invalid(int8) (
+	sfunc = int8_avg_accum,
+	stype = internal,
+	finalfunc = numeric_poly_avg,
+	combinefunc = int8_avg_combine,
+	serialfunc = int8_avg_serialize,
+	deserialfunc = int8_avg_deserialize,
+	aggpartialfunc = udf_avg_int8_invalid
+);
+
+-- invalid: aggpartialfunc which doesn't exist
+CREATE AGGREGATE nonexistent_aggpartial_agg(int8) (
+	sfunc = int8_avg_accum,
+	stype = internal,
+	finalfunc = numeric_poly_sum,
+	combinefunc = int8_avg_combine,
+	serialfunc = int8_avg_serialize,
+	deserialfunc = int8_avg_deserialize,
+	aggpartialfunc = aggpartial_foo
+);
+
+-- invalid: aggpartialfunc is specified and combinefunc isn't specified
+CREATE AGGREGATE nocombinefunc_agg(int8) (
+	sfunc = int8_avg_accum,
+	stype = internal,
+	finalfunc = numeric_poly_avg,
+	serialfunc = int8_avg_serialize,
+	deserialfunc = int8_avg_deserialize,
+	aggpartialfunc = avg_p_int8
+);
+
+-- invalid: combinefunc in agg and combinefunc in aggpartialfunc don't match
+CREATE AGGREGATE udf_avg_invalid_combinefunc(int8) (
+	sfunc = int8_avg_accum,
+	stype = internal,
+	finalfunc = numeric_poly_avg,
+	combinefunc = numeric_avg_combine,
+	serialfunc = int8_avg_serialize,
+	deserialfunc = int8_avg_deserialize,
+	aggpartialfunc = avg_p_int8
+);
+
+CREATE FUNCTION udf_float8_accum(_float8, float8) RETURNS _float8 AS
+$$ SELECT float8_accum($1, $2) $$
+LANGUAGE SQL;
+
+-- invalid: sfunc in agg and sfunc in aggpartialfunc don't match
+CREATE AGGREGATE udf_avg_invalid_sfunc(float8) (
+	sfunc = udf_float8_accum,
+	stype = _float8,
+	finalfunc = float8_avg,
+	combinefunc = float8_combine,
+	initcond = '{0,0,0}',
+	aggpartialfunc = avg_p_float8
+);
+DROP FUNCTION udf_float8_accum(_float8, float8);
+
+-- invalid: initcond in agg and initcond in aggpartialfunc don't match
+CREATE AGGREGATE udf_avg_invalid_initcond(int4) (
+	sfunc = int4_avg_accum,
+	stype = _int8,
+	initcond = '{1,0}',
+	finalfunc = int8_avg,
+	combinefunc = int4_avg_combine,
+	aggpartialfunc = avg_p_int4
+);
+
+-- invalid: aggserialfn in agg and aggserialfn in aggpartialfunc don't match
+CREATE AGGREGATE udf_avg_invalid_aggserialfn(int8) (
+	sfunc = int8_avg_accum,
+	stype = internal,
+	finalfunc = numeric_poly_avg,
+	combinefunc = int8_avg_combine,
+	serialfunc = numeric_avg_serialize,
+	deserialfunc = int8_avg_deserialize,
+	aggpartialfunc = avg_p_int8
+);
+
+-- invalid: aggdeserialfn in agg and aggdeserialfn in aggpartialfunc don't match
+CREATE AGGREGATE udf_avg_invalid_aggdeserialfn(int8) (
+	sfunc = int8_avg_accum,
+	stype = internal,
+	finalfunc = numeric_poly_avg,
+	combinefunc = int8_avg_combine,
+	serialfunc = int8_avg_serialize,
+	deserialfunc = numeric_avg_deserialize,
+	aggpartialfunc = avg_p_int8
+);
+
+-- invalid: stype is internal and aggpartialfunc's finalfunc
+-- isn't serialfunc of agg
+CREATE AGGREGATE udf_avg_p_int8(int8) (
+	sfunc = int8_avg_accum,
+	stype = internal,
+	finalfunc = numeric_avg_serialize,
+	combinefunc = int8_avg_combine,
+	serialfunc = int8_avg_serialize,
+	deserialfunc = int8_avg_deserialize
+);
+CREATE AGGREGATE udf_avg(int8) (
+	sfunc = int8_avg_accum,
+	stype = internal,
+	finalfunc = numeric_poly_avg,
+	combinefunc = int8_avg_combine,
+	serialfunc = int8_avg_serialize,
+	deserialfunc = int8_avg_deserialize,
+	aggpartialfunc = udf_avg_p_int8
+);
+
+-- invalid: stype is not internal and aggpartialfunc has finalfunc
+CREATE AGGREGATE udf_avg_p_int4_hasfinal(int4) (
+	sfunc = int4_avg_accum,
+	stype = _int8,
+	finalfunc = int8_avg,
+	combinefunc = int4_avg_combine,
+	initcond = '{0,0}'
+);
+CREATE AGGREGATE udf_avg(int4) (
+	sfunc = int4_avg_accum,
+	stype = _int8,
+	finalfunc = int8_avg,
+	combinefunc = int4_avg_combine,
+	initcond = '{0,0}',
+	aggpartialfunc = udf_avg_p_int4_hasfinal
+);
+
+-- invalid: current user doesn't have execute privilege on aggpartialfunc
+CREATE AGGREGATE udf_avg_p_int4(int4) (
+	sfunc = int4_avg_accum,
+	stype = _int8,
+	combinefunc = int4_avg_combine,
+	initcond = '{0,0}'
+);
+CREATE USER regress_priv_user1;
+GRANT ALL ON SCHEMA public TO regress_priv_user1;
+REVOKE EXECUTE ON FUNCTION udf_avg_p_int4 FROM public;
+SET SESSION AUTHORIZATION regress_priv_user1;
+
+CREATE AGGREGATE udf_avg_noprivilege(int4) (
+	sfunc = int4_avg_accum,
+	stype = _int8,
+	finalfunc = int8_avg,
+	combinefunc = int4_avg_combine,
+	initcond = '{0,0}',
+	aggpartialfunc = udf_avg_p_int4
+);
+SET SESSION AUTHORIZATION DEFAULT;
+REVOKE ALL ON SCHEMA public FROM regress_priv_user1;
+DROP USER regress_priv_user1;
+
+-- An aggregate function that is aggpartialfunc
+-- of another aggregate cannot be deleted.
+CREATE AGGREGATE udf_avg_int4_p(int4) (
+	sfunc = int4_avg_accum,
+	stype = _int8,
+	combinefunc = int4_avg_combine,
+	initcond = '{0,0}',
+	aggpartialfunc = udf_avg_int4_p
+);
+CREATE AGGREGATE udf_avg_int4(int4) (
+	sfunc = int4_avg_accum,
+	stype = _int8,
+	finalfunc = int8_avg,
+	combinefunc = int4_avg_combine,
+	initcond = '{0,0}',
+	aggpartialfunc = udf_avg_int4_p
+);
+DROP AGGREGATE udf_avg_int4_p(int4);
+DROP AGGREGATE udf_avg_int4_p(int4) CASCADE;

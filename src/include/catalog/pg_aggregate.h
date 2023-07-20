@@ -55,6 +55,9 @@ CATALOG(pg_aggregate,2600,AggregateRelationId)
 	/* function to convert bytea to transtype (0 if none) */
 	regproc		aggdeserialfn BKI_DEFAULT(-) BKI_LOOKUP_OPT(pg_proc);
 
+	/* special aggregate function for partial aggregation (0 if none) */
+	regproc		aggpartialfn BKI_DEFAULT(-) BKI_LOOKUP_OPT(pg_proc);
+
 	/* forward function for moving-aggregate mode (0 if none) */
 	regproc		aggmtransfn BKI_DEFAULT(-) BKI_LOOKUP_OPT(pg_proc);
 
@@ -164,6 +167,7 @@ extern ObjectAddress AggregateCreate(const char *aggName,
 									 List *aggmtransfnName,
 									 List *aggminvtransfnName,
 									 List *aggmfinalfnName,
+									 List *aggpartialfnName,
 									 bool finalfnExtraArgs,
 									 bool mfinalfnExtraArgs,
 									 char finalfnModify,

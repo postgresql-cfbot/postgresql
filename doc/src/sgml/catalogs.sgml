@@ -644,6 +644,19 @@
        value starts out null.
       </para></entry>
      </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>aggpartialfn</structfield> <type>regproc</type>
+       (references <link linkend="catalog-pg-proc"><structname>pg_proc</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       Partial aggregate function (zero if none).
+       See
+       <xref linkend="partial-aggregate-pushdown"/> for the
+       definition of partial aggregate function.
+      </para></entry>
+     </row>
     </tbody>
    </tgroup>
   </table>

@@ -1149,10 +1149,10 @@ mark_async_capable_plan(Plan *plan, Path *path)
 				SubqueryScan *scan_plan = (SubqueryScan *) plan;
 
 				/*
-				 * If the generated plan node includes a gating Result node,
-				 * we can't execute it asynchronously.
+				 * If the generated plan node includes a gating Result node or
+				 * a Sort node, we can't execute it asynchronously.
 				 */
-				if (IsA(plan, Result))
+				if (IsA(plan, Result) || IsA(plan, Sort))
 					return false;
 
 				/*
@@ -1170,10 +1170,10 @@ mark_async_capable_plan(Plan *plan, Path *path)
 				FdwRoutine *fdwroutine = path->parent->fdwroutine;
 
 				/*
-				 * If the generated plan node includes a gating Result node,
-				 * we can't execute it asynchronously.
+				 * If the generated plan node includes a gating Result node or
+				 * a Sort node, we can't execute it asynchronously.
 				 */
-				if (IsA(plan, Result))
+				if (IsA(plan, Result) || IsA(plan, Sort))
 					return false;
 
 				Assert(fdwroutine != NULL);
@@ -1186,9 +1186,9 @@ mark_async_capable_plan(Plan *plan, Path *path)
 
 			/*
 			 * If the generated plan node includes a Result node for the
-			 * projection, we can't execute it asynchronously.
+			 * projection or a Sort node, we can't execute it asynchronously.
 			 */
-			if (IsA(plan, Result))
+			if (IsA(plan, Result) || IsA(plan, Sort))
 				return false;
 
 			/*

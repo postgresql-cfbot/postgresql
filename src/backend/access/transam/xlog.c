@@ -376,7 +376,7 @@ typedef struct XLogwrtResult
 typedef struct
 {
 	LWLock		lock;
-	XLogRecPtr	insertingAt;
+	pg_atomic_uint64	insertingAt;
 	XLogRecPtr	lastImportantAt;
 } WALInsertLock;
 
@@ -1495,6 +1495,17 @@ WaitXLogInsertionsToFinish(XLogRecPtr upto)
 			 * calling LWLockUpdateVar.  But if it has to sleep, it will
 			 * advertise the insertion point with LWLockUpdateVar before
 			 * sleeping.
+			 *
+			 * In this loop we are only waiting for insertions that started
+			 * before WaitXLogInsertionsToFinish was called. The lack of memory
+			 * barriers in the loop means that we might see locks as "unused"
+			 * that have since become used, which is fine, because they only
+			 * can be for later insertions that we wouldn't want to wait on
+			 * anyway. And, not taking a lock to acquire the current
+			 * insertingAt value means that we might see older insertingAt
+			 * value. Which is also be fine, because if we read a too old
+			 * value, we will add ourselves to the queue, which contains atomic
+			 * operations.
 			 */
 			if (LWLockWaitForVar(&WALInsertLocks[i].l.lock,
 								 &WALInsertLocks[i].l.insertingAt,
@@ -4611,7 +4622,7 @@ XLOGShmemInit(void)
 	for (i = 0; i < NUM_XLOGINSERT_LOCKS; i++)
 	{
 		LWLockInitialize(&WALInsertLocks[i].l.lock, LWTRANCHE_WAL_INSERT);
-		WALInsertLocks[i].l.insertingAt = InvalidXLogRecPtr;
+		pg_atomic_init_u64(&WALInsertLocks[i].l.insertingAt, InvalidXLogRecPtr);
 		WALInsertLocks[i].l.lastImportantAt = InvalidXLogRecPtr;
 	}
 

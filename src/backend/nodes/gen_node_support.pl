@@ -1308,7 +1308,7 @@ _jumble${n}(JumbleState *jstate, Node *node)
 			# Track the node's location only if directly requested.
 			if ($query_jumble_location)
 			{
-				print $jff "\tJUMBLE_LOCATION($f);\n"
+				print $jff "\tJUMBLE_LOCATION($f, false);\n"
 				  unless $query_jumble_ignore;
 			}
 		}

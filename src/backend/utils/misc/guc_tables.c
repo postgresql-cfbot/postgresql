@@ -1999,6 +1999,16 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"query_id_const_merge", PGC_SUSET, STATS_MONITORING,
+			gettext_noop("Sets whether an array of constants will contribute to"
+						 " query identified computation."),
+		},
+		&query_id_const_merge,
+		false,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL, NULL

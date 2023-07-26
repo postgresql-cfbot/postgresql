@@ -4391,6 +4391,7 @@ create_nestloop_plan(PlannerInfo *root,
 	{
 		extract_actual_join_clauses(joinrestrictclauses,
 									best_path->jpath.path.parent->relids,
+									best_path->jpath.ojrelids,
 									&joinclauses, &otherclauses);
 	}
 	else
@@ -4479,6 +4480,7 @@ create_mergejoin_plan(PlannerInfo *root,
 	{
 		extract_actual_join_clauses(joinclauses,
 									best_path->jpath.path.parent->relids,
+									best_path->jpath.ojrelids,
 									&joinclauses, &otherclauses);
 	}
 	else
@@ -4781,6 +4783,7 @@ create_hashjoin_plan(PlannerInfo *root,
 	{
 		extract_actual_join_clauses(joinclauses,
 									best_path->jpath.path.parent->relids,
+									best_path->jpath.ojrelids,
 									&joinclauses, &otherclauses);
 	}
 	else

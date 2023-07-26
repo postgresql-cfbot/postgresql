@@ -525,6 +525,7 @@ transformColumnRef(ParseState *pstate, ColumnRef *cref)
 		case EXPR_KIND_LIMIT:
 		case EXPR_KIND_OFFSET:
 		case EXPR_KIND_RETURNING:
+		case EXPR_KIND_MERGE_RETURNING:
 		case EXPR_KIND_VALUES:
 		case EXPR_KIND_VALUES_SINGLE:
 		case EXPR_KIND_CHECK_CONSTRAINT:
@@ -1751,6 +1752,7 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 		case EXPR_KIND_LIMIT:
 		case EXPR_KIND_OFFSET:
 		case EXPR_KIND_RETURNING:
+		case EXPR_KIND_MERGE_RETURNING:
 		case EXPR_KIND_VALUES:
 		case EXPR_KIND_VALUES_SINGLE:
 		case EXPR_KIND_CYCLE_MARK:
@@ -3099,6 +3101,7 @@ ParseExprKindName(ParseExprKind exprKind)
 		case EXPR_KIND_OFFSET:
 			return "OFFSET";
 		case EXPR_KIND_RETURNING:
+		case EXPR_KIND_MERGE_RETURNING:
 			return "RETURNING";
 		case EXPR_KIND_VALUES:
 		case EXPR_KIND_VALUES_SINGLE:

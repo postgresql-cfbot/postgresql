@@ -307,6 +307,63 @@ replace_outer_grouping(PlannerInfo *root, GroupingFunc *grp)
 }
 
 /*
+ * Generate a Param node to replace the given FuncExpr expression, which is
+ * expected to be a merge support function, if it belongs to an upper-level
+ * MERGE query. Otherwise NULL will be returned.
+ *
+ * A NULL return value indicates either that the merge support function
+ * belongs to a MERGE query at this query level, or that there is no MERGE
+ * query at all. In both cases, the caller is expected to leave the FuncExpr
+ * node unaltered, so that it is executed at this query level (in the latter
+ * case, it is up to the merge support function to decide how to handle being
+ * called outside of a MERGE query).
+ */
+Param *
+replace_outer_merge_support_function(PlannerInfo *root, FuncExpr *func)
+{
+	Param	   *retval;
+	PlannerParamItem *pitem;
+	Index		levelsup;
+	Oid			ptype = exprType((Node *) func);
+
+	/* Find the upper-level MERGE query the function belongs to */
+	levelsup = 0;
+	while (root->parse->commandType != CMD_MERGE)
+	{
+		root = root->parent_root;
+		if (root == NULL)
+			return NULL;		/* Not in a MERGE query */
+		levelsup++;
+	}
+	if (levelsup == 0)
+		return NULL;			/* Local MERGE query at this level */
+
+	/*
+	 * It does not seem worthwhile to try to de-duplicate references to outer
+	 * merge support functions.  Just make a new slot every time.
+	 */
+	func = copyObject(func);
+
+	pitem = makeNode(PlannerParamItem);
+	pitem->item = (Node *) func;
+	pitem->paramId = list_length(root->glob->paramExecTypes);
+	root->glob->paramExecTypes = lappend_oid(root->glob->paramExecTypes,
+											 ptype);
+
+	root->plan_params = lappend(root->plan_params, pitem);
+
+	retval = makeNode(Param);
+	retval->paramkind = PARAM_EXEC;
+	retval->paramid = pitem->paramId;
+	retval->paramtype = ptype;
+	retval->paramtypmod = -1;
+	retval->paramcollid = InvalidOid;
+	retval->location = func->location;
+
+	return retval;
+}
+
+/*
  * Generate a Param node to replace the given Var,
  * which is expected to come from some upper NestLoop plan node.
  * Record the need for the Var in root->curOuterParams.

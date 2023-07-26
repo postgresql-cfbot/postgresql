@@ -7183,8 +7183,13 @@ get_merge_query_def(Query *query, deparse_context *context,
 			appendStringInfoString(buf, "DO NOTHING");
 	}
 
-	/* No RETURNING support in MERGE yet */
-	Assert(query->returningList == NIL);
+	/* Add RETURNING if present */
+	if (query->returningList)
+	{
+		appendContextKeyword(context, " RETURNING",
+							 -PRETTYINDENT_STD, PRETTYINDENT_STD, 1);
+		get_target_list(query->returningList, context, NULL, colNamesVisible);
+	}
 }
 
 

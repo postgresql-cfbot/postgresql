@@ -12043,4 +12043,14 @@
   proname => 'any_value_transfn', prorettype => 'anyelement',
   proargtypes => 'anyelement anyelement', prosrc => 'any_value_transfn' },
 
+# MERGE support functions
+{ oid => '9499', descr => 'command type of current MERGE action',
+  proname => 'pg_merge_action',  provolatile => 'v', proparallel => 'r',
+  prorettype => 'text', proargtypes => '',
+  prosrc => 'pg_merge_action' },
+{ oid => '9500', descr => 'index of current MERGE WHEN clause',
+  proname => 'pg_merge_when_clause_number',  provolatile => 'v',
+  proparallel => 'r', prorettype => 'int4', proargtypes => '',
+  prosrc => 'pg_merge_when_clause_number' },
+
 ]

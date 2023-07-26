@@ -18,6 +18,7 @@
 
 #include "access/htup_details.h"
 #include "catalog/pg_operator.h"
+#include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
 #include "executor/executor.h"
 #include "miscadmin.h"
@@ -35,6 +36,7 @@
 #include "parser/parse_relation.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/builtins.h"
+#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
@@ -1846,7 +1848,8 @@ convert_EXISTS_to_ANY(PlannerInfo *root, Query *subselect,
 /*
  * Replace correlation vars (uplevel vars) with Params.
  *
- * Uplevel PlaceHolderVars and aggregates are replaced, too.
+ * Uplevel PlaceHolderVars, aggregates, GROUPING() expressions and merge
+ * support functions are replaced, too.
  *
  * Note: it is critical that this runs immediately after SS_process_sublinks.
  * Since we do not recurse into the arguments of uplevel PHVs and aggregates,
@@ -1899,6 +1902,22 @@ replace_correlation_vars_mutator(Node *node, PlannerInfo *root)
 	{
 		if (((GroupingFunc *) node)->agglevelsup > 0)
 			return (Node *) replace_outer_grouping(root, (GroupingFunc *) node);
+	}
+	if (IsA(node, FuncExpr))
+	{
+		if (IsMergeSupportFunction(((FuncExpr *) node)->funcid))
+		{
+			Param	   *param;
+
+			/*
+			 * Replace with a Param, if it belongs to an upper-level MERGE
+			 * query. Otherwise, leave it be.
+			 */
+			param = replace_outer_merge_support_function(root,
+														 (FuncExpr *) node);
+			if (param)
+				return (Node *) param;
+		}
 	}
 	return expression_tree_mutator(node,
 								   replace_correlation_vars_mutator,

@@ -160,4 +160,11 @@ extern void assign_xlog_sync_method(int new_sync_method, void *extra);
 extern bool check_io_direct(char **newval, void **extra, GucSource source);
 extern void assign_io_direct(const char *newval, void *extra);
 
+extern bool check_local_preload_libraries(char **newval, void **extra,
+										  GucSource source);
+extern bool check_session_preload_libraries(char **newval, void **extra,
+											GucSource source);
+extern bool check_shared_preload_libraries(char **newval, void **extra,
+										   GucSource source);
+
 #endif							/* GUC_HOOKS_H */

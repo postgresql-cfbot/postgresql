@@ -129,7 +129,7 @@ add_paths_to_joinrel(PlannerInfo *root,
 					 List *restrictlist)
 {
 	JoinPathExtraData extra;
-	bool		mergejoin_allowed = true;
+	bool		mergejoin_allowed = !(jointype == JOIN_RIGHT_SEMI);
 	ListCell   *lc;
 	Relids		joinrelids;
 
@@ -206,7 +206,8 @@ add_paths_to_joinrel(PlannerInfo *root,
 	 * way of implementing a full outer join, so override enable_mergejoin if
 	 * it's a full join.
 	 */
-	if (enable_mergejoin || jointype == JOIN_FULL)
+	if ((enable_mergejoin || jointype == JOIN_FULL) &&
+		jointype != JOIN_RIGHT_SEMI)
 		extra.mergeclause_list = select_mergejoin_clauses(root,
 														  joinrel,
 														  outerrel,
@@ -2269,13 +2270,14 @@ hash_inner_and_outer(PlannerInfo *root,
 			 * total inner path will also be parallel-safe, but if not, we'll
 			 * have to search for the cheapest safe, unparameterized inner
 			 * path.  If doing JOIN_UNIQUE_INNER, we can't use any alternative
-			 * inner path.  If full, right, or right-anti join, we can't use
-			 * parallelism (building the hash table in each backend) because
-			 * no one process has all the match bits.
+			 * inner path.  If full, right, right-anti or right-semi join, we
+			 * can't use parallelism (building the hash table in each backend)
+			 * because no one process has all the match bits.
 			 */
 			if (save_jointype == JOIN_FULL ||
 				save_jointype == JOIN_RIGHT ||
-				save_jointype == JOIN_RIGHT_ANTI)
+				save_jointype == JOIN_RIGHT_ANTI ||
+				save_jointype == JOIN_RIGHT_SEMI)
 				cheapest_safe_inner = NULL;
 			else if (cheapest_total_inner->parallel_safe)
 				cheapest_safe_inner = cheapest_total_inner;

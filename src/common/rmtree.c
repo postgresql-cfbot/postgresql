@@ -55,7 +55,7 @@ rmtree(const char *path, bool rmtopdir)
 	bool		result = true;
 	size_t		dirnames_size = 0;
 	size_t		dirnames_capacity = 8;
-	char	  **dirnames = palloc(sizeof(char *) * dirnames_capacity);
+	char	  **dirnames;
 
 	dir = OPENDIR(path);
 	if (dir == NULL)
@@ -64,6 +64,7 @@ rmtree(const char *path, bool rmtopdir)
 		return false;
 	}
 
+	dirnames = (char **) palloc(sizeof(char *) * dirnames_capacity);
 	while (errno = 0, (de = readdir(dir)))
 	{
 		if (strcmp(de->d_name, ".") == 0 ||

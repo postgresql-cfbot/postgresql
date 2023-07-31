@@ -652,6 +652,7 @@ CopyFrom(CopyFromState cstate)
 	bool		has_before_insert_row_trig;
 	bool		has_instead_insert_row_trig;
 	bool		leafpart_use_multi_insert = false;
+	ErrorSaveContext escontext = {T_ErrorSaveContext};
 
 	Assert(cstate->rel);
 	Assert(list_length(cstate->range_table) == 1);
@@ -750,6 +751,13 @@ CopyFrom(CopyFromState cstate)
 					 errmsg("cannot perform COPY FREEZE because the table was not created or truncated in the current subtransaction")));
 
 		ti_options |= TABLE_INSERT_FROZEN;
+	}
+
+	/* Set up soft error handler for IGNORE_DATATYPE_ERRORS */
+	if (cstate->opts.ignore_datatype_errors)
+	{
+		escontext.details_wanted = true;
+		cstate->escontext = escontext;
 	}
 
 	/*
@@ -987,7 +995,31 @@ CopyFrom(CopyFromState cstate)
 
 		/* Directly store the values/nulls array in the slot */
 		if (!NextCopyFrom(cstate, econtext, myslot->tts_values, myslot->tts_isnull))
+		{
+			if (cstate->opts.ignore_datatype_errors && cstate->ignored_errors > 0)
+				ereport(WARNING,
+						errmsg("%zd rows were skipped due to data type incompatibility",
+							cstate->ignored_errors));
 			break;
+		}
+
+		/* Soft error occured, skip this tuple and cleanup the escontext */
+		if (cstate->escontext.error_occurred)
+		{
+			ErrorSaveContext new_escontext = {T_ErrorSaveContext};
+
+			/* adjust elevel so we don't jump out */
+			cstate->escontext.error_data->elevel = WARNING;
+			/* despite the name, this won't raise an error since elevel is WARNING now */
+			ThrowErrorData(cstate->escontext.error_data);
+
+			ExecClearTuple(myslot);
+
+			new_escontext.details_wanted = true;
+			cstate->escontext = new_escontext;
+
+			continue;
+		}
 
 		ExecStoreVirtualTuple(myslot);
 

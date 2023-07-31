@@ -419,6 +419,7 @@ ProcessCopyOptions(ParseState *pstate,
 	bool		format_specified = false;
 	bool		freeze_specified = false;
 	bool		header_specified = false;
+	bool		ignore_datatype_errors_specified = false;
 	ListCell   *option;
 
 	/* Support external use for option sanity checking */
@@ -457,6 +458,13 @@ ProcessCopyOptions(ParseState *pstate,
 				errorConflictingDefElem(defel, pstate);
 			freeze_specified = true;
 			opts_out->freeze = defGetBoolean(defel);
+		}
+		else if (strcmp(defel->defname, "ignore_datatype_errors") == 0)
+		{
+			if (ignore_datatype_errors_specified)
+				errorConflictingDefElem(defel, pstate);
+			ignore_datatype_errors_specified = true;
+			opts_out->ignore_datatype_errors = defGetBoolean(defel);
 		}
 		else if (strcmp(defel->defname, "delimiter") == 0)
 		{
@@ -576,7 +584,7 @@ ProcessCopyOptions(ParseState *pstate,
 	}
 
 	/*
-	 * Check for incompatible options (must do these two before inserting
+	 * Check for incompatible options (must do these before inserting
 	 * defaults)
 	 */
 	if (opts_out->binary && opts_out->delim)
@@ -593,6 +601,11 @@ ProcessCopyOptions(ParseState *pstate,
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("cannot specify DEFAULT in BINARY mode")));
+
+	if (opts_out->binary && opts_out->ignore_datatype_errors)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("cannot specify IGNORE_DATATYPE_ERRORS in BINARY mode")));
 
 	/* Set defaults for omitted options */
 	if (!opts_out->delim)

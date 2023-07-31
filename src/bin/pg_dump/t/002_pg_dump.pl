@@ -2117,6 +2117,25 @@ my %tests = (
 		},
 	},
 
+	'CREATE FUNCTION dump_test.login_event_trigger_func' => {
+		create_order => 32,
+		create_sql   => 'CREATE FUNCTION dump_test.login_event_trigger_func()
+					   RETURNS event_trigger LANGUAGE plpgsql
+					   AS $$ BEGIN RETURN; END;$$;',
+		regexp => qr/^
+			\QCREATE FUNCTION dump_test.login_event_trigger_func() RETURNS event_trigger\E
+			\n\s+\QLANGUAGE plpgsql\E
+			\n\s+AS\ \$\$
+			\Q BEGIN RETURN; END;\E
+			\$\$;/xm,
+		like =>
+		  { %full_runs, %dump_test_schema_runs, section_pre_data => 1, },
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement    => 1,
+		},
+	},
+
 	'CREATE OPERATOR FAMILY dump_test.op_family' => {
 		create_order => 73,
 		create_sql =>
@@ -2225,6 +2244,19 @@ my %tests = (
 			\QCREATE EVENT TRIGGER test_event_trigger \E
 			\QON ddl_command_start\E
 			\n\s+\QEXECUTE FUNCTION dump_test.event_trigger_func();\E
+			/xm,
+		like => { %full_runs, section_post_data => 1, },
+	},
+
+	'CREATE EVENT TRIGGER test_login_event_trigger' => {
+		create_order => 33,
+		create_sql   => 'CREATE EVENT TRIGGER test_login_event_trigger
+					   ON login
+					   EXECUTE FUNCTION dump_test.login_event_trigger_func();',
+		regexp => qr/^
+			\QCREATE EVENT TRIGGER test_login_event_trigger \E
+			\QON login\E
+			\n\s+\QEXECUTE FUNCTION dump_test.login_event_trigger_func();\E
 			/xm,
 		like => { %full_runs, section_post_data => 1, },
 	},

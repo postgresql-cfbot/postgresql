@@ -20,6 +20,7 @@
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
+#include "catalog/pg_database.h"
 #include "catalog/pg_event_trigger.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
@@ -37,15 +38,18 @@
 #include "miscadmin.h"
 #include "parser/parse_func.h"
 #include "pgstat.h"
+#include "storage/lmgr.h"
 #include "tcop/deparse_utility.h"
 #include "tcop/utility.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/evtcache.h"
 #include "utils/fmgroids.h"
+#include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+#include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
 typedef struct EventTriggerQueryState
@@ -130,6 +134,7 @@ CreateEventTrigger(CreateEventTrigStmt *stmt)
 	if (strcmp(stmt->eventname, "ddl_command_start") != 0 &&
 		strcmp(stmt->eventname, "ddl_command_end") != 0 &&
 		strcmp(stmt->eventname, "sql_drop") != 0 &&
+		strcmp(stmt->eventname, "login") != 0 &&
 		strcmp(stmt->eventname, "table_rewrite") != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
@@ -579,10 +584,15 @@ EventTriggerCommonSetup(Node *parsetree,
 	{
 		CommandTag	dbgtag;
 
-		dbgtag = CreateCommandTag(parsetree);
+		if (event == EVT_Login)
+			dbgtag = CMDTAG_LOGIN;
+		else
+			dbgtag = CreateCommandTag(parsetree);
+
 		if (event == EVT_DDLCommandStart ||
 			event == EVT_DDLCommandEnd ||
-			event == EVT_SQLDrop)
+			event == EVT_SQLDrop ||
+			event == EVT_Login)
 		{
 			if (!command_tag_event_trigger_ok(dbgtag))
 				elog(ERROR, "unexpected command tag \"%s\"", GetCommandTagName(dbgtag));
@@ -601,7 +611,10 @@ EventTriggerCommonSetup(Node *parsetree,
 		return NIL;
 
 	/* Get the command tag. */
-	tag = CreateCommandTag(parsetree);
+	if (event == EVT_Login)
+		tag = CMDTAG_LOGIN;
+	else
+		tag = CreateCommandTag(parsetree);
 
 	/*
 	 * Filter list of event triggers by command tag, and copy them into our
@@ -797,6 +810,46 @@ EventTriggerSQLDrop(Node *parsetree)
 
 	/* Cleanup. */
 	list_free(runlist);
+}
+
+/*
+ * Fire login event triggers if any are present.
+ */
+void
+EventTriggerOnLogin(void)
+{
+	List	   *runlist;
+	EventTriggerData trigdata;
+
+	/*
+	 * See EventTriggerDDLCommandStart for a discussion about why event
+	 * triggers are disabled in single user mode.
+	 */
+	if (!IsUnderPostmaster || !OidIsValid(MyDatabaseId))
+		return;
+
+	StartTransactionCommand();
+
+	/* Find login triggers and run what was found */
+	runlist = EventTriggerCommonSetup(NULL,
+										EVT_Login, "login",
+										&trigdata);
+
+	if (runlist != NIL)
+	{
+		/* Event trigger execution may require an active snapshot. */
+		PushActiveSnapshot(GetTransactionSnapshot());
+
+		/* Run the triggers. */
+		EventTriggerInvoke(runlist, &trigdata);
+
+		/* Cleanup. */
+		list_free(runlist);
+
+		PopActiveSnapshot();
+	}
+
+	CommitTransactionCommand();
 }
 
 

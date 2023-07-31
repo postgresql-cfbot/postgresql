@@ -92,6 +92,74 @@ WHERE t1.unique1 < 1000;
   1000 | 9.5000000000000000
 (1 row)
 
+-- Try with LATERAL references within PlaceHolderVars at a baserel
+SELECT explain_memoize('
+SELECT COUNT(*),AVG(t1.twenty) FROM tenk1 t1 LEFT JOIN
+LATERAL (SELECT t1.twenty as c1, t2.unique1 as c2 FROM tenk1 t2) s on true
+WHERE s.c1 = s.c2 and t1.unique1 < 1000;', false);
+                                      explain_memoize                                      
+-------------------------------------------------------------------------------------------
+ Aggregate (actual rows=1 loops=N)
+   ->  Nested Loop (actual rows=1000 loops=N)
+         ->  Seq Scan on tenk1 t1 (actual rows=1000 loops=N)
+               Filter: (unique1 < 1000)
+               Rows Removed by Filter: 9000
+         ->  Memoize (actual rows=1 loops=N)
+               Cache Key: t1.twenty
+               Cache Mode: binary
+               Hits: 980  Misses: 20  Evictions: Zero  Overflows: 0  Memory Usage: NkB
+               ->  Index Only Scan using tenk1_unique1 on tenk1 t2 (actual rows=1 loops=N)
+                     Filter: (t1.twenty = unique1)
+                     Rows Removed by Filter: 9999
+                     Heap Fetches: N
+(13 rows)
+
+-- And check we get the expected results.
+SELECT COUNT(*), AVG(t1.twenty) FROM tenk1 t1 LEFT JOIN
+LATERAL (SELECT t1.twenty as c1, t2.unique1 as c2 FROM tenk1 t2) s on true
+WHERE s.c1 = s.c2 and t1.unique1 < 1000;
+ count |        avg         
+-------+--------------------
+  1000 | 9.5000000000000000
+(1 row)
+
+-- Try with LATERAL references within PlaceHolderVars at a joinrel
+SELECT explain_memoize('
+SELECT COUNT(*),AVG(t1.twenty) FROM tenk1 t1 LEFT JOIN
+LATERAL (SELECT t1.twenty as c1, t2.unique1 as c2 FROM tenk1 t2, tenk1 t3
+         WHERE t3.unique1 = 1) s on true
+WHERE s.c1 = s.c2 and t1.unique1 < 1000;', false);
+                                           explain_memoize                                           
+-----------------------------------------------------------------------------------------------------
+ Aggregate (actual rows=1 loops=N)
+   ->  Nested Loop (actual rows=1000 loops=N)
+         ->  Seq Scan on tenk1 t1 (actual rows=1000 loops=N)
+               Filter: (unique1 < 1000)
+               Rows Removed by Filter: 9000
+         ->  Memoize (actual rows=1 loops=N)
+               Cache Key: t1.twenty
+               Cache Mode: binary
+               Hits: 980  Misses: 20  Evictions: Zero  Overflows: 0  Memory Usage: NkB
+               ->  Nested Loop (actual rows=1 loops=N)
+                     Join Filter: (t1.twenty = t2.unique1)
+                     Rows Removed by Join Filter: 9999
+                     ->  Index Only Scan using tenk1_unique1 on tenk1 t3 (actual rows=1 loops=N)
+                           Index Cond: (unique1 = 1)
+                           Heap Fetches: N
+                     ->  Index Only Scan using tenk1_unique1 on tenk1 t2 (actual rows=10000 loops=N)
+                           Heap Fetches: N
+(17 rows)
+
+-- And check we get the expected results.
+SELECT COUNT(*),AVG(t1.twenty) FROM tenk1 t1 LEFT JOIN
+LATERAL (SELECT t1.twenty as c1, t2.unique1 as c2 FROM tenk1 t2, tenk1 t3
+         WHERE t3.unique1 = 1) s on true
+WHERE s.c1 = s.c2 and t1.unique1 < 1000;
+ count |        avg         
+-------+--------------------
+  1000 | 9.5000000000000000
+(1 row)
+
 -- Reduce work_mem and hash_mem_multiplier so that we see some cache evictions
 SET work_mem TO '64kB';
 SET hash_mem_multiplier TO 1.0;

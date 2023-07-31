@@ -661,3 +661,37 @@ if test x"$Ac_cachevar" = x"yes"; then
 fi
 undefine([Ac_cachevar])dnl
 ])# PGAC_ARMV8_CRC32C_INTRINSICS
+
+# PGAC_LOONGARCH_CRC32C_INTRINSICS
+# ---------------------------
+# Check if the compiler supports the LoongArch CRCC instructions, using
+# __builtin_loongarch_crcc_w_b_w, __builtin_loongarch_crcc_w_h_w,
+# __builtin_loongarch_crcc_w_w_w and __builtin_loongarch_crcc_w_d_w
+# intrinsic functions.
+#
+# If the intrinsics are supported, sets pgac_loongarch_crc32c_intrinsics,
+# and CFLAGS_CRC.
+AC_DEFUN([PGAC_LOONGARCH_CRC32C_INTRINSICS],
+[define([Ac_cachevar], [AS_TR_SH([pgac_cv_loongarch_crc32c_intrinsics_$1])])dnl
+AC_CACHE_CHECK(
+  [for __builtin_loongarch_crcc_w_b_w, __builtin_loongarch_crcc_w_h_w, __builtin_loongarch_crcc_w_w_w and __builtin_loongarch_crcc_w_d_w with CFLAGS=$1],
+  [Ac_cachevar],
+[pgac_save_CFLAGS=$CFLAGS
+CFLAGS="$pgac_save_CFLAGS $1"
+AC_LINK_IFELSE([AC_LANG_PROGRAM([],
+  [unsigned int crc = 0;
+   crc = __builtin_loongarch_crcc_w_b_w(0, crc);
+   crc = __builtin_loongarch_crcc_w_h_w(0, crc);
+   crc = __builtin_loongarch_crcc_w_w_w(0, crc);
+   crc = __builtin_loongarch_crcc_w_d_w(0, crc);
+   /* return computed value, to prevent the above being optimized away */
+   return crc == 0;])],
+  [Ac_cachevar=yes],
+  [Ac_cachevar=no])
+CFLAGS="$pgac_save_CFLAGS"])
+if test x"$Ac_cachevar" = x"yes"; then
+  CFLAGS_CRC="$1"
+  pgac_loongarch_crc32c_intrinsics=yes
+fi
+undefine([Ac_cachevar])dnl
+])# PGAC_LOONGARCH_CRC32C_INTRINSICS

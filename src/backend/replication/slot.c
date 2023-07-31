@@ -829,8 +829,11 @@ ReplicationSlotPersist(void)
 /*
  * Compute the oldest xmin across all slots and store it in the ProcArray.
  *
- * If already_locked is true, ProcArrayLock has already been acquired
- * exclusively.
+ * If already_locked is true, both the ReplicationSlotControlLock and
+ * the ProcArrayLock have already been acquired exclusively.
+ *
+ * Note that the ReplicationSlotControlLock must be locked first to avoid
+ * deadlocks.
  */
 void
 ReplicationSlotsComputeRequiredXmin(bool already_locked)
@@ -840,8 +843,26 @@ ReplicationSlotsComputeRequiredXmin(bool already_locked)
 	TransactionId agg_catalog_xmin = InvalidTransactionId;
 
 	Assert(ReplicationSlotCtl != NULL);
+	Assert(!already_locked ||
+		   (LWLockHeldByMeInMode(ReplicationSlotControlLock, LW_EXCLUSIVE) &&
+			LWLockHeldByMeInMode(ProcArrayLock, LW_EXCLUSIVE)));
 
-	LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+	/*
+	 * Hold the ReplicationSlotControlLock exclusive until after updating
+	 * the slot xmin values, so no backend can compute and update the new
+	 * value concurrently.
+	 *
+	 * One might think that we can hold the ProcArrayLock exclusively,
+	 * compute the xmin values while holding the ReplicationSlotControlLock
+	 * in shared mode, and update the slot xmin values, but it could increase
+	 * lock contention on the ProcArrayLock, which is not great since this
+	 * function can be called at non-negligible frequency.
+	 *
+	 * We instead increase lock contention on the ReplicationSlotControlLock
+	 * but it would be less harmful.
+	 */
+	if (!already_locked)
+		LWLockAcquire(ReplicationSlotControlLock, LW_EXCLUSIVE);
 
 	for (i = 0; i < max_replication_slots; i++)
 	{
@@ -876,9 +897,10 @@ ReplicationSlotsComputeRequiredXmin(bool already_locked)
 			agg_catalog_xmin = effective_catalog_xmin;
 	}
 
-	LWLockRelease(ReplicationSlotControlLock);
-
 	ProcArraySetReplicationSlotXmin(agg_xmin, agg_catalog_xmin, already_locked);
+
+	if (!already_locked)
+		LWLockRelease(ReplicationSlotControlLock);
 }
 
 /*

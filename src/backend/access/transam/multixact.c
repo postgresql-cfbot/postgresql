@@ -1776,7 +1776,7 @@ PostPrepare_MultiXact(TransactionId xid)
  *		Recover the state of a prepared transaction at startup
  */
 void
-multixact_twophase_recover(TransactionId xid, uint16 info,
+multixact_twophase_recover(Oid databaseid, TransactionId xid, uint16 info,
 						   void *recdata, uint32 len)
 {
 	BackendId	dummyBackendId = TwoPhaseGetDummyBackendId(xid, false);
@@ -1797,7 +1797,7 @@ multixact_twophase_recover(TransactionId xid, uint16 info,
  *		Similar to AtEOXact_MultiXact but for COMMIT PREPARED
  */
 void
-multixact_twophase_postcommit(TransactionId xid, uint16 info,
+multixact_twophase_postcommit(Oid databaseid, TransactionId xid, uint16 info,
 							  void *recdata, uint32 len)
 {
 	BackendId	dummyBackendId = TwoPhaseGetDummyBackendId(xid, true);
@@ -1812,10 +1812,10 @@ multixact_twophase_postcommit(TransactionId xid, uint16 info,
  *		This is actually just the same as the COMMIT case.
  */
 void
-multixact_twophase_postabort(TransactionId xid, uint16 info,
+multixact_twophase_postabort(Oid databaseid, TransactionId xid, uint16 info,
 							 void *recdata, uint32 len)
 {
-	multixact_twophase_postcommit(xid, info, recdata, len);
+	multixact_twophase_postcommit(databaseid, xid, info, recdata, len);
 }
 
 /*

@@ -699,7 +699,7 @@ PostPrepare_PgStat_Relations(PgStat_SubXactStatus *xact_state)
  * Load the saved counts into our local pgstats state.
  */
 void
-pgstat_twophase_postcommit(TransactionId xid, uint16 info,
+pgstat_twophase_postcommit(Oid databaseid, TransactionId xid, uint16 info,
 						   void *recdata, uint32 len)
 {
 	TwoPhasePgStatRecord *rec = (TwoPhasePgStatRecord *) recdata;
@@ -735,7 +735,7 @@ pgstat_twophase_postcommit(TransactionId xid, uint16 info,
  * as aborted.
  */
 void
-pgstat_twophase_postabort(TransactionId xid, uint16 info,
+pgstat_twophase_postabort(Oid databaseid, TransactionId xid, uint16 info,
 						  void *recdata, uint32 len)
 {
 	TwoPhasePgStatRecord *rec = (TwoPhasePgStatRecord *) recdata;

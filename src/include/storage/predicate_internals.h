@@ -116,6 +116,7 @@ typedef struct SERIALIZABLEXACT
 	uint32		flags;			/* OR'd combination of values defined below */
 	int			pid;			/* pid of associated process */
 	int			pgprocno;		/* pgprocno of associated process */
+	Oid			database;		/* which database is this transaction in? */
 } SERIALIZABLEXACT;
 
 #define SXACT_FLAG_COMMITTED			0x00000001	/* already committed */

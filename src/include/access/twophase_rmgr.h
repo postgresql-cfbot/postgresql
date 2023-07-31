@@ -14,7 +14,7 @@
 #ifndef TWOPHASE_RMGR_H
 #define TWOPHASE_RMGR_H
 
-typedef void (*TwoPhaseCallback) (TransactionId xid, uint16 info,
+typedef void (*TwoPhaseCallback) (Oid databaseid, TransactionId xid, uint16 info,
 								  void *recdata, uint32 len);
 typedef uint8 TwoPhaseRmgrId;
 

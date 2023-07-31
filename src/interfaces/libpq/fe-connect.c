@@ -394,8 +394,10 @@ static PGPing internal_ping(PGconn *conn);
 static PGconn *makeEmptyPGconn(void);
 static void pqFreeCommandQueue(PGcmdQueueEntry *queue);
 static bool fillPGconn(PGconn *conn, PQconninfoOption *connOptions);
+static bool copyPGconn(PGconn *srcConn, PGconn *dstConn);
 static void freePGconn(PGconn *conn);
 static void closePGconn(PGconn *conn);
+static void release_conn_hosts(PGconn *conn);
 static void release_conn_addrinfo(PGconn *conn);
 static int	store_conn_addrinfo(PGconn *conn, struct addrinfo *addrlist);
 static void sendTerminateConn(PGconn *conn);
@@ -623,8 +625,17 @@ pqDropServerData(PGconn *conn)
 	conn->write_failed = false;
 	free(conn->write_err_msg);
 	conn->write_err_msg = NULL;
-	conn->be_pid = 0;
-	conn->be_key = 0;
+
+	/*
+	 * Cancel connections should save their be_pid and be_key across
+	 * PQcancelReset invocations. Otherwise they would not have access to the
+	 * secret token of the connection they are supposed to cancel anymore.
+	 */
+	if (!conn->cancelRequest)
+	{
+		conn->be_pid = 0;
+		conn->be_key = 0;
+	}
 }
 
 
@@ -753,6 +764,113 @@ PQping(const char *conninfo)
 	PQfinish(conn);
 
 	return ret;
+}
+
+/*
+ *		PQcancelConn
+ *
+ * Asynchronously cancel a query on the given connection. This requires polling
+ * the returned PGcancelConn to actually complete the cancellation of the
+ * query.
+ */
+PGcancelConn *
+PQcancelConn(PGconn *conn)
+{
+	PGconn	   *cancelConn = makeEmptyPGconn();
+	pg_conn_host originalHost;
+
+	if (cancelConn == NULL)
+		return NULL;
+
+	/* Check we have an open connection */
+	if (!conn)
+	{
+		libpq_append_conn_error(cancelConn, "passed connection was NULL");
+		return (PGcancelConn *) cancelConn;
+	}
+
+	if (conn->sock == PGINVALID_SOCKET)
+	{
+		libpq_append_conn_error(cancelConn, "passed connection is not open");
+		return (PGcancelConn *) cancelConn;
+	}
+
+
+	/*
+	 * Indicate that this connection is used to send a cancellation
+	 */
+	cancelConn->cancelRequest = true;
+
+	if (!copyPGconn(conn, cancelConn))
+		return (PGcancelConn *) cancelConn;
+
+	/*
+	 * Compute derived options
+	 */
+	if (!connectOptions2(cancelConn))
+		return (PGcancelConn *) cancelConn;
+
+	/*
+	 * Copy cancelation token data from the original connnection
+	 */
+	cancelConn->be_pid = conn->be_pid;
+	cancelConn->be_key = conn->be_key;
+
+	/*
+	 * Cancel requests should not iterate over all possible hosts. The request
+	 * needs to be sent to the exact host and address that the original
+	 * connection used. So we manually create the host and address arrays with
+	 * a single element after freeing the host array that we generated from
+	 * the connection options.
+	 */
+	release_conn_hosts(cancelConn);
+	cancelConn->nconnhost = 1;
+	cancelConn->naddr = 1;
+
+	cancelConn->connhost = calloc(cancelConn->nconnhost, sizeof(pg_conn_host));
+	if (!cancelConn->connhost)
+		goto oom_error;
+
+	originalHost = conn->connhost[conn->whichhost];
+	if (originalHost.host)
+	{
+		cancelConn->connhost[0].host = strdup(originalHost.host);
+		if (!cancelConn->connhost[0].host)
+			goto oom_error;
+	}
+	if (originalHost.hostaddr)
+	{
+		cancelConn->connhost[0].hostaddr = strdup(originalHost.hostaddr);
+		if (!cancelConn->connhost[0].hostaddr)
+			goto oom_error;
+	}
+	if (originalHost.port)
+	{
+		cancelConn->connhost[0].port = strdup(originalHost.port);
+		if (!cancelConn->connhost[0].port)
+			goto oom_error;
+	}
+	if (originalHost.password)
+	{
+		cancelConn->connhost[0].password = strdup(originalHost.password);
+		if (!cancelConn->connhost[0].password)
+			goto oom_error;
+	}
+
+	cancelConn->addr = calloc(cancelConn->naddr, sizeof(AddrInfo));
+	if (!cancelConn->connhost)
+		goto oom_error;
+
+	cancelConn->addr[0].addr = conn->raddr;
+	cancelConn->addr[0].family = conn->raddr.addr.ss_family;
+
+	cancelConn->status = CONNECTION_STARTING;
+	return (PGcancelConn *) cancelConn;
+
+oom_error:
+	conn->status = CONNECTION_BAD;
+	libpq_append_conn_error(cancelConn, "out of memory");
+	return (PGcancelConn *) cancelConn;
 }
 
 /*
@@ -927,6 +1045,45 @@ fillPGconn(PGconn *conn, PQconninfoOption *connOptions)
 		}
 	}
 
+	return true;
+}
+
+/*
+ * Copy over option values from srcConn to dstConn
+ *
+ * Don't put anything cute here --- intelligence should be in
+ * connectOptions2 ...
+ *
+ * Returns true on success. On failure, returns false and sets error message of
+ * dstConn.
+ */
+static bool
+copyPGconn(PGconn *srcConn, PGconn *dstConn)
+{
+	const internalPQconninfoOption *option;
+
+	/* copy over connection options */
+	for (option = PQconninfoOptions; option->keyword; option++)
+	{
+		if (option->connofs >= 0)
+		{
+			const char **tmp = (const char **) ((char *) srcConn + option->connofs);
+
+			if (*tmp)
+			{
+				char	  **dstConnmember = (char **) ((char *) dstConn + option->connofs);
+
+				if (*dstConnmember)
+					free(*dstConnmember);
+				*dstConnmember = strdup(*tmp);
+				if (*dstConnmember == NULL)
+				{
+					libpq_append_conn_error(dstConn, "out of memory");
+					return false;
+				}
+			}
+		}
+	}
 	return true;
 }
 
@@ -2361,10 +2518,18 @@ connectDBStart(PGconn *conn)
 	 * Set up to try to connect to the first host.  (Setting whichhost = -1 is
 	 * a bit of a cheat, but PQconnectPoll will advance it to 0 before
 	 * anything else looks at it.)
+	 *
+	 * Cancel requests are special though, they should only try one host and
+	 * address. These fields have already set up in PQcancelConn. So leave
+	 * these fields alone for cancel requests.
 	 */
-	conn->whichhost = -1;
-	conn->try_next_addr = false;
-	conn->try_next_host = true;
+	if (!conn->cancelRequest)
+	{
+		conn->whichhost = -1;
+		conn->try_next_host = true;
+		conn->try_next_addr = false;
+	}
+
 	conn->status = CONNECTION_NEEDED;
 
 	/* Also reset the target_server_type state if needed */
@@ -2506,7 +2671,10 @@ connectDBComplete(PGconn *conn)
 		/*
 		 * Now try to advance the state machine.
 		 */
-		flag = PQconnectPoll(conn);
+		if (conn->cancelRequest)
+			flag = PQcancelPoll((PGcancelConn *) conn);
+		else
+			flag = PQconnectPoll(conn);
 	}
 }
 
@@ -2631,13 +2799,17 @@ keep_going:						/* We will come back to here until there is
 			 * Oops, no more hosts.
 			 *
 			 * If we are trying to connect in "prefer-standby" mode, then drop
-			 * the standby requirement and start over.
+			 * the standby requirement and start over. Don't do this for
+			 * cancel requests though, since we are certain the list of
+			 * servers won't change as the target_server_type option is not
+			 * applicable to those connections.
 			 *
 			 * Otherwise, an appropriate error message is already set up, so
 			 * we just need to set the right status.
 			 */
 			if (conn->target_server_type == SERVER_TYPE_PREFER_STANDBY &&
-				conn->nconnhost > 0)
+				conn->nconnhost > 0 &&
+				!conn->cancelRequest)
 			{
 				conn->target_server_type = SERVER_TYPE_PREFER_STANDBY_PASS2;
 				conn->whichhost = 0;
@@ -3278,6 +3450,29 @@ keep_going:						/* We will come back to here until there is
 					return PGRES_POLLING_READING;
 				}
 #endif							/* USE_SSL */
+
+				/*
+				 * For cancel requests this is as far as we need to go in the
+				 * connection establishment. Now we can actually send our
+				 * cancelation request.
+				 */
+				if (conn->cancelRequest)
+				{
+					CancelRequestPacket cancelpacket;
+
+					packetlen = sizeof(cancelpacket);
+					cancelpacket.cancelRequestCode = (MsgType) pg_hton32(CANCEL_REQUEST_CODE);
+					cancelpacket.backendPID = pg_hton32(conn->be_pid);
+					cancelpacket.cancelAuthCode = pg_hton32(conn->be_key);
+					if (pqPacketSend(conn, 0, &cancelpacket, packetlen) != STATUS_OK)
+					{
+						libpq_append_conn_error(conn, "could not send cancel packet: %s",
+												SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+						goto error_return;
+					}
+					conn->status = CONNECTION_AWAITING_RESPONSE;
+					return PGRES_POLLING_READING;
+				}
 
 				/*
 				 * Build the startup packet.
@@ -4023,8 +4218,14 @@ keep_going:						/* We will come back to here until there is
 					}
 				}
 
-				/* We can release the address list now. */
-				release_conn_addrinfo(conn);
+				/*
+				 * For non cancel requests we can release the address list
+				 * now. For cancel requests we never actually resolve
+				 * addresses and instead the addrinfo exists for the lifetime
+				 * of the connection.
+				 */
+				if (!conn->cancelRequest)
+					release_conn_addrinfo(conn);
 
 				/*
 				 * Contents of conn->errorMessage are no longer interesting
@@ -4392,19 +4593,8 @@ freePGconn(PGconn *conn)
 		free(conn->events[i].name);
 	}
 
-	/* clean up pg_conn_host structures */
-	for (int i = 0; i < conn->nconnhost; ++i)
-	{
-		free(conn->connhost[i].host);
-		free(conn->connhost[i].hostaddr);
-		free(conn->connhost[i].port);
-		if (conn->connhost[i].password != NULL)
-		{
-			explicit_bzero(conn->connhost[i].password, strlen(conn->connhost[i].password));
-			free(conn->connhost[i].password);
-		}
-	}
-	free(conn->connhost);
+	release_conn_addrinfo(conn);
+	release_conn_hosts(conn);
 
 	free(conn->client_encoding_initial);
 	free(conn->events);
@@ -4524,12 +4714,46 @@ release_conn_addrinfo(PGconn *conn)
 }
 
 /*
+ * release_conn_hosts
+ *	 - Free the host list in the PGconn.
+ */
+static void
+release_conn_hosts(PGconn *conn)
+{
+	if (conn->connhost)
+	{
+		for (int i = 0; i < conn->nconnhost; ++i)
+		{
+			free(conn->connhost[i].host);
+			free(conn->connhost[i].hostaddr);
+			free(conn->connhost[i].port);
+			if (conn->connhost[i].password != NULL)
+			{
+				explicit_bzero(conn->connhost[i].password, strlen(conn->connhost[i].password));
+				free(conn->connhost[i].password);
+			}
+		}
+		free(conn->connhost);
+	}
+}
+
+
+/*
  * sendTerminateConn
  *	 - Send a terminate message to backend.
  */
 static void
 sendTerminateConn(PGconn *conn)
 {
+	/*
+	 * The Postgres cancellation protocol does not have a notion of a
+	 * Terminate message, so don't send one.
+	 */
+	if (conn->cancelRequest)
+	{
+		return;
+	}
+
 	/*
 	 * Note that the protocol doesn't allow us to send Terminate messages
 	 * during the startup phase.
@@ -4583,7 +4807,13 @@ closePGconn(PGconn *conn)
 	conn->pipelineStatus = PQ_PIPELINE_OFF;
 	pqClearAsyncResult(conn);	/* deallocate result */
 	pqClearConnErrorState(conn);
-	release_conn_addrinfo(conn);
+
+	/*
+	 * Since cancel requests never change their addrinfo we don't free it
+	 * here. Otherwise we would have to rebuild it during a PQcancelReset.
+	 */
+	if (!conn->cancelRequest)
+		release_conn_addrinfo(conn);
 
 	/* Reset all state obtained from server, too */
 	pqDropServerData(conn);
@@ -4998,6 +5228,177 @@ cancel_errReturn:
 	return false;
 }
 
+/*
+ *		PQcancelSend
+ *
+ * Send a cancellation request in a blocking fashion.
+ * Returns 1 if successful 0 if not.
+ */
+int
+PQcancelSend(PGcancelConn * cancelConn)
+{
+	if (!cancelConn || cancelConn->conn.status == CONNECTION_BAD)
+		return 1;
+
+	if (!connectDBStart(&cancelConn->conn))
+	{
+		cancelConn->conn.status = CONNECTION_BAD;
+		return 1;
+	}
+
+	return connectDBComplete(&cancelConn->conn);
+}
+
+/*
+ *		PQcancelPoll
+ *
+ * Poll a cancel connection. For usage details see PQconnectPoll.
+ */
+PostgresPollingStatusType
+PQcancelPoll(PGcancelConn * cancelConn)
+{
+	PGconn	   *conn = (PGconn *) cancelConn;
+	int			n;
+
+	/*
+	 * Before we can call PQconnectPoll we first need to start the connection
+	 * using connectDBstart. Non-cancel connections already do this whenever
+	 * the connection is initialized. But cancel connections wait until the
+	 * caller starts polling, because there might be a large delay between
+	 * creating a cancel connection and actually wanting to use it.
+	 */
+	if (conn->status == CONNECTION_STARTING)
+	{
+		if (!connectDBStart(&cancelConn->conn))
+		{
+			cancelConn->conn.status = CONNECTION_STARTED;
+			return PGRES_POLLING_WRITING;
+		}
+	}
+
+	/*
+	 * The rest of the connection establishement we leave to PQconnectPoll,
+	 * since it's very similar to normal connection establishment. But once we
+	 * get to the CONNECTION_AWAITING_RESPONSE we need to do our own thing.
+	 */
+	if (conn->status != CONNECTION_AWAITING_RESPONSE)
+	{
+		return PQconnectPoll(conn);
+	}
+
+	/*
+	 * At this point we are waiting on the server to close the connection,
+	 * which is its way of communicating that the cancel has been handled.
+	 */
+
+	n = pqReadData(conn);
+
+	if (n == 0)
+		return PGRES_POLLING_READING;
+
+#ifndef WIN32
+
+	/*
+	 * Windows is a bit special in its EOF behaviour for TCP. Sometimes it
+	 * will error with an ECONNRESET when there is a clean connection closure.
+	 * See these threads for details:
+	 * https://www.postgresql.org/message-id/flat/90b34057-4176-7bb0-0dbb-9822a5f6425b%40greiz-reinsdorf.de
+	 *
+	 * https://www.postgresql.org/message-id/flat/CA%2BhUKG%2BOeoETZQ%3DQw5Ub5h3tmwQhBmDA%3DnuNO3KG%3DzWfUypFAw%40mail.gmail.com
+	 *
+	 * PQcancel ignores such errors and reports success for the cancellation
+	 * anyway, so even if this is not always correct we do the same here. For
+	 * all other OSes we consider any other error than EOF and report it as
+	 * such.
+	 */
+	if (n < 0 && n != -2)
+	{
+		conn->status = CONNECTION_BAD;
+		return PGRES_POLLING_FAILED;
+	}
+#endif
+
+	/*
+	 * We don't expect any data, only connection closure. So if we strangly do
+	 * receive some data we consider that an error.
+	 */
+	if (n > 0)
+	{
+
+		libpq_append_conn_error(conn, "received unexpected response from server");
+		conn->status = CONNECTION_BAD;
+		return PGRES_POLLING_FAILED;
+	}
+
+	/*
+	 * Getting here means that we received an EOF. Which is what we were
+	 * expecting. The cancel request has completed.
+	 */
+	cancelConn->conn.status = CONNECTION_OK;
+	resetPQExpBuffer(&conn->errorMessage);
+	return PGRES_POLLING_OK;
+}
+
+/*
+ *		PQcancelStatus
+ *
+ * Get the status of a cancel connection.
+ */
+ConnStatusType
+PQcancelStatus(const PGcancelConn * cancelConn)
+{
+	return PQstatus((const PGconn *) cancelConn);
+}
+
+/*
+ *		PQcancelSocket
+ *
+ * Get the socket of the cancel connection.
+ */
+int
+PQcancelSocket(const PGcancelConn * cancelConn)
+{
+	return PQsocket((const PGconn *) cancelConn);
+}
+
+/*
+ *		PQcancelErrorMessage
+ *
+ * Get the socket of the cancel connection.
+ */
+char *
+PQcancelErrorMessage(const PGcancelConn * cancelConn)
+{
+	return PQerrorMessage((const PGconn *) cancelConn);
+}
+
+/*
+ *		PQcancelReset
+ *
+ * Resets the cancel connection, so it can be reused to send a new cancel
+ * request.
+ */
+void
+PQcancelReset(PGcancelConn * cancelConn)
+{
+	closePGconn((PGconn *) cancelConn);
+	cancelConn->conn.status = CONNECTION_STARTING;
+	cancelConn->conn.whichhost = 0;
+	cancelConn->conn.whichaddr = 0;
+	cancelConn->conn.try_next_host = false;
+	cancelConn->conn.try_next_addr = false;
+}
+
+/*
+ *		PQcancelFinish
+ *
+ * Closes and frees the cancel connection.
+ */
+void
+PQcancelFinish(PGcancelConn * cancelConn)
+{
+	PQfinish((PGconn *) cancelConn);
+}
 
 /*
  * PQrequestCancel: old, not thread-safe function for requesting query cancel

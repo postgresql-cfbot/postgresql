@@ -2218,6 +2218,10 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 
 					INSTR_TIME_SET_CURRENT(duration);
 					INSTR_TIME_ACCUM_DIFF(PendingWalStats.wal_write_time, duration, start);
+					pgstat_count_io_op_time(IOOBJECT_WAL, IOCONTEXT_NORMAL, IOOP_WRITE, start, 1);
+				} else
+				{
+					pgstat_count_io_op_n(IOOBJECT_WAL, IOCONTEXT_NORMAL, IOOP_WRITE, 1);
 				}
 
 				PendingWalStats.wal_write++;
@@ -8244,6 +8248,10 @@ issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli)
 
 		INSTR_TIME_SET_CURRENT(duration);
 		INSTR_TIME_ACCUM_DIFF(PendingWalStats.wal_sync_time, duration, start);
+		pgstat_count_io_op_time(IOOBJECT_WAL, IOCONTEXT_NORMAL, IOOP_FSYNC, start, 1);
+	} else
+	{
+		pgstat_count_io_op_n(IOOBJECT_WAL, IOCONTEXT_NORMAL, IOOP_FSYNC, 1);
 	}
 
 	PendingWalStats.wal_sync++;

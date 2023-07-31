@@ -481,6 +481,14 @@ expand_single_inheritance_child(PlannerInfo *root, RangeTblEntry *parentrte,
 	 */
 	childrte = makeNode(RangeTblEntry);
 	memcpy(childrte, parentrte, sizeof(RangeTblEntry));
+	/*
+	 * We do not want to inherit the EquivalenceMember indexes of the parent
+	 * to its child
+	 */
+	childrte->eclass_member_indexes = NULL;
+	childrte->eclass_source_indexes = NULL;
+	childrte->eclass_derive_indexes = NULL;
+
 	Assert(parentrte->rtekind == RTE_RELATION); /* else this is dubious */
 	childrte->relid = childOID;
 	childrte->relkind = childrel->rd_rel->relkind;

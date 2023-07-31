@@ -940,18 +940,19 @@ convert_subquery_pathkeys(PlannerInfo *root, RelOptInfo *rel,
 			 * outer query.
 			 */
 			int			best_score = -1;
-			ListCell   *j;
+			int			j = -1;
 
-			foreach(j, sub_eclass->ec_members)
+			while ((j = bms_next_member(sub_eclass->ec_nonchild_indexes, j)) >= 0)
 			{
-				EquivalenceMember *sub_member = (EquivalenceMember *) lfirst(j);
+				EquivalenceMember *sub_member = list_nth_node(EquivalenceMember,
+															  rel->subroot->eq_members,
+															  j);
 				Expr	   *sub_expr = sub_member->em_expr;
 				Oid			sub_expr_type = sub_member->em_datatype;
 				Oid			sub_expr_coll = sub_eclass->ec_collation;
 				ListCell   *k;
 
-				if (sub_member->em_is_child)
-					continue;	/* ignore children here */
+				Assert(!sub_member->em_is_child);
 
 				foreach(k, subquery_tlist)
 				{
@@ -1452,7 +1453,7 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
 		EquivalenceClass *oeclass;
 		int			score;
-		ListCell   *lc2;
+		int			i;
 
 		/* get the outer eclass */
 		update_mergeclause_eclasses(root, rinfo);
@@ -1473,13 +1474,16 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 
 		/* compute score */
 		score = 0;
-		foreach(lc2, oeclass->ec_members)
+		i = -1;
+		while ((i = bms_next_member(oeclass->ec_nonchild_indexes, i)) >= 0)
 		{
-			EquivalenceMember *em = (EquivalenceMember *) lfirst(lc2);
+			EquivalenceMember *em = list_nth_node(EquivalenceMember,
+												  root->eq_members, i);
 
-			/* Potential future join partner? */
-			if (!em->em_is_const && !em->em_is_child &&
-				!bms_overlap(em->em_relids, joinrel->relids))
+			/* shouldn't be consts or child members in ec_nonchild_indexes */
+			Assert(!em->em_is_const && !em->em_is_child);
+
+			if (!bms_overlap(em->em_relids, joinrel->relids))
 				score++;
 		}
 

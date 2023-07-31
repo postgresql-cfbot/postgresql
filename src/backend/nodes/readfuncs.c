@@ -567,6 +567,9 @@ _readRangeTblEntry(void)
 	READ_BOOL_FIELD(inh);
 	READ_BOOL_FIELD(inFromCl);
 	READ_NODE_FIELD(securityQuals);
+	READ_BITMAPSET_FIELD(eclass_member_indexes);
+	READ_BITMAPSET_FIELD(eclass_source_indexes);
+	READ_BITMAPSET_FIELD(eclass_derive_indexes);
 
 	READ_DONE();
 }

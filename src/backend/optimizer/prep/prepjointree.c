@@ -993,6 +993,9 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 	subroot->multiexpr_params = NIL;
 	subroot->join_domains = NIL;
 	subroot->eq_classes = NIL;
+	subroot->eq_members = NIL;
+	subroot->eq_sources = NIL;
+	subroot->eq_derives = NIL;
 	subroot->ec_merging_done = false;
 	subroot->last_rinfo_serial = 0;
 	subroot->all_result_relids = NULL;

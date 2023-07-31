@@ -39,7 +39,7 @@ static void remove_rel_from_query(PlannerInfo *root, int relid,
 								  SpecialJoinInfo *sjinfo);
 static void remove_rel_from_restrictinfo(RestrictInfo *rinfo,
 										 int relid, int ojrelid);
-static void remove_rel_from_eclass(EquivalenceClass *ec,
+static void remove_rel_from_eclass(PlannerInfo *root, EquivalenceClass *ec,
 								   int relid, int ojrelid);
 static List *remove_rel_from_joinlist(List *joinlist, int relid, int *nremoved);
 static bool rel_supports_distinctness(PlannerInfo *root, RelOptInfo *rel);
@@ -522,7 +522,7 @@ remove_rel_from_query(PlannerInfo *root, int relid, SpecialJoinInfo *sjinfo)
 
 		if (bms_is_member(relid, ec->ec_relids) ||
 			bms_is_member(ojrelid, ec->ec_relids))
-			remove_rel_from_eclass(ec, relid, ojrelid);
+			remove_rel_from_eclass(root, ec, relid, ojrelid);
 	}
 
 	/*
@@ -607,9 +607,11 @@ remove_rel_from_restrictinfo(RestrictInfo *rinfo, int relid, int ojrelid)
  * level(s).
  */
 static void
-remove_rel_from_eclass(EquivalenceClass *ec, int relid, int ojrelid)
+remove_rel_from_eclass(PlannerInfo *root, EquivalenceClass *ec, int relid,
+					   int ojrelid)
 {
 	ListCell   *lc;
+	int			i;
 
 	/* Fix up the EC's overall relids */
 	ec->ec_relids = bms_del_member(ec->ec_relids, relid);
@@ -627,18 +629,41 @@ remove_rel_from_eclass(EquivalenceClass *ec, int relid, int ojrelid)
 		if (bms_is_member(relid, cur_em->em_relids) ||
 			bms_is_member(ojrelid, cur_em->em_relids))
 		{
+			RangeTblEntry  *rte;
+
 			Assert(!cur_em->em_is_const);
+
+			/* Delete 'relid' from em_relids */
 			cur_em->em_relids = bms_del_member(cur_em->em_relids, relid);
+			rte = root->simple_rte_array[relid];
+			rte->eclass_member_indexes =
+				bms_del_member(rte->eclass_member_indexes, cur_em->em_index);
+
+			/* Delete 'ojrelid' from em_relids */
 			cur_em->em_relids = bms_del_member(cur_em->em_relids, ojrelid);
+			rte = root->simple_rte_array[ojrelid];
+			rte->eclass_member_indexes =
+				bms_del_member(rte->eclass_member_indexes, cur_em->em_index);
+
 			if (bms_is_empty(cur_em->em_relids))
+			{
+				/* Delete this EquivalenceMember with updating indexes */
 				ec->ec_members = foreach_delete_current(ec->ec_members, lc);
+				ec->ec_member_indexes =
+					bms_del_member(ec->ec_member_indexes, cur_em->em_index);
+				ec->ec_nonchild_indexes =
+					bms_del_member(ec->ec_nonchild_indexes, cur_em->em_index);
+				ec->ec_norel_indexes =
+					bms_del_member(ec->ec_norel_indexes, cur_em->em_index);
+			}
 		}
 	}
 
 	/* Fix up the source clauses, in case we can re-use them later */
-	foreach(lc, ec->ec_sources)
+	i = -1;
+	while ((i = bms_next_member(ec->ec_source_indexes, i)) >= 0)
 	{
-		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+		RestrictInfo *rinfo = list_nth_node(RestrictInfo, root->eq_sources, i);
 
 		remove_rel_from_restrictinfo(rinfo, relid, ojrelid);
 	}
@@ -648,7 +673,7 @@ remove_rel_from_eclass(EquivalenceClass *ec, int relid, int ojrelid)
 	 * drop them.  (At this point, any such clauses would be base restriction
 	 * clauses, which we'd not need anymore anyway.)
 	 */
-	ec->ec_derives = NIL;
+	ec->ec_derive_indexes = NULL;
 }
 
 /*

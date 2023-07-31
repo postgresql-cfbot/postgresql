@@ -629,3 +629,123 @@ create function inoutparam_fail(inout i anyelement, out r anyrange)
 --should fail
 create function table_fail(i anyelement) returns table(i anyelement, r anyrange)
   as $$ select $1, '[1,10]' $$ language sql;
+
+--
+-- Test support function
+--
+-- Test actual results, as well as estimates.
+CREATE TABLE integer_support_test AS
+(
+	SELECT
+		some_number
+	FROM
+		(
+			SELECT
+				generate_series AS some_number
+			FROM
+				generate_series(-1000, 1000)
+		) q
+);
+CREATE UNIQUE INDEX ON integer_support_test( some_number );
+ANALYZE integer_support_test;
+
+-- No bounds, so not a bounded range:
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_number FROM integer_support_test WHERE some_number <@ int4range(null, null);
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_number FROM integer_support_test WHERE int4range(null, null) @> some_number;
+
+-- Empty ranges
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_number FROM integer_support_test WHERE some_number <@ int4range(0, 0, '()');
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_number FROM integer_support_test WHERE int4range(0, 0, '()') @> some_number;
+
+-- Only lower bound present
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_number FROM integer_support_test WHERE some_number <@ int4range(-2, null, '[]');
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_number FROM integer_support_test WHERE int4range(-2, null, '[]') @> some_number;
+
+-- Only upper bound present
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_number FROM integer_support_test WHERE some_number <@ int4range(null, 2, '[]');
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_number FROM integer_support_test WHERE int4range(null, 2, '[]') @> some_number;
+
+-- Both bounds present
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_number FROM integer_support_test WHERE some_number <@ int4range(-2, 2, '[]');
+SELECT some_number FROM integer_support_test WHERE some_number <@ int4range(-2, 2, '[]');
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_number FROM integer_support_test WHERE int4range(-2, 2, '[]') @> some_number;
+SELECT some_number FROM integer_support_test WHERE int4range(-2, 2, '[]') @> some_number;
+
+-- Both bounds present, upper is not inclusive.
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_number FROM integer_support_test WHERE some_number <@ int4range(-2, 3, '[)');
+SELECT some_number FROM integer_support_test WHERE some_number <@ int4range(-2, 3, '[)');
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_number FROM integer_support_test WHERE int4range(-2, 3, '[)') @> some_number;
+SELECT some_number FROM integer_support_test WHERE int4range(-2, 3, '[)') @> some_number;
+
+-- Both bounds present, lower is not inclusive.
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_number FROM integer_support_test WHERE some_number <@ int4range(-3, 2, '(]');
+SELECT some_number FROM integer_support_test WHERE some_number <@ int4range(-3, 2, '(]');
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_number FROM integer_support_test WHERE int4range(-3, 2, '(]') @> some_number;
+SELECT some_number FROM integer_support_test WHERE int4range(-3, 2, '(]') @> some_number;
+
+DROP TABLE integer_support_test;
+
+-- Try out a type that has special values (+/- infinity):
+CREATE TABLE date_support_test AS
+(
+	SELECT
+		some_date
+	FROM
+		(
+			SELECT
+				'2000-01-01'::DATE + generate_series AS some_date
+			FROM
+				generate_series(-1000, 1000)
+		) q
+);
+CREATE UNIQUE INDEX ON date_support_test( some_date );
+INSERT INTO date_support_test values ( '-infinity' ), ( 'infinity' );
+ANALYZE date_support_test;
+
+-- No bounds, so not a bounded range.
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_date FROM date_support_test WHERE some_date <@ daterange(null, null);
+
+-- Should return 1000 rows, since -infinity and 2000-01-01 are not included in the range
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_date FROM date_support_test WHERE some_date <@ daterange('-infinity', '2000-01-01'::DATE, '()');
+
+-- Should return 1001 rows, since -infinity is included here
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_date FROM date_support_test WHERE some_date <@ daterange('-infinity', '2000-01-01'::DATE, '[)');
+
+-- Should return 1002 rows, since -infinity and 2000-01-01 are included here
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_date FROM date_support_test WHERE some_date <@ daterange('-infinity', '2000-01-01'::DATE, '[]');
+
+-- Should return 1001 rows, since infinity not included here
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_date FROM date_support_test WHERE some_date <@ daterange('2000-01-01'::DATE, 'infinity', '[)');
+
+-- Should return 1002 rows, since infinity is included here
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_date FROM date_support_test WHERE some_date <@ daterange('2000-01-01'::DATE, 'infinity', '[]');
+
+-- Should return 1 rows, since just infinity is included here
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_date FROM date_support_test WHERE some_date <@ daterange('infinity', 'infinity', '[]');
+
+-- Should return 0 rows, since this is up to, but not including infinity
+EXPLAIN (ANALYZE, SUMMARY OFF, TIMING OFF, COSTS OFF)
+SELECT some_date FROM date_support_test WHERE some_date <@ daterange('infinity', 'infinity', '[)');
+
+DROP TABLE date_support_test;

@@ -196,9 +196,9 @@ rangesel(PG_FUNCTION_ARGS)
 	else if (operator == OID_RANGE_ELEM_CONTAINED_OP)
 	{
 		/*
-		 * Here, the Var is the elem, not the range.  For now we just punt and
-		 * return the default estimate.  In future we could disassemble the
-		 * range constant and apply scalarineqsel ...
+		 * Here, the Var is the elem, not the range.
+		 * The support function in rangetypes.c should have simplified this case,
+		 * enabling the clausesel.c machinery to handle it.
 		 */
 	}
 	else if (((Const *) other)->consttype == vardata.vartype)

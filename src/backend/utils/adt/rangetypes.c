@@ -31,13 +31,19 @@
 #include "postgres.h"
 
 #include "access/tupmacs.h"
+#include "access/stratnum.h"
 #include "common/hashfn.h"
 #include "lib/stringinfo.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
+#include "nodes/supportnodes.h"
+#include "nodes/makefuncs.h"
+#include "nodes/nodeFuncs.h"
+#include "nodes/pg_list.h"
 #include "nodes/miscnodes.h"
 #include "port/pg_bitutils.h"
 #include "utils/builtins.h"
+#include "utils/fmgroids.h"
 #include "utils/date.h"
 #include "utils/lsyscache.h"
 #include "utils/rangetypes.h"
@@ -69,7 +75,13 @@ static Size datum_compute_size(Size data_length, Datum val, bool typbyval,
 							   char typalign, int16 typlen, char typstorage);
 static Pointer datum_write(Pointer ptr, Datum datum, bool typbyval,
 						   char typalign, int16 typlen, char typstorage);
-
+static Expr *build_bound_expr(Oid opfamily, TypeCacheEntry *typeCache,
+							  bool isLowerBound, bool isInclusive,
+							  Datum val, Expr *otherExpr);
+static Node *find_index_quals(Const *rangeConst, Expr *otherExpr,
+							  Oid opfamily);
+static Node *find_simplified_clause(Const *rangeConst, Expr *otherExpr);
+static Node *match_support_request(Node *rawreq);
 
 /*
  *----------------------------------------------------------
@@ -557,7 +569,6 @@ elem_contained_by_range(PG_FUNCTION_ARGS)
 
 	PG_RETURN_BOOL(range_contains_elem_internal(typcache, r, val));
 }
-
 
 /* range, range -> bool functions */
 
@@ -2173,6 +2184,29 @@ make_empty_range(TypeCacheEntry *typcache)
 	return make_range(typcache, &lower, &upper, true, NULL);
 }
 
+/*
+ * Planner support function for elem_contained_by_range operator
+ */
+Datum
+elem_contained_by_range_support(PG_FUNCTION_ARGS)
+{
+	Node	   *rawreq = (Node *) PG_GETARG_POINTER(0);
+	Node	   *ret = match_support_request(rawreq);
+
+	PG_RETURN_POINTER(ret);
+}
+
+/*
+ * Planner support function for range_contains_elem operator
+ */
+Datum
+range_contains_elem_support(PG_FUNCTION_ARGS)
+{
+	Node	   *rawreq = (Node *) PG_GETARG_POINTER(0);
+	Node	   *ret = match_support_request(rawreq);
+
+	PG_RETURN_POINTER(ret);
+}
 
 /*
  *----------------------------------------------------------
@@ -2713,4 +2747,278 @@ datum_write(Pointer ptr, Datum datum, bool typbyval, char typalign,
 	ptr += data_length;
 
 	return ptr;
+}
+
+static Expr *
+build_bound_expr(Oid opfamily, TypeCacheEntry *typeCache, bool isLowerBound, bool isInclusive, Datum val, Expr *otherExpr)
+{
+	Oid			elemType = typeCache->type_id;
+	int16		elemTypeLen = typeCache->typlen;
+	bool		elemByValue = typeCache->typbyval;
+	Oid			elemCollation = typeCache->typcollation;
+	int16		strategy;
+	Oid			oproid;
+	Expr	   *constExpr;
+
+	if (isLowerBound)
+		strategy = isInclusive ? BTGreaterEqualStrategyNumber : BTGreaterStrategyNumber;
+	else
+		strategy = isInclusive ? BTLessEqualStrategyNumber : BTLessStrategyNumber;
+
+	oproid = get_opfamily_member(opfamily, elemType, elemType, strategy);
+
+	if (!OidIsValid(oproid))
+		return NULL;
+
+	constExpr = (Expr *) makeConst(elemType,
+								   -1,
+								   elemCollation,
+								   elemTypeLen,
+								   val,
+								   false,
+								   elemByValue);
+
+	return make_opclause(oproid,
+						 BOOLOID,
+						 false,
+						 otherExpr,
+						 constExpr,
+						 InvalidOid,
+						 InvalidOid);
+}
+
+/*
+ * find_index_quals
+ *	  Try to generate indexquals for an element contained in a range.
+ *	  We need at least one RangeBound to do anything useful here.
+ *
+ * Supports both the ELEM_CONTAINED_BY_RANGE and RANGE_CONTAINS_ELEM cases.
+ */
+static Node *
+find_index_quals(Const *rangeConst, Expr *otherExpr, Oid opfamily)
+{
+	RangeType  *range = DatumGetRangeTypeP(rangeConst->constvalue);
+	TypeCacheEntry *rangetypcache = lookup_type_cache(RangeTypeGetOid(range), TYPECACHE_RANGE_INFO);
+	RangeBound	lower;
+	RangeBound	upper;
+	bool		empty;
+
+	range_deserialize(rangetypcache, range, &lower, &upper, &empty);
+
+	/*
+	 * The planner will call us for an empty range.find_simplified_clause
+	 * should prevent this.
+	 */
+	if (empty)
+		return NULL;
+
+	if (!(lower.infinite && upper.infinite))
+	{
+		/* At least one bound is available, we have something to work with. */
+		List	   *result = NULL;
+		TypeCacheEntry *elemTypcache = lookup_type_cache(rangetypcache->rngelemtype->type_id, TYPECACHE_BTREE_OPFAMILY);
+
+		/* There might not be an operator family available for this element */
+		if (!OidIsValid(elemTypcache->btree_opf))
+			return NULL;
+
+		if (!lower.infinite)
+		{
+			Expr	   *lowerExpr = build_bound_expr(opfamily,
+													 elemTypcache,
+													 true,
+													 lower.inclusive,
+													 lower.val,
+													 otherExpr);
+
+			if (lowerExpr)
+				result = lappend(result, lowerExpr);
+		}
+
+		if (!upper.infinite)
+		{
+			Expr	   *upperExpr = build_bound_expr(opfamily,
+													 elemTypcache,
+													 false,
+													 upper.inclusive,
+													 upper.val,
+													 otherExpr);
+
+			if (upperExpr)
+				result = lappend(result, upperExpr);
+		}
+
+		return (Node *) result;
+	}
+
+	return NULL;
+}
+
+/*
+ * find_simplified_clause
+ *
+ *
+ * Supports both the ELEM_CONTAINED_BY_RANGE and RANGE_CONTAINS_ELEM cases.
+ */
+static Node *
+find_simplified_clause(Const *rangeConst, Expr *otherExpr)
+{
+	RangeType  *range = DatumGetRangeTypeP(rangeConst->constvalue);
+	TypeCacheEntry *rangetypcache = lookup_type_cache(RangeTypeGetOid(range), TYPECACHE_RANGE_INFO);
+	RangeBound	lower;
+	RangeBound	upper;
+	bool		empty;
+
+	range_deserialize(rangetypcache, range, &lower, &upper, &empty);
+
+	if (empty)
+	{
+		/* If the range is empty, then there can be no matches. */
+		return makeBoolConst(false, false);
+	}
+	else if (lower.infinite && upper.infinite)
+	{
+		/* The range has no bounds, so matches everything. */
+		return makeBoolConst(true, false);
+	}
+	else
+	{
+		/* At least one bound is available, we have something to work with. */
+		TypeCacheEntry *elemTypcache = lookup_type_cache(rangetypcache->rngelemtype->type_id, TYPECACHE_BTREE_OPFAMILY);
+		Expr	   *lowerExpr = NULL;
+		Expr	   *upperExpr = NULL;
+
+		/* There might not be an operator family available for this element */
+		if (!OidIsValid(elemTypcache->btree_opf))
+			return NULL;
+
+		if (!lower.infinite)
+		{
+			lowerExpr = build_bound_expr(elemTypcache->btree_opf,
+										 elemTypcache,
+										 true,
+										 lower.inclusive,
+										 lower.val,
+										 otherExpr);
+		}
+
+		if (!upper.infinite)
+		{
+			upperExpr = build_bound_expr(elemTypcache->btree_opf,
+										 elemTypcache,
+										 false,
+										 upper.inclusive,
+										 upper.val,
+										 otherExpr);
+		}
+
+		if (lowerExpr != NULL && upperExpr != NULL)
+			return (Node *) makeBoolExpr(AND_EXPR, list_make2(lowerExpr, upperExpr), -1);
+		else if (lowerExpr != NULL)
+			return (Node *) lowerExpr;
+		else if (upperExpr != NULL)
+			return (Node *) upperExpr;
+	}
+
+	return NULL;
+}
+
+static Node *
+match_support_request(Node *rawreq)
+{
+	if (IsA(rawreq, SupportRequestIndexCondition))
+	{
+		SupportRequestIndexCondition *req = (SupportRequestIndexCondition *) rawreq;
+		OpExpr	   *clause;
+		Node	   *leftop;
+		Node	   *rightop;
+		Const	   *rangeConst;
+		Expr	   *otherExpr;
+		Node	   *result;
+
+		if (!is_opclause(req->node))
+			return NULL;
+
+		clause = (OpExpr *) req->node;
+		leftop = get_leftop(clause);
+		rightop = get_rightop(clause);
+
+		switch (req->funcid)
+		{
+			case F_ELEM_CONTAINED_BY_RANGE:
+
+				if (!IsA(rightop, Const) || ((Const *) rightop)->constisnull)
+					return NULL;
+
+				rangeConst = (Const *) rightop;
+				otherExpr = (Expr *) leftop;
+				break;
+
+			case F_RANGE_CONTAINS_ELEM:
+
+				if (!IsA(leftop, Const) || ((Const *) leftop)->constisnull)
+					return NULL;
+
+				rangeConst = (Const *) leftop;
+				otherExpr = (Expr *) rightop;
+				break;
+
+			default:
+				return NULL;
+		}
+
+		result = find_index_quals(rangeConst,
+								  otherExpr,
+								  req->opfamily);
+
+		/* If matched, the index condition is exact. */
+		if (result != NULL)
+		{
+			req->lossy = false;
+		}
+
+		return result;
+	}
+	else if (IsA(rawreq, SupportRequestSimplify))
+	{
+		SupportRequestSimplify *req = (SupportRequestSimplify *) rawreq;
+		FuncExpr   *clause = req->fcall;
+		Node	   *leftop;
+		Node	   *rightop;
+		Const	   *rangeConst;
+		Expr	   *otherExpr;
+
+		Assert(list_length(clause->args) == 2);
+
+		leftop = linitial(clause->args);
+		rightop = lsecond(clause->args);
+
+		switch (clause->funcid)
+		{
+			case F_ELEM_CONTAINED_BY_RANGE:
+
+				if (!IsA(rightop, Const) || ((Const *) rightop)->constisnull)
+					return NULL;
+
+				rangeConst = (Const *) rightop;
+				otherExpr = (Expr *) leftop;
+				break;
+
+			case F_RANGE_CONTAINS_ELEM:
+
+				if (!IsA(leftop, Const) || ((Const *) leftop)->constisnull)
+					return NULL;
+
+				rangeConst = (Const *) leftop;
+				otherExpr = (Expr *) rightop;
+				break;
+
+			default:
+				return NULL;
+		}
+
+		return find_simplified_clause(rangeConst, otherExpr);
+	}
+
+	return NULL;
 }

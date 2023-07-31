@@ -1,0 +1,9 @@
+black
+# cryptography 35.x and later add many platform/toolchain restrictions, beware
+cryptography~=3.4.8
+construct~=2.10.61
+isort~=5.6
+# TODO: update to psycopg[c] 3.1
+psycopg2~=2.9.6
+pytest~=7.3
+pytest-asyncio~=0.21.0

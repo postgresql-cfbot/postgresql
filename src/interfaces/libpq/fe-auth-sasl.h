@@ -21,6 +21,15 @@
 
 #include "libpq-fe.h"
 
+/* See pg_fe_sasl_mech.exchange(). */
+typedef enum
+{
+	SASL_COMPLETE,
+	SASL_FAILED,
+	SASL_CONTINUE,
+	SASL_ASYNC,
+} SASLStatus;
+
 /*
  * Frontend SASL mechanism callbacks.
  *
@@ -61,9 +70,26 @@ typedef struct pg_fe_sasl_mech
 	 * server response once at the start of the authentication exchange to
 	 * generate an initial response.
 	 *
+	 * Returns a SASLStatus:
+	 *
+	 *  SASL_CONTINUE: The output buffer is filled with a client response. An
+	 *				   additional server challenge is expected.
+	 *
+	 *  SASL_ASYNC:	   Some asynchronous processing external to the connection
+	 *				   needs to be done before a response can be generated. The
+	 *				   mechanism is responsible for setting up conn->async_auth
+	 *				   appropriately before returning.
+	 *
+	 *  SASL_COMPLETE: The SASL exchange has completed successfully.
+	 *
+	 *  SASL_FAILED:   The exchange has failed and the connection should be
+	 *				   dropped.
+	 *
 	 * Input parameters:
 	 *
 	 *	state:	   The opaque mechanism state returned by init()
+	 *
+	 *	final:	   true if the server has sent a final exchange outcome
 	 *
 	 *	input:	   The challenge data sent by the server, or NULL when
 	 *			   generating a client-first initial response (that is, when
@@ -79,22 +105,16 @@ typedef struct pg_fe_sasl_mech
 	 *
 	 *	output:	   A malloc'd buffer containing the client's response to
 	 *			   the server (can be empty), or NULL if the exchange should
-	 *			   be aborted.  (*success should be set to false in the
+	 *			   be aborted.  (The callback should return SASL_FAILED in the
 	 *			   latter case.)
 	 *
 	 *	outputlen: The length (0 or higher) of the client response buffer,
 	 *			   ignored if output is NULL.
-	 *
-	 *	done:      Set to true if the SASL exchange should not continue,
-	 *			   because the exchange is either complete or failed
-	 *
-	 *	success:   Set to true if the SASL exchange completed successfully.
-	 *			   Ignored if *done is false.
 	 *--------
 	 */
-	void		(*exchange) (void *state, char *input, int inputlen,
-							 char **output, int *outputlen,
-							 bool *done, bool *success);
+	SASLStatus	(*exchange) (void *state, bool final,
+							 char *input, int inputlen,
+							 char **output, int *outputlen);
 
 	/*--------
 	 * channel_bound()

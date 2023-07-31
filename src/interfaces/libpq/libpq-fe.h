@@ -78,7 +78,9 @@ typedef enum
 	CONNECTION_CONSUME,			/* Consuming any extra messages. */
 	CONNECTION_GSS_STARTUP,		/* Negotiating GSSAPI. */
 	CONNECTION_CHECK_TARGET,	/* Checking target server properties. */
-	CONNECTION_CHECK_STANDBY	/* Checking if server is in standby mode. */
+	CONNECTION_CHECK_STANDBY,	/* Checking if server is in standby mode. */
+	CONNECTION_AUTHENTICATING,	/* Authentication is in progress with some
+								 * external system. */
 } ConnStatusType;
 
 typedef enum

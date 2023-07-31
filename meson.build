@@ -223,6 +223,8 @@ elif host_system == 'darwin'
   dlsuffix = '.dylib'
   library_path_var = 'DYLD_LIBRARY_PATH'
 
+  cppflags += '-DCOMPLETELY_UNUSED_XXX'
+
   export_file_format = 'darwin'
   export_fmt = '-exported_symbols_list=@0@'
 
@@ -244,6 +246,7 @@ elif host_system == 'darwin'
 
 elif host_system == 'freebsd'
   sema_kind = 'unnamed_posix'
+  cppflags += '-DCOMPLETELY_UNUSED_XXX'
 
 elif host_system == 'linux'
   sema_kind = 'unnamed_posix'
@@ -261,6 +264,7 @@ elif host_system == 'netbsd'
   ldflags += ['-Wl,-z,now', '-Wl,-z,relro']
 
 elif host_system == 'openbsd'
+  cppflags += '-DCOMPLETELY_UNUSED_XXX'
   # you're ok
 
 elif host_system == 'sunos'
@@ -838,6 +842,49 @@ else
   lz4 = not_found_dep
 endif
 
+
+
+###############################################################
+# Library: oauth
+###############################################################
+
+oauth = not_found_dep
+oauth_library = 'none'
+oauthopt = get_option('oauth')
+
+if oauthopt == 'auto' and auto_features.disabled()
+  oauthopt = 'none'
+endif
+
+if oauthopt in ['auto', 'curl']
+  oauth = dependency('libcurl', required: (oauthopt == 'curl'))
+
+  if oauth.found()
+    oauth_library = 'curl'
+    cdata.set('USE_OAUTH', 1)
+    cdata.set('USE_OAUTH_CURL', 1)
+  endif
+endif
+
+if not oauth.found() and oauthopt in ['auto', 'iddawc']
+  oauth = dependency('libiddawc', required: (oauthopt == 'iddawc'))
+
+  if oauth.found()
+    oauth_library = 'iddawc'
+    cdata.set('USE_OAUTH', 1)
+    cdata.set('USE_OAUTH_IDDAWC', 1)
+
+    # Check for an older spelling of i_get_openid_config
+    if cc.has_function('i_load_openid_config',
+                       dependencies: oauth, args: test_c_args)
+      cdata.set('HAVE_I_LOAD_OPENID_CONFIG', 1)
+    endif
+  endif
+endif
+
+if oauthopt == 'auto' and auto_features.enabled() and not oauth.found()
+  error('no OAuth implementation library found')
+endif
 
 
 ###############################################################
@@ -2815,6 +2862,7 @@ libpq_deps += [
   gssapi,
   ldap_r,
   libintl,
+  oauth,
   ssl,
 ]
 
@@ -3092,6 +3140,9 @@ else
 endif
 
 testwrap = files('src/tools/testwrap')
+make_venv = files('src/tools/make_venv')
+
+checked_working_venv = false
 
 foreach test_dir : tests
   testwrap_base = [
@@ -3252,6 +3303,96 @@ foreach test_dir : tests
         )
       endforeach
       install_suites += test_group
+    elif kind == 'pytest'
+      venv_name = test_dir['name'] + '_venv'
+      venv_path = meson.build_root() / venv_name
+
+      # The Python tests require a working venv module. This is part of the
+      # standard library, but some platforms disable it until a separate package
+      # is installed. Those same platforms don't provide an easy way to check
+      # whether the venv command will work until the first time you try it, so
+      # we decide whether or not to enable these tests on the fly.
+      if not checked_working_venv
+        cmd = run_command(python, '-m', 'venv', venv_path, check: false)
+
+        have_working_venv = (cmd.returncode() == 0)
+        if not have_working_venv
+          warning('A working Python venv module is required to run Python tests.')
+        endif
+
+        checked_working_venv = true
+      endif
+
+      if not have_working_venv
+        continue
+      endif
+
+      # Make sure the temporary installation is in PATH (necessary both for
+      # --temp-instance and for any pip modules compiling against libpq, like
+      # psycopg2).
+      env = test_env
+      env.prepend('PATH', temp_install_bindir, test_dir['bd'])
+
+      foreach name, value : t.get('env', {})
+        env.set(name, value)
+      endforeach
+
+      reqs = files(t['requirements'])
+      test('install_' + venv_name,
+        python,
+        args: [ make_venv, '--requirements', reqs, venv_path ],
+        env: env,
+        priority: setup_tests_priority - 1,  # must run after tmp_install
+        is_parallel: false,
+        suite: ['setup'],
+        timeout: 60,  # 30s is too short for the cryptography package compile
+      )
+
+      test_group = test_dir['name']
+      test_output = test_result_dir / test_group / kind
+      test_kwargs = {
+        #'protocol': 'tap',
+        'suite': test_group,
+        'timeout': 1000,
+        'depends': test_deps,
+        'env': env,
+      }
+
+      pytest = venv_path / 'bin' / 'py.test'
+      test_command = [
+        pytest,
+        # Avoid running these tests against an existing database.
+        '--temp-instance', test_output / 'data',
+
+        # FIXME pytest-tap's stream feature accidentally suppresses errors that
+        # are critical for debugging:
+        #     https://github.com/python-tap/pytest-tap/issues/30
+        # Don't use the meson TAP protocol for now...
+        #'--tap-stream',
+      ]
+
+      foreach pyt : t['tests']
+        # Similarly to TAP, strip ./ and .py to make the names prettier
+        pyt_p = pyt
+        if pyt_p.startswith('./')
+          pyt_p = pyt_p.split('./')[1]
+        endif
+        if pyt_p.endswith('.py')
+          pyt_p = fs.stem(pyt_p)
+        endif
+
+        test(test_group / pyt_p,
+          python,
+          kwargs: test_kwargs,
+          args: testwrap_base + [
+            '--testgroup', test_group,
+            '--testname', pyt_p,
+            '--', test_command,
+            test_dir['sd'] / pyt,
+          ],
+        )
+      endforeach
+      install_suites += test_group
     else
       error('unknown kind @0@ of test in @1@'.format(kind, test_dir['sd']))
     endif
@@ -3371,6 +3512,7 @@ if meson.version().version_compare('>=0.57')
       'llvm': llvm,
       'lz4': lz4,
       'nls': libintl,
+      'oauth': oauth,
       'openssl': ssl,
       'pam': pam,
       'plperl': perl_dep,

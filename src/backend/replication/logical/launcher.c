@@ -440,6 +440,8 @@ retry:
 	worker->stream_fileset = NULL;
 	worker->leader_pid = is_parallel_apply_worker ? MyProcPid : InvalidPid;
 	worker->parallel_apply = is_parallel_apply_worker;
+	worker->relsync_completed = false;
+	worker->slotnum = slot;
 	worker->last_lsn = InvalidXLogRecPtr;
 	TIMESTAMP_NOBEGIN(worker->last_send_time);
 	TIMESTAMP_NOBEGIN(worker->last_recv_time);
@@ -459,24 +461,30 @@ retry:
 	snprintf(bgw.bgw_library_name, MAXPGPATH, "postgres");
 
 	if (is_parallel_apply_worker)
+	{
 		snprintf(bgw.bgw_function_name, BGW_MAXLEN, "ParallelApplyWorkerMain");
-	else
-		snprintf(bgw.bgw_function_name, BGW_MAXLEN, "ApplyWorkerMain");
-
-	if (OidIsValid(relid))
 		snprintf(bgw.bgw_name, BGW_MAXLEN,
-				 "logical replication worker for subscription %u sync %u", subid, relid);
-	else if (is_parallel_apply_worker)
-		snprintf(bgw.bgw_name, BGW_MAXLEN,
-				 "logical replication parallel apply worker for subscription %u", subid);
-	else
-		snprintf(bgw.bgw_name, BGW_MAXLEN,
-				 "logical replication apply worker for subscription %u", subid);
-
-	if (is_parallel_apply_worker)
+				 "logical replication parallel apply worker for subscription %u",
+				 subid);
 		snprintf(bgw.bgw_type, BGW_MAXLEN, "logical replication parallel worker");
+	}
+	else if (OidIsValid(relid))
+	{
+		snprintf(bgw.bgw_function_name, BGW_MAXLEN, "TablesyncWorkerMain");
+		snprintf(bgw.bgw_name, BGW_MAXLEN,
+				 "logical replication tablesync worker for subscription %u sync %u",
+				 subid,
+				 relid);
+		snprintf(bgw.bgw_type, BGW_MAXLEN, "logical replication tablesync worker");
+	}
 	else
-		snprintf(bgw.bgw_type, BGW_MAXLEN, "logical replication worker");
+	{
+		snprintf(bgw.bgw_function_name, BGW_MAXLEN, "ApplyWorkerMain");
+		snprintf(bgw.bgw_name, BGW_MAXLEN,
+				 "logical replication apply worker for subscription %u",
+				 subid);
+		snprintf(bgw.bgw_type, BGW_MAXLEN, "logical replication apply worker");
+	}
 
 	bgw.bgw_restart_time = BGW_NEVER_RESTART;
 	bgw.bgw_notify_pid = MyProcPid;

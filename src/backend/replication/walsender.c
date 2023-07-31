@@ -1830,7 +1830,14 @@ exec_replication_command(const char *cmd_string)
 				if (cmd->kind == REPLICATION_KIND_PHYSICAL)
 					StartReplication(cmd);
 				else
+				{
+					/*
+					 * Reset flags because reusing tablesync workers can mean
+					 * this is the second time here.
+					 */
+					streamingDoneSending = streamingDoneReceiving = false;
 					StartLogicalReplication(cmd);
+				}
 
 				/* dupe, but necessary per libpqrcv_endstreaming */
 				EndReplicationCommand(cmdtag);

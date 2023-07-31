@@ -19,6 +19,7 @@
 #include "datatype/timestamp.h"
 #include "miscadmin.h"
 #include "replication/logicalrelation.h"
+#include "replication/walreceiver.h"
 #include "storage/buffile.h"
 #include "storage/fileset.h"
 #include "storage/lock.h"
@@ -38,6 +39,9 @@ typedef struct LogicalRepWorker
 	/* Increased every time the slot is taken by new worker. */
 	uint16		generation;
 
+	/* Slot number of this worker. */
+	int			slotnum;
+
 	/* Pointer to proc array. NULL if not running. */
 	PGPROC	   *proc;
 
@@ -55,6 +59,8 @@ typedef struct LogicalRepWorker
 	char		relstate;
 	XLogRecPtr	relstate_lsn;
 	slock_t		relmutex;
+	bool		relsync_completed; /* has tablesync finished syncing
+									* the assigned table? */
 
 	/*
 	 * Used to create the changes and subxact files for the streaming
@@ -243,7 +249,6 @@ extern int	logicalrep_sync_worker_count(Oid subid);
 
 extern void ReplicationOriginNameForLogicalRep(Oid suboid, Oid relid,
 											   char *originname, Size szoriginname);
-extern char *LogicalRepSyncTableStart(XLogRecPtr *origin_startpos);
 
 extern bool AllTablesyncsReady(void);
 extern void UpdateTwoPhaseState(Oid suboid, char new_state);
@@ -265,7 +270,17 @@ extern void maybe_reread_subscription(void);
 
 extern void stream_cleanup_files(Oid subid, TransactionId xid);
 
-extern void InitializeApplyWorker(void);
+extern void set_stream_options(WalRcvStreamOptions *options,
+							   char *slotname,
+							   XLogRecPtr *origin_startpos);
+
+extern void start_apply(XLogRecPtr origin_startpos);
+
+extern void InitializeLogRepWorker(void);
+
+extern void SetupApplyOrSyncWorker(int worker_slot);
+
+extern void DisableSubscriptionAndExit(void);
 
 extern void store_flush_position(XLogRecPtr remote_lsn, XLogRecPtr local_lsn);
 
@@ -304,6 +319,7 @@ extern void pa_decr_and_wait_stream_block(void);
 
 extern void pa_xact_finish(ParallelApplyWorkerInfo *winfo,
 						   XLogRecPtr remote_lsn);
+
 
 #define isParallelApplyWorker(worker) ((worker)->leader_pid != InvalidPid)
 

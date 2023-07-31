@@ -29,6 +29,18 @@ typedef struct EventTriggerData
 	CommandTag	tag;
 } EventTriggerData;
 
+typedef enum ignore_event_trigger_events
+{
+	IGNORE_EVENT_TRIGGER_NONE,
+	IGNORE_EVENT_TRIGGER_DDL_START,
+	IGNORE_EVENT_TRIGGER_DDL_END,
+	IGNORE_EVENT_TRIGGER_TABLE_REWRITE,
+	IGNORE_EVENT_TRIGGER_SQL_DROP,
+	IGNORE_EVENT_TRIGGER_ALL
+} IgnoreEventTriggersEvents;
+
+extern PGDLLIMPORT int ignore_event_trigger;
+
 #define AT_REWRITE_ALTER_PERSISTENCE	0x01
 #define AT_REWRITE_DEFAULT_VAL			0x02
 #define AT_REWRITE_COLUMN_REWRITE		0x04

@@ -33,6 +33,39 @@ END; $$;
 SELECT toplevel, calls, query FROM pg_stat_statements
   ORDER BY query COLLATE "C", toplevel;
 
+-- DO block - top-level tracking without utility.
+SET pg_stat_statements.track = 'top';
+SET pg_stat_statements.track_utility = FALSE;
+SELECT pg_stat_statements_reset();
+DELETE FROM stats_track_tab;
+DO $$
+BEGIN
+  DELETE FROM stats_track_tab;
+END; $$;
+DO LANGUAGE plpgsql $$
+BEGIN
+  -- this is a SELECT
+  PERFORM 'hello world'::TEXT;
+END; $$;
+SELECT toplevel, calls, query FROM pg_stat_statements
+  ORDER BY query COLLATE "C", toplevel;
+
+-- DO block - all-level tracking without utility.
+SET pg_stat_statements.track = 'all';
+SELECT pg_stat_statements_reset();
+DELETE FROM stats_track_tab;
+DO $$
+BEGIN
+  DELETE FROM stats_track_tab;
+END; $$;
+DO LANGUAGE plpgsql $$
+BEGIN
+  -- this is a SELECT
+  PERFORM 'hello world'::TEXT;
+END; $$;
+SELECT toplevel, calls, query FROM pg_stat_statements
+  ORDER BY query COLLATE "C", toplevel;
+
 -- PL/pgSQL function - top-level tracking.
 SET pg_stat_statements.track = 'top';
 SET pg_stat_statements.track_utility = FALSE;

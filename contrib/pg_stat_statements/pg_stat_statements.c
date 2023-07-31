@@ -1198,14 +1198,29 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	}
 	else
 	{
-		if (prev_ProcessUtility)
-			prev_ProcessUtility(pstmt, queryString, readOnlyTree,
-								context, params, queryEnv,
-								dest, qc);
-		else
-			standard_ProcessUtility(pstmt, queryString, readOnlyTree,
+		/*
+		 * We need to increase the nesting level to correctly track 
+		 * the level of nested statements in case track_utility is disabled.
+		 */
+		if (PGSS_HANDLED_UTILITY(parsetree))
+			exec_nested_level++;
+		PG_TRY();
+		{
+			if (prev_ProcessUtility)
+				prev_ProcessUtility(pstmt, queryString, readOnlyTree,
 									context, params, queryEnv,
 									dest, qc);
+			else
+				standard_ProcessUtility(pstmt, queryString, readOnlyTree,
+										context, params, queryEnv,
+										dest, qc);
+		}
+		PG_FINALLY();
+		{
+			if (PGSS_HANDLED_UTILITY(parsetree))
+				exec_nested_level--;
+		}
+		PG_END_TRY();
 	}
 }
 

@@ -406,6 +406,22 @@
         <entry align="left"></entry>
        </row>
        <row>
+        <entry align="left"><literal>ALTER VARIABLE</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
+        <entry align="center"><literal>-</literal></entry>
+        <entry align="center"><literal>-</literal></entry>
+        <entry align="left"></entry>
+       </row>
+       <row>
+        <entry align="left"><literal>ALTER VARIABLE</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
+        <entry align="center"><literal>-</literal></entry>
+        <entry align="center"><literal>-</literal></entry>
+        <entry align="left"></entry>
+       </row>
+       <row>
         <entry align="left"><literal>ALTER VIEW</literal></entry>
         <entry align="center"><literal>X</literal></entry>
         <entry align="center"><literal>X</literal></entry>
@@ -694,6 +710,22 @@
         <entry align="left"></entry>
        </row>
        <row>
+        <entry align="left"><literal>CREATE VARIABLE</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
+        <entry align="center"><literal>-</literal></entry>
+        <entry align="center"><literal>-</literal></entry>
+        <entry align="left"></entry>
+       </row>
+       <row>
+        <entry align="left"><literal>CREATE VARIABLE</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
+        <entry align="center"><literal>-</literal></entry>
+        <entry align="center"><literal>-</literal></entry>
+        <entry align="left"></entry>
+       </row>
+       <row>
         <entry align="left"><literal>CREATE VIEW</literal></entry>
         <entry align="center"><literal>X</literal></entry>
         <entry align="center"><literal>X</literal></entry>
@@ -975,6 +1007,22 @@
        </row>
        <row>
         <entry align="left"><literal>DROP USER MAPPING</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
+        <entry align="center"><literal>-</literal></entry>
+        <entry align="left"></entry>
+       </row>
+       <row>
+        <entry align="left"><literal>DROP VARIABLE</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
+        <entry align="center"><literal>X</literal></entry>
+        <entry align="center"><literal>-</literal></entry>
+        <entry align="left"></entry>
+       </row>
+       <row>
+        <entry align="left"><literal>DROP VARIABLE</literal></entry>
         <entry align="center"><literal>X</literal></entry>
         <entry align="center"><literal>X</literal></entry>
         <entry align="center"><literal>X</literal></entry>

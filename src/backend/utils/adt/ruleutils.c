@@ -38,6 +38,7 @@
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_variable.h"
 #include "commands/defrem.h"
 #include "commands/tablespace.h"
 #include "common/keywords.h"
@@ -515,6 +516,7 @@ static char *generate_function_name(Oid funcid, int nargs,
 static char *generate_operator_name(Oid operid, Oid arg1, Oid arg2);
 static void add_cast_to(StringInfo buf, Oid typid);
 static char *generate_qualified_type_name(Oid typid);
+static char *generate_session_variable_name(Oid varid);
 static text *string_to_text(char *str);
 static char *flatten_reloptions(Oid relid);
 static void get_reloptions(StringInfo buf, Datum reloptions);
@@ -8164,6 +8166,14 @@ get_parameter(Param *param, deparse_context *context)
 		return;
 	}
 
+	/* translate paramvarid to session variable name */
+	if (param->paramkind == PARAM_VARIABLE)
+	{
+		appendStringInfo(context->buf, "%s",
+						 generate_session_variable_name(param->paramvarid));
+		return;
+	}
+
 	/*
 	 * If it's an external parameter, see if the outermost namespace provides
 	 * function argument names.
@@ -12475,6 +12485,42 @@ generate_collation_name(Oid collid)
 	result = quote_qualified_identifier(nspname, collname);
 
 	ReleaseSysCache(tp);
+
+	return result;
+}
+
+/*
+ * generate_session_variable_name
+ *		Compute the name to display for a session variable specified by OID
+ *
+ * The result includes all necessary quoting and schema-prefixing.
+ */
+static char *
+generate_session_variable_name(Oid varid)
+{
+	HeapTuple	tup;
+	Form_pg_variable varform;
+	char	   *varname;
+	char	   *nspname;
+	char	   *result;
+
+	tup = SearchSysCache1(VARIABLEOID, ObjectIdGetDatum(varid));
+
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "cache lookup failed for variable %u", varid);
+
+	varform = (Form_pg_variable) GETSTRUCT(tup);
+
+	varname = NameStr(varform->varname);
+
+	if (!VariableIsVisible(varid))
+		nspname = get_namespace_name_or_temp(varform->varnamespace);
+	else
+		nspname = NULL;
+
+	result = quote_qualified_identifier(nspname, varname);
+
+	ReleaseSysCache(tup);
 
 	return result;
 }

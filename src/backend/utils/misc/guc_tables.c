@@ -1546,6 +1546,16 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"session_variables_ambiguity_warning", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Raise warning when reference to a session variable is ambiguous."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&session_variables_ambiguity_warning,
+		false,
+		NULL, NULL, NULL
+	},
+	{
 		{"default_transaction_read_only", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Sets the default read-only status of new transactions."),
 			NULL,

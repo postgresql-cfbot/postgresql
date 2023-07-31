@@ -149,4 +149,7 @@ extern bool listOpFamilyFunctions(const char *access_method_pattern,
 /* \dl or \lo_list */
 extern bool listLargeObjects(bool verbose);
 
+/* \dV */
+extern bool listVariables(const char *pattern, bool varbose);
+
 #endif							/* DESCRIBE_H */

@@ -36,6 +36,7 @@
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_transform.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_variable.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "utils/array.h"
@@ -3695,4 +3696,116 @@ get_subscription_name(Oid subid, bool missing_ok)
 	ReleaseSysCache(tup);
 
 	return subname;
+}
+
+/*				---------- PG_VARIABLE CACHE ----------				 */
+
+/*
+ * get_varname_varid
+ *		Given name and namespace of variable, look up the OID.
+ */
+Oid
+get_varname_varid(const char *varname, Oid varnamespace)
+{
+	return GetSysCacheOid2(VARIABLENAMENSP, Anum_pg_variable_oid,
+						   PointerGetDatum(varname),
+						   ObjectIdGetDatum(varnamespace));
+}
+
+/*
+ * get_session_variable_name
+ *		Returns a palloc'd copy of the name of a given session variable.
+ */
+char *
+get_session_variable_name(Oid varid)
+{
+	HeapTuple	tup;
+	Form_pg_variable varform;
+	char	   *varname;
+
+	tup = SearchSysCache1(VARIABLEOID, ObjectIdGetDatum(varid));
+
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "cache lookup failed for session variable %u", varid);
+
+	varform = (Form_pg_variable) GETSTRUCT(tup);
+
+	varname = pstrdup(NameStr(varform->varname));
+
+	ReleaseSysCache(tup);
+
+	return varname;
+}
+
+/*
+ * get_session_variable_namespace
+ *		Returns the pg_namespace OID associated with a given session variable.
+ */
+Oid
+get_session_variable_namespace(Oid varid)
+{
+	HeapTuple	tup;
+	Form_pg_variable varform;
+	Oid			varnamespace;
+
+	tup = SearchSysCache1(VARIABLEOID, ObjectIdGetDatum(varid));
+
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "cache lookup failed for variable %u", varid);
+
+	varform = (Form_pg_variable) GETSTRUCT(tup);
+
+	varnamespace = varform->varnamespace;
+
+	ReleaseSysCache(tup);
+
+	return varnamespace;
+}
+
+/*
+ * Returns the type, typmod and collid of the given session variable.
+ */
+Oid
+get_session_variable_type(Oid varid)
+{
+	HeapTuple	tup;
+	Form_pg_variable varform;
+	Oid			vartype;
+
+	tup = SearchSysCache1(VARIABLEOID, ObjectIdGetDatum(varid));
+
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "cache lookup failed for session variable %u", varid);
+
+	varform = (Form_pg_variable) GETSTRUCT(tup);
+
+	vartype = varform->vartype;
+
+	ReleaseSysCache(tup);
+
+	return vartype;
+}
+
+/*
+ * Returns the type, typmod and collid of the given session variable.
+ */
+void
+get_session_variable_type_typmod_collid(Oid varid, Oid *typid, int32 *typmod,
+										Oid *collid)
+{
+	HeapTuple	tup;
+	Form_pg_variable varform;
+
+	tup = SearchSysCache1(VARIABLEOID, ObjectIdGetDatum(varid));
+
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "cache lookup failed for session variable %u", varid);
+
+	varform = (Form_pg_variable) GETSTRUCT(tup);
+
+	*typid = varform->vartype;
+	*typmod = varform->vartypmod;
+	*collid = varform->varcollation;
+
+	ReleaseSysCache(tup);
 }

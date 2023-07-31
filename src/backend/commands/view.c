@@ -489,7 +489,7 @@ DefineView(ViewStmt *stmt, const char *queryString,
 	 */
 	view = copyObject(stmt->view);	/* don't corrupt original command */
 	if (view->relpersistence == RELPERSISTENCE_PERMANENT
-		&& isQueryUsingTempRelation(viewParse))
+		&& isQueryUsingTempObject(viewParse))
 	{
 		view->relpersistence = RELPERSISTENCE_TEMP;
 		ereport(NOTICE,

@@ -568,9 +568,9 @@ DropAllPreparedStatements(void)
  * not the original PREPARE; we get the latter string from the plancache.
  */
 void
-ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
-					const char *queryString, ParamListInfo params,
-					QueryEnvironment *queryEnv)
+ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, Oid targetvar,
+					ExplainState *es, const char *queryString,
+					ParamListInfo params, QueryEnvironment *queryEnv)
 {
 	PreparedStatement *entry;
 	const char *query_string;
@@ -639,11 +639,11 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 		PlannedStmt *pstmt = lfirst_node(PlannedStmt, p);
 
 		if (pstmt->commandType != CMD_UTILITY)
-			ExplainOnePlan(pstmt, into, es, query_string, paramLI, queryEnv,
+			ExplainOnePlan(pstmt, into, targetvar, es, query_string, paramLI, queryEnv,
 						   &planduration, (es->buffers ? &bufusage : NULL));
 		else
-			ExplainOneUtility(pstmt->utilityStmt, into, es, query_string,
-							  paramLI, queryEnv);
+			ExplainOneUtility(pstmt->utilityStmt, into, targetvar, es,
+							  query_string, paramLI, queryEnv);
 
 		/* No need for CommandCounterIncrement, as ExplainOnePlan did it */
 

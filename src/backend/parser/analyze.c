@@ -25,9 +25,12 @@
 #include "postgres.h"
 
 #include "access/sysattr.h"
+#include "catalog/namespace.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_variable.h"
 #include "commands/defrem.h"
+#include "commands/session_variable.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -52,6 +55,7 @@
 #include "utils/backend_status.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
 
@@ -85,6 +89,8 @@ static Query *transformCreateTableAsStmt(ParseState *pstate,
 										 CreateTableAsStmt *stmt);
 static Query *transformCallStmt(ParseState *pstate,
 								CallStmt *stmt);
+static Query *transformLetStmt(ParseState *pstate,
+							   LetStmt *stmt);
 static void transformLockingClause(ParseState *pstate, Query *qry,
 								   LockingClause *lc, bool pushedDown);
 #ifdef RAW_EXPRESSION_COVERAGE_TEST
@@ -328,6 +334,7 @@ transformStmt(ParseState *pstate, Node *parseTree)
 		case T_UpdateStmt:
 		case T_DeleteStmt:
 		case T_MergeStmt:
+		case T_LetStmt:
 			(void) test_raw_expression_coverage(parseTree, NULL);
 			break;
 		default:
@@ -401,6 +408,11 @@ transformStmt(ParseState *pstate, Node *parseTree)
 									   (CallStmt *) parseTree);
 			break;
 
+		case T_LetStmt:
+			result = transformLetStmt(pstate,
+									  (LetStmt *) parseTree);
+			break;
+
 		default:
 
 			/*
@@ -443,6 +455,7 @@ analyze_requires_snapshot(RawStmt *parseTree)
 		case T_MergeStmt:
 		case T_SelectStmt:
 		case T_PLAssignStmt:
+		case T_LetStmt:
 			result = true;
 			break;
 
@@ -526,6 +539,8 @@ transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt)
 	qry->hasWindowFuncs = pstate->p_hasWindowFuncs;
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasAggs = pstate->p_hasAggs;
+
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	assign_query_collations(pstate, qry);
 
@@ -951,6 +966,7 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasSubLinks = pstate->p_hasSubLinks;
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	assign_query_collations(pstate, qry);
 
@@ -1405,6 +1421,7 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt)
 	qry->hasWindowFuncs = pstate->p_hasWindowFuncs;
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasAggs = pstate->p_hasAggs;
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	foreach(l, stmt->lockingClause)
 	{
@@ -1631,10 +1648,260 @@ transformValuesClause(ParseState *pstate, SelectStmt *stmt)
 	qry->jointree = makeFromExpr(pstate->p_joinlist, NULL);
 
 	qry->hasSubLinks = pstate->p_hasSubLinks;
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	assign_query_collations(pstate, qry);
 
 	return qry;
+}
+
+/*
+ * transformLetStmt -
+ *	  transform an Let Statement
+ */
+static Query *
+transformLetStmt(ParseState *pstate, LetStmt *stmt)
+{
+	Query	   *query;
+	Query	   *result;
+	List	   *exprList = NIL;
+	List	   *exprListCoer = NIL;
+	ListCell   *lc;
+	ListCell   *indirection_head = NULL;
+	Query	   *selectQuery;
+	Oid			varid;
+	char	   *attrname = NULL;
+	bool		not_unique;
+	bool		is_rowtype;
+	Oid			typid;
+	int32		typmod;
+	Oid			collid;
+	AclResult	aclresult;
+	List	   *names = NULL;
+	int			indirection_start;
+	int			i = 0;
+
+	/* There can't be any outer WITH to worry about */
+	Assert(pstate->p_ctenamespace == NIL);
+
+	names = NamesFromList(stmt->target);
+
+	/*
+	 * The AccessShareLock is created on related session variable. The lock
+	 * will be kept for the whole transaction.
+	 */
+	varid = IdentifyVariable(names, &attrname, &not_unique, false);
+	if (not_unique)
+		ereport(ERROR,
+				(errcode(ERRCODE_AMBIGUOUS_PARAMETER),
+				 errmsg("target \"%s\" of LET command is ambiguous",
+						NameListToString(names)),
+				 parser_errposition(pstate, stmt->location)));
+
+	if (!OidIsValid(varid))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("session variable \"%s\" doesn't exist",
+						NameListToString(names)),
+				 parser_errposition(pstate, stmt->location)));
+
+	/*
+	 * Calculate start of possible position of an indirection in list, and
+	 * when it is inside the list, store pointer on first node of indirection.
+	 */
+	indirection_start = list_length(names) - (attrname ? 1 : 0);
+	if (list_length(stmt->target) > indirection_start)
+		indirection_head = list_nth_cell(stmt->target, indirection_start);
+
+	get_session_variable_type_typmod_collid(varid, &typid, &typmod, &collid);
+
+	is_rowtype = type_is_rowtype(typid);
+
+	if (attrname && !is_rowtype)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("type \"%s\" of target session variable \"%s.%s\" is not a composite type",
+						format_type_be(typid),
+						get_namespace_name(get_session_variable_namespace(varid)),
+						get_session_variable_name(varid)),
+				 parser_errposition(pstate, stmt->location)));
+
+	aclresult = object_aclcheck(VariableRelationId, varid, GetUserId(), ACL_UPDATE);
+	if (aclresult != ACLCHECK_OK)
+		aclcheck_error(aclresult, OBJECT_VARIABLE, NameListToString(names));
+
+	/*
+	 * The behavior of EXPR_KIND_LET_TARGET is almost same like
+	 * EXPR_KIND_UPDATE_TARGET. EXPR_KIND_LET_TARGET was introduced to be
+	 * possible to raise more correct errors, where the command LET is
+	 * mentioned (instead UPDATE command).
+	 */
+	pstate->p_expr_kind = EXPR_KIND_LET_TARGET;
+
+	selectQuery = transformStmt(pstate, stmt->query);
+
+	/* The grammar should have produced a SELECT */
+	Assert(IsA(selectQuery, Query) && selectQuery->commandType == CMD_SELECT);
+
+	/*----------
+	 * Generate an expression list for the LET that selects all the
+	 * non-resjunk columns from the subquery.
+	 *----------
+	 */
+	exprList = NIL;
+	foreach(lc, selectQuery->targetList)
+	{
+		TargetEntry *tle = (TargetEntry *) lfirst(lc);
+
+		if (tle->resjunk)
+			continue;
+
+		exprList = lappend(exprList, tle->expr);
+	}
+
+	/* don't allow multicolumn result */
+	if (list_length(exprList) != 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg_plural("assignment expression returned %d column",
+							   "assignment expression returned %d columns",
+							   list_length(exprList),
+							   list_length(exprList)),
+				 parser_errposition(pstate,
+									exprLocation((Node *) exprList))));
+
+	exprListCoer = NIL;
+
+	foreach(lc, exprList)
+	{
+		Expr	   *expr = (Expr *) lfirst(lc);
+		Expr	   *coerced_expr;
+		Param	   *param;
+		Oid			exprtypid;
+
+		if (IsA(expr, Const) && ((Const *) expr)->constisnull)
+		{
+			/* use known type for NULL value */
+			expr = (Expr *) makeNullConst(typid, typmod, collid);
+		}
+
+		/* now we can read type of expression */
+		exprtypid = exprType((Node *) expr);
+
+		param = makeNode(Param);
+		param->paramkind = PARAM_VARIABLE;
+		param->paramvarid = varid;
+		param->paramtype = typid;
+		param->paramtypmod = typmod;
+
+		if (indirection_head)
+		{
+			bool		targetIsArray;
+			char	   *targetName;
+
+			targetName = get_session_variable_name(varid);
+			targetIsArray = OidIsValid(get_element_type(typid));
+
+			pstate->p_hasSessionVariables = true;
+
+			coerced_expr = (Expr *)
+				transformAssignmentIndirection(pstate,
+											   (Node *) param,
+											   targetName,
+											   targetIsArray,
+											   typid,
+											   typmod,
+											   InvalidOid,
+											   stmt->target,
+											   indirection_head,
+											   (Node *) expr,
+											   COERCION_PLPGSQL,
+											   stmt->location);
+		}
+		else
+			coerced_expr = (Expr *)
+				coerce_to_target_type(pstate,
+									  (Node *) expr,
+									  exprtypid,
+									  typid, typmod,
+									  COERCION_ASSIGNMENT,
+									  COERCE_IMPLICIT_CAST,
+									  stmt->location);
+
+		if (coerced_expr == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATATYPE_MISMATCH),
+					 errmsg("variable \"%s.%s\" is of type %s,"
+							" but expression is of type %s",
+							get_namespace_name(get_session_variable_namespace(varid)),
+							get_session_variable_name(varid),
+							format_type_be(typid),
+							format_type_be(exprtypid)),
+					 errhint("You will need to rewrite or cast the expression."),
+					 parser_errposition(pstate, exprLocation((Node *) expr))));
+
+		exprListCoer = lappend(exprListCoer, coerced_expr);
+	}
+
+	/*
+	 * Generate query's target list using the computed list of expressions.
+	 */
+	query = makeNode(Query);
+	query->commandType = CMD_SELECT;
+
+	foreach(lc, exprListCoer)
+	{
+		Expr	   *expr = (Expr *) lfirst(lc);
+		TargetEntry *tle;
+
+		tle = makeTargetEntry(expr,
+							  i + 1,
+							  FigureColname((Node *) expr),
+							  false);
+		query->targetList = lappend(query->targetList, tle);
+	}
+
+	/* done building the range table and jointree */
+	query->rtable = pstate->p_rtable;
+	query->jointree = makeFromExpr(pstate->p_joinlist, NULL);
+
+	query->hasTargetSRFs = pstate->p_hasTargetSRFs;
+	query->hasSubLinks = pstate->p_hasSubLinks;
+	query->hasSessionVariables = pstate->p_hasSessionVariables;
+
+	/* This is top query */
+	query->canSetTag = true;
+
+	/*
+	 * Save target session variable id. This value is used multiple times: by
+	 * query rewriter (for getting related defexpr), by planner (for acquiring
+	 * AccessShareLock on target variable), and by executor (we need to know
+	 * target variable id).
+	 */
+	query->resultVariable = varid;
+
+	assign_query_collations(pstate, query);
+
+	stmt->query = (Node *) query;
+
+	/*
+	 * Inside PL/pgSQL we don't want to execute LET statement as utility
+	 * command, because it disallow to execute expression as simple
+	 * expression. So for PL/pgSQL we have extra path, and we return SELECT.
+	 * Then it can be executed by exec_eval_expr. Result is dirrectly assigned
+	 * to target session variable inside PL/pgSQL LET statement handler. This
+	 * is extra code, extra path, but possibility to get faster execution is
+	 * too attractive.
+	 */
+	if (stmt->plpgsql_mode)
+		return query;
+
+	/* represent the command as a utility Query */
+	result = makeNode(Query);
+	result->commandType = CMD_UTILITY;
+	result->utilityStmt = (Node *) stmt;
+
+	return result;
 }
 
 /*
@@ -1881,6 +2148,7 @@ transformSetOperationStmt(ParseState *pstate, SelectStmt *stmt)
 	qry->hasWindowFuncs = pstate->p_hasWindowFuncs;
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasAggs = pstate->p_hasAggs;
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	foreach(l, lockingClause)
 	{
@@ -2421,6 +2689,7 @@ transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt)
 
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasSubLinks = pstate->p_hasSubLinks;
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	assign_query_collations(pstate, qry);
 
@@ -2604,9 +2873,15 @@ transformPLAssignStmt(ParseState *pstate, PLAssignStmt *stmt)
 	/*
 	 * Transform the target reference.  Typically we will get back a Param
 	 * node, but there's no reason to be too picky about its type.
+	 *
+	 * The session variables should not be used as target of PL/pgSQL assign
+	 * statement. So we should to use special parser expr kind, that disallow
+	 * usage of session variables. This block unwanted (in this context)
+	 * possible warning so target PL/pgSQL's variable shadows some session
+	 * variable.
 	 */
 	target = transformExpr(pstate, (Node *) cref,
-						   EXPR_KIND_UPDATE_TARGET);
+						   EXPR_KIND_ASSIGN_VARIABLE);
 	targettype = exprType(target);
 	targettypmod = exprTypmod(target);
 	targetcollation = exprCollation(target);
@@ -2648,6 +2923,10 @@ transformPLAssignStmt(ParseState *pstate, PLAssignStmt *stmt)
 	 */
 	type_id = exprType((Node *) tle->expr);
 
+	/*
+	 * For indirection processing and additional casts we can use expr_kind
+	 * EXPR_KIND_UPDATE_TARGET
+	 */
 	pstate->p_expr_kind = EXPR_KIND_UPDATE_TARGET;
 
 	if (indirection)
@@ -2983,10 +3262,10 @@ transformCreateTableAsStmt(ParseState *pstate, CreateTableAsStmt *stmt)
 		 * creation query. It would be hard to refresh data or incrementally
 		 * maintain it if a source disappeared.
 		 */
-		if (isQueryUsingTempRelation(query))
+		if (isQueryUsingTempObject(query))
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("materialized views must not use temporary tables or views")));
+					 errmsg("materialized views must not use temporary tables, views or session variables")));
 
 		/*
 		 * A materialized view would either need to save parameters for use in

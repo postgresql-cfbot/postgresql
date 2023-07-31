@@ -65,6 +65,7 @@ COMMENT ON
   TRANSFORM FOR <replaceable>type_name</replaceable> LANGUAGE <replaceable>lang_name</replaceable> |
   TRIGGER <replaceable class="parameter">trigger_name</replaceable> ON <replaceable class="parameter">table_name</replaceable> |
   TYPE <replaceable class="parameter">object_name</replaceable> |
+  VARIABLE <replaceable class="parameter">object_name</replaceable> |
   VIEW <replaceable class="parameter">object_name</replaceable>
 } IS { <replaceable class="parameter">string_literal</replaceable> | NULL }
 

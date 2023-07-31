@@ -800,6 +800,16 @@ my %tests = (
 		unlike => { no_privs => 1, },
 	  },
 
+	'ALTER DEFAULT PRIVILEGES FOR ROLE regress_dump_test_role GRANT SELECT ON VARIABLES TO PUBLIC'
+	  => {
+		create_order => 56,
+		create_sql   => 'ALTER DEFAULT PRIVILEGES FOR ROLE regress_dump_test_role GRANT SELECT ON VARIABLES TO PUBLIC;',
+		regexp => qr/^
+			\QALTER DEFAULT PRIVILEGES FOR ROLE regress_dump_test_role GRANT SELECT ON VARIABLES TO PUBLIC;\E/xm,
+		like => { %full_runs, section_post_data => 1, },
+		unlike => { no_privs => 1, },
+	  },
+
 	'ALTER ROLE regress_dump_test_role' => {
 		regexp => qr/^
 			\QALTER ROLE regress_dump_test_role WITH \E
@@ -1649,6 +1659,23 @@ my %tests = (
 		unlike => {
 			exclude_dump_test_schema => 1,
 			only_dump_measurement => 1,
+		},
+	},
+
+	'COMMENT ON VARIABLE dump_test.variable1' => {
+		create_order => 71,
+		create_sql   => 'COMMENT ON VARIABLE dump_test.variable1
+					   IS \'comment on variable\';',
+		regexp =>
+		  qr/^\QCOMMENT ON VARIABLE dump_test.variable1 IS 'comment on variable';\E/m,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			section_pre_data     => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement    => 1,
 		},
 	},
 
@@ -3944,6 +3971,132 @@ my %tests = (
 		},
 	},
 
+	'CREATE VARIABLE test_variable' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 61,
+		create_sql   => 'CREATE VARIABLE dump_test.variable1 AS integer;',
+		regexp => qr/^
+			\QCREATE VARIABLE dump_test.variable1 AS integer;\E/xm,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			section_pre_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement    => 1,
+		},
+	},
+
+	'CREATE VARIABLE test_variable ON TRANSACTION END RESET' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 61,
+		create_sql   => 'CREATE VARIABLE dump_test.variable2 AS integer ON TRANSACTION END RESET;',
+		regexp => qr/^
+			\QCREATE VARIABLE dump_test.variable2 AS integer ON TRANSACTION END RESET;\E/xm,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			section_pre_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement    => 1,
+		},
+	},
+
+	'CREATE VARIABLE test_variable DEFAULT' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 61,
+		create_sql   => 'CREATE VARIABLE dump_test.variable3 AS integer DEFAULT 10;',
+		regexp => qr/^
+			\QCREATE VARIABLE dump_test.variable3 AS integer DEFAULT 10;\E/xm,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			section_pre_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement    => 1,
+		},
+	},
+
+	'CREATE VARIABLE test_variable DEFAULT ON TRANSACTION END RESET' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 61,
+		create_sql   => 'CREATE VARIABLE dump_test.variable4 AS integer DEFAULT 10 ON TRANSACTION END RESET',
+		regexp => qr/^
+			\QCREATE VARIABLE dump_test.variable4 AS integer DEFAULT 10 ON TRANSACTION END RESET;\E/xm,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			section_pre_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement    => 1,
+		},
+	},
+
+	'CREATE IMMUTABLE VARIABLE test_variable' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 61,
+		create_sql   => 'CREATE IMMUTABLE VARIABLE dump_test.variable5 AS integer',
+		regexp => qr/^
+			\QCREATE IMMUTABLE VARIABLE dump_test.variable5 AS integer;\E/xm,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			section_pre_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement    => 1,
+		},
+	},
+
+	'CREATE VARIABLE test_variable NOT NULL' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 61,
+		create_sql   => 'CREATE VARIABLE dump_test.variable6 AS integer NOT NULL',
+		regexp => qr/^
+			\QCREATE VARIABLE dump_test.variable6 AS integer NOT NULL;\E/xm,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			section_pre_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement    => 1,
+		},
+	},
+
+	'CREATE IMMUTABLE VARIABLE test_variable NOT NULL DEFAULT' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 61,
+		create_sql   => 'CREATE IMMUTABLE VARIABLE dump_test.variable7 AS integer NOT NULL DEFAULT 10',
+		regexp => qr/^
+			\QCREATE IMMUTABLE VARIABLE dump_test.variable7 AS integer NOT NULL DEFAULT 10;\E/xm,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			section_pre_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement    => 1,
+		},
+	},
+
 	'CREATE VIEW test_view' => {
 		create_order => 61,
 		create_sql => 'CREATE VIEW dump_test.test_view
@@ -4402,6 +4555,25 @@ my %tests = (
 
 		# this shouldn't ever get emitted anymore
 		like => {},
+	},
+
+	'GRANT SELECT ON VARIABLE dump_test.variable1' => {
+		create_order => 73,
+		create_sql =>
+		  'GRANT SELECT ON VARIABLE dump_test.variable1 TO regress_dump_test_role;',
+		regexp => qr/^
+			\QGRANT SELECT ON VARIABLE dump_test.variable1 TO regress_dump_test_role;\E
+			/xm,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			section_pre_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			no_privs                 => 1,
+			only_dump_measurement    => 1,
+		},
 	},
 
 	'REFRESH MATERIALIZED VIEW matview' => {

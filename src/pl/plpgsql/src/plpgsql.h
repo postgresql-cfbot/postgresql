@@ -127,7 +127,8 @@ typedef enum PLpgSQL_stmt_type
 	PLPGSQL_STMT_PERFORM,
 	PLPGSQL_STMT_CALL,
 	PLPGSQL_STMT_COMMIT,
-	PLPGSQL_STMT_ROLLBACK
+	PLPGSQL_STMT_ROLLBACK,
+	PLPGSQL_STMT_LET
 } PLpgSQL_stmt_type;
 
 /*
@@ -519,6 +520,17 @@ typedef struct PLpgSQL_stmt_assign
 	int			varno;
 	PLpgSQL_expr *expr;
 } PLpgSQL_stmt_assign;
+
+/*
+ * Let statement
+ */
+typedef struct PLpgSQL_stmt_let
+{
+	PLpgSQL_stmt_type cmd_type;
+	int			lineno;
+	unsigned int stmtid;
+	PLpgSQL_expr *expr;
+} PLpgSQL_stmt_let;
 
 /*
  * PERFORM statement

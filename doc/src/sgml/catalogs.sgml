@@ -369,6 +369,11 @@
       <entry><link linkend="catalog-pg-user-mapping"><structname>pg_user_mapping</structname></link></entry>
       <entry>mappings of users to foreign servers</entry>
      </row>
+
+     <row>
+      <entry><link linkend="catalog-pg-variable"><structname>pg_variable</structname></link></entry>
+      <entry>session variables</entry>
+     </row>
     </tbody>
    </tgroup>
   </table>
@@ -9668,4 +9673,170 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
   </table>
  </sect1>
 
+ <sect1 id="catalog-pg-variable">
+  <title><structname>pg_variable</structname></title>
+
+  <indexterm zone="catalog-pg-variable">
+   <primary>pg_variable</primary>
+  </indexterm>
+
+  <para>
+   The table <structname>pg_variable</structname> provides information about
+   session variables.
+  </para>
+
+  <table>
+   <title><structname>pg_variable</structname> Columns</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>oid</structfield> <type>oid</type>
+      </para>
+      <para>
+       Row identifier
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>vartype</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-type"><structname>pg_type</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       The OID of the variable's data type
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>varcreate_lsn</structfield> <type>XLogRecPtr</type>
+      </para>
+      <para>
+       LSN of the transaction where variable was created. It is used
+       (in combination with <structfield>oid</structfield>) as everytime
+       unique identifier. Only <structfield>oid</structfield> cannot be
+       used for this purpose, because unused <structfield>oid</structfield>
+       can be reused.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>varname</structfield> <type>name</type>
+      </para>
+      <para>
+       Name of the session variable
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>varnamespace</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-namespace"><structname>pg_namespace</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       The OID of the namespace that contains this variable
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>varowner</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-authid"><structname>pg_authid</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       Owner of the variable
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>vartypmod</structfield> <type>int4</type>
+      </para>
+      <para>
+       <structfield>vartypmod</structfield> records type-specific data
+       supplied at variable creation time (for example, the maximum
+       length of a <type>varchar</type> column).  It is passed to
+       type-specific input functions and length coercion functions.
+       The value will generally be -1 for types that do not need <structfield>vartypmod</structfield>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>varisnotnull</structfield> <type>boolean</type>
+      </para>
+      <para>
+       True if the session variable doesn't allow null value. The default value is false.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>varisimmutable</structfield> <type>boolean</type>
+      </para>
+      <para>
+       True if the variable is <link linkend="sql-createvariable-immutable">immutable</link> (cannot be modified).
+       The default value is false.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>vareoxaction</structfield> <type>char</type>
+      </para>
+      <para>
+       Action performed at end of transaction:
+       <literal>n</literal> = no action, <literal>d</literal> = drop the variable,
+       <literal>r</literal> = reset the variable to its default value.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>varcollation</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-collation"><structname>pg_collation</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       The defined collation of the variable, or zero if the variable is
+       not of a collatable data type.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>varacl</structfield> <type>aclitem[]</type>
+      </para>
+      <para>
+       Access privileges; see
+       <xref linkend="sql-grant"/> and
+       <xref linkend="sql-revoke"/>
+       for details
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>vardefexpr</structfield> <type>pg_node_tree</type>
+      </para>
+      <para>
+       The internal representation of the variable default value
+      </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+ </sect1>
 </chapter>

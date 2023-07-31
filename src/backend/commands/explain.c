@@ -19,6 +19,7 @@
 #include "commands/defrem.h"
 #include "commands/prepare.h"
 #include "executor/nodeHash.h"
+#include "executor/svariableReceiver.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
 #include "nodes/extensible.h"
@@ -55,7 +56,7 @@ explain_get_index_name_hook_type explain_get_index_name_hook = NULL;
 #define X_NOWHITESPACE 4
 
 static void ExplainOneQuery(Query *query, int cursorOptions,
-							IntoClause *into, ExplainState *es,
+							IntoClause *into, Oid targetvar, ExplainState *es,
 							const char *queryString, ParamListInfo params,
 							QueryEnvironment *queryEnv);
 static void ExplainPrintJIT(ExplainState *es, int jit_flags,
@@ -288,7 +289,7 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 		foreach(l, rewritten)
 		{
 			ExplainOneQuery(lfirst_node(Query, l),
-							CURSOR_OPT_PARALLEL_OK, NULL, es,
+							CURSOR_OPT_PARALLEL_OK, NULL, InvalidOid, es,
 							pstate->p_sourcetext, params, pstate->p_queryEnv);
 
 			/* Separate plans with an appropriate separator */
@@ -374,21 +375,21 @@ ExplainResultDesc(ExplainStmt *stmt)
  */
 static void
 ExplainOneQuery(Query *query, int cursorOptions,
-				IntoClause *into, ExplainState *es,
+				IntoClause *into, Oid targetvar, ExplainState *es,
 				const char *queryString, ParamListInfo params,
 				QueryEnvironment *queryEnv)
 {
 	/* planner will not cope with utility statements */
 	if (query->commandType == CMD_UTILITY)
 	{
-		ExplainOneUtility(query->utilityStmt, into, es, queryString, params,
-						  queryEnv);
+		ExplainOneUtility(query->utilityStmt, into, targetvar, es, queryString,
+						  params, queryEnv);
 		return;
 	}
 
 	/* if an advisor plugin is present, let it manage things */
 	if (ExplainOneQuery_hook)
-		(*ExplainOneQuery_hook) (query, cursorOptions, into, es,
+		(*ExplainOneQuery_hook) (query, cursorOptions, into, targetvar, es,
 								 queryString, params, queryEnv);
 	else
 	{
@@ -416,7 +417,7 @@ ExplainOneQuery(Query *query, int cursorOptions,
 		}
 
 		/* run it (if needed) and produce output */
-		ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
+		ExplainOnePlan(plan, into, targetvar, es, queryString, params, queryEnv,
 					   &planduration, (es->buffers ? &bufusage : NULL));
 	}
 }
@@ -434,9 +435,9 @@ ExplainOneQuery(Query *query, int cursorOptions,
  * that's in the plan cache, so we have to ensure we don't modify it.
  */
 void
-ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
-				  const char *queryString, ParamListInfo params,
-				  QueryEnvironment *queryEnv)
+ExplainOneUtility(Node *utilityStmt, IntoClause *into, Oid targetvar,
+				  ExplainState *es, const char *queryString,
+				  ParamListInfo params, QueryEnvironment *queryEnv)
 {
 	if (utilityStmt == NULL)
 		return;
@@ -469,7 +470,7 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
 		rewritten = QueryRewrite(castNode(Query, copyObject(ctas->query)));
 		Assert(list_length(rewritten) == 1);
 		ExplainOneQuery(linitial_node(Query, rewritten),
-						CURSOR_OPT_PARALLEL_OK, ctas->into, es,
+						CURSOR_OPT_PARALLEL_OK, ctas->into, InvalidOid, es,
 						queryString, params, queryEnv);
 	}
 	else if (IsA(utilityStmt, DeclareCursorStmt))
@@ -488,11 +489,11 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
 		rewritten = QueryRewrite(castNode(Query, copyObject(dcs->query)));
 		Assert(list_length(rewritten) == 1);
 		ExplainOneQuery(linitial_node(Query, rewritten),
-						dcs->options, NULL, es,
+						dcs->options, NULL, InvalidOid, es,
 						queryString, params, queryEnv);
 	}
 	else if (IsA(utilityStmt, ExecuteStmt))
-		ExplainExecuteQuery((ExecuteStmt *) utilityStmt, into, es,
+		ExplainExecuteQuery((ExecuteStmt *) utilityStmt, into, InvalidOid, es,
 							queryString, params, queryEnv);
 	else if (IsA(utilityStmt, NotifyStmt))
 	{
@@ -500,6 +501,25 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
 			appendStringInfoString(es->str, "NOTIFY\n");
 		else
 			ExplainDummyGroup("Notify", NULL, es);
+	}
+	else if (IsA(utilityStmt, LetStmt))
+	{
+		LetStmt    *letstmt = (LetStmt *) utilityStmt;
+		List	   *rewritten;
+		Query	   *query;
+
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+			appendStringInfoString(es->str, "SET SESSION VARIABLE\n");
+		else
+			ExplainDummyGroup("Set Session Variable", NULL, es);
+
+		rewritten = QueryRewrite(castNode(Query, copyObject(letstmt->query)));
+
+		Assert(list_length(rewritten) == 1);
+		query = linitial_node(Query, rewritten);
+		ExplainOneQuery(query,
+						CURSOR_OPT_PARALLEL_OK, NULL, query->resultVariable, es,
+						queryString, params, queryEnv);
 	}
 	else
 	{
@@ -524,8 +544,8 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
  * to call it.
  */
 void
-ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
-			   const char *queryString, ParamListInfo params,
+ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, Oid targetvar,
+			   ExplainState *es, const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
 			   const BufferUsage *bufusage)
 {
@@ -568,6 +588,11 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	 */
 	if (into)
 		dest = CreateIntoRelDestReceiver(into);
+	else if (OidIsValid(targetvar))
+	{
+		dest = CreateVariableDestReceiver();
+		SetVariableDestReceiverVarid(dest, targetvar);
+	}
 	else
 		dest = None_Receiver;
 

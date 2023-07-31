@@ -5097,6 +5097,70 @@ EXPLAIN SELECT count(*) FROM measurement WHERE logdate &gt;= DATE '2008-01-01';
    </para>
  </sect1>
 
+  <sect1 id="ddl-session-variables">
+   <title>Session Variables</title>
+
+   <indexterm zone="ddl-session-variables">
+    <primary>Session variables</primary>
+   </indexterm>
+
+   <indexterm>
+    <primary>session variable</primary>
+   </indexterm>
+
+   <para>
+    Session variables are database objects that can hold a value.
+    Session variables, like relations, exist within a schema and their access
+    is controlled via <command>GRANT</command> and <command>REVOKE</command>
+    commands.  A session variable can be created by the <command>CREATE
+    VARIABLE</command> command.
+   </para>
+
+   <para>
+    The value of a session variable is set with the <command>LET</command> SQL
+    command.  While session variables share properties with tables, their value
+    cannot be updated with an <command>UPDATE</command> command. The value of a
+    session variable may be retrieved by the <command>SELECT</command> SQL
+    command.
+<programlisting>
+CREATE VARIABLE var1 AS date;
+LET var1 = current_date;
+SELECT var1;
+</programlisting>
+
+    or
+
+<programlisting>
+CREATE VARIABLE public.current_user_id AS integer;
+GRANT READ ON VARIABLE public.current_user_id TO PUBLIC;
+LET current_user_id = (SELECT id FROM users WHERE usename = session_user);
+SELECT current_user_id;
+</programlisting>
+   </para>
+
+   <para>
+    The value of a session variable is local to the current session. Retrieving
+    a variable's value returns either a <literal>NULL</literal> or a default
+    value, unless its value has been set to something else in the current
+    session using the <command>LET</command> command. The content of a variable
+    is not transactional. This is the same as regular variables in PL languages.
+    The session variables can be persistent or can be temporary. In both cases,
+    the content of session variables is temporary and not shared (like an
+    content of temporary tables).
+   </para>
+
+   <para>
+    The session variables can be shadowed by column references in a query. When
+    a query contains identifiers or qualified identifiers that could be used as
+    both a session variable identifiers and as column identifier, then the
+    column identifier is preferred every time. Warnings can be emitted when
+    this situation happens by enabling configuration parameter <xref
+    linkend="guc-session-variables-ambiguity-warning"/>. User can explicitly
+    qualify the source object by syntax <literal>table.column</literal> or
+    <literal>variable.column</literal>.
+   </para>
+  </sect1>
+
  <sect1 id="ddl-others">
   <title>Other Database Objects</title>
 

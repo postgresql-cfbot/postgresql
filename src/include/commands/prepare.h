@@ -42,7 +42,8 @@ extern void ExecuteQuery(ParseState *pstate,
 						 ParamListInfo params,
 						 DestReceiver *dest, QueryCompletion *qc);
 extern void DeallocateQuery(DeallocateStmt *stmt);
-extern void ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into,
+extern void ExplainExecuteQuery(ExecuteStmt *execstmt,
+								IntoClause *into, Oid targetvar,
 								ExplainState *es, const char *queryString,
 								ParamListInfo params, QueryEnvironment *queryEnv);
 

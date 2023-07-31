@@ -6151,13 +6151,13 @@ LINE 1: select t2.uunique1 from
 HINT:  Perhaps you meant to reference the column "t2.unique1".
 select uunique1 from
   tenk1 t1 join tenk2 t2 on t1.two = t2.two; -- error, suggest both at once
-ERROR:  column "uunique1" does not exist
+ERROR:  column or variable "uunique1" does not exist
 LINE 1: select uunique1 from
                ^
 HINT:  Perhaps you meant to reference the column "t1.unique1" or the column "t2.unique1".
 select ctid from
   tenk1 t1 join tenk2 t2 on t1.two = t2.two; -- error, need qualification
-ERROR:  column "ctid" does not exist
+ERROR:  column or variable "ctid" does not exist
 LINE 1: select ctid from
                ^
 DETAIL:  There are columns named "ctid", but they are in tables that cannot be referenced from this part of the query.
@@ -7227,7 +7227,7 @@ lateral (select * from int8_tbl t1,
 
 -- test some error cases where LATERAL should have been used but wasn't
 select f1,g from int4_tbl a, (select f1 as g) ss;
-ERROR:  column "f1" does not exist
+ERROR:  column or variable "f1" does not exist
 LINE 1: select f1,g from int4_tbl a, (select f1 as g) ss;
                                              ^
 DETAIL:  There is a column named "f1" in table "a", but it cannot be referenced from this part of the query.
@@ -7239,7 +7239,7 @@ LINE 1: select f1,g from int4_tbl a, (select a.f1 as g) ss;
 DETAIL:  There is an entry for table "a", but it cannot be referenced from this part of the query.
 HINT:  To reference that table, you must mark this subquery with LATERAL.
 select f1,g from int4_tbl a cross join (select f1 as g) ss;
-ERROR:  column "f1" does not exist
+ERROR:  column or variable "f1" does not exist
 LINE 1: select f1,g from int4_tbl a cross join (select f1 as g) ss;
                                                        ^
 DETAIL:  There is a column named "f1" in table "a", but it cannot be referenced from this part of the query.
@@ -7276,7 +7276,7 @@ LINE 1: select 1 from tenk1 a, lateral (select max(a.unique1) from i...
 create temp table xx1 as select f1 as x1, -f1 as x2 from int4_tbl;
 -- error, can't do this:
 update xx1 set x2 = f1 from (select * from int4_tbl where f1 = x1) ss;
-ERROR:  column "x1" does not exist
+ERROR:  column or variable "x1" does not exist
 LINE 1: ... set x2 = f1 from (select * from int4_tbl where f1 = x1) ss;
                                                                 ^
 DETAIL:  There is a column named "x1" in table "xx1", but it cannot be referenced from this part of the query.
@@ -7296,7 +7296,7 @@ update xx1 set x2 = f1 from xx1, lateral (select * from int4_tbl where f1 = x1) 
 ERROR:  table name "xx1" specified more than once
 -- also errors:
 delete from xx1 using (select * from int4_tbl where f1 = x1) ss;
-ERROR:  column "x1" does not exist
+ERROR:  column or variable "x1" does not exist
 LINE 1: ...te from xx1 using (select * from int4_tbl where f1 = x1) ss;
                                                                 ^
 DETAIL:  There is a column named "x1" in table "xx1", but it cannot be referenced from this part of the query.

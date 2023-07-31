@@ -231,6 +231,8 @@ pgstat_get_io_object_name(IOObject io_object)
 			return "relation";
 		case IOOBJECT_TEMP_RELATION:
 			return "temp relation";
+		case IOOBJECT_WAL:
+			return "wal";
 	}
 
 	elog(ERROR, "unrecognized IOObject value: %d", io_object);
@@ -313,8 +315,8 @@ pgstat_tracks_io_bktype(BackendType bktype)
 		case B_ARCHIVER:
 		case B_LOGGER:
 		case B_WAL_RECEIVER:
-		case B_WAL_WRITER:
 			return false;
+		case B_WAL_WRITER:
 
 		case B_AUTOVAC_LAUNCHER:
 		case B_AUTOVAC_WORKER:
@@ -348,6 +350,11 @@ pgstat_tracks_io_object(BackendType bktype, IOObject io_object,
 	 * Some BackendTypes should never track IO statistics.
 	 */
 	if (!pgstat_tracks_io_bktype(bktype))
+		return false;
+
+
+	if (io_context != IOCONTEXT_NORMAL &&
+		io_object == IOOBJECT_WAL)
 		return false;
 
 	/*

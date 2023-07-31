@@ -656,7 +656,7 @@ SELECT datname, age(datfrozenxid) FROM pg_database;
 
 <programlisting>
 WARNING:  database "mydb" must be vacuumed within 39985967 transactions
-HINT:  To avoid a database shutdown, execute a database-wide VACUUM in that database.
+HINT:  To prevent XID generation failure, execute a database-wide VACUUM in that database.
 </programlisting>
 
     (A manual <command>VACUUM</command> should fix the problem, as suggested by the
@@ -664,24 +664,56 @@ HINT:  To avoid a database shutdown, execute a database-wide VACUUM in that data
     superuser, else it will fail to process system catalogs and thus not
     be able to advance the database's <structfield>datfrozenxid</structfield>.)
     If these warnings are
-    ignored, the system will shut down and refuse to start any new
-    transactions once there are fewer than three million transactions left
-    until wraparound:
+    ignored, the system will refuse to generate new XIDs once there are
+    fewer than three million transactions left until wraparound:
 
 <programlisting>
-ERROR:  database is not accepting commands to avoid wraparound data loss in database "mydb"
-HINT:  Stop the postmaster and vacuum that database in single-user mode.
+ERROR:  database is not accepting commands that generate new XIDs to avoid wraparound data loss in database "mydb"
+HINT:  Execute a database-wide VACUUM in that database.
 </programlisting>
 
-    The three-million-transaction safety margin exists to let the
-    administrator recover without data loss, by manually executing the
-    required <command>VACUUM</command> commands.  However, since the system will not
-    execute commands once it has gone into the safety shutdown mode,
-    the only way to do this is to stop the server and start the server in single-user
-    mode to execute <command>VACUUM</command>.  The shutdown mode is not enforced
-    in single-user mode.  See the <xref linkend="app-postgres"/> reference
-    page for details about using single-user mode.
+    In this condition any transactions already in progress can continue,
+    but only read-only transactions can be started. Operations that
+    modify database records or truncate relations will fail.
+    The <command>VACUUM</command> command can still be run normally.
+    To restore normal operation:
+
+    <orderedlist>
+     <listitem>
+      <simpara>Commit or rollback any prepared transactions.</simpara>
+     </listitem>
+     <listitem>
+      <simpara>Terminate any sessions that might have open transactions.</simpara>
+     </listitem>
+     <listitem>
+      <simpara>Drop any old replication slots.</simpara>
+     </listitem>
+     <listitem>
+      <simpara>Ensure autovacuum is running, and execute a database-wide <command>VACUUM</command>.
+        To reduce the time required, it as also possible to issue manual <command>VACUUM</command>
+        commands on the tables where <structfield>relminxid</structfield> is oldest.</simpara>
+     </listitem>
+    </orderedlist>
    </para>
+
+   <note>
+    <para>
+     In earlier versions it was required to stop the postmaster and
+     <command>VACUUM</command> the database in a single-user mode. There is no
+     need to use single-user mode anymore, and in fact it's strongly
+     discouraged: It increases downtime, makes monitoring impossible,
+     disables replication, bypasses safeguards against wraparound, etc.
+    </para>
+
+    <para>
+     The only reason to use single-user mode in an emergency is to e.g.
+     <command>TRUNCATE</command> or <command>DROP</command> unneeded tables
+     to avoid needing to <command>VACUUM</command> them.
+     The three-million-transaction safety margin exists to let the
+     administrator do this. See the <xref linkend="app-postgres"/>
+     reference page for details about using single-user mode.
+    </para>
+   </note>
 
    <sect3 id="vacuum-for-multixact-wraparound">
     <title>Multixacts and Wraparound</title>
@@ -747,6 +779,47 @@ HINT:  Stop the postmaster and vacuum that database in single-user mode.
      have the oldest multixact-age.  Both of these kinds of aggressive
      scans will occur even if autovacuum is nominally disabled.
     </para>
+
+   <para>
+    Similar to the XID case, if autovacuum fails to clear old MXIDs from a table, the
+    system will begin to emit warning messages like this when the database's
+    oldest MXIDs reach forty million transactions from the wraparound point:
+
+<programlisting>
+WARNING:  database "mydb" must be vacuumed within 39985967 transactions
+HINT:  To prevent MultiXactId generation failure, execute a database-wide VACUUM in that database.
+</programlisting>
+
+    (A manual <command>VACUUM</command> should fix the problem, as suggested by the
+    hint; but note that the <command>VACUUM</command> must be performed by a
+    superuser, else it will fail to process system catalogs and thus not
+    be able to advance the database's <structfield>datfrozenxid</structfield>.)
+    If these warnings are ignored, the system will refuse to generate new
+    MXIDs once there are fewer than three million left until wraparound:
+
+<programlisting>
+ERROR:  database is not accepting commands that generate new MultiXactIds to avoid wraparound data loss in database "mydb"
+HINT:  Execute a database-wide VACUUM in that database.
+</programlisting>
+   </para>
+
+   <para>
+    To restore normal operation:
+    <orderedlist>
+     <listitem>
+      <simpara>Commit or rollback each prepared transaction that might appear in a multixact.</simpara>
+     </listitem>
+     <listitem>
+      <simpara>Resolve each transaction that might appear in a multixact.</simpara>
+     </listitem>
+     <listitem>
+      <simpara>Ensure autovacuum is running, and execute a database-wide <command>VACUUM</command>.
+        To reduce the time required, it as also possible to issue manual <command>VACUUM</command>
+        commands on the tables where <structfield>relminmxid</structfield> is oldest.</simpara>
+     </listitem>
+    </orderedlist>
+   </para>
+
    </sect3>
   </sect2>
 

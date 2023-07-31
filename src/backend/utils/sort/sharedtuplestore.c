@@ -593,6 +593,23 @@ sts_parallel_scan_next(SharedTuplestoreAccessor *accessor, void *meta_data)
 }
 
 /*
+ * Free any disk space consumed by this process.  After this, data should not
+ * be read from this SharedTuplestore by any process, so it must be known that
+ * all readers have finished and will not try to read again.  The reason we
+ * unlink only files created by this backend is that the file size limit
+ * mechanism is per-process, but the counters could go negative if one process
+ * freed more than it had consumed.
+ */
+void
+sts_dispose(SharedTuplestoreAccessor *accessor)
+{
+	char		name[MAXPGPATH];
+
+	sts_filename(name, accessor, accessor->participant);
+	BufFileDeleteFileSet(&accessor->fileset->fs, name, true);
+}
+
+/*
  * Create the name used for the BufFile that a given participant will write.
  */
 static void

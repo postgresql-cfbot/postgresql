@@ -73,6 +73,7 @@ static void ExecParallelHashJoinSetUpBatches(HashJoinTable hashtable, int nbatch
 static void ExecParallelHashEnsureBatchAccessors(HashJoinTable hashtable);
 static void ExecParallelHashRepartitionFirst(HashJoinTable hashtable);
 static void ExecParallelHashRepartitionRest(HashJoinTable hashtable);
+static void ExecParallelHashDeleteOldPartitions(HashJoinTable hashtable);
 static HashMemoryChunk ExecParallelHashPopChunkQueue(HashJoinTable hashtable,
 													 dsa_pointer *shared);
 static bool ExecParallelHashTuplePrealloc(HashJoinTable hashtable,
@@ -1229,6 +1230,9 @@ ExecParallelHashIncreaseNumBatches(HashJoinTable hashtable)
 			/* Wait for the above to be finished. */
 			BarrierArriveAndWait(&pstate->grow_batches_barrier,
 								 WAIT_EVENT_HASH_GROW_BATCHES_REPARTITION);
+			/* It's now safe to free the previous partitions on disk. */
+			ExecParallelHashDeleteOldPartitions(hashtable);
+
 			/* Fall through. */
 
 		case PHJ_GROW_BATCHES_DECIDE:
@@ -1448,6 +1452,34 @@ ExecParallelHashMergeCounters(HashJoinTable hashtable)
 		pstate->total_tuples += batch->shared->ntuples;
 	}
 	LWLockRelease(&pstate->lock);
+}
+
+/*
+ * After all attached participants have finished repartitioning, it is safe
+ * to unlink the files holding the previous generation of batches.
+ */
+static void
+ExecParallelHashDeleteOldPartitions(HashJoinTable hashtable)
+{
+	ParallelHashJoinState *pstate = hashtable->parallel_state;
+	int			old_nbatch = pstate->old_nbatch;
+	ParallelHashJoinBatch *old_batches;
+
+	old_batches = (ParallelHashJoinBatch *)
+		dsa_get_address(hashtable->area, pstate->old_batches);
+	for (int i = 1; i < old_nbatch; ++i)
+	{
+		ParallelHashJoinBatch *shared =
+		NthParallelHashJoinBatch(old_batches, i);
+		SharedTuplestoreAccessor *accessor;
+
+		accessor = sts_attach(ParallelHashJoinBatchInner(shared),
+							  ParallelWorkerNumber + 1,
+							  &pstate->fileset);
+		sts_dispose(accessor);
+		/* XXX free */
+	}
+
 }
 
 /*

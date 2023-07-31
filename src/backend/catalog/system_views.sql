@@ -1115,6 +1115,7 @@ CREATE VIEW pg_stat_bgwriter AS
         pg_stat_get_checkpoint_write_time() AS checkpoint_write_time,
         pg_stat_get_checkpoint_sync_time() AS checkpoint_sync_time,
         pg_stat_get_bgwriter_buf_written_checkpoints() AS buffers_checkpoint,
+        pg_stat_get_bgwriter_slru_written_checkpoints() AS slru_buffers_checkpoint,
         pg_stat_get_bgwriter_buf_written_clean() AS buffers_clean,
         pg_stat_get_bgwriter_maxwritten_clean() AS maxwritten_clean,
         pg_stat_get_buf_written_backend() AS buffers_backend,

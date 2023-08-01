@@ -24,6 +24,7 @@
 #include "executor/execdebug.h"
 #include "executor/nodeNestloop.h"
 #include "miscadmin.h"
+#include "utils/datum.h"
 #include "utils/memutils.h"
 
 
@@ -130,9 +131,12 @@ ExecNestLoop(PlanState *pstate)
 			{
 				NestLoopParam *nlp = (NestLoopParam *) lfirst(lc);
 				int			paramno = nlp->paramno;
-				ParamExecData *prm;
+				ParamExecData *prm, prev;
+				const FormData_pg_attribute* attr =
+					&outerTupleSlot->tts_tupleDescriptor->attrs[paramno];
 
 				prm = &(econtext->ecxt_param_exec_vals[paramno]);
+				prev = *prm;
 				/* Param value should be an OUTER_VAR var */
 				Assert(IsA(nlp->paramval, Var));
 				Assert(nlp->paramval->varno == OUTER_VAR);
@@ -141,8 +145,12 @@ ExecNestLoop(PlanState *pstate)
 										  nlp->paramval->varattno,
 										  &(prm->isnull));
 				/* Flag parameter value as changed */
-				innerPlan->chgParam = bms_add_member(innerPlan->chgParam,
-													 paramno);
+				if (prm->isnull != prev.isnull ||
+					(!prm->isnull && !datumIsEqual(prm->value, prev.value, attr->attbyval, attr->attlen)))
+				{
+					innerPlan->chgParam = bms_add_member(innerPlan->chgParam,
+														 paramno);
+				}
 			}
 
 			/*

@@ -24,7 +24,11 @@ extern "C"
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/MC/SubtargetFeature.h>
+#if LLVM_VERSION_MAJOR > 16
+#include <llvm/TargetParser/Host.h>
+#else
 #include <llvm/Support/Host.h>
+#endif
 
 #include "jit/llvmjit.h"
 

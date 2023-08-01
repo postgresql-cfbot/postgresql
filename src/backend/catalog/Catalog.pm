@@ -117,7 +117,12 @@ sub ParseHeader
 			 (?<index_name>\w+),\s*
 			 (?<index_oid>\d+),\s*
 			 (?<index_oid_macro>\w+),\s*
-			 (?<index_decl>.+)\s*
+			 (?<table_name>\w+),\s*
+			 (?<index_decl>\w+\s*\([\w\s,]+\))\s*
+			 (?:,\s*
+			   (?<syscache_name>\w+),\s*
+			   (?<syscache_nbuckets>\w+)
+			 )?
 			 \)/x
 		  )
 		{

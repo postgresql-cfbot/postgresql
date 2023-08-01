@@ -53,9 +53,10 @@ generate_old_dump(void)
 
 		parallel_exec_prog(log_file_name, NULL,
 						   "\"%s/pg_dump\" %s --schema-only --quote-all-identifiers "
-						   "--binary-upgrade --format=custom %s --file=\"%s/%s\" %s",
+						   "--binary-upgrade --format=custom %s %s --file=\"%s/%s\" %s",
 						   new_cluster.bindir, cluster_conn_opts(&old_cluster),
 						   log_opts.verbose ? "--verbose" : "",
+						   user_opts.preserve_subscriptions ? "--preserve-subscription-state" : "",
 						   log_opts.dumpdir,
 						   sql_file_name, escaped_connstr.data);
 

@@ -54,7 +54,8 @@ extern bool limit_needed(Query *parse);
 extern void mark_partial_aggref(Aggref *agg, AggSplit aggsplit);
 
 extern Path *get_cheapest_fractional_path(RelOptInfo *rel,
-										  double tuple_fraction);
+										  double tuple_fraction,
+										  bool is_partial);
 
 extern Expr *preprocess_phv_expression(PlannerInfo *root, Expr *expr);
 

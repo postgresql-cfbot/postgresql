@@ -1312,6 +1312,7 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 	List	   *pa_nonpartial_subpaths = NIL;
 	bool		partial_subpaths_valid = true;
 	bool		pa_subpaths_valid;
+	bool	   include_all_rels = false;
 	List	   *all_child_pathkeys = NIL;
 	List	   *all_child_outers = NIL;
 	ListCell   *l;
@@ -1319,6 +1320,7 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 
 	/* If appropriate, consider parallel append */
 	pa_subpaths_valid = enable_parallel_append && rel->consider_parallel;
+	include_all_rels = root && bms_equal(rel->relids, root->all_query_rels);
 
 	/*
 	 * For every non-dummy child, remember the cheapest path.  Also, identify
@@ -1330,7 +1332,12 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 		RelOptInfo *childrel = lfirst(l);
 		ListCell   *lcp;
 		Path	   *cheapest_partial_path = NULL;
+		Path	   *cheapest_startup_path = NULL;
 
+		if (childrel->pathlist != NIL && childrel->consider_startup && include_all_rels)
+		{
+			cheapest_startup_path = get_cheapest_fractional_path(childrel, root->tuple_fraction, false);
+		}
 		/*
 		 * If child has an unparameterized cheapest-total path, add that to
 		 * the unparameterized Append path we are constructing for the parent.
@@ -1339,7 +1346,10 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 		 * With partitionwise aggregates, the child rel's pathlist may be
 		 * empty, so don't assume that a path exists here.
 		 */
-		if (childrel->pathlist != NIL &&
+		if (cheapest_startup_path && cheapest_startup_path->param_info == NULL)
+			accumulate_append_subpath(cheapest_startup_path,
+									  &subpaths, NULL);
+		else if (childrel->pathlist != NIL &&
 			childrel->cheapest_total_path->param_info == NULL)
 			accumulate_append_subpath(childrel->cheapest_total_path,
 									  &subpaths, NULL);
@@ -1349,7 +1359,12 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 		/* Same idea, but for a partial plan. */
 		if (childrel->partial_pathlist != NIL)
 		{
-			cheapest_partial_path = linitial(childrel->partial_pathlist);
+			if (childrel->consider_startup && include_all_rels)
+				cheapest_partial_path = get_cheapest_fractional_path(childrel,
+																	 root->tuple_fraction,
+																	 true);
+			else
+				cheapest_partial_path = linitial(childrel->partial_pathlist);
 			accumulate_append_subpath(cheapest_partial_path,
 									  &partial_subpaths, NULL);
 		}

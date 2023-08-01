@@ -283,7 +283,8 @@ recurse_set_operations(Node *setOp, PlannerInfo *root,
 		 * set_subquery_pathlist).
 		 */
 		subpath = get_cheapest_fractional_path(final_rel,
-											   root->tuple_fraction);
+											   root->tuple_fraction,
+											   false);
 
 		/*
 		 * Stick a SubqueryScanPath atop that.

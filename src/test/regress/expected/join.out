@@ -7874,3 +7874,35 @@ where exists (select 1 from j3
 (13 rows)
 
 drop table j3;
+explain (costs off)
+(select * from tenk1 order by hundred)
+union all
+(select * from tenk2 order by hundred)
+limit 3;
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Limit
+   ->  Append
+         ->  Index Scan using tenk1_hundred on tenk1
+         ->  Index Scan using tenk2_hundred on tenk2
+(4 rows)
+
+explain (costs off)
+SELECT * FROM tenk1 t1 join tenk2 t2 using (unique2)
+union all
+SELECT * FROM tenk1 t1 join tenk2 t2 using (unique2)
+limit 3;
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Limit
+   ->  Append
+         ->  Merge Join
+               Merge Cond: (t1.unique2 = t2.unique2)
+               ->  Index Scan using tenk1_unique2 on tenk1 t1
+               ->  Index Scan using tenk2_unique2 on tenk2 t2
+         ->  Merge Join
+               Merge Cond: (t1_1.unique2 = t2_1.unique2)
+               ->  Index Scan using tenk1_unique2 on tenk1 t1_1
+               ->  Index Scan using tenk2_unique2 on tenk2 t2_1
+(10 rows)
+

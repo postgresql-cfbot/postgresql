@@ -2880,3 +2880,15 @@ where exists (select 1 from j3
       and t1.unique1 < 1;
 
 drop table j3;
+
+explain (costs off)
+(select * from tenk1 order by hundred)
+union all
+(select * from tenk2 order by hundred)
+limit 3;
+
+explain (costs off)
+SELECT * FROM tenk1 t1 join tenk2 t2 using (unique2)
+union all
+SELECT * FROM tenk1 t1 join tenk2 t2 using (unique2)
+limit 3;

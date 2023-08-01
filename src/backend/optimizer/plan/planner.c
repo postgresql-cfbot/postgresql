@@ -415,7 +415,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 
 	/* Select best Path and turn it into a Plan */
 	final_rel = fetch_upper_rel(root, UPPERREL_FINAL, NULL);
-	best_path = get_cheapest_fractional_path(final_rel, tuple_fraction);
+	best_path = get_cheapest_fractional_path(final_rel, tuple_fraction, false);
 
 	top_plan = create_plan(root, best_path);
 
@@ -6326,10 +6326,22 @@ make_sort_input_target(PlannerInfo *root,
  * We assume set_cheapest() has been run on the given rel.
  */
 Path *
-get_cheapest_fractional_path(RelOptInfo *rel, double tuple_fraction)
+get_cheapest_fractional_path(RelOptInfo *rel, double tuple_fraction, bool is_partial)
 {
-	Path	   *best_path = rel->cheapest_total_path;
+	Path	   *best_path;
 	ListCell   *l;
+	List	   *pathlist;
+
+	if (is_partial)
+	{
+		best_path = linitial(rel->partial_pathlist);
+		pathlist = rel->partial_pathlist;
+	}
+	else
+	{
+		best_path = rel->cheapest_total_path;
+		pathlist = rel->pathlist;
+	}
 
 	/* If all tuples will be retrieved, just return the cheapest-total path */
 	if (tuple_fraction <= 0.0)
@@ -6339,11 +6351,11 @@ get_cheapest_fractional_path(RelOptInfo *rel, double tuple_fraction)
 	if (tuple_fraction >= 1.0 && best_path->rows > 0)
 		tuple_fraction /= best_path->rows;
 
-	foreach(l, rel->pathlist)
+	foreach(l, pathlist)
 	{
 		Path	   *path = (Path *) lfirst(l);
 
-		if (path == rel->cheapest_total_path ||
+		if (path == best_path ||
 			compare_fractional_path_costs(best_path, path, tuple_fraction) <= 0)
 			continue;
 

@@ -231,7 +231,7 @@ make_subplan(PlannerInfo *root, Query *orig_subquery,
 	 * seems no reason to postpone doing that.
 	 */
 	final_rel = fetch_upper_rel(subroot, UPPERREL_FINAL, NULL);
-	best_path = get_cheapest_fractional_path(final_rel, tuple_fraction);
+	best_path = get_cheapest_fractional_path(final_rel, tuple_fraction, false);
 
 	plan = create_plan(subroot, best_path);
 

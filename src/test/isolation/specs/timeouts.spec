@@ -23,6 +23,10 @@ step sto	{ SET statement_timeout = '10ms'; }
 step lto	{ SET lock_timeout = '10ms'; }
 step lsto	{ SET lock_timeout = '10ms'; SET statement_timeout = '10s'; }
 step slto	{ SET lock_timeout = '10s'; SET statement_timeout = '10ms'; }
+step tsto	{ SET transaction_timeout = '30ms'; SET statement_timeout = '10s';}
+step stto	{ SET transaction_timeout = '10s'; SET statement_timeout = '10ms';}
+step sleep0	{ SELECT pg_sleep(0.0001) } # expected to always finish in time
+step sleep1000	{ SELECT pg_sleep(1000) } # expected to timeout always
 step locktbl	{ LOCK TABLE accounts; }
 step update	{ DELETE FROM accounts WHERE accountid = 'checking'; }
 teardown	{ ABORT; }
@@ -47,3 +51,7 @@ permutation wrtbl lto update(*)
 permutation wrtbl lsto update(*)
 # statement timeout expires first, row-level lock
 permutation wrtbl slto update(*)
+# transaction timeout before statement timeout
+permutation tsto sleep0 sleep1000(*)
+# statement timeout before transaction timeout
+permutation stto sleep1000(*)

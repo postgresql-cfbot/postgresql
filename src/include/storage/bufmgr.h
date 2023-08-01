@@ -103,8 +103,8 @@ typedef struct ExtendBufferedWhat
 	char		relpersistence;
 } ExtendBufferedWhat;
 
-#define EB_REL(p_rel) ((ExtendBufferedWhat){.rel = p_rel})
-#define EB_SMGR(p_smgr, p_relpersistence) ((ExtendBufferedWhat){.smgr = p_smgr, .relpersistence = p_relpersistence})
+#define EB_REL(p_rel) ((ExtendBufferedWhat){.rel = p_rel, .smgr = NULL, .relpersistence = '\0'})
+#define EB_SMGR(p_smgr, p_relpersistence) ((ExtendBufferedWhat){.rel = NULL, .smgr = p_smgr, .relpersistence = p_relpersistence})
 
 
 /* forward declared, to avoid having to expose buf_internals.h here */

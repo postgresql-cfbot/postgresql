@@ -59,6 +59,7 @@ extern bool check_default_with_oids(bool *newval, void **extra,
 									GucSource source);
 extern bool check_effective_io_concurrency(int *newval, void **extra,
 										   GucSource source);
+extern void assign_glibc_trim_threshold(int newval, void* extra);
 extern bool check_huge_page_size(int *newval, void **extra, GucSource source);
 extern const char *show_in_hot_standby(void);
 extern bool check_locale_messages(char **newval, void **extra, GucSource source);
@@ -157,6 +158,7 @@ extern bool check_wal_consistency_checking(char **newval, void **extra,
 										   GucSource source);
 extern void assign_wal_consistency_checking(const char *newval, void *extra);
 extern void assign_xlog_sync_method(int new_sync_method, void *extra);
+extern void assign_work_mem(int newval, void *extra);
 extern bool check_io_direct(char **newval, void **extra, GucSource source);
 extern void assign_io_direct(const char *newval, void *extra);
 

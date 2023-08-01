@@ -93,6 +93,16 @@ extern void MemoryContextStatsDetail(MemoryContext context, int max_children,
 extern void MemoryContextAllowInCriticalSection(MemoryContext context,
 												bool allow);
 
+/* Interface to tune underlying malloc implementation in mcxt.c.
+ * The implementation can only rely on GUCs for now, but it could be profitable
+ * to collect statistics about individual palloc / pfree cycle to determine the
+ * optimum size of certain values.
+ */
+extern void MallocAdjustSettings(void);
+
+/* Malloc-implementation specific GUCs */
+extern PGDLLIMPORT int glibc_malloc_max_trim_threshold;
+
 #ifdef MEMORY_CONTEXT_CHECKING
 extern void MemoryContextCheck(MemoryContext context);
 #endif

@@ -18,6 +18,7 @@ OBJS = \
 	dsa.o \
 	freepage.o \
 	generation.o \
+	malloc_tuning.o \
 	mcxt.o \
 	memdebug.o \
 	portalmem.o \

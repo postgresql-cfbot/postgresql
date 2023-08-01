@@ -2340,7 +2340,7 @@ struct config_int ConfigureNamesInt[] =
 		},
 		&work_mem,
 		4096, 64, MAX_KILOBYTES,
-		NULL, NULL, NULL
+		NULL, &assign_work_mem, NULL
 	},
 
 	{
@@ -2364,6 +2364,20 @@ struct config_int ConfigureNamesInt[] =
 		&logical_decoding_work_mem,
 		65536, 64, MAX_KILOBYTES,
 		NULL, NULL, NULL
+	},
+
+	{
+		{"glibc_malloc_max_trim_threshold", PGC_USERSET, RESOURCES_MEM,
+			gettext_noop("Sets the maximum value for glibc's M_TRIM_THRESHOLD option."),
+			gettext_noop("This controls how much memory glibc's will not return to the "
+					"OS once freed. An idle backend can thus consume that much memory "
+					"even if not in used. The default (-1) value disable static tuning "
+					"and relies on the default dynamic adjustment"),
+			GUC_UNIT_KB
+		},
+		&glibc_malloc_max_trim_threshold,
+		-1, -1, MAX_KILOBYTES,
+		NULL, &assign_glibc_trim_threshold, NULL
 	},
 
 	/*

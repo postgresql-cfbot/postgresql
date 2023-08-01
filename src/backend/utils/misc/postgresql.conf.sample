@@ -156,6 +156,7 @@
 					#   windows
 					#   mmap
 					# (change requires restart)
+#glibc_malloc_max_trim_threshold = -1 # Only used with glibc's malloc. -1 disable it
 #min_dynamic_shared_memory = 0MB	# (change requires restart)
 #vacuum_buffer_usage_limit = 256kB	# size of vacuum and analyze buffer access strategy ring;
 					# 0 to disable vacuum buffer access strategy;

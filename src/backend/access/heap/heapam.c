@@ -415,7 +415,7 @@ heapgetpage(TableScanDesc sscan, BlockNumber block)
 	/*
 	 * Prune and repair fragmentation for the whole page, if possible.
 	 */
-	heap_page_prune_opt(scan->rs_base.rs_rd, buffer);
+	heap_page_prune_opt(scan->rs_base.rs_rd, buffer, false);
 
 	/*
 	 * We must hold share lock on the buffer content while examining tuple
@@ -3017,8 +3017,15 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 				infomask2_old_tuple,
 				infomask_new_tuple,
 				infomask2_new_tuple;
+#ifdef USE_ASSERT_CHECKING
+	ItemPointerData original_otid;
+#endif
 
 	Assert(ItemPointerIsValid(otid));
+
+#ifdef USE_ASSERT_CHECKING
+	ItemPointerCopy(otid, &original_otid);
+#endif
 
 	/* Cheap, simplistic check that the tuple matches the rel's rowtype. */
 	Assert(HeapTupleHeaderGetNatts(newtup->t_data) <=
@@ -3141,6 +3148,7 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 	}
 
 	/*
+	 * TODO: is this note the problem pointer?
 	 * Note: beyond this point, use oldtup not otid to refer to old tuple.
 	 * otid may very well point at newtup->t_self, which we will overwrite
 	 * with the new tuple's location, so there's great risk of confusion if we
@@ -3625,13 +3633,39 @@ l2:
 			if (newtupsize > pagefree)
 			{
 				/* It doesn't fit, must use RelationGetBufferForTuple. */
+				/* TODO: every time we call this we need to make sure we don't have pointers into the page */
 				newbuf = RelationGetBufferForTuple(relation, heaptup->t_len,
 												   buffer, 0, NULL,
 												   &vmbuffer_new, &vmbuffer,
 												   0);
+
+#ifdef USE_ASSERT_CHECKING
+				/*
+				 * About 500 lines ago in this function a comment claimed we
+				 * might not be able to rely on otid after that point, but it
+				 * appears we can.
+				 */
+				Assert(ItemPointerEquals(otid, &original_otid));
+#endif
+
+				/*
+				 * Getting a buffer may have pruned the page, so we can't rely
+				 * on our original pointer into the page.
+				 */
+				lp = PageGetItemId(page, ItemPointerGetOffsetNumber(otid));
+				Assert(ItemIdIsNormal(lp));
+
+				/*
+				 * Mirror what we filled into oldtup at the beginning
+				 * of this function.
+				 */
+				oldtup.t_data = (HeapTupleHeader) PageGetItem(page, lp);
+				oldtup.t_len = ItemIdGetLength(lp);
+
 				/* We're all done. */
 				break;
 			}
+
 			/* Acquire VM page pin if needed and we don't have it. */
 			if (vmbuffer == InvalidBuffer && PageIsAllVisible(page))
 				visibilitymap_pin(relation, block, &vmbuffer);

@@ -2492,6 +2492,21 @@ ExtendMultiXactMember(MultiXactOffset offset, int nmembers)
 }
 
 /*
+ * GetOurOldestMultiXactId
+ *
+ * Expose the oldest MultiXactId possibly seen as live by *this*
+ * transaction. This is mainly useful for initializing relminmxid on temp
+ * tables since they can't been modified by other transactions.
+ */
+
+MultiXactId
+GetOurOldestMultiXactId(void)
+{
+	MultiXactIdSetOldestVisible();
+	return OldestVisibleMXactId[MyBackendId];
+}
+
+/*
  * GetOldestMultiXactId
  *
  * Return the oldest MultiXactId that's still possibly still seen as live by

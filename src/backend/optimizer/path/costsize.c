@@ -2810,6 +2810,190 @@ cost_agg(Path *path, PlannerInfo *root,
 }
 
 /*
+ * get_windowclause_startup_tuples
+ *		Determine how many tuples we'll need to fetch from a WindowAgg's
+ *		subnode before we can output the first WindowAgg tuple.
+ */
+static double
+get_windowclause_startup_tuples(PlannerInfo *root, WindowClause *wc,
+								double input_tuples)
+{
+	int			frameOptions = wc->frameOptions;
+	double		partition_tuples;
+	double		return_tuples;
+	double		peer_tuples;
+
+	/* Figure out how many partitions there are likely to be */
+	if (wc->partitionClause != NIL)
+	{
+		double		num_partitions;
+		List	   *partexprs = get_sortgrouplist_exprs(wc->partitionClause,
+														root->parse->targetList);
+
+		num_partitions = estimate_num_groups(root, partexprs, input_tuples,
+											 NULL, NULL);
+		list_free(partexprs);
+
+		partition_tuples = input_tuples / num_partitions;
+	}
+	else
+	{
+		/* all tuples belong to the same partition */
+		partition_tuples = input_tuples;
+	}
+
+	/* estimate the number of tuples in each peer group */
+	if (wc->orderClause != NIL)
+	{
+		double		num_groups;
+		List	   *orderexprs;
+
+		orderexprs = get_sortgrouplist_exprs(wc->orderClause,
+											 root->parse->targetList);
+
+		/*
+		 * First figure out how many peer groups there are likely to be in the
+		 * partition.
+		 */
+		num_groups = estimate_num_groups(root, orderexprs,
+										 partition_tuples, NULL,
+										 NULL);
+		list_free(orderexprs);
+		peer_tuples = partition_tuples / num_groups;
+	}
+	else
+	{
+		/* no ORDER BY so only 1 tuple belongs in each peer group */
+		peer_tuples = 1.0;
+	}
+
+	if (frameOptions & FRAMEOPTION_END_UNBOUNDED_FOLLOWING)
+	{
+		/* include all partition rows */
+		return_tuples = partition_tuples;
+	}
+	else if (frameOptions & FRAMEOPTION_END_CURRENT_ROW)
+	{
+		if (frameOptions & FRAMEOPTION_ROWS)
+		{
+			/* just count the current row */
+			return_tuples = 1.0;
+		}
+		else if (frameOptions & (FRAMEOPTION_RANGE | FRAMEOPTION_GROUPS))
+		{
+			/*
+			 * When in RANGE/GROUPS mode, it's more complex.  If there's no
+			 * ORDER BY, then all rows in the partition are peers, otherwise
+			 * we'll need to read the first group of peers.
+			 */
+			if (wc->orderClause == NIL)
+				return_tuples = partition_tuples;
+			else
+				return_tuples = peer_tuples;
+		}
+		else
+		{
+			Assert(false);
+			return_tuples = 1.0;
+		}
+	}
+	else if (frameOptions & FRAMEOPTION_END_OFFSET_PRECEDING)
+	{
+		/*
+		 * BETWEEN ... AND N PRECEDING will only need to read the WindowAgg's
+		 * subnode after N ROWS/RANGES/GROUPS.  N can be 0, but not negative,
+		 * so we'll just assume only the current row needs to be read to fetch
+		 * the first WindowAgg row.
+		 */
+		return_tuples = 1.0;
+	}
+	else if (frameOptions & FRAMEOPTION_END_OFFSET_FOLLOWING)
+	{
+		Const	   *endOffset = (Const *) wc->endOffset;
+		double		end_offset_value;
+
+		/*
+		 * Try and figure out the value specified in the endOffset. XXX is it
+		 * better to use ExecEvalExprSwitchContext()?
+		 */
+		if (!IsA(endOffset, Const))
+		{
+			/*
+			 * When the end bound is not a Const, we'll just need to guess. We
+			 * just make use of DEFAULT_INEQ_SEL.
+			 */
+			end_offset_value = partition_tuples / peer_tuples * DEFAULT_INEQ_SEL;
+		}
+		else if (endOffset->constisnull)
+		{
+			/*
+			 * NULLs are not allowed, but currently, there's no code to error
+			 * out if there's a NULL Const.  We'll only discover this during
+			 * execution.  For now, just pretend everything is ok and assume
+			 * that just the current row/range/group will be needed.
+			 */
+			end_offset_value = 1.0;
+		}
+		else
+		{
+			switch (endOffset->consttype)
+			{
+				case INT2OID:
+					end_offset_value = (double) DatumGetInt16(endOffset->constvalue);
+					break;
+				case INT4OID:
+					end_offset_value = (double) DatumGetInt32(endOffset->constvalue);
+					break;
+				case INT8OID:
+					end_offset_value = (double) DatumGetInt64(endOffset->constvalue);
+					break;
+				default:
+					end_offset_value = partition_tuples / peer_tuples * DEFAULT_INEQ_SEL;
+					break;
+			}
+		}
+
+		if (frameOptions & FRAMEOPTION_ROWS)
+		{
+			/* include the N FOLLOWING and the current row */
+			return_tuples = end_offset_value + 1.0;
+		}
+		else if (frameOptions & (FRAMEOPTION_RANGE | FRAMEOPTION_GROUPS))
+		{
+			/* include N FOLLOWING ranges/group and the initial range/group */
+			return_tuples = peer_tuples * (end_offset_value + 1.0);
+		}
+		else
+		{
+			Assert(false);
+			return_tuples = 1.0;
+		}
+	}
+	else
+	{
+		return_tuples = 1.0;
+		Assert(false);
+	}
+
+	/*
+	 * Cap the return value so it's never higher than the expected tuples in
+	 * the partition.  This must be done before processing the exclusions as
+	 * the exclusions are eliminated from the start of the frame, not the end.
+	 */
+	return_tuples = Min(return_tuples, partition_tuples);
+
+	/* process any exclusions */
+	if (frameOptions & FRAMEOPTION_EXCLUDE_CURRENT_ROW)
+		return_tuples -= 1.0;
+	else if (frameOptions & FRAMEOPTION_EXCLUDE_GROUP)
+		return_tuples -= peer_tuples;
+	else if (frameOptions & FRAMEOPTION_EXCLUDE_TIES)
+		return_tuples -= (peer_tuples - 1.0);
+
+	return clamp_row_est(return_tuples);
+}
+
+/*
  * cost_windowagg
  *		Determines and returns the cost of performing a WindowAgg plan node,
  *		including the cost of its input.
@@ -2818,16 +3002,31 @@ cost_agg(Path *path, PlannerInfo *root,
  */
 void
 cost_windowagg(Path *path, PlannerInfo *root,
-			   List *windowFuncs, int numPartCols, int numOrderCols,
+			   List *windowFuncs, WindowClause *winclause,
 			   Cost input_startup_cost, Cost input_total_cost,
 			   double input_tuples)
 {
 	Cost		startup_cost;
 	Cost		total_cost;
+	double		startup_tuples;
+	int			numPartCols;
+	int			numOrderCols;
 	ListCell   *lc;
+
+	numPartCols = list_length(winclause->partitionClause);
+	numOrderCols = list_length(winclause->orderClause);
 
 	startup_cost = input_startup_cost;
 	total_cost = input_total_cost;
+
+	/*
+	 * Estimate how many tuples we'll need to read from the subnode before we
+	 * can output the first WindowAgg row.
+	 */
+	startup_tuples = get_windowclause_startup_tuples(root, winclause,
+													 input_tuples);
+
+	elog(DEBUG1, "startup_tuples = %g", startup_tuples);	/* XXX not for commit */
 
 	/*
 	 * Window functions are assumed to cost their stated execution cost, plus
@@ -2880,6 +3079,18 @@ cost_windowagg(Path *path, PlannerInfo *root,
 	path->rows = input_tuples;
 	path->startup_cost = startup_cost;
 	path->total_cost = total_cost;
+
+	/*
+	 * Also, take into account how many tuples we need to read from the
+	 * subnode in order to produce the first tuple from the WindowAgg.  To do
+	 * this we proportion the run cost (total cost not including startup cost)
+	 * over the estimated startup tuples.  We already included the startup
+	 * cost of the subnode, so we only need to do this when the estimated
+	 * startup tuples is above 1.0.
+	 */
+	if (startup_tuples > 1.0)
+		path->startup_cost += (total_cost - startup_cost) / input_tuples *
+			(startup_tuples - 1.0);
 }
 
 /*

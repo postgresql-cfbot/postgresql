@@ -605,6 +605,7 @@ tuplesort_puttupleslot(Tuplesortstate *state, TupleTableSlot *slot)
 	SortTuple	stup;
 	MinimalTuple tuple;
 	HeapTupleData htup;
+	Size		tuplen;
 
 	/* copy the tuple into sort storage */
 	tuple = ExecCopySlotMinimalTuple(slot);
@@ -617,9 +618,14 @@ tuplesort_puttupleslot(Tuplesortstate *state, TupleTableSlot *slot)
 							   tupDesc,
 							   &stup.isnull1);
 
+	if (base->sortopt & TUPLESORT_ALLOWBOUNDED)
+		tuplen = GetMemoryChunkSpace(tuple);
+	else
+		tuplen = MAXALIGN(tuple->t_len);
+
 	tuplesort_puttuple_common(state, &stup,
 							  base->sortKeys->abbrev_converter &&
-							  !stup.isnull1);
+							  !stup.isnull1, tuplen);
 
 	MemoryContextSwitchTo(oldcontext);
 }
@@ -636,6 +642,7 @@ tuplesort_putheaptuple(Tuplesortstate *state, HeapTuple tup)
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	MemoryContext oldcontext = MemoryContextSwitchTo(base->tuplecontext);
 	TuplesortClusterArg *arg = (TuplesortClusterArg *) base->arg;
+	Size		tuplen;
 
 	/* copy the tuple into sort storage */
 	tup = heap_copytuple(tup);
@@ -653,10 +660,15 @@ tuplesort_putheaptuple(Tuplesortstate *state, HeapTuple tup)
 								   &stup.isnull1);
 	}
 
+	if (base->sortopt & TUPLESORT_ALLOWBOUNDED)
+		tuplen = GetMemoryChunkSpace(tup);
+	else
+		tuplen = MAXALIGN(HEAPTUPLESIZE + tup->t_len);
+
 	tuplesort_puttuple_common(state, &stup,
 							  base->haveDatum1 &&
 							  base->sortKeys->abbrev_converter &&
-							  !stup.isnull1);
+							  !stup.isnull1, tuplen);
 
 	MemoryContextSwitchTo(oldcontext);
 }
@@ -674,6 +686,7 @@ tuplesort_putindextuplevalues(Tuplesortstate *state, Relation rel,
 	IndexTuple	tuple;
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
 	TuplesortIndexArg *arg = (TuplesortIndexArg *) base->arg;
+	Size		tuplen;
 
 	stup.tuple = index_form_tuple_context(RelationGetDescr(rel), values,
 										  isnull, base->tuplecontext);
@@ -685,10 +698,15 @@ tuplesort_putindextuplevalues(Tuplesortstate *state, Relation rel,
 								RelationGetDescr(arg->indexRel),
 								&stup.isnull1);
 
+	if (base->sortopt & TUPLESORT_ALLOWBOUNDED)
+		tuplen = GetMemoryChunkSpace(tuple);
+	else
+		tuplen = MAXALIGN(tuple->t_info & INDEX_SIZE_MASK);
+
 	tuplesort_puttuple_common(state, &stup,
 							  base->sortKeys &&
 							  base->sortKeys->abbrev_converter &&
-							  !stup.isnull1);
+							  !stup.isnull1, tuplen);
 }
 
 /*
@@ -735,7 +753,7 @@ tuplesort_putdatum(Tuplesortstate *state, Datum val, bool isNull)
 
 	tuplesort_puttuple_common(state, &stup,
 							  base->tuples &&
-							  base->sortKeys->abbrev_converter && !isNull);
+							  base->sortKeys->abbrev_converter && !isNull, 0);
 
 	MemoryContextSwitchTo(oldcontext);
 }

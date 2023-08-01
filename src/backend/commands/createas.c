@@ -325,7 +325,7 @@ ExecCreateTableAs(ParseState *pstate, CreateTableAsStmt *stmt,
 		UpdateActiveSnapshotCommandId();
 
 		/* Create a QueryDesc, redirecting output to our tuple receiver */
-		queryDesc = CreateQueryDesc(plan, pstate->p_sourcetext,
+		queryDesc = CreateQueryDesc(plan, NULL, pstate->p_sourcetext,
 									GetActiveSnapshot(), InvalidSnapshot,
 									dest, params, queryEnv, 0);
 

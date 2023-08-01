@@ -88,8 +88,9 @@ ExecInitBitmapAnd(BitmapAnd *node, EState *estate, int eflags)
 	foreach(l, node->bitmapplans)
 	{
 		initNode = (Plan *) lfirst(l);
-		bitmapplanstates[i] = ExecInitNode(initNode, estate, eflags);
-		i++;
+		bitmapplanstates[i++] = ExecInitNode(initNode, estate, eflags);
+		if (!ExecPlanStillValid(estate))
+			return NULL;
 	}
 
 	/*
@@ -168,33 +169,15 @@ MultiExecBitmapAnd(BitmapAndState *node)
 
 /* ----------------------------------------------------------------
  *		ExecEndBitmapAnd
- *
- *		Shuts down the subscans of the BitmapAnd node.
- *
- *		Returns nothing of interest.
  * ----------------------------------------------------------------
  */
 void
 ExecEndBitmapAnd(BitmapAndState *node)
 {
-	PlanState **bitmapplans;
-	int			nplans;
-	int			i;
-
-	/*
-	 * get information from the node
-	 */
-	bitmapplans = node->bitmapplans;
-	nplans = node->nplans;
-
-	/*
-	 * shut down each of the subscans (that we've initialized)
-	 */
-	for (i = 0; i < nplans; i++)
-	{
-		if (bitmapplans[i])
-			ExecEndNode(bitmapplans[i]);
-	}
+	 /*
+	  * Nothing to do as any subscans that would have been initialized would
+	  * be cleaned up by ExecEndPlan().
+	  */
 }
 
 void

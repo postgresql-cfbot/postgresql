@@ -211,6 +211,7 @@ BitmapIndexScanState *
 ExecInitBitmapIndexScan(BitmapIndexScan *node, EState *estate, int eflags)
 {
 	BitmapIndexScanState *indexstate;
+	Relation	indexRelation;
 	LOCKMODE	lockmode;
 
 	/* check for unsupported flags */
@@ -262,7 +263,13 @@ ExecInitBitmapIndexScan(BitmapIndexScan *node, EState *estate, int eflags)
 
 	/* Open the index relation. */
 	lockmode = exec_rt_fetch(node->scan.scanrelid, estate)->rellockmode;
-	indexstate->biss_RelationDesc = index_open(node->indexid, lockmode);
+	indexRelation = index_open(node->indexid, lockmode);
+	if (!ExecPlanStillValid(estate))
+	{
+		index_close(indexRelation, lockmode);
+		return NULL;
+	}
+	indexstate->biss_RelationDesc = indexRelation;
 
 	/*
 	 * Initialize index-specific scan state

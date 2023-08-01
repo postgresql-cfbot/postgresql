@@ -528,6 +528,8 @@ ExecInitSetOp(SetOp *node, EState *estate, int eflags)
 	if (node->strategy == SETOP_HASHED)
 		eflags &= ~EXEC_FLAG_REWIND;
 	outerPlanState(setopstate) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 	outerDesc = ExecGetResultType(outerPlanState(setopstate));
 
 	/*
@@ -589,8 +591,6 @@ ExecEndSetOp(SetOpState *node)
 	if (node->tableContext)
 		MemoryContextDelete(node->tableContext);
 	ExecFreeExprContext(&node->ps);
-
-	ExecEndNode(outerPlanState(node));
 }
 
 

@@ -904,6 +904,7 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
 {
 	IndexScanState *indexstate;
 	Relation	currentRelation;
+	Relation	indexRelation;
 	LOCKMODE	lockmode;
 
 	/*
@@ -925,6 +926,8 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
 	 * open the scan relation
 	 */
 	currentRelation = ExecOpenScanRelation(estate, node->scan.scanrelid, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 
 	indexstate->ss.ss_currentRelation = currentRelation;
 	indexstate->ss.ss_currentScanDesc = NULL;	/* no heap scan here */
@@ -969,7 +972,13 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
 
 	/* Open the index relation. */
 	lockmode = exec_rt_fetch(node->scan.scanrelid, estate)->rellockmode;
-	indexstate->iss_RelationDesc = index_open(node->indexid, lockmode);
+	indexRelation = index_open(node->indexid, lockmode);
+	if (!ExecPlanStillValid(estate))
+	{
+		index_close(indexRelation, lockmode);
+		return NULL;
+	}
+	indexstate->iss_RelationDesc = indexRelation;
 
 	/*
 	 * Initialize index-specific scan state

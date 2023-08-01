@@ -244,7 +244,11 @@ ExecInitRecursiveUnion(RecursiveUnion *node, EState *estate, int eflags)
 	 * initialize child nodes
 	 */
 	outerPlanState(rustate) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 	innerPlanState(rustate) = ExecInitNode(innerPlan(node), estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 
 	/*
 	 * If hashing, precompute fmgr lookup data for inner loop, and create the
@@ -280,12 +284,6 @@ ExecEndRecursiveUnion(RecursiveUnionState *node)
 		MemoryContextDelete(node->tempContext);
 	if (node->tableContext)
 		MemoryContextDelete(node->tableContext);
-
-	/*
-	 * close down subplans
-	 */
-	ExecEndNode(outerPlanState(node));
-	ExecEndNode(innerPlanState(node));
 }
 
 /* ----------------------------------------------------------------

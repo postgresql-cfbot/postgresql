@@ -19,6 +19,7 @@
 #include "nodes/lockoptions.h"
 #include "nodes/parsenodes.h"
 #include "utils/memutils.h"
+#include "utils/plancache.h"
 
 
 /*
@@ -256,6 +257,17 @@ extern void ExecEndNode(PlanState *node);
 extern void ExecShutdownNode(PlanState *node);
 extern void ExecSetTupleBound(int64 tuples_needed, PlanState *child_node);
 
+/*
+ * Is the cached plan, if any, still valid at this point?  That is, not
+ * invalidated by the incoming invalidation messages that have been processed
+ * recently.
+ */
+static inline bool
+ExecPlanStillValid(EState *estate)
+{
+	return estate->es_cachedplan == NULL ? true :
+		CachedPlanStillValid(estate->es_cachedplan);
+}
 
 /* ----------------------------------------------------------------
  *		ExecProcNode
@@ -590,6 +602,7 @@ exec_rt_fetch(Index rti, EState *estate)
 }
 
 extern Relation ExecGetRangeTableRelation(EState *estate, Index rti);
+extern void ExecLockAppendNonLeafRelations(EState *estate, List *allpartrelids);
 extern void ExecInitResultRelation(EState *estate, ResultRelInfo *resultRelInfo,
 								   Index rti);
 

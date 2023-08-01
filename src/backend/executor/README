@@ -280,6 +280,39 @@ are typically reset to empty once per tuple.  Per-tuple contexts are usually
 associated with ExprContexts, and commonly each PlanState node has its own
 ExprContext to evaluate its qual and targetlist expressions in.
 
+Relation Locking
+----------------
+
+Normally, the executor does not lock non-index relations appearing in a given
+plan tree when initializing it for execution if the plan tree is freshly
+created, that is, not derived from a CachedPlan.  The reason for that is that
+the locks must already have been taken during parsing, rewriting, and planning
+of the query in that case.  If the plan tree is a cached one, there may still
+be unlocked relations present in the plan tree, because GetCachedPlan() only
+locks the relations that would be present in the query's range table before
+planning occurs, but not relations that would have been added to the range
+table during planning.  This means that inheritance child tables present in
+a cached plan, which are added to the query's range table during planning,
+would not have been locked when the plan enters the executor.
+
+GetCachedPlan() punts on locking child tables because not all may actually be
+scanned during a given execution of the plan if the child tables are partitions
+which may get pruned away due to executor-initialization-time pruning.  So the
+locking of child tables is made to wait till execution-initialization-time,
+which occurs during ExecInitNode() on the plan nodes containing the child
+tables.
+
+So, there's a time window during which a cached plan tree could go stale
+if it contains child tables, because they could get changed in other backends
+before ExecInitNode() gets a lock on them.  This means the executor now must
+check the validity of the plan tree every time it takes a lock on a child
+table contained in the tree (after executor-initialization-pruning, if any,
+has been performed), which it does by looking at CachedPlan.is_valid of the
+CachedPlan passed to it.  If the plan tree is indeed stale (is_valid=false),
+the executor must give up continuing to initialize it any further and return
+to the caller letting it know that the execution must be retried with a new
+plan tree.
+
 
 Query Processing Control Flow
 -----------------------------
@@ -310,11 +343,17 @@ This is a sketch of control flow for full query processing:
 		AfterTriggerEndQuery
 
 	ExecutorEnd
-		ExecEndNode --- recursively releases resources
+		ExecEndNode --- releases resources
 		FreeExecutorState
 			frees per-query context and child contexts
 
 	FreeQueryDesc
+
+As mentioned in the "Relation Locking" section, if the plan tree is found to
+be stale during one of the recursive calls of ExecInitNode() after taking a
+lock on a child table, the control is immmediately returned to the caller of
+ExecutorStart(), which must redo the steps from CreateQueryDesc with a new
+plan tree.
 
 Per above comments, it's not really critical for ExecEndNode to free any
 memory; it'll all go away in FreeExecutorState anyway.  However, we do need to

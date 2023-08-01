@@ -994,11 +994,16 @@ typedef struct PartitionCmd
  *
  *	  inFromCl marks those range variables that are listed in the FROM clause.
  *	  It's false for RTEs that are added to a query behind the scenes, such
- *	  as the NEW and OLD variables for a rule, or the subqueries of a UNION.
+ *	  as the NEW and OLD variables for a rule, or the subqueries of a UNION,
+ *	  or the RTEs of inheritance child tables that are added by the planner.
  *	  This flag is not used during parsing (except in transformLockingClause,
  *	  q.v.); the parser now uses a separate "namespace" data structure to
  *	  control visibility.  But it is needed by ruleutils.c to determine
- *	  whether RTEs should be shown in decompiled queries.
+ *	  whether RTEs should be shown in decompiled queries.  It is used by the
+ *	  executor to determine that a given RTE_RELATION entry belongs to a table
+ *	  directly mentioned in the query or to a child table added by the planner.
+ *	  It needs to know that for the case where the child tables in a plan need
+ *	  to be locked.
  *
  *	  securityQuals is a list of security barrier quals (boolean expressions),
  *	  to be tested in the listed order before returning a row from the

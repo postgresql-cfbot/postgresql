@@ -620,6 +620,17 @@ ExecCheckPermissions(List *rangeTable, List *rteperminfos,
 		RTEPermissionInfo *perminfo = lfirst_node(RTEPermissionInfo, l);
 
 		Assert(OidIsValid(perminfo->relid));
+
+		/*
+		 * Relations whose permissions need to be checked must already have
+		 * been locked by the parser or by GetCachedPlan() if a cached plan is
+		 * being executed.
+		 *
+		 * XXX shouldn't we skip calling ExecCheckPermissions from InitPlan
+		 * in a parallel worker?
+		 */
+		Assert(CheckRelLockedByMe(perminfo->relid, AccessShareLock, true) ||
+			   IsParallelWorker());
 		result = ExecCheckOneRelPerms(perminfo);
 		if (!result)
 		{
@@ -829,6 +840,23 @@ ExecCheckXactReadOnly(PlannedStmt *plannedstmt)
  *
  *		Initializes the query plan: open files, allocate storage
  *		and start up the rule manager
+ *
+ *
+ * Normally, the plan tree given in queryDesc->plannedstmt is known to be
+ * valid in a race-free manner, that is, all relations contained in
+ * plannedstmt->relationOids would have already been locked.  That is not the
+ * case however if the plannedstmt comes from a CachedPlan, one given in
+ * queryDesc->cplan.  That's because GetCachedPlan() only locks the tables
+ * that are mentioned in the original query but not the child tables, which
+ * would have been added to the plan by the planner.  In that case, locks on
+ * child tables will be taken when initializing their Scan nodes in
+ * ExecInitNode() to be done here.  If the CachedPlan gets invalidated as
+ * those locks are taken, plan tree initialization is suspended at the point
+ * where the invalidation is first detected, queryDesc->planstate will be set
+ * to NULL, and queryDesc->plan_valid to false.  Callers must retry the
+ * execution after creating a new CachedPlan in that case, after properly
+ * releasing the resources of this QueryDesc, which includes calling
+ * ExecutorFinish() and ExecutorEnd() on the EState contained therein.
  * ----------------------------------------------------------------
  */
 static void
@@ -839,7 +867,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	Plan	   *plan = plannedstmt->planTree;
 	List	   *rangeTable = plannedstmt->rtable;
 	EState	   *estate = queryDesc->estate;
-	PlanState  *planstate;
+	PlanState  *planstate = NULL;
 	TupleDesc	tupType;
 	ListCell   *l;
 	int			i;
@@ -850,10 +878,11 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	ExecCheckPermissions(rangeTable, plannedstmt->permInfos, true);
 
 	/*
-	 * initialize the node's execution state
+	 * Set up range table in EState.
 	 */
 	ExecInitRangeTable(estate, rangeTable, plannedstmt->permInfos);
 
+	estate->es_cachedplan = queryDesc->cplan;
 	estate->es_plannedstmt = plannedstmt;
 
 	/*
@@ -886,6 +915,8 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 				case ROW_MARK_KEYSHARE:
 				case ROW_MARK_REFERENCE:
 					relation = ExecGetRangeTableRelation(estate, rc->rti);
+					if (!ExecPlanStillValid(estate))
+						goto plan_init_suspended;
 					break;
 				case ROW_MARK_COPY:
 					/* no physical table access is required */
@@ -953,6 +984,11 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 			sp_eflags |= EXEC_FLAG_REWIND;
 
 		subplanstate = ExecInitNode(subplan, estate, sp_eflags);
+		if (!ExecPlanStillValid(estate))
+		{
+			Assert(subplanstate == NULL);
+			goto plan_init_suspended;
+		}
 
 		estate->es_subplanstates = lappend(estate->es_subplanstates,
 										   subplanstate);
@@ -966,6 +1002,11 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	 * processing tuples.
 	 */
 	planstate = ExecInitNode(plan, estate, eflags);
+	if (!ExecPlanStillValid(estate))
+	{
+		Assert(planstate == NULL);
+		goto plan_init_suspended;
+	}
 
 	/*
 	 * Get the tuple descriptor describing the type of tuples to return.
@@ -1008,7 +1049,19 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	}
 
 	queryDesc->tupDesc = tupType;
+	Assert(planstate != NULL);
 	queryDesc->planstate = planstate;
+	queryDesc->plan_valid = true;
+	return;
+
+plan_init_suspended:
+	/*
+	 * Plan initialization failed.  Mark QueryDesc as such.  ExecEndPlan()
+	 * will clean up initialized plan nodes from estate->es_inited_plannodes.
+	 */
+	Assert(planstate == NULL);
+	queryDesc->planstate = NULL;
+	queryDesc->plan_valid = false;
 }
 
 /*
@@ -1426,7 +1479,7 @@ ExecGetAncestorResultRels(EState *estate, ResultRelInfo *resultRelInfo)
 
 			/*
 			 * All ancestors up to the root target relation must have been
-			 * locked by the planner or AcquireExecutorLocks().
+			 * locked by the planner or ExecLockAppendNonLeafRelations().
 			 */
 			ancRel = table_open(ancOid, NoLock);
 			rInfo = makeNode(ResultRelInfo);
@@ -1504,18 +1557,15 @@ ExecEndPlan(PlanState *planstate, EState *estate)
 	ListCell   *l;
 
 	/*
-	 * shut down the node-type-specific query processing
+	 * Shut down the node-type-specific query processing for all nodes that
+	 * were initialized during InitPlan(), both in the main plan tree and those
+	 * in subplans (es_subplanstates), if any.
 	 */
-	ExecEndNode(planstate);
-
-	/*
-	 * for subplans too
-	 */
-	foreach(l, estate->es_subplanstates)
+	foreach(l, estate->es_inited_plannodes)
 	{
-		PlanState  *subplanstate = (PlanState *) lfirst(l);
+		PlanState  *pstate = (PlanState *) lfirst(l);
 
-		ExecEndNode(subplanstate);
+		ExecEndNode(pstate);
 	}
 
 	/*
@@ -1600,12 +1650,13 @@ ExecCloseResultRelations(EState *estate)
 void
 ExecCloseRangeTableRelations(EState *estate)
 {
-	int			i;
+	ListCell *lc;
 
-	for (i = 0; i < estate->es_range_table_size; i++)
+	foreach(lc, estate->es_opened_relations)
 	{
-		if (estate->es_relations[i])
-			table_close(estate->es_relations[i], NoLock);
+		Relation rel = lfirst(lc);
+
+		table_close(rel, NoLock);
 	}
 }
 
@@ -2858,7 +2909,8 @@ EvalPlanQualStart(EPQState *epqstate, Plan *planTree)
 	 * Child EPQ EStates share the parent's copy of unchanging state such as
 	 * the snapshot, rangetable, and external Param info.  They need their own
 	 * copies of local state, including a tuple table, es_param_exec_vals,
-	 * result-rel info, etc.
+	 * result-rel info, etc.  Also, we don't pass the parent't copy of the
+	 * CachedPlan, because no new locks will be taken for EvalPlanQual().
 	 */
 	rcestate->es_direction = ForwardScanDirection;
 	rcestate->es_snapshot = parentestate->es_snapshot;
@@ -2945,6 +2997,12 @@ EvalPlanQualStart(EPQState *epqstate, Plan *planTree)
 		PlanState  *subplanstate;
 
 		subplanstate = ExecInitNode(subplan, rcestate, 0);
+
+		/*
+		 * At this point, we had better not received any new invalidation
+		 * messages that would have caused the plan tree to go stale.
+		 */
+		Assert(ExecPlanStillValid(rcestate) && subplanstate);
 		rcestate->es_subplanstates = lappend(rcestate->es_subplanstates,
 											 subplanstate);
 	}
@@ -2988,6 +3046,12 @@ EvalPlanQualStart(EPQState *epqstate, Plan *planTree)
 	 */
 	epqstate->recheckplanstate = ExecInitNode(planTree, rcestate, 0);
 
+	/*
+	 * At this point, we had better not received any new invalidation messages
+	 * that would have caused the plan tree to go stale.
+	 */
+	Assert(ExecPlanStillValid(rcestate) && epqstate->recheckplanstate);
+
 	MemoryContextSwitchTo(oldcontext);
 }
 
@@ -3010,6 +3074,10 @@ EvalPlanQualEnd(EPQState *epqstate)
 	MemoryContext oldcontext;
 	ListCell   *l;
 
+	/* Nothing to do if EvalPlanQualInit() wasn't done to begin with. */
+	if (epqstate->parentestate == NULL)
+		return;
+
 	rtsize = epqstate->parentestate->es_range_table_size;
 
 	/*
@@ -3030,13 +3098,16 @@ EvalPlanQualEnd(EPQState *epqstate)
 
 	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
 
-	ExecEndNode(epqstate->recheckplanstate);
-
-	foreach(l, estate->es_subplanstates)
+	/*
+	 * Shut down the node-type-specific query processing for all nodes that
+	 * were initialized during EvalPlanQualStart(), both in the main plan tree
+	 * and those in subplans (es_subplanstates), if any.
+	 */
+	foreach(l, estate->es_inited_plannodes)
 	{
-		PlanState  *subplanstate = (PlanState *) lfirst(l);
+		PlanState  *planstate = (PlanState *) lfirst(l);
 
-		ExecEndNode(subplanstate);
+		ExecEndNode(planstate);
 	}
 
 	/* throw away the per-estate tuple table, some node may have used it */

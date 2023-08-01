@@ -490,6 +490,7 @@ ExecInitIndexOnlyScan(IndexOnlyScan *node, EState *estate, int eflags)
 {
 	IndexOnlyScanState *indexstate;
 	Relation	currentRelation;
+	Relation	indexRelation;
 	LOCKMODE	lockmode;
 	TupleDesc	tupDesc;
 
@@ -512,6 +513,8 @@ ExecInitIndexOnlyScan(IndexOnlyScan *node, EState *estate, int eflags)
 	 * open the scan relation
 	 */
 	currentRelation = ExecOpenScanRelation(estate, node->scan.scanrelid, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 
 	indexstate->ss.ss_currentRelation = currentRelation;
 	indexstate->ss.ss_currentScanDesc = NULL;	/* no heap scan here */
@@ -564,7 +567,13 @@ ExecInitIndexOnlyScan(IndexOnlyScan *node, EState *estate, int eflags)
 
 	/* Open the index relation. */
 	lockmode = exec_rt_fetch(node->scan.scanrelid, estate)->rellockmode;
-	indexstate->ioss_RelationDesc = index_open(node->indexid, lockmode);
+	indexRelation = index_open(node->indexid, lockmode);
+	if (!ExecPlanStillValid(estate))
+	{
+		index_close(indexRelation, lockmode);
+		return NULL;
+	}
+	indexstate->ioss_RelationDesc = indexRelation;
 
 	/*
 	 * Initialize index-specific scan state

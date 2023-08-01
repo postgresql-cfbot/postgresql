@@ -214,6 +214,8 @@ ExecInitMaterial(Material *node, EState *estate, int eflags)
 
 	outerPlan = outerPlan(node);
 	outerPlanState(matstate) = ExecInitNode(outerPlan, estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 
 	/*
 	 * Initialize result type and slot. No need to initialize projection info
@@ -250,11 +252,6 @@ ExecEndMaterial(MaterialState *node)
 	if (node->tuplestorestate != NULL)
 		tuplestore_end(node->tuplestorestate);
 	node->tuplestorestate = NULL;
-
-	/*
-	 * shut down the subplan
-	 */
-	ExecEndNode(outerPlanState(node));
 }
 
 /* ----------------------------------------------------------------

@@ -797,11 +797,13 @@ execute_sql_string(const char *sql)
 				QueryDesc  *qdesc;
 
 				qdesc = CreateQueryDesc(stmt,
+										NULL,
 										sql,
 										GetActiveSnapshot(), NULL,
 										dest, NULL, NULL, 0);
 
 				ExecutorStart(qdesc, 0);
+				Assert(qdesc->plan_valid);
 				ExecutorRun(qdesc, ForwardScanDirection, 0, true);
 				ExecutorFinish(qdesc);
 				ExecutorEnd(qdesc);

@@ -938,6 +938,8 @@ ExecInitMemoize(Memoize *node, EState *estate, int eflags)
 
 	outerNode = outerPlan(node);
 	outerPlanState(mstate) = ExecInitNode(outerNode, estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 
 	/*
 	 * Initialize return slot and type. No need to initialize projection info
@@ -1099,11 +1101,6 @@ ExecEndMemoize(MemoizeState *node)
 	 * free exprcontext
 	 */
 	ExecFreeExprContext(&node->ss.ps);
-
-	/*
-	 * shut down the subplan
-	 */
-	ExecEndNode(outerPlanState(node));
 }
 
 void

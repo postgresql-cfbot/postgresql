@@ -668,11 +668,6 @@ ExecEndBitmapHeapScan(BitmapHeapScanState *node)
 	ExecClearTuple(node->ss.ss_ScanTupleSlot);
 
 	/*
-	 * close down subplans
-	 */
-	ExecEndNode(outerPlanState(node));
-
-	/*
 	 * release bitmaps and buffers if any
 	 */
 	if (node->tbmiterator)
@@ -763,11 +758,15 @@ ExecInitBitmapHeapScan(BitmapHeapScan *node, EState *estate, int eflags)
 	 * open the scan relation
 	 */
 	currentRelation = ExecOpenScanRelation(estate, node->scan.scanrelid, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 
 	/*
 	 * initialize child nodes
 	 */
 	outerPlanState(scanstate) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 
 	/*
 	 * get the scan type from the relation descriptor.

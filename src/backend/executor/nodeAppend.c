@@ -133,6 +133,27 @@ ExecInitAppend(Append *node, EState *estate, int eflags)
 	appendstate->as_syncdone = false;
 	appendstate->as_begun = false;
 
+	/*
+	 * Must take locks on child tables if running a cached plan, because
+	 * GetCachedPlan() would've only locked the root parent named in the
+	 * query.
+	 *
+	 * First lock non-leaf partitions before doing pruning if any.  Even when
+	 * no pruning is to be done, non-leaf partitions still must be locked
+	 * explicitly like this, because they're not referenced elsewhere in
+	 * the plan tree.  XXX - OTOH, non-leaf partitions mentioned in
+	 * part_prune_info, if any, would be opened by ExecInitPartitionPruning()
+	 * using ExecGetRangeTableRelation() which locks child tables, redundantly
+	 * in this case.
+	 */
+	if (estate->es_cachedplan)
+	{
+		ExecLockAppendNonLeafRelations(estate, node->allpartrelids);
+		if (!ExecPlanStillValid(estate))
+			return NULL;
+
+	}
+
 	/* If run-time partition pruning is enabled, then set that up now */
 	if (node->part_prune_info != NULL)
 	{
@@ -147,6 +168,8 @@ ExecInitAppend(Append *node, EState *estate, int eflags)
 											  list_length(node->appendplans),
 											  node->part_prune_info,
 											  &validsubplans);
+		if (!ExecPlanStillValid(estate))
+			return NULL;
 		appendstate->as_prune_state = prunestate;
 		nplans = bms_num_members(validsubplans);
 
@@ -221,6 +244,8 @@ ExecInitAppend(Append *node, EState *estate, int eflags)
 			firstvalid = j;
 
 		appendplanstates[j++] = ExecInitNode(initNode, estate, eflags);
+		if (!ExecPlanStillValid(estate))
+			return NULL;
 	}
 
 	appendstate->as_first_partial_plan = firstvalid;
@@ -376,30 +401,15 @@ ExecAppend(PlanState *pstate)
 
 /* ----------------------------------------------------------------
  *		ExecEndAppend
- *
- *		Shuts down the subscans of the append node.
- *
- *		Returns nothing of interest.
  * ----------------------------------------------------------------
  */
 void
 ExecEndAppend(AppendState *node)
 {
-	PlanState **appendplans;
-	int			nplans;
-	int			i;
-
-	/*
-	 * get information from the node
-	 */
-	appendplans = node->appendplans;
-	nplans = node->as_nplans;
-
-	/*
-	 * shut down each of the subscans
-	 */
-	for (i = 0; i < nplans; i++)
-		ExecEndNode(appendplans[i]);
+	 /*
+	  * Nothing to do as subscans of the append node would be cleaned up by
+	  *	ExecEndPlan().
+	  */
 }
 
 void

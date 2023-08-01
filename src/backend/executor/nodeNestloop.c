@@ -295,11 +295,15 @@ ExecInitNestLoop(NestLoop *node, EState *estate, int eflags)
 	 * values.
 	 */
 	outerPlanState(nlstate) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 	if (node->nestParams == NIL)
 		eflags |= EXEC_FLAG_REWIND;
 	else
 		eflags &= ~EXEC_FLAG_REWIND;
 	innerPlanState(nlstate) = ExecInitNode(innerPlan(node), estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 
 	/*
 	 * Initialize result slot, type and projection.
@@ -373,12 +377,6 @@ ExecEndNestLoop(NestLoopState *node)
 	 * clean out the tuple table
 	 */
 	ExecClearTuple(node->js.ps.ps_ResultTupleSlot);
-
-	/*
-	 * close down subplans
-	 */
-	ExecEndNode(outerPlanState(node));
-	ExecEndNode(innerPlanState(node));
 
 	NL1_printf("ExecEndNestLoop: %s\n",
 			   "node processing ended");

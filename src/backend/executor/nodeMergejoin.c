@@ -1490,11 +1490,15 @@ ExecInitMergeJoin(MergeJoin *node, EState *estate, int eflags)
 	mergestate->mj_SkipMarkRestore = node->skip_mark_restore;
 
 	outerPlanState(mergestate) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 	outerDesc = ExecGetResultType(outerPlanState(mergestate));
 	innerPlanState(mergestate) = ExecInitNode(innerPlan(node), estate,
 											  mergestate->mj_SkipMarkRestore ?
 											  eflags :
 											  (eflags | EXEC_FLAG_MARK));
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 	innerDesc = ExecGetResultType(innerPlanState(mergestate));
 
 	/*
@@ -1653,12 +1657,6 @@ ExecEndMergeJoin(MergeJoinState *node)
 	 */
 	ExecClearTuple(node->js.ps.ps_ResultTupleSlot);
 	ExecClearTuple(node->mj_MarkedTupleSlot);
-
-	/*
-	 * shut down the subplans
-	 */
-	ExecEndNode(innerPlanState(node));
-	ExecEndNode(outerPlanState(node));
 
 	MJ1_printf("ExecEndMergeJoin: %s\n",
 			   "node processing ended");

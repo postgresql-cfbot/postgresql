@@ -1248,8 +1248,17 @@ ExecParallelGetQueryDesc(shm_toc *toc, DestReceiver *receiver,
 	paramspace = shm_toc_lookup(toc, PARALLEL_KEY_PARAMLISTINFO, false);
 	paramLI = RestoreParamList(&paramspace);
 
-	/* Create a QueryDesc for the query. */
+	/*
+	 * Create a QueryDesc for the query.  Note that no CachedPlan is available
+	 * here even if the leader may have gotten the plan tree from one.  That's
+	 * fine though, because the leader would have taken the locks necessary
+	 * for the plan tree that we have here to be fully valid.  That is true
+	 * despite the fact that we will be taking our own copies of those locks
+	 * in ExecGetRangeTableRelation(), because none of them would be the locks
+	 * that are not already taken by the leader.
+	 */
 	return CreateQueryDesc(pstmt,
+						   NULL,
 						   queryString,
 						   GetActiveSnapshot(), InvalidSnapshot,
 						   receiver, paramLI, NULL, instrument_options);
@@ -1431,6 +1440,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	/* Start up the executor */
 	queryDesc->plannedstmt->jitFlags = fpes->jit_flags;
 	ExecutorStart(queryDesc, fpes->eflags);
+	Assert(queryDesc->plan_valid);
 
 	/* Special executor initialization steps for parallel workers */
 	queryDesc->planstate->state->es_query_dsa = area;

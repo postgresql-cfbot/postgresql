@@ -173,6 +173,8 @@ ExecInitForeignScan(ForeignScan *node, EState *estate, int eflags)
 	if (scanrelid > 0)
 	{
 		currentRelation = ExecOpenScanRelation(estate, scanrelid, eflags);
+		if (!ExecPlanStillValid(estate))
+			return NULL;
 		scanstate->ss.ss_currentRelation = currentRelation;
 		fdwroutine = GetFdwRoutineForRelation(currentRelation, true);
 	}
@@ -264,6 +266,8 @@ ExecInitForeignScan(ForeignScan *node, EState *estate, int eflags)
 	if (outerPlan(node))
 		outerPlanState(scanstate) =
 			ExecInitNode(outerPlan(node), estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 
 	/*
 	 * Tell the FDW to initialize the scan.
@@ -308,10 +312,6 @@ ExecEndForeignScan(ForeignScanState *node)
 	}
 	else
 		node->fdwroutine->EndForeignScan(node);
-
-	/* Shut down any outer plan. */
-	if (outerPlanState(node))
-		ExecEndNode(outerPlanState(node));
 
 	/* Free the exprcontext */
 	ExecFreeExprContext(&node->ss.ps);

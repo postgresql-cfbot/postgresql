@@ -108,6 +108,8 @@ ExecInitGatherMerge(GatherMerge *node, EState *estate, int eflags)
 	 */
 	outerNode = outerPlan(node);
 	outerPlanState(gm_state) = ExecInitNode(outerNode, estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 
 	/*
 	 * Leader may access ExecProcNode result directly (if
@@ -288,7 +290,6 @@ ExecGatherMerge(PlanState *pstate)
 void
 ExecEndGatherMerge(GatherMergeState *node)
 {
-	ExecEndNode(outerPlanState(node));	/* let children clean up first */
 	ExecShutdownGatherMerge(node);
 	ExecFreeExprContext(&node->ps);
 	if (node->ps.ps_ResultTupleSlot)

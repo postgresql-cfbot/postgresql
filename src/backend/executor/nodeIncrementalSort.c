@@ -1041,6 +1041,8 @@ ExecInitIncrementalSort(IncrementalSort *node, EState *estate, int eflags)
 	 * nodes may be able to do something more useful.
 	 */
 	outerPlanState(incrsortstate) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 
 	/*
 	 * Initialize scan slot and type.
@@ -1100,11 +1102,6 @@ ExecEndIncrementalSort(IncrementalSortState *node)
 		tuplesort_end(node->prefixsort_state);
 		node->prefixsort_state = NULL;
 	}
-
-	/*
-	 * Shut down the subplan.
-	 */
-	ExecEndNode(outerPlanState(node));
 
 	SO_printf("ExecEndIncrementalSort: sort node shutdown\n");
 }

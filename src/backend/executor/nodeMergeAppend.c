@@ -81,6 +81,27 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 	mergestate->ps.state = estate;
 	mergestate->ps.ExecProcNode = ExecMergeAppend;
 
+	/*
+	 * Must take locks on child tables if running a cached plan, because
+	 * GetCachedPlan() would've only locked the root parent named in the
+	 * query.
+	 *
+	 * First lock non-leaf partitions before doing pruning if any.  Even when
+	 * no pruning is to be done, non-leaf partitions still must be locked
+	 * explicitly like this, because they're not referenced elsewhere in
+	 * the plan tree.  XXX - OTOH, non-leaf partitions mentioned in
+	 * part_prune_info, if any, would be opened by ExecInitPartitionPruning()
+	 * using ExecGetRangeTableRelation() which locks child tables, redundantly
+	 * in this case.
+	 */
+	if (estate->es_cachedplan)
+	{
+		ExecLockAppendNonLeafRelations(estate, node->allpartrelids);
+		if (!ExecPlanStillValid(estate))
+			return NULL;
+
+	}
+
 	/* If run-time partition pruning is enabled, then set that up now */
 	if (node->part_prune_info != NULL)
 	{
@@ -95,6 +116,8 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 											  list_length(node->mergeplans),
 											  node->part_prune_info,
 											  &validsubplans);
+		if (!ExecPlanStillValid(estate))
+			return NULL;
 		mergestate->ms_prune_state = prunestate;
 		nplans = bms_num_members(validsubplans);
 
@@ -151,6 +174,8 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 		Plan	   *initNode = (Plan *) list_nth(node->mergeplans, i);
 
 		mergeplanstates[j++] = ExecInitNode(initNode, estate, eflags);
+		if (!ExecPlanStillValid(estate))
+			return NULL;
 	}
 
 	mergestate->ps.ps_ProjInfo = NULL;
@@ -310,30 +335,14 @@ heap_compare_slots(Datum a, Datum b, void *arg)
 
 /* ----------------------------------------------------------------
  *		ExecEndMergeAppend
- *
- *		Shuts down the subscans of the MergeAppend node.
- *
- *		Returns nothing of interest.
  * ----------------------------------------------------------------
  */
 void
 ExecEndMergeAppend(MergeAppendState *node)
 {
-	PlanState **mergeplans;
-	int			nplans;
-	int			i;
-
-	/*
-	 * get information from the node
-	 */
-	mergeplans = node->mergeplans;
-	nplans = node->ms_nplans;
-
-	/*
-	 * shut down each of the subscans
-	 */
-	for (i = 0; i < nplans; i++)
-		ExecEndNode(mergeplans[i]);
+	 /*
+	  * Nothing to do as subscans would be cleaned up by ExecEndPlan().
+	  */
 }
 
 void

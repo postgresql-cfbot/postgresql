@@ -185,6 +185,8 @@ ExecInitGroup(Group *node, EState *estate, int eflags)
 	 * initialize child nodes
 	 */
 	outerPlanState(grpstate) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 
 	/*
 	 * Initialize scan slot and type.
@@ -226,15 +228,10 @@ ExecInitGroup(Group *node, EState *estate, int eflags)
 void
 ExecEndGroup(GroupState *node)
 {
-	PlanState  *outerPlan;
-
 	ExecFreeExprContext(&node->ss.ps);
 
 	/* clean up tuple table */
 	ExecClearTuple(node->ss.ss_ScanTupleSlot);
-
-	outerPlan = outerPlanState(node);
-	ExecEndNode(outerPlan);
 }
 
 void

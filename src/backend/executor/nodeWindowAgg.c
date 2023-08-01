@@ -2458,6 +2458,8 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 	 */
 	outerPlan = outerPlan(node);
 	outerPlanState(winstate) = ExecInitNode(outerPlan, estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 
 	/*
 	 * initialize source tuple type (which is also the tuple type that we'll
@@ -2681,7 +2683,6 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 void
 ExecEndWindowAgg(WindowAggState *node)
 {
-	PlanState  *outerPlan;
 	int			i;
 
 	release_partition(node);
@@ -2713,9 +2714,6 @@ ExecEndWindowAgg(WindowAggState *node)
 
 	pfree(node->perfunc);
 	pfree(node->peragg);
-
-	outerPlan = outerPlanState(node);
-	ExecEndNode(outerPlan);
 }
 
 /* -----------------

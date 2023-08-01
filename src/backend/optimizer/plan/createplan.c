@@ -25,6 +25,7 @@
 #include "nodes/extensible.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "optimizer/appendinfo.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
@@ -1210,6 +1211,7 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 	Oid		   *nodeCollations = NULL;
 	bool	   *nodeNullsFirst = NULL;
 	bool		consider_async = false;
+	List	   *allpartrelids = NIL;
 
 	/*
 	 * The subpaths list could be empty, if every child was proven empty by
@@ -1351,15 +1353,23 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 			++nasyncplans;
 		}
 
+		/*
+		 * Find partitioned parent rel(s) of the subpath's rel(s).
+		 */
+		allpartrelids = add_append_subpath_partrelids(root, subpath, rel,
+													  allpartrelids);
+
 		subplans = lappend(subplans, subplan);
 	}
 
+	plan->allpartrelids = allpartrelids;
+
 	/*
-	 * If any quals exist, they may be useful to perform further partition
-	 * pruning during execution.  Gather information needed by the executor to
-	 * do partition pruning.
+	 * If scanning partitions, check if there are quals that may be useful to
+	 * perform further partition pruning during execution.  Gather information
+	 * needed by the executor to do partition pruning.
 	 */
-	if (enable_partition_pruning)
+	if (enable_partition_pruning && allpartrelids != NIL)
 	{
 		List	   *prunequal;
 
@@ -1380,7 +1390,8 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 			partpruneinfo =
 				make_partition_pruneinfo(root, rel,
 										 best_path->subpaths,
-										 prunequal);
+										 prunequal,
+										 allpartrelids);
 	}
 
 	plan->appendplans = subplans;
@@ -1426,6 +1437,7 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
 	ListCell   *subpaths;
 	RelOptInfo *rel = best_path->path.parent;
 	PartitionPruneInfo *partpruneinfo = NULL;
+	List	   *allpartrelids = NIL;
 
 	/*
 	 * We don't have the actual creation of the MergeAppend node split out
@@ -1515,15 +1527,23 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
 			subplan = (Plan *) sort;
 		}
 
+		/*
+		 * Find partitioned parent rel(s) of the subpath's rel(s).
+		 */
+		allpartrelids = add_append_subpath_partrelids(root, subpath, rel,
+													  allpartrelids);
+
 		subplans = lappend(subplans, subplan);
 	}
 
+	node->allpartrelids = allpartrelids;
+
 	/*
-	 * If any quals exist, they may be useful to perform further partition
-	 * pruning during execution.  Gather information needed by the executor to
-	 * do partition pruning.
+	 * If scanning partitions, check if there are quals that may be useful to
+	 * perform further partition pruning during execution.  Gather information
+	 * needed by the executor to do partition pruning.
 	 */
-	if (enable_partition_pruning)
+	if (enable_partition_pruning && allpartrelids != NIL)
 	{
 		List	   *prunequal;
 
@@ -1535,7 +1555,8 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
 		if (prunequal != NIL)
 			partpruneinfo = make_partition_pruneinfo(root, rel,
 													 best_path->subpaths,
-													 prunequal);
+													 prunequal,
+													 allpartrelids);
 	}
 
 	node->mergeplans = subplans;

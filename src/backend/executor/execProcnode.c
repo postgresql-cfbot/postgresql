@@ -135,7 +135,17 @@ static bool ExecShutdownNode_walker(PlanState *node, void *context);
  *		  'estate' is the shared execution state for the plan tree
  *		  'eflags' is a bitwise OR of flag bits described in executor.h
  *
- *		Returns a PlanState node corresponding to the given Plan node.
+ *		Returns a PlanState node corresponding to the given Plan node or NULL.
+ *
+ *		NULL may be returned either if the input node is NULL or if the plan
+ *		tree that the node is a part of is found to have been invalidated when
+ *		taking a lock on the relation mentioned in the node or in a child
+ *		node.  The latter case arises if the plan tree contains inheritance/
+ *		partition child tables and is from a CachedPlan.
+ *
+ *		Also, all non-NULL PlanState nodes are added to
+ *		estate->es_inited_plannodes for ExecEndPlan() to iterate over to close
+ *		each one using ExecEndNode().
  * ------------------------------------------------------------------------
  */
 PlanState *
@@ -388,6 +398,13 @@ ExecInitNode(Plan *node, EState *estate, int eflags)
 			break;
 	}
 
+	if (!ExecPlanStillValid(estate))
+	{
+		Assert(result == NULL);
+		return NULL;
+	}
+
+	Assert(result != NULL);
 	ExecSetExecProcNode(result, result->ExecProcNode);
 
 	/*
@@ -410,6 +427,13 @@ ExecInitNode(Plan *node, EState *estate, int eflags)
 	if (estate->es_instrument)
 		result->instrument = InstrAlloc(1, estate->es_instrument,
 										result->async_capable);
+
+	/*
+	 * Remember valid PlanState nodes in EState for the processing in
+	 * ExecEndPlan().
+	 */
+	estate->es_inited_plannodes = lappend(estate->es_inited_plannodes,
+										  result);
 
 	return result;
 }
@@ -545,29 +569,21 @@ MultiExecProcNode(PlanState *node)
 /* ----------------------------------------------------------------
  *		ExecEndNode
  *
- *		Recursively cleans up all the nodes in the plan rooted
- *		at 'node'.
+ *		Cleans up node
  *
- *		After this operation, the query plan will not be able to be
- *		processed any further.  This should be called only after
+ *		Child nodes, if any, would have been closed by the caller, so the
+ *		ExecEnd* routine for a given node type is only responsible for
+ *		cleaning up the resources local to that node.
+ *
+ *		After this operation, the query plan containing this node will not be
+ *		able to be processed any further.  This should be called only after
  *		the query plan has been fully executed.
  * ----------------------------------------------------------------
  */
 void
 ExecEndNode(PlanState *node)
 {
-	/*
-	 * do nothing when we get to the end of a leaf on tree.
-	 */
-	if (node == NULL)
-		return;
-
-	/*
-	 * Make sure there's enough stack available. Need to check here, in
-	 * addition to ExecProcNode() (via ExecProcNodeFirst()), because it's not
-	 * guaranteed that ExecProcNode() is reached for all nodes.
-	 */
-	check_stack_depth();
+	Assert(node != NULL);
 
 	if (node->chgParam != NULL)
 	{

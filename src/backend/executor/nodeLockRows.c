@@ -322,6 +322,8 @@ ExecInitLockRows(LockRows *node, EState *estate, int eflags)
 	 * then initialize outer plan
 	 */
 	outerPlanState(lrstate) = ExecInitNode(outerPlan, estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 
 	/* node returns unmodified slots from the outer plan */
 	lrstate->ps.resultopsset = true;
@@ -386,7 +388,6 @@ ExecEndLockRows(LockRowsState *node)
 {
 	/* We may have shut down EPQ already, but no harm in another call */
 	EvalPlanQualEnd(&node->lr_epqstate);
-	ExecEndNode(outerPlanState(node));
 }
 
 

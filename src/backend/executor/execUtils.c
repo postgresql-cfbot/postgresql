@@ -804,7 +804,25 @@ ExecGetRangeTableRelation(EState *estate, Index rti)
 
 		Assert(rte->rtekind == RTE_RELATION);
 
-		if (!IsParallelWorker())
+		if (IsParallelWorker() ||
+			(estate->es_cachedplan != NULL && !rte->inFromCl))
+		{
+			/*
+			 * Take a lock if we are a parallel worker or if this is a child
+			 * table referenced in a cached plan.
+			 *
+			 * Parallel workers need to have their own local lock on the
+			 * relation.  This ensures sane behavior in case the parent process
+			 * exits before we do.
+			 *
+			 * When executing a cached plan, child tables must be locked
+			 * here, because plancache.c (GetCachedPlan()) would only have
+			 * locked tables mentioned in the query, that is, tables whose
+			 * RTEs' inFromCl is true.
+			 */
+			rel = table_open(rte->relid, rte->rellockmode);
+		}
+		else
 		{
 			/*
 			 * In a normal query, we should already have the appropriate lock,
@@ -817,20 +835,45 @@ ExecGetRangeTableRelation(EState *estate, Index rti)
 			Assert(rte->rellockmode == AccessShareLock ||
 				   CheckRelationLockedByMe(rel, rte->rellockmode, false));
 		}
-		else
-		{
-			/*
-			 * If we are a parallel worker, we need to obtain our own local
-			 * lock on the relation.  This ensures sane behavior in case the
-			 * parent process exits before we do.
-			 */
-			rel = table_open(rte->relid, rte->rellockmode);
-		}
 
 		estate->es_relations[rti - 1] = rel;
+		estate->es_opened_relations = lappend(estate->es_opened_relations,
+											  rel);
 	}
 
 	return rel;
+}
+
+/*
+ * ExecLockAppendNonLeafRelations
+ *		Lock non-leaf relations whose children are scanned by a given
+ *		Append/MergeAppend node
+ */
+void
+ExecLockAppendNonLeafRelations(EState *estate, List *allpartrelids)
+{
+	ListCell *l;
+
+	/* This should get called only when executing cached plans. */
+	Assert(estate->es_cachedplan != NULL);
+	foreach(l, allpartrelids)
+	{
+		Bitmapset *partrelids = lfirst_node(Bitmapset, l);
+		int		i;
+
+		/*
+		 * Note that we don't lock the first member (i=0) of each bitmapset
+		 * because it stands for the root parent mentioned in the query that
+		 * should always have been locked before entering the executor.
+		 */
+		i = 0;
+		while ((i = bms_next_member(partrelids, i)) > 0)
+		{
+			RangeTblEntry *rte = exec_rt_fetch(i, estate);
+
+			LockRelationOid(rte->relid, rte->rellockmode);
+		}
+	}
 }
 
 /*
@@ -848,6 +891,8 @@ ExecInitResultRelation(EState *estate, ResultRelInfo *resultRelInfo,
 	Relation	resultRelationDesc;
 
 	resultRelationDesc = ExecGetRangeTableRelation(estate, rti);
+	if (!ExecPlanStillValid(estate))
+		return;
 	InitResultRelInfo(resultRelInfo,
 					  resultRelationDesc,
 					  rti,

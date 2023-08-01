@@ -752,8 +752,12 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 	hashNode = (Hash *) innerPlan(node);
 
 	outerPlanState(hjstate) = ExecInitNode(outerNode, estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 	outerDesc = ExecGetResultType(outerPlanState(hjstate));
 	innerPlanState(hjstate) = ExecInitNode((Plan *) hashNode, estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 	innerDesc = ExecGetResultType(innerPlanState(hjstate));
 
 	/*
@@ -878,12 +882,6 @@ ExecEndHashJoin(HashJoinState *node)
 	ExecClearTuple(node->js.ps.ps_ResultTupleSlot);
 	ExecClearTuple(node->hj_OuterTupleSlot);
 	ExecClearTuple(node->hj_HashTupleSlot);
-
-	/*
-	 * clean up subtrees
-	 */
-	ExecEndNode(outerPlanState(node));
-	ExecEndNode(innerPlanState(node));
 }
 
 /*

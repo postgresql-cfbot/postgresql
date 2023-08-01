@@ -89,6 +89,9 @@ ExecInitGather(Gather *node, EState *estate, int eflags)
 	 */
 	outerNode = outerPlan(node);
 	outerPlanState(gatherstate) = ExecInitNode(outerNode, estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
+
 	tupDesc = ExecGetResultType(outerPlanState(gatherstate));
 
 	/*
@@ -248,7 +251,6 @@ ExecGather(PlanState *pstate)
 void
 ExecEndGather(GatherState *node)
 {
-	ExecEndNode(outerPlanState(node));	/* let children clean up first */
 	ExecShutdownGather(node);
 	ExecFreeExprContext(&node->ps);
 	if (node->ps.ps_ResultTupleSlot)

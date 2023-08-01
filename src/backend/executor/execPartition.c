@@ -513,6 +513,13 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 
 	oldcxt = MemoryContextSwitchTo(proute->memcxt);
 
+	/*
+	 * Note that while we normally check ExecPlanStillValid(estate) after each
+	 * lock taken during execution initialization, it is fine not do so for
+	 * partitions opened here, for tuple routing.  Locks taken here can't
+	 * possibly invalidate the plan given that the plan doesn't contain any
+	 * info about those partitions.
+	 */
 	partrel = table_open(partOid, RowExclusiveLock);
 
 	leaf_part_rri = makeNode(ResultRelInfo);
@@ -1111,6 +1118,9 @@ ExecInitPartitionDispatchInfo(EState *estate,
 	 * Only sub-partitioned tables need to be locked here.  The root
 	 * partitioned table will already have been locked as it's referenced in
 	 * the query's rtable.
+	 *
+	 * See the comment in ExecInitPartitionInfo() about taking locks and
+	 * not checking ExecPlanStillValid(estate) here.
 	 */
 	if (partoid != RelationGetRelid(proute->partition_root))
 		rel = table_open(partoid, RowExclusiveLock);
@@ -1801,6 +1811,8 @@ ExecInitPartitionPruning(PlanState *planstate,
 
 	/* Create the working data structure for pruning */
 	prunestate = CreatePartitionPruneState(planstate, pruneinfo);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 
 	/*
 	 * Perform an initial partition prune pass, if required.
@@ -1927,6 +1939,8 @@ CreatePartitionPruneState(PlanState *planstate, PartitionPruneInfo *pruneinfo)
 			 * duration of this executor run.
 			 */
 			partrel = ExecGetRangeTableRelation(estate, pinfo->rtindex);
+			if (!ExecPlanStillValid(estate))
+				return NULL;
 			partkey = RelationGetPartitionKey(partrel);
 			partdesc = PartitionDirectoryLookup(estate->es_partition_directory,
 												partrel);

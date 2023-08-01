@@ -3304,6 +3304,8 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 		eflags &= ~EXEC_FLAG_REWIND;
 	outerPlan = outerPlan(node);
 	outerPlanState(aggstate) = ExecInitNode(outerPlan, estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return NULL;
 
 	/*
 	 * initialize source tuple type.
@@ -4304,7 +4306,6 @@ GetAggInitVal(Datum textInitVal, Oid transtype)
 void
 ExecEndAgg(AggState *node)
 {
-	PlanState  *outerPlan;
 	int			transno;
 	int			numGroupingSets = Max(node->maxsets, 1);
 	int			setno;
@@ -4366,9 +4367,6 @@ ExecEndAgg(AggState *node)
 
 	/* clean up tuple table */
 	ExecClearTuple(node->ss.ss_ScanTupleSlot);
-
-	outerPlan = outerPlanState(node);
-	ExecEndNode(outerPlan);
 }
 
 void

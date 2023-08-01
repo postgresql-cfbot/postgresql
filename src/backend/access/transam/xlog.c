@@ -442,7 +442,9 @@ typedef struct XLogCtlInsert
 	/*
 	 * runningBackups is a counter indicating the number of backups currently
 	 * in progress. lastBackupStart is the latest checkpoint redo location
-	 * used as a starting point for an online backup.
+	 * used as a starting point for an online backup.  runningBackups is
+	 * protected by both ControlFileLock and WAL insertion lock (in that
+	 * order), because it affects the behavior of UpdateControlFile().
 	 */
 	int			runningBackups;
 	XLogRecPtr	lastBackupStart;
@@ -4181,7 +4183,13 @@ ReadControlFile(void)
 static void
 UpdateControlFile(void)
 {
-	update_controlfile(DataDir, ControlFile, true);
+	XLogCtlInsert *Insert = &XLogCtl->Insert;
+	bool		atomic;
+
+	Assert(LWLockHeldByMeInMode(ControlFileLock, LW_EXCLUSIVE));
+	atomic = Insert->runningBackups > 0;
+
+	update_controlfile(DataDir, ControlFile, atomic, true);
 }
 
 /*
@@ -5317,9 +5325,12 @@ StartupXLOG(void)
 		 * pg_control with any minimum recovery stop point obtained from a
 		 * backup history file.
 		 *
-		 * No need to hold ControlFileLock yet, we aren't up far enough.
+		 * ControlFileLock not really needed yet, we aren't up far enough, but
+		 * makes assertions simpler.
 		 */
+		LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
 		UpdateControlFile();
+		LWLockRelease(ControlFileLock);
 
 		/*
 		 * If there was a backup label file, it's done its job and the info
@@ -8305,6 +8316,12 @@ do_pg_backup_start(const char *backupidstr, bool fast, List **tablespaces,
 	memcpy(state->name, backupidstr, strlen(backupidstr));
 
 	/*
+	 * UpdateControlFile() behaves differently while backups are running, and
+	 * we need to avoid races when the backups start.
+	 */
+	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
+
+	/*
 	 * Mark backup active in shared memory.  We must do full-page WAL writes
 	 * during an on-line backup even if not doing so at other times, because
 	 * it's quite possible for the backup dump to obtain a "torn" (partially
@@ -8328,6 +8345,8 @@ do_pg_backup_start(const char *backupidstr, bool fast, List **tablespaces,
 	WALInsertLockAcquireExclusive();
 	XLogCtl->Insert.runningBackups++;
 	WALInsertLockRelease();
+
+	LWLockRelease(ControlFileLock);
 
 	/*
 	 * Ensure we decrement runningBackups if we fail below. NB -- for this to
@@ -8620,6 +8639,12 @@ do_pg_backup_stop(BackupState *state, bool waitforarchive)
 				 errhint("wal_level must be set to \"replica\" or \"logical\" at server start.")));
 
 	/*
+	 * Interlocking with UpdateControlFile(), so that it can start using atomic
+	 * mode while backups are running.
+	 */
+	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
+
+	/*
 	 * OK to update backup counter and session-level lock.
 	 *
 	 * Note that CHECK_FOR_INTERRUPTS() must not occur while updating them,
@@ -8647,6 +8672,8 @@ do_pg_backup_stop(BackupState *state, bool waitforarchive)
 	sessionBackupState = SESSION_BACKUP_NONE;
 
 	WALInsertLockRelease();
+
+	LWLockRelease(ControlFileLock);
 
 	/*
 	 * If we are taking an online backup from the standby, we confirm that the

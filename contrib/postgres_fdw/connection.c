@@ -12,6 +12,10 @@
  */
 #include "postgres.h"
 
+#if HAVE_POLL_H
+#include <poll.h>
+#endif
+
 #include "access/htup_details.h"
 #include "access/xact.h"
 #include "catalog/pg_user_mapping.h"
@@ -25,6 +29,7 @@
 #include "postgres_fdw.h"
 #include "storage/fd.h"
 #include "storage/latch.h"
+#include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/datetime.h"
 #include "utils/hsearch.h"
@@ -108,6 +113,10 @@ static bool xact_got_connection = false;
 PG_FUNCTION_INFO_V1(postgres_fdw_get_connections);
 PG_FUNCTION_INFO_V1(postgres_fdw_disconnect);
 PG_FUNCTION_INFO_V1(postgres_fdw_disconnect_all);
+PG_FUNCTION_INFO_V1(postgres_fdw_verify_connection_server_user);
+PG_FUNCTION_INFO_V1(postgres_fdw_verify_connection_server);
+PG_FUNCTION_INFO_V1(postgres_fdw_verify_connection_all);
+PG_FUNCTION_INFO_V1(postgres_fdw_can_verify_connection);
 
 /* prototypes of private functions */
 static void make_new_connection(ConnCacheEntry *entry, UserMapping *user);
@@ -154,6 +163,13 @@ static void pgfdw_security_check(const char **keywords, const char **values,
 								 UserMapping *user, PGconn *conn);
 static bool UserMappingPasswordRequired(UserMapping *user);
 static bool disconnect_cached_connections(Oid serverid);
+static Datum postgres_fdw_verify_connection(FunctionCallInfo fcinfo);
+static bool verify_cached_connections(Oid serverid, Oid userid,
+									  bool *checked);
+
+/* Low layer-like functions. They are used for verifying connections. */
+static int pgfdw_conn_check(PGconn *conn);
+static bool pgfdw_conn_checkable(void);
 
 /*
  * Get a PGconn which can be used to execute queries on the remote PostgreSQL
@@ -2025,7 +2041,7 @@ pgfdw_finish_abort_cleanup(List *pending_entries, List *cancel_requested,
 Datum
 postgres_fdw_get_connections(PG_FUNCTION_ARGS)
 {
-#define POSTGRES_FDW_GET_CONNECTIONS_COLS	2
+#define POSTGRES_FDW_GET_CONNECTIONS_COLS	3
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	HASH_SEQ_STATUS scan;
 	ConnCacheEntry *entry;
@@ -2087,11 +2103,17 @@ postgres_fdw_get_connections(PG_FUNCTION_ARGS)
 
 			/* Show null, if no server name was found */
 			nulls[0] = true;
+			nulls[1] = true;
 		}
 		else
-			values[0] = CStringGetTextDatum(server->servername);
+		{
+			UserMapping *user = GetUserMappingFromOid(entry->key);
 
-		values[1] = BoolGetDatum(!entry->invalidated);
+			values[0] = CStringGetTextDatum(server->servername);
+			values[1] = CStringGetTextDatum(MappingUserName(user->userid));
+		}
+
+		values[2] = BoolGetDatum(!entry->invalidated);
 
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
 	}
@@ -2223,4 +2245,259 @@ disconnect_cached_connections(Oid serverid)
 	}
 
 	return result;
+}
+
+/*
+ * Workhorse to verify cached connections.
+ *
+ * This function scans all the connection cache entries and verifies the
+ * connections whose foreign server OID and user mapping OID matche with the
+ * specified one. If userid is specified as InvalidOid, it verifies cached
+ * connections which have arbitrary user mapping OID. If serverid is specified
+ * as InvalidOid, it verifies all the cached connections.
+ *
+ * This function emits warnings if a disconnection is found. This returns false
+ * if disconnections are found, otherwise returns true.
+ *
+ * checked will be set to true if pgfdw_conn_check() is called at least once.
+ */
+static bool
+verify_cached_connections(Oid serverid, Oid userid, bool *checked)
+{
+	HASH_SEQ_STATUS		scan;
+	ConnCacheEntry	   *entry;
+	bool				all = !OidIsValid(serverid);
+	bool 				check_user_mapping = OidIsValid(userid);
+	bool				result = true;
+	StringInfoData 		str;
+
+	Assert(ConnectionHash);
+
+	*checked = false;
+
+	hash_seq_init(&scan, ConnectionHash);
+	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
+	{
+		/* Ignore cache entry if no open connection right now */
+		if (!entry->conn)
+			continue;
+
+		/* Skip if the entry is invalidated */
+		if (entry->invalidated)
+			continue;
+
+		if (all || entry->serverid == serverid)
+		{
+			/* Skip if the given userid is different from the key */
+			if (!all && check_user_mapping && (entry->key != userid))
+				continue;
+
+			if (pgfdw_conn_check(entry->conn))
+			{
+				/* A foreign server might be down, so construct a message */
+				ForeignServer *server = GetForeignServer(entry->serverid);
+				UserMapping	  *user = GetUserMappingFromOid(entry->key);
+
+				if (result)
+				{
+					/*
+					 * Initialize and add a prefix if this is the first
+					 * disconnection we found.
+					 */
+					initStringInfo(&str);
+					appendStringInfo(&str, "could not connect to server ");
+
+					result = false;
+				}
+				else
+					appendStringInfo(&str, ", ");
+
+				appendStringInfo(&str, "\"%s\" for user \"%s\"",
+								 server->servername,
+								 MappingUserName(user->userid));
+			}
+
+			/* Set a flag to notify the caller */
+			*checked = true;
+		}
+	}
+
+	/* Raise a warning if disconnections are found */
+	if (!result)
+	{
+		Assert(str.len);
+		ereport(WARNING,
+				errcode(ERRCODE_CONNECTION_FAILURE),
+				errmsg("%s", str.data),
+				errdetail("Connection close is detected."),
+				errhint("Plsease check the health of server."));
+		pfree(str.data);
+	}
+
+	return result;
+}
+
+/*
+ * Internal function for postgres_fdw_verify_connection variants
+ *
+ * This function verifies the connections that are established by postgres_fdw
+ * from the local session to the foreign server with the given name. If
+ * username is given, verifications are done only for foreign servers which is
+ * mapped by the user.
+ *
+ * This function emits a warning if a disconnection is found. This returns true
+ * if existing connection is not closed by the remote peer. false is returned
+ * if the local session seems to be disconnected from other servers. NULL is
+ * returned if a valid connection to the specified foreign server is not
+ * established or this function is not available on this platform.
+ */
+static Datum
+postgres_fdw_verify_connection(FunctionCallInfo fcinfo)
+{
+	ForeignServer  *server = NULL;
+	UserMapping	   *user = NULL;
+	bool			result,
+					checked;
+
+	/* Quick exit if the checking does not work well on this platfrom */
+	if (!pgfdw_conn_checkable())
+		PG_RETURN_NULL();
+
+	/* Quick exit if connection cache has not been initialized yet */
+	if (!ConnectionHash)
+		PG_RETURN_NULL();
+
+	/* If server name is specified, find a foreign server */
+	if (PG_NARGS() >= 1)
+	{
+		char *servername = text_to_cstring(PG_GETARG_TEXT_PP(0));
+
+		server = GetForeignServerByName(servername, false);
+	}
+
+	/* If user name is specified, find a user mapping */
+	if (PG_NARGS() >= 2)
+	{
+		char *username = text_to_cstring(PG_GETARG_TEXT_PP(1));
+		Oid userid = get_role_oid(username, false);
+
+		user = GetUserMapping(userid, server->serverid);
+	}
+
+	result = verify_cached_connections(server ? server->serverid : InvalidOid,
+									   user ? user->umid : InvalidOid,
+									   &checked);
+
+	if (checked)
+		PG_RETURN_BOOL(result);
+	else
+		PG_RETURN_NULL();
+}
+
+/*
+ * Verify all the cached connections.
+ *
+ * This function verifies all the connections that are established by postgres_fdw
+ * from the local session to the foreign servers.
+ */
+Datum
+postgres_fdw_verify_connection_all(PG_FUNCTION_ARGS)
+{
+	return postgres_fdw_verify_connection(fcinfo);
+}
+
+/*
+ * postgres_fdw_verify_connection variants
+ *
+ * They are all named 'postgres_fdw_verify_connection' at the SQL level.
+ * They take combinations of server name and user name.
+ */
+
+/*
+ * This function passes both server name and user name to
+ * postgres_fdw_verify_connection().
+ */
+Datum
+postgres_fdw_verify_connection_server_user(PG_FUNCTION_ARGS)
+{
+	return postgres_fdw_verify_connection(fcinfo);
+}
+
+/*
+ * This function passes only server name to postgres_fdw_verify_connection().
+ * This means that the internal function does not care about the difference of
+ * local user.
+ */
+Datum
+postgres_fdw_verify_connection_server(PG_FUNCTION_ARGS)
+{
+	return postgres_fdw_verify_connection(fcinfo);
+}
+
+/*
+ * Check whether functions for verifying cached connections work well or not
+ */
+Datum
+postgres_fdw_can_verify_connection(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_BOOL(pgfdw_conn_checkable());
+}
+
+/*
+ * Check whether the socket peer closed the connection or not.
+ *
+ * Returns >0 if input connection is bad or remote peer seems to be closed,
+ * 0 if it is valid, and -1 if an error occurred.
+ */
+static int
+pgfdw_conn_check(PGconn *conn)
+{
+	int sock = PQsocket(conn);
+	if (!pgfdw_conn_checkable())
+		return 0;
+
+	if (!conn || PQstatus(conn) != CONNECTION_OK || sock == PGINVALID_SOCKET)
+		return -1;
+
+#if (defined(HAVE_POLL) && defined(POLLRDHUP))
+	{
+		/*
+		 * This platform seems to have poll(2), and can wait POLLRDHUP event.
+		 * So construct pollfd and directly call it.
+		 */
+		struct pollfd input_fd;
+		int result;
+
+		input_fd.fd = sock;
+		input_fd.events = POLLRDHUP;
+		input_fd.revents = 0;
+
+		do
+			result = poll(&input_fd, 1, 0);
+		while (result < 0 && errno == EINTR);
+
+		if (result < 0)
+			return -1;
+
+		return input_fd.revents;
+	}
+#else
+	/* Do not support socket checking on this platform, return 0 */
+	return 0;
+#endif
+}
+
+/*
+ * Check whether pgfdw_conn_check() can work on this platform.
+ *
+ * Returns true if this can use pgfdw_conn_check(), otherwise false.
+ */
+static bool
+pgfdw_conn_checkable(void)
+{
+#if (defined(HAVE_POLL) && defined(POLLRDHUP))
+	return true;
+#else
+	return false;
+#endif
 }

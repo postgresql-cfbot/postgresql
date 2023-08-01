@@ -707,15 +707,31 @@ typedef LONG slock_t;
 
 #define SPIN_DELAY() spin_delay()
 
-/* If using Visual C++ on Win64, inline assembly is unavailable.
- * Use a _mm_pause intrinsic instead of rep nop.
+/*
+ * If using Visual C++ on Win64, inline assembly is unavailable.
+ * Use architecture specific intrinsics.
  */
 #if defined(_WIN64)
+/*
+ * For Arm64, use __isb intrinsic. See aarch64 inline assembly definition for details.
+ */
+#ifdef _M_ARM64
+static __forceinline void
+spin_delay(void)
+{
+	 /* Reference: https://learn.microsoft.com/en-us/cpp/intrinsics/arm64-intrinsics#BarrierRestrictions */
+	__isb(_ARM64_BARRIER_SY);
+}
+#else
+/*
+ * For x64, use _mm_pause intrinsic instead of rep nop.
+ */
 static __forceinline void
 spin_delay(void)
 {
 	_mm_pause();
 }
+#endif
 #else
 static __forceinline void
 spin_delay(void)

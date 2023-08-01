@@ -2045,8 +2045,11 @@ int main(void)
 elif host_cpu == 'arm' or host_cpu == 'aarch64'
 
   prog = '''
+#ifdef _MSC_VER
+#include <intrin.h>
+#else
 #include <arm_acle.h>
-
+#endif
 int main(void)
 {
     unsigned int crc = 0;
@@ -2060,7 +2063,11 @@ int main(void)
 }
 '''
 
-  if cc.links(prog, name: '__crc32cb, __crc32ch, __crc32cw, and __crc32cd without -march=armv8-a+crc',
+  if cc.get_id() == 'msvc'
+    cdata.set('USE_ARMV8_CRC32C', false)
+    cdata.set('USE_ARMV8_CRC32C_WITH_RUNTIME_CHECK', 1)
+    have_optimized_crc = true
+  elif cc.links(prog, name: '__crc32cb, __crc32ch, __crc32cw, and __crc32cd without -march=armv8-a+crc',
       args: test_c_args)
     # Use ARM CRC Extension unconditionally
     cdata.set('USE_ARMV8_CRC32C', 1)

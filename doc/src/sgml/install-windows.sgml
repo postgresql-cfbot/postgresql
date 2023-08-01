@@ -352,7 +352,8 @@ $ENV{MSBFLAGS}="/m";
   <title>Special Considerations for 64-Bit Windows</title>
 
   <para>
-   PostgreSQL will only build for the x64 architecture on 64-bit Windows.
+   PostgreSQL will only build for the x64 and ARM64 architectures on 64-bit
+   Windows.
   </para>
 
   <para>

@@ -12043,4 +12043,13 @@
   proname => 'any_value_transfn', prorettype => 'anyelement',
   proargtypes => 'anyelement anyelement', prosrc => 'any_value_transfn' },
 
+{ oid => '8355', descr => 'join selectivity for range operators',
+  proname => 'rangejoinsel', provolatile => 's', prorettype => 'float8',
+  proargtypes => 'internal oid internal int2 internal',
+  prosrc => 'rangejoinsel' },
+{ oid => '8356', descr => 'join selectivity for multirange operators',
+  proname => 'multirangejoinsel', provolatile => 's', prorettype => 'float8',
+  proargtypes => 'internal oid internal int2 internal',
+  prosrc => 'multirangejoinsel' },
+
 ]

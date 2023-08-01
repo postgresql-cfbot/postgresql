@@ -1497,6 +1497,39 @@ SELECT 'x-y' = 'x_y' COLLATE level4; -- false
     </para>
    </sect3>
 
+   <sect3 id="icu-tailoring-rules">
+     <title>Tailoring rules</title>
+     <para>
+       The order of individual code points may be changed with tailoring rules, whose syntax is detailed at <ulink url="https://unicode-org.github.io/icu/userguide/collation/customization/"></ulink>.
+       As an example, the following statement sets up a collation named <literal>ebcdic</literal> with rules to sort US-ASCII characters in the order of the <ulink url="https://en.wikipedia.org/wiki/EBCDIC">EBCDIC encoding.</ulink>
+<programlisting>
+<![CDATA[
+CREATE COLLATION ebcdic (provider='icu', locale='und',
+rules=$$
+& ' ' < '.' < '<' < '(' < '+' < \|
+< '&' < '!' < '$' < '*' < ')' < ';'
+< '-' < '/' < ',' < '%' < '_' < '>' < '?'
+< '`' < ':' < '#' < '@' < \' < '=' < '"'
+<*a-r < '~' <*s-z < '^' < '[' < ']'
+< '{' <*A-I < '}' <*J-R < '\' <*S-Z <*0-9
+$$);
+]]>
+
+SELECT c FROM (VALUES('a'),('b'),('A'),('B'),('1'),('2'),('!'),('^')) AS x(c)
+ORDER BY c COLLATE "ebcdic";
+ c
+---
+ !
+ a
+ b
+ ^
+ A
+ B
+ 1
+ 2
+</programlisting>
+     </para>
+   </sect3>
    <sect3 id="icu-external-references">
     <title>External References for ICU</title>
     <para>
@@ -1526,6 +1559,11 @@ SELECT 'x-y' = 'x_y' COLLATE level4; -- false
      <listitem>
       <para>
        <ulink url="https://unicode-org.github.io/icu/userguide/locale/"></ulink>
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       <ulink url="https://unicode-org.github.io/icu/userguide/collation/customization/">Collation customization (tailoring rules)</ulink>
       </para>
      </listitem>
      <listitem>

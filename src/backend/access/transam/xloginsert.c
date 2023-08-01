@@ -581,6 +581,8 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 		XLogRecordBlockHeader bkpb;
 		XLogRecordBlockImageHeader bimg;
 		XLogRecordBlockCompressHeader cbimg = {0};
+		int			data_length = 0;
+		XLogSizeClass data_sizeclass = XLS_EMPTY;
 		bool		samerel;
 		bool		is_compressed = false;
 		bool		include_image;
@@ -622,7 +624,7 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 
 		bkpb.id = block_id;
 		bkpb.fork_flags = regbuf->forkno;
-		bkpb.data_length = 0;
+		data_length = 0;
 
 		if ((regbuf->flags & REGBUF_WILL_INIT) == REGBUF_WILL_INIT)
 			bkpb.fork_flags |= BKPBLOCK_WILL_INIT;
@@ -785,12 +787,15 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 			 * overall list.
 			 */
 			bkpb.fork_flags |= BKPBLOCK_HAS_DATA;
-			bkpb.data_length = (uint16) regbuf->rdata_len;
+			data_length = (uint16) regbuf->rdata_len;
+			data_sizeclass = XLogLengthToSizeClass(data_length, XLS_UINT16);
 			total_len += regbuf->rdata_len;
 
 			rdt_datas_last->next = regbuf->rdata_head;
 			rdt_datas_last = regbuf->rdata_tail;
 		}
+
+		bkpb.id |= data_sizeclass << XLR_BLOCKID_SZCLASS_SHIFT;
 
 		if (prev_regbuf && RelFileLocatorEquals(regbuf->rlocator, prev_regbuf->rlocator))
 		{
@@ -804,6 +809,10 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 		/* Ok, copy the header to the scratch buffer */
 		memcpy(scratch, &bkpb, SizeOfXLogRecordBlockHeader);
 		scratch += SizeOfXLogRecordBlockHeader;
+
+		scratch += XLogWriteLength(data_length, data_sizeclass,
+								   XLS_UINT16, scratch);
+
 		if (include_image)
 		{
 			memcpy(scratch, &bimg, SizeOfXLogRecordBlockImageHeader);

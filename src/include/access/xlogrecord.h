@@ -18,6 +18,27 @@
 #include "storage/relfilelocator.h"
 
 /*
+ * XLogSizeClass
+ *
+ * XLog data segments registered to e.g. blocks are often quite small.
+ * This XLogSizeClass infrastructure allows us to do variable length encoding
+ * on these fields, so that we may save some bytes in each record on length
+ * fields.
+ *
+ * Note that it is possible to encode smaller sizes in the larger size classes,
+ * but the reverse is not true. For maximum efficiency, it is important to only
+ * use 
+ * 
+ * Values > UINT32_MAX are not supported in this scheme.
+ */
+typedef enum XLogSizeClass {
+	XLS_EMPTY = 0,	/* length == 0 */
+	XLS_UINT8 = 1,		/* length <= UINT8_MAX; stored in uint8 (1B) */
+	XLS_UINT16 = 2,		/* length <= UINT16_MAX; stored in uint16 (2B) */
+	XLS_UINT32 = 3		/* length <= UINT32_MAX; stored in uint32 (4B) */
+} XLogSizeClass;
+
+/*
  * The overall layout of an XLOG record is:
  *		Fixed-size header (XLogRecord struct)
  *		XLogRecordBlockHeader struct
@@ -104,15 +125,14 @@ typedef struct XLogRecordBlockHeader
 {
 	uint8		id;				/* block reference ID */
 	uint8		fork_flags;		/* fork within the relation, and flags */
-	uint16		data_length;	/* number of payload bytes (not including page
-								 * image) */
 
+	/* Depending on XLR_BLOCKID_SZCLASS; 0, 1 or 2 bytes of data_length follow */
 	/* If BKPBLOCK_HAS_IMAGE, an XLogRecordBlockImageHeader struct follows */
 	/* If BKPBLOCK_SAME_REL is not set, a RelFileLocator follows */
 	/* BlockNumber follows */
 } XLogRecordBlockHeader;
 
-#define SizeOfXLogRecordBlockHeader (offsetof(XLogRecordBlockHeader, data_length) + sizeof(uint16))
+#define SizeOfXLogRecordBlockHeader (offsetof(XLogRecordBlockHeader, fork_flags) + sizeof(uint8))
 
 /*
  * Additional header information when a full-page image is included
@@ -226,6 +246,11 @@ typedef struct XLogRecordDataHeaderLong
 
 #define SizeOfXLogRecordDataHeaderLong (sizeof(uint8) + sizeof(uint32))
 
+#define XLR_BLOCK_ID_MASK			0x3F
+
+#define XLR_BLOCKID_SZCLASS_SHIFT	6
+#define XLR_BLOCKID_SZCLASS_MASK	(3 << XLR_BLOCKID_SZCLASS_SHIFT)
+
 /*
  * Block IDs used to distinguish different kinds of record fragments. Block
  * references are numbered from 0 to XLR_MAX_BLOCK_ID. A rmgr is free to use
@@ -234,15 +259,15 @@ typedef struct XLogRecordDataHeaderLong
  * numbers are reserved to denote the "main" data portion of the record,
  * as well as replication-supporting transaction metadata.
  *
- * The maximum is currently set at 32, quite arbitrarily. Most records only
+ * The maximum is currently set at 0x20 (32), quite arbitrarily. Most records only
  * need a handful of block references, but there are a few exceptions that
  * need more.
  */
-#define XLR_MAX_BLOCK_ID			32
+#define XLR_MAX_BLOCK_ID			0x20
 
-#define XLR_BLOCK_ID_DATA_SHORT		255
-#define XLR_BLOCK_ID_DATA_LONG		254
-#define XLR_BLOCK_ID_ORIGIN			253
-#define XLR_BLOCK_ID_TOPLEVEL_XID	252
+#define XLR_BLOCK_ID_DATA_SHORT		0x3F
+#define XLR_BLOCK_ID_DATA_LONG		0x3E
+#define XLR_BLOCK_ID_ORIGIN			0x3D
+#define XLR_BLOCK_ID_TOPLEVEL_XID	0x3C
 
 #endif							/* XLOGRECORD_H */

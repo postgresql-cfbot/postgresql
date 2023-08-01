@@ -3743,6 +3743,53 @@ dumpLOs(Archive *fout, const void *arg)
 }
 
 /*
+ * getTablesWithPolicies TODO
+ */
+void
+getTablesWithPolicies(Archive *fout)
+{
+	PQExpBuffer query;
+	PGresult   *res;
+	int			i_classid;
+	int			i_polrelid;
+	int			i,
+				ntups;
+
+	/* No policies before 9.5 */
+	if (fout->remoteVersion < 90500)
+		return;
+
+	query = createPQExpBuffer();
+
+	/* Figure out which tables have RLS policies. */
+	printfPQExpBuffer(query,
+					  "SELECT DISTINCT 'pg_class'::regclass::oid AS classid, "
+					  "                polrelid "
+					  "FROM pg_catalog.pg_policy");
+
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(res);
+
+	i_classid = PQfnumber(res, "classid");
+	i_polrelid = PQfnumber(res, "polrelid");
+
+	for (i = 0; i < ntups; i++)
+	{
+		CatalogId	objId;
+
+		objId.tableoid = atooid(PQgetvalue(res, i, i_classid));
+		objId.oid = atooid(PQgetvalue(res, i, i_polrelid));
+
+		recordPoliciesExist(objId);
+	}
+
+	PQclear(res);
+
+	destroyPQExpBuffer(query);
+}
+
+/*
  * getPolicies
  *	  get information about all RLS policies on dumpable tables.
  */
@@ -6657,6 +6704,17 @@ getTables(Archive *fout, int *numTables)
 			tblinfo[i].dobj.dump = DUMP_COMPONENT_NONE;
 		else
 			selectDumpableTable(&tblinfo[i], fout);
+
+		/*
+		 * If the table has no policies, we don't need to worry about those.
+		 *
+		 * For tables internal to an extension, this may mean we don't need to
+		 * take an ACCESS SHARE lock, which in turn allows less privileged users
+		 * to successfully perform a dump if they don't have SELECT access to
+		 * those tables (which they weren't trying to dump in the first place).
+		 */
+		if (!hasPolicies(tblinfo[i].dobj.catId))
+			tblinfo[i].dobj.dump &= ~DUMP_COMPONENT_POLICY;
 
 		/*
 		 * Now, consider the table "interesting" if we need to dump its

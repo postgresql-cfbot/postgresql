@@ -59,6 +59,7 @@ typedef struct _catalogIdMapEntry
 	uint32		hashval;		/* hash code for the CatalogId */
 	DumpableObject *dobj;		/* the associated DumpableObject, if any */
 	ExtensionInfo *ext;			/* owning extension, if any */
+	bool		has_policies;	/* referenced by pg_policy? */
 } CatalogIdMapEntry;
 
 #define SH_PREFIX		catalogid
@@ -134,6 +135,13 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 
 	pg_log_info("identifying extension members");
 	getExtensionMembership(fout, extinfo, numExtensions);
+
+	/*
+	 * Similarly, the existence of RLS policies influences whether some tables
+	 * need to be locked.
+	 */
+	pg_log_info("checking for row-level security policies");
+	getTablesWithPolicies(fout);
 
 	pg_log_info("reading schemas");
 	(void) getNamespaces(fout, &numNamespaces);
@@ -686,6 +694,7 @@ AssignDumpId(DumpableObject *dobj)
 		{
 			entry->dobj = NULL;
 			entry->ext = NULL;
+			entry->has_policies = false;
 		}
 		Assert(entry->dobj == NULL);
 		entry->dobj = dobj;
@@ -995,6 +1004,7 @@ recordExtensionMembership(CatalogId catId, ExtensionInfo *ext)
 	{
 		entry->dobj = NULL;
 		entry->ext = NULL;
+		entry->has_policies = false;
 	}
 	Assert(entry->ext == NULL);
 	entry->ext = ext;
@@ -1016,6 +1026,50 @@ findOwningExtension(CatalogId catalogId)
 	if (entry == NULL)
 		return NULL;
 	return entry->ext;
+}
+
+
+/*
+ * recordPoliciesExist
+ *	  Record that the object identified by the given catalog ID has RLS policies
+ */
+void
+recordPoliciesExist(CatalogId catId)
+{
+	CatalogIdMapEntry *entry;
+	bool		found;
+
+	/* Initialize CatalogId hash table if not done yet */
+	if (catalogIdHash == NULL)
+		catalogIdHash = catalogid_create(CATALOGIDHASH_INITIAL_SIZE, NULL);
+
+	/* Add reference to CatalogId hash */
+	entry = catalogid_insert(catalogIdHash, catId, &found);
+	if (!found)
+	{
+		entry->dobj = NULL;
+		entry->ext = NULL;
+		entry->has_policies = false;
+	}
+	entry->has_policies = true;
+}
+
+/*
+ * hasPolicies
+ *	  return whether the specified catalog ID has RLS policies
+ */
+bool
+hasPolicies(CatalogId catId)
+{
+	CatalogIdMapEntry *entry;
+
+	if (catalogIdHash == NULL)
+		return false;			/* no objects exist yet */
+
+	entry = catalogid_lookup(catalogIdHash, catId);
+	if (entry == NULL)
+		return false;
+	return entry->has_policies;
 }
 
 

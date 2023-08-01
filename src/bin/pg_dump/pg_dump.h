@@ -695,6 +695,9 @@ extern PublicationInfo *findPublicationByOid(Oid oid);
 extern void recordExtensionMembership(CatalogId catId, ExtensionInfo *ext);
 extern ExtensionInfo *findOwningExtension(CatalogId catalogId);
 
+extern void recordPoliciesExist(CatalogId catId);
+extern bool hasPolicies(CatalogId catId);
+
 extern void parseOidArray(const char *str, Oid *array, int arraysize);
 
 extern void sortDumpableObjects(DumpableObject **objs, int numObjs,
@@ -743,6 +746,7 @@ extern void getExtensionMembership(Archive *fout, ExtensionInfo extinfo[],
 extern void processExtensionTables(Archive *fout, ExtensionInfo extinfo[],
 								   int numExtensions);
 extern EventTriggerInfo *getEventTriggers(Archive *fout, int *numEventTriggers);
+extern void getTablesWithPolicies(Archive *fout);
 extern void getPolicies(Archive *fout, TableInfo tblinfo[], int numTables);
 extern PublicationInfo *getPublications(Archive *fout,
 										int *numPublications);

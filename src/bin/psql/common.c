@@ -372,6 +372,7 @@ AcceptResult(const PGresult *result, bool show_error)
 		{
 			case PGRES_COMMAND_OK:
 			case PGRES_TUPLES_OK:
+			case PGRES_SINGLE_TUPLE:
 			case PGRES_EMPTY_QUERY:
 			case PGRES_COPY_IN:
 			case PGRES_COPY_OUT:
@@ -695,7 +696,7 @@ PrintNotifications(void)
  * Returns true if successful, false otherwise.
  */
 static bool
-PrintQueryTuples(const PGresult *result, const printQueryOpt *opt,
+PrintQueryTuples(PGresult *result, const printQueryOpt *opt,
 				 FILE *printQueryFout)
 {
 	bool		ok = true;
@@ -1391,6 +1392,47 @@ DescribeQuery(const char *query, double *elapsed_msec)
 	return OK;
 }
 
+/*
+ * Check if an output stream for \g needs to be opened, and if
+ * yes, open it.
+ * Return false if an error occurred, true otherwise.
+ */
+static bool
+SetupGOutput(PGresult *result, FILE **gfile_fout, bool *is_pipe)
+{
+	ExecStatusType status = PQresultStatus(result);
+	if (pset.gfname != NULL &&			/* there is a \g file or program */
+		*gfile_fout == NULL &&           /* and it's not already opened */
+		(status == PGRES_TUPLES_OK ||
+		 status == PGRES_SINGLE_TUPLE ||
+		 status == PGRES_COPY_OUT))
+	{
+		if (openQueryOutputFile(pset.gfname, gfile_fout, is_pipe))
+		{
+			if (is_pipe)
+				disable_sigpipe_trap();
+		}
+		else
+			return false;
+	}
+	return true;
+}
+
+static void
+CloseGOutput(FILE *gfile_fout, bool is_pipe)
+{
+	/* close \g file if we opened it */
+	if (gfile_fout)
+	{
+		if (is_pipe)
+		{
+			SetShellResultVariables(pclose(gfile_fout));
+			restore_sigpipe_trap();
+		}
+		else
+			fclose(gfile_fout);
+	}
+}
 
 /*
  * ExecQueryAndProcessResults: utility function for use by SendQuery()
@@ -1422,9 +1464,17 @@ ExecQueryAndProcessResults(const char *query,
 	bool		success;
 	instr_time	before,
 				after;
+	int fetch_count = pset.fetch_count;
 	PGresult   *result;
+
 	FILE	   *gfile_fout = NULL;
 	bool		gfile_is_pipe = false;
+
+	PGresult   **result_array = NULL; /* to collect results in single row mode */
+	int64		total_tuples = 0;
+	int			ntuples;
+	int			flush_error = 0;
+	bool		is_pager = false;
 
 	if (timing)
 		INSTR_TIME_SET_CURRENT(before);
@@ -1449,6 +1499,33 @@ ExecQueryAndProcessResults(const char *query,
 	}
 
 	/*
+	 * If FETCH_COUNT is set and the context allows it, use the single row
+	 * mode to fetch results and have no more than FETCH_COUNT rows in
+	 * memory.
+	 */
+	if (fetch_count > 0 && !pset.crosstab_flag && !pset.gexec_flag && !is_watch
+		&& !pset.gset_prefix && pset.show_all_results)
+	{
+		/*
+		 * The row-by-row fetch is not enabled when SHOW_ALL_RESULTS is false,
+		 * since we would need to accumulate all rows before knowing
+		 * whether they need to be discarded or displayed, which contradicts
+		 * FETCH_COUNT.
+		 */
+		if (!PQsetSingleRowMode(pset.db))
+		{
+			pg_log_warning("fetching results in single row mode is unavailable");
+			fetch_count = 0;
+		}
+		else
+		{
+			result_array = (PGresult**) pg_malloc(fetch_count * sizeof(PGresult*));
+		}
+	}
+	else
+		fetch_count = 0;		/* disable single-row mode */
+
+	/*
 	 * If SIGINT is sent while the query is processing, the interrupt will be
 	 * consumed.  The user's intention, though, is to cancel the entire watch
 	 * process, so detect a sent cancellation request and exit in this case.
@@ -1467,6 +1544,8 @@ ExecQueryAndProcessResults(const char *query,
 		ExecStatusType result_status;
 		PGresult   *next_result;
 		bool		last;
+		/* whether the output starts before results are fully fetched */
+		bool		partial_display = false;
 
 		if (!AcceptResult(result, false))
 		{
@@ -1593,6 +1672,94 @@ ExecQueryAndProcessResults(const char *query,
 			success &= HandleCopyResult(&result, copy_stream);
 		}
 
+		if (fetch_count > 0 && result_status == PGRES_SINGLE_TUPLE)
+		{
+			FILE	   *tuples_fout = printQueryFout ? printQueryFout : stdout;
+			printQueryOpt my_popt = pset.popt;
+
+			ntuples = 0;
+			total_tuples = 0;
+			partial_display = true;
+
+			success = SetupGOutput(result, &gfile_fout, &gfile_is_pipe);
+			if (gfile_fout)
+				tuples_fout = gfile_fout;
+
+			/* initialize print options for partial table output */
+			my_popt.topt.start_table = true;
+			my_popt.topt.stop_table = false;
+			my_popt.topt.prior_records = 0;
+
+			while (success)
+			{
+				result_array[ntuples++] = result;
+				if (ntuples == fetch_count)
+				{
+					/* pager: open at most once per resultset */
+					if (tuples_fout == stdout && !is_pager)
+					{
+						tuples_fout = PageOutput(INT_MAX, &(my_popt.topt));
+						is_pager = true;
+					}
+					/* display the current chunk of results unless the output stream is not working */
+					if (!flush_error)
+					{
+						printQueryChunks(result_array, ntuples, &my_popt, tuples_fout,
+										 is_pager, pset.logfile);
+						flush_error = fflush(tuples_fout);
+					}
+					/* clear and reuse result_array */
+					for (int i=0; i < ntuples; i++)
+						PQclear(result_array[i]);
+					/* after the first result set, disallow header decoration */
+					my_popt.topt.start_table = false;
+					my_popt.topt.prior_records += ntuples;
+					total_tuples += ntuples;
+					ntuples = 0;
+				}
+
+				result = PQgetResult(pset.db);
+				if (result == NULL)
+				{
+					/*
+					 * Error. We expect a PGRES_TUPLES_OK result with
+					 * zero tuple in it to finish the row-by-row sequence.
+					 */
+					success = false;
+					break;
+				}
+
+				if (PQresultStatus(result) == PGRES_TUPLES_OK)
+				{
+					/*
+					 * The last row has been read. Display the last chunk of
+					 * results and the footer.
+					 */
+					my_popt.topt.stop_table = true;
+					if (!flush_error)
+					{
+						printQueryChunks(result_array, ntuples, &my_popt, tuples_fout,
+										 is_pager, pset.logfile);
+						flush_error = fflush(tuples_fout);
+					}
+					for (int i=0; i < ntuples; i++)
+						PQclear(result_array[i]);
+					total_tuples += ntuples;
+					ntuples = 0;
+
+					if (is_pager)
+					{
+						ClosePager(tuples_fout);
+					}
+
+					result = NULL;
+					break;
+				}
+			}
+		}
+		else
+			partial_display = false;
+
 		/*
 		 * Check PQgetResult() again.  In the typical case of a single-command
 		 * string, it will return NULL.  Otherwise, we'll have other results
@@ -1621,7 +1788,7 @@ ExecQueryAndProcessResults(const char *query,
 		}
 
 		/* this may or may not print something depending on settings */
-		if (result != NULL)
+		if (result != NULL && !partial_display)
 		{
 			/*
 			 * If results need to be printed into the file specified by \g,
@@ -1630,32 +1797,31 @@ ExecQueryAndProcessResults(const char *query,
 			 * tuple output, but it's still used for status output.
 			 */
 			FILE	   *tuples_fout = printQueryFout;
-			bool		do_print = true;
-
-			if (PQresultStatus(result) == PGRES_TUPLES_OK &&
-				pset.gfname)
-			{
-				if (gfile_fout == NULL)
-				{
-					if (openQueryOutputFile(pset.gfname,
-											&gfile_fout, &gfile_is_pipe))
-					{
-						if (gfile_is_pipe)
-							disable_sigpipe_trap();
-					}
-					else
-						success = do_print = false;
-				}
+			success = SetupGOutput(result, &gfile_fout, &gfile_is_pipe);
+			if (gfile_fout)
 				tuples_fout = gfile_fout;
-			}
-			if (do_print)
+			if (success)
 				success &= PrintQueryResult(result, last, opt,
 											tuples_fout, printQueryFout);
 		}
 
 		/* set variables on last result if all went well */
 		if (!is_watch && last && success)
+		{
 			SetResultVariables(result, true);
+			if (partial_display)
+			{
+				/*
+				 * fake SetResultVariables() as in ExecQueryUsingCursor().
+				 */
+				char		buf[32];
+
+				SetVariable(pset.vars, "ERROR", "false");
+				SetVariable(pset.vars, "SQLSTATE", "00000");
+				snprintf(buf, sizeof(buf), INT64_FORMAT, total_tuples);
+				SetVariable(pset.vars, "ROW_COUNT", buf);
+			}
+		}
 
 		ClearOrSaveResult(result);
 		result = next_result;
@@ -1667,17 +1833,10 @@ ExecQueryAndProcessResults(const char *query,
 		}
 	}
 
-	/* close \g file if we opened it */
-	if (gfile_fout)
-	{
-		if (gfile_is_pipe)
-		{
-			SetShellResultVariables(pclose(gfile_fout));
-			restore_sigpipe_trap();
-		}
-		else
-			fclose(gfile_fout);
-	}
+	CloseGOutput(gfile_fout, gfile_is_pipe);
+
+	if (result_array)
+		pg_free(result_array);
 
 	/* may need this to recover from conn loss during COPY */
 	if (!CheckConnection())

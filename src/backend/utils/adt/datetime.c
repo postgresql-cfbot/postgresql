@@ -51,7 +51,6 @@ static int	DecodeDate(char *str, int fmask, int *tmask, bool *is2digits,
 					   struct pg_tm *tm);
 static char *AppendSeconds(char *cp, int sec, fsec_t fsec,
 						   int precision, bool fillzeros);
-static bool int64_multiply_add(int64 val, int64 multiplier, int64 *sum);
 static bool AdjustFractMicroseconds(double frac, int64 scale,
 									struct pg_itm_in *itm_in);
 static bool AdjustFractDays(double frac, int scale,
@@ -515,22 +514,6 @@ AppendTimestampSeconds(char *cp, struct pg_tm *tm, fsec_t fsec)
 	return AppendSeconds(cp, tm->tm_sec, fsec, MAX_TIMESTAMP_PRECISION, true);
 }
 
-
-/*
- * Add val * multiplier to *sum.
- * Returns true if successful, false on overflow.
- */
-static bool
-int64_multiply_add(int64 val, int64 multiplier, int64 *sum)
-{
-	int64		product;
-
-	if (pg_mul_s64_overflow(val, multiplier, &product) ||
-		pg_add_s64_overflow(*sum, product, sum))
-		return false;
-	return true;
-}
-
 /*
  * Multiply frac by scale (to produce microseconds) and add to itm_in->tm_usec.
  * Returns true if successful, false if itm_in overflows.
@@ -621,7 +604,7 @@ AdjustMicroseconds(int64 val, double fval, int64 scale,
 				   struct pg_itm_in *itm_in)
 {
 	/* Handle the integer part */
-	if (!int64_multiply_add(val, scale, &itm_in->tm_usec))
+	if (pg_mul_add_s64_overflow(val, scale, &itm_in->tm_usec))
 		return false;
 	/* Handle the float part */
 	return AdjustFractMicroseconds(fval, scale, itm_in);
@@ -2701,9 +2684,9 @@ DecodeTimeForInterval(char *str, int fmask, int range,
 		return dterr;
 
 	itm_in->tm_usec = itm.tm_usec;
-	if (!int64_multiply_add(itm.tm_hour, USECS_PER_HOUR, &itm_in->tm_usec) ||
-		!int64_multiply_add(itm.tm_min, USECS_PER_MINUTE, &itm_in->tm_usec) ||
-		!int64_multiply_add(itm.tm_sec, USECS_PER_SEC, &itm_in->tm_usec))
+	if (pg_mul_add_s64_overflow(itm.tm_hour, USECS_PER_HOUR, &itm_in->tm_usec) ||
+		pg_mul_add_s64_overflow(itm.tm_min, USECS_PER_MINUTE, &itm_in->tm_usec) ||
+		pg_mul_add_s64_overflow(itm.tm_sec, USECS_PER_SEC, &itm_in->tm_usec))
 		return DTERR_FIELD_OVERFLOW;
 
 	return 0;
@@ -3567,6 +3550,8 @@ DecodeInterval(char **field, int *ftype, int nf, int range,
 			case DTK_STRING:
 			case DTK_SPECIAL:
 				type = DecodeUnits(i, field[i], &uval);
+				if (type == UNKNOWN_FIELD)
+					type = DecodeSpecial(i, field[i], &uval);
 				if (type == IGNORE_DTF)
 					continue;
 

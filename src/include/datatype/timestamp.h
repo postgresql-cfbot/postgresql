@@ -114,6 +114,7 @@ struct pg_itm_in
  *	30 days.
  */
 #define DAYS_PER_MONTH	30		/* assumes exactly 30 days per month */
+#define DAYS_PER_WEEK	7
 #define HOURS_PER_DAY	24		/* assume no daylight savings time changes */
 
 /*
@@ -167,6 +168,25 @@ struct pg_itm_in
 
 #define TIMESTAMP_NOT_FINITE(j) (TIMESTAMP_IS_NOBEGIN(j) || TIMESTAMP_IS_NOEND(j))
 
+#define INTERVAL_NOBEGIN(i)	\
+	do {	\
+		(i->time) = PG_INT64_MIN;	\
+		(i->day) = PG_INT32_MIN;	\
+		(i->month) = PG_INT32_MIN;	\
+	} while (0)
+
+#define INTERVAL_IS_NOBEGIN(i) ((i->month) == PG_INT32_MIN)
+
+#define INTERVAL_NOEND(i)	\
+	do {	\
+		(i->time) = PG_INT64_MAX;	\
+		(i->day) = PG_INT32_MAX;	\
+		(i->month) = PG_INT32_MAX;	\
+	} while (0)
+
+#define INTERVAL_IS_NOEND(i) ((i->month) == PG_INT32_MAX)
+
+#define INTERVAL_NOT_FINITE(i) (INTERVAL_IS_NOBEGIN(i) || INTERVAL_IS_NOEND(i))
 
 /*
  * Julian date support.

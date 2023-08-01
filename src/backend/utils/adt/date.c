@@ -2014,6 +2014,11 @@ interval_time(PG_FUNCTION_ARGS)
 	TimeADT		result;
 	int64		days;
 
+	if (INTERVAL_NOT_FINITE(span))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("time out of range")));
+
 	result = span->time;
 	if (result >= USECS_PER_DAY)
 	{
@@ -2045,6 +2050,8 @@ time_mi_time(PG_FUNCTION_ARGS)
 	result->day = 0;
 	result->time = time1 - time2;
 
+	Assert(!INTERVAL_NOT_FINITE(result));
+
 	PG_RETURN_INTERVAL_P(result);
 }
 
@@ -2057,6 +2064,11 @@ time_pl_interval(PG_FUNCTION_ARGS)
 	TimeADT		time = PG_GETARG_TIMEADT(0);
 	Interval   *span = PG_GETARG_INTERVAL_P(1);
 	TimeADT		result;
+
+	if (INTERVAL_NOT_FINITE(span))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("cannot add infinite interval to time")));
 
 	result = time + span->time;
 	result -= result / USECS_PER_DAY * USECS_PER_DAY;
@@ -2075,6 +2087,11 @@ time_mi_interval(PG_FUNCTION_ARGS)
 	TimeADT		time = PG_GETARG_TIMEADT(0);
 	Interval   *span = PG_GETARG_INTERVAL_P(1);
 	TimeADT		result;
+
+	if (INTERVAL_NOT_FINITE(span))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("cannot subtract infinite interval from time")));
 
 	result = time - span->time;
 	result -= result / USECS_PER_DAY * USECS_PER_DAY;
@@ -2590,6 +2607,11 @@ timetz_pl_interval(PG_FUNCTION_ARGS)
 	Interval   *span = PG_GETARG_INTERVAL_P(1);
 	TimeTzADT  *result;
 
+	if (INTERVAL_NOT_FINITE(span))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("cannot add infinite interval to time")));
+
 	result = (TimeTzADT *) palloc(sizeof(TimeTzADT));
 
 	result->time = time->time + span->time;
@@ -2611,6 +2633,11 @@ timetz_mi_interval(PG_FUNCTION_ARGS)
 	TimeTzADT  *time = PG_GETARG_TIMETZADT_P(0);
 	Interval   *span = PG_GETARG_INTERVAL_P(1);
 	TimeTzADT  *result;
+
+	if (INTERVAL_NOT_FINITE(span))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("cannot subtract infinite interval from time")));
 
 	result = (TimeTzADT *) palloc(sizeof(TimeTzADT));
 
@@ -3103,6 +3130,13 @@ timetz_izone(PG_FUNCTION_ARGS)
 	TimeTzADT  *time = PG_GETARG_TIMETZADT_P(1);
 	TimeTzADT  *result;
 	int			tz;
+
+	if (INTERVAL_NOT_FINITE(zone))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("interval time zone \"%s\" must be finite",
+						DatumGetCString(DirectFunctionCall1(interval_out,
+															PointerGetDatum(zone))))));
 
 	if (zone->month != 0 || zone->day != 0)
 		ereport(ERROR,

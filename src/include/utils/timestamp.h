@@ -118,6 +118,7 @@ extern int	timestamp2tm(Timestamp dt, int *tzp, struct pg_tm *tm,
 						 fsec_t *fsec, const char **tzn, pg_tz *attimezone);
 extern void dt2time(Timestamp jd, int *hour, int *min, int *sec, fsec_t *fsec);
 
+extern void EncodeSpecialInterval(Interval *interval, char *str);
 extern void interval2itm(Interval span, struct pg_itm *itm);
 extern int	itm2interval(struct pg_itm *itm, Interval *span);
 extern int	itmin2interval(struct pg_itm_in *itm_in, Interval *span);
@@ -126,6 +127,8 @@ extern Timestamp SetEpochTimestamp(void);
 extern void GetEpochTime(struct pg_tm *tm);
 
 extern int	timestamp_cmp_internal(Timestamp dt1, Timestamp dt2);
+
+extern double interval2timestamp_no_overflow(Interval *interval);
 
 /* timestamp comparison works for timestamptz also */
 #define timestamptz_cmp_internal(dt1,dt2)	timestamp_cmp_internal(dt1, dt2)

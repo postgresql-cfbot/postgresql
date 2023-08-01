@@ -10,6 +10,7 @@
   hard limits are reached.
  </para>
 
+
  <table id="limits-table">
   <title><productname>PostgreSQL</productname> Limitations</title>
   <tgroup cols="3">
@@ -52,7 +53,7 @@
     <row>
      <entry>rows per table</entry>
      <entry>limited by the number of tuples that can fit onto 4,294,967,295 pages</entry>
-     <entry></entry>
+     <entry>further limited by the number of TOAST-ed values; see note below</entry>
     </row>
 
     <row>
@@ -92,11 +93,25 @@
      <entry>can be increased by recompiling <productname>PostgreSQL</productname></entry>
     </row>
 
-   <row>
-    <entry>partition keys</entry>
-    <entry>32</entry>
-    <entry>can be increased by recompiling <productname>PostgreSQL</productname></entry>
-   </row>
+    <row>
+     <entry>partition keys</entry>
+     <entry>32</entry>
+     <entry>can be increased by recompiling <productname>PostgreSQL</productname></entry>
+    </row>
+
+    <row>
+     <entry>maximum large object size</entry>
+     <entry>4TB</entry>
+     <entry>see <xref linkend="lo-intro"/></entry>
+    </row>
+
+    <row>
+     <entry>large objects size per database</entry>
+     <entry>subject to the same limitations as <symbol>rows per table</symbol> and <symbol>relation size</symbol>
+     (32 TB by default)</entry>
+     <entry></entry>
+    </row>
+
    </tbody>
   </tgroup>
  </table>
@@ -123,4 +138,24 @@
   created tuples are internally marked as null in the tuple's null bitmap, the
   null bitmap also occupies space.
  </para>
+
+ <para>
+  For every TOAST-ed column (that is for columns wider than TOAST_TUPLE_TARGET
+  [2040 bytes by default]), due to internal PostgreSQL implementation of using one
+  shared global OID counter - you cannot have more than 4,294,967,296 out-of-line
+  values in a single table.
+ </para>
+
+ <para>
+  In practice, you want to have considerably less than that many TOASTed values
+  per table, because as the OID space fills up, the system will spend larger
+  amounts of time searching for the next free OID when it needs to generate a new
+  out-of-line value. This will eventually cause slowdowns for INSERT, UPDATE, and
+  COPY statements.
+
+  Only column values wider than TOAST_TUPLE_TARGET will consume TOAST OIDs in this way.
+  So in practice, reaching this limit would require many terabytes of data in a
+  single table, especially with large number of wide columns.
+ </para>
+
 </appendix>

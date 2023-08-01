@@ -380,6 +380,7 @@
 #enable_incremental_sort = on
 #enable_indexscan = on
 #enable_indexonlyscan = on
+#enable_indexonlyfilter = on
 #enable_material = on
 #enable_memoize = on
 #enable_mergejoin = on

@@ -117,6 +117,7 @@ select name, setting from pg_settings where name like 'enable%';
  enable_hashagg                 | on
  enable_hashjoin                | on
  enable_incremental_sort        | on
+ enable_indexonlyfilter         | on
  enable_indexonlyscan           | on
  enable_indexscan               | on
  enable_material                | on
@@ -132,7 +133,7 @@ select name, setting from pg_settings where name like 'enable%';
  enable_seqscan                 | on
  enable_sort                    | on
  enable_tidscan                 | on
-(21 rows)
+(22 rows)
 
 -- Test that the pg_timezone_names and pg_timezone_abbrevs views are
 -- more-or-less working.  We can't test their contents in any great detail

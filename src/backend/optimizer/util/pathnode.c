@@ -995,6 +995,7 @@ IndexPath *
 create_index_path(PlannerInfo *root,
 				  IndexOptInfo *index,
 				  List *indexclauses,
+				  List *indexfilters,
 				  List *indexorderbys,
 				  List *indexorderbycols,
 				  List *pathkeys,
@@ -1019,6 +1020,7 @@ create_index_path(PlannerInfo *root,
 
 	pathnode->indexinfo = index;
 	pathnode->indexclauses = indexclauses;
+	pathnode->indexfilters = indexfilters;
 	pathnode->indexorderbys = indexorderbys;
 	pathnode->indexorderbycols = indexorderbycols;
 	pathnode->indexscandir = indexscandir;

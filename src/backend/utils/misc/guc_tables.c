@@ -839,6 +839,16 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"enable_indexonlyfilter", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables the planner's use of index to evaluate filters."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&enable_indexonlyfilter,
+		true,
+		NULL, NULL, NULL
+	},
+	{
 		{"enable_bitmapscan", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of bitmap-scan plans."),
 			NULL,

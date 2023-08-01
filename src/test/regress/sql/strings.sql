@@ -685,10 +685,15 @@ select split_part('joeuser@mydatabase','@',-3) AS "empty string";
 select split_part('@joeuser@mydatabase@','@',-2) AS "mydatabase";
 
 --
--- test to_hex
+-- test to_binary, to_oct, and to_hex
 --
-select to_hex(256*256*256 - 1) AS "ffffff";
+select to_binary(256*256*256 - 1) AS "111111111111111111111111";
+select to_binary(256::bigint*256::bigint*256::bigint*256::bigint - 1) AS "11111111111111111111111111111111";
 
+select to_oct(256*256*256 - 1) AS "77777777";
+select to_oct(256::bigint*256::bigint*256::bigint*256::bigint - 1) AS "37777777777";
+
+select to_hex(256*256*256 - 1) AS "ffffff";
 select to_hex(256::bigint*256::bigint*256::bigint*256::bigint - 1) AS "ffffffff";
 
 --

@@ -3740,6 +3740,48 @@ repeat('Pg', 4) <returnvalue>PgPgPgPg</returnvalue>
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>to_binary</primary>
+        </indexterm>
+        <function>to_binary</function> ( <type>integer</type> )
+        <returnvalue>text</returnvalue>
+       </para>
+       <para role="func_signature">
+        <function>to_binary</function> ( <type>bigint</type> )
+        <returnvalue>text</returnvalue>
+       </para>
+       <para>
+        Converts the number to its equivalent binary representation.
+       </para>
+       <para>
+        <literal>to_binary(2147483647)</literal>
+        <returnvalue>1111111111111111111111111111111</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>to_oct</primary>
+        </indexterm>
+        <function>to_oct</function> ( <type>integer</type> )
+        <returnvalue>text</returnvalue>
+       </para>
+       <para role="func_signature">
+        <function>to_oct</function> ( <type>bigint</type> )
+        <returnvalue>text</returnvalue>
+       </para>
+       <para>
+        Converts the number to its equivalent octal representation.
+       </para>
+       <para>
+        <literal>to_oct(2147483647)</literal>
+        <returnvalue>17777777777</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>to_hex</primary>
         </indexterm>
         <function>to_hex</function> ( <type>integer</type> )

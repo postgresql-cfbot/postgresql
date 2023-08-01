@@ -3410,24 +3410,55 @@ show_hashagg_info(AggState *aggstate, ExplainState *es)
 static void
 show_tidbitmap_info(BitmapHeapScanState *planstate, ExplainState *es)
 {
+	Assert(es->analyze);
+
 	if (es->format != EXPLAIN_FORMAT_TEXT)
 	{
 		ExplainPropertyInteger("Exact Heap Blocks", NULL,
-							   planstate->exact_pages, es);
+							   planstate->stats.exact_pages, es);
 		ExplainPropertyInteger("Lossy Heap Blocks", NULL,
-							   planstate->lossy_pages, es);
+							   planstate->stats.lossy_pages, es);
 	}
 	else
 	{
-		if (planstate->exact_pages > 0 || planstate->lossy_pages > 0)
+		if (planstate->stats.exact_pages > 0 || planstate->stats.lossy_pages > 0)
 		{
 			ExplainIndentText(es);
 			appendStringInfoString(es->str, "Heap Blocks:");
-			if (planstate->exact_pages > 0)
-				appendStringInfo(es->str, " exact=%ld", planstate->exact_pages);
-			if (planstate->lossy_pages > 0)
-				appendStringInfo(es->str, " lossy=%ld", planstate->lossy_pages);
+			if (planstate->stats.exact_pages > 0)
+				appendStringInfo(es->str, " exact=%ld", planstate->stats.exact_pages);
+			if (planstate->stats.lossy_pages > 0)
+				appendStringInfo(es->str, " lossy=%ld", planstate->stats.lossy_pages);
 			appendStringInfoChar(es->str, '\n');
+		}
+	}
+
+	if (planstate->shared_info != NULL)
+	{
+		for (int n = 0; n < planstate->shared_info->num_workers; n++)
+		{
+			BitmapHeapScanInstrumentation *si = &planstate->shared_info->sinstrument[n];
+
+			if (si->exact_pages == 0 && si->lossy_pages == 0)
+				continue;
+
+			if (es->workers_state)
+				ExplainOpenWorker(n, es);
+
+			if (es->format == EXPLAIN_FORMAT_TEXT)
+			{
+				ExplainIndentText(es);
+				appendStringInfo(es->str, "Heap Blocks: exact=%ld lossy=%ld\n",
+						 si->exact_pages, si->lossy_pages);
+			}
+			else
+			{
+				ExplainPropertyInteger("Exact Heap Blocks", NULL, si->exact_pages, es);
+				ExplainPropertyInteger("Lossy Heap Blocks", NULL, si->lossy_pages, es);
+			}
+
+			if (es->workers_state)
+				ExplainCloseWorker(n, es);
 		}
 	}
 }

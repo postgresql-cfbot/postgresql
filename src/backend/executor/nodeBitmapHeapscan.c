@@ -239,9 +239,9 @@ BitmapHeapNext(BitmapHeapScanState *node)
 			}
 
 			if (tbmres->ntuples >= 0)
-				node->exact_pages++;
+				node->stats.exact_pages++;
 			else
-				node->lossy_pages++;
+				node->stats.lossy_pages++;
 
 			/* Adjust the prefetch target */
 			BitmapAdjustPrefetchTarget(node);
@@ -641,6 +641,22 @@ ExecReScanBitmapHeapScan(BitmapHeapScanState *node)
 		ExecReScan(outerPlan);
 }
 
+/*
+ * The following two functions provide access to the variable length snapshot and stats array stored
+ * in shared memory. As there are two we cannot use variable length arrays for both of them.
+ */
+static char *
+GetSharedSnapshotData(ParallelBitmapHeapState *node)
+{
+	return node->snapshot_and_stats;
+}
+
+static SharedBitmapHeapScanInfo *
+GetSharedBitmapHeapScanInfo(ParallelBitmapHeapState *node)
+{
+	return (SharedBitmapHeapScanInfo *)(node->snapshot_and_stats + node->stats_offset);
+}
+
 /* ----------------------------------------------------------------
  *		ExecEndBitmapHeapScan
  * ----------------------------------------------------------------
@@ -649,6 +665,19 @@ void
 ExecEndBitmapHeapScan(BitmapHeapScanState *node)
 {
 	TableScanDesc scanDesc;
+
+	/*
+	 * When ending a parallel worker, copy the statistics gathered by the
+	 * worker back into shared memory so that it can be picked up by the main
+	 * process to report in EXPLAIN ANALYZE.
+	 */
+	if (node->pstate != NULL && IsParallelWorker())
+	{
+		SharedBitmapHeapScanInfo * shared_info = GetSharedBitmapHeapScanInfo(node->pstate);
+
+		Assert(ParallelWorkerNumber <= shared_info->num_workers);
+		shared_info->sinstrument[ParallelWorkerNumber] = node->stats;
+	}
 
 	/*
 	 * extract information from the node
@@ -731,8 +760,8 @@ ExecInitBitmapHeapScan(BitmapHeapScan *node, EState *estate, int eflags)
 	scanstate->return_empty_tuples = 0;
 	scanstate->vmbuffer = InvalidBuffer;
 	scanstate->pvmbuffer = InvalidBuffer;
-	scanstate->exact_pages = 0;
-	scanstate->lossy_pages = 0;
+	scanstate->stats.exact_pages = 0;
+	scanstate->stats.lossy_pages = 0;
 	scanstate->prefetch_iterator = NULL;
 	scanstate->prefetch_pages = 0;
 	scanstate->prefetch_target = 0;
@@ -856,12 +885,14 @@ void
 ExecBitmapHeapEstimate(BitmapHeapScanState *node,
 					   ParallelContext *pcxt)
 {
-	EState	   *estate = node->ss.ps.state;
+	Size   instr_size = mul_size(pcxt->nworkers, sizeof(BitmapHeapScanInstrumentation));
+	EState *estate = node->ss.ps.state;
 
-	node->pscan_len = add_size(offsetof(ParallelBitmapHeapState,
-										phs_snapshot_data),
-							   EstimateSnapshotSpace(estate->es_snapshot));
-
+	node->pscan_len = add_size(offsetof(ParallelBitmapHeapState, snapshot_and_stats),
+							   MAXALIGN(EstimateSnapshotSpace(estate->es_snapshot)));
+	node->pscan_len = add_size(node->pscan_len, instr_size);
+	node->pscan_len = add_size(node->pscan_len, offsetof(SharedBitmapHeapScanInfo, sinstrument));
+    
 	shm_toc_estimate_chunk(&pcxt->estimator, node->pscan_len);
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 }
@@ -877,9 +908,10 @@ ExecBitmapHeapInitializeDSM(BitmapHeapScanState *node,
 							ParallelContext *pcxt)
 {
 	ParallelBitmapHeapState *pstate;
+    SharedBitmapHeapScanInfo * shared_info;
 	EState	   *estate = node->ss.ps.state;
 	dsa_area   *dsa = node->ss.ps.state->es_query_dsa;
-
+    
 	/* If there's no DSA, there are no workers; initialize nothing. */
 	if (dsa == NULL)
 		return;
@@ -896,7 +928,13 @@ ExecBitmapHeapInitializeDSM(BitmapHeapScanState *node,
 	pstate->state = BM_INITIAL;
 
 	ConditionVariableInit(&pstate->cv);
-	SerializeSnapshot(estate->es_snapshot, pstate->phs_snapshot_data);
+	pstate->stats_offset = MAXALIGN(EstimateSnapshotSpace(estate->es_snapshot));
+	SerializeSnapshot(estate->es_snapshot, GetSharedSnapshotData(pstate));
+
+	/* ensure any unfilled slots will contain zeroes */
+	shared_info = GetSharedBitmapHeapScanInfo(pstate);
+	memset(shared_info->sinstrument, 0, pcxt->nworkers*sizeof(BitmapHeapScanInstrumentation));
+	shared_info->num_workers = pcxt->nworkers;
 
 	shm_toc_insert(pcxt->toc, node->ss.ps.plan->plan_node_id, pstate);
 	node->pstate = pstate;
@@ -949,6 +987,30 @@ ExecBitmapHeapInitializeWorker(BitmapHeapScanState *node,
 	pstate = shm_toc_lookup(pwcxt->toc, node->ss.ps.plan->plan_node_id, false);
 	node->pstate = pstate;
 
-	snapshot = RestoreSnapshot(pstate->phs_snapshot_data);
+	snapshot = RestoreSnapshot(GetSharedSnapshotData(pstate));
 	table_scan_update_snapshot(node->ss.ss_currentScanDesc, snapshot);
+}
+
+/* ----------------------------------------------------------------
+ *		ExecBitmapHeapRetrieveInstrumentation
+ *
+ *		Transfer bitmap heap scan statistics from DSM to private memory.
+ * ----------------------------------------------------------------
+ */
+void
+ExecBitmapHeapRetrieveInstrumentation(BitmapHeapScanState *node)
+{   
+	Size size;
+	SharedBitmapHeapScanInfo *shared_info;
+
+	if (node->pstate == NULL)
+		return;
+
+	shared_info = GetSharedBitmapHeapScanInfo(node->pstate);
+
+	size = offsetof(SharedBitmapHeapScanInfo, sinstrument)
+		+ shared_info->num_workers * sizeof(BitmapHeapScanInstrumentation);
+
+	node->shared_info = palloc(size);
+	memcpy(node->shared_info, shared_info, size);
 }

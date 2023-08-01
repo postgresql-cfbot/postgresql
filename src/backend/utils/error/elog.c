@@ -513,6 +513,8 @@ errfinish(const char *filename, int lineno, const char *funcname)
 		 econtext = econtext->previous)
 		econtext->callback(econtext->arg);
 
+	if (elevel >= ERROR)
+		ProcessLogQueryPlanInterruptActive = false;
 	/*
 	 * If ERROR (not more nor less) we pass it off to the current handler.
 	 * Printing it and popping the stack is the responsibility of the handler.

@@ -95,6 +95,7 @@ extern PGDLLIMPORT volatile sig_atomic_t IdleSessionTimeoutPending;
 extern PGDLLIMPORT volatile sig_atomic_t ProcSignalBarrierPending;
 extern PGDLLIMPORT volatile sig_atomic_t LogMemoryContextPending;
 extern PGDLLIMPORT volatile sig_atomic_t IdleStatsUpdateTimeoutPending;
+extern PGDLLIMPORT volatile sig_atomic_t LogQueryPlanPending;
 
 extern PGDLLIMPORT volatile sig_atomic_t CheckClientConnectionPending;
 extern PGDLLIMPORT volatile sig_atomic_t ClientConnectionLost;
@@ -117,9 +118,11 @@ extern void ProcessInterrupts(void);
 	 unlikely(InterruptPending))
 #endif
 
+extern void ProcessLogQueryPlanInterrupt(void);
 /* Service interrupt, if one is pending and it's safe to service it now */
 #define CHECK_FOR_INTERRUPTS() \
 do { \
+	ProcessLogQueryPlanInterrupt(); \
 	if (INTERRUPTS_PENDING_CONDITION()) \
 		ProcessInterrupts(); \
 } while(0)

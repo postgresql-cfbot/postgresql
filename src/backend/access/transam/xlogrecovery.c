@@ -125,15 +125,19 @@ static TimeLineID curFileTLI;
 
 /*
  * When ArchiveRecoveryRequested is set, archive recovery was requested,
- * ie. signal files were present.  When InArchiveRecovery is set, we are
- * currently recovering using offline XLOG archives.  These variables are only
- * valid in the startup process.
+ * ie. signal files or backup_label were present.  When InArchiveRecovery is
+ * set, we are currently recovering using offline XLOG archives.  These
+ + variables are only valid in the startup process.  Note that the presence of
+ * a backup_label file forces archive recovery even if there is no signal
+ * file.
  *
  * When ArchiveRecoveryRequested is true, but InArchiveRecovery is false, we're
  * currently performing crash recovery using only XLOG files in pg_wal, but
  * will switch to using offline XLOG archives as soon as we reach the end of
  * WAL in pg_wal.
-*/
+ *
+ * InArchiveRecovery should never be set without ArchiveRecoveryRequested.
+ */
 bool		ArchiveRecoveryRequested = false;
 bool		InArchiveRecovery = false;
 
@@ -540,42 +544,7 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 	readRecoverySignalFile();
 	validateRecoveryParameters();
 
-	if (ArchiveRecoveryRequested)
-	{
-		if (StandbyModeRequested)
-			ereport(LOG,
-					(errmsg("entering standby mode")));
-		else if (recoveryTarget == RECOVERY_TARGET_XID)
-			ereport(LOG,
-					(errmsg("starting point-in-time recovery to XID %u",
-							recoveryTargetXid)));
-		else if (recoveryTarget == RECOVERY_TARGET_TIME)
-			ereport(LOG,
-					(errmsg("starting point-in-time recovery to %s",
-							timestamptz_to_str(recoveryTargetTime))));
-		else if (recoveryTarget == RECOVERY_TARGET_NAME)
-			ereport(LOG,
-					(errmsg("starting point-in-time recovery to \"%s\"",
-							recoveryTargetName)));
-		else if (recoveryTarget == RECOVERY_TARGET_LSN)
-			ereport(LOG,
-					(errmsg("starting point-in-time recovery to WAL location (LSN) \"%X/%X\"",
-							LSN_FORMAT_ARGS(recoveryTargetLSN))));
-		else if (recoveryTarget == RECOVERY_TARGET_IMMEDIATE)
-			ereport(LOG,
-					(errmsg("starting point-in-time recovery to earliest consistent point")));
-		else
-			ereport(LOG,
-					(errmsg("starting archive recovery")));
-	}
-
-	/*
-	 * Take ownership of the wakeup latch if we're going to sleep during
-	 * recovery.
-	 */
-	if (ArchiveRecoveryRequested)
-		OwnLatch(&XLogRecoveryCtl->recoveryWakeupLatch);
-
+	/* Set the WAL reading processor, as backup_label may need it */
 	private = palloc0(sizeof(XLogPageReadPrivate));
 	xlogreader =
 		XLogReaderAllocate(wal_segment_size, NULL,
@@ -609,10 +578,29 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 	replay_image_masked = (char *) palloc(BLCKSZ);
 	primary_image_masked = (char *) palloc(BLCKSZ);
 
+	/*
+	 * Read the backup_label file.  We want to run this part of the recovery
+	 * process after checking for signal files and perform validation of the
+	 * recovery parameters, as it may be possible that a backup needs to be
+	 * run, but no signal files have been set.
+	 */
 	if (read_backup_label(&CheckPointLoc, &CheckPointTLI, &backupEndRequired,
 						  &backupFromStandby))
 	{
 		List	   *tablespaces = NIL;
+
+		if (!ArchiveRecoveryRequested)
+			ereport(FATAL,
+					(errmsg("could not find recovery.signal or standby.signal when recovering with backup_label"),
+					 errhint("If you are restoring from a backup, touch \"%s/recovery.signal\" or \"%s/standby.signal\" and add required recovery options.",
+							 DataDir, DataDir)));
+
+		/*
+		 * Take ownership of the wakeup latch if we're going to sleep during
+		 * recovery if needed.
+		 */
+		if (ArchiveRecoveryRequested)
+			OwnLatch(&XLogRecoveryCtl->recoveryWakeupLatch);
 
 		/*
 		 * Archive recovery was requested, and thanks to the backup label
@@ -706,6 +694,15 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 	}
 	else
 	{
+		/* No backup_label file has been found if we are here. */
+
+		/*
+		 * Take ownership of the wakeup latch if we're going to sleep during
+		 * recovery if needed.
+		 */
+		if (ArchiveRecoveryRequested)
+			OwnLatch(&XLogRecoveryCtl->recoveryWakeupLatch);
+
 		/*
 		 * If tablespace_map file is present without backup_label file, there
 		 * is no use of such file.  There is no harm in retaining it, but it
@@ -787,6 +784,35 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		}
 		memcpy(&checkPoint, XLogRecGetData(xlogreader), sizeof(CheckPoint));
 		wasShutdown = ((record->xl_info & ~XLR_INFO_MASK) == XLOG_CHECKPOINT_SHUTDOWN);
+	}
+
+	if (ArchiveRecoveryRequested)
+	{
+		if (StandbyModeRequested)
+			ereport(LOG,
+					(errmsg("entering standby mode")));
+		else if (recoveryTarget == RECOVERY_TARGET_XID)
+			ereport(LOG,
+					(errmsg("starting point-in-time recovery to XID %u",
+							recoveryTargetXid)));
+		else if (recoveryTarget == RECOVERY_TARGET_TIME)
+			ereport(LOG,
+					(errmsg("starting point-in-time recovery to %s",
+							timestamptz_to_str(recoveryTargetTime))));
+		else if (recoveryTarget == RECOVERY_TARGET_NAME)
+			ereport(LOG,
+					(errmsg("starting point-in-time recovery to \"%s\"",
+							recoveryTargetName)));
+		else if (recoveryTarget == RECOVERY_TARGET_LSN)
+			ereport(LOG,
+					(errmsg("starting point-in-time recovery to WAL location (LSN) \"%X/%X\"",
+							LSN_FORMAT_ARGS(recoveryTargetLSN))));
+		else if (recoveryTarget == RECOVERY_TARGET_IMMEDIATE)
+			ereport(LOG,
+					(errmsg("starting point-in-time recovery to earliest consistent point")));
+		else
+			ereport(LOG,
+					(errmsg("starting archive recovery")));
 	}
 
 	/*
@@ -1574,6 +1600,12 @@ ShutdownWalRecovery(void)
 	 */
 	if (ArchiveRecoveryRequested)
 		DisownLatch(&XLogRecoveryCtl->recoveryWakeupLatch);
+
+	/*
+	 * InArchiveRecovery should never have been set without
+	 * ArchiveRecoveryRequested.
+	 */
+	Assert(ArchiveRecoveryRequested || !InArchiveRecovery);
 }
 
 /*

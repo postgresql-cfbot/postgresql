@@ -454,16 +454,25 @@ select 'foo' ilike all (array['F%', '%O']); -- t
 
 -- none of the following should be accepted
 select '{{1,{2}},{2,3}}'::text[];
-select '{{},{}}'::text[];
 select E'{{1,2},\\{2,3}}'::text[];
 select '{{"1 2" x},{3}}'::text[];
 select '{}}'::text[];
 select '{ }}'::text[];
+select '{{1},{{2}}}'::text[];
+select '{{{1}},{2}}'::text[];
+select '{{},{{}}}'::text[];
+select '{{{}},{}}'::text[];
+select '{{1},{}}'::text[];
+select '{{},{1}}'::text[];
+select '[2147483646:2147483647]={1,2}'::int[];
+select '[1:-1]={}'::int[];
+select '[1:0]={1}'::int[];
 select array[];
 -- none of the above should be accepted
 
 -- all of the following should be accepted
 select '{}'::text[];
+select '{{},{}}'::text[];
 select '{{{1,2,3,4},{2,3,4,5}},{{3,4,5,6},{4,5,6,7}}}'::text[];
 select '{0 second  ,0 second}'::interval[];
 select '{ { "," } , { 3 } }'::text[];
@@ -474,6 +483,8 @@ select '{
          }'::interval[];
 select array[]::text[];
 select '[0:1]={1.1,2.2}'::float8[];
+select '[2147483646:2147483646]={1}'::int[];
+select '[1:0]={}'::int[];
 -- all of the above should be accepted
 
 -- tests for array aggregates

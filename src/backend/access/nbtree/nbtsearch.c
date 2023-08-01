@@ -896,7 +896,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	 * Examine the scan keys and eliminate any redundant keys; also mark the
 	 * keys that must be matched to continue the scan.
 	 */
-	_bt_preprocess_keys(scan);
+	_bt_preprocess_keys(scan, dir);
 
 	/*
 	 * Quit now if _bt_preprocess_keys() discovered that the scan keys can
@@ -1551,6 +1551,8 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 	int			itemIndex;
 	bool		continuescan;
 	int			indnatts;
+	IndexTuple	itup;
+	bool		all_fit = false;
 
 	/*
 	 * We must have the buffer pinned and locked, but the usual macro can't be
@@ -1604,6 +1606,17 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 	 */
 	Assert(BTScanPosIsPinned(so->currPos));
 
+	/* Do no perform this optimization for first index page to avoid slowdown of dot queries.
+	 * so->has_matches is set at the end if _bt_readpage, so we do not try to perform this optimization
+	 * at first invocation of _bt_readpage. Also it enforces that we found items mathcing low boundary o only upper boundary has to be checked.
+	 */
+	if (so->is_range_search	&& so->has_matches) {
+		bool		temp;
+		/* Try first to compare minnimal/maximal key on the page to avoid checks of all other items on the page */
+		itup = (IndexTuple) PageGetItem(page,  PageGetItemId(page, ScanDirectionIsForward(dir) ? maxoff : minoff));
+		all_fit = _bt_checkkeys(scan, itup, indnatts, dir, &temp);
+	}
+
 	if (ScanDirectionIsForward(dir))
 	{
 		/* load items[] in ascending order */
@@ -1614,7 +1627,6 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 		while (offnum <= maxoff)
 		{
 			ItemId		iid = PageGetItemId(page, offnum);
-			IndexTuple	itup;
 
 			/*
 			 * If the scan specifies not to return killed tuples, then we
@@ -1628,7 +1640,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 
 			itup = (IndexTuple) PageGetItem(page, iid);
 
-			if (_bt_checkkeys(scan, itup, indnatts, dir, &continuescan))
+			if (all_fit || _bt_checkkeys(scan, itup, indnatts, dir, &continuescan))
 			{
 				/* tuple passes all scan key conditions */
 				if (!BTreeTupleIsPosting(itup))
@@ -1681,9 +1693,9 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 		if (continuescan && !P_RIGHTMOST(opaque))
 		{
 			ItemId		iid = PageGetItemId(page, P_HIKEY);
-			IndexTuple	itup = (IndexTuple) PageGetItem(page, iid);
 			int			truncatt;
 
+			itup = (IndexTuple) PageGetItem(page, iid);
 			truncatt = BTreeTupleGetNAtts(itup, scan->indexRelation);
 			_bt_checkkeys(scan, itup, truncatt, dir, &continuescan);
 		}
@@ -1706,7 +1718,6 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 		while (offnum >= minoff)
 		{
 			ItemId		iid = PageGetItemId(page, offnum);
-			IndexTuple	itup;
 			bool		tuple_alive;
 			bool		passes_quals;
 
@@ -1736,8 +1747,8 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 
 			itup = (IndexTuple) PageGetItem(page, iid);
 
-			passes_quals = _bt_checkkeys(scan, itup, indnatts, dir,
-										 &continuescan);
+			passes_quals = all_fit || _bt_checkkeys(scan, itup, indnatts, dir,
+													&continuescan);
 			if (passes_quals && tuple_alive)
 			{
 				/* tuple passes all scan key conditions */
@@ -1791,8 +1802,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 		so->currPos.lastItem = MaxTIDsPerBTreePage - 1;
 		so->currPos.itemIndex = MaxTIDsPerBTreePage - 1;
 	}
-
-	return (so->currPos.firstItem <= so->currPos.lastItem);
+	return so->has_matches = so->currPos.firstItem <= so->currPos.lastItem;
 }
 
 /* Save an index item into so->currPos.items[itemIndex] */

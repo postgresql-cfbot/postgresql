@@ -654,7 +654,7 @@ _bt_restore_array_keys(IndexScanDesc scan)
 	 */
 	if (changed)
 	{
-		_bt_preprocess_keys(scan);
+		_bt_preprocess_keys(scan, NoMovementScanDirection);
 		/* The mark should have been set on a consistent set of keys... */
 		Assert(so->qual_ok);
 	}
@@ -746,7 +746,7 @@ _bt_restore_array_keys(IndexScanDesc scan)
  * new elements of array keys.  Therefore we can't overwrite the source data.
  */
 void
-_bt_preprocess_keys(IndexScanDesc scan)
+_bt_preprocess_keys(IndexScanDesc scan, ScanDirection dir)
 {
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 	int			numberOfKeys = scan->numberOfKeys;
@@ -761,9 +761,12 @@ _bt_preprocess_keys(IndexScanDesc scan)
 	int			i,
 				j;
 	AttrNumber	attno;
+	bool		low_boundary, high_boundary;
 
 	/* initialize result variables */
 	so->qual_ok = true;
+	so->is_range_search = true;
+	so->has_matches = false;
 	so->numberOfKeys = 0;
 
 	if (numberOfKeys < 1)
@@ -794,6 +797,11 @@ _bt_preprocess_keys(IndexScanDesc scan)
 		/* We can mark the qual as required if it's for first index col */
 		if (cur->sk_attno == 1)
 			_bt_mark_scankey_required(outkeys);
+
+		/* Check if we can perform range search optimization */
+		so->is_range_search =
+			(ScanDirectionIsForward(dir) & ((outkeys->sk_flags & (SK_ISNULL|SK_ROW_HEADER|SK_BT_REQFWD)) == SK_BT_REQFWD)) |
+			(ScanDirectionIsBackward(dir) & ((outkeys->sk_flags & (SK_ISNULL|SK_ROW_HEADER|SK_BT_REQBKWD)) == SK_BT_REQBKWD));
 		return;
 	}
 
@@ -1009,6 +1017,21 @@ _bt_preprocess_keys(IndexScanDesc scan)
 		}
 	}
 
+	/* Check if we can perform range search optimization */
+	if (new_numberOfKeys == 2)
+	{
+		low_boundary = false;
+		high_boundary = false;
+		for (i = 0; i < 2; i++)
+		{
+			ScanKey		key = &outkeys[i];
+			if ((key->sk_flags & (SK_ISNULL|SK_ROW_HEADER|SK_BT_REQFWD)) == SK_BT_REQFWD)
+				high_boundary = true;
+			else if ((key->sk_flags & (SK_ISNULL|SK_ROW_HEADER|SK_BT_REQBKWD)) == SK_BT_REQBKWD)
+				low_boundary = true;
+		}
+		so->is_range_search = low_boundary & high_boundary;
+	}
 	so->numberOfKeys = new_numberOfKeys;
 }
 

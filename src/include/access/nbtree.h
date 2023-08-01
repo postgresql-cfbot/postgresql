@@ -1038,6 +1038,8 @@ typedef struct BTScanOpaqueData
 {
 	/* these fields are set by _bt_preprocess_keys(): */
 	bool		qual_ok;		/* false if qual can never be satisfied */
+	bool		is_range_search;/* true if each is limited by upperbound */
+	bool		has_matches;    /* true if index scan already found some matches */
 	int			numberOfKeys;	/* number of preprocessed scan keys */
 	ScanKey		keyData;		/* array of preprocessed scan keys */
 
@@ -1252,7 +1254,7 @@ extern void _bt_start_array_keys(IndexScanDesc scan, ScanDirection dir);
 extern bool _bt_advance_array_keys(IndexScanDesc scan, ScanDirection dir);
 extern void _bt_mark_array_keys(IndexScanDesc scan);
 extern void _bt_restore_array_keys(IndexScanDesc scan);
-extern void _bt_preprocess_keys(IndexScanDesc scan);
+extern void _bt_preprocess_keys(IndexScanDesc scan, ScanDirection dir);
 extern bool _bt_checkkeys(IndexScanDesc scan, IndexTuple tuple,
 						  int tupnatts, ScanDirection dir, bool *continuescan);
 extern void _bt_killitems(IndexScanDesc scan);

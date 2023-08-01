@@ -451,6 +451,11 @@ SocketBackend(StringInfo inBuf)
 			doing_extended_query_message = false;
 			break;
 
+		case 'r':				/* report GUC */
+			maxmsglen = PQ_SMALL_MESSAGE_LIMIT;
+			doing_extended_query_message = false;
+			break;
+
 		default:
 
 			/*
@@ -4826,6 +4831,24 @@ PostgresMain(const char *dbname, const char *username)
 				pq_getmsgend(&input_message);
 				if (whereToSendOutput == DestRemote)
 					pq_flush();
+				break;
+
+			case 'r':			/* report GUC */
+				{
+					const char	   *name;
+					int				create_flag;
+
+					name = pq_getmsgstring(&input_message);
+					create_flag = pq_getmsgint(&input_message, 2);
+					pq_getmsgend(&input_message);
+
+					if (create_flag)
+						SetGUCOptionFlag(name, GUC_REPORT);
+					else
+					UnsetGUCOptionFlag(name, GUC_REPORT);
+
+					send_ready_for_query = true;
+				}
 				break;
 
 			case 'S':			/* sync */

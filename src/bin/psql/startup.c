@@ -1094,10 +1094,34 @@ histcontrol_hook(const char *newval)
 	return true;
 }
 
+static void
+prompt_needs_role_parameter_status(void)
+{
+	int		res;
+
+	pset.prompt_shows_role = false;
+
+	if (pset.prompt1 && strstr(pset.prompt1, "%N"))
+		pset.prompt_shows_role = true;
+	else if (pset.prompt2 && strstr(pset.prompt2, "%N"))
+		pset.prompt_shows_role = true;
+	else if (pset.prompt3 && strstr(pset.prompt3, "%N"))
+		pset.prompt_shows_role = true;
+
+	if (pset.prompt_shows_role)
+		res = PQlinkParameterStatus(pset.db, "role");
+	else
+		res = PQunlinkParameterStatus(pset.db, "role");
+
+	if (res < 0)
+		pg_log_info("%s", PQerrorMessage(pset.db));
+}
+
 static bool
 prompt1_hook(const char *newval)
 {
 	pset.prompt1 = newval ? newval : "";
+	prompt_needs_role_parameter_status();
 	return true;
 }
 
@@ -1105,6 +1129,7 @@ static bool
 prompt2_hook(const char *newval)
 {
 	pset.prompt2 = newval ? newval : "";
+	prompt_needs_role_parameter_status();
 	return true;
 }
 
@@ -1112,6 +1137,7 @@ static bool
 prompt3_hook(const char *newval)
 {
 	pset.prompt3 = newval ? newval : "";
+	prompt_needs_role_parameter_status();
 	return true;
 }
 

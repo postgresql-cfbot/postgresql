@@ -1999,6 +1999,152 @@ pqEndcopy3(PGconn *conn)
 	return 1;
 }
 
+/*
+ * sends report GUC message, and wait and process related backend
+ * messages until 'backend is ready' including this message. Only
+ * allowed backend massages are 'N' and 'E'.
+ */
+int
+pqSendReportGUCMessage(PGconn *conn, const char *paramName, bool create_flag)
+{
+	bool		needInput = false;
+	bool		is_error = false;
+	char		id;
+	int			msgLength;
+	int			avail;
+
+	if (!conn)
+		return 0;
+
+	/* construct Report GUC message */
+	if (pqPutMsgStart('r', conn) < 0 ||
+		pqPuts(paramName, conn) < 0 ||
+		pqPutInt(create_flag ? 1 : 0, 2, conn) < 0 ||
+		pqPutMsgEnd(conn) < 0 ||
+		pqFlush(conn))
+		return -1;
+
+	if (pqWait(true, false, conn) ||
+		pqReadData(conn) < 0)
+		return -1;
+
+	for (;;)
+	{
+		if (needInput)
+		{
+			/* Wait for some data to arrive (or for the channel to close) */
+			if (pqWait(true, false, conn) ||
+				pqReadData(conn) < 0)
+				break;
+		}
+
+		/*
+		 * Scan the message. If we run out of data, loop around to try again.
+		 */
+		needInput = true;
+
+		conn->inCursor = conn->inStart;
+		if (pqGetc(&id, conn))
+			continue;
+		if (pqGetInt(&msgLength, 4, conn))
+			continue;
+
+		/*
+		 * Try to validate message type/length here.  A length less than 4 is
+		 * definitely broken.  Large lengths should only be believed for a few
+		 * message types.
+		 */
+		if (msgLength < 4)
+		{
+			handleSyncLoss(conn, id, msgLength);
+			break;
+		}
+		if (msgLength > 30000 && !VALID_LONG_MESSAGE_TYPE(id))
+		{
+			handleSyncLoss(conn, id, msgLength);
+			break;
+		}
+
+		/*
+		 * Can't process if message body isn't all here yet.
+		 */
+		msgLength -= 4;
+		avail = conn->inEnd - conn->inCursor;
+		if (avail < msgLength)
+		{
+			/*
+			 * Before looping, enlarge the input buffer if needed to hold the
+			 * whole message.  See notes in parseInput.
+			 */
+			if (pqCheckInBufferSpace(conn->inCursor + (size_t) msgLength,
+									 conn))
+			{
+				/*
+				 * XXX add some better recovery code... plan is to skip over
+				 * the message using its length, then report an error. For the
+				 * moment, just treat this like loss of sync (which indeed it
+				 * might be!)
+				 */
+				handleSyncLoss(conn, id, msgLength);
+				break;
+			}
+			continue;
+		}
+
+		/*
+		 * We should see V or E response to the command, but might get N
+		 * and/or A notices first. We also need to swallow the final Z before
+		 * returning.
+		 */
+		switch (id)
+		{
+			case 'E':			/* error return */
+				if (pqGetErrorNotice3(conn, true))
+					continue;
+				is_error = true;
+				break;
+			case 'N':			/* notice */
+				/* handle notice and go back to processing return values */
+				if (pqGetErrorNotice3(conn, false))
+					continue;
+				break;
+			case 'Z':			/* backend is ready for new query */
+				if (getReadyForQuery(conn))
+					continue;
+				/* consume the message and exit */
+				conn->inStart += 5 + msgLength;
+
+				return !is_error ? 0 : -1;
+			case 'S':			/* parameter status */
+				if (getParameterStatus(conn))
+					continue;
+				break;
+			default:
+				/* The backend violates the protocol. */
+				libpq_append_conn_error(conn, "protocol error: id=0x%x", id);
+
+				/* trust the specified message length as what to skip */
+				conn->inStart += 5 + msgLength;
+				return -1;
+		}
+
+		/* trace server-to-client message */
+		if (conn->Pfdebug)
+			pqTraceOutputMessage(conn, conn->inBuffer + conn->inStart, false);
+
+		/* Completed this message, keep going */
+		/* trust the specified message length as what to skip */
+		conn->inStart += 5 + msgLength;
+		needInput = false;
+	}
+
+	/*
+	 * We fall out of the loop only upon failing to read data.
+	 * conn->errorMessage has been set by pqWait or pqReadData.
+	 */
+
+	return -1;
+}
 
 /*
  * PQfn - Send a function call to the POSTGRES backend.

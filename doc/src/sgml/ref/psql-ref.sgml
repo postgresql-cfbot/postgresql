@@ -4567,7 +4567,24 @@ testdb=&gt; <userinput>INSERT INTO my_table VALUES (:'content');</userinput>
         <listitem><para>The port number at which the database server is listening.</para></listitem>
       </varlistentry>
 
-      <varlistentry id="app-psql-prompting-n">
+      <varlistentry id="app-psql-prompting-n-uc">
+        <term><literal>%N</literal></term>
+        <listitem>
+         <para>
+          The database role name. This value is specified by command
+          <command>SET ROLE</command>. Until execution of this command
+          the value is set to the database session user name.
+         </para>
+
+         <para>
+          This substitution requires <productname>PostgreSQL</productname>
+          version 16 and up. When you use older version, the empty string
+          is used instead.
+         </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry id="app-psql-prompting-n-lc">
         <term><literal>%n</literal></term>
         <listitem>
          <para>

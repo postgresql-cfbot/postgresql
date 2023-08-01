@@ -718,6 +718,7 @@ extern PGresult *pqFunctionCall3(PGconn *conn, Oid fnid,
 								 int *result_buf, int *actual_result_len,
 								 int result_is_int,
 								 const PQArgBlock *args, int nargs);
+extern int pqSendReportGUCMessage(PGconn *conn, const char *paramName, bool create_flag);
 
 /* === in fe-misc.c === */
 

@@ -5401,6 +5401,43 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
     </listitem>
    </varlistentry>
 
+   <varlistentry id="protocol-message-formats-ReportGUC">
+    <term>ReportGUC (F)</term>
+    <listitem>
+     <variablelist>
+      <varlistentry>
+       <term>Byte1('r')</term>
+       <listitem>
+        <para>
+         Identifies the message type.  ReportGUC is sent by
+         frontend when the changes of specified GUC option
+         should be (or should not be) reported to state parameter.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>String</term>
+       <listitem>
+        <para>
+         The name of GUC option.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int16</term>
+       <listitem>
+        <para>
+         1 if reporting should be enables, 0 if reporting should be
+         disabled.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+    </listitem>
+   </varlistentry>
+
    <varlistentry id="protocol-message-formats-RowDescription">
     <term>RowDescription (B)</term>
     <listitem>

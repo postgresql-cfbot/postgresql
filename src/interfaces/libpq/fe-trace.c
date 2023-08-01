@@ -522,6 +522,15 @@ pqTraceOutputZ(FILE *f, const char *message, int *cursor)
 	pqTraceOutputByte1(f, message, cursor);
 }
 
+/* ReportGUC */
+static void
+pqTraceOutputr(FILE *f, const char *message, int *cursor)
+{
+	fprintf(f, "ReportGUC\t");
+	pqTraceOutputString(f, message, cursor, false);
+	pqTraceOutputInt16(f, message, cursor);
+}
+
 /*
  * Print the given message to the trace output stream.
  */
@@ -632,6 +641,9 @@ pqTraceOutputMessage(PGconn *conn, const char *message, bool toServer)
 			break;
 		case 'Q':				/* Query */
 			pqTraceOutputQ(conn->Pfdebug, message, &logCursor);
+			break;
+		case 'r':				/* Report GUC */
+			pqTraceOutputr(conn->Pfdebug, message, &logCursor);
 			break;
 		case 'R':				/* Authentication */
 			pqTraceOutputR(conn->Pfdebug, message, &logCursor);

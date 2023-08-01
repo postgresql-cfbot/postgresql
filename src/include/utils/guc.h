@@ -370,6 +370,8 @@ extern void ResetAllOptions(void);
 extern void AtStart_GUC(void);
 extern int	NewGUCNestLevel(void);
 extern void AtEOXact_GUC(bool isCommit, int nestLevel);
+extern void SetGUCOptionFlag(const char *name, int flag);
+extern void UnsetGUCOptionFlag(const char *name, int flag);
 extern void BeginReportingGUCOptions(void);
 extern void ReportChangedGUCOptions(void);
 extern void ParseLongOption(const char *string, char **name, char **value);

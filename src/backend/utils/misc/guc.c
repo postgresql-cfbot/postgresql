@@ -2533,6 +2533,37 @@ BeginReportingGUCOptions(void)
 }
 
 /*
+ * Allow to set / unset dynamicaly flags to GUC variables
+ */
+void
+SetGUCOptionFlag(const char *name, int flag)
+{
+	struct config_generic *conf;
+
+	/* only GUC_REPORT flag is supported now */
+	Assert(flag == GUC_REPORT);
+
+	conf = find_option(name, false, true, ERROR);
+	conf->flags |= flag;
+
+	if (flag == GUC_REPORT)
+		/* force transmit value of related option to client Parameter Status */
+		ReportGUCOption(conf);
+}
+
+void
+UnsetGUCOptionFlag(const char *name, int flag)
+{
+	struct config_generic *conf;
+
+	/* only GUC_REPORT flag is supported now */
+	Assert(flag == GUC_REPORT);
+
+	conf = find_option(name, false, true, ERROR);
+	conf->flags &= ~flag;
+}
+
+/*
  * ReportChangedGUCOptions: report recently-changed GUC_REPORT variables
  *
  * This is called just before we wait for a new client query.

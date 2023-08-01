@@ -3861,6 +3861,7 @@ SyncVariables(void)
 {
 	char		vbuf[32];
 	const char *server_version;
+	int			res;
 
 	/* get stuff from connection */
 	pset.encoding = PQclientEncoding(pset.db);
@@ -3890,6 +3891,15 @@ SyncVariables(void)
 	/* send stuff to it, too */
 	PQsetErrorVerbosity(pset.db, pset.verbosity);
 	PQsetErrorContextVisibility(pset.db, pset.show_context);
+
+	/* link role GUC when it is needed for prompt */
+	if (pset.prompt_shows_role)
+		res = PQlinkParameterStatus(pset.db, "role");
+	else
+		res = PQunlinkParameterStatus(pset.db, "role");
+
+	if (res < 0)
+		pg_log_info("%s", PQerrorMessage(pset.db));
 }
 
 /*

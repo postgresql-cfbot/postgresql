@@ -1070,6 +1070,25 @@ pqSaveMessageField(PGresult *res, char code, const char *value)
 }
 
 /*
+ * Add GUC_REPORT flag to specified setting and wait for synchronization
+ * with state parameters.
+ */
+int
+PQlinkParameterStatus(PGconn *conn, const char *paramName)
+{
+	return pqSendReportGUCMessage(conn, paramName, true);
+}
+
+/*
+ * Remove GUC_REPORT flag from specified setting.
+ */
+int
+PQunlinkParameterStatus(PGconn *conn, const char *paramName)
+{
+	return pqSendReportGUCMessage(conn, paramName, false);
+}
+
+/*
  * pqSaveParameterStatus - remember parameter status sent by backend
  */
 void

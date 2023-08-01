@@ -765,11 +765,15 @@ check_exclusion_or_unique_constraint(Relation heap, Relation index,
 	/*
 	 * May have to restart scan from this point if a potential conflict is
 	 * found.
+	 *
+	 * XXX Should this do index prefetch? Probably not worth it for unique
+	 * constraints, I guess? Otherwise we should calculate prefetch_target
+	 * just like in nodeIndexscan etc.
 	 */
 retry:
 	conflict = false;
 	found_self = false;
-	index_scan = index_beginscan(heap, index, &DirtySnapshot, indnkeyatts, 0);
+	index_scan = index_beginscan(heap, index, &DirtySnapshot, indnkeyatts, 0, 0, 0);
 	index_rescan(index_scan, scankeys, indnkeyatts, NULL, 0);
 
 	while (index_getnext_slot(index_scan, ForwardScanDirection, existing_slot))

@@ -3558,6 +3558,7 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage, bool planning)
 								  !INSTR_TIME_IS_ZERO(usage->blk_write_time));
 		bool		has_temp_timing = (!INSTR_TIME_IS_ZERO(usage->temp_blk_read_time) ||
 									   !INSTR_TIME_IS_ZERO(usage->temp_blk_write_time));
+		bool		has_prefetches = (usage->blks_prefetches > 0);
 		bool		show_planning = (planning && (has_shared ||
 												  has_local || has_temp || has_timing ||
 												  has_temp_timing));
@@ -3652,6 +3653,23 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage, bool planning)
 					appendStringInfo(es->str, " write=%0.3f",
 									 INSTR_TIME_GET_MILLISEC(usage->temp_blk_write_time));
 			}
+			appendStringInfoChar(es->str, '\n');
+		}
+
+		/* As above, show only positive counter values. */
+		if (has_prefetches)
+		{
+			ExplainIndentText(es);
+			appendStringInfoString(es->str, "Prefetches:");
+
+			if (usage->blks_prefetches > 0)
+				appendStringInfo(es->str, " blocks=%lld",
+								 (long long) usage->blks_prefetches);
+
+			if (usage->blks_prefetch_rounds > 0)
+				appendStringInfo(es->str, " rounds=%lld",
+								 (long long) usage->blks_prefetch_rounds);
+
 			appendStringInfoChar(es->str, '\n');
 		}
 

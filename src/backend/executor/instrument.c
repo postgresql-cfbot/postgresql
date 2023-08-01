@@ -235,6 +235,8 @@ BufferUsageAdd(BufferUsage *dst, const BufferUsage *add)
 	dst->local_blks_written += add->local_blks_written;
 	dst->temp_blks_read += add->temp_blks_read;
 	dst->temp_blks_written += add->temp_blks_written;
+	dst->blks_prefetch_rounds += add->blks_prefetch_rounds;
+	dst->blks_prefetches += add->blks_prefetches;
 	INSTR_TIME_ADD(dst->blk_read_time, add->blk_read_time);
 	INSTR_TIME_ADD(dst->blk_write_time, add->blk_write_time);
 	INSTR_TIME_ADD(dst->temp_blk_read_time, add->temp_blk_read_time);
@@ -257,6 +259,8 @@ BufferUsageAccumDiff(BufferUsage *dst,
 	dst->local_blks_written += add->local_blks_written - sub->local_blks_written;
 	dst->temp_blks_read += add->temp_blks_read - sub->temp_blks_read;
 	dst->temp_blks_written += add->temp_blks_written - sub->temp_blks_written;
+	dst->blks_prefetches += add->blks_prefetches - sub->blks_prefetches;
+	dst->blks_prefetch_rounds += add->blks_prefetch_rounds - sub->blks_prefetch_rounds;
 	INSTR_TIME_ACCUM_DIFF(dst->blk_read_time,
 						  add->blk_read_time, sub->blk_read_time);
 	INSTR_TIME_ACCUM_DIFF(dst->blk_write_time,

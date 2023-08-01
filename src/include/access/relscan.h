@@ -107,6 +107,12 @@ typedef struct IndexFetchTableData
 } IndexFetchTableData;
 
 /*
+ * Forward declaration, defined in genam.h.
+ */
+typedef struct IndexPrefetchData IndexPrefetchData;
+typedef struct IndexPrefetchData *IndexPrefetch;
+
+/*
  * We use the same IndexScanDescData structure for both amgettuple-based
  * and amgetbitmap-based index scans.  Some fields are only relevant in
  * amgettuple-based scans.
@@ -161,6 +167,9 @@ typedef struct IndexScanDescData
 	Datum	   *xs_orderbyvals;
 	bool	   *xs_orderbynulls;
 	bool		xs_recheckorderby;
+
+	/* prefetching state (or NULL if disabled) */
+	IndexPrefetchData *xs_prefetch;
 
 	/* parallel index scan information, in shared memory */
 	struct ParallelIndexScanDescData *parallel_scan;

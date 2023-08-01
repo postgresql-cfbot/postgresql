@@ -1082,6 +1082,20 @@ DETAIL:  Only roles with privileges of the "pg_read_all_settings" role may exami
 RESET SESSION AUTHORIZATION;
 ERROR:  current transaction is aborted, commands ignored until end of transaction block
 ROLLBACK;
+BEGIN;
+SET SESSION AUTHORIZATION regress_role_haspriv;
+-- passes with role member of pg_read_all_settings
+SELECT pg_config_unitless_value('session_preload_libraries', 'val');
+ pg_config_unitless_value 
+--------------------------
+ val
+(1 row)
+
+SET SESSION AUTHORIZATION regress_role_nopriv;
+SELECT pg_config_unitless_value('session_preload_libraries', 'val');
+ERROR:  permission denied to examine "session_preload_libraries"
+DETAIL:  Only roles with privileges of the "pg_read_all_settings" role may examine this parameter.
+ROLLBACK;
 REVOKE pg_read_all_settings FROM regress_role_haspriv;
 -- clean up
 \c

@@ -659,7 +659,12 @@ include_dir 'conf.d'
          to it.
          The default value is <systemitem class="systemname">localhost</systemitem>,
          which allows only local TCP/IP <quote>loopback</quote> connections to be
-         made.  While client authentication (<xref
+         made. The server will start only if it can open the <varname>port</varname>
+         on at least one TCP/IP address.  If server is unable to open
+         <varname>port</varname> on a TCP/IP address, it emits a warning.
+       <para>
+       </para>
+         While client authentication (<xref
          linkend="client-authentication"/>) allows fine-grained control
          over who can access the server, <varname>listen_addresses</varname>
          controls which interfaces accept connection attempts, which

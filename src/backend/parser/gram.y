@@ -615,12 +615,13 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	xml_root_version opt_xml_root_standalone
 %type <node>	xmlexists_argument
 %type <ival>	document_or_content
-%type <boolean>	xml_indent_option xml_whitespace_option
+%type <boolean>	xml_whitespace_option
 %type <list>	xmltable_column_list xmltable_column_option_list
 %type <node>	xmltable_column_el
 %type <defelt>	xmltable_column_option_el
 %type <list>	xml_namespace_list
 %type <target>	xml_namespace_el
+%type <ival> 	opt_xml_serialize_format
 
 %type <node>	func_application func_expr_common_subexpr
 %type <node>	func_expr func_expr_windowless
@@ -692,7 +693,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	BACKWARD BEFORE BEGIN_P BETWEEN BIGINT BINARY BIT
 	BOOLEAN_P BOTH BREADTH BY
 
-	CACHE CALL CALLED CASCADE CASCADED CASE CAST CATALOG_P CHAIN CHAR_P
+	CACHE CALL CALLED CANONICAL CASCADE CASCADED CASE CAST CATALOG_P CHAIN CHAR_P
 	CHARACTER CHARACTERISTICS CHECK CHECKPOINT CLASS CLOSE
 	CLUSTER COALESCE COLLATE COLLATION COLUMN COLUMNS COMMENT COMMENTS COMMIT
 	COMMITTED COMPRESSION CONCURRENTLY CONFIGURATION CONFLICT
@@ -15574,14 +15575,14 @@ func_expr_common_subexpr:
 					$$ = makeXmlExpr(IS_XMLROOT, NULL, NIL,
 									 list_make3($3, $5, $6), @1);
 				}
-			| XMLSERIALIZE '(' document_or_content a_expr AS SimpleTypename xml_indent_option ')'
+			| XMLSERIALIZE '(' document_or_content a_expr AS SimpleTypename opt_xml_serialize_format ')'
 				{
 					XmlSerialize *n = makeNode(XmlSerialize);
 
 					n->xmloption = $3;
 					n->expr = $4;
 					n->typeName = $6;
-					n->indent = $7;
+					n->format = $7;
 					n->location = @1;
 					$$ = (Node *) n;
 				}
@@ -15737,9 +15738,13 @@ document_or_content: DOCUMENT_P						{ $$ = XMLOPTION_DOCUMENT; }
 			| CONTENT_P								{ $$ = XMLOPTION_CONTENT; }
 		;
 
-xml_indent_option: INDENT							{ $$ = true; }
-			| NO INDENT								{ $$ = false; }
-			| /*EMPTY*/								{ $$ = false; }
+opt_xml_serialize_format:
+			INDENT									{ $$ = XMLSERIALIZE_INDENT; }
+			| NO INDENT								{ $$ = XMLSERIALIZE_NO_FORMAT; }
+			| CANONICAL								{ $$ = XMLSERIALIZE_CANONICAL; }
+			| CANONICAL WITH NO COMMENTS			{ $$ = XMLSERIALIZE_CANONICAL; }
+			| CANONICAL WITH COMMENTS				{ $$ = XMLSERIALIZE_CANONICAL_WITH_COMMENTS; }
+			| /*EMPTY*/								{ $$ = XMLSERIALIZE_NO_FORMAT; }
 		;
 
 xml_whitespace_option: PRESERVE WHITESPACE_P		{ $$ = true; }
@@ -17024,6 +17029,7 @@ unreserved_keyword:
 			| CACHE
 			| CALL
 			| CALLED
+			| CANONICAL
 			| CASCADE
 			| CASCADED
 			| CATALOG_P
@@ -17558,6 +17564,7 @@ bare_label_keyword:
 			| CACHE
 			| CALL
 			| CALLED
+			| CANONICAL
 			| CASCADE
 			| CASCADED
 			| CASE

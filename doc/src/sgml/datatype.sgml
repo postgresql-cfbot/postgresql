@@ -4464,7 +4464,7 @@ xml '<foo>bar</foo>'
     <type>xml</type>, uses the function
     <function>xmlserialize</function>:<indexterm><primary>xmlserialize</primary></indexterm>
 <synopsis>
-XMLSERIALIZE ( { DOCUMENT | CONTENT } <replaceable>value</replaceable> AS <replaceable>type</replaceable> [ [ NO ] INDENT ] )
+XMLSERIALIZE ( { DOCUMENT | CONTENT } <replaceable>value</replaceable> AS <replaceable>type</replaceable> [ { [ NO ] INDENT ] | CANONICAL [ WITH [NO] COMMENTS ]})
 </synopsis>
     <replaceable>type</replaceable> can be
     <type>character</type>, <type>character varying</type>, or
@@ -4481,6 +4481,45 @@ XMLSERIALIZE ( { DOCUMENT | CONTENT } <replaceable>value</replaceable> AS <repla
     type likewise produces the original string.
    </para>
 
+   <para>
+    The option <type>CANONICAL</type> converts a given
+    XML document to its <ulink url="https://www.w3.org/TR/xml-c14n11/#Terminology">canonical form</ulink>
+    based on the <ulink url="https://www.w3.org/TR/xml-c14n11/">W3C Canonical XML 1.1 Specification</ulink>.
+    It is basically designed to provide applications the ability to compare xml documents or test if they
+    have been changed. The optional parameter <type>WITH [NO] COMMENTS</type> removes or keeps XML comments
+    from the given document.
+    </para>
+
+     <para>
+     Example:
+
+<screen><![CDATA[
+SELECT
+  xmlserialize(DOCUMENT
+    '<foo>
+       <!-- a comment -->
+       <bar c="3" b="2" a="1">42</bar>
+       <empty/>
+     </foo>'::xml AS text CANONICAL);
+                       xmlserialize
+-----------------------------------------------------------
+ <foo><bar a="1" b="2" c="3">42</bar><empty></empty></foo>
+(1 row)
+
+SELECT
+  xmlserialize(DOCUMENT
+    '<foo>
+       <!-- a comment -->
+       <bar c="3" b="2" a="1">42</bar>
+       <empty/>
+     </foo>'::xml AS text CANONICAL WITH COMMENTS);
+                                xmlserialize
+-----------------------------------------------------------------------------
+ <foo><!-- a comment --><bar a="1" b="2" c="3">42</bar><empty></empty></foo>
+(1 row)
+
+]]></screen>
+   </para>
    <para>
     When a character string value is cast to or from type
     <type>xml</type> without going through <type>XMLPARSE</type> or

@@ -3100,7 +3100,7 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				conv = (Form_pg_conversion) GETSTRUCT(conTup);
 
 				/* Qualify the name if not visible in search path */
-				if (ConversionIsVisible(object->objectId))
+				if (ObjectIsVisible(ConversionRelationId, object->objectId))
 					nspname = NULL;
 				else
 					nspname = get_namespace_name(conv->connamespace);
@@ -3471,7 +3471,7 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				stxForm = (Form_pg_statistic_ext) GETSTRUCT(stxTup);
 
 				/* Qualify the name if not visible in search path */
-				if (StatisticsObjIsVisible(object->objectId))
+				if (ObjectIsVisible(StatisticExtRelationId, object->objectId))
 					nspname = NULL;
 				else
 					nspname = get_namespace_name(stxForm->stxnamespace);
@@ -3502,7 +3502,7 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				prsForm = (Form_pg_ts_parser) GETSTRUCT(tup);
 
 				/* Qualify the name if not visible in search path */
-				if (TSParserIsVisible(object->objectId))
+				if (ObjectIsVisible(TSParserRelationId, object->objectId))
 					nspname = NULL;
 				else
 					nspname = get_namespace_name(prsForm->prsnamespace);
@@ -3533,7 +3533,7 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				dictForm = (Form_pg_ts_dict) GETSTRUCT(tup);
 
 				/* Qualify the name if not visible in search path */
-				if (TSDictionaryIsVisible(object->objectId))
+				if (ObjectIsVisible(TSDictionaryRelationId, object->objectId))
 					nspname = NULL;
 				else
 					nspname = get_namespace_name(dictForm->dictnamespace);
@@ -3564,7 +3564,7 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				tmplForm = (Form_pg_ts_template) GETSTRUCT(tup);
 
 				/* Qualify the name if not visible in search path */
-				if (TSTemplateIsVisible(object->objectId))
+				if (ObjectIsVisible(TSTemplateRelationId, object->objectId))
 					nspname = NULL;
 				else
 					nspname = get_namespace_name(tmplForm->tmplnamespace);
@@ -3595,7 +3595,7 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				cfgForm = (Form_pg_ts_config) GETSTRUCT(tup);
 
 				/* Qualify the name if not visible in search path */
-				if (TSConfigIsVisible(object->objectId))
+				if (ObjectIsVisible(TSConfigRelationId, object->objectId))
 					nspname = NULL;
 				else
 					nspname = get_namespace_name(cfgForm->cfgnamespace);
@@ -4102,7 +4102,7 @@ getRelationDescription(StringInfo buffer, Oid relid, bool missing_ok)
 	relForm = (Form_pg_class) GETSTRUCT(relTup);
 
 	/* Qualify the name if not visible in search path */
-	if (RelationIsVisible(relid))
+	if (ObjectIsVisible(RelationRelationId, relid))
 		nspname = NULL;
 	else
 		nspname = get_namespace_name(relForm->relnamespace);

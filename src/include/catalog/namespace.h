@@ -90,11 +90,9 @@ extern Oid	RangeVarGetAndCheckCreationNamespace(RangeVar *relation,
 												 Oid *existing_relation_id);
 extern void RangeVarAdjustRelationPersistence(RangeVar *newRelation, Oid nspid);
 extern Oid	RelnameGetRelid(const char *relname);
-extern bool RelationIsVisible(Oid relid);
 
 extern Oid	TypenameGetTypid(const char *typname);
 extern Oid	TypenameGetTypidExtended(const char *typname, bool temp_ok);
-extern bool TypeIsVisible(Oid typid);
 
 extern FuncCandidateList FuncnameGetCandidates(List *names,
 											   int nargs, List *argnames,
@@ -118,23 +116,17 @@ extern bool OpfamilyIsVisible(Oid opfid);
 extern Oid	CollationGetCollid(const char *collname);
 extern bool CollationIsVisible(Oid collid);
 
-extern Oid	ConversionGetConid(const char *conname);
-extern bool ConversionIsVisible(Oid conid);
-
 extern Oid	get_statistics_object_oid(List *names, bool missing_ok);
-extern bool StatisticsObjIsVisible(Oid relid);
 
 extern Oid	get_ts_parser_oid(List *names, bool missing_ok);
-extern bool TSParserIsVisible(Oid prsId);
 
 extern Oid	get_ts_dict_oid(List *names, bool missing_ok);
-extern bool TSDictionaryIsVisible(Oid dictId);
 
 extern Oid	get_ts_template_oid(List *names, bool missing_ok);
-extern bool TSTemplateIsVisible(Oid tmplId);
 
 extern Oid	get_ts_config_oid(List *names, bool missing_ok);
-extern bool TSConfigIsVisible(Oid cfgid);
+
+extern bool ObjectIsVisible(Oid classid, Oid objectid);
 
 extern void DeconstructQualifiedName(List *names,
 									 char **nspname_p,

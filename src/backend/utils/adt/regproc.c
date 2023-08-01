@@ -973,7 +973,7 @@ regclassout(PG_FUNCTION_ARGS)
 			/*
 			 * Would this class be found by regclassin? If not, qualify it.
 			 */
-			if (RelationIsVisible(classid))
+			if (ObjectIsVisible(RelationRelationId, classid))
 				nspname = NULL;
 			else
 				nspname = get_namespace_name(classform->relnamespace);
@@ -1359,7 +1359,7 @@ regconfigout(PG_FUNCTION_ARGS)
 		/*
 		 * Would this config be found by regconfigin? If not, qualify it.
 		 */
-		if (TSConfigIsVisible(cfgid))
+		if (ObjectIsVisible(TSConfigRelationId, cfgid))
 			nspname = NULL;
 		else
 			nspname = get_namespace_name(cfgform->cfgnamespace);
@@ -1470,7 +1470,7 @@ regdictionaryout(PG_FUNCTION_ARGS)
 		 * Would this dictionary be found by regdictionaryin? If not, qualify
 		 * it.
 		 */
-		if (TSDictionaryIsVisible(dictid))
+		if (ObjectIsVisible(TSDictionaryRelationId, dictid))
 			nspname = NULL;
 		else
 			nspname = get_namespace_name(dictform->dictnamespace);

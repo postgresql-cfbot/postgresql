@@ -4978,3 +4978,31 @@ satisfies_hash_partition(PG_FUNCTION_ARGS)
 
 	PG_RETURN_BOOL(rowHash % modulus == remainder);
 }
+
+/*
+ * Obtain the deparsed partition bound expression for the given table.
+ */
+char *
+relation_get_part_bound(Oid relid)
+{
+	Datum		deparsed;
+	Datum		bound;
+	bool		isnull;
+	HeapTuple	tuple;
+
+	tuple = SearchSysCache1(RELOID, relid);
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for relation with OID %u", relid);
+
+	bound = SysCacheGetAttr(RELOID, tuple,
+							Anum_pg_class_relpartbound,
+							&isnull);
+
+	deparsed = DirectFunctionCall2(pg_get_expr,
+								   CStringGetTextDatum(TextDatumGetCString(bound)),
+								   relid);
+
+	ReleaseSysCache(tuple);
+
+	return TextDatumGetCString(deparsed);
+}

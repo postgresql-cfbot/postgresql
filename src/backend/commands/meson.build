@@ -17,6 +17,8 @@ backend_sources += files(
   'copyto.c',
   'createas.c',
   'dbcommands.c',
+  'ddldeparse.c',
+  'ddljson.c',
   'define.c',
   'discard.c',
   'dropcmds.c',

@@ -12043,4 +12043,11 @@
   proname => 'any_value_transfn', prorettype => 'anyelement',
   proargtypes => 'anyelement anyelement', prosrc => 'any_value_transfn' },
 
+{ oid => '4642', descr => 'deparse the DDL command into a JSON format string',
+  proname => 'ddl_deparse_to_json', prorettype => 'text',
+  proargtypes => 'pg_ddl_command', prosrc => 'ddl_deparse_to_json' },
+{ oid => '4643', descr => 'expand JSON format DDL to a plain text DDL command',
+  proname => 'ddl_deparse_expand_command', prorettype => 'text',
+  proargtypes => 'text', prosrc => 'ddl_deparse_expand_command' },
+
 ]

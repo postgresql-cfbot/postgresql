@@ -655,3 +655,39 @@ PartitionHasPendingDetach(Oid partoid)
 	elog(ERROR, "relation %u is not a partition", partoid);
 	return false;				/* keep compiler quiet */
 }
+
+/*
+ * Given a table OID, return a schema-qualified table list representing
+ * the parent tables.
+ */
+List *
+relation_get_inh_parents(Oid objectId)
+{
+	List	   *parents = NIL;
+	Relation	inhRel;
+	SysScanDesc scan;
+	ScanKeyData key;
+	HeapTuple	tuple;
+
+	inhRel = table_open(InheritsRelationId, RowExclusiveLock);
+
+	ScanKeyInit(&key,
+				Anum_pg_inherits_inhrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(objectId));
+
+	scan = systable_beginscan(inhRel, InheritsRelidSeqnoIndexId,
+							  true, NULL, 1, &key);
+
+	while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+	{
+		Form_pg_inherits formInh = (Form_pg_inherits) GETSTRUCT(tuple);
+
+		parents = lappend_oid(parents, formInh->inhparent);
+	}
+
+	systable_endscan(scan);
+	table_close(inhRel, RowExclusiveLock);
+
+	return parents;
+}

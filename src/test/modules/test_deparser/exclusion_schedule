@@ -1,0 +1,7 @@
+
+# For tests that don't include any DDL statement or can
+# give unexpected output because of the extra event trigger functions and table
+# created in this test, we skipping running these tests.
+opr_sanity
+misc_sanity
+event_trigger

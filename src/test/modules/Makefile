@@ -17,6 +17,7 @@ SUBDIRS = \
 		  test_bloomfilter \
 		  test_copy_callbacks \
 		  test_custom_rmgrs \
+		  test_deparser \
 		  test_ddl_deparse \
 		  test_extensions \
 		  test_ginpostinglist \

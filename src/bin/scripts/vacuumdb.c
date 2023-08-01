@@ -72,6 +72,7 @@ static void vacuum_one_database(ConnParams *cparams,
 static void vacuum_all_databases(ConnParams *cparams,
 								 vacuumingOptions *vacopts,
 								 bool analyze_in_stages,
+								 SimpleStringList *objects,
 								 int concurrentCons,
 								 const char *progname, bool echo, bool quiet);
 
@@ -376,6 +377,7 @@ main(int argc, char *argv[])
 
 		vacuum_all_databases(&cparams, &vacopts,
 							 analyze_in_stages,
+							 &objects,
 							 concurrentCons,
 							 progname, echo, quiet);
 	}
@@ -426,18 +428,6 @@ check_objfilter(void)
 	if ((objfilter & OBJFILTER_ALL_DBS) &&
 		(objfilter & OBJFILTER_DATABASE))
 		pg_fatal("cannot vacuum all databases and a specific one at the same time");
-
-	if ((objfilter & OBJFILTER_ALL_DBS) &&
-		(objfilter & OBJFILTER_TABLE))
-		pg_fatal("cannot vacuum specific table(s) in all databases");
-
-	if ((objfilter & OBJFILTER_ALL_DBS) &&
-		(objfilter & OBJFILTER_SCHEMA))
-		pg_fatal("cannot vacuum specific schema(s) in all databases");
-
-	if ((objfilter & OBJFILTER_ALL_DBS) &&
-		(objfilter & OBJFILTER_SCHEMA_EXCLUDE))
-		pg_fatal("cannot exclude specific schema(s) in all databases");
 
 	if ((objfilter & OBJFILTER_TABLE) &&
 		(objfilter & OBJFILTER_SCHEMA))
@@ -873,6 +863,7 @@ static void
 vacuum_all_databases(ConnParams *cparams,
 					 vacuumingOptions *vacopts,
 					 bool analyze_in_stages,
+					 SimpleStringList *objects,
 					 int concurrentCons,
 					 const char *progname, bool echo, bool quiet)
 {
@@ -905,7 +896,7 @@ vacuum_all_databases(ConnParams *cparams,
 
 				vacuum_one_database(cparams, vacopts,
 									stage,
-									NULL,
+									objects,
 									concurrentCons,
 									progname, echo, quiet);
 			}
@@ -919,7 +910,7 @@ vacuum_all_databases(ConnParams *cparams,
 
 			vacuum_one_database(cparams, vacopts,
 								ANALYZE_NO_STAGE,
-								NULL,
+								objects,
 								concurrentCons,
 								progname, echo, quiet);
 		}

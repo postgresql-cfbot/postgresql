@@ -214,7 +214,7 @@ InitDeadLockChecking(void)
  * and (b) we are typically invoked inside a signal handler.
  */
 DeadLockState
-DeadLockCheck(PGPROC *proc)
+DeadLockCheck(PGPROC *proc, LatchGroup *wakeups)
 {
 	/* Initialize to "no constraints" */
 	nCurConstraints = 0;
@@ -266,7 +266,7 @@ DeadLockCheck(PGPROC *proc)
 #endif
 
 		/* See if any waiters for the lock can be woken up now */
-		ProcLockWakeup(GetLocksMethodTable(lock), lock);
+		ProcLockWakeup(GetLocksMethodTable(lock), lock, wakeups);
 	}
 
 	/* Return code tells caller if we had to escape a deadlock or not */

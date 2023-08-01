@@ -1411,6 +1411,7 @@ LabelProvider
 LagTracker
 LargeObjectDesc
 Latch
+LatchGroup
 LauncherLastStartTimesEntry
 LerpFunc
 LexDescr

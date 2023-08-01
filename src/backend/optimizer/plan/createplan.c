@@ -280,7 +280,8 @@ static Material *make_material(Plan *lefttree);
 static Memoize *make_memoize(Plan *lefttree, Oid *hashoperators,
 							 Oid *collations, List *param_exprs,
 							 bool singlerow, bool binary_mode,
-							 uint32 est_entries, Bitmapset *keyparamids);
+							 uint32 est_entries, Bitmapset *keyparamids,
+							 double hit_ratio);
 static WindowAgg *make_windowagg(List *tlist, Index winref,
 								 int partNumCols, AttrNumber *partColIdx, Oid *partOperators, Oid *partCollations,
 								 int ordNumCols, AttrNumber *ordColIdx, Oid *ordOperators, Oid *ordCollations,
@@ -1681,7 +1682,8 @@ create_memoize_plan(PlannerInfo *root, MemoizePath *best_path, int flags)
 
 	plan = make_memoize(subplan, operators, collations, param_exprs,
 						best_path->singlerow, best_path->binary_mode,
-						best_path->est_entries, keyparamids);
+						best_path->est_entries, keyparamids,
+						best_path->hit_ratio);
 
 	copy_generic_path_info(&plan->plan, (Path *) best_path);
 
@@ -6520,7 +6522,8 @@ materialize_finished_plan(Plan *subplan)
 static Memoize *
 make_memoize(Plan *lefttree, Oid *hashoperators, Oid *collations,
 			 List *param_exprs, bool singlerow, bool binary_mode,
-			 uint32 est_entries, Bitmapset *keyparamids)
+			 uint32 est_entries, Bitmapset *keyparamids,
+			 double hit_ratio)
 {
 	Memoize    *node = makeNode(Memoize);
 	Plan	   *plan = &node->plan;
@@ -6538,6 +6541,7 @@ make_memoize(Plan *lefttree, Oid *hashoperators, Oid *collations,
 	node->binary_mode = binary_mode;
 	node->est_entries = est_entries;
 	node->keyparamids = keyparamids;
+	node->hit_ratio = hit_ratio;
 
 	return node;
 }

@@ -2603,6 +2603,9 @@ cost_memoize_rescan(PlannerInfo *root, MemoizePath *mpath,
 	 */
 	startup_cost += cpu_tuple_cost;
 
+	/* Remember cache hit ratio for a potential EXPLAIN later */
+	mpath->hit_ratio = hit_ratio;
+
 	*rescan_startup_cost = startup_cost;
 	*rescan_total_cost = total_cost;
 }

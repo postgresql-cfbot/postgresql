@@ -1956,6 +1956,7 @@ typedef struct MemoizePath
 	uint32		est_entries;	/* The maximum number of entries that the
 								 * planner expects will fit in the cache, or 0
 								 * if unknown */
+	double		hit_ratio;		/* Estimated cache hit ratio, kept for EXPLAIN */
 } MemoizePath;
 
 /*

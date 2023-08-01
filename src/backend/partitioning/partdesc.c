@@ -162,7 +162,8 @@ RelationBuildPartitionDesc(Relation rel, bool omit_detached)
 	inhoids = find_inheritance_children_extended(RelationGetRelid(rel),
 												 omit_detached, NoLock,
 												 &detached_exist,
-												 &detached_xmin);
+												 &detached_xmin,
+												 false);
 
 	nparts = list_length(inhoids);
 

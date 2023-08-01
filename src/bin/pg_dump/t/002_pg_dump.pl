@@ -4584,6 +4584,30 @@ my %tests = (
 			no_table_access_method => 1,
 			only_dump_measurement => 1,
 		},
+	},
+
+	'CREATE TABLE regress_pg_dump_publish_via_parent' => {
+		create_order => 3,
+		create_sql => '
+			CREATE TABLE dump_test.regress_pg_dump_publish_via_parent (col1 int);
+			CREATE TABLE dump_test.regress_pg_dump_publish_via_parent_1() INHERITS (dump_test.regress_pg_dump_publish_via_parent) WITH (publish_via_parent);',
+		regexp => qr/^
+			\QCREATE TABLE dump_test.regress_pg_dump_publish_via_parent (\E
+			\n\s+\Qcol1 integer\E
+			\n\);
+			(\n.*)+?
+			\n\QCREATE TABLE dump_test.regress_pg_dump_publish_via_parent_1 (\E
+			\n\)
+			\n\QINHERITS (dump_test.regress_pg_dump_publish_via_parent)\E
+			\n\QWITH (publish_via_parent='true')\E;/xm,
+		like => {
+			%full_runs, %dump_test_schema_runs, section_pre_data => 1,
+		},
+		unlike => {
+			binary_upgrade => 1,
+			exclude_dump_test_schema => 1,
+			only_dump_measurement => 1,
+		},
 	});
 
 #########################################

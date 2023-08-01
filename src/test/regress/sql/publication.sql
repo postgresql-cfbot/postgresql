@@ -6,6 +6,30 @@ CREATE ROLE regress_publication_user2;
 CREATE ROLE regress_publication_user_dummy LOGIN NOSUPERUSER;
 SET SESSION AUTHORIZATION 'regress_publication_user';
 
+CREATE FUNCTION published_sync (VARIADIC pubnames text[])
+                RETURNS TABLE (published regclass, synced regclass) AS $$
+  -- Show each published table alongside the tables to be copied into it during
+  -- initial sync.
+  SELECT t.published, synced
+    FROM (SELECT DISTINCT relid::regclass AS published
+            FROM pg_get_publication_tables(VARIADIC pubnames)) t
+    JOIN LATERAL pg_get_publication_rels_to_sync(t.published, VARIADIC pubnames) synced
+      ON true
+    ORDER BY 1, 2;
+$$ LANGUAGE sql;
+
+CREATE FUNCTION published_stream (VARIADIC pubnames text[])
+                RETURNS TABLE (pubname text, published regclass, synced regclass) AS $$
+  -- For each publication, show each published root alongside the tables which
+  -- are published via its OID.
+  SELECT p.pubname, rpi.pubasrelid::regclass, pr.prrelid::regclass
+    FROM pg_publication_rel pr
+    JOIN pg_publication p ON (p.oid = pr.prpubid),
+         pg_get_relation_publishing_info(pr.prrelid, VARIADIC pubnames) rpi
+   WHERE p.pubname = ANY (pubnames)
+   ORDER BY p.oid, 2, 3;
+$$ LANGUAGE sql;
+
 -- suppress warning that depends on wal_level
 SET client_min_messages = 'ERROR';
 CREATE PUBLICATION testpub_default;
@@ -1064,6 +1088,8 @@ SELECT * FROM pg_publication_tables;
 -- Table publication that includes both the parent table and the child table
 ALTER PUBLICATION pub ADD TABLE sch1.tbl1;
 SELECT * FROM pg_publication_tables;
+SELECT * FROM published_sync('pub');
+SELECT * FROM published_stream('pub');
 
 DROP PUBLICATION pub;
 -- Schema publication that does not include the schema that has the parent table
@@ -1078,6 +1104,8 @@ SELECT * FROM pg_publication_tables;
 -- Table publication that includes both the parent table and the child table
 ALTER PUBLICATION pub ADD TABLE sch1.tbl1;
 SELECT * FROM pg_publication_tables;
+SELECT * FROM published_sync('pub');
+SELECT * FROM published_stream('pub');
 
 DROP PUBLICATION pub;
 DROP TABLE sch2.tbl1_part1;
@@ -1091,11 +1119,138 @@ ALTER TABLE sch1.tbl1 ATTACH PARTITION sch1.tbl1_part3 FOR VALUES FROM (20) to (
 CREATE PUBLICATION pub FOR TABLES IN SCHEMA sch1 WITH (PUBLISH_VIA_PARTITION_ROOT=1);
 SELECT * FROM pg_publication_tables;
 
+-- Sanity check cases for publish_via_parent.
+CREATE TABLE sch1.iroot (a int);
+CREATE TABLE sch1.ipart1 (a int);
+CREATE TABLE sch1.ipart2 () INHERITS (sch1.iroot);
+
+-- should do nothing at all
+ALTER TABLE sch1.iroot SET (publish_via_parent = false);
+ALTER TABLE sch1.iroot RESET (publish_via_parent);
+
+-- marking roots between unrelated tables is not allowed
+ALTER TABLE sch1.ipart1 SET (publish_via_parent);
+CREATE TABLE fail (a int) WITH (publish_via_parent);
+
+-- establishing an inheritance relationship fixes the problem
+ALTER TABLE sch1.ipart1 INHERIT sch1.iroot,
+						SET (publish_via_parent);
+
+-- but multiple inheritance is not allowed
+ALTER TABLE sch1.ipart2 INHERIT sch1.ipart1,
+						SET (publish_via_parent);
+
+-- once publish_via_parent is set, inheritance cannot be changed
+ALTER TABLE sch1.ipart2 SET (publish_via_parent);
+ALTER TABLE sch1.ipart2 NO INHERIT sch1.iroot;
+ALTER TABLE sch1.ipart2 INHERIT sch1.ipart1;
+
+-- table ownership must match, like ATTACH PARTITION
+CREATE ROLE regress_test_me;
+CREATE ROLE regress_test_not_me;
+CREATE TABLE root (a int);
+CREATE TABLE part () INHERITS (root);
+
+ALTER TABLE root OWNER TO regress_test_me;
+ALTER TABLE part OWNER TO regress_test_not_me;
+SET SESSION AUTHORIZATION regress_test_me;
+ALTER TABLE part SET (publish_via_parent); -- should fail
+RESET SESSION AUTHORIZATION;
+
+ALTER TABLE root OWNER TO regress_test_not_me;
+ALTER TABLE part OWNER TO regress_test_me;
+SET SESSION AUTHORIZATION regress_test_me;
+ALTER TABLE part SET (publish_via_parent); -- should also fail
+CREATE TABLE fail () INHERITS (root) WITH (publish_via_parent);
+RESET SESSION AUTHORIZATION;
+
+DROP TABLE root, part;
+DROP ROLE regress_test_not_me;
+DROP ROLE regress_test_me;
+
+-- Mixed publication settings for publish_via_partition_root, at different
+-- levels of the inheritance tree, to pin correct behavior in the worst cases.
+CREATE TABLE sch1.ipart1_a () INHERITS (sch1.ipart1) WITH (publish_via_parent);
+CREATE TABLE sch1.ipart1_a1 () INHERITS (sch1.ipart1_a);
+ALTER TABLE sch1.ipart1_a1 SET (publish_via_parent);
+
+CREATE PUBLICATION ipub_root FOR TABLE sch1.iroot;
+CREATE PUBLICATION ipub_part1 FOR TABLE ONLY sch1.ipart1, ONLY sch1.ipart1_a1
+       WITH (publish_via_partition_root);
+CREATE PUBLICATION ipub_other FOR TABLE ONLY sch1.iroot, ONLY sch1.ipart1_a,
+                                        ONLY sch1.ipart2
+       WITH (publish_via_partition_root);
+
+-- At this point, the published trees look like this:
+--
+-- ipub_root             ipub_part1 (pubviaroot)    ipub_other (pubviaroot)
+-- ------------------    -----------------------    -----------------------
+--  iroot                                            iroot
+--  +- ipart1                ipart1                  |
+--  | +- ipart1_a            |                       +--- ipart1_a
+--  |   +- ipart1_a1         +--- ipart1_a1          |
+--  +- ipart2                                        +- ipart2
+
+-- What a subscription to only ipub_root should see
+SELECT relid::regclass FROM pg_get_publication_tables('ipub_root');
+SELECT * FROM published_sync('ipub_root');
+SELECT * FROM published_stream('ipub_root');
+
+-- What a subscription to only ipub_part1 should see
+SELECT relid::regclass FROM pg_get_publication_tables('ipub_part1');
+SELECT * FROM published_sync('ipub_part1');
+SELECT * FROM published_stream('ipub_part1');
+
+-- What a subscription to both ipub_root and ipub_part1 should see
+SELECT pubname, relid::regclass
+  FROM pg_get_publication_tables('ipub_root', 'ipub_part1') t
+  JOIN pg_publication p ON (p.oid = t.pubid);
+SELECT * FROM published_sync('ipub_root', 'ipub_part1');
+SELECT * FROM published_stream('ipub_root', 'ipub_part1');
+
+-- What a subscription to both ipub_part1 and ipub_other should see
+SELECT pubname, relid::regclass
+  FROM pg_get_publication_tables('ipub_part1', 'ipub_other') t
+  JOIN pg_publication p ON (p.oid = t.pubid);
+SELECT * FROM published_sync('ipub_part1', 'ipub_other');
+SELECT * FROM published_stream('ipub_part1', 'ipub_other');
+
+-- What a subscription to all three should see
+SELECT pubname, relid::regclass
+  FROM pg_get_publication_tables('ipub_root', 'ipub_part1', 'ipub_other') t
+  JOIN pg_publication p ON (p.oid = t.pubid);
+SELECT * FROM published_sync('ipub_root', 'ipub_part1', 'ipub_other');
+SELECT * FROM published_stream('ipub_root', 'ipub_part1', 'ipub_other');
+
+-- "Detaching" partitions should change the subscriptions
+ALTER TABLE sch1.ipart2 SET (publish_via_parent = false);
+SELECT pubname, relid::regclass
+  FROM pg_get_publication_tables('ipub_root', 'ipub_part1', 'ipub_other') t
+  JOIN pg_publication p ON (p.oid = t.pubid);
+SELECT * FROM published_sync('ipub_root', 'ipub_part1', 'ipub_other');
+SELECT * FROM published_stream('ipub_root', 'ipub_part1', 'ipub_other');
+
+ALTER TABLE sch1.ipart1_a1 RESET (publish_via_parent);
+SELECT relid::regclass FROM pg_get_publication_tables('ipub_part1');
+SELECT * FROM published_sync('ipub_part1');
+SELECT * FROM published_stream('ipub_part1');
+
+DROP PUBLICATION ipub_other;
+DROP PUBLICATION ipub_part1;
+DROP PUBLICATION ipub_root;
+
 RESET client_min_messages;
 DROP PUBLICATION pub;
 DROP TABLE sch1.tbl1;
+DROP TABLE sch1.ipart1_a1;
+DROP TABLE sch1.ipart1_a;
+DROP TABLE sch1.ipart1;
+DROP TABLE sch1.ipart2;
+DROP TABLE sch1.iroot;
 DROP SCHEMA sch1 cascade;
 DROP SCHEMA sch2 cascade;
+DROP FUNCTION published_stream;
+DROP FUNCTION published_sync;
 
 RESET SESSION AUTHORIZATION;
 DROP ROLE regress_publication_user, regress_publication_user2;

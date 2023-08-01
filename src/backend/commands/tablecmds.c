@@ -356,7 +356,8 @@ static bool MergeCheckConstraint(List *constraints, char *name, Node *expr);
 static void MergeAttributesIntoExisting(Relation child_rel, Relation parent_rel);
 static void MergeConstraintsIntoExisting(Relation child_rel, Relation parent_rel);
 static void StoreCatalogInheritance(Oid relationId, List *supers,
-									bool child_is_partition);
+									bool child_is_partition,
+									bool publish_via_parent);
 static void StoreCatalogInheritance1(Oid relationId, Oid parentOid,
 									 int32 seqNumber, Relation inhRelation,
 									 bool child_is_partition);
@@ -578,6 +579,7 @@ static void ATPrepSetTableSpace(AlteredTableInfo *tab, Relation rel,
 								const char *tablespacename, LOCKMODE lockmode);
 static void ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode);
 static void ATExecSetTableSpaceNoStorage(Relation rel, Oid newTableSpace);
+static void change_publish_via_parent(Relation rel, bool set);
 static void ATExecSetRelOptions(Relation rel, List *defList,
 								AlterTableType operation,
 								LOCKMODE lockmode);
@@ -1116,7 +1118,8 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	}
 
 	/* Store inheritance information for new rel. */
-	StoreCatalogInheritance(relationId, inheritOids, stmt->partbound != NULL);
+	StoreCatalogInheritance(relationId, inheritOids, stmt->partbound != NULL,
+							RelationIsPublishedViaParent(rel));
 
 	/*
 	 * Process the partitioning specification (if any) and store the partition
@@ -3218,7 +3221,7 @@ MergeCheckConstraint(List *constraints, char *name, Node *expr)
  */
 static void
 StoreCatalogInheritance(Oid relationId, List *supers,
-						bool child_is_partition)
+						bool child_is_partition, bool publish_via_parent)
 {
 	Relation	relation;
 	int32		seqNumber;
@@ -3228,6 +3231,22 @@ StoreCatalogInheritance(Oid relationId, List *supers,
 	 * sanity checks
 	 */
 	Assert(OidIsValid(relationId));
+
+	/*
+	 * publish_via_parent requires exactly one parent. Try to keep this
+	 * messaging consistent with ALTER TABLE/change_publish_via_parent().
+	 *
+	 * Earlier, in MergeAttributes, we already checked that we had ownership of
+	 * the parent table, so we don't need to check that again the way that
+	 * change_publish_via_parent() does.
+	 */
+	if (publish_via_parent && list_length(supers) != 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg((list_length(supers) == 0)
+						? "table \"%s\" does not inherit from any tables"
+						: "table \"%s\" inherits from multiple tables",
+						get_rel_name(relationId))));
 
 	if (supers == NIL)
 		return;
@@ -3243,7 +3262,12 @@ StoreCatalogInheritance(Oid relationId, List *supers,
 	 */
 	relation = table_open(InheritsRelationId, RowExclusiveLock);
 
-	seqNumber = 1;
+	/*
+	 * Normally inhseqno starts at one, but for publish_via_parent, it's given a
+	 * sentinel value of zero. (In that case, we'll only go through this loop
+	 * once, as the list_length() check above enforces.)
+	 */
+	seqNumber = publish_via_parent ? 0 : 1;
 	foreach(entry, supers)
 	{
 		Oid			parentOid = lfirst_oid(entry);
@@ -14276,6 +14300,88 @@ ATPrepSetTableSpace(AlteredTableInfo *tab, Relation rel, const char *tablespacen
 	tab->newTableSpace = tablespaceId;
 }
 
+static void
+change_publish_via_parent(Relation rel, bool set)
+{
+	Relation	inhRel;
+	ScanKeyData key;
+	SysScanDesc scan;
+	Oid			parentOid;
+	Relation	parentRel;
+	HeapTuple	tuple, copyTuple;
+	Form_pg_inherits form;
+
+	/* Open pg_inherits with RowExclusiveLock so that we can update it. */
+	inhRel = table_open(InheritsRelationId, RowExclusiveLock);
+
+	/*
+	 * We have to make sure that an inheritance relationship already exists, and
+	 * that there is only one candidate parent for this table.
+	 *
+	 * TODO: do we have to lock the tables themselves to avoid races?
+	 */
+	ScanKeyInit(&key,
+				Anum_pg_inherits_inhrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(RelationGetRelid(rel)));
+
+	scan = systable_beginscan(inhRel, InheritsRelidSeqnoIndexId, true,
+							  NULL, 1, &key);
+	tuple = systable_getnext(scan);
+
+	if (!HeapTupleIsValid(tuple))
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("table \"%s\" does not inherit from any tables",
+						RelationGetRelationName(rel))));
+
+	form = (Form_pg_inherits) GETSTRUCT(tuple);
+	parentOid = form->inhparent;
+	copyTuple = heap_copytuple(tuple);
+
+	if (HeapTupleIsValid(systable_getnext(scan)))
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("table \"%s\" inherits from multiple tables",
+						RelationGetRelationName(rel))));
+
+	systable_endscan(scan);
+
+	if (set)
+	{
+		/*
+		 * Open our parent table and check permissions. Like ATTACH PARTITION,
+		 * we require ownership of the parent table in addition to the child
+		 * (which has already been checked in ATPrepCmd).
+		 *
+		 * TODO: what lock strength is needed here? Is nesting it inside the
+		 * inhRel lock a risk?
+		 */
+		parentRel = table_open(parentOid, AccessExclusiveLock);
+		ATSimplePermissions(AT_SetRelOptions, parentRel, ATT_TABLE);
+		table_close(parentRel, NoLock); /* TODO: do we need to hang onto the lock? */
+	}
+	else
+	{
+		/*
+		 * Ownership of the parent isn't needed for unsetting the flag, just
+		 * like we wouldn't check ownership during NO INHERIT.
+		 */
+	}
+
+	/*
+	 * Mark the inheritance as a logical root by setting inhseqno to zero.
+	 * Unmark it by setting inhseqno to one (since there's only one parent).
+	 */
+	form = (Form_pg_inherits) GETSTRUCT(copyTuple);
+	form->inhseqno = set ? 0 : 1;
+
+	CatalogTupleUpdate(inhRel, &copyTuple->t_self, copyTuple);
+
+	heap_freetuple(copyTuple);
+	table_close(inhRel, RowExclusiveLock);
+}
+
 /*
  * Set, reset, or replace reloptions.
  */
@@ -14384,6 +14490,39 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("WITH CHECK OPTION is supported only on automatically updatable views"),
 						 errhint("%s", _(view_updatable_error))));
+		}
+	}
+
+	/* Extra work for publish_via_parent */
+	if (rel->rd_rel->relkind == RELKIND_RELATION)
+	{
+		List	   *heap_options = untransformRelOptions(newOptions);
+		ListCell   *cell;
+		bool		curSetting = RelationIsPublishedViaParent(rel);
+		DefElem    *pubElem = NULL;
+
+		foreach (cell, heap_options)
+		{
+			DefElem    *defel = lfirst_node(DefElem, cell);
+
+			if (strcmp(defel->defname, "publish_via_parent") == 0)
+			{
+				pubElem = defel;
+				break;
+			}
+		}
+
+		if (pubElem)
+		{
+			bool		newSetting = defGetBoolean(pubElem);
+
+			if (newSetting != curSetting)
+				change_publish_via_parent(rel, newSetting);
+		}
+		else if (curSetting)
+		{
+			/* publish_via_parent was RESET */
+			change_publish_via_parent(rel, false);
 		}
 	}
 
@@ -14979,6 +15118,13 @@ ATExecAddInherit(Relation child_rel, RangeVar *parent, LOCKMODE lockmode)
 						trigger_name, RelationGetRelationName(child_rel)),
 				 errdetail("ROW triggers with transition tables are not supported in inheritance hierarchies.")));
 
+	/* publish_via_parent tables are not allowed to add additional parents. */
+	if (RelationIsPublishedViaParent(child_rel))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("relation option \"%s\" prevents table \"%s\" from changing inheritance",
+						"publish_via_parent", RelationGetRelationName(child_rel))));
+
 	/* OK to create inheritance */
 	CreateInheritance(child_rel, parent_rel);
 
@@ -15394,6 +15540,13 @@ ATExecDropInherit(Relation rel, RangeVar *parent, LOCKMODE lockmode)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("cannot change inheritance of a partition")));
+
+	/* publish_via_parent tables are not allowed to remove their parent. */
+	if (RelationIsPublishedViaParent(rel))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("relation option \"%s\" prevents table \"%s\" from changing inheritance",
+						"publish_via_parent", RelationGetRelationName(rel))));
 
 	/*
 	 * AccessShareLock on the parent is probably enough, seeing that DROP

@@ -758,11 +758,12 @@ copy_read_data(void *outbuf, int minread, int maxread)
 /*
  * Get information about remote relation in similar fashion the RELATION
  * message provides during replication. This function also returns the relation
- * qualifications to be used in the COPY command.
+ * qualifications to be used in the COPY command, and the list of tables to COPY
+ * (which for most tables will contain only one entry).
  */
 static void
 fetch_remote_table_info(char *nspname, char *relname,
-						LogicalRepRelation *lrel, List **qual)
+						LogicalRepRelation *lrel, List **qual, List **to_copy)
 {
 	WalRcvExecResult *res;
 	StringInfoData cmd;
@@ -1073,6 +1074,87 @@ fetch_remote_table_info(char *nspname, char *relname,
 		walrcv_clear_result(res);
 	}
 
+	/*
+	 * See if there are any other tables to be copied besides the original. This
+	 * happens when a descendant in the inheritance relationship is marked with
+	 * publish_via_parent and is part of a publication with
+	 * publish_via_partition_root = true.
+	 *
+	 * FIXME: if two publications have conflicting settings for
+	 * publish_via_partition_root, this behaves strangely. It looks like that's
+	 * true for regular partitions too...
+	 */
+	if (walrcv_server_version(LogRepWorkerWalRcvConn) >= 160000)
+	{
+		Oid			descRow[] = {TEXTOID, TEXTOID};
+		StringInfoData pub_names;
+
+		/* Build the pubname list. */
+		initStringInfo(&pub_names);
+		foreach(lc, MySubscription->publications)
+		{
+			char	   *pubname = strVal(lfirst(lc));
+
+			if (foreach_current_index(lc) > 0)
+				appendStringInfoString(&pub_names, ", ");
+
+			appendStringInfoString(&pub_names, quote_literal_cstr(pubname));
+		}
+
+		/*
+		 * Ask the server what it wants us to sync.
+		 */
+		resetStringInfo(&cmd);
+		appendStringInfo(&cmd,
+						 "SELECT DISTINCT n.nspname, c.relname"
+						 "  FROM pg_catalog.pg_publication p,"
+						 "       pg_catalog.pg_class c"
+						 "  JOIN pg_catalog.pg_namespace n"
+						 "    ON (c.relnamespace = n.oid)"
+						 "  JOIN LATERAL pg_catalog.pg_get_publication_rels_to_sync(%u::regclass, p.pubname) relid"
+						 "    ON (c.oid = relid)"
+						 " WHERE p.pubname IN ( %s )",
+						 lrel->remoteid, pub_names.data);
+
+		res = walrcv_exec(LogRepWorkerWalRcvConn, cmd.data,
+						  lengthof(descRow), descRow);
+
+		if (res->status != WALRCV_OK_TUPLES)
+			ereport(ERROR,
+					(errmsg("could not fetch logical descendants for table \"%s.%s\" from publisher: %s",
+							nspname, relname, res->err)));
+
+		slot = MakeSingleTupleTableSlot(res->tupledesc, &TTSOpsMinimalTuple);
+		while (tuplestore_gettupleslot(res->tuplestore, true, false, slot))
+		{
+			char	   *desc_nspname;
+			char	   *desc_relname;
+			char	   *quoted;
+
+			desc_nspname = TextDatumGetCString(slot_getattr(slot, 1, &isnull));
+			Assert(!isnull);
+			desc_relname = TextDatumGetCString(slot_getattr(slot, 2, &isnull));
+			Assert(!isnull);
+
+			quoted = quote_qualified_identifier(desc_nspname, desc_relname);
+			*to_copy = lappend(*to_copy, quoted);
+
+			ExecClearTuple(slot);
+		}
+
+		ExecDropSingleTupleTableSlot(slot);
+		walrcv_clear_result(res);
+
+		pfree(pub_names.data);
+	}
+	else
+	{
+		/* For older servers, we only COPY the table itself. */
+		char   *quoted = quote_qualified_identifier(lrel->nspname,
+													lrel->relname);
+		*to_copy = lappend(*to_copy, quoted);
+	}
+
 	pfree(cmd.data);
 }
 
@@ -1087,6 +1169,8 @@ copy_table(Relation rel)
 	LogicalRepRelMapEntry *relmapentry;
 	LogicalRepRelation lrel;
 	List	   *qual = NIL;
+	List	   *to_copy = NIL;
+	ListCell   *cur;
 	WalRcvExecResult *res;
 	StringInfoData cmd;
 	CopyFromState cstate;
@@ -1096,7 +1180,8 @@ copy_table(Relation rel)
 
 	/* Get the publisher relation info. */
 	fetch_remote_table_info(get_namespace_name(RelationGetNamespace(rel)),
-							RelationGetRelationName(rel), &lrel, &qual);
+							RelationGetRelationName(rel), &lrel, &qual,
+							&to_copy);
 
 	/* Put the relation into relmap. */
 	logicalrep_relmap_update(&lrel);
@@ -1105,105 +1190,109 @@ copy_table(Relation rel)
 	relmapentry = logicalrep_rel_open(lrel.remoteid, NoLock);
 	Assert(rel == relmapentry->localrel);
 
-	/* Start copy on the publisher. */
-	initStringInfo(&cmd);
-
-	/* Regular table with no row filter */
-	if (lrel.relkind == RELKIND_RELATION && qual == NIL)
+	foreach(cur, to_copy)
 	{
-		appendStringInfo(&cmd, "COPY %s (",
-						 quote_qualified_identifier(lrel.nspname, lrel.relname));
+		char	   *quoted_name = lfirst(cur);
 
-		/*
-		 * XXX Do we need to list the columns in all cases? Maybe we're
-		 * replicating all columns?
-		 */
-		for (int i = 0; i < lrel.natts; i++)
+		/* Start copy on the publisher. */
+		initStringInfo(&cmd);
+
+		/* Regular table with no row filter */
+		if (lrel.relkind == RELKIND_RELATION && qual == NIL)
 		{
-			if (i > 0)
-				appendStringInfoString(&cmd, ", ");
+			appendStringInfo(&cmd, "COPY %s (", quoted_name);
 
-			appendStringInfoString(&cmd, quote_identifier(lrel.attnames[i]));
-		}
-
-		appendStringInfoString(&cmd, ") TO STDOUT");
-	}
-	else
-	{
-		/*
-		 * For non-tables and tables with row filters, we need to do COPY
-		 * (SELECT ...), but we can't just do SELECT * because we need to not
-		 * copy generated columns. For tables with any row filters, build a
-		 * SELECT query with OR'ed row filters for COPY.
-		 */
-		appendStringInfoString(&cmd, "COPY (SELECT ");
-		for (int i = 0; i < lrel.natts; i++)
-		{
-			appendStringInfoString(&cmd, quote_identifier(lrel.attnames[i]));
-			if (i < lrel.natts - 1)
-				appendStringInfoString(&cmd, ", ");
-		}
-
-		appendStringInfoString(&cmd, " FROM ");
-
-		/*
-		 * For regular tables, make sure we don't copy data from a child that
-		 * inherits the named table as those will be copied separately.
-		 */
-		if (lrel.relkind == RELKIND_RELATION)
-			appendStringInfoString(&cmd, "ONLY ");
-
-		appendStringInfoString(&cmd, quote_qualified_identifier(lrel.nspname, lrel.relname));
-		/* list of OR'ed filters */
-		if (qual != NIL)
-		{
-			ListCell   *lc;
-			char	   *q = strVal(linitial(qual));
-
-			appendStringInfo(&cmd, " WHERE %s", q);
-			for_each_from(lc, qual, 1)
+			/*
+			 * XXX Do we need to list the columns in all cases? Maybe we're
+			 * replicating all columns?
+			 */
+			for (int i = 0; i < lrel.natts; i++)
 			{
-				q = strVal(lfirst(lc));
-				appendStringInfo(&cmd, " OR %s", q);
+				if (i > 0)
+					appendStringInfoString(&cmd, ", ");
+
+				appendStringInfoString(&cmd, quote_identifier(lrel.attnames[i]));
 			}
-			list_free_deep(qual);
+
+			appendStringInfoString(&cmd, ") TO STDOUT");
+		}
+		else
+		{
+			/*
+			 * For non-tables and tables with row filters, we need to do COPY
+			 * (SELECT ...), but we can't just do SELECT * because we need to not
+			 * copy generated columns. For tables with any row filters, build a
+			 * SELECT query with OR'ed row filters for COPY.
+			 */
+			appendStringInfoString(&cmd, "COPY (SELECT ");
+			for (int i = 0; i < lrel.natts; i++)
+			{
+				appendStringInfoString(&cmd, quote_identifier(lrel.attnames[i]));
+				if (i < lrel.natts - 1)
+					appendStringInfoString(&cmd, ", ");
+			}
+
+			appendStringInfoString(&cmd, " FROM ");
+
+			/*
+			 * For regular tables, make sure we don't copy data from a child that
+			 * inherits the named table as those will be copied separately.
+			 */
+			if (lrel.relkind == RELKIND_RELATION)
+				appendStringInfoString(&cmd, "ONLY ");
+
+			appendStringInfoString(&cmd, quoted_name);
+			/* list of OR'ed filters */
+			if (qual != NIL)
+			{
+				ListCell   *lc;
+				char	   *q = strVal(linitial(qual));
+
+				appendStringInfo(&cmd, " WHERE %s", q);
+				for_each_from(lc, qual, 1)
+				{
+					q = strVal(lfirst(lc));
+					appendStringInfo(&cmd, " OR %s", q);
+				}
+				list_free_deep(qual);
+			}
+
+			appendStringInfoString(&cmd, ") TO STDOUT");
 		}
 
-		appendStringInfoString(&cmd, ") TO STDOUT");
+		/*
+		 * Prior to v16, initial table synchronization will use text format even
+		 * if the binary option is enabled for a subscription.
+		 */
+		if (walrcv_server_version(LogRepWorkerWalRcvConn) >= 160000 &&
+			MySubscription->binary)
+		{
+			appendStringInfoString(&cmd, " WITH (FORMAT binary)");
+			options = list_make1(makeDefElem("format",
+											 (Node *) makeString("binary"), -1));
+		}
+
+		res = walrcv_exec(LogRepWorkerWalRcvConn, cmd.data, 0, NULL);
+		pfree(cmd.data);
+		if (res->status != WALRCV_OK_COPY_OUT)
+			ereport(ERROR,
+					(errcode(ERRCODE_CONNECTION_FAILURE),
+					 errmsg("could not start initial contents copy for table \"%s.%s\" from remote %s: %s",
+							lrel.nspname, lrel.relname, quoted_name, res->err)));
+		walrcv_clear_result(res);
+
+		copybuf = makeStringInfo();
+
+		pstate = make_parsestate(NULL);
+		(void) addRangeTableEntryForRelation(pstate, rel, AccessShareLock,
+											 NULL, false, false);
+
+		attnamelist = make_copy_attnamelist(relmapentry);
+		cstate = BeginCopyFrom(pstate, rel, NULL, NULL, false, copy_read_data, attnamelist, options);
+
+		/* Do the copy */
+		(void) CopyFrom(cstate);
 	}
-
-	/*
-	 * Prior to v16, initial table synchronization will use text format even
-	 * if the binary option is enabled for a subscription.
-	 */
-	if (walrcv_server_version(LogRepWorkerWalRcvConn) >= 160000 &&
-		MySubscription->binary)
-	{
-		appendStringInfoString(&cmd, " WITH (FORMAT binary)");
-		options = list_make1(makeDefElem("format",
-										 (Node *) makeString("binary"), -1));
-	}
-
-	res = walrcv_exec(LogRepWorkerWalRcvConn, cmd.data, 0, NULL);
-	pfree(cmd.data);
-	if (res->status != WALRCV_OK_COPY_OUT)
-		ereport(ERROR,
-				(errcode(ERRCODE_CONNECTION_FAILURE),
-				 errmsg("could not start initial contents copy for table \"%s.%s\": %s",
-						lrel.nspname, lrel.relname, res->err)));
-	walrcv_clear_result(res);
-
-	copybuf = makeStringInfo();
-
-	pstate = make_parsestate(NULL);
-	(void) addRangeTableEntryForRelation(pstate, rel, AccessShareLock,
-										 NULL, false, false);
-
-	attnamelist = make_copy_attnamelist(relmapentry);
-	cstate = BeginCopyFrom(pstate, rel, NULL, NULL, false, copy_read_data, attnamelist, options);
-
-	/* Do the copy */
-	(void) CopyFrom(cstate);
 
 	logicalrep_rel_close(relmapentry, NoLock);
 }

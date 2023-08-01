@@ -1278,15 +1278,24 @@ convert_ANY_sublink_to_join(PlannerInfo *root, SubLink *sublink,
 	List	   *subquery_vars;
 	Node	   *quals;
 	ParseState *pstate;
+	Relids sub_ref_outer_relids = NULL;
+	bool use_lateral = false;
 
 	Assert(sublink->subLinkType == ANY_SUBLINK);
 
 	/*
-	 * The sub-select must not refer to any Vars of the parent query. (Vars of
-	 * higher levels should be okay, though.)
+	 * If the sub-select refers to any Vars of the parent query, we have to
+	 * treat it as LATERAL.  (Vars of higher levels don't matter here.)
 	 */
-	if (contain_vars_of_level((Node *) subselect, 1))
-		return NULL;
+	sub_ref_outer_relids = pull_varnos_of_level(NULL, (Node *) subselect, 1);
+
+	if (!bms_is_empty(sub_ref_outer_relids))
+	{
+		if (bms_is_subset(sub_ref_outer_relids, available_rels))
+			use_lateral = true;
+		else
+			return NULL;
+	}
 
 	/*
 	 * The test expression must contain some Vars of the parent query, else
@@ -1323,7 +1332,7 @@ convert_ANY_sublink_to_join(PlannerInfo *root, SubLink *sublink,
 	nsitem = addRangeTableEntryForSubquery(pstate,
 										   subselect,
 										   makeAlias("ANY_subquery", NIL),
-										   false,
+										   use_lateral,
 										   false);
 	rte = nsitem->p_rte;
 	parse->rtable = lappend(parse->rtable, rte);

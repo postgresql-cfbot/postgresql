@@ -388,6 +388,7 @@ SELECT pg_stat_force_next_flush();
 SELECT sessions > :db_stat_sessions FROM pg_stat_database WHERE datname = (SELECT current_database());
 
 -- Test pg_stat_bgwriter checkpointer-related stats, together with pg_stat_wal
+-- and pg_stat_slru
 SELECT checkpoints_req AS rqst_ckpts_before FROM pg_stat_bgwriter \gset
 
 -- Test pg_stat_wal (and make a temp table so our temp schema exists)
@@ -395,6 +396,9 @@ SELECT wal_bytes AS wal_bytes_before FROM pg_stat_wal \gset
 
 CREATE TEMP TABLE test_stats_temp AS SELECT 17;
 DROP TABLE test_stats_temp;
+
+-- Test pg_stat_slru, checkpoint should generate SLRU flushes
+SELECT SUM(flushes) AS slru_flushes_before from pg_stat_slru \gset
 
 -- Checkpoint twice: The checkpointer reports stats after reporting completion
 -- of the checkpoint. But after a second checkpoint we'll see at least the
@@ -404,6 +408,7 @@ CHECKPOINT;
 
 SELECT checkpoints_req > :rqst_ckpts_before FROM pg_stat_bgwriter;
 SELECT wal_bytes > :wal_bytes_before FROM pg_stat_wal;
+SELECT SUM(flushes) > :slru_flushes_before FROM pg_stat_slru;
 
 -- Test pg_stat_get_backend_idset() and some allied functions.
 -- In particular, verify that their notion of backend ID matches

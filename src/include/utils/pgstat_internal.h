@@ -540,6 +540,7 @@ extern void pgstat_bgwriter_snapshot_cb(void);
 
 extern void pgstat_checkpointer_reset_all_cb(TimestampTz ts);
 extern void pgstat_checkpointer_snapshot_cb(void);
+extern void pgstat_flush_checkpointer(void);
 
 
 /*

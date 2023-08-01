@@ -503,7 +503,6 @@ CheckpointerMain(void)
 
 		/* Report pending statistics to the cumulative stats system */
 		pgstat_report_checkpointer();
-		pgstat_report_wal(true);
 
 		/*
 		 * If any checkpoint flags have been set, redo the loop to handle the
@@ -581,7 +580,6 @@ HandleCheckpointerInterrupts(void)
 		PendingCheckpointerStats.requested_checkpoints++;
 		ShutdownXLOG(0, 0);
 		pgstat_report_checkpointer();
-		pgstat_report_wal(true);
 
 		/* Normal exit from the checkpointer is here */
 		proc_exit(0);			/* done */

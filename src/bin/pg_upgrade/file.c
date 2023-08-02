@@ -10,6 +10,7 @@
 #include "postgres_fe.h"
 
 #include <sys/stat.h>
+#include <limits.h>
 #include <fcntl.h>
 #ifdef HAVE_COPYFILE_H
 #include <copyfile.h>
@@ -137,6 +138,48 @@ copyFile(const char *src, const char *dst,
 	}
 
 #endif							/* WIN32 */
+}
+
+
+/*
+ * copyFileByRange()
+ *
+ * Copies a relation file from src to dst.
+ * schemaName/relName are relation's SQL name (used for error messages only).
+ */
+void
+copyFileByRange(const char *src, const char *dst,
+				const char *schemaName, const char *relName)
+{
+#ifdef HAVE_COPY_FILE_RANGE
+	int			src_fd;
+	int			dest_fd;
+	ssize_t		nbytes;
+
+	if ((src_fd = open(src, O_RDONLY | PG_BINARY, 0)) < 0)
+		pg_fatal("error while copying relation \"%s.%s\": could not open file \"%s\": %s",
+				 schemaName, relName, src, strerror(errno));
+
+	if ((dest_fd = open(dst, O_RDWR | O_CREAT | O_EXCL | PG_BINARY,
+						pg_file_create_mode)) < 0)
+		pg_fatal("error while copying relation \"%s.%s\": could not create file \"%s\": %s",
+				 schemaName, relName, dst, strerror(errno));
+
+	for (;;)
+	{
+		nbytes = copy_file_range(src_fd, NULL, dest_fd, NULL, SSIZE_MAX, 0);
+		if (nbytes < 0 && errno != EINTR)
+			pg_fatal("error while copying relation \"%s.%s\": could not copy file range from \"%s\" to \"%s\": %s",
+					 schemaName, relName, src, dst, strerror(errno));
+		if (nbytes == 0)
+			break;
+	}
+
+	close(src_fd);
+	close(dest_fd);
+#else
+	pg_fatal("copy_file_range not supported on this platform");
+#endif
 }
 
 

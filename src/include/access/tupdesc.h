@@ -151,4 +151,6 @@ extern TupleDesc BuildDescForRelation(List *schema);
 
 extern TupleDesc BuildDescFromLists(List *names, List *types, List *typmods, List *collations);
 
+extern AttrNumber PopulateTupleDescCacheOffsets(TupleDesc desc);
+
 #endif							/* TUPDESC_H */

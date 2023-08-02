@@ -901,6 +901,49 @@ large groups of duplicates, maximizing space utilization.  Note also that
 deduplication more efficient.  Deduplication can be performed infrequently,
 without merging together existing posting list tuples too often.
 
+Notes about dynamic prefix truncation
+-------------------------------------
+
+Because NBTrees have a sorted keyspace, when we have determined that some
+prefixing columns of tuples on both sides of the tuple that is being
+compared are equal to the scankey, then the current tuple must also share
+this prefix with the scankey. This allows us to skip comparing those columns,
+saving the indirect function calls in the compare operation.
+
+We can only use this constraint if we have proven this information while we
+hold a pin on the page, so this is only useful on the page level: Concurrent
+page deletions and splits may have moved the keyspace of the page referenced
+by a parent page to the right. If we re-used high- and low-column-prefixes,
+we would not be able to detect a change of keyspace from e.g. [2,3) to [1,2),
+and subsequently return invalid results. This race condition can only be
+prevented by re-establishing the prefix-equal-columns for each page.
+
+There is positive news, though: A page split will put a binary copy of the
+page's highkey in the parent page. This means that we usually can reuse
+the compare result of the parent page's downlink's right sibling when we
+discover that their representation is binary equal. In general this will
+be the case, as only in concurrent page splits and deletes the downlink
+may not point to the page with the correct highkey bound (_bt_moveright
+only rarely actually moves right).
+
+To implement this, we copy the downlink's right differentiator key into a
+temporary buffer, which is then compared against the child pages' highkey.
+If they match, we reuse the compare result (plus prefix) we had for it from
+the parent page, if not, we need to do a full _bt_compare. Because memcpy +
+memcmp is cheap compared to _bt_compare, and because it's quite unlikely
+that we guess wrong this speeds up our _bt_moveright code (at cost of some
+stack memory in _bt_search and some overhead in case of a wrong prediction)
+
+Now that we have prefix bounds on the highest value of a page, the
+_bt_binsrch procedure will use this result as a rightmost prefix compare,
+and for each step in the binary search (that does not compare less than the
+insert key) improve the equal-prefix bounds.
+
+Using the above optimization, we now (on average) only need 2 full key
+compares per page (plus ceil(log2(ntupsperpage)) single-attribute compares),
+as opposed to the ceil(log2(ntupsperpage)) + 1 of a naive implementation;
+a significant improvement.
+
 Notes about deduplication
 -------------------------
 
@@ -1040,6 +1083,33 @@ new item even begins.  We'd end up having to handle posting list splits
 that need a page split anyway.  Besides, supporting variable "split points"
 while splitting posting lists won't actually improve overall space
 utilization.
+
+Notes about nbtree specialization
+---------------------------------
+
+Attribute iteration is a significant overhead for multi-column indexes
+with variable length attributes, due to our inability to cache the offset
+of each attribute into an on-disk tuple. To combat this, we'd have to either
+fully deserialize the tuple, or maintain our offset into the tuple as we
+iterate over the tuple's fields.
+
+Keeping track of this offset also has a non-negligible overhead too, so we'd
+prefer to not have to keep track of these offsets when we can use the cache.
+By specializing performance-sensitive search functions for these specific
+index tuple shapes and calling those selectively, we can keep the performance
+of cacheable attribute offsets where that is applicable, while improving
+performance where we currently would see O(n_atts^2) time iterating on
+variable-length attributes.  Additionally, we update the entry points
+in the index AM to call the specialized functions, increasing the
+performance of those hot paths.
+
+Optimized code paths exist for the following cases, in order of preference:
+ - indexes with only a single key attribute
+ - multi-column indexes that cannot pre-calculate the offsets of all key
+   attributes in the tuple data section
+ - multi-column indexes that could benefit from the attcacheoff optimization
+   NB: This is also the default path, and is comparatively slow for uncachable
+   attribute offsets.
 
 Notes About Data Representation
 -------------------------------

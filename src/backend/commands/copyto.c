@@ -34,6 +34,7 @@
 #include "miscadmin.h"
 #include "optimizer/optimizer.h"
 #include "pgstat.h"
+#include "protocol.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/fd.h"
 #include "tcop/tcopprot.h"
@@ -144,7 +145,7 @@ SendCopyBegin(CopyToState cstate)
 	int16		format = (cstate->opts.binary ? 1 : 0);
 	int			i;
 
-	pq_beginmessage(&buf, 'H');
+	pq_beginmessage(&buf, COPY_OUT_RESPONSE);
 	pq_sendbyte(&buf, format);	/* overall format */
 	pq_sendint16(&buf, natts);
 	for (i = 0; i < natts; i++)
@@ -159,7 +160,7 @@ SendCopyEnd(CopyToState cstate)
 	/* Shouldn't have any unsent data */
 	Assert(cstate->fe_msgbuf->len == 0);
 	/* Send Copy Done message */
-	pq_putemptymessage('c');
+	pq_putemptymessage(COPY_DONE);
 }
 
 /*----------

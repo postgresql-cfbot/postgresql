@@ -32,6 +32,7 @@
 #include "executor/executor.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
+#include "protocol.h"
 #include "tcop/dest.h"
 #include "utils/builtins.h"
 #include "utils/timestamp.h"
@@ -169,7 +170,7 @@ bbsink_copystream_begin_archive(bbsink *sink, const char *archive_name)
 	StringInfoData buf;
 
 	ti = list_nth(state->tablespaces, state->tablespace_num);
-	pq_beginmessage(&buf, 'd'); /* CopyData */
+	pq_beginmessage(&buf, COPY_DATA);
 	pq_sendbyte(&buf, 'n');		/* New archive */
 	pq_sendstring(&buf, archive_name);
 	pq_sendstring(&buf, ti->path == NULL ? "" : ti->path);
@@ -220,8 +221,8 @@ bbsink_copystream_archive_contents(bbsink *sink, size_t len)
 		{
 			mysink->last_progress_report_time = now;
 
-			pq_beginmessage(&buf, 'd'); /* CopyData */
-			pq_sendbyte(&buf, 'p'); /* Progress report */
+			pq_beginmessage(&buf, COPY_DATA);
+			pq_sendbyte(&buf, COPY_PROGRESS);
 			pq_sendint64(&buf, state->bytes_done);
 			pq_endmessage(&buf);
 			pq_flush_if_writable();
@@ -246,8 +247,8 @@ bbsink_copystream_end_archive(bbsink *sink)
 
 	mysink->bytes_done_at_last_time_check = state->bytes_done;
 	mysink->last_progress_report_time = GetCurrentTimestamp();
-	pq_beginmessage(&buf, 'd'); /* CopyData */
-	pq_sendbyte(&buf, 'p');		/* Progress report */
+	pq_beginmessage(&buf, COPY_DATA);
+	pq_sendbyte(&buf, COPY_PROGRESS);
 	pq_sendint64(&buf, state->bytes_done);
 	pq_endmessage(&buf);
 	pq_flush_if_writable();
@@ -261,7 +262,7 @@ bbsink_copystream_begin_manifest(bbsink *sink)
 {
 	StringInfoData buf;
 
-	pq_beginmessage(&buf, 'd'); /* CopyData */
+	pq_beginmessage(&buf, COPY_DATA);
 	pq_sendbyte(&buf, 'm');		/* Manifest */
 	pq_endmessage(&buf);
 }
@@ -318,7 +319,7 @@ SendCopyOutResponse(void)
 {
 	StringInfoData buf;
 
-	pq_beginmessage(&buf, 'H');
+	pq_beginmessage(&buf, COPY_OUT_RESPONSE);
 	pq_sendbyte(&buf, 0);		/* overall format */
 	pq_sendint16(&buf, 0);		/* natts */
 	pq_endmessage(&buf);
@@ -330,7 +331,7 @@ SendCopyOutResponse(void)
 static void
 SendCopyDone(void)
 {
-	pq_putemptymessage('c');
+	pq_putemptymessage(COPY_DONE);
 }
 
 /*

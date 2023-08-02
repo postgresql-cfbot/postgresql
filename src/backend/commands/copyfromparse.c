@@ -72,6 +72,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/pg_bswap.h"
+#include "protocol.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
@@ -174,7 +175,7 @@ ReceiveCopyBegin(CopyFromState cstate)
 	int16		format = (cstate->opts.binary ? 1 : 0);
 	int			i;
 
-	pq_beginmessage(&buf, 'G');
+	pq_beginmessage(&buf, COPY_IN_RESPONSE);
 	pq_sendbyte(&buf, format);	/* overall format */
 	pq_sendint16(&buf, natts);
 	for (i = 0; i < natts; i++)
@@ -279,13 +280,13 @@ CopyGetData(CopyFromState cstate, void *databuf, int minread, int maxread)
 					/* Validate message type and set packet size limit */
 					switch (mtype)
 					{
-						case 'd':	/* CopyData */
+						case COPY_DATA:
 							maxmsglen = PQ_LARGE_MESSAGE_LIMIT;
 							break;
-						case 'c':	/* CopyDone */
-						case 'f':	/* CopyFail */
-						case 'H':	/* Flush */
-						case 'S':	/* Sync */
+						case COPY_DONE:
+						case COPY_FAIL:
+						case FLUSH_DATA_REQUEST:
+						case SYNC_DATA_REQUEST:
 							maxmsglen = PQ_SMALL_MESSAGE_LIMIT;
 							break;
 						default:
@@ -305,20 +306,20 @@ CopyGetData(CopyFromState cstate, void *databuf, int minread, int maxread)
 					/* ... and process it */
 					switch (mtype)
 					{
-						case 'd':	/* CopyData */
+						case COPY_DATA:
 							break;
-						case 'c':	/* CopyDone */
+						case COPY_DONE:
 							/* COPY IN correctly terminated by frontend */
 							cstate->raw_reached_eof = true;
 							return bytesread;
-						case 'f':	/* CopyFail */
+						case COPY_FAIL:
 							ereport(ERROR,
 									(errcode(ERRCODE_QUERY_CANCELED),
 									 errmsg("COPY from stdin failed: %s",
 											pq_getmsgstring(cstate->fe_msgbuf))));
 							break;
-						case 'H':	/* Flush */
-						case 'S':	/* Sync */
+						case FLUSH_DATA_REQUEST:
+						case SYNC_DATA_REQUEST:
 
 							/*
 							 * Ignore Flush/Sync for the convenience of client

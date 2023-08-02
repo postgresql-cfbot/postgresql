@@ -43,6 +43,7 @@
 #include "fe-auth.h"
 #include "fe-auth-sasl.h"
 #include "libpq-fe.h"
+#include "protocol.h"
 
 #ifdef ENABLE_GSS
 /*
@@ -586,7 +587,7 @@ pg_SASL_init(PGconn *conn, int payloadlen)
 	/*
 	 * Build a SASLInitialResponse message, and send it.
 	 */
-	if (pqPutMsgStart('p', conn))
+	if (pqPutMsgStart(GSS_RESPONSE, conn))
 		goto error;
 	if (pqPuts(selected_mechanism, conn))
 		goto error;

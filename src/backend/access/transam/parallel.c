@@ -33,6 +33,7 @@
 #include "miscadmin.h"
 #include "optimizer/optimizer.h"
 #include "pgstat.h"
+#include "protocol.h"
 #include "storage/ipc.h"
 #include "storage/predicate.h"
 #include "storage/sinval.h"
@@ -1127,7 +1128,7 @@ HandleParallelMessage(ParallelContext *pcxt, int i, StringInfo msg)
 
 	switch (msgtype)
 	{
-		case 'K':				/* BackendKeyData */
+		case BACKEND_KEY_DATA:
 			{
 				int32		pid = pq_getmsgint(msg, 4);
 
@@ -1137,8 +1138,8 @@ HandleParallelMessage(ParallelContext *pcxt, int i, StringInfo msg)
 				break;
 			}
 
-		case 'E':				/* ErrorResponse */
-		case 'N':				/* NoticeResponse */
+		case ERROR_RESPONSE:
+		case NOTICE_RESPONSE:
 			{
 				ErrorData	edata;
 				ErrorContextCallback *save_error_context_stack;
@@ -1183,7 +1184,7 @@ HandleParallelMessage(ParallelContext *pcxt, int i, StringInfo msg)
 				break;
 			}
 
-		case 'A':				/* NotifyResponse */
+		case NOTIFY_RESPONSE:
 			{
 				/* Propagate NotifyResponse. */
 				int32		pid;
@@ -1200,7 +1201,7 @@ HandleParallelMessage(ParallelContext *pcxt, int i, StringInfo msg)
 				break;
 			}
 
-		case 'P':				/* Parallel progress reporting */
+		case PARALLEL_PROGRESS_RESPONSE:
 			{
 				/*
 				 * Only incremental progress reporting is currently supported.
@@ -1217,7 +1218,7 @@ HandleParallelMessage(ParallelContext *pcxt, int i, StringInfo msg)
 				break;
 			}
 
-		case 'X':				/* Terminate, indicating clean exit */
+		case TERMINATE_REQUEST:	/* Terminate, indicating clean exit */
 			{
 				shm_mq_detach(pcxt->worker[i].error_mqh);
 				pcxt->worker[i].error_mqh = NULL;
@@ -1372,7 +1373,7 @@ ParallelWorkerMain(Datum main_arg)
 	 * protocol message is defined, but it won't actually be used for anything
 	 * in this case.
 	 */
-	pq_beginmessage(&msgbuf, 'K');
+	pq_beginmessage(&msgbuf, BACKEND_KEY_DATA);
 	pq_sendint32(&msgbuf, (int32) MyProcPid);
 	pq_sendint32(&msgbuf, (int32) MyCancelKey);
 	pq_endmessage(&msgbuf);
@@ -1550,7 +1551,7 @@ ParallelWorkerMain(Datum main_arg)
 	DetachSession();
 
 	/* Report success. */
-	pq_putmessage('X', NULL, 0);
+	pq_putmessage(TERMINATE_REQUEST, NULL, 0);
 }
 
 /*

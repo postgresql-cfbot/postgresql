@@ -19,6 +19,7 @@
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "libpq/sasl.h"
+#include "protocol.h"
 
 /*
  * Maximum accepted size of SASL messages.
@@ -87,7 +88,7 @@ CheckSASLAuth(const pg_be_sasl_mech *mech, Port *port, char *shadow_pass,
 	{
 		pq_startmsgread();
 		mtype = pq_getbyte();
-		if (mtype != 'p')
+		if (mtype != GSS_RESPONSE)
 		{
 			/* Only log error if client didn't disconnect. */
 			if (mtype != EOF)

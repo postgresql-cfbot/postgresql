@@ -474,8 +474,14 @@ static void dump_var(const char *str, NumericVar *var);
 #define dump_var(s,v)
 #endif
 
+/*
+ * Macros to allocate/free numeric digit buffers. Whenever we allocate a digit
+ * buffer, we give it an extra NUMERIC_HDRSZ (8 bytes) of space, so that the
+ * same memory block can be used by make_result() to construct a Numeric result
+ * from it, avoiding palloc/pfree overhead.
+ */
 #define digitbuf_alloc(ndigits)  \
-	((NumericDigit *) palloc((ndigits) * sizeof(NumericDigit)))
+	((NumericDigit *) palloc(NUMERIC_HDRSZ + (ndigits) * sizeof(NumericDigit)))
 #define digitbuf_free(buf)	\
 	do { \
 		 if ((buf) != NULL) \
@@ -783,8 +789,6 @@ numeric_in(PG_FUNCTION_ARGS)
 			ereturn(escontext, (Datum) 0,
 					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
 					 errmsg("value overflows numeric format")));
-
-		free_var(&value);
 	}
 
 	PG_RETURN_NUMERIC(res);
@@ -1141,8 +1145,6 @@ numeric_recv(PG_FUNCTION_ARGS)
 		(void) apply_typmod_special(res, typmod, NULL);
 	}
 
-	free_var(&value);
-
 	PG_RETURN_NUMERIC(res);
 }
 
@@ -1304,8 +1306,6 @@ numeric		(PG_FUNCTION_ARGS)
 	set_var_from_num(num, &var);
 	(void) apply_typmod(&var, typmod, NULL);
 	new = make_result(&var);
-
-	free_var(&var);
 
 	PG_RETURN_NUMERIC(new);
 }
@@ -1566,7 +1566,6 @@ numeric_round(PG_FUNCTION_ARGS)
 	 */
 	res = make_result(&arg);
 
-	free_var(&arg);
 	PG_RETURN_NUMERIC(res);
 }
 
@@ -1615,7 +1614,6 @@ numeric_trunc(PG_FUNCTION_ARGS)
 	 */
 	res = make_result(&arg);
 
-	free_var(&arg);
 	PG_RETURN_NUMERIC(res);
 }
 
@@ -1642,7 +1640,6 @@ numeric_ceil(PG_FUNCTION_ARGS)
 	ceil_var(&result, &result);
 
 	res = make_result(&result);
-	free_var(&result);
 
 	PG_RETURN_NUMERIC(res);
 }
@@ -1670,7 +1667,6 @@ numeric_floor(PG_FUNCTION_ARGS)
 	floor_var(&result, &result);
 
 	res = make_result(&result);
-	free_var(&result);
 
 	PG_RETURN_NUMERIC(res);
 }
@@ -1793,7 +1789,13 @@ generate_series_step_numeric(PG_FUNCTION_ARGS)
 		(fctx->step.sign == NUMERIC_NEG &&
 		 cmp_var(&fctx->current, &fctx->stop) >= 0))
 	{
-		Numeric		result = make_result(&fctx->current);
+		NumericVar	result_var;
+		Numeric		result;
+
+		/* copy current and make result from copy */
+		init_var(&result_var);
+		set_var_from_var(&fctx->current, &result_var);
+		result = make_result(&result_var);
 
 		/* switch to memory context appropriate for iteration calculation */
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
@@ -2909,8 +2911,6 @@ numeric_add_opt_error(Numeric num1, Numeric num2, bool *have_error)
 
 	res = make_result_opt_error(&result, have_error);
 
-	free_var(&result);
-
 	return res;
 }
 
@@ -2986,8 +2986,6 @@ numeric_sub_opt_error(Numeric num1, Numeric num2, bool *have_error)
 	sub_var(&arg1, &arg2, &result);
 
 	res = make_result_opt_error(&result, have_error);
-
-	free_var(&result);
 
 	return res;
 }
@@ -3107,8 +3105,6 @@ numeric_mul_opt_error(Numeric num1, Numeric num2, bool *have_error)
 		round_var(&result, NUMERIC_DSCALE_MAX);
 
 	res = make_result_opt_error(&result, have_error);
-
-	free_var(&result);
 
 	return res;
 }
@@ -3243,8 +3239,6 @@ numeric_div_opt_error(Numeric num1, Numeric num2, bool *have_error)
 
 	res = make_result_opt_error(&result, have_error);
 
-	free_var(&result);
-
 	return res;
 }
 
@@ -3331,8 +3325,6 @@ numeric_div_trunc(PG_FUNCTION_ARGS)
 	div_var(&arg1, &arg2, &result, 0, false);
 
 	res = make_result(&result);
-
-	free_var(&result);
 
 	PG_RETURN_NUMERIC(res);
 }
@@ -3421,8 +3413,6 @@ numeric_mod_opt_error(Numeric num1, Numeric num2, bool *have_error)
 
 	res = make_result_opt_error(&result, NULL);
 
-	free_var(&result);
-
 	return res;
 }
 
@@ -3453,8 +3443,6 @@ numeric_inc(PG_FUNCTION_ARGS)
 	add_var(&arg, &const_one, &arg);
 
 	res = make_result(&arg);
-
-	free_var(&arg);
 
 	PG_RETURN_NUMERIC(res);
 }
@@ -3548,8 +3536,6 @@ numeric_gcd(PG_FUNCTION_ARGS)
 
 	res = make_result(&result);
 
-	free_var(&result);
-
 	PG_RETURN_NUMERIC(res);
 }
 
@@ -3608,8 +3594,6 @@ numeric_lcm(PG_FUNCTION_ARGS)
 
 	res = make_result(&result);
 
-	free_var(&result);
-
 	PG_RETURN_NUMERIC(res);
 }
 
@@ -3658,9 +3642,6 @@ numeric_fac(PG_FUNCTION_ARGS)
 	}
 
 	res = make_result(&result);
-
-	free_var(&fact);
-	free_var(&result);
 
 	PG_RETURN_NUMERIC(res);
 }
@@ -3732,8 +3713,6 @@ numeric_sqrt(PG_FUNCTION_ARGS)
 
 	res = make_result(&result);
 
-	free_var(&result);
-
 	PG_RETURN_NUMERIC(res);
 }
 
@@ -3799,8 +3778,6 @@ numeric_exp(PG_FUNCTION_ARGS)
 
 	res = make_result(&result);
 
-	free_var(&result);
-
 	PG_RETURN_NUMERIC(res);
 }
 
@@ -3847,8 +3824,6 @@ numeric_ln(PG_FUNCTION_ARGS)
 	ln_var(&arg, &result, rscale);
 
 	res = make_result(&result);
-
-	free_var(&result);
 
 	PG_RETURN_NUMERIC(res);
 }
@@ -3918,8 +3893,6 @@ numeric_log(PG_FUNCTION_ARGS)
 	log_var(&arg1, &arg2, &result);
 
 	res = make_result(&result);
-
-	free_var(&result);
 
 	PG_RETURN_NUMERIC(res);
 }
@@ -4107,8 +4080,6 @@ numeric_power(PG_FUNCTION_ARGS)
 
 	res = make_result(&result);
 
-	free_var(&result);
-
 	PG_RETURN_NUMERIC(res);
 }
 
@@ -4194,7 +4165,6 @@ numeric_min_scale(PG_FUNCTION_ARGS)
 
 	init_var_from_num(num, &arg);
 	min_scale = get_min_scale(&arg);
-	free_var(&arg);
 
 	PG_RETURN_INT32(min_scale);
 }
@@ -4215,7 +4185,6 @@ numeric_trim_scale(PG_FUNCTION_ARGS)
 	init_var_from_num(num, &result);
 	result.dscale = get_min_scale(&result);
 	res = make_result(&result);
-	free_var(&result);
 
 	PG_RETURN_NUMERIC(res);
 }
@@ -4239,8 +4208,6 @@ int64_to_numeric(int64 val)
 	int64_to_numericvar(val, &result);
 
 	res = make_result(&result);
-
-	free_var(&result);
 
 	return res;
 }
@@ -4328,8 +4295,6 @@ int64_div_fast_to_numeric(int64 val1, int log10val2)
 	result.dscale = rscale;
 
 	res = make_result(&result);
-
-	free_var(&result);
 
 	return res;
 }
@@ -4540,8 +4505,6 @@ float8_numeric(PG_FUNCTION_ARGS)
 
 	res = make_result(&result);
 
-	free_var(&result);
-
 	PG_RETURN_NUMERIC(res);
 }
 
@@ -4633,8 +4596,6 @@ float4_numeric(PG_FUNCTION_ARGS)
 	(void) set_var_from_str(buf, buf, &result, &endptr, NULL);
 
 	res = make_result(&result);
-
-	free_var(&result);
 
 	PG_RETURN_NUMERIC(res);
 }
@@ -6016,8 +5977,6 @@ numeric_poly_sum(PG_FUNCTION_ARGS)
 
 	res = make_result(&result);
 
-	free_var(&result);
-
 	PG_RETURN_NUMERIC(res);
 #else
 	return numeric_sum(fcinfo);
@@ -6045,8 +6004,6 @@ numeric_poly_avg(PG_FUNCTION_ARGS)
 
 	countd = NumericGetDatum(int64_to_numeric(state->N));
 	sumd = NumericGetDatum(make_result(&result));
-
-	free_var(&result);
 
 	PG_RETURN_DATUM(DirectFunctionCall2(numeric_div, sumd, countd));
 #else
@@ -6084,7 +6041,6 @@ numeric_avg(PG_FUNCTION_ARGS)
 	init_var(&sumX_var);
 	accum_sum_final(&state->sumX, &sumX_var);
 	sumX_datum = NumericGetDatum(make_result(&sumX_var));
-	free_var(&sumX_var);
 
 	PG_RETURN_DATUM(DirectFunctionCall2(numeric_div, sumX_datum, N_datum));
 }
@@ -6116,7 +6072,6 @@ numeric_sum(PG_FUNCTION_ARGS)
 	init_var(&sumX_var);
 	accum_sum_final(&state->sumX, &sumX_var);
 	result = make_result(&sumX_var);
-	free_var(&sumX_var);
 
 	PG_RETURN_NUMERIC(result);
 }
@@ -6208,10 +6163,6 @@ numeric_stddev_internal(NumericAggState *state,
 
 		res = make_result(&vsumX);
 	}
-
-	free_var(&vNminus1);
-	free_var(&vsumX);
-	free_var(&vsumX2);
 
 	return res;
 }
@@ -6945,6 +6896,7 @@ set_var_from_str(const char *str, const char *cp,
 {
 	bool		have_dp = false;
 	int			i;
+	unsigned char *buf;
 	unsigned char *decdigits;
 	int			sign = NUMERIC_POS;
 	int			dweight = -1;
@@ -6981,7 +6933,14 @@ set_var_from_str(const char *str, const char *cp,
 	if (!isdigit((unsigned char) *cp))
 		goto invalid_syntax;
 
-	decdigits = (unsigned char *) palloc(strlen(cp) + DEC_DIGITS * 2);
+	/*
+	 * Allocate a buffer for the decimal digit values, with space for leading
+	 * and trailing padding for digit alignment (DEC_DIGITS * 2).  This same
+	 * buffer will then be reused for the result's digit buffer, which might
+	 * later become a Numeric, so also include space for the numeric header.
+	 */
+	buf = (unsigned char *) palloc(NUMERIC_HDRSZ + strlen(cp) + DEC_DIGITS * 2);
+	decdigits = buf + NUMERIC_HDRSZ;
 
 	/* leading padding for digit alignment later */
 	memset(decdigits, 0, DEC_DIGITS);
@@ -7092,7 +7051,21 @@ set_var_from_str(const char *str, const char *cp,
 	offset = (weight + 1) * DEC_DIGITS - (dweight + 1);
 	ndigits = (ddigits + offset + DEC_DIGITS - 1) / DEC_DIGITS;
 
-	alloc_var(dest, ndigits);
+	/*
+	 * Reuse the same buffer for the result to save a palloc() and pfree(),
+	 * making the digits start where they would in a Numeric result so that
+	 * make_result() doesn't need to move them if this variable is converted
+	 * to a Numeric.  Note that decdigits starts at an offset of NUMERIC_HDRSZ
+	 * into the buffer, so there's no danger of overwriting the decimal digits
+	 * as we produce the result digits.
+	 */
+	digitbuf_free(dest->buf);
+	dest->buf = (NumericDigit *) buf;
+	dest->digits = NUMERIC_CAN_BE_SHORT(dscale, weight) ?
+				   &((Numeric) (buf))->choice.n_short.n_data[0] :
+				   &((Numeric) (buf))->choice.n_long.n_data[0];
+	dest->digits[-1] = 0;			/* spare digit for rounding */
+	dest->ndigits = ndigits;
 	dest->sign = sign;
 	dest->weight = weight;
 	dest->dscale = dscale;
@@ -7114,8 +7087,6 @@ set_var_from_str(const char *str, const char *cp,
 #endif
 		i += DEC_DIGITS;
 	}
-
-	pfree(decdigits);
 
 	/* Strip any leading/trailing zeroes, and normalize weight if zero */
 	strip_var(dest);
@@ -7702,11 +7673,19 @@ duplicate_numeric(Numeric num)
 /*
  * make_result_opt_error() -
  *
- *	Create the packed db numeric format in palloc()'d memory from
- *	a variable.  This will handle NaN and Infinity cases.
+ *	Create the packed db numeric format from a variable.  This will handle NaN
+ *	and Infinity cases.
  *
  *	If "have_error" isn't NULL, on overflow *have_error is set to true and
  *	NULL is returned.  This is helpful when caller needs to handle errors.
+ *
+ *	NOTE: This reuses the memory allocated for the variable's digit buffer, if
+ *	possible.  The variable must not be freed or used in any way afterwards (we
+ *	may trample over its digit buffer).  If the variable doesn't have an
+ *	allocated digit buffer, new memory will be palloc'd and returned.  This
+ *	makes it safe to use with constant variables (const_one, const_nan, etc.),
+ *	as well as variables initialized using init_var_from_num(), zeroed using
+ *	zero_var(), etc.
  */
 static Numeric
 make_result_opt_error(const NumericVar *var, bool *have_error)
@@ -7767,7 +7746,9 @@ make_result_opt_error(const NumericVar *var, bool *have_error)
 	if (NUMERIC_CAN_BE_SHORT(var->dscale, weight))
 	{
 		len = NUMERIC_HDRSZ_SHORT + n * sizeof(NumericDigit);
-		result = (Numeric) palloc(len);
+		result = var->buf ? (Numeric) var->buf : (Numeric) palloc(len);
+		if (n > 0 && result->choice.n_short.n_data != digits)
+			memmove(result->choice.n_short.n_data, digits, n * sizeof(NumericDigit));
 		SET_VARSIZE(result, len);
 		result->choice.n_short.n_header =
 			(sign == NUMERIC_NEG ? (NUMERIC_SHORT | NUMERIC_SHORT_SIGN_MASK)
@@ -7779,7 +7760,9 @@ make_result_opt_error(const NumericVar *var, bool *have_error)
 	else
 	{
 		len = NUMERIC_HDRSZ + n * sizeof(NumericDigit);
-		result = (Numeric) palloc(len);
+		result = var->buf ? (Numeric) var->buf : (Numeric) palloc(len);
+		if (n > 0 && result->choice.n_long.n_data != digits)
+			memmove(result->choice.n_long.n_data, digits, n * sizeof(NumericDigit));
 		SET_VARSIZE(result, len);
 		result->choice.n_long.n_sign_dscale =
 			sign | (var->dscale & NUMERIC_DSCALE_MASK);
@@ -7787,8 +7770,6 @@ make_result_opt_error(const NumericVar *var, bool *have_error)
 	}
 
 	Assert(NUMERIC_NDIGITS(result) == n);
-	if (n > 0)
-		memcpy(NUMERIC_DIGITS(result), digits, n * sizeof(NumericDigit));
 
 	/* Check for overflow of int16 fields */
 	if (NUMERIC_WEIGHT(result) != weight ||

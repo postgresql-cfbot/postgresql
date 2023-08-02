@@ -40,6 +40,7 @@
 #include "utils/index_selfuncs.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+#include "utils/usercontext.h"
 
 
 /*
@@ -1066,6 +1067,7 @@ brin_summarize_range(PG_FUNCTION_ARGS)
 		SetUserIdAndSecContext(heapRel->rd_rel->relowner,
 							   save_sec_context | SECURITY_RESTRICTED_OPERATION);
 		save_nestlevel = NewGUCNestLevel();
+		RestrictSearchPath();
 	}
 	else
 	{

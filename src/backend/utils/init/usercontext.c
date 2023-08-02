@@ -90,3 +90,17 @@ RestoreUserContext(UserContext *context)
 		AtEOXact_GUC(false, context->save_nestlevel);
 	SetUserIdAndSecContext(context->save_userid, context->save_sec_context);
 }
+
+/*
+ * Set search_path to a safe and consistent value. The caller should have
+ * already called NewGUCNestLevel().
+ *
+ * This is important when executing code as another user; for example, when
+ * running a maintenance command on a table with a functional index.
+ */
+void
+RestrictSearchPath()
+{
+	set_config_option("search_path", "pg_catalog, pg_temp", PGC_USERSET,
+					  PGC_S_SESSION, GUC_ACTION_SAVE, true, 0, false);
+}

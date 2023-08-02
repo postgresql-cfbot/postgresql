@@ -631,12 +631,50 @@ REFRESH MATERIALIZED VIEW matview_schema.mv_nodata2;
 RESET SESSION AUTHORIZATION;
 ALTER DEFAULT PRIVILEGES FOR ROLE regress_matview_user
   GRANT INSERT ON TABLES TO regress_matview_user;
+-- Test that MV is populated using restricted search_path
+SET SESSION AUTHORIZATION regress_matview_user;
+SET search_path = matview_schema;
+CREATE FUNCTION matview_schema.mod(a INT, b INT) RETURNS INT
+  IMMUTABLE LANGUAGE plpgsql AS
+  $$ BEGIN RETURN 42; END; $$;
+CREATE FUNCTION matview_schema.mod10(i INT) RETURNS INT
+  IMMUTABLE LANGUAGE plpgsql AS
+  $$ BEGIN RETURN mod(i, 10); END; $$;
+CREATE MATERIALIZED VIEW matview_search_path AS
+  SELECT current_user, matview_schema.mod10(33);
+SELECT * FROM matview_search_path;
+     current_user     | mod10 
+----------------------+-------
+ regress_matview_user |     3
+(1 row)
+
+RESET SESSION AUTHORIZATION;
+REFRESH MATERIALIZED VIEW matview_search_path;
+SELECT * FROM matview_search_path;
+     current_user     | mod10 
+----------------------+-------
+ regress_matview_user |     3
+(1 row)
+
+ALTER FUNCTION matview_schema.mod10(INT)
+  SET search_path = matview_schema, pg_catalog;
+REFRESH MATERIALIZED VIEW matview_search_path;
+SELECT * FROM matview_search_path;
+     current_user     | mod10 
+----------------------+-------
+ regress_matview_user |    42
+(1 row)
+
+RESET search_path;
 DROP SCHEMA matview_schema CASCADE;
-NOTICE:  drop cascades to 4 other objects
+NOTICE:  drop cascades to 7 other objects
 DETAIL:  drop cascades to materialized view matview_schema.mv_withdata1
 drop cascades to materialized view matview_schema.mv_withdata2
 drop cascades to materialized view matview_schema.mv_nodata1
 drop cascades to materialized view matview_schema.mv_nodata2
+drop cascades to function matview_schema.mod(integer,integer)
+drop cascades to function matview_schema.mod10(integer)
+drop cascades to materialized view matview_schema.matview_search_path
 DROP USER regress_matview_user;
 -- CREATE MATERIALIZED VIEW ... IF NOT EXISTS
 CREATE MATERIALIZED VIEW matview_ine_tab AS SELECT 1;

@@ -61,6 +61,7 @@
 #include "utils/pg_rusage.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
+#include "utils/usercontext.h"
 
 
 /*
@@ -2187,6 +2188,7 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
 	SetUserIdAndSecContext(rel->rd_rel->relowner,
 						   save_sec_context | SECURITY_RESTRICTED_OPERATION);
 	save_nestlevel = NewGUCNestLevel();
+	RestrictSearchPath();
 
 	/*
 	 * If PROCESS_MAIN is set (the default), it's time to vacuum the main

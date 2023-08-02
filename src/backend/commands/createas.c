@@ -50,6 +50,7 @@
 #include "utils/rel.h"
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
+#include "utils/usercontext.h"
 
 typedef struct
 {
@@ -61,6 +62,8 @@ typedef struct
 	CommandId	output_cid;		/* cmin to insert in output tuples */
 	int			ti_options;		/* table_tuple_insert performance options */
 	BulkInsertState bistate;	/* bulk insert state */
+	int		   *save_nestlevel;	/* initialized in ExecCreateTableAs if new GUC
+								 * nest level is created */
 } DR_intorel;
 
 /* utility functions for CTAS definition creation */
@@ -267,6 +270,17 @@ ExecCreateTableAs(ParseState *pstate, CreateTableAsStmt *stmt,
 	}
 	Assert(query->commandType == CMD_SELECT);
 
+	if (into->skipData)
+	{
+		/*
+		 * If WITH NO DATA was specified, do not go through the rewriter,
+		 * planner and executor.  Just define the relation using a code path
+		 * similar to CREATE VIEW.  This avoids dump/restore problems stemming
+		 * from running the planner before all dependencies are set up.
+		 */
+		return create_ctas_nodata(query->targetList, into);
+	}
+
 	/*
 	 * For materialized views, lock down security-restricted operations and
 	 * arrange to make GUC variable changes local to this command.  This is
@@ -280,76 +294,65 @@ ExecCreateTableAs(ParseState *pstate, CreateTableAsStmt *stmt,
 		SetUserIdAndSecContext(save_userid,
 							   save_sec_context | SECURITY_RESTRICTED_OPERATION);
 		save_nestlevel = NewGUCNestLevel();
+		RestrictSearchPath();
+		((DR_intorel *) dest)->save_nestlevel = &save_nestlevel;
 	}
 
-	if (into->skipData)
-	{
-		/*
-		 * If WITH NO DATA was specified, do not go through the rewriter,
-		 * planner and executor.  Just define the relation using a code path
-		 * similar to CREATE VIEW.  This avoids dump/restore problems stemming
-		 * from running the planner before all dependencies are set up.
-		 */
-		address = create_ctas_nodata(query->targetList, into);
-	}
-	else
-	{
-		/*
-		 * Parse analysis was done already, but we still have to run the rule
-		 * rewriter.  We do not do AcquireRewriteLocks: we assume the query
-		 * either came straight from the parser, or suitable locks were
-		 * acquired by plancache.c.
-		 */
-		rewritten = QueryRewrite(query);
+	/*
+	 * Parse analysis was done already, but we still have to run the rule
+	 * rewriter.  We do not do AcquireRewriteLocks: we assume the query either
+	 * came straight from the parser, or suitable locks were acquired by
+	 * plancache.c.
+	 */
+	rewritten = QueryRewrite(query);
 
-		/* SELECT should never rewrite to more or less than one SELECT query */
-		if (list_length(rewritten) != 1)
-			elog(ERROR, "unexpected rewrite result for %s",
-				 is_matview ? "CREATE MATERIALIZED VIEW" :
-				 "CREATE TABLE AS SELECT");
-		query = linitial_node(Query, rewritten);
-		Assert(query->commandType == CMD_SELECT);
+	/* SELECT should never rewrite to more or less than one SELECT query */
+	if (list_length(rewritten) != 1)
+		elog(ERROR, "unexpected rewrite result for %s",
+			 is_matview ? "CREATE MATERIALIZED VIEW" :
+			 "CREATE TABLE AS SELECT");
+	query = linitial_node(Query, rewritten);
+	Assert(query->commandType == CMD_SELECT);
 
-		/* plan the query */
-		plan = pg_plan_query(query, pstate->p_sourcetext,
-							 CURSOR_OPT_PARALLEL_OK, params);
+	/* plan the query */
+	plan = pg_plan_query(query, pstate->p_sourcetext,
+						 CURSOR_OPT_PARALLEL_OK, params);
 
-		/*
-		 * Use a snapshot with an updated command ID to ensure this query sees
-		 * results of any previously executed queries.  (This could only
-		 * matter if the planner executed an allegedly-stable function that
-		 * changed the database contents, but let's do it anyway to be
-		 * parallel to the EXPLAIN code path.)
-		 */
-		PushCopiedSnapshot(GetActiveSnapshot());
-		UpdateActiveSnapshotCommandId();
+	/*
+	 * Use a snapshot with an updated command ID to ensure this query sees
+	 * results of any previously executed queries.  (This could only matter if
+	 * the planner executed an allegedly-stable function that changed the
+	 * database contents, but let's do it anyway to be parallel to the EXPLAIN
+	 * code path.)
+	 */
+	PushCopiedSnapshot(GetActiveSnapshot());
+	UpdateActiveSnapshotCommandId();
 
-		/* Create a QueryDesc, redirecting output to our tuple receiver */
-		queryDesc = CreateQueryDesc(plan, pstate->p_sourcetext,
-									GetActiveSnapshot(), InvalidSnapshot,
-									dest, params, queryEnv, 0);
+	/* Create a QueryDesc, redirecting output to our tuple receiver */
+	queryDesc = CreateQueryDesc(plan, pstate->p_sourcetext,
+								GetActiveSnapshot(), InvalidSnapshot,
+								dest, params, queryEnv, 0);
 
-		/* call ExecutorStart to prepare the plan for execution */
-		ExecutorStart(queryDesc, GetIntoRelEFlags(into));
+	/* call ExecutorStart to prepare the plan for execution */
+	ExecutorStart(queryDesc, GetIntoRelEFlags(into));
 
-		/* run the plan to completion */
-		ExecutorRun(queryDesc, ForwardScanDirection, 0, true);
+	/* run the plan to completion */
+	ExecutorRun(queryDesc, ForwardScanDirection, 0, true);
 
-		/* save the rowcount if we're given a qc to fill */
-		if (qc)
-			SetQueryCompletion(qc, CMDTAG_SELECT, queryDesc->estate->es_processed);
+	/* save the rowcount if we're given a qc to fill */
+	if (qc)
+		SetQueryCompletion(qc, CMDTAG_SELECT, queryDesc->estate->es_processed);
 
-		/* get object address that intorel_startup saved for us */
-		address = ((DR_intorel *) dest)->reladdr;
+	/* get object address that intorel_startup saved for us */
+	address = ((DR_intorel *) dest)->reladdr;
 
-		/* and clean up */
-		ExecutorFinish(queryDesc);
-		ExecutorEnd(queryDesc);
+	/* and clean up */
+	ExecutorFinish(queryDesc);
+	ExecutorEnd(queryDesc);
 
-		FreeQueryDesc(queryDesc);
+	FreeQueryDesc(queryDesc);
 
-		PopActiveSnapshot();
-	}
+	PopActiveSnapshot();
 
 	if (is_matview)
 	{
@@ -523,9 +526,26 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 				 errmsg("too many column names were specified")));
 
 	/*
+	 * Restore search_path to original value so that the object is created in
+	 * the correct namespace.
+	 */
+	if (myState->save_nestlevel)
+		AtEOXact_GUC(false, *myState->save_nestlevel);
+
+	/*
 	 * Actually create the target table
 	 */
 	intoRelationAddr = create_ctas_internal(attrList, into);
+
+	/*
+	 * Restrict the search_path again for execution of the materialized view
+	 * query.
+	 */
+	if (myState->save_nestlevel)
+	{
+		*myState->save_nestlevel = NewGUCNestLevel();
+		RestrictSearchPath();
+	}
 
 	/*
 	 * Finally we can open the target table

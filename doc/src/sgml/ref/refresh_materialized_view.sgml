@@ -32,12 +32,19 @@ REFRESH MATERIALIZED VIEW [ CONCURRENTLY ] <replaceable class="parameter">name</
   <para>
    <command>REFRESH MATERIALIZED VIEW</command> completely replaces the
    contents of a materialized view.  To execute this command you must be the
-   owner of the materialized view.  The old contents are discarded.  If
-   <literal>WITH DATA</literal> is specified (or defaults) the backing query
-   is executed to provide the new data, and the materialized view is left in a
-   scannable state.  If <literal>WITH NO DATA</literal> is specified no new
-   data is generated and the materialized view is left in an unscannable
-   state.
+   owner of the materialized view.  The old contents are discarded.
+  </para>
+  <para>
+   If <literal>WITH DATA</literal> is specified (or defaults) the backing
+   query is executed to provide the new data, and the materialized view is
+   left in a scannable state.  The query is executed as the owner of the
+   materialized view; and while the query is executing the <xref
+   linkend="guc-search-path"/> is set to <literal>pg_catalog,
+   pg_temp</literal>.
+  </para>
+  <para>
+   If <literal>WITH NO DATA</literal> is specified no new data is generated
+   and the materialized view is left in an unscannable state.
   </para>
   <para>
    <literal>CONCURRENTLY</literal> and <literal>WITH NO DATA</literal> may not

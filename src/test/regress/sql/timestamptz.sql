@@ -612,6 +612,27 @@ SELECT '2014-10-25 22:00:01 UTC'::timestamptz AT TIME ZONE 'MSK';
 SELECT '2014-10-25 23:00:00 UTC'::timestamptz AT TIME ZONE 'MSK';
 
 --
+-- Test LOCAL time zone
+--
+BEGIN;
+SET LOCAL TIME ZONE 'Europe/Paris';
+VALUES (CAST('1978-07-07 19:38 America/New_York' AS TIMESTAMP WITH TIME ZONE) AT LOCAL);
+VALUES (TIMESTAMP '1978-07-07 19:38' AT LOCAL);
+SET LOCAL TIME ZONE 'Australia/Sydney';
+VALUES (CAST('1978-07-07 19:38 America/New_York' AS TIMESTAMP WITH TIME ZONE) AT LOCAL);
+VALUES (TIMESTAMP '1978-07-07 19:38' AT LOCAL);
+RESET TIME ZONE;
+CREATE VIEW local_time_zone AS
+    VALUES (CAST('1978-07-07 19:38 America/New_York' AS TIMESTAMP WITH TIME ZONE) AT LOCAL,
+            CAST('1978-07-07 19:38 America/New_York' AS TIMESTAMP WITH TIME ZONE) AT TIME ZONE current_setting('TimeZone'),
+            TIMESTAMP '1978-07-07 19:38' AT LOCAL,
+            TIMESTAMP '1978-07-07 19:38' AT TIME ZONE current_setting('TimeZone'));
+\sv local_time_zone
+TABLE local_time_zone;
+DROP VIEW local_time_zone;
+COMMIT;
+
+--
 -- Test that AT TIME ZONE isn't misoptimized when using an index (bug #14504)
 --
 create temp table tmptz (f1 timestamptz primary key);

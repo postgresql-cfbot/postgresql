@@ -84,6 +84,7 @@ extern const ExtensibleNodeMethods *GetExtensibleNodeMethods(const char *extnode
 #define CUSTOMPATH_SUPPORT_BACKWARD_SCAN	0x0001
 #define CUSTOMPATH_SUPPORT_MARK_RESTORE		0x0002
 #define CUSTOMPATH_SUPPORT_PROJECTION		0x0004
+#define CUSTOMPATH_SUPPORT_ASYNC_EXECUTION	0x0008
 
 /*
  * Custom path methods.  Mostly, we just need to know how to convert a
@@ -155,6 +156,11 @@ typedef struct CustomExecMethods
 	void		(*ExplainCustomScan) (CustomScanState *node,
 									  List *ancestors,
 									  ExplainState *es);
+
+	/* Support functions for asynchronous execution */
+	void 		(*CustomScanAsyncRequest) (AsyncRequest *areq);
+	void 		(*CustomScanAsyncConfigureWait) (AsyncRequest *areq);
+	void 		(*CustomScanAsyncNotify) (AsyncRequest *areq);
 } CustomExecMethods;
 
 extern void RegisterCustomScanMethods(const CustomScanMethods *methods);

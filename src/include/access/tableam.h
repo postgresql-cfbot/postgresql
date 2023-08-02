@@ -390,7 +390,8 @@ typedef struct TableAmRoutine
 	 * relation.
 	 */
 	Size		(*parallelscan_initialize) (Relation rel,
-											ParallelTableScanDesc pscan);
+											ParallelTableScanDesc pscan,
+											BlockNumber chunk_factor);
 
 	/*
 	 * Reinitialize `pscan` for a new scan. `rel` will be the same relation as
@@ -1148,7 +1149,8 @@ extern Size table_parallelscan_estimate(Relation rel, Snapshot snapshot);
  */
 extern void table_parallelscan_initialize(Relation rel,
 										  ParallelTableScanDesc pscan,
-										  Snapshot snapshot);
+										  Snapshot snapshot,
+										  BlockNumber chunk_factor);
 
 /*
  * Begin a parallel scan. `pscan` needs to have been initialized with
@@ -2064,7 +2066,8 @@ extern void simple_table_tuple_update(Relation rel, ItemPointer otid,
 
 extern Size table_block_parallelscan_estimate(Relation rel);
 extern Size table_block_parallelscan_initialize(Relation rel,
-												ParallelTableScanDesc pscan);
+												ParallelTableScanDesc pscan,
+												BlockNumber chunk_factor);
 extern void table_block_parallelscan_reinitialize(Relation rel,
 												  ParallelTableScanDesc pscan);
 extern BlockNumber table_block_parallelscan_nextpage(Relation rel,

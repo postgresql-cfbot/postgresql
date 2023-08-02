@@ -682,6 +682,10 @@ include_dir 'conf.d'
         same port number is used for all IP addresses the server listens on.
         This parameter can only be set at server start.
        </para>
+       <para>
+        The port can be set to 0 to make Postgres pick an unused port number.
+        The assigned port number can be then retrieved from <filename>postmaster.pid</filename>.
+       </para>
       </listitem>
      </varlistentry>
 

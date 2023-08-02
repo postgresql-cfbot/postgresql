@@ -1208,17 +1208,30 @@ PostmasterMain(int argc, char *argv[])
 		foreach(l, elemlist)
 		{
 			char	   *curhost = (char *) lfirst(l);
+			bool       wildcard_port = PostPortNumber == 0;
 
 			if (strcmp(curhost, "*") == 0)
-				status = StreamServerPort(AF_UNSPEC, NULL,
-										  (unsigned short) PostPortNumber,
+				status = StreamServerPortReturn(AF_UNSPEC, NULL,
+										  (unsigned short *) &PostPortNumber,
 										  NULL,
 										  ListenSocket, MAXLISTEN);
 			else
-				status = StreamServerPort(AF_UNSPEC, curhost,
-										  (unsigned short) PostPortNumber,
+				status = StreamServerPortReturn(AF_UNSPEC, curhost,
+										  (unsigned short *) &PostPortNumber,
 										  NULL,
 										  ListenSocket, MAXLISTEN);
+
+			if (wildcard_port) {
+				char curport[10];
+				/* Ensure picked port is saved to the lock file
+				 *
+				 * Initial port selection is written to the lock file in
+				 * CreateDataDirLockFile but if the supplied port was zero,
+				 * we need to update it.
+				 */
+				curport[pg_ultoa_n(PostPortNumber, curport)] = 0;
+				AddToDataDirLockFile(LOCK_FILE_LINE_PORT, curport);
+			}
 
 			if (status == STATUS_OK)
 			{

@@ -302,11 +302,12 @@ socket_close(int code, Datum arg)
  *		Stream functions are used for vanilla TCP connection protocol.
  */
 
-
 /*
- * StreamServerPort -- open a "listening" port to accept connections.
+ * StreamServerPortReturn -- open a "listening" port to accept connections.
  *
- * family should be AF_UNIX or AF_UNSPEC; portNumber is the port number.
+ * family should be AF_UNIX or AF_UNSPEC; portNumberPtr is a non-NULL pointer
+ * to a port number.
+ *
  * For AF_UNIX ports, hostName should be NULL and unixSocketDir must be
  * specified.  For TCP ports, hostName is either NULL for all interfaces or
  * the interface to listen on, and unixSocketDir is ignored (can be NULL).
@@ -314,13 +315,21 @@ socket_close(int code, Datum arg)
  * Successfully opened sockets are added to the ListenSocket[] array (of
  * length MaxListen), at the first position that isn't PGINVALID_SOCKET.
  *
+ * This function allows retrieving assigned port number through portNumberPtr
+ * (if the original value of *portNumberPtr is 0, signifying an unused port
+ * selection)
+ *
+ * If the retrieval of the assigned port number is not necessary, StreamServerPort
+ * can be used instead.
+ *
  * RETURNS: STATUS_OK or STATUS_ERROR
  */
 
 int
-StreamServerPort(int family, const char *hostName, unsigned short portNumber,
+StreamServerPortReturn(int family, const char *hostName, unsigned short *portNumberPtr,
 				 const char *unixSocketDir,
 				 pgsocket ListenSocket[], int MaxListen)
+
 {
 	pgsocket	fd;
 	int			err;
@@ -341,6 +350,11 @@ StreamServerPort(int family, const char *hostName, unsigned short portNumber,
 #if !defined(WIN32) || defined(IPV6_V6ONLY)
 	int			one = 1;
 #endif
+	unsigned short portNumber;
+
+	/* portNumberPtr must contain a value */
+	Assert(portNumberPtr != NULL);
+	portNumber = *portNumberPtr;
 
 	/* Initialize hint structure */
 	MemSet(&hint, 0, sizeof(hint));
@@ -539,6 +553,39 @@ StreamServerPort(int family, const char *hostName, unsigned short portNumber,
 				closesocket(fd);
 				break;
 			}
+		} else if (portNumber == 0)
+		{
+			/* Return actual, effective portNumber through portNumberPtr.
+			 *
+			 * The reason it works uniformly across different socket types is because
+			 * port number is updated in a sequence and on the following iterations, it will
+			 * be no longer set to 0. Therefore, all sockets will share the same IP address.
+			 *
+			 * If it is impossible to listen on a socket on the port that was unused in one family,
+			 * it will result in an error.
+			 */
+			struct sockaddr_in sockaddr;
+			socklen_t socksize = sizeof(sockaddr);
+			StaticAssertStmt(offsetof(struct sockaddr_in, sin_port) == offsetof(struct sockaddr_in6, sin6_port),
+					"sockaddr_in and sockaddr_in6 must have port at the same offset");
+
+			if (getsockname(fd, (struct sockaddr *)&sockaddr, &socksize) == -1)
+			{
+				int	saved_errno = errno;
+				ereport(LOG, errmsg("getsockname failed with: %s", strerror(saved_errno)));
+				closesocket(fd);
+				break;
+			}
+
+			if (addr->ai_family == AF_INET)
+			{
+				*portNumberPtr = ntohs(sockaddr.sin_port);
+			} else if (addr->ai_family == AF_INET6)
+			{
+				*portNumberPtr = ntohs(((struct sockaddr_in6 *)&sockaddr)->sin6_port);
+			}
+
+			portNumber = *portNumberPtr;
 		}
 
 		/*
@@ -582,6 +629,27 @@ StreamServerPort(int family, const char *hostName, unsigned short portNumber,
 	return STATUS_OK;
 }
 
+/*
+ * StreamServerPort -- open a "listening" port to accept connections.
+ *
+ * family should be AF_UNIX or AF_UNSPEC; portNumber is the port number.
+ * For AF_UNIX ports, hostName should be NULL and unixSocketDir must be
+ * specified.  For TCP ports, hostName is either NULL for all interfaces or
+ * the interface to listen on, and unixSocketDir is ignored (can be NULL).
+ *
+ * Successfully opened sockets are added to the ListenSocket[] array (of
+ * length MaxListen), at the first position that isn't PGINVALID_SOCKET.
+ *
+ * RETURNS: STATUS_OK or STATUS_ERROR
+ */
+
+int
+StreamServerPort(int family, const char *hostName, unsigned short portNumber,
+				 const char *unixSocketDir,
+				 pgsocket ListenSocket[], int MaxListen)
+{
+	return StreamServerPortReturn(family, hostName, &portNumber, unixSocketDir, ListenSocket, MaxListen);
+}
 
 /*
  * Lock_AF_UNIX -- configure unix socket file path

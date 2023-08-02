@@ -367,6 +367,7 @@ extern void tuplesort_reset(Tuplesortstate *state);
 
 extern void tuplesort_get_stats(Tuplesortstate *state,
 								TuplesortInstrumentation *stats);
+extern void tuplesort_reset_stats(Tuplesortstate *state);
 extern const char *tuplesort_method_name(TuplesortMethod m);
 extern const char *tuplesort_space_type_name(TuplesortSpaceType t);
 

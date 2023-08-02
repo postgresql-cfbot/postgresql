@@ -2575,6 +2575,18 @@ tuplesort_get_stats(Tuplesortstate *state,
 }
 
 /*
+ * tuplesort_reset_stats - reset summary statistics
+ *
+ * This can be called before tuplesort_performsort() starts.
+ */
+void
+tuplesort_reset_stats(Tuplesortstate *state)
+{
+	state->isMaxSpaceDisk = false;
+	state->maxSpace = 0;
+}
+
+/*
  * Convert TuplesortMethod to a string.
  */
 const char *

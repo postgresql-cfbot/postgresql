@@ -151,6 +151,7 @@ typedef struct VacAttrStats
 	float4	   *stanumbers[STATISTIC_NUM_SLOTS];
 	int			numvalues[STATISTIC_NUM_SLOTS];
 	Datum	   *stavalues[STATISTIC_NUM_SLOTS];
+	Datum		staindexam;		/* index-specific stats (as bytea) */
 
 	/*
 	 * These fields describe the stavalues[n] element types. They will be
@@ -299,6 +300,7 @@ extern PGDLLIMPORT int vacuum_multixact_freeze_min_age;
 extern PGDLLIMPORT int vacuum_multixact_freeze_table_age;
 extern PGDLLIMPORT int vacuum_failsafe_age;
 extern PGDLLIMPORT int vacuum_multixact_failsafe_age;
+extern PGDLLIMPORT bool enable_indexam_stats;
 
 /*
  * Maximum value for default_statistics_target and per-column statistics

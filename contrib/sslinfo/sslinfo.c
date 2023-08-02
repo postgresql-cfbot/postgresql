@@ -18,6 +18,7 @@
 #include "libpq/libpq-be.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
+#include "utils/timestamp.h"
 
 /*
  * On Windows, <wincrypt.h> includes a #define for X509_NAME, which breaks our
@@ -34,6 +35,7 @@ PG_MODULE_MAGIC;
 
 static Datum X509_NAME_field_to_text(X509_NAME *name, text *fieldName);
 static Datum ASN1_STRING_to_text(ASN1_STRING *str);
+static Datum ASN1_TIME_to_timestamp(ASN1_TIME *time);
 
 /*
  * Function context for data persisting over repeated calls.
@@ -222,6 +224,52 @@ X509_NAME_field_to_text(X509_NAME *name, text *fieldName)
 		return (Datum) 0;
 	data = X509_NAME_ENTRY_get_data(X509_NAME_get_entry(name, index));
 	return ASN1_STRING_to_text(data);
+}
+
+
+/*
+ * Converts OpenSSL ASN1_TIME structure into timestamp
+ *
+ * OpenSSL 1.0.2 doesn't expose a function to convert an ASN1_TIME to a tm
+ * struct, it's only available in 1.1.1 an onwards. Instead we can ask for the
+ * difference between the ASN1_TIME and a known timestamp and get the actual
+ * timestamp that way. Until support for OpenSSL 1.0.2 is retired we have to do
+ * it this way.
+ *
+ * Parameter: time - OpenSSL ASN1_TIME structure.
+ * Returns Datum, which can be directly returned from a C language SQL
+ * function.
+ */
+static Datum
+ASN1_TIME_to_timestamp(ASN1_TIME *ASN1_cert_ts)
+{
+	int			days;
+	int			seconds;
+	const char	utc_epoch[] = "19700101000000Z";
+	ASN1_TIME  *ASN1_epoch;
+
+	/* Create an epoch to compare against */
+	ASN1_epoch = ASN1_TIME_new();
+	if (!ASN1_epoch)
+		ereport(ERROR,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("could not allocate memory for ASN1 TIME structure")));
+
+	/* Calculate the diff from the epoch to the certificat timestamp */
+	if (!ASN1_TIME_set_string(ASN1_epoch, utc_epoch) ||
+		!ASN1_TIME_diff(&days, &seconds, ASN1_epoch, ASN1_cert_ts))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("failed to read certificate validity")));
+
+	/*
+	 * Unlike when freeing other OpenSSL memory structures, there is no error
+	 * return on freeing ASN1 strings.
+	 */
+	ASN1_TIME_free(ASN1_epoch);
+
+	return DirectFunctionCall1(float8_timestamptz,
+							   Float8GetDatum(((double)days * 24 * 60 * 60) + (double)seconds));
 }
 
 
@@ -481,4 +529,36 @@ ssl_extension_info(PG_FUNCTION_ARGS)
 
 	/* All done */
 	SRF_RETURN_DONE(funcctx);
+}
+
+/*
+ * Returns current client certificate notBefore timestamp in
+ * timestamp data type
+ */
+PG_FUNCTION_INFO_V1(ssl_client_get_notbefore);
+Datum
+ssl_client_get_notbefore(PG_FUNCTION_ARGS)
+{
+	X509	   *cert = MyProcPort->peer;
+
+	if (!MyProcPort->ssl_in_use || !MyProcPort->peer_cert_valid)
+		PG_RETURN_NULL();
+
+	return ASN1_TIME_to_timestamp(X509_get_notBefore(cert));
+}
+
+/*
+ * Returns current client certificate notAfter timestamp in
+ * timestamp data type
+ */
+PG_FUNCTION_INFO_V1(ssl_client_get_notafter);
+Datum
+ssl_client_get_notafter(PG_FUNCTION_ARGS)
+{
+	X509	   *cert = MyProcPort->peer;
+
+	if (!MyProcPort->ssl_in_use || !MyProcPort->peer_cert_valid)
+		PG_RETURN_NULL();
+
+	return ASN1_TIME_to_timestamp(X509_get_notAfter(cert));
 }

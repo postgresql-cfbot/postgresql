@@ -216,7 +216,8 @@ DECLARE_INDEX(pg_class_tblspc_relfilenode_index, 3455, ClassTblspcRelfilenodeInd
 /*
  * Relation kinds with a table access method (rd_tableam).  Although sequences
  * use the heap table AM, they are enough of a special case in most uses that
- * they are not included here.
+ * they are not included here.  Likewise, partitioned tables have an access
+ * method defined; however, it's handled specially outside of this macro.
  */
 #define RELKIND_HAS_TABLE_AM(relkind) \
 	((relkind) == RELKIND_RELATION || \

@@ -77,6 +77,39 @@
  *	  a bit more memory to the oldest subtransactions, because it's likely
  *	  they are the source for the next sequence of changes.
  *
+ *	  When decoding sequences, we differentiate between changes to sequences
+ *	  with a new relfilenode in the currently decoded transaction, and
+ *	  sequences created in other (already committed) transactions. First case
+ *	  is treated as "transactional" i.e. just like any other change from that
+ *	  transaction (and discarded in case of a rollback). Second case is treated
+ *	  as non-transactional and the changes are processed immediately, as if
+ *	  performed outside any transaction (and thus not rolled back).
+ *
+ *	  This mixed behavior is necessary - sequences are non-transactional
+ *	  (e.g. ROLLBACK does not undo the sequence increments). But for new
+ *	  sequences, we need to handle them in a transactional way, because if
+ *	  we ever get some DDL support, the sequence won't exist until the
+ *	  transaction gets applied. So we need to ensure the changes don't
+ *	  happen until the sequence gets created.
+ *
+ *	  Similarly when a new relfilenode is assigned to a sequence (because of
+ *	  some sort of DDL) the changs do not become visible till the transaction
+ *	  gets committed. If the transaction gets aborted it will never be visible.
+ *
+ *	  To decide if a sequence change is transactional, we track relfilenodes
+ *	  created in current transactions, with the XID of the (sub)transaction
+ *	  that created the relfilenode. The list of sequence relfilenodes gets
+ *	  cleaned up when a transaction completes (commit/rollback).
+ *
+ *	  We don't use the XID to check if it's the same top-level transaction.
+ *	  It's enough to know it was created in the transaction being decoded, and
+ *	  we know it must be the current one because otherwise it wouldn't see the
+ *	  sequence object.
+ *
+ *	  The XID may be valid even for non-transactional sequences - we simply
+ *	  keep the XID logged to WAL, it's up to the reorderbuffer to decide if
+ *	  the increment is transactional.
+ *
  * -------------------------------------------------------------------------
  */
 #include "postgres.h"
@@ -91,6 +124,7 @@
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 #include "catalog/catalog.h"
+#include "commands/sequence.h"
 #include "lib/binaryheap.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -115,6 +149,13 @@ typedef struct ReorderBufferTXNByIdEnt
 	TransactionId xid;
 	ReorderBufferTXN *txn;
 } ReorderBufferTXNByIdEnt;
+
+/* entry for hash table we use to track sequences created in running xacts */
+typedef struct ReorderBufferSequenceEnt
+{
+	RelFileLocator	rlocator;
+	ReorderBufferTXN *txn;
+} ReorderBufferSequenceEnt;
 
 /* data structures for (relfilelocator, ctid) => (cmin, cmax) mapping */
 typedef struct ReorderBufferTupleCidKey
@@ -225,6 +266,7 @@ static void ReorderBufferTransferSnapToParent(ReorderBufferTXN *txn,
 											  ReorderBufferTXN *subtxn);
 
 static void AssertTXNLsnOrder(ReorderBuffer *rb);
+static void AssertCheckSequences(ReorderBuffer *rb);
 
 /* ---------------------------------------
  * support functions for lsn-order iterating over the ->changes of a
@@ -369,6 +411,7 @@ ReorderBufferAllocate(void)
 
 	dlist_init(&buffer->toplevel_by_lsn);
 	dlist_init(&buffer->txns_by_base_snapshot_lsn);
+	dlist_init(&buffer->sequence_changes);
 	dclist_init(&buffer->catchange_txns);
 
 	/*
@@ -456,10 +499,46 @@ ReorderBufferReturnTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
 		txn->invalidations = NULL;
 	}
 
+	if (txn->sequences_hash != NULL)
+	{
+		hash_destroy(txn->sequences_hash);
+		txn->sequences_hash = NULL;
+	}
+
 	/* Reset the toast hash */
 	ReorderBufferToastReset(rb, txn);
 
 	pfree(txn);
+}
+
+/*
+ * Initialize hash table of relfilenodes created by the transaction.
+ *
+ * Each entry maps the relfilenode to the (sub)transaction that created the
+ * relfilenode - which is also the transaction the sequence change needs to
+ * be part of (in transactional case).
+ *
+ * We don't do this in ReorderBufferGetTXN because that'd allocate the hash
+ * for all transactions, and we expect new relfilenodes to be fairly rare.
+ * So only do that when adding the first entry.
+ */
+static void
+ReorderBufferTXNSequencesInit(ReorderBuffer *rb, ReorderBufferTXN *txn)
+{
+	HASHCTL		hash_ctl;
+
+	/* bail out if already initialized */
+	if (txn->sequences_hash)
+		return;
+
+	/* hash table of sequences, mapping relfilelocator to transaction */
+	hash_ctl.keysize = sizeof(RelFileLocator);
+	hash_ctl.entrysize = sizeof(ReorderBufferSequenceEnt);
+	hash_ctl.hcxt = rb->context;
+
+	/* we expect relfilenodes to be created only rarely, so 32 seems enough */
+	txn->sequences_hash = hash_create("ReorderBufferTXNSequenceHash", 32, &hash_ctl,
+								 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 }
 
 /*
@@ -534,6 +613,13 @@ ReorderBufferReturnChange(ReorderBuffer *rb, ReorderBufferChange *change,
 			{
 				ReorderBufferReturnRelids(rb, change->data.truncate.relids);
 				change->data.truncate.relids = NULL;
+			}
+			break;
+		case REORDER_BUFFER_CHANGE_SEQUENCE:
+			if (change->data.sequence.tuple)
+			{
+				ReorderBufferReturnTupleBuf(rb, change->data.sequence.tuple);
+				change->data.sequence.tuple = NULL;
 			}
 			break;
 		case REORDER_BUFFER_CHANGE_INTERNAL_SPEC_CONFIRM:
@@ -896,6 +982,354 @@ ReorderBufferQueueMessage(ReorderBuffer *rb, TransactionId xid,
 }
 
 /*
+ * Treat the sequence change as transactional?
+ *
+ * To decide if a sequence change should be handled as transactional or applied
+ * immediately, we track (sequence) relfilenodes created by each transaction.
+ * We don't know if the current sub-transaction was already assigned to the
+ * top-level transaction, so we need to check all transactions.
+ *
+ * To limit the number of transactions we need to check, we copy the entries
+ * from subxacts to the top-level transaction, so we have to scan just the top
+ * level ones. We expect relfilenode creation to be a rare thing, so the copies
+ * should not waste too much memory. But sequence changes are very common, so
+ * making the check more efficient seems like a very good trade off.
+ *
+ * XXX Actually, can it happen that the either the relfilenode creation and/or
+ * the sequence change is still unassigned?
+ *
+ * XXX Maybe we should return the XID (in transactional mode), so that we don't
+ * need to look it up again while queueing it.
+ *
+ * XXX Maybe this should try searching the current xact, or the immediate parent.
+ * If it's a transactional change, it's likely where we find a match.
+ */
+bool
+ReorderBufferSequenceIsTransactional(ReorderBuffer *rb,
+									 RelFileLocator rlocator)
+{
+	bool		found = false;
+	dlist_iter	iter;
+
+	AssertCheckSequences(rb);
+
+	/*
+	 * Walk all top-level transactions (some of which may be subxacts, except
+	 * that we haven't processed the assignments yet), and check if any of
+	 * them created the relfilenode.
+	 */
+	dlist_foreach(iter, &rb->toplevel_by_lsn)
+	{
+		ReorderBufferTXN *txn = dlist_container(ReorderBufferTXN, node,
+												iter.cur);
+
+		/* transaction has no relfilenodes at all */
+		if (!txn->sequences_hash)
+			continue;
+
+		(void) hash_search(txn->sequences_hash,
+						   (void *) &rlocator,
+						   HASH_FIND,
+						   &found);
+
+		/*
+		 * If we found an entry with matchine relfilenode, we're done - we have
+		 * to treat the sequence change as transactional, and replay it in the
+		 * same (sub)transaction just like any other change.
+		 */
+		if (found)
+			break;
+	}
+
+	return found;
+}
+
+/*
+ * ReorderBufferSequenceGetXid
+ *		XID of the (sub)transaction that created the relfilenode.
+ *
+ * Returns XID for transactional changes, and invalid XID otherwise.
+ *
+ * XXX Same thing as ReorderBufferSequenceIsTransactional, except that instead
+ * of returning true/false, returns XID of the xact that created relfilenode.
+ */
+static TransactionId
+ReorderBufferSequenceGetXid(ReorderBuffer *rb,
+							RelFileLocator rlocator)
+{
+	bool		found = true;
+	dlist_iter	iter;
+
+	AssertCheckSequences(rb);
+
+	/*
+	 * Walk all top-level transactions (some of which may be subxacts, except
+	 * that we haven't processed the assignments yet), and check if any of
+	 * them created the relfilenode.
+	 */
+	dlist_foreach(iter, &rb->toplevel_by_lsn)
+	{
+		ReorderBufferSequenceEnt *entry;
+		ReorderBufferTXN *txn = dlist_container(ReorderBufferTXN, node,
+												iter.cur);
+
+		/* transaction has no relfilenodes at all */
+		if (!txn->sequences_hash)
+			continue;
+
+		entry = hash_search(txn->sequences_hash,
+							(void *) &rlocator,
+							HASH_FIND,
+							&found);
+
+		/*
+		 * If we found an entry with matchine relfilenode, we're done - we have
+		 * to treat the sequence change as transactional, and replay it in the
+		 * same (sub)transaction just like any other change.
+		 */
+		if (found)
+			return entry->txn->xid;
+	}
+
+	/* no match (has to be non-transactional change) */
+	return InvalidTransactionId;
+}
+
+/*
+ * ReorderBufferTransferSequencesToParent
+ *		Copy the relfilenode entries to the parent after assignment.
+ */
+static void
+ReorderBufferTransferSequencesToParent(ReorderBuffer *rb,
+									   ReorderBufferTXN *txn,
+									   ReorderBufferTXN *subtxn)
+{
+	HASH_SEQ_STATUS scan_status;
+	ReorderBufferSequenceEnt *ent;
+
+	/* we should only get here for subtransactions */
+	Assert(rbtxn_is_known_subxact(subtxn));
+
+	/* if the subtransaction has no relfilenodes, there's nothing to copy */
+	if (!subtxn->sequences_hash)
+		return;
+
+	/* make sure the hash table for parent xact is initialized */
+	ReorderBufferTXNSequencesInit(rb, txn);
+
+	/* scan the subxact hash and copy entries to the parent */
+	hash_seq_init(&scan_status, subtxn->sequences_hash);
+	while ((ent = (ReorderBufferSequenceEnt *) hash_seq_search(&scan_status)) != NULL)
+	{
+		ReorderBufferSequenceEnt   *entry;
+		bool	found = false;
+
+		/* add the same relfilenode to the parent */
+		entry = hash_search(txn->toptxn->sequences_hash,
+							(void *) &ent->rlocator,
+							HASH_ENTER,
+							&found);
+
+		/* the parent should not have the relfilenode yet */
+		Assert(!found);
+		Assert(ent->txn == subtxn);
+
+		entry->txn = ent->txn;
+	}
+}
+
+/*
+ * Cleanup sequences after a subtransaction got aborted.
+ *
+ * The hash table will get destroyed in ReorderBufferReturnTXN, so we don't
+ * need to worry about that. But the entries were copied to the parent xact,
+ * and that's still being decoded - we make sure to remove the entries from
+ * the aborted one.
+ *
+ * XXX We only call this after an abort.
+ */
+static void
+ReorderBufferSequenceCleanup(ReorderBufferTXN *txn)
+{
+	HASH_SEQ_STATUS scan_status;
+	ReorderBufferSequenceEnt *ent;
+
+	/* Bail out if not a subxact, or if there are no entries. */
+	if (!rbtxn_is_known_subxact(txn))
+		return;
+
+	if (!txn->sequences_hash)
+		return;
+
+	/*
+	 * Scan the top-level transaction hash and remove the entries from it. If we
+	 * have entries for subxact, the top-level hash must have been initialized.
+	 */
+	hash_seq_init(&scan_status, txn->sequences_hash);
+	while ((ent = (ReorderBufferSequenceEnt *) hash_seq_search(&scan_status)) != NULL)
+	{
+		(void) hash_search(txn->toptxn->sequences_hash,
+						   (void *) &ent->rlocator,
+						   HASH_REMOVE, NULL);
+	}
+}
+
+/*
+ * A transactional sequence increment is queued to be processed upon commit
+ * and a non-transactional increment gets processed immediately.
+ *
+ * A sequence update may be both transactional and non-transactional. When
+ * created in a running transaction, treat it as transactional and queue
+ * the change in it. Otherwise treat it as non-transactional, so that we
+ * don't forget the increment in case of a rollback.
+ */
+void
+ReorderBufferQueueSequence(ReorderBuffer *rb, TransactionId xid,
+						   Snapshot snapshot, XLogRecPtr lsn, RepOriginId origin_id,
+						   RelFileLocator rlocator, bool transactional,
+						   ReorderBufferTupleBuf *tuplebuf)
+{
+	AssertCheckSequences(rb);
+
+	/*
+	 * Change needs to be handled as transactional, because the sequence was
+	 * created in a transaction that is still running. In that case all the
+	 * changes need to be queued in that transaction, we must not send them
+	 * to the downstream until the transaction commits.
+	 *
+	 * There's a bit of a trouble with subtransactions - we can't queue it
+	 * into the subxact, because it might be rolled back and we'd lose the
+	 * increment. We need to queue it into the same (sub)xact that created
+	 * the sequence, which is why we track the XID in the hash table.
+	 */
+	if (transactional)
+	{
+		MemoryContext oldcontext;
+		ReorderBufferChange *change;
+
+		/* allocate and queue the transactional sequence change */
+		oldcontext = MemoryContextSwitchTo(rb->context);
+
+		change = ReorderBufferGetChange(rb);
+
+		change->action = REORDER_BUFFER_CHANGE_SEQUENCE;
+		change->origin_id = origin_id;
+
+		memcpy(&change->data.sequence.locator, &rlocator, sizeof(RelFileLocator));
+
+		change->data.sequence.tuple = tuplebuf;
+
+		/* lookup the XID for transaction that created the relfilenode */
+		xid = ReorderBufferSequenceGetXid(rb, rlocator);
+
+		/* the XID should be valid for a transactional change */
+		Assert(TransactionIdIsValid(xid));
+
+		/* add it to the same (sub)xact that created that relfilenode */
+		ReorderBufferQueueChange(rb, xid, lsn, change, false);
+
+		MemoryContextSwitchTo(oldcontext);
+	}
+	else
+	{
+		MemoryContext oldcontext;
+		ReorderBufferChange *change;
+
+		/* allocate and queue the transactional sequence change */
+		oldcontext = MemoryContextSwitchTo(rb->context);
+
+		change = ReorderBufferGetChange(rb);
+
+		change->action = REORDER_BUFFER_CHANGE_SEQUENCE;
+		change->origin_id = origin_id;
+		change->lsn = lsn;
+
+		memcpy(&change->data.sequence.locator, &rlocator, sizeof(RelFileLocator));
+
+		change->data.sequence.tuple = tuplebuf;
+
+		dlist_push_tail(&rb->sequence_changes, &change->node);
+
+		MemoryContextSwitchTo(oldcontext);
+	}
+}
+
+/*
+ * ReorderBufferAddRelFileLocator
+ *		Add newly created relfilenode to the hash table for transaction.
+ *
+ * If the transaction is already known to be a subtransaction, we add the same
+ * entry into the parent transaction (but it still points at the subxact, so
+ * that we know where to queue changes or what to discard in case of an abort).
+ */
+void
+ReorderBufferAddRelFileLocator(ReorderBuffer *rb, TransactionId xid,
+							   XLogRecPtr lsn, RelFileLocator rlocator)
+{
+	bool				found;
+	ReorderBufferSequenceEnt   *entry;
+	ReorderBufferTXN   *txn;
+
+	AssertCheckSequences(rb);
+
+	/*
+	 * We only care about sequence relfilenodes for now, and those always have
+	 * a XID. So if there's no XID, don't bother adding them to the hash.
+	 */
+	if (xid == InvalidTransactionId)
+		return;
+
+	/*
+	 * This might be the first change decoded for this transaction, so make
+	 * sure we create it if needed.
+	 */
+	txn = ReorderBufferTXNByXid(rb, xid, true, NULL, lsn, true);
+
+	/*
+	 * First add it to the top-level transaction, but make sure it links to
+	 * the correct subtransaction (so that we add later increments to it).
+	 */
+	if (txn->toptxn)
+	{
+		/* make sure the hash table is initialized */
+		ReorderBufferTXNSequencesInit(rb, txn->toptxn);
+
+		/* search the lookup table */
+		entry = hash_search(txn->toptxn->sequences_hash,
+							(void *) &rlocator,
+							HASH_ENTER,
+							&found);
+
+		/*
+		 * We've just decoded creation of the relfilenode, so if we found it in
+		 * the hash table, something is wrong.
+		 */
+		Assert(!found);
+
+		entry->txn = txn;
+	}
+
+	/* make sure the hash table is initialized */
+	ReorderBufferTXNSequencesInit(rb, txn);
+
+	/* search the lookup table */
+	entry = hash_search(txn->sequences_hash,
+						(void *) &rlocator,
+						HASH_ENTER,
+						&found);
+
+	/*
+	 * We've just decoded creation of the relfilenode, so if we found it in
+	 * the hash table, something is wrong.
+	 */
+	Assert(!found);
+
+	entry->txn = txn;
+
+	AssertCheckSequences(rb);
+}
+
+/*
  * AssertTXNLsnOrder
  *		Verify LSN ordering of transaction lists in the reorderbuffer
  *
@@ -965,6 +1399,123 @@ AssertTXNLsnOrder(ReorderBuffer *rb)
 		Assert(!rbtxn_is_known_subxact(cur_txn));
 
 		prev_base_snap_lsn = cur_txn->base_snapshot_lsn;
+	}
+#endif
+}
+
+static void
+AssertCheckSequences(ReorderBuffer *rb)
+{
+#ifdef USE_ASSERT_CHECKING
+	LogicalDecodingContext *ctx = rb->private_data;
+	dlist_iter	iter;
+
+	/*
+	 * Skip the verification if we don't reach the LSN at which we start
+	 * decoding the contents of transactions yet because until we reach the
+	 * LSN, we could have transactions that don't have the association between
+	 * the top-level transaction and subtransaction yet and consequently have
+	 * the same LSN.  We don't guarantee this association until we try to
+	 * decode the actual contents of transaction. The ordering of the records
+	 * prior to the start_decoding_at LSN should have been checked before the
+	 * restart.
+	 */
+	if (SnapBuildXactNeedsSkip(ctx->snapshot_builder, ctx->reader->EndRecPtr))
+		return;
+
+	/*
+	 * Make sure the relfilenodes from subxacts are properly recorded in the
+	 * parent transaction hash table.
+	 */
+	dlist_foreach(iter, &rb->toplevel_by_lsn)
+	{
+		int			nentries = 0,
+					nsubentries = 0;
+		dlist_iter	subiter;
+		ReorderBufferTXN *txn = dlist_container(ReorderBufferTXN, node,
+													iter.cur);
+
+		if (txn->sequences_hash)
+			nentries = hash_get_num_entries(txn->sequences_hash);
+
+		/* walk all subxacts */
+		dlist_foreach(subiter, &txn->subtxns)
+		{
+			HASH_SEQ_STATUS scan_status;
+			ReorderBufferSequenceEnt *entry;
+
+			ReorderBufferTXN *subtxn = dlist_container(ReorderBufferTXN, node,
+													   subiter.cur);
+
+			if (!subtxn->sequences_hash)
+				continue;
+
+			nsubentries += hash_get_num_entries(subtxn->sequences_hash);
+
+			/*
+			 * Check that all subxact relfilenodes are in the parent too, and
+			 * are pointing to this subtransaction.
+			 */
+			hash_seq_init(&scan_status, subtxn->sequences_hash);
+			while ((entry = (ReorderBufferSequenceEnt *) hash_seq_search(&scan_status)) != NULL)
+			{
+				bool	found = false;
+				ReorderBufferSequenceEnt *entry2;
+
+				/* search for the same relfilenode in the parent */
+				entry2 = hash_search(txn->sequences_hash,
+									 (void *) &entry->rlocator,
+									 HASH_FIND,
+									 &found);
+
+				/*
+				 * The parent hash should have the relfilenode too, and it should
+				 * point to this subxact.
+				 */
+				Assert(found);
+				Assert(entry2->txn == subtxn);
+			}
+		}
+
+		Assert(nentries >= nsubentries);
+
+		/*
+		 * Now do the check in the opposite direction - check that every entry in
+		 * the parent hash (except those pointing to the parent txn) point to one
+		 * of the subxacts, and there's an entry in the subxact hash.
+		 */
+		if (txn->sequences_hash)
+		{
+			HASH_SEQ_STATUS scan_status;
+			ReorderBufferSequenceEnt *entry;
+
+			hash_seq_init(&scan_status, txn->sequences_hash);
+			while ((entry = (ReorderBufferSequenceEnt *) hash_seq_search(&scan_status)) != NULL)
+			{
+				bool	found = false;
+				ReorderBufferSequenceEnt *entry2;
+
+				/* skip entries for the parent txn itself */
+				if (entry->txn == txn)
+					continue;
+
+				/* is it a subxact of this txn? */
+				Assert(rbtxn_is_known_subxact(entry->txn));
+				Assert(entry->txn->toptxn == txn);
+
+				/*
+				 * Search for the same relfilenode in the subxact (it should be
+				 * initialized, as we expect it to contain the relfilenode).
+				 */
+				entry2 = hash_search(entry->txn->sequences_hash,
+									 (void *) &entry->rlocator,
+									 HASH_FIND,
+									 &found);
+
+				Assert(found);
+				Assert(entry2->txn = entry->txn);
+			}
+		}
 	}
 #endif
 }
@@ -1103,6 +1654,9 @@ ReorderBufferAssignChild(ReorderBuffer *rb, TransactionId xid,
 
 	/* Possibly transfer the subtxn's snapshot to its top-level txn. */
 	ReorderBufferTransferSnapToParent(txn, subtxn);
+
+	/* Possibly transfer the subtxn's sequences to its top-level txn. */
+	ReorderBufferTransferSequencesToParent(rb, txn, subtxn);
 
 	/* Verify LSN-ordering invariant */
 	AssertTXNLsnOrder(rb);
@@ -1582,8 +2136,11 @@ ReorderBufferCleanupTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
 		dclist_delete_from(&rb->catchange_txns, &txn->catchange_node);
 
 	/* now remove reference from buffer */
-	hash_search(rb->by_txn, &txn->xid, HASH_REMOVE, &found);
-	Assert(found);
+	if (TransactionIdIsValid(txn->xid))	/* XXX fake sequence TXN has invalid XID */
+	{
+		hash_search(rb->by_txn, &txn->xid, HASH_REMOVE, &found);
+		Assert(found);
+	}
 
 	/* remove entries spilled to disk */
 	if (rbtxn_is_serialized(txn))
@@ -1995,6 +2552,35 @@ ReorderBufferApplyMessage(ReorderBuffer *rb, ReorderBufferTXN *txn,
 					change->data.msg.prefix,
 					change->data.msg.message_size,
 					change->data.msg.message);
+}
+
+/*
+ * Helper function for ReorderBufferProcessTXN for applying sequences.
+ */
+static inline void
+ReorderBufferApplySequence(ReorderBuffer *rb, ReorderBufferTXN *txn,
+						   Relation relation, ReorderBufferChange *change,
+						   bool streaming)
+{
+	HeapTuple	tuple;
+	Form_pg_sequence_data seq;
+	int64		value;
+
+	tuple = &change->data.sequence.tuple->tuple;
+	seq = (Form_pg_sequence_data) GETSTRUCT(tuple);
+
+	value = seq->last_value;
+	value += (seq->is_called) ? seq->log_cnt : 0;
+
+	/*
+	 * When called from ReorderBufferApplySequence, we're applying changes
+	 * accumulated in a ReorderBufferTXN, so all those are transactional
+	 * changes of sequences.
+	 */
+	if (streaming)
+		rb->stream_sequence(rb, txn, change->lsn, relation, true, value);
+	else
+		rb->sequence(rb, txn, change->lsn, relation, true, value);
 }
 
 /*
@@ -2442,6 +3028,31 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 				case REORDER_BUFFER_CHANGE_INTERNAL_TUPLECID:
 					elog(ERROR, "tuplecid value in changequeue");
 					break;
+
+				case REORDER_BUFFER_CHANGE_SEQUENCE:
+					Assert(snapshot_now);
+
+					reloid = RelidByRelfilenumber(change->data.sequence.locator.spcOid,
+												  change->data.sequence.locator.relNumber);
+
+					if (reloid == InvalidOid)
+						elog(ERROR, "could not map filenode \"%s\" to relation OID",
+							 relpathperm(change->data.sequence.locator,
+										 MAIN_FORKNUM));
+
+					relation = RelationIdGetRelation(reloid);
+
+					if (!RelationIsValid(relation))
+						elog(ERROR, "could not open relation with OID %u (for filenode \"%s\")",
+							 reloid,
+							 relpathperm(change->data.sequence.locator,
+										 MAIN_FORKNUM));
+
+					if (RelationIsLogicallyLogged(relation))
+						ReorderBufferApplySequence(rb, txn, relation, change, streaming);
+
+					RelationClose(relation);
+					break;
 			}
 
 			/*
@@ -2692,6 +3303,81 @@ ReorderBufferReplay(ReorderBufferTXN *txn,
 }
 
 /*
+ * Create a "fake" substransaction injecting the non-transactional sequence
+ * changes that happened until this commit.
+ *
+ * XXX This has issues with snapshots. Firstly, the "parent" transaction may
+ * be empty withoug a base_snapshot, so that ReorderBufferReplay() will treat
+ * is as empty transaction - and won't apply even the sequence change.
+ *
+ * Secondly, the sequence changes originate from other transactions, so it's
+ * not clear if we can simply transfer snapshots in some way. Maybe we can?
+ * sequence_decode() knows the *current* snapshot, but can we keep it for
+ * later, somehow? Or can we maybe just use some "fresh" snapshot (as these
+ * non-transactional changes should not change sequence-related catalogs).
+ */
+static void
+ReorderBufferAddSequenceTXN(ReorderBuffer *rb, ReorderBufferTXN *txn, XLogRecPtr end_lsn)
+{
+	dlist_mutable_iter miter;
+	ReorderBufferTXN *subtxn = NULL;
+
+	dlist_foreach_modify(miter, &rb->sequence_changes)
+	{
+		ReorderBufferChange *change = dlist_container(ReorderBufferChange, node,
+													  miter.cur);
+
+		/* changes are ordered by LSN, so stop once we exceed end_lsn */
+		if (change->lsn > end_lsn)
+			break;
+
+		if (subtxn == NULL)
+		{
+			subtxn = ReorderBufferGetTXN(rb);
+
+			subtxn->first_lsn = change->lsn;
+
+			/* similar to ReorderBufferAssignChild, but we don't have XIDs */
+			subtxn->txn_flags |= RBTXN_IS_SUBXACT;
+			subtxn->toplevel_xid = txn->xid;
+
+			Assert(subtxn->nsubtxns == 0);
+
+			/* set the reference to top-level transaction */
+			subtxn->toptxn = txn;
+
+			/* add to subtransaction list */
+			dlist_push_tail(&txn->subtxns, &subtxn->node);
+			txn->nsubtxns++;
+		}
+
+		/* remove the change from the top-level list of changes */
+		dlist_delete(miter.cur);
+
+		change->txn = subtxn;
+
+		/* add it to the next subxact */
+		dlist_push_tail(&subtxn->changes, &change->node);
+		subtxn->nentries++;
+		subtxn->nentries_mem++;
+
+		/*
+		 * XXX should this do memory limit checks and partial changes similar to
+		 * ReorderBufferQueueChange?
+		 *
+		 * We have to do at least the accounting, so that the numbers match.
+		 */
+
+		/* update memory accounting information */
+		ReorderBufferChangeMemoryUpdate(rb, change, true,
+										ReorderBufferChangeSize(change));
+
+		/* check the memory limits and evict something if needed */
+		ReorderBufferCheckMemoryLimit(rb);
+	}
+}
+
+/*
  * Commit a transaction.
  *
  * See comments for ReorderBufferReplay().
@@ -2706,6 +3392,19 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 
 	txn = ReorderBufferTXNByXid(rb, xid, false, NULL, InvalidXLogRecPtr,
 								false);
+
+	/*
+	 * Maybe add a "fake" subtransaction with non-transactional sequence
+	 * changes that happened since the last commit.
+	 *
+	 * XXX I wonder if this might have issues with sequence changes preceding
+	 * the first LSN of the transaction. What snapshot would those changes use?
+	 * Although, maybe we should just skip those changes, at it has to be from
+	 * not-committed transaction.
+	 *
+	 * XXX Should this be looking at commit_lsn or end_lsn?
+	 */
+	ReorderBufferAddSequenceTXN(rb, txn, commit_lsn);
 
 	/* unknown transaction, nothing to replay */
 	if (txn == NULL)
@@ -2921,8 +3620,13 @@ ReorderBufferAbort(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn,
 	/* cosmetic... */
 	txn->final_lsn = lsn;
 
+	/* remove sequence relfilenodes from a top-level hash table (if subxact) */
+	ReorderBufferSequenceCleanup(txn);
+
 	/* remove potential on-disk data, and deallocate */
 	ReorderBufferCleanupTXN(rb, txn);
+
+	AssertCheckSequences(rb);
 }
 
 /*
@@ -2960,6 +3664,8 @@ ReorderBufferAbortOld(ReorderBuffer *rb, TransactionId oldestRunningXid)
 
 			/* remove potential on-disk data, and deallocate this tx */
 			ReorderBufferCleanupTXN(rb, txn);
+
+			AssertCheckSequences(rb);
 		}
 		else
 			return;
@@ -3911,6 +4617,39 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 				break;
 			}
+		case REORDER_BUFFER_CHANGE_SEQUENCE:
+			{
+				char	   *data;
+				ReorderBufferTupleBuf *tup;
+				Size		len = 0;
+
+				tup = change->data.sequence.tuple;
+
+				if (tup)
+				{
+					sz += sizeof(HeapTupleData);
+					len = tup->tuple.t_len;
+					sz += len;
+				}
+
+				/* make sure we have enough space */
+				ReorderBufferSerializeReserve(rb, sz);
+
+				data = ((char *) rb->outbuf) + sizeof(ReorderBufferDiskChange);
+				/* might have been reallocated above */
+				ondisk = (ReorderBufferDiskChange *) rb->outbuf;
+
+				if (len)
+				{
+					memcpy(data, &tup->tuple, sizeof(HeapTupleData));
+					data += sizeof(HeapTupleData);
+
+					memcpy(data, tup->tuple.t_data, len);
+					data += len;
+				}
+
+				break;
+			}
 		case REORDER_BUFFER_CHANGE_INTERNAL_SPEC_CONFIRM:
 		case REORDER_BUFFER_CHANGE_INTERNAL_SPEC_ABORT:
 		case REORDER_BUFFER_CHANGE_INTERNAL_COMMAND_ID:
@@ -4172,6 +4911,22 @@ ReorderBufferChangeSize(ReorderBufferChange *change)
 		case REORDER_BUFFER_CHANGE_TRUNCATE:
 			{
 				sz += sizeof(Oid) * change->data.truncate.nrelids;
+
+				break;
+			}
+		case REORDER_BUFFER_CHANGE_SEQUENCE:
+			{
+				ReorderBufferTupleBuf *tup;
+				Size		len = 0;
+
+				tup = change->data.sequence.tuple;
+
+				if (tup)
+				{
+					sz += sizeof(HeapTupleData);
+					len = tup->tuple.t_len;
+					sz += len;
+				}
 
 				break;
 			}
@@ -4476,6 +5231,30 @@ ReorderBufferRestoreChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 				break;
 			}
+
+		case REORDER_BUFFER_CHANGE_SEQUENCE:
+			if (change->data.sequence.tuple)
+			{
+				uint32		tuplelen = ((HeapTuple) data)->t_len;
+
+				change->data.sequence.tuple =
+					ReorderBufferGetTupleBuf(rb, tuplelen - SizeofHeapTupleHeader);
+
+				/* restore ->tuple */
+				memcpy(&change->data.sequence.tuple->tuple, data,
+					   sizeof(HeapTupleData));
+				data += sizeof(HeapTupleData);
+
+				/* reset t_data pointer into the new tuplebuf */
+				change->data.sequence.tuple->tuple.t_data =
+					ReorderBufferTupleBufData(change->data.sequence.tuple);
+
+				/* restore tuple data itself */
+				memcpy(change->data.sequence.tuple->tuple.t_data, data, tuplelen);
+				data += tuplelen;
+			}
+			break;
+
 		case REORDER_BUFFER_CHANGE_INTERNAL_SPEC_CONFIRM:
 		case REORDER_BUFFER_CHANGE_INTERNAL_SPEC_ABORT:
 		case REORDER_BUFFER_CHANGE_INTERNAL_COMMAND_ID:

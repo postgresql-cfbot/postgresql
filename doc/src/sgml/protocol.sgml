@@ -6372,6 +6372,86 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
     </listitem>
    </varlistentry>
 
+   <varlistentry id="protocol-logicalrep-message-formats-Sequence">
+    <term>Sequence</term>
+    <listitem>
+     <variablelist>
+      <varlistentry>
+       <term>Byte1('X')</term>
+       <listitem>
+        <para>
+         Identifies the message as a sequence message.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int32 (TransactionId)</term>
+       <listitem>
+        <para>
+         Xid of the transaction (only present for streamed transactions).
+         This field is available since protocol version 2.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int8 (0)</term>
+       <listitem>
+        <para>
+         Flags; currently unused.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int64 (XLogRecPtr)</term>
+       <listitem>
+        <para>
+         The LSN of the sequence increment.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>String</term>
+       <listitem>
+        <para>
+         Namespace (empty string for <literal>pg_catalog</literal>).
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>String</term>
+       <listitem>
+        <para>
+         Sequence name.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int8</term>
+       <listitem>
+        <para>
+         1 if the sequence update is transactional, 0 otherwise.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int64</term>
+       <listitem>
+        <para>
+         <structfield>value</structfield> value of the sequence.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+    </listitem>
+   </varlistentry>
+
    <varlistentry id="protocol-logicalrep-message-formats-Type">
     <term>Type</term>
     <listitem>

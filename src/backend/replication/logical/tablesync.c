@@ -100,6 +100,7 @@
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_type.h"
 #include "commands/copy.h"
+#include "commands/sequence.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "parser/parse_relation.h"
@@ -117,6 +118,7 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/pg_lsn.h"
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
@@ -1209,6 +1211,106 @@ copy_table(Relation rel)
 }
 
 /*
+ * Fetch sequence data (current state) from the remote node, including the
+ * page LSN.
+ */
+static int64
+fetch_sequence_data(Oid remoteid, XLogRecPtr *lsn)
+{
+	WalRcvExecResult *res;
+	StringInfoData cmd;
+	TupleTableSlot *slot;
+	Oid			tableRow[2] = {INT8OID, LSNOID};
+	int64		value = (Datum) 0;
+
+	initStringInfo(&cmd);
+	appendStringInfo(&cmd, "SELECT (last_value + log_cnt), page_lsn "
+						   "FROM pg_sequence_state(%d)", remoteid);
+
+	res = walrcv_exec(LogRepWorkerWalRcvConn, cmd.data, 2, tableRow);
+	pfree(cmd.data);
+
+	if (res->status != WALRCV_OK_TUPLES)
+		ereport(ERROR,
+				(errmsg("could not receive list of replicated tables from the publisher: %s",
+						res->err)));
+
+	/* Process the sequence. */
+	slot = MakeSingleTupleTableSlot(res->tupledesc, &TTSOpsMinimalTuple);
+	while (tuplestore_gettupleslot(res->tuplestore, true, false, slot))
+	{
+		bool		isnull;
+
+		value = DatumGetInt64(slot_getattr(slot, 1, &isnull));
+		Assert(!isnull);
+
+		*lsn = DatumGetInt64(slot_getattr(slot, 2, &isnull));
+		Assert(!isnull);
+	}
+
+	ExecDropSingleTupleTableSlot(slot);
+
+	walrcv_clear_result(res);
+
+	return value;
+}
+
+/*
+ * Copy existing data of a sequence from publisher.
+ *
+ * Caller is responsible for locking the local relation.
+ */
+static XLogRecPtr
+copy_sequence(Relation rel)
+{
+	LogicalRepRelMapEntry *relmapentry;
+	LogicalRepRelation lrel;
+	List	   *qual = NIL;
+	StringInfoData cmd;
+	int64		sequence_value;
+	XLogRecPtr	lsn = InvalidXLogRecPtr;
+
+	/* Get the publisher relation info. */
+	fetch_remote_table_info(get_namespace_name(RelationGetNamespace(rel)),
+							RelationGetRelationName(rel), &lrel, &qual);
+
+	/* sequences don't have row filters */
+	Assert(!qual);
+
+	/* Put the relation into relmap. */
+	logicalrep_relmap_update(&lrel);
+
+	/* Map the publisher relation to local one. */
+	relmapentry = logicalrep_rel_open(lrel.remoteid, NoLock);
+	Assert(rel == relmapentry->localrel);
+
+	/* Start copy on the publisher. */
+	initStringInfo(&cmd);
+
+	Assert(lrel.relkind == RELKIND_SEQUENCE);
+
+	/*
+	 * Logical replication of sequences is based on decoding WAL records,
+	 * describing the "next" state of the sequence the current state in the
+	 * relfilenode is yet to reach. But during the initial sync we read the
+	 * current state, so we need to reconstruct the WAL record logged when
+	 * we started the current batch of sequence values.
+	 *
+	 * Otherwise we might get duplicate values (on subscriber) if we failed
+	 * over right after the sync.
+	 */
+	sequence_value = fetch_sequence_data(lrel.remoteid, &lsn);
+
+	/* tablesync sets the sequences in non-transactional way */
+	SetSequence(RelationGetRelid(rel), false, sequence_value);
+
+	logicalrep_rel_close(relmapentry, NoLock);
+
+	/* return the LSN when the sequence state was set */
+	return lsn;
+}
+
+/*
  * Determine the tablesync slot name.
  *
  * The name must not exceed NAMEDATALEN - 1 because of remote node constraints
@@ -1256,6 +1358,7 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 	UserContext ucxt;
 	bool		must_use_password;
 	bool		run_as_owner;
+	XLogRecPtr	sequence_lsn = InvalidXLogRecPtr;
 
 	/* Check the state of the table synchronization. */
 	StartTransactionCommand();
@@ -1469,10 +1572,34 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 						GetUserNameFromId(GetUserId(), true),
 						RelationGetRelationName(rel))));
 
-	/* Now do the initial data copy */
-	PushActiveSnapshot(GetTransactionSnapshot());
-	copy_table(rel);
-	PopActiveSnapshot();
+	/* Do the right action depending on the relation kind. */
+	if (get_rel_relkind(RelationGetRelid(rel)) == RELKIND_SEQUENCE)
+	{
+		/* Now do the initial sequence copy */
+		PushActiveSnapshot(GetTransactionSnapshot());
+		sequence_lsn = copy_sequence(rel);
+		PopActiveSnapshot();
+
+		/*
+		 * Sequences are not consistent (in the MVCC sense) with respect to the
+		 * replication slot, so the copy might have read a more recent state
+		 * than origin_startpos. The sequence_lsn comes from page LSN (which is
+		 * LSN of the last sequence change), so that's the right position where
+		 * to start with the catchup apply.
+		 *
+		 * It might be before the slot, though (if the sequence was not used
+		 * since between the slot creation and copy), so make sure the position
+		 * does not move backwards.
+		 */
+		*origin_startpos = Max(*origin_startpos, sequence_lsn);
+	}
+	else
+	{
+		/* Now do the initial data copy */
+		PushActiveSnapshot(GetTransactionSnapshot());
+		copy_table(rel);
+		PopActiveSnapshot();
+	}
 
 	res = walrcv_exec(LogRepWorkerWalRcvConn, "COMMIT", 0, NULL);
 	if (res->status != WALRCV_OK_COMMAND)

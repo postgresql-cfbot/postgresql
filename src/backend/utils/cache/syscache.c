@@ -450,9 +450,10 @@ static const struct cachedesc cacheinfo[] = {
 	},
 	[PUBLICATIONNAMESPACEMAP] = {
 		PublicationNamespaceRelationId,
-		PublicationNamespacePnnspidPnpubidIndexId,
+		PublicationNamespacePnnspidPnpubidPntypeIndexId,
 		KEY(Anum_pg_publication_namespace_pnnspid,
-			Anum_pg_publication_namespace_pnpubid),
+			Anum_pg_publication_namespace_pnpubid,
+			Anum_pg_publication_namespace_pntype),
 		64
 	},
 	[PUBLICATIONOID] = {

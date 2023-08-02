@@ -2779,7 +2779,7 @@ invariant_l_offset(BtreeCheckState *state, BTScanInsert key,
 	ItemId		itemid;
 	int32		cmp;
 
-	Assert(key->pivotsearch);
+	Assert(!key->nextkey && key->backward);
 
 	/* Verify line pointer before checking tuple */
 	itemid = PageGetItemIdCareful(state, state->targetblock, state->target,
@@ -2841,7 +2841,7 @@ invariant_leq_offset(BtreeCheckState *state, BTScanInsert key,
 {
 	int32		cmp;
 
-	Assert(key->pivotsearch);
+	Assert(!key->nextkey && key->backward);
 
 	cmp = _bt_compare(state->rel, key, state->target, upperbound);
 
@@ -2864,7 +2864,7 @@ invariant_g_offset(BtreeCheckState *state, BTScanInsert key,
 {
 	int32		cmp;
 
-	Assert(key->pivotsearch);
+	Assert(!key->nextkey && key->backward);
 
 	cmp = _bt_compare(state->rel, key, state->target, lowerbound);
 
@@ -2902,7 +2902,7 @@ invariant_l_nontarget_offset(BtreeCheckState *state, BTScanInsert key,
 	ItemId		itemid;
 	int32		cmp;
 
-	Assert(key->pivotsearch);
+	Assert(!key->nextkey && key->backward);
 
 	/* Verify line pointer before checking tuple */
 	itemid = PageGetItemIdCareful(state, nontargetblock, nontarget,
@@ -3128,9 +3128,9 @@ palloc_btree_page(BtreeCheckState *state, BlockNumber blocknum)
  * For example, invariant_g_offset() might miss a cross-page invariant failure
  * on an internal level if the scankey built from the first item on the
  * target's right sibling page happened to be equal to (not greater than) the
- * last item on target page.  The !pivotsearch tiebreaker in _bt_compare()
- * might otherwise cause amcheck to assume (rather than actually verify) that
- * the scankey is greater.
+ * last item on target page.  The !backward tiebreaker in _bt_compare() might
+ * otherwise cause amcheck to assume (rather than actually verify) that the
+ * scankey is greater.
  */
 static inline BTScanInsert
 bt_mkscankey_pivotsearch(Relation rel, IndexTuple itup)
@@ -3138,7 +3138,7 @@ bt_mkscankey_pivotsearch(Relation rel, IndexTuple itup)
 	BTScanInsert skey;
 
 	skey = _bt_mkscankey(rel, itup);
-	skey->pivotsearch = true;
+	skey->backward = true;
 
 	return skey;
 }

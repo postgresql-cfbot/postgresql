@@ -65,6 +65,7 @@
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "postmaster/auxprocess.h"
 #include "postmaster/interrupt.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
@@ -184,7 +185,7 @@ ProcessWalRcvInterrupts(void)
 
 /* Main entry point for walreceiver process */
 void
-WalReceiverMain(void)
+WalReceiverMain(char *startup_data, size_t startup_data_len)
 {
 	char		conninfo[MAXCONNINFO];
 	char	   *tmp_conninfo;
@@ -200,10 +201,17 @@ WalReceiverMain(void)
 	char	   *sender_host = NULL;
 	int			sender_port = 0;
 
+	Assert(startup_data_len == 0);
+
+	MyAuxProcType = WalReceiverProcess;
+	MyBackendType = B_WAL_RECEIVER;
+	AuxiliaryProcessInit();
+
 	/*
 	 * WalRcv should be set up already (if we are a backend, we inherit this
 	 * by fork() or EXEC_BACKEND mechanism from the postmaster).
 	 */
+	// FIXME: could this be passed in startup_data instead? Would it be better?
 	Assert(walrcv != NULL);
 
 	/*

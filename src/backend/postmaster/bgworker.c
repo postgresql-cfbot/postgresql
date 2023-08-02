@@ -33,6 +33,7 @@
 #include "storage/shmem.h"
 #include "tcop/tcopprot.h"
 #include "utils/ascii.h"
+#include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/timeout.h"
 
@@ -344,7 +345,9 @@ BackgroundWorkerStateChange(bool allow_new_workers)
 		/*
 		 * Copy the registration data into the registered workers list.
 		 */
-		rw = malloc(sizeof(RegisteredBgWorker));
+		rw = MemoryContextAllocExtended(PostmasterContext,
+										sizeof(RegisteredBgWorker),
+										MCXT_ALLOC_NO_OOM);
 		if (rw == NULL)
 		{
 			ereport(LOG,
@@ -452,7 +455,7 @@ ForgetBackgroundWorker(slist_mutable_iter *cur)
 							 rw->rw_worker.bgw_name)));
 
 	slist_delete_current(cur);
-	free(rw);
+	pfree(rw);
 }
 
 /*
@@ -625,27 +628,6 @@ ResetBackgroundWorkerCrashTimes(void)
 	}
 }
 
-#ifdef EXEC_BACKEND
-/*
- * In EXEC_BACKEND mode, workers use this to retrieve their details from
- * shared memory.
- */
-BackgroundWorker *
-BackgroundWorkerEntry(int slotno)
-{
-	static BackgroundWorker myEntry;
-	BackgroundWorkerSlot *slot;
-
-	Assert(slotno < BackgroundWorkerData->total_slots);
-	slot = &BackgroundWorkerData->slot[slotno];
-	Assert(slot->in_use);
-
-	/* must copy this in case we don't intend to retain shmem access */
-	memcpy(&myEntry, &slot->worker, sizeof myEntry);
-	return &myEntry;
-}
-#endif
-
 /*
  * Complain about the BackgroundWorker definition using error level elevel.
  * Return true if it looks ok, false if not (unless elevel >= ERROR, in
@@ -735,23 +717,30 @@ bgworker_die(SIGNAL_ARGS)
 }
 
 /*
- * Start a new background worker
- *
- * This is the main entry point for background worker, to be called from
- * postmaster.
+ * This is the main entry point for background worker process.
  */
 void
-StartBackgroundWorker(void)
+BackgroundWorkerMain(char *startup_data, size_t startup_data_len)
 {
 	sigjmp_buf	local_sigjmp_buf;
-	BackgroundWorker *worker = MyBgworkerEntry;
+	BackgroundWorker *worker;
 	bgworker_main_type entrypt;
 
+	/* Release postmaster's working memory context */
+	if (PostmasterContext)
+	{
+		MemoryContextDelete(PostmasterContext);
+		PostmasterContext = NULL;
+	}
+
+	Assert(startup_data_len == sizeof(BackgroundWorker));
+	worker = (BackgroundWorker *) startup_data;
 	if (worker == NULL)
 		elog(FATAL, "unable to find bgworker entry");
 
 	IsBackgroundWorker = true;
 
+	MyBgworkerEntry = worker;
 	MyBackendType = B_BG_WORKER;
 	init_ps_display(worker->bgw_name);
 
@@ -828,14 +817,13 @@ StartBackgroundWorker(void)
 	PG_exception_stack = &local_sigjmp_buf;
 
 	/*
-	 * Create a per-backend PGPROC struct in shared memory, except in the
-	 * EXEC_BACKEND case where this was done in SubPostmasterMain. We must do
-	 * this before we can use LWLocks (and in the EXEC_BACKEND case we already
-	 * had to do some stuff with LWLocks).
+	 * Create a per-backend PGPROC struct in shared memory. We must do this
+	 * before we can use LWLocks.
 	 */
-#ifndef EXEC_BACKEND
 	InitProcess();
-#endif
+
+	/* Attach process to shared data structures */
+	AttachSharedMemoryAndSemaphores();
 
 	/*
 	 * Early initialization.
@@ -926,7 +914,9 @@ RegisterBackgroundWorker(BackgroundWorker *worker)
 	/*
 	 * Copy the registration data into the registered workers list.
 	 */
-	rw = malloc(sizeof(RegisteredBgWorker));
+	rw = MemoryContextAllocExtended(PostmasterContext,
+									sizeof(RegisteredBgWorker),
+									MCXT_ALLOC_NO_OOM);
 	if (rw == NULL)
 	{
 		ereport(LOG,

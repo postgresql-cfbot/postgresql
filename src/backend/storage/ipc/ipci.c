@@ -173,6 +173,17 @@ CalculateShmemSize(int *num_semaphores)
  * This is a bit code-wasteful and could be cleaned up.)
  */
 void
+AttachSharedMemoryAndSemaphores(void)
+{
+	/* InitProcess must've been called already */
+
+	/* Init !EXEC_BACKEND mode, we inherited everything through the fork */
+#ifdef EXEC_BACKEND
+	CreateSharedMemoryAndSemaphores();
+#endif
+}
+
+void
 CreateSharedMemoryAndSemaphores(void)
 {
 	PGShmemHeader *shim = NULL;

@@ -58,13 +58,47 @@ extern int	MaxLivePostmasterChildren(void);
 
 extern bool PostmasterMarkPIDForWorkerNotify(int);
 
-#ifdef EXEC_BACKEND
-extern pid_t postmaster_forkexec(int argc, char *argv[]);
-extern void SubPostmasterMain(int argc, char *argv[]) pg_attribute_noreturn();
+extern void BackendMain(char *startup_data, size_t startup_data_len);
 
+#ifdef EXEC_BACKEND
 extern Size ShmemBackendArraySize(void);
 extern void ShmemBackendArrayAllocation(void);
 #endif
+
+/* in process_start.c */
+
+/* this better match the list in process_start.c */
+typedef enum PostmasterChildType {
+	PMC_BACKEND = 0,
+	PMC_AV_LAUNCHER,
+	PMC_AV_WORKER,
+	PMC_BGWORKER,
+	PMC_SYSLOGGER,
+
+	/*
+	 * so-called "aux processes". These access shared memory, but are not attached to
+	 * any particular database. Only one of each of these can be running at a time.
+	 */
+	PMC_STARTUP,
+	PMC_BGWRITER,
+	PMC_ARCHIVER,
+	PMC_CHECKPOINTER,
+	PMC_WAL_WRITER,
+	PMC_WAL_RECEIVER,
+} PostmasterChildType;
+
+typedef void (*ChildEntryPoint) (char *startup_data, size_t startup_data_len);
+
+/* defined in libpq-be.h */
+extern struct ClientSocket *MyClientSocket;
+
+extern pid_t postmaster_child_launch(PostmasterChildType child_type, char *startup_data, size_t startup_data_len, struct ClientSocket *sock);
+
+#ifdef EXEC_BACKEND
+extern void SubPostmasterMain(int argc, char *argv[]) pg_attribute_noreturn();
+#endif
+
+const char *PostmasterChildName(PostmasterChildType child_type);
 
 /*
  * Note: MAX_BACKENDS is limited to 2^18-1 because that's the width reserved

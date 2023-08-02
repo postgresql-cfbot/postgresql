@@ -4204,6 +4204,7 @@ PostgresMain(const char *dbname, const char *username)
 	 * *MyProcPort, because ConnCreate() allocated that space with malloc()
 	 * ... else we'd need to copy the Port data first.  Also, subsidiary data
 	 * such as the username isn't lost either; see ProcessStartupPacket().
+	 * XXX
 	 */
 	if (PostmasterContext)
 	{

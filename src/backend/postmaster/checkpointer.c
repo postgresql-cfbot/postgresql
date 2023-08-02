@@ -42,6 +42,7 @@
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "postmaster/auxprocess.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/interrupt.h"
 #include "replication/syncrep.h"
@@ -178,10 +179,16 @@ static void ReqCheckpointHandler(SIGNAL_ARGS);
  * basic execution environment, but not enabled signals yet.
  */
 void
-CheckpointerMain(void)
+CheckpointerMain(char *startup_data, size_t startup_data_len)
 {
 	sigjmp_buf	local_sigjmp_buf;
 	MemoryContext checkpointer_context;
+
+	Assert(startup_data_len == 0);
+
+	MyAuxProcType = CheckpointerProcess;
+	MyBackendType = B_CHECKPOINTER;
+	AuxiliaryProcessInit();
 
 	CheckpointerShmem->checkpointer_pid = MyProcPid;
 

@@ -317,7 +317,6 @@ extern int	trace_recovery(int trace_level);
 extern PGDLLIMPORT char *DatabasePath;
 
 /* now in utils/init/miscinit.c */
-extern void InitPostmasterChild(void);
 extern void InitStandaloneProcess(const char *argv0);
 extern void InitProcessLocalLatch(void);
 extern void SwitchToSharedLatch(void);

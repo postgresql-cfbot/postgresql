@@ -36,6 +36,7 @@
 #include "lib/binaryheap.h"
 #include "libpq/pqsignal.h"
 #include "pgstat.h"
+#include "postmaster/auxprocess.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/pgarch.h"
 #include "storage/fd.h"
@@ -211,8 +212,14 @@ PgArchCanRestart(void)
 
 /* Main entry point for archiver process */
 void
-PgArchiverMain(void)
+PgArchiverMain(char *startup_data, size_t startup_data_len)
 {
+	Assert(startup_data_len == 0);
+
+	MyAuxProcType = ArchiverProcess;
+	MyBackendType = B_ARCHIVER;
+	AuxiliaryProcessInit();
+
 	/*
 	 * Ignore all signals usually bound to some action in the postmaster,
 	 * except for SIGHUP, SIGTERM, SIGUSR1, SIGUSR2, and SIGQUIT.

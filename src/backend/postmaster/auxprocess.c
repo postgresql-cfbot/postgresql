@@ -46,7 +46,7 @@ AuxProcType MyAuxProcType = NotAnAuxProcess;	/* declared in miscadmin.h */
 
 
 /*
- *	 AuxiliaryProcessMain
+ *	 AuxiliaryProcessMain XXX
  *
  *	 The main entry point for auxiliary processes, such as the bgwriter,
  *	 walwriter, walreceiver, bootstrapper and the shared memory checker code.
@@ -54,36 +54,16 @@ AuxProcType MyAuxProcType = NotAnAuxProcess;	/* declared in miscadmin.h */
  *	 This code is here just because of historical reasons.
  */
 void
-AuxiliaryProcessMain(AuxProcType auxtype)
+AuxiliaryProcessInit(void)
 {
-	Assert(IsUnderPostmaster);
-
-	MyAuxProcType = auxtype;
-
-	switch (MyAuxProcType)
+	/* Release postmaster's working memory context */
+	if (PostmasterContext)
 	{
-		case StartupProcess:
-			MyBackendType = B_STARTUP;
-			break;
-		case ArchiverProcess:
-			MyBackendType = B_ARCHIVER;
-			break;
-		case BgWriterProcess:
-			MyBackendType = B_BG_WRITER;
-			break;
-		case CheckpointerProcess:
-			MyBackendType = B_CHECKPOINTER;
-			break;
-		case WalWriterProcess:
-			MyBackendType = B_WAL_WRITER;
-			break;
-		case WalReceiverProcess:
-			MyBackendType = B_WAL_RECEIVER;
-			break;
-		default:
-			elog(PANIC, "unrecognized process type: %d", (int) MyAuxProcType);
-			MyBackendType = B_INVALID;
+		MemoryContextDelete(PostmasterContext);
+		PostmasterContext = NULL;
 	}
+
+	Assert(IsUnderPostmaster);
 
 	init_ps_display(NULL);
 
@@ -97,12 +77,12 @@ AuxiliaryProcessMain(AuxProcType auxtype)
 	 */
 
 	/*
-	 * Create a PGPROC so we can use LWLocks.  In the EXEC_BACKEND case, this
-	 * was already done by SubPostmasterMain().
+	 * Create a PGPROC so we can use LWLocks.
 	 */
-#ifndef EXEC_BACKEND
 	InitAuxiliaryProcess();
-#endif
+
+	/* Attach process to shared data structures */
+	AttachSharedMemoryAndSemaphores();
 
 	BaseInit();
 
@@ -134,37 +114,6 @@ AuxiliaryProcessMain(AuxProcType auxtype)
 	before_shmem_exit(ShutdownAuxiliaryProcess, 0);
 
 	SetProcessingMode(NormalProcessing);
-
-	switch (MyAuxProcType)
-	{
-		case StartupProcess:
-			StartupProcessMain();
-			proc_exit(1);
-
-		case ArchiverProcess:
-			PgArchiverMain();
-			proc_exit(1);
-
-		case BgWriterProcess:
-			BackgroundWriterMain();
-			proc_exit(1);
-
-		case CheckpointerProcess:
-			CheckpointerMain();
-			proc_exit(1);
-
-		case WalWriterProcess:
-			WalWriterMain();
-			proc_exit(1);
-
-		case WalReceiverProcess:
-			WalReceiverMain();
-			proc_exit(1);
-
-		default:
-			elog(PANIC, "unrecognized process type: %d", (int) MyAuxProcType);
-			proc_exit(1);
-	}
 }
 
 /*

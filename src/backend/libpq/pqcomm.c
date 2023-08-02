@@ -29,9 +29,9 @@
  * INTERFACE ROUTINES
  *
  * setup/teardown:
- *		StreamServerPort	- Open postmaster's server port
- *		StreamConnection	- Create new connection with client
- *		StreamClose			- Close a client/backend connection
+ *		ListenServerPort	- Open postmaster's server port
+ *		AcceptClientConnection - Create new connection with client
+ *		StreamConnection	- Initialize a client connection
  *		TouchSocketFiles	- Protect socket files against /tmp cleaners
  *		pq_init			- initialize libpq at backend startup
  *		socket_comm_reset	- reset libpq during error recovery
@@ -304,7 +304,7 @@ socket_close(int code, Datum arg)
 
 
 /*
- * StreamServerPort -- open a "listening" port to accept connections.
+ * ListenServerPort -- open a "listening" port to accept connections.
  *
  * family should be AF_UNIX or AF_UNSPEC; portNumber is the port number.
  * For AF_UNIX ports, hostName should be NULL and unixSocketDir must be
@@ -318,7 +318,7 @@ socket_close(int code, Datum arg)
  */
 
 int
-StreamServerPort(int family, const char *hostName, unsigned short portNumber,
+ListenServerPort(int family, const char *hostName, unsigned short portNumber,
 				 const char *unixSocketDir,
 				 pgsocket ListenSocket[], int MaxListen)
 {
@@ -458,6 +458,9 @@ StreamServerPort(int family, const char *hostName, unsigned short portNumber,
 		}
 
 #ifndef WIN32
+		/* Don't give the listen socket to any subprograms we execute. */
+		if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0)
+			elog(FATAL, "fcntl(F_SETFD) failed on socket: %m");
 
 		/*
 		 * Without the SO_REUSEADDR flag, a new postmaster can't be started
@@ -686,8 +689,9 @@ Setup_AF_UNIX(const char *sock_path)
 
 
 /*
- * StreamConnection -- create a new connection with client using
- *		server port.  Set port->sock to the FD of the new connection.
+ * AcceptClientConnection -- accept a new connection with client using
+ *		server port.  Fills *client_sock with the FD and endpoint info
+ *		of the new connection.
  *
  * ASSUME: that this doesn't need to be non-blocking because
  *		the Postmaster waits for the socket to be ready to accept().
@@ -695,13 +699,13 @@ Setup_AF_UNIX(const char *sock_path)
  * RETURNS: STATUS_OK or STATUS_ERROR
  */
 int
-StreamConnection(pgsocket server_fd, Port *port)
+AcceptClientConnection(pgsocket server_fd, ClientSocket *client_sock)
 {
 	/* accept connection and fill in the client (remote) address */
-	port->raddr.salen = sizeof(port->raddr.addr);
-	if ((port->sock = accept(server_fd,
-							 (struct sockaddr *) &port->raddr.addr,
-							 &port->raddr.salen)) == PGINVALID_SOCKET)
+	client_sock->raddr.salen = sizeof(client_sock->raddr.addr);
+	if ((client_sock->sock = accept(server_fd,
+									(struct sockaddr *) &client_sock->raddr.addr,
+									&client_sock->raddr.salen)) == PGINVALID_SOCKET)
 	{
 		ereport(LOG,
 				(errcode_for_socket_access(),
@@ -719,10 +723,10 @@ StreamConnection(pgsocket server_fd, Port *port)
 	}
 
 	/* fill in the server (local) address */
-	port->laddr.salen = sizeof(port->laddr.addr);
-	if (getsockname(port->sock,
-					(struct sockaddr *) &port->laddr.addr,
-					&port->laddr.salen) < 0)
+	client_sock->laddr.salen = sizeof(client_sock->laddr.addr);
+	if (getsockname(client_sock->sock,
+					(struct sockaddr *) &client_sock->laddr.addr,
+					&client_sock->laddr.salen) < 0)
 	{
 		ereport(LOG,
 				(errmsg("%s() failed: %m", "getsockname")));
@@ -730,7 +734,7 @@ StreamConnection(pgsocket server_fd, Port *port)
 	}
 
 	/* select NODELAY and KEEPALIVE options if it's a TCP connection */
-	if (port->laddr.addr.ss_family != AF_UNIX)
+	if (client_sock->laddr.addr.ss_family != AF_UNIX)
 	{
 		int			on;
 #ifdef WIN32
@@ -741,7 +745,7 @@ StreamConnection(pgsocket server_fd, Port *port)
 
 #ifdef	TCP_NODELAY
 		on = 1;
-		if (setsockopt(port->sock, IPPROTO_TCP, TCP_NODELAY,
+		if (setsockopt(client_sock->sock, IPPROTO_TCP, TCP_NODELAY,
 					   (char *) &on, sizeof(on)) < 0)
 		{
 			ereport(LOG,
@@ -750,7 +754,7 @@ StreamConnection(pgsocket server_fd, Port *port)
 		}
 #endif
 		on = 1;
-		if (setsockopt(port->sock, SOL_SOCKET, SO_KEEPALIVE,
+		if (setsockopt(client_sock->sock, SOL_SOCKET, SO_KEEPALIVE,
 					   (char *) &on, sizeof(on)) < 0)
 		{
 			ereport(LOG,
@@ -782,7 +786,7 @@ StreamConnection(pgsocket server_fd, Port *port)
 		 * https://msdn.microsoft.com/en-us/library/bb736549%28v=vs.85%29.aspx
 		 */
 		optlen = sizeof(oldopt);
-		if (getsockopt(port->sock, SOL_SOCKET, SO_SNDBUF, (char *) &oldopt,
+		if (getsockopt(client_sock->sock, SOL_SOCKET, SO_SNDBUF, (char *) &oldopt,
 					   &optlen) < 0)
 		{
 			ereport(LOG,
@@ -792,7 +796,7 @@ StreamConnection(pgsocket server_fd, Port *port)
 		newopt = PQ_SEND_BUFFER_SIZE * 4;
 		if (oldopt < newopt)
 		{
-			if (setsockopt(port->sock, SOL_SOCKET, SO_SNDBUF, (char *) &newopt,
+			if (setsockopt(client_sock->sock, SOL_SOCKET, SO_SNDBUF, (char *) &newopt,
 						   sizeof(newopt)) < 0)
 			{
 				ereport(LOG,
@@ -801,13 +805,34 @@ StreamConnection(pgsocket server_fd, Port *port)
 			}
 		}
 #endif
+	}
+	return STATUS_OK;
+}
 
+/*
+ * StreamConnection -- create a new connection from the given socket.
+ *
+ * This runs in the backend process.
+ */
+Port *
+StreamConnection(ClientSocket *client_sock)
+{
+	Port	   *port;
+
+	port = palloc0(sizeof(Port));
+	port->sock = client_sock->sock;
+	port->laddr = client_sock->laddr;
+	port->raddr = client_sock->raddr;
+
+	/* Apply the current keepalive parameters if it's a TCP connection */
+	if (port->laddr.addr.ss_family != AF_UNIX)
+	{
 		/*
-		 * Also apply the current keepalive parameters.  If we fail to set a
-		 * parameter, don't error out, because these aren't universally
-		 * supported.  (Note: you might think we need to reset the GUC
-		 * variables to 0 in such a case, but it's not necessary because the
-		 * show hooks for these variables report the truth anyway.)
+		 * If we fail to set a parameter, don't error out, because these
+		 * aren't universally supported.  (Note: you might think we need to
+		 * reset the GUC variables to 0 in such a case, but it's not necessary
+		 * because the show hooks for these variables report the truth
+		 * anyway.)
 		 */
 		(void) pq_setkeepalivesidle(tcp_keepalives_idle, port);
 		(void) pq_setkeepalivesinterval(tcp_keepalives_interval, port);
@@ -815,23 +840,7 @@ StreamConnection(pgsocket server_fd, Port *port)
 		(void) pq_settcpusertimeout(tcp_user_timeout, port);
 	}
 
-	return STATUS_OK;
-}
-
-/*
- * StreamClose -- close a client/backend connection
- *
- * NOTE: this is NOT used to terminate a session; it is just used to release
- * the file descriptor in a process that should no longer have the socket
- * open.  (For example, the postmaster calls this after passing ownership
- * of the connection to a child process.)  It is expected that someone else
- * still has the socket open.  So, we only want to close the descriptor,
- * we do NOT want to send anything to the far end.
- */
-void
-StreamClose(pgsocket sock)
-{
-	closesocket(sock);
+	return port;
 }
 
 /*

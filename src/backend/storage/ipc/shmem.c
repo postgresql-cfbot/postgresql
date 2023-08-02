@@ -144,6 +144,8 @@ InitShmemAllocation(void)
 	/*
 	 * Initialize ShmemVariableCache for transaction manager. (This doesn't
 	 * really belong here, but not worth moving.)
+	 *
+	 * XXX: we really should move this
 	 */
 	ShmemVariableCache = (VariableCache)
 		ShmemAlloc(sizeof(*ShmemVariableCache));

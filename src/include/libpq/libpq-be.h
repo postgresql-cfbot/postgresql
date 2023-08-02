@@ -58,17 +58,6 @@ typedef struct
 #include "libpq/pqcomm.h"
 
 
-typedef enum CAC_state
-{
-	CAC_OK,
-	CAC_STARTUP,
-	CAC_SHUTDOWN,
-	CAC_RECOVERY,
-	CAC_NOTCONSISTENT,
-	CAC_TOOMANY
-} CAC_state;
-
-
 /*
  * GSSAPI specific state information
  */
@@ -121,12 +110,9 @@ typedef struct ClientConnectionInfo
 } ClientConnectionInfo;
 
 /*
- * This is used by the postmaster in its communication with frontends.  It
- * contains all state information needed during this communication before the
- * backend is run.  The Port structure is kept in malloc'd memory and is
- * still available when a backend is running (see MyProcPort).  The data
- * it points to must also be malloc'd, or else palloc'd in TopMemoryContext,
- * so that it survives into PostgresMain execution!
+ * The Port structure holds state information about a client connection in a
+ * backend process.  It is available in the global variable MyProcPort.  The
+ * struct and all the data it points are kept in TopMemoryContext.
  *
  * remote_hostname is set if we did a successful reverse lookup of the
  * client's IP address during connection setup.
@@ -146,17 +132,17 @@ typedef struct ClientConnectionInfo
 typedef struct Port
 {
 	pgsocket	sock;			/* File descriptor */
-	bool		noblock;		/* is the socket in non-blocking mode? */
-	ProtocolVersion proto;		/* FE/BE protocol version */
 	SockAddr	laddr;			/* local addr (postmaster) */
 	SockAddr	raddr;			/* remote addr (client) */
+
+	bool		noblock;		/* is the socket in non-blocking mode? */
+	ProtocolVersion proto;		/* FE/BE protocol version */
 	char	   *remote_host;	/* name (or ip addr) of remote host */
 	char	   *remote_hostname;	/* name (not ip addr) of remote host, if
 									 * available */
 	int			remote_hostname_resolv; /* see above */
 	int			remote_hostname_errcode;	/* see above */
 	char	   *remote_port;	/* text rep of remote port */
-	CAC_state	canAcceptConnections;	/* postmaster connection status */
 
 	/*
 	 * Information that needs to be saved from the startup packet and passed
@@ -228,6 +214,17 @@ typedef struct Port
 	X509	   *peer;
 #endif
 } Port;
+
+/*
+ * ClientSocket holds a socket for an accepted connection, along with the
+ * information about the endpoints.
+ */
+struct ClientSocket {
+	pgsocket	sock;			/* File descriptor */
+	SockAddr	laddr;			/* local addr (postmaster) */
+	SockAddr	raddr;			/* remote addr (client) */
+};
+typedef struct ClientSocket ClientSocket;
 
 #ifdef USE_SSL
 /*

@@ -64,11 +64,11 @@ extern PGDLLIMPORT WaitEventSet *FeBeWaitSet;
 #define FeBeWaitSetLatchPos 1
 #define FeBeWaitSetNEvents 3
 
-extern int	StreamServerPort(int family, const char *hostName,
+extern int	ListenServerPort(int family, const char *hostName,
 							 unsigned short portNumber, const char *unixSocketDir,
 							 pgsocket ListenSocket[], int MaxListen);
-extern int	StreamConnection(pgsocket server_fd, Port *port);
-extern void StreamClose(pgsocket sock);
+extern int	AcceptClientConnection(pgsocket server_fd, ClientSocket *client_sock);
+extern Port *StreamConnection(ClientSocket *client_sock);
 extern void TouchSocketFiles(void);
 extern void RemoveSocketFiles(void);
 extern void pq_init(void);

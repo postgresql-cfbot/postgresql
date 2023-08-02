@@ -22,6 +22,7 @@
 #include "access/htup_details.h"
 #include "access/tableam.h"
 #include "access/xact.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_subscription_rel.h"
 #include "funcapi.h"
@@ -57,6 +58,16 @@
 int			max_logical_replication_workers = 4;
 int			max_sync_workers_per_subscription = 2;
 int			max_parallel_apply_workers_per_subscription = 2;
+int			max_slot_sync_workers = 2;
+
+/*
+ * allocation size for dbids array for each SlotSyncWorker in shared memory.
+ * This fixed size is only for PoC patch. This needs to be otherwise done
+ * using dsm.
+ */
+#define	ALLOC_DB_PER_WORKER 50
+
+SlotSyncWorker *MySlotSyncWorker = NULL;
 
 LogicalRepWorker *MyLogicalRepWorker = NULL;
 
@@ -70,6 +81,7 @@ typedef struct LogicalRepCtxStruct
 	dshash_table_handle last_start_dsh;
 
 	/* Background workers. */
+	SlotSyncWorker   *ss_workers;                      /* slot sync workers */
 	LogicalRepWorker workers[FLEXIBLE_ARRAY_MEMBER];
 } LogicalRepCtxStruct;
 
@@ -106,7 +118,6 @@ static int	logicalrep_pa_worker_count(Oid subid);
 static void logicalrep_launcher_attach_dshmem(void);
 static void ApplyLauncherSetWorkerStartTime(Oid subid, TimestampTz start_time);
 static TimestampTz ApplyLauncherGetWorkerStartTime(Oid subid);
-
 
 /*
  * Load the list of subscriptions.
@@ -455,7 +466,7 @@ retry:
 	memset(&bgw, 0, sizeof(bgw));
 	bgw.bgw_flags = BGWORKER_SHMEM_ACCESS |
 		BGWORKER_BACKEND_DATABASE_CONNECTION;
-	bgw.bgw_start_time = BgWorkerStart_RecoveryFinished;
+	bgw.bgw_start_time = BgWorkerStart_ConsistentState;
 	snprintf(bgw.bgw_library_name, MAXPGPATH, "postgres");
 
 	if (is_parallel_apply_worker)
@@ -909,7 +920,7 @@ ApplyLauncherRegister(void)
 	memset(&bgw, 0, sizeof(bgw));
 	bgw.bgw_flags = BGWORKER_SHMEM_ACCESS |
 		BGWORKER_BACKEND_DATABASE_CONNECTION;
-	bgw.bgw_start_time = BgWorkerStart_RecoveryFinished;
+	bgw.bgw_start_time = BgWorkerStart_ConsistentState;
 	snprintf(bgw.bgw_library_name, MAXPGPATH, "postgres");
 	snprintf(bgw.bgw_function_name, BGW_MAXLEN, "ApplyLauncherMain");
 	snprintf(bgw.bgw_name, BGW_MAXLEN,
@@ -931,6 +942,8 @@ void
 ApplyLauncherShmemInit(void)
 {
 	bool		found;
+	bool		foundSlotSync;
+	Size		ss_size;
 
 	LogicalRepCtx = (LogicalRepCtxStruct *)
 		ShmemInitStruct("Logical Replication Launcher Data",
@@ -953,6 +966,32 @@ ApplyLauncherShmemInit(void)
 
 			memset(worker, 0, sizeof(LogicalRepWorker));
 			SpinLockInit(&worker->relmutex);
+		}
+	}
+
+	/* Allocate shared-memory for slot-sync workers now */
+	ss_size = mul_size(max_slot_sync_workers, sizeof(SlotSyncWorker));
+	ss_size = add_size(ss_size, mul_size(max_slot_sync_workers *
+								ALLOC_DB_PER_WORKER, sizeof(Oid)));
+
+	LogicalRepCtx->ss_workers = (SlotSyncWorker *)
+		ShmemInitStruct("Slot Sync Workers", ss_size, &foundSlotSync);
+
+	if (!foundSlotSync)
+	{
+		int	slot;
+
+		for (slot = 0; slot < max_slot_sync_workers; slot++)
+		{
+			int	idx;
+			SlotSyncWorker *worker = &LogicalRepCtx->ss_workers[slot];
+
+			memset(worker, 0, sizeof(SlotSyncWorker));
+
+			for (idx = 0; idx < ALLOC_DB_PER_WORKER; idx++)
+			{
+				worker->dbids[idx] = InvalidOid;
+			}
 		}
 	}
 }
@@ -1093,6 +1132,464 @@ ApplyLauncherWakeup(void)
 }
 
 /*
+ * Clean up slot-sync worker info.
+ */
+static void
+sloysync_worker_cleanup(SlotSyncWorker *worker)
+{
+	uint i;
+
+	Assert(LWLockHeldByMeInMode(SlotSyncWorkerLock, LW_EXCLUSIVE));
+
+	worker->in_use = false;
+	worker->proc = NULL;
+	worker->dbid = InvalidOid;
+
+	for (i = 0; i < worker->dbcount; i++)
+	{
+		worker->dbids[i] = InvalidOid;
+	}
+
+	worker->dbcount = 0;
+	worker->userid = InvalidOid;
+}
+
+/*
+ * Cleanup function.
+ *
+ * Called on slot-sync worker exit.
+ */
+static void
+slotsync_worker_onexit(int code, Datum arg)
+{
+
+	LWLockAcquire(SlotSyncWorkerLock, LW_EXCLUSIVE);
+
+	sloysync_worker_cleanup(MySlotSyncWorker);
+
+	LWLockRelease(SlotSyncWorkerLock);
+}
+
+/*
+ * Attach Slot-sync worker to worker-slot assigned by launcher.
+ */
+void
+slotsync_worker_attach(int slot)
+{
+	/* Block concurrent access. */
+	LWLockAcquire(SlotSyncWorkerLock, LW_EXCLUSIVE);
+
+	Assert(slot >= 0 && slot < max_slot_sync_workers);
+	MySlotSyncWorker = &LogicalRepCtx->ss_workers[slot];
+
+	if (!MySlotSyncWorker->in_use)
+	{
+		LWLockRelease(SlotSyncWorkerLock);
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("logical replication worker slot %d is empty, cannot attach",
+						slot)));
+	}
+
+	if (MySlotSyncWorker->proc)
+	{
+		LWLockRelease(SlotSyncWorkerLock);
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("logical replication worker slot %d is already used by "
+						"another worker, cannot attach", slot)));
+	}
+
+	MySlotSyncWorker->proc = MyProc;
+	before_shmem_exit(slotsync_worker_onexit, (Datum) 0);
+
+	LWLockRelease(SlotSyncWorkerLock);
+}
+
+/*
+ * Wait for a background worker to start up and attach to the shmem context.
+ *
+ * This is only needed for cleaning up the shared memory in case the worker
+ * fails to attach.
+ *
+ * Returns whether the attach was successful.
+ */
+static bool
+WaitForSlotSyncWorkerAttach(SlotSyncWorker *worker,
+							   uint16 generation,
+							   BackgroundWorkerHandle *handle)
+{
+	BgwHandleStatus status;
+	int			rc;
+
+	for (;;)
+	{
+		pid_t		pid;
+
+		CHECK_FOR_INTERRUPTS();
+
+		LWLockAcquire(SlotSyncWorkerLock, LW_SHARED);
+
+		/* Worker either died or has started. Return false if died. */
+		if (!worker->in_use || worker->proc)
+		{
+			LWLockRelease(SlotSyncWorkerLock);
+			return worker->in_use;
+		}
+
+		LWLockRelease(SlotSyncWorkerLock);
+
+		/* Check if worker has died before attaching, and clean up after it. */
+		status = GetBackgroundWorkerPid(handle, &pid);
+
+		if (status == BGWH_STOPPED)
+		{
+			LWLockAcquire(SlotSyncWorkerLock, LW_EXCLUSIVE);
+			/* Ensure that this was indeed the worker we waited for. */
+			if (generation == worker->generation)
+				sloysync_worker_cleanup(worker);
+			LWLockRelease(SlotSyncWorkerLock);
+			return false;
+		}
+
+		/*
+		 * We need timeout because we generally don't get notified via latch
+		 * about the worker attach.  But we don't expect to have to wait long.
+		 */
+		rc = WaitLatch(MyLatch,
+					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+					   10L, WAIT_EVENT_BGWORKER_STARTUP);
+
+		if (rc & WL_LATCH_SET)
+		{
+			ResetLatch(MyLatch);
+			CHECK_FOR_INTERRUPTS();
+		}
+	}
+}
+
+/*
+ * Walks the slot-sync workers array and searches for one that matches given
+ * dbid. Since one worker can manage multiple dbs, so it walks the db array in
+ * each worker to find the match.
+ */
+static SlotSyncWorker *
+slotsync_worker_find(Oid dbid)
+{
+	int			i;
+	SlotSyncWorker *res = NULL;
+
+	Assert(LWLockHeldByMe(SlotSyncWorkerLock));
+
+	/* Search for attached worker for a given dbid */
+	for (i = 0; i < max_slot_sync_workers; i++)
+	{
+		SlotSyncWorker *w = &LogicalRepCtx->ss_workers[i];
+		int             cnt;
+
+		if (!w->in_use)
+			continue;
+
+		for (cnt = 0; cnt < w->dbcount; cnt++)
+		{
+			Oid  wdbid = w->dbids[cnt];
+			if (wdbid == dbid)
+			{
+				res = w;
+				break;
+			}
+		}
+
+		/* if worker is found, break the outer loop */
+		if (res)
+			break;
+	}
+
+	return res;
+}
+
+/*
+ * Start new slot-sync background worker, if possible.
+ *
+ * Returns true on success, false on failure.
+ */
+static bool
+slot_sync_worker_launch(Oid dbid, Oid userid)
+{
+	BackgroundWorker bgw;
+	BackgroundWorkerHandle *bgw_handle;
+	uint16		generation;
+	int			i;
+	int			worker_slot = 0;
+	SlotSyncWorker *worker = NULL;
+	int 			mindbcnt = 0;
+
+	Assert(OidIsValid(dbid));
+
+	/*
+	 * We need to do the modification of the shared memory under lock so that
+	 * we have consistent view.
+	 */
+	LWLockAcquire(SlotSyncWorkerLock, LW_EXCLUSIVE);
+
+	/* Find unused worker slot. */
+	for (i = 0; i < max_slot_sync_workers; i++)
+	{
+		SlotSyncWorker *w = &LogicalRepCtx->ss_workers[i];
+
+		if (!w->in_use)
+		{
+			worker = w;
+			worker_slot = i;
+			break;
+		}
+	}
+
+	/* If all the workers are currently in use. Find the one with
+	 * minimum number of dbs and use that. */
+	if (!worker)
+	{
+		for (i = 0; i < max_slot_sync_workers; i++)
+		{
+			SlotSyncWorker *w = &LogicalRepCtx->ss_workers[i];
+
+			if (i == 0)
+			{
+				mindbcnt = w->dbcount;
+				worker = w;
+				worker_slot = i;
+			}
+			else if (w->dbcount < mindbcnt)
+			{
+				mindbcnt = w->dbcount;
+				worker = w;
+				worker_slot = i;
+			}
+		}
+	}
+
+	/* If worker is being reused, just update dbids array and count */
+	if (worker->in_use)
+	{
+		worker->dbids[worker->dbcount++] = dbid;
+		LWLockRelease(SlotSyncWorkerLock);
+
+		ereport(LOG,
+				(errmsg("adding database %d to replication slot synchronization"
+				" worker %d",
+				dbid, worker_slot)));
+
+		return true;
+	}
+
+	/* Else prepare the new worker. */
+	worker->launch_time = GetCurrentTimestamp();
+	worker->in_use = true;
+	worker->generation++;
+
+	/* 'proc' will be assigned in ReplSlotSyncMain when we attach
+	* that worker to a particular worker-array slot */
+	worker->proc = NULL;
+
+	worker->dbid = dbid;  /* TODO: do we really need this? analyse more here */
+	worker->dbids[worker->dbcount++] = dbid;
+	worker->userid = userid;
+
+	/* Before releasing lock, remember generation for future identification. */
+	generation = worker->generation;
+
+	LWLockRelease(SlotSyncWorkerLock);
+
+	/* Register the new dynamic worker. */
+	memset(&bgw, 0, sizeof(bgw));
+	bgw.bgw_flags = BGWORKER_SHMEM_ACCESS |
+		BGWORKER_BACKEND_DATABASE_CONNECTION;
+	bgw.bgw_start_time = BgWorkerStart_ConsistentState;
+	snprintf(bgw.bgw_library_name, MAXPGPATH, "postgres");
+
+	snprintf(bgw.bgw_function_name, BGW_MAXLEN, "ReplSlotSyncMain");
+
+	snprintf(bgw.bgw_name, BGW_MAXLEN,
+			 "slot synchronization worker %d", worker_slot);
+
+	snprintf(bgw.bgw_type, BGW_MAXLEN, "slot synchronization worker");
+
+	bgw.bgw_restart_time = BGW_NEVER_RESTART;
+	bgw.bgw_notify_pid = MyProcPid;
+	bgw.bgw_main_arg = Int32GetDatum(worker_slot);
+
+	if (!RegisterDynamicBackgroundWorker(&bgw, &bgw_handle))
+	{
+		/* Failed to start worker, so clean up the worker slot. */
+		LWLockAcquire(SlotSyncWorkerLock, LW_EXCLUSIVE);
+		Assert(generation == worker->generation);
+		sloysync_worker_cleanup(worker);
+		LWLockRelease(SlotSyncWorkerLock);
+
+		ereport(WARNING,
+				(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
+				 errmsg("out of background worker slots"),
+				 errhint("You might need to increase %s.", "max_worker_processes")));
+		return false;
+	}
+
+	/* Now wait until it attaches. */
+	return WaitForSlotSyncWorkerAttach(worker, generation, bgw_handle);
+}
+
+
+static void
+ApplyLauncherStartSlotSync(long *wait_time)
+{
+	WalReceiverConn *wrconn;
+	char	   *err;
+	List	   *slots;
+	ListCell   *lc;
+	MemoryContext tmpctx;
+	MemoryContext oldctx;
+
+	if (max_slot_sync_workers == 0)
+		return;
+
+	if (strcmp(synchronize_slot_names, "") == 0)
+		return;
+
+	wrconn = walrcv_connect(PrimaryConnInfo, false, false,
+							"Logical Replication Launcher", &err);
+	if (!wrconn)
+		ereport(ERROR,
+				(errmsg("could not connect to the primary server: %s", err)));
+
+	/* Use temporary context for the slot list and worker info. */
+	tmpctx = AllocSetContextCreate(TopMemoryContext,
+								   "Logical Replication Launcher Slot Sync ctx",
+								   ALLOCSET_DEFAULT_SIZES);
+	oldctx = MemoryContextSwitchTo(tmpctx);
+
+	slots = walrcv_list_slots(wrconn, synchronize_slot_names);
+
+	foreach(lc, slots)
+	{
+		WalRecvReplicationSlotData *slot_data = lfirst(lc);
+		SlotSyncWorker *w;
+		TimestampTz last_sync;
+		TimestampTz	now;
+		long		elapsed;
+
+		if (!OidIsValid(slot_data->persistent_data.database))
+			continue;
+
+		LWLockAcquire(SlotSyncWorkerLock, LW_SHARED);
+		w = slotsync_worker_find(slot_data->persistent_data.database);
+		LWLockRelease(SlotSyncWorkerLock);
+
+		if (w != NULL)
+			continue;		/* worker is running already */
+
+		/*
+		 * If the worker is eligible to start now, launch it.  Otherwise,
+		 * adjust wait_time so that we'll wake up as soon as it can be
+		 * started.
+		 *
+		 * Each apply worker can only be restarted once per
+		 * wal_retrieve_retry_interval, so that errors do not cause us to
+		 * repeatedly restart the worker as fast as possible.
+		 */
+		last_sync = slot_data->last_sync_time;
+		now = GetCurrentTimestamp();
+		if (last_sync == 0 ||
+			(elapsed = TimestampDifferenceMilliseconds(last_sync, now)) >= wal_retrieve_retry_interval)
+		{
+			slot_data->last_sync_time = now;
+			slot_sync_worker_launch(slot_data->persistent_data.database,
+									 BOOTSTRAP_SUPERUSERID);
+		}
+		else
+		{
+			*wait_time = Min(*wait_time,
+							wal_retrieve_retry_interval - elapsed);
+		}
+	}
+
+	/* Switch back to original memory context. */
+	MemoryContextSwitchTo(oldctx);
+	/* Clean the temporary memory. */
+	MemoryContextDelete(tmpctx);
+
+	walrcv_disconnect(wrconn);
+}
+
+static void
+ApplyLauncherStartSubs(long *wait_time)
+{
+	List	   *sublist;
+	ListCell   *lc;
+	MemoryContext subctx;
+	MemoryContext oldctx;
+
+	/* Use temporary context to avoid leaking memory across cycles. */
+	subctx = AllocSetContextCreate(TopMemoryContext,
+								   "Logical Replication Launcher sublist",
+								   ALLOCSET_DEFAULT_SIZES);
+	oldctx = MemoryContextSwitchTo(subctx);
+
+	/* Start the missing workers for enabled subscriptions. */
+	sublist = get_subscription_list();
+	foreach(lc, sublist)
+	{
+		Subscription *sub = (Subscription *) lfirst(lc);
+		LogicalRepWorker *w;
+		TimestampTz last_start;
+		TimestampTz now;
+		long		elapsed;
+
+		if (!sub->enabled)
+			continue;
+
+		LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
+		w = logicalrep_worker_find(sub->oid, InvalidOid, false);
+		LWLockRelease(LogicalRepWorkerLock);
+
+		if (w != NULL)
+			continue;		/* worker is running already */
+
+		/*
+		 * If the worker is eligible to start now, launch it.  Otherwise,
+		 * adjust wait_time so that we'll wake up as soon as it can be
+		 * started.
+		 *
+		 * Each subscription's apply worker can only be restarted once per
+		 * wal_retrieve_retry_interval, so that errors do not cause us to
+		 * repeatedly restart the worker as fast as possible.  In cases
+		 * where a restart is expected (e.g., subscription parameter
+		 * changes), another process should remove the last-start entry
+		 * for the subscription so that the worker can be restarted
+		 * without waiting for wal_retrieve_retry_interval to elapse.
+		 */
+		last_start = ApplyLauncherGetWorkerStartTime(sub->oid);
+		now = GetCurrentTimestamp();
+		if (last_start == 0 ||
+			(elapsed = TimestampDifferenceMilliseconds(last_start, now)) >= wal_retrieve_retry_interval)
+		{
+			ApplyLauncherSetWorkerStartTime(sub->oid, now);
+			logicalrep_worker_launch(sub->dbid, sub->oid, sub->name,
+									 sub->owner, InvalidOid,
+									 DSM_HANDLE_INVALID);
+		}
+		else
+		{
+			*wait_time = Min(*wait_time,
+							wal_retrieve_retry_interval - elapsed);
+		}
+	}
+
+	/* Switch back to original memory context. */
+	MemoryContextSwitchTo(oldctx);
+	/* Clean the temporary memory. */
+	MemoryContextDelete(subctx);
+}
+
+/*
  * Main loop for the apply launcher process.
  */
 void
@@ -1117,78 +1614,20 @@ ApplyLauncherMain(Datum main_arg)
 	 */
 	BackgroundWorkerInitializeConnection(NULL, NULL, 0);
 
+	load_file("libpqwalreceiver", false);
+
 	/* Enter main loop */
 	for (;;)
 	{
 		int			rc;
-		List	   *sublist;
-		ListCell   *lc;
-		MemoryContext subctx;
-		MemoryContext oldctx;
 		long		wait_time = DEFAULT_NAPTIME_PER_CYCLE;
 
 		CHECK_FOR_INTERRUPTS();
 
-		/* Use temporary context to avoid leaking memory across cycles. */
-		subctx = AllocSetContextCreate(TopMemoryContext,
-									   "Logical Replication Launcher sublist",
-									   ALLOCSET_DEFAULT_SIZES);
-		oldctx = MemoryContextSwitchTo(subctx);
-
-		/* Start any missing workers for enabled subscriptions. */
-		sublist = get_subscription_list();
-		foreach(lc, sublist)
-		{
-			Subscription *sub = (Subscription *) lfirst(lc);
-			LogicalRepWorker *w;
-			TimestampTz last_start;
-			TimestampTz now;
-			long		elapsed;
-
-			if (!sub->enabled)
-				continue;
-
-			LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
-			w = logicalrep_worker_find(sub->oid, InvalidOid, false);
-			LWLockRelease(LogicalRepWorkerLock);
-
-			if (w != NULL)
-				continue;		/* worker is running already */
-
-			/*
-			 * If the worker is eligible to start now, launch it.  Otherwise,
-			 * adjust wait_time so that we'll wake up as soon as it can be
-			 * started.
-			 *
-			 * Each subscription's apply worker can only be restarted once per
-			 * wal_retrieve_retry_interval, so that errors do not cause us to
-			 * repeatedly restart the worker as fast as possible.  In cases
-			 * where a restart is expected (e.g., subscription parameter
-			 * changes), another process should remove the last-start entry
-			 * for the subscription so that the worker can be restarted
-			 * without waiting for wal_retrieve_retry_interval to elapse.
-			 */
-			last_start = ApplyLauncherGetWorkerStartTime(sub->oid);
-			now = GetCurrentTimestamp();
-			if (last_start == 0 ||
-				(elapsed = TimestampDifferenceMilliseconds(last_start, now)) >= wal_retrieve_retry_interval)
-			{
-				ApplyLauncherSetWorkerStartTime(sub->oid, now);
-				logicalrep_worker_launch(sub->dbid, sub->oid, sub->name,
-										 sub->owner, InvalidOid,
-										 DSM_HANDLE_INVALID);
-			}
-			else
-			{
-				wait_time = Min(wait_time,
-								wal_retrieve_retry_interval - elapsed);
-			}
-		}
-
-		/* Switch back to original memory context. */
-		MemoryContextSwitchTo(oldctx);
-		/* Clean the temporary memory. */
-		MemoryContextDelete(subctx);
+		if (!RecoveryInProgress())
+			ApplyLauncherStartSubs(&wait_time);
+		else
+			ApplyLauncherStartSlotSync(&wait_time);
 
 		/* Wait for more work. */
 		rc = WaitLatch(MyLatch,

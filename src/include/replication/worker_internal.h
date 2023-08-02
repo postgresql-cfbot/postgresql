@@ -65,7 +65,7 @@ typedef struct LogicalRepWorker
 	 * would be created for each transaction which will be deleted after the
 	 * transaction is finished.
 	 */
-	FileSet    *stream_fileset;
+	struct FileSet    *stream_fileset;
 
 	/*
 	 * PID of leader apply worker if this slot is used for a parallel apply
@@ -83,6 +83,33 @@ typedef struct LogicalRepWorker
 	XLogRecPtr	reply_lsn;
 	TimestampTz reply_time;
 } LogicalRepWorker;
+
+typedef struct SlotSyncWorker
+{
+	/* Time at which this worker was launched. */
+	TimestampTz launch_time;
+
+	/* Indicates if this slot is used or free. */
+	bool		in_use;
+
+	/* Increased every time the slot is taken by new worker. */
+	uint16		generation;
+
+	/* Pointer to proc array. NULL if not running. */
+	PGPROC	   *proc;
+
+	/* User to use for connection (will be same as owner of subscription). */
+	Oid			userid;
+
+	/* Database id to connect to. */
+	Oid			dbid;
+
+	/* Count of Database ids it manages */
+	uint32			dbcount;
+
+	/* Database ids it manages */
+	Oid			dbids[FLEXIBLE_ARRAY_MEMBER];
+} SlotSyncWorker;
 
 /*
  * State of the transaction in parallel apply worker.
@@ -222,12 +249,14 @@ extern PGDLLIMPORT struct WalReceiverConn *LogRepWorkerWalRcvConn;
 /* Worker and subscription objects. */
 extern PGDLLIMPORT Subscription *MySubscription;
 extern PGDLLIMPORT LogicalRepWorker *MyLogicalRepWorker;
+extern PGDLLIMPORT SlotSyncWorker *MySlotSyncWorker;
 
 extern PGDLLIMPORT bool in_remote_transaction;
 
 extern PGDLLIMPORT bool InitializingApplyWorker;
 
 extern void logicalrep_worker_attach(int slot);
+extern void slotsync_worker_attach(int slot);
 extern LogicalRepWorker *logicalrep_worker_find(Oid subid, Oid relid,
 												bool only_running);
 extern List *logicalrep_workers_find(Oid subid, bool only_running);

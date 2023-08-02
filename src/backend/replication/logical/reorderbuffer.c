@@ -100,6 +100,7 @@
 #include "replication/snapbuild.h"	/* just for SnapBuildSnapDecRefcount */
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
+#include "storage/ipc.h"
 #include "storage/sinval.h"
 #include "utils/builtins.h"
 #include "utils/combocid.h"
@@ -107,6 +108,7 @@
 #include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/relfilenumbermap.h"
+#include "utils/varlena.h"
 
 
 /* entry for a hash table we use to map from xid to our transaction state */
@@ -2498,6 +2500,13 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 		}
 		else
 		{
+			/*
+			 * Before we send out the last set of changes to logical decoding
+			 * output plugin, wait for specified streaming replication standby
+			 * servers (if any) to confirm receipt of WAL upto commit_lsn.
+			 */
+			WaitForStandbyLSN(commit_lsn);
+
 			/*
 			 * Call either PREPARE (for two-phase transactions) or COMMIT (for
 			 * regular ones).

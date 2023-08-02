@@ -52,6 +52,8 @@
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "utils/builtins.h"
+#include "utils/guc_hooks.h"
+#include "utils/varlena.h"
 
 /*
  * Replication slot on-disk data structure.
@@ -98,9 +100,11 @@ ReplicationSlotCtlData *ReplicationSlotCtl = NULL;
 /* My backend's replication slot in the shared memory array */
 ReplicationSlot *MyReplicationSlot = NULL;
 
-/* GUC variable */
+/* GUC variables */
 int			max_replication_slots = 10; /* the maximum number of replication
 										 * slots */
+char	*synchronize_slot_names;
+char	*standby_slot_names;
 
 static void ReplicationSlotShmemExit(int code, Datum arg);
 static void ReplicationSlotDropAcquired(void);
@@ -110,6 +114,8 @@ static void ReplicationSlotDropPtr(ReplicationSlot *slot);
 static void RestoreSlotFromDisk(const char *name);
 static void CreateSlotOnDisk(ReplicationSlot *slot);
 static void SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel);
+
+static bool validate_slot_names(char **newval);
 
 /*
  * Report shared-memory space needed by ReplicationSlotsShmemInit.
@@ -2084,4 +2090,212 @@ RestoreSlotFromDisk(const char *name)
 		ereport(FATAL,
 				(errmsg("too many replication slots active before shutdown"),
 				 errhint("Increase max_replication_slots and try again.")));
+}
+
+/*
+ * A helper function to simplify check_hook implementation for
+ * synchronize_slot_names and standby_slot_names GUCs.
+ */
+static bool
+validate_slot_names(char **newval)
+{
+	char	   *rawname;
+	List	   *elemlist;
+
+	/* Need a modifiable copy of string */
+	rawname = pstrdup(*newval);
+
+	/* Parse string into list of identifiers */
+	if (!SplitIdentifierString(rawname, ',', &elemlist))
+	{
+		/* syntax error in name list */
+		GUC_check_errdetail("List syntax is invalid.");
+		pfree(rawname);
+		list_free(elemlist);
+		return false;
+	}
+
+	pfree(rawname);
+	list_free(elemlist);
+	return true;
+}
+
+/*
+ * GUC check_hook for synchronize_slot_names
+ */
+bool
+check_synchronize_slot_names(char **newval, void **extra, GucSource source)
+{
+	/* Special handling for "*" which means all. */
+	if (strcmp(*newval, "*") == 0)
+		return true;
+
+	if (strcmp(*newval, "") == 0)
+		return true;
+
+	return validate_slot_names(newval);
+}
+
+/*
+ * GUC check_hook for standby_slot_names
+ */
+bool
+check_standby_slot_names(char **newval, void **extra, GucSource source)
+{
+	/* Special handling for "*" which means all. */
+	if (strcmp(*newval, "*") == 0)
+		return true;
+
+	if (strcmp(*newval, "") == 0)
+		return true;
+
+	return validate_slot_names(newval);
+}
+
+/*
+ * Function in which logical walsender (the caller) corresponding to a logical
+ * slot specified in synchronize_slot_names GUC value waits for one or more
+ * physical standbys corresponding to specified physical slots in
+ * standby_slot_names GUC value.
+ */
+void
+WaitForStandbyLSN(XLogRecPtr wait_for_lsn)
+{
+	char	*rawname;
+	List	*elemlist;
+	ListCell	*l;
+	ReplicationSlot *slot;
+
+	Assert(MyReplicationSlot != NULL);
+	Assert(SlotIsLogical(MyReplicationSlot));
+
+	if (strcmp(standby_slot_names, "") == 0)
+		return;
+
+	/*
+	 * Check if the slot associated with this logical walsender is asked to
+	 * wait for physical standbys.
+	 */
+	if (strcmp(synchronize_slot_names, "") == 0)
+		return;
+
+	/* "*" means all logical walsenders should wait for physical standbys. */
+	if (strcmp(synchronize_slot_names, "*") != 0)
+	{
+		bool	shouldwait = false;
+
+		rawname = pstrdup(synchronize_slot_names);
+		SplitIdentifierString(rawname, ',', &elemlist);
+
+		foreach (l, elemlist)
+		{
+			char *name = lfirst(l);
+			if (strcmp(name, NameStr(MyReplicationSlot->data.name)) == 0)
+			{
+				shouldwait = true;
+				break;
+			}
+		}
+
+		pfree(rawname);
+		rawname = NULL;
+		list_free(elemlist);
+		elemlist = NIL;
+
+		if (!shouldwait)
+			return;
+	}
+
+	rawname = pstrdup(standby_slot_names);
+	SplitIdentifierString(rawname, ',', &elemlist);
+
+retry:
+
+	foreach (l, elemlist)
+	{
+		char *name = lfirst(l);
+		XLogRecPtr	restart_lsn;
+		bool	invalidated;
+
+		slot = SearchNamedReplicationSlot(name, true);
+
+		/*
+		 * It may happen that the slot specified in standby_slot_names GUC
+		 * value is dropped, so let's skip over it.
+		 */
+		if (!slot)
+		{
+			ereport(WARNING,
+					errmsg("replication slot \"%s\" specified in parameter \"%s\" does not exist, ignoring",
+							name, "standby_slot_names"));
+			elemlist = foreach_delete_current(elemlist, l);
+			continue;
+		}
+
+		/*
+		 * It may happen that the physical slot specified in standby_slot_names
+		 * is dropped without removing it from the GUC value, and a logical
+		 * slot has been created with the same name meanwhile. Let's skip over
+		 * it.
+		 *
+		 * NB: We might think to modify the GUC value automatically while
+		 * dropping a physical replication slot, but that won't be a nice idea
+		 * given that the slot can sometimes be dropped in process exit paths
+		 * (check ReplicationSlotCleanup call sites), so modifying GUC value
+		 * there isn't a great idea.
+		 */
+		if (SlotIsLogical(slot))
+		{
+			ereport(WARNING,
+					errmsg("cannot have logical replication slot \"%s\" in parameter \"%s\", ignoring",
+							name, "standby_slot_names"));
+			elemlist = foreach_delete_current(elemlist, l);
+			continue;
+		}
+
+		/* physical slots advance restart_lsn on remote flush */
+		SpinLockAcquire(&slot->mutex);
+		restart_lsn = slot->data.restart_lsn;
+		invalidated = slot->data.invalidated != RS_INVAL_NONE;
+		SpinLockRelease(&slot->mutex);
+
+		/*
+		 * Specified physical slot may have been invalidated, so no point in
+		 * waiting for it.
+		*/
+		if (restart_lsn == InvalidXLogRecPtr || invalidated)
+		{
+			ereport(WARNING,
+					errmsg("physical slot \"%s\" specified in parameter \"%s\" has been invalidated, ignoring",
+							name, "standby_slot_names"));
+			elemlist = foreach_delete_current(elemlist, l);
+			continue;
+		}
+
+		/* If the slot is past the wait_for_lsn, no need to wait anymore */
+		if (restart_lsn >= wait_for_lsn)
+		{
+			elemlist = foreach_delete_current(elemlist, l);
+			continue;
+		}
+	}
+
+	if (list_length(elemlist) == 0)
+	{
+		pfree(rawname);
+		return; 	/* Exit if done waiting for everyone */
+	}
+
+	/* XXX: Is waiting for 1 second before retrying enough or more or less? */
+
+	/* XXX: Need to have a new wait event type. */
+	(void) WaitLatch(MyLatch,
+					 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+					 1000L,
+					 WAIT_EVENT_WAL_SENDER_WAIT_WAL);
+	ResetLatch(MyLatch);
+
+	CHECK_FOR_INTERRUPTS();
+
+	goto retry;
 }

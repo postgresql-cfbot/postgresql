@@ -76,11 +76,12 @@ Node *replication_parse_result;
 %token K_EXPORT_SNAPSHOT
 %token K_NOEXPORT_SNAPSHOT
 %token K_USE_SNAPSHOT
+%token K_LIST_SLOTS
 
 %type <node>	command
 %type <node>	base_backup start_replication start_logical_replication
 				create_replication_slot drop_replication_slot identify_system
-				read_replication_slot timeline_history show
+				read_replication_slot timeline_history show list_slots
 %type <list>	generic_option_list
 %type <defelt>	generic_option
 %type <uintval>	opt_timeline
@@ -91,6 +92,7 @@ Node *replication_parse_result;
 %type <boolval>	opt_temporary
 %type <list>	create_slot_options create_slot_legacy_opt_list
 %type <defelt>	create_slot_legacy_opt
+%type <list>	slot_name_list slot_name_list_opt
 
 %%
 
@@ -114,6 +116,7 @@ command:
 			| read_replication_slot
 			| timeline_history
 			| show
+			| list_slots
 			;
 
 /*
@@ -123,6 +126,33 @@ identify_system:
 			K_IDENTIFY_SYSTEM
 				{
 					$$ = (Node *) makeNode(IdentifySystemCmd);
+				}
+			;
+
+slot_name_list:
+			IDENT
+				{
+					$$ = list_make1($1);
+				}
+			| slot_name_list ',' IDENT
+				{
+					$$ = lappend($1, $3);
+				}
+
+slot_name_list_opt:
+			slot_name_list			{ $$ = $1; }
+			| /* EMPTY */			{ $$ = NIL; }
+		;
+
+/*
+ * LIST_SLOTS
+ */
+list_slots:
+			K_LIST_SLOTS slot_name_list_opt
+				{
+					ListSlotsCmd *cmd = makeNode(ListSlotsCmd);
+					cmd->slot_names = $2;
+					$$ = (Node *) cmd;
 				}
 			;
 

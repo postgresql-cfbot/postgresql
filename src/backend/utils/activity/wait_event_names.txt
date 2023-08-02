@@ -53,6 +53,7 @@ WAIT_EVENT_LOGICAL_APPLY_MAIN	LogicalApplyMain	"Waiting in main loop of logical 
 WAIT_EVENT_LOGICAL_LAUNCHER_MAIN	LogicalLauncherMain	"Waiting in main loop of logical replication launcher process."
 WAIT_EVENT_LOGICAL_PARALLEL_APPLY_MAIN	LogicalParallelApplyMain	"Waiting in main loop of logical replication parallel apply process."
 WAIT_EVENT_RECOVERY_WAL_STREAM	RecoveryWalStream	"Waiting in main loop of startup process for WAL to arrive, during streaming recovery."
+WAIT_EVENT_REPL_SLOT_SYNC_MAIN	ReplSlotSyncMain	"Waiting in main loop of worker for synchronizing slots to a standby from primary."
 WAIT_EVENT_SYSLOGGER_MAIN	SysLoggerMain	"Waiting in main loop of syslogger process."
 WAIT_EVENT_WAL_RECEIVER_MAIN	WalReceiverMain	"Waiting in main loop of WAL receiver process."
 WAIT_EVENT_WAL_SENDER_MAIN	WalSenderMain	"Waiting in main loop of WAL sender process."

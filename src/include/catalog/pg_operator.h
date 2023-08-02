@@ -104,4 +104,28 @@ extern ObjectAddress makeOperatorDependencies(HeapTuple tuple,
 
 extern void OperatorUpd(Oid baseId, Oid commId, Oid negId, bool isDelete);
 
+extern Oid	OperatorGetOrCreateValidCommutator(List *commutatorName,
+											   Oid operatorOid,
+											   const char *operatorName,
+											   Oid operatorNamespace,
+											   Oid operatorLeftTypeId,
+											   Oid operatorRightTypeId);
+
+extern Oid	OperatorGetOrCreateValidNegator(List *negatorName,
+											Oid operatorOid,
+											const char *operatorName,
+											Oid operatorNamespace,
+											Oid operatorLeftTypeId,
+											Oid operatorRightTypeId);
+
+extern void OperatorValidateParams(Oid leftTypeId,
+								   Oid rightTypeId,
+								   Oid operResultType,
+								   bool hasCommutator,
+								   bool hasNegator,
+								   bool hasJoinSelectivity,
+								   bool hasRestrictionSelectivity,
+								   bool canMerge,
+								   bool canHash);
+
 #endif							/* PG_OPERATOR_H */

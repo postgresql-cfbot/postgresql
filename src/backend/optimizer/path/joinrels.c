@@ -109,14 +109,14 @@ join_search_one_level(PlannerInfo *root, int level)
 			List	   *other_rels_list;
 			ListCell   *other_rels;
 
+			other_rels_list = joinrels[1];
+
 			if (level == 2)		/* consider remaining initial rels */
 			{
-				other_rels_list = joinrels[level - 1];
 				other_rels = lnext(other_rels_list, r);
 			}
 			else				/* consider all initial rels */
 			{
-				other_rels_list = joinrels[1];
 				other_rels = list_head(other_rels_list);
 			}
 

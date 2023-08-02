@@ -1483,7 +1483,7 @@ LogicalDecodingContext
 LogicalErrorCallbackState
 LogicalOutputPluginInit
 LogicalOutputPluginWriterPrepareWrite
-LogicalOutputPluginWriterUpdateProgress
+LogicalOutputPluginWriterUpdateProgressAndKeepalive
 LogicalOutputPluginWriterWrite
 LogicalRepBeginData
 LogicalRepCommitData
@@ -2334,7 +2334,6 @@ ReorderBufferToastEnt
 ReorderBufferTupleBuf
 ReorderBufferTupleCidEnt
 ReorderBufferTupleCidKey
-ReorderBufferUpdateProgressTxnCB
 ReorderTuple
 RepOriginId
 ReparameterizeForeignPathByChild_function

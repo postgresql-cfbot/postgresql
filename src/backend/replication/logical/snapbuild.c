@@ -305,7 +305,7 @@ static void SnapBuildWaitSnapshot(xl_running_xacts *running, TransactionId cutof
 /* serialization functions */
 static void SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn);
 static bool SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn);
-static void SnapBuildRestoreContents(int fd, char *dest, Size size, const char *path);
+static void SnapBuildRestoreContents(File file, char *dest, Size size, const char *path);
 
 /*
  * Allocate a new snapshot builder.
@@ -1611,7 +1611,7 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 	MemoryContext old_ctx;
 	size_t		catchange_xcnt;
 	char	   *ondisk_c;
-	int			fd;
+	int			file;
 	char		tmppath[MAXPGPATH];
 	char		path[MAXPGPATH];
 	int			ret;
@@ -1750,23 +1750,16 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 	FIN_CRC32C(ondisk->checksum);
 
 	/* we have valid data now, open tempfile and write it there */
-	fd = OpenTransientFile(tmppath,
+	file = PathNameOpenTemporaryFile(tmppath,
 						   O_CREAT | O_EXCL | O_WRONLY | PG_BINARY);
-	if (fd < 0)
+	if (file < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not open file \"%s\": %m", tmppath)));
 
-	errno = 0;
-	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_WRITE);
-	if ((write(fd, ondisk, needed_length)) != needed_length)
+	if ((FileWriteSeq(file, ondisk, needed_length, WAIT_EVENT_SNAPBUILD_WRITE)) != needed_length)
 	{
-		int			save_errno = errno;
-
-		CloseTransientFile(fd);
-
-		/* if write didn't set errno, assume problem is no disk space */
-		errno = save_errno ? save_errno : ENOSPC;
+		FileClose(file);
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not write to file \"%s\": %m", tmppath)));
@@ -1784,24 +1777,20 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 	 * some noticeable overhead since it's performed synchronously during
 	 * decoding?
 	 */
-	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_SYNC);
-	if (pg_fsync(fd) != 0)
+	if (FileSync(file, WAIT_EVENT_SNAPBUILD_SYNC) != 0)
 	{
 		int			save_errno = errno;
-
-		CloseTransientFile(fd);
+		FileClose(file);
 		errno = save_errno;
+
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not fsync file \"%s\": %m", tmppath)));
 	}
-	pgstat_report_wait_end();
 
-	if (CloseTransientFile(fd) != 0)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not close file \"%s\": %m", tmppath)));
+	FileClose(file);
 
+	/* Sync the directory as well */
 	fsync_fname("pg_logical/snapshots", true);
 
 	/*
@@ -1846,7 +1835,7 @@ static bool
 SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 {
 	SnapBuildOnDisk ondisk;
-	int			fd;
+	File			file;
 	char		path[MAXPGPATH];
 	Size		sz;
 	pg_crc32c	checksum;
@@ -1858,11 +1847,11 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 	sprintf(path, "pg_logical/snapshots/%X-%X.snap",
 			LSN_FORMAT_ARGS(lsn));
 
-	fd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
-
-	if (fd < 0 && errno == ENOENT)
+	file = PathNameOpenTemporaryFile(path, O_RDONLY | PG_BINARY);
+    if (file < 0 && errno == ENOENT)
 		return false;
-	else if (fd < 0)
+
+	else if (file < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not open file \"%s\": %m", path)));
@@ -1880,7 +1869,7 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 
 
 	/* read statically sized portion of snapshot */
-	SnapBuildRestoreContents(fd, (char *) &ondisk, SnapBuildOnDiskConstantSize, path);
+	SnapBuildRestoreContents(file, (char *) &ondisk, SnapBuildOnDiskConstantSize, path);
 
 	if (ondisk.magic != SNAPBUILD_MAGIC)
 		ereport(ERROR,
@@ -1900,7 +1889,7 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 				SnapBuildOnDiskConstantSize - SnapBuildOnDiskNotChecksummedSize);
 
 	/* read SnapBuild */
-	SnapBuildRestoreContents(fd, (char *) &ondisk.builder, sizeof(SnapBuild), path);
+	SnapBuildRestoreContents(file, (char *) &ondisk.builder, sizeof(SnapBuild), path);
 	COMP_CRC32C(checksum, &ondisk.builder, sizeof(SnapBuild));
 
 	/* restore committed xacts information */
@@ -1908,7 +1897,7 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 	{
 		sz = sizeof(TransactionId) * ondisk.builder.committed.xcnt;
 		ondisk.builder.committed.xip = MemoryContextAllocZero(builder->context, sz);
-		SnapBuildRestoreContents(fd, (char *) ondisk.builder.committed.xip, sz, path);
+		SnapBuildRestoreContents(file, (char *) ondisk.builder.committed.xip, sz, path);
 		COMP_CRC32C(checksum, ondisk.builder.committed.xip, sz);
 	}
 
@@ -1917,14 +1906,11 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 	{
 		sz = sizeof(TransactionId) * ondisk.builder.catchange.xcnt;
 		ondisk.builder.catchange.xip = MemoryContextAllocZero(builder->context, sz);
-		SnapBuildRestoreContents(fd, (char *) ondisk.builder.catchange.xip, sz, path);
+		SnapBuildRestoreContents(file, (char *) ondisk.builder.catchange.xip, sz, path);
 		COMP_CRC32C(checksum, ondisk.builder.catchange.xip, sz);
 	}
 
-	if (CloseTransientFile(fd) != 0)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not close file \"%s\": %m", path)));
+	FileClose(file);
 
 	FIN_CRC32C(checksum);
 
@@ -2015,26 +2001,19 @@ snapshot_not_interesting:
  * Read the contents of the serialized snapshot to 'dest'.
  */
 static void
-SnapBuildRestoreContents(int fd, char *dest, Size size, const char *path)
+SnapBuildRestoreContents(File file, char *dest, Size size, const char *path)
 {
 	int			readBytes;
 
-	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_READ);
-	readBytes = read(fd, dest, size);
-	pgstat_report_wait_end();
+	readBytes = FileReadSeq(file, dest, size, WAIT_EVENT_SNAPBUILD_READ);
 	if (readBytes != size)
 	{
-		int			save_errno = errno;
-
-		CloseTransientFile(fd);
+		FileClose(file);
 
 		if (readBytes < 0)
-		{
-			errno = save_errno;
 			ereport(ERROR,
 					(errcode_for_file_access(),
 					 errmsg("could not read file \"%s\": %m", path)));
-		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_DATA_CORRUPTED),

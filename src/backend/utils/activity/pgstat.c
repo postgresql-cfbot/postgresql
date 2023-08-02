@@ -1288,14 +1288,9 @@ pgstat_assert_is_up(void)
 
 /* helpers for pgstat_write_statsfile() */
 static void
-write_chunk(FILE *fpout, void *ptr, size_t len)
+write_chunk(File file, void *ptr, size_t len)
 {
-	int			rc;
-
-	rc = fwrite(ptr, len, 1, fpout);
-
-	/* we'll check for errors with ferror once at the end */
-	(void) rc;
+	FileWriteSeq(file, ptr, len, 0);
 }
 
 #define write_chunk_s(fpout, ptr) write_chunk(fpout, ptr, sizeof(*ptr))
@@ -1307,7 +1302,7 @@ write_chunk(FILE *fpout, void *ptr, size_t len)
 static void
 pgstat_write_statsfile(void)
 {
-	FILE	   *fpout;
+	File file;
 	int32		format_id;
 	const char *tmpfile = PGSTAT_STAT_PERMANENT_TMPFILE;
 	const char *statfile = PGSTAT_STAT_PERMANENT_FILENAME;
@@ -1324,8 +1319,8 @@ pgstat_write_statsfile(void)
 	/*
 	 * Open the statistics temp file to write out the current values.
 	 */
-	fpout = AllocateFile(tmpfile, PG_BINARY_W);
-	if (fpout == NULL)
+	file = PathNameOpenTemporaryFile(tmpfile, O_WRONLY | O_CREAT | O_TRUNC | PG_BINARY);
+	if (file < 0)
 	{
 		ereport(LOG,
 				(errcode_for_file_access(),
@@ -1338,7 +1333,7 @@ pgstat_write_statsfile(void)
 	 * Write the file header --- currently just a format ID.
 	 */
 	format_id = PGSTAT_FILE_FORMAT_ID;
-	write_chunk_s(fpout, &format_id);
+	write_chunk_s(file, &format_id);
 
 	/*
 	 * XXX: The following could now be generalized to just iterate over
@@ -1350,37 +1345,37 @@ pgstat_write_statsfile(void)
 	 * Write archiver stats struct
 	 */
 	pgstat_build_snapshot_fixed(PGSTAT_KIND_ARCHIVER);
-	write_chunk_s(fpout, &pgStatLocal.snapshot.archiver);
+	write_chunk_s(file, &pgStatLocal.snapshot.archiver);
 
 	/*
 	 * Write bgwriter stats struct
 	 */
 	pgstat_build_snapshot_fixed(PGSTAT_KIND_BGWRITER);
-	write_chunk_s(fpout, &pgStatLocal.snapshot.bgwriter);
+	write_chunk_s(file, &pgStatLocal.snapshot.bgwriter);
 
 	/*
 	 * Write checkpointer stats struct
 	 */
 	pgstat_build_snapshot_fixed(PGSTAT_KIND_CHECKPOINTER);
-	write_chunk_s(fpout, &pgStatLocal.snapshot.checkpointer);
+	write_chunk_s(file, &pgStatLocal.snapshot.checkpointer);
 
 	/*
 	 * Write IO stats struct
 	 */
 	pgstat_build_snapshot_fixed(PGSTAT_KIND_IO);
-	write_chunk_s(fpout, &pgStatLocal.snapshot.io);
+	write_chunk_s(file, &pgStatLocal.snapshot.io);
 
 	/*
 	 * Write SLRU stats struct
 	 */
 	pgstat_build_snapshot_fixed(PGSTAT_KIND_SLRU);
-	write_chunk_s(fpout, &pgStatLocal.snapshot.slru);
+	write_chunk_s(file, &pgStatLocal.snapshot.slru);
 
 	/*
 	 * Write WAL stats struct
 	 */
 	pgstat_build_snapshot_fixed(PGSTAT_KIND_WAL);
-	write_chunk_s(fpout, &pgStatLocal.snapshot.wal);
+	write_chunk_s(file, &pgStatLocal.snapshot.wal);
 
 	/*
 	 * Walk through the stats entries
@@ -1408,8 +1403,8 @@ pgstat_write_statsfile(void)
 		if (!kind_info->to_serialized_name)
 		{
 			/* normal stats entry, identified by PgStat_HashKey */
-			fputc('S', fpout);
-			write_chunk_s(fpout, &ps->key);
+			FilePutc('S', file);
+			write_chunk_s(file, &ps->key);
 		}
 		else
 		{
@@ -1418,13 +1413,13 @@ pgstat_write_statsfile(void)
 
 			kind_info->to_serialized_name(&ps->key, shstats, &name);
 
-			fputc('N', fpout);
-			write_chunk_s(fpout, &ps->key.kind);
-			write_chunk_s(fpout, &name);
+			FilePutc('N', file);
+			write_chunk_s(file, &ps->key.kind);
+			write_chunk_s(file, &name);
 		}
 
 		/* Write except the header part of the entry */
-		write_chunk(fpout,
+		write_chunk(file,
 					pgstat_get_entry_data(ps->key.kind, shstats),
 					pgstat_get_entry_len(ps->key.kind));
 	}
@@ -1435,25 +1430,17 @@ pgstat_write_statsfile(void)
 	 * pgstat.stat with it.  The ferror() check replaces testing for error
 	 * after each individual fputc or fwrite (in write_chunk()) above.
 	 */
-	fputc('E', fpout);
+	FilePutc('E', file);
+	FileClose(file);
+	if (FileError(file))
+	{
+		ereport(LOG,
+				(errcode_for_file_access(),
+					errmsg("could not write temporary statistics file \"%s\": %m",
+						   tmpfile)));
+		unlink(tmpfile);
+	}
 
-	if (ferror(fpout))
-	{
-		ereport(LOG,
-				(errcode_for_file_access(),
-				 errmsg("could not write temporary statistics file \"%s\": %m",
-						tmpfile)));
-		FreeFile(fpout);
-		unlink(tmpfile);
-	}
-	else if (FreeFile(fpout) < 0)
-	{
-		ereport(LOG,
-				(errcode_for_file_access(),
-				 errmsg("could not close temporary statistics file \"%s\": %m",
-						tmpfile)));
-		unlink(tmpfile);
-	}
 	else if (rename(tmpfile, statfile) < 0)
 	{
 		ereport(LOG,
@@ -1466,12 +1453,12 @@ pgstat_write_statsfile(void)
 
 /* helpers for pgstat_read_statsfile() */
 static bool
-read_chunk(FILE *fpin, void *ptr, size_t len)
+read_chunk(File file, void *ptr, size_t len)
 {
-	return fread(ptr, 1, len, fpin) == len;
+	return FileReadSeq(file, ptr, len, 0) == len;
 }
 
-#define read_chunk_s(fpin, ptr) read_chunk(fpin, ptr, sizeof(*ptr))
+#define read_chunk_s(file, ptr) read_chunk(file, ptr, sizeof(*ptr))
 
 /*
  * Reads in existing statistics file into the shared stats hash.
@@ -1482,7 +1469,7 @@ read_chunk(FILE *fpin, void *ptr, size_t len)
 static void
 pgstat_read_statsfile(void)
 {
-	FILE	   *fpin;
+	File	    file;
 	int32		format_id;
 	bool		found;
 	const char *statfile = PGSTAT_STAT_PERMANENT_FILENAME;
@@ -1502,7 +1489,8 @@ pgstat_read_statsfile(void)
 	 * has not yet written the stats file for the first time.  Any other
 	 * failure condition is suspicious.
 	 */
-	if ((fpin = AllocateFile(statfile, PG_BINARY_R)) == NULL)
+	file = PathNameOpenTemporaryFile(statfile, O_RDONLY | PG_BINARY);
+	if (file < 0)
 	{
 		if (errno != ENOENT)
 			ereport(LOG,
@@ -1516,7 +1504,7 @@ pgstat_read_statsfile(void)
 	/*
 	 * Verify it's of the expected format.
 	 */
-	if (!read_chunk_s(fpin, &format_id) ||
+	if (!read_chunk_s(file, &format_id) ||
 		format_id != PGSTAT_FILE_FORMAT_ID)
 		goto error;
 
@@ -1529,37 +1517,37 @@ pgstat_read_statsfile(void)
 	/*
 	 * Read archiver stats struct
 	 */
-	if (!read_chunk_s(fpin, &shmem->archiver.stats))
+	if (!read_chunk_s(file, &shmem->archiver.stats))
 		goto error;
 
 	/*
 	 * Read bgwriter stats struct
 	 */
-	if (!read_chunk_s(fpin, &shmem->bgwriter.stats))
+	if (!read_chunk_s(file, &shmem->bgwriter.stats))
 		goto error;
 
 	/*
 	 * Read checkpointer stats struct
 	 */
-	if (!read_chunk_s(fpin, &shmem->checkpointer.stats))
+	if (!read_chunk_s(file, &shmem->checkpointer.stats))
 		goto error;
 
 	/*
 	 * Read IO stats struct
 	 */
-	if (!read_chunk_s(fpin, &shmem->io.stats))
+	if (!read_chunk_s(file, &shmem->io.stats))
 		goto error;
 
 	/*
 	 * Read SLRU stats struct
 	 */
-	if (!read_chunk_s(fpin, &shmem->slru.stats))
+	if (!read_chunk_s(file, &shmem->slru.stats))
 		goto error;
 
 	/*
 	 * Read WAL stats struct
 	 */
-	if (!read_chunk_s(fpin, &shmem->wal.stats))
+	if (!read_chunk_s(file, &shmem->wal.stats))
 		goto error;
 
 	/*
@@ -1568,7 +1556,7 @@ pgstat_read_statsfile(void)
 	 */
 	for (;;)
 	{
-		int			t = fgetc(fpin);
+		int			t = FileGetc(file);
 
 		switch (t)
 		{
@@ -1584,7 +1572,7 @@ pgstat_read_statsfile(void)
 					if (t == 'S')
 					{
 						/* normal stats entry, identified by PgStat_HashKey */
-						if (!read_chunk_s(fpin, &key))
+						if (!read_chunk_s(file, &key))
 							goto error;
 
 						if (!pgstat_is_kind_valid(key.kind))
@@ -1597,9 +1585,9 @@ pgstat_read_statsfile(void)
 						PgStat_Kind kind;
 						NameData	name;
 
-						if (!read_chunk_s(fpin, &kind))
+						if (!read_chunk_s(file, &kind))
 							goto error;
-						if (!read_chunk_s(fpin, &name))
+						if (!read_chunk_s(file, &name))
 							goto error;
 						if (!pgstat_is_kind_valid(kind))
 							goto error;
@@ -1612,7 +1600,7 @@ pgstat_read_statsfile(void)
 						if (!kind_info->from_serialized_name(&name, &key))
 						{
 							/* skip over data for entry we don't care about */
-							if (fseek(fpin, pgstat_get_entry_len(kind), SEEK_CUR) != 0)
+							if (FileSeek(file, FileTell(file) + pgstat_get_entry_len(kind)) < 0)
 								goto error;
 
 							continue;
@@ -1640,7 +1628,7 @@ pgstat_read_statsfile(void)
 					header = pgstat_init_entry(key.kind, p);
 					dshash_release_lock(pgStatLocal.shared_hash, p);
 
-					if (!read_chunk(fpin,
+					if (!read_chunk(file,
 									pgstat_get_entry_data(key.kind, header),
 									pgstat_get_entry_len(key.kind)))
 						goto error;
@@ -1649,7 +1637,7 @@ pgstat_read_statsfile(void)
 				}
 			case 'E':
 				/* check that 'E' actually signals end of file */
-				if (fgetc(fpin) != EOF)
+				if (FileGetc(file) != EOF)
 					goto error;
 
 				goto done;
@@ -1660,7 +1648,7 @@ pgstat_read_statsfile(void)
 	}
 
 done:
-	FreeFile(fpin);
+	FileClose(file);
 
 	elog(DEBUG2, "removing permanent stats file \"%s\"", statfile);
 	unlink(statfile);

@@ -83,6 +83,7 @@ extern void InitWalRecovery(ControlFileData *ControlFile,
 							bool *wasShutdown_ptr, bool *haveBackupLabel_ptr,
 							bool *haveTblspcMap_ptr);
 extern void PerformWalRecovery(void);
+extern bool RestartPointAvailable(void);
 
 /*
  * FinishWalRecovery() returns this.  It contains information about the point

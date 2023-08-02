@@ -445,6 +445,7 @@ heap_page_prune(Relation relation, Buffer buffer,
 				XLogRegisterBufData(0, (char *) prstate.nowunused,
 									prstate.nunused * sizeof(OffsetNumber));
 
+			XLogSetRecordFlags(XLOG_INCLUDE_XID);
 			recptr = XLogInsert(RM_HEAP2_ID, XLOG_HEAP2_PRUNE);
 
 			PageSetLSN(BufferGetPage(buffer), recptr);

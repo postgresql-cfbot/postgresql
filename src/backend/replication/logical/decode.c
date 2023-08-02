@@ -132,7 +132,7 @@ void
 xlog_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
 	SnapBuild  *builder = ctx->snapshot_builder;
-	uint8		info = XLogRecGetInfo(buf->record) & ~XLR_INFO_MASK;
+	uint8		info = XLogRecGetRmgrInfo(buf->record);
 
 	ReorderBufferProcessXid(ctx->reorder, XLogRecGetXid(buf->record),
 							buf->origptr);
@@ -205,7 +205,7 @@ xact_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	SnapBuild  *builder = ctx->snapshot_builder;
 	ReorderBuffer *reorder = ctx->reorder;
 	XLogReaderState *r = buf->record;
-	uint8		info = XLogRecGetInfo(r) & XLOG_XACT_OPMASK;
+	uint8		info = XLogRecGetRmgrInfo(r) & XLOG_XACT_OPMASK;
 
 	/*
 	 * If the snapshot isn't yet fully built, we cannot decode anything, so
@@ -225,7 +225,9 @@ xact_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 				bool		two_phase = false;
 
 				xlrec = (xl_xact_commit *) XLogRecGetData(r);
-				ParseCommitRecord(XLogRecGetInfo(buf->record), xlrec, &parsed);
+				ParseCommitRecord(XLogRecGetRmgrInfo(buf->record),
+								  xlrec,
+								  &parsed);
 
 				if (!TransactionIdIsValid(parsed.twophase_xid))
 					xid = XLogRecGetXid(r);
@@ -253,7 +255,7 @@ xact_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 				bool		two_phase = false;
 
 				xlrec = (xl_xact_abort *) XLogRecGetData(r);
-				ParseAbortRecord(XLogRecGetInfo(buf->record), xlrec, &parsed);
+				ParseAbortRecord(XLogRecGetRmgrInfo(buf->record), xlrec, &parsed);
 
 				if (!TransactionIdIsValid(parsed.twophase_xid))
 					xid = XLogRecGetXid(r);
@@ -316,7 +318,7 @@ xact_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 
 				/* ok, parse it */
 				xlrec = (xl_xact_prepare *) XLogRecGetData(r);
-				ParsePrepareRecord(XLogRecGetInfo(buf->record),
+				ParsePrepareRecord(XLogRecGetRmgrInfo(buf->record),
 								   xlrec, &parsed);
 
 				/*
@@ -361,7 +363,7 @@ standby_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
 	SnapBuild  *builder = ctx->snapshot_builder;
 	XLogReaderState *r = buf->record;
-	uint8		info = XLogRecGetInfo(r) & ~XLR_INFO_MASK;
+	uint8		info = XLogRecGetRmgrInfo(r);
 
 	ReorderBufferProcessXid(ctx->reorder, XLogRecGetXid(r), buf->origptr);
 
@@ -405,7 +407,7 @@ standby_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 void
 heap2_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
-	uint8		info = XLogRecGetInfo(buf->record) & XLOG_HEAP_OPMASK;
+	uint8		info = XLogRecGetRmgrInfo(buf->record) & XLOG_HEAP_OPMASK;
 	TransactionId xid = XLogRecGetXid(buf->record);
 	SnapBuild  *builder = ctx->snapshot_builder;
 
@@ -464,7 +466,7 @@ heap2_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 void
 heap_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
-	uint8		info = XLogRecGetInfo(buf->record) & XLOG_HEAP_OPMASK;
+	uint8		info = XLogRecGetRmgrInfo(buf->record) & XLOG_HEAP_OPMASK;
 	TransactionId xid = XLogRecGetXid(buf->record);
 	SnapBuild  *builder = ctx->snapshot_builder;
 
@@ -589,7 +591,7 @@ logicalmsg_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	SnapBuild  *builder = ctx->snapshot_builder;
 	XLogReaderState *r = buf->record;
 	TransactionId xid = XLogRecGetXid(r);
-	uint8		info = XLogRecGetInfo(r) & ~XLR_INFO_MASK;
+	uint8		info = XLogRecGetRmgrInfo(r);
 	RepOriginId origin_id = XLogRecGetOrigin(r);
 	Snapshot	snapshot = NULL;
 	xl_logical_message *message;

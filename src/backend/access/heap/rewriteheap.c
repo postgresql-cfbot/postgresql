@@ -921,6 +921,7 @@ logical_heap_rewrite_flush_mappings(RewriteState state)
 		src->off += len;
 
 		XLogBeginInsert();
+		XLogSetRecordFlags(XLOG_INCLUDE_XID);
 		XLogRegisterData((char *) (&xlrec), sizeof(xlrec));
 		XLogRegisterData(waldata_start, len);
 

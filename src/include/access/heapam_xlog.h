@@ -26,8 +26,8 @@
 /*
  * WAL record definitions for heapam.c's WAL operations
  *
- * XLOG allows to store some information in high 4 bits of log
- * record xl_info field.  We use 3 for opcode and one for init bit.
+ * XLOG allows to store some information in the 8-bit xl_rmgrinfo field.
+ * We use 3 for opcode and one for init bit.
  */
 #define XLOG_HEAP_INSERT		0x00
 #define XLOG_HEAP_DELETE		0x10
@@ -406,11 +406,11 @@ extern void HeapTupleHeaderAdvanceConflictHorizon(HeapTupleHeader tuple,
 
 extern void heap_redo(XLogReaderState *record);
 extern void heap_desc(StringInfo buf, XLogReaderState *record);
-extern const char *heap_identify(uint8 info);
+extern const char *heap_identify(uint8 rmgrinfo);
 extern void heap_mask(char *pagedata, BlockNumber blkno);
 extern void heap2_redo(XLogReaderState *record);
 extern void heap2_desc(StringInfo buf, XLogReaderState *record);
-extern const char *heap2_identify(uint8 info);
+extern const char *heap2_identify(uint8 rmgrinfo);
 extern void heap_xlog_logical_rewrite(XLogReaderState *r);
 
 extern XLogRecPtr log_heap_visible(Relation rel, Buffer heap_buffer,

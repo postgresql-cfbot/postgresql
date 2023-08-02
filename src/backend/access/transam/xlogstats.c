@@ -74,21 +74,21 @@ XLogRecStoreStats(XLogStats *stats, XLogReaderState *record)
 
 	/*
 	 * Update per-record statistics, where the record is identified by a
-	 * combination of the RmgrId and the four bits of the xl_info field that
-	 * are the rmgr's domain (resulting in sixteen possible entries per
+	 * combination of the RmgrId and the eight bits of the xl_rmgrinfo field
+	 * that are the rmgr's domain (resulting in 256 possible entries per
 	 * RmgrId).
 	 */
 
-	recid = XLogRecGetInfo(record) >> 4;
+	recid = XLogRecGetRmgrInfo(record);
 
 	/*
 	 * XACT records need to be handled differently. Those records use the
 	 * first bit of those four bits for an optional flag variable and the
-	 * following three bits for the opcode. We filter opcode out of xl_info
-	 * and use it as the identifier of the record.
+	 * following three bits for the opcode. We filter opcode out of
+	 * xl_rmgrinfo and use it as the identifier of the record.
 	 */
 	if (rmid == RM_XACT_ID)
-		recid &= 0x07;
+		recid &= 0x70;
 
 	stats->record_stats[rmid][recid].count++;
 	stats->record_stats[rmid][recid].rec_len += rec_len;

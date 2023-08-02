@@ -150,6 +150,7 @@ extern PGDLLIMPORT bool XLOG_DEBUG;
  */
 #define XLOG_INCLUDE_ORIGIN		0x01	/* include the replication origin */
 #define XLOG_MARK_UNIMPORTANT	0x02	/* record not important for durability */
+#define XLOG_INCLUDE_XID		0x04	/* include the transaction ID */
 
 
 /* Checkpoint statistics */
@@ -211,7 +212,7 @@ extern void XLogSetReplicationSlotMinimumLSN(XLogRecPtr lsn);
 
 extern void xlog_redo(struct XLogReaderState *record);
 extern void xlog_desc(StringInfo buf, struct XLogReaderState *record);
-extern const char *xlog_identify(uint8 info);
+extern const char *xlog_identify(uint8 rmgrinfo);
 
 extern void issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli);
 

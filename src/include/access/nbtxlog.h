@@ -21,8 +21,7 @@
 /*
  * XLOG records for btree operations
  *
- * XLOG allows to store some information in high 4 bits of log
- * record xl_info field
+ * XLOG allows to store some information in the 8-bit xl_rmgrinfo field.
  */
 #define XLOG_BTREE_INSERT_LEAF	0x00	/* add index tuple without split */
 #define XLOG_BTREE_INSERT_UPPER 0x10	/* same, on a non-leaf page */
@@ -362,6 +361,6 @@ extern void btree_mask(char *pagedata, BlockNumber blkno);
  * prototypes for functions in nbtdesc.c
  */
 extern void btree_desc(StringInfo buf, XLogReaderState *record);
-extern const char *btree_identify(uint8 info);
+extern const char *btree_identify(uint8 rmgrinfo);
 
 #endif							/* NBTXLOG_H */

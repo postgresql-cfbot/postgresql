@@ -21,7 +21,7 @@ void
 smgr_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		info = XLogRecGetRmgrInfo(record);
 
 	if (info == XLOG_SMGR_CREATE)
 	{
@@ -43,11 +43,11 @@ smgr_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-smgr_identify(uint8 info)
+smgr_identify(uint8 rmgrinfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rmgrinfo)
 	{
 		case XLOG_SMGR_CREATE:
 			id = "CREATE";

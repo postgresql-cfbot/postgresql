@@ -1040,12 +1040,15 @@ WriteEmptyXLOG(void)
 	PGAlignedXLogBlock buffer;
 	XLogPageHeader page;
 	XLogLongPageHeader longpage;
-	XLogRecord *record;
 	pg_crc32c	crc;
 	char		path[MAXPGPATH];
 	int			fd;
 	int			nbytes;
 	char	   *recptr;
+	char	   *baserecptr;
+	const int		rec_hdr_len = offsetof(XLogRecHdrData, xl_hdrdata) +
+		sizeof(uint8) + sizeof(XLogRecPtr) + sizeof(pg_crc32c);
+	const int		rec_payload_len = sizeof(uint8) * 2 + sizeof(CheckPoint);
 
 	memset(buffer.data, 0, XLOG_BLCKSZ);
 
@@ -1061,25 +1064,33 @@ WriteEmptyXLOG(void)
 	longpage->xlp_xlog_blcksz = XLOG_BLCKSZ;
 
 	/* Insert the initial checkpoint record */
-	recptr = (char *) page + SizeOfXLogLongPHD;
-	record = (XLogRecord *) recptr;
-	record->xl_prev = 0;
-	record->xl_xid = InvalidTransactionId;
-	record->xl_tot_len = SizeOfXLogRecord + SizeOfXLogRecordDataHeaderShort + sizeof(CheckPoint);
-	record->xl_info = XLOG_CHECKPOINT_SHUTDOWN;
-	record->xl_rmid = RM_XLOG_ID;
+	baserecptr = recptr = (char *) page + SizeOfXLogLongPHD;
+	*(recptr++) = (char) XLS_UINT8;
+	*(recptr++) = (char) RM_XLOG_ID;
+	recptr += XLogWriteLength(SizeOfXLogRecordDataHeaderShort + sizeof(CheckPoint),
+							  XLS_UINT8, XLS_UINT8, recptr);
 
-	recptr += SizeOfXLogRecord;
+	/* include prevptr */
+	{
+		XLogRecPtr prevptr = 0;
+		memcpy(recptr, &prevptr, sizeof(XLogRecPtr));
+		recptr += sizeof(XLogRecPtr);
+	}
+	/* reserve location of crc */
+	recptr += sizeof(pg_crc32c);
+
 	*(recptr++) = (char) XLR_BLOCK_ID_DATA_SHORT;
 	*(recptr++) = sizeof(CheckPoint);
 	memcpy(recptr, &ControlFile.checkPointCopy,
 		   sizeof(CheckPoint));
 
 	INIT_CRC32C(crc);
-	COMP_CRC32C(crc, ((char *) record) + SizeOfXLogRecord, record->xl_tot_len - SizeOfXLogRecord);
-	COMP_CRC32C(crc, (char *) record, offsetof(XLogRecord, xl_crc));
+	COMP_CRC32C(crc, baserecptr + rec_hdr_len, rec_payload_len);
+	COMP_CRC32C(crc, baserecptr, rec_hdr_len - sizeof(pg_crc32c));
 	FIN_CRC32C(crc);
-	record->xl_crc = crc;
+
+	memcpy(baserecptr + rec_hdr_len - sizeof(pg_crc32c),
+		   &crc, sizeof(pg_crc32c));
 
 	/* Write the first page */
 	XLogFilePath(path, ControlFile.checkPointCopy.ThisTimeLineID,

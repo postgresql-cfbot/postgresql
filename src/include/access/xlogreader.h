@@ -397,7 +397,7 @@ extern bool WALRead(XLogReaderState *state,
 extern size_t DecodeXLogRecordRequiredSpace(size_t xl_tot_len);
 extern bool DecodeXLogRecord(XLogReaderState *state,
 							 DecodedXLogRecord *decoded,
-							 XLogRecord *record,
+							 XLogRecHdr record,
 							 XLogRecPtr lsn,
 							 char **errormsg);
 
@@ -405,9 +405,10 @@ extern bool DecodeXLogRecord(XLogReaderState *state,
  * Macros that provide access to parts of the record most recently returned by
  * XLogReadRecord() or XLogNextRecord().
  */
-#define XLogRecGetTotalLen(decoder) ((decoder)->record->header.xl_tot_len)
+#define XLogRecGetTotalLen(decoder) ((decoder)->record->header.xl_payload_len)
 #define XLogRecGetPrev(decoder) ((decoder)->record->header.xl_prev)
 #define XLogRecGetInfo(decoder) ((decoder)->record->header.xl_info)
+#define XLogRecGetRmgrInfo(decoder) ((decoder)->record->header.xl_rmgrinfo)
 #define XLogRecGetRmid(decoder) ((decoder)->record->header.xl_rmid)
 #define XLogRecGetXid(decoder) ((decoder)->record->header.xl_xid)
 #define XLogRecGetOrigin(decoder) ((decoder)->record->record_origin)

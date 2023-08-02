@@ -26,12 +26,20 @@
 #include "pgtime.h"
 #include "storage/block.h"
 #include "storage/relfilelocator.h"
+#include "transam.h"
 
+/*
+ * WAL records (and other XLogPage page-level content) are aligned to 8 bytes.
+ *
+ * Note that the contents of the records is not aligned (!)
+ */
+#define ALIGNOF_XLP_CONTENT 8
+#define XLP_ALIGN(LEN) TYPEALIGN64(ALIGNOF_XLP_CONTENT, LEN)
 
 /*
  * Each page of XLOG file has a header like this:
  */
-#define XLOG_PAGE_MAGIC 0xD113	/* can be used as WAL version indicator */
+#define XLOG_PAGE_MAGIC 0xD114	/* can be used as WAL version indicator */
 
 typedef struct XLogPageHeaderData
 {
@@ -49,7 +57,7 @@ typedef struct XLogPageHeaderData
 	uint32		xlp_rem_len;	/* total len of remaining data for record */
 } XLogPageHeaderData;
 
-#define SizeOfXLogShortPHD	MAXALIGN(sizeof(XLogPageHeaderData))
+#define SizeOfXLogShortPHD	XLP_ALIGN(sizeof(XLogPageHeaderData))
 
 typedef XLogPageHeaderData *XLogPageHeader;
 
@@ -66,7 +74,7 @@ typedef struct XLogLongPageHeaderData
 	uint32		xlp_xlog_blcksz;	/* just as a cross-check */
 } XLogLongPageHeaderData;
 
-#define SizeOfXLogLongPHD	MAXALIGN(sizeof(XLogLongPageHeaderData))
+#define SizeOfXLogLongPHD	XLP_ALIGN(sizeof(XLogLongPageHeaderData))
 
 typedef XLogLongPageHeaderData *XLogLongPageHeader;
 
@@ -329,12 +337,212 @@ struct LogicalDecodingContext;
 struct XLogRecordBuffer;
 
 /*
+ * XLogSizeClass interactions
+ */
+
+/*
+ * XLogLengthToSizeClass
+ * Turns a length into a size class
+ * MaxSizeClass is used to allow the compiler to eliminate branches that
+ * can never be hit in the caller's code path; e.g. when processing uint16.
+ */
+static inline XLogSizeClass XLogLengthToSizeClass(uint32 length,
+												  const XLogSizeClass maxSizeClass)
+{
+	XLogSizeClass sizeClass;
+
+	if (length == 0)
+		sizeClass = XLS_EMPTY;
+	else if (length <= UINT8_MAX  && maxSizeClass >= XLS_UINT8)
+		sizeClass = XLS_UINT8;
+	else if (length <= UINT16_MAX && maxSizeClass >= XLS_UINT16)
+		sizeClass = XLS_UINT16;
+	else
+	{
+		Assert(maxSizeClass == XLS_UINT32);
+		sizeClass = XLS_UINT32;
+	}
+
+	Assert(sizeClass <= maxSizeClass);
+
+	return sizeClass;
+}
+
+/*
+ * XLogWriteLength
+ *
+ * Write a length with size determined by sizeClass into the output.
+ * Returns the Size of bytes written. The user is responsible for making
+ * sure that out-of-bounds write is impossible.
+ * Writes at most 4 bytes.
+ */
+static inline Size XLogWriteLength(uint32 length, XLogSizeClass sizeClass,
+								   const XLogSizeClass maxSizeClass,
+								   char *output)
+{
+	Size written = -1;
+
+	Assert(sizeClass <= maxSizeClass &&
+		   XLogLengthToSizeClass(length, maxSizeClass) == sizeClass);
+
+#define WRITE_OP(caseSizeClass, field_type) \
+		case caseSizeClass: \
+			if ((caseSizeClass) <= maxSizeClass) \
+			{ \
+				field_type typedLength = (field_type) length; \
+				memcpy(output, &typedLength, sizeof(field_type)); \
+				written = sizeof(field_type); \
+			} \
+			break
+
+	switch (sizeClass) {
+		case XLS_EMPTY:
+			written = 0;
+			break;
+		WRITE_OP(XLS_UINT8, uint8);
+		WRITE_OP(XLS_UINT16, uint16);
+		WRITE_OP(XLS_UINT32, uint32);
+		default:
+			Assert(false);
+			pg_unreachable();
+	}
+
+#undef WRITE_OP
+	return written;
+}
+
+/*
+ * XLogReadLength
+ *
+ * Read a length with size determined by sizeClass from the input into
+ * *length. Returns the Size of bytes read, or -1 if the input size was
+ * too small to read the relevant length field.
+ */
+static inline Size XLogReadLength(uint32 *length, XLogSizeClass sizeClass,
+								  const XLogSizeClass maxSizeClass,
+								  char *input, Size inSize)
+{
+	Size readSize = -1;
+
+	Assert(sizeClass <= maxSizeClass);
+
+#define READ_OP(caseSizeClass, field_type) \
+		case caseSizeClass: \
+			if ((caseSizeClass) <= maxSizeClass) \
+			{ \
+				field_type typedLength; \
+				if (inSize < sizeof(field_type)) \
+					return -1; \
+				memcpy(&typedLength, input, sizeof(field_type)); \
+				readSize = sizeof(field_type); \
+				*length = typedLength; \
+			} \
+			break
+
+	switch (sizeClass) {
+		case XLS_EMPTY:
+			readSize = 0;
+			*length = 0;
+			break;
+		READ_OP(XLS_UINT8, uint8);
+		READ_OP(XLS_UINT16, uint16);
+		READ_OP(XLS_UINT32, uint32);
+		default:
+			Assert(false);
+			pg_unreachable();
+	}
+
+#undef READ_OP
+	return readSize;
+}
+
+
+inline static uint8 XLRHdrGetRmgrInfo(XLogRecHdr record)
+{
+	XLogSizeClass recSizeClass;
+	int			offset;
+
+	if (!(record->xl_info & XLR_HAS_RMGRINFO))
+		return 0;
+
+	recSizeClass = XLR_SIZECLASS(record->xl_info);
+	/* xl_rmgrinfo is located immediately behind the xl_payload_len field */
+	offset = XLogSizeClassToByteLength(recSizeClass);
+
+	return (uint8) record->xl_hdrdata[offset];
+}
+
+
+/* Works on any partial record */
+inline static Size XLogRecordTotalLength(XLogRecHdr record)
+{
+	uint8		xl_info = record->xl_info;
+	XLogSizeClass sizeClass;
+	uint32		length = 0;
+	sizeClass = XLR_SIZECLASS(xl_info);
+
+	XLogReadLength(&length, sizeClass, XLS_UINT32,
+				   &record->xl_hdrdata[0], 6);
+
+	return (Size) length + XLogRecordHdrLen(xl_info);
+}
+
+inline static void XLogReadRecHdrInto(XLogRecHdr recdata, Size length,
+									  XLogRecord *record)
+{
+	Size offset		= 0;
+	Size hdr_size PG_USED_FOR_ASSERTS_ONLY = 0;
+	XLogSizeClass sizeClass;
+
+	Assert(length >= XLogRecordMinHdrSize);
+
+	record->xl_info = recdata->xl_info;
+
+	hdr_size = XLogRecordHdrLen(record->xl_info);
+	Assert(length >= hdr_size);
+
+	record->xl_rmid = recdata->xl_rmid;
+
+	sizeClass = XLR_SIZECLASS(record->xl_info);
+	offset += XLogReadLength(&record->xl_payload_len, sizeClass,
+							 XLS_UINT32, &recdata->xl_hdrdata[offset], length - offset);
+
+	if (record->xl_info & XLR_HAS_RMGRINFO)
+	{
+		record->xl_rmgrinfo = recdata->xl_hdrdata[offset];
+		offset += sizeof(uint8);
+	}
+	else
+	{
+		record->xl_rmgrinfo = 0;
+	}
+
+	if (record->xl_info & XLR_HAS_XID)
+	{
+		memcpy(&record->xl_xid, &recdata->xl_hdrdata[offset], sizeof(TransactionId));
+		offset += sizeof(TransactionId);
+	}
+	else
+	{
+		record->xl_xid = InvalidTransactionId;
+	}
+
+	memcpy(&record->xl_prev, &recdata->xl_hdrdata[offset], sizeof(XLogRecPtr));
+	offset += sizeof(XLogRecPtr);
+
+	memcpy(&record->xl_crc, &recdata->xl_hdrdata[offset], sizeof(pg_crc32c));
+	offset += sizeof(pg_crc32c);
+
+	Assert(hdr_size - 2 == offset);
+}
+
+/*
  * Method table for resource managers.
  *
  * This struct must be kept in sync with the PG_RMGR definition in
  * rmgr.c.
  *
- * rm_identify must return a name for the record based on xl_info (without
+ * rm_identify must return a name for the record based on xl_rmgrinfo (without
  * reference to the rmid). For example, XLOG_BTREE_VACUUM would be named
  * "VACUUM". rm_desc can then be called to obtain additional detail for the
  * record, if available (e.g. the last block).

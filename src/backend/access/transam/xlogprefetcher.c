@@ -536,7 +536,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 		if (replaying_lsn < record->lsn)
 		{
 			uint8		rmid = record->header.xl_rmid;
-			uint8		record_type = record->header.xl_info & ~XLR_INFO_MASK;
+			uint8		record_type = record->header.xl_rmgrinfo;
 
 			if (rmid == RM_XLOG_ID)
 			{

@@ -58,6 +58,6 @@ extern int	clogsyncfiletag(const FileTag *ftag, char *path);
 
 extern void clog_redo(XLogReaderState *record);
 extern void clog_desc(StringInfo buf, XLogReaderState *record);
-extern const char *clog_identify(uint8 info);
+extern const char *clog_identify(uint8 rmgrinfo);
 
 #endif							/* CLOG_H */

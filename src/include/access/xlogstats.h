@@ -16,7 +16,8 @@
 #include "access/rmgr.h"
 #include "access/xlogreader.h"
 
-#define MAX_XLINFO_TYPES 16
+/* all 8 bits of xl_rmgrinfo are available */
+#define MAX_XLRMGRINFO_TYPES 256
 
 typedef struct XLogRecStats
 {
@@ -33,7 +34,7 @@ typedef struct XLogStats
 	XLogRecPtr	endptr;
 #endif
 	XLogRecStats rmgr_stats[RM_MAX_ID + 1];
-	XLogRecStats record_stats[RM_MAX_ID + 1][MAX_XLINFO_TYPES];
+	XLogRecStats record_stats[RM_MAX_ID + 1][MAX_XLRMGRINFO_TYPES];
 } XLogStats;
 
 extern void XLogRecGetLen(XLogReaderState *record, uint32 *rec_len,

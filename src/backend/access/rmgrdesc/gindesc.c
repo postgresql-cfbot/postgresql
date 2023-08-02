@@ -74,7 +74,7 @@ void
 gin_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		info = XLogRecGetRmgrInfo(record);
 
 	switch (info)
 	{
@@ -179,11 +179,11 @@ gin_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-gin_identify(uint8 info)
+gin_identify(uint8 rmgrinfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rmgrinfo)
 	{
 		case XLOG_GIN_CREATE_PTREE:
 			id = "CREATE_PTREE";

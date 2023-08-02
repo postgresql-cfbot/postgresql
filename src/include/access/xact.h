@@ -163,8 +163,8 @@ typedef struct SavedTransactionCharacteristics
  */
 
 /*
- * XLOG allows to store some information in high 4 bits of log record xl_info
- * field. We use 3 for the opcode, and one about an optional flag variable.
+ * XLOG allows to store some information in the 8-bit xl_rmgrinfo field.
+ * We use 3 for the opcode, and one about an optional flag variable.
  */
 #define XLOG_XACT_COMMIT			0x00
 #define XLOG_XACT_PREPARE			0x10
@@ -232,7 +232,7 @@ typedef struct xl_xact_assignment
  * A minimal commit/abort record only consists of a xl_xact_commit/abort
  * struct. The presence of additional information is indicated by bits set in
  * 'xl_xact_xinfo->xinfo'. The presence of the xinfo field itself is signaled
- * by a set XLOG_XACT_HAS_INFO bit in the xl_info field.
+ * by a set XLOG_XACT_HAS_INFO bit in the xl_rmgrinfo field.
  *
  * NB: All the individual data chunks should be sized to multiples of
  * sizeof(int) and only require int32 alignment. If they require bigger
@@ -519,9 +519,9 @@ extern void xact_desc(StringInfo buf, XLogReaderState *record);
 extern const char *xact_identify(uint8 info);
 
 /* also in xactdesc.c, so they can be shared between front/backend code */
-extern void ParseCommitRecord(uint8 info, xl_xact_commit *xlrec, xl_xact_parsed_commit *parsed);
-extern void ParseAbortRecord(uint8 info, xl_xact_abort *xlrec, xl_xact_parsed_abort *parsed);
-extern void ParsePrepareRecord(uint8 info, xl_xact_prepare *xlrec, xl_xact_parsed_prepare *parsed);
+extern void ParseCommitRecord(uint8 rmgrinfo, xl_xact_commit *xlrec, xl_xact_parsed_commit *parsed);
+extern void ParseAbortRecord(uint8 rmgrinfo, xl_xact_abort *xlrec, xl_xact_parsed_abort *parsed);
+extern void ParsePrepareRecord(uint8 rmgrinfo, xl_xact_prepare *xlrec, xl_xact_parsed_prepare *parsed);
 
 extern void EnterParallelMode(void);
 extern void ExitParallelMode(void);

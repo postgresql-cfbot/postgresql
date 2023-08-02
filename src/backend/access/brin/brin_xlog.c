@@ -56,7 +56,7 @@ brin_xlog_insert_update(XLogReaderState *record,
 	 * If we inserted the first and only tuple on the page, re-initialize the
 	 * page from scratch.
 	 */
-	if (XLogRecGetInfo(record) & XLOG_BRIN_INIT_PAGE)
+	if (XLogRecGetRmgrInfo(record) & XLOG_BRIN_INIT_PAGE)
 	{
 		buffer = XLogInitBufferForRedo(record, 0);
 		page = BufferGetPage(buffer);
@@ -308,7 +308,7 @@ brin_xlog_desummarize_page(XLogReaderState *record)
 void
 brin_redo(XLogReaderState *record)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		info = XLogRecGetRmgrInfo(record);
 
 	switch (info & XLOG_BRIN_OPMASK)
 	{

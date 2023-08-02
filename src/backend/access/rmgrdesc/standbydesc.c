@@ -47,7 +47,7 @@ void
 standby_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		info = XLogRecGetRmgrInfo(record);
 
 	if (info == XLOG_STANDBY_LOCK)
 	{
@@ -76,11 +76,11 @@ standby_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-standby_identify(uint8 info)
+standby_identify(uint8 rmgrinfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rmgrinfo)
 	{
 		case XLOG_STANDBY_LOCK:
 			id = "LOCK";

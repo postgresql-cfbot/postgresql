@@ -217,6 +217,8 @@ extern void ReplicationSlotDrop(const char *name, bool nowait);
 
 extern void ReplicationSlotAcquire(const char *name, bool nowait);
 extern void ReplicationSlotRelease(void);
+extern void LogReplicationSlotAcquire(bool is_physical, const char *slotname);
+extern void LogReplicationSlotRelease(bool is_physical, const char *slotname);
 extern void ReplicationSlotCleanup(void);
 extern void ReplicationSlotSave(void);
 extern void ReplicationSlotMarkDirty(void);

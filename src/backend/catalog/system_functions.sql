@@ -616,6 +616,8 @@ REVOKE EXECUTE ON FUNCTION pg_backup_stop(boolean) FROM public;
 
 REVOKE EXECUTE ON FUNCTION pg_create_restore_point(text) FROM public;
 
+REVOKE EXECUTE ON FUNCTION pg_get_wal_record_content(pg_lsn) FROM public;
+
 REVOKE EXECUTE ON FUNCTION pg_switch_wal() FROM public;
 
 REVOKE EXECUTE ON FUNCTION pg_log_standby_snapshot() FROM public;
@@ -725,6 +727,8 @@ REVOKE EXECUTE ON FUNCTION pg_ls_replslotdir(text) FROM PUBLIC;
 --
 -- We also set up some things as accessible to standard roles.
 --
+
+GRANT EXECUTE ON FUNCTION pg_get_wal_record_content(pg_lsn) TO pg_read_server_files;
 
 GRANT EXECUTE ON FUNCTION pg_ls_logdir() TO pg_monitor;
 

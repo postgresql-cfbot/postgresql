@@ -93,6 +93,7 @@ enum dbObjectTypePriorities
 	PRIO_PUBLICATION_REL,
 	PRIO_PUBLICATION_TABLE_IN_SCHEMA,
 	PRIO_SUBSCRIPTION,
+	PRIO_LOGICAL_REPLICATION_SLOT,
 	PRIO_DEFAULT_ACL,			/* done in ACL pass */
 	PRIO_EVENT_TRIGGER,			/* must be next to last! */
 	PRIO_REFRESH_MATVIEW		/* must be last! */
@@ -146,10 +147,11 @@ static const int dbObjectTypePriority[] =
 	PRIO_PUBLICATION,			/* DO_PUBLICATION */
 	PRIO_PUBLICATION_REL,		/* DO_PUBLICATION_REL */
 	PRIO_PUBLICATION_TABLE_IN_SCHEMA,	/* DO_PUBLICATION_TABLE_IN_SCHEMA */
-	PRIO_SUBSCRIPTION			/* DO_SUBSCRIPTION */
+	PRIO_SUBSCRIPTION,			/* DO_SUBSCRIPTION */
+	PRIO_LOGICAL_REPLICATION_SLOT	/* DO_LOGICAL_REPLICATION_SLOT */
 };
 
-StaticAssertDecl(lengthof(dbObjectTypePriority) == (DO_SUBSCRIPTION + 1),
+StaticAssertDecl(lengthof(dbObjectTypePriority) == (DO_LOGICAL_REPLICATION_SLOT + 1),
 				 "array length mismatch");
 
 static DumpId preDataBoundId;
@@ -1541,6 +1543,11 @@ describeDumpableObject(DumpableObject *obj, char *buf, int bufsize)
 			snprintf(buf, bufsize,
 					 "SUBSCRIPTION (ID %d OID %u)",
 					 obj->dumpId, obj->catId.oid);
+			return;
+		case DO_LOGICAL_REPLICATION_SLOT:
+			snprintf(buf, bufsize,
+					 "LOGICAL REPLICATION SLOT (ID %d NAME %s)",
+					 obj->dumpId, obj->name);
 			return;
 		case DO_PRE_DATA_BOUNDARY:
 			snprintf(buf, bufsize,

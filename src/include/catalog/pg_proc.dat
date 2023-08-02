@@ -6489,6 +6489,15 @@
   proargnames => '{rm_id, rm_name, rm_builtin}',
   prosrc => 'pg_get_wal_resource_managers' },
 
+
+{ oid => '8045', descr => 'Info of the WAL conent',
+  proname => 'pg_get_wal_record_content', prorows => '1', proretset => 't',
+  provolatile => 's', prorettype => 'record', proargtypes => 'pg_lsn',
+  proallargtypes => '{pg_lsn,pg_lsn,pg_lsn,pg_lsn,xid,text,text,int4,int4,int4,text,text}',
+  proargmodes => '{i,o,o,o,o,o,o,o,o,o,o,o}',
+  proargnames => '{in_lsn,start_lsn,end_lsn,prev_lsn,xid,resource_manager,record_type,record_length,main_data_length,fpi_length,description,block_ref}',
+  prosrc => 'pg_get_wal_record_content' },
+
 { oid => '2621', descr => 'reload configuration files',
   proname => 'pg_reload_conf', provolatile => 'v', prorettype => 'bool',
   proargtypes => '', prosrc => 'pg_reload_conf' },

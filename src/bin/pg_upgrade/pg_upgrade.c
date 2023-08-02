@@ -59,6 +59,7 @@ static void copy_xact_xlog_xid(void);
 static void set_frozenxids(bool minmxid_only);
 static void make_outputdirs(char *pgdata);
 static void setup(char *argv0, bool *live_check);
+static void create_logical_replication_slots(void);
 
 ClusterInfo old_cluster,
 			new_cluster;
@@ -187,6 +188,19 @@ main(int argc, char **argv)
 			  new_cluster.bindir, old_cluster.controldata.chkpnt_nxtoid,
 			  new_cluster.pgdata);
 	check_ok();
+
+	/*
+	 * Create logical replication slots if requested.
+	 *
+	 * Note: This must be done after doing pg_resetwal command because
+	 * pg_resetwal would remove required WALs.
+	 */
+	if (user_opts.include_logical_slots)
+	{
+		start_postmaster(&new_cluster, true);
+		create_logical_replication_slots();
+		stop_postmaster(false);
+	}
 
 	if (user_opts.do_sync)
 	{
@@ -859,4 +873,51 @@ set_frozenxids(bool minmxid_only)
 	PQfinish(conn_template1);
 
 	check_ok();
+}
+
+/*
+ * create_logical_replication_slots()
+ *
+ * Similar to create_new_objects() but only restores logical replication slots.
+ */
+static void
+create_logical_replication_slots(void)
+{
+	int			dbnum;
+
+	prep_status_progress("Restoring logical replication slots in the new cluster");
+
+	for (dbnum = 0; dbnum < old_cluster.dbarr.ndbs; dbnum++)
+	{
+		char		slots_file_name[MAXPGPATH],
+					log_file_name[MAXPGPATH];
+		DbInfo	   *old_db = &old_cluster.dbarr.dbs[dbnum];
+
+		pg_log(PG_STATUS, "%s", old_db->db_name);
+
+		snprintf(slots_file_name, sizeof(slots_file_name),
+				 DB_DUMP_LOGICAL_SLOTS_FILE_MASK, old_db->db_oid);
+		snprintf(log_file_name, sizeof(log_file_name),
+				 DB_DUMP_LOG_FILE_MASK, old_db->db_oid);
+
+		parallel_exec_prog(log_file_name,
+						   NULL,
+						   "\"%s/psql\" %s --echo-queries --set ON_ERROR_STOP=on "
+						   "--no-psqlrc --dbname %s -f \"%s/%s\"",
+						   new_cluster.bindir,
+						   cluster_conn_opts(&new_cluster),
+						   old_db->db_name,
+						   log_opts.dumpdir,
+						   slots_file_name);
+	}
+
+	/* reap all children */
+	while (reap_child(true) == true)
+		;
+
+	end_progress_output();
+	check_ok();
+
+	/* update new_cluster info again */
+	get_logical_slot_infos(&new_cluster);
 }

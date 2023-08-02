@@ -237,3 +237,19 @@ SELECT segment_number > 0 AS ok_segment_number, timeline_id
   FROM pg_split_walfile_name('000000010000000100000000');
 SELECT segment_number > 0 AS ok_segment_number, timeline_id
   FROM pg_split_walfile_name('ffffffFF00000001000000af');
+
+-- pg_get_wal_record_content
+CREATE TABLE sample_tbl(col1 int, col2 int);
+SELECT pg_current_wal_lsn() AS wal_lsn \gset
+INSERT INTO sample_tbl SELECT * FROM generate_series(1, 2);
+
+-- Mask DETAIL messages as these could refer to current LSN positions.
+\set VERBOSITY terse
+
+-- Invalid input LSN.
+SELECT * FROM pg_get_wal_record_content('0/0');
+
+-- LSNs with the highest value possible.
+SELECT * FROM pg_get_wal_record_content('FFFFFFFF/FFFFFFFF');
+
+SELECT COUNT(*) >= 1 AS ok FROM pg_get_wal_record_content(:'wal_lsn');

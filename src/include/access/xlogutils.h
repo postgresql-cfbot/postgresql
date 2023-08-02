@@ -115,4 +115,10 @@ extern void XLogReadDetermineTimeline(XLogReaderState *state,
 
 extern void WALReadRaiseError(WALReadError *errinfo);
 
+extern XLogRecPtr GetCurrentLSN(void);
+extern XLogReaderState *InitXLogReaderState(XLogRecPtr lsn);
+extern XLogRecord *ReadNextXLogRecord(XLogReaderState *xlogreader);
+extern void GetWALRecordInfo(XLogReaderState *record, Datum *values,
+							 bool *nulls, uint32 ncols);
+
 #endif

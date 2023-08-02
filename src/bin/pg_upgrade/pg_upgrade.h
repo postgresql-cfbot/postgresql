@@ -29,6 +29,7 @@
 /* contains both global db information and CREATE DATABASE commands */
 #define GLOBALS_DUMP_FILE	"pg_upgrade_dump_globals.sql"
 #define DB_DUMP_FILE_MASK	"pg_upgrade_dump_%u.custom"
+#define DB_DUMP_LOGICAL_SLOTS_FILE_MASK	"pg_upgrade_dump_%u_logical_slots.sql"
 
 /*
  * Base directories that include all the files generated internally, from the
@@ -151,6 +152,22 @@ typedef struct
 } RelInfoArr;
 
 /*
+ * Structure to store logical replication slot information
+ */
+typedef struct
+{
+	char	   *slotname;		/* slot name */
+	char	   *plugin;			/* plugin */
+	bool		two_phase;		/* Can the slot decode 2PC? */
+} LogicalSlotInfo;
+
+typedef struct
+{
+	int			nslots;
+	LogicalSlotInfo *slots;
+} LogicalSlotInfoArr;
+
+/*
  * The following structure represents a relation mapping.
  */
 typedef struct
@@ -176,6 +193,7 @@ typedef struct
 	char		db_tablespace[MAXPGPATH];	/* database default tablespace
 											 * path */
 	RelInfoArr	rel_arr;		/* array of all user relinfos */
+	LogicalSlotInfoArr slot_arr;	/* array of all LogicalSlotInfo */
 } DbInfo;
 
 /*
@@ -304,6 +322,8 @@ typedef struct
 	transferMode transfer_mode; /* copy files or link them? */
 	int			jobs;			/* number of processes/threads to use */
 	char	   *socketdir;		/* directory to use for Unix sockets */
+	bool		include_logical_slots;	/* true -> dump and restore logical
+										 * replication slots */
 } UserOpts;
 
 typedef struct
@@ -400,6 +420,7 @@ FileNameMap *gen_db_file_maps(DbInfo *old_db,
 							  DbInfo *new_db, int *nmaps, const char *old_pgdata,
 							  const char *new_pgdata);
 void		get_db_and_rel_infos(ClusterInfo *cluster);
+int			get_logical_slot_infos(ClusterInfo *cluster);
 
 /* option.c */
 

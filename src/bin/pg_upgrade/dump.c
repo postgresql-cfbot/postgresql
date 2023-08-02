@@ -59,6 +59,30 @@ generate_old_dump(void)
 						   log_opts.dumpdir,
 						   sql_file_name, escaped_connstr.data);
 
+		/*
+		 * Dump logical replication slots if needed.
+		 *
+		 * XXX We cannot dump replication slots at the same time as the schema
+		 * dump because we need to separate the timing of restoring
+		 * replication slots and other objects. Replication slots, in
+		 * particular, should not be restored before executing the pg_resetwal
+		 * command because it will remove WALs that are required by the slots.
+		 */
+		if (user_opts.include_logical_slots)
+		{
+			char		slots_file_name[MAXPGPATH];
+
+			snprintf(slots_file_name, sizeof(slots_file_name),
+					 DB_DUMP_LOGICAL_SLOTS_FILE_MASK, old_db->db_oid);
+			parallel_exec_prog(log_file_name, NULL,
+							   "\"%s/pg_dump\" %s --logical-replication-slots-only "
+							   "--quote-all-identifiers --binary-upgrade %s "
+							   "--file=\"%s/%s\" %s",
+							   new_cluster.bindir, cluster_conn_opts(&old_cluster),
+							   log_opts.verbose ? "--verbose" : "",
+							   log_opts.dumpdir,
+							   slots_file_name, escaped_connstr.data);
+		}
 		termPQExpBuffer(&escaped_connstr);
 	}
 

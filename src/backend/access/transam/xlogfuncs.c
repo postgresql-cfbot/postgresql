@@ -754,3 +754,53 @@ pg_promote(PG_FUNCTION_ARGS)
 						   wait_seconds)));
 	PG_RETURN_BOOL(false);
 }
+
+/*
+ * Get WAL record content.
+ */
+Datum
+pg_get_wal_record_content(PG_FUNCTION_ARGS)
+{
+#define PG_GET_WAL_RECORD_CONTENT_COLS 11
+	Datum		result;
+	Datum		values[PG_GET_WAL_RECORD_CONTENT_COLS] = {0};
+	bool		nulls[PG_GET_WAL_RECORD_CONTENT_COLS] = {0};
+	XLogRecPtr	lsn;
+	XLogRecPtr	curr_lsn;
+	XLogReaderState *xlogreader;
+	TupleDesc	tupdesc;
+	HeapTuple	tuple;
+
+	lsn = PG_GETARG_LSN(0);
+	curr_lsn = GetCurrentLSN();
+
+	if (lsn > curr_lsn)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("WAL input LSN must be less than current LSN"),
+				 errdetail("Current WAL LSN on the database system is at %X/%X.",
+						   LSN_FORMAT_ARGS(curr_lsn))));
+
+	/* Build a tuple descriptor for our result type. */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	xlogreader = InitXLogReaderState(lsn);
+
+	if (!ReadNextXLogRecord(xlogreader))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("could not read WAL at %X/%X",
+						LSN_FORMAT_ARGS(xlogreader->EndRecPtr))));
+
+	GetWALRecordInfo(xlogreader, values, nulls, PG_GET_WAL_RECORD_CONTENT_COLS);
+
+	pfree(xlogreader->private_data);
+	XLogReaderFree(xlogreader);
+
+	tuple = heap_form_tuple(tupdesc, values, nulls);
+	result = HeapTupleGetDatum(tuple);
+
+	PG_RETURN_DATUM(result);
+#undef PG_GET_WAL_RECORD_CONTENT_COLS
+}

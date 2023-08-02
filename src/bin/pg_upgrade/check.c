@@ -30,7 +30,10 @@ static void check_for_jsonb_9_4_usage(ClusterInfo *cluster);
 static void check_for_pg_role_prefix(ClusterInfo *cluster);
 static void check_for_new_tablespace_dir(ClusterInfo *new_cluster);
 static void check_for_user_defined_encoding_conversions(ClusterInfo *cluster);
+static void check_for_logical_replication_slots(ClusterInfo *new_cluster);
+static void check_for_confirmed_flush_lsn(ClusterInfo *cluster);
 
+static int	num_slots_on_old_cluster;
 
 /*
  * fix_path_separator
@@ -89,6 +92,10 @@ check_and_dump_old_cluster(bool live_check)
 	/* Extract a list of databases and tables from the old cluster */
 	get_db_and_rel_infos(&old_cluster);
 
+	/* Additionally, extract a list of logical replication slots if required */
+	if (user_opts.include_logical_slots)
+		num_slots_on_old_cluster = get_logical_slot_infos(&old_cluster);
+
 	init_tablespaces();
 
 	get_loadable_libraries();
@@ -103,6 +110,8 @@ check_and_dump_old_cluster(bool live_check)
 	check_for_composite_data_type_usage(&old_cluster);
 	check_for_reg_data_type_usage(&old_cluster);
 	check_for_isn_and_int8_passing_mismatch(&old_cluster);
+	if (user_opts.include_logical_slots)
+		check_for_confirmed_flush_lsn(&old_cluster);
 
 	/*
 	 * PG 16 increased the size of the 'aclitem' type, which breaks the
@@ -188,6 +197,18 @@ void
 check_new_cluster(void)
 {
 	get_db_and_rel_infos(&new_cluster);
+
+	/*
+	 * Do additional work if --include-logical-replication-slots was
+	 * specified. This must be done before check_new_cluster_is_empty()
+	 * because the slot_arr attribute of the new_cluster will be checked in
+	 * that function.
+	 */
+	if (user_opts.include_logical_slots)
+	{
+		(void) get_logical_slot_infos(&new_cluster);
+		check_for_logical_replication_slots(&new_cluster);
+	}
 
 	check_new_cluster_is_empty();
 
@@ -363,6 +384,22 @@ check_new_cluster_is_empty(void)
 						 new_cluster.dbarr.dbs[dbnum].db_name,
 						 rel_arr->rels[relnum].nspname,
 						 rel_arr->rels[relnum].relname);
+		}
+
+		/*
+		 * If --include-logical-replication-slots is required, check the
+		 * existence of slots.
+		 */
+		if (user_opts.include_logical_slots)
+		{
+			DbInfo	   *pDbInfo = &new_cluster.dbarr.dbs[dbnum];
+			LogicalSlotInfoArr *slot_arr = &pDbInfo->slot_arr;
+
+			/* if nslots > 0, report just first entry and exit */
+			if (slot_arr->nslots)
+				pg_fatal("New cluster database \"%s\" is not empty: found logical replication slot \"%s\"",
+						 pDbInfo->db_name,
+						 slot_arr->slots[0].slotname);
 		}
 	}
 }
@@ -1401,4 +1438,103 @@ check_for_user_defined_encoding_conversions(ClusterInfo *cluster)
 	}
 	else
 		check_ok();
+}
+
+/*
+ * Verify the parameter settings necessary for creating logical replication
+ * slots.
+ */
+static void
+check_for_logical_replication_slots(ClusterInfo *new_cluster)
+{
+	PGresult   *res;
+	PGconn	   *conn = connectToServer(new_cluster, "template1");
+	int			max_replication_slots;
+	char	   *wal_level;
+
+	/* --include-logical-replication-slots can be used since PG17. */
+	if (GET_MAJOR_VERSION(new_cluster->major_version) <= 1600)
+		return;
+
+	prep_status("Checking parameter settings for logical replication slots");
+
+	res = executeQueryOrDie(conn, "SHOW max_replication_slots;");
+	max_replication_slots = atoi(PQgetvalue(res, 0, 0));
+
+	if (max_replication_slots == 0)
+		pg_fatal("max_replication_slots must be greater than 0");
+	else if (num_slots_on_old_cluster > max_replication_slots)
+		pg_fatal("max_replication_slots must be greater than existing logical "
+				 "replication slots on old node.");
+
+	PQclear(res);
+
+	res = executeQueryOrDie(conn, "SHOW wal_level;");
+	wal_level = PQgetvalue(res, 0, 0);
+
+	if (strcmp(wal_level, "logical") != 0)
+		pg_fatal("wal_level must be \"logical\", but is set to \"%s\"",
+				 wal_level);
+
+	PQclear(res);
+
+	PQfinish(conn);
+
+	check_ok();
+}
+
+/*
+ * Verify that all logical replication slots consumed all WALs, except a
+ * CHECKPOINT_SHUTDOWN record.
+ */
+static void
+check_for_confirmed_flush_lsn(ClusterInfo *cluster)
+{
+	int			i,
+				ntups,
+				i_slotname;
+	bool		is_error = false;
+	PGresult   *res;
+	DbInfo	   *active_db = &cluster->dbarr.dbs[0];
+	PGconn	   *conn = connectToServer(cluster, active_db->db_name);
+
+	Assert(user_opts.include_logical_slots);
+
+	/* --include-logical-replication-slots can be used since PG17. */
+	if (GET_MAJOR_VERSION(cluster->major_version) <= 1600)
+		return;
+
+	prep_status("Checking confirmed_flush_lsn for logical replication slots");
+
+	/*
+	 * Check that all logical replication slots have reached the current WAL
+	 * position.
+	 */
+	res = executeQueryOrDie(conn,
+							"SELECT slot_name FROM pg_catalog.pg_replication_slots "
+							"WHERE (SELECT count(record_type) "
+							"		FROM pg_catalog.pg_get_wal_record_content(confirmed_flush_lsn) "
+							"		WHERE record_type != 'CHECKPOINT_SHUTDOWN') <> 0 "
+							"AND temporary = false AND wal_status IN ('reserved', 'extended', 'unreserved');");
+
+	ntups = PQntuples(res);
+	i_slotname = PQfnumber(res, "slot_name");
+
+	for (i = 0; i < ntups; i++)
+	{
+		is_error = true;
+
+		pg_log(PG_WARNING,
+			   "\nWARNING: logical replication slot \"%s\" has not consumed WALs yet",
+			   PQgetvalue(res, i, i_slotname));
+	}
+
+	PQclear(res);
+	PQfinish(conn);
+
+	if (is_error)
+		pg_fatal("--include-logical-replication-slots requires that all "
+				 "logical replication slots consumed all the WALs");
+
+	check_ok();
 }

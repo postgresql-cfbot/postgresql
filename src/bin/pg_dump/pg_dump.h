@@ -82,7 +82,8 @@ typedef enum
 	DO_PUBLICATION,
 	DO_PUBLICATION_REL,
 	DO_PUBLICATION_TABLE_IN_SCHEMA,
-	DO_SUBSCRIPTION
+	DO_SUBSCRIPTION,
+	DO_LOGICAL_REPLICATION_SLOT
 } DumpableObjectType;
 
 /*
@@ -666,6 +667,17 @@ typedef struct _SubscriptionInfo
 	char	   *subpublications;
 	char	   *subpasswordrequired;
 } SubscriptionInfo;
+
+/*
+ * The LogicalReplicationSlotInfo struct is used to represent replication
+ * slots.
+ */
+typedef struct _LogicalReplicationSlotInfo
+{
+	DumpableObject dobj;
+	char	   *plugin;
+	bool		twophase;
+} LogicalReplicationSlotInfo;
 
 /*
  *	common utility functions

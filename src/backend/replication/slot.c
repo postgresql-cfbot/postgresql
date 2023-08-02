@@ -109,7 +109,8 @@ static void ReplicationSlotDropPtr(ReplicationSlot *slot);
 /* internal persistency functions */
 static void RestoreSlotFromDisk(const char *name);
 static void CreateSlotOnDisk(ReplicationSlot *slot);
-static void SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel);
+static void SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel,
+						   bool is_shutdown);
 
 /*
  * Report shared-memory space needed by ReplicationSlotsShmemInit.
@@ -783,7 +784,7 @@ ReplicationSlotSave(void)
 	Assert(MyReplicationSlot != NULL);
 
 	sprintf(path, "pg_replslot/%s", NameStr(MyReplicationSlot->data.name));
-	SaveSlotToPath(MyReplicationSlot, path, ERROR);
+	SaveSlotToPath(MyReplicationSlot, path, ERROR, false);
 }
 
 /*
@@ -1565,11 +1566,10 @@ restart:
 /*
  * Flush all replication slots to disk.
  *
- * This needn't actually be part of a checkpoint, but it's a convenient
- * location.
+ * is_shutdown is true in case of a shutdown checkpoint.
  */
 void
-CheckPointReplicationSlots(void)
+CheckPointReplicationSlots(bool is_shutdown)
 {
 	int			i;
 
@@ -1594,7 +1594,7 @@ CheckPointReplicationSlots(void)
 
 		/* save the slot to disk, locking is handled in SaveSlotToPath() */
 		sprintf(path, "pg_replslot/%s", NameStr(s->data.name));
-		SaveSlotToPath(s, path, LOG);
+		SaveSlotToPath(s, path, LOG, is_shutdown);
 	}
 	LWLockRelease(ReplicationSlotAllocationLock);
 }
@@ -1700,7 +1700,7 @@ CreateSlotOnDisk(ReplicationSlot *slot)
 
 	/* Write the actual state file. */
 	slot->dirty = true;			/* signal that we really need to write */
-	SaveSlotToPath(slot, tmppath, ERROR);
+	SaveSlotToPath(slot, tmppath, ERROR, false);
 
 	/* Rename the directory into place. */
 	if (rename(tmppath, path) != 0)
@@ -1726,7 +1726,8 @@ CreateSlotOnDisk(ReplicationSlot *slot)
  * Shared functionality between saving and creating a replication slot.
  */
 static void
-SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel)
+SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel,
+			   bool is_shutdown)
 {
 	char		tmppath[MAXPGPATH];
 	char		path[MAXPGPATH];
@@ -1740,8 +1741,13 @@ SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel)
 	slot->just_dirtied = false;
 	SpinLockRelease(&slot->mutex);
 
-	/* and don't do anything if there's nothing to write */
-	if (!was_dirty)
+	/*
+	 * and don't do anything if there's nothing to write, unless it's this is
+	 * called for a logical slot during a shutdown checkpoint, as we want to
+	 * persist the confirmed_flush_lsn in that case, even if that's the only
+	 * modification.
+	 */
+	if (!was_dirty && (SlotIsPhysical(slot) || !is_shutdown))
 		return;
 
 	LWLockAcquire(&slot->io_in_progress_lock, LW_EXCLUSIVE);

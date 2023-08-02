@@ -241,6 +241,17 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--include-logical-replication-slots</option></term>
+      <listitem>
+       <para>
+        Upgrade logical replication slots. Only permanent and usable
+        replication slots are included. Note that pg_upgrade does not check the
+        installation of plugins.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-?</option></term>
       <term><option>--help</option></term>
       <listitem><para>show help, then exit</para></listitem>
@@ -399,6 +410,34 @@ NET STOP postgresql-&majorversion;
      Also, make sure <varname>wal_level</varname> is not set to
      <literal>minimal</literal> in the <filename>postgresql.conf</filename> file on the
      new primary cluster.
+    </para>
+   </step>
+
+   <step>
+    <title>Prepare for publisher upgrades</title>
+
+    <para>
+     If you are upgrading a publisher node, it is recommended to use the
+     <option>--include-logical-replication-slots</option> option. This helps
+     avoid the need for manually defining the same replication slot on the new
+     publisher.
+    </para>
+
+    <para>
+     Before you start upgrading the publisher node, ensure that the
+     subscription is temporarily disabled. After the upgrade is complete,
+     execute the
+     <link linkend="sql-altersubscription"><command>ALTER SUBSCRIPTION ... DISABLE</command></link>
+     command to update the connection string, and then re-enable the
+     subscription.
+    </para>
+
+    <para>
+     Note that only the replication slots with a wal_status different from
+     <literal>lost</literal> will be replicated to the new node. If there are
+     any subscriptions referring to a <literal>lost</literal> slot, they must
+     either be dropped or the slot_name should be changed to <literal>NONE</literal>
+     prior to upgrading.
     </para>
    </step>
 

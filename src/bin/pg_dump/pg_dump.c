@@ -328,6 +328,9 @@ static void setupDumpWorker(Archive *AH);
 static TableInfo *getRootTableInfo(const TableInfo *tbinfo);
 static bool forcePartitionRootLoad(const TableInfo *tbinfo);
 
+static void getLogicalReplicationSlots(Archive *fout);
+static void dumpLogicalReplicationSlot(Archive *fout,
+									   const LogicalReplicationSlotInfo *slotinfo);
 
 int
 main(int argc, char **argv)
@@ -431,6 +434,7 @@ main(int argc, char **argv)
 		{"table-and-children", required_argument, NULL, 12},
 		{"exclude-table-and-children", required_argument, NULL, 13},
 		{"exclude-table-data-and-children", required_argument, NULL, 14},
+		{"logical-replication-slots-only", no_argument, NULL, 15},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -657,6 +661,10 @@ main(int argc, char **argv)
 										  optarg);
 				break;
 
+			case 15:			/* dump only replication slot(s) */
+				dopt.logical_slots_only = true;
+				break;
+
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -713,6 +721,9 @@ main(int argc, char **argv)
 	 */
 	if (dopt.do_nothing && dopt.dump_inserts == 0)
 		pg_fatal("option --on-conflict-do-nothing requires option --inserts, --rows-per-insert, or --column-inserts");
+
+	if (dopt.logical_slots_only && !dopt.binary_upgrade)
+		pg_fatal("options --logical-replication-slots-only requires option --binary-upgrade");
 
 	/* Identify archive format to emit */
 	archiveFormat = parseArchiveFormat(format, &archiveMode);
@@ -877,6 +888,16 @@ main(int argc, char **argv)
 	}
 
 	/*
+	 * If dump logical-replication-slots-only was requested, dump only them
+	 * and skip everything else.
+	 */
+	if (dopt.logical_slots_only)
+	{
+		getLogicalReplicationSlots(fout);
+		goto dump;
+	}
+
+	/*
 	 * Dumping LOs is the default for dumps where an inclusion switch is not
 	 * used (an "include everything" dump).  -B can be used to exclude LOs
 	 * from those dumps.  -b can be used to include LOs even when an inclusion
@@ -935,6 +956,8 @@ main(int argc, char **argv)
 		collectComments(fout);
 	if (!dopt.no_security_labels)
 		collectSecLabels(fout);
+
+dump:
 
 	/* Lastly, create dummy objects to represent the section boundaries */
 	boundaryObjs = createBoundaryObjects();
@@ -1109,6 +1132,12 @@ help(const char *progname)
 			 "                               servers matching PATTERN\n"));
 	printf(_("  --inserts                    dump data as INSERT commands, rather than COPY\n"));
 	printf(_("  --load-via-partition-root    load partitions via the root table\n"));
+
+	/*
+	 * The option --logical-replication-slots-only is used only by pg_upgrade
+	 * and should not be called by users, which is why it is not exposed by
+	 * the help.
+	 */
 	printf(_("  --no-comments                do not dump comments\n"));
 	printf(_("  --no-publications            do not dump publications\n"));
 	printf(_("  --no-security-labels         do not dump security label assignments\n"));
@@ -10237,6 +10266,10 @@ dumpDumpableObject(Archive *fout, DumpableObject *dobj)
 		case DO_SUBSCRIPTION:
 			dumpSubscription(fout, (const SubscriptionInfo *) dobj);
 			break;
+		case DO_LOGICAL_REPLICATION_SLOT:
+			dumpLogicalReplicationSlot(fout,
+									   (const LogicalReplicationSlotInfo *) dobj);
+			break;
 		case DO_PRE_DATA_BOUNDARY:
 		case DO_POST_DATA_BOUNDARY:
 			/* never dumped, nothing to do */
@@ -18218,6 +18251,7 @@ addBoundaryDependencies(DumpableObject **dobjs, int numObjs,
 			case DO_PUBLICATION_REL:
 			case DO_PUBLICATION_TABLE_IN_SCHEMA:
 			case DO_SUBSCRIPTION:
+			case DO_LOGICAL_REPLICATION_SLOT:
 				/* Post-data objects: must come after the post-data boundary */
 				addObjectDependency(dobj, postDataBound->dumpId);
 				break;
@@ -18478,4 +18512,113 @@ appendReloptionsArrayAH(PQExpBuffer buffer, const char *reloptions,
 								fout->std_strings);
 	if (!res)
 		pg_log_warning("could not parse %s array", "reloptions");
+}
+
+/*
+ * getLogicalReplicationSlots
+ *	  get information about replication slots
+ */
+static void
+getLogicalReplicationSlots(Archive *fout)
+{
+	PGresult   *res;
+	LogicalReplicationSlotInfo *slotinfo;
+	PQExpBuffer query;
+
+	int			i_slotname;
+	int			i_plugin;
+	int			i_twophase;
+	int			i,
+				ntups;
+
+	/* Check whether we should dump or not */
+	if (fout->remoteVersion < 170000)
+		return;
+
+	Assert(fout->dopt->logical_slots_only);
+
+	query = createPQExpBuffer();
+
+	resetPQExpBuffer(query);
+
+	/*
+	 * Get replication slots.
+	 *
+	 * XXX: Which information must be extracted from old node? Currently three
+	 * attributes are extracted because they are used by
+	 * pg_create_logical_replication_slot().
+	 */
+	appendPQExpBufferStr(query,
+						 "SELECT slot_name, plugin, two_phase "
+						 "FROM pg_catalog.pg_replication_slots "
+						 "WHERE database = current_database() AND temporary = false "
+						 "AND wal_status IN ('reserved', 'extended');");
+
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(res);
+
+	i_slotname = PQfnumber(res, "slot_name");
+	i_plugin = PQfnumber(res, "plugin");
+	i_twophase = PQfnumber(res, "two_phase");
+
+	slotinfo = pg_malloc(ntups * sizeof(LogicalReplicationSlotInfo));
+
+	for (i = 0; i < ntups; i++)
+	{
+		slotinfo[i].dobj.objType = DO_LOGICAL_REPLICATION_SLOT;
+
+		slotinfo[i].dobj.catId.tableoid = InvalidOid;
+		slotinfo[i].dobj.catId.oid = InvalidOid;
+		AssignDumpId(&slotinfo[i].dobj);
+
+		slotinfo[i].dobj.name = pg_strdup(PQgetvalue(res, i, i_slotname));
+
+		slotinfo[i].plugin = pg_strdup(PQgetvalue(res, i, i_plugin));
+		slotinfo[i].twophase = (strcmp(PQgetvalue(res, i, i_twophase), "t") == 0);
+
+		/*
+		 * Note: Currently we do not have any options to include/exclude slots
+		 * in dumping, so all the slots must be selected.
+		 */
+		slotinfo[i].dobj.dump = DUMP_COMPONENT_DEFINITION;
+	}
+	PQclear(res);
+
+	destroyPQExpBuffer(query);
+}
+
+/*
+ * dumpLogicalReplicationSlot
+ *	  dump creation functions for the given logical replication slots
+ */
+static void
+dumpLogicalReplicationSlot(Archive *fout,
+						   const LogicalReplicationSlotInfo *slotinfo)
+{
+	Assert(fout->dopt->logical_slots_only);
+
+	if (slotinfo->dobj.dump & DUMP_COMPONENT_DEFINITION)
+	{
+		PQExpBuffer query = createPQExpBuffer();
+
+		/*
+		 * XXX: For simplification, pg_create_logical_replication_slot() is
+		 * used. Is it sufficient?
+		 */
+		appendPQExpBuffer(query, "SELECT pg_catalog.pg_create_logical_replication_slot(");
+		appendStringLiteralAH(query, slotinfo->dobj.name, fout);
+		appendPQExpBuffer(query, ", ");
+		appendStringLiteralAH(query, slotinfo->plugin, fout);
+		appendPQExpBuffer(query, ", false, %s);",
+						  slotinfo->twophase ? "true" : "false");
+
+		ArchiveEntry(fout, slotinfo->dobj.catId, slotinfo->dobj.dumpId,
+					 ARCHIVE_OPTS(.tag = slotinfo->dobj.name,
+								  .description = "REPLICATION SLOT",
+								  .section = SECTION_POST_DATA,
+								  .createStmt = query->data));
+
+		destroyPQExpBuffer(query);
+	}
 }

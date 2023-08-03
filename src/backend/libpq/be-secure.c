@@ -61,6 +61,9 @@ bool		SSLPreferServerCiphers;
 int			ssl_min_protocol_version = PG_TLS1_2_VERSION;
 int			ssl_max_protocol_version = PG_TLS_ANY;
 
+/* GUC variable: if false ignore ALPN negotiation */
+bool		ssl_enable_alpn = true;
+
 /* ------------------------------------------------------------ */
 /*			 Procedures common to all secure sessions			*/
 /* ------------------------------------------------------------ */
@@ -234,6 +237,19 @@ ssize_t
 secure_raw_read(Port *port, void *ptr, size_t len)
 {
 	ssize_t		n;
+
+	/* Read from the "unread" buffered data first. c.f. libpq-be.h */
+	if (port->raw_buf_remaining > 0)
+	{
+		/* consume up to len bytes from the raw_buf */
+		if (len > port->raw_buf_remaining)
+			len = port->raw_buf_remaining;
+		Assert(port->raw_buf);
+		memcpy(ptr, port->raw_buf + port->raw_buf_consumed, len);
+		port->raw_buf_consumed += len;
+		port->raw_buf_remaining -= len;
+		return len;
+	}
 
 	/*
 	 * Try to read from the socket without blocking. If it succeeds we're

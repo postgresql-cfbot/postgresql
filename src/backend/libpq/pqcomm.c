@@ -1126,13 +1126,16 @@ pq_discardbytes(size_t len)
 /* --------------------------------
  *		pq_buffer_has_data		- is any buffered data available to read?
  *
- * This will *not* attempt to read more data.
+ * Actually returns the number of bytes in the buffer...
+ *
+ * This will *not* attempt to read more data. And reading up to that number of
+ * bytes should not cause reading any more data either.
  * --------------------------------
  */
-bool
+size_t
 pq_buffer_has_data(void)
 {
-	return (PqRecvPointer < PqRecvLength);
+	return (PqRecvLength - PqRecvPointer);
 }
 
 

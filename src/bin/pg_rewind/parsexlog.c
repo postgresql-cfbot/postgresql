@@ -48,6 +48,7 @@ typedef struct XLogPageReadPrivate
 {
 	const char *restoreCommand;
 	int			tliIndex;
+	bool		keepWalSeg;
 } XLogPageReadPrivate;
 
 static int	SimpleXLogPageRead(XLogReaderState *xlogreader,
@@ -73,6 +74,7 @@ extractPageMap(const char *datadir, XLogRecPtr startpoint, int tliIndex,
 
 	private.tliIndex = tliIndex;
 	private.restoreCommand = restoreCommand;
+	private.keepWalSeg = false;
 	xlogreader = XLogReaderAllocate(WalSegSz, datadir,
 									XL_ROUTINE(.page_read = &SimpleXLogPageRead),
 									&private);
@@ -132,6 +134,7 @@ readOneRecord(const char *datadir, XLogRecPtr ptr, int tliIndex,
 
 	private.tliIndex = tliIndex;
 	private.restoreCommand = restoreCommand;
+	private.keepWalSeg = false;
 	xlogreader = XLogReaderAllocate(WalSegSz, datadir,
 									XL_ROUTINE(.page_read = &SimpleXLogPageRead),
 									&private);
@@ -192,6 +195,11 @@ findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
 
 	private.tliIndex = tliIndex;
 	private.restoreCommand = restoreCommand;
+	/*
+	 * WAL files read during searching for the last checkpoint are required
+	 * by the next startup recovery of the target cluster.
+	 */
+	private.keepWalSeg = true;
 	xlogreader = XLogReaderAllocate(WalSegSz, datadir,
 									XL_ROUTINE(.page_read = &SimpleXLogPageRead),
 									&private);
@@ -296,6 +304,15 @@ SimpleXLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 
 		XLogFileName(xlogfname, targetHistory[private->tliIndex].tli,
 					 xlogreadsegno, WalSegSz);
+
+		if (private->keepWalSeg)
+		{
+			/*
+			 * The caller told us to preserve this file for a future use.
+			 */
+			snprintf(xlogfpath, MAXPGPATH, XLOGDIR "/%s", xlogfname);
+			preserve_file(xlogfpath);
+		}
 
 		snprintf(xlogfpath, MAXPGPATH, "%s/" XLOGDIR "/%s",
 				 xlogreader->segcxt.ws_dir, xlogfname);

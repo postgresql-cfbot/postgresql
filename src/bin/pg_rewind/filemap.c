@@ -795,7 +795,12 @@ decide_file_actions(void)
 	filehash_start_iterate(filehash, &it);
 	while ((entry = filehash_iterate(filehash, &it)) != NULL)
 	{
-		entry->action = decide_file_action(entry);
+		/*
+		 * Some entries (WAL segments) already have an action assigned
+		 * (see SimpleXLogPageRead()).
+		 */
+		if (entry->action == FILE_ACTION_UNDECIDED)
+			entry->action = decide_file_action(entry);
 	}
 
 	/*
@@ -816,6 +821,18 @@ decide_file_actions(void)
 		  final_filemap_cmp);
 
 	return filemap;
+}
+
+/*
+ * Prevent a given file deletion during rewind
+ */
+void
+preserve_file(char *filepath)
+{
+	file_entry_t *entry;
+
+	entry = insert_filehash_entry(filepath);
+	entry->action = FILE_ACTION_NONE;
 }
 
 

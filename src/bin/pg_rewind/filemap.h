@@ -109,5 +109,6 @@ extern void process_target_wal_block_change(ForkNumber forknum,
 extern filemap_t *decide_file_actions(void);
 extern void calculate_totals(filemap_t *filemap);
 extern void print_filemap(filemap_t *filemap);
+extern void preserve_file(char *filepath);
 
 #endif							/* FILEMAP_H */

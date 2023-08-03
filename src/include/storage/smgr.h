@@ -15,8 +15,18 @@
 #define SMGR_H
 
 #include "lib/ilist.h"
+#include "nodes/pg_list.h"
 #include "storage/block.h"
 #include "storage/relfilelocator.h"
+
+/*
+ * volatile ID of the smgr. Across various configurations IDs may vary,
+ * true identity is the name of each smgr. 
+ */
+typedef int SMgrId;
+
+#define MaxSMgrId		INT_MAX
+#define InvalidSmgrId	(-1)
 
 /*
  * smgr.c maintains a table of SMgrRelation objects, which are essentially
@@ -59,14 +69,8 @@ typedef struct SMgrRelationData
 	 * Fields below here are intended to be private to smgr.c and its
 	 * submodules.  Do not touch them from elsewhere.
 	 */
-	int			smgr_which;		/* storage manager selector */
-
-	/*
-	 * for md.c; per-fork arrays of the number of open segments
-	 * (md_num_open_segs) and the segments themselves (md_seg_fds).
-	 */
-	int			md_num_open_segs[MAX_FORKNUM + 1];
-	struct _MdfdVec *md_seg_fds[MAX_FORKNUM + 1];
+	SMgrId		smgr_which;		/* storage manager selector */
+	int			smgrrelation_size;	/* size of this struct, incl. smgr-specific data */
 
 	/* if unowned, list link in list of all unowned SMgrRelations */
 	dlist_node	node;
@@ -76,6 +80,53 @@ typedef SMgrRelationData *SMgrRelation;
 
 #define SmgrIsTemp(smgr) \
 	RelFileLocatorBackendIsTemp((smgr)->smgr_rlocator)
+
+/*
+ * This struct of function pointers defines the API between smgr.c and
+ * any individual storage manager module.  Note that smgr subfunctions are
+ * generally expected to report problems via elog(ERROR).  An exception is
+ * that smgr_unlink should use elog(WARNING), rather than erroring out,
+ * because we normally unlink relations during post-commit/abort cleanup,
+ * and so it's too late to raise an error.  Also, various conditions that
+ * would normally be errors should be allowed during bootstrap and/or WAL
+ * recovery --- see comments in md.c for details.
+ */
+typedef struct f_smgr
+{
+	const char *name;
+	void		(*smgr_init) (void);		/* may be NULL */
+	void		(*smgr_shutdown) (void);	/* may be NULL */
+	void		(*smgr_open) (SMgrRelation reln);
+	void		(*smgr_close) (SMgrRelation reln, ForkNumber forknum);
+	void		(*smgr_create) (SMgrRelation reln, ForkNumber forknum,
+								bool isRedo);
+	bool		(*smgr_exists) (SMgrRelation reln, ForkNumber forknum);
+	void		(*smgr_unlink) (RelFileLocatorBackend rlocator, ForkNumber forknum,
+								bool isRedo);
+	void		(*smgr_extend) (SMgrRelation reln, ForkNumber forknum,
+								BlockNumber blocknum, const void *buffer, bool skipFsync);
+	void		(*smgr_zeroextend) (SMgrRelation reln, ForkNumber forknum,
+									BlockNumber blocknum, int nblocks, bool skipFsync);
+	bool		(*smgr_prefetch) (SMgrRelation reln, ForkNumber forknum,
+								  BlockNumber blocknum);
+	void		(*smgr_read) (SMgrRelation reln, ForkNumber forknum,
+							  BlockNumber blocknum, void *buffer);
+	void		(*smgr_write) (SMgrRelation reln, ForkNumber forknum,
+							   BlockNumber blocknum, const void *buffer, bool skipFsync);
+	void		(*smgr_writeback) (SMgrRelation reln, ForkNumber forknum,
+								   BlockNumber blocknum, BlockNumber nblocks);
+	BlockNumber (*smgr_nblocks) (SMgrRelation reln, ForkNumber forknum);
+	void		(*smgr_truncate) (SMgrRelation reln, ForkNumber forknum,
+								  BlockNumber nblocks);
+	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
+
+	void		(*smgr_validate_tspopts) (List *tspopts);
+	void		(*smgr_create_tsp) (Oid tspoid, List *tspopts, bool isredo);
+	void		(*smgr_drop_tsp) (Oid tspoid, bool isredo);
+} f_smgr;
+
+extern SMgrId get_smgr_id(const char *smgrname, bool missing_ok);
+extern SMgrId smgr_register(const f_smgr *smgr, Size smgrrelation_size);
 
 extern void smgrinit(void);
 extern SMgrRelation smgropen(RelFileLocator rlocator, BackendId backend);
@@ -107,6 +158,11 @@ extern BlockNumber smgrnblocks_cached(SMgrRelation reln, ForkNumber forknum);
 extern void smgrtruncate(SMgrRelation reln, ForkNumber *forknum,
 						 int nforks, BlockNumber *nblocks);
 extern void smgrimmedsync(SMgrRelation reln, ForkNumber forknum);
+
+extern void smgrvalidatetspopts(const char *smgrname, List *opts);
+extern void smgrcreatetsp(const char *smgrname, Oid tsp, List *opts, bool isredo);
+extern void smgrdroptsp(const char *smgrname, Oid tsp, bool isredo);
+
 extern void AtEOXact_SMgr(void);
 extern bool ProcessBarrierSmgrRelease(void);
 

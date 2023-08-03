@@ -24,6 +24,8 @@
 #include "miscadmin.h"
 #include "optimizer/optimizer.h"
 #include "storage/bufmgr.h"
+#include "storage/smgr.h"
+#include "storage/md.h"
 #include "utils/catcache.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
@@ -38,6 +40,7 @@ static HTAB *TableSpaceCacheHash = NULL;
 typedef struct
 {
 	Oid			oid;			/* lookup key - must be first */
+	SMgrId		smgrid;			/* cached storage manager id */
 	TableSpaceOpts *opts;		/* options, or NULL if none */
 } TableSpaceCacheEntry;
 
@@ -98,7 +101,7 @@ InitializeTableSpaceCache(void)
 
 /*
  * get_tablespace
- *		Fetch TableSpaceCacheEntry structure for a specified table OID.
+ *		Fetch TableSpaceCacheEntry structure for a specified tablespace OID.
  *
  * Pointers returned by this function should not be stored, since a cache
  * flush will invalidate them.
@@ -109,6 +112,7 @@ get_tablespace(Oid spcid)
 	TableSpaceCacheEntry *spc;
 	HeapTuple	tp;
 	TableSpaceOpts *opts;
+	SMgrId		smgrid;
 
 	/*
 	 * Since spcid is always from a pg_class tuple, InvalidOid implies the
@@ -135,18 +139,32 @@ get_tablespace(Oid spcid)
 	 */
 	tp = SearchSysCache1(TABLESPACEOID, ObjectIdGetDatum(spcid));
 	if (!HeapTupleIsValid(tp))
+	{
 		opts = NULL;
+		smgrid = InvalidSmgrId;
+	}
 	else
 	{
 		Datum		datum;
 		bool		isNull;
+		char	   *smgrname;
+		
+		smgrname = NameStr(*DatumGetName(SysCacheGetAttr(TABLESPACEOID,
+														 tp,
+														 Anum_pg_tablespace_spcsmgr,
+														 &isNull)));
+
+		Assert(!isNull);
+		smgrid = get_smgr_id(smgrname, false);
 
 		datum = SysCacheGetAttr(TABLESPACEOID,
 								tp,
 								Anum_pg_tablespace_spcoptions,
 								&isNull);
 		if (isNull)
+		{
 			opts = NULL;
+		}
 		else
 		{
 			bytea	   *bytea_opts = tablespace_reloptions(datum, false);
@@ -167,6 +185,8 @@ get_tablespace(Oid spcid)
 											   HASH_ENTER,
 											   NULL);
 	spc->opts = opts;
+	spc->smgrid = smgrid;
+
 	return spc;
 }
 
@@ -234,4 +254,20 @@ get_tablespace_maintenance_io_concurrency(Oid spcid)
 		return maintenance_io_concurrency;
 	else
 		return spc->opts->maintenance_io_concurrency;
+}
+
+/*
+ * get_tablespace_smgrid
+ */
+SMgrId
+get_tablespace_smgrid(Oid spcid)
+{
+	TableSpaceCacheEntry *spc;
+	
+	if (spcid == GLOBALTABLESPACE_OID || spcid == DEFAULTTABLESPACE_OID)
+		return get_smgr_id(MD_SMGR_NAME, false);
+
+	spc = get_tablespace(spcid);
+
+	return spc->smgrid;
 }

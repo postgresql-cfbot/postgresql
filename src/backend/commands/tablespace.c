@@ -74,6 +74,7 @@
 #include "miscadmin.h"
 #include "postmaster/bgwriter.h"
 #include "storage/fd.h"
+#include "storage/md.h"
 #include "storage/lmgr.h"
 #include "storage/standby.h"
 #include "utils/acl.h"
@@ -92,8 +93,6 @@ bool		allow_in_place_tablespaces = false;
 
 Oid			binary_upgrade_next_pg_tablespace_oid = InvalidOid;
 
-static void create_tablespace_directories(const char *location,
-										  const Oid tablespaceoid);
 static bool destroy_tablespace_directories(Oid tablespaceoid, bool redo);
 
 
@@ -218,10 +217,8 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	bool		nulls[Natts_pg_tablespace] = {0};
 	HeapTuple	tuple;
 	Oid			tablespaceoid;
-	char	   *location;
 	Oid			ownerId;
 	Datum		newOptions;
-	bool		in_place;
 
 	/* Must be superuser */
 	if (!superuser())
@@ -237,47 +234,7 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	else
 		ownerId = GetUserId();
 
-	/* Unix-ify the offered path, and strip any trailing slashes */
-	location = pstrdup(stmt->location);
-	canonicalize_path(location);
-
-	/* disallow quotes, else CREATE DATABASE would be at risk */
-	if (strchr(location, '\''))
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_NAME),
-				 errmsg("tablespace location cannot contain single quotes")));
-
-	in_place = allow_in_place_tablespaces && strlen(location) == 0;
-
-	/*
-	 * Allowing relative paths seems risky
-	 *
-	 * This also helps us ensure that location is not empty or whitespace,
-	 * unless specifying a developer-only in-place tablespace.
-	 */
-	if (!in_place && !is_absolute_path(location))
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-				 errmsg("tablespace location must be an absolute path")));
-
-	/*
-	 * Check that location isn't too long. Remember that we're going to append
-	 * 'PG_XXX/<dboid>/<relid>_<fork>.<nnn>'.  FYI, we never actually
-	 * reference the whole path here, but MakePGDirectory() uses the first two
-	 * parts.
-	 */
-	if (strlen(location) + 1 + strlen(TABLESPACE_VERSION_DIRECTORY) + 1 +
-		OIDCHARS + 1 + OIDCHARS + 1 + FORKNAMECHARS + 1 + OIDCHARS > MAXPGPATH)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-				 errmsg("tablespace location \"%s\" is too long",
-						location)));
-
-	/* Warn if the tablespace is in the data directory. */
-	if (path_is_prefix_of_path(DataDir, location))
-		ereport(WARNING,
-				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-				 errmsg("tablespace location should not be inside the data directory")));
+	smgrvalidatetspopts(stmt->smgr, stmt->smgropts);
 
 	/*
 	 * Disallow creation of tablespaces named "pg_xxx"; we reserve this
@@ -334,6 +291,8 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	values[Anum_pg_tablespace_oid - 1] = ObjectIdGetDatum(tablespaceoid);
 	values[Anum_pg_tablespace_spcname - 1] =
 		DirectFunctionCall1(namein, CStringGetDatum(stmt->tablespacename));
+	values[Anum_pg_tablespace_spcsmgr - 1] =
+		DirectFunctionCall1(namein, CStringGetDatum(stmt->smgr));
 	values[Anum_pg_tablespace_spcowner - 1] =
 		ObjectIdGetDatum(ownerId);
 	nulls[Anum_pg_tablespace_spcacl - 1] = true;
@@ -360,18 +319,22 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	/* Post creation hook for new tablespace */
 	InvokeObjectPostCreateHook(TableSpaceRelationId, tablespaceoid, 0);
 
-	create_tablespace_directories(location, tablespaceoid);
+	smgrcreatetsp(stmt->smgr, tablespaceoid, stmt->smgropts, 0);
 
 	/* Record the filesystem change in XLOG */
 	{
-		xl_tblspc_create_rec xlrec;
+		xl_tblspc_create_rec xlrec = {0};
+		Datum	smgropts;
 
 		xlrec.ts_id = tablespaceoid;
+		memcpy(&xlrec.ts_smgr, stmt->smgr, strlen(stmt->smgr));
+		smgropts = transformRelOptions((Datum) 0, stmt->smgropts,
+									   NULL, NULL, false, false);
 
 		XLogBeginInsert();
 		XLogRegisterData((char *) &xlrec,
-						 offsetof(xl_tblspc_create_rec, ts_path));
-		XLogRegisterData((char *) location, strlen(location) + 1);
+						 offsetof(xl_tblspc_create_rec, ts_smgropts));
+		XLogRegisterData((char *) smgropts, VARSIZE_ANY(smgropts));
 
 		(void) XLogInsert(RM_TBLSPC_ID, XLOG_TBLSPC_CREATE);
 	}
@@ -383,8 +346,6 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	 * it larger than necessary.
 	 */
 	ForceSyncCommit();
-
-	pfree(location);
 
 	/* We keep the lock on pg_tablespace until commit */
 	table_close(rel, NoLock);
@@ -401,6 +362,7 @@ void
 DropTableSpace(DropTableSpaceStmt *stmt)
 {
 	char	   *tablespacename = stmt->tablespacename;
+	char	   *smgrname;
 	TableScanDesc scandesc;
 	Relation	rel;
 	HeapTuple	tuple;
@@ -444,6 +406,7 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 
 	spcform = (Form_pg_tablespace) GETSTRUCT(tuple);
 	tablespaceoid = spcform->oid;
+	smgrname = pstrdup(NameStr(spcform->spcsmgr));
 
 	/* Must be tablespace owner */
 	if (!object_ownercheck(TableSpaceRelationId, tablespaceoid, GetUserId()))
@@ -491,6 +454,8 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 	 * is running concurrently.
 	 */
 	LWLockAcquire(TablespaceCreateLock, LW_EXCLUSIVE);
+
+	smgrdroptsp(smgrname, tablespaceoid, false);
 
 	/*
 	 * Try to remove the physical infrastructure.
@@ -566,114 +531,6 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 	/* We keep the lock on pg_tablespace until commit */
 	table_close(rel, NoLock);
 }
-
-
-/*
- * create_tablespace_directories
- *
- *	Attempt to create filesystem infrastructure linking $PGDATA/pg_tblspc/
- *	to the specified directory
- */
-static void
-create_tablespace_directories(const char *location, const Oid tablespaceoid)
-{
-	char	   *linkloc;
-	char	   *location_with_version_dir;
-	struct stat st;
-	bool		in_place;
-
-	linkloc = psprintf("pg_tblspc/%u", tablespaceoid);
-
-	/*
-	 * If we're asked to make an 'in place' tablespace, create the directory
-	 * directly where the symlink would normally go.  This is a developer-only
-	 * option for now, to facilitate regression testing.
-	 */
-	in_place = strlen(location) == 0;
-
-	if (in_place)
-	{
-		if (MakePGDirectory(linkloc) < 0 && errno != EEXIST)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not create directory \"%s\": %m",
-							linkloc)));
-	}
-
-	location_with_version_dir = psprintf("%s/%s", in_place ? linkloc : location,
-										 TABLESPACE_VERSION_DIRECTORY);
-
-	/*
-	 * Attempt to coerce target directory to safe permissions.  If this fails,
-	 * it doesn't exist or has the wrong owner.  Not needed for in-place mode,
-	 * because in that case we created the directory with the desired
-	 * permissions.
-	 */
-	if (!in_place && chmod(location, pg_dir_create_mode) != 0)
-	{
-		if (errno == ENOENT)
-			ereport(ERROR,
-					(errcode(ERRCODE_UNDEFINED_FILE),
-					 errmsg("directory \"%s\" does not exist", location),
-					 InRecovery ? errhint("Create this directory for the tablespace before "
-										  "restarting the server.") : 0));
-		else
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not set permissions on directory \"%s\": %m",
-							location)));
-	}
-
-	/*
-	 * The creation of the version directory prevents more than one tablespace
-	 * in a single location.  This imitates TablespaceCreateDbspace(), but it
-	 * ignores concurrency and missing parent directories.  The chmod() would
-	 * have failed in the absence of a parent.  pg_tablespace_spcname_index
-	 * prevents concurrency.
-	 */
-	if (stat(location_with_version_dir, &st) < 0)
-	{
-		if (errno != ENOENT)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not stat directory \"%s\": %m",
-							location_with_version_dir)));
-		else if (MakePGDirectory(location_with_version_dir) < 0)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not create directory \"%s\": %m",
-							location_with_version_dir)));
-	}
-	else if (!S_ISDIR(st.st_mode))
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" exists but is not a directory",
-						location_with_version_dir)));
-	else if (!InRecovery)
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_IN_USE),
-				 errmsg("directory \"%s\" already in use as a tablespace",
-						location_with_version_dir)));
-
-	/*
-	 * In recovery, remove old symlink, in case it points to the wrong place.
-	 */
-	if (!in_place && InRecovery)
-		remove_tablespace_symlink(linkloc);
-
-	/*
-	 * Create the symlink under PGDATA
-	 */
-	if (!in_place && symlink(location, linkloc) < 0)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not create symbolic link \"%s\": %m",
-						linkloc)));
-
-	pfree(linkloc);
-	pfree(location_with_version_dir);
-}
-
 
 /*
  * destroy_tablespace_directories
@@ -1524,9 +1381,12 @@ tblspc_redo(XLogReaderState *record)
 	if (info == XLOG_TBLSPC_CREATE)
 	{
 		xl_tblspc_create_rec *xlrec = (xl_tblspc_create_rec *) XLogRecGetData(record);
-		char	   *location = xlrec->ts_path;
+		smgrcreatetsp(NameStr(xlrec->ts_smgr), xlrec->ts_id,
+					  untransformRelOptions((Datum) &xlrec->ts_smgropts), true);
 
-		create_tablespace_directories(location, xlrec->ts_id);
+		/*
+		 * create_tablespace_directories(location, xlrec->ts_id);
+		 */
 	}
 	else if (info == XLOG_TBLSPC_DROP)
 	{

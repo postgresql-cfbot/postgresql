@@ -28,7 +28,8 @@ extern PGDLLIMPORT bool allow_in_place_tablespaces;
 typedef struct xl_tblspc_create_rec
 {
 	Oid			ts_id;
-	char		ts_path[FLEXIBLE_ARRAY_MEMBER]; /* null-terminated string */
+	NameData	ts_smgr;
+	char		ts_smgropts[FLEXIBLE_ARRAY_MEMBER];
 } xl_tblspc_create_rec;
 
 typedef struct xl_tblspc_drop_rec

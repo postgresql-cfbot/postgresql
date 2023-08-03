@@ -30,6 +30,7 @@ CATALOG(pg_tablespace,1213,TableSpaceRelationId) BKI_SHARED_RELATION
 {
 	Oid			oid;			/* oid */
 	NameData	spcname;		/* tablespace name */
+	NameData	spcsmgr;		/* tablespace storage manager */
 
 	/* owner of tablespace */
 	Oid			spcowner BKI_DEFAULT(POSTGRES) BKI_LOOKUP(pg_authid);

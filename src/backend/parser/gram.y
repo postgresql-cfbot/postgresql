@@ -60,6 +60,7 @@
 #include "nodes/nodeFuncs.h"
 #include "parser/parser.h"
 #include "storage/lmgr.h"
+#include "storage/md.h"
 #include "utils/date.h"
 #include "utils/datetime.h"
 #include "utils/numeric.h"
@@ -393,6 +394,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	func_name handler_name qual_Op qual_all_Op subquery_Op
 				opt_inline_handler opt_validator validator_clause
 				opt_collate
+
+%type <node>	OptTableSpaceStorage
 
 %type <range>	qualified_name insert_target OptConstrFromTable
 
@@ -4929,18 +4932,35 @@ opt_procedural:
 /*****************************************************************************
  *
  *		QUERY:
- *             CREATE TABLESPACE tablespace LOCATION '/path/to/tablespace/'
+ *             CREATE TABLESPACE tablespace
+ *                 [ OWNER role ]
+ *                 [ LOCATION '/path/to/tablespace/' | USING smgr ( option [, ...] ) ]
+ *                 [ WITH ( option [ , ... ] ) ]
  *
  *****************************************************************************/
 
-CreateTableSpaceStmt: CREATE TABLESPACE name OptTableSpaceOwner LOCATION Sconst opt_reloptions
+CreateTableSpaceStmt: CREATE TABLESPACE name OptTableSpaceOwner OptTableSpaceStorage opt_reloptions
 				{
-					CreateTableSpaceStmt *n = makeNode(CreateTableSpaceStmt);
-
+					CreateTableSpaceStmt *n = (CreateTableSpaceStmt *) $5;
 					n->tablespacename = $3;
 					n->owner = $4;
-					n->location = $6;
-					n->options = $7;
+					n->options = $6;
+					$$ = (Node *) n;
+				}
+		;
+
+OptTableSpaceStorage: LOCATION Sconst
+				{
+					CreateTableSpaceStmt *n = makeNode(CreateTableSpaceStmt);
+					n->smgr = MD_SMGR_NAME;
+					n->smgropts = list_make1(makeDefElem("location", (Node *) makeString($2), @1));
+					$$ = (Node *) n;
+				}
+			| USING name '(' utility_option_list ')'
+				{
+					CreateTableSpaceStmt *n = makeNode(CreateTableSpaceStmt);
+					n->smgr = $2;
+					n->smgropts = $4;
 					$$ = (Node *) n;
 				}
 		;

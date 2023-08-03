@@ -461,10 +461,18 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 	{
 		char	   *actual_versionstr;
 		char	   *collversionstr;
+		char	   *locale;
 
 		collversionstr = TextDatumGetCString(datum);
 
-		actual_versionstr = get_collation_actual_version(dbform->datlocprovider, dbform->datlocprovider == COLLPROVIDER_ICU ? iculocale : collate);
+		if (dbform->datlocprovider == COLLPROVIDER_ICU)
+			locale = iculocale;
+		else if (dbform->datlocprovider == COLLPROVIDER_LIBC)
+			locale = collate;
+		else
+			locale = NULL; /* COLLPROVIDER_BUILTIN */
+
+		actual_versionstr = get_collation_actual_version(dbform->datlocprovider, locale);
 		if (!actual_versionstr)
 			/* should not happen */
 			elog(WARNING,

@@ -50,6 +50,15 @@ B
 b),
 	'sort by explicit collation upper first');
 
+my ($ret, $stdout, $stderr) = $node1->psql('postgres',
+	q{CREATE DATABASE dbicu LOCALE_PROVIDER builtin LOCALE 'C' TEMPLATE dbicu}
+);
+isnt($ret, 0,
+	"locale provider must match template: exit code not 0");
+like(
+	$stderr,
+	qr/ERROR:  new locale provider \(builtin\) does not match locale provider of the template database \(icu\)/,
+	"locale provider must match template: error message");
 
 # Test that LOCALE='C' works for ICU
 is( $node1->psql(

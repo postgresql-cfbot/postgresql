@@ -105,6 +105,62 @@ else
 		'create database with ICU fails since no ICU support');
 }
 
+$node->command_ok(
+	[
+		'createdb', '-T', 'template0', '--locale-provider=builtin',
+		'tbuiltin1'
+	],
+	'create database with provider "builtin"'
+);
+
+$node->command_ok(
+	[
+		'createdb', '-T', 'template0', '--locale-provider=builtin',
+		'--locale=C', 'tbuiltin2'
+	],
+	'create database with provider "builtin" and locale "C"'
+);
+
+$node->command_ok(
+	[
+		'createdb', '-T', 'template0', '--locale-provider=builtin',
+		'--lc-collate=C', 'tbuiltin3'
+	],
+	'create database with provider "builtin" and LC_COLLATE=C'
+);
+
+$node->command_ok(
+	[
+		'createdb', '-T', 'template0', '--locale-provider=builtin',
+		'--lc-ctype=C', 'tbuiltin4'
+	],
+	'create database with provider "builtin" and LC_CTYPE=C'
+);
+
+$node->command_fails(
+	[
+		'createdb', '-T', 'template0', '--locale-provider=builtin',
+		'--icu-locale=en', 'tbuiltin5'
+	],
+	'create database with provider "builtin" and ICU_LOCALE="en"'
+);
+
+$node->command_fails(
+	[
+		'createdb', '-T', 'template0', '--locale-provider=builtin',
+		'--icu-rules=""', 'tbuiltin6'
+	],
+	'create database with provider "builtin" and ICU_RULES=""'
+);
+
+$node->command_fails(
+	[
+		'createdb', '-T', 'template1', '--locale-provider=builtin',
+		'--locale=C', 'tbuiltin7'
+	],
+	'create database with provider "builtin" not matching template'
+);
+
 $node->command_fails([ 'createdb', 'foobar1' ],
 	'fails if database already exists');
 

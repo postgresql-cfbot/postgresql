@@ -3070,7 +3070,9 @@ dumpDatabase(Archive *fout)
 	}
 
 	appendPQExpBufferStr(creaQry, " LOCALE_PROVIDER = ");
-	if (datlocprovider[0] == 'c')
+	if (datlocprovider[0] == 'b')
+		appendPQExpBufferStr(creaQry, "builtin");
+	else if (datlocprovider[0] == 'c')
 		appendPQExpBufferStr(creaQry, "libc");
 	else if (datlocprovider[0] == 'i')
 		appendPQExpBufferStr(creaQry, "icu");
@@ -13432,7 +13434,9 @@ dumpCollation(Archive *fout, const CollInfo *collinfo)
 					  fmtQualifiedDumpable(collinfo));
 
 	appendPQExpBufferStr(q, "provider = ");
-	if (collprovider[0] == 'c')
+	if (collprovider[0] == 'b')
+		appendPQExpBufferStr(q, "builtin");
+	else if (collprovider[0] == 'c')
 		appendPQExpBufferStr(q, "libc");
 	else if (collprovider[0] == 'i')
 		appendPQExpBufferStr(q, "icu");
@@ -13446,13 +13450,42 @@ dumpCollation(Archive *fout, const CollInfo *collinfo)
 	if (strcmp(PQgetvalue(res, 0, i_collisdeterministic), "f") == 0)
 		appendPQExpBufferStr(q, ", deterministic = false");
 
-	if (colliculocale != NULL)
+	if (collprovider[0] == 'd')
 	{
+		Assert(colliculocale == NULL);
+		Assert(collicurules == NULL);
+		Assert(collcollate == NULL);
+		Assert(collctype == NULL);
+
+		/* no locale -- cannot be reloaded anyway */
+	}
+	else if (collprovider[0] == 'b')
+	{
+		Assert(colliculocale == NULL);
+		Assert(collicurules == NULL);
+		Assert(collcollate == NULL);
+		Assert(collctype == NULL);
+		appendPQExpBufferStr(q, ", locale = 'C'");
+	}
+	else if (collprovider[0] == 'i')
+	{
+		Assert(colliculocale != NULL);
+		Assert(collcollate == NULL);
+		Assert(collctype == NULL);
+
 		appendPQExpBufferStr(q, ", locale = ");
 		appendStringLiteralAH(q, colliculocale, fout);
+
+		if (collicurules)
+		{
+			appendPQExpBufferStr(q, ", rules = ");
+			appendStringLiteralAH(q, collicurules, fout);
+		}
 	}
-	else
+	else if (collprovider[0] == 'c')
 	{
+		Assert(colliculocale == NULL);
+		Assert(collicurules == NULL);
 		Assert(collcollate != NULL);
 		Assert(collctype != NULL);
 
@@ -13469,12 +13502,8 @@ dumpCollation(Archive *fout, const CollInfo *collinfo)
 			appendStringLiteralAH(q, collctype, fout);
 		}
 	}
-
-	if (collicurules)
-	{
-		appendPQExpBufferStr(q, ", rules = ");
-		appendStringLiteralAH(q, collicurules, fout);
-	}
+	else
+		pg_fatal("unrecognized collation provider '%c'", collprovider[0]);
 
 	/*
 	 * For binary upgrade, carry over the collation version.  For normal

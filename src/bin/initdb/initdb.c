@@ -2448,7 +2448,7 @@ usage(const char *progname)
 			 "                            set default locale in the respective category for\n"
 			 "                            new databases (default taken from environment)\n"));
 	printf(_("      --no-locale           equivalent to --locale=C\n"));
-	printf(_("      --locale-provider={libc|icu}\n"
+	printf(_("      --locale-provider={builtin|libc|icu}\n"
 			 "                            set default locale provider for new databases\n"));
 	printf(_("      --pwfile=FILE         read password for the new superuser from file\n"));
 	printf(_("  -T, --text-search-config=CFG\n"
@@ -2598,7 +2598,15 @@ setup_locale_encoding(void)
 {
 	setlocales();
 
-	if (locale_provider == COLLPROVIDER_LIBC &&
+	if (locale_provider == COLLPROVIDER_BUILTIN &&
+		strcmp(lc_ctype, "C") == 0 &&
+		strcmp(lc_collate, "C") == 0 &&
+		strcmp(lc_time, "C") == 0 &&
+		strcmp(lc_numeric, "C") == 0 &&
+		strcmp(lc_monetary, "C") == 0 &&
+		strcmp(lc_messages, "C") == 0)
+		printf(_("The database cluster will be initialized with no locale.\n"));
+	else if (locale_provider == COLLPROVIDER_LIBC &&
 		strcmp(lc_ctype, lc_collate) == 0 &&
 		strcmp(lc_ctype, lc_time) == 0 &&
 		strcmp(lc_ctype, lc_numeric) == 0 &&
@@ -2609,9 +2617,11 @@ setup_locale_encoding(void)
 	else
 	{
 		printf(_("The database cluster will be initialized with this locale configuration:\n"));
-		printf(_("  provider:    %s\n"), collprovider_name(locale_provider));
-		if (icu_locale)
-			printf(_("  ICU locale:  %s\n"), icu_locale);
+		printf(_("  default collation provider:  %s\n"), collprovider_name(locale_provider));
+		if (locale_provider == COLLPROVIDER_BUILTIN)
+			printf(_("  default collation locale:    %s\n"), "C");
+		else if (locale_provider == COLLPROVIDER_ICU)
+			printf(_("  default collation locale:    %s\n"), icu_locale);
 		printf(_("  LC_COLLATE:  %s\n"
 				 "  LC_CTYPE:    %s\n"
 				 "  LC_MESSAGES: %s\n"
@@ -3272,7 +3282,9 @@ main(int argc, char *argv[])
 										 "-c debug_discard_caches=1");
 				break;
 			case 15:
-				if (strcmp(optarg, "icu") == 0)
+				if (strcmp(optarg, "builtin") == 0)
+					locale_provider = COLLPROVIDER_BUILTIN;
+				else if (strcmp(optarg, "icu") == 0)
 					locale_provider = COLLPROVIDER_ICU;
 				else if (strcmp(optarg, "libc") == 0)
 					locale_provider = COLLPROVIDER_LIBC;

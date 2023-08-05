@@ -103,6 +103,9 @@ static int	on_proc_exit_index,
 void
 proc_exit(int code)
 {
+	/* proc_exit() is not safe in forked processes from system(), etc. */
+	Assert(MyProcPid == (int) getpid());
+
 	/* Clean up everything that must be cleaned up */
 	proc_exit_prepare(code);
 

@@ -149,6 +149,7 @@ header_subdirs = [
   'postmaster',
   'regex',
   'replication',
+  'restore',
   'rewrite',
   'statistics',
   'storage',

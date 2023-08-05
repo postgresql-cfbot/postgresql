@@ -134,6 +134,7 @@ ArchiveOpts
 ArchiveShutdownCB
 ArchiveStartupCB
 ArchiveStreamState
+ArchiveType
 ArchiverOutput
 ArchiverStage
 ArrayAnalyzeExtraData

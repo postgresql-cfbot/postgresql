@@ -372,6 +372,7 @@ task:
           meson setup \
             --buildtype=debugoptimized \
             -Dcassert=true \
+            -Dsegsize_blocks=6 \
             ${LINUX_MESON_FEATURES} \
             -DPG_TEST_EXTRA="$PG_TEST_EXTRA" \
             build

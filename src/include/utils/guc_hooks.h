@@ -149,6 +149,7 @@ extern bool check_timezone_abbreviations(char **newval, void **extra,
 										 GucSource source);
 extern void assign_timezone_abbreviations(const char *newval, void *extra);
 extern bool check_transaction_deferrable(bool *newval, void **extra, GucSource source);
+extern bool check_transaction_committable(bool *newval, void **extra, GucSource source);
 extern bool check_transaction_isolation(int *newval, void **extra, GucSource source);
 extern bool check_transaction_read_only(bool *newval, void **extra, GucSource source);
 extern const char *show_unix_socket_permissions(void);

@@ -695,7 +695,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	CACHE CALL CALLED CASCADE CASCADED CASE CAST CATALOG_P CHAIN CHAR_P
 	CHARACTER CHARACTERISTICS CHECK CHECKPOINT CLASS CLOSE
 	CLUSTER COALESCE COLLATE COLLATION COLUMN COLUMNS COMMENT COMMENTS COMMIT
-	COMMITTED COMPRESSION CONCURRENTLY CONFIGURATION CONFLICT
+	COMMITTABLE COMMITTED COMPRESSION CONCURRENTLY CONFIGURATION CONFLICT
 	CONNECTION CONSTRAINT CONSTRAINTS CONTENT_P CONTINUE_P CONVERSION_P COPY
 	COST CREATE CROSS CSV CUBE CURRENT_P
 	CURRENT_CATALOG CURRENT_DATE CURRENT_ROLE CURRENT_SCHEMA
@@ -10990,6 +10990,12 @@ transaction_mode_item:
 			| NOT DEFERRABLE
 					{ $$ = makeDefElem("transaction_deferrable",
 									   makeIntConst(false, @1), @1); }
+			| COMMITTABLE
+					{ $$ = makeDefElem("transaction_committable",
+									   makeIntConst(true, @1), @1); }
+			| NOT COMMITTABLE
+					{ $$ = makeDefElem("transaction_committable",
+									   makeIntConst(false, @1), @1); }
 		;
 
 /* Syntax with commas is SQL-spec, without commas is Postgres historical */
@@ -17037,6 +17043,7 @@ unreserved_keyword:
 			| COMMENT
 			| COMMENTS
 			| COMMIT
+			| COMMITTABLE
 			| COMMITTED
 			| COMPRESSION
 			| CONFIGURATION
@@ -17578,6 +17585,7 @@ bare_label_keyword:
 			| COMMENT
 			| COMMENTS
 			| COMMIT
+			| COMMITTABLE
 			| COMMITTED
 			| COMPRESSION
 			| CONCURRENTLY

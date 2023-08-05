@@ -93,6 +93,9 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 					else if (strcmp(item->defname, "transaction_deferrable") == 0)
 						SetPGVariable("transaction_deferrable",
 									  list_make1(item->arg), stmt->is_local);
+					else if (strcmp(item->defname, "transaction_committable") == 0)
+						SetPGVariable("transaction_committable",
+									  list_make1(item->arg), stmt->is_local);
 					else
 						elog(ERROR, "unexpected SET TRANSACTION element: %s",
 							 item->defname);
@@ -114,6 +117,9 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 									  list_make1(item->arg), stmt->is_local);
 					else if (strcmp(item->defname, "transaction_deferrable") == 0)
 						SetPGVariable("default_transaction_deferrable",
+									  list_make1(item->arg), stmt->is_local);
+					else if (strcmp(item->defname, "transaction_committable") == 0)
+						SetPGVariable("default_transaction_committable",
 									  list_make1(item->arg), stmt->is_local);
 					else
 						elog(ERROR, "unexpected SET SESSION element: %s",

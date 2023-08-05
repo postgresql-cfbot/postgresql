@@ -1533,6 +1533,8 @@ InitializeGUCOptions(void)
 					PGC_POSTMASTER, PGC_S_OVERRIDE);
 	SetConfigOption("transaction_deferrable", "no",
 					PGC_POSTMASTER, PGC_S_OVERRIDE);
+	SetConfigOption("transaction_committable", "yes",
+					PGC_POSTMASTER, PGC_S_OVERRIDE);
 
 	/*
 	 * For historical reasons, some GUC parameters can receive defaults from

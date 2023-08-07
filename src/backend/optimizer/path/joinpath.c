@@ -582,6 +582,7 @@ get_memoize_path(PlannerInfo *root, RelOptInfo *innerrel,
 	List	   *hash_operators;
 	ListCell   *lc;
 	bool		binary_mode;
+	List	   *restrictlist;
 
 	/* Obviously not if it's disabled */
 	if (!enable_memoize)
@@ -655,11 +656,18 @@ get_memoize_path(PlannerInfo *root, RelOptInfo *innerrel,
 	 * We can't use a memoize node if there are volatile functions in the
 	 * inner rel's target list or restrict list.  A cache hit could reduce the
 	 * number of calls to these functions.
+	 *
+	 * Note that we need to also consider all the join clauses available from
+	 * the outer relation(s) as restriction clauses.
 	 */
 	if (contain_volatile_functions((Node *) innerrel->reltarget))
 		return NULL;
 
-	foreach(lc, innerrel->baserestrictinfo)
+	restrictlist = innerrel->baserestrictinfo;
+	if (inner_path->param_info)
+		restrictlist = list_concat_copy(restrictlist,
+										inner_path->param_info->ppi_clauses);
+	foreach(lc, restrictlist)
 	{
 		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
 

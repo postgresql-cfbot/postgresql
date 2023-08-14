@@ -19,6 +19,7 @@
 
 #include "postgres.h"
 
+#include "access/brin_tuple.h"
 #include "access/hash.h"
 #include "access/htup_details.h"
 #include "access/nbtree.h"
@@ -43,6 +44,8 @@ static void removeabbrev_cluster(Tuplesortstate *state, SortTuple *stups,
 								 int count);
 static void removeabbrev_index(Tuplesortstate *state, SortTuple *stups,
 							   int count);
+static void removeabbrev_index_brin(Tuplesortstate *state, SortTuple *stups,
+									int count);
 static void removeabbrev_datum(Tuplesortstate *state, SortTuple *stups,
 							   int count);
 static int	comparetup_heap(const SortTuple *a, const SortTuple *b,
@@ -61,10 +64,16 @@ static int	comparetup_index_btree(const SortTuple *a, const SortTuple *b,
 								   Tuplesortstate *state);
 static int	comparetup_index_hash(const SortTuple *a, const SortTuple *b,
 								  Tuplesortstate *state);
+static int	comparetup_index_brin(const SortTuple *a, const SortTuple *b,
+								  Tuplesortstate *state);
 static void writetup_index(Tuplesortstate *state, LogicalTape *tape,
 						   SortTuple *stup);
 static void readtup_index(Tuplesortstate *state, SortTuple *stup,
 						  LogicalTape *tape, unsigned int len);
+static void writetup_index_brin(Tuplesortstate *state, LogicalTape *tape,
+								SortTuple *stup);
+static void readtup_index_brin(Tuplesortstate *state, SortTuple *stup,
+							   LogicalTape *tape, unsigned int len);
 static int	comparetup_datum(const SortTuple *a, const SortTuple *b,
 							 Tuplesortstate *state);
 static void writetup_datum(Tuplesortstate *state, LogicalTape *tape,
@@ -119,6 +128,16 @@ typedef struct
 } TuplesortIndexHashArg;
 
 /*
+ * Data struture pointed by "TuplesortPublic.arg" for the index_brin subcase.
+ */
+typedef struct
+{
+	TuplesortIndexArg index;
+
+	/* XXX do we need something here? */
+} TuplesortIndexBrinArg;
+
+/*
  * Data struture pointed by "TuplesortPublic.arg" for the Datum case.
  * Set by tuplesort_begin_datum and used only by the DatumTuple routines.
  */
@@ -129,6 +148,22 @@ typedef struct
 	/* we need typelen in order to know how to copy the Datums. */
 	int			datumTypeLen;
 } TuplesortDatumArg;
+
+/*
+ * Computing BrinTuple size with only the tuple is difficult, so we want to track
+ * the length for r referenced by SortTuple. That's what BrinSortTuple is meant
+ * to do - it's essentially a BrinTuple prefixed by length. We only write the
+ * BrinTuple to the logtapes, though.
+ */
+typedef struct BrinSortTuple
+{
+	Size		tuplen;
+	BrinTuple	tuple;
+} BrinSortTuple;
+
+/* Size of the BrinSortTuple, given length of the BrinTuple. */
+#define BRINSORTTUPLE_SIZE(len)		(offsetof(BrinSortTuple, tuple) + (len))
+
 
 Tuplesortstate *
 tuplesort_begin_heap(TupleDesc tupDesc,
@@ -513,6 +548,47 @@ tuplesort_begin_index_gist(Relation heapRel,
 }
 
 Tuplesortstate *
+tuplesort_begin_index_brin(Relation heapRel,
+						   Relation indexRel,
+						   int workMem,
+						   SortCoordinate coordinate,
+						   int sortopt)
+{
+	Tuplesortstate *state = tuplesort_begin_common(workMem, coordinate,
+												   sortopt);
+	TuplesortPublic *base = TuplesortstateGetPublic(state);
+	MemoryContext oldcontext;
+	TuplesortIndexBrinArg *arg;
+
+	oldcontext = MemoryContextSwitchTo(base->maincontext);
+	arg = (TuplesortIndexBrinArg *) palloc(sizeof(TuplesortIndexBrinArg));
+
+#ifdef TRACE_SORT
+	if (trace_sort)
+		elog(LOG,
+			 "begin index sort: workMem = %d, randomAccess = %c",
+			 workMem,
+			 sortopt & TUPLESORT_RANDOMACCESS ? 't' : 'f');
+#endif
+
+	base->nKeys = 1;			/* Only one sort column, the block number */
+
+	base->removeabbrev = removeabbrev_index_brin;
+	base->comparetup = comparetup_index_brin;
+	base->writetup = writetup_index_brin;
+	base->readtup = readtup_index_brin;
+	base->haveDatum1 = true;
+	base->arg = arg;
+
+	arg->index.heapRel = heapRel;
+	arg->index.indexRel = indexRel;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	return state;
+}
+
+Tuplesortstate *
 tuplesort_begin_datum(Oid datumType, Oid sortOperator, Oid sortCollation,
 					  bool nullsFirstFlag, int workMem,
 					  SortCoordinate coordinate, int sortopt)
@@ -692,6 +768,35 @@ tuplesort_putindextuplevalues(Tuplesortstate *state, Relation rel,
 }
 
 /*
+ * Collect one BRIN tuple while collecting input data for sort.
+ */
+void
+tuplesort_putbrintuple(Tuplesortstate *state, BrinTuple *tuple, Size size)
+{
+	SortTuple	stup;
+	BrinSortTuple *bstup;
+	TuplesortPublic *base = TuplesortstateGetPublic(state);
+	MemoryContext oldcontext = MemoryContextSwitchTo(base->tuplecontext);
+
+	/* allocate space for the whole BRIN sort tuple */
+	bstup = palloc(BRINSORTTUPLE_SIZE(size));
+	stup.tuple = bstup;
+
+	bstup->tuplen = size;
+	memcpy(&bstup->tuple, tuple, size);
+
+	stup.datum1 = tuple->bt_blkno;
+	stup.isnull1 = false;
+
+	tuplesort_puttuple_common(state, &stup,
+							  base->sortKeys &&
+							  base->sortKeys->abbrev_converter &&
+							  !stup.isnull1);
+
+	MemoryContextSwitchTo(oldcontext);
+}
+
+/*
  * Accept one Datum while collecting input data for sort.
  *
  * If the Datum is pass-by-ref type, the value will be copied.
@@ -832,6 +937,35 @@ tuplesort_getindextuple(Tuplesortstate *state, bool forward)
 	MemoryContextSwitchTo(oldcontext);
 
 	return (IndexTuple) stup.tuple;
+}
+
+/*
+ * Fetch the next BRIN tuple in either forward or back direction.
+ * Returns NULL if no more tuples.  Returned tuple belongs to tuplesort memory
+ * context, and must not be freed by caller.  Caller may not rely on tuple
+ * remaining valid after any further manipulation of tuplesort.
+ */
+BrinTuple *
+tuplesort_getbrintuple(Tuplesortstate *state, Size *len, bool forward)
+{
+	TuplesortPublic *base = TuplesortstateGetPublic(state);
+	MemoryContext oldcontext = MemoryContextSwitchTo(base->sortcontext);
+	SortTuple		stup;
+	BrinSortTuple  *btup;
+
+	if (!tuplesort_gettuple_common(state, forward, &stup))
+		stup.tuple = NULL;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	if (!stup.tuple)
+		return NULL;
+
+	btup = (BrinSortTuple *) stup.tuple;
+
+	*len = btup->tuplen;
+
+	return &btup->tuple;
 }
 
 /*
@@ -1499,6 +1633,83 @@ readtup_index(Tuplesortstate *state, SortTuple *stup,
 								 1,
 								 RelationGetDescr(arg->indexRel),
 								 &stup->isnull1);
+}
+
+/*
+ * Routines specialized for BrinTuple case
+ */
+
+static void
+removeabbrev_index_brin(Tuplesortstate *state, SortTuple *stups, int count)
+{
+	int			i;
+
+	for (i = 0; i < count; i++)
+	{
+		BrinSortTuple   *tuple;
+
+		tuple = stups[i].tuple;
+		stups[i].datum1 = tuple->tuple.bt_blkno;
+	}
+}
+
+static int
+comparetup_index_brin(const SortTuple *a, const SortTuple *b,
+					  Tuplesortstate *state)
+{
+	BrinTuple  *tuple1;
+	BrinTuple  *tuple2;
+
+	tuple1 = &((BrinSortTuple *) a)->tuple;
+	tuple2 = &((BrinSortTuple *) b)->tuple;
+
+	if (tuple1->bt_blkno > tuple2->bt_blkno)
+		return 1;
+	else if (tuple1->bt_blkno < tuple2->bt_blkno)
+		return -1;
+
+	/* silence compilers */
+	return 0;
+}
+
+static void
+writetup_index_brin(Tuplesortstate *state, LogicalTape *tape, SortTuple *stup)
+{
+	TuplesortPublic *base = TuplesortstateGetPublic(state);
+	BrinSortTuple  *tuple = (BrinSortTuple *) stup->tuple;
+	unsigned int	tuplen = tuple->tuplen;
+
+	tuplen = tuplen + sizeof(tuplen);
+	LogicalTapeWrite(tape, &tuplen, sizeof(tuplen));
+	LogicalTapeWrite(tape, &tuple->tuple, tuple->tuplen);
+	if (base->sortopt & TUPLESORT_RANDOMACCESS) /* need trailing length word? */
+		LogicalTapeWrite(tape, &tuplen, sizeof(tuplen));
+}
+
+static void
+readtup_index_brin(Tuplesortstate *state, SortTuple *stup,
+				   LogicalTape *tape, unsigned int len)
+{
+	TuplesortPublic *base = TuplesortstateGetPublic(state);
+	unsigned int tuplen = len - sizeof(unsigned int);
+
+	/*
+	 * Allocate space for the BRIN sort tuple, which is BrinTuple with an
+	 * extra length field.
+	 */
+	BrinSortTuple *tuple
+		= (BrinSortTuple *) tuplesort_readtup_alloc(state,
+													BRINSORTTUPLE_SIZE(tuplen));
+
+	tuple->tuplen = tuplen;
+
+	LogicalTapeReadExact(tape, &tuple->tuple, tuplen);
+	if (base->sortopt & TUPLESORT_RANDOMACCESS) /* need trailing length word? */
+		LogicalTapeReadExact(tape, &tuplen, sizeof(tuplen));
+	stup->tuple = (void *) tuple;
+
+	/* set up first-column key value, which is block number */
+	stup->datum1 = tuple->tuple.bt_blkno;
 }
 
 /*

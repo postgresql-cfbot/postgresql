@@ -153,9 +153,9 @@ table_parallelscan_estimate(Relation rel, Snapshot snapshot)
 
 void
 table_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan,
-							  Snapshot snapshot)
+							  Snapshot snapshot, BlockNumber chunk_factor)
 {
-	Size		snapshot_off = rel->rd_tableam->parallelscan_initialize(rel, pscan);
+	Size		snapshot_off = rel->rd_tableam->parallelscan_initialize(rel, pscan, chunk_factor);
 
 	pscan->phs_snapshot_off = snapshot_off;
 
@@ -395,16 +395,21 @@ table_block_parallelscan_estimate(Relation rel)
 }
 
 Size
-table_block_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan)
+table_block_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan, BlockNumber chunk_factor)
 {
 	ParallelBlockTableScanDesc bpscan = (ParallelBlockTableScanDesc) pscan;
 
 	bpscan->base.phs_relid = RelationGetRelid(rel);
 	bpscan->phs_nblocks = RelationGetNumberOfBlocks(rel);
-	/* compare phs_syncscan initialization to similar logic in initscan */
+	bpscan->phs_chunk_factor = chunk_factor;
+	/* compare phs_syncscan initialization to similar logic in initscan
+	 *
+	 * Disable sync scans if the chunk factor is set (valid block number).
+	 */
 	bpscan->base.phs_syncscan = synchronize_seqscans &&
 		!RelationUsesLocalBuffers(rel) &&
-		bpscan->phs_nblocks > NBuffers / 4;
+		(bpscan->phs_nblocks > NBuffers / 4) &&
+		!BlockNumberIsValid(bpscan->phs_chunk_factor);
 	SpinLockInit(&bpscan->phs_mutex);
 	bpscan->phs_startblock = InvalidBlockNumber;
 	pg_atomic_init_u64(&bpscan->phs_nallocated, 0);
@@ -458,6 +463,25 @@ table_block_parallelscan_startblock_init(Relation rel,
 	 */
 	pbscanwork->phsw_chunk_size = Min(pbscanwork->phsw_chunk_size,
 									  PARALLEL_SEQSCAN_MAX_CHUNK_SIZE);
+
+	/*
+	 * If the chunk size factor is set, we need to make sure the chunk size is
+	 * a multiple of that value. We round the chunk size to the nearest chunk
+	 * factor multiple, at least one chunk_factor.
+	 *
+	 * XXX Note this may override PARALLEL_SEQSCAN_MAX_CHUNK_SIZE, in case the
+	 * chunk factor (e.g. BRIN pages_per_range) is larger.
+	 */
+	if (pbscan->phs_chunk_factor != InvalidBlockNumber)
+	{
+		/* nearest (smaller) multiple of chunk_factor */
+		pbscanwork->phsw_chunk_size
+			= pbscan->phs_chunk_factor * (pbscanwork->phsw_chunk_size / pbscan->phs_chunk_factor);
+
+		/* but at least one chunk_factor */
+		pbscanwork->phsw_chunk_size = Max(pbscanwork->phsw_chunk_size,
+										  pbscan->phs_chunk_factor);
+	}
 
 retry:
 	/* Grab the spinlock. */
@@ -574,6 +598,21 @@ table_block_parallelscan_nextpage(Relation rel,
 			pbscanwork->phsw_nallocated > pbscan->phs_nblocks -
 			(pbscanwork->phsw_chunk_size * PARALLEL_SEQSCAN_RAMPDOWN_CHUNKS))
 			pbscanwork->phsw_chunk_size >>= 1;
+
+		/*
+		 * We need to make sure the new chunk_size is still a suitable multiple
+		 * of chunk_factor.
+		 */
+		if (pbscan->phs_chunk_factor != InvalidBlockNumber)
+		{
+			/* nearest (smaller) multiple of chunk_factor */
+			pbscanwork->phsw_chunk_size
+				= pbscan->phs_chunk_factor * (pbscanwork->phsw_chunk_size / pbscan->phs_chunk_factor);
+
+			/* but at least one chunk_factor */
+			pbscanwork->phsw_chunk_size = Max(pbscanwork->phsw_chunk_size,
+											  pbscan->phs_chunk_factor);
+		}
 
 		nallocated = pbscanwork->phsw_nallocated =
 			pg_atomic_fetch_add_u64(&pbscan->phs_nallocated,

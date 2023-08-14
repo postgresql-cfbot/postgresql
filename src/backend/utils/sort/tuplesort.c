@@ -1331,6 +1331,7 @@ tuplesort_puttuple_common(Tuplesortstate *state, SortTuple *tuple, bool useAbbre
 			break;
 
 		default:
+			Assert(false);
 			elog(ERROR, "invalid tuplesort state");
 			break;
 	}
@@ -1465,6 +1466,7 @@ tuplesort_performsort(Tuplesortstate *state)
 			break;
 
 		default:
+			Assert(false);
 			elog(ERROR, "invalid tuplesort state");
 			break;
 	}
@@ -1721,6 +1723,7 @@ tuplesort_gettuple_common(Tuplesortstate *state, bool forward,
 			return false;
 
 		default:
+			Assert(false);
 			elog(ERROR, "invalid tuplesort state");
 			return false;		/* keep compiler quiet */
 	}

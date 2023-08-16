@@ -513,7 +513,7 @@ qsort_tuple_unsigned_compare(SortTuple *a, SortTuple *b, Tuplesortstate *state)
 	if (state->base.onlyKey != NULL)
 		return 0;
 
-	return state->base.comparetup(a, b, state);
+	return state->base.comparetup_tiebreak(a, b, state);
 }
 
 #if SIZEOF_DATUM >= 8
@@ -537,7 +537,7 @@ qsort_tuple_signed_compare(SortTuple *a, SortTuple *b, Tuplesortstate *state)
 	if (state->base.onlyKey != NULL)
 		return 0;
 
-	return state->base.comparetup(a, b, state);
+	return state->base.comparetup_tiebreak(a, b, state);
 }
 #endif
 
@@ -561,7 +561,7 @@ qsort_tuple_int32_compare(SortTuple *a, SortTuple *b, Tuplesortstate *state)
 	if (state->base.onlyKey != NULL)
 		return 0;
 
-	return state->base.comparetup(a, b, state);
+	return state->base.comparetup_tiebreak(a, b, state);
 }
 
 /*

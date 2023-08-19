@@ -81,6 +81,24 @@ typedef struct PgBackendGSSStatus
 
 } PgBackendGSSStatus;
 
+/*
+ * PgBackendSessionStatus
+ *
+ * For each session, we keep counters accumulated since the start of the session
+ * in a separate struct. The struct is always filled.
+ *
+ */
+typedef struct PgBackendSessionStatus
+{
+	int64		total_running_time;
+	int64		total_running_count;
+	int64		total_idle_time;
+	int64		total_idle_count;
+	int64		total_transaction_idle_time;
+	int64		total_transaction_idle_count;
+	int64		total_transaction_idle_aborted_time;
+	int64		total_transaction_idle_aborted_count;
+} PgBackendSessionStatus;
 
 /* ----------
  * PgBackendStatus
@@ -170,6 +188,9 @@ typedef struct PgBackendStatus
 
 	/* query identifier, optionally computed using post_parse_analyze_hook */
 	uint64		st_query_id;
+
+	/* Counters accumulated since the start of the session */
+	PgBackendSessionStatus st_session;
 } PgBackendStatus;
 
 
@@ -232,6 +253,17 @@ typedef struct PgBackendStatus
 #define pgstat_read_activity_complete(before_changecount, after_changecount) \
 	((before_changecount) == (after_changecount) && \
 	 ((before_changecount) & 1) == 0)
+
+
+/* Macros to identify the states for time accounting */
+#define PGSTAT_IS_ACTIVE(s) \
+	((s)->st_state == STATE_RUNNING || (s)->st_state == STATE_FASTPATH)
+#define PGSTAT_IS_IDLE(s) \
+	((s)->st_state == STATE_IDLE)
+#define PGSTAT_IS_IDLEINTRANSACTION(s) \
+	((s)->st_state == STATE_IDLEINTRANSACTION)
+#define PGSTAT_IS_IDLEINTRANSACTION_ABORTED(s) \
+	((s)->st_state == STATE_IDLEINTRANSACTION_ABORTED)
 
 
 /* ----------

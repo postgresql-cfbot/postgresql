@@ -68,3 +68,6 @@ set timezone_abbreviations = 'Australia';
 select count(distinct utc_offset) >= 24 as ok from pg_timezone_abbrevs;
 set timezone_abbreviations = 'India';
 select count(distinct utc_offset) >= 24 as ok from pg_timezone_abbrevs;
+
+select total_idle_count as prev_idle_count from pg_stat_session where pid = pg_backend_pid() \gset
+select (select total_idle_count from pg_stat_session where pid = pg_backend_pid()) - :prev_idle_count = 1 as ok;

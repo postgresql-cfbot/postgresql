@@ -765,6 +765,48 @@ FROM pg_stat_all_tables WHERE relid = 'test_last_scan'::regclass;
 (1 row)
 
 -----
+-- Test to reset stats for a table shared across all databases (ex. pg_shdescription)
+-----
+-- store the old comment to reset
+SELECT shobj_description(d.oid, 'pg_database') as description_before
+FROM pg_database d WHERE datname = current_database() \gset
+-- update the stats in pg_shdescription
+BEGIN;
+SELECT current_database() as current_database \gset
+COMMENT ON DATABASE :"current_database" IS 'This is a test comment';
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+COMMIT;
+-- check to reset the stats
+SELECT n_tup_ins + n_tup_upd > 0 FROM pg_stat_all_tables WHERE relid = 'pg_shdescription'::regclass;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT pg_stat_reset_single_table_counters('pg_shdescription'::regclass);
+ pg_stat_reset_single_table_counters 
+-------------------------------------
+ 
+(1 row)
+
+SELECT n_tup_ins + n_tup_upd FROM pg_stat_all_tables WHERE relid = 'pg_shdescription'::regclass;
+ ?column? 
+----------
+        0
+(1 row)
+
+-- cleanup the comment
+\if :{?description_before}
+  COMMENT ON DATABASE :"current_database" IS :'description_before';
+\else
+  COMMENT ON DATABASE :"current_database" IS NULL;
+\endif
+-----
 -- Test that various stats views are being properly populated
 -----
 -- Test that sessions is incremented when a new session is started in pg_stat_database

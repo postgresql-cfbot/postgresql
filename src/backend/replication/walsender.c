@@ -197,6 +197,10 @@ static volatile sig_atomic_t replication_active = false;
 
 static LogicalDecodingContext *logical_decoding_ctx = NULL;
 
+static TimestampTz start = 0;
+static long		secs = 0;
+static int			microsecs = 0;
+
 /* A sample associating a WAL location with the time it was written. */
 typedef struct
 {
@@ -1034,6 +1038,8 @@ parseCreateReplSlotOptions(CreateReplicationSlotCmd *cmd,
 	}
 }
 
+instr_time	total_wait;
+
 /*
  * Create a new replication slot.
  */
@@ -1051,6 +1057,15 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 	TupleDesc	tupdesc;
 	Datum		values[4];
 	bool		nulls[4] = {0};
+
+	instr_time	begin;
+	instr_time	elapsed;
+	instr_time	total_create;
+
+	INSTR_TIME_SET_ZERO(total_create);
+	INSTR_TIME_SET_ZERO(total_wait);
+
+	INSTR_TIME_SET_CURRENT(begin);
 
 	Assert(!MyReplicationSlot);
 
@@ -1082,6 +1097,12 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 	{
 		LogicalDecodingContext *ctx;
 		bool		need_full_snapshot = false;
+
+		INSTR_TIME_SET_CURRENT(elapsed);
+		INSTR_TIME_SUBTRACT(elapsed, begin);
+		INSTR_TIME_ADD(total_create, elapsed);
+
+		elog(LOG, "LOGICAL_SLOT_CREATION %ld", INSTR_TIME_GET_MICROSEC(total_create));
 
 		/*
 		 * Do options check early so that we can bail before calling the
@@ -1131,6 +1152,7 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 			need_full_snapshot = true;
 		}
 
+		start = GetCurrentTimestamp();
 		ctx = CreateInitDecodingContext(cmd->plugin, NIL, need_full_snapshot,
 										InvalidXLogRecPtr,
 										XL_ROUTINE(.page_read = logical_read_xlog_page,
@@ -1138,6 +1160,10 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 												   .segment_close = wal_segment_close),
 										WalSndPrepareWrite, WalSndWriteData,
 										WalSndUpdateProgress);
+
+		TimestampDifference(start, GetCurrentTimestamp(), &secs, &microsecs);
+		elog(LOG, "INIT_DECODING_CONTEXT %d", ((int) secs * 1000000 + microsecs));
+		start = GetCurrentTimestamp();
 
 		/*
 		 * Signal that we don't need the timeout mechanism. We're just
@@ -1150,6 +1176,12 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 
 		/* build initial snapshot, might take a while */
 		DecodingContextFindStartpoint(ctx);
+
+		TimestampDifference(start, GetCurrentTimestamp(), &secs, &microsecs);
+		elog(LOG, "FIND_DECODING_STARTPOINT %d", ((int) secs * 1000000 + microsecs));
+		start = GetCurrentTimestamp();
+
+		elog(LOG, "LOGICAL_WAIT_TRANSACTION %ld", INSTR_TIME_GET_MICROSEC(total_wait));
 
 		/*
 		 * Export or use the snapshot if we've been asked to do so.
@@ -1168,6 +1200,10 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 			snap = SnapBuildInitialSnapshot(ctx->snapshot_builder);
 			RestoreTransactionSnapshot(snap, MyProc);
 		}
+
+		TimestampDifference(start, GetCurrentTimestamp(), &secs, &microsecs);
+		elog(LOG, "SNAPSHOT_BUILD %d", ((int) secs * 1000000 + microsecs));
+		start = GetCurrentTimestamp();
 
 		/* don't need the decoding context anymore */
 		FreeDecodingContext(ctx);

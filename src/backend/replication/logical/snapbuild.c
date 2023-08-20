@@ -1209,6 +1209,8 @@ SnapBuildXidHasCatalogChanges(SnapBuild *builder, TransactionId xid,
  * -----------------------------------
  */
 
+extern instr_time	total_wait;
+
 /*
  * Process a running xacts record, and use its information to first build a
  * historic snapshot and later to release resources that aren't needed
@@ -1227,8 +1229,18 @@ SnapBuildProcessRunningXacts(SnapBuild *builder, XLogRecPtr lsn, xl_running_xact
 	 */
 	if (builder->state < SNAPBUILD_CONSISTENT)
 	{
+		instr_time	start;
+		instr_time	elapsed;
+		bool result;
+
+		INSTR_TIME_SET_CURRENT(start);
+		result = SnapBuildFindSnapshot(builder, lsn, running);
+		INSTR_TIME_SET_CURRENT(elapsed);
+		INSTR_TIME_SUBTRACT(elapsed, start);
+		INSTR_TIME_ADD(total_wait, elapsed);
+
 		/* returns false if there's no point in performing cleanup just yet */
-		if (!SnapBuildFindSnapshot(builder, lsn, running))
+		if (!result)
 			return;
 	}
 	else

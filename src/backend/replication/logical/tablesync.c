@@ -123,6 +123,10 @@
 #include "utils/syscache.h"
 #include "utils/usercontext.h"
 
+static TimestampTz start = 0;
+static long		secs = 0;
+static int			microsecs = 0;
+
 static bool table_states_valid = false;
 static List *table_states_not_ready = NIL;
 static bool FetchTableStates(bool *started_tx);
@@ -338,6 +342,11 @@ process_syncing_tables_for_sync(XLogRecPtr current_lsn)
 		ReplicationSlotDropAtPubNode(LogRepWorkerWalRcvConn, syncslotname, false);
 
 		CommitTransactionCommand();
+
+		TimestampDifference(start, GetCurrentTimestamp(), &secs, &microsecs);
+		elog(LOG, "SUBREL_STATE_SYNCDONE %d", ((int) secs * 1000000 + microsecs));
+		start = GetCurrentTimestamp();
+
 		pgstat_report_stat(false);
 
 		/*
@@ -1259,6 +1268,8 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 	bool		must_use_password;
 	bool		run_as_owner;
 
+	start = GetCurrentTimestamp();
+
 	/* Check the state of the table synchronization. */
 	StartTransactionCommand();
 	relstate = GetSubscriptionRelState(MyLogicalRepWorker->subid,
@@ -1362,6 +1373,10 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 	MyLogicalRepWorker->relstate_lsn = InvalidXLogRecPtr;
 	SpinLockRelease(&MyLogicalRepWorker->relmutex);
 
+	TimestampDifference(start, GetCurrentTimestamp(), &secs, &microsecs);
+	elog(LOG, "SUBREL_STATE_DATASYNC %d", ((int) secs * 1000000 + microsecs));
+	start = GetCurrentTimestamp();
+
 	/* Update the state and make it visible to others. */
 	StartTransactionCommand();
 	UpdateSubscriptionRelState(MyLogicalRepWorker->subid,
@@ -1404,6 +1419,10 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 	walrcv_create_slot(LogRepWorkerWalRcvConn,
 					   slotname, false /* permanent */ , false /* two_phase */ ,
 					   CRS_USE_SNAPSHOT, origin_startpos);
+
+	TimestampDifference(start, GetCurrentTimestamp(), &secs, &microsecs);
+	elog(LOG, "WALRCV_CREATE_SLOT %d", ((int) secs * 1000000 + microsecs));
+	start = GetCurrentTimestamp();
 
 	/*
 	 * Setup replication origin tracking. The purpose of doing this before the
@@ -1503,6 +1522,10 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 
 	CommitTransactionCommand();
 
+	TimestampDifference(start, GetCurrentTimestamp(), &secs, &microsecs);
+	elog(LOG, "SUBREL_STATE_FINISHEDCOPY %d", ((int) secs * 1000000 + microsecs));
+	start = GetCurrentTimestamp();
+
 copy_table_done:
 
 	elog(DEBUG1,
@@ -1522,6 +1545,11 @@ copy_table_done:
 	 * then return to let LogicalRepApplyLoop do it.
 	 */
 	wait_for_worker_state_change(SUBREL_STATE_CATCHUP);
+
+	TimestampDifference(start, GetCurrentTimestamp(), &secs, &microsecs);
+	elog(LOG, "SUBREL_STATE_CATCHUP %d", ((int) secs * 1000000 + microsecs));
+	start = GetCurrentTimestamp();
+
 	return slotname;
 }
 

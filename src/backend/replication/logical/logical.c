@@ -630,11 +630,20 @@ void
 DecodingContextFindStartpoint(LogicalDecodingContext *ctx)
 {
 	ReplicationSlot *slot = ctx->slot;
+	int count = 0;
+
+	instr_time	start;
+	instr_time	elapsed;
+	instr_time	total_read;
+	instr_time	total_decode;
+
+	INSTR_TIME_SET_ZERO(total_read);
+	INSTR_TIME_SET_ZERO(total_decode);
 
 	/* Initialize from where to start reading WAL. */
 	XLogBeginRead(ctx->reader, slot->data.restart_lsn);
 
-	elog(DEBUG1, "searching for logical decoding starting point, starting at %X/%X",
+	elog(LOG, "searching for logical decoding starting point, starting at %X/%X",
 		 LSN_FORMAT_ARGS(slot->data.restart_lsn));
 
 	/* Wait for a consistent starting point */
@@ -642,15 +651,28 @@ DecodingContextFindStartpoint(LogicalDecodingContext *ctx)
 	{
 		XLogRecord *record;
 		char	   *err = NULL;
+		count++;
+
+		INSTR_TIME_SET_CURRENT(start);
 
 		/* the read_page callback waits for new WAL */
 		record = XLogReadRecord(ctx->reader, &err);
+		INSTR_TIME_SET_CURRENT(elapsed);
+		INSTR_TIME_SUBTRACT(elapsed, start);
+		INSTR_TIME_ADD(total_read, elapsed);
+
 		if (err)
 			elog(ERROR, "could not find logical decoding starting point: %s", err);
 		if (!record)
 			elog(ERROR, "could not find logical decoding starting point");
 
+		INSTR_TIME_SET_CURRENT(start);
+
 		LogicalDecodingProcessRecord(ctx, ctx->reader);
+
+		INSTR_TIME_SET_CURRENT(elapsed);
+		INSTR_TIME_SUBTRACT(elapsed, start);
+		INSTR_TIME_ADD(total_decode, elapsed);
 
 		/* only continue till we found a consistent spot */
 		if (DecodingContextReady(ctx))
@@ -664,6 +686,9 @@ DecodingContextFindStartpoint(LogicalDecodingContext *ctx)
 	if (slot->data.two_phase)
 		slot->data.two_phase_at = ctx->reader->EndRecPtr;
 	SpinLockRelease(&slot->mutex);
+	elog(LOG, "LOGICAL_XLOG_READ %ld", INSTR_TIME_GET_MICROSEC(total_read));
+	elog(LOG, "LOGICAL_DECODE_PROCESS_RECORD %ld", INSTR_TIME_GET_MICROSEC(total_decode));
+	elog(LOG, "FIND_DECODING_XLOG_RECORD_COUNT %d", count);
 }
 
 /*

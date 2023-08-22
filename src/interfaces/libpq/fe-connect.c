@@ -32,6 +32,7 @@
 #include "mb/pg_wchar.h"
 #include "pg_config_paths.h"
 #include "port/pg_bswap.h"
+#include "protocol.h"
 
 #ifdef WIN32
 #include "win32.h"
@@ -3591,7 +3592,7 @@ keep_going:						/* We will come back to here until there is
 				 * Anything else probably means it's not Postgres on the other
 				 * end at all.
 				 */
-				if (!(beresp == 'R' || beresp == 'v' || beresp == 'E'))
+				if (!(beresp == AUTHENTICATION_REQUEST || beresp == NEGOTIATE_PROTOCOL || beresp == ERROR_RESPONSE))
 				{
 					libpq_append_conn_error(conn, "expected authentication request from server, but received %c",
 											beresp);
@@ -3618,19 +3619,19 @@ keep_going:						/* We will come back to here until there is
 				 * version 14, the server also used the old protocol for
 				 * errors that happened before processing the startup packet.)
 				 */
-				if (beresp == 'R' && (msgLength < 8 || msgLength > 2000))
+				if (beresp == AUTHENTICATION_REQUEST && (msgLength < 8 || msgLength > 2000))
 				{
 					libpq_append_conn_error(conn, "received invalid authentication request");
 					goto error_return;
 				}
-				if (beresp == 'v' && (msgLength < 8 || msgLength > 2000))
+				if (beresp == NEGOTIATE_PROTOCOL && (msgLength < 8 || msgLength > 2000))
 				{
 					libpq_append_conn_error(conn, "received invalid protocol negotiation message");
 					goto error_return;
 				}
 
 #define MAX_ERRLEN 30000
-				if (beresp == 'E' && (msgLength < 8 || msgLength > MAX_ERRLEN))
+				if (beresp == ERROR_RESPONSE && (msgLength < 8 || msgLength > MAX_ERRLEN))
 				{
 					/* Handle error from a pre-3.0 server */
 					conn->inCursor = conn->inStart + 1; /* reread data */
@@ -3693,7 +3694,7 @@ keep_going:						/* We will come back to here until there is
 				}
 
 				/* Handle errors. */
-				if (beresp == 'E')
+				if (beresp == ERROR_RESPONSE)
 				{
 					if (pqGetErrorNotice3(conn, true))
 					{
@@ -3770,7 +3771,7 @@ keep_going:						/* We will come back to here until there is
 
 					goto error_return;
 				}
-				else if (beresp == 'v')
+				else if (beresp == NEGOTIATE_PROTOCOL)
 				{
 					if (pqGetNegotiateProtocolVersion3(conn))
 					{
@@ -4540,7 +4541,7 @@ sendTerminateConn(PGconn *conn)
 		 * Try to send "close connection" message to backend. Ignore any
 		 * error.
 		 */
-		pqPutMsgStart('X', conn);
+		pqPutMsgStart(TERMINATE_REQUEST, conn);
 		pqPutMsgEnd(conn);
 		(void) pqFlush(conn);
 	}

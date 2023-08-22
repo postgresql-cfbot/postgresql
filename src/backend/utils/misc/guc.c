@@ -37,6 +37,7 @@
 #include "libpq/pqformat.h"
 #include "parser/scansup.h"
 #include "port/pg_bitutils.h"
+#include "protocol.h"
 #include "storage/fd.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
@@ -2593,7 +2594,7 @@ ReportGUCOption(struct config_generic *record)
 	{
 		StringInfoData msgbuf;
 
-		pq_beginmessage(&msgbuf, 'S');
+		pq_beginmessage(&msgbuf, PARAMETER_STATUS_RESPONSE);
 		pq_sendstring(&msgbuf, record->name);
 		pq_sendstring(&msgbuf, val);
 		pq_endmessage(&msgbuf);

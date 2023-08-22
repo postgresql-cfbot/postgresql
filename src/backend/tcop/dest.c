@@ -39,6 +39,7 @@
 #include "executor/tstoreReceiver.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
+#include "protocol.h"
 #include "utils/portal.h"
 
 
@@ -220,7 +221,7 @@ NullCommand(CommandDest dest)
 		case DestRemoteSimple:
 
 			/* Tell the FE that we saw an empty query string */
-			pq_putemptymessage('I');
+			pq_putemptymessage(EMPTY_QUERY_RESPONSE);
 			break;
 
 		case DestNone:
@@ -258,7 +259,7 @@ ReadyForQuery(CommandDest dest)
 			{
 				StringInfoData buf;
 
-				pq_beginmessage(&buf, 'Z');
+				pq_beginmessage(&buf, READY_FOR_QUERY);
 				pq_sendbyte(&buf, TransactionBlockStatusCode());
 				pq_endmessage(&buf);
 			}

@@ -114,6 +114,7 @@
 #include "postmaster/pgarch.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/syslogger.h"
+#include "protocol.h"
 #include "replication/logicallauncher.h"
 #include "replication/walsender.h"
 #include "storage/fd.h"
@@ -2357,7 +2358,7 @@ SendNegotiateProtocolVersion(List *unrecognized_protocol_options)
 	StringInfoData buf;
 	ListCell   *lc;
 
-	pq_beginmessage(&buf, 'v'); /* NegotiateProtocolVersion */
+	pq_beginmessage(&buf, NEGOTIATE_PROTOCOL);
 	pq_sendint32(&buf, PG_PROTOCOL_LATEST);
 	pq_sendint32(&buf, list_length(unrecognized_protocol_options));
 	foreach(lc, unrecognized_protocol_options)

@@ -55,6 +55,7 @@
 #include "postmaster/autovacuum.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/postmaster.h"
+#include "protocol.h"
 #include "replication/logicallauncher.h"
 #include "replication/logicalworker.h"
 #include "replication/slot.h"
@@ -402,37 +403,37 @@ SocketBackend(StringInfo inBuf)
 	 */
 	switch (qtype)
 	{
-		case 'Q':				/* simple query */
+		case SIMPLE_QUERY:
 			maxmsglen = PQ_LARGE_MESSAGE_LIMIT;
 			doing_extended_query_message = false;
 			break;
 
-		case 'F':				/* fastpath function call */
+		case FUNCTION_CALL_REQUEST:
 			maxmsglen = PQ_LARGE_MESSAGE_LIMIT;
 			doing_extended_query_message = false;
 			break;
 
-		case 'X':				/* terminate */
+		case TERMINATE_REQUEST:
 			maxmsglen = PQ_SMALL_MESSAGE_LIMIT;
 			doing_extended_query_message = false;
 			ignore_till_sync = false;
 			break;
 
-		case 'B':				/* bind */
-		case 'P':				/* parse */
+		case BIND_REQUEST :
+		case PARSE_REQUEST:
 			maxmsglen = PQ_LARGE_MESSAGE_LIMIT;
 			doing_extended_query_message = true;
 			break;
 
-		case 'C':				/* close */
-		case 'D':				/* describe */
-		case 'E':				/* execute */
-		case 'H':				/* flush */
+		case CLOSE_REQUEST:
+		case DESCRIBE_REQUEST:
+		case EXECUTE_REQUEST:
+		case FLUSH_DATA_REQUEST:
 			maxmsglen = PQ_SMALL_MESSAGE_LIMIT;
 			doing_extended_query_message = true;
 			break;
 
-		case 'S':				/* sync */
+		case SYNC_DATA_REQUEST:
 			maxmsglen = PQ_SMALL_MESSAGE_LIMIT;
 			/* stop any active skip-till-Sync */
 			ignore_till_sync = false;
@@ -440,13 +441,13 @@ SocketBackend(StringInfo inBuf)
 			doing_extended_query_message = false;
 			break;
 
-		case 'd':				/* copy data */
+		case COPY_DATA:
 			maxmsglen = PQ_LARGE_MESSAGE_LIMIT;
 			doing_extended_query_message = false;
 			break;
 
-		case 'c':				/* copy done */
-		case 'f':				/* copy fail */
+		case COPY_DONE:
+		case COPY_FAIL:
 			maxmsglen = PQ_SMALL_MESSAGE_LIMIT;
 			doing_extended_query_message = false;
 			break;
@@ -1589,7 +1590,7 @@ exec_parse_message(const char *query_string,	/* string to execute */
 	 * Send ParseComplete.
 	 */
 	if (whereToSendOutput == DestRemote)
-		pq_putemptymessage('1');
+		pq_putemptymessage(PARSE_COMPLETE_RESPONSE);
 
 	/*
 	 * Emit duration logging if appropriate.
@@ -2047,7 +2048,7 @@ exec_bind_message(StringInfo input_message)
 	 * Send BindComplete.
 	 */
 	if (whereToSendOutput == DestRemote)
-		pq_putemptymessage('2');
+		pq_putemptymessage(BIND_COMPLETE_RESPONSE);
 
 	/*
 	 * Emit duration logging if appropriate.
@@ -2290,7 +2291,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 	{
 		/* Portal run not complete, so send PortalSuspended */
 		if (whereToSendOutput == DestRemote)
-			pq_putemptymessage('s');
+			pq_putemptymessage(PORTAL_SUSPENDED_RESPONSE);
 
 		/*
 		 * Set XACT_FLAGS_PIPELINING whenever we suspend an Execute message,
@@ -2683,7 +2684,7 @@ exec_describe_statement_message(const char *stmt_name)
 								  NULL);
 	}
 	else
-		pq_putemptymessage('n');	/* NoData */
+		pq_putemptymessage(NO_DATA_RESPONSE);
 }
 
 /*
@@ -2736,7 +2737,7 @@ exec_describe_portal_message(const char *portal_name)
 								  FetchPortalTargetList(portal),
 								  portal->formats);
 	else
-		pq_putemptymessage('n');	/* NoData */
+		pq_putemptymessage(NO_DATA_RESPONSE);
 }
 
 
@@ -4239,7 +4240,7 @@ PostgresMain(const char *dbname, const char *username)
 	{
 		StringInfoData buf;
 
-		pq_beginmessage(&buf, 'K');
+		pq_beginmessage(&buf, BACKEND_KEY_DATA);
 		pq_sendint32(&buf, (int32) MyProcPid);
 		pq_sendint32(&buf, (int32) MyCancelKey);
 		pq_endmessage(&buf);
@@ -4618,7 +4619,7 @@ PostgresMain(const char *dbname, const char *username)
 
 		switch (firstchar)
 		{
-			case 'Q':			/* simple query */
+			case SIMPLE_QUERY:
 				{
 					const char *query_string;
 
@@ -4642,7 +4643,7 @@ PostgresMain(const char *dbname, const char *username)
 				}
 				break;
 
-			case 'P':			/* parse */
+			case PARSE_REQUEST:
 				{
 					const char *stmt_name;
 					const char *query_string;
@@ -4672,7 +4673,7 @@ PostgresMain(const char *dbname, const char *username)
 				}
 				break;
 
-			case 'B':			/* bind */
+			case BIND_REQUEST:
 				forbidden_in_wal_sender(firstchar);
 
 				/* Set statement_timestamp() */
@@ -4687,7 +4688,7 @@ PostgresMain(const char *dbname, const char *username)
 				/* exec_bind_message does valgrind_report_error_query */
 				break;
 
-			case 'E':			/* execute */
+			case EXECUTE_REQUEST:
 				{
 					const char *portal_name;
 					int			max_rows;
@@ -4707,7 +4708,7 @@ PostgresMain(const char *dbname, const char *username)
 				}
 				break;
 
-			case 'F':			/* fastpath function call */
+			case FUNCTION_CALL_REQUEST:
 				forbidden_in_wal_sender(firstchar);
 
 				/* Set statement_timestamp() */
@@ -4742,7 +4743,7 @@ PostgresMain(const char *dbname, const char *username)
 				send_ready_for_query = true;
 				break;
 
-			case 'C':			/* close */
+			case CLOSE_REQUEST:
 				{
 					int			close_type;
 					const char *close_target;
@@ -4755,7 +4756,7 @@ PostgresMain(const char *dbname, const char *username)
 
 					switch (close_type)
 					{
-						case 'S':
+						case DESCRIBE_PREPARED:
 							if (close_target[0] != '\0')
 								DropPreparedStatement(close_target, false);
 							else
@@ -4764,7 +4765,7 @@ PostgresMain(const char *dbname, const char *username)
 								drop_unnamed_stmt();
 							}
 							break;
-						case 'P':
+						case DESCRIBE_PORTAL:
 							{
 								Portal		portal;
 
@@ -4782,13 +4783,13 @@ PostgresMain(const char *dbname, const char *username)
 					}
 
 					if (whereToSendOutput == DestRemote)
-						pq_putemptymessage('3');	/* CloseComplete */
+						pq_putemptymessage(CLOSE_COMPLETE_RESPONSE);
 
 					valgrind_report_error_query("CLOSE message");
 				}
 				break;
 
-			case 'D':			/* describe */
+			case DESCRIBE_REQUEST:
 				{
 					int			describe_type;
 					const char *describe_target;
@@ -4804,10 +4805,10 @@ PostgresMain(const char *dbname, const char *username)
 
 					switch (describe_type)
 					{
-						case 'S':
+						case DESCRIBE_PREPARED:
 							exec_describe_statement_message(describe_target);
 							break;
-						case 'P':
+						case DESCRIBE_PORTAL:
 							exec_describe_portal_message(describe_target);
 							break;
 						default:
@@ -4822,13 +4823,13 @@ PostgresMain(const char *dbname, const char *username)
 				}
 				break;
 
-			case 'H':			/* flush */
+			case FLUSH_DATA_REQUEST:
 				pq_getmsgend(&input_message);
 				if (whereToSendOutput == DestRemote)
 					pq_flush();
 				break;
 
-			case 'S':			/* sync */
+			case SYNC_DATA_REQUEST:
 				pq_getmsgend(&input_message);
 				finish_xact_command();
 				valgrind_report_error_query("SYNC message");
@@ -4847,7 +4848,7 @@ PostgresMain(const char *dbname, const char *username)
 
 				/* FALLTHROUGH */
 
-			case 'X':
+			case TERMINATE_REQUEST:
 
 				/*
 				 * Reset whereToSendOutput to prevent ereport from attempting
@@ -4865,9 +4866,9 @@ PostgresMain(const char *dbname, const char *username)
 				 */
 				proc_exit(0);
 
-			case 'd':			/* copy data */
-			case 'c':			/* copy done */
-			case 'f':			/* copy fail */
+			case COPY_DATA:
+			case COPY_DONE:
+			case COPY_FAIL:
 
 				/*
 				 * Accept but ignore these messages, per protocol spec; we
@@ -4897,7 +4898,7 @@ forbidden_in_wal_sender(char firstchar)
 {
 	if (am_walsender)
 	{
-		if (firstchar == 'F')
+		if (firstchar == FUNCTION_CALL_REQUEST)
 			ereport(ERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
 					 errmsg("fastpath function calls not supported in a replication connection")));

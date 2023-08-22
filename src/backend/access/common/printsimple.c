@@ -21,6 +21,7 @@
 #include "access/printsimple.h"
 #include "catalog/pg_type.h"
 #include "libpq/pqformat.h"
+#include "protocol.h"
 #include "utils/builtins.h"
 
 /*
@@ -32,7 +33,7 @@ printsimple_startup(DestReceiver *self, int operation, TupleDesc tupdesc)
 	StringInfoData buf;
 	int			i;
 
-	pq_beginmessage(&buf, 'T'); /* RowDescription */
+	pq_beginmessage(&buf, ROW_DESCRIPTION_RESPONSE);
 	pq_sendint16(&buf, tupdesc->natts);
 
 	for (i = 0; i < tupdesc->natts; ++i)
@@ -65,7 +66,7 @@ printsimple(TupleTableSlot *slot, DestReceiver *self)
 	slot_getallattrs(slot);
 
 	/* Prepare and send message */
-	pq_beginmessage(&buf, 'D');
+	pq_beginmessage(&buf, DATA_ROW_RESPONSE);
 	pq_sendint16(&buf, tupdesc->natts);
 
 	for (i = 0; i < tupdesc->natts; ++i)

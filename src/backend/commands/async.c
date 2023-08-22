@@ -141,6 +141,7 @@
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
+#include "protocol.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
 #include "storage/proc.h"
@@ -2281,7 +2282,7 @@ NotifyMyFrontEnd(const char *channel, const char *payload, int32 srcPid)
 	{
 		StringInfoData buf;
 
-		pq_beginmessage(&buf, 'A');
+		pq_beginmessage(&buf, NOTIFY_RESPONSE);
 		pq_sendint32(&buf, srcPid);
 		pq_sendstring(&buf, channel);
 		pq_sendstring(&buf, payload);

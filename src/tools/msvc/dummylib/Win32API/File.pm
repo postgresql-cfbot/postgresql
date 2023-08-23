@@ -4,7 +4,7 @@
 package Win32API::File;
 
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 
 use constant { SEM_FAILCRITICALERRORS => 1, SEM_NOGPFAULTERRORBOX => 2 };
 sub SetErrormode { }

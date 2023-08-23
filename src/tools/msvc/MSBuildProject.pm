@@ -11,7 +11,7 @@ package MSBuildProject;
 
 use Carp;
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 use base qw(Project);
 
 no warnings qw(redefine);    ## no critic
@@ -412,7 +412,7 @@ package VC2015Project;
 #
 
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 use base qw(MSBuildProject);
 
 no warnings qw(redefine);    ## no critic
@@ -437,7 +437,7 @@ package VC2017Project;
 #
 
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 use base qw(MSBuildProject);
 
 no warnings qw(redefine);    ## no critic
@@ -462,7 +462,7 @@ package VC2019Project;
 #
 
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 use base qw(MSBuildProject);
 
 no warnings qw(redefine);    ## no critic
@@ -487,7 +487,7 @@ package VC2022Project;
 #
 
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 use base qw(MSBuildProject);
 
 no warnings qw(redefine);    ## no critic

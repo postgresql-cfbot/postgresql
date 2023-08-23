@@ -5,7 +5,7 @@
 # src/tools/msvc/pgflex.pl
 
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 
 use File::Basename;
 

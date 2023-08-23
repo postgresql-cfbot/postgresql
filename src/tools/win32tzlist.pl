@@ -16,7 +16,7 @@
 #
 
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 
 use Win32::Registry;
 

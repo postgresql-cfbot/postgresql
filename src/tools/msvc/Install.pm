@@ -9,7 +9,7 @@ package Install;
 # src/tools/msvc/Install.pm
 #
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 use Carp;
 use File::Basename;
 use File::Copy;

@@ -3,7 +3,7 @@
 
 # Configuration arguments for vcbuild.
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 
 our $config = {
 	asserts => 0,    # --enable-cassert

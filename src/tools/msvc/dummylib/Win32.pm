@@ -3,5 +3,5 @@
 
 package Win32;
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 1;

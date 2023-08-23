@@ -10,7 +10,7 @@ package Project;
 #
 use Carp;
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 use File::Basename;
 
 sub _new

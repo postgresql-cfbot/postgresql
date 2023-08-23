@@ -10,7 +10,7 @@ package Solution;
 #
 use Carp;
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 use VSObjectFactory;
 
 no warnings qw(redefine);    ## no critic
@@ -1242,7 +1242,7 @@ package VS2015Solution;
 
 use Carp;
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 use base qw(Solution);
 
 no warnings qw(redefine);    ## no critic
@@ -1270,7 +1270,7 @@ package VS2017Solution;
 
 use Carp;
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 use base qw(Solution);
 
 no warnings qw(redefine);    ## no critic
@@ -1298,7 +1298,7 @@ package VS2019Solution;
 
 use Carp;
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 use base qw(Solution);
 
 no warnings qw(redefine);    ## no critic
@@ -1326,7 +1326,7 @@ package VS2022Solution;
 
 use Carp;
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 use base qw(Solution);
 
 no warnings qw(redefine);    ## no critic

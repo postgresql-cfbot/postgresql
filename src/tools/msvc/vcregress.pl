@@ -5,7 +5,7 @@
 # src/tools/msvc/vcregress.pl
 
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 
 our $config;
 

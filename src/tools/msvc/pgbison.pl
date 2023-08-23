@@ -5,7 +5,7 @@
 # src/tools/msvc/pgbison.pl
 
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 
 use File::Basename;
 

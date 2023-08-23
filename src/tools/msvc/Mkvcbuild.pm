@@ -9,7 +9,7 @@ package Mkvcbuild;
 # src/tools/msvc/Mkvcbuild.pm
 #
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 
 use Carp;
 use if ($^O eq "MSWin32"), 'Win32';

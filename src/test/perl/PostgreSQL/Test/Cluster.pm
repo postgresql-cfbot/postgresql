@@ -97,7 +97,7 @@ The IPC::Run module is required.
 package PostgreSQL::Test::Cluster;
 
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 
 use Carp;
 use Config;
@@ -1570,9 +1570,8 @@ sub can_bind
 	my ($host, $port) = @_;
 	my $iaddr = inet_aton($host);
 	my $paddr = sockaddr_in($port, $iaddr);
-	my $proto = getprotobyname("tcp");
 
-	socket(SOCK, PF_INET, SOCK_STREAM, $proto)
+	socket(SOCK, PF_INET, SOCK_STREAM, 0)
 	  or die "socket failed: $!";
 
 	# As in postmaster, don't use SO_REUSEADDR on Windows

@@ -11,7 +11,7 @@ package VSObjectFactory;
 
 use Carp;
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 
 use Exporter;
 use Project;

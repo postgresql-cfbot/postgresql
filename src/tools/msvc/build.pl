@@ -8,7 +8,7 @@
 # src/tools/msvc/build.pl
 #
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 
 use FindBin;
 use lib $FindBin::RealBin;

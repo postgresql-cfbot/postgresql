@@ -4,7 +4,7 @@
 package Win32::Registry;
 
 use strict;
-use warnings;
+use warnings FATAL => 'all';
 
 use vars qw($HKEY_LOCAL_MACHINE);
 

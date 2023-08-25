@@ -36,9 +36,10 @@
 static bool join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo);
 static void remove_rel_from_query(PlannerInfo *root, int relid,
 								  SpecialJoinInfo *sjinfo);
-static void remove_rel_from_restrictinfo(RestrictInfo *rinfo,
+static void remove_rel_from_restrictinfo(PlannerInfo *root,
+										 RestrictInfo *rinfo,
 										 int relid, int ojrelid);
-static void remove_rel_from_eclass(EquivalenceClass *ec,
+static void remove_rel_from_eclass(PlannerInfo *root, EquivalenceClass *ec,
 								   int relid, int ojrelid);
 static List *remove_rel_from_joinlist(List *joinlist, int relid, int *nremoved);
 static bool rel_supports_distinctness(PlannerInfo *root, RelOptInfo *rel);
@@ -445,7 +446,7 @@ remove_rel_from_query(PlannerInfo *root, int relid, SpecialJoinInfo *sjinfo)
 			 * that any such PHV is safe (and updated its ph_eval_at), so we
 			 * can just drop those references.
 			 */
-			remove_rel_from_restrictinfo(rinfo, relid, ojrelid);
+			remove_rel_from_restrictinfo(root, rinfo, relid, ojrelid);
 
 			/*
 			 * Cross-check that the clause itself does not reference the
@@ -474,7 +475,7 @@ remove_rel_from_query(PlannerInfo *root, int relid, SpecialJoinInfo *sjinfo)
 
 		if (bms_is_member(relid, ec->ec_relids) ||
 			bms_is_member(ojrelid, ec->ec_relids))
-			remove_rel_from_eclass(ec, relid, ojrelid);
+			remove_rel_from_eclass(root, ec, relid, ojrelid);
 	}
 
 	/*
@@ -547,19 +548,28 @@ remove_rel_from_query(PlannerInfo *root, int relid, SpecialJoinInfo *sjinfo)
  * we have to also clean up the sub-clauses.
  */
 static void
-remove_rel_from_restrictinfo(RestrictInfo *rinfo, int relid, int ojrelid)
+remove_rel_from_restrictinfo(PlannerInfo *root, RestrictInfo *rinfo, int relid,
+							 int ojrelid)
 {
+	Relids		new_clause_relids;
+
 	/*
 	 * initsplan.c is fairly cavalier about allowing RestrictInfos to share
 	 * relid sets with other RestrictInfos, and SpecialJoinInfos too.  Make
 	 * sure this RestrictInfo has its own relid sets before we modify them.
-	 * (In present usage, clause_relids is probably not shared, but
-	 * required_relids could be; let's not assume anything.)
+	 * The 'new_clause_relids' passed to update_clause_relids() must be a
+	 * different instance from the current rinfo->clause_relids, so we make a
+	 * copy of it.
 	 */
-	rinfo->clause_relids = bms_copy(rinfo->clause_relids);
-	rinfo->clause_relids = bms_del_member(rinfo->clause_relids, relid);
-	rinfo->clause_relids = bms_del_member(rinfo->clause_relids, ojrelid);
-	/* Likewise for required_relids */
+	new_clause_relids = bms_copy(rinfo->clause_relids);
+	new_clause_relids = bms_del_member(new_clause_relids, relid);
+	new_clause_relids = bms_del_member(new_clause_relids, ojrelid);
+	update_clause_relids(root, rinfo, new_clause_relids);
+
+	/*
+	 * In present usage, required_relids could be shared, so we make a copy of
+	 * it.
+	 */
 	rinfo->required_relids = bms_copy(rinfo->required_relids);
 	rinfo->required_relids = bms_del_member(rinfo->required_relids, relid);
 	rinfo->required_relids = bms_del_member(rinfo->required_relids, ojrelid);
@@ -584,14 +594,14 @@ remove_rel_from_restrictinfo(RestrictInfo *rinfo, int relid, int ojrelid)
 				{
 					RestrictInfo *rinfo2 = lfirst_node(RestrictInfo, lc2);
 
-					remove_rel_from_restrictinfo(rinfo2, relid, ojrelid);
+					remove_rel_from_restrictinfo(root, rinfo2, relid, ojrelid);
 				}
 			}
 			else
 			{
 				RestrictInfo *rinfo2 = castNode(RestrictInfo, orarg);
 
-				remove_rel_from_restrictinfo(rinfo2, relid, ojrelid);
+				remove_rel_from_restrictinfo(root, rinfo2, relid, ojrelid);
 			}
 		}
 	}
@@ -607,9 +617,11 @@ remove_rel_from_restrictinfo(RestrictInfo *rinfo, int relid, int ojrelid)
  * level(s).
  */
 static void
-remove_rel_from_eclass(EquivalenceClass *ec, int relid, int ojrelid)
+remove_rel_from_eclass(PlannerInfo *root, EquivalenceClass *ec, int relid,
+					   int ojrelid)
 {
 	ListCell   *lc;
+	int			i;
 
 	/* Fix up the EC's overall relids */
 	ec->ec_relids = bms_del_member(ec->ec_relids, relid);
@@ -636,11 +648,12 @@ remove_rel_from_eclass(EquivalenceClass *ec, int relid, int ojrelid)
 	}
 
 	/* Fix up the source clauses, in case we can re-use them later */
-	foreach(lc, ec->ec_sources)
+	i = -1;
+	while ((i = bms_next_member(ec->ec_source_indexes, i)) >= 0)
 	{
-		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+		RestrictInfo *rinfo = list_nth_node(RestrictInfo, root->eq_sources, i);
 
-		remove_rel_from_restrictinfo(rinfo, relid, ojrelid);
+		remove_rel_from_restrictinfo(root, rinfo, relid, ojrelid);
 	}
 
 	/*
@@ -648,7 +661,7 @@ remove_rel_from_eclass(EquivalenceClass *ec, int relid, int ojrelid)
 	 * drop them.  (At this point, any such clauses would be base restriction
 	 * clauses, which we'd not need anymore anyway.)
 	 */
-	ec->ec_derives = NIL;
+	ec->ec_derive_indexes = NULL;
 }
 
 /*

@@ -321,6 +321,12 @@ struct PlannerInfo
 	/* list of active EquivalenceClasses */
 	List	   *eq_classes;
 
+	/* list of source RestrictInfos used to build EquivalenceClasses */
+	List	   *eq_sources;
+
+	/* list of RestrictInfos derived from EquivalenceClasses */
+	List	   *eq_derives;
+
 	/* set true once ECs are canonical */
 	bool		ec_merging_done;
 
@@ -1399,6 +1405,24 @@ typedef struct JoinDomain
  * its comment for usage. The approach to lookup child members quickly is
  * described as iterate_child_rel_equivalences() comment.
  *
+ * At various locations in the query planner, we must search for source and
+ * derived RestrictInfos regarding a given EquivalenceClass.  For the common
+ * case, an EquivalenceClass does not have a large number of RestrictInfos,
+ * however, in cases such as planning queries to partitioned tables, the
+ * number of members can become large.  To maintain planning performance, we
+ * make use of a bitmap index to allow us to quickly find RestrictInfos in a
+ * given EquivalenceClass belonging to a given relation or set of relations.
+ * This is done by storing a list of RestrictInfos belonging to all
+ * EquivalenceClasses in PlannerInfo and storing a Bitmapset for each
+ * RelOptInfo which has a bit set for each RestrictInfo in that list which
+ * relates to the given relation.  We also store a Bitmapset to mark all of
+ * the indexes in the PlannerInfo's list of RestrictInfos in the
+ * EquivalenceClass.  We can quickly find the interesting indexes into the
+ * PlannerInfo's list by performing a bit-wise AND on the RelOptInfo's
+ * Bitmapset and the EquivalenceClasses.  RestrictInfos must be looked up in
+ * PlannerInfo by this technique using the ec_source_indexes and
+ * ec_derive_indexes Bitmapsets.
+ *
  * NB: if ec_merged isn't NULL, this class has been merged into another, and
  * should be ignored in favor of using the pointed-to class.
  *
@@ -1417,8 +1441,10 @@ typedef struct EquivalenceClass
 	List	   *ec_opfamilies;	/* btree operator family OIDs */
 	Oid			ec_collation;	/* collation, if datatypes are collatable */
 	List	   *ec_members;		/* list of EquivalenceMembers */
-	List	   *ec_sources;		/* list of generating RestrictInfos */
-	List	   *ec_derives;		/* list of derived RestrictInfos */
+	Bitmapset  *ec_source_indexes;	/* indexes into PlannerInfo's eq_sources
+									 * list of generating RestrictInfos */
+	Bitmapset  *ec_derive_indexes;	/* indexes into PlannerInfo's eq_derives
+									 * list of derived RestrictInfos */
 	Relids		ec_relids;		/* all relids appearing in ec_members, except
 								 * for child members (see below) */
 	bool		ec_has_const;	/* any pseudoconstants in ec_members? */
@@ -2659,7 +2685,12 @@ typedef struct RestrictInfo
 	/* number of base rels in clause_relids */
 	int			num_base_rels pg_node_attr(equal_ignore);
 
-	/* The relids (varnos+varnullingrels) actually referenced in the clause: */
+	/*
+	 * The relids (varnos+varnullingrels) actually referenced in the clause.
+	 *
+	 * NOTE: This field must be updated through update_clause_relids(), not by
+	 * setting the field directly.
+	 */
 	Relids		clause_relids pg_node_attr(equal_ignore);
 
 	/* The set of relids required to evaluate the clause: */
@@ -2777,6 +2808,10 @@ typedef struct RestrictInfo
 	/* hash equality operators used for memoize nodes, else InvalidOid */
 	Oid			left_hasheqoperator pg_node_attr(equal_ignore);
 	Oid			right_hasheqoperator pg_node_attr(equal_ignore);
+
+	/* the index within root->eq_sources and root->eq_derives */
+	int			eq_sources_index pg_node_attr(equal_ignore);
+	int			eq_derives_index pg_node_attr(equal_ignore);
 } RestrictInfo;
 
 /*

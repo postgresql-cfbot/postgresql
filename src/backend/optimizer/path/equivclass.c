@@ -42,6 +42,10 @@ static EquivalenceMember *add_eq_member(EquivalenceClass *ec,
 										Expr *expr, Relids relids,
 										JoinDomain *jdomain,
 										Oid datatype);
+static void add_eq_source(PlannerInfo *root, EquivalenceClass *ec,
+						  RestrictInfo *rinfo);
+static void add_eq_derive(PlannerInfo *root, EquivalenceClass *ec,
+						  RestrictInfo *rinfo);
 static void generate_base_implied_equalities_const(PlannerInfo *root,
 												   EquivalenceClass *ec);
 static void generate_base_implied_equalities_no_const(PlannerInfo *root,
@@ -319,7 +323,6 @@ process_equivalence(PlannerInfo *root,
 		/* If case 1, nothing to do, except add to sources */
 		if (ec1 == ec2)
 		{
-			ec1->ec_sources = lappend(ec1->ec_sources, restrictinfo);
 			ec1->ec_min_security = Min(ec1->ec_min_security,
 									   restrictinfo->security_level);
 			ec1->ec_max_security = Max(ec1->ec_max_security,
@@ -330,6 +333,8 @@ process_equivalence(PlannerInfo *root,
 			/* mark the RI as usable with this pair of EMs */
 			restrictinfo->left_em = em1;
 			restrictinfo->right_em = em2;
+
+			add_eq_source(root, ec1, restrictinfo);
 			return true;
 		}
 
@@ -350,8 +355,10 @@ process_equivalence(PlannerInfo *root,
 		 * be found.
 		 */
 		ec1->ec_members = list_concat(ec1->ec_members, ec2->ec_members);
-		ec1->ec_sources = list_concat(ec1->ec_sources, ec2->ec_sources);
-		ec1->ec_derives = list_concat(ec1->ec_derives, ec2->ec_derives);
+		ec1->ec_source_indexes = bms_join(ec1->ec_source_indexes,
+										  ec2->ec_source_indexes);
+		ec1->ec_derive_indexes = bms_join(ec1->ec_derive_indexes,
+										  ec2->ec_derive_indexes);
 		ec1->ec_relids = bms_join(ec1->ec_relids, ec2->ec_relids);
 		ec1->ec_has_const |= ec2->ec_has_const;
 		/* can't need to set has_volatile */
@@ -363,10 +370,9 @@ process_equivalence(PlannerInfo *root,
 		root->eq_classes = list_delete_nth_cell(root->eq_classes, ec2_idx);
 		/* just to avoid debugging confusion w/ dangling pointers: */
 		ec2->ec_members = NIL;
-		ec2->ec_sources = NIL;
-		ec2->ec_derives = NIL;
+		ec2->ec_source_indexes = NULL;
+		ec2->ec_derive_indexes = NULL;
 		ec2->ec_relids = NULL;
-		ec1->ec_sources = lappend(ec1->ec_sources, restrictinfo);
 		ec1->ec_min_security = Min(ec1->ec_min_security,
 								   restrictinfo->security_level);
 		ec1->ec_max_security = Max(ec1->ec_max_security,
@@ -377,13 +383,14 @@ process_equivalence(PlannerInfo *root,
 		/* mark the RI as usable with this pair of EMs */
 		restrictinfo->left_em = em1;
 		restrictinfo->right_em = em2;
+
+		add_eq_source(root, ec1, restrictinfo);
 	}
 	else if (ec1)
 	{
 		/* Case 3: add item2 to ec1 */
 		em2 = add_eq_member(ec1, item2, item2_relids,
 							jdomain, item2_type);
-		ec1->ec_sources = lappend(ec1->ec_sources, restrictinfo);
 		ec1->ec_min_security = Min(ec1->ec_min_security,
 								   restrictinfo->security_level);
 		ec1->ec_max_security = Max(ec1->ec_max_security,
@@ -394,13 +401,14 @@ process_equivalence(PlannerInfo *root,
 		/* mark the RI as usable with this pair of EMs */
 		restrictinfo->left_em = em1;
 		restrictinfo->right_em = em2;
+
+		add_eq_source(root, ec1, restrictinfo);
 	}
 	else if (ec2)
 	{
 		/* Case 3: add item1 to ec2 */
 		em1 = add_eq_member(ec2, item1, item1_relids,
 							jdomain, item1_type);
-		ec2->ec_sources = lappend(ec2->ec_sources, restrictinfo);
 		ec2->ec_min_security = Min(ec2->ec_min_security,
 								   restrictinfo->security_level);
 		ec2->ec_max_security = Max(ec2->ec_max_security,
@@ -411,6 +419,8 @@ process_equivalence(PlannerInfo *root,
 		/* mark the RI as usable with this pair of EMs */
 		restrictinfo->left_em = em1;
 		restrictinfo->right_em = em2;
+
+		add_eq_source(root, ec2, restrictinfo);
 	}
 	else
 	{
@@ -420,8 +430,8 @@ process_equivalence(PlannerInfo *root,
 		ec->ec_opfamilies = opfamilies;
 		ec->ec_collation = collation;
 		ec->ec_members = NIL;
-		ec->ec_sources = list_make1(restrictinfo);
-		ec->ec_derives = NIL;
+		ec->ec_source_indexes = NULL;
+		ec->ec_derive_indexes = NULL;
 		ec->ec_relids = NULL;
 		ec->ec_has_const = false;
 		ec->ec_has_volatile = false;
@@ -443,6 +453,8 @@ process_equivalence(PlannerInfo *root,
 		/* mark the RI as usable with this pair of EMs */
 		restrictinfo->left_em = em1;
 		restrictinfo->right_em = em2;
+
+		add_eq_source(root, ec, restrictinfo);
 	}
 
 	return true;
@@ -582,6 +594,167 @@ add_eq_member(EquivalenceClass *ec, Expr *expr, Relids relids,
 
 	ec->ec_members = lappend(ec->ec_members, em);
 	return em;
+}
+
+/*
+ * add_eq_source - add 'rinfo' in eq_sources for this 'ec'
+ */
+static void
+add_eq_source(PlannerInfo *root, EquivalenceClass *ec, RestrictInfo *rinfo)
+{
+	int			source_idx = list_length(root->eq_sources);
+	int			i;
+
+	ec->ec_source_indexes = bms_add_member(ec->ec_source_indexes, source_idx);
+	root->eq_sources = lappend(root->eq_sources, rinfo);
+	Assert(rinfo->eq_sources_index == -1);
+	rinfo->eq_sources_index = source_idx;
+
+	i = -1;
+	while ((i = bms_next_member(rinfo->clause_relids, i)) >= 0)
+	{
+		RangeTblEntry *rte = root->simple_rte_array[i];
+
+		rte->eclass_source_indexes = bms_add_member(rte->eclass_source_indexes,
+													source_idx);
+	}
+}
+
+/*
+ * add_eq_derive - add 'rinfo' in eq_derives for this 'ec'
+ */
+static void
+add_eq_derive(PlannerInfo *root, EquivalenceClass *ec, RestrictInfo *rinfo)
+{
+	int			derive_idx = list_length(root->eq_derives);
+	int			i;
+
+	ec->ec_derive_indexes = bms_add_member(ec->ec_derive_indexes, derive_idx);
+	root->eq_derives = lappend(root->eq_derives, rinfo);
+	Assert(rinfo->eq_derives_index == -1);
+	rinfo->eq_derives_index = derive_idx;
+
+	i = -1;
+	while ((i = bms_next_member(rinfo->clause_relids, i)) >= 0)
+	{
+		RangeTblEntry *rte = root->simple_rte_array[i];
+
+		rte->eclass_derive_indexes = bms_add_member(rte->eclass_derive_indexes,
+													derive_idx);
+	}
+}
+
+/*
+ * update_clause_relids
+ *	  Update RestrictInfo->clause_relids with adjusting the relevant indexes.
+ *	  The clause_relids field must be updated through this function, not by
+ *	  setting the field directly.
+ */
+void
+update_clause_relids(PlannerInfo *root, RestrictInfo *rinfo,
+					 Relids new_clause_relids)
+{
+	int			i;
+	Relids		removing_relids;
+	Relids		adding_relids;
+#ifdef USE_ASSERT_CHECKING
+	Relids		common_relids;
+#endif
+
+	/*
+	 * If there is nothing to do, we return immediately after setting the
+	 * clause_relids field.
+	 */
+	if (rinfo->eq_sources_index == -1 && rinfo->eq_derives_index == -1)
+	{
+		rinfo->clause_relids = new_clause_relids;
+		return;
+	}
+
+	/*
+	 * Remove any references between this RestrictInfo and RangeTblEntries
+	 * that are no longer relevant.
+	 */
+	removing_relids = bms_difference(rinfo->clause_relids, new_clause_relids);
+	i = -1;
+	while ((i = bms_next_member(removing_relids, i)) >= 0)
+	{
+		RangeTblEntry *rte = root->simple_rte_array[i];
+
+		if (rinfo->eq_sources_index != -1)
+		{
+			Assert(bms_is_member(rinfo->eq_sources_index,
+								 rte->eclass_source_indexes));
+			rte->eclass_source_indexes =
+				bms_del_member(rte->eclass_source_indexes,
+							   rinfo->eq_sources_index);
+		}
+		if (rinfo->eq_derives_index != -1)
+		{
+			Assert(bms_is_member(rinfo->eq_derives_index,
+								 rte->eclass_derive_indexes));
+			rte->eclass_derive_indexes =
+				bms_del_member(rte->eclass_derive_indexes,
+							   rinfo->eq_derives_index);
+		}
+	}
+	bms_free(removing_relids);
+
+	/*
+	 * Add references between this RestrictInfo and RangeTblEntries that will
+	 * be relevant.
+	 */
+	adding_relids = bms_difference(new_clause_relids, rinfo->clause_relids);
+	i = -1;
+	while ((i = bms_next_member(adding_relids, i)) >= 0)
+	{
+		RangeTblEntry *rte = root->simple_rte_array[i];
+
+		if (rinfo->eq_sources_index != -1)
+		{
+			Assert(!bms_is_member(rinfo->eq_sources_index,
+								  rte->eclass_source_indexes));
+			rte->eclass_source_indexes =
+				bms_add_member(rte->eclass_source_indexes,
+							   rinfo->eq_sources_index);
+		}
+		if (rinfo->eq_derives_index != -1)
+		{
+			Assert(!bms_is_member(rinfo->eq_derives_index,
+								  rte->eclass_derive_indexes));
+			rte->eclass_derive_indexes =
+				bms_add_member(rte->eclass_derive_indexes,
+							   rinfo->eq_derives_index);
+		}
+	}
+	bms_free(adding_relids);
+
+#ifdef USE_ASSERT_CHECKING
+
+	/*
+	 * Verify that all indexes are set for common Relids.
+	 */
+	common_relids = bms_intersect(rinfo->clause_relids, new_clause_relids);
+	i = -1;
+	while ((i = bms_next_member(common_relids, i)) >= 0)
+	{
+		RangeTblEntry *rte = root->simple_rte_array[i];
+
+		if (rinfo->eq_sources_index != -1)
+			Assert(bms_is_member(rinfo->eq_sources_index,
+								 rte->eclass_source_indexes));
+		if (rinfo->eq_derives_index != -1)
+			Assert(bms_is_member(rinfo->eq_derives_index,
+								 rte->eclass_derive_indexes));
+	}
+	bms_free(common_relids);
+#endif
+
+	/*
+	 * Since we have done everything to adjust the indexes, we can set the
+	 * clause_relids field.
+	 */
+	rinfo->clause_relids = new_clause_relids;
 }
 
 
@@ -729,8 +902,8 @@ get_eclass_for_sort_expr(PlannerInfo *root,
 	newec->ec_opfamilies = list_copy(opfamilies);
 	newec->ec_collation = collation;
 	newec->ec_members = NIL;
-	newec->ec_sources = NIL;
-	newec->ec_derives = NIL;
+	newec->ec_source_indexes = NULL;
+	newec->ec_derive_indexes = NULL;
 	newec->ec_relids = NULL;
 	newec->ec_has_const = false;
 	newec->ec_has_volatile = contain_volatile_functions((Node *) expr);
@@ -1108,7 +1281,7 @@ relation_can_be_sorted_early(PlannerInfo *root, RelOptInfo *rel,
  * scanning of the quals and before Path construction begins.
  *
  * We make no attempt to avoid generating duplicate RestrictInfos here: we
- * don't search ec_sources or ec_derives for matches.  It doesn't really
+ * don't search eq_sources or eq_derives for matches.  It doesn't really
  * seem worth the trouble to do so.
  */
 void
@@ -1201,6 +1374,7 @@ generate_base_implied_equalities_const(PlannerInfo *root,
 {
 	EquivalenceMember *const_em = NULL;
 	ListCell   *lc;
+	int			i;
 
 	/*
 	 * In the trivial case where we just had one "var = const" clause, push
@@ -1210,9 +1384,9 @@ generate_base_implied_equalities_const(PlannerInfo *root,
 	 * equivalent to the old one.
 	 */
 	if (list_length(ec->ec_members) == 2 &&
-		list_length(ec->ec_sources) == 1)
+		bms_get_singleton_member(ec->ec_source_indexes, &i))
 	{
-		RestrictInfo *restrictinfo = (RestrictInfo *) linitial(ec->ec_sources);
+		RestrictInfo *restrictinfo = list_nth_node(RestrictInfo, root->eq_sources, i);
 
 		distribute_restrictinfo_to_rels(root, restrictinfo);
 		return;
@@ -1270,9 +1444,9 @@ generate_base_implied_equalities_const(PlannerInfo *root,
 
 		/*
 		 * If the clause didn't degenerate to a constant, fill in the correct
-		 * markings for a mergejoinable clause, and save it in ec_derives. (We
+		 * markings for a mergejoinable clause, and save it in eq_derives. (We
 		 * will not re-use such clauses directly, but selectivity estimation
-		 * may consult the list later.  Note that this use of ec_derives does
+		 * may consult the list later.  Note that this use of eq_derives does
 		 * not overlap with its use for join clauses, since we never generate
 		 * join clauses from an ec_has_const eclass.)
 		 */
@@ -1282,7 +1456,8 @@ generate_base_implied_equalities_const(PlannerInfo *root,
 			rinfo->left_ec = rinfo->right_ec = ec;
 			rinfo->left_em = cur_em;
 			rinfo->right_em = const_em;
-			ec->ec_derives = lappend(ec->ec_derives, rinfo);
+
+			add_eq_derive(root, ec, rinfo);
 		}
 	}
 }
@@ -1348,7 +1523,7 @@ generate_base_implied_equalities_no_const(PlannerInfo *root,
 			/*
 			 * If the clause didn't degenerate to a constant, fill in the
 			 * correct markings for a mergejoinable clause.  We don't put it
-			 * in ec_derives however; we don't currently need to re-find such
+			 * in eq_derives however; we don't currently need to re-find such
 			 * clauses, and we don't want to clutter that list with non-join
 			 * clauses.
 			 */
@@ -1405,11 +1580,12 @@ static void
 generate_base_implied_equalities_broken(PlannerInfo *root,
 										EquivalenceClass *ec)
 {
-	ListCell   *lc;
+	int			i = -1;
 
-	foreach(lc, ec->ec_sources)
+	while ((i = bms_next_member(ec->ec_source_indexes, i)) >= 0)
 	{
-		RestrictInfo *restrictinfo = (RestrictInfo *) lfirst(lc);
+		RestrictInfo *restrictinfo = list_nth_node(RestrictInfo,
+												   root->eq_sources, i);
 
 		if (ec->ec_has_const ||
 			bms_membership(restrictinfo->required_relids) != BMS_MULTIPLE)
@@ -1450,11 +1626,11 @@ generate_base_implied_equalities_broken(PlannerInfo *root,
  * Because the same join clauses are likely to be needed multiple times as
  * we consider different join paths, we avoid generating multiple copies:
  * whenever we select a particular pair of EquivalenceMembers to join,
- * we check to see if the pair matches any original clause (in ec_sources)
- * or previously-built clause (in ec_derives).  This saves memory and allows
- * re-use of information cached in RestrictInfos.  We also avoid generating
- * commutative duplicates, i.e. if the algorithm selects "a.x = b.y" but
- * we already have "b.y = a.x", we return the existing clause.
+ * we check to see if the pair matches any original clause in root's
+ * eq_sources or previously-built clause (in root's eq_derives).  This saves
+ * memory and allows re-use of information cached in RestrictInfos.  We also
+ * avoid generating commutative duplicates, i.e. if the algorithm selects
+ * "a.x = b.y" but we already have "b.y = a.x", we return the existing clause.
  *
  * If we are considering an outer join, sjinfo is the associated OJ info,
  * otherwise it can be NULL.
@@ -1832,12 +2008,16 @@ generate_join_implied_equalities_broken(PlannerInfo *root,
 										Relids nominal_inner_relids,
 										RelOptInfo *inner_rel)
 {
+	Bitmapset  *matching_es;
 	List	   *result = NIL;
-	ListCell   *lc;
+	int			i;
 
-	foreach(lc, ec->ec_sources)
+	matching_es = get_ec_source_indexes(root, ec, nominal_join_relids);
+	i = -1;
+	while ((i = bms_next_member(matching_es, i)) >= 0)
 	{
-		RestrictInfo *restrictinfo = (RestrictInfo *) lfirst(lc);
+		RestrictInfo *restrictinfo = list_nth_node(RestrictInfo,
+												   root->eq_sources, i);
 		Relids		clause_relids = restrictinfo->required_relids;
 
 		if (bms_is_subset(clause_relids, nominal_join_relids) &&
@@ -1849,12 +2029,12 @@ generate_join_implied_equalities_broken(PlannerInfo *root,
 	/*
 	 * If we have to translate, just brute-force apply adjust_appendrel_attrs
 	 * to all the RestrictInfos at once.  This will result in returning
-	 * RestrictInfos that are not listed in ec_derives, but there shouldn't be
+	 * RestrictInfos that are not listed in eq_derives, but there shouldn't be
 	 * any duplication, and it's a sufficiently narrow corner case that we
 	 * shouldn't sweat too much over it anyway.
 	 *
 	 * Since inner_rel might be an indirect descendant of the baserel
-	 * mentioned in the ec_sources clauses, we have to be prepared to apply
+	 * mentioned in the eq_sources clauses, we have to be prepared to apply
 	 * multiple levels of Var translation.
 	 */
 	if (IS_OTHER_REL(inner_rel) && result != NIL)
@@ -1916,10 +2096,11 @@ create_join_clause(PlannerInfo *root,
 				   EquivalenceMember *rightem,
 				   EquivalenceClass *parent_ec)
 {
+	Bitmapset  *matches;
 	RestrictInfo *rinfo;
 	RestrictInfo *parent_rinfo = NULL;
-	ListCell   *lc;
 	MemoryContext oldcontext;
+	int			i;
 
 	/*
 	 * Search to see if we already built a RestrictInfo for this pair of
@@ -1930,9 +2111,12 @@ create_join_clause(PlannerInfo *root,
 	 * it's not identical, it'd better have the same effects, or the operator
 	 * families we're using are broken.
 	 */
-	foreach(lc, ec->ec_sources)
+	matches = bms_int_members(get_ec_source_indexes_strict(root, ec, leftem->em_relids),
+							  get_ec_source_indexes_strict(root, ec, rightem->em_relids));
+	i = -1;
+	while ((i = bms_next_member(matches, i)) >= 0)
 	{
-		rinfo = (RestrictInfo *) lfirst(lc);
+		rinfo = list_nth_node(RestrictInfo, root->eq_sources, i);
 		if (rinfo->left_em == leftem &&
 			rinfo->right_em == rightem &&
 			rinfo->parent_ec == parent_ec)
@@ -1943,9 +2127,13 @@ create_join_clause(PlannerInfo *root,
 			return rinfo;
 	}
 
-	foreach(lc, ec->ec_derives)
+	matches = bms_int_members(get_ec_derive_indexes_strict(root, ec, leftem->em_relids),
+							  get_ec_derive_indexes_strict(root, ec, rightem->em_relids));
+
+	i = -1;
+	while ((i = bms_next_member(matches, i)) >= 0)
 	{
-		rinfo = (RestrictInfo *) lfirst(lc);
+		rinfo = list_nth_node(RestrictInfo, root->eq_derives, i);
 		if (rinfo->left_em == leftem &&
 			rinfo->right_em == rightem &&
 			rinfo->parent_ec == parent_ec)
@@ -2018,7 +2206,7 @@ create_join_clause(PlannerInfo *root,
 	rinfo->left_em = leftem;
 	rinfo->right_em = rightem;
 	/* and save it for possible re-use */
-	ec->ec_derives = lappend(ec->ec_derives, rinfo);
+	add_eq_derive(root, ec, rinfo);
 
 	MemoryContextSwitchTo(oldcontext);
 
@@ -2744,16 +2932,19 @@ match_eclasses_to_foreign_key_col(PlannerInfo *root,
  * Returns NULL if no such clause can be found.
  */
 RestrictInfo *
-find_derived_clause_for_ec_member(EquivalenceClass *ec,
+find_derived_clause_for_ec_member(PlannerInfo *root, EquivalenceClass *ec,
 								  EquivalenceMember *em)
 {
-	ListCell   *lc;
+	int			i;
 
 	Assert(ec->ec_has_const);
 	Assert(!em->em_is_const);
-	foreach(lc, ec->ec_derives)
+
+	i = -1;
+	while ((i = bms_next_member(ec->ec_derive_indexes, i)) >= 0)
 	{
-		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+		RestrictInfo *rinfo = list_nth_node(RestrictInfo, root->eq_derives,
+											i);
 
 		/*
 		 * generate_base_implied_equalities_const will have put non-const
@@ -3467,7 +3658,7 @@ have_relevant_eclass_joinclause(PlannerInfo *root,
 		 * surely be true if both of them overlap ec_relids.)
 		 *
 		 * Note we don't test ec_broken; if we did, we'd need a separate code
-		 * path to look through ec_sources.  Checking the membership anyway is
+		 * path to look through eq_sources.  Checking the membership anyway is
 		 * OK as a possibly-overoptimistic heuristic.
 		 *
 		 * We don't test ec_has_const either, even though a const eclass won't
@@ -3555,7 +3746,7 @@ eclass_useful_for_merging(PlannerInfo *root,
 
 	/*
 	 * Note we don't test ec_broken; if we did, we'd need a separate code path
-	 * to look through ec_sources.  Checking the members anyway is OK as a
+	 * to look through eq_sources.  Checking the members anyway is OK as a
 	 * possibly-overoptimistic heuristic.
 	 */
 
@@ -3712,3 +3903,240 @@ get_common_eclass_indexes(PlannerInfo *root, Relids relids1, Relids relids2)
 	/* Calculate and return the common EC indexes, recycling the left input. */
 	return bms_int_members(rel1ecs, rel2ecs);
 }
+
+/*
+ * get_ec_source_indexes
+ *		Returns a Bitmapset with indexes into root->eq_sources for all
+ *		RestrictInfos in 'ec' that have
+ *		bms_overlap(relids, rinfo->clause_relids) as true.
+ *
+ * Returns a newly allocated Bitmapset which the caller is free to modify.
+ */
+Bitmapset *
+get_ec_source_indexes(PlannerInfo *root, EquivalenceClass *ec, Relids relids)
+{
+	Bitmapset  *rel_esis = NULL;
+	int			i = -1;
+
+	while ((i = bms_next_member(relids, i)) >= 0)
+	{
+		RangeTblEntry *rte = root->simple_rte_array[i];
+
+		rel_esis = bms_add_members(rel_esis, rte->eclass_source_indexes);
+	}
+
+#ifdef USE_ASSERT_CHECKING
+	/* verify the results look sane */
+	i = -1;
+	while ((i = bms_next_member(rel_esis, i)) >= 0)
+	{
+		RestrictInfo *rinfo = list_nth_node(RestrictInfo, root->eq_sources,
+											i);
+
+		Assert(bms_overlap(relids, rinfo->clause_relids));
+	}
+#endif
+
+	/* bitwise-AND to leave only the ones for this EquivalenceClass */
+	return bms_int_members(rel_esis, ec->ec_source_indexes);
+}
+
+/*
+ * get_ec_source_indexes_strict
+ *		Returns a Bitmapset with indexes into root->eq_sources for all
+ *		RestrictInfos in 'ec' that have
+ *		bms_is_subset(relids, rinfo->clause_relids) as true.
+ *
+ * Returns a newly allocated Bitmapset which the caller is free to modify.
+ */
+Bitmapset *
+get_ec_source_indexes_strict(PlannerInfo *root, EquivalenceClass *ec,
+							 Relids relids)
+{
+	Bitmapset  *esis = NULL;
+	int			i = bms_next_member(relids, -1);
+
+	if (i >= 0)
+	{
+		RangeTblEntry *rte = root->simple_rte_array[i];
+
+		/*
+		 * bms_intersect to the first relation to try to keep the resulting
+		 * Bitmapset as small as possible.  This saves having to make a
+		 * complete bms_copy() of one of them.  One may contain significantly
+		 * more words than the other.
+		 */
+		esis = bms_intersect(ec->ec_source_indexes,
+							 rte->eclass_source_indexes);
+
+		while ((i = bms_next_member(relids, i)) >= 0)
+		{
+			rte = root->simple_rte_array[i];
+			esis = bms_int_members(esis, rte->eclass_source_indexes);
+		}
+	}
+
+#ifdef USE_ASSERT_CHECKING
+	/* verify the results look sane */
+	i = -1;
+	while ((i = bms_next_member(esis, i)) >= 0)
+	{
+		RestrictInfo *rinfo = list_nth_node(RestrictInfo, root->eq_sources,
+											i);
+
+		Assert(bms_is_subset(relids, rinfo->clause_relids));
+	}
+#endif
+
+	return esis;
+}
+
+/*
+ * get_ec_derive_indexes
+ *		Returns a Bitmapset with indexes into root->eq_derives for all
+ *		RestrictInfos in 'ec' that have
+ *		bms_overlap(relids, rinfo->clause_relids) as true.
+ *
+ * Returns a newly allocated Bitmapset which the caller is free to modify.
+ *
+ * XXX is this function even needed?
+ */
+Bitmapset *
+get_ec_derive_indexes(PlannerInfo *root, EquivalenceClass *ec, Relids relids)
+{
+	Bitmapset  *rel_edis = NULL;
+	int			i = -1;
+
+	while ((i = bms_next_member(relids, i)) >= 0)
+	{
+		RangeTblEntry *rte = root->simple_rte_array[i];
+
+		rel_edis = bms_add_members(rel_edis, rte->eclass_derive_indexes);
+	}
+
+#ifdef USE_ASSERT_CHECKING
+	/* verify the results look sane */
+	i = -1;
+	while ((i = bms_next_member(rel_edis, i)) >= 0)
+	{
+		RestrictInfo *rinfo = list_nth_node(RestrictInfo, root->eq_derives,
+											i);
+
+		Assert(bms_overlap(relids, rinfo->clause_relids));
+	}
+#endif
+
+	/* bitwise-AND to leave only the ones for this EquivalenceClass */
+	return bms_int_members(rel_edis, ec->ec_derive_indexes);
+}
+
+/*
+ * get_ec_derive_indexes_strict
+ *		Returns a Bitmapset with indexes into root->eq_derives for all
+ *		RestrictInfos in 'ec' that have
+ *		bms_is_subset(relids, rinfo->clause_relids) as true.
+ *
+ * Returns a newly allocated Bitmapset which the caller is free to modify.
+ */
+Bitmapset *
+get_ec_derive_indexes_strict(PlannerInfo *root, EquivalenceClass *ec,
+							 Relids relids)
+{
+	Bitmapset  *edis = NULL;
+	int			i = bms_next_member(relids, -1);
+
+	if (i >= 0)
+	{
+		RangeTblEntry *rte = root->simple_rte_array[i];
+
+		/*
+		 * bms_intersect to the first relation to try to keep the resulting
+		 * Bitmapset as small as possible.  This saves having to make a
+		 * complete bms_copy() of one of them.  One may contain significantly
+		 * more words than the other.
+		 */
+		edis = bms_intersect(ec->ec_derive_indexes,
+							 rte->eclass_derive_indexes);
+
+		while ((i = bms_next_member(relids, i)) >= 0)
+		{
+			rte = root->simple_rte_array[i];
+			edis = bms_int_members(edis, rte->eclass_derive_indexes);
+		}
+	}
+
+#ifdef USE_ASSERT_CHECKING
+	/* verify the results look sane */
+	i = -1;
+	while ((i = bms_next_member(edis, i)) >= 0)
+	{
+		RestrictInfo *rinfo = list_nth_node(RestrictInfo, root->eq_derives,
+											i);
+
+		Assert(bms_is_subset(relids, rinfo->clause_relids));
+	}
+#endif
+
+	return edis;
+}
+
+#ifdef USE_ASSERT_CHECKING
+/*
+ * verify_eclass_indexes
+ *		Verify that there are no missing references between RestrictInfos and
+ *		EquivalenceMember's indexes, namely eclass_source_indexes and
+ *		eclass_derive_indexes. If you modify these indexes, you should check
+ *		them with this function.
+ */
+void
+verify_eclass_indexes(PlannerInfo *root, EquivalenceClass *ec)
+{
+	ListCell   *lc;
+
+	/*
+	 * All RestrictInfos in root->eq_sources must have references to
+	 * eclass_source_indexes.
+	 */
+	foreach(lc, root->eq_sources)
+	{
+		RestrictInfo *rinfo = lfirst_node(RestrictInfo, lc);
+		int			index;
+		int			k;
+
+		/* Deleted members are marked NULL */
+		if (rinfo == NULL)
+			continue;
+
+		index = list_cell_number(root->eq_sources, lc);
+		k = -1;
+		while ((k = bms_next_member(rinfo->clause_relids, k)) >= 0)
+		{
+			/* must have a reference */
+			Assert(bms_is_member(index, root->simple_rte_array[k]->eclass_source_indexes));
+		}
+	}
+
+	/*
+	 * All RestrictInfos in root->eq_derives must have references to
+	 * eclass_derive_indexes.
+	 */
+	foreach(lc, root->eq_derives)
+	{
+		RestrictInfo *rinfo = lfirst_node(RestrictInfo, lc);
+		int			index;
+		int			k;
+
+		/* Deleted members are marked NULL */
+		if (rinfo == NULL)
+			continue;
+
+		index = list_cell_number(root->eq_derives, lc);
+		k = -1;
+		while ((k = bms_next_member(rinfo->clause_relids, k)) >= 0)
+		{
+			/* must have a reference */
+			Assert(bms_is_member(index, root->simple_rte_array[k]->eclass_derive_indexes));
+		}
+	}
+}
+#endif

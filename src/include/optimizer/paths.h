@@ -129,6 +129,8 @@ extern Expr *canonicalize_ec_expression(Expr *expr,
 										Oid req_type, Oid req_collation);
 extern void reconsider_outer_join_clauses(PlannerInfo *root);
 extern void rebuild_eclass_attr_needed(PlannerInfo *root);
+extern void update_clause_relids(PlannerInfo *root, RestrictInfo *rinfo,
+								 Relids new_clause_relids);
 extern EquivalenceClass *get_eclass_for_sort_expr(PlannerInfo *root,
 												  Expr *expr,
 												  List *opfamilies,
@@ -165,7 +167,8 @@ extern bool exprs_known_equal(PlannerInfo *root, Node *item1, Node *item2,
 extern EquivalenceClass *match_eclasses_to_foreign_key_col(PlannerInfo *root,
 														   ForeignKeyOptInfo *fkinfo,
 														   int colno);
-extern RestrictInfo *find_derived_clause_for_ec_member(EquivalenceClass *ec,
+extern RestrictInfo *find_derived_clause_for_ec_member(PlannerInfo *root,
+													   EquivalenceClass *ec,
 													   EquivalenceMember *em);
 extern void add_child_rel_equivalences(PlannerInfo *root,
 									   AppendRelInfo *appinfo,
@@ -204,6 +207,22 @@ extern bool eclass_useful_for_merging(PlannerInfo *root,
 extern bool is_redundant_derived_clause(RestrictInfo *rinfo, List *clauselist);
 extern bool is_redundant_with_indexclauses(RestrictInfo *rinfo,
 										   List *indexclauses);
+extern Bitmapset *get_ec_source_indexes(PlannerInfo *root,
+										EquivalenceClass *ec,
+										Relids relids);
+extern Bitmapset *get_ec_source_indexes_strict(PlannerInfo *root,
+											   EquivalenceClass *ec,
+											   Relids relids);
+extern Bitmapset *get_ec_derive_indexes(PlannerInfo *root,
+										EquivalenceClass *ec,
+										Relids relids);
+extern Bitmapset *get_ec_derive_indexes_strict(PlannerInfo *root,
+											   EquivalenceClass *ec,
+											   Relids relids);
+#ifdef USE_ASSERT_CHECKING
+extern void verify_eclass_indexes(PlannerInfo *root,
+								  EquivalenceClass *ec);
+#endif
 
 /*
  * pathkeys.c

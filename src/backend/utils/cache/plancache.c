@@ -227,7 +227,6 @@ CreateCachedPlan(RawStmt *raw_parse_tree,
 	plansource->parserSetup = NULL;
 	plansource->parserSetupArg = NULL;
 	plansource->cursor_options = 0;
-	plansource->fixed_result = false;
 	plansource->resultDesc = NULL;
 	plansource->context = source_context;
 	plansource->query_list = NIL;
@@ -295,7 +294,6 @@ CreateOneShotCachedPlan(RawStmt *raw_parse_tree,
 	plansource->parserSetup = NULL;
 	plansource->parserSetupArg = NULL;
 	plansource->cursor_options = 0;
-	plansource->fixed_result = false;
 	plansource->resultDesc = NULL;
 	plansource->context = CurrentMemoryContext;
 	plansource->query_list = NIL;
@@ -360,7 +358,6 @@ CreateOneShotCachedPlan(RawStmt *raw_parse_tree,
  * parserSetup: alternate method for handling query parameters
  * parserSetupArg: data to pass to parserSetup
  * cursor_options: options bitmask to pass to planner
- * fixed_result: true to disallow future changes in query's result tupdesc
  */
 void
 CompleteCachedPlan(CachedPlanSource *plansource,
@@ -370,8 +367,7 @@ CompleteCachedPlan(CachedPlanSource *plansource,
 				   int num_params,
 				   ParserSetupHook parserSetup,
 				   void *parserSetupArg,
-				   int cursor_options,
-				   bool fixed_result)
+				   int cursor_options)
 {
 	MemoryContext source_context = plansource->context;
 	MemoryContext oldcxt = CurrentMemoryContext;
@@ -454,7 +450,6 @@ CompleteCachedPlan(CachedPlanSource *plansource,
 	plansource->parserSetup = parserSetup;
 	plansource->parserSetupArg = parserSetupArg;
 	plansource->cursor_options = cursor_options;
-	plansource->fixed_result = fixed_result;
 	plansource->resultDesc = PlanCacheComputeResultDesc(querytree_list);
 
 	MemoryContextSwitchTo(oldcxt);
@@ -1570,7 +1565,6 @@ CopyCachedPlan(CachedPlanSource *plansource)
 	newsource->parserSetup = plansource->parserSetup;
 	newsource->parserSetupArg = plansource->parserSetupArg;
 	newsource->cursor_options = plansource->cursor_options;
-	newsource->fixed_result = plansource->fixed_result;
 	if (plansource->resultDesc)
 		newsource->resultDesc = CreateTupleDescCopy(plansource->resultDesc);
 	else

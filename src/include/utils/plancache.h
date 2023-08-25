@@ -104,7 +104,6 @@ typedef struct CachedPlanSource
 	ParserSetupHook parserSetup;	/* alternative parameter spec method */
 	void	   *parserSetupArg;
 	int			cursor_options; /* cursor options used for planning */
-	bool		fixed_result;	/* disallow change in result tupdesc? */
 	TupleDesc	resultDesc;		/* result type; NULL = doesn't return tuples */
 	MemoryContext context;		/* memory context holding all above */
 	/* These fields describe the current analyzed-and-rewritten query tree: */
@@ -203,8 +202,7 @@ extern void CompleteCachedPlan(CachedPlanSource *plansource,
 							   int num_params,
 							   ParserSetupHook parserSetup,
 							   void *parserSetupArg,
-							   int cursor_options,
-							   bool fixed_result);
+							   int cursor_options);
 
 extern void SaveCachedPlan(CachedPlanSource *plansource);
 extern void DropCachedPlan(CachedPlanSource *plansource);

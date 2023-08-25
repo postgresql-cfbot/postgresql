@@ -137,7 +137,8 @@ extern EquivalenceClass *get_eclass_for_sort_expr(PlannerInfo *root,
 												  Index sortref,
 												  Relids rel,
 												  bool create_it);
-extern EquivalenceMember *find_ec_member_matching_expr(EquivalenceClass *ec,
+extern EquivalenceMember *find_ec_member_matching_expr(PlannerInfo *root,
+													   EquivalenceClass *ec,
 													   Expr *expr,
 													   Relids relids);
 extern EquivalenceMember *find_computable_ec_member(PlannerInfo *root,
@@ -179,6 +180,15 @@ extern void add_setop_child_rel_equivalences(PlannerInfo *root,
 											 RelOptInfo *child_rel,
 											 List *child_tlist,
 											 List *setop_pathkeys);
+extern void setup_eclass_child_member_iterator(EquivalenceChildMemberIterator *it,
+											   EquivalenceClass *ec);
+extern EquivalenceMember *eclass_child_member_iterator_next(EquivalenceChildMemberIterator *it);
+extern void dispose_eclass_child_member_iterator(EquivalenceChildMemberIterator *it);
+extern void iterate_child_rel_equivalences(EquivalenceChildMemberIterator *it,
+										   PlannerInfo *root,
+										   EquivalenceClass *ec,
+										   EquivalenceMember *parent_em,
+										   Relids child_relids);
 extern List *generate_implied_equalities_for_column(PlannerInfo *root,
 													RelOptInfo *rel,
 													ec_matches_callback_type callback,

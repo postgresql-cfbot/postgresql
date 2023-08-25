@@ -1247,6 +1247,12 @@ typedef struct RangeTblEntry
 	bool		inFromCl pg_node_attr(query_jumble_ignore);
 	/* security barrier quals to apply, if any */
 	List	   *securityQuals pg_node_attr(query_jumble_ignore);
+	Bitmapset  *eclass_source_indexes;	/* Indexes in PlannerInfo's eq_sources
+										 * list for RestrictInfos that mention
+										 * this relation */
+	Bitmapset  *eclass_derive_indexes;	/* Indexes in PlannerInfo's eq_derives
+										 * list for RestrictInfos that mention
+										 * this relation */
 } RangeTblEntry;
 
 /*

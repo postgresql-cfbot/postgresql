@@ -3278,6 +3278,7 @@ DecodeInterval(char **field, int *ftype, int nf, int range,
 {
 	bool		force_negative = false;
 	bool		is_before = false;
+	bool		parsing_unit_val = false;
 	char	   *cp;
 	int			fmask = 0,
 				tmask,
@@ -3336,6 +3337,7 @@ DecodeInterval(char **field, int *ftype, int nf, int range,
 					itm_in->tm_usec > 0)
 					itm_in->tm_usec = -itm_in->tm_usec;
 				type = DTK_DAY;
+				parsing_unit_val = false;
 				break;
 
 			case DTK_TZ:
@@ -3373,6 +3375,7 @@ DecodeInterval(char **field, int *ftype, int nf, int range,
 					 * are reading right to left.
 					 */
 					type = DTK_DAY;
+					parsing_unit_val = false;
 					break;
 				}
 
@@ -3562,10 +3565,14 @@ DecodeInterval(char **field, int *ftype, int nf, int range,
 					default:
 						return DTERR_BAD_FORMAT;
 				}
+				parsing_unit_val = false;
 				break;
 
 			case DTK_STRING:
 			case DTK_SPECIAL:
+				/* reject consecutive unhandled units */
+				if (parsing_unit_val)
+					return DTERR_BAD_FORMAT;
 				type = DecodeUnits(i, field[i], &uval);
 				if (type == IGNORE_DTF)
 					continue;
@@ -3575,16 +3582,18 @@ DecodeInterval(char **field, int *ftype, int nf, int range,
 				{
 					case UNITS:
 						type = uval;
+						parsing_unit_val = true;
 						break;
 
 					case AGO:
+						/*
+						 * 'ago' is only allowed to appear at the end of the
+						 * interval.
+						 */
+						if (i != nf - 1)
+							return DTERR_BAD_FORMAT;
 						is_before = true;
 						type = uval;
-						break;
-
-					case RESERV:
-						tmask = (DTK_DATE_M | DTK_TIME_M);
-						*dtype = uval;
 						break;
 
 					default:
@@ -3603,6 +3612,10 @@ DecodeInterval(char **field, int *ftype, int nf, int range,
 
 	/* ensure that at least one time field has been found */
 	if (fmask == 0)
+		return DTERR_BAD_FORMAT;
+
+	/* reject if unit appeared and was never handled */
+	if (parsing_unit_val)
 		return DTERR_BAD_FORMAT;
 
 	/* finally, AGO negates everything */

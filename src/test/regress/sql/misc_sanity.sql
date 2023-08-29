@@ -38,11 +38,11 @@ WHERE refclassid = 0 OR refobjid = 0 OR
 -- Look for system tables with varlena columns but no toast table. All
 -- system tables with toastable columns should have toast tables, with
 -- the following exceptions:
--- 1. pg_class, pg_attribute, and pg_index, due to fear of recursive
--- dependencies as toast tables depend on them.
--- 2. pg_largeobject and pg_largeobject_metadata.  Large object catalogs
--- and toast tables are mutually exclusive and large object data is handled
--- as user data by pg_upgrade, which would cause failures.
+-- 1. pg_index.
+-- 2. pg_largeobject.
+-- These and some other tables were excluded in PostgreSQL for various reasons,
+-- but in Postgres Pro Enterprise we added toast tables for system tables with
+-- ACL columns.
 
 SELECT relname, attname, atttypid::regtype
 FROM pg_class c JOIN pg_attribute a ON c.oid = attrelid

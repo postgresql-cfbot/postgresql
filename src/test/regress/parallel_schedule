@@ -132,3 +132,6 @@ test: fast_default
 # run tablespace test at the end because it drops the tablespace created during
 # setup that other tests may use.
 test: tablespace
+
+#check for "invalig tupple length" error when creating index with toasted pg_class
+test: pg_catalog_toast1

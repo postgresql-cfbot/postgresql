@@ -238,6 +238,8 @@ contain_invalid_rfcolumn_walker(Node *node, rf_context *context)
 		 * parent table, but the bitmap contains the replica identity
 		 * information of the child table. So, get the column number of the
 		 * child table as parent and child column order could be different.
+		 *
+		 * TODO: is this applicable to publish_via_parent?
 		 */
 		if (context->pubviaroot)
 		{
@@ -286,6 +288,8 @@ pub_rf_contains_invalid_column(Oid pubid, Relation relation, List *ancestors,
 	 *
 	 * Note that even though the row filter used is for an ancestor, the
 	 * REPLICA IDENTITY used will be for the actual child table.
+	 *
+	 * TODO: is this applicable to publish_via_parent?
 	 */
 	if (pubviaroot && relation->rd_rel->relispartition)
 	{
@@ -336,6 +340,8 @@ pub_rf_contains_invalid_column(Oid pubid, Relation relation, List *ancestors,
  * the column list.
  *
  * Returns true if any replica identity column is not covered by column list.
+ *
+ * TODO: publish_via_parent?
  */
 bool
 pub_collist_contains_invalid_column(Oid pubid, Relation relation, List *ancestors,
@@ -628,6 +634,8 @@ TransformPubWhereClauses(List *tables, const char *queryString,
 		 * If the publication doesn't publish changes via the root partitioned
 		 * table, the partition's row filter will be used. So disallow using
 		 * WHERE clause on partitioned table in this case.
+		 *
+		 * TODO: decide how this interacts with publish_via_parent
 		 */
 		if (!pubviaroot &&
 			pri->relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
@@ -715,6 +723,8 @@ CheckPubRelationColumnList(char *pubname, List *tables,
 		 * If the publication doesn't publish changes via the root partitioned
 		 * table, the partition's column list will be used. So disallow using
 		 * a column list on the partitioned table in this case.
+		 *
+		 * TODO: decide if this interacts with publish_via_parent
 		 */
 		if (!pubviaroot &&
 			pri->relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)

@@ -155,4 +155,8 @@ extern ObjectAddress publication_add_schema(Oid pubid, Oid schemaid,
 extern Bitmapset *pub_collist_to_bitmapset(Bitmapset *columns, Datum pubcols,
 										   MemoryContext mcxt);
 
+extern List *process_relation_publications(Oid relid, const List *publications,
+										   PublicationActions *pubactions,
+										   Oid *publish_as_relid);
+
 #endif							/* PG_PUBLICATION_H */

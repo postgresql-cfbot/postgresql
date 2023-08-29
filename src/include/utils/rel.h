@@ -339,6 +339,7 @@ typedef struct StdRdOptions
 	int			toast_tuple_target; /* target for tuple toasting */
 	AutoVacOpts autovacuum;		/* autovacuum-related options */
 	bool		user_catalog_table; /* use as an additional catalog relation */
+	bool		publish_via_parent; /* publish via parent's relid for logrep */
 	int			parallel_workers;	/* max number of parallel workers */
 	StdRdOptIndexCleanup vacuum_index_cleanup;	/* controls index vacuuming */
 	bool		vacuum_truncate;	/* enables vacuum to truncate a relation */
@@ -387,6 +388,17 @@ typedef struct StdRdOptions
 	 ((relation)->rd_rel->relkind == RELKIND_RELATION || \
 	  (relation)->rd_rel->relkind == RELKIND_MATVIEW) ? \
 	 ((StdRdOptions *) (relation)->rd_options)->user_catalog_table : false)
+
+/*
+ * RelationIsPublishedViaParent
+ *		Returns whether the relation's contents should be logically replicated
+ *		via its parent table's relid, when published under the effects of
+ *		publish_via_partition_root.  Note multiple eval of argument!
+ */
+#define RelationIsPublishedViaParent(relation)	\
+	((relation)->rd_options && \
+	 ((relation)->rd_rel->relkind == RELKIND_RELATION) && \
+	 ((StdRdOptions *) (relation)->rd_options)->publish_via_parent)
 
 /*
  * RelationGetParallelWorkers

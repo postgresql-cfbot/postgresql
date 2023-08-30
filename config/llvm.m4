@@ -75,6 +75,7 @@ AC_DEFUN([PGAC_LLVM_SUPPORT],
       engine) pgac_components="$pgac_components $pgac_component";;
       debuginfodwarf) pgac_components="$pgac_components $pgac_component";;
       orcjit) pgac_components="$pgac_components $pgac_component";;
+      jitlink) pgac_components="$pgac_components $pgac_component";;
       passes) pgac_components="$pgac_components $pgac_component";;
       native) pgac_components="$pgac_components $pgac_component";;
       perfjitevents) pgac_components="$pgac_components $pgac_component";;

@@ -27,6 +27,10 @@ extern "C"
 #include <llvm/Support/Host.h>
 
 #include "jit/llvmjit.h"
+#ifdef USE_JITLINK
+#include "llvm/ExecutionEngine/JITLink/EHFrameSupport.h"
+#include "llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h"
+#endif
 
 
 /*
@@ -47,6 +51,21 @@ char *LLVMGetHostCPUFeatures(void) {
 	if (llvm::sys::getHostCPUFeatures(HostFeatures))
 		for (auto &F : HostFeatures)
 			Features.AddFeature(F.first(), F.second);
+
+#if defined(__riscv)
+	/* getHostCPUName returns "generic-rv[32|64]", which lacks all features
+	 * except extension 'i'
+	 * Assume running machine support 'rv64imafdc' ('rv64gc') because it is
+	 * the recommended and most common basic set of extensions for running
+	 * linux capable machines.
+	 */
+	Features.AddFeature("m", true);
+	Features.AddFeature("a", true);
+	Features.AddFeature("c", true);
+	Features.AddFeature("f", true);
+	Features.AddFeature("d", true);
+# endif
+#endif
 
 	return strdup(Features.getString().c_str());
 }
@@ -76,3 +95,21 @@ LLVMGetAttributeCountAtIndexPG(LLVMValueRef F, uint32 Idx)
 	 */
 	return LLVMGetAttributeCountAtIndex(F, Idx);
 }
+
+#ifdef USE_JITLINK
+/*
+ * There is no public C API to create ObjectLinkingLayer for JITLINK, create our own
+ */
+DEFINE_SIMPLE_CONVERSION_FUNCTIONS(llvm::orc::ExecutionSession, LLVMOrcExecutionSessionRef)
+DEFINE_SIMPLE_CONVERSION_FUNCTIONS(llvm::orc::ObjectLayer, LLVMOrcObjectLayerRef)
+
+LLVMOrcObjectLayerRef
+LLVMOrcCreateJitlinkObjectLinkingLayer(LLVMOrcExecutionSessionRef ES)
+{
+	Assert(ES);
+	auto ObjLinkingLayer = new llvm::orc::ObjectLinkingLayer(*unwrap(ES));
+	ObjLinkingLayer->addPlugin(std::make_unique<llvm::orc::EHFrameRegistrationPlugin>(
+		*unwrap(ES), std::make_unique<llvm::jitlink::InProcessEHFrameRegistrar>()));
+	return wrap(ObjLinkingLayer);
+}
+#endif

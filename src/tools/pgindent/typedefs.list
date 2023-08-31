@@ -2661,6 +2661,7 @@ SubqueryScan
 SubqueryScanPath
 SubqueryScanState
 SubqueryScanStatus
+SubRelInfo
 SubscriptExecSetup
 SubscriptExecSteps
 SubscriptRoutines

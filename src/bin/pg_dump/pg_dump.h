@@ -654,6 +654,16 @@ typedef struct _PublicationSchemaInfo
 } PublicationSchemaInfo;
 
 /*
+ * The SubRelInfo struct is used to represent a subscription relation.
+ */
+typedef struct _SubRelInfo
+{
+	Oid			srrelid;
+	char		srsubstate;
+	char	   *srsublsn;
+} SubRelInfo;
+
+/*
  * The SubscriptionInfo struct is used to represent subscription.
  */
 typedef struct _SubscriptionInfo
@@ -670,6 +680,9 @@ typedef struct _SubscriptionInfo
 	char	   *subsynccommit;
 	char	   *subpublications;
 	char	   *subpasswordrequired;
+	char	   *suboriginremotelsn;
+	int			nrels;
+	SubRelInfo *subrels;
 } SubscriptionInfo;
 
 /*
@@ -696,6 +709,7 @@ extern CollInfo *findCollationByOid(Oid oid);
 extern NamespaceInfo *findNamespaceByOid(Oid oid);
 extern ExtensionInfo *findExtensionByOid(Oid oid);
 extern PublicationInfo *findPublicationByOid(Oid oid);
+extern SubscriptionInfo *findSubscriptionByOid(Oid oid);
 
 extern void recordExtensionMembership(CatalogId catId, ExtensionInfo *ext);
 extern ExtensionInfo *findOwningExtension(CatalogId catalogId);
@@ -755,5 +769,6 @@ extern void getPublicationNamespaces(Archive *fout);
 extern void getPublicationTables(Archive *fout, TableInfo tblinfo[],
 								 int numTables);
 extern void getSubscriptions(Archive *fout);
+extern void getSubscriptionTables(Archive *fout);
 
 #endif							/* PG_DUMP_H */

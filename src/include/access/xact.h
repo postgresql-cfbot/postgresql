@@ -65,6 +65,12 @@ extern PGDLLIMPORT bool xact_is_sampled;
 extern PGDLLIMPORT bool DefaultXactDeferrable;
 extern PGDLLIMPORT bool XactDeferrable;
 
+/*
+ * Xact is committable
+ */
+extern PGDLLIMPORT bool DefaultXactCommittable;
+extern PGDLLIMPORT bool XactCommittable;
+
 typedef enum
 {
 	SYNCHRONOUS_COMMIT_OFF,		/* asynchronous commit */
@@ -154,6 +160,7 @@ typedef struct SavedTransactionCharacteristics
 	int			save_XactIsoLevel;
 	bool		save_XactReadOnly;
 	bool		save_XactDeferrable;
+	bool		save_XactCommittable;
 } SavedTransactionCharacteristics;
 
 

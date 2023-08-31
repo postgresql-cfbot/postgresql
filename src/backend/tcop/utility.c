@@ -620,16 +620,16 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 
 								if (strcmp(item->defname, "transaction_isolation") == 0)
 									SetPGVariable("transaction_isolation",
-												  list_make1(item->arg),
-												  true);
+												  list_make1(item->arg), true);
 								else if (strcmp(item->defname, "transaction_read_only") == 0)
 									SetPGVariable("transaction_read_only",
-												  list_make1(item->arg),
-												  true);
+												  list_make1(item->arg), true);
 								else if (strcmp(item->defname, "transaction_deferrable") == 0)
 									SetPGVariable("transaction_deferrable",
-												  list_make1(item->arg),
-												  true);
+												  list_make1(item->arg), true);
+								else if (strcmp(item->defname, "transaction_committable") == 0)
+									SetPGVariable("transaction_committable",
+												  list_make1(item->arg), true);
 							}
 						}
 						break;

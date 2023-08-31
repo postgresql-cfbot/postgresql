@@ -636,6 +636,26 @@ check_transaction_deferrable(bool *newval, void **extra, GucSource source)
 }
 
 /*
+ * SET TRANSACTION [NOT] COMMITTABLE
+ */
+
+bool
+check_transaction_committable(bool *newval, void **extra, GucSource source)
+{
+	/*
+	 * If a transaction has been marked uncommittable, it cannot be marked as
+	 * committable.
+	 *
+	 * TODO: Should we emit a warning here, notifying the user as to why their
+	 * attempt to set transaction_committable = true was rejected?
+	 */
+	if (XactCommittable == false && *newval == true)
+		return false;
+
+	return true;
+}
+
+/*
  * Random number seed
  *
  * We can't roll back the random sequence on error, and we don't want

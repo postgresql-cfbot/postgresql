@@ -1585,6 +1585,25 @@ struct config_bool ConfigureNamesBool[] =
 		check_transaction_deferrable, NULL, NULL
 	},
 	{
+		{"default_transaction_committable", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Sets the default committable status of new transactions."),
+			NULL
+		},
+		&DefaultXactCommittable,
+		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"transaction_committable", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Whether to allow committing a transaction."),
+			NULL,
+			GUC_NO_RESET | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+		},
+		&XactCommittable,
+		true,
+		check_transaction_committable, NULL, NULL
+	},
+	{
 		{"row_security", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Enable row security."),
 			gettext_noop("When enabled, row security will be applied to all users.")

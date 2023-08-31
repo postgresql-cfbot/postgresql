@@ -84,6 +84,9 @@ bool		XactReadOnly;
 bool		DefaultXactDeferrable = false;
 bool		XactDeferrable;
 
+bool		DefaultXactCommittable = true;
+bool		XactCommittable = true;
+
 int			synchronous_commit = SYNCHRONOUS_COMMIT_ON;
 
 /*
@@ -222,6 +225,7 @@ typedef struct SerializedTransactionState
 {
 	int			xactIsoLevel;
 	bool		xactDeferrable;
+	bool		xactCommittable;
 	FullTransactionId topFullTransactionId;
 	FullTransactionId currentFullTransactionId;
 	CommandId	currentCommandId;
@@ -2059,6 +2063,7 @@ StartTransaction(void)
 		XactReadOnly = DefaultXactReadOnly;
 	}
 	XactDeferrable = DefaultXactDeferrable;
+	XactCommittable = DefaultXactCommittable;
 	XactIsoLevel = DefaultXactIsoLevel;
 	forceSyncCommit = false;
 	MyXactFlags = 0;
@@ -3004,7 +3009,7 @@ StartTransactionCommand(void)
 
 /*
  * Simple system for saving and restoring transaction characteristics
- * (isolation level, read only, deferrable).  We need this for transaction
+ * (isolation level, read only, deferrable, committable).  We need this for transaction
  * chaining, so that we can set the characteristics of the new transaction to
  * be the same as the previous one.  (We need something like this because the
  * GUC system resets the characteristics at transaction end, so for example
@@ -3016,6 +3021,7 @@ SaveTransactionCharacteristics(SavedTransactionCharacteristics *s)
 	s->save_XactIsoLevel = XactIsoLevel;
 	s->save_XactReadOnly = XactReadOnly;
 	s->save_XactDeferrable = XactDeferrable;
+	s->save_XactCommittable = XactCommittable;
 }
 
 void
@@ -3024,6 +3030,7 @@ RestoreTransactionCharacteristics(const SavedTransactionCharacteristics *s)
 	XactIsoLevel = s->save_XactIsoLevel;
 	XactReadOnly = s->save_XactReadOnly;
 	XactDeferrable = s->save_XactDeferrable;
+	XactCommittable = s->save_XactCommittable;
 }
 
 
@@ -3884,6 +3891,10 @@ PrepareTransactionBlock(const char *gid)
  * The real work will be done in the upcoming CommitTransactionCommand().
  * We do it this way because it's not convenient to change memory context,
  * resource owner, etc while executing inside a Portal.
+ *
+ * When ending a live transaction, if the user has previously declared the
+ * transaction uncommittable, we emit a warning and treat it as a ROLLBACK,
+ * instead.
  */
 bool
 EndTransactionBlock(bool chain)
@@ -3898,8 +3909,19 @@ EndTransactionBlock(bool chain)
 			 * to COMMIT.
 			 */
 		case TBLOCK_INPROGRESS:
-			s->blockState = TBLOCK_END;
-			result = true;
+			if (XactCommittable)
+			{
+				s->blockState = TBLOCK_END;
+				result = true;
+			}
+			else
+			{
+				ereport(WARNING,
+						(errcode(ERRCODE_NO_ACTIVE_SQL_TRANSACTION),
+						 errmsg("transaction is not committable")));
+
+				s->blockState = TBLOCK_ABORT_PENDING;
+			}
 			break;
 
 			/*
@@ -3918,8 +3940,20 @@ EndTransactionBlock(bool chain)
 				ereport(WARNING,
 						(errcode(ERRCODE_NO_ACTIVE_SQL_TRANSACTION),
 						 errmsg("there is no transaction in progress")));
-			s->blockState = TBLOCK_END;
-			result = true;
+
+			if (XactCommittable)
+			{
+				s->blockState = TBLOCK_END;
+				result = true;
+			}
+			else
+			{
+				ereport(WARNING,
+						(errcode(ERRCODE_NO_ACTIVE_SQL_TRANSACTION),
+						 errmsg("transaction is not committable")));
+
+				s->blockState = TBLOCK_ABORT_PENDING;
+			}
 			break;
 
 			/*
@@ -3944,12 +3978,26 @@ EndTransactionBlock(bool chain)
 						 BlockStateAsString(s->blockState));
 				s = s->parent;
 			}
+
 			if (s->blockState == TBLOCK_INPROGRESS)
-				s->blockState = TBLOCK_END;
+			{
+				if (XactCommittable)
+				{
+					s->blockState = TBLOCK_END;
+					result = true;
+				}
+				else
+				{
+					ereport(WARNING,
+							(errcode(ERRCODE_NO_ACTIVE_SQL_TRANSACTION),
+							 errmsg("transaction is not committable")));
+
+					s->blockState = TBLOCK_ABORT_PENDING;
+				}
+			}
 			else
 				elog(FATAL, "EndTransactionBlock: unexpected state %s",
 					 BlockStateAsString(s->blockState));
-			result = true;
 			break;
 
 			/*
@@ -3997,7 +4045,18 @@ EndTransactionBlock(bool chain)
 				ereport(WARNING,
 						(errcode(ERRCODE_NO_ACTIVE_SQL_TRANSACTION),
 						 errmsg("there is no transaction in progress")));
-			result = true;
+			if (XactCommittable)
+			{
+				result = true;
+			}
+			else
+			{
+				ereport(WARNING,
+						(errcode(ERRCODE_NO_ACTIVE_SQL_TRANSACTION),
+						 errmsg("transaction is not committable")));
+
+				s->blockState = TBLOCK_ABORT_PENDING;
+			}
 			break;
 
 			/*
@@ -5360,7 +5419,7 @@ EstimateTransactionStateSpace(void)
  *		Write out relevant details of our transaction state that will be
  *		needed by a parallel worker.
  *
- * We need to save and restore XactDeferrable, XactIsoLevel, and the XIDs
+ * We need to save and restore XactDeferrable, XactCommittable, XactIsoLevel, and the XIDs
  * associated with this transaction.  These are serialized into a
  * caller-supplied buffer big enough to hold the number of bytes reported by
  * EstimateTransactionStateSpace().  We emit the XIDs in sorted order for the
@@ -5379,6 +5438,7 @@ SerializeTransactionState(Size maxsize, char *start_address)
 
 	result->xactIsoLevel = XactIsoLevel;
 	result->xactDeferrable = XactDeferrable;
+	result->xactCommittable = XactCommittable;
 	result->topFullTransactionId = XactTopFullTransactionId;
 	result->currentFullTransactionId =
 		CurrentTransactionState->fullTransactionId;
@@ -5448,6 +5508,7 @@ StartParallelWorkerTransaction(char *tstatespace)
 	tstate = (SerializedTransactionState *) tstatespace;
 	XactIsoLevel = tstate->xactIsoLevel;
 	XactDeferrable = tstate->xactDeferrable;
+	XactCommittable = tstate->xactCommittable;
 	XactTopFullTransactionId = tstate->topFullTransactionId;
 	CurrentTransactionState->fullTransactionId =
 		tstate->currentFullTransactionId;

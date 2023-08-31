@@ -619,10 +619,10 @@ _bt_blnewpage(uint32 level)
 	Page		page;
 	BTPageOpaque opaque;
 
-	page = (Page) palloc_aligned(BLCKSZ, PG_IO_ALIGN_SIZE, 0);
+	page = (Page) palloc_aligned(cluster_block_size, PG_IO_ALIGN_SIZE, 0);
 
 	/* Zero the page and set up standard page header info */
-	_bt_pageinit(page, BLCKSZ);
+	_bt_pageinit(page, cluster_block_size);
 
 	/* Initialize BT opaque state */
 	opaque = BTPageGetOpaque(page);
@@ -660,7 +660,7 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 	while (blkno > wstate->btws_pages_written)
 	{
 		if (!wstate->btws_zeropage)
-			wstate->btws_zeropage = (Page) palloc_aligned(BLCKSZ,
+			wstate->btws_zeropage = (Page) palloc_aligned(cluster_block_size,
 														  PG_IO_ALIGN_SIZE,
 														  MCXT_ALLOC_ZERO);
 		/* don't set checksum for all-zero page */
@@ -715,7 +715,7 @@ _bt_pagestate(BTWriteState *wstate, uint32 level)
 	state->btps_level = level;
 	/* set "full" threshold based on level.  See notes at head of file. */
 	if (level > 0)
-		state->btps_full = (BLCKSZ * (100 - BTREE_NONLEAF_FILLFACTOR) / 100);
+		state->btps_full = (cluster_block_size * (100 - BTREE_NONLEAF_FILLFACTOR) / 100);
 	else
 		state->btps_full = BTGetTargetPageFreeSpace(wstate->index);
 
@@ -1172,7 +1172,7 @@ _bt_uppershutdown(BTWriteState *wstate, BTPageState *state)
 	 * set to point to "P_NONE").  This changes the index to the "valid" state
 	 * by filling in a valid magic number in the metapage.
 	 */
-	metapage = (Page) palloc_aligned(BLCKSZ, PG_IO_ALIGN_SIZE, 0);
+	metapage = (Page) palloc_aligned(cluster_block_size, PG_IO_ALIGN_SIZE, 0);
 	_bt_initmetapage(metapage, rootblkno, rootlevel,
 					 wstate->inskey->allequalimage);
 	_bt_blwritepage(wstate, metapage, BTREE_METAPAGE);
@@ -1350,7 +1350,7 @@ _bt_load(BTWriteState *wstate, BTSpool *btspool, BTSpool *btspool2)
 				 * leaf pages full with few very large tuples doesn't seem
 				 * like a useful goal.)
 				 */
-				dstate->maxpostingsize = MAXALIGN_DOWN((BLCKSZ * 10 / 100)) -
+				dstate->maxpostingsize = MAXALIGN_DOWN((cluster_block_size * 10 / 100)) -
 					sizeof(ItemIdData);
 				Assert(dstate->maxpostingsize <= BTMaxItemSize(state->btps_page) &&
 					   dstate->maxpostingsize <= INDEX_SIZE_MASK);

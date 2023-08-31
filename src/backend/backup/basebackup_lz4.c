@@ -117,10 +117,10 @@ bbsink_lz4_begin_backup(bbsink *sink)
 											 &mysink->prefs);
 
 	/*
-	 * The buffer length is expected to be a multiple of BLCKSZ, so round up.
+	 * The buffer length is expected to be a multiple of cluster_block_size, so round up.
 	 */
-	output_buffer_bound = output_buffer_bound + BLCKSZ -
-		(output_buffer_bound % BLCKSZ);
+	output_buffer_bound = output_buffer_bound + cluster_block_size -
+		(output_buffer_bound % cluster_block_size);
 
 	bbsink_begin_backup(sink->bbs_next, sink->bbs_state, output_buffer_bound);
 }

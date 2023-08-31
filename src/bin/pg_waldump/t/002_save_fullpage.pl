@@ -38,6 +38,8 @@ max_wal_senders = 4
 });
 $node->start;
 
+$ENV{PGDATA} = $node->data_dir;
+
 # Generate data/WAL to examine that will have full pages in them.
 $node->safe_psql(
 	'postgres',
@@ -73,6 +75,7 @@ $node->command_ok(
 	[
 		'pg_waldump', '--quiet',
 		'--save-fullpage', "$tmp_folder/raw",
+		'-D', $node->data_dir,
 		'--relation', $relation,
 		$walfile
 	],

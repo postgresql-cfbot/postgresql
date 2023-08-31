@@ -41,6 +41,7 @@
 #include "commands/trigger.h"
 #include "commands/user.h"
 #include "commands/vacuum.h"
+#include "common/blocksize.h"
 #include "common/scram-common.h"
 #include "jit/jit.h"
 #include "libpq/auth.h"
@@ -504,7 +505,10 @@ bool		log_btree_build_stats = false;
 char	   *event_source;
 
 bool		row_security;
+
 bool		check_function_bodies = true;
+
+int        	block_size;
 
 /*
  * This GUC exists solely for backward compatibility, check its definition for
@@ -588,7 +592,6 @@ static char *session_authorization_string;
 static int	max_function_args;
 static int	max_index_keys;
 static int	max_identifier_length;
-static int	block_size;
 static int	segment_size;
 static int	shared_memory_size_mb;
 static int	shared_memory_size_in_huge_pages;
@@ -3118,7 +3121,7 @@ struct config_int ConfigureNamesInt[] =
 			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
 		&block_size,
-		BLCKSZ, BLCKSZ, BLCKSZ,
+		DEFAULT_BLOCK_SIZE, MIN_BLOCK_SIZE, MAX_BLOCK_SIZE,
 		NULL, NULL, NULL
 	},
 
@@ -3368,7 +3371,8 @@ struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_BLOCKS | GUC_EXPLAIN,
 		},
 		&min_parallel_table_scan_size,
-		(8 * 1024 * 1024) / BLCKSZ, 0, INT_MAX / 3,
+		/* This is set dynamically based on cluster_block_size, but works for a default */
+		(8 * 1024 * 1024) / DEFAULT_BLOCK_SIZE, 0, INT_MAX / 3,
 		NULL, NULL, NULL
 	},
 
@@ -3379,7 +3383,8 @@ struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_BLOCKS | GUC_EXPLAIN,
 		},
 		&min_parallel_index_scan_size,
-		(512 * 1024) / BLCKSZ, 0, INT_MAX / 3,
+		/* This is set dynamically based on cluster_block_size, but works for a default */
+		(512 * 1024) / DEFAULT_BLOCK_SIZE, 0, INT_MAX / 3,
 		NULL, NULL, NULL
 	},
 
@@ -4986,3 +4991,29 @@ struct config_enum ConfigureNamesEnum[] =
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, NULL, NULL, NULL, NULL
 	}
 };
+
+
+
+/*
+ * Update the specific GUCs which have dynamic limits.  Due to having variable
+ * block sizes, what were originally constants now depend on the runtime block
+ * size, so handle the adjustments to those boot values here.
+ */
+void
+update_dynamic_gucs(void)
+{
+	int i;
+
+	for (i = 0; ConfigureNamesInt[i].gen.name; i++)
+	{
+		if (strcmp("min_parallel_table_scan_size", ConfigureNamesInt[i].gen.name) == 0)
+		{
+			ConfigureNamesInt[i].boot_val = (8 * 1024 * 1024) >> cluster_block_bits;
+		}
+		else if (strcmp("min_parallel_index_scan_size", ConfigureNamesInt[i].gen.name) == 0)
+		{
+			ConfigureNamesInt[i].boot_val = (512 * 1024) >> cluster_block_bits;
+		}
+	}
+
+}

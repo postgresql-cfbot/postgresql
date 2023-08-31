@@ -841,8 +841,8 @@ parse_required_wal(verifier_context *context, char *pg_waldump_path,
 	{
 		char	   *pg_waldump_cmd;
 
-		pg_waldump_cmd = psprintf("\"%s\" --quiet --path=\"%s\" --timeline=%u --start=%X/%X --end=%X/%X\n",
-								  pg_waldump_path, wal_directory, this_wal_range->tli,
+		pg_waldump_cmd = psprintf("\"%s\" --quiet --pgdata=\"%s\" --path=\"%s\" --timeline=%u --start=%X/%X --end=%X/%X\n",
+								  pg_waldump_path, context->backup_directory, wal_directory, this_wal_range->tli,
 								  LSN_FORMAT_ARGS(this_wal_range->start_lsn),
 								  LSN_FORMAT_ARGS(this_wal_range->end_lsn));
 		fflush(NULL);

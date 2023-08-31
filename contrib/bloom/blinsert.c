@@ -52,7 +52,7 @@ flushCachedPage(Relation index, BloomBuildState *buildstate)
 
 	state = GenericXLogStart(index);
 	page = GenericXLogRegisterBuffer(state, buffer, GENERIC_XLOG_FULL_IMAGE);
-	memcpy(page, buildstate->data.data, BLCKSZ);
+	memcpy(page, buildstate->data.data, cluster_block_size);
 	GenericXLogFinish(state);
 	UnlockReleaseBuffer(buffer);
 }

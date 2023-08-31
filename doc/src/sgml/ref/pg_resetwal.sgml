@@ -137,6 +137,25 @@ PostgreSQL documentation
 
   <variablelist>
    <varlistentry>
+    <term><option>-b <replaceable class="parameter">blocksize</replaceable></option></term>
+    <term><option>--block-size=<replaceable class="parameter">blocksize</replaceable></option></term>
+    <listitem>
+     <para>
+      Sets the cluster's database block size
+      to <replaceable>blocksize</replaceable> kilobytes.  This should be one
+      of 1, 2, 4, 8, 16, or 32.  Many database limits are defined relative
+      to this parameter.
+     </para>
+     <para>
+      This <emphasis>must</emphasis> be the same value selected
+      at <command>initdb</command> time, or this will result in database
+      corruption.  This option should <emphasis>only</emphasis> be provided
+      when <filename>pg_control</filename> is corrupted or missing.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><option>-c <replaceable class="parameter">xid</replaceable>,<replaceable class="parameter">xid</replaceable></option></term>
     <term><option>--commit-timestamp-ids=<replaceable class="parameter">xid</replaceable>,<replaceable class="parameter">xid</replaceable></option></term>
     <listitem>

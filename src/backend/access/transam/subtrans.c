@@ -36,23 +36,23 @@
 
 
 /*
- * Defines for SubTrans page sizes.  A page is the same BLCKSZ as is used
+ * Defines for SubTrans page sizes.  A page is the same cluster_block_size as is used
  * everywhere else in Postgres.
  *
  * Note: because TransactionIds are 32 bits and wrap around at 0xFFFFFFFF,
  * SubTrans page numbering also wraps around at
- * 0xFFFFFFFF/SUBTRANS_XACTS_PER_PAGE, and segment numbering at
- * 0xFFFFFFFF/SUBTRANS_XACTS_PER_PAGE/SLRU_PAGES_PER_SEGMENT.  We need take no
+ * 0xFFFFFFFF/subtrans_xacts_per_page, and segment numbering at
+ * 0xFFFFFFFF/subtrans_xacts_per_page/SLRU_PAGES_PER_SEGMENT.  We need take no
  * explicit notice of that fact in this module, except when comparing segment
  * and page numbers in TruncateSUBTRANS (see SubTransPagePrecedes) and zeroing
  * them in StartupSUBTRANS.
  */
 
 /* We need four bytes per xact */
-#define SUBTRANS_XACTS_PER_PAGE (BLCKSZ / sizeof(TransactionId))
+#define subtrans_xacts_per_page (cluster_block_size / sizeof(TransactionId))
 
-#define TransactionIdToPage(xid) ((xid) / (TransactionId) SUBTRANS_XACTS_PER_PAGE)
-#define TransactionIdToEntry(xid) ((xid) % (TransactionId) SUBTRANS_XACTS_PER_PAGE)
+#define TransactionIdToPage(xid) ((xid) / (TransactionId) subtrans_xacts_per_page)
+#define TransactionIdToEntry(xid) ((xid) % (TransactionId) subtrans_xacts_per_page)
 
 
 /*
@@ -194,7 +194,7 @@ SUBTRANSShmemInit(void)
 	SimpleLruInit(SubTransCtl, "Subtrans", NUM_SUBTRANS_BUFFERS, 0,
 				  SubtransSLRULock, "pg_subtrans",
 				  LWTRANCHE_SUBTRANS_BUFFER, SYNC_HANDLER_NONE);
-	SlruPagePrecedesUnitTests(SubTransCtl, SUBTRANS_XACTS_PER_PAGE);
+	SlruPagePrecedesUnitTests(SubTransCtl, subtrans_xacts_per_page);
 }
 
 /*
@@ -364,11 +364,11 @@ SubTransPagePrecedes(int page1, int page2)
 	TransactionId xid1;
 	TransactionId xid2;
 
-	xid1 = ((TransactionId) page1) * SUBTRANS_XACTS_PER_PAGE;
+	xid1 = ((TransactionId) page1) * subtrans_xacts_per_page;
 	xid1 += FirstNormalTransactionId + 1;
-	xid2 = ((TransactionId) page2) * SUBTRANS_XACTS_PER_PAGE;
+	xid2 = ((TransactionId) page2) * subtrans_xacts_per_page;
 	xid2 += FirstNormalTransactionId + 1;
 
 	return (TransactionIdPrecedes(xid1, xid2) &&
-			TransactionIdPrecedes(xid1, xid2 + SUBTRANS_XACTS_PER_PAGE - 1));
+			TransactionIdPrecedes(xid1, xid2 + subtrans_xacts_per_page - 1));
 }

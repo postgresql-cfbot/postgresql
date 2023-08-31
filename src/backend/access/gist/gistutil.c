@@ -758,7 +758,7 @@ gistinitpage(Page page, uint32 f)
 {
 	GISTPageOpaque opaque;
 
-	PageInit(page, BLCKSZ, sizeof(GISTPageOpaqueData));
+	PageInit(page, cluster_block_size, sizeof(GISTPageOpaqueData));
 
 	opaque = GistPageGetOpaque(page);
 	opaque->rightlink = InvalidBlockNumber;

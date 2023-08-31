@@ -255,7 +255,7 @@ begin_heap_rewrite(Relation old_heap, Relation new_heap, TransactionId oldest_xm
 
 	state->rs_old_rel = old_heap;
 	state->rs_new_rel = new_heap;
-	state->rs_buffer = (Page) palloc_aligned(BLCKSZ, PG_IO_ALIGN_SIZE, 0);
+	state->rs_buffer = (Page) palloc_aligned(cluster_block_size, PG_IO_ALIGN_SIZE, 0);
 	/* new_heap needn't be empty, just locked */
 	state->rs_blockno = RelationGetNumberOfBlocks(new_heap);
 	state->rs_buffer_valid = false;
@@ -631,7 +631,7 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 		Assert(!HeapTupleHasExternal(tup));
 		heaptup = tup;
 	}
-	else if (HeapTupleHasExternal(tup) || tup->t_len > TOAST_TUPLE_THRESHOLD)
+	else if (HeapTupleHasExternal(tup) || tup->t_len > toast_tuple_threshold)
 	{
 		int			options = HEAP_INSERT_SKIP_FSM;
 
@@ -657,7 +657,7 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 		ereport(ERROR,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("row is too big: size %zu, maximum size %zu",
-						len, MaxHeapTupleSize)));
+						len, (Size)MaxHeapTupleSize)));
 
 	/* Compute desired extra freespace due to fillfactor option */
 	saveFreeSpace = RelationGetTargetPageFreeSpace(state->rs_new_rel,
@@ -702,7 +702,7 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 	if (!state->rs_buffer_valid)
 	{
 		/* Initialize a new empty page */
-		PageInit(page, BLCKSZ, 0);
+		PageInit(page, cluster_block_size, 0);
 		state->rs_buffer_valid = true;
 	}
 

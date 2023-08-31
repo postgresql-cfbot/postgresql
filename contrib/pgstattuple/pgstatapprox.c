@@ -94,7 +94,7 @@ statapprox_heap(Relation rel, output_type *stat)
 		if (VM_ALL_VISIBLE(rel, blkno, &vmbuffer))
 		{
 			freespace = GetRecordedFreeSpace(rel, blkno);
-			stat->tuple_len += BLCKSZ - freespace;
+			stat->tuple_len += cluster_block_size - freespace;
 			stat->free_space += freespace;
 			continue;
 		}
@@ -113,7 +113,7 @@ statapprox_heap(Relation rel, output_type *stat)
 		if (!PageIsNew(page))
 			stat->free_space += PageGetHeapFreeSpace(page);
 		else
-			stat->free_space += BLCKSZ - SizeOfPageHeaderData;
+			stat->free_space += cluster_block_size - SizeOfPageHeaderData;
 
 		/* We may count the page as scanned even if it's new/empty */
 		scanned++;
@@ -182,7 +182,7 @@ statapprox_heap(Relation rel, output_type *stat)
 		UnlockReleaseBuffer(buf);
 	}
 
-	stat->table_len = (uint64) nblocks * BLCKSZ;
+	stat->table_len = (uint64) nblocks * cluster_block_size;
 
 	/*
 	 * We don't know how many tuples are in the pages we didn't scan, so

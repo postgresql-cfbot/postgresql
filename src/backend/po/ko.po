@@ -2348,10 +2348,10 @@ msgstr ""
 #: access/transam/xlog.c:4802
 #, c-format
 msgid ""
-"The database cluster was initialized with BLCKSZ %d, but the server was "
-"compiled with BLCKSZ %d."
+"The database cluster was initialized with cluster_block_size %d, but the server was "
+"compiled with cluster_block_size %d."
 msgstr ""
-"이 데이터베이스 클러스터는 BLCKSZ %d (으)로 초기화 되었지만, 서버는 BLCKSZ "
+"이 데이터베이스 클러스터는 cluster_block_size %d (으)로 초기화 되었지만, 서버는 cluster_block_size "
 "%d (으)로 컴파일 되어있습니다."
 
 #: access/transam/xlog.c:4805 access/transam/xlog.c:4812
@@ -2404,20 +2404,20 @@ msgstr ""
 #: access/transam/xlog.c:4837
 #, c-format
 msgid ""
-"The database cluster was initialized with TOAST_MAX_CHUNK_SIZE %d, but the "
-"server was compiled with TOAST_MAX_CHUNK_SIZE %d."
+"The database cluster was initialized with cluster_toast_max_chunk_size %d, but the "
+"server was compiled with cluster_toast_max_chunk_size %d."
 msgstr ""
-"데이터베이스 클러스터는 TOAST_MAX_CHUNK_SIZE %d(으)로 초기화되었지만 서버는 "
-"TOAST_MAX_CHUNK_SIZE %d(으)로 컴파일 되었습니다."
+"데이터베이스 클러스터는 cluster_toast_max_chunk_size %d(으)로 초기화되었지만 서버는 "
+"cluster_toast_max_chunk_size %d(으)로 컴파일 되었습니다."
 
 #: access/transam/xlog.c:4844
 #, c-format
 msgid ""
-"The database cluster was initialized with LOBLKSIZE %d, but the server was "
-"compiled with LOBLKSIZE %d."
+"The database cluster was initialized with cluster_loblksize %d, but the server was "
+"compiled with cluster_loblksize %d."
 msgstr ""
-"이 데이터베이스 클러스터는 LOBLKSIZE %d(으)로 초기화 되었지만, 서버는 "
-"LOBLKSIZE %d (으)로 컴파일 되어있습니다."
+"이 데이터베이스 클러스터는 cluster_loblksize %d(으)로 초기화 되었지만, 서버는 "
+"cluster_loblksize %d (으)로 컴파일 되어있습니다."
 
 #: access/transam/xlog.c:4853
 #, c-format

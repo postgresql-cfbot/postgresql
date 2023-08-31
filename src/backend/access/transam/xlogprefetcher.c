@@ -51,7 +51,7 @@
  * Every time we process this much WAL, we'll update the values in
  * pg_stat_recovery_prefetch.
  */
-#define XLOGPREFETCHER_STATS_DISTANCE BLCKSZ
+#define xlogprefetcher_stats_distance cluster_block_size
 
 /*
  * To detect repeated access to the same block and skip useless extra system
@@ -442,7 +442,7 @@ XLogPrefetcherComputeStats(XLogPrefetcher *prefetcher)
 	SharedStats->wal_distance = wal_distance;
 
 	prefetcher->next_stats_shm_lsn =
-		prefetcher->reader->ReadRecPtr + XLOGPREFETCHER_STATS_DISTANCE;
+		prefetcher->reader->ReadRecPtr + xlogprefetcher_stats_distance;
 }
 
 /*

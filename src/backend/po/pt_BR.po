@@ -1264,7 +1264,7 @@ msgstr "O agrupamento de banco de dados parece utilizar um formato de número de
 
 #: access/transam/xlog.c:4506
 #, c-format
-msgid "The database cluster was initialized with BLCKSZ %d, but the server was compiled with BLCKSZ %d."
+msgid "The database cluster was initialized with cluster_block_size %d, but the server was compiled with cluster_block_size %d."
 msgstr "O agrupamento de banco de dados foi inicializado com BLCSZ %d, mas o servidor foi compilado com BLCSZ %d."
 
 #: access/transam/xlog.c:4509 access/transam/xlog.c:4516
@@ -1305,13 +1305,13 @@ msgstr "O agrupamento de banco de dados foi inicializado com INDEX_MAX_KEYS %d, 
 
 #: access/transam/xlog.c:4548
 #, c-format
-msgid "The database cluster was initialized with TOAST_MAX_CHUNK_SIZE %d, but the server was compiled with TOAST_MAX_CHUNK_SIZE %d."
-msgstr "O agrupamento de banco de dados foi inicializado com TOAST_MAX_CHUNK_SIZE %d, mas o servidor foi compilado com TOAST_MAX_CHUNK_SIZE %d."
+msgid "The database cluster was initialized with cluster_toast_max_chunk_size %d, but the server was compiled with cluster_toast_max_chunk_size %d."
+msgstr "O agrupamento de banco de dados foi inicializado com cluster_toast_max_chunk_size %d, mas o servidor foi compilado com cluster_toast_max_chunk_size %d."
 
 #: access/transam/xlog.c:4555
 #, c-format
-msgid "The database cluster was initialized with LOBLKSIZE %d, but the server was compiled with LOBLKSIZE %d."
-msgstr "O agrupamento de banco de dados foi inicializado com LOBLKSIZE %d, mas o servidor foi compilado com LOBLKSIZE %d."
+msgid "The database cluster was initialized with cluster_loblksize %d, but the server was compiled with cluster_loblksize %d."
+msgstr "O agrupamento de banco de dados foi inicializado com cluster_loblksize %d, mas o servidor foi compilado com cluster_loblksize %d."
 
 #: access/transam/xlog.c:4564
 #, c-format

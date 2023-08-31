@@ -2685,7 +2685,7 @@ _bt_delete_or_dedup_one_page(Relation rel, Relation heapRel,
 							 bool simpleonly, bool checkingunique,
 							 bool uniquedup, bool indexUnchanged)
 {
-	OffsetNumber deletable[MaxIndexTuplesPerPage];
+	OffsetNumber deletable[MaxIndexTuplesPerPageLimit];
 	int			ndeletable = 0;
 	OffsetNumber offnum,
 				minoff,

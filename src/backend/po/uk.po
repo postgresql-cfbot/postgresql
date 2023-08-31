@@ -2288,8 +2288,8 @@ msgstr "Здається, в кластері баз даних і в прогр
 
 #: access/transam/xlog.c:4096
 #, c-format
-msgid "The database cluster was initialized with BLCKSZ %d, but the server was compiled with BLCKSZ %d."
-msgstr "Кластер бази даних було ініціалізовано з BLCKSZ %d,  але сервер було скомпільовано з BLCKSZ %d."
+msgid "The database cluster was initialized with cluster_block_size %d, but the server was compiled with cluster_block_size %d."
+msgstr "Кластер бази даних було ініціалізовано з cluster_block_size %d,  але сервер було скомпільовано з cluster_block_size %d."
 
 #: access/transam/xlog.c:4099 access/transam/xlog.c:4106
 #: access/transam/xlog.c:4113 access/transam/xlog.c:4120
@@ -2322,13 +2322,13 @@ msgstr "Кластер бази даних було ініціалізовано
 
 #: access/transam/xlog.c:4131
 #, c-format
-msgid "The database cluster was initialized with TOAST_MAX_CHUNK_SIZE %d, but the server was compiled with TOAST_MAX_CHUNK_SIZE %d."
-msgstr "Кластер бази даних було ініціалізовано з TOAST_MAX_CHUNK_SIZE %d, але сервер було скомпільовано з TOAST_MAX_CHUNK_SIZE %d."
+msgid "The database cluster was initialized with cluster_toast_max_chunk_size %d, but the server was compiled with cluster_toast_max_chunk_size %d."
+msgstr "Кластер бази даних було ініціалізовано з cluster_toast_max_chunk_size %d, але сервер було скомпільовано з cluster_toast_max_chunk_size %d."
 
 #: access/transam/xlog.c:4138
 #, c-format
-msgid "The database cluster was initialized with LOBLKSIZE %d, but the server was compiled with LOBLKSIZE %d."
-msgstr "Кластер бази даних було ініціалізовано з LOBLKSIZE %d, але сервер було скомпільовано з LOBLKSIZE %d."
+msgid "The database cluster was initialized with cluster_loblksize %d, but the server was compiled with cluster_loblksize %d."
+msgstr "Кластер бази даних було ініціалізовано з cluster_loblksize %d, але сервер було скомпільовано з cluster_loblksize %d."
 
 #: access/transam/xlog.c:4147
 #, c-format

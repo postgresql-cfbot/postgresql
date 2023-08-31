@@ -31,6 +31,7 @@ tests += {
     'env': {'with_icu': icu.found() ? 'yes' : 'no'},
     'tests': [
       't/001_initdb.pl',
+      't/002_blocksize.pl',
     ],
   },
 }

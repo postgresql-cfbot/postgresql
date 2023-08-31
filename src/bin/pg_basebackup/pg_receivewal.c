@@ -897,6 +897,10 @@ main(int argc, char **argv)
 	/* determine remote server's xlog segment size */
 	if (!RetrieveWalSegSize(conn))
 		exit(1);
+	if (!RetrieveBlockSize(conn))
+		exit(1);
+
+	BlockSizeInit(BlockSize);
 
 	/*
 	 * Don't close the connection here so that subsequent StreamLog() can

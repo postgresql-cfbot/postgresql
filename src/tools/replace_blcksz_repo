@@ -1,0 +1,13 @@
+#!/bin/bash -e
+
+# Wrapper for refreshing all of the files in the repo This is separate from the
+# replace_blcksz script itself since we may want to individually use that on
+# patch files or other non-repo externalities. This is the interface for batch
+# updating and should wrap the logic for files which should be excluded, etc.
+
+cd $(git rev-parse --show-toplevel)
+git checkout .
+
+perl -i src/tools/replace_blcksz $(git ls-files | egrep -v 'configure|meson|replace_blcksz|pg_config.h.in')
+perl -i -lpe 'print "#define cluster_block_size BLCKSZ" if /endif.*POSTGRES_EXT_H/' src/include/postgres_ext.h
+

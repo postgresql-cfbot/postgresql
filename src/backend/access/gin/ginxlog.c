@@ -146,7 +146,7 @@ ginRedoRecompress(Page page, ginxlogRecompressDataLeaf *data)
 			GinPostingList *plist;
 
 			plist = ginCompressPostingList(uncompressed, nuncompressed,
-										   BLCKSZ, &npacked);
+										   cluster_block_size, &npacked);
 			totalsize = SizeOfGinPostingList(plist);
 
 			Assert(npacked == nuncompressed);
@@ -236,7 +236,7 @@ ginRedoRecompress(Page page, ginxlogRecompressDataLeaf *data)
 			Assert(nnewitems == nolditems + nitems);
 
 			newseg = ginCompressPostingList(newitems, nnewitems,
-											BLCKSZ, &npacked);
+											cluster_block_size, &npacked);
 			Assert(npacked == nnewitems);
 
 			newsegsize = SizeOfGinPostingList(newseg);

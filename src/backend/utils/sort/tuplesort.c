@@ -179,8 +179,8 @@ typedef enum
  */
 #define MINORDER		6		/* minimum merge order */
 #define MAXORDER		500		/* maximum merge order */
-#define TAPE_BUFFER_OVERHEAD		BLCKSZ
-#define MERGE_BUFFER_SIZE			(BLCKSZ * 32)
+#define TAPE_BUFFER_OVERHEAD		cluster_block_size
+#define MERGE_BUFFER_SIZE			(cluster_block_size * 32)
 
 
 /*
@@ -1000,7 +1000,7 @@ tuplesort_updatemax(Tuplesortstate *state)
 	if (state->tapeset)
 	{
 		isSpaceDisk = true;
-		spaceUsed = LogicalTapeSetBlocks(state->tapeset) * BLCKSZ;
+		spaceUsed = LogicalTapeSetBlocks(state->tapeset) * cluster_block_size;
 	}
 	else
 	{

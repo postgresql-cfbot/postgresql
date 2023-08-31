@@ -2329,8 +2329,8 @@ msgstr "Der Datenbank-Cluster verwendet anscheinend ein anderes Fließkommazahle
 
 #: access/transam/xlog.c:4070
 #, c-format
-msgid "The database cluster was initialized with BLCKSZ %d, but the server was compiled with BLCKSZ %d."
-msgstr "Der Datenbank-Cluster wurde mit BLCKSZ %d initialisiert, aber der Server wurde mit BLCKSZ %d kompiliert."
+msgid "The database cluster was initialized with cluster_block_size %d, but the server was compiled with cluster_block_size %d."
+msgstr "Der Datenbank-Cluster wurde mit cluster_block_size %d initialisiert, aber der Server wurde mit cluster_block_size %d kompiliert."
 
 #: access/transam/xlog.c:4073 access/transam/xlog.c:4080
 #: access/transam/xlog.c:4087 access/transam/xlog.c:4094
@@ -2363,13 +2363,13 @@ msgstr "Der Datenbank-Cluster wurde mit INDEX_MAX_KEYS %d initialisiert, aber de
 
 #: access/transam/xlog.c:4105
 #, c-format
-msgid "The database cluster was initialized with TOAST_MAX_CHUNK_SIZE %d, but the server was compiled with TOAST_MAX_CHUNK_SIZE %d."
-msgstr "Der Datenbank-Cluster wurde mit TOAST_MAX_CHUNK_SIZE %d initialisiert, aber der Server wurde mit TOAST_MAX_CHUNK_SIZE %d kompiliert."
+msgid "The database cluster was initialized with cluster_toast_max_chunk_size %d, but the server was compiled with cluster_toast_max_chunk_size %d."
+msgstr "Der Datenbank-Cluster wurde mit cluster_toast_max_chunk_size %d initialisiert, aber der Server wurde mit cluster_toast_max_chunk_size %d kompiliert."
 
 #: access/transam/xlog.c:4112
 #, c-format
-msgid "The database cluster was initialized with LOBLKSIZE %d, but the server was compiled with LOBLKSIZE %d."
-msgstr "Der Datenbank-Cluster wurde mit LOBLKSIZE %d initialisiert, aber der Server wurde mit LOBLKSIZE %d kompiliert."
+msgid "The database cluster was initialized with cluster_loblksize %d, but the server was compiled with cluster_loblksize %d."
+msgstr "Der Datenbank-Cluster wurde mit cluster_loblksize %d initialisiert, aber der Server wurde mit cluster_loblksize %d kompiliert."
 
 #: access/transam/xlog.c:4121
 #, c-format
@@ -22029,8 +22029,8 @@ msgstr "debug_io_direct wird für WAL nicht unterstützt, weil XLOG_BLCKSZ zu kl
 
 #: storage/file/fd.c:3951
 #, c-format
-msgid "debug_io_direct is not supported for data because BLCKSZ is too small"
-msgstr "debug_io_direct wird für Daten nicht unterstützt, weil BLCKSZ zu klein ist"
+msgid "debug_io_direct is not supported for data because cluster_block_size is too small"
+msgstr "debug_io_direct wird für Daten nicht unterstützt, weil cluster_block_sizes zu klein ist"
 
 #: storage/file/reinit.c:145
 #, c-format

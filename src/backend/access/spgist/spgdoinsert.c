@@ -135,7 +135,7 @@ spgPageIndexMultiDelete(SpGistState *state, Page page,
 						BlockNumber blkno, OffsetNumber offnum)
 {
 	OffsetNumber firstItem;
-	OffsetNumber sortednos[MaxIndexTuplesPerPage];
+	OffsetNumber sortednos[MaxIndexTuplesPerPageLimit];
 	SpGistDeadTuple tuple = NULL;
 	int			i;
 
@@ -341,8 +341,8 @@ checkSplitConditions(Relation index, SpGistState *state,
 	if (SpGistBlockIsRoot(current->blkno))
 	{
 		/* return impossible values to force split */
-		*nToSplit = BLCKSZ;
-		return BLCKSZ;
+		*nToSplit = cluster_block_size;
+		return cluster_block_size;
 	}
 
 	i = current->offnum;
@@ -899,7 +899,7 @@ doPickSplit(Relation index, SpGistState *state,
 	 * fit on one page.
 	 */
 	allTheSame = checkAllTheSame(&in, &out,
-								 totalLeafSizes > SPGIST_PAGE_CAPACITY,
+								 totalLeafSizes > spgist_page_capacity,
 								 &includeNew);
 
 	/*
@@ -1030,7 +1030,7 @@ doPickSplit(Relation index, SpGistState *state,
 		for (i = 0; i < nToInsert; i++)
 			leafPageSelect[i] = 0;	/* signifies current page */
 	}
-	else if (in.nTuples == 1 && totalLeafSizes > SPGIST_PAGE_CAPACITY)
+	else if (in.nTuples == 1 && totalLeafSizes > spgist_page_capacity)
 	{
 		/*
 		 * We're trying to split up a long value by repeated suffixing, but
@@ -1051,7 +1051,7 @@ doPickSplit(Relation index, SpGistState *state,
 		newLeafBuffer = SpGistGetBuffer(index,
 										GBUF_LEAF | (isNulls ? GBUF_NULLS : 0),
 										Min(totalLeafSizes,
-											SPGIST_PAGE_CAPACITY),
+											spgist_page_capacity),
 										&xlrec.initDest);
 
 		/*
@@ -1995,13 +1995,13 @@ spgdoinsert(Relation index, SpGistState *state,
 	 * If it isn't gonna fit, and the opclass can't reduce the datum size by
 	 * suffixing, bail out now rather than doing a lot of useless work.
 	 */
-	if (leafSize > SPGIST_PAGE_CAPACITY &&
+	if (leafSize > spgist_page_capacity &&
 		(isnull || !state->config.longValuesOK))
 		ereport(ERROR,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("index row size %zu exceeds maximum %zu for index \"%s\"",
 						leafSize - sizeof(ItemIdData),
-						SPGIST_PAGE_CAPACITY - sizeof(ItemIdData),
+						spgist_page_capacity - sizeof(ItemIdData),
 						RelationGetRelationName(index)),
 				 errhint("Values larger than a buffer page cannot be indexed.")));
 	bestLeafSize = leafSize;
@@ -2059,7 +2059,7 @@ spgdoinsert(Relation index, SpGistState *state,
 			current.buffer =
 				SpGistGetBuffer(index,
 								GBUF_LEAF | (isnull ? GBUF_NULLS : 0),
-								Min(leafSize, SPGIST_PAGE_CAPACITY),
+								Min(leafSize, spgist_page_capacity),
 								&isNew);
 			current.blkno = BufferGetBlockNumber(current.buffer);
 		}
@@ -2122,9 +2122,9 @@ spgdoinsert(Relation index, SpGistState *state,
 			}
 			else if ((sizeToSplit =
 					  checkSplitConditions(index, state, &current,
-										   &nToSplit)) < SPGIST_PAGE_CAPACITY / 2 &&
+										   &nToSplit)) < spgist_page_capacity / 2 &&
 					 nToSplit < 64 &&
-					 leafTuple->size + sizeof(ItemIdData) + sizeToSplit <= SPGIST_PAGE_CAPACITY)
+					 leafTuple->size + sizeof(ItemIdData) + sizeToSplit <= spgist_page_capacity)
 			{
 				/*
 				 * the amount of data is pretty small, so just move the whole
@@ -2258,7 +2258,7 @@ spgdoinsert(Relation index, SpGistState *state,
 					 * than MAXALIGN, to accommodate opclasses that trim one
 					 * byte from the leaf datum per pass.)
 					 */
-					if (leafSize > SPGIST_PAGE_CAPACITY)
+					if (leafSize > spgist_page_capacity)
 					{
 						bool		ok = false;
 
@@ -2278,7 +2278,7 @@ spgdoinsert(Relation index, SpGistState *state,
 									(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 									 errmsg("index row size %zu exceeds maximum %zu for index \"%s\"",
 											leafSize - sizeof(ItemIdData),
-											SPGIST_PAGE_CAPACITY - sizeof(ItemIdData),
+											spgist_page_capacity - sizeof(ItemIdData),
 											RelationGetRelationName(index)),
 									 errhint("Values larger than a buffer page cannot be indexed.")));
 					}

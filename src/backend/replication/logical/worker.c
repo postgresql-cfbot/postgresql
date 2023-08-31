@@ -2056,7 +2056,7 @@ apply_spooled_messages(FileSet *stream_fileset, TransactionId xid,
 
 	CurrentResourceOwner = oldowner;
 
-	buffer = palloc(BLCKSZ);
+	buffer = palloc(cluster_block_size);
 	initStringInfo(&s2);
 
 	MemoryContextSwitchTo(oldcxt);

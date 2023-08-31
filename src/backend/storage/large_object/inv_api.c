@@ -185,7 +185,7 @@ getdatafield(Form_pg_largeobject tuple,
 		freeit = true;
 	}
 	len = VARSIZE(datafield) - VARHDRSZ;
-	if (len < 0 || len > LOBLKSIZE)
+	if (len < 0 || len > cluster_loblksize)
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
 				 errmsg("pg_largeobject entry for OID %u, page %d has invalid data field size %d",
@@ -414,7 +414,7 @@ inv_getsize(LargeObjectDesc *obj_desc)
 			elog(ERROR, "null field found in pg_largeobject");
 		data = (Form_pg_largeobject) GETSTRUCT(tuple);
 		getdatafield(data, &datafield, &len, &pfreeit);
-		lastbyte = (uint64) data->pageno * LOBLKSIZE + len;
+		lastbyte = (uint64) data->pageno * cluster_loblksize + len;
 		if (pfreeit)
 			pfree(datafield);
 	}
@@ -493,7 +493,7 @@ inv_read(LargeObjectDesc *obj_desc, char *buf, int nbytes)
 	int64		n;
 	int64		off;
 	int			len;
-	int32		pageno = (int32) (obj_desc->offset / LOBLKSIZE);
+	int32		pageno = (int32) (obj_desc->offset / cluster_loblksize);
 	uint64		pageoff;
 	ScanKeyData skey[2];
 	SysScanDesc sd;
@@ -541,7 +541,7 @@ inv_read(LargeObjectDesc *obj_desc, char *buf, int nbytes)
 		 * there may be missing pages if the LO contains unwritten "holes". We
 		 * want missing sections to read out as zeroes.
 		 */
-		pageoff = ((uint64) data->pageno) * LOBLKSIZE;
+		pageoff = ((uint64) data->pageno) * cluster_loblksize;
 		if (pageoff > obj_desc->offset)
 		{
 			n = pageoff - obj_desc->offset;
@@ -555,7 +555,7 @@ inv_read(LargeObjectDesc *obj_desc, char *buf, int nbytes)
 		{
 			Assert(obj_desc->offset >= pageoff);
 			off = (int) (obj_desc->offset - pageoff);
-			Assert(off >= 0 && off < LOBLKSIZE);
+			Assert(off >= 0 && off < cluster_loblksize);
 
 			getdatafield(data, &datafield, &len, &pfreeit);
 			if (len > off)
@@ -586,7 +586,7 @@ inv_write(LargeObjectDesc *obj_desc, const char *buf, int nbytes)
 	int			n;
 	int			off;
 	int			len;
-	int32		pageno = (int32) (obj_desc->offset / LOBLKSIZE);
+	int32		pageno = (int32) (obj_desc->offset / cluster_loblksize);
 	ScanKeyData skey[2];
 	SysScanDesc sd;
 	HeapTuple	oldtuple;
@@ -598,7 +598,7 @@ inv_write(LargeObjectDesc *obj_desc, const char *buf, int nbytes)
 	{
 		bytea		hdr;
 		/* this is to make the union big enough for a LO data chunk: */
-		char		data[LOBLKSIZE + VARHDRSZ];
+		char		data[LOBLKSIZE_LIMIT + VARHDRSZ];
 		/* ensure union is aligned well enough: */
 		int32		align_it;
 	}			workbuf;
@@ -687,14 +687,14 @@ inv_write(LargeObjectDesc *obj_desc, const char *buf, int nbytes)
 			/*
 			 * Fill any hole
 			 */
-			off = (int) (obj_desc->offset % LOBLKSIZE);
+			off = (int) (obj_desc->offset % cluster_loblksize);
 			if (off > len)
 				MemSet(workb + len, 0, off - len);
 
 			/*
 			 * Insert appropriate portion of new data
 			 */
-			n = LOBLKSIZE - off;
+			n = cluster_loblksize - off;
 			n = (n <= (nbytes - nwritten)) ? n : (nbytes - nwritten);
 			memcpy(workb + off, buf + nwritten, n);
 			nwritten += n;
@@ -732,14 +732,14 @@ inv_write(LargeObjectDesc *obj_desc, const char *buf, int nbytes)
 			 *
 			 * First, fill any hole
 			 */
-			off = (int) (obj_desc->offset % LOBLKSIZE);
+			off = (int) (obj_desc->offset % cluster_loblksize);
 			if (off > 0)
 				MemSet(workb, 0, off);
 
 			/*
 			 * Insert appropriate portion of new data
 			 */
-			n = LOBLKSIZE - off;
+			n = cluster_loblksize - off;
 			n = (n <= (nbytes - nwritten)) ? n : (nbytes - nwritten);
 			memcpy(workb + off, buf + nwritten, n);
 			nwritten += n;
@@ -779,7 +779,7 @@ inv_write(LargeObjectDesc *obj_desc, const char *buf, int nbytes)
 void
 inv_truncate(LargeObjectDesc *obj_desc, int64 len)
 {
-	int32		pageno = (int32) (len / LOBLKSIZE);
+	int32		pageno = (int32) (len / cluster_loblksize);
 	int32		off;
 	ScanKeyData skey[2];
 	SysScanDesc sd;
@@ -789,7 +789,7 @@ inv_truncate(LargeObjectDesc *obj_desc, int64 len)
 	{
 		bytea		hdr;
 		/* this is to make the union big enough for a LO data chunk: */
-		char		data[LOBLKSIZE + VARHDRSZ];
+		char		data[LOBLKSIZE_LIMIT + VARHDRSZ];
 		/* ensure union is aligned well enough: */
 		int32		align_it;
 	}			workbuf;
@@ -872,7 +872,7 @@ inv_truncate(LargeObjectDesc *obj_desc, int64 len)
 		/*
 		 * Fill any hole
 		 */
-		off = len % LOBLKSIZE;
+		off = len % cluster_loblksize;
 		if (off > pagelen)
 			MemSet(workb + pagelen, 0, off - pagelen);
 
@@ -911,7 +911,7 @@ inv_truncate(LargeObjectDesc *obj_desc, int64 len)
 		 *
 		 * Fill the hole up to the truncation point
 		 */
-		off = len % LOBLKSIZE;
+		off = len % cluster_loblksize;
 		if (off > 0)
 			MemSet(workb, 0, off);
 

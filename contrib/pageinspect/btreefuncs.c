@@ -116,7 +116,7 @@ GetBTPageStatistics(BlockNumber blkno, Buffer buffer, BTPageStat *stat)
 
 	stat->blkno = blkno;
 
-	stat->max_avail = BLCKSZ - (BLCKSZ - phdr->pd_special + SizeOfPageHeaderData);
+	stat->max_avail = cluster_block_size - (cluster_block_size - phdr->pd_special + SizeOfPageHeaderData);
 
 	stat->dead_items = stat->live_items = 0;
 
@@ -663,8 +663,8 @@ bt_page_items_internal(PG_FUNCTION_ARGS, enum pageinspect_version ext_version)
 
 		uargs = palloc(sizeof(ua_page_items));
 
-		uargs->page = palloc(BLCKSZ);
-		memcpy(uargs->page, BufferGetPage(buffer), BLCKSZ);
+		uargs->page = palloc(cluster_block_size);
+		memcpy(uargs->page, BufferGetPage(buffer), cluster_block_size);
 
 		UnlockReleaseBuffer(buffer);
 		relation_close(rel, AccessShareLock);

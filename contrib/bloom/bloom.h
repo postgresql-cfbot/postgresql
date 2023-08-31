@@ -19,6 +19,7 @@
 #include "access/xlog.h"
 #include "fmgr.h"
 #include "nodes/pathnodes.h"
+#include "storage/bufpage.h"
 
 /* Support procedures numbers */
 #define BLOOM_HASH_PROC			1
@@ -106,16 +107,9 @@ typedef struct BloomOptions
 											 * index key */
 } BloomOptions;
 
-/*
- * FreeBlockNumberArray - array of block numbers sized so that metadata fill
- * all space in metapage.
- */
-typedef BlockNumber FreeBlockNumberArray[
-										 MAXALIGN_DOWN(
-													   BLCKSZ - SizeOfPageHeaderData - MAXALIGN(sizeof(BloomPageOpaqueData))
-													   - MAXALIGN(sizeof(uint16) * 2 + sizeof(uint32) + sizeof(BloomOptions))
-													   ) / sizeof(BlockNumber)
-];
+#define free_block_number_elems CalcFreeBlockNumberElems(cluster_block_size)
+BlockSizeDecl(CalcFreeBlockNumberElems);
+
 
 /* Metadata of bloom index */
 typedef struct BloomMetaPageData
@@ -124,14 +118,18 @@ typedef struct BloomMetaPageData
 	uint16		nStart;
 	uint16		nEnd;
 	BloomOptions opts;
-	FreeBlockNumberArray notFullPage;
+	BlockNumber notFullPage[FLEXIBLE_ARRAY_MEMBER];
 } BloomMetaPageData;
+
+#define SizeOfBloomMetaPageData (offsetof(BloomMetaPageData,notFullPage) + sizeof(BlockNumber) * BloomMetaBlockN)
 
 /* Magic number to distinguish bloom pages among anothers */
 #define BLOOM_MAGICK_NUMBER (0xDBAC0DED)
 
 /* Number of blocks numbers fit in BloomMetaPageData */
-#define BloomMetaBlockN		(sizeof(FreeBlockNumberArray) / sizeof(BlockNumber))
+#define BloomMetaBlockN		(MAXALIGN_DOWN(cluster_block_size - SizeOfPageHeaderData - MAXALIGN(sizeof(BloomPageOpaqueData)) \
+													   - MAXALIGN(sizeof(uint16) * 2 + sizeof(uint32) + sizeof(BloomOptions)) \
+								  ) / sizeof(BlockNumber))
 
 #define BloomPageGetMeta(page)	((BloomMetaPageData *) PageGetContents(page))
 
@@ -150,7 +148,7 @@ typedef struct BloomState
 } BloomState;
 
 #define BloomPageGetFreeSpace(state, page) \
-	(BLCKSZ - MAXALIGN(SizeOfPageHeaderData) \
+	(cluster_block_size - MAXALIGN(SizeOfPageHeaderData) \
 		- BloomPageGetMaxOffset(page) * (state)->sizeOfBloomTuple \
 		- MAXALIGN(sizeof(BloomPageOpaqueData)))
 

@@ -174,7 +174,7 @@ heap_toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 		hoff += BITMAPLEN(numAttrs);
 	hoff = MAXALIGN(hoff);
 	/* now convert to a limit on the tuple data size */
-	maxDataLen = RelationGetToastTupleTarget(rel, TOAST_TUPLE_TARGET) - hoff;
+	maxDataLen = RelationGetToastTupleTarget(rel, cluster_toast_tuple_target) - hoff;
 
 	/*
 	 * Look for attributes with attstorage EXTENDED to compress.  Also find
@@ -255,7 +255,7 @@ heap_toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 	 * increase the target tuple size, so that MAIN attributes aren't stored
 	 * externally unless really necessary.
 	 */
-	maxDataLen = TOAST_TUPLE_TARGET_MAIN - hoff;
+	maxDataLen = toast_tuple_target_main - hoff;
 
 	while (heap_compute_data_size(tupleDesc,
 								  toast_values, toast_isnull) > maxDataLen &&
@@ -634,7 +634,7 @@ heap_fetch_toast_slice(Relation toastrel, Oid valueid, int32 attrsize,
 	SysScanDesc toastscan;
 	HeapTuple	ttup;
 	int32		expectedchunk;
-	int32		totalchunks = ((attrsize - 1) / TOAST_MAX_CHUNK_SIZE) + 1;
+	int32		totalchunks = ((attrsize - 1) / cluster_toast_max_chunk_size) + 1;
 	int			startchunk;
 	int			endchunk;
 	int			num_indexes;
@@ -647,8 +647,8 @@ heap_fetch_toast_slice(Relation toastrel, Oid valueid, int32 attrsize,
 									&toastidxs,
 									&num_indexes);
 
-	startchunk = sliceoffset / TOAST_MAX_CHUNK_SIZE;
-	endchunk = (sliceoffset + slicelength - 1) / TOAST_MAX_CHUNK_SIZE;
+	startchunk = sliceoffset / cluster_toast_max_chunk_size;
+	endchunk = (sliceoffset + slicelength - 1) / cluster_toast_max_chunk_size;
 	Assert(endchunk <= totalchunks);
 
 	/* Set up a scan key to fetch from the index. */
@@ -749,8 +749,8 @@ heap_fetch_toast_slice(Relation toastrel, Oid valueid, int32 attrsize,
 									 curchunk,
 									 startchunk, endchunk, valueid,
 									 RelationGetRelationName(toastrel))));
-		expected_size = curchunk < totalchunks - 1 ? TOAST_MAX_CHUNK_SIZE
-			: attrsize - ((totalchunks - 1) * TOAST_MAX_CHUNK_SIZE);
+		expected_size = curchunk < totalchunks - 1 ? cluster_toast_max_chunk_size
+			: attrsize - ((totalchunks - 1) * cluster_toast_max_chunk_size);
 		if (chunksize != expected_size)
 			ereport(ERROR,
 					(errcode(ERRCODE_DATA_CORRUPTED),
@@ -765,12 +765,12 @@ heap_fetch_toast_slice(Relation toastrel, Oid valueid, int32 attrsize,
 		chcpystrt = 0;
 		chcpyend = chunksize - 1;
 		if (curchunk == startchunk)
-			chcpystrt = sliceoffset % TOAST_MAX_CHUNK_SIZE;
+			chcpystrt = sliceoffset % cluster_toast_max_chunk_size;
 		if (curchunk == endchunk)
-			chcpyend = (sliceoffset + slicelength - 1) % TOAST_MAX_CHUNK_SIZE;
+			chcpyend = (sliceoffset + slicelength - 1) % cluster_toast_max_chunk_size;
 
 		memcpy(VARDATA(result) +
-			   (curchunk * TOAST_MAX_CHUNK_SIZE - sliceoffset) + chcpystrt,
+			   ((int32)(curchunk * cluster_toast_max_chunk_size) - sliceoffset) + chcpystrt,
 			   chunkdata + chcpystrt,
 			   (chcpyend - chcpystrt) + 1);
 

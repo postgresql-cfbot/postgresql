@@ -2023,7 +2023,7 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
       </para>
       <para>
        Size of the on-disk representation of this table in pages (of size
-       <symbol>BLCKSZ</symbol>).  This is only an estimate used by the
+       <symbol>cluster_block_size</symbol>).  This is only an estimate used by the
        planner.  It is updated by <link linkend="sql-vacuum"><command>VACUUM</command></link>,
        <link linkend="sql-analyze"><command>ANALYZE</command></link>, and a few DDL commands such as
        <link linkend="sql-createindex"><command>CREATE INDEX</command></link>.
@@ -4884,8 +4884,8 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
    assigned when it is created.  Each large object is broken into
    segments or <quote>pages</quote> small enough to be conveniently stored as rows
    in <structname>pg_largeobject</structname>.
-   The amount of data per page is defined to be <symbol>LOBLKSIZE</symbol> (which is currently
-   <literal>BLCKSZ/4</literal>, or typically 2 kB).
+   The amount of data per page is defined to be <symbol>cluster_loblksize</symbol> (which is currently
+   <literal>cluster_block_size/4</literal>, or typically 2 kB).
   </para>
 
   <para>
@@ -4939,7 +4939,7 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
       </para>
       <para>
        Actual data stored in the large object.
-       This will never be more than <symbol>LOBLKSIZE</symbol> bytes and might be less.
+       This will never be more than <symbol>cluster_loblksize</symbol> bytes and might be less.
       </para></entry>
      </row>
     </tbody>
@@ -4949,9 +4949,9 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
   <para>
    Each row of <structname>pg_largeobject</structname> holds data
    for one page of a large object, beginning at
-   byte offset (<literal>pageno * LOBLKSIZE</literal>) within the object.  The implementation
+   byte offset (<literal>pageno * cluster_loblksize</literal>) within the object.  The implementation
    allows sparse storage: pages might be missing, and might be shorter than
-   <literal>LOBLKSIZE</literal> bytes even if they are not the last page of the object.
+   <literal>cluster_loblksize</literal> bytes even if they are not the last page of the object.
    Missing regions within a large object read as zeroes.
   </para>
 

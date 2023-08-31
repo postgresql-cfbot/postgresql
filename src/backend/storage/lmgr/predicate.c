@@ -321,9 +321,9 @@ static SlruCtlData SerialSlruCtlData;
 
 #define SerialSlruCtl			(&SerialSlruCtlData)
 
-#define SERIAL_PAGESIZE			BLCKSZ
+#define serial_pagesize			cluster_block_size
 #define SERIAL_ENTRYSIZE			sizeof(SerCommitSeqNo)
-#define SERIAL_ENTRIESPERPAGE	(SERIAL_PAGESIZE / SERIAL_ENTRYSIZE)
+#define SERIAL_ENTRIESPERPAGE	(serial_pagesize / SERIAL_ENTRYSIZE)
 
 /*
  * Set maximum pages based on the number needed to track all transactions.

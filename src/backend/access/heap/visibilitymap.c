@@ -90,6 +90,7 @@
 #include "access/visibilitymap.h"
 #include "access/xloginsert.h"
 #include "access/xlogutils.h"
+#include "common/libdivide.h"
 #include "miscadmin.h"
 #include "port/pg_bitutils.h"
 #include "storage/bufmgr.h"
@@ -105,18 +106,26 @@
  * extra headers, so the whole page minus the standard page header is
  * used for the bitmap.
  */
-#define MAPSIZE (BLCKSZ - MAXALIGN(SizeOfPageHeaderData))
+#define MAPSIZE(blocksize) (blocksize - MAXALIGN(SizeOfPageHeaderData))
 
 /* Number of heap blocks we can represent in one byte */
-#define HEAPBLOCKS_PER_BYTE (BITS_PER_BYTE / BITS_PER_HEAPBLOCK)
+#define HEAPBLOCKS_PER_BYTE(blocksize) (BITS_PER_BYTE / BITS_PER_HEAPBLOCK)
+
+/* Init routine for our fastmath */
+#define MAPBLOCK_INIT if (unlikely(!mapblock_size))			\
+	{														\
+		mapblock_size = MAPSIZE(cluster_block_size);		\
+		mapblock_div = libdivide_u32_gen(mapblock_size);	\
+		mapblock_inv = pg_fastinverse(mapblock_size);		\
+	}
 
 /* Number of heap blocks we can represent in one visibility map page. */
-#define HEAPBLOCKS_PER_PAGE (MAPSIZE * HEAPBLOCKS_PER_BYTE)
+#define HEAPBLOCKS_PER_PAGE(blocksize) (MAPSIZE(blocksize) << BITS_PER_HEAPBLOCK)
 
 /* Mapping from heap block number to the right bit in the visibility map */
-#define HEAPBLK_TO_MAPBLOCK(x) ((x) / HEAPBLOCKS_PER_PAGE)
-#define HEAPBLK_TO_MAPBYTE(x) (((x) % HEAPBLOCKS_PER_PAGE) / HEAPBLOCKS_PER_BYTE)
-#define HEAPBLK_TO_OFFSET(x) (((x) % HEAPBLOCKS_PER_BYTE) * BITS_PER_HEAPBLOCK)
+#define HEAPBLK_TO_MAPBLOCK(x) (libdivide_u32_do((x),&mapblock_div))
+#define HEAPBLK_TO_MAPBYTE(x) (pg_fastmod((x),mapblock_size,mapblock_inv) >> 2) /* always 4 blocks per byte */
+#define HEAPBLK_TO_OFFSET(x) (((x) & 0x3) << 1) /* always 2 bits per entry */
 
 /* Masks for counting subsets of bits in the visibility map. */
 #define VISIBLE_MASK64	UINT64CONST(0x5555555555555555) /* The lower bit of each
@@ -128,6 +137,10 @@
 static Buffer vm_readbuf(Relation rel, BlockNumber blkno, bool extend);
 static Buffer vm_extend(Relation rel, BlockNumber vm_nblocks);
 
+/* storage for the fast div/mod inverse */
+static uint32 mapblock_size = 0;
+static uint64 mapblock_inv;
+static struct libdivide_u32_t mapblock_div;
 
 /*
  *	visibilitymap_clear - clear specified bits for one page in visibility map
@@ -139,12 +152,19 @@ static Buffer vm_extend(Relation rel, BlockNumber vm_nblocks);
 bool
 visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer vmbuf, uint8 flags)
 {
-	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
-	int			mapByte = HEAPBLK_TO_MAPBYTE(heapBlk);
-	int			mapOffset = HEAPBLK_TO_OFFSET(heapBlk);
-	uint8		mask = flags << mapOffset;
+	BlockNumber mapBlock;
+	int			mapByte;
+	int			mapOffset;
+	uint8		mask;
 	char	   *map;
 	bool		cleared = false;
+
+	MAPBLOCK_INIT;
+
+	mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
+	mapByte = HEAPBLK_TO_MAPBYTE(heapBlk);
+	mapOffset = HEAPBLK_TO_OFFSET(heapBlk);
+	mask = flags << mapOffset;
 
 	/* Must never clear all_visible bit while leaving all_frozen bit set */
 	Assert(flags & VISIBILITYMAP_VALID_BITS);
@@ -192,7 +212,11 @@ visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer vmbuf, uint8 flags
 void
 visibilitymap_pin(Relation rel, BlockNumber heapBlk, Buffer *vmbuf)
 {
-	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
+	BlockNumber mapBlock;
+
+	MAPBLOCK_INIT;
+
+	mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
 
 	/* Reuse the old pinned buffer if possible */
 	if (BufferIsValid(*vmbuf))
@@ -216,7 +240,11 @@ visibilitymap_pin(Relation rel, BlockNumber heapBlk, Buffer *vmbuf)
 bool
 visibilitymap_pin_ok(BlockNumber heapBlk, Buffer vmbuf)
 {
-	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
+	BlockNumber mapBlock;
+
+	MAPBLOCK_INIT;
+
+	mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
 
 	return BufferIsValid(vmbuf) && BufferGetBlockNumber(vmbuf) == mapBlock;
 }
@@ -247,11 +275,17 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 				  XLogRecPtr recptr, Buffer vmBuf, TransactionId cutoff_xid,
 				  uint8 flags)
 {
-	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
-	uint32		mapByte = HEAPBLK_TO_MAPBYTE(heapBlk);
-	uint8		mapOffset = HEAPBLK_TO_OFFSET(heapBlk);
+	BlockNumber mapBlock;
+	uint32		mapByte;
+	uint8		mapOffset;
 	Page		page;
 	uint8	   *map;
+
+	MAPBLOCK_INIT;
+
+	mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
+	mapByte = HEAPBLK_TO_MAPBYTE(heapBlk);
+	mapOffset = HEAPBLK_TO_OFFSET(heapBlk);
 
 #ifdef TRACE_VISIBILITYMAP
 	elog(DEBUG1, "vm_set %s %d", RelationGetRelationName(rel), heapBlk);
@@ -337,11 +371,17 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 uint8
 visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *vmbuf)
 {
-	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
-	uint32		mapByte = HEAPBLK_TO_MAPBYTE(heapBlk);
-	uint8		mapOffset = HEAPBLK_TO_OFFSET(heapBlk);
+	BlockNumber mapBlock;
+	uint32		mapByte;
+	uint8		mapOffset;
 	char	   *map;
 	uint8		result;
+
+	MAPBLOCK_INIT;
+
+	mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
+	mapByte = HEAPBLK_TO_MAPBYTE(heapBlk);
+	mapOffset = HEAPBLK_TO_OFFSET(heapBlk);
 
 #ifdef TRACE_VISIBILITYMAP
 	elog(DEBUG1, "vm_get_status %s %d", RelationGetRelationName(rel), heapBlk);
@@ -414,16 +454,16 @@ visibilitymap_count(Relation rel, BlockNumber *all_visible, BlockNumber *all_fro
 		 */
 		map = (uint64 *) PageGetContents(BufferGetPage(mapBuffer));
 
-		StaticAssertStmt(MAPSIZE % sizeof(uint64) == 0,
-						 "unsupported MAPSIZE");
+		Assert(mapblock_size % sizeof(uint64) == 0);
+
 		if (all_frozen == NULL)
 		{
-			for (i = 0; i < MAPSIZE / sizeof(uint64); i++)
+			for (i = 0; i < mapblock_size / sizeof(uint64); i++)
 				nvisible += pg_popcount64(map[i] & VISIBLE_MASK64);
 		}
 		else
 		{
-			for (i = 0; i < MAPSIZE / sizeof(uint64); i++)
+			for (i = 0; i < mapblock_size / sizeof(uint64); i++)
 			{
 				nvisible += pg_popcount64(map[i] & VISIBLE_MASK64);
 				nfrozen += pg_popcount64(map[i] & FROZEN_MASK64);
@@ -455,9 +495,15 @@ visibilitymap_prepare_truncate(Relation rel, BlockNumber nheapblocks)
 	BlockNumber newnblocks;
 
 	/* last remaining block, byte, and bit */
-	BlockNumber truncBlock = HEAPBLK_TO_MAPBLOCK(nheapblocks);
-	uint32		truncByte = HEAPBLK_TO_MAPBYTE(nheapblocks);
-	uint8		truncOffset = HEAPBLK_TO_OFFSET(nheapblocks);
+	BlockNumber truncBlock;
+	uint32		truncByte;
+	uint8		truncOffset;
+
+	MAPBLOCK_INIT;
+
+	truncBlock = HEAPBLK_TO_MAPBLOCK(nheapblocks);
+	truncByte = HEAPBLK_TO_MAPBYTE(nheapblocks);
+	truncOffset = HEAPBLK_TO_OFFSET(nheapblocks);
 
 #ifdef TRACE_VISIBILITYMAP
 	elog(DEBUG1, "vm_truncate %s %d", RelationGetRelationName(rel), nheapblocks);
@@ -501,7 +547,7 @@ visibilitymap_prepare_truncate(Relation rel, BlockNumber nheapblocks)
 		START_CRIT_SECTION();
 
 		/* Clear out the unwanted bytes. */
-		MemSet(&map[truncByte + 1], 0, MAPSIZE - (truncByte + 1));
+		MemSet(&map[truncByte + 1], 0, mapblock_size - (truncByte + 1));
 
 		/*----
 		 * Mask out the unwanted bits of the last remaining byte.
@@ -613,7 +659,7 @@ vm_readbuf(Relation rel, BlockNumber blkno, bool extend)
 	{
 		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 		if (PageIsNew(BufferGetPage(buf)))
-			PageInit(BufferGetPage(buf), BLCKSZ, 0);
+			PageInit(BufferGetPage(buf), cluster_block_size, 0);
 		LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 	}
 	return buf;

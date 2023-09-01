@@ -84,6 +84,8 @@ libpq = declare_dependency(
   include_directories: [include_directories('.')]
 )
 
+meson.override_dependency('libpq', libpq)
+
 pkgconfig.generate(
   name: 'libpq',
   description: 'PostgreSQL libpq library',

@@ -234,6 +234,7 @@ typedef enum
 {
 	TRANSFER_MODE_CLONE,
 	TRANSFER_MODE_COPY,
+	TRANSFER_MODE_COPY_FILE_RANGE,
 	TRANSFER_MODE_LINK
 } transferMode;
 
@@ -379,6 +380,8 @@ void		cloneFile(const char *src, const char *dst,
 					  const char *schemaName, const char *relName);
 void		copyFile(const char *src, const char *dst,
 					 const char *schemaName, const char *relName);
+void		copyFileByRange(const char *src, const char *dst,
+							const char *schemaName, const char *relName);
 void		linkFile(const char *src, const char *dst,
 					 const char *schemaName, const char *relName);
 void		rewriteVisibilityMap(const char *fromfile, const char *tofile,

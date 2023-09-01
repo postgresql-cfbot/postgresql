@@ -920,6 +920,9 @@ typedef struct Memoize
 
 	/* paramids from param_exprs */
 	Bitmapset  *keyparamids;
+
+	/* Estimated cache hit ratio, kept for EXPLAIN */
+	double		hit_ratio;
 } Memoize;
 
 /* ----------------

@@ -1627,6 +1627,11 @@ create_memoize_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 	pathnode->est_entries = 0;
 
 	/*
+	 * The estimated cache hit ratio will calculated later by cost_memoize_rescan()
+	 */
+	pathnode->hit_ratio = 0;
+
+	/*
 	 * Add a small additional charge for caching the first entry.  All the
 	 * harder calculations for rescans are performed in cost_memoize_rescan().
 	 */

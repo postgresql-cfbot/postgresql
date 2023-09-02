@@ -131,3 +131,29 @@ SELECT keys AS keys_leaf_1
 (1 row)
 
 DROP TABLE test_gist;
+-- Test for keys output by gtsvectorout() and also exercise
+-- a corner case of tsvector's picksplit.
+CREATE TABLE test_tsvector(t tsvector);
+INSERT INTO test_tsvector
+  SELECT array_to_string(array(SELECT 'a' || x::text FROM generate_series(1, 125) x), ' ')::tsvector
+  FROM generate_series(1, 3000);
+INSERT INTO test_tsvector SELECT '' FROM generate_series(1, 100);
+CREATE INDEX tsvector_gist_idx_1 ON test_tsvector USING gist (t tsvector_ops(siglen=1));
+CREATE INDEX tsvector_gist_idx_10 ON test_tsvector USING gist (t tsvector_ops(siglen=10));
+SELECT keys
+  FROM gist_page_items(get_raw_page('tsvector_gist_idx_1', 0), 'tsvector_gist_idx_1')
+  WHERE itemoffset = 1;
+         keys          
+-----------------------
+ (t)=("all true bits")
+(1 row)
+
+SELECT keys
+  FROM gist_page_items(get_raw_page('tsvector_gist_idx_10', 0), 'tsvector_gist_idx_10')
+  WHERE itemoffset = 1;
+                keys                 
+-------------------------------------
+ (t)=("62 true bits, 18 false bits")
+(1 row)
+
+DROP TABLE test_tsvector;

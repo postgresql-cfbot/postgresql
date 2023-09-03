@@ -131,6 +131,7 @@
 #include <signal.h>
 
 #include "access/parallel.h"
+#include "access/nrel.h"
 #include "access/slru.h"
 #include "access/transam.h"
 #include "access/xact.h"
@@ -141,6 +142,7 @@
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
+#include "storage/bufmgr.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
 #include "storage/proc.h"
@@ -163,7 +165,7 @@
  * than that, so changes in that data structure won't affect user-visible
  * restrictions.
  */
-#define NOTIFY_PAYLOAD_MAX_LENGTH	(BLCKSZ - NAMEDATALEN - 128)
+#define NOTIFY_PAYLOAD_MAX_LENGTH	(BLCKSZ - NAMEDATALEN - SizeOfPageHeaderData - 128)
 
 /*
  * Struct representing an entry in the global notify queue
@@ -213,7 +215,7 @@ typedef struct QueuePosition
 	((x).page == (y).page && (x).offset == (y).offset)
 
 #define QUEUE_POS_IS_ZERO(x) \
-	((x).page == 0 && (x).offset == 0)
+	((x).page == 0 && (x).offset == MAXALIGN(SizeOfPageHeaderData))
 
 /* choose logically smaller QueuePosition */
 #define QUEUE_POS_MIN(x,y) \
@@ -305,19 +307,13 @@ static AsyncQueueControl *asyncQueueControl;
 #define QUEUE_NEXT_LISTENER(i)		(asyncQueueControl->backend[i].nextListener)
 #define QUEUE_BACKEND_POS(i)		(asyncQueueControl->backend[i].pos)
 
-/*
- * The SLRU buffer area through which we access the notification queue
- */
-static SlruCtlData NotifyCtlData;
-
-#define NotifyCtl					(&NotifyCtlData)
 #define QUEUE_PAGESIZE				BLCKSZ
 #define QUEUE_FULL_WARN_INTERVAL	5000	/* warn at most once every 5s */
 
 /*
  * Use segments 0000 through FFFF.  Each contains SLRU_PAGES_PER_SEGMENT pages
  * which gives us the pages from 0 to SLRU_PAGES_PER_SEGMENT * 0x10000 - 1.
- * We could use as many segments as SlruScanDirectory() allows, but this gives
+ * We could use as many segments as NrelScanDirectory() allows, but this gives
  * us so much space already that it doesn't seem worth the trouble.
  *
  * The most data we can have in the queue at a time is QUEUE_MAX_PAGE/2
@@ -521,8 +517,6 @@ AsyncShmemSize(void)
 	size = mul_size(MaxBackends + 1, sizeof(QueueBackendStatus));
 	size = add_size(size, offsetof(AsyncQueueControl, backend));
 
-	size = add_size(size, SimpleLruShmemSize(NUM_NOTIFY_BUFFERS, 0));
-
 	return size;
 }
 
@@ -550,8 +544,8 @@ AsyncShmemInit(void)
 	if (!found)
 	{
 		/* First time through, so initialize it */
-		SET_QUEUE_POS(QUEUE_HEAD, 0, 0);
-		SET_QUEUE_POS(QUEUE_TAIL, 0, 0);
+		SET_QUEUE_POS(QUEUE_HEAD, 0, MAXALIGN(SizeOfPageHeaderData));
+		SET_QUEUE_POS(QUEUE_TAIL, 0, MAXALIGN(SizeOfPageHeaderData));
 		QUEUE_STOP_PAGE = 0;
 		QUEUE_FIRST_LISTENER = InvalidBackendId;
 		asyncQueueControl->lastQueueFillWarn = 0;
@@ -561,24 +555,17 @@ AsyncShmemInit(void)
 			QUEUE_BACKEND_PID(i) = InvalidPid;
 			QUEUE_BACKEND_DBOID(i) = InvalidOid;
 			QUEUE_NEXT_LISTENER(i) = InvalidBackendId;
-			SET_QUEUE_POS(QUEUE_BACKEND_POS(i), 0, 0);
+			SET_QUEUE_POS(QUEUE_BACKEND_POS(i), 0, MAXALIGN(SizeOfPageHeaderData));
 		}
 	}
-
-	/*
-	 * Set up SLRU management of the pg_notify data.
-	 */
-	NotifyCtl->PagePrecedes = asyncQueuePagePrecedes;
-	SimpleLruInit(NotifyCtl, "Notify", NUM_NOTIFY_BUFFERS, 0,
-				  NotifySLRULock, "pg_notify", LWTRANCHE_NOTIFY_BUFFER,
-				  SYNC_HANDLER_NONE);
 
 	if (!found)
 	{
 		/*
 		 * During start or reboot, clean out the pg_notify directory.
 		 */
-		(void) SlruScanDirectory(NotifyCtl, SlruScanDirCbDeleteAll, NULL);
+		(void) NrelScanDirectory(NREL_NOTIFY_REL_ID, asyncQueuePagePrecedes,
+								 NrelScanDirCbDeleteAll, NULL);
 	}
 }
 
@@ -1345,19 +1332,19 @@ asyncQueueAdvance(volatile QueuePosition *position, int entryLength)
 	 * written or read.
 	 */
 	offset += entryLength;
-	Assert(offset <= QUEUE_PAGESIZE);
+	Assert(offset <= QUEUE_PAGESIZE - MAXALIGN(SizeOfPageHeaderData));
 
 	/*
 	 * In a second step check if another entry can possibly be written to the
 	 * page. If so, stay here, we have reached the next position. If not, then
 	 * we need to move on to the next page.
 	 */
-	if (offset + QUEUEALIGN(AsyncQueueEntryEmptySize) > QUEUE_PAGESIZE)
+	if (offset + QUEUEALIGN(AsyncQueueEntryEmptySize) > QUEUE_PAGESIZE - MAXALIGN(SizeOfPageHeaderData))
 	{
 		pageno++;
 		if (pageno > QUEUE_MAX_PAGE)
 			pageno = 0;			/* wrap around */
-		offset = 0;
+		offset = MAXALIGN(SizeOfPageHeaderData); /* start at SizeOfPageHeaderData */
 		pageJump = true;
 	}
 
@@ -1411,10 +1398,8 @@ asyncQueueAddEntries(ListCell *nextNotify)
 	QueuePosition queue_head;
 	int			pageno;
 	int			offset;
-	int			slotno;
-
-	/* We hold both NotifyQueueLock and NotifySLRULock during this operation */
-	LWLockAcquire(NotifySLRULock, LW_EXCLUSIVE);
+	Buffer		buffer;
+	Page		page;
 
 	/*
 	 * We work with a local copy of QUEUE_HEAD, which we write back to shared
@@ -1439,13 +1424,25 @@ asyncQueueAddEntries(ListCell *nextNotify)
 	 */
 	pageno = QUEUE_POS_PAGE(queue_head);
 	if (QUEUE_POS_IS_ZERO(queue_head))
-		slotno = SimpleLruZeroPage(NotifyCtl, pageno);
-	else
-		slotno = SimpleLruReadPage(NotifyCtl, pageno, true,
-								   InvalidTransactionId);
+	{
 
+		buffer = ZeroNrelBuffer(NREL_NOTIFY_REL_ID, pageno);
+		page = BufferGetPage(buffer);
+		PageInitNREL(page, BLCKSZ, 0);
+		PageSetHeaderDataNonRel(page, pageno, InvalidXLogRecPtr, BLCKSZ, PG_METAPAGE_LAYOUT_VERSION);
+
+	}
+	else
+	{
+		buffer = ReadNrelBuffer(NREL_NOTIFY_REL_ID, pageno);
+
+
+		LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+	}
+
+	
 	/* Note we mark the page dirty before writing in it */
-	NotifyCtl->shared->page_dirty[slotno] = true;
+	MarkBufferDirty(buffer);
 
 	while (nextNotify != NULL)
 	{
@@ -1457,7 +1454,7 @@ asyncQueueAddEntries(ListCell *nextNotify)
 		offset = QUEUE_POS_OFFSET(queue_head);
 
 		/* Check whether the entry really fits on the current page */
-		if (offset + qe.length <= QUEUE_PAGESIZE)
+		if (offset + qe.length <= QUEUE_PAGESIZE - MAXALIGN(SizeOfPageHeaderData))
 		{
 			/* OK, so advance nextNotify past this item */
 			nextNotify = lnext(pendingNotifies->events, nextNotify);
@@ -1469,16 +1466,17 @@ asyncQueueAddEntries(ListCell *nextNotify)
 			 * only check dboid and since it won't match any reader's database
 			 * OID, they will ignore this entry and move on.
 			 */
-			qe.length = QUEUE_PAGESIZE - offset;
+			qe.length = QUEUE_PAGESIZE - MAXALIGN(SizeOfPageHeaderData) - offset;
 			qe.dboid = InvalidOid;
 			qe.data[0] = '\0';	/* empty channel */
 			qe.data[1] = '\0';	/* empty payload */
 		}
 
 		/* Now copy qe into the shared buffer page */
-		memcpy(NotifyCtl->shared->page_buffer[slotno] + offset,
+		memcpy(PageGetContents(BufferGetPage(buffer)) + offset,
 			   &qe,
 			   qe.length);
+
 
 		/* Advance queue_head appropriately, and detect if page is full */
 		if (asyncQueueAdvance(&(queue_head), qe.length))
@@ -1487,11 +1485,14 @@ asyncQueueAddEntries(ListCell *nextNotify)
 			 * Page is full, so we're done here, but first fill the next page
 			 * with zeroes.  The reason to do this is to ensure that slru.c's
 			 * idea of the head page is always the same as ours, which avoids
-			 * boundary problems in SimpleLruTruncate.  The test in
+			 * boundary problems in NonRelTruncate.  The test in
 			 * asyncQueueIsFull() ensured that there is room to create this
 			 * page without overrunning the queue.
 			 */
-			slotno = SimpleLruZeroPage(NotifyCtl, QUEUE_POS_PAGE(queue_head));
+			UnlockReleaseBuffer(buffer);
+			buffer = ZeroNrelBuffer(NREL_NOTIFY_REL_ID,
+									QUEUE_POS_PAGE(queue_head));
+			MarkBufferDirty(buffer);
 
 			/*
 			 * If the new page address is a multiple of QUEUE_CLEANUP_DELAY,
@@ -1505,11 +1506,10 @@ asyncQueueAddEntries(ListCell *nextNotify)
 			break;
 		}
 	}
+	UnlockReleaseBuffer(buffer);
 
 	/* Success, so update the global QUEUE_HEAD */
 	QUEUE_HEAD = queue_head;
-
-	LWLockRelease(NotifySLRULock);
 
 	return nextNotify;
 }
@@ -1983,17 +1983,18 @@ asyncQueueReadAllNotifications(void)
 		{
 			int			curpage = QUEUE_POS_PAGE(pos);
 			int			curoffset = QUEUE_POS_OFFSET(pos);
-			int			slotno;
 			int			copysize;
+			Buffer		buffer;
 
 			/*
-			 * We copy the data from SLRU into a local buffer, so as to avoid
-			 * holding the NotifySLRULock while we are examining the entries
-			 * and possibly transmitting them to our frontend.  Copy only the
-			 * part of the page we will actually inspect.
+			 * We copy the data into a local buffer, so as to avoid holding a
+			 * buffer pin while we are examining the entries and possibly
+			 * transmitting them to our frontend.  Copy only the part of the
+			 * page we will actually inspect.
 			 */
-			slotno = SimpleLruReadPage_ReadOnly(NotifyCtl, curpage,
-												InvalidTransactionId);
+			buffer = ReadNrelBuffer(NREL_NOTIFY_REL_ID, curpage);
+
+
 			if (curpage == QUEUE_POS_PAGE(head))
 			{
 				/* we only want to read as far as head */
@@ -2004,13 +2005,12 @@ asyncQueueReadAllNotifications(void)
 			else
 			{
 				/* fetch all the rest of the page */
-				copysize = QUEUE_PAGESIZE - curoffset;
+				copysize = QUEUE_PAGESIZE - MAXALIGN(SizeOfPageHeaderData) - curoffset;
 			}
-			memcpy(page_buffer.buf + curoffset,
-				   NotifyCtl->shared->page_buffer[slotno] + curoffset,
+			memcpy(PageGetContents(page_buffer.buf) +  curoffset,
+				   PageGetContents(BufferGetPage(buffer)) + curoffset,
 				   copysize);
-			/* Release lock that we got from SimpleLruReadPage_ReadOnly() */
-			LWLockRelease(NotifySLRULock);
+			ReleaseBuffer(buffer);
 
 			/*
 			 * Process messages up to the stop position, end of page, or an
@@ -2078,7 +2078,7 @@ asyncQueueProcessPageEntries(volatile QueuePosition *current,
 		if (QUEUE_POS_EQUAL(thisentry, stop))
 			break;
 
-		qe = (AsyncQueueEntry *) (page_buffer + QUEUE_POS_OFFSET(thisentry));
+		qe = (AsyncQueueEntry *) (PageGetContents(page_buffer) + QUEUE_POS_OFFSET(thisentry));
 
 		/*
 		 * Advance *current over this message, possibly to the next page. As
@@ -2161,7 +2161,7 @@ asyncQueueAdvanceTail(void)
 	int			newtailpage;
 	int			boundary;
 
-	/* Restrict task to one backend per cluster; see SimpleLruTruncate(). */
+	/* Restrict task to one backend per cluster; see NonRelTruncate(). */
 	LWLockAcquire(NotifyQueueTailLock, LW_EXCLUSIVE);
 
 	/*
@@ -2178,7 +2178,7 @@ asyncQueueAdvanceTail(void)
 	 * there are pages we can truncate but haven't yet finished doing so.
 	 *
 	 * For concurrency's sake, we don't want to hold NotifyQueueLock while
-	 * performing SimpleLruTruncate.  This is OK because no backend will try
+	 * performing NonRelTruncate.  This is OK because no backend will try
 	 * to access the pages we are in the midst of truncating.
 	 */
 	LWLockAcquire(NotifyQueueLock, LW_EXCLUSIVE);
@@ -2204,10 +2204,10 @@ asyncQueueAdvanceTail(void)
 	if (asyncQueuePagePrecedes(oldtailpage, boundary))
 	{
 		/*
-		 * SimpleLruTruncate() will ask for NotifySLRULock but will also
+		 * NonRelTruncate() will ask for NotifySLRULock but will also
 		 * release the lock again.
 		 */
-		SimpleLruTruncate(NotifyCtl, newtailpage);
+		NonRelTruncate(NREL_NOTIFY_REL_ID, asyncQueuePagePrecedes, newtailpage);
 
 		/*
 		 * Update QUEUE_STOP_PAGE.  This changes asyncQueueIsFull()'s verdict

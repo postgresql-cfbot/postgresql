@@ -17,6 +17,7 @@ OBJS = \
 	commit_ts.o \
 	generic_xlog.o \
 	multixact.o \
+	nrel.o \
 	parallel.o \
 	rmgr.o \
 	slru.o \

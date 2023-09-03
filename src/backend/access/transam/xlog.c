@@ -51,6 +51,7 @@
 #include "access/heaptoast.h"
 #include "access/multixact.h"
 #include "access/rewriteheap.h"
+#include "access/slru.h"
 #include "access/subtrans.h"
 #include "access/timeline.h"
 #include "access/transam.h"
@@ -1462,7 +1463,7 @@ WaitXLogInsertionsToFinish(XLogRecPtr upto)
 	 */
 	if (upto > reservedUpto)
 	{
-		ereport(LOG,
+		ereport(PANIC,
 				(errmsg("request to flush past end of generated WAL; request %X/%X, current position %X/%X",
 						LSN_FORMAT_ARGS(upto), LSN_FORMAT_ARGS(reservedUpto))));
 		upto = reservedUpto;
@@ -4678,6 +4679,7 @@ BootStrapXLOG(void)
 	uint64		sysidentifier;
 	struct timeval tv;
 	pg_crc32c	crc;
+	ResourceOwner resowner;
 
 	/* allow ordinary WAL segment creation, like StartupXLOG() would */
 	SetInstallXLogFileSegmentActive();
@@ -4816,11 +4818,15 @@ BootStrapXLOG(void)
 	/* some additional ControlFile fields are set in WriteControlFile() */
 	WriteControlFile();
 
-	/* Bootstrap the commit log, too */
+	/* Bootstrap the commit log too */
+	resowner = ResourceOwnerCreate(NULL, "bootstrap resowner");
+	CurrentResourceOwner = resowner;
 	BootStrapCLOG();
 	BootStrapCommitTs();
 	BootStrapSUBTRANS();
 	BootStrapMultiXact();
+	CurrentResourceOwner = NULL;
+	ResourceOwnerDelete(resowner);
 
 	pfree(buffer);
 
@@ -7043,15 +7049,12 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	CheckPointSnapBuild();
 	CheckPointLogicalRewriteHeap();
 	CheckPointReplicationOrigin();
+	CheckPointPredicate();
+	CheckPointNREL();
 
-	/* Write out all dirty data in SLRUs and the main buffer pool */
+	/* Write out all dirty data in the buffer pool */
 	TRACE_POSTGRESQL_BUFFER_CHECKPOINT_START(flags);
 	CheckpointStats.ckpt_write_t = GetCurrentTimestamp();
-	CheckPointCLOG();
-	CheckPointCommitTs();
-	CheckPointSUBTRANS();
-	CheckPointMultiXact();
-	CheckPointPredicate();
 	CheckPointBuffers(flags);
 
 	/* Perform all queued up fsyncs */

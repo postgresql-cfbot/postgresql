@@ -1171,6 +1171,24 @@ CompactCheckpointerRequestQueue(void)
 	/* must hold CheckpointerCommLock in exclusive mode */
 	Assert(LWLockHeldByMe(CheckpointerCommLock));
 
+	/*
+	 * XXX FIXME
+	 * If we were unlucky enough to be reached from
+	 * TransactionIdSetTreeStatus() while trying to read in a CLOG page and
+	 * having to write out some other dirty page and then finding the sync
+	 * request queue full, we're now running in a critical section and we're
+	 * not allowed to allocate any memory below.
+	 *
+	 * XXX Without this, 027_stream_regress.pl aborts below occasionally, due
+	 * to pressure on its very small shared_buffers and thus also sync request
+	 * queue.
+	 */
+	if (CritSectionCount > 0)
+	{
+		elog(LOG, "CompactCheckpointerRequestQueue() critical section, returning");
+		return false;
+	}
+
 	/* Initialize skip_slot array */
 	skip_slot = palloc0(sizeof(bool) * CheckpointerShmem->num_requests);
 

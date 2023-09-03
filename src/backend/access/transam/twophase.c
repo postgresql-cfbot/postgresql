@@ -2296,6 +2296,10 @@ RecordTransactionCommitPrepared(TransactionId xid,
 	TimestampTz committs = GetCurrentTimestamp();
 	bool		replorigin;
 
+	//set resource owner already enlarged flag
+	ResourceOwnerEnlargeBuffers(CurrentResourceOwner);
+
+	
 	/*
 	 * Are we using the replication origins feature?  Or, in other words, are
 	 * we replaying remote actions?
@@ -2359,6 +2363,8 @@ RecordTransactionCommitPrepared(TransactionId xid,
 	MyProc->delayChkptFlags &= ~DELAY_CHKPT_START;
 
 	END_CRIT_SECTION();
+
+	//reset resource owner already enlarged flag 
 
 	/*
 	 * Wait for synchronous replication, if required.

@@ -68,6 +68,7 @@
 #include "utils/inval.h"
 #include "utils/memutils.h"
 #include "utils/relmapper.h"
+#include "utils/resowner_private.h"
 #include "utils/snapmgr.h"
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
@@ -1391,6 +1392,23 @@ RecordTransactionCommit(void)
 		 * are delaying the checkpoint a bit fuzzy, but it doesn't matter.
 		 */
 		Assert((MyProc->delayChkptFlags & DELAY_CHKPT_START) == 0);
+		
+		/*
+		 * After moving the commit log to the buffer cache, we may need to
+		 * create a hashtable entry in the storage manager hash table for the
+		 * commit log which will require allocating memory. We want to do this 
+		 * before we start the critical section.
+		 */
+		Assert(VerifyClogLocatorInHashTable());
+
+
+		/*
+		 * Similar to above - we may need to allocate memory for a new buffer pin
+		 * for ReadBuffer while getting a clog page, so ensure we have enough memory
+		 * before starting critical section.
+		 */
+		ResourceOwnerEnlargeBuffers(CurrentResourceOwner);
+						
 		START_CRIT_SECTION();
 		MyProc->delayChkptFlags |= DELAY_CHKPT_START;
 
@@ -1426,6 +1444,8 @@ RecordTransactionCommit(void)
 		TransactionTreeSetCommitTsData(xid, nchildren, children,
 									   replorigin_session_origin_timestamp,
 									   replorigin_session_origin);
+
+		//reset resource owner already enlarged flag
 	}
 
 	/*
@@ -1754,6 +1774,7 @@ RecordTransactionAbort(bool isSubXact)
 	ndroppedstats = pgstat_get_transactional_drops(false, &droppedstats);
 
 	/* XXX do we really need a critical section here? */
+	ResourceOwnerEnlargeBuffers(CurrentResourceOwner);
 	START_CRIT_SECTION();
 
 	/* Write the ABORT record */

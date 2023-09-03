@@ -69,6 +69,7 @@
 #include "postgres.h"
 
 #include "access/multixact.h"
+#include "access/nrel.h"
 #include "access/slru.h"
 #include "access/transam.h"
 #include "access/twophase.h"
@@ -106,7 +107,7 @@
  */
 
 /* We need four bytes per offset */
-#define MULTIXACT_OFFSETS_PER_PAGE (BLCKSZ / sizeof(MultiXactOffset))
+#define MULTIXACT_OFFSETS_PER_PAGE ((BLCKSZ - SizeOfPageHeaderData)/ sizeof(MultiXactOffset))
 
 #define MultiXactIdToOffsetPage(xid) \
 	((xid) / (MultiXactOffset) MULTIXACT_OFFSETS_PER_PAGE)
@@ -138,7 +139,7 @@
 /* size in bytes of a complete group */
 #define MULTIXACT_MEMBERGROUP_SIZE \
 	(sizeof(TransactionId) * MULTIXACT_MEMBERS_PER_MEMBERGROUP + MULTIXACT_FLAGBYTES_PER_GROUP)
-#define MULTIXACT_MEMBERGROUPS_PER_PAGE (BLCKSZ / MULTIXACT_MEMBERGROUP_SIZE)
+#define MULTIXACT_MEMBERGROUPS_PER_PAGE ((BLCKSZ - SizeOfPageHeaderData) / MULTIXACT_MEMBERGROUP_SIZE)
 #define MULTIXACT_MEMBERS_PER_PAGE	\
 	(MULTIXACT_MEMBERGROUPS_PER_PAGE * MULTIXACT_MEMBERS_PER_MEMBERGROUP)
 
@@ -161,9 +162,9 @@
 
 /* Location (byte offset within page) of flag word for a given member */
 #define MXOffsetToFlagsOffset(xid) \
-	((((xid) / (TransactionId) MULTIXACT_MEMBERS_PER_MEMBERGROUP) % \
+	(((((xid) / (TransactionId) MULTIXACT_MEMBERS_PER_MEMBERGROUP) % \
 	  (TransactionId) MULTIXACT_MEMBERGROUPS_PER_PAGE) * \
-	 (TransactionId) MULTIXACT_MEMBERGROUP_SIZE)
+	 (TransactionId) MULTIXACT_MEMBERGROUP_SIZE))
 #define MXOffsetToFlagsBitShift(xid) \
 	(((xid) % (TransactionId) MULTIXACT_MEMBERS_PER_MEMBERGROUP) * \
 	 MXACT_MEMBER_BITS_PER_XACT)
@@ -180,15 +181,6 @@
 
 #define PreviousMultiXactId(xid) \
 	((xid) == FirstMultiXactId ? MaxMultiXactId : (xid) - 1)
-
-/*
- * Links to shared-memory data structures for MultiXact control
- */
-static SlruCtlData MultiXactOffsetCtlData;
-static SlruCtlData MultiXactMemberCtlData;
-
-#define MultiXactOffsetCtl	(&MultiXactOffsetCtlData)
-#define MultiXactMemberCtl	(&MultiXactMemberCtlData)
 
 /*
  * MultiXact state shared across all backends.  All this state is protected
@@ -341,8 +333,8 @@ static MemoryContext MXactContext = NULL;
 /* internal MultiXactId management */
 static void MultiXactIdSetOldestVisible(void);
 static void RecordNewMultiXact(MultiXactId multi, MultiXactOffset offset,
-							   int nmembers, MultiXactMember *members);
-static MultiXactId GetNewMultiXactId(int nmembers, MultiXactOffset *offset);
+							   int nmembers, MultiXactMember *members, Buffer * offset_buf_ptr, Buffer * member_bufs);
+static MultiXactId GetNewMultiXactId(int nmembers, MultiXactOffset *offset, Buffer * offset_buf, Buffer ** member_bufs);
 
 /* MultiXact cache management */
 static int	mxactMemberComparator(const void *arg1, const void *arg2);
@@ -354,19 +346,18 @@ static void mXactCachePut(MultiXactId multi, int nmembers,
 static char *mxstatus_to_string(MultiXactStatus status);
 
 /* management of SLRU infrastructure */
-static int	ZeroMultiXactOffsetPage(int pageno, bool writeXlog);
-static int	ZeroMultiXactMemberPage(int pageno, bool writeXlog);
+static Buffer ZeroMultiXactOffsetPage(int pageno, bool writeXlog);
+static Buffer ZeroMultiXactMemberPage(int pageno, bool writeXlog);
 static bool MultiXactOffsetPagePrecedes(int page1, int page2);
-static bool MultiXactMemberPagePrecedes(int page1, int page2);
 static bool MultiXactOffsetPrecedes(MultiXactOffset offset1,
 									MultiXactOffset offset2);
-static void ExtendMultiXactOffset(MultiXactId multi);
-static void ExtendMultiXactMember(MultiXactOffset offset, int nmembers);
+static void ExtendMultiXactOffset(MultiXactId multi, Buffer * buffer);
+static void ExtendMultiXactMember(MultiXactOffset offset, int nmembers, Buffer ** member_buffers);
 static bool MultiXactOffsetWouldWrap(MultiXactOffset boundary,
 									 MultiXactOffset start, uint32 distance);
 static bool SetOffsetVacuumLimit(bool is_startup);
 static bool find_multixact_start(MultiXactId multi, MultiXactOffset *result);
-static void WriteMZeroPageXlogRec(int pageno, uint8 info);
+static XLogRecPtr WriteMZeroPageXlogRec(int pageno, uint8 info);
 static void WriteMTruncateXlogRec(Oid oldestMultiDB,
 								  MultiXactId startTruncOff,
 								  MultiXactId endTruncOff,
@@ -767,6 +758,9 @@ ReadMultiXactIdRange(MultiXactId *oldest, MultiXactId *next)
 MultiXactId
 MultiXactIdCreateFromMembers(int nmembers, MultiXactMember *members)
 {
+	Buffer * member_bufs;
+	Buffer offset_buff;
+
 	MultiXactId multi;
 	MultiXactOffset offset;
 	xl_multixact_create xlrec;
@@ -820,7 +814,8 @@ MultiXactIdCreateFromMembers(int nmembers, MultiXactMember *members)
 	 * in vacuum.  During vacuum, in particular, it would be unacceptable to
 	 * keep OldestMulti set, in case it runs for long.
 	 */
-	multi = GetNewMultiXactId(nmembers, &offset);
+
+	multi = GetNewMultiXactId(nmembers, &offset, &offset_buff, &member_bufs);
 
 	/* Make an XLOG entry describing the new MXID. */
 	xlrec.mid = multi;
@@ -840,8 +835,8 @@ MultiXactIdCreateFromMembers(int nmembers, MultiXactMember *members)
 	(void) XLogInsert(RM_MULTIXACT_ID, XLOG_MULTIXACT_CREATE_ID);
 
 	/* Now enter the information into the OFFSETs and MEMBERs logs */
-	RecordNewMultiXact(multi, offset, nmembers, members);
-
+	RecordNewMultiXact(multi, offset, nmembers, members, &offset_buff, member_bufs);
+	
 	/* Done with critical section */
 	END_CRIT_SECTION();
 
@@ -862,40 +857,37 @@ MultiXactIdCreateFromMembers(int nmembers, MultiXactMember *members)
  */
 static void
 RecordNewMultiXact(MultiXactId multi, MultiXactOffset offset,
-				   int nmembers, MultiXactMember *members)
+				   int nmembers, MultiXactMember *members, Buffer * offset_buf_ptr, Buffer * member_bufs)
 {
 	int			pageno;
 	int			prev_pageno;
+	int 		min_pageno;
 	int			entryno;
-	int			slotno;
 	MultiXactOffset *offptr;
 	int			i;
-
-	LWLockAcquire(MultiXactOffsetSLRULock, LW_EXCLUSIVE);
+	Buffer		buffer;
+	Buffer		offset_buf;
 
 	pageno = MultiXactIdToOffsetPage(multi);
 	entryno = MultiXactIdToOffsetEntry(multi);
 
-	/*
-	 * Note: we pass the MultiXactId to SimpleLruReadPage as the "transaction"
-	 * to complain about if there's any I/O error.  This is kinda bogus, but
-	 * since the errors will always give the full pathname, it should be clear
-	 * enough that a MultiXactId is really involved.  Perhaps someday we'll
-	 * take the trouble to generalize the slru.c error reporting code.
-	 */
-	slotno = SimpleLruReadPage(MultiXactOffsetCtl, pageno, true, multi);
-	offptr = (MultiXactOffset *) MultiXactOffsetCtl->shared->page_buffer[slotno];
+	if (offset_buf_ptr)
+		offset_buf = *offset_buf_ptr;
+	else 
+		offset_buf = ReadNrelBuffer(NREL_MULTIXACT_OFFSET_REL_ID, pageno);
+
+	LockBuffer(offset_buf, BUFFER_LOCK_EXCLUSIVE);
+						
+	offptr = (MultiXactOffset *) PageGetContents(BufferGetPage(offset_buf));
 	offptr += entryno;
 
 	*offptr = offset;
 
-	MultiXactOffsetCtl->shared->page_dirty[slotno] = true;
+	MarkBufferDirty(offset_buf);
+	UnlockReleaseBuffer(offset_buf);
+	buffer = InvalidBuffer;
 
-	/* Exchange our lock */
-	LWLockRelease(MultiXactOffsetSLRULock);
-
-	LWLockAcquire(MultiXactMemberSLRULock, LW_EXCLUSIVE);
-
+	min_pageno = MXOffsetToMemberPage(offset);
 	prev_pageno = -1;
 
 	for (i = 0; i < nmembers; i++, offset++)
@@ -916,35 +908,50 @@ RecordNewMultiXact(MultiXactId multi, MultiXactOffset offset,
 
 		if (pageno != prev_pageno)
 		{
-			slotno = SimpleLruReadPage(MultiXactMemberCtl, pageno, true, multi);
+			if (BufferIsValid(buffer))
+				UnlockReleaseBuffer(buffer);
+			
+			/* 
+			 * If we were in a critical section, member_bufs should be provided beforehand
+			 * so we don't have to make ReadBuffer calls
+			 */	
+			if (member_bufs)
+				buffer = member_bufs[pageno - min_pageno];
+			else
+				buffer = ReadNrelBuffer(NREL_MULTIXACT_MEMBER_REL_ID, pageno);
+
+			LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 			prev_pageno = pageno;
 		}
 
-		memberptr = (TransactionId *)
-			(MultiXactMemberCtl->shared->page_buffer[slotno] + memberoff);
+		memberptr = (TransactionId *) (PageGetContents(BufferGetPage(buffer)) + memberoff);
 
 		*memberptr = members[i].xid;
 
-		flagsptr = (uint32 *)
-			(MultiXactMemberCtl->shared->page_buffer[slotno] + flagsoff);
+		flagsptr = (uint32 *) (PageGetContents(BufferGetPage(buffer)) + flagsoff);
 
 		flagsval = *flagsptr;
 		flagsval &= ~(((1 << MXACT_MEMBER_BITS_PER_XACT) - 1) << bshift);
 		flagsval |= (members[i].status << bshift);
 		*flagsptr = flagsval;
 
-		MultiXactMemberCtl->shared->page_dirty[slotno] = true;
+		MarkBufferDirty(buffer);
 	}
 
-	LWLockRelease(MultiXactMemberSLRULock);
+	UnlockReleaseBuffer(buffer);
+	if (member_bufs != NULL)
+		pfree(member_bufs);
 }
 
 /*
  * GetNewMultiXactId
  *		Get the next MultiXactId.
  *
- * Also, reserve the needed amount of space in the "members" area.  The
- * starting offset of the reserved space is returned in *offset.
+ * Also, reserve the needed amount of space in the "members" area. The
+ * starting offset of the reserved space is returned in *offset. A pointer
+ * to the array where the space for the members is allocated is returned
+ * via member_bufs.
+ *
  *
  * This may generate XLOG records for expansion of the offsets and/or members
  * files.  Unfortunately, we have to do that while holding MultiXactGenLock
@@ -955,8 +962,11 @@ RecordNewMultiXact(MultiXactId multi, MultiXactOffset offset,
  * caller must end the critical section after writing SLRU data.
  */
 static MultiXactId
-GetNewMultiXactId(int nmembers, MultiXactOffset *offset)
+GetNewMultiXactId(int nmembers, MultiXactOffset *offset, Buffer * offset_buf, Buffer ** member_bufs)
 {
+	int min_pageno;
+	int max_pageno;
+
 	MultiXactId result;
 	MultiXactOffset nextOffset;
 
@@ -1074,7 +1084,7 @@ GetNewMultiXactId(int nmembers, MultiXactOffset *offset)
 	}
 
 	/* Make sure there is room for the MXID in the file.  */
-	ExtendMultiXactOffset(result);
+	ExtendMultiXactOffset(result, offset_buf);
 
 	/*
 	 * Reserve the members space, similarly to above.  Also, be careful not to
@@ -1162,7 +1172,16 @@ GetNewMultiXactId(int nmembers, MultiXactOffset *offset)
 							   MultiXactState->offsetStopLimit - nextOffset + nmembers),
 				 errhint("Execute a database-wide VACUUM in that database with reduced vacuum_multixact_freeze_min_age and vacuum_multixact_freeze_table_age settings.")));
 
-	ExtendMultiXactMember(nextOffset, nmembers);
+	min_pageno = MXOffsetToMemberPage(nextOffset);
+	max_pageno = MXOffsetToMemberPage(nextOffset + nmembers - 1);
+
+	
+	/* pre allocate memory here before critical section for needed buffers to avoid 
+	 * having to make ReadBuffer calls which may need to allocate memory.
+	 */
+	*member_bufs = (Buffer *) palloc(sizeof(Buffer) * (max_pageno - min_pageno + 1));
+
+	ExtendMultiXactMember(nextOffset, nmembers, member_bufs);
 
 	/*
 	 * Critical section from here until caller has written the data into the
@@ -1228,7 +1247,6 @@ GetMultiXactIdMembers(MultiXactId multi, MultiXactMember **members,
 	int			pageno;
 	int			prev_pageno;
 	int			entryno;
-	int			slotno;
 	MultiXactOffset *offptr;
 	MultiXactOffset offset;
 	int			length;
@@ -1239,6 +1257,7 @@ GetMultiXactIdMembers(MultiXactId multi, MultiXactMember **members,
 	MultiXactId tmpMXact;
 	MultiXactOffset nextOffset;
 	MultiXactMember *ptr;
+	Buffer		buffer;
 
 	debug_elog3(DEBUG2, "GetMembers: asked for %u", multi);
 
@@ -1342,13 +1361,13 @@ GetMultiXactIdMembers(MultiXactId multi, MultiXactMember **members,
 	 * time on every multixact creation.
 	 */
 retry:
-	LWLockAcquire(MultiXactOffsetSLRULock, LW_EXCLUSIVE);
-
 	pageno = MultiXactIdToOffsetPage(multi);
 	entryno = MultiXactIdToOffsetEntry(multi);
 
-	slotno = SimpleLruReadPage(MultiXactOffsetCtl, pageno, true, multi);
-	offptr = (MultiXactOffset *) MultiXactOffsetCtl->shared->page_buffer[slotno];
+	buffer = ReadNrelBuffer(NREL_MULTIXACT_OFFSET_REL_ID, pageno);
+
+	LockBuffer(buffer, BUFFER_LOCK_SHARE);
+	offptr = (MultiXactOffset *) (PageGetContents(BufferGetPage(buffer)));
 	offptr += entryno;
 	offset = *offptr;
 
@@ -1379,16 +1398,22 @@ retry:
 		entryno = MultiXactIdToOffsetEntry(tmpMXact);
 
 		if (pageno != prev_pageno)
-			slotno = SimpleLruReadPage(MultiXactOffsetCtl, pageno, true, tmpMXact);
+		{
+			UnlockReleaseBuffer(buffer);
+			buffer = ReadNrelBuffer(NREL_MULTIXACT_OFFSET_REL_ID, pageno);
 
-		offptr = (MultiXactOffset *) MultiXactOffsetCtl->shared->page_buffer[slotno];
+
+			LockBuffer(buffer, BUFFER_LOCK_SHARE);
+		}
+
+		offptr = (MultiXactOffset *) (PageGetContents(BufferGetPage(buffer)));
 		offptr += entryno;
 		nextMXOffset = *offptr;
 
 		if (nextMXOffset == 0)
 		{
 			/* Corner case 2: next multixact is still being filled in */
-			LWLockRelease(MultiXactOffsetSLRULock);
+			UnlockReleaseBuffer(buffer);
 			CHECK_FOR_INTERRUPTS();
 			pg_usleep(1000L);
 			goto retry;
@@ -1396,13 +1421,10 @@ retry:
 
 		length = nextMXOffset - offset;
 	}
-
-	LWLockRelease(MultiXactOffsetSLRULock);
+	UnlockReleaseBuffer(buffer);
+	buffer = InvalidBuffer;
 
 	ptr = (MultiXactMember *) palloc(length * sizeof(MultiXactMember));
-
-	/* Now get the members themselves. */
-	LWLockAcquire(MultiXactMemberSLRULock, LW_EXCLUSIVE);
 
 	truelength = 0;
 	prev_pageno = -1;
@@ -1419,12 +1441,15 @@ retry:
 
 		if (pageno != prev_pageno)
 		{
-			slotno = SimpleLruReadPage(MultiXactMemberCtl, pageno, true, multi);
+			if (BufferIsValid(buffer))
+				UnlockReleaseBuffer(buffer);
+			buffer = ReadNrelBuffer(NREL_MULTIXACT_MEMBER_REL_ID, pageno);
+
+			LockBuffer(buffer, BUFFER_LOCK_SHARE);
 			prev_pageno = pageno;
 		}
 
-		xactptr = (TransactionId *)
-			(MultiXactMemberCtl->shared->page_buffer[slotno] + memberoff);
+		xactptr = (TransactionId *) (PageGetContents((BufferGetPage(buffer)) + memberoff));
 
 		if (!TransactionIdIsValid(*xactptr))
 		{
@@ -1435,14 +1460,13 @@ retry:
 
 		flagsoff = MXOffsetToFlagsOffset(offset);
 		bshift = MXOffsetToFlagsBitShift(offset);
-		flagsptr = (uint32 *) (MultiXactMemberCtl->shared->page_buffer[slotno] + flagsoff);
+		flagsptr = (uint32 *) (PageGetContents(BufferGetPage(buffer)) + flagsoff);
 
 		ptr[truelength].xid = *xactptr;
 		ptr[truelength].status = (*flagsptr >> bshift) & MXACT_MEMBER_XACT_BITMASK;
 		truelength++;
 	}
-
-	LWLockRelease(MultiXactMemberSLRULock);
+	UnlockReleaseBuffer(buffer);
 
 	/* A multixid with zero members should not happen */
 	Assert(truelength > 0);
@@ -1834,8 +1858,6 @@ MultiXactShmemSize(void)
 			 mul_size(sizeof(MultiXactId) * 2, MaxOldestSlot))
 
 	size = SHARED_MULTIXACT_STATE_SIZE;
-	size = add_size(size, SimpleLruShmemSize(NUM_MULTIXACTOFFSET_BUFFERS, 0));
-	size = add_size(size, SimpleLruShmemSize(NUM_MULTIXACTMEMBER_BUFFERS, 0));
 
 	return size;
 }
@@ -1846,22 +1868,6 @@ MultiXactShmemInit(void)
 	bool		found;
 
 	debug_elog2(DEBUG2, "Shared Memory Init for MultiXact");
-
-	MultiXactOffsetCtl->PagePrecedes = MultiXactOffsetPagePrecedes;
-	MultiXactMemberCtl->PagePrecedes = MultiXactMemberPagePrecedes;
-
-	SimpleLruInit(MultiXactOffsetCtl,
-				  "MultiXactOffset", NUM_MULTIXACTOFFSET_BUFFERS, 0,
-				  MultiXactOffsetSLRULock, "pg_multixact/offsets",
-				  LWTRANCHE_MULTIXACTOFFSET_BUFFER,
-				  SYNC_HANDLER_MULTIXACT_OFFSET);
-	SlruPagePrecedesUnitTests(MultiXactOffsetCtl, MULTIXACT_OFFSETS_PER_PAGE);
-	SimpleLruInit(MultiXactMemberCtl,
-				  "MultiXactMember", NUM_MULTIXACTMEMBER_BUFFERS, 0,
-				  MultiXactMemberSLRULock, "pg_multixact/members",
-				  LWTRANCHE_MULTIXACTMEMBER_BUFFER,
-				  SYNC_HANDLER_MULTIXACT_MEMBER);
-	/* doesn't call SimpleLruTruncate() or meet criteria for unit tests */
 
 	/* Initialize our shared state struct */
 	MultiXactState = ShmemInitStruct("Shared MultiXact State",
@@ -1893,29 +1899,17 @@ MultiXactShmemInit(void)
 void
 BootStrapMultiXact(void)
 {
-	int			slotno;
-
-	LWLockAcquire(MultiXactOffsetSLRULock, LW_EXCLUSIVE);
+	Buffer		buffer;
 
 	/* Create and zero the first page of the offsets log */
-	slotno = ZeroMultiXactOffsetPage(0, false);
-
-	/* Make sure it's written out */
-	SimpleLruWritePage(MultiXactOffsetCtl, slotno);
-	Assert(!MultiXactOffsetCtl->shared->page_dirty[slotno]);
-
-	LWLockRelease(MultiXactOffsetSLRULock);
-
-	LWLockAcquire(MultiXactMemberSLRULock, LW_EXCLUSIVE);
+	buffer = ZeroMultiXactOffsetPage(0, false);
+	FlushOneBuffer(buffer);
+	UnlockReleaseBuffer(buffer);
 
 	/* Create and zero the first page of the members log */
-	slotno = ZeroMultiXactMemberPage(0, false);
-
-	/* Make sure it's written out */
-	SimpleLruWritePage(MultiXactMemberCtl, slotno);
-	Assert(!MultiXactMemberCtl->shared->page_dirty[slotno]);
-
-	LWLockRelease(MultiXactMemberSLRULock);
+	buffer = ZeroMultiXactMemberPage(0, false);
+	FlushOneBuffer(buffer);
+	UnlockReleaseBuffer(buffer);
 }
 
 /*
@@ -1927,33 +1921,51 @@ BootStrapMultiXact(void)
  *
  * Control lock must be held at entry, and will be held at exit.
  */
-static int
+static Buffer
 ZeroMultiXactOffsetPage(int pageno, bool writeXlog)
 {
-	int			slotno;
+	Buffer		buffer;
+	Page		page;
+	XLogRecPtr	recptr;
 
-	slotno = SimpleLruZeroPage(MultiXactOffsetCtl, pageno);
 
+	buffer = ZeroNrelBuffer(NREL_MULTIXACT_OFFSET_REL_ID, pageno);
+	page = BufferGetPage(buffer);
+	PageInitNREL(page, BLCKSZ, 0);
+
+	recptr = 0;
+	
 	if (writeXlog)
-		WriteMZeroPageXlogRec(pageno, XLOG_MULTIXACT_ZERO_OFF_PAGE);
+		recptr = WriteMZeroPageXlogRec(pageno, XLOG_MULTIXACT_ZERO_OFF_PAGE);
 
-	return slotno;
+	PageSetHeaderDataNonRel(page, pageno, recptr, BLCKSZ, PG_METAPAGE_LAYOUT_VERSION);
+	MarkBufferDirty(buffer);
+
+	return buffer;
 }
 
 /*
  * Ditto, for MultiXactMember
  */
-static int
+static Buffer
 ZeroMultiXactMemberPage(int pageno, bool writeXlog)
 {
-	int			slotno;
+	Buffer		buffer;
+	Page 		page;
+	XLogRecPtr 	recptr;
 
-	slotno = SimpleLruZeroPage(MultiXactMemberCtl, pageno);
-
+	buffer = ZeroNrelBuffer(NREL_MULTIXACT_MEMBER_REL_ID, pageno);
+	page = BufferGetPage(buffer);
+	PageInitNREL(page, BLCKSZ, 0);
+		
+	recptr = 0;
 	if (writeXlog)
-		WriteMZeroPageXlogRec(pageno, XLOG_MULTIXACT_ZERO_MEM_PAGE);
-
-	return slotno;
+		recptr = WriteMZeroPageXlogRec(pageno, XLOG_MULTIXACT_ZERO_MEM_PAGE);
+	
+	PageSetHeaderDataNonRel(page, pageno, recptr, BLCKSZ, PG_METAPAGE_LAYOUT_VERSION);
+	MarkBufferDirty(buffer);
+	
+	return buffer;
 }
 
 /*
@@ -1978,22 +1990,14 @@ MaybeExtendOffsetSlru(void)
 
 	pageno = MultiXactIdToOffsetPage(MultiXactState->nextMXact);
 
-	LWLockAcquire(MultiXactOffsetSLRULock, LW_EXCLUSIVE);
-
-	if (!SimpleLruDoesPhysicalPageExist(MultiXactOffsetCtl, pageno))
+	if (!NonRelDoesPhysicalPageExist(NREL_MULTIXACT_OFFSET_REL_ID, pageno))
 	{
-		int			slotno;
+		Buffer			buffer;
 
-		/*
-		 * Fortunately for us, SimpleLruWritePage is already prepared to deal
-		 * with creating a new segment file even if the page we're writing is
-		 * not the first in it, so this is enough.
-		 */
-		slotno = ZeroMultiXactOffsetPage(pageno, false);
-		SimpleLruWritePage(MultiXactOffsetCtl, slotno);
+		buffer = ZeroMultiXactOffsetPage(pageno, false);
+		FlushOneBuffer(buffer);
+		UnlockReleaseBuffer(buffer);
 	}
-
-	LWLockRelease(MultiXactOffsetSLRULock);
 }
 
 /*
@@ -2007,21 +2011,6 @@ MaybeExtendOffsetSlru(void)
 void
 StartupMultiXact(void)
 {
-	MultiXactId multi = MultiXactState->nextMXact;
-	MultiXactOffset offset = MultiXactState->nextOffset;
-	int			pageno;
-
-	/*
-	 * Initialize offset's idea of the latest page number.
-	 */
-	pageno = MultiXactIdToOffsetPage(multi);
-	MultiXactOffsetCtl->shared->latest_page_number = pageno;
-
-	/*
-	 * Initialize member's idea of the latest page number.
-	 */
-	pageno = MXOffsetToMemberPage(offset);
-	MultiXactMemberCtl->shared->latest_page_number = pageno;
 }
 
 /*
@@ -2045,14 +2034,8 @@ TrimMultiXact(void)
 	oldestMXactDB = MultiXactState->oldestMultiXactDB;
 	LWLockRelease(MultiXactGenLock);
 
-	/* Clean up offsets state */
-	LWLockAcquire(MultiXactOffsetSLRULock, LW_EXCLUSIVE);
-
-	/*
-	 * (Re-)Initialize our idea of the latest page number for offsets.
-	 */
 	pageno = MultiXactIdToOffsetPage(nextMXact);
-	MultiXactOffsetCtl->shared->latest_page_number = pageno;
+	
 
 	/*
 	 * Zero out the remainder of the current offsets page.  See notes in
@@ -2065,46 +2048,41 @@ TrimMultiXact(void)
 	entryno = MultiXactIdToOffsetEntry(nextMXact);
 	if (entryno != 0)
 	{
-		int			slotno;
 		MultiXactOffset *offptr;
+		Buffer		buffer;
 
-		slotno = SimpleLruReadPage(MultiXactOffsetCtl, pageno, true, nextMXact);
-		offptr = (MultiXactOffset *) MultiXactOffsetCtl->shared->page_buffer[slotno];
+		buffer = ReadNrelBuffer(NREL_MULTIXACT_OFFSET_REL_ID, pageno);
+
+		LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+		offptr = (MultiXactOffset *) (PageGetContents(BufferGetPage(buffer)));
 		offptr += entryno;
 
-		MemSet(offptr, 0, BLCKSZ - (entryno * sizeof(MultiXactOffset)));
+		MemSet(offptr, 0, BLCKSZ - MAXALIGN(SizeOfPageHeaderData) - (entryno * sizeof(MultiXactOffset)));
 
-		MultiXactOffsetCtl->shared->page_dirty[slotno] = true;
+		MarkBufferDirty(buffer);
+		UnlockReleaseBuffer(buffer);
 	}
-
-	LWLockRelease(MultiXactOffsetSLRULock);
-
-	/* And the same for members */
-	LWLockAcquire(MultiXactMemberSLRULock, LW_EXCLUSIVE);
-
-	/*
-	 * (Re-)Initialize our idea of the latest page number for members.
-	 */
-	pageno = MXOffsetToMemberPage(offset);
-	MultiXactMemberCtl->shared->latest_page_number = pageno;
 
 	/*
 	 * Zero out the remainder of the current members page.  See notes in
 	 * TrimCLOG() for motivation.
 	 */
+
+	pageno = MXOffsetToMemberPage(offset);
 	flagsoff = MXOffsetToFlagsOffset(offset);
 	if (flagsoff != 0)
 	{
-		int			slotno;
 		TransactionId *xidptr;
 		int			memberoff;
+		Buffer		buffer;
 
 		memberoff = MXOffsetToMemberOffset(offset);
-		slotno = SimpleLruReadPage(MultiXactMemberCtl, pageno, true, offset);
-		xidptr = (TransactionId *)
-			(MultiXactMemberCtl->shared->page_buffer[slotno] + memberoff);
+		buffer = ReadNrelBuffer(NREL_MULTIXACT_MEMBER_REL_ID, pageno);
 
-		MemSet(xidptr, 0, BLCKSZ - memberoff);
+		LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+		xidptr = (TransactionId *) (PageGetContents(BufferGetPage(buffer)) + memberoff);
+
+		MemSet(xidptr, 0, BLCKSZ - memberoff - MAXALIGN(SizeOfPageHeaderData));
 
 		/*
 		 * Note: we don't need to zero out the flag bits in the remaining
@@ -2112,10 +2090,9 @@ TrimMultiXact(void)
 		 * writing.
 		 */
 
-		MultiXactMemberCtl->shared->page_dirty[slotno] = true;
+		MarkBufferDirty(buffer);
+		UnlockReleaseBuffer(buffer);
 	}
-
-	LWLockRelease(MultiXactMemberSLRULock);
 
 	/* signal that we're officially up */
 	LWLockAcquire(MultiXactGenLock, LW_EXCLUSIVE);
@@ -2146,25 +2123,6 @@ MultiXactGetCheckptMulti(bool is_shutdown,
 	debug_elog6(DEBUG2,
 				"MultiXact: checkpoint is nextMulti %u, nextOffset %u, oldestMulti %u in DB %u",
 				*nextMulti, *nextMultiOffset, *oldestMulti, *oldestMultiDB);
-}
-
-/*
- * Perform a checkpoint --- either during shutdown, or on-the-fly
- */
-void
-CheckPointMultiXact(void)
-{
-	TRACE_POSTGRESQL_MULTIXACT_CHECKPOINT_START(true);
-
-	/*
-	 * Write dirty MultiXact pages to disk.  This may result in sync requests
-	 * queued for later handling by ProcessSyncRequests(), as part of the
-	 * checkpoint.
-	 */
-	SimpleLruWriteAll(MultiXactOffsetCtl, true);
-	SimpleLruWriteAll(MultiXactMemberCtl, true);
-
-	TRACE_POSTGRESQL_MULTIXACT_CHECKPOINT_DONE(true);
 }
 
 /*
@@ -2401,26 +2359,30 @@ MultiXactAdvanceOldest(MultiXactId oldestMulti, Oid oldestMultiDB)
  * room in shared memory.
  */
 static void
-ExtendMultiXactOffset(MultiXactId multi)
+ExtendMultiXactOffset(MultiXactId multi, Buffer * buffer)
 {
 	int			pageno;
 
+
 	/*
-	 * No work except at first MultiXactId of a page.  But beware: just after
-	 * wraparound, the first MultiXactId of page zero is FirstMultiXactId.
+	 * Make a ReadBuffer call for the page we need beforehand so that we don't need
+	 * to malloc later.
+	 * If we're at the first MultiXactId of a page, make sure we also zero the page
 	 */
-	if (MultiXactIdToOffsetEntry(multi) != 0 &&
-		multi != FirstMultiXactId)
-		return;
 
 	pageno = MultiXactIdToOffsetPage(multi);
-
-	LWLockAcquire(MultiXactOffsetSLRULock, LW_EXCLUSIVE);
-
-	/* Zero the page and make an XLOG entry about it */
-	ZeroMultiXactOffsetPage(pageno, true);
-
-	LWLockRelease(MultiXactOffsetSLRULock);
+	if (MultiXactIdToOffsetEntry(multi) != 0 &&
+		multi != FirstMultiXactId)
+	{
+		/* make a read buffer call to enlarge the resource owner */
+		*buffer = ReadNrelBuffer(NREL_MULTIXACT_OFFSET_REL_ID, pageno);
+		return;
+	} else
+	{
+		/* Zero the page and make an XLOG entry about it */
+		*buffer = ZeroMultiXactOffsetPage(pageno, true);
+		LockBuffer(*buffer, BUFFER_LOCK_UNLOCK); /* release lock but don't unpin */
+	}
 }
 
 /*
@@ -2431,7 +2393,7 @@ ExtendMultiXactOffset(MultiXactId multi)
  * same comments apply.
  */
 static void
-ExtendMultiXactMember(MultiXactOffset offset, int nmembers)
+ExtendMultiXactMember(MultiXactOffset offset, int nmembers, Buffer ** buffers)
 {
 	/*
 	 * It's possible that the members span more than one page of the members
@@ -2439,10 +2401,17 @@ ExtendMultiXactMember(MultiXactOffset offset, int nmembers)
 	 * optimal if the members span several pages, but that seems unusual
 	 * enough to not worry much about.
 	 */
+	int min_pageno;
+
+	min_pageno = MXOffsetToMemberPage(offset);
 	while (nmembers > 0)
 	{
+		Buffer buf;
+
 		int			flagsoff;
 		int			flagsbit;
+		int			pageno;
+
 		uint32		difference;
 
 		/*
@@ -2450,19 +2419,23 @@ ExtendMultiXactMember(MultiXactOffset offset, int nmembers)
 		 */
 		flagsoff = MXOffsetToFlagsOffset(offset);
 		flagsbit = MXOffsetToFlagsBitShift(offset);
+		pageno = MXOffsetToMemberPage(offset);
+		
+		
+		
 		if (flagsoff == 0 && flagsbit == 0)
 		{
-			int			pageno;
-
-			pageno = MXOffsetToMemberPage(offset);
-
-			LWLockAcquire(MultiXactMemberSLRULock, LW_EXCLUSIVE);
-
 			/* Zero the page and make an XLOG entry about it */
-			ZeroMultiXactMemberPage(pageno, true);
-
-			LWLockRelease(MultiXactMemberSLRULock);
+			buf = ZeroMultiXactMemberPage(pageno, true);
+			LockBuffer(buf, BUFFER_LOCK_UNLOCK);
+		} else
+		{
+			/* do a read buffer call to allocate space beforehand */
+			buf = ReadNrelBuffer(NREL_MULTIXACT_MEMBER_REL_ID, pageno);
 		}
+
+		if (buffers)
+			(*buffers)[pageno - min_pageno] = buf;
 
 		/*
 		 * Compute the number of items till end of current page.  Careful: if
@@ -2737,8 +2710,9 @@ find_multixact_start(MultiXactId multi, MultiXactOffset *result)
 	MultiXactOffset offset;
 	int			pageno;
 	int			entryno;
-	int			slotno;
 	MultiXactOffset *offptr;
+	Buffer		buffer;
+	RelFileLocator rlocator = NrelRelFileLocator(NREL_MULTIXACT_OFFSET_REL_ID);
 
 	Assert(MultiXactState->finishedStartup);
 
@@ -2746,20 +2720,20 @@ find_multixact_start(MultiXactId multi, MultiXactOffset *result)
 	entryno = MultiXactIdToOffsetEntry(multi);
 
 	/*
-	 * Write out dirty data, so PhysicalPageExists can work correctly.
+	 * Cope with missing/bogus oldest MultiXact in inconsistent states (see
+	 * commit 068cfadf9).
 	 */
-	SimpleLruWriteAll(MultiXactOffsetCtl, true);
-	SimpleLruWriteAll(MultiXactMemberCtl, true);
-
-	if (!SimpleLruDoesPhysicalPageExist(MultiXactOffsetCtl, pageno))
+	if (!BufferProbe(rlocator, MAIN_FORKNUM, pageno) &&
+		!NonRelDoesPhysicalPageExist(NREL_MULTIXACT_OFFSET_REL_ID, pageno))
 		return false;
 
-	/* lock is acquired by SimpleLruReadPage_ReadOnly */
-	slotno = SimpleLruReadPage_ReadOnly(MultiXactOffsetCtl, pageno, multi);
-	offptr = (MultiXactOffset *) MultiXactOffsetCtl->shared->page_buffer[slotno];
+	buffer = ReadNrelBuffer(NREL_MULTIXACT_OFFSET_REL_ID, pageno);
+
+	LockBuffer(buffer, BUFFER_LOCK_SHARE);
+	offptr = (MultiXactOffset *) (PageGetContents(BufferGetPage(buffer)));
 	offptr += entryno;
 	offset = *offptr;
-	LWLockRelease(MultiXactOffsetSLRULock);
+	UnlockReleaseBuffer(buffer);
 
 	*result = offset;
 	return true;
@@ -2862,12 +2836,13 @@ typedef struct mxtruncinfo
  *		This callback determines the earliest existing page number.
  */
 static bool
-SlruScanDirCbFindEarliest(SlruCtl ctl, char *filename, int segpage, void *data)
+NrelScanDirCbFindEarliest(Oid rel_id, NrelPagePrecedesFunction PagePrecedes,
+						  char *filename, int segpage, void *data)
 {
 	mxtruncinfo *trunc = (mxtruncinfo *) data;
 
 	if (trunc->earliestExistingPage == -1 ||
-		ctl->PagePrecedes(segpage, trunc->earliestExistingPage))
+		PagePrecedes(segpage, trunc->earliestExistingPage))
 	{
 		trunc->earliestExistingPage = segpage;
 	}
@@ -2880,7 +2855,7 @@ SlruScanDirCbFindEarliest(SlruCtl ctl, char *filename, int segpage, void *data)
  * Delete members segments [oldest, newOldest)
  *
  * The members SLRU can, in contrast to the offsets one, be filled to almost
- * the full range at once. This means SimpleLruTruncate() can't trivially be
+ * the full range at once. This means NonRelTruncate() can't trivially be
  * used - instead the to-be-deleted range is computed using the offsets
  * SLRU. C.f. TruncateMultiXact().
  */
@@ -2899,7 +2874,7 @@ PerformMembersTruncation(MultiXactOffset oldestOffset, MultiXactOffset newOldest
 	while (segment != endsegment)
 	{
 		elog(DEBUG2, "truncating multixact members segment %x", segment);
-		SlruDeleteSegment(MultiXactMemberCtl, segment);
+		NrelDeleteSegment(NREL_MULTIXACT_MEMBER_REL_ID, segment);
 
 		/* move to next segment, handling wraparound correctly */
 		if (segment == maxsegment)
@@ -2919,10 +2894,11 @@ PerformOffsetsTruncation(MultiXactId oldestMulti, MultiXactId newOldestMulti)
 	 * We step back one multixact to avoid passing a cutoff page that hasn't
 	 * been created yet in the rare case that oldestMulti would be the first
 	 * item on a page and oldestMulti == nextMulti.  In that case, if we
-	 * didn't subtract one, we'd trigger SimpleLruTruncate's wraparound
+	 * didn't subtract one, we'd trigger NonRelTruncate's wraparound
 	 * detection.
 	 */
-	SimpleLruTruncate(MultiXactOffsetCtl,
+	NonRelTruncate(NREL_MULTIXACT_OFFSET_REL_ID,
+					  MultiXactOffsetPagePrecedes,
 					  MultiXactIdToOffsetPage(PreviousMultiXactId(newOldestMulti)));
 }
 
@@ -2985,7 +2961,7 @@ TruncateMultiXact(MultiXactId newOldestMulti, Oid newOldestMultiDB)
 	 * the earliest offsets page number that we can read without error.
 	 *
 	 * When nextMXact is less than one segment away from multiWrapLimit,
-	 * SlruScanDirCbFindEarliest can find some early segment other than the
+	 * NrelScanDirCbFindEarliest can find some early segment other than the
 	 * actual earliest.  (MultiXactOffsetPagePrecedes(EARLIEST, LATEST)
 	 * returns false, because not all pairs of entries have the same answer.)
 	 * That can also arise when an earlier truncation attempt failed unlink()
@@ -2996,7 +2972,9 @@ TruncateMultiXact(MultiXactId newOldestMulti, Oid newOldestMultiDB)
 	 * been truncated away, and we crashed before updating oldestMulti.
 	 */
 	trunc.earliestExistingPage = -1;
-	SlruScanDirectory(MultiXactOffsetCtl, SlruScanDirCbFindEarliest, &trunc);
+	NrelScanDirectory(NREL_MULTIXACT_OFFSET_REL_ID,
+					  MultiXactOffsetPagePrecedes,
+					  NrelScanDirCbFindEarliest, &trunc);
 	earliest = trunc.earliestExistingPage * MULTIXACT_OFFSETS_PER_PAGE;
 	if (earliest < FirstMultiXactId)
 		earliest = FirstMultiXactId;
@@ -3129,24 +3107,6 @@ MultiXactOffsetPagePrecedes(int page1, int page2)
 }
 
 /*
- * Decide whether a MultiXactMember page number is "older" for truncation
- * purposes.  There is no "invalid offset number" so use the numbers verbatim.
- */
-static bool
-MultiXactMemberPagePrecedes(int page1, int page2)
-{
-	MultiXactOffset offset1;
-	MultiXactOffset offset2;
-
-	offset1 = ((MultiXactOffset) page1) * MULTIXACT_MEMBERS_PER_PAGE;
-	offset2 = ((MultiXactOffset) page2) * MULTIXACT_MEMBERS_PER_PAGE;
-
-	return (MultiXactOffsetPrecedes(offset1, offset2) &&
-			MultiXactOffsetPrecedes(offset1,
-									offset2 + MULTIXACT_MEMBERS_PER_PAGE - 1));
-}
-
-/*
  * Decide which of two MultiXactIds is earlier.
  *
  * XXX do we need to do something special for InvalidMultiXactId?
@@ -3190,12 +3150,16 @@ MultiXactOffsetPrecedes(MultiXactOffset offset1, MultiXactOffset offset2)
  * Write an xlog record reflecting the zeroing of either a MEMBERs or
  * OFFSETs page (info shows which)
  */
-static void
+static XLogRecPtr 
 WriteMZeroPageXlogRec(int pageno, uint8 info)
 {
+	XLogRecPtr recptr;
+	
 	XLogBeginInsert();
 	XLogRegisterData((char *) (&pageno), sizeof(int));
-	(void) XLogInsert(RM_MULTIXACT_ID, info);
+	recptr = XLogInsert(RM_MULTIXACT_ID, info);
+
+	return recptr;
 }
 
 /*
@@ -3240,32 +3204,18 @@ multixact_redo(XLogReaderState *record)
 	if (info == XLOG_MULTIXACT_ZERO_OFF_PAGE)
 	{
 		int			pageno;
-		int			slotno;
 
 		memcpy(&pageno, XLogRecGetData(record), sizeof(int));
 
-		LWLockAcquire(MultiXactOffsetSLRULock, LW_EXCLUSIVE);
-
-		slotno = ZeroMultiXactOffsetPage(pageno, false);
-		SimpleLruWritePage(MultiXactOffsetCtl, slotno);
-		Assert(!MultiXactOffsetCtl->shared->page_dirty[slotno]);
-
-		LWLockRelease(MultiXactOffsetSLRULock);
+		UnlockReleaseBuffer(ZeroMultiXactOffsetPage(pageno, false));
 	}
 	else if (info == XLOG_MULTIXACT_ZERO_MEM_PAGE)
 	{
 		int			pageno;
-		int			slotno;
 
 		memcpy(&pageno, XLogRecGetData(record), sizeof(int));
 
-		LWLockAcquire(MultiXactMemberSLRULock, LW_EXCLUSIVE);
-
-		slotno = ZeroMultiXactMemberPage(pageno, false);
-		SimpleLruWritePage(MultiXactMemberCtl, slotno);
-		Assert(!MultiXactMemberCtl->shared->page_dirty[slotno]);
-
-		LWLockRelease(MultiXactMemberSLRULock);
+		UnlockReleaseBuffer(ZeroMultiXactMemberPage(pageno, false));
 	}
 	else if (info == XLOG_MULTIXACT_CREATE_ID)
 	{
@@ -3276,7 +3226,7 @@ multixact_redo(XLogReaderState *record)
 
 		/* Store the data back into the SLRU files */
 		RecordNewMultiXact(xlrec->mid, xlrec->moff, xlrec->nmembers,
-						   xlrec->members);
+						   xlrec->members, NULL, NULL);
 
 		/* Make sure nextMXact/nextOffset are beyond what this record has */
 		MultiXactAdvanceNextMXact(xlrec->mid + 1,
@@ -3299,7 +3249,6 @@ multixact_redo(XLogReaderState *record)
 	else if (info == XLOG_MULTIXACT_TRUNCATE_ID)
 	{
 		xl_multixact_truncate xlrec;
-		int			pageno;
 
 		memcpy(&xlrec, XLogRecGetData(record),
 			   SizeOfMultiXactTruncate);
@@ -3325,13 +3274,6 @@ multixact_redo(XLogReaderState *record)
 
 		PerformMembersTruncation(xlrec.startTruncMemb, xlrec.endTruncMemb);
 
-		/*
-		 * During XLOG replay, latest_page_number isn't necessarily set up
-		 * yet; insert a suitable value to bypass the sanity test in
-		 * SimpleLruTruncate.
-		 */
-		pageno = MultiXactIdToOffsetPage(xlrec.endTruncOff);
-		MultiXactOffsetCtl->shared->latest_page_number = pageno;
 		PerformOffsetsTruncation(xlrec.startTruncOff, xlrec.endTruncOff);
 
 		LWLockRelease(MultiXactTruncationLock);
@@ -3400,22 +3342,4 @@ pg_get_multixact_members(PG_FUNCTION_ARGS)
 	}
 
 	SRF_RETURN_DONE(funccxt);
-}
-
-/*
- * Entrypoint for sync.c to sync offsets files.
- */
-int
-multixactoffsetssyncfiletag(const FileTag *ftag, char *path)
-{
-	return SlruSyncFileTag(MultiXactOffsetCtl, ftag, path);
-}
-
-/*
- * Entrypoint for sync.c to sync members files.
- */
-int
-multixactmemberssyncfiletag(const FileTag *ftag, char *path)
-{
-	return SlruSyncFileTag(MultiXactMemberCtl, ftag, path);
 }

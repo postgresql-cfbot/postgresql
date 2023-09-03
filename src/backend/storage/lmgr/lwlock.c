@@ -132,20 +132,6 @@ StaticAssertDecl(LW_VAL_EXCLUSIVE > (uint32) MAX_BACKENDS,
 extern const char *const IndividualLWLockNames[];	/* in lwlocknames.c */
 
 static const char *const BuiltinTrancheNames[] = {
-	/* LWTRANCHE_XACT_BUFFER: */
-	"XactBuffer",
-	/* LWTRANCHE_COMMITTS_BUFFER: */
-	"CommitTsBuffer",
-	/* LWTRANCHE_SUBTRANS_BUFFER: */
-	"SubtransBuffer",
-	/* LWTRANCHE_MULTIXACTOFFSET_BUFFER: */
-	"MultiXactOffsetBuffer",
-	/* LWTRANCHE_MULTIXACTMEMBER_BUFFER: */
-	"MultiXactMemberBuffer",
-	/* LWTRANCHE_NOTIFY_BUFFER: */
-	"NotifyBuffer",
-	/* LWTRANCHE_SERIAL_BUFFER: */
-	"SerialBuffer",
 	/* LWTRANCHE_WAL_INSERT: */
 	"WALInsert",
 	/* LWTRANCHE_BUFFER_CONTENT: */

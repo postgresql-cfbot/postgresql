@@ -1230,6 +1230,12 @@ palloc(Size size)
 	MemoryContext context = CurrentMemoryContext;
 
 	Assert(MemoryContextIsValid(context));
+	/*
+	 * XXX:TM I commented this out for now, because otherwise it can fail
+	 * while writing back md.c buffers due to cache pressure while reading in
+	 * CLOG buffers during commit, in a critical section (md.c allocates
+	 * memory to build paths...); FIXME!
+	 */
 	AssertNotInCriticalSection(context);
 
 	if (!AllocSizeIsValid(size))

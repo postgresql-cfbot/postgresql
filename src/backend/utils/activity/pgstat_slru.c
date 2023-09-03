@@ -31,7 +31,7 @@ static void pgstat_reset_slru_counter_internal(int index, TimestampTz ts);
  * SLRU counters are reported within critical sections so we use static memory
  * in order to avoid memory allocation.
  */
-static PgStat_SLRUStats pending_SLRUStats[SLRU_NUM_ELEMENTS];
+static PgStat_SLRUStats pending_SLRUStats[NREL_NUM_RELS + 1];
 bool		have_slrustats = false;
 
 
@@ -110,37 +110,21 @@ pgstat_fetch_slru(void)
 }
 
 /*
- * Returns SLRU name for an index. The index may be above SLRU_NUM_ELEMENTS,
- * in which case this returns NULL. This allows writing code that does not
- * know the number of entries in advance.
+ * Returns SLRU name for an index.
  */
 const char *
 pgstat_get_slru_name(int slru_idx)
 {
-	if (slru_idx < 0 || slru_idx >= SLRU_NUM_ELEMENTS)
-		return NULL;
-
-	return slru_names[slru_idx];
+	return NrelName(slru_idx);
 }
 
 /*
- * Determine index of entry for a SLRU with a given name. If there's no exact
- * match, returns index of the last "other" entry used for SLRUs defined in
- * external projects.
+ * Determine index of entry for a SLRU with a given name.
  */
 int
 pgstat_get_slru_index(const char *name)
 {
-	int			i;
-
-	for (i = 0; i < SLRU_NUM_ELEMENTS; i++)
-	{
-		if (strcmp(slru_names[i], name) == 0)
-			return i;
-	}
-
-	/* return index of the last entry (which is the "other" one) */
-	return (SLRU_NUM_ELEMENTS - 1);
+	return NrelRelIdByName(name);
 }
 
 /*
@@ -166,7 +150,7 @@ pgstat_slru_flush(bool nowait)
 	else if (!LWLockConditionalAcquire(&stats_shmem->lock, LW_EXCLUSIVE))
 		return true;
 
-	for (i = 0; i < SLRU_NUM_ELEMENTS; i++)
+	for (i = 0; i < NREL_NUM_RELS + 1; i++)
 	{
 		PgStat_SLRUStats *sharedent = &stats_shmem->stats[i];
 		PgStat_SLRUStats *pendingent = &pending_SLRUStats[i];
@@ -195,7 +179,7 @@ pgstat_slru_flush(bool nowait)
 void
 pgstat_slru_reset_all_cb(TimestampTz ts)
 {
-	for (int i = 0; i < SLRU_NUM_ELEMENTS; i++)
+	for (int i = 0; i < NREL_NUM_RELS + 1; i++)
 		pgstat_reset_slru_counter_internal(i, ts);
 }
 
@@ -213,8 +197,7 @@ pgstat_slru_snapshot_cb(void)
 }
 
 /*
- * Returns pointer to entry with counters for given SLRU (based on the name
- * stored in SlruCtl as lwlock tranche name).
+ * Returns pointer to entry with counters for given SLRU.
  */
 static inline PgStat_SLRUStats *
 get_slru_entry(int slru_idx)
@@ -227,7 +210,7 @@ get_slru_entry(int slru_idx)
 	 */
 	Assert(IsUnderPostmaster || !IsPostmasterEnvironment);
 
-	Assert((slru_idx >= 0) && (slru_idx < SLRU_NUM_ELEMENTS));
+	Assert((slru_idx >= 0) && (slru_idx < NREL_NUM_RELS + 1));
 
 	have_slrustats = true;
 

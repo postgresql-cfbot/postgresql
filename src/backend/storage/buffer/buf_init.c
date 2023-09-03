@@ -69,8 +69,10 @@ InitBufferPool(void)
 {
 	bool		foundBufs,
 				foundDescs,
+				foundLSNs,
 				foundIOCV,
 				foundBufCkpt;
+
 
 	/* Align descriptors to a cacheline boundary. */
 	BufferDescriptors = (BufferDescPadded *)
@@ -102,10 +104,10 @@ InitBufferPool(void)
 		ShmemInitStruct("Checkpoint BufferIds",
 						NBuffers * sizeof(CkptSortItem), &foundBufCkpt);
 
-	if (foundDescs || foundBufs || foundIOCV || foundBufCkpt)
+	if (foundDescs || foundBufs || foundIOCV || foundBufCkpt || foundLSNs)
 	{
 		/* should find all of these, or none of them */
-		Assert(foundDescs && foundBufs && foundIOCV && foundBufCkpt);
+		Assert(foundDescs && foundBufs && foundIOCV && foundBufCkpt && foundLSNs);
 		/* note: this path is only taken in EXEC_BACKEND case */
 	}
 	else
@@ -169,6 +171,9 @@ BufferShmemSize(void)
 	/* size of data pages, plus alignment padding */
 	size = add_size(size, PG_IO_ALIGN_SIZE);
 	size = add_size(size, mul_size(NBuffers, BLCKSZ));
+
+	/* size of external LSNs */
+	size = add_size(size, mul_size(NBuffers, sizeof(XLogRecPtr)));
 
 	/* size of stuff controlled by freelist.c */
 	size = add_size(size, StrategyShmemSize());

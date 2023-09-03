@@ -77,6 +77,12 @@
  */
 #define BM_MAX_USAGE_COUNT	5
 
+#define BufferGetExternalLSN(bufHdr) \
+	BufferExternalLSNs[(bufHdr)->buf_id]
+
+#define BufferSetExternalLSN(bufHdr, lsn) \
+	BufferExternalLSNs[(bufHdr)->buf_id] = (lsn)
+
 /*
  * Buffer tag identifies which disk block the buffer contains.
  *
@@ -308,6 +314,7 @@ typedef struct WritebackContext
 /* in buf_init.c */
 extern PGDLLIMPORT BufferDescPadded *BufferDescriptors;
 extern PGDLLIMPORT ConditionVariableMinimallyPadded *BufferIOCVArray;
+extern PGDLLIMPORT XLogRecPtr *BufferExternalLSNs;
 extern PGDLLIMPORT WritebackContext BackendWritebackContext;
 
 /* in localbuf.c */

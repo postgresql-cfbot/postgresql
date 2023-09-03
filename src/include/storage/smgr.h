@@ -16,6 +16,7 @@
 
 #include "lib/ilist.h"
 #include "storage/block.h"
+#include "storage/fd.h"
 #include "storage/relfilelocator.h"
 
 /*
@@ -67,6 +68,13 @@ typedef struct SMgrRelationData
 	 */
 	int			md_num_open_segs[MAX_FORKNUM + 1];
 	struct _MdfdVec *md_seg_fds[MAX_FORKNUM + 1];
+
+	/*
+	 * for slru.c; we'll just cache one File for now.
+	 * XXX Unionize with md stuff somehow so we don't waste space
+	 */
+	int			nrel_file_segment;
+	File		nrel_file;
 
 	/* if unowned, list link in list of all unowned SMgrRelations */
 	dlist_node	node;

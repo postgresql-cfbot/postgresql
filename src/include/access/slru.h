@@ -14,6 +14,8 @@
 #define SLRU_H
 
 #include "access/xlogdefs.h"
+
+
 #include "storage/lwlock.h"
 #include "storage/sync.h"
 
@@ -32,6 +34,17 @@
  * segment and page numbers in SimpleLruTruncate (see PagePrecedes()).
  */
 #define SLRU_PAGES_PER_SEGMENT	32
+
+
+/*
+ * After we moved the built in SLRU components to the buffer cache, we still
+ * want to support custom SLRU extensions. This internal index is used for the
+ * statistics system to differentiate between non-relational components in nrel.c
+ * and user defined SLRUs. There are currently 7 enumerated non relational components, 
+ * and we use 0 for an invalid id.
+ * hence we use the value 8.
+ */
+#define SLRU_OTHER_ID 8 
 
 /*
  * Page status codes.  Note that these do not include the "dirty" bit.
@@ -170,5 +183,7 @@ extern bool SlruScanDirCbReportPresence(SlruCtl ctl, char *filename,
 										int segpage, void *data);
 extern bool SlruScanDirCbDeleteAll(SlruCtl ctl, char *filename, int segpage,
 								   void *data);
+
+
 
 #endif							/* SLRU_H */

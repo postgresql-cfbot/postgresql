@@ -682,8 +682,8 @@ extern void pgstat_count_slru_page_read(int slru_idx);
 extern void pgstat_count_slru_page_written(int slru_idx);
 extern void pgstat_count_slru_page_exists(int slru_idx);
 extern void pgstat_count_slru_flush(int slru_idx);
-extern void pgstat_count_slru_truncate(int slru_idx);
-extern const char *pgstat_get_slru_name(int slru_idx);
+extern void pgstat_count_slru_truncate(int nrel_idx);
+extern const char *pgstat_get_nrel_name(int slru_idx);
 extern int	pgstat_get_slru_index(const char *name);
 extern PgStat_SLRUStats *pgstat_fetch_slru(void);
 
@@ -773,6 +773,5 @@ extern PGDLLIMPORT SessionEndType pgStatSessionEndCause;
 
 /* updated directly by backends and background processes */
 extern PGDLLIMPORT PgStat_PendingWalStats PendingWalStats;
-
 
 #endif							/* PGSTAT_H */

@@ -15,6 +15,8 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "access/nrel.h"
+#include "access/slru.h"
 #include "access/xlog.h"
 #include "access/xlogprefetcher.h"
 #include "catalog/catalog.h"
@@ -1521,33 +1523,30 @@ pg_stat_get_wal(PG_FUNCTION_ARGS)
 }
 
 /*
- * Returns statistics of SLRU caches.
+ * Returns statistics of NREL caches.
  */
 Datum
 pg_stat_get_slru(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_SLRU_COLS	9
+#define PG_STAT_GET_NREL_COLS	9
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	int			i;
 	PgStat_SLRUStats *stats;
 
 	InitMaterializedSRF(fcinfo, 0);
 
-	/* request SLRU stats from the cumulative stats system */
+	/* request NREL stats from the cumulative stats system */
 	stats = pgstat_fetch_slru();
 
-	for (i = 0;; i++)
+	for (i = 0; i < NREL_NUM_RELS; i++)
 	{
 		/* for each row */
-		Datum		values[PG_STAT_GET_SLRU_COLS] = {0};
-		bool		nulls[PG_STAT_GET_SLRU_COLS] = {0};
+		Datum		values[PG_STAT_GET_NREL_COLS] = {0};
+		bool		nulls[PG_STAT_GET_NREL_COLS] = {0};
 		PgStat_SLRUStats stat;
 		const char *name;
 
-		name = pgstat_get_slru_name(i);
-
-		if (!name)
-			break;
+		name = NrelName(i);
 
 		stat = stats[i];
 

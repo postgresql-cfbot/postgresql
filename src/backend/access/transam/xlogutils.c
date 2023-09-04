@@ -27,6 +27,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "storage/fd.h"
+#include "storage/latch.h"
 #include "storage/smgr.h"
 #include "utils/guc.h"
 #include "utils/hsearch.h"
@@ -958,7 +959,7 @@ read_local_xlog_page_guts(XLogReaderState *state, XLogRecPtr targetPagePtr,
 			}
 
 			CHECK_FOR_INTERRUPTS();
-			pg_usleep(1000L);
+			pg_msleep(1, WAIT_EVENT_PG_SLEEP);
 		}
 		else
 		{

@@ -154,6 +154,8 @@ Section: ClassName - WaitEventTimeout
 WAIT_EVENT_BASE_BACKUP_THROTTLE	BaseBackupThrottle	"Waiting during base backup when throttling activity."
 WAIT_EVENT_CHECKPOINT_WRITE_DELAY	CheckpointWriteDelay	"Waiting between writes while performing a checkpoint."
 WAIT_EVENT_PG_SLEEP	PgSleep	"Waiting due to a call to <function>pg_sleep</function> or a sibling function."
+WAIT_EVENT_PRE_AUTH_DELAY	PreAuthDelay	"Waiting before authentication."
+WAIT_EVENT_POST_AUTH_DELAY	PostAuthDelay	"Waiting after authentication."
 WAIT_EVENT_RECOVERY_APPLY_DELAY	RecoveryApplyDelay	"Waiting to apply WAL during recovery because of a delay setting."
 WAIT_EVENT_RECOVERY_RETRIEVE_RETRY_INTERVAL	RecoveryRetrieveRetryInterval	"Waiting during recovery when WAL data is not available from any source (<filename>pg_wal</filename>, archive or stream)."
 WAIT_EVENT_REGISTER_SYNC_REQUEST	RegisterSyncRequest	"Waiting while sending synchronization requests to the checkpointer, because the request queue is full."

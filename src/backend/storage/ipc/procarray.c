@@ -3745,7 +3745,7 @@ CountOtherDBBackends(Oid databaseId, int *nbackends, int *nprepared)
 			(void) kill(autovac_pids[index], SIGTERM);	/* ignore any error */
 
 		/* sleep, then try again */
-		pg_usleep(100 * 1000L); /* 100ms */
+		pg_msleep(100, WAIT_EVENT_PG_SLEEP);
 	}
 
 	return true;				/* timed out, still conflicts */

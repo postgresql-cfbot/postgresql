@@ -188,7 +188,7 @@ WalWriterMain(void)
 		 * to be repeated, and we don't want to be filling the error logs as
 		 * fast as we can.
 		 */
-		pg_usleep(1000000L);
+		pg_msleep(1000, WAIT_EVENT_WAL_WRITER_MAIN);
 
 		/*
 		 * Close all open files after any error.  This is helpful on Windows,

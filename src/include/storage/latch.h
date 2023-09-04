@@ -190,5 +190,6 @@ extern int	WaitLatchOrSocket(Latch *latch, int wakeEvents,
 extern void InitializeLatchWaitSet(void);
 extern int	GetNumRegisteredWaitEvents(WaitEventSet *set);
 extern bool WaitEventSetCanReportClosed(void);
+extern void pg_msleep(int timeout, uint32 wait_event_info);
 
 #endif							/* LATCH_H */

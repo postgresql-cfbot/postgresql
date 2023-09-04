@@ -2384,9 +2384,7 @@ vacuum_delay_point(void)
 		if (msec > vacuum_cost_delay * 4)
 			msec = vacuum_cost_delay * 4;
 
-		pgstat_report_wait_start(WAIT_EVENT_VACUUM_DELAY);
-		pg_usleep(msec * 1000);
-		pgstat_report_wait_end();
+		pg_msleep(msec, WAIT_EVENT_VACUUM_DELAY);
 
 		/*
 		 * We don't want to ignore postmaster death during very long vacuums

@@ -2124,7 +2124,7 @@ retry:
 		switch (error)
 		{
 			case ERROR_NO_SYSTEM_RESOURCES:
-				pg_usleep(1000L);
+				pg_msleep(1, WAIT_EVENT_PG_SLEEP);
 				errno = EINTR;
 				break;
 			default:
@@ -2222,7 +2222,7 @@ retry:
 		switch (error)
 		{
 			case ERROR_NO_SYSTEM_RESOURCES:
-				pg_usleep(1000L);
+				pg_msleep(1, WAIT_EVENT_PG_SLEEP);
 				errno = EINTR;
 				break;
 			default:

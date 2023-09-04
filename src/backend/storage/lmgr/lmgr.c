@@ -722,7 +722,7 @@ XactLockTableWait(TransactionId xid, Relation rel, ItemPointer ctid,
 		 * through, to avoid slowing down the normal case.)
 		 */
 		if (!first)
-			pg_usleep(1000L);
+			pg_msleep(1, WAIT_EVENT_PG_SLEEP);
 		first = false;
 		xid = SubTransGetTopmostTransaction(xid);
 	}
@@ -760,7 +760,7 @@ ConditionalXactLockTableWait(TransactionId xid)
 
 		/* See XactLockTableWait about this case */
 		if (!first)
-			pg_usleep(1000L);
+			pg_msleep(1, WAIT_EVENT_PG_SLEEP);
 		first = false;
 		xid = SubTransGetTopmostTransaction(xid);
 	}

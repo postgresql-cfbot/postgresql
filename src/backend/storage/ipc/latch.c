@@ -2264,3 +2264,17 @@ drain(void)
 }
 
 #endif
+
+/*
+ * Convenient wrapper around WaitLatch(NULL, ...).
+ */
+void
+pg_msleep(int timeout, uint32 wait_event_info)
+{
+	Assert(timeout >= 0);
+
+	(void) WaitLatch(NULL,
+					 WL_EXIT_ON_PM_DEATH | WL_TIMEOUT,
+					 timeout,
+					 wait_event_info);
+}

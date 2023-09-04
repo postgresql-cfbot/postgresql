@@ -4269,7 +4269,7 @@ BackendInitialize(Port *port)
 	 * is not honored until after authentication.)
 	 */
 	if (PreAuthDelay > 0)
-		pg_usleep(PreAuthDelay * 1000000L);
+		pg_msleep(PreAuthDelay * 1000, WAIT_EVENT_PRE_AUTH_DELAY);
 
 	/* This flag will remain set until InitPostgres finishes authentication */
 	ClientAuthInProgress = true;	/* limit visibility of log messages */

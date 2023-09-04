@@ -309,7 +309,7 @@ CheckpointerMain(void)
 		 * to be repeated, and we don't want to be filling the error logs as
 		 * fast as we can.
 		 */
-		pg_usleep(1000000L);
+		pg_msleep(1000, WAIT_EVENT_CHECKPOINTER_MAIN);
 
 		/*
 		 * Close all open files after any error.  This is helpful on Windows,
@@ -1005,7 +1005,7 @@ RequestCheckpoint(int flags)
 			break;				/* signal sent successfully */
 
 		CHECK_FOR_INTERRUPTS();
-		pg_usleep(100000L);		/* wait 0.1 sec, then retry */
+		pg_msleep(100, WAIT_EVENT_CHECKPOINTER_MAIN);	/* wait 0.1 sec, then retry */
 	}
 
 	/*

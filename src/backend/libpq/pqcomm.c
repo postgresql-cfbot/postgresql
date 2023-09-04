@@ -80,6 +80,7 @@
 #include "storage/ipc.h"
 #include "utils/guc_hooks.h"
 #include "utils/memutils.h"
+#include "utils/wait_event.h"
 
 /*
  * Cope with the various platform-specific ways to spell TCP keepalive socket
@@ -717,7 +718,7 @@ StreamConnection(pgsocket server_fd, Port *port)
 		 * (The most likely reason for failure is being out of kernel file
 		 * table slots; we can do little except hope some will get freed up.)
 		 */
-		pg_usleep(100000L);		/* wait 0.1 sec */
+		pg_msleep(100, WAIT_EVENT_PG_SLEEP);
 		return STATUS_ERROR;
 	}
 

@@ -5143,7 +5143,7 @@ StartupXLOG(void)
 	/* This is just to allow attaching to startup process with a debugger */
 #ifdef XLOG_REPLAY_DELAY
 	if (ControlFile->state != DB_SHUTDOWNED)
-		pg_usleep(60000000L);
+		pg_msleep(60000, WAIT_EVENT_PG_SLEEP);
 #endif
 
 	/*
@@ -6723,7 +6723,7 @@ CreateCheckPoint(int flags)
 	{
 		do
 		{
-			pg_usleep(10000L);	/* wait for 10 msec */
+			pg_msleep(10, WAIT_EVENT_PG_SLEEP);
 		} while (HaveVirtualXIDsDelayingChkpt(vxids, nvxids,
 											  DELAY_CHKPT_START));
 	}
@@ -6736,7 +6736,7 @@ CreateCheckPoint(int flags)
 	{
 		do
 		{
-			pg_usleep(10000L);	/* wait for 10 msec */
+			pg_msleep(10, WAIT_EVENT_PG_SLEEP);
 		} while (HaveVirtualXIDsDelayingChkpt(vxids, nvxids,
 											  DELAY_CHKPT_COMPLETE));
 	}

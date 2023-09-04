@@ -762,7 +762,7 @@ StartBackgroundWorker(void)
 
 	/* Apply PostAuthDelay */
 	if (PostAuthDelay > 0)
-		pg_usleep(PostAuthDelay * 1000000L);
+		pg_msleep(PostAuthDelay * 1000, WAIT_EVENT_POST_AUTH_DELAY);
 
 	/*
 	 * Set up signal handlers.

@@ -3461,7 +3461,7 @@ WalSndWaitStopping(void)
 		if (all_stopped)
 			return;
 
-		pg_usleep(10000L);		/* wait for 10 msec */
+		pg_msleep(10, WAIT_EVENT_PG_SLEEP);
 	}
 }
 

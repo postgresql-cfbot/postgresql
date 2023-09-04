@@ -90,6 +90,7 @@
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
+#include "utils/wait_event.h"
 
 
 /*
@@ -1390,7 +1391,7 @@ retry:
 			/* Corner case 2: next multixact is still being filled in */
 			LWLockRelease(MultiXactOffsetSLRULock);
 			CHECK_FOR_INTERRUPTS();
-			pg_usleep(1000L);
+			pg_msleep(1, WAIT_EVENT_PG_SLEEP);
 			goto retry;
 		}
 

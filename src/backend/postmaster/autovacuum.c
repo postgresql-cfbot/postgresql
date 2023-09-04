@@ -453,7 +453,7 @@ AutoVacLauncherMain(int argc, char *argv[])
 			(errmsg_internal("autovacuum launcher started")));
 
 	if (PostAuthDelay)
-		pg_usleep(PostAuthDelay * 1000000L);
+		pg_msleep(PostAuthDelay * 1000, WAIT_EVENT_POST_AUTH_DELAY);
 
 	SetProcessingMode(InitProcessing);
 
@@ -572,7 +572,7 @@ AutoVacLauncherMain(int argc, char *argv[])
 		 * Sleep at least 1 second after any error.  We don't want to be
 		 * filling the error logs as fast as we can.
 		 */
-		pg_usleep(1000000L);
+		pg_msleep(1000, WAIT_EVENT_PG_SLEEP);
 	}
 
 	/* We can now handle ereport(ERROR) */
@@ -698,7 +698,7 @@ AutoVacLauncherMain(int argc, char *argv[])
 				 * of a worker will continue to fail in the same way.
 				 */
 				AutoVacuumShmem->av_signal[AutoVacForkFailed] = false;
-				pg_usleep(1000000L);	/* 1s */
+				pg_msleep(1000, WAIT_EVENT_PG_SLEEP);
 				SendPostmasterSignal(PMSIGNAL_START_AUTOVAC_WORKER);
 				continue;
 			}
@@ -1714,7 +1714,7 @@ AutoVacWorkerMain(int argc, char *argv[])
 				(errmsg_internal("autovacuum: processing database \"%s\"", dbname)));
 
 		if (PostAuthDelay)
-			pg_usleep(PostAuthDelay * 1000000L);
+			pg_msleep(PostAuthDelay * 1000, WAIT_EVENT_POST_AUTH_DELAY);
 
 		/* And do an appropriate amount of work */
 		recentXid = ReadNextTransactionId();

@@ -397,7 +397,7 @@ ResolveRecoveryConflictWithVirtualXIDs(VirtualTransactionId *waitlist,
 				 * an unresponsive backend when system is heavily loaded.
 				 */
 				if (pid != 0)
-					pg_usleep(5000L);
+					pg_msleep(5, WAIT_EVENT_PG_SLEEP);
 			}
 
 			if (waitStart != 0 && (!logged_recovery_conflict || !waiting))
@@ -587,7 +587,7 @@ ResolveRecoveryConflictWithDatabase(Oid dbid)
 		 * Wait awhile for them to die so that we avoid flooding an
 		 * unresponsive backend when system is heavily loaded.
 		 */
-		pg_usleep(10000);
+		pg_msleep(10, WAIT_EVENT_PG_SLEEP);
 	}
 }
 

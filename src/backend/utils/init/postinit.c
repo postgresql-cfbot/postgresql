@@ -983,7 +983,7 @@ InitPostgres(const char *in_dbname, Oid dboid,
 
 		/* Apply PostAuthDelay as soon as we've read all options */
 		if (PostAuthDelay > 0)
-			pg_usleep(PostAuthDelay * 1000000L);
+			pg_msleep(PostAuthDelay * 1000, WAIT_EVENT_POST_AUTH_DELAY);
 
 		/* initialize client encoding */
 		InitializeClientEncoding();
@@ -1204,7 +1204,7 @@ InitPostgres(const char *in_dbname, Oid dboid,
 
 	/* Apply PostAuthDelay as soon as we've read all options */
 	if (PostAuthDelay > 0)
-		pg_usleep(PostAuthDelay * 1000000L);
+		pg_msleep(PostAuthDelay * 1000, WAIT_EVENT_POST_AUTH_DELAY);
 
 	/*
 	 * Initialize various default states that can't be set up until we've

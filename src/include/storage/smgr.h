@@ -85,8 +85,8 @@ extern void smgrclearowner(SMgrRelation *owner, SMgrRelation reln);
 extern void smgrclose(SMgrRelation reln);
 extern void smgrcloseall(void);
 extern void smgrcloserellocator(RelFileLocatorBackend rlocator);
-extern void smgrrelease(SMgrRelation reln);
-extern void smgrreleaseall(void);
+extern void smgrdestroy(SMgrRelation reln);
+extern void smgrdestroyall(void);
 extern void smgrcreate(SMgrRelation reln, ForkNumber forknum, bool isRedo);
 extern void smgrdosyncall(SMgrRelation *rels, int nrels);
 extern void smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo);
@@ -95,11 +95,14 @@ extern void smgrextend(SMgrRelation reln, ForkNumber forknum,
 extern void smgrzeroextend(SMgrRelation reln, ForkNumber forknum,
 						   BlockNumber blocknum, int nblocks, bool skipFsync);
 extern bool smgrprefetch(SMgrRelation reln, ForkNumber forknum,
-						 BlockNumber blocknum);
-extern void smgrread(SMgrRelation reln, ForkNumber forknum,
-					 BlockNumber blocknum, void *buffer);
-extern void smgrwrite(SMgrRelation reln, ForkNumber forknum,
-					  BlockNumber blocknum, const void *buffer, bool skipFsync);
+						 BlockNumber blocknum, int nblocks);
+extern void smgrreadv(SMgrRelation reln, ForkNumber forknum,
+					  BlockNumber blocknum,
+					  void **buffer, BlockNumber nblocks);
+extern void smgrwritev(SMgrRelation reln, ForkNumber forknum,
+					   BlockNumber blocknum,
+					   const void **buffer, BlockNumber nblocks,
+					   bool skipFsync);
 extern void smgrwriteback(SMgrRelation reln, ForkNumber forknum,
 						  BlockNumber blocknum, BlockNumber nblocks);
 extern BlockNumber smgrnblocks(SMgrRelation reln, ForkNumber forknum);
@@ -109,5 +112,19 @@ extern void smgrtruncate(SMgrRelation reln, ForkNumber *forknum,
 extern void smgrimmedsync(SMgrRelation reln, ForkNumber forknum);
 extern void AtEOXact_SMgr(void);
 extern bool ProcessBarrierSmgrRelease(void);
+
+static inline void
+smgrread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+		 void *buffer)
+{
+	smgrreadv(reln, forknum, blocknum, &buffer, 1);
+}
+
+static inline void
+smgrwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+		  const void *buffer, bool skipFsync)
+{
+	smgrwritev(reln, forknum, blocknum, &buffer, 1, skipFsync);
+}
 
 #endif							/* SMGR_H */

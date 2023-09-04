@@ -160,6 +160,16 @@ BufferTagsEqual(const BufferTag *tag1, const BufferTag *tag2)
 }
 
 static inline bool
+BufferTagsConsecutive(const BufferTag *tag1, const BufferTag *tag2)
+{
+	return (tag1->spcOid == tag2->spcOid) &&
+		(tag1->dbOid == tag2->dbOid) &&
+		(tag1->relNumber == tag2->relNumber) &&
+		(tag1->forkNum == tag2->forkNum) &&
+		(tag1->blockNum + 1 == tag2->blockNum);
+}
+
+static inline bool
 BufTagMatchesRelFileLocator(const BufferTag *tag,
 							const RelFileLocator *rlocator)
 {
@@ -290,6 +300,7 @@ typedef struct PendingWriteback
 {
 	/* could store different types of pending flushes here */
 	BufferTag	tag;
+	int			nblocks;
 } PendingWriteback;
 
 /* struct forward declared in bufmgr.h */
@@ -390,7 +401,8 @@ extern PGDLLIMPORT CkptSortItem *CkptBufferIds;
 extern void WritebackContextInit(WritebackContext *context, int *max_pending);
 extern void IssuePendingWritebacks(WritebackContext *wb_context, IOContext io_context);
 extern void ScheduleBufferTagForWriteback(WritebackContext *wb_context,
-										  IOContext io_context, BufferTag *tag);
+										  IOContext io_context, BufferTag *tag,
+										  int nblocks);
 
 /* freelist.c */
 extern IOContext IOContextForStrategy(BufferAccessStrategy strategy);
@@ -422,7 +434,8 @@ extern PrefetchBufferResult PrefetchLocalBuffer(SMgrRelation smgr,
 												ForkNumber forkNum,
 												BlockNumber blockNum);
 extern BufferDesc *LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum,
-									BlockNumber blockNum, bool *foundPtr);
+									BlockNumber blockNum, bool *foundPtr,
+									bool *allocPtr);
 extern BlockNumber ExtendBufferedRelLocal(BufferManagerRelation bmr,
 										  ForkNumber fork,
 										  uint32 flags,

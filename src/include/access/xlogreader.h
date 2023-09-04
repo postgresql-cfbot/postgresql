@@ -128,6 +128,7 @@ typedef struct
 
 	/* Prefetching workspace. */
 	Buffer		prefetch_buffer;
+	bool		prefetch_buffer_streamed;
 
 	/* copy of the fork_flags field from the XLogRecordBlockHeader */
 	uint8		flags;

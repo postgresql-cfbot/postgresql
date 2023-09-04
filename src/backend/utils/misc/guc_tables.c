@@ -375,7 +375,7 @@ static const struct config_enum_entry huge_pages_status_options[] = {
 static const struct config_enum_entry recovery_prefetch_options[] = {
 	{"off", RECOVERY_PREFETCH_OFF, false},
 	{"on", RECOVERY_PREFETCH_ON, false},
-	{"try", RECOVERY_PREFETCH_TRY, false},
+	{"try", RECOVERY_PREFETCH_ON, false},
 	{"true", RECOVERY_PREFETCH_ON, true},
 	{"false", RECOVERY_PREFETCH_OFF, true},
 	{"yes", RECOVERY_PREFETCH_ON, true},
@@ -4895,8 +4895,8 @@ struct config_enum ConfigureNamesEnum[] =
 			gettext_noop("Look ahead in the WAL to find references to uncached data.")
 		},
 		&recovery_prefetch,
-		RECOVERY_PREFETCH_TRY, recovery_prefetch_options,
-		check_recovery_prefetch, assign_recovery_prefetch, NULL
+		RECOVERY_PREFETCH_ON, recovery_prefetch_options,
+		NULL, assign_recovery_prefetch, NULL
 	},
 
 	{

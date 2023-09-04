@@ -54,11 +54,14 @@ typedef struct f_smgr
 	void		(*smgr_zeroextend) (SMgrRelation reln, ForkNumber forknum,
 									BlockNumber blocknum, int nblocks, bool skipFsync);
 	bool		(*smgr_prefetch) (SMgrRelation reln, ForkNumber forknum,
-								  BlockNumber blocknum);
-	void		(*smgr_read) (SMgrRelation reln, ForkNumber forknum,
-							  BlockNumber blocknum, void *buffer);
-	void		(*smgr_write) (SMgrRelation reln, ForkNumber forknum,
-							   BlockNumber blocknum, const void *buffer, bool skipFsync);
+								  BlockNumber blocknum, int nblocks);
+	void		(*smgr_readv) (SMgrRelation reln, ForkNumber forknum,
+							   BlockNumber blocknum,
+							   void **buffers, BlockNumber nblocks);
+	void		(*smgr_writev) (SMgrRelation reln, ForkNumber forknum,
+								BlockNumber blocknum,
+								const void **buffers, BlockNumber nblocks,
+								bool skipFsync);
 	void		(*smgr_writeback) (SMgrRelation reln, ForkNumber forknum,
 								   BlockNumber blocknum, BlockNumber nblocks);
 	BlockNumber (*smgr_nblocks) (SMgrRelation reln, ForkNumber forknum);
@@ -80,8 +83,8 @@ static const f_smgr smgrsw[] = {
 		.smgr_extend = mdextend,
 		.smgr_zeroextend = mdzeroextend,
 		.smgr_prefetch = mdprefetch,
-		.smgr_read = mdread,
-		.smgr_write = mdwrite,
+		.smgr_readv = mdreadv,
+		.smgr_writev = mdwritev,
 		.smgr_writeback = mdwriteback,
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
@@ -144,7 +147,9 @@ smgrshutdown(int code, Datum arg)
 /*
  * smgropen() -- Return an SMgrRelation object, creating it if need be.
  *
- * This does not attempt to actually open the underlying file.
+ * This does not attempt to actually open the underlying files.  The returned
+ * object remains valid at least until AtEOXact_SMgr() is called, or until
+ * smgrdestroy() is called in non-transaction backends.
  */
 SMgrRelation
 smgropen(RelFileLocator rlocator, BackendId backend)
@@ -254,10 +259,10 @@ smgrexists(SMgrRelation reln, ForkNumber forknum)
 }
 
 /*
- * smgrclose() -- Close and delete an SMgrRelation object.
+ * smgrdestroy() -- Delete an SMgrRelation object.
  */
 void
-smgrclose(SMgrRelation reln)
+smgrdestroy(SMgrRelation reln)
 {
 	SMgrRelation *owner;
 	ForkNumber	forknum;
@@ -284,12 +289,14 @@ smgrclose(SMgrRelation reln)
 }
 
 /*
- * smgrrelease() -- Release all resources used by this object.
+ * smgrclose() -- Release all resources used by this object.
  *
- * The object remains valid.
+ * The object remains valid, but is moved to the unknown list where it will
+ * be destroyed by AtEOXact_SMgr().  It may be re-owned if it is accessed by a
+ * relation before then.
  */
 void
-smgrrelease(SMgrRelation reln)
+smgrclose(SMgrRelation reln)
 {
 	for (ForkNumber forknum = 0; forknum <= MAX_FORKNUM; forknum++)
 	{
@@ -297,31 +304,17 @@ smgrrelease(SMgrRelation reln)
 		reln->smgr_cached_nblocks[forknum] = InvalidBlockNumber;
 	}
 	reln->smgr_targblock = InvalidBlockNumber;
+
+	if (reln->smgr_owner)
+	{
+		*reln->smgr_owner = NULL;
+		reln->smgr_owner = NULL;
+		dlist_push_tail(&unowned_relns, &reln->node);
+	}
 }
 
 /*
- * smgrreleaseall() -- Release resources used by all objects.
- *
- * This is called for PROCSIGNAL_BARRIER_SMGRRELEASE.
- */
-void
-smgrreleaseall(void)
-{
-	HASH_SEQ_STATUS status;
-	SMgrRelation reln;
-
-	/* Nothing to do if hashtable not set up */
-	if (SMgrRelationHash == NULL)
-		return;
-
-	hash_seq_init(&status, SMgrRelationHash);
-
-	while ((reln = (SMgrRelation) hash_seq_search(&status)) != NULL)
-		smgrrelease(reln);
-}
-
-/*
- * smgrcloseall() -- Close all existing SMgrRelation objects.
+ * smgrcloseall() -- Close all objects.
  */
 void
 smgrcloseall(void)
@@ -337,6 +330,28 @@ smgrcloseall(void)
 
 	while ((reln = (SMgrRelation) hash_seq_search(&status)) != NULL)
 		smgrclose(reln);
+}
+
+/*
+ * smgrdestroyall() -- Destroy all SMgrRelation objects.
+ *
+ * It must be known that there are no pointers to SMgrRelations, other than
+ * those registered with smgrsetowner().
+ */
+void
+smgrdestroyall(void)
+{
+	HASH_SEQ_STATUS status;
+	SMgrRelation reln;
+
+	/* Nothing to do if hashtable not set up */
+	if (SMgrRelationHash == NULL)
+		return;
+
+	hash_seq_init(&status, SMgrRelationHash);
+
+	while ((reln = (SMgrRelation) hash_seq_search(&status)) != NULL)
+		smgrdestroy(reln);
 }
 
 /*
@@ -545,28 +560,30 @@ smgrzeroextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
  * record).
  */
 bool
-smgrprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
+smgrprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+			 int nblocks)
 {
-	return smgrsw[reln->smgr_which].smgr_prefetch(reln, forknum, blocknum);
+	return smgrsw[reln->smgr_which].smgr_prefetch(reln, forknum, blocknum, nblocks);
 }
 
 /*
- * smgrread() -- read a particular block from a relation into the supplied
- *				 buffer.
+ * smgrreadv() -- read a particular block range from a relation into the
+ *				 supplied buffers.
  *
  * This routine is called from the buffer manager in order to
  * instantiate pages in the shared buffer cache.  All storage managers
  * return pages in the format that POSTGRES expects.
  */
 void
-smgrread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-		 void *buffer)
+smgrreadv(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+		  void **buffers, BlockNumber nblocks)
 {
-	smgrsw[reln->smgr_which].smgr_read(reln, forknum, blocknum, buffer);
+	smgrsw[reln->smgr_which].smgr_readv(reln, forknum, blocknum, buffers,
+										nblocks);
 }
 
 /*
- * smgrwrite() -- Write the supplied buffer out.
+ * smgrwritev() -- Write the supplied buffers out.
  *
  * This is to be used only for updating already-existing blocks of a
  * relation (ie, those before the current EOF).  To extend a relation,
@@ -581,13 +598,12 @@ smgrread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
  * do not require fsync.
  */
 void
-smgrwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-		  const void *buffer, bool skipFsync)
+smgrwritev(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+		   const void **buffers, BlockNumber nblocks, bool skipFsync)
 {
-	smgrsw[reln->smgr_which].smgr_write(reln, forknum, blocknum,
-										buffer, skipFsync);
+	smgrsw[reln->smgr_which].smgr_writev(reln, forknum, blocknum,
+										 buffers, nblocks, skipFsync);
 }
-
 
 /*
  * smgrwriteback() -- Trigger kernel writeback for the supplied range of
@@ -727,7 +743,8 @@ smgrimmedsync(SMgrRelation reln, ForkNumber forknum)
  * AtEOXact_SMgr
  *
  * This routine is called during transaction commit or abort (it doesn't
- * particularly care which).  All transient SMgrRelation objects are closed.
+ * particularly care which).  All transient SMgrRelation objects are
+ * destroyed.
  *
  * We do this as a compromise between wanting transient SMgrRelations to
  * live awhile (to amortize the costs of blind writes of multiple blocks)
@@ -741,7 +758,7 @@ AtEOXact_SMgr(void)
 	dlist_mutable_iter iter;
 
 	/*
-	 * Zap all unowned SMgrRelations.  We rely on smgrclose() to remove each
+	 * Zap all unowned SMgrRelations.  We rely on smgrdestroy() to remove each
 	 * one from the list.
 	 */
 	dlist_foreach_modify(iter, &unowned_relns)
@@ -751,7 +768,7 @@ AtEOXact_SMgr(void)
 
 		Assert(rel->smgr_owner == NULL);
 
-		smgrclose(rel);
+		smgrdestroy(rel);
 	}
 }
 
@@ -762,6 +779,6 @@ AtEOXact_SMgr(void)
 bool
 ProcessBarrierSmgrRelease(void)
 {
-	smgrreleaseall();
+	smgrcloseall();
 	return true;
 }

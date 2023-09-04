@@ -561,12 +561,6 @@ typedef struct ViewOptions
  *
  * Very little code is authorized to touch rel->rd_smgr directly.  Instead
  * use this function to fetch its value.
- *
- * Note: since a relcache flush can cause the file handle to be closed again,
- * it's unwise to hold onto the pointer returned by this function for any
- * long period.  Recommended practice is to just re-execute RelationGetSmgr
- * each time you need to access the SMgrRelation.  It's quite cheap in
- * comparison to whatever an smgr function is going to do.
  */
 static inline SMgrRelation
 RelationGetSmgr(Relation rel)

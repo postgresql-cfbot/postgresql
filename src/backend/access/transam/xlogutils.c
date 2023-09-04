@@ -360,13 +360,13 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	RelFileLocator rlocator;
 	ForkNumber	forknum;
 	BlockNumber blkno;
-	Buffer		prefetch_buffer;
+	Buffer		streamed_buffer;
 	Page		page;
 	bool		zeromode;
 	bool		willinit;
 
 	if (!XLogRecGetBlockTagExtended(record, block_id, &rlocator, &forknum, &blkno,
-									&prefetch_buffer))
+									&streamed_buffer))
 	{
 		/* Caller specified a bogus block_id */
 		elog(PANIC, "failed to locate backup block with ID %d in WAL record",
@@ -384,13 +384,47 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	if (!willinit && zeromode)
 		elog(PANIC, "block to be initialized in redo routine must be marked with WILL_INIT flag in the WAL record");
 
+	/* Has xlogprefetcher.c streamed a pinned buffer to us? */
+	if (BufferIsValid(streamed_buffer))
+	{
+#ifdef USE_ASSERT_CHECKING
+		RelFileLocator xrlocator;
+		ForkNumber	xforknum;
+		BlockNumber xblocknum;
+
+		/* It must match the block requested in the WAL. */
+		BufferGetTag(streamed_buffer, &xrlocator, &xforknum, &xblocknum);
+		Assert(RelFileLocatorEquals(xrlocator, rlocator));
+		Assert(xforknum == forknum);
+		Assert(xblocknum == blkno);
+#endif
+	}
+
 	/* If it has a full-page image and it should be restored, do it. */
 	if (XLogRecBlockImageApply(record, block_id))
 	{
 		Assert(XLogRecHasBlockImage(record, block_id));
-		*buf = XLogReadBufferExtended(rlocator, forknum, blkno,
-									  get_cleanup_lock ? RBM_ZERO_AND_CLEANUP_LOCK : RBM_ZERO_AND_LOCK,
-									  prefetch_buffer);
+		if (BufferIsValid(streamed_buffer))
+		{
+			/*
+			 * The prefetcher has pinned this buffer, but used RBM_WILL_ZERO
+			 * when it saw that an image would be restored, so the buffer
+			 * wasn't made BM_VALID.  The only thing we are allowed to do now
+			 * is call ZeroBuffer().  Doing this at the last moment means that
+			 * we only lock one block at a time, when the redo routine is
+			 * ready for it, and can tell us which kind of lock it wants.
+			 *
+			 * XXX There doesn't seem to be a good reason to zero a page
+			 * before copying an image over the top, but this matches the
+			 * traditional behavior for now.
+			 */
+			ZeroBuffer(streamed_buffer,
+					   get_cleanup_lock ? RBM_ZERO_AND_CLEANUP_LOCK : RBM_ZERO_AND_CLEANUP_LOCK);
+			*buf = streamed_buffer;
+		}
+		else
+			*buf = XLogReadBufferExtended(rlocator, forknum, blkno,
+										  get_cleanup_lock ? RBM_ZERO_AND_CLEANUP_LOCK : RBM_ZERO_AND_LOCK);
 		page = BufferGetPage(*buf);
 		if (!RestoreBlockImage(record, block_id, page))
 			ereport(ERROR,
@@ -421,7 +455,22 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	}
 	else
 	{
-		*buf = XLogReadBufferExtended(rlocator, forknum, blkno, mode, prefetch_buffer);
+		if (BufferIsValid(streamed_buffer))
+		{
+			/*
+			 * If the redo routine wants a zeroed page, we do that here.  The
+			 * prefetcher streamed us a pinned but not necessarily BM_VALID
+			 * buffer, because it saw the BKPBLOCK_WILL_INIT flag and used
+			 * PGSR_NEXT_WILL_ZERO to avoid I/O for a page that will be
+			 * zeroed.  We only lock one page at a time, when the redo routine
+			 * is ready to tell us which type of lock it wants.
+			 */
+			if (zeromode)
+				ZeroBuffer(streamed_buffer, mode);
+			*buf = streamed_buffer;
+		}
+		else
+			*buf = XLogReadBufferExtended(rlocator, forknum, blkno, mode);
 		if (BufferIsValid(*buf))
 		{
 			if (mode != RBM_ZERO_AND_LOCK && mode != RBM_ZERO_AND_CLEANUP_LOCK)
@@ -472,23 +521,13 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
  */
 Buffer
 XLogReadBufferExtended(RelFileLocator rlocator, ForkNumber forknum,
-					   BlockNumber blkno, ReadBufferMode mode,
-					   Buffer recent_buffer)
+					   BlockNumber blkno, ReadBufferMode mode)
 {
 	BlockNumber lastblock;
 	Buffer		buffer;
 	SMgrRelation smgr;
 
 	Assert(blkno != P_NEW);
-
-	/* Do we have a clue where the buffer might be already? */
-	if (BufferIsValid(recent_buffer) &&
-		mode == RBM_NORMAL &&
-		ReadRecentBuffer(rlocator, forknum, blkno, recent_buffer))
-	{
-		buffer = recent_buffer;
-		goto recent_buffer_fast_path;
-	}
 
 	/* Open the relation at smgr level */
 	smgr = smgropen(rlocator, InvalidBackendId);
@@ -533,7 +572,6 @@ XLogReadBufferExtended(RelFileLocator rlocator, ForkNumber forknum,
 									 mode);
 	}
 
-recent_buffer_fast_path:
 	if (mode == RBM_NORMAL)
 	{
 		/* check that page has been initialized */
@@ -657,7 +695,7 @@ XLogDropDatabase(Oid dbid)
 	 * This is unnecessarily heavy-handed, as it will close SMgrRelation
 	 * objects for other databases as well. DROP DATABASE occurs seldom enough
 	 * that it's not worth introducing a variant of smgrclose for just this
-	 * purpose. XXX: Or should we rather leave the smgr entries dangling?
+	 * purpose.
 	 */
 	smgrcloseall();
 

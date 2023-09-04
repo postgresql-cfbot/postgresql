@@ -3737,13 +3737,9 @@ include_dir 'conf.d'
        <para>
         Whether to try to prefetch blocks that are referenced in the WAL that
         are not yet in the buffer pool, during recovery.  Valid values are
-        <literal>off</literal>, <literal>on</literal> and
-        <literal>try</literal> (the default).  The setting
-        <literal>try</literal> enables
-        prefetching only if the operating system provides the
-        <function>posix_fadvise</function> function, which is currently used
-        to implement prefetching.  Note that some operating systems provide the
-        function, but it doesn't do anything.
+        <literal>off</literal> and <literal>on</literal> (the default).
+        This allows <function>posix_fadvise</function> hints to be provided
+        to some operating systems, and I/O to be performed more efficiently.
        </para>
        <para>
         Prefetching blocks that will soon be needed can reduce I/O wait times

@@ -93,7 +93,7 @@ PrefetchLocalBuffer(SMgrRelation smgr, ForkNumber forkNum,
 #ifdef USE_PREFETCH
 		/* Not in buffers, so initiate prefetch */
 		if ((io_direct_flags & IO_DIRECT_DATA) == 0 &&
-			smgrprefetch(smgr, forkNum, blockNum))
+			smgrprefetch(smgr, forkNum, blockNum, 1))
 		{
 			result.initiated_io = true;
 		}
@@ -115,7 +115,7 @@ PrefetchLocalBuffer(SMgrRelation smgr, ForkNumber forkNum,
  */
 BufferDesc *
 LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
-				 bool *foundPtr)
+				 bool *foundPtr, bool *allocPtr)
 {
 	BufferTag	newTag;			/* identity of requested block */
 	LocalBufferLookupEnt *hresult;
@@ -141,6 +141,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 		Assert(BufferTagsEqual(&bufHdr->tag, &newTag));
 
 		*foundPtr = PinLocalBuffer(bufHdr, true);
+		*allocPtr = false;
 	}
 	else
 	{
@@ -167,6 +168,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 		pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
 
 		*foundPtr = false;
+		*allocPtr = true;
 	}
 
 	return bufHdr;

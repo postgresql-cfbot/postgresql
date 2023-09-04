@@ -1750,6 +1750,7 @@ DecodeXLogRecord(XLogReaderState *state,
 			blk->has_data = ((fork_flags & BKPBLOCK_HAS_DATA) != 0);
 
 			blk->prefetch_buffer = InvalidBuffer;
+			blk->prefetch_buffer_streamed = false;
 
 			COPY_HEADER_FIELD(&blk->data_len, sizeof(uint16));
 			/* cross-check that the HAS_DATA flag is set iff data_length > 0 */
@@ -1978,6 +1979,9 @@ XLogRecGetBlockTag(XLogReaderState *record, uint8 block_id,
  * If the WAL record contains a block reference with the given ID, *rlocator,
  * *forknum, *blknum and *prefetch_buffer are filled in (if not NULL), and
  * returns true.  Otherwise returns false.
+ *
+ * If prefetch_buffer is not NULL, the buffer is already pinned, and ownership
+ * of the pin is transferred to the caller.
  */
 bool
 XLogRecGetBlockTagExtended(XLogReaderState *record, uint8 block_id,
@@ -1998,7 +2002,15 @@ XLogRecGetBlockTagExtended(XLogReaderState *record, uint8 block_id,
 	if (blknum)
 		*blknum = bkpb->blkno;
 	if (prefetch_buffer)
+	{
 		*prefetch_buffer = bkpb->prefetch_buffer;
+
+		/*
+		 * Clear this flag is so that we can assert that redo records take
+		 * ownership of all buffers pinned by xlogprefetcher.c.
+		 */
+		bkpb->prefetch_buffer = InvalidBuffer;
+	}
 	return true;
 }
 

@@ -212,7 +212,7 @@ XLogRecordPageWithFreeSpace(RelFileLocator rlocator, BlockNumber heapBlk,
 
 	/* If the page doesn't exist already, extend */
 	buf = XLogReadBufferExtended(rlocator, FSM_FORKNUM, blkno,
-								 RBM_ZERO_ON_ERROR, InvalidBuffer);
+								 RBM_ZERO_ON_ERROR);
 	LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 
 	page = BufferGetPage(buf);

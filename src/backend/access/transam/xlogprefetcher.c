@@ -27,6 +27,7 @@
 
 #include "postgres.h"
 
+#include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xlogprefetcher.h"
 #include "access/xlogreader.h"
@@ -44,6 +45,7 @@
 #include "storage/bufmgr.h"
 #include "storage/shmem.h"
 #include "storage/smgr.h"
+#include "storage/streaming_read.h"
 #include "utils/guc_hooks.h"
 #include "utils/hsearch.h"
 
@@ -52,12 +54,6 @@
  * pg_stat_recovery_prefetch.
  */
 #define XLOGPREFETCHER_STATS_DISTANCE BLCKSZ
-
-/*
- * To detect repeated access to the same block and skip useless extra system
- * calls, we remember a small window of recently prefetched blocks.
- */
-#define XLOGPREFETCHER_SEQ_WINDOW_SIZE 4
 
 /*
  * When maintenance_io_concurrency is not saturated, we're prepared to look
@@ -69,57 +65,12 @@
 /* #define XLOGPREFETCHER_DEBUG_LEVEL LOG */
 
 /* GUCs */
-int			recovery_prefetch = RECOVERY_PREFETCH_TRY;
+int			recovery_prefetch = RECOVERY_PREFETCH_ON;
 
-#ifdef USE_PREFETCH
 #define RecoveryPrefetchEnabled() \
-		(recovery_prefetch != RECOVERY_PREFETCH_OFF && \
-		 maintenance_io_concurrency > 0)
-#else
-#define RecoveryPrefetchEnabled() false
-#endif
+		(recovery_prefetch != RECOVERY_PREFETCH_OFF)
 
 static int	XLogPrefetchReconfigureCount = 0;
-
-/*
- * Enum used to report whether an IO should be started.
- */
-typedef enum
-{
-	LRQ_NEXT_NO_IO,
-	LRQ_NEXT_IO,
-	LRQ_NEXT_AGAIN
-} LsnReadQueueNextStatus;
-
-/*
- * Type of callback that can decide which block to prefetch next.  For now
- * there is only one.
- */
-typedef LsnReadQueueNextStatus (*LsnReadQueueNextFun) (uintptr_t lrq_private,
-													   XLogRecPtr *lsn);
-
-/*
- * A simple circular queue of LSNs, using to control the number of
- * (potentially) inflight IOs.  This stands in for a later more general IO
- * control mechanism, which is why it has the apparently unnecessary
- * indirection through a function pointer.
- */
-typedef struct LsnReadQueue
-{
-	LsnReadQueueNextFun next;
-	uintptr_t	lrq_private;
-	uint32		max_inflight;
-	uint32		inflight;
-	uint32		completed;
-	uint32		head;
-	uint32		tail;
-	uint32		size;
-	struct
-	{
-		bool		io;
-		XLogRecPtr	lsn;
-	}			queue[FLEXIBLE_ARRAY_MEMBER];
-} LsnReadQueue;
 
 /*
  * A prefetcher.  This is a mechanism that wraps an XLogReader, prefetching
@@ -139,16 +90,11 @@ struct XLogPrefetcher
 	HTAB	   *filter_table;
 	dlist_head	filter_queue;
 
-	/* Book-keeping to avoid repeat prefetches. */
-	RelFileLocator recent_rlocator[XLOGPREFETCHER_SEQ_WINDOW_SIZE];
-	BlockNumber recent_block[XLOGPREFETCHER_SEQ_WINDOW_SIZE];
-	int			recent_idx;
-
 	/* Book-keeping to disable prefetching temporarily. */
 	XLogRecPtr	no_readahead_until;
 
 	/* IO depth manager. */
-	LsnReadQueue *streaming_read;
+	PgStreamingRead *streaming_read;
 
 	XLogRecPtr	begin_ptr;
 
@@ -197,102 +143,15 @@ static inline bool XLogPrefetcherIsFiltered(XLogPrefetcher *prefetcher,
 											BlockNumber blockno);
 static inline void XLogPrefetcherCompleteFilters(XLogPrefetcher *prefetcher,
 												 XLogRecPtr replaying_lsn);
-static LsnReadQueueNextStatus XLogPrefetcherNextBlock(uintptr_t pgsr_private,
-													  XLogRecPtr *lsn);
+static bool XLogPrefetcherNextBlock(PgStreamingRead *pgsr,
+									uintptr_t pgsr_prviate,
+									void *per_io_data,
+									BufferManagerRelation *bmr,
+									ForkNumber *forknum,
+									BlockNumber *blocknum,
+									ReadBufferMode *mode);
 
 static XLogPrefetchStats *SharedStats;
-
-static inline LsnReadQueue *
-lrq_alloc(uint32 max_distance,
-		  uint32 max_inflight,
-		  uintptr_t lrq_private,
-		  LsnReadQueueNextFun next)
-{
-	LsnReadQueue *lrq;
-	uint32		size;
-
-	Assert(max_distance >= max_inflight);
-
-	size = max_distance + 1;	/* full ring buffer has a gap */
-	lrq = palloc(offsetof(LsnReadQueue, queue) + sizeof(lrq->queue[0]) * size);
-	lrq->lrq_private = lrq_private;
-	lrq->max_inflight = max_inflight;
-	lrq->size = size;
-	lrq->next = next;
-	lrq->head = 0;
-	lrq->tail = 0;
-	lrq->inflight = 0;
-	lrq->completed = 0;
-
-	return lrq;
-}
-
-static inline void
-lrq_free(LsnReadQueue *lrq)
-{
-	pfree(lrq);
-}
-
-static inline uint32
-lrq_inflight(LsnReadQueue *lrq)
-{
-	return lrq->inflight;
-}
-
-static inline uint32
-lrq_completed(LsnReadQueue *lrq)
-{
-	return lrq->completed;
-}
-
-static inline void
-lrq_prefetch(LsnReadQueue *lrq)
-{
-	/* Try to start as many IOs as we can within our limits. */
-	while (lrq->inflight < lrq->max_inflight &&
-		   lrq->inflight + lrq->completed < lrq->size - 1)
-	{
-		Assert(((lrq->head + 1) % lrq->size) != lrq->tail);
-		switch (lrq->next(lrq->lrq_private, &lrq->queue[lrq->head].lsn))
-		{
-			case LRQ_NEXT_AGAIN:
-				return;
-			case LRQ_NEXT_IO:
-				lrq->queue[lrq->head].io = true;
-				lrq->inflight++;
-				break;
-			case LRQ_NEXT_NO_IO:
-				lrq->queue[lrq->head].io = false;
-				lrq->completed++;
-				break;
-		}
-		lrq->head++;
-		if (lrq->head == lrq->size)
-			lrq->head = 0;
-	}
-}
-
-static inline void
-lrq_complete_lsn(LsnReadQueue *lrq, XLogRecPtr lsn)
-{
-	/*
-	 * We know that LSNs before 'lsn' have been replayed, so we can now assume
-	 * that any IOs that were started before then have finished.
-	 */
-	while (lrq->tail != lrq->head &&
-		   lrq->queue[lrq->tail].lsn < lsn)
-	{
-		if (lrq->queue[lrq->tail].io)
-			lrq->inflight--;
-		else
-			lrq->completed--;
-		lrq->tail++;
-		if (lrq->tail == lrq->size)
-			lrq->tail = 0;
-	}
-	if (RecoveryPrefetchEnabled())
-		lrq_prefetch(lrq);
-}
 
 size_t
 XLogPrefetchShmemSize(void)
@@ -395,7 +254,23 @@ XLogPrefetcherAllocate(XLogReaderState *reader)
 void
 XLogPrefetcherFree(XLogPrefetcher *prefetcher)
 {
-	lrq_free(prefetcher->streaming_read);
+	/*
+	 * Redo records are normally expected to read and then release any buffers
+	 * referenced by a WAL record, but we may need to release buffers for the
+	 * final block if recovery ends without replaying a record.
+	 */
+	if (prefetcher->reader->record)
+	{
+		DecodedXLogRecord *last_record = prefetcher->reader->record;
+
+		for (int i = 0; i <= last_record->max_block_id; ++i)
+		{
+			if (last_record->blocks[i].in_use &&
+				BufferIsValid(last_record->blocks[i].prefetch_buffer))
+				ReleaseBuffer(last_record->blocks[i].prefetch_buffer);
+		}
+	}
+	pg_streaming_read_free(prefetcher->streaming_read);
 	hash_destroy(prefetcher->filter_table);
 	pfree(prefetcher);
 }
@@ -415,8 +290,8 @@ XLogPrefetcherGetReader(XLogPrefetcher *prefetcher)
 void
 XLogPrefetcherComputeStats(XLogPrefetcher *prefetcher)
 {
-	uint32		io_depth;
-	uint32		completed;
+	int			ios;
+	int			pins;
 	int64		wal_distance;
 
 
@@ -432,13 +307,13 @@ XLogPrefetcherComputeStats(XLogPrefetcher *prefetcher)
 		wal_distance = 0;
 	}
 
-	/* How many IOs are currently in flight and completed? */
-	io_depth = lrq_inflight(prefetcher->streaming_read);
-	completed = lrq_completed(prefetcher->streaming_read);
+	/* How many IOs are currently in progress, and how many pins do we have? */
+	ios = pg_streaming_read_ios(prefetcher->streaming_read);
+	pins = pg_streaming_read_pins(prefetcher->streaming_read);
 
 	/* Update the instantaneous stats visible in pg_stat_recovery_prefetch. */
-	SharedStats->io_depth = io_depth;
-	SharedStats->block_distance = io_depth + completed;
+	SharedStats->io_depth = ios;
+	SharedStats->block_distance = pins;
 	SharedStats->wal_distance = wal_distance;
 
 	prefetcher->next_stats_shm_lsn =
@@ -446,23 +321,18 @@ XLogPrefetcherComputeStats(XLogPrefetcher *prefetcher)
 }
 
 /*
- * A callback that examines the next block reference in the WAL, and possibly
- * starts an IO so that a later read will be fast.
- *
- * Returns LRQ_NEXT_AGAIN if no more WAL data is available yet.
- *
- * Returns LRQ_NEXT_IO if the next block reference is for a main fork block
- * that isn't in the buffer pool, and the kernel has been asked to start
- * reading it to make a future read system call faster. An LSN is written to
- * *lsn, and the I/O will be considered to have completed once that LSN is
- * replayed.
- *
- * Returns LRQ_NEXT_NO_IO if we examined the next block reference and found
- * that it was already in the buffer pool, or we decided for various reasons
- * not to prefetch.
+ * A PgStreamingRead callback that generates a stream of block references by
+ * looking ahead in the WAL, which XLogPrefetcherReadRecord() will later
+ * retrieve.
  */
-static LsnReadQueueNextStatus
-XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
+static bool
+XLogPrefetcherNextBlock(PgStreamingRead *pgsr,
+						uintptr_t pgsr_private,
+						void *per_io_data,
+						BufferManagerRelation *bmr,
+						ForkNumber *forknum,
+						BlockNumber *blocknum,
+						ReadBufferMode *mode)
 {
 	XLogPrefetcher *prefetcher = (XLogPrefetcher *) pgsr_private;
 	XLogReaderState *reader = prefetcher->reader;
@@ -475,6 +345,8 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 	for (;;)
 	{
 		DecodedXLogRecord *record;
+		uint8		rmid;
+		uint8		record_type;
 
 		/* Try to read a new future record, if we don't already have one. */
 		if (prefetcher->record == NULL)
@@ -491,7 +363,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 
 			/* Readahead is disabled until we replay past a certain point. */
 			if (nonblocking && replaying_lsn <= prefetcher->no_readahead_until)
-				return LRQ_NEXT_AGAIN;
+				return false;
 
 			record = XLogReadAhead(prefetcher->reader, nonblocking);
 			if (record == NULL)
@@ -505,23 +377,20 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 					prefetcher->no_readahead_until =
 						prefetcher->reader->decode_queue_tail->lsn;
 
-				return LRQ_NEXT_AGAIN;
-			}
-
-			/*
-			 * If prefetching is disabled, we don't need to analyze the record
-			 * or issue any prefetches.  We just need to cause one record to
-			 * be decoded.
-			 */
-			if (!RecoveryPrefetchEnabled())
-			{
-				*lsn = InvalidXLogRecPtr;
-				return LRQ_NEXT_NO_IO;
+				return false;
 			}
 
 			/* We have a new record to process. */
 			prefetcher->record = record;
 			prefetcher->next_block_id = 0;
+
+			/*
+			 * If prefetching is disabled, we don't need to analyze the
+			 * record.  We just needed to cause one record to be decoded, so
+			 * we can give up now.
+			 */
+			if (!RecoveryPrefetchEnabled())
+				return false;
 		}
 		else
 		{
@@ -529,15 +398,15 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 			record = prefetcher->record;
 		}
 
+		rmid = record->header.xl_rmid;
+		record_type = record->header.xl_info & ~XLR_INFO_MASK;
+
 		/*
 		 * Check for operations that require us to filter out block ranges, or
 		 * pause readahead completely.
 		 */
 		if (replaying_lsn < record->lsn)
 		{
-			uint8		rmid = record->header.xl_rmid;
-			uint8		record_type = record->header.xl_info & ~XLR_INFO_MASK;
-
 			if (rmid == RM_XLOG_ID)
 			{
 				if (record_type == XLOG_CHECKPOINT_SHUTDOWN ||
@@ -589,6 +458,51 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 						 rlocator.dbOid,
 						 LSN_FORMAT_ARGS(record->lsn));
 #endif
+
+					/*
+					 * Don't prefetch anything in the source database either,
+					 * because FlushDatabaseBuffers() doesn't like to see any
+					 * pinned buffers.
+					 */
+					rlocator.dbOid = xlrec->src_db_id;
+					XLogPrefetcherAddFilter(prefetcher, rlocator, 0, record->lsn);
+
+#ifdef XLOGPREFETCHER_DEBUG_LEVEL
+					elog(XLOGPREFETCHER_DEBUG_LEVEL,
+						 "suppressing prefetch in database %u until %X/%X is replayed due to raw file copy",
+						 rlocator.dbOid,
+						 LSN_FORMAT_ARGS(record->lsn));
+#endif
+				}
+				else if (record_type == XLOG_DBASE_CREATE_WAL_LOG)
+				{
+					xl_dbase_create_wal_log_rec *xlrec =
+						(xl_dbase_create_wal_log_rec *) record->main_data;
+					RelFileLocator rlocator =
+					{InvalidOid, xlrec->db_id, InvalidRelFileNumber};
+
+					/*
+					 * As above, we don't want to pin buffers on the other
+					 * side of a DROP, CREATE DATABASE sequence that recycles
+					 * database OIDs.
+					 */
+					XLogPrefetcherAddFilter(prefetcher, rlocator, 0, record->lsn);
+				}
+				else if (record_type == XLOG_DBASE_DROP)
+				{
+					xl_dbase_drop_rec *xlrec =
+						(xl_dbase_drop_rec *) record->main_data;
+					RelFileLocator rlocator =
+					{InvalidOid, xlrec->db_id, InvalidRelFileNumber};
+
+					/*
+					 * XLOG_DBASE_DROP can be used while moving between
+					 * tablespaces, and in that case it invalidates buffers
+					 * from all tablespaces.  That means that we also have to
+					 * wait for the drop before prefetching anything in this
+					 * whole DB.
+					 */
+					XLogPrefetcherAddFilter(prefetcher, rlocator, 0, record->lsn);
 				}
 			}
 			else if (rmid == RM_SMGR_ID)
@@ -645,6 +559,53 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 #endif
 				}
 			}
+			else if (rmid == RM_XACT_ID)
+			{
+				/*
+				 * If this is a COMMIT/ABORT that drops relations, the
+				 * SMgrRelation pointers to those relations that we have
+				 * already queued for streaming read will become dangling
+				 * pointers after this is replayed due to smgrclose(), so
+				 * pause prefetching here until that's done.
+				 */
+				if (unlikely(record->header.xl_info & XACT_XINFO_HAS_RELFILELOCATORS))
+				{
+					RelFileLocator *xlocators;
+					int			nrels = 0;
+
+					if (record_type == XLOG_XACT_COMMIT ||
+						record_type == XLOG_XACT_COMMIT_PREPARED)
+					{
+						xl_xact_parsed_commit parsed;
+
+						ParseCommitRecord(record->header.xl_info,
+										  (xl_xact_commit *) record->main_data,
+										  &parsed);
+
+						xlocators = parsed.xlocators;
+						nrels = parsed.nrels;
+					}
+					else if (record_type == XLOG_XACT_ABORT)
+					{
+						xl_xact_parsed_abort parsed;
+
+						ParseAbortRecord(record->header.xl_info,
+										 (xl_xact_abort *) record->main_data,
+										 &parsed);
+
+						xlocators = parsed.xlocators;
+						nrels = parsed.nrels;
+					}
+
+					/*
+					 * Filter out these relations until the record is
+					 * replayed.
+					 */
+					for (int i = 0; i < nrels; ++i)
+						XLogPrefetcherAddFilter(prefetcher, xlocators[i], 0,
+												record->lsn);
+				}
+			}
 		}
 
 		/* Scan the block references, starting where we left off last time. */
@@ -653,69 +614,39 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 			int			block_id = prefetcher->next_block_id++;
 			DecodedBkpBlock *block = &record->blocks[block_id];
 			SMgrRelation reln;
-			PrefetchBufferResult result;
 
 			if (!block->in_use)
 				continue;
 
 			Assert(!BufferIsValid(block->prefetch_buffer));
+			Assert(!block->prefetch_buffer_streamed);
 
 			/*
-			 * Record the LSN of this record.  When it's replayed,
-			 * LsnReadQueue will consider any IOs submitted for earlier LSNs
-			 * to be finished.
+			 * We only stream the main fork only, for now.  Some of the other
+			 * forks require RBM_ZERO_ON_ERROR and have unusual logging
+			 * protocols.
 			 */
-			*lsn = record->lsn;
-
-			/* We don't try to prefetch anything but the main fork for now. */
 			if (block->forknum != MAIN_FORKNUM)
-			{
-				return LRQ_NEXT_NO_IO;
-			}
+				continue;
 
 			/*
-			 * If there is a full page image attached, we won't be reading the
-			 * page, so don't bother trying to prefetch.
+			 * FPI_FOR_HINT is special, with full_page_writes = off and
+			 * wal_log_hints = true, the record is solely used to include
+			 * knowledge about modified blocks in the WAL.
 			 */
-			if (block->has_image)
+			if (rmid == RM_XLOG_ID && record_type == XLOG_FPI_FOR_HINT &&
+				!block->has_image)
 			{
 				XLogPrefetchIncrement(&SharedStats->skip_fpw);
-				return LRQ_NEXT_NO_IO;
-			}
-
-			/* There is no point in reading a page that will be zeroed. */
-			if (block->flags & BKPBLOCK_WILL_INIT)
-			{
-				XLogPrefetchIncrement(&SharedStats->skip_init);
-				return LRQ_NEXT_NO_IO;
+				continue;
 			}
 
 			/* Should we skip prefetching this block due to a filter? */
 			if (XLogPrefetcherIsFiltered(prefetcher, block->rlocator, block->blkno))
 			{
 				XLogPrefetchIncrement(&SharedStats->skip_new);
-				return LRQ_NEXT_NO_IO;
+				continue;
 			}
-
-			/* There is no point in repeatedly prefetching the same block. */
-			for (int i = 0; i < XLOGPREFETCHER_SEQ_WINDOW_SIZE; ++i)
-			{
-				if (block->blkno == prefetcher->recent_block[i] &&
-					RelFileLocatorEquals(block->rlocator, prefetcher->recent_rlocator[i]))
-				{
-					/*
-					 * XXX If we also remembered where it was, we could set
-					 * recent_buffer so that recovery could skip smgropen()
-					 * and a buffer table lookup.
-					 */
-					XLogPrefetchIncrement(&SharedStats->skip_rep);
-					return LRQ_NEXT_NO_IO;
-				}
-			}
-			prefetcher->recent_rlocator[prefetcher->recent_idx] = block->rlocator;
-			prefetcher->recent_block[prefetcher->recent_idx] = block->blkno;
-			prefetcher->recent_idx =
-				(prefetcher->recent_idx + 1) % XLOGPREFETCHER_SEQ_WINDOW_SIZE;
 
 			/*
 			 * We could try to have a fast path for repeated references to the
@@ -744,7 +675,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 				XLogPrefetcherAddFilter(prefetcher, block->rlocator, 0,
 										record->lsn);
 				XLogPrefetchIncrement(&SharedStats->skip_new);
-				return LRQ_NEXT_NO_IO;
+				continue;
 			}
 
 			/*
@@ -766,41 +697,33 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 				XLogPrefetcherAddFilter(prefetcher, block->rlocator, block->blkno,
 										record->lsn);
 				XLogPrefetchIncrement(&SharedStats->skip_new);
-				return LRQ_NEXT_NO_IO;
+				continue;
 			}
 
-			/* Try to initiate prefetching. */
-			result = PrefetchSharedBuffer(reln, block->forknum, block->blkno);
-			if (BufferIsValid(result.recent_buffer))
-			{
-				/* Cache hit, nothing to do. */
-				XLogPrefetchIncrement(&SharedStats->hit);
-				block->prefetch_buffer = result.recent_buffer;
-				return LRQ_NEXT_NO_IO;
-			}
-			else if (result.initiated_io)
-			{
-				/* Cache miss, I/O (presumably) started. */
-				XLogPrefetchIncrement(&SharedStats->prefetch);
-				block->prefetch_buffer = InvalidBuffer;
-				return LRQ_NEXT_IO;
-			}
-			else if ((io_direct_flags & IO_DIRECT_DATA) == 0)
-			{
-				/*
-				 * This shouldn't be possible, because we already determined
-				 * that the relation exists on disk and is big enough.
-				 * Something is wrong with the cache invalidation for
-				 * smgrexists(), smgrnblocks(), or the file was unlinked or
-				 * truncated beneath our feet?
-				 */
-				elog(ERROR,
-					 "could not prefetch relation %u/%u/%u block %u",
-					 reln->smgr_rlocator.locator.spcOid,
-					 reln->smgr_rlocator.locator.dbOid,
-					 reln->smgr_rlocator.locator.relNumber,
-					 block->blkno);
-			}
+			/*
+			 * Stream this block!  It will be looked up and pinned by the
+			 * streaming read (possibly combining I/Os with nearby blocks),
+			 * and XLogPrefetcherReadRecord() will consume it from the
+			 * streaming read object, and make it available for
+			 * XLogReadBufferForRedo() to provide to a redo routine.
+			 */
+			block->prefetch_buffer_streamed = true;
+
+			/*
+			 * If there's an FPI or redo is just going to zero it, we can skip
+			 * a useless I/O, and stream a pinned buffer that
+			 * XLogReadBufferForRedo() will pass to ZeroBuffer().
+			 */
+			if (block->apply_image ||
+				(block->flags & BKPBLOCK_WILL_INIT))
+				*mode = RBM_WILL_ZERO;
+			else
+				*mode = RBM_NORMAL;
+			*bmr = BMR_SMGR(reln, RELPERSISTENCE_PERMANENT);
+			*forknum = block->forknum;
+			*blocknum = block->blkno;
+
+			return true;
 		}
 
 		/*
@@ -815,7 +738,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 		 */
 		if (prefetcher->reader->decode_queue_tail &&
 			prefetcher->reader->decode_queue_tail->lsn == prefetcher->begin_ptr)
-			return LRQ_NEXT_AGAIN;
+			return false;
 
 		/* Advance to the next record. */
 		prefetcher->record = NULL;
@@ -989,34 +912,64 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
 	DecodedXLogRecord *record;
 	XLogRecPtr	replayed_up_to;
 
+#ifdef USE_ASSERT_CHECKING
+
+	/*
+	 * The recovery code (ie individual redo routines) should have called
+	 * XLogReadBufferForRedo() for all registered buffers.  Here we'll assert
+	 * that that's the case.
+	 */
+	if (prefetcher->reader->record)
+	{
+		DecodedXLogRecord *last_record = prefetcher->reader->record;
+
+		for (int i = 0; i <= last_record->max_block_id; ++i)
+		{
+			if (last_record->blocks[i].in_use &&
+				BufferIsValid(last_record->blocks[i].prefetch_buffer))
+				elog(ERROR,
+					 "redo routine did not read buffer pinned by prefetcher, LSN %X/%X",
+					 LSN_FORMAT_ARGS(last_record->lsn));
+		}
+	}
+#endif
+
 	/*
 	 * See if it's time to reset the prefetching machinery, because a relevant
 	 * GUC was changed.
 	 */
 	if (unlikely(XLogPrefetchReconfigureCount != prefetcher->reconfigure_count))
 	{
-		uint32		max_distance;
-		uint32		max_inflight;
+		int			max_ios;
 
 		if (prefetcher->streaming_read)
-			lrq_free(prefetcher->streaming_read);
+			pg_streaming_read_free(prefetcher->streaming_read);
 
 		if (RecoveryPrefetchEnabled())
 		{
-			Assert(maintenance_io_concurrency > 0);
-			max_inflight = maintenance_io_concurrency;
-			max_distance = max_inflight * XLOGPREFETCHER_DISTANCE_MULTIPLIER;
+			/*
+			 * maintenance_io_concurrency might be 0 on some systems, but we
+			 * need at least 1 to function.
+			 */
+			max_ios = Max(maintenance_io_concurrency, 1);
 		}
 		else
 		{
-			max_inflight = 1;
-			max_distance = 1;
+			/*
+			 * Non-zero values are needed, but the NextBlock callback will
+			 * never actually do any prefetching, so the streaming read will
+			 * not be used except as a way to force records to be decoded one
+			 * by one.
+			 */
+			max_ios = 1;
 		}
 
-		prefetcher->streaming_read = lrq_alloc(max_distance,
-											   max_inflight,
-											   (uintptr_t) prefetcher,
-											   XLogPrefetcherNextBlock);
+		prefetcher->streaming_read =
+			pg_streaming_read_buffer_alloc(max_ios,
+										   0,
+										   (uintptr_t) prefetcher,
+										   NULL,
+										   XLogPrefetcherNextBlock);
 
 		prefetcher->reconfigure_count = XLogPrefetchReconfigureCount;
 	}
@@ -1035,20 +988,15 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
 	XLogPrefetcherCompleteFilters(prefetcher, replayed_up_to);
 
 	/*
-	 * All IO initiated by earlier WAL is now completed.  This might trigger
-	 * further prefetching.
-	 */
-	lrq_complete_lsn(prefetcher->streaming_read, replayed_up_to);
-
-	/*
-	 * If there's nothing queued yet, then start prefetching to cause at least
-	 * one record to be queued.
+	 * If there's nothing queued yet, then start prefetching.  Normally this
+	 * happens automatically when we call streaming_read_get_next() below to
+	 * complete earlier IOs, but if we didn't have a special case for an empty
+	 * queue we'd never be able to get started.
 	 */
 	if (!XLogReaderHasQueuedRecordOrError(prefetcher->reader))
 	{
-		Assert(lrq_inflight(prefetcher->streaming_read) == 0);
-		Assert(lrq_completed(prefetcher->streaming_read) == 0);
-		lrq_prefetch(prefetcher->streaming_read);
+		pg_streaming_read_reset(prefetcher->streaming_read);
+		pg_streaming_read_prefetch(prefetcher->streaming_read);
 	}
 
 	/* Read the next record. */
@@ -1078,23 +1026,64 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
 	if (unlikely(record->lsn >= prefetcher->next_stats_shm_lsn))
 		XLogPrefetcherComputeStats(prefetcher);
 
+	/*
+	 * Make sure that any IOs we initiated earlier for this record are
+	 * completed, by pulling the buffers out of the StreamingRead.
+	 */
+	for (int block_id = 0; block_id <= record->max_block_id; ++block_id)
+	{
+		DecodedBkpBlock *block = &record->blocks[block_id];
+		Buffer		buffer;
+
+		if (!block->in_use)
+			continue;
+
+		/*
+		 * If we haven't streamed this buffer, then
+		 * XLogReadBufferForRedoExtended() will just have to read it the
+		 * traditional way.
+		 */
+		if (!block->prefetch_buffer_streamed)
+			continue;
+
+		Assert(!BufferIsValid(block->prefetch_buffer));
+
+		/*
+		 * Otherwise we already have a pinned buffer waiting for us in the
+		 * streaming read.
+		 */
+		buffer = pg_streaming_read_buffer_get_next(prefetcher->streaming_read, NULL);
+
+		if (buffer == InvalidBuffer)
+			elog(PANIC, "unexpectedly ran out of buffers in streaming read");
+
+		block->prefetch_buffer = buffer;
+		block->prefetch_buffer_streamed = false;
+
+		/*
+		 * Assert that we're in sync with XLogPrefetcherNextBlock(), which is
+		 * feeding blocks into the far end of the pipe.  For every decoded
+		 * block that has the prefetch_buffer_streamed flag set, in order, we
+		 * expect the corresponding already-pinned buffer to be the next to
+		 * come out of streaming_read.
+		 */
+#ifdef USE_ASSERT_CHECKING
+		{
+			RelFileLocator rlocator;
+			ForkNumber	forknum;
+			BlockNumber blocknum;
+
+			BufferGetTag(buffer, &rlocator, &forknum, &blocknum);
+			Assert(RelFileLocatorEquals(rlocator, block->rlocator));
+			Assert(forknum == block->forknum);
+			Assert(blocknum == block->blkno);
+		}
+#endif
+	}
+
 	Assert(record == prefetcher->reader->record);
 
 	return &record->header;
-}
-
-bool
-check_recovery_prefetch(int *new_value, void **extra, GucSource source)
-{
-#ifndef USE_PREFETCH
-	if (*new_value == RECOVERY_PREFETCH_ON)
-	{
-		GUC_check_errdetail("recovery_prefetch is not supported on platforms that lack posix_fadvise().");
-		return false;
-	}
-#endif
-
-	return true;
 }
 
 void

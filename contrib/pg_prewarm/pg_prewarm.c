@@ -20,6 +20,7 @@
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
 #include "storage/smgr.h"
+#include "storage/streaming_read.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
@@ -37,6 +38,38 @@ typedef enum
 } PrewarmType;
 
 static PGIOAlignedBlock blockbuffer;
+
+struct pg_prewarm_streaming_read_private
+{
+	BufferManagerRelation bmr;
+	ForkNumber	forknum;
+	BlockNumber blocknum;
+	int64		last_block;
+};
+
+static bool
+pg_prewarm_streaming_read_next(PgStreamingRead *pgsr,
+							   uintptr_t pgsr_private,
+							   void *per_io_data,
+							   BufferManagerRelation *bmr,
+							   ForkNumber *forknum,
+							   BlockNumber *blocknum,
+							   ReadBufferMode *mode)
+{
+	struct pg_prewarm_streaming_read_private *p =
+		(struct pg_prewarm_streaming_read_private *) pgsr_private;
+
+	if (p->blocknum <= p->last_block)
+	{
+		*bmr = p->bmr;
+		*forknum = p->forknum;
+		*mode = RBM_NORMAL;
+		*blocknum = p->blocknum++;
+		return true;
+	}
+
+	return false;
+}
 
 /*
  * pg_prewarm(regclass, mode text, fork text,
@@ -183,18 +216,36 @@ pg_prewarm(PG_FUNCTION_ARGS)
 	}
 	else if (ptype == PREWARM_BUFFER)
 	{
+		struct pg_prewarm_streaming_read_private p;
+		PgStreamingRead *pgsr;
+
 		/*
 		 * In buffer mode, we actually pull the data into shared_buffers.
 		 */
+
+		/* Set up the private state for our streaming buffer read callback. */
+		p.bmr = BMR_REL(rel);
+		p.forknum = forkNumber;
+		p.blocknum = first_block;
+		p.last_block = last_block;
+
+		pgsr = pg_streaming_read_buffer_alloc(PG_STREAMING_READ_DEFAULT_MAX_IOS,
+											  0,
+											  (uintptr_t) &p,
+											  NULL,
+											  pg_prewarm_streaming_read_next);
+
 		for (block = first_block; block <= last_block; ++block)
 		{
 			Buffer		buf;
 
 			CHECK_FOR_INTERRUPTS();
-			buf = ReadBufferExtended(rel, forkNumber, block, RBM_NORMAL, NULL);
+			buf = pg_streaming_read_buffer_get_next(pgsr, NULL);
 			ReleaseBuffer(buf);
 			++blocks_done;
 		}
+		Assert(pg_streaming_read_buffer_get_next(pgsr, NULL) == InvalidBuffer);
+		pg_streaming_read_free(pgsr);
 	}
 
 	/* Close relation, release lock. */

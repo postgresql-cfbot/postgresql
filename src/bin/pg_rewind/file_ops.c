@@ -296,7 +296,7 @@ sync_target_dir(void)
 	if (!do_sync || dry_run)
 		return;
 
-	fsync_pgdata(datadir_target, PG_VERSION_NUM);
+	fsync_pgdata(datadir_target, PG_VERSION_NUM, sync_method);
 }
 
 

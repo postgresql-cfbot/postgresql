@@ -51,6 +51,31 @@ static void walkdir(const char *path,
 					int (*action) (const char *fname, bool isdir),
 					bool process_symlinks);
 
+#ifdef HAVE_SYNCFS
+static void
+do_syncfs(const char *path)
+{
+	int			fd;
+
+	fd = open(path, O_RDONLY, 0);
+
+	if (fd < 0)
+	{
+		pg_log_error("could not open file \"%s\": %m", path);
+		return;
+	}
+
+	if (syncfs(fd) < 0)
+	{
+		pg_log_error("could not synchronize file system for file \"%s\": %m", path);
+		(void) close(fd);
+		exit(EXIT_FAILURE);
+	}
+
+	(void) close(fd);
+}
+#endif
+
 /*
  * Issue fsync recursively on PGDATA and all its contents.
  *
@@ -63,7 +88,8 @@ static void walkdir(const char *path,
  */
 void
 fsync_pgdata(const char *pg_data,
-			 int serverVersion)
+			 int serverVersion,
+			 DataDirSyncMethod sync_method)
 {
 	bool		xlog_is_symlink;
 	char		pg_wal[MAXPGPATH];
@@ -89,30 +115,93 @@ fsync_pgdata(const char *pg_data,
 			xlog_is_symlink = true;
 	}
 
-	/*
-	 * If possible, hint to the kernel that we're soon going to fsync the data
-	 * directory and its contents.
-	 */
+	switch (sync_method)
+	{
+		case DATA_DIR_SYNC_METHOD_SYNCFS:
+			{
+#ifndef HAVE_SYNCFS
+				pg_log_error("this build does not support sync method \"%s\"",
+							 "syncfs");
+				exit(EXIT_FAILURE);
+#else
+				DIR		   *dir;
+				struct dirent *de;
+
+				/*
+				 * On Linux, we don't have to open every single file one by
+				 * one.  We can use syncfs() to sync whole filesystems.  We
+				 * only expect filesystem boundaries to exist where we
+				 * tolerate symlinks, namely pg_wal and the tablespaces, so we
+				 * call syncfs() for each of those directories.
+				 */
+
+				/* Sync the top level pgdata directory. */
+				do_syncfs(pg_data);
+
+				/* If any tablespaces are configured, sync each of those. */
+				dir = opendir(pg_tblspc);
+				if (dir == NULL)
+					pg_log_error("could not open directory \"%s\": %m",
+								 pg_tblspc);
+				else
+				{
+					while (errno = 0, (de = readdir(dir)) != NULL)
+					{
+						char		subpath[MAXPGPATH * 2];
+
+						if (strcmp(de->d_name, ".") == 0 ||
+							strcmp(de->d_name, "..") == 0)
+							continue;
+
+						snprintf(subpath, sizeof(subpath), "%s/%s",
+								 pg_tblspc, de->d_name);
+						do_syncfs(subpath);
+					}
+
+					if (errno)
+						pg_log_error("could not read directory \"%s\": %m",
+									 pg_tblspc);
+
+					(void) closedir(dir);
+				}
+
+				/* If pg_wal is a symlink, process that too. */
+				if (xlog_is_symlink)
+					do_syncfs(pg_wal);
+#endif							/* HAVE_SYNCFS */
+			}
+			break;
+
+		case DATA_DIR_SYNC_METHOD_FSYNC:
+			{
+				/*
+				 * If possible, hint to the kernel that we're soon going to
+				 * fsync the data directory and its contents.
+				 */
 #ifdef PG_FLUSH_DATA_WORKS
-	walkdir(pg_data, pre_sync_fname, false);
-	if (xlog_is_symlink)
-		walkdir(pg_wal, pre_sync_fname, false);
-	walkdir(pg_tblspc, pre_sync_fname, true);
+				walkdir(pg_data, pre_sync_fname, false);
+				if (xlog_is_symlink)
+					walkdir(pg_wal, pre_sync_fname, false);
+				walkdir(pg_tblspc, pre_sync_fname, true);
 #endif
 
-	/*
-	 * Now we do the fsync()s in the same order.
-	 *
-	 * The main call ignores symlinks, so in addition to specially processing
-	 * pg_wal if it's a symlink, pg_tblspc has to be visited separately with
-	 * process_symlinks = true.  Note that if there are any plain directories
-	 * in pg_tblspc, they'll get fsync'd twice.  That's not an expected case
-	 * so we don't worry about optimizing it.
-	 */
-	walkdir(pg_data, fsync_fname, false);
-	if (xlog_is_symlink)
-		walkdir(pg_wal, fsync_fname, false);
-	walkdir(pg_tblspc, fsync_fname, true);
+				/*
+				 * Now we do the fsync()s in the same order.
+				 *
+				 * The main call ignores symlinks, so in addition to specially
+				 * processing pg_wal if it's a symlink, pg_tblspc has to be
+				 * visited separately with process_symlinks = true.  Note that
+				 * if there are any plain directories in pg_tblspc, they'll
+				 * get fsync'd twice. That's not an expected case so we don't
+				 * worry about optimizing it.
+				 */
+				walkdir(pg_data, fsync_fname, false);
+				if (xlog_is_symlink)
+					walkdir(pg_wal, fsync_fname, false);
+				walkdir(pg_tblspc, fsync_fname, true);
+			}
+			break;
+	}
 }
 
 /*
@@ -121,17 +210,40 @@ fsync_pgdata(const char *pg_data,
  * This is a convenient wrapper on top of walkdir().
  */
 void
-fsync_dir_recurse(const char *dir)
+fsync_dir_recurse(const char *dir, DataDirSyncMethod sync_method)
 {
-	/*
-	 * If possible, hint to the kernel that we're soon going to fsync the data
-	 * directory and its contents.
-	 */
+	switch (sync_method)
+	{
+		case DATA_DIR_SYNC_METHOD_SYNCFS:
+			{
+#ifndef HAVE_SYNCFS
+				pg_log_error("this build does not support sync method \"%s\"",
+							 "syncfs");
+				exit(EXIT_FAILURE);
+#else
+				/*
+				 * On Linux, we don't have to open every single file one by
+				 * one.  We can use syncfs() to sync the whole filesystem.
+				 */
+				do_syncfs(dir);
+#endif							/* HAVE_SYNCFS */
+			}
+			break;
+
+		case DATA_DIR_SYNC_METHOD_FSYNC:
+			{
+				/*
+				 * If possible, hint to the kernel that we're soon going to
+				 * fsync the data directory and its contents.
+				 */
 #ifdef PG_FLUSH_DATA_WORKS
-	walkdir(dir, pre_sync_fname, false);
+				walkdir(dir, pre_sync_fname, false);
 #endif
 
-	walkdir(dir, fsync_fname, false);
+				walkdir(dir, fsync_fname, false);
+			}
+			break;
+	}
 }
 
 /*

@@ -492,6 +492,7 @@ static JsonParseErrorType transform_string_values_object_field_start(void *state
 static JsonParseErrorType transform_string_values_array_element_start(void *state, bool isnull);
 static JsonParseErrorType transform_string_values_scalar(void *state, char *token, JsonTokenType tokentype);
 
+static JsonbValue *jsonb_get_jsonbvalue(Jsonb *jb, Datum *path, int npath, bool *isnull);
 
 /*
  * pg_parse_json_or_errsave
@@ -848,13 +849,12 @@ json_object_field(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 }
 
-Datum
-jsonb_object_field(PG_FUNCTION_ARGS)
+static Datum
+jsonb_object_field_internal(FunctionCallInfo fcinfo, bool as_jsonb)
 {
 	Jsonb	   *jb = PG_GETARG_JSONB_P(0);
 	text	   *key = PG_GETARG_TEXT_PP(1);
-	JsonbValue *v;
-	JsonbValue	vbuf;
+	JsonbValue	*v;
 
 	if (!JB_ROOT_IS_OBJECT(jb))
 		PG_RETURN_NULL();
@@ -862,12 +862,26 @@ jsonb_object_field(PG_FUNCTION_ARGS)
 	v = getKeyJsonValueFromContainer(&jb->root,
 									 VARDATA_ANY(key),
 									 VARSIZE_ANY_EXHDR(key),
-									 &vbuf);
+									 NULL);
+	if (v == NULL)
+		PG_RETURN_NULL();
 
-	if (v != NULL)
+	if (as_jsonb)
 		PG_RETURN_JSONB_P(JsonbValueToJsonb(v));
 
-	PG_RETURN_NULL();
+	PG_RETURN_POINTER(v);
+}
+
+Datum
+jsonb_object_field(PG_FUNCTION_ARGS)
+{
+	return jsonb_object_field_internal(fcinfo, true);
+}
+
+Datum
+jsonb_object_field_start(PG_FUNCTION_ARGS)
+{
+	return jsonb_object_field_internal(fcinfo, false);
 }
 
 Datum
@@ -923,8 +937,8 @@ json_array_element(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 }
 
-Datum
-jsonb_array_element(PG_FUNCTION_ARGS)
+static Datum
+jsonb_array_element_internal(FunctionCallInfo fcinfo, bool as_jsonb)
 {
 	Jsonb	   *jb = PG_GETARG_JSONB_P(0);
 	int			element = PG_GETARG_INT32(1);
@@ -945,10 +959,25 @@ jsonb_array_element(PG_FUNCTION_ARGS)
 	}
 
 	v = getIthJsonbValueFromContainer(&jb->root, element);
-	if (v != NULL)
+	if (v == NULL)
+		PG_RETURN_NULL();
+
+	if (as_jsonb)
 		PG_RETURN_JSONB_P(JsonbValueToJsonb(v));
 
-	PG_RETURN_NULL();
+	PG_RETURN_POINTER(v);
+}
+
+Datum
+jsonb_array_element(PG_FUNCTION_ARGS)
+{
+	return jsonb_array_element_internal(fcinfo, true);
+}
+
+Datum
+jsonb_array_element_start(PG_FUNCTION_ARGS)
+{
+	return jsonb_array_element_internal(fcinfo, false);
 }
 
 Datum
@@ -1474,6 +1503,39 @@ get_scalar(void *state, char *token, JsonTokenType tokentype)
 }
 
 Datum
+jsonb_extract_path_start(PG_FUNCTION_ARGS)
+{
+	Jsonb	   *jb = PG_GETARG_JSONB_P(0);
+	ArrayType  *path = PG_GETARG_ARRAYTYPE_P(1);
+
+	JsonbValue *v;
+
+	Datum	   *pathtext;
+	bool	   *pathnulls;
+	bool		isnull = false;
+	int			npath;
+
+	/*
+	 * If the array contains any null elements, return NULL, on the grounds
+	 * that you'd have gotten NULL if any RHS value were NULL in a nested
+	 * series of applications of the -> operator.  (Note: because we also
+	 * return NULL for error cases such as no-such-field, this is true
+	 * regardless of the contents of the rest of the array.)
+	 */
+	if (array_contains_nulls(path))
+		PG_RETURN_NULL();
+
+	deconstruct_array_builtin(path, TEXTOID, &pathtext, &pathnulls, &npath);
+
+	v = jsonb_get_jsonbvalue(jb, pathtext, npath, &isnull);
+
+	if (isnull)
+		PG_RETURN_NULL();
+
+	PG_RETURN_POINTER(v);
+}
+
+Datum
 jsonb_extract_path(PG_FUNCTION_ARGS)
 {
 	return get_jsonb_path_all(fcinfo, false);
@@ -1516,52 +1578,36 @@ get_jsonb_path_all(FunctionCallInfo fcinfo, bool as_text)
 		PG_RETURN_DATUM(res);
 }
 
-Datum
-jsonb_get_element(Jsonb *jb, Datum *path, int npath, bool *isnull, bool as_text)
-{
-	JsonbContainer *container = &jb->root;
-	JsonbValue *jbvp = NULL;
-	int			i;
-	bool		have_object = false,
-				have_array = false;
 
-	*isnull = false;
+static JsonbValue *
+jsonb_get_jsonbvalue(Jsonb *jb, Datum *path, int npath, bool *isnull)
+{
+	bool have_object = false, have_array = false;
+	JsonbContainer *container = &jb->root;
+	int i;
+	JsonbValue *jbvp = NULL;
+
+	/*
+	 * If the array is empty, return the entire LHS object, on the grounds
+	 * that we should do zero field or element extractions.
+	 */
+	if (npath <= 0)
+	{
+		JsonbValue *res = NULL;
+		if (JB_ROOT_IS_ARRAY(jb) && JB_ROOT_IS_SCALAR(jb))
+			return getIthJsonbValueFromContainer(container, 0);
+
+		/* NB: res is a jbvBinary JsonbValue */
+		res = palloc0(sizeof(JsonbValue));
+		JsonbToJsonbValue(jb, res);
+		return res;
+	}
 
 	/* Identify whether we have object, array, or scalar at top-level */
 	if (JB_ROOT_IS_OBJECT(jb))
 		have_object = true;
 	else if (JB_ROOT_IS_ARRAY(jb) && !JB_ROOT_IS_SCALAR(jb))
 		have_array = true;
-	else
-	{
-		Assert(JB_ROOT_IS_ARRAY(jb) && JB_ROOT_IS_SCALAR(jb));
-		/* Extract the scalar value, if it is what we'll return */
-		if (npath <= 0)
-			jbvp = getIthJsonbValueFromContainer(container, 0);
-	}
-
-	/*
-	 * If the array is empty, return the entire LHS object, on the grounds
-	 * that we should do zero field or element extractions.  For the
-	 * non-scalar case we can just hand back the object without much work. For
-	 * the scalar case, fall through and deal with the value below the loop.
-	 * (This inconsistency arises because there's no easy way to generate a
-	 * JsonbValue directly for root-level containers.)
-	 */
-	if (npath <= 0 && jbvp == NULL)
-	{
-		if (as_text)
-		{
-			return PointerGetDatum(cstring_to_text(JsonbToCString(NULL,
-																  container,
-																  VARSIZE(jb))));
-		}
-		else
-		{
-			/* not text mode - just hand back the jsonb */
-			PG_RETURN_JSONB_P(jb);
-		}
-	}
 
 	for (i = 0; i < npath; i++)
 	{
@@ -1586,7 +1632,7 @@ jsonb_get_element(Jsonb *jb, Datum *path, int npath, bool *isnull, bool as_text)
 			if (endptr == indextext || *endptr != '\0' || errno != 0)
 			{
 				*isnull = true;
-				return PointerGetDatum(NULL);
+				return NULL;
 			}
 
 			if (lindex >= 0)
@@ -1607,7 +1653,7 @@ jsonb_get_element(Jsonb *jb, Datum *path, int npath, bool *isnull, bool as_text)
 				if (lindex == INT_MIN || -lindex > nelements)
 				{
 					*isnull = true;
-					return PointerGetDatum(NULL);
+					return NULL;
 				}
 				else
 					index = nelements + lindex;
@@ -1619,13 +1665,13 @@ jsonb_get_element(Jsonb *jb, Datum *path, int npath, bool *isnull, bool as_text)
 		{
 			/* scalar, extraction yields a null */
 			*isnull = true;
-			return PointerGetDatum(NULL);
+			return NULL;
 		}
 
 		if (jbvp == NULL)
 		{
 			*isnull = true;
-			return PointerGetDatum(NULL);
+			return NULL;
 		}
 		else if (i == npath - 1)
 			break;
@@ -1644,6 +1690,22 @@ jsonb_get_element(Jsonb *jb, Datum *path, int npath, bool *isnull, bool as_text)
 			have_array = false;
 		}
 	}
+	return jbvp;
+}
+
+/*
+ * Return jsonb datum or jsonb-as-text datum.
+ */
+Datum
+jsonb_get_element(Jsonb *jb, Datum *path, int npath, bool *isnull, bool as_text)
+{
+	JsonbValue *jbvp = NULL;
+	*isnull = false;
+
+	jbvp = jsonb_get_jsonbvalue(jb, path, npath, isnull);
+
+	if (*isnull)
+		return PointerGetDatum(NULL);
 
 	if (as_text)
 	{

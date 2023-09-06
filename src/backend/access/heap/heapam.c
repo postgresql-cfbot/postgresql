@@ -450,30 +450,43 @@ heapgetpage(TableScanDesc sscan, BlockNumber block)
 	 */
 	all_visible = PageIsAllVisible(page) && !snapshot->takenDuringRecovery;
 
-	for (lineoff = FirstOffsetNumber; lineoff <= lines; lineoff++)
+	if (all_visible && !CheckForSerializableConflictOutNeeded(scan->rs_base.rs_rd, snapshot))
 	{
-		ItemId		lpp = PageGetItemId(page, lineoff);
-		HeapTupleData loctup;
-		bool		valid;
+		for (lineoff = FirstOffsetNumber; lineoff <= lines; lineoff++)
+		{
+			if (!ItemIdIsNormal(PageGetItemId(page, lineoff)))
+				continue;
 
-		if (!ItemIdIsNormal(lpp))
-			continue;
-
-		loctup.t_tableOid = RelationGetRelid(scan->rs_base.rs_rd);
-		loctup.t_data = (HeapTupleHeader) PageGetItem(page, lpp);
-		loctup.t_len = ItemIdGetLength(lpp);
-		ItemPointerSet(&(loctup.t_self), block, lineoff);
-
-		if (all_visible)
-			valid = true;
-		else
-			valid = HeapTupleSatisfiesVisibility(&loctup, snapshot, buffer);
-
-		HeapCheckForSerializableConflictOut(valid, scan->rs_base.rs_rd,
-											&loctup, buffer, snapshot);
-
-		if (valid)
 			scan->rs_vistuples[ntup++] = lineoff;
+		}
+	}
+	else
+	{
+		for (lineoff = FirstOffsetNumber; lineoff <= lines; lineoff++)
+		{
+			ItemId		lpp = PageGetItemId(page, lineoff);
+			HeapTupleData loctup;
+			bool		valid;
+
+			if (!ItemIdIsNormal(lpp))
+				continue;
+
+			loctup.t_tableOid = RelationGetRelid(scan->rs_base.rs_rd);
+			loctup.t_data = (HeapTupleHeader) PageGetItem(page, lpp);
+			loctup.t_len = ItemIdGetLength(lpp);
+			ItemPointerSet(&(loctup.t_self), block, lineoff);
+
+			if (all_visible)
+				valid = true;
+			else
+				valid = HeapTupleSatisfiesVisibility(&loctup, snapshot, buffer);
+
+			HeapCheckForSerializableConflictOut(valid, scan->rs_base.rs_rd,
+												&loctup, buffer, snapshot);
+
+			if (valid)
+				scan->rs_vistuples[ntup++] = lineoff;
+		}
 	}
 
 	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);

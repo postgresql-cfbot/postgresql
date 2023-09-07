@@ -139,6 +139,7 @@ typedef struct IndexAmRoutine
     ambuild_function ambuild;
     ambuildempty_function ambuildempty;
     aminsert_function aminsert;
+    aminsertcleanup_function aminsertcleanup;
     ambulkdelete_function ambulkdelete;
     amvacuumcleanup_function amvacuumcleanup;
     amcanreturn_function amcanreturn;   /* can be NULL */
@@ -355,10 +356,21 @@ aminsert (Relation indexRelation,
    within an SQL statement, it can allocate space
    in <literal>indexInfo-&gt;ii_Context</literal> and store a pointer to the
    data in <literal>indexInfo-&gt;ii_AmCache</literal> (which will be NULL
-   initially).
+   initially). If the data cached contains structures that can be simply pfree'd,
+   they will implicitly be pfree'd. But, if it contains more complex data, such
+   as Buffers or TupleDescs, additional cleanup is necessary. This additional
+   cleanup can be performed in <literal>indexinsertcleanup</literal>.
   </para>
 
   <para>
+<programlisting>
+bool
+aminsertcleanup (IndexInfo *indexInfo);
+</programlisting>
+   Clean up state that was maintained across successive inserts in
+   <literal>indexInfo-&gt;ii_AmCache</literal>. This is useful if the data
+   contained is complex - like Buffers or TupleDescs which need additional
+   cleanup, unlike simple structures that will be implicitly pfree'd.
 <programlisting>
 IndexBulkDeleteResult *
 ambulkdelete (IndexVacuumInfo *info,

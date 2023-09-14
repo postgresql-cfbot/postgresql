@@ -61,6 +61,7 @@
 #include "storage/procarray.h"
 #include "storage/sinvaladt.h"
 #include "storage/smgr.h"
+#include "tcop/pquery.h"
 #include "utils/builtins.h"
 #include "utils/catcache.h"
 #include "utils/combocid.h"
@@ -2751,6 +2752,12 @@ AbortTransaction(void)
 	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
 
 	/*
+	 * When ActiveQueryDesc is referenced after abort, some of its elements
+	 * are freed. To avoid accessing them, reset ActiveQueryDesc here.
+	 */
+	ActiveQueryDesc = NULL;
+
+	/*
 	 * check the current transaction state
 	 */
 	is_parallel_worker = (s->blockState == TBLOCK_PARALLEL_INPROGRESS);
@@ -5107,6 +5114,12 @@ AbortSubTransaction(void)
 	 * infrastructure will be functional if needed while aborting.
 	 */
 	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
+
+	/*
+	 * When ActiveQueryDesc is referenced after abort, some of its elements
+	 * are freed. To avoid accessing them, reset ActiveQueryDesc here.
+	 */
+	ActiveQueryDesc = NULL;
 
 	/*
 	 * check the current transaction state

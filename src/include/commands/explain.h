@@ -17,6 +17,7 @@
 #include "lib/stringinfo.h"
 #include "parser/parse_node.h"
 
+extern PGDLLIMPORT bool ProcessLogQueryPlanInterruptActive;
 typedef enum ExplainFormat
 {
 	EXPLAIN_FORMAT_TEXT,
@@ -60,6 +61,7 @@ typedef struct ExplainState
 	bool		hide_workers;	/* set if we find an invisible Gather */
 	/* state related to the current plan node */
 	ExplainWorkersState *workers_state; /* needed if parallel plan */
+	bool		signaled;		/* whether explain is called by signal */
 } ExplainState;
 
 /* Hook for plugins to get control in ExplainOneQuery() */
@@ -126,4 +128,6 @@ extern void ExplainOpenGroup(const char *objtype, const char *labelname,
 extern void ExplainCloseGroup(const char *objtype, const char *labelname,
 							  bool labeled, ExplainState *es);
 
+extern void HandleLogQueryPlanInterrupt(void);
+extern void ProcessLogQueryPlanInterrupt(void);
 #endif							/* EXPLAIN_H */

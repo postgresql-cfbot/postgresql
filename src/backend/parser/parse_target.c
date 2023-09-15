@@ -1643,10 +1643,9 @@ expandRecordVariable(ParseState *pstate, Var *var, int levelsup)
 					 * in step with varlevelsup in the CTE; furthermore it
 					 * could be an outer CTE.
 					 */
-					ParseState	mypstate;
+					ParseState	mypstate = {0};
 					Index		levelsup;
 
-					MemSet(&mypstate, 0, sizeof(mypstate));
 					/* this loop must work, since GetCTEForRTE did */
 					for (levelsup = 0;
 						 levelsup < rte->ctelevelsup + netlevelsup;

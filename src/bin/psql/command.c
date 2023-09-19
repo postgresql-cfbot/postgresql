@@ -1239,6 +1239,15 @@ exec_command_ef_ev(PsqlScanState scan_state, bool active_branch,
 				status = PSQL_CMD_NEWEDIT;
 		}
 
+		if (status == PSQL_CMD_ERROR)
+		{
+			/*
+			 * clear the query buffer because it could be overwritten with
+			 * an incomplete query string due to certain failures.
+			 */
+			resetPQExpBuffer(query_buf);
+		}
+
 		free(obj_desc);
 	}
 	else

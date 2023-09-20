@@ -777,8 +777,16 @@ PostgreSQL documentation
        <para>
         The option is called <literal>--dbname</literal> for consistency with other
         client applications, but because <application>pg_basebackup</application>
-        doesn't connect to any particular database in the cluster, any database
-        name in the connection string will be ignored.
+        doesn't connect to any particular database in the cluster, supplying a
+        specific database name in the connection string won't cause
+        <application>pg_basebackup</application> to behave any
+        differently when connecting directly to a
+        <productname>PostgreSQL</productname> server.
+        However, if you are connecting to <productname>PostgreSQL</productname>
+        through a proxy, then it's possible that this proxy does use the
+        supplied database name to make certain decisions, such as to which
+        database cluster to route the connection if the proxy can connect to
+        multiple different clusters.
        </para>
       </listitem>
      </varlistentry>

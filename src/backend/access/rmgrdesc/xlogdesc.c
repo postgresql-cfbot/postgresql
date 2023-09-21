@@ -37,7 +37,7 @@ void
 xlog_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		info = XLogRecGetRmgrInfo(record);
 
 	if (info == XLOG_CHECKPOINT_SHUTDOWN ||
 		info == XLOG_CHECKPOINT_ONLINE)
@@ -151,11 +151,11 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-xlog_identify(uint8 info)
+xlog_identify(uint8 rmgrinfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rmgrinfo)
 	{
 		case XLOG_CHECKPOINT_SHUTDOWN:
 			id = "CHECKPOINT_SHUTDOWN";

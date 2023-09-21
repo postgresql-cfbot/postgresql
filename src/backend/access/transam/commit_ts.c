@@ -966,7 +966,7 @@ WriteTruncateXlogRec(int pageno, TransactionId oldestXid)
 void
 commit_ts_redo(XLogReaderState *record)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		info = XLogRecGetRmgrInfo(record);
 
 	/* Backup blocks are not used in commit_ts records */
 	Assert(!XLogRecHasAnyBlockRefs(record));

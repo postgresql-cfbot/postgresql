@@ -22,7 +22,7 @@ void
 dbase_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		info = XLogRecGetRmgrInfo(record);
 
 	if (info == XLOG_DBASE_CREATE_FILE_COPY)
 	{
@@ -54,11 +54,11 @@ dbase_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-dbase_identify(uint8 info)
+dbase_identify(uint8 rmgrinfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rmgrinfo)
 	{
 		case XLOG_DBASE_CREATE_FILE_COPY:
 			id = "CREATE_FILE_COPY";

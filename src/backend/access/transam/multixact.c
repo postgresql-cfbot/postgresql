@@ -834,6 +834,7 @@ MultiXactIdCreateFromMembers(int nmembers, MultiXactMember *members)
 	 * Not clear that it's worth the trouble though.
 	 */
 	XLogBeginInsert();
+	XLogSetRecordFlags(XLOG_INCLUDE_XID);
 	XLogRegisterData((char *) (&xlrec), SizeOfMultiXactCreate);
 	XLogRegisterData((char *) members, nmembers * sizeof(MultiXactMember));
 
@@ -3232,7 +3233,7 @@ WriteMTruncateXlogRec(Oid oldestMultiDB,
 void
 multixact_redo(XLogReaderState *record)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		info = XLogRecGetRmgrInfo(record);
 
 	/* Backup blocks are not used in multixact records */
 	Assert(!XLogRecHasAnyBlockRefs(record));

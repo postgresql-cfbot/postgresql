@@ -196,10 +196,10 @@ GetWALRecordInfo(XLogReaderState *record, Datum *values,
 	int			i = 0;
 
 	desc = GetRmgr(XLogRecGetRmid(record));
-	record_type = desc.rm_identify(XLogRecGetInfo(record));
+	record_type = desc.rm_identify(XLogRecGetRmgrInfo(record));
 
 	if (record_type == NULL)
-		record_type = psprintf("UNKNOWN (%x)", XLogRecGetInfo(record) & ~XLR_INFO_MASK);
+		record_type = psprintf("UNKNOWN (%x)", XLogRecGetRmgrInfo(record));
 
 	initStringInfo(&rec_desc);
 	desc.rm_desc(&rec_desc, record);
@@ -258,11 +258,11 @@ GetWALBlockInfo(FunctionCallInfo fcinfo, XLogReaderState *record,
 	Assert(XLogRecHasAnyBlockRefs(record));
 
 	desc = GetRmgr(XLogRecGetRmid(record));
-	record_type = desc.rm_identify(XLogRecGetInfo(record));
+	record_type = desc.rm_identify(XLogRecGetRmgrInfo(record));
 
 	if (record_type == NULL)
 		record_type = psprintf("UNKNOWN (%x)",
-							   XLogRecGetInfo(record) & ~XLR_INFO_MASK);
+							   XLogRecGetRmgrInfo(record));
 
 	initStringInfo(&rec_desc);
 	desc.rm_desc(&rec_desc, record);
@@ -697,7 +697,7 @@ GetXLogSummaryStats(XLogStats *stats, ReturnSetInfo *rsinfo,
 		{
 			int			rj;
 
-			for (rj = 0; rj < MAX_XLINFO_TYPES; rj++)
+			for (rj = 0; rj < MAX_XLRMGRINFO_TYPES; rj++)
 			{
 				const char *id;
 
@@ -712,10 +712,9 @@ GetXLogSummaryStats(XLogStats *stats, ReturnSetInfo *rsinfo,
 
 				old_cxt = MemoryContextSwitchTo(tmp_cxt);
 
-				/* the upper four bits in xl_info are the rmgr's */
-				id = desc.rm_identify(rj << 4);
+				id = desc.rm_identify(rj);
 				if (id == NULL)
-					id = psprintf("UNKNOWN (%x)", rj << 4);
+					id = psprintf("UNKNOWN (%x)", rj);
 
 				FillXLogStatsRow(psprintf("%s/%s", desc.rm_name, id), count,
 								 total_count, rec_len, total_rec_len, fpi_len,

@@ -41,7 +41,7 @@ typedef enum RmgrIds
 static inline bool
 RmgrIdIsBuiltin(int rmid)
 {
-	return rmid <= RM_MAX_BUILTIN_ID;
+	return rmid <= RM_MAX_BUILTIN_ID && rmid != RM_INVALID_ID;
 }
 
 static inline bool

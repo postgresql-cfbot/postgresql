@@ -95,7 +95,7 @@ void
 heap_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		info = XLogRecGetRmgrInfo(record);
 
 	info &= XLOG_HEAP_OPMASK;
 	if (info == XLOG_HEAP_INSERT)
@@ -172,7 +172,7 @@ void
 heap2_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		info = XLogRecGetRmgrInfo(record);
 
 	info &= XLOG_HEAP_OPMASK;
 	if (info == XLOG_HEAP2_PRUNE)
@@ -265,7 +265,7 @@ heap2_desc(StringInfo buf, XLogReaderState *record)
 	else if (info == XLOG_HEAP2_MULTI_INSERT)
 	{
 		xl_heap_multi_insert *xlrec = (xl_heap_multi_insert *) rec;
-		bool		isinit = (XLogRecGetInfo(record) & XLOG_HEAP_INIT_PAGE) != 0;
+		bool		isinit = (XLogRecGetRmgrInfo(record) & XLOG_HEAP_INIT_PAGE) != 0;
 
 		appendStringInfo(buf, "ntuples: %d, flags: 0x%02X", xlrec->ntuples,
 						 xlrec->flags);
@@ -302,11 +302,11 @@ heap2_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-heap_identify(uint8 info)
+heap_identify(uint8 rmgrinfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rmgrinfo)
 	{
 		case XLOG_HEAP_INSERT:
 			id = "INSERT";
@@ -347,11 +347,11 @@ heap_identify(uint8 info)
 }
 
 const char *
-heap2_identify(uint8 info)
+heap2_identify(uint8 rmgrinfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rmgrinfo)
 	{
 		case XLOG_HEAP2_PRUNE:
 			id = "PRUNE";

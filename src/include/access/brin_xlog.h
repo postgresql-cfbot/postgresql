@@ -25,8 +25,7 @@
 /*
  * WAL record definitions for BRIN's WAL operations
  *
- * XLOG allows to store some information in high 4 bits of log
- * record xl_info field.
+ * XLOG allows to store some information in the 8-bit xl_rmgrinfo field.
  */
 #define XLOG_BRIN_CREATE_INDEX		0x00
 #define XLOG_BRIN_INSERT			0x10
@@ -145,7 +144,7 @@ typedef struct xl_brin_desummarize
 
 extern void brin_redo(XLogReaderState *record);
 extern void brin_desc(StringInfo buf, XLogReaderState *record);
-extern const char *brin_identify(uint8 info);
+extern const char *brin_identify(uint8 rmgrinfo);
 extern void brin_mask(char *pagedata, BlockNumber blkno);
 
 #endif							/* BRIN_XLOG_H */

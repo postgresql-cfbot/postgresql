@@ -25,6 +25,7 @@
  */
 
 /* symbol name, textual name, redo, desc, identify, startup, cleanup, mask, decode */
+PG_RMGR(RM_INVALID_ID, "invalid", NULL, NULL, NULL, NULL, NULL, NULL, NULL)
 PG_RMGR(RM_XLOG_ID, "XLOG", xlog_redo, xlog_desc, xlog_identify, NULL, NULL, NULL, xlog_decode)
 PG_RMGR(RM_XACT_ID, "Transaction", xact_redo, xact_desc, xact_identify, NULL, NULL, NULL, xact_decode)
 PG_RMGR(RM_SMGR_ID, "Storage", smgr_redo, smgr_desc, smgr_identify, NULL, NULL, NULL, NULL)

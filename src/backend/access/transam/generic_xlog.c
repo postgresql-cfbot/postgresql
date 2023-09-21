@@ -399,6 +399,9 @@ GenericXLogFinish(GenericXLogState *state)
 			}
 		}
 
+		/* Assume XID is required */
+		XLogSetRecordFlags(XLOG_INCLUDE_XID);
+
 		/* Insert xlog record */
 		lsn = XLogInsert(RM_GENERIC_ID, 0);
 

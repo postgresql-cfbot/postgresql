@@ -21,7 +21,7 @@ void
 clog_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		info = XLogRecGetRmgrInfo(record);
 
 	if (info == CLOG_ZEROPAGE)
 	{
@@ -41,11 +41,11 @@ clog_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-clog_identify(uint8 info)
+clog_identify(uint8 rmgrinfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rmgrinfo)
 	{
 		case CLOG_ZEROPAGE:
 			id = "ZEROPAGE";

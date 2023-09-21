@@ -99,7 +99,7 @@ print_rmgr_list(void)
 {
 	int			i;
 
-	for (i = 0; i <= RM_MAX_BUILTIN_ID; i++)
+	for (i = RM_INVALID_ID + 1; i <= RM_MAX_BUILTIN_ID; i++)
 	{
 		printf("%s\n", GetRmgrDesc(i)->rm_name);
 	}
@@ -549,7 +549,7 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 	const RmgrDescData *desc = GetRmgrDesc(XLogRecGetRmid(record));
 	uint32		rec_len;
 	uint32		fpi_len;
-	uint8		info = XLogRecGetInfo(record);
+	uint8		info = XLogRecGetRmgrInfo(record);
 	XLogRecPtr	xl_prev = XLogRecGetPrev(record);
 	StringInfoData s;
 
@@ -564,7 +564,7 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 
 	id = desc->rm_identify(info);
 	if (id == NULL)
-		printf("desc: UNKNOWN (%x) ", info & ~XLR_INFO_MASK);
+		printf("desc: UNKNOWN (%x) ", info);
 	else
 		printf("desc: %s ", id);
 
@@ -698,7 +698,7 @@ XLogDumpDisplayStats(XLogDumpConfig *config, XLogStats *stats)
 		}
 		else
 		{
-			for (rj = 0; rj < MAX_XLINFO_TYPES; rj++)
+			for (rj = 0; rj < MAX_XLRMGRINFO_TYPES; rj++)
 			{
 				const char *id;
 
@@ -711,10 +711,9 @@ XLogDumpDisplayStats(XLogDumpConfig *config, XLogStats *stats)
 				if (count == 0)
 					continue;
 
-				/* the upper four bits in xl_info are the rmgr's */
-				id = desc->rm_identify(rj << 4);
+				id = desc->rm_identify(rj);
 				if (id == NULL)
-					id = psprintf("UNKNOWN (%x)", rj << 4);
+					id = psprintf("UNKNOWN (%x)", rj);
 
 				XLogDumpStatsRow(psprintf("%s/%s", desc->rm_name, id),
 								 count, total_count, rec_len, total_rec_len,
@@ -968,7 +967,7 @@ main(int argc, char **argv)
 					else
 					{
 						/* then look for builtin rmgrs */
-						for (rmid = 0; rmid <= RM_MAX_BUILTIN_ID; rmid++)
+						for (rmid = RM_INVALID_ID + 1; rmid <= RM_MAX_BUILTIN_ID; rmid++)
 						{
 							if (pg_strcasecmp(optarg, GetRmgrDesc(rmid)->rm_name) == 0)
 							{

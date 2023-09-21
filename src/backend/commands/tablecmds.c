@@ -2150,7 +2150,7 @@ ExecuteTruncateGuts(List *explicit_rels,
 		XLogRegisterData((char *) &xlrec, SizeOfHeapTruncate);
 		XLogRegisterData((char *) logrelids, list_length(relids_logged) * sizeof(Oid));
 
-		XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
+		XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN | XLOG_INCLUDE_XID);
 
 		(void) XLogInsert(RM_HEAP_ID, XLOG_HEAP_TRUNCATE);
 	}

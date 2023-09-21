@@ -55,6 +55,6 @@ typedef struct xl_dbase_drop_rec
 
 extern void dbase_redo(XLogReaderState *record);
 extern void dbase_desc(StringInfo buf, XLogReaderState *record);
-extern const char *dbase_identify(uint8 info);
+extern const char *dbase_identify(uint8 rmgrinfo);
 
 #endif							/* DBCOMMANDS_XLOG_H */

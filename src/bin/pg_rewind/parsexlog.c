@@ -222,7 +222,7 @@ findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
 		 * be the latest checkpoint before WAL forked and not the checkpoint
 		 * where the primary has been stopped to be rewound.
 		 */
-		info = XLogRecGetInfo(xlogreader) & ~XLR_INFO_MASK;
+		info = XLogRecGetRmgrInfo(xlogreader);
 		if (searchptr < forkptr &&
 			XLogRecGetRmid(xlogreader) == RM_XLOG_ID &&
 			(info == XLOG_CHECKPOINT_SHUTDOWN ||
@@ -370,7 +370,7 @@ extractPageInfo(XLogReaderState *record)
 	int			block_id;
 	RmgrId		rmid = XLogRecGetRmid(record);
 	uint8		info = XLogRecGetInfo(record);
-	uint8		rminfo = info & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmgrInfo(record);
 
 	/* Is this a special record type that I recognize? */
 
@@ -438,9 +438,9 @@ extractPageInfo(XLogReaderState *record)
 		 * track that change.
 		 */
 		pg_fatal("WAL record modifies a relation, but record type is not recognized: "
-				 "lsn: %X/%X, rmid: %d, rmgr: %s, info: %02X",
+				 "lsn: %X/%X, rmid: %d, rmgr: %s, info: %02X, rmgrinfo: %02X",
 				 LSN_FORMAT_ARGS(record->ReadRecPtr),
-				 rmid, RmgrName(rmid), info);
+				 rmid, RmgrName(rmid), info, rminfo);
 	}
 
 	for (block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)

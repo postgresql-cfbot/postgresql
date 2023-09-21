@@ -32,7 +32,7 @@
  */
 
 void
-ParseCommitRecord(uint8 info, xl_xact_commit *xlrec, xl_xact_parsed_commit *parsed)
+ParseCommitRecord(uint8 rmgrinfo, xl_xact_commit *xlrec, xl_xact_parsed_commit *parsed)
 {
 	char	   *data = ((char *) xlrec) + MinSizeOfXactCommit;
 
@@ -43,7 +43,7 @@ ParseCommitRecord(uint8 info, xl_xact_commit *xlrec, xl_xact_parsed_commit *pars
 
 	parsed->xact_time = xlrec->xact_time;
 
-	if (info & XLOG_XACT_HAS_INFO)
+	if (rmgrinfo & XLOG_XACT_HAS_INFO)
 	{
 		xl_xact_xinfo *xl_xinfo = (xl_xact_xinfo *) data;
 
@@ -138,7 +138,7 @@ ParseCommitRecord(uint8 info, xl_xact_commit *xlrec, xl_xact_parsed_commit *pars
 }
 
 void
-ParseAbortRecord(uint8 info, xl_xact_abort *xlrec, xl_xact_parsed_abort *parsed)
+ParseAbortRecord(uint8 rmgrinfo, xl_xact_abort *xlrec, xl_xact_parsed_abort *parsed)
 {
 	char	   *data = ((char *) xlrec) + MinSizeOfXactAbort;
 
@@ -149,7 +149,7 @@ ParseAbortRecord(uint8 info, xl_xact_abort *xlrec, xl_xact_parsed_abort *parsed)
 
 	parsed->xact_time = xlrec->xact_time;
 
-	if (info & XLOG_XACT_HAS_INFO)
+	if (rmgrinfo & XLOG_XACT_HAS_INFO)
 	{
 		xl_xact_xinfo *xl_xinfo = (xl_xact_xinfo *) data;
 
@@ -236,7 +236,7 @@ ParseAbortRecord(uint8 info, xl_xact_abort *xlrec, xl_xact_parsed_abort *parsed)
  * ParsePrepareRecord
  */
 void
-ParsePrepareRecord(uint8 info, xl_xact_prepare *xlrec, xl_xact_parsed_prepare *parsed)
+ParsePrepareRecord(uint8 rmgrinfo, xl_xact_prepare *xlrec, xl_xact_parsed_prepare *parsed)
 {
 	char	   *bufptr;
 
@@ -328,11 +328,11 @@ xact_desc_stats(StringInfo buf, const char *label,
 }
 
 static void
-xact_desc_commit(StringInfo buf, uint8 info, xl_xact_commit *xlrec, RepOriginId origin_id)
+xact_desc_commit(StringInfo buf, uint8 rmgrinfo, xl_xact_commit *xlrec, RepOriginId origin_id)
 {
 	xl_xact_parsed_commit parsed;
 
-	ParseCommitRecord(info, xlrec, &parsed);
+	ParseCommitRecord(rmgrinfo, xlrec, &parsed);
 
 	/* If this is a prepared xact, show the xid of the original xact */
 	if (TransactionIdIsValid(parsed.twophase_xid))
@@ -364,11 +364,11 @@ xact_desc_commit(StringInfo buf, uint8 info, xl_xact_commit *xlrec, RepOriginId 
 }
 
 static void
-xact_desc_abort(StringInfo buf, uint8 info, xl_xact_abort *xlrec, RepOriginId origin_id)
+xact_desc_abort(StringInfo buf, uint8 rmgrinfo, xl_xact_abort *xlrec, RepOriginId origin_id)
 {
 	xl_xact_parsed_abort parsed;
 
-	ParseAbortRecord(info, xlrec, &parsed);
+	ParseAbortRecord(rmgrinfo, xlrec, &parsed);
 
 	/* If this is a prepared xact, show the xid of the original xact */
 	if (TransactionIdIsValid(parsed.twophase_xid))
@@ -391,11 +391,11 @@ xact_desc_abort(StringInfo buf, uint8 info, xl_xact_abort *xlrec, RepOriginId or
 }
 
 static void
-xact_desc_prepare(StringInfo buf, uint8 info, xl_xact_prepare *xlrec, RepOriginId origin_id)
+xact_desc_prepare(StringInfo buf, uint8 rmgrinfo, xl_xact_prepare *xlrec, RepOriginId origin_id)
 {
 	xl_xact_parsed_prepare parsed;
 
-	ParsePrepareRecord(info, xlrec, &parsed);
+	ParsePrepareRecord(rmgrinfo, xlrec, &parsed);
 
 	appendStringInfo(buf, "gid %s: ", parsed.twophase_gid);
 	appendStringInfoString(buf, timestamptz_to_str(parsed.xact_time));
@@ -436,27 +436,27 @@ void
 xact_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & XLOG_XACT_OPMASK;
+	uint8		info = XLogRecGetRmgrInfo(record) & XLOG_XACT_OPMASK;
 
 	if (info == XLOG_XACT_COMMIT || info == XLOG_XACT_COMMIT_PREPARED)
 	{
 		xl_xact_commit *xlrec = (xl_xact_commit *) rec;
 
-		xact_desc_commit(buf, XLogRecGetInfo(record), xlrec,
+		xact_desc_commit(buf, XLogRecGetRmgrInfo(record), xlrec,
 						 XLogRecGetOrigin(record));
 	}
 	else if (info == XLOG_XACT_ABORT || info == XLOG_XACT_ABORT_PREPARED)
 	{
 		xl_xact_abort *xlrec = (xl_xact_abort *) rec;
 
-		xact_desc_abort(buf, XLogRecGetInfo(record), xlrec,
+		xact_desc_abort(buf, XLogRecGetRmgrInfo(record), xlrec,
 						XLogRecGetOrigin(record));
 	}
 	else if (info == XLOG_XACT_PREPARE)
 	{
 		xl_xact_prepare *xlrec = (xl_xact_prepare *) rec;
 
-		xact_desc_prepare(buf, XLogRecGetInfo(record), xlrec,
+		xact_desc_prepare(buf, XLogRecGetRmgrInfo(record), xlrec,
 						  XLogRecGetOrigin(record));
 	}
 	else if (info == XLOG_XACT_ASSIGNMENT)

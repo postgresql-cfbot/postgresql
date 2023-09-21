@@ -3036,6 +3036,9 @@ CommitTransactionCommand(void)
 	TransactionState s = CurrentTransactionState;
 	SavedTransactionCharacteristics savetc;
 
+	/* since this function recurses, it could be driven to stack overflow */
+	check_stack_depth();
+
 	SaveTransactionCharacteristics(&savetc);
 
 	switch (s->blockState)
@@ -5490,6 +5493,9 @@ static void
 ShowTransactionStateRec(const char *str, TransactionState s)
 {
 	StringInfoData buf;
+
+	/* since this function recurses, it could be driven to stack overflow */
+	check_stack_depth();
 
 	initStringInfo(&buf);
 

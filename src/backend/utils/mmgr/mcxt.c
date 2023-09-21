@@ -408,6 +408,9 @@ MemoryContextDelete(MemoryContext context)
 	/* And not CurrentMemoryContext, either */
 	Assert(context != CurrentMemoryContext);
 
+	/* since this function recurses, it could be driven to stack overflow */
+	check_stack_depth();
+
 	/* save a function call in common case where there are no children */
 	if (context->firstchild != NULL)
 		MemoryContextDeleteChildren(context);
@@ -766,6 +769,9 @@ MemoryContextStatsInternal(MemoryContext context, int level,
 
 	Assert(MemoryContextIsValid(context));
 
+	/* since this function recurses, it could be driven to stack overflow */
+	check_stack_depth();
+
 	/* Examine the context itself */
 	context->methods->stats(context,
 							print ? MemoryContextStatsPrint : NULL,
@@ -930,6 +936,9 @@ MemoryContextCheck(MemoryContext context)
 	MemoryContext child;
 
 	Assert(MemoryContextIsValid(context));
+
+	/* since this function recurses, it could be driven to stack overflow */
+	check_stack_depth();
 
 	context->methods->check(context);
 	for (child = context->firstchild; child != NULL; child = child->nextchild)

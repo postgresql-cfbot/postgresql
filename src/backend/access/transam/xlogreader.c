@@ -48,6 +48,8 @@ static int	ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr,
 							 int reqLen);
 static void XLogReaderInvalReadState(XLogReaderState *state);
 static XLogPageReadResult XLogDecodeNextRecord(XLogReaderState *state, bool nonblocking);
+static bool ValidXLogRecordLength(XLogReaderState *state, XLogRecPtr RecPtr,
+								  XLogRecord *record);
 static bool ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
 								  XLogRecPtr PrevRecPtr, XLogRecord *record, bool randAccess);
 static bool ValidXLogRecord(XLogReaderState *state, XLogRecord *record,
@@ -149,6 +151,7 @@ XLogReaderAllocate(int wal_segment_size, const char *waldir,
 		pfree(state);
 		return NULL;
 	}
+	state->EndOfWAL = false;
 	state->errormsg_buf[0] = '\0';
 
 	/*
@@ -558,6 +561,7 @@ XLogDecodeNextRecord(XLogReaderState *state, bool nonblocking)
 	/* reset error state */
 	state->errormsg_buf[0] = '\0';
 	decoded = NULL;
+	state->EndOfWAL = false;
 
 	state->abortedRecPtr = InvalidXLogRecPtr;
 	state->missingContrecPtr = InvalidXLogRecPtr;
@@ -641,16 +645,12 @@ restart:
 	Assert(pageHeaderSize <= readOff);
 
 	/*
-	 * Read the record length.
+	 * Verify the record header.
 	 *
 	 * NB: Even though we use an XLogRecord pointer here, the whole record
-	 * header might not fit on this page. xl_tot_len is the first field of the
-	 * struct, so it must be on this page (the records are MAXALIGNed), but we
-	 * cannot access any other fields until we've verified that we got the
-	 * whole header.
+	 * header might not fit on this page.
 	 */
 	record = (XLogRecord *) (state->readBuf + RecPtr % XLOG_BLCKSZ);
-	total_len = record->xl_tot_len;
 
 	/*
 	 * If the whole record header is on this page, validate it immediately.
@@ -669,17 +669,20 @@ restart:
 	}
 	else
 	{
-		/* XXX: more validation should be done here */
-		if (total_len < SizeOfXLogRecord)
-		{
-			report_invalid_record(state,
-								  "invalid record length at %X/%X: expected at least %u, got %u",
-								  LSN_FORMAT_ARGS(RecPtr),
-								  (uint32) SizeOfXLogRecord, total_len);
+		/*
+		 * xl_tot_len is the first field of the struct, so it must be on this
+		 * page (the records are MAXALIGNed), but we cannot access any other
+		 * fields until we've verified that we got the whole header.
+		 *
+		 * XXX: more validation should be done here
+		 */
+		if (!ValidXLogRecordLength(state, RecPtr, record))
 			goto err;
-		}
+
 		gotheader = false;
 	}
+
+	total_len = record->xl_tot_len;
 
 	/*
 	 * Find space to decode this record.  Don't allow oversized allocation if
@@ -1103,16 +1106,51 @@ XLogReaderInvalReadState(XLogReaderState *state)
 }
 
 /*
- * Validate an XLOG record header.
+ * Validate record length of an XLOG record header.
  *
- * This is just a convenience subroutine to avoid duplicated code in
- * XLogReadRecord.  It's not intended for use from anywhere else.
+ * This is substantially a part of ValidXLogRecordHeader.  But XLogReadRecord
+ * needs this separate from the function in case of a partial record header.
+ *
+ * Returns true if the xl_tot_len header field has a seemingly valid value,
+ * which means the caller can proceed reading to the following part of the
+ * record.
  */
 static bool
-ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
-					  XLogRecPtr PrevRecPtr, XLogRecord *record,
-					  bool randAccess)
+ValidXLogRecordLength(XLogReaderState *state, XLogRecPtr RecPtr,
+					  XLogRecord *record)
 {
+	if (record->xl_tot_len == 0)
+	{
+		char	   *p;
+		char	   *pe;
+
+		/*
+		 * We are almost sure reaching the end of WAL, make sure that the
+		 * whole page after the record is filled with zeroes.
+		 */
+		p = (char *) record;
+		pe = p + XLOG_BLCKSZ - (RecPtr & (XLOG_BLCKSZ - 1));
+
+		while (p < pe && *p == 0)
+			p++;
+
+		if (p == pe)
+		{
+			/*
+			 * The page after the record is completely zeroed. That suggests
+			 * we don't have a record after this point. We don't bother
+			 * checking the pages after since they are not zeroed in the case
+			 * of recycled segments.
+			 */
+			report_invalid_record(state, "empty record at %X/%X",
+								  LSN_FORMAT_ARGS(RecPtr));
+
+			/* notify end-of-wal to callers */
+			state->EndOfWAL = true;
+			return false;
+		}
+	}
+
 	if (record->xl_tot_len < SizeOfXLogRecord)
 	{
 		report_invalid_record(state,
@@ -1121,6 +1159,27 @@ ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
 							  (uint32) SizeOfXLogRecord, record->xl_tot_len);
 		return false;
 	}
+
+	return true;
+}
+
+/*
+ * Validate an XLOG record header.
+ *
+ * This is just a convenience subroutine to avoid duplicated code in
+ * XLogReadRecord.  It's not intended for use from anywhere else.
+ *
+ * Returns true if the header fields have the valid values and the caller can
+ * proceed reading to the following part of the record.
+ */
+static bool
+ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
+					  XLogRecPtr PrevRecPtr, XLogRecord *record,
+					  bool randAccess)
+{
+	if (!ValidXLogRecordLength(state, RecPtr, record))
+		return false;
+
 	if (!RmgrIdIsValid(record->xl_rmid))
 	{
 		report_invalid_record(state,
@@ -1216,6 +1275,32 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 	XLByteToSeg(recptr, segno, state->segcxt.ws_segsize);
 	offset = XLogSegmentOffset(recptr, state->segcxt.ws_segsize);
 
+	StaticAssertStmt(XLOG_PAGE_MAGIC != 0, "XLOG_PAGE_MAGIC is zero");
+
+	if (hdr->xlp_magic == 0)
+	{
+		/* Regard an empty page as End-Of-WAL */
+		int			i;
+
+		for (i = 0; i < XLOG_BLCKSZ && phdr[i] == 0; i++);
+		if (i == XLOG_BLCKSZ)
+		{
+			char		fname[MAXFNAMELEN];
+
+			XLogFileName(fname, state->seg.ws_tli, segno,
+						 state->segcxt.ws_segsize);
+
+			report_invalid_record(state,
+								  "empty page in log segment %s, offset %u",
+								  fname,
+								  offset);
+			state->EndOfWAL = true;
+			return false;
+		}
+
+		/* The same condition will be caught as invalid magic number */
+	}
+
 	if (hdr->xlp_magic != XLOG_PAGE_MAGIC)
 	{
 		char		fname[MAXFNAMELEN];
@@ -1305,6 +1390,14 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 							  fname,
 							  LSN_FORMAT_ARGS(recptr),
 							  offset);
+
+		/*
+		 * If the page address is less than expected we assume it is an unused
+		 * page in a recycled segment.
+		 */
+		if (hdr->xlp_pageaddr < recptr)
+			state->EndOfWAL = true;
+
 		return false;
 	}
 

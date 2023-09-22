@@ -1644,7 +1644,7 @@ PerformWalRecovery(void)
 		/* just have to read next record after CheckPoint */
 		Assert(xlogreader->ReadRecPtr == CheckPointLoc);
 		replayTLI = CheckPointTLI;
-		record = ReadRecord(xlogprefetcher, LOG, false, replayTLI);
+		record = ReadRecord(xlogprefetcher, WARNING, false, replayTLI);
 	}
 
 	if (record != NULL)
@@ -1753,7 +1753,7 @@ PerformWalRecovery(void)
 			}
 
 			/* Else, try to fetch the next WAL record */
-			record = ReadRecord(xlogprefetcher, LOG, false, replayTLI);
+			record = ReadRecord(xlogprefetcher, WARNING, false, replayTLI);
 		} while (record != NULL);
 
 		/*
@@ -1807,11 +1807,18 @@ PerformWalRecovery(void)
 
 		InRedo = false;
 	}
-	else
+	else if (xlogreader->EndOfWAL)
 	{
 		/* there are no WAL records following the checkpoint */
 		ereport(LOG,
-				(errmsg("redo is not required")));
+				errmsg("redo is not required"));
+	}
+	else
+	{
+		/* broken record found */
+		ereport(WARNING,
+				errmsg("redo is skipped"),
+				errhint("This suggests WAL file corruption. You might need to check the database."));
 	}
 
 	/*
@@ -3063,6 +3070,7 @@ ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
 	for (;;)
 	{
 		char	   *errormsg;
+		XLogRecPtr	ErrRecPtr = InvalidXLogRecPtr;
 
 		record = XLogPrefetcherReadRecord(xlogprefetcher, &errormsg);
 		if (record == NULL)
@@ -3084,6 +3092,18 @@ ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
 			{
 				abortedRecPtr = xlogreader->abortedRecPtr;
 				missingContrecPtr = xlogreader->missingContrecPtr;
+				ErrRecPtr = abortedRecPtr;
+			}
+			else
+			{
+				/*
+				 * EndRecPtr is the LSN we tried to read but failed. In the
+				 * case of decoding error, it is at the end of the failed
+				 * record but we don't have a means for now to know EndRecPtr
+				 * is pointing to which of the beginning or ending of the
+				 * failed record.
+				 */
+				ErrRecPtr = xlogreader->EndRecPtr;
 			}
 
 			if (readFile >= 0)
@@ -3094,13 +3114,15 @@ ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
 
 			/*
 			 * We only end up here without a message when XLogPageRead()
-			 * failed - in that case we already logged something. In
-			 * StandbyMode that only happens if we have been triggered, so we
-			 * shouldn't loop anymore in that case.
+			 * failed- in that case we already logged something. In StandbyMode
+			 * that only happens if we have been triggered, so we shouldn't
+			 * loop anymore in that case. When EndOfWAL is true, we don't emit
+			 * the message immediately and instead will show it as a part of a
+			 * decent end-of-wal message later.
 			 */
-			if (errormsg)
-				ereport(emode_for_corrupt_record(emode, xlogreader->EndRecPtr),
-						(errmsg_internal("%s", errormsg) /* already translated */ ));
+			if (!xlogreader->EndOfWAL && errormsg)
+				ereport(emode_for_corrupt_record(emode, ErrRecPtr),
+						errmsg_internal("%s", errormsg) /* already translated */ );
 		}
 
 		/*
@@ -3131,11 +3153,14 @@ ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
 			/* Great, got a record */
 			return record;
 		}
-		else
-		{
-			/* No valid record available from this source */
-			lastSourceFailed = true;
 
+		Assert(ErrRecPtr != InvalidXLogRecPtr);
+
+		/* No valid record available from this source */
+		lastSourceFailed = true;
+
+		if (!fetching_ckpt)
+		{
 			/*
 			 * If archive recovery was requested, but we were still doing
 			 * crash recovery, switch to archive recovery and retry using the
@@ -3148,11 +3173,16 @@ ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
 			 * we'd have no idea how far we'd have to replay to reach
 			 * consistency.  So err on the safe side and give up.
 			 */
-			if (!InArchiveRecovery && ArchiveRecoveryRequested &&
-				!fetching_ckpt)
+			if (!InArchiveRecovery && ArchiveRecoveryRequested)
 			{
+				/*
+				 * We don't report this as LOG, since we don't stop recovery
+				 * here
+				 */
 				ereport(DEBUG1,
-						(errmsg_internal("reached end of WAL in pg_wal, entering archive recovery")));
+						errmsg_internal("reached end of WAL at %X/%X on timeline %u in pg_wal during crash recovery, entering archive recovery",
+										LSN_FORMAT_ARGS(ErrRecPtr),
+										replayTLI));
 				InArchiveRecovery = true;
 				if (StandbyModeRequested)
 					EnableStandbyMode();
@@ -3173,12 +3203,24 @@ ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
 				continue;
 			}
 
-			/* In standby mode, loop back to retry. Otherwise, give up. */
-			if (StandbyMode && !CheckForStandbyTrigger())
-				continue;
-			else
-				return NULL;
+			/*
+			 * recovery ended.
+			 *
+			 * Emit a decent message if we met end-of-WAL. Otherwise we should
+			 * have already emitted an error message.
+			 */
+			if (xlogreader->EndOfWAL)
+				ereport(LOG,
+						errmsg("reached end of WAL at %X/%X on timeline %u",
+							   LSN_FORMAT_ARGS(ErrRecPtr), replayTLI),
+						(errormsg ? errdetail_internal("%s", errormsg) : 0));
 		}
+
+		/* In standby mode, loop back to retry. Otherwise, give up. */
+		if (StandbyMode && !CheckForStandbyTrigger())
+			continue;
+		else
+			return NULL;
 	}
 }
 
@@ -3275,11 +3317,16 @@ retry:
 			case XLREAD_WOULDBLOCK:
 				return XLREAD_WOULDBLOCK;
 			case XLREAD_FAIL:
+				Assert(!StandbyMode || CheckForStandbyTrigger());
+
 				if (readFile >= 0)
 					close(readFile);
 				readFile = -1;
 				readLen = 0;
 				readSource = XLOG_FROM_ANY;
+
+				/* promotion exit is not end-of-WAL */
+				xlogreader->EndOfWAL = !StandbyMode;
 				return XLREAD_FAIL;
 			case XLREAD_SUCCESS:
 				break;
@@ -3947,7 +3994,8 @@ emode_for_corrupt_record(int emode, XLogRecPtr RecPtr)
 {
 	static XLogRecPtr lastComplaint = 0;
 
-	if (readSource == XLOG_FROM_PG_WAL && emode == LOG)
+	/* use currentSource as readSource is reset at failure */
+	if (currentSource == XLOG_FROM_PG_WAL && emode <= WARNING)
 	{
 		if (RecPtr == lastComplaint)
 			emode = DEBUG1;

@@ -147,10 +147,10 @@ command_fails_like([ 'pg_waldump', $node->data_dir . '/pg_wal/' . $start_walfile
 command_like([ 'pg_waldump', $node->data_dir . '/pg_wal/' . $start_walfile, $node->data_dir . '/pg_wal/' . $end_walfile ], qr/./, 'runs with start and end segment specified');
 command_fails_like([ 'pg_waldump', '-p', $node->data_dir ], qr/error: no start WAL location given/, 'path option requires start location');
 command_like([ 'pg_waldump', '-p', $node->data_dir, '--start', $start_lsn, '--end', $end_lsn ], qr/./, 'runs with path option and start and end locations');
-command_fails_like([ 'pg_waldump', '-p', $node->data_dir, '--start', $start_lsn ], qr/error: error in WAL record at/, 'falling off the end of the WAL results in an error');
+command_checks_all([ 'pg_waldump', '-p', $node->data_dir, '--start', $start_lsn ], 0, [], [qr/empty record at/], 'falling off the end of the WAL results in an empty record error');
 
 command_like([ 'pg_waldump', '--quiet', $node->data_dir . '/pg_wal/' . $start_walfile ], qr/^$/, 'no output with --quiet option');
-command_fails_like([ 'pg_waldump', '--quiet', '-p', $node->data_dir, '--start', $start_lsn ], qr/error: error in WAL record at/, 'errors are shown with --quiet');
+command_checks_all([ 'pg_waldump', '--quiet', '-p', $node->data_dir, '--start', $start_lsn ], 0, [], [qr/empty record at/], 'empty record error is shown with --quiet');
 
 
 # Test for: Display a message that we're skipping data if `from`

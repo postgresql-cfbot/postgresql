@@ -262,4 +262,18 @@ $node->command_ok(
 	[ 'reindexdb', '-j', '2', '--concurrently', '-d', 'postgres' ],
 	'parallel reindexdb on database, concurrently');
 
+# invalid combinations of objects
+$node->command_fails([ 'reindexdb', '-s', '-t', 'test1' ],
+	'specify both --system and --table');
+$node->command_fails([ 'reindexdb', '-s', '-i', 'test1x' ],
+	'specify both --system and --index');
+$node->command_fails([ 'reindexdb', '-s', '-S', 'pg_catalog' ],
+	'specify both --system and --schema');
+$node->command_fails([ 'reindexdb', '-t', 'test1', '-i', 'test1x' ],
+	'specify both --table and --index');
+$node->command_fails([ 'reindexdb', '-t', 'test1', '-S', 'pg_catalog' ],
+	'specify both --table and --schema');
+$node->command_fails([ 'reindexdb', '-i', 'test1x', '-S', 'pg_catalog' ],
+	'specify both --index and --schema');
+
 done_testing();

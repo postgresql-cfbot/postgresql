@@ -51,7 +51,6 @@
 #include "optimizer/optimizer.h"
 #include "parser/parse_agg.h"
 #include "parser/parse_func.h"
-#include "parser/parse_node.h"
 #include "parser/parse_oper.h"
 #include "parser/parse_relation.h"
 #include "parser/parser.h"
@@ -501,22 +500,15 @@ static void get_from_clause_coldeflist(RangeTblFunction *rtfunc,
 									   deparse_context *context);
 static void get_tablesample_def(TableSampleClause *tablesample,
 								deparse_context *context);
-static void get_opclass_name(Oid opclass, Oid actual_datatype,
-							 StringInfo buf);
 static Node *processIndirection(Node *node, deparse_context *context);
 static void printSubscripts(SubscriptingRef *sbsref, deparse_context *context);
 static char *get_relation_name(Oid relid);
 static char *generate_relation_name(Oid relid, List *namespaces);
 static char *generate_qualified_relation_name(Oid relid);
-static char *generate_function_name(Oid funcid, int nargs,
-									List *argnames, Oid *argtypes,
-									bool has_variadic, bool *use_variadic_p,
-									ParseExprKind special_exprkind);
 static char *generate_operator_name(Oid operid, Oid arg1, Oid arg2);
 static void add_cast_to(StringInfo buf, Oid typid);
 static char *generate_qualified_type_name(Oid typid);
 static text *string_to_text(char *str);
-static char *flatten_reloptions(Oid relid);
 static void get_reloptions(StringInfo buf, Datum reloptions);
 
 #define only_marker(rte)  ((rte)->inh ? "" : "ONLY ")
@@ -1901,6 +1893,14 @@ pg_get_partkeydef_columns(Oid relid, bool pretty)
 	return pg_get_partkeydef_worker(relid, prettyFlags, true, false);
 }
 
+/* Internal version that reports the full partition key definition */
+char *
+pg_get_partkeydef_string(Oid relid)
+{
+	return pg_get_partkeydef_worker(relid, GET_PRETTY_FLAGS(false), false,
+									false);
+}
+
 /*
  * Internal workhorse to decompile a partition key definition.
  */
@@ -2146,6 +2146,16 @@ pg_get_constraintdef_ext(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 
 	PG_RETURN_TEXT_P(string_to_text(res));
+}
+
+/*
+ * Internal version that returns the definition of a CONSTRAINT command
+ */
+char *
+pg_get_constraintdef_string(Oid constraintId)
+{
+	return pg_get_constraintdef_worker(constraintId, false,
+									   GET_PRETTY_FLAGS(false), false);
 }
 
 /*
@@ -11793,7 +11803,7 @@ get_tablesample_def(TableSampleClause *tablesample, deparse_context *context)
  * actual_datatype.  (If you don't want this behavior, just pass
  * InvalidOid for actual_datatype.)
  */
-static void
+void
 get_opclass_name(Oid opclass, Oid actual_datatype,
 				 StringInfo buf)
 {
@@ -12187,7 +12197,7 @@ generate_qualified_relation_name(Oid relid)
  *
  * The result includes all necessary quoting and schema-prefixing.
  */
-static char *
+char *
 generate_function_name(Oid funcid, int nargs, List *argnames, Oid *argtypes,
 					   bool has_variadic, bool *use_variadic_p,
 					   ParseExprKind special_exprkind)
@@ -12573,7 +12583,7 @@ get_reloptions(StringInfo buf, Datum reloptions)
 /*
  * Generate a C string representing a relation's reloptions, or NULL if none.
  */
-static char *
+char *
 flatten_reloptions(Oid relid)
 {
 	char	   *result = NULL;
@@ -12640,4 +12650,24 @@ get_range_partbound_string(List *bound_datums)
 	appendStringInfoChar(buf, ')');
 
 	return buf->data;
+}
+
+/*
+ * Obtain the deparsed default value for the given column of the given table.
+ *
+ * Caller must have set a correct deparse context and must ensure that the
+ * passed attribute has a default value.
+ */
+char *
+relation_get_column_default(Relation rel, AttrNumber attno, List *dpcontext)
+{
+	Node	   *defval;
+	char	   *defstr;
+
+	defval = build_column_default(rel, attno);
+	Assert(defval != NULL);
+
+	defstr = deparse_expression(defval, dpcontext, false, false);
+
+	return defstr;
 }

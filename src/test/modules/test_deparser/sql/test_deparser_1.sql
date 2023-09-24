@@ -1,0 +1,40 @@
+
+CREATE ROLE deparse_role SUPERUSER;
+
+CREATE OR REPLACE FUNCTION public.deparse_test_ddl_command_end()
+  RETURNS event_trigger
+  SECURITY DEFINER
+  LANGUAGE plpgsql
+AS $fn$
+BEGIN
+	BEGIN
+		INSERT INTO pg_catalog.deparse_test_commands
+		            (id, test_name, deparse_time, original_command, command)
+		SELECT public.tdparser_get_cmdcount(),
+		current_setting('application_name'), clock_timestamp(), current_query(),
+		pg_catalog.ddl_deparse_expand_command(pg_catalog.ddl_deparse_to_json(command))
+		FROM pg_event_trigger_ddl_commands() WITH ORDINALITY;
+
+	EXCEPTION WHEN OTHERS THEN
+			RAISE EXCEPTION 'state: % errm: %', sqlstate, sqlerrm;
+	END;
+END;
+$fn$;
+
+SET allow_system_table_mods = on;
+
+CREATE UNLOGGED TABLE pg_catalog.deparse_test_commands (
+  id int,
+  test_name text,
+  deparse_time timestamptz,
+  original_command TEXT NOT NULL,
+  command TEXT
+);
+
+CREATE EVENT TRIGGER deparse_test_trg_sql_drop
+  ON sql_drop
+  EXECUTE PROCEDURE test_deparser_drop_command();
+
+CREATE EVENT TRIGGER deparse_test_trg_ddl_command_end
+  ON ddl_command_end WHEN TAG IN ('CREATE TABLE', 'ALTER TABLE')
+  EXECUTE PROCEDURE deparse_test_ddl_command_end();

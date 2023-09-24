@@ -124,9 +124,14 @@ extern Datum numeric_float8_no_overflow(PG_FUNCTION_ARGS);
 #define FORMAT_TYPE_INVALID_AS_NULL	0x08	/* NULL if undefined */
 extern char *format_type_extended(Oid type_oid, int32 typemod, bits16 flags);
 
+extern void format_type_detailed(Oid type_oid, int32 typemod,
+								  Oid *nspid, char **typname,
+								  char **typemodstr, bool *typearray);
+
 extern char *format_type_be(Oid type_oid);
 extern char *format_type_be_qualified(Oid type_oid);
 extern char *format_type_with_typemod(Oid type_oid, int32 typemod);
+extern char *printTypmod(const char *typname, int32 typmod, Oid typmodout);
 
 extern int32 type_maximum_size(Oid type_oid, int32 typemod);
 

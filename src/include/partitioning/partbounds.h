@@ -143,4 +143,6 @@ extern int	partition_range_datum_bsearch(FmgrInfo *partsupfunc,
 extern int	partition_hash_bsearch(PartitionBoundInfo boundinfo,
 								   int modulus, int remainder);
 
+extern char    *relation_get_part_bound(Oid relid);
+
 #endif							/* PARTBOUNDS_H */

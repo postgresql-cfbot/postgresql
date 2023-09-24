@@ -3231,6 +3231,7 @@ config_var_value
 contain_aggs_of_level_context
 contain_placeholder_references_context
 convert_testexpr_context
+convSpecifier
 copy_data_dest_cb
 copy_data_source_cb
 core_YYSTYPE
@@ -3434,6 +3435,7 @@ json_manifest_perwalrange_callback
 json_ofield_action
 json_scalar_action
 json_struct_action
+json_trivalue
 keyEntryData
 key_t
 lclContext

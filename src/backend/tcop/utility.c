@@ -2207,6 +2207,23 @@ UtilityContainsQuery(Node *parsetree)
 	}
 }
 
+/*
+ * stringify_objtype
+ * 		Return the given object type as a string.
+ */
+const char *
+stringify_objtype(ObjectType objtype)
+{
+	switch (objtype)
+	{
+		case OBJECT_TABLE:
+			return "TABLE";
+		default:
+			elog(ERROR, "unsupported object type %d", objtype);
+	}
+
+	return "???";				/* keep compiler quiet */
+}
 
 /*
  * AlterObjectTypeCommandTag

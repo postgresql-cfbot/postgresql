@@ -37,8 +37,10 @@ CREATE MATERIALIZED VIEW [ IF NOT EXISTS ] <replaceable>table_name</replaceable>
   <para>
    <command>CREATE MATERIALIZED VIEW</command> defines a materialized view of
    a query.  The query is executed and used to populate the view at the time
-   the command is issued (unless <command>WITH NO DATA</command> is used) and may be
-   refreshed later using <command>REFRESH MATERIALIZED VIEW</command>.
+   the command is issued (unless <command>WITH NO DATA</command> is used) and
+   may be refreshed later using <command>REFRESH MATERIALIZED VIEW</command>.
+   While the query is executing, the <xref linkend="guc-search-path"/> is set
+   to <literal>pg_catalog, pg_temp</literal>.
   </para>
 
   <para>

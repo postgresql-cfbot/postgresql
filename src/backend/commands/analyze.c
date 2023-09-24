@@ -67,6 +67,7 @@
 #include "utils/spccache.h"
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
+#include "utils/usercontext.h"
 
 
 /* Per-index data for ANALYZE */
@@ -349,6 +350,7 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 	SetUserIdAndSecContext(onerel->rd_rel->relowner,
 						   save_sec_context | SECURITY_RESTRICTED_OPERATION);
 	save_nestlevel = NewGUCNestLevel();
+	RestrictSearchPath();
 
 	/* measure elapsed time iff autovacuum logging requires it */
 	if (IsAutoVacuumWorkerProcess() && params->log_min_duration >= 0)

@@ -270,6 +270,29 @@ RESET SESSION AUTHORIZATION;
 ALTER DEFAULT PRIVILEGES FOR ROLE regress_matview_user
   GRANT INSERT ON TABLES TO regress_matview_user;
 
+-- Test that MV is populated using restricted search_path
+SET SESSION AUTHORIZATION regress_matview_user;
+SET search_path = matview_schema;
+CREATE FUNCTION matview_schema.mod(a INT, b INT) RETURNS INT
+  IMMUTABLE LANGUAGE plpgsql AS
+  $$ BEGIN RETURN 42; END; $$;
+CREATE FUNCTION matview_schema.mod10(i INT) RETURNS INT
+  IMMUTABLE LANGUAGE plpgsql AS
+  $$ BEGIN RETURN mod(i, 10); END; $$;
+CREATE MATERIALIZED VIEW matview_search_path AS
+  SELECT current_user, matview_schema.mod10(33);
+SELECT * FROM matview_search_path;
+RESET SESSION AUTHORIZATION;
+REFRESH MATERIALIZED VIEW matview_search_path;
+SELECT * FROM matview_search_path;
+
+ALTER FUNCTION matview_schema.mod10(INT)
+  SET search_path = matview_schema, pg_catalog;
+REFRESH MATERIALIZED VIEW matview_search_path;
+SELECT * FROM matview_search_path;
+
+RESET search_path;
+
 DROP SCHEMA matview_schema CASCADE;
 DROP USER regress_matview_user;
 

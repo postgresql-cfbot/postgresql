@@ -22,5 +22,6 @@ typedef struct UserContext
 /* Function prototypes. */
 extern void SwitchToUntrustedUser(Oid userid, UserContext *context);
 extern void RestoreUserContext(UserContext *context);
+extern void RestrictSearchPath(void);
 
 #endif							/* USERCONTEXT_H */

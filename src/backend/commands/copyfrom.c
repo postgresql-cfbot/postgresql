@@ -375,7 +375,7 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 					slot->tts_tableOid = relid;
 
 					ExecARInsertTriggers(estate, resultRelInfo,
-										 slot, NIL,
+										 slot, NIL, false,
 										 cstate->transition_capture);
 				}
 			}
@@ -437,7 +437,7 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 										  buffer->slots[i], estate, false,
 										  false, NULL, NIL, false);
 				ExecARInsertTriggers(estate, resultRelInfo,
-									 slots[i], recheckIndexes,
+									 slots[i], recheckIndexes, false,
 									 cstate->transition_capture);
 				list_free(recheckIndexes);
 			}
@@ -452,7 +452,7 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 			{
 				cstate->cur_lineno = buffer->linenos[i];
 				ExecARInsertTriggers(estate, resultRelInfo,
-									 slots[i], NIL,
+									 slots[i], NIL, false,
 									 cstate->transition_capture);
 			}
 
@@ -1169,7 +1169,7 @@ CopyFrom(CopyFromState cstate)
 				 */
 				if (resultRelInfo->ri_FdwRoutine == NULL &&
 					resultRelInfo->ri_RelationDesc->rd_att->constr)
-					ExecConstraints(resultRelInfo, myslot, estate);
+					ExecConstraints(resultRelInfo, myslot, estate, CHECK_RECHECK_DISABLED);
 
 				/*
 				 * Also check the tuple against the partition constraint, if
@@ -1254,7 +1254,7 @@ CopyFrom(CopyFromState cstate)
 
 					/* AFTER ROW INSERT Triggers */
 					ExecARInsertTriggers(estate, resultRelInfo, myslot,
-										 recheckIndexes, cstate->transition_capture);
+										 recheckIndexes, false, cstate->transition_capture);
 
 					list_free(recheckIndexes);
 				}

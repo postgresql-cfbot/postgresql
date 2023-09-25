@@ -515,6 +515,7 @@ ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
 	if (!skip_tuple)
 	{
 		List	   *recheckIndexes = NIL;
+		bool		recheckConstraints = false;
 
 		/* Compute stored generated columns */
 		if (rel->rd_att->constr &&
@@ -524,7 +525,7 @@ ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
 
 		/* Check the constraints of the tuple */
 		if (rel->rd_att->constr)
-			ExecConstraints(resultRelInfo, slot, estate);
+			recheckConstraints = ExecConstraints(resultRelInfo, slot, estate, CHECK_RECHECK_ENABLED);
 		if (rel->rd_rel->relispartition)
 			ExecPartitionCheck(resultRelInfo, slot, estate, true);
 
@@ -538,7 +539,7 @@ ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
 
 		/* AFTER ROW INSERT Triggers */
 		ExecARInsertTriggers(estate, resultRelInfo, slot,
-							 recheckIndexes, NULL);
+							 recheckIndexes, recheckConstraints, NULL);
 
 		/*
 		 * XXX we should in theory pass a TransitionCaptureState object to the
@@ -583,6 +584,7 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 	{
 		List	   *recheckIndexes = NIL;
 		TU_UpdateIndexes update_indexes;
+		bool		recheckConstraints = false;
 
 		/* Compute stored generated columns */
 		if (rel->rd_att->constr &&
@@ -592,7 +594,7 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 
 		/* Check the constraints of the tuple */
 		if (rel->rd_att->constr)
-			ExecConstraints(resultRelInfo, slot, estate);
+			recheckConstraints = ExecConstraints(resultRelInfo, slot, estate, CHECK_RECHECK_ENABLED);
 		if (rel->rd_rel->relispartition)
 			ExecPartitionCheck(resultRelInfo, slot, estate, true);
 
@@ -609,7 +611,7 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 		ExecARUpdateTriggers(estate, resultRelInfo,
 							 NULL, NULL,
 							 tid, NULL, slot,
-							 recheckIndexes, NULL, false);
+							 recheckIndexes, recheckConstraints, NULL, false);
 
 		list_free(recheckIndexes);
 	}

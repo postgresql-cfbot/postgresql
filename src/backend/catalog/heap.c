@@ -52,17 +52,20 @@
 #include "catalog/pg_statistic.h"
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_tablespace.h"
+#include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
 #include "commands/tablecmds.h"
 #include "commands/typecmds.h"
 #include "miscadmin.h"
+#include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/optimizer.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_collate.h"
 #include "parser/parse_expr.h"
 #include "parser/parse_relation.h"
+#include "parser/parser.h"
 #include "parser/parsetree.h"
 #include "partitioning/partdesc.h"
 #include "pgstat.h"
@@ -102,7 +105,8 @@ static ObjectAddress AddNewRelationType(const char *typeName,
 static void RelationRemoveInheritance(Oid relid);
 static Oid	StoreRelCheck(Relation rel, const char *ccname, Node *expr,
 						  bool is_validated, bool is_local, int inhcount,
-						  bool is_no_inherit, bool is_internal);
+						  bool is_no_inherit, bool is_internal,
+						  bool is_deferrable, bool initdeferred);
 static void StoreConstraints(Relation rel, List *cooked_constraints,
 							 bool is_internal);
 static bool MergeWithExistingConstraint(Relation rel, const char *ccname, Node *expr,
@@ -2050,13 +2054,15 @@ SetAttrMissing(Oid relid, char *attname, char *value)
 static Oid
 StoreRelCheck(Relation rel, const char *ccname, Node *expr,
 			  bool is_validated, bool is_local, int inhcount,
-			  bool is_no_inherit, bool is_internal)
+			  bool is_no_inherit, bool is_internal,
+			  bool is_deferrable, bool initdeferred)
 {
 	char	   *ccbin;
 	List	   *varList;
 	int			keycount;
 	int16	   *attNos;
 	Oid			constrOid;
+	CreateTrigStmt *trigger;
 
 	/*
 	 * Flatten expression to string form for storage.
@@ -2113,8 +2119,10 @@ StoreRelCheck(Relation rel, const char *ccname, Node *expr,
 		CreateConstraintEntry(ccname,	/* Constraint Name */
 							  RelationGetNamespace(rel),	/* namespace */
 							  CONSTRAINT_CHECK, /* Constraint Type */
-							  false,	/* Is Deferrable */
-							  false,	/* Is Deferred */
+							  is_deferrable,	/* Is Check Constraint
+												 * deferrable */
+							  initdeferred, /* Is Check Constraint initially
+											 * deferred */
 							  is_validated,
 							  InvalidOid,	/* no parent constraint */
 							  RelationGetRelid(rel),	/* relation */
@@ -2141,6 +2149,36 @@ StoreRelCheck(Relation rel, const char *ccname, Node *expr,
 							  inhcount, /* coninhcount */
 							  is_no_inherit,	/* connoinherit */
 							  is_internal); /* internally constructed? */
+
+	/*
+	 * If the constraint is deferrable, create the deferred trigger to
+	 * re-validate the check constraint.(The trigger will be given an internal
+	 * dependency on the constraint by CreateTrigger, so there's no need to do
+	 * anything more here.)
+	 */
+	if (is_deferrable)
+	{
+		trigger = makeNode(CreateTrigStmt);
+		trigger->replace = false;
+		trigger->isconstraint = true;
+		trigger->trigname = "Check_ConstraintTrigger";
+		trigger->relation = NULL;
+		trigger->funcname = SystemFuncName("check_constraint_recheck");
+		trigger->args = NIL;
+		trigger->row = true;
+		trigger->timing = TRIGGER_TYPE_AFTER;
+		trigger->events = TRIGGER_TYPE_INSERT | TRIGGER_TYPE_UPDATE;
+		trigger->columns = NIL;
+		trigger->whenClause = NULL;
+		trigger->transitionRels = NIL;
+		trigger->deferrable = true;
+		trigger->initdeferred = initdeferred;
+		trigger->constrrel = NULL;
+
+		(void) CreateTrigger(trigger, NULL, RelationGetRelid(rel),
+							 InvalidOid, constrOid, InvalidOid, InvalidOid,
+							 InvalidOid, NULL, true, false);
+	}
 
 	pfree(ccbin);
 
@@ -2235,7 +2273,7 @@ StoreConstraints(Relation rel, List *cooked_constraints, bool is_internal)
 					StoreRelCheck(rel, con->name, con->expr,
 								  !con->skip_validation, con->is_local,
 								  con->inhcount, con->is_no_inherit,
-								  is_internal);
+								  is_internal, con->is_deferrable, con->is_deferred);
 				numchecks++;
 				break;
 
@@ -2500,7 +2538,7 @@ AddRelationNewConstraints(Relation rel,
 			 */
 			constrOid =
 				StoreRelCheck(rel, ccname, expr, cdef->initially_valid, is_local,
-							  is_local ? 0 : 1, cdef->is_no_inherit, is_internal);
+							  is_local ? 0 : 1, cdef->is_no_inherit, is_internal, cdef->deferrable, cdef->initdeferred);
 
 			numchecks++;
 

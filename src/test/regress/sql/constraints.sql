@@ -446,6 +446,105 @@ INSERT INTO parted_uniq_tbl VALUES (1);	-- OK now, fail at commit
 COMMIT;
 DROP TABLE parted_uniq_tbl;
 
+
+-- deferrable CHECK constraint
+CREATE TABLE check_constr_tbl (i int CHECK(i<>0) DEFERRABLE, t text); -- initially Immediate
+
+INSERT INTO check_constr_tbl VALUES (1, 'one');
+
+-- default is immediate so this should fail right away
+INSERT INTO check_constr_tbl VALUES (0, 'zero');
+
+-- should fail here too
+BEGIN;
+
+INSERT INTO check_constr_tbl VALUES (0, 'zero');
+
+COMMIT;
+
+-- explicitly defer the constraint
+BEGIN;
+
+SET CONSTRAINTS check_constr_tbl_i_check DEFERRED;
+INSERT INTO check_constr_tbl VALUES (0, 'one');-- should succeed
+
+COMMIT; -- should fail
+
+BEGIN;
+
+SET CONSTRAINTS check_constr_tbl_i_check DEFERRED;
+INSERT INTO check_constr_tbl VALUES (0, 'one'); -- should succeed
+UPDATE check_constr_tbl SET i = 1 WHERE t = 'one';
+
+COMMIT; -- should succeed
+
+-- INSERT Followed by UPDATE, UPDATE
+BEGIN;
+
+SET CONSTRAINTS check_constr_tbl_i_check DEFERRED;
+INSERT INTO check_constr_tbl VALUES (3, 'three'); -- should succeed
+UPDATE check_constr_tbl SET i = 0 WHERE t = 'three' and i = 3; -- should succeed
+UPDATE check_constr_tbl SET i = 3 WHERE t = 'three' and i = 0; -- should succeed
+
+COMMIT; -- should succeed
+
+-- INSERT Followed by DELETE
+BEGIN;
+
+SET CONSTRAINTS check_constr_tbl_i_check DEFERRED;
+INSERT INTO check_constr_tbl VALUES (0, 'zero'); -- should succeed
+DELETE FROM check_constr_tbl where i = 0; -- should succeed
+
+COMMIT; -- should succeed
+
+-- try adding an initially deferred constraint
+ALTER TABLE check_constr_tbl DROP CONSTRAINT check_constr_tbl_i_check;
+ALTER TABLE check_constr_tbl ADD CONSTRAINT check_constr_tbl_i_check
+	CHECK (i<>0) DEFERRABLE INITIALLY DEFERRED;
+
+BEGIN;
+
+INSERT INTO check_constr_tbl VALUES (0, 'one'); -- should succeed
+
+COMMIT; -- should fail
+
+BEGIN;
+
+SET CONSTRAINTS ALL IMMEDIATE;
+
+INSERT INTO check_constr_tbl VALUES (0, 'one'); -- should fail
+
+COMMIT;
+
+
+-- test deferrable CHECK constraint with a partition table
+CREATE TABLE parted_check_constr_tbl (i int check(i<>0) DEFERRABLE) partition by range (i);
+CREATE TABLE parted_check_constr_tbl_1 PARTITION OF parted_check_constr_tbl FOR VALUES FROM (0) TO (10);
+CREATE TABLE parted_check_constr_tbl_2 PARTITION OF parted_check_constr_tbl FOR VALUES FROM (20) TO (30);
+SELECT conname, conrelid::regclass FROM pg_constraint
+  WHERE conname LIKE 'parted_check%' ORDER BY conname;
+BEGIN;
+INSERT INTO parted_check_constr_tbl VALUES (1);
+SAVEPOINT f;
+UPDATE parted_check_constr_tbl set i = 0 where i = 1; -- check constraint violation
+ROLLBACK TO f;
+SET CONSTRAINTS parted_check_constr_tbl_i_check DEFERRED;
+UPDATE parted_check_constr_tbl set i = 0 where i = 1; -- now succeed
+COMMIT; -- should fail
+
+-- test table inheritance, must inhert column i DEFERRABLE check constraint
+CREATE TABLE parent_check_deferred ( i int CHECK(i<>0) DEFERRABLE INITIALLY DEFERRED);
+CREATE TABLE child_check_deferred ( j int) INHERITS (parent_check_deferred);
+\d+ child_check_deferred;
+
+-- clean up
+DROP TABLE child_check_deferred;
+DROP TABLE parent_check_deferred;
+DROP TABLE parted_check_constr_tbl_1;
+DROP TABLE parted_check_constr_tbl_2;
+DROP TABLE parted_check_constr_tbl;
+DROP TABLE check_constr_tbl;
+
 -- test naming a constraint in a partition when a conflict exists
 CREATE TABLE parted_fk_naming (
     id bigint NOT NULL default 1,

@@ -204,6 +204,8 @@ CreateTupleDescCopyConstr(TupleDesc tupdesc)
 				cpy->check[i].ccbin = pstrdup(constr->check[i].ccbin);
 				cpy->check[i].ccvalid = constr->check[i].ccvalid;
 				cpy->check[i].ccnoinherit = constr->check[i].ccnoinherit;
+				cpy->check[i].ccdeferrable = constr->check[i].ccdeferrable;
+				cpy->check[i].ccdeferred = constr->check[i].ccdeferred;
 			}
 		}
 

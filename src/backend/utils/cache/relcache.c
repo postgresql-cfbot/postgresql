@@ -4561,6 +4561,8 @@ CheckConstraintFetch(Relation relation)
 
 		check[found].ccvalid = conform->convalidated;
 		check[found].ccnoinherit = conform->connoinherit;
+		check[found].ccdeferrable = conform->condeferrable;
+		check[found].ccdeferred = conform->condeferred;
 		check[found].ccname = MemoryContextStrdup(CacheMemoryContext,
 												  NameStr(conform->conname));
 

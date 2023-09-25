@@ -335,6 +335,8 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	 *
 	 * For regular tables all constraints can be marked valid immediately,
 	 * because the table is new therefore empty. Not so for foreign tables.
+	 * Also, Create After Row trigger(for Insert and Update) for Deferrable
+	 * check constraint.
 	 */
 	transformCheckConstraints(&cxt, !cxt.isforeign);
 
@@ -1417,6 +1419,8 @@ expandTableLikeClause(RangeVar *heapRel, TableLikeClause *table_like_clause)
 			char	   *ccname = constr->check[ccnum].ccname;
 			char	   *ccbin = constr->check[ccnum].ccbin;
 			bool		ccnoinherit = constr->check[ccnum].ccnoinherit;
+			bool		ccdeferrable = constr->check[ccnum].ccdeferrable;
+			bool		ccdeferred = constr->check[ccnum].ccdeferred;
 			Node	   *ccbin_node;
 			bool		found_whole_row;
 			Constraint *n;
@@ -1446,6 +1450,8 @@ expandTableLikeClause(RangeVar *heapRel, TableLikeClause *table_like_clause)
 			n->conname = pstrdup(ccname);
 			n->location = -1;
 			n->is_no_inherit = ccnoinherit;
+			n->deferrable = ccdeferrable;
+			n->initdeferred = ccdeferred;
 			n->raw_expr = NULL;
 			n->cooked_expr = nodeToString(ccbin_node);
 
@@ -3780,7 +3786,8 @@ transformConstraintAttrs(CreateStmtContext *cxt, List *constraintList)
 	 ((node)->contype == CONSTR_PRIMARY ||	\
 	  (node)->contype == CONSTR_UNIQUE ||	\
 	  (node)->contype == CONSTR_EXCLUSION || \
-	  (node)->contype == CONSTR_FOREIGN))
+	  (node)->contype == CONSTR_FOREIGN || \
+	  (node)->contype == CONSTR_CHECK))
 
 	foreach(clist, constraintList)
 	{

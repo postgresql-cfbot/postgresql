@@ -937,6 +937,9 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 			cooked->is_local = true;	/* not used for defaults */
 			cooked->inhcount = 0;	/* ditto */
 			cooked->is_no_inherit = false;
+			cooked->is_deferrable = false;	/* By default constraint is not
+											 * deferrable */
+			cooked->is_deferred = false;	/* ditto */
 			cookedDefaults = lappend(cookedDefaults, cooked);
 			attr->atthasdef = true;
 		}
@@ -2929,6 +2932,8 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 					cooked->is_local = false;
 					cooked->inhcount = 1;
 					cooked->is_no_inherit = false;
+					cooked->is_deferrable = check[i].ccdeferrable;
+					cooked->is_deferred = check[i].ccdeferred;
 					constraints = lappend(constraints, cooked);
 				}
 			}
@@ -19541,6 +19546,9 @@ DetachAddConstraintIfNeeded(List **wqueue, Relation partRel)
 		n->cooked_expr = nodeToString(make_ands_explicit(constraintExpr));
 		n->initially_valid = true;
 		n->skip_validation = true;
+		n->deferrable = false;  /* By default this new constraint must be
+								 * non-deferrable */
+		n->initdeferred = false;    /* Ditto */
 		/* It's a re-add, since it nominally already exists */
 		ATAddCheckNNConstraint(wqueue, tab, partRel, n,
 							   true, false, true, ShareUpdateExclusiveLock);

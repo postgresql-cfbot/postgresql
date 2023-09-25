@@ -4162,6 +4162,69 @@ ORDER BY c.ordinal_position;
   </table>
  </sect1>
 
+ <sect1 id="infoschema-periods">
+  <title><literal>periods</literal></title>
+
+  <para>
+   The view <literal>parameters</literal> contains information about the
+   periods of all tables in the current database.  The start and end column
+   names are only shown if the current user has access to them (by way of being
+   the owner or having some privilege).
+  </para>
+
+  <table>
+   <title><literal>periods</literal> Columns</title>
+
+   <tgroup cols="3">
+    <thead>
+     <row>
+      <entry>Name</entry>
+      <entry>Data Type</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry><literal>table_catalog</literal></entry>
+      <entry><type>sql_identifier</type></entry>
+      <entry>Name of the database containing the period (always the current database)</entry>
+     </row>
+
+     <row>
+      <entry><literal>table_schema</literal></entry>
+      <entry><type>sql_identifier</type></entry>
+      <entry>Name of the schema containing the period</entry>
+     </row>
+
+     <row>
+      <entry><literal>table_name</literal></entry>
+      <entry><type>sql_identifier</type></entry>
+      <entry>Name of the table containing the period</entry>
+     </row>
+
+     <row>
+      <entry><literal>period_name</literal></entry>
+      <entry><type>sql_identifier</type></entry>
+      <entry>Name of the period</entry>
+     </row>
+
+     <row>
+      <entry><literal>start_column_name</literal></entry>
+      <entry><type>sql_identifier</type></entry>
+      <entry>Name of the start column for the period</entry>
+     </row>
+
+     <row>
+      <entry><literal>end_column_name</literal></entry>
+      <entry><type>sql_identifier</type></entry>
+      <entry>Name of the end column for the period</entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+ </sect1>
+
  <sect1 id="infoschema-referential-constraints">
   <title><literal>referential_constraints</literal></title>
 

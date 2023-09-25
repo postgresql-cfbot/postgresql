@@ -39,6 +39,7 @@ OBJS = \
 	pg_namespace.o \
 	pg_operator.o \
 	pg_parameter_acl.o \
+	pg_period.o \
 	pg_proc.o \
 	pg_publication.o \
 	pg_range.o \
@@ -111,6 +112,7 @@ CATALOG_HEADERS := \
 	pg_collation.h \
 	pg_parameter_acl.h \
 	pg_partitioned_table.h \
+	pg_period.h \
 	pg_range.h \
 	pg_transform.h \
 	pg_sequence.h \

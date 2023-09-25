@@ -2041,4 +2041,29 @@ typedef struct OnConflictExpr
 	List	   *exclRelTlist;	/* tlist of the EXCLUDED pseudo relation */
 } OnConflictExpr;
 
+/*----------
+ * ForPortionOfExpr - represents a FOR PORTION OF ... expression
+ *
+ * We set up an expression to make a range from the FROM/TO bounds,
+ * so that we can use range operators with it.
+ *
+ * Then we set up an overlaps expression between that and the range column,
+ * so that we can find the rows we need to update/delete.
+ *
+ * In the executor we'll also build an intersect expression between the
+ * targeted range and the range column, so that we can update the start/end
+ * bounds of the UPDATE'd record.
+ *----------
+ */
+typedef struct ForPortionOfExpr
+{
+	NodeTag		type;
+	Var		   *rangeVar;			/* Range column */
+	char	   *range_name;			/* Range name */
+	Node	   *targetRange;		/* FOR PORTION OF bounds as a range */
+	Oid			rangeType;			/* type of targetRange */
+	Node	   *overlapsExpr;		/* range && targetRange */
+	List	   *rangeSet;			/* List of TargetEntrys to set the time column(s) */
+} ForPortionOfExpr;
+
 #endif							/* PRIMNODES_H */

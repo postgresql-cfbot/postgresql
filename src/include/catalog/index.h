@@ -91,6 +91,7 @@ extern Oid	index_create(Relation heapRelation,
 #define	INDEX_CONSTR_CREATE_INIT_DEFERRED	(1 << 2)
 #define	INDEX_CONSTR_CREATE_UPDATE_INDEX	(1 << 3)
 #define	INDEX_CONSTR_CREATE_REMOVE_OLD_DEPS	(1 << 4)
+#define	INDEX_CONSTR_CREATE_TEMPORAL		(1 << 5)
 
 extern Oid	index_concurrently_create_copy(Relation heapRelation,
 										   Oid oldIndexId,

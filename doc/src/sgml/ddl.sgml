@@ -1263,6 +1263,64 @@ CREATE TABLE circles (
   </sect2>
  </sect1>
 
+ <sect1 id="ddl-periods">
+  <title>Periods</title>
+
+  <para>
+   Periods are definitions on a table that associate a period name with a start
+   column and an end column.  Both columns must be of exactly the same type
+   (including collation), have a btree operator class, and the start column
+   value must be strictly less than the end column value.
+  </para>
+
+  <para>
+   There are two types of periods: application and system.  System periods are
+   distinguished by their name which must be <literal>SYSTEM_TIME</literal>.  Any
+   other name is an application period.
+  </para>
+
+  <sect2 id="ddl-periods-application-periods">
+  <title>Application Periods</title>
+
+   <indexterm>
+    <primary>period</primary>
+    <secondary>application</secondary>
+   </indexterm>
+
+   <para>
+    Application periods are defined on a table using the following syntax:
+   </para>
+
+<programlisting>
+CREATE TABLE billing_addresses (
+  customer_id integer,
+  address_id integer,
+  valid_from date,
+  valid_to date,
+  <emphasis>PERIOD FOR validity (valid_from, valid_to)</emphasis>
+);
+</programlisting>
+
+   <para>
+    Application periods can be used to define temporal primary and foreign keys.
+    Any table with a temporal primary key is a temporal table and supports temporal update and delete commands.
+   </para>
+  </sect2>
+
+  <sect2 id="ddl-periods-system-periods">
+   <title>System Periods</title>
+
+   <indexterm>
+    <primary>period</primary>
+    <secondary>system</secondary>
+   </indexterm>
+
+   <para>
+    Periods for <literal>SYSTEM_TIME</literal> are currently not implemented.
+   </para>
+  </sect2>
+ </sect1>
+
  <sect1 id="ddl-system-columns">
   <title>System Columns</title>
 

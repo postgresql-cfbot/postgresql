@@ -255,8 +255,8 @@ index_check_primary_key(Relation heapRel,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("primary keys cannot be expressions")));
 
-		/* System attributes are never null, so no need to check */
-		if (attnum < 0)
+		/* System attributes are never null, so no need to check. */
+		if (attnum <= 0)
 			continue;
 
 		atttuple = SearchSysCache2(ATTNUM,
@@ -1897,6 +1897,7 @@ index_concurrently_set_dead(Oid heapId, Oid indexId)
  *		INDEX_CONSTR_CREATE_UPDATE_INDEX: update the pg_index row
  *		INDEX_CONSTR_CREATE_REMOVE_OLD_DEPS: remove existing dependencies
  *			of index on table's columns
+ *		INDEX_CONSTR_CREATE_TEMPORAL: constraint is for a temporal primary key
  * allow_system_table_mods: allow table to be a system catalog
  * is_internal: index is constructed due to internal process
  */
@@ -1920,11 +1921,13 @@ index_constraint_create(Relation heapRelation,
 	bool		mark_as_primary;
 	bool		islocal;
 	bool		noinherit;
+	bool		is_temporal;
 	int			inhcount;
 
 	deferrable = (constr_flags & INDEX_CONSTR_CREATE_DEFERRABLE) != 0;
 	initdeferred = (constr_flags & INDEX_CONSTR_CREATE_INIT_DEFERRED) != 0;
 	mark_as_primary = (constr_flags & INDEX_CONSTR_CREATE_MARK_AS_PRIMARY) != 0;
+	is_temporal = (constr_flags & INDEX_CONSTR_CREATE_TEMPORAL) != 0;
 
 	/* constraint creation support doesn't work while bootstrapping */
 	Assert(!IsBootstrapProcessingMode());
@@ -2001,6 +2004,7 @@ index_constraint_create(Relation heapRelation,
 								   islocal,
 								   inhcount,
 								   noinherit,
+								   is_temporal,	/* contemporal */
 								   is_internal);
 
 	/*

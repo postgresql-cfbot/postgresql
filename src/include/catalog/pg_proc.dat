@@ -10416,6 +10416,12 @@
 { oid => '3114', descr => 'fetch the Nth row value',
   proname => 'nth_value', prokind => 'w', prorettype => 'anyelement',
   proargtypes => 'anyelement int4', prosrc => 'window_nth_value' },
+{ oid => '6122', descr => 'previous value',
+  proname => 'prev', provolatile => 's', prorettype => 'anyelement',
+  proargtypes => 'anyelement', prosrc => 'window_prev' },
+{ oid => '6123', descr => 'next value',
+  proname => 'next', provolatile => 's', prorettype => 'anyelement',
+  proargtypes => 'anyelement', prosrc => 'window_next' },
 
 # functions for range types
 { oid => '3832', descr => 'I/O',

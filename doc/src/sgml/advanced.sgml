@@ -538,6 +538,58 @@ WHERE pos &lt; 3;
    </para>
 
    <para>
+    Row pattern common syntax can be used with row pattern common syntax to
+    perform row pattern recognition in a query. Row pattern common syntax
+    includes two sub clauses. <literal>DEFINE</literal> defines definition
+    variables along with an expression. The expression must be a logical
+    expression, which means it must
+    return <literal>TRUE</literal>, <literal>FALSE</literal>
+    or <literal>NULL</literal>. Moreover if the expression comprises a column
+    reference, it must be the argument of <function>rpr</function>. An example
+    of <literal>DEFINE</literal> is as follows.
+
+<programlisting>
+DEFINE
+ LOWPRICE AS price &lt;= 100,
+ UP AS price &gt; PREV(price),
+ DOWN AS price &lt; PREV(price)
+</programlisting>
+
+    Note that <function>PREV</function> returns price column in the previous
+    row if it's called in a context of row pattern recognition. So in the
+    second line means the definition variable "UP" is <literal>TRUE</literal>
+    when price column in the current row is greater than the price column in
+    the previous row. Likewise, "DOWN" is <literal>TRUE</literal> when when
+    price column in the current row is lower than the price column in the
+    previous row.
+   </para>
+   <para>
+    Once <literal>DEFINE</literal> exists, <literal>PATTERN</literal> can be
+    used. <literal>PATTERN</literal> defines a sequence of rows that satisfies
+    certain conditions.  For example following <literal>PATTERN</literal>
+    defines that a row starts with the condition "LOWPRICE", then one or more
+    rows satisfy "UP" and finally one or more rows satisfy "DOWN". If a
+    sequence of rows found, rpr returns the column at the starting row.
+    Example of a <literal>SELECT</literal> using the <literal>DEFINE</literal>
+    and <literal>PATTERN</literal> clause is as follows.
+
+<programlisting>
+SELECT company, tdate, price, max(price) OVER w FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ AFTER MATCH SKIP PAST LAST ROW
+ INITIAL
+ PATTERN (LOWPRICE UP+ DOWN+)
+ DEFINE
+  LOWPRICE AS price &lt;= 100,
+  UP AS price &gt; PREV(price),
+  DOWN AS price &lt; PREV(price)
+);
+</programlisting>
+   </para>
+
+   <para>
     When a query involves multiple window functions, it is possible to write
     out each one with a separate <literal>OVER</literal> clause, but this is
     duplicative and error-prone if the same windowing behavior is wanted

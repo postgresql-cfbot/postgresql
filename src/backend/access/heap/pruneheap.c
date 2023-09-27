@@ -90,10 +90,11 @@ static void page_verify_redirects(Page page);
  * Note: this is called quite often.  It's important that it fall out quickly
  * if there's not any use in pruning.
  *
- * Caller must have pin on the buffer, and must *not* have a lock on it.
+ * Caller must have pin on the buffer, and must either have an exclusive lock
+ * (and pass already_locked = true) or not have a lock on it.
  */
 void
-heap_page_prune_opt(Relation relation, Buffer buffer)
+heap_page_prune_opt(Relation relation, Buffer buffer, bool already_locked)
 {
 	Page		page = BufferGetPage(buffer);
 	TransactionId prune_xid;
@@ -144,8 +145,9 @@ heap_page_prune_opt(Relation relation, Buffer buffer)
 
 	if (PageIsFull(page) || PageGetHeapFreeSpace(page) < minfree)
 	{
-		/* OK, try to get exclusive buffer lock */
-		if (!ConditionalLockBufferForCleanup(buffer))
+		/* OK, try to get exclusive buffer lock if necessary */
+		if ((!already_locked && !ConditionalLockBufferForCleanup(buffer)) ||
+				(already_locked && !IsBufferCleanupOK(buffer)))
 			return;
 
 		/*
@@ -180,8 +182,9 @@ heap_page_prune_opt(Relation relation, Buffer buffer)
 											   ndeleted - nnewlpdead);
 		}
 
-		/* And release buffer lock */
-		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+		/* And release buffer lock if we acquired it */
+		if (!already_locked)
+			LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 
 		/*
 		 * We avoid reuse of any free space created on the page by unrelated

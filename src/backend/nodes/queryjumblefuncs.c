@@ -52,6 +52,7 @@ static void _jumbleNode(JumbleState *jstate, Node *node);
 static void _jumbleA_Const(JumbleState *jstate, Node *node);
 static void _jumbleList(JumbleState *jstate, Node *node);
 static void _jumbleRangeTblEntry(JumbleState *jstate, Node *node);
+static void _jumbleVariableSetStmt(JumbleState *jstate, Node *node);
 
 /*
  * Given a possibly multi-statement source string, confine our attention to the
@@ -393,5 +394,33 @@ _jumbleRangeTblEntry(JumbleState *jstate, Node *node)
 		default:
 			elog(ERROR, "unrecognized RTE kind: %d", (int) expr->rtekind);
 			break;
+	}
+}
+
+static void
+_jumbleVariableSetStmt(JumbleState *jstate, Node *node)
+{
+	VariableSetStmt *expr = (VariableSetStmt *) node;
+	ListCell  *l;
+
+	/* We don't need to normalize SET TRANSACTION */
+	if (expr->kind == VAR_SET_MULTI)
+		JUMBLE_NODE(args);
+	else
+	{
+		int num_args = list_length(expr->args);
+
+		JUMBLE_FIELD(kind);
+		JUMBLE_STRING(name);
+		JUMBLE_FIELD(is_local);
+		JUMBLE_FIELD_SINGLE(num_args);
+
+		foreach	(l, expr->args)
+		{
+			A_Const *ac = (A_Const *) lfirst(l);
+
+			if(ac->type != T_String)
+				RecordConstLocation(jstate, ac->location);
+		}
 	}
 }

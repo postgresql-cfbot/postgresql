@@ -49,22 +49,22 @@ BEGIN
 END; $$;
 SELECT toplevel, calls, query FROM pg_stat_statements
   ORDER BY query COLLATE "C", toplevel;
- toplevel | calls |                query                 
-----------+-------+--------------------------------------
+ toplevel | calls |               query               
+----------+-------+-----------------------------------
  f        |     1 | DELETE FROM stats_track_tab
  t        |     1 | DELETE FROM stats_track_tab
- t        |     1 | DO $$                               +
-          |       | BEGIN                               +
-          |       |   DELETE FROM stats_track_tab;      +
+ t        |     1 | DO $$                            +
+          |       | BEGIN                            +
+          |       |   DELETE FROM stats_track_tab;   +
           |       | END; $$
- t        |     1 | DO LANGUAGE plpgsql $$              +
-          |       | BEGIN                               +
-          |       |   -- this is a SELECT               +
-          |       |   PERFORM 'hello world'::TEXT;      +
+ t        |     1 | DO LANGUAGE plpgsql $$           +
+          |       | BEGIN                            +
+          |       |   -- this is a SELECT            +
+          |       |   PERFORM 'hello world'::TEXT;   +
           |       | END; $$
  f        |     1 | SELECT $1::TEXT
  t        |     1 | SELECT pg_stat_statements_reset()
- t        |     1 | SET pg_stat_statements.track = 'all'
+ t        |     1 | SET pg_stat_statements.track = $1
 (7 rows)
 
 -- PL/pgSQL function - top-level tracking.

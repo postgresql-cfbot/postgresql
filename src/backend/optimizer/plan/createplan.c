@@ -24,6 +24,7 @@
 #include "miscadmin.h"
 #include "nodes/extensible.h"
 #include "nodes/makefuncs.h"
+#include "nodes/multibitmapset.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
@@ -177,7 +178,8 @@ static void copy_generic_path_info(Plan *dest, Path *src);
 static void copy_plan_costsize(Plan *dest, Plan *src);
 static void label_sort_with_costsize(PlannerInfo *root, Sort *plan,
 									 double limit_tuples);
-static SeqScan *make_seqscan(List *qptlist, List *qpqual, Index scanrelid);
+static SeqScan *make_seqscan(List *qptlist, List *qpqual, List *scankeys,
+							 Index scanrelid);
 static SampleScan *make_samplescan(List *qptlist, List *qpqual, Index scanrelid,
 								   TableSampleClause *tsc);
 static IndexScan *make_indexscan(List *qptlist, List *qpqual, Index scanrelid,
@@ -2905,6 +2907,160 @@ create_limit_plan(PlannerInfo *root, LimitPath *best_path, int flags)
 
 
 /*
+ * reconstruct_null_tests
+ *   Creates a list of NullTests, one for each Var in varset, which is a
+ *   multibitmapset of varno/varattno. Whole-row Vars are omitted.
+ */
+static List *
+reconstruct_null_tests(PlannerInfo *root, List *tests, NullTestType type, List *varset)
+{
+	ListCell   *lc;
+
+	foreach(lc, varset)
+	{
+		Bitmapset  *varattnos = lfirst_node(Bitmapset, lc);
+		int			i = -1;
+
+		while ((i = bms_next_member(varattnos, i)) >= 0)
+		{
+			int			varno = foreach_current_index(lc);
+			AttrNumber	varattno = i + FirstLowInvalidHeapAttributeNumber;
+			RangeTblEntry *rte;
+			Oid			atttypid;
+			int32		atttypmod;
+			Oid			attcollation;
+			Var		   *var;
+			NullTest   *n;
+
+			if (varattno == 0)
+				continue; /* skip whole-row vars */
+
+			rte = planner_rt_fetch(varno, root);
+			get_atttypetypmodcoll(rte->relid, varattno,
+								  &atttypid, &atttypmod, &attcollation);
+
+			var = makeVar(varno,
+						  varattno,
+						  atttypid,
+						  atttypmod,
+						  attcollation,
+						  0);
+
+			n = makeNode(NullTest);
+			n->arg = (Expr *) var;
+			n->nulltesttype = type;
+			n->argisrow = false;
+			n->location = -1;
+
+			tests = lappend(tests, n);
+		}
+	}
+
+	return tests;
+}
+
+
+static List *
+extract_key_clauses(PlannerInfo *root, List *scan_clauses, List **key_clauses)
+{
+	const Cost	scankey_cost = 0.05 * cpu_operator_cost; /* TODO tunable? */
+	ListCell   *lc;
+	QualCost	qcost;
+	Cost		skippable_cost;
+	List	   *null_vars;
+	List	   *nonnull_vars = NIL;
+
+	cost_qual_eval(&qcost, scan_clauses, root);
+	skippable_cost = qcost.per_tuple;
+
+	/*
+	 * Because find_forced_null_vars() only finds literal IS NULL tests, we
+	 * assume they're always worth promoting to a key clause.
+	 */
+	null_vars = mbms_add_members(NIL,
+								 find_forced_null_vars((Node *) scan_clauses));
+
+	/*
+	 * The non-NULL case is trickier. In addition to IS NOT NULL tests, which we
+	 * always promote, other clauses like strict function calls are only worth
+	 * generating a key clause for if the expected cost savings outweigh the
+	 * additional scankey_cost.
+	 */
+	foreach(lc, scan_clauses)
+	{
+		Node	   *clause = (Node *) lfirst(lc);
+		List	   *tests;
+		ListCell   *lc2;
+
+		tests = reconstruct_null_tests(root, NIL, IS_NOT_NULL, find_nonnullable_vars(clause));
+		foreach(lc2, tests)
+		{
+			NullTest   *test = lfirst_node(NullTest, lc2);
+			Var		   *var = (Var *) test->arg; /* see reconstruct_null_tests() */
+
+			if (equal(clause, test))
+			{
+				/*
+				 * The clause is an identical IS NOT NULL test. We know we'll be
+				 * able to save the entire cost of the redundant clause even if
+				 * the key clause doesn't end up filtering anything, so promote
+				 * it.
+				 */
+			}
+			else
+			{
+				/*
+				 * The more selective the null check to be pushed down, the more
+				 * we'll save. Only create a key clause when that savings
+				 * outweighs the cost of the new check.
+				 *
+				 * XXX nulltestsel() doesn't use the JoinType or the
+				 * SpecialJoinInfo, but relying on that detail at this level
+				 * seems wrong
+				 */
+				Selectivity	sel = clause_selectivity(root, (Node *) test, 0, -1, NULL);
+				Cost		savings = skippable_cost * (1.0 - sel);
+
+				if (savings < scankey_cost)
+					continue; /* not worth it */
+			}
+
+			nonnull_vars = mbms_add_member(nonnull_vars,
+										   var->varno,
+										   var->varattno - FirstLowInvalidHeapAttributeNumber);
+		}
+
+		/*
+		 * TODO: if we know the clause is being removed, it might be more honest
+		 * to subtract it from the skippable_cost, but that seems like a lot of
+		 * complexity for unclear benefit.
+		 */
+	}
+
+	/*
+	 * Reconstitute our key clauses from our deduplicated multibitmapsets.
+	 *
+	 * TODO: would it be worth it to sort by descending selectivity?
+	 */
+	*key_clauses = reconstruct_null_tests(root, *key_clauses, IS_NULL, null_vars);
+	*key_clauses = reconstruct_null_tests(root, *key_clauses, IS_NOT_NULL, nonnull_vars);
+
+	/*
+	 * Now remove redundant scan clauses.
+	 */
+	foreach(lc, scan_clauses)
+	{
+		Node	   *clause = (Node *) lfirst(lc);
+
+		if (predicate_implied_by(list_make1(clause), *key_clauses, false))
+			scan_clauses = foreach_delete_current(scan_clauses, lc);
+	}
+
+	return scan_clauses;
+}
+
+
+/*
  * create_seqscan_plan
  *	 Returns a seqscan plan for the base relation scanned by 'best_path'
  *	 with restriction clauses 'scan_clauses' and targetlist 'tlist'.
@@ -2915,6 +3071,7 @@ create_seqscan_plan(PlannerInfo *root, Path *best_path,
 {
 	SeqScan    *scan_plan;
 	Index		scan_relid = best_path->parent->relid;
+	List	   *keyexprs = NIL;
 
 	/* it should be a base rel... */
 	Assert(scan_relid > 0);
@@ -2933,8 +3090,12 @@ create_seqscan_plan(PlannerInfo *root, Path *best_path,
 			replace_nestloop_params(root, (Node *) scan_clauses);
 	}
 
+	if (enable_seqscan_conds)
+		scan_clauses = extract_key_clauses(root, scan_clauses, &keyexprs);
+
 	scan_plan = make_seqscan(tlist,
 							 scan_clauses,
+							 keyexprs,
 							 scan_relid);
 
 	copy_generic_path_info(&scan_plan->scan.plan, best_path);
@@ -5479,6 +5640,7 @@ bitmap_subplan_mark_shared(Plan *plan)
 static SeqScan *
 make_seqscan(List *qptlist,
 			 List *qpqual,
+			 List *keyexprs,
 			 Index scanrelid)
 {
 	SeqScan    *node = makeNode(SeqScan);
@@ -5489,6 +5651,7 @@ make_seqscan(List *qptlist,
 	plan->lefttree = NULL;
 	plan->righttree = NULL;
 	node->scan.scanrelid = scanrelid;
+	node->keyexprs = keyexprs;
 
 	return node;
 }

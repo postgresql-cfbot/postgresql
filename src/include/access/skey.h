@@ -46,9 +46,10 @@
  * and the sk_strategy, sk_subtype, sk_collation, and sk_func fields are
  * not used (unless set by the index AM).
  *
- * SK_SEARCHARRAY, SK_SEARCHNULL and SK_SEARCHNOTNULL are supported only
- * for index scans, not heap scans; and not all index AMs support them,
- * only those that set amsearcharray or amsearchnulls respectively.
+ * SK_SEARCHARRAY is supported only for index scans, not heap scans; and not all
+ * index AMs support it, only those that set amsearcharray. SK_SEARCHNULL and
+ * SK_SEARCHNOTNULL are supported for heap and index scans but similarly not all
+ * index AMs support them, only those that set amsearchnulls.
  *
  * A ScanKey can also represent an ordering operator invocation, that is
  * an ordering requirement "ORDER BY indexedcol op constant".  This looks

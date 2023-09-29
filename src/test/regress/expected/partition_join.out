@@ -1982,11 +1982,11 @@ WHERE EXISTS (
    ->  Nested Loop Semi Join
          ->  Append
                ->  Seq Scan on prt1_l_p1 prt1_l_1
-                     Filter: (c IS NULL)
+                     Scan Cond: (c IS NULL)
                ->  Seq Scan on prt1_l_p3_p1 prt1_l_2
-                     Filter: (c IS NULL)
+                     Scan Cond: (c IS NULL)
                ->  Seq Scan on prt1_l_p3_p2 prt1_l_3
-                     Filter: (c IS NULL)
+                     Scan Cond: (c IS NULL)
          ->  Materialize
                ->  Nested Loop
                      ->  Seq Scan on int4_tbl
@@ -4520,8 +4520,8 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a =
 
 EXPLAIN (COSTS OFF)
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.c IS NULL AND t1.b < 10 ORDER BY t1.a;
-                       QUERY PLAN                       
---------------------------------------------------------
+                      QUERY PLAN                      
+------------------------------------------------------
  Sort
    Sort Key: t1.a
    ->  Hash Right Join
@@ -4529,8 +4529,9 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = 
          ->  Seq Scan on plt2_adv_p4 t2
          ->  Hash
                ->  Seq Scan on plt1_adv_p4 t1
-                     Filter: ((c IS NULL) AND (b < 10))
-(8 rows)
+                     Scan Cond: (c IS NULL)
+                     Filter: (b < 10)
+(9 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.c IS NULL AND t1.b < 10 ORDER BY t1.a;
  a  | c | a | c 
@@ -4573,8 +4574,8 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a =
 
 EXPLAIN (COSTS OFF)
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.c IS NULL AND t1.b < 10 ORDER BY t1.a;
-                       QUERY PLAN                       
---------------------------------------------------------
+                      QUERY PLAN                      
+------------------------------------------------------
  Sort
    Sort Key: t1.a
    ->  Hash Right Join
@@ -4582,8 +4583,9 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = 
          ->  Seq Scan on plt2_adv_p4 t2
          ->  Hash
                ->  Seq Scan on plt1_adv_p4 t1
-                     Filter: ((c IS NULL) AND (b < 10))
-(8 rows)
+                     Scan Cond: (c IS NULL)
+                     Filter: (b < 10)
+(9 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.c IS NULL AND t1.b < 10 ORDER BY t1.a;
  a  | c | a | c 

@@ -394,6 +394,7 @@ typedef struct Scan
 typedef struct SeqScan
 {
 	Scan		scan;
+	List	   *keyexprs;		/* expressions to push down as ScanKeys */
 } SeqScan;
 
 /* ----------------

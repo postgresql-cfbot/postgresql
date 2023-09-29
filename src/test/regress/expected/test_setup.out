@@ -213,6 +213,19 @@ CREATE FUNCTION get_columns_length(oid[])
     RETURNS int
     AS :'regresslib'
     LANGUAGE C STRICT STABLE PARALLEL SAFE;
+--
+-- These table and function are used for testing the support of SK_SEARCHNULL
+-- and SK_SEARCHNOTNULL flags for heap-only scans.
+--
+CREATE TABLE phonebook(
+    id INT PRIMARY KEY NOT NULL,
+    name NAME NOT NULL,
+    phone INT /* nullable */
+);
+CREATE FUNCTION phonebook_find_first_phone(isnull bool)
+    RETURNS int
+    AS :'regresslib', 'phonebook_find_first_phone'
+    LANGUAGE C;
 -- Use hand-rolled hash functions and operator classes to get predictable
 -- result on different machines.  The hash function for int4 simply returns
 -- the sum of the values passed to it and the one for text returns the length

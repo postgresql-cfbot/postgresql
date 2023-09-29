@@ -1840,6 +1840,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_NamedTuplestoreScan:
 		case T_WorkTableScan:
 		case T_SubqueryScan:
+			if (IsA(plan, SeqScan) && ((SeqScan *) plan)->keyexprs)
+				show_scan_qual(((SeqScan *) plan)->keyexprs, "Scan Cond",
+							   planstate, ancestors, es);
 			show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,

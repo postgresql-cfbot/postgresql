@@ -1,0 +1,1 @@
+SELECT COUNT(*) FROM :table WHERE abs(i) % 2 = 0;

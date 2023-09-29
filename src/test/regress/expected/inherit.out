@@ -2504,7 +2504,7 @@ explain (costs off) select * from list_parted where a is null;
               QUERY PLAN              
 --------------------------------------
  Seq Scan on part_null_xy list_parted
-   Filter: (a IS NULL)
+   Scan Cond: (a IS NULL)
 (2 rows)
 
 explain (costs off) select * from list_parted where a is not null;
@@ -2512,11 +2512,11 @@ explain (costs off) select * from list_parted where a is not null;
 ----------------------------------------------
  Append
    ->  Seq Scan on part_ab_cd list_parted_1
-         Filter: (a IS NOT NULL)
+         Scan Cond: (a IS NOT NULL)
    ->  Seq Scan on part_ef_gh list_parted_2
-         Filter: (a IS NOT NULL)
+         Scan Cond: (a IS NOT NULL)
    ->  Seq Scan on part_null_xy list_parted_3
-         Filter: (a IS NOT NULL)
+         Scan Cond: (a IS NOT NULL)
 (7 rows)
 
 explain (costs off) select * from list_parted where a in ('ab', 'cd', 'ef');
@@ -2624,7 +2624,7 @@ explain (costs off) select * from range_list_parted where b is null;
                    QUERY PLAN                   
 ------------------------------------------------
  Seq Scan on part_40_inf_null range_list_parted
-   Filter: (b IS NULL)
+   Scan Cond: (b IS NULL)
 (2 rows)
 
 explain (costs off) select * from range_list_parted where a is not null and a < 67;
@@ -2632,24 +2632,33 @@ explain (costs off) select * from range_list_parted where a is not null and a < 
 --------------------------------------------------------
  Append
    ->  Seq Scan on part_1_10_ab range_list_parted_1
-         Filter: ((a IS NOT NULL) AND (a < 67))
+         Scan Cond: (a IS NOT NULL)
+         Filter: (a < 67)
    ->  Seq Scan on part_1_10_cd range_list_parted_2
-         Filter: ((a IS NOT NULL) AND (a < 67))
+         Scan Cond: (a IS NOT NULL)
+         Filter: (a < 67)
    ->  Seq Scan on part_10_20_ab range_list_parted_3
-         Filter: ((a IS NOT NULL) AND (a < 67))
+         Scan Cond: (a IS NOT NULL)
+         Filter: (a < 67)
    ->  Seq Scan on part_10_20_cd range_list_parted_4
-         Filter: ((a IS NOT NULL) AND (a < 67))
+         Scan Cond: (a IS NOT NULL)
+         Filter: (a < 67)
    ->  Seq Scan on part_21_30_ab range_list_parted_5
-         Filter: ((a IS NOT NULL) AND (a < 67))
+         Scan Cond: (a IS NOT NULL)
+         Filter: (a < 67)
    ->  Seq Scan on part_21_30_cd range_list_parted_6
-         Filter: ((a IS NOT NULL) AND (a < 67))
+         Scan Cond: (a IS NOT NULL)
+         Filter: (a < 67)
    ->  Seq Scan on part_40_inf_ab range_list_parted_7
-         Filter: ((a IS NOT NULL) AND (a < 67))
+         Scan Cond: (a IS NOT NULL)
+         Filter: (a < 67)
    ->  Seq Scan on part_40_inf_cd range_list_parted_8
-         Filter: ((a IS NOT NULL) AND (a < 67))
+         Scan Cond: (a IS NOT NULL)
+         Filter: (a < 67)
    ->  Seq Scan on part_40_inf_null range_list_parted_9
-         Filter: ((a IS NOT NULL) AND (a < 67))
-(19 rows)
+         Scan Cond: (a IS NOT NULL)
+         Filter: (a < 67)
+(28 rows)
 
 explain (costs off) select * from range_list_parted where a >= 30;
                        QUERY PLAN                       

@@ -16,6 +16,7 @@
 
 #include "access/table.h"
 #include "access/xact.h"
+#include "catalog/catalog.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_inherits.h"
 #include "commands/lockcmds.h"
@@ -28,7 +29,8 @@
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
-static void LockTableRecurse(Oid reloid, LOCKMODE lockmode, bool nowait);
+static void LockTableRecurse(Oid reloid, LOCKMODE lockmode, bool nowait,
+							 List **locktags_p);
 static AclResult LockTableAclCheck(Oid reloid, LOCKMODE lockmode, Oid userid);
 static void RangeVarCallbackForLockTable(const RangeVar *rv, Oid relid,
 										 Oid oldrelid, void *arg);
@@ -42,6 +44,34 @@ void
 LockTableCommand(LockStmt *lockstmt)
 {
 	ListCell   *p;
+	LOCKMODE	lockmode;
+	LOCKMODE   	waitmode;
+	List	   *waitlocktags = NIL;
+	List	  **waitlocktags_p;
+
+	if (lockstmt->waitonly && lockstmt->nowait)
+		/*
+		 * this could be defined to check and error if there are conflicting
+		 * lockers, but it seems unclear if that would be useful, since
+		 * LOCK ... NOWAIT + immediate unlock would do nearly the same thing
+		 */
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				errmsg("NOWAIT is not supported with WAIT ONLY")));
+
+
+	if (lockstmt->waitonly)
+	{
+		lockmode = NoLock;
+		waitmode = lockstmt->mode;
+		waitlocktags_p = &waitlocktags;
+	}
+	else
+	{
+		lockmode = lockstmt->mode;
+		waitmode = NoLock;
+		waitlocktags_p = NULL;
+	}
 
 	/*
 	 * Iterate over the list and process the named relations one at a time
@@ -52,16 +82,37 @@ LockTableCommand(LockStmt *lockstmt)
 		bool		recurse = rv->inh;
 		Oid			reloid;
 
-		reloid = RangeVarGetRelidExtended(rv, lockstmt->mode,
+		reloid = RangeVarGetRelidExtended(rv, lockmode,
 										  lockstmt->nowait ? RVR_NOWAIT : 0,
 										  RangeVarCallbackForLockTable,
-										  (void *) &lockstmt->mode);
+										  (void *) &lockmode);
+		if (waitmode != NoLock)
+		{
+			Oid			dbid;
+			LOCKTAG	   *heaplocktag = palloc_object(LOCKTAG);
+
+			if (IsSharedRelation(reloid))
+				dbid = InvalidOid;
+			else
+				dbid = MyDatabaseId;
+			SET_LOCKTAG_RELATION(*heaplocktag, dbid, reloid);
+			waitlocktags = lappend(waitlocktags, heaplocktag);
+		}
 
 		if (get_rel_relkind(reloid) == RELKIND_VIEW)
-			LockViewRecurse(reloid, lockstmt->mode, lockstmt->nowait, NIL);
+		{
+			if (lockstmt->waitonly || lockmode == NoLock)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("WAIT ONLY is not supported with views")));
+			LockViewRecurse(reloid, lockmode, lockstmt->nowait, NIL);
+		}
 		else if (recurse)
-			LockTableRecurse(reloid, lockstmt->mode, lockstmt->nowait);
+			LockTableRecurse(reloid, lockmode, lockstmt->nowait,
+							 waitlocktags_p);
 	}
+	if (waitmode != NoLock)
+		WaitForLockersMultiple(waitlocktags, waitmode, false);
 }
 
 /*
@@ -115,7 +166,7 @@ RangeVarCallbackForLockTable(const RangeVar *rv, Oid relid, Oid oldrelid,
  * parent which is enough.
  */
 static void
-LockTableRecurse(Oid reloid, LOCKMODE lockmode, bool nowait)
+LockTableRecurse(Oid reloid, LOCKMODE lockmode, bool nowait, List **locktags_p)
 {
 	List	   *children;
 	ListCell   *lc;
@@ -125,11 +176,26 @@ LockTableRecurse(Oid reloid, LOCKMODE lockmode, bool nowait)
 	foreach(lc, children)
 	{
 		Oid			childreloid = lfirst_oid(lc);
+		Oid			dbid;
+		LOCKTAG	   *heaplocktag;
 
-		/* Parent already locked. */
+		/* Parent already handled. */
 		if (childreloid == reloid)
 			continue;
 
+		if (locktags_p != NULL)
+		{
+			heaplocktag = palloc_object(LOCKTAG);
+			if (IsSharedRelation(childreloid))
+				dbid = InvalidOid;
+			else
+				dbid = MyDatabaseId;
+			SET_LOCKTAG_RELATION(*heaplocktag, dbid, childreloid);
+			*locktags_p = lappend(*locktags_p, heaplocktag);
+		}
+
+		if (lockmode == NoLock)
+			continue;
 		if (!nowait)
 			LockRelationOid(childreloid, lockmode);
 		else if (!ConditionalLockRelationOid(childreloid, lockmode))
@@ -228,7 +294,8 @@ LockViewRecurse_walker(Node *node, LockViewRecurse_context *context)
 				LockViewRecurse(relid, context->lockmode, context->nowait,
 								context->ancestor_views);
 			else if (rte->inh)
-				LockTableRecurse(relid, context->lockmode, context->nowait);
+				LockTableRecurse(relid, context->lockmode, context->nowait,
+								 NULL);
 		}
 
 		return query_tree_walker(query,

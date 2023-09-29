@@ -354,7 +354,7 @@ ClassifyUtilityCommandAsReadOnly(Node *parsetree)
 				 * restrictions here must match those in
 				 * LockAcquireExtended().
 				 */
-				if (stmt->mode > RowExclusiveLock)
+				if (!stmt->waitonly && stmt->mode > RowExclusiveLock)
 					return COMMAND_OK_IN_READ_ONLY_TXN;
 				else
 					return COMMAND_IS_STRICTLY_READ_ONLY;
@@ -932,13 +932,23 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 			break;
 
 		case T_LockStmt:
+			{
+				LockStmt *stmt = (LockStmt *) parsetree;
 
-			/*
-			 * Since the lock would just get dropped immediately, LOCK TABLE
-			 * outside a transaction block is presumed to be user error.
-			 */
-			RequireTransactionBlock(isTopLevel, "LOCK TABLE");
-			LockTableCommand((LockStmt *) parsetree);
+				if (!stmt->waitonly)
+				{
+					/*
+					 * Since the lock would just get dropped immediately, and
+					 * simply waiting is better done with WAIT ONLY, LOCK TABLE
+					 * without WAIT ONLY outside a transaction block is presumed
+					 * to be user error.
+					 *
+					 * XXX: the error should clarify that WAIT ONLY is allowed?
+					 */
+					RequireTransactionBlock(isTopLevel, "LOCK TABLE");
+				}
+				LockTableCommand(stmt);
+			}
 			break;
 
 		case T_ConstraintsSetStmt:

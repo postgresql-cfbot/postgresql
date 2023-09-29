@@ -2576,6 +2576,39 @@ int PQprotocolVersion(const PGconn *conn);
      </listitem>
     </varlistentry>
 
+    <varlistentry id="libpq-PQprotocolVersionFull">
+     <term><function>PQprotocolVersionFull</function><indexterm><primary>PQprotocolVersionFull</primary></indexterm></term>
+
+     <listitem>
+      <para>
+       Returns complete frontend/backend protocol number.
+<synopsis>
+int PQprotocolVersionFull(const PGconn *conn);
+</synopsis>
+       The internal frontend/backend version protocol number is an value, that
+       composites major protocol number and minor protocol number. The returned
+       value is calculated as protocol version number major * 1000 +
+       protocol version number minor.
+      </para>
+     </listitem>
+    </varlistentry>
+
+
+    <varlistentry id="libpq-PQmakeprotocolVersionFull">
+     <term><function>PQmakeProtocolVersionFull</function><indexterm><primary>PQmakeProtocolVersionFull</primary></indexterm></term>
+
+     <listitem>
+      <para>
+       Calculates full protocol version number from entered major and minor numbers
+<synopsis>
+int PQmakeProtocolVersionFull(int pversion_major, int pversion_major);
+</synopsis>
+       returns an number that is comparable with an number returned by function
+       <xref linkend="libpq-PQprotocolVersionFull"/>.
+      </para>
+     </listitem>
+    </varlistentry>
+
     <varlistentry id="libpq-PQserverVersion">
      <term><function>PQserverVersion</function><indexterm><primary>PQserverVersion</primary></indexterm></term>
 

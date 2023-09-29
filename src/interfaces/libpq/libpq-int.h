@@ -322,7 +322,8 @@ typedef enum
 	PGQUERY_PREPARE,			/* Parse only (PQprepare) */
 	PGQUERY_DESCRIBE,			/* Describe Statement or Portal */
 	PGQUERY_SYNC,				/* Sync (at end of a pipeline) */
-	PGQUERY_CLOSE				/* Close Statement or Portal */
+	PGQUERY_CLOSE,				/* Close Statement or Portal */
+	PGQUERY_SETTING				/* setting GUC_REPORT flag */
 } PGQueryClass;
 
 /*
@@ -718,6 +719,7 @@ extern PGresult *pqFunctionCall3(PGconn *conn, Oid fnid,
 								 int *result_buf, int *actual_result_len,
 								 int result_is_int,
 								 const PQArgBlock *args, int nargs);
+extern int pqSendReportGUCMessage(PGconn *conn, const char *paramName, bool create_flag);
 
 /* === in fe-misc.c === */
 

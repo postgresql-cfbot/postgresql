@@ -165,6 +165,33 @@ get_prompt(promptStatus_t status, ConditionalStack cstack)
 					if (pset.db)
 						strlcpy(buf, session_username(), sizeof(buf));
 					break;
+					/* DB server user role */
+				case 'N':
+					if (pset.db)
+					{
+						const char *rolename = NULL;
+
+						/*
+						 * This feature requires GUC "role" to be marked
+						 * by GUC_REPORT flag. This is done by PQlinkParameterStatus
+						 * function. This function requires protocol 3.1 (ReportGUC
+						 * message). Fallback is empty string.
+						 */
+						if (PQprotocolVersionFull(pset.db) >= PQmakeProtocolVersionFull(3,1))
+						{
+							rolename  = PQparameterStatus(pset.db, "role");
+
+							/* fallback when role is not set yet */
+							if (rolename && strcmp(rolename, "none") == 0)
+								rolename = session_username();
+						}
+
+						if (rolename)
+							strlcpy(buf, rolename, sizeof(buf));
+						else
+							buf[0] = '\0';
+					}
+					break;
 					/* backend pid */
 				case 'p':
 					if (pset.db)

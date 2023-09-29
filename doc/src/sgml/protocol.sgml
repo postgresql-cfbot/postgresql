@@ -1030,6 +1030,13 @@ SELCT 1/0;<!-- this typo is intentional -->
      CloseComplete, or NoData messages.
     </para>
    </note>
+
+   <para>
+    The ReportGUC message allows to set/unset REPORT flag to any configuration
+    variable. The response is a CommandComplete message (status string is SET
+    or UNSET). An error causes ErrorResponse. When the REPORT flag is succesfully
+    assigned, then ParameterStatus message is sent before CommandComplete message.
+   </para>
   </sect2>
 
   <sect2 id="protocol-flow-pipelining">
@@ -5394,6 +5401,43 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
          a transaction block); '<literal>T</literal>' if in a transaction
          block; or '<literal>E</literal>' if in a failed transaction
          block (queries will be rejected until block is ended).
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="protocol-message-formats-ReportGUC">
+    <term>ReportGUC (F)</term>
+    <listitem>
+     <variablelist>
+      <varlistentry>
+       <term>Byte1('r')</term>
+       <listitem>
+        <para>
+         Identifies the message type.  ReportGUC is sent by
+         frontend when the changes of specified GUC option
+         should be (or should not be) reported to state parameter.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Byte1</term>
+       <listitem>
+        <para>
+         't' when reporting should be enables, 'f' if reporting should be
+         disabled.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>String</term>
+       <listitem>
+        <para>
+         The name of GUC option.
         </para>
        </listitem>
       </varlistentry>

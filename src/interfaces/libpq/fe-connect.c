@@ -2777,7 +2777,7 @@ keep_going:						/* We will come back to here until there is
 		 * must persist across individual connection attempts, but we must
 		 * reset them when we start to consider a new server.
 		 */
-		conn->pversion = PG_PROTOCOL(3, 0);
+		conn->pversion = PG_PROTOCOL(3, 1);
 		conn->send_appname = true;
 #ifdef USE_SSL
 		/* initialize these values based on SSL mode */
@@ -7232,6 +7232,23 @@ PQprotocolVersion(const PGconn *conn)
 	if (conn->status == CONNECTION_BAD)
 		return 0;
 	return PG_PROTOCOL_MAJOR(conn->pversion);
+}
+
+int
+PQmakeProtocolVersionFull(int pversion_major, int pversion_minor)
+{
+	return pversion_major * 1000 + pversion_minor;
+}
+
+int
+PQprotocolVersionFull(const PGconn *conn)
+{
+	if (!conn)
+		return 0;
+	if (conn->status == CONNECTION_BAD)
+		return 0;
+	return PQmakeProtocolVersionFull(PG_PROTOCOL_MAJOR(conn->pversion),
+									 PG_PROTOCOL_MINOR(conn->pversion));
 }
 
 int

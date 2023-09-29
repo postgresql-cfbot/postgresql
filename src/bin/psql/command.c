@@ -3898,6 +3898,7 @@ SyncVariables(void)
 {
 	char		vbuf[32];
 	const char *server_version;
+	PGresult   *result;
 
 	/* get stuff from connection */
 	pset.encoding = PQclientEncoding(pset.db);
@@ -3927,6 +3928,18 @@ SyncVariables(void)
 	/* send stuff to it, too */
 	PQsetErrorVerbosity(pset.db, pset.verbosity);
 	PQsetErrorContextVisibility(pset.db, pset.show_context);
+
+	/* link role GUC when it is needed for prompt */
+	if (pset.prompt_shows_role)
+		result = PQlinkParameterStatus(pset.db, "role");
+	else
+		result = PQunlinkParameterStatus(pset.db, "role");
+
+	if (PQresultStatus(result) != PGRES_COMMAND_OK)
+		pg_log_info("cannot set REPORT flag on configuration variable \"role\": %s",
+					PQerrorMessage(pset.db));
+
+	PQclear(result);
 }
 
 /*

@@ -32,6 +32,8 @@
 #include "access/nbtree.h"
 #include "access/relscan.h"
 #include "access/tableam.h"
+#include "access/visibilitymap.h"
+#include "catalog/index.h"
 #include "catalog/pg_am.h"
 #include "executor/execdebug.h"
 #include "executor/nodeIndexscan.h"
@@ -69,6 +71,10 @@ static void reorderqueue_push(IndexScanState *node, TupleTableSlot *slot,
 							  Datum *orderbyvals, bool *orderbynulls);
 static HeapTuple reorderqueue_pop(IndexScanState *node);
 
+static void StoreIndexTuple(TupleTableSlot *slot, IndexTuple itup,
+							TupleDesc itupdesc, IndexInfo *iinfo);
+static void StoreHeapTuple(TupleTableSlot *slot, HeapTuple tup,
+						   TupleDesc tupdesc, IndexInfo *iinfo);
 
 /* ----------------------------------------------------------------
  *		IndexNext
@@ -115,6 +121,13 @@ IndexNext(IndexScanState *node)
 
 		node->iss_ScanDesc = scandesc;
 
+		/* Set it up for index-only filters, if there are any. */
+		if (node->indexfilters != NULL)
+		{
+			node->iss_ScanDesc->xs_want_itup = true;
+			node->iss_VMBuffer = InvalidBuffer;
+		}
+
 		/*
 		 * If no run-time keys to calculate or they are ready, go ahead and
 		 * pass the scankeys to the index AM.
@@ -127,10 +140,149 @@ IndexNext(IndexScanState *node)
 
 	/*
 	 * ok, now that we have what we need, fetch the next tuple.
+	 *
+	 * XXX maybe we should invent something like index_getnext_tid/index_getnext_slot
+	 * that would allow doing this in a more readable / coherent way.
 	 */
-	while (index_getnext_slot(scandesc, direction, slot))
+	while (true)
 	{
+		bool	has_index_tuple = false;
+		bool	filter_checked;
+
 		CHECK_FOR_INTERRUPTS();
+
+		/*
+		 * XXX code from index_getnext_slot(), but we need to inject stuff between
+		 * the index_getnext_tid() and index_fetch_heap(), so we do it here
+		 */
+		for (;;)
+		{
+			filter_checked = false;
+
+			if (!scandesc->xs_heap_continue)
+			{
+				ItemPointer tid;
+
+				/* Time to fetch the next TID from the index */
+				tid = index_getnext_tid(scandesc, direction);
+
+				/* If we're out of index entries, we're done */
+				if (tid == NULL)
+					break;
+
+				Assert(ItemPointerEquals(tid, &scandesc->xs_heaptid));
+			}
+
+			/* Make sure we have a valid item pointer. */
+			Assert(ItemPointerIsValid(&scandesc->xs_heaptid));
+
+			/*
+			 * If there are index clauses, try to evaluate the filter on the index
+			 * tuple first, and only when it fails try the index tuple.
+			 *
+			 * https://www.postgresql.org/message-id/N1xaIrU29uk5YxLyW55MGk5fz9s6V2FNtj54JRaVlFbPixD5z8sJ07Ite5CvbWwik8ZvDG07oSTN-usENLVMq2UAcizVTEd5b-o16ZGDIIU%3D%40yamlcoder.me
+			 */
+			if (node->indexfilters != NULL)
+			{
+				ItemPointer tid = &scandesc->xs_heaptid;
+
+				/*
+				 * XXX see nodeIndexonlyscan.c, but inverse - we only do this when
+				 * we can check some filters on the index tuple.
+				 */
+				if (VM_ALL_VISIBLE(scandesc->heapRelation,
+								   ItemPointerGetBlockNumber(tid),
+								   &node->iss_VMBuffer))
+				{
+					/*
+					 * Only MVCC snapshots are supported here, so there should be no
+					 * need to keep following the HOT chain once a visible entry has
+					 * been found.  If we did want to allow that, we'd need to keep
+					 * more state to remember not to call index_getnext_tid next time.
+					 *
+					 * XXX Is there a place where we can decide whether to consider
+					 * this optimization, based on which type of snapshot we're going
+					 * to use? And disable it for non-MVCC ones? That'd mean this
+					 * error can't really happen here. Or how can we even get this
+					 * error now?
+					 */
+					if (scandesc->xs_heap_continue)
+						elog(ERROR, "non-MVCC snapshots are not supported with index filters");
+
+					/*
+					 * Fill the scan tuple slot with data from the index.  This might be
+					 * provided in either HeapTuple or IndexTuple format.  Conceivably an
+					 * index AM might fill both fields, in which case we prefer the heap
+					 * format, since it's probably a bit cheaper to fill a slot from.
+					 */
+					if (scandesc->xs_hitup)
+					{
+						StoreHeapTuple(node->iss_TableSlot, scandesc->xs_hitup,
+									   scandesc->xs_hitupdesc, node->iss_IndexInfo);
+					}
+					else if (scandesc->xs_itup)
+						StoreIndexTuple(node->iss_TableSlot, scandesc->xs_itup,
+										scandesc->xs_itupdesc, node->iss_IndexInfo);
+					else
+						elog(ERROR, "no data returned for index-only scan");
+
+					/* run the expressions
+					 *
+					 * XXX This does not work, because for some indexes the index key type
+					 * may differ from the table attribute type. This happens when the
+					 * (pg_opclass.opcintype != opckeytype). There's about 10 such built-in
+					 * opclasses, e.g. name_ops creates cstring on name columns. A good
+					 * example is pg_namespace.nspname, with the index on nspname causing
+					 * trouble for \dT.
+					 *
+					 * One option would be to tweak the type for the Var, but I'm not sure
+					 * that's actually correct. Surely some of the types may not be binary
+					 * compatible (e.g. jsonb_ops has opcintype=jsonb and opckeytype=text).
+					 * So maybe we should just disable index-only filters for such cases.
+					 */
+					econtext->ecxt_scantuple = node->iss_TableSlot;
+
+					/* check the filters pushed to the index-tuple level */
+					if (!ExecQual(node->indexfilters, econtext))
+					{
+						InstrCountFiltered2(node, 1);
+						continue;
+					}
+
+					/* remember we already checked the filter */
+					filter_checked = true;
+				}
+			}
+
+			/*
+			 * Fetch the next (or only) visible heap tuple for this index entry.
+			 * If we don't find anything, loop around and grab the next TID from
+			 * the index.
+			 */
+			if (index_fetch_heap(scandesc, slot))
+			{
+				has_index_tuple = true;
+				break;
+			}
+		}
+
+		if (!has_index_tuple)
+			break;
+
+		/*
+		 * If we didn't manage to check the filter on the index tuple (because
+		 * of the page not being all-visible, etc.), do that now on the heap
+		 * tuple.
+		 */
+		if (!filter_checked)
+		{
+			econtext->ecxt_scantuple = slot;
+			if (!ExecQual(node->indexfiltersorig, econtext))
+			{
+				InstrCountFiltered2(node, 1);
+				continue;
+			}
+		}
 
 		/*
 		 * If the index was lossy, we have to recheck the index quals using
@@ -794,6 +946,13 @@ ExecEndIndexScan(IndexScanState *node)
 	indexRelationDesc = node->iss_RelationDesc;
 	indexScanDesc = node->iss_ScanDesc;
 
+	/* Release VM buffer pin, if any. */
+	if (node->iss_VMBuffer != InvalidBuffer)
+	{
+		ReleaseBuffer(node->iss_VMBuffer);
+		node->iss_VMBuffer = InvalidBuffer;
+	}
+
 	/*
 	 * close the index relation (no-op if we didn't open it)
 	 */
@@ -940,6 +1099,10 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
 		ExecInitQual(node->scan.plan.qual, (PlanState *) indexstate);
 	indexstate->indexqualorig =
 		ExecInitQual(node->indexqualorig, (PlanState *) indexstate);
+	indexstate->indexfilters =
+		ExecInitQual(node->indexfilters, (PlanState *) indexstate);
+	indexstate->indexfiltersorig =
+		ExecInitQual(node->indexfiltersorig, (PlanState *) indexstate);
 	indexstate->indexorderbyorig =
 		ExecInitExprList(node->indexorderbyorig, (PlanState *) indexstate);
 
@@ -954,6 +1117,19 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
 	/* Open the index relation. */
 	lockmode = exec_rt_fetch(node->scan.scanrelid, estate)->rellockmode;
 	indexstate->iss_RelationDesc = index_open(node->indexid, lockmode);
+
+	/*
+	 * We need another slot, in a format that's suitable for the table AM, for
+	 * when we need to evaluate index-only filter on data from index tuple.
+	 *
+	 * XXX Maybe this could use the scan tuple slot?
+	 */
+	indexstate->iss_TableSlot =
+		ExecAllocTableSlot(&estate->es_tupleTable,
+						   RelationGetDescr(currentRelation),
+						   table_slot_callbacks(currentRelation));
+
+	indexstate->iss_IndexInfo = BuildIndexInfo(indexstate->iss_RelationDesc);
 
 	/*
 	 * Initialize index-specific scan state
@@ -1727,4 +1903,84 @@ ExecIndexScanInitializeWorker(IndexScanState *node,
 		index_rescan(node->iss_ScanDesc,
 					 node->iss_ScanKeys, node->iss_NumScanKeys,
 					 node->iss_OrderByKeys, node->iss_NumOrderByKeys);
+}
+
+/*
+ * StoreIndexTuple
+ *		Fill the slot with data from the index tuple.
+ *
+ * At some point this might be generally-useful functionality, but
+ * right now we don't need it elsewhere.
+ */
+static void
+StoreIndexTuple(TupleTableSlot *slot, IndexTuple itup, TupleDesc itupdesc, IndexInfo *iinfo)
+{
+	bool   *isnull;
+	Datum  *values;
+
+	isnull = palloc0(itupdesc->natts * sizeof(bool));
+	values = palloc0(itupdesc->natts * sizeof(Datum));
+
+	/* expand the index tuple */
+	index_deform_tuple(itup, itupdesc, values, isnull);
+
+	/* now fill the values from the index tuple into the table slot */
+	ExecClearTuple(slot);
+
+	for (int i = 0; i < iinfo->ii_NumIndexAttrs; i++)
+	{
+		AttrNumber	attnum = iinfo->ii_IndexAttrNumbers[i];
+
+		/* skip expressions */
+		if (attnum > 0)
+		{
+			slot->tts_isnull[attnum - 1] = isnull[i];
+			slot->tts_values[attnum - 1] = values[i];
+		}
+	}
+
+	pfree(values);
+	pfree(isnull);
+
+	ExecStoreVirtualTuple(slot);
+}
+
+/*
+ * StoreHeapTuple
+ *		Fill the slot with data from the heap tuple (from the index).
+ *
+ * At some point this might be generally-useful functionality, but
+ * right now we don't need it elsewhere.
+ */
+static void
+StoreHeapTuple(TupleTableSlot *slot, HeapTuple tup, TupleDesc tupdesc, IndexInfo *iinfo)
+{
+	bool   *isnull;
+	Datum  *values;
+
+	isnull = palloc0(tupdesc->natts * sizeof(bool));
+	values = palloc0(tupdesc->natts * sizeof(Datum));
+
+	/* expand the index tuple */
+	heap_deform_tuple(tup, tupdesc, values, isnull);
+
+	/* now fill the values from the index tuple into the table slot */
+	ExecClearTuple(slot);
+
+	for (int i = 0; i < iinfo->ii_NumIndexAttrs; i++)
+	{
+		AttrNumber	attnum = iinfo->ii_IndexAttrNumbers[i];
+
+		/* skip expressions */
+		if (attnum > 0)
+		{
+			slot->tts_isnull[attnum - 1] = isnull[i];
+			slot->tts_values[attnum - 1] = values[i];
+		}
+	}
+
+	pfree(values);
+	pfree(isnull);
+
+	ExecStoreVirtualTuple(slot);
 }

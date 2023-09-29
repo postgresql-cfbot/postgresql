@@ -18,6 +18,7 @@
 #include "executor/executor.h"
 #include "executor/nodeAppend.h"
 #include "executor/nodeForeignscan.h"
+#include "executor/nodeCustom.h"
 
 /*
  * Asynchronously request a tuple from a designed async-capable node.
@@ -36,6 +37,9 @@ ExecAsyncRequest(AsyncRequest *areq)
 	{
 		case T_ForeignScanState:
 			ExecAsyncForeignScanRequest(areq);
+			break;
+		case T_CustomScanState:
+			ExecAsyncCustomScanRequest(areq);
 			break;
 		default:
 			/* If the node doesn't support async, caller messed up. */
@@ -70,6 +74,9 @@ ExecAsyncConfigureWait(AsyncRequest *areq)
 		case T_ForeignScanState:
 			ExecAsyncForeignScanConfigureWait(areq);
 			break;
+		case T_CustomScanState:
+			ExecAsyncCustomScanConfigureWait(areq);
+			break;
 		default:
 			/* If the node doesn't support async, caller messed up. */
 			elog(ERROR, "unrecognized node type: %d",
@@ -95,6 +102,9 @@ ExecAsyncNotify(AsyncRequest *areq)
 	{
 		case T_ForeignScanState:
 			ExecAsyncForeignScanNotify(areq);
+			break;
+		case T_CustomScanState:
+			ExecAsyncCustomScanNotify(areq);
 			break;
 		default:
 			/* If the node doesn't support async, caller messed up. */

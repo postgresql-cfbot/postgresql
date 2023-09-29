@@ -579,32 +579,13 @@ GetCTEForRTE(ParseState *pstate, RangeTblEntry *rte, int rtelevelsup)
 	return NULL;				/* keep compiler quiet */
 }
 
-/*
- * updateFuzzyAttrMatchState
- *	  Using Levenshtein distance, consider if column is best fuzzy match.
- */
 static void
-updateFuzzyAttrMatchState(int fuzzy_rte_penalty,
-						  FuzzyAttrMatchState *fuzzystate, RangeTblEntry *rte,
-						  const char *actual, const char *match, int attnum)
+updateFuzzyAttrMatchStateSingleString(int fuzzy_rte_penalty,
+							FuzzyAttrMatchState *fuzzystate, RangeTblEntry *rte,
+							const char *actual, const char *match, int attnum, int matchlen)
 {
-	int			columndistance;
-	int			matchlen;
-
-	/* Bail before computing the Levenshtein distance if there's no hope. */
-	if (fuzzy_rte_penalty > fuzzystate->distance)
-		return;
-
-	/*
-	 * Outright reject dropped columns, which can appear here with apparent
-	 * empty actual names, per remarks within scanRTEForColumn().
-	 */
-	if (actual[0] == '\0')
-		return;
-
 	/* Use Levenshtein to compute match distance. */
-	matchlen = strlen(match);
-	columndistance =
+	int columndistance =
 		varstr_levenshtein_less_equal(actual, strlen(actual), match, matchlen,
 									  1, 1, 1,
 									  fuzzystate->distance + 1
@@ -665,6 +646,82 @@ updateFuzzyAttrMatchState(int fuzzy_rte_penalty,
 			 */
 		}
 	}
+}
+
+/*
+ * updateFuzzyAttrMatchState
+ *	  Using Levenshtein distance, consider if column is best fuzzy match.
+ */
+static void
+updateFuzzyAttrMatchState(int fuzzy_rte_penalty,
+						FuzzyAttrMatchState *fuzzystate, RangeTblEntry *rte,
+						const char *actual, const char *match, int attnum)
+{
+	/* Memory segment to store the current permutation of the match string. */
+	char* tmp_match;
+	/*
+	 * We count the number of underscores here, because we want to know whether we should consider
+	 * permuting underscore separated sections.
+	 */
+	int underscore_count = 0;
+	int matchlen		 = strlen(match);
+	/* We check for the amounts of underscores first, since updateFuzzyAttrMatchState has already quadratic run time. */
+	for (int i = 0; i < matchlen; i++) {
+		if (match[i] == '_')
+			underscore_count++;
+	}
+
+	/* Bail before computing the Levenshtein distance if there's no hope. */
+	if (fuzzy_rte_penalty > fuzzystate->distance)
+		return;
+
+	/*
+	 * Outright reject dropped columns, which can appear here with apparent
+	 * empty actual names, per remarks within scanRTEForColumn().
+	 */
+	if (actual[0] == '\0')
+		return;
+
+	updateFuzzyAttrMatchStateSingleString(fuzzy_rte_penalty, fuzzystate, rte, actual, match, attnum, matchlen);
+	/*
+	 * If told to, check for permuting up to three sections separated by underscores.
+	 */
+	if (underscore_count && underscore_count <= 6) {
+			tmp_match = palloc(matchlen + 1);
+			tmp_match[matchlen] = '\0';
+			for (int i = 1; i < matchlen - 1; i++) {
+				if (match[i] == '_') {
+					/* Consider swapping two sections. */
+					memcpy(tmp_match, &match[i + 1], matchlen - i - 1);
+					tmp_match[matchlen - i - 1] = '_';
+					memcpy(&tmp_match[matchlen - i + 1], match, i);
+					updateFuzzyAttrMatchStateSingleString(fuzzy_rte_penalty + 1, fuzzystate, rte, actual, tmp_match, attnum, matchlen);
+					/* Consider swapping three sections. */
+					for (int j = i + 2; j < matchlen - 1; j++) {
+						if (match[j] == '_') {
+							/*
+							 * Only consider mirroring permutations, since the three simple rotations are already
+							 * (or will be for a later i) covered above.
+							 */
+							int permutation_matrix[3][3] = {{j - i, 0, j + 1},
+									{matchlen - i, matchlen - j, 0},
+									{0, matchlen - j + i + 1, i + 1}};
+							for (int k = 0; k < 3; k++) {
+								memcpy(&tmp_match[permutation_matrix[k][0]], match, i);
+								tmp_match[permutation_matrix[k][0] + i - 1 + 1] = '_';
+								memcpy(&tmp_match[permutation_matrix[k][1]], &match[i + 1], j - i - 1);
+								tmp_match[permutation_matrix[k][1] + j - i - 1] = '_';
+								memcpy(&tmp_match[permutation_matrix[k][2]], &match[j + 1], matchlen - j - 1);
+								tmp_match[permutation_matrix[k][2] + matchlen - j - 1] = '_';
+								tmp_match[matchlen] = '\0';
+								updateFuzzyAttrMatchStateSingleString(fuzzy_rte_penalty + 1, fuzzystate, rte, actual, tmp_match, attnum, matchlen);
+							}
+						}
+					}
+				}
+			}
+			pfree(tmp_match);
+		}
 }
 
 /*

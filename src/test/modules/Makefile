@@ -31,6 +31,7 @@ SUBDIRS = \
 		  test_rls_hooks \
 		  test_shm_mq \
 		  test_slru \
+		  test_wal_read_from_buffers \
 		  unsafe_tests \
 		  worker_spi
 

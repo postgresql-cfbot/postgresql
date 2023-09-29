@@ -122,6 +122,8 @@ static const char *explain_get_index_name(Oid indexId);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage,
 							  bool planning);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
+static void show_planning_memory(ExplainState *es,
+								 const MemUsage *usage);
 static void ExplainIndexScanDetails(Oid indexid, ScanDirection indexorderdir,
 									ExplainState *es);
 static void ExplainScanTarget(Scan *plan, ExplainState *es);
@@ -397,9 +399,27 @@ ExplainOneQuery(Query *query, int cursorOptions,
 					planduration;
 		BufferUsage bufusage_start,
 					bufusage;
+		MemoryContextCounters mem_counts_start;
+		MemoryContextCounters mem_counts_end;
+		MemUsage	mem_usage;
+		MemoryContext planner_ctx;
+		MemoryContext saved_ctx;
+
+		/*
+		 * Create a new memory context to accurately measure memory malloc'ed
+		 * by the planner. For further accuracy we should use the same type of
+		 * memory context as the planner would use. That's usually AllocSet
+		 * but ensure that.
+		 */
+		Assert(IsA(CurrentMemoryContext, AllocSetContext));
+		planner_ctx = AllocSetContextCreate(CurrentMemoryContext,
+											"explain analyze planner context",
+											ALLOCSET_DEFAULT_SIZES);
 
 		if (es->buffers)
 			bufusage_start = pgBufferUsage;
+		MemoryContextMemConsumed(planner_ctx, &mem_counts_start);
+		saved_ctx = MemoryContextSwitchTo(planner_ctx);
 		INSTR_TIME_SET_CURRENT(planstart);
 
 		/* plan the query */
@@ -407,6 +427,9 @@ ExplainOneQuery(Query *query, int cursorOptions,
 
 		INSTR_TIME_SET_CURRENT(planduration);
 		INSTR_TIME_SUBTRACT(planduration, planstart);
+		MemoryContextSwitchTo(saved_ctx);
+		MemoryContextMemConsumed(planner_ctx, &mem_counts_end);
+		calc_mem_usage(&mem_usage, &mem_counts_end, &mem_counts_start);
 
 		/* calc differences of buffer counters. */
 		if (es->buffers)
@@ -417,7 +440,8 @@ ExplainOneQuery(Query *query, int cursorOptions,
 
 		/* run it (if needed) and produce output */
 		ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
-					   &planduration, (es->buffers ? &bufusage : NULL));
+					   &planduration, (es->buffers ? &bufusage : NULL),
+					   &mem_usage);
 	}
 }
 
@@ -527,7 +551,7 @@ void
 ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			   const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
-			   const BufferUsage *bufusage)
+			   const BufferUsage *bufusage, const MemUsage *mem_usage)
 {
 	DestReceiver *dest;
 	QueryDesc  *queryDesc;
@@ -628,6 +652,13 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		double		plantime = INSTR_TIME_GET_DOUBLE(*planduration);
 
 		ExplainPropertyFloat("Planning Time", "ms", 1000.0 * plantime, 3, es);
+	}
+
+	if (es->summary && mem_usage)
+	{
+		ExplainOpenGroup("Planning Memory", "Planning Memory", true, es);
+		show_planning_memory(es, mem_usage);
+		ExplainCloseGroup("Planning Memory", "Planning Memory", true, es);
 	}
 
 	/* Print info about runtime of triggers */
@@ -3742,6 +3773,50 @@ show_wal_usage(ExplainState *es, const WalUsage *usage)
 		ExplainPropertyUInteger("WAL Bytes", NULL,
 								usage->wal_bytes, es);
 	}
+}
+
+/*
+ * Show planner's memory usage details.
+ */
+static void
+show_planning_memory(ExplainState *es, const MemUsage *usage)
+{
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+		appendStringInfo(es->str,
+						 "Planning Memory: used=%zu bytes allocated=%zu bytes",
+						 usage->mem_used, usage->mem_allocated);
+		appendStringInfoChar(es->str, '\n');
+	}
+	else
+	{
+		ExplainPropertyInteger("Used", "bytes", usage->mem_used, es);
+		ExplainPropertyInteger("Allocated", "bytes", usage->mem_allocated, es);
+	}
+}
+
+/*
+ * Compute memory usage from the start and end memory counts.
+ */
+void
+calc_mem_usage(MemUsage *mem_usage, MemoryContextCounters *mem_counts_end,
+			   MemoryContextCounters *mem_counts_start)
+{
+	Size		mem_used_start;
+	Size		mem_used_end;
+
+	mem_used_start = mem_counts_start->totalspace - mem_counts_start->freespace;
+	mem_used_end = mem_counts_end->totalspace - mem_counts_end->freespace;
+
+	mem_usage->mem_used = mem_used_end - mem_used_start;
+
+	/*
+	 * The net memory used is from total memory allocated and not necessarily
+	 * the net memory allocated between the two given samples. Hence do not
+	 * compute the difference between allocated memory reported in the two
+	 * given samples.
+	 */
+	mem_usage->mem_allocated = mem_counts_end->totalspace;
 }
 
 /*

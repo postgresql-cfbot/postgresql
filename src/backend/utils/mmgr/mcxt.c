@@ -748,6 +748,18 @@ MemoryContextStatsDetail(MemoryContext context, int max_children,
 }
 
 /*
+ * Return the memory used in the given context and its children.
+ */
+extern void
+MemoryContextMemConsumed(MemoryContext context,
+						 MemoryContextCounters *mem_consumed)
+{
+	memset(mem_consumed, 0, sizeof(*mem_consumed));
+
+	MemoryContextStatsInternal(context, 0, false, 100, mem_consumed, false);
+}
+
+/*
  * MemoryContextStatsInternal
  *		One recursion level for MemoryContextStats
  *

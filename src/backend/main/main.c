@@ -59,6 +59,11 @@ int
 main(int argc, char *argv[])
 {
 	bool		do_check_root = true;
+	char	   *collate_locale;
+	char	   *ctype_locale;
+#ifdef LC_MESSAGES
+	char	   *messages_locale;
+#endif
 
 	reached_main = true;
 
@@ -111,15 +116,39 @@ main(int argc, char *argv[])
 	 * these set to "C" then message localization might not work well in the
 	 * postmaster.
 	 */
-	init_locale("LC_COLLATE", LC_COLLATE, "");
-	init_locale("LC_CTYPE", LC_CTYPE, "");
+
+	/*
+	 * Save off the original locale values prior to the first call of
+	 * uselocale(). This ensures that we don't call pg_setlocale() with an empty
+	 * string. See the function comment for pg_setlocale() for further
+	 * explanation. Note that this restriction doesn't exist on Windows, but we
+	 * can use the same code path anyway.
+	 */
+	collate_locale = setlocale(LC_COLLATE, "");
+	ctype_locale = setlocale(LC_CTYPE, "");
+
+#ifdef LC_MESSAGES
+	messages_locale = setlocale(LC_MESSAGES, "");
+#endif
+
+
+#ifdef HAVE__CONFIGTHREADLOCALE
+	/*
+	 * This call could most likely happen sooner, but just to err on the side of
+	 * caution, call it after absorbing locales from the environment.
+	 */
+	_configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
+#endif
+
+	init_locale("LC_COLLATE", LC_COLLATE, collate_locale);
+	init_locale("LC_CTYPE", LC_CTYPE, ctype_locale);
 
 	/*
 	 * LC_MESSAGES will get set later during GUC option processing, but we set
 	 * it here to allow startup error messages to be localized.
 	 */
 #ifdef LC_MESSAGES
-	init_locale("LC_MESSAGES", LC_MESSAGES, "");
+	init_locale("LC_MESSAGES", LC_MESSAGES, messages_locale);
 #endif
 
 	/*
@@ -129,13 +158,6 @@ main(int argc, char *argv[])
 	init_locale("LC_MONETARY", LC_MONETARY, "C");
 	init_locale("LC_NUMERIC", LC_NUMERIC, "C");
 	init_locale("LC_TIME", LC_TIME, "C");
-
-	/*
-	 * Now that we have absorbed as much as we wish to from the locale
-	 * environment, remove any LC_ALL setting, so that the environment
-	 * variables installed by pg_perm_setlocale have force.
-	 */
-	unsetenv("LC_ALL");
 
 	/*
 	 * Catch standard options before doing much else, in particular before we
@@ -307,8 +329,17 @@ startup_hacks(const char *progname)
 static void
 init_locale(const char *categoryname, int category, const char *locale)
 {
-	if (pg_perm_setlocale(category, locale) == NULL &&
-		pg_perm_setlocale(category, "C") == NULL)
+	/*
+	 * Since we are initializing global locales, NULL and empty string are
+	 * invalid arguments. See the pg_setlocale() function description for more
+	 * explanation on the empty string. NULL just doesn't make sense in this
+	 * context of initializing locales.
+	 */
+	Assert(locale);
+	Assert(locale[0] != '\0');
+
+	if (pg_setlocale(category, locale) == NULL &&
+		pg_setlocale(category, "C") == NULL)
 		elog(FATAL, "could not adopt \"%s\" locale nor C locale for %s",
 			 locale, categoryname);
 }

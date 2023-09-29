@@ -1,0 +1,191 @@
+From 02ea352d84ed87e156617de8b8020811680cb412 Mon Sep 17 00:00:00 2001
+From: Palak <palakchaturvedi2843@gmail.com>
+Date: Fri, 30 Jun 2023 08:21:06 +0000
+Subject: [PATCH v1] Invalidate Buffer By Bufnum
+
+---
+ contrib/pg_buffercache/Makefile               |  2 +-
+ contrib/pg_buffercache/meson.build            |  1 +
+ .../pg_buffercache--1.4--1.5.sql              |  6 ++
+ contrib/pg_buffercache/pg_buffercache.control |  2 +-
+ contrib/pg_buffercache/pg_buffercache_pages.c | 27 ++++++++
+ src/backend/storage/buffer/bufmgr.c           | 64 +++++++++++++++++++
+ src/include/storage/bufmgr.h                  |  3 +
+ 7 files changed, 103 insertions(+), 2 deletions(-)
+ create mode 100644 contrib/pg_buffercache/pg_buffercache--1.4--1.5.sql
+
+diff --git a/contrib/pg_buffercache/Makefile b/contrib/pg_buffercache/Makefile
+index d6b58d4da9..eae65ead9e 100644
+--- a/contrib/pg_buffercache/Makefile
++++ b/contrib/pg_buffercache/Makefile
+@@ -8,7 +8,7 @@ OBJS = \
+ EXTENSION = pg_buffercache
+ DATA = pg_buffercache--1.2.sql pg_buffercache--1.2--1.3.sql \
+ 	pg_buffercache--1.1--1.2.sql pg_buffercache--1.0--1.1.sql \
+-	pg_buffercache--1.3--1.4.sql
++	pg_buffercache--1.3--1.4.sql pg_buffercache--1.4--1.5.sql
+ PGFILEDESC = "pg_buffercache - monitoring of shared buffer cache in real-time"
+ 
+ REGRESS = pg_buffercache
+diff --git a/contrib/pg_buffercache/meson.build b/contrib/pg_buffercache/meson.build
+index c51edf37d1..748463bc19 100644
+--- a/contrib/pg_buffercache/meson.build
++++ b/contrib/pg_buffercache/meson.build
+@@ -22,6 +22,7 @@ install_data(
+   'pg_buffercache--1.2--1.3.sql',
+   'pg_buffercache--1.2.sql',
+   'pg_buffercache--1.3--1.4.sql',
++  'pg_buffercache--1.4--1.5.sql',
+   'pg_buffercache.control',
+   kwargs: contrib_data_args,
+ )
+diff --git a/contrib/pg_buffercache/pg_buffercache--1.4--1.5.sql b/contrib/pg_buffercache/pg_buffercache--1.4--1.5.sql
+new file mode 100644
+index 0000000000..c7e47456d7
+--- /dev/null
++++ b/contrib/pg_buffercache/pg_buffercache--1.4--1.5.sql
+@@ -0,0 +1,6 @@
++\echo Use "ALTER EXTENSION pg_buffercache UPDATE TO '1.5'" to load this file. \quit
++
++CREATE FUNCTION pg_buffercache_invalidate(IN int)
++RETURNS bool
++AS 'MODULE_PATHNAME', 'pg_buffercache_invalidate'
++LANGUAGE C PARALLEL SAFE;
+diff --git a/contrib/pg_buffercache/pg_buffercache.control b/contrib/pg_buffercache/pg_buffercache.control
+index a82ae5f9bb..5ee875f77d 100644
+--- a/contrib/pg_buffercache/pg_buffercache.control
++++ b/contrib/pg_buffercache/pg_buffercache.control
+@@ -1,5 +1,5 @@
+ # pg_buffercache extension
+ comment = 'examine the shared buffer cache'
+-default_version = '1.4'
++default_version = '1.5'
+ module_pathname = '$libdir/pg_buffercache'
+ relocatable = true
+diff --git a/contrib/pg_buffercache/pg_buffercache_pages.c b/contrib/pg_buffercache/pg_buffercache_pages.c
+index 3316732365..6dd02fe6af 100644
+--- a/contrib/pg_buffercache/pg_buffercache_pages.c
++++ b/contrib/pg_buffercache/pg_buffercache_pages.c
+@@ -64,6 +64,33 @@ PG_FUNCTION_INFO_V1(pg_buffercache_pages);
+ PG_FUNCTION_INFO_V1(pg_buffercache_summary);
+ PG_FUNCTION_INFO_V1(pg_buffercache_usage_counts);
+ 
++PG_FUNCTION_INFO_V1(pg_buffercache_invalidate);
++Datum
++pg_buffercache_invalidate(PG_FUNCTION_ARGS)
++{
++	Buffer		bufnum;
++	bool		result;
++
++	if (PG_ARGISNULL(0))
++	{
++		ereport(ERROR,
++				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
++				 errmsg("buffernum cannot be NULL")));
++	}
++
++	bufnum = PG_GETARG_INT32(0);
++	if (bufnum < 0 || bufnum > NBuffers)
++	{
++		ereport(ERROR,
++				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
++				 errmsg("buffernum is not valid")));
++
++	}
++
++	result = TryInvalidateBuffer(bufnum);
++	PG_RETURN_BOOL(result);
++}
++
+ Datum
+ pg_buffercache_pages(PG_FUNCTION_ARGS)
+ {
+diff --git a/src/backend/storage/buffer/bufmgr.c b/src/backend/storage/buffer/bufmgr.c
+index 3c59bbd04e..376afcf996 100644
+--- a/src/backend/storage/buffer/bufmgr.c
++++ b/src/backend/storage/buffer/bufmgr.c
+@@ -5592,3 +5592,67 @@ TestForOldSnapshot_impl(Snapshot snapshot, Relation relation)
+ 				(errcode(ERRCODE_SNAPSHOT_TOO_OLD),
+ 				 errmsg("snapshot too old")));
+ }
++
++/*
++Try Invalidating a buffer using bufnum.
++If the buffer is invalid, the function returns false.
++The function checks for dirty buffer and flushes the dirty buffer before invalidating.
++If the buffer is still dirty it returns false.
++*/
++bool
++TryInvalidateBuffer(Buffer bufnum)
++{
++	BufferDesc *bufHdr = GetBufferDescriptor(bufnum - 1);
++	uint32		buf_state;
++
++	ReservePrivateRefCountEntry();
++
++	buf_state = LockBufHdr(bufHdr);
++	if ((buf_state & BM_VALID) == BM_VALID)
++	{
++		/*
++		 * The buffer is pinned therefore cannot invalidate.
++		 */
++		if (BUF_STATE_GET_REFCOUNT(buf_state) > 0)
++		{
++			UnlockBufHdr(bufHdr, buf_state);
++			return false;
++		}
++		if ((buf_state & BM_DIRTY) == BM_DIRTY)
++		{
++			/*
++			 * Try once to flush the dirty buffer.
++			 */
++			PinBuffer_Locked(bufHdr);
++			LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
++			FlushBuffer(bufHdr, NULL, IOOBJECT_RELATION, IOCONTEXT_NORMAL);
++			LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
++			UnpinBuffer(bufHdr);
++			buf_state = LockBufHdr(bufHdr);
++			if (BUF_STATE_GET_REFCOUNT(buf_state) > 0)
++			{
++				UnlockBufHdr(bufHdr, buf_state);
++				return false;
++			}
++
++			/*
++			 * If its dirty again or not valid anymore give up.
++			 */
++
++			if ((buf_state & (BM_DIRTY | BM_VALID)) != (BM_VALID))
++			{
++				UnlockBufHdr(bufHdr, buf_state);
++				return false;
++			}
++
++		}
++
++		InvalidateBuffer(bufHdr);
++		return true;
++	}
++	else
++	{
++		UnlockBufHdr(bufHdr, buf_state);
++		return false;
++	}
++}
+diff --git a/src/include/storage/bufmgr.h b/src/include/storage/bufmgr.h
+index 0f5fb6be00..4ba3d9089b 100644
+--- a/src/include/storage/bufmgr.h
++++ b/src/include/storage/bufmgr.h
+@@ -252,6 +252,9 @@ extern bool BgBufferSync(struct WritebackContext *wb_context);
+ 
+ extern void TestForOldSnapshot_impl(Snapshot snapshot, Relation relation);
+ 
++
++extern bool TryInvalidateBuffer(Buffer bufnum);
++
+ /* in buf_init.c */
+ extern void InitBufferPool(void);
+ extern Size BufferShmemSize(void);
+-- 
+2.25.1
+

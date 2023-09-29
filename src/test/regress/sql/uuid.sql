@@ -85,5 +85,11 @@ INSERT INTO guid1 (guid_field) VALUES (gen_random_uuid());
 INSERT INTO guid1 (guid_field) VALUES (gen_random_uuid());
 SELECT count(DISTINCT guid_field) FROM guid1;
 
+-- generation test for v7
+TRUNCATE guid1;
+INSERT INTO guid1 (guid_field) VALUES (gen_uuid_v7());
+INSERT INTO guid1 (guid_field) VALUES (gen_uuid_v7());
+SELECT count(DISTINCT guid_field) FROM guid1;
+
 -- clean up
 DROP TABLE guid1, guid2 CASCADE;

@@ -96,6 +96,12 @@ do
 	test "$f" = src/include/nodes/nodetags.h && continue
 	test "$f" = src/backend/nodes/nodetags.h && continue
 
+	# radixtree_*_impl.h cannot be included standalone: they are just code fragments.
+	test "$f" = src/include/lib/radixtree_delete_impl.h && continue
+	test "$f" = src/include/lib/radixtree_insert_impl.h && continue
+	test "$f" = src/include/lib/radixtree_iter_impl.h && continue
+	test "$f" = src/include/lib/radixtree_search_impl.h && continue
+
 	# These files are not meant to be included standalone, because
 	# they contain lists that might have multiple use-cases.
 	test "$f" = src/include/access/rmgrlist.h && continue

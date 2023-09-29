@@ -176,6 +176,8 @@ static const char *const BuiltinTrancheNames[] = {
 	"SharedTupleStore",
 	/* LWTRANCHE_SHARED_TIDBITMAP: */
 	"SharedTidBitmap",
+	/* LWTRANCHE_SHARED_TIDSTORE: */
+	"SharedTidStore",
 	/* LWTRANCHE_PARALLEL_APPEND: */
 	"ParallelAppend",
 	/* LWTRANCHE_PER_XACT_PREDICATE_LIST: */

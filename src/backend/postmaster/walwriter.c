@@ -115,6 +115,8 @@ WalWriterMain(void)
 	 */
 	pqsignal(SIGCHLD, SIG_DFL);
 
+	LoadBacktraceFunctions();
+
 	/*
 	 * Create a memory context that we will do all our work in.  We do this so
 	 * that we can reset the context during error recovery and thereby avoid

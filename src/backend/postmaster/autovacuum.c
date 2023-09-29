@@ -475,6 +475,8 @@ AutoVacLauncherMain(int argc, char *argv[])
 	pqsignal(SIGFPE, FloatExceptionHandler);
 	pqsignal(SIGCHLD, SIG_DFL);
 
+	LoadBacktraceFunctions();
+
 	/*
 	 * Create a per-backend PGPROC struct in shared memory, except in the
 	 * EXEC_BACKEND case where this was done in SubPostmasterMain. We must do
@@ -1546,6 +1548,8 @@ AutoVacWorkerMain(int argc, char *argv[])
 	pqsignal(SIGUSR2, SIG_IGN);
 	pqsignal(SIGFPE, FloatExceptionHandler);
 	pqsignal(SIGCHLD, SIG_DFL);
+
+	LoadBacktraceFunctions();
 
 	/*
 	 * Create a per-backend PGPROC struct in shared memory, except in the

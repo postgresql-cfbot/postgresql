@@ -22,6 +22,12 @@ EXPLAIN (COSTS OFF)
 SELECT ctid, * FROM tidscan WHERE ctid = '(0,2)' OR '(0,1)' = ctid;
 SELECT ctid, * FROM tidscan WHERE ctid = '(0,2)' OR '(0,1)' = ctid;
 
+SET or_transform_limit = 0;
+EXPLAIN (COSTS OFF)
+SELECT ctid, * FROM tidscan WHERE ctid = '(0,2)' OR '(0,1)' = ctid;
+SELECT ctid, * FROM tidscan WHERE ctid = '(0,2)' OR '(0,1)' = ctid;
+RESET or_transform_limit;
+
 -- ctid = ScalarArrayOp - implemented as tidscan
 EXPLAIN (COSTS OFF)
 SELECT ctid, * FROM tidscan WHERE ctid = ANY(ARRAY['(0,1)', '(0,2)']::tid[]);

@@ -2053,6 +2053,16 @@ struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"or_transform_limit", PGC_USERSET, QUERY_TUNING_OTHER,
+			gettext_noop("Transform a sequence of OR clauses to an IN expression."),
+			gettext_noop("The planner will replace clauses like 'x=c1 OR x=c2 .."
+						 "to the clause 'x IN (c1,c2,...)'")
+		},
+		&or_transform_limit,
+		500, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+	{
 		{"from_collapse_limit", PGC_USERSET, QUERY_TUNING_OTHER,
 			gettext_noop("Sets the FROM-list size beyond which subqueries "
 						 "are not collapsed."),

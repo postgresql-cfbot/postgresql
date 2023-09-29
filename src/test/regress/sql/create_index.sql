@@ -737,6 +737,38 @@ SELECT count(*) FROM tenk1
 SELECT count(*) FROM tenk1
   WHERE hundred = 42 AND (thousand = 42 OR thousand = 99);
 
+SET or_transform_limit = 0;
+EXPLAIN (COSTS OFF)
+SELECT * FROM tenk1
+  WHERE thousand = 42 AND (tenthous = 1 OR tenthous = 3 OR tenthous = 42);
+SELECT * FROM tenk1
+  WHERE thousand = 42 AND (tenthous = 1 OR tenthous = 3 OR tenthous = 42);
+
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM tenk1
+  WHERE hundred = 42 AND (thousand = 42 OR thousand = 99);
+SELECT count(*) FROM tenk1
+  WHERE hundred = 42 AND (thousand = 42 OR thousand = 99);
+
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM tenk1
+  WHERE thousand = 42 AND (tenthous = 1 OR tenthous = 3) OR thousand = 41;
+SELECT count(*) FROM tenk1
+  WHERE thousand = 42 AND (tenthous = 1 OR tenthous = 3) OR thousand = 41;
+
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM tenk1
+  WHERE hundred = 42 AND (thousand = 42 OR thousand = 99 OR tenthous < 2) OR thousand = 41;
+SELECT count(*) FROM tenk1
+  WHERE hundred = 42 AND (thousand = 42 OR thousand = 99 OR tenthous < 2) OR thousand = 41;
+
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM tenk1
+  WHERE hundred = 42 AND (thousand = 42 OR thousand = 41 OR thousand = 99 AND tenthous = 2);
+SELECT count(*) FROM tenk1
+  WHERE hundred = 42 AND (thousand = 42 OR thousand = 41 OR thousand = 99 AND tenthous = 2);
+RESET or_transform_limit;
+
 --
 -- Check behavior with duplicate index column contents
 --

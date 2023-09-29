@@ -22,6 +22,10 @@
 #include "optimizer/optimizer.h"
 #include "optimizer/orclauses.h"
 #include "optimizer/restrictinfo.h"
+#include "utils/lsyscache.h"
+#include "parser/parse_expr.h"
+#include "parser/parse_coerce.h"
+#include "parser/parse_oper.h"
 
 
 static bool is_safe_restriction_clause_for(RestrictInfo *rinfo, RelOptInfo *rel);
@@ -29,6 +33,292 @@ static Expr *extract_or_clause(RestrictInfo *or_rinfo, RelOptInfo *rel);
 static void consider_new_or_clause(PlannerInfo *root, RelOptInfo *rel,
 								   Expr *orclause, RestrictInfo *join_or_rinfo);
 
+
+int			or_transform_limit = 2;
+
+typedef struct OrClauseGroupEntry
+{
+	Node		   *node;
+	List		   *consts;
+	Oid				scalar_type;
+	Oid				opno;
+	Expr 		   *expr;
+	RestrictInfo   *rinfo;
+} OrClauseGroupEntry;
+
+static List *
+transform_ors(PlannerInfo *root, List *baserestrictinfo)
+{
+	ListCell	   *lc_clause;
+	List	   	   *modified_rinfo = NIL;
+	bool		    something_changed = false;
+
+
+	foreach (lc_clause, baserestrictinfo)
+	{
+		RestrictInfo   	   *rinfo = lfirst_node(RestrictInfo, lc_clause);
+		RestrictInfo	   *rinfo_base = copyObject(rinfo);
+		List		   	   *groups_list = NIL;
+		List		       *or_list = NIL;
+		ListCell	   	   *lc_eargs,
+					   	   *lc_rargs;
+
+		if (!restriction_is_or_clause(rinfo) ||
+			list_length(((BoolExpr *) rinfo->clause)->args) < or_transform_limit)
+		{
+			/* Add a clause without changes */
+			modified_rinfo = lappend(modified_rinfo, rinfo);
+			continue;
+		}
+		forboth(lc_eargs, ((BoolExpr *) rinfo->clause)->args,
+				lc_rargs, ((BoolExpr *) rinfo->orclause)->args)
+		{
+			Expr			   *orqual = (Expr *) lfirst(lc_eargs);
+			Node			   *const_expr;
+			Node			   *nconst_expr;
+			ListCell		   *lc_groups;
+			OrClauseGroupEntry *gentry;
+			RestrictInfo	   *sub_rinfo;
+
+			/* If this is not an 'OR' expression, skip the transformation */
+			if (!IsA(lfirst(lc_rargs), RestrictInfo))
+			{
+				or_list = lappend(or_list, orqual);
+				continue;
+			}
+			sub_rinfo = lfirst_node(RestrictInfo, lc_rargs);
+
+			/* Check: it is an expr of the form 'F(x) oper ConstExpr' */
+			if (!IsA(orqual, OpExpr) ||
+			    !(bms_is_empty(sub_rinfo->left_relids) ^
+				bms_is_empty(sub_rinfo->right_relids)) ||
+				contain_volatile_functions((Node *) orqual))
+			{
+				/* Again, it's not the expr we can transform */
+				or_list = lappend(or_list, (void *) orqual);
+				continue;
+			}
+
+
+			/*
+			* Detect the constant side of the clause. Recall non-constant
+			* expression can be made not only with Vars, but also with Params,
+			* which is not bonded with any relation. Thus, we detect the const
+			* side - if another side is constant too, the orqual couldn't be
+			* an OpExpr.
+			* Get pointers to constant and expression sides of the qual.
+			*/
+			const_expr =bms_is_empty(sub_rinfo->left_relids) ?
+												get_leftop(sub_rinfo->clause) :
+												get_rightop(sub_rinfo->clause);
+			nconst_expr = bms_is_empty(sub_rinfo->left_relids) ?
+												get_rightop(sub_rinfo->clause) :
+												get_leftop(sub_rinfo->clause);
+
+			if (!op_mergejoinable(((OpExpr *) sub_rinfo->clause)->opno, exprType(nconst_expr)))
+			{
+				or_list = lappend(or_list, (void *) orqual);
+				continue;
+			}
+
+			/*
+			* At this point we definitely have a transformable clause.
+			* Classify it and add into specific group of clauses, or create new
+			* group.
+			* TODO: to manage complexity in the case of many different clauses
+			* (X1=C1) OR (X2=C2 OR) ... (XN = CN) we could invent something
+			* like a hash table. But also we believe, that the case of many
+			* different variable sides is very rare.
+			*/
+			foreach(lc_groups, groups_list)
+			{
+				OrClauseGroupEntry *v = (OrClauseGroupEntry *) lfirst(lc_groups);
+
+				Assert(v->node != NULL);
+
+				if (equal(v->node, nconst_expr))
+				{
+					v->consts = lappend(v->consts, const_expr);
+					nconst_expr = NULL;
+					break;
+				}
+			}
+
+			if (nconst_expr == NULL)
+				/*
+					* The clause classified successfully and added into existed
+					* clause group.
+					*/
+				continue;
+
+			/* New clause group needed */
+			gentry = palloc(sizeof(OrClauseGroupEntry));
+			gentry->node = nconst_expr;
+			gentry->consts = list_make1(const_expr);
+			gentry->rinfo = sub_rinfo;
+			groups_list = lappend(groups_list,  (void *) gentry);
+		}
+
+		if (groups_list == NIL)
+		{
+			/*
+			* No any transformations possible with this list of arguments. Here we
+			* already made all underlying transformations. Thus, just return the
+			* transformed bool expression.
+			*/
+			modified_rinfo = lappend(modified_rinfo, rinfo);
+			continue;
+		}
+		else
+		{
+			ListCell	   *lc_args;
+
+			/* Let's convert each group of clauses to an IN operation. */
+
+			/*
+			* Go through the list of groups and convert each, where number of
+			* consts more than 1. trivial groups move to OR-list again
+			*/
+
+			foreach(lc_args, groups_list)
+			{
+				List			   *allexprs;
+				Oid				    scalar_type;
+				Oid					array_type;
+				OrClauseGroupEntry *gentry = (OrClauseGroupEntry *) lfirst(lc_args);
+
+				Assert(list_length(gentry->consts) > 0);
+
+				if (list_length(gentry->consts) == 1)
+				{
+					/*
+					* Only one element in the class. Return rinfo into the BoolExpr
+					* args list unchanged.
+					*/
+					list_free(gentry->consts);
+					or_list = lappend(or_list, gentry->rinfo->clause);
+					continue;
+				}
+
+				/*
+				* Do the transformation.
+				*
+				* First of all, try to select a common type for the array elements.
+				* Note that since the LHS' type is first in the list, it will be
+				* preferred when there is doubt (eg, when all the RHS items are
+				* unknown literals).
+				*
+				* Note: use list_concat here not lcons, to avoid damaging rnonvars.
+				*
+				* As a source of insides, use make_scalar_array_op()
+				*/
+				allexprs = list_concat(list_make1(gentry->node), gentry->consts);
+				scalar_type = select_common_type(NULL, allexprs, NULL, NULL);
+
+				if (scalar_type != RECORDOID && OidIsValid(scalar_type))
+					array_type = get_array_type(scalar_type);
+				else
+					array_type = InvalidOid;
+
+				if (array_type != InvalidOid && scalar_type != InvalidOid)
+				{
+					/*
+					* OK: coerce all the right-hand non-Var inputs to the common
+					* type and build an ArrayExpr for them.
+					*/
+					List	   *aexprs;
+					ArrayExpr  *newa;
+					ScalarArrayOpExpr *saopexpr;
+					ListCell *l;
+
+					aexprs = NIL;
+
+					foreach(l, gentry->consts)
+					{
+						Node	   *rexpr = (Node *) lfirst(l);
+
+						rexpr = coerce_to_common_type(NULL, rexpr,
+													scalar_type,
+													"IN");
+						aexprs = lappend(aexprs, rexpr);
+					}
+
+					newa = makeNode(ArrayExpr);
+					/* array_collid will be set by parse_collate.c */
+					newa->element_typeid = scalar_type;
+					newa->array_typeid = array_type;
+					newa->multidims = false;
+					newa->elements = aexprs;
+					newa->location = -1;
+
+					saopexpr =
+						(ScalarArrayOpExpr *)
+							make_scalar_array_op(NULL,
+												list_make1(makeString((char *) "=")),
+												true,
+												gentry->node,
+												(Node *) newa,
+												-1);
+					saopexpr->inputcollid = exprInputCollation((Node *)gentry->rinfo->clause);
+
+					or_list = lappend(or_list, (void *) saopexpr);
+
+					something_changed = true;
+				}
+				else
+				{
+					/*
+					* Each group contains only one element - use rinfo as is.
+					*/
+					list_free(gentry->consts);
+					or_list = lappend(or_list, gentry->expr);
+					continue;
+				}
+
+				/*
+				* Make a new version of the restriction. Remember source restriction
+				* can be used in another path (SeqScan, for example).
+				*/
+
+				/* One more trick: assemble correct clause */
+				rinfo = make_restrictinfo(root,
+						list_length(or_list) > 1 ? make_orclause(or_list) :
+													(Expr *) linitial(or_list),
+						rinfo->has_clone,
+						rinfo->is_clone,
+						rinfo->is_pushed_down,
+						rinfo->pseudoconstant,
+						rinfo->security_level,
+						rinfo->required_relids,
+						rinfo->outer_relids,
+						rinfo->outer_relids);
+				rinfo->eval_cost=rinfo_base->eval_cost;
+				rinfo->norm_selec=rinfo_base->norm_selec;
+				rinfo->outer_selec=rinfo_base->outer_selec;
+				rinfo->left_bucketsize=rinfo_base->left_bucketsize;
+				rinfo->right_bucketsize=rinfo_base->right_bucketsize;
+				rinfo->left_mcvfreq=rinfo_base->left_mcvfreq;
+				rinfo->right_mcvfreq=rinfo_base->right_mcvfreq;
+				modified_rinfo = lappend(modified_rinfo, rinfo);
+				something_changed = true;
+			}
+		}
+		list_free(or_list);
+		list_free_deep(groups_list);
+	}
+
+	/*
+		* Check if transformation has made. If nothing changed - return
+		* baserestrictinfo as is.
+		*/
+	if (something_changed)
+	{
+		return modified_rinfo;
+	}
+
+	list_free(modified_rinfo);
+	return baserestrictinfo;
+}
 
 /*
  * extract_restriction_or_clauses
@@ -93,6 +383,9 @@ extract_restriction_or_clauses(PlannerInfo *root)
 		if (rel->reloptkind != RELOPT_BASEREL)
 			continue;
 
+		rel->baserestrictinfo  = transform_ors(root, rel->baserestrictinfo);
+		//rel->joininfo = transform_ors(root, rel->joininfo);
+
 		/*
 		 * Find potentially interesting OR joinclauses.  We can use any
 		 * joinclause that is considered safe to move to this rel by the
@@ -114,7 +407,9 @@ extract_restriction_or_clauses(PlannerInfo *root)
 				 * and insert it into the rel's restrictinfo list if so.
 				 */
 				if (orclause)
+				{
 					consider_new_or_clause(root, rel, orclause, rinfo);
+				}
 			}
 		}
 	}

@@ -43,6 +43,7 @@
 
 /* GUC parameters */
 bool		Transform_null_equals = false;
+int			or_transform_limit = 500;
 
 
 static Node *transformExprRecurse(ParseState *pstate, Node *expr);
@@ -99,6 +100,233 @@ static Expr *make_distinct_op(ParseState *pstate, List *opname,
 static Node *make_nulltest_from_distinct(ParseState *pstate,
 										 A_Expr *distincta, Node *arg);
 
+typedef struct OrClauseGroupEntry
+{
+	Node		   *node;
+	List		   *consts;
+	Oid				scalar_type;
+	Oid				opno;
+	Expr 		   *expr;
+} OrClauseGroupEntry;
+
+static Node *
+transformBoolExprOr(ParseState *pstate, BoolExpr *expr_orig)
+{
+	List		   *or_list = NIL;
+	List		   *groups_list = NIL;
+	ListCell	   *lc;
+
+	/* If this is not an 'OR' expression, skip the transformation */
+	if (expr_orig->boolop != OR_EXPR ||
+		list_length(expr_orig->args) < or_transform_limit)
+		return transformBoolExpr(pstate, (BoolExpr *) expr_orig);
+
+	foreach(lc, expr_orig->args)
+	{
+		Node			   *arg = lfirst(lc);
+		Node			   *orqual;
+		Node			   *const_expr;
+		Node			   *nconst_expr;
+		ListCell		   *lc_groups;
+		OrClauseGroupEntry *gentry;
+
+		/* At first, transform the arg and evaluate constant expressions. */
+		orqual = transformExprRecurse(pstate, (Node *) arg);
+		orqual = coerce_to_boolean(pstate, orqual, "OR");
+		orqual = eval_const_expressions(NULL, orqual);
+
+		if (!IsA(orqual, OpExpr))
+		{
+			or_list = lappend(or_list, orqual);
+			continue;
+		}
+
+		/*
+		 * Detect the constant side of the clause. Recall non-constant
+		 * expression can be made not only with Vars, but also with Params,
+		 * which is not bonded with any relation. Thus, we detect the const
+		 * side - if another side is constant too, the orqual couldn't be
+		 * an OpExpr.
+		 * Get pointers to constant and expression sides of the qual.
+		 */
+		if (IsA(get_leftop(orqual), Const))
+		{
+			nconst_expr = get_rightop(orqual);
+			const_expr = get_leftop(orqual);
+		}
+		else if (IsA(get_rightop(orqual), Const))
+		{
+			const_expr = get_rightop(orqual);
+			nconst_expr = get_leftop(orqual);
+		}
+		else
+		{
+			or_list = lappend(or_list, orqual);
+			continue;
+		}
+
+		if (!op_mergejoinable(((OpExpr *) orqual)->opno, exprType(nconst_expr)))
+		{
+			or_list = lappend(or_list, orqual);
+			continue;
+		}
+
+		/*
+		* At this point we definitely have a transformable clause.
+		* Classify it and add into specific group of clauses, or create new
+		* group.
+		* TODO: to manage complexity in the case of many different clauses
+		* (X1=C1) OR (X2=C2 OR) ... (XN = CN) we could invent something
+		* like a hash table. But also we believe, that the case of many
+		* different variable sides is very rare.
+		*/
+		foreach(lc_groups, groups_list)
+		{
+			OrClauseGroupEntry *v = (OrClauseGroupEntry *) lfirst(lc_groups);
+
+			Assert(v->node != NULL);
+
+			if (equal(v->node, nconst_expr))
+			{
+				v->consts = lappend(v->consts, const_expr);
+				nconst_expr = NULL;
+				break;
+			}
+		}
+
+		if (nconst_expr == NULL)
+			/*
+				* The clause classified successfully and added into existed
+				* clause group.
+				*/
+			continue;
+
+		/* New clause group needed */
+		gentry = palloc(sizeof(OrClauseGroupEntry));
+		gentry->node = nconst_expr;
+		gentry->consts = list_make1(const_expr);
+		gentry->expr = (Expr *) orqual;
+		groups_list = lappend(groups_list,  (void *) gentry);
+	}
+
+	if (groups_list == NIL)
+	{
+		/*
+		* No any transformations possible with this list of arguments. Here we
+		* already made all underlying transformations. Thus, just return the
+		* transformed bool expression.
+		*/
+		return (Node *) makeBoolExpr(OR_EXPR, or_list, expr_orig->location);
+	}
+	else
+	{
+		ListCell	   *lc_args;
+
+		/* Let's convert each group of clauses to an IN operation. */
+
+		/*
+		* Go through the list of groups and convert each, where number of
+		* consts more than 1. trivial groups move to OR-list again
+		*/
+
+		foreach(lc_args, groups_list)
+		{
+			OrClauseGroupEntry *gentry = (OrClauseGroupEntry *) lfirst(lc_args);
+			List			   *allexprs;
+			Oid				    scalar_type;
+			Oid					array_type;
+
+			Assert(list_length(gentry->consts) > 0);
+
+			if (list_length(gentry->consts) == 1)
+			{
+				/*
+				 * Only one element in the class. Return rinfo into the BoolExpr
+				 * args list unchanged.
+				 */
+				list_free(gentry->consts);
+				or_list = lappend(or_list, gentry->expr);
+				continue;
+			}
+
+			/*
+			 * Do the transformation.
+			 *
+			 * First of all, try to select a common type for the array elements.
+			 * Note that since the LHS' type is first in the list, it will be
+			 * preferred when there is doubt (eg, when all the RHS items are
+			 * unknown literals).
+			 *
+			 * Note: use list_concat here not lcons, to avoid damaging rnonvars.
+			 *
+			 * As a source of insides, use make_scalar_array_op()
+			 */
+			allexprs = list_concat(list_make1(gentry->node), gentry->consts);
+			scalar_type = select_common_type(NULL, allexprs, NULL, NULL);
+
+			if (scalar_type != RECORDOID && OidIsValid(scalar_type))
+				array_type = get_array_type(scalar_type);
+			else
+				array_type = InvalidOid;
+
+			if (array_type != InvalidOid)
+			{
+				/*
+				 * OK: coerce all the right-hand non-Var inputs to the common
+				 * type and build an ArrayExpr for them.
+				 */
+				List	   *aexprs;
+				ArrayExpr  *newa;
+				ScalarArrayOpExpr *saopexpr;
+				ListCell *l;
+
+				aexprs = NIL;
+
+				foreach(l, gentry->consts)
+				{
+					Node	   *rexpr = (Node *) lfirst(l);
+
+					rexpr = coerce_to_common_type(pstate, rexpr,
+												scalar_type,
+												"IN");
+					aexprs = lappend(aexprs, rexpr);
+				}
+
+				newa = makeNode(ArrayExpr);
+				/* array_collid will be set by parse_collate.c */
+				newa->element_typeid = scalar_type;
+				newa->array_typeid = array_type;
+				newa->multidims = false;
+				newa->elements = aexprs;
+				newa->location = -1;
+
+				saopexpr =
+					(ScalarArrayOpExpr *)
+						make_scalar_array_op(pstate,
+											 list_make1(makeString((char *) "=")),
+											 true,
+											 gentry->node,
+											 (Node *) newa,
+											 -1);
+
+				or_list = lappend(or_list, (void *) saopexpr);
+			}
+			else
+			{
+				list_free(gentry->consts);
+				or_list = lappend(or_list, gentry->expr);
+				continue;
+			}
+		}
+
+		list_free_deep(groups_list);
+	}
+
+	/* One more trick: assemble correct clause */
+	return (Node *) ((list_length(or_list) > 1) ?
+						makeBoolExpr(OR_EXPR, or_list, expr_orig->location) :
+						linitial(or_list));
+}
 
 /*
  * transformExpr -
@@ -212,7 +440,7 @@ transformExprRecurse(ParseState *pstate, Node *expr)
 			}
 
 		case T_BoolExpr:
-			result = transformBoolExpr(pstate, (BoolExpr *) expr);
+			result = (Node *)transformBoolExprOr(pstate, (BoolExpr *) expr);
 			break;
 
 		case T_FuncCall:

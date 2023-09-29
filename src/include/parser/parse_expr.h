@@ -17,6 +17,7 @@
 
 /* GUC parameters */
 extern PGDLLIMPORT bool Transform_null_equals;
+extern PGDLLIMPORT int or_transform_limit;
 
 extern Node *transformExpr(ParseState *pstate, Node *expr, ParseExprKind exprKind);
 

@@ -11,14 +11,20 @@
 
 #include "postgres.h"
 
+#include "access/heapam_xlog.h"
+#include "access/xlog.h"
+#include "access/xlogutils.h"
 #include "catalog/binary_upgrade.h"
 #include "catalog/heap.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_control.h"
 #include "catalog/pg_type.h"
 #include "commands/extension.h"
 #include "miscadmin.h"
+#include "storage/standbydefs.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/pg_lsn.h"
 
 
 #define CHECK_IS_BINARY_UPGRADE									\
@@ -260,4 +266,98 @@ binary_upgrade_set_missing_value(PG_FUNCTION_ARGS)
 	SetAttrMissing(table_id, cattname, cvalue);
 
 	PG_RETURN_VOID();
+}
+
+/*
+ * Helper function for binary_upgrade_validate_wal_logical_end().
+ */
+static inline bool
+is_xlog_record_type(RmgrId rmgrid, uint8 info,
+					RmgrId expected_rmgrid, uint8 expected_info)
+{
+	return (rmgrid == expected_rmgrid) && (info == expected_info);
+}
+
+/*
+ * Return false if we found unexpected WAL records, otherwise true.
+ *
+ * This is a special purpose function to ensure that there are no WAL records
+ * pending to be decoded after the given LSN.
+ *
+ * It is used to ensure that there is no pending WAL to be consumed for
+ * the logical slots.
+ *
+ * During the upgrade process there can be certain types of WAL records
+ * generated that don't need to be decoded. Such records are ignored.
+ *
+ * XLOG_CHECKPOINT_SHUTDOWN and XLOG_SWITCH are ignored because they would be
+ * inserted after the walsender exits. Moreover, the following types of records
+ * could be generated during the pg_upgrade --check, so they are ignored too:
+ * XLOG_CHECKPOINT_ONLINE, XLOG_RUNNING_XACTS, XLOG_FPI_FOR_HINT,
+ * XLOG_HEAP2_PRUNE, XLOG_PARAMETER_CHANGE.
+ */
+Datum
+binary_upgrade_validate_wal_logical_end(PG_FUNCTION_ARGS)
+{
+	XLogRecPtr	start_lsn;
+	XLogReaderState *xlogreader;
+	bool		initial_record = true;
+	bool		is_valid = true;
+
+	CHECK_IS_BINARY_UPGRADE;
+
+	/* Quick exit if the input is NULL */
+	if (PG_ARGISNULL(0))
+		PG_RETURN_BOOL(false);
+
+	start_lsn = PG_GETARG_LSN(0);
+
+	/* Quick exit if the given lsn is larger than current one */
+	if (start_lsn >= GetFlushRecPtr(NULL))
+		PG_RETURN_BOOL(false);
+
+	xlogreader = InitXLogReaderState(start_lsn);
+
+	/* Loop until all WALs are read, or unexpected record is found */
+	while (is_valid && ReadNextXLogRecord(xlogreader))
+	{
+		RmgrIds		rmid;
+		uint8		info;
+
+		/* Check the type of WAL */
+		rmid = XLogRecGetRmid(xlogreader);
+		info = XLogRecGetInfo(xlogreader) & ~XLR_INFO_MASK;
+
+		if (initial_record)
+		{
+			/*
+			 * Initial record must be either XLOG_CHECKPOINT_SHUTDOWN or
+			 * XLOG_SWITCH.
+			 */
+			is_valid = is_xlog_record_type(rmid, info, RM_XLOG_ID, XLOG_CHECKPOINT_SHUTDOWN) ||
+				is_xlog_record_type(rmid, info, RM_XLOG_ID, XLOG_SWITCH);
+
+			initial_record = false;
+			continue;
+		}
+
+		/*
+		 * There is a possibility that following records may be generated
+		 * during the upgrade.
+		 */
+		is_valid = is_xlog_record_type(rmid, info, RM_XLOG_ID, XLOG_CHECKPOINT_SHUTDOWN) ||
+			is_xlog_record_type(rmid, info, RM_XLOG_ID, XLOG_CHECKPOINT_ONLINE) ||
+			is_xlog_record_type(rmid, info, RM_XLOG_ID, XLOG_SWITCH) ||
+			is_xlog_record_type(rmid, info, RM_XLOG_ID, XLOG_FPI_FOR_HINT) ||
+			is_xlog_record_type(rmid, info, RM_XLOG_ID, XLOG_PARAMETER_CHANGE) ||
+			is_xlog_record_type(rmid, info, RM_STANDBY_ID, XLOG_RUNNING_XACTS) ||
+			is_xlog_record_type(rmid, info, RM_HEAP2_ID, XLOG_HEAP2_PRUNE);
+
+		CHECK_FOR_INTERRUPTS();
+	}
+
+	pfree(xlogreader->private_data);
+	XLogReaderFree(xlogreader);
+
+	PG_RETURN_BOOL(is_valid);
 }

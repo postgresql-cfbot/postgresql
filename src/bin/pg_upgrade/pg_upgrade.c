@@ -59,6 +59,8 @@ static void copy_xact_xlog_xid(void);
 static void set_frozenxids(bool minmxid_only);
 static void make_outputdirs(char *pgdata);
 static void setup(char *argv0, bool *live_check);
+static void create_logical_replication_slots(void);
+static void setup_new_cluster(void);
 
 ClusterInfo old_cluster,
 			new_cluster;
@@ -188,6 +190,8 @@ main(int argc, char **argv)
 			  new_cluster.pgdata);
 	check_ok();
 
+	setup_new_cluster();
+
 	if (user_opts.do_sync)
 	{
 		prep_status("Sync data directory to disk");
@@ -200,8 +204,6 @@ main(int argc, char **argv)
 	}
 
 	create_script_for_old_cluster_deletion(&deletion_script_file_name);
-
-	issue_warnings_and_set_wal_level();
 
 	pg_log(PG_REPORT,
 		   "\n"
@@ -593,7 +595,7 @@ create_new_objects(void)
 		set_frozenxids(true);
 
 	/* update new_cluster info now that we have objects in the databases */
-	get_db_and_rel_infos(&new_cluster);
+	get_db_rel_and_slot_infos(&new_cluster, false);
 }
 
 /*
@@ -861,4 +863,103 @@ set_frozenxids(bool minmxid_only)
 	PQfinish(conn_template1);
 
 	check_ok();
+}
+
+/*
+ * create_logical_replication_slots()
+ *
+ * Similar to create_new_objects() but only restores logical replication slots.
+ */
+static void
+create_logical_replication_slots(void)
+{
+	int			dbnum;
+
+	prep_status_progress("Restoring logical replication slots in the new cluster");
+
+	for (dbnum = 0; dbnum < old_cluster.dbarr.ndbs; dbnum++)
+	{
+		DbInfo	   *old_db = &old_cluster.dbarr.dbs[dbnum];
+		LogicalSlotInfoArr *slot_arr = &old_db->slot_arr;
+		PGconn	   *conn;
+		PQExpBuffer query;
+		int			slotnum;
+		char		log_file_name[MAXPGPATH];
+
+		/* Skip this database if there are no slots */
+		if (slot_arr->nslots == 0)
+			continue;
+
+		conn = connectToServer(&new_cluster, old_db->db_name);
+		query = createPQExpBuffer();
+
+		snprintf(log_file_name, sizeof(log_file_name),
+				 DB_DUMP_LOG_FILE_MASK, old_db->db_oid);
+
+		pg_log(PG_STATUS, "%s", old_db->db_name);
+
+		for (slotnum = 0; slotnum < slot_arr->nslots; slotnum++)
+		{
+			LogicalSlotInfo *slot_info = &slot_arr->slots[slotnum];
+
+			/* Constructs a query for creating logical replication slots. */
+			appendPQExpBuffer(query, "SELECT pg_catalog.pg_create_logical_replication_slot(");
+			appendStringLiteralConn(query, slot_info->slotname, conn);
+			appendPQExpBuffer(query, ", ");
+			appendStringLiteralConn(query, slot_info->plugin, conn);
+			appendPQExpBuffer(query, ", false, %s);",
+							  slot_info->two_phase ? "true" : "false");
+
+			PQclear(executeQueryOrDie(conn, "%s", query->data));
+
+			resetPQExpBuffer(query);
+		}
+
+		PQfinish(conn);
+
+		destroyPQExpBuffer(query);
+	}
+
+	end_progress_output();
+	check_ok();
+}
+
+/*
+ *	setup_new_cluster()
+ *
+ * Starts a new cluster for updating the wal_level in the control file, then
+ * does final setups. Logical slots are also created here.
+ */
+static void
+setup_new_cluster(void)
+{
+	/*
+	 * We unconditionally start/stop the new server because pg_resetwal -o set
+	 * wal_level to 'minimum'.  If the user is upgrading standby servers using
+	 * the rsync instructions, they will need pg_upgrade to write its final
+	 * WAL record showing wal_level as 'replica'.
+	 */
+	start_postmaster(&new_cluster, true);
+
+	/*
+	 * If the old cluster has logical slots, migrate them to a new cluster.
+	 *
+	 * Note: This must be done after executing pg_resetwal command in the
+	 * caller because pg_resetwal would remove required WALs.
+	 */
+	if (count_old_cluster_logical_slots())
+		create_logical_replication_slots();
+
+	/*
+	 * Reindex hash indexes for old < 10.0. count_old_cluster_logical_slots()
+	 * returns non-zero when the old_cluster is PG17 and later, so it's OK to
+	 * use "else if" here. See comments atop count_old_cluster_logical_slots()
+	 * and get_old_cluster_logical_slot_infos().
+	 */
+	else if (GET_MAJOR_VERSION(old_cluster.major_version) <= 906)
+		old_9_6_invalidate_hash_indexes(&new_cluster, false);
+
+	report_extension_updates(&new_cluster);
+
+	stop_postmaster(false);
 }

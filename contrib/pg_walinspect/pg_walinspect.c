@@ -40,8 +40,6 @@ PG_FUNCTION_INFO_V1(pg_get_wal_stats_till_end_of_wal);
 
 static void ValidateInputLSNs(XLogRecPtr start_lsn, XLogRecPtr *end_lsn);
 static XLogRecPtr GetCurrentLSN(void);
-static XLogReaderState *InitXLogReaderState(XLogRecPtr lsn);
-static XLogRecord *ReadNextXLogRecord(XLogReaderState *xlogreader);
 static void GetWALRecordInfo(XLogReaderState *record, Datum *values,
 							 bool *nulls, uint32 ncols);
 static void GetWALRecordsInfo(FunctionCallInfo fcinfo,
@@ -82,98 +80,6 @@ GetCurrentLSN(void)
 	Assert(!XLogRecPtrIsInvalid(curr_lsn));
 
 	return curr_lsn;
-}
-
-/*
- * Initialize WAL reader and identify first valid LSN.
- */
-static XLogReaderState *
-InitXLogReaderState(XLogRecPtr lsn)
-{
-	XLogReaderState *xlogreader;
-	ReadLocalXLogPageNoWaitPrivate *private_data;
-	XLogRecPtr	first_valid_record;
-
-	/*
-	 * Reading WAL below the first page of the first segments isn't allowed.
-	 * This is a bootstrap WAL page and the page_read callback fails to read
-	 * it.
-	 */
-	if (lsn < XLOG_BLCKSZ)
-		ereport(ERROR,
-				(errmsg("could not read WAL at LSN %X/%X",
-						LSN_FORMAT_ARGS(lsn))));
-
-	private_data = (ReadLocalXLogPageNoWaitPrivate *)
-		palloc0(sizeof(ReadLocalXLogPageNoWaitPrivate));
-
-	xlogreader = XLogReaderAllocate(wal_segment_size, NULL,
-									XL_ROUTINE(.page_read = &read_local_xlog_page_no_wait,
-											   .segment_open = &wal_segment_open,
-											   .segment_close = &wal_segment_close),
-									private_data);
-
-	if (xlogreader == NULL)
-		ereport(ERROR,
-				(errcode(ERRCODE_OUT_OF_MEMORY),
-				 errmsg("out of memory"),
-				 errdetail("Failed while allocating a WAL reading processor.")));
-
-	/* first find a valid recptr to start from */
-	first_valid_record = XLogFindNextRecord(xlogreader, lsn);
-
-	if (XLogRecPtrIsInvalid(first_valid_record))
-		ereport(ERROR,
-				(errmsg("could not find a valid record after %X/%X",
-						LSN_FORMAT_ARGS(lsn))));
-
-	return xlogreader;
-}
-
-/*
- * Read next WAL record.
- *
- * By design, to be less intrusive in a running system, no slot is allocated
- * to reserve the WAL we're about to read. Therefore this function can
- * encounter read errors for historical WAL.
- *
- * We guard against ordinary errors trying to read WAL that hasn't been
- * written yet by limiting end_lsn to the flushed WAL, but that can also
- * encounter errors if the flush pointer falls in the middle of a record. In
- * that case we'll return NULL.
- */
-static XLogRecord *
-ReadNextXLogRecord(XLogReaderState *xlogreader)
-{
-	XLogRecord *record;
-	char	   *errormsg;
-
-	record = XLogReadRecord(xlogreader, &errormsg);
-
-	if (record == NULL)
-	{
-		ReadLocalXLogPageNoWaitPrivate *private_data;
-
-		/* return NULL, if end of WAL is reached */
-		private_data = (ReadLocalXLogPageNoWaitPrivate *)
-			xlogreader->private_data;
-
-		if (private_data->end_of_wal)
-			return NULL;
-
-		if (errormsg)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read WAL at %X/%X: %s",
-							LSN_FORMAT_ARGS(xlogreader->EndRecPtr), errormsg)));
-		else
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read WAL at %X/%X",
-							LSN_FORMAT_ARGS(xlogreader->EndRecPtr))));
-	}
-
-	return record;
 }
 
 /*

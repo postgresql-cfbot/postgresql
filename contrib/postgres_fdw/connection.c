@@ -1384,6 +1384,14 @@ pgfdw_cancel_query_begin(PGconn *conn)
 		}
 		PQfreeCancel(cancel);
 	}
+	else
+	{
+		ereport(WARNING,
+				(errcode(ERRCODE_CONNECTION_FAILURE),
+				 errmsg("could not send cancel request: %s",
+						pchomp(PQerrorMessage(conn)))));
+		return false;
+	}
 
 	return true;
 }

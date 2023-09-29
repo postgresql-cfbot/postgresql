@@ -95,6 +95,8 @@ static char *ChooseIndexNameAddition(const List *colnames);
 static List *ChooseIndexColumnNames(const List *indexElems);
 static void ReindexIndex(const RangeVar *indexRelation, const ReindexParams *params,
 						 bool isTopLevel);
+static void reindex_event_trigger_collect(Oid oid);
+static void reindex_event_trigger_collect_relation(Oid oid);
 static void RangeVarCallbackForReindexIndex(const RangeVar *relation,
 											Oid relId, Oid oldRelId, void *arg);
 static Oid	ReindexTable(const RangeVar *relation, const ReindexParams *params,
@@ -110,6 +112,8 @@ static bool ReindexRelationConcurrently(Oid relationOid,
 										const ReindexParams *params);
 static void update_relispartition(Oid relationId, bool newval);
 static inline void set_indexsafe_procflags(void);
+
+static ReindexStmt *currentReindexStatement = NULL;
 
 /*
  * callback argument type for RangeVarCallbackForReindexIndex()
@@ -2696,6 +2700,12 @@ ExecReindex(ParseState *pstate, const ReindexStmt *stmt, bool isTopLevel)
 	bool		verbose = false;
 	char	   *tablespacename = NULL;
 
+	/*
+	 * Make current stmt available for event triggers without directly passing
+	 * the context to every subsequent call.
+	 */
+	currentReindexStatement = unconstify(ReindexStmt*, stmt);
+
 	/* Parse option list */
 	foreach(lc, stmt->params)
 	{
@@ -2776,6 +2786,12 @@ ExecReindex(ParseState *pstate, const ReindexStmt *stmt, bool isTopLevel)
 				 (int) stmt->kind);
 			break;
 	}
+
+	/*
+	 * Clear the reindex stmt global reference now that triggers should have
+	 * completed
+	 */
+	currentReindexStatement = NULL;
 }
 
 /*
@@ -2827,6 +2843,8 @@ ReindexIndex(const RangeVar *indexRelation, const ReindexParams *params, bool is
 
 		newparams.options |= REINDEXOPT_REPORT_PROGRESS;
 		reindex_index(indOid, false, persistence, &newparams);
+		/* Add the index to event trigger */
+		reindex_event_trigger_collect(indOid);
 	}
 }
 
@@ -2950,6 +2968,9 @@ ReindexTable(const RangeVar *relation, const ReindexParams *params, bool isTopLe
 			ereport(NOTICE,
 					(errmsg("table \"%s\" has no indexes to reindex",
 							relation->relname)));
+
+		/* Create even for the indexes being modified */
+		reindex_event_trigger_collect_relation(heapOid);
 	}
 
 	return heapOid;
@@ -3366,6 +3387,8 @@ ReindexMultipleInternal(const List *relids, const ReindexParams *params)
 			newparams.options |=
 				REINDEXOPT_REPORT_PROGRESS | REINDEXOPT_MISSING_OK;
 			reindex_index(relid, false, relpersistence, &newparams);
+			/* Add the index to event trigger */
+			reindex_event_trigger_collect(relid);
 			PopActiveSnapshot();
 			/* reindex_index() does the verbose output */
 		}
@@ -3386,6 +3409,9 @@ ReindexMultipleInternal(const List *relids, const ReindexParams *params)
 						(errmsg("table \"%s.%s\" was reindexed",
 								get_namespace_name(get_rel_namespace(relid)),
 								get_rel_name(relid))));
+
+			/* Create even for the indexes being modified */
+			reindex_event_trigger_collect_relation(relid);
 
 			PopActiveSnapshot();
 		}
@@ -3832,6 +3858,9 @@ ReindexRelationConcurrently(Oid relationOid, const ReindexParams *params)
 		newidx->amId = idx->amId;
 
 		newIndexIds = lappend(newIndexIds, newidx);
+
+		/* Add the index to event trigger */
+		reindex_event_trigger_collect(newIndexId);
 
 		/*
 		 * Save lockrelid to protect each relation from drop then close
@@ -4435,4 +4464,58 @@ set_indexsafe_procflags(void)
 	MyProc->statusFlags |= PROC_IN_SAFE_IC;
 	ProcGlobal->statusFlags[MyProc->pgxactoff] = MyProc->statusFlags;
 	LWLockRelease(ProcArrayLock);
+}
+
+static void
+reindex_event_trigger_collect(Oid oid)
+{
+	ObjectAddress address;
+
+	if (currentReindexStatement == NULL)
+		return;
+
+	address.classId = RelationRelationId;
+	address.objectId = oid;
+	address.objectSubId = 0;
+
+	EventTriggerCollectSimpleCommand(address,
+									 InvalidObjectAddress, (Node *) currentReindexStatement);
+}
+
+static void
+reindex_event_trigger_collect_relation(Oid relid)
+{
+	Relation	rel;
+	List	   *indexIds = NULL;
+	ListCell   *indexId = NULL;
+
+	/*
+	 * Open and lock the relation.  ShareLock is sufficient since we only need
+	 * to prevent schema and data changes in it.  The lock level used here
+	 * should match catalog's reindex_relation().
+	 */
+	rel = try_table_open(relid, ShareLock);
+
+	/* if relation is gone, leave */
+	if (!rel)
+		return;
+
+	/*
+	 * Get the list of index OIDs for this relation.  (We trust to the
+	 * relcache to get this with a sequential scan if ignoring system
+	 * indexes.)
+	 */
+	indexIds = RelationGetIndexList(rel);
+
+	/*
+	 * Get the list of index OIDs for this relation.
+	 */
+	foreach(indexId, indexIds)
+	{
+		Oid			indexOid = lfirst_oid(indexId);
+
+		reindex_event_trigger_collect(indexOid);
+	}
+
+	table_close(rel, ShareLock);
 }

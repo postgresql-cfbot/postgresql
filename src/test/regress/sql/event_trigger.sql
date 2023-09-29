@@ -418,6 +418,105 @@ drop table rewriteme;
 drop event trigger no_rewrite_allowed;
 drop function test_evtrig_no_rewrite();
 
+-- test Reindex Event Trigger
+CREATE OR REPLACE FUNCTION reindex_start_command()
+RETURNS event_trigger AS $$
+BEGIN
+  RAISE NOTICE 'ddl_start_command -- REINDEX: % %', tg_event, tg_tag;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE EVENT TRIGGER start_reindex_command ON ddl_command_start
+    WHEN TAG IN ('REINDEX') EXECUTE PROCEDURE reindex_start_command();
+
+CREATE OR REPLACE FUNCTION reindex_end_command()
+RETURNS event_trigger AS $$
+DECLARE
+  obj record;
+BEGIN
+  FOR obj IN SELECT * FROM pg_event_trigger_ddl_commands()
+    LOOP
+      RAISE NOTICE 'ddl_end_command -- REINDEX: %', pg_get_indexdef(obj.objid);
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE EVENT TRIGGER end_reindex_command ON ddl_command_end
+    WHEN TAG IN ('REINDEX') EXECUTE PROCEDURE reindex_end_command();
+
+-- test REINDEX event for a standard table
+DROP SCHEMA IF EXISTS reindex_test CASCADE;
+CREATE SCHEMA reindex_test;
+CREATE TABLE reindex_test.reindex_tester1 (a int);
+CREATE INDEX reindex_test1_idx1 ON reindex_test.reindex_tester1 (a);
+CREATE INDEX reindex_test1_idx2 ON reindex_test.reindex_tester1 (a);
+CREATE TABLE reindex_test.reindex_tester2 (a int);
+CREATE INDEX reindex_test2_idx1 ON reindex_test.reindex_tester2 (a);
+
+REINDEX INDEX reindex_test.reindex_test1_idx1;
+REINDEX TABLE reindex_test.reindex_tester1;
+REINDEX INDEX CONCURRENTLY reindex_test.reindex_test2_idx1;
+REINDEX TABLE CONCURRENTLY reindex_test.reindex_tester2;
+
+-- test REINDEX event for a partitioned table
+CREATE TABLE reindex_test.ptif_test (a int, b int) PARTITION BY range (a);
+CREATE TABLE reindex_test.ptif_test0 PARTITION OF reindex_test.ptif_test
+  FOR VALUES FROM (minvalue) TO (0) PARTITION BY list (b);
+CREATE TABLE reindex_test.ptif_test01 PARTITION OF reindex_test.ptif_test0 FOR VALUES IN (1);
+CREATE TABLE reindex_test.ptif_test1 PARTITION OF reindex_test.ptif_test
+  FOR VALUES FROM (0) TO (100) PARTITION BY list (b);
+CREATE TABLE reindex_test.ptif_test11 PARTITION OF reindex_test.ptif_test1 FOR VALUES IN (1);
+CREATE TABLE reindex_test.ptif_test2 PARTITION OF reindex_test.ptif_test
+  FOR VALUES FROM (100) TO (200);
+-- This partitioned table should remain with no partitions.
+CREATE TABLE reindex_test.ptif_test3 PARTITION OF reindex_test.ptif_test
+  FOR VALUES FROM (200) TO (maxvalue) PARTITION BY list (b);
+
+CREATE INDEX ptif_test_index ON ONLY reindex_test.ptif_test (a);
+CREATE INDEX ptif_test0_index ON ONLY reindex_test.ptif_test0 (a);
+ALTER INDEX reindex_test.ptif_test_index ATTACH PARTITION reindex_test.ptif_test0_index;
+CREATE INDEX ptif_test01_index ON reindex_test.ptif_test01 (a);
+ALTER INDEX reindex_test.ptif_test0_index ATTACH PARTITION reindex_test.ptif_test01_index;
+CREATE INDEX ptif_test1_index ON ONLY reindex_test.ptif_test1 (a);
+ALTER INDEX reindex_test.ptif_test_index ATTACH PARTITION reindex_test.ptif_test1_index;
+CREATE INDEX ptif_test11_index ON reindex_test.ptif_test11 (a);
+ALTER INDEX reindex_test.ptif_test1_index ATTACH PARTITION reindex_test.ptif_test11_index;
+CREATE INDEX ptif_test2_index ON reindex_test.ptif_test2 (a);
+ALTER INDEX reindex_test.ptif_test_index ATTACH PARTITION reindex_test.ptif_test2_index;
+CREATE INDEX ptif_test3_index ON reindex_test.ptif_test3 (a);
+ALTER INDEX reindex_test.ptif_test_index ATTACH PARTITION reindex_test.ptif_test3_index;
+
+-- reindex at the top level table to recursively reindex each partition
+REINDEX INDEX CONCURRENTLY reindex_test.ptif_test_index;
+-- ptif_test0 is partitioned table so it will index partition: ptif_test01_index
+-- event trigger will log ptif_test01_index
+REINDEX INDEX CONCURRENTLY reindex_test.ptif_test0_index;
+-- ptif_test1_index is partitioned index so it will index partition: ptif_test11_index
+-- event trigger will effect on partion index:ptif_test11_index
+REINDEX INDEX CONCURRENTLY reindex_test.ptif_test1_index;
+-- ptif_test2 is a partition so event trigger will log ptif_test2_index
+REINDEX INDEX CONCURRENTLY reindex_test.ptif_test2_index;
+-- no partitions: event trigger won't do anything
+REINDEX INDEX CONCURRENTLY reindex_test.ptif_test3_index;
+
+-- reindex at the top level table to recursively reindex each partition
+REINDEX TABLE reindex_test.ptif_test;
+-- will direct to ptif_test01
+REINDEX TABLE reindex_test.ptif_test0;
+-- will index its associtaed index
+REINDEX TABLE reindex_test.ptif_test01;
+-- will index its associtaed index
+REINDEX TABLE reindex_test.ptif_test11;
+-- will index its associtaed index
+REINDEX TABLE reindex_test.ptif_test2;
+-- no partion, index won't do anything
+REINDEX TABLE reindex_test.ptif_test3;
+
+DROP EVENT TRIGGER start_reindex_command;
+DROP EVENT TRIGGER end_reindex_command;
+DROP SCHEMA reindex_test CASCADE;
+DROP FUNCTION reindex_end_command;
+
 -- test Row Security Event Trigger
 RESET SESSION AUTHORIZATION;
 CREATE TABLE event_trigger_test (a integer, b text);

@@ -961,7 +961,9 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 			break;
 
 		case T_ReindexStmt:
-			ExecReindex(pstate, (ReindexStmt *) parsetree, isTopLevel);
+			ProcessUtilitySlow(pstate, pstmt, queryString,
+							   context, params, queryEnv,
+							   dest, qc);
 			break;
 
 			/*
@@ -1572,6 +1574,12 @@ ProcessUtilitySlow(ParseState *pstate,
 					commandCollected = true;
 					EventTriggerAlterTableEnd();
 				}
+				break;
+
+			case T_ReindexStmt:
+				ExecReindex(pstate, (ReindexStmt *) parsetree, isTopLevel);
+				/* no commands stashed for REINDEX */
+				commandCollected = true;
 				break;
 
 			case T_CreateExtensionStmt:
@@ -3620,7 +3628,7 @@ GetCommandLogLevel(Node *parsetree)
 			break;
 
 		case T_ReindexStmt:
-			lev = LOGSTMT_ALL;	/* should this be DDL? */
+			lev = LOGSTMT_DDL;
 			break;
 
 		case T_CreateConversionStmt:

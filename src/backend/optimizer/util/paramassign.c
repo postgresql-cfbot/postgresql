@@ -307,6 +307,57 @@ replace_outer_grouping(PlannerInfo *root, GroupingFunc *grp)
 }
 
 /*
+ * Generate a Param node to replace the given FuncExpr node, which is expected
+ * to be a merge support function in the RETURNING list of an upper-level
+ * MERGE query.  Record the need for the FuncExpr in the proper upper-level
+ * root->plan_params.
+ */
+Param *
+replace_outer_merge_support_function(PlannerInfo *root, FuncExpr *func)
+{
+	Param	   *retval;
+	PlannerParamItem *pitem;
+	Oid			ptype = exprType((Node *) func);
+
+	Assert(root->parse->commandType != CMD_MERGE);
+
+	/*
+	 * The parser should have ensured that the merge support function is in
+	 * the RETURNING list of an upper-level MERGE query, so find that query.
+	 */
+	do
+	{
+		root = root->parent_root;
+		if (root == NULL)
+			elog(ERROR, "merge support function used outside MERGE");
+	} while (root->parse->commandType != CMD_MERGE);
+
+	/*
+	 * It does not seem worthwhile to try to de-duplicate references to outer
+	 * merge support functions.  Just make a new slot every time.
+	 */
+	func = copyObject(func);
+
+	pitem = makeNode(PlannerParamItem);
+	pitem->item = (Node *) func;
+	pitem->paramId = list_length(root->glob->paramExecTypes);
+	root->glob->paramExecTypes = lappend_oid(root->glob->paramExecTypes,
+											 ptype);
+
+	root->plan_params = lappend(root->plan_params, pitem);
+
+	retval = makeNode(Param);
+	retval->paramkind = PARAM_EXEC;
+	retval->paramid = pitem->paramId;
+	retval->paramtype = ptype;
+	retval->paramtypmod = -1;
+	retval->paramcollid = InvalidOid;
+	retval->location = func->location;
+
+	return retval;
+}
+
+/*
  * Generate a Param node to replace the given Var,
  * which is expected to come from some upper NestLoop plan node.
  * Record the need for the Var in root->curOuterParams.

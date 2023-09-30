@@ -1209,6 +1209,15 @@ SHOW intervalstyle;
  postgres
 (1 row)
 
+-- Check custom wait events are registered
+SELECT name FROM pg_wait_events WHERE name ~ '^Dblink'
+ORDER BY name COLLATE "C";
+       name       
+------------------
+ DblinkConnect
+ DblinkGetConnect
+(2 rows)
+
 -- Clean up GUC-setting tests
 SELECT dblink_disconnect('myconn');
  dblink_disconnect 

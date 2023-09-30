@@ -106,6 +106,16 @@ static bool autoprewarm = true; /* start worker? */
 static int	autoprewarm_interval = 300; /* dump interval */
 
 /*
+ * Cached custom wait events, fetched from shared memory.
+ *
+ * Note that they are not reported on pg_stat_activity. pgstat_bestart() isn't
+ * called because the autoprewarm worker isn't an auxiliary process and it
+ * doesn't connect to a database.
+ */
+static uint32 autoprewarm_we_shutdown = 0;
+static uint32 autoprewarm_we_delay = 0;
+
+/*
  * Module load callback.
  */
 void
@@ -233,11 +243,15 @@ autoprewarm_main(Datum main_arg)
 
 		if (autoprewarm_interval <= 0)
 		{
+			/* first time, allocate or get the custom wait event */
+			if (autoprewarm_we_shutdown == 0)
+				autoprewarm_we_shutdown = WaitEventExtensionNew("PgPrewarmDumpShutdown");
+
 			/* We're only dumping at shutdown, so just wait forever. */
 			(void) WaitLatch(MyLatch,
 							 WL_LATCH_SET | WL_EXIT_ON_PM_DEATH,
 							 -1L,
-							 WAIT_EVENT_EXTENSION);
+							autoprewarm_we_shutdown);
 		}
 		else
 		{
@@ -260,11 +274,15 @@ autoprewarm_main(Datum main_arg)
 				continue;
 			}
 
+			/* first time, allocate or get the custom wait event */
+			if (autoprewarm_we_delay == 0)
+				autoprewarm_we_delay = WaitEventExtensionNew("PgPrewarmDumpDelay");
+
 			/* Sleep until the next dump time. */
 			(void) WaitLatch(MyLatch,
 							 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
 							 delay_in_ms,
-							 WAIT_EVENT_EXTENSION);
+							 autoprewarm_we_delay);
 		}
 
 		/* Reset the latch, loop. */

@@ -1154,10 +1154,17 @@ pg_get_indexdef(PG_FUNCTION_ARGS)
 
 	prettyFlags = PRETTYFLAG_INDENT;
 
+	/*
+	 * Setup the snapshot to get the catalog information using this snapshot
+	 * which will prevent accessing a future catalog data which has occurred
+	 * due to concurrent catalog change.
+	 */
+	SetupHistoricSnapshot(GetActiveSnapshot(), NULL);
 	res = pg_get_indexdef_worker(indexrelid, 0, NULL,
 								 false, false,
 								 false, false,
 								 prettyFlags, true);
+	TeardownHistoricSnapshot(false);
 
 	if (res == NULL)
 		PG_RETURN_NULL();

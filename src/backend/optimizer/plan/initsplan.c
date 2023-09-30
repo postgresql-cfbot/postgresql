@@ -2619,6 +2619,225 @@ check_redundant_nullability_qual(PlannerInfo *root, Node *clause)
 }
 
 /*
+ * add_baserestrictinfo_to_rel
+ *	  Add 'restrictinfo' as a baserestrictinfo to the base relation denoted by
+ *	  'relid'.  While here, attempt to determine if the given qual is always
+ *	  true or always false when evaluated as a base qual.  If we can determine
+ *	  that the qual needn't be evaluated by the executor, we replace the qual
+ *	  with a constant "true" or "false".
+ */
+static void
+add_baserestrictinfo_to_rel(PlannerInfo *root, Index relid,
+							RestrictInfo *restrictinfo)
+{
+	RelOptInfo *rel = find_base_rel(root, relid);
+	Expr	   *newclause;
+
+	Assert(bms_membership(restrictinfo->required_relids) == BMS_SINGLETON);
+
+	newclause = transform_clause(root, restrictinfo->clause);
+
+	if (newclause != restrictinfo->clause)
+	{
+		restrictinfo = make_restrictinfo(root,
+										 newclause,
+										 restrictinfo->is_pushed_down,
+										 restrictinfo->has_clone,
+										 restrictinfo->is_clone,
+										 restrictinfo->pseudoconstant,
+										 restrictinfo->security_level,
+										 restrictinfo->required_relids,
+										 restrictinfo->incompatible_relids,
+										 restrictinfo->outer_relids);
+	}
+
+	/* Add clause to rel's restriction list */
+	rel->baserestrictinfo = lappend(rel->baserestrictinfo, restrictinfo);
+
+	/* Update security level info */
+	rel->baserestrict_min_security = Min(rel->baserestrict_min_security,
+										 restrictinfo->security_level);
+}
+
+/*
+ * transform_nulltest
+ *	  Attempt to transform the given NullTest and into a constant "true" or
+ *	  "false".  This maybe possible when the column has a NOT NULL constraint
+ *	  which means an IS NOT NULL clause is always true or a IS NULL clause is
+ *	  always false.  If there is no NOT NULL constraint or if the column is
+ *	  NULLable by an outer join, or the NullTest's arg isn't a Var, then we
+ *	  return the input NullTest.
+ */
+static Expr *
+transform_nulltest(PlannerInfo *root, NullTest *nulltest)
+{
+	Var		   *var;
+	bool		notnull = false;
+
+	Assert(IsA(nulltest, NullTest));
+
+	/*
+	 * We only support Vars as there's no ability to have a NOT NULL constraint
+	 * on anything else.
+	 */
+	if (!IsA(nulltest->arg, Var))
+		return (Expr *) nulltest;
+
+	var = (Var *) nulltest->arg;
+
+	/* could the Var be nulled by any outer joins? */
+	if (var->varnullingrels != NULL)
+		return (Expr *) nulltest;
+
+	/* system columns cannot be NULL */
+	if (var->varattno < 0)
+		notnull = true;
+	else if (var->varattno > 0)
+	{
+		/* is the column defined NOT NULL? */
+		RelOptInfo *rel = find_base_rel(root, var->varno);
+		
+		if (bms_is_member(var->varattno, rel->notnullattnums))
+			notnull = true;
+	}
+	else
+	{
+		RelOptInfo	   *rel = find_base_rel(root, var->varno);
+		Bitmapset	   *allattnums = bms_add_range(NULL, 1, rel->max_attr);
+
+		/*
+		 * Handle whole-row Vars.  The SQL standard defines IS [NOT] NULL for a
+		 * non-null rowtype argument as:
+		 *
+		 * "R IS NULL" is true if every field is the null value.
+		 *
+		 * "R IS NOT NULL" is true if no field is the null value.
+		 */
+
+		/*
+		 * XXX the IS NOT NULL won't work correctly if there are dropped columns.
+		 * Is it worth having another set in RelOptInfo to allow us to remove
+		 * dropped columns from allattnums before the bms_nonempty_difference?
+		 * XXX should we even bother handling whole-row Vars??
+		 */
+		if (nulltest->nulltesttype == IS_NOT_NULL)
+			notnull = !bms_nonempty_difference(allattnums,
+											   rel->notnullattnums);
+		else
+			notnull = bms_overlap(allattnums, rel->notnullattnums);
+		bms_free(allattnums);
+	}
+
+	/*
+	 * When the column cannot be NULL, we can transform IS NOT NULL quals to
+	 * "true" and IS NULL quals to "false".
+	 */
+	if (notnull)
+	{
+		bool	constexpr = (nulltest->nulltesttype == IS_NOT_NULL);
+
+		return (Expr *) makeBoolConst(constexpr, false);
+	}
+
+	return (Expr *) nulltest;
+}
+
+/*
+ * transform_clause
+ *	  Check and attempt to transform 'clause' into either a constant true or
+ *	  constant false if we're able to determine that the qual needn't be
+ *	  evaluated by the executor.
+ *
+ * Returns a newly allocated Expr if any tranformation was done, else returns
+ * the input Expr unmodified.
+ */
+Expr *
+transform_clause(PlannerInfo *root, Expr *clause)
+{
+	/*
+	 * Currently we only check for NullTest quals and OR clauses that include
+	 * NullTest quals.
+	 */
+
+	/* Check for NullTest qual */
+	if (IsA(clause, NullTest))
+		return transform_nulltest(root, (NullTest *) clause);
+
+	if (is_orclause(clause))
+	{
+		ListCell   *lc;
+		bool reeval_const = false;
+
+		/* If it's an OR, check its sub-clauses */
+		foreach (lc, ((BoolExpr *) clause)->args)
+		{
+			Expr   *orarg = (Expr *) lfirst(lc);
+
+			if (IsA(orarg, Const))
+				reeval_const = true;
+			else
+			{
+				Expr   *newexpr = transform_clause(root, orarg);
+
+				if (newexpr != orarg)
+				{
+					reeval_const = true;
+					lfirst(lc) = newexpr;
+				}
+			}
+		}
+
+		/*
+		 * If we managed to transform any clauses or found a Const in the OR clause
+		 * then let's try constant folding again as it may allow us to simplify (or
+		 * delete) the OR clause.
+		 */
+		if (reeval_const)
+			clause = (Expr *) eval_const_expressions(root, (Node *) clause);
+	}
+
+	return clause;
+}
+
+void
+transform_join_clauses(PlannerInfo *root)
+{
+	if (root->simple_rel_array_size == 1)
+		return;
+
+	for (int i = 1; i < root->simple_rel_array_size; i++)
+	{
+		RelOptInfo *rel = root->simple_rel_array[i];
+		ListCell *lc;
+
+		if (rel == NULL || rel->reloptkind != RELOPT_BASEREL)
+			continue;
+
+		foreach(lc, rel->joininfo)
+		{
+			RestrictInfo *restrictinfo = lfirst(lc);
+			Expr *newclause = transform_clause(root, restrictinfo->clause);
+
+			if (newclause != restrictinfo->clause)
+			{
+				restrictinfo =
+						make_restrictinfo(root,
+										  newclause,
+										  restrictinfo->is_pushed_down,
+										  restrictinfo->has_clone,
+										  restrictinfo->is_clone,
+										  restrictinfo->pseudoconstant,
+										  restrictinfo->security_level,
+										  restrictinfo->required_relids,
+										  restrictinfo->incompatible_relids,
+										  restrictinfo->outer_relids);
+				lfirst(lc) = restrictinfo;
+			}
+		}
+	}
+}
+
+/*
  * distribute_restrictinfo_to_rels
  *	  Push a completed RestrictInfo into the proper restriction or join
  *	  clause list(s).
@@ -2632,58 +2851,39 @@ distribute_restrictinfo_to_rels(PlannerInfo *root,
 								RestrictInfo *restrictinfo)
 {
 	Relids		relids = restrictinfo->required_relids;
-	RelOptInfo *rel;
+	int			relid;
 
-	switch (bms_membership(relids))
+	if (relids == NULL)
 	{
-		case BMS_SINGLETON:
+		/*
+		 * clause references no rels, and therefore we have no place to
+		 * attach it.  Shouldn't get here if callers are working properly.
+		 */
+		elog(ERROR, "cannot cope with variable-free clause");
+	}
+	else if (bms_get_singleton_member(relids, &relid))
+		add_baserestrictinfo_to_rel(root, relid, restrictinfo);
+	else
+	{
+		/*
+		 * The clause is a join clause, since there is more than one rel in
+		 * its relid set.
+		 */
 
-			/*
-			 * There is only one relation participating in the clause, so it
-			 * is a restriction clause for that relation.
-			 */
-			rel = find_base_rel(root, bms_singleton_member(relids));
+		/*
+		 * Check for hashjoinable operators.  (We don't bother setting the
+		 * hashjoin info except in true join clauses.)
+		 */
+		check_hashjoinable(restrictinfo);
 
-			/* Add clause to rel's restriction list */
-			rel->baserestrictinfo = lappend(rel->baserestrictinfo,
-											restrictinfo);
-			/* Update security level info */
-			rel->baserestrict_min_security = Min(rel->baserestrict_min_security,
-												 restrictinfo->security_level);
-			break;
-		case BMS_MULTIPLE:
+		/*
+		 * Likewise, check if the clause is suitable to be used with a Memoize
+		 * node to cache inner tuples during a parameterized nested loop.
+		 */
+		check_memoizable(restrictinfo);
 
-			/*
-			 * The clause is a join clause, since there is more than one rel
-			 * in its relid set.
-			 */
-
-			/*
-			 * Check for hashjoinable operators.  (We don't bother setting the
-			 * hashjoin info except in true join clauses.)
-			 */
-			check_hashjoinable(restrictinfo);
-
-			/*
-			 * Likewise, check if the clause is suitable to be used with a
-			 * Memoize node to cache inner tuples during a parameterized
-			 * nested loop.
-			 */
-			check_memoizable(restrictinfo);
-
-			/*
-			 * Add clause to the join lists of all the relevant relations.
-			 */
-			add_join_clause_to_rels(root, restrictinfo, relids);
-			break;
-		default:
-
-			/*
-			 * clause references no rels, and therefore we have no place to
-			 * attach it.  Shouldn't get here if callers are working properly.
-			 */
-			elog(ERROR, "cannot cope with variable-free clause");
-			break;
+		/* Add clause to the join lists of all the relevant relations. */
+		add_join_clause_to_rels(root, restrictinfo, relids);
 	}
 }
 

@@ -195,6 +195,8 @@ query_planner(PlannerInfo *root,
 	 */
 	reconsider_outer_join_clauses(root);
 
+	transform_join_clauses(root);
+
 	/*
 	 * If we formed any equivalence classes, generate additional restriction
 	 * clauses as appropriate.  (Implied join clauses are formed on-the-fly

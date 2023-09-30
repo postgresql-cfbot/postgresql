@@ -7690,11 +7690,26 @@ conversion_error_callback(void *arg)
 EquivalenceMember *
 find_em_for_rel(PlannerInfo *root, EquivalenceClass *ec, RelOptInfo *rel)
 {
-	ListCell   *lc;
+	Relids		top_parent_rel_relids;
+	List	   *members;
+	bool		modified;
+	int			i;
 
-	foreach(lc, ec->ec_members)
+	/* See the comments in get_eclass_for_sort_expr() to see how this works. */
+	top_parent_rel_relids = find_relids_top_parents(root, rel->relids);
+
+	members = ec->ec_members;
+	modified = false;
+	for (i = 0; i < list_length(members); i++)
 	{
-		EquivalenceMember *em = (EquivalenceMember *) lfirst(lc);
+		EquivalenceMember *em = list_nth_node(EquivalenceMember, members, i);
+
+		/* See the comments in get_eclass_for_sort_expr() to see how this works. */
+		if (unlikely(top_parent_rel_relids != NULL) && !em->em_is_child &&
+			bms_is_subset(em->em_relids, top_parent_rel_relids))
+			add_child_rel_equivalences_to_list(root, ec, em,
+											   rel->relids,
+											   &members, &modified);
 
 		/*
 		 * Note we require !bms_is_empty, else we'd accept constant
@@ -7705,6 +7720,8 @@ find_em_for_rel(PlannerInfo *root, EquivalenceClass *ec, RelOptInfo *rel)
 			is_foreign_expr(root, rel, em->em_expr))
 			return em;
 	}
+	if (unlikely(modified))
+		list_free(members);
 
 	return NULL;
 }
@@ -7758,9 +7775,8 @@ find_em_for_rel_target(PlannerInfo *root, EquivalenceClass *ec,
 			if (em->em_is_const)
 				continue;
 
-			/* Ignore child members */
-			if (em->em_is_child)
-				continue;
+			/* Child members should not exist in ec_members */
+			Assert(!em->em_is_child);
 
 			/* Match if same expression (after stripping relabel) */
 			em_expr = em->em_expr;

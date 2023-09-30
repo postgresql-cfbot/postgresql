@@ -246,6 +246,14 @@ struct PlannerInfo
 	struct AppendRelInfo **append_rel_array pg_node_attr(read_write_ignore);
 
 	/*
+	 * append_rel_array is the same length as simple_rel_array and holds the
+	 * top-level parent indexes of the corresponding rels within
+	 * simple_rel_array. The element can be zero if the rel has no parents,
+	 * i.e., is itself in a top-level.
+	 */
+	Index	   *top_parent_relid_array pg_node_attr(read_write_ignore);
+
+	/*
 	 * all_baserels is a Relids set of all base relids (but not joins or
 	 * "other" rels) in the query.  This is computed in deconstruct_jointree.
 	 */
@@ -309,6 +317,12 @@ struct PlannerInfo
 
 	/* list of active EquivalenceClasses */
 	List	   *eq_classes;
+
+	/* list of source RestrictInfos used to build EquivalenceClasses */
+	List	   *eq_sources;
+
+	/* list of RestrictInfos derived from EquivalenceClasses */
+	List	   *eq_derives;
 
 	/* set true once ECs are canonical */
 	bool		ec_merging_done;
@@ -937,6 +951,17 @@ typedef struct RelOptInfo
 	uint32		amflags;
 
 	/*
+	 * information about a join rel
+	 */
+	/* index in root->join_rel_list of this rel */
+	Index		join_rel_list_index;
+
+	/*
+	 * EquivalenceMembers referencing this rel
+	 */
+	List	   *eclass_child_members;
+
+	/*
 	 * Information about foreign tables and foreign joins
 	 */
 	/* identifies server for the table or join */
@@ -1350,6 +1375,41 @@ typedef struct JoinDomain
  * entry: consider SELECT random() AS a, random() AS b ... ORDER BY b,a.
  * So we record the SortGroupRef of the originating sort clause.
  *
+ * TODO: We should update the following comments.
+ *
+ * At various locations in the query planner, we must search for
+ * EquivalenceMembers within a given EquivalenceClass.  For the common case,
+ * an EquivalenceClass does not have a large number of EquivalenceMembers,
+ * however, in cases such as planning queries to partitioned tables, the number
+ * of members can become large.  To maintain planning performance, we make use
+ * of a bitmap index to allow us to quickly find EquivalenceMembers in a given
+ * EquivalenceClass belonging to a given relation or set of relations.  This
+ * is done by storing a list of EquivalenceMembers belonging to all
+ * EquivalenceClasses in PlannerInfo and storing a Bitmapset for each
+ * RelOptInfo which has a bit set for each EquivalenceMember in that list
+ * which relates to the given relation.  We also store a Bitmapset to mark all
+ * of the indexes in the PlannerInfo's list of EquivalenceMembers in the
+ * EquivalenceClass.  We can quickly find the interesting indexes into the
+ * PlannerInfo's list by performing a bit-wise AND on the RelOptInfo's
+ * Bitmapset and the EquivalenceClasses.
+ *
+ * To further speed up the lookup of EquivalenceMembers we also record the
+ * non-child indexes.  This allows us to deal with fewer bits for searches
+ * that don't require "is_child" EquivalenceMembers.  We must also store the
+ * indexes into EquivalenceMembers which have no relids mentioned as some
+ * searches require that.
+ *
+ * Additionally, we also store the EquivalenceMembers of a given
+ * EquivalenceClass in the ec_members list.  Technically, we could obtain this
+ * from looking at the bits in ec_member_indexes, however, finding all members
+ * of a given EquivalenceClass is common enough that it pays to have fast
+ * access to a dense list containing all members.
+ *
+ * The source and derived RestrictInfos are indexed in a similar method,
+ * although we don't maintain a List in the EquivalenceClass for these.  These
+ * must be looked up in PlannerInfo using the ec_source_indexes and
+ * ec_derive_indexes Bitmapsets.
+ *
  * NB: if ec_merged isn't NULL, this class has been merged into another, and
  * should be ignored in favor of using the pointed-to class.
  *
@@ -1368,8 +1428,14 @@ typedef struct EquivalenceClass
 	List	   *ec_opfamilies;	/* btree operator family OIDs */
 	Oid			ec_collation;	/* collation, if datatypes are collatable */
 	List	   *ec_members;		/* list of EquivalenceMembers */
-	List	   *ec_sources;		/* list of generating RestrictInfos */
-	List	   *ec_derives;		/* list of derived RestrictInfos */
+	List	   *ec_norel_members;	/* list of EquivalenceMembers whose
+									 * em_relids is empty */
+	List	   *ec_rel_members;	/* list of EquivalenceMembers whose
+								 * em_relids is not empty */
+	Bitmapset  *ec_source_indexes;	/* indexes into PlannerInfo's eq_sources
+									 * list of generating RestrictInfos */
+	Bitmapset  *ec_derive_indexes;	/* indexes into PlannerInfo's eq_derives
+									 * list of derived RestrictInfos */
 	Relids		ec_relids;		/* all relids appearing in ec_members, except
 								 * for child members (see below) */
 	bool		ec_has_const;	/* any pseudoconstants in ec_members? */
@@ -1422,6 +1488,9 @@ typedef struct EquivalenceMember
 	bool		em_is_child;	/* derived version for a child relation? */
 	Oid			em_datatype;	/* the "nominal type" used by the opfamily */
 	JoinDomain *em_jdomain;		/* join domain containing the source clause */
+	Relids		em_child_relids;	/* all relids of child rels */
+	Bitmapset  *em_child_joinrel_relids;	/* indexes in root->join_rel_list of
+											   join rel children */
 	/* if em_is_child is true, this links to corresponding EM for top parent */
 	struct EquivalenceMember *em_parent pg_node_attr(read_write_ignore);
 } EquivalenceMember;

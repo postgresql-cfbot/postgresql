@@ -377,3 +377,86 @@ RESET ROLE;
 DROP TABLE vacowned;
 DROP TABLE vacowned_parted;
 DROP ROLE regress_vacuum;
+
+
+CREATE TYPE stats_import_complex_type AS (
+    a integer,
+    b float,
+    c text,
+    d date,
+    e jsonb);
+
+CREATE TABLE stats_import_test(
+    id INTEGER PRIMARY KEY,
+    name text,
+    comp stats_import_complex_type
+);
+
+INSERT INTO stats_import_test
+SELECT 1, 'one', (1, 1.1, 'ONE', '2001-01-01', '{ "xkey": "xval" }')::stats_import_complex_type
+UNION ALL
+SELECT 2, 'two', (2, 2.2, 'TWO', '2002-02-02', '[true, 4, "six"]')::stats_import_complex_type
+UNION ALL
+SELECT 3, 'tre', (3, 3.3, 'TRE', '2003-03-03', NULL)::stats_import_complex_type
+UNION ALL
+SELECT 4, 'four', NULL;
+
+ANALYZE stats_import_test;
+
+CREATE TABLE stats_export AS
+SELECT e.*
+FROM pg_catalog.pg_statistic_export AS e
+WHERE e.schemaname = 'public'
+AND e.relname = 'stats_import_test';
+
+SELECT c.reltuples, c.relpages
+FROM pg_class AS c
+WHERE oid = 'stats_import_test'::regclass;
+
+-- test settting tuples and pages but no columns
+SELECT pg_import_rel_stats(c.oid, current_setting('server_version_num')::integer,
+                           1000.0, 200, NULL::jsonb)
+FROM pg_class AS c
+WHERE oid = 'stats_import_test'::regclass;
+
+SELECT c.reltuples, c.relpages
+FROM pg_class AS c
+WHERE oid = 'stats_import_test'::regclass;
+
+-- create a table just like stats_import_test
+CREATE TABLE stats_import_clone ( LIKE stats_import_test );
+
+-- copy table stats to clone table
+SELECT pg_import_rel_stats(c.oid, e.server_version_num,
+                            e.n_tuples, e.n_pages, e.columns)
+FROM pg_class AS c
+JOIN pg_namespace AS n
+ON n.oid = c.relnamespace
+JOIN stats_export AS e
+ON e.schemaname = 'public'
+AND e.relname = 'stats_import_test'
+WHERE c.oid = 'stats_import_clone'::regclass;
+
+-- stats should match
+SELECT staattnum, stainherit, stanullfrac, stawidth, stadistinct,
+        stakind1, stakind2, stakind3, stakind4, stakind5,
+        staop1, staop2, staop3, staop4, staop5, stacoll1, stacoll2, stacoll3, stacoll4, stacoll5,
+        stanumbers1, stanumbers2, stanumbers3, stanumbers4, stanumbers5,
+        stavalues1::text AS sv1, stavalues2::text AS sv2, stavalues3::text AS sv3,
+        stavalues4::text AS sv4, stavalues5::text AS sv5
+FROM pg_statistic AS s
+WHERE s.starelid = 'stats_import_test'::regclass
+EXCEPT
+SELECT staattnum, stainherit, stanullfrac, stawidth, stadistinct,
+        stakind1, stakind2, stakind3, stakind4, stakind5,
+        staop1, staop2, staop3, staop4, staop5, stacoll1, stacoll2, stacoll3, stacoll4, stacoll5,
+        stanumbers1, stanumbers2, stanumbers3, stanumbers4, stanumbers5,
+        stavalues1::text AS sv1, stavalues2::text AS sv2, stavalues3::text AS sv3,
+        stavalues4::text AS sv4, stavalues5::text AS sv5
+FROM pg_statistic AS s
+WHERE s.starelid = 'stats_import_clone'::regclass;
+
+DROP TABLE stats_export;
+DROP TABLE stats_import_clone;
+DROP TABLE stats_import_test;
+DROP TYPE stats_import_complex_type;

@@ -253,6 +253,98 @@ CREATE VIEW pg_stats WITH (security_barrier) AS
 
 REVOKE ALL ON pg_statistic FROM public;
 
+CREATE VIEW pg_statistic_export WITH (security_barrier) AS
+    SELECT
+        n.nspname AS schemaname,
+        r.relname AS relname,
+        current_setting('server_version_num')::integer AS server_version_num,
+        r.reltuples::float4 AS n_tuples,
+        r.relpages::integer AS n_pages,
+        (
+            SELECT
+                jsonb_object_agg(a.attname,
+                                 (
+                                    SELECT
+                                        jsonb_object_agg(attsta.inherit_type,
+                                                         attsta.stat_obj)
+                                    FROM (
+                                        SELECT
+                                            CASE s.stainherit
+                                                WHEN TRUE THEN 'inherited'
+                                                ELSE 'regular'
+                                            END AS inherit_type,
+                                            jsonb_build_object(
+                                                'attstattarget',
+                                                CASE
+                                                    WHEN a.attstattarget >= 0 THEN a.attstattarget
+                                                    ELSE current_setting('default_statistics_target')::int4
+                                                END,
+                                                'stanullfrac', s.stanullfrac::text,
+                                                'stawidth', s.stawidth::text,
+                                                'stadistinct', s.stadistinct::text,
+                                                'stakind1', s.stakind1::text,
+                                                'stakind2', s.stakind2::text,
+                                                'stakind3', s.stakind3::text,
+                                                'stakind4', s.stakind4::text,
+                                                'stakind5', s.stakind5::text,
+                                                'staop1',
+                                                CASE s.stakind1
+                                                    WHEN 0 THEN '0'
+                                                    WHEN 1 THEN '='
+                                                    ELSE '<'
+                                                END,
+                                                'staop2',
+                                                CASE s.stakind2
+                                                    WHEN 0 THEN '0'
+                                                    WHEN 1 THEN '='
+                                                    ELSE '<'
+                                                END,
+                                                'staop3',
+                                                CASE s.stakind3
+                                                    WHEN 0 THEN '0'
+                                                    WHEN 1 THEN '='
+                                                    ELSE '<'
+                                                END,
+                                                'staop4',
+                                                CASE s.stakind4
+                                                    WHEN 0 THEN '0'
+                                                    WHEN 1 THEN '='
+                                                    ELSE '<'
+                                                END,
+                                                'staop5',
+                                                CASE s.stakind5
+                                                    WHEN 0 THEN '0'
+                                                    WHEN 1 THEN '='
+                                                    ELSE '<'
+                                                END,
+                                                'stanumbers1', s.stanumbers1::text[],
+                                                'stanumbers2', s.stanumbers2::text[],
+                                                'stanumbers3', s.stanumbers3::text[],
+                                                'stanumbers4', s.stanumbers4::text[],
+                                                'stanumbers5', s.stanumbers5::text[],
+                                                /* casting these to text makes re-casting easier */
+                                                'stavalues1', s.stavalues1::text::text[],
+                                                'stavalues2', s.stavalues2::text::text[],
+                                                'stavalues3', s.stavalues3::text::text[],
+                                                'stavalues4', s.stavalues4::text::text[],
+                                                'stavalues5', s.stavalues5::text::text[]
+                                                    ) AS stat_obj
+                                        FROM pg_statistic AS s
+                                        WHERE s.starelid = a.attrelid
+                                        AND s.staattnum = a.attnum
+                                        ) AS attsta
+                                )
+                                ORDER BY a.attnum)
+            FROM pg_attribute AS a
+            WHERE a.attrelid = r.oid
+            AND NOT a.attisdropped
+            AND has_column_privilege(r.oid, a.attnum, 'SELECT')
+            AND a.attnum > 0
+        ) AS columns
+    FROM pg_class AS r
+    JOIN pg_namespace AS n
+        ON n.oid = r.relnamespace;
+
 CREATE VIEW pg_stats_ext WITH (security_barrier) AS
     SELECT cn.nspname AS schemaname,
            c.relname AS tablename,

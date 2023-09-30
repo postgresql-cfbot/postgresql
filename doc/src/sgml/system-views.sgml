@@ -192,6 +192,11 @@
      </row>
 
      <row>
+      <entry><link linkend="view-pg-stats"><structname>pg_stats_export</structname></link></entry>
+      <entry>planner statistics for export/upgrade purposes</entry>
+     </row>
+
+     <row>
       <entry><link linkend="view-pg-tables"><structname>pg_tables</structname></link></entry>
       <entry>tables</entry>
      </row>

@@ -386,4 +386,7 @@ extern double anl_random_fract(void);
 extern double anl_init_selection_state(int n);
 extern double anl_get_next_S(double t, int n, double *stateptr);
 
+extern Datum pg_import_rel_stats(PG_FUNCTION_ARGS);
+
+
 #endif							/* VACUUM_H */

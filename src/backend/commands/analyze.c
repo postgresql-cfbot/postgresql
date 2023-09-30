@@ -18,6 +18,7 @@
 
 #include "access/detoast.h"
 #include "access/genam.h"
+#include "access/heapam.h"
 #include "access/multixact.h"
 #include "access/relation.h"
 #include "access/sysattr.h"
@@ -40,6 +41,7 @@
 #include "commands/vacuum.h"
 #include "common/pg_prng.h"
 #include "executor/executor.h"
+#include "fmgr.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
@@ -59,14 +61,17 @@
 #include "utils/datum.h"
 #include "utils/fmgroids.h"
 #include "utils/guc.h"
+#include "utils/jsonb.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/numeric.h"
 #include "utils/pg_rusage.h"
 #include "utils/sampling.h"
 #include "utils/sortsupport.h"
 #include "utils/spccache.h"
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
+#include "utils/typcache.h"
 
 
 /* Per-index data for ANALYZE */
@@ -3072,4 +3077,580 @@ analyze_mcv_list(int *mcv_counts,
 		}
 	}
 	return num_mcv;
+}
+
+/*
+ * Get a JsonbValue from a JsonbContainer
+ */
+static
+JsonbValue *key_lookup(JsonbContainer *cont, const char *key)
+{
+	return getKeyJsonValueFromContainer(cont, key, strlen(key), NULL);
+}
+
+/*
+ * Get a JsonbValue from a JsonbContainer and ensure that it is a string
+ */
+static
+JsonbValue *key_lookup_string(JsonbContainer *cont, const char *key)
+{
+	JsonbValue *j = key_lookup(cont,key);
+
+	if (j == NULL)
+		return NULL;
+
+	if (j->type != jbvString)
+	{
+		ereport(ERROR,
+		  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		   errmsg("invalid statistics format, %s must be a string",key)));
+	}
+
+	return j;
+}
+
+/*
+ * Get a JsonbContainer from a JsonbContainer and ensure that it is a object
+ */
+static
+JsonbContainer *key_lookup_object(JsonbContainer *cont, const char *key)
+{
+	JsonbValue *j = key_lookup(cont,key);
+
+	if (j == NULL)
+		return NULL;
+
+	if ((j->type != jbvBinary) || (!JsonContainerIsObject(j->val.binary.data)))
+		ereport(ERROR,
+		  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		   errmsg("invalid statistics format, %s must be a binary object", key)));
+
+	return j->val.binary.data;
+}
+
+static
+bool jbvIsBinaryArray(JsonbValue *j)
+{
+	return (j->type == jbvBinary) && JsonContainerIsArray(j->val.binary.data);
+}
+
+static
+char *jbvstr_to_cstring(JsonbValue *j)
+{
+	char *s;
+
+	Assert(j->type == jbvString);
+	/* make a string we are sure is null-terminated */
+	s = palloc(j->val.string.len + 1);
+	memcpy(s, j->val.string.val, j->val.string.len);
+	s[j->val.string.len] = '\0';
+	return s;
+}
+
+static
+Datum jbvstr_to_float4datum(JsonbValue *j)
+{
+	char * s = jbvstr_to_cstring(j);
+	Datum result = DirectFunctionCall1(float4in, CStringGetDatum(s));
+	pfree(s);
+	return result;
+}
+
+static
+Datum jbvstr_to_int32datum(JsonbValue *j)
+{
+	char * s = jbvstr_to_cstring(j);
+	Datum result = DirectFunctionCall1(int4in, CStringGetDatum(s));
+	pfree(s);
+	return result;
+}
+
+static
+Datum jbvstr_to_int16datum(JsonbValue *j)
+{
+	char * s = jbvstr_to_cstring(j);
+	Datum result = DirectFunctionCall1(int2in, CStringGetDatum(s));
+	pfree(s);
+	return result;
+}
+
+static
+Datum jbvstr_to_attrtypedatum(JsonbValue *j, FmgrInfo *finfo, Oid input_func, Oid typioparam, int32 typmod)
+{
+	char * s = jbvstr_to_cstring(j);
+	Datum result = InputFunctionCall(finfo, s, typioparam, typmod);
+	pfree(s);
+	return result;
+}
+
+static
+void import_pg_statistic_rows(Oid relid, Relation sd, TupleDesc tupleDesc,
+							  Form_pg_attribute attr,
+							  FmgrInfo *finfo, Oid input_func,
+							  Oid typioparams, Oid eq_opr, Oid lt_opr,
+							  CatalogIndexState indstate,
+							  JsonbContainer *cont, const char *name, bool inh)
+{
+
+	HeapTuple	stup,
+				tup;
+	int			i,
+				j,
+				k;
+	Datum		values[Natts_pg_statistic];
+	bool		nulls[Natts_pg_statistic];
+	bool		replaces[Natts_pg_statistic];
+	bool		newrow = true;
+	JsonbValue *jv;
+
+	/* Is there already a pg_statistic tuple for this attribute? */
+	tup = SearchSysCache3(STATRELATTINH,
+						  ObjectIdGetDatum(relid),
+						  Int16GetDatum(attr->attnum),
+						  BoolGetDatum(inh));
+
+	if (HeapTupleIsValid(tup))
+	{
+		/* use the tuple that already exists */
+		newrow = false;
+		heap_deform_tuple(tup, tupleDesc, values, nulls);
+		for (i = 0; i < Natts_pg_statistic; ++i)
+			replaces[i] = false;
+	}
+	else
+	{
+		/* new row */
+		for (i = 0; i < Natts_pg_statistic; ++i)
+		{
+			nulls[i] = false;
+			replaces[i] = true;
+		}
+
+		values[Anum_pg_statistic_starelid - 1] = relid;
+		values[Anum_pg_statistic_staattnum - 1] = attr->attnum;
+		values[Anum_pg_statistic_stainherit - 1] = BoolGetDatum(inh);
+	}
+
+	i =	Anum_pg_statistic_stanullfrac - 1;
+	jv = key_lookup_string(cont, "stanullfrac");
+	if (jv != NULL)
+	{
+		values[i] = jbvstr_to_float4datum(jv);
+		replaces[i] = true;
+	}
+	else if (newrow)
+		values[i] = Float4GetDatum(0.0);
+
+	i = Anum_pg_statistic_stawidth - 1;
+	jv = key_lookup_string(cont, "stawidth");
+	if (jv != NULL)
+	{
+		values[i] = jbvstr_to_int32datum(jv);
+		replaces[i] = true;
+	}
+	else if (newrow)
+		values[i] = Int32GetDatum(0);
+
+	i = Anum_pg_statistic_stadistinct - 1;
+	jv = key_lookup_string(cont, "stadistinct");
+	if (jv != NULL)
+	{
+		values[i] = jbvstr_to_float4datum(jv);
+		replaces[i] = true;
+	}
+	else if (newrow)
+		values[i] = Float4GetDatum(0.0);
+
+	i = Anum_pg_statistic_stakind1 - 1;
+	for (k = 1; k <= STATISTIC_NUM_SLOTS; k++)
+	{
+		char key[20];
+		sprintf(key, "stakind%d", k);
+		jv = key_lookup_string(cont, key);
+		if (jv != NULL)
+		{
+			values[i] = jbvstr_to_int16datum(jv);
+			replaces[i] = true;
+		}
+		else if (newrow)
+			values[i] = Int16GetDatum(0);
+
+		i++;
+	}
+
+
+	/*
+	 * set staopN rows. Use staopN as a proxy for when to set stacollN
+	 *
+	 * collation cannot be changed in stats, only attempt to set if this is a
+	 * new row, and set it to the attcollation - it is possible that if this
+	 * column is an expression on an index, then the collation could be
+	 * different but this will be reset anyway on the next autoanalyze.
+	 */
+	i = Anum_pg_statistic_staop1 - 1;
+	j = Anum_pg_statistic_stacoll1 - 1;
+	for (k = 1; k <= STATISTIC_NUM_SLOTS; k++)
+	{
+		char key[20];
+		Oid res_opr;
+		sprintf(key, "staop%d", k);
+		jv = key_lookup(cont, key);
+		if (jv != NULL)
+		{
+			if (jv->type != jbvString)
+				ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("invalid format: %s must be one of: '=', '<', ''", key)));
+
+			if (jv->val.string.len != 1)
+				ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("invalid format: %s must be one of: '=', '<', ''", key)));
+
+			if (jv->val.string.val[0] == '0')
+				res_opr = 0;
+			else if (jv->val.string.val[0] == '=')
+				res_opr = eq_opr;
+			else if (jv->val.string.val[0] == '<')
+				res_opr = lt_opr;
+			else
+				ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("invalid format: %s must be one of: '=', '<', ''", key)));
+
+			values[i] = ObjectIdGetDatum(res_opr);
+			replaces[i] = true;
+			/* staopN was set, so set stacollN if this row is new */
+			if (newrow)
+			{
+				if (res_opr != 0)
+					values[j] = ObjectIdGetDatum(attr->attcollation);
+				else
+					values[j] = ObjectIdGetDatum(0);
+			}
+		}
+		else if (newrow)
+		{
+			values[i] = ObjectIdGetDatum(0);
+			values[j] = ObjectIdGetDatum(0);
+		}
+
+		i++;
+		j++;
+	}
+
+	for (k = 1; k <= STATISTIC_NUM_SLOTS; k++)
+	{
+		char		key[20];
+		int			num_elements;
+		Datum	   *numdatums;
+		ArrayType  *arry;
+		int			n;
+
+		sprintf(key, "stanumbers%d", k);
+
+		/* compute offset to allow for continue bailouts */
+		i = Anum_pg_statistic_stanumbers1 - 2 + k;
+
+		jv = key_lookup(cont, key);
+
+		if (jv == NULL)
+		{
+			/* no key set, do not modify existing row value */
+			if (newrow)
+			{
+				nulls[i] = true;
+				values[i] = (Datum) 0;
+			}
+			continue;
+		}
+
+		/* can be null or a binary array */
+		if (jv->type == jbvNull)
+		{
+			/* explicitly set valuesN null */
+			nulls[i] = true;
+			values[i] = (Datum) 0;
+			replaces[i] = true;
+			continue;
+		}
+
+		if (!jbvIsBinaryArray(jv))
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("invalid statistics format, %s must be a array or null", key)));
+
+		num_elements = JsonContainerSize(jv->val.binary.data);
+
+		if (num_elements == 0)
+		{
+			/* empty array is just null */
+			nulls[i] = true;
+			values[i] = (Datum) 0;
+			replaces[i] = true;
+			continue;
+		}
+
+		numdatums = (Datum *) palloc(num_elements * sizeof(Datum));
+		for (n = 0; n < num_elements; n++)
+		{
+			JsonbValue *elem;
+
+			elem = getIthJsonbValueFromContainer(jv->val.binary.data, n);
+			if (elem->type != jbvString)
+				ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("invalid format: element %d of %s must be a string", n, key)));
+
+			numdatums[n] = jbvstr_to_float4datum(elem);
+		}
+		arry = construct_array_builtin(numdatums, num_elements, FLOAT4OID);
+		values[i] = PointerGetDatum(arry);	/* stanumbersN */
+		replaces[i] = true;
+	}
+
+	i = Anum_pg_statistic_stavalues1 - 1;
+	for (k = 1; k <= STATISTIC_NUM_SLOTS; k++)
+	{
+		char		key[20];
+		int			num_elements;
+		Datum	   *numdatums;
+		ArrayType  *arry;
+		int			n;
+
+		sprintf(key, "stavalues%d", k);
+
+		/* compute offset to allow for continue bailouts */
+		i = Anum_pg_statistic_stavalues1 - 2 + k;
+
+		jv = key_lookup(cont, key);
+
+		if (jv == NULL)
+		{
+			/* no key set, do not modify existing row value */
+			if (newrow)
+			{
+				nulls[i] = true;
+				values[i] = (Datum) 0;
+			}
+			continue;
+		}
+
+		/* can be null or a binary array */
+		if (jv->type == jbvNull)
+		{
+			/* explicitly set valuesN null */
+			nulls[i] = true;
+			values[i] = (Datum) 0;
+			replaces[i] = true;
+			continue;
+		}
+
+		if (!jbvIsBinaryArray(jv))
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("invalid statistics format, %s must be a array or null", key)));
+
+		num_elements = JsonContainerSize(jv->val.binary.data);
+
+		if (num_elements == 0)
+		{
+			/* empty array is just null */
+			nulls[i] = true;
+			values[i] = (Datum) 0;
+			replaces[i] = true;
+			continue;
+		}
+
+		numdatums = (Datum *) palloc(num_elements * sizeof(Datum));
+
+		for (n = 0; n < num_elements; n++)
+		{
+			/* All elements must be of type string that is iocoerce-friendly */
+			JsonbValue *elem = getIthJsonbValueFromContainer(jv->val.binary.data, n);
+			if (elem->type != jbvString)
+				ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("invalid format: element %d of %s must be a string",
+						   n, key)));
+			numdatums[n] = jbvstr_to_attrtypedatum(elem, finfo,
+													input_func,
+													typioparams,
+													attr->atttypmod);
+		}
+
+		arry = construct_array(numdatums, num_elements, attr->atttypid,
+								attr->attlen, attr->attbyval, attr->attalign);
+		values[i] = PointerGetDatum(arry);	/* stavaluesN */
+		replaces[i] = true;
+	}
+
+	if (newrow)
+	{
+		/* insert new tuple */
+		stup = heap_form_tuple(RelationGetDescr(sd), values, nulls);
+		CatalogTupleInsertWithInfo(sd, stup, indstate);
+	}
+	else
+	{
+		/* modify existing tuple */
+		stup = heap_modify_tuple(tup, RelationGetDescr(sd),
+								 values, nulls, replaces);
+		CatalogTupleUpdateWithInfo(sd, &stup->t_self, stup, indstate);
+		ReleaseSysCache(tup);
+	}
+
+	heap_freetuple(stup);
+}
+
+
+/*
+ * Import statistics from JSONB export into relation
+ * to-do: pg_import_ext_stats()
+ */
+Datum
+pg_import_rel_stats(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	int32		stats_version_num = PG_GETARG_INT32(1);
+	Jsonb	   *jb = PG_ARGISNULL(4) ? NULL : PG_GETARG_JSONB_P(4);
+	Relation	onerel;
+
+	if (jb != NULL && !JB_ROOT_IS_OBJECT(jb))
+		ereport(ERROR,
+		  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		   errmsg("invalid statistics format")));
+
+	if ( stats_version_num < 80000)
+		ereport(ERROR,
+		  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		   errmsg("invalid statistics version: %d is earlier than earliest supported version",
+				  stats_version_num)));
+
+	/* to-do: change this to found current server version */
+	if ( stats_version_num > 170000)
+		ereport(ERROR,
+		  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		   errmsg("invalid statistics version: %d is greater than current version",
+				  stats_version_num)));
+
+	onerel = vacuum_open_relation(relid, NULL, VACOPT_ANALYZE, true,
+								  ShareUpdateExclusiveLock);
+
+	if (onerel == NULL)
+		PG_RETURN_BOOL(false);
+
+	if (!vacuum_is_relation_owner(RelationGetRelid(onerel),
+								onerel->rd_rel,
+								VACOPT_ANALYZE))
+	{
+		relation_close(onerel, ShareUpdateExclusiveLock);
+		PG_RETURN_BOOL(false);
+	}
+
+
+	/* only modify pg_class row if changes are to be made */
+	if ( ! PG_ARGISNULL(2) || ! PG_ARGISNULL(3) )
+	{
+		Relation	pg_class_rel;
+		HeapTuple	ctup;
+		Form_pg_class pgcform;
+
+		/*
+		 * Open the relation, getting ShareUpdateExclusiveLock to ensure that no
+		 * other stat-setting operation can run on it concurrently.
+		 */
+		pg_class_rel = table_open(RelationRelationId, ShareUpdateExclusiveLock);
+
+		/* leave if relation could not be opened or locked */
+		if (!pg_class_rel)
+			PG_RETURN_BOOL(false);
+
+		/* to-do: allow import IF FDW allows analyze */
+		if (pg_class_rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("cannot import stats to foreign table")));
+
+
+		ctup = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(relid));
+		if (!HeapTupleIsValid(ctup))
+			elog(ERROR, "pg_class entry for relid %u vanished during statistics import",
+				 relid);
+		pgcform = (Form_pg_class) GETSTRUCT(ctup);
+
+		/* leave un-set values alone */
+		if (! PG_ARGISNULL(2))
+			pgcform->reltuples = PG_GETARG_FLOAT4(2);
+		if (! PG_ARGISNULL(3))
+			pgcform->relpages = PG_GETARG_INT32(3);
+
+		heap_inplace_update(pg_class_rel, ctup);
+		table_close(pg_class_rel, ShareUpdateExclusiveLock);
+	}
+
+	/* Apply statistical updates, if any, to copied tuple */
+	if (! PG_ARGISNULL(4))
+	{
+		TupleDesc			tupdesc;
+		Relation			sd;
+		TupleDesc			stupdesc;
+		CatalogIndexState	indstate;
+		int					i;
+
+		tupdesc = RelationGetDescr(onerel);
+		sd = table_open(StatisticRelationId, RowExclusiveLock);
+		stupdesc = RelationGetDescr(sd);
+		indstate = CatalogOpenIndexes(sd);
+
+		for (i = 0; i < tupdesc->natts; i++)
+		{
+			Form_pg_attribute	attr;
+			char			   *attname;
+			JsonbContainer	   *attrcont;
+			JsonbContainer	   *inheritcont;
+
+			Oid					in_func;
+			Oid					typioparams;
+			FmgrInfo			finfo;
+			TypeCacheEntry	   *typentry;
+
+			attr = TupleDescAttr(tupdesc, i);
+			typentry = lookup_type_cache(attr->atttypid, TYPECACHE_LT_OPR | TYPECACHE_EQ_OPR);
+
+			/* get input function for stavaluesN InputFunctionCall */
+			getTypeInputInfo(attr->atttypid, &in_func, &typioparams);
+			fmgr_info(in_func, &finfo);
+
+			/* Look for column key matching attname */
+			attname = NameStr(attr->attname);
+
+			attrcont = key_lookup_object(&jb->root, attname);
+
+			if (attrcont == NULL)
+				continue;
+
+			inheritcont = key_lookup_object(attrcont, "regular");
+			if (inheritcont != NULL)
+				import_pg_statistic_rows(relid, sd, stupdesc, attr, &finfo,
+										 in_func, typioparams,
+										 typentry->eq_opr, typentry->lt_opr,
+										 indstate,
+										 inheritcont, "regular", false);
+
+			inheritcont = key_lookup_object(attrcont, "inherited");
+			if (inheritcont != NULL)
+				import_pg_statistic_rows(relid, sd, stupdesc, attr, &finfo,
+										 in_func, typioparams,
+										 typentry->eq_opr, typentry->lt_opr,
+										 indstate,
+										 inheritcont, "inherited", true);
+		}
+
+		CatalogCloseIndexes(indstate);
+		table_close(sd, RowExclusiveLock);
+		relation_close(onerel, NoLock);
+	}
+
+	PG_RETURN_BOOL(true);
 }

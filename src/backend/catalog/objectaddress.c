@@ -32,19 +32,10 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_conversion.h"
-#include "catalog/pg_database.h"
 #include "catalog/pg_default_acl.h"
-#include "catalog/pg_enum.h"
-#include "catalog/pg_event_trigger.h"
-#include "catalog/pg_extension.h"
-#include "catalog/pg_foreign_data_wrapper.h"
-#include "catalog/pg_foreign_server.h"
 #include "catalog/pg_language.h"
 #include "catalog/pg_largeobject.h"
-#include "catalog/pg_largeobject_metadata.h"
-#include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
-#include "catalog/pg_operator.h"
 #include "catalog/pg_opfamily.h"
 #include "catalog/pg_parameter_acl.h"
 #include "catalog/pg_policy.h"
@@ -54,8 +45,6 @@
 #include "catalog/pg_publication_rel.h"
 #include "catalog/pg_rewrite.h"
 #include "catalog/pg_statistic_ext.h"
-#include "catalog/pg_subscription.h"
-#include "catalog/pg_tablespace.h"
 #include "catalog/pg_transform.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_ts_config.h"
@@ -119,6 +108,9 @@ typedef struct
 									 * object of this class? */
 } ObjectPropertyType;
 
+#if 1
+#include "catalog/objectproperty_info.c.h"
+#else
 static const ObjectPropertyType ObjectProperty[] =
 {
 	{
@@ -132,7 +124,7 @@ static const ObjectPropertyType ObjectProperty[] =
 		InvalidAttrNumber,
 		InvalidAttrNumber,
 		InvalidAttrNumber,
-		-1,
+		OBJECT_ACCESS_METHOD,
 		true
 	},
 	{
@@ -174,7 +166,7 @@ static const ObjectPropertyType ObjectProperty[] =
 		InvalidAttrNumber,
 		InvalidAttrNumber,
 		InvalidAttrNumber,
-		-1,
+		OBJECT_CAST,
 		false
 	},
 	{
@@ -384,7 +376,7 @@ static const ObjectPropertyType ObjectProperty[] =
 		InvalidAttrNumber,
 		InvalidAttrNumber,
 		InvalidAttrNumber,
-		-1,
+		OBJECT_ROLE,
 		true
 	},
 	{
@@ -412,7 +404,7 @@ static const ObjectPropertyType ObjectProperty[] =
 		InvalidAttrNumber,
 		InvalidAttrNumber,
 		InvalidAttrNumber,
-		-1,
+		OBJECT_RULE,
 		false
 	},
 	{
@@ -468,7 +460,7 @@ static const ObjectPropertyType ObjectProperty[] =
 		InvalidAttrNumber,
 		InvalidAttrNumber,
 		InvalidAttrNumber,
-		-1,
+		OBJECT_TRANSFORM,
 		false
 	},
 	{
@@ -482,7 +474,7 @@ static const ObjectPropertyType ObjectProperty[] =
 		InvalidAttrNumber,
 		InvalidAttrNumber,
 		InvalidAttrNumber,
-		-1,
+		OBJECT_TRIGGER,
 		false
 	},
 	{
@@ -496,7 +488,7 @@ static const ObjectPropertyType ObjectProperty[] =
 		InvalidAttrNumber,
 		InvalidAttrNumber,
 		InvalidAttrNumber,
-		-1,
+		OBJECT_POLICY,
 		false
 	},
 	{
@@ -552,7 +544,7 @@ static const ObjectPropertyType ObjectProperty[] =
 		Anum_pg_ts_parser_prsnamespace,
 		InvalidAttrNumber,
 		InvalidAttrNumber,
-		-1,
+		OBJECT_TSPARSER,
 		true
 	},
 	{
@@ -566,7 +558,7 @@ static const ObjectPropertyType ObjectProperty[] =
 		Anum_pg_ts_template_tmplnamespace,
 		InvalidAttrNumber,
 		InvalidAttrNumber,
-		-1,
+		OBJECT_TSTEMPLATE,
 		true,
 	},
 	{
@@ -640,6 +632,7 @@ static const ObjectPropertyType ObjectProperty[] =
 		false
 	},
 };
+#endif
 
 /*
  * This struct maps the string object types as returned by
@@ -2791,6 +2784,7 @@ get_object_property_data(Oid class_id)
 {
 	static const ObjectPropertyType *prop_last = NULL;
 	int			index;
+	uint32      hashkey;
 
 	/*
 	 * A shortcut to speed up multiple consecutive lookups of a particular
@@ -2799,7 +2793,13 @@ get_object_property_data(Oid class_id)
 	if (prop_last && prop_last->class_oid == class_id)
 		return prop_last;
 
+#if 1
+	hashkey = pg_hton32(class_id);
+	index = objectproperty_hash_func(&hashkey);
+	if (index >= 0 && index < lengthof(ObjectProperty))
+#else
 	for (index = 0; index < lengthof(ObjectProperty); index++)
+#endif
 	{
 		if (ObjectProperty[index].class_oid == class_id)
 		{

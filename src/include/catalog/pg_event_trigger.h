@@ -51,7 +51,7 @@ typedef FormData_pg_event_trigger *Form_pg_event_trigger;
 
 DECLARE_TOAST(pg_event_trigger, 4145, 4146);
 
-DECLARE_UNIQUE_INDEX(pg_event_trigger_evtname_index, 3467, EventTriggerNameIndexId, pg_event_trigger, btree(evtname name_ops));
-DECLARE_UNIQUE_INDEX_PKEY(pg_event_trigger_oid_index, 3468, EventTriggerOidIndexId, pg_event_trigger, btree(oid oid_ops));
+DECLARE_UNIQUE_INDEX(pg_event_trigger_evtname_index, 3467, EventTriggerNameIndexId, pg_event_trigger, btree(evtname name_ops), EVENTTRIGGERNAME, 8);
+DECLARE_UNIQUE_INDEX_PKEY(pg_event_trigger_oid_index, 3468, EventTriggerOidIndexId, pg_event_trigger, btree(oid oid_ops), EVENTTRIGGEROID, 8);
 
 #endif							/* PG_EVENT_TRIGGER_H */

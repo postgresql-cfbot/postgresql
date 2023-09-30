@@ -53,7 +53,7 @@ typedef FormData_pg_ts_dict *Form_pg_ts_dict;
 
 DECLARE_TOAST(pg_ts_dict, 4169, 4170);
 
-DECLARE_UNIQUE_INDEX(pg_ts_dict_dictname_index, 3604, TSDictionaryNameNspIndexId, pg_ts_dict, btree(dictname name_ops, dictnamespace oid_ops));
-DECLARE_UNIQUE_INDEX_PKEY(pg_ts_dict_oid_index, 3605, TSDictionaryOidIndexId, pg_ts_dict, btree(oid oid_ops));
+DECLARE_UNIQUE_INDEX(pg_ts_dict_dictname_index, 3604, TSDictionaryNameNspIndexId, pg_ts_dict, btree(dictname name_ops, dictnamespace oid_ops), TSDICTNAMENSP, 2);
+DECLARE_UNIQUE_INDEX_PKEY(pg_ts_dict_oid_index, 3605, TSDictionaryOidIndexId, pg_ts_dict, btree(oid oid_ops), TSDICTOID, 2);
 
 #endif							/* PG_TS_DICT_H */

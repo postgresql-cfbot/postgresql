@@ -57,6 +57,7 @@
 #include <libxml/xmlwriter.h>
 #include <libxml/xpath.h>
 #include <libxml/xpathInternals.h>
+#include <libxml/c14n.h>
 
 /*
  * We used to check for xmlStructuredErrorContext via a configure test; but
@@ -622,7 +623,7 @@ xmltotext(PG_FUNCTION_ARGS)
 
 
 text *
-xmltotext_with_options(xmltype *data, XmlOptionType xmloption_arg, bool indent)
+xmltotext_with_options(xmltype *data, XmlOptionType xmloption_arg, XmlSerializeFormat format)
 {
 #ifdef USE_LIBXML
 	text	   *volatile result;
@@ -635,7 +636,7 @@ xmltotext_with_options(xmltype *data, XmlOptionType xmloption_arg, bool indent)
 	PgXmlErrorContext *xmlerrcxt;
 #endif
 
-	if (xmloption_arg != XMLOPTION_DOCUMENT && !indent)
+	if (xmloption_arg != XMLOPTION_DOCUMENT && format == XMLSERIALIZE_NO_FORMAT)
 	{
 		/*
 		 * We don't actually need to do anything, so just return the
@@ -646,10 +647,23 @@ xmltotext_with_options(xmltype *data, XmlOptionType xmloption_arg, bool indent)
 	}
 
 #ifdef USE_LIBXML
-	/* Parse the input according to the xmloption */
-	doc = xml_parse(data, xmloption_arg, true, GetDatabaseEncoding(),
-					&parsed_xmloptiontype, &content_nodes,
-					(Node *) &escontext);
+	/*
+	* Parse the input according to the xmloption.
+	* XML canonical expects a well-formed XML input, so here in case of
+	* XMLSERIALIZE_CANONICAL or XMLSERIALIZE_CANONICAL_WITH_COMMENTS we
+	* force xml_parse() to parse 'data' as XMLOPTION_DOCUMENT despite
+	* of the XmlOptionType given in 'xmloption_arg'. This enables the
+	* canonicalization of CONTENT fragments if they contain a singly-rooted
+	* XML - xml_parse() will thrown an error otherwise.
+	*/
+	if(format == XMLSERIALIZE_CANONICAL || format == XMLSERIALIZE_CANONICAL_WITH_COMMENTS)
+		doc = xml_parse(data, XMLOPTION_DOCUMENT, false,
+						GetDatabaseEncoding(), NULL, NULL, NULL);
+	else
+		doc = xml_parse(data, xmloption_arg, true, GetDatabaseEncoding(),
+						&parsed_xmloptiontype, &content_nodes,
+						(Node *) &escontext);
+
 	if (doc == NULL || escontext.error_occurred)
 	{
 		if (doc)
@@ -661,7 +675,7 @@ xmltotext_with_options(xmltype *data, XmlOptionType xmloption_arg, bool indent)
 	}
 
 	/* If we weren't asked to indent, we're done. */
-	if (!indent)
+	if (format == XMLSERIALIZE_NO_FORMAT)
 	{
 		xmlFreeDoc(doc);
 		return (text *) data;
@@ -670,130 +684,191 @@ xmltotext_with_options(xmltype *data, XmlOptionType xmloption_arg, bool indent)
 	/* Otherwise, we gotta spin up some error handling. */
 	xmlerrcxt = pg_xml_init(PG_XML_STRICTNESS_ALL);
 
-	PG_TRY();
+	if(format == XMLSERIALIZE_INDENT)
 	{
-		size_t		decl_len = 0;
-
-		/* The serialized data will go into this buffer. */
-		buf = xmlBufferCreate();
-
-		if (buf == NULL || xmlerrcxt->err_occurred)
-			xml_ereport(xmlerrcxt, ERROR, ERRCODE_OUT_OF_MEMORY,
-						"could not allocate xmlBuffer");
-
-		/* Detect whether there's an XML declaration */
-		parse_xml_decl(xml_text2xmlChar(data), &decl_len, NULL, NULL, NULL);
-
-		/*
-		 * Emit declaration only if the input had one.  Note: some versions of
-		 * xmlSaveToBuffer leak memory if a non-null encoding argument is
-		 * passed, so don't do that.  We don't want any encoding conversion
-		 * anyway.
-		 */
-		if (decl_len == 0)
-			ctxt = xmlSaveToBuffer(buf, NULL,
-								   XML_SAVE_NO_DECL | XML_SAVE_FORMAT);
-		else
-			ctxt = xmlSaveToBuffer(buf, NULL,
-								   XML_SAVE_FORMAT);
-
-		if (ctxt == NULL || xmlerrcxt->err_occurred)
-			xml_ereport(xmlerrcxt, ERROR, ERRCODE_OUT_OF_MEMORY,
-						"could not allocate xmlSaveCtxt");
-
-		if (parsed_xmloptiontype == XMLOPTION_DOCUMENT)
+		PG_TRY();
 		{
-			/* If it's a document, saving is easy. */
-			if (xmlSaveDoc(ctxt, doc) == -1 || xmlerrcxt->err_occurred)
-				xml_ereport(xmlerrcxt, ERROR, ERRCODE_INTERNAL_ERROR,
-							"could not save document to xmlBuffer");
-		}
-		else if (content_nodes != NULL)
-		{
-			/*
-			 * Deal with the case where we have non-singly-rooted XML.
-			 * libxml's dump functions don't work well for that without help.
-			 * We build a fake root node that serves as a container for the
-			 * content nodes, and then iterate over the nodes.
-			 */
-			xmlNodePtr	root;
-			xmlNodePtr	newline;
+			size_t		decl_len = 0;
 
-			root = xmlNewNode(NULL, (const xmlChar *) "content-root");
-			if (root == NULL || xmlerrcxt->err_occurred)
+			/* The serialized data will go into this buffer. */
+			buf = xmlBufferCreate();
+
+			if (buf == NULL || xmlerrcxt->err_occurred)
 				xml_ereport(xmlerrcxt, ERROR, ERRCODE_OUT_OF_MEMORY,
-							"could not allocate xml node");
+							"could not allocate xmlBuffer");
 
-			/* This attaches root to doc, so we need not free it separately. */
-			xmlDocSetRootElement(doc, root);
-			xmlAddChild(root, content_nodes);
+			/* Detect whether there's an XML declaration */
+			parse_xml_decl(xml_text2xmlChar(data), &decl_len, NULL, NULL, NULL);
 
 			/*
-			 * We use this node to insert newlines in the dump.  Note: in at
-			 * least some libxml versions, xmlNewDocText would not attach the
-			 * node to the document even if we passed it.  Therefore, manage
-			 * freeing of this node manually, and pass NULL here to make sure
-			 * there's not a dangling link.
-			 */
-			newline = xmlNewDocText(NULL, (const xmlChar *) "\n");
-			if (newline == NULL || xmlerrcxt->err_occurred)
-				xml_ereport(xmlerrcxt, ERROR, ERRCODE_OUT_OF_MEMORY,
-							"could not allocate xml node");
+			* Emit declaration only if the input had one.  Note: some versions of
+			* xmlSaveToBuffer leak memory if a non-null encoding argument is
+			* passed, so don't do that.  We don't want any encoding conversion
+			* anyway.
+			*/
+			if (decl_len == 0)
+				ctxt = xmlSaveToBuffer(buf, NULL,
+									XML_SAVE_NO_DECL | XML_SAVE_FORMAT);
+			else
+				ctxt = xmlSaveToBuffer(buf, NULL,
+									XML_SAVE_FORMAT);
 
-			for (xmlNodePtr node = root->children; node; node = node->next)
+			if (ctxt == NULL || xmlerrcxt->err_occurred)
+				xml_ereport(xmlerrcxt, ERROR, ERRCODE_OUT_OF_MEMORY,
+							"could not allocate xmlSaveCtxt");
+
+			if (parsed_xmloptiontype == XMLOPTION_DOCUMENT)
 			{
-				/* insert newlines between nodes */
-				if (node->type != XML_TEXT_NODE && node->prev != NULL)
+				/* If it's a document, saving is easy. */
+				if (xmlSaveDoc(ctxt, doc) == -1 || xmlerrcxt->err_occurred)
+					xml_ereport(xmlerrcxt, ERROR, ERRCODE_INTERNAL_ERROR,
+								"could not save document to xmlBuffer");
+			}
+			else if (content_nodes != NULL)
+			{
+				/*
+				* Deal with the case where we have non-singly-rooted XML.
+				* libxml's dump functions don't work well for that without help.
+				* We build a fake root node that serves as a container for the
+				* content nodes, and then iterate over the nodes.
+				*/
+				xmlNodePtr	root;
+				xmlNodePtr	newline;
+
+				root = xmlNewNode(NULL, (const xmlChar *) "content-root");
+				if (root == NULL || xmlerrcxt->err_occurred)
+					xml_ereport(xmlerrcxt, ERROR, ERRCODE_OUT_OF_MEMORY,
+								"could not allocate xml node");
+
+				/* This attaches root to doc, so we need not free it separately. */
+				xmlDocSetRootElement(doc, root);
+				xmlAddChild(root, content_nodes);
+
+				/*
+				* We use this node to insert newlines in the dump.  Note: in at
+				* least some libxml versions, xmlNewDocText would not attach the
+				* node to the document even if we passed it.  Therefore, manage
+				* freeing of this node manually, and pass NULL here to make sure
+				* there's not a dangling link.
+				*/
+				newline = xmlNewDocText(NULL, (const xmlChar *) "\n");
+				if (newline == NULL || xmlerrcxt->err_occurred)
+					xml_ereport(xmlerrcxt, ERROR, ERRCODE_OUT_OF_MEMORY,
+								"could not allocate xml node");
+
+				for (xmlNodePtr node = root->children; node; node = node->next)
 				{
-					if (xmlSaveTree(ctxt, newline) == -1 || xmlerrcxt->err_occurred)
+					/* insert newlines between nodes */
+					if (node->type != XML_TEXT_NODE && node->prev != NULL)
+					{
+						if (xmlSaveTree(ctxt, newline) == -1 || xmlerrcxt->err_occurred)
+						{
+							xmlFreeNode(newline);
+							xml_ereport(xmlerrcxt, ERROR, ERRCODE_INTERNAL_ERROR,
+										"could not save newline to xmlBuffer");
+						}
+					}
+
+					if (xmlSaveTree(ctxt, node) == -1 || xmlerrcxt->err_occurred)
 					{
 						xmlFreeNode(newline);
 						xml_ereport(xmlerrcxt, ERROR, ERRCODE_INTERNAL_ERROR,
-									"could not save newline to xmlBuffer");
+									"could not save content to xmlBuffer");
 					}
 				}
 
-				if (xmlSaveTree(ctxt, node) == -1 || xmlerrcxt->err_occurred)
-				{
-					xmlFreeNode(newline);
-					xml_ereport(xmlerrcxt, ERROR, ERRCODE_INTERNAL_ERROR,
-								"could not save content to xmlBuffer");
-				}
+				xmlFreeNode(newline);
 			}
 
-			xmlFreeNode(newline);
-		}
+			if (xmlSaveClose(ctxt) == -1 || xmlerrcxt->err_occurred)
+			{
+				ctxt = NULL;		/* don't try to close it again */
+				xml_ereport(xmlerrcxt, ERROR, ERRCODE_INTERNAL_ERROR,
+							"could not close xmlSaveCtxtPtr");
+			}
 
-		if (xmlSaveClose(ctxt) == -1 || xmlerrcxt->err_occurred)
+			result = (text *) xmlBuffer_to_xmltype(buf);
+		}
+		PG_CATCH();
 		{
-			ctxt = NULL;		/* don't try to close it again */
-			xml_ereport(xmlerrcxt, ERROR, ERRCODE_INTERNAL_ERROR,
-						"could not close xmlSaveCtxtPtr");
+			if (ctxt)
+				xmlSaveClose(ctxt);
+			if (buf)
+				xmlBufferFree(buf);
+			if (doc)
+				xmlFreeDoc(doc);
+
+			pg_xml_done(xmlerrcxt, true);
+
+			PG_RE_THROW();
 		}
+		PG_END_TRY();
 
-		result = (text *) xmlBuffer_to_xmltype(buf);
+		xmlBufferFree(buf);
+		xmlFreeDoc(doc);
+
+		pg_xml_done(xmlerrcxt, false);
 	}
-	PG_CATCH();
+	else if (format == XMLSERIALIZE_CANONICAL || format == XMLSERIALIZE_CANONICAL_WITH_COMMENTS)
 	{
-		if (ctxt)
-			xmlSaveClose(ctxt);
-		if (buf)
-			xmlBufferFree(buf);
-		if (doc)
-			xmlFreeDoc(doc);
+		xmlChar    *xmlbuf = NULL;
+		int         nbytes;
+		int         with_comments = 0; /* 0 = no xml comments (default) */
 
-		pg_xml_done(xmlerrcxt, true);
+		PG_TRY();
+		{
+			/* 1 = keeps xml comments */
+			if (format == XMLSERIALIZE_CANONICAL_WITH_COMMENTS)
+				with_comments = 1;
 
-		PG_RE_THROW();
+			if (doc == NULL || escontext.error_occurred)
+			{
+				if (doc)
+					xmlFreeDoc(doc);
+				/* A soft error must be failure to conform to XMLOPTION_DOCUMENT */
+				ereport(ERROR,
+						(errcode(ERRCODE_NOT_AN_XML_DOCUMENT),
+						errmsg("not an XML document")));
+			}
+
+			/*
+			 * This dumps the canonicalized XML doc into the xmlChar* buffer.
+			 * mode = 2 means the doc will be canonicalized using the C14N 1.1 standard.
+			 */
+			nbytes = xmlC14NDocDumpMemory(doc, NULL, 2, NULL, with_comments, &xmlbuf);
+
+			if(nbytes < 0 || escontext.error_occurred)
+				ereport(ERROR,
+						(errcode(ERRCODE_INTERNAL_ERROR),
+						errmsg("could not canonicalize the given XML document")));
+
+			result = cstring_to_text_with_len((const char *) xmlbuf, nbytes);
+		}
+		PG_CATCH();
+		{
+			if (ctxt)
+				xmlSaveClose(ctxt);
+			if (xmlbuf)
+				xmlFree(xmlbuf);
+			if (doc)
+				xmlFreeDoc(doc);
+
+			pg_xml_done(xmlerrcxt, true);
+
+			PG_RE_THROW();
+		}
+		PG_END_TRY();
+
+		xmlFreeDoc(doc);
+		xmlFree(xmlbuf);
+
+		pg_xml_done(xmlerrcxt, false);
 	}
-	PG_END_TRY();
-
-	xmlBufferFree(buf);
-	xmlFreeDoc(doc);
-
-	pg_xml_done(xmlerrcxt, false);
+	else
+		elog(ERROR,"invalid xmlserialize option");
 
 	return result;
+
 #else
 	NO_XML_SUPPORT();
 	return NULL;

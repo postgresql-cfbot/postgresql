@@ -168,6 +168,69 @@ SELECT xmlserialize(CONTENT  '<foo><bar></bar></foo>' AS text INDENT);
 -- 'no indent' = not using 'no indent'
 SELECT xmlserialize(DOCUMENT '<foo><bar><val x="y">42</val></bar></foo>' AS text) = xmlserialize(DOCUMENT '<foo><bar><val x="y">42</val></bar></foo>' AS text NO INDENT);
 SELECT xmlserialize(CONTENT  '<foo><bar><val x="y">42</val></bar></foo>' AS text) = xmlserialize(CONTENT '<foo><bar><val x="y">42</val></bar></foo>' AS text NO INDENT);
+-- xmlserialize: canonical
+CREATE TABLE xmltest_serialize (id int, doc xml);
+INSERT INTO xmltest_serialize VALUES
+  (1,'<?xml version="1.0" encoding="ISO-8859-1"?>
+  <!DOCTYPE doc SYSTEM "doc.dtd" [
+                  <!ENTITY val "42">
+      <!ATTLIST xyz attr CDATA "default">
+  ]>
+
+  <!-- attributes and namespces will be sorted -->
+  <foo a:attr="out" b:attr="sorted" attr2="all" attr="I am"
+      xmlns:b="http://www.ietf.org"
+      xmlns:a="http://www.w3.org"
+      xmlns="http://example.org">
+
+    <!-- Normalization of whitespace in start and end tags -->
+    <!-- Elimination of superfluous namespace declarations, as already declared in <foo> -->
+    <bar     xmlns="" xmlns:a="http://www.w3.org"     >&val;</bar     >
+
+    <!-- empty element will be converted to start-end tag pair -->
+    <empty/>
+
+    <!-- text will be transcoded to UTF-8 -->
+    <transcode>&#49;</transcode>
+
+    <!-- default attribute will be added -->
+    <!-- whitespace inside tag will be preserved -->
+    <whitespace> 321 </whitespace>
+
+    <!-- empty namespace will be removed of child tag -->
+    <emptyns  xmlns="" >
+       <emptyns_child xmlns=""></emptyns_child>
+    </emptyns>
+
+    <!-- CDATA section will be replaced by its value -->
+    <compute><![CDATA[value>"0" && value<"10" ?"valid":"error"]]></compute>
+  </foo>
+  <!-- comment outside doc -->'::xml),
+  (2,'<foo>
+        <bar>
+          <!-- important comment -->
+          <val x="y">42</val>
+        </bar>
+    </foo>   '::xml);
+
+SELECT xmlserialize(DOCUMENT doc AS text CANONICAL) FROM xmltest_serialize WHERE id = 1;
+SELECT xmlserialize(DOCUMENT doc AS text CANONICAL WITH COMMENTS) FROM xmltest_serialize WHERE id = 2;
+SELECT xmlserialize(DOCUMENT doc AS text CANONICAL) = xmlserialize(DOCUMENT doc AS text CANONICAL WITH NO COMMENTS) FROM xmltest_serialize;
+SELECT xmlserialize(CONTENT doc AS text CANONICAL) FROM xmltest_serialize WHERE id = 1;
+SELECT xmlserialize(CONTENT doc AS text CANONICAL WITH COMMENTS) FROM xmltest_serialize WHERE id = 2;
+SELECT xmlserialize(CONTENT doc AS text CANONICAL) = xmlserialize(CONTENT doc AS text CANONICAL WITH NO COMMENTS) FROM xmltest_serialize;
+SELECT xmlserialize(DOCUMENT NULL AS text CANONICAL);
+SELECT xmlserialize(CONTENT NULL AS text CANONICAL);
+\set VERBOSITY terse
+SELECT xmlserialize(DOCUMENT '' AS text CANONICAL);
+SELECT xmlserialize(DOCUMENT '  ' AS text CANONICAL);
+SELECT xmlserialize(DOCUMENT 'foo' AS text CANONICAL);
+SELECT xmlserialize(CONTENT '' AS text CANONICAL);
+SELECT xmlserialize(CONTENT '  ' AS text CANONICAL);
+SELECT xmlserialize(CONTENT 'foo' AS text CANONICAL);
+SELECT xmlserialize(DOCUMENT '<foo><bar>73</bar></foo>' AS text CANONICAL INDENT);
+SELECT xmlserialize(CONTENT '<foo><bar>73</bar></foo>' AS text CANONICAL INDENT);
+\set VERBOSITY default
 
 SELECT xml '<foo>bar</foo>' IS DOCUMENT;
 SELECT xml '<foo>bar</foo><bar>foo</bar>' IS DOCUMENT;

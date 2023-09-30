@@ -443,6 +443,114 @@ ERROR:  unsupported XML feature
 LINE 1: SELECT xmlserialize(CONTENT  '<foo><bar><val x="y">42</val><...
                                      ^
 DETAIL:  This functionality requires the server to be built with libxml support.
+-- xmlserialize: canonical
+CREATE TABLE xmltest_serialize (id int, doc xml);
+INSERT INTO xmltest_serialize VALUES
+  (1,'<?xml version="1.0" encoding="ISO-8859-1"?>
+  <!DOCTYPE doc SYSTEM "doc.dtd" [
+                  <!ENTITY val "42">
+      <!ATTLIST xyz attr CDATA "default">
+  ]>
+
+  <!-- attributes and namespces will be sorted -->
+  <foo a:attr="out" b:attr="sorted" attr2="all" attr="I am"
+      xmlns:b="http://www.ietf.org"
+      xmlns:a="http://www.w3.org"
+      xmlns="http://example.org">
+
+    <!-- Normalization of whitespace in start and end tags -->
+    <!-- Elimination of superfluous namespace declarations, as already declared in <foo> -->
+    <bar     xmlns="" xmlns:a="http://www.w3.org"     >&val;</bar     >
+
+    <!-- empty element will be converted to start-end tag pair -->
+    <empty/>
+
+    <!-- text will be transcoded to UTF-8 -->
+    <transcode>&#49;</transcode>
+
+    <!-- default attribute will be added -->
+    <!-- whitespace inside tag will be preserved -->
+    <whitespace> 321 </whitespace>
+
+    <!-- empty namespace will be removed of child tag -->
+    <emptyns  xmlns="" >
+       <emptyns_child xmlns=""></emptyns_child>
+    </emptyns>
+
+    <!-- CDATA section will be replaced by its value -->
+    <compute><![CDATA[value>"0" && value<"10" ?"valid":"error"]]></compute>
+  </foo>
+  <!-- comment outside doc -->'::xml),
+  (2,'<foo>
+        <bar>
+          <!-- important comment -->
+          <val x="y">42</val>
+        </bar>
+    </foo>   '::xml);
+ERROR:  unsupported XML feature
+LINE 2:   (1,'<?xml version="1.0" encoding="ISO-8859-1"?>
+             ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT doc AS text CANONICAL) FROM xmltest_serialize WHERE id = 1;
+ xmlserialize 
+--------------
+(0 rows)
+
+SELECT xmlserialize(DOCUMENT doc AS text CANONICAL WITH COMMENTS) FROM xmltest_serialize WHERE id = 2;
+ xmlserialize 
+--------------
+(0 rows)
+
+SELECT xmlserialize(DOCUMENT doc AS text CANONICAL) = xmlserialize(DOCUMENT doc AS text CANONICAL WITH NO COMMENTS) FROM xmltest_serialize;
+ ?column? 
+----------
+(0 rows)
+
+SELECT xmlserialize(CONTENT doc AS text CANONICAL) FROM xmltest_serialize WHERE id = 1;
+ xmlserialize 
+--------------
+(0 rows)
+
+SELECT xmlserialize(CONTENT doc AS text CANONICAL WITH COMMENTS) FROM xmltest_serialize WHERE id = 2;
+ xmlserialize 
+--------------
+(0 rows)
+
+SELECT xmlserialize(CONTENT doc AS text CANONICAL) = xmlserialize(CONTENT doc AS text CANONICAL WITH NO COMMENTS) FROM xmltest_serialize;
+ ?column? 
+----------
+(0 rows)
+
+SELECT xmlserialize(DOCUMENT NULL AS text CANONICAL);
+ xmlserialize 
+--------------
+ 
+(1 row)
+
+SELECT xmlserialize(CONTENT NULL AS text CANONICAL);
+ xmlserialize 
+--------------
+ 
+(1 row)
+
+\set VERBOSITY terse
+SELECT xmlserialize(DOCUMENT '' AS text CANONICAL);
+ERROR:  unsupported XML feature at character 30
+SELECT xmlserialize(DOCUMENT '  ' AS text CANONICAL);
+ERROR:  unsupported XML feature at character 30
+SELECT xmlserialize(DOCUMENT 'foo' AS text CANONICAL);
+ERROR:  unsupported XML feature at character 30
+SELECT xmlserialize(CONTENT '' AS text CANONICAL);
+ERROR:  unsupported XML feature at character 29
+SELECT xmlserialize(CONTENT '  ' AS text CANONICAL);
+ERROR:  unsupported XML feature at character 29
+SELECT xmlserialize(CONTENT 'foo' AS text CANONICAL);
+ERROR:  unsupported XML feature at character 29
+SELECT xmlserialize(DOCUMENT '<foo><bar>73</bar></foo>' AS text CANONICAL INDENT);
+ERROR:  syntax error at or near "INDENT" at character 75
+SELECT xmlserialize(CONTENT '<foo><bar>73</bar></foo>' AS text CANONICAL INDENT);
+ERROR:  syntax error at or near "INDENT" at character 74
+\set VERBOSITY default
 SELECT xml '<foo>bar</foo>' IS DOCUMENT;
 ERROR:  unsupported XML feature
 LINE 1: SELECT xml '<foo>bar</foo>' IS DOCUMENT;

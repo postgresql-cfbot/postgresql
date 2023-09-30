@@ -351,6 +351,8 @@ typedef struct pg_conn_host
 								 * found in password file. */
 } pg_conn_host;
 
+typedef PostgresPollingStatusType (*AsyncAuthFunc) (PGconn *conn, pgsocket *altsock);
+
 /*
  * PGconn stores all the state data associated with a single connection
  * to a backend.
@@ -408,6 +410,14 @@ struct pg_conn
 	char	   *target_session_attrs;	/* desired session properties */
 	char	   *require_auth;	/* name of the expected auth method */
 	char	   *load_balance_hosts; /* load balance over hosts */
+
+	/* OAuth v2 */
+	char	   *oauth_issuer;			/* token issuer URL */
+	char	   *oauth_discovery_uri;	/* URI of the issuer's discovery document */
+	char	   *oauth_client_id;		/* client identifier */
+	char	   *oauth_client_secret;	/* client secret */
+	char	   *oauth_scope;			/* access token scope */
+	bool		oauth_want_retry;		/* should we retry on failure? */
 
 	/* Optional file to write trace info to */
 	FILE	   *Pfdebug;
@@ -476,6 +486,9 @@ struct pg_conn
 										 * codes */
 	bool		client_finished_auth;	/* have we finished our half of the
 										 * authentication exchange? */
+
+	AsyncAuthFunc async_auth;	/* callback for external async authentication */
+	pgsocket	altsock;		/* alternative socket for client to poll */
 
 
 	/* Transient state needed while establishing connection */

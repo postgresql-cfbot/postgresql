@@ -38,6 +38,8 @@ extern "C"
 #define LIBPQ_HAS_TRACE_FLAGS 1
 /* Indicates that PQsslAttribute(NULL, "library") is useful */
 #define LIBPQ_HAS_SSL_LIBRARY_DETECTION 1
+/* Indicates presence of the PQAUTHDATA_PROMPT_OAUTH_DEVICE authdata hook */
+#define LIBPQ_HAS_PROMPT_OAUTH_DEVICE 1
 
 /*
  * Option flags for PQcopyResult
@@ -78,7 +80,9 @@ typedef enum
 	CONNECTION_CONSUME,			/* Consuming any extra messages. */
 	CONNECTION_GSS_STARTUP,		/* Negotiating GSSAPI. */
 	CONNECTION_CHECK_TARGET,	/* Checking target server properties. */
-	CONNECTION_CHECK_STANDBY	/* Checking if server is in standby mode. */
+	CONNECTION_CHECK_STANDBY,	/* Checking if server is in standby mode. */
+	CONNECTION_AUTHENTICATING,	/* Authentication is in progress with some
+								 * external system. */
 } ConnStatusType;
 
 typedef enum
@@ -159,6 +163,12 @@ typedef enum
 	PQ_PIPELINE_ON,
 	PQ_PIPELINE_ABORTED
 } PGpipelineStatus;
+
+typedef enum
+{
+	PQAUTHDATA_PROMPT_OAUTH_DEVICE,	/* user must visit a device-authorization URL */
+	PQAUTHDATA_OAUTH_BEARER_TOKEN,	/* server requests an OAuth Bearer token */
+} PGAuthData;
 
 /* PGconn encapsulates a connection to the backend.
  * The contents of this struct are not supposed to be known to applications.
@@ -657,8 +667,71 @@ extern int	PQenv2encoding(void);
 
 /* === in fe-auth.c === */
 
+typedef struct _PQpromptOAuthDevice
+{
+	const char *verification_uri;			/* verification URI to visit */
+	const char *user_code;					/* user code to enter */
+} PQpromptOAuthDevice;
+
+typedef struct _PQoauthBearerRequest
+{
+	/* Hook inputs (constant across all calls) */
+	const char * const openid_configuration;	/* OIDC discovery URI */
+	const char * const scope;					/* required scope(s), or NULL */
+
+	/* Hook outputs */
+
+	/*
+	 * Callback implementing a custom asynchronous OAuth flow.
+	 *
+	 * The callback may return
+	 * - PGRES_POLLING_READING/WRITING, to indicate that a file descriptor has
+	 *   been stored in *altsock and libpq should wait until it is readable or
+	 *   writable before calling back;
+	 * - PGRES_POLLING_OK, to indicate that the flow is complete and
+	 *   request->token has been set; or
+	 * - PGRES_POLLING_FAILED, to indicate that token retrieval has failed.
+	 *
+	 * This callback is optional. If the token can be obtained without blocking
+	 * during the original call to the PQAUTHDATA_OAUTH_BEARER_TOKEN hook, it
+	 * may be returned directly, but one of request->async or request->token
+	 * must be set by the hook.
+	 */
+	PostgresPollingStatusType (*async) (PGconn *conn,
+										struct _PQoauthBearerRequest *request,
+										int *altsock);
+
+	/*
+	 * Callback to clean up custom allocations. A hook implementation may use
+	 * this to free request->token and any resources in request->user.
+	 *
+	 * This is technically optional, but highly recommended, because there is no
+	 * other indication as to when it is safe to free the token.
+	 */
+	void	  (*cleanup) (PGconn *conn, struct _PQoauthBearerRequest *request);
+
+	/*
+	 * The hook should set this to the Bearer token contents for the connection,
+	 * once the flow is completed.  The token contents must remain available to
+	 * libpq until the hook's cleanup callback is called.
+	 */
+	char	   *token;
+
+	/*
+	 * Hook-defined data. libpq will not modify this pointer across calls to the
+	 * async callback, so it can be used to keep track of application-specific
+	 * state. Resources allocated here should be freed by the cleanup callback.
+	 */
+	void	   *user;
+} PQoauthBearerRequest;
+
 extern char *PQencryptPassword(const char *passwd, const char *user);
 extern char *PQencryptPasswordConn(PGconn *conn, const char *passwd, const char *user, const char *algorithm);
+
+typedef int (*PQauthDataHook_type) (PGAuthData type, PGconn *conn, void *data);
+extern void	PQsetAuthDataHook(PQauthDataHook_type hook);
+extern PQauthDataHook_type PQgetAuthDataHook(void);
+extern int	PQdefaultAuthDataHook(PGAuthData type, PGconn *conn, void *data);
 
 /* === in encnames.c === */
 

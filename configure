@@ -712,6 +712,7 @@ with_uuid
 with_readline
 with_systemd
 with_selinux
+with_oauth
 with_ldap
 with_krb_srvnam
 krb_srvtab
@@ -857,6 +858,7 @@ with_krb_srvnam
 with_pam
 with_bsd_auth
 with_ldap
+with_oauth
 with_bonjour
 with_selinux
 with_systemd
@@ -1566,6 +1568,7 @@ Optional Packages:
   --with-pam              build with PAM support
   --with-bsd-auth         build with BSD Authentication support
   --with-ldap             build with LDAP support
+  --with-oauth=LIB        use LIB for OAuth 2.0 support (curl, iddawc)
   --with-bonjour          build with Bonjour support
   --with-selinux          build with SELinux support
   --with-systemd          build with systemd support
@@ -8759,6 +8762,59 @@ $as_echo "$with_ldap" >&6; }
 
 
 #
+# OAuth 2.0
+#
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with OAuth support" >&5
+$as_echo_n "checking whether to build with OAuth support... " >&6; }
+
+
+
+# Check whether --with-oauth was given.
+if test "${with_oauth+set}" = set; then :
+  withval=$with_oauth;
+  case $withval in
+    yes)
+      as_fn_error $? "argument required for --with-oauth option" "$LINENO" 5
+      ;;
+    no)
+      as_fn_error $? "argument required for --with-oauth option" "$LINENO" 5
+      ;;
+    *)
+
+      ;;
+  esac
+
+fi
+
+
+if test x"$with_oauth" = x"" ; then
+  with_oauth=no
+fi
+
+if test x"$with_oauth" = x"curl"; then
+
+$as_echo "#define USE_OAUTH 1" >>confdefs.h
+
+
+$as_echo "#define USE_OAUTH_CURL 1" >>confdefs.h
+
+elif test x"$with_oauth" = x"iddawc"; then
+
+$as_echo "#define USE_OAUTH 1" >>confdefs.h
+
+
+$as_echo "#define USE_OAUTH_IDDAWC 1" >>confdefs.h
+
+elif test x"$with_oauth" != x"no"; then
+  as_fn_error $? "--with-oauth must specify curl or iddawc" "$LINENO" 5
+fi
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $with_oauth" >&5
+$as_echo "$with_oauth" >&6; }
+
+
+
+#
 # Bonjour
 #
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with Bonjour support" >&5
@@ -13355,6 +13411,116 @@ fi
 
 
 
+if test "$with_oauth" = curl ; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for curl_multi_init in -lcurl" >&5
+$as_echo_n "checking for curl_multi_init in -lcurl... " >&6; }
+if ${ac_cv_lib_curl_curl_multi_init+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lcurl  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char curl_multi_init ();
+int
+main ()
+{
+return curl_multi_init ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_curl_curl_multi_init=yes
+else
+  ac_cv_lib_curl_curl_multi_init=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_curl_curl_multi_init" >&5
+$as_echo "$ac_cv_lib_curl_curl_multi_init" >&6; }
+if test "x$ac_cv_lib_curl_curl_multi_init" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBCURL 1
+_ACEOF
+
+  LIBS="-lcurl $LIBS"
+
+else
+  as_fn_error $? "library 'curl' is required for --with-oauth=curl" "$LINENO" 5
+fi
+
+elif test "$with_oauth" = iddawc ; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for i_init_session in -liddawc" >&5
+$as_echo_n "checking for i_init_session in -liddawc... " >&6; }
+if ${ac_cv_lib_iddawc_i_init_session+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-liddawc  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char i_init_session ();
+int
+main ()
+{
+return i_init_session ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_iddawc_i_init_session=yes
+else
+  ac_cv_lib_iddawc_i_init_session=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_iddawc_i_init_session" >&5
+$as_echo "$ac_cv_lib_iddawc_i_init_session" >&6; }
+if test "x$ac_cv_lib_iddawc_i_init_session" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBIDDAWC 1
+_ACEOF
+
+  LIBS="-liddawc $LIBS"
+
+else
+  as_fn_error $? "library 'iddawc' is required for --with-oauth=iddawc" "$LINENO" 5
+fi
+
+  # Check for an older spelling of i_get_openid_config
+  for ac_func in i_load_openid_config
+do :
+  ac_fn_c_check_func "$LINENO" "i_load_openid_config" "ac_cv_func_i_load_openid_config"
+if test "x$ac_cv_func_i_load_openid_config" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_I_LOAD_OPENID_CONFIG 1
+_ACEOF
+
+fi
+done
+
+fi
+
 # for contrib/sepgsql
 if test "$with_selinux" = yes; then
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for security_compute_create_name in -lselinux" >&5
@@ -14376,6 +14542,26 @@ done
 fi
 
 done
+
+fi
+
+if test "$with_oauth" = curl; then
+  ac_fn_c_check_header_mongrel "$LINENO" "curl/curl.h" "ac_cv_header_curl_curl_h" "$ac_includes_default"
+if test "x$ac_cv_header_curl_curl_h" = xyes; then :
+
+else
+  as_fn_error $? "header file <curl/curl.h> is required for OAuth" "$LINENO" 5
+fi
+
+
+elif test "$with_oauth" = iddawc; then
+  ac_fn_c_check_header_mongrel "$LINENO" "iddawc.h" "ac_cv_header_iddawc_h" "$ac_includes_default"
+if test "x$ac_cv_header_iddawc_h" = xyes; then :
+
+else
+  as_fn_error $? "header file <iddawc.h> is required for OAuth" "$LINENO" 5
+fi
+
 
 fi
 

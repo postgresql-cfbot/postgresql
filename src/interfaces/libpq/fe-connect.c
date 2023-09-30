@@ -359,6 +359,23 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Load-Balance-Hosts", "", 8,	/* sizeof("disable") = 8 */
 	offsetof(struct pg_conn, load_balance_hosts)},
 
+	/* OAuth v2 */
+	{"oauth_issuer", NULL, NULL, NULL,
+		"OAuth-Issuer", "", 40,
+	offsetof(struct pg_conn, oauth_issuer)},
+
+	{"oauth_client_id", NULL, NULL, NULL,
+		"OAuth-Client-ID", "", 40,
+	offsetof(struct pg_conn, oauth_client_id)},
+
+	{"oauth_client_secret", NULL, NULL, NULL,
+		"OAuth-Client-Secret", "", 40,
+	offsetof(struct pg_conn, oauth_client_secret)},
+
+	{"oauth_scope", NULL, NULL, NULL,
+		"OAuth-Scope", "", 15,
+	offsetof(struct pg_conn, oauth_scope)},
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}
@@ -625,6 +642,7 @@ pqDropServerData(PGconn *conn)
 	conn->write_err_msg = NULL;
 	conn->be_pid = 0;
 	conn->be_key = 0;
+	/* conn->oauth_want_retry = false; TODO */
 }
 
 
@@ -2589,6 +2607,7 @@ PQconnectPoll(PGconn *conn)
 		case CONNECTION_NEEDED:
 		case CONNECTION_GSS_STARTUP:
 		case CONNECTION_CHECK_TARGET:
+		case CONNECTION_AUTHENTICATING:
 			break;
 
 		default:
@@ -3570,6 +3589,7 @@ keep_going:						/* We will come back to here until there is
 				int			avail;
 				AuthRequest areq;
 				int			res;
+				bool		async;
 
 				/*
 				 * Scan the message from current point (note that if we find
@@ -3725,6 +3745,16 @@ keep_going:						/* We will come back to here until there is
 					/* Check to see if we should mention pgpassfile */
 					pgpassfileWarning(conn);
 
+#ifdef USE_OAUTH
+					if (conn->sasl == &pg_oauth_mech
+						&& conn->oauth_want_retry)
+					{
+						/* TODO: only allow retry once */
+						need_new_connection = true;
+						goto keep_going;
+					}
+#endif
+
 #ifdef ENABLE_GSS
 
 					/*
@@ -3806,7 +3836,17 @@ keep_going:						/* We will come back to here until there is
 				 * Note that conn->pghost must be non-NULL if we are going to
 				 * avoid the Kerberos code doing a hostname look-up.
 				 */
-				res = pg_fe_sendauth(areq, msgLength, conn);
+				res = pg_fe_sendauth(areq, msgLength, conn, &async);
+
+				if (async && (res == STATUS_OK))
+				{
+					/*
+					 * We'll come back later once we're ready to respond. Don't
+					 * consume the request yet.
+					 */
+					conn->status = CONNECTION_AUTHENTICATING;
+					goto keep_going;
+				}
 
 				/* OK, we have processed the message; mark data consumed */
 				conn->inStart = conn->inCursor;
@@ -3837,6 +3877,40 @@ keep_going:						/* We will come back to here until there is
 
 				/* Look to see if we have more data yet. */
 				goto keep_going;
+			}
+
+		case CONNECTION_AUTHENTICATING:
+			{
+				PostgresPollingStatusType status;
+				pgsocket	altsock = PGINVALID_SOCKET;
+
+				if (!conn->async_auth)
+				{
+					/* programmer error; should not happen */
+					libpq_append_conn_error(conn, "async authentication has no handler");
+					goto error_return;
+				}
+
+				status = conn->async_auth(conn, &altsock);
+
+				if (status == PGRES_POLLING_FAILED)
+					goto error_return;
+
+				if (status == PGRES_POLLING_OK)
+				{
+					/*
+					 * Reenter the authentication exchange with the server. We
+					 * didn't consume the message that started external
+					 * authentication, so it'll be reprocessed as if we just
+					 * received it.
+					 */
+					conn->status = CONNECTION_AWAITING_RESPONSE;
+					conn->altsock = PGINVALID_SOCKET; /* TODO: what frees this? */
+					goto keep_going;
+				}
+
+				conn->altsock = altsock;
+				return status;
 			}
 
 		case CONNECTION_AUTH_OK:
@@ -4338,6 +4412,7 @@ makeEmptyPGconn(void)
 	conn->verbosity = PQERRORS_DEFAULT;
 	conn->show_context = PQSHOW_CONTEXT_ERRORS;
 	conn->sock = PGINVALID_SOCKET;
+	conn->altsock = PGINVALID_SOCKET;
 	conn->Pfdebug = NULL;
 
 	/*
@@ -4465,6 +4540,11 @@ freePGconn(PGconn *conn)
 	free(conn->rowBuf);
 	free(conn->target_session_attrs);
 	free(conn->load_balance_hosts);
+	free(conn->oauth_issuer);
+	free(conn->oauth_discovery_uri);
+	free(conn->oauth_client_id);
+	free(conn->oauth_client_secret);
+	free(conn->oauth_scope);
 	termPQExpBuffer(&conn->errorMessage);
 	termPQExpBuffer(&conn->workBuffer);
 
@@ -7275,6 +7355,8 @@ PQsocket(const PGconn *conn)
 {
 	if (!conn)
 		return -1;
+	if (conn->altsock != PGINVALID_SOCKET)
+		return conn->altsock;
 	return (conn->sock != PGINVALID_SOCKET) ? conn->sock : -1;
 }
 

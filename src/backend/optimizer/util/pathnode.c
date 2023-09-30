@@ -56,6 +56,8 @@ static int	append_startup_cost_compare(const ListCell *a, const ListCell *b);
 static List *reparameterize_pathlist_by_child(PlannerInfo *root,
 											  List *pathlist,
 											  RelOptInfo *child_rel);
+static bool pathlist_is_reparameterizable_by_child(List *pathlist,
+												   RelOptInfo *child_rel);
 
 
 /*****************************************************************************
@@ -2436,6 +2438,16 @@ create_nestloop_path(PlannerInfo *root,
 {
 	NestPath   *pathnode = makeNode(NestPath);
 	Relids		inner_req_outer = PATH_REQ_OUTER(inner_path);
+	Relids		outerrelids;
+
+	/*
+	 * Paths are parameterized by top-level parents, so run parameterization
+	 * tests on the parent relids.
+	 */
+	if (outer_path->parent->top_parent_relids)
+		outerrelids = outer_path->parent->top_parent_relids;
+	else
+		outerrelids = outer_path->parent->relids;
 
 	/*
 	 * If the inner path is parameterized by the outer, we must drop any
@@ -2445,7 +2457,7 @@ create_nestloop_path(PlannerInfo *root,
 	 * estimates for this path.  We detect such clauses by checking for serial
 	 * number match to clauses already enforced in the inner path.
 	 */
-	if (bms_overlap(inner_req_outer, outer_path->parent->relids))
+	if (bms_overlap(inner_req_outer, outerrelids))
 	{
 		Bitmapset  *enforced_serials = get_param_path_clause_serials(inner_path);
 		List	   *jclauses = NIL;
@@ -4042,6 +4054,12 @@ reparameterize_path(PlannerInfo *root, Path *path,
  *
  * Currently, only a few path types are supported here, though more could be
  * added at need.  We return NULL if we can't reparameterize the given path.
+ *
+ * Note that this function can change referenced RTEs as well as the Path
+ * structures.  Therefore, it's only safe to call during create_plan(),
+ * when we have made a final choice of which Path to use for each RTE.
+ *
+ * Keep this code in sync with path_is_reparameterizable_by_child()!
  */
 Path *
 reparameterize_path_by_child(PlannerInfo *root, Path *path,
@@ -4054,7 +4072,7 @@ reparameterize_path_by_child(PlannerInfo *root, Path *path,
 
 #define ADJUST_CHILD_ATTRS(node) \
 	((node) = \
-	 (List *) adjust_appendrel_attrs_multilevel(root, (Node *) (node), \
+	 (void *) adjust_appendrel_attrs_multilevel(root, (Node *) (node), \
 												child_rel, \
 												child_rel->top_parent))
 
@@ -4082,8 +4100,8 @@ do { \
 	Relids		required_outer;
 
 	/*
-	 * If the path is not parameterized by parent of the given relation, it
-	 * doesn't need reparameterization.
+	 * If the path is not parameterized by the parent of the given relation,
+	 * it doesn't need reparameterization.
 	 */
 	if (!path->param_info ||
 		!bms_overlap(PATH_REQ_OUTER(path), child_rel->top_parent_relids))
@@ -4105,6 +4123,20 @@ do { \
 	{
 		case T_Path:
 			FLAT_COPY_PATH(new_path, path, Path);
+			ADJUST_CHILD_ATTRS(new_path->parent->baserestrictinfo);
+			if (path->pathtype == T_SampleScan)
+			{
+				Index		scan_relid = path->parent->relid;
+				RangeTblEntry *rte;
+
+				/* it should be a base rel with a tablesample clause... */
+				Assert(scan_relid > 0);
+				rte = planner_rt_fetch(scan_relid, root);
+				Assert(rte->rtekind == RTE_RELATION);
+				Assert(rte->tablesample != NULL);
+
+				ADJUST_CHILD_ATTRS(rte->tablesample);
+			}
 			break;
 
 		case T_IndexPath:
@@ -4112,6 +4144,7 @@ do { \
 				IndexPath  *ipath;
 
 				FLAT_COPY_PATH(ipath, path, IndexPath);
+				ADJUST_CHILD_ATTRS(ipath->indexinfo->indrestrictinfo);
 				ADJUST_CHILD_ATTRS(ipath->indexclauses);
 				new_path = (Path *) ipath;
 			}
@@ -4122,6 +4155,7 @@ do { \
 				BitmapHeapPath *bhpath;
 
 				FLAT_COPY_PATH(bhpath, path, BitmapHeapPath);
+				ADJUST_CHILD_ATTRS(bhpath->path.parent->baserestrictinfo);
 				REPARAMETERIZE_CHILD_PATH(bhpath->bitmapqual);
 				new_path = (Path *) bhpath;
 			}
@@ -4153,6 +4187,7 @@ do { \
 				ReparameterizeForeignPathByChild_function rfpc_func;
 
 				FLAT_COPY_PATH(fpath, path, ForeignPath);
+				ADJUST_CHILD_ATTRS(fpath->path.parent->baserestrictinfo);
 				if (fpath->fdw_outerpath)
 					REPARAMETERIZE_CHILD_PATH(fpath->fdw_outerpath);
 				if (fpath->fdw_restrictinfo)
@@ -4173,6 +4208,7 @@ do { \
 				CustomPath *cpath;
 
 				FLAT_COPY_PATH(cpath, path, CustomPath);
+				ADJUST_CHILD_ATTRS(cpath->path.parent->baserestrictinfo);
 				REPARAMETERIZE_CHILD_PATH_LIST(cpath->custom_paths);
 				if (cpath->custom_restrictinfo)
 					ADJUST_CHILD_ATTRS(cpath->custom_restrictinfo);
@@ -4336,8 +4372,144 @@ do { \
 }
 
 /*
+ * path_is_reparameterizable_by_child
+ * 		Given a path parameterized by the parent of the given child relation,
+ * 		see if it can be translated to be parameterized by the child relation.
+ *
+ * This must return true if and only if reparameterize_path_by_child()
+ * would succeed on this path.  Currently it's sufficient to verify that
+ * the path and all of its subpaths (if any) are of the types handled by
+ * that function.  However, sub-paths that are not parameterized can be
+ * disregarded since they won't require translation.
+ */
+bool
+path_is_reparameterizable_by_child(Path *path, RelOptInfo *child_rel)
+{
+
+#define CHILD_PATH_IS_REPARAMETERIZABLE(path) \
+do { \
+	if (!path_is_reparameterizable_by_child(path, child_rel)) \
+		return false; \
+} while(0)
+
+#define CHILD_PATH_LIST_IS_REPARAMETERIZABLE(pathlist) \
+do { \
+	if (!pathlist_is_reparameterizable_by_child(pathlist, child_rel)) \
+		return false; \
+} while(0)
+
+	/*
+	 * If the path is not parameterized by the parent of the given relation,
+	 * it doesn't need reparameterization.
+	 */
+	if (!path->param_info ||
+		!bms_overlap(PATH_REQ_OUTER(path), child_rel->top_parent_relids))
+		return true;
+
+	switch (nodeTag(path))
+	{
+		case T_Path:
+		case T_IndexPath:
+			break;
+
+		case T_BitmapHeapPath:
+			{
+				BitmapHeapPath *bhpath = (BitmapHeapPath *) path;
+
+				CHILD_PATH_IS_REPARAMETERIZABLE(bhpath->bitmapqual);
+			}
+			break;
+
+		case T_BitmapAndPath:
+			{
+				BitmapAndPath *bapath = (BitmapAndPath *) path;
+
+				CHILD_PATH_LIST_IS_REPARAMETERIZABLE(bapath->bitmapquals);
+			}
+			break;
+
+		case T_BitmapOrPath:
+			{
+				BitmapOrPath *bopath = (BitmapOrPath *) path;
+
+				CHILD_PATH_LIST_IS_REPARAMETERIZABLE(bopath->bitmapquals);
+			}
+			break;
+
+		case T_ForeignPath:
+			{
+				ForeignPath *fpath = (ForeignPath *) path;
+
+				if (fpath->fdw_outerpath)
+					CHILD_PATH_IS_REPARAMETERIZABLE(fpath->fdw_outerpath);
+			}
+			break;
+
+		case T_CustomPath:
+			{
+				CustomPath *cpath = (CustomPath *) path;
+
+				CHILD_PATH_LIST_IS_REPARAMETERIZABLE(cpath->custom_paths);
+			}
+			break;
+
+		case T_NestPath:
+		case T_MergePath:
+		case T_HashPath:
+			{
+				JoinPath   *jpath = (JoinPath *) path;
+
+				CHILD_PATH_IS_REPARAMETERIZABLE(jpath->outerjoinpath);
+				CHILD_PATH_IS_REPARAMETERIZABLE(jpath->innerjoinpath);
+			}
+			break;
+
+		case T_AppendPath:
+			{
+				AppendPath *apath = (AppendPath *) path;
+
+				CHILD_PATH_LIST_IS_REPARAMETERIZABLE(apath->subpaths);
+			}
+			break;
+
+		case T_MaterialPath:
+			{
+				MaterialPath *mpath = (MaterialPath *) path;
+
+				CHILD_PATH_IS_REPARAMETERIZABLE(mpath->subpath);
+			}
+			break;
+
+		case T_MemoizePath:
+			{
+				MemoizePath *mpath = (MemoizePath *) path;
+
+				CHILD_PATH_IS_REPARAMETERIZABLE(mpath->subpath);
+			}
+			break;
+
+		case T_GatherPath:
+			{
+				GatherPath *gpath = (GatherPath *) path;
+
+				CHILD_PATH_IS_REPARAMETERIZABLE(gpath->subpath);
+			}
+			break;
+
+		default:
+
+			/* We don't know how to reparameterize this path. */
+			return false;
+	}
+
+	return true;
+}
+
+/*
  * reparameterize_pathlist_by_child
  * 		Helper function to reparameterize a list of paths by given child rel.
+ *
+ * Returns NIL to indicate failure, so pathlist had better not be NIL.
  */
 static List *
 reparameterize_pathlist_by_child(PlannerInfo *root,
@@ -4362,4 +4534,24 @@ reparameterize_pathlist_by_child(PlannerInfo *root,
 	}
 
 	return result;
+}
+
+/*
+ * pathlist_is_reparameterizable_by_child
+ *		Helper function to check if a list of paths can be reparameterized.
+ */
+static bool
+pathlist_is_reparameterizable_by_child(List *pathlist, RelOptInfo *child_rel)
+{
+	ListCell   *lc;
+
+	foreach(lc, pathlist)
+	{
+		Path	   *path = (Path *) lfirst(lc);
+
+		if (!path_is_reparameterizable_by_child(path, child_rel))
+			return false;
+	}
+
+	return true;
 }

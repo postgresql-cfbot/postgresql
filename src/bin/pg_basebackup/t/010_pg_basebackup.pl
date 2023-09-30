@@ -392,7 +392,8 @@ SKIP:
 	my $node2 = PostgreSQL::Test::Cluster->new('replica');
 
 	# Recover main data directory
-	$node2->init_from_backup($node, 'tarbackup2', tar_program => $tar);
+	$node2->init_from_backup($node, 'tarbackup2', tar_program => $tar,
+	    has_restoring => 1);
 
 	# Recover tablespace into a new directory (not where it was!)
 	my $repTsDir = "$tempdir/tblspc1replica";

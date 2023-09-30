@@ -152,6 +152,7 @@ move(
 	"$tmp_folder/node_2-postgresql.conf.tmp",
 	"$node_2_pgdata/postgresql.conf");
 
+$node_2->append_conf('standby.signal', '');
 $node_2->start;
 
 # Check contents of the test tables after rewind. The rows inserted in node 3

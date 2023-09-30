@@ -7,6 +7,7 @@
 #include "btree_utils_num.h"
 #include "utils/builtins.h"
 #include "utils/inet.h"
+#include "utils/sortsupport.h"
 
 typedef struct
 {
@@ -25,7 +26,14 @@ PG_FUNCTION_INFO_V1(gbt_macad8_picksplit);
 PG_FUNCTION_INFO_V1(gbt_macad8_consistent);
 PG_FUNCTION_INFO_V1(gbt_macad8_penalty);
 PG_FUNCTION_INFO_V1(gbt_macad8_same);
+PG_FUNCTION_INFO_V1(gbt_macad8_sortsupport);
 
+
+static int
+macaddr8_fast_cmp(Datum x, Datum y, SortSupport ssup)
+{
+	return DatumGetInt32(DirectFunctionCall2(macaddr8_cmp, x, y));
+}
 
 static bool
 gbt_macad8gt(const void *a, const void *b, FmgrInfo *flinfo)
@@ -193,4 +201,15 @@ gbt_macad8_same(PG_FUNCTION_ARGS)
 
 	*result = gbt_num_same((void *) b1, (void *) b2, &tinfo, fcinfo->flinfo);
 	PG_RETURN_POINTER(result);
+}
+
+Datum
+gbt_macad8_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = macaddr8_fast_cmp;
+	ssup->ssup_extra = NULL;
+
+	PG_RETURN_VOID();
 }

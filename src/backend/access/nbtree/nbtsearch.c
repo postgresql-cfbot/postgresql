@@ -318,9 +318,12 @@ _bt_moveright(Relation rel,
  *	_bt_binsrch() -- Do a binary search for a key on a particular page.
  *
  * On a leaf page, _bt_binsrch() returns the OffsetNumber of the first
- * key >= given scankey, or > scankey if nextkey is true.  (NOTE: in
- * particular, this means it is possible to return a value 1 greater than the
- * number of keys on the page, if the scankey is > all keys on the page.)
+ * key >= given scankey, or > scankey if nextkey is true for forward scans.
+ * _bt_binsrch() also "steps back" by one item/tuple on the leaf level in the
+ * case of backward scans.  (NOTE: this means it is possible to return a value
+ * that's 1 greater than the number of keys on the leaf page.  It also means
+ * that we can return an item 1 less than the first non-pivot tuple on any
+ * leaf page.)
  *
  * On an internal (non-leaf) page, _bt_binsrch() returns the OffsetNumber
  * of the last key < given scankey, or last key <= given scankey if nextkey
@@ -362,7 +365,7 @@ _bt_binsrch(Relation rel,
 	 * this covers two cases: the page is really empty (no keys), or it
 	 * contains only a high key.  The latter case is possible after vacuuming.
 	 * This can never happen on an internal page, however, since they are
-	 * never empty (an internal page must have children).
+	 * never empty (an internal page must have at least one child).
 	 */
 	if (unlikely(high < low))
 		return low;
@@ -402,10 +405,27 @@ _bt_binsrch(Relation rel,
 	 * past the last slot on the page.
 	 *
 	 * On a leaf page, we always return the first key >= scan key (resp. >
-	 * scan key), which could be the last slot + 1.
+	 * scan key) for forward scan callers, which could be the last slot + 1.
 	 */
 	if (P_ISLEAF(opaque))
+	{
+		/*
+		 * Backward scans should (by definition) be initially positioned after
+		 * the final non-pivot tuple from the equal-to-scankey grouping on the
+		 * leaf level (with forward scans it's before the first such tuple).
+		 * This explanation works independently of the scan's nextkey-ness
+		 * (actually, nextkey-ness makes the grouping greater-than-scankey,
+		 * but there's still a grouping to position ourselves relative to).
+		 *
+		 * The backward scan case is now "at the start of the wrong grouping".
+		 * It must now step back to "the end of the correct grouping".  This
+		 * leaves us at the correct final offnum from the correct leaf page.
+		 */
+		if (unlikely(key->backward))
+			return OffsetNumberPrev(low);
+
 		return low;
+	}
 
 	/*
 	 * On a non-leaf page, return the last key < scan key (resp. <= scan key).
@@ -767,7 +787,7 @@ _bt_compare(Relation rel,
 	if (key->scantid == NULL)
 	{
 		/*
-		 * Most searches have a scankey that is considered greater than a
+		 * Forward scans have a scankey that is considered greater than a
 		 * truncated pivot tuple if and when the scankey has equal values for
 		 * attributes up to and including the least significant untruncated
 		 * attribute in tuple.
@@ -782,25 +802,33 @@ _bt_compare(Relation rel,
 		 * doesn't have to descend left because it isn't interested in a match
 		 * that has a heap TID value of -inf.
 		 *
-		 * However, some searches (pivotsearch searches) actually require that
-		 * we descend left when this happens.  -inf is treated as a possible
-		 * match for omitted scankey attribute(s).  This is needed by page
-		 * deletion, which must re-find leaf pages that are targets for
-		 * deletion using their high keys.
+		 * We take a symmetrical approach in our handling of this boundary
+		 * case during backward scan searches (with the same goal in mind).
+		 * Here we treat -inf as a possible match for omitted scankey suffix
+		 * attribute(s).  The searcher isn't really interested in matches with
+		 * a heap TID value of -inf, though; it's actually interested in any
+		 * non-pivot tuple match to the immediate left of the ('foo', -inf)
+		 * pivot.  The first leaf page match returned by _bt_binsrch might be
+		 * ('fog', '(4223,7)'), for example.  In other words, backward scan
+		 * search doesn't have to descend right because it is only interested
+		 * in values strictly < 'foo'.
+		 *
+		 * Note: We can exploit invariants for the >= 'foo' and < 'foo' cases
+		 * like this because pivot tuples usually have -inf sentinel values.
+		 * This isn't possible for the <= 'foo' case because suffix truncation
+		 * will never make truncated key attributes have +inf sentinel values.
+		 * When nextkey and backward are both true, our behavior here cannot
+		 * and will not alter how _bt_search descends the tree.  In other
+		 * words, when scan is interested in <= 'foo' matches we must assume
+		 * that leaf pages on both sides of ('foo', -inf) pivot are relevant.
 		 *
 		 * Note: the heap TID part of the test ensures that scankey is being
-		 * compared to a pivot tuple with one or more truncated key
-		 * attributes.
-		 *
-		 * Note: pg_upgrade'd !heapkeyspace indexes must always descend to the
-		 * left here, since they have no heap TID attribute (and cannot have
-		 * any -inf key values in any case, since truncation can only remove
-		 * non-key attributes).  !heapkeyspace searches must always be
-		 * prepared to deal with matches on both sides of the pivot once the
-		 * leaf level is reached.
+		 * compared to a pivot tuple with one or more truncated -inf key
+		 * attributes.  The heap TID attribute is the last key attribute in
+		 * every index, of course, but other than that it isn't special.
 		 */
-		if (key->heapkeyspace && !key->pivotsearch &&
-			key->keysz == ntupatts && heapTid == NULL)
+		if (!key->backward && key->keysz == ntupatts && heapTid == NULL &&
+			key->heapkeyspace)
 			return 1;
 
 		/* All provided scankey arguments found to be equal */
@@ -865,12 +893,10 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	BTStack		stack;
 	OffsetNumber offnum;
 	StrategyNumber strat;
-	bool		nextkey;
-	bool		goback;
 	BTScanInsertData inskey;
 	ScanKey		startKeys[INDEX_MAX_KEYS];
 	ScanKeyData notnullkeys[INDEX_MAX_KEYS];
-	int			keysCount = 0;
+	int			keysz = 0;
 	int			i;
 	bool		status;
 	StrategyNumber strat_total;
@@ -1005,7 +1031,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 					 ScanDirectionIsBackward(dir)))
 				{
 					/* Yes, so build the key in notnullkeys[keysCount] */
-					chosen = &notnullkeys[keysCount];
+					chosen = &notnullkeys[keysz];
 					ScanKeyEntryInitialize(chosen,
 										   (SK_SEARCHNOTNULL | SK_ISNULL |
 											(impliesNN->sk_flags &
@@ -1026,7 +1052,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 				 */
 				if (chosen == NULL)
 					break;
-				startKeys[keysCount++] = chosen;
+				startKeys[keysz++] = chosen;
 
 				/*
 				 * Adjust strat_total, and quit if we have stored a > or <
@@ -1100,7 +1126,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	 * the tree.  Walk down that edge to the first or last key, and scan from
 	 * there.
 	 */
-	if (keysCount == 0)
+	if (keysz == 0)
 	{
 		bool		match;
 
@@ -1122,8 +1148,8 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	 * identified by startKeys[].  (Remaining insertion scankey fields are
 	 * initialized after initial-positioning strategy is finalized.)
 	 */
-	Assert(keysCount <= INDEX_MAX_KEYS);
-	for (i = 0; i < keysCount; i++)
+	Assert(keysz <= INDEX_MAX_KEYS);
+	for (i = 0; i < keysz; i++)
 	{
 		ScanKey		cur = startKeys[i];
 
@@ -1164,7 +1190,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 			 * did use has to be treated as just a ">=" or "<=" condition, and
 			 * so we'd better adjust strat_total accordingly.
 			 */
-			if (i == keysCount - 1)
+			if (i == keysz - 1)
 			{
 				bool		used_all_subkeys = false;
 
@@ -1173,16 +1199,16 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 				{
 					subkey++;
 					Assert(subkey->sk_flags & SK_ROW_MEMBER);
-					if (subkey->sk_attno != keysCount + 1)
+					if (subkey->sk_attno != keysz + 1)
 						break;	/* out-of-sequence, can't use it */
 					if (subkey->sk_strategy != cur->sk_strategy)
 						break;	/* wrong direction, can't use it */
 					if (subkey->sk_flags & SK_ISNULL)
 						break;	/* can't use null keys */
-					Assert(keysCount < INDEX_MAX_KEYS);
-					memcpy(inskey.scankeys + keysCount, subkey,
+					Assert(keysz < INDEX_MAX_KEYS);
+					memcpy(inskey.scankeys + keysz, subkey,
 						   sizeof(ScanKeyData));
-					keysCount++;
+					keysz++;
 					if (subkey->sk_flags & SK_ROW_END)
 					{
 						used_all_subkeys = true;
@@ -1263,40 +1289,26 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	/*----------
 	 * Examine the selected initial-positioning strategy to determine exactly
 	 * where we need to start the scan, and set flag variables to control the
-	 * code below.
-	 *
-	 * If nextkey = false, _bt_search and _bt_binsrch will locate the first
-	 * item >= scan key.  If nextkey = true, they will locate the first
-	 * item > scan key.
-	 *
-	 * If goback = true, we will then step back one item, while if
-	 * goback = false, we will start the scan on the located item.
+	 * initial descent by _bt_search (and our _bt_binsrch call for the leaf
+	 * page _bt_search returns).
 	 *----------
 	 */
+	_bt_metaversion(rel, &inskey.heapkeyspace, &inskey.allequalimage);
+	inskey.anynullkeys = false; /* unused */
+	inskey.scantid = NULL;
+	inskey.keysz = keysz;
 	switch (strat_total)
 	{
 		case BTLessStrategyNumber:
 
-			/*
-			 * Find first item >= scankey, then back up one to arrive at last
-			 * item < scankey.  (Note: this positioning strategy is only used
-			 * for a backward scan, so that is always the correct starting
-			 * position.)
-			 */
-			nextkey = false;
-			goback = true;
+			inskey.nextkey = false;
+			inskey.backward = true;
 			break;
 
 		case BTLessEqualStrategyNumber:
 
-			/*
-			 * Find first item > scankey, then back up one to arrive at last
-			 * item <= scankey.  (Note: this positioning strategy is only used
-			 * for a backward scan, so that is always the correct starting
-			 * position.)
-			 */
-			nextkey = true;
-			goback = true;
+			inskey.nextkey = true;
+			inskey.backward = true;
 			break;
 
 		case BTEqualStrategyNumber:
@@ -1308,41 +1320,37 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 			if (ScanDirectionIsBackward(dir))
 			{
 				/*
-				 * This is the same as the <= strategy.  We will check at the
-				 * end whether the found item is actually =.
+				 * This is the same as the <= strategy
 				 */
-				nextkey = true;
-				goback = true;
+				inskey.nextkey = true;
+				inskey.backward = true;
 			}
 			else
 			{
 				/*
-				 * This is the same as the >= strategy.  We will check at the
-				 * end whether the found item is actually =.
+				 * This is the same as the >= strategy
 				 */
-				nextkey = false;
-				goback = false;
+				inskey.nextkey = false;
+				inskey.backward = false;
 			}
 			break;
 
 		case BTGreaterEqualStrategyNumber:
 
 			/*
-			 * Find first item >= scankey.  (This is only used for forward
-			 * scans.)
+			 * Find first item >= scankey
 			 */
-			nextkey = false;
-			goback = false;
+			inskey.nextkey = false;
+			inskey.backward = false;
 			break;
 
 		case BTGreaterStrategyNumber:
 
 			/*
-			 * Find first item > scankey.  (This is only used for forward
-			 * scans.)
+			 * Find first item > scankey
 			 */
-			nextkey = true;
-			goback = false;
+			inskey.nextkey = true;
+			inskey.backward = false;
 			break;
 
 		default:
@@ -1351,18 +1359,11 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 			return false;
 	}
 
-	/* Initialize remaining insertion scan key fields */
-	_bt_metaversion(rel, &inskey.heapkeyspace, &inskey.allequalimage);
-	inskey.anynullkeys = false; /* unused */
-	inskey.nextkey = nextkey;
-	inskey.pivotsearch = false;
-	inskey.scantid = NULL;
-	inskey.keysz = keysCount;
-
 	/*
 	 * Use the manufactured insertion scan key to descend the tree and
 	 * position ourselves on the target leaf page.
 	 */
+	Assert(ScanDirectionIsBackward(dir) == inskey.backward);
 	stack = _bt_search(rel, NULL, &inskey, &buf, BT_READ);
 
 	/* don't need to keep the stack around... */
@@ -1404,34 +1405,29 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 
 	/* position to the precise item on the page */
 	offnum = _bt_binsrch(rel, &inskey, buf);
-
-	/*
-	 * If nextkey = false, we are positioned at the first item >= scan key, or
-	 * possibly at the end of a page on which all the existing items are less
-	 * than the scan key and we know that everything on later pages is greater
-	 * than or equal to scan key.
-	 *
-	 * If nextkey = true, we are positioned at the first item > scan key, or
-	 * possibly at the end of a page on which all the existing items are less
-	 * than or equal to the scan key and we know that everything on later
-	 * pages is greater than scan key.
-	 *
-	 * The actually desired starting point is either this item or the prior
-	 * one, or in the end-of-page case it's the first item on the next page or
-	 * the last item on this page.  Adjust the starting offset if needed. (If
-	 * this results in an offset before the first item or after the last one,
-	 * _bt_readpage will report no items found, and then we'll step to the
-	 * next page as needed.)
-	 */
-	if (goback)
-		offnum = OffsetNumberPrev(offnum);
-
-	/* remember which buffer we have pinned, if any */
 	Assert(!BTScanPosIsValid(so->currPos));
 	so->currPos.buf = buf;
 
 	/*
 	 * Now load data from the first page of the scan.
+	 *
+	 * If inskey.nextkey = false and inskey.backward = false, offnum is
+	 * positioned at the first non-pivot tuple >= inskey.scankeys.
+	 *
+	 * If inskey.nextkey = false and inskey.backward = true, offnum is
+	 * positioned at the last non-pivot tuple < inskey.scankeys.
+	 *
+	 * If inskey.nextkey = true and inskey.backward = false, offnum is
+	 * positioned at the first non-pivot tuple > inskey.scankeys.
+	 *
+	 * If inskey.nextkey = true and inskey.backward = true, offnum is
+	 * positioned at the last non-pivot tuple <= inskey.scankeys.
+	 *
+	 * Note: if there isn't an existing non-pivot tuple that is fully equal to
+	 * inskey.scankeys according to _bt_compare, then offnum is the would-be
+	 * offset -- the offset that btinsert would have to use when inserting a
+	 * matching non-pivot tuple onto the page, backfilled with -inf values for
+	 * omitted suffix key attributes (+inf values in the backward scan case).
 	 */
 	if (!_bt_readpage(scan, dir, offnum))
 	{
@@ -1445,7 +1441,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	}
 	else
 	{
-		/* Drop the lock, and maybe the pin, on the current page */
+		/* We have at least one item to return as scan's first item */
 		_bt_drop_lock_and_maybe_pin(scan, &so->currPos);
 	}
 
@@ -1521,6 +1517,11 @@ _bt_next(IndexScanDesc scan, ScanDirection dir)
  * direction.  All items matching the scan keys are loaded into currPos.items.
  * moreLeft or moreRight (as appropriate) is cleared if _bt_checkkeys reports
  * that there can be no more matching tuples in the current scan direction.
+ *
+ * Some callers pass us an offnum returned by _bt_binsrch, which can be an
+ * "invalid" offnum such as "maxoff+1" in certain corner cases.  We deal with
+ * that by only checking the keys from the offnum tuple after we're sure that
+ * it points to a valid non-pivot tuple (which is a good idea anyway).
  *
  * In the case of a parallel scan, caller must have called _bt_parallel_seize
  * prior to calling this function; this function will invoke
@@ -1615,6 +1616,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 			}
 
 			itup = (IndexTuple) PageGetItem(page, iid);
+			Assert(!BTreeTupleIsPivot(itup));
 
 			if (_bt_checkkeys(scan, itup, indnatts, dir, &continuescan))
 			{
@@ -1723,6 +1725,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 				tuple_alive = true;
 
 			itup = (IndexTuple) PageGetItem(page, iid);
+			Assert(!BTreeTupleIsPivot(itup));
 
 			passes_quals = _bt_checkkeys(scan, itup, indnatts, dir,
 										 &continuescan);
@@ -1971,7 +1974,7 @@ _bt_steppage(IndexScanDesc scan, ScanDirection dir)
 	if (!_bt_readnextpage(scan, blkno, dir))
 		return false;
 
-	/* Drop the lock, and maybe the pin, on the current page */
+	/* We have at least one item to return as scan's next item */
 	_bt_drop_lock_and_maybe_pin(scan, &so->currPos);
 
 	return true;
@@ -2172,7 +2175,7 @@ _bt_parallel_readpage(IndexScanDesc scan, BlockNumber blkno, ScanDirection dir)
 	if (!_bt_readnextpage(scan, blkno, dir))
 		return false;
 
-	/* Drop the lock, and maybe the pin, on the current page */
+	/* We have at least one item to return as scan's next item */
 	_bt_drop_lock_and_maybe_pin(scan, &so->currPos);
 
 	return true;
@@ -2461,7 +2464,7 @@ _bt_endpoint(IndexScanDesc scan, ScanDirection dir)
 	}
 	else
 	{
-		/* Drop the lock, and maybe the pin, on the current page */
+		/* We have at least one item to return as scan's first item */
 		_bt_drop_lock_and_maybe_pin(scan, &so->currPos);
 	}
 

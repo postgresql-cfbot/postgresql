@@ -13904,6 +13904,7 @@ dumpAgg(Archive *fout, const AggInfo *agginfo)
 	const char *aggmtransfn;
 	const char *aggminvtransfn;
 	const char *aggmfinalfn;
+	const char *aggpartialfn;
 	bool		aggfinalextra;
 	bool		aggmfinalextra;
 	char		aggfinalmodify;
@@ -13986,11 +13987,11 @@ dumpAgg(Archive *fout, const AggInfo *agginfo)
 		if (fout->remoteVersion >= 110000)
 			appendPQExpBufferStr(query,
 								 "aggfinalmodify,\n"
-								 "aggmfinalmodify\n");
+								 "aggmfinalmodify,\n");
 		else
 			appendPQExpBufferStr(query,
 								 "'0' AS aggfinalmodify,\n"
-								 "'0' AS aggmfinalmodify\n");
+								 "'0' AS aggmfinalmodify,\n");
 
 		appendPQExpBufferStr(query,
 							 "FROM pg_catalog.pg_aggregate a, pg_catalog.pg_proc p "
@@ -14016,6 +14017,7 @@ dumpAgg(Archive *fout, const AggInfo *agginfo)
 	aggcombinefn = PQgetvalue(res, 0, PQfnumber(res, "aggcombinefn"));
 	aggserialfn = PQgetvalue(res, 0, PQfnumber(res, "aggserialfn"));
 	aggdeserialfn = PQgetvalue(res, 0, PQfnumber(res, "aggdeserialfn"));
+	aggpartialfn = PQgetvalue(res, 0, PQfnumber(res, "aggpartialfn"));
 	aggmtransfn = PQgetvalue(res, 0, PQfnumber(res, "aggmtransfn"));
 	aggminvtransfn = PQgetvalue(res, 0, PQfnumber(res, "aggminvtransfn"));
 	aggmfinalfn = PQgetvalue(res, 0, PQfnumber(res, "aggmfinalfn"));
@@ -14104,6 +14106,9 @@ dumpAgg(Archive *fout, const AggInfo *agginfo)
 
 	if (strcmp(aggdeserialfn, "-") != 0)
 		appendPQExpBuffer(details, ",\n    DESERIALFUNC = %s", aggdeserialfn);
+
+	if (strcmp(aggpartialfn, "-") != 0)
+		appendPQExpBuffer(details, ",\n    AGGPARTIALFUNC = %s", aggpartialfn);
 
 	if (strcmp(aggmtransfn, "-") != 0)
 	{

@@ -42,6 +42,7 @@ CREATE [ OR REPLACE ] AGGREGATE <replaceable class="parameter">name</replaceable
     [ , MINITCOND = <replaceable class="parameter">minitial_condition</replaceable> ]
     [ , SORTOP = <replaceable class="parameter">sort_operator</replaceable> ]
     [ , PARALLEL = { SAFE | RESTRICTED | UNSAFE } ]
+    [ , AGGPARTIALFUNC = <replaceable class="parameter">aggpartialfunc</replaceable> ]
 )
 
 CREATE [ OR REPLACE ] AGGREGATE <replaceable class="parameter">name</replaceable> ( [ [ <replaceable class="parameter">argmode</replaceable> ] [ <replaceable class="parameter">argname</replaceable> ] <replaceable class="parameter">arg_data_type</replaceable> [ , ... ] ]
@@ -80,6 +81,7 @@ CREATE [ OR REPLACE ] AGGREGATE <replaceable class="parameter">name</replaceable
     [ , MFINALFUNC_MODIFY = { READ_ONLY | SHAREABLE | READ_WRITE } ]
     [ , MINITCOND = <replaceable class="parameter">minitial_condition</replaceable> ]
     [ , SORTOP = <replaceable class="parameter">sort_operator</replaceable> ]
+    [ , AGGPARTIALFUNC = <replaceable class="parameter">aggpartialfunc</replaceable> ]
 )
 </synopsis>
  </refsynopsisdiv>
@@ -244,6 +246,18 @@ CREATE [ OR REPLACE ] AGGREGATE <replaceable class="parameter">name</replaceable
    <literal>SERIALFUNC</literal> and <literal>DESERIALFUNC</literal> parameters so that
    parallel aggregation is possible.  Note that the aggregate must also be
    marked <literal>PARALLEL SAFE</literal> to enable parallel aggregation.
+  </para>
+
+  <para>
+   <filename>postgres_fdw</filename> can optimize a query containing aggregate
+   expressions for a partitioned table across one or more remote servers.
+   This optimization sends an aggregate expression to a remote server and the
+   aggregate is a partial aggregate on the local server. This optimization
+   requires an aggregate function called a <firstterm>partial aggregate
+   function</firstterm>. See
+   <xref linkend="partial-aggregate-pushdown"/> for the definition of
+   partial aggregate function. <literal>AGGPARTIALFUNC</literal> is a parameter
+   of the partial aggregate function.
   </para>
 
   <para>
@@ -650,6 +664,34 @@ SELECT col FROM tab ORDER BY col USING sortop LIMIT 1;
       arguments.  The <literal>HYPOTHETICAL</literal> flag has no effect on
       run-time behavior, only on parse-time resolution of the data types and
       collations of the aggregate's arguments.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">aggpartialfunc</replaceable></term>
+    <listitem>
+     <para>
+      The name of the partial aggregate function.
+      If the <replaceable class="parameter">name</replaceable> and the
+      <replaceable class="parameter">aggpartialfunc</replaceable> are the same,
+      then the aggregate function must be the partial aggregate function.
+      If the <replaceable class="parameter">aggpartialfunc</replaceable>
+      is specified, the <replaceable class="parameter">combinefunc</replaceable>
+      must be specified.
+      If the <replaceable class="parameter">state_data_type</replaceable> is not
+      <type>internal</type>, then the partial aggregate function must not have
+      the <replaceable class="parameter">ffunc</replaceable>.
+      If the <replaceable class="parameter">state_data_type</replaceable> is
+      <type>internal</type>, the partial aggregate function must have the same
+      final function as the <replaceable class="parameter">serialfunc</replaceable>.
+      The partial aggregate function and the aggregate function have
+      the same <replaceable class="parameter">sfunc</replaceable> and
+      <replaceable class="parameter">state_data_type</replaceable>.
+      If the partial aggregate function has any of the following members:
+      initial state, combine function, serialization function, or deserialization
+      function, the members must match with the corresponding members in the
+      aggregate function.
      </para>
     </listitem>
    </varlistentry>

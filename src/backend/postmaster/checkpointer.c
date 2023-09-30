@@ -45,6 +45,7 @@
 #include "postmaster/bgwriter.h"
 #include "postmaster/interrupt.h"
 #include "replication/syncrep.h"
+#include "restore/restore_module.h"
 #include "storage/bufmgr.h"
 #include "storage/condition_variable.h"
 #include "storage/fd.h"
@@ -232,6 +233,24 @@ CheckpointerMain(void)
 												 "Checkpointer",
 												 ALLOCSET_DEFAULT_SIZES);
 	MemoryContextSwitchTo(checkpointer_context);
+
+	/*
+	 * Load restore_library so that we can use its archive-cleanup callback, if
+	 * one is defined.
+	 *
+	 * We also take this opportunity to set up the before_shmem_exit hook for
+	 * the shutdown callback and to check that only one of restore_library,
+	 * archive_cleanup_command is set.  Note that we emit a WARNING upon
+	 * detecting misconfigured parameters, and we clear the callbacks so that
+	 * the archive-cleanup functionality is skipped.  We judge this
+	 * functionality to not be important enough to require blocking checkpoints
+	 * or shutting down the server when the parameters are misconfigured.
+	 */
+	before_shmem_exit(call_restore_module_shutdown_cb, 0);
+	if (CheckMutuallyExclusiveStringGUCs(restoreLibrary, "restore_library",
+										 archiveCleanupCommand, "archive_cleanup_command",
+										 WARNING))
+		LoadRestoreCallbacks();
 
 	/*
 	 * If an exception is encountered, processing resumes here.
@@ -547,6 +566,10 @@ HandleCheckpointerInterrupts(void)
 
 	if (ConfigReloadPending)
 	{
+		bool		archive_cleanup_settings_changed = false;
+		char	   *prevRestoreLibrary = pstrdup(restoreLibrary);
+		char	   *prevArchiveCleanupCommand = pstrdup(archiveCleanupCommand);
+
 		ConfigReloadPending = false;
 		ProcessConfigFile(PGC_SIGHUP);
 
@@ -562,6 +585,36 @@ HandleCheckpointerInterrupts(void)
 		 * because of SIGHUP.
 		 */
 		UpdateSharedMemoryConfig();
+
+		/*
+		 * If the archive-cleanup settings have changed, call the currently
+		 * loaded shutdown callback and clear all the restore callbacks.
+		 * There's presently no good way to unload a library besides restarting
+		 * the process, and there should be little harm in leaving it around,
+		 * so we just leave it loaded.
+		 */
+		if (strcmp(prevRestoreLibrary, restoreLibrary) != 0 ||
+			strcmp(prevArchiveCleanupCommand, archiveCleanupCommand) != 0)
+		{
+			archive_cleanup_settings_changed = true;
+			call_restore_module_shutdown_cb(0, (Datum) 0);
+			RestoreCallbacks = NULL;
+		}
+
+		/*
+		 * As in CheckpointerMain(), we only emit a WARNING if we detect that
+		 * both restore_library and archive_cleanup_command are set.  We do
+		 * this even if the archive-cleanup settings haven't changed to remind
+		 * the user about the misconfiguration.
+		 */
+		if (CheckMutuallyExclusiveStringGUCs(restoreLibrary, "restore_library",
+											 archiveCleanupCommand, "archive_cleanup_command",
+											 WARNING) &&
+			archive_cleanup_settings_changed)
+			LoadRestoreCallbacks();
+
+		pfree(prevRestoreLibrary);
+		pfree(prevArchiveCleanupCommand);
 	}
 	if (ShutdownRequestPending)
 	{

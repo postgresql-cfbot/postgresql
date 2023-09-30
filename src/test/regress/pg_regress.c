@@ -93,6 +93,7 @@ bool		debug = false;
 char	   *inputdir = ".";
 char	   *outputdir = ".";
 char	   *expecteddir = ".";
+char	   *verifydb_test = NULL;
 char	   *bindir = PGBINDIR;
 char	   *launcher = NULL;
 static _stringlist *loadextension = NULL;
@@ -112,6 +113,7 @@ static char *dlpath = PKGLIBDIR;
 static char *user = NULL;
 static _stringlist *extraroles = NULL;
 static char *config_auth_datadir = NULL;
+static char *verifydb_expect = NULL;
 
 /* internal variables */
 static const char *progname;
@@ -119,11 +121,10 @@ static char *logfilename;
 static FILE *logfile;
 static char *difffilename;
 static const char *sockdir;
-static const char *temp_sockdir;
-static char sockself[MAXPGPATH];
-static char socklock[MAXPGPATH];
+static const char *temp_dir = NULL;
 static StringInfo failed_tests = NULL;
 static bool in_note = false;
+static _stringlist *removefiles = NULL;
 
 static _resultmap *resultmap = NULL;
 
@@ -135,6 +136,7 @@ static int	fail_count = 0;
 
 static bool directory_exists(const char *dir);
 static void make_directory(const char *dir);
+static void run_verification(const char *test, test_start_function startfunc, bool validate);
 
 static void test_status_print(bool ok, const char *testname, double runtime, bool parallel);
 static void test_status_ok(const char *testname, double runtime, bool parallel);
@@ -435,7 +437,8 @@ stop_postmaster(void)
 }
 
 /*
- * Remove the socket temporary directory.  pg_regress never waits for a
+ * Remove the temporary directory and remove all files which have been added
+ * to it.  pg_regress never waits for a
  * postmaster exit, so it is indeterminate whether the postmaster has yet to
  * unlink the socket and lock file.  Unlink them here so we can proceed to
  * remove the directory.  Ignore errors; leaking a temporary directory is
@@ -446,10 +449,15 @@ stop_postmaster(void)
 static void
 remove_temp(void)
 {
-	Assert(temp_sockdir);
-	unlink(sockself);
-	unlink(socklock);
-	rmdir(temp_sockdir);
+	_stringlist *rf;
+
+	Assert(temp_dir);
+
+	/* Remove any files which has been added to the temporary directory */
+	for (rf = removefiles; rf != NULL; rf = rf->next)
+		unlink(rf->str);
+
+	rmdir(temp_dir);
 }
 
 /*
@@ -465,7 +473,9 @@ signal_remove_temp(SIGNAL_ARGS)
 }
 
 /*
- * Create a temporary directory suitable for the server's Unix-domain socket.
+ * Create a temporary directory suitable for the server's Unix-domain socket
+ * as well as any intermediate expectfiles.
+ *
  * The directory will have mode 0700 or stricter, so no other OS user can open
  * our socket to exploit our use of trust authentication.  Most systems
  * constrain the length of socket paths well below _POSIX_PATH_MAX, so we
@@ -477,21 +487,22 @@ signal_remove_temp(SIGNAL_ARGS)
  * the build/test user.
  */
 static const char *
-make_temp_sockdir(void)
+make_temp_dir(void)
 {
-	char	   *template = psprintf("%s/pg_regress-XXXXXX",
-									getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
+	char	   *template;
 
-	temp_sockdir = mkdtemp(template);
-	if (temp_sockdir == NULL)
+	if (temp_dir != NULL)
+		return temp_dir;
+
+	template = psprintf("%s/pg_regress-XXXXXX",
+						getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
+
+	temp_dir = mkdtemp(template);
+	if (temp_dir == NULL)
 	{
-		bail("could not create directory \"%s\": %s",
+		bail("could not create temporary directory \"%s\": %s",
 			 template, strerror(errno));
 	}
-
-	/* Stage file names for remove_temp().  Unsafe in a signal handler. */
-	UNIXSOCK_PATH(sockself, port, temp_sockdir);
-	snprintf(socklock, sizeof(socklock), "%s.lock", sockself);
 
 	/* Remove the directory during clean exit. */
 	atexit(remove_temp);
@@ -505,7 +516,7 @@ make_temp_sockdir(void)
 	pqsignal(SIGPIPE, signal_remove_temp);
 	pqsignal(SIGTERM, signal_remove_temp);
 
-	return temp_sockdir;
+	return temp_dir;
 }
 
 /*
@@ -829,7 +840,20 @@ initialize_environment(void)
 		{
 			sockdir = getenv("PG_REGRESS_SOCK_DIR");
 			if (!sockdir)
-				sockdir = make_temp_sockdir();
+			{
+				char sockself[MAXPGPATH];
+				char socklock[MAXPGPATH];
+
+				sockdir = make_temp_dir();
+				/*
+				 * Stage socket file names for remove_temp().  Unsafe in a
+				 * signal handler.
+				 */
+				UNIXSOCK_PATH(sockself, port, temp_dir);
+				snprintf(socklock, sizeof(socklock), "%s.lock", sockself);
+				add_stringlist_item(&removefiles, sockself);
+				add_stringlist_item(&removefiles, socklock);
+			}
 			setenv("PGHOST", sockdir, 1);
 		}
 		unsetenv("PGHOSTADDR");
@@ -1840,6 +1864,60 @@ run_schedule(const char *schedule, test_start_function startfunc,
 }
 
 /*
+ * Run the database verification test. Database validation tests are intended
+ * to be used for validating that the testsuite doesn't modify the database.
+ * When validate is set to false, the test results are not validated but are
+ * saved to a temporary folder to be used as a future expectfile. When validate
+ * is set to true the test results are validated against the previously stored
+ * expectfile.
+ */
+static void
+run_verification(const char *test, test_start_function startfunc, bool validate)
+{
+	PID_TYPE	pid;
+	instr_time	starttime;
+	instr_time	stoptime;
+	int 		exit_status;
+	_stringlist *resultfiles = NULL;
+	_stringlist *expectfiles = NULL;
+	_stringlist *tags = NULL;
+
+	pid = (startfunc) (test, &resultfiles, &expectfiles, &tags);
+	INSTR_TIME_SET_CURRENT(starttime);
+	wait_for_tests(&pid, &exit_status, &stoptime, NULL, 1);
+
+	if (exit_status != 0)
+	{
+		test_status_failed(test, INSTR_TIME_GET_MILLISEC(stoptime), false);
+		log_child_failure(exit_status);
+	}
+
+	/*
+	 * Save the resultfile as the expectfile for the next invocation after the
+	 * the testsuite has finished.
+	 */
+	if (!validate)
+	{
+		errno = 0;
+		if (rename(resultfiles[0].str, verifydb_expect) != 0)
+			bail("could not write temporary expectfile \"%s\": %s",
+				 verifydb_expect, strerror(errno));
+		return;
+	}
+
+	INSTR_TIME_SUBTRACT(stoptime, starttime);
+
+	/*
+	 * When executed after the testsuite we validate the results against the
+	 * resultfile from the initial run, whcih has been saved as an expectfile.
+	 */
+	if (results_differ(test, resultfiles[0].str, verifydb_expect))
+		test_status_failed(test, INSTR_TIME_GET_MILLISEC(stoptime), false);
+	else
+		test_status_ok(test, INSTR_TIME_GET_MILLISEC(stoptime), false);
+}
+
+/*
  * Run a single test
  */
 static void
@@ -2048,6 +2126,7 @@ help(void)
 	printf(_("                                (can be used multiple times to concatenate)\n"));
 	printf(_("      --temp-instance=DIR       create a temporary instance in DIR\n"));
 	printf(_("      --use-existing            use an existing installation\n"));
+	printf(_("      --verifydb=TEST           run TEST before and after and ensure output matches\n"));
 	printf(_("  -V, --version                 output version information, then exit\n"));
 	printf(_("\n"));
 	printf(_("Options for \"temp-instance\" mode:\n"));
@@ -2098,6 +2177,7 @@ regression_main(int argc, char *argv[],
 		{"config-auth", required_argument, NULL, 24},
 		{"max-concurrent-tests", required_argument, NULL, 25},
 		{"expecteddir", required_argument, NULL, 26},
+		{"verifydb", required_argument, NULL, 27},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -2226,6 +2306,9 @@ regression_main(int argc, char *argv[],
 				break;
 			case 26:
 				expecteddir = pg_strdup(optarg);
+				break;
+			case 27:
+				verifydb_test = pg_strdup(optarg);
 				break;
 			default:
 				/* getopt_long already emitted a complaint */
@@ -2583,6 +2666,21 @@ regression_main(int argc, char *argv[],
 	}
 
 	/*
+	 * If there is database verification test, make sure to run it after we
+	 * set up extra databases and roles, but before any test has been run. A
+	 * temporary expectdir also needs to be set up for this test since the
+	 * outputfile from this test will be the expected file for when we run it
+	 * again after the test(s).
+	 */
+	if (verifydb_test)
+	{
+		make_temp_dir();
+		verifydb_expect = psprintf("%s/%s.sql", temp_dir, verifydb_test);
+		add_stringlist_item(&removefiles, verifydb_expect);
+		run_verification(verifydb_test, startfunc, false);
+	}
+
+	/*
 	 * Ready to run the tests
 	 */
 	for (sl = schedulelist; sl != NULL; sl = sl->next)
@@ -2593,6 +2691,15 @@ regression_main(int argc, char *argv[],
 	for (sl = extra_tests; sl != NULL; sl = sl->next)
 	{
 		run_single_test(sl->str, startfunc, postfunc);
+	}
+
+	/*
+	 * Run the verification test again and compare the results with the saved
+	 * results from before.
+	 */
+	if (verifydb_test)
+	{
+		run_verification(verifydb_test, startfunc, true);
 	}
 
 	/*

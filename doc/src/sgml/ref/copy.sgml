@@ -43,6 +43,7 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
     FORCE_QUOTE { ( <replaceable class="parameter">column_name</replaceable> [, ...] ) | * }
     FORCE_NOT_NULL ( <replaceable class="parameter">column_name</replaceable> [, ...] )
     FORCE_NULL ( <replaceable class="parameter">column_name</replaceable> [, ...] )
+    IGNORE_DATATYPE_ERRORS [ <replaceable class="parameter">boolean</replaceable> ]
     ENCODING '<replaceable class="parameter">encoding_name</replaceable>'
 </synopsis>
  </refsynopsisdiv>
@@ -366,6 +367,18 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       this converts a quoted empty string into NULL.
       This option is allowed only in <command>COPY FROM</command>, and only when
       using <literal>CSV</literal> format.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>IGNORE_DATATYPE_ERRORS</literal></term>
+    <listitem>
+     <para>
+      Drops rows that contain malformed data while copying. These are rows
+      with columns where the data type's input-function raises an error.
+      This option is not allowed when using binary format.  Note that this
+      is only supported in current <command>COPY</command> syntax.
      </para>
     </listitem>
    </varlistentry>

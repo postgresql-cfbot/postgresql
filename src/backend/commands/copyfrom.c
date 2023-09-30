@@ -752,6 +752,14 @@ CopyFrom(CopyFromState cstate)
 		ti_options |= TABLE_INSERT_FROZEN;
 	}
 
+	/* Set up soft error handler for IGNORE_DATATYPE_ERRORS */
+	if (cstate->opts.ignore_datatype_errors)
+	{
+		ErrorSaveContext escontext = {T_ErrorSaveContext};
+		escontext.details_wanted = true;
+		cstate->escontext = escontext;
+	}
+
 	/*
 	 * We need a ResultRelInfo so we can use the regular executor's
 	 * index-entry-making machinery.  (There used to be a huge amount of code
@@ -987,7 +995,36 @@ CopyFrom(CopyFromState cstate)
 
 		/* Directly store the values/nulls array in the slot */
 		if (!NextCopyFrom(cstate, econtext, myslot->tts_values, myslot->tts_isnull))
+		{
+			if (cstate->opts.ignore_datatype_errors &&
+				cstate->ignored_errors_count > 0)
+				ereport(WARNING,
+						errmsg("%zd rows were skipped due to data type incompatibility",
+							   cstate->ignored_errors_count));
 			break;
+		}
+
+		/* Soft error occured, skip this tuple and log the reason */
+		if (cstate->escontext.error_occurred)
+		{
+			ErrorSaveContext new_escontext = {T_ErrorSaveContext};
+
+			/* Adjust elevel so we don't jump out */
+			cstate->escontext.error_data->elevel = WARNING;
+
+			/*
+			 * Despite the name, this won't raise an error since elevel is
+			 * WARNING now.
+			 */
+			ThrowErrorData(cstate->escontext.error_data);
+
+			ExecClearTuple(myslot);
+
+			new_escontext.details_wanted = true;
+			cstate->escontext = new_escontext;
+
+			continue;
+		}
 
 		ExecStoreVirtualTuple(myslot);
 

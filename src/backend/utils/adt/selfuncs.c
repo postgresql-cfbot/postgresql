@@ -5598,13 +5598,43 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 			examine_simple_variable(rel->subroot, var, vardata);
 		}
 	}
+	else if (rte->rtekind == RTE_CTE && !rte->inh)
+	{
+		/*
+		 * Punt if it's a whole-row var rather than a plain column reference.
+		 */
+		if (var->varattno == InvalidAttrNumber)
+			return;
+		/*
+		 * OK, fetch RelOptInfo for subquery. 
+		 */
+		RelOptInfo *rel = find_base_rel(root, var->varno);
+		/* Can only handle a simple Var of subquery's query level */
+		if (var && IsA(var, Var) &&
+			var->varlevelsup == 0)
+		{
+			/*
+			 * OK, recurse into the subquery.  Note that the original setting
+			 * of vardata->isunique (which will surely be false) is left
+			 * unchanged in this situation.  That's what we want, since even
+			 * if the underlying column is unique, the subquery may have
+			 * joined to other tables in a way that creates duplicates.
+			 */
+			Index varnoSaved = var->varno;
+			/* Mock a fake index for CTE */
+			var->varno = 1;
+			if (rel->subroot)
+				examine_simple_variable(rel->subroot, var, vardata);
+			var->varno = varnoSaved;
+		}
+	}
 	else
 	{
 		/*
-		 * Otherwise, the Var comes from a FUNCTION, VALUES, or CTE RTE.  (We
+		 * Otherwise, the Var comes from a FUNCTION, VALUES.  (We
 		 * won't see RTE_JOIN here because join alias Vars have already been
 		 * flattened.)	There's not much we can do with function outputs, but
-		 * maybe someday try to be smarter about VALUES and/or CTEs.
+		 * maybe someday try to be smarter about VALUES.
 		 */
 	}
 }
@@ -5866,7 +5896,8 @@ get_variable_range(PlannerInfo *root, VariableStatData *vardata,
 	 * data.  Proceed only if the MCVs represent the whole table (to within
 	 * roundoff error).
 	 */
-	if (get_attstatsslot(&sslot, vardata->statsTuple,
+	bool has_mcv = (!vardata->rel || vardata->rel->rtekind != RTE_CTE);
+	if (has_mcv && get_attstatsslot(&sslot, vardata->statsTuple,
 						 STATISTIC_KIND_MCV, InvalidOid,
 						 have_data ? ATTSTATSSLOT_VALUES :
 						 (ATTSTATSSLOT_VALUES | ATTSTATSSLOT_NUMBERS)))

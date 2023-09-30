@@ -182,8 +182,9 @@ typedef struct Query
 								 * also USING clause for MERGE */
 
 	List	   *mergeActionList;	/* list of actions for MERGE (only) */
-	/* whether to use outer join */
-	bool		mergeUseOuterJoin pg_node_attr(query_jumble_ignore);
+
+	/* rtable index of source relation for MERGE */
+	int			mergeSourceRelation pg_node_attr(query_jumble_ignore);
 
 	List	   *targetList;		/* target list (of TargetEntry) */
 
@@ -1663,6 +1664,14 @@ typedef struct CommonTableExpr
 	 ((Query *) (cte)->ctequery)->targetList : \
 	 ((Query *) (cte)->ctequery)->returningList)
 
+/* MATCHED/NOT MATCHED specification for WHEN clauses in a MERGE statement */
+typedef enum MergeMatchKind
+{
+	MERGE_WHEN_MATCHED,
+	MERGE_WHEN_NOT_MATCHED_BY_SOURCE,
+	MERGE_WHEN_NOT_MATCHED_BY_TARGET
+} MergeMatchKind;
+
 /*
  * MergeWhenClause -
  *		raw parser representation of a WHEN clause in a MERGE statement
@@ -1672,7 +1681,7 @@ typedef struct CommonTableExpr
 typedef struct MergeWhenClause
 {
 	NodeTag		type;
-	bool		matched;		/* true=MATCHED, false=NOT MATCHED */
+	MergeMatchKind matchKind;	/* MATCHED/NOT MATCHED BY SOURCE/TARGET */
 	CmdType		commandType;	/* INSERT/UPDATE/DELETE/DO NOTHING */
 	OverridingKind override;	/* OVERRIDING clause */
 	Node	   *condition;		/* WHEN conditions (raw parser) */
@@ -1688,7 +1697,7 @@ typedef struct MergeWhenClause
 typedef struct MergeAction
 {
 	NodeTag		type;
-	bool		matched;		/* true=MATCHED, false=NOT MATCHED */
+	MergeMatchKind matchKind;	/* MATCHED/NOT MATCHED BY SOURCE/TARGET */
 	CmdType		commandType;	/* INSERT/UPDATE/DELETE/DO NOTHING */
 	/* OVERRIDING clause */
 	OverridingKind override pg_node_attr(query_jumble_ignore);

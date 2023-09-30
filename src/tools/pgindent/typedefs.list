@@ -1552,6 +1552,7 @@ MergeAppendState
 MergeJoin
 MergeJoinClause
 MergeJoinState
+MergeMatchKind
 MergePath
 MergeScanSelCache
 MergeStmt

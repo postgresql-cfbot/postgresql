@@ -110,6 +110,19 @@ CreateSchemaCommand(CreateSchemaStmt *stmt, const char *queryString,
 				 errdetail("The prefix \"pg_\" is reserved for system schemas.")));
 
 	/*
+	 * These names have special meaning for search_path. Emit only a WARNING
+	 * (rather than ERROR) to avoid compatibility problems.
+	 */
+	if (strcmp(schemaName, "$user") == 0 ||
+		strncmp(schemaName, "!pg_", 4) == 0)
+	{
+		ereport(WARNING,
+				(errcode(ERRCODE_RESERVED_NAME),
+				 errmsg("schema name \"%s\" should not be used", schemaName),
+				 errdetail("The name \"$user\" and prefix \"!pg_\" have special meaning for search_path.")));
+	}
+
+	/*
 	 * If if_not_exists was given and the schema already exists, bail out.
 	 * (Note: we needn't check this when not if_not_exists, because
 	 * NamespaceCreate will complain anyway.)  We could do this before making

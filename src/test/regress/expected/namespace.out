@@ -114,3 +114,38 @@ SELECT COUNT(*) FROM pg_class WHERE relnamespace =
      0
 (1 row)
 
+-- test special names
+CREATE SCHEMA "$user";
+WARNING:  schema name "$user" should not be used
+DETAIL:  The name "$user" and prefix "!pg_" have special meaning for search_path.
+CREATE SCHEMA "!pg_foo";
+WARNING:  schema name "!pg_foo" should not be used
+DETAIL:  The name "$user" and prefix "!pg_" have special meaning for search_path.
+-- test "!pg_temp"
+CREATE TEMPORARY TABLE tmp(i INT);
+SELECT * FROM tmp;
+ i 
+---
+(0 rows)
+
+SET search_path = public, "!pg_temp";
+SELECT * FROM tmp;
+ERROR:  relation "tmp" does not exist
+LINE 1: SELECT * FROM tmp;
+                      ^
+RESET search_path;
+DROP TABLE tmp;
+-- test "!pg_catalog"
+SELECT 1+1;
+ ?column? 
+----------
+        2
+(1 row)
+
+SET search_path = public, "!pg_catalog";
+SELECT 1+1;
+ERROR:  operator does not exist: integer + integer
+LINE 1: SELECT 1+1;
+                ^
+HINT:  No operator matches the given name and argument types. You might need to add explicit type casts.
+RESET search_path;

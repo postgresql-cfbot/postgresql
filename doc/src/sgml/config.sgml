@@ -8571,10 +8571,11 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
 
        <para>
         The system catalog schema, <literal>pg_catalog</literal>, is always
-        searched, whether it is mentioned in the path or not.  If it is
-        mentioned in the path then it will be searched in the specified
-        order.  If <literal>pg_catalog</literal> is not in the path then it will
-        be searched <emphasis>before</emphasis> searching any of the path items.
+        searched, unless the special schema name
+        <literal>!pg_catalog</literal> is specified in the path.  If it is
+        mentioned in the path then it will be searched in the specified order.
+        If <literal>pg_catalog</literal> is not in the path then it will be
+        searched <emphasis>before</emphasis> searching any of the path items.
        </para>
 
        <!-- To further split hairs, funcname('foo') does not use the temporary
@@ -8583,13 +8584,15 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
             func_name grammar production". -->
        <para>
         Likewise, the current session's temporary-table schema,
-        <literal>pg_temp_<replaceable>nnn</replaceable></literal>, is always searched if it
-        exists.  It can be explicitly listed in the path by using the
-        alias <literal>pg_temp</literal><indexterm><primary>pg_temp</primary></indexterm>.  If it is not listed in the path then
-        it is searched first (even before <literal>pg_catalog</literal>).  However,
-        the temporary schema is only searched for relation (table, view,
-        sequence, etc.) and data type names.  It is never searched for
-        function or operator names.
+        <literal>pg_temp_<replaceable>nnn</replaceable></literal>, is always
+        searched if it exists, unless the special schema name
+        <literal>!pg_temp</literal> is specified.  It can be explicitly
+        listed in the path by using the alias
+        <literal>pg_temp</literal><indexterm><primary>pg_temp</primary></indexterm>.
+        If it is not listed in the path then it is searched first (even before
+        <literal>pg_catalog</literal>).  However, the temporary schema is only
+        searched for relation (table, view, sequence, etc.) and data type
+        names.  It is never searched for function or operator names.
        </para>
 
        <para>

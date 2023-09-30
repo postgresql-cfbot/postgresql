@@ -66,3 +66,21 @@ DROP SCHEMA test_ns_schema_renamed CASCADE;
 -- verify that the objects were dropped
 SELECT COUNT(*) FROM pg_class WHERE relnamespace =
     (SELECT oid FROM pg_namespace WHERE nspname = 'test_ns_schema_renamed');
+
+-- test special names
+CREATE SCHEMA "$user";
+CREATE SCHEMA "!pg_foo";
+
+-- test "!pg_temp"
+CREATE TEMPORARY TABLE tmp(i INT);
+SELECT * FROM tmp;
+SET search_path = public, "!pg_temp";
+SELECT * FROM tmp;
+RESET search_path;
+DROP TABLE tmp;
+
+-- test "!pg_catalog"
+SELECT 1+1;
+SET search_path = public, "!pg_catalog";
+SELECT 1+1;
+RESET search_path;

@@ -650,9 +650,9 @@ XLogArchiveIsBusy(const char *xlog)
  * This is similar to XLogArchiveIsBusy(), but returns true if the file
  * is already archived or is about to be archived.
  *
- * This is currently only used at recovery.  During normal operation this
- * would be racy: the file might get removed or marked with .ready as we're
- * checking it, or immediately after we return.
+ * This is primarily used at recovery.  During normal operation this would be
+ * racy: the file might get removed or marked with .ready as we're checking
+ * it, or immediately after we return.
  */
 bool
 XLogArchiveIsReadyOrDone(const char *xlog)

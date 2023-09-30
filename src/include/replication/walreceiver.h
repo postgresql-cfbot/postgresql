@@ -298,7 +298,8 @@ typedef void (*walrcv_readtimelinehistoryfile_fn) (WalReceiverConn *conn,
 												   TimeLineID tli,
 												   char **filename,
 												   char **content,
-												   int *size);
+												   int *size,
+												   bool missing_ok);
 
 /*
  * walrcv_startstreaming_fn
@@ -419,8 +420,8 @@ extern PGDLLIMPORT WalReceiverFunctionsType *WalReceiverFunctions;
 	WalReceiverFunctions->walrcv_identify_system(conn, primary_tli)
 #define walrcv_server_version(conn) \
 	WalReceiverFunctions->walrcv_server_version(conn)
-#define walrcv_readtimelinehistoryfile(conn, tli, filename, content, size) \
-	WalReceiverFunctions->walrcv_readtimelinehistoryfile(conn, tli, filename, content, size)
+#define walrcv_readtimelinehistoryfile(conn, tli, filename, content, size, missing_ok) \
+	WalReceiverFunctions->walrcv_readtimelinehistoryfile(conn, tli, filename, content, size, missing_ok)
 #define walrcv_startstreaming(conn, options) \
 	WalReceiverFunctions->walrcv_startstreaming(conn, options)
 #define walrcv_endstreaming(conn, next_tli) \

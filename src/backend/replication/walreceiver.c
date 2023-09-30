@@ -754,12 +754,22 @@ WalRcvFetchTimeLineHistoryFiles(TimeLineID first, TimeLineID last)
 			char	   *content;
 			int			len;
 			char		expectedfname[MAXFNAMELEN];
+			bool		missing_ok;
 
 			ereport(LOG,
 					(errmsg("fetching timeline history file for timeline %u from primary server",
 							tli)));
 
-			walrcv_readtimelinehistoryfile(wrconn, tli, &fname, &content, &len);
+			missing_ok = (tli == first);
+			walrcv_readtimelinehistoryfile(wrconn, tli, &fname, &content, &len, missing_ok);
+
+			/*
+			 * If the requested timeline id is the first one, we can overlook
+			 * the timeline history file fetch error since it's not required
+			 * to start the standby.
+			 */
+			if (missing_ok && fname == NULL && content == NULL)
+				continue;
 
 			/*
 			 * Check that the filename on the primary matches what we

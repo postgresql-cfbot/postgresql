@@ -1124,7 +1124,7 @@ validateRecoveryParameters(void)
 		TimeLineID	rtli = recoveryTargetTLIRequested;
 
 		/* Timeline 1 does not have a history file, all else should */
-		if (rtli != 1 && !existsTimeLineHistory(rtli))
+		if (rtli != 1 && !existsTimeLineHistory(rtli) && rtli != recoveryTargetTLI)
 			ereport(FATAL,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("recovery target timeline %u does not exist",

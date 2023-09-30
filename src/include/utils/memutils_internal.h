@@ -18,6 +18,23 @@
 
 #include "utils/memutils.h"
 
+ /* These functions implement the MemoryContext API for the Bump context. */
+extern void *BumpAlloc(MemoryContext context, Size size);
+extern void BumpFree(void *pointer);
+extern void *BumpRealloc(void *pointer, Size size);
+extern void BumpReset(MemoryContext context);
+extern void BumpDelete(MemoryContext context);
+extern MemoryContext BumpGetChunkContext(void *pointer);
+extern Size BumpGetChunkSpace(void *pointer);
+extern bool BumpIsEmpty(MemoryContext context);
+extern void BumpStats(MemoryContext context, MemoryStatsPrintFunc printfunc,
+					  void *passthru, MemoryContextCounters *totals,
+					  bool print_to_stderr);
+#ifdef MEMORY_CONTEXT_CHECKING
+extern void BumpCheck(MemoryContext context);
+#endif
+
+
 /* These functions implement the MemoryContext API for AllocSet context. */
 extern void *AllocSetAlloc(MemoryContext context, Size size);
 extern void AllocSetFree(void *pointer);
@@ -106,12 +123,13 @@ typedef enum MemoryContextMethodID
 {
 	MCTX_UNUSED1_ID,			/* 000 occurs in never-used memory */
 	MCTX_UNUSED2_ID,			/* glibc malloc'd chunks usually match 001 */
-	MCTX_UNUSED3_ID,			/* glibc malloc'd chunks > 128kB match 010 */
+	MCTX_BUMP_ID,				/* glibc malloc'd chunks > 128kB match 010
+								 * XXX? */
 	MCTX_ASET_ID,
 	MCTX_GENERATION_ID,
 	MCTX_SLAB_ID,
 	MCTX_ALIGNED_REDIRECT_ID,
-	MCTX_UNUSED4_ID				/* 111 occurs in wipe_mem'd memory */
+	MCTX_UNUSED3_ID				/* 111 occurs in wipe_mem'd memory */
 } MemoryContextMethodID;
 
 /*

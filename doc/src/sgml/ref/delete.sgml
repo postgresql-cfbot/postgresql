@@ -234,6 +234,30 @@ DELETE FROM films
    In some cases the join style is easier to write or faster to
    execute than the sub-select style.
   </para>
+  <para>
+   In situations where a single operation would consume too many resources, it
+   may be desirable to break up a large <command>DELETE</command> into multiple
+   separate commands. The <glossterm linkend="glossary-sql-standard">SQL
+   standard</glossterm> does not define a <literal>LIMIT</literal> clause for
+   <command>DELETE</command> operations, but it is possible get the equivalent
+   functionality through the <literal>USING</literal> clause to a
+   <link linkend="queries-with">Common Table Expression</link> which identifies
+   a subset of rows to be deleted, locks those rows, and returns their system
+   column <link linkend="ddl-system-columns-ctid">ctid</link> values:
+<programlisting>
+WITH delete_batch AS (
+  SELECT l.ctid
+  FROM user_logs AS l
+  WHERE l.status = 'archived'
+  ORDER BY l.creation_date
+  LIMIT 10000
+  FOR UPDATE )
+DELETE FROM user_logs AS ul
+USING delete_branch AS del
+WHERE ul.ctid = del.ctid
+</programlisting>
+  This allows for flexible search criteria within the CTE and an efficient self-join.
+  </para>
  </refsect1>
 
  <refsect1>

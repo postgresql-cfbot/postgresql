@@ -1679,6 +1679,27 @@ SELECT * FROM (SELECT * FROM mytable FOR UPDATE) ss WHERE col1 = 5;
     condition is not textually within the sub-query.
    </para>
 
+   <para>
+    In cases where a <acronym>DML</acronym> operation involving many rows
+    must be performed, and that table experiences numerous other simultaneous
+    <acronym>DML</acronym> operations, a <literal>FOR UPDATE</literal> clause
+    used in conjunction with <literal>SKIP LOCKED</literal> can be useful for
+    performing partial <acronym>DML</acronym> operations:
+
+<programlisting>
+WITH mods AS (SELECT ctid FROM mytable
+              WHERE status = 'active' AND retries > 10
+              ORDER BY id FOR UPDATE SKIP LOCKED)
+UPDATE mytable SET status = 'failed'
+FROM mods WHERE mytable.ctid = mods.ctid
+</programlisting>
+
+    This allows the <acronym>DML</acronym> operation to be performed in parts, avoiding locking,
+    until such time as the set of rows that remain to be modified is small enough
+    that the locking will not affect overall performance, at which point the same
+    statement can be issued without the <literal>SKIP LOCKED</literal> clause to ensure
+    that no rows were overlooked.
+   </para>
   <para>
    Previous releases failed to preserve a lock which is upgraded by a later
    savepoint.  For example, this code:

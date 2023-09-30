@@ -40,6 +40,7 @@
 #include "large_obj.h"
 #include "libpq-fe.h"
 #include "libpq/pqcomm.h"
+#include "libpq/pqsignal.h"
 #include "mainloop.h"
 #include "portability/instr_time.h"
 #include "pqexpbuffer.h"
@@ -3614,10 +3615,32 @@ do_connect(enum trivalue reuse_previous_specification,
 		values[paramnum] = NULL;
 
 		/* Note we do not want libpq to re-expand the dbname parameter */
-		n_conn = PQconnectdbParams(keywords, values, false);
+		n_conn = PQconnectStartParams(keywords, values, false);
 
 		pg_free(keywords);
 		pg_free(values);
+
+		while (true) {
+			int		socket;
+
+			if (CancelRequested)
+				break;
+
+			socket = PQsocket(n_conn);
+			if (socket == -1)
+				break;
+
+			switch (PQconnectPoll(n_conn)) {
+			case PGRES_POLLING_OK:
+			case PGRES_POLLING_FAILED:
+				break;
+			case PGRES_POLLING_READING:
+			case PGRES_POLLING_WRITING:
+				continue;
+			case PGRES_POLLING_ACTIVE:
+				pg_unreachable();
+			}
+		}
 
 		if (PQstatus(n_conn) == CONNECTION_OK)
 			break;

@@ -1043,13 +1043,13 @@ typedef struct BTScanOpaqueData
 
 	/* workspace for SK_SEARCHARRAY support */
 	ScanKey		arrayKeyData;	/* modified copy of scan->keyData */
-	bool		arraysStarted;	/* Started array keys, but have yet to "reach
-								 * past the end" of all arrays? */
 	int			numArrayKeys;	/* number of equality-type array keys (-1 if
 								 * there are any unsatisfiable array keys) */
-	int			arrayKeyCount;	/* count indicating number of array scan keys
-								 * processed */
+	bool		needPrimScan;	/* Perform another primitive scan? */
 	BTArrayKeyInfo *arrayKeys;	/* info about each equality-type array key */
+	FmgrInfo   *orderProcs;		/* ORDER procs for equality constraint keys */
+	int			numPrimScans;	/* Running tally of # primitive index scans
+								 * (used to coordinate parallel workers) */
 	MemoryContext arrayContext; /* scan-lifespan context for array data */
 
 	/* info about killed items if any (killedItems is NULL if never used) */
@@ -1079,6 +1079,29 @@ typedef struct BTScanOpaqueData
 } BTScanOpaqueData;
 
 typedef BTScanOpaqueData *BTScanOpaque;
+
+/*
+ * _bt_readpage state used across _bt_checkkeys calls for a page
+ *
+ * When _bt_readpage is called during a forward scan that has one or more
+ * equality-type SK_SEARCHARRAY scan keys, it has an extra responsibility: to
+ * set up information about the page high key.  This must happen before the
+ * first call to _bt_checkkeys.  _bt_checkkeys uses this information to manage
+ * advancement of the scan's array keys.
+ */
+typedef struct BTReadPageState
+{
+	/* Input parameters, set by _bt_readpage */
+	ScanDirection dir;			/* current scan direction */
+	IndexTuple	highkey;		/* page high key, set by forward scans */
+
+	/* Output parameters, set by _bt_checkkeys */
+	bool		continuescan;	/* Terminate ongoing (primitive) index scan? */
+
+	/* Private _bt_checkkeys-managed state */
+	bool		highkeychecked; /* high key checked against current
+								 * SK_SEARCHARRAY array keys? */
+} BTReadPageState;
 
 /*
  * We use some private sk_flags bits in preprocessed scan keys.  We're allowed
@@ -1157,7 +1180,7 @@ extern bool btcanreturn(Relation index, int attno);
 extern bool _bt_parallel_seize(IndexScanDesc scan, BlockNumber *pageno);
 extern void _bt_parallel_release(IndexScanDesc scan, BlockNumber scan_page);
 extern void _bt_parallel_done(IndexScanDesc scan);
-extern void _bt_parallel_advance_array_keys(IndexScanDesc scan);
+extern void _bt_parallel_next_primitive_scan(IndexScanDesc scan);
 
 /*
  * prototypes for functions in nbtdedup.c
@@ -1250,12 +1273,12 @@ extern BTScanInsert _bt_mkscankey(Relation rel, IndexTuple itup);
 extern void _bt_freestack(BTStack stack);
 extern void _bt_preprocess_array_keys(IndexScanDesc scan);
 extern void _bt_start_array_keys(IndexScanDesc scan, ScanDirection dir);
-extern bool _bt_advance_array_keys(IndexScanDesc scan, ScanDirection dir);
+extern bool _bt_array_keys_remain(IndexScanDesc scan, ScanDirection dir);
 extern void _bt_mark_array_keys(IndexScanDesc scan);
 extern void _bt_restore_array_keys(IndexScanDesc scan);
 extern void _bt_preprocess_keys(IndexScanDesc scan);
-extern bool _bt_checkkeys(IndexScanDesc scan, IndexTuple tuple,
-						  int tupnatts, ScanDirection dir, bool *continuescan);
+extern bool _bt_checkkeys(IndexScanDesc scan, BTReadPageState *pstate,
+						  IndexTuple tuple, bool finaltup);
 extern void _bt_killitems(IndexScanDesc scan);
 extern BTCycleId _bt_vacuum_cycleid(Relation rel);
 extern BTCycleId _bt_start_vacuum(Relation rel);

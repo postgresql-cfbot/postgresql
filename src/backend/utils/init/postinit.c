@@ -73,7 +73,7 @@ static void PerformAuthentication(Port *port);
 static void CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connections);
 static void ShutdownPostgres(int code, Datum arg);
 static void StatementTimeoutHandler(void);
-static void LockTimeoutHandler(void);
+static void CancelOnTimeoutHandler(void);
 static void IdleInTransactionSessionTimeoutHandler(void);
 static void IdleSessionTimeoutHandler(void);
 static void IdleStatsUpdateTimeoutHandler(void);
@@ -760,9 +760,10 @@ InitPostgres(const char *in_dbname, Oid dboid,
 	{
 		RegisterTimeout(DEADLOCK_TIMEOUT, CheckDeadLockAlert);
 		RegisterTimeout(STATEMENT_TIMEOUT, StatementTimeoutHandler);
-		RegisterTimeout(LOCK_TIMEOUT, LockTimeoutHandler);
+		RegisterTimeout(LOCK_TIMEOUT, CancelOnTimeoutHandler);
 		RegisterTimeout(IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
 						IdleInTransactionSessionTimeoutHandler);
+		RegisterTimeout(TRANSACTION_TIMEOUT, CancelOnTimeoutHandler);
 		RegisterTimeout(IDLE_SESSION_TIMEOUT, IdleSessionTimeoutHandler);
 		RegisterTimeout(CLIENT_CONNECTION_CHECK_TIMEOUT, ClientCheckTimeoutHandler);
 		RegisterTimeout(IDLE_STATS_UPDATE_TIMEOUT,
@@ -1379,10 +1380,10 @@ StatementTimeoutHandler(void)
 }
 
 /*
- * LOCK_TIMEOUT handler: trigger a query-cancel interrupt.
+ * LOCK_TIMEOUT and TRANSACTION_TIMEOUT handler: trigger a query-cancel interrupt.
  */
 static void
-LockTimeoutHandler(void)
+CancelOnTimeoutHandler(void)
 {
 #ifdef HAVE_SETSID
 	/* try to signal whole process group */

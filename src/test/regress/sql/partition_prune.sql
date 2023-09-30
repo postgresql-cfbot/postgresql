@@ -710,6 +710,24 @@ select tbl1.col1, tprt.col1 from tbl1
 inner join tprt on tbl1.col1 = tprt.col1
 order by tbl1.col1, tprt.col1;
 
+-- join partition pruning
+delete from tbl1;
+insert into tbl1 values (501), (505);
+analyze tbl1, tprt;
+
+set enable_nestloop = off;
+set enable_mergejoin = off;
+set enable_hashjoin = on;
+
+explain (analyze, verbose, costs off, summary off, timing off)
+select * from tprt p1
+   inner join tprt p2 on p1.col1 = p2.col1
+   right join tbl1 t on p1.col1 = t.col1 and p2.col1 = t.col1;
+
+select * from tprt p1
+   inner join tprt p2 on p1.col1 = p2.col1
+   right join tbl1 t on p1.col1 = t.col1 and p2.col1 = t.col1;
+
 drop table tbl1, tprt;
 
 -- Test with columns defined in varying orders between each level

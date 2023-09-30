@@ -173,6 +173,10 @@ static void get_restriction_qual_cost(PlannerInfo *root, RelOptInfo *baserel,
 static bool has_indexed_join_quals(NestPath *path);
 static double approx_tuple_count(PlannerInfo *root, JoinPath *path,
 								 List *quals);
+static double get_joinrel_matching_outer_size(PlannerInfo *root,
+											  RelOptInfo *outer_rel,
+											  Relids inner_relids,
+											  List *restrictlist);
 static double calc_joinrel_size_estimate(PlannerInfo *root,
 										 RelOptInfo *joinrel,
 										 RelOptInfo *outer_rel,
@@ -5381,6 +5385,61 @@ get_parameterized_joinrel_size(PlannerInfo *root, RelOptInfo *rel,
 }
 
 /*
+ * get_joinrel_matching_outer_size
+ *		Make a size estimate for the outer side that matches the inner side.
+ */
+static double
+get_joinrel_matching_outer_size(PlannerInfo *root,
+								RelOptInfo *outer_rel,
+								Relids inner_relids,
+								List *restrictlist)
+{
+	double		nrows;
+	Selectivity fkselec;
+	Selectivity jselec;
+	SpecialJoinInfo *sjinfo;
+	SpecialJoinInfo sjinfo_data;
+
+	sjinfo = &sjinfo_data;
+	sjinfo->type = T_SpecialJoinInfo;
+	sjinfo->min_lefthand = outer_rel->relids;
+	sjinfo->min_righthand = inner_relids;
+	sjinfo->syn_lefthand = outer_rel->relids;
+	sjinfo->syn_righthand = inner_relids;
+	sjinfo->jointype = JOIN_SEMI;
+	sjinfo->ojrelid = 0;
+	sjinfo->commute_above_l = NULL;
+	sjinfo->commute_above_r = NULL;
+	sjinfo->commute_below_l = NULL;
+	sjinfo->commute_below_r = NULL;
+	/* we don't bother trying to make the remaining fields valid */
+	sjinfo->lhs_strict = false;
+	sjinfo->semi_can_btree = false;
+	sjinfo->semi_can_hash = false;
+	sjinfo->semi_operators = NIL;
+	sjinfo->semi_rhs_exprs = NIL;
+
+	fkselec = get_foreign_key_join_selectivity(root,
+											   outer_rel->relids,
+											   inner_relids,
+											   sjinfo,
+											   &restrictlist);
+	jselec = clauselist_selectivity(root,
+									restrictlist,
+									0,
+									sjinfo->jointype,
+									sjinfo);
+
+	nrows = outer_rel->rows * fkselec * jselec;
+	nrows = clamp_row_est(nrows);
+
+	/* For safety, make sure result is not more than the base estimate */
+	if (nrows > outer_rel->rows)
+		nrows = outer_rel->rows;
+	return nrows;
+}
+
+/*
  * calc_joinrel_size_estimate
  *		Workhorse for set_joinrel_size_estimates and
  *		get_parameterized_joinrel_size.
@@ -6494,4 +6553,51 @@ compute_bitmap_pages(PlannerInfo *root, RelOptInfo *baserel, Path *bitmapqual,
 		*tuple = tuples_fetched;
 
 	return pages_fetched;
+}
+
+/*
+ * compute_partprune_cost
+ *		Compute the overhead of join partition pruning.
+ */
+double
+compute_partprune_cost(PlannerInfo *root, RelOptInfo *appendrel,
+					   Cost append_total_cost, int append_nplans,
+					   Relids inner_relids, double inner_rows,
+					   List *prunequal)
+{
+	Cost		prune_cost;
+	Cost		saved_cost;
+	double		matching_outer_rows;
+	double		unmatched_nplans;
+
+	switch (appendrel->part_scheme->strategy)
+	{
+
+		case PARTITION_STRATEGY_LIST:
+		case PARTITION_STRATEGY_RANGE:
+			prune_cost = cpu_operator_cost * LOG2(append_nplans) * inner_rows;
+			break;
+		case PARTITION_STRATEGY_HASH:
+			prune_cost = cpu_operator_cost * append_nplans * inner_rows;
+			break;
+		default:
+			elog(ERROR, "unexpected partition strategy: %d",
+				 (int) appendrel->part_scheme->strategy);
+			break;
+	}
+
+	matching_outer_rows =
+		get_joinrel_matching_outer_size(root,
+										appendrel,
+										inner_relids,
+										prunequal);
+
+	/*
+	 * We assume that each outer joined row occupies one new partition.  This
+	 * is really the worst case.
+	 */
+	unmatched_nplans = append_nplans - Min(matching_outer_rows, append_nplans);
+	saved_cost = (unmatched_nplans / append_nplans) * append_total_cost;
+
+	return prune_cost - saved_cost;
 }

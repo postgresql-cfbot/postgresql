@@ -2679,6 +2679,9 @@ typedef struct HashState
 
 	/* Parallel hash state. */
 	struct ParallelHashJoinState *parallel_state;
+
+	/* Infos for join partition pruning. */
+	List *joinpartprune_state_list;
 } HashState;
 
 /* ----------------

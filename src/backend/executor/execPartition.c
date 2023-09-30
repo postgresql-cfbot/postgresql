@@ -199,6 +199,8 @@ static void find_matching_subplans_recurse(PartitionPruningData *prunedata,
 										   PartitionedRelPruningData *pprune,
 										   bool initial_prune,
 										   Bitmapset **validsubplans);
+static bool get_join_prune_matching_subplans(PlanState *planstate,
+											 Bitmapset **partset);
 
 
 /*
@@ -1806,7 +1808,7 @@ ExecInitPartitionPruning(PlanState *planstate,
 	 * Perform an initial partition prune pass, if required.
 	 */
 	if (prunestate->do_initial_prune)
-		*initially_valid_subplans = ExecFindMatchingSubPlans(prunestate, true);
+		*initially_valid_subplans = ExecFindMatchingSubPlans(prunestate, true, NULL);
 	else
 	{
 		/* No pruning, so we'll need to initialize all subplans */
@@ -1834,6 +1836,37 @@ ExecInitPartitionPruning(PlanState *planstate,
 	}
 
 	return prunestate;
+}
+
+/*
+ * ExecInitJoinpartpruneList
+ *		Initialize data structures needed for join partition pruning
+ */
+List *
+ExecInitJoinpartpruneList(PlanState *planstate,
+						  List *joinpartprune_info_list)
+{
+	ListCell   *lc;
+	List	   *result = NIL;
+
+	foreach(lc, joinpartprune_info_list)
+	{
+		JoinPartitionPruneInfo *jpinfo = (JoinPartitionPruneInfo *) lfirst(lc);
+		JoinPartitionPruneState *jpstate = palloc(sizeof(JoinPartitionPruneState));
+
+		jpstate->part_prune_state =
+			CreatePartitionPruneState(planstate, jpinfo->part_prune_info);
+		Assert(jpstate->part_prune_state->do_exec_prune);
+
+		jpstate->paramid = jpinfo->paramid;
+		jpstate->nplans = jpinfo->nplans;
+		jpstate->finished = false;
+		jpstate->part_prune_result = NULL;
+
+		result = lappend(result, jpstate);
+	}
+
+	return result;
 }
 
 /*
@@ -2268,7 +2301,9 @@ PartitionPruneFixSubPlanMap(PartitionPruneState *prunestate,
 /*
  * ExecFindMatchingSubPlans
  *		Determine which subplans match the pruning steps detailed in
- *		'prunestate' for the current comparison expression values.
+ *		'prunestate' if any for the current comparison expression values, and
+ *		meanwhile match the join partition pruning results if any stored in
+ *		Append/MergeAppend node's join_prune_paramids.
  *
  * Pass initial_prune if PARAM_EXEC Params cannot yet be evaluated.  This
  * differentiates the initial executor-time pruning step from later
@@ -2276,11 +2311,30 @@ PartitionPruneFixSubPlanMap(PartitionPruneState *prunestate,
  */
 Bitmapset *
 ExecFindMatchingSubPlans(PartitionPruneState *prunestate,
-						 bool initial_prune)
+						 bool initial_prune,
+						 PlanState *planstate)
 {
 	Bitmapset  *result = NULL;
 	MemoryContext oldcontext;
 	int			i;
+	Bitmapset  *join_prune_partset = NULL;
+	bool		do_join_prune;
+
+	/* Retrieve the join partition pruning results if any */
+	do_join_prune =
+		get_join_prune_matching_subplans(planstate, &join_prune_partset);
+
+	/*
+	 * Either we're here on partition prune done according to the pruning steps
+	 * detailed in 'prunestate', or we have done join partition prune.
+	 */
+	Assert(do_join_prune || prunestate != NULL);
+
+	/*
+	 * If there is no 'prunestate', then rely entirely on join pruning.
+	 */
+	if (prunestate == NULL)
+		return join_prune_partset;
 
 	/*
 	 * Either we're here on the initial prune done during pruning
@@ -2320,6 +2374,10 @@ ExecFindMatchingSubPlans(PartitionPruneState *prunestate,
 
 	/* Add in any subplans that partition pruning didn't account for */
 	result = bms_add_members(result, prunestate->other_subplans);
+
+	/* Intersect join partition pruning results */
+	if (do_join_prune)
+		result = bms_intersect(result, join_prune_partset);
 
 	MemoryContextSwitchTo(oldcontext);
 
@@ -2390,4 +2448,67 @@ find_matching_subplans_recurse(PartitionPruningData *prunedata,
 			}
 		}
 	}
+}
+
+/*
+ * get_join_prune_matching_subplans
+ *		Retrieve the join partition pruning results if any stored in
+ *		Append/MergeAppend node's join_prune_paramids.  Return true if we can
+ *		do join partition pruning, otherwise return false.
+ *
+ * Adds valid (non-prunable) subplan IDs to *partset
+ */
+static bool
+get_join_prune_matching_subplans(PlanState *planstate, Bitmapset **partset)
+{
+	Bitmapset  *join_prune_paramids;
+	int			nplans;
+	int			paramid;
+
+	if (planstate == NULL)
+		return false;
+
+	if (IsA(planstate, AppendState))
+	{
+		join_prune_paramids =
+			((Append *) planstate->plan)->join_prune_paramids;
+		nplans = ((AppendState *) planstate)->as_nplans;
+	}
+	else if (IsA(planstate, MergeAppendState))
+	{
+		join_prune_paramids =
+			((MergeAppend *) planstate->plan)->join_prune_paramids;
+		nplans = ((MergeAppendState *) planstate)->ms_nplans;
+	}
+	else
+	{
+		elog(ERROR, "unrecognized node type: %d", (int) nodeTag(planstate));
+		return false;
+	}
+
+	if (bms_is_empty(join_prune_paramids))
+		return false;
+
+	Assert(nplans > 0);
+	*partset = bms_add_range(NULL, 0, nplans - 1);
+
+	paramid = -1;
+	while ((paramid = bms_next_member(join_prune_paramids, paramid)) >= 0)
+	{
+		ParamExecData *param;
+		JoinPartitionPruneState *jpstate;
+
+		param = &(planstate->state->es_param_exec_vals[paramid]);
+		Assert(param->execPlan == NULL);
+		Assert(!param->isnull);
+		jpstate = (JoinPartitionPruneState *) DatumGetPointer(param->value);
+
+		if (jpstate != NULL)
+			*partset = bms_intersect(*partset, jpstate->part_prune_result);
+		else	/* the Hash node for this pruning has not been executed */
+			elog(WARNING, "Join partition pruning $%d has not been performed yet.",
+				 paramid);
+	}
+
+	return true;
 }

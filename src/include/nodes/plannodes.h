@@ -275,6 +275,9 @@ typedef struct Append
 
 	/* Info for run-time subplan pruning; NULL if we're not doing that */
 	struct PartitionPruneInfo *part_prune_info;
+
+	/* Info for join partition pruning; NULL if we're not doing that */
+	Bitmapset  *join_prune_paramids;
 } Append;
 
 /* ----------------
@@ -310,6 +313,9 @@ typedef struct MergeAppend
 
 	/* Info for run-time subplan pruning; NULL if we're not doing that */
 	struct PartitionPruneInfo *part_prune_info;
+
+	/* Info for join partition pruning; NULL if we're not doing that */
+	Bitmapset  *join_prune_paramids;
 } MergeAppend;
 
 /* ----------------
@@ -1206,6 +1212,7 @@ typedef struct Hash
 	bool		skewInherit;	/* is outer join rel an inheritance tree? */
 	/* all other info is in the parent HashJoin node */
 	Cardinality rows_total;		/* estimate total rows if parallel_aware */
+	List	   *joinpartprune_info_list;	/* infos for join partition pruning */
 } Hash;
 
 /* ----------------
@@ -1551,6 +1558,29 @@ typedef struct PartitionPruneStepCombine
 	PartitionPruneCombineOp combineOp;
 	List	   *source_stepids;
 } PartitionPruneStepCombine;
+
+/*
+ * JoinPartitionPruneCandidateInfo - Information required to build
+ * JoinPartitionPruneInfos.
+ */
+typedef struct JoinPartitionPruneCandidateInfo
+{
+	List	   *joinrestrictinfo;
+	Bitmapset  *inner_relids;
+	double		inner_rows;
+	List	   *joinpartprune_info_list;
+} JoinPartitionPruneCandidateInfo;
+
+/*
+ * JoinPartitionPruneInfo - Details required to allow the executor to prune
+ * partitions during join.
+ */
+typedef struct JoinPartitionPruneInfo
+{
+	PartitionPruneInfo *part_prune_info;
+	int			paramid;
+	int			nplans;
+} JoinPartitionPruneInfo;
 
 
 /*

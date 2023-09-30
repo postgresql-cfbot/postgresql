@@ -2967,6 +2967,9 @@ _SPI_error_callback(void *arg)
 			case RAW_PARSE_PLPGSQL_ASSIGN3:
 				errcontext("PL/pgSQL assignment \"%s\"", query);
 				break;
+			case RAW_PARSE_PLPGSQL_LET:
+				errcontext("LET statement \"%s\"", query);
+				break;
 			default:
 				errcontext("SQL statement \"%s\"", query);
 				break;

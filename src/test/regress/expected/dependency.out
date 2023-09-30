@@ -152,3 +152,19 @@ owner of type deptest_t
 DROP OWNED BY regress_dep_user2, regress_dep_user0;
 DROP USER regress_dep_user2;
 DROP USER regress_dep_user0;
+-- dependency on type
+CREATE DOMAIN vardomain AS int;
+CREATE TYPE vartype AS (a int, b int, c vardomain);
+CREATE VARIABLE var1 AS vartype;
+-- should to fail
+DROP DOMAIN vardomain;
+ERROR:  cannot drop type vardomain because other objects depend on it
+DETAIL:  column c of composite type vartype depends on type vardomain
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+DROP TYPE vartype;
+ERROR:  cannot drop type vartype because other objects depend on it
+DETAIL:  session variable var1 depends on type vartype
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+DROP VARIABLE var1;
+DROP TYPE vartype;
+DROP DOMAIN vardomain;

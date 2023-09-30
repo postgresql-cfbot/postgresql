@@ -133,6 +133,14 @@ transformWithClause(ParseState *pstate, WithClause *withClause)
 					errmsg("MERGE not supported in WITH query"),
 					parser_errposition(pstate, cte->location));
 
+		/* LET is allowed by parser, but not supported. Reject for now */
+		if (IsA(cte->ctequery, LetStmt))
+			ereport(ERROR,
+					errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					errmsg("LET not supported in WITH query"),
+					parser_errposition(pstate, cte->location));
+
+
 		for_each_cell(rest, withClause->ctes, lnext(withClause->ctes, lc))
 		{
 			CommonTableExpr *cte2 = (CommonTableExpr *) lfirst(rest);

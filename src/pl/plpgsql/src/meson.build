@@ -87,6 +87,7 @@ tests += {
       'plpgsql_trap',
       'plpgsql_trigger',
       'plpgsql_varprops',
+      'plpgsql_session_variable',
     ],
   },
 }

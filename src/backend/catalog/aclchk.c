@@ -60,6 +60,7 @@
 #include "catalog/pg_ts_parser.h"
 #include "catalog/pg_ts_template.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_variable.h"
 #include "commands/dbcommands.h"
 #include "commands/defrem.h"
 #include "commands/event_trigger.h"
@@ -280,6 +281,9 @@ restrict_and_check_grant(bool is_grant, AclMode avail_goptions, bool all_privs,
 			break;
 		case OBJECT_PARAMETER_ACL:
 			whole_mask = ACL_ALL_RIGHTS_PARAMETER_ACL;
+			break;
+		case OBJECT_VARIABLE:
+			whole_mask = ACL_ALL_RIGHTS_VARIABLE;
 			break;
 		default:
 			elog(ERROR, "unrecognized object type: %d", objtype);
@@ -525,6 +529,10 @@ ExecuteGrantStmt(GrantStmt *stmt)
 			all_privileges = ACL_ALL_RIGHTS_PARAMETER_ACL;
 			errormsg = gettext_noop("invalid privilege type %s for parameter");
 			break;
+		case OBJECT_VARIABLE:
+			all_privileges = ACL_ALL_RIGHTS_VARIABLE;
+			errormsg = gettext_noop("invalid privilege type %s for session variable");
+			break;
 		default:
 			elog(ERROR, "unrecognized GrantStmt.objtype: %d",
 				 (int) stmt->objtype);
@@ -629,6 +637,9 @@ ExecGrantStmt_oids(InternalGrant *istmt)
 			break;
 		case OBJECT_PARAMETER_ACL:
 			ExecGrant_Parameter(istmt);
+			break;
+		case OBJECT_VARIABLE:
+			ExecGrant_common(istmt, VariableRelationId, ACL_ALL_RIGHTS_VARIABLE, NULL);
 			break;
 		default:
 			elog(ERROR, "unrecognized GrantStmt.objtype: %d",
@@ -820,6 +831,18 @@ objectNamesToOids(ObjectType objtype, List *objnames, bool is_grant)
 					objects = lappend_oid(objects, parameterId);
 			}
 			break;
+		case OBJECT_VARIABLE:
+			foreach(cell, objnames)
+			{
+				RangeVar   *varvar = (RangeVar *) lfirst(cell);
+				Oid			relOid;
+
+				relOid = LookupVariable(varvar->schemaname,
+										varvar->relname,
+										false);
+				objects = lappend_oid(objects, relOid);
+			}
+			break;
 		default:
 			elog(ERROR, "unrecognized GrantStmt.objtype: %d",
 				 (int) objtype);
@@ -897,6 +920,32 @@ objectsInSchemaToOids(ObjectType objtype, List *nspnames)
 
 					rel = table_open(ProcedureRelationId, AccessShareLock);
 					scan = table_beginscan_catalog(rel, keycount, key);
+
+					while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+					{
+						Oid			oid = ((Form_pg_proc) GETSTRUCT(tuple))->oid;
+
+						objects = lappend_oid(objects, oid);
+					}
+
+					table_endscan(scan);
+					table_close(rel, AccessShareLock);
+				}
+				break;
+			case OBJECT_VARIABLE:
+				{
+					ScanKeyData key;
+					Relation	rel;
+					TableScanDesc scan;
+					HeapTuple	tuple;
+
+					ScanKeyInit(&key,
+								Anum_pg_variable_varnamespace,
+								BTEqualStrategyNumber, F_OIDEQ,
+								ObjectIdGetDatum(namespaceId));
+
+					rel = table_open(VariableRelationId, AccessShareLock);
+					scan = table_beginscan_catalog(rel, 1, &key);
 
 					while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 					{
@@ -1067,6 +1116,10 @@ ExecAlterDefaultPrivilegesStmt(ParseState *pstate, AlterDefaultPrivilegesStmt *s
 		case OBJECT_SCHEMA:
 			all_privileges = ACL_ALL_RIGHTS_SCHEMA;
 			errormsg = gettext_noop("invalid privilege type %s for schema");
+			break;
+		case OBJECT_VARIABLE:
+			all_privileges = ACL_ALL_RIGHTS_VARIABLE;
+			errormsg = gettext_noop("invalid privilege type %s for session variable");
 			break;
 		default:
 			elog(ERROR, "unrecognized GrantStmt.objtype: %d",
@@ -1257,6 +1310,12 @@ SetDefaultACL(InternalDefaultACL *iacls)
 			objtype = DEFACLOBJ_NAMESPACE;
 			if (iacls->all_privs && this_privileges == ACL_NO_RIGHTS)
 				this_privileges = ACL_ALL_RIGHTS_SCHEMA;
+			break;
+
+		case OBJECT_VARIABLE:
+			objtype = DEFACLOBJ_VARIABLE;
+			if (iacls->all_privs && this_privileges == ACL_NO_RIGHTS)
+				this_privileges = ACL_ALL_RIGHTS_VARIABLE;
 			break;
 
 		default:
@@ -1490,6 +1549,9 @@ RemoveRoleFromObjectACL(Oid roleid, Oid classid, Oid objid)
 			case DEFACLOBJ_NAMESPACE:
 				iacls.objtype = OBJECT_SCHEMA;
 				break;
+			case DEFACLOBJ_VARIABLE:
+				iacls.objtype = OBJECT_VARIABLE;
+				break;
 			default:
 				/* Shouldn't get here */
 				elog(ERROR, "unexpected default ACL type: %d",
@@ -1549,6 +1611,9 @@ RemoveRoleFromObjectACL(Oid roleid, Oid classid, Oid objid)
 				break;
 			case ParameterAclRelationId:
 				istmt.objtype = OBJECT_PARAMETER_ACL;
+				break;
+			case VariableRelationId:
+				istmt.objtype = OBJECT_VARIABLE;
 				break;
 			default:
 				elog(ERROR, "unexpected object class %u", classid);
@@ -2779,6 +2844,9 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					case OBJECT_TYPE:
 						msg = gettext_noop("permission denied for type %s");
 						break;
+					case OBJECT_VARIABLE:
+						msg = gettext_noop("permission denied for session variable %s");
+						break;
 					case OBJECT_VIEW:
 						msg = gettext_noop("permission denied for view %s");
 						break;
@@ -2889,6 +2957,9 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 						break;
 					case OBJECT_TYPE:
 						msg = gettext_noop("must be owner of type %s");
+						break;
+					case OBJECT_VARIABLE:
+						msg = gettext_noop("must be owner of session variable %s");
 						break;
 					case OBJECT_VIEW:
 						msg = gettext_noop("must be owner of view %s");
@@ -3038,6 +3109,8 @@ pg_aclmask(ObjectType objtype, Oid object_oid, AttrNumber attnum, Oid roleid,
 			return ACL_NO_RIGHTS;
 		case OBJECT_TYPE:
 			return object_aclmask(TypeRelationId, object_oid, roleid, mask, how);
+		case OBJECT_VARIABLE:
+			return object_aclmask(VariableRelationId, object_oid, roleid, mask, how);
 		default:
 			elog(ERROR, "unrecognized object type: %d",
 				 (int) objtype);
@@ -4149,6 +4222,10 @@ get_user_default_acl(ObjectType objtype, Oid ownerId, Oid nsp_oid)
 
 		case OBJECT_SCHEMA:
 			defaclobjtype = DEFACLOBJ_NAMESPACE;
+			break;
+
+		case OBJECT_VARIABLE:
+			defaclobjtype = DEFACLOBJ_VARIABLE;
 			break;
 
 		default:

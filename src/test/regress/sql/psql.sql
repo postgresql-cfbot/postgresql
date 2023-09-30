@@ -1582,6 +1582,19 @@ SELECT * FROM bla ORDER BY 1;
 DROP TABLE bla;
 DROP FUNCTION psql_error;
 
+-- session variable test
+CREATE ROLE regress_variable_owner;
+SET ROLE TO regress_variable_owner;
+CREATE VARIABLE var1 AS varchar COLLATE "C";
+\dV+ var1
+GRANT SELECT ON VARIABLE var1 TO PUBLIC;
+COMMENT ON VARIABLE var1 IS 'some description';
+\dV+ var1
+DROP VARIABLE var1;
+
+SET ROLE TO DEFAULT;
+DROP ROLE regress_variable_owner;
+
 -- check describing invalid multipart names
 \dA regression.heap
 \dA nonesuch.heap
@@ -1693,6 +1706,9 @@ DROP FUNCTION psql_error;
 \dX nonesuch.public.func_deps_stat
 \dy regression.myevt
 \dy nonesuch.myevt
+\dV host.regression.public.var
+\dV regression|mydb.public.var
+\dV nonesuch.public.var
 
 -- check that dots within quoted name segments are not counted
 \dA "no.such.access.method"
@@ -1734,6 +1750,8 @@ DROP FUNCTION psql_error;
 \dx "no.such.installed.extension"
 \dX "no.such.extended.statistics"
 \dy "no.such.event.trigger"
+\dV "no.such.variable"
+
 
 -- again, but with dotted schema qualifications.
 \dA "no.such.schema"."no.such.access.method"
@@ -1774,6 +1792,7 @@ DROP FUNCTION psql_error;
 \dx "no.such.schema"."no.such.installed.extension"
 \dX "no.such.schema"."no.such.extended.statistics"
 \dy "no.such.schema"."no.such.event.trigger"
+\dV "no.such.schema"."no.such.variable"
 
 -- again, but with current database and dotted schema qualifications.
 \dt regression."no.such.schema"."no.such.table.relation"
@@ -1798,6 +1817,7 @@ DROP FUNCTION psql_error;
 \dP regression."no.such.schema"."no.such.partitioned.relation"
 \dT regression."no.such.schema"."no.such.data.type"
 \dX regression."no.such.schema"."no.such.extended.statistics"
+\dV regression."no.such.schema"."no.such.variable"
 
 -- again, but with dotted database and dotted schema qualifications.
 \dt "no.such.database"."no.such.schema"."no.such.table.relation"
@@ -1823,6 +1843,7 @@ DROP FUNCTION psql_error;
 \dP "no.such.database"."no.such.schema"."no.such.partitioned.relation"
 \dT "no.such.database"."no.such.schema"."no.such.data.type"
 \dX "no.such.database"."no.such.schema"."no.such.extended.statistics"
+\dV "no.such.database"."no.such.schema"."no.such.variable"
 
 -- check \drg and \du
 CREATE ROLE regress_du_role0;

@@ -120,7 +120,7 @@ SELECT $1, $2 \bind 'foo' 'bar' \g
 -- errors
 -- parse error
 SELECT foo \bind \g
-ERROR:  column "foo" does not exist
+ERROR:  column or variable "foo" does not exist
 LINE 1: SELECT foo 
                ^
 -- tcop error
@@ -5814,6 +5814,30 @@ SELECT * FROM bla ORDER BY 1;
 # final ON_ERROR_ROLLBACK: off
 DROP TABLE bla;
 DROP FUNCTION psql_error;
+-- session variable test
+CREATE ROLE regress_variable_owner;
+SET ROLE TO regress_variable_owner;
+CREATE VARIABLE var1 AS varchar COLLATE "C";
+\dV+ var1
+                                                                         List of variables
+ Schema | Name |       Type        | Collation |         Owner          | Nullable | Mutable | Default | Transactional end action | Access privileges | Description 
+--------+------+-------------------+-----------+------------------------+----------+---------+---------+--------------------------+-------------------+-------------
+ public | var1 | character varying | C         | regress_variable_owner | t        | t       |         |                          |                   | 
+(1 row)
+
+GRANT SELECT ON VARIABLE var1 TO PUBLIC;
+COMMENT ON VARIABLE var1 IS 'some description';
+\dV+ var1
+                                                                                           List of variables
+ Schema | Name |       Type        | Collation |         Owner          | Nullable | Mutable | Default | Transactional end action |                Access privileges                 |   Description    
+--------+------+-------------------+-----------+------------------------+----------+---------+---------+--------------------------+--------------------------------------------------+------------------
+ public | var1 | character varying | C         | regress_variable_owner | t        | t       |         |                          | regress_variable_owner=rw/regress_variable_owner+| some description
+        |      |                   |           |                        |          |         |         |                          | =r/regress_variable_owner                        | 
+(1 row)
+
+DROP VARIABLE var1;
+SET ROLE TO DEFAULT;
+DROP ROLE regress_variable_owner;
 -- check describing invalid multipart names
 \dA regression.heap
 improper qualified name (too many dotted names): regression.heap
@@ -6035,6 +6059,12 @@ cross-database references are not implemented: nonesuch.public.func_deps_stat
 improper qualified name (too many dotted names): regression.myevt
 \dy nonesuch.myevt
 improper qualified name (too many dotted names): nonesuch.myevt
+\dV host.regression.public.var
+improper qualified name (too many dotted names): host.regression.public.var
+\dV regression|mydb.public.var
+cross-database references are not implemented: regression|mydb.public.var
+\dV nonesuch.public.var
+cross-database references are not implemented: nonesuch.public.var
 -- check that dots within quoted name segments are not counted
 \dA "no.such.access.method"
 List of access methods
@@ -6269,6 +6299,12 @@ List of schemas
 ------+-------+-------+---------+----------+------
 (0 rows)
 
+\dV "no.such.variable"
+                                         List of variables
+ Schema | Name | Type | Collation | Owner | Nullable | Mutable | Default | Transactional end action 
+--------+------+------+-----------+-------+----------+---------+---------+--------------------------
+(0 rows)
+
 -- again, but with dotted schema qualifications.
 \dA "no.such.schema"."no.such.access.method"
 improper qualified name (too many dotted names): "no.such.schema"."no.such.access.method"
@@ -6438,6 +6474,12 @@ improper qualified name (too many dotted names): "no.such.schema"."no.such.insta
 
 \dy "no.such.schema"."no.such.event.trigger"
 improper qualified name (too many dotted names): "no.such.schema"."no.such.event.trigger"
+\dV "no.such.schema"."no.such.variable"
+                                         List of variables
+ Schema | Name | Type | Collation | Owner | Nullable | Mutable | Default | Transactional end action 
+--------+------+------+-----------+-------+----------+---------+---------+--------------------------
+(0 rows)
+
 -- again, but with current database and dotted schema qualifications.
 \dt regression."no.such.schema"."no.such.table.relation"
       List of relations
@@ -6571,6 +6613,12 @@ List of text search templates
 --------+------+------------+-----------+--------------+-----
 (0 rows)
 
+\dV regression."no.such.schema"."no.such.variable"
+                                         List of variables
+ Schema | Name | Type | Collation | Owner | Nullable | Mutable | Default | Transactional end action 
+--------+------+------+-----------+-------+----------+---------+---------+--------------------------
+(0 rows)
+
 -- again, but with dotted database and dotted schema qualifications.
 \dt "no.such.database"."no.such.schema"."no.such.table.relation"
 cross-database references are not implemented: "no.such.database"."no.such.schema"."no.such.table.relation"
@@ -6618,6 +6666,8 @@ cross-database references are not implemented: "no.such.database"."no.such.schem
 cross-database references are not implemented: "no.such.database"."no.such.schema"."no.such.data.type"
 \dX "no.such.database"."no.such.schema"."no.such.extended.statistics"
 cross-database references are not implemented: "no.such.database"."no.such.schema"."no.such.extended.statistics"
+\dV "no.such.database"."no.such.schema"."no.such.variable"
+cross-database references are not implemented: "no.such.database"."no.such.schema"."no.such.variable"
 -- check \drg and \du
 CREATE ROLE regress_du_role0;
 CREATE ROLE regress_du_role1;

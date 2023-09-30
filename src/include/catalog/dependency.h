@@ -127,10 +127,11 @@ typedef enum ObjectClass
 	OCLASS_PUBLICATION_NAMESPACE,	/* pg_publication_namespace */
 	OCLASS_PUBLICATION_REL,		/* pg_publication_rel */
 	OCLASS_SUBSCRIPTION,		/* pg_subscription */
-	OCLASS_TRANSFORM			/* pg_transform */
+	OCLASS_TRANSFORM,			/* pg_transform */
+	OCLASS_VARIABLE				/* pg_variable */
 } ObjectClass;
 
-#define LAST_OCLASS		OCLASS_TRANSFORM
+#define LAST_OCLASS		OCLASS_VARIABLE
 
 /* flag bits for performDeletion/performMultipleDeletions: */
 #define PERFORM_DELETION_INTERNAL			0x0001	/* internal action */

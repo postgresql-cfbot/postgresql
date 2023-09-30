@@ -75,6 +75,7 @@
 #include "catalog/pg_ts_template.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_user_mapping.h"
+#include "catalog/pg_variable.h"
 #include "lib/qunique.h"
 #include "utils/catcache.h"
 #include "utils/lsyscache.h"
@@ -676,6 +677,19 @@ static const struct cachedesc cacheinfo[] = {
 		KEY(Anum_pg_user_mapping_umuser,
 			Anum_pg_user_mapping_umserver),
 		2
+	},
+	[VARIABLENAMENSP] = {
+		VariableRelationId,
+		VariableNameNspIndexId,
+		KEY(Anum_pg_variable_varname,
+			Anum_pg_variable_varnamespace),
+		8
+	},
+	[VARIABLEOID] = {
+		VariableRelationId,
+		VariableObjectIndexId,
+		KEY(Anum_pg_variable_oid),
+		8
 	}
 };
 

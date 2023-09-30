@@ -510,6 +510,12 @@ do { \
 		CONVERT_PRIV('r', "SELECT");
 		CONVERT_PRIV('w', "UPDATE");
 	}
+	else if (strcmp(type, "VARIABLE") == 0 ||
+			 strcmp(type, "VARIABLES") == 0)
+	{
+		CONVERT_PRIV('r', "SELECT");
+		CONVERT_PRIV('w', "UPDATE");
+	}
 	else
 		abort();
 

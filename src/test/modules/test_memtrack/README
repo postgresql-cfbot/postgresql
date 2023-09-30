@@ -1,0 +1,36 @@
+test_memtrack tests the memory tracking facilities of PostgreSQL.
+
+
+Functions
+=========
+test_allocation(# workers, type of memory, # blocks, block size)
+
+    This function controls the test. It creates a pool of workers and passes them messages
+    asking them to allocate or free memory. It verifies the memory is allocated or freed,
+    and it confirms the total memory has been freed at the end of the test.
+
+    Like test_shm_queue, this function spawns worker backends which communicate
+    through message queues.
+
+    Unlike test_shm_queue, each worker is associatied with two queues, one for requests
+    and another for responses. All messages are exchanged between the main test backend
+    and the workers. The workers do not communicate with each other.
+
+test_memtrack(# workers, type of memory, # blocks, block size)
+
+    This function is like test_allocation, but it only updates the memory tracking counters
+    and does not actually allocate or free memory.
+
+
+Messages
+========
+The message sent to the workers
+    request type (ALLOCATE or FREE)
+    type of memory
+    number of blocks to allocate or free
+    size of each block
+
+The response sent back.
+    error code (0 if no error)
+    starting memory usage totals and subtotals.
+    ending memory usage totals and subtotals.

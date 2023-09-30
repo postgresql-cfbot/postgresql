@@ -3,6 +3,7 @@
 backend_sources += files(
   'backend_progress.c',
   'backend_status.c',
+  'memtrack.c',
   'pgstat.c',
   'pgstat_archiver.c',
   'pgstat_bgwriter.c',

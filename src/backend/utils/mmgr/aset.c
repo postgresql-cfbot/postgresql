@@ -48,6 +48,7 @@
 
 #include "port/pg_bitutils.h"
 #include "utils/memdebug.h"
+#include "utils/memtrack.h"
 #include "utils/memutils.h"
 #include "utils/memutils_memorychunk.h"
 #include "utils/memutils_internal.h"
@@ -441,7 +442,7 @@ AllocSetContextCreateInternal(MemoryContext parent,
 	 * Allocate the initial block.  Unlike other aset.c blocks, it starts with
 	 * the context header and its block header follows that.
 	 */
-	set = (AllocSet) malloc(firstBlockSize);
+	set = (AllocSet) malloc_backend(firstBlockSize, PG_ALLOC_ASET);
 	if (set == NULL)
 	{
 		if (TopMemoryContext)
@@ -539,6 +540,7 @@ AllocSetReset(MemoryContext context)
 	AllocSet	set = (AllocSet) context;
 	AllocBlock	block;
 	Size		keepersize PG_USED_FOR_ASSERTS_ONLY;
+	uint64		deallocation = 0;
 
 	Assert(AllocSetIsValid(set));
 
@@ -581,6 +583,7 @@ AllocSetReset(MemoryContext context)
 		{
 			/* Normal case, release the block */
 			context->mem_allocated -= block->endptr - ((char *) block);
+			deallocation += block->endptr - ((char *) block);
 
 #ifdef CLOBBER_FREED_MEMORY
 			wipe_mem(block, block->freeptr - ((char *) block));
@@ -591,6 +594,7 @@ AllocSetReset(MemoryContext context)
 	}
 
 	Assert(context->mem_allocated == keepersize);
+	release_backend_memory(deallocation, PG_ALLOC_ASET);
 
 	/* Reset block size allocation sequence, too */
 	set->nextBlockSize = set->initBlockSize;
@@ -609,6 +613,7 @@ AllocSetDelete(MemoryContext context)
 	AllocSet	set = (AllocSet) context;
 	AllocBlock	block = set->blocks;
 	Size		keepersize PG_USED_FOR_ASSERTS_ONLY;
+	uint64		deallocation = 0;
 
 	Assert(AllocSetIsValid(set));
 
@@ -647,11 +652,13 @@ AllocSetDelete(MemoryContext context)
 
 				freelist->first_free = (AllocSetContext *) oldset->header.nextchild;
 				freelist->num_free--;
+				deallocation += oldset->header.mem_allocated;
 
 				/* All that remains is to free the header/initial block */
 				free(oldset);
 			}
 			Assert(freelist->num_free == 0);
+			release_backend_memory(deallocation, PG_ALLOC_ASET);
 		}
 
 		/* Now add the just-deleted context to the freelist. */
@@ -668,7 +675,10 @@ AllocSetDelete(MemoryContext context)
 		AllocBlock	next = block->next;
 
 		if (!IsKeeperBlock(set, block))
+		{
 			context->mem_allocated -= block->endptr - ((char *) block);
+			deallocation += block->endptr - ((char *) block);
+		}
 
 #ifdef CLOBBER_FREED_MEMORY
 		wipe_mem(block, block->freeptr - ((char *) block));
@@ -681,6 +691,7 @@ AllocSetDelete(MemoryContext context)
 	}
 
 	Assert(context->mem_allocated == keepersize);
+	release_backend_memory(deallocation + context->mem_allocated, PG_ALLOC_ASET);
 
 	/* Finally, free the context header, including the keeper block */
 	free(set);
@@ -725,7 +736,7 @@ AllocSetAlloc(MemoryContext context, Size size)
 #endif
 
 		blksize = chunk_size + ALLOC_BLOCKHDRSZ + ALLOC_CHUNKHDRSZ;
-		block = (AllocBlock) malloc(blksize);
+		block = (AllocBlock) malloc_backend(blksize, PG_ALLOC_ASET);
 		if (block == NULL)
 			return NULL;
 
@@ -925,7 +936,7 @@ AllocSetAlloc(MemoryContext context, Size size)
 			blksize <<= 1;
 
 		/* Try to allocate it */
-		block = (AllocBlock) malloc(blksize);
+		block = (AllocBlock) malloc_backend(blksize, PG_ALLOC_ASET);
 
 		/*
 		 * We could be asking for pretty big blocks here, so cope if malloc
@@ -936,7 +947,7 @@ AllocSetAlloc(MemoryContext context, Size size)
 			blksize >>= 1;
 			if (blksize < required_size)
 				break;
-			block = (AllocBlock) malloc(blksize);
+			block = (AllocBlock) malloc_backend(blksize, PG_ALLOC_ASET);
 		}
 
 		if (block == NULL)
@@ -1044,7 +1055,7 @@ AllocSetFree(void *pointer)
 #ifdef CLOBBER_FREED_MEMORY
 		wipe_mem(block, block->freeptr - ((char *) block));
 #endif
-		free(block);
+		free_backend(block, block->endptr - ((char *) block), PG_ALLOC_ASET);
 	}
 	else
 	{
@@ -1159,8 +1170,7 @@ AllocSetRealloc(void *pointer, Size size)
 		/* Do the realloc */
 		blksize = chksize + ALLOC_BLOCKHDRSZ + ALLOC_CHUNKHDRSZ;
 		oldblksize = block->endptr - ((char *) block);
-
-		block = (AllocBlock) realloc(block, blksize);
+		block = (AllocBlock) realloc_backend(block, blksize, oldblksize, PG_ALLOC_ASET);
 		if (block == NULL)
 		{
 			/* Disallow access to the chunk header. */

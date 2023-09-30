@@ -24,6 +24,7 @@
 #include "utils/backend_status.h"
 #include "utils/guc.h"			/* for application_name */
 #include "utils/memutils.h"
+#include "utils/memtrack.h"
 
 
 /* ----------
@@ -49,7 +50,6 @@ int			pgstat_track_activity_query_size = 1024;
 /* exposed so that backend_progress.c can access it */
 PgBackendStatus *MyBEEntry = NULL;
 
-
 static PgBackendStatus *BackendStatusArray = NULL;
 static char *BackendAppnameBuffer = NULL;
 static char *BackendClientHostnameBuffer = NULL;
@@ -62,7 +62,6 @@ static PgBackendSSLStatus *BackendSslStatusBuffer = NULL;
 static PgBackendGSSStatus *BackendGssStatusBuffer = NULL;
 #endif
 
-
 /* Status for backends including auxiliary */
 static LocalPgBackendStatus *localBackendStatusTable = NULL;
 
@@ -70,7 +69,6 @@ static LocalPgBackendStatus *localBackendStatusTable = NULL;
 static int	localNumBackends = 0;
 
 static MemoryContext backendStatusSnapContext;
-
 
 static void pgstat_beshutdown_hook(int code, Datum arg);
 static void pgstat_read_current_status(void);
@@ -401,6 +399,9 @@ pgstat_bestart(void)
 	lbeentry.st_progress_command_target = InvalidOid;
 	lbeentry.st_query_id = UINT64CONST(0);
 
+	/* No allocations have been reported yet  */
+	lbeentry.st_memory = NO_BACKEND_MEMORY;
+
 	/*
 	 * we don't zero st_progress_param here to save cycles; nobody should
 	 * examine it until st_progress_command has been set to something other
@@ -470,6 +471,9 @@ pgstat_beshutdown_hook(int code, Datum arg)
 	beentry->st_procpid = 0;	/* mark invalid */
 
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
+
+	/* Stop reporting memory allocation changes to shared memory */
+	exit_backend_memory();
 
 	/* so that functions can check if backend_status.c is up via MyBEEntry */
 	MyBEEntry = NULL;
@@ -1151,6 +1155,69 @@ pgstat_get_local_beentry_by_index(int idx)
 		return NULL;
 
 	return &localBackendStatusTable[idx - 1];
+}
+
+/* ----------
+ * pgstat_fetch_stat_beentry() -
+ *
+ *	Support function for the SQL-callable pgstat* functions. Returns
+ *	our local copy of the current-activity entry for one backend,
+ *	or NULL if the given beid doesn't identify any known session.
+ *
+ *	The beid argument is the BackendId of the desired session
+ *	(note that this is unlike pgstat_fetch_stat_local_beentry()).
+ *
+ *	NB: caller is responsible for a check if the user is permitted to see
+ *	this info (especially the querystring).
+ * ----------
+ */
+PgBackendStatus *
+pgstat_fetch_stat_beentry(BackendId beid)
+{
+	LocalPgBackendStatus key;
+	LocalPgBackendStatus *ret;
+
+	pgstat_read_current_status();
+
+	/*
+	 * Since the localBackendStatusTable is in order by backend_id, we can use
+	 * bsearch() to search it efficiently.
+	 */
+	key.backend_id = beid;
+	ret = (LocalPgBackendStatus *) bsearch(&key, localBackendStatusTable,
+										   localNumBackends,
+										   sizeof(LocalPgBackendStatus),
+										   cmp_lbestatus);
+	if (ret)
+		return &ret->backendStatus;
+
+	return NULL;
+}
+
+
+/* ----------
+ * pgstat_fetch_stat_local_beentry() -
+ *
+ *	Like pgstat_fetch_stat_beentry() but with locally computed additions (like
+ *	xid and xmin values of the backend)
+ *
+ *	The beid argument is a 1-based index in the localBackendStatusTable
+ *	(note that this is unlike pgstat_fetch_stat_beentry()).
+ *	Returns NULL if the argument is out of range (no current caller does that).
+ *
+ *	NB: caller is responsible for a check if the user is permitted to see
+ *	this info (especially the querystring).
+ * ----------
+ */
+LocalPgBackendStatus *
+pgstat_fetch_stat_local_beentry(int beid)
+{
+	pgstat_read_current_status();
+
+	if (beid < 1 || beid > localNumBackends)
+		return NULL;
+
+	return &localBackendStatusTable[beid - 1];
 }
 
 

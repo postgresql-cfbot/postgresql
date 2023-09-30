@@ -404,6 +404,10 @@ typedef struct PROC_HDR
 	int			spins_per_delay;
 	/* Buffer id of the buffer that Startup process waits for pin on, or -1 */
 	int			startupBufferPinWaitBufId;
+	/* Global dsm allocations */
+	pg_atomic_uint64 global_dsm_allocation;
+	/* Track how much memory the backends have allocated */
+	pg_atomic_uint64 total_bkend_mem_bytes;
 } PROC_HDR;
 
 extern PGDLLIMPORT PROC_HDR *ProcGlobal;

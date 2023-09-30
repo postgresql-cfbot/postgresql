@@ -99,12 +99,28 @@ typedef struct CachedPlanSource
 	struct RawStmt *raw_parse_tree; /* output of raw_parser(), or NULL */
 	const char *query_string;	/* source text of query */
 	CommandTag	commandTag;		/* 'nuff said */
+
+	/*
+	 * We store two versions of the parameter types:
+	 *
+	 * 1. The ones originally given when creating the prepared statement.
+	 * These might contain unresolved types, e.g. if unknown is given as a
+	 * type.
+	 */
+	Oid		   *orig_param_types;	/* array of original parameter type OIDs,
+									 * or NULL */
+	int			orig_num_params;	/* length of orig_param_types array */
+
+	/*
+	 * 2. The ones we actually use for execution. These are resolved versions
+	 * of the original types based on the actual query and underlying objects.
+	 */
 	Oid		   *param_types;	/* array of parameter type OIDs, or NULL */
 	int			num_params;		/* length of param_types array */
+
 	ParserSetupHook parserSetup;	/* alternative parameter spec method */
 	void	   *parserSetupArg;
 	int			cursor_options; /* cursor options used for planning */
-	bool		fixed_result;	/* disallow change in result tupdesc? */
 	TupleDesc	resultDesc;		/* result type; NULL = doesn't return tuples */
 	MemoryContext context;		/* memory context holding all above */
 	/* These fields describe the current analyzed-and-rewritten query tree: */
@@ -190,6 +206,8 @@ extern void ResetPlanCache(void);
 
 extern CachedPlanSource *CreateCachedPlan(struct RawStmt *raw_parse_tree,
 										  const char *query_string,
+										  const Oid *param_types,
+										  int num_params,
 										  CommandTag commandTag);
 extern CachedPlanSource *CreateOneShotCachedPlan(struct RawStmt *raw_parse_tree,
 												 const char *query_string,
@@ -201,8 +219,7 @@ extern void CompleteCachedPlan(CachedPlanSource *plansource,
 							   int num_params,
 							   ParserSetupHook parserSetup,
 							   void *parserSetupArg,
-							   int cursor_options,
-							   bool fixed_result);
+							   int cursor_options);
 
 extern void SaveCachedPlan(CachedPlanSource *plansource);
 extern void DropCachedPlan(CachedPlanSource *plansource);
@@ -220,7 +237,14 @@ extern List *CachedPlanGetTargetList(CachedPlanSource *plansource,
 extern CachedPlan *GetCachedPlan(CachedPlanSource *plansource,
 								 ParamListInfo boundParams,
 								 ResourceOwner owner,
-								 QueryEnvironment *queryEnv);
+								 QueryEnvironment *queryEnv,
+								 List *qlist);
+extern CachedPlan *RevalidateAndGetCachedPlan(CachedPlanSource *plansource,
+											  ParamListInfo boundParams,
+											  ResourceOwner owner,
+											  QueryEnvironment *queryEnv);
+extern List *RevalidateCachedQuery(CachedPlanSource *plansource,
+								   QueryEnvironment *queryEnv);
 extern void ReleaseCachedPlan(CachedPlan *plan, ResourceOwner owner);
 
 extern bool CachedPlanAllowsSimpleValidityCheck(CachedPlanSource *plansource,

@@ -83,12 +83,6 @@ PrepareQuery(ParseState *pstate, PrepareStmt *stmt,
 	rawstmt->stmt_location = stmt_location;
 	rawstmt->stmt_len = stmt_len;
 
-	/*
-	 * Create the CachedPlanSource before we do parse analysis, since it needs
-	 * to see the unmodified raw parse tree.
-	 */
-	plansource = CreateCachedPlan(rawstmt, pstate->p_sourcetext,
-								  CreateCommandTag(stmt->query));
 
 	/* Transform list of TypeNames to array of type OIDs */
 	nargs = list_length(stmt->argtypes);
@@ -111,6 +105,14 @@ PrepareQuery(ParseState *pstate, PrepareStmt *stmt,
 	}
 
 	/*
+	 * Create the CachedPlanSource before we do parse analysis, since it needs
+	 * to see the unmodified raw parse tree.
+	 */
+	plansource = CreateCachedPlan(rawstmt, pstate->p_sourcetext,
+								  argtypes, nargs,
+								  CreateCommandTag(stmt->query));
+
+	/*
 	 * Analyze the statement using these parameter types (any parameters
 	 * passed in from above us will not be visible to it), allowing
 	 * information about unknown parameters to be deduced from context.
@@ -127,8 +129,7 @@ PrepareQuery(ParseState *pstate, PrepareStmt *stmt,
 					   nargs,
 					   NULL,
 					   NULL,
-					   CURSOR_OPT_PARALLEL_OK,	/* allow parallel mode */
-					   true);	/* fixed result */
+					   CURSOR_OPT_PARALLEL_OK); /* allow parallel mode */
 
 	/*
 	 * Save the results.
@@ -161,13 +162,12 @@ ExecuteQuery(ParseState *pstate,
 	char	   *query_string;
 	int			eflags;
 	long		count;
+	List	   *revalidationResult;
 
 	/* Look it up in the hash table */
 	entry = FetchPreparedStatement(stmt->name, true);
 
-	/* Shouldn't find a non-fixed-result cached plan */
-	if (!entry->plansource->fixed_result)
-		elog(ERROR, "EXECUTE does not support variable-result cached plans");
+	revalidationResult = RevalidateCachedQuery(entry->plansource, NULL);
 
 	/* Evaluate parameters, if any */
 	if (entry->plansource->num_params > 0)
@@ -193,7 +193,7 @@ ExecuteQuery(ParseState *pstate,
 									   entry->plansource->query_string);
 
 	/* Replan if needed, and increment plan refcount for portal */
-	cplan = GetCachedPlan(entry->plansource, paramLI, NULL, NULL);
+	cplan = GetCachedPlan(entry->plansource, paramLI, NULL, NULL, revalidationResult);
 	plan_list = cplan->stmt_list;
 
 	/*
@@ -469,7 +469,6 @@ FetchPreparedStatementResultDesc(PreparedStatement *stmt)
 	 * Since we don't allow prepared statements' result tupdescs to change,
 	 * there's no need to worry about revalidating the cached plan here.
 	 */
-	Assert(stmt->plansource->fixed_result);
 	if (stmt->plansource->resultDesc)
 		return CreateTupleDescCopy(stmt->plansource->resultDesc);
 	else
@@ -583,6 +582,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	instr_time	planduration;
 	BufferUsage bufusage_start,
 				bufusage;
+	List	   *revalidationResult;
 
 	if (es->buffers)
 		bufusage_start = pgBufferUsage;
@@ -591,9 +591,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	/* Look it up in the hash table */
 	entry = FetchPreparedStatement(execstmt->name, true);
 
-	/* Shouldn't find a non-fixed-result cached plan */
-	if (!entry->plansource->fixed_result)
-		elog(ERROR, "EXPLAIN EXECUTE does not support variable-result cached plans");
+	revalidationResult = RevalidateCachedQuery(entry->plansource, NULL);
 
 	query_string = entry->plansource->query_string;
 
@@ -619,7 +617,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 
 	/* Replan if needed, and acquire a transient refcount */
 	cplan = GetCachedPlan(entry->plansource, paramLI,
-						  CurrentResourceOwner, queryEnv);
+						  CurrentResourceOwner, queryEnv, revalidationResult);
 
 	INSTR_TIME_SET_CURRENT(planduration);
 	INSTR_TIME_SUBTRACT(planduration, planstart);

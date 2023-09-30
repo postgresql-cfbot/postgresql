@@ -85,6 +85,7 @@ typedef struct FmgrInfo
 typedef struct FunctionCallInfoBaseData
 {
 	FmgrInfo   *flinfo;			/* ptr to lookup info used for this call */
+#define FIELDNO_FUNCTIONCALLINFODATA_CONTEXT 1
 	fmNodePtr	context;		/* pass info about context of call */
 	fmNodePtr	resultinfo;		/* pass or return extra info about result */
 	Oid			fncollation;	/* collation for function to use */

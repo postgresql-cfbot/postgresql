@@ -112,6 +112,9 @@ extern JsonFormat *makeJsonFormat(JsonFormatType type, JsonEncoding encoding,
 								  int location);
 extern JsonValueExpr *makeJsonValueExpr(Expr *raw_expr, Expr *formatted_expr,
 										JsonFormat *format);
+extern JsonBehavior *makeJsonBehavior(JsonBehaviorType type, Node *expr, int location);
+extern Node *makeJsonTableJoinedPlan(JsonTablePlanJoinType type,
+									 Node *plan1, Node *plan2, int location);
 extern Node *makeJsonKeyValue(Node *key, Node *value);
 extern Node *makeJsonIsPredicate(Node *expr, JsonFormat *format,
 								 JsonValueType item_type, bool unique_keys,

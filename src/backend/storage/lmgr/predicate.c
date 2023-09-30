@@ -992,6 +992,13 @@ SerialSetActiveSerXmin(TransactionId xid)
 
 	serialControl->tailXid = xid;
 
+	/*
+	 * If the SLRU is being used, set the latest page number to
+	 * the current tail xid.
+	 */
+	if (serialControl->headPage > 0)
+		SerialSlruCtl->shared->latest_page_number = SerialPage(serialControl->tailXid);
+
 	LWLockRelease(SerialSLRULock);
 }
 

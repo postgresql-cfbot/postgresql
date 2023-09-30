@@ -191,3 +191,11 @@ PQclosePrepared           188
 PQclosePortal             189
 PQsendClosePrepared       190
 PQsendClosePortal         191
+PQcancelSend              192
+PQcancelConn              193
+PQcancelPoll              194
+PQcancelStatus            195
+PQcancelSocket            196
+PQcancelErrorMessage      197
+PQcancelReset             198
+PQcancelFinish            199

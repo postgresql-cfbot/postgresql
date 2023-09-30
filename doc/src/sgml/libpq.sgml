@@ -265,7 +265,7 @@ PGconn *PQsetdb(char *pghost,
     <varlistentry id="libpq-PQconnectStartParams">
      <term><function>PQconnectStartParams</function><indexterm><primary>PQconnectStartParams</primary></indexterm></term>
      <term><function>PQconnectStart</function><indexterm><primary>PQconnectStart</primary></indexterm></term>
-     <term><function>PQconnectPoll</function><indexterm><primary>PQconnectPoll</primary></indexterm></term>
+     <term id="libpq-PQconnectPoll"><function>PQconnectPoll</function><indexterm><primary>PQconnectPoll</primary></indexterm></term>
      <listitem>
       <para>
        <indexterm><primary>nonblocking connection</primary></indexterm>
@@ -5279,7 +5279,7 @@ int PQisBusy(PGconn *conn);
    <xref linkend="libpq-PQsendQuery"/>/<xref linkend="libpq-PQgetResult"/>
    can also attempt to cancel a command that is still being processed
    by the server; see <xref linkend="libpq-cancel"/>.  But regardless of
-   the return value of <xref linkend="libpq-PQcancel"/>, the application
+   the return value of <xref linkend="libpq-PQcancelSend"/>, the application
    must continue with the normal result-reading sequence using
    <xref linkend="libpq-PQgetResult"/>.  A successful cancellation will
    simply cause the command to terminate sooner than it would have
@@ -6002,13 +6002,223 @@ int PQsetSingleRowMode(PGconn *conn);
    this section.
 
    <variablelist>
+    <varlistentry id="libpq-PQcancelConn">
+     <term><function>PQcancelConn</function><indexterm><primary>PQcancelConn</primary></indexterm></term>
+
+     <listitem>
+      <para>
+       Prepares a connection over which a cancel request can be sent.
+<synopsis>
+PGcancelConn *PQcancelConn(PGconn *conn);
+</synopsis>
+      </para>
+
+      <para>
+       <xref linkend="libpq-PQcancelConn"/> creates a
+       <structname>PGcancelConn</structname><indexterm><primary>PGcancelConn</primary></indexterm>
+       object, but it won't instantly start sending a cancel request over this
+       connection. A cancel request can be sent over this connection in a
+       blocking manner using <xref linkend="libpq-PQcancelSend"/> and in a
+       non-blocking manner using <xref linkend="libpq-PQcancelPoll"/>.
+       The return value should can be passed to <xref linkend="libpq-PQcancelStatus"/>,
+       to check if the <structname>PGcancelConn</structname> object was
+       created successfully. The <structname>PGcancelConn</structname> object
+       is an opaque structure that is not meant to be accessed directly by the
+       application. This <structname>PGcancelConn</structname> object can be
+       used to cancel the query that's running on the original connection in a
+       thread-safe way.
+      </para>
+
+      <para>
+       If the original connection is encrypted (using TLS or GSS), then the
+       connection for the cancel request is encrypted in the same way. Any
+       connection options that are only used during authentication or after
+       authentication of the client are ignored though, because cancellation
+       requests do not require authentication and the connection is closed right
+       after the cancellation request is submitted.
+      </para>
+
+      <para>
+       Note that when <function>PQcancelConn</function> returns a non-null
+       pointer, you must call <xref linkend="libpq-PQcancelFinish"/> when you
+       are finished with it, in order to dispose of the structure and any
+       associated memory blocks. This must be done even if the cancel request
+       failed or was abandoned.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="libpq-PQcancelSend">
+     <term><function>PQcancelSend</function><indexterm><primary>PQcancelSend</primary></indexterm></term>
+
+     <listitem>
+      <para>
+       Requests that the server abandons processing of the current command in a blocking manner.
+<synopsis>
+int PQcancelSend(PGcancelConn *conn);
+</synopsis>
+      </para>
+
+      <para>
+       The request is made over the given <structname>PGcancelConn</structname>,
+       which needs to be created with <xref linkend="libpq-PQcancelConn"/>
+       The return value of <xref linkend="libpq-PQcancelSend"/>
+       is 1 if the cancel request was successfully
+       dispatched and 0 if not. If it was unsuccessful, the error message can be
+       retrieved using <xref linkend="libpq-PQcancelErrorMessage"/>.
+      </para>
+
+      <para>
+       Successful dispatch of the cancellation is no guarantee that the request
+       will have any effect, however. If the cancellation is effective, the
+       command being cancelled will terminate early and return an error result.
+       If the cancellation fails (say, because the server was already done
+       processing the command), then there will be no visible result at all.
+      </para>
+
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="libpq-PQcancelStatus">
+     <term><function>PQcancelStatus</function><indexterm><primary>PQcancelStatus</primary></indexterm></term>
+
+     <listitem>
+      <para>
+       A version of <xref linkend="libpq-PQstatus"/> that can be used for
+       cancellation connections.
+<synopsis>
+ConnStatusType PQcancelStatus(const PGcancelConn *conn);
+</synopsis>
+      </para>
+      <para>
+       In addition to all the statuses that a <structname>PGconn</structname>
+       can have, this connection can have one additional status:
+
+       <variablelist>
+        <varlistentry id="libpq-connection-starting">
+         <term><symbol>CONNECTION_STARTING</symbol></term>
+         <listitem>
+          <para>
+           Waiting for the first call to <xref linkend="libpq-PQcancelPoll"/>,
+           to actually open the socket. This is the connection state right after
+           calling <xref linkend="libpq-PQcancelConn"/>. No connection to the
+           server has been initiated yet at this point. To actually start
+           sending the cancel request use <xref linkend="libpq-PQcancelPoll"/>.
+          </para>
+         </listitem>
+        </varlistentry>
+       </variablelist>
+      </para>
+
+      <para>
+       One final note about the returned statuses is that
+       <symbol>CONNECTION_OK</symbol> has a slightly different meaning for a
+       <structname>PGcancelConn</structname> than what it has for a
+       <structname>PGconn</structname>. When <xref linkend="libpq-PQcancelStatus"/>
+       returns <symbol>CONNECTION_OK</symbol> for a <structname>PGcancelConn</structname>
+       it means that that the dispatch of the cancel request has completed (although
+       this is no promise that the query was actually cancelled) and that the
+       connection is now closed. While a <symbol>CONNECTION_OK</symbol> result
+       for <structname>PGconn</structname> means that queries can be sent over
+       the connection.
+      </para>
+
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="libpq-PQcancelSocket">
+     <term><function>PQcancelSocket</function><indexterm><primary>PQcancelSocket</primary></indexterm></term>
+
+     <listitem>
+      <para>
+       A version of <xref linkend="libpq-PQsocket"/> that can be used for
+       cancellation connections.
+<synopsis>
+int PQcancelSocket(PGcancelConn *conn);
+</synopsis>
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="libpq-PQcancelPoll">
+     <term><function>PQcancelPoll</function><indexterm><primary>PQcancelPoll</primary></indexterm></term>
+
+     <listitem>
+      <para>
+       A version of <xref linkend="libpq-PQconnectPoll"/> that can be used for
+       cancellation connections.
+<synopsis>
+PostgresPollingStatusType PQcancelPoll(PGcancelConn *conn);
+</synopsis>
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="libpq-PQcancelErrorMessage">
+     <term><function>PQcancelErrorMessage</function><indexterm><primary>PQcancelErrorMessage</primary></indexterm></term>
+
+     <listitem>
+      <para>
+       A version of <xref linkend="libpq-PQerrorMessage"/> that can be used for
+       cancellation connections.
+<synopsis>
+char *PQcancelErrorMessage(const PGcancelConn *conn);
+</synopsis>
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="libpq-PQcancelFinish">
+     <term><function>PQcancelFinish</function><indexterm><primary>PQcancelFinish</primary></indexterm></term>
+     <listitem>
+      <para>
+       Closes the cancel connection (if it did not finish sending the cancel 
+       request yet). Also frees memory used by the <structname>PGcancelConn</structname> 
+       object.
+<synopsis>
+void PQcancelFinish(PGcancelConn *conn);
+</synopsis>
+      </para>
+
+      <para>
+       Note that even if the cancel attempt fails (as
+       indicated by <xref linkend="libpq-PQcancelStatus"/>), the application should call <xref linkend="libpq-PQcancelFinish"/>
+       to free the memory used by the <structname>PGcancelConn</structname> object.
+       The <structname>PGcancelConn</structname> pointer must not be used again after
+       <xref linkend="libpq-PQcancelFinish"/> has been called.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="libpq-PQcancelReset">
+     <term><function>PQcancelReset</function><indexterm><primary>PQcancelReset</primary></indexterm></term>
+     <listitem>
+      <para>
+       Resets the <symbol>PGcancelConn</symbol> so it can be reused for a new
+       cancel connection.
+<synopsis>
+void PQcancelReset(PGcancelConn *conn);
+</synopsis>
+      </para>
+
+      <para>
+       If the <symbol>PGcancelConn</symbol> is currently used to send a cancel
+       request, then this connection is closed. It will then prepare the
+       <symbol>PGcancelConn</symbol> object such that it can be used to send a
+       new cancel request. This can be used to create one <symbol>PGcancelConn</symbol>
+       for a <symbol>PGconn</symbol> and reuse that multiple times throughout
+       the lifetime of the original <symbol>PGconn</symbol>.
+      </para>
+     </listitem>
+    </varlistentry>
+
     <varlistentry id="libpq-PQgetCancel">
      <term><function>PQgetCancel</function><indexterm><primary>PQgetCancel</primary></indexterm></term>
 
      <listitem>
       <para>
        Creates a data structure containing the information needed to cancel
-       a command issued through a particular database connection.
+       a command using <xref linkend="libpq-PQcancel"/>.
 <synopsis>
 PGcancel *PQgetCancel(PGconn *conn);
 </synopsis>
@@ -6050,14 +6260,28 @@ void PQfreeCancel(PGcancel *cancel);
 
      <listitem>
       <para>
-       Requests that the server abandon processing of the current command.
+       An insecure version of <xref linkend="libpq-PQcancelSend"/>, but one
+       that can be used safely from within a signal handler.
 <synopsis>
 int PQcancel(PGcancel *cancel, char *errbuf, int errbufsize);
 </synopsis>
       </para>
 
       <para>
-       The return value is 1 if the cancel request was successfully
+       <xref linkend="libpq-PQcancel"/> should only be used if it's necessary
+       to cancel a query from a signal-handler. If signal-safety is not needed,
+       <xref linkend="libpq-PQcancelSend"/> should be used to cancel the query
+       instead. <xref linkend="libpq-PQcancel"/> can be safely invoked from a
+       signal handler, if the <parameter>errbuf</parameter> is a local variable
+       in the signal handler.  The <structname>PGcancel</structname> object is
+       read-only as far as <xref linkend="libpq-PQcancel"/> is concerned, so it
+       can also be invoked from a thread that is separate from the one
+       manipulating the <structname>PGconn</structname> object.
+      </para>
+
+      <para>
+       The return value of <xref linkend="libpq-PQcancel"/>
+       is 1 if the cancel request was successfully
        dispatched and 0 if not.  If not, <parameter>errbuf</parameter> is filled
        with an explanatory error message.  <parameter>errbuf</parameter>
        must be a char array of size <parameter>errbufsize</parameter> (the
@@ -6065,21 +6289,22 @@ int PQcancel(PGcancel *cancel, char *errbuf, int errbufsize);
       </para>
 
       <para>
-       Successful dispatch is no guarantee that the request will have
-       any effect, however.  If the cancellation is effective, the current
-       command will terminate early and return an error result.  If the
-       cancellation fails (say, because the server was already done
-       processing the command), then there will be no visible result at
-       all.
-      </para>
-
-      <para>
-       <xref linkend="libpq-PQcancel"/> can safely be invoked from a signal
-       handler, if the <parameter>errbuf</parameter> is a local variable in the
-       signal handler.  The <structname>PGcancel</structname> object is read-only
-       as far as <xref linkend="libpq-PQcancel"/> is concerned, so it can
-       also be invoked from a thread that is separate from the one
-       manipulating the <structname>PGconn</structname> object.
+       To achieve signal-safety, some concessions needed to be made in the
+       implementation of <xref linkend="libpq-PQcancel"/>. Not all connection
+       options of the original connection are used when establishing a
+       connection for the cancellation request. This function connects to
+       postgres on the same address and port as the original connection. The
+       only connection options that are honored during this connection are
+       <varname>keepalives</varname>,
+       <varname>keepalives_idle</varname>,
+       <varname>keepalives_interval</varname>,
+       <varname>keepalives_count</varname>, and
+       <varname>tcp_user_timeout</varname>.
+       So, for example
+       <varname>connect_timeout</varname>,
+       <varname>gssencmode</varname>, and
+       <varname>sslmode</varname> are ignored. <emphasis>This means the connection
+       for the cancel request is never encrypted using TLS or GSS</emphasis>.
       </para>
      </listitem>
     </varlistentry>
@@ -6091,11 +6316,20 @@ int PQcancel(PGcancel *cancel, char *errbuf, int errbufsize);
 
      <listitem>
       <para>
-       <xref linkend="libpq-PQrequestCancel"/> is a deprecated variant of
-       <xref linkend="libpq-PQcancel"/>.
+       <xref linkend="libpq-PQrequestCancel"/> is a deprecated and insecure
+       variant of <xref linkend="libpq-PQcancelSend"/>.
 <synopsis>
 int PQrequestCancel(PGconn *conn);
 </synopsis>
+      </para>
+
+      <para>
+       <xref linkend="libpq-PQrequestCancel"/> only exists because of backwards
+       compatibility reasons. <xref linkend="libpq-PQcancelSend"/> should be
+       used instead, to avoid the security and thread-safety issues that this
+       function has. This function has the same security issues as
+       <xref linkend="libpq-PQcancel"/>, but without the benefit of being
+       signal-safe.
       </para>
 
       <para>
@@ -9285,7 +9519,7 @@ int PQisthreadsafe();
    The deprecated functions <xref linkend="libpq-PQrequestCancel"/> and
    <xref linkend="libpq-PQoidStatus"/> are not thread-safe and should not be
    used in multithread programs.  <xref linkend="libpq-PQrequestCancel"/>
-   can be replaced by <xref linkend="libpq-PQcancel"/>.
+   can be replaced by <xref linkend="libpq-PQcancelSend"/>.
    <xref linkend="libpq-PQoidStatus"/> can be replaced by
    <xref linkend="libpq-PQoidValue"/>.
   </para>

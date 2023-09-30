@@ -24,6 +24,8 @@ explain (costs off) select * from lp where a is not null and (a = 'a' or a = 'c'
 explain (costs off) select * from lp where a <> 'g';
 explain (costs off) select * from lp where a <> 'a' and a <> 'd';
 explain (costs off) select * from lp where a not in ('a', 'd');
+explain (costs off) select * from lp limit 3;
+explain (costs off) select * from lp where exists (select 1 from lp where random() > 0.1) limit 3;
 
 -- collation matches the partitioning collation, pruning works
 create table coll_pruning (a text collate "C") partition by list (a);

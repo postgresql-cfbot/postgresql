@@ -1239,6 +1239,11 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	List	   *live_childrels = NIL;
 	ListCell   *l;
 
+	if (rel->consider_startup &&
+		bms_equal(rel->relids, root->all_baserels) &&
+		!root->has_stoper_op)
+		rel->tuple_fraction = root->tuple_fraction;
+
 	/*
 	 * Generate access paths for each member relation, and remember the
 	 * non-dummy children.
@@ -1267,6 +1272,8 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 		 */
 		if (!rel->consider_parallel)
 			childrel->consider_parallel = false;
+
+		childrel->tuple_fraction = rel->tuple_fraction;
 
 		/*
 		 * Compute the child's access paths.
@@ -1307,6 +1314,8 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 {
 	List	   *subpaths = NIL;
 	bool		subpaths_valid = true;
+	List	   *startup_subpaths = NIL;
+	bool		startup_subpaths_valid = true;
 	List	   *partial_subpaths = NIL;
 	List	   *pa_partial_subpaths = NIL;
 	List	   *pa_nonpartial_subpaths = NIL;
@@ -1329,7 +1338,9 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 	{
 		RelOptInfo *childrel = lfirst(l);
 		ListCell   *lcp;
+		Path	   *cheapest_startup_path = NULL;
 		Path	   *cheapest_partial_path = NULL;
+		Cost		cheapest_partial_cost = 0;
 
 		/*
 		 * If child has an unparameterized cheapest-total path, add that to
@@ -1339,19 +1350,46 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 		 * With partitionwise aggregates, the child rel's pathlist may be
 		 * empty, so don't assume that a path exists here.
 		 */
-		if (childrel->pathlist != NIL &&
+		if (childrel->tuple_fraction &&
+			(cheapest_startup_path = get_cheapest_fractional_path_ext(childrel,
+																	  childrel->tuple_fraction,
+																	  false, false, false)) != NULL)
+			accumulate_append_subpath(cheapest_startup_path,
+									  &subpaths, NULL);
+		else if (childrel->pathlist != NIL &&
 			childrel->cheapest_total_path->param_info == NULL)
 			accumulate_append_subpath(childrel->cheapest_total_path,
 									  &subpaths, NULL);
 		else
 			subpaths_valid = false;
 
+		if (rel->consider_startup && !childrel->tuple_fraction &&
+			childrel->pathlist != NIL &&
+			childrel->cheapest_startup_path->param_info == NULL)
+		{
+			accumulate_append_subpath(childrel->cheapest_startup_path, &startup_subpaths, NULL);
+		}
+		else
+			startup_subpaths_valid = false;
+
+		if (childrel->tuple_fraction &&
+			(cheapest_partial_path = get_cheapest_fractional_path_ext(childrel,
+																	  childrel->tuple_fraction,
+																	  false, true, false)) !=NULL)
+		{
+			accumulate_append_subpath(cheapest_partial_path,
+									  &partial_subpaths, NULL);
+			cheapest_partial_cost = get_fractional_path_cost(cheapest_partial_path,
+															 root->tuple_fraction);
+		}
+
 		/* Same idea, but for a partial plan. */
-		if (childrel->partial_pathlist != NIL)
+		else if (childrel->partial_pathlist != NIL)
 		{
 			cheapest_partial_path = linitial(childrel->partial_pathlist);
 			accumulate_append_subpath(cheapest_partial_path,
 									  &partial_subpaths, NULL);
+			cheapest_partial_cost = cheapest_partial_path->total_cost;
 		}
 		else
 			partial_subpaths_valid = false;
@@ -1363,9 +1401,33 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 		if (pa_subpaths_valid)
 		{
 			Path	   *nppath = NULL;
+			Cost	   nppath_cost = 0;
 
-			nppath =
-				get_cheapest_parallel_safe_total_inner(childrel->pathlist);
+			/*
+			 * Check if the cheapest non-partial and parallel safe path (nppath)
+			 * is cheaper than cheapest_partial_path, if so use the nppath instead of
+			 * cheapest_partial_path. Note the cheapest_partial_path has been startup
+			 * aware already.
+			 */
+			if (childrel->tuple_fraction && cheapest_startup_path)
+			{
+				if (cheapest_startup_path->parallel_safe)
+					nppath = cheapest_startup_path;
+				else
+					nppath = get_cheapest_fractional_path_ext(childrel, childrel->tuple_fraction,
+															  false, false, true);
+
+				if (nppath)
+					nppath_cost = get_fractional_path_cost(nppath,
+														   root->tuple_fraction);
+			}
+			else
+			{
+				nppath =
+					get_cheapest_parallel_safe_total_inner(childrel->pathlist);
+				if (nppath)
+					nppath_cost = nppath->total_cost;
+			}
 
 			if (cheapest_partial_path == NULL && nppath == NULL)
 			{
@@ -1374,7 +1436,7 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 			}
 			else if (nppath == NULL ||
 					 (cheapest_partial_path != NULL &&
-					  cheapest_partial_path->total_cost < nppath->total_cost))
+					  cheapest_partial_cost < nppath_cost))
 			{
 				/* Partial path is cheaper or the only option. */
 				Assert(cheapest_partial_path != NULL);
@@ -1476,6 +1538,11 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 	if (subpaths_valid)
 		add_path(rel, (Path *) create_append_path(root, rel, subpaths, NIL,
 												  NIL, NULL, 0, false,
+												  -1));
+
+	if (startup_subpaths_valid && startup_subpaths != NIL)
+		add_path(rel, (Path *) create_append_path(root, rel, startup_subpaths,
+												  NIL, NIL, NULL, 0, false,
 												  -1));
 
 	/*
@@ -2495,7 +2562,6 @@ static void
 set_subquery_pathlist(PlannerInfo *root, RelOptInfo *rel,
 					  Index rti, RangeTblEntry *rte)
 {
-	Query	   *parse = root->parse;
 	Query	   *subquery = rte->subquery;
 	bool		trivial_pathtarget;
 	Relids		required_outer;
@@ -2631,13 +2697,7 @@ set_subquery_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	 * we'd better tell the subquery to plan for full retrieval. (XXX This
 	 * could probably be made more intelligent ...)
 	 */
-	if (parse->hasAggs ||
-		parse->groupClause ||
-		parse->groupingSets ||
-		root->hasHavingQual ||
-		parse->distinctClause ||
-		parse->sortClause ||
-		has_multiple_baserels(root))
+	if (root->has_stoper_op ||	has_multiple_baserels(root))
 		tuple_fraction = 0.0;	/* default case */
 	else
 		tuple_fraction = root->tuple_fraction;

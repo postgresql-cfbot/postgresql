@@ -479,6 +479,9 @@ struct PlannerInfo
 	/* limit_tuples passed to query_planner */
 	Cardinality limit_tuples;
 
+	/* Like order by, group by, distinct and so. */
+	bool		has_stoper_op;
+
 	/*
 	 * Minimum security_level for quals. Note: qual_security_level is zero if
 	 * there are no securityQuals.
@@ -870,6 +873,8 @@ typedef struct RelOptInfo
 	bool		consider_param_startup;
 	/* consider parallel paths? */
 	bool		consider_parallel;
+	/* the tuple fraction of rows. */
+	Selectivity tuple_fraction;
 
 	/*
 	 * default result targetlist for Paths scanning this relation; list of

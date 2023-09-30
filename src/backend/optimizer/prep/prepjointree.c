@@ -1015,6 +1015,14 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 	subroot->non_recursive_path = NULL;
 	/* We don't currently need a top JoinDomain for the subroot */
 
+	if (subquery->hasAggs ||
+		subquery->groupClause ||
+		subquery->groupingSets ||
+		subquery->havingQual != NULL ||
+		subquery->distinctClause ||
+		subquery->sortClause)
+		subroot->has_stoper_op = true;
+
 	/* No CTEs to worry about */
 	Assert(subquery->cteList == NIL);
 

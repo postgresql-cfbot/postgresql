@@ -120,6 +120,9 @@ compare_fractional_path_costs(Path *path1, Path *path2,
 	Cost		cost1,
 				cost2;
 
+	if (path1 == path2)
+		return 0;
+
 	if (fraction <= 0.0 || fraction >= 1.0)
 		return compare_path_costs(path1, path2, TOTAL_COST);
 	cost1 = path1->startup_cost +
@@ -132,6 +135,21 @@ compare_fractional_path_costs(Path *path1, Path *path2,
 		return +1;
 	return 0;
 }
+
+Cost
+get_fractional_path_cost(Path *path1, double fraction)
+{
+	double	total_rows = path1->rows;
+
+	if (total_rows <= 0)
+		return path1->total_cost;
+
+	if (fraction >= 1.0)
+		fraction =  Min(1.0, fraction / path1->rows);
+
+	return path1->startup_cost + fraction * (path1->total_cost - path1->startup_cost);
+}
+
 
 /*
  * compare_path_costs_fuzzily

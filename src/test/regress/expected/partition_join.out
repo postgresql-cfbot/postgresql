@@ -62,6 +62,33 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1, prt2 t2 WHERE t1.a = t2.b AND t1.b =
  450 | 0450 | 450 | 0450
 (4 rows)
 
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1, prt2 t2 WHERE t1.a = t2.b AND t1.b = 0 ORDER BY t1.a, t2.b LIMIT 1;
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Limit
+   ->  Merge Append
+         Sort Key: t1.a
+         ->  Nested Loop
+               Join Filter: (t1_1.a = t2_1.b)
+               ->  Index Scan using iprt2_p1_b on prt2_p1 t2_1
+               ->  Materialize
+                     ->  Seq Scan on prt1_p1 t1_1
+                           Filter: (b = 0)
+         ->  Nested Loop
+               Join Filter: (t1_2.a = t2_2.b)
+               ->  Index Scan using iprt2_p2_b on prt2_p2 t2_2
+               ->  Materialize
+                     ->  Seq Scan on prt1_p2 t1_2
+                           Filter: (b = 0)
+         ->  Nested Loop
+               Join Filter: (t1_3.a = t2_3.b)
+               ->  Index Scan using iprt2_p3_b on prt2_p3 t2_3
+               ->  Materialize
+                     ->  Seq Scan on prt1_p3 t1_3
+                           Filter: (b = 0)
+(21 rows)
+
 -- left outer join, 3-way
 EXPLAIN (COSTS OFF)
 SELECT COUNT(*) FROM prt1 t1

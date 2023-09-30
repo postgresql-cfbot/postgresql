@@ -55,6 +55,28 @@ SELECT c, sum(a), avg(b), count(*), min(a), max(b) FROM pagg_tab GROUP BY c HAVI
  0008 | 2000 | 14.0000000000000000 |   250 |   0 |  26
 (6 rows)
 
+EXPLAIN (COSTS OFF)
+SELECT c, sum(a), avg(b), count(*), min(a), max(b) FROM pagg_tab GROUP BY c HAVING avg(d) < 15 ORDER BY 1, 2, 3 LIMIT 1;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Limit
+   ->  Sort
+         Sort Key: pagg_tab.c, (sum(pagg_tab.a)), (avg(pagg_tab.b))
+         ->  Append
+               ->  HashAggregate
+                     Group Key: pagg_tab.c
+                     Filter: (avg(pagg_tab.d) < '15'::numeric)
+                     ->  Seq Scan on pagg_tab_p1 pagg_tab
+               ->  HashAggregate
+                     Group Key: pagg_tab_1.c
+                     Filter: (avg(pagg_tab_1.d) < '15'::numeric)
+                     ->  Seq Scan on pagg_tab_p2 pagg_tab_1
+               ->  HashAggregate
+                     Group Key: pagg_tab_2.c
+                     Filter: (avg(pagg_tab_2.d) < '15'::numeric)
+                     ->  Seq Scan on pagg_tab_p3 pagg_tab_2
+(16 rows)
+
 -- When GROUP BY clause does not match; partial aggregation is performed for each partition.
 EXPLAIN (COSTS OFF)
 SELECT a, sum(b), avg(b), count(*), min(a), max(b) FROM pagg_tab GROUP BY a HAVING avg(d) < 15 ORDER BY 1, 2, 3;

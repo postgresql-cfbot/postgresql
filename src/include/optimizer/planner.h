@@ -56,6 +56,12 @@ extern void mark_partial_aggref(Aggref *agg, AggSplit aggsplit);
 extern Path *get_cheapest_fractional_path(RelOptInfo *rel,
 										  double tuple_fraction);
 
+extern Path *get_cheapest_fractional_path_ext(RelOptInfo *rel,
+											  double tuple_fraction,
+											  bool allow_parameterized,
+											  bool look_partial,
+											  bool must_parallel_safe);
+
 extern Expr *preprocess_phv_expression(PlannerInfo *root, Expr *expr);
 
 #endif							/* PLANNER_H */

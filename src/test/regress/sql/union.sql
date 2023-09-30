@@ -540,3 +540,13 @@ select * from
    union all
    select *, 1 as x from int8_tbl b) ss
 where (x = 0) or (q1 >= q2 and q1 <= q2);
+
+explain (costs off)
+with s1 as
+(select * from tenk1 join tenk2 using (hundred)),
+s2 as
+(select * from tenk1 join tenk2 using (hundred))
+select * from s1
+union all
+select * from s2
+limit 3;

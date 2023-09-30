@@ -674,6 +674,14 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	root->non_recursive_path = NULL;
 	root->partColsUpdated = false;
 
+	if (parse->hasAggs ||
+		parse->groupClause ||
+		parse->groupingSets ||
+		parse->havingQual != NULL ||
+		parse->distinctClause ||
+		parse->sortClause)
+		root->has_stoper_op = true;
+
 	/*
 	 * Create the top-level join domain.  This won't have valid contents until
 	 * deconstruct_jointree fills it in, but the node needs to exist before
@@ -6328,26 +6336,40 @@ make_sort_input_target(PlannerInfo *root,
 Path *
 get_cheapest_fractional_path(RelOptInfo *rel, double tuple_fraction)
 {
-	Path	   *best_path = rel->cheapest_total_path;
+	return get_cheapest_fractional_path_ext(rel, tuple_fraction, true, false, false);
+}
+
+Path *
+get_cheapest_fractional_path_ext(RelOptInfo *rel, double tuple_fraction,
+								 bool allow_parameterized, bool look_partial,
+								 bool must_parallel_safe)
+{
+	List	   *pathlist = look_partial ? rel->partial_pathlist : rel->pathlist;
+	Path	   *best_path = allow_parameterized ? linitial(pathlist) : NULL;
 	ListCell   *l;
+	double		total_rows = ((Path *)linitial(rel->pathlist))->rows;
 
 	/* If all tuples will be retrieved, just return the cheapest-total path */
 	if (tuple_fraction <= 0.0)
 		return best_path;
 
 	/* Convert absolute # of tuples to a fraction; no need to clamp to 0..1 */
-	if (tuple_fraction >= 1.0 && best_path->rows > 0)
-		tuple_fraction /= best_path->rows;
+	if (tuple_fraction >= 1.0 && total_rows > 0)
+		tuple_fraction /= total_rows;
 
-	foreach(l, rel->pathlist)
+	foreach(l, pathlist)
 	{
 		Path	   *path = (Path *) lfirst(l);
 
-		if (path == rel->cheapest_total_path ||
-			compare_fractional_path_costs(best_path, path, tuple_fraction) <= 0)
+		if (!allow_parameterized && !bms_is_empty(PATH_REQ_OUTER(path)))
 			continue;
 
-		best_path = path;
+		if (must_parallel_safe && !path->parallel_safe)
+			continue;
+
+		if (best_path == NULL ||
+			compare_fractional_path_costs(best_path, path, tuple_fraction) > 0)
+			best_path = path;
 	}
 
 	return best_path;

@@ -143,6 +143,58 @@ explain (costs off) select * from lp where a not in ('a', 'd');
          Filter: (a <> ALL ('{a,d}'::bpchar[]))
 (9 rows)
 
+explain (costs off) select * from lp limit 3;
+               QUERY PLAN                
+-----------------------------------------
+ Limit
+   ->  Append
+         ->  Seq Scan on lp_ad lp_1
+         ->  Seq Scan on lp_bc lp_2
+         ->  Seq Scan on lp_ef lp_3
+         ->  Seq Scan on lp_g lp_4
+         ->  Seq Scan on lp_null lp_5
+         ->  Seq Scan on lp_default lp_6
+(8 rows)
+
+explain (costs off) select * from lp where exists (select 1 from lp where random() > 0.1) limit 3;
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Limit
+   InitPlan 1 (returns $0)
+     ->  Append
+           ->  Seq Scan on lp_ad lp_8
+                 Filter: (random() > '0.1'::double precision)
+           ->  Seq Scan on lp_bc lp_9
+                 Filter: (random() > '0.1'::double precision)
+           ->  Seq Scan on lp_ef lp_10
+                 Filter: (random() > '0.1'::double precision)
+           ->  Seq Scan on lp_g lp_11
+                 Filter: (random() > '0.1'::double precision)
+           ->  Seq Scan on lp_null lp_12
+                 Filter: (random() > '0.1'::double precision)
+           ->  Seq Scan on lp_default lp_13
+                 Filter: (random() > '0.1'::double precision)
+   ->  Append
+         ->  Result
+               One-Time Filter: $0
+               ->  Seq Scan on lp_ad lp_1
+         ->  Result
+               One-Time Filter: $0
+               ->  Seq Scan on lp_bc lp_2
+         ->  Result
+               One-Time Filter: $0
+               ->  Seq Scan on lp_ef lp_3
+         ->  Result
+               One-Time Filter: $0
+               ->  Seq Scan on lp_g lp_4
+         ->  Result
+               One-Time Filter: $0
+               ->  Seq Scan on lp_null lp_5
+         ->  Result
+               One-Time Filter: $0
+               ->  Seq Scan on lp_default lp_6
+(34 rows)
+
 -- collation matches the partitioning collation, pruning works
 create table coll_pruning (a text collate "C") partition by list (a);
 create table coll_pruning_a partition of coll_pruning for values in ('a');

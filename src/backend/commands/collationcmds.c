@@ -66,6 +66,7 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 	DefElem    *deterministicEl = NULL;
 	DefElem    *rulesEl = NULL;
 	DefElem    *versionEl = NULL;
+	char	   *builtin_locale = NULL;
 	char	   *collcollate;
 	char	   *collctype;
 	char	   *colliculocale;
@@ -215,7 +216,9 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 
 		if (collproviderstr)
 		{
-			if (pg_strcasecmp(collproviderstr, "icu") == 0)
+			if (pg_strcasecmp(collproviderstr, "builtin") == 0)
+				collprovider = COLLPROVIDER_BUILTIN;
+			else if (pg_strcasecmp(collproviderstr, "icu") == 0)
 				collprovider = COLLPROVIDER_ICU;
 			else if (pg_strcasecmp(collproviderstr, "libc") == 0)
 				collprovider = COLLPROVIDER_LIBC;
@@ -230,7 +233,11 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 
 		if (localeEl)
 		{
-			if (collprovider == COLLPROVIDER_LIBC)
+			if (collprovider == COLLPROVIDER_BUILTIN)
+			{
+				builtin_locale = defGetString(localeEl);
+			}
+			else if (collprovider == COLLPROVIDER_LIBC)
 			{
 				collcollate = defGetString(localeEl);
 				collctype = defGetString(localeEl);
@@ -245,7 +252,22 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 		if (lcctypeEl)
 			collctype = defGetString(lcctypeEl);
 
-		if (collprovider == COLLPROVIDER_LIBC)
+		if (collprovider == COLLPROVIDER_BUILTIN)
+		{
+			if (!builtin_locale)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+						 errmsg("parameter \"locale\" must be specified")));
+
+			if (strcmp(builtin_locale, "C") != 0 &&
+				strcmp(builtin_locale, "POSIX") != 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("collation provider \"builtin\" does not support locale \"%s\"",
+								builtin_locale),
+						 errhint("The built-in collation provider only supports the \"C\" and \"POSIX\" locales.")));
+		}
+		else if (collprovider == COLLPROVIDER_LIBC)
 		{
 			if (!collcollate)
 				ereport(ERROR,
@@ -302,7 +324,17 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 					 errmsg("ICU rules cannot be specified unless locale provider is ICU")));
 
-		if (collprovider == COLLPROVIDER_ICU)
+		if (collprovider == COLLPROVIDER_BUILTIN)
+		{
+			/*
+			 * Behavior may be different in different encodings, so set
+			 * collencoding to the current database encoding. No validation is
+			 * required, because the "builtin" provider is compatible with any
+			 * encoding.
+			 */
+			collencoding = GetDatabaseEncoding();
+		}
+		else if (collprovider == COLLPROVIDER_ICU)
 		{
 #ifdef USE_ICU
 			/*
@@ -331,7 +363,18 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 	}
 
 	if (!collversion)
-		collversion = get_collation_actual_version(collprovider, collprovider == COLLPROVIDER_ICU ? colliculocale : collcollate);
+	{
+		char *locale;
+
+		if (collprovider == COLLPROVIDER_ICU)
+			locale = colliculocale;
+		else if (collprovider == COLLPROVIDER_LIBC)
+			locale = collcollate;
+		else
+			locale = NULL; /* COLLPROVIDER_BUILTIN */
+
+		collversion = get_collation_actual_version(collprovider, locale);
+	}
 
 	newoid = CollationCreate(collName,
 							 collNamespace,
@@ -406,6 +449,7 @@ AlterCollation(AlterCollationStmt *stmt)
 	Form_pg_collation collForm;
 	Datum		datum;
 	bool		isnull;
+	char	   *locale;
 	char	   *oldversion;
 	char	   *newversion;
 	ObjectAddress address;
@@ -430,8 +474,20 @@ AlterCollation(AlterCollationStmt *stmt)
 	datum = SysCacheGetAttr(COLLOID, tup, Anum_pg_collation_collversion, &isnull);
 	oldversion = isnull ? NULL : TextDatumGetCString(datum);
 
-	datum = SysCacheGetAttrNotNull(COLLOID, tup, collForm->collprovider == COLLPROVIDER_ICU ? Anum_pg_collation_colliculocale : Anum_pg_collation_collcollate);
-	newversion = get_collation_actual_version(collForm->collprovider, TextDatumGetCString(datum));
+	if (collForm->collprovider == COLLPROVIDER_ICU)
+	{
+		datum = SysCacheGetAttrNotNull(COLLOID, tup, Anum_pg_collation_colliculocale);
+		locale = TextDatumGetCString(datum);
+	}
+	else if (collForm->collprovider == COLLPROVIDER_LIBC)
+	{
+		datum = SysCacheGetAttrNotNull(COLLOID, tup, Anum_pg_collation_collcollate);
+		locale = TextDatumGetCString(datum);
+	}
+	else
+		locale = NULL; /* COLLPROVIDER_BUILTIN */
+
+	newversion = get_collation_actual_version(collForm->collprovider, locale);
 
 	/* cannot change from NULL to non-NULL or vice versa */
 	if ((!oldversion && newversion) || (oldversion && !newversion))
@@ -495,11 +551,18 @@ pg_collation_actual_version(PG_FUNCTION_ARGS)
 
 		provider = ((Form_pg_database) GETSTRUCT(dbtup))->datlocprovider;
 
-		datum = SysCacheGetAttrNotNull(DATABASEOID, dbtup,
-									   provider == COLLPROVIDER_ICU ?
-									   Anum_pg_database_daticulocale : Anum_pg_database_datcollate);
-
-		locale = TextDatumGetCString(datum);
+		if (provider == COLLPROVIDER_ICU)
+		{
+			datum = SysCacheGetAttrNotNull(DATABASEOID, dbtup, Anum_pg_database_daticulocale);
+			locale = TextDatumGetCString(datum);
+		}
+		else if (provider == COLLPROVIDER_LIBC)
+		{
+			datum = SysCacheGetAttrNotNull(DATABASEOID, dbtup, Anum_pg_database_datcollate);
+			locale = TextDatumGetCString(datum);
+		}
+		else
+			locale = NULL; /* COLLPROVIDER_BUILTIN */
 
 		ReleaseSysCache(dbtup);
 	}
@@ -516,11 +579,19 @@ pg_collation_actual_version(PG_FUNCTION_ARGS)
 
 		provider = ((Form_pg_collation) GETSTRUCT(colltp))->collprovider;
 		Assert(provider != COLLPROVIDER_DEFAULT);
-		datum = SysCacheGetAttrNotNull(COLLOID, colltp,
-									   provider == COLLPROVIDER_ICU ?
-									   Anum_pg_collation_colliculocale : Anum_pg_collation_collcollate);
 
-		locale = TextDatumGetCString(datum);
+		if (provider == COLLPROVIDER_ICU)
+		{
+			datum = SysCacheGetAttrNotNull(COLLOID, colltp, Anum_pg_collation_colliculocale);
+			locale = TextDatumGetCString(datum);
+		}
+		else if (provider == COLLPROVIDER_LIBC)
+		{
+			datum = SysCacheGetAttrNotNull(COLLOID, colltp, Anum_pg_collation_collcollate);
+			locale = TextDatumGetCString(datum);
+		}
+		else
+			locale = NULL; /* COLLPROVIDER_BUILTIN */
 
 		ReleaseSysCache(colltp);
 	}

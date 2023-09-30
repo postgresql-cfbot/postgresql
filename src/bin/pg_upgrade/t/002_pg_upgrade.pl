@@ -114,22 +114,45 @@ my $original_locale = "C";
 my $original_iculocale = "";
 my $provider_field = "'c' AS datlocprovider";
 my $iculocale_field = "NULL AS daticulocale";
-if ($oldnode->pg_version >= 15 && $ENV{with_icu} eq 'yes')
+if ($oldnode->pg_version >= 15)
 {
 	$provider_field = "datlocprovider";
 	$iculocale_field = "daticulocale";
-	$original_provider = "i";
-	$original_iculocale = "fr-CA";
+
+	if ($ENV{with_icu} eq 'yes')
+	{
+		$original_provider = "i";
+		$original_iculocale = "fr-CA";
+	}
+}
+
+# use builtin provider instead of libc, if supported
+if ($oldnode->pg_version >= 16 && $ENV{with_icu} ne 'yes')
+{
+	$original_provider = "b";
 }
 
 my @initdb_params = @custom_opts;
 
 push @initdb_params, ('--encoding', 'UTF-8');
 push @initdb_params, ('--locale', $original_locale);
-if ($original_provider eq "i")
+
+# add --locale-provider, if supported
+if ($oldnode->pg_version >= 15)
 {
-	push @initdb_params, ('--locale-provider', 'icu');
-	push @initdb_params, ('--icu-locale', 'fr-CA');
+	if ($original_provider eq "b")
+	{
+		push @initdb_params, ('--locale-provider', 'builtin');
+	}
+	elsif ($original_provider eq "i")
+	{
+		push @initdb_params, ('--locale-provider', 'icu');
+		push @initdb_params, ('--icu-locale', 'fr-CA');
+	}
+	elsif ($original_provider eq "c")
+	{
+		push @initdb_params, ('--locale-provider', 'libc');
+	}
 }
 
 $node_params{extra} = \@initdb_params;

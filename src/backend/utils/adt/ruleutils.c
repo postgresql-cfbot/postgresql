@@ -10337,15 +10337,53 @@ get_func_sql_syntax(FuncExpr *expr, deparse_context *context)
 		case F_TIMEZONE_TEXT_TIMESTAMP:
 		case F_TIMEZONE_TEXT_TIMESTAMPTZ:
 		case F_TIMEZONE_TEXT_TIMETZ:
-			/* AT TIME ZONE ... note reversed argument order */
-			appendStringInfoChar(buf, '(');
-			get_rule_expr_paren((Node *) lsecond(expr->args), context, false,
-								(Node *) expr);
-			appendStringInfoString(buf, " AT TIME ZONE ");
-			get_rule_expr_paren((Node *) linitial(expr->args), context, false,
-								(Node *) expr);
-			appendStringInfoChar(buf, ')');
-			return true;
+			{
+				/* AT TIME ZONE ... note reversed argument order */
+				Node   *ts = (Node *) lsecond(expr->args);
+				Node   *zone = (Node *) linitial(expr->args);
+
+				/*
+				 * If the time zone is a function call, look to see if this is
+				 * literally current_setting('TimeZone') and that we should
+				 * coerce it to SQL, in which case we need to use "AT LOCAL".
+				 */
+				bool	islocal = false;
+
+				/* Is it a function? */
+				if (IsA(zone, FuncExpr))
+				{
+					FuncExpr *func = castNode(FuncExpr, zone);
+
+					/*
+					 * Is it current_setting() with a constant argument that
+					 * should be coerced to SQL?
+					 */
+					if (func->funcid == F_CURRENT_SETTING_TEXT &&
+						func->funcformat == COERCE_SQL_SYNTAX &&
+						IsA(linitial(func->args), Const))
+					{
+						Const   *con = castNode(Const, linitial(func->args));
+
+						Assert(con->consttype == TEXTOID && !con->constisnull);
+
+						/* Is that argument TimeZone? */
+						if (pg_strcasecmp(TextDatumGetCString(con->constvalue), "TimeZone") == 0)
+							islocal = true;
+					}
+				}
+
+				appendStringInfoChar(buf, '(');
+				get_rule_expr_paren(ts, context, false, (Node *) expr);
+				if (islocal)
+					appendStringInfoString(buf, " AT LOCAL");
+				else
+				{
+					appendStringInfoString(buf, " AT TIME ZONE ");
+					get_rule_expr_paren(zone, context, false, (Node *) expr);
+				}
+				appendStringInfoChar(buf, ')');
+				return true;
+			}
 
 		case F_OVERLAPS_TIMESTAMPTZ_INTERVAL_TIMESTAMPTZ_INTERVAL:
 		case F_OVERLAPS_TIMESTAMPTZ_INTERVAL_TIMESTAMPTZ_TIMESTAMPTZ:

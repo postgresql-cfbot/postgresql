@@ -14473,6 +14473,18 @@ a_expr:		c_expr									{ $$ = $1; }
 											   COERCE_SQL_SYNTAX,
 											   @2);
 				}
+			| a_expr AT LOCAL						%prec AT
+				{
+					/* Use the value of the session's time zone */
+					FuncCall *tz = makeFuncCall(SystemFuncName("current_setting"),
+												list_make1(makeStringConst("TimeZone", -1)),
+												COERCE_SQL_SYNTAX,
+												-1);
+					$$ = (Node *) makeFuncCall(SystemFuncName("timezone"),
+											   list_make2(tz, $1),
+											   COERCE_SQL_SYNTAX,
+											   @2);
+				}
 		/*
 		 * These operators must be called out explicitly in order to make use
 		 * of bison's automatic operator-precedence handling.  All other

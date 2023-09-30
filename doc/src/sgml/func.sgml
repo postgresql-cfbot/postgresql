@@ -10622,6 +10622,10 @@ SELECT date_bin('15 minutes', TIMESTAMP '2020-02-11 15:44:17', TIMESTAMP '2001-0
     <primary>AT TIME ZONE</primary>
    </indexterm>
 
+   <indexterm>
+    <primary>AT LOCAL</primary>
+   </indexterm>
+
    <para>
     The <literal>AT TIME ZONE</literal> operator converts time
     stamp <emphasis>without</emphasis> time zone to/from
@@ -10711,6 +10715,12 @@ SELECT date_bin('15 minutes', TIMESTAMP '2020-02-11 15:44:17', TIMESTAMP '2001-0
    </para>
 
    <para>
+    The syntax <literal>AT LOCAL</literal> may be used as shorthand for <literal>AT TIME ZONE
+    <replaceable>local</replaceable></literal>, where <replaceable>local</replaceable> is the
+    session's <varname>TimeZone</varname> value.
+   </para>
+
+   <para>
     Examples (assuming the current <xref linkend="guc-timezone"/> setting
     is <literal>America/Los_Angeles</literal>):
 <screen>
@@ -10722,6 +10732,9 @@ SELECT TIMESTAMP WITH TIME ZONE '2001-02-16 20:38:40-05' AT TIME ZONE 'America/D
 
 SELECT TIMESTAMP '2001-02-16 20:38:40' AT TIME ZONE 'Asia/Tokyo' AT TIME ZONE 'America/Chicago';
 <lineannotation>Result: </lineannotation><computeroutput>2001-02-16 05:38:40</computeroutput>
+
+SELECT TIMESTAMP WITH TIME ZONE '2001-02-16 20:38:40-05' AT LOCAL;
+<lineannotation>Result: </lineannotation><computeroutput>2001-02-16 17:38:40</computeroutput>
 </screen>
     The first example adds a time zone to a value that lacks it, and
     displays the value using the current <varname>TimeZone</varname>

@@ -225,6 +225,22 @@ $$ LANGUAGE plperl;
   </para>
 
   <para>
+   Normally the <type>bytea</type> arguments are seen by Perl as strings in hex format (see
+   <xref linkend="datatype-binary"/>).
+   If the transform defined by the <filename>bytea_plperl</filename> extension is used, they are
+   passed and returned as native Perl octet strings, see example below:
+<programlisting>
+CREATE EXTENSION bytea_plperl; -- or bool_plperlu for PL/PerlU
+CREATE FUNCTION perl_inverse_bytes(bytea) RETURNS bytea
+TRANSFORM FOR TYPE bytea
+AS $$
+    return join '', reverse split('', $_[0]);
+$$ LANGUAGE plperl;
+</programlisting>
+
+  </para>
+
+  <para>
    Perl can return <productname>PostgreSQL</productname> arrays as
    references to Perl arrays.  Here is an example:
 

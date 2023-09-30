@@ -43,7 +43,7 @@ my $contrib_extralibs = { 'libpq_pipeline' => ['ws2_32.lib'] };
 my $contrib_extraincludes = {};
 my $contrib_extrasource = {};
 my @contrib_excludes = (
-	'bool_plperl', 'commit_ts',
+	'bool_plperl', 'bytea_plperl', 'commit_ts',
 	'hstore_plperl', 'hstore_plpython',
 	'intagg', 'jsonb_plperl',
 	'jsonb_plpython', 'ltree_plpython',
@@ -791,6 +791,9 @@ sub mkvcbuild
 		my $bool_plperl = AddTransformModule(
 			'bool_plperl', 'contrib/bool_plperl',
 			'plperl', 'src/pl/plperl');
+		my $bytea_plperl = AddTransformModule(
+			'bytea_plperl', 'contrib/bytea_plperl',
+			'plperl',      'src/pl/plperl');
 		my $hstore_plperl = AddTransformModule(
 			'hstore_plperl', 'contrib/hstore_plperl',
 			'plperl', 'src/pl/plperl',
@@ -802,6 +805,7 @@ sub mkvcbuild
 		foreach my $f (@perl_embed_ccflags)
 		{
 			$bool_plperl->AddDefine($f);
+			$bytea_plperl->AddDefine($f);
 			$hstore_plperl->AddDefine($f);
 			$jsonb_plperl->AddDefine($f);
 		}

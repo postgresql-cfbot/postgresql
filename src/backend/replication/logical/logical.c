@@ -93,10 +93,10 @@ static void stream_message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *tx
 static void stream_truncate_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 									   int nrelations, Relation relations[], ReorderBufferChange *change);
 
-/* callback to update txn's progress */
-static void update_progress_txn_cb_wrapper(ReorderBuffer *cache,
-										   ReorderBufferTXN *txn,
-										   XLogRecPtr lsn);
+static void UpdateProgressAndKeepalive(LogicalDecodingContext *ctx,
+									   bool finished_xact);
+
+static bool is_keepalive_threshold_exceeded(LogicalDecodingContext *ctx);
 
 static void LoadOutputPlugin(OutputPluginCallbacks *callbacks, const char *plugin);
 
@@ -154,7 +154,7 @@ StartupDecodingContext(List *output_plugin_options,
 					   XLogReaderRoutine *xl_routine,
 					   LogicalOutputPluginWriterPrepareWrite prepare_write,
 					   LogicalOutputPluginWriterWrite do_write,
-					   LogicalOutputPluginWriterUpdateProgress update_progress)
+					   LogicalOutputPluginWriterUpdateProgressAndKeepalive update_progress_and_keepalive)
 {
 	ReplicationSlot *slot;
 	MemoryContext context,
@@ -281,16 +281,10 @@ StartupDecodingContext(List *output_plugin_options,
 	ctx->reorder->commit_prepared = commit_prepared_cb_wrapper;
 	ctx->reorder->rollback_prepared = rollback_prepared_cb_wrapper;
 
-	/*
-	 * Callback to support updating progress during sending data of a
-	 * transaction (and its subtransactions) to the output plugin.
-	 */
-	ctx->reorder->update_progress_txn = update_progress_txn_cb_wrapper;
-
 	ctx->out = makeStringInfo();
 	ctx->prepare_write = prepare_write;
 	ctx->write = do_write;
-	ctx->update_progress = update_progress;
+	ctx->update_progress_and_keepalive = update_progress_and_keepalive;
 
 	ctx->output_plugin_options = output_plugin_options;
 
@@ -314,7 +308,7 @@ StartupDecodingContext(List *output_plugin_options,
  *		marking WAL reserved beforehand.  In that scenario, it's up to the
  *		caller to guarantee that WAL remains available.
  * xl_routine -- XLogReaderRoutine for underlying XLogReader
- * prepare_write, do_write, update_progress --
+ * prepare_write, do_write, update_progress_and_keepalive --
  *		callbacks that perform the use-case dependent, actual, work.
  *
  * Needs to be called while in a memory context that's at least as long lived
@@ -332,7 +326,7 @@ CreateInitDecodingContext(const char *plugin,
 						  XLogReaderRoutine *xl_routine,
 						  LogicalOutputPluginWriterPrepareWrite prepare_write,
 						  LogicalOutputPluginWriterWrite do_write,
-						  LogicalOutputPluginWriterUpdateProgress update_progress)
+						  LogicalOutputPluginWriterUpdateProgressAndKeepalive update_progress_and_keepalive)
 {
 	TransactionId xmin_horizon = InvalidTransactionId;
 	ReplicationSlot *slot;
@@ -439,7 +433,7 @@ CreateInitDecodingContext(const char *plugin,
 	ctx = StartupDecodingContext(NIL, restart_lsn, xmin_horizon,
 								 need_full_snapshot, false,
 								 xl_routine, prepare_write, do_write,
-								 update_progress);
+								 update_progress_and_keepalive);
 
 	/* call output plugin initialization callback */
 	old_context = MemoryContextSwitchTo(ctx->context);
@@ -479,7 +473,7 @@ CreateInitDecodingContext(const char *plugin,
  * xl_routine
  *		XLogReaderRoutine used by underlying xlogreader
  *
- * prepare_write, do_write, update_progress
+ * prepare_write, do_write, update_progress_and_keepalive
  *		callbacks that have to be filled to perform the use-case dependent,
  *		actual work.
  *
@@ -497,7 +491,7 @@ CreateDecodingContext(XLogRecPtr start_lsn,
 					  XLogReaderRoutine *xl_routine,
 					  LogicalOutputPluginWriterPrepareWrite prepare_write,
 					  LogicalOutputPluginWriterWrite do_write,
-					  LogicalOutputPluginWriterUpdateProgress update_progress)
+					  LogicalOutputPluginWriterUpdateProgressAndKeepalive update_progress_and_keepalive)
 {
 	LogicalDecodingContext *ctx;
 	ReplicationSlot *slot;
@@ -574,7 +568,7 @@ CreateDecodingContext(XLogRecPtr start_lsn,
 	ctx = StartupDecodingContext(output_plugin_options,
 								 start_lsn, InvalidTransactionId, false,
 								 fast_forward, xl_routine, prepare_write,
-								 do_write, update_progress);
+								 do_write, update_progress_and_keepalive);
 
 	/* call output plugin initialization callback */
 	old_context = MemoryContextSwitchTo(ctx->context);
@@ -689,7 +683,8 @@ void
 OutputPluginPrepareWrite(struct LogicalDecodingContext *ctx, bool last_write)
 {
 	if (!ctx->accept_writes)
-		elog(ERROR, "writes are only accepted in commit, begin and change callbacks");
+		elog(ERROR, "writes are only accepted in output plugin callbacks, "
+			 "except startup, shutdown, filter_by_origin, and filter_prepare");
 
 	ctx->prepare_write(ctx, ctx->write_location, ctx->write_xid, last_write);
 	ctx->prepared_write = true;
@@ -706,20 +701,7 @@ OutputPluginWrite(struct LogicalDecodingContext *ctx, bool last_write)
 
 	ctx->write(ctx, ctx->write_location, ctx->write_xid, last_write);
 	ctx->prepared_write = false;
-}
-
-/*
- * Update progress tracking (if supported).
- */
-void
-OutputPluginUpdateProgress(struct LogicalDecodingContext *ctx,
-						   bool skipped_xact)
-{
-	if (!ctx->update_progress)
-		return;
-
-	ctx->update_progress(ctx, ctx->write_location, ctx->write_xid,
-						 skipped_xact);
+	ctx->did_write = true;
 }
 
 /*
@@ -786,13 +768,14 @@ startup_cb_wrapper(LogicalDecodingContext *ctx, OutputPluginOptions *opt, bool i
 
 	/* set output state */
 	ctx->accept_writes = false;
-	ctx->end_xact = false;
 
 	/* do the actual work: call callback */
 	ctx->callbacks.startup_cb(ctx, opt, is_init);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+	/* No progress has been made, so don't call UpdateProgressAndKeepalive */
 }
 
 static void
@@ -814,13 +797,14 @@ shutdown_cb_wrapper(LogicalDecodingContext *ctx)
 
 	/* set output state */
 	ctx->accept_writes = false;
-	ctx->end_xact = false;
 
 	/* do the actual work: call callback */
 	ctx->callbacks.shutdown_cb(ctx);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+	/* No progress has been made, so don't call UpdateProgressAndKeepalive */
 }
 
 
@@ -850,7 +834,7 @@ begin_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn)
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
 	ctx->write_location = txn->first_lsn;
-	ctx->end_xact = false;
+	ctx->did_write = false;
 
 	/* do the actual work: call callback */
 	ctx->callbacks.begin_cb(ctx, txn);
@@ -882,13 +866,15 @@ commit_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
 	ctx->write_location = txn->end_lsn; /* points to the end of the record */
-	ctx->end_xact = true;
+	ctx->did_write = false;
 
 	/* do the actual work: call callback */
 	ctx->callbacks.commit_cb(ctx, txn, commit_lsn);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+	UpdateProgressAndKeepalive(ctx, true);
 }
 
 /*
@@ -923,7 +909,7 @@ begin_prepare_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn)
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
 	ctx->write_location = txn->first_lsn;
-	ctx->end_xact = false;
+	ctx->did_write = false;
 
 	/*
 	 * If the plugin supports two-phase commits then begin prepare callback is
@@ -968,23 +954,27 @@ prepare_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
 	ctx->write_location = txn->end_lsn; /* points to the end of the record */
-	ctx->end_xact = true;
+	ctx->did_write = false;
 
 	/*
-	 * If the plugin supports two-phase commits then prepare callback is
-	 * mandatory
+	 * If the plugin supports two-phase commits then prepare and other related
+	 * callbacks are mandatory
 	 */
-	if (ctx->callbacks.prepare_cb == NULL)
+	if (ctx->callbacks.prepare_cb == NULL ||
+		ctx->callbacks.commit_prepared_cb == NULL ||
+		ctx->callbacks.rollback_prepared_cb == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("logical replication at prepare time requires a %s callback",
-						"prepare_cb")));
+				 errmsg("logical replication at prepare time requires %s callbacks",
+						"prepare_cb, commit_prepared_cb and rollback_prepared_cb")));
 
 	/* do the actual work: call callback */
 	ctx->callbacks.prepare_cb(ctx, txn, prepare_lsn);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+	UpdateProgressAndKeepalive(ctx, true);
 }
 
 static void
@@ -1013,23 +1003,15 @@ commit_prepared_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
 	ctx->write_location = txn->end_lsn; /* points to the end of the record */
-	ctx->end_xact = true;
-
-	/*
-	 * If the plugin support two-phase commits then commit prepared callback
-	 * is mandatory
-	 */
-	if (ctx->callbacks.commit_prepared_cb == NULL)
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("logical replication at prepare time requires a %s callback",
-						"commit_prepared_cb")));
+	ctx->did_write = false;
 
 	/* do the actual work: call callback */
 	ctx->callbacks.commit_prepared_cb(ctx, txn, commit_lsn);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+	UpdateProgressAndKeepalive(ctx, true);
 }
 
 static void
@@ -1059,17 +1041,7 @@ rollback_prepared_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
 	ctx->write_location = txn->end_lsn; /* points to the end of the record */
-	ctx->end_xact = true;
-
-	/*
-	 * If the plugin support two-phase commits then rollback prepared callback
-	 * is mandatory
-	 */
-	if (ctx->callbacks.rollback_prepared_cb == NULL)
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("logical replication at prepare time requires a %s callback",
-						"rollback_prepared_cb")));
+	ctx->did_write = false;
 
 	/* do the actual work: call callback */
 	ctx->callbacks.rollback_prepared_cb(ctx, txn, prepare_end_lsn,
@@ -1077,6 +1049,8 @@ rollback_prepared_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+	UpdateProgressAndKeepalive(ctx, true);
 }
 
 static void
@@ -1101,6 +1075,7 @@ change_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	/* set output state */
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
+	ctx->did_write = false;
 
 	/*
 	 * Report this change's lsn so replies from clients can give an up-to-date
@@ -1110,12 +1085,13 @@ change_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	 */
 	ctx->write_location = change->lsn;
 
-	ctx->end_xact = false;
-
 	ctx->callbacks.change_cb(ctx, txn, relation, change);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+	if (is_keepalive_threshold_exceeded(ctx))
+		UpdateProgressAndKeepalive(ctx, false);
 }
 
 static void
@@ -1129,7 +1105,7 @@ truncate_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	Assert(!ctx->fast_forward);
 
 	if (!ctx->callbacks.truncate_cb)
-		return;
+		goto out;
 
 	/* Push callback + info on the error context stack */
 	state.ctx = ctx;
@@ -1143,6 +1119,7 @@ truncate_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	/* set output state */
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
+	ctx->did_write = false;
 
 	/*
 	 * Report this change's lsn so replies from clients can give an up-to-date
@@ -1152,12 +1129,14 @@ truncate_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	 */
 	ctx->write_location = change->lsn;
 
-	ctx->end_xact = false;
-
 	ctx->callbacks.truncate_cb(ctx, txn, nrelations, relations, change);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+out:
+	if (is_keepalive_threshold_exceeded(ctx))
+		UpdateProgressAndKeepalive(ctx, false);
 }
 
 bool
@@ -1181,13 +1160,14 @@ filter_prepare_cb_wrapper(LogicalDecodingContext *ctx, TransactionId xid,
 
 	/* set output state */
 	ctx->accept_writes = false;
-	ctx->end_xact = false;
 
 	/* do the actual work: call callback */
 	ret = ctx->callbacks.filter_prepare_cb(ctx, xid, gid);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+	/* No progress has been made, so don't call UpdateProgressAndKeepalive */
 
 	return ret;
 }
@@ -1212,13 +1192,14 @@ filter_by_origin_cb_wrapper(LogicalDecodingContext *ctx, RepOriginId origin_id)
 
 	/* set output state */
 	ctx->accept_writes = false;
-	ctx->end_xact = false;
 
 	/* do the actual work: call callback */
 	ret = ctx->callbacks.filter_by_origin_cb(ctx, origin_id);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+	/* No progress has been made, so don't call UpdateProgressAndKeepalive */
 
 	return ret;
 }
@@ -1235,7 +1216,7 @@ message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	Assert(!ctx->fast_forward);
 
 	if (ctx->callbacks.message_cb == NULL)
-		return;
+		goto out;
 
 	/* Push callback + info on the error context stack */
 	state.ctx = ctx;
@@ -1250,7 +1231,7 @@ message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	ctx->accept_writes = true;
 	ctx->write_xid = txn != NULL ? txn->xid : InvalidTransactionId;
 	ctx->write_location = message_lsn;
-	ctx->end_xact = false;
+	ctx->did_write = false;
 
 	/* do the actual work: call callback */
 	ctx->callbacks.message_cb(ctx, txn, message_lsn, transactional, prefix,
@@ -1258,6 +1239,10 @@ message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+out:
+	if (is_keepalive_threshold_exceeded(ctx))
+		UpdateProgressAndKeepalive(ctx, false);
 }
 
 static void
@@ -1285,6 +1270,7 @@ stream_start_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	/* set output state */
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
+	ctx->did_write = false;
 
 	/*
 	 * Report this message's lsn so replies from clients can give an
@@ -1293,8 +1279,6 @@ stream_start_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	 * transaction's commit to be confirmed with one message.
 	 */
 	ctx->write_location = first_lsn;
-
-	ctx->end_xact = false;
 
 	/* in streaming mode, stream_start_cb is required */
 	if (ctx->callbacks.stream_start_cb == NULL)
@@ -1307,6 +1291,8 @@ stream_start_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+	/* No progress has been made, so don't call UpdateProgressAndKeepalive */
 }
 
 static void
@@ -1334,6 +1320,7 @@ stream_stop_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	/* set output state */
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
+	ctx->did_write = false;
 
 	/*
 	 * Report this message's lsn so replies from clients can give an
@@ -1342,8 +1329,6 @@ stream_stop_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	 * transaction's commit to be confirmed with one message.
 	 */
 	ctx->write_location = last_lsn;
-
-	ctx->end_xact = false;
 
 	/* in streaming mode, stream_stop_cb is required */
 	if (ctx->callbacks.stream_stop_cb == NULL)
@@ -1356,6 +1341,8 @@ stream_stop_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+	/* No progress has been made, so don't call UpdateProgressAndKeepalive */
 }
 
 static void
@@ -1384,7 +1371,7 @@ stream_abort_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
 	ctx->write_location = abort_lsn;
-	ctx->end_xact = true;
+	ctx->did_write = false;
 
 	/* in streaming mode, stream_abort_cb is required */
 	if (ctx->callbacks.stream_abort_cb == NULL)
@@ -1397,6 +1384,8 @@ stream_abort_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+	UpdateProgressAndKeepalive(ctx, (txn->toptxn == NULL));
 }
 
 static void
@@ -1429,19 +1418,26 @@ stream_prepare_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
 	ctx->write_location = txn->end_lsn;
-	ctx->end_xact = true;
+	ctx->did_write = false;
 
-	/* in streaming mode with two-phase commits, stream_prepare_cb is required */
-	if (ctx->callbacks.stream_prepare_cb == NULL)
+	/*
+	 * in streaming mode with two-phase commits, stream_prepare_cb and other
+	 * related callbacks are required
+	 */
+	if (ctx->callbacks.stream_prepare_cb == NULL ||
+		ctx->callbacks.commit_prepared_cb == NULL ||
+		ctx->callbacks.rollback_prepared_cb == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("logical streaming at prepare time requires a %s callback",
-						"stream_prepare_cb")));
+				 errmsg("logical streaming at prepare time requires %s callbacks",
+						"stream_prepare_cb, commit_prepared_cb and rollback_prepared_cb")));
 
 	ctx->callbacks.stream_prepare_cb(ctx, txn, prepare_lsn);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+	UpdateProgressAndKeepalive(ctx, true);
 }
 
 static void
@@ -1470,7 +1466,7 @@ stream_commit_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
 	ctx->write_location = txn->end_lsn;
-	ctx->end_xact = true;
+	ctx->did_write = false;
 
 	/* in streaming mode, stream_commit_cb is required */
 	if (ctx->callbacks.stream_commit_cb == NULL)
@@ -1483,6 +1479,8 @@ stream_commit_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+	UpdateProgressAndKeepalive(ctx, true);
 }
 
 static void
@@ -1510,6 +1508,7 @@ stream_change_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	/* set output state */
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
+	ctx->did_write = false;
 
 	/*
 	 * Report this change's lsn so replies from clients can give an up-to-date
@@ -1518,8 +1517,6 @@ stream_change_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	 * commit to be confirmed with one message.
 	 */
 	ctx->write_location = change->lsn;
-
-	ctx->end_xact = false;
 
 	/* in streaming mode, stream_change_cb is required */
 	if (ctx->callbacks.stream_change_cb == NULL)
@@ -1532,6 +1529,9 @@ stream_change_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+	if (is_keepalive_threshold_exceeded(ctx))
+		UpdateProgressAndKeepalive(ctx, false);
 }
 
 static void
@@ -1550,7 +1550,7 @@ stream_message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 	/* this callback is optional */
 	if (ctx->callbacks.stream_message_cb == NULL)
-		return;
+		goto out;
 
 	/* Push callback + info on the error context stack */
 	state.ctx = ctx;
@@ -1565,7 +1565,7 @@ stream_message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	ctx->accept_writes = true;
 	ctx->write_xid = txn != NULL ? txn->xid : InvalidTransactionId;
 	ctx->write_location = message_lsn;
-	ctx->end_xact = false;
+	ctx->did_write = false;
 
 	/* do the actual work: call callback */
 	ctx->callbacks.stream_message_cb(ctx, txn, message_lsn, transactional, prefix,
@@ -1573,6 +1573,10 @@ stream_message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+out:
+	if (is_keepalive_threshold_exceeded(ctx))
+		UpdateProgressAndKeepalive(ctx, false);
 }
 
 static void
@@ -1591,7 +1595,7 @@ stream_truncate_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 	/* this callback is optional */
 	if (!ctx->callbacks.stream_truncate_cb)
-		return;
+		goto out;
 
 	/* Push callback + info on the error context stack */
 	state.ctx = ctx;
@@ -1605,6 +1609,7 @@ stream_truncate_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	/* set output state */
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
+	ctx->did_write = false;
 
 	/*
 	 * Report this change's lsn so replies from clients can give an up-to-date
@@ -1614,51 +1619,80 @@ stream_truncate_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	 */
 	ctx->write_location = change->lsn;
 
-	ctx->end_xact = false;
-
 	ctx->callbacks.stream_truncate_cb(ctx, txn, nrelations, relations, change);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+
+out:
+	if (is_keepalive_threshold_exceeded(ctx))
+		UpdateProgressAndKeepalive(ctx, false);
 }
 
-static void
-update_progress_txn_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
-							   XLogRecPtr lsn)
+/*
+ * Helper function to check for continuous skipping of many changes without
+ * sending them to the output plugin.
+ */
+static bool
+is_keepalive_threshold_exceeded(LogicalDecodingContext *ctx)
 {
-	LogicalDecodingContext *ctx = cache->private_data;
-	LogicalErrorCallbackState state;
-	ErrorContextCallback errcallback;
+	/*
+	 * The counter for accumulating the number of consecutively skipped
+	 * changes.
+	 *
+	 * XXX This counter is not reset at the end of a transaction. The worst
+	 * case this leads to is a delay in sending the keepalive message for the
+	 * next transaction. But testing shows that using CHANGES_THRESHOLD (see
+	 * below) is safe enough.
+	 */
+	static int	changes_count = 0;
 
-	Assert(!ctx->fast_forward);
-
-	/* Push callback + info on the error context stack */
-	state.ctx = ctx;
-	state.callback_name = "update_progress_txn";
-	state.report_location = lsn;
-	errcallback.callback = output_plugin_error_callback;
-	errcallback.arg = (void *) &state;
-	errcallback.previous = error_context_stack;
-	error_context_stack = &errcallback;
-
-	/* set output state */
-	ctx->accept_writes = false;
-	ctx->write_xid = txn->xid;
+	/* If the change was published, reset the counter and return false */
+	if (ctx->did_write)
+	{
+		changes_count = 0;
+		return false;
+	}
 
 	/*
-	 * Report this change's lsn so replies from clients can give an up-to-date
-	 * answer. This won't ever be enough (and shouldn't be!) to confirm
-	 * receipt of this transaction, but it might allow another transaction's
-	 * commit to be confirmed with one message.
+	 * It is possible that the data is not sent to downstream for a long time
+	 * either because the output plugin filtered it or there is a DDL that
+	 * generates a lot of data that is not processed by the plugin. So, in
+	 * such cases, the downstream can timeout. To avoid that we try to send a
+	 * keepalive message if required.  Trying to send a keepalive message
+	 * after every change has some overhead, but testing showed there is no
+	 * noticeable overhead if we do it after every ~100 changes.
 	 */
-	ctx->write_location = lsn;
+#define CHANGES_THRESHOLD 100
+	if (++changes_count >= CHANGES_THRESHOLD)
+	{
+		changes_count = 0;
+		return true;
+	}
 
-	ctx->end_xact = false;
+	return false;
+}
 
-	OutputPluginUpdateProgress(ctx, false);
+/*
+ * Update progress tracking and send keepalive (if required).
+ *
+ * We should update progress in time when the transaction is completed, and
+ * send keepalive messages if required to prevent the subscriber from timing
+ * out during the decoding process.
+ *
+ * Note: We ignore timeout handling on some code paths. This is because the
+ * harm of this handling due to the increased overhead is higher than the
+ * benefit.
+ */
+static void
+UpdateProgressAndKeepalive(LogicalDecodingContext *ctx, bool finished_xact)
+{
+	if (!ctx->update_progress_and_keepalive)
+		return;
 
-	/* Pop the error context stack */
-	error_context_stack = errcallback.previous;
+	ctx->update_progress_and_keepalive(ctx, ctx->write_location,
+									   ctx->write_xid, ctx->did_write,
+									   finished_xact);
 }
 
 /*
@@ -1948,4 +1982,27 @@ UpdateDecodingStats(LogicalDecodingContext *ctx)
 	rb->streamBytes = 0;
 	rb->totalTxns = 0;
 	rb->totalBytes = 0;
+}
+
+/*
+ * UpdateDecodingProgressAndKeepalive
+ *
+ * During the logical decoding process, when no data is sent to the subscriber
+ * due to skipping the entire transaction or processing unlogged table data
+ * and temporary data, try to update progress and send a keepalive message.
+ */
+void
+UpdateDecodingProgressAndKeepalive(LogicalDecodingContext *ctx,
+								   TransactionId xid,
+								   XLogRecPtr lsn,
+								   bool finished_xact)
+{
+	/* set output state */
+	ctx->accept_writes = false;
+	ctx->write_xid = xid;
+	ctx->write_location = lsn;
+	ctx->did_write = false;
+
+	if (finished_xact || is_keepalive_threshold_exceeded(ctx))
+		UpdateProgressAndKeepalive(ctx, finished_xact);
 }

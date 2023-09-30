@@ -628,7 +628,7 @@
 #log_parser_stats = off
 #log_planner_stats = off
 #log_executor_stats = off
-
+#query_id_const_merge = off
 
 #------------------------------------------------------------------------------
 # AUTOVACUUM

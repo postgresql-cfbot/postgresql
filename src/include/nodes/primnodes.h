@@ -1296,6 +1296,8 @@ typedef struct CaseTestExpr
  */
 typedef struct ArrayExpr
 {
+	pg_node_attr(custom_query_jumble)
+
 	Expr		xpr;
 	/* type of expression result */
 	Oid			array_typeid pg_node_attr(query_jumble_ignore);

@@ -60,6 +60,7 @@ OBJS_COMMON = \
 	file_perm.o \
 	file_utils.o \
 	hashfn.o \
+	instr_time.o \
 	ip.o \
 	jsonapi.o \
 	keywords.o \

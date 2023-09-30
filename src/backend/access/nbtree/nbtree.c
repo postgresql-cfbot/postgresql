@@ -87,6 +87,8 @@ static BTVacuumPosting btreevacuumposting(BTVacState *vstate,
 										  OffsetNumber updatedoffset,
 										  int *nremaining);
 
+#define NBT_SPECIALIZE_FILE "../../backend/access/nbtree/nbtree_spec.c"
+#include "access/nbtree_spec.h"
 
 /*
  * Btree handler function: return IndexAmRoutine with access method parameters
@@ -121,7 +123,7 @@ bthandler(PG_FUNCTION_ARGS)
 
 	amroutine->ambuild = btbuild;
 	amroutine->ambuildempty = btbuildempty;
-	amroutine->aminsert = btinsert;
+	amroutine->aminsert = btinsert_default;
 	amroutine->ambulkdelete = btbulkdelete;
 	amroutine->amvacuumcleanup = btvacuumcleanup;
 	amroutine->amcanreturn = btcanreturn;
@@ -155,6 +157,8 @@ btbuildempty(Relation index)
 	Buffer		metabuf;
 	Page		metapage;
 
+	nbt_opt_specialize(index);
+
 	/*
 	 * Initalize the metapage.
 	 *
@@ -178,33 +182,6 @@ btbuildempty(Relation index)
 
 	_bt_unlockbuf(index, metabuf);
 	ReleaseBuffer(metabuf);
-}
-
-/*
- *	btinsert() -- insert an index tuple into a btree.
- *
- *		Descend the tree recursively, find the appropriate location for our
- *		new tuple, and put it there.
- */
-bool
-btinsert(Relation rel, Datum *values, bool *isnull,
-		 ItemPointer ht_ctid, Relation heapRel,
-		 IndexUniqueCheck checkUnique,
-		 bool indexUnchanged,
-		 IndexInfo *indexInfo)
-{
-	bool		result;
-	IndexTuple	itup;
-
-	/* generate an index tuple */
-	itup = index_form_tuple(RelationGetDescr(rel), values, isnull);
-	itup->t_tid = *ht_ctid;
-
-	result = _bt_doinsert(rel, itup, checkUnique, indexUnchanged, heapRel);
-
-	pfree(itup);
-
-	return result;
 }
 
 /*
@@ -347,6 +324,8 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
 {
 	IndexScanDesc scan;
 	BTScanOpaque so;
+
+	nbt_opt_specialize(rel);
 
 	/* no order by operators allowed */
 	Assert(norderbys == 0);
@@ -791,6 +770,8 @@ btbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 {
 	Relation	rel = info->index;
 	BTCycleId	cycleid;
+
+	nbt_opt_specialize(rel);
 
 	/* allocate stats if first time through, else re-use existing struct */
 	if (stats == NULL)

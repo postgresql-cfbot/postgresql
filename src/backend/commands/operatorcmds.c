@@ -426,6 +426,14 @@ AlterOperator(AlterOperatorStmt *stmt)
 	List	   *joinName = NIL; /* optional join sel. function */
 	bool		updateJoin = false;
 	Oid			joinOid;
+	List	   *commutatorName = NIL;	/* optional commutator operator name */
+	Oid			commutatorOid;
+	List	   *negatorName = NIL;	/* optional negator operator name */
+	Oid			negatorOid;
+	bool		updateHashes = false;
+	bool		canHash = false;
+	bool		updateMerges = false;
+	bool		canMerge = false;
 
 	/* Look up the operator */
 	oprId = LookupOperWithArgs(stmt->opername, false);
@@ -456,6 +464,24 @@ AlterOperator(AlterOperatorStmt *stmt)
 			joinName = param;
 			updateJoin = true;
 		}
+		else if (strcmp(defel->defname, "commutator") == 0)
+		{
+			commutatorName = defGetQualifiedName(defel);
+		}
+		else if (strcmp(defel->defname, "negator") == 0)
+		{
+			negatorName = defGetQualifiedName(defel);
+		}
+		else if (strcmp(defel->defname, "hashes") == 0)
+		{
+			canHash = defGetBoolean(defel);
+			updateHashes = true;
+		}
+		else if (strcmp(defel->defname, "merges") == 0)
+		{
+			canMerge = defGetBoolean(defel);
+			updateMerges = true;
+		}
 
 		/*
 		 * The rest of the options that CREATE accepts cannot be changed.
@@ -464,11 +490,7 @@ AlterOperator(AlterOperatorStmt *stmt)
 		else if (strcmp(defel->defname, "leftarg") == 0 ||
 				 strcmp(defel->defname, "rightarg") == 0 ||
 				 strcmp(defel->defname, "function") == 0 ||
-				 strcmp(defel->defname, "procedure") == 0 ||
-				 strcmp(defel->defname, "commutator") == 0 ||
-				 strcmp(defel->defname, "negator") == 0 ||
-				 strcmp(defel->defname, "hashes") == 0 ||
-				 strcmp(defel->defname, "merges") == 0)
+				 strcmp(defel->defname, "procedure") == 0)
 		{
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -488,7 +510,7 @@ AlterOperator(AlterOperatorStmt *stmt)
 					   NameStr(oprForm->oprname));
 
 	/*
-	 * Look up restriction and join estimators if specified
+	 * Look up Oid for any parameters specified
 	 */
 	if (restrictionName)
 		restrictionOid = ValidateRestrictionEstimator(restrictionName);
@@ -499,27 +521,79 @@ AlterOperator(AlterOperatorStmt *stmt)
 	else
 		joinOid = InvalidOid;
 
-	/* Perform additional checks, like OperatorCreate does */
-	if (!(OidIsValid(oprForm->oprleft) && OidIsValid(oprForm->oprright)))
+	if (commutatorName)
 	{
-		/* If it's not a binary op, these things mustn't be set: */
-		if (OidIsValid(joinOid))
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
-					 errmsg("only binary operators can have join selectivity")));
+		commutatorOid = OperatorGetOrCreateValidCommutator(commutatorName,
+														   oprForm->oid,
+														   oprForm->oprname.data,
+														   oprForm->oprnamespace,
+														   oprForm->oprleft,
+														   oprForm->oprright);
+
+		/*
+		 * we don't need to do anything extra for a self commutator as in
+		 * OperatorCreate as there we have to create the operator before
+		 * setting the commutator, but here the operator already exists and
+		 * the commutatorOid above is valid (and is the operator oid).
+		 */
+	}
+	else
+		commutatorOid = InvalidOid;
+
+	if (negatorName)
+		negatorOid = OperatorGetOrCreateValidNegator(negatorName,
+													 oprForm->oid,
+													 oprForm->oprname.data,
+													 oprForm->oprnamespace,
+													 oprForm->oprleft,
+													 oprForm->oprright);
+	else
+		negatorOid = InvalidOid;
+
+	/*
+	 * check that we're not changing any existing values that might be depended
+	 * on elsewhere and may be expected to never change, while allowing no-ops.
+	 */
+	if (OidIsValid(commutatorOid) && OidIsValid(oprForm->oprcom)
+		&& commutatorOid != oprForm->oprcom)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
+				 errmsg("operator attribute \"commutator\" cannot be changed if it has already been set")));
 	}
 
-	if (oprForm->oprresult != BOOLOID)
+	if (OidIsValid(negatorOid) && OidIsValid(oprForm->oprnegate)
+		&& negatorOid != oprForm->oprnegate)
 	{
-		if (OidIsValid(restrictionOid))
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
-					 errmsg("only boolean operators can have restriction selectivity")));
-		if (OidIsValid(joinOid))
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
-					 errmsg("only boolean operators can have join selectivity")));
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
+				 errmsg("operator attribute \"negator\" cannot be changed if it has already been set")));
 	}
+
+	if (updateHashes && oprForm->oprcanhash && !canHash)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
+				 errmsg("operator attribute \"hashes\" cannot be changed if it has already been set")));
+	}
+
+	if (updateMerges && oprForm->oprcanmerge && !canMerge)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
+				 errmsg("operator attribute \"merges\" cannot be changed if it has already been set")));
+	}
+
+	/* Perform additional checks, like OperatorCreate does */
+	OperatorValidateParams(oprForm->oprleft,
+						   oprForm->oprright,
+						   oprForm->oprresult,
+						   OidIsValid(commutatorOid),
+						   OidIsValid(negatorOid),
+						   OidIsValid(joinOid),
+						   OidIsValid(restrictionOid),
+						   updateMerges,
+						   updateHashes);
 
 	/* Update the tuple */
 	for (i = 0; i < Natts_pg_operator; ++i)
@@ -539,6 +613,30 @@ AlterOperator(AlterOperatorStmt *stmt)
 		values[Anum_pg_operator_oprjoin - 1] = joinOid;
 	}
 
+	if (OidIsValid(commutatorOid))
+	{
+		replaces[Anum_pg_operator_oprcom - 1] = true;
+		values[Anum_pg_operator_oprcom - 1] = ObjectIdGetDatum(commutatorOid);
+	}
+
+	if (OidIsValid(negatorOid))
+	{
+		replaces[Anum_pg_operator_oprnegate - 1] = true;
+		values[Anum_pg_operator_oprnegate - 1] = ObjectIdGetDatum(negatorOid);
+	}
+
+	if (updateMerges)
+	{
+		replaces[Anum_pg_operator_oprcanmerge - 1] = true;
+		values[Anum_pg_operator_oprcanmerge - 1] = canMerge;
+	}
+
+	if (updateHashes)
+	{
+		replaces[Anum_pg_operator_oprcanhash - 1] = true;
+		values[Anum_pg_operator_oprcanhash - 1] = canHash;
+	}
+
 	tup = heap_modify_tuple(tup, RelationGetDescr(catalog),
 							values, nulls, replaces);
 
@@ -549,6 +647,9 @@ AlterOperator(AlterOperatorStmt *stmt)
 	InvokeObjectPostAlterHook(OperatorRelationId, oprId, 0);
 
 	table_close(catalog, NoLock);
+
+	if (OidIsValid(commutatorOid) || OidIsValid(negatorOid))
+		OperatorUpd(oprId, commutatorOid, negatorOid, false);
 
 	return address;
 }

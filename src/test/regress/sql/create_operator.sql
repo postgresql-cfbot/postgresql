@@ -210,6 +210,42 @@ CREATE OPERATOR #*# (
 );
 ROLLBACK;
 
+-- Should fail. An operator cannot have a self negator.
+BEGIN TRANSACTION;
+CREATE FUNCTION create_op_test_fn(boolean, boolean)
+RETURNS boolean AS $$
+    SELECT NULL::BOOLEAN;
+$$ LANGUAGE sql IMMUTABLE;
+CREATE OPERATOR === (
+    leftarg = boolean,
+    rightarg = boolean,
+    procedure = create_op_test_fn,
+    negator = ===
+);
+ROLLBACK;
+
+-- Should fail. An operator cannot have a self negator. Here we test that when
+-- 'creating' an existing shell operator, it checks the negator is not self.
+BEGIN TRANSACTION;
+CREATE FUNCTION create_op_test_fn(boolean, boolean)
+RETURNS boolean AS $$
+    SELECT NULL::BOOLEAN;
+$$ LANGUAGE sql IMMUTABLE;
+-- create a shell operator for ===!!! by referencing it as a commutator
+CREATE OPERATOR === (
+    leftarg = boolean,
+    rightarg = boolean,
+    procedure = create_op_test_fn,
+    commutator = ===!!!
+);
+CREATE OPERATOR ===!!! (
+    leftarg = boolean,
+    rightarg = boolean,
+    procedure = create_op_test_fn,
+    negator = ===!!!
+);
+ROLLBACK;
+
 -- invalid: non-lowercase quoted identifiers
 CREATE OPERATOR ===
 (

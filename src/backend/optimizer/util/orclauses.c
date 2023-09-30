@@ -265,7 +265,6 @@ consider_new_or_clause(PlannerInfo *root, RelOptInfo *rel,
 	 */
 	or_rinfo = make_restrictinfo(root,
 								 orclause,
-								 true,
 								 false,
 								 false,
 								 false,

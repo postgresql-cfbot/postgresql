@@ -196,7 +196,6 @@ process_equivalence(PlannerInfo *root,
 			*p_restrictinfo =
 				make_restrictinfo(root,
 								  (Expr *) ntest,
-								  restrictinfo->is_pushed_down,
 								  restrictinfo->has_clone,
 								  restrictinfo->is_clone,
 								  restrictinfo->pseudoconstant,
@@ -2005,7 +2004,6 @@ reconsider_outer_join_clauses(PlannerInfo *root)
 				/* throw back a dummy replacement clause (see notes above) */
 				rinfo = make_restrictinfo(root,
 										  (Expr *) makeBoolConst(true, false),
-										  rinfo->is_pushed_down,
 										  rinfo->has_clone,
 										  rinfo->is_clone,
 										  false,	/* pseudoconstant */
@@ -2033,7 +2031,6 @@ reconsider_outer_join_clauses(PlannerInfo *root)
 				/* throw back a dummy replacement clause (see notes above) */
 				rinfo = make_restrictinfo(root,
 										  (Expr *) makeBoolConst(true, false),
-										  rinfo->is_pushed_down,
 										  rinfo->has_clone,
 										  rinfo->is_clone,
 										  false,	/* pseudoconstant */
@@ -2061,7 +2058,6 @@ reconsider_outer_join_clauses(PlannerInfo *root)
 				/* throw back a dummy replacement clause (see notes above) */
 				rinfo = make_restrictinfo(root,
 										  (Expr *) makeBoolConst(true, false),
-										  rinfo->is_pushed_down,
 										  rinfo->has_clone,
 										  rinfo->is_clone,
 										  false,	/* pseudoconstant */

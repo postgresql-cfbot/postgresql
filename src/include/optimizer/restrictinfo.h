@@ -19,12 +19,11 @@
 
 /* Convenience macro for the common case of a valid-everywhere qual */
 #define make_simple_restrictinfo(root, clause)  \
-	make_restrictinfo(root, clause, true, false, false, false, 0, \
+	make_restrictinfo(root, clause, false, false, false, 0, \
 		NULL, NULL, NULL)
 
 extern RestrictInfo *make_restrictinfo(PlannerInfo *root,
 									   Expr *clause,
-									   bool is_pushed_down,
 									   bool has_clone,
 									   bool is_clone,
 									   bool pseudoconstant,
@@ -41,6 +40,7 @@ extern List *extract_actual_clauses(List *restrictinfo_list,
 									bool pseudoconstant);
 extern void extract_actual_join_clauses(List *restrictinfo_list,
 										Relids joinrelids,
+										Relids ojrelids,
 										List **joinquals,
 										List **otherquals);
 extern bool join_clause_is_movable_to(RestrictInfo *rinfo, RelOptInfo *baserel);

@@ -1,0 +1,75 @@
+-- Create test table
+CREATE TABLE IF NOT EXISTS pg_tracing_test (a int, b char(20));
+-- Enable full sampling
+SET pg_tracing.sample_rate = 1.0;
+-- Start a transaction with subxaction
+BEGIN;
+SAVEPOINT s1;
+INSERT INTO pg_tracing_test VALUES(generate_series(1, 2), 'aaa');
+SAVEPOINT s2;
+INSERT INTO pg_tracing_test VALUES(generate_series(1, 2), 'aaa');
+SAVEPOINT s3;
+SELECT 1;
+ ?column? 
+----------
+        1
+(1 row)
+
+COMMIT;
+-- Check that subxact_count is correctly reported
+select resource, parameters, subxact_count from pg_tracing_consume_spans order by span_start, span_start_ns;
+                             resource                             |         parameters         | subxact_count 
+------------------------------------------------------------------+----------------------------+---------------
+ BEGIN;                                                           |                            |             0
+ Parse                                                            |                            |             0
+ Post Parse                                                       |                            |             0
+ BEGIN;                                                           |                            |             0
+ SAVEPOINT $1;                                                    | $1 = s1                    |             0
+ Parse                                                            |                            |             0
+ Post Parse                                                       |                            |             0
+ SAVEPOINT s1;                                                    |                            |             0
+ INSERT INTO pg_tracing_test VALUES(generate_series($1, $2), $3); | $1 = 1, $2 = 2, $3 = 'aaa' |             0
+ Parse                                                            |                            |             0
+ Post Parse                                                       |                            |             0
+ Planner                                                          |                            |             0
+ Start                                                            |                            |             0
+ Run                                                              |                            |             0
+ Insert on pg_tracing_test                                        |                            |             1
+ ProjectSet                                                       |                            |             1
+ Result                                                           |                            |             1
+ Finish                                                           |                            |             1
+ End                                                              |                            |             1
+ SAVEPOINT $1;                                                    | $1 = s2                    |             1
+ Parse                                                            |                            |             1
+ Post Parse                                                       |                            |             1
+ SAVEPOINT s2;                                                    |                            |             1
+ INSERT INTO pg_tracing_test VALUES(generate_series($1, $2), $3); | $1 = 1, $2 = 2, $3 = 'aaa' |             1
+ Parse                                                            |                            |             1
+ Post Parse                                                       |                            |             1
+ Planner                                                          |                            |             1
+ Start                                                            |                            |             1
+ Run                                                              |                            |             1
+ Insert on pg_tracing_test                                        |                            |             2
+ ProjectSet                                                       |                            |             2
+ Result                                                           |                            |             2
+ Finish                                                           |                            |             2
+ End                                                              |                            |             2
+ SAVEPOINT $1;                                                    | $1 = s3                    |             2
+ Parse                                                            |                            |             2
+ Post Parse                                                       |                            |             2
+ SAVEPOINT s3;                                                    |                            |             2
+ SELECT $1;                                                       | $1 = 1                     |             2
+ Parse                                                            |                            |             2
+ Post Parse                                                       |                            |             2
+ Planner                                                          |                            |             2
+ Start                                                            |                            |             2
+ Run                                                              |                            |             2
+ Result                                                           |                            |             2
+ Finish                                                           |                            |             2
+ End                                                              |                            |             2
+ COMMIT;                                                          |                            |             2
+ Parse                                                            |                            |             2
+ Post Parse                                                       |                            |             2
+ COMMIT;                                                          |                            |             2
+(51 rows)
+

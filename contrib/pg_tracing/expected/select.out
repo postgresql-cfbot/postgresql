@@ -1,0 +1,229 @@
+-- Only trace queries with sample flag
+SET pg_tracing.sample_rate = 0.0;
+SET pg_tracing.caller_sample_rate = 1.0;
+-- Run a simple query
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000001-0000000000000001-01'*/ SELECT 1;
+ ?column? 
+----------
+        1
+(1 row)
+
+-- Get top span id
+SELECT span_id AS top_span_id from pg_tracing_peek_spans where parent_id=1 and name!='Parse' \gset
+-- Check parameters
+SELECT parameters from pg_tracing_peek_spans where span_id=:top_span_id;
+ parameters 
+------------
+ $1 = 1
+(1 row)
+
+-- Check the number of children
+SELECT count(*) from pg_tracing_peek_spans where parent_id=:'top_span_id';
+ count 
+-------
+     7
+(1 row)
+
+-- Check resource and query id
+SELECT name, resource, query_id from pg_tracing_peek_spans where trace_id=1 order by span_start, span_start_ns, resource;
+    name    |  resource  |      query_id       
+------------+------------+---------------------
+ Parse      | Parse      | 6865378226349601843
+ Select     | SELECT $1; | 6865378226349601843
+ Post Parse | Post Parse | 6865378226349601843
+ Planner    | Planner    | 6865378226349601843
+ Executor   | Start      | 6865378226349601843
+ Executor   | Run        | 6865378226349601843
+ Result     | Result     | 6865378226349601843
+ Executor   | Finish     | 6865378226349601843
+ Executor   | End        | 6865378226349601843
+(9 rows)
+
+-- Check reported number of trace
+SELECT traces from pg_tracing_info;
+ traces 
+--------
+     15
+(1 row)
+
+-- Trace a statement with function call
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000003-0000000000000003-01'*/ SELECT count(*) from current_database();
+ count 
+-------
+     1
+(1 row)
+
+-- Check the generated span name, resource and order of function call
+SELECT name, resource from pg_tracing_consume_spans where trace_id=3 order by resource;
+     name     |                 resource                 
+--------------+------------------------------------------
+ Aggregate    | Aggregate
+ Executor     | End
+ Executor     | Finish
+ FunctionScan | FunctionScan on current_database
+ Parse        | Parse
+ Planner      | Planner
+ Post Parse   | Post Parse
+ Executor     | Run
+ Select       | SELECT count(*) from current_database();
+ Executor     | Start
+(10 rows)
+
+-- Trace a more complex query with multiple function calls
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000004-0000000000000004-01'*/ SELECT s.relation_size + s.index_size
+FROM (SELECT
+      pg_relation_size(C.oid) as relation_size,
+      pg_indexes_size(C.oid) as index_size
+    FROM pg_class C) as s limit 1;
+ ?column? 
+----------
+        0
+(1 row)
+
+-- Check the generated span name, resource and order of query with multiple function calls
+SELECT name, resource from pg_tracing_consume_spans where trace_id=4 order by resource;
+     name     |                                                                             resource                                                                             
+--------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Executor     | End
+ Executor     | Finish
+ Limit        | Limit
+ Parse        | Parse
+ Planner      | Planner
+ Post Parse   | Post Parse
+ Executor     | Run
+ Select       | SELECT s.relation_size + s.index_sizeFROM (SELECT pg_relation_size(C.oid) as relation_size, pg_indexes_size(C.oid) as index_size FROM pg_class C) as s limit $1;
+ SeqScan      | SeqScan on pg_class c
+ Executor     | Start
+ SubqueryScan | SubqueryScan on s
+(11 rows)
+
+-- Check that we're in a correct state after a timeout
+set statement_timeout=200;
+-- Trace query triggering a statement timeout
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000007-0000000000000007-01'*/ select * from pg_sleep(10);
+ERROR:  canceling statement due to statement timeout
+-- Trace a working query after the timeout to check we're in a consistent state
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000008-0000000000000008-01'*/ select 1;
+ ?column? 
+----------
+        1
+(1 row)
+
+-- Check the spans order and error code
+SELECT name, resource, sql_error_code from pg_tracing_consume_spans order by span_start, span_start_ns, resource;
+     name     |          resource           | sql_error_code 
+--------------+-----------------------------+----------------
+ Parse        | Parse                       | 00000
+ Select       | select * from pg_sleep($1); | 57014
+ Post Parse   | Post Parse                  | 00000
+ Planner      | Planner                     | 00000
+ Executor     | Start                       | 00000
+ Executor     | Run                         | 57014
+ FunctionScan | FunctionScan on pg_sleep    | 57014
+ Parse        | Parse                       | 00000
+ Select       | select $1;                  | 00000
+ Post Parse   | Post Parse                  | 00000
+ Planner      | Planner                     | 00000
+ Executor     | Start                       | 00000
+ Executor     | Run                         | 00000
+ Result       | Result                      | 00000
+ Executor     | Finish                      | 00000
+ Executor     | End                         | 00000
+(16 rows)
+
+-- Cleanup statement setting
+set statement_timeout=0;
+-- Create a prepare statement with comment passed as first parameter
+PREPARE test_prepared (text, integer) AS /*$1*/ SELECT $2;
+-- Execute prepare statement with trace context passed as a parameter
+EXECUTE test_prepared('dddbs=''postgres.db'',traceparent=''00-00000000000000000000000000000009-0000000000000009-01''', 1);
+ ?column? 
+----------
+        1
+(1 row)
+
+-- Check generated spans and order
+SELECT trace_id, name, resource, parameters from pg_tracing_consume_spans order by span_start, span_start_ns, resource;
+ trace_id |   name   |                      resource                       |                                                   parameters                                                   
+----------+----------+-----------------------------------------------------+----------------------------------------------------------------------------------------------------------------
+        9 | Select   | PREPARE test_prepared (text, integer) AS SELECT $2; | $1 = 'dddbs=''postgres.db'',traceparent=''00-00000000000000000000000000000009-0000000000000009-01''', $2 = '1'
+        9 | Planner  | Planner                                             | 
+        9 | Executor | Start                                               | 
+        9 | Executor | Run                                                 | 
+        9 | Result   | Result                                              | 
+        9 | Executor | Finish                                              | 
+        9 | Executor | End                                                 | 
+(7 rows)
+
+-- Test prepared statement with generic plan
+SET plan_cache_mode='force_generic_plan';
+-- Execute prepare statement with trace context passed as a parameter and generic plan
+EXECUTE test_prepared('dddbs=''postgres.db'',traceparent=''00-00000000000000000000000000000010-0000000000000010-01''', 10);
+ ?column? 
+----------
+       10
+(1 row)
+
+-- Check spans are generated even through generic plan
+SELECT trace_id, resource, parameters from pg_tracing_consume_spans order by span_start, span_start_ns, resource;
+ trace_id |                      resource                       | parameters 
+----------+-----------------------------------------------------+------------
+       16 | PREPARE test_prepared (text, integer) AS SELECT $2; | 
+       16 | Start                                               | 
+       16 | Run                                                 | 
+       16 | Result                                              | 
+       16 | Finish                                              | 
+       16 | End                                                 | 
+(6 rows)
+
+-- Run a statement with node not executed
+/*dddbs='postgres.db',traceparent='00-0000000000000000000000000000000a-000000000000000a-01'*/ select 1 limit 0;
+ ?column? 
+----------
+(0 rows)
+
+-- Not executed node should not generate any spans
+SELECT trace_id, resource, parameters from pg_tracing_consume_spans order by span_start, span_start_ns, resource;
+ trace_id |      resource       |   parameters   
+----------+---------------------+----------------
+       10 | Parse               | 
+       10 | select $1 limit $2; | $1 = 1, $2 = 0
+       10 | Post Parse          | 
+       10 | Planner             | 
+       10 | Start               | 
+       10 | Run                 | 
+       10 | Limit               | 
+       10 | Finish              | 
+       10 | End                 | 
+(9 rows)
+
+-- Test multiple statements in a single query
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000011-0000000000000012-01'*/ select 1; select 2;
+ ?column? 
+----------
+        1
+(1 row)
+
+ ?column? 
+----------
+        2
+(1 row)
+
+-- Not executed node should not generate any spans
+select resource, parameters from pg_tracing_consume_spans order by span_start, span_start_ns;
+  resource  | parameters 
+------------+------------
+ select $1; | $1 = 1
+ Parse      | 
+ Post Parse | 
+ Planner    | 
+ Start      | 
+ Run        | 
+ Result     | 
+ Finish     | 
+ End        | 
+(9 rows)
+
+-- Cleanup
+SET plan_cache_mode='auto';
+DEALLOCATE test_prepared;

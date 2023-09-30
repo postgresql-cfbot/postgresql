@@ -72,6 +72,7 @@ typedef struct Instrumentation
 	bool		async_mode;		/* true if node is in async mode */
 	/* Info about current plan cycle: */
 	bool		running;		/* true if we've completed first tuple */
+	instr_time	firsttime;		/* start time of this node */
 	instr_time	starttime;		/* start time of current iteration of node */
 	instr_time	counter;		/* accumulated runtime for this node */
 	double		firsttuple;		/* time for first tuple of this cycle */

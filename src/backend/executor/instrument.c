@@ -70,6 +70,7 @@ InstrStartNode(Instrumentation *instr)
 	if (instr->need_timer &&
 		!INSTR_TIME_SET_CURRENT_LAZY(instr->starttime))
 		elog(ERROR, "InstrStartNode called twice in a row");
+	INSTR_TIME_SET_CURRENT_LAZY(instr->firsttime);
 
 	/* save buffer usage totals at node entry, if needed */
 	if (instr->need_bufusage)

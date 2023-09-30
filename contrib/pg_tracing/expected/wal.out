@@ -1,0 +1,96 @@
+-- Create test table
+CREATE TABLE IF NOT EXISTS pg_tracing_test (a int, b char(20));
+NOTICE:  relation "pg_tracing_test" already exists, skipping
+-- Enable wal instrumentation
+set pg_tracing.instrument_wal = true;
+-- Generate queries with wal write
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000001-0000000000000001-01'*/ INSERT INTO pg_tracing_test VALUES(generate_series(1, 10), 'aaa');
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000002-0000000000000002-01'*/ UPDATE pg_tracing_test SET b = 'bbb' WHERE a > 7;
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000003-0000000000000003-01'*/ DELETE FROM pg_tracing_test WHERE a > 9;
+-- Check WAL is generated for the above statements
+SELECT trace_id, name, resource,
+       wal_records > 0 as wal_records,
+       wal_bytes > 0 as wal_bytes
+FROM pg_tracing_consume_spans order by span_start, span_start_ns, resource;
+ trace_id |    name    |                             resource                             | wal_records | wal_bytes 
+----------+------------+------------------------------------------------------------------+-------------+-----------
+        1 | Insert     | INSERT INTO pg_tracing_test VALUES(generate_series($1, $2), $3); | t           | t
+        1 | Parse      | Parse                                                            |             | 
+        1 | Post Parse | Post Parse                                                       |             | 
+        1 | Planner    | Planner                                                          | f           | f
+        1 | Executor   | Start                                                            |             | 
+        1 | Executor   | Run                                                              |             | 
+        1 | Insert     | Insert on pg_tracing_test                                        | t           | t
+        1 | ProjectSet | ProjectSet                                                       | f           | f
+        1 | Result     | Result                                                           | f           | f
+        1 | Executor   | Finish                                                           |             | 
+        1 | Executor   | End                                                              |             | 
+        2 | Parse      | Parse                                                            |             | 
+        2 | Update     | UPDATE pg_tracing_test SET b = $1 WHERE a > $2;                  | t           | t
+        2 | Post Parse | Post Parse                                                       |             | 
+        2 | Planner    | Planner                                                          | f           | f
+        2 | Executor   | Start                                                            |             | 
+        2 | Executor   | Run                                                              |             | 
+        2 | Update     | Update on pg_tracing_test                                        | t           | t
+        2 | SeqScan    | SeqScan on pg_tracing_test|Filter : (a > 7)                      | f           | f
+        2 | Executor   | Finish                                                           |             | 
+        2 | Executor   | End                                                              |             | 
+        3 | Delete     | DELETE FROM pg_tracing_test WHERE a > $1;                        | t           | t
+        3 | Parse      | Parse                                                            |             | 
+        3 | Post Parse | Post Parse                                                       |             | 
+        3 | Planner    | Planner                                                          | f           | f
+        3 | Executor   | Start                                                            |             | 
+        3 | Executor   | Run                                                              |             | 
+        3 | Delete     | Delete on pg_tracing_test                                        | t           | t
+        3 | SeqScan    | SeqScan on pg_tracing_test|Filter : (a > 9)                      | f           | f
+        3 | Executor   | Finish                                                           |             | 
+        3 | Executor   | End                                                              |             | 
+(31 rows)
+
+-- Redo the same but without wal instrumentation
+set pg_tracing.instrument_wal = false;
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000001-0000000000000001-01'*/ INSERT INTO pg_tracing_test VALUES(generate_series(1, 10), 'aaa');
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000002-0000000000000002-01'*/ UPDATE pg_tracing_test SET b = 'bbb' WHERE a > 7;
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000003-0000000000000003-01'*/ DELETE FROM pg_tracing_test WHERE a > 9;
+-- With wal instrumentation disabled, wal counters should be set to 0
+SELECT trace_id, name, resource,
+       wal_records = 0 as wal_records,
+       wal_bytes = 0 as wal_bytes
+FROM pg_tracing_consume_spans order by span_start, span_start_ns, resource;
+ trace_id |    name    |                             resource                             | wal_records | wal_bytes 
+----------+------------+------------------------------------------------------------------+-------------+-----------
+        1 | Insert     | INSERT INTO pg_tracing_test VALUES(generate_series($1, $2), $3); | t           | t
+        1 | Parse      | Parse                                                            |             | 
+        1 | Post Parse | Post Parse                                                       |             | 
+        1 | Planner    | Planner                                                          | t           | t
+        1 | Executor   | Start                                                            |             | 
+        1 | Executor   | Run                                                              |             | 
+        1 | Insert     | Insert on pg_tracing_test                                        | t           | t
+        1 | ProjectSet | ProjectSet                                                       | t           | t
+        1 | Result     | Result                                                           | t           | t
+        1 | Executor   | Finish                                                           |             | 
+        1 | Executor   | End                                                              |             | 
+        2 | Parse      | Parse                                                            |             | 
+        2 | Update     | UPDATE pg_tracing_test SET b = $1 WHERE a > $2;                  | t           | t
+        2 | Post Parse | Post Parse                                                       |             | 
+        2 | Planner    | Planner                                                          | t           | t
+        2 | Executor   | Start                                                            |             | 
+        2 | Executor   | Run                                                              |             | 
+        2 | Update     | Update on pg_tracing_test                                        | t           | t
+        2 | SeqScan    | SeqScan on pg_tracing_test|Filter : (a > 7)                      | t           | t
+        2 | Executor   | Finish                                                           |             | 
+        2 | Executor   | End                                                              |             | 
+        3 | Delete     | DELETE FROM pg_tracing_test WHERE a > $1;                        | t           | t
+        3 | Parse      | Parse                                                            |             | 
+        3 | Post Parse | Post Parse                                                       |             | 
+        3 | Planner    | Planner                                                          | t           | t
+        3 | Executor   | Start                                                            |             | 
+        3 | Executor   | Run                                                              |             | 
+        3 | Delete     | Delete on pg_tracing_test                                        | t           | t
+        3 | SeqScan    | SeqScan on pg_tracing_test|Filter : (a > 9)                      | t           | t
+        3 | Executor   | Finish                                                           |             | 
+        3 | Executor   | End                                                              |             | 
+(31 rows)
+
+-- Cleanup
+set pg_tracing.instrument_wal = true;

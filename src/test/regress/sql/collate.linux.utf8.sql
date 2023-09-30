@@ -358,13 +358,13 @@ CREATE SCHEMA test_schema;
 -- We need to do this this way to cope with varying names for encodings:
 do $$
 BEGIN
-  EXECUTE 'CREATE COLLATION test0 (locale = ' ||
+  EXECUTE 'CREATE COLLATION test0 (provider = libc, locale = ' ||
           quote_literal((SELECT datcollate FROM pg_database WHERE datname = current_database())) || ');';
 END
 $$;
 CREATE COLLATION test0 FROM "C"; -- fail, duplicate name
 CREATE COLLATION IF NOT EXISTS test0 FROM "C"; -- ok, skipped
-CREATE COLLATION IF NOT EXISTS test0 (locale = 'foo'); -- ok, skipped
+CREATE COLLATION IF NOT EXISTS test0 (provider = libc, locale = 'foo'); -- ok, skipped
 do $$
 BEGIN
   EXECUTE 'CREATE COLLATION test1 (lc_collate = ' ||
@@ -374,7 +374,7 @@ BEGIN
 END
 $$;
 CREATE COLLATION test3 (lc_collate = 'en_US.utf8'); -- fail, need lc_ctype
-CREATE COLLATION testx (locale = 'nonsense'); -- fail
+CREATE COLLATION testx (provider = libc, locale = 'nonsense'); -- fail
 
 CREATE COLLATION test4 FROM nonsense;
 CREATE COLLATION test5 FROM test0;
@@ -455,8 +455,8 @@ SELECT * FROM collate_test2 ORDER BY b COLLATE UCS_BASIC;
 -- nondeterministic collations
 -- (not supported with libc provider)
 
-CREATE COLLATION ctest_det (locale = 'en_US.utf8', deterministic = true);
-CREATE COLLATION ctest_nondet (locale = 'en_US.utf8', deterministic = false);
+CREATE COLLATION ctest_det (provider = libc, locale = 'en_US.utf8', deterministic = true);
+CREATE COLLATION ctest_nondet (provider = libc, locale = 'en_US.utf8', deterministic = false);
 
 
 -- cleanup

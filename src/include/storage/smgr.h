@@ -16,7 +16,17 @@
 
 #include "lib/ilist.h"
 #include "storage/block.h"
+#include "storage/buf.h"
 #include "storage/relfilelocator.h"
+
+/* For each fork we'll use one (typical) cache line of recent memory. */
+#define SMGR_BUFFER_LRU_SIZE 8
+
+typedef struct SMgrBufferLruEntry
+{
+	BlockNumber	block;
+	Buffer		buffer;
+} SMgrBufferLruEntry;
 
 /*
  * smgr.c maintains a table of SMgrRelation objects, which are essentially
@@ -60,6 +70,9 @@ typedef struct SMgrRelationData
 	 * submodules.  Do not touch them from elsewhere.
 	 */
 	int			smgr_which;		/* storage manager selector */
+
+	/* for bufmgr.c; cached recently accessed buffers */
+	SMgrBufferLruEntry recent_buffer_lru[MAX_FORKNUM + 1][SMGR_BUFFER_LRU_SIZE];
 
 	/*
 	 * for md.c; per-fork arrays of the number of open segments

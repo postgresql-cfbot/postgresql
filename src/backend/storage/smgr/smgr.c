@@ -179,7 +179,11 @@ smgropen(RelFileLocator rlocator, BackendId backend)
 		reln->smgr_owner = NULL;
 		reln->smgr_targblock = InvalidBlockNumber;
 		for (int i = 0; i <= MAX_FORKNUM; ++i)
+		{
 			reln->smgr_cached_nblocks[i] = InvalidBlockNumber;
+			for (int j = 0; j < SMGR_BUFFER_LRU_SIZE; ++j)
+				reln->recent_buffer_lru[i][j].block = InvalidBlockNumber;
+		}
 		reln->smgr_which = 0;	/* we only have md.c at present */
 
 		/* implementation-specific initialization */

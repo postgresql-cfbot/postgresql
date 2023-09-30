@@ -114,12 +114,6 @@
       </para>
     </listitem>
 
-    <listitem>
-      <para>
-        On <productname>macOS</productname>, write caching can be prevented by
-        setting <varname>wal_sync_method</varname> to <literal>fsync_writethrough</literal>.
-      </para>
-    </listitem>
   </itemizedlist>
 
   <para>
@@ -758,10 +752,6 @@
    The <xref linkend="guc-wal-sync-method"/> parameter determines how
    <productname>PostgreSQL</productname> will ask the kernel to force
    <acronym>WAL</acronym> updates out to disk.
-   All the options should be the same in terms of reliability, with
-   the exception of <literal>fsync_writethrough</literal>, which can sometimes
-   force a flush of the disk cache even when other options do not do so.
-   However, it's quite platform-specific which one will be the fastest.
    You can test the speeds of different options using the <xref
    linkend="pgtestfsync"/> program.
    Note that this parameter is irrelevant if <varname>fsync</varname>
@@ -795,8 +785,8 @@
    <literal>open_datasync</literal> or <literal>open_sync</literal>,
    a write operation in <function>XLogWrite</function> guarantees to sync written
    WAL data to disk and <function>issue_xlog_fsync</function> does nothing.
-   If <varname>wal_sync_method</varname> is either <literal>fdatasync</literal>,
-   <literal>fsync</literal>, or <literal>fsync_writethrough</literal>,
+   If <varname>wal_sync_method</varname> is either <literal>fdatasync</literal>
+   or <literal>fsync</literal>,
    the write operation moves WAL buffers to kernel cache and
    <function>issue_xlog_fsync</function> syncs them to disk. Regardless
    of the setting of <varname>track_wal_io_timing</varname>, the number

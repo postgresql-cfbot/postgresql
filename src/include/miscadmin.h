@@ -23,6 +23,7 @@
 #ifndef MISCADMIN_H
 #define MISCADMIN_H
 
+#include <fcntl.h>
 #include <signal.h>
 
 #include "datatype/timestamp.h" /* for TimestampTz */
@@ -256,7 +257,19 @@ extern PGDLLIMPORT int IntervalStyle;
 
 #define MAXTZLEN		10		/* max TZ name len, not counting tr. null */
 
-extern PGDLLIMPORT bool enableFsync;
+#define ENABLE_FSYNC_OFF			0
+#define ENABLE_FSYNC_ON				1
+#ifdef F_FULLFSYNC
+#define ENABLE_FSYNC_FULL			2
+#endif
+
+#ifdef ENABLE_FSYNC_FULL
+#define DEFAULT_ENABLE_FSYNC ENABLE_FSYNC_FULL
+#else
+#define DEFAULT_ENABLE_FSYNC ENABLE_FSYNC_ON
+#endif
+
+extern PGDLLIMPORT int enableFsync;
 extern PGDLLIMPORT bool allowSystemTableMods;
 extern PGDLLIMPORT int work_mem;
 extern PGDLLIMPORT double hash_mem_multiplier;

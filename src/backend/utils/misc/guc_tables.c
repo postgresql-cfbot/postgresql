@@ -479,6 +479,22 @@ static const struct config_enum_entry wal_compression_options[] = {
 	{NULL, 0, false}
 };
 
+static const struct config_enum_entry enable_fsync_options[] = {
+	{"on", ENABLE_FSYNC_ON, false},
+	{"off", ENABLE_FSYNC_OFF, false},
+	{"true", ENABLE_FSYNC_ON, true},
+	{"false", ENABLE_FSYNC_OFF, true},
+	{"yes", ENABLE_FSYNC_ON, true},
+	{"no", ENABLE_FSYNC_OFF, true},
+	{"1", ENABLE_FSYNC_ON, true},
+	{"0", ENABLE_FSYNC_OFF, true},
+#ifdef ENABLE_FSYNC_FULL
+	{"full", ENABLE_FSYNC_FULL, false},
+#endif
+	{NULL, 0, false}
+};
+
+
 /*
  * Options for enum values stored in other modules
  */
@@ -1094,18 +1110,6 @@ struct config_bool ConfigureNamesBool[] =
 			NULL
 		},
 		&SSLPreferServerCiphers,
-		true,
-		NULL, NULL, NULL
-	},
-	{
-		{"fsync", PGC_SIGHUP, WAL_SETTINGS,
-			gettext_noop("Forces synchronization of updates to disk."),
-			gettext_noop("The server will use the fsync() system call in several places to make "
-						 "sure that updates are physically written to disk. This insures "
-						 "that a database cluster will recover to a consistent state after "
-						 "an operating system or hardware crash.")
-		},
-		&enableFsync,
 		true,
 		NULL, NULL, NULL
 	},
@@ -4632,6 +4636,19 @@ struct config_enum ConfigureNamesEnum[] =
 		},
 		&DefaultXactIsoLevel,
 		XACT_READ_COMMITTED, isolation_level_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"fsync", PGC_SIGHUP, WAL_SETTINGS,
+			gettext_noop("Forces synchronization of updates to disk."),
+			gettext_noop("Whether to use syncronization APIs to make "
+						 "sure that updates are physically written to disk. This insures "
+						 "that a database cluster will recover to a consistent state after "
+						 "an operating system or hardware crash.")
+		},
+		&enableFsync,
+		DEFAULT_ENABLE_FSYNC, enable_fsync_options,
 		NULL, NULL, NULL
 	},
 

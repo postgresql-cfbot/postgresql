@@ -120,7 +120,7 @@ int			DateStyle = USE_ISO_DATES;
 int			DateOrder = DATEORDER_MDY;
 int			IntervalStyle = INTSTYLE_POSTGRES;
 
-bool		enableFsync = true;
+int			enableFsync = DEFAULT_ENABLE_FSYNC;
 bool		allowSystemTableMods = false;
 int			work_mem = 4096;
 double		hash_mem_multiplier = 2.0;

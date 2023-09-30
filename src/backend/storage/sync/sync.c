@@ -386,7 +386,7 @@ ProcessSyncRequests(void)
 		 * all.  (We delay checking until this point so that changing fsync on
 		 * the fly behaves sensibly.)
 		 */
-		if (enableFsync)
+		if (enableFsync != ENABLE_FSYNC_OFF)
 		{
 			/*
 			 * If in checkpointer, we want to absorb pending requests every so

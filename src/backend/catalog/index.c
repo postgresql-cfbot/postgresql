@@ -3874,7 +3874,7 @@ reindex_relation(Oid relid, int flags, const ReindexParams *params)
 	Oid			toast_relid;
 	List	   *indexIds;
 	char		persistence;
-	bool		result;
+	bool		result = false;
 	ListCell   *indexId;
 	int			i;
 
@@ -3904,7 +3904,7 @@ reindex_relation(Oid relid, int flags, const ReindexParams *params)
 	toast_relid = rel->rd_rel->reltoastrelid;
 
 	/*
-	 * Get the list of index OIDs for this relation.  (We trust to the
+	 * Get the list of index OIDs for this relation.  (We trust the
 	 * relcache to get this with a sequential scan if ignoring system
 	 * indexes.)
 	 */
@@ -3923,6 +3923,31 @@ reindex_relation(Oid relid, int flags, const ReindexParams *params)
 	}
 
 	/*
+	 * Reindex the secondary toast table, if any, before the indexes on main
+	 * table. This helps in cases where a corruption in toast table's index
+	 * would otherwise prevent reindexing of main table's indexes.
+	 *
+	 * This should be done after the suppression of the use of indexes (above),
+	 * because the recursive call to reindex_relation() below will invoke
+	 * CommandCounterIncrement(), which may prevent enumeration of the indexes
+	 * on the table.
+	 */
+	if ((flags & REINDEX_REL_PROCESS_TOAST) && OidIsValid(toast_relid))
+	{
+		/*
+		 * Note that this should fail if the toast relation is missing, so
+		 * reset REINDEXOPT_MISSING_OK.  Even if a new tablespace is set for
+		 * the parent relation, the indexes on its toast table are not moved.
+		 * This rule is enforced by setting tablespaceOid to InvalidOid.
+		 */
+		ReindexParams newparams = *params;
+
+		newparams.options &= ~(REINDEXOPT_MISSING_OK);
+		newparams.tablespaceOid = InvalidOid;
+		result |= reindex_relation(toast_relid, flags, &newparams);
+	}
+
+	/*
 	 * Compute persistence of indexes: same as that of owning rel, unless
 	 * caller specified otherwise.
 	 */
@@ -3937,8 +3962,8 @@ reindex_relation(Oid relid, int flags, const ReindexParams *params)
 	i = 1;
 	foreach(indexId, indexIds)
 	{
-		Oid			indexOid = lfirst_oid(indexId);
-		Oid			indexNamespaceId = get_rel_namespace(indexOid);
+		Oid indexOid = lfirst_oid(indexId);
+		Oid indexNamespaceId = get_rel_namespace(indexOid);
 
 		/*
 		 * Skip any invalid indexes on a TOAST table.  These can only be
@@ -3975,26 +4000,7 @@ reindex_relation(Oid relid, int flags, const ReindexParams *params)
 	 */
 	table_close(rel, NoLock);
 
-	result = (indexIds != NIL);
-
-	/*
-	 * If the relation has a secondary toast rel, reindex that too while we
-	 * still hold the lock on the main table.
-	 */
-	if ((flags & REINDEX_REL_PROCESS_TOAST) && OidIsValid(toast_relid))
-	{
-		/*
-		 * Note that this should fail if the toast relation is missing, so
-		 * reset REINDEXOPT_MISSING_OK.  Even if a new tablespace is set for
-		 * the parent relation, the indexes on its toast table are not moved.
-		 * This rule is enforced by setting tablespaceOid to InvalidOid.
-		 */
-		ReindexParams newparams = *params;
-
-		newparams.options &= ~(REINDEXOPT_MISSING_OK);
-		newparams.tablespaceOid = InvalidOid;
-		result |= reindex_relation(toast_relid, flags, &newparams);
-	}
+	result |= (indexIds != NIL);
 
 	return result;
 }

@@ -185,6 +185,8 @@ ExecInitGroup(Group *node, EState *estate, int eflags)
 	 * initialize child nodes
 	 */
 	outerPlanState(grpstate) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return grpstate;
 
 	/*
 	 * Initialize scan slot and type.
@@ -226,10 +228,8 @@ ExecInitGroup(Group *node, EState *estate, int eflags)
 void
 ExecEndGroup(GroupState *node)
 {
-	PlanState  *outerPlan;
-
-	outerPlan = outerPlanState(node);
-	ExecEndNode(outerPlan);
+	ExecEndNode(outerPlanState(node));
+	outerPlanState(node) = NULL;
 }
 
 void

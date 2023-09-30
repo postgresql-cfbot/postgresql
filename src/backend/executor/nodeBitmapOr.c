@@ -90,6 +90,8 @@ ExecInitBitmapOr(BitmapOr *node, EState *estate, int eflags)
 	{
 		initNode = (Plan *) lfirst(l);
 		bitmapplanstates[i] = ExecInitNode(initNode, estate, eflags);
+		if (unlikely(!ExecPlanStillValid(estate)))
+			return bitmaporstate;
 		i++;
 	}
 
@@ -210,8 +212,8 @@ ExecEndBitmapOr(BitmapOrState *node)
 	 */
 	for (i = 0; i < nplans; i++)
 	{
-		if (bitmapplans[i])
-			ExecEndNode(bitmapplans[i]);
+		ExecEndNode(bitmapplans[i]);
+		bitmapplans[i] = NULL;
 	}
 }
 

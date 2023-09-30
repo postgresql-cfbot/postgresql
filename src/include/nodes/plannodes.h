@@ -268,6 +268,13 @@ typedef struct Append
 	int			nasyncplans;	/* # of asynchronous plans */
 
 	/*
+	 * RTIs of all partitioned tables whose children are scanned by
+	 * appendplans. The list contains a bitmapset for every partition tree
+	 * covered by this Append.
+	 */
+	List	   *allpartrelids;
+
+	/*
 	 * All 'appendplans' preceding this index are non-partial plans. All
 	 * 'appendplans' from this index onwards are partial plans.
 	 */
@@ -290,6 +297,13 @@ typedef struct MergeAppend
 	Bitmapset  *apprelids;
 
 	List	   *mergeplans;
+
+	/*
+	 * RTIs of all partitioned tables whose children are scanned by
+	 * mergeplans. The list contains a bitmapset for every partition tree
+	 * covered by this MergeAppend.
+	 */
+	List	   *allpartrelids;
 
 	/* these fields are just like the sort-key info in struct Sort: */
 

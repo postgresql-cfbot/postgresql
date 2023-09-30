@@ -785,22 +785,21 @@ ExecIndexAdvanceArrayKeys(IndexArrayKeyInfo *arrayKeys, int numArrayKeys)
 void
 ExecEndIndexScan(IndexScanState *node)
 {
-	Relation	indexRelationDesc;
-	IndexScanDesc indexScanDesc;
-
-	/*
-	 * extract information from the node
-	 */
-	indexRelationDesc = node->iss_RelationDesc;
-	indexScanDesc = node->iss_ScanDesc;
+	/* close the scan (no-op if we didn't start it) */
+	if (node->iss_ScanDesc != NULL)
+	{
+		index_endscan(node->iss_ScanDesc);
+		node->iss_ScanDesc = NULL;
+	}
 
 	/*
 	 * close the index relation (no-op if we didn't open it)
 	 */
-	if (indexScanDesc)
-		index_endscan(indexScanDesc);
-	if (indexRelationDesc)
-		index_close(indexRelationDesc, NoLock);
+	if (node->iss_RelationDesc != NULL)
+	{
+		index_close(node->iss_RelationDesc, NoLock);
+		node->iss_RelationDesc = NULL;
+	}
 }
 
 /* ----------------------------------------------------------------
@@ -909,6 +908,8 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
 	 * open the scan relation
 	 */
 	currentRelation = ExecOpenScanRelation(estate, node->scan.scanrelid, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return indexstate;
 
 	indexstate->ss.ss_currentRelation = currentRelation;
 	indexstate->ss.ss_currentScanDesc = NULL;	/* no heap scan here */

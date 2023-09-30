@@ -492,6 +492,13 @@ expand_single_inheritance_child(PlannerInfo *root, RangeTblEntry *parentrte,
 	}
 	else
 		childrte->inh = false;
+
+	/*
+	 * Flag child tables as indirectly referenced in the query. This helps
+	 * the executor's ExecGetRangeTableRelation() recognize them as
+	 * inheritance children.
+	 */
+	childrte->inFromCl = false;
 	childrte->securityQuals = NIL;
 
 	/*

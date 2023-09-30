@@ -247,6 +247,8 @@ ExecInitProjectSet(ProjectSet *node, EState *estate, int eflags)
 	 * initialize child nodes
 	 */
 	outerPlanState(state) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return state;
 
 	/*
 	 * we don't use inner plan
@@ -324,6 +326,7 @@ ExecEndProjectSet(ProjectSetState *node)
 	 * shut down subplans
 	 */
 	ExecEndNode(outerPlanState(node));
+	outerPlanState(node) = NULL;
 }
 
 void

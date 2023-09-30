@@ -1766,6 +1766,8 @@ set_append_references(PlannerInfo *root,
 	set_dummy_tlist_references((Plan *) aplan, rtoffset);
 
 	aplan->apprelids = offset_relid_set(aplan->apprelids, rtoffset);
+	foreach(l, aplan->allpartrelids)
+		lfirst(l) = offset_relid_set((Relids) lfirst(l), rtoffset);
 
 	if (aplan->part_prune_info)
 	{
@@ -1842,6 +1844,8 @@ set_mergeappend_references(PlannerInfo *root,
 	set_dummy_tlist_references((Plan *) mplan, rtoffset);
 
 	mplan->apprelids = offset_relid_set(mplan->apprelids, rtoffset);
+	foreach(l, mplan->allpartrelids)
+		lfirst(l) = offset_relid_set((Relids) lfirst(l), rtoffset);
 
 	if (mplan->part_prune_info)
 	{

@@ -1383,6 +1383,7 @@ pg_stat_get_io(PG_FUNCTION_ARGS)
 			for (int io_context = 0; io_context < IOCONTEXT_NUM_TYPES; io_context++)
 			{
 				const char *context_name = pgstat_get_io_context_name(io_context);
+				int			op_bytes;
 
 				Datum		values[IO_NUM_COLUMNS] = {0};
 				bool		nulls[IO_NUM_COLUMNS] = {0};
@@ -1401,12 +1402,11 @@ pg_stat_get_io(PG_FUNCTION_ARGS)
 				values[IO_COL_RESET_TIME] = TimestampTzGetDatum(reset_time);
 
 				/*
-				 * Hard-code this to the value of BLCKSZ for now. Future
-				 * values could include XLOG_BLCKSZ, once WAL IO is tracked,
-				 * and constant multipliers, once non-block-oriented IO (e.g.
-				 * temporary file IO) is tracked.
+				 * op_bytes can change according to IOObject and IOContext.
+				 * Get the correct op_bytes.
 				 */
-				values[IO_COL_CONVERSION] = Int64GetDatum(BLCKSZ);
+				op_bytes = pgstat_get_io_op_bytes(io_obj, io_context);
+				values[IO_COL_CONVERSION] = Int64GetDatum(op_bytes);
 
 				for (int io_op = 0; io_op < IOOP_NUM_TYPES; io_op++)
 				{

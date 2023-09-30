@@ -405,6 +405,36 @@ select '$.datetime("datetime template")'::jsonpath;
  $.datetime("datetime template")
 (1 row)
 
+select '$.date()'::jsonpath;
+ jsonpath 
+----------
+ $.date()
+(1 row)
+
+select '$.time()'::jsonpath;
+ jsonpath 
+----------
+ $.time()
+(1 row)
+
+select '$.time_tz()'::jsonpath;
+  jsonpath   
+-------------
+ $.time_tz()
+(1 row)
+
+select '$.timestamp()'::jsonpath;
+   jsonpath    
+---------------
+ $.timestamp()
+(1 row)
+
+select '$.timestamp_tz()'::jsonpath;
+     jsonpath     
+------------------
+ $.timestamp_tz()
+(1 row)
+
 select '$ ? (@ starts with "abc")'::jsonpath;
         jsonpath         
 -------------------------

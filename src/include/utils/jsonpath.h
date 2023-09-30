@@ -85,11 +85,22 @@ typedef enum JsonPathItemType
 	jpiExists,					/* EXISTS (expr) predicate */
 	jpiType,					/* .type() item method */
 	jpiSize,					/* .size() item method */
+	jpiBoolean,					/* .boolean() item method */
+	jpiStringFunc,				/* .string() item method */
 	jpiAbs,						/* .abs() item method */
 	jpiFloor,					/* .floor() item method */
 	jpiCeiling,					/* .ceiling() item method */
 	jpiDouble,					/* .double() item method */
+	jpiDecimal,					/* .decimal() item method */
+	jpiBigint,					/* .bigint() item method */
+	jpiInteger,					/* .integer() item method */
+	jpiNumber,					/* .number() item method */
 	jpiDatetime,				/* .datetime() item method */
+	jpiDate,					/* .date() item method */
+	jpiTime,					/* .time() item method */
+	jpiTimeTz,					/* .time_tz() item method */
+	jpiTimestamp,				/* .timestamp() item method */
+	jpiTimestampTz,				/* .timestamp_tz() item method */
 	jpiKeyValue,				/* .keyvalue() item method */
 	jpiSubscript,				/* array subscript: 'expr' or 'expr TO expr' */
 	jpiLast,					/* LAST array subscript */

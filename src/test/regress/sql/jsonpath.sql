@@ -73,6 +73,11 @@ select '$.double().floor().ceiling().abs()'::jsonpath;
 select '$.keyvalue().key'::jsonpath;
 select '$.datetime()'::jsonpath;
 select '$.datetime("datetime template")'::jsonpath;
+select '$.date()'::jsonpath;
+select '$.time()'::jsonpath;
+select '$.time_tz()'::jsonpath;
+select '$.timestamp()'::jsonpath;
+select '$.timestamp_tz()'::jsonpath;
 
 select '$ ? (@ starts with "abc")'::jsonpath;
 select '$ ? (@ starts with $var)'::jsonpath;

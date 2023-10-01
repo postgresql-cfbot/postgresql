@@ -15,6 +15,8 @@
 extern PGDLLIMPORT int max_logical_replication_workers;
 extern PGDLLIMPORT int max_sync_workers_per_subscription;
 extern PGDLLIMPORT int max_parallel_apply_workers_per_subscription;
+extern PGDLLIMPORT int max_slotsync_workers;
+
 
 extern void ApplyLauncherRegister(void);
 extern void ApplyLauncherMain(Datum main_arg);
@@ -30,5 +32,7 @@ extern void AtEOXact_ApplyLauncher(bool isCommit);
 extern bool IsLogicalLauncher(void);
 
 extern pid_t GetLeaderApplyWorkerPid(pid_t pid);
+
+extern PGDLLIMPORT char *PrimaryConnInfo;
 
 #endif							/* LOGICALLAUNCHER_H */

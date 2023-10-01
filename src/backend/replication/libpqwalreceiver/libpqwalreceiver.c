@@ -34,6 +34,7 @@
 #include "utils/memutils.h"
 #include "utils/pg_lsn.h"
 #include "utils/tuplestore.h"
+#include "utils/varlena.h"
 
 PG_MODULE_MAGIC;
 
@@ -58,6 +59,9 @@ static void libpqrcv_get_senderinfo(WalReceiverConn *conn,
 									char **sender_host, int *sender_port);
 static char *libpqrcv_identify_system(WalReceiverConn *conn,
 									  TimeLineID *primary_tli);
+static List *libpqrcv_get_dbinfo_for_logical_slots(WalReceiverConn *conn,
+												   const char *slot_names);
+static char *libpqrcv_get_dbname_from_conninfo(const char *conninfo);
 static int	libpqrcv_server_version(WalReceiverConn *conn);
 static void libpqrcv_readtimelinehistoryfile(WalReceiverConn *conn,
 											 TimeLineID tli, char **filename,
@@ -96,6 +100,8 @@ static WalReceiverFunctionsType PQWalReceiverFunctions = {
 	.walrcv_receive = libpqrcv_receive,
 	.walrcv_send = libpqrcv_send,
 	.walrcv_create_slot = libpqrcv_create_slot,
+	.walrcv_get_dbinfo_for_logical_slots = libpqrcv_get_dbinfo_for_logical_slots,
+	.walrcv_get_dbname_from_conninfo = libpqrcv_get_dbname_from_conninfo,
 	.walrcv_get_backend_pid = libpqrcv_get_backend_pid,
 	.walrcv_exec = libpqrcv_exec,
 	.walrcv_disconnect = libpqrcv_disconnect
@@ -407,6 +413,119 @@ static int
 libpqrcv_server_version(WalReceiverConn *conn)
 {
 	return PQserverVersion(conn->streamConn);
+}
+
+/*
+ * Get DB info for logical slots
+ *
+ * It gets the DBIDs for slot_names from primary. The list returned
+ * by LIST_DBID_FOR_LOGICAL_SLOTS has no duplicates.
+ */
+static List *
+libpqrcv_get_dbinfo_for_logical_slots(WalReceiverConn *conn,
+									  const char *slot_names)
+{
+	PGresult   *res;
+	List	   *slotlist = NIL;
+	int			ntuples;
+	StringInfoData s;
+	WalRcvRepSlotDbData *slot_data;
+
+	initStringInfo(&s);
+	appendStringInfoString(&s, "LIST_DBID_FOR_LOGICAL_SLOTS");
+
+	if (strcmp(slot_names, "") != 0 && strcmp(slot_names, "*") != 0)
+	{
+		char	   *rawnames;
+		List	   *namelist;
+		ListCell   *lc;
+
+		appendStringInfoChar(&s, ' ');
+		rawnames = pstrdup(slot_names);
+		SplitIdentifierString(rawnames, ',', &namelist);
+		foreach(lc, namelist)
+		{
+			if (lc != list_head(namelist))
+				appendStringInfoChar(&s, ',');
+			appendStringInfo(&s, "%s",
+							 quote_identifier(lfirst(lc)));
+		}
+	}
+
+	res = libpqrcv_PQexec(conn->streamConn, s.data);
+	pfree(s.data);
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		PQclear(res);
+		ereport(ERROR,
+				(errmsg("could not receive list of slots from the primary server: %s",
+						pchomp(PQerrorMessage(conn->streamConn)))));
+	}
+	if (PQnfields(res) != 1)
+	{
+		int			nfields = PQnfields(res);
+
+		PQclear(res);
+		ereport(ERROR,
+				(errmsg("invalid response from primary server"),
+				 errdetail("Could not get list of slots: got %d fields, "
+						   "expected 1", nfields)));
+	}
+
+	ntuples = PQntuples(res);
+	for (int i = 0; i < ntuples; i++)
+	{
+		slot_data = palloc0(sizeof(WalRcvRepSlotDbData));
+		if (!PQgetisnull(res, i, 0))
+			slot_data->database = atooid(PQgetvalue(res, i, 0));
+
+		slotlist = lappend(slotlist, slot_data);
+	}
+
+	PQclear(res);
+
+	return slotlist;
+}
+
+/*
+ * Get database name from primary conninfo.
+ *
+ * If dbanme is not found in connInfo, return NULL value.
+ * The caller should take care of handling NULL value.
+ */
+static char *
+libpqrcv_get_dbname_from_conninfo(const char *connInfo)
+{
+	PQconninfoOption *opts;
+	PQconninfoOption *opt;
+	char	   *dbname = NULL;
+	char	   *err = NULL;
+
+	opts = PQconninfoParse(connInfo, &err);
+	if (opts == NULL)
+	{
+		/* The error string is malloc'd, so we must free it explicitly */
+		char	   *errcopy = err ? pstrdup(err) : "out of memory";
+
+		PQfreemem(err);
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("invalid connection string syntax: %s", errcopy)));
+	}
+
+	for (opt = opts; opt->keyword != NULL; ++opt)
+	{
+		/* Ignore connection options that are not present. */
+		if (opt->val == NULL)
+			continue;
+
+		if (strcmp(opt->keyword, "dbname") == 0 && opt->val[0] != '\0')
+		{
+			dbname = pstrdup(opt->val);
+		}
+	}
+
+	return dbname;
 }
 
 /*

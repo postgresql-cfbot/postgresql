@@ -100,6 +100,7 @@
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_type.h"
 #include "commands/copy.h"
+#include "commands/subscriptioncmds.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "parser/parse_relation.h"
@@ -246,7 +247,7 @@ wait_for_worker_state_change(char expected_state)
 		LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
 		worker = logicalrep_worker_find(MyLogicalRepWorker->subid,
 										InvalidOid, false);
-		if (worker && worker->proc)
+		if (worker && worker->hdr.proc)
 			logicalrep_worker_wakeup_ptr(worker);
 		LWLockRelease(LogicalRepWorkerLock);
 		if (!worker)
@@ -535,7 +536,7 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 				if (rstate->state == SUBREL_STATE_SYNCWAIT)
 				{
 					/* Signal the sync worker, as it may be waiting for us. */
-					if (syncworker->proc)
+					if (syncworker->hdr.proc)
 						logicalrep_worker_wakeup_ptr(syncworker);
 
 					/* Now safe to release the LWLock */

@@ -65,8 +65,11 @@
 #include "postmaster/syslogger.h"
 #include "postmaster/walwriter.h"
 #include "replication/logicallauncher.h"
+#include "replication/reorderbuffer.h"
 #include "replication/slot.h"
 #include "replication/syncrep.h"
+#include "replication/walreceiver.h"
+#include "replication/walsender.h"
 #include "storage/bufmgr.h"
 #include "storage/large_object.h"
 #include "storage/pg_shmem.h"
@@ -3508,6 +3511,19 @@ struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"max_slotsync_workers",
+			PGC_POSTMASTER,
+			REPLICATION_STANDBY,
+			gettext_noop("Maximum number of slot synchronization workers "
+						 "on a standby."),
+			NULL,
+		},
+		&max_slotsync_workers,
+		2, 0, MAX_SLOTSYNC_WORKER_LIMIT,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL
@@ -4550,6 +4566,36 @@ struct config_string ConfigureNamesString[] =
 		&debug_io_direct_string,
 		"",
 		check_debug_io_direct, assign_debug_io_direct, NULL
+	},
+
+	/*
+	 * XXX: synchronize_slot_names needs to be specified on both primary and
+	 * standby, therefore, we might need a new group REPLICATION.
+	 */
+	{
+		{"synchronize_slot_names", PGC_SIGHUP, REPLICATION_STANDBY,
+			gettext_noop("List of replication slot names to synchronize from "
+						 "primary to streaming replication standby server."),
+			gettext_noop("Value of \"*\" means all."),
+			GUC_LIST_INPUT | GUC_LIST_QUOTE
+		},
+		&synchronize_slot_names,
+		"",
+		check_synchronize_slot_names, NULL, NULL
+	},
+
+	{
+		{"standby_slot_names", PGC_SIGHUP, REPLICATION_PRIMARY,
+			gettext_noop("List of streaming replication standby server slot "
+						 "names that logical walsenders waits for."),
+			gettext_noop("Decoded changes are sent out to plugins by logical "
+						 "walsenders only after specified replication slots "
+						 "confirm receiving WAL."),
+			GUC_LIST_INPUT | GUC_LIST_QUOTE
+		},
+		&standby_slot_names,
+		"",
+		check_standby_slot_names, NULL, NULL
 	},
 
 	/* End-of-list marker */

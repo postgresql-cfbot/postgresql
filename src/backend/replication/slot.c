@@ -52,6 +52,8 @@
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "utils/builtins.h"
+#include "utils/guc_hooks.h"
+#include "utils/varlena.h"
 
 /*
  * Replication slot on-disk data structure.
@@ -90,7 +92,7 @@ typedef struct ReplicationSlotOnDisk
 	sizeof(ReplicationSlotOnDisk) - ReplicationSlotOnDiskConstantSize
 
 #define SLOT_MAGIC		0x1051CA1	/* format identifier */
-#define SLOT_VERSION	3		/* version for new files */
+#define SLOT_VERSION	4		/* version for new files */
 
 /* Control array for replication slot management */
 ReplicationSlotCtlData *ReplicationSlotCtl = NULL;
@@ -98,9 +100,13 @@ ReplicationSlotCtlData *ReplicationSlotCtl = NULL;
 /* My backend's replication slot in the shared memory array */
 ReplicationSlot *MyReplicationSlot = NULL;
 
-/* GUC variable */
+/* GUC variables */
 int			max_replication_slots = 10; /* the maximum number of replication
 										 * slots */
+char	   *synchronize_slot_names;
+char	   *standby_slot_names;
+List	   *standby_slot_names_list = NIL;
+List	   *synchronize_slot_names_list = NIL;
 
 static void ReplicationSlotShmemExit(int code, Datum arg);
 static void ReplicationSlotDropAcquired(void);
@@ -311,6 +317,7 @@ ReplicationSlotCreate(const char *name, bool db_specific,
 	slot->data.persistency = persistency;
 	slot->data.two_phase = two_phase;
 	slot->data.two_phase_at = InvalidXLogRecPtr;
+	slot->data.synced = false;
 
 	/* and then data only present in shared memory */
 	slot->just_dirtied = false;
@@ -2120,4 +2127,165 @@ RestoreSlotFromDisk(const char *name)
 		ereport(FATAL,
 				(errmsg("too many replication slots active before shutdown"),
 				 errhint("Increase max_replication_slots and try again.")));
+}
+
+/*
+ * A helper function to simplify check_hook implementation for
+ * synchronize_slot_names and standby_slot_names GUCs.
+ */
+static bool
+validate_slot_names(char **newval, List **elemlist)
+{
+	char	   *rawname;
+
+	/* Need a modifiable copy of string */
+	rawname = pstrdup(*newval);
+
+	/* Parse string into list of identifiers */
+	if (!SplitIdentifierString(rawname, ',', elemlist))
+	{
+		/* syntax error in name list */
+		GUC_check_errdetail("List syntax is invalid.");
+		pfree(rawname);
+		list_free(*elemlist);
+		return false;
+	}
+
+	return true;
+}
+
+/*
+ * A helper function to validate 'type'(logical/physical) of slots for
+ * synchronize_slot_names and standby_slot_names GUCs.
+ *
+ * The caller is expected to pass last argument as per the 'type' of slots
+ * expected for the concerned GUC.
+ *
+ * NOTE: The flow where synchronize_slot_names will be sent from  physical
+ * standby to walsender is yet to be implemented. Then this function will
+ * be used there as well to validate type of 'synchronize_slot_names' and
+ * thus it is made generic to handle both logical=true/false.
+ */
+static bool
+validate_slot_type(List *elemlist, bool logical)
+{
+	ListCell   *lc;
+
+	/*
+	 * Skip check if replication slots' data is not initialized yet i.e. we
+	 * are in startup process.
+	 *
+	 * TODO: analyze what to do in this case when we do not have slots-data.
+	 */
+	if (!ReplicationSlotCtl)
+		return true;
+
+	foreach(lc, elemlist)
+	{
+		char	   *name = lfirst(lc);
+		ReplicationSlot *slot;
+
+		slot = SearchNamedReplicationSlot(name, true);
+
+		if (!slot)
+		{
+			GUC_check_errdetail("replication slot \"%s\" does not exist", name);
+			return false;
+		}
+
+		/* If caller expects logical slot while we got physical, return error */
+		if (logical && SlotIsPhysical(slot))
+		{
+			GUC_check_errdetail("cannot have physical replication slot \"%s\" "
+								"in this parameter", name);
+			return false;
+		}
+
+		/* If caller expects physical slot while we got logical, return error */
+		if (!logical && SlotIsLogical(slot))
+		{
+			GUC_check_errdetail("cannot have logical replication slot \"%s\" "
+								"in this parameter", name);
+			return false;
+		}
+	}
+
+	return true;
+}
+
+/*
+ * GUC check_hook for synchronize_slot_names
+ *
+ * TODO: Ideally synchronize_slot_names should be physical standby's GUC.
+ * It should be conveyed somehow by physical standby to primary.
+ */
+bool
+check_synchronize_slot_names(char **newval, void **extra, GucSource source)
+{
+	List	   *elemlist;
+
+	/* Special handling for "*" which means all. */
+	if (strcmp(*newval, "*") == 0)
+		return true;
+
+	if (strcmp(*newval, "") == 0)
+		return true;
+
+	if (!validate_slot_names(newval, &elemlist))
+		return false;
+
+	list_free(elemlist);
+	return true;
+}
+
+/*
+ * GUC check_hook for standby_slot_names
+ */
+bool
+check_standby_slot_names(char **newval, void **extra, GucSource source)
+{
+	List	   *elemlist;
+
+	/* Special handling for "*" which means all. */
+	if (strcmp(*newval, "*") == 0)
+		return true;
+
+	if (strcmp(*newval, "") == 0)
+		return true;
+
+	if (!validate_slot_names(newval, &elemlist))
+		return false;
+
+	if (!validate_slot_type(elemlist, false /* physical slots expected */ ))
+	{
+		list_free(elemlist);
+		return false;
+	}
+
+	list_free(elemlist);
+	return true;
+}
+
+/*
+ * Initialize the lists from raw synchronize_slot_names and standby_slot_names
+ * and cache these, in order to avoid parsing these repeatedly. Done at
+ * WALSender startup and after each SIGHUP.
+ */
+void
+SlotSyncInitConfig(void)
+{
+	char	   *rawname;
+
+	if (strcmp(standby_slot_names, "") != 0)
+	{
+		rawname = pstrdup(standby_slot_names);
+		SplitIdentifierString(rawname, ',', &standby_slot_names_list);
+	}
+
+	if ((strcmp(synchronize_slot_names, "") != 0 &&
+		 strcmp(synchronize_slot_names, "*") != 0))
+	{
+		rawname = pstrdup(synchronize_slot_names);
+		SplitIdentifierString(rawname, ',', &synchronize_slot_names_list);
+	}
 }

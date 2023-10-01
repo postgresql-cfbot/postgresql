@@ -1428,6 +1428,7 @@ LimitState
 LimitStateCond
 List
 ListCell
+ListDBForLogicalSlotsCmd
 ListDictionary
 ListParsedLex
 ListenAction
@@ -1505,6 +1506,7 @@ LogicalRepWorkerType
 LogicalRewriteMappingData
 LogicalTape
 LogicalTapeSet
+LogicalWorkerHeader
 LsnReadQueue
 LsnReadQueueNextFun
 LsnReadQueueNextStatus
@@ -2306,6 +2308,7 @@ RelocationBufferInfo
 RelptrFreePageBtree
 RelptrFreePageManager
 RelptrFreePageSpanLeader
+RemoteSlot
 RenameStmt
 ReopenPtrType
 ReorderBuffer
@@ -2561,6 +2564,7 @@ SlabBlock
 SlabContext
 SlabSlot
 SlotNumber
+SlotSyncWorker
 SlruCtl
 SlruCtlData
 SlruErrorCause
@@ -3007,6 +3011,7 @@ WalLevel
 WalRcvData
 WalRcvExecResult
 WalRcvExecStatus
+WalRcvRepSlotDbData
 WalRcvState
 WalRcvStreamOptions
 WalRcvWakeupReason

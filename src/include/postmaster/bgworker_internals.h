@@ -22,6 +22,7 @@
  * Maximum possible value of parallel workers.
  */
 #define MAX_PARALLEL_WORKER_LIMIT 1024
+#define MAX_SLOTSYNC_WORKER_LIMIT 50
 
 /*
  * List of background workers, private to postmaster.

@@ -33,6 +33,15 @@ typedef struct IdentifySystemCmd
 	NodeTag		type;
 } IdentifySystemCmd;
 
+/* -------------------------------
+ *		LIST_DBID_FOR_LOGICAL_SLOTS command
+ * -------------------------------
+ */
+typedef struct ListDBForLogicalSlotsCmd
+{
+	NodeTag		type;
+	List	   *slot_names;
+} ListDBForLogicalSlotsCmd;
 
 /* ----------------------
  *		BASE_BACKUP command

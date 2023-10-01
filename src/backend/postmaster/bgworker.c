@@ -130,6 +130,9 @@ static const struct
 		"ApplyWorkerMain", ApplyWorkerMain
 	},
 	{
+		"ReplSlotSyncWorkerMain", ReplSlotSyncWorkerMain
+	},
+	{
 		"ParallelApplyWorkerMain", ParallelApplyWorkerMain
 	},
 	{

@@ -202,6 +202,19 @@ pg_logical_slot_get_changes_guts(FunctionCallInfo fcinfo, bool confirm, bool bin
 
 	ReplicationSlotAcquire(NameStr(*name), true);
 
+	/*
+	 * Do not allow consumption of a "synchronized" slot until the standby
+	 * gets promoted.
+	 */
+	if (RecoveryInProgress() && MyReplicationSlot->data.synced)
+	{
+		ReplicationSlotRelease();
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("operation not permitted on replication slots on "
+						"standby which are synchronized from primary")));
+	}
+
 	PG_TRY();
 	{
 		/* restart at slot's confirmed_flush */

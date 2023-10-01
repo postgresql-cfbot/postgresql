@@ -190,6 +190,8 @@ static const char *const BuiltinTrancheNames[] = {
 	"LogicalRepLauncherDSA",
 	/* LWTRANCHE_LAUNCHER_HASH: */
 	"LogicalRepLauncherHash",
+	/* LWTRANCHE_SLOTSYNC_DSA: */
+	"SlotSyncWorkerDSA",
 };
 
 StaticAssertDecl(lengthof(BuiltinTrancheNames) ==

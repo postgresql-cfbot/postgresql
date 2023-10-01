@@ -15,7 +15,6 @@
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
 #include "storage/spin.h"
-#include "replication/walreceiver.h"
 
 /*
  * Behaviour of replication slots, upon release or crash.
@@ -111,6 +110,11 @@ typedef struct ReplicationSlotPersistentData
 
 	/* plugin name */
 	NameData	plugin;
+
+	/*
+	 * Is this a slot created by a sync-slot worker?
+	 */
+	bool		synced;
 } ReplicationSlotPersistentData;
 
 /*
@@ -210,6 +214,12 @@ extern PGDLLIMPORT ReplicationSlot *MyReplicationSlot;
 
 /* GUCs */
 extern PGDLLIMPORT int max_replication_slots;
+extern PGDLLIMPORT char *synchronize_slot_names;
+extern PGDLLIMPORT char *standby_slot_names;
+
+/* Globals */
+extern PGDLLIMPORT List *standby_slot_names_list;
+extern PGDLLIMPORT List *synchronize_slot_names_list;
 
 /* shmem initialization functions */
 extern Size ReplicationSlotsShmemSize(void);
@@ -245,12 +255,14 @@ extern ReplicationSlot *SearchNamedReplicationSlot(const char *name, bool need_l
 extern int	ReplicationSlotIndex(ReplicationSlot *slot);
 extern bool ReplicationSlotName(int index, Name name);
 extern void ReplicationSlotNameForTablesync(Oid suboid, Oid relid, char *syncslotname, Size szslot);
-extern void ReplicationSlotDropAtPubNode(WalReceiverConn *wrconn, char *slotname, bool missing_ok);
 
 extern void StartupReplicationSlots(void);
 extern void CheckPointReplicationSlots(bool is_shutdown);
 
 extern void CheckSlotRequirements(void);
 extern void CheckSlotPermissions(void);
+
+extern void WaitForStandbyLSN(XLogRecPtr wait_for_lsn);
+extern void SlotSyncInitConfig(void);
 
 #endif							/* SLOT_H */

@@ -36,11 +36,9 @@ typedef enum LogicalRepWorkerType
 	WORKERTYPE_PARALLEL_APPLY
 } LogicalRepWorkerType;
 
-typedef struct LogicalRepWorker
+/* Common data for Slotsync and LogicalRep workers */
+typedef struct LogicalWorkerHeader
 {
-	/* What type of worker is this? */
-	LogicalRepWorkerType type;
-
 	/* Time at which this worker was launched. */
 	TimestampTz launch_time;
 
@@ -52,6 +50,15 @@ typedef struct LogicalRepWorker
 
 	/* Pointer to proc array. NULL if not running. */
 	PGPROC	   *proc;
+
+} LogicalWorkerHeader;
+
+typedef struct LogicalRepWorker
+{
+	LogicalWorkerHeader hdr;
+
+	/* What type of worker is this? */
+	LogicalRepWorkerType type;
 
 	/* Database id to connect to. */
 	Oid			dbid;
@@ -95,6 +102,41 @@ typedef struct LogicalRepWorker
 	XLogRecPtr	reply_lsn;
 	TimestampTz reply_time;
 } LogicalRepWorker;
+
+/*
+ * Shared memory structure for Slot-Sync worker. It is allocated by logical
+ * replication launcher and then read by each slot-sync worker.
+ *
+ * It is protected by LWLock (SlotSyncWorkerLock). Each slot-sync worker
+ * reading the structure needs to hold the lock in shared mode, whereas
+ * the logical replication launcher which updates it needs to hold the lock
+ * in exclusive mode.
+ */
+typedef struct SlotSyncWorker
+{
+	LogicalWorkerHeader hdr;
+
+	/* The slot in worker pool to which slot-sync worker is attached */
+	int			slot;
+
+	/* Count of dbids slot-sync worker manages */
+	uint32		dbcount;
+
+	/* DSA for dbids */
+	dsa_area   *dbids_dsa;
+
+	/* dsa_pointer for dbids slot-sync worker manages */
+	dsa_pointer dbids_dp;
+
+	/* Info about slot being monitored for worker's naptime purpose */
+	struct SlotSyncWorkerWatchSlot
+	{
+		NameData	slot_name;
+		XLogRecPtr	confirmed_lsn;
+		TimestampTz last_update_time;
+	}			monitoring_info;
+
+} SlotSyncWorker;
 
 /*
  * State of the transaction in parallel apply worker.
@@ -234,12 +276,14 @@ extern PGDLLIMPORT struct WalReceiverConn *LogRepWorkerWalRcvConn;
 /* Worker and subscription objects. */
 extern PGDLLIMPORT Subscription *MySubscription;
 extern PGDLLIMPORT LogicalRepWorker *MyLogicalRepWorker;
+extern PGDLLIMPORT SlotSyncWorker *MySlotSyncWorker;
 
 extern PGDLLIMPORT bool in_remote_transaction;
 
 extern PGDLLIMPORT bool InitializingApplyWorker;
 
 extern void logicalrep_worker_attach(int slot);
+extern void slotsync_worker_attach(int slot);
 extern LogicalRepWorker *logicalrep_worker_find(Oid subid, Oid relid,
 												bool only_running);
 extern List *logicalrep_workers_find(Oid subid, bool only_running);
@@ -327,9 +371,9 @@ extern void pa_decr_and_wait_stream_block(void);
 extern void pa_xact_finish(ParallelApplyWorkerInfo *winfo,
 						   XLogRecPtr remote_lsn);
 
-#define isParallelApplyWorker(worker) ((worker)->in_use && \
+#define isParallelApplyWorker(worker) ((worker)->hdr.in_use && \
 									   (worker)->type == WORKERTYPE_PARALLEL_APPLY)
-#define isTablesyncWorker(worker) ((worker)->in_use && \
+#define isTablesyncWorker(worker) ((worker)->hdr.in_use && \
 								   (worker)->type == WORKERTYPE_TABLESYNC)
 
 static inline bool
@@ -341,14 +385,14 @@ am_tablesync_worker(void)
 static inline bool
 am_leader_apply_worker(void)
 {
-	Assert(MyLogicalRepWorker->in_use);
+	Assert(MyLogicalRepWorker->hdr.in_use);
 	return (MyLogicalRepWorker->type == WORKERTYPE_APPLY);
 }
 
 static inline bool
 am_parallel_apply_worker(void)
 {
-	Assert(MyLogicalRepWorker->in_use);
+	Assert(MyLogicalRepWorker->hdr.in_use);
 	return isParallelApplyWorker(MyLogicalRepWorker);
 }
 

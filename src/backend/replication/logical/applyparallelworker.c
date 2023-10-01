@@ -925,7 +925,8 @@ ParallelApplyWorkerMain(Datum main_arg)
 	before_shmem_exit(pa_shutdown, PointerGetDatum(seg));
 
 	SpinLockAcquire(&MyParallelShared->mutex);
-	MyParallelShared->logicalrep_worker_generation = MyLogicalRepWorker->generation;
+	MyParallelShared->logicalrep_worker_generation =
+								MyLogicalRepWorker->hdr.generation;
 	MyParallelShared->logicalrep_worker_slot_no = worker_slot;
 	SpinLockRelease(&MyParallelShared->mutex);
 

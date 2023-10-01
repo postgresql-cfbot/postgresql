@@ -473,6 +473,120 @@ IdentifySystem(void)
 	end_tup_output(tstate);
 }
 
+static int
+pg_qsort_namecmp(const void *a, const void *b)
+{
+	return strncmp(NameStr(*(Name) a), NameStr(*(Name) b), NAMEDATALEN);
+}
+
+/*
+ * Handle the LIST_DBID_FOR_LOGICAL_SLOTS command.
+ *
+ * Given the slot-names, this function returns the list of database-ids
+ * corresponding to those slots. The returned list has no duplicates.
+ */
+static void
+ListSlotDatabaseOIDs(ListDBForLogicalSlotsCmd *cmd)
+{
+	DestReceiver *dest;
+	TupOutputState *tstate;
+	TupleDesc	tupdesc;
+	NameData   *slot_names = NULL;
+	int			numslot_names;
+	List	   *database_oids_list = NIL;
+	int			slotno;
+
+	numslot_names = list_length(cmd->slot_names);
+	if (numslot_names)
+	{
+		ListCell   *lc;
+		int			i = 0;
+
+		slot_names = palloc(numslot_names * sizeof(NameData));
+		foreach(lc, cmd->slot_names)
+		{
+			char	   *slot_name = lfirst(lc);
+
+			ReplicationSlotValidateName(slot_name, ERROR);
+			namestrcpy(&slot_names[i++], slot_name);
+		}
+
+		qsort(slot_names, numslot_names, sizeof(NameData), pg_qsort_namecmp);
+	}
+
+	dest = CreateDestReceiver(DestRemoteSimple);
+
+	/* Need a tuple descriptor representing a single column */
+	tupdesc = CreateTemplateTupleDesc(1);
+	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 1, "database_oid",
+							  INT8OID, -1, 0);
+
+	/* Prepare for projection of tuples */
+	tstate = begin_tup_output_tupdesc(dest, tupdesc, &TTSOpsVirtual);
+
+	LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+	for (slotno = 0; slotno < max_replication_slots; slotno++)
+	{
+		ReplicationSlot *slot = &ReplicationSlotCtl->replication_slots[slotno];
+		Oid			dboid;
+		Datum		values[1];
+		bool		nulls[1];
+
+		if (!slot->in_use)
+			continue;
+
+		SpinLockAcquire(&slot->mutex);
+
+		dboid = slot->data.database;
+
+		SpinLockRelease(&slot->mutex);
+
+		if (numslot_names)
+		{
+			/*
+			 * If slot names were provided and the current slot name is not in
+			 * the list, skip it.
+			 */
+			if (!bsearch((void *) &slot->data.name, (void *) slot_names,
+						 numslot_names, sizeof(NameData), pg_qsort_namecmp))
+				continue;
+
+			/*
+			 * If the current slot is a physical slot, error out. We are
+			 * supposed to get only logical slots for sync-slot purpose.
+			 */
+			if (SlotIsPhysical(slot))
+				ereport(ERROR,
+						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						 errmsg("physical replication slot %s found in "
+								"synchronize_slot_names",
+								NameStr(slot->data.name))));
+		}
+
+		/*
+		 * Check if the database OID is already in the list, and if so, skip
+		 * this slot.
+		 */
+		if (OidIsValid(dboid) && list_member_oid(database_oids_list, dboid))
+			continue;
+
+		/* Add the database OID to the list */
+		database_oids_list = lappend_oid(database_oids_list, dboid);
+
+		values[0] = Int64GetDatum(dboid);
+		nulls[0] = (dboid == InvalidOid);
+
+		/* Send it to dest */
+		do_tup_output(tstate, values, nulls);
+	}
+	LWLockRelease(ReplicationSlotControlLock);
+
+	/* Clean up the list */
+	list_free(database_oids_list);
+
+	end_tup_output(tstate);
+}
+
 /* Handle READ_REPLICATION_SLOT command */
 static void
 ReadReplicationSlot(ReadReplicationSlotCmd *cmd)
@@ -1318,6 +1432,7 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	replication_active = true;
 
 	SyncRepInitConfig();
+	SlotSyncInitConfig();
 
 	/* Main loop of walsender */
 	WalSndLoop(XLogSendLogical);
@@ -1448,6 +1563,7 @@ ProcessPendingWrites(void)
 			ConfigReloadPending = false;
 			ProcessConfigFile(PGC_SIGHUP);
 			SyncRepInitConfig();
+			SlotSyncInitConfig();
 		}
 
 		/* Try to flush pending output to the client */
@@ -1528,6 +1644,180 @@ WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId 
 }
 
 /*
+ * Does this Wal Sender need to wait for physical standby.
+ *
+ * Check if this logical walsender needs to wait for physical standby
+ * corresponding to physical slots specified in standby_slot_names GUC.
+ */
+static bool
+WalSndWaitForStandbyNeeded()
+{
+	ListCell   *l;
+
+	Assert(MyReplicationSlot != NULL);
+	Assert(SlotIsLogical(MyReplicationSlot));
+
+	if (strcmp(standby_slot_names, "") == 0)
+		return false;
+
+	/*
+	 * Check if the slot associated with this logical walsender is asked to
+	 * wait for physical standbys.
+	 */
+	if (strcmp(synchronize_slot_names, "") == 0)
+		return false;
+
+	/*
+	 * "*" means all logical walsenders should wait for physical standbys,
+	 * else check if MyReplicationSlot is specified in synchronize_slot_names.
+	 */
+	if (strcmp(synchronize_slot_names, "*") != 0)
+	{
+		bool		shouldwait = false;
+
+		foreach(l, synchronize_slot_names_list)
+		{
+			char	   *name = lfirst(l);
+
+			if (strcmp(name, NameStr(MyReplicationSlot->data.name)) == 0)
+			{
+				shouldwait = true;
+				break;
+			}
+		}
+
+		if (!shouldwait)
+			return false;
+	}
+
+	return true;
+}
+
+/*
+ * Wait for physical standby to confirm receiving give lsn.
+ *
+ * Here logical walsender corresponding to a logical slot specified in
+ * synchronize_slot_names GUC waits for physical standbys corresponding to
+ * physical slots specified in standby_slot_names GUC.
+ */
+static void
+WalSndWaitForStandbyConfirmation(XLogRecPtr wait_for_lsn)
+{
+	List	   *standby_slot_cpy;
+	ListCell   *l;
+	ReplicationSlot *slot;
+
+	standby_slot_cpy = list_copy(standby_slot_names_list);
+
+retry:
+	foreach(l, standby_slot_cpy)
+	{
+		char	   *name = lfirst(l);
+		XLogRecPtr	restart_lsn;
+		bool		invalidated;
+
+		CHECK_FOR_INTERRUPTS();
+
+		/* Process any requests or signals received recently */
+		if (ConfigReloadPending)
+		{
+			ConfigReloadPending = false;
+			ProcessConfigFile(PGC_SIGHUP);
+			SyncRepInitConfig();
+		}
+
+		/* If postmaster asked us to stop, don't wait anymore */
+		if (got_STOPPING)
+			break;
+
+		slot = SearchNamedReplicationSlot(name, true);
+
+		/*
+		 * It may happen that the slot specified in standby_slot_names GUC
+		 * value is dropped, so let's skip over it.
+		 */
+		if (!slot)
+		{
+			ereport(WARNING,
+					errmsg("replication slot \"%s\" specified in parameter"
+						   " \"%s\" does not exist, ignoring",
+						   name, "standby_slot_names"));
+			standby_slot_cpy = foreach_delete_current(standby_slot_cpy, l);
+			continue;
+		}
+
+		/*
+		 * If logical slot name is given in standby_slot_names, give WARNING
+		 * and skip it. Since it is harmless, so WARNING should be enough, no
+		 * need to error-out.
+		 */
+		if (SlotIsLogical(slot))
+		{
+			ereport(WARNING,
+					errmsg("cannot have logical replication slot \"%s\" in "
+						   "parameter \"%s\", ignoring",
+						   name, "standby_slot_names"));
+			standby_slot_cpy = foreach_delete_current(standby_slot_cpy, l);
+			continue;
+		}
+
+		/* physical slots advance restart_lsn on remote flush */
+		SpinLockAcquire(&slot->mutex);
+		restart_lsn = slot->data.restart_lsn;
+		invalidated = slot->data.invalidated != RS_INVAL_NONE;
+		SpinLockRelease(&slot->mutex);
+
+		/*
+		 * Specified physical slot may have been invalidated, so no point in
+		 * waiting for it.
+		 */
+		if (restart_lsn == InvalidXLogRecPtr || invalidated)
+		{
+			ereport(WARNING,
+					errmsg("physical slot \"%s\" specified in parameter \"%s\" "
+						   "has been invalidated, ignoring",
+						   name, "standby_slot_names"));
+			standby_slot_cpy = foreach_delete_current(standby_slot_cpy, l);
+			continue;
+		}
+
+		/* If the slot is past the wait_for_lsn, no need to wait anymore */
+		if (restart_lsn >= wait_for_lsn)
+		{
+			standby_slot_cpy = foreach_delete_current(standby_slot_cpy, l);
+			continue;
+		}
+
+	}
+
+	/* Exit if done waiting for everyone or postmaster asked us to stop */
+	if ((list_length(standby_slot_cpy) == 0) || got_STOPPING)
+	{
+		return;
+	}
+
+	/* Check for input from the client */
+	ProcessRepliesIfAny();
+
+	/* Die if timeout was reached */
+	WalSndCheckTimeOut();
+
+	/* Send keepalive if the time has come */
+	WalSndKeepaliveIfNecessary();
+
+	/* XXX: Is waiting for 1 second before retrying enough or more or less? */
+	(void) WaitLatch(MyLatch,
+					 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+					 1000L,
+					 WAIT_EVENT_WAL_SENDER_WAIT_FOR_STANDBY_CONFIRMATION);
+	ResetLatch(MyLatch);
+
+	CHECK_FOR_INTERRUPTS();
+
+	goto retry;
+}
+
+/*
  * Wait till WAL < loc is flushed to disk so it can be safely sent to client.
  *
  * Returns end LSN of flushed WAL.  Normally this will be >= loc, but
@@ -1570,6 +1860,7 @@ WalSndWaitForWal(XLogRecPtr loc)
 			ConfigReloadPending = false;
 			ProcessConfigFile(PGC_SIGHUP);
 			SyncRepInitConfig();
+			SlotSyncInitConfig();
 		}
 
 		/* Check for input from the client */
@@ -1656,6 +1947,16 @@ WalSndWaitForWal(XLogRecPtr loc)
 
 		WalSndWait(wakeEvents, sleeptime, WAIT_EVENT_WAL_SENDER_WAIT_FOR_WAL);
 	}
+
+	/*
+	 * Wait for specified streaming replication standby servers (if any) to
+	 * confirm receipt of WAL upto RecentFlushPtr. It is good to wait here
+	 * upto RecentFlushPtr and then let it send the changes to logical
+	 * subscribers one by one which are already covered in RecentFlushPtr
+	 * without needing to wait on every change for standby confirmation.
+	 */
+	if (WalSndWaitForStandbyNeeded())
+		WalSndWaitForStandbyConfirmation(RecentFlushPtr);
 
 	/* reactivate latch so WalSndLoop knows to continue */
 	SetLatch(MyLatch);
@@ -1816,6 +2117,13 @@ exec_replication_command(const char *cmd_string)
 			cmdtag = "DROP_REPLICATION_SLOT";
 			set_ps_display(cmdtag);
 			DropReplicationSlot((DropReplicationSlotCmd *) cmd_node);
+			EndReplicationCommand(cmdtag);
+			break;
+
+		case T_ListDBForLogicalSlotsCmd:
+			cmdtag = "LIST_DBID_FOR_LOGICAL_SLOTS";
+			set_ps_display(cmdtag);
+			ListSlotDatabaseOIDs((ListDBForLogicalSlotsCmd *) cmd_node);
 			EndReplicationCommand(cmdtag);
 			break;
 
@@ -2469,6 +2777,7 @@ WalSndLoop(WalSndSendDataCallback send_data)
 			ConfigReloadPending = false;
 			ProcessConfigFile(PGC_SIGHUP);
 			SyncRepInitConfig();
+			SlotSyncInitConfig();
 		}
 
 		/* Check for input from the client */

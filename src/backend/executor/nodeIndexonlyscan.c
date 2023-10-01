@@ -87,12 +87,20 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * We reach here if the index only scan is not parallel, or if we're
 		 * serially executing an index only scan that was planned to be
 		 * parallel.
+		 *
+		 * XXX Maybe we should enable prefetching, but prefetch only pages that
+		 * are not all-visible (but checking that from the index code seems like
+		 * a violation of layering etc).
+		 *
+		 * XXX This might lead to IOS being slower than plain index scan, if the
+		 * table has a lot of pages that need recheck.
 		 */
 		scandesc = index_beginscan(node->ss.ss_currentRelation,
 								   node->ioss_RelationDesc,
 								   estate->es_snapshot,
 								   node->ioss_NumScanKeys,
-								   node->ioss_NumOrderByKeys);
+								   node->ioss_NumOrderByKeys,
+								   0, 0);	/* no index prefetch for IOS */
 
 		node->ioss_ScanDesc = scandesc;
 
@@ -658,7 +666,8 @@ ExecIndexOnlyScanInitializeDSM(IndexOnlyScanState *node,
 								 node->ioss_RelationDesc,
 								 node->ioss_NumScanKeys,
 								 node->ioss_NumOrderByKeys,
-								 piscan);
+								 piscan,
+								 0, 0);	/* no index prefetch for IOS */
 	node->ioss_ScanDesc->xs_want_itup = true;
 	node->ioss_VMBuffer = InvalidBuffer;
 
@@ -703,7 +712,8 @@ ExecIndexOnlyScanInitializeWorker(IndexOnlyScanState *node,
 								 node->ioss_RelationDesc,
 								 node->ioss_NumScanKeys,
 								 node->ioss_NumOrderByKeys,
-								 piscan);
+								 piscan,
+								 0, 0);	/* no index prefetch for IOS */
 	node->ioss_ScanDesc->xs_want_itup = true;
 
 	/*

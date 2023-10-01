@@ -282,8 +282,21 @@ SELECT ('{3456,1.2.3.4}'::ltree[] ?<@ '1.2.5') is null;
 SELECT '{ltree.asd, tree.awdfg}'::ltree[] ?@ 'tree & aWdfg@'::ltxtquery;
 SELECT '{j.k.l.m, g.b.c.d.e}'::ltree[] ?~ 'A*@|g.b.c.d.e';
 
+-- Check that the ltree_hash() and ltree_hash_extended() function's lower 
+-- 32 bits match when the seed is 0 and do not match when the seed != 0
+SELECT v as value, ltree_hash(v)::bit(32) as standard,
+       ltree_hash_extended(v, 0)::bit(32) as extended0,
+       ltree_hash_extended(v, 1)::bit(32) as extended1
+FROM   (VALUES (NULL::ltree), (''::ltree), ('0'::ltree), ('0.1'::ltree),
+       ('0.1.2'::ltree), ('0'::ltree), ('0_asd.1_ASD'::ltree)) x(v)
+WHERE  ltree_hash(v)::bit(32) != ltree_hash_extended(v, 0)::bit(32)
+       OR ltree_hash(v)::bit(32) = ltree_hash_extended(v, 1)::bit(32);
+
+
 CREATE TABLE ltreetest (t ltree);
 \copy ltreetest FROM 'data/ltree.data'
+
+SELECT count(*) from ltreetest;
 
 SELECT * FROM ltreetest WHERE t <  '12.3' order by t asc;
 SELECT * FROM ltreetest WHERE t <= '12.3' order by t asc;
@@ -327,6 +340,20 @@ SELECT * FROM ltreetest WHERE t ~ '23.*{1}.1' order by t asc;
 SELECT * FROM ltreetest WHERE t ~ '23.*.1' order by t asc;
 SELECT * FROM ltreetest WHERE t ~ '23.*.2' order by t asc;
 SELECT * FROM ltreetest WHERE t ? '{23.*.1,23.*.2}' order by t asc;
+
+drop index tstidx;
+create index tstidx on ltreetest using hash (t);
+set enable_seqscan=off;
+
+SELECT * FROM ltreetest WHERE t =  '12.3' order by t asc;
+
+set enable_hashagg = true;
+set enable_sort = false;
+
+SELECT count(*) FROM (
+SELECT t FROM (SELECT * FROM ltreetest UNION ALL SELECT * FROM ltreetest) t1 GROUP BY t
+) t2;
+set enable_sort = true;
 
 drop index tstidx;
 create index tstidx on ltreetest using gist (t gist_ltree_ops(siglen=0));

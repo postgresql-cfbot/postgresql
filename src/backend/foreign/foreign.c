@@ -242,6 +242,34 @@ GetUserMapping(Oid userid, Oid serverid)
 	return um;
 }
 
+/*
+ * GetUserMappingFromOid - look up the user mapping by its oid.
+ */
+UserMapping *
+GetUserMappingFromOid(Oid usermappigid)
+{
+	HeapTuple				tp;
+	UserMapping			   *um;
+	Form_pg_user_mapping	umform;
+
+	tp = SearchSysCache1(USERMAPPINGOID,
+						 ObjectIdGetDatum(usermappigid));
+
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for user mapping %u", usermappigid);
+
+	umform = ((Form_pg_user_mapping) GETSTRUCT(tp));
+
+	um = (UserMapping *) palloc(sizeof(UserMapping));
+	um->umid = umform->oid;
+	um->userid = umform->umuser;
+	um->serverid = umform->umserver;
+
+	ReleaseSysCache(tp);
+
+	return um;
+}
+
 
 /*
  * GetForeignTable - look up the foreign table definition by relation oid.

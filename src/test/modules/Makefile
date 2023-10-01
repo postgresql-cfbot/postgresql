@@ -13,6 +13,7 @@ SUBDIRS = \
 		  libpq_pipeline \
 		  plsample \
 		  spgist_name_ops \
+		  xid_wraparound \
 		  test_bloomfilter \
 		  test_copy_callbacks \
 		  test_custom_rmgrs \

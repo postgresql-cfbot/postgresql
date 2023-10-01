@@ -2069,6 +2069,7 @@ sub background_psql
 	local %ENV = $self->_get_env();
 
 	my $replication = $params{replication};
+	my $timeout = undef;
 
 	my @psql_params = (
 		$self->installed_command('psql'),
@@ -2080,12 +2081,13 @@ sub background_psql
 		'-');
 
 	$params{on_error_stop} = 1 unless defined $params{on_error_stop};
+	$timeout = $params{timeout} if defined $params{timeout};
 
 	push @psql_params, '-v', 'ON_ERROR_STOP=1' if $params{on_error_stop};
 	push @psql_params, @{ $params{extra_params} }
 	  if defined $params{extra_params};
 
-	return PostgreSQL::Test::BackgroundPsql->new(0, \@psql_params);
+	return PostgreSQL::Test::BackgroundPsql->new(0, \@psql_params, $timeout);
 }
 
 =pod

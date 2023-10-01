@@ -28,6 +28,7 @@
 #include "catalog/index.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
+#include "common/initdb_bootstrap.h"
 #include "common/link-canary.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
@@ -65,6 +66,7 @@ Relation	boot_reldesc;		/* current relation descriptor */
 Form_pg_attribute attrtypes[MAXATTR];	/* points to attribute info */
 int			numattr;			/* number of attributes for cur. rel */
 
+extra_bootstrap_params *ebootp = NULL;
 
 /*
  * Basic information associated with each type.  This is used before
@@ -206,6 +208,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	char	   *progname = argv[0];
 	int			flag;
 	char	   *userDoption = NULL;
+	char	   *bki_file = NULL;
 
 	Assert(!IsUnderPostmaster);
 
@@ -221,7 +224,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	argv++;
 	argc--;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:X:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:c:d:D:Fi:kr:X:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -272,6 +275,47 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 				break;
 			case 'F':
 				SetConfigOption("fsync", "false", PGC_POSTMASTER, PGC_S_ARGV);
+				break;
+			case 'i':
+
+				/*
+				 * Here we extract key value pairs from bootstrap parameters
+				 * string passed from initdb. These values are used to replace
+				 * macros in the bki file.
+				 */
+				ebootp = palloc0(sizeof(extra_bootstrap_params));
+				// Keep a copy so strtok side effects don't affect optarg.
+				ebootp->param_str = pstrdup(optarg);
+				for (char *token = strtok(ebootp->param_str, ","); token; token = strtok(NULL, ","))
+				{
+					char	   *e = strchr(token, '=');
+
+					if (e)
+					{
+						char	   *k;
+						char	   *v;
+
+						*e = '\0';
+						k = token;
+						v = e + 1;
+						if (strcmp(k, BKI_FILE) == 0)
+							bki_file = v;
+						else if (strcmp(k, BOOT_USERNAME) == 0)
+							ebootp->username = v;
+						else if (strcmp(k, BOOT_ENCODING_ID) == 0)
+							ebootp->encoding_id = v;
+						else if (strcmp(k, BOOT_LC_COLLATE) == 0)
+							ebootp->lc_collate = v;
+						else if (strcmp(k, BOOT_LC_CTYPE) == 0)
+							ebootp->lc_ctype = v;
+						else if (strcmp(k, BOOT_ICU_LOCALE) == 0)
+							ebootp->icu_locale = v;
+						else if (strcmp(k, BOOT_ICU_RULES) == 0)
+							ebootp->icu_rules = v;
+						else if (strcmp(k, BOOT_LOCALE_PROVIDER) == 0)
+							ebootp->locale_provider = v;
+					}
+				}
 				break;
 			case 'k':
 				bootstrap_data_checksum_version = PG_DATA_CHECKSUM_VERSION;
@@ -355,7 +399,22 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	}
 
 	/*
-	 * Process bootstrap input.
+	 * Open bki file and redirect the input for boot_yyparse to point to the
+	 * file.
+	 *
+	 */
+	elog(INFO, "Open bki file %s\n", bki_file);
+	boot_yyin = fopen(bki_file, "r");
+	if (!boot_yyin)
+	{
+		elog(ERROR, "Could not open bki_file=%s.", bki_file);
+		cleanup();
+		proc_exit(1);
+	}
+
+	/*
+	 * Process bootstrap input. As boot_yyin is pointing to bki file,
+	 * boot_yyparse will read from the bki file.
 	 */
 	StartTransactionCommand();
 	boot_yyparse();
@@ -686,6 +745,14 @@ InsertOneNull(int i)
 static void
 cleanup(void)
 {
+	if (ebootp)
+	{
+		if (ebootp->param_str)
+		{
+			pfree(ebootp->param_str);
+		}
+		pfree(ebootp);
+	}
 	if (boot_reldesc != NULL)
 		closerel(NULL);
 }

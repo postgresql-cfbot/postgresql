@@ -55,8 +55,24 @@ extern void boot_get_type_io_data(Oid typid,
 								  Oid *typoutput);
 
 extern int	boot_yyparse(void);
+extern FILE *boot_yyin;
+extern FILE *boot_yyout;
 
 extern int	boot_yylex(void);
 extern void boot_yyerror(const char *message) pg_attribute_noreturn();
 
+typedef struct
+{
+	char	   *param_str;
+	char	   *username;
+	char	   *encoding_id;
+	char	   *lc_collate;
+	char	   *lc_ctype;
+	char	   *icu_locale;
+	char	   *icu_rules;
+	char	   *locale_provider;
+} extra_bootstrap_params;
+
+extern extra_bootstrap_params * ebootp;
+extern bool bootp_null(extra_bootstrap_params * e, char *s);
 #endif							/* BOOTSTRAP_H */

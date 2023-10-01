@@ -71,6 +71,7 @@
 #include "catalog/pg_database_d.h"	/* pgrminclude ignore */
 #include "common/file_perm.h"
 #include "common/file_utils.h"
+#include "common/initdb_bootstrap.h"
 #include "common/logging.h"
 #include "common/pg_prng.h"
 #include "common/restricted_token.h"
@@ -1473,90 +1474,36 @@ bootstrap_template1(void)
 {
 	PG_CMD_DECL;
 	PQExpBufferData cmd;
-	char	  **line;
-	char	  **bki_lines;
-	char		headerline[MAXPGPATH];
-	char		buf[64];
 
 	printf(_("running bootstrap script ... "));
 	fflush(stdout);
-
-	bki_lines = readfile(bki_file);
-
-	/* Check that bki file appears to be of the right version */
-
-	snprintf(headerline, sizeof(headerline), "# PostgreSQL %s\n",
-			 PG_MAJORVERSION);
-
-	if (strcmp(headerline, *bki_lines) != 0)
-	{
-		pg_log_error("input file \"%s\" does not belong to PostgreSQL %s",
-					 bki_file, PG_VERSION);
-		pg_log_error_hint("Specify the correct path using the option -L.");
-		exit(1);
-	}
-
-	/* Substitute for various symbols used in the BKI file */
-
-	sprintf(buf, "%d", NAMEDATALEN);
-	bki_lines = replace_token(bki_lines, "NAMEDATALEN", buf);
-
-	sprintf(buf, "%d", (int) sizeof(Pointer));
-	bki_lines = replace_token(bki_lines, "SIZEOF_POINTER", buf);
-
-	bki_lines = replace_token(bki_lines, "ALIGNOF_POINTER",
-							  (sizeof(Pointer) == 4) ? "i" : "d");
-
-	bki_lines = replace_token(bki_lines, "FLOAT8PASSBYVAL",
-							  FLOAT8PASSBYVAL ? "true" : "false");
-
-	bki_lines = replace_token(bki_lines, "POSTGRES",
-							  escape_quotes_bki(username));
-
-	bki_lines = replace_token(bki_lines, "ENCODING",
-							  encodingid_to_string(encodingid));
-
-	bki_lines = replace_token(bki_lines, "LC_COLLATE",
-							  escape_quotes_bki(lc_collate));
-
-	bki_lines = replace_token(bki_lines, "LC_CTYPE",
-							  escape_quotes_bki(lc_ctype));
-
-	bki_lines = replace_token(bki_lines, "ICU_LOCALE",
-							  icu_locale ? escape_quotes_bki(icu_locale) : "_null_");
-
-	bki_lines = replace_token(bki_lines, "ICU_RULES",
-							  icu_rules ? escape_quotes_bki(icu_rules) : "_null_");
-
-	sprintf(buf, "%c", locale_provider);
-	bki_lines = replace_token(bki_lines, "LOCALE_PROVIDER", buf);
 
 	/* Also ensure backend isn't confused by this environment var: */
 	unsetenv("PGCLIENTENCODING");
 
 	initPQExpBuffer(&cmd);
 
-	printfPQExpBuffer(&cmd, "\"%s\" --boot %s %s", backend_exec, boot_options, extra_options);
-	appendPQExpBuffer(&cmd, " -X %d", wal_segment_size_mb * (1024 * 1024));
-	if (data_checksums)
-		appendPQExpBuffer(&cmd, " -k");
-	if (debug)
-		appendPQExpBuffer(&cmd, " -d 5");
-
-
+	/* Pass the options consumed in initdb to the bootstrap startup. */
+	printf("lc collate: %s\n", lc_collate);
+	printfPQExpBuffer(&cmd, "\"%s\" --boot -X %d %s %s %s %s -i %s=%s,%s=%s,%s=%s,"
+					  "%s=%s,%s=%s,%s=%s,%s=%s,%s=%c",
+					  backend_exec,
+					  wal_segment_size_mb * (1024 * 1024),
+					  boot_options, extra_options,
+					  data_checksums ? "-k" : "",
+					  debug ? "-d 5" : "",
+					  BKI_FILE, bki_file,
+					  BOOT_USERNAME, escape_quotes_bki(username),
+					  BOOT_ENCODING_ID, encodingid_to_string(encodingid),
+					  BOOT_LC_COLLATE, escape_quotes_bki(lc_collate),
+					  BOOT_LC_CTYPE, escape_quotes_bki(lc_ctype),
+					  BOOT_ICU_LOCALE, icu_locale ? escape_quotes_bki(icu_locale) : "_null_",
+					  BOOT_ICU_RULES, icu_rules ? escape_quotes_bki(icu_rules) : "_null_",
+					  BOOT_LOCALE_PROVIDER, locale_provider);
 	PG_CMD_OPEN(cmd.data);
-
-	for (line = bki_lines; *line != NULL; line++)
-	{
-		PG_CMD_PUTS(*line);
-		free(*line);
-	}
-
 	PG_CMD_CLOSE();
 
 	termPQExpBuffer(&cmd);
-	free(bki_lines);
-
 	check_ok();
 }
 

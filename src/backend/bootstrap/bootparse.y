@@ -95,6 +95,7 @@ static int num_columns_read = 0;
 %type <oidval> oidspec optrowtypeoid
 
 %token <str> ID
+%token <str> BOOT_PARAM
 %token COMMA EQUALS LPAREN RPAREN
 /* NULLVAL is a reserved keyword */
 %token NULLVAL
@@ -485,5 +486,6 @@ boot_ident:
 		| XFORCE		{ $$ = pstrdup($1); }
 		| XNOT			{ $$ = pstrdup($1); }
 		| XNULL			{ $$ = pstrdup($1); }
+		| BOOT_PARAM	{ $$ = $1; }
 		;
 %%

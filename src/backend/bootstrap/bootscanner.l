@@ -108,6 +108,61 @@ FORCE			{ boot_yylval.kw = "FORCE"; return XFORCE; }
 NOT				{ boot_yylval.kw = "NOT"; return XNOT; }
 NULL			{ boot_yylval.kw = "NULL"; return XNULL; }
 
+NAMEDATALEN     {
+					boot_yylval.str = pstrdup(yytext);
+					sprintf(boot_yylval.str, "%d", NAMEDATALEN);
+					return BOOT_PARAM;
+				}
+SIZEOF_POINTER	{
+					boot_yylval.str = pstrdup(yytext);
+					sprintf(boot_yylval.str, "%d", (int) sizeof(Pointer));
+					return BOOT_PARAM;
+				}
+ALIGNOF_POINTER	{
+					boot_yylval.str = pstrdup(yytext);
+					sprintf(boot_yylval.str, "%s", sizeof(Pointer) == 4? "i": "d");
+					return BOOT_PARAM;
+				}
+FLOAT8PASSBYVAL	{
+					boot_yylval.str = pstrdup(yytext);
+					sprintf(boot_yylval.str, "%s", FLOAT8PASSBYVAL ? "true": "false");
+					return BOOT_PARAM;
+				}
+POSTGRES		{
+					if (bootp_null(ebootp, ebootp->username)) return NULLVAL;
+					boot_yylval.str = pstrdup(ebootp->username);
+					return BOOT_PARAM;
+				}
+ENCODING		{
+					if (bootp_null(ebootp, ebootp->encoding_id)) return NULLVAL;
+					boot_yylval.str = pstrdup(ebootp->encoding_id);
+					return BOOT_PARAM;
+				}
+LC_COLLATE		{
+					if (bootp_null(ebootp, ebootp->lc_collate)) return NULLVAL;
+					boot_yylval.str =  pstrdup(ebootp->lc_collate);
+					return BOOT_PARAM;
+				}
+LC_CTYPE		{
+					if (bootp_null(ebootp, ebootp->lc_ctype)) return NULLVAL;
+					boot_yylval.str = pstrdup(ebootp->lc_ctype);
+					return BOOT_PARAM;
+				}
+ICU_LOCALE		{
+					if (bootp_null(ebootp, ebootp->icu_locale)) return NULLVAL;
+					boot_yylval.str =  pstrdup(ebootp->icu_locale);
+					return BOOT_PARAM;
+				}
+ICU_RULES		{
+					if (bootp_null(ebootp, ebootp->icu_rules)) return NULLVAL;
+					boot_yylval.str = pstrdup(ebootp->icu_rules);
+					return BOOT_PARAM;
+				}
+LOCALE_PROVIDER	{
+					if (bootp_null(ebootp, ebootp->locale_provider)) return NULLVAL;
+					boot_yylval.str = pstrdup(ebootp->locale_provider);
+					return BOOT_PARAM;
+				}
 {id}			{
 					boot_yylval.str = pstrdup(yytext);
 					return ID;
@@ -125,6 +180,13 @@ NULL			{ boot_yylval.kw = "NULL"; return XNULL; }
 %%
 
 /* LCOV_EXCL_STOP */
+
+bool bootp_null(extra_bootstrap_params *e, char *s)
+{
+	if (e == NULL || s == NULL || !strcmp(s, "_null_"))
+		return true;
+	return false;
+}
 
 void
 boot_yyerror(const char *message)

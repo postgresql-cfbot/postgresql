@@ -382,6 +382,15 @@ static relopt_int intRelOpts[] =
 		},
 		-1, 0, 1024
 	},
+	{
+		{
+			"local_update_limit",
+			"Updates in the table that are not located the first local_update_limit MB of the table will always try to insert the new tuple on a different page.",
+			RELOPT_KIND_HEAP,
+			ShareUpdateExclusiveLock
+		},
+		-1, -1, (MaxBlockNumber / (1024 * 1024 / BLCKSZ))
+	},
 
 	/* list terminator */
 	{{NULL}}
@@ -1882,7 +1891,9 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		{"vacuum_index_cleanup", RELOPT_TYPE_ENUM,
 		offsetof(StdRdOptions, vacuum_index_cleanup)},
 		{"vacuum_truncate", RELOPT_TYPE_BOOL,
-		offsetof(StdRdOptions, vacuum_truncate)}
+		offsetof(StdRdOptions, vacuum_truncate)},
+		{"local_update_limit", RELOPT_TYPE_INT,
+		offsetof(StdRdOptions, local_update_limit)}
 	};
 
 	return (bytea *) build_reloptions(reloptions, validate, kind,

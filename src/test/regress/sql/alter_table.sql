@@ -1764,6 +1764,14 @@ begin; alter table alterlock reset (fillfactor);
 select * from my_locks order by 1;
 commit;
 
+begin; alter table alterlock set (local_update_limit = 8);
+select * from my_locks order by 1;
+commit;
+
+begin; alter table alterlock reset (local_update_limit);
+select * from my_locks order by 1;
+commit;
+
 begin; alter table alterlock set (toast.autovacuum_enabled = off);
 select * from my_locks order by 1;
 commit;

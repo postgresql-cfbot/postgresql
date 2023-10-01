@@ -543,6 +543,33 @@
        Used space in bytes
       </para></entry>
      </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>context_id</structfield> <type>int4</type>
+      </para>
+      <para>
+       Current context id
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>parent_id</structfield> <type>int4</type>
+      </para>
+      <para>
+       Parent context id
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>path</structfield> <type>int4</type>
+      </para>
+      <para>
+       Path to reach the current context from TopMemoryContext
+      </para></entry>
+     </row>
     </tbody>
    </tgroup>
   </table>

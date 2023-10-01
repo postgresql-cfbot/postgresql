@@ -67,6 +67,7 @@
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
 #include "utils/varlena.h"
+#include "utils/wait_event.h"
 
 
 /* Globally visible state variables */
@@ -3456,37 +3457,32 @@ static char *
 read_whole_file(const char *filename, int *length)
 {
 	char	   *buf;
-	FILE	   *file;
+	File	   file;
 	size_t		bytes_to_read;
-	struct stat fst;
 
-	if (stat(filename, &fst) < 0)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not stat file \"%s\": %m", filename)));
-
-	if (fst.st_size > (MaxAllocSize - 1))
-		ereport(ERROR,
-				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-				 errmsg("file \"%s\" is too large", filename)));
-	bytes_to_read = (size_t) fst.st_size;
-
-	if ((file = AllocateFile(filename, PG_BINARY_R)) == NULL)
+	file = PathNameOpenTemporaryFile(filename, O_RDONLY);
+	if (file < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not open file \"%s\" for reading: %m",
 						filename)));
 
+	bytes_to_read = FileSize(file);
+	if (bytes_to_read > (MaxAllocSize -1))
+		ereport(ERROR,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+					errmsg("file \"%s\" is too large", filename)));
+
+
 	buf = (char *) palloc(bytes_to_read + 1);
 
-	*length = fread(buf, 1, bytes_to_read, file);
-
-	if (ferror(file))
+	*length = FileReadSeq(file, buf, bytes_to_read, 0);
+	if (*length != bytes_to_read)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not read file \"%s\": %m", filename)));
 
-	FreeFile(file);
+	FileClose(file);
 
 	buf[*length] = '\0';
 	return buf;

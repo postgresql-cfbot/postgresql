@@ -33,7 +33,6 @@
 #include "utils/resowner_private.h"
 #include "utils/snapmgr.h"
 
-
 /*
  * All resource IDs managed by this code are required to fit into a Datum,
  * which is fine since they are generally pointers or integers.
@@ -714,7 +713,7 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 		while (ResourceArrayGetAny(&(owner->filearr), &foundres))
 		{
 			File		res = DatumGetFile(foundres);
-
+            
 			if (isCommit)
 				PrintFileLeakWarning(res);
 			FileClose(res);

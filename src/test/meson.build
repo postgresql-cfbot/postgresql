@@ -5,6 +5,7 @@ subdir('isolation')
 
 subdir('authentication')
 subdir('recovery')
+subdir('storage')
 subdir('subscription')
 subdir('modules')
 

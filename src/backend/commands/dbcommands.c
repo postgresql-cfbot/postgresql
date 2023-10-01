@@ -456,7 +456,7 @@ ScanSourceDatabasePgClassTuple(HeapTupleData *tuple, Oid tbid, Oid dbid,
 static void
 CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 {
-	int			fd;
+	File		file;
 	int			nbytes;
 	char		versionfile[MAXPGPATH];
 	char		buf[16];
@@ -508,31 +508,23 @@ CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 	 */
 	snprintf(versionfile, sizeof(versionfile), "%s/%s", dbpath, "PG_VERSION");
 
-	fd = OpenTransientFile(versionfile, O_WRONLY | O_CREAT | O_EXCL | PG_BINARY);
-	if (fd < 0 && errno == EEXIST && isRedo)
-		fd = OpenTransientFile(versionfile, O_WRONLY | O_TRUNC | PG_BINARY);
+	file = PathNameOpenTemporaryFile(versionfile, O_WRONLY | O_CREAT | O_EXCL | PG_BINARY);
+	if (file < 0 && errno == EEXIST && isRedo)
+		file = PathNameOpenTemporaryFile(versionfile, O_WRONLY | O_TRUNC | PG_BINARY);
 
-	if (fd < 0)
+	if (file < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not create file \"%s\": %m", versionfile)));
 
 	/* Write PG_MAJORVERSION in the PG_VERSION file. */
-	pgstat_report_wait_start(WAIT_EVENT_VERSION_FILE_WRITE);
-	errno = 0;
-	if ((int) write(fd, buf, nbytes) != nbytes)
-	{
-		/* If write didn't set errno, assume problem is no disk space. */
-		if (errno == 0)
-			errno = ENOSPC;
+	if (FileWriteSeq(file, buf, nbytes, WAIT_EVENT_VERSION_FILE_WRITE) != nbytes)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not write to file \"%s\": %m", versionfile)));
-	}
-	pgstat_report_wait_end();
 
 	/* Close the version file. */
-	CloseTransientFile(fd);
+	FileClose(file);
 
 	/* Critical section done. */
 	if (!isRedo)

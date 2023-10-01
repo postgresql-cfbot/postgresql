@@ -476,6 +476,7 @@ tsvectorrecv(PG_FUNCTION_ARGS)
 		const char *lexeme;
 		uint16		npos;
 		size_t		lex_len;
+		Size		required_len;
 
 		lexeme = pq_getmsgstring(buf);
 		npos = (uint16) pq_getmsgint(buf, sizeof(uint16));
@@ -497,10 +498,15 @@ tsvectorrecv(PG_FUNCTION_ARGS)
 		 *
 		 * But make sure the buffer is large enough first.
 		 */
-		while (hdrlen + SHORTALIGN(datalen + lex_len) +
-			   (npos + 1) * sizeof(WordEntryPos) >= len)
+		required_len = hdrlen + 
+			(npos > 0 
+				? (SHORTALIGN(datalen + lex_len) + sizeof(uint16) + npos * sizeof(WordEntryPos)) 
+				: (datalen + lex_len));
+		if (required_len > len)
 		{
-			len *= 2;
+			do
+				len *= 2;
+			while (required_len > len);
 			vec = (TSVector) repalloc(vec, len);
 		}
 
@@ -544,8 +550,9 @@ tsvectorrecv(PG_FUNCTION_ARGS)
 					elog(ERROR, "position information is misordered");
 			}
 
-			datalen += (npos + 1) * sizeof(WordEntry);
+			datalen += sizeof(uint16) + npos * sizeof(WordEntryPos);
 		}
+		Assert(datalen == required_len);
 	}
 
 	SET_VARSIZE(vec, hdrlen + datalen);

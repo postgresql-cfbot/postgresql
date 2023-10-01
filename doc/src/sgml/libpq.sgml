@@ -3547,8 +3547,9 @@ ExecStatusType PQresultStatus(const PGresult *res);
           <listitem>
            <para>
             The <structname>PGresult</structname> represents a
-            synchronization point in pipeline mode, requested by
-            <xref linkend="libpq-PQpipelineSync"/>.
+            synchronization point in pipeline mode, requested by either
+            <xref linkend="libpq-PQpipelineSync"/> or
+            <xref linkend="libpq-PQpipelinePutSync"/>.
             This status occurs only when pipeline mode has been selected.
            </para>
           </listitem>
@@ -5122,7 +5123,8 @@ int PQsendClosePortal(PGconn *conn, const char *portalName);
        <xref linkend="libpq-PQsendDescribePrepared"/>,
        <xref linkend="libpq-PQsendDescribePortal"/>,
        <xref linkend="libpq-PQsendClosePrepared"/>,
-       <xref linkend="libpq-PQsendClosePortal"/>, or
+       <xref linkend="libpq-PQsendClosePortal"/>,
+       <xref linkend="libpq-PQpipelinePutSync"/>, or
        <xref linkend="libpq-PQpipelineSync"/>
        call, and returns it.
        A null pointer is returned when the command is complete and there
@@ -5490,7 +5492,8 @@ int PQflush(PGconn *conn);
      or its prepared-query sibling
      <xref linkend="libpq-PQsendQueryPrepared"/>.
      These requests are queued on the client-side until flushed to the server;
-     this occurs when <xref linkend="libpq-PQpipelineSync"/> is used to
+     this occurs when <xref linkend="libpq-PQpipelineSync"/> (or optionally
+     <xref linkend="libpq-PQpipelinePutSync"/>) is used to
      establish a synchronization point in the pipeline,
      or when <xref linkend="libpq-PQflush"/> is called.
      The functions <xref linkend="libpq-PQsendPrepare"/>,
@@ -5506,8 +5509,9 @@ int PQflush(PGconn *conn);
      client sends them.  The server will begin executing the commands in the
      pipeline immediately, not waiting for the end of the pipeline.
      Note that results are buffered on the server side; the server flushes
-     that buffer when a synchronization point is established with
-     <function>PQpipelineSync</function>, or when
+     that buffer when a synchronization point is established with either
+     <function>PQpipelineSync</function> or
+     <function>PQpipelinePutSync</function>, or when
      <function>PQsendFlushRequest</function> is called.
      If any statement encounters an error, the server aborts the current
      transaction and does not execute any subsequent command in the queue
@@ -5564,7 +5568,8 @@ int PQflush(PGconn *conn);
      <type>PGresult</type> types <literal>PGRES_PIPELINE_SYNC</literal>
      and <literal>PGRES_PIPELINE_ABORTED</literal>.
      <literal>PGRES_PIPELINE_SYNC</literal> is reported exactly once for each
-     <function>PQpipelineSync</function> at the corresponding point
+     <function>PQpipelineSync</function> or
+     <function>PQpipelinePutSync</function> at the corresponding point
      in the pipeline.
      <literal>PGRES_PIPELINE_ABORTED</literal> is emitted in place of a normal
      query result for the first error and all subsequent results
@@ -5602,7 +5607,8 @@ int PQflush(PGconn *conn);
      <function>PQresultStatus</function> will report a
      <literal>PGRES_PIPELINE_ABORTED</literal> result for each remaining queued
      operation in an aborted pipeline. The result for
-     <function>PQpipelineSync</function> is reported as
+     <function>PQpipelineSync</function> or
+     <function>PQpipelinePutSync</function> is reported as
      <literal>PGRES_PIPELINE_SYNC</literal> to signal the end of the aborted pipeline
      and resumption of normal result processing.
     </para>
@@ -5834,6 +5840,36 @@ int PQsendFlushRequest(PGconn *conn);
        </para>
       </listitem>
      </varlistentry>
+
+    <varlistentry id="libpq-PQpipelinePutSync">
+     <term><function>PQpipelinePutSync</function><indexterm><primary>PQpipelinePutSync</primary></indexterm></term>
+
+     <listitem>
+      <para>
+       Marks a synchronization point in a pipeline by sending a
+       <link linkend="protocol-flow-ext-query">sync message</link>.
+       This serves as the delimiter of an implicit transaction and
+       an error recovery point; see <xref linkend="libpq-pipeline-errors"/>.
+
+<synopsis>
+int PQpipelinePutSync(PGconn *conn, int flags);
+</synopsis>
+      </para>
+      <para>
+       Returns 0 for success. Returns -1 if the connection is not in
+       pipeline mode or sending a
+       <link linkend="protocol-flow-ext-query">sync message</link>
+       failed. Returns 1 if it was unable to send all the data in
+       the send queue yet (this case can only occur if the connection
+       is nonblocking and output data is flushed to the server).
+       The <parameter>flags</parameter> argument is a bitwise OR of
+       several flags. <literal>PG_PIPELINEPUTSYNC_FLUSH</literal>
+       specifies that any queued output data is flushed to the
+       server. Otherwise, nothing is flushed automatically;
+       use <function>PQflush</function> if necessary.
+      </para>
+     </listitem>
+    </varlistentry>
    </variablelist>
   </sect2>
 

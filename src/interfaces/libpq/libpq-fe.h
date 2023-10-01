@@ -47,6 +47,11 @@ extern "C"
 #define PG_COPYRES_EVENTS		  0x04
 #define PG_COPYRES_NOTICEHOOKS	  0x08
 
+/*
+ * Option flags for PQpipelinePutSync
+ */
+#define PG_PIPELINEPUTSYNC_FLUSH  1
+
 /* Application-visible enum types */
 
 /*
@@ -474,6 +479,7 @@ extern int	PQenterPipelineMode(PGconn *conn);
 extern int	PQexitPipelineMode(PGconn *conn);
 extern int	PQpipelineSync(PGconn *conn);
 extern int	PQsendFlushRequest(PGconn *conn);
+extern int	PQpipelinePutSync(PGconn *conn, int flags);
 
 /* LISTEN/NOTIFY support */
 extern PGnotify *PQnotifies(PGconn *conn);

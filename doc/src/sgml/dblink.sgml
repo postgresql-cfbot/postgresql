@@ -54,12 +54,11 @@ dblink_connect(text connname, text connstr) returns text
    </para>
 
    <para>
-    The connection string may also be the name of an existing foreign
-    server.  It is recommended to use the foreign-data wrapper
-    <literal>dblink_fdw</literal> when defining the foreign
-    server.  See the example below, as well as
-    <xref linkend="sql-createserver"/> and
-    <xref linkend="sql-createusermapping"/>.
+    The connection string may also be the name of an existing foreign server.
+    It is recommended to use the foreign-data wrapper
+    <literal>dblink_fdw</literal> or <literal>FOR CONNECTION ONLY</literal>
+    when defining the foreign server.  See the example below, as well as <xref
+    linkend="sql-createserver"/> and <xref linkend="sql-createusermapping"/>.
    </para>
 
   </refsect1>

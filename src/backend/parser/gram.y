@@ -5393,6 +5393,32 @@ CreateForeignServerStmt: CREATE SERVER name opt_type opt_foreign_server_version
 					n->if_not_exists = true;
 					$$ = (Node *) n;
 				}
+				| CREATE SERVER name opt_type opt_foreign_server_version
+						 FOR CONNECTION ONLY create_generic_options
+				{
+					CreateForeignServerStmt *n = makeNode(CreateForeignServerStmt);
+
+					n->servername = $3;
+					n->servertype = $4;
+					n->version = $5;
+					n->options = $9;
+					n->connection_only = true;
+					n->if_not_exists = false;
+					$$ = (Node *) n;
+				}
+				| CREATE SERVER IF_P NOT EXISTS name opt_type opt_foreign_server_version
+						 FOR CONNECTION ONLY create_generic_options
+				{
+					CreateForeignServerStmt *n = makeNode(CreateForeignServerStmt);
+
+					n->servername = $6;
+					n->servertype = $7;
+					n->version = $8;
+					n->options = $12;
+					n->connection_only = true;
+					n->if_not_exists = true;
+					$$ = (Node *) n;
+				}
 		;
 
 opt_type:
@@ -10596,6 +10622,16 @@ CreateSubscriptionStmt:
 					n->options = $8;
 					$$ = (Node *) n;
 				}
+			| CREATE SUBSCRIPTION name SERVER name PUBLICATION name_list opt_definition
+				{
+					CreateSubscriptionStmt *n =
+						makeNode(CreateSubscriptionStmt);
+					n->subname = $3;
+					n->servername = $5;
+					n->publication = $7;
+					n->options = $8;
+					$$ = (Node *) n;
+				}
 		;
 
 /*****************************************************************************
@@ -10623,6 +10659,16 @@ AlterSubscriptionStmt:
 					n->kind = ALTER_SUBSCRIPTION_CONNECTION;
 					n->subname = $3;
 					n->conninfo = $5;
+					$$ = (Node *) n;
+				}
+			| ALTER SUBSCRIPTION name SERVER name
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+
+					n->kind = ALTER_SUBSCRIPTION_SERVER;
+					n->subname = $3;
+					n->servername = $5;
 					$$ = (Node *) n;
 				}
 			| ALTER SUBSCRIPTION name REFRESH PUBLICATION opt_definition

@@ -48,6 +48,7 @@
 #include "catalog/pg_cast_d.h"
 #include "catalog/pg_class_d.h"
 #include "catalog/pg_default_acl_d.h"
+#include "catalog/pg_foreign_data_wrapper.h"
 #include "catalog/pg_largeobject_d.h"
 #include "catalog/pg_largeobject_metadata_d.h"
 #include "catalog/pg_proc_d.h"
@@ -4595,6 +4596,7 @@ getSubscriptions(Archive *fout)
 	int			i_subtwophasestate;
 	int			i_subdisableonerr;
 	int			i_suborigin;
+	int			i_subservername;
 	int			i_subconninfo;
 	int			i_subslotname;
 	int			i_subsynccommit;
@@ -4655,17 +4657,26 @@ getSubscriptions(Archive *fout)
 	if (fout->remoteVersion >= 160000)
 		appendPQExpBufferStr(query,
 							 " s.suborigin,\n"
-							 " s.subpasswordrequired\n");
+							 " s.subpasswordrequired,\n");
 	else
 		appendPQExpBuffer(query,
 						  " '%s' AS suborigin,\n"
-						  " 't' AS subpasswordrequired\n",
+						  " 't' AS subpasswordrequired,\n",
 						  LOGICALREP_ORIGIN_ANY);
 
-	appendPQExpBufferStr(query,
-						 "FROM pg_subscription s\n"
-						 "WHERE s.subdbid = (SELECT oid FROM pg_database\n"
-						 "                   WHERE datname = current_database())");
+	if (fout->remoteVersion >= 170000)
+		appendPQExpBufferStr(query,
+							 " fs.srvname AS subservername\n"
+							 "FROM pg_subscription s LEFT JOIN pg_foreign_server fs\n"
+							 "  ON (s.subserver = fs.oid)\n"
+							 "WHERE s.subdbid = (SELECT oid FROM pg_database\n"
+							 "                   WHERE datname = current_database())");
+	else
+		appendPQExpBufferStr(query,
+							 " NULL AS subservername\n"
+							 "FROM pg_subscription s\n"
+							 "WHERE s.subdbid = (SELECT oid FROM pg_database\n"
+							 "                   WHERE datname = current_database())");
 
 	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
 
@@ -4679,6 +4690,7 @@ getSubscriptions(Archive *fout)
 	i_oid = PQfnumber(res, "oid");
 	i_subname = PQfnumber(res, "subname");
 	i_subowner = PQfnumber(res, "subowner");
+	i_subservername = PQfnumber(res, "subservername");
 	i_subconninfo = PQfnumber(res, "subconninfo");
 	i_subslotname = PQfnumber(res, "subslotname");
 	i_subsynccommit = PQfnumber(res, "subsynccommit");
@@ -4701,6 +4713,10 @@ getSubscriptions(Archive *fout)
 		AssignDumpId(&subinfo[i].dobj);
 		subinfo[i].dobj.name = pg_strdup(PQgetvalue(res, i, i_subname));
 		subinfo[i].rolname = getRoleName(PQgetvalue(res, i, i_subowner));
+		if (PQgetisnull(res, i, i_subservername))
+			subinfo[i].subservername = NULL;
+		else
+			subinfo[i].subservername = pg_strdup(PQgetvalue(res, i, i_subservername));
 		subinfo[i].subconninfo = pg_strdup(PQgetvalue(res, i, i_subconninfo));
 		if (PQgetisnull(res, i, i_subslotname))
 			subinfo[i].subslotname = NULL;
@@ -4759,9 +4775,17 @@ dumpSubscription(Archive *fout, const SubscriptionInfo *subinfo)
 	appendPQExpBuffer(delq, "DROP SUBSCRIPTION %s;\n",
 					  qsubname);
 
-	appendPQExpBuffer(query, "CREATE SUBSCRIPTION %s CONNECTION ",
+	appendPQExpBuffer(query, "CREATE SUBSCRIPTION %s ",
 					  qsubname);
-	appendStringLiteralAH(query, subinfo->subconninfo, fout);
+	if (subinfo->subservername)
+	{
+		appendPQExpBuffer(query, "SERVER %s", fmtId(subinfo->subservername));
+	}
+	else
+	{
+		appendPQExpBuffer(query, "CONNECTION ");
+		appendStringLiteralAH(query, subinfo->subconninfo, fout);
+	}
 
 	/* Build list of quoted publications and append them to query. */
 	if (!parsePGArray(subinfo->subpublications, &pubnames, &npubnames))
@@ -14641,9 +14665,9 @@ dumpForeignServer(Archive *fout, const ForeignServerInfo *srvinfo)
 	PQExpBuffer q;
 	PQExpBuffer delq;
 	PQExpBuffer query;
-	PGresult   *res;
+	PGresult   *res = NULL;
 	char	   *qsrvname;
-	char	   *fdwname;
+	char	   *fdwname = NULL;
 
 	/* Do nothing in data-only dump */
 	if (dopt->dataOnly)
@@ -14655,13 +14679,16 @@ dumpForeignServer(Archive *fout, const ForeignServerInfo *srvinfo)
 
 	qsrvname = pg_strdup(fmtId(srvinfo->dobj.name));
 
-	/* look up the foreign-data wrapper */
-	appendPQExpBuffer(query, "SELECT fdwname "
-					  "FROM pg_foreign_data_wrapper w "
-					  "WHERE w.oid = '%u'",
-					  srvinfo->srvfdw);
-	res = ExecuteSqlQueryForSingleRow(fout, query->data);
-	fdwname = PQgetvalue(res, 0, 0);
+	if (OidIsValid(srvinfo->srvfdw))
+	{
+		/* look up the foreign-data wrapper */
+		appendPQExpBuffer(query, "SELECT fdwname "
+						  "FROM pg_foreign_data_wrapper w "
+						  "WHERE w.oid = '%u'",
+						  srvinfo->srvfdw);
+		res = ExecuteSqlQueryForSingleRow(fout, query->data);
+		fdwname = PQgetvalue(res, 0, 0);
+	}
 
 	appendPQExpBuffer(q, "CREATE SERVER %s", qsrvname);
 	if (srvinfo->srvtype && strlen(srvinfo->srvtype) > 0)
@@ -14675,8 +14702,15 @@ dumpForeignServer(Archive *fout, const ForeignServerInfo *srvinfo)
 		appendStringLiteralAH(q, srvinfo->srvversion, fout);
 	}
 
-	appendPQExpBufferStr(q, " FOREIGN DATA WRAPPER ");
-	appendPQExpBufferStr(q, fmtId(fdwname));
+	if (!OidIsValid(srvinfo->srvfdw))
+	{
+		appendPQExpBufferStr(q, " FOR CONNECTION ONLY ");
+	}
+	else
+	{
+		appendPQExpBufferStr(q, " FOREIGN DATA WRAPPER ");
+		appendPQExpBufferStr(q, fmtId(fdwname));
+	}
 
 	if (srvinfo->srvoptions && strlen(srvinfo->srvoptions) > 0)
 		appendPQExpBuffer(q, " OPTIONS (\n    %s\n)", srvinfo->srvoptions);
@@ -14718,7 +14752,8 @@ dumpForeignServer(Archive *fout, const ForeignServerInfo *srvinfo)
 						 srvinfo->rolname,
 						 srvinfo->dobj.catId, srvinfo->dobj.dumpId);
 
-	PQclear(res);
+	if (res)
+		PQclear(res);
 
 	free(qsrvname);
 

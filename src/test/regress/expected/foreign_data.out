@@ -394,6 +394,48 @@ CREATE SERVER t2 FOREIGN DATA WRAPPER foo;
 
 RESET ROLE;
 REVOKE regress_test_indirect FROM regress_test_role;
+-- test SERVER ... FOR CONNECTION ONLY
+SET ROLE regress_test_role;
+CREATE SERVER t3 FOR CONNECTION ONLY; 			   -- ERROR: not a member of pg_create_connection
+ERROR:  permission denied to create server connection
+DETAIL:  Only roles with privileges of the "pg_create_connection" role may create servers FOR CONNECTION ONLY.
+RESET ROLE;
+GRANT pg_create_connection TO regress_test_role;
+SET ROLE regress_test_role;
+CREATE SERVER t3 FOR CONNECTION ONLY OPTIONS (client_encoding 'foo'); --fails
+ERROR:  cannot specify client_encoding in server FOR CONNECTION ONLY
+CREATE SERVER t3 FOR CONNECTION ONLY OPTIONS (user 'foo'); --fails
+ERROR:  invalid option "user" for server FOR CONNECTION ONLY
+HINT:  Specify option "user" for a user mapping associated with the server instead.
+CREATE SERVER t3 FOR CONNECTION ONLY OPTIONS (password 'foo'); --fails
+ERROR:  invalid option "password" for server FOR CONNECTION ONLY
+HINT:  Specify option "password" for a user mapping associated with the server instead.
+CREATE SERVER t3 FOR CONNECTION ONLY OPTIONS (password_required 'true'); --fails
+ERROR:  invalid option "password_required" for server FOR CONNECTION ONLY
+HINT:  Specify option "password_required" for a user mapping associated with the server instead.
+CREATE SERVER t3 FOR CONNECTION ONLY;
+IMPORT FOREIGN SCHEMA foo FROM SERVER t3 INTO bar; -- fails
+ERROR:  cannot import foreign schema using server that has FOR CONNECTION ONLY specified
+HINT:  Use a foreign server that has a FOREIGN DATA WRAPPER specified instead.
+CREATE USER MAPPING FOR PUBLIC SERVER t3 OPTIONS (user 'x'); -- fails
+ERROR:  password is required
+DETAIL:  Non-superusers must provide a password in the connection string.
+CREATE USER MAPPING FOR PUBLIC SERVER t3 OPTIONS (user 'x', password_required 'false'); -- fails
+ERROR:  password_required=false is superuser-only
+HINT:  User mappings with the password_required option set to false may only be created or modified by the superuser.
+CREATE USER MAPPING FOR PUBLIC SERVER t3 OPTIONS (user 'x', application_name 'nonsense'); -- fails
+ERROR:  invalid user mapping option "application_name"
+CREATE USER MAPPING FOR PUBLIC SERVER t3 OPTIONS (user 'x', password 'secret');
+DROP USER MAPPING FOR PUBLIC SERVER t3;
+RESET ROLE;
+CREATE USER MAPPING FOR PUBLIC SERVER t3 OPTIONS (user 'x'); -- still fails
+ERROR:  password is required
+DETAIL:  Non-superusers must provide a password in the connection string.
+CREATE USER MAPPING FOR PUBLIC SERVER t3 OPTIONS (user 'x', password 'secret');
+DROP USER MAPPING FOR PUBLIC SERVER t3;
+CREATE USER MAPPING FOR PUBLIC SERVER t3 OPTIONS (user 'x', password_required 'false');
+DROP USER MAPPING FOR PUBLIC SERVER t3;
+DROP SERVER t3;
 -- ALTER SERVER
 ALTER SERVER s0;                                            -- ERROR
 ERROR:  syntax error at or near ";"

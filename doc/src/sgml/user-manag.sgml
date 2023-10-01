@@ -689,10 +689,19 @@ DROP ROLE doomed_role;
        <xref linkend="guc-reserved-connections"/>.</entry>
       </row>
       <row>
+       <entry>pg_create_connection</entry>
+       <entry>Allow users with <literal>CREATE</literal> permission on the
+       database to issue <link linkend="sql-createserver"><command>CREATE
+       SERVER</command></link> if <literal>FOR CONNECTION ONLY</literal> is
+       specified.</entry>
+      </row>
+      <row>
        <entry>pg_create_subscription</entry>
        <entry>Allow users with <literal>CREATE</literal> permission on the
-       database to issue
-       <link linkend="sql-createsubscription"><command>CREATE SUBSCRIPTION</command></link>.</entry>
+       database to issue <link
+       linkend="sql-createsubscription"><command>CREATE
+       SUBSCRIPTION</command></link>.  This role is a member of
+       <literal>pg_create_connection</literal>.</entry>
       </row>
      </tbody>
     </tgroup>
@@ -736,6 +745,14 @@ DROP ROLE doomed_role;
   the server file system, they bypass all database-level permission checks when accessing files
   directly and they could be used to gain superuser-level access, therefore
   great care should be taken when granting these roles to users.
+  </para>
+
+  <para>
+  The <literal>pg_create_subscription</literal> role is a member of
+  <literal>pg_create_connection</literal>. It may be useful to revoke that
+  membership in order to permit roles to create subscriptions only to a
+  foreign server, without allowing them to specify a connection string
+  directly.
   </para>
 
   <para>

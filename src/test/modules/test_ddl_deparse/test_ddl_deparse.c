@@ -132,7 +132,7 @@ get_altertable_subcmdinfo(PG_FUNCTION_ARGS)
 			case AT_SetAttNotNull:
 				strtype = "SET ATTNOTNULL";
 				break;
-			case AT_DropExpression:
+			case AT_ColumnExpression:
 				strtype = "DROP EXPRESSION";
 				break;
 			case AT_SetStatistics:

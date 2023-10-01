@@ -455,8 +455,11 @@ static ObjectAddress ATExecAddIdentity(Relation rel, const char *colName,
 static ObjectAddress ATExecSetIdentity(Relation rel, const char *colName,
 									   Node *def, LOCKMODE lockmode);
 static ObjectAddress ATExecDropIdentity(Relation rel, const char *colName, bool missing_ok, LOCKMODE lockmode);
-static void ATPrepDropExpression(Relation rel, AlterTableCmd *cmd, bool recurse, bool recursing, LOCKMODE lockmode);
-static ObjectAddress ATExecDropExpression(Relation rel, const char *colName, bool missing_ok, LOCKMODE lockmode);
+static void ATPrepColumnExpression(Relation rel, AlterTableCmd *cmd,
+								   bool recurse, bool recursing, LOCKMODE lockmode);
+static ObjectAddress ATExecColumnExpression(AlteredTableInfo *tab, Relation rel,
+											const char *colName, Node *newDefault,
+											bool missing_ok, LOCKMODE lockmode);
 static ObjectAddress ATExecSetStatistics(Relation rel, const char *colName, int16 colNum,
 										 Node *newValue, LOCKMODE lockmode);
 static ObjectAddress ATExecSetOptions(Relation rel, const char *colName,
@@ -4449,7 +4452,7 @@ AlterTableGetLockLevel(List *cmds)
 			case AT_AddIdentity:
 			case AT_DropIdentity:
 			case AT_SetIdentity:
-			case AT_DropExpression:
+			case AT_ColumnExpression:
 			case AT_SetCompression:
 				cmd_lockmode = AccessExclusiveLock;
 				break;
@@ -4750,10 +4753,10 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			ATSimpleRecursion(wqueue, rel, cmd, recurse, lockmode, context);
 			pass = AT_PASS_COL_ATTRS;
 			break;
-		case AT_DropExpression: /* ALTER COLUMN DROP EXPRESSION */
+		case AT_ColumnExpression:	/* ALTER COLUMN SET/DROP EXPRESSION */
 			ATSimplePermissions(cmd->subtype, rel, ATT_TABLE | ATT_FOREIGN_TABLE);
 			ATSimpleRecursion(wqueue, rel, cmd, recurse, lockmode, context);
-			ATPrepDropExpression(rel, cmd, recurse, recursing, lockmode);
+			ATPrepColumnExpression(rel, cmd, recurse, recursing, lockmode);
 			pass = AT_PASS_DROP;
 			break;
 		case AT_SetStatistics:	/* ALTER COLUMN SET STATISTICS */
@@ -5135,8 +5138,9 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 		case AT_SetAttNotNull:	/* set pg_attribute.attnotnull */
 			address = ATExecSetAttNotNull(wqueue, rel, cmd->name, lockmode);
 			break;
-		case AT_DropExpression:
-			address = ATExecDropExpression(rel, cmd->name, cmd->missing_ok, lockmode);
+		case AT_ColumnExpression:
+			address = ATExecColumnExpression(tab, rel, cmd->name, cmd->def,
+											 cmd->missing_ok, lockmode);
 			break;
 		case AT_SetStatistics:	/* ALTER COLUMN SET STATISTICS */
 			address = ATExecSetStatistics(rel, cmd->name, cmd->num, cmd->def, lockmode);
@@ -6262,7 +6266,7 @@ alter_table_type_to_string(AlterTableType cmdtype)
 			return "ALTER COLUMN ... SET NOT NULL";
 		case AT_SetAttNotNull:
 			return NULL;		/* not real grammar */
-		case AT_DropExpression:
+		case AT_ColumnExpression:
 			return "ALTER COLUMN ... DROP EXPRESSION";
 		case AT_SetStatistics:
 			return "ALTER COLUMN ... SET STATISTICS";
@@ -8203,22 +8207,28 @@ ATExecDropIdentity(Relation rel, const char *colName, bool missing_ok, LOCKMODE 
 }
 
 /*
- * ALTER TABLE ALTER COLUMN DROP EXPRESSION
+ * ALTER TABLE ALTER COLUMN DROP/SET EXPRESSION
  */
 static void
-ATPrepDropExpression(Relation rel, AlterTableCmd *cmd, bool recurse, bool recursing, LOCKMODE lockmode)
+ATPrepColumnExpression(Relation rel, AlterTableCmd *cmd, bool recurse, bool recursing, LOCKMODE lockmode)
 {
 	/*
-	 * Reject ONLY if there are child tables.  We could implement this, but it
-	 * is a bit complicated.  GENERATED clauses must be attached to the column
-	 * definition and cannot be added later like DEFAULT, so if a child table
-	 * has a generation expression that the parent does not have, the child
-	 * column will necessarily be an attislocal column.  So to implement ONLY
-	 * here, we'd need extra code to update attislocal of the direct child
-	 * tables, somewhat similar to how DROP COLUMN does it, so that the
-	 * resulting state can be properly dumped and restored.
+	 * Only SET EXPRESSION would be having new expression for the replacement.
 	 */
-	if (!recurse &&
+	bool		isdrop = (cmd->def == NULL);
+
+	/*
+	 * Reject ALTER TABLE ONLY ... DROP EXPRESSION if there are child tables.
+	 * We could implement this, but it is a bit complicated.  GENERATED
+	 * clauses must be attached to the column definition and cannot be added
+	 * later like DEFAULT, so if a child table has a generation expression
+	 * that the parent does not have, the child column will necessarily be an
+	 * attislocal column. So to implement ONLY here, we'd need extra code to
+	 * update attislocal of the direct child tables, somewhat similar to how
+	 * DROP COLUMN does it, so that the resulting state can be properly dumped
+	 * and restored.
+	 */
+	if (!recurse && isdrop &&
 		find_inheritance_children(RelationGetRelid(rel), lockmode))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -8241,7 +8251,7 @@ ATPrepDropExpression(Relation rel, AlterTableCmd *cmd, bool recurse, bool recurs
 
 		attTup = (Form_pg_attribute) GETSTRUCT(tuple);
 
-		if (attTup->attinhcount > 0)
+		if (attTup->attinhcount > 0 && isdrop)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 					 errmsg("cannot drop generation expression from inherited column")));
@@ -8252,7 +8262,8 @@ ATPrepDropExpression(Relation rel, AlterTableCmd *cmd, bool recurse, bool recurs
  * Return the address of the affected column.
  */
 static ObjectAddress
-ATExecDropExpression(Relation rel, const char *colName, bool missing_ok, LOCKMODE lockmode)
+ATExecColumnExpression(AlteredTableInfo *tab, Relation rel, const char *colName,
+					   Node *newDefault, bool missing_ok, LOCKMODE lockmode)
 {
 	HeapTuple	tuple;
 	Form_pg_attribute attTup;
@@ -8296,16 +8307,21 @@ ATExecDropExpression(Relation rel, const char *colName, bool missing_ok, LOCKMOD
 		}
 	}
 
-	/*
-	 * Mark the column as no longer generated.  (The atthasdef flag needs to
-	 * get cleared too, but RemoveAttrDefault will handle that.)
-	 */
-	attTup->attgenerated = '\0';
-	CatalogTupleUpdate(attrelation, &tuple->t_self, tuple);
+	/* DROP EXPRESSION */
+	if (newDefault == NULL)
+	{
+		/*
+		 * Mark the column as no longer generated.  (The atthasdef flag needs
+		 * to get cleared too, but RemoveAttrDefault will handle that.)
+		 */
+		attTup->attgenerated = '\0';
+		CatalogTupleUpdate(attrelation, &tuple->t_self, tuple);
 
-	InvokeObjectPostAlterHook(RelationRelationId,
-							  RelationGetRelid(rel),
-							  attnum);
+		InvokeObjectPostAlterHook(RelationRelationId,
+								  RelationGetRelid(rel),
+								  attnum);
+	}
+
 	heap_freetuple(tuple);
 
 	table_close(attrelation, RowExclusiveLock);
@@ -8331,6 +8347,37 @@ ATExecDropExpression(Relation rel, const char *colName, bool missing_ok, LOCKMOD
 	 */
 	RemoveAttrDefault(RelationGetRelid(rel), attnum, DROP_RESTRICT,
 					  false, false);
+
+	/* SET EXPRESSION */
+	if (newDefault)
+	{
+		Expr	   *defval;
+		NewColumnValue *newval;
+		RawColumnDefault *rawEnt;
+
+		/* Prepare to store the EXPRESSION, in the catalogs */
+		rawEnt = (RawColumnDefault *) palloc(sizeof(RawColumnDefault));
+		rawEnt->attnum = attnum;
+		rawEnt->raw_default = newDefault;
+		rawEnt->missingMode = false;
+		rawEnt->generated = ATTRIBUTE_GENERATED_STORED;
+
+		/* Store the EXPRESSION */
+		AddRelationNewConstraints(rel, list_make1(rawEnt), NIL,
+								  false, true, false, NULL);
+		CommandCounterIncrement();
+
+		/* Prepare for table rewrite */
+		defval = (Expr *) build_column_default(rel, attnum);
+
+		newval = (NewColumnValue *) palloc0(sizeof(NewColumnValue));
+		newval->attnum = attnum;
+		newval->expr = expression_planner(defval);
+		newval->is_generated = true;
+
+		tab->newvals = lappend(tab->newvals, newval);
+		tab->rewrite |= AT_REWRITE_DEFAULT_VAL;
+	}
 
 	ObjectAddressSubSet(address, RelationRelationId,
 						RelationGetRelid(rel), attnum);

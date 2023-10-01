@@ -2404,12 +2404,22 @@ alter_table_cmd:
 					n->name = $3;
 					$$ = (Node *) n;
 				}
+			/* ALTER TABLE <name> ALTER [COLUMN] <colname> SET EXPRESSION <expr> STORED */
+			| ALTER opt_column ColId SET EXPRESSION '(' a_expr ')' STORED
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+
+					n->subtype = AT_ColumnExpression;
+					n->name = $3;
+					n->def = $7;
+					$$ = (Node *) n;
+				}
 			/* ALTER TABLE <name> ALTER [COLUMN] <colname> DROP EXPRESSION */
 			| ALTER opt_column ColId DROP EXPRESSION
 				{
 					AlterTableCmd *n = makeNode(AlterTableCmd);
 
-					n->subtype = AT_DropExpression;
+					n->subtype = AT_ColumnExpression;
 					n->name = $3;
 					$$ = (Node *) n;
 				}
@@ -2418,7 +2428,7 @@ alter_table_cmd:
 				{
 					AlterTableCmd *n = makeNode(AlterTableCmd);
 
-					n->subtype = AT_DropExpression;
+					n->subtype = AT_ColumnExpression;
 					n->name = $3;
 					n->missing_ok = true;
 					$$ = (Node *) n;

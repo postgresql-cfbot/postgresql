@@ -411,11 +411,28 @@ ALTER TABLE gtest_parent ATTACH PARTITION gtest_child3 FOR VALUES FROM ('2016-09
 \d gtest_child2
 \d gtest_child3
 INSERT INTO gtest_parent (f1, f2) VALUES ('2016-07-15', 1);
-SELECT * FROM gtest_parent;
-SELECT * FROM gtest_child;
-UPDATE gtest_parent SET f1 = f1 + 60;
-SELECT * FROM gtest_parent;
-SELECT * FROM gtest_child3;
+INSERT INTO gtest_parent (f1, f2) VALUES ('2016-07-15', 2);
+INSERT INTO gtest_parent (f1, f2) VALUES ('2016-08-15', 3);
+SELECT tableoid::regclass, * FROM gtest_parent ORDER BY 1;
+UPDATE gtest_parent SET f1 = f1 + 60 WHERE f2 = 1;
+SELECT tableoid::regclass, * FROM gtest_parent ORDER BY 1;
+
+-- alter only parent's and one child's generated expression
+ALTER TABLE ONLY gtest_parent ALTER COLUMN f3 SET EXPRESSION (f2 * 4) STORED;
+ALTER TABLE gtest_child ALTER COLUMN f3 SET EXPRESSION (f2 * 10) STORED;
+\d gtest_parent
+\d gtest_child
+\d gtest_child2
+\d gtest_child3
+SELECT tableoid::regclass, * FROM gtest_parent ORDER BY 1;
+
+-- alter generated expression of a parent and all it's child altogether
+ALTER TABLE gtest_parent ALTER COLUMN f3 SET EXPRESSION (f2 * 2) STORED;
+\d gtest_parent
+\d gtest_child
+\d gtest_child2
+\d gtest_child3
+SELECT tableoid::regclass, * FROM gtest_parent ORDER BY 1;
 -- we leave these tables around for purposes of testing dump/reload/upgrade
 
 -- generated columns in partition key (not allowed)
@@ -470,8 +487,17 @@ CREATE TABLE gtest29 (
     b int GENERATED ALWAYS AS (a * 2) STORED
 );
 INSERT INTO gtest29 (a) VALUES (3), (4);
+SELECT * FROM gtest29;
+\d gtest29
+ALTER TABLE gtest29 ALTER COLUMN a SET EXPRESSION (a * 3) STORED;  -- error
 ALTER TABLE gtest29 ALTER COLUMN a DROP EXPRESSION;  -- error
 ALTER TABLE gtest29 ALTER COLUMN a DROP EXPRESSION IF EXISTS;  -- notice
+
+-- Change the expression
+ALTER TABLE gtest29 ALTER COLUMN b SET EXPRESSION (a * 3) STORED;
+SELECT * FROM gtest29;
+\d gtest29
+
 ALTER TABLE gtest29 ALTER COLUMN b DROP EXPRESSION;
 INSERT INTO gtest29 (a) VALUES (5);
 INSERT INTO gtest29 (a, b) VALUES (6, 66);

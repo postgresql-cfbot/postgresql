@@ -46,6 +46,7 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> SET DEFAULT <replaceable class="parameter">expression</replaceable>
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> DROP DEFAULT
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> { SET | DROP } NOT NULL
+    ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> SET EXPRESSION <replaceable class="parameter">expression</replaceable> STORED
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> DROP EXPRESSION [ IF EXISTS ]
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> ADD GENERATED { ALWAYS | BY DEFAULT } AS IDENTITY [ ( <replaceable>sequence_options</replaceable> ) ]
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> { SET GENERATED { ALWAYS | BY DEFAULT } | SET <replaceable>sequence_option</replaceable> | RESTART [ [ WITH ] <replaceable class="parameter">restart</replaceable> ] } [...]
@@ -256,13 +257,18 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
     </listitem>
    </varlistentry>
 
-   <varlistentry id="sql-altertable-desc-drop-expression">
+   <varlistentry id="sql-altertable-desc-set-drop-expression">
     <term><literal>DROP EXPRESSION [ IF EXISTS ]</literal></term>
     <listitem>
      <para>
-      This form turns a stored generated column into a normal base column.
-      Existing data in the columns is retained, but future changes will no
-      longer apply the generation expression.
+      The <literal>SET</literal> form replaces stored generated value for a
+      column.  Existing data in the columns is rewritten and all the future
+      changes will apply the new generation expression.
+     </para>
+     <para>
+      The <literal>DROP</literal> form turns a stored generated column into a
+      normal base column.  Existing data in the columns is retained, but future
+      changes will no longer apply the generation expression.
      </para>
 
      <para>

@@ -74,6 +74,12 @@ static char *pg_realpath(const char *fname);
 static BOOL GetTokenUser(HANDLE hToken, PTOKEN_USER *ppTokenUser);
 #endif
 
+#ifdef __darwin__
+static char extra_envvars[4096];
+#else
+static const char extra_envvars[] = "";
+#endif 
+
 /*
  * validate_exec -- validate "path" as an executable file
  *
@@ -330,6 +336,15 @@ find_other_exec(const char *argv0, const char *target,
 	char		cmd[MAXPGPATH];
 	char		line[MAXPGPATH];
 
+#ifdef __darwin__
+        int result = 1;
+        result = snprintf(extra_envvars, sizeof(extra_envvars), "DYLD_LIBRARY_PATH=%s",
+                                                  getenv("DYLD_LIBRARY_PATH"));
+        if (result < 0 || result >= sizeof(extra_envvars))
+        {       
+                printf("extra_envars too small for DYLD_LIBRARY_PATH");
+        }
+#endif
 	if (find_my_exec(argv0, retpath) < 0)
 		return -1;
 
@@ -344,7 +359,7 @@ find_other_exec(const char *argv0, const char *target,
 	if (validate_exec(retpath) != 0)
 		return -1;
 
-	snprintf(cmd, sizeof(cmd), "\"%s\" -V", retpath);
+	snprintf(cmd, sizeof(cmd), "%s \"%s\" -V", extra_envvars, retpath);
 
 	if (!pipe_read_line(cmd, line, sizeof(line)))
 		return -1;

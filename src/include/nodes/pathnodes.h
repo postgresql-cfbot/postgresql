@@ -2839,6 +2839,10 @@ typedef struct PlaceHolderVar
  * cost estimation purposes it is sometimes useful to know the join size under
  * plain innerjoin semantics.  Note that lhs_strict and the semi_xxx fields
  * are not set meaningfully within such structs.
+ *
+ * We also create transient SpecialJoinInfos for child joins by translating
+ * corresponding parent SpecialJoinInfos. These are also not part of
+ * PlannerInfo's join_info_list.
  */
 #ifndef HAVE_SPECIALJOININFO_TYPEDEF
 typedef struct SpecialJoinInfo SpecialJoinInfo;

@@ -514,6 +514,15 @@ RestoreArchive(Archive *AHX)
 				 */
 				if (*te->dropStmt != '\0')
 				{
+					if (ropt->createDB && ropt->force)
+					{
+						int queryLen = strlen(te->dropStmt);
+						char	   *dropStmt = pnstrdup(te->dropStmt, queryLen - 2);
+						PQExpBuffer newStmt = createPQExpBuffer();
+						appendPQExpBufferStr(newStmt, dropStmt);
+						appendPQExpBufferStr(newStmt, " WITH(FORCE);");
+						te->dropStmt = newStmt->data;
+					}
 					if (!ropt->if_exists ||
 						strncmp(te->dropStmt, "--", 2) == 0)
 					{

@@ -74,6 +74,7 @@ main(int argc, char **argv)
 	static int	no_security_labels = 0;
 	static int	no_subscriptions = 0;
 	static int	strict_names = 0;
+	static bool	force = 0;
 
 	struct option cmdopts[] = {
 		{"clean", 0, NULL, 'c'},
@@ -123,6 +124,7 @@ main(int argc, char **argv)
 		{"no-publications", no_argument, &no_publications, 1},
 		{"no-security-labels", no_argument, &no_security_labels, 1},
 		{"no-subscriptions", no_argument, &no_subscriptions, 1},
+		{"force", no_argument, &force, 1},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -351,11 +353,29 @@ main(int argc, char **argv)
 	opts->no_publications = no_publications;
 	opts->no_security_labels = no_security_labels;
 	opts->no_subscriptions = no_subscriptions;
+	opts->force = force;
 
 	if (if_exists && !opts->dropSchema)
 		pg_fatal("option --if-exists requires option -c/--clean");
 	opts->if_exists = if_exists;
 	opts->strict_names = strict_names;
+
+	if(opts->force)
+	{
+		int currentMajorVersion = 0;
+		int ptr = 0, totalVersionLen = strlen(PG_VERSION);
+		while(ptr < totalVersionLen && PG_VERSION[ptr] >= '0' && PG_VERSION[ptr] <= '9')
+		{
+			currentMajorVersion = currentMajorVersion * 10 + (PG_VERSION[ptr] - '0');
+			ptr++;
+		}
+
+		if(currentMajorVersion < 13)
+		{
+			pg_log_error("option --force cannot be used with postgres versions less than 13");
+			exit_nicely(1);
+		}
+	}
 
 	if (opts->formatName)
 	{

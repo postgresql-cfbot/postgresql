@@ -730,6 +730,15 @@ PostgreSQL documentation
        </listitem>
      </varlistentry>
 
+     <varlistentry>
+      <term><option>--force</option></term>
+      <listitem>
+       <para>
+         Force database to drop while restoring if there are any connections.
+       </para>
+      </listitem>
+     </varlistentry>
+
     </variablelist>
    </para>
 

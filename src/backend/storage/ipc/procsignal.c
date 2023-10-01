@@ -255,8 +255,6 @@ CleanupProcSignalState(int status, Datum arg)
  *
  * On success (a signal was sent), zero is returned.
  * On error, -1 is returned, and errno is set (typically to ESRCH or EPERM).
- *
- * Not to be confused with ProcSendSignal
  */
 int
 SendProcSignal(pid_t pid, ProcSignalReason reason, BackendId backendId)

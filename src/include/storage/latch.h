@@ -119,6 +119,17 @@ typedef struct Latch
 } Latch;
 
 /*
+ * A buffer for setting multiple latches at a time.
+ */
+typedef struct LatchGroup
+{
+	int			size;
+	int			capacity;
+	Latch	  **latches;
+	Latch	   *in_place_buffer[64];
+} LatchGroup;
+
+/*
  * Bitmasks for events that may wake-up WaitLatch(), WaitLatchOrSocket(), or
  * WaitEventSetWait().
  */
@@ -170,6 +181,8 @@ extern void InitSharedLatch(Latch *latch);
 extern void OwnLatch(Latch *latch);
 extern void DisownLatch(Latch *latch);
 extern void SetLatch(Latch *latch);
+extern void AddLatch(LatchGroup *group, Latch *latch);
+extern void SetLatches(LatchGroup *group);
 extern void ResetLatch(Latch *latch);
 extern void ShutdownLatchSupport(void);
 

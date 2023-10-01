@@ -604,7 +604,10 @@ SlruInternalWritePage(SlruCtl ctl, int slotno, SlruWriteAll fdata)
 
 	/* If part of a checkpoint, count this as a buffer written. */
 	if (fdata)
-		CheckpointStats.ckpt_bufs_written++;
+	{
+		CheckpointStats.ckpt_slru_written++;
+		PendingCheckpointerStats.slru_written_checkpoints++;
+	}
 }
 
 /*

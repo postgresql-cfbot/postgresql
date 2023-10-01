@@ -220,7 +220,7 @@ static void RecordTransactionAbortPrepared(TransactionId xid,
 										   int nstats,
 										   xl_xact_stats_item *stats,
 										   const char *gid);
-static void ProcessRecords(char *bufptr, TransactionId xid,
+static void ProcessRecords(char *bufptr, Oid databaseid, TransactionId xid,
 						   const TwoPhaseCallback callbacks[]);
 static void RemoveGXact(GlobalTransaction gxact);
 
@@ -1629,9 +1629,9 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 
 	/* And now do the callbacks */
 	if (isCommit)
-		ProcessRecords(bufptr, xid, twophase_postcommit_callbacks);
+		ProcessRecords(bufptr, hdr->database, xid, twophase_postcommit_callbacks);
 	else
-		ProcessRecords(bufptr, xid, twophase_postabort_callbacks);
+		ProcessRecords(bufptr, hdr->database, xid, twophase_postabort_callbacks);
 
 	PredicateLockTwoPhaseFinish(xid, isCommit);
 
@@ -1664,7 +1664,7 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
  * Scan 2PC state data in memory and call the indicated callbacks for each 2PC record.
  */
 static void
-ProcessRecords(char *bufptr, TransactionId xid,
+ProcessRecords(char *bufptr, Oid databaseid, TransactionId xid,
 			   const TwoPhaseCallback callbacks[])
 {
 	for (;;)
@@ -1678,7 +1678,7 @@ ProcessRecords(char *bufptr, TransactionId xid,
 		bufptr += MAXALIGN(sizeof(TwoPhaseRecordOnDisk));
 
 		if (callbacks[record->rmid] != NULL)
-			callbacks[record->rmid] (xid, record->info,
+			callbacks[record->rmid] (databaseid, xid, record->info,
 									 (void *) bufptr, record->len);
 
 		bufptr += MAXALIGN(record->len);
@@ -2124,7 +2124,7 @@ RecoverPreparedTransactions(void)
 		/*
 		 * Recover other state (notably locks) using resource managers.
 		 */
-		ProcessRecords(bufptr, xid, twophase_recover_callbacks);
+		ProcessRecords(bufptr, hdr->database, xid, twophase_recover_callbacks);
 
 		/*
 		 * Release locks held by the standby process after we process each

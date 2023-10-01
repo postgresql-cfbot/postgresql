@@ -370,6 +370,39 @@ FullTransactionIdNewer(FullTransactionId a, FullTransactionId b)
 	return b;
 }
 
+
+/* return the distance between the two IDs */
+static inline int
+TransactionIdDistance(TransactionId from_xid, TransactionId to_xid)
+{
+	int			nxids;
+	TransactionId next_xid;
+
+	StaticAssertDecl(sizeof(int) >= sizeof(TransactionId),
+					 "TransactionId exceeds the width of int");
+	Assert(TransactionIdPrecedesOrEquals(from_xid, to_xid));
+
+	/*
+	 * Calculate the distance between the two XIDs. Normally this is cheap; in
+	 * the unusual case where the XIDs cross the wrap point, we do it the hard
+	 * way.
+	 */
+	if (to_xid >= from_xid)
+		nxids = to_xid - from_xid;
+	else
+	{
+		nxids = 0;
+		next_xid = from_xid;
+		while (TransactionIdPrecedes(next_xid, to_xid))
+		{
+			nxids++;
+			TransactionIdAdvance(next_xid);
+		}
+	}
+
+	return nxids;
+}
+
 #endif							/* FRONTEND */
 
 #endif							/* TRANSAM_H */

@@ -160,8 +160,10 @@ typedef struct SnapshotData
 	/*
 	 * For normal MVCC snapshot this contains the all xact IDs that are in
 	 * progress, unless the snapshot was taken during recovery in which case
-	 * it's empty. For historic MVCC snapshots, the meaning is inverted, i.e.
-	 * it contains *committed* transactions between xmin and xmax.
+	 * it's empty. In the case of !suboverflowed, there's a situation where
+	 * this contains both top and sub-transaction IDs in a mixed manner.  For
+	 * historic MVCC snapshots, the meaning is inverted, i.e.  it contains
+	 * *committed* transactions between xmin and xmax.
 	 *
 	 * note: all ids in xip[] satisfy xmin <= xip[i] < xmax
 	 */
@@ -171,8 +173,10 @@ typedef struct SnapshotData
 	/*
 	 * For non-historic MVCC snapshots, this contains subxact IDs that are in
 	 * progress (and other transactions that are in progress if taken during
-	 * recovery). For historic snapshot it contains *all* xids assigned to the
-	 * replayed transaction, including the toplevel xid.
+	 * recovery). In the case of !suboverflowed, there's a situation where this
+	 * contains both top and sub-transaction IDs in a mixed manner. For
+	 * historic snapshot it contains *all* xids assigned to the replayed
+	 * transaction, including the toplevel xid.
 	 *
 	 * note: all ids in subxip[] are >= xmin, but we don't bother filtering
 	 * out any that are >= xmax

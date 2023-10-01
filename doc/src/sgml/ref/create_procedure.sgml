@@ -25,6 +25,7 @@ CREATE [ OR REPLACE ] PROCEDURE
     <replaceable class="parameter">name</replaceable> ( [ [ <replaceable class="parameter">argmode</replaceable> ] [ <replaceable class="parameter">argname</replaceable> ] <replaceable class="parameter">argtype</replaceable> [ { DEFAULT | = } <replaceable class="parameter">default_expr</replaceable> ] [, ...] ] )
   { LANGUAGE <replaceable class="parameter">lang_name</replaceable>
     | TRANSFORM { FOR TYPE <replaceable class="parameter">type_name</replaceable> } [, ... ]
+    | SEARCH FROM { DEFAULT | TRUSTED | SESSION }
     | [ EXTERNAL ] SECURITY INVOKER | [ EXTERNAL ] SECURITY DEFINER
     | SET <replaceable class="parameter">configuration_parameter</replaceable> { TO <replaceable class="parameter">value</replaceable> | = <replaceable class="parameter">value</replaceable> | FROM CURRENT }
     | AS '<replaceable class="parameter">definition</replaceable>'
@@ -190,6 +191,60 @@ CREATE [ OR REPLACE ] PROCEDURE
        supplied, it will fall back to a default behavior for converting data
        types, but this depends on the implementation.
       </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>SEARCH FROM DEFAULT</literal></term>
+     <term><literal>SEARCH FROM TRUSTED</literal></term>
+     <term><literal>SEARCH FROM SESSION</literal></term>
+
+     <listitem>
+      <para>
+       Declare how <xref linkend="guc-search-path"/> will be initialized
+       before execution. <literal>SEARCH FROM TRUSTED</literal> causes the
+       search_path to be initialized to a safe value that includes built-in
+       objects. <literal>SEARCH FROM SESSION</literal> causes the search_path
+       to be inherited from the current setting in the session (or
+       current setting in the calling function or procedure).
+      </para>
+      <warning>
+       <para>
+        If <literal>search_path</literal> is inherited from the session, the
+        caller of the function or procedure may be able to manipulate its
+        behavior.
+       </para>
+      </warning>
+      <para>
+       Regardless of the <literal>SEARCH</literal> clause, the
+       <literal>search_path</literal> may be changed later just like any other
+       GUC, e.g. by using a <literal>SET</literal> clause in the declaration
+       or a <xref linkend="sql-set"/> command during execution.
+      </para>
+      <para>
+       If the function or procedure is specified with
+       <replaceable>sql_body</replaceable>, the <literal>SEARCH</literal>
+       clause does not affect the <literal>search_path</literal> used to find
+       objects referenced in the <replaceable>sql_body</replaceable> because
+       the it's parsed at definition time.
+      </para>
+      <para>
+       <literal>SEARCH FROM DEFAULT</literal> is the same as not specifying
+       any <literal>SEARCH</literal> clause at all, and the behavior is
+       equivalent to <literal>SEARCH FROM SESSION</literal>.
+      </para>
+      <note>
+       <para>
+        The <literal>search_path</literal> setting is important for functions
+        or procedures that parse statements at execution time (such as
+        PL/pgSQL, SQL specified with a <replaceable>definition</replaceable>,
+        or those that use the <link linkend="spi">Server Programming
+        Interface</link>), or those that call other functions or procedures
+        that parse statements at execution time.
+       </para>
+       <para>
+       </para>
+      </note>
      </listitem>
     </varlistentry>
 

@@ -624,6 +624,7 @@ AggregateCreate(const char *aggName,
 							 NULL,	/* probin */
 							 NULL,	/* prosqlbody */
 							 PROKIND_AGGREGATE,
+							 PROSEARCH_DEFAULT, /* no SEARCH clause for aggregates */
 							 false, /* security invoker (currently not
 									 * definable for agg) */
 							 false, /* isLeakProof */

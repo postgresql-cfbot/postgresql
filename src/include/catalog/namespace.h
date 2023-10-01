@@ -76,6 +76,12 @@ typedef enum RVROption
 typedef void (*RangeVarGetRelidCallback) (const RangeVar *relation, Oid relId,
 										  Oid oldRelId, void *callback_arg);
 
+/*
+ * Trusted search_path for cases where relying on the session search_path is
+ * unsafe (e.g. for SECURITY DEFINER functions).
+ */
+#define NAMESPACE_TRUSTED_SEARCH_PATH		"pg_catalog, pg_temp"
+
 #define RangeVarGetRelid(relation, lockmode, missing_ok) \
 	RangeVarGetRelidExtended(relation, lockmode, \
 							 (missing_ok) ? RVR_MISSING_OK : 0, NULL, NULL)

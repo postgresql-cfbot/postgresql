@@ -8553,6 +8553,21 @@ common_func_opt_item:
 				{
 					$$ = makeDefElem("support", (Node *) $2, @1);
 				}
+			| SEARCH FROM DEFAULT
+				{
+					/* we abuse the normal content of a DefElem here */
+					$$ = makeDefElem("search", (Node *) makeString("default"), @1);
+				}
+			| SEARCH FROM TRUSTED
+				{
+					/* we abuse the normal content of a DefElem here */
+					$$ = makeDefElem("search", (Node *) makeString("trusted"), @1);
+				}
+			| SEARCH FROM SESSION
+				{
+					/* we abuse the normal content of a DefElem here */
+					$$ = makeDefElem("search", (Node *) makeString("session"), @1);
+				}
 			| FunctionSetResetClause
 				{
 					/* we abuse the normal content of a DefElem here */

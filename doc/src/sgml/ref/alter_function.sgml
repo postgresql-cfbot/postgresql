@@ -37,6 +37,7 @@ ALTER FUNCTION <replaceable>name</replaceable> [ ( [ [ <replaceable class="param
     CALLED ON NULL INPUT | RETURNS NULL ON NULL INPUT | STRICT
     IMMUTABLE | STABLE | VOLATILE
     [ NOT ] LEAKPROOF
+    SEARCH FROM { DEFAULT | TRUSTED | SESSION }
     [ EXTERNAL ] SECURITY INVOKER | [ EXTERNAL ] SECURITY DEFINER
     PARALLEL { UNSAFE | RESTRICTED | SAFE }
     COST <replaceable class="parameter">execution_cost</replaceable>
@@ -194,6 +195,20 @@ ALTER FUNCTION <replaceable>name</replaceable> [ ( [ [ <replaceable class="param
       <para>
        Change the volatility of the function to the specified setting.
        See <xref linkend="sql-createfunction"/> for details.
+      </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>SEARCH FROM DEFAULT</literal></term>
+    <term><literal>SEARCH FROM TRUSTED</literal></term>
+    <term><literal>SEARCH FROM SESSION</literal></term>
+
+    <listitem>
+      <para>
+       Change the <literal>SEARCH</literal> behavior of the function to the
+       specified setting.  See <xref linkend="sql-createfunction"/> for
+       details.
       </para>
     </listitem>
    </varlistentry>

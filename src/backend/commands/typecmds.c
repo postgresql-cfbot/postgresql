@@ -1763,6 +1763,7 @@ makeRangeConstructors(const char *name, Oid namespace,
 								 NULL,	/* probin */
 								 NULL,	/* prosqlbody */
 								 PROKIND_FUNCTION,
+								 PROSEARCH_DEFAULT,
 								 false, /* security_definer */
 								 false, /* leakproof */
 								 false, /* isStrict */
@@ -1828,6 +1829,7 @@ makeMultirangeConstructors(const char *name, Oid namespace,
 							 NULL,	/* probin */
 							 NULL,	/* prosqlbody */
 							 PROKIND_FUNCTION,
+							 PROSEARCH_DEFAULT,
 							 false, /* security_definer */
 							 false, /* leakproof */
 							 true,	/* isStrict */
@@ -1872,6 +1874,7 @@ makeMultirangeConstructors(const char *name, Oid namespace,
 							 NULL,	/* probin */
 							 NULL,	/* prosqlbody */
 							 PROKIND_FUNCTION,
+							 PROSEARCH_DEFAULT,
 							 false, /* security_definer */
 							 false, /* leakproof */
 							 true,	/* isStrict */
@@ -1910,6 +1913,7 @@ makeMultirangeConstructors(const char *name, Oid namespace,
 							 NULL,	/* probin */
 							 NULL,	/* prosqlbody */
 							 PROKIND_FUNCTION,
+							 PROSEARCH_DEFAULT,
 							 false, /* security_definer */
 							 false, /* leakproof */
 							 true,	/* isStrict */

@@ -5277,12 +5277,12 @@ create function psql_df_plpgsql ()
   as $$ begin return; end; $$;
 comment on function psql_df_plpgsql () is 'some comment';
 \df+ psql_df_*
-                                                                                       List of functions
- Schema |       Name       | Result data type | Argument data types | Type | Volatility | Parallel |       Owner       | Security | Access privileges | Language | Internal name | Description  
---------+------------------+------------------+---------------------+------+------------+----------+-------------------+----------+-------------------+----------+---------------+--------------
- public | psql_df_internal | double precision | double precision    | func | immutable  | safe     | regress_psql_user | invoker  |                   | internal | dsin          | 
- public | psql_df_plpgsql  | void             |                     | func | volatile   | unsafe   | regress_psql_user | invoker  |                   | plpgsql  |               | some comment
- public | psql_df_sql      | integer          | x integer           | func | volatile   | unsafe   | regress_psql_user | definer  |                   | sql      |               | 
+                                                                                            List of functions
+ Schema |       Name       | Result data type | Argument data types | Type | Search  | Volatility | Parallel |       Owner       | Security | Access privileges | Language | Internal name | Description  
+--------+------------------+------------------+---------------------+------+---------+------------+----------+-------------------+----------+-------------------+----------+---------------+--------------
+ public | psql_df_internal | double precision | double precision    | func | default | immutable  | safe     | regress_psql_user | invoker  |                   | internal | dsin          | 
+ public | psql_df_plpgsql  | void             |                     | func | default | volatile   | unsafe   | regress_psql_user | invoker  |                   | plpgsql  |               | some comment
+ public | psql_df_sql      | integer          | x integer           | func | default | volatile   | unsafe   | regress_psql_user | definer  |                   | sql      |               | 
 (3 rows)
 
 rollback;

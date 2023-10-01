@@ -34,6 +34,7 @@ ALTER PROCEDURE <replaceable>name</replaceable> [ ( [ [ <replaceable class="para
 
 <phrase>where <replaceable class="parameter">action</replaceable> is one of:</phrase>
 
+    SEARCH FROM { DEFAULT | TRUSTED | SESSION }
     [ EXTERNAL ] SECURITY INVOKER | [ EXTERNAL ] SECURITY DEFINER
     SET <replaceable class="parameter">configuration_parameter</replaceable> { TO | = } { <replaceable class="parameter">value</replaceable> | DEFAULT }
     SET <replaceable class="parameter">configuration_parameter</replaceable> FROM CURRENT
@@ -155,6 +156,20 @@ ALTER PROCEDURE <replaceable>name</replaceable> [ ( [ [ <replaceable class="para
       A procedure can depend upon multiple extensions, and will be dropped when
       any one of those extensions is dropped.
      </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>SEARCH FROM DEFAULT</literal></term>
+    <term><literal>SEARCH FROM TRUSTED</literal></term>
+    <term><literal>SEARCH FROM SESSION</literal></term>
+
+    <listitem>
+      <para>
+       Change the <literal>SEARCH</literal> behavior of the function to the
+       specified setting.  See <xref linkend="sql-createprocedure"/> for
+       details.
+      </para>
     </listitem>
    </varlistentry>
 

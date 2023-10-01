@@ -3335,7 +3335,7 @@ CleanupBackgroundWorker(int pid,
 		 */
 		if (rw->rw_backend->bgworker_notify)
 			BackgroundWorkerStopNotifications(rw->rw_pid);
-		free(rw->rw_backend);
+		pfree(rw->rw_backend);
 		rw->rw_backend = NULL;
 		rw->rw_pid = 0;
 		rw->rw_child_slot = 0;
@@ -3428,7 +3428,7 @@ CleanupBackend(int pid,
 				BackgroundWorkerStopNotifications(bp->pid);
 			}
 			dlist_delete(iter.cur);
-			free(bp);
+			pfree(bp);
 			break;
 		}
 	}
@@ -3484,7 +3484,7 @@ HandleChildCrash(int pid, int exitstatus, const char *procname)
 #ifdef EXEC_BACKEND
 			ShmemBackendArrayRemove(rw->rw_backend);
 #endif
-			free(rw->rw_backend);
+			pfree(rw->rw_backend);
 			rw->rw_backend = NULL;
 			rw->rw_pid = 0;
 			rw->rw_child_slot = 0;
@@ -3521,7 +3521,7 @@ HandleChildCrash(int pid, int exitstatus, const char *procname)
 #endif
 			}
 			dlist_delete(iter.cur);
-			free(bp);
+			pfree(bp);
 			/* Keep looping so we can signal remaining backends */
 		}
 		else
@@ -4097,7 +4097,7 @@ BackendStartup(Port *port)
 	 * Create backend data structure.  Better before the fork() so we can
 	 * handle failure cleanly.
 	 */
-	bn = (Backend *) malloc(sizeof(Backend));
+	bn = (Backend *) palloc_extended(sizeof(Backend), MCXT_ALLOC_NO_OOM);
 	if (!bn)
 	{
 		ereport(LOG,
@@ -4113,7 +4113,7 @@ BackendStartup(Port *port)
 	 */
 	if (!RandomCancelKey(&MyCancelKey))
 	{
-		free(bn);
+		pfree(bn);
 		ereport(LOG,
 				(errcode(ERRCODE_INTERNAL_ERROR),
 				 errmsg("could not generate random cancel key")));
@@ -4143,8 +4143,6 @@ BackendStartup(Port *port)
 	pid = fork_process();
 	if (pid == 0)				/* child */
 	{
-		free(bn);
-
 		/* Detangle from postmaster */
 		InitPostmasterChild();
 
@@ -4175,7 +4173,7 @@ BackendStartup(Port *port)
 
 		if (!bn->dead_end)
 			(void) ReleasePostmasterChildSlot(bn->child_slot);
-		free(bn);
+		pfree(bn);
 		errno = save_errno;
 		ereport(LOG,
 				(errmsg("could not fork new process for connection: %m")));
@@ -5438,7 +5436,7 @@ StartAutovacuumWorker(void)
 			return;
 		}
 
-		bn = (Backend *) malloc(sizeof(Backend));
+		bn = (Backend *) palloc_extended(sizeof(Backend), MCXT_ALLOC_NO_OOM);
 		if (bn)
 		{
 			bn->cancel_key = MyCancelKey;
@@ -5465,7 +5463,7 @@ StartAutovacuumWorker(void)
 			 * logged by StartAutoVacWorker
 			 */
 			(void) ReleasePostmasterChildSlot(bn->child_slot);
-			free(bn);
+			pfree(bn);
 		}
 		else
 			ereport(LOG,
@@ -5710,7 +5708,7 @@ do_start_bgworker(RegisteredBgWorker *rw)
 			/* undo what assign_backendlist_entry did */
 			ReleasePostmasterChildSlot(rw->rw_child_slot);
 			rw->rw_child_slot = 0;
-			free(rw->rw_backend);
+			pfree(rw->rw_backend);
 			rw->rw_backend = NULL;
 			/* mark entry as crashed, so we'll try again later */
 			rw->rw_crashed_at = GetCurrentTimestamp();
@@ -5836,7 +5834,7 @@ assign_backendlist_entry(RegisteredBgWorker *rw)
 		return false;
 	}
 
-	bn = malloc(sizeof(Backend));
+	bn = palloc_extended(sizeof(Backend), MCXT_ALLOC_NO_OOM);
 	if (bn == NULL)
 	{
 		ereport(LOG,

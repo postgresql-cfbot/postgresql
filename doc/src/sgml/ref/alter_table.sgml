@@ -720,6 +720,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
      <para>
       This form changes the access method of the table by rewriting it. See
       <xref linkend="tableam"/> for more information.
+      When applied to a partitioned table, there is no data to rewrite, but any
+      partitions created afterwards with
+      <command>CREATE TABLE PARTITION OF</command> will use that access method,
+      unless overridden by an <literal>USING</literal> clause.
      </para>
     </listitem>
    </varlistentry>

@@ -224,8 +224,11 @@ extern void printTableSetFooter(printTableContent *const content,
 extern void printTableCleanup(printTableContent *const content);
 extern void printTable(const printTableContent *cont,
 					   FILE *fout, bool is_pager, FILE *flog);
-extern void printQuery(const PGresult *result, const printQueryOpt *opt,
+extern void printQuery(PGresult *result, const printQueryOpt *opt,
 					   FILE *fout, bool is_pager, FILE *flog);
+extern void printQueryChunks(PGresult *results[], int nresults,
+							 const printQueryOpt *opt,
+							 FILE *fout, bool is_pager, FILE *flog);
 
 extern char column_type_alignment(Oid);
 

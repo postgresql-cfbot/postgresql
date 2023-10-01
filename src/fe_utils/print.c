@@ -3532,19 +3532,44 @@ printTable(const printTableContent *cont,
  * flog: if not null, also print the data there (for --log-file option)
  */
 void
-printQuery(const PGresult *result, const printQueryOpt *opt,
+printQuery(PGresult *result, const printQueryOpt *opt,
 		   FILE *fout, bool is_pager, FILE *flog)
+{
+	printQueryChunks(&result, 1, opt, fout, is_pager, flog);
+}
+
+/*
+ * Print the results of a query that may have been obtained by a
+ * succession of calls to PQgetResult in single-row mode.
+ *
+ * results: array of results of a successful query. They must have the same columns.
+ * nbresults: size of results
+ * opt: formatting options
+ * fout: where to print to
+ * is_pager: true if caller has already redirected fout to be a pager pipe
+ * flog: if not null, also print the data there (for --log-file option)
+ */
+void
+printQueryChunks(PGresult *results[], int nresults, const printQueryOpt *opt,
+				 FILE *fout, bool is_pager, FILE *flog)
 {
 	printTableContent cont;
 	int			i,
 				r,
 				c;
+	int			nrows = 0;		/* total number of rows */
+	int			ri;				/* index into results[] */
 
 	if (cancel_pressed)
 		return;
 
+	for (ri = 0; ri < nresults; ri++)
+	{
+		nrows += PQntuples(results[ri]);
+	}
+
 	printTableInit(&cont, &opt->topt, opt->title,
-				   PQnfields(result), PQntuples(result));
+				   (nresults > 0) ? PQnfields(results[0]) : 0, nrows);
 
 	/* Assert caller supplied enough translate_columns[] entries */
 	Assert(opt->translate_columns == NULL ||
@@ -3552,34 +3577,37 @@ printQuery(const PGresult *result, const printQueryOpt *opt,
 
 	for (i = 0; i < cont.ncolumns; i++)
 	{
-		printTableAddHeader(&cont, PQfname(result, i),
+		printTableAddHeader(&cont, PQfname(results[0], i),
 							opt->translate_header,
-							column_type_alignment(PQftype(result, i)));
+							column_type_alignment(PQftype(results[0], i)));
 	}
 
 	/* set cells */
-	for (r = 0; r < cont.nrows; r++)
+	for (ri = 0; ri < nresults; ri++)
 	{
-		for (c = 0; c < cont.ncolumns; c++)
+		for (r = 0; r < PQntuples(results[ri]); r++)
 		{
-			char	   *cell;
-			bool		mustfree = false;
-			bool		translate;
-
-			if (PQgetisnull(result, r, c))
-				cell = opt->nullPrint ? opt->nullPrint : "";
-			else
+			for (c = 0; c < cont.ncolumns; c++)
 			{
-				cell = PQgetvalue(result, r, c);
-				if (cont.aligns[c] == 'r' && opt->topt.numericLocale)
-				{
-					cell = format_numeric_locale(cell);
-					mustfree = true;
-				}
-			}
+				char	   *cell;
+				bool		mustfree = false;
+				bool		translate;
 
-			translate = (opt->translate_columns && opt->translate_columns[c]);
-			printTableAddCell(&cont, cell, translate, mustfree);
+				if (PQgetisnull(results[ri], r, c))
+					cell = opt->nullPrint ? opt->nullPrint : "";
+				else
+				{
+					cell = PQgetvalue(results[ri], r, c);
+					if (cont.aligns[c] == 'r' && opt->topt.numericLocale)
+					{
+						cell = format_numeric_locale(cell);
+						mustfree = true;
+					}
+				}
+
+				translate = (opt->translate_columns && opt->translate_columns[c]);
+				printTableAddCell(&cont, cell, translate, mustfree);
+			}
 		}
 	}
 

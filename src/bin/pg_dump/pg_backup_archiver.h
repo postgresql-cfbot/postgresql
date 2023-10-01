@@ -68,10 +68,11 @@
 #define K_VERS_1_15 MAKE_ARCHIVE_VERSION(1, 15, 0)	/* add
 													 * compression_algorithm
 													 * in header */
+#define K_VERS_1_16 MAKE_ARCHIVE_VERSION(1, 16, 0)	/* optimize dump format, add dictionnaries for common strings */
 
 /* Current archive version number (the format we can output) */
 #define K_VERS_MAJOR 1
-#define K_VERS_MINOR 15
+#define K_VERS_MINOR 16
 #define K_VERS_REV 0
 #define K_VERS_SELF MAKE_ARCHIVE_VERSION(K_VERS_MAJOR, K_VERS_MINOR, K_VERS_REV)
 
@@ -345,10 +346,14 @@ struct _tocEntry
 								 * in restore) */
 	char	   *tag;			/* index tag */
 	char	   *namespace;		/* null or empty string if not in a schema */
+	int			namespace_idx;	/* schema idx in dictionnary */
 	char	   *tablespace;		/* null if not in a tablespace; empty string
 								 * means use database default */
+	int			tablespace_idx;	/* tablespace idx in dictionnary */
 	char	   *tableam;		/* table access method, only for TABLE tags */
+	int			tableam_idx;	/* table access method idx in dictionnary, only for TABLE tags */
 	char	   *owner;
+	int			owner_idx;
 	char	   *desc;
 	char	   *defn;
 	char	   *dropStmt;

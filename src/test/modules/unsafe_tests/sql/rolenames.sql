@@ -492,6 +492,13 @@ SET SESSION AUTHORIZATION regress_role_nopriv;
 SHOW session_preload_libraries;
 RESET SESSION AUTHORIZATION;
 ROLLBACK;
+BEGIN;
+SET SESSION AUTHORIZATION regress_role_haspriv;
+-- passes with role member of pg_read_all_settings
+SELECT pg_config_unitless_value('session_preload_libraries', 'val');
+SET SESSION AUTHORIZATION regress_role_nopriv;
+SELECT pg_config_unitless_value('session_preload_libraries', 'val');
+ROLLBACK;
 REVOKE pg_read_all_settings FROM regress_role_haspriv;
 
 -- clean up

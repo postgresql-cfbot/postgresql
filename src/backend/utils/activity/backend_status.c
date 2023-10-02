@@ -37,6 +37,8 @@
  */
 #define NumBackendStatSlots (MaxBackends + NUM_AUXPROCTYPES)
 
+/* Safety net to prevent requesting huge memory by each query to pg_stat_activity */
+#define PGSTAT_MAX_ACTIVITY_BUF_SIZE 4 * 1024 * 1024 * 1024L
 
 /* ----------
  * GUC parameters
@@ -84,6 +86,7 @@ Size
 BackendStatusShmemSize(void)
 {
 	Size		size;
+	Size		pgstat_track_size;
 
 	/* BackendStatusArray: */
 	size = mul_size(sizeof(PgBackendStatus), NumBackendStatSlots);
@@ -94,8 +97,14 @@ BackendStatusShmemSize(void)
 	size = add_size(size,
 					mul_size(NAMEDATALEN, NumBackendStatSlots));
 	/* BackendActivityBuffer: */
-	size = add_size(size,
-					mul_size(pgstat_track_activity_query_size, NumBackendStatSlots));
+	pgstat_track_size = mul_size(pgstat_track_activity_query_size,
+					NumBackendStatSlots);
+	if(pgstat_track_size >= PGSTAT_MAX_ACTIVITY_BUF_SIZE)
+		ereport(ERROR,
+			(errcode(ERRCODE_CONFIG_FILE_ERROR),
+			 errmsg("size requested for backend status is out of range")));
+	size = add_size(size, pgstat_track_size);
+
 #ifdef USE_SSL
 	/* BackendSslStatusBuffer: */
 	size = add_size(size,
@@ -765,7 +774,7 @@ pgstat_read_current_status(void)
 						   NAMEDATALEN * NumBackendStatSlots);
 	localactivity = (char *)
 		MemoryContextAllocHuge(backendStatusSnapContext,
-							   pgstat_track_activity_query_size * NumBackendStatSlots);
+							   (size_t)pgstat_track_activity_query_size * (size_t)NumBackendStatSlots);
 #ifdef USE_SSL
 	localsslstatus = (PgBackendSSLStatus *)
 		MemoryContextAlloc(backendStatusSnapContext,

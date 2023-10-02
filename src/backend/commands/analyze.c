@@ -772,9 +772,9 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 
 			if (delay_in_ms > 0)
 			{
-				read_rate = (double) BLCKSZ * AnalyzePageMiss / (1024 * 1024) /
+				read_rate = (double) cluster_block_size * AnalyzePageMiss / (1024 * 1024) /
 					(delay_in_ms / 1000.0);
-				write_rate = (double) BLCKSZ * AnalyzePageDirty / (1024 * 1024) /
+				write_rate = (double) cluster_block_size * AnalyzePageDirty / (1024 * 1024) /
 					(delay_in_ms / 1000.0);
 			}
 

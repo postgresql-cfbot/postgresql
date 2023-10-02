@@ -38,11 +38,11 @@
  * divide the amount of free space a page can have into 256 different
  * categories. The highest category, 255, represents a page with at least
  * MaxFSMRequestSize bytes of free space, and the second highest category
- * represents the range from 254 * FSM_CAT_STEP, inclusive, to
+ * represents the range from 254 * fsm_cat_step, inclusive, to
  * MaxFSMRequestSize, exclusive.
  *
- * MaxFSMRequestSize depends on the architecture and BLCKSZ, but assuming
- * default 8k BLCKSZ, and that MaxFSMRequestSize is 8164 bytes, the
+ * MaxFSMRequestSize depends on the architecture and cluster_block_size, but assuming
+ * default 8k cluster_block_size, and that MaxFSMRequestSize is 8164 bytes, the
  * categories look like this:
  *
  *
@@ -62,14 +62,14 @@
  * request of exactly MaxFSMRequestSize bytes.
  */
 #define FSM_CATEGORIES	256
-#define FSM_CAT_STEP	(BLCKSZ / FSM_CATEGORIES)
+#define fsm_cat_step	(cluster_block_size / FSM_CATEGORIES)
 #define MaxFSMRequestSize	MaxHeapTupleSize
 
 /*
  * Depth of the on-disk tree. We need to be able to address 2^32-1 blocks,
  * and 1626 is the smallest number that satisfies X^3 >= 2^32-1. Likewise,
  * 256 is the smallest number that satisfies X^4 >= 2^32-1. In practice,
- * this means that 4096 bytes is the smallest BLCKSZ that we can get away
+ * this means that 4096 bytes is the smallest cluster_block_size that we can get away
  * with a 3-level tree, and 512 is the smallest we support.
  */
 #define FSM_TREE_DEPTH	((SlotsPerFSMPage >= 1626) ? 3 : 4)
@@ -87,8 +87,8 @@ typedef struct
 	int			logpageno;		/* page number within the level */
 } FSMAddress;
 
-/* Address of the root page. */
-static const FSMAddress FSM_ROOT_ADDRESS = {FSM_ROOT_LEVEL, 0};
+/* Address of the root page. Level is adjusted by FreeSpaceMapInit()  */
+static FSMAddress FSM_ROOT_ADDRESS = {0,0};
 
 /* functions to navigate the tree */
 static FSMAddress fsm_get_child(FSMAddress parent, uint16 slot);
@@ -115,6 +115,17 @@ static uint8 fsm_vacuum_page(Relation rel, FSMAddress addr,
 
 
 /******** Public API ********/
+
+/*
+ * FreeSpaceMapInit - initialize the FSM system with the cluster block size
+ *
+ */
+
+void
+FreeSpaceMapInit(void)
+{
+	FSM_ROOT_ADDRESS.level = FSM_ROOT_LEVEL;
+}
 
 /*
  * GetPageWithFreeSpace - try to find a page in the given relation with
@@ -217,7 +228,7 @@ XLogRecordPageWithFreeSpace(RelFileLocator rlocator, BlockNumber heapBlk,
 
 	page = BufferGetPage(buf);
 	if (PageIsNew(page))
-		PageInit(page, BLCKSZ, 0);
+		PageInit(page, cluster_block_size, 0);
 
 	if (fsm_set_avail(page, slot, new_cat))
 		MarkBufferDirtyHint(buf, false);
@@ -370,12 +381,12 @@ fsm_space_avail_to_cat(Size avail)
 {
 	int			cat;
 
-	Assert(avail < BLCKSZ);
+	Assert(avail < cluster_block_size);
 
 	if (avail >= MaxFSMRequestSize)
 		return 255;
 
-	cat = avail / FSM_CAT_STEP;
+	cat = avail / fsm_cat_step;
 
 	/*
 	 * The highest category, 255, is reserved for MaxFSMRequestSize bytes or
@@ -398,7 +409,7 @@ fsm_space_cat_to_avail(uint8 cat)
 	if (cat == 255)
 		return MaxFSMRequestSize;
 	else
-		return cat * FSM_CAT_STEP;
+		return cat * fsm_cat_step;
 }
 
 /*
@@ -417,7 +428,7 @@ fsm_space_needed_to_cat(Size needed)
 	if (needed == 0)
 		return 1;
 
-	cat = (needed + FSM_CAT_STEP - 1) / FSM_CAT_STEP;
+	cat = (needed + fsm_cat_step - 1) / fsm_cat_step;
 
 	if (cat > 255)
 		cat = 255;
@@ -598,7 +609,7 @@ fsm_readbuf(Relation rel, FSMAddress addr, bool extend)
 	{
 		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 		if (PageIsNew(BufferGetPage(buf)))
-			PageInit(BufferGetPage(buf), BLCKSZ, 0);
+			PageInit(BufferGetPage(buf), cluster_block_size, 0);
 		LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 	}
 	return buf;

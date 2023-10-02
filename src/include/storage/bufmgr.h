@@ -321,7 +321,7 @@ BufferGetBlock(Buffer buffer)
 	if (BufferIsLocal(buffer))
 		return LocalBufferBlockPointers[-buffer - 1];
 	else
-		return (Block) (BufferBlocks + ((Size) (buffer - 1)) * BLCKSZ);
+		return (Block) (BufferBlocks + ((Size) (buffer - 1)) * cluster_block_size);
 }
 
 /*
@@ -339,7 +339,7 @@ static inline Size
 BufferGetPageSize(Buffer buffer)
 {
 	AssertMacro(BufferIsValid(buffer));
-	return (Size) BLCKSZ;
+	return (Size) cluster_block_size;
 }
 
 /*

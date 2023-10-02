@@ -216,8 +216,8 @@
  *
  *	  Tapes' buffers can take up substantial memory when many tapes are open at
  *	  once. We only need one tape open at a time in read mode (using a buffer
- *	  that's a multiple of BLCKSZ); but we need one tape open in write mode (each
- *	  requiring a buffer of size BLCKSZ) for each partition.
+ *	  that's a multiple of cluster_block_size); but we need one tape open in write mode (each
+ *	  requiring a buffer of size cluster_block_size) for each partition.
  *
  *	  Note that it's possible for transition states to start small but then
  *	  grow very large; for instance in the case of ARRAY_AGG. In such cases,
@@ -299,12 +299,12 @@
 
 /*
  * For reading from tapes, the buffer size must be a multiple of
- * BLCKSZ. Larger values help when reading from multiple tapes concurrently,
- * but that doesn't happen in HashAgg, so we simply use BLCKSZ. Writing to a
- * tape always uses a buffer of size BLCKSZ.
+ * cluster_block_size. Larger values help when reading from multiple tapes concurrently,
+ * but that doesn't happen in HashAgg, so we simply use cluster_block_size. Writing to a
+ * tape always uses a buffer of size cluster_block_size.
  */
-#define HASHAGG_READ_BUFFER_SIZE BLCKSZ
-#define HASHAGG_WRITE_BUFFER_SIZE BLCKSZ
+#define hashagg_read_buffer_size cluster_block_size
+#define hashagg_write_buffer_size cluster_block_size
 
 /*
  * HyperLogLog is used for estimating the cardinality of the spilled tuples in
@@ -1827,8 +1827,8 @@ hash_agg_set_limits(double hashentrysize, double input_groups, int used_bits,
 		*num_partitions = npartitions;
 
 	partition_mem =
-		HASHAGG_READ_BUFFER_SIZE +
-		HASHAGG_WRITE_BUFFER_SIZE * npartitions;
+		hashagg_read_buffer_size +
+		hashagg_write_buffer_size * npartitions;
 
 	/*
 	 * Don't set the limit below 3/4 of hash_mem. In that case, we are at the
@@ -1933,9 +1933,9 @@ hash_agg_update_metrics(AggState *aggstate, bool from_tape, int npartitions)
 	hashkey_mem = MemoryContextMemAllocated(aggstate->hashcontext->ecxt_per_tuple_memory, true);
 
 	/* memory for read/write tape buffers, if spilled */
-	buffer_mem = npartitions * HASHAGG_WRITE_BUFFER_SIZE;
+	buffer_mem = npartitions * hashagg_write_buffer_size;
 	if (from_tape)
-		buffer_mem += HASHAGG_READ_BUFFER_SIZE;
+		buffer_mem += hashagg_read_buffer_size;
 
 	/* update peak mem */
 	total_mem = meta_mem + hashkey_mem + buffer_mem;
@@ -1945,7 +1945,7 @@ hash_agg_update_metrics(AggState *aggstate, bool from_tape, int npartitions)
 	/* update disk usage */
 	if (aggstate->hash_tapeset != NULL)
 	{
-		uint64		disk_used = LogicalTapeSetBlocks(aggstate->hash_tapeset) * (BLCKSZ / 1024);
+		uint64		disk_used = LogicalTapeSetBlocks(aggstate->hash_tapeset) * (cluster_block_size / 1024);
 
 		if (aggstate->hash_disk_used < disk_used)
 			aggstate->hash_disk_used = disk_used;
@@ -2004,8 +2004,8 @@ hash_choose_num_partitions(double input_groups, double hashentrysize,
 	 * open partition files are greater than 1/4 of hash_mem.
 	 */
 	partition_limit =
-		(hash_mem_limit * 0.25 - HASHAGG_READ_BUFFER_SIZE) /
-		HASHAGG_WRITE_BUFFER_SIZE;
+		(hash_mem_limit * 0.25 - hashagg_read_buffer_size) /
+		hashagg_write_buffer_size;
 
 	mem_wanted = HASHAGG_PARTITION_FACTOR * input_groups * hashentrysize;
 
@@ -3113,7 +3113,7 @@ hashagg_spill_finish(AggState *aggstate, HashAggSpill *spill, int setno)
 		freeHyperLogLog(&spill->hll_card[i]);
 
 		/* rewinding frees the buffer while not in use */
-		LogicalTapeRewindForRead(tape, HASHAGG_READ_BUFFER_SIZE);
+		LogicalTapeRewindForRead(tape, hashagg_read_buffer_size);
 
 		new_batch = hashagg_batch_new(tape, setno,
 									  spill->ntuples[i], cardinality,

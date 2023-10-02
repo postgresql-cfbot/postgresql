@@ -324,7 +324,7 @@ _bt_bottomupdel_pass(Relation rel, Buffer buf, Relation heapRel,
 	state = (BTDedupState) palloc(sizeof(BTDedupStateData));
 	state->deduplicate = true;
 	state->nmaxitems = 0;
-	state->maxpostingsize = BLCKSZ; /* We're not really deduplicating */
+	state->maxpostingsize = cluster_block_size; /* We're not really deduplicating */
 	state->base = NULL;
 	state->baseoff = InvalidOffsetNumber;
 	state->basetupsize = 0;
@@ -353,7 +353,7 @@ _bt_bottomupdel_pass(Relation rel, Buffer buf, Relation heapRel,
 	delstate.irel = rel;
 	delstate.iblknum = BufferGetBlockNumber(buf);
 	delstate.bottomup = true;
-	delstate.bottomupfreespace = Max(BLCKSZ / 16, newitemsz);
+	delstate.bottomupfreespace = Max(cluster_block_size / 16, newitemsz);
 	delstate.ndeltids = 0;
 	delstate.deltids = palloc(MaxTIDsPerBTreePage * sizeof(TM_IndexDelete));
 	delstate.status = palloc(MaxTIDsPerBTreePage * sizeof(TM_IndexStatus));
@@ -417,7 +417,7 @@ _bt_bottomupdel_pass(Relation rel, Buffer buf, Relation heapRel,
 		return true;
 
 	/* Don't dedup when we won't end up back here any time soon anyway */
-	return PageGetExactFreeSpace(page) >= Max(BLCKSZ / 24, newitemsz);
+	return PageGetExactFreeSpace(page) >= Max(cluster_block_size / 24, newitemsz);
 }
 
 /*
@@ -597,7 +597,7 @@ _bt_dedup_finish_pending(Page newpage, BTDedupState state)
 		spacesaving = state->phystupsize - (tuplesz + sizeof(ItemIdData));
 		/* Increment nintervals, since we wrote a new posting list tuple */
 		state->nintervals++;
-		Assert(spacesaving > 0 && spacesaving < BLCKSZ);
+		Assert(spacesaving > 0 && spacesaving < cluster_block_size);
 	}
 
 	/* Reset state for next pending posting list */

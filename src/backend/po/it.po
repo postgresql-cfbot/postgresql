@@ -2067,8 +2067,8 @@ msgstr "Il cluster di database sta usando un formato per i numeri in virgola mob
 
 #: access/transam/xlog.c:4096
 #, c-format
-msgid "The database cluster was initialized with BLCKSZ %d, but the server was compiled with BLCKSZ %d."
-msgstr "Il cluster di database è stato inizializzato con BLCKSZ %d, ma il server è stato compilato con BLCKSZ %d."
+msgid "The database cluster was initialized with cluster_block_size %d, but the server was compiled with cluster_block_size %d."
+msgstr "Il cluster di database è stato inizializzato con cluster_block_size %d, ma il server è stato compilato con cluster_block_size %d."
 
 #: access/transam/xlog.c:4099 access/transam/xlog.c:4106 access/transam/xlog.c:4113 access/transam/xlog.c:4120 access/transam/xlog.c:4127 access/transam/xlog.c:4134 access/transam/xlog.c:4141 access/transam/xlog.c:4149 access/transam/xlog.c:4156
 #, c-format
@@ -2097,13 +2097,13 @@ msgstr "Il cluster di database è stato inizializzato con INDEX_MAX_KEYS %d, ma 
 
 #: access/transam/xlog.c:4131
 #, c-format
-msgid "The database cluster was initialized with TOAST_MAX_CHUNK_SIZE %d, but the server was compiled with TOAST_MAX_CHUNK_SIZE %d."
-msgstr "Il cluster di database è stato inizializzato con TOAST_MAX_CHUNK_SIZE %d, ma il server è stato compilato con TOAST_MAX_CHUNK_SIZE %d."
+msgid "The database cluster was initialized with cluster_toast_max_chunk_size %d, but the server was compiled with cluster_toast_max_chunk_size %d."
+msgstr "Il cluster di database è stato inizializzato con cluster_toast_max_chunk_size %d, ma il server è stato compilato con cluster_toast_max_chunk_size %d."
 
 #: access/transam/xlog.c:4138
 #, c-format
-msgid "The database cluster was initialized with LOBLKSIZE %d, but the server was compiled with LOBLKSIZE %d."
-msgstr "Il cluster di database è stato inizializzato con LOBLKSIZE %d, ma il server è stato compilato con LOBLKSIZE %d."
+msgid "The database cluster was initialized with cluster_loblksize %d, but the server was compiled with cluster_loblksize %d."
+msgstr "Il cluster di database è stato inizializzato con cluster_loblksize %d, ma il server è stato compilato con cluster_loblksize %d."
 
 #: access/transam/xlog.c:4147
 #, c-format

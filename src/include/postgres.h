@@ -45,6 +45,7 @@
 #include "c.h"
 #include "utils/elog.h"
 #include "utils/palloc.h"
+#include "common/blocksize.h"
 
 /* ----------------------------------------------------------------
  *				Section 1:	Datum type + support functions

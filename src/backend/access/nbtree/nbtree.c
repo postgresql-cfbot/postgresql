@@ -428,8 +428,8 @@ btrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 	 */
 	if (scan->xs_want_itup && so->currTuples == NULL)
 	{
-		so->currTuples = (char *) palloc(BLCKSZ * 2);
-		so->markTuples = so->currTuples + BLCKSZ;
+		so->currTuples = (char *) palloc(cluster_block_size * 2);
+		so->markTuples = so->currTuples + cluster_block_size;
 	}
 
 	/*
@@ -1157,9 +1157,9 @@ backtrack:
 	}
 	else if (P_ISLEAF(opaque))
 	{
-		OffsetNumber deletable[MaxIndexTuplesPerPage];
+		OffsetNumber deletable[MaxIndexTuplesPerPageLimit];
 		int			ndeletable;
-		BTVacuumPosting updatable[MaxIndexTuplesPerPage];
+		BTVacuumPosting updatable[MaxIndexTuplesPerPageLimit];
 		int			nupdatable;
 		OffsetNumber offnum,
 					minoff,

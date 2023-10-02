@@ -97,8 +97,8 @@
  * Perform a failsafe check each time we scan another 4GB of pages.
  * (Note that this is deliberately kept to a power-of-two, usually 2^19.)
  */
-#define FAILSAFE_EVERY_PAGES \
-	((BlockNumber) (((uint64) 4 * 1024 * 1024 * 1024) / BLCKSZ))
+#define failsafe_every_pages \
+	((BlockNumber) (((uint64) 4 * 1024 * 1024 * 1024) >> cluster_block_bits))
 
 /*
  * When a table has no indexes, vacuum the FSM after every 8GB, approximately
@@ -106,8 +106,8 @@
  * that has some removable tuples).  When there are indexes, this is ignored,
  * and we vacuum FSM after each index/heap cleaning pass.
  */
-#define VACUUM_FSM_EVERY_PAGES \
-	((BlockNumber) (((uint64) 8 * 1024 * 1024 * 1024) / BLCKSZ))
+#define vacuum_fsm_every_pages \
+	((BlockNumber) (((uint64) 8 * 1024 * 1024 * 1024) >> cluster_block_bits))
 
 /*
  * Before we consider skipping a page that's marked as clean in
@@ -749,9 +749,9 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 			}
 			if (secs_dur > 0 || usecs_dur > 0)
 			{
-				read_rate = (double) BLCKSZ * PageMissOp / (1024 * 1024) /
+				read_rate = (double) cluster_block_size * PageMissOp / (1024 * 1024) /
 					(secs_dur + usecs_dur / 1000000.0);
-				write_rate = (double) BLCKSZ * PageDirtyOp / (1024 * 1024) /
+				write_rate = (double) cluster_block_size * PageDirtyOp / (1024 * 1024) /
 					(secs_dur + usecs_dur / 1000000.0);
 			}
 			appendStringInfo(&buf, _("avg read rate: %.3f MB/s, avg write rate: %.3f MB/s\n"),
@@ -900,7 +900,7 @@ lazy_scan_heap(LVRelState *vacrel)
 		 * one-pass strategy, and the two-pass strategy with the index_cleanup
 		 * param set to 'off'.
 		 */
-		if (vacrel->scanned_pages % FAILSAFE_EVERY_PAGES == 0)
+		if (vacrel->scanned_pages % failsafe_every_pages == 0)
 			lazy_check_wraparound_failsafe(vacrel);
 
 		/*
@@ -1051,7 +1051,7 @@ lazy_scan_heap(LVRelState *vacrel)
 				 * space visible on upper FSM pages.  Note we have not yet
 				 * performed FSM processing for blkno.
 				 */
-				if (blkno - next_fsm_block_to_vacuum >= VACUUM_FSM_EVERY_PAGES)
+				if (blkno - next_fsm_block_to_vacuum >= vacuum_fsm_every_pages)
 				{
 					FreeSpaceMapVacuumRange(vacrel->rel, next_fsm_block_to_vacuum,
 											blkno);
@@ -1439,7 +1439,7 @@ lazy_scan_new_or_empty(LVRelState *vacrel, Buffer buf, BlockNumber blkno,
 
 		if (GetRecordedFreeSpace(vacrel->rel, blkno) == 0)
 		{
-			freespace = BLCKSZ - SizeOfPageHeaderData;
+			freespace = cluster_block_size - SizeOfPageHeaderData;
 
 			RecordPageWithFreeSpace(vacrel->rel, blkno, freespace);
 		}
@@ -1551,8 +1551,8 @@ lazy_scan_prune(LVRelState *vacrel,
 				recently_dead_tuples;
 	HeapPageFreeze pagefrz;
 	int64		fpi_before = pgWalUsage.wal_fpi;
-	OffsetNumber deadoffsets[MaxHeapTuplesPerPage];
-	HeapTupleFreeze frozen[MaxHeapTuplesPerPage];
+	OffsetNumber deadoffsets[MaxHeapTuplesPerPageLimit];
+	HeapTupleFreeze frozen[MaxHeapTuplesPerPageLimit];
 
 	Assert(BufferGetBlockNumber(buf) == blkno);
 
@@ -1967,7 +1967,7 @@ lazy_scan_noprune(LVRelState *vacrel,
 	HeapTupleHeader tupleheader;
 	TransactionId NoFreezePageRelfrozenXid = vacrel->NewRelfrozenXid;
 	MultiXactId NoFreezePageRelminMxid = vacrel->NewRelminMxid;
-	OffsetNumber deadoffsets[MaxHeapTuplesPerPage];
+	OffsetNumber deadoffsets[MaxHeapTuplesPerPageLimit];
 
 	Assert(BufferGetBlockNumber(buf) == blkno);
 
@@ -2521,7 +2521,7 @@ lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno, Buffer buffer,
 {
 	VacDeadItems *dead_items = vacrel->dead_items;
 	Page		page = BufferGetPage(buffer);
-	OffsetNumber unused[MaxHeapTuplesPerPage];
+	OffsetNumber unused[MaxHeapTuplesPerPageLimit];
 	int			nunused = 0;
 	TransactionId visibility_cutoff_xid;
 	bool		all_frozen;

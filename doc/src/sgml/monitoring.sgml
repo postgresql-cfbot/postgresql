@@ -2703,8 +2703,8 @@ description | Waiting for a newly initialized WAL file to reach durable storage
        </para>
        <para>
         Relation data reads, writes, and extends are done in
-        <varname>block_size</varname> units, derived from the build-time
-        parameter <symbol>BLCKSZ</symbol>, which is <literal>8192</literal> by
+        <varname>block_size</varname> units, derived from the cluster init-time
+        parameter <symbol>cluster_block_size</symbol>, which is <literal>8192</literal> by
         default.
        </para>
       </entry>

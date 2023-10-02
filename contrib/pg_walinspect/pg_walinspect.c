@@ -386,9 +386,9 @@ GetWALBlockInfo(FunctionCallInfo fcinfo, XLogReaderState *record,
 						(errcode(ERRCODE_INTERNAL_ERROR),
 						 errmsg_internal("%s", record->errormsg_buf)));
 
-			block_fpi_data = (bytea *) palloc(BLCKSZ + VARHDRSZ);
-			SET_VARSIZE(block_fpi_data, BLCKSZ + VARHDRSZ);
-			memcpy(VARDATA(block_fpi_data), page, BLCKSZ);
+			block_fpi_data = (bytea *) palloc(cluster_block_size + VARHDRSZ);
+			SET_VARSIZE(block_fpi_data, cluster_block_size + VARHDRSZ);
+			memcpy(VARDATA(block_fpi_data), page, cluster_block_size);
 			values[i++] = PointerGetDatum(block_fpi_data);
 		}
 		else

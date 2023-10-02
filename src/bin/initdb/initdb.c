@@ -69,6 +69,7 @@
 #include "catalog/pg_class_d.h" /* pgrminclude ignore */
 #include "catalog/pg_collation_d.h"
 #include "catalog/pg_database_d.h"	/* pgrminclude ignore */
+#include "common/blocksize.h"
 #include "common/file_perm.h"
 #include "common/file_utils.h"
 #include "common/logging.h"
@@ -166,6 +167,8 @@ static bool data_checksums = false;
 static char *xlog_dir = NULL;
 static int	wal_segment_size_mb = (DEFAULT_XLOG_SEG_SIZE) / (1024 * 1024);
 static DataDirSyncMethod sync_method = DATA_DIR_SYNC_METHOD_FSYNC;
+static char *str_block_size = NULL;
+int block_size = DEFAULT_BLOCK_SIZE;
 
 
 /* internal vars */
@@ -1109,8 +1112,8 @@ test_config_settings(void)
 
 	for (i = 0; i < bufslen; i++)
 	{
-		/* Use same amount of memory, independent of BLCKSZ */
-		test_buffs = (trial_bufs[i] * 8192) / BLCKSZ;
+		/* Use same amount of memory, independent of block_size */
+		test_buffs = (trial_bufs[i] * 8192) / block_size;
 		if (test_buffs <= ok_buffers)
 		{
 			test_buffs = ok_buffers;
@@ -1122,10 +1125,10 @@ test_config_settings(void)
 	}
 	n_buffers = test_buffs;
 
-	if ((n_buffers * (BLCKSZ / 1024)) % 1024 == 0)
-		printf("%dMB\n", (n_buffers * (BLCKSZ / 1024)) / 1024);
+	if ((n_buffers * (block_size / 1024)) % 1024 == 0)
+		printf("%dMB\n", (n_buffers * (block_size / 1024)) / 1024);
 	else
-		printf("%dkB\n", n_buffers * (BLCKSZ / 1024));
+		printf("%dkB\n", n_buffers * (block_size / 1024));
 
 	printf(_("selecting default time zone ... "));
 	fflush(stdout);
@@ -1148,11 +1151,12 @@ test_specific_config_settings(int test_conns, int test_buffs)
 
 	/* Set up the test postmaster invocation */
 	printfPQExpBuffer(&cmd,
-					  "\"%s\" --check %s %s "
+					  "\"%s\" --check %s %s -b %d "
 					  "-c max_connections=%d "
 					  "-c shared_buffers=%d "
 					  "-c dynamic_shared_memory_type=%s",
 					  backend_exec, boot_options, extra_options,
+					  block_size,
 					  test_conns, test_buffs,
 					  dynamic_shared_memory_type);
 
@@ -1217,12 +1221,12 @@ setup_config(void)
 	conflines = replace_guc_value(conflines, "max_connections",
 								  repltok, false);
 
-	if ((n_buffers * (BLCKSZ / 1024)) % 1024 == 0)
+	if ((n_buffers * (block_size / 1024)) % 1024 == 0)
 		snprintf(repltok, sizeof(repltok), "%dMB",
-				 (n_buffers * (BLCKSZ / 1024)) / 1024);
+				 (n_buffers * (block_size / 1024)) / 1024);
 	else
 		snprintf(repltok, sizeof(repltok), "%dkB",
-				 n_buffers * (BLCKSZ / 1024));
+				 n_buffers * (block_size / 1024));
 	conflines = replace_guc_value(conflines, "shared_buffers",
 								  repltok, false);
 
@@ -1297,21 +1301,21 @@ setup_config(void)
 
 #if DEFAULT_BACKEND_FLUSH_AFTER > 0
 	snprintf(repltok, sizeof(repltok), "%dkB",
-			 DEFAULT_BACKEND_FLUSH_AFTER * (BLCKSZ / 1024));
+			 DEFAULT_BACKEND_FLUSH_AFTER * (block_size / 1024));
 	conflines = replace_guc_value(conflines, "backend_flush_after",
 								  repltok, true);
 #endif
 
 #if DEFAULT_BGWRITER_FLUSH_AFTER > 0
 	snprintf(repltok, sizeof(repltok), "%dkB",
-			 DEFAULT_BGWRITER_FLUSH_AFTER * (BLCKSZ / 1024));
+			 DEFAULT_BGWRITER_FLUSH_AFTER * (block_size / 1024));
 	conflines = replace_guc_value(conflines, "bgwriter_flush_after",
 								  repltok, true);
 #endif
 
 #if DEFAULT_CHECKPOINT_FLUSH_AFTER > 0
 	snprintf(repltok, sizeof(repltok), "%dkB",
-			 DEFAULT_CHECKPOINT_FLUSH_AFTER * (BLCKSZ / 1024));
+			 DEFAULT_CHECKPOINT_FLUSH_AFTER * (block_size / 1024));
 	conflines = replace_guc_value(conflines, "checkpoint_flush_after",
 								  repltok, true);
 #endif
@@ -1538,11 +1542,11 @@ bootstrap_template1(void)
 
 	printfPQExpBuffer(&cmd, "\"%s\" --boot %s %s", backend_exec, boot_options, extra_options);
 	appendPQExpBuffer(&cmd, " -X %d", wal_segment_size_mb * (1024 * 1024));
+	appendPQExpBuffer(&cmd, " -b %d", block_size);
 	if (data_checksums)
 		appendPQExpBuffer(&cmd, " -k");
 	if (debug)
 		appendPQExpBuffer(&cmd, " -d 5");
-
 
 	PG_CMD_OPEN(cmd.data);
 
@@ -2437,6 +2441,7 @@ usage(const char *progname)
 	printf(_("  -A, --auth=METHOD         default authentication method for local connections\n"));
 	printf(_("      --auth-host=METHOD    default authentication method for local TCP/IP connections\n"));
 	printf(_("      --auth-local=METHOD   default authentication method for local-socket connections\n"));
+	printf(_("  -b, --block-size=SIZE     size of database blocks, in kilobytes\n"));
 	printf(_(" [-D, --pgdata=]DATADIR     location for this database cluster\n"));
 	printf(_("  -E, --encoding=ENCODING   set default encoding for new databases\n"));
 	printf(_("  -g, --allow-group-access  allow group read/execute on data directory\n"));
@@ -3102,6 +3107,7 @@ main(int argc, char *argv[])
 		{"sync-only", no_argument, NULL, 'S'},
 		{"waldir", required_argument, NULL, 'X'},
 		{"wal-segsize", required_argument, NULL, 12},
+		{"block-size", required_argument, NULL, 'b'},
 		{"data-checksums", no_argument, NULL, 'k'},
 		{"allow-group-access", no_argument, NULL, 'g'},
 		{"discard-caches", no_argument, NULL, 14},
@@ -3150,7 +3156,7 @@ main(int argc, char *argv[])
 
 	/* process command-line options */
 
-	while ((c = getopt_long(argc, argv, "A:c:dD:E:gkL:nNsST:U:WX:",
+	while ((c = getopt_long(argc, argv, "A:b:c:dD:E:gkL:nNsST:U:WX:",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -3173,6 +3179,9 @@ main(int argc, char *argv[])
 				break;
 			case 11:
 				authmethodhost = pg_strdup(optarg);
+				break;
+			case 'b':
+				str_block_size = pg_strdup(optarg);
 				break;
 			case 'c':
 				{
@@ -3359,6 +3368,26 @@ main(int argc, char *argv[])
 	if (!IsValidWalSegSize(wal_segment_size_mb * 1024 * 1024))
 		pg_fatal("argument of %s must be a power of two between 1 and 1024", "--wal-segsize");
 
+	if (str_block_size == NULL)
+		block_size = DEFAULT_BLOCK_SIZE;
+	else
+	{
+		char	   *endptr;
+
+		/* check that the argument is a number */
+		block_size = strtol(str_block_size, &endptr, 10);
+
+		/* verify that the  segment size is valid */
+		if (endptr == str_block_size || *endptr != '\0')
+			pg_fatal("argument of --block-size must be a number");
+		block_size *= 1024;
+		/* check for valid block_size; last is bitwise power of two check */
+		if (!IsValidBlockSize(block_size))
+			pg_fatal("argument of --block-size must be a power of 2 between 1 and 32");
+	}
+
+	BlockSizeInit(block_size);
+
 	get_restricted_token();
 
 	setup_pgdata();
@@ -3391,6 +3420,8 @@ main(int argc, char *argv[])
 		printf(_("Data page checksums are enabled.\n"));
 	else
 		printf(_("Data page checksums are disabled.\n"));
+
+	printf(_("Selected server block size: %d\n"), block_size);
 
 	if (pwprompt || pwfilename)
 		get_su_pwd();

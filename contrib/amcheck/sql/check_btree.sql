@@ -110,7 +110,7 @@ WHERE attrelid = 'toasty'::regclass AND attname = 'buggy';
 SELECT attstorage FROM pg_attribute
 WHERE attrelid = 'toast_bug'::regclass AND attname = 'buggy';
 
--- Insert compressible heap tuple (comfortably exceeds TOAST_TUPLE_THRESHOLD):
+-- Insert compressible heap tuple (comfortably exceeds toast_tuple_threshold):
 INSERT INTO toast_bug SELECT repeat('a', 2200);
 -- Should not get false positive report of corruption:
 SELECT bt_index_check('toasty', true);

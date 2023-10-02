@@ -1,5 +1,7 @@
 # Copyright (c) 2022-2023, PostgreSQL Global Development Group
 
+fs = import('fs')
+
 pg_upgrade_sources = files(
   'check.c',
   'controldata.c',

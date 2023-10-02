@@ -6,7 +6,7 @@
 -- on the configured block size.  This test has several different expected
 -- results files to handle the following possibilities:
 --
---	BLCKSZ	end	file
+--	cluster_block_size	end	file
 --	8K	LE	checksum.out
 --	8K	BE	checksum_1.out
 --

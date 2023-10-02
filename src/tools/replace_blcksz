@@ -1,0 +1,47 @@
+#!/usr/bin/env -S perl -i
+# -*-cperl-*-
+
+use strict;
+use warnings;
+
+# Construct our replacement list; if a replacement is specified, then we use
+# that, otherwise we just assume lower-cased version of the given identifier.
+
+my %replacements = map { my ($tok,$repl) = split; $tok, $repl || lc $tok } <DATA>;
+
+# Construct a regex that matches and captures any key
+my $matchre = qr/\b(@{[ join '|' => keys %replacements ]})\b/;
+while (<>) {
+    # Replace all found keys with the corresponding lookup value
+    s/$matchre/$replacements{$1}/eg;
+    print
+}
+
+__DATA__
+BLCKSZ  cluster_block_size
+CLUSTER_BLOCK_BITS
+CLUSTER_BLOCK_SIZE
+CLUSTER_RELSEG_SIZE
+COMMIT_TS_XACTS_PER_PAGE
+FAILSAFE_EVERY_PAGES
+FREE_BLOCK_NUMBER_ELEMS
+FSM_CAT_STEP
+GIN_PAGE_FREESIZE
+HASHAGG_READ_BUFFER_SIZE
+HASHAGG_WRITE_BUFFER_SIZE
+HEAP_USABLE_BYTES_PER_PAGE
+LOBLKSIZE	cluster_loblksize
+MULTIXACT_MEMBERGROUPS_PER_PAGE
+MULTIXACT_MEMBERS_PER_PAGE
+MULTIXACT_OFFSETS_PER_PAGE
+REVMAP_CONTENT_SIZE
+SERIAL_PAGESIZE
+SINK_BUFFER_LENGTH
+SPGIST_PAGE_CAPACITY
+SUBTRANS_XACTS_PER_PAGE
+TOAST_MAX_CHUNK_SIZE	cluster_toast_max_chunk_size
+TOAST_TUPLE_TARGET	cluster_toast_tuple_target
+TOAST_TUPLE_TARGET_MAIN
+TOAST_TUPLE_THRESHOLD
+VACUUM_FSM_EVERY_PAGES
+XLOGPREFETCHER_STATS_DISTANCE

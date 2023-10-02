@@ -1761,8 +1761,8 @@ msgstr "Veritabanı dosyaları, sunucu programından farklı ondalık sayı biç
 
 #: access/transam/xlog.c:4676
 #, c-format
-msgid "The database cluster was initialized with BLCKSZ %d, but the server was compiled with BLCKSZ %d."
-msgstr "Veritabanı clusteri BLCKSZ %d ile ilklendirilmiştir, ancak sunucu  BLCKSZ %d ile derlenmiştir."
+msgid "The database cluster was initialized with cluster_block_size %d, but the server was compiled with cluster_block_size %d."
+msgstr "Veritabanı clusteri cluster_block_size %d ile ilklendirilmiştir, ancak sunucu  cluster_block_size %d ile derlenmiştir."
 
 #: access/transam/xlog.c:4679 access/transam/xlog.c:4686 access/transam/xlog.c:4693 access/transam/xlog.c:4700 access/transam/xlog.c:4707 access/transam/xlog.c:4714 access/transam/xlog.c:4721 access/transam/xlog.c:4729 access/transam/xlog.c:4736 access/transam/xlog.c:4745 access/transam/xlog.c:4752
 #, c-format
@@ -1791,13 +1791,13 @@ msgstr "Veritabanı clusteri INDEX_MAX_KEYS %d ile ilklendirilmiştir, ancak sun
 
 #: access/transam/xlog.c:4711
 #, c-format
-msgid "The database cluster was initialized with TOAST_MAX_CHUNK_SIZE %d, but the server was compiled with TOAST_MAX_CHUNK_SIZE %d."
-msgstr "Veritabanı clusteri TOAST_MAX_CHUNK_SIZE %d ile ilklendirilmiştir, ancak sunucu  TOAST_MAX_CHUNK_SIZE %d ile derlenmiştir."
+msgid "The database cluster was initialized with cluster_toast_max_chunk_size %d, but the server was compiled with cluster_toast_max_chunk_size %d."
+msgstr "Veritabanı clusteri cluster_toast_max_chunk_size %d ile ilklendirilmiştir, ancak sunucu  cluster_toast_max_chunk_size %d ile derlenmiştir."
 
 #: access/transam/xlog.c:4718
 #, c-format
-msgid "The database cluster was initialized with LOBLKSIZE %d, but the server was compiled with LOBLKSIZE %d."
-msgstr "Veritabanı clusteri LOBLKSIZE %d ile ilklendirilmiştir, ancak sunucu  LOBLKSIZE %d ile derlenmiştir."
+msgid "The database cluster was initialized with cluster_loblksize %d, but the server was compiled with cluster_loblksize %d."
+msgstr "Veritabanı clusteri cluster_loblksize %d ile ilklendirilmiştir, ancak sunucu  cluster_loblksize %d ile derlenmiştir."
 
 #: access/transam/xlog.c:4727
 #, c-format

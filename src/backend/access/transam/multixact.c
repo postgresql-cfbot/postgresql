@@ -93,25 +93,25 @@
 
 
 /*
- * Defines for MultiXactOffset page sizes.  A page is the same BLCKSZ as is
+ * Defines for MultiXactOffset page sizes.  A page is the same cluster_block_size as is
  * used everywhere else in Postgres.
  *
  * Note: because MultiXactOffsets are 32 bits and wrap around at 0xFFFFFFFF,
  * MultiXact page numbering also wraps around at
- * 0xFFFFFFFF/MULTIXACT_OFFSETS_PER_PAGE, and segment numbering at
- * 0xFFFFFFFF/MULTIXACT_OFFSETS_PER_PAGE/SLRU_PAGES_PER_SEGMENT.  We need
+ * 0xFFFFFFFF/multixact_offsets_per_page, and segment numbering at
+ * 0xFFFFFFFF/multixact_offsets_per_page/SLRU_PAGES_PER_SEGMENT.  We need
  * take no explicit notice of that fact in this module, except when comparing
  * segment and page numbers in TruncateMultiXact (see
  * MultiXactOffsetPagePrecedes).
  */
 
 /* We need four bytes per offset */
-#define MULTIXACT_OFFSETS_PER_PAGE (BLCKSZ / sizeof(MultiXactOffset))
+#define multixact_offsets_per_page (cluster_block_size / sizeof(MultiXactOffset))
 
 #define MultiXactIdToOffsetPage(xid) \
-	((xid) / (MultiXactOffset) MULTIXACT_OFFSETS_PER_PAGE)
+	((xid) / (MultiXactOffset) multixact_offsets_per_page)
 #define MultiXactIdToOffsetEntry(xid) \
-	((xid) % (MultiXactOffset) MULTIXACT_OFFSETS_PER_PAGE)
+	((xid) % (MultiXactOffset) multixact_offsets_per_page)
 #define MultiXactIdToOffsetSegment(xid) (MultiXactIdToOffsetPage(xid) / SLRU_PAGES_PER_SEGMENT)
 
 /*
@@ -119,7 +119,7 @@
  * additional flag bits for each TransactionId.  To do this without getting
  * into alignment issues, we store four bytes of flags, and then the
  * corresponding 4 Xids.  Each such 5-word (20-byte) set we call a "group", and
- * are stored as a whole in pages.  Thus, with 8kB BLCKSZ, we keep 409 groups
+ * are stored as a whole in pages.  Thus, with 8kB cluster_block_size, we keep 409 groups
  * per page.  This wastes 12 bytes per page, but that's OK -- simplicity (and
  * performance) trumps space efficiency here.
  *
@@ -138,9 +138,9 @@
 /* size in bytes of a complete group */
 #define MULTIXACT_MEMBERGROUP_SIZE \
 	(sizeof(TransactionId) * MULTIXACT_MEMBERS_PER_MEMBERGROUP + MULTIXACT_FLAGBYTES_PER_GROUP)
-#define MULTIXACT_MEMBERGROUPS_PER_PAGE (BLCKSZ / MULTIXACT_MEMBERGROUP_SIZE)
-#define MULTIXACT_MEMBERS_PER_PAGE	\
-	(MULTIXACT_MEMBERGROUPS_PER_PAGE * MULTIXACT_MEMBERS_PER_MEMBERGROUP)
+#define multixact_membergroups_per_page (cluster_block_size / MULTIXACT_MEMBERGROUP_SIZE)
+#define multixact_members_per_page	\
+	(multixact_membergroups_per_page * MULTIXACT_MEMBERS_PER_MEMBERGROUP)
 
 /*
  * Because the number of items per page is not a divisor of the last item
@@ -153,16 +153,16 @@
  * This constant is the number of members in the last page of the last segment.
  */
 #define MAX_MEMBERS_IN_LAST_MEMBERS_PAGE \
-		((uint32) ((0xFFFFFFFF % MULTIXACT_MEMBERS_PER_PAGE) + 1))
+		((uint32) ((0xFFFFFFFF % multixact_members_per_page) + 1))
 
 /* page in which a member is to be found */
-#define MXOffsetToMemberPage(xid) ((xid) / (TransactionId) MULTIXACT_MEMBERS_PER_PAGE)
+#define MXOffsetToMemberPage(xid) ((xid) / (TransactionId) multixact_members_per_page)
 #define MXOffsetToMemberSegment(xid) (MXOffsetToMemberPage(xid) / SLRU_PAGES_PER_SEGMENT)
 
 /* Location (byte offset within page) of flag word for a given member */
 #define MXOffsetToFlagsOffset(xid) \
 	((((xid) / (TransactionId) MULTIXACT_MEMBERS_PER_MEMBERGROUP) % \
-	  (TransactionId) MULTIXACT_MEMBERGROUPS_PER_PAGE) * \
+	  (TransactionId) multixact_membergroups_per_page) * \
 	 (TransactionId) MULTIXACT_MEMBERGROUP_SIZE)
 #define MXOffsetToFlagsBitShift(xid) \
 	(((xid) % (TransactionId) MULTIXACT_MEMBERS_PER_MEMBERGROUP) * \
@@ -1152,7 +1152,7 @@ GetNewMultiXactId(int nmembers, MultiXactOffset *offset)
 	if (MultiXactState->oldestOffsetKnown &&
 		MultiXactOffsetWouldWrap(MultiXactState->offsetStopLimit,
 								 nextOffset,
-								 nmembers + MULTIXACT_MEMBERS_PER_PAGE * SLRU_PAGES_PER_SEGMENT * OFFSET_WARN_SEGMENTS))
+								 nmembers + multixact_members_per_page * SLRU_PAGES_PER_SEGMENT * OFFSET_WARN_SEGMENTS))
 		ereport(WARNING,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg_plural("database with OID %u must be vacuumed before %d more multixact member is used",
@@ -1855,7 +1855,7 @@ MultiXactShmemInit(void)
 				  MultiXactOffsetSLRULock, "pg_multixact/offsets",
 				  LWTRANCHE_MULTIXACTOFFSET_BUFFER,
 				  SYNC_HANDLER_MULTIXACT_OFFSET);
-	SlruPagePrecedesUnitTests(MultiXactOffsetCtl, MULTIXACT_OFFSETS_PER_PAGE);
+	SlruPagePrecedesUnitTests(MultiXactOffsetCtl, multixact_offsets_per_page);
 	SimpleLruInit(MultiXactMemberCtl,
 				  "MultiXactMember", NUM_MULTIXACTMEMBER_BUFFERS, 0,
 				  MultiXactMemberSLRULock, "pg_multixact/members",
@@ -2072,7 +2072,7 @@ TrimMultiXact(void)
 		offptr = (MultiXactOffset *) MultiXactOffsetCtl->shared->page_buffer[slotno];
 		offptr += entryno;
 
-		MemSet(offptr, 0, BLCKSZ - (entryno * sizeof(MultiXactOffset)));
+		MemSet(offptr, 0, cluster_block_size - (entryno * sizeof(MultiXactOffset)));
 
 		MultiXactOffsetCtl->shared->page_dirty[slotno] = true;
 	}
@@ -2104,7 +2104,7 @@ TrimMultiXact(void)
 		xidptr = (TransactionId *)
 			(MultiXactMemberCtl->shared->page_buffer[slotno] + memberoff);
 
-		MemSet(xidptr, 0, BLCKSZ - memberoff);
+		MemSet(xidptr, 0, cluster_block_size - memberoff);
 
 		/*
 		 * Note: we don't need to zero out the flag bits in the remaining
@@ -2480,7 +2480,7 @@ ExtendMultiXactMember(MultiXactOffset offset, int nmembers)
 			difference = MaxMultiXactOffset - offset + 1;
 		}
 		else
-			difference = MULTIXACT_MEMBERS_PER_PAGE - offset % MULTIXACT_MEMBERS_PER_PAGE;
+			difference = multixact_members_per_page - offset % multixact_members_per_page;
 
 		/*
 		 * Advance to next page, taking care to properly handle the wraparound
@@ -2634,10 +2634,10 @@ SetOffsetVacuumLimit(bool is_startup)
 	{
 		/* move back to start of the corresponding segment */
 		offsetStopLimit = oldestOffset - (oldestOffset %
-										  (MULTIXACT_MEMBERS_PER_PAGE * SLRU_PAGES_PER_SEGMENT));
+										  (multixact_members_per_page * SLRU_PAGES_PER_SEGMENT));
 
 		/* always leave one segment before the wraparound point */
-		offsetStopLimit -= (MULTIXACT_MEMBERS_PER_PAGE * SLRU_PAGES_PER_SEGMENT);
+		offsetStopLimit -= (multixact_members_per_page * SLRU_PAGES_PER_SEGMENT);
 
 		if (!prevOldestOffsetKnown && !is_startup)
 			ereport(LOG,
@@ -2997,7 +2997,7 @@ TruncateMultiXact(MultiXactId newOldestMulti, Oid newOldestMultiDB)
 	 */
 	trunc.earliestExistingPage = -1;
 	SlruScanDirectory(MultiXactOffsetCtl, SlruScanDirCbFindEarliest, &trunc);
-	earliest = trunc.earliestExistingPage * MULTIXACT_OFFSETS_PER_PAGE;
+	earliest = trunc.earliestExistingPage * multixact_offsets_per_page;
 	if (earliest < FirstMultiXactId)
 		earliest = FirstMultiXactId;
 
@@ -3118,14 +3118,14 @@ MultiXactOffsetPagePrecedes(int page1, int page2)
 	MultiXactId multi1;
 	MultiXactId multi2;
 
-	multi1 = ((MultiXactId) page1) * MULTIXACT_OFFSETS_PER_PAGE;
+	multi1 = ((MultiXactId) page1) * multixact_offsets_per_page;
 	multi1 += FirstMultiXactId + 1;
-	multi2 = ((MultiXactId) page2) * MULTIXACT_OFFSETS_PER_PAGE;
+	multi2 = ((MultiXactId) page2) * multixact_offsets_per_page;
 	multi2 += FirstMultiXactId + 1;
 
 	return (MultiXactIdPrecedes(multi1, multi2) &&
 			MultiXactIdPrecedes(multi1,
-								multi2 + MULTIXACT_OFFSETS_PER_PAGE - 1));
+								multi2 + multixact_offsets_per_page - 1));
 }
 
 /*
@@ -3138,12 +3138,12 @@ MultiXactMemberPagePrecedes(int page1, int page2)
 	MultiXactOffset offset1;
 	MultiXactOffset offset2;
 
-	offset1 = ((MultiXactOffset) page1) * MULTIXACT_MEMBERS_PER_PAGE;
-	offset2 = ((MultiXactOffset) page2) * MULTIXACT_MEMBERS_PER_PAGE;
+	offset1 = ((MultiXactOffset) page1) * multixact_members_per_page;
+	offset2 = ((MultiXactOffset) page2) * multixact_members_per_page;
 
 	return (MultiXactOffsetPrecedes(offset1, offset2) &&
 			MultiXactOffsetPrecedes(offset1,
-									offset2 + MULTIXACT_MEMBERS_PER_PAGE - 1));
+									offset2 + multixact_members_per_page - 1));
 }
 
 /*

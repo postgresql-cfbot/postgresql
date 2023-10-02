@@ -1852,8 +1852,8 @@ msgstr "数据库集群在使用与服务器执行部分不同的浮点数格式
 
 #: access/transam/xlog.c:4677
 #, c-format
-msgid "The database cluster was initialized with BLCKSZ %d, but the server was compiled with BLCKSZ %d."
-msgstr "数据库簇是以 BLCKSZ %d 初始化的, 但是 服务器是以 BLCKSZ %d 编译的."
+msgid "The database cluster was initialized with cluster_block_size %d, but the server was compiled with cluster_block_size %d."
+msgstr "数据库簇是以 cluster_block_size %d 初始化的, 但是 服务器是以 cluster_block_size %d 编译的."
 
 #: access/transam/xlog.c:4680 access/transam/xlog.c:4687
 #: access/transam/xlog.c:4694 access/transam/xlog.c:4701
@@ -1887,13 +1887,13 @@ msgstr "数据库集群是以 INDEX_MAX_KEYS  %d 初始化的, 但是 服务器�
 
 #: access/transam/xlog.c:4712
 #, c-format
-msgid "The database cluster was initialized with TOAST_MAX_CHUNK_SIZE %d, but the server was compiled with TOAST_MAX_CHUNK_SIZE %d."
-msgstr "数据库集群是以 TOAST_MAX_CHUNK_SIZE %d 初始化的, 但是 服务器是以 TOAST_MAX_CHUNK_SIZE %d 编译的."
+msgid "The database cluster was initialized with cluster_toast_max_chunk_size %d, but the server was compiled with cluster_toast_max_chunk_size %d."
+msgstr "数据库集群是以 cluster_toast_max_chunk_size %d 初始化的, 但是 服务器是以 cluster_toast_max_chunk_size %d 编译的."
 
 #: access/transam/xlog.c:4719
 #, c-format
-msgid "The database cluster was initialized with LOBLKSIZE %d, but the server was compiled with LOBLKSIZE %d."
-msgstr "数据库簇是以 LOBLKSIZE %d 初始化的, 但是 服务器是以 LOBLKSIZE %d 编译的."
+msgid "The database cluster was initialized with cluster_loblksize %d, but the server was compiled with cluster_loblksize %d."
+msgstr "数据库簇是以 cluster_loblksize %d 初始化的, 但是 服务器是以 cluster_loblksize %d 编译的."
 
 #: access/transam/xlog.c:4728
 #, c-format

@@ -544,7 +544,7 @@ SpGistGetBuffer(Relation index, int flags, int needSpace, bool *isNew)
 	SpGistLastUsedPage *lup;
 
 	/* Bail out if even an empty page wouldn't meet the demand */
-	if (needSpace > SPGIST_PAGE_CAPACITY)
+	if (needSpace > spgist_page_capacity)
 		elog(ERROR, "desired SPGiST tuple size is too big");
 
 	/*
@@ -555,7 +555,7 @@ SpGistGetBuffer(Relation index, int flags, int needSpace, bool *isNew)
 	 * error for requests that would otherwise be legal.
 	 */
 	needSpace += SpGistGetTargetPageFreeSpace(index);
-	needSpace = Min(needSpace, SPGIST_PAGE_CAPACITY);
+	needSpace = Min(needSpace, spgist_page_capacity);
 
 	/* Get the cache entry for this flags setting */
 	lup = GET_LUP(cache, flags);
@@ -681,7 +681,7 @@ SpGistInitPage(Page page, uint16 f)
 {
 	SpGistPageOpaque opaque;
 
-	PageInit(page, BLCKSZ, sizeof(SpGistPageOpaqueData));
+	PageInit(page, cluster_block_size, sizeof(SpGistPageOpaqueData));
 	opaque = SpGistPageGetOpaque(page);
 	opaque->flags = f;
 	opaque->spgist_page_id = SPGIST_PAGE_ID;
@@ -693,7 +693,7 @@ SpGistInitPage(Page page, uint16 f)
 void
 SpGistInitBuffer(Buffer b, uint16 f)
 {
-	Assert(BufferGetPageSize(b) == BLCKSZ);
+	Assert(BufferGetPageSize(b) == cluster_block_size);
 	SpGistInitPage(BufferGetPage(b), f);
 }
 
@@ -1002,12 +1002,12 @@ spgFormInnerTuple(SpGistState *state, bool hasPrefix, Datum prefix,
 	/*
 	 * Inner tuple should be small enough to fit on a page
 	 */
-	if (size > SPGIST_PAGE_CAPACITY - sizeof(ItemIdData))
+	if (size > spgist_page_capacity - sizeof(ItemIdData))
 		ereport(ERROR,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("SP-GiST inner tuple size %zu exceeds maximum %zu",
 						(Size) size,
-						SPGIST_PAGE_CAPACITY - sizeof(ItemIdData)),
+						spgist_page_capacity - sizeof(ItemIdData)),
 				 errhint("Values larger than a buffer page cannot be indexed.")));
 
 	/*

@@ -2039,7 +2039,7 @@ heap_prepare_insert(Relation relation, HeapTuple tup, TransactionId xid,
 		Assert(!HeapTupleHasExternal(tup));
 		return tup;
 	}
-	else if (HeapTupleHasExternal(tup) || tup->t_len > TOAST_TUPLE_THRESHOLD)
+	else if (HeapTupleHasExternal(tup) || tup->t_len > toast_tuple_threshold)
 		return heap_toast_insert_or_update(relation, tup, NULL, options);
 	else
 		return tup;
@@ -2053,7 +2053,7 @@ heap_prepare_insert(Relation relation, HeapTuple tup, TransactionId xid,
 static int
 heap_multi_insert_pages(HeapTuple *heaptuples, int done, int ntuples, Size saveFreeSpace)
 {
-	size_t		page_avail = BLCKSZ - SizeOfPageHeaderData - saveFreeSpace;
+	size_t		page_avail = cluster_block_size - SizeOfPageHeaderData - saveFreeSpace;
 	int			npages = 1;
 
 	for (int i = done; i < ntuples; i++)
@@ -2063,7 +2063,7 @@ heap_multi_insert_pages(HeapTuple *heaptuples, int done, int ntuples, Size saveF
 		if (page_avail < tup_sz)
 		{
 			npages++;
-			page_avail = BLCKSZ - SizeOfPageHeaderData - saveFreeSpace;
+			page_avail = cluster_block_size - SizeOfPageHeaderData - saveFreeSpace;
 		}
 		page_avail -= tup_sz;
 	}
@@ -2324,7 +2324,7 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 				scratchptr += datalen;
 			}
 			totaldatalen = scratchptr - tupledata;
-			Assert((scratchptr - scratch.data) < BLCKSZ);
+			Assert((scratchptr - scratch.data) < cluster_block_size);
 
 			if (need_tuple_data)
 				xlrec->flags |= XLH_INSERT_CONTAINS_NEW_TUPLE;
@@ -3481,7 +3481,7 @@ l2:
 	else
 		need_toast = (HeapTupleHasExternal(&oldtup) ||
 					  HeapTupleHasExternal(newtup) ||
-					  newtup->t_len > TOAST_TUPLE_THRESHOLD);
+					  newtup->t_len > toast_tuple_threshold);
 
 	pagefree = PageGetHeapFreeSpace(page);
 
@@ -6732,8 +6732,8 @@ heap_freeze_execute_prepared(Relation rel, Buffer buffer,
 	/* Now WAL-log freezing if necessary */
 	if (RelationNeedsWAL(rel))
 	{
-		xl_heap_freeze_plan plans[MaxHeapTuplesPerPage];
-		OffsetNumber offsets[MaxHeapTuplesPerPage];
+		xl_heap_freeze_plan plans[MaxHeapTuplesPerPageLimit];
+		OffsetNumber offsets[MaxHeapTuplesPerPageLimit];
 		int			nplans;
 		xl_heap_freeze_page xlrec;
 		XLogRecPtr	recptr;
@@ -7981,7 +7981,7 @@ index_delete_sort(TM_IndexDeleteOp *delstate)
 	 * Shellsort gap sequence (taken from Sedgewick-Incerpi paper).
 	 *
 	 * This implementation is fast with array sizes up to ~4500.  This covers
-	 * all supported BLCKSZ values.
+	 * all supported cluster_block_size values.
 	 */
 	const int	gaps[9] = {1968, 861, 336, 112, 48, 21, 7, 3, 1};
 
@@ -9011,7 +9011,7 @@ heap_xlog_visible(XLogReaderState *record)
 
 		/* initialize the page if it was read as zeros */
 		if (PageIsNew(vmpage))
-			PageInit(vmpage, BLCKSZ, 0);
+			PageInit(vmpage, cluster_block_size, 0);
 
 		/* remove VISIBILITYMAP_XLOG_* */
 		vmbits = xlrec->flags & VISIBILITYMAP_VALID_BITS;
@@ -9213,7 +9213,7 @@ heap_xlog_insert(XLogReaderState *record)
 	union
 	{
 		HeapTupleHeaderData hdr;
-		char		data[MaxHeapTupleSize];
+		char		data[MaxHeapTupleSizeLimit];
 	}			tbuf;
 	HeapTupleHeader htup;
 	xl_heap_header xlhdr;
@@ -9316,7 +9316,7 @@ heap_xlog_insert(XLogReaderState *record)
 	 * don't bother to update the FSM in that case, it doesn't need to be
 	 * totally accurate anyway.
 	 */
-	if (action == BLK_NEEDS_REDO && freespace < BLCKSZ / 5)
+	if (action == BLK_NEEDS_REDO && freespace < cluster_block_size / 5)
 		XLogRecordPageWithFreeSpace(target_locator, blkno, freespace);
 }
 
@@ -9335,7 +9335,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
 	union
 	{
 		HeapTupleHeaderData hdr;
-		char		data[MaxHeapTupleSize];
+		char		data[MaxHeapTupleSizeLimit];
 	}			tbuf;
 	HeapTupleHeader htup;
 	uint32		newlen;
@@ -9463,7 +9463,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
 	 * don't bother to update the FSM in that case, it doesn't need to be
 	 * totally accurate anyway.
 	 */
-	if (action == BLK_NEEDS_REDO && freespace < BLCKSZ / 5)
+	if (action == BLK_NEEDS_REDO && freespace < cluster_block_size / 5)
 		XLogRecordPageWithFreeSpace(rlocator, blkno, freespace);
 }
 
@@ -9492,7 +9492,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	union
 	{
 		HeapTupleHeaderData hdr;
-		char		data[MaxHeapTupleSize];
+		char		data[MaxHeapTupleSizeLimit];
 	}			tbuf;
 	xl_heap_header xlhdr;
 	uint32		newlen;
@@ -9738,7 +9738,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	 * don't bother to update the FSM in that case, it doesn't need to be
 	 * totally accurate anyway.
 	 */
-	if (newaction == BLK_NEEDS_REDO && !hot_update && freespace < BLCKSZ / 5)
+	if (newaction == BLK_NEEDS_REDO && !hot_update && freespace < cluster_block_size / 5)
 		XLogRecordPageWithFreeSpace(rlocator, newblk, freespace);
 }
 

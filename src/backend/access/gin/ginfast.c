@@ -38,8 +38,8 @@
 /* GUC parameter */
 int			gin_pending_list_limit = 0;
 
-#define GIN_PAGE_FREESIZE \
-	( BLCKSZ - MAXALIGN(SizeOfPageHeaderData) - MAXALIGN(sizeof(GinPageOpaqueData)) )
+#define gin_page_freesize \
+	( cluster_block_size - MAXALIGN(SizeOfPageHeaderData) - MAXALIGN(sizeof(GinPageOpaqueData)) )
 
 typedef struct KeyArray
 {
@@ -92,7 +92,7 @@ writeListPage(Relation index, Buffer buffer,
 		off++;
 	}
 
-	Assert(size <= BLCKSZ);		/* else we overran workspace */
+	Assert(size <= cluster_block_size);		/* else we overran workspace */
 
 	GinPageGetOpaque(page)->rightlink = rightlink;
 
@@ -455,7 +455,7 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 	 * ginInsertCleanup() should not be called inside our CRIT_SECTION.
 	 */
 	cleanupSize = GinGetPendingListCleanupSize(index);
-	if (metadata->nPendingPages * GIN_PAGE_FREESIZE > cleanupSize * 1024L)
+	if (metadata->nPendingPages * gin_page_freesize > cleanupSize * 1024L)
 		needCleanup = true;
 
 	UnlockReleaseBuffer(metabuffer);

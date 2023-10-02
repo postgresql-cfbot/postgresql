@@ -85,12 +85,12 @@ typedef struct RevmapContents
 	ItemPointerData rm_tids[1];
 } RevmapContents;
 
-#define REVMAP_CONTENT_SIZE \
-	(BLCKSZ - MAXALIGN(SizeOfPageHeaderData) - \
+#define revmap_content_size \
+	(cluster_block_size - MAXALIGN(SizeOfPageHeaderData) - \
 	 offsetof(RevmapContents, rm_tids) - \
 	 MAXALIGN(sizeof(BrinSpecialSpace)))
 /* max num of items in the array */
 #define REVMAP_PAGE_MAXITEMS \
-	(REVMAP_CONTENT_SIZE / sizeof(ItemPointerData))
+	(revmap_content_size / sizeof(ItemPointerData))
 
 #endif							/* BRIN_PAGE_H */

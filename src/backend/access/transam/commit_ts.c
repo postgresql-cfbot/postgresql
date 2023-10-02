@@ -37,13 +37,13 @@
 #include "utils/timestamp.h"
 
 /*
- * Defines for CommitTs page sizes.  A page is the same BLCKSZ as is used
+ * Defines for CommitTs page sizes.  A page is the same cluster_block_size as is used
  * everywhere else in Postgres.
  *
  * Note: because TransactionIds are 32 bits and wrap around at 0xFFFFFFFF,
  * CommitTs page numbering also wraps around at
- * 0xFFFFFFFF/COMMIT_TS_XACTS_PER_PAGE, and CommitTs segment numbering at
- * 0xFFFFFFFF/COMMIT_TS_XACTS_PER_PAGE/SLRU_PAGES_PER_SEGMENT.  We need take no
+ * 0xFFFFFFFF/commit_ts_xacts_per_page, and CommitTs segment numbering at
+ * 0xFFFFFFFF/commit_ts_xacts_per_page/SLRU_PAGES_PER_SEGMENT.  We need take no
  * explicit notice of that fact in this module, except when comparing segment
  * and page numbers in TruncateCommitTs (see CommitTsPagePrecedes).
  */
@@ -62,13 +62,13 @@ typedef struct CommitTimestampEntry
 #define SizeOfCommitTimestampEntry (offsetof(CommitTimestampEntry, nodeid) + \
 									sizeof(RepOriginId))
 
-#define COMMIT_TS_XACTS_PER_PAGE \
-	(BLCKSZ / SizeOfCommitTimestampEntry)
+#define commit_ts_xacts_per_page \
+	(cluster_block_size / SizeOfCommitTimestampEntry)
 
 #define TransactionIdToCTsPage(xid) \
-	((xid) / (TransactionId) COMMIT_TS_XACTS_PER_PAGE)
+	((xid) / (TransactionId) commit_ts_xacts_per_page)
 #define TransactionIdToCTsEntry(xid)	\
-	((xid) % (TransactionId) COMMIT_TS_XACTS_PER_PAGE)
+	((xid) % (TransactionId) commit_ts_xacts_per_page)
 
 /*
  * Link to shared-memory data structures for CommitTs control
@@ -524,7 +524,7 @@ CommitTsShmemInit(void)
 				  CommitTsSLRULock, "pg_commit_ts",
 				  LWTRANCHE_COMMITTS_BUFFER,
 				  SYNC_HANDLER_COMMIT_TS);
-	SlruPagePrecedesUnitTests(CommitTsCtl, COMMIT_TS_XACTS_PER_PAGE);
+	SlruPagePrecedesUnitTests(CommitTsCtl, commit_ts_xacts_per_page);
 
 	commitTsShared = ShmemInitStruct("CommitTs shared",
 									 sizeof(CommitTimestampShared),
@@ -898,7 +898,7 @@ AdvanceOldestCommitTsXid(TransactionId oldestXact)
  * Decide whether a commitTS page number is "older" for truncation purposes.
  * Analogous to CLOGPagePrecedes().
  *
- * At default BLCKSZ, (1 << 31) % COMMIT_TS_XACTS_PER_PAGE == 128.  This
+ * At default cluster_block_size, (1 << 31) % commit_ts_xacts_per_page == 128.  This
  * introduces differences compared to CLOG and the other SLRUs having (1 <<
  * 31) % per_page == 0.  This function never tests exactly
  * TransactionIdPrecedes(x-2^31, x).  When the system reaches xidStopLimit,
@@ -923,13 +923,13 @@ CommitTsPagePrecedes(int page1, int page2)
 	TransactionId xid1;
 	TransactionId xid2;
 
-	xid1 = ((TransactionId) page1) * COMMIT_TS_XACTS_PER_PAGE;
+	xid1 = ((TransactionId) page1) * commit_ts_xacts_per_page;
 	xid1 += FirstNormalTransactionId + 1;
-	xid2 = ((TransactionId) page2) * COMMIT_TS_XACTS_PER_PAGE;
+	xid2 = ((TransactionId) page2) * commit_ts_xacts_per_page;
 	xid2 += FirstNormalTransactionId + 1;
 
 	return (TransactionIdPrecedes(xid1, xid2) &&
-			TransactionIdPrecedes(xid1, xid2 + COMMIT_TS_XACTS_PER_PAGE - 1));
+			TransactionIdPrecedes(xid1, xid2 + commit_ts_xacts_per_page - 1));
 }
 
 

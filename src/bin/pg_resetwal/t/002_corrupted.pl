@@ -31,7 +31,7 @@ print $fh pack("x[$size]");
 close $fh;
 
 command_checks_all(
-	[ 'pg_resetwal', '-n', $node->data_dir ],
+	[ 'pg_resetwal', '-b', '8', '-n', $node->data_dir ],
 	0,
 	[qr/pg_control version number/],
 	[
@@ -47,7 +47,7 @@ print $fh $data, pack("x[" . ($size - 16) . "]");
 close $fh;
 
 command_checks_all(
-	[ 'pg_resetwal', '-n', $node->data_dir ],
+	[ 'pg_resetwal', '-b', '8', '-n', $node->data_dir ],
 	0,
 	[qr/pg_control version number/],
 	[

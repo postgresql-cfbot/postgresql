@@ -403,11 +403,11 @@ verify_heapam(PG_FUNCTION_ARGS)
 	for (ctx.blkno = first_block; ctx.blkno <= last_block; ctx.blkno++)
 	{
 		OffsetNumber maxoff;
-		OffsetNumber predecessor[MaxOffsetNumber];
-		OffsetNumber successor[MaxOffsetNumber];
-		bool		lp_valid[MaxOffsetNumber];
-		bool		xmin_commit_status_ok[MaxOffsetNumber];
-		XidCommitStatus xmin_commit_status[MaxOffsetNumber];
+		OffsetNumber predecessor[MaxOffsetNumberLimit];
+		OffsetNumber successor[MaxOffsetNumberLimit];
+		bool		lp_valid[MaxOffsetNumberLimit];
+		bool		xmin_commit_status_ok[MaxOffsetNumberLimit];
+		XidCommitStatus xmin_commit_status[MaxOffsetNumberLimit];
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -540,13 +540,13 @@ verify_heapam(PG_FUNCTION_ARGS)
 										   (unsigned) MAXALIGN(SizeofHeapTupleHeader)));
 				continue;
 			}
-			if (ctx.lp_off + ctx.lp_len > BLCKSZ)
+			if (ctx.lp_off + ctx.lp_len > cluster_block_size)
 			{
 				report_corruption(&ctx,
 								  psprintf("line pointer to page offset %u with length %u ends beyond maximum page offset %u",
 										   ctx.lp_off,
 										   ctx.lp_len,
-										   (unsigned) BLCKSZ));
+										   (unsigned) cluster_block_size));
 				continue;
 			}
 
@@ -1460,7 +1460,7 @@ check_toast_tuple(HeapTuple toasttup, HeapCheckContext *ctx,
 				  uint32 extsize)
 {
 	int32		chunk_seq;
-	int32		last_chunk_seq = (extsize - 1) / TOAST_MAX_CHUNK_SIZE;
+	int32		last_chunk_seq = (extsize - 1) / cluster_toast_max_chunk_size;
 	Pointer		chunk;
 	bool		isnull;
 	int32		chunksize;
@@ -1530,8 +1530,8 @@ check_toast_tuple(HeapTuple toasttup, HeapCheckContext *ctx,
 		return;
 	}
 
-	expected_size = chunk_seq < last_chunk_seq ? TOAST_MAX_CHUNK_SIZE
-		: extsize - (last_chunk_seq * TOAST_MAX_CHUNK_SIZE);
+	expected_size = chunk_seq < last_chunk_seq ? cluster_toast_max_chunk_size
+		: extsize - (last_chunk_seq * cluster_toast_max_chunk_size);
 
 	if (chunksize != expected_size)
 		report_toast_corruption(ctx, ta,
@@ -1773,7 +1773,7 @@ check_toasted_attribute(HeapCheckContext *ctx, ToastedAttribute *ta)
 	int32		last_chunk_seq;
 
 	extsize = VARATT_EXTERNAL_GET_EXTSIZE(ta->toast_pointer);
-	last_chunk_seq = (extsize - 1) / TOAST_MAX_CHUNK_SIZE;
+	last_chunk_seq = (extsize - 1) / cluster_toast_max_chunk_size;
 
 	/*
 	 * Setup a scan key to find chunks in toast table with matching va_valueid

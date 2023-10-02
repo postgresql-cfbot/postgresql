@@ -1191,7 +1191,7 @@ heapam_index_build_range_scan(Relation heapRelation,
 	TransactionId OldestXmin;
 	BlockNumber previous_blkno = InvalidBlockNumber;
 	BlockNumber root_blkno = InvalidBlockNumber;
-	OffsetNumber root_offsets[MaxHeapTuplesPerPage];
+	OffsetNumber root_offsets[MaxHeapTuplesPerPageLimit];
 
 	/*
 	 * sanity checks
@@ -1754,8 +1754,8 @@ heapam_index_validate_scan(Relation heapRelation,
 	EState	   *estate;
 	ExprContext *econtext;
 	BlockNumber root_blkno = InvalidBlockNumber;
-	OffsetNumber root_offsets[MaxHeapTuplesPerPage];
-	bool		in_index[MaxHeapTuplesPerPage];
+	OffsetNumber root_offsets[MaxHeapTuplesPerPageLimit];
+	bool		in_index[MaxHeapTuplesPerPageLimit];
 	BlockNumber previous_blkno = InvalidBlockNumber;
 
 	/* state variables for the merge */
@@ -2026,7 +2026,7 @@ heapam_scan_get_blocks_done(HeapScanDesc hscan)
 /*
  * Check to see whether the table needs a TOAST table.  It does only if
  * (1) there are any toastable attributes, and (2) the maximum length
- * of a tuple could exceed TOAST_TUPLE_THRESHOLD.  (We don't want to
+ * of a tuple could exceed toast_tuple_threshold.  (We don't want to
  * create a toast table for something like "f1 varchar(20)".)
  */
 static bool
@@ -2071,7 +2071,7 @@ heapam_relation_needs_toast_table(Relation rel)
 	tuple_length = MAXALIGN(SizeofHeapTupleHeader +
 							BITMAPLEN(tupdesc->natts)) +
 		MAXALIGN(data_length);
-	return (tuple_length > TOAST_TUPLE_THRESHOLD);
+	return (tuple_length > toast_tuple_threshold);
 }
 
 /*
@@ -2091,8 +2091,8 @@ heapam_relation_toast_am(Relation rel)
 
 #define HEAP_OVERHEAD_BYTES_PER_TUPLE \
 	(MAXALIGN(SizeofHeapTupleHeader) + sizeof(ItemIdData))
-#define HEAP_USABLE_BYTES_PER_PAGE \
-	(BLCKSZ - SizeOfPageHeaderData)
+#define heap_usable_bytes_per_page \
+	(cluster_block_size - SizeOfPageHeaderData)
 
 static void
 heapam_estimate_rel_size(Relation rel, int32 *attr_widths,
@@ -2102,7 +2102,7 @@ heapam_estimate_rel_size(Relation rel, int32 *attr_widths,
 	table_block_relation_estimate_size(rel, attr_widths, pages,
 									   tuples, allvisfrac,
 									   HEAP_OVERHEAD_BYTES_PER_TUPLE,
-									   HEAP_USABLE_BYTES_PER_PAGE);
+									   heap_usable_bytes_per_page);
 }
 
 

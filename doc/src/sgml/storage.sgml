@@ -415,7 +415,7 @@ described in more detail below.
 
 <para>
 Out-of-line values are divided (after compression if used) into chunks of at
-most <symbol>TOAST_MAX_CHUNK_SIZE</symbol> bytes (by default this value is chosen
+most <symbol>cluster_toast_max_chunk_size</symbol> bytes (by default this value is chosen
 so that four chunk rows will fit on a page, making it about 2000 bytes).
 Each chunk is stored as a separate row in the <acronym>TOAST</acronym> table
 belonging to the owning table.  Every
@@ -438,10 +438,10 @@ bytes regardless of the actual size of the represented value.
 <para>
 The <acronym>TOAST</acronym> management code is triggered only
 when a row value to be stored in a table is wider than
-<symbol>TOAST_TUPLE_THRESHOLD</symbol> bytes (normally 2 kB).
+<symbol>toast_tuple_threshold</symbol> bytes (normally 2 kB).
 The <acronym>TOAST</acronym> code will compress and/or move
 field values out-of-line until the row value is shorter than
-<symbol>TOAST_TUPLE_TARGET</symbol> bytes (also normally 2 kB, adjustable)
+<symbol>cluster_toast_tuple_target</symbol> bytes (also normally 2 kB, adjustable)
 or no more gains can be had.  During an UPDATE
 operation, values of unchanged fields are normally preserved as-is; so an
 UPDATE of a row with out-of-line values incurs no <acronym>TOAST</acronym> costs if
@@ -496,7 +496,7 @@ with <link linkend="sql-altertable"><command>ALTER TABLE ... SET STORAGE</comman
 </para>
 
 <para>
-<symbol>TOAST_TUPLE_TARGET</symbol> can be adjusted for each table using
+<symbol>cluster_toast_tuple_target</symbol> can be adjusted for each table using
 <link linkend="sql-altertable"><command>ALTER TABLE ... SET (toast_tuple_target = N)</command></link>
 </para>
 

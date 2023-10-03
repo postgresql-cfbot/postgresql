@@ -41,6 +41,10 @@ $node->issues_sql_like(
 	qr/statement: VACUUM \(DISABLE_PAGE_SKIPPING, SKIP_DATABASE_STATS\).*;/,
 	'vacuumdb --disable-page-skipping');
 $node->issues_sql_like(
+	[ 'vacuumdb', '--buffer-usage-limit', '0', 'postgres' ],
+	qr/statement: VACUUM \(SKIP_DATABASE_STATS, BUFFER_USAGE_LIMIT '0'\).*;/,
+	'vacuumdb --buffer-usage-limit');
+$node->issues_sql_like(
 	[ 'vacuumdb', '--skip-locked', 'postgres' ],
 	qr/statement: VACUUM \(SKIP_DATABASE_STATS, SKIP_LOCKED\).*;/,
 	'vacuumdb --skip-locked');
@@ -48,6 +52,10 @@ $node->issues_sql_like(
 	[ 'vacuumdb', '--skip-locked', '--analyze-only', 'postgres' ],
 	qr/statement: ANALYZE \(SKIP_LOCKED\).*;/,
 	'vacuumdb --skip-locked --analyze-only');
+$node->issues_sql_like(
+	[ 'vacuumdb', '--buffer-usage-limit', '0', '--analyze-only', 'postgres' ],
+	qr/statement: ANALYZE \(BUFFER_USAGE_LIMIT '0'\).*;/,
+	'vacuumdb --buffer-usage-limit --analyze-only');
 $node->command_fails(
 	[ 'vacuumdb', '--analyze-only', '--disable-page-skipping', 'postgres' ],
 	'--analyze-only and --disable-page-skipping specified together');

@@ -884,6 +884,14 @@ sub program_help_ok
 	ok($result, "$cmd --help exit code 0");
 	isnt($stdout, '', "$cmd --help goes to stdout");
 	is($stderr, '', "$cmd --help nothing to stderr");
+
+	# We set the hard limit on the length of line to 120
+	subtest "$cmd --help outputs fit within 120 columns per line" => sub {
+	foreach my $line (split /\n/, $stdout)
+	{
+		ok(length($line) <= 120, "$line");
+	}
+};
 	return;
 }
 

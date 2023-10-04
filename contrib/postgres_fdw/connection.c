@@ -83,6 +83,11 @@ static unsigned int prep_stmt_number = 0;
 /* tracks whether any work is needed in callback functions */
 static bool xact_got_connection = false;
 
+/* value cached, fetched from shared memory */
+static uint32 pgfdw_we_connect = 0;
+static uint32 pgfdw_we_receive = 0;
+static uint32 pgfdw_we_cleanup_receive = 0;
+
 /*
  * Milliseconds to wait to cancel an in-progress query or execute a cleanup
  * query; if it takes longer than 30 seconds to do these, we assume the
@@ -527,10 +532,14 @@ connect_pg_server(ForeignServer *server, UserMapping *user)
 		/* verify the set of connection parameters */
 		check_conn_params(keywords, values, user);
 
+		/* first time, allocate or get the custom wait event */
+		if (pgfdw_we_connect == 0)
+			pgfdw_we_connect = WaitEventExtensionNew("PostgresFdwConnect");
+
 		/* OK to make connection */
 		conn = libpqsrv_connect_params(keywords, values,
 									   false,	/* expand_dbname */
-									   WAIT_EVENT_EXTENSION);
+									   pgfdw_we_connect);
 
 		if (!conn || PQstatus(conn) != CONNECTION_OK)
 			ereport(ERROR,
@@ -858,12 +867,16 @@ pgfdw_get_result(PGconn *conn, const char *query)
 			{
 				int			wc;
 
+				/* first time, allocate or get the custom wait event */
+				if (pgfdw_we_receive == 0)
+					pgfdw_we_receive = WaitEventExtensionNew("PostgresFdwReceive");
+
 				/* Sleep until there's something to do */
 				wc = WaitLatchOrSocket(MyLatch,
 									   WL_LATCH_SET | WL_SOCKET_READABLE |
 									   WL_EXIT_ON_PM_DEATH,
 									   PQsocket(conn),
-									   -1L, WAIT_EVENT_EXTENSION);
+									   -1L, pgfdw_we_receive);
 				ResetLatch(MyLatch);
 
 				CHECK_FOR_INTERRUPTS();
@@ -1562,12 +1575,16 @@ pgfdw_get_cleanup_result(PGconn *conn, TimestampTz endtime, PGresult **result,
 					goto exit;
 				}
 
+				/* first time, allocate or get the custom wait event */
+				if (pgfdw_we_cleanup_receive == 0)
+					pgfdw_we_cleanup_receive = WaitEventExtensionNew("PostgresFdwCleanupReceive");
+
 				/* Sleep until there's something to do */
 				wc = WaitLatchOrSocket(MyLatch,
 									   WL_LATCH_SET | WL_SOCKET_READABLE |
 									   WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
 									   PQsocket(conn),
-									   cur_timeout, WAIT_EVENT_EXTENSION);
+									   cur_timeout, pgfdw_we_cleanup_receive);
 				ResetLatch(MyLatch);
 
 				CHECK_FOR_INTERRUPTS();

@@ -627,6 +627,10 @@ FROM dblink_fetch('myconn','error_cursor', 1) AS t(i int);
 SHOW datestyle;
 SHOW intervalstyle;
 
+-- Check custom wait events are registered
+SELECT name FROM pg_wait_events WHERE name ~ '^Dblink'
+ORDER BY name COLLATE "C";
+
 -- Clean up GUC-setting tests
 SELECT dblink_disconnect('myconn');
 RESET datestyle;

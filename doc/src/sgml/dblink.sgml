@@ -14,6 +14,34 @@
  </para>
 
  <para>
+  <filename>dblink</filename> can report the following wait events under the wait
+  event type <literal>Extension</literal>.
+ </para>
+
+ <variablelist>
+  <varlistentry>
+   <term><literal>DblinkConnect</literal></term>
+   <listitem>
+    <para>
+     Waiting to establish a connection to a remote server. It can be reported when calling
+     <function>dblink_connect</function>.
+    </para>
+   </listitem>
+  </varlistentry>
+
+  <varlistentry>
+   <term><literal>DblinkGetConnect</literal></term>
+   <listitem>
+    <para>
+     Waiting to establish a connection to a remote server when it can't look up the
+     specified persistent connection's name. It can be reported when calling
+     <function>dblink</function> and <function>dblink_exec</function>.
+    </para>
+   </listitem>
+  </varlistentry>
+ </variablelist>
+
+ <para>
   See also <xref linkend="postgres-fdw"/>, which provides roughly the same
   functionality using a more modern and standards-compliant infrastructure.
  </para>

@@ -4039,6 +4039,13 @@ ANALYZE analyze_table;
 ALTER SERVER loopback OPTIONS (SET analyze_sampling 'off');
 ANALYZE analyze_table;
 
+-- ===================================================================
+-- test for custom wait events
+-- ===================================================================
+
+SELECT name FROM pg_wait_events WHERE name ~ '^PostgresFdw'
+ORDER BY name COLLATE "C";
+
 -- cleanup
 DROP FOREIGN TABLE analyze_ftable;
 DROP TABLE analyze_table;

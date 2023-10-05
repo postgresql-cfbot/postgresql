@@ -7,19 +7,25 @@ initdb_sources = files(
 
 initdb_sources += timezone_localtime_source
 
-#fixme: reimplement libpq_pgport logic
-
 if host_system == 'windows'
   initdb_sources += rc_bin_gen.process(win32ver_rc, extra_args: [
     '--NAME', 'initdb',
     '--FILEDESC', 'initdb - initialize a new database cluster',])
 endif
 
+# Note: it's important that we link to encnames.o from libpgcommon, not
+# from libpq, else we have risks of version skew if we run with a libpq
+# shared library from a different PG version.  Define
+# USE_PRIVATE_ENCODING_FUNCS to ensure that that happens.
+c_args = default_bin_args.get('c_args', []) + ['-DUSE_PRIVATE_ENCODING_FUNCS']
+
 initdb = executable('initdb',
   initdb_sources,
   include_directories: [timezone_inc],
   dependencies: [frontend_code, libpq, icu, icu_i18n],
-  kwargs: default_bin_args,
+  kwargs: default_bin_args + {
+    'c_args': c_args,
+  },
 )
 bin_targets += initdb
 

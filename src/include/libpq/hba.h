@@ -135,6 +135,7 @@ typedef struct HbaLine
 	char	   *radiusidentifiers_s;
 	List	   *radiusports;
 	char	   *radiusports_s;
+	char	   *comments;
 } HbaLine;
 
 typedef struct IdentLine

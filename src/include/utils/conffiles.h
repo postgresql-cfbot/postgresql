@@ -23,5 +23,6 @@ extern char **GetConfFilesInDir(const char *includedir,
 								const char *calling_file,
 								int elevel, int *num_filenames,
 								char **err_msg);
+extern char *GetInlineComment(char *line);
 
 #endif							/* CONFFILES_H */

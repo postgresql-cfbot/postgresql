@@ -26,6 +26,47 @@
 #include "utils/conffiles.h"
 
 /*
+ * GetInlineComment
+ *
+ * This function returns comments of a given config file line,
+ * if there is any. A comment is any text after the # character,
+ * as long as it is not located after a opeining '"'.
+ */
+char *
+GetInlineComment(char *line)
+{
+
+	size_t nq = 0;
+	char *comment;
+
+	for (int i = 0; i < strlen(line); i++) {
+
+		if (line[i] == '"')
+			nq++;
+		else if (line[i] == '#' && nq % 2 == 0)
+		{
+			size_t len = strlen(line);
+			comment = (char *) palloc(len * sizeof(char *));
+			memcpy(comment,&line[i+1],len-i);
+
+			/* trim leading and trailing whitespaces */
+			while (*comment && isspace((unsigned char) *comment))
+				comment++;
+			len = strlen(comment);
+			while (len > 0 && isspace((unsigned char) comment[len - 1]))
+				len--;
+			comment[len] = '\0';
+
+			return comment;
+		}
+
+	}
+
+	return NULL;
+
+ }
+
+/*
  * AbsoluteConfigLocation
  *
  * Given a configuration file or directory location that may be a relative

@@ -1090,6 +1090,15 @@
       </para></entry>
      </row>
 
+    <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>comment</structfield> <type>text</type>
+      </para>
+      <para>
+       Text after the first <literal>#</literal> comment character in the end of a valid <literal>pg_hba.conf</literal> entry, if any
+      </para></entry>
+     </row>
+
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>error</structfield> <type>text</type>

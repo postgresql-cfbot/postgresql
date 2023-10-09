@@ -22,6 +22,7 @@
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/conffiles.h"
 
 
 static ArrayType *get_hba_options(HbaLine *hba);
@@ -159,7 +160,7 @@ get_hba_options(HbaLine *hba)
 }
 
 /* Number of columns in pg_hba_file_rules view */
-#define NUM_PG_HBA_FILE_RULES_ATTS	 11
+#define NUM_PG_HBA_FILE_RULES_ATTS	 12
 
 /*
  * fill_hba_line
@@ -191,6 +192,7 @@ fill_hba_line(Tuplestorestate *tuple_store, TupleDesc tupdesc,
 	const char *addrstr;
 	const char *maskstr;
 	ArrayType  *options;
+	char       *comment;
 
 	Assert(tupdesc->natts == NUM_PG_HBA_FILE_RULES_ATTS);
 
@@ -344,6 +346,13 @@ fill_hba_line(Tuplestorestate *tuple_store, TupleDesc tupdesc,
 		options = get_hba_options(hba);
 		if (options)
 			values[index++] = PointerGetDatum(options);
+		else
+			nulls[index++] = true;
+
+		/* comments */
+		comment = GetInlineComment(hba->rawline);
+		if(comment)
+			values[index++] = CStringGetTextDatum(comment);
 		else
 			nulls[index++] = true;
 	}

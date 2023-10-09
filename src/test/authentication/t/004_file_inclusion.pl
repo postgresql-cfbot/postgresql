@@ -63,14 +63,72 @@ sub add_hba_line
 	# Increment pg_hba_file_rules.rule_number and save it.
 	$globline = ++$line_counters{'hba_rule'};
 
+	# It is possible to have the character '#' in several elements of
+	# a hba entry if they're wrapped with double quotes. So we first check
+	# if a '#' comes after an opening '"', and if so we ignore it. If a '#'
+	# is located after a closing '"' or if there is no previous '"' in the
+	# string, we consider it as the beginning of an inline comment.
+
+	my $comment_position = -1;
+	my $nq = 0;
+
+	for my $i (0..length($entry)-1){
+
+		my $char = substr($entry, $i, 1);
+
+		if($char eq '"')
+		{
+			$nq = $nq + 1;
+		} elsif ($char eq '#' && $nq % 2 == 0)
+		{
+			$comment_position = $i;
+			last;
+		}
+
+	}
+
+	# In case the pg_hba entry has a comment, we store it in $comment
+	# and remove it from $entry. The content of $comment will be pushed
+	# into @tokens separataely. This avoids having whitespaces in $comment
+	# being interpreted as element separator by split(). The leading
+	# and trailing whitespaces in $comment are removed to reproduce the
+	# behaviour of GetInlineComment(char *line).
+
+	my $comment;
+
+	if($comment_position != -1)
+	{
+		$comment = substr($entry, $comment_position+1);
+		$comment =~ s/^\s+|\s+$//g;
+		$entry = substr($entry, 0, $comment_position);
+	}
+
 	# Generate the expected pg_hba_file_rules line
 	@tokens = split(/ /, $entry);
+
+	# Remove surrounding double quotes.
+	foreach (@tokens)
+	{
+		$_ =~ s/^"|"$//g;
+	}
+
+	# Wrapping database and user name with {}
 	$tokens[1] = '{' . $tokens[1] . '}';    # database
 	$tokens[2] = '{' . $tokens[2] . '}';    # user_name
 
 	# Append empty options and error
 	push @tokens, '';
 	push @tokens, '';
+
+	# Append comment, if any. Otherwise append empty string
+	if(not defined $comment)
+	{
+		push @tokens, '';
+	}
+	else
+	{
+		push @tokens, $comment;
+	}
 
 	# Final line expected, output of the SQL query.
 	$line = "";
@@ -167,15 +225,18 @@ mkdir("$data_dir/hba_inc_if");
 mkdir("$data_dir/hba_pos");
 
 # First, make sure that we will always be able to connect.
-$hba_expected .= add_hba_line($node, "$hba_file", 'local all all trust');
+$hba_expected .= add_hba_line($node, "$hba_file", 'local all all trust    #   # First, make sure that we will always be able to connect.   ');
+
+# Add database and user names containing # by wrapping them with double quotes.
+$hba_expected .= add_hba_line($node, "$hba_file", 'local "fancy#dbname" "fancy#username" trust# Add database and user names containing # by wrapping them with double quotes.');
 
 # "include".  Note that as $hba_file is located in $data_dir/subdir1,
 # pg_hba_pre.conf is located at the root of the data directory.
 $hba_expected .=
-  add_hba_line($node, "$hba_file", "include ../pg_hba_pre.conf");
+  add_hba_line($node, "$hba_file", "include ../pg_hba_pre.conf#foo");
 $hba_expected .=
   add_hba_line($node, 'pg_hba_pre.conf', "local pre all reject");
-$hba_expected .= add_hba_line($node, "$hba_file", "local all all reject");
+$hba_expected .= add_hba_line($node, "$hba_file", 'local all "all" reject #bar');
 add_hba_line($node, "$hba_file", "include ../hba_pos/pg_hba_pos.conf");
 $hba_expected .=
   add_hba_line($node, 'hba_pos/pg_hba_pos.conf', "local pos all reject");
@@ -184,7 +245,7 @@ $hba_expected .=
 $hba_expected .=
   add_hba_line($node, 'hba_pos/pg_hba_pos.conf', "include pg_hba_pos2.conf");
 $hba_expected .=
-  add_hba_line($node, 'hba_pos/pg_hba_pos2.conf', "local pos2 all reject");
+  add_hba_line($node, 'hba_pos/pg_hba_pos2.conf', "local pos2 all reject #bar!#");
 $hba_expected .=
   add_hba_line($node, 'hba_pos/pg_hba_pos2.conf', "local pos3 all reject");
 
@@ -216,7 +277,7 @@ $hba_expected .= "\n"
   . $line_counters{'hba_rule'} . "|"
   . basename($hba_file) . "|"
   . $line_counters{$hba_file}
-  . '|local|{db1,db3}|{all}|reject||';
+  . '|local|{db1,db3}|{all}|reject|||';
 
 note "Generating ident structure with include directives";
 
@@ -279,7 +340,8 @@ my $contents = $node->safe_psql(
   user_name,
   auth_method,
   options,
-  error
+  error,
+  comment
  FROM pg_hba_file_rules ORDER BY rule_number;));
 is($contents, $hba_expected, 'check contents of pg_hba_file_rules');
 

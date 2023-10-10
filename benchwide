@@ -1,0 +1,4 @@
+SELECT COUNT(*) FROM wide
+ WHERE i <> 0 AND j <> 0 AND k <> 0 AND l <> 0 AND m <> 0 AND n <> 0 AND o <> 0
+   AND p <> 0 AND q <> 0 AND r <> 0 AND s <> 0 AND t <> 0 AND u <> 0 AND v <> 0
+   AND w <> 0 AND x <> 0 AND y <> 0 AND z <> 0;

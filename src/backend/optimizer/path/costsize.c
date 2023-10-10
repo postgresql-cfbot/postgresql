@@ -133,6 +133,7 @@ Cost		disable_cost = 1.0e10;
 int			max_parallel_workers_per_gather = 2;
 
 bool		enable_seqscan = true;
+bool		enable_seqscan_conds = true;
 bool		enable_indexscan = true;
 bool		enable_indexonlyscan = true;
 bool		enable_bitmapscan = true;

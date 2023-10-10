@@ -1,0 +1,1 @@
+SELECT COUNT(i) FROM :table;

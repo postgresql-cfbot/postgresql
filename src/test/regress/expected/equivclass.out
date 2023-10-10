@@ -424,10 +424,10 @@ drop user regress_user_ectest;
 -- check that X=X is converted to X IS NOT NULL when appropriate
 explain (costs off)
   select * from tenk1 where unique1 = unique1 and unique2 = unique2;
-                         QUERY PLAN                          
--------------------------------------------------------------
+                           QUERY PLAN                           
+----------------------------------------------------------------
  Seq Scan on tenk1
-   Filter: ((unique1 IS NOT NULL) AND (unique2 IS NOT NULL))
+   Scan Cond: ((unique1 IS NOT NULL) AND (unique2 IS NOT NULL))
 (2 rows)
 
 -- this could be converted, but isn't at present

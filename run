@@ -1,0 +1,26 @@
+#! /bin/bash
+
+function bench()
+{
+  local index=$1
+
+  for t in zero five ten twenty fifty eighty ninety ninetyfive hundred; do
+    echo "= $index: $t ="
+    pgbench -n -f ./bench$index -T5 -c1 -j1 -Dtable=$t postgres
+  done;
+}
+
+function all()
+{
+  for i in 1 2 3 4 5; do
+    bench $i
+    echo
+  done
+
+  echo "= wide ="
+  pgbench -n -f ./benchwide -T5 -c1 -j1 postgres
+}
+
+for typ in on off; do
+  PGOPTIONS="-c enable_seqscan_conds=$typ" all > $typ.perf
+done

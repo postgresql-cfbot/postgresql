@@ -1,0 +1,57 @@
+-- Tables are named after the percentage of values that are non-NULL.
+DROP TABLE IF EXISTS zero;
+DROP TABLE IF EXISTS five;
+DROP TABLE IF EXISTS ten;
+DROP TABLE IF EXISTS twenty;
+DROP TABLE IF EXISTS fifty;
+DROP TABLE IF EXISTS eighty;
+DROP TABLE IF EXISTS ninety;
+DROP TABLE IF EXISTS ninetyfive;
+DROP TABLE IF EXISTS hundred;
+
+DROP TABLE IF EXISTS wide;
+
+\if :{?scale}
+\else
+  \set scale 1
+\endif
+
+CREATE TABLE zero AS
+  SELECT NULL::int AS i FROM generate_series(1, 100000 * :scale);
+
+CREATE TABLE five AS
+  SELECT CASE WHEN random() < 0.05 THEN i ELSE NULL END AS i
+    FROM generate_series(1, 100000 * :scale) i;
+
+CREATE TABLE ten AS
+  SELECT CASE WHEN random() < 0.1 THEN i ELSE NULL END AS i
+    FROM generate_series(1, 100000 * :scale) i;
+
+CREATE TABLE twenty AS
+  SELECT CASE WHEN random() < 0.2 THEN i ELSE NULL END AS i
+    FROM generate_series(1, 100000 * :scale) i;
+
+CREATE TABLE fifty AS
+  SELECT CASE WHEN random() < 0.5 THEN i ELSE NULL END AS i
+    FROM generate_series(1, 100000 * :scale) i;
+
+CREATE TABLE eighty AS
+  SELECT CASE WHEN random() < 0.8 THEN i ELSE NULL END AS i
+    FROM generate_series(1, 100000 * :scale) i;
+
+CREATE TABLE ninety AS
+  SELECT CASE WHEN random() < 0.9 THEN i ELSE NULL END AS i
+    FROM generate_series(1, 100000 * :scale) i;
+
+CREATE TABLE ninetyfive AS
+  SELECT CASE WHEN random() < 0.95 THEN i ELSE NULL END AS i
+    FROM generate_series(1, 100000 * :scale) i;
+
+CREATE TABLE hundred AS
+  SELECT i FROM generate_series(1, 100000 * :scale) i;
+
+CREATE TABLE wide AS
+  SELECT i, 2 AS j, 3 AS k, 4 AS l, 5 AS m, 6 AS n, 7 AS o, 8 AS p, 9 AS q,
+         10 AS r, 11 AS s, 12 AS t, 13 AS u, 14 AS v, 15 AS w, 16 AS x, 17 AS y,
+		 18 AS z
+    FROM generate_series(1, 100000 * :scale) i;

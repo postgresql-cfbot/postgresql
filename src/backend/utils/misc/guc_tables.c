@@ -821,6 +821,18 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"enable_seqscan_conds", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables the planner's ability to push down scan conditions "
+						 "during sequential scans."),
+			gettext_noop("Allows the query planner to build sequential-scan plans that "
+						 "prefilter row attributes before expression evaluation."),
+			GUC_EXPLAIN
+		},
+		&enable_seqscan_conds,
+		true,
+		NULL, NULL, NULL
+	},
+	{
 		{"enable_indexscan", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of index-scan plans."),
 			NULL,

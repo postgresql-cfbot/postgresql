@@ -458,33 +458,47 @@ SELECT dblink_disconnect('dtest1');
 CREATE ROLE regress_dblink_user;
 DO $d$
     BEGIN
-        EXECUTE $$CREATE SERVER fdtest FOREIGN DATA WRAPPER dblink_fdw
+        EXECUTE $$CREATE SERVER fdtest_fco FOR CONNECTION ONLY
+            OPTIONS (dbname '$$||current_database()||$$',
+                     port '$$||current_setting('port')||$$'
+            )$$;
+        EXECUTE $$CREATE SERVER fdtest_fdw FOREIGN DATA WRAPPER dblink_fdw
             OPTIONS (dbname '$$||current_database()||$$',
                      port '$$||current_setting('port')||$$'
             )$$;
     END;
 $d$;
 
-CREATE USER MAPPING FOR public SERVER fdtest
+CREATE USER MAPPING FOR public SERVER fdtest_fco
   OPTIONS (server 'localhost');  -- fail, can't specify server here
-CREATE USER MAPPING FOR public SERVER fdtest OPTIONS (user :'USER');
+CREATE USER MAPPING FOR public SERVER fdtest_fdw
+  OPTIONS (server 'localhost');  -- fail, can't specify server here
+CREATE USER MAPPING FOR public SERVER fdtest_fco OPTIONS (user :'USER', password 'nonsense');
+CREATE USER MAPPING FOR public SERVER fdtest_fdw OPTIONS (user :'USER');
 
-GRANT USAGE ON FOREIGN SERVER fdtest TO regress_dblink_user;
+GRANT USAGE ON FOREIGN SERVER fdtest_fco TO regress_dblink_user;
+GRANT USAGE ON FOREIGN SERVER fdtest_fdw TO regress_dblink_user;
 GRANT EXECUTE ON FUNCTION dblink_connect_u(text, text) TO regress_dblink_user;
 
 SET SESSION AUTHORIZATION regress_dblink_user;
 -- should fail
-SELECT dblink_connect('myconn', 'fdtest');
+SELECT dblink_connect('myconn1', 'fdtest_fco');
+SELECT dblink_connect('myconn2', 'fdtest_fdw');
 -- should succeed
-SELECT dblink_connect_u('myconn', 'fdtest');
-SELECT * FROM dblink('myconn','SELECT * FROM foo') AS t(a int, b text, c text[]);
+SELECT dblink_connect_u('myconn1', 'fdtest_fco');
+SELECT dblink_connect_u('myconn2', 'fdtest_fdw');
+SELECT * FROM dblink('myconn1','SELECT * FROM foo') AS t(a int, b text, c text[]);
+SELECT * FROM dblink('myconn2','SELECT * FROM foo') AS t(a int, b text, c text[]);
 
 \c - -
-REVOKE USAGE ON FOREIGN SERVER fdtest FROM regress_dblink_user;
+REVOKE USAGE ON FOREIGN SERVER fdtest_fco FROM regress_dblink_user;
+REVOKE USAGE ON FOREIGN SERVER fdtest_fdw FROM regress_dblink_user;
 REVOKE EXECUTE ON FUNCTION dblink_connect_u(text, text) FROM regress_dblink_user;
 DROP USER regress_dblink_user;
-DROP USER MAPPING FOR public SERVER fdtest;
-DROP SERVER fdtest;
+DROP USER MAPPING FOR public SERVER fdtest_fco;
+DROP USER MAPPING FOR public SERVER fdtest_fdw;
+DROP SERVER fdtest_fco;
+DROP SERVER fdtest_fdw;
 
 -- should fail
 ALTER FOREIGN DATA WRAPPER dblink_fdw OPTIONS (nonexistent 'fdw');

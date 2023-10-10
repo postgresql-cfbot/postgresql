@@ -22,7 +22,7 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 CREATE SERVER [ IF NOT EXISTS ] <replaceable class="parameter">server_name</replaceable> [ TYPE '<replaceable class="parameter">server_type</replaceable>' ] [ VERSION '<replaceable class="parameter">server_version</replaceable>' ]
-    FOREIGN DATA WRAPPER <replaceable class="parameter">fdw_name</replaceable>
+    { FOR CONNECTION ONLY | FOREIGN DATA WRAPPER <replaceable class="parameter">fdw_name</replaceable> }
     [ OPTIONS ( <replaceable class="parameter">option</replaceable> '<replaceable class="parameter">value</replaceable>' [, ... ] ) ]
 </synopsis>
  </refsynopsisdiv>
@@ -57,6 +57,22 @@ CREATE SERVER [ IF NOT EXISTS ] <replaceable class="parameter">server_name</repl
 
   <variablelist>
   <varlistentry>
+    <term><literal>FOR CONNECTION ONLY</literal></term>
+    <listitem>
+     <para>
+      Create a foreign server that can be used by <xref
+      linkend="sql-createsubscription"/>, or for other purposes that need only
+      the PostgreSQL connection information, such as <xref
+      linkend="dblink"/>. This foreign server may not be used by a foreign
+      table.
+     </para>
+     <para>
+      See <xref linkend="server-connection-only-options"/> for details.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><literal>IF NOT EXISTS</literal></term>
     <listitem>
      <para>
@@ -113,6 +129,10 @@ CREATE SERVER [ IF NOT EXISTS ] <replaceable class="parameter">server_name</repl
       actual names and values are dependent on the server's
       foreign-data wrapper.
      </para>
+     <para>
+      If <literal>FOR CONNECTION ONLY</literal> is specified, see <xref
+      linkend="server-connection-only-options"/> for available options.
+     </para>
     </listitem>
    </varlistentry>
   </variablelist>
@@ -121,14 +141,44 @@ CREATE SERVER [ IF NOT EXISTS ] <replaceable class="parameter">server_name</repl
  <refsect1>
   <title>Notes</title>
 
-  <para>
-   When using the <xref linkend="dblink"/> module,
-   a foreign server's name can be used
-   as an argument of the <xref linkend="contrib-dblink-connect"/>
-   function to indicate the connection parameters.  It is necessary to have
-   the <literal>USAGE</literal> privilege on the foreign server to be
-   able to use it in this way.
-  </para>
+  <refsect2 id="server-connection-only-options" xreflabel="FOR CONNECTION ONLY Options">
+   <title><literal>FOR CONNECTION ONLY</literal> Options</title>
+
+   <para>
+    A foreign server defined with <literal>FOR CONNECTION ONLY</literal>
+    can have the same options that <application>libpq</application> accepts in
+    connection strings, as described in <xref linkend="libpq-paramkeywords"/>,
+    except that the following options cannot be set:
+
+    <itemizedlist spacing="compact">
+     <listitem>
+      <para>
+       <literal>user</literal>, <literal>password</literal> and
+       <literal>sslpassword</literal> - these must instead be set on the
+       associated user mapping.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       <literal>client_encoding</literal> - will always be the same as the
+       database encoding.
+      </para>
+     </listitem>
+    </itemizedlist>
+   </para>
+  </refsect2>
+
+  <refsect2>
+   <title>Use with dblink</title>
+
+   <para>
+    When using the <xref linkend="dblink"/> module, a foreign server's name
+    can be used as an argument of the <xref linkend="contrib-dblink-connect"/>
+    function to indicate the connection parameters.  It is necessary to have
+    the <literal>USAGE</literal> privilege on the foreign server to be able to
+    use it in this way.
+   </para>
+  </refsect2>
  </refsect1>
 
  <refsect1>

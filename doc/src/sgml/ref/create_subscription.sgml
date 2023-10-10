@@ -22,7 +22,7 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceable>
-    CONNECTION '<replaceable class="parameter">conninfo</replaceable>'
+    { SERVER <replaceable class="parameter">servername</replaceable> | CONNECTION '<replaceable class="parameter">conninfo</replaceable>' }
     PUBLICATION <replaceable class="parameter">publication_name</replaceable> [, ...]
     [ WITH ( <replaceable class="parameter">subscription_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
 </synopsis>
@@ -73,6 +73,17 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
     <listitem>
      <para>
       The name of the new subscription.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-createsubscription-server">
+    <term><literal>SERVER <replaceable class="parameter">servername</replaceable></literal></term>
+    <listitem>
+     <para>
+      The foreign server to use for connecting to the publisher database,
+      which must have <literal>FOR CONNECTION ONLY</literal> specified. See
+      <xref linkend="sql-createserver"/> for details.
      </para>
     </listitem>
    </varlistentry>
@@ -362,6 +373,10 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
           is ignored when the subscription is owned by a superuser.
           The default is <literal>true</literal>. Only superusers can set
           this value to <literal>false</literal>.
+         </para>
+         <para>
+          Only allowed when <literal>CONNECTION</literal> is
+          specified. Otherwise, see <xref linkend="sql-createusermapping"/>.
          </para>
         </listitem>
        </varlistentry>

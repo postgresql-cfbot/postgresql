@@ -2790,7 +2790,6 @@ get_connect_string(const char *servername)
 	UserMapping *user_mapping;
 	ListCell   *cell;
 	StringInfoData buf;
-	ForeignDataWrapper *fdw;
 	AclResult	aclresult;
 	char	   *srvname;
 
@@ -2827,20 +2826,24 @@ get_connect_string(const char *servername)
 		Oid			userid = GetUserId();
 
 		user_mapping = GetUserMapping(userid, serverid);
-		fdw = GetForeignDataWrapper(fdwid);
 
 		/* Check permissions, user must have usage on the server. */
 		aclresult = object_aclcheck(ForeignServerRelationId, serverid, userid, ACL_USAGE);
 		if (aclresult != ACLCHECK_OK)
 			aclcheck_error(aclresult, OBJECT_FOREIGN_SERVER, foreign_server->servername);
 
-		foreach(cell, fdw->options)
+		if (OidIsValid(fdwid))
 		{
-			DefElem    *def = lfirst(cell);
+			ForeignDataWrapper *fdw = GetForeignDataWrapper(fdwid);
 
-			if (is_valid_dblink_option(options, def->defname, ForeignDataWrapperRelationId))
-				appendStringInfo(&buf, "%s='%s' ", def->defname,
-								 escape_param_str(strVal(def->arg)));
+			foreach(cell, fdw->options)
+			{
+				DefElem    *def = lfirst(cell);
+
+				if (is_valid_dblink_option(options, def->defname, ForeignDataWrapperRelationId))
+					appendStringInfo(&buf, "%s='%s' ", def->defname,
+									 escape_param_str(strVal(def->arg)));
+			}
 		}
 
 		foreach(cell, foreign_server->options)

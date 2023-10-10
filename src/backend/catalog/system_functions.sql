@@ -747,3 +747,5 @@ GRANT pg_read_all_settings TO pg_monitor;
 GRANT pg_read_all_stats TO pg_monitor;
 
 GRANT pg_stat_scan_tables TO pg_monitor;
+
+GRANT pg_create_connection TO pg_create_subscription;

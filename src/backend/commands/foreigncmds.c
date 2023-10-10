@@ -21,6 +21,7 @@
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_foreign_data_wrapper.h"
 #include "catalog/pg_foreign_server.h"
 #include "catalog/pg_foreign_table.h"
@@ -35,6 +36,7 @@
 #include "tcop/utility.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
@@ -843,11 +845,12 @@ CreateForeignServer(CreateForeignServerStmt *stmt)
 	bool		nulls[Natts_pg_foreign_server];
 	HeapTuple	tuple;
 	Oid			srvId;
+	Oid			fdwId;
+	Oid			fdwvalidator;
 	Oid			ownerId;
 	AclResult	aclresult;
 	ObjectAddress myself;
 	ObjectAddress referenced;
-	ForeignDataWrapper *fdw;
 
 	rel = table_open(ForeignServerRelationId, RowExclusiveLock);
 
@@ -885,15 +888,42 @@ CreateForeignServer(CreateForeignServerStmt *stmt)
 							stmt->servername)));
 	}
 
-	/*
-	 * Check that the FDW exists and that we have USAGE on it. Also get the
-	 * actual FDW for option validation etc.
-	 */
-	fdw = GetForeignDataWrapperByName(stmt->fdwname, false);
+	if (stmt->connection_only)
+	{
+		Assert(stmt->fdwname == NULL);
 
-	aclresult = object_aclcheck(ForeignDataWrapperRelationId, fdw->fdwid, ownerId, ACL_USAGE);
-	if (aclresult != ACLCHECK_OK)
-		aclcheck_error(aclresult, OBJECT_FDW, fdw->fdwname);
+		/*
+		 * We don't want to allow unprivileged users to be able to trigger
+		 * attempts to access arbitrary network destinations, so require the user
+		 * to have been specifically authorized to create connections.
+		 */
+		if (!has_privs_of_role(ownerId, ROLE_PG_CREATE_CONNECTION))
+			ereport(ERROR,
+					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+					 errmsg("permission denied to create server connection"),
+					 errdetail("Only roles with privileges of the \"%s\" role may create servers FOR CONNECTION ONLY.",
+							   "pg_create_connection")));
+
+		fdwId = InvalidOid;
+		fdwvalidator = F_PG_CONNECTION_VALIDATOR;
+	}
+	else
+	{
+		/*
+		 * Check that the FDW exists and that we have USAGE on it. Also get
+		 * the option validator oid.
+		 */
+		ForeignDataWrapper *fdw = GetForeignDataWrapperByName(stmt->fdwname,
+															  false);
+
+		aclresult = object_aclcheck(ForeignDataWrapperRelationId, fdw->fdwid,
+									ownerId, ACL_USAGE);
+		if (aclresult != ACLCHECK_OK)
+			aclcheck_error(aclresult, OBJECT_FDW, fdw->fdwname);
+
+		fdwId = fdw->fdwid;
+		fdwvalidator = fdw->fdwvalidator;
+	}
 
 	/*
 	 * Insert tuple into pg_foreign_server.
@@ -907,7 +937,7 @@ CreateForeignServer(CreateForeignServerStmt *stmt)
 	values[Anum_pg_foreign_server_srvname - 1] =
 		DirectFunctionCall1(namein, CStringGetDatum(stmt->servername));
 	values[Anum_pg_foreign_server_srvowner - 1] = ObjectIdGetDatum(ownerId);
-	values[Anum_pg_foreign_server_srvfdw - 1] = ObjectIdGetDatum(fdw->fdwid);
+	values[Anum_pg_foreign_server_srvfdw - 1] = ObjectIdGetDatum(fdwId);
 
 	/* Add server type if supplied */
 	if (stmt->servertype)
@@ -930,7 +960,7 @@ CreateForeignServer(CreateForeignServerStmt *stmt)
 	srvoptions = transformGenericOptions(ForeignServerRelationId,
 										 PointerGetDatum(NULL),
 										 stmt->options,
-										 fdw->fdwvalidator);
+										 fdwvalidator);
 
 	if (PointerIsValid(DatumGetPointer(srvoptions)))
 		values[Anum_pg_foreign_server_srvoptions - 1] = srvoptions;
@@ -948,10 +978,13 @@ CreateForeignServer(CreateForeignServerStmt *stmt)
 	myself.objectId = srvId;
 	myself.objectSubId = 0;
 
-	referenced.classId = ForeignDataWrapperRelationId;
-	referenced.objectId = fdw->fdwid;
-	referenced.objectSubId = 0;
-	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+	if (OidIsValid(fdwId))
+	{
+		referenced.classId = ForeignDataWrapperRelationId;
+		referenced.objectId = fdwId;
+		referenced.objectSubId = 0;
+		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+	}
 
 	recordDependencyOnOwner(ForeignServerRelationId, srvId, ownerId);
 
@@ -1022,9 +1055,19 @@ AlterForeignServer(AlterForeignServerStmt *stmt)
 
 	if (stmt->options)
 	{
-		ForeignDataWrapper *fdw = GetForeignDataWrapper(srvForm->srvfdw);
+		Oid			fdwvalidator;
 		Datum		datum;
 		bool		isnull;
+
+		if (!OidIsValid(srvForm->srvfdw))
+		{
+			fdwvalidator = F_PG_CONNECTION_VALIDATOR;
+		}
+		else
+		{
+			ForeignDataWrapper *fdw = GetForeignDataWrapper(srvForm->srvfdw);
+			fdwvalidator = fdw->fdwvalidator;
+		}
 
 		/* Extract the current srvoptions */
 		datum = SysCacheGetAttr(FOREIGNSERVEROID,
@@ -1038,7 +1081,7 @@ AlterForeignServer(AlterForeignServerStmt *stmt)
 		datum = transformGenericOptions(ForeignServerRelationId,
 										datum,
 										stmt->options,
-										fdw->fdwvalidator);
+										fdwvalidator);
 
 		if (PointerIsValid(DatumGetPointer(datum)))
 			repl_val[Anum_pg_foreign_server_srvoptions - 1] = datum;
@@ -1106,10 +1149,10 @@ CreateUserMapping(CreateUserMappingStmt *stmt)
 	HeapTuple	tuple;
 	Oid			useId;
 	Oid			umId;
+	Oid			fdwvalidator;
 	ObjectAddress myself;
 	ObjectAddress referenced;
 	ForeignServer *srv;
-	ForeignDataWrapper *fdw;
 	RoleSpec   *role = (RoleSpec *) stmt->user;
 
 	rel = table_open(UserMappingRelationId, RowExclusiveLock);
@@ -1156,7 +1199,15 @@ CreateUserMapping(CreateUserMappingStmt *stmt)
 							stmt->servername)));
 	}
 
-	fdw = GetForeignDataWrapper(srv->fdwid);
+	if (!OidIsValid(srv->fdwid))
+	{
+		fdwvalidator = F_PG_CONNECTION_VALIDATOR;
+	}
+	else
+	{
+		ForeignDataWrapper *fdw = GetForeignDataWrapper(srv->fdwid);
+		fdwvalidator = fdw->fdwvalidator;
+	}
 
 	/*
 	 * Insert tuple into pg_user_mapping.
@@ -1174,7 +1225,7 @@ CreateUserMapping(CreateUserMappingStmt *stmt)
 	useoptions = transformGenericOptions(UserMappingRelationId,
 										 PointerGetDatum(NULL),
 										 stmt->options,
-										 fdw->fdwvalidator);
+										 fdwvalidator);
 
 	if (PointerIsValid(DatumGetPointer(useoptions)))
 		values[Anum_pg_user_mapping_umoptions - 1] = useoptions;
@@ -1267,7 +1318,7 @@ AlterUserMapping(AlterUserMappingStmt *stmt)
 
 	if (stmt->options)
 	{
-		ForeignDataWrapper *fdw;
+		Oid			fdwvalidator;
 		Datum		datum;
 		bool		isnull;
 
@@ -1275,7 +1326,15 @@ AlterUserMapping(AlterUserMappingStmt *stmt)
 		 * Process the options.
 		 */
 
-		fdw = GetForeignDataWrapper(srv->fdwid);
+		if (!OidIsValid(srv->fdwid))
+		{
+			fdwvalidator = F_PG_CONNECTION_VALIDATOR;
+		}
+		else
+		{
+			ForeignDataWrapper *fdw = GetForeignDataWrapper(srv->fdwid);
+			fdwvalidator = fdw->fdwvalidator;
+		}
 
 		datum = SysCacheGetAttr(USERMAPPINGUSERSERVER,
 								tp,
@@ -1288,7 +1347,7 @@ AlterUserMapping(AlterUserMappingStmt *stmt)
 		datum = transformGenericOptions(UserMappingRelationId,
 										datum,
 										stmt->options,
-										fdw->fdwvalidator);
+										fdwvalidator);
 
 		if (PointerIsValid(DatumGetPointer(datum)))
 			repl_val[Anum_pg_user_mapping_umoptions - 1] = datum;
@@ -1437,6 +1496,12 @@ CreateForeignTable(CreateForeignTableStmt *stmt, Oid relid)
 	if (aclresult != ACLCHECK_OK)
 		aclcheck_error(aclresult, OBJECT_FOREIGN_SERVER, server->servername);
 
+	if (!OidIsValid(server->fdwid))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot create foreign table using server that has FOR CONNECTION ONLY specified"),
+				 errhint("Use a foreign server that has a FOREIGN DATA WRAPPER specified instead.")));
+
 	fdw = GetForeignDataWrapper(server->fdwid);
 
 	/*
@@ -1495,6 +1560,12 @@ ImportForeignSchema(ImportForeignSchemaStmt *stmt)
 	aclresult = object_aclcheck(ForeignServerRelationId, server->serverid, GetUserId(), ACL_USAGE);
 	if (aclresult != ACLCHECK_OK)
 		aclcheck_error(aclresult, OBJECT_FOREIGN_SERVER, server->servername);
+
+	if (!OidIsValid(server->fdwid))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot import foreign schema using server that has FOR CONNECTION ONLY specified"),
+				 errhint("Use a foreign server that has a FOREIGN DATA WRAPPER specified instead.")));
 
 	/* Check that the schema exists and we have CREATE permissions on it */
 	(void) LookupCreationNamespace(stmt->local_schema);

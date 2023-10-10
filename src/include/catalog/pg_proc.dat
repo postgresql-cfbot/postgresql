@@ -7483,6 +7483,10 @@
   proname => 'postgresql_fdw_validator', prorettype => 'bool',
   proargtypes => '_text oid', prosrc => 'postgresql_fdw_validator' },
 
+{ oid => '6122', descr => '(internal)',
+  proname => 'pg_connection_validator', prorettype => 'bool',
+  proargtypes => '_text oid', prosrc => 'pg_connection_validator' },
+
 { oid => '2290', descr => 'I/O',
   proname => 'record_in', provolatile => 's', prorettype => 'record',
   proargtypes => 'cstring oid int4', prosrc => 'record_in' },

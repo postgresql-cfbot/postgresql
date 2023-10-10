@@ -180,6 +180,40 @@ CREATE SERVER t2 FOREIGN DATA WRAPPER foo;
 RESET ROLE;
 REVOKE regress_test_indirect FROM regress_test_role;
 
+-- test SERVER ... FOR CONNECTION ONLY
+
+SET ROLE regress_test_role;
+CREATE SERVER t3 FOR CONNECTION ONLY; 			   -- ERROR: not a member of pg_create_connection
+RESET ROLE;
+GRANT pg_create_connection TO regress_test_role;
+SET ROLE regress_test_role;
+
+CREATE SERVER t3 FOR CONNECTION ONLY OPTIONS (client_encoding 'foo'); --fails
+CREATE SERVER t3 FOR CONNECTION ONLY OPTIONS (user 'foo'); --fails
+CREATE SERVER t3 FOR CONNECTION ONLY OPTIONS (password 'foo'); --fails
+CREATE SERVER t3 FOR CONNECTION ONLY OPTIONS (password_required 'true'); --fails
+CREATE SERVER t3 FOR CONNECTION ONLY;
+
+IMPORT FOREIGN SCHEMA foo FROM SERVER t3 INTO bar; -- fails
+
+CREATE USER MAPPING FOR PUBLIC SERVER t3 OPTIONS (user 'x'); -- fails
+CREATE USER MAPPING FOR PUBLIC SERVER t3 OPTIONS (user 'x', password_required 'false'); -- fails
+CREATE USER MAPPING FOR PUBLIC SERVER t3 OPTIONS (user 'x', application_name 'nonsense'); -- fails
+
+CREATE USER MAPPING FOR PUBLIC SERVER t3 OPTIONS (user 'x', password 'secret');
+DROP USER MAPPING FOR PUBLIC SERVER t3;
+
+RESET ROLE;
+CREATE USER MAPPING FOR PUBLIC SERVER t3 OPTIONS (user 'x'); -- still fails
+
+CREATE USER MAPPING FOR PUBLIC SERVER t3 OPTIONS (user 'x', password 'secret');
+DROP USER MAPPING FOR PUBLIC SERVER t3;
+
+CREATE USER MAPPING FOR PUBLIC SERVER t3 OPTIONS (user 'x', password_required 'false');
+
+DROP USER MAPPING FOR PUBLIC SERVER t3;
+DROP SERVER t3;
+
 -- ALTER SERVER
 ALTER SERVER s0;                                            -- ERROR
 ALTER SERVER s0 OPTIONS (a '1');                            -- ERROR

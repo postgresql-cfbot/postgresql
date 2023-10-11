@@ -1549,16 +1549,18 @@ relation_excluded_by_constraints(PlannerInfo *root,
 
 	/*
 	 * Regardless of the setting of constraint_exclusion, detect
-	 * constant-FALSE-or-NULL restriction clauses.  Because const-folding will
-	 * reduce "anything AND FALSE" to just "FALSE", any such case should
-	 * result in exactly one baserestrictinfo entry.  This doesn't fire very
-	 * often, but it seems cheap enough to be worth doing anyway.  (Without
-	 * this, we'd miss some optimizations that 9.5 and earlier found via much
-	 * more roundabout methods.)
+	 * constant-FALSE-or-NULL restriction clauses.  Although const-folding will
+	 * reduce "anything AND FALSE" to just "FALSE", the baserestrictinfo list
+	 * might possibly have other members besides the FALSE constant, since
+	 * equivclass.c may generate constant-FALSE baserestrictinfo entry on the
+	 * fly.  In addition, other quals could get "pushed down" to the baserel.
+	 * This doesn't fire very often, but it seems cheap enough to be worth
+	 * doing anyway.  (Without this, we'd miss some optimizations that 9.5 and
+	 * earlier found via much more roundabout methods.)
 	 */
-	if (list_length(rel->baserestrictinfo) == 1)
+	foreach(lc, rel->baserestrictinfo)
 	{
-		RestrictInfo *rinfo = (RestrictInfo *) linitial(rel->baserestrictinfo);
+		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
 		Expr	   *clause = rinfo->clause;
 
 		if (clause && IsA(clause, Const) &&

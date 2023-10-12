@@ -355,11 +355,12 @@ static int	fsync_parent_path(const char *fname, int elevel);
 
 
 /*
- * pg_fsync --- do fsync with or without writethrough
+ * pg_fsync --- do fsync, if enabled, or redirect to Apple's F_FULLFSYNC.
  */
 int
 pg_fsync(int fd)
 {
+	int			rc;
 #if !defined(WIN32) && defined(USE_ASSERT_CHECKING)
 	struct stat st;
 
@@ -398,30 +399,20 @@ pg_fsync(int fd)
 	errno = 0;
 #endif
 
-	/* #if is to skip the sync_method test if there's no need for it */
-#if defined(HAVE_FSYNC_WRITETHROUGH)
-	if (sync_method == SYNC_METHOD_FSYNC_WRITETHROUGH)
-		return pg_fsync_writethrough(fd);
-	else
-#endif
-		return pg_fsync_no_writethrough(fd);
-}
-
-
-/*
- * pg_fsync_no_writethrough --- same as fsync except does nothing if
- *	enableFsync is off
- */
-int
-pg_fsync_no_writethrough(int fd)
-{
-	int			rc;
-
-	if (!enableFsync)
+	if (enableFsync == ENABLE_FSYNC_OFF)
 		return 0;
 
 retry:
-	rc = fsync(fd);
+#if defined(ENABLE_FSYNC_FULL)
+	if (enableFsync == ENABLE_FSYNC_FULL)
+	{
+		rc = fcntl(fd, F_FULLFSYNC);
+	}
+	else
+#endif
+	{
+		rc = fsync(fd);
+	}
 
 	if (rc == -1 && errno == EINTR)
 		goto retry;
@@ -430,37 +421,28 @@ retry:
 }
 
 /*
- * pg_fsync_writethrough
- */
-int
-pg_fsync_writethrough(int fd)
-{
-	if (enableFsync)
-	{
-#if defined(F_FULLFSYNC)
-		return (fcntl(fd, F_FULLFSYNC, 0) == -1) ? -1 : 0;
-#else
-		errno = ENOSYS;
-		return -1;
-#endif
-	}
-	else
-		return 0;
-}
-
-/*
- * pg_fdatasync --- same as fdatasync except does nothing if enableFsync is off
+ * pg_fdatasync --- same as fdatasync except does nothing if enableFsync is off,
+ * and redirects to Apple's F_FULLSYNC if configured.
  */
 int
 pg_fdatasync(int fd)
 {
 	int			rc;
 
-	if (!enableFsync)
+	if (enableFsync == ENABLE_FSYNC_OFF)
 		return 0;
 
 retry:
-	rc = fdatasync(fd);
+#if defined(ENABLE_FSYNC_FULL)
+	if (enableFsync == ENABLE_FSYNC_FULL)
+	{
+		rc = fcntl(fd, F_FULLFSYNC);
+	}
+	else
+#endif
+	{
+		rc = fdatasync(fd);
+	}
 
 	if (rc == -1 && errno == EINTR)
 		goto retry;
@@ -482,7 +464,7 @@ pg_flush_data(int fd, off_t offset, off_t nbytes)
 	 * if fsyncs are disabled - that's a decision we might want to make
 	 * configurable at some point.
 	 */
-	if (!enableFsync)
+	if (enableFsync == ENABLE_FSYNC_OFF)
 		return;
 
 	/*
@@ -3491,7 +3473,7 @@ SyncDataDirectory(void)
 	bool		xlog_is_symlink;
 
 	/* We can skip this whole thing if fsync is disabled. */
-	if (!enableFsync)
+	if (enableFsync == ENABLE_FSYNC_OFF)
 		return;
 
 	/*

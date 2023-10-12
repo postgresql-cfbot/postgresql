@@ -177,8 +177,6 @@ extern void RemovePgTempFilesInDir(const char *tmpdirname, bool missing_ok,
 extern bool looks_like_temp_rel_name(const char *name);
 
 extern int	pg_fsync(int fd);
-extern int	pg_fsync_no_writethrough(int fd);
-extern int	pg_fsync_writethrough(int fd);
 extern int	pg_fdatasync(int fd);
 extern void pg_flush_data(int fd, off_t offset, off_t nbytes);
 extern int	pg_truncate(const char *path, off_t length);

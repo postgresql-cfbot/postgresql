@@ -3080,8 +3080,8 @@ description | Waiting for a newly initialized WAL file to reach durable storage
        <function>issue_xlog_fsync</function> request
        (if <xref linkend="guc-fsync"/> is <literal>on</literal> and
        <xref linkend="guc-wal-sync-method"/> is either
-       <literal>fdatasync</literal>, <literal>fsync</literal> or
-       <literal>fsync_writethrough</literal>, otherwise zero).
+       <literal>fdatasync</literal> or <literal>fsync</literal>,
+       otherwise zero).
        See <xref linkend="wal-configuration"/> for more information about
        the internal WAL function <function>issue_xlog_fsync</function>.
       </para></entry>
@@ -3111,8 +3111,8 @@ description | Waiting for a newly initialized WAL file to reach durable storage
        (if <varname>track_wal_io_timing</varname> is enabled,
        <varname>fsync</varname> is <literal>on</literal>, and
        <varname>wal_sync_method</varname> is either
-       <literal>fdatasync</literal>, <literal>fsync</literal> or
-       <literal>fsync_writethrough</literal>, otherwise zero).
+       <literal>fdatasync</literal> or <literal>fsync</literal>,
+       otherwise zero).
       </para></entry>
      </row>
 

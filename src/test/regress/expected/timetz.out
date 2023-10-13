@@ -262,3 +262,42 @@ SELECT date_part('epoch',       TIME WITH TIME ZONE '2020-05-26 13:30:25.575401-
  63025.575401
 (1 row)
 
+--
+-- test LOCAL time zone
+--
+BEGIN;
+SET LOCAL TimeZone TO 'UTC';
+CREATE VIEW time_local AS
+SELECT f1,
+       f1 AT LOCAL AS f2,
+       timezone(f1) AS f3,
+       f1 AT TIME ZONE current_setting('TimeZone') AS f4
+FROM TIMETZ_TBL
+ORDER BY f1;
+\sv time_local
+CREATE OR REPLACE VIEW public.time_local AS
+ SELECT f1,
+    (f1 AT LOCAL) AS f2,
+    timezone(f1) AS f3,
+    (f1 AT TIME ZONE current_setting('TimeZone'::text)) AS f4
+   FROM timetz_tbl
+  ORDER BY f1
+TABLE time_local;
+       f1       |       f2       |       f3       |       f4       
+----------------+----------------+----------------+----------------
+ 00:01:00-07    | 07:01:00+00    | 07:01:00+00    | 07:01:00+00
+ 01:00:00-07    | 08:00:00+00    | 08:00:00+00    | 08:00:00+00
+ 02:03:00-07    | 09:03:00+00    | 09:03:00+00    | 09:03:00+00
+ 08:08:00-04    | 12:08:00+00    | 12:08:00+00    | 12:08:00+00
+ 07:07:00-08    | 15:07:00+00    | 15:07:00+00    | 15:07:00+00
+ 11:59:00-07    | 18:59:00+00    | 18:59:00+00    | 18:59:00+00
+ 12:00:00-07    | 19:00:00+00    | 19:00:00+00    | 19:00:00+00
+ 12:01:00-07    | 19:01:00+00    | 19:01:00+00    | 19:01:00+00
+ 15:36:39-04    | 19:36:39+00    | 19:36:39+00    | 19:36:39+00
+ 15:36:39-05    | 20:36:39+00    | 20:36:39+00    | 20:36:39+00
+ 23:59:00-07    | 06:59:00+00    | 06:59:00+00    | 06:59:00+00
+ 23:59:59.99-07 | 06:59:59.99+00 | 06:59:59.99+00 | 06:59:59.99+00
+(12 rows)
+
+DROP VIEW time_local;
+COMMIT;

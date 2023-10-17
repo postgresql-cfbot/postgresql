@@ -119,17 +119,21 @@ pgstat_count_io_op_time(IOObject io_object, IOContext io_context, IOOp io_op,
 		INSTR_TIME_SET_CURRENT(io_time);
 		INSTR_TIME_SUBTRACT(io_time, start_time);
 
-		if (io_op == IOOP_WRITE)
+		if (io_op == IOOP_WRITE || io_op == IOOP_EXTEND)
 		{
 			pgstat_count_buffer_write_time(INSTR_TIME_GET_MICROSEC(io_time));
 			if (io_object == IOOBJECT_RELATION)
-				INSTR_TIME_ADD(pgBufferUsage.blk_write_time, io_time);
+				INSTR_TIME_ADD(pgBufferUsage.shared_blk_write_time, io_time);
+			else if (io_object == IOOBJECT_TEMP_RELATION)
+				INSTR_TIME_ADD(pgBufferUsage.local_blk_write_time, io_time);
 		}
 		else if (io_op == IOOP_READ)
 		{
 			pgstat_count_buffer_read_time(INSTR_TIME_GET_MICROSEC(io_time));
 			if (io_object == IOOBJECT_RELATION)
-				INSTR_TIME_ADD(pgBufferUsage.blk_read_time, io_time);
+				INSTR_TIME_ADD(pgBufferUsage.shared_blk_read_time, io_time);
+			else if (io_object == IOOBJECT_TEMP_RELATION)
+				INSTR_TIME_ADD(pgBufferUsage.local_blk_read_time, io_time);
 		}
 
 		INSTR_TIME_ADD(PendingIOStats.pending_times[io_object][io_context][io_op],

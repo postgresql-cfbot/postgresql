@@ -92,6 +92,7 @@ extern void MemoryContextStatsDetail(MemoryContext context, int max_children,
 									 bool print_to_stderr);
 extern void MemoryContextAllowInCriticalSection(MemoryContext context,
 												bool allow);
+extern Size MemoryContextMemUsed(MemoryContext context);
 
 #ifdef MEMORY_CONTEXT_CHECKING
 extern void MemoryContextCheck(MemoryContext context);

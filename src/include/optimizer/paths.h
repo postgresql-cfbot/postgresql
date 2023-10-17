@@ -108,6 +108,8 @@ extern bool have_join_order_restriction(PlannerInfo *root,
 extern bool have_dangerous_phv(PlannerInfo *root,
 							   Relids outer_relids, Relids inner_params);
 extern void mark_dummy_rel(RelOptInfo *rel);
+extern List *build_child_clauses(PlannerInfo *root, List *parent_clauselist,
+								 int nappinfos, AppendRelInfo **appinfos);
 
 /*
  * equivclass.c

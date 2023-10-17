@@ -20,6 +20,19 @@
 #include "optimizer/optimizer.h"
 #include "optimizer/restrictinfo.h"
 
+typedef struct RinfoHashTabEntry
+{
+	int			rinfo_serial;	/* Key, must be the first one. */
+	HTAB	   *hash_tab;		/* Hash table containing child RestrictInfo
+								 * for RestrictInfo indicated by given
+								 * rinfo_serial. */
+} RinfoHashTabEntry;
+
+typedef struct ChildRinfoTabEntry
+{
+	Relids		required_relids;	/* Key, must be the first one */
+	RestrictInfo *child_rinfo;	/* Child RestrictInfo for required_relids. */
+} ChildRinfoTabEntry;
 
 static RestrictInfo *make_restrictinfo_internal(PlannerInfo *root,
 												Expr *clause,
@@ -42,6 +55,8 @@ static Expr *make_sub_restrictinfos(PlannerInfo *root,
 									Relids required_relids,
 									Relids incompatible_relids,
 									Relids outer_relids);
+static HTAB *get_child_rinfo_htab(PlannerInfo *root,
+								  RestrictInfo *parent_rinfo);
 
 
 /*
@@ -246,6 +261,8 @@ make_restrictinfo_internal(PlannerInfo *root,
 
 	restrictinfo->left_hasheqoperator = InvalidOid;
 	restrictinfo->right_hasheqoperator = InvalidOid;
+	restrictinfo->comm_rinfo = NULL;
+	restrictinfo->is_commuted = false;
 
 	return restrictinfo;
 }
@@ -354,14 +371,27 @@ make_sub_restrictinfos(PlannerInfo *root,
  * be hazardous if the source is subject to change.  Also notice that we
  * assume without checking that the commutator op is a member of the same
  * btree and hash opclasses as the original op.
+ *
+ * If a commuted RestrictInfo is already available it is returned.
  */
 RestrictInfo *
 commute_restrictinfo(RestrictInfo *rinfo, Oid comm_op)
 {
 	RestrictInfo *result;
 	OpExpr	   *newclause;
-	OpExpr	   *clause = castNode(OpExpr, rinfo->clause);
+	OpExpr	   *clause;
 
+	if (rinfo->comm_rinfo)
+	{
+		result = rinfo->comm_rinfo;
+		newclause = castNode(OpExpr, result->clause);
+		Assert(list_length(newclause->args) == 2);
+		Assert(newclause->opno == comm_op);
+
+		return result;
+	}
+
+	clause = castNode(OpExpr, rinfo->clause);
 	Assert(list_length(clause->args) == 2);
 
 	/* flat-copy all the fields of clause ... */
@@ -403,6 +433,11 @@ commute_restrictinfo(RestrictInfo *rinfo, Oid comm_op)
 	result->right_mcvfreq = rinfo->left_mcvfreq;
 	result->left_hasheqoperator = InvalidOid;
 	result->right_hasheqoperator = InvalidOid;
+	result->is_commuted = !rinfo->is_commuted;
+	result->comm_rinfo = rinfo;
+
+	/* Save the commuted RestrictInfo for later use. */
+	rinfo->comm_rinfo = result;
 
 	return result;
 }
@@ -684,4 +719,112 @@ join_clause_is_movable_into(RestrictInfo *rinfo,
 		return false;
 
 	return true;
+}
+
+/*
+ * find_child_rinfo
+ *		Find the translation of the given parent RestrictInfo for the given
+ *		child relids.
+ *
+ * The given parent RestrictInfo need not be the top parent relations's
+ * RestrictInfo. We use RestrictInfo::rinfo_serial to access all the
+ * translations of the top parent relation's RestrictInfo.
+ *
+ * PlannerInfo maintains a hash table of hash tables to store and search
+ * translated RestrictInfos. The first level hash table is referenced by
+ * RestrictInfo::rinfo_serial and the second level hash table contains
+ * translated RestrictInfos referenced by RestrictInfo::required_relids.
+ */
+RestrictInfo *
+find_child_rinfo(PlannerInfo *root, RestrictInfo *parent_rinfo,
+				 Relids child_required_relids)
+{
+	HTAB	   *rinfo_hash = get_child_rinfo_htab(root, parent_rinfo);
+	ChildRinfoTabEntry *child_rinfo_entry;
+
+	child_rinfo_entry = hash_search(rinfo_hash, &child_required_relids,
+									HASH_FIND,
+									NULL);
+	return (child_rinfo_entry ? child_rinfo_entry->child_rinfo : NULL);
+}
+
+/*
+ * add_child_rinfo
+ *		Save the given child RestrictInfo in the hash table containing translations of the given parent RestrictInfo.
+ *
+ * The parent RestrictInfo need not be the top parent RestrictInfo. We use
+ * RestrictInfo::rinfo_serial to identify the set of RestrictInfos.
+ *
+ * The function assumes that the given child RestrictInfo is not already
+ * available in the hash table.
+ */
+extern void
+add_child_rinfo(PlannerInfo *root, RestrictInfo *parent_rinfo,
+				RestrictInfo *child_rinfo)
+{
+	HTAB	   *rinfo_hash = get_child_rinfo_htab(root, parent_rinfo);
+	ChildRinfoTabEntry *child_rinfo_entry;
+	bool		found;
+
+	Assert(child_rinfo->rinfo_serial == parent_rinfo->rinfo_serial);
+
+	child_rinfo_entry = hash_search(rinfo_hash, &(child_rinfo->required_relids),
+									HASH_ENTER, &found);
+
+	/*
+	 * A child restrictinfo should be translated only once and thus is
+	 * required to be added only once.
+	 */
+	Assert(!found);
+	child_rinfo_entry->child_rinfo = child_rinfo;
+}
+
+/*
+ * get_child_rinfo_htab
+ *		Given a parent RestrictInfo, return the hash table containing all its child RestrictInfos.
+ *
+ * A helper function to access the RestrictInfo translation hash tables. The function creates the required hash table if they are not already available.
+ */
+static HTAB *
+get_child_rinfo_htab(PlannerInfo *root, RestrictInfo *parent_rinfo)
+{
+	RinfoHashTabEntry *rinfo_tab_entry;
+	bool		found_htab;
+
+	if (!root->child_rinfo_hash)
+	{
+		HASHCTL		hash_ctl = {0};
+
+		Assert(sizeof(int) == sizeof(parent_rinfo->rinfo_serial));
+		hash_ctl.keysize = sizeof(int);
+		hash_ctl.entrysize = sizeof(RinfoHashTabEntry);
+		hash_ctl.hcxt = root->planner_cxt;
+
+		root->child_rinfo_hash = hash_create("hash of child rinfo hash",
+											 root->last_rinfo_serial,
+											 &hash_ctl,
+											 HASH_ELEM | HASH_BLOBS |
+											 HASH_CONTEXT);
+	}
+
+	rinfo_tab_entry = hash_search(root->child_rinfo_hash,
+								  &(parent_rinfo->rinfo_serial), HASH_ENTER,
+								  &found_htab);
+	if (!found_htab)
+	{
+		HASHCTL		hash_ctl = {0};
+
+		hash_ctl.keysize = sizeof(Relids);
+		hash_ctl.entrysize = sizeof(ChildRinfoTabEntry);
+		hash_ctl.hash = bitmap_hash;
+		hash_ctl.match = bitmap_match;
+		hash_ctl.hcxt = root->planner_cxt;
+
+		rinfo_tab_entry->hash_tab = hash_create("child rinfo hash", 100,
+												&hash_ctl,
+												HASH_ELEM | HASH_FUNCTION | HASH_COMPARE |
+												HASH_CONTEXT);
+	}
+
+	return rinfo_tab_entry->hash_tab;
 }

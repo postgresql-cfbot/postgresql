@@ -947,10 +947,9 @@ build_child_join_rel(PlannerInfo *root, RelOptInfo *outer_rel,
 							   nappinfos, appinfos);
 
 	/* Construct joininfo list. */
-	joinrel->joininfo = (List *) adjust_appendrel_attrs(root,
-														(Node *) parent_joinrel->joininfo,
-														nappinfos,
-														appinfos);
+	joinrel->joininfo = build_child_clauses(root,
+											parent_joinrel->joininfo,
+											nappinfos, appinfos);
 
 	/*
 	 * Lateral relids referred in child join will be same as that referred in

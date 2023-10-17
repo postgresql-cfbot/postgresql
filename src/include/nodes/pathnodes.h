@@ -338,6 +338,7 @@ struct PlannerInfo
 
 	/* counter for assigning RestrictInfo serial numbers */
 	int			last_rinfo_serial;
+	struct HTAB *child_rinfo_hash pg_node_attr(read_write_ignore);
 
 	/*
 	 * all_result_relids is empty for SELECT, otherwise it contains at least
@@ -2517,6 +2518,14 @@ typedef struct LimitPath
  *
  * parent_ec, left_ec, right_ec are not printed, lest it lead to infinite
  * recursion in plan tree dump.
+ *
+ * A RestrictInfo may get commuted as many times as the number of indexes it is
+ * used for. The commuted clause is cached in the original RestrictInfo as
+ * comm_rinfo and vice versa. Both the RestrictInfos are commuted versions of
+ * each other. is_commuted flag is false for the first one to appear and is
+ * true in the other. The order doesn't matter. The flag just differentiate
+ * between the commuted version. The child RestrictInfos inherit this flag from
+ * their respective parent RestrictInfo.
  */
 
 typedef struct RestrictInfo
@@ -2668,6 +2677,8 @@ typedef struct RestrictInfo
 	/* hash equality operators used for memoize nodes, else InvalidOid */
 	Oid			left_hasheqoperator pg_node_attr(equal_ignore);
 	Oid			right_hasheqoperator pg_node_attr(equal_ignore);
+	struct RestrictInfo *comm_rinfo pg_node_attr(equal_ignore);
+	bool		is_commuted pg_node_attr(equal_ignore);
 } RestrictInfo;
 
 /*

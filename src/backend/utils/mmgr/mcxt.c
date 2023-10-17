@@ -748,6 +748,25 @@ MemoryContextStatsDetail(MemoryContext context, int max_children,
 }
 
 /*
+ * Compute the memory used in the given context and its children.
+ *
+ * XXX: Instead of this separate function we could modify
+ * MemoryContextStatsDetail() to report used memory and disable printing the
+ * detailed stats.
+ */
+extern Size
+MemoryContextMemUsed(MemoryContext context)
+{
+	MemoryContextCounters grand_totals;
+
+	memset(&grand_totals, 0, sizeof(grand_totals));
+
+	MemoryContextStatsInternal(context, 0, false, 100, &grand_totals, false);
+
+	return grand_totals.totalspace - grand_totals.freespace;
+}
+
+/*
  * MemoryContextStatsInternal
  *		One recursion level for MemoryContextStats
  *

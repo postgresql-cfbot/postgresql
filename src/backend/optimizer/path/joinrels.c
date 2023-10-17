@@ -42,9 +42,12 @@ static void try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1,
 								   RelOptInfo *rel2, RelOptInfo *joinrel,
 								   SpecialJoinInfo *parent_sjinfo,
 								   List *parent_restrictlist);
-static SpecialJoinInfo *build_child_join_sjinfo(PlannerInfo *root,
-												SpecialJoinInfo *parent_sjinfo,
-												Relids left_relids, Relids right_relids);
+static void build_child_join_sjinfo(PlannerInfo *root,
+									SpecialJoinInfo *parent_sjinfo,
+									RelOptInfo *left_child,
+									RelOptInfo *right_child,
+									SpecialJoinInfo *child_sjinfo);
+static void free_child_sjinfo_members(SpecialJoinInfo *child_sjinfo);
 static void compute_partition_bounds(PlannerInfo *root, RelOptInfo *rel1,
 									 RelOptInfo *rel2, RelOptInfo *joinrel,
 									 SpecialJoinInfo *parent_sjinfo,
@@ -653,6 +656,32 @@ join_is_legal(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 	return true;
 }
 
+/*
+ * make_dummy_sjinfo
+ *    Populate the given SpecialJoinInfo for a plain inner join, between rel1
+ *    and rel2, which does not have a SpecialJoinInfo associated with it.
+ */
+void
+make_dummy_sjinfo(SpecialJoinInfo *sjinfo, RelOptInfo *rel1, RelOptInfo *rel2)
+{
+	sjinfo->type = T_SpecialJoinInfo;
+	sjinfo->min_lefthand = rel1->relids;
+	sjinfo->min_righthand = rel2->relids;
+	sjinfo->syn_lefthand = rel1->relids;
+	sjinfo->syn_righthand = rel2->relids;
+	sjinfo->jointype = JOIN_INNER;
+	sjinfo->ojrelid = 0;
+	sjinfo->commute_above_l = NULL;
+	sjinfo->commute_above_r = NULL;
+	sjinfo->commute_below_l = NULL;
+	sjinfo->commute_below_r = NULL;
+	/* we don't bother trying to make the remaining fields valid */
+	sjinfo->lhs_strict = false;
+	sjinfo->semi_can_btree = false;
+	sjinfo->semi_can_hash = false;
+	sjinfo->semi_operators = NIL;
+	sjinfo->semi_rhs_exprs = NIL;
+}
 
 /*
  * make_join_rel
@@ -716,23 +745,7 @@ make_join_rel(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2)
 	if (sjinfo == NULL)
 	{
 		sjinfo = &sjinfo_data;
-		sjinfo->type = T_SpecialJoinInfo;
-		sjinfo->min_lefthand = rel1->relids;
-		sjinfo->min_righthand = rel2->relids;
-		sjinfo->syn_lefthand = rel1->relids;
-		sjinfo->syn_righthand = rel2->relids;
-		sjinfo->jointype = JOIN_INNER;
-		sjinfo->ojrelid = 0;
-		sjinfo->commute_above_l = NULL;
-		sjinfo->commute_above_r = NULL;
-		sjinfo->commute_below_l = NULL;
-		sjinfo->commute_below_r = NULL;
-		/* we don't bother trying to make the remaining fields valid */
-		sjinfo->lhs_strict = false;
-		sjinfo->semi_can_btree = false;
-		sjinfo->semi_can_hash = false;
-		sjinfo->semi_operators = NIL;
-		sjinfo->semi_rhs_exprs = NIL;
+		make_dummy_sjinfo(sjinfo, rel1, rel2);
 	}
 
 	/*
@@ -1521,7 +1534,7 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 		RelOptInfo *child_rel2;
 		bool		rel1_empty;
 		bool		rel2_empty;
-		SpecialJoinInfo *child_sjinfo;
+		SpecialJoinInfo child_sjinfo;
 		List	   *child_restrictlist;
 		RelOptInfo *child_joinrel;
 		AppendRelInfo **appinfos;
@@ -1616,9 +1629,8 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 		 * Construct SpecialJoinInfo from parent join relations's
 		 * SpecialJoinInfo.
 		 */
-		child_sjinfo = build_child_join_sjinfo(root, parent_sjinfo,
-											   child_rel1->relids,
-											   child_rel2->relids);
+		build_child_join_sjinfo(root, parent_sjinfo, child_rel1,
+								child_rel2, &child_sjinfo);
 
 		/* Find the AppendRelInfo structures */
 		appinfos = find_appinfos_by_relids(root,
@@ -1641,7 +1653,7 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 		{
 			child_joinrel = build_child_join_rel(root, child_rel1, child_rel2,
 												 joinrel, child_restrictlist,
-												 child_sjinfo);
+												 &child_sjinfo);
 			joinrel->part_rels[cnt_parts] = child_joinrel;
 			joinrel->live_parts = bms_add_member(joinrel->live_parts, cnt_parts);
 			joinrel->all_partrels = bms_add_members(joinrel->all_partrels,
@@ -1655,10 +1667,11 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 
 		/* And make paths for the child join */
 		populate_joinrel_with_paths(root, child_rel1, child_rel2,
-									child_joinrel, child_sjinfo,
+									child_joinrel, &child_sjinfo,
 									child_restrictlist);
 
 		pfree(appinfos);
+		free_child_sjinfo_members(&child_sjinfo);
 	}
 }
 
@@ -1666,43 +1679,83 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
  * Construct the SpecialJoinInfo for a child-join by translating
  * SpecialJoinInfo for the join between parents. left_relids and right_relids
  * are the relids of left and right side of the join respectively.
+ *
+ * If translations are added to or removed from this function, consider freeing
+ * the translated objects in free_child_sjinfo_members() appropriately.
  */
-static SpecialJoinInfo *
+static void
 build_child_join_sjinfo(PlannerInfo *root, SpecialJoinInfo *parent_sjinfo,
-						Relids left_relids, Relids right_relids)
+						RelOptInfo *left_child, RelOptInfo *right_child,
+						SpecialJoinInfo *child_sjinfo)
 {
-	SpecialJoinInfo *sjinfo = makeNode(SpecialJoinInfo);
 	AppendRelInfo **left_appinfos;
 	int			left_nappinfos;
 	AppendRelInfo **right_appinfos;
 	int			right_nappinfos;
 
-	memcpy(sjinfo, parent_sjinfo, sizeof(SpecialJoinInfo));
-	left_appinfos = find_appinfos_by_relids(root, left_relids,
+	/* Dummy SpecialJoinInfos can be created without any translation. */
+	if (parent_sjinfo->jointype == JOIN_INNER)
+	{
+		Assert(parent_sjinfo->ojrelid == 0);
+		make_dummy_sjinfo(child_sjinfo, left_child, right_child);
+		return;
+	}
+
+	memcpy(child_sjinfo, parent_sjinfo, sizeof(SpecialJoinInfo));
+	left_appinfos = find_appinfos_by_relids(root, left_child->relids,
 											&left_nappinfos);
-	right_appinfos = find_appinfos_by_relids(root, right_relids,
+	right_appinfos = find_appinfos_by_relids(root, right_child->relids,
 											 &right_nappinfos);
 
-	sjinfo->min_lefthand = adjust_child_relids(sjinfo->min_lefthand,
-											   left_nappinfos, left_appinfos);
-	sjinfo->min_righthand = adjust_child_relids(sjinfo->min_righthand,
-												right_nappinfos,
-												right_appinfos);
-	sjinfo->syn_lefthand = adjust_child_relids(sjinfo->syn_lefthand,
-											   left_nappinfos, left_appinfos);
-	sjinfo->syn_righthand = adjust_child_relids(sjinfo->syn_righthand,
-												right_nappinfos,
-												right_appinfos);
+	child_sjinfo->min_lefthand =
+		adjust_child_relids(child_sjinfo->min_lefthand,
+							left_nappinfos,
+							left_appinfos);
+	child_sjinfo->min_righthand =
+		adjust_child_relids(child_sjinfo->min_righthand,
+							right_nappinfos,
+							right_appinfos);
+	child_sjinfo->syn_lefthand = adjust_child_relids(child_sjinfo->syn_lefthand,
+													 left_nappinfos,
+													 left_appinfos);
+	child_sjinfo->syn_righthand = adjust_child_relids(child_sjinfo->syn_righthand,
+													  right_nappinfos,
+													  right_appinfos);
+
 	/* outer-join relids need no adjustment */
-	sjinfo->semi_rhs_exprs = (List *) adjust_appendrel_attrs(root,
-															 (Node *) sjinfo->semi_rhs_exprs,
-															 right_nappinfos,
-															 right_appinfos);
+	child_sjinfo->semi_rhs_exprs =
+		(List *) adjust_appendrel_attrs(root,
+										(Node *) child_sjinfo->semi_rhs_exprs,
+										right_nappinfos, right_appinfos);
 
 	pfree(left_appinfos);
 	pfree(right_appinfos);
+}
 
-	return sjinfo;
+/*
+ * free_child_sjinfo_members
+ *		Free memory consumed by members of a child SpecialJoinInfo.
+ *
+ * Only members that are translated copies of their counterpart in the parent
+ * SpecialJoinInfo are freed here.  However, members that could be referenced
+ * elsewhere are not freed.
+ */
+static void
+free_child_sjinfo_members(SpecialJoinInfo *child_sjinfo)
+{
+	/*
+	 * Dummy SpecialJoinInfos do not have any translated fields and hence have
+	 * nothing to free.
+	 */
+	if (child_sjinfo->jointype == JOIN_INNER)
+		return;
+
+	bms_free(child_sjinfo->min_lefthand);
+	bms_free(child_sjinfo->min_righthand);
+	bms_free(child_sjinfo->syn_lefthand);
+	bms_free(child_sjinfo->syn_righthand);
+
+	/* semi_rhs_exprs may be referenced, so don't free. */
 }
 
 /*

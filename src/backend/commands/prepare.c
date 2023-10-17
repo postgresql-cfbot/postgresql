@@ -583,10 +583,12 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	instr_time	planduration;
 	BufferUsage bufusage_start,
 				bufusage;
+	Size		mem_consumed;
 
 	if (es->buffers)
 		bufusage_start = pgBufferUsage;
 	INSTR_TIME_SET_CURRENT(planstart);
+	mem_consumed = MemoryContextMemUsed(CurrentMemoryContext);
 
 	/* Look it up in the hash table */
 	entry = FetchPreparedStatement(execstmt->name, true);
@@ -623,6 +625,8 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 
 	INSTR_TIME_SET_CURRENT(planduration);
 	INSTR_TIME_SUBTRACT(planduration, planstart);
+	mem_consumed = MemoryContextMemUsed(CurrentMemoryContext)
+		- mem_consumed;
 
 	/* calc differences of buffer counters. */
 	if (es->buffers)
@@ -640,7 +644,8 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 
 		if (pstmt->commandType != CMD_UTILITY)
 			ExplainOnePlan(pstmt, into, es, query_string, paramLI, queryEnv,
-						   &planduration, (es->buffers ? &bufusage : NULL));
+						   &planduration, (es->buffers ? &bufusage : NULL),
+						   &mem_consumed);
 		else
 			ExplainOneUtility(pstmt->utilityStmt, into, es, query_string,
 							  paramLI, queryEnv);

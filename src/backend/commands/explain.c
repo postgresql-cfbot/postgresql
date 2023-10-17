@@ -397,16 +397,20 @@ ExplainOneQuery(Query *query, int cursorOptions,
 					planduration;
 		BufferUsage bufusage_start,
 					bufusage;
+		Size		mem_consumed;
 
 		if (es->buffers)
 			bufusage_start = pgBufferUsage;
 		INSTR_TIME_SET_CURRENT(planstart);
+		mem_consumed = MemoryContextMemUsed(CurrentMemoryContext);
 
 		/* plan the query */
 		plan = pg_plan_query(query, queryString, cursorOptions, params);
 
 		INSTR_TIME_SET_CURRENT(planduration);
 		INSTR_TIME_SUBTRACT(planduration, planstart);
+		mem_consumed = MemoryContextMemUsed(CurrentMemoryContext)
+			- mem_consumed;
 
 		/* calc differences of buffer counters. */
 		if (es->buffers)
@@ -417,7 +421,7 @@ ExplainOneQuery(Query *query, int cursorOptions,
 
 		/* run it (if needed) and produce output */
 		ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
-					   &planduration, (es->buffers ? &bufusage : NULL));
+					   &planduration, (es->buffers ? &bufusage : NULL), &mem_consumed);
 	}
 }
 
@@ -527,7 +531,7 @@ void
 ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			   const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
-			   const BufferUsage *bufusage)
+			   const BufferUsage *bufusage, const Size *mem_consumed)
 {
 	DestReceiver *dest;
 	QueryDesc  *queryDesc;
@@ -628,6 +632,10 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		double		plantime = INSTR_TIME_GET_DOUBLE(*planduration);
 
 		ExplainPropertyFloat("Planning Time", "ms", 1000.0 * plantime, 3, es);
+
+		if (mem_consumed)
+			ExplainPropertyUInteger("Planning Memory", "bytes",
+									(uint64) *mem_consumed, es);
 	}
 
 	/* Print info about runtime of triggers */

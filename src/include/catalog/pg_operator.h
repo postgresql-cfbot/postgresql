@@ -85,6 +85,11 @@ typedef FormData_pg_operator *Form_pg_operator;
 DECLARE_UNIQUE_INDEX_PKEY(pg_operator_oid_index, 2688, OperatorOidIndexId, pg_operator, btree(oid oid_ops));
 DECLARE_UNIQUE_INDEX(pg_operator_oprname_l_r_n_index, 2689, OperatorNameNspIndexId, pg_operator, btree(oprname name_ops, oprleft oid_ops, oprright oid_ops, oprnamespace oid_ops));
 
+extern Oid
+			OperatorLookup(List *operatorName,
+						   Oid leftObjectId,
+						   Oid rightObjectId,
+						   bool *defined);
 
 extern ObjectAddress OperatorCreate(const char *operatorName,
 									Oid operatorNamespace,
@@ -103,5 +108,15 @@ extern ObjectAddress makeOperatorDependencies(HeapTuple tuple,
 											  bool isUpdate);
 
 extern void OperatorUpd(Oid baseId, Oid commId, Oid negId, bool isDelete);
+
+extern void OperatorValidateParams(Oid leftTypeId,
+								   Oid rightTypeId,
+								   Oid operResultType,
+								   bool hasCommutator,
+								   bool hasNegator,
+								   bool hasJoinSelectivity,
+								   bool hasRestrictionSelectivity,
+								   bool canMerge,
+								   bool canHash);
 
 #endif							/* PG_OPERATOR_H */

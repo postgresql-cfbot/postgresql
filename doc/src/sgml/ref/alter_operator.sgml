@@ -29,8 +29,12 @@ ALTER OPERATOR <replaceable>name</replaceable> ( { <replaceable>left_type</repla
 
 ALTER OPERATOR <replaceable>name</replaceable> ( { <replaceable>left_type</replaceable> | NONE } , <replaceable>right_type</replaceable> )
     SET ( {  RESTRICT = { <replaceable class="parameter">res_proc</replaceable> | NONE }
-           | JOIN = { <replaceable class="parameter">join_proc</replaceable> | NONE }
-         } [, ... ] )
+            | JOIN = { <replaceable class="parameter">join_proc</replaceable> | NONE }
+            | COMMUTATOR = <replaceable class="parameter">com_op</replaceable> 
+            | NEGATOR = <replaceable class="parameter">neg_op</replaceable>
+            | HASHES
+            | MERGES
+          } [, ... ] )
 </synopsis>
  </refsynopsisdiv>
 
@@ -121,8 +125,63 @@ ALTER OPERATOR <replaceable>name</replaceable> ( { <replaceable>left_type</repla
      </listitem>
    </varlistentry>
 
+   <varlistentry>
+    <term><replaceable class="parameter">com_op</replaceable></term>
+    <listitem>
+     <para>
+      The commutator of this operator. Can only be set if the operator does not have an existing commutator.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">neg_op</replaceable></term>
+    <listitem>
+     <para>
+      The negator of this operator. Can only be set if the operator does not have an existing negator.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>HASHES</literal></term>
+    <listitem>
+     <para>
+     Indicates this operator can support a hash join. Can only be enabled and not disabled.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>MERGES</literal></term>
+    <listitem>
+     <para>
+     Indicates this operator can support a merge join. Can only be enabled and not disabled.
+     </para>
+    </listitem>
+   </varlistentry>
+
   </variablelist>
  </refsect1>
+
+  <refsect1>
+  <title>Notes</title>
+
+  <para>
+   Refer to <xref linkend="xoper"/> and <xref linkend="xoper-optimization"/> for further information.
+  </para>
+
+  <para>
+  Since commutators come in pairs and are commutators of each other,
+  <productname>PostgreSQL</productname> will set the commutator of the
+  <replaceable class="parameter">com_op</replaceable> to the operator.
+  </para>
+
+  <para>
+  Like with commutators, <productname>PostgreSQL</productname> will set the
+  negator of the <replaceable class="parameter">neg_op</replaceable> to the operator.
+  </para>
+  </refsect1>
 
  <refsect1>
   <title>Examples</title>

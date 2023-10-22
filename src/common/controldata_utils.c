@@ -170,14 +170,27 @@ retry:
  * optionally used to flush the updated control file.  Note that it is up
  * to the caller to properly lock ControlFileLock when calling this
  * routine in the backend.
+ *
+ * If atomic is true, a slower procedure is used in backend code that renames a
+ * temporary file into place.  This is intended for use while backups are in
+ * progress, to avoid the possibility of a torn read of the control file.  Note
+ * that this refers to atomicity of concurrent reads and writes.  (Atomicity
+ * under power failure is a separate topic; we always assume that writes of
+ * size PG_CONTROL_MAX_SAFE_SIZE are power-failure-atomic, even when 'atomic'
+ * is false here.)
  */
 void
 update_controlfile(const char *DataDir,
-				   ControlFileData *ControlFile, bool do_sync)
+				   ControlFileData *ControlFile,
+				   bool atomic,
+				   bool do_sync)
 {
 	int			fd;
 	char		buffer[PG_CONTROL_FILE_SIZE];
 	char		ControlFilePath[MAXPGPATH];
+#ifndef FRONTEND
+	int			flags = 0;
+#endif
 
 	/* Update timestamp  */
 	ControlFile->time = (pg_time_t) time(NULL);
@@ -197,7 +210,18 @@ update_controlfile(const char *DataDir,
 	memset(buffer, 0, PG_CONTROL_FILE_SIZE);
 	memcpy(buffer, ControlFile, sizeof(ControlFileData));
 
-	snprintf(ControlFilePath, sizeof(ControlFilePath), "%s/%s", DataDir, XLOG_CONTROL_FILE);
+	/* In atomic mode, we'll write into a new temporary file first. */
+	snprintf(ControlFilePath,
+			 sizeof(ControlFilePath),
+			 "%s/%s%s",
+			 DataDir,
+			 XLOG_CONTROL_FILE,
+			 atomic ? ".tmp" : "");
+#ifndef FRONTEND
+	flags = 0;
+	if (atomic)
+		flags = O_CREAT;
+#endif
 
 #ifndef FRONTEND
 
@@ -205,7 +229,7 @@ update_controlfile(const char *DataDir,
 	 * All errors issue a PANIC, so no need to use OpenTransientFile() and to
 	 * worry about file descriptor leaks.
 	 */
-	if ((fd = BasicOpenFile(ControlFilePath, O_RDWR | PG_BINARY)) < 0)
+	if ((fd = BasicOpenFile(ControlFilePath, O_RDWR | PG_BINARY | flags)) < 0)
 		ereport(PANIC,
 				(errcode_for_file_access(),
 				 errmsg("could not open file \"%s\": %m",
@@ -266,4 +290,15 @@ update_controlfile(const char *DataDir,
 		pg_fatal("could not close file \"%s\": %m", ControlFilePath);
 #endif
 	}
+
+#ifndef FRONTEND
+	if (atomic)
+	{
+		char		path[MAXPGPATH];
+
+		snprintf(path, sizeof(path), "%s/%s", DataDir, XLOG_CONTROL_FILE);
+
+		durable_rename(ControlFilePath, path, PANIC);
+	}
+#endif
 }

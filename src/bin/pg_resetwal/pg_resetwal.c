@@ -889,7 +889,7 @@ RewriteControlFile(void)
 	ControlFile.max_locks_per_xact = 64;
 
 	/* The control file gets flushed here. */
-	update_controlfile(".", &ControlFile, true);
+	update_controlfile(".", &ControlFile, false, true);
 }
 
 

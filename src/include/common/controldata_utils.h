@@ -14,6 +14,8 @@
 
 extern ControlFileData *get_controlfile(const char *DataDir, bool *crc_ok_p);
 extern void update_controlfile(const char *DataDir,
-							   ControlFileData *ControlFile, bool do_sync);
+							   ControlFileData *ControlFile,
+							   bool atomic,
+							   bool do_sync);
 
 #endif							/* COMMON_CONTROLDATA_UTILS_H */

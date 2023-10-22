@@ -21,6 +21,7 @@ OBJS = \
 	rmgr.o \
 	slru.o \
 	subtrans.o \
+	simpleundolog.o \
 	timeline.o \
 	transam.o \
 	twophase.o \

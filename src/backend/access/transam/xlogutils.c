@@ -395,7 +395,7 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 		if (!RestoreBlockImage(record, block_id, page))
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
-					 errmsg_internal("%s", record->errormsg_buf)));
+					 errmsg_internal("%s", record->errordata.message)));
 
 		/*
 		 * The page may be uninitialized. If so, we can't set the LSN because

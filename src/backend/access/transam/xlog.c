@@ -1005,7 +1005,7 @@ XLogInsertRecord(XLogRecData *rdata,
 		DecodedXLogRecord *decoded;
 		StringInfoData buf;
 		StringInfoData recordBuf;
-		char	   *errormsg = NULL;
+		XLogReaderError errordata = {0};
 		MemoryContext oldCxt;
 
 		oldCxt = MemoryContextSwitchTo(walDebugCxt);
@@ -1039,10 +1039,10 @@ XLogInsertRecord(XLogRecData *rdata,
 								   decoded,
 								   record,
 								   EndPos,
-								   &errormsg))
+								   &errordata))
 		{
 			appendStringInfo(&buf, "error decoding record: %s",
-							 errormsg ? errormsg : "no error message");
+							 errordata.message ? errordata.message : "no error message");
 		}
 		else
 		{

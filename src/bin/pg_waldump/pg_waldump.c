@@ -512,7 +512,7 @@ XLogRecordSaveFPWs(XLogReaderState *record, const char *savepath)
 
 		/* Full page exists, so let's save it */
 		if (!RestoreBlockImage(record, block_id, page))
-			pg_fatal("%s", record->errormsg_buf);
+			pg_fatal("%s", record->errordata.message);
 
 		(void) XLogRecGetBlockTagExtended(record, block_id,
 										  &rnode, &fork, &blk, NULL);
@@ -800,7 +800,7 @@ main(int argc, char **argv)
 	XLogRecord *record;
 	XLogRecPtr	first_record;
 	char	   *waldir = NULL;
-	char	   *errormsg;
+	XLogReaderError errordata = {0};
 
 	static struct option long_options[] = {
 		{"bkp-details", no_argument, NULL, 'b'},
@@ -1243,7 +1243,7 @@ main(int argc, char **argv)
 		}
 
 		/* try to read the next record */
-		record = XLogReadRecord(xlogreader_state, &errormsg);
+		record = XLogReadRecord(xlogreader_state, &errordata);
 		if (!record)
 		{
 			if (!config.follow || private.endptr_reached)
@@ -1308,10 +1308,10 @@ main(int argc, char **argv)
 	if (time_to_stop)
 		exit(0);
 
-	if (errormsg)
+	if (errordata.message)
 		pg_fatal("error in WAL record at %X/%X: %s",
 				 LSN_FORMAT_ARGS(xlogreader_state->ReadRecPtr),
-				 errormsg);
+				 errordata.message);
 
 	XLogReaderFree(xlogreader_state);
 

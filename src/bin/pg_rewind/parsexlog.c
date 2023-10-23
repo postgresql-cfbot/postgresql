@@ -68,7 +68,7 @@ extractPageMap(const char *datadir, XLogRecPtr startpoint, int tliIndex,
 {
 	XLogRecord *record;
 	XLogReaderState *xlogreader;
-	char	   *errormsg;
+	XLogReaderError errordata = {0};
 	XLogPageReadPrivate private;
 
 	private.tliIndex = tliIndex;
@@ -82,16 +82,16 @@ extractPageMap(const char *datadir, XLogRecPtr startpoint, int tliIndex,
 	XLogBeginRead(xlogreader, startpoint);
 	do
 	{
-		record = XLogReadRecord(xlogreader, &errormsg);
+		record = XLogReadRecord(xlogreader, &errordata);
 
 		if (record == NULL)
 		{
 			XLogRecPtr	errptr = xlogreader->EndRecPtr;
 
-			if (errormsg)
+			if (errordata.message)
 				pg_fatal("could not read WAL record at %X/%X: %s",
 						 LSN_FORMAT_ARGS(errptr),
-						 errormsg);
+						 errordata.message);
 			else
 				pg_fatal("could not read WAL record at %X/%X",
 						 LSN_FORMAT_ARGS(errptr));
@@ -126,7 +126,7 @@ readOneRecord(const char *datadir, XLogRecPtr ptr, int tliIndex,
 {
 	XLogRecord *record;
 	XLogReaderState *xlogreader;
-	char	   *errormsg;
+	XLogReaderError errordata = {0};
 	XLogPageReadPrivate private;
 	XLogRecPtr	endptr;
 
@@ -139,12 +139,12 @@ readOneRecord(const char *datadir, XLogRecPtr ptr, int tliIndex,
 		pg_fatal("out of memory while allocating a WAL reading processor");
 
 	XLogBeginRead(xlogreader, ptr);
-	record = XLogReadRecord(xlogreader, &errormsg);
+	record = XLogReadRecord(xlogreader, &errordata);
 	if (record == NULL)
 	{
-		if (errormsg)
+		if (errordata.message)
 			pg_fatal("could not read WAL record at %X/%X: %s",
-					 LSN_FORMAT_ARGS(ptr), errormsg);
+					 LSN_FORMAT_ARGS(ptr), errordata.message);
 		else
 			pg_fatal("could not read WAL record at %X/%X",
 					 LSN_FORMAT_ARGS(ptr));
@@ -173,7 +173,7 @@ findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
 	XLogRecord *record;
 	XLogRecPtr	searchptr;
 	XLogReaderState *xlogreader;
-	char	   *errormsg;
+	XLogReaderError errordata = {0};
 	XLogPageReadPrivate private;
 
 	/*
@@ -204,14 +204,14 @@ findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
 		uint8		info;
 
 		XLogBeginRead(xlogreader, searchptr);
-		record = XLogReadRecord(xlogreader, &errormsg);
+		record = XLogReadRecord(xlogreader, &errordata);
 
 		if (record == NULL)
 		{
-			if (errormsg)
+			if (errordata.message)
 				pg_fatal("could not find previous WAL record at %X/%X: %s",
 						 LSN_FORMAT_ARGS(searchptr),
-						 errormsg);
+						 errordata.message);
 			else
 				pg_fatal("could not find previous WAL record at %X/%X",
 						 LSN_FORMAT_ARGS(searchptr));

@@ -3083,6 +3083,8 @@ XLogPageReadResult
 XLogPrefetchStats
 XLogPrefetcher
 XLogPrefetcherFilter
+XLogReaderError
+XLogReaderErrorCode
 XLogReaderRoutine
 XLogReaderState
 XLogRecData

@@ -503,17 +503,17 @@ pg_logical_replication_slot_advance(XLogRecPtr moveto)
 		/* Decode records until we reach the requested target */
 		while (ctx->reader->EndRecPtr < moveto)
 		{
-			char	   *errm = NULL;
 			XLogRecord *record;
+			XLogReaderError errordata = {0};
 
 			/*
 			 * Read records.  No changes are generated in fast_forward mode,
 			 * but snapbuilder/slot statuses are updated properly.
 			 */
-			record = XLogReadRecord(ctx->reader, &errm);
-			if (errm)
+			record = XLogReadRecord(ctx->reader, &errordata);
+			if (errordata.message)
 				elog(ERROR, "could not find record while advancing replication slot: %s",
-					 errm);
+					 errordata.message);
 
 			/*
 			 * Process the record.  Storage-level changes are ignored in

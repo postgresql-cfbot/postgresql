@@ -244,11 +244,12 @@ pg_logical_slot_get_changes_guts(FunctionCallInfo fcinfo, bool confirm, bool bin
 		while (ctx->reader->EndRecPtr < end_of_wal)
 		{
 			XLogRecord *record;
-			char	   *errm = NULL;
+			XLogReaderError errordata = {0};
 
-			record = XLogReadRecord(ctx->reader, &errm);
-			if (errm)
-				elog(ERROR, "could not find record for logical decoding: %s", errm);
+			record = XLogReadRecord(ctx->reader, &errordata);
+			if (errordata.message)
+				elog(ERROR, "could not find record for logical decoding: %s",
+					 errordata.message);
 
 			/*
 			 * The {begin_txn,change,commit_txn}_wrapper callbacks above will

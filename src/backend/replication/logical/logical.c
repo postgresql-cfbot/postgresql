@@ -641,12 +641,13 @@ DecodingContextFindStartpoint(LogicalDecodingContext *ctx)
 	for (;;)
 	{
 		XLogRecord *record;
-		char	   *err = NULL;
+		XLogReaderError errordata = {0};
 
 		/* the read_page callback waits for new WAL */
-		record = XLogReadRecord(ctx->reader, &err);
-		if (err)
-			elog(ERROR, "could not find logical decoding starting point: %s", err);
+		record = XLogReadRecord(ctx->reader, &errordata);
+		if (errordata.message)
+			elog(ERROR, "could not find logical decoding starting point: %s",
+				 errordata.message);
 		if (!record)
 			elog(ERROR, "could not find logical decoding starting point");
 

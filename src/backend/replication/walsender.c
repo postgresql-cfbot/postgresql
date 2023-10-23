@@ -3045,7 +3045,7 @@ static void
 XLogSendLogical(void)
 {
 	XLogRecord *record;
-	char	   *errm;
+	XLogReaderError errordata = {0};
 
 	/*
 	 * We'll use the current flush point to determine whether we've caught up.
@@ -3063,12 +3063,12 @@ XLogSendLogical(void)
 	 */
 	WalSndCaughtUp = false;
 
-	record = XLogReadRecord(logical_decoding_ctx->reader, &errm);
+	record = XLogReadRecord(logical_decoding_ctx->reader, &errordata);
 
 	/* xlog record was invalid */
-	if (errm != NULL)
+	if (errordata.message != NULL)
 		elog(ERROR, "could not find record while sending logically-decoded data: %s",
-			 errm);
+			 errordata.message);
 
 	if (record != NULL)
 	{

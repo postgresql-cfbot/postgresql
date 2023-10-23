@@ -984,7 +984,7 @@ XLogPrefetcherBeginRead(XLogPrefetcher *prefetcher, XLogRecPtr recPtr)
  * tries to initiate I/O for blocks referenced in future WAL records.
  */
 XLogRecord *
-XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
+XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, XLogReaderError *errdata)
 {
 	DecodedXLogRecord *record;
 	XLogRecPtr	replayed_up_to;
@@ -1052,7 +1052,7 @@ XLogPrefetcherReadRecord(XLogPrefetcher *prefetcher, char **errmsg)
 	}
 
 	/* Read the next record. */
-	record = XLogNextRecord(prefetcher->reader, errmsg);
+	record = XLogNextRecord(prefetcher->reader, errdata);
 	if (!record)
 		return NULL;
 

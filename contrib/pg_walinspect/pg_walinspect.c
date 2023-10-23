@@ -146,9 +146,9 @@ static XLogRecord *
 ReadNextXLogRecord(XLogReaderState *xlogreader)
 {
 	XLogRecord *record;
-	char	   *errormsg;
+	XLogReaderError errordata = {0};
 
-	record = XLogReadRecord(xlogreader, &errormsg);
+	record = XLogReadRecord(xlogreader, &errordata);
 
 	if (record == NULL)
 	{
@@ -161,11 +161,12 @@ ReadNextXLogRecord(XLogReaderState *xlogreader)
 		if (private_data->end_of_wal)
 			return NULL;
 
-		if (errormsg)
+		if (errordata.message)
 			ereport(ERROR,
 					(errcode_for_file_access(),
 					 errmsg("could not read WAL at %X/%X: %s",
-							LSN_FORMAT_ARGS(xlogreader->EndRecPtr), errormsg)));
+							LSN_FORMAT_ARGS(xlogreader->EndRecPtr),
+							errordata.message)));
 		else
 			ereport(ERROR,
 					(errcode_for_file_access(),
@@ -384,7 +385,7 @@ GetWALBlockInfo(FunctionCallInfo fcinfo, XLogReaderState *record,
 			if (!RestoreBlockImage(record, block_id, page))
 				ereport(ERROR,
 						(errcode(ERRCODE_INTERNAL_ERROR),
-						 errmsg_internal("%s", record->errormsg_buf)));
+						 errmsg_internal("%s", record->errordata.message)));
 
 			block_fpi_data = (bytea *) palloc(BLCKSZ + VARHDRSZ);
 			SET_VARSIZE(block_fpi_data, BLCKSZ + VARHDRSZ);

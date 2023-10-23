@@ -1399,7 +1399,7 @@ XlogReadTwoPhaseData(XLogRecPtr lsn, char **buf, int *len)
 {
 	XLogRecord *record;
 	XLogReaderState *xlogreader;
-	char	   *errormsg;
+	XLogReaderError errordata = {0};
 
 	xlogreader = XLogReaderAllocate(wal_segment_size, NULL,
 									XL_ROUTINE(.page_read = &read_local_xlog_page,
@@ -1413,15 +1413,15 @@ XlogReadTwoPhaseData(XLogRecPtr lsn, char **buf, int *len)
 				 errdetail("Failed while allocating a WAL reading processor.")));
 
 	XLogBeginRead(xlogreader, lsn);
-	record = XLogReadRecord(xlogreader, &errormsg);
+	record = XLogReadRecord(xlogreader, &errordata);
 
 	if (record == NULL)
 	{
-		if (errormsg)
+		if (errordata.message)
 			ereport(ERROR,
 					(errcode_for_file_access(),
 					 errmsg("could not read two-phase state from WAL at %X/%X: %s",
-							LSN_FORMAT_ARGS(lsn), errormsg)));
+							LSN_FORMAT_ARGS(lsn), errordata.message)));
 		else
 			ereport(ERROR,
 					(errcode_for_file_access(),

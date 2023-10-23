@@ -2465,7 +2465,7 @@ verifyBackupPageConsistency(XLogReaderState *record)
 		if (!RestoreBlockImage(record, block_id, primary_image_masked))
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
-					 errmsg_internal("%s", record->errormsg_buf)));
+					 errmsg_internal("%s", record->errordata.message)));
 
 		/*
 		 * If masking function is defined, mask both the primary and replay
@@ -3073,34 +3073,55 @@ ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
 
 	for (;;)
 	{
-		char	   *errormsg;
+		XLogReaderError errordata = {0};
 
-		record = XLogPrefetcherReadRecord(xlogprefetcher, &errormsg);
+		record = XLogPrefetcherReadRecord(xlogprefetcher, &errordata);
 		if (record == NULL)
 		{
-			/*
-			 * When we find that WAL ends in an incomplete record, keep track
-			 * of that record.  After recovery is done, we'll write a record
-			 * to indicate to downstream WAL readers that that portion is to
-			 * be ignored.
-			 *
-			 * However, when ArchiveRecoveryRequested = true, we're going to
-			 * switch to a new timeline at the end of recovery. We will only
-			 * copy WAL over to the new timeline up to the end of the last
-			 * complete record, so if we did this, we would later create an
-			 * overwrite contrecord in the wrong place, breaking everything.
-			 */
-			if (!ArchiveRecoveryRequested &&
-				!XLogRecPtrIsInvalid(xlogreader->abortedRecPtr))
+			switch (errordata.code)
 			{
-				abortedRecPtr = xlogreader->abortedRecPtr;
-				missingContrecPtr = xlogreader->missingContrecPtr;
-			}
+				case XLOG_READER_NO_ERROR:
+					/* Possible when XLogPageRead() has failed */
+					Assert(!errordata.message);
+					/* FALLTHROUGH */
 
-			if (readFile >= 0)
-			{
-				close(readFile);
-				readFile = -1;
+				case XLOG_READER_INVALID_DATA:
+
+					/*
+					 * When we find that WAL ends in an incomplete record,
+					 * keep track of that record.  After recovery is done,
+					 * we'll write a record to indicate to downstream WAL
+					 * readers that that portion is to be ignored.
+					 *
+					 * However, when ArchiveRecoveryRequested = true, we're
+					 * going to switch to a new timeline at the end of
+					 * recovery. We will only copy WAL over to the new
+					 * timeline up to the end of the last complete record, so
+					 * if we did this, we would later create an overwrite
+					 * contrecord in the wrong place, breaking everything.
+					 */
+					if (!ArchiveRecoveryRequested &&
+						!XLogRecPtrIsInvalid(xlogreader->abortedRecPtr))
+					{
+						abortedRecPtr = xlogreader->abortedRecPtr;
+						missingContrecPtr = xlogreader->missingContrecPtr;
+					}
+
+					if (readFile >= 0)
+					{
+						close(readFile);
+						readFile = -1;
+					}
+					break;
+				case XLOG_READER_OOM:
+
+					/*
+					 * If we failed because of an out-of-memory problem, just
+					 * give up and retry recovery later.  It may be posible
+					 * that the WAL record to decode required a larger memory
+					 * allocation than what the host can offer.
+					 */
+					break;
 			}
 
 			/*
@@ -3109,9 +3130,9 @@ ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
 			 * StandbyMode that only happens if we have been triggered, so we
 			 * shouldn't loop anymore in that case.
 			 */
-			if (errormsg)
+			if (errordata.message)
 				ereport(emode_for_corrupt_record(emode, xlogreader->EndRecPtr),
-						(errmsg_internal("%s", errormsg) /* already translated */ ));
+						(errmsg_internal("%s", errordata.message) /* already translated */ ));
 		}
 
 		/*
@@ -3158,9 +3179,12 @@ ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
 			 * WAL from the archive, even if pg_wal is completely empty, but
 			 * we'd have no idea how far we'd have to replay to reach
 			 * consistency.  So err on the safe side and give up.
+			 *
+			 * It may be possible that the record was not decoded because of
+			 * an out-of-memory failure.  In this case, just loop.
 			 */
 			if (!InArchiveRecovery && ArchiveRecoveryRequested &&
-				!fetching_ckpt)
+				!fetching_ckpt && errordata.code != XLOG_READER_OOM)
 			{
 				ereport(DEBUG1,
 						(errmsg_internal("reached end of WAL in pg_wal, entering archive recovery")));
@@ -3184,8 +3208,13 @@ ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
 				continue;
 			}
 
-			/* In standby mode, loop back to retry. Otherwise, give up. */
+			/*
+			 * In standby mode or if the WAL record failed on an
+			 * out-of-memory, loop back and retry.  Otherwise, give up.
+			 */
 			if (StandbyMode && !CheckForStandbyTrigger())
+				continue;
+			else if (errordata.code == XLOG_READER_OOM)
 				continue;
 			else
 				return NULL;
@@ -3396,9 +3425,9 @@ retry:
 		 * Emit this error right now then retry this page immediately. Use
 		 * errmsg_internal() because the message was already translated.
 		 */
-		if (xlogreader->errormsg_buf[0])
+		if (xlogreader->errordata.message[0])
 			ereport(emode_for_corrupt_record(emode, xlogreader->EndRecPtr),
-					(errmsg_internal("%s", xlogreader->errormsg_buf)));
+					(errmsg_internal("%s", xlogreader->errordata.message)));
 
 		/* reset any error XLogReaderValidatePageHeader() might have set */
 		XLogReaderResetError(xlogreader);

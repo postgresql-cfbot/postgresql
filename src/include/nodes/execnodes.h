@@ -1571,6 +1571,13 @@ typedef struct IndexScanState
 	Relation	iss_RelationDesc;
 	struct IndexScanDescData *iss_ScanDesc;
 
+	/* index-only filters */
+	ExprState	   *indexfilters;
+	ExprState	   *indexfiltersorig;
+	TupleTableSlot *iss_TableSlot;
+	Buffer			iss_VMBuffer;
+	IndexInfo	   *iss_IndexInfo;
+
 	/* These are needed for re-checking ORDER BY expr ordering */
 	pairingheap *iss_ReorderQueue;
 	bool		iss_ReachedEnd;

@@ -3386,11 +3386,28 @@ double
 estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 					List **pgset, EstimationInfo *estinfo)
 {
-	List	   *varinfos = NIL;
+	return estimate_num_groups_incremental(root, groupExprs,
+										   input_rows, pgset, estinfo,
+										   NULL, 0);
+}
+
+/*
+ * estimate_num_groups_incremental
+ *		An estimate_num_groups variant, optimized for cases that are adding the
+ *		expressions incrementally (e.g. one by one).
+ */
+double
+estimate_num_groups_incremental(PlannerInfo *root, List *groupExprs,
+								double input_rows,
+								List **pgset, EstimationInfo *estinfo,
+								List **cache_varinfos, int prevNExprs)
+{
+	List	   *varinfos = (cache_varinfos) ? *cache_varinfos : NIL;
 	double		srf_multiplier = 1.0;
 	double		numdistinct;
 	ListCell   *l;
-	int			i;
+	int			i,
+				j;
 
 	/* Zero the estinfo output parameter, if non-NULL */
 	if (estinfo != NULL)
@@ -3421,7 +3438,7 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 	 */
 	numdistinct = 1.0;
 
-	i = 0;
+	i = j = 0;
 	foreach(l, groupExprs)
 	{
 		Node	   *groupexpr = (Node *) lfirst(l);
@@ -3429,6 +3446,14 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 		VariableStatData vardata;
 		List	   *varshere;
 		ListCell   *l2;
+
+		/* was done on previous call */
+		if (cache_varinfos && j++ < prevNExprs)
+		{
+			if (pgset)
+				i++;			/* to keep in sync with lines below */
+			continue;
+		}
 
 		/* is expression in this grouping set? */
 		if (pgset && !list_member_int(*pgset, i++))
@@ -3499,7 +3524,11 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 		if (varshere == NIL)
 		{
 			if (contain_volatile_functions(groupexpr))
+			{
+				if (cache_varinfos)
+					*cache_varinfos = varinfos;
 				return input_rows;
+			}
 			continue;
 		}
 
@@ -3515,6 +3544,9 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 			ReleaseVariableStats(vardata);
 		}
 	}
+
+	if (cache_varinfos)
+		*cache_varinfos = varinfos;
 
 	/*
 	 * If now no Vars, we must have an all-constant or all-boolean GROUP BY

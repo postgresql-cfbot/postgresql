@@ -1486,6 +1486,8 @@ pg_roles| SELECT pg_authid.rolname,
     pg_authid.rolconnlimit,
     '********'::text AS rolpassword,
     pg_authid.rolvaliduntil,
+    '********'::text AS rolsecondpassword,
+    pg_authid.rolsecondvaliduntil,
     pg_authid.rolbypassrls,
     s.setconfig AS rolconfig,
     pg_authid.oid
@@ -1729,6 +1731,8 @@ pg_shadow| SELECT pg_authid.rolname AS usename,
     pg_authid.rolbypassrls AS usebypassrls,
     pg_authid.rolpassword AS passwd,
     pg_authid.rolvaliduntil AS valuntil,
+    pg_authid.rolsecondpassword AS secondpasswd,
+    pg_authid.rolsecondvaliduntil AS secondvaluntil,
     s.setconfig AS useconfig
    FROM (pg_authid
      LEFT JOIN pg_db_role_setting s ON (((pg_authid.oid = s.setrole) AND (s.setdatabase = (0)::oid))))

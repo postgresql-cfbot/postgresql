@@ -32,11 +32,11 @@
  * Perform a SASL exchange with a libpq client, using a specific mechanism
  * implementation.
  *
- * shadow_pass is an optional pointer to the stored secret of the role
- * authenticated, from pg_authid.rolpassword.  For mechanisms that use
- * shadowed passwords, a NULL pointer here means that an entry could not
- * be found for the role (or the user does not exist), and the mechanism
- * should fail the authentication exchange.
+ * passwords is an optional pointer to the stored secrets of the role
+ * authenticated, from pg_authid's rolpassword and rolsecondpassword.  For
+ * mechanisms that use shadowed passwords, a NULL pointer here means that an
+ * entry could not be found for the role (or the user does not exist), and the
+ * mechanism should fail the authentication exchange.
  *
  * Mechanisms must take care not to reveal to the client that a user entry
  * does not exist; ideally, the external failure mode is identical to that
@@ -45,11 +45,11 @@
  * assist debugging by the server admin.
  *
  * A mechanism is not required to utilize a shadow entry, or even a password
- * system at all; for these cases, shadow_pass may be ignored and the caller
- * should just pass NULL.
+ * system at all; for these cases, passwords paramter may be ignored and the
+ * caller should just pass NULL.
  */
 int
-CheckSASLAuth(const pg_be_sasl_mech *mech, Port *port, char *shadow_pass,
+CheckSASLAuth(const pg_be_sasl_mech *mech, Port *port, const char **passwords, int num_passwords,
 			  const char **logdetail)
 {
 	StringInfoData sasl_mechs;
@@ -136,7 +136,7 @@ CheckSASLAuth(const pg_be_sasl_mech *mech, Port *port, char *shadow_pass,
 			 * This is because we don't want to reveal to an attacker what
 			 * usernames are valid, nor which users have a valid password.
 			 */
-			opaq = mech->init(port, selected_mech, shadow_pass);
+			opaq = mech->init(port, selected_mech, passwords, num_passwords);
 
 			inputlen = pq_getmsgint(&buf, 4);
 			if (inputlen == -1)

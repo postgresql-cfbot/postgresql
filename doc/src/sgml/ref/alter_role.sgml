@@ -35,6 +35,9 @@ ALTER ROLE <replaceable class="parameter">role_specification</replaceable> [ WIT
     | CONNECTION LIMIT <replaceable class="parameter">connlimit</replaceable>
     | [ ENCRYPTED ] PASSWORD '<replaceable class="parameter">password</replaceable>' | PASSWORD NULL
     | VALID UNTIL '<replaceable class="parameter">timestamp</replaceable>'
+    | ADD { FIRST | SECOND } PASSWORD '<replaceable class="parameter">password</replaceable>'
+    | DROP { FIRST | SECOND | ALL } PASSWORD
+    | { FIRST | SECOND } PASSWORD VALID UNTIL '<replaceable class="parameter">timestamp</replaceable>'
 
 ALTER ROLE <replaceable class="parameter">name</replaceable> RENAME TO <replaceable>new_name</replaceable>
 
@@ -126,6 +129,14 @@ ALTER ROLE { <replaceable class="parameter">role_specification</replaceable> | A
    set if a superuser issues the command.  Only superusers can change a setting
    for all roles in all databases.
   </para>
+
+  <para>
+   To support gradual password rollovers, PostgreSQL provides the ability to
+   store up to two passwords at the same time for each role. These passwords are
+   referred to as <literal>FIRST</literal> and <literal>SECOND</literal>
+   password. Each of these passwords can be changed independently, and each of
+   these can have their own password expiration time.
+  </para>
  </refsect1>
 
  <refsect1 id="sql-alterrole-params">
@@ -185,6 +196,34 @@ ALTER ROLE { <replaceable class="parameter">role_specification</replaceable> | A
         These clauses alter attributes originally set by
         <link linkend="sql-createrole"><command>CREATE ROLE</command></link>. For more information, see the
         <command>CREATE ROLE</command> reference page.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="sql-alterrole-params-add-password">
+      <term><literal>ADD</literal> { <literal>FIRST</literal> | <literal>SECOND</literal> } <literal>PASSWORD</literal> '<replaceable class="parameter">password</replaceable>'</term>
+      <listitem>
+       <para>
+        Set the first, or the second, password of the role. It is an error if the
+        corresponding password is already set.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="sql-alterrole-params-drop-password">
+      <term><literal>DROP</literal> { <literal>FIRST</literal> | <literal>SECOND</literal> | <literal>ALL</literal> } <literal>PASSWORD</literal> </term>
+      <listitem>
+       <para>
+        Clear the first, the second, or all passwords of the role.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="sql-alterrole-params-first-password-valid-until">
+      <term> { <literal>FIRST</literal> | <literal>SECOND</literal> } <literal>PASSWORD VALID UNTIL</literal> '<replaceable class="parameter">timestamp</replaceable>'</term>
+      <listitem>
+       <para>
+        Sets a date and time after which the corresponding password is no longer valid.
        </para>
       </listitem>
      </varlistentry>
@@ -335,6 +374,14 @@ ALTER ROLE worker_bee SET maintenance_work_mem = 100000;
 <programlisting>
 ALTER ROLE fred IN DATABASE devel SET client_min_messages = DEBUG;
 </programlisting></para>
+
+  <para>
+   Add a second password to a role:
+
+<programlisting>
+ALTER ROLE fred ADD SECOND PASSwORD 'secret' SECOND PASSWORD VALID UNTIL '2005/01/01';
+</programlisting>
+  </para>
  </refsect1>
 
  <refsect1 id="sql-alterrole-compat">

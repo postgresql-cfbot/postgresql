@@ -30,7 +30,9 @@
 #include "commands/defrem.h"
 #include "commands/seclabel.h"
 #include "commands/user.h"
+#include "common/scram-common.h"
 #include "libpq/crypt.h"
+#include "libpq/scram.h"
 #include "miscadmin.h"
 #include "storage/lmgr.h"
 #include "utils/acl.h"
@@ -125,6 +127,92 @@ have_createrole_privilege(void)
 	return has_createrole_privilege(GetUserId());
 }
 
+/*
+ * Inspect the current passwords of a role, and return the salt that can be used
+ * for hashing of newer passwords.
+ *
+ * Returns success on error, and false otherwise. On error the reason is stored in
+ * logdetail. On success, salt may be null which indicates that the caller is
+ * free to generate a new salt.
+ */
+static bool
+get_salt(char *rolename, char **salt, const char **logdetail)
+{
+	char	  **current_secrets;
+	int			i,
+				num_secrets;
+	char	   *salt1,
+			   *salt2 = NULL;
+	PasswordType passtype;
+
+	if (Password_encryption == PASSWORD_TYPE_MD5)
+	{
+		*salt = rolename;		/* md5 always uses role name, no need to look
+								 * through the passwords */
+		return true;
+	}
+	else if (Password_encryption == PASSWORD_TYPE_PLAINTEXT)
+	{
+		*salt = NULL;			/* Plaintext does not have a salt */
+		return true;
+	}
+
+	current_secrets = get_role_passwords(rolename, logdetail, &num_secrets);
+	if (num_secrets == 0)
+	{
+		*salt = NULL;			/* No existing passwords, allow salt to be
+								 * generated */
+		return true;
+	}
+
+	for (i = 0; i < num_secrets; i++)
+	{
+		passtype = get_password_type(current_secrets[i]);
+
+		if (passtype == PASSWORD_TYPE_MD5 || passtype == PASSWORD_TYPE_PLAINTEXT)
+			continue;			/* md5 uses rolename as salt so it is always
+								 * the same, and plaintext has no salt */
+		else if (passtype == PASSWORD_TYPE_SCRAM_SHA_256)
+		{
+			int			iterations;
+			int			key_length = 0;
+			pg_cryptohash_type hash_type;
+			uint8		stored_key[SCRAM_MAX_KEY_LEN];
+			uint8		server_key[SCRAM_MAX_KEY_LEN];
+
+			if (!parse_scram_secret(current_secrets[i], &iterations, &hash_type, &key_length,
+									&salt1, stored_key, server_key))
+			{
+				*logdetail = psprintf(_("could not parse SCRAM secret"));
+				*salt = NULL;
+				return false;
+			}
+
+			if (salt2 != NULL)
+			{
+				if (strcmp(salt1, salt2))
+				{
+					*logdetail = psprintf(_("inconsistent salts, clearing password"));
+			//TODO: Better message
+						* salt = NULL;
+					return false;
+				}
+			}
+			else
+				salt2 = salt1;
+		}
+	}
+
+	for (i = 0; i < num_secrets; i++)
+		pfree(current_secrets[i]);
+	if (current_secrets)
+		pfree(current_secrets);
+
+	if (salt2)
+		*salt = pstrdup(salt2);
+
+	return true;
+}
 
 /*
  * CREATE ROLE
@@ -153,8 +241,8 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 	List	   *addroleto = NIL;	/* roles to make this a member of */
 	List	   *rolemembers = NIL;	/* roles to be members of this role */
 	List	   *adminmembers = NIL; /* roles to be admins of this role */
-	char	   *validUntil = NULL;	/* time the login is valid until */
-	Datum		validUntil_datum;	/* same, as timestamptz Datum */
+	char	   *validUntil = NULL;	/* time the password is valid until */
+	Datum		validUntil_datum;	/* validuntil, as timestamptz Datum */
 	bool		validUntil_null;
 	DefElem    *dpassword = NULL;
 	DefElem    *dissuper = NULL;
@@ -442,18 +530,27 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 		}
 		else
 		{
+			char	   *salt;
+
+			if (!get_salt(stmt->role, &salt, &logdetail))
+				ereport(ERROR,
+						(errmsg("could not get a valid salt for password"),
+						 errdetail("%s", logdetail)));
+
 			/* Encrypt the password to the requested format. */
-			shadow_pass = encrypt_password(Password_encryption, stmt->role,
-										   password);
-			new_record[Anum_pg_authid_rolpassword - 1] =
-				CStringGetTextDatum(shadow_pass);
+			shadow_pass = encrypt_password(Password_encryption, salt, password);
+			new_record[Anum_pg_authid_rolpassword - 1] = CStringGetTextDatum(shadow_pass);
 		}
 	}
 	else
 		new_record_nulls[Anum_pg_authid_rolpassword - 1] = true;
 
+	new_record_nulls[Anum_pg_authid_rolsecondpassword - 1] = true;
+
 	new_record[Anum_pg_authid_rolvaliduntil - 1] = validUntil_datum;
 	new_record_nulls[Anum_pg_authid_rolvaliduntil - 1] = validUntil_null;
+
+	new_record_nulls[Anum_pg_authid_rolsecondvaliduntil - 1] = true;
 
 	new_record[Anum_pg_authid_rolbypassrls - 1] = BoolGetDatum(bypassrls);
 
@@ -630,11 +727,18 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 	ListCell   *option;
 	char	   *rolename;
 	char	   *password = NULL;	/* user password */
+	char	   *second_password = NULL; /* user's second password */
 	int			connlimit = -1; /* maximum connections allowed */
-	char	   *validUntil = NULL;	/* time the login is valid until */
-	Datum		validUntil_datum;	/* same, as timestamptz Datum */
+	char	   *validUntil = NULL;	/* time the password is valid until */
+	Datum		validUntil_datum;	/* validUntil, as timestamptz Datum */
 	bool		validUntil_null;
+	char	   *secondValidUntil = NULL;	/* time the second password is
+											 * valid until */
+	Datum		secondValidUntil_datum; /* secondValidUntil, as timestamptz
+										 * Datum */
+	bool		secondValidUntil_null;
 	DefElem    *dpassword = NULL;
+	DefElem    *dsecondpassword = NULL;
 	DefElem    *dissuper = NULL;
 	DefElem    *dinherit = NULL;
 	DefElem    *dcreaterole = NULL;
@@ -644,10 +748,18 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 	DefElem    *dconnlimit = NULL;
 	DefElem    *drolemembers = NULL;
 	DefElem    *dvalidUntil = NULL;
+	DefElem    *dfirstValidUntil = NULL;
+	DefElem    *dsecondValidUntil = NULL;
 	DefElem    *dbypassRLS = NULL;
 	Oid			roleid;
 	Oid			currentUserId = GetUserId();
 	GrantRoleOptions popt;
+	bool		overwriteFirstPassword = false;
+	bool		addFirstPassword = false;
+	bool		addSecondPassword = false;
+	bool		dropFirstPassword = false;
+	bool		dropSecondPassword = false;
+	bool		dropAllPasswords = false;
 
 	check_rolespec_name(stmt->role,
 						_("Cannot alter reserved roles."));
@@ -659,9 +771,96 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 
 		if (strcmp(defel->defname, "password") == 0)
 		{
-			if (dpassword)
+			if (overwriteFirstPassword || addFirstPassword)
 				errorConflictingDefElem(defel, pstate);
 			dpassword = defel;
+			overwriteFirstPassword = true;
+
+			if (dpassword->arg != NULL)
+			{
+				/* PASSWORD 'sometext' syntax was used */
+
+				/*
+				 * Adding and dropping passwords in the same command is not
+				 * supported.
+				 */
+				if (dropFirstPassword || dropSecondPassword || dropAllPasswords)
+					errorConflictingDefElem(defel, pstate);
+			}
+			else
+			{
+				/* PASSWORD NULL syntax was used */
+
+				if (dropFirstPassword)
+					errorConflictingDefElem(defel, pstate);
+
+				/*
+				 * Adding and dropping passwords in the same command is not
+				 * supported.
+				 */
+				if (addFirstPassword || addSecondPassword)
+					errorConflictingDefElem(defel, pstate);
+
+				dropFirstPassword = true;
+			}
+		}
+		else if (strcmp(defel->defname, "add-first-password") == 0)
+		{
+			if (addFirstPassword || overwriteFirstPassword)
+				errorConflictingDefElem(defel, pstate);
+			dpassword = defel;
+			addFirstPassword = true;
+
+			/*
+			 * Adding and dropping passwords in the same command is not
+			 * supported.
+			 */
+			if (dropFirstPassword || dropSecondPassword || dropAllPasswords)
+				errorConflictingDefElem(defel, pstate);
+		}
+		else if (strcmp(defel->defname, "add-second-password") == 0)
+		{
+			if (dsecondpassword)
+				errorConflictingDefElem(defel, pstate);
+			dsecondpassword = defel;
+			addSecondPassword = true;
+
+			/*
+			 * Adding and dropping passwords in the same command is not
+			 * supported.
+			 */
+			if (dropFirstPassword || dropSecondPassword || dropAllPasswords)
+				errorConflictingDefElem(defel, pstate);
+		}
+		else if (strcmp(defel->defname, "drop-password") == 0)
+		{
+			char	   *which = strVal(defel->arg);
+
+			if (strcmp(which, "first") == 0)
+			{
+				if (dropFirstPassword || dropAllPasswords)
+					errorConflictingDefElem(defel, pstate);
+				dropFirstPassword = true;
+			}
+			else if (strcmp(which, "second") == 0)
+			{
+				if (dropSecondPassword || dropAllPasswords)
+					errorConflictingDefElem(defel, pstate);
+				dropSecondPassword = true;
+			}
+			else
+			{
+				if (dropAllPasswords || dropFirstPassword || dropSecondPassword)
+					errorConflictingDefElem(defel, pstate);
+				dropAllPasswords = true;
+			}
+
+			/*
+			 * Adding and dropping passwords in the same command is not
+			 * supported.
+			 */
+			if (addFirstPassword || addSecondPassword || overwriteFirstPassword)
+				errorConflictingDefElem(defel, pstate);
 		}
 		else if (strcmp(defel->defname, "superuser") == 0)
 		{
@@ -718,6 +917,18 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 				errorConflictingDefElem(defel, pstate);
 			dvalidUntil = defel;
 		}
+		else if (strcmp(defel->defname, "first-password-valid-until") == 0)
+		{
+			if (dfirstValidUntil)
+				errorConflictingDefElem(defel, pstate);
+			dfirstValidUntil = defel;
+		}
+		else if (strcmp(defel->defname, "second-password-valid-until") == 0)
+		{
+			if (dsecondValidUntil)
+				errorConflictingDefElem(defel, pstate);
+			dsecondValidUntil = defel;
+		}
 		else if (strcmp(defel->defname, "bypassrls") == 0)
 		{
 			if (dbypassRLS)
@@ -731,6 +942,8 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 
 	if (dpassword && dpassword->arg)
 		password = strVal(dpassword->arg);
+	if (dsecondpassword)
+		second_password = strVal(dsecondpassword->arg);
 	if (dconnlimit)
 	{
 		connlimit = intVal(dconnlimit->arg);
@@ -739,8 +952,30 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("invalid connection limit: %d", connlimit)));
 	}
+
+	/*
+	 * Disallow mixing VALID UNTIL with ADD FIRST/SECOND PASSWORD.
+	 *
+	 * VALID UNTIL and FIRST PASSWORD VALID UNTIL are functionally identical,
+	 * but we track them separately to prevent the confusing invocation like
+	 * the following.
+	 *
+	 * ALTER ROLE x ADD SECOND PASSWORD 'y' VALID UNTIL '2020/01/01';
+	 *
+	 * In the above command the user may expect the expiration of the _second_
+	 * password to be set to '2020/01/01', but it will lead to second
+	 * password's expiration set to NULL and first password's expiration set
+	 * to '2020/01/01', because a plain VALIF UNTIL applies to the _first_
+	 * password.
+	 */
+	if (dvalidUntil && (addFirstPassword || addSecondPassword))
+		errorConflictingDefElem(dvalidUntil, pstate);
+	dvalidUntil = dfirstValidUntil;
+
 	if (dvalidUntil)
 		validUntil = strVal(dvalidUntil->arg);
+	if (dsecondValidUntil)
+		secondValidUntil = strVal(dsecondValidUntil->arg);
 
 	/*
 	 * Scan the pg_authid relation to be certain the user exists.
@@ -768,7 +1003,7 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 						   "SUPERUSER", "SUPERUSER")));
 
 	/*
-	 * Most changes to a role require that you both have CREATEROLE privileges
+	 * Most changes to a role require that you have both CREATEROLE privileges
 	 * and also ADMIN OPTION on the role.
 	 */
 	if (!have_createrole_privilege() ||
@@ -776,7 +1011,7 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 	{
 		/* things an unprivileged user certainly can't do */
 		if (dinherit || dcreaterole || dcreatedb || dcanlogin || dconnlimit ||
-			dvalidUntil || disreplication || dbypassRLS)
+			dvalidUntil || dsecondValidUntil || disreplication || dbypassRLS)
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("permission denied to alter role"),
@@ -784,7 +1019,7 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 							   "CREATEROLE", "ADMIN", rolename)));
 
 		/* an unprivileged user can change their own password */
-		if (dpassword && roleid != currentUserId)
+		if ((dpassword || dsecondpassword) && roleid != currentUserId)
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("permission denied to alter role"),
@@ -843,15 +1078,42 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 										   &validUntil_null);
 	}
 
+	/* Convert secondvaliduntil to internal form */
+	if (dsecondValidUntil)
+	{
+		secondValidUntil_datum = DirectFunctionCall3(timestamptz_in,
+													 CStringGetDatum(secondValidUntil),
+													 ObjectIdGetDatum(InvalidOid),
+													 Int32GetDatum(-1));
+		secondValidUntil_null = false;
+	}
+	else
+	{
+		/* fetch existing setting in case hook needs it */
+		secondValidUntil_datum = SysCacheGetAttr(AUTHNAME, tuple,
+												 Anum_pg_authid_rolsecondvaliduntil,
+												 &secondValidUntil_null);
+	}
+
 	/*
 	 * Call the password checking hook if there is one defined
 	 */
-	if (check_password_hook && password)
-		(*check_password_hook) (rolename,
-								password,
-								get_password_type(password),
-								validUntil_datum,
-								validUntil_null);
+	if (check_password_hook)
+	{
+		if (password)
+			(*check_password_hook) (rolename,
+									password,
+									get_password_type(password),
+									validUntil_datum,
+									validUntil_null);
+
+		if (second_password)
+			(*check_password_hook) (rolename,
+									second_password,
+									get_password_type(second_password),
+									secondValidUntil_datum,
+									secondValidUntil_null);
+	}
 
 	/*
 	 * Build an updated tuple, perusing the information just obtained
@@ -917,6 +1179,20 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 		char	   *shadow_pass;
 		const char *logdetail = NULL;
 
+		if (addFirstPassword)
+		{
+			bool		firstPassword_null;
+
+			SysCacheGetAttr(AUTHNAME, tuple,
+							Anum_pg_authid_rolpassword,
+							&firstPassword_null);
+
+			if (!firstPassword_null)
+				ereport(ERROR,
+						(errmsg("first password is already in use"),
+						 errdetail("Use ALTER ROLE DROP FIRST PASSWORD.")));
+		}
+
 		/* Like in CREATE USER, don't allow an empty password. */
 		if (password[0] == '\0' ||
 			plain_crypt_verify(rolename, password, "", &logdetail) == STATUS_OK)
@@ -927,26 +1203,170 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 		}
 		else
 		{
+			char	   *salt;
+
+			if (!get_salt(rolename, &salt, &logdetail))
+				ereport(ERROR,
+						(errcode(ERRCODE_INTERNAL_ERROR),
+						 errmsg("could not get a valid salt for password"),
+						 errdetail("%s", logdetail)));
+
 			/* Encrypt the password to the requested format. */
-			shadow_pass = encrypt_password(Password_encryption, rolename,
-										   password);
+			shadow_pass = encrypt_password(Password_encryption, salt, password);
 			new_record[Anum_pg_authid_rolpassword - 1] =
 				CStringGetTextDatum(shadow_pass);
 		}
 		new_record_repl[Anum_pg_authid_rolpassword - 1] = true;
 	}
 
+	/* second password */
+	if (second_password)
+	{
+		char	   *shadow_pass;
+		const char *logdetail = NULL;
+		bool		secondPassword_null;
+
+		SysCacheGetAttr(AUTHNAME, tuple,
+						Anum_pg_authid_rolsecondpassword,
+						&secondPassword_null);
+
+		if (!secondPassword_null)
+			ereport(ERROR,
+					(errmsg("second password is already in use"),
+					 errdetail("Use ALTER ROLE DROP SECOND PASSWORD")));
+
+		/* Like in CREATE USER, don't allow an empty password. */
+		if (second_password[0] == '\0' ||
+			plain_crypt_verify(rolename, second_password, "", &logdetail) == STATUS_OK)
+		{
+			ereport(NOTICE,
+					(errmsg("empty string is not a valid password, clearing password")));
+			new_record_nulls[Anum_pg_authid_rolsecondpassword - 1] = true;
+		}
+		else
+		{
+			char	   *salt;
+
+			if (!get_salt(rolename, &salt, &logdetail))
+				ereport(ERROR,
+						(errcode(ERRCODE_INTERNAL_ERROR),
+						 errmsg("could not get a valid salt for password"),
+						 errdetail("%s", logdetail)));
+
+			/* Encrypt the password to the requested format. */
+			shadow_pass = encrypt_password(Password_encryption, salt, second_password);
+			new_record[Anum_pg_authid_rolsecondpassword - 1] =
+				CStringGetTextDatum(shadow_pass);
+		}
+		new_record_repl[Anum_pg_authid_rolsecondpassword - 1] = true;
+	}
+
+	/*
+	 * Disallow more than one type of passwords for a role. If a role has an
+	 * md5 password, then allow only md5 passwords; similarly for
+	 * scram-sha-256 passwords. Having all passwords of the same type helps
+	 * the server pick the correponding authentication method during
+	 * connection attempt.
+	 */
+	if (overwriteFirstPassword || addFirstPassword || addSecondPassword)
+	{
+		bool		firstPassword_null;
+		bool		secondPassword_null;
+		Datum		firstPassword_datum;
+		Datum		secondPassword_datum;
+		char	   *roleFirstPassword = NULL;
+		char	   *roleSecondPassword = NULL;
+		PasswordType roleFirstPasswordType = -1;	/* silence the compiler */
+		PasswordType roleSecondPasswordType = -1;	/* silence the compiler */
+
+		firstPassword_datum = SysCacheGetAttr(AUTHNAME, tuple,
+											  Anum_pg_authid_rolpassword,
+											  &firstPassword_null);
+		secondPassword_datum = SysCacheGetAttr(AUTHNAME, tuple,
+											   Anum_pg_authid_rolsecondpassword,
+											   &secondPassword_null);
+		if (!firstPassword_null)
+		{
+			roleFirstPassword = TextDatumGetCString(firstPassword_datum);
+			roleFirstPasswordType = get_password_type(roleFirstPassword);
+		}
+
+		if (!secondPassword_null)
+		{
+			roleSecondPassword = TextDatumGetCString(secondPassword_datum);
+			roleSecondPasswordType = get_password_type(roleSecondPassword);
+		}
+
+		/* if the user requested setting the first password ... */
+		if ((overwriteFirstPassword || addFirstPassword) &&
+		/* and we have decided to honor their request */
+			new_record_repl[Anum_pg_authid_rolpassword - 1] == true &&
+		/* and the resulting password hash about to be stored is not null */
+			new_record_nulls[Anum_pg_authid_rolpassword - 1] == false &&
+		/* and the algorithm used doesn't match existing password's algorithm */
+			roleSecondPassword != NULL &&
+			roleSecondPasswordType != Password_encryption)
+		{
+			if (roleSecondPasswordType == PASSWORD_TYPE_MD5)
+				ereport(ERROR,
+						(errmsg("role has an md5 password"),
+						 errdetail("The new password must also use md5.")));
+			else if (roleSecondPasswordType == PASSWORD_TYPE_SCRAM_SHA_256)
+				ereport(ERROR,
+						(errmsg("role has a scram-sha-256 password"),
+						 errdetail("The new password must also use scram-sha-256.")));
+			else
+				ereport(ERROR,
+						(errmsg("role has a plaintext password"),
+						 errdetail("The new password must also use plaintext.")));
+		}
+
+		/* if the user requested setting the second password ... */
+		if (addSecondPassword &&
+		/* and we have decided to honor their request */
+			new_record_repl[Anum_pg_authid_rolsecondpassword - 1] == true &&
+		/* and the resulting password hash about to be stored is not null */
+			new_record_nulls[Anum_pg_authid_rolsecondpassword - 1] == false &&
+		/* and the algorithm used doesn't match existing password's algorithm */
+			roleFirstPassword != NULL &&
+			roleFirstPasswordType != Password_encryption)
+		{
+			if (roleFirstPasswordType == PASSWORD_TYPE_MD5)
+				ereport(ERROR,
+						(errmsg("role has an md5 password"),
+						 errdetail("The new password must also use md5.")));
+			else if (roleFirstPasswordType == PASSWORD_TYPE_SCRAM_SHA_256)
+				ereport(ERROR,
+						(errmsg("role has a scram-sha-256 password"),
+						 errdetail("The new password must also use scram-sha-256.")));
+			else
+				ereport(ERROR,
+						(errmsg("role has a plaintext password"),
+						 errdetail("The new password must also use plaintext.")));
+		}
+	}
+
 	/* unset password */
-	if (dpassword && dpassword->arg == NULL)
+	if (dropFirstPassword || dropAllPasswords)
 	{
 		new_record_repl[Anum_pg_authid_rolpassword - 1] = true;
 		new_record_nulls[Anum_pg_authid_rolpassword - 1] = true;
+	}
+
+	if (dropSecondPassword || dropAllPasswords)
+	{
+		new_record_repl[Anum_pg_authid_rolsecondpassword - 1] = true;
+		new_record_nulls[Anum_pg_authid_rolsecondpassword - 1] = true;
 	}
 
 	/* valid until */
 	new_record[Anum_pg_authid_rolvaliduntil - 1] = validUntil_datum;
 	new_record_nulls[Anum_pg_authid_rolvaliduntil - 1] = validUntil_null;
 	new_record_repl[Anum_pg_authid_rolvaliduntil - 1] = true;
+	/* second password valid until */
+	new_record[Anum_pg_authid_rolsecondvaliduntil - 1] = secondValidUntil_datum;
+	new_record_nulls[Anum_pg_authid_rolsecondvaliduntil - 1] = secondValidUntil_null;
+	new_record_repl[Anum_pg_authid_rolsecondvaliduntil - 1] = true;
 
 	if (dbypassRLS)
 	{
@@ -1456,6 +1876,18 @@ RenameRole(const char *oldname, const char *newname)
 		/* MD5 uses the username as salt, so just clear it on a rename */
 		repl_repl[Anum_pg_authid_rolpassword - 1] = true;
 		repl_null[Anum_pg_authid_rolpassword - 1] = true;
+
+		ereport(NOTICE,
+				(errmsg("MD5 password cleared because of role rename")));
+	}
+
+	datum = heap_getattr(oldtuple, Anum_pg_authid_rolsecondpassword, dsc, &isnull);
+
+	if (!isnull && get_password_type(TextDatumGetCString(datum)) == PASSWORD_TYPE_MD5)
+	{
+		/* MD5 uses the username as salt, so just clear it on a rename */
+		repl_repl[Anum_pg_authid_rolsecondpassword - 1] = true;
+		repl_null[Anum_pg_authid_rolsecondpassword - 1] = true;
 
 		ereport(NOTICE,
 				(errmsg("MD5 password cleared because of role rename")));

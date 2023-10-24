@@ -2664,6 +2664,25 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>rolsecondpassword</structfield> <type>text</type>
+      </para>
+      <para>
+       Not the second password (always reads as <literal>********</literal>)
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>rolsecondvaliduntil</structfield> <type>timestamptz</type>
+      </para>
+      <para>
+       Second password's expiry time (only used for password authentication);
+       null if no expiration
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>rolbypassrls</structfield> <type>bool</type>
       </para>
       <para>
@@ -3490,6 +3509,26 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
       </para>
       <para>
        Password expiry time (only used for password authentication)
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>secondpasswd</structfield> <type>text</type>
+      </para>
+      <para>
+       Second password (possibly encrypted); null if none.  See
+       <link linkend="catalog-pg-authid"><structname>pg_authid</structname></link>
+       for details of how encrypted passwords are stored.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>secondvaluntil</structfield> <type>timestamptz</type>
+      </para>
+      <para>
+       Second password's expiry time (only used for password authentication)
       </para></entry>
      </row>
 

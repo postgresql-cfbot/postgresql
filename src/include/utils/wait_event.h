@@ -57,7 +57,7 @@ typedef enum
 {
 	WAIT_EVENT_EXTENSION = PG_WAIT_EXTENSION,
 	WAIT_EVENT_EXTENSION_FIRST_USER_DEFINED
-} WaitEventExtension;
+}			WaitEventExtension;
 
 extern void WaitEventExtensionShmemInit(void);
 extern Size WaitEventExtensionShmemSize(void);

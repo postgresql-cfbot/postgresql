@@ -662,4 +662,54 @@ test_conn(
 		qr/connection authenticated: identity="regress_not_member" method=scram-sha-256/
 	]);
 
+# Create roles, and assign two passwords for password rollover tests
+reset_pg_hba($node, 'all', 'all', 'trust');
+$node->safe_psql(
+	'postgres',
+	qq{set password_encryption = 'scram-sha-256';
+CREATE ROLE regress_password_rollover_scram LOGIN PASSWORD 'scram';
+ALTER ROLE regress_password_rollover_scram ADD SECOND PASSWORD 'scram2';
+set password_encryption = 'md5';
+CREATE ROLE regress_password_rollover_md5 LOGIN PASSWORD 'md5';
+ALTER ROLE regress_password_rollover_md5 ADD SECOND PASSWORD 'md5_2';
+});
+
+reset_pg_hba($node, 'all', 'all', 'scram-sha-256');
+$ENV{"PGPASSWORD"} = 'scram';
+test_conn(
+	$node,
+	'user=regress_password_rollover_scram',
+	'scram-sha-256',
+	0,
+	log_like => [
+		qr/connection authenticated: identity="regress_password_rollover_scram" method=scram-sha-256/
+	]);
+$ENV{"PGPASSWORD"} = 'scram2';
+test_conn(
+	$node,
+	'user=regress_password_rollover_scram',
+	'scram-sha-256',
+	0,
+	log_like => [
+		qr/connection authenticated: identity="regress_password_rollover_scram" method=scram-sha-256/
+	]);
+
+reset_pg_hba($node, 'all', 'all', 'md5');
+$ENV{"PGPASSWORD"} = 'md5';
+test_conn(
+	$node,
+	'user=regress_password_rollover_md5',
+	'md5', 0,
+	log_like => [
+		qr/connection authenticated: identity="regress_password_rollover_md5" method=md5/
+	]);
+$ENV{"PGPASSWORD"} = 'md5_2';
+test_conn(
+	$node,
+	'user=regress_password_rollover_md5',
+	'md5', 0,
+	log_like => [
+		qr/connection authenticated: identity="regress_password_rollover_md5" method=md5/
+	]);
+
 done_testing();

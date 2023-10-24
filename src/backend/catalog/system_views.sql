@@ -26,6 +26,8 @@ CREATE VIEW pg_roles AS
         rolconnlimit,
         '********'::text as rolpassword,
         rolvaliduntil,
+        '********'::text as rolsecondpassword,
+        rolsecondvaliduntil,
         rolbypassrls,
         setconfig as rolconfig,
         pg_authid.oid
@@ -42,6 +44,8 @@ CREATE VIEW pg_shadow AS
         rolbypassrls AS usebypassrls,
         rolpassword AS passwd,
         rolvaliduntil AS valuntil,
+        rolsecondpassword AS secondpasswd,
+        rolsecondvaliduntil AS secondvaluntil,
         setconfig AS useconfig
     FROM pg_authid LEFT JOIN pg_db_role_setting s
     ON (pg_authid.oid = setrole AND setdatabase = 0)

@@ -25,7 +25,7 @@ extern PGDLLIMPORT int scram_sha_256_iterations;
 extern PGDLLIMPORT const pg_be_sasl_mech pg_be_scram_mech;
 
 /* Routines to handle and check SCRAM-SHA-256 secret */
-extern char *pg_be_scram_build_secret(const char *password);
+extern char *pg_be_scram_build_secret(const char *password, const char *salt);
 extern bool parse_scram_secret(const char *secret,
 							   int *iterations,
 							   pg_cryptohash_type *hash_type,

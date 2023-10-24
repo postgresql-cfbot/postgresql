@@ -755,6 +755,8 @@ dumpRoles(PGconn *conn)
 				i_rolconnlimit,
 				i_rolpassword,
 				i_rolvaliduntil,
+				i_rolsecondpassword,
+				i_rolsecondvaliduntil,
 				i_rolreplication,
 				i_rolbypassrls,
 				i_rolcomment,
@@ -762,12 +764,28 @@ dumpRoles(PGconn *conn)
 	int			i;
 
 	/* note: rolconfig is dumped later */
-	if (server_version >= 90600)
+	if (server_version >= 170000)
 		printfPQExpBuffer(buf,
 						  "SELECT oid, rolname, rolsuper, rolinherit, "
 						  "rolcreaterole, rolcreatedb, "
-						  "rolcanlogin, rolconnlimit, rolpassword, "
-						  "rolvaliduntil, rolreplication, rolbypassrls, "
+						  "rolcanlogin, rolconnlimit, "
+						  "rolpassword, rolvaliduntil, "
+						  "rolsecondpassword, rolsecondvaliduntil, "
+						  "rolreplication, rolbypassrls, "
+						  "pg_catalog.shobj_description(oid, '%s') as rolcomment, "
+						  "rolname = current_user AS is_current_user "
+						  "FROM %s "
+						  "WHERE rolname !~ '^pg_' "
+						  "ORDER BY 2", role_catalog, role_catalog);
+	else if (server_version >= 90600)
+		printfPQExpBuffer(buf,
+						  "SELECT oid, rolname, rolsuper, rolinherit, "
+						  "rolcreaterole, rolcreatedb, "
+						  "rolcanlogin, rolconnlimit, "
+						  "rolpassword, rolvaliduntil, "
+						  "rolsecondpassword, rolsecodnvaliduntil, "
+						  "null as rolsecondpassword, null as rolsecondvaliduntil, "
+						  "rolreplication, rolbypassrls, "
 						  "pg_catalog.shobj_description(oid, '%s') as rolcomment, "
 						  "rolname = current_user AS is_current_user "
 						  "FROM %s "
@@ -777,8 +795,10 @@ dumpRoles(PGconn *conn)
 		printfPQExpBuffer(buf,
 						  "SELECT oid, rolname, rolsuper, rolinherit, "
 						  "rolcreaterole, rolcreatedb, "
-						  "rolcanlogin, rolconnlimit, rolpassword, "
-						  "rolvaliduntil, rolreplication, rolbypassrls, "
+						  "rolcanlogin, rolconnlimit, "
+						  "rolpassword, rolvaliduntil, "
+						  "null as rolsecondpassword, null as rolsecodnvaliduntil, "
+						  "rolreplication, rolbypassrls, "
 						  "pg_catalog.shobj_description(oid, '%s') as rolcomment, "
 						  "rolname = current_user AS is_current_user "
 						  "FROM %s "
@@ -787,8 +807,10 @@ dumpRoles(PGconn *conn)
 		printfPQExpBuffer(buf,
 						  "SELECT oid, rolname, rolsuper, rolinherit, "
 						  "rolcreaterole, rolcreatedb, "
-						  "rolcanlogin, rolconnlimit, rolpassword, "
-						  "rolvaliduntil, rolreplication, "
+						  "rolcanlogin, rolconnlimit, "
+						  "rolpassword, rolvaliduntil, "
+						  "null as rolsecondpassword, null as rolsecondvaliduntil, "
+						  "rolreplication, "
 						  "false as rolbypassrls, "
 						  "pg_catalog.shobj_description(oid, '%s') as rolcomment, "
 						  "rolname = current_user AS is_current_user "
@@ -807,6 +829,8 @@ dumpRoles(PGconn *conn)
 	i_rolconnlimit = PQfnumber(res, "rolconnlimit");
 	i_rolpassword = PQfnumber(res, "rolpassword");
 	i_rolvaliduntil = PQfnumber(res, "rolvaliduntil");
+	i_rolsecondpassword = PQfnumber(res, "rolsecondpassword");
+	i_rolsecondvaliduntil = PQfnumber(res, "rolsecondvaliduntil");
 	i_rolreplication = PQfnumber(res, "rolreplication");
 	i_rolbypassrls = PQfnumber(res, "rolbypassrls");
 	i_rolcomment = PQfnumber(res, "rolcomment");
@@ -895,12 +919,22 @@ dumpRoles(PGconn *conn)
 
 		if (!PQgetisnull(res, i, i_rolpassword) && !no_role_passwords)
 		{
-			appendPQExpBufferStr(buf, " PASSWORD ");
+			appendPQExpBufferStr(buf, " ADD FIRST PASSWORD ");
 			appendStringLiteralConn(buf, PQgetvalue(res, i, i_rolpassword), conn);
 		}
 
 		if (!PQgetisnull(res, i, i_rolvaliduntil))
-			appendPQExpBuffer(buf, " VALID UNTIL '%s'",
+			appendPQExpBuffer(buf, " FIRST PASSWORD VALID UNTIL '%s'",
+							  PQgetvalue(res, i, i_rolvaliduntil));
+
+		if (!PQgetisnull(res, i, i_rolsecondpassword) && !no_role_passwords)
+		{
+			appendPQExpBufferStr(buf, " ADD SECOND PASSWORD ");
+			appendStringLiteralConn(buf, PQgetvalue(res, i, i_rolsecondpassword), conn);
+		}
+
+		if (!PQgetisnull(res, i, i_rolsecondvaliduntil))
+			appendPQExpBuffer(buf, " SECOND PASSWORD VALID UNTIL '%s'",
 							  PQgetvalue(res, i, i_rolvaliduntil));
 
 		appendPQExpBufferStr(buf, ";\n");

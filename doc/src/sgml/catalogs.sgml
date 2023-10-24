@@ -1605,12 +1605,39 @@
        null if no expiration
       </para></entry>
      </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>rolsecondpassword</structfield> <type>text</type>
+      </para>
+      <para>
+       Second password (possibly encrypted); null if none. The format depends
+       on the form of encryption used.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>rolsecondvaliduntil</structfield> <type>timestamptz</type>
+      </para>
+      <para>
+       Second password's expiry time (only used for password authentication);
+       null if no expiration
+      </para></entry>
+     </row>
     </tbody>
    </tgroup>
   </table>
 
+
   <para>
-   For an MD5 encrypted password, <structfield>rolpassword</structfield>
+   <structfield>rolpassword</structfield> and <structfield>rolsecondpassword</structfield>
+   store either the unencrypted password, MD5 encrypted password, or
+   SCRAM-SHA-256 encrypted password.
+  </para>
+
+  <para>
+   For an MD5 encrypted password, the
    column will begin with the string <literal>md5</literal> followed by a
    32-character hexadecimal MD5 hash. The MD5 hash will be of the user's
    password concatenated to their user name. For example, if user

@@ -361,7 +361,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <ival>	opt_nowait_or_skip
 
 %type <list>	OptRoleList AlterOptRoleList
-%type <defelt>	CreateOptRoleElem AlterOptRoleElem
+%type <defelt>	CreateOptRoleElem AlterOptRoleElem AlterOnlyOptRoleElem
+%type <boolean>	OptFirstOrSecond
 
 %type <str>		opt_type
 %type <str>		foreign_server_version opt_foreign_server_version
@@ -1168,6 +1169,7 @@ OptRoleList:
 
 AlterOptRoleList:
 			AlterOptRoleList AlterOptRoleElem		{ $$ = lappend($1, $2); }
+			| AlterOptRoleList AlterOnlyOptRoleElem	{ $$ = lappend($1, $2); }
 			| /* EMPTY */							{ $$ = NIL; }
 		;
 
@@ -1260,6 +1262,55 @@ AlterOptRoleElem:
 								(errcode(ERRCODE_SYNTAX_ERROR),
 								 errmsg("unrecognized role option \"%s\"", $1),
 									 parser_errposition(@1)));
+				}
+		;
+
+OptFirstOrSecond:
+			FIRST_P 			{ $$ = true; }
+			| SECOND_P 			{ $$ = false; }
+		;
+
+/*
+ * AlterOnlyOptRoleElem is separate from AlterOptRoleElem because these options
+ * are not available to the CREATE ROLE command.
+ */
+AlterOnlyOptRoleElem:
+			ADD_P OptFirstOrSecond PASSWORD Sconst
+				{
+					bool first = $2;
+
+					if (first)
+						$$ = makeDefElem("add-first-password",
+										(Node *) makeString($4), @1);
+					else
+						$$ = makeDefElem("add-second-password",
+										(Node *) makeString($4), @1);
+				}
+			| DROP OptFirstOrSecond PASSWORD
+				{
+					bool first = $2;
+
+					if (first)
+						$$ = makeDefElem("drop-password",
+										(Node *) makeString("first"), @1);
+					else
+						$$ = makeDefElem("drop-password",
+										(Node *) makeString("second"), @1);
+				}
+			| DROP ALL PASSWORD
+				{
+					$$ = makeDefElem("drop-all-password", (Node *) NULL, @1);
+				}
+			| OptFirstOrSecond PASSWORD VALID UNTIL Sconst
+				{
+					bool first = $1;
+
+					if (first)
+						$$ = makeDefElem("first-password-valid-until",
+										(Node *) makeString($5), @1);
+					else
+						$$ = makeDefElem("second-password-valid-until",
+										(Node *) makeString($5), @1);
 				}
 		;
 

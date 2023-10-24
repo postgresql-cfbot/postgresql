@@ -57,8 +57,7 @@ static void set_authn_id(Port *port, const char *id);
 static int	CheckPasswordAuth(Port *port, const char **logdetail);
 static int	CheckPWChallengeAuth(Port *port, const char **logdetail);
 
-static int	CheckMD5Auth(Port *port, char *shadow_pass,
-						 const char **logdetail);
+static int	CheckMD5Auth(Port *port, const char **passwords, int num_passwords, const char **logdetail);
 
 
 /*----------------------------------------------------------------
@@ -789,8 +788,10 @@ static int
 CheckPasswordAuth(Port *port, const char **logdetail)
 {
 	char	   *passwd;
-	int			result;
-	char	   *shadow_pass;
+	int			result = STATUS_ERROR;
+	int			i,
+				num_passwords;
+	char	  **passwords;
 
 	sendAuthRequest(port, AUTH_REQ_PASSWORD, NULL, 0);
 
@@ -798,17 +799,23 @@ CheckPasswordAuth(Port *port, const char **logdetail)
 	if (passwd == NULL)
 		return STATUS_EOF;		/* client wouldn't send password */
 
-	shadow_pass = get_role_password(port->user_name, logdetail);
-	if (shadow_pass)
+	passwords = get_role_passwords(port->user_name, logdetail, &num_passwords);
+	if (passwords != NULL)
 	{
-		result = plain_crypt_verify(port->user_name, shadow_pass, passwd,
-									logdetail);
-	}
-	else
-		result = STATUS_ERROR;
+		for (i = 0; i < num_passwords; i++)
+		{
+			result = plain_crypt_verify(port->user_name, passwords[i], passwd,
+										logdetail);
+			if (result == STATUS_OK)
+				break;			/* Found a matching password, no need to try
+								 * any others */
+		}
+		for (i = 0; i < num_passwords; i++)
+			pfree(passwords[i]);
 
-	if (shadow_pass)
-		pfree(shadow_pass);
+		pfree(passwords);
+	}
+
 	pfree(passwd);
 
 	if (result == STATUS_OK)
@@ -823,54 +830,82 @@ CheckPasswordAuth(Port *port, const char **logdetail)
 static int
 CheckPWChallengeAuth(Port *port, const char **logdetail)
 {
-	int			auth_result;
-	char	   *shadow_pass;
+	bool		scram_pw_avail = false;
+	int			auth_result = STATUS_ERROR;
+	int			i,
+				num_passwords;
+	char	  **passwords;
 	PasswordType pwtype;
 
 	Assert(port->hba->auth_method == uaSCRAM ||
 		   port->hba->auth_method == uaMD5);
 
-	/* First look up the user's password. */
-	shadow_pass = get_role_password(port->user_name, logdetail);
+	/* First look up the user's passwords. */
+	passwords = get_role_passwords(port->user_name, logdetail, &num_passwords);
 
 	/*
-	 * If the user does not exist, or has no password or it's expired, we
-	 * still go through the motions of authentication, to avoid revealing to
-	 * the client that the user didn't exist.  If 'md5' is allowed, we choose
-	 * whether to use 'md5' or 'scram-sha-256' authentication based on current
-	 * password_encryption setting.  The idea is that most genuine users
-	 * probably have a password of that type, and if we pretend that this user
-	 * had a password of that type, too, it "blends in" best.
+	 * If the user does not exist, or has no passwords or they're all expired,
+	 * we still go through the motions of authentication, to avoid revealing
+	 * to the client that the user didn't exist.  If 'md5' is allowed, we
+	 * choose whether to use 'md5' or 'scram-sha-256' authentication based on
+	 * current password_encryption setting.  The idea is that most genuine
+	 * users probably have a password of that type, and if we pretend that
+	 * this user had a password of that type, too, it "blends in" best.
 	 */
-	if (!shadow_pass)
+	if (!passwords)
 		pwtype = Password_encryption;
-	else
-		pwtype = get_password_type(shadow_pass);
 
 	/*
 	 * If 'md5' authentication is allowed, decide whether to perform 'md5' or
 	 * 'scram-sha-256' authentication based on the type of password the user
-	 * has.  If it's an MD5 hash, we must do MD5 authentication, and if it's a
-	 * SCRAM secret, we must do SCRAM authentication.
+	 * has.  If there's a SCRAM password available then we'll do SCRAM,
+	 * otherwise we will fall back to trying to use MD5.
 	 *
 	 * If MD5 authentication is not allowed, always use SCRAM.  If the user
 	 * had an MD5 password, CheckSASLAuth() with the SCRAM mechanism will
 	 * fail.
 	 */
-	if (port->hba->auth_method == uaMD5 && pwtype == PASSWORD_TYPE_MD5)
-		auth_result = CheckMD5Auth(port, shadow_pass, logdetail);
+	if (passwords == NULL)
+	{
+		if (port->hba->auth_method == uaMD5 && pwtype == PASSWORD_TYPE_MD5)
+			auth_result = CheckMD5Auth(port, (const char **) NULL, 0, logdetail);
+		else
+			auth_result = CheckSASLAuth(&pg_be_scram_mech, port,
+										(const char **) NULL, 0, logdetail);
+	}
 	else
-		auth_result = CheckSASLAuth(&pg_be_scram_mech, port, shadow_pass,
-									logdetail);
+	{
+		for (i = 0; i < num_passwords; i++)
+		{
+			if (get_password_type(passwords[i]) == PASSWORD_TYPE_SCRAM_SHA_256)
+			{
+				scram_pw_avail = true;
+				break;
+			}
+		}
 
-	if (shadow_pass)
-		pfree(shadow_pass);
+		if (port->hba->auth_method == uaMD5 && !scram_pw_avail)
+			auth_result = CheckMD5Auth(port, (const char **) passwords, num_passwords, logdetail);
+		else
+			auth_result = CheckSASLAuth(&pg_be_scram_mech, port, (const char **) passwords, num_passwords,
+										logdetail);
+
+		for (i = 0; i < num_passwords; i++)
+		{
+			if (passwords[i] != NULL)
+				pfree(passwords[i]);
+			else
+				ereport(DEBUG2,
+						(errmsg("Password %d was null", i)));
+		}
+		pfree(passwords);
+	}
 
 	/*
-	 * If get_role_password() returned error, return error, even if the
+	 * If get_role_passwords() returned error, return error, even if the
 	 * authentication succeeded.
 	 */
-	if (!shadow_pass)
+	if (!passwords)
 	{
 		Assert(auth_result != STATUS_OK);
 		return STATUS_ERROR;
@@ -883,11 +918,12 @@ CheckPWChallengeAuth(Port *port, const char **logdetail)
 }
 
 static int
-CheckMD5Auth(Port *port, char *shadow_pass, const char **logdetail)
+CheckMD5Auth(Port *port, const char **passwords, int num_passwords, const char **logdetail)
 {
 	char		md5Salt[4];		/* Password salt */
 	char	   *passwd;
-	int			result;
+	int			result = STATUS_ERROR;
+	int			i;
 
 	/* include the salt to use for computing the response */
 	if (!pg_strong_random(md5Salt, 4))
@@ -903,12 +939,13 @@ CheckMD5Auth(Port *port, char *shadow_pass, const char **logdetail)
 	if (passwd == NULL)
 		return STATUS_EOF;		/* client wouldn't send password */
 
-	if (shadow_pass)
-		result = md5_crypt_verify(port->user_name, shadow_pass, passwd,
+	for (i = 0; i < num_passwords; i++)
+	{
+		result = md5_crypt_verify(port->user_name, passwords[i], passwd,
 								  md5Salt, 4, logdetail);
-	else
-		result = STATUS_ERROR;
-
+		if (result == STATUS_OK)
+			break;
+	}
 	pfree(passwd);
 
 	return result;

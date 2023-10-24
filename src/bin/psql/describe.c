@@ -3675,7 +3675,7 @@ describeRoles(const char *pattern, bool verbose, bool showSystem)
 	printfPQExpBuffer(&buf,
 					  "SELECT r.rolname, r.rolsuper, r.rolinherit,\n"
 					  "  r.rolcreaterole, r.rolcreatedb, r.rolcanlogin,\n"
-					  "  r.rolconnlimit, r.rolvaliduntil");
+					  "  r.rolconnlimit, r.rolvaliduntil, r.rolsecondvaliduntil");
 
 	if (verbose)
 	{

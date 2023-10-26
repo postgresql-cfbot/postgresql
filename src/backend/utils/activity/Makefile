@@ -18,6 +18,7 @@ override CPPFLAGS := -I. -I$(srcdir) $(CPPFLAGS)
 OBJS = \
 	backend_progress.o \
 	backend_status.o \
+	memtrack.o \
 	pgstat.o \
 	pgstat_archiver.o \
 	pgstat_bgwriter.o \

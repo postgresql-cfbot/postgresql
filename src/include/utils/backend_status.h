@@ -10,11 +10,13 @@
 #ifndef BACKEND_STATUS_H
 #define BACKEND_STATUS_H
 
+#include "postgres.h"
 #include "datatype/timestamp.h"
 #include "libpq/pqcomm.h"
 #include "miscadmin.h"			/* for BackendType */
 #include "storage/backendid.h"
 #include "utils/backend_progress.h"
+#include "utils/memtrack.h"
 
 
 /* ----------
@@ -170,6 +172,10 @@ typedef struct PgBackendStatus
 
 	/* query identifier, optionally computed using post_parse_analyze_hook */
 	uint64		st_query_id;
+
+	/* Memory allocated to this backend, both total and subtotals by type. */
+	PgBackendMemoryStatus st_memory;
+
 } PgBackendStatus;
 
 
@@ -332,6 +338,8 @@ extern uint64 pgstat_get_my_query_id(void);
  * generate the pgstat* views.
  * ----------
  */
+extern LocalPgBackendStatus *pgstat_fetch_stat_local_beentry(int beid);
+extern PgBackendStatus *pgstat_fetch_stat_beentry(int beid);
 extern int	pgstat_fetch_stat_numbackends(void);
 extern PgBackendStatus *pgstat_get_beentry_by_backend_id(BackendId beid);
 extern LocalPgBackendStatus *pgstat_get_local_beentry_by_backend_id(BackendId beid);

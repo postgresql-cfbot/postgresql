@@ -69,6 +69,7 @@
 #include "postgres.h"
 
 #include "lib/ilist.h"
+#include "utils/backend_status.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
 #include "utils/memutils_memorychunk.h"
@@ -359,9 +360,7 @@ SlabContextCreate(MemoryContext parent,
 		elog(ERROR, "block size %zu for slab is too small for %zu-byte chunks",
 			 blockSize, chunkSize);
 
-
-
-	slab = (SlabContext *) malloc(Slab_CONTEXT_HDRSZ(chunksPerBlock));
+	slab = (SlabContext *) malloc_backend(Slab_CONTEXT_HDRSZ(chunksPerBlock), PG_ALLOC_SLAB);
 	if (slab == NULL)
 	{
 		MemoryContextStats(TopMemoryContext);
@@ -433,6 +432,7 @@ SlabReset(MemoryContext context)
 	SlabContext *slab = (SlabContext *) context;
 	dlist_mutable_iter miter;
 	int			i;
+	uint64		deallocation = 0;
 
 	Assert(SlabIsValid(slab));
 
@@ -453,6 +453,7 @@ SlabReset(MemoryContext context)
 #endif
 		free(block);
 		context->mem_allocated -= slab->blockSize;
+		deallocation += slab->blockSize;
 	}
 
 	/* walk over blocklist and free the blocks */
@@ -469,9 +470,11 @@ SlabReset(MemoryContext context)
 #endif
 			free(block);
 			context->mem_allocated -= slab->blockSize;
+			deallocation += slab->blockSize;
 		}
 	}
 
+	release_backend_memory(deallocation, PG_ALLOC_SLAB);
 	slab->curBlocklistIndex = 0;
 
 	Assert(context->mem_allocated == 0);
@@ -486,8 +489,13 @@ SlabDelete(MemoryContext context)
 {
 	/* Reset to release all the SlabBlocks */
 	SlabReset(context);
-	/* And free the context header */
-	free(context);
+
+	/*
+	 * Until context header allocation is included in context->mem_allocated,
+	 * cast to slab and decrement the header allocation
+	 */
+	free_backend(context, Slab_CONTEXT_HDRSZ(((SlabContext *) context)->chunksPerBlock),
+				 PG_ALLOC_SLAB);
 }
 
 /*
@@ -543,8 +551,7 @@ SlabAlloc(MemoryContext context, Size size)
 		}
 		else
 		{
-			block = (SlabBlock *) malloc(slab->blockSize);
-
+			block = (SlabBlock *) malloc_backend(slab->blockSize, PG_ALLOC_SLAB);
 			if (unlikely(block == NULL))
 				return NULL;
 
@@ -742,7 +749,7 @@ SlabFree(void *pointer)
 #ifdef CLOBBER_FREED_MEMORY
 			wipe_mem(block, slab->blockSize);
 #endif
-			free(block);
+			free_backend(block, slab->blockSize, PG_ALLOC_SLAB);
 			slab->header.mem_allocated -= slab->blockSize;
 		}
 

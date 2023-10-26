@@ -37,6 +37,7 @@
 
 #include "lib/ilist.h"
 #include "port/pg_bitutils.h"
+#include "utils/backend_status.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
 #include "utils/memutils_memorychunk.h"
@@ -203,7 +204,7 @@ GenerationContextCreate(MemoryContext parent,
 	 * Allocate the initial block.  Unlike other generation.c blocks, it
 	 * starts with the context header and its block header follows that.
 	 */
-	set = (GenerationContext *) malloc(allocSize);
+	set = (GenerationContext *) malloc_backend(allocSize, PG_ALLOC_GENERATION);
 	if (set == NULL)
 	{
 		MemoryContextStats(TopMemoryContext);
@@ -279,6 +280,7 @@ GenerationReset(MemoryContext context)
 {
 	GenerationContext *set = (GenerationContext *) context;
 	dlist_mutable_iter miter;
+	uint64		deallocation = 0;
 
 	Assert(GenerationIsValid(set));
 
@@ -301,8 +303,13 @@ GenerationReset(MemoryContext context)
 		if (IsKeeperBlock(set, block))
 			GenerationBlockMarkEmpty(block);
 		else
+		{
+			deallocation += block->blksize;
 			GenerationBlockFree(set, block);
+		}
 	}
+
+	release_backend_memory(deallocation, PG_ALLOC_GENERATION);
 
 	/* set it so new allocations to make use of the keeper block */
 	set->block = KeeperBlock(set);
@@ -322,10 +329,12 @@ GenerationReset(MemoryContext context)
 void
 GenerationDelete(MemoryContext context)
 {
+
 	/* Reset to release all releasable GenerationBlocks */
 	GenerationReset(context);
+
 	/* And free the context header and keeper block */
-	free(context);
+	free_backend(context, MAXALIGN(sizeof(GenerationContext)) + context->mem_allocated, PG_ALLOC_GENERATION);
 }
 
 /*
@@ -365,7 +374,7 @@ GenerationAlloc(MemoryContext context, Size size)
 	{
 		Size		blksize = required_size + Generation_BLOCKHDRSZ;
 
-		block = (GenerationBlock *) malloc(blksize);
+		block = (GenerationBlock *) malloc_backend(blksize, PG_ALLOC_GENERATION);
 		if (block == NULL)
 			return NULL;
 
@@ -467,8 +476,7 @@ GenerationAlloc(MemoryContext context, Size size)
 			if (blksize < required_size)
 				blksize = pg_nextpower2_size_t(required_size);
 
-			block = (GenerationBlock *) malloc(blksize);
-
+			block = (GenerationBlock *) malloc_backend(blksize, PG_ALLOC_GENERATION);
 			if (block == NULL)
 				return NULL;
 
@@ -723,9 +731,8 @@ GenerationFree(void *pointer)
 	 * list of blocks, then return it to malloc().
 	 */
 	dlist_delete(&block->node);
-
 	set->header.mem_allocated -= block->blksize;
-	free(block);
+	free_backend(block, block->blksize, PG_ALLOC_GENERATION);
 }
 
 /*

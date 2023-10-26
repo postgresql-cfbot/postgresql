@@ -1,0 +1,31 @@
+CREATE EXTENSION test_memtrack;
+
+-- Make sure we can track memory usage of a single task
+-- Since logic is the same for all memory managers, only test one.
+SELECT test_memtrack(1, 1, 0, 1024);
+
+-- Make sure we can track memory usage of multiple tasks.
+--  By default we are limited to 8 tasks, so stay below the limit.
+SELECT test_memtrack(5, 2, 1024, 5*1024);
+
+-- Do it again. We had a bug where the second call would fail.
+SELECT test_memtrack(5, 3, 1024, 5*1024);
+
+-- Now we're going to actualy do memory allocations.
+-- We'll test each type of memory manager, except DSM.
+
+-- Verify we can create and destroy contexts.
+SELECT test_allocation(1,1,0,1024);
+SELECT test_allocation(1,2,0, 1024);
+SELECT test_allocation(1,3, 0,1024);
+SELECT test_allocation(1,4,0,1024);
+
+-- Create and free blocks of memory.
+SELECT test_allocation(5,1,5*1024,1024);
+SELECT test_allocation(5,2,5,1024*1024);  /* Fewer, don't exceed shmem limit */
+SELECT test_allocation(5,3,5*1024,1024);
+SELECT test_allocation(5,4,5*1024,1024);
+
+-- Allocate more memory than we have available.
+-- (this should fail because we configured max_backend_memory to 1024 Mb)
+SELECT test_memtrack(5, 2, 1024, 1024*1024*1024);

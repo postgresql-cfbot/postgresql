@@ -43,6 +43,20 @@ static Size BogusGetChunkSpace(void *pointer);
  *****************************************************************************/
 
 static const MemoryContextMethods mcxt_methods[] = {
+	/* bump.c */
+	[MCTX_BUMP_ID].alloc = BumpAlloc,
+	[MCTX_BUMP_ID].free_p = BumpFree,
+	[MCTX_BUMP_ID].realloc = BumpRealloc,
+	[MCTX_BUMP_ID].reset = BumpReset,
+	[MCTX_BUMP_ID].delete_context = BumpDelete,
+	[MCTX_BUMP_ID].get_chunk_context = BumpGetChunkContext,
+	[MCTX_BUMP_ID].get_chunk_space = BumpGetChunkSpace,
+	[MCTX_BUMP_ID].is_empty = BumpIsEmpty,
+	[MCTX_BUMP_ID].stats = BumpStats,
+#ifdef MEMORY_CONTEXT_CHECKING
+	[MCTX_BUMP_ID].check = BumpCheck,
+#endif
+
 	/* aset.c */
 	[MCTX_ASET_ID].alloc = AllocSetAlloc,
 	[MCTX_ASET_ID].free_p = AllocSetFree,
@@ -121,11 +135,6 @@ static const MemoryContextMethods mcxt_methods[] = {
 	[MCTX_UNUSED3_ID].realloc = BogusRealloc,
 	[MCTX_UNUSED3_ID].get_chunk_context = BogusGetChunkContext,
 	[MCTX_UNUSED3_ID].get_chunk_space = BogusGetChunkSpace,
-
-	[MCTX_UNUSED4_ID].free_p = BogusFree,
-	[MCTX_UNUSED4_ID].realloc = BogusRealloc,
-	[MCTX_UNUSED4_ID].get_chunk_context = BogusGetChunkContext,
-	[MCTX_UNUSED4_ID].get_chunk_space = BogusGetChunkSpace,
 };
 
 /*

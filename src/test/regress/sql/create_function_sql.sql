@@ -61,6 +61,50 @@ SELECT proname, provolatile FROM pg_proc
 		     'functest_B_4'::regproc) ORDER BY proname;
 
 --
+-- SEARCH FROM DEFAULT | TRUSTED | SESSION
+--
+
+CREATE FUNCTION f_show_search_path() RETURNS TEXT
+  LANGUAGE plpgsql AS
+$$
+  BEGIN
+    RETURN current_setting('search_path');
+  END;
+$$;
+
+CREATE PROCEDURE p_show_search_path()
+  LANGUAGE plpgsql AS
+$$
+  BEGIN
+    RAISE NOTICE 'search_path: %', current_setting('search_path');
+  END;
+$$;
+
+SELECT f_show_search_path();
+CALL p_show_search_path();
+
+ALTER FUNCTION f_show_search_path() SEARCH FROM TRUSTED;
+SELECT f_show_search_path();
+ALTER FUNCTION f_show_search_path() SEARCH FROM DEFAULT;
+SELECT f_show_search_path();
+ALTER FUNCTION f_show_search_path() SEARCH FROM SESSION;
+SELECT f_show_search_path();
+
+ALTER FUNCTION f_show_search_path() IMMUTABLE; -- fail
+ALTER FUNCTION f_show_search_path() SEARCH FROM DEFAULT;
+ALTER FUNCTION f_show_search_path() IMMUTABLE;
+ALTER FUNCTION f_show_search_path() SEARCH FROM SESSION; -- fail
+ALTER FUNCTION f_show_search_path() VOLATILE;
+
+ALTER ROUTINE p_show_search_path() SEARCH FROM TRUSTED SET search_path = test1;
+CALL p_show_search_path();
+ALTER ROUTINE f_show_search_path() SEARCH FROM SESSION SET search_path = test1;
+SELECT f_show_search_path();
+
+DROP FUNCTION f_show_search_path();
+DROP PROCEDURE p_show_search_path();
+
+--
 -- SECURITY DEFINER | INVOKER
 --
 CREATE FUNCTION functest_C_1(int) RETURNS bool LANGUAGE 'sql'

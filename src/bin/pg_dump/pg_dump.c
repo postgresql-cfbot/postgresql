@@ -12010,6 +12010,7 @@ dumpFunc(Archive *fout, const FuncInfo *finfo)
 	char	   *prokind;
 	char	   *provolatile;
 	char	   *proisstrict;
+	char	   *prosearch;
 	char	   *prosecdef;
 	char	   *proleakproof;
 	char	   *proconfig;
@@ -12084,10 +12085,17 @@ dumpFunc(Archive *fout, const FuncInfo *finfo)
 
 		if (fout->remoteVersion >= 140000)
 			appendPQExpBufferStr(query,
-								 "pg_get_function_sqlbody(p.oid) AS prosqlbody\n");
+								 "pg_get_function_sqlbody(p.oid) AS prosqlbody,\n");
 		else
 			appendPQExpBufferStr(query,
-								 "NULL AS prosqlbody\n");
+								 "NULL AS prosqlbody,\n");
+
+		if (fout->remoteVersion >= 170000)
+			appendPQExpBufferStr(query,
+								 "prosearch\n");
+		else
+			appendPQExpBufferStr(query,
+								 "NULL AS prosearch\n");
 
 		appendPQExpBufferStr(query,
 							 "FROM pg_catalog.pg_proc p, pg_catalog.pg_language l\n"
@@ -12125,6 +12133,7 @@ dumpFunc(Archive *fout, const FuncInfo *finfo)
 	prokind = PQgetvalue(res, 0, PQfnumber(res, "prokind"));
 	provolatile = PQgetvalue(res, 0, PQfnumber(res, "provolatile"));
 	proisstrict = PQgetvalue(res, 0, PQfnumber(res, "proisstrict"));
+	prosearch = PQgetvalue(res, 0, PQfnumber(res, "prosearch"));
 	prosecdef = PQgetvalue(res, 0, PQfnumber(res, "prosecdef"));
 	proleakproof = PQgetvalue(res, 0, PQfnumber(res, "proleakproof"));
 	proconfig = PQgetvalue(res, 0, PQfnumber(res, "proconfig"));
@@ -12249,6 +12258,11 @@ dumpFunc(Archive *fout, const FuncInfo *finfo)
 
 	if (proisstrict[0] == 't')
 		appendPQExpBufferStr(q, " STRICT");
+
+	if (prosearch[0] == 't')
+		appendPQExpBufferStr(q, " SEARCH FROM TRUSTED");
+	else if (prosearch[0] == 's')
+		appendPQExpBufferStr(q, " SEARCH FROM SESSION");
 
 	if (prosecdef[0] == 't')
 		appendPQExpBufferStr(q, " SECURITY DEFINER");

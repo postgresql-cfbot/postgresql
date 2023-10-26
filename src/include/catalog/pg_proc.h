@@ -59,6 +59,9 @@ CATALOG(pg_proc,1255,ProcedureRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(81,Proce
 	char		prokind BKI_DEFAULT(f);
 
 	/* security definer */
+	char		prosearch BKI_DEFAULT(d);
+
+	/* security definer */
 	bool		prosecdef BKI_DEFAULT(f);
 
 	/* is it a leak-proof function? */
@@ -151,6 +154,15 @@ DECLARE_UNIQUE_INDEX(pg_proc_proname_args_nsp_index, 2691, ProcedureNameArgsNspI
 #define PROKIND_PROCEDURE 'p'
 
 /*
+ * Symbolic values for prosearch column: these determine how search_path is
+ * initialized when executing the function. PROSEARCH_DEFAULT means that no
+ * SEARCH clause was specified.
+ */
+#define PROSEARCH_DEFAULT		'd'
+#define PROSEARCH_TRUSTED		't'
+#define PROSEARCH_SESSION		's'
+
+/*
  * Symbolic values for provolatile column: these indicate whether the result
  * of a function is dependent *only* on the values of its explicit arguments,
  * or can change due to outside factors (such as parameter variables or
@@ -197,6 +209,7 @@ extern ObjectAddress ProcedureCreate(const char *procedureName,
 									 const char *probin,
 									 Node *prosqlbody,
 									 char prokind,
+									 char prosearch,
 									 bool security_definer,
 									 bool isLeakProof,
 									 bool isStrict,

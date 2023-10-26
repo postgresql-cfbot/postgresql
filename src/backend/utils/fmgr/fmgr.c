@@ -16,6 +16,7 @@
 #include "postgres.h"
 
 #include "access/detoast.h"
+#include "catalog/namespace.h"
 #include "catalog/pg_language.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
@@ -203,6 +204,7 @@ fmgr_info_cxt_security(Oid functionId, FmgrInfo *finfo, MemoryContext mcxt,
 	 */
 	if (!ignore_security &&
 		(procedureStruct->prosecdef ||
+		 procedureStruct->prosearch == PROSEARCH_TRUSTED ||
 		 !heap_attisnull(procedureTuple, Anum_pg_proc_proconfig, NULL) ||
 		 FmgrHookIsNeeded(functionId)))
 	{
@@ -612,6 +614,7 @@ struct fmgr_security_definer_cache
 {
 	FmgrInfo	flinfo;			/* lookup info for target function */
 	Oid			userid;			/* userid to set, or InvalidOid */
+	char	   *searchPath;		/* from SEARCH clause, if specified */
 	List	   *configNames;	/* GUC names to set, or NIL */
 	List	   *configValues;	/* GUC values to set, or NIL */
 	Datum		arg;			/* passthrough argument for plugin modules */
@@ -630,6 +633,9 @@ struct fmgr_security_definer_cache
 extern Datum
 fmgr_security_definer(PG_FUNCTION_ARGS)
 {
+	GucContext	context = superuser() ? PGC_SUSET : PGC_USERSET;
+	GucSource	source = PGC_S_SESSION;
+	GucAction	action = GUC_ACTION_SAVE;
 	Datum		result;
 	struct fmgr_security_definer_cache *volatile fcache;
 	FmgrInfo   *save_flinfo;
@@ -662,6 +668,9 @@ fmgr_security_definer(PG_FUNCTION_ARGS)
 				 fcinfo->flinfo->fn_oid);
 		procedureStruct = (Form_pg_proc) GETSTRUCT(tuple);
 
+		if (procedureStruct->prosearch == PROSEARCH_TRUSTED)
+			fcache->searchPath = NAMESPACE_TRUSTED_SEARCH_PATH;
+
 		if (procedureStruct->prosecdef)
 			fcache->userid = procedureStruct->proowner;
 
@@ -687,20 +696,22 @@ fmgr_security_definer(PG_FUNCTION_ARGS)
 
 	/* GetUserIdAndSecContext is cheap enough that no harm in a wasted call */
 	GetUserIdAndSecContext(&save_userid, &save_sec_context);
-	if (fcache->configNames != NIL) /* Need a new GUC nesting level */
+	if (fcache->searchPath != NULL || fcache->configNames != NIL) /* Need a new GUC nesting level */
 		save_nestlevel = NewGUCNestLevel();
 	else
-		save_nestlevel = 0;		/* keep compiler quiet */
+		save_nestlevel = 0;
 
 	if (OidIsValid(fcache->userid))
 		SetUserIdAndSecContext(fcache->userid,
 							   save_sec_context | SECURITY_LOCAL_USERID_CHANGE);
 
+	if (fcache->searchPath != NULL)
+		(void) set_config_option("search_path", fcache->searchPath,
+								 context, source,
+								 action, true, 0, false);
+
 	forboth(lc1, fcache->configNames, lc2, fcache->configValues)
 	{
-		GucContext	context = superuser() ? PGC_SUSET : PGC_USERSET;
-		GucSource	source = PGC_S_SESSION;
-		GucAction	action = GUC_ACTION_SAVE;
 		char	   *name = lfirst(lc1);
 		char	   *value = lfirst(lc2);
 
@@ -749,7 +760,7 @@ fmgr_security_definer(PG_FUNCTION_ARGS)
 
 	fcinfo->flinfo = save_flinfo;
 
-	if (fcache->configNames != NIL)
+	if (save_nestlevel > 0)
 		AtEOXact_GUC(true, save_nestlevel);
 	if (OidIsValid(fcache->userid))
 		SetUserIdAndSecContext(save_userid, save_sec_context);

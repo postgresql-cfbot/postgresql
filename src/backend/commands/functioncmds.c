@@ -507,6 +507,7 @@ compute_common_attribute(ParseState *pstate,
 						 DefElem *defel,
 						 DefElem **volatility_item,
 						 DefElem **strict_item,
+						 DefElem **search_item,
 						 DefElem **security_item,
 						 DefElem **leakproof_item,
 						 List **set_items,
@@ -532,6 +533,13 @@ compute_common_attribute(ParseState *pstate,
 			errorConflictingDefElem(defel, pstate);
 
 		*strict_item = defel;
+	}
+	else if (strcmp(defel->defname, "search") == 0)
+	{
+		if (*search_item)
+			errorConflictingDefElem(defel, pstate);
+
+		*search_item = defel;
 	}
 	else if (strcmp(defel->defname, "security") == 0)
 	{
@@ -601,6 +609,24 @@ procedure_error:
 			 errmsg("invalid attribute in procedure definition"),
 			 parser_errposition(pstate, defel->location)));
 	return false;
+}
+
+static char
+interpret_func_search(DefElem *defel)
+{
+	char	   *str = strVal(defel->arg);
+
+	if (strcmp(str, "default") == 0)
+		return PROSEARCH_DEFAULT;
+	else if (strcmp(str, "trusted") == 0)
+		return PROSEARCH_TRUSTED;
+	else if (strcmp(str, "session") == 0)
+		return PROSEARCH_SESSION;
+	else
+	{
+		elog(ERROR, "invalid search \"%s\"", str);
+		return 0;				/* keep compiler quiet */
+	}
 }
 
 static char
@@ -725,6 +751,7 @@ compute_function_attributes(ParseState *pstate,
 							bool *windowfunc_p,
 							char *volatility_p,
 							bool *strict_p,
+							char *search_p,
 							bool *security_definer,
 							bool *leakproof_p,
 							ArrayType **proconfig,
@@ -740,6 +767,7 @@ compute_function_attributes(ParseState *pstate,
 	DefElem    *windowfunc_item = NULL;
 	DefElem    *volatility_item = NULL;
 	DefElem    *strict_item = NULL;
+	DefElem    *search_item = NULL;
 	DefElem    *security_item = NULL;
 	DefElem    *leakproof_item = NULL;
 	List	   *set_items = NIL;
@@ -786,6 +814,7 @@ compute_function_attributes(ParseState *pstate,
 										  defel,
 										  &volatility_item,
 										  &strict_item,
+										  &search_item,
 										  &security_item,
 										  &leakproof_item,
 										  &set_items,
@@ -814,6 +843,8 @@ compute_function_attributes(ParseState *pstate,
 		*volatility_p = interpret_func_volatility(volatility_item);
 	if (strict_item)
 		*strict_p = boolVal(strict_item->arg);
+	if (search_item)
+		*search_p = interpret_func_search(search_item);
 	if (security_item)
 		*security_definer = boolVal(security_item->arg);
 	if (leakproof_item)
@@ -1042,7 +1073,8 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 				isStrict,
 				security,
 				isLeakProof;
-	char		volatility;
+	char		prosearch,
+				volatility;
 	ArrayType  *proconfig;
 	float4		procost;
 	float4		prorows;
@@ -1067,6 +1099,7 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 	language = NULL;
 	isWindowFunc = false;
 	isStrict = false;
+	prosearch = PROSEARCH_DEFAULT;
 	security = false;
 	isLeakProof = false;
 	volatility = PROVOLATILE_VOLATILE;
@@ -1082,9 +1115,15 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 								stmt->options,
 								&as_clause, &language, &transformDefElem,
 								&isWindowFunc, &volatility,
-								&isStrict, &security, &isLeakProof,
-								&proconfig, &procost, &prorows,
+								&isStrict, &prosearch, &security,
+								&isLeakProof, &proconfig, &procost, &prorows,
 								&prosupport, &parallel);
+
+	if (volatility == PROVOLATILE_IMMUTABLE && prosearch == PROSEARCH_SESSION)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("immutable functions cannot be specified with SEARCH FROM SESSION"),
+				 errhint("Specify SEARCH FROM TRUSTED instead.")));
 
 	if (!language)
 	{
@@ -1271,6 +1310,7 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 						   probin_str,	/* converted to text later */
 						   prosqlbody,
 						   stmt->is_procedure ? PROKIND_PROCEDURE : (isWindowFunc ? PROKIND_WINDOW : PROKIND_FUNCTION),
+						   prosearch,
 						   security,
 						   isLeakProof,
 						   isStrict,
@@ -1355,6 +1395,7 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 	ListCell   *l;
 	DefElem    *volatility_item = NULL;
 	DefElem    *strict_item = NULL;
+	DefElem    *search_item = NULL;
 	DefElem    *security_def_item = NULL;
 	DefElem    *leakproof_item = NULL;
 	List	   *set_items = NIL;
@@ -1399,6 +1440,7 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 									 defel,
 									 &volatility_item,
 									 &strict_item,
+									 &search_item,
 									 &security_def_item,
 									 &leakproof_item,
 									 &set_items,
@@ -1413,8 +1455,16 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 		procForm->provolatile = interpret_func_volatility(volatility_item);
 	if (strict_item)
 		procForm->proisstrict = boolVal(strict_item->arg);
+	if (search_item)
+		procForm->prosearch = interpret_func_search(search_item);
 	if (security_def_item)
 		procForm->prosecdef = boolVal(security_def_item->arg);
+	if (procForm->provolatile == PROVOLATILE_IMMUTABLE &&
+		procForm->prosearch == PROSEARCH_SESSION)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("immutable functions cannot be specified with SEARCH FROM SESSION"),
+				 errhint("Specify SEARCH FROM TRUSTED instead.")));
 	if (leakproof_item)
 	{
 		procForm->proleakproof = boolVal(leakproof_item->arg);

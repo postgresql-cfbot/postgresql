@@ -301,7 +301,10 @@ describeFunctions(const char *functypes, const char *func_pattern,
 	PQExpBufferData buf;
 	PGresult   *res;
 	printQueryOpt myopt = pset.popt;
-	static const bool translate_columns[] = {false, false, false, false, true, true, true, false, true, false, false, false, false};
+	static const bool translate_columns[] = {false, false, false, false, true, true, true, true, false, true, false, false, false, false};
+
+	/* No "Search" column before 17 */
+	static const bool translate_columns_pre_17[] = {false, false, false, false, true, true, true, false, true, false, false, false, false};
 
 	/* No "Parallel" column before 9.6 */
 	static const bool translate_columns_pre_96[] = {false, false, false, false, true, true, false, true, false, false, false, false};
@@ -377,6 +380,17 @@ describeFunctions(const char *functypes, const char *func_pattern,
 
 	if (verbose)
 	{
+		if (pset.sversion >= 170000)
+			appendPQExpBuffer(&buf,
+							  ",\n CASE\n"
+							  "  WHEN p.prosearch = 'd' THEN '%s'\n"
+							  "  WHEN p.prosearch = 't' THEN '%s'\n"
+							  "  WHEN p.prosearch = 's' THEN '%s'\n"
+							  " END as \"%s\"",
+							  gettext_noop("default"),
+							  gettext_noop("trusted"),
+							  gettext_noop("session"),
+							  gettext_noop("Search"));
 		appendPQExpBuffer(&buf,
 						  ",\n CASE\n"
 						  "  WHEN p.provolatile = 'i' THEN '%s'\n"
@@ -588,10 +602,15 @@ describeFunctions(const char *functypes, const char *func_pattern,
 	myopt.nullPrint = NULL;
 	myopt.title = _("List of functions");
 	myopt.translate_header = true;
-	if (pset.sversion >= 90600)
+	if (pset.sversion >= 170000)
 	{
 		myopt.translate_columns = translate_columns;
 		myopt.n_translate_columns = lengthof(translate_columns);
+	}
+	else if (pset.sversion >= 90600)
+	{
+		myopt.translate_columns = translate_columns_pre_17;
+		myopt.n_translate_columns = lengthof(translate_columns_pre_17);
 	}
 	else
 	{

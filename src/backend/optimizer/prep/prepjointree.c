@@ -153,6 +153,9 @@ transform_MERGE_to_join(Query *parse)
 {
 	RangeTblEntry *joinrte;
 	JoinExpr   *joinexpr;
+	ListCell   *lc;
+	bool		src_only_tuples;
+	bool		tgt_only_tuples;
 	JoinType	jointype;
 	int			joinrti;
 	List	   *vars;
@@ -164,12 +167,32 @@ transform_MERGE_to_join(Query *parse)
 	vars = NIL;
 
 	/*
-	 * When any WHEN NOT MATCHED THEN INSERT clauses exist, we need to use an
-	 * outer join so that we process all unmatched tuples from the source
-	 * relation.  If none exist, we can use an inner join.
+	 * Work out what kind of join is required.  If there any WHEN NOT MATCHED
+	 * BY SOURCE/TARGET actions, an outer join is required so that we process
+	 * all unmatched tuples from the source and/or target relations.
+	 * Otherwise, we can use an inner join.
 	 */
-	if (parse->mergeUseOuterJoin)
+	src_only_tuples = false;
+	tgt_only_tuples = false;
+	foreach(lc, parse->mergeActionList)
+	{
+		MergeAction *action = lfirst_node(MergeAction, lc);
+
+		if (action->commandType != CMD_NOTHING)
+		{
+			if (action->matchKind == MERGE_WHEN_NOT_MATCHED_BY_SOURCE)
+				tgt_only_tuples = true;
+			if (action->matchKind == MERGE_WHEN_NOT_MATCHED_BY_TARGET)
+				src_only_tuples = true;
+		}
+	}
+
+	if (src_only_tuples && tgt_only_tuples)
+		jointype = JOIN_FULL;
+	else if (src_only_tuples)
 		jointype = JOIN_RIGHT;
+	else if (tgt_only_tuples)
+		jointype = JOIN_LEFT;
 	else
 		jointype = JOIN_INNER;
 
@@ -215,6 +238,51 @@ transform_MERGE_to_join(Query *parse)
 	/* Make the new join be the sole entry in the query's jointree */
 	parse->jointree->fromlist = list_make1(joinexpr);
 	parse->jointree->quals = NULL;
+
+	/*
+	 * If there any WHEN NOT MATCHED BY SOURCE actions that require unmatched
+	 * tuples from the target relation to be processed, add additional WHEN
+	 * conditions to every action to check whether tuples from the source
+	 * match or not, as necessary.
+	 *
+	 * This distinguishes WHEN NOT MATCHED BY SOURCE actions (identified by a
+	 * "source IS NOT DISTINCT FROM NULL" clause) from WHEN MATCHED actions
+	 * (identified by a "source IS DISTINCT FROM NULL" clause).
+	 *
+	 * Additionally, a "source IS DISTINCT FROM NULL" clause is required for
+	 * WHEN NOT MATCHED [BY TARGET] actions in case the executor attempts to
+	 * invoke such an action for a concurrently deleted target row that ends
+	 * up matching neither source nor target.
+	 */
+	if (tgt_only_tuples)
+	{
+		foreach(lc, parse->mergeActionList)
+		{
+			MergeAction *action = lfirst_node(MergeAction, lc);
+			bool		src_null;
+			Var		   *var;
+			NullTest   *ntest;
+
+			/* Make a "source IS [NOT] DISTINCT FROM NULL" clause */
+			src_null = action->matchKind == MERGE_WHEN_NOT_MATCHED_BY_SOURCE;
+
+			var = makeWholeRowVar(rt_fetch(parse->mergeSourceRelation,
+										   parse->rtable),
+								  parse->mergeSourceRelation, 0, false);
+
+			/* source wholerow Var is nullable by the new join */
+			var->varnullingrels = bms_make_singleton(joinrti);
+
+			ntest = makeNode(NullTest);
+			ntest->arg = (Expr *) var;
+			ntest->nulltesttype = src_null ? IS_NULL : IS_NOT_NULL;
+			ntest->argisrow = false;
+			ntest->location = -1;
+
+			/* Combine it with the action's WHEN condition */
+			action->qual = make_and_qual((Node *) ntest, action->qual);
+		}
+	}
 }
 
 /*

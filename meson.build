@@ -1983,17 +1983,16 @@ endif
 ###############################################################
 # Select CRC-32C implementation.
 #
-# If we are targeting a processor that has Intel SSE 4.2 instructions, we can
-# use the special CRC instructions for calculating CRC-32C. If we're not
-# targeting such a processor, but we can nevertheless produce code that uses
-# the SSE intrinsics, perhaps with some extra CFLAGS, compile both
+# If we are targeting a processor that has Intel SSE 4.2 instructions, or we're
+# not targeting such a processor, but we can nevertheless produce code that
+# uses the SSE intrinsics, perhaps with some extra CFLAGS, compile both
 # implementations and select which one to use at runtime, depending on whether
 # SSE 4.2 is supported by the processor we're running on.
 #
 # Similarly, if we are targeting an ARM processor that has the CRC
-# instructions that are part of the ARMv8 CRC Extension, use them. And if
-# we're not targeting such a processor, but can nevertheless produce code that
-# uses the CRC instructions, compile both, and select at runtime.
+# instructions that are part of the ARMv8 CRC Extension, or if we're not
+# targeting such a processor, but can nevertheless produce code that uses the
+# CRC instructions, compile both, and select at runtime.
 ###############################################################
 
 have_optimized_crc = false
@@ -2001,7 +2000,6 @@ cflags_crc = []
 if host_cpu == 'x86' or host_cpu == 'x86_64'
 
   if cc.get_id() == 'msvc'
-    cdata.set('USE_SSE42_CRC32C', false)
     cdata.set('USE_SSE42_CRC32C_WITH_RUNTIME_CHECK', 1)
     have_optimized_crc = true
   else
@@ -2020,16 +2018,12 @@ int main(void)
 '''
 
     if cc.links(prog, name: '_mm_crc32_u8 and _mm_crc32_u32 without -msse4.2',
-          args: test_c_args)
-      # Use Intel SSE 4.2 unconditionally.
-      cdata.set('USE_SSE42_CRC32C', 1)
-      have_optimized_crc = true
-    elif cc.links(prog, name: '_mm_crc32_u8 and _mm_crc32_u32 with -msse4.2',
+          args: test_c_args) or \
+       cc.links(prog, name: '_mm_crc32_u8 and _mm_crc32_u32 with -msse4.2',
           args: test_c_args + ['-msse4.2'])
       # Use Intel SSE 4.2, with runtime check. The CPUID instruction is needed for
       # the runtime check.
       cflags_crc += '-msse4.2'
-      cdata.set('USE_SSE42_CRC32C', false)
       cdata.set('USE_SSE42_CRC32C_WITH_RUNTIME_CHECK', 1)
       have_optimized_crc = true
     endif
@@ -2055,15 +2049,10 @@ int main(void)
 '''
 
   if cc.links(prog, name: '__crc32cb, __crc32ch, __crc32cw, and __crc32cd without -march=armv8-a+crc',
-      args: test_c_args)
-    # Use ARM CRC Extension unconditionally
-    cdata.set('USE_ARMV8_CRC32C', 1)
-    have_optimized_crc = true
-  elif cc.links(prog, name: '__crc32cb, __crc32ch, __crc32cw, and __crc32cd with -march=armv8-a+crc',
+      args: test_c_args) or \
+     cc.links(prog, name: '__crc32cb, __crc32ch, __crc32cw, and __crc32cd with -march=armv8-a+crc',
       args: test_c_args + ['-march=armv8-a+crc'])
     # Use ARM CRC Extension, with runtime check
-    cflags_crc += '-march=armv8-a+crc'
-    cdata.set('USE_ARMV8_CRC32C', false)
     cdata.set('USE_ARMV8_CRC32C_WITH_RUNTIME_CHECK', 1)
     have_optimized_crc = true
   endif

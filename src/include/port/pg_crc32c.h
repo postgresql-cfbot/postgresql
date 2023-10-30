@@ -41,24 +41,7 @@ typedef uint32 pg_crc32c;
 #define INIT_CRC32C(crc) ((crc) = 0xFFFFFFFF)
 #define EQ_CRC32C(c1, c2) ((c1) == (c2))
 
-#if defined(USE_SSE42_CRC32C)
-/* Use Intel SSE4.2 instructions. */
-#define COMP_CRC32C(crc, data, len) \
-	((crc) = pg_comp_crc32c_sse42((crc), (data), (len)))
-#define FIN_CRC32C(crc) ((crc) ^= 0xFFFFFFFF)
-
-extern pg_crc32c pg_comp_crc32c_sse42(pg_crc32c crc, const void *data, size_t len);
-
-#elif defined(USE_ARMV8_CRC32C)
-/* Use ARMv8 CRC Extension instructions. */
-
-#define COMP_CRC32C(crc, data, len)							\
-	((crc) = pg_comp_crc32c_armv8((crc), (data), (len)))
-#define FIN_CRC32C(crc) ((crc) ^= 0xFFFFFFFF)
-
-extern pg_crc32c pg_comp_crc32c_armv8(pg_crc32c crc, const void *data, size_t len);
-
-#elif defined(USE_LOONGARCH_CRC32C)
+#if defined(USE_LOONGARCH_CRC32C)
 /* Use LoongArch CRCC instructions. */
 
 #define COMP_CRC32C(crc, data, len)							\

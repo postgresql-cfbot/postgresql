@@ -30,10 +30,15 @@
 
 #include "port/pg_crc32c.h"
 
+#ifndef FRONTEND
+#include "utils/elog.h"
+#endif
+
 static bool
 pg_crc32c_sse42_available(void)
 {
 	unsigned int exx[4] = {0, 0, 0, 0};
+	bool		result;
 
 #if defined(HAVE__GET_CPUID)
 	__get_cpuid(1, &exx[0], &exx[1], &exx[2], &exx[3]);
@@ -43,7 +48,13 @@ pg_crc32c_sse42_available(void)
 #error cpuid instruction not available
 #endif
 
-	return (exx[2] & (1 << 20)) != 0;	/* SSE 4.2 */
+	result = ((exx[2] & (1 << 20)) != 0);	/* SSE 4.2 */
+
+#ifndef FRONTEND
+	elog(DEBUG1, "using sse42 crc32 hardware = %d", result);
+#endif
+
+	return result;
 }
 
 /*

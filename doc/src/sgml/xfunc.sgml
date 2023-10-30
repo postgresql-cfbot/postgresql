@@ -3424,9 +3424,18 @@ void RequestNamedLWLockTranche(const char *tranche_name, int num_lwlocks)
      to get a pointer to this array.
     </para>
     <para>
-     An example of a <literal>shmem_request_hook</literal> can be found in
-     <filename>contrib/pg_stat_statements/pg_stat_statements.c</filename> in the
-     <productname>PostgreSQL</productname> source tree.
+     When necessary, an unique tranche ID can be allocated:
+<programlisting>
+int LWLockNewTrancheId(void)
+</programlisting>
+     Also a dynamic name in the lookup table of the current process can be assigned to the tranche:
+<programlisting>
+void LWLockRegisterTranche(int tranche_id, const char *tranche_name)
+</programlisting>
+    A complete usage example of <function>LWLockNewTrancheId</function> and
+    <function>LWLockRegisterTranche</function> can be found in
+    <filename>contrib/pg_prewarm/autoprewarm.c</filename> in the
+    <productname>PostgreSQL</productname> source tree.
     </para>
     <para>
      To avoid possible race-conditions, each backend should use the LWLock
@@ -3450,6 +3459,18 @@ if (!ptr)
         LWLockRelease(AddinShmemInitLock);
 }
 </programlisting>
+    </para>
+    <para>
+    It is convenient to use <literal>shmem_startup_hook</literal> which allows
+    placing all the code responsible for initializing shared memory in one place.
+    When using <literal>shmem_startup_hook</literal> the extension still needs
+    to acquire <function>AddinShmemInitLock</function> in order to work properly
+    on all the supported platforms.
+    </para>
+    <para>
+     A complete example of allocating shared memory and LWLocks can be found in
+     <filename>contrib/pg_stat_statements/pg_stat_statements.c</filename> in the
+     <productname>PostgreSQL</productname> source tree.
     </para>
    </sect2>
 

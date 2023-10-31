@@ -33,6 +33,9 @@
 
 int			WalSegSz;
 
+static bool CreateReplicationSlot_internal(PGconn *conn, const char *slot_name, const char *plugin,
+					  bool is_temporary, bool is_physical, bool reserve_wal,
+					  bool slot_exists_ok, bool two_phase, char *lsn);
 static bool RetrieveDataDirCreatePerm(PGconn *conn);
 
 /* SHOW command for replication connection was introduced in version 10 */
@@ -584,6 +587,26 @@ CreateReplicationSlot(PGconn *conn, const char *slot_name, const char *plugin,
 					  bool is_temporary, bool is_physical, bool reserve_wal,
 					  bool slot_exists_ok, bool two_phase)
 {
+	return CreateReplicationSlot_internal(conn, slot_name, plugin,
+					  is_temporary, is_physical, reserve_wal,
+					  slot_exists_ok, two_phase, NULL);
+}
+
+bool
+CreateReplicationSlotLSN(PGconn *conn, const char *slot_name, const char *plugin,
+					  bool is_temporary, bool is_physical, bool reserve_wal,
+					  bool slot_exists_ok, bool two_phase, char *lsn)
+{
+	return CreateReplicationSlot_internal(conn, slot_name, plugin,
+					  is_temporary, is_physical, reserve_wal,
+					  slot_exists_ok, two_phase, lsn);
+}
+
+static bool
+CreateReplicationSlot_internal(PGconn *conn, const char *slot_name, const char *plugin,
+					  bool is_temporary, bool is_physical, bool reserve_wal,
+					  bool slot_exists_ok, bool two_phase, char *lsn)
+{
 	PQExpBuffer query;
 	PGresult   *res;
 	bool		use_new_option_syntax = (PQserverVersion(conn) >= 150000);
@@ -654,6 +677,30 @@ CreateReplicationSlot(PGconn *conn, const char *slot_name, const char *plugin,
 		{
 			destroyPQExpBuffer(query);
 			PQclear(res);
+
+			/* Duplicate replication slot. Obtain the current LSN. */
+			if (lsn)
+			{
+				query = createPQExpBuffer();
+				appendPQExpBuffer(query, "SELECT restart_lsn FROM pg_catalog.pg_replication_slots WHERE slot_name = '%s'", slot_name);
+				res = PQexec(conn, query->data);
+				if (PQresultStatus(res) != PGRES_TUPLES_OK)
+				{
+					pg_log_error("could not read replication slot \"%s\": got %d rows, expected %d rows", slot_name, PQntuples(res), 1);
+					return false;	/* FIXME can't happen */
+				}
+				else if (PQgetisnull(res, 0, 0))
+				{
+					lsn = NULL;
+				}
+				else
+				{
+					lsn = pg_strdup(PQgetvalue(res, 0, 0));
+				}
+				destroyPQExpBuffer(query);
+				PQclear(res);
+			}
+
 			return true;
 		}
 		else
@@ -676,6 +723,14 @@ CreateReplicationSlot(PGconn *conn, const char *slot_name, const char *plugin,
 		destroyPQExpBuffer(query);
 		PQclear(res);
 		return false;
+	}
+
+	if (lsn)
+	{
+		if (PQgetisnull(res, 0, 1))
+			lsn = NULL;
+		else
+			lsn = pg_strdup(PQgetvalue(res, 0, 1));
 	}
 
 	destroyPQExpBuffer(query);

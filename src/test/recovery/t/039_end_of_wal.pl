@@ -137,11 +137,11 @@ sub build_record_header
 	# C for xl_rmid
 	# BB for two bytes of padding
 	# I for xl_crc
-	return pack("IIIICCBBI",
+	return pack("IIIICCBBIII",
 		$xl_tot_len, $xl_xid,
 		$BIG_ENDIAN ? 0        : $xl_prev,
 		$BIG_ENDIAN ? $xl_prev : 0,
-		$xl_info, $xl_rmid, 0, 0, $xl_crc);
+		$xl_info, $xl_rmid, 0, 0, $xl_crc, 0, 0);
 }
 
 # Build a fake WAL page header, based on the data given by the caller

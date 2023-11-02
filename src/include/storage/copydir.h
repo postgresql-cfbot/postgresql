@@ -14,6 +14,6 @@
 #define COPYDIR_H
 
 extern void copydir(const char *fromdir, const char *todir, bool recurse);
-extern void copy_file(const char *fromfile, const char *tofile);
+extern void copy_file(const char *fromfile, const char *tofile, bool encrypt_init_file);
 
 #endif							/* COPYDIR_H */

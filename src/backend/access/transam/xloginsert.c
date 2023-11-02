@@ -553,7 +553,7 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 	XLogRecData *rdt;
 	uint64		total_len = 0;
 	int			block_id;
-	pg_crc32c	rdata_crc;
+	pg_crc32c	rdata_crc = 0;
 	registered_buffer *prev_regbuf = NULL;
 	XLogRecData *rdt_datas_last;
 	XLogRecord *rechdr;
@@ -893,18 +893,21 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 	hdr_rdt.len = (scratch - hdr_scratch);
 	total_len += hdr_rdt.len;
 
-	/*
-	 * Calculate CRC of the data
-	 *
-	 * Note that the record header isn't added into the CRC initially since we
-	 * don't know the prev-link yet.  Thus, the CRC will represent the CRC of
-	 * the whole record in the order: rdata, then backup blocks, then record
-	 * header.
-	 */
-	INIT_CRC32C(rdata_crc);
-	COMP_CRC32C(rdata_crc, hdr_scratch + SizeOfXLogRecord, hdr_rdt.len - SizeOfXLogRecord);
-	for (rdt = hdr_rdt.next; rdt != NULL; rdt = rdt->next)
-		COMP_CRC32C(rdata_crc, rdt->data, rdt->len);
+	if (!encrypt_wal)
+	{
+		/*
+		 * Calculate CRC of the data
+		 *
+		 * Note that the record header isn't added into the CRC initially since we
+		 * don't know the prev-link yet.  Thus, the CRC will represent the CRC of
+		 * the whole record in the order: rdata, then backup blocks, then record
+		 * header.
+		 */
+		INIT_CRC32C(rdata_crc);
+		COMP_CRC32C(rdata_crc, hdr_scratch + SizeOfXLogRecord, hdr_rdt.len - SizeOfXLogRecord);
+		for (rdt = hdr_rdt.next; rdt != NULL; rdt = rdt->next)
+			COMP_CRC32C(rdata_crc, rdt->data, rdt->len);
+	}
 
 	/*
 	 * Ensure that the XLogRecord is not too large.
@@ -929,7 +932,8 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 	rechdr->xl_info = info;
 	rechdr->xl_rmid = rmid;
 	rechdr->xl_prev = InvalidXLogRecPtr;
-	rechdr->xl_crc = rdata_crc;
+	if (!encrypt_wal)
+		rechdr->xl_integrity.crc = rdata_crc;
 
 	return &hdr_rdt;
 }
@@ -1126,6 +1130,30 @@ XLogSaveBufferForHint(Buffer buffer, bool buffer_std)
 	}
 
 	return recptr;
+}
+
+/*
+ * This function returns either a WAL or fake LSN, for use by encryption.
+ */
+XLogRecPtr
+LSNForEncryption(bool use_wal_lsn)
+{
+	if (use_wal_lsn)
+	{
+		int			dummy = 0;
+
+		Assert(FileEncryptionEnabled);
+		/*
+		 * Records other than SWITCH_WAL must have content. We use an integer 0 to
+		 * follow the restriction.
+		 */
+		XLogBeginInsert();
+		XLogSetRecordFlags(XLOG_MARK_UNIMPORTANT);
+		XLogRegisterData((char *) &dummy, sizeof(dummy));
+		return XLogInsert(RM_XLOG_ID, XLOG_ENCRYPTION_LSN);
+	}
+	else
+		return GetFakeLSNForUnloggedRel();
 }
 
 /*

@@ -181,6 +181,12 @@ GetLocalVictimBuffer(void)
 	BufferDesc *bufHdr;
 
 	ResourceOwnerEnlargeBuffers(CurrentResourceOwner);
+	
+#ifdef LBDEBUG
+	fprintf(stderr, "LB ALLOC (%u,%d,%d) %d\n",
+			smgr->smgr_rlocator.locator.relNumber, forkNum, blockNum,
+			-nextFreeLocalBuf - 1);
+#endif
 
 	/*
 	 * Need to get a new buffer.  We use a clock sweep algorithm (essentially
@@ -241,6 +247,9 @@ GetLocalVictimBuffer(void)
 		/* Find smgr relation for buffer */
 		oreln = smgropen(BufTagGetRelFileLocator(&bufHdr->tag), MyBackendId);
 
+		PageEncryptInplace(localpage, bufHdr->tag.forkNum,
+					   buf_state & BM_PERMANENT, bufHdr->tag.blockNum,
+					   bufHdr->tag.relNumber);
 		PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 
 		io_start = pgstat_prepare_io_time();

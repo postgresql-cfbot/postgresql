@@ -62,6 +62,7 @@ static ControlFileData ControlFile_source_after;
 
 const char *progname;
 int			WalSegSz;
+bool encrypt_wal = false;
 
 /* Configuration options */
 char	   *datadir_target = NULL;

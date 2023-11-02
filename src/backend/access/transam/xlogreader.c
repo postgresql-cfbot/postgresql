@@ -31,6 +31,7 @@
 #include "access/xlogrecord.h"
 #include "catalog/pg_control.h"
 #include "common/pg_lzcompress.h"
+#include "crypto/bufenc.h"
 #include "replication/origin.h"
 
 #ifndef FRONTEND
@@ -806,6 +807,11 @@ restart:
 		Assert(gotheader);
 
 		record = (XLogRecord *) state->readRecordBuf;
+
+		/* here we decrypt the record as needed */
+		if (encrypt_wal && !DecryptXLogRecord(record, RecPtr))
+			goto err;
+
 		if (!ValidXLogRecord(state, record, RecPtr))
 			goto err;
 
@@ -825,6 +831,9 @@ restart:
 			goto err;
 
 		/* Record does not cross a page boundary */
+		if (encrypt_wal && !DecryptXLogRecord(record, RecPtr))
+			goto err;
+
 		if (!ValidXLogRecord(state, record, RecPtr))
 			goto err;
 
@@ -1169,15 +1178,19 @@ ValidXLogRecord(XLogReaderState *state, XLogRecord *record, XLogRecPtr recptr)
 	pg_crc32c	crc;
 
 	Assert(record->xl_tot_len >= SizeOfXLogRecord);
+	/* encrypted WAL is guaranteed to be valid since we are using authenticated encryption */
+
+	if (encrypt_wal)
+		return true;
 
 	/* Calculate the CRC */
 	INIT_CRC32C(crc);
 	COMP_CRC32C(crc, ((char *) record) + SizeOfXLogRecord, record->xl_tot_len - SizeOfXLogRecord);
 	/* include the record header last */
-	COMP_CRC32C(crc, (char *) record, offsetof(XLogRecord, xl_crc));
+	COMP_CRC32C(crc, (char *) record, offsetof(XLogRecord, xl_integrity.crc));
 	FIN_CRC32C(crc);
 
-	if (!EQ_CRC32C(record->xl_crc, crc))
+	if (!EQ_CRC32C(record->xl_integrity.crc, crc))
 	{
 		report_invalid_record(state,
 							  "incorrect resource manager data checksum in record at %X/%X",

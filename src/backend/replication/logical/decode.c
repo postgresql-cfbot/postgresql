@@ -191,6 +191,7 @@ xlog_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 		case XLOG_FPI:
 		case XLOG_OVERWRITE_CONTRECORD:
 		case XLOG_CHECKPOINT_REDO:
+		case XLOG_ENCRYPTION_LSN:
 			break;
 		default:
 			elog(ERROR, "unexpected RM_XLOG_ID record type: %u", info);

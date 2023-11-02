@@ -80,6 +80,7 @@ typedef struct XLogDumpConfig
 	char	   *save_fullpage_path;
 } XLogDumpConfig;
 
+bool encrypt_wal = false;
 
 /*
  * When sigint is called, just tell the system to exit at the next possible

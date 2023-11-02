@@ -1,6 +1,7 @@
 # Copyright (c) 2022-2023, PostgreSQL Global Development Group
 
 subdir('initdb')
+subdir('pg_alterckey')
 subdir('pg_amcheck')
 subdir('pg_archivecleanup')
 subdir('pg_basebackup')

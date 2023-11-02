@@ -20,9 +20,8 @@
 #include "pgtime.h"				/* for pg_time_t */
 #include "port/pg_crc32c.h"
 
-
 /* Version identifier for this pg_control format */
-#define PG_CONTROL_VERSION	1300
+#define PG_CONTROL_VERSION	1700
 
 /* Nonce key length, see below */
 #define MOCK_AUTH_NONCE_LEN		32
@@ -79,6 +78,7 @@ typedef struct CheckPoint
 /* 0xC0 is used in Postgres 9.5-11 */
 #define XLOG_OVERWRITE_CONTRECORD		0xD0
 #define XLOG_CHECKPOINT_REDO			0xE0
+#define XLOG_ENCRYPTION_LSN				0xF0
 
 
 /*
@@ -226,6 +226,9 @@ typedef struct ControlFileData
 	 * failed at an early stage.
 	 */
 	char		mock_authentication_nonce[MOCK_AUTH_NONCE_LEN];
+
+	/* File encryption method;  index into encryption_methods[]. */
+	int		file_encryption_method;
 
 	/* CRC of all above ... MUST BE LAST! */
 	pg_crc32c	crc;

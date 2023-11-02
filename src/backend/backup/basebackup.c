@@ -24,6 +24,7 @@
 #include "backup/basebackup_target.h"
 #include "commands/defrem.h"
 #include "common/compression.h"
+#include "common/kmgr_utils.h"
 #include "common/file_perm.h"
 #include "common/file_utils.h"
 #include "lib/stringinfo.h"
@@ -139,6 +140,10 @@ struct exclude_list_item
  */
 static const char *const excludeDirContents[] =
 {
+	/* Skip temporary crypto key directories */
+	NEW_KMGR_DIR,
+	OLD_KMGR_DIR,
+
 	/*
 	 * Skip temporary statistics files. PG_STAT_TMP_DIR must be skipped
 	 * because extensions like pg_stat_statements store data there.

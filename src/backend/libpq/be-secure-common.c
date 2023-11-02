@@ -23,6 +23,7 @@
 #include <unistd.h>
 
 #include "common/percentrepl.h"
+#include "postmaster/postmaster.h"
 #include "common/string.h"
 #include "libpq/libpq.h"
 #include "storage/fd.h"
@@ -44,12 +45,17 @@ run_ssl_passphrase_command(const char *prompt, bool is_server_start, char *buf, 
 	FILE	   *fh;
 	int			pclose_rc;
 	size_t		len = 0;
+	char fd_str[20];
 
 	Assert(prompt);
 	Assert(size > 0);
 	buf[0] = '\0';
 
-	command = replace_percent_placeholders(ssl_passphrase_command, "ssl_passphrase_command", "p", prompt);
+	fd_str[0] = 0;
+	if (terminal_fd != -1)
+		snprintf(fd_str, sizeof(fd_str), "%d", terminal_fd);
+
+	command = replace_percent_placeholders(ssl_passphrase_command, "ssl_passphrase_command", "pR", prompt, fd_str);
 
 	fh = OpenPipeStream(command, "r");
 	if (fh == NULL)

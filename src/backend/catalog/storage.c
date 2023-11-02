@@ -486,7 +486,9 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 
 		smgrread(src, forkNum, blkno, buf.data);
 
-		if (!PageIsVerifiedExtended(page, blkno,
+		if (!PageIsVerifiedExtended(page, forkNum,
+									relpersistence == RELPERSISTENCE_PERMANENT,
+									blkno, src->smgr_rlocator.locator.relNumber,
 									PIV_LOG_WARNING | PIV_REPORT_STAT))
 		{
 			/*
@@ -514,6 +516,9 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 		if (use_wal)
 			log_newpage(&dst->smgr_rlocator.locator, forkNum, blkno, page, false);
 
+		PageEncryptInplace(page, forkNum,
+						   relpersistence == RELPERSISTENCE_PERMANENT, blkno,
+						   dst->smgr_rlocator.locator.relNumber);
 		PageSetChecksumInplace(page, blkno);
 
 		/*

@@ -663,13 +663,15 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 			wstate->btws_zeropage = (Page) palloc_aligned(BLCKSZ,
 														  PG_IO_ALIGN_SIZE,
 														  MCXT_ALLOC_ZERO);
-		/* don't set checksum for all-zero page */
+		/* don't set checksum or encryption for all-zero page */
 		smgrextend(RelationGetSmgr(wstate->index), MAIN_FORKNUM,
 				   wstate->btws_pages_written++,
 				   wstate->btws_zeropage,
 				   true);
 	}
 
+	PageEncryptInplace(page, MAIN_FORKNUM, RelationIsPermanent(wstate->index),
+					   blkno, RelationGetSmgr(wstate->index)->smgr_rlocator.locator.relNumber);
 	PageSetChecksumInplace(page, blkno);
 
 	/*

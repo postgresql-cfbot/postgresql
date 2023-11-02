@@ -204,8 +204,8 @@ pg_control_recovery(PG_FUNCTION_ARGS)
 Datum
 pg_control_init(PG_FUNCTION_ARGS)
 {
-	Datum		values[11];
-	bool		nulls[11];
+	Datum		values[12];
+	bool		nulls[12];
 	TupleDesc	tupdesc;
 	HeapTuple	htup;
 	ControlFileData *ControlFile;
@@ -213,6 +213,36 @@ pg_control_init(PG_FUNCTION_ARGS)
 
 	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
 		elog(ERROR, "return type must be a row type");
+	/*
+	 * Construct a tuple descriptor for the result row.  This must match this
+	 * function's pg_proc entry!
+	 */
+	tupdesc = CreateTemplateTupleDesc(12);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "max_data_alignment",
+					   INT4OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "database_block_size",
+					   INT4OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "blocks_per_segment",
+					   INT4OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 4, "wal_block_size",
+					   INT4OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 5, "bytes_per_wal_segment",
+					   INT4OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 6, "max_identifier_length",
+					   INT4OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 7, "max_index_columns",
+					   INT4OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 8, "max_toast_chunk_size",
+					   INT4OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 9, "large_object_chunk_size",
+					   INT4OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 10, "float8_pass_by_value",
+					   BOOLOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 11, "data_page_checksum_version",
+					   INT4OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 12, "file_encryption_method",
+					   INT4OID, -1, 0);
+	tupdesc = BlessTupleDesc(tupdesc);
 
 	/* read the control file */
 	LWLockAcquire(ControlFileLock, LW_SHARED);
@@ -254,6 +284,9 @@ pg_control_init(PG_FUNCTION_ARGS)
 
 	values[10] = Int32GetDatum(ControlFile->data_checksum_version);
 	nulls[10] = false;
+
+	values[11] = Int32GetDatum(ControlFile->file_encryption_method);
+	nulls[11] = false;
 
 	htup = heap_form_tuple(tupdesc, values, nulls);
 

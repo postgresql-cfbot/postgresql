@@ -783,7 +783,7 @@ read_relmap_file(RelMapFile *map, char *dbpath, bool lock_held, int elevel)
 {
 	char		mapfilename[MAXPGPATH];
 	pg_crc32c	crc;
-	int			fd;
+	File		file;
 	int			r;
 
 	Assert(elevel >= ERROR);
@@ -809,18 +809,21 @@ read_relmap_file(RelMapFile *map, char *dbpath, bool lock_held, int elevel)
 	 */
 	snprintf(mapfilename, sizeof(mapfilename), "%s/%s", dbpath,
 			 RELMAPPER_FILENAME);
-	fd = OpenTransientFile(mapfilename, O_RDONLY | PG_BINARY);
-	if (fd < 0)
+	file = PathNameOpenFile(mapfilename, O_RDONLY | PG_BINARY);
+	if (file < 0)
 		ereport(elevel,
 				(errcode_for_file_access(),
 				 errmsg("could not open file \"%s\": %m",
 						mapfilename)));
 
 	/* Now read the data. */
-	pgstat_report_wait_start(WAIT_EVENT_RELATION_MAP_READ);
-	r = read(fd, map, sizeof(RelMapFile));
+	r = FileReadSeq(file, map, sizeof(RelMapFile), WAIT_EVENT_RELATION_MAP_READ);
 	if (r != sizeof(RelMapFile))
 	{
+		int save_errno = errno;
+		FileClose(file);
+		errno = save_errno;
+
 		if (r < 0)
 			ereport(elevel,
 					(errcode_for_file_access(),
@@ -831,13 +834,8 @@ read_relmap_file(RelMapFile *map, char *dbpath, bool lock_held, int elevel)
 					 errmsg("could not read file \"%s\": read %d of %zu",
 							mapfilename, r, sizeof(RelMapFile))));
 	}
-	pgstat_report_wait_end();
 
-	if (CloseTransientFile(fd) != 0)
-		ereport(elevel,
-				(errcode_for_file_access(),
-				 errmsg("could not close file \"%s\": %m",
-						mapfilename)));
+	FileClose(file);
 
 	if (!lock_held)
 		LWLockRelease(RelationMappingLock);
@@ -887,7 +885,7 @@ static void
 write_relmap_file(RelMapFile *newmap, bool write_wal, bool send_sinval,
 				  bool preserve_files, Oid dbid, Oid tsid, const char *dbpath)
 {
-	int			fd;
+	File		file;
 	char		mapfilename[MAXPGPATH];
 	char		maptempfilename[MAXPGPATH];
 
@@ -912,38 +910,36 @@ write_relmap_file(RelMapFile *newmap, bool write_wal, bool send_sinval,
 			 dbpath, RELMAPPER_TEMP_FILENAME);
 
 	/*
-	 * Open a temporary file. If a file already exists with this name, it must
+	 * Open a virtual file. If a file already exists with this name, it must
 	 * be left over from a previous crash, so we can overwrite it. Concurrent
 	 * calls to this function are not allowed.
 	 */
-	fd = OpenTransientFile(maptempfilename,
+	file = PathNameOpenFile(maptempfilename,
 						   O_WRONLY | O_CREAT | O_TRUNC | PG_BINARY);
-	if (fd < 0)
+	if (file < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not open file \"%s\": %m",
 						maptempfilename)));
 
-	/* Write new data to the file. */
-	pgstat_report_wait_start(WAIT_EVENT_RELATION_MAP_WRITE);
-	if (write(fd, newmap, sizeof(RelMapFile)) != sizeof(RelMapFile))
+	/*
+	 * Write new data to the file.
+	 * We may be invoked during bootstrap, so we do our own cleanup
+	 * rather than depending on the resource owner to close the file.
+	 */
+	if (FileWriteSeq(file, newmap, sizeof(RelMapFile), WAIT_EVENT_RELATION_MAP_WRITE) != sizeof(RelMapFile))
 	{
-		/* if write didn't set errno, assume problem is no disk space */
-		if (errno == 0)
-			errno = ENOSPC;
+		int save_errno = errno;
+		FileClose(file);
+		errno = save_errno;
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not write file \"%s\": %m",
-						maptempfilename)));
+					errmsg("could not write file \"%s\": %m",
+						   maptempfilename)));
 	}
-	pgstat_report_wait_end();
 
 	/* And close the file. */
-	if (CloseTransientFile(fd) != 0)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not close file \"%s\": %m",
-						maptempfilename)));
+	FileClose(file);
 
 	if (write_wal)
 	{

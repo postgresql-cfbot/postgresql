@@ -467,7 +467,8 @@ static BlockNumber ExtendBufferedRelShared(BufferManagerRelation bmr,
 										   BlockNumber extend_upto,
 										   Buffer *buffers,
 										   uint32 *extended_by);
-static bool PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy);
+static bool PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy,
+					  bool skip_if_not_valid);
 static void PinBuffer_Locked(BufferDesc *buf);
 static void UnpinBuffer(BufferDesc *buf);
 static void BufferSync(int flags);
@@ -635,7 +636,6 @@ ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockN
 	BufferDesc *bufHdr;
 	BufferTag	tag;
 	uint32		buf_state;
-	bool		have_private_ref;
 
 	Assert(BufferIsValid(recent_buffer));
 
@@ -663,38 +663,24 @@ ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockN
 	else
 	{
 		bufHdr = GetBufferDescriptor(recent_buffer - 1);
-		have_private_ref = GetPrivateRefCount(recent_buffer) > 0;
 
 		/*
-		 * Do we already have this buffer pinned with a private reference?  If
-		 * so, it must be valid and it is safe to check the tag without
-		 * locking.  If not, we have to lock the header first and then check.
+		 * Is it still valid and holding the right tag?  We do an unlocked
+		 * tag comparison first, to make it unlikely that we'll increment the
+		 * usage counter of the wrong buffer, if someone calls us with a very
+		 * out of date recent_buffer.  Then we'll check it again if we get the
+		 * pin.
 		 */
-		if (have_private_ref)
-			buf_state = pg_atomic_read_u32(&bufHdr->state);
-		else
-			buf_state = LockBufHdr(bufHdr);
-
-		if ((buf_state & BM_VALID) && BufferTagsEqual(&tag, &bufHdr->tag))
+		if (BufferTagsEqual(&tag, &bufHdr->tag) &&
+			PinBuffer(bufHdr, NULL, true))
 		{
-			/*
-			 * It's now safe to pin the buffer.  We can't pin first and ask
-			 * questions later, because it might confuse code paths like
-			 * InvalidateBuffer() if we pinned a random non-matching buffer.
-			 */
-			if (have_private_ref)
-				PinBuffer(bufHdr, NULL);	/* bump pin count */
-			else
-				PinBuffer_Locked(bufHdr);	/* pin for first time */
-
-			pgBufferUsage.shared_blks_hit++;
-
-			return true;
+			if (BufferTagsEqual(&tag, &bufHdr->tag))
+			{
+				pgBufferUsage.shared_blks_hit++;
+				return true;
+			}
+			UnpinBuffer(bufHdr);
 		}
-
-		/* If we locked the header above, now unlock. */
-		if (!have_private_ref)
-			UnlockBufHdr(bufHdr, buf_state);
 	}
 
 	return false;
@@ -984,6 +970,87 @@ ExtendBufferedRelTo(BufferManagerRelation bmr,
 }
 
 /*
+ * Try to find a buffer using our tiny LRU cache, to avoid a trip through the
+ * buffer mapping table.  Only for non-local RBM_NORMAL reads.
+ */
+static Buffer
+ReadBuffer_try_recent(SMgrRelation smgr, ForkNumber forkNum,
+					  BlockNumber blockNum)
+{
+	SMgrBufferLruEntry *buffer_lru = &smgr->recent_buffer_lru[forkNum][0];
+
+	Assert(BlockNumberIsValid(blockNum));
+	for (int i = 0; i < SMGR_BUFFER_LRU_SIZE; ++i)
+	{
+		if (buffer_lru[i].block == blockNum)
+		{
+			SMgrBufferLruEntry found = buffer_lru[i];
+
+			if (ReadRecentBuffer(smgr->smgr_rlocator.locator,
+								 forkNum,
+								 blockNum,
+								 found.buffer))
+			{
+				/* Move to front. */
+				if (i > 0)
+				{
+					memmove(&buffer_lru[1],
+							&buffer_lru[0],
+							sizeof(buffer_lru[0]) * i);
+					buffer_lru[0] = found;
+				}
+				return found.buffer;
+			}
+
+			/* Kill this entry and give up. */
+			if (i < SMGR_BUFFER_LRU_SIZE - 1)
+				memmove(&buffer_lru[i],
+						&buffer_lru[i + 1],
+						SMGR_BUFFER_LRU_SIZE - i);
+			buffer_lru[SMGR_BUFFER_LRU_SIZE - 1].block = InvalidBlockNumber;
+			break;
+		}
+	}
+
+	return InvalidBuffer;
+}
+
+/*
+ * Remember which buffer a block is in, for later lookups by
+ * ReadBuffer_try_recent().
+ */
+static void
+RememberRecentBuffer(SMgrRelation smgr, ForkNumber forkNum,
+					 BlockNumber blockNum, Buffer buffer)
+{
+	SMgrBufferLruEntry *buffer_lru = &smgr->recent_buffer_lru[forkNum][0];
+
+	/* If it's already there, move to front and update. */
+	for (int i = 0; i < SMGR_BUFFER_LRU_SIZE; ++i)
+	{
+		if (buffer_lru[i].block == blockNum)
+		{
+			if (i > 0)
+			{
+				memmove(&buffer_lru[1],
+						&buffer_lru[0],
+						sizeof(buffer_lru[0]) * i);
+				buffer_lru[0].block = blockNum;
+			}
+			buffer_lru[0].buffer = buffer;
+			return;
+		}
+	}
+
+	/* Otherwise insert at front. */
+	memmove(&buffer_lru[1],
+			&buffer_lru[0],
+			sizeof(buffer_lru[0]) * (SMGR_BUFFER_LRU_SIZE - 1));
+	buffer_lru[0].block = blockNum;
+	buffer_lru[0].buffer = buffer;
+}
+
+/*
  * ReadBuffer_common -- common logic for all ReadBuffer variants
  *
  * *hit is set to true if the request was satisfied from shared buffer cache.
@@ -999,6 +1066,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	IOContext	io_context;
 	IOObject	io_object;
 	bool		isLocalBuf = SmgrIsTemp(smgr);
+	Buffer		recent_buffer;
 
 	*hit = false;
 
@@ -1049,6 +1117,20 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				 mode == RBM_ZERO_ON_ERROR)
 			pgBufferUsage.local_blks_read++;
 	}
+	else if (mode == RBM_NORMAL &&
+			 BufferIsValid((recent_buffer = ReadBuffer_try_recent(smgr,
+																  forkNum,
+																  blockNum))))
+	{
+		/*
+		 * Pinned buffer without having to look it up in the shared buffer
+		 * mapping table.
+		 */
+		found = true;
+		bufHdr = GetBufferDescriptor(recent_buffer - 1);
+		io_context = IOCONTEXT_NORMAL;
+		io_object = IOOBJECT_RELATION;
+	}
 	else
 	{
 		/*
@@ -1064,6 +1146,9 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		else if (mode == RBM_NORMAL || mode == RBM_NORMAL_NO_LOG ||
 				 mode == RBM_ZERO_ON_ERROR)
 			pgBufferUsage.shared_blks_read++;
+
+		RememberRecentBuffer(smgr, forkNum, blockNum,
+							 BufferDescriptorGetBuffer(bufHdr));
 	}
 
 	/* At this point we do NOT hold any locks. */
@@ -1177,6 +1262,9 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	{
 		/* Set BM_VALID, terminate IO, and wake up any waiters */
 		TerminateBufferIO(bufHdr, false, BM_VALID);
+
+		RememberRecentBuffer(smgr, forkNum, blockNum,
+							 BufferDescriptorGetBuffer(bufHdr));
 	}
 
 	VacuumPageMiss++;
@@ -1252,7 +1340,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		 */
 		buf = GetBufferDescriptor(existing_buf_id);
 
-		valid = PinBuffer(buf, strategy);
+		valid = PinBuffer(buf, strategy, false);
 
 		/* Can release the mapping lock as soon as we've pinned it */
 		LWLockRelease(newPartitionLock);
@@ -1330,7 +1418,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 		existing_buf_hdr = GetBufferDescriptor(existing_buf_id);
 
-		valid = PinBuffer(existing_buf_hdr, strategy);
+		valid = PinBuffer(existing_buf_hdr, strategy, false);
 
 		/* Can release the mapping lock as soon as we've pinned it */
 		LWLockRelease(newPartitionLock);
@@ -1979,7 +2067,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 			 * Pin the existing buffer before releasing the partition lock,
 			 * preventing it from being evicted.
 			 */
-			valid = PinBuffer(existing_hdr, strategy);
+			valid = PinBuffer(existing_hdr, strategy, false);
 
 			LWLockRelease(partition_lock);
 
@@ -2284,10 +2372,13 @@ ReleaseAndReadBuffer(Buffer buffer,
  * Note that ResourceOwnerEnlargeBuffers must have been done already.
  *
  * Returns true if buffer is BM_VALID, else false.  This provision allows
- * some callers to avoid an extra spinlock cycle.
+ * some callers to avoid an extra spinlock cycle.  If skip_if_not_valid is
+ * true, then a false return value also indicates that the buffer was
+ * (recently) invalid and has not been pinned.
  */
 static bool
-PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy)
+PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy,
+		  bool skip_if_not_valid)
 {
 	Buffer		b = BufferDescriptorGetBuffer(buf);
 	bool		result;
@@ -2310,6 +2401,12 @@ PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy)
 		{
 			if (old_buf_state & BM_LOCKED)
 				old_buf_state = WaitBufHdrUnlocked(buf);
+
+			if (unlikely(skip_if_not_valid && !(old_buf_state & BM_VALID)))
+			{
+				ForgetPrivateRefCountEntry(ref);
+				return false;
+			}
 
 			buf_state = old_buf_state;
 

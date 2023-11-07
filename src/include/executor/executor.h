@@ -195,6 +195,44 @@ ExecGetJunkAttribute(TupleTableSlot *slot, AttrNumber attno, bool *isNull)
 #endif
 
 /*
+ * Enumeration specifying the type for re-check of CHECK constraint to perform in
+ * ExecConstraints().
+ *
+ * CHECK_DEFERRED_NO is the traditional Postgres immediate check, should
+ * throw an error if there is any check constraint violation. This is useful
+ * for command like CopyFrom.
+ *
+ * For deferrable CHECK constraints, CHECK_DEFERRED_YES is passed to
+ * to ExecConstraints for insert or update queries. ExecConstraints() should
+ * validate if the CHECK constraint is violated but should not throw an error,
+ * block, or prevent the insertion. We'll recheck later when it is time for the
+ * constraint to be enforced.  The  ExecConstraints() must return false if the tuple is
+ * not violating any check constraint, true if it is possibly a violation and we need
+ * to recheck the CHECK constraint.  In the "false" case
+ * it is safe to omit the later recheck.
+ *
+ * When it is time to recheck the deferred constraint(via AR trigger), a
+ * call is made with CHECK_DEFERRED_EXISTING and this time conflicting latest live tuple
+ * will be revalidated.
+ */
+typedef enum EnforceDeferredCheck
+{
+	CHECK_DEFERRED_NO,			/* Recheck of CHECK constraint is disabled, so
+								 * DEFERRED CHECK constraint will be
+								 * considered as non-deferrable check
+								 * constraint.  */
+	CHECK_DEFERRED_YES,			/* Recheck of CHECK constraint is enabled, so
+								 * CHECK constraint will be validated but
+								 * error will not be reported for deferred
+								 * CHECK constraint. */
+	CHECK_DEFERRED_EXISTING		/* Recheck of existing violated CHECK
+								 * constraint, indicates that this is a
+								 * deferred recheck of a row that was reported
+								 * as a potential violation of CHECK
+								 * CONSTRAINT */
+} EnforceDeferredCheck;
+
+/*
  * prototypes from functions in execMain.c
  */
 extern void ExecutorStart(QueryDesc *queryDesc, int eflags);
@@ -219,8 +257,8 @@ extern void InitResultRelInfo(ResultRelInfo *resultRelInfo,
 extern ResultRelInfo *ExecGetTriggerResultRel(EState *estate, Oid relid,
 											  ResultRelInfo *rootRelInfo);
 extern List *ExecGetAncestorResultRels(EState *estate, ResultRelInfo *resultRelInfo);
-extern void ExecConstraints(ResultRelInfo *resultRelInfo,
-							TupleTableSlot *slot, EState *estate);
+extern Oid	ExecConstraints(ResultRelInfo *resultRelInfo,
+							TupleTableSlot *slot, EState *estate, EnforceDeferredCheck checkConstraint);
 extern bool ExecPartitionCheck(ResultRelInfo *resultRelInfo,
 							   TupleTableSlot *slot, EState *estate, bool emitError);
 extern void ExecPartitionCheckEmitError(ResultRelInfo *resultRelInfo,

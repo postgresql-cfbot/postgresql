@@ -103,7 +103,8 @@ static void AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 								  ResultRelInfo *dst_partinfo,
 								  int event, bool row_trigger,
 								  TupleTableSlot *oldslot, TupleTableSlot *newslot,
-								  List *recheckIndexes, Bitmapset *modifiedCols,
+								  List *recheckIndexes, Oid recheckConstraints,
+								  Bitmapset *modifiedCols,
 								  TransitionCaptureState *transition_capture,
 								  bool is_crosspart_update);
 static void AfterTriggerEnlargeQueryState(void);
@@ -2456,7 +2457,7 @@ ExecASInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 	if (trigdesc && trigdesc->trig_insert_after_statement)
 		AfterTriggerSaveEvent(estate, relinfo, NULL, NULL,
 							  TRIGGER_EVENT_INSERT,
-							  false, NULL, NULL, NIL, NULL, transition_capture,
+							  false, NULL, NULL, NIL, InvalidOid, NULL, transition_capture,
 							  false);
 }
 
@@ -2539,7 +2540,7 @@ ExecBRInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 void
 ExecARInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 					 TupleTableSlot *slot, List *recheckIndexes,
-					 TransitionCaptureState *transition_capture)
+					 Oid recheckConstraints, TransitionCaptureState *transition_capture)
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
 
@@ -2548,7 +2549,9 @@ ExecARInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 		AfterTriggerSaveEvent(estate, relinfo, NULL, NULL,
 							  TRIGGER_EVENT_INSERT,
 							  true, NULL, slot,
-							  recheckIndexes, NULL,
+							  recheckIndexes,
+							  recheckConstraints,
+							  NULL,
 							  transition_capture,
 							  false);
 }
@@ -2674,7 +2677,7 @@ ExecASDeleteTriggers(EState *estate, ResultRelInfo *relinfo,
 	if (trigdesc && trigdesc->trig_delete_after_statement)
 		AfterTriggerSaveEvent(estate, relinfo, NULL, NULL,
 							  TRIGGER_EVENT_DELETE,
-							  false, NULL, NULL, NIL, NULL, transition_capture,
+							  false, NULL, NULL, NIL, InvalidOid, NULL, transition_capture,
 							  false);
 }
 
@@ -2807,7 +2810,7 @@ ExecARDeleteTriggers(EState *estate,
 
 		AfterTriggerSaveEvent(estate, relinfo, NULL, NULL,
 							  TRIGGER_EVENT_DELETE,
-							  true, slot, NULL, NIL, NULL,
+							  true, slot, NULL, NIL, InvalidOid, NULL,
 							  transition_capture,
 							  is_crosspart_update);
 	}
@@ -2930,7 +2933,7 @@ ExecASUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 	if (trigdesc && trigdesc->trig_update_after_statement)
 		AfterTriggerSaveEvent(estate, relinfo, NULL, NULL,
 							  TRIGGER_EVENT_UPDATE,
-							  false, NULL, NULL, NIL,
+							  false, NULL, NULL, NIL, InvalidOid,
 							  ExecGetAllUpdatedCols(relinfo, estate),
 							  transition_capture,
 							  false);
@@ -3089,6 +3092,7 @@ ExecARUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 					 HeapTuple fdw_trigtuple,
 					 TupleTableSlot *newslot,
 					 List *recheckIndexes,
+					 Oid recheckConstraints,
 					 TransitionCaptureState *transition_capture,
 					 bool is_crosspart_update)
 {
@@ -3133,7 +3137,7 @@ ExecARUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 							  src_partinfo, dst_partinfo,
 							  TRIGGER_EVENT_UPDATE,
 							  true,
-							  oldslot, newslot, recheckIndexes,
+							  oldslot, newslot, recheckIndexes, recheckConstraints,
 							  ExecGetAllUpdatedCols(relinfo, estate),
 							  transition_capture,
 							  is_crosspart_update);
@@ -3262,7 +3266,7 @@ ExecASTruncateTriggers(EState *estate, ResultRelInfo *relinfo)
 		AfterTriggerSaveEvent(estate, relinfo,
 							  NULL, NULL,
 							  TRIGGER_EVENT_TRUNCATE,
-							  false, NULL, NULL, NIL, NULL, NULL,
+							  false, NULL, NULL, NIL, InvalidOid, NULL, NULL,
 							  false);
 }
 
@@ -6051,7 +6055,8 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 					  ResultRelInfo *dst_partinfo,
 					  int event, bool row_trigger,
 					  TupleTableSlot *oldslot, TupleTableSlot *newslot,
-					  List *recheckIndexes, Bitmapset *modifiedCols,
+					  List *recheckIndexes, Oid recheckConstraints,
+					  Bitmapset *modifiedCols,
 					  TransitionCaptureState *transition_capture,
 					  bool is_crosspart_update)
 {
@@ -6386,6 +6391,18 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 						rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 						continue;
 					break;
+			}
+		}
+
+		/*
+		 * If the trigger is deferred check constraint recheck trigger, only
+		 * queue it for the constraint that was potentially violated.
+		 */
+		if (trigger->tgfoid == F_CHECK_CONSTRAINT_RECHECK)
+		{
+			if (recheckConstraints != trigger->tgconstraint)
+			{
+				continue;		/* Check constraint not violated */
 			}
 		}
 

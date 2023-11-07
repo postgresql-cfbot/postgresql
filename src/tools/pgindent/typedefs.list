@@ -334,6 +334,7 @@ CCHashFN
 CEOUC_WAIT_MODE
 CFuncHashTabEntry
 CHAR
+EnforceDeferredCheck
 CHECKPOINT
 CHKVAL
 CIRCLE

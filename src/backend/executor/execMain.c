@@ -45,6 +45,7 @@
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
+#include "catalog/pg_constraint.h"
 #include "catalog/pg_publication.h"
 #include "commands/matview.h"
 #include "commands/trigger.h"
@@ -1734,12 +1735,15 @@ ExecutePlan(EState *estate,
 
 /*
  * ExecRelCheck --- check that tuple meets constraints for result relation
+ * and populate recheckConstraints with Oid of violated deferred constraint
+ * if that constraint is deferrable.
  *
  * Returns NULL if OK, else name of failed check constraint
  */
 static const char *
 ExecRelCheck(ResultRelInfo *resultRelInfo,
-			 TupleTableSlot *slot, EState *estate)
+			 TupleTableSlot *slot, EState *estate,
+			 EnforceDeferredCheck checkConstraint, bool *recheckConstraints)
 {
 	Relation	rel = resultRelInfo->ri_RelationDesc;
 	int			ncheck = rel->rd_att->constr->num_check;
@@ -1798,7 +1802,20 @@ ExecRelCheck(ResultRelInfo *resultRelInfo,
 		 * ExecQual.
 		 */
 		if (!ExecCheck(checkconstr, econtext))
+		{
+
+			/*
+			 * If the constraint is deferrable and caller is
+			 * CHECK_DEFERRED_YES then constraints must be revalidated at
+			 * the time of enforcing the constraint, that is at commit time
+			 * and via after Row trigger.
+			 */
+			if (checkConstraint == CHECK_DEFERRED_YES && check[i].ccdeferrable)
+			{
+				*recheckConstraints = true;
+			}
 			return check[i].ccname;
+		}
 	}
 
 	/* NULL result means no error */
@@ -1936,18 +1953,27 @@ ExecPartitionCheckEmitError(ResultRelInfo *resultRelInfo,
  * have been converted from the original input tuple after tuple routing.
  * 'resultRelInfo' is the final result relation, after tuple routing.
  */
-void
+Oid
 ExecConstraints(ResultRelInfo *resultRelInfo,
-				TupleTableSlot *slot, EState *estate)
+				TupleTableSlot *slot, EState *estate,
+				EnforceDeferredCheck checkConstraint)
 {
 	Relation	rel = resultRelInfo->ri_RelationDesc;
 	TupleDesc	tupdesc = RelationGetDescr(rel);
 	TupleConstr *constr = tupdesc->constr;
 	Bitmapset  *modifiedCols;
+	bool		recheckConstraints = false;
+	const char *failed;
 
 	Assert(constr);				/* we should not be called otherwise */
 
-	if (constr->has_not_null)
+	/*
+	 * NOT NULL constraint is not supported as deferrable so don't need to
+	 * recheck( CHECK_DEFERRED_EXISTING means it is getting called by trigger
+	 * function check_constraint_recheck for re-checking the potential
+	 * constraint violation of "CHECK" constraint on one/more columns).
+	 */
+	if (constr->has_not_null && checkConstraint != CHECK_DEFERRED_EXISTING)
 	{
 		int			natts = tupdesc->natts;
 		int			attrChk;
@@ -2013,9 +2039,9 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 
 	if (rel->rd_rel->relchecks > 0)
 	{
-		const char *failed;
 
-		if ((failed = ExecRelCheck(resultRelInfo, slot, estate)) != NULL)
+		if ((failed = ExecRelCheck(resultRelInfo, slot, estate, checkConstraint, &recheckConstraints)) != NULL
+			&& !recheckConstraints)
 		{
 			char	   *val_desc;
 			Relation	orig_rel = rel;
@@ -2060,6 +2086,9 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 					 errtableconstraint(orig_rel, failed)));
 		}
 	}
+	return (recheckConstraints ?
+			get_relation_constraint_oid(RelationGetRelid(rel), failed, false) :
+			InvalidOid);
 }
 
 /*

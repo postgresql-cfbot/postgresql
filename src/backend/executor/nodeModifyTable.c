@@ -767,6 +767,7 @@ ExecInsert(ModifyTableContext *context,
 	OnConflictAction onconflict = node->onConflictAction;
 	PartitionTupleRouting *proute = mtstate->mt_partition_tuple_routing;
 	MemoryContext oldContext;
+	Oid			recheckConstraints = InvalidOid;
 
 	/*
 	 * If the input result relation is a partitioned table, find the leaf
@@ -995,7 +996,7 @@ ExecInsert(ModifyTableContext *context,
 		 * Check the constraints of the tuple.
 		 */
 		if (resultRelationDesc->rd_att->constr)
-			ExecConstraints(resultRelInfo, slot, estate);
+			recheckConstraints = ExecConstraints(resultRelInfo, slot, estate, CHECK_DEFERRED_YES);
 
 		/*
 		 * Also check the tuple against the partition constraint, if there is
@@ -1162,6 +1163,7 @@ ExecInsert(ModifyTableContext *context,
 							 NULL,
 							 slot,
 							 NULL,
+							 InvalidOid,
 							 mtstate->mt_transition_capture,
 							 false);
 
@@ -1173,7 +1175,7 @@ ExecInsert(ModifyTableContext *context,
 	}
 
 	/* AFTER ROW INSERT Triggers */
-	ExecARInsertTriggers(estate, resultRelInfo, slot, recheckIndexes,
+	ExecARInsertTriggers(estate, resultRelInfo, slot, recheckIndexes, recheckConstraints,
 						 ar_insert_trig_tcs);
 
 	list_free(recheckIndexes);
@@ -1247,7 +1249,7 @@ ExecBatchInsert(ModifyTableState *mtstate,
 		slot->tts_tableOid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
 
 		/* AFTER ROW INSERT Triggers */
-		ExecARInsertTriggers(estate, resultRelInfo, slot, NIL,
+		ExecARInsertTriggers(estate, resultRelInfo, slot, NIL, InvalidOid,
 							 mtstate->mt_transition_capture);
 
 		/*
@@ -1380,7 +1382,7 @@ ExecDeleteEpilogue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 		ExecARUpdateTriggers(estate, resultRelInfo,
 							 NULL, NULL,
 							 tupleid, oldtuple,
-							 NULL, NULL, mtstate->mt_transition_capture,
+							 NULL, NULL, InvalidOid, mtstate->mt_transition_capture,
 							 false);
 
 		/*
@@ -1967,7 +1969,7 @@ ExecUpdatePrepareSlot(ResultRelInfo *resultRelInfo,
 static TM_Result
 ExecUpdateAct(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 			  ItemPointer tupleid, HeapTuple oldtuple, TupleTableSlot *slot,
-			  bool canSetTag, UpdateContext *updateCxt)
+			  bool canSetTag, UpdateContext *updateCxt, Oid *recheckConstraints)
 {
 	EState	   *estate = context->estate;
 	Relation	resultRelationDesc = resultRelInfo->ri_RelationDesc;
@@ -2087,7 +2089,7 @@ lreplace:
 	 * have it validate all remaining checks.
 	 */
 	if (resultRelationDesc->rd_att->constr)
-		ExecConstraints(resultRelInfo, slot, estate);
+		*recheckConstraints = ExecConstraints(resultRelInfo, slot, estate, CHECK_DEFERRED_YES);
 
 	/*
 	 * replace the heap tuple
@@ -2120,7 +2122,7 @@ lreplace:
 static void
 ExecUpdateEpilogue(ModifyTableContext *context, UpdateContext *updateCxt,
 				   ResultRelInfo *resultRelInfo, ItemPointer tupleid,
-				   HeapTuple oldtuple, TupleTableSlot *slot)
+				   HeapTuple oldtuple, TupleTableSlot *slot, Oid recheckConstraints)
 {
 	ModifyTableState *mtstate = context->mtstate;
 	List	   *recheckIndexes = NIL;
@@ -2138,6 +2140,7 @@ ExecUpdateEpilogue(ModifyTableContext *context, UpdateContext *updateCxt,
 						 NULL, NULL,
 						 tupleid, oldtuple, slot,
 						 recheckIndexes,
+						 recheckConstraints,
 						 mtstate->operation == CMD_INSERT ?
 						 mtstate->mt_oc_transition_capture :
 						 mtstate->mt_transition_capture,
@@ -2225,7 +2228,7 @@ ExecCrossPartitionUpdateForeignKey(ModifyTableContext *context,
 	/* Perform the root table's triggers. */
 	ExecARUpdateTriggers(context->estate,
 						 rootRelInfo, sourcePartInfo, destPartInfo,
-						 tupleid, NULL, newslot, NIL, NULL, true);
+						 tupleid, NULL, newslot, NIL, InvalidOid, NULL, true);
 }
 
 /* ----------------------------------------------------------------
@@ -2264,6 +2267,7 @@ ExecUpdate(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 	Relation	resultRelationDesc = resultRelInfo->ri_RelationDesc;
 	UpdateContext updateCxt = {0};
 	TM_Result	result;
+	Oid			recheckConstraints = false;
 
 	/*
 	 * abort the operation if not running transactions
@@ -2320,7 +2324,7 @@ ExecUpdate(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 		 */
 redo_act:
 		result = ExecUpdateAct(context, resultRelInfo, tupleid, oldtuple, slot,
-							   canSetTag, &updateCxt);
+							   canSetTag, &updateCxt, &recheckConstraints);
 
 		/*
 		 * If ExecUpdateAct reports that a cross-partition update was done,
@@ -2476,7 +2480,7 @@ redo_act:
 		(estate->es_processed)++;
 
 	ExecUpdateEpilogue(context, &updateCxt, resultRelInfo, tupleid, oldtuple,
-					   slot);
+					   slot, recheckConstraints);
 
 	/* Process RETURNING if present */
 	if (resultRelInfo->ri_projectReturning)
@@ -2845,6 +2849,7 @@ lmerge_matched:
 		CmdType		commandType = relaction->mas_action->commandType;
 		TM_Result	result;
 		UpdateContext updateCxt = {0};
+		Oid			recheckConstraints = false;
 
 		/*
 		 * Test condition, if any.
@@ -2898,11 +2903,11 @@ lmerge_matched:
 					break;		/* concurrent update/delete */
 				}
 				result = ExecUpdateAct(context, resultRelInfo, tupleid, NULL,
-									   newslot, false, &updateCxt);
+									   newslot, false, &updateCxt, &recheckConstraints);
 				if (result == TM_Ok && updateCxt.updated)
 				{
 					ExecUpdateEpilogue(context, &updateCxt, resultRelInfo,
-									   tupleid, NULL, newslot);
+									   tupleid, NULL, newslot, recheckConstraints);
 					mtstate->mt_merge_updated += 1;
 				}
 				break;

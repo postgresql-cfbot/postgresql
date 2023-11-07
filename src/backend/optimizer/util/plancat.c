@@ -1244,15 +1244,16 @@ get_relation_constraints(PlannerInfo *root,
 			Node	   *cexpr;
 
 			/*
-			 * If this constraint hasn't been fully validated yet, we must
-			 * ignore it here.  Also ignore if NO INHERIT and we weren't told
-			 * that that's safe.
+			 * Ignore if this is deferred CHECK constraint or constraint
+			 * hasn't been fully validated yet.  Also ignore if NO INHERIT and
+			 * we weren't told that that's safe.
 			 */
+			if (constr->check[i].ccdeferrable)
+				continue;
 			if (!constr->check[i].ccvalid)
 				continue;
 			if (constr->check[i].ccnoinherit && !include_noinherit)
 				continue;
-
 			cexpr = stringToNode(constr->check[i].ccbin);
 
 			/*

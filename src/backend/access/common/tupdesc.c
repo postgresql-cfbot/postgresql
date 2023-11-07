@@ -201,6 +201,8 @@ CreateTupleDescCopyConstr(TupleDesc tupdesc)
 				cpy->check[i].ccbin = pstrdup(constr->check[i].ccbin);
 				cpy->check[i].ccvalid = constr->check[i].ccvalid;
 				cpy->check[i].ccnoinherit = constr->check[i].ccnoinherit;
+				cpy->check[i].ccdeferrable = constr->check[i].ccdeferrable;
+				cpy->check[i].ccdeferred = constr->check[i].ccdeferred;
 			}
 		}
 
@@ -528,7 +530,9 @@ equalTupleDescs(TupleDesc tupdesc1, TupleDesc tupdesc2)
 			if (!(strcmp(check1->ccname, check2->ccname) == 0 &&
 				  strcmp(check1->ccbin, check2->ccbin) == 0 &&
 				  check1->ccvalid == check2->ccvalid &&
-				  check1->ccnoinherit == check2->ccnoinherit))
+				  check1->ccnoinherit == check2->ccnoinherit &&
+				  check1->ccdeferrable == check2->ccdeferrable &&
+				  check1->ccdeferred == check2->ccdeferred))
 				return false;
 		}
 	}

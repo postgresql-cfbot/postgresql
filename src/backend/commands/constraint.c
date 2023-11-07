@@ -203,3 +203,119 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 
 	return PointerGetDatum(NULL);
 }
+
+/*
+ *  check_constraint_recheck- trigger function to do a deferred check for CHECK constraint.
+ *
+ * This is invoked as an AFTER ROW trigger for both INSERT and UPDATE,
+ * for any rows recorded as potential violation of Deferred check
+ * constraint.
+ *
+ * This may be an end-of-statement check or a commit-time check.
+ */
+Datum
+check_constraint_recheck(PG_FUNCTION_ARGS)
+{
+	TriggerData *trigdata = (TriggerData *) fcinfo->context;
+	const char *funcname = "check_constraint_recheck";
+	ItemPointerData checktid;
+	Relation	rel;
+	EState	   *estate;
+	TupleTableSlot *slot;
+	ResultRelInfo *rInfo = NULL;
+	TableScanDesc scan;
+	ExprContext *econtext;
+
+	/*
+	 * Make sure this is being called as an AFTER ROW trigger.  Note:
+	 * translatable error strings are shared with ri_triggers.c, so resist the
+	 * temptation to fold the function name into them.
+	 */
+	if (!CALLED_AS_TRIGGER(fcinfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),
+				 errmsg("function \"%s\" was not called by trigger manager",
+						funcname)));
+
+	if (!TRIGGER_FIRED_AFTER(trigdata->tg_event) ||
+		!TRIGGER_FIRED_FOR_ROW(trigdata->tg_event))
+		ereport(ERROR,
+				(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),
+				 errmsg("function \"%s\" must be fired AFTER ROW",
+						funcname)));
+
+	/*
+	 * Get the new data that was inserted/updated.
+	 */
+	if (TRIGGER_FIRED_BY_INSERT(trigdata->tg_event))
+		checktid = trigdata->tg_trigslot->tts_tid;
+	else if (TRIGGER_FIRED_BY_UPDATE(trigdata->tg_event))
+		checktid = trigdata->tg_newslot->tts_tid;
+	else
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),
+				 errmsg("function \"%s\" must be fired for INSERT or UPDATE",
+						funcname)));
+		ItemPointerSetInvalid(&checktid);	/* keep compiler quiet */
+	}
+
+	slot = table_slot_create(trigdata->tg_relation, NULL);
+	scan = table_beginscan_tid(trigdata->tg_relation, SnapshotSelf);
+
+	/*
+	 * Now look for latest tuple in that chain because it is possible that
+	 * same tuple is updated(or even inserted and then updated/deleted)
+	 * multiple times in a transaction.
+	 */
+	heap_get_latest_tid(scan, &checktid);
+
+	/*
+	 * Check if latest tuple is visible to current transaction.
+	 * heap_get_latest_tid(as called above) provides the latest tuple as per
+	 * current Snapshot and if tuple is not visible (if
+	 * table_tuple_fetch_row_version returns false), it means tuple is
+	 * inserted/updated and then deleted in the same transaction. We are sure
+	 * that initially tuple was inserted or or updated in this transaction
+	 * because this constraint trigger function was called as an UPDATE or
+	 * INSERT event of after row trigger.
+	 */
+	if (!table_tuple_fetch_row_version(trigdata->tg_relation,
+									   &checktid,
+									   SnapshotSelf,
+									   slot))
+	{
+		table_endscan(scan);
+		ExecDropSingleTupleTableSlot(slot);
+		return PointerGetDatum(NULL);
+	}
+
+	/* Make a local estate and Exprcontext */
+	estate = CreateExecutorState();
+	econtext = GetPerTupleExprContext(estate);
+	econtext->ecxt_scantuple = slot;
+
+	/*
+	 * Open the relation, acquiring a AccessShareLock.
+	 */
+	rel = table_open(trigdata->tg_relation->rd_id, AccessShareLock);
+	rInfo = ExecGetTriggerResultRel(estate, RelationGetRelid(rel),
+									NULL);
+	ExecConstraints(rInfo, slot, estate, CHECK_DEFERRED_EXISTING);
+
+	/*
+	 * If that worked, then this potential failure of check constraint is now
+	 * resolved, and we are done.
+	 */
+	if (estate != NULL)
+	{
+		ExecCloseResultRelations(estate);
+		ExecResetTupleTable(estate->es_tupleTable, false);
+		FreeExecutorState(estate);
+	}
+
+	table_endscan(scan);
+	ExecDropSingleTupleTableSlot(slot);
+	table_close(rel, AccessShareLock);
+	return PointerGetDatum(NULL);
+}

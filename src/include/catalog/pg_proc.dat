@@ -3901,6 +3901,11 @@
   proname => 'unique_key_recheck', provolatile => 'v', prorettype => 'trigger',
   proargtypes => '', prosrc => 'unique_key_recheck' },
 
+# Deferrable unique constraint trigger
+{ oid => '1382', descr => 'deferred CHECK constraint check',
+  proname => 'check_constraint_recheck', provolatile => 'v', prorettype => 'trigger',
+  proargtypes => '', prosrc => 'check_constraint_recheck' },
+
 # Generic referential integrity constraint triggers
 { oid => '1644', descr => 'referential integrity FOREIGN KEY ... REFERENCES',
   proname => 'RI_FKey_check_ins', provolatile => 'v', prorettype => 'trigger',

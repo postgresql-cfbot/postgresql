@@ -353,7 +353,8 @@ static void RangeVarCallbackForTruncate(const RangeVar *relation,
 static List *MergeAttributes(List *columns, const List *supers, char relpersistence,
 							 bool is_partition, List **supconstr,
 							 List **supnotnulls);
-static List *MergeCheckConstraint(List *constraints, const char *name, Node *expr);
+static List *MergeCheckConstraint(List *constraints, const char *name,
+								  Node *expr, bool is_deferrable, bool is_deferred);
 static void MergeAttributesIntoExisting(Relation child_rel, Relation parent_rel);
 static void MergeConstraintsIntoExisting(Relation child_rel, Relation parent_rel);
 static void StoreCatalogInheritance(Oid relationId, List *supers,
@@ -933,6 +934,9 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 			cooked->name = NULL;
 			cooked->attnum = attnum;
 			cooked->expr = colDef->cooked_default;
+			cooked->is_deferrable = false;	/* By default constraint is not
+											 * deferrable */
+			cooked->is_deferred = false;	/* ditto */
 			cooked->skip_validation = false;
 			cooked->is_local = true;	/* not used for defaults */
 			cooked->inhcount = 0;	/* ditto */
@@ -2970,6 +2974,8 @@ MergeAttributes(List *columns, const List *supers, char relpersistence,
 			for (int i = 0; i < constr->num_check; i++)
 			{
 				char	   *name = check[i].ccname;
+				bool		is_deferrable = check[i].ccdeferrable;
+				bool		is_deferred = check[i].ccdeferred;
 				Node	   *expr;
 				bool		found_whole_row;
 
@@ -2996,7 +3002,8 @@ MergeAttributes(List *columns, const List *supers, char relpersistence,
 									   name,
 									   RelationGetRelationName(relation))));
 
-				constraints = MergeCheckConstraint(constraints, name, expr);
+				constraints = MergeCheckConstraint(constraints, name, expr,
+												   is_deferrable, is_deferred);
 			}
 		}
 
@@ -3350,7 +3357,8 @@ MergeAttributes(List *columns, const List *supers, char relpersistence,
  * the list.
  */
 static List *
-MergeCheckConstraint(List *constraints, const char *name, Node *expr)
+MergeCheckConstraint(List *constraints, const char *name, Node *expr,
+					 bool is_deferrable, bool is_deferred)
 {
 	ListCell   *lc;
 	CookedConstraint *newcon;
@@ -3390,6 +3398,8 @@ MergeCheckConstraint(List *constraints, const char *name, Node *expr)
 	newcon->contype = CONSTR_CHECK;
 	newcon->name = pstrdup(name);
 	newcon->expr = expr;
+	newcon->is_deferrable = is_deferrable;
+	newcon->is_deferred = is_deferred;
 	newcon->inhcount = 1;
 	return lappend(constraints, newcon);
 }
@@ -19608,6 +19618,9 @@ DetachAddConstraintIfNeeded(List **wqueue, Relation partRel)
 		n->raw_expr = NULL;
 		n->cooked_expr = nodeToString(make_ands_explicit(constraintExpr));
 		n->initially_valid = true;
+		n->deferrable = false;	/* By default this new constraint must be
+								 * non-deferrable */
+		n->initdeferred = false;	/* Ditto */
 		n->skip_validation = true;
 		/* It's a re-add, since it nominally already exists */
 		ATAddCheckNNConstraint(wqueue, tab, partRel, n,

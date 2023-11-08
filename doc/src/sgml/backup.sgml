@@ -1380,7 +1380,9 @@ restore_command = 'cp /mnt/server/archivedir/%f %p'
       tool. If you include the <literal>-X</literal> parameter when calling
       it, all the write-ahead log required to use the backup will be
       included in the backup automatically, and no special action is
-      required to restore the backup.
+      required to restore the backup. Restoring a standalone backup is
+      equivalent to crash recovery, replaying all the WAL stored in
+      <filename>pg_wal</filename> up to its end.
      </para>
     </sect3>
 

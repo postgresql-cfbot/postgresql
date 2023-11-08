@@ -133,6 +133,8 @@ static TimeLineID curFileTLI;
  * currently performing crash recovery using only XLOG files in pg_wal, but
  * will switch to using offline XLOG archives as soon as we reach the end of
  * WAL in pg_wal.
+ *
+ * InArchiveRecovery should never be set without ArchiveRecoveryRequested.
  */
 bool		ArchiveRecoveryRequested = false;
 bool		InArchiveRecovery = false;
@@ -595,13 +597,22 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		List	   *tablespaces = NIL;
 
 		/*
-		 * Archive recovery was requested, and thanks to the backup label
-		 * file, we know how far we need to replay to reach consistency. Enter
-		 * archive recovery directly.
+		 * If archive recovery was requested, and we know how far we need to
+		 * replay to reach consistency thanks to the backup label file, then
+		 * enter archive recovery directly in this case.
+		 *
+		 * If archive recovery was not requested, then do crash recovery and
+		 * replay all the local WAL.  This still checks that all the WAL up
+		 * to backupEndRequired has been replayed.  This case is useful when
+		 * restoring from a standalone base backup, taken with pg_basebackup
+		 * --wal-method=stream, for example.
 		 */
-		InArchiveRecovery = true;
-		if (StandbyModeRequested)
-			EnableStandbyMode();
+		if (ArchiveRecoveryRequested)
+		{
+			InArchiveRecovery = true;
+			if (StandbyModeRequested)
+				EnableStandbyMode();
+		}
 
 		/*
 		 * When a backup_label file is present, we want to roll forward from
@@ -1591,6 +1602,12 @@ ShutdownWalRecovery(void)
 	 */
 	if (ArchiveRecoveryRequested)
 		DisownLatch(&XLogRecoveryCtl->recoveryWakeupLatch);
+
+	/*
+	 * InArchiveRecovery should never have been set without
+	 * ArchiveRecoveryRequested.
+	 */
+	Assert(ArchiveRecoveryRequested || !InArchiveRecovery);
 }
 
 /*

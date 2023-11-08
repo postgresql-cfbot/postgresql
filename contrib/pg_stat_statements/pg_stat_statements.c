@@ -100,13 +100,6 @@ static const uint32 PGSS_PG_MAJOR_VERSION = PG_VERSION_NUM / 100;
 #define IS_STICKY(c)	((c.calls[PGSS_PLAN] + c.calls[PGSS_EXEC]) == 0)
 
 /*
- * Utility statements that pgss_ProcessUtility and pgss_post_parse_analyze
- * ignores.
- */
-#define PGSS_HANDLED_UTILITY(n)		(!IsA(n, ExecuteStmt) && \
-									!IsA(n, PrepareStmt))
-
-/*
  * Extension version number, for supporting older extension versions' objects
  */
 typedef enum pgssVersion
@@ -836,16 +829,18 @@ pgss_post_parse_analyze(ParseState *pstate, Query *query, JumbleState *jstate)
 		prev_post_parse_analyze_hook(pstate, query, jstate);
 
 	/* Safety check... */
-	if (!pgss || !pgss_hash || !pgss_enabled(exec_nested_level))
+	if (!pgss || !pgss_hash || !pgss_enabled(plan_nested_level + exec_nested_level))
 		return;
 
 	/*
-	 * Clear queryId for prepared statements related utility, as those will
-	 * inherit from the underlying statement's one.
+	 * If it's EXECUTE, clear the queryId so that stats will accumulate for
+	 * the underlying PREPARE.  But don't do this if we're not tracking
+	 * utility statements, to avoid messing up another extension that might be
+	 * tracking them.
 	 */
 	if (query->utilityStmt)
 	{
-		if (pgss_track_utility && !PGSS_HANDLED_UTILITY(query->utilityStmt))
+		if (pgss_track_utility && IsA(query->utilityStmt, ExecuteStmt))
 		{
 			query->queryId = UINT64CONST(0);
 			return;
@@ -959,12 +954,26 @@ pgss_planner(Query *parse,
 	}
 	else
 	{
-		if (prev_planner_hook)
-			result = prev_planner_hook(parse, query_string, cursorOptions,
-									   boundParams);
-		else
-			result = standard_planner(parse, query_string, cursorOptions,
-									  boundParams);
+		/*
+		 * Even though we're not tracking plan time for this statement, we
+		 * must still increment the nesting level, to ensure that functions
+		 * evaluated during planning are not seen as top-level calls.
+		 */
+		plan_nested_level++;
+		PG_TRY();
+		{
+			if (prev_planner_hook)
+				result = prev_planner_hook(parse, query_string, cursorOptions,
+										   boundParams);
+			else
+				result = standard_planner(parse, query_string, cursorOptions,
+										  boundParams);
+		}
+		PG_FINALLY();
+		{
+			plan_nested_level--;
+		}
+		PG_END_TRY();
 	}
 
 	return result;
@@ -986,7 +995,7 @@ pgss_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	 * counting of optimizable statements that are directly contained in
 	 * utility statements.
 	 */
-	if (pgss_enabled(exec_nested_level) && queryDesc->plannedstmt->queryId != UINT64CONST(0))
+	if (pgss_enabled(plan_nested_level + exec_nested_level) && queryDesc->plannedstmt->queryId != UINT64CONST(0))
 	{
 		/*
 		 * Set up to track total elapsed time in ExecutorRun.  Make sure the
@@ -1056,7 +1065,7 @@ pgss_ExecutorEnd(QueryDesc *queryDesc)
 	uint64		queryId = queryDesc->plannedstmt->queryId;
 
 	if (queryId != UINT64CONST(0) && queryDesc->totaltime &&
-		pgss_enabled(exec_nested_level))
+		pgss_enabled(plan_nested_level + exec_nested_level))
 	{
 		/*
 		 * Make sure stats accumulation is done.  (Note: it's okay if several
@@ -1097,6 +1106,7 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	uint64		saved_queryId = pstmt->queryId;
 	int			saved_stmt_location = pstmt->stmt_location;
 	int			saved_stmt_len = pstmt->stmt_len;
+	bool		enabled = pgss_track_utility && pgss_enabled(plan_nested_level + exec_nested_level);
 
 	/*
 	 * Force utility statements to get queryId zero.  We do this even in cases
@@ -1112,7 +1122,7 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	 * that user configured another extension to handle utility statements
 	 * only.
 	 */
-	if (pgss_enabled(exec_nested_level) && pgss_track_utility)
+	if (enabled)
 		pstmt->queryId = UINT64CONST(0);
 
 	/*
@@ -1124,11 +1134,13 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	 * hash table entry for the PREPARE (with hash calculated from the query
 	 * string), and then a different one with the same query string (but hash
 	 * calculated from the query tree) would be used to accumulate costs of
-	 * ensuing EXECUTEs.  This would be confusing, and inconsistent with other
-	 * cases where planning time is not included at all.
+	 * ensuing EXECUTEs.  This would be confusing.  Since PREPARE doesn't
+	 * actually run the planner (only parse+rewrite), its costs are generally
+	 * pretty negligible and it seems okay to just ignore it.
 	 */
-	if (pgss_track_utility && pgss_enabled(exec_nested_level) &&
-		PGSS_HANDLED_UTILITY(parsetree))
+	if (enabled &&
+		!IsA(parsetree, ExecuteStmt) &&
+		!IsA(parsetree, PrepareStmt))
 	{
 		instr_time	start;
 		instr_time	duration;
@@ -1206,14 +1218,41 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	}
 	else
 	{
-		if (prev_ProcessUtility)
-			prev_ProcessUtility(pstmt, queryString, readOnlyTree,
-								context, params, queryEnv,
-								dest, qc);
-		else
-			standard_ProcessUtility(pstmt, queryString, readOnlyTree,
+		/*
+		 * Even though we're not tracking execution time for this statement,
+		 * we must still increment the nesting level, to ensure that functions
+		 * evaluated within it are not seen as top-level calls.  But don't do
+		 * so for EXECUTE; that way, when control reaches pgss_planner or
+		 * pgss_ExecutorStart, we will treat the costs as top-level if
+		 * appropriate.  Likewise, don't bump for PREPARE, so that parse
+		 * analysis will treat the statement as top-level if appropriate.
+		 *
+		 * To be absolutely certain we don't mess up the nesting level,
+		 * evaluate the bump_level condition just once.
+		 */
+		bool		bump_level =
+			!IsA(parsetree, ExecuteStmt) &&
+			!IsA(parsetree, PrepareStmt);
+
+		if (bump_level)
+			exec_nested_level++;
+		PG_TRY();
+		{
+			if (prev_ProcessUtility)
+				prev_ProcessUtility(pstmt, queryString, readOnlyTree,
 									context, params, queryEnv,
 									dest, qc);
+			else
+				standard_ProcessUtility(pstmt, queryString, readOnlyTree,
+										context, params, queryEnv,
+										dest, qc);
+		}
+		PG_FINALLY();
+		{
+			if (bump_level)
+				exec_nested_level--;
+		}
+		PG_END_TRY();
 	}
 }
 
@@ -1271,7 +1310,7 @@ pgss_store(const char *query, uint64 queryId,
 	key.userid = GetUserId();
 	key.dbid = MyDatabaseId;
 	key.queryid = queryId;
-	key.toplevel = (exec_nested_level == 0);
+	key.toplevel = (plan_nested_level + exec_nested_level == 0);
 
 	/* Lookup the hash table entry with shared lock. */
 	LWLockAcquire(pgss->lock, LW_SHARED);

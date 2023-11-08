@@ -551,6 +551,16 @@ select * from onek t1
       on t2.unique1 = 1;
 
 --
+-- check for correct handling of nullingrels when simplifying functions
+--
+create function f_immutable_nullingrels(t onek) returns text as
+$$ select t.unique1::text; $$ language sql immutable;
+explain (costs off)
+select f_immutable_nullingrels(t2) from onek t1
+    left join onek t2 on t1.unique1 = t2.unique1
+    left join onek t3 on true;
+
+--
 -- check a case where we formerly got confused by conflicting sort orders
 -- in redundant merge join path keys
 --

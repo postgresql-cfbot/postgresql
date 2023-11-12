@@ -1578,6 +1578,7 @@ COMMIT;
 SELECT COUNT(*) AS "#mum"
 FROM bla WHERE s = 'Mum' \;               -- no mum here
 SELECT * FROM bla ORDER BY 1;
+COMMIT;
 
 -- reset all
 \set AUTOCOMMIT on
@@ -1853,3 +1854,47 @@ DROP ROLE regress_du_role0;
 DROP ROLE regress_du_role1;
 DROP ROLE regress_du_role2;
 DROP ROLE regress_du_admin;
+
+-- Test empty privileges.
+BEGIN;
+-- Create an owner for tested objects because output contains owner info.
+-- Must be superuser to be owner of tablespace.
+CREATE ROLE regress_zeropriv_owner SUPERUSER;
+SET LOCAL ROLE regress_zeropriv_owner;
+
+CREATE DOMAIN regress_zeropriv_domain AS int;
+REVOKE ALL ON DOMAIN regress_zeropriv_domain FROM CURRENT_USER, PUBLIC;
+\dD+ regress_zeropriv_domain
+
+CREATE PROCEDURE regress_zeropriv_proc() LANGUAGE sql AS '';
+REVOKE ALL ON PROCEDURE regress_zeropriv_proc() FROM CURRENT_USER, PUBLIC;
+\df+ regress_zeropriv_proc
+
+ALTER LANGUAGE plpgsql OWNER TO CURRENT_USER;
+REVOKE ALL ON LANGUAGE plpgsql FROM CURRENT_USER, PUBLIC;
+\dL+ plpgsql
+
+SELECT lo_create(3001);
+REVOKE ALL ON LARGE OBJECT 3001 FROM CURRENT_USER;
+\dl+
+
+CREATE SCHEMA regress_zeropriv_schema;
+REVOKE ALL ON SCHEMA regress_zeropriv_schema FROM CURRENT_USER;
+\dn+ regress_zeropriv_schema
+
+CREATE TABLE regress_zeropriv_tbl (a int);
+REVOKE ALL ON TABLE regress_zeropriv_tbl FROM CURRENT_USER;
+\dp regress_zeropriv_tbl
+
+CREATE TYPE regress_zeropriv_type AS (a int);
+REVOKE ALL ON TYPE regress_zeropriv_type FROM CURRENT_USER, PUBLIC;
+\dT+ regress_zeropriv_type
+
+ROLLBACK;
+
+-- test display of default privileges with \pset null
+CREATE TABLE defprivs ();
+\pset null '(default)'
+\z defprivs
+\pset null ''
+DROP TABLE defprivs;

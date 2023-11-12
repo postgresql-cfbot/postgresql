@@ -154,8 +154,72 @@ CREATE TEMP TABLE test_jsonb (
 
 INSERT INTO test_jsonb VALUES
 ('scalar','"a scalar"'),
+('scalarint','2'),
 ('array','["zero", "one","two",null,"four","five", [1,2,3],{"f1":9}]'),
-('object','{"field1":"val1","field2":"val2","field3":null, "field4": 4, "field5": [1,2,3], "field6": {"f1":9}}');
+('object','{"field1":"val1","field2":"val2","field3":null, "field4": 4, "field5": [1,2,3], "field6": {"f1":9}, "field7": true, "field8": [1,2,3,4,5]}');
+
+\pset null NULL
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT
+(test_json -> 'field4')::numeric,
+(test_json -> 'field4')::int2,
+(test_json -> 'field4')::int4,
+(test_json -> 'field4')::int8,
+(test_json -> 'field4')::float4,
+(test_json -> 'field4')::float8,
+(test_json->'field5' -> 0)::numeric,
+(test_json->'field5' -> 10)::numeric,
+(test_json#>'{"field6", "f1"}')::numeric,
+(test_json#>'{"field6", "f2"}')::numeric,
+(test_json#>'{"field7"}')::bool
+FROM test_jsonb
+WHERE json_type = 'object';
+
+SELECT
+(test_json -> 'field4')::numeric,
+(test_json -> 'field4')::int2,
+(test_json -> 'field4')::int4,
+(test_json -> 'field4')::int8,
+(test_json -> 'field4')::float4,
+(test_json -> 'field4')::float8,
+(test_json -> 'field5' -> 0)::numeric,
+(test_json -> 'field5' -> 10)::numeric,
+(test_json #> '{"field6", "f1"}')::numeric,
+(test_json #> '{"field6", "f2"}')::numeric,
+(test_json#>'{"field7"}')::bool
+FROM test_jsonb
+WHERE json_type = 'object';
+
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT
+jsonb_path_query(test_json,'$.field8[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}'),
+jsonb_path_query_first(test_json, '$.field8[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}'),
+jsonb_path_query(test_json,'$.field8[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}')::int2,
+jsonb_path_query_first(test_json, '$.field8[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}')::int2
+FROM test_jsonb
+WHERE json_type = 'object';
+
+SELECT
+jsonb_path_query(test_json,'$.field8[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}'),
+jsonb_path_query_first(test_json, '$.field8[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}'),
+jsonb_path_query(test_json,'$.field8[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}')::int2,
+jsonb_path_query_first(test_json, '$.field8[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}')::int2
+FROM test_jsonb
+WHERE json_type = 'object';
+
+
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT (test_json #> '{}')::numeric FROM test_jsonb WHERE json_type = 'scalarint';
+SELECT (test_json #> '{}')::numeric FROM test_jsonb WHERE json_type = 'scalarint';
+
+-- let raise some errors.
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT (test_json -> 'field1')::int4 FROM test_jsonb WHERE json_type = 'object';
+SELECT (test_json -> 'field1')::int4 FROM test_jsonb WHERE json_type = 'object';
+
+SELECT (test_json -> 'field1')::bool FROM test_jsonb WHERE json_type = 'object';
+
+\pset null ''
 
 SELECT test_json -> 'x' FROM test_jsonb WHERE json_type = 'scalar';
 SELECT test_json -> 'x' FROM test_jsonb WHERE json_type = 'array';

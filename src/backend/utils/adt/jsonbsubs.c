@@ -251,7 +251,7 @@ jsonb_subscript_fetch(ExprState *state,
 									  workspace->index,
 									  sbsrefstate->numupper,
 									  op->resnull,
-									  false);
+									  JsonbValue_AsJsonb);
 }
 
 /*
@@ -343,7 +343,7 @@ jsonb_subscript_fetch_old(ExprState *state,
 												   sbsrefstate->upperindex,
 												   sbsrefstate->numupper,
 												   &sbsrefstate->prevnull,
-												   false);
+												   JsonbValue_AsJsonb);
 	}
 }
 

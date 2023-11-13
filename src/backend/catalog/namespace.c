@@ -3905,6 +3905,8 @@ recomputeNamespacePath(void)
 	List	   *newpath;
 	ListCell   *l;
 	bool		temp_missing;
+	bool		implicit_pg_temp = true;
+	bool		implicit_pg_catalog = true;
 	Oid			firstNS;
 	bool		pathChanged;
 	MemoryContext oldcxt;
@@ -3974,6 +3976,14 @@ recomputeNamespacePath(void)
 					temp_missing = true;
 			}
 		}
+		else if (strcmp(curname, "!pg_temp") == 0)
+		{
+			implicit_pg_temp = false;
+		}
+		else if (strcmp(curname, "!pg_catalog") == 0)
+		{
+			implicit_pg_catalog = false;
+		}
 		else
 		{
 			/* normal namespace reference */
@@ -3998,14 +4008,17 @@ recomputeNamespacePath(void)
 		firstNS = linitial_oid(oidlist);
 
 	/*
-	 * Add any implicitly-searched namespaces to the list.  Note these go on
-	 * the front, not the back; also notice that we do not check USAGE
-	 * permissions for these.
+	 * Add any implicitly-searched namespaces to the list unless the markers
+	 * "!pg_catalog" or "!pg_temp" are present.  Note these go on the front,
+	 * not the back; also notice that we do not check USAGE permissions for
+	 * these.
 	 */
-	if (!list_member_oid(oidlist, PG_CATALOG_NAMESPACE))
+	if (implicit_pg_catalog &&
+		!list_member_oid(oidlist, PG_CATALOG_NAMESPACE))
 		oidlist = lcons_oid(PG_CATALOG_NAMESPACE, oidlist);
 
-	if (OidIsValid(myTempNamespace) &&
+	if (implicit_pg_temp &&
+		OidIsValid(myTempNamespace) &&
 		!list_member_oid(oidlist, myTempNamespace))
 		oidlist = lcons_oid(myTempNamespace, oidlist);
 

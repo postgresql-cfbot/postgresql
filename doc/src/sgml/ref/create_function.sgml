@@ -794,9 +794,8 @@ SELECT * FROM dup(42);
     Particularly important in this regard is the
     temporary-table schema, which is searched first by default, and
     is normally writable by anyone.  A secure arrangement can be obtained
-    by forcing the temporary schema to be searched last.  To do this,
-    write <literal>pg_temp</literal><indexterm><primary>pg_temp</primary><secondary>securing functions</secondary></indexterm> as the last entry in <varname>search_path</varname>.
-    This function illustrates safe usage:
+    by specifying <literal>!pg_temp</literal>.  This function illustrates
+    safe usage:
 
 <programlisting>
 CREATE FUNCTION check_password(uname TEXT, pass TEXT)
@@ -811,8 +810,7 @@ BEGIN
 END;
 $$  LANGUAGE plpgsql
     SECURITY DEFINER
-    -- Set a secure search_path: trusted schema(s), then 'pg_temp'.
-    SET search_path = admin, pg_temp;
+    SET search_path = admin, "!pg_temp";
 </programlisting>
 
     This function's intention is to access a table <literal>admin.pwds</literal>.

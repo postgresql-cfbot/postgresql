@@ -451,6 +451,43 @@ OPTIONS (ADD password_required 'false');
 
   </sect3>
 
+  <sect3 id="postgres-fdw-options-partial-aggregate-pushdown">
+   <title>Partial Aggregate Pushdown Options</title>
+
+   <para>
+    By default, <filename>postgres_fdw</filename> assumes that each
+    built-in aggregate function has a partial aggregate function defined on
+    the remote server;  see <xref linkend="partial-aggregate-pushdown"/>
+    for a definition of the partial aggregate functions. This may be
+    overridden using the following option:
+   </para>
+
+   <variablelist>
+
+    <varlistentry>
+     <term><literal>check_partial_aggregate_support</literal> (<type>boolean</type>)</term>
+     <listitem>
+      <para>
+       If this option is false, <filename>postgres_fdw</filename> always
+       uses partial aggregate pushdown by assuming that each built-in
+       aggregate function has a partial aggregate function defined on
+       the remote server.  If this option is true, local aggregates
+       whose partial computation function references itself are assumed
+       to exist on the remote server.  If not, during query planning,
+       <filename>postgres_fdw</filename> will connect to the remote
+       server and retrieve the remote server version.  If the remote
+       version is the same or newer, partial aggregate functions will be
+       assumed to exist.  If older, <filename>postgres_fdw</filename>
+       checks that the remote server has a matching partial aggregate
+       function before performing partial aggregate pushdown.  The default
+       is <literal>false</literal>.
+      </para>
+     </listitem>
+    </varlistentry>
+
+   </variablelist>
+  </sect3>
+
   <sect3 id="postgres-fdw-options-asynchronous-execution">
    <title>Asynchronous Execution Options</title>
 
@@ -929,14 +966,15 @@ postgres=# SELECT postgres_fdw_disconnect_all();
   <para>
    <filename>postgres_fdw</filename> attempts to optimize remote queries to reduce
    the amount of data transferred from foreign servers.  This is done by
-   sending query <literal>WHERE</literal> clauses to the remote server for
-   execution, and by not retrieving table columns that are not needed for
-   the current query.  To reduce the risk of misexecution of queries,
-   <literal>WHERE</literal> clauses are not sent to the remote server unless they use
-   only data types, operators, and functions that are built-in or belong to an
-   extension that's listed in the foreign server's <literal>extensions</literal>
-   option.  Operators and functions in such clauses must
-   be <literal>IMMUTABLE</literal> as well.
+   sending query <literal>WHERE</literal> clauses and aggregate expressions
+   to the remote server for execution, and by not retrieving table
+   columns that are not needed for the current query.  To reduce the
+   risk of misexecution of queries, <literal>WHERE</literal> clauses
+   and aggregate expressions are not sent to the remote server unless
+   they only use data types, operators, and functions that are built-in
+   or belong to an extension that is listed in the foreign server's
+   <literal>extensions</literal> option.  Operators and functions in such
+   clauses must be <literal>IMMUTABLE</literal> as well.
    For an <command>UPDATE</command> or <command>DELETE</command> query,
    <filename>postgres_fdw</filename> attempts to optimize the query execution by
    sending the whole query to the remote server if there are no query
@@ -963,6 +1001,64 @@ postgres=# SELECT postgres_fdw_disconnect_all();
   <para>
    The query that is actually sent to the remote server for execution can
    be examined using <command>EXPLAIN VERBOSE</command>.
+  </para>
+ </sect2>
+
+ <sect2 id="partial-aggregate-pushdown">
+  <title>Partial aggregate pushdown</title>
+  <para>
+   Partial aggregate pushdown is an optimization for queries that contains
+   aggregate expressions for a partitioned table across one or more remote
+   servers. If multiple conditions are met, partial aggregate function
+   calls are sent to the remote servers.  The conditions under which this
+   sending is active are as follows.
+
+   <itemizedlist spacing="compact">
+    <listitem>
+     <para>
+      A partial aggregate function which corresponds to the aggregate
+      expression is defined on the local server and assumed to exist on
+      the remote server
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      The conditions in <xref linkend="postgres-fdw-remote-query-optimization"/> are true
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      The query doesn't contain a <literal>HAVING</literal> clause
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      The aggregate expressions in the query do not contain
+      <literal>DISTINCT</literal> or <literal>ORDER BY</literal> clauses
+     </para>
+    </listitem>
+   </itemizedlist>
+
+   When partial aggregate pushdown is used for aggregate expressions,
+   remote queries replace aggregate function calls with partial
+   aggregate function calls.  If the data type of the state value is not
+   <type>internal</type>, the partial aggregate function must not have
+   a final function.  If <type>internal</type>, the partial aggregate
+   function must have the same final function as the aggregate function's
+   serialization function, and the partial aggregate function and the
+   aggregate function have the same transition function and data type
+   of the state value. If the partial aggregate function has any of the
+   following members: initial state, combine function, serialization
+   function, or deserialization function, the members must match the
+   corresponding members in the aggregate function.  Built-in aggregate
+   functions that support partial aggregation must also have their
+   partial aggregate functions defined as built-in aggregates.  See <xref
+   linkend="postgres-fdw-options-partial-aggregate-pushdown"/> for details
+   on how the existance of remote-server partial aggregates are checked.
+   <filename>postgres_fdw</filename> assumes user-defined aggregate
+   functions have partial aggregate functions on the remote server only
+   if both belong to extensions listed in the foreign server's extensions
+   option.
   </para>
  </sect2>
 
@@ -1031,14 +1127,24 @@ postgres=# SELECT postgres_fdw_disconnect_all();
    back to 8.1.  A limitation however is that <filename>postgres_fdw</filename>
    generally assumes that immutable built-in functions and operators are
    safe to send to the remote server for execution, if they appear in a
-   <literal>WHERE</literal> clause for a foreign table.  Thus, a built-in
-   function that was added since the remote server's release might be sent
-   to it for execution, resulting in <quote>function does not exist</quote> or
-   a similar error.  This type of failure can be worked around by
+   <literal>WHERE</literal> clause or aggregate expressions for a foreign table.
+   Thus, a built-in function that was added since the remote server's release
+   might be sent to it for execution, resulting in <quote>function does not
+   exist</quote> or a similar error.  This type of failure can be worked around by
    rewriting the query, for example by embedding the foreign table
    reference in a sub-<literal>SELECT</literal> with <literal>OFFSET 0</literal> as an
    optimization fence, and placing the problematic function or operator
    outside the sub-<literal>SELECT</literal>.
+  </para>
+
+  <para>
+   A similar problem can occur with partial aggregate pushdown.
+   Pushdown causes aggregate function calls to send partial aggregate
+   function calls to the remote server. If the partial aggregate
+   function doesn't exist on the remote server, it causes
+   <quote>function does not exist</quote> or a similar error; see
+   <xref linkend="postgres-fdw-options-partial-aggregate-pushdown"/>
+   on how to enable remote server checks.
   </para>
  </sect2>
 

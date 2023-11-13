@@ -536,9 +536,6 @@ SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY income) FROM households;
    parallel aggregation by having different worker processes scan different
    portions of a table.  Each worker produces a partial state value, and at
    the end those state values are combined to produce a final state value.
-   (In the future this mode might also be used for purposes such as combining
-   aggregations over local and remote tables; but that is not implemented
-   yet.)
   </para>
 
   <para>
@@ -610,6 +607,14 @@ SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY income) FROM households;
    Worth noting also is that for an aggregate to be executed in parallel,
    the aggregate itself must be marked <literal>PARALLEL SAFE</literal>.  The
    parallel-safety markings on its support functions are not consulted.
+  </para>
+
+  <para>
+   <filename>postgres_fdw</filename> can optimize queries containing
+   aggregate expressions on partitioned tables that span multiple
+   remote servers. This optimization sends <firstterm>partial
+   aggregate functions</firstterm> to remote servers;  see <xref
+   linkend="partial-aggregate-pushdown"/> for details.
   </para>
 
  </sect2>

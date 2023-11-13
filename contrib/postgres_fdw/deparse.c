@@ -202,7 +202,7 @@ static bool is_subquery_var(Var *node, RelOptInfo *foreignrel,
 							int *relno, int *colno);
 static void get_relation_column_alias_ids(Var *node, RelOptInfo *foreignrel,
 										  int *relno, int *colno);
-
+static bool partial_agg_ok(Aggref *agg, PgFdwRelationInfo *fpinfo);
 
 /*
  * Examine each qual clause in input_conds, and classify them into two groups,
@@ -907,8 +907,9 @@ foreign_expr_walker(Node *node,
 				if (!IS_UPPER_REL(glob_cxt->foreignrel))
 					return false;
 
-				/* Only non-split aggregates are pushable. */
-				if (agg->aggsplit != AGGSPLIT_SIMPLE)
+				if (agg->aggsplit != AGGSPLIT_SIMPLE && agg->aggsplit != AGGSPLIT_INITIAL_SERIAL)
+					return false;
+				if (agg->aggsplit == AGGSPLIT_INITIAL_SERIAL && !partial_agg_ok(agg, fpinfo))
 					return false;
 
 				/* As usual, it must be shippable. */
@@ -3517,14 +3518,34 @@ deparseAggref(Aggref *node, deparse_expr_cxt *context)
 	StringInfo	buf = context->buf;
 	bool		use_variadic;
 
-	/* Only basic, non-split aggregation accepted. */
-	Assert(node->aggsplit == AGGSPLIT_SIMPLE);
+
+	Assert((node->aggsplit == AGGSPLIT_SIMPLE) ||
+		   (node->aggsplit == AGGSPLIT_INITIAL_SERIAL));
 
 	/* Check if need to print VARIADIC (cf. ruleutils.c) */
 	use_variadic = node->aggvariadic;
 
-	/* Find aggregate name from aggfnoid which is a pg_proc entry */
-	appendFunctionName(node->aggfnoid, context);
+	if (node->aggsplit == AGGSPLIT_SIMPLE)
+		/* Find aggregate name from aggfnoid which is a pg_proc entry */
+		appendFunctionName(node->aggfnoid, context);
+	else
+	{
+		HeapTuple	aggtup;
+		Form_pg_aggregate aggform;
+
+		/* Find aggregate name from aggfnoid and aggpartialfn */
+		aggtup = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(node->aggfnoid));
+		if (!HeapTupleIsValid(aggtup))
+			elog(ERROR, "cache lookup failed for aggregate %u", node->aggfnoid);
+		aggform = (Form_pg_aggregate) GETSTRUCT(aggtup);
+
+		if (aggform->aggpartialfn)
+			appendFunctionName(aggform->aggpartialfn, context);
+		else
+			elog(ERROR, "there is no aggpartialfn %u", node->aggfnoid);
+		ReleaseSysCache(aggtup);
+	}
+
 	appendStringInfoChar(buf, '(');
 
 	/* Add DISTINCT */
@@ -3723,6 +3744,7 @@ appendGroupByClause(List *tlist, deparse_expr_cxt *context)
 	Query	   *query = context->root->parse;
 	ListCell   *lc;
 	bool		first = true;
+	PgFdwRelationInfo *fpinfo = (PgFdwRelationInfo *) context->foreignrel->fdw_private;
 
 	/* Nothing to be done, if there's no GROUP BY clause in the query. */
 	if (!query->groupClause)
@@ -3743,7 +3765,7 @@ appendGroupByClause(List *tlist, deparse_expr_cxt *context)
 	 * to empty, and in any case the redundancy situation on the remote might
 	 * be different than what we think here.
 	 */
-	foreach(lc, query->groupClause)
+	foreach(lc, fpinfo->group_clause)
 	{
 		SortGroupClause *grp = (SortGroupClause *) lfirst(lc);
 
@@ -4046,4 +4068,79 @@ get_relation_column_alias_ids(Var *node, RelOptInfo *foreignrel,
 
 	/* Shouldn't get here */
 	elog(ERROR, "unexpected expression in subquery output");
+}
+
+/*
+ * Can we assume a buit-in aggpartialfunc exists on the remote server? If
+ * check_partial_aggregate_support is false, we assume the partial aggregate
+ * function exists on the remote server. If true, we assume the partial
+ * aggregate function exists on the remote server if the aggregate is so
+ * simple that the local aggregate's OID and its partial aggregate function
+ * OID are the same.  If not, we check the remote server version and assume
+ * the remote partial aggregate function exists if the remote server version
+ * is equal to or greater than the local server version.
+ */
+static bool
+is_builtin_aggpartialfunc_shippable(Form_pg_aggregate aggform,
+									PgFdwRelationInfo *fpinfo)
+{
+	bool		shippable = true;
+
+	/* So simple, we assume it exists. */
+	if (aggform->aggfnoid != aggform->aggpartialfn &&
+		fpinfo->check_partial_aggregate_support)
+	{
+		if (fpinfo->remoteversion == 0)
+		{
+			PGconn	   *conn = GetConnection(fpinfo->user, false, NULL);
+
+			fpinfo->remoteversion = PQserverVersion(conn);
+		}
+
+		if (fpinfo->remoteversion < PG_VERSION_NUM)
+			shippable = false;
+	}
+
+	return shippable;
+}
+
+/*
+ * ----------
+ * Check that partial aggregate "agg" is safe to push down.
+ *
+ * It is pushdown-safe when all of the following conditions are true:
+ *
+ *    * agg is an AGGKIND_NORMAL aggregate which contains no DISTINCT or
+ *    ORDER BY clauses
+ *    * There is a local aggregate function for partial aggregation
+ *    (aggpartialfunc) and it is assumed to exist on the remote server
+ * ----------
+ */
+static bool
+partial_agg_ok(Aggref *agg, PgFdwRelationInfo *fpinfo)
+{
+	HeapTuple	aggtup;
+	Form_pg_aggregate aggform;
+	bool		partial_agg_ok = true;
+
+	Assert(agg->aggsplit == AGGSPLIT_INITIAL_SERIAL);
+
+	/* We don't support complex partial aggregates */
+	if (agg->aggdistinct || agg->aggkind != AGGKIND_NORMAL || agg->aggorder != NIL)
+		return false;
+
+	aggtup = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(agg->aggfnoid));
+	if (!HeapTupleIsValid(aggtup))
+		elog(ERROR, "cache lookup failed for aggregate %u", agg->aggfnoid);
+	aggform = (Form_pg_aggregate) GETSTRUCT(aggtup);
+
+	if (!aggform->aggpartialfn)
+		partial_agg_ok = false;
+	else if (is_builtin(aggform->aggpartialfn))
+		partial_agg_ok = is_builtin_aggpartialfunc_shippable(aggform, fpinfo);
+	else if (!is_shippable(aggform->aggpartialfn, ProcedureRelationId, fpinfo))
+		partial_agg_ok = false;
+
+	ReleaseSysCache(aggtup);
+	return partial_agg_ok;
 }

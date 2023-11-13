@@ -63,6 +63,7 @@ AggregateCreate(const char *aggName,
 				List *aggmtransfnName,
 				List *aggminvtransfnName,
 				List *aggmfinalfnName,
+				List *aggpartialfnName,
 				bool finalfnExtraArgs,
 				bool mfinalfnExtraArgs,
 				char finalfnModify,
@@ -91,6 +92,8 @@ AggregateCreate(const char *aggName,
 	Oid			mtransfn = InvalidOid;	/* can be omitted */
 	Oid			minvtransfn = InvalidOid;	/* can be omitted */
 	Oid			mfinalfn = InvalidOid;	/* can be omitted */
+	bool		isaggpartialfn = false;
+	Oid			aggpartialfn = InvalidOid;	/* can be omitted */
 	Oid			sortop = InvalidOid;	/* can be omitted */
 	Oid		   *aggArgTypes = parameterTypes->values;
 	bool		mtransIsStrict = false;
@@ -569,6 +572,94 @@ AggregateCreate(const char *aggName,
 							format_type_be(finaltype))));
 	}
 
+	/*
+	 * Validate the aggpartialfunc, if present.
+	 */
+	if (aggpartialfnName)
+	{
+		char	   *aggpartialName;
+		Oid			aggpartialNamespace;
+
+		if (!aggcombinefnName)
+			elog(ERROR, "aggcombinefnName must be supplied if aggpartialfnName is supplied");
+
+		/* Convert list of names to a name and namespace */
+		aggpartialNamespace = QualifiedNameGetCreationNamespace(aggpartialfnName,
+																&aggpartialName);
+
+		if ((aggNamespace == aggpartialNamespace)
+			&& (strcmp(aggName, aggpartialName) == 0))
+		{
+			if (((aggTransType != INTERNALOID) && (finalfn != InvalidOid))
+				|| ((aggTransType == INTERNALOID) && (finalfn != serialfn)))
+				elog(ERROR, "%s is not its own aggpartialfunc", aggName);
+			isaggpartialfn = true;
+		}
+		else
+		{
+			HeapTuple	aggtup;
+			Form_pg_aggregate aggpartialform;
+			Datum		textInitVal;
+			char	   *strInitVal;
+			bool		initValueIsNull;
+
+			aggpartialfn = LookupFuncName(aggpartialfnName, numArgs, aggArgTypes, false);
+
+			/* Check aggregate creator has permission to call the function */
+			aclresult = object_aclcheck(ProcedureRelationId, aggpartialfn,
+										GetUserId(), ACL_EXECUTE);
+			if (aclresult != ACLCHECK_OK)
+				aclcheck_error(aclresult, OBJECT_FUNCTION, get_func_name(aggpartialfn));
+
+			rettype = get_func_rettype(aggpartialfn);
+
+			aggtup = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(aggpartialfn));
+			if (!HeapTupleIsValid(aggtup))
+				elog(ERROR, "cache lookup failed for aggpartialfunc %u", aggpartialfn);
+
+			aggpartialform = (Form_pg_aggregate) GETSTRUCT(aggtup);
+
+			if ((aggpartialform->aggcombinefn != InvalidOid) &&
+				(aggpartialform->aggcombinefn != combinefn))
+				elog(ERROR, "%s in aggregate and %s in its aggpartialfunc must match",
+					 "combinefunc", "combinefunc");
+
+			if (aggpartialform->aggtransfn != transfn)
+				elog(ERROR, "%s in aggregate and its aggpartialfunc must match", "sfunc");
+
+			textInitVal = SysCacheGetAttr(AGGFNOID, aggtup,
+										  Anum_pg_aggregate_agginitval, &initValueIsNull);
+
+			if (!initValueIsNull && (agginitval != NULL))
+			{
+				strInitVal = TextDatumGetCString(textInitVal);
+				if (strcmp(strInitVal, agginitval) != 0)
+					elog(ERROR, "%s in aggregate and %s in its aggpartialfunc must match",
+						 "initcond", "initcond");
+			}
+
+			if (aggTransType == INTERNALOID)
+			{
+				if (aggpartialform->aggcombinefn != InvalidOid)
+				{
+					if (aggpartialform->aggserialfn != serialfn)
+						elog(ERROR, "%s in aggregate and %s in its aggpartialfunc must match",
+							 "serialfunc", "serialfunc");
+
+					if (aggpartialform->aggdeserialfn != deserialfn)
+						elog(ERROR, "%s in aggregate and %s in its aggpartialfunc must match",
+							 "deserialfunc", "deserialfunc");
+				}
+				if (aggpartialform->aggfinalfn != serialfn)
+					elog(ERROR, "finalfunc of aggpartialfunc must match serialfunc of aggregate when stype is internal");
+			}
+			else if (aggpartialform->aggfinalfn != InvalidOid)
+				elog(ERROR, "finalfunc of aggpartialfunc must not be supplied when stype isn't internal");
+
+			ReleaseSysCache(aggtup);
+		}
+	}
+
 	/* handle sortop, if supplied */
 	if (aggsortopName)
 	{
@@ -684,6 +775,9 @@ AggregateCreate(const char *aggName,
 		values[Anum_pg_aggregate_aggminitval - 1] = CStringGetTextDatum(aggminitval);
 	else
 		nulls[Anum_pg_aggregate_aggminitval - 1] = true;
+	if (isaggpartialfn)
+		aggpartialfn = procOid;
+	values[Anum_pg_aggregate_aggpartialfn - 1] = ObjectIdGetDatum(aggpartialfn);
 
 	if (replace)
 		oldtup = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(procOid));
@@ -802,6 +896,13 @@ AggregateCreate(const char *aggName,
 	if (OidIsValid(sortop))
 	{
 		ObjectAddressSet(referenced, OperatorRelationId, sortop);
+		add_exact_object_address(&referenced, addrs);
+	}
+
+	/* Depends on aggpartialfunc, if any */
+	if (OidIsValid(aggpartialfn) && (aggpartialfn != procOid))
+	{
+		ObjectAddressSet(referenced, ProcedureRelationId, aggpartialfn);
 		add_exact_object_address(&referenced, addrs);
 	}
 

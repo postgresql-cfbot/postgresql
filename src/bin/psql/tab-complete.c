@@ -3231,11 +3231,15 @@ psql_completion(const char *text, int start, int end)
 	/* Complete CREATE TABLE <name> with '(', OF or PARTITION OF */
 	else if (TailMatches("CREATE", "TABLE", MatchAny) ||
 			 TailMatches("CREATE", "TEMP|TEMPORARY|UNLOGGED", "TABLE", MatchAny))
-		COMPLETE_WITH("(", "OF", "PARTITION OF");
+		COMPLETE_WITH("(", "OF", "PARTITION OF", "AS");
 	/* Complete CREATE TABLE <name> OF with list of composite types */
 	else if (TailMatches("CREATE", "TABLE", MatchAny, "OF") ||
 			 TailMatches("CREATE", "TEMP|TEMPORARY|UNLOGGED", "TABLE", MatchAny, "OF"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_composite_datatypes);
+	/* Complete CREATE TABLE <name> AS with list of keywords */
+	else if (TailMatches("CREATE", "TABLE", MatchAny, "AS") ||
+			 TailMatches("CREATE", "TEMP|TEMPORARY|UNLOGGED", "TABLE", MatchAny, "AS"))
+		COMPLETE_WITH("SELECT", "WITH");
 	/* Complete CREATE TABLE name (...) with supported options */
 	else if (TailMatches("CREATE", "TABLE", MatchAny, "(*)") ||
 			 TailMatches("CREATE", "UNLOGGED", "TABLE", MatchAny, "(*)"))

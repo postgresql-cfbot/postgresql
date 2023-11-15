@@ -545,7 +545,7 @@ RESET enable_seqscan;
 -- do some inequality tests for varlena data types
 CREATE TABLE brin_test_multi_2 (a UUID) WITH (fillfactor=10);
 INSERT INTO brin_test_multi_2
-SELECT v::uuid FROM (SELECT row_number() OVER (ORDER BY v) c, v FROM (SELECT md5((i/13)::text) AS v FROM generate_series(1,1000) s(i)) foo) bar ORDER BY c + 25 * random();
+SELECT v::uuid FROM (SELECT row_number() OVER (ORDER BY v) c, v FROM (SELECT fipshash((i/13)::text) AS v FROM generate_series(1,1000) s(i)) foo) bar ORDER BY c + 25 * random();
 
 CREATE INDEX brin_test_multi_2_idx ON brin_test_multi_2 USING brin (a uuid_minmax_multi_ops) WITH (pages_per_range=5);
 
@@ -570,7 +570,7 @@ SELECT COUNT(*) FROM brin_test_multi_2 WHERE a = 'aab32389-22bc-c25a-6f60-6eb525
 
 TRUNCATE brin_test_multi_2;
 INSERT INTO brin_test_multi_2
-SELECT v::uuid FROM (SELECT row_number() OVER (ORDER BY v) c, v FROM (SELECT md5((i/13)::text) AS v FROM generate_series(1,1000) s(i)) foo) bar ORDER BY c + 25 * random();
+SELECT v::uuid FROM (SELECT row_number() OVER (ORDER BY v) c, v FROM (SELECT fipshash((i/13)::text) AS v FROM generate_series(1,1000) s(i)) foo) bar ORDER BY c + 25 * random();
 
 SELECT COUNT(*) FROM brin_test_multi_2 WHERE a < '33e75ff0-9dd6-01bb-e69f-351039152189';
 

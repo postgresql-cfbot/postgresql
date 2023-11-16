@@ -138,7 +138,9 @@ extern Expr *canonicalize_qual(Expr *qual, bool is_check);
 /* in util/clauses.c: */
 
 extern bool contain_mutable_functions(Node *clause);
+extern bool ContainMutableFunctions(Expr *expr);
 extern bool contain_volatile_functions(Node *clause);
+extern bool ContainVolatileFunctions(Expr *expr);
 extern bool contain_volatile_functions_not_nextval(Node *clause);
 
 extern Node *eval_const_expressions(PlannerInfo *root, Node *node);

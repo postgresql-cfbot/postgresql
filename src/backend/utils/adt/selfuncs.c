@@ -5497,13 +5497,17 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 			vardata->acl_ok = true;
 		}
 	}
-	else if (rte->rtekind == RTE_SUBQUERY && !rte->inh)
+	else if ((rte->rtekind == RTE_SUBQUERY && !rte->inh) ||
+			 (rte->rtekind == RTE_CTE && !rte->self_reference))
 	{
 		/*
-		 * Plain subquery (not one that was converted to an appendrel).
+		 * Plain subquery (not one that was converted to an appendrel) or
+		 * non-recursive CTE.  In either case, we can try to find out what the
+		 * Var refers to within the subquery.
 		 */
-		Query	   *subquery = rte->subquery;
-		RelOptInfo *rel;
+		Query	   *subquery;
+		PlannerInfo *subroot;
+		List	   *subtlist;
 		TargetEntry *ste;
 
 		/*
@@ -5511,6 +5515,80 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 		 */
 		if (var->varattno == InvalidAttrNumber)
 			return;
+
+		/*
+		 * Otherwise, find the subquery's query tree and planner subroot.
+		 */
+		if (rte->rtekind == RTE_SUBQUERY)
+		{
+			RelOptInfo *rel;
+
+			/*
+			 * Fetch RelOptInfo for subquery.  Note that we don't change the
+			 * rel returned in vardata, since caller expects it to be a rel of
+			 * the caller's query level.  Because we might already be
+			 * recursing, we can't use that rel pointer either, but have to
+			 * look up the Var's rel afresh.
+			 */
+			rel = find_base_rel(root, var->varno);
+
+			subquery = rte->subquery;
+			subroot = rel->subroot;
+		}
+		else
+		{
+			/* CTE case is more difficult */
+			PlannerInfo *cteroot;
+			Index		levelsup;
+			int			ndx;
+			int			plan_id;
+			ListCell   *lc;
+
+			/*
+			 * Find the referenced CTE, and locate the subroot previously made
+			 * for it.
+			 */
+			levelsup = rte->ctelevelsup;
+			cteroot = root;
+			while (levelsup-- > 0)
+			{
+				cteroot = cteroot->parent_root;
+				if (!cteroot)	/* shouldn't happen */
+					elog(ERROR, "bad levelsup for CTE \"%s\"", rte->ctename);
+			}
+
+			/*
+			 * Note: cte_plan_ids can be shorter than cteList, if we are still
+			 * working on planning the CTEs (ie, this is a side-reference from
+			 * another CTE).  So we mustn't use forboth here.
+			 */
+			ndx = 0;
+			subquery = NULL;
+			foreach(lc, cteroot->parse->cteList)
+			{
+				CommonTableExpr *cte = (CommonTableExpr *) lfirst(lc);
+
+				if (strcmp(cte->ctename, rte->ctename) == 0)
+				{
+					subquery = castNode(Query, cte->ctequery);
+					break;
+				}
+				ndx++;
+			}
+			if (subquery == NULL)	/* shouldn't happen */
+				elog(ERROR, "could not find CTE \"%s\"", rte->ctename);
+			if (ndx >= list_length(cteroot->cte_plan_ids))
+				elog(ERROR, "could not find plan for CTE \"%s\"", rte->ctename);
+			plan_id = list_nth_int(cteroot->cte_plan_ids, ndx);
+			if (plan_id <= 0)
+				elog(ERROR, "no plan was made for CTE \"%s\"", rte->ctename);
+			subroot = list_nth(root->glob->subroots, plan_id - 1);
+		}
+
+		/* If the subquery hasn't been planned yet, we have to punt */
+		if (subroot == NULL)
+			return;
+		Assert(IsA(subroot, PlannerInfo));
 
 		/*
 		 * Punt if subquery uses set operations or GROUP BY, as these will
@@ -5526,20 +5604,6 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 			return;
 
 		/*
-		 * OK, fetch RelOptInfo for subquery.  Note that we don't change the
-		 * rel returned in vardata, since caller expects it to be a rel of the
-		 * caller's query level.  Because we might already be recursing, we
-		 * can't use that rel pointer either, but have to look up the Var's
-		 * rel afresh.
-		 */
-		rel = find_base_rel(root, var->varno);
-
-		/* If the subquery hasn't been planned yet, we have to punt */
-		if (rel->subroot == NULL)
-			return;
-		Assert(IsA(rel->subroot, PlannerInfo));
-
-		/*
 		 * Switch our attention to the subquery as mangled by the planner. It
 		 * was okay to look at the pre-planning version for the tests above,
 		 * but now we need a Var that will refer to the subroot's live
@@ -5547,11 +5611,15 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 		 * planning, Vars in the targetlist might have gotten replaced, and we
 		 * need to see the replacement expressions.
 		 */
-		subquery = rel->subroot->parse;
+		subquery = subroot->parse;
 		Assert(IsA(subquery, Query));
 
 		/* Get the subquery output expression referenced by the upper Var */
-		ste = get_tle_by_resno(subquery->targetList, var->varattno);
+		if (subquery->returningList)
+			subtlist = subquery->returningList;
+		else
+			subtlist = subquery->targetList;
+		ste = get_tle_by_resno(subtlist, var->varattno);
 		if (ste == NULL || ste->resjunk)
 			elog(ERROR, "subquery %s does not have attribute %d",
 				 rte->eref->aliasname, var->varattno);
@@ -5599,16 +5667,16 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 			 * if the underlying column is unique, the subquery may have
 			 * joined to other tables in a way that creates duplicates.
 			 */
-			examine_simple_variable(rel->subroot, var, vardata);
+			examine_simple_variable(subroot, var, vardata);
 		}
 	}
 	else
 	{
 		/*
-		 * Otherwise, the Var comes from a FUNCTION, VALUES, or CTE RTE.  (We
-		 * won't see RTE_JOIN here because join alias Vars have already been
+		 * Otherwise, the Var comes from a FUNCTION or VALUES RTE.  (We won't
+		 * see RTE_JOIN here because join alias Vars have already been
 		 * flattened.)	There's not much we can do with function outputs, but
-		 * maybe someday try to be smarter about VALUES and/or CTEs.
+		 * maybe someday try to be smarter about VALUES.
 		 */
 	}
 }

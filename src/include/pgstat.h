@@ -16,6 +16,7 @@
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"	/* for MAX_XFN_CHARS */
 #include "replication/conflict.h"
+#include "storage/relfilelocator.h"
 #include "utils/backend_progress.h" /* for backward compatibility */
 #include "utils/backend_status.h"	/* for backward compatibility */
 #include "utils/relcache.h"
@@ -46,17 +47,18 @@
 /* stats for variable-numbered objects */
 #define PGSTAT_KIND_DATABASE	1	/* database-wide statistics */
 #define PGSTAT_KIND_RELATION	2	/* per-table statistics */
-#define PGSTAT_KIND_FUNCTION	3	/* per-function statistics */
-#define PGSTAT_KIND_REPLSLOT	4	/* per-slot statistics */
-#define PGSTAT_KIND_SUBSCRIPTION	5	/* per-subscription statistics */
+#define PGSTAT_KIND_RELFILENODE 3   /* per-relfilenode statistics */
+#define PGSTAT_KIND_FUNCTION	4	/* per-function statistics */
+#define PGSTAT_KIND_REPLSLOT	5	/* per-slot statistics */
+#define PGSTAT_KIND_SUBSCRIPTION	6	/* per-subscription statistics */
 
 /* stats for fixed-numbered objects */
-#define PGSTAT_KIND_ARCHIVER	6
-#define PGSTAT_KIND_BGWRITER	7
-#define PGSTAT_KIND_CHECKPOINTER	8
-#define PGSTAT_KIND_IO	9
-#define PGSTAT_KIND_SLRU	10
-#define PGSTAT_KIND_WAL	11
+#define PGSTAT_KIND_ARCHIVER	7
+#define PGSTAT_KIND_BGWRITER	8
+#define PGSTAT_KIND_CHECKPOINTER	9
+#define PGSTAT_KIND_IO	10
+#define PGSTAT_KIND_SLRU	11
+#define PGSTAT_KIND_WAL	12
 
 #define PGSTAT_KIND_BUILTIN_MIN PGSTAT_KIND_DATABASE
 #define PGSTAT_KIND_BUILTIN_MAX PGSTAT_KIND_WAL
@@ -450,6 +452,7 @@ typedef struct PgStat_StatTabEntry
 
 	PgStat_Counter blocks_fetched;
 	PgStat_Counter blocks_hit;
+	PgStat_Counter blocks_written;
 
 	TimestampTz last_vacuum_time;	/* user initiated vacuum */
 	PgStat_Counter vacuum_count;
@@ -460,6 +463,13 @@ typedef struct PgStat_StatTabEntry
 	TimestampTz last_autoanalyze_time;	/* autovacuum initiated */
 	PgStat_Counter autoanalyze_count;
 } PgStat_StatTabEntry;
+
+typedef struct PgStat_StatRelFileNodeEntry
+{
+	PgStat_Counter blocks_fetched;
+	PgStat_Counter blocks_hit;
+	PgStat_Counter blocks_written;
+} PgStat_StatRelFileNodeEntry;
 
 typedef struct PgStat_WalStats
 {
@@ -511,7 +521,7 @@ extern long pgstat_report_stat(bool force);
 extern void pgstat_force_next_flush(void);
 
 extern void pgstat_reset_counters(void);
-extern void pgstat_reset(PgStat_Kind kind, Oid dboid, Oid objoid);
+extern void pgstat_reset(PgStat_Kind kind, Oid dboid, Oid objoid, RelFileNumber relfile);
 extern void pgstat_reset_of_kind(PgStat_Kind kind);
 
 /* stats accessors */
@@ -520,7 +530,7 @@ extern TimestampTz pgstat_get_stat_snapshot_timestamp(bool *have_snapshot);
 
 /* helpers */
 extern PgStat_Kind pgstat_get_kind_from_str(char *kind_str);
-extern bool pgstat_have_entry(PgStat_Kind kind, Oid dboid, Oid objoid);
+extern bool pgstat_have_entry(PgStat_Kind kind, Oid dboid, Oid objoid, RelFileNumber relfile);
 
 
 /*
@@ -629,6 +639,10 @@ extern void pgstat_report_analyze(Relation rel,
 								  PgStat_Counter livetuples, PgStat_Counter deadtuples,
 								  bool resetcounter);
 
+extern void pgstat_report_relfilenode_blks_written(RelFileLocator locator);
+extern void pgstat_report_relfilenode_buffer_read(Relation reln);
+extern void pgstat_report_relfilenode_buffer_hit(Relation reln);
+
 /*
  * If stats are enabled, but pending data hasn't been prepared yet, call
  * pgstat_assoc_relation() to do so. See its comment for why this is done
@@ -688,6 +702,7 @@ extern void pgstat_twophase_postabort(TransactionId xid, uint16 info,
 									  void *recdata, uint32 len);
 
 extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry(Oid relid);
+extern PgStat_StatRelFileNodeEntry *pgstat_fetch_stat_relfilenodeentry(Oid dboid, Oid spcOid, RelFileNumber relfile);
 extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry_ext(bool shared,
 														   Oid reloid);
 extern PgStat_TableStatus *find_tabstat_entry(Oid rel_id);

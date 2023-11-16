@@ -284,6 +284,7 @@ typedef struct xl_xact_stats_item
 	int			kind;
 	Oid			dboid;
 	Oid			objoid;
+	RelFileNumber relfile;
 } xl_xact_stats_item;
 
 typedef struct xl_xact_stats_items

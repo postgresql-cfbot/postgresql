@@ -179,9 +179,9 @@ sub test_standby_func_tab_stats_status
 	my %stats;
 
 	$stats{rel} = $node_standby->safe_psql($connect_db,
-		"SELECT pg_stat_have_stats('relation', $dboid, $tableoid)");
+		"SELECT pg_stat_have_stats('relation', $dboid, $tableoid, 0)");
 	$stats{func} = $node_standby->safe_psql($connect_db,
-		"SELECT pg_stat_have_stats('function', $dboid, $funcoid)");
+		"SELECT pg_stat_have_stats('function', $dboid, $funcoid, 0)");
 
 	is_deeply(\%stats, \%expected, "$sect: standby stats as expected");
 
@@ -194,7 +194,7 @@ sub test_standby_db_stats_status
 	my ($connect_db, $dboid, $present) = @_;
 
 	is( $node_standby->safe_psql(
-			$connect_db, "SELECT pg_stat_have_stats('database', $dboid, 0)"),
+			$connect_db, "SELECT pg_stat_have_stats('database', $dboid, 0, 0)"),
 		$present,
 		"$sect: standby db stats as expected");
 }

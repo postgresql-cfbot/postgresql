@@ -204,7 +204,6 @@ win32_langinfo(const char *ctype)
 	char	   *r = NULL;
 	char	   *codepage;
 
-#if defined(_MSC_VER)
 	uint32		cp;
 	WCHAR		wctype[LOCALE_NAME_MAX_LENGTH];
 
@@ -229,7 +228,6 @@ win32_langinfo(const char *ctype)
 		}
 	}
 	else
-#endif
 	{
 		/*
 		 * Locale format on Win32 is <Language>_<Country>.<CodePage>.  For

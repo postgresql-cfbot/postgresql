@@ -146,7 +146,7 @@ BuildQueryCompletionString(char *buff, const QueryCompletion *qc,
 	 */
 	if (command_tag_display_rowcount(tag) && !nameonly)
 	{
-		if (tag == CMDTAG_INSERT)
+		if (tag == CMDTAG_INSERT || tag == CMDTAG_EXPLAIN_INSERT)
 		{
 			*bufp++ = ' ';
 			*bufp++ = '0';

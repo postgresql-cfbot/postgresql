@@ -867,7 +867,32 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 			break;
 
 		case T_ExplainStmt:
-			ExplainQuery(pstate, (ExplainStmt *) parsetree, params, dest);
+			{
+				Query	   *query;
+				uint64		processed;
+				int			explainTag;
+
+				ExplainQuery(pstate, (ExplainStmt *) parsetree, params, dest, &processed);
+
+				query = castNode(Query, ((ExplainStmt *) parsetree)->query);
+				switch (query->commandType)
+				{
+					case CMD_INSERT:
+						explainTag = CMDTAG_EXPLAIN_INSERT;
+						break;
+					case CMD_UPDATE:
+						explainTag = CMDTAG_EXPLAIN_UPDATE;
+						break;
+					case CMD_DELETE:
+						explainTag = CMDTAG_EXPLAIN_DELETE;
+						break;
+					default:
+						explainTag = CMDTAG_EXPLAIN;
+						break;
+				}
+				if (qc)
+					SetQueryCompletion(qc, explainTag, processed);
+			}
 			break;
 
 		case T_AlterSystemStmt:

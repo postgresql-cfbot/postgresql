@@ -775,7 +775,13 @@ PortalRun(Portal portal, long count, bool isTopLevel, bool run_once,
 				if (qc && portal->qc.commandTag != CMDTAG_UNKNOWN)
 				{
 					CopyQueryCompletion(qc, &portal->qc);
-					qc->nprocessed = nprocessed;
+					if (portal->qc.commandTag == CMDTAG_EXPLAIN ||
+						portal->qc.commandTag == CMDTAG_EXPLAIN_INSERT ||
+						portal->qc.commandTag == CMDTAG_EXPLAIN_UPDATE ||
+						portal->qc.commandTag == CMDTAG_EXPLAIN_DELETE)
+						qc->nprocessed = portal->qc.nprocessed;
+					else
+						qc->nprocessed = nprocessed;
 				}
 
 				/* Mark portal not active */

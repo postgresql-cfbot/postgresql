@@ -60,6 +60,7 @@ typedef struct ExplainState
 	bool		hide_workers;	/* set if we find an invisible Gather */
 	/* state related to the current plan node */
 	ExplainWorkersState *workers_state; /* needed if parallel plan */
+	uint64		es_processed;	/* sum of queryDesc->estate->es_processed */
 } ExplainState;
 
 /* Hook for plugins to get control in ExplainOneQuery() */
@@ -78,7 +79,7 @@ extern PGDLLIMPORT explain_get_index_name_hook_type explain_get_index_name_hook;
 
 
 extern void ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
-						 ParamListInfo params, DestReceiver *dest);
+						 ParamListInfo params, DestReceiver *dest, uint64 *processed);
 
 extern ExplainState *NewExplainState(void);
 

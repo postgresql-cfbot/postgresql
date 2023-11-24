@@ -275,6 +275,49 @@ search:
 	return is_unique;
 }
 
+/* XXX simplified version of _bt_doinsert */
+void
+_bt_doprefetch(Relation rel, IndexTuple itup, Relation heapRel)
+{
+	BTInsertStateData insertstate;
+	BTScanInsert itup_key;
+
+	/* we need an insertion scan key to do our search, so build one */
+	itup_key = _bt_mkscankey(rel, itup);
+
+	/*
+	 * Fill in the BTInsertState working area, to track the current page and
+	 * position within the page to insert on.
+	 *
+	 * Note that itemsz is passed down to lower level code that deals with
+	 * inserting the item.  It must be MAXALIGN()'d.  This ensures that space
+	 * accounting code consistently considers the alignment overhead that we
+	 * expect PageAddItem() will add later.  (Actually, index_form_tuple() is
+	 * already conservative about alignment, but we don't rely on that from
+	 * this distance.  Besides, preserving the "true" tuple size in index
+	 * tuple headers for the benefit of nbtsplitloc.c might happen someday.
+	 * Note that heapam does not MAXALIGN() each heap tuple's lp_len field.)
+	 */
+	insertstate.itup = itup;
+	insertstate.itemsz = MAXALIGN(IndexTupleSize(itup));
+	insertstate.itup_key = itup_key;
+	insertstate.bounds_valid = false;
+	insertstate.buf = InvalidBuffer;
+	insertstate.postingoff = 0;
+
+	/*
+	 * Find and lock the leaf page that the tuple should be added to by
+	 * searching from the root page.  insertstate.buf will hold a buffer that
+	 * is locked in exclusive mode afterwards.
+	 *
+	 * XXX Same as _bt_search, but just prefetches the leaf page and then
+	 * releases it. We don't need the stack.
+	 */
+	_bt_prefetch(rel, heapRel, &insertstate);
+
+	pfree(itup_key);
+}
+
 /*
  *	_bt_search_insert() -- _bt_search() wrapper for inserts
  *

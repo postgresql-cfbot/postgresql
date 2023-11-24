@@ -391,6 +391,7 @@
 #enable_seqscan = on
 #enable_sort = on
 #enable_tidscan = on
+#enable_insert_prefetch = off
 
 # - Planner Cost Constants -
 

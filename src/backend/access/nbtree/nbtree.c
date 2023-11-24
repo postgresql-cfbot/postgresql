@@ -122,6 +122,7 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->ambuild = btbuild;
 	amroutine->ambuildempty = btbuildempty;
 	amroutine->aminsert = btinsert;
+	amroutine->amprefetch = btprefetch;
 	amroutine->ambulkdelete = btbulkdelete;
 	amroutine->amvacuumcleanup = btvacuumcleanup;
 	amroutine->amcanreturn = btcanreturn;
@@ -205,6 +206,26 @@ btinsert(Relation rel, Datum *values, bool *isnull,
 	pfree(itup);
 
 	return result;
+}
+
+/*
+ *	btprefetch() -- prefetch pages for insert into the index
+ *
+ *		Descend the tree recursively, find the appropriate location for our
+ *		new tuple, and prefetch the page(s).
+ */
+void
+btprefetch(Relation rel, Datum *values, bool *isnull, Relation heapRel,
+		   IndexInfo *indexInfo)
+{
+	IndexTuple	itup;
+
+	/* generate an index tuple */
+	itup = index_form_tuple(RelationGetDescr(rel), values, isnull);
+
+	_bt_doprefetch(rel, itup, heapRel);
+
+	pfree(itup);
 }
 
 /*

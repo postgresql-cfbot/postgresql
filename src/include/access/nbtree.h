@@ -1135,6 +1135,10 @@ extern bool btinsert(Relation rel, Datum *values, bool *isnull,
 					 IndexUniqueCheck checkUnique,
 					 bool indexUnchanged,
 					 struct IndexInfo *indexInfo);
+extern void btprefetch(Relation rel,
+					   Datum *values, bool *isnull,
+					   Relation heapRelation,
+					   struct IndexInfo *indexInfo);
 extern IndexScanDesc btbeginscan(Relation rel, int nkeys, int norderbys);
 extern Size btestimateparallelscan(void);
 extern void btinitparallelscan(void *target);
@@ -1185,6 +1189,8 @@ extern IndexTuple _bt_swap_posting(IndexTuple newitem, IndexTuple oposting,
 extern bool _bt_doinsert(Relation rel, IndexTuple itup,
 						 IndexUniqueCheck checkUnique, bool indexUnchanged,
 						 Relation heapRel);
+extern void _bt_doprefetch(Relation rel, IndexTuple itup,
+						   Relation heapRel);
 extern void _bt_finish_split(Relation rel, Relation heaprel, Buffer lbuf,
 							 BTStack stack);
 extern Buffer _bt_getstackbuf(Relation rel, Relation heaprel, BTStack stack,
@@ -1237,6 +1243,8 @@ extern void _bt_pendingfsm_finalize(Relation rel, BTVacState *vstate);
  */
 extern BTStack _bt_search(Relation rel, Relation heaprel, BTScanInsert key,
 						  Buffer *bufP, int access);
+extern void _bt_prefetch(Relation rel, Relation heaprel,
+						 BTInsertState insertstate);
 extern Buffer _bt_moveright(Relation rel, Relation heaprel, BTScanInsert key,
 							Buffer buf, bool forupdate, BTStack stack,
 							int access);

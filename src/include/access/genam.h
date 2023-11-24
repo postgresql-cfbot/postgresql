@@ -149,6 +149,11 @@ extern bool index_insert(Relation indexRelation,
 						 bool indexUnchanged,
 						 struct IndexInfo *indexInfo);
 
+extern void index_prefetch(Relation indexRelation,
+						   Datum *values, bool *isnull,
+						   Relation heapRelation,
+						   struct IndexInfo *indexInfo);
+
 extern IndexScanDesc index_beginscan(Relation heapRelation,
 									 Relation indexRelation,
 									 Snapshot snapshot,

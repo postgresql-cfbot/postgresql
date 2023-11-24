@@ -119,6 +119,7 @@ select name, setting from pg_settings where name like 'enable%';
  enable_incremental_sort        | on
  enable_indexonlyscan           | on
  enable_indexscan               | on
+ enable_insert_prefetch         | off
  enable_material                | on
  enable_memoize                 | on
  enable_mergejoin               | on
@@ -133,7 +134,7 @@ select name, setting from pg_settings where name like 'enable%';
  enable_seqscan                 | on
  enable_sort                    | on
  enable_tidscan                 | on
-(22 rows)
+(23 rows)
 
 -- There are always wait event descriptions for various types.
 select type, count(*) > 0 as ok FROM pg_wait_events

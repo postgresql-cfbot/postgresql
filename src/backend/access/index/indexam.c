@@ -63,6 +63,7 @@
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
+bool              enable_insert_prefetch = false;
 
 /* ----------------------------------------------------------------
  *					macros used in index_ routines
@@ -194,6 +195,27 @@ index_insert(Relation indexRelation,
 											 heap_t_ctid, heapRelation,
 											 checkUnique, indexUnchanged,
 											 indexInfo);
+}
+
+/* ----------------
+ *		index_prefetch - prefetch index pages for insert
+ * ----------------
+ */
+void
+index_prefetch(Relation indexRelation,
+			   Datum *values,
+			   bool *isnull,
+			   Relation heapRelation,
+			   IndexInfo *indexInfo)
+{
+	RELATION_CHECKS;
+	CHECK_REL_PROCEDURE(amprefetch);
+
+	if (indexRelation->rd_indam->amprefetch == NULL)
+		return;
+
+	indexRelation->rd_indam->amprefetch(indexRelation, values, isnull,
+										heapRelation, indexInfo);
 }
 
 /*

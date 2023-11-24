@@ -1094,6 +1094,13 @@ ExecInsert(ModifyTableContext *context,
 										   NULL,
 										   specToken);
 
+			/* prefetch index leafs before inserting index tuples */
+			ExecInsertPrefetchIndexes(resultRelInfo,
+									  slot, estate, false, true,
+									  &specConflict,
+									  arbiterIndexes,
+									  false);
+
 			/* insert index entries for tuple */
 			recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
 												   slot, estate, false, true,
@@ -1136,10 +1143,17 @@ ExecInsert(ModifyTableContext *context,
 
 			/* insert index entries for tuple */
 			if (resultRelInfo->ri_NumIndices > 0)
+			{
+				ExecInsertPrefetchIndexes(resultRelInfo,
+										  slot, estate, false,
+										  false, NULL, NIL,
+										  false);
+
 				recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
 													   slot, estate, false,
 													   false, NULL, NIL,
 													   false);
+			}
 		}
 	}
 
@@ -2127,11 +2141,19 @@ ExecUpdateEpilogue(ModifyTableContext *context, UpdateContext *updateCxt,
 
 	/* insert index entries for tuple if necessary */
 	if (resultRelInfo->ri_NumIndices > 0 && (updateCxt->updateIndexes != TU_None))
+	{
+		ExecInsertPrefetchIndexes(resultRelInfo,
+								  slot, context->estate,
+								  true, false,
+								  NULL, NIL,
+								  (updateCxt->updateIndexes == TU_Summarizing));
+
 		recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
 											   slot, context->estate,
 											   true, false,
 											   NULL, NIL,
 											   (updateCxt->updateIndexes == TU_Summarizing));
+	}
 
 	/* AFTER ROW UPDATE Triggers */
 	ExecARUpdateTriggers(context->estate, resultRelInfo,

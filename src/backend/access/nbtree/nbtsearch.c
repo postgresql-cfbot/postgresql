@@ -200,6 +200,101 @@ _bt_search(Relation rel, Relation heaprel, BTScanInsert key, Buffer *bufP,
 	return stack_in;
 }
 
+void
+_bt_prefetch(Relation rel, Relation heaprel, BTInsertState insertstate)
+{
+	Buffer		buffer;
+	BTStack		stack_in = NULL;
+	int			access = BT_READ;
+	BTScanInsert	key = insertstate->itup_key;
+
+	/* Get the root page to start with */
+	buffer = _bt_getroot(rel, heaprel, access);
+
+	/* If index is empty, no root page is created. */
+	if (!BufferIsValid(buffer))
+		return;
+
+	/* Loop iterates once per level descended in the tree */
+	for (;;)
+	{
+		Page		page;
+		BTPageOpaque opaque;
+		OffsetNumber offnum;
+		ItemId		itemid;
+		IndexTuple	itup;
+		BlockNumber child;
+		BTStack		new_stack;
+
+		/*
+		 * Race -- the page we just grabbed may have split since we read its
+		 * downlink in its parent page (or the metapage).  If it has, we may
+		 * need to move right to its new sibling.  Do that.
+		 *
+		 * In write-mode, allow _bt_moveright to finish any incomplete splits
+		 * along the way.  Strictly speaking, we'd only need to finish an
+		 * incomplete split on the leaf page we're about to insert to, not on
+		 * any of the upper levels (internal pages with incomplete splits are
+		 * also taken care of in _bt_getstackbuf).  But this is a good
+		 * opportunity to finish splits of internal pages too.
+		 */
+		buffer = _bt_moveright(rel, heaprel, key, buffer,
+							   (access == BT_WRITE), stack_in, access);
+
+		/* if this is a leaf page, we're done */
+		page = BufferGetPage(buffer);
+		opaque = BTPageGetOpaque(page);
+
+		/* we should never see a leaf page here, we only prefetch it */
+		Assert(!P_ISLEAF(opaque));
+
+		/*
+		 * Find the appropriate pivot tuple on this page.  Its downlink points
+		 * to the child page that we're about to descend to.
+		 */
+		offnum = _bt_binsrch(rel, key, buffer);
+		itemid = PageGetItemId(page, offnum);
+		itup = (IndexTuple) PageGetItem(page, itemid);
+		Assert(BTreeTupleIsPivot(itup) || !key->heapkeyspace);
+		child = BTreeTupleGetDownLink(itup);
+
+		/* we should never actually visit a leaf page during prefetching */
+		Assert(!P_ISLEAF(opaque));
+
+		/*
+		 * Page level 1 is lowest non-leaf page level prior to leaves.  So, if
+		 * we're on the level 1 and asked to lock leaf page in write mode,
+		 * then lock next page in write mode, because it must be a leaf.
+		 */
+		if (opaque->btpo_level == 1)
+		{
+			PrefetchBuffer(rel, MAIN_FORKNUM, child);
+			break;
+		}
+
+		/*
+		 * We need to save the location of the pivot tuple we chose in a new
+		 * stack entry for this page/level.  If caller ends up splitting a
+		 * page one level down, it usually ends up inserting a new pivot
+		 * tuple/downlink immediately after the location recorded here.
+		 */
+		new_stack = (BTStack) palloc(sizeof(BTStackData));
+		new_stack->bts_blkno = BufferGetBlockNumber(buffer);
+		new_stack->bts_offset = offnum;
+		new_stack->bts_parent = stack_in;
+
+		/* drop the read lock on the page, then acquire one on its child */
+		buffer = _bt_relandgetbuf(rel, buffer, child, access);
+
+		/* okay, all set to move down a level */
+		stack_in = new_stack;
+	}
+
+	_bt_relbuf(rel, buffer);
+
+	_bt_freestack(stack_in);
+}
+
 /*
  *	_bt_moveright() -- move right in the btree if necessary.
  *

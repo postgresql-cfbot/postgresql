@@ -113,6 +113,13 @@ typedef bool (*aminsert_function) (Relation indexRelation,
 								   bool indexUnchanged,
 								   struct IndexInfo *indexInfo);
 
+/* prefetch pages for new tuple */
+typedef void (*amprefetch_function) (Relation indexRelation,
+									 Datum *values,
+									 bool *isnull,
+									 Relation heapRelation,
+									 struct IndexInfo *indexInfo);
+
 /* bulk delete */
 typedef IndexBulkDeleteResult *(*ambulkdelete_function) (IndexVacuumInfo *info,
 														 IndexBulkDeleteResult *stats,
@@ -261,6 +268,7 @@ typedef struct IndexAmRoutine
 	ambuild_function ambuild;
 	ambuildempty_function ambuildempty;
 	aminsert_function aminsert;
+	amprefetch_function amprefetch;
 	ambulkdelete_function ambulkdelete;
 	amvacuumcleanup_function amvacuumcleanup;
 	amcanreturn_function amcanreturn;	/* can be NULL */

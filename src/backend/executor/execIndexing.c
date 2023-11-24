@@ -113,6 +113,7 @@
 #include "catalog/index.h"
 #include "executor/executor.h"
 #include "nodes/nodeFuncs.h"
+#include "optimizer/cost.h"
 #include "storage/lmgr.h"
 #include "utils/snapmgr.h"
 
@@ -250,6 +251,111 @@ ExecCloseIndices(ResultRelInfo *resultRelInfo)
 	 * XXX should free indexInfo array here too?  Currently we assume that
 	 * such stuff will be cleaned up automatically in FreeExecutorState.
 	 */
+}
+
+void
+ExecInsertPrefetchIndexes(ResultRelInfo *resultRelInfo,
+						  TupleTableSlot *slot,
+						  EState *estate,
+						  bool update,
+						  bool noDupErr,
+						  bool *specConflict,
+						  List *arbiterIndexes,
+						  bool onlySummarizing)
+{
+	int			i;
+	int			numIndices;
+	RelationPtr relationDescs;
+	Relation	heapRelation;
+	IndexInfo **indexInfoArray;
+	ExprContext *econtext;
+	Datum		values[INDEX_MAX_KEYS];
+	bool		isnull[INDEX_MAX_KEYS];
+
+	if (!enable_insert_prefetch)
+		return;
+
+	/*
+	 * Get information from the result relation info structure.
+	 */
+	numIndices = resultRelInfo->ri_NumIndices;
+	relationDescs = resultRelInfo->ri_IndexRelationDescs;
+	indexInfoArray = resultRelInfo->ri_IndexRelationInfo;
+	heapRelation = resultRelInfo->ri_RelationDesc;
+
+	/* Sanity check: slot must belong to the same rel as the resultRelInfo. */
+	Assert(slot->tts_tableOid == RelationGetRelid(heapRelation));
+
+	/*
+	 * We will use the EState's per-tuple context for evaluating predicates
+	 * and index expressions (creating it if it's not already there).
+	 */
+	econtext = GetPerTupleExprContext(estate);
+
+	/* Arrange for econtext's scan tuple to be the tuple under test */
+	econtext->ecxt_scantuple = slot;
+
+	/*
+	 * for each index, form and insert the index tuple
+	 */
+	for (i = 0; i < numIndices; i++)
+	{
+		Relation	indexRelation = relationDescs[i];
+		IndexInfo  *indexInfo;
+
+		if (indexRelation == NULL)
+			continue;
+
+		indexInfo = indexInfoArray[i];
+
+		/* If the index is marked as read-only, ignore it */
+		if (!indexInfo->ii_ReadyForInserts)
+			continue;
+
+		/*
+		 * Skip processing of non-summarizing indexes if we only update
+		 * summarizing indexes
+		 */
+		if (onlySummarizing && !indexInfo->ii_Summarizing)
+			continue;
+
+		/* Check for partial index */
+		if (indexInfo->ii_Predicate != NIL)
+		{
+			ExprState  *predicate;
+
+			/*
+			 * If predicate state not set up yet, create it (in the estate's
+			 * per-query context)
+			 */
+			predicate = indexInfo->ii_PredicateState;
+			if (predicate == NULL)
+			{
+				predicate = ExecPrepareQual(indexInfo->ii_Predicate, estate);
+				indexInfo->ii_PredicateState = predicate;
+			}
+
+			/* Skip this index-update if the predicate isn't satisfied */
+			if (!ExecQual(predicate, econtext))
+				continue;
+		}
+
+		/*
+		 * FormIndexDatum fills in its values and isnull parameters with the
+		 * appropriate values for the column(s) of the index.
+		 */
+		FormIndexDatum(indexInfo,
+					   slot,
+					   estate,
+					   values,
+					   isnull);
+
+		index_prefetch(indexRelation,
+					   values,
+					   isnull,
+					   heapRelation,
+					   indexInfo);
+	}
 }
 
 /* ----------------------------------------------------------------

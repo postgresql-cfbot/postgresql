@@ -423,6 +423,16 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 
 		for (i = 0; i < nused; i++)
 		{
+			if (resultRelInfo->ri_NumIndices > 0)
+			{
+				ExecInsertPrefetchIndexes(resultRelInfo,
+										  buffer->slots[i], estate, false,
+										  false, NULL, NIL, false);
+			}
+		}
+
+		for (i = 0; i < nused; i++)
+		{
 			/*
 			 * If there are any indexes, update them for all the inserted
 			 * tuples, and run AFTER ROW INSERT triggers.
@@ -1245,6 +1255,16 @@ CopyFrom(CopyFromState cstate)
 										   myslot, mycid, ti_options, bistate);
 
 						if (resultRelInfo->ri_NumIndices > 0)
+						{
+							ExecInsertPrefetchIndexes(resultRelInfo,
+													  myslot,
+													  estate,
+													  false,
+													  false,
+													  NULL,
+													  NIL,
+													  false);
+
 							recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
 																   myslot,
 																   estate,
@@ -1253,6 +1273,7 @@ CopyFrom(CopyFromState cstate)
 																   NULL,
 																   NIL,
 																   false);
+						}
 					}
 
 					/* AFTER ROW INSERT Triggers */

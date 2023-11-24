@@ -532,9 +532,14 @@ ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
 		simple_table_tuple_insert(resultRelInfo->ri_RelationDesc, slot);
 
 		if (resultRelInfo->ri_NumIndices > 0)
+		{
+			ExecInsertPrefetchIndexes(resultRelInfo,
+									  slot, estate, false, false,
+									  NULL, NIL, false);
 			recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
 												   slot, estate, false, false,
 												   NULL, NIL, false);
+		}
 
 		/* AFTER ROW INSERT Triggers */
 		ExecARInsertTriggers(estate, resultRelInfo, slot,
@@ -600,10 +605,17 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 								  &update_indexes);
 
 		if (resultRelInfo->ri_NumIndices > 0 && (update_indexes != TU_None))
+		{
+			ExecInsertPrefetchIndexes(resultRelInfo,
+									  slot, estate, true, false,
+									  NULL, NIL,
+									  (update_indexes == TU_Summarizing));
+
 			recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
 												   slot, estate, true, false,
 												   NULL, NIL,
 												   (update_indexes == TU_Summarizing));
+		}
 
 		/* AFTER ROW UPDATE Triggers */
 		ExecARUpdateTriggers(estate, resultRelInfo,

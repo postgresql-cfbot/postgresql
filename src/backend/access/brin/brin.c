@@ -59,6 +59,17 @@ typedef struct BrinBuildState
 } BrinBuildState;
 
 /*
+ * We use a BrinInsertState to capture running state spanning multiple
+ * brininsert invocations, within the same command.
+ */
+typedef struct BrinInsertState
+{
+	BrinRevmap *bs_rmAccess;
+	BrinDesc   *bs_desc;
+	BlockNumber bs_pages_per_range;
+}			BrinInsertState;
+
+/*
  * Struct used as "opaque" during index scans
  */
 typedef struct BrinOpaque
@@ -72,6 +83,7 @@ typedef struct BrinOpaque
 
 static BrinBuildState *initialize_brin_buildstate(Relation idxRel,
 												  BrinRevmap *revmap, BlockNumber pagesPerRange);
+static BrinInsertState *initialize_brin_insertstate(Relation idxRel, IndexInfo *indexInfo);
 static void terminate_brin_buildstate(BrinBuildState *state);
 static void brinsummarize(Relation index, Relation heapRel, BlockNumber pageRange,
 						  bool include_partial, double *numSummarized, double *numExisting);
@@ -117,6 +129,7 @@ brinhandler(PG_FUNCTION_ARGS)
 	amroutine->ambuild = brinbuild;
 	amroutine->ambuildempty = brinbuildempty;
 	amroutine->aminsert = brininsert;
+	amroutine->aminsertcleanup = brininsertcleanup;
 	amroutine->ambulkdelete = brinbulkdelete;
 	amroutine->amvacuumcleanup = brinvacuumcleanup;
 	amroutine->amcanreturn = NULL;
@@ -141,6 +154,27 @@ brinhandler(PG_FUNCTION_ARGS)
 }
 
 /*
+ * Initialize a BrinInsertState to maintain state to be used across multiple
+ * tuple inserts, within the same command.
+ */
+static BrinInsertState *
+initialize_brin_insertstate(Relation idxRel, IndexInfo *indexInfo)
+{
+	BrinInsertState *bistate;
+	MemoryContext oldcxt;
+
+	oldcxt = MemoryContextSwitchTo(indexInfo->ii_Context);
+	bistate = palloc0(sizeof(BrinInsertState));
+	bistate->bs_desc = brin_build_desc(idxRel);
+	bistate->bs_rmAccess = brinRevmapInitialize(idxRel,
+												&bistate->bs_pages_per_range);
+	indexInfo->ii_AmCache = bistate;
+	MemoryContextSwitchTo(oldcxt);
+
+	return bistate;
+}
+
+/*
  * A tuple in the heap is being inserted.  To keep a brin index up to date,
  * we need to obtain the relevant index tuple and compare its stored values
  * with those of the new tuple.  If the tuple values are not consistent with
@@ -162,14 +196,23 @@ brininsert(Relation idxRel, Datum *values, bool *nulls,
 	BlockNumber pagesPerRange;
 	BlockNumber origHeapBlk;
 	BlockNumber heapBlk;
-	BrinDesc   *bdesc = (BrinDesc *) indexInfo->ii_AmCache;
+	BrinInsertState *bistate = (BrinInsertState *) indexInfo->ii_AmCache;
 	BrinRevmap *revmap;
+	BrinDesc   *bdesc;
 	Buffer		buf = InvalidBuffer;
 	MemoryContext tupcxt = NULL;
 	MemoryContext oldcxt = CurrentMemoryContext;
 	bool		autosummarize = BrinGetAutoSummarize(idxRel);
 
-	revmap = brinRevmapInitialize(idxRel, &pagesPerRange);
+	if (!bistate)
+	{
+		/* First time through in this statement? */
+		bistate = initialize_brin_insertstate(idxRel, indexInfo);
+	}
+
+	revmap = bistate->bs_rmAccess;
+	bdesc = bistate->bs_desc;
+	pagesPerRange = bistate->bs_pages_per_range;
 
 	/*
 	 * origHeapBlk is the block number where the insertion occurred.  heapBlk
@@ -228,14 +271,6 @@ brininsert(Relation idxRel, Datum *values, bool *nulls,
 		if (!brtup)
 			break;
 
-		/* First time through in this statement? */
-		if (bdesc == NULL)
-		{
-			MemoryContextSwitchTo(indexInfo->ii_Context);
-			bdesc = brin_build_desc(idxRel);
-			indexInfo->ii_AmCache = (void *) bdesc;
-			MemoryContextSwitchTo(oldcxt);
-		}
 		/* First time through in this brininsert call? */
 		if (tupcxt == NULL)
 		{
@@ -306,7 +341,6 @@ brininsert(Relation idxRel, Datum *values, bool *nulls,
 		break;
 	}
 
-	brinRevmapTerminate(revmap);
 	if (BufferIsValid(buf))
 		ReleaseBuffer(buf);
 	MemoryContextSwitchTo(oldcxt);
@@ -314,6 +348,24 @@ brininsert(Relation idxRel, Datum *values, bool *nulls,
 		MemoryContextDelete(tupcxt);
 
 	return false;
+}
+
+/*
+ * Callback to clean up the BrinInsertState once all tuple inserts are done.
+ */
+void
+brininsertcleanup(IndexInfo *indexInfo)
+{
+	BrinInsertState *bistate = (BrinInsertState *) indexInfo->ii_AmCache;
+
+	Assert(bistate);
+	/*
+	 * Clean up the revmap. Note that the brinDesc has already been cleaned up
+	 * as part of its own memory context.
+	 */
+	brinRevmapTerminate(bistate->bs_rmAccess);
+	bistate->bs_rmAccess = NULL;
+	bistate->bs_desc = NULL;
 }
 
 /*

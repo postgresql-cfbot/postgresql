@@ -1810,6 +1810,7 @@ _bt_pagedel(Relation rel, Buffer leafbuf, BTVacState *vstate)
 	bool		rightsib_empty;
 	Page		page;
 	BTPageOpaque opaque;
+	nbts_prep_ctx(rel);
 
 	/*
 	 * Save original leafbuf block number from caller.  Only deleted blocks

@@ -151,4 +151,6 @@ extern TupleDesc BuildDescFromLists(const List *names, const List *types, const 
 
 extern Node *TupleDescGetDefault(TupleDesc tupdesc, AttrNumber attnum);
 
+extern AttrNumber PopulateTupleDescCacheOffsets(TupleDesc desc);
+
 #endif							/* TUPDESC_H */

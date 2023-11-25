@@ -901,6 +901,63 @@ large groups of duplicates, maximizing space utilization.  Note also that
 deduplication more efficient.  Deduplication can be performed infrequently,
 without merging together existing posting list tuples too often.
 
+Notes about dynamic prefix truncation
+-------------------------------------
+
+When we do a binary search on a sorted set (such as a BTree), we know that a
+tuple will be smaller than its left neighbour, and larger than its right
+neighbour.  If we know that both the left and right neighbour share a prefix
+with the scan key, we deduce that the current tuple must also share this
+prefix with the scan key, which allows us to skip this shared prefix during
+tuple compare operations when we descend the btree.
+
+However, the BTree is not a static sorted list: It is a dynamic data
+structure which changes over time.  Because of this, we cannot just reuse the
+established prefix from the parent page: concurrent page deletions may have
+moved in new tuples from the keyspace left of the left separator of this
+page's downlink on the parent page, and page splits may have moved tuples
+that were previously in this page's indicated keyspace away from the page.
+This means that we have to re-establish the prefix that is shared with the
+scan key at every level of the btree.
+
+Note that this is most effective on indexes where a prefix of key columns has
+many duplicate values.  Compare operations on full index tuples stop at the
+first non-equal attribute: it is quite unlikely that an index on
+(unique, 1, 1, 1) will ever compare the latter columns, while one on
+(1, 1, 1, unique) will essentially always have to compare all attributes to
+hit an attribute that isn't equal to that of the scan key.  The dynamic
+prefix truncation allows PostgreSQL to skip most compare operations on the
+(1, 1, 1 ...) prefix, but it cannot improve the (unique, ...) case because
+that has no "wasteful" prefix that we can skip.
+
+With the above optimizations, dynamic prefix truncation improves the worst
+case complexity of indexing from O(tree_height * natts * log(tups_per_page))
+to O(tree_height * (3*natts + log(tups_per_page))) attribute compare
+operations, which can improve performance significantly.  If we also take
+the downlink right separator/HIKEY moveright optimization into account, that
+is further reduced to O(tree_height * (2*natts + log(tups_per_page)))
+attribute compares, which further improves performance.
+
+Notes about the right separator/HIKEY moveright optimization
+------------------------------------------------------------
+
+Page splits consistently cause the HIKEY of the split page to be inserted
+into the parent page as the right separator of the page's downlink (or,
+as the split page's new right sibling's left link), with the only
+difference between the HIKEY and the separator being the contents of the
+IndexTupleData struct of these tuples: the payloads are bit-identical.
+This allows us to reuse the _bt_compare result of the right separator key
+for the downlinked page's HIKEY, if we can determine that those are indeed
+bit-identical: Concurrent page splits and deletions may have caused the
+downlinked page to get a different HIKEY, which could have a different
+_bt_compare result.  To make this work, in _bt_search we cache the
+current downlink's right separator key, to then in the _bt_moveright
+phase of the layer below use memcmp() to validate our assumptions about
+the HIKEY matching the downlink's right separator key.  Only if the
+assumption is proven wrong (memcmp(HIKEY, parent_rsep) != 0), we call
+_bt_compare(), otherwise we can be certain that the parent page's result
+is unchanged, i.e. that _bt_compare would return "<".
+
 Notes about deduplication
 -------------------------
 
@@ -1040,6 +1097,33 @@ new item even begins.  We'd end up having to handle posting list splits
 that need a page split anyway.  Besides, supporting variable "split points"
 while splitting posting lists won't actually improve overall space
 utilization.
+
+Notes about nbtree specialization
+---------------------------------
+
+Attribute iteration is a significant overhead for multi-column indexes
+with variable length attributes, due to our inability to cache the offset
+of each attribute into an on-disk tuple. To combat this, we'd have to either
+fully deserialize the tuple, or maintain our offset into the tuple as we
+iterate over the tuple's fields.
+
+Keeping track of this offset also has a non-negligible overhead too, so we'd
+prefer to not have to keep track of these offsets when we can use the cache.
+By specializing performance-sensitive search functions for these specific
+index tuple shapes and calling those selectively, we can keep the performance
+of cacheable attribute offsets where that is applicable, while improving
+performance where we currently would see O(n_atts^2) time iterating on
+variable-length attributes.  Additionally, we update the entry points
+in the index AM to call the specialized functions, increasing the
+performance of those hot paths.
+
+Optimized code paths exist for the following cases, in order of preference:
+ - indexes with only a single key attribute
+ - multi-column indexes that cannot pre-calculate the offsets of all key
+   attributes in the tuple data section
+ - multi-column indexes that could benefit from the attcacheoff optimization
+   NB: This is also the default path, and is comparatively slow for uncachable
+   attribute offsets.
 
 Notes About Data Representation
 -------------------------------

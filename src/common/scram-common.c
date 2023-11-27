@@ -15,6 +15,7 @@
  */
 #ifndef FRONTEND
 #include "postgres.h"
+#include "miscadmin.h"
 #else
 #include "postgres_fe.h"
 #endif
@@ -73,6 +74,13 @@ scram_SaltedPassword(const char *password,
 	/* Subsequent iterations */
 	for (i = 2; i <= iterations; i++)
 	{
+		/* 
+		 * Allow it to be interrupted is necesssary when scram_iterations 
+		 * is set to a large value. However, this only works in the backend.
+		 */
+#ifndef FRONTEND
+		CHECK_FOR_INTERRUPTS();
+#endif
 		if (pg_hmac_init(hmac_ctx, (uint8 *) password, password_len) < 0 ||
 			pg_hmac_update(hmac_ctx, (uint8 *) Ui_prev, key_length) < 0 ||
 			pg_hmac_final(hmac_ctx, Ui, key_length) < 0)

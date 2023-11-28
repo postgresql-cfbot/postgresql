@@ -84,6 +84,7 @@ LLVMTypeRef StructAggState;
 LLVMTypeRef StructAggStatePerGroupData;
 LLVMTypeRef StructAggStatePerTransData;
 LLVMTypeRef StructPlanState;
+LLVMTypeRef StructJsonExprPostEvalState;
 
 LLVMValueRef AttributeTemplate;
 LLVMValueRef ExecEvalSubroutineTemplate;
@@ -1186,6 +1187,7 @@ llvm_create_types(void)
 	StructAggStatePerTransData = llvm_pg_var_type("StructAggStatePerTransData");
 	StructPlanState = llvm_pg_var_type("StructPlanState");
 	StructMinimalTupleData = llvm_pg_var_type("StructMinimalTupleData");
+	StructJsonExprPostEvalState = llvm_pg_var_type("StructJsonExprPostEvalState");
 
 	AttributeTemplate = LLVMGetNamedFunction(llvm_types_module, "AttributeTemplate");
 	ExecEvalSubroutineTemplate = LLVMGetNamedFunction(llvm_types_module, "ExecEvalSubroutineTemplate");

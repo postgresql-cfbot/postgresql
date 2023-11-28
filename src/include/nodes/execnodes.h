@@ -34,6 +34,7 @@
 #include "fmgr.h"
 #include "lib/ilist.h"
 #include "lib/pairingheap.h"
+#include "nodes/miscnodes.h"
 #include "nodes/params.h"
 #include "nodes/plannodes.h"
 #include "nodes/tidbitmap.h"
@@ -129,6 +130,12 @@ typedef struct ExprState
 
 	Datum	   *innermost_domainval;
 	bool	   *innermost_domainnull;
+
+	/*
+	 * For expression nodes that support soft errors.  Should be set to NULL
+	 * before calling ExecInitExprRec() if the caller wants errors thrown.
+	 */
+	ErrorSaveContext *escontext;
 } ExprState;
 
 
@@ -1875,6 +1882,8 @@ typedef struct TableFuncScanState
 	ExprState  *rowexpr;		/* state for row-generating expression */
 	List	   *colexprs;		/* state for column-generating expression */
 	List	   *coldefexprs;	/* state for column default expressions */
+	List	   *colvalexprs;	/* state for column value expression */
+	List	   *passingvalexprs;	/* state for PASSING argument expression */
 	List	   *ns_names;		/* same as TableFunc.ns_names */
 	List	   *ns_uris;		/* list of states of namespace URI exprs */
 	Bitmapset  *notnulls;		/* nullability flag for each output column */

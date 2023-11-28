@@ -69,6 +69,7 @@ MinimalTupleTableSlot StructMinimalTupleTableSlot;
 TupleDescData StructTupleDescData;
 PlanState	StructPlanState;
 MinimalTupleData StructMinimalTupleData;
+JsonExprPostEvalState StructJsonExprPostEvalState;
 
 
 /*
@@ -162,6 +163,7 @@ void	   *referenced_functions[] =
 	ExecEvalRow,
 	ExecEvalRowNotNull,
 	ExecEvalRowNull,
+	ExecEvalCoerceViaIOSafe,
 	ExecEvalSQLValueFunction,
 	ExecEvalScalarArrayOp,
 	ExecEvalHashedScalarArrayOp,
@@ -171,6 +173,9 @@ void	   *referenced_functions[] =
 	ExecEvalXmlExpr,
 	ExecEvalJsonConstructor,
 	ExecEvalJsonIsPredicate,
+	ExecEvalJsonCoercionViaPopulateOrIO,
+	ExecEvalJsonCoercionFinish,
+	ExecEvalJsonExprPath,
 	MakeExpandedObjectReadOnlyInternal,
 	slot_getmissingattrs,
 	slot_getsomeattrs_int,

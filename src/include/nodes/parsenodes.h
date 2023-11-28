@@ -1693,6 +1693,36 @@ typedef struct TriggerTransition
 /* Nodes for SQL/JSON support */
 
 /*
+ * JsonQuotes -
+ *		representation of [KEEP|OMIT] QUOTES clause for JSON_QUERY()
+ */
+typedef enum JsonQuotes
+{
+	JS_QUOTES_UNSPEC,			/* unspecified */
+	JS_QUOTES_KEEP,				/* KEEP QUOTES */
+	JS_QUOTES_OMIT,				/* OMIT QUOTES */
+} JsonQuotes;
+
+/*
+ * JsonPathSpec -
+ *		representation of JSON path constant
+ */
+typedef char *JsonPathSpec;
+
+/*
+ * JsonTableColumnType -
+ *		enumeration of JSON_TABLE column types
+ */
+typedef enum JsonTableColumnType
+{
+	JTC_FOR_ORDINALITY,
+	JTC_REGULAR,
+	JTC_EXISTS,
+	JTC_FORMATTED,
+	JTC_NESTED,
+} JsonTableColumnType;
+
+/*
  * JsonOutput -
  *		representation of JSON output clause (RETURNING type [FORMAT format])
  */
@@ -1702,6 +1732,118 @@ typedef struct JsonOutput
 	TypeName   *typeName;		/* RETURNING type name, if specified */
 	JsonReturning *returning;	/* RETURNING FORMAT clause and type Oids */
 } JsonOutput;
+
+/*
+ * JsonArgument -
+ *		representation of argument from JSON PASSING clause
+ */
+typedef struct JsonArgument
+{
+	NodeTag		type;
+	JsonValueExpr *val;			/* argument value expression */
+	char	   *name;			/* argument name */
+} JsonArgument;
+
+/*
+ * JsonFuncExpr -
+ *		untransformed representation of JSON function expressions
+ */
+typedef struct JsonFuncExpr
+{
+	NodeTag		type;
+	JsonExprOp	op;				/* expression type */
+	JsonValueExpr *context_item;	/* context item expression */
+	Node	   *pathspec;		/* JSON path specification expression */
+	char	   *pathname;		/* path name, if any */
+	List	   *passing;		/* list of PASSING clause arguments, if any */
+	JsonOutput *output;			/* output clause, if specified */
+	List	   *behavior;		/* ON EMPTY / ERROR behaviors, list of two
+								 * JsonBehavior nodes in that order */
+	JsonWrapper wrapper;		/* array wrapper behavior (JSON_QUERY only) */
+	JsonQuotes	quotes;			/* omit or keep quotes? (JSON_QUERY only) */
+	int			location;		/* token location, or -1 if unknown */
+} JsonFuncExpr;
+
+/*
+ * JsonTableColumn -
+ *		untransformed representation of JSON_TABLE column
+ */
+typedef struct JsonTableColumn
+{
+	NodeTag		type;
+	JsonTableColumnType coltype;	/* column type */
+	char	   *name;			/* column name */
+	TypeName   *typeName;		/* column type name */
+	char	   *pathspec;		/* path specification, if any */
+	char	   *pathname;		/* path name, if any */
+	JsonFormat *format;			/* JSON format clause, if specified */
+	JsonWrapper wrapper;		/* WRAPPER behavior for formatted columns */
+	JsonQuotes	quotes;			/* omit or keep quotes on scalar strings? */
+	List	   *columns;		/* nested columns */
+	List	   *behavior;		/* ON EMPTY / ERROR behaviors, list of two
+								 * JsonBehavior nodes in that order */
+	int			location;		/* token location, or -1 if unknown */
+} JsonTableColumn;
+
+/*
+ * JsonTablePlanType -
+ *		flags for JSON_TABLE plan node types representation
+ */
+typedef enum JsonTablePlanType
+{
+	JSTP_DEFAULT,
+	JSTP_SIMPLE,
+	JSTP_JOINED,
+} JsonTablePlanType;
+
+/*
+ * JsonTablePlanJoinType -
+ *		flags for JSON_TABLE join types representation
+ */
+typedef enum JsonTablePlanJoinType
+{
+	JSTPJ_INNER = 0x01,
+	JSTPJ_OUTER = 0x02,
+	JSTPJ_CROSS = 0x04,
+	JSTPJ_UNION = 0x08,
+} JsonTablePlanJoinType;
+
+typedef struct JsonTablePlan JsonTablePlan;
+
+/*
+ * JsonTablePlan -
+ *		untransformed representation of JSON_TABLE plan node
+ */
+struct JsonTablePlan
+{
+	NodeTag		type;
+	JsonTablePlanType plan_type;	/* plan type */
+	JsonTablePlanJoinType join_type;	/* join type (for joined plan only) */
+	JsonTablePlan *plan1;		/* first joined plan */
+	JsonTablePlan *plan2;		/* second joined plan */
+	char	   *pathname;		/* path name (for simple plan only) */
+	int			location;		/* token location, or -1 if unknown */
+};
+
+/*
+ * JsonTable -
+ *		untransformed representation of JSON_TABLE
+ */
+typedef struct JsonTable
+{
+	NodeTag		type;
+	JsonValueExpr *context_item;	/* context item expression */
+	Node	   *pathspec;		/* JSON path specification expression */
+	char	   *pathname;		/* path name, if any */
+	List	   *passing;		/* list of PASSING clause arguments, if any */
+	List	   *columns;		/* list of JsonTableColumn */
+	JsonTablePlan *plan;		/* join plan, if specified */
+	List	   *behavior;		/* ON EMPTY / ERROR behaviors, list of two
+								 * JsonBehavior nodes in that order */
+	Alias	   *alias;			/* table alias in FROM clause */
+	bool		lateral;		/* does it have LATERAL prefix? */
+	int			location;		/* token location, or -1 if unknown */
+} JsonTable;
 
 /*
  * JsonKeyValue -

@@ -16,12 +16,15 @@
 
 #include "executor/nodeAgg.h"
 #include "nodes/execnodes.h"
+#include "nodes/miscnodes.h"
 
 /* forward references to avoid circularity */
 struct ExprEvalStep;
 struct SubscriptingRefState;
 struct ScalarArrayOpExprHashTable;
 struct JsonConstructorExprState;
+struct JsonbValue;
+struct JsonExprState;
 
 /* Bits in ExprState->flags (see also execnodes.h for public flag bits): */
 /* expression's interpreter has been initialized */
@@ -168,6 +171,7 @@ typedef enum ExprEvalOp
 
 	/* evaluate assorted special-purpose expression types */
 	EEOP_IOCOERCE,
+	EEOP_IOCOERCE_SAFE,
 	EEOP_DISTINCT,
 	EEOP_NOT_DISTINCT,
 	EEOP_NULLIF,
@@ -238,6 +242,9 @@ typedef enum ExprEvalOp
 	EEOP_XMLEXPR,
 	EEOP_JSON_CONSTRUCTOR,
 	EEOP_IS_JSON,
+	EEOP_JSONEXPR_PATH,
+	EEOP_JSONEXPR_COERCION,
+	EEOP_JSONEXPR_COERCION_FINISH,
 	EEOP_AGGREF,
 	EEOP_GROUPING_FUNC,
 	EEOP_WINDOW_FUNC,
@@ -547,6 +554,7 @@ typedef struct ExprEvalStep
 			bool	   *checknull;
 			/* OID of domain type */
 			Oid			resulttype;
+			ErrorSaveContext *escontext;
 		}			domaincheck;
 
 		/* for EEOP_CONVERT_ROWTYPE */
@@ -689,6 +697,11 @@ typedef struct ExprEvalStep
 			JsonIsPredicate *pred;	/* original expression node */
 		}			is_json;
 
+		/* for EEOP_JSONEXPR_PATH */
+		struct
+		{
+			struct JsonExprState *jsestate;
+		}			jsonexpr;
 	}			d;
 } ExprEvalStep;
 
@@ -752,6 +765,104 @@ typedef struct JsonConstructorExprState
 	int			nargs;
 } JsonConstructorExprState;
 
+/*
+ * Information about the state of JsonPath* evaluation.
+ */
+typedef struct JsonExprPostEvalState
+{
+	/* Did JsonPath* evaluation cause an error? */
+	NullableDatum	error;
+
+	/* Is the result of JsonPath* evaluation empty? */
+	NullableDatum	empty;
+
+	/*
+	 * ExecEvalJsonExprPath() will set this to the address of the step to
+	 * use to coerce the result of JsonPath* evaluation to the RETURNING type.
+	 * Also see the description of possible step addresses that this could be
+	 * set to in the definition of JsonExprState.
+	 */
+#define FIELDNO_JSONEXPRPOSTEVALSTATE_JUMP_EVAL_COERCION	2
+	int			jump_eval_coercion;
+	bool		throw_coercion_error;
+} JsonExprPostEvalState;
+
+/* State for evaluating a JsonExpr, too big to inline */
+typedef struct JsonExprState
+{
+	/* original expression node */
+	JsonExpr   *jsexpr;
+
+	/* value/isnull for formatted_expr */
+	NullableDatum formatted_expr;
+
+	/* value/isnull for pathspec */
+	NullableDatum pathspec;
+
+	/* JsonPathVariable entries for passing_values */
+	List	   *args;
+
+	/*
+	 * Per-row result status info populated by ExecEvalJsonExprPath(),
+	 * ExecEvalJsonCoercionViaPopulateOrIO(), and
+	 * ExecEvalJsonCoercionFinish().
+	 */
+	JsonExprPostEvalState post_eval;
+
+	/*
+	 * Address of the step that implements the non-ERROR variant of ON ERROR
+	 * and ON EMPTY behaviors, to be jumped to when ExecEvalJsonExprPath()
+	 * returns false on encountering an error during JsonPath* evaluation
+	 * (ON ERROR) or on finding that no matching JSON item was returned (ON
+	 * EMPTY).  The same steps are also performed on encountering an error
+	 * when coercing JsonPath* result to the RETURNING type.
+	 */
+	int			jump_error;
+
+	/*
+	 * Addresses of steps to perform the coercion of the JsonPath* result value
+	 * to the RETURNING type.  Each address points to either 1) a special
+	 * EEOP_JSONEXPR_COERCION step that handles coercion using the RETURNING
+	 * type's input function or by using json_via_populate(), or 2) an
+	 * expression such as CoerceViaIO.  It may be -1 if no coercion is
+	 * necessary.
+	 *
+	 * jump_eval_result_coercion points to the step to evaluate the coercion
+	 * given in JsonExpr.result_coercion.
+	 */
+	int			jump_eval_result_coercion;
+
+	/* eval_item_coercion_jumps is an array of num_item_coercions elements
+	 * each containing a step address to evaluate the coercion from a value of
+	 * the given JsonItemType to the RETURNING type, or -1 if no coercion is
+	 * necessary.  item_coercion_via_expr is an array of boolean flags of the
+	 * same length that indicates whether each valid step address in the
+	 * eval_item_coercion_jumps array points to an expression or a
+	 * EEOP_JSONEXPR_COERCION step.  ExecEvalJsonExprPath() will cause an
+	 * error if it's the latter, because that mode of coercion is not
+	 * supported for all JsonItemTypes.
+	 */
+	int			num_item_coercions;
+	int		   *eval_item_coercion_jumps;
+	bool	   *item_coercion_via_expr;
+
+	/*
+	 * For passing when initializing a EEOP_IOCOERCE_SAFE step for any
+	 * CoerceViaIO nodes in the expression that must be evaluated in an
+	 * error-safe manner.
+	 */
+	ErrorSaveContext escontext;
+
+	/* Input function info for the RETURNING type. */
+	struct
+	{
+		FmgrInfo   *finfo;
+		Oid			typioparam;
+	}			input;
+
+	/* Cache for json_populate_type() called for coercion in some cases */
+	void	   *cache;
+} JsonExprState;
 
 /* functions in execExpr.c */
 extern void ExprEvalPushStep(ExprState *es, const ExprEvalStep *s);
@@ -776,6 +887,7 @@ extern void ExecEvalParamExec(ExprState *state, ExprEvalStep *op,
 							  ExprContext *econtext);
 extern void ExecEvalParamExtern(ExprState *state, ExprEvalStep *op,
 								ExprContext *econtext);
+extern void ExecEvalCoerceViaIOSafe(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalSQLValueFunction(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalCurrentOfExpr(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalNextValueExpr(ExprState *state, ExprEvalStep *op);
@@ -805,6 +917,11 @@ extern void ExecEvalXmlExpr(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalJsonConstructor(ExprState *state, ExprEvalStep *op,
 									ExprContext *econtext);
 extern void ExecEvalJsonIsPredicate(ExprState *state, ExprEvalStep *op);
+extern void	ExecEvalJsonCoercionViaPopulateOrIO(ExprState *state, ExprEvalStep *op,
+												ExprContext *econtext);
+extern void	ExecEvalJsonCoercionFinish(ExprState *state, ExprEvalStep *op);
+extern bool ExecEvalJsonExprPath(ExprState *state, ExprEvalStep *op,
+								 ExprContext *econtext);
 extern void ExecEvalGroupingFunc(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalSubPlan(ExprState *state, ExprEvalStep *op,
 							ExprContext *econtext);

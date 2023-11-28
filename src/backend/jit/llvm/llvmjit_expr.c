@@ -1431,6 +1431,12 @@ llvm_compile_expr(ExprState *state)
 					break;
 				}
 
+			case EEOP_IOCOERCE_SAFE:
+				build_EvalXFunc(b, mod, "ExecEvalCoerceViaIOSafe",
+								v_state, op);
+				LLVMBuildBr(b, opblocks[opno + 1]);
+				break;
+
 			case EEOP_DISTINCT:
 			case EEOP_NOT_DISTINCT:
 				{
@@ -1921,6 +1927,130 @@ llvm_compile_expr(ExprState *state)
 			case EEOP_IS_JSON:
 				build_EvalXFunc(b, mod, "ExecEvalJsonIsPredicate",
 								v_state, op);
+				LLVMBuildBr(b, opblocks[opno + 1]);
+				break;
+
+			case EEOP_JSONEXPR_PATH:
+				{
+					JsonExprState *jsestate = op->d.jsonexpr.jsestate;
+					LLVMValueRef v_ret;
+					LLVMBasicBlockRef 	b_coercion;
+
+					b_coercion =
+						l_bb_before_v(opblocks[opno + 1],
+									  "op.%d.jsonexpr_coercion", opno);
+
+					v_ret = build_EvalXFunc(b, mod, "ExecEvalJsonExprPath",
+											v_state, op, v_econtext);
+					v_ret = LLVMBuildZExt(b, v_ret, TypeStorageBool, "");
+					LLVMBuildCondBr(b,
+									LLVMBuildICmp(b,
+												  LLVMIntEQ,
+												  v_ret,
+												  l_sbool_const(0),
+												  ""),
+									jsestate->jump_error >= 0 ?
+									opblocks[jsestate->jump_error] :
+									b_coercion,
+									b_coercion);
+
+					LLVMPositionBuilderAtEnd(b, b_coercion);
+					if (jsestate->jump_eval_result_coercion >= 0 ||
+						jsestate->num_item_coercions > 0)
+					{
+						JsonExprPostEvalState *post_eval = &jsestate->post_eval;
+						int			i;
+						LLVMValueRef v_post_eval;
+						LLVMValueRef v_post_eval_jump_eval_coercionp;
+						LLVMValueRef v_post_eval_jump_eval_coercion;
+						LLVMValueRef v_jump_coercion;
+						LLVMValueRef v_switch;
+						LLVMBasicBlockRef 	b_done,
+											b_result_coercion_block,
+										   *b_item_coercion_blocks = NULL;
+
+						v_post_eval = l_ptr_const(post_eval, l_ptr(StructJsonExprPostEvalState));
+						v_post_eval_jump_eval_coercionp =
+							l_struct_gep(b,
+										 StructJsonExprPostEvalState,
+										 v_post_eval,
+										 FIELDNO_JSONEXPRPOSTEVALSTATE_JUMP_EVAL_COERCION,
+										 "v_post_eval_jump_eval_coercion");
+						v_post_eval_jump_eval_coercion =
+							l_load(b, LLVMInt32TypeInContext(lc),
+								   v_post_eval_jump_eval_coercionp, "");
+
+						b_result_coercion_block =
+							l_bb_before_v(opblocks[opno + 1],
+										  "op.%d.jsonexpr_result_coercion", opno);
+						if (jsestate->num_item_coercions > 0)
+						{
+							b_item_coercion_blocks = palloc(sizeof(LLVMBasicBlockRef) *
+															jsestate->num_item_coercions);
+							for (i = 0; i < jsestate->num_item_coercions; i++)
+							{
+								b_item_coercion_blocks[i] =
+									l_bb_before_v(opblocks[opno + 1],
+												  "op.%d.jsonexpr_item_coercion.%d",
+												  opno, i);
+							}
+						}
+						b_done =
+							l_bb_before_v(opblocks[opno + 1],
+										  "op.%d.jsonexpr_done", opno);
+
+						v_switch = LLVMBuildSwitch(b,
+												   v_post_eval_jump_eval_coercion,
+												   b_done,
+												   jsestate->num_item_coercions + 1);
+						if (jsestate->jump_eval_result_coercion >= 0)
+						{
+							v_jump_coercion = l_int32_const(lc, jsestate->jump_eval_result_coercion);
+							LLVMAddCase(v_switch, v_jump_coercion, b_result_coercion_block);
+						}
+
+						for (i = 0; i < jsestate->num_item_coercions; i++)
+						{
+							if (jsestate->eval_item_coercion_jumps[i] >= 0)
+							{
+								v_jump_coercion = l_int32_const(lc, jsestate->eval_item_coercion_jumps[i]);
+								LLVMAddCase(v_switch, v_jump_coercion, b_item_coercion_blocks[i]);
+							}
+						}
+
+						LLVMPositionBuilderAtEnd(b, b_result_coercion_block);
+						if (jsestate->jump_eval_result_coercion >= 0)
+							LLVMBuildBr(b, opblocks[jsestate->jump_eval_result_coercion]);
+						else
+							LLVMBuildUnreachable(b);
+
+						for (i = 0; i < jsestate->num_item_coercions; i++)
+						{
+							LLVMPositionBuilderAtEnd(b, b_item_coercion_blocks[i]);
+							if (jsestate->eval_item_coercion_jumps[i] >= 0)
+								LLVMBuildBr(b, opblocks[jsestate->eval_item_coercion_jumps[i]]);
+							else
+								LLVMBuildUnreachable(b);
+						}
+
+						LLVMPositionBuilderAtEnd(b, b_done);
+					}
+
+					LLVMBuildBr(b, opblocks[opno + 1]);
+					break;
+				}
+
+			case EEOP_JSONEXPR_COERCION:
+				build_EvalXFunc(b, mod, "ExecEvalJsonCoercionViaPopulateOrIO",
+									v_state, op, v_econtext);
+
+				LLVMBuildBr(b, opblocks[opno + 1]);
+				break;
+
+			case EEOP_JSONEXPR_COERCION_FINISH:
+				build_EvalXFunc(b, mod, "ExecEvalJsonCoercionFinish",
+								v_state, op);
+
 				LLVMBuildBr(b, opblocks[opno + 1]);
 				break;
 

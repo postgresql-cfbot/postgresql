@@ -61,7 +61,7 @@ static void remove_leftjoinrel_from_query(PlannerInfo *root, int relid,
 										  SpecialJoinInfo *sjinfo);
 static void remove_rel_from_restrictinfo(RestrictInfo *rinfo,
 										 int relid, int ojrelid);
-static void remove_rel_from_eclass(EquivalenceClass *ec,
+static void remove_rel_from_eclass(PlannerInfo *root, EquivalenceClass *ec,
 								   int relid, int ojrelid);
 static List *remove_rel_from_joinlist(List *joinlist, int relid, int *nremoved);
 static bool rel_supports_distinctness(PlannerInfo *root, RelOptInfo *rel);
@@ -578,7 +578,7 @@ remove_leftjoinrel_from_query(PlannerInfo *root, int relid,
 
 		if (bms_is_member(relid, ec->ec_relids) ||
 			bms_is_member(ojrelid, ec->ec_relids))
-			remove_rel_from_eclass(ec, relid, ojrelid);
+			remove_rel_from_eclass(root, ec, relid, ojrelid);
 	}
 
 	/*
@@ -663,9 +663,10 @@ remove_rel_from_restrictinfo(RestrictInfo *rinfo, int relid, int ojrelid)
  * level(s).
  */
 static void
-remove_rel_from_eclass(EquivalenceClass *ec, int relid, int ojrelid)
+remove_rel_from_eclass(PlannerInfo *root, EquivalenceClass *ec, int relid, int ojrelid)
 {
 	ListCell   *lc;
+	int			i;
 
 	/* Fix up the EC's overall relids */
 	ec->ec_relids = bms_del_member(ec->ec_relids, relid);
@@ -687,14 +688,22 @@ remove_rel_from_eclass(EquivalenceClass *ec, int relid, int ojrelid)
 			cur_em->em_relids = bms_del_member(cur_em->em_relids, relid);
 			cur_em->em_relids = bms_del_member(cur_em->em_relids, ojrelid);
 			if (bms_is_empty(cur_em->em_relids))
+			{
 				ec->ec_members = foreach_delete_current(ec->ec_members, lc);
+				/* XXX performance of list_delete_ptr()?? */
+				ec->ec_norel_members = list_delete_ptr(ec->ec_norel_members,
+													   cur_em);
+				ec->ec_rel_members = list_delete_ptr(ec->ec_rel_members,
+													 cur_em);
+			}
 		}
 	}
 
 	/* Fix up the source clauses, in case we can re-use them later */
-	foreach(lc, ec->ec_sources)
+	i = -1;
+	while ((i = bms_next_member(ec->ec_source_indexes, i)) >= 0)
 	{
-		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+		RestrictInfo *rinfo = list_nth_node(RestrictInfo, root->eq_sources, i);
 
 		remove_rel_from_restrictinfo(rinfo, relid, ojrelid);
 	}
@@ -704,7 +713,7 @@ remove_rel_from_eclass(EquivalenceClass *ec, int relid, int ojrelid)
 	 * drop them.  (At this point, any such clauses would be base restriction
 	 * clauses, which we'd not need anymore anyway.)
 	 */
-	ec->ec_derives = NIL;
+	ec->ec_derive_indexes = NULL;
 }
 
 /*
@@ -1528,6 +1537,24 @@ replace_relid(Relids relids, int oldId, int newId)
 	return relids;
 }
 
+void
+del_eq_derives(PlannerInfo *root, EquivalenceClass *ec)
+{
+	int i = -1;
+
+	while ((i = bms_next_member(ec->ec_derive_indexes, i)) >= 0)
+	{
+		/*
+		 * Can't delete the element because we would need to rebuild all
+		 * the eq_derives indexes. But add a nuke to detect potential problems.
+		 */
+		list_nth_cell(root->eq_derives, i)->ptr_value = NULL;
+	}
+	bms_free(ec->ec_derive_indexes);
+	ec->ec_derive_indexes = NULL;
+}
+
+
 /*
  * Update EC members to point to the remaining relation instead of the removed
  * one, removing duplicates.
@@ -1551,10 +1578,11 @@ replace_relid(Relids relids, int oldId, int newId)
  * delete them.
  */
 static void
-update_eclasses(EquivalenceClass *ec, int from, int to)
+update_eclass(PlannerInfo *root, EquivalenceClass *ec, int from, int to)
 {
 	List	   *new_members = NIL;
 	List	   *new_sources = NIL;
+	int			i = -1;
 	ListCell   *lc;
 	ListCell   *lc1;
 
@@ -1593,16 +1621,13 @@ update_eclasses(EquivalenceClass *ec, int from, int to)
 			new_members = lappend(new_members, em);
 	}
 
-	list_free(ec->ec_members);
-	ec->ec_members = new_members;
-
-	list_free(ec->ec_derives);
-	ec->ec_derives = NULL;
+	del_eq_derives(root, ec);
 
 	/* Update EC source expressions */
-	foreach(lc, ec->ec_sources)
+	while ((i = bms_next_member(ec->ec_source_indexes, i)) > 0)
 	{
-		RestrictInfo *rinfo = lfirst_node(RestrictInfo, lc);
+		RestrictInfo   *rinfo = list_nth_node(RestrictInfo,
+											   root->eq_sources, i);
 		bool		is_redundant = false;
 
 		if (!bms_is_member(from, rinfo->required_relids))
@@ -1636,8 +1661,21 @@ update_eclasses(EquivalenceClass *ec, int from, int to)
 			new_sources = lappend(new_sources, rinfo);
 	}
 
-	list_free(ec->ec_sources);
-	ec->ec_sources = new_sources;
+	i=-1;
+
+	while ((i = bms_next_member(ec->ec_source_indexes, i)) > 0)
+	{
+		list_nth_cell(root->eq_sources, i)->ptr_value = NULL;
+	}
+	bms_free(ec->ec_source_indexes);
+	ec->ec_source_indexes = NULL;
+
+	foreach(lc, new_sources)
+	{
+		RestrictInfo   *rinfo = lfirst_node(RestrictInfo, lc);
+		add_eq_source(root, ec, rinfo);
+	}
+
 	ec->ec_relids = replace_relid(ec->ec_relids, from, to);
 }
 
@@ -1815,7 +1853,7 @@ remove_self_join_rel(PlannerInfo *root, PlanRowMark *kmark, PlanRowMark *rmark,
 	{
 		EquivalenceClass *ec = (EquivalenceClass *) list_nth(root->eq_classes, i);
 
-		update_eclasses(ec, toRemove->relid, toKeep->relid);
+		update_eclass(root, ec, toRemove->relid, toKeep->relid);
 		toKeep->eclass_indexes = bms_add_member(toKeep->eclass_indexes, i);
 	}
 

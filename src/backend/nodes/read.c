@@ -514,3 +514,23 @@ nodeRead(const char *token, int tok_len)
 
 	return (void *) result;
 }
+
+/*
+ * pg_strtok_save_context -
+ *	  Save context initialized by stringToNode.
+ */
+void
+pg_strtok_save_context(const char **pcontext)
+{
+	*pcontext = pg_strtok_ptr;
+}
+
+/*
+ * pg_strtok_restore_context -
+ *	  Resore saved context.
+ */
+void
+pg_strtok_restore_context(const char *context)
+{
+	pg_strtok_ptr = context;
+}

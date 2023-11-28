@@ -2129,6 +2129,10 @@ perform_pullup_replace_vars(PlannerInfo *root,
 		if (wc->runCondition != NIL)
 			wc->runCondition = (List *)
 				pullup_replace_vars((Node *) wc->runCondition, rvcontext);
+
+		if (wc->defineClause != NIL)
+			wc->defineClause = (List *)
+				pullup_replace_vars((Node *) wc->defineClause, rvcontext);
 	}
 	if (parse->onConflict)
 	{

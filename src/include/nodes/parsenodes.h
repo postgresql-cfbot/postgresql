@@ -541,6 +541,44 @@ typedef struct SortBy
 } SortBy;
 
 /*
+ * AFTER MATCH row pattern skip to types in row pattern common syntax
+ */
+typedef enum RPSkipTo
+{
+	ST_NONE,					/* AFTER MATCH omitted */
+	ST_NEXT_ROW,				/* SKIP TO NEXT ROW */
+	ST_PAST_LAST_ROW,			/* SKIP TO PAST LAST ROW */
+	ST_FIRST_VARIABLE,			/* SKIP TO FIRST variable name */
+	ST_LAST_VARIABLE,			/* SKIP TO LAST variable name */
+	ST_VARIABLE					/* SKIP TO variable name */
+} RPSkipTo;
+
+/*
+ * Row Pattern SUBSET clause item
+ */
+typedef struct RPSubsetItem
+{
+	NodeTag		type;
+	char	   *name;			/* Row Pattern SUBSET clause variable name */
+	List	   *rhsVariable;	/* Row Pattern SUBSET rhs variables (list of char *string) */
+} RPSubsetItem;
+
+/*
+ * RowPatternCommonSyntax - raw representation of row pattern common syntax
+ *
+ */
+typedef struct RPCommonSyntax
+{
+	NodeTag		type;
+	RPSkipTo	rpSkipTo;		/* Row Pattern AFTER MATCH SKIP type */
+	char	   *rpSkipVariable;	/* Row Pattern Skip To variable name, if any */
+	bool		initial;		/* true if <row pattern initial or seek> is initial */
+	List	   *rpPatterns;		/* PATTERN variables (list of A_Expr) */
+	List	   *rpSubsetClause;	/* row pattern subset clause (list of RPSubsetItem), if any */
+	List	   *rpDefs;			/* row pattern definitions clause (list of ResTarget) */
+} RPCommonSyntax;
+
+/*
  * WindowDef - raw representation of WINDOW and OVER clauses
  *
  * For entries in a WINDOW list, "name" is the window name being defined.
@@ -555,6 +593,8 @@ typedef struct WindowDef
 	char	   *refname;		/* referenced window name, if any */
 	List	   *partitionClause;	/* PARTITION BY expression list */
 	List	   *orderClause;	/* ORDER BY (list of SortBy) */
+	List	   *rowPatternMeasures;	/* row pattern measures (list of ResTarget) */
+	RPCommonSyntax *rpCommonSyntax;	/* row pattern common syntax */
 	int			frameOptions;	/* frame_clause options, see below */
 	Node	   *startOffset;	/* expression for starting bound, if any */
 	Node	   *endOffset;		/* expression for ending bound, if any */
@@ -1476,6 +1516,11 @@ typedef struct GroupingSet
  * the orderClause might or might not be copied (see copiedOrder); the framing
  * options are never copied, per spec.
  *
+ * "defineClause" is Row Pattern Recognition DEFINE clause (list of
+ * TargetEntry). TargetEntry.resname represents row pattern definition
+ * variable name. "patternVariable" and "patternRegexp" represents PATTERN
+ * clause.
+ *
  * The information relevant for the query jumbling is the partition clause
  * type and its bounds.
  */
@@ -1507,6 +1552,17 @@ typedef struct WindowClause
 	Index		winref;			/* ID referenced by window functions */
 	/* did we copy orderClause from refname? */
 	bool		copiedOrder pg_node_attr(query_jumble_ignore);
+	/* Row Pattern AFTER MACH SKIP clause */
+	RPSkipTo	rpSkipTo;		/* Row Pattern Skip To type */
+	bool		initial;		/* true if <row pattern initial or seek> is initial */
+	/* Row Pattern DEFINE clause (list of TargetEntry) */
+	List		*defineClause;
+	/* Row Pattern DEFINE variable initial names (list of String) */
+	List		*defineInitial;
+	/* Row Pattern PATTERN variable name (list of String) */
+	List		*patternVariable;
+	/* Row Pattern PATTERN regular expression quantifier ('+' or ''. list of String) */
+	List		*patternRegexp;
 } WindowClause;
 
 /*

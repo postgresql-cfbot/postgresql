@@ -585,19 +585,26 @@ pg_convert(PG_FUNCTION_ARGS)
 												  src_encoding,
 												  dest_encoding);
 
-	/* update len if conversion actually happened */
-	if (dest_str != src_str)
-		len = strlen(dest_str);
 
 	/*
-	 * build bytea data type structure.
+	 * If no actual conversion happened, return the original string (we are
+	 * checking pointers to strings instead of encodings because
+	 * pg_do_encoding_conversion() above covers more cases than just encoding
+	 * equality).
 	 */
+	if (dest_str == src_str)
+	{
+		PG_RETURN_BYTEA_P(string);
+	}
+
+	/* if conversion happened, build a new bytea of a correct length */
+	len = strlen(dest_str);
 	retval = (bytea *) palloc(len + VARHDRSZ);
 	SET_VARSIZE(retval, len + VARHDRSZ);
 	memcpy(VARDATA(retval), dest_str, len);
 
-	if (dest_str != src_str)
-		pfree(dest_str);
+	/* free the original result of conversion */
+	pfree(dest_str);
 
 	/* free memory if allocated by the toaster */
 	PG_FREE_IF_COPY(string, 0);

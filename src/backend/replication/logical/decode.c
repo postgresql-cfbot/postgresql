@@ -35,6 +35,7 @@
 #include "access/xlogrecord.h"
 #include "access/xlogutils.h"
 #include "catalog/pg_control.h"
+#include "catalog/storage_xlog.h"
 #include "replication/decode.h"
 #include "replication/logical.h"
 #include "replication/message.h"
@@ -42,6 +43,7 @@
 #include "replication/reorderbuffer.h"
 #include "replication/snapbuild.h"
 #include "storage/standby.h"
+#include "commands/sequence.h"
 
 /* individual record(group)'s handlers */
 static void DecodeInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
@@ -63,6 +65,7 @@ static void DecodePrepare(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 
 /* common function to decode tuples */
 static void DecodeXLogTuple(char *data, Size len, ReorderBufferTupleBuf *tuple);
+static void DecodeSeqTuple(char *data, Size len, ReorderBufferTupleBuf *tuple);
 
 /* helper functions for decoding transactions */
 static inline bool FilterPrepare(LogicalDecodingContext *ctx,
@@ -629,7 +632,7 @@ logicalmsg_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 		 * We need to set processing_required flag to notify the message's
 		 * existence to the caller. Usually, the flag is set when either the
 		 * COMMIT or ABORT records are decoded, but this must be turned on
-		 * here because the non-transactional logical message is decoded
+		 * here because the non-transactional sequence change is decoded
 		 * without waiting for these records.
 		 */
 		if (!message->transactional)
@@ -1319,4 +1322,227 @@ DecodeTXNNeedSkip(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 	}
 
 	return false;
+}
+
+/*
+ * DecodeSeqTuple
+ *		decode tuple describing the sequence change
+ *
+ * Sequences are represented as a table with a single row, which gets updated by
+ * nextval() etc. The tuple is stored in WAL right after the xl_seq_rec, so we
+ * simply copy it into the tuplebuf (similar to seq_redo).
+ */
+static void
+DecodeSeqTuple(char *data, Size len, ReorderBufferTupleBuf *tuple)
+{
+	int			datalen = len - sizeof(xl_seq_rec) - SizeofHeapTupleHeader;
+
+	Assert(datalen >= 0);
+
+	tuple->tuple.t_len = datalen + SizeofHeapTupleHeader;
+
+	ItemPointerSetInvalid(&tuple->tuple.t_self);
+
+	tuple->tuple.t_tableOid = InvalidOid;
+
+	memcpy(((char *) tuple->tuple.t_data),
+		   data + sizeof(xl_seq_rec),
+		   SizeofHeapTupleHeader + datalen);
+}
+
+/*
+ * Handle sequence decode
+ *
+ * Decoding sequences is a bit tricky, because while most sequence actions
+ * are non-transactional (immediately visible and not subject to rollback),
+ * some need to be handled as transactional (e.g. for sequences created in
+ * a transaction are invisible until that transaction commits).
+ *
+ * By default, a sequence change is non-transactional - we must not queue
+ * it in a transaction as other changes, because the transaction might get
+ * rolled back and we'd discard the change. But that'd be incorrect, as the
+ * change is already visible to other processes accessing the sequence. If
+ * we discard the change, the downstream will not be notified about the
+ * change, and may fall behind.
+ *
+ * On the other hand, the sequence may be created in a transaction. In this
+ * case we *have to* queue it in the transaction just like other changes,
+ * because we don't want to process changes for sequences that may be unknown
+ * outside the transaction - the downstream might get confused about which
+ * sequence it's related to etc.
+ */
+void
+seq_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+{
+	SnapBuild  *builder = ctx->snapshot_builder;
+	ReorderBufferTupleBuf *tuplebuf;
+	RelFileLocator target_locator;
+	XLogReaderState *r = buf->record;
+	char	   *tupledata = NULL;
+	Size		tuplelen;
+	Size		datalen = 0;
+	TransactionId xid = XLogRecGetXid(r);
+	uint8		info = XLogRecGetInfo(buf->record) & ~XLR_INFO_MASK;
+	Snapshot	snapshot = NULL;
+	RepOriginId origin_id = XLogRecGetOrigin(r);
+	bool		transactional;
+
+	/* ignore sequences when the plugin does not have the callbacks */
+	if (!ctx->sequences)
+		return;
+
+	/* only decode changes flagged with XLOG_SEQ_LOG */
+	if (info != XLOG_SEQ_LOG)
+		elog(ERROR, "unexpected RM_SEQ_ID record type: %u", info);
+
+	ReorderBufferProcessXid(ctx->reorder, XLogRecGetXid(r), buf->origptr);
+
+	/*
+	 * If we don't have snapshot or we are just fast-forwarding, there is no
+	 * point in decoding sequences.
+	 */
+	if (SnapBuildCurrentState(builder) < SNAPBUILD_FULL_SNAPSHOT)
+		return;
+
+	/* only interested in our database */
+	XLogRecGetBlockTag(r, 0, &target_locator, NULL, NULL);
+	if (target_locator.dbOid != ctx->slot->data.database)
+		return;
+
+	/* output plugin doesn't look for this origin, no need to queue */
+	if (FilterByOrigin(ctx, XLogRecGetOrigin(r)))
+		return;
+
+	/* time to decode the sequence data from the tuple */
+	tupledata = XLogRecGetData(r);
+	datalen = XLogRecGetDataLen(r);
+	tuplelen = datalen - SizeOfHeapHeader - sizeof(xl_seq_rec);
+
+	/* the sequence should not have changed without data */
+	if (!datalen || !tupledata)
+		elog(ERROR, "sequence decode missing tuple data");
+
+	tuplebuf = ReorderBufferGetTupleBuf(ctx->reorder, tuplelen);
+	DecodeSeqTuple(tupledata, datalen, tuplebuf);
+
+	/*
+	 * Should we handle the sequence change as transactional or not?
+	 *
+	 * If the relfilenode was created in the current transaction, treat the
+	 * change as transactional and queue it. Otherwise it needs to be treated
+	 * as non-transactional, in which case we just send it to the plugin right
+	 * away.
+	 */
+	transactional = ReorderBufferSequenceIsTransactional(ctx->reorder,
+														 target_locator,
+														 xid, NULL);
+
+	/* Skip the change if already processed (per the snapshot). */
+	if (transactional &&
+		!SnapBuildProcessChange(builder, xid, buf->origptr))
+		return;
+	else if (!transactional &&
+			 (SnapBuildCurrentState(builder) != SNAPBUILD_CONSISTENT ||
+			  SnapBuildXactNeedsSkip(builder, buf->origptr)))
+		return;
+
+	/*
+	 * We also skip decoding in fast_forward mode. This check must be last
+	 * because we don't want to set the processing_required flag unless we
+	 * have a decodable sequence change.
+	 */
+	if (ctx->fast_forward)
+	{
+		/*
+		 * We need to set processing_required flag to notify the sequence
+		 * change existence to the caller. Usually, the flag is set when
+		 * either the COMMIT or ABORT records are decoded, but this must be
+		 * turned on here because the non-transactional logical message is
+		 * decoded without waiting for these records.
+		 */
+		if (!transactional)
+			ctx->processing_required = true;
+
+		return;
+	}
+
+	/*
+	 * If this is a non-transactional change, get the snapshot we're expected
+	 * to use. We only get here when the snapshot is consistent, and the
+	 * change is not meant to be skipped.
+	 *
+	 * For transactional changes we don't need a snapshot, we'll use the
+	 * regular snapshot maintained by ReorderBuffer. We just leave it NULL.
+	 */
+	if (!transactional)
+		snapshot = SnapBuildGetOrBuildSnapshot(builder);
+
+	/* Queue the change (or send immediately if not transactional). */
+	ReorderBufferQueueSequence(ctx->reorder, xid, snapshot, buf->endptr,
+							   origin_id, target_locator, transactional,
+							   tuplebuf);
+}
+
+/*
+ * Decode relfilenode change
+ *
+ * Decode SMGR records, so that we can later decide which sequence changes
+ * need to be treated as transactional. Most sequence changes are going to
+ * be non-transactional (applied as if outside the decoded transaction, not
+ * subject to rollback, etc.). Changes for sequences created/altered in the
+ * transaction need to be handled as transactional (i.e. applied as part of
+ * the decoded transaction, same as all other changes).
+ *
+ * To decide which of those cases is it we decode XLOG_SMGR_CREATE records
+ * and track relfilenodes created in each (sub)transaction. Changes for
+ * these relfilenodes are then queued and treated as transactional, while
+ * remaining changes are treated as non-transactional.
+ *
+ * We only care about XLOG_SMGR_CREATE records for "our" database (logical
+ * decoding is restricted to a single database), and we do the filtering
+ * and skipping, as appropriate.
+ */
+void
+smgr_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+{
+	SnapBuild  *builder = ctx->snapshot_builder;
+	XLogReaderState *r = buf->record;
+	TransactionId xid = XLogRecGetXid(r);
+	uint8		info = XLogRecGetInfo(buf->record) & ~XLR_INFO_MASK;
+	xl_smgr_create *xlrec;
+
+	/*
+	 * Bail out when not decoding sequences, which is currently the only case
+	 * when we need to know about relfilenodes created in a transaction.
+	 */
+	if (!ctx->sequences)
+		return;
+
+	/*
+	 * We only care about XLOG_SMGR_CREATE, because that's what determines if
+	 * the following sequence changes are transactional.
+	 */
+	if (info != XLOG_SMGR_CREATE)
+		return;
+
+	ReorderBufferProcessXid(ctx->reorder, XLogRecGetXid(r), buf->origptr);
+
+	/*
+	 * If we don't have snapshot or we are just fast-forwarding, there is no
+	 * point in decoding relfilenode information.
+	 */
+	if (SnapBuildCurrentState(builder) < SNAPBUILD_FULL_SNAPSHOT ||
+		ctx->fast_forward)
+		return;
+
+	/* only interested in our database */
+	xlrec = (xl_smgr_create *) XLogRecGetData(r);
+	if (xlrec->rlocator.dbOid != ctx->slot->data.database)
+		return;
+
+	/* output plugin doesn't look for this origin, no need to queue */
+	if (FilterByOrigin(ctx, XLogRecGetOrigin(r)))
+		return;
+
+	ReorderBufferAddRelFileLocator(ctx->reorder, xid, buf->endptr, xlrec->rlocator);
 }

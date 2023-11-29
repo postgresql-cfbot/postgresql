@@ -1500,6 +1500,7 @@ LogicalRepRelId
 LogicalRepRelMapEntry
 LogicalRepRelation
 LogicalRepRollbackPreparedTxnData
+LogicalRepSequence
 LogicalRepStreamAbortData
 LogicalRepTupleData
 LogicalRepTyp
@@ -2329,6 +2330,7 @@ ReorderBufferIterTXNState
 ReorderBufferMessageCB
 ReorderBufferPrepareCB
 ReorderBufferRollbackPreparedCB
+ReorderBufferSequenceEnt
 ReorderBufferStreamAbortCB
 ReorderBufferStreamChangeCB
 ReorderBufferStreamCommitCB

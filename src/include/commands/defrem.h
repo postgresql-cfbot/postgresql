@@ -44,7 +44,8 @@ extern char *ChooseRelationName(const char *name1, const char *name2,
 extern bool CheckIndexCompatible(Oid oldId,
 								 const char *accessMethodName,
 								 const List *attributeList,
-								 const List *exclusionOpNames);
+								 const List *exclusionOpNames,
+								 bool isWithoutOverlaps);
 extern Oid	GetDefaultOpClass(Oid type_id, Oid am_id);
 extern Oid	ResolveOpClass(const List *opclass, Oid attrType,
 						   const char *accessMethodName, Oid accessMethodId);

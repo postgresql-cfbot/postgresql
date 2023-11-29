@@ -180,6 +180,12 @@ get_altertable_subcmdinfo(PG_FUNCTION_ARGS)
 			case AT_DropConstraint:
 				strtype = "DROP CONSTRAINT";
 				break;
+			case AT_AddPeriod:
+				strtype = "ADD PERIOD";
+				break;
+			case AT_DropPeriod:
+				strtype = "DROP PERIOD";
+				break;
 			case AT_ReAddComment:
 				strtype = "(re) ADD COMMENT";
 				break;

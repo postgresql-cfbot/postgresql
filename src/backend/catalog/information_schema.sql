@@ -1210,7 +1210,28 @@ GRANT SELECT ON parameters TO PUBLIC;
  * PERIODS view
  */
 
--- feature not supported
+CREATE VIEW periods AS
+    SELECT current_database()::information_schema.sql_identifier AS table_catalog,
+           nc.nspname::information_schema.sql_identifier AS table_schema,
+           c.relname::information_schema.sql_identifier AS table_name,
+           p.pername::information_schema.sql_identifier AS period_name,
+           CASE WHEN pg_has_role(c.relowner, 'USAGE')
+                  OR has_column_privilege(sa.attrelid, sa.attnum, 'SELECT, INSERT, UPDATE, REFERENCES')
+                THEN sa.attname::information_schema.sql_identifier
+           END AS start_column_name,
+           CASE WHEN pg_has_role(c.relowner, 'USAGE')
+                  OR has_column_privilege(ea.attrelid, ea.attnum, 'SELECT, INSERT, UPDATE, REFERENCES')
+                THEN ea.attname::information_schema.sql_identifier
+           END AS end_column_name
+    FROM pg_period AS p
+    JOIN pg_class AS c ON c.oid = p.perrelid
+    JOIN pg_namespace AS nc ON nc.oid = c.relnamespace
+    JOIN pg_attribute AS sa ON (sa.attrelid, sa.attnum) = (p.perrelid, p.perstart)
+    JOIN pg_attribute AS ea ON (ea.attrelid, ea.attnum) = (p.perrelid, p.perend)
+    WHERE NOT pg_is_other_temp_schema(nc.oid)
+      AND c.relkind IN ('r', 'v');
+
+GRANT SELECT ON periods TO PUBLIC;
 
 
 /*

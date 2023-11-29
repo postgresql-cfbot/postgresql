@@ -1,0 +1,177 @@
+/* System periods are not implemented */
+create table pt (id integer, ds date, de date, period for system_time (ds, de));
+ERROR:  PERIOD FOR SYSTEM_TIME is not supported
+LINE 2: create table pt (id integer, ds date, de date, period for sy...
+                                                       ^
+/* Periods must specify actual columns */
+create table pt (id integer, ds date, de date, period for p (bogus, de));
+ERROR:  column "bogus" of relation "pt" does not exist
+create table pt (id integer, ds date, de date, period for p (ds, bogus));
+ERROR:  column "bogus" of relation "pt" does not exist
+/* Data types must match exactly */
+create table pt (id integer, ds date, de timestamp, period for p (ds, de));
+ERROR:  start and end columns of period must be of same type
+create table pt (id integer, ds text collate "C", de text collate "POSIX", period for p (ds, de));
+ERROR:  start and end columns of period must have same collation
+/* Periods must have a default BTree operator class */
+create table pt (id integer, ds xml, de xml, period for p (ds, de));
+ERROR:  no range type for xml found for period p
+HINT:  You can define a custom range type with CREATE TYPE
+/* Period and column names are in the same namespace */
+create table pt (id integer, ds date, de date, period for ctid (ds, de));
+ERROR:  period name "ctid" conflicts with a system column name
+create table pt (id integer, ds date, de date, period for id (ds, de));
+ERROR:  period name "id" conflicts with a column name
+/* Period name can't be given more than once */
+create table pt (id integer, ds date, de date, period for p (ds, de), period for p (ds, de));
+ERROR:  period name "p" specified more than once
+/* Now make one that works */
+create table pt (id integer, ds date, de date, period for p (ds, de));
+/* SELECT * excludes the PERIOD */
+insert into pt values (1, '2000-01-01', '2001-01-01');
+select * from pt;
+ id |     ds     |     de     
+----+------------+------------
+  1 | 01-01-2000 | 01-01-2001
+(1 row)
+
+/* You can get it if you want */
+select *, p from pt;
+ id |     ds     |     de     |            p            
+----+------------+------------+-------------------------
+  1 | 01-01-2000 | 01-01-2001 | [01-01-2000,01-01-2001)
+(1 row)
+
+/* Two are okay */
+create table pt2 (id integer, ds date, de date, period for p1 (ds, de), period for p2 (ds, de));
+drop table pt2;
+/*
+ * ALTER TABLE tests
+ */
+alter table pt drop period for p;
+alter table pt add period for system_time (ds, de);
+ERROR:  PERIOD FOR SYSTEM_TIME is not supported
+alter table pt add period for p (ds, de);
+/* Adding a second one */
+create table pt2 (id integer, ds date, de date, period for p1 (ds, de));
+alter table pt2 add period for p2 (ds, de);
+drop table pt2;
+/* Can't drop its columns */
+alter table pt drop column ds;
+ERROR:  cannot drop column ds of table pt because other objects depend on it
+DETAIL:  period p on table pt depends on column ds of table pt
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+alter table pt drop column de;
+ERROR:  cannot drop column de of table pt because other objects depend on it
+DETAIL:  period p on table pt depends on column de of table pt
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+/* Can't change the data types */
+alter table pt alter column ds type timestamp;
+ERROR:  cannot alter type of a column used by a period
+DETAIL:  period p on table pt depends on column "ds"
+alter table pt alter column ds type timestamp;
+ERROR:  cannot alter type of a column used by a period
+DETAIL:  period p on table pt depends on column "ds"
+/* column/period namespace conflicts */
+alter table pt add column p integer;
+ERROR:  column name "p" conflicts with a period name
+alter table pt rename column id to p;
+ERROR:  column name "p" conflicts with a period name
+alter table pt add period for tableoid (ds, de);
+ERROR:  period name "tableoid" conflicts with a system column name
+alter table pt add period for "........pg.dropped.4........" (ds, de);
+ERROR:  period name "........pg.dropped.4........" conflicts with a column name
+/* adding columns and the period at the same time */
+create table pt2 (id integer);
+alter table pt2 add column ds date, add column de date, add period for p (ds, de);
+drop table pt2;
+/* Ambiguous range types raise an error */
+create type mydaterange as range(subtype=date);
+create table pt2 (id int, ds date, de date, period for p (ds, de));
+ERROR:  ambiguous range for type date
+/* You can give an explicit range type */
+create table pt2 (id int, ds date, de date, period for p (ds, de) with (rangetype = 'mydaterange'));
+drop type mydaterange;
+ERROR:  cannot drop type mydaterange because other objects depend on it
+DETAIL:  period p on table pt2 depends on type mydaterange
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+drop type mydaterange cascade;
+NOTICE:  drop cascades to period p on table pt2
+drop table pt2;
+create table pt2 (id int, ds date, de date, period for p (ds, de) with (rangetype = 'daterange'));
+/* Range type is not found */
+create table pt3 (id int, ds date, de date, period for p (ds, de) with (rangetype = 'notarange'));
+ERROR:  Range type notarange not found
+/* Range type is the wrong type */
+create table pt3 (id int, ds date, de date, period for p (ds, de) with (rangetype = 'tstzrange'));
+ERROR:  Range type tstzrange does not match column type date
+drop table pt2;
+/* CREATE TABLE (LIKE ...) */
+/* Periods are not copied by LIKE, so their columns aren't either */
+create table pt2 (like pt);
+\d pt2
+                Table "public.pt2"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ id     | integer |           |          | 
+ ds     | date    |           |          | 
+ de     | date    |           |          | 
+
+drop table pt2;
+/* Can add a period referring to LIKE'd columns */
+create table not_p (id integer, ds date, de date);
+create table pt2 (like not_p, period for p (ds, de));
+\d pt2
+                Table "public.pt2"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ id     | integer |           |          | 
+ ds     | date    |           |          | 
+ de     | date    |           |          | 
+Periods:
+    p (ds, de)
+Check constraints:
+    "pt2_p_check" CHECK (ds < de)
+
+drop table pt2;
+/* Can add a period with the same name */
+create table pt2 (like pt, period for p (ds, de));
+\d pt2
+                Table "public.pt2"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ id     | integer |           |          | 
+ ds     | date    |           |          | 
+ de     | date    |           |          | 
+Periods:
+    p (ds, de)
+Check constraints:
+    "pt2_p_check" CHECK (ds < de)
+
+drop table pt2;
+/* Can add a period with a different name */
+create table pt2 (like pt, period for p2 (ds, de));
+\d pt2
+                Table "public.pt2"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ id     | integer |           |          | 
+ ds     | date    |           |          | 
+ de     | date    |           |          | 
+Periods:
+    p2 (ds, de)
+Check constraints:
+    "pt2_p2_check" CHECK (ds < de)
+
+drop table pt2;
+/* Can't add a period whose name conflicts with a LIKE'd column */
+create table pt2 (like pt, period for id (ds, de));
+ERROR:  period name "id" conflicts with a column name
+/* CREATE TALBE INHERITS */
+/* Can't inherit from a table with a period */
+create table pt2 (name text) inherits (pt);
+ERROR:  Inheriting from a table with a PERIOD is not supported
+/* Can't inherit with a period */
+create table pt2 (d2s date, d2e date, period for p (d2s, d2e)) inherits (not_p);
+ERROR:  Inheriting is not supported when a table has a PERIOD
+drop table not_p;

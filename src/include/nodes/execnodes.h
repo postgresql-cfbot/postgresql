@@ -41,12 +41,14 @@
 #include "storage/condition_variable.h"
 #include "utils/hsearch.h"
 #include "utils/queryenvironment.h"
+#include "utils/rangetypes.h"
 #include "utils/reltrigger.h"
 #include "utils/sharedtuplestore.h"
 #include "utils/snapshot.h"
 #include "utils/sortsupport.h"
 #include "utils/tuplesort.h"
 #include "utils/tuplestore.h"
+#include "utils/typcache.h"
 
 struct PlanState;				/* forward references in this file */
 struct ParallelHashJoinState;
@@ -422,6 +424,28 @@ typedef struct MergeActionState
 } MergeActionState;
 
 /*
+ * ForPortionOfState
+ *
+ * Executor state of a FOR PORTION OF operation.
+ */
+typedef struct ForPortionOfState
+{
+	NodeTag		type;
+
+	char   *fp_rangeName;		/* the column/PERIOD named in FOR PORTION OF */
+	Oid		fp_rangeType;		/* the type of the FOR PORTION OF expression */
+	bool	fp_hasPeriod;		/* true iff this is a PERIOD not a range */
+	int		fp_rangeAttno;		/* the attno of the range column (or 0 for a PERIOD) */
+	int		fp_periodStartAttno;	/* the attno of the PERIOD start column (or 0 for a range) */
+	int		fp_periodEndAttno;		/* the attno of the PERIOD end column (or 0 for a range) */
+	Datum	fp_targetRange;		/* the range from FOR PORTION OF */
+	TypeCacheEntry *fp_rangetypcache;	/* type cache entry of the range */
+	TupleTableSlot *fp_Existing;		/* slot to store existing target tuple in */
+	TupleTableSlot *fp_Leftover1;		/* slot to store leftover below the target range */
+	TupleTableSlot *fp_Leftover2;		/* slot to store leftover above the target range */
+} ForPortionOfState;
+
+/*
  * ResultRelInfo
  *
  * Whenever we update an existing relation, we have to update indexes on the
@@ -540,6 +564,9 @@ typedef struct ResultRelInfo
 	/* for MERGE, lists of MergeActionState */
 	List	   *ri_matchedMergeAction;
 	List	   *ri_notMatchedMergeAction;
+
+	/* FOR PORTION OF evaluation state */
+	ForPortionOfState *ri_forPortionOf;
 
 	/* partition check expression state (NULL if not set up yet) */
 	ExprState  *ri_PartitionCheckExpr;

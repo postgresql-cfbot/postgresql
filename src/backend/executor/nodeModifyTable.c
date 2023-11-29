@@ -61,6 +61,9 @@
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/memutils.h"
+#include "utils/period.h"
+#include "utils/rangetypes.h"
+#include "utils/lsyscache.h"
 #include "utils/rel.h"
 
 
@@ -141,6 +144,10 @@ static bool ExecOnConflictUpdate(ModifyTableContext *context,
 								 TupleTableSlot *excludedSlot,
 								 bool canSetTag,
 								 TupleTableSlot **returning);
+static void ExecForPortionOfLeftovers(ModifyTableContext *context,
+									  EState *estate,
+									  ResultRelInfo *resultRelInfo,
+									  ItemPointer tupleid);
 static TupleTableSlot *ExecPrepareTupleRouting(ModifyTableState *mtstate,
 											   EState *estate,
 											   PartitionTupleRouting *proute,
@@ -1206,6 +1213,142 @@ ExecInsert(ModifyTableContext *context,
 }
 
 /* ----------------------------------------------------------------
+ *		set_leftover_tuple_bounds
+ *
+ *		Saves the new bounds into the range attribute
+ * ----------------------------------------------------------------
+ */
+static void set_leftover_tuple_bounds(TupleTableSlot *leftoverTuple,
+									  ForPortionOfExpr *forPortionOf,
+									  TypeCacheEntry *typcache,
+									  RangeType *leftoverRangeType)
+{
+	/* Store the range directly */
+
+	leftoverTuple->tts_values[forPortionOf->rangeVar->varattno - 1] = RangeTypePGetDatum(leftoverRangeType);
+	leftoverTuple->tts_isnull[forPortionOf->rangeVar->varattno - 1] = false;
+}
+
+/* ----------------------------------------------------------------
+ *		ExecForPortionOfLeftovers
+ *
+ *		Insert tuples for the untouched timestamp of a row in a FOR
+ *		PORTION OF UPDATE/DELETE
+ * ----------------------------------------------------------------
+ */
+static void
+ExecForPortionOfLeftovers(ModifyTableContext *context,
+						  EState *estate,
+						  ResultRelInfo *resultRelInfo,
+						  ItemPointer tupleid)
+{
+	ModifyTableState *mtstate = context->mtstate;
+	ModifyTable *node = (ModifyTable *) mtstate->ps.plan;
+	ForPortionOfExpr *forPortionOf = (ForPortionOfExpr *) node->forPortionOf;
+	Datum oldRange;
+	RangeType *oldRangeType;
+	RangeType *targetRangeType;
+	RangeType *leftoverRangeType1;
+	RangeType *leftoverRangeType2;
+	Oid rangeTypeOid = forPortionOf->rangeType;
+	bool isNull = false;
+	TypeCacheEntry *typcache;
+	ForPortionOfState *fpoState = resultRelInfo->ri_forPortionOf;
+	TupleTableSlot *oldtupleSlot = fpoState->fp_Existing;
+	TupleTableSlot *leftoverTuple1 = fpoState->fp_Leftover1;
+	TupleTableSlot *leftoverTuple2 = fpoState->fp_Leftover2;
+	HeapTuple oldtuple = NULL;
+	bool shouldFree = false;
+
+	/*
+	 * Get the range of the old pre-UPDATE/DELETE tuple,
+	 * so we can intersect it with the FOR PORTION OF target
+	 * and see if there are any "leftovers" to insert.
+	 *
+	 * We have already locked the tuple in ExecUpdate/ExecDelete
+	 * (TODO: if it was *not* concurrently updated, does table_tuple_update lock the tuple itself?
+	 * I don't found the code for that yet, and maybe it depends on the AM?)
+	 * and it has passed EvalPlanQual.
+	 * Make sure we're looking at the most recent version.
+	 * Otherwise concurrent updates of the same tuple in READ COMMITTED
+	 * could insert conflicting "leftovers".
+	 */
+	if (!table_tuple_fetch_row_version(resultRelInfo->ri_RelationDesc, tupleid, SnapshotAny, oldtupleSlot))
+		elog(ERROR, "failed to fetch tuple for FOR PORTION OF");
+
+	oldRange = slot_getattr(oldtupleSlot, forPortionOf->rangeVar->varattno, &isNull);
+
+	if (isNull)
+		elog(ERROR, "found a NULL range in a temporal table");
+	oldRangeType = DatumGetRangeTypeP(oldRange);
+
+	/* Get the target range. */
+
+	targetRangeType = DatumGetRangeTypeP(fpoState->fp_targetRange);
+
+	/*
+	 * Get the range's type cache entry. This is worth caching for the whole UPDATE
+	 * like range functions do.
+	 */
+
+	typcache = fpoState->fp_rangetypcache;
+	if (typcache == NULL)
+	{
+		typcache = lookup_type_cache(rangeTypeOid, TYPECACHE_RANGE_INFO);
+		if (typcache->rngelemtype == NULL)
+			elog(ERROR, "type %u is not a range type", rangeTypeOid);
+		fpoState->fp_rangetypcache = typcache;
+	}
+
+	/* Get the ranges to the left/right of the targeted range. */
+
+	range_leftover_internal(typcache, oldRangeType, targetRangeType, &leftoverRangeType1,
+			&leftoverRangeType2);
+
+	/*
+	 * Insert a copy of the tuple with the lower leftover range.
+	 * Even if the table is partitioned,
+	 * our insert won't extend past the current row, so we don't need to re-route.
+	 * TODO: Really? What if you update the partition key?
+	 */
+
+	if (!RangeIsEmpty(leftoverRangeType1))
+	{
+		oldtuple = ExecFetchSlotHeapTuple(oldtupleSlot, false, &shouldFree);
+		ExecForceStoreHeapTuple(oldtuple, leftoverTuple1, false);
+
+		set_leftover_tuple_bounds(leftoverTuple1, forPortionOf, typcache, leftoverRangeType1);
+		ExecMaterializeSlot(leftoverTuple1);
+
+		// TODO: Need to save context->mtstate->mt_transition_capture? (See comment on ExecInsert)
+		ExecInsert(context, resultRelInfo, leftoverTuple1, node->canSetTag, NULL, NULL);
+	}
+
+	/*
+	 * Insert a copy of the tuple with the upper leftover range
+	 * Even if the table is partitioned,
+	 * our insert won't extend past the current row, so we don't need to re-route.
+	 * TODO: Really? What if you update the partition key?
+	 */
+
+	if (!RangeIsEmpty(leftoverRangeType2))
+	{
+		if (!oldtuple)
+			oldtuple = ExecFetchSlotHeapTuple(oldtupleSlot, false, &shouldFree);
+		ExecForceStoreHeapTuple(oldtuple, leftoverTuple2, false);
+
+		set_leftover_tuple_bounds(leftoverTuple2, forPortionOf, typcache, leftoverRangeType2);
+		ExecMaterializeSlot(leftoverTuple2);
+
+		// TODO: Need to save context->mtstate->mt_transition_capture? (See comment on ExecInsert)
+		ExecInsert(context, resultRelInfo, leftoverTuple2, node->canSetTag, NULL, NULL);
+	}
+
+	if (shouldFree)
+		heap_freetuple(oldtuple);
+}
+
+/* ----------------------------------------------------------------
  *		ExecBatchInsert
  *
  *		Insert multiple tuples in an efficient way.
@@ -1357,7 +1500,8 @@ ExecDeleteAct(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
  *
  * Closing steps of tuple deletion; this invokes AFTER FOR EACH ROW triggers,
  * including the UPDATE triggers if the deletion is being done as part of a
- * cross-partition tuple move.
+ * cross-partition tuple move. It also inserts leftovers from a FOR PORTION OF
+ * delete.
  */
 static void
 ExecDeleteEpilogue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
@@ -1389,6 +1533,11 @@ ExecDeleteEpilogue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 		 */
 		ar_delete_trig_tcs = NULL;
 	}
+
+	/* Compute leftovers in FOR PORTION OF */
+	// TODO: Skip this for FDW deletes?
+	if (((ModifyTable *) context->mtstate->ps.plan)->forPortionOf)
+		ExecForPortionOfLeftovers(context, estate, resultRelInfo, tupleid);
 
 	/* AFTER ROW DELETE Triggers */
 	ExecARDeleteTriggers(estate, resultRelInfo, tupleid, oldtuple,
@@ -2132,6 +2281,11 @@ ExecUpdateEpilogue(ModifyTableContext *context, UpdateContext *updateCxt,
 											   true, false,
 											   NULL, NIL,
 											   (updateCxt->updateIndexes == TU_Summarizing));
+
+	/* Compute leftovers in FOR PORTION OF */
+	// TODO: Skip this for FDW updates?
+	if (((ModifyTable *) context->mtstate->ps.plan)->forPortionOf)
+		ExecForPortionOfLeftovers(context, context->estate, resultRelInfo, tupleid);
 
 	/* AFTER ROW UPDATE Triggers */
 	ExecARUpdateTriggers(context->estate, resultRelInfo,
@@ -3626,6 +3780,7 @@ ExecModifyTable(PlanState *pstate)
 		 * Reset per-tuple memory context used for processing on conflict and
 		 * returning clauses, to free any expression evaluation storage
 		 * allocated in the previous cycle.
+		 * TODO: It sounds like FOR PORTION OF might need to do something here too?
 		 */
 		if (pstate->ps_ExprContext)
 			ResetExprContext(pstate->ps_ExprContext);
@@ -4297,6 +4452,75 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 									&mtstate->ps);
 			onconfl->oc_WhereClause = qualexpr;
 		}
+	}
+
+	/*
+	 * If needed, initialize the target range for FOR PORTION OF.
+	 */
+	if (node->forPortionOf)
+	{
+		TupleDesc tupDesc;
+		ForPortionOfExpr *forPortionOf;
+		Datum	targetRange;
+		bool	isNull;
+		ExprContext *econtext;
+		ExprState *exprState;
+		ForPortionOfState *fpoState;
+
+		resultRelInfo = mtstate->resultRelInfo;
+		tupDesc = resultRelInfo->ri_RelationDesc->rd_att;
+		forPortionOf = (ForPortionOfExpr *) node->forPortionOf;
+
+		/* Eval the FOR PORTION OF target */
+		if (mtstate->ps.ps_ExprContext == NULL)
+			ExecAssignExprContext(estate, &mtstate->ps);
+		econtext = mtstate->ps.ps_ExprContext;
+
+		exprState = ExecPrepareExpr((Expr *) forPortionOf->targetRange, estate);
+		targetRange = ExecEvalExpr(exprState, econtext, &isNull);
+		if (isNull)
+			elog(ERROR, "Got a NULL FOR PORTION OF target range");
+
+		/* Create state for FOR PORTION OF operation */
+
+		fpoState = makeNode(ForPortionOfState);
+		fpoState->fp_rangeName = forPortionOf->range_name;
+		fpoState->fp_rangeType = forPortionOf->rangeType;
+		fpoState->fp_rangeAttno = forPortionOf->rangeVar->varattno;
+		fpoState->fp_targetRange = targetRange;
+
+		/* Initialize slot for the existing tuple */
+
+		fpoState->fp_Existing =
+			table_slot_create(resultRelInfo->ri_RelationDesc,
+							  &mtstate->ps.state->es_tupleTable);
+
+		/* Create the tuple slots for INSERTing the leftovers */
+
+		fpoState->fp_Leftover1 =
+			ExecInitExtraTupleSlot(mtstate->ps.state, tupDesc, &TTSOpsVirtual);
+		fpoState->fp_Leftover2 =
+			ExecInitExtraTupleSlot(mtstate->ps.state, tupDesc, &TTSOpsVirtual);
+
+		/*
+		 * We must attach the ForPortionOfState to all result rels,
+		 * in case of a cross-partition update or triggers firing
+		 * on partitions.
+		 *
+		 * They should all have the same tupledesc, so it's okay
+		 * that any one of them can use the tuple table slots there.
+		 */
+		for (i = 0; i < nrels; i++)
+		{
+			resultRelInfo = &mtstate->resultRelInfo[i];
+			resultRelInfo->ri_forPortionOf = fpoState;
+		}
+
+		/* Make sure the root relation has the FOR PORTION OF clause too. */
+		if (node->rootRelation > 0)
+			mtstate->rootResultRelInfo->ri_forPortionOf = fpoState;
+
+		/* Don't free the ExprContext here because the result must last for the whole query */
 	}
 
 	/*

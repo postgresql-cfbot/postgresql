@@ -574,6 +574,13 @@ check_agglevels_and_constraints(ParseState *pstate, Node *expr)
 		case EXPR_KIND_CYCLE_MARK:
 			errkind = true;
 			break;
+		case EXPR_KIND_UPDATE_PORTION:
+			if (isAgg)
+				err = _("aggregate functions are not allowed in FOR PORTION OF expressions");
+			else
+				err = _("grouping operations are not allowed in FOR PORTION OF expressions");
+
+			break;
 
 			/*
 			 * There is intentionally no default: case here, so that the
@@ -963,6 +970,9 @@ transformWindowFuncCall(ParseState *pstate, WindowFunc *wfunc,
 			break;
 		case EXPR_KIND_CYCLE_MARK:
 			errkind = true;
+			break;
+		case EXPR_KIND_UPDATE_PORTION:
+			err = _("window functions are not allowed in FOR PORTION OF expressions");
 			break;
 
 			/*

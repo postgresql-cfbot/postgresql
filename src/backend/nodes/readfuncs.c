@@ -427,6 +427,7 @@ _readConstraint(void)
 
 		case CONSTR_PRIMARY:
 			READ_NODE_FIELD(keys);
+			READ_BOOL_FIELD(without_overlaps);
 			READ_NODE_FIELD(including);
 			READ_NODE_FIELD(options);
 			READ_STRING_FIELD(indexname);
@@ -438,6 +439,7 @@ _readConstraint(void)
 		case CONSTR_UNIQUE:
 			READ_BOOL_FIELD(nulls_not_distinct);
 			READ_NODE_FIELD(keys);
+			READ_BOOL_FIELD(without_overlaps);
 			READ_NODE_FIELD(including);
 			READ_NODE_FIELD(options);
 			READ_STRING_FIELD(indexname);
@@ -460,7 +462,9 @@ _readConstraint(void)
 		case CONSTR_FOREIGN:
 			READ_NODE_FIELD(pktable);
 			READ_NODE_FIELD(fk_attrs);
+			READ_NODE_FIELD(fk_period);
 			READ_NODE_FIELD(pk_attrs);
+			READ_NODE_FIELD(pk_period);
 			READ_CHAR_FIELD(fk_matchtype);
 			READ_CHAR_FIELD(fk_upd_action);
 			READ_CHAR_FIELD(fk_del_action);

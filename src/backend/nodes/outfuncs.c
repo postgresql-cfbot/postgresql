@@ -756,6 +756,7 @@ _outConstraint(StringInfo str, const Constraint *node)
 		case CONSTR_PRIMARY:
 			appendStringInfoString(str, "PRIMARY_KEY");
 			WRITE_NODE_FIELD(keys);
+			WRITE_BOOL_FIELD(without_overlaps);
 			WRITE_NODE_FIELD(including);
 			WRITE_NODE_FIELD(options);
 			WRITE_STRING_FIELD(indexname);
@@ -768,6 +769,7 @@ _outConstraint(StringInfo str, const Constraint *node)
 			appendStringInfoString(str, "UNIQUE");
 			WRITE_BOOL_FIELD(nulls_not_distinct);
 			WRITE_NODE_FIELD(keys);
+			WRITE_BOOL_FIELD(without_overlaps);
 			WRITE_NODE_FIELD(including);
 			WRITE_NODE_FIELD(options);
 			WRITE_STRING_FIELD(indexname);
@@ -792,7 +794,9 @@ _outConstraint(StringInfo str, const Constraint *node)
 			appendStringInfoString(str, "FOREIGN_KEY");
 			WRITE_NODE_FIELD(pktable);
 			WRITE_NODE_FIELD(fk_attrs);
+			WRITE_NODE_FIELD(fk_period);
 			WRITE_NODE_FIELD(pk_attrs);
+			WRITE_NODE_FIELD(pk_period);
 			WRITE_CHAR_FIELD(fk_matchtype);
 			WRITE_CHAR_FIELD(fk_upd_action);
 			WRITE_CHAR_FIELD(fk_del_action);

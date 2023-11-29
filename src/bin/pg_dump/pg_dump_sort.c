@@ -85,6 +85,7 @@ enum dbObjectTypePriorities
 	PRIO_CONSTRAINT,
 	PRIO_INDEX,
 	PRIO_INDEX_ATTACH,
+	PRIO_PERIOD,
 	PRIO_STATSEXT,
 	PRIO_RULE,
 	PRIO_TRIGGER,
@@ -119,6 +120,7 @@ static const int dbObjectTypePriority[] =
 	PRIO_ATTRDEF,				/* DO_ATTRDEF */
 	PRIO_INDEX,					/* DO_INDEX */
 	PRIO_INDEX_ATTACH,			/* DO_INDEX_ATTACH */
+	PRIO_PERIOD,				/* DO_PERIOD */
 	PRIO_STATSEXT,				/* DO_STATSEXT */
 	PRIO_RULE,					/* DO_RULE */
 	PRIO_TRIGGER,				/* DO_TRIGGER */
@@ -1366,6 +1368,11 @@ describeDumpableObject(DumpableObject *obj, char *buf, int bufsize)
 		case DO_FK_CONSTRAINT:
 			snprintf(buf, bufsize,
 					 "FK CONSTRAINT %s  (ID %d OID %u)",
+					 obj->name, obj->dumpId, obj->catId.oid);
+			return;
+		case DO_PERIOD:
+			snprintf(buf, bufsize,
+					 "PERIOD %s  (ID %d OID %u)",
 					 obj->name, obj->dumpId, obj->catId.oid);
 			return;
 		case DO_PROCLANG:

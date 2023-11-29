@@ -49,6 +49,7 @@
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_partitioned_table.h"
+#include "catalog/pg_period.h"
 #include "catalog/pg_statistic.h"
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_tablespace.h"
@@ -2040,6 +2041,81 @@ SetAttrMissing(Oid relid, char *attname, char *value)
 }
 
 /*
+ * Store a period of relation rel.
+ *
+ * Returns the OID of the new pg_period tuple.
+ */
+Oid
+StorePeriod(Relation rel, const char *periodname, AttrNumber startnum,
+			AttrNumber endnum, AttrNumber rangenum, Oid conoid)
+{
+	Datum		values[Natts_pg_period];
+	bool		nulls[Natts_pg_period];
+	Relation	pg_period;
+	HeapTuple	tuple;
+	Oid			oid;
+	NameData	pername;
+	ObjectAddress	myself, referenced;
+
+	Assert(rangenum != InvalidAttrNumber);
+
+	namestrcpy(&pername, periodname);
+
+	MemSet(values, 0, sizeof(values));
+	MemSet(nulls, false, sizeof(nulls));
+
+	pg_period = table_open(PeriodRelationId, RowExclusiveLock);
+
+	oid = GetNewOidWithIndex(pg_period, AttrDefaultOidIndexId, Anum_pg_period_oid);
+	values[Anum_pg_period_oid - 1] = ObjectIdGetDatum(oid);
+	values[Anum_pg_period_pername - 1] = NameGetDatum(&pername);
+	values[Anum_pg_period_perrelid - 1] = RelationGetRelid(rel);
+	values[Anum_pg_period_perstart - 1] = startnum;
+	values[Anum_pg_period_perend - 1] = endnum;
+	values[Anum_pg_period_perrange - 1] = rangenum;
+	values[Anum_pg_period_perconstraint - 1] = conoid;
+
+	tuple = heap_form_tuple(RelationGetDescr(pg_period), values, nulls);
+	CatalogTupleInsert(pg_period, tuple);
+
+	ObjectAddressSet(myself, PeriodRelationId, oid);
+
+	/* Drop the period when the table is dropped. */
+	ObjectAddressSet(referenced, RelationRelationId, RelationGetRelid(rel));
+	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
+
+	/* Forbid dropping the columns of the period. */
+	ObjectAddressSubSet(referenced, RelationRelationId, RelationGetRelid(rel), startnum);
+	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+	ObjectAddressSubSet(referenced, RelationRelationId, RelationGetRelid(rel), endnum);
+	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+
+	/*
+	 * The range column is an implementation detail,
+	 * but we can't use DEPENDENCY_INTERNAL
+	 * because dropping the table will check for dependencies on all subobjects too
+	 * (in findDependentObjects).
+	 * But if we make an AUTO dependency one way we will auto-drop the column
+	 * when we drop the PERIOD,
+	 * and a NORMAL dependency the other way we will forbid dropping the column directly.
+	 */
+	ObjectAddressSubSet(referenced, RelationRelationId, RelationGetRelid(rel), rangenum);
+	recordDependencyOn(&referenced, &myself, DEPENDENCY_AUTO);
+	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+
+	/*
+	 * The constraint is an implementation detail, so we mark it as such.
+	 * (Note that myself and referenced are reversed for this one.)
+	 */
+	ObjectAddressSet(referenced, ConstraintRelationId, conoid);
+	recordDependencyOn(&referenced, &myself, DEPENDENCY_INTERNAL);
+
+	table_close(pg_period, RowExclusiveLock);
+
+	return oid;
+}
+
+/*
  * Store a check-constraint expression for the given relation.
  *
  * Caller is responsible for updating the count of constraints
@@ -2140,6 +2216,7 @@ StoreRelCheck(Relation rel, const char *ccname, Node *expr,
 							  is_local, /* conislocal */
 							  inhcount, /* coninhcount */
 							  is_no_inherit,	/* connoinherit */
+							  false,	/* conwithoutoverlaps */
 							  is_internal); /* internally constructed? */
 
 	pfree(ccbin);
@@ -2190,6 +2267,7 @@ StoreRelNotNull(Relation rel, const char *nnname, AttrNumber attnum,
 							  is_local,
 							  inhcount,
 							  is_no_inherit,
+							  false,	/* conwithoutoverlaps */
 							  false);
 	return constrOid;
 }

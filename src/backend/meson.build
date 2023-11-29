@@ -155,6 +155,22 @@ postgres = executable('postgres',
 
 backend_targets += postgres
 
+custom_target('postgres.abi.xml',
+              input: postgres,
+              output: 'postgres.@0@-@1@.abi.xml'.format(host_cpu, host_system),
+              command: abidw_cmd,
+              build_by_default: true)
+
+if get_option('abidiff').enabled()
+  test('postgres.abidiff',
+       abidiff,
+       args: ['--no-added-syms',
+              '--suppr', files('postgres.abidiff-suppr.ini'),
+              files('postgres.@0@-@1@.abi.xml'.format(host_cpu, host_system)),
+              postgres],
+       suite: 'abidiff')
+endif
+
 pg_mod_c_args = cflags_mod
 pg_mod_cpp_args = cxxflags_mod
 pg_mod_link_args = ldflags_sl + ldflags_mod

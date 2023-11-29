@@ -46,6 +46,20 @@ ecpg_pgtypes_so = shared_library('libpgtypes',
 )
 ecpg_targets += ecpg_pgtypes_so
 
+custom_target('libpgtypes.abi.xml',
+              input: ecpg_pgtypes_so,
+              output: 'libpgtypes.@0@-@1@.abi.xml'.format(host_cpu, host_system),
+              command: abidw_cmd,
+              build_by_default: true)
+
+if get_option('abidiff').enabled()
+  test('libpgtypes.abidiff',
+       abidiff,
+       args: [files('libpgtypes.@0@-@1@.abi.xml'.format(host_cpu, host_system)),
+              ecpg_pgtypes_so],
+       suite: 'abidiff')
+endif
+
 pkgconfig.generate(
   name: 'libpgtypes',
   description: 'PostgreSQL libpgtypes library',

@@ -59,5 +59,6 @@ extern int	boot_yyparse(void);
 
 extern int	boot_yylex(void);
 extern void boot_yyerror(const char *message) pg_attribute_noreturn();
+extern FILE *boot_yyin;
 
 #endif							/* BOOTSTRAP_H */

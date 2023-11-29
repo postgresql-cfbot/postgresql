@@ -764,15 +764,6 @@ get_id(void)
 	return pg_strdup(username);
 }
 
-static char *
-encodingid_to_string(int enc)
-{
-	char		result[20];
-
-	sprintf(result, "%d", enc);
-	return pg_strdup(result);
-}
-
 /*
  * get the encoding id for a given encoding name
  */
@@ -1473,70 +1464,17 @@ bootstrap_template1(void)
 {
 	PG_CMD_DECL;
 	PQExpBufferData cmd;
-	char	  **line;
-	char	  **bki_lines;
-	char		headerline[MAXPGPATH];
-	char		buf[64];
 
 	printf(_("running bootstrap script ... "));
 	fflush(stdout);
-
-	bki_lines = readfile(bki_file);
-
-	/* Check that bki file appears to be of the right version */
-
-	snprintf(headerline, sizeof(headerline), "# PostgreSQL %s\n",
-			 PG_MAJORVERSION);
-
-	if (strcmp(headerline, *bki_lines) != 0)
-	{
-		pg_log_error("input file \"%s\" does not belong to PostgreSQL %s",
-					 bki_file, PG_VERSION);
-		pg_log_error_hint("Specify the correct path using the option -L.");
-		exit(1);
-	}
-
-	/* Substitute for various symbols used in the BKI file */
-
-	sprintf(buf, "%d", NAMEDATALEN);
-	bki_lines = replace_token(bki_lines, "NAMEDATALEN", buf);
-
-	sprintf(buf, "%d", (int) sizeof(Pointer));
-	bki_lines = replace_token(bki_lines, "SIZEOF_POINTER", buf);
-
-	bki_lines = replace_token(bki_lines, "ALIGNOF_POINTER",
-							  (sizeof(Pointer) == 4) ? "i" : "d");
-
-	bki_lines = replace_token(bki_lines, "FLOAT8PASSBYVAL",
-							  FLOAT8PASSBYVAL ? "true" : "false");
-
-	bki_lines = replace_token(bki_lines, "POSTGRES",
-							  escape_quotes_bki(username));
-
-	bki_lines = replace_token(bki_lines, "ENCODING",
-							  encodingid_to_string(encodingid));
-
-	bki_lines = replace_token(bki_lines, "LC_COLLATE",
-							  escape_quotes_bki(lc_collate));
-
-	bki_lines = replace_token(bki_lines, "LC_CTYPE",
-							  escape_quotes_bki(lc_ctype));
-
-	bki_lines = replace_token(bki_lines, "ICU_LOCALE",
-							  icu_locale ? escape_quotes_bki(icu_locale) : "_null_");
-
-	bki_lines = replace_token(bki_lines, "ICU_RULES",
-							  icu_rules ? escape_quotes_bki(icu_rules) : "_null_");
-
-	sprintf(buf, "%c", locale_provider);
-	bki_lines = replace_token(bki_lines, "LOCALE_PROVIDER", buf);
 
 	/* Also ensure backend isn't confused by this environment var: */
 	unsetenv("PGCLIENTENCODING");
 
 	initPQExpBuffer(&cmd);
 
-	printfPQExpBuffer(&cmd, "\"%s\" --boot %s %s", backend_exec, boot_options, extra_options);
+	printfPQExpBuffer(&cmd, "\"%s\" --boot %s %s -b %s", backend_exec, boot_options,
+					  extra_options, bki_file);
 	appendPQExpBuffer(&cmd, " -X %d", wal_segment_size_mb * (1024 * 1024));
 	if (data_checksums)
 		appendPQExpBuffer(&cmd, " -k");
@@ -1545,19 +1483,44 @@ bootstrap_template1(void)
 
 
 	PG_CMD_OPEN(cmd.data);
-
-	for (line = bki_lines; *line != NULL; line++)
-	{
-		PG_CMD_PUTS(*line);
-		free(*line);
-	}
-
 	PG_CMD_CLOSE();
 
 	termPQExpBuffer(&cmd);
-	free(bki_lines);
 
 	check_ok();
+}
+
+/*
+ * Placeholder values from catalog *.dat are used to create template1.
+ * Here we UPDATE with configured values from current initdb run.
+ */
+static void
+update_params(FILE *cmdfd)
+{
+
+	char	   *icu_locale_str = NULL;
+	char	   *icu_rules_str = NULL;
+	char	   *line = NULL;
+
+	if (icu_locale)
+	{
+		icu_locale_str = psprintf(",daticulocale=%s", escape_quotes_bki(icu_locale));
+	}
+
+	if (icu_rules)
+	{
+		icu_rules_str = psprintf(",daticulocale=%s", escape_quotes_bki(icu_rules));
+	}
+
+	line = psprintf("UPDATE pg_authid SET rolname='%s' WHERE rolname='POSTGRES'; \n\n"
+					"UPDATE pg_database SET encoding='%d', datcollate='%s', datctype='%s',"
+					"datlocprovider='%c' %s %s "
+					"WHERE datname='template1'; \n\n",
+					escape_quotes(username), encodingid, escape_quotes(lc_collate),
+					escape_quotes(lc_ctype), locale_provider,
+					icu_locale_str ? icu_locale_str : "",
+					icu_rules_str ? icu_rules_str : "");
+	PG_CMD_PUTS(line);
 }
 
 /*
@@ -3027,6 +2990,8 @@ initialize_data_directory(void)
 					  backend_exec, backend_options, extra_options, DEVNULL);
 
 	PG_CMD_OPEN(cmd.data);
+
+	update_params(cmdfd);
 
 	setup_auth(cmdfd);
 

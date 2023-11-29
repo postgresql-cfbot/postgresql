@@ -145,17 +145,18 @@ static List *on_commits = NIL;
 #define AT_PASS_UNSET			-1	/* UNSET will cause ERROR */
 #define AT_PASS_DROP			0	/* DROP (all flavors) */
 #define AT_PASS_ALTER_TYPE		1	/* ALTER COLUMN TYPE */
-#define AT_PASS_OLD_INDEX		2	/* re-add existing indexes */
-#define AT_PASS_OLD_CONSTR		3	/* re-add existing constraints */
+#define AT_PASS_SET_EXPRESSION	2	/* ALTER SET EXPRESSION */
+#define AT_PASS_OLD_INDEX		3	/* re-add existing indexes */
+#define AT_PASS_OLD_CONSTR		4	/* re-add existing constraints */
 /* We could support a RENAME COLUMN pass here, but not currently used */
-#define AT_PASS_ADD_COL			4	/* ADD COLUMN */
-#define AT_PASS_ADD_CONSTR		5	/* ADD constraints (initial examination) */
-#define AT_PASS_COL_ATTRS		6	/* set column attributes, eg NOT NULL */
-#define AT_PASS_ADD_INDEXCONSTR	7	/* ADD index-based constraints */
-#define AT_PASS_ADD_INDEX		8	/* ADD indexes */
-#define AT_PASS_ADD_OTHERCONSTR	9	/* ADD other constraints, defaults */
-#define AT_PASS_MISC			10	/* other stuff */
-#define AT_NUM_PASSES			11
+#define AT_PASS_ADD_COL			5	/* ADD COLUMN */
+#define AT_PASS_ADD_CONSTR		6	/* ADD constraints (initial examination) */
+#define AT_PASS_COL_ATTRS		7	/* set column attributes, eg NOT NULL */
+#define AT_PASS_ADD_INDEXCONSTR	8	/* ADD index-based constraints */
+#define AT_PASS_ADD_INDEX		9	/* ADD indexes */
+#define AT_PASS_ADD_OTHERCONSTR	10	/* ADD other constraints, defaults */
+#define AT_PASS_MISC			11	/* other stuff */
+#define AT_NUM_PASSES			12
 
 typedef struct AlteredTableInfo
 {
@@ -455,6 +456,9 @@ static ObjectAddress ATExecAddIdentity(Relation rel, const char *colName,
 static ObjectAddress ATExecSetIdentity(Relation rel, const char *colName,
 									   Node *def, LOCKMODE lockmode);
 static ObjectAddress ATExecDropIdentity(Relation rel, const char *colName, bool missing_ok, LOCKMODE lockmode);
+static ObjectAddress ATExecSetExpression(AlteredTableInfo *tab, Relation rel,
+										 const char *colName, Node *newDefault,
+										 LOCKMODE lockmode);
 static void ATPrepDropExpression(Relation rel, AlterTableCmd *cmd, bool recurse, bool recursing, LOCKMODE lockmode);
 static ObjectAddress ATExecDropExpression(Relation rel, const char *colName, bool missing_ok, LOCKMODE lockmode);
 static ObjectAddress ATExecSetStatistics(Relation rel, const char *colName, int16 colNum,
@@ -557,14 +561,17 @@ static void ATPrepAlterColumnType(List **wqueue,
 static bool ATColumnChangeRequiresRewrite(Node *expr, AttrNumber varattno);
 static ObjectAddress ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 										   AlterTableCmd *cmd, LOCKMODE lockmode);
+static void RememberAllDependentForRebuilding(AlteredTableInfo *tab,
+											  AlterTableType subtype,
+											  Relation rel, AttrNumber attnum);
 static void RememberConstraintForRebuilding(Oid conoid, AlteredTableInfo *tab);
 static void RememberIndexForRebuilding(Oid indoid, AlteredTableInfo *tab);
 static void RememberStatisticsForRebuilding(Oid stxoid, AlteredTableInfo *tab);
-static void ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab,
-								   LOCKMODE lockmode);
-static void ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId,
-								 char *cmd, List **wqueue, LOCKMODE lockmode,
-								 bool rewrite);
+static void ATPostAlterColumnCleanup(List **wqueue, AlteredTableInfo *tab,
+									 LOCKMODE lockmode);
+static void ATPostAlterColumnParse(Oid oldId, Oid oldRelId, Oid refRelId,
+								   char *cmd, List **wqueue, LOCKMODE lockmode,
+								   bool rewrite);
 static void RebuildConstraintComment(AlteredTableInfo *tab, int pass,
 									 Oid objid, Relation rel, List *domname,
 									 const char *conname);
@@ -4548,6 +4555,7 @@ AlterTableGetLockLevel(List *cmds)
 			case AT_AddIdentity:
 			case AT_DropIdentity:
 			case AT_SetIdentity:
+			case AT_SetExpression:
 			case AT_DropExpression:
 			case AT_SetCompression:
 				cmd_lockmode = AccessExclusiveLock;
@@ -4848,6 +4856,11 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			/* Need command-specific recursion decision */
 			ATSimpleRecursion(wqueue, rel, cmd, recurse, lockmode, context);
 			pass = AT_PASS_COL_ATTRS;
+			break;
+		case AT_SetExpression:	/* ALTER COLUMN SET EXPRESSION AS */
+			ATSimplePermissions(cmd->subtype, rel, ATT_TABLE | ATT_FOREIGN_TABLE);
+			ATSimpleRecursion(wqueue, rel, cmd, recurse, lockmode, context);
+			pass = AT_PASS_SET_EXPRESSION;
 			break;
 		case AT_DropExpression: /* ALTER COLUMN DROP EXPRESSION */
 			ATSimplePermissions(cmd->subtype, rel, ATT_TABLE | ATT_FOREIGN_TABLE);
@@ -5151,12 +5164,12 @@ ATRewriteCatalogs(List **wqueue, LOCKMODE lockmode,
 						  lockmode, pass, context);
 
 			/*
-			 * After the ALTER TYPE pass, do cleanup work (this is not done in
-			 * ATExecAlterColumnType since it should be done only once if
-			 * multiple columns of a table are altered).
+			 * After the ALTER TYPE or ALTER SET EXPRESSION pass, do cleanup
+			 * work (this is not done in ATExecAlterColumnType since it should
+			 * be done only once if multiple columns of a table are altered).
 			 */
-			if (pass == AT_PASS_ALTER_TYPE)
-				ATPostAlterTypeCleanup(wqueue, tab, lockmode);
+			if (pass == AT_PASS_ALTER_TYPE || pass == AT_PASS_SET_EXPRESSION)
+				ATPostAlterColumnCleanup(wqueue, tab, lockmode);
 
 			if (tab->rel)
 			{
@@ -5233,6 +5246,9 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 			break;
 		case AT_SetAttNotNull:	/* set pg_attribute.attnotnull */
 			address = ATExecSetAttNotNull(wqueue, rel, cmd->name, lockmode);
+			break;
+		case AT_SetExpression:
+			address = ATExecSetExpression(tab, rel, cmd->name, cmd->def, lockmode);
 			break;
 		case AT_DropExpression:
 			address = ATExecDropExpression(rel, cmd->name, cmd->missing_ok, lockmode);
@@ -6361,6 +6377,8 @@ alter_table_type_to_string(AlterTableType cmdtype)
 			return "ALTER COLUMN ... SET NOT NULL";
 		case AT_SetAttNotNull:
 			return NULL;		/* not real grammar */
+		case AT_SetExpression:
+			return "ALTER COLUMN ... SET EXPRESSION AS";
 		case AT_DropExpression:
 			return "ALTER COLUMN ... DROP EXPRESSION";
 		case AT_SetStatistics:
@@ -8011,8 +8029,10 @@ ATExecColumnDefault(Relation rel, const char *colName,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("column \"%s\" of relation \"%s\" is a generated column",
 						colName, RelationGetRelationName(rel)),
-				 newDefault || TupleDescAttr(tupdesc, attnum - 1)->attgenerated != ATTRIBUTE_GENERATED_STORED ? 0 :
+				 TupleDescAttr(tupdesc, attnum - 1)->attgenerated != ATTRIBUTE_GENERATED_STORED ? 0 :
 		/* translator: %s is an SQL ALTER command */
+				 newDefault ? errhint("Use %s instead.",
+						 "ALTER TABLE ... ALTER COLUMN ... SET EXPRESSION") :
 				 errhint("Use %s instead.",
 						 "ALTER TABLE ... ALTER COLUMN ... DROP EXPRESSION")));
 
@@ -8308,6 +8328,121 @@ ATExecDropIdentity(Relation rel, const char *colName, bool missing_ok, LOCKMODE 
 	seqaddress.objectSubId = 0;
 	performDeletion(&seqaddress, DROP_RESTRICT, PERFORM_DELETION_INTERNAL);
 
+	return address;
+}
+
+/*
+ * ALTER TABLE ALTER COLUMN SET EXPRESSION AS
+ *
+ * Return the address of the affected column.
+ */
+static ObjectAddress
+ATExecSetExpression(AlteredTableInfo *tab, Relation rel, const char *colName,
+					Node *newDefault, LOCKMODE lockmode)
+{
+	HeapTuple	tuple;
+	Form_pg_attribute attTup;
+	AttrNumber	attnum;
+	Oid			attrdefoid;
+	ObjectAddress address;
+	Expr	   *defval;
+	NewColumnValue *newval;
+	RawColumnDefault *rawEnt;
+
+	tuple = SearchSysCacheAttName(RelationGetRelid(rel), colName);
+	if (!HeapTupleIsValid(tuple))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_COLUMN),
+				 errmsg("column \"%s\" of relation \"%s\" does not exist",
+						colName, RelationGetRelationName(rel))));
+
+	attTup = (Form_pg_attribute) GETSTRUCT(tuple);
+	attnum = attTup->attnum;
+
+	if (attnum <= 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot alter system column \"%s\"",
+						colName)));
+
+	if (attTup->attgenerated != ATTRIBUTE_GENERATED_STORED)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("column \"%s\" of relation \"%s\" is not a stored generated column",
+						colName, RelationGetRelationName(rel))));
+	ReleaseSysCache(tuple);
+
+	/*
+	 * Clear all the missing values if we're rewriting the table, since this
+	 * renders them pointless.
+	 */
+	RelationClearMissing(rel);
+
+	/* make sure we don't conflict with later attribute modifications */
+	CommandCounterIncrement();
+
+	/*
+	 * Find everything that depends on the column (constraints, indexes, etc),
+	 * and record enough information to let us recreate the objects after
+	 * rewrite.
+	 */
+	RememberAllDependentForRebuilding(tab, AT_SetExpression, rel, attnum);
+
+	/*
+	 * Drop the dependency records of the GENERATED expression, in particular
+	 * its INTERNAL dependency on the column, which would otherwise cause
+	 * dependency.c to refuse to perform the deletion.
+	 */
+	attrdefoid = GetAttrDefaultOid(RelationGetRelid(rel), attnum);
+	if (!OidIsValid(attrdefoid))
+		elog(ERROR, "could not find attrdef tuple for relation %u attnum %d",
+			 RelationGetRelid(rel), attnum);
+	(void) deleteDependencyRecordsFor(AttrDefaultRelationId, attrdefoid, false);
+
+	/* Make above changes visible */
+	CommandCounterIncrement();
+
+	/*
+	 * Get rid of the GENERATED expression itself.  We use RESTRICT here for
+	 * safety, but at present we do not expect anything to depend on the
+	 * default.
+	 */
+	RemoveAttrDefault(RelationGetRelid(rel), attnum, DROP_RESTRICT,
+					  false, false);
+
+	/* Prepare to store the new expression, in the catalogs */
+	rawEnt = (RawColumnDefault *) palloc(sizeof(RawColumnDefault));
+	rawEnt->attnum = attnum;
+	rawEnt->raw_default = newDefault;
+	rawEnt->missingMode = false;
+	rawEnt->generated = ATTRIBUTE_GENERATED_STORED;
+
+	/* Store the generated expression */
+	AddRelationNewConstraints(rel, list_make1(rawEnt), NIL,
+							  false, true, false, NULL);
+
+	/* Make above new expression visible */
+	CommandCounterIncrement();
+
+	/* Prepare for table rewrite */
+	defval = (Expr *) build_column_default(rel, attnum);
+
+	newval = (NewColumnValue *) palloc0(sizeof(NewColumnValue));
+	newval->attnum = attnum;
+	newval->expr = expression_planner(defval);
+	newval->is_generated = true;
+
+	tab->newvals = lappend(tab->newvals, newval);
+	tab->rewrite |= AT_REWRITE_DEFAULT_VAL;
+
+	/* Drop any pg_statistic entry for the column */
+	RemoveStatistics(RelationGetRelid(rel), attnum);
+
+	InvokeObjectPostAlterHook(RelationRelationId,
+							  RelationGetRelid(rel), attnum);
+
+	ObjectAddressSubSet(address, RelationRelationId,
+						RelationGetRelid(rel), attnum);
 	return address;
 }
 
@@ -13291,222 +13426,18 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 
 	/*
 	 * Find everything that depends on the column (constraints, indexes, etc),
-	 * and record enough information to let us recreate the objects.
-	 *
-	 * The actual recreation does not happen here, but only after we have
-	 * performed all the individual ALTER TYPE operations.  We have to save
-	 * the info before executing ALTER TYPE, though, else the deparser will
-	 * get confused.
+	 * and record enough information to let us recreate the objects after ALTER
+	 * TYPE operations.
 	 */
-	depRel = table_open(DependRelationId, RowExclusiveLock);
-
-	ScanKeyInit(&key[0],
-				Anum_pg_depend_refclassid,
-				BTEqualStrategyNumber, F_OIDEQ,
-				ObjectIdGetDatum(RelationRelationId));
-	ScanKeyInit(&key[1],
-				Anum_pg_depend_refobjid,
-				BTEqualStrategyNumber, F_OIDEQ,
-				ObjectIdGetDatum(RelationGetRelid(rel)));
-	ScanKeyInit(&key[2],
-				Anum_pg_depend_refobjsubid,
-				BTEqualStrategyNumber, F_INT4EQ,
-				Int32GetDatum((int32) attnum));
-
-	scan = systable_beginscan(depRel, DependReferenceIndexId, true,
-							  NULL, 3, key);
-
-	while (HeapTupleIsValid(depTup = systable_getnext(scan)))
-	{
-		Form_pg_depend foundDep = (Form_pg_depend) GETSTRUCT(depTup);
-		ObjectAddress foundObject;
-
-		foundObject.classId = foundDep->classid;
-		foundObject.objectId = foundDep->objid;
-		foundObject.objectSubId = foundDep->objsubid;
-
-		switch (getObjectClass(&foundObject))
-		{
-			case OCLASS_CLASS:
-				{
-					char		relKind = get_rel_relkind(foundObject.objectId);
-
-					if (relKind == RELKIND_INDEX ||
-						relKind == RELKIND_PARTITIONED_INDEX)
-					{
-						Assert(foundObject.objectSubId == 0);
-						RememberIndexForRebuilding(foundObject.objectId, tab);
-					}
-					else if (relKind == RELKIND_SEQUENCE)
-					{
-						/*
-						 * This must be a SERIAL column's sequence.  We need
-						 * not do anything to it.
-						 */
-						Assert(foundObject.objectSubId == 0);
-					}
-					else
-					{
-						/* Not expecting any other direct dependencies... */
-						elog(ERROR, "unexpected object depending on column: %s",
-							 getObjectDescription(&foundObject, false));
-					}
-					break;
-				}
-
-			case OCLASS_CONSTRAINT:
-				Assert(foundObject.objectSubId == 0);
-				RememberConstraintForRebuilding(foundObject.objectId, tab);
-				break;
-
-			case OCLASS_REWRITE:
-				/* XXX someday see if we can cope with revising views */
-				ereport(ERROR,
-						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						 errmsg("cannot alter type of a column used by a view or rule"),
-						 errdetail("%s depends on column \"%s\"",
-								   getObjectDescription(&foundObject, false),
-								   colName)));
-				break;
-
-			case OCLASS_TRIGGER:
-
-				/*
-				 * A trigger can depend on a column because the column is
-				 * specified as an update target, or because the column is
-				 * used in the trigger's WHEN condition.  The first case would
-				 * not require any extra work, but the second case would
-				 * require updating the WHEN expression, which will take a
-				 * significant amount of new code.  Since we can't easily tell
-				 * which case applies, we punt for both.  FIXME someday.
-				 */
-				ereport(ERROR,
-						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						 errmsg("cannot alter type of a column used in a trigger definition"),
-						 errdetail("%s depends on column \"%s\"",
-								   getObjectDescription(&foundObject, false),
-								   colName)));
-				break;
-
-			case OCLASS_POLICY:
-
-				/*
-				 * A policy can depend on a column because the column is
-				 * specified in the policy's USING or WITH CHECK qual
-				 * expressions.  It might be possible to rewrite and recheck
-				 * the policy expression, but punt for now.  It's certainly
-				 * easy enough to remove and recreate the policy; still, FIXME
-				 * someday.
-				 */
-				ereport(ERROR,
-						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						 errmsg("cannot alter type of a column used in a policy definition"),
-						 errdetail("%s depends on column \"%s\"",
-								   getObjectDescription(&foundObject, false),
-								   colName)));
-				break;
-
-			case OCLASS_DEFAULT:
-				{
-					ObjectAddress col = GetAttrDefaultColumnAddress(foundObject.objectId);
-
-					if (col.objectId == RelationGetRelid(rel) &&
-						col.objectSubId == attnum)
-					{
-						/*
-						 * Ignore the column's own default expression, which
-						 * we will deal with below.
-						 */
-						Assert(defaultexpr);
-					}
-					else
-					{
-						/*
-						 * This must be a reference from the expression of a
-						 * generated column elsewhere in the same table.
-						 * Changing the type of a column that is used by a
-						 * generated column is not allowed by SQL standard, so
-						 * just punt for now.  It might be doable with some
-						 * thinking and effort.
-						 */
-						ereport(ERROR,
-								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-								 errmsg("cannot alter type of a column used by a generated column"),
-								 errdetail("Column \"%s\" is used by generated column \"%s\".",
-										   colName,
-										   get_attname(col.objectId,
-													   col.objectSubId,
-													   false))));
-					}
-					break;
-				}
-
-			case OCLASS_STATISTIC_EXT:
-
-				/*
-				 * Give the extended-stats machinery a chance to fix anything
-				 * that this column type change would break.
-				 */
-				RememberStatisticsForRebuilding(foundObject.objectId, tab);
-				break;
-
-			case OCLASS_PROC:
-			case OCLASS_TYPE:
-			case OCLASS_CAST:
-			case OCLASS_COLLATION:
-			case OCLASS_CONVERSION:
-			case OCLASS_LANGUAGE:
-			case OCLASS_LARGEOBJECT:
-			case OCLASS_OPERATOR:
-			case OCLASS_OPCLASS:
-			case OCLASS_OPFAMILY:
-			case OCLASS_AM:
-			case OCLASS_AMOP:
-			case OCLASS_AMPROC:
-			case OCLASS_SCHEMA:
-			case OCLASS_TSPARSER:
-			case OCLASS_TSDICT:
-			case OCLASS_TSTEMPLATE:
-			case OCLASS_TSCONFIG:
-			case OCLASS_ROLE:
-			case OCLASS_ROLE_MEMBERSHIP:
-			case OCLASS_DATABASE:
-			case OCLASS_TBLSPACE:
-			case OCLASS_FDW:
-			case OCLASS_FOREIGN_SERVER:
-			case OCLASS_USER_MAPPING:
-			case OCLASS_DEFACL:
-			case OCLASS_EXTENSION:
-			case OCLASS_EVENT_TRIGGER:
-			case OCLASS_PARAMETER_ACL:
-			case OCLASS_PUBLICATION:
-			case OCLASS_PUBLICATION_NAMESPACE:
-			case OCLASS_PUBLICATION_REL:
-			case OCLASS_SUBSCRIPTION:
-			case OCLASS_TRANSFORM:
-
-				/*
-				 * We don't expect any of these sorts of objects to depend on
-				 * a column.
-				 */
-				elog(ERROR, "unexpected object depending on column: %s",
-					 getObjectDescription(&foundObject, false));
-				break;
-
-				/*
-				 * There's intentionally no default: case here; we want the
-				 * compiler to warn if a new OCLASS hasn't been handled above.
-				 */
-		}
-	}
-
-	systable_endscan(scan);
+	RememberAllDependentForRebuilding(tab, AT_AlterColumnType, rel, attnum);
 
 	/*
 	 * Now scan for dependencies of this column on other things.  The only
 	 * things we should find are the dependency on the column datatype and
 	 * possibly a collation dependency.  Those can be removed.
 	 */
+	depRel = table_open(DependRelationId, RowExclusiveLock);
+
 	ScanKeyInit(&key[0],
 				Anum_pg_depend_classid,
 				BTEqualStrategyNumber, F_OIDEQ,
@@ -13695,6 +13626,287 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 }
 
 /*
+ * Subroutine for ATExecAlterColumnType and ATExecSetExpression: Find everything
+ * that depends on the column (constraints, indexes, etc), and record enough
+ * information to let us recreate the objects.
+ *
+ * The actual recreation does not happen here, but only after we have
+ * performed all the individual ALTER TYPE/EXPRESSION operations.  We have
+ * to save the info before executing ALTER TYPE/EXPRESSION, though, else the
+ * deparser will get confused.
+ */
+static void
+RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
+								  Relation rel, AttrNumber attnum)
+{
+	Relation	depRel;
+	ScanKeyData key[3];
+	SysScanDesc scan;
+	HeapTuple	depTup;
+
+	depRel = table_open(DependRelationId, AccessShareLock);
+
+	ScanKeyInit(&key[0],
+				Anum_pg_depend_refclassid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(RelationRelationId));
+	ScanKeyInit(&key[1],
+				Anum_pg_depend_refobjid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(RelationGetRelid(rel)));
+	ScanKeyInit(&key[2],
+				Anum_pg_depend_refobjsubid,
+				BTEqualStrategyNumber, F_INT4EQ,
+				Int32GetDatum((int32) attnum));
+
+	scan = systable_beginscan(depRel, DependReferenceIndexId, true,
+							  NULL, 3, key);
+
+	while (HeapTupleIsValid(depTup = systable_getnext(scan)))
+	{
+		Form_pg_depend foundDep = (Form_pg_depend) GETSTRUCT(depTup);
+		ObjectAddress foundObject;
+
+		foundObject.classId = foundDep->classid;
+		foundObject.objectId = foundDep->objid;
+		foundObject.objectSubId = foundDep->objsubid;
+
+		switch (getObjectClass(&foundObject))
+		{
+			case OCLASS_CLASS:
+				{
+					char		relKind = get_rel_relkind(foundObject.objectId);
+
+					if (relKind == RELKIND_INDEX ||
+						relKind == RELKIND_PARTITIONED_INDEX)
+					{
+						Assert(foundObject.objectSubId == 0);
+						RememberIndexForRebuilding(foundObject.objectId, tab);
+					}
+					else if (relKind == RELKIND_SEQUENCE)
+					{
+						/*
+						 * This must be a SERIAL column's sequence.  We need
+						 * not do anything to it.
+						 */
+						Assert(foundObject.objectSubId == 0);
+					}
+					else
+					{
+						/* Not expecting any other direct dependencies... */
+						elog(ERROR, "unexpected object depending on column: %s",
+							 getObjectDescription(&foundObject, false));
+					}
+					break;
+				}
+
+			case OCLASS_CONSTRAINT:
+				Assert(foundObject.objectSubId == 0);
+				RememberConstraintForRebuilding(foundObject.objectId, tab);
+				break;
+
+			case OCLASS_REWRITE:
+				/* XXX someday see if we can cope with revising views */
+				if (subtype == AT_AlterColumnType)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("cannot alter type of a column used by a view or rule"),
+							 errdetail("%s depends on column \"%s\"",
+									   getObjectDescription(&foundObject, false),
+									   get_attname(RelationGetRelid(rel), attnum, false))));
+				else
+				{
+					Assert(subtype == AT_SetExpression);
+
+					/*
+					 * Ignore view dependencies since not altering any column
+					 * attribute.
+					 */
+				}
+				break;
+
+			case OCLASS_TRIGGER:
+
+				/*
+				 * A trigger can depend on a column because the column is
+				 * specified as an update target, or because the column is
+				 * used in the trigger's WHEN condition.  The first case would
+				 * not require any extra work, but the second case would
+				 * require updating the WHEN expression, which will take a
+				 * significant amount of new code.  Since we can't easily tell
+				 * which case applies, we punt for both.  FIXME someday.
+				 */
+				if (subtype == AT_AlterColumnType)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("cannot alter type of a column used in a trigger definition"),
+							 errdetail("%s depends on column \"%s\"",
+									   getObjectDescription(&foundObject, false),
+									   get_attname(RelationGetRelid(rel), attnum, false))));
+				else
+				{
+					Assert(subtype == AT_SetExpression);
+
+					/*
+					 * The generated column not allowed to update, but there
+					 * could be trigger on it which can have specified as an
+					 * update target for this column even though it doesn make
+					 * sense. However, the rewrite is an update operation, and
+					 * trigger execution not supported at rewrite.
+					 */
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("cannot alter generated expression of a column used in a trigger definition"),
+							 errdetail("%s depends on column \"%s\"",
+									   getObjectDescription(&foundObject, false),
+									   get_attname(RelationGetRelid(rel), attnum, false))));
+				}
+				break;
+
+			case OCLASS_POLICY:
+
+				/*
+				 * A policy can depend on a column because the column is
+				 * specified in the policy's USING or WITH CHECK qual
+				 * expressions.  It might be possible to rewrite and recheck
+				 * the policy expression, but punt for now.  It's certainly
+				 * easy enough to remove and recreate the policy; still, FIXME
+				 * someday.
+				 */
+				if (subtype == AT_AlterColumnType)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("cannot alter type of a column used in a policy definition"),
+							 errdetail("%s depends on column \"%s\"",
+									   getObjectDescription(&foundObject, false),
+									   get_attname(RelationGetRelid(rel), attnum, false))));
+				else
+				{
+					Assert(subtype == AT_SetExpression);
+
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("cannot alter generated expression of a column used in a policy definition"),
+							 errdetail("%s depends on column \"%s\"",
+									   getObjectDescription(&foundObject, false),
+									   get_attname(RelationGetRelid(rel), attnum, false))));
+				}
+				break;
+
+			case OCLASS_DEFAULT:
+				{
+					ObjectAddress col = GetAttrDefaultColumnAddress(foundObject.objectId);
+
+					if (col.objectId == RelationGetRelid(rel) &&
+						col.objectSubId == attnum)
+					{
+						/*
+						 * Ignore the column's own default expression, which
+						 * called is supposed to deal with.
+						 */
+						Assert(build_column_default(rel, attnum));
+					}
+					else
+					{
+						/*
+						 * This must be a reference from the expression of a
+						 * generated column elsewhere in the same table.
+						 * Changing the type/generated expression of a column
+						 * that is used by a generated column is not allowed by
+						 * SQL standard, so just punt for now.  It might be
+						 * doable with some thinking and effort.
+						 */
+						if (subtype == AT_AlterColumnType)
+							ereport(ERROR,
+									(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+									 errmsg("cannot alter type of a column used by a generated column"),
+									 errdetail("Column \"%s\" is used by generated column \"%s\".",
+											   get_attname(RelationGetRelid(rel),
+														   attnum, false),
+											   get_attname(col.objectId,
+														   col.objectSubId,
+														   false))));
+						else
+						{
+							Assert(subtype == AT_SetExpression);
+							ereport(ERROR,
+									(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+									 errmsg("cannot alter generated expression of a column used by a generated column"),
+									 errdetail("Column \"%s\" is used by generated column \"%s\".",
+											   get_attname(RelationGetRelid(rel),
+														   attnum, false),
+											   get_attname(col.objectId,
+														   col.objectSubId,
+														   false))));
+						}
+					}
+					break;
+				}
+
+			case OCLASS_STATISTIC_EXT:
+
+				/*
+				 * Give the extended-stats machinery a chance to fix anything
+				 * that this column type change would break.
+				 */
+				RememberStatisticsForRebuilding(foundObject.objectId, tab);
+				break;
+
+			case OCLASS_PROC:
+			case OCLASS_TYPE:
+			case OCLASS_CAST:
+			case OCLASS_COLLATION:
+			case OCLASS_CONVERSION:
+			case OCLASS_LANGUAGE:
+			case OCLASS_LARGEOBJECT:
+			case OCLASS_OPERATOR:
+			case OCLASS_OPCLASS:
+			case OCLASS_OPFAMILY:
+			case OCLASS_AM:
+			case OCLASS_AMOP:
+			case OCLASS_AMPROC:
+			case OCLASS_SCHEMA:
+			case OCLASS_TSPARSER:
+			case OCLASS_TSDICT:
+			case OCLASS_TSTEMPLATE:
+			case OCLASS_TSCONFIG:
+			case OCLASS_ROLE:
+			case OCLASS_ROLE_MEMBERSHIP:
+			case OCLASS_DATABASE:
+			case OCLASS_TBLSPACE:
+			case OCLASS_FDW:
+			case OCLASS_FOREIGN_SERVER:
+			case OCLASS_USER_MAPPING:
+			case OCLASS_DEFACL:
+			case OCLASS_EXTENSION:
+			case OCLASS_EVENT_TRIGGER:
+			case OCLASS_PARAMETER_ACL:
+			case OCLASS_PUBLICATION:
+			case OCLASS_PUBLICATION_NAMESPACE:
+			case OCLASS_PUBLICATION_REL:
+			case OCLASS_SUBSCRIPTION:
+			case OCLASS_TRANSFORM:
+
+				/*
+				 * We don't expect any of these sorts of objects to depend on
+				 * a column.
+				 */
+				elog(ERROR, "unexpected object depending on column: %s",
+					 getObjectDescription(&foundObject, false));
+				break;
+
+				/*
+				 * There's intentionally no default: case here; we want the
+				 * compiler to warn if a new OCLASS hasn't been handled above.
+				 */
+		}
+	}
+
+	systable_endscan(scan);
+	table_close(depRel, AccessShareLock);
+}
+
+/*
  * Subroutine for ATExecAlterColumnType: remember that a replica identity
  * needs to be reset.
  */
@@ -13753,7 +13965,7 @@ RememberConstraintForRebuilding(Oid conoid, AlteredTableInfo *tab)
 		/*
 		 * For the index of a constraint, if any, remember if it is used for
 		 * the table's replica identity or if it is a clustered index, so that
-		 * ATPostAlterTypeCleanup() can queue up commands necessary to restore
+		 * ATPostAlterColumnCleanup() can queue up commands necessary to restore
 		 * those properties.
 		 */
 		indoid = get_constraint_index(conoid);
@@ -13807,7 +14019,7 @@ RememberIndexForRebuilding(Oid indoid, AlteredTableInfo *tab)
 
 			/*
 			 * Remember if this index is used for the table's replica identity
-			 * or if it is a clustered index, so that ATPostAlterTypeCleanup()
+			 * or if it is a clustered index, so that ATPostAlterColumnCleanup()
 			 * can queue up commands necessary to restore those properties.
 			 */
 			RememberReplicaIdentityForRebuilding(indoid, tab);
@@ -13843,14 +14055,14 @@ RememberStatisticsForRebuilding(Oid stxoid, AlteredTableInfo *tab)
 }
 
 /*
- * Cleanup after we've finished all the ALTER TYPE operations for a
- * particular relation.  We have to drop and recreate all the indexes
- * and constraints that depend on the altered columns.  We do the
- * actual dropping here, but re-creation is managed by adding work
- * queue entries to do those steps later.
+ * Cleanup after we've finished all the ALTER TYPE or ALTER SET EXPRESSION
+ * operations for a particular relation.  We have to drop and recreate all the
+ * indexes and constraints that depend on the altered columns.  We do the actual
+ * dropping here, but re-creation is managed by adding work queue entries to do
+ * those steps later.
  */
 static void
-ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
+ATPostAlterColumnCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 {
 	ObjectAddress obj;
 	ObjectAddresses *objects;
@@ -13928,9 +14140,9 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 		if (relid != tab->relid && contype == CONSTRAINT_FOREIGN)
 			LockRelationOid(relid, AccessExclusiveLock);
 
-		ATPostAlterTypeParse(oldId, relid, confrelid,
-							 (char *) lfirst(def_item),
-							 wqueue, lockmode, tab->rewrite);
+		ATPostAlterColumnParse(oldId, relid, confrelid,
+							   (char *) lfirst(def_item),
+							   wqueue, lockmode, tab->rewrite);
 	}
 	forboth(oid_item, tab->changedIndexOids,
 			def_item, tab->changedIndexDefs)
@@ -13939,9 +14151,9 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 		Oid			relid;
 
 		relid = IndexGetRelation(oldId, false);
-		ATPostAlterTypeParse(oldId, relid, InvalidOid,
-							 (char *) lfirst(def_item),
-							 wqueue, lockmode, tab->rewrite);
+		ATPostAlterColumnParse(oldId, relid, InvalidOid,
+							   (char *) lfirst(def_item),
+							   wqueue, lockmode, tab->rewrite);
 
 		ObjectAddressSet(obj, RelationRelationId, oldId);
 		add_exact_object_address(&obj, objects);
@@ -13955,9 +14167,9 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 		Oid			relid;
 
 		relid = StatisticsGetRelation(oldId, false);
-		ATPostAlterTypeParse(oldId, relid, InvalidOid,
-							 (char *) lfirst(def_item),
-							 wqueue, lockmode, tab->rewrite);
+		ATPostAlterColumnParse(oldId, relid, InvalidOid,
+							   (char *) lfirst(def_item),
+							   wqueue, lockmode, tab->rewrite);
 
 		ObjectAddressSet(obj, StatisticExtRelationId, oldId);
 		add_exact_object_address(&obj, objects);
@@ -14019,8 +14231,8 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
  * operator that's not available for the new column type.
  */
 static void
-ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, char *cmd,
-					 List **wqueue, LOCKMODE lockmode, bool rewrite)
+ATPostAlterColumnParse(Oid oldId, Oid oldRelId, Oid refRelId, char *cmd,
+					   List **wqueue, LOCKMODE lockmode, bool rewrite)
 {
 	List	   *raw_parsetree_list;
 	List	   *querytree_list;
@@ -14225,7 +14437,7 @@ ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, char *cmd,
 }
 
 /*
- * Subroutine for ATPostAlterTypeParse() to recreate any existing comment
+ * Subroutine for ATPostAlterColumnParse() to recreate any existing comment
  * for a table or domain constraint that is being rebuilt.
  *
  * objid is the OID of the constraint.
@@ -14275,7 +14487,7 @@ RebuildConstraintComment(AlteredTableInfo *tab, int pass, Oid objid,
 }
 
 /*
- * Subroutine for ATPostAlterTypeParse().  Calls out to CheckIndexCompatible()
+ * Subroutine for ATPostAlterColumnParse().  Calls out to CheckIndexCompatible()
  * for the real analysis, then mutates the IndexStmt based on that verdict.
  */
 static void
@@ -14300,7 +14512,7 @@ TryReuseIndex(Oid oldId, IndexStmt *stmt)
 }
 
 /*
- * Subroutine for ATPostAlterTypeParse().
+ * Subroutine for ATPostAlterColumnParse().
  *
  * Stash the old P-F equality operator into the Constraint node, for possible
  * use by ATAddForeignKeyConstraint() in determining whether revalidation of

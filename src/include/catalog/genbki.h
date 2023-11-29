@@ -77,13 +77,14 @@
  * is the name of a #define to generate for its OID.  References to the index
  * in the C code should always use these #defines, not the actual index name
  * (much less the numeric OID).  The fourth argument is the table name.  The
- * rest is much like a standard 'create index' SQL command.
+ * decl argument is much like a standard 'create index' SQL command.
+ * Optionally, specify the syscache ID and bucket size.
  *
  * The macro definitions are just to keep the C compiler from spitting up.
  */
 #define DECLARE_INDEX(name,oid,oidmacro,tblname,decl) extern int no_such_variable
-#define DECLARE_UNIQUE_INDEX(name,oid,oidmacro,tblname,decl) extern int no_such_variable
-#define DECLARE_UNIQUE_INDEX_PKEY(name,oid,oidmacro,tblname,decl) extern int no_such_variable
+#define DECLARE_UNIQUE_INDEX(name,oid,oidmacro,tblname,decl,...) extern int no_such_variable
+#define DECLARE_UNIQUE_INDEX_PKEY(name,oid,oidmacro,tblname,decl,...) extern int no_such_variable
 
 /*
  * These lines inform genbki.pl about manually-assigned OIDs that do not

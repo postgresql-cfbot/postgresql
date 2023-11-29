@@ -45,7 +45,7 @@ CATALOG(pg_ts_template,3764,TSTemplateRelationId)
 
 typedef FormData_pg_ts_template *Form_pg_ts_template;
 
-DECLARE_UNIQUE_INDEX(pg_ts_template_tmplname_index, 3766, TSTemplateNameNspIndexId, pg_ts_template, btree(tmplname name_ops, tmplnamespace oid_ops));
-DECLARE_UNIQUE_INDEX_PKEY(pg_ts_template_oid_index, 3767, TSTemplateOidIndexId, pg_ts_template, btree(oid oid_ops));
+DECLARE_UNIQUE_INDEX(pg_ts_template_tmplname_index, 3766, TSTemplateNameNspIndexId, pg_ts_template, btree(tmplname name_ops, tmplnamespace oid_ops), TSTEMPLATENAMENSP, 2);
+DECLARE_UNIQUE_INDEX_PKEY(pg_ts_template_oid_index, 3767, TSTemplateOidIndexId, pg_ts_template, btree(oid oid_ops), TSTEMPLATEOID, 2);
 
 #endif							/* PG_TS_TEMPLATE_H */

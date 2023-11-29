@@ -56,7 +56,7 @@ typedef FormData_pg_replication_origin *Form_pg_replication_origin;
 
 DECLARE_TOAST_WITH_MACRO(pg_replication_origin, 4181, 4182, PgReplicationOriginToastTable, PgReplicationOriginToastIndex);
 
-DECLARE_UNIQUE_INDEX_PKEY(pg_replication_origin_roiident_index, 6001, ReplicationOriginIdentIndex, pg_replication_origin, btree(roident oid_ops));
-DECLARE_UNIQUE_INDEX(pg_replication_origin_roname_index, 6002, ReplicationOriginNameIndex, pg_replication_origin, btree(roname text_ops));
+DECLARE_UNIQUE_INDEX_PKEY(pg_replication_origin_roiident_index, 6001, ReplicationOriginIdentIndex, pg_replication_origin, btree(roident oid_ops), REPLORIGIDENT, 16);
+DECLARE_UNIQUE_INDEX(pg_replication_origin_roname_index, 6002, ReplicationOriginNameIndex, pg_replication_origin, btree(roname text_ops), REPLORIGNAME, 16);
 
 #endif							/* PG_REPLICATION_ORIGIN_H */

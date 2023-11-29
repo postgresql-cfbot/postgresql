@@ -217,10 +217,22 @@ GetUserMapping(Oid userid, Oid serverid)
 	}
 
 	if (!HeapTupleIsValid(tp))
+	{
+		ForeignServer *server = GetForeignServerExtended(serverid,
+														 FSV_MISSING_OK);
+
+		if (!server)
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("user mapping not found for user \"%s\"",
+							MappingUserName(userid))));
+
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
-				 errmsg("user mapping not found for \"%s\"",
-						MappingUserName(userid))));
+				 errmsg("user mapping not found for user \"%s\", server \"%s\"",
+						MappingUserName(userid),
+						server->servername)));
+	}
 
 	um = (UserMapping *) palloc(sizeof(UserMapping));
 	um->umid = ((Form_pg_user_mapping) GETSTRUCT(tp))->oid;

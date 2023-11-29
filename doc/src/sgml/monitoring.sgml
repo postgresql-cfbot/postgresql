@@ -336,7 +336,7 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      <row>
       <entry><structname>pg_stat_recovery_prefetch</structname><indexterm><primary>pg_stat_recovery_prefetch</primary></indexterm></entry>
       <entry>Only one row, showing statistics about blocks prefetched during recovery.
-       See <link linkend="monitoring-pg-stat-recovery-prefetch">
+       See <link linkend="monitoring-pg-stat-recovery-prefetch-view">
        <structname>pg_stat_recovery_prefetch</structname></link> for details.
       </entry>
      </row>
@@ -345,7 +345,7 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       <entry><structname>pg_stat_subscription</structname><indexterm><primary>pg_stat_subscription</primary></indexterm></entry>
       <entry>At least one row per subscription, showing information about
        the subscription workers.
-       See <link linkend="monitoring-pg-stat-subscription">
+       See <link linkend="monitoring-pg-stat-subscription-view">
        <structname>pg_stat_subscription</structname></link> for details.
       </entry>
      </row>
@@ -508,7 +508,7 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      <row>
       <entry><structname>pg_stat_subscription_stats</structname><indexterm><primary>pg_stat_subscription_stats</primary></indexterm></entry>
       <entry>One row per subscription, showing statistics about errors.
-      See <link linkend="monitoring-pg-stat-subscription-stats">
+      See <link linkend="monitoring-pg-stat-subscription-stats-view">
       <structname>pg_stat_subscription_stats</structname></link> for details.
       </entry>
      </row>
@@ -1816,7 +1816,7 @@ description | Waiting for a newly initialized WAL file to reach durable storage
 
  </sect2>
 
- <sect2 id="monitoring-pg-stat-recovery-prefetch">
+ <sect2 id="monitoring-pg-stat-recovery-prefetch-view">
   <title><structname>pg_stat_recovery_prefetch</structname></title>
 
   <indexterm>
@@ -1962,14 +1962,14 @@ description | Waiting for a newly initialized WAL file to reach durable storage
 
  </sect2>
 
- <sect2 id="monitoring-pg-stat-subscription">
+ <sect2 id="monitoring-pg-stat-subscription-view">
   <title><structname>pg_stat_subscription</structname></title>
 
   <indexterm>
    <primary>pg_stat_subscription</primary>
   </indexterm>
 
-  <table id="pg-stat-subscription" xreflabel="pg_stat_subscription">
+  <table id="pg-stat-subscription-view" xreflabel="pg_stat_subscription">
    <title><structname>pg_stat_subscription</structname> View</title>
    <tgroup cols="1">
     <thead>
@@ -2098,7 +2098,7 @@ description | Waiting for a newly initialized WAL file to reach durable storage
 
  </sect2>
 
- <sect2 id="monitoring-pg-stat-subscription-stats">
+ <sect2 id="monitoring-pg-stat-subscription-stats-view">
   <title><structname>pg_stat_subscription_stats</structname></title>
 
   <indexterm>
@@ -2110,7 +2110,7 @@ description | Waiting for a newly initialized WAL file to reach durable storage
    one row per subscription.
   </para>
 
-  <table id="pg-stat-subscription-stats" xreflabel="pg_stat_subscription_stats">
+  <table id="pg-stat-subscription-stats-view" xreflabel="pg_stat_subscription_stats">
    <title><structname>pg_stat_subscription_stats</structname> View</title>
    <tgroup cols="1">
     <thead>

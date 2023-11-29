@@ -46,6 +46,7 @@ typedef enum
 	POSTMASTER_READY,
 	POSTMASTER_STILL_STARTING,
 	POSTMASTER_FAILED,
+	POSTMASTER_RECOVERY_SHUTDOWN,
 } WaitPMResult;
 
 typedef enum
@@ -662,11 +663,21 @@ wait_for_postmaster_start(pid_t pm_pid, bool do_checkpoint)
 			int			exitstatus;
 
 			if (waitpid(pm_pid, &exitstatus, WNOHANG) == pm_pid)
-				return POSTMASTER_FAILED;
+			{
+				if (get_control_dbstate() == DB_SHUTDOWNED_IN_RECOVERY)
+					return POSTMASTER_RECOVERY_SHUTDOWN;
+				else
+					return POSTMASTER_FAILED;
+			}
 		}
 #else
 		if (WaitForSingleObject(postmasterProcess, 0) == WAIT_OBJECT_0)
-			return POSTMASTER_FAILED;
+		{
+			if (get_control_dbstate() == DB_SHUTDOWNED_IN_RECOVERY)
+				return POSTMASTER_RECOVERY_SHUTDOWN;
+			else
+				return POSTMASTER_FAILED;
+		}
 #endif
 
 		/* Startup still in process; wait, printing a dot once per second */
@@ -991,10 +1002,14 @@ do_start(void)
 							 progname);
 				exit(1);
 				break;
+			case POSTMASTER_RECOVERY_SHUTDOWN:
+				print_msg(_("PITR shutdown\n"));
+				print_msg(_("update configuration for startup again if needed\n"));
+				break;
 			case POSTMASTER_FAILED:
 				print_msg(_(" stopped waiting\n"));
 				write_stderr(_("%s: could not start server\n"
-							   "Examine the log output.\n"),
+							   "Examine the log output\n"),
 							 progname);
 				exit(1);
 				break;

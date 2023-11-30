@@ -611,14 +611,11 @@ StreamLog(void)
  * When SIGINT/SIGTERM are caught, just tell the system to exit at the next
  * possible moment.
  */
-#ifndef WIN32
-
 static void
 sigexit_handler(SIGNAL_ARGS)
 {
 	time_to_stop = true;
 }
-#endif
 
 int
 main(int argc, char **argv)
@@ -838,9 +835,9 @@ main(int argc, char **argv)
 	 * Trap signals.  (Don't do this until after the initial password prompt,
 	 * if one is needed, in GetConnection.)
 	 */
+	pqsignal(SIGTERM, sigexit_handler);
 #ifndef WIN32
 	pqsignal(SIGINT, sigexit_handler);
-	pqsignal(SIGTERM, sigexit_handler);
 #endif
 
 	/*

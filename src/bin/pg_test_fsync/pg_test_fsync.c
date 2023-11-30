@@ -115,9 +115,6 @@ main(int argc, char *argv[])
 	pqsignal(SIGTERM, signal_cleanup);
 #ifndef WIN32
 	pqsignal(SIGALRM, process_alarm);
-#endif
-#ifdef SIGHUP
-	/* Not defined on win32 */
 	pqsignal(SIGHUP, signal_cleanup);
 #endif
 
@@ -602,8 +599,8 @@ signal_cleanup(SIGNAL_ARGS)
 	if (needs_unlink)
 		unlink(filename);
 	/* Finish incomplete line on stdout */
-	puts("");
-	exit(1);
+	write(STDOUT_FILENO, "\n", 1);
+	_exit(1);
 }
 
 #ifdef HAVE_FSYNC_WRITETHROUGH

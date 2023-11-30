@@ -661,10 +661,6 @@ error:
 	conn = NULL;
 }
 
-/*
- * Unfortunately we can't do sensible signal handling on windows...
- */
-#ifndef WIN32
 
 /*
  * When SIGINT/SIGTERM are caught, just tell the system to exit at the next
@@ -676,6 +672,9 @@ sigexit_handler(SIGNAL_ARGS)
 	stop_reason = STREAM_STOP_SIGNAL;
 	time_to_abort = true;
 }
+
+/* SIGHUP is not defined on Windows */
+#ifndef WIN32
 
 /*
  * Trigger the output file to be reopened.
@@ -939,9 +938,9 @@ main(int argc, char **argv)
 	 * Trap signals.  (Don't do this until after the initial password prompt,
 	 * if one is needed, in GetConnection.)
 	 */
+	pqsignal(SIGTERM, sigexit_handler);
 #ifndef WIN32
 	pqsignal(SIGINT, sigexit_handler);
-	pqsignal(SIGTERM, sigexit_handler);
 	pqsignal(SIGHUP, sighup_handler);
 #endif
 

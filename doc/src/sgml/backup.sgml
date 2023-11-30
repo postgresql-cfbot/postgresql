@@ -1180,9 +1180,26 @@ SELECT * FROM pg_backup_stop(wait_for_archive => true);
    <para>
     The key part of all this is to set up a recovery configuration that
     describes how you want to recover and how far the recovery should
-    run.  The one thing that you absolutely must specify is the <varname>restore_command</varname>,
+    run.  The one thing that you absolutely must specify is either
+    <varname>restore_command</varname> or a <varname>restore_library</varname>,
     which tells <productname>PostgreSQL</productname> how to retrieve archived
-    WAL file segments.  Like the <varname>archive_command</varname>, this is
+    WAL file segments.
+   </para>
+
+   <para>
+    Like the <varname>archive_library</varname> parameter,
+    <varname>restore_library</varname> is a shared library.  Since such
+    libraries are written in <literal>C</literal>, creating your own may
+    require considerably more effort than writing a shell command.  However,
+    restore modules can be more performance than restoring via shell, and they
+    will have access to many useful server resources.  For more information
+    about creating a <varname>restore_library</varname>, see
+    <xref linkend="restore-modules"/>.
+   </para>
+
+   <para>
+    Like the <varname>archive_command</varname>,
+    <varname>restore_command</varname> is
     a shell command string.  It can contain <literal>%f</literal>, which is
     replaced by the name of the desired WAL file, and <literal>%p</literal>,
     which is replaced by the path name to copy the WAL file to.
@@ -1201,14 +1218,20 @@ restore_command = 'cp /mnt/server/archivedir/%f %p'
    </para>
 
    <para>
-    It is important that the command return nonzero exit status on failure.
-    The command <emphasis>will</emphasis> be called requesting files that are not
-    present in the archive; it must return nonzero when so asked.  This is not
-    an error condition.  An exception is that if the command was terminated by
+    It is important that the <varname>restore_command</varname> return nonzero
+    exit status on failure, or, if you are using a
+    <varname>restore_library</varname>, that the restore callbacks return
+    <literal>false</literal> on failure.  The command or library
+    <emphasis>will</emphasis> be called requesting files that are not
+    present in the archive; it must fail when so asked.  This is not
+    an error condition.  An exception is that if the
+    <varname>restore_command</varname> was terminated by
     a signal (other than <systemitem>SIGTERM</systemitem>, which is used as
     part of a database server shutdown) or an error by the shell (such as
     command not found), then recovery will abort and the server will not start
-    up.
+    up.  Likewise, if the restore callbacks provided by the
+    <varname>restore_library</varname> emit an <literal>ERROR</literal> or
+    <literal>FATAL</literal>, recovery will abort and the server won't start.
    </para>
 
    <para>
@@ -1232,7 +1255,8 @@ restore_command = 'cp /mnt/server/archivedir/%f %p'
     close as possible given the available WAL segments).  Therefore, a normal
     recovery will end with a <quote>file not found</quote> message, the exact text
     of the error message depending upon your choice of
-    <varname>restore_command</varname>.  You may also see an error message
+    <varname>restore_command</varname> or <varname>restore_library</varname>.
+    You may also see an error message
     at the start of recovery for a file named something like
     <filename>00000001.history</filename>.  This is also normal and does not
     indicate a problem in simple recovery situations; see

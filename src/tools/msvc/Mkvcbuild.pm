@@ -55,7 +55,7 @@ my @contrib_excludes = (
 # Set of variables for frontend modules
 my $frontend_defines = { 'pgbench' => 'FD_SETSIZE=1024' };
 my @frontend_uselibpq =
-  ('pg_amcheck', 'pg_ctl', 'pg_upgrade', 'pgbench', 'psql', 'initdb');
+  ('pg_amcheck', 'pg_ctl', 'pg_upgrade', 'pgbench', 'psql', 'initdb', 'pg_subscriber');
 my @frontend_uselibpgport = (
 	'pg_amcheck', 'pg_archivecleanup',
 	'pg_test_fsync', 'pg_test_timing',

@@ -1,0 +1,36 @@
+CREATE EXTENSION bytea_plperl CASCADE;
+NOTICE:  installing required extension "plperl"
+CREATE FUNCTION cat_bytea(bytea) RETURNS bytea LANGUAGE plperl
+ TRANSFORM FOR TYPE bytea
+ AS $$
+    return $_[0];
+ $$;
+SELECT data = cat_bytea(data)
+    FROM (
+        SELECT decode(repeat(unnest(ARRAY[ 'a','abc', 'abcd', 'abcdefgh\000ijkl12' , '爱' ]), 10000), 'escape') data
+    ) line;
+ ?column? 
+----------
+ t
+ t
+ t
+ t
+ t
+(5 rows)
+
+CREATE FUNCTION perl_inverse_bytes(bytea) RETURNS bytea
+TRANSFORM FOR TYPE bytea
+AS $$
+	return join '', reverse split('', $_[0]);
+$$ LANGUAGE plperl;
+SELECT 'ξενία'::bytea, perl_inverse_bytes('ξενία'::bytea);
+         bytea          |   perl_inverse_bytes   
+------------------------+------------------------
+ \xcebeceb5cebdceafceb1 | \xb1ceafcebdceb5cebece
+(1 row)
+
+DROP EXTENSION plperl CASCADE;
+NOTICE:  drop cascades to 3 other objects
+DETAIL:  drop cascades to extension bytea_plperl
+drop cascades to function cat_bytea(bytea)
+drop cascades to function perl_inverse_bytes(bytea)

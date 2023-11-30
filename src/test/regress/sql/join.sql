@@ -2859,6 +2859,20 @@ select * from
   int8_tbl a left join
   lateral (select *, coalesce(a.q2, 42) as x from int8_tbl b) ss on a.q2 = ss.q1;
 
+-- lateral reference to simple Var can escape PlaceHolderVar if the
+-- referenced rel is under the same lowest nulling outer join
+explain (verbose, costs off)
+select * from
+  int8_tbl a left join
+  (int8_tbl b inner join
+   lateral (select *, b.q2 as x from int8_tbl c) ss on b.q2 = ss.q1)
+  on a.q1 = b.q1;
+select * from
+  int8_tbl a left join
+  (int8_tbl b inner join
+   lateral (select *, b.q2 as x from int8_tbl c) ss on b.q2 = ss.q1)
+  on a.q1 = b.q1;
+
 -- lateral can result in join conditions appearing below their
 -- real semantic level
 explain (verbose, costs off)

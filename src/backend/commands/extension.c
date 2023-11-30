@@ -259,6 +259,56 @@ get_extension_schema(Oid ext_oid)
 }
 
 /*
+ * get_extension_version - given an extension OID, look up the version
+ *
+ * Returns a palloc'd string, or NULL if no such extension.
+ */
+char *
+get_extension_version(Oid ext_oid)
+{
+	char	   *result;
+	Relation	rel;
+	SysScanDesc scandesc;
+	HeapTuple	tuple;
+	ScanKeyData entry[1];
+
+	rel = table_open(ExtensionRelationId, AccessShareLock);
+
+	ScanKeyInit(&entry[0],
+				Anum_pg_extension_oid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(ext_oid));
+
+	scandesc = systable_beginscan(rel, ExtensionOidIndexId, true,
+								  NULL, 1, entry);
+
+	tuple = systable_getnext(scandesc);
+
+	/* We assume that there can be at most one matching tuple */
+	if (HeapTupleIsValid(tuple))
+	{
+		Datum		datum;
+		bool		isnull;
+
+		datum = heap_getattr(tuple, Anum_pg_extension_extversion,
+							 RelationGetDescr(rel), &isnull);
+
+		if (isnull)
+			elog(ERROR, "extversion is null");
+
+		result = text_to_cstring(DatumGetTextPP(datum));
+	}
+	else
+		result = NULL;
+
+	systable_endscan(scandesc);
+
+	table_close(rel, AccessShareLock);
+
+	return result;
+}
+
+/*
  * Utility functions to check validity of extension and version names
  */
 static void

@@ -508,8 +508,8 @@ pa_allocate_worker(TransactionId xid)
 
 	winfo->in_use = true;
 	winfo->serialize_changes = false;
+	Assert(entry->xid == xid);
 	entry->winfo = winfo;
-	entry->xid = xid;
 }
 
 /*

@@ -2105,7 +2105,7 @@ ExecuteTruncateGuts(List *explicit_rels,
 			ft_info = hash_search(ft_htab, &serverid, HASH_ENTER, &found);
 			if (!found)
 			{
-				ft_info->serverid = serverid;
+				Assert(ft_info->serverid == serverid);
 				ft_info->rels = NIL;
 			}
 

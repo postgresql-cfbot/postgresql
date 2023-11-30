@@ -785,6 +785,6 @@ RestoreUncommittedEnums(void *space)
 	init_uncommitted_enums();
 	do
 	{
-		hash_search(uncommitted_enums, serialized++, HASH_ENTER, NULL);
+		(void) hash_search(uncommitted_enums, serialized++, HASH_ENTER, NULL);
 	} while (OidIsValid(*serialized));
 }

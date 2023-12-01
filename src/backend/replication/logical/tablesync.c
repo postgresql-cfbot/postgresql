@@ -100,6 +100,7 @@
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_type.h"
 #include "commands/copy.h"
+#include "commands/subscriptioncmds.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "parser/parse_relation.h"
@@ -614,15 +615,28 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 		 * Note: If the subscription has no tables then leave the state as
 		 * PENDING, which allows ALTER SUBSCRIPTION ... REFRESH PUBLICATION to
 		 * work.
+		 *
+		 * Same goes for 'failover'. Enable it only if subscription has tables
+		 * and all the tablesyncs have reached READY state.
 		 */
-		if (MySubscription->twophasestate == LOGICALREP_TWOPHASE_STATE_PENDING)
+		if (MySubscription->twophasestate == LOGICALREP_TWOPHASE_STATE_PENDING ||
+			MySubscription->failoverstate == LOGICALREP_FAILOVER_STATE_PENDING)
 		{
 			CommandCounterIncrement();	/* make updates visible */
 			if (AllTablesyncsReady())
 			{
-				ereport(LOG,
-						(errmsg("logical replication apply worker for subscription \"%s\" will restart so that two_phase can be enabled",
-								MySubscription->name)));
+				if (MySubscription->twophasestate == LOGICALREP_TWOPHASE_STATE_PENDING)
+					ereport(LOG,
+					/* translator: %s is a subscription option */
+							(errmsg("logical replication apply worker for subscription \"%s\" will restart so that %s can be enabled",
+									MySubscription->name, "two_phase")));
+
+				if (MySubscription->failoverstate == LOGICALREP_FAILOVER_STATE_PENDING)
+					ereport(LOG,
+					/* translator: %s is a subscription option */
+							(errmsg("logical replication apply worker for subscription \"%s\" will restart so that %s can be enabled",
+									MySubscription->name, "failover")));
+
 				should_exit = true;
 			}
 		}
@@ -1420,7 +1434,8 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 	 */
 	walrcv_create_slot(LogRepWorkerWalRcvConn,
 					   slotname, false /* permanent */ , false /* two_phase */ ,
-					   CRS_USE_SNAPSHOT, origin_startpos);
+					   false /* failover */ , CRS_USE_SNAPSHOT,
+					   origin_startpos);
 
 	/*
 	 * Setup replication origin tracking. The purpose of doing this before the
@@ -1722,10 +1737,12 @@ AllTablesyncsReady(void)
 }
 
 /*
- * Update the two_phase state of the specified subscription in pg_subscription.
+ * Update the twophase and/or failover state of the specified subscription
+ * in pg_subscription.
  */
 void
-UpdateTwoPhaseState(Oid suboid, char new_state)
+EnableTwoPhaseFailoverTriState(Oid suboid, bool enable_twophase,
+							   bool enable_failover)
 {
 	Relation	rel;
 	HeapTuple	tup;
@@ -1733,9 +1750,8 @@ UpdateTwoPhaseState(Oid suboid, char new_state)
 	bool		replaces[Natts_pg_subscription];
 	Datum		values[Natts_pg_subscription];
 
-	Assert(new_state == LOGICALREP_TWOPHASE_STATE_DISABLED ||
-		   new_state == LOGICALREP_TWOPHASE_STATE_PENDING ||
-		   new_state == LOGICALREP_TWOPHASE_STATE_ENABLED);
+	if (!enable_twophase && !enable_failover)
+		return;
 
 	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
 	tup = SearchSysCacheCopy1(SUBSCRIPTIONOID, ObjectIdGetDatum(suboid));
@@ -1749,9 +1765,21 @@ UpdateTwoPhaseState(Oid suboid, char new_state)
 	memset(nulls, false, sizeof(nulls));
 	memset(replaces, false, sizeof(replaces));
 
-	/* And update/set two_phase state */
-	values[Anum_pg_subscription_subtwophasestate - 1] = CharGetDatum(new_state);
-	replaces[Anum_pg_subscription_subtwophasestate - 1] = true;
+	/* Update/set two_phase state if asked by the caller */
+	if (enable_twophase)
+	{
+		values[Anum_pg_subscription_subtwophasestate - 1] =
+			CharGetDatum(LOGICALREP_TWOPHASE_STATE_ENABLED);
+		replaces[Anum_pg_subscription_subtwophasestate - 1] = true;
+	}
+
+	/* Update/set failover state if asked by the caller */
+	if (enable_failover)
+	{
+		values[Anum_pg_subscription_subfailoverstate - 1] =
+			CharGetDatum(LOGICALREP_FAILOVER_STATE_ENABLED);
+		replaces[Anum_pg_subscription_subfailoverstate - 1] = true;
+	}
 
 	tup = heap_modify_tuple(tup, RelationGetDescr(rel),
 							values, nulls, replaces);

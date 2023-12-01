@@ -974,12 +974,13 @@ static void
 parseCreateReplSlotOptions(CreateReplicationSlotCmd *cmd,
 						   bool *reserve_wal,
 						   CRSSnapshotAction *snapshot_action,
-						   bool *two_phase)
+						   bool *two_phase, bool *failover)
 {
 	ListCell   *lc;
 	bool		snapshot_action_given = false;
 	bool		reserve_wal_given = false;
 	bool		two_phase_given = false;
+	bool		failover_given = false;
 
 	/* Parse options */
 	foreach(lc, cmd->options)
@@ -1029,6 +1030,15 @@ parseCreateReplSlotOptions(CreateReplicationSlotCmd *cmd,
 			two_phase_given = true;
 			*two_phase = defGetBoolean(defel);
 		}
+		else if (strcmp(defel->defname, "failover") == 0)
+		{
+			if (failover_given || cmd->kind != REPLICATION_KIND_LOGICAL)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			failover_given = true;
+			*failover = defGetBoolean(defel);
+		}
 		else
 			elog(ERROR, "unrecognized option: %s", defel->defname);
 	}
@@ -1045,6 +1055,7 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 	char	   *slot_name;
 	bool		reserve_wal = false;
 	bool		two_phase = false;
+	bool		failover = false;
 	CRSSnapshotAction snapshot_action = CRS_EXPORT_SNAPSHOT;
 	DestReceiver *dest;
 	TupOutputState *tstate;
@@ -1054,13 +1065,13 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 
 	Assert(!MyReplicationSlot);
 
-	parseCreateReplSlotOptions(cmd, &reserve_wal, &snapshot_action, &two_phase);
-
+	parseCreateReplSlotOptions(cmd, &reserve_wal, &snapshot_action, &two_phase,
+							   &failover);
 	if (cmd->kind == REPLICATION_KIND_PHYSICAL)
 	{
 		ReplicationSlotCreate(cmd->slotname, false,
 							  cmd->temporary ? RS_TEMPORARY : RS_PERSISTENT,
-							  false);
+							  false, false, SYNCSLOT_STATE_NONE);
 
 		if (reserve_wal)
 		{
@@ -1091,7 +1102,7 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 		 */
 		ReplicationSlotCreate(cmd->slotname, true,
 							  cmd->temporary ? RS_TEMPORARY : RS_EPHEMERAL,
-							  two_phase);
+							  two_phase, failover, SYNCSLOT_STATE_NONE);
 
 		/*
 		 * Do options check early so that we can bail before calling the
@@ -1243,7 +1254,47 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 static void
 DropReplicationSlot(DropReplicationSlotCmd *cmd)
 {
-	ReplicationSlotDrop(cmd->slotname, !cmd->wait);
+	ReplicationSlotDrop(cmd->slotname, !cmd->wait, true);
+}
+
+/*
+ * Process extra options given to ALTER_REPLICATION_SLOT.
+ */
+static void
+parseAlterReplSlotOptions(AlterReplicationSlotCmd *cmd, bool *failover)
+{
+	ListCell   *lc;
+	bool		failover_given = false;
+
+	/* Parse options */
+	foreach(lc, cmd->options)
+	{
+		DefElem    *defel = (DefElem *) lfirst(lc);
+
+		if (strcmp(defel->defname, "failover") == 0)
+		{
+			if (failover_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			failover_given = true;
+			*failover = defGetBoolean(defel);
+		}
+		else
+			elog(ERROR, "unrecognized option: %s", defel->defname);
+	}
+}
+
+/*
+ * Change the definition of a replication slot.
+ */
+static void
+AlterReplicationSlot(AlterReplicationSlotCmd *cmd)
+{
+	bool	failover = false;
+
+	parseAlterReplSlotOptions(cmd, &failover);
+	ReplicationSlotAlter(cmd->slotname, failover);
 }
 
 /*
@@ -1528,26 +1579,237 @@ WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId 
 }
 
 /*
+ * Wake up the logical walsender processes with failover-enabled slots if the
+ * physical slot of the current walsender is specified in standby_slot_names
+ * GUC.
+ */
+void
+PhysicalWakeupLogicalWalSnd(void)
+{
+	ListCell   *lc;
+	List	   *standby_slots;
+
+	Assert(MyReplicationSlot && SlotIsPhysical(MyReplicationSlot));
+
+	standby_slots = GetStandbySlotList(false);
+
+	foreach(lc, standby_slots)
+	{
+		char	   *name = lfirst(lc);
+
+		if (strcmp(name, NameStr(MyReplicationSlot->data.name)) == 0)
+		{
+			ConditionVariableBroadcast(&WalSndCtl->wal_confirm_rcv_cv);
+			return;
+		}
+	}
+}
+
+/*
+ * Reload the config file and reinitialize the standby slot list if the GUC
+ * standby_slot_names has changed.
+ */
+void
+WalSndRereadConfigAndReInitSlotList(List **standby_slots)
+{
+	char	   *pre_standby_slot_names = pstrdup(standby_slot_names);
+
+	ProcessConfigFile(PGC_SIGHUP);
+
+	if (strcmp(pre_standby_slot_names, standby_slot_names) != 0)
+	{
+		list_free(*standby_slots);
+		*standby_slots = GetStandbySlotList(true);
+	}
+
+	pfree(pre_standby_slot_names);
+}
+
+/*
+ * Filter the standby slots based on the specified log sequence number
+ * (wait_for_lsn).
+ *
+ * This function updates the passed standby_slots list, removing any slots that
+ * have already caught up to or surpassed the given wait_for_lsn. Additionally,
+ * it removes slots that have been invalidated, dropped, or converted to
+ * logical slots.
+ */
+void
+WalSndFilterStandbySlots(XLogRecPtr wait_for_lsn, List **standby_slots)
+{
+	ListCell   *lc;
+	List	   *standby_slots_cpy = *standby_slots;
+
+	foreach(lc, standby_slots_cpy)
+	{
+		char	   *name = lfirst(lc);
+		XLogRecPtr	restart_lsn = InvalidXLogRecPtr;
+		bool		invalidated = false;
+		char	   *warningfmt = NULL;
+		ReplicationSlot *slot;
+
+		slot = SearchNamedReplicationSlot(name, true);
+
+		if (slot && SlotIsPhysical(slot))
+		{
+			SpinLockAcquire(&slot->mutex);
+			restart_lsn = slot->data.restart_lsn;
+			invalidated = slot->data.invalidated != RS_INVAL_NONE;
+			SpinLockRelease(&slot->mutex);
+		}
+
+		/* Continue if the current slot hasn't caught up. */
+		if (!invalidated && !XLogRecPtrIsInvalid(restart_lsn) &&
+			restart_lsn < wait_for_lsn)
+		{
+			/* Log warning if no active_pid for this physical slot */
+			if (slot->active_pid == 0)
+				ereport(WARNING,
+						errmsg("replication slot \"%s\" specified in parameter \"%s\" does not have active_pid",
+							   name, "standby_slot_names"),
+						errdetail("Logical replication is waiting on the "
+								  "standby associated with \"%s\"", name),
+						errhint("Consider starting standby associated with "
+								"\"%s\" or amend standby_slot_names", name));
+
+			continue;
+		}
+
+		/*
+		 * It may happen that the slot specified in standby_slot_names GUC
+		 * value is dropped, so let's skip over it.
+		 */
+		else if (!slot)
+			warningfmt = _("replication slot \"%s\" specified in parameter \"%s\" does not exist, ignoring");
+
+		/*
+		 * If a logical slot name is provided in standby_slot_names, issue a
+		 * WARNING and skip it. Although logical slots are disallowed in the
+		 * GUC check_hook(validate_standby_slots), it is still possible for a
+		 * user to drop an existing physical slot and recreate a logical slot
+		 * with the same name. Since it is harmless, a WARNING should be
+		 * enough, no need to error-out.
+		 */
+		else if (SlotIsLogical(slot))
+			warningfmt = _("cannot have logical replication slot \"%s\" in parameter \"%s\", ignoring");
+
+		/*
+		 * Specified physical slot may have been invalidated, so no point in
+		 * waiting for it.
+		 */
+		else if (XLogRecPtrIsInvalid(restart_lsn) || invalidated)
+			warningfmt = _("physical slot \"%s\" specified in parameter \"%s\" has been invalidated, ignoring");
+		else
+			Assert(restart_lsn >= wait_for_lsn);
+
+		/*
+		 * Reaching here indicates that either the slot has passed the
+		 * wait_for_lsn or there is an issue with the slot that requires a
+		 * warning to be reported.
+		 */
+		if (warningfmt)
+			ereport(WARNING, errmsg(warningfmt, name, "standby_slot_names"));
+
+		standby_slots_cpy = foreach_delete_current(standby_slots_cpy, lc);
+	}
+
+	*standby_slots = standby_slots_cpy;
+}
+
+/*
+ * Wait for physical standby to confirm receiving the given lsn.
+ *
+ * Used by logical decoding SQL functions that acquired slot with failover
+ * enabled. It waits for physical standbys corresponding to the physical slots
+ * specified in the standby_slot_names GUC.
+ */
+void
+WalSndWaitForStandbyConfirmation(XLogRecPtr wait_for_lsn)
+{
+	List	   *standby_slots;
+
+	Assert(!am_walsender);
+
+	if (!MyReplicationSlot->data.failover)
+		return;
+
+	standby_slots = GetStandbySlotList(true);
+
+	ConditionVariablePrepareToSleep(&WalSndCtl->wal_confirm_rcv_cv);
+
+	for (;;)
+	{
+		long		sleeptime = -1;
+
+		CHECK_FOR_INTERRUPTS();
+
+		if (ConfigReloadPending)
+		{
+			ConfigReloadPending = false;
+			WalSndRereadConfigAndReInitSlotList(&standby_slots);
+		}
+
+		WalSndFilterStandbySlots(wait_for_lsn, &standby_slots);
+
+		/* Exit if done waiting for every slot. */
+		if (standby_slots == NIL)
+			break;
+
+		sleeptime = WalSndComputeSleeptime(GetCurrentTimestamp());
+
+		ConditionVariableTimedSleep(&WalSndCtl->wal_confirm_rcv_cv, sleeptime,
+									WAIT_EVENT_WAL_SENDER_WAIT_FOR_STANDBY_CONFIRMATION);
+	}
+
+	ConditionVariableCancelSleep();
+	list_free(standby_slots);
+}
+
+/*
  * Wait till WAL < loc is flushed to disk so it can be safely sent to client.
  *
- * Returns end LSN of flushed WAL.  Normally this will be >= loc, but
- * if we detect a shutdown request (either from postmaster or client)
- * we will return early, so caller must always check.
+ * If the walsender holds a logical slot that has enabled failover, the
+ * function also waits for all the specified streaming replication standby
+ * servers to confirm receipt of WAL up to RecentFlushPtr.
+ *
+ * Returns end LSN of flushed WAL.  Normally this will be >= loc, but if we
+ * detect a shutdown request (either from postmaster or client) we will return
+ * early, so caller must always check.
  */
 static XLogRecPtr
 WalSndWaitForWal(XLogRecPtr loc)
 {
 	int			wakeEvents;
+	bool		wait_for_standby = false;
+	uint32		wait_event;
+	List	   *standby_slots = NIL;
 	static XLogRecPtr RecentFlushPtr = InvalidXLogRecPtr;
 
+	if (MyReplicationSlot->data.failover)
+		standby_slots = GetStandbySlotList(true);
+
 	/*
-	 * Fast path to avoid acquiring the spinlock in case we already know we
-	 * have enough WAL available. This is particularly interesting if we're
-	 * far behind.
+	 * Check if all the standby servers have confirmed receipt of WAL up to
+	 * RecentFlushPtr if we already know we have enough WAL available.
+	 *
+	 * Note that we cannot directly return without checking the status of
+	 * standby servers because the standby_slot_names may have changed, which
+	 * means there could be new standby slots in the list that have not yet
+	 * caught up to the RecentFlushPtr.
 	 */
-	if (RecentFlushPtr != InvalidXLogRecPtr &&
-		loc <= RecentFlushPtr)
-		return RecentFlushPtr;
+	if (!XLogRecPtrIsInvalid(RecentFlushPtr) && loc <= RecentFlushPtr)
+	{
+		WalSndFilterStandbySlots(RecentFlushPtr, &standby_slots);
+
+		/*
+		 * Fast path to avoid acquiring the spinlock in case we already know we
+		 * have enough WAL available and all the standby servers have confirmed
+		 * receipt of WAL up to RecentFlushPtr. This is particularly interesting
+		 * if we're far behind.
+		 */
+		if (standby_slots == NIL)
+			return RecentFlushPtr;
+	}
 
 	/* Get a more recent flush pointer. */
 	if (!RecoveryInProgress())
@@ -1568,7 +1830,7 @@ WalSndWaitForWal(XLogRecPtr loc)
 		if (ConfigReloadPending)
 		{
 			ConfigReloadPending = false;
-			ProcessConfigFile(PGC_SIGHUP);
+			WalSndRereadConfigAndReInitSlotList(&standby_slots);
 			SyncRepInitConfig();
 		}
 
@@ -1583,8 +1845,18 @@ WalSndWaitForWal(XLogRecPtr loc)
 		if (got_STOPPING)
 			XLogBackgroundFlush();
 
+		/*
+		 * Update the standby slots that have not yet caught up to the flushed
+		 * position. It is good to wait up to RecentFlushPtr and then let it
+		 * send the changes to logical subscribers one by one which are
+		 * already covered in RecentFlushPtr without needing to wait on every
+		 * change for standby confirmation.
+		 */
+		if (wait_for_standby)
+			WalSndFilterStandbySlots(RecentFlushPtr, &standby_slots);
+
 		/* Update our idea of the currently flushed position. */
-		if (!RecoveryInProgress())
+		else if (!RecoveryInProgress())
 			RecentFlushPtr = GetFlushRecPtr(NULL);
 		else
 			RecentFlushPtr = GetXLogReplayRecPtr(NULL);
@@ -1612,8 +1884,14 @@ WalSndWaitForWal(XLogRecPtr loc)
 			!waiting_for_ping_response)
 			WalSndKeepalive(false, InvalidXLogRecPtr);
 
-		/* check whether we're done */
-		if (loc <= RecentFlushPtr)
+		if (loc > RecentFlushPtr)
+			wait_event = WAIT_EVENT_WAL_SENDER_WAIT_FOR_WAL;
+		else if (standby_slots)
+		{
+			wait_event = WAIT_EVENT_WAL_SENDER_WAIT_FOR_STANDBY_CONFIRMATION;
+			wait_for_standby = true;
+		}
+		else
 			break;
 
 		/* Waiting for new WAL. Since we need to wait, we're now caught up. */
@@ -1654,8 +1932,10 @@ WalSndWaitForWal(XLogRecPtr loc)
 		if (pq_is_send_pending())
 			wakeEvents |= WL_SOCKET_WRITEABLE;
 
-		WalSndWait(wakeEvents, sleeptime, WAIT_EVENT_WAL_SENDER_WAIT_FOR_WAL);
+		WalSndWait(wakeEvents, sleeptime, wait_event);
 	}
+
+	list_free(standby_slots);
 
 	/* reactivate latch so WalSndLoop knows to continue */
 	SetLatch(MyLatch);
@@ -1816,6 +2096,13 @@ exec_replication_command(const char *cmd_string)
 			cmdtag = "DROP_REPLICATION_SLOT";
 			set_ps_display(cmdtag);
 			DropReplicationSlot((DropReplicationSlotCmd *) cmd_node);
+			EndReplicationCommand(cmdtag);
+			break;
+
+		case T_AlterReplicationSlotCmd:
+			cmdtag = "ALTER_REPLICATION_SLOT";
+			set_ps_display(cmdtag);
+			AlterReplicationSlot((AlterReplicationSlotCmd *) cmd_node);
 			EndReplicationCommand(cmdtag);
 			break;
 
@@ -2049,6 +2336,7 @@ PhysicalConfirmReceivedLocation(XLogRecPtr lsn)
 	{
 		ReplicationSlotMarkDirty();
 		ReplicationSlotsComputeRequiredLSN();
+		PhysicalWakeupLogicalWalSnd();
 	}
 
 	/*
@@ -3311,6 +3599,8 @@ WalSndShmemInit(void)
 
 		ConditionVariableInit(&WalSndCtl->wal_flush_cv);
 		ConditionVariableInit(&WalSndCtl->wal_replay_cv);
+
+		ConditionVariableInit(&WalSndCtl->wal_confirm_rcv_cv);
 	}
 }
 
@@ -3380,8 +3670,14 @@ WalSndWait(uint32 socket_events, long timeout, uint32 wait_event)
 	 *
 	 * And, we use separate shared memory CVs for physical and logical
 	 * walsenders for selective wake ups, see WalSndWakeup() for more details.
+	 *
+	 * When the wait event is WAIT_FOR_STANDBY_CONFIRMATION, wait on another CV
+	 * that is woken up by physical walsenders when the walreceiver has
+	 * confirmed the receipt of LSN.
 	 */
-	if (MyWalSnd->kind == REPLICATION_KIND_PHYSICAL)
+	if (wait_event == WAIT_EVENT_WAL_SENDER_WAIT_FOR_STANDBY_CONFIRMATION)
+		ConditionVariablePrepareToSleep(&WalSndCtl->wal_confirm_rcv_cv);
+	else if (MyWalSnd->kind == REPLICATION_KIND_PHYSICAL)
 		ConditionVariablePrepareToSleep(&WalSndCtl->wal_flush_cv);
 	else if (MyWalSnd->kind == REPLICATION_KIND_LOGICAL)
 		ConditionVariablePrepareToSleep(&WalSndCtl->wal_replay_cv);

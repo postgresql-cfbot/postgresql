@@ -117,6 +117,7 @@
 #include "postmaster/syslogger.h"
 #include "replication/logicallauncher.h"
 #include "replication/walsender.h"
+#include "replication/worker_internal.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/pg_shmem.h"
@@ -1000,6 +1001,8 @@ PostmasterMain(int argc, char *argv[])
 	 * before any modules had a chance to take the background worker slots.
 	 */
 	ApplyLauncherRegister();
+
+	SlotSyncWorkerRegister();
 
 	/*
 	 * process any libraries that should be preloaded at postmaster start
@@ -5780,6 +5783,9 @@ bgworker_should_start_now(BgWorkerStartTime start_time)
 
 		case PM_HOT_STANDBY:
 			if (start_time == BgWorkerStart_ConsistentState)
+				return true;
+			else if (start_time == BgWorkerStart_ConsistentState_HotStandby &&
+					 pmState != PM_RUN)
 				return true;
 			/* fall through */
 

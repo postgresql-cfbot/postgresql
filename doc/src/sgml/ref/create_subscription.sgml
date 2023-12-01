@@ -399,6 +399,29 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
          </para>
         </listitem>
        </varlistentry>
+
+       <varlistentry id="sql-createsubscription-params-with-failover">
+        <term><literal>failover</literal> (<type>boolean</type>)</term>
+        <listitem>
+         <para>
+          Specifies whether the replication slot associated with the subscription
+          is enabled to be synced to the physical standbys so that logical
+          replication can be resumed from the new primary after failover.
+          The default is <literal>false</literal>.
+         </para>
+
+         <para>
+          The implementation of failover requires that replication
+          has successfully finished the initial table synchronization
+          phase. So even when <literal>failover</literal> is enabled for a
+          subscription, the internal failover state remains
+          temporarily <quote>pending</quote> until the initialization phase
+          completes. See column <structfield>subfailoverstate</structfield>
+          of <link linkend="catalog-pg-subscription"><structname>pg_subscription</structname></link>
+          to know the actual failover state.
+         </para>
+        </listitem>
+       </varlistentry>
       </variablelist></para>
 
     </listitem>

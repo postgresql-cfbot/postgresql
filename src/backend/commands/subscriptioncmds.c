@@ -71,6 +71,7 @@
 #define SUBOPT_RUN_AS_OWNER			0x00001000
 #define SUBOPT_LSN					0x00002000
 #define SUBOPT_ORIGIN				0x00004000
+#define SUBOPT_FAILOVER				0x00008000
 
 /* check if the 'val' has 'bits' set */
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
@@ -96,6 +97,7 @@ typedef struct SubOpts
 	bool		passwordrequired;
 	bool		runasowner;
 	char	   *origin;
+	bool		failover;
 	XLogRecPtr	lsn;
 } SubOpts;
 
@@ -157,6 +159,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 		opts->runasowner = false;
 	if (IsSet(supported_opts, SUBOPT_ORIGIN))
 		opts->origin = pstrdup(LOGICALREP_ORIGIN_ANY);
+	if (IsSet(supported_opts, SUBOPT_FAILOVER))
+		opts->failover = false;
 
 	/* Parse options */
 	foreach(lc, stmt_options)
@@ -325,6 +329,15 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 				ereport(ERROR,
 						errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						errmsg("unrecognized origin value: \"%s\"", opts->origin));
+		}
+		else if (IsSet(supported_opts, SUBOPT_FAILOVER) &&
+				 strcmp(defel->defname, "failover") == 0)
+		{
+			if (IsSet(opts->specified_opts, SUBOPT_FAILOVER))
+				errorConflictingDefElem(defel, pstate);
+
+			opts->specified_opts |= SUBOPT_FAILOVER;
+			opts->failover = defGetBoolean(defel);
 		}
 		else if (IsSet(supported_opts, SUBOPT_LSN) &&
 				 strcmp(defel->defname, "lsn") == 0)
@@ -591,7 +604,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 					  SUBOPT_SYNCHRONOUS_COMMIT | SUBOPT_BINARY |
 					  SUBOPT_STREAMING | SUBOPT_TWOPHASE_COMMIT |
 					  SUBOPT_DISABLE_ON_ERR | SUBOPT_PASSWORD_REQUIRED |
-					  SUBOPT_RUN_AS_OWNER | SUBOPT_ORIGIN);
+					  SUBOPT_RUN_AS_OWNER | SUBOPT_ORIGIN |
+					  SUBOPT_FAILOVER);
 	parse_subscription_options(pstate, stmt->options, supported_opts, &opts);
 
 	/*
@@ -710,6 +724,10 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 		publicationListToArray(publications);
 	values[Anum_pg_subscription_suborigin - 1] =
 		CStringGetTextDatum(opts.origin);
+	values[Anum_pg_subscription_subfailoverstate - 1] =
+		CharGetDatum(opts.failover ?
+					 LOGICALREP_FAILOVER_STATE_PENDING :
+					 LOGICALREP_FAILOVER_STATE_DISABLED);
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
@@ -746,6 +764,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 
 		PG_TRY();
 		{
+			bool		failover_enabled = false;
+
 			check_publications(wrconn, publications);
 			check_publications_origin(wrconn, publications, opts.copy_data,
 									  opts.origin, NULL, 0, stmt->subname);
@@ -775,6 +795,19 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 				AddSubscriptionRelState(subid, relid, table_state,
 										InvalidXLogRecPtr);
 			}
+
+			/*
+			 * Even if failover is set, don't create the slot with failover
+			 * enabled. Will enable it once all the tables are synced and
+			 * ready. The intention is that if failover happens at the time of
+			 * table-sync, user should re-launch the subscription instead of
+			 * relying on main slot (if synced) with no table-sync data
+			 * present. When the subscription has no tables, leave failover as
+			 * false to allow ALTER SUBSCRIPTION ... REFRESH PUBLICATION to
+			 * work.
+			 */
+			if (opts.failover && !opts.copy_data && tables != NIL)
+				failover_enabled = true;
 
 			/*
 			 * If requested, create permanent slot for the subscription. We
@@ -807,14 +840,33 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 					twophase_enabled = true;
 
 				walrcv_create_slot(wrconn, opts.slot_name, false, twophase_enabled,
-								   CRS_NOEXPORT_SNAPSHOT, NULL);
+								   failover_enabled, CRS_NOEXPORT_SNAPSHOT, NULL);
 
-				if (twophase_enabled)
-					UpdateTwoPhaseState(subid, LOGICALREP_TWOPHASE_STATE_ENABLED);
-
+				/* Update twophase and/or failover state */
+				EnableTwoPhaseFailoverTriState(subid, twophase_enabled,
+											   failover_enabled);
 				ereport(NOTICE,
 						(errmsg("created replication slot \"%s\" on publisher",
 								opts.slot_name)));
+			}
+
+			/*
+			 * If the slot_name is specified without the create_slot option, it
+			 * is possible that the user intends to use an existing slot on the
+			 * publisher, so here we alter the failover property of the slot to
+			 * match the failover value in subscription.
+			 *
+			 * We do not need to change the failover to false if the server
+			 * does not support failover (e.g. pre-PG17)
+			 */
+			else if (opts.slot_name &&
+					(failover_enabled || walrcv_server_version(wrconn) >= 170000))
+			{
+				walrcv_alter_slot(wrconn, opts.slot_name, failover_enabled);
+				ereport(NOTICE,
+						(errmsg("changed the failover state of replication slot \"%s\" on publisher to %s",
+								opts.slot_name,
+								failover_enabled ? "true" : "false")));
 			}
 		}
 		PG_FINALLY();
@@ -1279,13 +1331,21 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 								 errhint("Use ALTER SUBSCRIPTION ... SET PUBLICATION ... WITH (refresh = false).")));
 
 					/*
-					 * See ALTER_SUBSCRIPTION_REFRESH for details why this is
-					 * not allowed.
+					 * See ALTER_SUBSCRIPTION_REFRESH for details why copy_data
+					 * is not allowed when twophase or failover is enabled.
 					 */
 					if (sub->twophasestate == LOGICALREP_TWOPHASE_STATE_ENABLED && opts.copy_data)
 						ereport(ERROR,
 								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-								 errmsg("ALTER SUBSCRIPTION with refresh and copy_data is not allowed when two_phase is enabled"),
+						/* translator: %s is a subscription option */
+								 errmsg("ALTER SUBSCRIPTION with refresh and copy_data is not allowed when %s is enabled", "two_phase"),
+								 errhint("Use ALTER SUBSCRIPTION ... SET PUBLICATION with refresh = false, or with copy_data = false, or use DROP/CREATE SUBSCRIPTION.")));
+
+					if (sub->failoverstate == LOGICALREP_FAILOVER_STATE_ENABLED && opts.copy_data)
+						ereport(ERROR,
+								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						/* translator: %s is a subscription option */
+								 errmsg("ALTER SUBSCRIPTION with refresh and copy_data is not allowed when %s is enabled", "failover"),
 								 errhint("Use ALTER SUBSCRIPTION ... SET PUBLICATION with refresh = false, or with copy_data = false, or use DROP/CREATE SUBSCRIPTION.")));
 
 					PreventInTransactionBlock(isTopLevel, "ALTER SUBSCRIPTION with refresh");
@@ -1334,13 +1394,25 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 										 "ALTER SUBSCRIPTION ... DROP PUBLICATION ... WITH (refresh = false)")));
 
 					/*
-					 * See ALTER_SUBSCRIPTION_REFRESH for details why this is
-					 * not allowed.
+					 * See ALTER_SUBSCRIPTION_REFRESH for details why copy_data
+					 * is not allowed when twophase or failover is enabled.
 					 */
 					if (sub->twophasestate == LOGICALREP_TWOPHASE_STATE_ENABLED && opts.copy_data)
 						ereport(ERROR,
 								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-								 errmsg("ALTER SUBSCRIPTION with refresh and copy_data is not allowed when two_phase is enabled"),
+						/* translator: %s is a subscription option */
+								 errmsg("ALTER SUBSCRIPTION with refresh and copy_data is not allowed when %s is enabled", "two_phase"),
+						/* translator: %s is an SQL ALTER command */
+								 errhint("Use %s with refresh = false, or with copy_data = false, or use DROP/CREATE SUBSCRIPTION.",
+										 isadd ?
+										 "ALTER SUBSCRIPTION ... ADD PUBLICATION" :
+										 "ALTER SUBSCRIPTION ... DROP PUBLICATION")));
+
+					if (sub->failoverstate == LOGICALREP_FAILOVER_STATE_ENABLED && opts.copy_data)
+						ereport(ERROR,
+								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						/* translator: %s is a subscription option */
+								 errmsg("ALTER SUBSCRIPTION with refresh and copy_data is not allowed when %s is enabled", "failover"),
 						/* translator: %s is an SQL ALTER command */
 								 errhint("Use %s with refresh = false, or with copy_data = false, or use DROP/CREATE SUBSCRIPTION.",
 										 isadd ?
@@ -1389,7 +1461,19 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 				if (sub->twophasestate == LOGICALREP_TWOPHASE_STATE_ENABLED && opts.copy_data)
 					ereport(ERROR,
 							(errcode(ERRCODE_SYNTAX_ERROR),
-							 errmsg("ALTER SUBSCRIPTION ... REFRESH with copy_data is not allowed when two_phase is enabled"),
+					/* translator: %s is a subscription option */
+							 errmsg("ALTER SUBSCRIPTION ... REFRESH with copy_data is not allowed when %s is enabled", "two_phase"),
+							 errhint("Use ALTER SUBSCRIPTION ... REFRESH with copy_data = false, or use DROP/CREATE SUBSCRIPTION.")));
+
+				/*
+				 * See comments above for twophasestate, same holds true for
+				 * 'failover'
+				 */
+				if (sub->failoverstate == LOGICALREP_FAILOVER_STATE_ENABLED && opts.copy_data)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+					/* translator: %s is a subscription option */
+							 errmsg("ALTER SUBSCRIPTION ... REFRESH with copy_data is not allowed when %s is enabled", "failover"),
 							 errhint("Use ALTER SUBSCRIPTION ... REFRESH with copy_data = false, or use DROP/CREATE SUBSCRIPTION.")));
 
 				PreventInTransactionBlock(isTopLevel, "ALTER SUBSCRIPTION ... REFRESH");

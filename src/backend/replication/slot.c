@@ -47,11 +47,15 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "replication/slot.h"
+#include "replication/walsender.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "utils/builtins.h"
+#include "utils/guc_hooks.h"
+#include "utils/memutils.h"
+#include "utils/varlena.h"
 
 /*
  * Replication slot on-disk data structure.
@@ -90,7 +94,7 @@ typedef struct ReplicationSlotOnDisk
 	sizeof(ReplicationSlotOnDisk) - ReplicationSlotOnDiskConstantSize
 
 #define SLOT_MAGIC		0x1051CA1	/* format identifier */
-#define SLOT_VERSION	3		/* version for new files */
+#define SLOT_VERSION	4		/* version for new files */
 
 /* Control array for replication slot management */
 ReplicationSlotCtlData *ReplicationSlotCtl = NULL;
@@ -98,9 +102,18 @@ ReplicationSlotCtlData *ReplicationSlotCtl = NULL;
 /* My backend's replication slot in the shared memory array */
 ReplicationSlot *MyReplicationSlot = NULL;
 
-/* GUC variable */
+/* GUC variables */
 int			max_replication_slots = 10; /* the maximum number of replication
 										 * slots */
+
+/*
+ * This GUC lists streaming replication standby server slot names that
+ * logical WAL sender processes will wait for.
+ */
+char	   *standby_slot_names;
+
+/* This is parsed and cached list for raw standby_slot_names. */
+static List *standby_slot_names_list = NIL;
 
 static void ReplicationSlotShmemExit(int code, Datum arg);
 static void ReplicationSlotDropAcquired(void);
@@ -251,7 +264,8 @@ ReplicationSlotValidateName(const char *name, int elevel)
  */
 void
 ReplicationSlotCreate(const char *name, bool db_specific,
-					  ReplicationSlotPersistency persistency, bool two_phase)
+					  ReplicationSlotPersistency persistency,
+					  bool two_phase, bool failover, char sync_state)
 {
 	ReplicationSlot *slot = NULL;
 	int			i;
@@ -311,6 +325,8 @@ ReplicationSlotCreate(const char *name, bool db_specific,
 	slot->data.persistency = persistency;
 	slot->data.two_phase = two_phase;
 	slot->data.two_phase_at = InvalidXLogRecPtr;
+	slot->data.failover = failover;
+	slot->data.sync_state = sync_state;
 
 	/* and then data only present in shared memory */
 	slot->just_dirtied = false;
@@ -670,13 +686,52 @@ restart:
  * Permanently drop replication slot identified by the passed in name.
  */
 void
-ReplicationSlotDrop(const char *name, bool nowait)
+ReplicationSlotDrop(const char *name, bool nowait, bool user_cmd)
 {
 	Assert(MyReplicationSlot == NULL);
 
 	ReplicationSlotAcquire(name, nowait);
 
+	/*
+	 * Do not allow users to drop the slots which are currently being synced
+	 * from the primary to the standby.
+	 */
+	if (user_cmd && RecoveryInProgress() &&
+		MyReplicationSlot->data.sync_state != SYNCSLOT_STATE_NONE)
+	{
+		ReplicationSlotRelease();
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("cannot drop replication slot \"%s\"", name),
+				 errdetail("This slot is being synced from the primary.")));
+	}
+
 	ReplicationSlotDropAcquired();
+}
+
+/*
+ * Change the definition of the slot identified by the specified name.
+ */
+void
+ReplicationSlotAlter(const char *name, bool failover)
+{
+	Assert(MyReplicationSlot == NULL);
+
+	ReplicationSlotAcquire(name, true);
+
+	if (SlotIsPhysical(MyReplicationSlot))
+		ereport(ERROR,
+				errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				errmsg("cannot use %s with a physical replication slot",
+					   "ALTER_REPLICATION_SLOT"));
+
+	SpinLockAcquire(&MyReplicationSlot->mutex);
+	MyReplicationSlot->data.failover = failover;
+	SpinLockRelease(&MyReplicationSlot->mutex);
+
+	ReplicationSlotMarkDirty();
+	ReplicationSlotSave();
+	ReplicationSlotRelease();
 }
 
 /*
@@ -2158,4 +2213,141 @@ RestoreSlotFromDisk(const char *name)
 		ereport(FATAL,
 				(errmsg("too many replication slots active before shutdown"),
 				 errhint("Increase max_replication_slots and try again.")));
+}
+
+/*
+ * A helper function to validate slots specified in GUC standby_slot_names.
+ */
+static bool
+validate_standby_slots(char **newval)
+{
+	char	   *rawname;
+	List	   *elemlist;
+	ListCell   *lc;
+
+	/* Need a modifiable copy of string */
+	rawname = pstrdup(*newval);
+
+	/* Verify syntax and parse string into list of identifiers */
+	if (!SplitIdentifierString(rawname, ',', &elemlist))
+	{
+		/* syntax error in name list */
+		GUC_check_errdetail("List syntax is invalid.");
+		goto ret_standby_slot_names_ng;
+	}
+
+	/*
+	 * Verify 'type' of slot now.
+	 *
+	 * Skip check if replication slots' data is not initialized yet i.e. we
+	 * are in startup process.
+	 */
+	if (!ReplicationSlotCtl)
+		goto ret_standby_slot_names_ok;
+
+	foreach(lc, elemlist)
+	{
+		char	   *name = lfirst(lc);
+		ReplicationSlot *slot;
+
+		slot = SearchNamedReplicationSlot(name, true);
+
+		if (!slot)
+			goto ret_standby_slot_names_ng;
+
+		if (!SlotIsPhysical(slot))
+		{
+			GUC_check_errdetail("\"%s\" is not a physical replication slot",
+								name);
+			goto ret_standby_slot_names_ng;
+		}
+	}
+
+ret_standby_slot_names_ok:
+
+	pfree(rawname);
+	list_free(elemlist);
+	return true;
+
+ret_standby_slot_names_ng:
+
+	pfree(rawname);
+	list_free(elemlist);
+	return false;
+}
+
+/*
+ * GUC check_hook for standby_slot_names
+ */
+bool
+check_standby_slot_names(char **newval, void **extra, GucSource source)
+{
+	if (strcmp(*newval, "") == 0)
+		return true;
+
+	/*
+	 * "*" is not accepted as in that case primary will not be able to know
+	 * for which all standbys to wait for. Even if we have physical-slots
+	 * info, there is no way to confirm whether there is any standby
+	 * configured for the known physical slots.
+	 */
+	if (strcmp(*newval, "*") == 0)
+	{
+		GUC_check_errdetail("\"%s\" is not accepted for standby_slot_names",
+							*newval);
+		return false;
+	}
+
+	/* Now verify if the specified slots really exist and have correct type */
+	if (!validate_standby_slots(newval))
+		return false;
+
+	*extra = guc_strdup(ERROR, *newval);
+
+	return true;
+}
+
+/*
+ * GUC assign_hook for standby_slot_names
+ */
+void
+assign_standby_slot_names(const char *newval, void *extra)
+{
+	List	   *standby_slots;
+	MemoryContext oldcxt;
+	char	   *standby_slot_names_cpy = extra;
+
+	list_free(standby_slot_names_list);
+	standby_slot_names_list = NIL;
+
+	/* No value is specified for standby_slot_names. */
+	if (standby_slot_names_cpy == NULL)
+		return;
+
+	if (!SplitIdentifierString(standby_slot_names_cpy, ',', &standby_slots))
+	{
+		/* This should not happen if GUC checked check_standby_slot_names. */
+		elog(ERROR, "invalid list syntax");
+	}
+
+	/*
+	 * Switch to the same memory context under which GUC variables are
+	 * allocated (GUCMemoryContext).
+	 */
+	oldcxt = MemoryContextSwitchTo(GetMemoryChunkContext(standby_slot_names_cpy));
+	standby_slot_names_list = list_copy(standby_slots);
+	MemoryContextSwitchTo(oldcxt);
+}
+
+/*
+ * Return a copy of standby_slot_names_list if the copy flag is set to true,
+ * otherwise return the original list.
+ */
+List *
+GetStandbySlotList(bool copy)
+{
+	if (copy)
+		return list_copy(standby_slot_names_list);
+	else
+		return standby_slot_names_list;
 }

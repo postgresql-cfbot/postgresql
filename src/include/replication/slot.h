@@ -15,7 +15,6 @@
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
 #include "storage/spin.h"
-#include "replication/walreceiver.h"
 
 /*
  * Behaviour of replication slots, upon release or crash.
@@ -51,6 +50,14 @@ typedef enum ReplicationSlotInvalidationCause
 	/* wal_level insufficient for slot */
 	RS_INVAL_WAL_LEVEL,
 } ReplicationSlotInvalidationCause;
+
+/* The possible values for 'sync_state' in ReplicationSlotPersistentData */
+#define SYNCSLOT_STATE_NONE          'n'	/* None for user created slots */
+#define SYNCSLOT_STATE_INITIATED     'i'	/* Sync initiated for the slot but
+											 * not completed yet, waiting for
+											 * the primary server to catch-up */
+#define SYNCSLOT_STATE_READY         'r'	/* Initialization complete, ready
+											 * to be synced further */
 
 /*
  * On-Disk data of a replication slot, preserved across restarts.
@@ -111,6 +118,19 @@ typedef struct ReplicationSlotPersistentData
 
 	/* plugin name */
 	NameData	plugin;
+
+	/*
+	 * Is this a slot created by a sync-slot worker?
+	 *
+	 * Relevant for logical slots on the physical standby.
+	 */
+	char		sync_state;
+
+	/*
+	 * Is this a failover slot (sync candidate for physical standbys)?
+	 * Only relevant for logical slots on the primary server.
+	 */
+	bool		failover;
 } ReplicationSlotPersistentData;
 
 /*
@@ -210,6 +230,7 @@ extern PGDLLIMPORT ReplicationSlot *MyReplicationSlot;
 
 /* GUCs */
 extern PGDLLIMPORT int max_replication_slots;
+extern PGDLLIMPORT char *standby_slot_names;
 
 /* shmem initialization functions */
 extern Size ReplicationSlotsShmemSize(void);
@@ -218,9 +239,11 @@ extern void ReplicationSlotsShmemInit(void);
 /* management of individual slots */
 extern void ReplicationSlotCreate(const char *name, bool db_specific,
 								  ReplicationSlotPersistency persistency,
-								  bool two_phase);
+								  bool two_phase, bool failover,
+								  char sync_state);
 extern void ReplicationSlotPersist(void);
-extern void ReplicationSlotDrop(const char *name, bool nowait);
+extern void ReplicationSlotDrop(const char *name, bool nowait, bool user_cmd);
+extern void ReplicationSlotAlter(const char *name, bool failover);
 
 extern void ReplicationSlotAcquire(const char *name, bool nowait);
 extern void ReplicationSlotRelease(void);
@@ -245,12 +268,13 @@ extern ReplicationSlot *SearchNamedReplicationSlot(const char *name, bool need_l
 extern int	ReplicationSlotIndex(ReplicationSlot *slot);
 extern bool ReplicationSlotName(int index, Name name);
 extern void ReplicationSlotNameForTablesync(Oid suboid, Oid relid, char *syncslotname, Size szslot);
-extern void ReplicationSlotDropAtPubNode(WalReceiverConn *wrconn, char *slotname, bool missing_ok);
 
 extern void StartupReplicationSlots(void);
 extern void CheckPointReplicationSlots(bool is_shutdown);
 
 extern void CheckSlotRequirements(void);
 extern void CheckSlotPermissions(void);
+
+extern List *GetStandbySlotList(bool copy);
 
 #endif							/* SLOT_H */

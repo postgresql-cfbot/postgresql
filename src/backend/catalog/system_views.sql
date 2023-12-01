@@ -1023,7 +1023,9 @@ CREATE VIEW pg_replication_slots AS
             L.wal_status,
             L.safe_wal_size,
             L.two_phase,
-            L.conflicting
+            L.conflicting,
+            L.failover,
+            L.sync_state
     FROM pg_get_replication_slots() AS L
             LEFT JOIN pg_database D ON (L.datoid = D.oid);
 
@@ -1354,7 +1356,8 @@ REVOKE ALL ON pg_subscription FROM public;
 GRANT SELECT (oid, subdbid, subskiplsn, subname, subowner, subenabled,
               subbinary, substream, subtwophasestate, subdisableonerr,
 			  subpasswordrequired, subrunasowner,
-              subslotname, subsynccommit, subpublications, suborigin)
+              subslotname, subsynccommit, subpublications, suborigin,
+              subfailoverstate)
     ON pg_subscription TO public;
 
 CREATE VIEW pg_stat_subscription_stats AS

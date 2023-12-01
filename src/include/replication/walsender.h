@@ -14,6 +14,9 @@
 
 #include <signal.h>
 
+#include "access/xlogdefs.h"
+#include "nodes/pg_list.h"
+
 /*
  * What to do with a snapshot in create replication slot command.
  */
@@ -47,6 +50,12 @@ extern void WalSndInitStopping(void);
 extern void WalSndWaitStopping(void);
 extern void HandleWalSndInitStopping(void);
 extern void WalSndRqstFileReload(void);
+extern void PhysicalWakeupLogicalWalSnd(void);
+extern void WalSndFilterStandbySlots(XLogRecPtr wait_for_lsn,
+									 List **standby_slots);
+extern void WalSndWaitForStandbyConfirmation(XLogRecPtr wait_for_lsn);
+extern List *WalSndGetStandbySlots(void);
+extern void WalSndRereadConfigAndReInitSlotList(List **standby_slots);
 
 /*
  * Remember that we want to wakeup walsenders later

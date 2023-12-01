@@ -79,6 +79,7 @@ typedef enum
 	BgWorkerStart_PostmasterStart,
 	BgWorkerStart_ConsistentState,
 	BgWorkerStart_RecoveryFinished,
+	BgWorkerStart_ConsistentState_HotStandby,
 } BgWorkerStartTime;
 
 #define BGW_DEFAULT_RESTART_INTERVAL	60

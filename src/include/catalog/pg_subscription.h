@@ -32,6 +32,14 @@
 #define LOGICALREP_TWOPHASE_STATE_ENABLED 'e'
 
 /*
+ * failover tri-state values. See comments atop worker.c to know more about
+ * these states.
+ */
+#define LOGICALREP_FAILOVER_STATE_DISABLED 'd'
+#define LOGICALREP_FAILOVER_STATE_PENDING 'p'
+#define LOGICALREP_FAILOVER_STATE_ENABLED 'e'
+
+/*
  * The subscription will request the publisher to only send changes that do not
  * have any origin.
  */
@@ -93,6 +101,8 @@ CATALOG(pg_subscription,6100,SubscriptionRelationId) BKI_SHARED_RELATION BKI_ROW
 	bool		subrunasowner;	/* True if replication should execute as the
 								 * subscription owner */
 
+	char		subfailoverstate;	/* Failover state */
+
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 	/* Connection string to the publisher */
 	text		subconninfo BKI_FORCE_NOT_NULL;
@@ -145,6 +155,7 @@ typedef struct Subscription
 	List	   *publications;	/* List of publication names to subscribe to */
 	char	   *origin;			/* Only publish data originating from the
 								 * specified origin */
+	char		failoverstate;	/* Allow slot to be synchronized for failover */
 } Subscription;
 
 /* Disallow streaming in-progress transactions. */

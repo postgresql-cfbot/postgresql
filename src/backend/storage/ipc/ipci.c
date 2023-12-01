@@ -36,6 +36,7 @@
 #include "replication/slot.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
+#include "replication/worker_internal.h"
 #include "storage/bufmgr.h"
 #include "storage/dsm.h"
 #include "storage/ipc.h"
@@ -293,6 +294,7 @@ CreateSharedMemoryAndSemaphores(void)
 	WalRcvShmemInit();
 	PgArchShmemInit();
 	ApplyLauncherShmemInit();
+	SlotSyncWorkerShmemInit();
 
 	/*
 	 * Set up other modules that need some shared memory space

@@ -73,6 +73,7 @@ GetSubscription(Oid subid, bool missing_ok)
 	sub->disableonerr = subform->subdisableonerr;
 	sub->passwordrequired = subform->subpasswordrequired;
 	sub->runasowner = subform->subrunasowner;
+	sub->failoverstate = subform->subfailoverstate;
 
 	/* Get conninfo */
 	datum = SysCacheGetAttrNotNull(SUBSCRIPTIONOID,

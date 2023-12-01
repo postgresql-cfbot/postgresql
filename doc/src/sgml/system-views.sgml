@@ -2532,6 +2532,42 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
        invalidated). Always NULL for physical slots.
       </para></entry>
      </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>failover</structfield> <type>bool</type>
+      </para>
+      <para>
+       True if this logical slot is enabled to be synced to the physical
+       standbys so that logical replication can be resumed from the new primary
+       after failover. Always false for physical slots.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>sync_state</structfield> <type>char</type>
+      </para>
+      <para>
+      Defines slot synchronization state. This is meaningful on the physical
+      standby which has enabled slots synchronization.
+      </para>
+      <para>
+       State code:
+       <literal>n</literal> = none for user created slots,
+       <literal>i</literal> = sync initiated for the slot but slot is not ready
+        yet for periodic syncs,
+       <literal>r</literal> = ready for periodic syncs.
+      </para>
+      <para>
+      The hot standby can have any of these sync_state for the slots but on a
+      hot standby, the slots with state 'r' and 'i' can neither be used for logical
+      decoded nor dropped by the user. The primary server will have sync_state
+      as 'n' for all the slots. But if the standby is promoted to become the
+      new primary server, sync_state can be seen 'r' as well. On this new
+      primary server, slots with sync_state as 'r' and 'n' will behave the same.
+      </para></entry>
+     </row>
     </tbody>
    </tgroup>
   </table>

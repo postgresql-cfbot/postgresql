@@ -85,6 +85,7 @@ AlterOwnerStmt
 AlterPolicyStmt
 AlterPublicationAction
 AlterPublicationStmt
+AlterReplicationSlotCmd
 AlterRoleSetStmt
 AlterRoleStmt
 AlterSeqStmt
@@ -2316,6 +2317,7 @@ RelocationBufferInfo
 RelptrFreePageBtree
 RelptrFreePageManager
 RelptrFreePageSpanLeader
+RemoteSlot
 RenameStmt
 ReopenPtrType
 ReorderBuffer
@@ -2574,6 +2576,7 @@ SlabBlock
 SlabContext
 SlabSlot
 SlotNumber
+SlotSyncWorkerCtx
 SlruCtl
 SlruCtlData
 SlruErrorCause
@@ -3865,6 +3868,7 @@ varattrib_1b_e
 varattrib_4b
 vbits
 verifier_context
+walrcv_alter_slot_fn
 walrcv_check_conninfo_fn
 walrcv_connect_fn
 walrcv_create_slot_fn

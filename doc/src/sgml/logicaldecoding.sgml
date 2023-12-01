@@ -346,6 +346,19 @@ postgres=# select * from pg_logical_slot_get_changes('regression_slot', NULL, NU
      <function>pg_log_standby_snapshot</function> function on the primary.
     </para>
 
+    <para>
+     A logical replication slot on the primary can be synchronized to the hot
+     standby by enabling the failover option during slot creation and set
+     <varname>enable_syncslot</varname> on the standby. The physical replication
+     slot for the standby should be listed in
+     <varname>standby_slot_names</varname> on the primary to prevent the
+     subscriber from consuming changes faster than the hot standby.
+     Additionally, similar to creating a logical replication slot on the hot
+     standby, <varname>hot_standby_feedback</varname> should be set on the
+     standby and a physical slot between the primary and the standby should be
+     used.
+    </para>
+
     <caution>
      <para>
       Replication slots persist across crashes and know nothing about the state

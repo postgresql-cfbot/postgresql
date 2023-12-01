@@ -60,6 +60,7 @@
 #include "replication/logicalworker.h"
 #include "replication/slot.h"
 #include "replication/walsender.h"
+#include "replication/worker_internal.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
@@ -3282,6 +3283,17 @@ ProcessInterrupts(void)
 
 			/*
 			 * The logical replication launcher can be stopped at any time.
+			 * Use exit status 1 so the background worker is restarted.
+			 */
+			proc_exit(1);
+		}
+		else if (IsSlotSyncWorker())
+		{
+			ereport(DEBUG1,
+					(errmsg_internal("replication slot sync worker is shutting down due to administrator command")));
+
+			/*
+			 * Slot sync worker can be stopped at any time.
 			 * Use exit status 1 so the background worker is restarted.
 			 */
 			proc_exit(1);

@@ -132,6 +132,37 @@
  * avoid such deadlocks, we generate a unique GID (consisting of the
  * subscription oid and the xid of the prepared transaction) for each prepare
  * transaction on the subscriber.
+ *
+ * FAILOVER
+ * ----------------------
+ * The logical slot on the primary can be synced to the standby by specifying
+ * failover = true when creating the subscription. Enabling failover allows us
+ * to smoothly transition to the promoted standby, ensuring that we can
+ * subscribe to the new primary without losing any data.
+ *
+ * However, we do not enable failover for slots created by the table sync
+ * worker. This is because the table sync slot might not be fully synced on the
+ * standby. During syncing, the local restart_lsn and/or local catalog_xmin of
+ * the newly created slot on the standby are typically ahead of those on the
+ * primary. Therefore, the standby needs to wait for the primary server's
+ * restart_lsn and catalog_xmin to catch up, which takes time.
+ *
+ * Additionally, failover is not enabled for the main slot if the table sync is
+ * in progress. This is because if a failover occurs while the table sync
+ * worker has reached a certain state (SUBREL_STATE_FINISHEDCOPY or
+ * SUBREL_STATE_DATASYNC), replication will not be able to continue from the
+ * new primary node.
+ *
+ * As a result, we enable the failover option for the main slot only after the
+ * initial sync is complete. The failover option is implemented as a tri-state
+ * with values DISABLED, PENDING, and ENABLED. The state transition process
+ * between these values is the same as the two_phase option (see TWO_PHASE
+ * TRANSACTIONS for details).
+ *
+ * During the startup of the apply worker, it checks if all table syncs are in
+ * the READY state for a failover tri-state of PENDING. If so, it alters the
+ * main slot's failover property to true and updates the tri-state value from
+ * PENDING to ENABLED.
  *-------------------------------------------------------------------------
  */
 
@@ -3947,6 +3978,7 @@ maybe_reread_subscription(void)
 		newsub->passwordrequired != MySubscription->passwordrequired ||
 		strcmp(newsub->origin, MySubscription->origin) != 0 ||
 		newsub->owner != MySubscription->owner ||
+		newsub->failoverstate != MySubscription->failoverstate ||
 		!equal(newsub->publications, MySubscription->publications))
 	{
 		if (am_parallel_apply_worker())
@@ -4482,6 +4514,8 @@ run_apply_worker()
 	TimeLineID	startpointTLI;
 	char	   *err;
 	bool		must_use_password;
+	bool		twophase_pending;
+	bool		failover_pending;
 
 	slotname = MySubscription->slotname;
 
@@ -4538,17 +4572,38 @@ run_apply_worker()
 	 * Note: If the subscription has no tables then leave the state as
 	 * PENDING, which allows ALTER SUBSCRIPTION ... REFRESH PUBLICATION to
 	 * work.
+	 *
+	 * Same goes for 'failover'. It is enabled only if subscription has tables
+	 * and all the tablesyncs have reached READY state, until then it remains
+	 * as PENDING.
 	 */
-	if (MySubscription->twophasestate == LOGICALREP_TWOPHASE_STATE_PENDING &&
-		AllTablesyncsReady())
+	twophase_pending =
+		(MySubscription->twophasestate == LOGICALREP_TWOPHASE_STATE_PENDING);
+	failover_pending =
+		(MySubscription->failoverstate == LOGICALREP_FAILOVER_STATE_PENDING);
+
+	if ((twophase_pending || failover_pending) && AllTablesyncsReady())
 	{
 		/* Start streaming with two_phase enabled */
-		options.proto.logical.twophase = true;
+		if (twophase_pending)
+			options.proto.logical.twophase = true;
+
+		if (failover_pending)
+			walrcv_alter_slot(LogRepWorkerWalRcvConn, slotname, true);
+
 		walrcv_startstreaming(LogRepWorkerWalRcvConn, &options);
 
 		StartTransactionCommand();
-		UpdateTwoPhaseState(MySubscription->oid, LOGICALREP_TWOPHASE_STATE_ENABLED);
-		MySubscription->twophasestate = LOGICALREP_TWOPHASE_STATE_ENABLED;
+
+		/* Update twophase and/or failover */
+		EnableTwoPhaseFailoverTriState(MySubscription->oid, twophase_pending,
+									   failover_pending);
+		if (twophase_pending)
+			MySubscription->twophasestate = LOGICALREP_TWOPHASE_STATE_ENABLED;
+
+		if (failover_pending)
+			MySubscription->failoverstate = LOGICALREP_FAILOVER_STATE_ENABLED;
+
 		CommitTransactionCommand();
 	}
 	else
@@ -4557,11 +4612,15 @@ run_apply_worker()
 	}
 
 	ereport(DEBUG1,
-			(errmsg_internal("logical replication apply worker for subscription \"%s\" two_phase is %s",
+			(errmsg_internal("logical replication apply worker for subscription \"%s\" two_phase is %s and failover is %s",
 							 MySubscription->name,
 							 MySubscription->twophasestate == LOGICALREP_TWOPHASE_STATE_DISABLED ? "DISABLED" :
 							 MySubscription->twophasestate == LOGICALREP_TWOPHASE_STATE_PENDING ? "PENDING" :
 							 MySubscription->twophasestate == LOGICALREP_TWOPHASE_STATE_ENABLED ? "ENABLED" :
+							 "?",
+							 MySubscription->failoverstate == LOGICALREP_FAILOVER_STATE_DISABLED ? "DISABLED" :
+							 MySubscription->failoverstate == LOGICALREP_FAILOVER_STATE_PENDING ? "PENDING" :
+							 MySubscription->failoverstate == LOGICALREP_FAILOVER_STATE_ENABLED ? "ENABLED" :
 							 "?")));
 
 	/* Run the main loop. */

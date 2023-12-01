@@ -50,6 +50,7 @@
 #include "postmaster/startup.h"
 #include "replication/slot.h"
 #include "replication/walreceiver.h"
+#include "replication/worker_internal.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
@@ -1434,6 +1435,15 @@ FinishWalRecovery(void)
 	 * start writing WAL.
 	 */
 	XLogShutdownWalRcv();
+
+	/*
+	 * Shutdown the slot sync workers to prevent potential conflicts between
+	 * user processes and slotsync workers after a promotion. Additionally,
+	 * drop any slots that have initiated but not yet completed the sync
+	 * process.
+	 */
+	ShutDownSlotSync();
+	slotsync_drop_initiated_slots();
 
 	/*
 	 * We are now done reading the xlog from stream. Turn off streaming

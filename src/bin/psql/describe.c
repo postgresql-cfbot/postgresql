@@ -6563,7 +6563,8 @@ describeSubscriptions(const char *pattern, bool verbose)
 	PGresult   *res;
 	printQueryOpt myopt = pset.popt;
 	static const bool translate_columns[] = {false, false, false, false,
-	false, false, false, false, false, false, false, false, false, false};
+		false, false, false, false, false, false, false, false, false, false,
+	false};
 
 	if (pset.sversion < 100000)
 	{
@@ -6626,6 +6627,11 @@ describeSubscriptions(const char *pattern, bool verbose)
 							  gettext_noop("Origin"),
 							  gettext_noop("Password required"),
 							  gettext_noop("Run as owner?"));
+
+		if (pset.sversion >= 170000)
+			appendPQExpBuffer(&buf,
+							  ", subfailoverstate AS \"%s\"\n",
+							  gettext_noop("Failover"));
 
 		appendPQExpBuffer(&buf,
 						  ",  subsynccommit AS \"%s\"\n"

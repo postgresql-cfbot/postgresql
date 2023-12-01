@@ -73,11 +73,14 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
 
    These commands also cannot be executed when the subscription has
    <link linkend="sql-createsubscription-params-with-two-phase"><literal>two_phase</literal></link>
-   commit enabled, unless
+   commit enabled or
+   <link linkend="sql-createsubscription-params-with-failover"><literal>failover</literal></link>
+   enabled, unless
    <link linkend="sql-createsubscription-params-with-copy-data"><literal>copy_data</literal></link>
    is <literal>false</literal>. See column <structfield>subtwophasestate</structfield>
-   of <link linkend="catalog-pg-subscription"><structname>pg_subscription</structname></link>
-   to know the actual two-phase state.
+   and <structfield>subfailoverstate</structfield> of
+   <link linkend="catalog-pg-subscription"><structname>pg_subscription</structname></link>
+   to know the actual state.
   </para>
  </refsect1>
 
@@ -229,6 +232,17 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
       <link linkend="sql-createsubscription-params-with-run-as-owner"><literal>run_as_owner</literal></link>, and
       <link linkend="sql-createsubscription-params-with-origin"><literal>origin</literal></link>.
       Only a superuser can set <literal>password_required = false</literal>.
+     </para>
+
+     <para>
+      When altering the
+      <link linkend="sql-createsubscription-params-with-slot-name"><literal>slot_name</literal></link>,
+      the <literal>failover</literal> property of the new slot may differ from the
+      <link linkend="sql-createsubscription-params-with-failover"><literal>failover</literal></link>
+      parameter specified in the subscription. When creating the slot,
+      ensure the slot failover property matches the
+      <link linkend="sql-createsubscription-params-with-failover"><literal>failover</literal></link>
+      parameter value of the subscription.
      </para>
     </listitem>
    </varlistentry>

@@ -239,6 +239,11 @@ extern PGDLLIMPORT bool in_remote_transaction;
 
 extern PGDLLIMPORT bool InitializingApplyWorker;
 
+/* Slot sync worker objects */
+extern PGDLLIMPORT char *PrimaryConnInfo;
+extern PGDLLIMPORT char *PrimarySlotName;
+extern PGDLLIMPORT bool enable_syncslot;
+
 extern void logicalrep_worker_attach(int slot);
 extern LogicalRepWorker *logicalrep_worker_find(Oid subid, Oid relid,
 												bool only_running);
@@ -258,7 +263,8 @@ extern void ReplicationOriginNameForLogicalRep(Oid suboid, Oid relid,
 											   char *originname, Size szoriginname);
 
 extern bool AllTablesyncsReady(void);
-extern void UpdateTwoPhaseState(Oid suboid, char new_state);
+extern void EnableTwoPhaseFailoverTriState(Oid suboid, bool enable_twophase,
+										   bool enable_failover);
 
 extern void process_syncing_tables(XLogRecPtr current_lsn);
 extern void invalidate_syncing_table_states(Datum arg, int cacheid,
@@ -326,6 +332,13 @@ extern void pa_decr_and_wait_stream_block(void);
 
 extern void pa_xact_finish(ParallelApplyWorkerInfo *winfo,
 						   XLogRecPtr remote_lsn);
+
+extern void ReplSlotSyncWorkerMain(Datum main_arg);
+extern void SlotSyncWorkerRegister(void);
+extern void ShutDownSlotSync(void);
+extern void slotsync_drop_initiated_slots(void);
+extern bool IsSlotSyncWorker(void);
+extern void SlotSyncWorkerShmemInit(void);
 
 #define isParallelApplyWorker(worker) ((worker)->in_use && \
 									   (worker)->type == WORKERTYPE_PARALLEL_APPLY)

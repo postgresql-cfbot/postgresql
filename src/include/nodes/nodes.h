@@ -317,6 +317,7 @@ typedef enum JoinType
 	 */
 	JOIN_SEMI,					/* 1 copy of each LHS row that has match(es) */
 	JOIN_ANTI,					/* 1 copy of each LHS row that has no match */
+	JOIN_RIGHT_SEMI,			/* 1 copy of each RHS row that has match(es) */
 	JOIN_RIGHT_ANTI,			/* 1 copy of each RHS row that has no match */
 
 	/*

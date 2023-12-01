@@ -2064,7 +2064,7 @@ heap_prepare_insert(Relation relation, HeapTuple tup, TransactionId xid,
 static int
 heap_multi_insert_pages(HeapTuple *heaptuples, int done, int ntuples, Size saveFreeSpace)
 {
-	size_t		page_avail = BLCKSZ - SizeOfPageHeaderData - saveFreeSpace;
+	size_t		page_avail = PageUsableSpace - saveFreeSpace;
 	int			npages = 1;
 
 	for (int i = done; i < ntuples; i++)
@@ -2074,7 +2074,7 @@ heap_multi_insert_pages(HeapTuple *heaptuples, int done, int ntuples, Size saveF
 		if (page_avail < tup_sz)
 		{
 			npages++;
-			page_avail = BLCKSZ - SizeOfPageHeaderData - saveFreeSpace;
+			page_avail = PageUsableSpace - saveFreeSpace;
 		}
 		page_avail -= tup_sz;
 	}

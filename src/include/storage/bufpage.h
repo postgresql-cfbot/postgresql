@@ -214,6 +214,13 @@ typedef PageHeaderData *PageHeader;
 #define SizeOfPageHeaderData (offsetof(PageHeaderData, pd_linp))
 
 /*
+ * how much space is left after smgr's bookkeeping, etc
+ */
+#define PageUsableSpace (BLCKSZ - SizeOfPageHeaderData)
+StaticAssertDecl(PageUsableSpace == MAXALIGN(PageUsableSpace),
+				 "SizeOfPageHeaderData must be MAXALIGN'd");
+
+/*
  * PageIsEmpty
  *		returns true iff no itemid has been allocated on the page
  */

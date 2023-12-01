@@ -164,7 +164,7 @@ index_getattr(IndexTuple tup, int attnum, TupleDesc tupleDesc, bool *isnull)
  * But such a page always has at least MAXALIGN special space, so we're safe.
  */
 #define MaxIndexTuplesPerPage	\
-	((int) ((BLCKSZ - SizeOfPageHeaderData) / \
+	((int) ((PageUsableSpace) / \
 			(MAXALIGN(sizeof(IndexTupleData) + 1) + sizeof(ItemIdData))))
 
 #endif							/* ITUP_H */

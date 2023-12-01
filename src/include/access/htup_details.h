@@ -560,7 +560,7 @@ StaticAssertDecl(MaxOffsetNumber < SpecTokenOffsetNumber,
  * ItemIds and tuples have different alignment requirements, don't assume that
  * you can, say, fit 2 tuples of size MaxHeapTupleSize/2 on the same page.
  */
-#define MaxHeapTupleSize  (BLCKSZ - MAXALIGN(SizeOfPageHeaderData + sizeof(ItemIdData)))
+#define MaxHeapTupleSize  (PageUsableSpace - MAXALIGN(sizeof(ItemIdData)))
 #define MinHeapTupleSize  MAXALIGN(SizeofHeapTupleHeader)
 
 /*
@@ -575,7 +575,7 @@ StaticAssertDecl(MaxOffsetNumber < SpecTokenOffsetNumber,
  * require increases in the size of work arrays.
  */
 #define MaxHeapTuplesPerPage	\
-	((int) ((BLCKSZ - SizeOfPageHeaderData) / \
+	((int) ((PageUsableSpace) / \
 			(MAXALIGN(SizeofHeapTupleHeader) + sizeof(ItemIdData))))
 
 /*

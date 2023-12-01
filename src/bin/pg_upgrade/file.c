@@ -187,7 +187,7 @@ rewriteVisibilityMap(const char *fromfile, const char *tofile,
 	struct stat statbuf;
 
 	/* Compute number of old-format bytes per new page */
-	rewriteVmBytesPerPage = (BLCKSZ - SizeOfPageHeaderData) / 2;
+	rewriteVmBytesPerPage = (PageUsableSpace) / 2;
 
 	if ((src_fd = open(fromfile, O_RDONLY | PG_BINARY, 0)) < 0)
 		pg_fatal("error while copying relation \"%s.%s\": could not open file \"%s\": %s",

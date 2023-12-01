@@ -183,7 +183,7 @@ typedef struct BTMetaPageData
  * than necessary as a result, which is considered acceptable.
  */
 #define MaxTIDsPerBTreePage \
-	(int) ((BLCKSZ - SizeOfPageHeaderData - sizeof(BTPageOpaqueData)) / \
+	(int) ((PageUsableSpace - sizeof(BTPageOpaqueData)) / \
 		   sizeof(ItemPointerData))
 
 /*

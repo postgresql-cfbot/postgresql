@@ -3554,11 +3554,23 @@ IndexGetRelation(Oid indexId, bool missing_ok)
 	return result;
 }
 
+void
+reindex_event_trigger_collect(Oid oid, const ReindexStmt *stmt)
+{
+	ObjectAddress address;
+
+	address.classId = RelationRelationId;
+	address.objectId = oid;
+	address.objectSubId = 0;
+
+	EventTriggerCollectSimpleCommand(address,
+									 InvalidObjectAddress, (Node *) stmt);
+}
 /*
  * reindex_index - This routine is used to recreate a single index
  */
 void
-reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
+reindex_index(const ReindexStmt *stmt, Oid indexId, bool skip_constraint_checks, char persistence,
 			  const ReindexParams *params)
 {
 	Relation	iRel,
@@ -3629,6 +3641,9 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 	if (progress)
 		pgstat_progress_update_param(PROGRESS_CREATEIDX_ACCESS_METHOD_OID,
 									 iRel->rd_rel->relam);
+	/* event trigger tracking REINDEX primary pointer */
+	if (stmt)
+		reindex_event_trigger_collect(indexId, stmt);
 
 	/*
 	 * Partitioned indexes should never get processed here, as they have no
@@ -3865,7 +3880,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
  * index rebuild.
  */
 bool
-reindex_relation(Oid relid, int flags, const ReindexParams *params)
+reindex_relation(const ReindexStmt *stmt, Oid relid, int flags, const ReindexParams *params)
 {
 	Relation	rel;
 	Oid			toast_relid;
@@ -3953,7 +3968,7 @@ reindex_relation(Oid relid, int flags, const ReindexParams *params)
 			continue;
 		}
 
-		reindex_index(indexOid, !(flags & REINDEX_REL_CHECK_CONSTRAINTS),
+		reindex_index(stmt, indexOid, !(flags & REINDEX_REL_CHECK_CONSTRAINTS),
 					  persistence, params);
 
 		CommandCounterIncrement();
@@ -3990,7 +4005,7 @@ reindex_relation(Oid relid, int flags, const ReindexParams *params)
 
 		newparams.options &= ~(REINDEXOPT_MISSING_OK);
 		newparams.tablespaceOid = InvalidOid;
-		result |= reindex_relation(toast_relid, flags, &newparams);
+		result |= reindex_relation(stmt, toast_relid, flags, &newparams);
 	}
 
 	return result;

@@ -418,6 +418,99 @@ drop table rewriteme;
 drop event trigger no_rewrite_allowed;
 drop function test_evtrig_no_rewrite();
 
+--reindex command, event trigger test setup.
+DROP SCHEMA IF EXISTS schema_to_reindex CASCADE;
+CREATE SCHEMA schema_to_reindex;
+SET search_path TO schema_to_reindex;
+
+CREATE TABLE concur_reindex_tab (c1 int,c2 text);
+CREATE UNIQUE INDEX concur_reindex_ind1 ON concur_reindex_tab (c1);
+CREATE INDEX concur_reindex_ind2 ON concur_reindex_tab (c2);
+CREATE INDEX concur_reindex_ind4 ON concur_reindex_tab (c1, c1, c2);
+ALTER TABLE concur_reindex_tab ADD PRIMARY KEY USING INDEX concur_reindex_ind1;
+INSERT INTO concur_reindex_tab VALUES (1, 'a'),(2, 'a');
+
+CREATE TABLE parted_irreg_ancestor (b text,a int) PARTITION BY RANGE (b);
+CREATE TABLE parted_irreg (a int,b text) PARTITION BY RANGE (b);
+
+ALTER TABLE parted_irreg_ancestor ATTACH PARTITION parted_irreg
+FOR VALUES FROM ('aaaa') TO ('zzzz');
+
+CREATE TABLE parted1_irreg1 (b text NOT NULL,a int);
+ALTER TABLE parted_irreg ATTACH PARTITION parted1_irreg1
+FOR VALUES FROM ('aaaa') TO ('jjjj');
+
+CREATE TABLE parted1_irreg2 (b text NOT NULL, a int);
+ALTER TABLE parted_irreg ATTACH PARTITION parted1_irreg2
+FOR VALUES FROM ('jjjj') TO ('zzzz');
+
+INSERT INTO parted_irreg_ancestor (b)
+VALUES ('daasvog'),('asdhjksd'),('sssdjk'),('jssdjk');
+
+ALTER TABLE parted_irreg_ancestor ADD PRIMARY KEY (b);
+
+CREATE OR REPLACE FUNCTION public.reindex_start_command()
+RETURNS event_trigger AS $$
+BEGIN
+    RAISE NOTICE 'ddl_start_command -- REINDEX: % %', tg_event, tg_tag;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE EVENT TRIGGER start_reindex_command ON ddl_command_start
+    WHEN TAG IN ('REINDEX') EXECUTE PROCEDURE public.reindex_start_command();
+
+CREATE OR REPLACE FUNCTION public.reindex_end_command()
+RETURNS event_trigger AS $$
+DECLARE
+	obj record;
+	toast_main_table text;
+BEGIN
+FOR obj IN SELECT * FROM pg_event_trigger_ddl_commands()
+    LOOP
+        IF  obj.schema_name = 'pg_toast' THEN
+            RAISE NOTICE 'reindexing toast related index! object_type: %, schema_name: %'
+                          ,obj.object_type, obj.schema_name;
+            /* get the toast table will be reindexed main table.
+             * toast table name auto generated, cannot use to test.
+            */
+            SELECT t1.relname into toast_main_table
+            FROM (
+                SELECT t1.oid
+                FROM pg_class t1 INNER JOIN pg_index t2 ON t1.oid = t2.indrelid
+                WHERE t2.indexrelid = obj.objid AND relkind = 't') sub
+                INNER JOIN pg_class t1 ON t1.reltoastrelid = sub.oid;
+
+            RAISE NOTICE 'toast table related main relation: %', toast_main_table;
+        ELSE
+            RAISE NOTICE 'ddl_end_command -- REINDEX: %', pg_get_indexdef(obj.objid);
+        END IF;
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE EVENT TRIGGER end_reindex_command ON ddl_command_end
+    WHEN TAG IN ('REINDEX') EXECUTE PROCEDURE public.reindex_end_command();
+
+REINDEX (CONCURRENTLY) INDEX  parted_irreg_ancestor_pkey;
+ALTER EVENT TRIGGER end_reindex_command DISABLE;
+
+-- event trigger disabled.
+--so reindex_start_command part will invoke, reindex_end_command won't.
+REINDEX (CONCURRENTLY) TABLE  parted_irreg_ancestor;
+
+ALTER EVENT TRIGGER end_reindex_command ENABLE;
+REINDEX (CONCURRENTLY) TABLE  parted_irreg_ancestor;
+
+/* REINDEX SCHEMA (CONCURRENTLY) generated test result order unstable,
+ * So just do normal reindex schema. should cover reindex statement most cases.
+*/
+REINDEX SCHEMA  schema_to_reindex;
+
+drop event trigger if exists  start_reindex_command,end_reindex_command;
+drop function if exists  public.reindex_end_command, public.reindex_start_command cascade;
+drop schema if exists schema_to_reindex cascade;
+RESET search_path;
+
 -- test Row Security Event Trigger
 RESET SESSION AUTHORIZATION;
 CREATE TABLE event_trigger_test (a integer, b text);

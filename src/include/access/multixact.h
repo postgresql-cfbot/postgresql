@@ -149,11 +149,11 @@ extern void MultiXactAdvanceNextMXact(MultiXactId minMulti,
 extern void MultiXactAdvanceOldest(MultiXactId oldestMulti, Oid oldestMultiDB);
 extern int	MultiXactMemberFreezeThreshold(void);
 
-extern void multixact_twophase_recover(TransactionId xid, uint16 info,
+extern void multixact_twophase_recover(Oid databaseid, TransactionId xid, uint16 info,
 									   void *recdata, uint32 len);
-extern void multixact_twophase_postcommit(TransactionId xid, uint16 info,
+extern void multixact_twophase_postcommit(Oid databaseid, TransactionId xid, uint16 info,
 										  void *recdata, uint32 len);
-extern void multixact_twophase_postabort(TransactionId xid, uint16 info,
+extern void multixact_twophase_postabort(Oid databaseid, TransactionId xid, uint16 info,
 										 void *recdata, uint32 len);
 
 extern void multixact_redo(XLogReaderState *record);

@@ -174,6 +174,13 @@ typedef struct BloomScanOpaqueData
 
 typedef BloomScanOpaqueData *BloomScanOpaque;
 
+typedef struct
+{
+	uint64 matches;
+} BloomUsage;
+
+extern BloomUsage bloomUsage;
+
 /* blutils.c */
 extern void initBloomState(BloomState *state, Relation index);
 extern void BloomFillMetapage(Relation index, Page metaPage);

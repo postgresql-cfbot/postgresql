@@ -483,6 +483,7 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		&&CASE_EEOP_AGGREF,
 		&&CASE_EEOP_GROUPING_FUNC,
 		&&CASE_EEOP_WINDOW_FUNC,
+		&&CASE_EEOP_MERGING_FUNC,
 		&&CASE_EEOP_SUBPLAN,
 		&&CASE_EEOP_AGG_STRICT_DESERIALIZE,
 		&&CASE_EEOP_AGG_DESERIALIZE,
@@ -1578,6 +1579,14 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 
 			*op->resvalue = econtext->ecxt_aggvalues[wfunc->wfuncno];
 			*op->resnull = econtext->ecxt_aggnulls[wfunc->wfuncno];
+
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_MERGING_FUNC)
+		{
+			/* too complex/uncommon for an inline implementation */
+			ExecEvalMergingFunc(state, op, econtext);
 
 			EEO_NEXT();
 		}
@@ -4168,6 +4177,59 @@ ExecEvalGroupingFunc(ExprState *state, ExprEvalStep *op)
 
 	*op->resvalue = Int32GetDatum(result);
 	*op->resnull = false;
+}
+
+/*
+ * ExecEvalMergingFunc
+ *
+ * Returns information about the current MERGE action for its RETURNING list.
+ */
+void
+ExecEvalMergingFunc(ExprState *state, ExprEvalStep *op, ExprContext *econtext)
+{
+	MergingFuncOp mfop = op->d.merging_func.mfop;
+	ModifyTableState *mtstate = castNode(ModifyTableState, state->parent);
+	MergeActionState *relaction = mtstate->mt_merge_action;
+
+	if (!relaction)
+		elog(ERROR, "no merge action in progress");
+
+	switch (mfop)
+	{
+		case MERGING_ACTION:
+			/* Return the MERGE action ("INSERT", "UPDATE", or "DELETE") */
+			switch (relaction->mas_action->commandType)
+			{
+				case CMD_INSERT:
+					*op->resvalue = PointerGetDatum(cstring_to_text_with_len("INSERT", 6));
+					*op->resnull = false;
+					break;
+				case CMD_UPDATE:
+					*op->resvalue = PointerGetDatum(cstring_to_text_with_len("UPDATE", 6));
+					*op->resnull = false;
+					break;
+				case CMD_DELETE:
+					*op->resvalue = PointerGetDatum(cstring_to_text_with_len("DELETE", 6));
+					*op->resnull = false;
+					break;
+				case CMD_NOTHING:
+					elog(ERROR, "unexpected merge action: DO NOTHING");
+					break;
+				default:
+					elog(ERROR, "unrecognized commandType: %d",
+						 (int) relaction->mas_action->commandType);
+			}
+			break;
+
+		case MERGING_CLAUSE_NUMBER:
+			/* Return the 1-based index of the MERGE action */
+			*op->resvalue = Int32GetDatum(relaction->mas_action->index);
+			*op->resnull = false;
+			break;
+
+		default:
+			elog(ERROR, "unrecognized MergingFuncOp: %d", (int) mfop);
+	}
 }
 
 /*

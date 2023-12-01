@@ -21992,6 +21992,84 @@ SELECT count(*) FROM sometable;
 
  </sect1>
 
+ <sect1 id="functions-merge-support">
+  <title>Merge Support Functions</title>
+
+  <indexterm>
+   <primary>MERGE</primary>
+   <secondary>RETURNING</secondary>
+  </indexterm>
+
+  <indexterm>
+   <primary>MERGING</primary>
+  </indexterm>
+
+  <para>
+   <productname>PostgreSQL</productname> includes one merge support function
+   that may be used in the <literal>RETURNING</literal> list of a
+   <xref linkend="sql-merge"/> command to return additional information about
+   the action taken for each row:
+<synopsis>
+<function id="function-merging">MERGING</function> ( <replaceable>property</replaceable> )
+</synopsis>
+   The following are valid property values specifying what to return:
+
+   <variablelist>
+    <varlistentry>
+     <term><literal>ACTION</literal></term>
+     <listitem>
+      <para>
+       The merge action command executed for the current row
+       (<literal>'INSERT'</literal>, <literal>'UPDATE'</literal>, or
+       <literal>'DELETE'</literal>).
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>CLAUSE_NUMBER</literal></term>
+     <listitem>
+      <para>
+       The 1-based index of the <literal>WHEN</literal> clause executed for
+       the current row.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </para>
+
+  <para>
+   The following example illustrates how this may be used to determine
+   which actions were performed for each row affected by the
+   <command>MERGE</command> command:
+<screen><![CDATA[
+MERGE INTO products p
+  USING stock s ON p.product_id = s.product_id
+  WHEN MATCHED AND s.quantity > 0 THEN
+    UPDATE SET in_stock = true, quantity = s.quantity
+  WHEN MATCHED THEN
+    UPDATE SET in_stock = false, quantity = 0
+  WHEN NOT MATCHED THEN
+    INSERT (product_id, in_stock, quantity)
+      VALUES (s.product_id, true, s.quantity)
+  RETURNING MERGING(ACTION), MERGING(CLAUSE_NUMBER), p.*;
+
+ action | clause_number | product_id | in_stock | quantity 
+--------+---------------+------------+----------+----------
+ UPDATE |             1 |       1001 | t        |       50
+ UPDATE |             2 |       1002 | f        |        0
+ INSERT |             3 |       1003 | t        |       10
+]]></screen>
+  </para>
+
+  <para>
+   Note that this function can only be used in the <literal>RETURNING</literal>
+   list of a <command>MERGE</command> command.  It is an error to use it in any
+   other part of a query.
+  </para>
+
+ </sect1>
+
  <sect1 id="functions-subquery">
   <title>Subquery Expressions</title>
 

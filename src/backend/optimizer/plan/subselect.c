@@ -1846,7 +1846,8 @@ convert_EXISTS_to_ANY(PlannerInfo *root, Query *subselect,
 /*
  * Replace correlation vars (uplevel vars) with Params.
  *
- * Uplevel PlaceHolderVars and aggregates are replaced, too.
+ * Uplevel PlaceHolderVars, aggregates, GROUPING() expressions, and MERGING()
+ * expressions are replaced, too.
  *
  * Note: it is critical that this runs immediately after SS_process_sublinks.
  * Since we do not recurse into the arguments of uplevel PHVs and aggregates,
@@ -1899,6 +1900,11 @@ replace_correlation_vars_mutator(Node *node, PlannerInfo *root)
 	{
 		if (((GroupingFunc *) node)->agglevelsup > 0)
 			return (Node *) replace_outer_grouping(root, (GroupingFunc *) node);
+	}
+	if (IsA(node, MergingFunc))
+	{
+		if (root->parse->commandType != CMD_MERGE)
+			return (Node *) replace_outer_merging(root, (MergingFunc *) node);
 	}
 	return expression_tree_mutator(node,
 								   replace_correlation_vars_mutator,

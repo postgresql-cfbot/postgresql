@@ -1927,6 +1927,7 @@ typedef struct MergeStmt
 	Node	   *sourceRelation; /* source relation */
 	Node	   *joinCondition;	/* join condition between source and target */
 	List	   *mergeWhenClauses;	/* list of MergeWhenClause(es) */
+	List	   *returningList;	/* list of expressions to return */
 	WithClause *withClause;		/* WITH clause */
 } MergeStmt;
 

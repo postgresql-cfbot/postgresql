@@ -1807,6 +1807,20 @@ FigureColnameInternal(Node *node, char **name)
 			/* make GROUPING() act like a regular function */
 			*name = "grouping";
 			return 2;
+		case T_MergingFunc:
+			switch (((MergingFunc *) node)->mfop)
+			{
+				case MERGING_ACTION:
+					*name = "action";
+					return 2;
+				case MERGING_CLAUSE_NUMBER:
+					*name = "clause_number";
+					return 2;
+				default:
+					elog(ERROR, "unrecognized MergingFuncOp: %d",
+						 (int) ((MergingFunc *) node)->mfop);
+			}
+			break;
 		case T_SubLink:
 			switch (((SubLink *) node)->subLinkType)
 			{

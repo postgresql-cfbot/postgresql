@@ -693,7 +693,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	BOOLEAN_P BOTH BREADTH BY
 
 	CACHE CALL CALLED CASCADE CASCADED CASE CAST CATALOG_P CHAIN CHAR_P
-	CHARACTER CHARACTERISTICS CHECK CHECKPOINT CLASS CLOSE
+	CHARACTER CHARACTERISTICS CHECK CHECKPOINT CLASS CLAUSE_NUMBER CLOSE
 	CLUSTER COALESCE COLLATE COLLATION COLUMN COLUMNS COMMENT COMMENTS COMMIT
 	COMMITTED COMPRESSION CONCURRENTLY CONFIGURATION CONFLICT
 	CONNECTION CONSTRAINT CONSTRAINTS CONTENT_P CONTINUE_P CONVERSION_P COPY
@@ -731,7 +731,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	LEADING LEAKPROOF LEAST LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
 	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED LOGGED
 
-	MAPPING MATCH MATCHED MATERIALIZED MAXVALUE MERGE METHOD
+	MAPPING MATCH MATCHED MATERIALIZED MAXVALUE MERGE MERGING METHOD
 	MINUTE_P MINVALUE MODE MONTH_P MOVE
 
 	NAME_P NAMES NATIONAL NATURAL NCHAR NEW NEXT NFC NFD NFKC NFKD NO NONE
@@ -12345,6 +12345,7 @@ MergeStmt:
 			USING table_ref
 			ON a_expr
 			merge_when_list
+			returning_clause
 				{
 					MergeStmt  *m = makeNode(MergeStmt);
 
@@ -12353,6 +12354,7 @@ MergeStmt:
 					m->sourceRelation = $6;
 					m->joinCondition = $8;
 					m->mergeWhenClauses = $9;
+					m->returningList = $10;
 
 					$$ = (Node *) m;
 				}
@@ -15768,6 +15770,24 @@ func_expr_common_subexpr:
 					n->location = @1;
 					$$ = (Node *) n;
 				}
+			| MERGING '(' ACTION ')'
+				{
+					MergingFunc *m = makeNode(MergingFunc);
+
+					m->mfop = MERGING_ACTION;
+					m->mftype = TEXTOID;
+					m->location = @1;
+					$$ = (Node *) m;
+				}
+			| MERGING '(' CLAUSE_NUMBER ')'
+				{
+					MergingFunc *m = makeNode(MergingFunc);
+
+					m->mfop = MERGING_CLAUSE_NUMBER;
+					m->mftype = INT4OID;
+					m->location = @1;
+					$$ = (Node *) m;
+				}
 			;
 
 
@@ -17127,6 +17147,7 @@ unreserved_keyword:
 			| CHARACTERISTICS
 			| CHECKPOINT
 			| CLASS
+			| CLAUSE_NUMBER
 			| CLOSE
 			| CLUSTER
 			| COLUMNS
@@ -17446,6 +17467,7 @@ col_name_keyword:
 			| JSON_SCALAR
 			| JSON_SERIALIZE
 			| LEAST
+			| MERGING
 			| NATIONAL
 			| NCHAR
 			| NONE
@@ -17664,6 +17686,7 @@ bare_label_keyword:
 			| CHECK
 			| CHECKPOINT
 			| CLASS
+			| CLAUSE_NUMBER
 			| CLOSE
 			| CLUSTER
 			| COALESCE
@@ -17835,6 +17858,7 @@ bare_label_keyword:
 			| MATERIALIZED
 			| MAXVALUE
 			| MERGE
+			| MERGING
 			| METHOD
 			| MINVALUE
 			| MODE

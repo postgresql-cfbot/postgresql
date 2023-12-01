@@ -13,6 +13,7 @@ SELECT table_name, column_name, column_default, is_nullable, is_identity, identi
 SELECT sequence_name FROM information_schema.sequences WHERE sequence_name LIKE 'itest%';
 
 SELECT pg_get_serial_sequence('itest1', 'a');
+SELECT pg_get_owned_sequence('itest1', 'a');
 
 \d itest1_a_seq
 

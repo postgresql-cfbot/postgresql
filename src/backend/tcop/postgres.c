@@ -1064,8 +1064,9 @@ exec_simple_query(const char *query_string)
 	 */
 	parsetree_list = pg_parse_query(query_string);
 
-	/* Log immediately if dictated by log_statement */
-	if (check_log_statement(parsetree_list))
+	/* Log immediately if dictated by log_statement and XID assigned. */
+	if (GetTopTransactionIdIfAny() != InvalidTransactionId &&
+			check_log_statement(parsetree_list))
 	{
 		ereport(LOG,
 				(errmsg("statement: %s", query_string),
@@ -1281,6 +1282,16 @@ exec_simple_query(const char *query_string)
 		receiver->rDestroy(receiver);
 
 		PortalDrop(portal, false);
+
+		/* Log if dictated by log_statement and has not been logged. */
+		if (!was_logged && check_log_statement(parsetree_list))
+		{
+			ereport(LOG,
+					(errmsg("statement: %s", query_string),
+					errhidestmt(true),
+					errdetail_execute(parsetree_list)));
+			was_logged = true;
+		}
 
 		if (lnext(parsetree_list, parsetree_item) == NULL)
 		{

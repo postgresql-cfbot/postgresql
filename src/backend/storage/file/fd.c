@@ -2110,8 +2110,8 @@ FileWriteback(File file, off_t offset, off_t nbytes, uint32 wait_event_info)
 }
 
 int
-FileRead(File file, void *buffer, size_t amount, off_t offset,
-		 uint32 wait_event_info)
+FileReadV(File file, const struct iovec *iov, int iovcnt, off_t offset,
+		  uint32 wait_event_info)
 {
 	int			returnCode;
 	Vfd		   *vfdP;
@@ -2131,7 +2131,7 @@ FileRead(File file, void *buffer, size_t amount, off_t offset,
 
 retry:
 	pgstat_report_wait_start(wait_event_info);
-	returnCode = pg_pread(vfdP->fd, buffer, amount, offset);
+	returnCode = pg_preadv(vfdP->fd, iov, iovcnt, offset);
 	pgstat_report_wait_end();
 
 	if (returnCode < 0)
@@ -2166,8 +2166,8 @@ retry:
 }
 
 int
-FileWrite(File file, const void *buffer, size_t amount, off_t offset,
-		  uint32 wait_event_info)
+FileWriteV(File file, const struct iovec *iov, int iovcnt, off_t offset,
+		   uint32 wait_event_info)
 {
 	int			returnCode;
 	Vfd		   *vfdP;
@@ -2195,7 +2195,14 @@ FileWrite(File file, const void *buffer, size_t amount, off_t offset,
 	 */
 	if (temp_file_limit >= 0 && (vfdP->fdstate & FD_TEMP_FILE_LIMIT))
 	{
-		off_t		past_write = offset + amount;
+		size_t		size = 0;
+		off_t		past_write;
+
+		/* Compute the total transfer size. */
+		for (int i = 0; i < iovcnt; ++i)
+			size += iov[i].iov_len;
+
+		past_write = offset + size;
 
 		if (past_write > vfdP->fileSize)
 		{
@@ -2213,11 +2220,17 @@ FileWrite(File file, const void *buffer, size_t amount, off_t offset,
 retry:
 	errno = 0;
 	pgstat_report_wait_start(wait_event_info);
-	returnCode = pg_pwrite(VfdCache[file].fd, buffer, amount, offset);
+	returnCode = pg_pwritev(vfdP->fd, iov, iovcnt, offset);
 	pgstat_report_wait_end();
 
-	/* if write didn't set errno, assume problem is no disk space */
-	if (returnCode != amount && errno == 0)
+	/*
+	 * Some callers expect short writes to set errno, even though that isn't
+	 * the behavior of the underlying system calls.  We don't want to waste
+	 * CPU cycles adding up the total write size here, so we'll just set it to
+	 * ENOSPC even on success, if the syscall didn't set it.  On successful
+	 * non-short write, no caller should consult errno.
+	 */
+	if (errno == 0)
 		errno = ENOSPC;
 
 	if (returnCode >= 0)
@@ -2227,7 +2240,7 @@ retry:
 		 */
 		if (vfdP->fdstate & FD_TEMP_FILE_LIMIT)
 		{
-			off_t		past_write = offset + amount;
+			off_t		past_write = offset + returnCode;
 
 			if (past_write > vfdP->fileSize)
 			{

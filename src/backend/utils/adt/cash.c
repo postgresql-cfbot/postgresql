@@ -111,6 +111,11 @@ cash_in(PG_FUNCTION_ARGS)
 			   *csymbol;
 	struct lconv *lconvert = PGLC_localeconv();
 
+	if (lconvert == NULL)
+		ereturn(escontext, (Datum) 0,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("could not allocate memory for locale information")));
+
 	/*
 	 * frac_digits will be CHAR_MAX in some locales, notably C.  However, just
 	 * testing for == CHAR_MAX is risky, because of compilers like gcc that
@@ -324,6 +329,11 @@ cash_out(PG_FUNCTION_ARGS)
 				cs_precedes,
 				sep_by_space;
 	struct lconv *lconvert = PGLC_localeconv();
+
+	if (lconvert == NULL)
+		ereturn(fcinfo->context, (Datum) 0,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("could not allocate memory for locale information")));
 
 	/* see comments about frac_digits in cash_in() */
 	points = lconvert->frac_digits;
@@ -1036,6 +1046,11 @@ cash_numeric(PG_FUNCTION_ARGS)
 	int			fpoint;
 	struct lconv *lconvert = PGLC_localeconv();
 
+	if (lconvert == NULL)
+		ereturn(fcinfo->context, (Datum) 0,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("could not allocate memory for locale information")));
+
 	/* see comments about frac_digits in cash_in() */
 	fpoint = lconvert->frac_digits;
 	if (fpoint < 0 || fpoint > 10)
@@ -1095,6 +1110,11 @@ numeric_cash(PG_FUNCTION_ARGS)
 	Datum		numeric_scale;
 	struct lconv *lconvert = PGLC_localeconv();
 
+	if (lconvert == NULL)
+		ereturn(fcinfo->context, (Datum) 0,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("could not allocate memory for locale information")));
+
 	/* see comments about frac_digits in cash_in() */
 	fpoint = lconvert->frac_digits;
 	if (fpoint < 0 || fpoint > 10)
@@ -1128,6 +1148,11 @@ int4_cash(PG_FUNCTION_ARGS)
 	int			i;
 	struct lconv *lconvert = PGLC_localeconv();
 
+	if (lconvert == NULL)
+		ereturn(fcinfo->context, (Datum) 0,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("could not allocate memory for locale information")));
+
 	/* see comments about frac_digits in cash_in() */
 	fpoint = lconvert->frac_digits;
 	if (fpoint < 0 || fpoint > 10)
@@ -1157,6 +1182,10 @@ int8_cash(PG_FUNCTION_ARGS)
 	int64		scale;
 	int			i;
 	struct lconv *lconvert = PGLC_localeconv();
+
+	ereturn(fcinfo->context, (Datum) 0,
+			(errcode(ERRCODE_OUT_OF_MEMORY),
+			 errmsg("could not allocate memory for locale information")));
 
 	/* see comments about frac_digits in cash_in() */
 	fpoint = lconvert->frac_digits;

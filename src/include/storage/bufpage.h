@@ -447,7 +447,10 @@ do { \
 	Assert(TransactionIdIsNormal(xid)); \
 	if (!TransactionIdIsValid(((PageHeader) (page))->pd_prune_xid) || \
 		TransactionIdPrecedes(xid, ((PageHeader) (page))->pd_prune_xid)) \
+	{ \
+		elog(WARNING, "PageSetPrunable setting pd_prune_xid=%u", xid); \
 		((PageHeader) (page))->pd_prune_xid = (xid); \
+	} \
 } while (0)
 #define PageClearPrunable(page) \
 	(((PageHeader) (page))->pd_prune_xid = InvalidTransactionId)

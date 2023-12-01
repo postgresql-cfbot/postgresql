@@ -81,16 +81,19 @@ static void page_verify_redirects(Page page);
  * Note: this is called quite often.  It's important that it fall out quickly
  * if there's not any use in pruning.
  *
- * Caller must have pin on the buffer, and must *not* have a lock on it.
+ * Caller must have pin on the buffer, and must either have an exclusive lock
+ * (and pass already_locked = true) or not have a lock on it.
  */
 void
-heap_page_prune_opt(Relation relation, Buffer buffer)
+heap_page_prune_opt(Relation relation, Buffer buffer, bool already_locked)
 {
 	Page		page = BufferGetPage(buffer);
 	TransactionId prune_xid;
 	GlobalVisState *vistest;
 	Size		minfree;
 
+	if (relation->rd_id > 16384)
+		elog(WARNING, "in heap_page_prune_opt");
 	/*
 	 * We can't write WAL in recovery mode, so there's no point trying to
 	 * clean the page. The primary will likely issue a cleaning WAL record
@@ -135,8 +138,9 @@ heap_page_prune_opt(Relation relation, Buffer buffer)
 
 	if (PageIsFull(page) || PageGetHeapFreeSpace(page) < minfree)
 	{
-		/* OK, try to get exclusive buffer lock */
-		if (!ConditionalLockBufferForCleanup(buffer))
+		/* OK, try to get exclusive buffer lock if necessary */
+		if ((!already_locked && !ConditionalLockBufferForCleanup(buffer)) ||
+				(already_locked && !IsBufferCleanupOK(buffer)))
 			return;
 
 		/*
@@ -169,8 +173,9 @@ heap_page_prune_opt(Relation relation, Buffer buffer)
 											   presult.ndeleted - presult.nnewlpdead);
 		}
 
-		/* And release buffer lock */
-		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+		/* And release buffer lock if we acquired it */
+		if (!already_locked)
+			LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 
 		/*
 		 * We avoid reuse of any free space created on the page by unrelated
@@ -213,6 +218,8 @@ heap_page_prune(Relation relation, Buffer buffer,
 	PruneState	prstate;
 	HeapTupleData tup;
 
+	if (relation->rd_id > 16384)
+	  elog(WARNING, "in heap_page_prune");
 	/*
 	 * Our strategy is to scan the page and make lists of items to change,
 	 * then apply the changes within a critical section.  This keeps as much
@@ -339,6 +346,8 @@ heap_page_prune(Relation relation, Buffer buffer,
 		 * Update the page's pd_prune_xid field to either zero, or the lowest
 		 * XID of any soon-prunable tuple.
 		 */
+		if (relation->rd_id > 16384)
+			elog(WARNING, "setting pd_prune_xid=%u", prstate.new_prune_xid);
 		((PageHeader) page)->pd_prune_xid = prstate.new_prune_xid;
 
 		/*
@@ -405,6 +414,8 @@ heap_page_prune(Relation relation, Buffer buffer,
 		if (((PageHeader) page)->pd_prune_xid != prstate.new_prune_xid ||
 			PageIsFull(page))
 		{
+			if (relation->rd_id > 16384)
+				elog(WARNING, "setting pd_prune_xid=%u", prstate.new_prune_xid);
 			((PageHeader) page)->pd_prune_xid = prstate.new_prune_xid;
 			PageClearFull(page);
 			MarkBufferDirtyHint(buffer, true);

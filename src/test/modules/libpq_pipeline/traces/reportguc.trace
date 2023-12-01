@@ -1,0 +1,30 @@
+F	62	Query	 "SELECT pg_catalog.set_config('test.test', 'Hello', false)"
+B	35	RowDescription	 1 "set_config" NNNN 0 NNNN 65535 -1 0
+B	15	DataRow	 1 5 'Hello'
+B	13	CommandComplete	 "SELECT 1"
+B	5	ReadyForQuery	 I
+F	15	ReportGUC	 t "test.test"
+F	4	Sync
+B	20	ParameterStatus	 "test.test" "Hello"
+B	8	CommandComplete	 "SET"
+B	5	ReadyForQuery	 I
+F	64	Query	 "SELECT pg_catalog.set_config('test.test', 'Bonjour', false)"
+B	35	RowDescription	 1 "set_config" NNNN 0 NNNN 65535 -1 0
+B	17	DataRow	 1 7 'Bonjour'
+B	13	CommandComplete	 "SELECT 1"
+B	22	ParameterStatus	 "test.test" "Bonjour"
+B	5	ReadyForQuery	 I
+F	15	ReportGUC	 f "test.test"
+F	4	Sync
+B	10	CommandComplete	 "UNSET"
+B	5	ReadyForQuery	 I
+F	25	ReportGUC	 t "not_exists_variable"
+F	4	Sync
+B	NN	ErrorResponse	 S "ERROR" V "ERROR" C "42704" M "unrecognized configuration parameter "not_exists_variable"" F "SSSS" L "SSSS" R "SSSS" \x00
+B	5	ReadyForQuery	 I
+F	61	Query	 "SELECT pg_catalog.set_config('test.test', 'Ahoj', false)"
+B	35	RowDescription	 1 "set_config" NNNN 0 NNNN 65535 -1 0
+B	14	DataRow	 1 4 'Ahoj'
+B	13	CommandComplete	 "SELECT 1"
+B	5	ReadyForQuery	 I
+F	4	Terminate

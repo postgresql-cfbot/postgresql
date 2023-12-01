@@ -427,6 +427,7 @@ SocketBackend(StringInfo inBuf)
 		case PqMsg_Describe:
 		case PqMsg_Execute:
 		case PqMsg_Flush:
+		case PqMsg_ReportGUC:
 			maxmsglen = PQ_SMALL_MESSAGE_LIMIT;
 			doing_extended_query_message = true;
 			break;
@@ -4849,6 +4850,38 @@ PostgresMain(const char *dbname, const char *username)
 				finish_xact_command();
 				valgrind_report_error_query("SYNC message");
 				send_ready_for_query = true;
+				break;
+
+			case PqMsg_ReportGUC:
+				{
+					const char	   *name;
+					const char	   *status;
+					int				is_set;
+
+					is_set = pq_getmsgbyte(&input_message);
+					name = pq_getmsgstring(&input_message);
+					pq_getmsgend(&input_message);
+
+					if (is_set == 't')
+					{
+						SetGUCOptionFlag(name, GUC_REPORT);
+						status = "SET";
+					}
+					else if (is_set == 'f')
+					{
+						UnsetGUCOptionFlag(name, GUC_REPORT);
+						status = "UNSET";
+					}
+					else
+						ereport(ERROR,
+								(errcode(ERRCODE_PROTOCOL_VIOLATION),
+								 errmsg("invalid argument of REPORTGUC message %c",
+										is_set)));
+
+					pq_puttextmessage(PqMsg_CommandComplete, status);
+
+					valgrind_report_error_query("ReportGUC message");
+				}
 				break;
 
 				/*

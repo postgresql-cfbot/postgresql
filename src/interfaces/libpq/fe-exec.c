@@ -1070,6 +1070,33 @@ pqSaveMessageField(PGresult *res, char code, const char *value)
 }
 
 /*
+ * Add GUC_REPORT flag to specified setting and wait for synchronization
+ * with state parameters.
+ */
+PGresult *
+PQlinkParameterStatus(PGconn *conn, const char *paramName)
+{
+	if (!PQexecStart(conn))
+		return NULL;
+	if (!PQsendTypedCommand(conn, PqMsg_ReportGUC, 't', paramName))
+		return NULL;
+	return PQexecFinish(conn);
+}
+
+/*
+ * Remove GUC_REPORT flag from specified setting.
+ */
+PGresult *
+PQunlinkParameterStatus(PGconn *conn, const char *paramName)
+{
+	if (!PQexecStart(conn))
+		return NULL;
+	if (!PQsendTypedCommand(conn, PqMsg_ReportGUC, 'f', paramName))
+		return NULL;
+	return PQexecFinish(conn);
+}
+
+/*
  * pqSaveParameterStatus - remember parameter status sent by backend
  */
 void
@@ -2543,11 +2570,14 @@ PQsendClosePortal(PGconn *conn, const char *portal)
  *
  * Available options for "command" are
  *	 PqMsg_Close for Close; or
- *	 PqMsg_Describe for Describe.
+ *	 PqMsg_Describe for Describe; or
+ *	 PqMsg_ReportGUC for (un)set GUC_REPORT flag.
  *
  * Available options for "type" are
  *	 'S' to run a command on a prepared statement; or
  *	 'P' to run a command on a portal.
+ *	 't' to set GUC_REPORT flag
+ *	 'f' to unset GUC_REPORT flag
  *
  * Returns 1 on success and 0 on failure.
  */
@@ -2590,6 +2620,10 @@ PQsendTypedCommand(PGconn *conn, char command, char type, const char *target)
 	else if (command == PqMsg_Describe)
 	{
 		entry->queryclass = PGQUERY_DESCRIBE;
+	}
+	else if (command == PqMsg_ReportGUC)
+	{
+		entry->queryclass = PGQUERY_SETTING;
 	}
 	else
 	{

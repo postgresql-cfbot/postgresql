@@ -2049,6 +2049,10 @@ typedef struct JoinPath
 	 * joinrestrictinfo is needed in JoinPath, and can't be merged into the
 	 * parent RelOptInfo.
 	 */
+
+	Relids		ojrelids;	/* the relid set of any outer joins that will be
+							 * calculated at this join for outer join, or NULL
+							 * for inner join */
 } JoinPath;
 
 /*
@@ -2421,27 +2425,16 @@ typedef struct LimitPath
  * level of the outer join, which is true except when it is a "degenerate"
  * condition that references only Vars from the nullable side of the join.
  *
- * RestrictInfo nodes contain a flag to indicate whether a qual has been
- * pushed down to a lower level than its original syntactic placement in the
- * join tree would suggest.  If an outer join prevents us from pushing a qual
- * down to its "natural" semantic level (the level associated with just the
- * base rels used in the qual) then we mark the qual with a "required_relids"
- * value including more than just the base rels it actually uses.  By
- * pretending that the qual references all the rels required to form the outer
- * join, we prevent it from being evaluated below the outer join's joinrel.
- * When we do form the outer join's joinrel, we still need to distinguish
- * those quals that are actually in that join's JOIN/ON condition from those
- * that appeared elsewhere in the tree and were pushed down to the join rel
- * because they used no other rels.  That's what the is_pushed_down flag is
- * for; it tells us that a qual is not an OUTER JOIN qual for the set of base
- * rels listed in required_relids.  A clause that originally came from WHERE
- * or an INNER JOIN condition will *always* have its is_pushed_down flag set.
- * It's possible for an OUTER JOIN clause to be marked is_pushed_down too,
- * if we decide that it can be pushed down into the nullable side of the join.
- * In that case it acts as a plain filter qual for wherever it gets evaluated.
- * (In short, is_pushed_down is only false for non-degenerate outer join
- * conditions.  Possibly we should rename it to reflect that meaning?  But
- * see also the comments for RINFO_IS_PUSHED_DOWN, below.)
+ * If an outer join prevents us from pushing a qual down to its "natural"
+ * semantic level (the level associated with just the base rels used in the
+ * qual) then we mark the qual with a "required_relids" value including more
+ * than just the base rels it actually uses.  By pretending that the qual
+ * references all the rels required to form the outer join, we prevent it from
+ * being evaluated below the outer join's joinrel.  When we do form the outer
+ * join's joinrel, we still need to distinguish those quals that are actually
+ * in that join's JOIN/ON condition from those that appeared elsewhere in the
+ * tree and were pushed down to the join rel because they used no other rels.
+ * See the comments for RINFO_IS_PUSHED_DOWN for how we do that.
  *
  * There is also an incompatible_relids field, which is a set of outer-join
  * relids above which we cannot evaluate the clause (because they might null
@@ -2527,9 +2520,6 @@ typedef struct RestrictInfo
 
 	/* the represented clause of WHERE or JOIN */
 	Expr	   *clause;
-
-	/* true if clause was pushed down in level */
-	bool		is_pushed_down;
 
 	/* see comment above */
 	bool		can_join pg_node_attr(equal_ignore);
@@ -2674,15 +2664,19 @@ typedef struct RestrictInfo
  * This macro embodies the correct way to test whether a RestrictInfo is
  * "pushed down" to a given outer join, that is, should be treated as a filter
  * clause rather than a join clause at that outer join.  This is certainly so
- * if is_pushed_down is true; but examining that is not sufficient anymore,
- * because outer-join clauses will get pushed down to lower outer joins when
- * we generate a path for the lower outer join that is parameterized by the
- * LHS of the upper one.  We can detect such a clause by noting that its
+ * if the outer join clause references that outer join in any varnullingrels or
+ * phnullingrels set; but examining that is not sufficient anymore, because
+ * outer-join clauses will get pushed down to lower outer joins when we
+ * generate a path for the lower outer join that is parameterized by the LHS of
+ * the upper one.  We can detect such a clause by noting that its
  * required_relids exceed the scope of the join.
  */
-#define RINFO_IS_PUSHED_DOWN(rinfo, joinrelids) \
-	((rinfo)->is_pushed_down || \
+#define RINFO_IS_PUSHED_DOWN(rinfo, ojrelids, joinrelids) \
+	(bms_overlap((rinfo)->required_relids, (ojrelids)) || \
 	 !bms_is_subset((rinfo)->required_relids, joinrelids))
+
+#define CALC_OUTER_JOIN_RELIDS(joinrelids, outerrelids, innerrelids) \
+	(bms_difference((joinrelids), bms_union((outerrelids), (innerrelids))))
 
 /*
  * Since mergejoinscansel() is a relatively expensive function, and would
@@ -3183,6 +3177,8 @@ typedef struct SemiAntiJoinFactors
  * sjinfo is extra info about special joins for selectivity estimation
  * semifactors is as shown above (only valid for SEMI/ANTI/inner_unique joins)
  * param_source_rels are OK targets for parameterization of result paths
+ * ojrelids is the relid set of any outer joins that will be calculated at this
+ *		join, or NULL for inner join
  */
 typedef struct JoinPathExtraData
 {
@@ -3192,6 +3188,7 @@ typedef struct JoinPathExtraData
 	SpecialJoinInfo *sjinfo;
 	SemiAntiJoinFactors semifactors;
 	Relids		param_source_rels;
+	Relids		ojrelids;
 } JoinPathExtraData;
 
 /*

@@ -4969,7 +4969,7 @@ get_restriction_qual_cost(PlannerInfo *root, RelOptInfo *baserel,
  *	sjinfo: SpecialJoinInfo relevant to this join
  *	restrictlist: join quals
  * Output parameters:
- *	*semifactors is filled in (see pathnodes.h for field definitions)
+ *	extra->semifactors is filled in (see pathnodes.h for field definitions)
  */
 void
 compute_semi_anti_join_factors(PlannerInfo *root,
@@ -4979,7 +4979,7 @@ compute_semi_anti_join_factors(PlannerInfo *root,
 							   JoinType jointype,
 							   SpecialJoinInfo *sjinfo,
 							   List *restrictlist,
-							   SemiAntiJoinFactors *semifactors)
+							   JoinPathExtraData *extra)
 {
 	Selectivity jselec;
 	Selectivity nselec;
@@ -5002,7 +5002,7 @@ compute_semi_anti_join_factors(PlannerInfo *root,
 		{
 			RestrictInfo *rinfo = lfirst_node(RestrictInfo, l);
 
-			if (!RINFO_IS_PUSHED_DOWN(rinfo, joinrel->relids))
+			if (!RINFO_IS_PUSHED_DOWN(rinfo, extra->ojrelids, joinrel->relids))
 				joinquals = lappend(joinquals, rinfo);
 		}
 	}
@@ -5070,8 +5070,8 @@ compute_semi_anti_join_factors(PlannerInfo *root,
 	else
 		avgmatch = 1.0;
 
-	semifactors->outer_match_frac = jselec;
-	semifactors->match_count = avgmatch;
+	extra->semifactors.outer_match_frac = jselec;
+	extra->semifactors.match_count = avgmatch;
 }
 
 /*
@@ -5436,13 +5436,16 @@ calc_joinrel_size_estimate(PlannerInfo *root,
 		List	   *joinquals = NIL;
 		List	   *pushedquals = NIL;
 		ListCell   *l;
+		Relids		ojrelids = CALC_OUTER_JOIN_RELIDS(joinrel->relids,
+													  outer_rel->relids,
+													  inner_rel->relids);
 
 		/* Grovel through the clauses to separate into two lists */
 		foreach(l, restrictlist)
 		{
 			RestrictInfo *rinfo = lfirst_node(RestrictInfo, l);
 
-			if (RINFO_IS_PUSHED_DOWN(rinfo, joinrel->relids))
+			if (RINFO_IS_PUSHED_DOWN(rinfo, ojrelids, joinrel->relids))
 				pushedquals = lappend(pushedquals, rinfo);
 			else
 				joinquals = lappend(joinquals, rinfo);

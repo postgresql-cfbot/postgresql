@@ -6,7 +6,7 @@ use PostgreSQL::Test::Utils;
 use PostgreSQL::Test::Cluster;
 use Test::More;
 
-if ($ENV{PG_TEST_EXTRA} !~ /\bload_balance\b/)
+if (!PostgreSQL::Test::Utils::check_extra_text_enabled('load_balance'))
 {
 	plan skip_all =>
 	  'Potentially unsafe test load_balance not enabled in PG_TEST_EXTRA';

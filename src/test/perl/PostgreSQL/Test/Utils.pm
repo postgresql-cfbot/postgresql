@@ -269,6 +269,51 @@ sub all_tests_passing
 
 =pod
 
+=item check_extra_text_enabled()
+
+Return 1 if the extra test given as an input is enabled. Otherwise, return 0.
+
+=cut
+
+sub check_extra_text_enabled
+{
+	my ($extra_test) = @_;
+	# Set the extra tests that treat the loopback interface as a private.
+	my %needs_private_lo = map { $_ => 1 } (
+		'kerberos',
+		'ldap',
+		'load_balance',
+		'ssl',
+	);
+	# Set the tests categories
+	my %test_categories = (
+		'needs_private_lo' => {%needs_private_lo},
+	);
+
+	# Look if the individual extra test is enabled.
+	if ($ENV{PG_TEST_EXTRA} =~ m/\b$extra_test\b/)
+	{
+		return 1;
+	}
+	# Traverse the test categories, look if both the test catagory
+	# is enabled and extra test exists in this category.
+	else
+	{
+		foreach my $test_category (keys %test_categories)
+		{
+			if ($ENV{PG_TEST_EXTRA} =~ m/\b$test_category\b/
+			 && exists $test_categories{$test_category}{$extra_test})
+			{
+				return 1;
+			}
+		}
+	}
+
+	return 0;
+}
+
+=pod
+
 =item tempdir(prefix)
 
 Securely create a temporary directory inside C<$tmp_check>, like C<mkdtemp>,

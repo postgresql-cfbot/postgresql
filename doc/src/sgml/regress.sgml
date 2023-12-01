@@ -324,6 +324,16 @@ make check-world PG_TEST_EXTRA='kerberos ldap ssl load_balance'
       </para>
      </listitem>
     </varlistentry>
+
+    <varlistentry>
+     <term><literal>needs_private_lo</literal></term>
+     <listitem>
+      <para>
+       Enables the extra tests that treat the loopback interface as a private.
+       Currently enables kerberos, ldap, load_balance and ssl extra tests.
+      </para>
+     </listitem>
+    </varlistentry>
    </variablelist>
 
    Tests for features that are not supported by the current build

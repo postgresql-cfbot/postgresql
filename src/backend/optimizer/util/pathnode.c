@@ -587,11 +587,22 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
 			parent_rel->pathlist = foreach_delete_current(parent_rel->pathlist,
 														  p1);
 
+#ifdef NOT_USED
+
+			/*
+			 * XXX fixme.  When creating the final upper rel paths for queries
+			 * which have setop_pathkey set,  we'll at the cheapest path as-is
+			 * also try sorting the cheapest path. If the costs of each are
+			 * fuzzily the same then we might choose to pfree the cheapest
+			 * path.  That's bad as the sort uses that path.
+			 */
+
 			/*
 			 * Delete the data pointed-to by the deleted cell, if possible
 			 */
 			if (!IsA(old_path, IndexPath))
 				pfree(old_path);
+#endif
 		}
 		else
 		{
@@ -1237,6 +1248,9 @@ create_tidrangescan_path(PlannerInfo *root, RelOptInfo *rel,
  *
  * Note that we must handle subpaths = NIL, representing a dummy access path.
  * Also, there are callers that pass root = NULL.
+ * 'rows', when passed as a non-negative number will be used to overwrite the
+ * returned path's row estimate.  Otherwise the row estimate is calculated
+ * by totaling the rows from 'subpaths'.
  */
 AppendPath *
 create_append_path(PlannerInfo *root,

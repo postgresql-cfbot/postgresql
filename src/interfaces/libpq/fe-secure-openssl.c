@@ -241,7 +241,7 @@ rloop:
 			 */
 			libpq_append_conn_error(conn, "SSL connection has been closed unexpectedly");
 			result_errno = ECONNRESET;
-			n = -1;
+			n = -2;
 			break;
 		default:
 			libpq_append_conn_error(conn, "unrecognized SSL error code: %d", err);

@@ -556,8 +556,11 @@ pqPutMsgEnd(PGconn *conn)
  * Possible return values:
  *	 1: successfully loaded at least one more byte
  *	 0: no data is presently available, but no error detected
- *	-1: error detected (including EOF = connection closure);
+ *	-1: error detected (excluding EOF = clean connection closure);
  *		conn->errorMessage set
+ *	-2: EOF detected, connection is closed cleanly by other side;
+ *		conn->errorMessage set
+ *
  * NOTE: callers must not assume that pointers or indexes into conn->inBuffer
  * remain valid across this call!
  * ----------
@@ -639,7 +642,7 @@ retry3:
 
 			default:
 				/* pqsecure_read set the error message for us */
-				return -1;
+				return nread;
 		}
 	}
 	if (nread > 0)
@@ -734,7 +737,7 @@ retry4:
 
 			default:
 				/* pqsecure_read set the error message for us */
-				return -1;
+				return nread;
 		}
 	}
 	if (nread > 0)
@@ -751,13 +754,17 @@ definitelyEOF:
 	libpq_append_conn_error(conn, "server closed the connection unexpectedly\n"
 							"\tThis probably means the server terminated abnormally\n"
 							"\tbefore or while processing the request.");
+	/* Do *not* drop any already-read data; caller still wants it */
+	pqDropConnection(conn, false);
+	conn->status = CONNECTION_BAD;	/* No more connection to backend */
+	return -2;
 
 	/* Come here if lower-level code already set a suitable errorMessage */
 definitelyFailed:
 	/* Do *not* drop any already-read data; caller still wants it */
 	pqDropConnection(conn, false);
 	conn->status = CONNECTION_BAD;	/* No more connection to backend */
-	return -1;
+	return nread < 0 ? nread : -1;
 }
 
 /*

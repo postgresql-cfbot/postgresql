@@ -3510,6 +3510,62 @@ uint32 WaitEventExtensionNew(const char *wait_event_name)
     </para>
    </sect2>
 
+   <sect2 id="xfunc-addin-injection-points">
+    <title>Injection Points</title>
+
+    <para>
+     Add-ins can define injection points, that can register callbacks
+     to run user-defined code when going through a specific code path,
+     by calling:
+<programlisting>
+extern void InjectionPointAttach(const char *name,
+                                 const char *library,
+                                 const char *function);
+</programlisting>
+
+     <literal>name</literal> is the name of the injection point, that
+     will execute the <literal>function</literal> loaded from
+     <literal>library</library>.
+     Injection points are saved in a hash table in shared memory, and
+     last until the server is shut down.
+    </para>
+
+    <para>
+     Here is an example of callback for
+     <literal>InjectionPointCallback</literal>:
+<programlisting>
+static void
+custom_injection_callback(const char *name)
+{
+    elog(NOTICE, "%s: executed custom callback", name);
+}
+</programlisting>
+    </para>
+
+    <para>
+     Once an injection point is defined, running it requires to use
+     the following macro to trigger the callback given in a wanted code
+     path:
+<programlisting>
+INJECTION_POINT(name);
+</programlisting>
+    </para>
+
+    <para>
+     Optionally, it is possible to detach injection points by calling:
+<programlisting>
+extern void InjectionPointDetach(const char *name);
+</programlisting>
+    </para>
+
+    <para>
+     Enabling injections points requires
+     <option>--enable-injection-points</option> from
+     <command>configure</command> or <option>-Dinjection_points=true</option>
+     from <application>Meson</application>.
+    </para>
+   </sect2>
+
    <sect2 id="extend-cpp">
     <title>Using C++ for Extensibility</title>
 

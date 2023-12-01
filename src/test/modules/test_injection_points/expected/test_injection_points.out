@@ -1,0 +1,117 @@
+CREATE EXTENSION test_injection_points;
+SELECT test_injection_points_attach('TestInjectionBooh', 'booh');
+ERROR:  incorrect mode "booh" for injection point creation
+SELECT test_injection_points_attach('TestInjectionError', 'error');
+ test_injection_points_attach 
+------------------------------
+ 
+(1 row)
+
+SELECT test_injection_points_attach('TestInjectionLog', 'notice');
+ test_injection_points_attach 
+------------------------------
+ 
+(1 row)
+
+SELECT test_injection_points_attach('TestInjectionLog2', 'notice');
+ test_injection_points_attach 
+------------------------------
+ 
+(1 row)
+
+SELECT test_injection_points_run('TestInjectionBooh'); -- nothing
+ test_injection_points_run 
+---------------------------
+ 
+(1 row)
+
+SELECT test_injection_points_run('TestInjectionLog2'); -- notice
+NOTICE:  notice triggered for injection point TestInjectionLog2
+ test_injection_points_run 
+---------------------------
+ 
+(1 row)
+
+SELECT test_injection_points_run('TestInjectionLog'); -- notice
+NOTICE:  notice triggered for injection point TestInjectionLog
+ test_injection_points_run 
+---------------------------
+ 
+(1 row)
+
+SELECT test_injection_points_run('TestInjectionError'); -- error
+ERROR:  error triggered for injection point TestInjectionError
+-- Re-load and run again.
+\c
+SELECT test_injection_points_run('TestInjectionLog2'); -- notice
+NOTICE:  notice triggered for injection point TestInjectionLog2
+ test_injection_points_run 
+---------------------------
+ 
+(1 row)
+
+SELECT test_injection_points_run('TestInjectionLog'); -- notice
+NOTICE:  notice triggered for injection point TestInjectionLog
+ test_injection_points_run 
+---------------------------
+ 
+(1 row)
+
+SELECT test_injection_points_run('TestInjectionError'); -- error
+ERROR:  error triggered for injection point TestInjectionError
+-- Remove one entry and check the other one.
+SELECT test_injection_points_detach('TestInjectionError'); -- ok
+ test_injection_points_detach 
+------------------------------
+ 
+(1 row)
+
+SELECT test_injection_points_run('TestInjectionLog'); -- notice
+NOTICE:  notice triggered for injection point TestInjectionLog
+ test_injection_points_run 
+---------------------------
+ 
+(1 row)
+
+SELECT test_injection_points_run('TestInjectionError'); -- nothing
+ test_injection_points_run 
+---------------------------
+ 
+(1 row)
+
+-- All entries removed, nothing happens
+SELECT test_injection_points_detach('TestInjectionLog'); -- ok
+ test_injection_points_detach 
+------------------------------
+ 
+(1 row)
+
+SELECT test_injection_points_run('TestInjectionLog'); -- nothing
+ test_injection_points_run 
+---------------------------
+ 
+(1 row)
+
+SELECT test_injection_points_run('TestInjectionError'); -- nothing
+ test_injection_points_run 
+---------------------------
+ 
+(1 row)
+
+SELECT test_injection_points_run('TestInjectionLog2'); -- notice
+NOTICE:  notice triggered for injection point TestInjectionLog2
+ test_injection_points_run 
+---------------------------
+ 
+(1 row)
+
+SELECT test_injection_points_detach('TestInjectionLog'); -- fails
+ERROR:  injection point "TestInjectionLog" not found
+SELECT test_injection_points_run('TestInjectionLog2'); -- notice
+NOTICE:  notice triggered for injection point TestInjectionLog2
+ test_injection_points_run 
+---------------------------
+ 
+(1 row)
+
+DROP EXTENSION test_injection_points;

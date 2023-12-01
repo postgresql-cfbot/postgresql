@@ -141,6 +141,7 @@
 #include "storage/procarray.h"
 #include "storage/standby.h"
 #include "utils/builtins.h"
+#include "utils/injection_point.h"
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
 #include "utils/snapshot.h"
@@ -653,6 +654,8 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 	snap->snapshot_type = SNAPSHOT_MVCC;
 	snap->xcnt = newxcnt;
 	snap->xip = newxip;
+
+	INJECTION_POINT("SnapBuildInitialSnapshot");
 
 	return snap;
 }

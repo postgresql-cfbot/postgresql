@@ -37,6 +37,13 @@ SUBDIRS = \
 		  worker_spi \
 		  xid_wraparound
 
+
+ifeq ($(enable_injection_points),yes)
+SUBDIRS += test_injection_points
+else
+ALWAYS_SUBDIRS += test_injection_points
+endif
+
 ifeq ($(with_ssl),openssl)
 SUBDIRS += ssl_passphrase_callback
 else

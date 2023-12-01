@@ -319,6 +319,7 @@ XactTruncation	"Waiting to execute <function>pg_xact_status</function> or update
 WrapLimitsVacuum	"Waiting to update limits on transaction id and multixact consumption."
 NotifyQueueTail	"Waiting to update limit on <command>NOTIFY</command> message storage."
 WaitEventExtension	"Waiting to read or update custom wait events information for extensions."
+InjectionPoint	"Waiting to read or update information related to injection points."
 
 XactBuffer	"Waiting for I/O on a transaction status SLRU buffer."
 CommitTsBuffer	"Waiting for I/O on a commit timestamp SLRU buffer."

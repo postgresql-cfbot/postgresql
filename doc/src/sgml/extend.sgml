@@ -822,6 +822,20 @@ RETURNS anycompatible AS ...
        </para>
       </listitem>
      </varlistentry>
+
+     <varlistentry id="extend-extensions-wildcard-upgrade">
+      <term><varname>wildcard_upgrades</varname> (<type>boolean</type>)</term>
+      <listitem>
+       <para>
+        This parameter, if set to <literal>true</literal> (which is not the
+        default), allows <command>ALTER EXTENSION</command> to consider
+        a wildcard character <literal>%</literal> as matching any version of
+        the extension. Such wildcard match will only be used when no
+        perfect match is found for a version.
+       </para>
+      </listitem>
+     </varlistentry>
+
     </variablelist>
 
     <para>

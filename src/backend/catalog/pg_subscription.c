@@ -228,10 +228,14 @@ textarray_to_stringlist(ArrayType *textarray)
 
 /*
  * Add new state record for a subscription table.
+ *
+ * If retain_lock is true, then don't release the locks taken on
+ * pg_subscription and pg_subscription_rel tables. retain_lock will be true in
+ * case of non binary-upgrade mode.
  */
 void
 AddSubscriptionRelState(Oid subid, Oid relid, char state,
-						XLogRecPtr sublsn)
+						XLogRecPtr sublsn, bool retain_lock)
 {
 	Relation	rel;
 	HeapTuple	tup;
@@ -269,7 +273,10 @@ AddSubscriptionRelState(Oid subid, Oid relid, char state,
 	heap_freetuple(tup);
 
 	/* Cleanup. */
-	table_close(rel, NoLock);
+	table_close(rel, retain_lock ? NoLock : RowExclusiveLock);
+
+	if (!retain_lock)
+		UnlockSharedObject(SubscriptionRelationId, subid, 0, AccessShareLock);
 }
 
 /*

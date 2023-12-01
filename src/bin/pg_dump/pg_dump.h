@@ -83,6 +83,7 @@ typedef enum
 	DO_PUBLICATION_REL,
 	DO_PUBLICATION_TABLE_IN_SCHEMA,
 	DO_SUBSCRIPTION,
+	DO_SUBSCRIPTION_REL,
 } DumpableObjectType;
 
 /*
@@ -660,6 +661,7 @@ typedef struct _SubscriptionInfo
 {
 	DumpableObject dobj;
 	const char *rolname;
+	char	   *subenabled;
 	char	   *subbinary;
 	char	   *substream;
 	char	   *subtwophasestate;
@@ -671,7 +673,20 @@ typedef struct _SubscriptionInfo
 	char	   *subsynccommit;
 	char	   *subpublications;
 	char	   *suborigin;
+	char	   *suboriginremotelsn;
 } SubscriptionInfo;
+
+/*
+ * The SubRelInfo struct is used to represent a subscription relation.
+ */
+typedef struct _SubRelInfo
+{
+	DumpableObject dobj;
+	SubscriptionInfo *subinfo;
+	TableInfo  *tblinfo;
+	char		srsubstate;
+	char	   *srsublsn;
+} SubRelInfo;
 
 /*
  *	common utility functions
@@ -697,6 +712,7 @@ extern CollInfo *findCollationByOid(Oid oid);
 extern NamespaceInfo *findNamespaceByOid(Oid oid);
 extern ExtensionInfo *findExtensionByOid(Oid oid);
 extern PublicationInfo *findPublicationByOid(Oid oid);
+extern SubscriptionInfo *findSubscriptionByOid(Oid oid);
 
 extern void recordExtensionMembership(CatalogId catId, ExtensionInfo *ext);
 extern ExtensionInfo *findOwningExtension(CatalogId catalogId);
@@ -756,5 +772,6 @@ extern void getPublicationNamespaces(Archive *fout);
 extern void getPublicationTables(Archive *fout, TableInfo tblinfo[],
 								 int numTables);
 extern void getSubscriptions(Archive *fout);
+extern void getSubscriptionTables(Archive *fout);
 
 #endif							/* PG_DUMP_H */

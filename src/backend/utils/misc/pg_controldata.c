@@ -163,8 +163,8 @@ pg_control_checkpoint(PG_FUNCTION_ARGS)
 Datum
 pg_control_recovery(PG_FUNCTION_ARGS)
 {
-	Datum		values[5];
-	bool		nulls[5];
+	Datum		values[9];
+	bool		nulls[9];
 	TupleDesc	tupdesc;
 	HeapTuple	htup;
 	ControlFileData *ControlFile;
@@ -187,14 +187,26 @@ pg_control_recovery(PG_FUNCTION_ARGS)
 	values[1] = Int32GetDatum(ControlFile->minRecoveryPointTLI);
 	nulls[1] = false;
 
-	values[2] = LSNGetDatum(ControlFile->backupStartPoint);
+	values[2] = LSNGetDatum(ControlFile->backupCheckPoint);
 	nulls[2] = false;
 
-	values[3] = LSNGetDatum(ControlFile->backupEndPoint);
+	values[3] = LSNGetDatum(ControlFile->backupStartPoint);
 	nulls[3] = false;
 
-	values[4] = BoolGetDatum(ControlFile->backupEndRequired);
+	values[4] = Int32GetDatum(ControlFile->backupStartPointTLI);
 	nulls[4] = false;
+
+	values[5] = LSNGetDatum(ControlFile->backupEndPoint);
+	nulls[5] = false;
+
+	values[6] = BoolGetDatum(ControlFile->backupRecoveryRequired);
+	nulls[6] = false;
+
+	values[7] = BoolGetDatum(ControlFile->backupFromStandby);
+	nulls[7] = false;
+
+	values[8] = BoolGetDatum(ControlFile->backupEndRequired);
+	nulls[8] = false;
 
 	htup = heap_form_tuple(tupdesc, values, nulls);
 

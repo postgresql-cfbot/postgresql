@@ -22,6 +22,7 @@
 #include "backup/basebackup.h"
 #include "backup/basebackup_sink.h"
 #include "backup/basebackup_target.h"
+#include "catalog/pg_control.h"
 #include "commands/defrem.h"
 #include "common/compression.h"
 #include "common/file_perm.h"
@@ -192,10 +193,9 @@ static const struct exclude_list_item excludeFiles[] =
 	{RELCACHE_INIT_FILENAME, true},
 
 	/*
-	 * backup_label and tablespace_map should not exist in a running cluster
-	 * capable of doing an online backup, but exclude them just in case.
+	 * tablespace_map should not exist in a running cluster capable of doing
+	 * an online backup, but exclude it just in case.
 	 */
-	{BACKUP_LABEL_FILE, false},
 	{TABLESPACE_MAP, false},
 
 	/*
@@ -225,6 +225,8 @@ perform_base_backup(basebackup_options *opt, bbsink *sink)
 	bbsink_state state;
 	XLogRecPtr	endptr;
 	TimeLineID	endtli;
+	pg_time_t	starttime;
+	pg_time_t	stoptime;
 	backup_manifest_info manifest;
 	BackupState *backup_state;
 	StringInfo	tablespace_map;
@@ -243,7 +245,7 @@ perform_base_backup(basebackup_options *opt, bbsink *sink)
 	backup_started_in_recovery = RecoveryInProgress();
 
 	InitializeBackupManifest(&manifest, opt->manifest,
-							 opt->manifest_checksum_type);
+							 opt->manifest_checksum_type, opt->label);
 
 	total_checksum_failures = 0;
 
@@ -308,19 +310,11 @@ perform_base_backup(basebackup_options *opt, bbsink *sink)
 
 			if (ti->path == NULL)
 			{
-				struct stat statbuf;
 				bool		sendtblspclinks = true;
-				char	   *backup_label;
 
 				bbsink_begin_archive(sink, "base.tar");
 
-				/* In the main tar, include the backup_label first... */
-				backup_label = build_backup_content(backup_state, false);
-				sendFileWithContent(sink, BACKUP_LABEL_FILE,
-									backup_label, -1, &manifest);
-				pfree(backup_label);
-
-				/* Then the tablespace_map file, if required... */
+				/* Send the tablespace_map file, if required... */
 				if (opt->sendtblspcmapfile)
 				{
 					sendFileWithContent(sink, TABLESPACE_MAP,
@@ -332,15 +326,14 @@ perform_base_backup(basebackup_options *opt, bbsink *sink)
 				sendDir(sink, ".", 1, false, state.tablespaces,
 						sendtblspclinks, &manifest, InvalidOid);
 
-				/* ... and pg_control after everything else. */
-				if (lstat(XLOG_CONTROL_FILE, &statbuf) != 0)
-					ereport(ERROR,
-							(errcode_for_file_access(),
-							 errmsg("could not stat file \"%s\": %m",
-									XLOG_CONTROL_FILE)));
-				sendFile(sink, XLOG_CONTROL_FILE, XLOG_CONTROL_FILE, &statbuf,
-						 false, InvalidOid, InvalidOid,
-						 InvalidRelFileNumber, 0, &manifest);
+				/* End the backup before sending pg_control */
+				basebackup_progress_wait_wal_archive(&state);
+				do_pg_backup_stop(backup_state, !opt->nowait);
+
+				/* Send copy of pg_control containing recovery info */
+				sendFileWithContent(sink, XLOG_CONTROL_FILE,
+									(char *)backup_state->controlFile,
+									PG_CONTROL_FILE_SIZE, &manifest);
 			}
 			else
 			{
@@ -374,11 +367,12 @@ perform_base_backup(basebackup_options *opt, bbsink *sink)
 			}
 		}
 
-		basebackup_progress_wait_wal_archive(&state);
-		do_pg_backup_stop(backup_state, !opt->nowait);
-
 		endptr = backup_state->stoppoint;
 		endtli = backup_state->stoptli;
+
+		/* Record start/stop time for manifest */
+		starttime = backup_state->starttime;
+		stoptime = backup_state->stoptime;
 
 		/* Deallocate backup-related variables. */
 		pfree(tablespace_map->data);
@@ -629,6 +623,7 @@ perform_base_backup(basebackup_options *opt, bbsink *sink)
 
 	AddWALInfoToBackupManifest(&manifest, state.startptr, state.starttli,
 							   endptr, endtli);
+	AddTimeInfoToBackupManifest(&manifest, starttime, stoptime);
 
 	SendBackupManifest(&manifest, sink);
 
@@ -1044,7 +1039,6 @@ sendFileWithContent(bbsink *sink, const char *filename, const char *content,
 	/*
 	 * Construct a stat struct for the file we're injecting in the tar.
 	 */
-
 	/* Windows doesn't have the concept of uid and gid */
 #ifdef WIN32
 	statbuf.st_uid = 0;

@@ -53,7 +53,7 @@ static MemoryContext backupcontext = NULL;
  * pg_backup_start: set up for taking an on-line backup dump
  *
  * Essentially what this does is to create the contents required for the
- * backup_label file and the tablespace map.
+ * the tablespace map.
  *
  * Permission checking for this function is managed through the normal
  * GRANT system.
@@ -61,6 +61,10 @@ static MemoryContext backupcontext = NULL;
 Datum
 pg_backup_start(PG_FUNCTION_ARGS)
 {
+#define PG_BACKUP_START_V2_COLS 3
+	TupleDesc	tupdesc;
+	Datum		values[PG_BACKUP_START_V2_COLS] = {0};
+	bool		nulls[PG_BACKUP_START_V2_COLS] = {0};
 	text	   *backupid = PG_GETARG_TEXT_PP(0);
 	bool		fast = PG_GETARG_BOOL(1);
 	char	   *backupidstr;
@@ -68,6 +72,10 @@ pg_backup_start(PG_FUNCTION_ARGS)
 	MemoryContext oldcontext;
 
 	backupidstr = text_to_cstring(backupid);
+
+	/* Initialize attributes information in the tuple descriptor */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
 
 	if (status == SESSION_BACKUP_RUNNING)
 		ereport(ERROR,
@@ -102,7 +110,12 @@ pg_backup_start(PG_FUNCTION_ARGS)
 	register_persistent_abort_backup_handler();
 	do_pg_backup_start(backupidstr, fast, NULL, backup_state, tablespace_map);
 
-	PG_RETURN_LSN(backup_state->startpoint);
+	values[0] = LSNGetDatum(backup_state->startpoint);
+	values[1] = Int64GetDatum(backup_state->starttli);
+	values[2] = TimestampTzGetDatum(time_t_to_timestamptz(backup_state->starttime));
+
+	/* Returns the record as Datum */
+	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
 }
 
 
@@ -113,14 +126,12 @@ pg_backup_start(PG_FUNCTION_ARGS)
  * allows the user to choose if they want to wait for the WAL to be archived
  * or if we should just return as soon as the WAL record is written.
  *
- * This function stops an in-progress backup, creates backup_label contents and
- * it returns the backup stop LSN, backup_label and tablespace_map contents.
+ * This function stops an in-progress backup and returns the backup stop LSN,
+ * pg_control and tablespace_map contents.
  *
- * The backup_label contains the user-supplied label string (typically this
- * would be used to tell where the backup dump will be stored), the starting
- * time, starting WAL location for the dump and so on.  It is the caller's
- * responsibility to write the backup_label and tablespace_map files in the
- * data folder that will be restored from this backup.
+ * The pg_control file contains the recovery information for the backup.  It is
+ * the caller's responsibility to write the pg_control and tablespace_map files
+ * in the data folder that will be restored from this backup.
  *
  * Permission checking for this function is managed through the normal
  * GRANT system.
@@ -128,12 +139,12 @@ pg_backup_start(PG_FUNCTION_ARGS)
 Datum
 pg_backup_stop(PG_FUNCTION_ARGS)
 {
-#define PG_BACKUP_STOP_V2_COLS 3
+#define PG_BACKUP_STOP_V2_COLS 5
 	TupleDesc	tupdesc;
 	Datum		values[PG_BACKUP_STOP_V2_COLS] = {0};
 	bool		nulls[PG_BACKUP_STOP_V2_COLS] = {0};
 	bool		waitforarchive = PG_GETARG_BOOL(0);
-	char	   *backup_label;
+	bytea	   *pg_control_bytea;
 	SessionBackupState status = get_backup_status();
 
 	/* Initialize attributes information in the tuple descriptor */
@@ -152,15 +163,16 @@ pg_backup_stop(PG_FUNCTION_ARGS)
 	/* Stop the backup */
 	do_pg_backup_stop(backup_state, waitforarchive);
 
-	/* Build the contents of backup_label */
-	backup_label = build_backup_content(backup_state, false);
+	/* Build the contents of pg_control */
+	pg_control_bytea = (bytea *) palloc(PG_CONTROL_FILE_SIZE + VARHDRSZ);
+	SET_VARSIZE(pg_control_bytea, PG_CONTROL_FILE_SIZE + VARHDRSZ);
+	memcpy(VARDATA(pg_control_bytea), backup_state->controlFile, PG_CONTROL_FILE_SIZE);
 
-	values[0] = LSNGetDatum(backup_state->stoppoint);
-	values[1] = CStringGetTextDatum(backup_label);
-	values[2] = CStringGetTextDatum(tablespace_map->data);
-
-	/* Deallocate backup-related variables */
-	pfree(backup_label);
+	values[0] = PointerGetDatum(pg_control_bytea);
+	values[1] = CStringGetTextDatum(tablespace_map->data);
+	values[2] = LSNGetDatum(backup_state->stoppoint);
+	values[3] = Int64GetDatum(backup_state->stoptli);
+	values[4] = TimestampTzGetDatum(time_t_to_timestamptz(backup_state->stoptime));
 
 	/* Clean up the session-level state and its memory context */
 	backup_state = NULL;

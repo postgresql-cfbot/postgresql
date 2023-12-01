@@ -277,10 +277,18 @@ main(int argc, char *argv[])
 		   LSN_FORMAT_ARGS(ControlFile->minRecoveryPoint));
 	printf(_("Min recovery ending loc's timeline:   %u\n"),
 		   ControlFile->minRecoveryPointTLI);
+	printf(_("Backup checkpoint location:           %X/%X\n"),
+		   LSN_FORMAT_ARGS(ControlFile->backupCheckPoint));
 	printf(_("Backup start location:                %X/%X\n"),
 		   LSN_FORMAT_ARGS(ControlFile->backupStartPoint));
+	printf(_("Backup start location's timeline:     %u\n"),
+		   ControlFile->backupStartPointTLI);
 	printf(_("Backup end location:                  %X/%X\n"),
 		   LSN_FORMAT_ARGS(ControlFile->backupEndPoint));
+	printf(_("Backup recovery required:        		%s\n"),
+		   ControlFile->backupRecoveryRequired ? _("yes") : _("no"));
+	printf(_("Backup from standby:        			%s\n"),
+		   ControlFile->backupFromStandby ? _("yes") : _("no"));
 	printf(_("End-of-backup record required:        %s\n"),
 		   ControlFile->backupEndRequired ? _("yes") : _("no"));
 	printf(_("wal_level setting:                    %s\n"),

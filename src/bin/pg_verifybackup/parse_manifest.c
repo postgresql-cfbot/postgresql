@@ -25,6 +25,7 @@ typedef enum
 	JM_EXPECT_TOPLEVEL_END,
 	JM_EXPECT_TOPLEVEL_FIELD,
 	JM_EXPECT_VERSION_VALUE,
+	JM_EXPECT_BACKUP_LABEL_VALUE,
 	JM_EXPECT_FILES_START,
 	JM_EXPECT_FILES_NEXT,
 	JM_EXPECT_THIS_FILE_FIELD,
@@ -33,6 +34,9 @@ typedef enum
 	JM_EXPECT_WAL_RANGES_NEXT,
 	JM_EXPECT_THIS_WAL_RANGE_FIELD,
 	JM_EXPECT_THIS_WAL_RANGE_VALUE,
+	JM_EXPECT_TIME_RANGE_START,
+	JM_EXPECT_THIS_TIME_RANGE_FIELD,
+	JM_EXPECT_THIS_TIME_RANGE_VALUE,
 	JM_EXPECT_MANIFEST_CHECKSUM_VALUE,
 	JM_EXPECT_EOF,
 } JsonManifestSemanticState;
@@ -188,6 +192,9 @@ json_manifest_object_start(void *state)
 			parse->start_lsn = NULL;
 			parse->end_lsn = NULL;
 			break;
+		case JM_EXPECT_TIME_RANGE_START:
+			parse->state = JM_EXPECT_THIS_TIME_RANGE_FIELD;
+			break;
 		default:
 			json_manifest_parse_failure(parse->context,
 										"unexpected object start");
@@ -222,6 +229,9 @@ json_manifest_object_end(void *state)
 		case JM_EXPECT_THIS_WAL_RANGE_FIELD:
 			json_manifest_finalize_wal_range(parse);
 			parse->state = JM_EXPECT_WAL_RANGES_NEXT;
+			break;
+		case JM_EXPECT_THIS_TIME_RANGE_FIELD:
+			parse->state = JM_EXPECT_TOPLEVEL_FIELD;
 			break;
 		default:
 			json_manifest_parse_failure(parse->context,
@@ -312,6 +322,13 @@ json_manifest_object_field_start(void *state, char *fname, bool isnull)
 				break;
 			}
 
+			/* Is this the backup label? */
+			if (strcmp(fname, "Backup-Label") == 0)
+			{
+				parse->state = JM_EXPECT_BACKUP_LABEL_VALUE;
+				break;
+			}
+
 			/* Is this the list of files? */
 			if (strcmp(fname, "Files") == 0)
 			{
@@ -323,6 +340,13 @@ json_manifest_object_field_start(void *state, char *fname, bool isnull)
 			if (strcmp(fname, "WAL-Ranges") == 0)
 			{
 				parse->state = JM_EXPECT_WAL_RANGES_START;
+				break;
+			}
+
+			/* Is this the time range? */
+			if (strcmp(fname, "Time-Range") == 0)
+			{
+				parse->state = JM_EXPECT_TIME_RANGE_START;
 				break;
 			}
 
@@ -372,6 +396,14 @@ json_manifest_object_field_start(void *state, char *fname, bool isnull)
 			parse->state = JM_EXPECT_THIS_WAL_RANGE_VALUE;
 			break;
 
+		case JM_EXPECT_THIS_TIME_RANGE_FIELD:
+			if (strcmp(fname, "Start-Time") != 0 &&
+				strcmp(fname, "End-Time") != 0)
+				json_manifest_parse_failure(parse->context,
+											"unexpected time range field");
+			parse->state = JM_EXPECT_THIS_TIME_RANGE_VALUE;
+			break;
+
 		default:
 			json_manifest_parse_failure(parse->context,
 										"unexpected object field");
@@ -407,6 +439,10 @@ json_manifest_scalar(void *state, char *token, JsonTokenType tokentype)
 			if (strcmp(token, "1") != 0)
 				json_manifest_parse_failure(parse->context,
 											"unexpected manifest version");
+			parse->state = JM_EXPECT_TOPLEVEL_FIELD;
+			break;
+
+		case JM_EXPECT_BACKUP_LABEL_VALUE:
 			parse->state = JM_EXPECT_TOPLEVEL_FIELD;
 			break;
 
@@ -449,6 +485,10 @@ json_manifest_scalar(void *state, char *token, JsonTokenType tokentype)
 					break;
 			}
 			parse->state = JM_EXPECT_THIS_WAL_RANGE_FIELD;
+			break;
+
+		case JM_EXPECT_THIS_TIME_RANGE_VALUE:
+			parse->state = JM_EXPECT_THIS_TIME_RANGE_FIELD;
 			break;
 
 		case JM_EXPECT_MANIFEST_CHECKSUM_VALUE:

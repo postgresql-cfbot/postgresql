@@ -15,6 +15,7 @@
 #define XLOG_BACKUP_H
 
 #include "access/xlogdefs.h"
+#include "catalog/pg_control.h"
 #include "pgtime.h"
 
 /* Structure to hold backup state. */
@@ -33,9 +34,16 @@ typedef struct BackupState
 	XLogRecPtr	stoppoint;		/* backup stop WAL location */
 	TimeLineID	stoptli;		/* backup stop TLI */
 	pg_time_t	stoptime;		/* backup stop time */
+
+	/*
+	 * After pg_backup_stop() returns this field will contain a copy of
+	 * pg_control that should be stored with the backup. Fields have been
+	 * updated for recovery and the CRC has been recalculated. Bytes after
+	 * sizeof(ControlFileData) are zeroed.
+	 */
+	uint8_t controlFile[PG_CONTROL_FILE_SIZE];
 } BackupState;
 
-extern char *build_backup_content(BackupState *state,
-								  bool ishistoryfile);
+extern char *build_backup_history_content(BackupState *state);
 
 #endif							/* XLOG_BACKUP_H */

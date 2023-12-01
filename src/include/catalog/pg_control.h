@@ -146,6 +146,9 @@ typedef struct ControlFileData
 	 * to disk, we mustn't start up until we reach X again. Zero when not
 	 * doing archive recovery.
 	 *
+	 * backupCheckPoint is the backup start checkpoint and is set to zero after
+	 * recovery is initialized.
+	 *
 	 * backupStartPoint is the redo pointer of the backup start checkpoint, if
 	 * we are recovering from an online backup and haven't reached the end of
 	 * backup yet. It is reset to zero when the end of backup is reached, and
@@ -160,14 +163,28 @@ typedef struct ControlFileData
 	 * pg_control which was backed up last. It is reset to zero when the end
 	 * of backup is reached, and we mustn't start up before that.
 	 *
+	 * backupRecoveryRequired indicates that the pg_control file was provided
+	 * by a backup or pg_rewind and recovery settings need to be copied to the
+	 * appropriate fields. It will be set to false when the settings have been
+	 * copied.
+	 *
+	 * backupFromStandby indicates that the backup was taken on a standby. It is
+	 * required to initialize recovery and set to false afterwards.
+	 *
 	 * If backupEndRequired is true, we know for sure that we're restoring
 	 * from a backup, and must see a backup-end record before we can safely
-	 * start up.
+	 * start up. Currently backupEndRequired should only be false if recovery
+	 * settings were configured by pg_rewind, which does not require an end
+	 * point.
 	 */
 	XLogRecPtr	minRecoveryPoint;
 	TimeLineID	minRecoveryPointTLI;
+	XLogRecPtr	backupCheckPoint;
 	XLogRecPtr	backupStartPoint;
 	XLogRecPtr	backupEndPoint;
+	TimeLineID	backupStartPointTLI;
+	bool 		backupRecoveryRequired;
+	bool 		backupFromStandby;
 	bool		backupEndRequired;
 
 	/*

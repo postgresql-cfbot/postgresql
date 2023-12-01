@@ -41,6 +41,22 @@ LOCK TABLE lock_tbl1 IN SHARE ROW EXCLUSIVE MODE NOWAIT;
 LOCK TABLE lock_tbl1 IN EXCLUSIVE MODE NOWAIT;
 LOCK TABLE lock_tbl1 IN ACCESS EXCLUSIVE MODE NOWAIT;
 ROLLBACK;
+-- Try using WAIT ONLY along with valid options.
+BEGIN TRANSACTION;
+LOCK TABLE lock_tbl1 IN ACCESS SHARE MODE WAIT ONLY;
+LOCK TABLE lock_tbl1 IN ROW SHARE MODE WAIT ONLY;
+LOCK TABLE lock_tbl1 IN ROW EXCLUSIVE MODE WAIT ONLY;
+LOCK TABLE lock_tbl1 IN SHARE UPDATE EXCLUSIVE MODE WAIT ONLY;
+LOCK TABLE lock_tbl1 IN SHARE MODE WAIT ONLY;
+LOCK TABLE lock_tbl1 IN SHARE ROW EXCLUSIVE MODE WAIT ONLY;
+LOCK TABLE lock_tbl1 IN EXCLUSIVE MODE WAIT ONLY;
+LOCK TABLE lock_tbl1 IN ACCESS EXCLUSIVE MODE WAIT ONLY;
+ROLLBACK;
+-- WAIT ONLY is allowed outside a transaction
+LOCK TABLE lock_tbl1 IN ACCESS EXCLUSIVE MODE WAIT ONLY;
+-- NOWAIT + WAIT ONLY is not supported (yet?)
+LOCK TABLE lock_tbl1 IN ACCESS EXCLUSIVE MODE NOWAIT WAIT ONLY;
+ERROR:  NOWAIT is not supported with WAIT ONLY
 -- Verify that we can lock views.
 BEGIN TRANSACTION;
 LOCK TABLE lock_view1 IN EXCLUSIVE MODE;
@@ -138,8 +154,22 @@ ROLLBACK;
 CREATE TABLE lock_tbl2 (b BIGINT) INHERITS (lock_tbl1);
 CREATE TABLE lock_tbl3 () INHERITS (lock_tbl2);
 BEGIN TRANSACTION;
+LOCK TABLE lock_tbl1 * IN ACCESS EXCLUSIVE MODE WAIT ONLY;
 LOCK TABLE lock_tbl1 * IN ACCESS EXCLUSIVE MODE;
 ROLLBACK;
+-- WAIT ONLY requires SELECT permissions regardless of lock mode
+-- fail without permissions
+SET ROLE regress_rol_lock1;
+BEGIN;
+LOCK TABLE ONLY lock_tbl1 IN ACCESS SHARE MODE WAIT ONLY;
+ERROR:  permission denied for table lock_tbl1
+ROLLBACK;
+RESET ROLE;
+-- succeed with only SELECT permissions and ACCESS EXCLUSIVE mode
+GRANT SELECT ON TABLE lock_tbl1 TO regress_rol_lock1;
+LOCK TABLE ONLY lock_tbl1 IN ACCESS EXCLUSIVE MODE WAIT ONLY;
+RESET ROLE;
+REVOKE SELECT ON TABLE lock_tbl1 FROM regress_rol_lock1;
 -- Child tables are locked without granting explicit permission to do so as
 -- long as we have permission to lock the parent.
 GRANT UPDATE ON TABLE lock_tbl1 TO regress_rol_lock1;
@@ -150,10 +180,20 @@ LOCK TABLE lock_tbl2;
 ERROR:  permission denied for table lock_tbl2
 ROLLBACK;
 BEGIN;
+LOCK TABLE lock_tbl2 WAIT ONLY;
+ERROR:  permission denied for table lock_tbl2
+ROLLBACK;
+BEGIN;
 LOCK TABLE lock_tbl1 * IN ACCESS EXCLUSIVE MODE;
 ROLLBACK;
 BEGIN;
+LOCK TABLE lock_tbl1 * IN ACCESS EXCLUSIVE MODE WAIT ONLY;
+ROLLBACK;
+BEGIN;
 LOCK TABLE ONLY lock_tbl1;
+ROLLBACK;
+BEGIN;
+LOCK TABLE ONLY lock_tbl1 WAIT ONLY;
 ROLLBACK;
 RESET ROLE;
 REVOKE UPDATE ON TABLE lock_tbl1 FROM regress_rol_lock1;

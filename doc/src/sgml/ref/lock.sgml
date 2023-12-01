@@ -21,7 +21,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-LOCK [ TABLE ] [ ONLY ] <replaceable class="parameter">name</replaceable> [ * ] [, ...] [ IN <replaceable class="parameter">lockmode</replaceable> MODE ] [ NOWAIT ]
+LOCK [ TABLE ] [ ONLY ] <replaceable class="parameter">name</replaceable> [ * ] [, ...] [ IN <replaceable class="parameter">lockmode</replaceable> MODE ] [ NOWAIT | WAIT ONLY ]
 
 <phrase>where <replaceable class="parameter">lockmode</replaceable> is one of:</phrase>
 
@@ -42,12 +42,15 @@ LOCK [ TABLE ] [ ONLY ] <replaceable class="parameter">name</replaceable> [ * ] 
    error is emitted.  Once obtained, the lock is held for the
    remainder of the current transaction.  (There is no <command>UNLOCK
    TABLE</command> command; locks are always released at transaction
-   end.)
+   end.)  If <literal>WAIT ONLY</literal> is specified, <command>LOCK
+   TABLE</command> simply waits for already-held conflicting locks to be
+   released, and doesn't take any new table-level locks.
   </para>
 
   <para>
    When a view is locked, all relations appearing in the view definition
-   query are also locked recursively with the same lock mode.
+   query are also locked recursively with the same lock mode. Views are not
+   currently supported with <literal>WAIT ONLY</literal>.
   </para>
 
   <para>
@@ -99,6 +102,15 @@ LOCK [ TABLE ] [ ONLY ] <replaceable class="parameter">name</replaceable> [ * ] 
    same order, and if multiple lock modes are involved for a single
    object, then transactions should always acquire the most
    restrictive mode first.
+  </para>
+
+  <para>
+   <literal>WAIT ONLY</literal> can be used with <literal>SHARE</literal> mode
+   to wait for in-progress writes to be committed or rolled back, while still
+   allowing other transactions to newly acquire conflicting locks. This can be
+   useful in conjunction with non-transactional communication between clients
+   about writes, such as through sequences. As above, clients must be mindful of
+   isolation levels when observing changes made by other transactions.
   </para>
 
   <para>
@@ -158,6 +170,24 @@ LOCK [ TABLE ] [ ONLY ] <replaceable class="parameter">name</replaceable> [ * ] 
      </para>
     </listitem>
    </varlistentry>
+
+   <varlistentry>
+    <term><literal>WAIT ONLY</literal></term>
+    <listitem>
+     <para>
+      Specifies that <command>LOCK TABLE</command> should only wait for existing
+      conflicting locks to be released, and not take any new table-level locks.
+      Unlike when actually locking the tables, this first obtains the combined
+      set of conflicting locks for all specified tables, and then waits on all
+      of those locks (rather than first obtaining the conflicting locks for the
+      first table and waiting on those, then obtaining the conflicting locks for
+      the second table and waiting on those, and so on). Since no table-level
+      locks are taken, a table may be dropped by another transaction while
+      waiting. Views are not currently supported with
+      <literal>WAIT ONLY</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
   </variablelist>
  </refsect1>
 
@@ -175,7 +205,9 @@ LOCK [ TABLE ] [ ONLY ] <replaceable class="parameter">name</replaceable> [ * ] 
     MODE</literal> (or a less-conflicting mode as described in <xref
     linkend="explicit-locking"/>) is permitted. If a user has
     <literal>SELECT</literal> privileges on the table, <literal>ACCESS SHARE
-    MODE</literal> is permitted.
+    MODE</literal> is permitted. If <literal>WAIT ONLY</literal> is specified,
+    only <literal>SELECT</literal> privileges are required regardless of
+    <replaceable class="parameter">lockmode</replaceable>.
    </para>
 
    <para>
@@ -191,10 +223,13 @@ LOCK [ TABLE ] [ ONLY ] <replaceable class="parameter">name</replaceable> [ * ] 
    </para>
 
    <para>
-    <command>LOCK TABLE</command> is useless outside a transaction block: the lock
-    would remain held only to the completion of the statement.  Therefore
-    <productname>PostgreSQL</productname> reports an error if <command>LOCK</command>
-    is used outside a transaction block.
+    <command>LOCK TABLE</command> without <literal>WAIT ONLY</literal> is
+    useless outside a transaction block: the lock would remain held only to the
+    completion of the statement, and using <literal>WAIT ONLY</literal> is more
+    efficient if the goal is simply to wait for conflicting locks.  Therefore
+    <productname>PostgreSQL</productname> reports an error if
+    <command>LOCK</command> is used outside a transaction block without
+    <literal>WAIT ONLY</literal>.
     Use
     <link linkend="sql-begin"><command>BEGIN</command></link> and
     <link linkend="sql-commit"><command>COMMIT</command></link>
@@ -262,7 +297,8 @@ COMMIT WORK;
 
   <para>
    Except for <literal>ACCESS SHARE</literal>, <literal>ACCESS EXCLUSIVE</literal>,
-   and <literal>SHARE UPDATE EXCLUSIVE</literal> lock modes, the
+   and <literal>SHARE UPDATE EXCLUSIVE</literal> lock modes and the
+   <literal>WAIT ONLY</literal> option, the
    <productname>PostgreSQL</productname> lock modes and the
    <command>LOCK TABLE</command> syntax are compatible with those
    present in <productname>Oracle</productname>.

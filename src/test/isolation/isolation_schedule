@@ -5,6 +5,7 @@ test: read-write-unique
 test: read-write-unique-2
 test: read-write-unique-3
 test: read-write-unique-4
+test: wait-only
 test: simple-write-skew
 test: receipt-report
 test: temporal-range-integrity
@@ -20,6 +21,7 @@ test: index-only-scan
 test: predicate-lock-hot-tuple
 test: update-conflict-out
 test: deadlock-simple
+test: deadlock-wait-only
 test: deadlock-hard
 test: deadlock-soft
 test: deadlock-soft-2

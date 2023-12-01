@@ -1,0 +1,12 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1re s2as s2swo s1aewo s1c s2c
+step s1re: LOCK TABLE a1 IN ROW EXCLUSIVE MODE;
+step s2as: LOCK TABLE a1 IN ACCESS SHARE MODE;
+step s2swo: LOCK TABLE a1 IN SHARE MODE WAIT ONLY; <waiting ...>
+step s1aewo: LOCK TABLE a1 IN ACCESS EXCLUSIVE MODE WAIT ONLY; <waiting ...>
+step s1aewo: <... completed>
+step s2swo: <... completed>
+ERROR:  deadlock detected
+step s1c: COMMIT;
+step s2c: COMMIT;

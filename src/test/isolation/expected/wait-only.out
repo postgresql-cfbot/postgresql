@@ -1,0 +1,129 @@
+Parsed test spec with 3 sessions
+
+starting permutation: w1ae2 w2in1 rlwo w2c w1c rsel1 rc
+step w1ae2: LOCK TABLE t2 IN ACCESS EXCLUSIVE MODE;
+step w2in1: INSERT INTO t1 VALUES (DEFAULT);
+step rlwo: LOCK TABLE t1, t2 IN SHARE MODE WAIT ONLY; <waiting ...>
+step w2c: COMMIT;
+step w1c: COMMIT;
+step rlwo: <... completed>
+step rsel1: SELECT id from t1;
+id
+--
+ 1
+(1 row)
+
+step rc: COMMIT;
+
+starting permutation: w1ae2 w2in1 w2c w1c rlwo rsel1 rc
+step w1ae2: LOCK TABLE t2 IN ACCESS EXCLUSIVE MODE;
+step w2in1: INSERT INTO t1 VALUES (DEFAULT);
+step w2c: COMMIT;
+step w1c: COMMIT;
+step rlwo: LOCK TABLE t1, t2 IN SHARE MODE WAIT ONLY;
+step rsel1: SELECT id from t1;
+id
+--
+ 1
+(1 row)
+
+step rc: COMMIT;
+
+starting permutation: w1in1 rlwo w2in1 w2c w1c rsel1 rc
+step w1in1: INSERT INTO t1 VALUES (DEFAULT);
+step rlwo: LOCK TABLE t1, t2 IN SHARE MODE WAIT ONLY; <waiting ...>
+step w2in1: INSERT INTO t1 VALUES (DEFAULT);
+step w2c: COMMIT;
+step w1c: COMMIT;
+step rlwo: <... completed>
+step rsel1: SELECT id from t1;
+id
+--
+ 1
+ 2
+(2 rows)
+
+step rc: COMMIT;
+
+starting permutation: w1in1 rsv rl w2in1 w1c rrb w2c rsel1 rc
+step w1in1: INSERT INTO t1 VALUES (DEFAULT);
+step rsv: SAVEPOINT foo;
+step rl: LOCK TABLE t1, t2 IN SHARE MODE; <waiting ...>
+step w2in1: INSERT INTO t1 VALUES (DEFAULT); <waiting ...>
+step w1c: COMMIT;
+step rl: <... completed>
+step rrb: ROLLBACK TO foo;
+step w2in1: <... completed>
+step w2c: COMMIT;
+step rsel1: SELECT id from t1;
+id
+--
+ 1
+ 2
+(2 rows)
+
+step rc: COMMIT;
+
+starting permutation: w2in1 rlwo w1ae2 w1in1 w2c rsel1 w1c rc
+step w2in1: INSERT INTO t1 VALUES (DEFAULT);
+step rlwo: LOCK TABLE t1, t2 IN SHARE MODE WAIT ONLY; <waiting ...>
+step w1ae2: LOCK TABLE t2 IN ACCESS EXCLUSIVE MODE;
+step w1in1: INSERT INTO t1 VALUES (DEFAULT);
+step w2c: COMMIT;
+step rlwo: <... completed>
+step rsel1: SELECT id from t1;
+id
+--
+ 1
+(1 row)
+
+step w1c: COMMIT;
+step rc: COMMIT;
+
+starting permutation: w2in1 rsv rl w1ae2 w2c w1c rrb rsel1 rc
+step w2in1: INSERT INTO t1 VALUES (DEFAULT);
+step rsv: SAVEPOINT foo;
+step rl: LOCK TABLE t1, t2 IN SHARE MODE; <waiting ...>
+step w1ae2: LOCK TABLE t2 IN ACCESS EXCLUSIVE MODE;
+step w2c: COMMIT;
+step w1c: COMMIT;
+step rl: <... completed>
+step rrb: ROLLBACK TO foo;
+step rsel1: SELECT id from t1;
+id
+--
+ 1
+(1 row)
+
+step rc: COMMIT;
+
+starting permutation: w1ae1 w2in1 rlwo w1c rsel1 w2c rc
+step w1ae1: LOCK TABLE t1 IN ACCESS EXCLUSIVE MODE;
+step w2in1: INSERT INTO t1 VALUES (DEFAULT); <waiting ...>
+step rlwo: LOCK TABLE t1, t2 IN SHARE MODE WAIT ONLY; <waiting ...>
+step w1c: COMMIT;
+step w2in1: <... completed>
+step rlwo: <... completed>
+step rsel1: SELECT id from t1;
+id
+--
+(0 rows)
+
+step w2c: COMMIT;
+step rc: COMMIT;
+
+starting permutation: w1ae1 w2in1 rl w1c w2c rsel1 rc
+step w1ae1: LOCK TABLE t1 IN ACCESS EXCLUSIVE MODE;
+step w2in1: INSERT INTO t1 VALUES (DEFAULT); <waiting ...>
+step rl: LOCK TABLE t1, t2 IN SHARE MODE; <waiting ...>
+step w1c: COMMIT;
+step w2in1: <... completed>
+step w2c: COMMIT;
+step rl: <... completed>
+step rsel1: SELECT id from t1;
+id
+--
+ 1
+(1 row)
+
+step rc: COMMIT;

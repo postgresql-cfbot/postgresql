@@ -296,7 +296,7 @@ help(const char *progname)
 	printf(_("      --lc-ctype=LOCALE        LC_CTYPE setting for the database\n"));
 	printf(_("      --icu-locale=LOCALE      ICU locale setting for the database\n"));
 	printf(_("      --icu-rules=RULES        ICU rules setting for the database\n"));
-	printf(_("      --locale-provider={libc|icu}\n"
+	printf(_("      --locale-provider={builtin|libc|icu}\n"
 			 "                               locale provider for the database's default collation\n"));
 	printf(_("  -O, --owner=OWNER            database user to own the new database\n"));
 	printf(_("  -S, --strategy=STRATEGY      database creation strategy wal_log or file_copy\n"));

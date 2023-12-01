@@ -910,7 +910,9 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	{
 		char	   *locproviderstr = defGetString(dlocprovider);
 
-		if (pg_strcasecmp(locproviderstr, "icu") == 0)
+		if (pg_strcasecmp(locproviderstr, "builtin") == 0)
+			dblocprovider = COLLPROVIDER_BUILTIN;
+		else if (pg_strcasecmp(locproviderstr, "icu") == 0)
 			dblocprovider = COLLPROVIDER_ICU;
 		else if (pg_strcasecmp(locproviderstr, "libc") == 0)
 			dblocprovider = COLLPROVIDER_LIBC;
@@ -1195,9 +1197,17 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	 */
 	if (src_collversion && !dcollversion)
 	{
-		char	   *actual_versionstr;
+		char	*actual_versionstr;
+		char	*locale;
 
-		actual_versionstr = get_collation_actual_version(dblocprovider, dblocprovider == COLLPROVIDER_ICU ? dbiculocale : dbcollate);
+		if (dblocprovider == COLLPROVIDER_ICU)
+			locale = dbiculocale;
+		else if (dblocprovider == COLLPROVIDER_LIBC)
+			locale = dbcollate;
+		else
+			locale = NULL; /* COLLPROVIDER_BUILTIN */
+
+		actual_versionstr = get_collation_actual_version(dblocprovider, locale);
 		if (!actual_versionstr)
 			ereport(ERROR,
 					(errmsg("template database \"%s\" has a collation version, but no actual collation version could be determined",
@@ -1225,7 +1235,18 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	 * collation version, which is normally only the case for template0.
 	 */
 	if (dbcollversion == NULL)
-		dbcollversion = get_collation_actual_version(dblocprovider, dblocprovider == COLLPROVIDER_ICU ? dbiculocale : dbcollate);
+	{
+		char *locale;
+
+		if (dblocprovider == COLLPROVIDER_ICU)
+			locale = dbiculocale;
+		else if (dblocprovider == COLLPROVIDER_LIBC)
+			locale = dbcollate;
+		else
+			locale = NULL; /* COLLPROVIDER_BUILTIN */
+
+		dbcollversion = get_collation_actual_version(dblocprovider, locale);
+	}
 
 	/* Resolve default tablespace for new database */
 	if (dtablespacename && dtablespacename->arg)
@@ -2446,6 +2467,7 @@ AlterDatabaseRefreshColl(AlterDatabaseRefreshCollStmt *stmt)
 	ObjectAddress address;
 	Datum		datum;
 	bool		isnull;
+	char	   *locale;
 	char	   *oldversion;
 	char	   *newversion;
 
@@ -2472,10 +2494,24 @@ AlterDatabaseRefreshColl(AlterDatabaseRefreshCollStmt *stmt)
 	datum = heap_getattr(tuple, Anum_pg_database_datcollversion, RelationGetDescr(rel), &isnull);
 	oldversion = isnull ? NULL : TextDatumGetCString(datum);
 
-	datum = heap_getattr(tuple, datForm->datlocprovider == COLLPROVIDER_ICU ? Anum_pg_database_daticulocale : Anum_pg_database_datcollate, RelationGetDescr(rel), &isnull);
-	if (isnull)
-		elog(ERROR, "unexpected null in pg_database");
-	newversion = get_collation_actual_version(datForm->datlocprovider, TextDatumGetCString(datum));
+	if (datForm->datlocprovider == COLLPROVIDER_ICU)
+	{
+		datum = heap_getattr(tuple, Anum_pg_database_daticulocale, RelationGetDescr(rel), &isnull);
+		if (isnull)
+			elog(ERROR, "unexpected null in pg_database");
+		locale = TextDatumGetCString(datum);
+	}
+	else if (datForm->datlocprovider == COLLPROVIDER_LIBC)
+	{
+		datum = heap_getattr(tuple, Anum_pg_database_datcollate, RelationGetDescr(rel), &isnull);
+		if (isnull)
+			elog(ERROR, "unexpected null in pg_database");
+		locale = TextDatumGetCString(datum);
+	}
+	else
+		locale = NULL; /* COLLPROVIDER_BUILTIN */
+
+	newversion = get_collation_actual_version(datForm->datlocprovider, locale);
 
 	/* cannot change from NULL to non-NULL or vice versa */
 	if ((!oldversion && newversion) || (oldversion && !newversion))
@@ -2660,6 +2696,7 @@ pg_database_collation_actual_version(PG_FUNCTION_ARGS)
 	HeapTuple	tp;
 	char		datlocprovider;
 	Datum		datum;
+	char	   *locale;
 	char	   *version;
 
 	tp = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(dbid));
@@ -2670,8 +2707,20 @@ pg_database_collation_actual_version(PG_FUNCTION_ARGS)
 
 	datlocprovider = ((Form_pg_database) GETSTRUCT(tp))->datlocprovider;
 
-	datum = SysCacheGetAttrNotNull(DATABASEOID, tp, datlocprovider == COLLPROVIDER_ICU ? Anum_pg_database_daticulocale : Anum_pg_database_datcollate);
-	version = get_collation_actual_version(datlocprovider, TextDatumGetCString(datum));
+	if (datlocprovider == COLLPROVIDER_ICU)
+	{
+		datum = SysCacheGetAttrNotNull(DATABASEOID, tp, Anum_pg_database_daticulocale);
+		locale = TextDatumGetCString(datum);
+	}
+	else if (datlocprovider == COLLPROVIDER_LIBC)
+	{
+		datum = SysCacheGetAttrNotNull(DATABASEOID, tp, Anum_pg_database_datcollate);
+		locale = TextDatumGetCString(datum);
+	}
+	else
+		locale = NULL; /* COLLPROVIDER_BUILTIN */
+
+	version = get_collation_actual_version(datlocprovider, locale);
 
 	ReleaseSysCache(tp);
 

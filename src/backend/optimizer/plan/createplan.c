@@ -3720,13 +3720,20 @@ create_subqueryscan_plan(PlannerInfo *root, SubqueryScanPath *best_path,
 	/* Reduce RestrictInfo list to bare expressions; ignore pseudoconstants */
 	scan_clauses = extract_actual_clauses(scan_clauses, false);
 
-	/* Replace any outer-relation variables with nestloop params */
+	/*
+	 * Add the subquery's subplan_params to root->curOuterParams and then
+	 * replace any outer-relation variables with nestloop params
+	 *
+	 * Note that we do them in this order so that we can share the same
+	 * PARAM_EXEC slot for the same Var that both belongs to the subquery's
+	 * uplevel vars and to the NestLoop's outer-relation vars.
+	 */
 	if (best_path->path.param_info)
 	{
-		scan_clauses = (List *)
-			replace_nestloop_params(root, (Node *) scan_clauses);
 		process_subquery_nestloop_params(root,
 										 rel->subplan_params);
+		scan_clauses = (List *)
+			replace_nestloop_params(root, (Node *) scan_clauses);
 	}
 
 	scan_plan = make_subqueryscan(tlist,

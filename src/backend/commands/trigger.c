@@ -5009,6 +5009,19 @@ AfterTriggerBeginQuery(void)
 	afterTriggers.query_depth++;
 }
 
+/* ----------
+ * AfterTriggerCancelQuery()
+ *
+ *	Called from ExecutorEnd() if the query execution was canceled.
+ * ----------
+ */
+void
+AfterTriggerCancelQuery(void)
+{
+	/* Set to a value denoting that no query is active. */
+	afterTriggers.query_depth = -1;
+}
+
 
 /* ----------
  * AfterTriggerEndQuery()

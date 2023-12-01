@@ -2126,7 +2126,11 @@ postgresEndForeignModify(EState *estate,
 {
 	PgFdwModifyState *fmstate = (PgFdwModifyState *) resultRelInfo->ri_FdwState;
 
-	/* If fmstate is NULL, we are in EXPLAIN; nothing to do */
+	/*
+	 * fmstate could be NULL under two conditions: during an EXPLAIN
+	 * operation, or if BeginForeignModify() hasn't been invoked.
+	 * In either case, no action is required.
+	 */
 	if (fmstate == NULL)
 		return;
 
@@ -2660,7 +2664,11 @@ postgresBeginDirectModify(ForeignScanState *node, int eflags)
 	/* Get info about foreign table. */
 	rtindex = node->resultRelInfo->ri_RangeTableIndex;
 	if (fsplan->scan.scanrelid == 0)
+	{
 		dmstate->rel = ExecOpenScanRelation(estate, rtindex, eflags);
+		if (unlikely(!ExecPlanStillValid(estate)))
+			return;
+	}
 	else
 		dmstate->rel = node->ss.ss_currentRelation;
 	table = GetForeignTable(RelationGetRelid(dmstate->rel));

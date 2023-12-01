@@ -138,6 +138,8 @@ typedef struct PortalData
 	QueryCompletion qc;			/* command completion data for executed query */
 	List	   *stmts;			/* list of PlannedStmts */
 	CachedPlan *cplan;			/* CachedPlan, if stmts are from one */
+	List	   *qdescs;			/* list of QueryDescs */
+	MemoryContext queryContext;	/* memory for QueryDescs and children */
 
 	ParamListInfo portalParams; /* params to pass to query */
 	QueryEnvironment *queryEnv; /* environment for query */

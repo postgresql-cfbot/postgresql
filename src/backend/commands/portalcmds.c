@@ -142,9 +142,11 @@ PerformCursorOpen(ParseState *pstate, DeclareCursorStmt *cstmt, ParamListInfo pa
 
 	/*
 	 * Start execution, inserting parameters if any.
+	 *
+	 * OK to ignore the return value; plan can't become invalid here,
+	 * because there's no CachedPlan.
 	 */
-	PortalStart(portal, params, 0, GetActiveSnapshot());
-
+	(void) PortalStart(portal, params, 0, GetActiveSnapshot());
 	Assert(portal->strategy == PORTAL_ONE_SELECT);
 
 	/*

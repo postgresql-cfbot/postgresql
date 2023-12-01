@@ -7850,8 +7850,11 @@ create_partitionwise_grouping_paths(PlannerInfo *root,
 									   agg_costs, gd, &child_extra,
 									   &child_partially_grouped_rel);
 
+		/* Mark as child of grouped_rel. */
+		child_grouped_rel->parent = grouped_rel;
 		if (child_partially_grouped_rel)
 		{
+			child_partially_grouped_rel->parent = grouped_rel;
 			partially_grouped_live_children =
 				lappend(partially_grouped_live_children,
 						child_partially_grouped_rel);

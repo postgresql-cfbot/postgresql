@@ -151,6 +151,7 @@ CreateExecutorState(void)
 	estate->es_top_eflags = 0;
 	estate->es_instrument = 0;
 	estate->es_finished = false;
+	estate->es_canceled = false;
 
 	estate->es_exprcontexts = NIL;
 
@@ -696,6 +697,8 @@ ExecRelationIsTargetRelation(EState *estate, Index scanrelid)
  *
  *		Open the heap relation to be scanned by a base-level scan plan node.
  *		This should be called during the node's ExecInit routine.
+ *
+ *		NULL is returned if the relation is found to have been dropped.
  * ----------------------------------------------------------------
  */
 Relation
@@ -705,6 +708,8 @@ ExecOpenScanRelation(EState *estate, Index scanrelid, int eflags)
 
 	/* Open the relation. */
 	rel = ExecGetRangeTableRelation(estate, scanrelid);
+	if (unlikely(rel == NULL))
+		return NULL;
 
 	/*
 	 * Complain if we're attempting a scan of an unscannable relation, except
@@ -762,6 +767,9 @@ ExecInitRangeTable(EState *estate, List *rangeTable, List *permInfos)
  *		Open the Relation for a range table entry, if not already done
  *
  * The Relations will be closed again in ExecEndPlan().
+ *
+ * Returned value may be NULL if the relation is a child relation that is not
+ * already locked.
  */
 Relation
 ExecGetRangeTableRelation(EState *estate, Index rti)
@@ -778,7 +786,28 @@ ExecGetRangeTableRelation(EState *estate, Index rti)
 
 		Assert(rte->rtekind == RTE_RELATION);
 
-		if (!IsParallelWorker())
+		if (IsParallelWorker() ||
+			(estate->es_cachedplan != NULL && !rte->inFromCl))
+		{
+			/*
+			 * Take a lock if we are a parallel worker or if this is a child
+			 * table referenced in a cached plan.
+			 *
+			 * Parallel workers need to have their own local lock on the
+			 * relation.  This ensures sane behavior in case the parent process
+			 * exits before we do.
+			 *
+			 * When executing a cached plan, child tables must be locked
+			 * here, because plancache.c (GetCachedPlan()) would only have
+			 * locked tables mentioned in the query, that is, tables whose
+			 * RTEs' inFromCl is true.
+			 *
+			 * Note that we use try_table_open() here, because without a lock
+			 * held on the relation, it may have disappeared from under us.
+			 */
+			rel = try_table_open(rte->relid, rte->rellockmode);
+		}
+		else
 		{
 			/*
 			 * In a normal query, we should already have the appropriate lock,
@@ -791,20 +820,47 @@ ExecGetRangeTableRelation(EState *estate, Index rti)
 			Assert(rte->rellockmode == AccessShareLock ||
 				   CheckRelationLockedByMe(rel, rte->rellockmode, false));
 		}
-		else
-		{
-			/*
-			 * If we are a parallel worker, we need to obtain our own local
-			 * lock on the relation.  This ensures sane behavior in case the
-			 * parent process exits before we do.
-			 */
-			rel = table_open(rte->relid, rte->rellockmode);
-		}
 
 		estate->es_relations[rti - 1] = rel;
+		if (rel != NULL)
+			estate->es_opened_relations = lappend(estate->es_opened_relations,
+												  rel);
 	}
 
 	return rel;
+}
+
+/*
+ * ExecLockAppendNonLeafPartitions
+ *		Lock non-leaf partitions whose child partitions are scanned by a given
+ *		Append/MergeAppend node
+ */
+void
+ExecLockAppendNonLeafPartitions(EState *estate, List *allpartrelids)
+{
+	ListCell *l;
+
+	/* This should get called only when executing cached plans. */
+	Assert(estate->es_cachedplan != NULL);
+	foreach(l, allpartrelids)
+	{
+		Bitmapset *partrelids = lfirst_node(Bitmapset, l);
+		int		i = -1;
+
+		while ((i = bms_next_member(partrelids, i)) > 0)
+		{
+			RangeTblEntry *rte = exec_rt_fetch(i, estate);
+
+			/*
+			 * Don't lock the root parent mentioned in the query, because it
+			 * should already have been locked before entering the executor.
+			 */
+			if (!rte->inFromCl)
+				LockRelationOid(rte->relid, rte->rellockmode);
+			else
+				Assert(CheckRelLockedByMe(rte->relid, rte->rellockmode, true));
+		}
+	}
 }
 
 /*
@@ -822,6 +878,8 @@ ExecInitResultRelation(EState *estate, ResultRelInfo *resultRelInfo,
 	Relation	resultRelationDesc;
 
 	resultRelationDesc = ExecGetRangeTableRelation(estate, rti);
+	if (unlikely(resultRelationDesc == NULL))
+		return;
 	InitResultRelInfo(resultRelInfo,
 					  resultRelationDesc,
 					  rti,

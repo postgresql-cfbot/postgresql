@@ -61,6 +61,8 @@ ExecInitCustomScan(CustomScan *cscan, EState *estate, int eflags)
 	if (scanrelid > 0)
 	{
 		scan_rel = ExecOpenScanRelation(estate, scanrelid, eflags);
+		if (unlikely(!ExecPlanStillValid(estate)))
+			return css;
 		css->ss.ss_currentRelation = scan_rel;
 	}
 

@@ -838,6 +838,7 @@ postquel_start(execution_state *es, SQLFunctionCachePtr fcache)
 		dest = None_Receiver;
 
 	es->qd = CreateQueryDesc(es->stmt,
+							 NULL,	/* fmgr_sql() doesn't use CachedPlans */
 							 fcache->src,
 							 GetActiveSnapshot(),
 							 InvalidSnapshot,
@@ -862,7 +863,12 @@ postquel_start(execution_state *es, SQLFunctionCachePtr fcache)
 			eflags = EXEC_FLAG_SKIP_TRIGGERS;
 		else
 			eflags = 0;			/* default run-to-completion flags */
-		ExecutorStart(es->qd, eflags);
+
+		/*
+		 * OK to ignore the return value; plan can't become invalid,
+		 * because there's no CachedPlan.
+		 */
+		(void) ExecutorStart(es->qd, eflags);
 	}
 
 	es->status = F_EXEC_RUN;

@@ -386,6 +386,8 @@ ExecInitHash(Hash *node, EState *estate, int eflags)
 	 * initialize child nodes
 	 */
 	outerPlanState(hashstate) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return hashstate;
 
 	/*
 	 * initialize our result slot and type. No need to build projection
@@ -413,13 +415,11 @@ ExecInitHash(Hash *node, EState *estate, int eflags)
 void
 ExecEndHash(HashState *node)
 {
-	PlanState  *outerPlan;
-
 	/*
 	 * shut down the subplan
 	 */
-	outerPlan = outerPlanState(node);
-	ExecEndNode(outerPlan);
+	ExecEndNode(outerPlanState(node));
+	outerPlanState(node) = NULL;
 }
 
 

@@ -618,10 +618,14 @@ typedef struct EState
 	Index		es_range_table_size;	/* size of the range table arrays */
 	Relation   *es_relations;	/* Array of per-range-table-entry Relation
 								 * pointers, or NULL if not yet opened */
+	List	   *es_opened_relations; /* List of non-NULL entries in
+									  * es_relations in no specific order */
 	struct ExecRowMark **es_rowmarks;	/* Array of per-range-table-entry
 										 * ExecRowMarks, or NULL if none */
 	List	   *es_rteperminfos;	/* List of RTEPermissionInfo */
 	PlannedStmt *es_plannedstmt;	/* link to top of plan tree */
+	struct CachedPlan  *es_cachedplan;	/* CachedPlan if plannedstmt is from
+										 * one, or NULL if not */
 	const char *es_sourceText;	/* Source text from QueryDesc */
 
 	JunkFilter *es_junkFilter;	/* top-level junk filter, if any */
@@ -667,6 +671,9 @@ typedef struct EState
 	int			es_top_eflags;	/* eflags passed to ExecutorStart */
 	int			es_instrument;	/* OR of InstrumentOption flags */
 	bool		es_finished;	/* true when ExecutorFinish is done */
+	bool		es_canceled;	/* true when execution was canceled
+								 * upon encountering that plan was invalided
+								 * during ExecInitNode() */
 
 	List	   *es_exprcontexts;	/* List of ExprContexts within EState */
 

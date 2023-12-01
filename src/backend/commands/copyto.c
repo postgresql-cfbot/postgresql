@@ -558,7 +558,8 @@ BeginCopyTo(ParseState *pstate,
 		((DR_copy *) dest)->cstate = cstate;
 
 		/* Create a QueryDesc requesting no output */
-		cstate->queryDesc = CreateQueryDesc(plan, pstate->p_sourcetext,
+		cstate->queryDesc = CreateQueryDesc(plan, NULL,
+											pstate->p_sourcetext,
 											GetActiveSnapshot(),
 											InvalidSnapshot,
 											dest, NULL, NULL, 0);
@@ -567,8 +568,11 @@ BeginCopyTo(ParseState *pstate,
 		 * Call ExecutorStart to prepare the plan for execution.
 		 *
 		 * ExecutorStart computes a result tupdesc for us
+		 *
+		 * OK to ignore the return value; plan can't become invalid,
+		 * because there's no CachedPlan.
 		 */
-		ExecutorStart(cstate->queryDesc, 0);
+		(void) ExecutorStart(cstate->queryDesc, 0);
 
 		tupDesc = cstate->queryDesc->tupDesc;
 	}

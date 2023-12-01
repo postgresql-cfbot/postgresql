@@ -295,11 +295,15 @@ ExecInitNestLoop(NestLoop *node, EState *estate, int eflags)
 	 * values.
 	 */
 	outerPlanState(nlstate) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return nlstate;
 	if (node->nestParams == NIL)
 		eflags |= EXEC_FLAG_REWIND;
 	else
 		eflags &= ~EXEC_FLAG_REWIND;
 	innerPlanState(nlstate) = ExecInitNode(innerPlan(node), estate, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return nlstate;
 
 	/*
 	 * Initialize result slot, type and projection.
@@ -368,7 +372,9 @@ ExecEndNestLoop(NestLoopState *node)
 	 * close down subplans
 	 */
 	ExecEndNode(outerPlanState(node));
+	outerPlanState(node) = NULL;
 	ExecEndNode(innerPlanState(node));
+	innerPlanState(node) = NULL;
 
 	NL1_printf("ExecEndNestLoop: %s\n",
 			   "node processing ended");

@@ -325,12 +325,17 @@ ExecCreateTableAs(ParseState *pstate, CreateTableAsStmt *stmt,
 		UpdateActiveSnapshotCommandId();
 
 		/* Create a QueryDesc, redirecting output to our tuple receiver */
-		queryDesc = CreateQueryDesc(plan, pstate->p_sourcetext,
+		queryDesc = CreateQueryDesc(plan, NULL, pstate->p_sourcetext,
 									GetActiveSnapshot(), InvalidSnapshot,
 									dest, params, queryEnv, 0);
 
-		/* call ExecutorStart to prepare the plan for execution */
-		ExecutorStart(queryDesc, GetIntoRelEFlags(into));
+		/*
+		 * call ExecutorStart to prepare the plan for execution
+		 *
+		 * OK to ignore the return value; plan can't become invalid,
+		 * because there's no CachedPlan.
+		 */
+		(void) ExecutorStart(queryDesc, GetIntoRelEFlags(into));
 
 		/* run the plan to completion */
 		ExecutorRun(queryDesc, ForwardScanDirection, 0, true);

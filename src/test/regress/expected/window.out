@@ -1775,6 +1775,22 @@ select first_value(salary) over(order by enroll_date range between unbounded pre
         5000 |       4500 |   4200 | 01-01-2008
 (10 rows)
 
+-- with DISTINCT in agg functionn
+select depname, count(DISTINCT enroll_date) over (PARTITION BY depname) FROM empsalary;
+  depname  | count 
+-----------+-------
+ develop   |     4
+ develop   |     4
+ develop   |     4
+ develop   |     4
+ develop   |     4
+ personnel |     2
+ personnel |     2
+ sales     |     3
+ sales     |     3
+ sales     |     3
+(10 rows)
+
 -- RANGE offset PRECEDING/FOLLOWING with null values
 select x, y,
        first_value(y) over w,

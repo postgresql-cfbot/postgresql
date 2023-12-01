@@ -1058,6 +1058,51 @@ transformWindowFuncCall(ParseState *pstate, WindowFunc *wfunc,
 		}
 	}
 
+	if (wfunc->aggdistinct){
+		List	   *argtypes = NIL;
+		List	   *tlist = NIL;
+		List	   *torder = NIL;
+		List	   *tdistinct = NIL;
+		AttrNumber	attno = 1;
+		ListCell   *lc;
+
+		foreach(lc, wfunc->args)
+		{
+			Expr	   *arg = (Expr *) lfirst(lc);
+			TargetEntry *tle;
+
+			/* We don't bother to assign column names to the entries */
+			tle = makeTargetEntry(arg, attno++, NULL, false);
+			tlist = lappend(tlist, tle);
+		}
+		torder = transformSortClause(pstate,
+									 NIL,
+									 &tlist,
+									 EXPR_KIND_ORDER_BY,
+									 true /* force SQL99 rules */ );
+
+		tdistinct = transformDistinctClause(pstate, &tlist, torder, true);
+
+		foreach(lc, tdistinct)
+		{
+			SortGroupClause *sortcl = (SortGroupClause *) lfirst(lc);
+
+			if (!OidIsValid(sortcl->sortop))
+			{
+				Node	   *expr = get_sortgroupclause_expr(sortcl, tlist);
+
+				ereport(ERROR,
+						(errcode(ERRCODE_UNDEFINED_FUNCTION),
+							errmsg("could not identify an ordering operator for type %s",
+								format_type_be(exprType(expr))),
+							errdetail("Aggregates with DISTINCT must be able to sort their inputs."),
+							parser_errposition(pstate, exprLocation(expr))));
+			}
+		}
+		wfunc->distinctargs = tdistinct;
+	}
+	
+
 	pstate->p_hasWindowFuncs = true;
 }
 

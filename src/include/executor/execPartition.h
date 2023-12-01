@@ -121,11 +121,26 @@ typedef struct PartitionPruneState
 	PartitionPruningData *partprunedata[FLEXIBLE_ARRAY_MEMBER];
 } PartitionPruneState;
 
+/*
+ * JoinPartitionPruneState - State object required for plan nodes to perform
+ * join partition pruning.
+ */
+typedef struct JoinPartitionPruneState
+{
+	PartitionPruneState *part_prune_state;
+	int			paramid;
+	int			nplans;
+	bool		finished;
+	Bitmapset  *part_prune_result;
+} JoinPartitionPruneState;
+
 extern PartitionPruneState *ExecInitPartitionPruning(PlanState *planstate,
 													 int n_total_subplans,
 													 PartitionPruneInfo *pruneinfo,
 													 Bitmapset **initially_valid_subplans);
+extern List *ExecInitJoinpartpruneList(PlanState *planstate, List *joinpartprune_info_list);
 extern Bitmapset *ExecFindMatchingSubPlans(PartitionPruneState *prunestate,
-										   bool initial_prune);
+										   bool initial_prune,
+										   PlanState *planstate);
 
 #endif							/* EXECPARTITION_H */

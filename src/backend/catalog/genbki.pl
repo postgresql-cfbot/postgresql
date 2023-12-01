@@ -533,13 +533,6 @@ EOM
 		print $def $line;
 	}
 
-	# Open it, unless it's a bootstrap catalog (create bootstrap does this
-	# automatically)
-	if (!$catalog->{bootstrap})
-	{
-		print $bki "open $catname\n";
-	}
-
 	# For pg_attribute.h, we generate data entries ourselves.
 	if ($catname eq 'pg_attribute')
 	{

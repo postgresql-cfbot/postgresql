@@ -2449,19 +2449,158 @@ void
 WriteToc(ArchiveHandle *AH)
 {
 	TocEntry   *te;
-	char		workbuf[32];
 	int			tocCount;
 	int			i;
+	int			tableam_count;
+	char	  **tableams;
+	int			namespace_count;
+	char	  **namespaces;
+	int			owner_count;
+	char	  **owners;
+	int			tablespace_count;
+	char	  **tablespaces;
+	
+	/* prepare dynamic arrays */
+	tableams = palloc(sizeof(char*) * 1);
+	tableams[0] = NULL;
+	tableam_count = 0;
+	namespaces = palloc(sizeof(char*) * 1);
+	namespaces[0] = NULL;
+	namespace_count = 0;
+	owners = palloc(sizeof(char*) * 1);
+	owners[0] = NULL;
+	owner_count = 0;
+	tablespaces = palloc(sizeof(char*) * 1);
+	tablespaces[0] = NULL;
+	tablespace_count = 0;
 
-	/* count entries that will actually be dumped */
+	/* count entries that will actually be dumped
+	 * and build the dictionnary */
 	tocCount = 0;
 	for (te = AH->toc->next; te != AH->toc; te = te->next)
 	{
 		if ((te->reqs & (REQ_SCHEMA | REQ_DATA | REQ_SPECIAL)) != 0)
 			tocCount++;
+		te->tableam_idx = -1;
+		if (te->tableam)
+		{
+			for (i = 0 ; i < tableam_count ; i++)
+			{
+				if (strcmp(tableams[i], te->tableam) == 0)
+				{
+					te->tableam_idx = i;
+					break;
+				}
+			}
+			if (te->tableam_idx == -1)
+			{
+				/* append tableam to array */
+				tableams[tableam_count] = te->tableam;
+				te->tableam_idx = tableam_count;
+				tableam_count++;
+				tableams = pg_realloc(tableams, sizeof(char*) * (tableam_count + 1));
+			}
+		}
+
+		te->namespace_idx = -1;
+		if (te->namespace)
+		{
+			/* reverse iterate for increased perfs, ToC entries can be ordered by namespace */
+			for (i = namespace_count - 1 ; i >= 0 ; i--)
+			{
+				if (strcmp(namespaces[i], te->namespace) == 0)
+				{
+					te->namespace_idx = i;
+					break;
+				}
+			}
+			if (te->namespace_idx == -1)
+			{
+				namespaces[namespace_count] = te->namespace;
+				te->namespace_idx = namespace_count;
+				namespace_count++;
+				namespaces = pg_realloc(namespaces, sizeof(char*) * (namespace_count + 1));
+			}
+		}
+
+		te->owner_idx = -1;
+		if (te->owner)
+		{
+			for (i = 0 ; i < owner_count ; i++)
+			{
+				if (strcmp(owners[i], te->owner) == 0)
+				{
+					te->owner_idx = i;
+					break;
+				}
+			}
+			if (te->owner_idx == -1)
+			{
+				owners[owner_count] = te->owner;
+				te->owner_idx = owner_count;
+				owner_count++;
+				owners = pg_realloc(owners, sizeof(char*) * (owner_count + 1));
+			}
+		}
+
+		te->tablespace_idx = -1;
+		if (te->tablespace)
+		{
+			for (i = 0 ; i < tablespace_count ; i++)
+			{
+				if (strcmp(tablespaces[i], te->tablespace) == 0)
+				{
+					te->tablespace_idx = i;
+					break;
+				}
+			}
+			if (te->tablespace_idx == -1)
+			{
+				tablespaces[tablespace_count] = te->tablespace;
+				te->tablespace_idx = tablespace_count;
+				tablespace_count++;
+				tablespaces = pg_realloc(tablespaces, sizeof(char*) * (tablespace_count + 1));
+			}
+		}
+	}
+	
+	/* write the list of am */
+	printf("%d tableams to save\n", tableam_count);
+	WriteInt(AH, tableam_count);
+	for (i = 0 ; i < tableam_count ; i++)
+	{
+		printf("%d is %s\n", i, tableams[i]);
+		WriteStr(AH, tableams[i]);
 	}
 
-	/* printf("%d TOC Entries to save\n", tocCount); */
+	/* write the list of namespaces */
+	printf("%d namespaces to save\n", namespace_count);
+	WriteInt(AH, namespace_count);
+	for (i = 0 ; i < namespace_count ; i++)
+	{
+		printf("%d is %s\n", i, namespaces[i]);
+		WriteStr(AH, namespaces[i]);
+	}
+
+	/* write the list of owners */
+	printf("%d owners to save\n", owner_count);
+	WriteInt(AH, owner_count);
+	for (i = 0 ; i < owner_count ; i++)
+	{
+		printf("%d is %s\n", i, owners[i]);
+		WriteStr(AH, owners[i]);
+	}
+
+	/* write the list of tablespaces */
+	printf("%d tablespaces to save\n", tablespace_count);
+	WriteInt(AH, tablespace_count);
+	for (i = 0 ; i < tablespace_count ; i++)
+	{
+		printf("%d is %s\n", i, tablespaces[i]);
+		WriteStr(AH, tablespaces[i]);
+	}
+
+	printf("%d TOC Entries to save\n", tocCount);
 
 	WriteInt(AH, tocCount);
 
@@ -2473,11 +2612,8 @@ WriteToc(ArchiveHandle *AH)
 		WriteInt(AH, te->dumpId);
 		WriteInt(AH, te->dataDumper ? 1 : 0);
 
-		/* OID is recorded as a string for historical reasons */
-		sprintf(workbuf, "%u", te->catalogId.tableoid);
-		WriteStr(AH, workbuf);
-		sprintf(workbuf, "%u", te->catalogId.oid);
-		WriteStr(AH, workbuf);
+		WriteInt(AH, te->catalogId.tableoid);
+		WriteInt(AH, te->catalogId.oid);
 
 		WriteStr(AH, te->tag);
 		WriteStr(AH, te->desc);
@@ -2485,19 +2621,29 @@ WriteToc(ArchiveHandle *AH)
 		WriteStr(AH, te->defn);
 		WriteStr(AH, te->dropStmt);
 		WriteStr(AH, te->copyStmt);
-		WriteStr(AH, te->namespace);
-		WriteStr(AH, te->tablespace);
-		WriteStr(AH, te->tableam);
-		WriteStr(AH, te->owner);
-		WriteStr(AH, "false");
+		if (namespace_count < 128)
+			AH->WriteBytePtr(AH, te->namespace_idx);
+		else
+			WriteInt(AH, te->namespace_idx);
+		if (tablespace_count < 128)
+			AH->WriteBytePtr(AH, te->tablespace_idx);
+		else
+			WriteInt(AH, te->tablespace_idx);
+		if (tableam_count < 128)
+			AH->WriteBytePtr(AH, te->tableam_idx);
+		else
+			WriteInt(AH, te->tableam_idx);
+		if (owner_count < 128)
+			AH->WriteBytePtr(AH, te->owner_idx);
+		else
+			WriteInt(AH, te->owner_idx);
 
 		/* Dump list of dependencies */
 		for (i = 0; i < te->nDeps; i++)
 		{
-			sprintf(workbuf, "%d", te->dependencies[i]);
-			WriteStr(AH, workbuf);
+			WriteInt(AH, te->dependencies[i]);
 		}
-		WriteStr(AH, NULL);		/* Terminate List */
+		WriteInt(AH, -1);		/* Terminate List */
 
 		if (AH->WriteExtraTocPtr)
 			AH->WriteExtraTocPtr(AH, te);
@@ -2509,11 +2655,59 @@ ReadToc(ArchiveHandle *AH)
 {
 	int			i;
 	char	   *tmp;
+	int			depId;
 	DumpId	   *deps;
 	int			depIdx;
 	int			depSize;
 	TocEntry   *te;
 	bool		is_supported;
+	int			tableam_count;
+	char	  **tableams;
+	int			namespace_count;
+	char	  **namespaces;
+	int			owner_count;
+	char	  **owners;
+	int			tablespace_count;
+	char	  **tablespaces;
+	int			invalid_entry;
+
+	if (AH->version < K_VERS_1_16)
+	{
+		tableam_count = 0;
+		tableams = NULL;
+		namespace_count = 0;
+		namespaces = NULL;
+		owner_count = 0;
+		owners = NULL;
+		tablespace_count = 0;
+		tablespaces = NULL;
+	}
+	else
+	{
+		tableam_count = ReadInt(AH);
+		tableams = pg_malloc0(sizeof(char*) * tableam_count);
+		
+		for (i = 0 ; i < tableam_count ; i++)
+			tableams[i] = ReadStr(AH);
+
+		namespace_count = ReadInt(AH);
+		namespaces = pg_malloc0(sizeof(char*) * namespace_count);
+		
+		for (i = 0 ; i < namespace_count ; i++)
+			namespaces[i] = ReadStr(AH);
+
+		owner_count = ReadInt(AH);
+		owners = pg_malloc0(sizeof(char*) * owner_count);
+
+		for (i = 0 ; i < owner_count ; i++)
+			owners[i] = ReadStr(AH);
+
+		tablespace_count = ReadInt(AH);
+		tablespaces = pg_malloc0(sizeof(char*) * tablespace_count);
+
+		for (i = 0 ; i < tablespace_count ; i++)
+			tablespaces[i] = ReadStr(AH);
+	}
 
 	AH->tocCount = ReadInt(AH);
 	AH->maxDumpId = 0;
@@ -2533,17 +2727,27 @@ ReadToc(ArchiveHandle *AH)
 
 		te->hadDumper = ReadInt(AH);
 
-		if (AH->version >= K_VERS_1_8)
+		if (AH->version >= K_VERS_1_16)
+		{
+			te->catalogId.tableoid = ReadInt(AH);
+		}
+		else if (AH->version >= K_VERS_1_8)
 		{
 			tmp = ReadStr(AH);
-			sscanf(tmp, "%u", &te->catalogId.tableoid);
+			te->catalogId.tableoid = strtoul(tmp, NULL, 10);
 			free(tmp);
 		}
 		else
 			te->catalogId.tableoid = InvalidOid;
-		tmp = ReadStr(AH);
-		sscanf(tmp, "%u", &te->catalogId.oid);
-		free(tmp);
+
+		if (AH->version >= K_VERS_1_16)
+			te->catalogId.oid = ReadInt(AH);
+		else
+		{
+			tmp = ReadStr(AH);
+			te->catalogId.oid = strtoul(tmp, NULL, 10);
+			free(tmp);
+		}
 
 		te->tag = ReadStr(AH);
 		te->desc = ReadStr(AH);
@@ -2584,20 +2788,90 @@ ReadToc(ArchiveHandle *AH)
 		if (AH->version >= K_VERS_1_3)
 			te->copyStmt = ReadStr(AH);
 
-		if (AH->version >= K_VERS_1_6)
+		if (AH->version >= K_VERS_1_6 && AH->version < K_VERS_1_16)
 			te->namespace = ReadStr(AH);
+		else
+		{
+			if (namespace_count < 128)
+			{
+				te->namespace_idx = AH->ReadBytePtr(AH);
+				invalid_entry = 255;
+			}
+			else
+			{
+				te->namespace_idx = ReadInt(AH);
+				invalid_entry = -1;
+			}
+			if (te->namespace_idx == invalid_entry)
+				te->namespace = "";
+			else
+				te->namespace = namespaces[te->namespace_idx];
+		}
 
-		if (AH->version >= K_VERS_1_10)
+		if (AH->version >= K_VERS_1_10 && AH->version < K_VERS_1_16)
 			te->tablespace = ReadStr(AH);
+		else
+		{
+			if (tablespace_count < 128)
+			{
+				te->tablespace_idx = AH->ReadBytePtr(AH);
+				invalid_entry = 255;
+			}
+			else
+			{
+				te->tablespace_idx = ReadInt(AH);
+				invalid_entry = -1;
+			}
+			if (te->tablespace_idx == invalid_entry)
+				te->tablespace = NULL;
+			else
+				te->tablespace = tablespaces[te->tablespace_idx];
+		}
 
-		if (AH->version >= K_VERS_1_14)
+		if (AH->version >= K_VERS_1_14 && AH->version < K_VERS_1_16)
 			te->tableam = ReadStr(AH);
+		else if (AH->version >= K_VERS_1_16)
+		{
+			if (tableam_count < 128)
+			{
+				te->tableam_idx = AH->ReadBytePtr(AH);
+				invalid_entry = 255;
+			}
+			else
+			{
+				te->tableam_idx = ReadInt(AH);
+				invalid_entry = -1;
+			}
+			if (te->tableam_idx == invalid_entry)
+				te->tableam = NULL;
+			else
+				te->tableam = tableams[te->tableam_idx];
+		}
 
-		te->owner = ReadStr(AH);
+		if (AH->version < K_VERS_1_16)
+			te->owner = ReadStr(AH);
+		else
+		{
+			if (owner_count < 128)
+			{
+				te->owner_idx = AH->ReadBytePtr(AH);
+				invalid_entry = 255;
+			}
+			else
+			{
+				te->owner_idx = ReadInt(AH);
+				invalid_entry = -1;
+			}
+			if (te->owner_idx == invalid_entry)
+				te->owner = NULL;
+			else
+				te->owner = owners[te->owner_idx];
+		}
+
 		is_supported = true;
 		if (AH->version < K_VERS_1_9)
 			is_supported = false;
-		else
+		else if (AH->version < K_VERS_1_16)
 		{
 			tmp = ReadStr(AH);
 
@@ -2618,16 +2892,31 @@ ReadToc(ArchiveHandle *AH)
 			depIdx = 0;
 			for (;;)
 			{
-				tmp = ReadStr(AH);
-				if (!tmp)
-					break;		/* end of list */
-				if (depIdx >= depSize)
+				if (AH->version >= K_VERS_1_16)
 				{
-					depSize *= 2;
-					deps = (DumpId *) pg_realloc(deps, sizeof(DumpId) * depSize);
+					depId = ReadInt(AH);
+					if (depId == -1)
+						break;		/* end of list */
+					if (depIdx >= depSize)
+					{
+						depSize *= 2;
+						deps = (DumpId *) pg_realloc(deps, sizeof(DumpId) * depSize);
+					}
+					deps[depIdx] = depId;
 				}
-				sscanf(tmp, "%d", &deps[depIdx]);
-				free(tmp);
+				else
+				{
+					tmp = ReadStr(AH);
+					if (!tmp)
+						break;		/* end of list */
+					if (depIdx >= depSize)
+					{
+						depSize *= 2;
+						deps = (DumpId *) pg_realloc(deps, sizeof(DumpId) * depSize);
+					}
+					deps[depIdx] = strtoul(tmp, NULL, 10);
+					free(tmp);
+				}
 				depIdx++;
 			}
 

@@ -1,0 +1,73 @@
+-- Enable full sampling
+SET pg_tracing.sample_rate = 1.0;
+-- Start a transaction with subxaction
+BEGIN;
+SAVEPOINT s1;
+INSERT INTO pg_tracing_test VALUES(generate_series(1, 2), 'aaa');
+SAVEPOINT s2;
+INSERT INTO pg_tracing_test VALUES(generate_series(1, 2), 'aaa');
+SAVEPOINT s3;
+SELECT 1;
+ ?column? 
+----------
+        1
+(1 row)
+
+COMMIT;
+-- Check that subxact_count is correctly reported
+select span_operation, parameters, subxact_count from pg_tracing_consume_spans order by span_start, span_start_ns, span_operation;
+                          span_operation                          |         parameters         | subxact_count 
+------------------------------------------------------------------+----------------------------+---------------
+ Parse                                                            |                            |             0
+ BEGIN;                                                           |                            |             0
+ Post Parse                                                       |                            |             0
+ ProcessUtility                                                   |                            |             0
+ Parse                                                            |                            |             0
+ Post Parse                                                       |                            |             0
+ SAVEPOINT $1;                                                    | $1 = s1                    |             0
+ ProcessUtility                                                   |                            |             0
+ Parse                                                            |                            |             0
+ INSERT INTO pg_tracing_test VALUES(generate_series($1, $2), $3); | $1 = 1, $2 = 2, $3 = 'aaa' |             0
+ Post Parse                                                       |                            |             0
+ Planner                                                          |                            |             0
+ ExecutorStart                                                    |                            |             0
+ ExecutorRun                                                      |                            |             0
+ Insert on pg_tracing_test                                        |                            |             1
+ ProjectSet                                                       |                            |             1
+ Result                                                           |                            |             1
+ ExecutorFinish                                                   |                            |             1
+ ExecutorEnd                                                      |                            |             1
+ Parse                                                            |                            |             1
+ Post Parse                                                       |                            |             1
+ SAVEPOINT $1;                                                    | $1 = s2                    |             1
+ ProcessUtility                                                   |                            |             1
+ Parse                                                            |                            |             1
+ INSERT INTO pg_tracing_test VALUES(generate_series($1, $2), $3); | $1 = 1, $2 = 2, $3 = 'aaa' |             1
+ Post Parse                                                       |                            |             1
+ Planner                                                          |                            |             1
+ ExecutorStart                                                    |                            |             1
+ ExecutorRun                                                      |                            |             1
+ Insert on pg_tracing_test                                        |                            |             2
+ ProjectSet                                                       |                            |             2
+ Result                                                           |                            |             2
+ ExecutorFinish                                                   |                            |             2
+ ExecutorEnd                                                      |                            |             2
+ Parse                                                            |                            |             2
+ Post Parse                                                       |                            |             2
+ SAVEPOINT $1;                                                    | $1 = s3                    |             2
+ ProcessUtility                                                   |                            |             2
+ Parse                                                            |                            |             2
+ Post Parse                                                       |                            |             2
+ SELECT $1;                                                       | $1 = 1                     |             2
+ Planner                                                          |                            |             2
+ ExecutorStart                                                    |                            |             2
+ ExecutorRun                                                      |                            |             2
+ Result                                                           |                            |             2
+ ExecutorFinish                                                   |                            |             2
+ ExecutorEnd                                                      |                            |             2
+ Parse                                                            |                            |             2
+ COMMIT;                                                          |                            |             2
+ Post Parse                                                       |                            |             2
+ ProcessUtility                                                   |                            |             2
+(51 rows)
+

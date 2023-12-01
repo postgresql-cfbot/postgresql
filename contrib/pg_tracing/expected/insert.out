@@ -1,0 +1,64 @@
+-- Only trace queries with sample flag
+SET pg_tracing.sample_rate = 0.0;
+SET pg_tracing.caller_sample_rate = 1.0;
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000001-0000000000000001-01'*/ CREATE TABLE IF NOT EXISTS pg_tracing_test_table_with_constraint (a int, b char(20), CONSTRAINT PK_tracing_test PRIMARY KEY (a));
+-- Check create statement spans
+SELECT span_type, span_operation from pg_tracing_consume_spans where trace_id=1 order by span_start, span_start_ns, span_operation;
+   span_type    |                                                          span_operation                                                           
+----------------+-----------------------------------------------------------------------------------------------------------------------------------
+ Parse          | Parse
+ Utility        | CREATE TABLE IF NOT EXISTS pg_tracing_test_table_with_constraint (a int, b char(20), CONSTRAINT PK_tracing_test PRIMARY KEY (a));
+ Post Parse     | Post Parse
+ ProcessUtility | ProcessUtility
+ Utility        | CREATE TABLE IF NOT EXISTS pg_tracing_test_table_with_constraint (a int, b char(20), CONSTRAINT PK_tracing_test PRIMARY KEY (a));
+ ProcessUtility | ProcessUtility
+ Utility        | CREATE TABLE IF NOT EXISTS pg_tracing_test_table_with_constraint (a int, b char(20), CONSTRAINT PK_tracing_test PRIMARY KEY (a));
+ ProcessUtility | ProcessUtility
+(8 rows)
+
+-- Simple insertion
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000001-0000000000000001-01'*/ INSERT INTO pg_tracing_test_table_with_constraint VALUES(1, 'aaa');
+-- Check insert spans
+SELECT span_type, span_operation from pg_tracing_consume_spans where trace_id=1 order by span_start, span_start_ns, span_operation;
+ span_type  |                          span_operation                           
+------------+-------------------------------------------------------------------
+ Parse      | Parse
+ Insert     | INSERT INTO pg_tracing_test_table_with_constraint VALUES($1, $2);
+ Post Parse | Post Parse
+ Planner    | Planner
+ Executor   | ExecutorStart
+ Executor   | ExecutorRun
+ Insert     | Insert on pg_tracing_test_table_with_constraint
+ Result     | Result
+ Executor   | ExecutorFinish
+ Executor   | ExecutorEnd
+(10 rows)
+
+-- Trigger constraint violation
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000001-0000000000000001-01'*/ INSERT INTO pg_tracing_test_table_with_constraint VALUES(1, 'aaa');
+ERROR:  duplicate key value violates unique constraint "pk_tracing_test"
+DETAIL:  Key (a)=(1) already exists.
+-- Check violation spans
+SELECT span_type, span_operation, sql_error_code from pg_tracing_consume_spans where trace_id=1 order by span_start, span_start_ns, span_operation;
+ span_type  |                          span_operation                           | sql_error_code 
+------------+-------------------------------------------------------------------+----------------
+ Parse      | Parse                                                             | 00000
+ Insert     | INSERT INTO pg_tracing_test_table_with_constraint VALUES($1, $2); | 23505
+ Post Parse | Post Parse                                                        | 00000
+ Planner    | Planner                                                           | 00000
+ Executor   | ExecutorStart                                                     | 00000
+ Executor   | ExecutorRun                                                       | 23505
+ Insert     | Insert on pg_tracing_test_table_with_constraint                   | 23505
+ Result     | Result                                                            | 23505
+(8 rows)
+
+-- Trigger an error while calling pg_tracing_peek_spans which resets tracing
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000001-0000000000000001-01'*/ INSERT INTO pg_tracing_test_table_with_constraint VALUES(length((select sql_error_code from public.pg_tracing_peek_spans)), 'aaa');
+ERROR:  null value in column "a" of relation "pg_tracing_test_table_with_constraint" violates not-null constraint
+DETAIL:  Failing row contains (null, aaa                 ).
+-- Nothing should be generated
+SELECT span_type, span_operation, sql_error_code from pg_tracing_consume_spans where trace_id=1 order by span_start, span_start_ns, span_operation;
+ span_type | span_operation | sql_error_code 
+-----------+----------------+----------------
+(0 rows)
+

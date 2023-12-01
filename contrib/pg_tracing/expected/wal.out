@@ -1,0 +1,97 @@
+-- Enable wal instrumentation
+set pg_tracing.instrument_wal = true;
+-- Generate queries with wal write
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000001-0000000000000001-01'*/ INSERT INTO pg_tracing_test VALUES(generate_series(1, 10), 'aaa');
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000002-0000000000000002-01'*/ UPDATE pg_tracing_test SET b = 'bbb' WHERE a > 7;
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000003-0000000000000003-01'*/ DELETE FROM pg_tracing_test WHERE a > 9;
+-- Check WAL is generated for the above statements
+SELECT trace_id, span_type, span_operation, deparse_info,
+       wal_records > 0 as wal_records,
+       wal_bytes > 0 as wal_bytes
+FROM pg_tracing_consume_spans order by span_start, span_start_ns, span_operation;
+ trace_id |    span_type    |                          span_operation                          |     deparse_info      | wal_records | wal_bytes 
+----------+-----------------+------------------------------------------------------------------+-----------------------+-------------+-----------
+        1 | Parse           | Parse                                                            |                       |             | 
+        1 | Insert          | INSERT INTO pg_tracing_test VALUES(generate_series($1, $2), $3); |                       | t           | t
+        1 | Post Parse      | Post Parse                                                       |                       |             | 
+        1 | Planner         | Planner                                                          |                       | f           | f
+        1 | Executor        | ExecutorStart                                                    |                       |             | 
+        1 | Executor        | ExecutorRun                                                      |                       |             | 
+        1 | Insert          | Insert on pg_tracing_test                                        |                       | t           | t
+        1 | ProjectSet      | ProjectSet                                                       |                       | f           | f
+        1 | Result          | Result                                                           |                       | f           | f
+        1 | Executor        | ExecutorFinish                                                   |                       |             | 
+        1 | Executor        | ExecutorEnd                                                      |                       |             | 
+        2 | Parse           | Parse                                                            |                       |             | 
+        2 | Post Parse      | Post Parse                                                       |                       |             | 
+        2 | Update          | UPDATE pg_tracing_test SET b = $1 WHERE a > $2;                  |                       | t           | t
+        2 | Planner         | Planner                                                          |                       | f           | f
+        2 | Executor        | ExecutorStart                                                    |                       |             | 
+        2 | Executor        | ExecutorRun                                                      |                       |             | 
+        2 | Update          | Update on pg_tracing_test                                        |                       | t           | t
+        2 | BitmapHeapScan  | BitmapHeapScan on pg_tracing_test                                | Recheck Cond: (a > 7) | f           | f
+        2 | BitmapIndexScan | BitmapIndexScan on pg_tracing_index                              | Index Cond: (a > 7)   | f           | f
+        2 | Executor        | ExecutorFinish                                                   |                       |             | 
+        2 | Executor        | ExecutorEnd                                                      |                       |             | 
+        3 | Parse           | Parse                                                            |                       |             | 
+        3 | Delete          | DELETE FROM pg_tracing_test WHERE a > $1;                        |                       | t           | t
+        3 | Post Parse      | Post Parse                                                       |                       |             | 
+        3 | Planner         | Planner                                                          |                       | f           | f
+        3 | Executor        | ExecutorStart                                                    |                       |             | 
+        3 | Executor        | ExecutorRun                                                      |                       |             | 
+        3 | Delete          | Delete on pg_tracing_test                                        |                       | t           | t
+        3 | BitmapHeapScan  | BitmapHeapScan on pg_tracing_test                                | Recheck Cond: (a > 9) | f           | f
+        3 | BitmapIndexScan | BitmapIndexScan on pg_tracing_index                              | Index Cond: (a > 9)   | f           | f
+        3 | Executor        | ExecutorFinish                                                   |                       |             | 
+        3 | Executor        | ExecutorEnd                                                      |                       |             | 
+(33 rows)
+
+-- Redo the same but without wal instrumentation
+set pg_tracing.instrument_wal = false;
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000001-0000000000000001-01'*/ INSERT INTO pg_tracing_test VALUES(generate_series(1, 10), 'aaa');
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000002-0000000000000002-01'*/ UPDATE pg_tracing_test SET b = 'bbb' WHERE a > 7;
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000003-0000000000000003-01'*/ DELETE FROM pg_tracing_test WHERE a > 9;
+-- With wal instrumentation disabled, wal counters should be set to 0
+SELECT trace_id, span_type, span_operation, deparse_info,
+       wal_records = 0 as wal_records,
+       wal_bytes = 0 as wal_bytes
+FROM pg_tracing_consume_spans order by span_start, span_start_ns, span_operation;
+ trace_id |    span_type    |                          span_operation                          |     deparse_info      | wal_records | wal_bytes 
+----------+-----------------+------------------------------------------------------------------+-----------------------+-------------+-----------
+        1 | Parse           | Parse                                                            |                       |             | 
+        1 | Insert          | INSERT INTO pg_tracing_test VALUES(generate_series($1, $2), $3); |                       | t           | t
+        1 | Post Parse      | Post Parse                                                       |                       |             | 
+        1 | Planner         | Planner                                                          |                       | t           | t
+        1 | Executor        | ExecutorStart                                                    |                       |             | 
+        1 | Executor        | ExecutorRun                                                      |                       |             | 
+        1 | Insert          | Insert on pg_tracing_test                                        |                       | t           | t
+        1 | ProjectSet      | ProjectSet                                                       |                       | t           | t
+        1 | Result          | Result                                                           |                       | t           | t
+        1 | Executor        | ExecutorFinish                                                   |                       |             | 
+        1 | Executor        | ExecutorEnd                                                      |                       |             | 
+        2 | Parse           | Parse                                                            |                       |             | 
+        2 | Post Parse      | Post Parse                                                       |                       |             | 
+        2 | Update          | UPDATE pg_tracing_test SET b = $1 WHERE a > $2;                  |                       | t           | t
+        2 | Planner         | Planner                                                          |                       | t           | t
+        2 | Executor        | ExecutorStart                                                    |                       |             | 
+        2 | Executor        | ExecutorRun                                                      |                       |             | 
+        2 | Update          | Update on pg_tracing_test                                        |                       | t           | t
+        2 | BitmapHeapScan  | BitmapHeapScan on pg_tracing_test                                | Recheck Cond: (a > 7) | t           | t
+        2 | BitmapIndexScan | BitmapIndexScan on pg_tracing_index                              | Index Cond: (a > 7)   | t           | t
+        2 | Executor        | ExecutorFinish                                                   |                       |             | 
+        2 | Executor        | ExecutorEnd                                                      |                       |             | 
+        3 | Parse           | Parse                                                            |                       |             | 
+        3 | Delete          | DELETE FROM pg_tracing_test WHERE a > $1;                        |                       | t           | t
+        3 | Post Parse      | Post Parse                                                       |                       |             | 
+        3 | Planner         | Planner                                                          |                       | t           | t
+        3 | Executor        | ExecutorStart                                                    |                       |             | 
+        3 | Executor        | ExecutorRun                                                      |                       |             | 
+        3 | Delete          | Delete on pg_tracing_test                                        |                       | t           | t
+        3 | BitmapHeapScan  | BitmapHeapScan on pg_tracing_test                                | Recheck Cond: (a > 9) | t           | t
+        3 | BitmapIndexScan | BitmapIndexScan on pg_tracing_index                              | Index Cond: (a > 9)   | t           | t
+        3 | Executor        | ExecutorFinish                                                   |                       |             | 
+        3 | Executor        | ExecutorEnd                                                      |                       |             | 
+(33 rows)
+
+-- Cleanup
+set pg_tracing.instrument_wal = true;

@@ -1,0 +1,193 @@
+-- Trace everything
+SET pg_tracing.sample_rate = 1.0;
+-- Simple query with extended protocol
+SELECT $1, $2 \bind 1 2 \g
+ ?column? | ?column? 
+----------+----------
+ 1        | 2
+(1 row)
+
+-- Check generated spans
+SELECT span_type, span_operation, parameters FROM pg_tracing_consume_spans order by span_start, span_start_ns, span_operation;
+   span_type    |          span_operation           |     parameters     
+----------------+-----------------------------------+--------------------
+ Parse          | Parse                             | 
+ Post Parse     | Post Parse                        | 
+ Utility        | SET pg_tracing.sample_rate = 0.0; | 
+ ProcessUtility | ProcessUtility                    | 
+ Parse          | Parse                             | 
+ Post Parse     | Post Parse                        | 
+ Select         | SELECT $1, $2                     | $1 = '1', $2 = '2'
+ Planner        | Planner                           | 
+ Executor       | ExecutorStart                     | 
+ Executor       | ExecutorRun                       | 
+ Result         | Result                            | 
+ Executor       | ExecutorFinish                    | 
+ Executor       | ExecutorEnd                       | 
+(13 rows)
+
+-- Trigger an error due to mismatching number of parameters
+BEGIN; select $1 \bind \g
+ERROR:  bind message supplies 0 parameters, but prepared statement "" requires 1
+ROLLBACK;
+-- Check that no spans were generated
+SELECT span_type, span_operation, parameters FROM pg_tracing_consume_spans order by span_start, span_start_ns, span_operation;
+   span_type    | span_operation | parameters 
+----------------+----------------+------------
+ Parse          | Parse          | 
+ Utility        | BEGIN;         | 
+ Post Parse     | Post Parse     | 
+ ProcessUtility | ProcessUtility | 
+ Parse          | Parse          | 
+ Post Parse     | Post Parse     | 
+ Utility        | ROLLBACK;      | 
+ ProcessUtility | ProcessUtility | 
+(8 rows)
+
+-- Execute queries with extended protocol within an explicit transaction
+BEGIN;
+SELECT $1 \bind 1 \g
+ ?column? 
+----------
+ 1
+(1 row)
+
+SELECT $1, $2 \bind 2 3 \g
+ ?column? | ?column? 
+----------+----------
+ 2        | 3
+(1 row)
+
+COMMIT;
+-- Spans within the same transaction should have been generated with the same trace_id
+SELECT count(distinct(trace_id)) = 1 FROM pg_tracing_peek_spans;
+ ?column? 
+----------
+ t
+(1 row)
+
+-- Check generated spans order
+SELECT span_type, span_operation, parameters FROM pg_tracing_consume_spans order by span_start, span_start_ns, span_operation;
+   span_type    | span_operation |     parameters     
+----------------+----------------+--------------------
+ Parse          | Parse          | 
+ Utility        | BEGIN;         | 
+ Post Parse     | Post Parse     | 
+ ProcessUtility | ProcessUtility | 
+ Parse          | Parse          | 
+ Post Parse     | Post Parse     | 
+ Select         | SELECT $1      | $1 = '1'
+ Planner        | Planner        | 
+ Executor       | ExecutorStart  | 
+ Executor       | ExecutorRun    | 
+ Result         | Result         | 
+ Parse          | Parse          | 
+ Post Parse     | Post Parse     | 
+ Select         | SELECT $1, $2  | $1 = '2', $2 = '3'
+ Executor       | ExecutorFinish | 
+ Executor       | ExecutorEnd    | 
+ Planner        | Planner        | 
+ Executor       | ExecutorStart  | 
+ Executor       | ExecutorRun    | 
+ Result         | Result         | 
+ Parse          | Parse          | 
+ Utility        | COMMIT;        | 
+ Post Parse     | Post Parse     | 
+ Executor       | ExecutorFinish | 
+ Executor       | ExecutorEnd    | 
+ ProcessUtility | ProcessUtility | 
+(26 rows)
+
+-- Mix extended protocol and simple protocol
+BEGIN;
+SELECT $1 \bind 1 \g
+ ?column? 
+----------
+ 1
+(1 row)
+
+SELECT 5, 6, 7;
+ ?column? | ?column? | ?column? 
+----------+----------+----------
+        5 |        6 |        7
+(1 row)
+
+SELECT $1, $2 \bind 2 3 \g
+ ?column? | ?column? 
+----------+----------
+ 2        | 3
+(1 row)
+
+COMMIT;
+-- Spans within the same transaction should have been generated with the same trace_id
+SELECT count(distinct(trace_id)) = 1 FROM pg_tracing_peek_spans;
+ ?column? 
+----------
+ t
+(1 row)
+
+-- Check generated spans order
+SELECT span_type, span_operation, parameters FROM pg_tracing_consume_spans order by span_start, span_start_ns, span_operation;
+   span_type    |   span_operation   |       parameters       
+----------------+--------------------+------------------------
+ Parse          | Parse              | 
+ Utility        | BEGIN;             | 
+ Post Parse     | Post Parse         | 
+ ProcessUtility | ProcessUtility     | 
+ Parse          | Parse              | 
+ Post Parse     | Post Parse         | 
+ Select         | SELECT $1          | $1 = '1'
+ Planner        | Planner            | 
+ Executor       | ExecutorStart      | 
+ Executor       | ExecutorRun        | 
+ Result         | Result             | 
+ Parse          | Parse              | 
+ Post Parse     | Post Parse         | 
+ Select         | SELECT $1, $2, $3; | $1 = 5, $2 = 6, $3 = 7
+ Planner        | Planner            | 
+ Executor       | ExecutorFinish     | 
+ Executor       | ExecutorEnd        | 
+ Executor       | ExecutorStart      | 
+ Executor       | ExecutorRun        | 
+ Result         | Result             | 
+ Executor       | ExecutorFinish     | 
+ Executor       | ExecutorEnd        | 
+ Parse          | Parse              | 
+ Post Parse     | Post Parse         | 
+ Select         | SELECT $1, $2      | $1 = '2', $2 = '3'
+ Planner        | Planner            | 
+ Executor       | ExecutorStart      | 
+ Executor       | ExecutorRun        | 
+ Result         | Result             | 
+ Parse          | Parse              | 
+ Utility        | COMMIT;            | 
+ Post Parse     | Post Parse         | 
+ Executor       | ExecutorFinish     | 
+ Executor       | ExecutorEnd        | 
+ ProcessUtility | ProcessUtility     | 
+(35 rows)
+
+-- gdesc calls a single parse command then execute a query. Make sure we handle this case
+\gdesc
+     Column     | Type 
+----------------+------
+ span_type      | text
+ span_operation | text
+ parameters     | text
+(3 rows)
+
+-- Checking gdesc generated spans
+SELECT span_type, span_operation, parameters FROM pg_tracing_consume_spans order by span_start, span_start_ns, span_operation;
+ span_type  |                                                                                    span_operation                                                                                    |                                                       parameters                                                       
+------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------
+ Parse      | Parse                                                                                                                                                                                | 
+ Post Parse | Post Parse                                                                                                                                                                           | 
+ Select     | SELECT name AS "Column", pg_catalog.format_type(tp, tpm) AS "Type"FROM (VALUES ($1, $2::pg_catalog.oid,$3),($4, $5::pg_catalog.oid,$6),($7, $8::pg_catalog.oid,$9)) s(name, tp, tpm) | $1 = 'span_type', $2 = '25', $3 = -1, $4 = 'span_operation', $5 = '25', $6 = -1, $7 = 'parameters', $8 = '25', $9 = -1
+ Planner    | Planner                                                                                                                                                                              | 
+ Executor   | ExecutorStart                                                                                                                                                                        | 
+ Executor   | ExecutorRun                                                                                                                                                                          | 
+ ValuesScan | ValuesScan on "*VALUES*"                                                                                                                                                             | 
+ Executor   | ExecutorFinish                                                                                                                                                                       | 
+ Executor   | ExecutorEnd                                                                                                                                                                          | 
+(9 rows)
+

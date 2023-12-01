@@ -1,0 +1,162 @@
+-- Trace nothing
+SET pg_tracing.sample_rate = 0.0;
+SET pg_tracing.caller_sample_rate = 0.0;
+-- Query with sampling flag
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000021-0000000000000021-01'*/ SELECT 1;
+ ?column? 
+----------
+        1
+(1 row)
+
+-- Query without trace context
+SELECT 1;
+ ?column? 
+----------
+        1
+(1 row)
+
+-- No spans should have been generated
+select count(distinct(trace_id)) from pg_tracing_consume_spans;
+ count 
+-------
+     0
+(1 row)
+
+-- Enable full sampling
+SET pg_tracing.sample_rate = 1.0;
+-- Generate queries with sampling flag on, off and no trace context
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000022-0000000000000022-01'*/ SELECT 1;
+ ?column? 
+----------
+        1
+(1 row)
+
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000023-0000000000000023-00'*/ SELECT 2;
+ ?column? 
+----------
+        2
+(1 row)
+
+SELECT 3;
+ ?column? 
+----------
+        3
+(1 row)
+
+SELECT 4;
+ ?column? 
+----------
+        4
+(1 row)
+
+-- Check number of generated spans
+select count(distinct(trace_id)) from pg_tracing_peek_spans;
+ count 
+-------
+     4
+(1 row)
+
+-- Check span order
+select span_operation, parameters from pg_tracing_peek_spans order by span_start, span_start_ns;
+ span_operation | parameters 
+----------------+------------
+ Parse          | 
+ SELECT $1;     | $1 = 1
+ Post Parse     | 
+ Planner        | 
+ ExecutorStart  | 
+ ExecutorRun    | 
+ Result         | 
+ ExecutorFinish | 
+ ExecutorEnd    | 
+ Parse          | 
+ SELECT $1;     | $1 = 2
+ Post Parse     | 
+ Planner        | 
+ ExecutorStart  | 
+ ExecutorRun    | 
+ Result         | 
+ ExecutorFinish | 
+ ExecutorEnd    | 
+ Parse          | 
+ SELECT $1;     | $1 = 3
+ Post Parse     | 
+ Planner        | 
+ ExecutorStart  | 
+ ExecutorRun    | 
+ Result         | 
+ ExecutorFinish | 
+ ExecutorEnd    | 
+ Parse          | 
+ SELECT $1;     | $1 = 4
+ Post Parse     | 
+ Planner        | 
+ ExecutorStart  | 
+ ExecutorRun    | 
+ Result         | 
+ ExecutorFinish | 
+ ExecutorEnd    | 
+(36 rows)
+
+-- Top spans should reuse generated ids and have trace_id = parent_id
+select span_operation, parameters from pg_tracing_consume_spans where trace_id = parent_id order by span_start, span_start_ns;
+ span_operation | parameters 
+----------------+------------
+ Parse          | 
+ SELECT $1;     | $1 = 1
+ Parse          | 
+ SELECT $1;     | $1 = 2
+ Parse          | 
+ SELECT $1;     | $1 = 3
+ Parse          | 
+ SELECT $1;     | $1 = 4
+(8 rows)
+
+-- Only trace query with sampled flag
+SET pg_tracing.sample_rate = 0.0;
+SET pg_tracing.caller_sample_rate = 1.0;
+-- Generate queries with sampling flag on, off and no trace context
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000024-0000000000000024-01'*/ SELECT 1;
+ ?column? 
+----------
+        1
+(1 row)
+
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000025-0000000000000025-00'*/ SELECT 2;
+ ?column? 
+----------
+        2
+(1 row)
+
+SELECT 1;
+ ?column? 
+----------
+        1
+(1 row)
+
+-- Check number of generated spans
+select count(distinct(trace_id)) from pg_tracing_peek_spans;
+ count 
+-------
+     2
+(1 row)
+
+-- Check span ordering
+select span_operation, parameters from pg_tracing_consume_spans order by span_start, span_start_ns;
+          span_operation           | parameters 
+-----------------------------------+------------
+ Parse                             | 
+ SET pg_tracing.sample_rate = 0.0; | 
+ Post Parse                        | 
+ ProcessUtility                    | 
+ Parse                             | 
+ Post Parse                        | 
+ SELECT $1;                        | $1 = 1
+ Planner                           | 
+ ExecutorStart                     | 
+ ExecutorRun                       | 
+ Result                            | 
+ ExecutorFinish                    | 
+ ExecutorEnd                       | 
+(13 rows)
+

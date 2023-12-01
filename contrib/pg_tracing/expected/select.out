@@ -1,0 +1,350 @@
+-- Only trace queries with sample flag
+SET pg_tracing.sample_rate = 0.0;
+SET pg_tracing.caller_sample_rate = 1.0;
+-- Run a simple query
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000001-0000000000000001-01'*/ SELECT 1;
+ ?column? 
+----------
+        1
+(1 row)
+
+-- Get top span id
+SELECT span_id AS top_span_id from pg_tracing_peek_spans where parent_id=1 and span_type!='Parse' \gset
+-- Check parameters
+SELECT parameters from pg_tracing_peek_spans where span_id=:top_span_id;
+ parameters 
+------------
+ $1 = 1
+(1 row)
+
+-- Check the number of children
+SELECT count(*) from pg_tracing_peek_spans where parent_id=:'top_span_id';
+ count 
+-------
+     6
+(1 row)
+
+-- Check span_operation
+SELECT span_type, span_operation from pg_tracing_peek_spans where trace_id=1 order by span_start, span_start_ns, span_operation;
+ span_type  | span_operation 
+------------+----------------
+ Parse      | Parse
+ Post Parse | Post Parse
+ Select     | SELECT $1;
+ Planner    | Planner
+ Executor   | ExecutorStart
+ Executor   | ExecutorRun
+ Result     | Result
+ Executor   | ExecutorFinish
+ Executor   | ExecutorEnd
+(9 rows)
+
+-- Check count of query_id
+SELECT count(distinct query_id) from pg_tracing_peek_spans where trace_id=1;
+ count 
+-------
+     1
+(1 row)
+
+-- Check reported number of trace
+SELECT traces from pg_tracing_info;
+ traces 
+--------
+     20
+(1 row)
+
+-- Trace a statement with function call
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000003-0000000000000003-01'*/ SELECT count(*) from current_database();
+ count 
+-------
+     1
+(1 row)
+
+-- Check the generated span span_type, span_operation and order of function call
+SELECT span_type, span_operation from pg_tracing_consume_spans where trace_id=3 order by span_operation;
+  span_type   |              span_operation              
+--------------+------------------------------------------
+ Aggregate    | Aggregate
+ Executor     | ExecutorEnd
+ Executor     | ExecutorFinish
+ Executor     | ExecutorRun
+ Executor     | ExecutorStart
+ FunctionScan | FunctionScan on current_database
+ Parse        | Parse
+ Planner      | Planner
+ Post Parse   | Post Parse
+ Select       | SELECT count(*) from current_database();
+(10 rows)
+
+-- Trace a more complex query with multiple function calls
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000004-0000000000000004-01'*/ SELECT s.relation_size + s.index_size
+FROM (SELECT
+      pg_relation_size(C.oid) as relation_size,
+      pg_indexes_size(C.oid) as index_size
+    FROM pg_class C) as s limit 1;
+ ?column? 
+----------
+        0
+(1 row)
+
+-- Check the generated span span_type, span_operation and order of query with multiple function calls
+SELECT span_type, span_operation from pg_tracing_consume_spans where trace_id=4 order by span_operation;
+  span_type   |                                                                          span_operation                                                                          
+--------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Executor     | ExecutorEnd
+ Executor     | ExecutorFinish
+ Executor     | ExecutorRun
+ Executor     | ExecutorStart
+ Limit        | Limit
+ Parse        | Parse
+ Planner      | Planner
+ Post Parse   | Post Parse
+ Select       | SELECT s.relation_size + s.index_sizeFROM (SELECT pg_relation_size(C.oid) as relation_size, pg_indexes_size(C.oid) as index_size FROM pg_class C) as s limit $1;
+ SeqScan      | SeqScan on pg_class c
+ SubqueryScan | SubqueryScan on s
+(11 rows)
+
+-- Check that we're in a correct state after a timeout
+set statement_timeout=200;
+-- Trace query triggering a statement timeout
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000007-0000000000000007-01'*/ select * from pg_sleep(10);
+ERROR:  canceling statement due to statement timeout
+-- Cleanup statement setting
+set statement_timeout=0;
+-- Trace a working query after the timeout to check we're in a consistent state
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000008-0000000000000008-01'*/ select 1;
+ ?column? 
+----------
+        1
+(1 row)
+
+-- Check the spans order and error code
+SELECT span_type, span_operation, sql_error_code from pg_tracing_consume_spans order by span_start, span_start_ns, span_operation;
+  span_type   |       span_operation        | sql_error_code 
+--------------+-----------------------------+----------------
+ Parse        | Parse                       | 00000
+ Post Parse   | Post Parse                  | 00000
+ Select       | select * from pg_sleep($1); | 57014
+ Planner      | Planner                     | 00000
+ Executor     | ExecutorStart               | 00000
+ Executor     | ExecutorRun                 | 57014
+ FunctionScan | FunctionScan on pg_sleep    | 57014
+ Parse        | Parse                       | 00000
+ Post Parse   | Post Parse                  | 00000
+ Select       | select $1;                  | 00000
+ Planner      | Planner                     | 00000
+ Executor     | ExecutorStart               | 00000
+ Executor     | ExecutorRun                 | 00000
+ Result       | Result                      | 00000
+ Executor     | ExecutorFinish              | 00000
+ Executor     | ExecutorEnd                 | 00000
+(16 rows)
+
+-- Create a prepare statement with comment passed as first parameter
+PREPARE test_prepared (text, integer) AS /*$1*/ SELECT $2;
+-- Execute prepare statement with trace context passed as a parameter
+EXECUTE test_prepared('dddbs=''postgres.db'',traceparent=''00-00000000000000000000000000000009-0000000000000009-01''', 1);
+ ?column? 
+----------
+        1
+(1 row)
+
+-- Check generated spans and order
+SELECT trace_id, span_type, span_operation, parameters from pg_tracing_consume_spans order by span_start, span_start_ns, span_operation;
+ trace_id | span_type |                   span_operation                    |                                                   parameters                                                   
+----------+-----------+-----------------------------------------------------+----------------------------------------------------------------------------------------------------------------
+        9 | Select    | PREPARE test_prepared (text, integer) AS SELECT $2; | $1 = 'dddbs=''postgres.db'',traceparent=''00-00000000000000000000000000000009-0000000000000009-01''', $2 = '1'
+        9 | Planner   | Planner                                             | 
+        9 | Executor  | ExecutorStart                                       | 
+        9 | Executor  | ExecutorRun                                         | 
+        9 | Result    | Result                                              | 
+        9 | Executor  | ExecutorFinish                                      | 
+        9 | Executor  | ExecutorEnd                                         | 
+(7 rows)
+
+-- Test prepared statement with generic plan
+SET plan_cache_mode='force_generic_plan';
+-- Execute prepare statement with trace context passed as a parameter and generic plan
+EXECUTE test_prepared('dddbs=''postgres.db'',traceparent=''00-00000000000000000000000000000010-0000000000000010-01''', 10);
+ ?column? 
+----------
+       10
+(1 row)
+
+-- Cleanup
+SET plan_cache_mode='auto';
+DEALLOCATE test_prepared;
+-- Check spans are generated even through generic plan
+SELECT trace_id, span_operation, parameters from pg_tracing_consume_spans order by span_start, span_start_ns, span_operation;
+ trace_id |                   span_operation                    | parameters 
+----------+-----------------------------------------------------+------------
+       16 | ExecutorStart                                       | 
+       16 | PREPARE test_prepared (text, integer) AS SELECT $2; | 
+       16 | ExecutorRun                                         | 
+       16 | Result                                              | 
+       16 | ExecutorFinish                                      | 
+       16 | ExecutorEnd                                         | 
+(6 rows)
+
+-- Run a statement with node not executed
+/*dddbs='postgres.db',traceparent='00-0000000000000000000000000000000a-000000000000000a-01'*/ select 1 limit 0;
+ ?column? 
+----------
+(0 rows)
+
+-- Not executed node should not generate any spans
+SELECT trace_id, span_operation, parameters from pg_tracing_consume_spans order by span_start, span_start_ns, span_operation;
+ trace_id |   span_operation    |   parameters   
+----------+---------------------+----------------
+       10 | Parse               | 
+       10 | Post Parse          | 
+       10 | select $1 limit $2; | $1 = 1, $2 = 0
+       10 | Planner             | 
+       10 | ExecutorStart       | 
+       10 | ExecutorRun         | 
+       10 | Limit               | 
+       10 | ExecutorFinish      | 
+       10 | ExecutorEnd         | 
+(9 rows)
+
+-- Test multiple statements in a single query
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000011-0000000000000012-01'*/ select 1; select 2;
+ ?column? 
+----------
+        1
+(1 row)
+
+ ?column? 
+----------
+        2
+(1 row)
+
+-- Not executed node should not generate any spans
+select span_operation, parameters from pg_tracing_consume_spans order by span_start, span_start_ns;
+ span_operation | parameters 
+----------------+------------
+ Parse          | 
+ select $1;     | $1 = 1
+ Post Parse     | 
+ Planner        | 
+ ExecutorStart  | 
+ ExecutorRun    | 
+ Result         | 
+ ExecutorFinish | 
+ ExecutorEnd    | 
+(9 rows)
+
+-- Check that parameters are not exported when disabled
+SET pg_tracing.export_parameters=false;
+/*dddbs='postgres.db',traceparent='00-0000000000000000000000000000000b-000000000000000b-01'*/ select 1, 2, 3;
+ ?column? | ?column? | ?column? 
+----------+----------+----------
+        1 |        2 |        3
+(1 row)
+
+SELECT trace_id, span_operation, parameters from pg_tracing_consume_spans order by span_start, span_start_ns, span_operation;
+ trace_id |   span_operation   | parameters 
+----------+--------------------+------------
+       11 | Parse              | 
+       11 | Post Parse         | 
+       11 | select $1, $2, $3; | 
+       11 | Planner            | 
+       11 | ExecutorStart      | 
+       11 | ExecutorRun        | 
+       11 | Result             | 
+       11 | ExecutorFinish     | 
+       11 | ExecutorEnd        | 
+(9 rows)
+
+-- Reset export parameters setting
+SET pg_tracing.export_parameters=true;
+-- Check the result of disabling deparse
+SET pg_tracing.deparse_plan=false;
+/*dddbs='postgres.db',traceparent='00-0000000000000000000000000000000c-000000000000000c-01'*/ SELECT * from pg_tracing_test where a=1;
+ a | b 
+---+---
+(0 rows)
+
+SET pg_tracing.deparse_plan=true;
+/*dddbs='postgres.db',traceparent='00-0000000000000000000000000000000d-000000000000000d-01'*/ SELECT * from pg_tracing_test where a=1;
+ a | b 
+---+---
+(0 rows)
+
+SELECT trace_id, span_operation, deparse_info, parameters from pg_tracing_consume_spans order by span_start, span_start_ns, span_operation;
+ trace_id |              span_operation               |     deparse_info      | parameters 
+----------+-------------------------------------------+-----------------------+------------
+       12 | Parse                                     |                       | 
+       12 | Post Parse                                |                       | 
+       12 | SELECT * from pg_tracing_test where a=$1; |                       | $1 = 1
+       12 | Planner                                   |                       | 
+       12 | ExecutorStart                             |                       | 
+       12 | ExecutorRun                               |                       | 
+       12 | BitmapHeapScan on pg_tracing_test         |                       | 
+       12 | BitmapIndexScan on pg_tracing_index       |                       | 
+       12 | ExecutorFinish                            |                       | 
+       12 | ExecutorEnd                               |                       | 
+       13 | Parse                                     |                       | 
+       13 | Post Parse                                |                       | 
+       13 | SELECT * from pg_tracing_test where a=$1; |                       | $1 = 1
+       13 | Planner                                   |                       | 
+       13 | ExecutorStart                             |                       | 
+       13 | ExecutorRun                               |                       | 
+       13 | BitmapHeapScan on pg_tracing_test         | Recheck Cond: (a = 1) | 
+       13 | BitmapIndexScan on pg_tracing_index       | Index Cond: (a = 1)   | 
+       13 | ExecutorFinish                            |                       | 
+       13 | ExecutorEnd                               |                       | 
+(20 rows)
+
+-- Check multi statement query
+SET pg_tracing.sample_rate = 1.0;
+-- Force a multi-query statement with \;
+SELECT 1\; SELECT 1, 2;
+ ?column? 
+----------
+        1
+(1 row)
+
+ ?column? | ?column? 
+----------+----------
+        1 |        2
+(1 row)
+
+SELECT span_operation, parameters from pg_tracing_consume_spans order by span_start, span_start_ns, span_operation;
+ span_operation | parameters 
+----------------+------------
+ Parse          | 
+ Post Parse     | 
+ SELECT $1;     | $1 = 1
+ Planner        | 
+ ExecutorStart  | 
+ ExecutorRun    | 
+ Result         | 
+ ExecutorFinish | 
+ ExecutorEnd    | 
+(9 rows)
+
+-- Check standalone trace
+SELECT 1;
+ ?column? 
+----------
+        1
+(1 row)
+
+-- Make sure we have unique span ids
+select count(span_id) from pg_tracing_consume_spans group by span_id;
+ count 
+-------
+     1
+     1
+     1
+     1
+     1
+     1
+     1
+     1
+     1
+(9 rows)
+
+-- Cleanup
+SET pg_tracing.sample_rate = 0.0;

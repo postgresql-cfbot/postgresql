@@ -160,6 +160,7 @@ CREATE EXTENSION <replaceable>extension_name</replaceable>;
  &pgstatstatements;
  &pgstattuple;
  &pgsurgery;
+ &pgtracing;
  &pgtrgm;
  &pgvisibility;
  &pgwalinspect;

@@ -1,0 +1,271 @@
+-- Only trace queries with sample flag
+SET pg_tracing.sample_rate = 0.0;
+SET pg_tracing.caller_sample_rate = 1.0;
+-- Create test tables
+CREATE TABLE Employee (
+    EmployeeId INT NOT NULL,
+    LastName VARCHAR(20) NOT NULL,
+    CONSTRAINT PK_Employee PRIMARY KEY (EmployeeId));
+CREATE TABLE Employee_Audit (
+    EmployeeId INT NOT NULL,
+    LastName VARCHAR(20) NOT NULL,
+    EmpAdditionTime VARCHAR(20) NOT NULL);
+-- Create test trigger
+CREATE OR REPLACE FUNCTION employee_insert_trigger_fnc()
+  RETURNS trigger AS
+$$
+BEGIN
+    INSERT INTO Employee_Audit (EmployeeId, LastName, EmpAdditionTime)
+         VALUES(NEW.EmployeeId,NEW.LastName,current_date);
+RETURN NEW;
+END;
+$$
+LANGUAGE plpgsql;
+-- Hook the trigger twice
+CREATE TRIGGER employee_insert_trigger
+  AFTER INSERT
+  ON Employee
+  FOR EACH ROW
+  EXECUTE PROCEDURE employee_insert_trigger_fnc();
+CREATE TRIGGER employee_insert_trigger_2
+  AFTER INSERT
+  ON Employee
+  FOR EACH ROW
+  EXECUTE PROCEDURE employee_insert_trigger_fnc();
+-- Call update
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000001-0000000000000001-01'*/ INSERT INTO Employee VALUES(10,'Adams');
+--
+-- +--------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+-- |A: Parse| B: INSERT INTO Employee                                                                                                                                                   |
+-- +--------++----------+-+--------------------------+-----------------------------------------------------------------------------------------------------------------+---------------++
+--           |C: Planner| |D: ExecutorRun            | G: ExecutorFinish                                                                                               |R: ExecutorEnd |
+--           +----------+ ++-----------------------+-+--+--------+-------------------------------------------------------------+-+-------------------------------------+---------------+
+--                         |E: Insert into employee|    |H: Parse|  I: INSERT INTO Employee_Audit...                           | | O: INSERT INTO Employee_Audit...    |
+--                         ++---------+------------+    +--------+-+----------++----------------------------+---+--------------+ ++---------------+-----+--------------+
+--                          |F: Result|                            |J: Planner||K: ExecutorRun              |...|N: ExecutorEnd|  |P: ExecutorRun | ... |Q: ExecutorEnd|
+--                          +---------+                            +----------+++---------------------------+   +--------------+  ++--------------+     +--------------+
+--                                                                              |L: Insert on employee audit|                      | ...          |
+--                                                                              +-+---------+---------------+                      +--------------+
+--                                                                                |M: Result|
+--                                                                                +---------+
+-- Gather span_id, span start and span end of call with triggers
+SELECT span_id AS span_a_id,
+        get_span_start_ns(span_start, span_start_ns) as span_a_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_a_end
+		from pg_tracing_peek_spans where parent_id=1 and span_type='Parse' \gset
+SELECT span_id AS span_b_id,
+        get_span_start_ns(span_start, span_start_ns) as span_b_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_b_end
+		from pg_tracing_peek_spans where parent_id=1 and span_type!='Parse' \gset
+SELECT span_id AS span_c_id,
+        get_span_start_ns(span_start, span_start_ns) as span_c_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_c_end
+		from pg_tracing_peek_spans where parent_id=:span_b_id and span_type='Planner' \gset
+SELECT span_id AS span_d_id,
+        get_span_start_ns(span_start, span_start_ns) as span_d_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_d_end
+		from pg_tracing_peek_spans where parent_id=:span_b_id and span_type='Executor' and span_operation='ExecutorRun' \gset
+SELECT span_id AS span_e_id,
+        get_span_start_ns(span_start, span_start_ns) as span_e_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_e_end
+		from pg_tracing_peek_spans where parent_id=:span_d_id and span_type='Insert' \gset
+SELECT span_id AS span_f_id,
+        get_span_start_ns(span_start, span_start_ns) as span_f_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_f_end
+		from pg_tracing_peek_spans where parent_id=:span_e_id and span_type='Result' \gset
+-- Executor Finish, first trigger
+SELECT span_id AS span_g_id,
+        get_span_start_ns(span_start, span_start_ns) as span_g_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_g_end
+		from pg_tracing_peek_spans where parent_id=:span_b_id and span_type='Executor' and span_operation='ExecutorFinish' \gset
+SELECT span_id AS span_h_id,
+        get_span_start_ns(span_start, span_start_ns) as span_h_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_h_end
+		from pg_tracing_peek_spans where parent_id=:span_g_id and span_type='Parse' \gset
+SELECT span_id AS span_i_id,
+        get_span_start_ns(span_start, span_start_ns) as span_i_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_i_end
+		from pg_tracing_peek_spans where parent_id=:span_g_id and span_type='Insert' limit 1 \gset
+SELECT span_id AS span_j_id,
+        get_span_start_ns(span_start, span_start_ns) as span_j_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_j_end
+		from pg_tracing_peek_spans where parent_id=:span_i_id and span_type='Planner' \gset
+SELECT span_id AS span_k_id,
+        get_span_start_ns(span_start, span_start_ns) as span_k_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_k_end
+		from pg_tracing_peek_spans where parent_id=:span_i_id and span_type='Executor' and span_operation='ExecutorRun' \gset
+SELECT span_id AS span_l_id,
+        get_span_start_ns(span_start, span_start_ns) as span_l_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_l_end
+		from pg_tracing_peek_spans where parent_id=:span_k_id and span_type='Insert' \gset
+SELECT span_id AS span_m_id,
+        get_span_start_ns(span_start, span_start_ns) as span_m_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_m_end
+		from pg_tracing_peek_spans where parent_id=:span_l_id and span_type='Result' \gset
+SELECT span_id AS span_n_id,
+        get_span_start_ns(span_start, span_start_ns) as span_n_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_n_end
+        from pg_tracing_peek_spans where parent_id=:span_i_id and span_type='Executor' and span_operation='ExecutorEnd' \gset
+-- Executor Finish, second trigger
+SELECT span_id AS span_o_id,
+        get_span_start_ns(span_start, span_start_ns) as span_o_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_o_end
+        from pg_tracing_peek_spans where parent_id=:span_g_id and span_type='Insert' limit 1 offset 1 \gset
+SELECT span_id AS span_p_id,
+        get_span_start_ns(span_start, span_start_ns) as span_p_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_p_end
+        from pg_tracing_peek_spans where parent_id=:span_o_id and span_type='Executor' and span_operation='ExecutorRun' \gset
+SELECT span_id AS span_q_id,
+        get_span_start_ns(span_start, span_start_ns) as span_q_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_q_end
+        from pg_tracing_peek_spans where parent_id=:span_o_id and span_type='Executor' and span_operation='ExecutorEnd' \gset
+-- End
+SELECT span_id AS span_r_id,
+        get_span_start_ns(span_start, span_start_ns) as span_r_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_r_end
+        from pg_tracing_peek_spans where parent_id=:span_b_id and span_type='Executor' and span_operation='ExecutorEnd' \gset
+-- Check that spans' start and end are within expection
+SELECT
+-- Root span
+        :span_a_end <= :span_b_start as parse_before_root_span,
+-- Planner
+       :span_c_start >= :span_b_start as planner_starts_after_root_span,
+-- ExecutorRun
+       :span_d_start >= :span_c_end as executor_run_starts_after_planner,
+       :span_d_end <= :span_g_start as executor_run_ends_before_finish,
+-- First Insert
+       :span_e_start >= :span_d_start as insert_starts_after_executor_run,
+       :span_e_start <= :span_f_start as insert_ends_before_executor_run,
+       :span_e_end >= :span_f_end as insert_starts_before_child,
+       :span_e_end <= :span_d_end as insert_ends_after_child,
+-- ExecutorFinish
+       :span_g_start <= :span_i_start as executor_finish_starts_before_child,
+       :span_g_end >= :span_o_end as executor_finish_ends_after_child,
+-- First trigger
+       :span_h_end <= :span_i_start as parse_ends_before_first_trigger,
+       :span_i_end >= :span_n_end as first_trigger_ends_after_child,
+-- Second trigger
+       :span_o_start >= :span_i_end  as second_trigger_starts_after_first,
+       :span_o_end >= :span_q_end as second_trigger_ends_after_child,
+       :span_q_end <= :span_r_start as second_trigger_ends_before_executor_end,
+       :span_o_end <= :span_r_start as second_trigger_ends_before_root_executor_end,
+-- Root ExecutorEnd
+       :span_r_start >= :span_g_end as executor_end_start_after_executor_finish,
+       :span_r_end <= :span_b_end as executor_end_ends_before_root;
+ parse_before_root_span | planner_starts_after_root_span | executor_run_starts_after_planner | executor_run_ends_before_finish | insert_starts_after_executor_run | insert_ends_before_executor_run | insert_starts_before_child | insert_ends_after_child | executor_finish_starts_before_child | executor_finish_ends_after_child | parse_ends_before_first_trigger | first_trigger_ends_after_child | second_trigger_starts_after_first | second_trigger_ends_after_child | second_trigger_ends_before_executor_end | second_trigger_ends_before_root_executor_end | executor_end_start_after_executor_finish | executor_end_ends_before_root 
+------------------------+--------------------------------+-----------------------------------+---------------------------------+----------------------------------+---------------------------------+----------------------------+-------------------------+-------------------------------------+----------------------------------+---------------------------------+--------------------------------+-----------------------------------+---------------------------------+-----------------------------------------+----------------------------------------------+------------------------------------------+-------------------------------
+ t                      | t                              | t                                 | t                               | t                                | t                               | t                          | t                       | t                                   | t                                | t                               | t                              | t                                 | t                               | t                                       | t                                            | t                                        | t
+(1 row)
+
+-- Check span_operation
+SELECT span_type, span_operation from pg_tracing_peek_spans where trace_id=1 order by span_start, span_start_ns, span_operation;
+ span_type  |                                                   span_operation                                                    
+------------+---------------------------------------------------------------------------------------------------------------------
+ Parse      | Parse
+ Insert     | INSERT INTO Employee VALUES($1,$2);
+ Post Parse | Post Parse
+ Planner    | Planner
+ Executor   | ExecutorStart
+ Executor   | ExecutorRun
+ Insert     | Insert on employee
+ Result     | Result
+ Executor   | ExecutorFinish
+ Parse      | Parse
+ Insert     | INSERT INTO Employee_Audit (EmployeeId, LastName, EmpAdditionTime) VALUES(NEW.EmployeeId,NEW.LastName,current_date)
+ Post Parse | Post Parse
+ Planner    | Planner
+ Executor   | ExecutorStart
+ Executor   | ExecutorRun
+ Insert     | Insert on employee_audit
+ Result     | Result
+ Executor   | ExecutorFinish
+ Executor   | ExecutorEnd
+ Insert     | INSERT INTO Employee_Audit (EmployeeId, LastName, EmpAdditionTime) VALUES(NEW.EmployeeId,NEW.LastName,current_date)
+ Post Parse | Post Parse
+ Planner    | Planner
+ Executor   | ExecutorStart
+ Executor   | ExecutorRun
+ Insert     | Insert on employee_audit
+ Result     | Result
+ Executor   | ExecutorFinish
+ Executor   | ExecutorEnd
+ Executor   | ExecutorEnd
+(29 rows)
+
+-- Check count of query_id
+SELECT count(distinct query_id) from pg_tracing_consume_spans where trace_id=1;
+ count 
+-------
+     2
+(1 row)
+
+-- Second call, parse should not be present anymore
+/*dddbs='postgres.db',traceparent='00-00000000000000000000000000000001-0000000000000001-01'*/ INSERT INTO Employee VALUES(11,'Adams');
+SELECT span_id AS span_b_id,
+        get_span_start_ns(span_start, span_start_ns) as span_b_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_b_end
+		from pg_tracing_peek_spans where parent_id=1 and span_type!='Parse' \gset
+SELECT span_id AS span_d_id,
+        get_span_start_ns(span_start, span_start_ns) as span_d_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_d_end
+		from pg_tracing_peek_spans where parent_id=:span_b_id and span_type='Executor' and span_operation='ExecutorRun' \gset
+SELECT span_id AS span_g_id,
+        get_span_start_ns(span_start, span_start_ns) as span_g_start,
+        get_span_end_ns(span_start, span_start_ns, duration) as span_g_end
+		from pg_tracing_peek_spans where parent_id=:span_b_id and span_type='Executor' and span_operation='ExecutorFinish' \gset
+-- Check we don't have Parse span anymore
+SELECT count(*) = 0 from pg_tracing_peek_spans where parent_id=:span_g_id and span_type='Parse';
+ ?column? 
+----------
+ t
+(1 row)
+
+-- Insert should be attached to the correct parent
+SELECT count(*) = 1 from pg_tracing_peek_spans where parent_id=:span_g_id and span_type='Insert' limit 1 \gset
+invalid variable name: "?column?"
+-- Check that ExecutorRun ends before ExecutorFinish start
+SELECT :span_d_end <= :span_g_start as finish_start_after_run;
+ finish_start_after_run 
+------------------------
+ t
+(1 row)
+
+-- Check generated spans for the second call with trigger
+SELECT span_type, span_operation from pg_tracing_peek_spans where trace_id=1 order by span_start, span_start_ns, span_operation;
+ span_type  |                                                   span_operation                                                    
+------------+---------------------------------------------------------------------------------------------------------------------
+ Parse      | Parse
+ Insert     | INSERT INTO Employee VALUES($1,$2);
+ Post Parse | Post Parse
+ Planner    | Planner
+ Executor   | ExecutorStart
+ Executor   | ExecutorRun
+ Insert     | Insert on employee
+ Result     | Result
+ Executor   | ExecutorFinish
+ Insert     | INSERT INTO Employee_Audit (EmployeeId, LastName, EmpAdditionTime) VALUES(NEW.EmployeeId,NEW.LastName,current_date)
+ Planner    | Planner
+ Executor   | ExecutorStart
+ Executor   | ExecutorRun
+ Insert     | Insert on employee_audit
+ Result     | Result
+ Executor   | ExecutorFinish
+ Executor   | ExecutorEnd
+ Insert     | INSERT INTO Employee_Audit (EmployeeId, LastName, EmpAdditionTime) VALUES(NEW.EmployeeId,NEW.LastName,current_date)
+ Planner    | Planner
+ Executor   | ExecutorStart
+ Executor   | ExecutorRun
+ Insert     | Insert on employee_audit
+ Result     | Result
+ Executor   | ExecutorFinish
+ Executor   | ExecutorEnd
+ Executor   | ExecutorEnd
+(26 rows)
+
+-- Check count of query_id
+SELECT count(distinct query_id) from pg_tracing_consume_spans where trace_id=1;
+ count 
+-------
+     2
+(1 row)
+

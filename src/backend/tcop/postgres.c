@@ -1253,7 +1253,28 @@ exec_simple_query(const char *query_string)
 					format = 1; /* BINARY */
 			}
 		}
-		PortalSetResultFormat(portal, 1, &format);
+
+		if (portal->commandTag == CMDTAG_EXECUTE)
+		{
+			/*
+			 * For EXECUTE queries we clear the tupDesc now, and it will be
+			 * filled in later by FillPortalStore, because the tupDesc might
+			 * change due to replanning when ExecuteQuery calls GetCachedPlan.
+			 * So we should only fetch the tupDesc after the query is actually
+			 * executed. This also means that we cannot set the result format
+			 * for the output tuple yet, so we temporarily store the desired
+			 * format in portal->formats. Then after creating the actual
+			 * tupDesc we call PortalSetResultFormat, using this format.
+			 */
+			Assert(portal->tupDesc == NULL);
+			portal->formats = (int16 *) MemoryContextAlloc(portal->portalContext,
+														   sizeof(int16));
+			portal->formats[0] = format;
+		}
+		else
+		{
+			PortalSetResultFormat(portal, 1, &format);
+		}
 
 		/*
 		 * Now we can create the destination receiver object.
@@ -1501,6 +1522,7 @@ exec_parse_message(const char *query_string,	/* string to execute */
 		 * needs to see the unmodified raw parse tree.
 		 */
 		psrc = CreateCachedPlan(raw_parse_tree, query_string,
+								paramTypes, numParams,
 								CreateCommandTag(raw_parse_tree->stmt));
 
 		/*
@@ -1532,6 +1554,7 @@ exec_parse_message(const char *query_string,	/* string to execute */
 		/* Empty input string.  This is legal. */
 		raw_parse_tree = NULL;
 		psrc = CreateCachedPlan(raw_parse_tree, query_string,
+								paramTypes, numParams,
 								CMDTAG_UNKNOWN);
 		querytree_list = NIL;
 	}
@@ -1553,8 +1576,7 @@ exec_parse_message(const char *query_string,	/* string to execute */
 					   numParams,
 					   NULL,
 					   NULL,
-					   CURSOR_OPT_PARALLEL_OK,	/* allow parallel mode */
-					   true);	/* fixed result */
+					   CURSOR_OPT_PARALLEL_OK); /* allow parallel mode */
 
 	/* If we got a cancel signal during analysis, quit */
 	CHECK_FOR_INTERRUPTS();
@@ -2003,7 +2025,7 @@ exec_bind_message(StringInfo input_message)
 	 * will be generated in MessageContext.  The plan refcount will be
 	 * assigned to the Portal, so it will be released at portal destruction.
 	 */
-	cplan = GetCachedPlan(psrc, params, NULL, NULL);
+	cplan = RevalidateAndGetCachedPlan(psrc, params, NULL, NULL);
 
 	/*
 	 * Now we can define the portal.
@@ -2613,6 +2635,21 @@ exec_describe_statement_message(const char *stmt_name)
 
 		pstmt = FetchPreparedStatement(stmt_name, true);
 		psrc = pstmt->plansource;
+
+		/*
+		 * Revalidate the cached query, because maybe the argument types
+		 * should be changed due to plan invalidation. This mostly helps for
+		 * cases where the current session did some DDL that invalidated the
+		 * plan or if it changed the search_path.
+		 *
+		 * This approach cannot fully avoid all argument type errors. It's
+		 * still possible that another backend changes one of the tables that
+		 * is used in the prepared statement, in between this backend its
+		 * Describe and Bind calls. This is very unlikely in practice though,
+		 * and at least on the next Describe+Bind iteration the problem would
+		 * not happen.
+		 */
+		RevalidateCachedQuery(psrc, NULL);
 	}
 	else
 	{
@@ -2623,9 +2660,6 @@ exec_describe_statement_message(const char *stmt_name)
 					(errcode(ERRCODE_UNDEFINED_PSTATEMENT),
 					 errmsg("unnamed prepared statement does not exist")));
 	}
-
-	/* Prepared statements shouldn't have changeable result descs */
-	Assert(psrc->fixed_result);
 
 	/*
 	 * If we are in aborted transaction state, we can't run

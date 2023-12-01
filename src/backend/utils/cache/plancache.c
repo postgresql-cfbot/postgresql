@@ -101,8 +101,6 @@ static dlist_head saved_plan_list = DLIST_STATIC_INIT(saved_plan_list);
 static dlist_head cached_expression_list = DLIST_STATIC_INIT(cached_expression_list);
 
 static void ReleaseGenericPlan(CachedPlanSource *plansource);
-static List *RevalidateCachedQuery(CachedPlanSource *plansource,
-								   QueryEnvironment *queryEnv);
 static bool CheckCachedPlan(CachedPlanSource *plansource);
 static CachedPlan *BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
 								   ParamListInfo boundParams, QueryEnvironment *queryEnv);
@@ -192,6 +190,8 @@ InitPlanCache(void)
 CachedPlanSource *
 CreateCachedPlan(RawStmt *raw_parse_tree,
 				 const char *query_string,
+				 const Oid *param_types,
+				 int num_params,
 				 CommandTag commandTag)
 {
 	CachedPlanSource *plansource;
@@ -225,10 +225,19 @@ CreateCachedPlan(RawStmt *raw_parse_tree,
 	plansource->commandTag = commandTag;
 	plansource->param_types = NULL;
 	plansource->num_params = 0;
+	if (num_params > 0)
+	{
+		plansource->orig_param_types = palloc_array(Oid, num_params);
+		memcpy(plansource->orig_param_types, param_types, num_params * sizeof(Oid));
+	}
+	else
+	{
+		plansource->orig_param_types = NULL;
+	}
+	plansource->orig_num_params = num_params;
 	plansource->parserSetup = NULL;
 	plansource->parserSetupArg = NULL;
 	plansource->cursor_options = 0;
-	plansource->fixed_result = false;
 	plansource->resultDesc = NULL;
 	plansource->context = source_context;
 	plansource->query_list = NIL;
@@ -249,6 +258,7 @@ CreateCachedPlan(RawStmt *raw_parse_tree,
 	plansource->total_custom_cost = 0;
 	plansource->num_generic_plans = 0;
 	plansource->num_custom_plans = 0;
+
 
 	MemoryContextSwitchTo(oldcxt);
 
@@ -296,7 +306,6 @@ CreateOneShotCachedPlan(RawStmt *raw_parse_tree,
 	plansource->parserSetup = NULL;
 	plansource->parserSetupArg = NULL;
 	plansource->cursor_options = 0;
-	plansource->fixed_result = false;
 	plansource->resultDesc = NULL;
 	plansource->context = CurrentMemoryContext;
 	plansource->query_list = NIL;
@@ -361,7 +370,6 @@ CreateOneShotCachedPlan(RawStmt *raw_parse_tree,
  * parserSetup: alternate method for handling query parameters
  * parserSetupArg: data to pass to parserSetup
  * cursor_options: options bitmask to pass to planner
- * fixed_result: true to disallow future changes in query's result tupdesc
  */
 void
 CompleteCachedPlan(CachedPlanSource *plansource,
@@ -371,8 +379,7 @@ CompleteCachedPlan(CachedPlanSource *plansource,
 				   int num_params,
 				   ParserSetupHook parserSetup,
 				   void *parserSetupArg,
-				   int cursor_options,
-				   bool fixed_result)
+				   int cursor_options)
 {
 	MemoryContext source_context = plansource->context;
 	MemoryContext oldcxt = CurrentMemoryContext;
@@ -455,7 +462,6 @@ CompleteCachedPlan(CachedPlanSource *plansource,
 	plansource->parserSetup = parserSetup;
 	plansource->parserSetupArg = parserSetupArg;
 	plansource->cursor_options = cursor_options;
-	plansource->fixed_result = fixed_result;
 	plansource->resultDesc = PlanCacheComputeResultDesc(querytree_list);
 
 	MemoryContextSwitchTo(oldcxt);
@@ -580,7 +586,7 @@ ReleaseGenericPlan(CachedPlanSource *plansource)
  * had to do re-analysis, and NIL otherwise.  (This is returned just to save
  * a tree copying step in a subsequent BuildCachedPlan call.)
  */
-static List *
+List *
 RevalidateCachedQuery(CachedPlanSource *plansource,
 					  QueryEnvironment *queryEnv)
 {
@@ -717,11 +723,26 @@ RevalidateCachedQuery(CachedPlanSource *plansource,
 											  plansource->parserSetupArg,
 											  queryEnv);
 	else
-		tlist = pg_analyze_and_rewrite_fixedparams(rawtree,
-												   plansource->query_string,
-												   plansource->param_types,
-												   plansource->num_params,
-												   queryEnv);
+	{
+		int			num_params = plansource->orig_num_params;
+		Oid		   *param_types = palloc_array(Oid, num_params);
+
+		memcpy(param_types, plansource->orig_param_types, sizeof(Oid) * num_params);
+
+		/*
+		 * Analyze and rewrite the query.  Note that the originally specified
+		 * parameter set is not required to be complete, so we have to use
+		 * pg_analyze_and_rewrite_varparams(). We cannot reuse the previously
+		 * filled in param_types, because the filled in argument types might
+		 * need to change due to the invalidation.
+		 */
+		tlist = pg_analyze_and_rewrite_varparams(rawtree,
+												 plansource->query_string,
+												 &param_types,
+												 &num_params,
+												 queryEnv);
+		memcpy(plansource->param_types, param_types, sizeof(Oid) * num_params);
+	}
 
 	/* Release snapshot if we got one */
 	if (snapshot_set)
@@ -742,11 +763,6 @@ RevalidateCachedQuery(CachedPlanSource *plansource,
 	else if (resultDesc == NULL || plansource->resultDesc == NULL ||
 			 !equalTupleDescs(resultDesc, plansource->resultDesc))
 	{
-		/* can we give a better error message? */
-		if (plansource->fixed_result)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cached plan must not change result type")));
 		oldcxt = MemoryContextSwitchTo(plansource->context);
 		if (resultDesc)
 			resultDesc = CreateTupleDescCopy(resultDesc);
@@ -1155,6 +1171,9 @@ cached_plan_cost(CachedPlan *plan, bool include_planner)
  * plan or a custom plan for the given parameters: the caller does not know
  * which it will get.
  *
+ * qlist should be the result value from a previous RevalidateCachedQuery,
+ * or it can be set to NIL if we need to re-copy the plansource's query_list.
+ *
  * On return, the plan is valid and we have sufficient locks to begin
  * execution.
  *
@@ -1167,11 +1186,13 @@ cached_plan_cost(CachedPlan *plan, bool include_planner)
  * is used for that work.
  */
 CachedPlan *
-GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
-			  ResourceOwner owner, QueryEnvironment *queryEnv)
+GetCachedPlan(CachedPlanSource *plansource,
+			  ParamListInfo boundParams,
+			  ResourceOwner owner,
+			  QueryEnvironment *queryEnv,
+			  List *qlist)
 {
 	CachedPlan *plan = NULL;
-	List	   *qlist;
 	bool		customplan;
 
 	/* Assert caller is doing things in a sane order */
@@ -1180,9 +1201,6 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 	/* This seems worth a real test, though */
 	if (owner && !plansource->is_saved)
 		elog(ERROR, "cannot apply ResourceOwner to non-saved cached plan");
-
-	/* Make sure the querytree list is valid and we have parse-time locks */
-	qlist = RevalidateCachedQuery(plansource, queryEnv);
 
 	/* Decide whether to use a custom plan */
 	customplan = choose_custom_plan(plansource, boundParams);
@@ -1276,6 +1294,31 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 	}
 
 	return plan;
+}
+
+/*
+ * RevalidateAndGetCachedPlan: get a cached plan from a CachedPlanSource.
+ *
+ * This function is the same as GetCachedPlan, except that it handles
+ * revalidating the query.
+ */
+CachedPlan *
+RevalidateAndGetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
+						   ResourceOwner owner, QueryEnvironment *queryEnv)
+{
+	List	   *qlist;
+
+	/* Assert caller is doing things in a sane order */
+	Assert(plansource->magic == CACHEDPLANSOURCE_MAGIC);
+	Assert(plansource->is_complete);
+	/* This seems worth a real test, though */
+	if (owner && !plansource->is_saved)
+		elog(ERROR, "cannot apply ResourceOwner to non-saved cached plan");
+
+	/* Make sure the querytree list is valid and we have parse-time locks */
+	qlist = RevalidateCachedQuery(plansource, queryEnv);
+
+	return GetCachedPlan(plansource, boundParams, owner, queryEnv, qlist);
 }
 
 /*
@@ -1577,7 +1620,6 @@ CopyCachedPlan(CachedPlanSource *plansource)
 	newsource->parserSetup = plansource->parserSetup;
 	newsource->parserSetupArg = plansource->parserSetupArg;
 	newsource->cursor_options = plansource->cursor_options;
-	newsource->fixed_result = plansource->fixed_result;
 	if (plansource->resultDesc)
 		newsource->resultDesc = CreateTupleDescCopy(plansource->resultDesc);
 	else

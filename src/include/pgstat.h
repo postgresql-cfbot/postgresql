@@ -276,9 +276,10 @@ typedef enum IOObject
 {
 	IOOBJECT_RELATION,
 	IOOBJECT_TEMP_RELATION,
+	IOOBJECT_WAL,
 } IOObject;
 
-#define IOOBJECT_NUM_TYPES (IOOBJECT_TEMP_RELATION + 1)
+#define IOOBJECT_NUM_TYPES (IOOBJECT_WAL + 1)
 
 typedef enum IOContext
 {
@@ -286,9 +287,10 @@ typedef enum IOContext
 	IOCONTEXT_BULKWRITE,
 	IOCONTEXT_NORMAL,
 	IOCONTEXT_VACUUM,
+	IOCONTEXT_INIT,
 } IOContext;
 
-#define IOCONTEXT_NUM_TYPES (IOCONTEXT_VACUUM + 1)
+#define IOCONTEXT_NUM_TYPES (IOCONTEXT_INIT + 1)
 
 typedef enum IOOp
 {
@@ -520,10 +522,12 @@ extern bool pgstat_bktype_io_stats_valid(PgStat_BktypeIO *backend_io,
 extern void pgstat_count_io_op(IOObject io_object, IOContext io_context, IOOp io_op);
 extern void pgstat_count_io_op_n(IOObject io_object, IOContext io_context, IOOp io_op, uint32 cnt);
 extern instr_time pgstat_prepare_io_time(void);
+extern bool pgstat_should_track_io_time(IOObject io_object, IOContext io_context);
 extern void pgstat_count_io_op_time(IOObject io_object, IOContext io_context,
 									IOOp io_op, instr_time start_time, uint32 cnt);
 
 extern PgStat_IO *pgstat_fetch_stat_io(void);
+extern int	pgstat_get_io_op_bytes(IOObject io_object, IOContext io_context);
 extern const char *pgstat_get_io_context_name(IOContext io_context);
 extern const char *pgstat_get_io_object_name(IOObject io_object);
 

@@ -1377,6 +1377,7 @@ pg_stat_get_io(PG_FUNCTION_ARGS)
 			for (int io_context = 0; io_context < IOCONTEXT_NUM_TYPES; io_context++)
 			{
 				const char *context_name = pgstat_get_io_context_name(io_context);
+				int			op_bytes;
 
 				Datum		values[IO_NUM_COLUMNS] = {0};
 				bool		nulls[IO_NUM_COLUMNS] = {0};
@@ -1395,12 +1396,11 @@ pg_stat_get_io(PG_FUNCTION_ARGS)
 				values[IO_COL_RESET_TIME] = TimestampTzGetDatum(reset_time);
 
 				/*
-				 * Hard-code this to the value of BLCKSZ for now. Future
-				 * values could include XLOG_BLCKSZ, once WAL IO is tracked,
-				 * and constant multipliers, once non-block-oriented IO (e.g.
-				 * temporary file IO) is tracked.
+				 * op_bytes can change according to IOObject and IOContext.
+				 * Get the correct op_bytes.
 				 */
-				values[IO_COL_CONVERSION] = Int64GetDatum(BLCKSZ);
+				op_bytes = pgstat_get_io_op_bytes(io_obj, io_context);
+				values[IO_COL_CONVERSION] = Int64GetDatum(op_bytes);
 
 				for (int io_op = 0; io_op < IOOP_NUM_TYPES; io_op++)
 				{
@@ -1444,6 +1444,27 @@ pg_stat_get_io(PG_FUNCTION_ARGS)
 	}
 
 	return (Datum) 0;
+}
+
+/*
+ * Return total IOOp time by IOObject and IOContext.
+ */
+static double
+pg_stat_get_io_time(IOObject io_obj, IOContext io_context, IOOp io_op)
+{
+	double		sum_time = 0;
+	PgStat_IO  *backends_io_stats = pgstat_fetch_stat_io();
+
+	for (int bktype = 0; bktype < BACKEND_NUM_TYPES; bktype++)
+	{
+		PgStat_BktypeIO *bktype_stats = &backends_io_stats->stats[bktype];
+
+		if (!pgstat_tracks_io_bktype(bktype) || !pgstat_tracks_io_op(bktype, io_obj, io_context, io_op))
+			continue;
+
+		sum_time += bktype_stats->times[io_obj][io_context][io_op];
+	}
+	return pg_stat_us_to_ms(sum_time);
 }
 
 /*
@@ -1500,9 +1521,20 @@ pg_stat_get_wal(PG_FUNCTION_ARGS)
 	values[4] = Int64GetDatum(wal_stats->wal_write);
 	values[5] = Int64GetDatum(wal_stats->wal_sync);
 
-	/* Convert counters from microsec to millisec for display */
-	values[6] = Float8GetDatum(((double) wal_stats->wal_write_time) / 1000.0);
-	values[7] = Float8GetDatum(((double) wal_stats->wal_sync_time) / 1000.0);
+	/*
+	 * There is no need to calculate timings for both pg_stat_wal and
+	 * pg_stat_io. So, fetch timings from pg_stat_io to make stats gathering
+	 * cheaper. Note that, since timings are fetched from pg_stat_io;
+	 * pg_stat_reset_shared('io') will reset pg_stat_wal's timings too.
+	 *
+	 * Convert counters from microsec to millisec for display
+	 */
+	values[6] = Float8GetDatum(pg_stat_get_io_time(IOOBJECT_WAL,
+												   IOCONTEXT_NORMAL,
+												   IOOP_WRITE));
+	values[7] = Float8GetDatum(pg_stat_get_io_time(IOOBJECT_WAL,
+												   IOCONTEXT_NORMAL,
+												   IOOP_FSYNC));
 
 	values[8] = TimestampTzGetDatum(wal_stats->stat_reset_timestamp);
 

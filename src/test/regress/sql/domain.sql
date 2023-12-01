@@ -809,3 +809,20 @@ create domain testdomain1 as int constraint unsigned check (value > 0);
 alter domain testdomain1 rename constraint unsigned to unsigned_foo;
 alter domain testdomain1 drop constraint unsigned_foo;
 drop domain testdomain1;
+
+--
+-- Get the base type of a domain
+--
+
+create domain mytext as text;
+create domain mytext_child_1 as mytext;
+create domain mytext_child_2 as mytext_child_1;
+
+select pg_basetype('mytext'::regtype);
+-- gets base types recursively
+select pg_basetype('mytext_child_1'::regtype);
+select pg_basetype('mytext_child_2'::regtype);
+-- if already a base type, get the same
+select pg_basetype('text'::regtype);
+
+drop domain mytext cascade;

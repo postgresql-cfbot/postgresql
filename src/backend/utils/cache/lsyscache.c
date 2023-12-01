@@ -2549,6 +2549,55 @@ getBaseTypeAndTypmod(Oid typid, int32 *typmod)
 }
 
 /*
+ * getBaseTypeAndTypmodExtended
+ *		If the given type is a domain, return its base type and typmod;
+ *		otherwise return the type's own OID, and leave *typmod unchanged.
+ *   	If missing_ok is false, throw an error if base type not found.
+ * 		If missing_ok is true, return InvalidOid if base type not found.
+ *
+ * Note that the "applied typmod" should be -1 for every domain level
+ * above the bottommost; therefore, if the passed-in typid is indeed
+ * a domain, *typmod should be -1.
+ */
+Oid
+getBaseTypeAndTypmodExtended(Oid typid, int32 *typmod, bool missing_ok)
+{
+	/*
+	 * We loop to find the bottom base type in a stack of domains.
+	 */
+	for (;;)
+	{
+		HeapTuple	tup;
+		Form_pg_type typTup;
+
+		tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
+		if (HeapTupleIsValid(tup))
+		{
+			typTup = (Form_pg_type) GETSTRUCT(tup);
+			if (typTup->typtype != TYPTYPE_DOMAIN)
+			{
+				/* Not a domain, so done */
+				ReleaseSysCache(tup);
+				break;
+			}
+			Assert(*typmod == -1);
+			typid = typTup->typbasetype;
+			*typmod = typTup->typtypmod;
+
+			ReleaseSysCache(tup);
+		}
+	}
+
+	if(missing_ok && !OidIsValid(typid))
+		return InvalidOid;
+
+	if(!missing_ok && !OidIsValid(typid))
+		elog(ERROR, "cache lookup failed for type %u", typid);
+
+	return typid;
+}
+
+/*
  * get_typavgwidth
  *
  *	  Given a type OID and a typmod value (pass -1 if typmod is unknown),

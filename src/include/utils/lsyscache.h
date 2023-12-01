@@ -184,6 +184,8 @@ extern const struct SubscriptRoutines *getSubscriptingRoutines(Oid typid,
 															   Oid *typelemp);
 extern Oid	getBaseType(Oid typid);
 extern Oid	getBaseTypeAndTypmod(Oid typid, int32 *typmod);
+extern Oid getBaseTypeAndTypmodExtended(Oid typid, int32 *typmod,
+													bool missing_ok);
 extern int32 get_typavgwidth(Oid typid, int32 typmod);
 extern int32 get_attavgwidth(Oid relid, AttrNumber attnum);
 extern bool get_attstatsslot(AttStatsSlot *sslot, HeapTuple statstuple,

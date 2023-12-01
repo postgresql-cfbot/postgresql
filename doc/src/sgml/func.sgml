@@ -24344,6 +24344,31 @@ SELECT pg_type_is_visible('myschema.widget'::regtype);
       </row>
 
       <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_basetype</primary>
+        </indexterm>
+        <function>pg_basetype</function> ( <parameter>type</parameter> <type>oid</type> )
+        <returnvalue>regtype</returnvalue>
+       </para>
+       <para>
+       Returns the OID of the base type of a domain or if the argument is not a domain, returns the argument.
+       If there's a chain of domain dependencies, it will recurse until finding the base type.
+       </para>
+       <para>
+        For example:
+<programlisting>
+CREATE DOMAIN mytext as text;
+
+SELECT pg_basetype('mytext'::regtype);
+ pg_basetype
+-----------
+ text
+</programlisting>
+       </para></entry>
+      </row>
+
+      <row>
        <entry id="pg-char-to-encoding" role="func_table_entry"><para role="func_signature">
         <indexterm>
          <primary>pg_char_to_encoding</primary>

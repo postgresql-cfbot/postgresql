@@ -2144,10 +2144,15 @@ psql_completion(const char *text, int start, int end)
 
 	/* ALTER DEFAULT PRIVILEGES */
 	else if (Matches("ALTER", "DEFAULT", "PRIVILEGES"))
-		COMPLETE_WITH("FOR ROLE", "IN SCHEMA");
+		COMPLETE_WITH("FOR", "GRANT", "IN SCHEMA", "REVOKE");
 	/* ALTER DEFAULT PRIVILEGES FOR */
 	else if (Matches("ALTER", "DEFAULT", "PRIVILEGES", "FOR"))
-		COMPLETE_WITH("ROLE");
+		COMPLETE_WITH("ROLE", "USER");
+	/* ALTER DEFAULT PRIVILEGES REVOKE */
+	else if (Matches("ALTER", "DEFAULT", "PRIVILEGES", "REVOKE"))
+		COMPLETE_WITH("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE",
+					  "REFERENCES", "TRIGGER", "CREATE", "EXECUTE", "USAGE",
+					  "ALL", "GRANT OPTION FOR");
 	/* ALTER DEFAULT PRIVILEGES IN */
 	else if (Matches("ALTER", "DEFAULT", "PRIVILEGES", "IN"))
 		COMPLETE_WITH("SCHEMA");
@@ -2158,11 +2163,11 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER DEFAULT PRIVILEGES IN SCHEMA ... */
 	else if (Matches("ALTER", "DEFAULT", "PRIVILEGES", "IN", "SCHEMA",
 					 MatchAny))
-		COMPLETE_WITH("GRANT", "REVOKE", "FOR ROLE");
+		COMPLETE_WITH("GRANT", "REVOKE", "FOR");
 	/* ALTER DEFAULT PRIVILEGES IN SCHEMA ... FOR */
 	else if (Matches("ALTER", "DEFAULT", "PRIVILEGES", "IN", "SCHEMA",
 					 MatchAny, "FOR"))
-		COMPLETE_WITH("ROLE");
+		COMPLETE_WITH("ROLE", "USER");
 	/* ALTER DEFAULT PRIVILEGES FOR ROLE|USER ... IN SCHEMA ... */
 	/* ALTER DEFAULT PRIVILEGES IN SCHEMA ... FOR ROLE|USER ... */
 	else if (Matches("ALTER", "DEFAULT", "PRIVILEGES", "FOR", "ROLE|USER",
@@ -2504,7 +2509,7 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER TABLE ALTER [COLUMN] <foo> SET */
 	else if (Matches("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny, "SET") ||
 			 Matches("ALTER", "TABLE", MatchAny, "ALTER", MatchAny, "SET"))
-		COMPLETE_WITH("(", "COMPRESSION", "DEFAULT", "GENERATED", "NOT NULL", "STATISTICS", "STORAGE",
+		COMPLETE_WITH("(", "COMPRESSION", "DATA TYPE", "DEFAULT", "GENERATED", "NOT NULL", "STATISTICS", "STORAGE",
 		/* a subset of ALTER SEQUENCE options */
 					  "INCREMENT", "MINVALUE", "MAXVALUE", "START", "NO", "CACHE", "CYCLE");
 	/* ALTER TABLE ALTER [COLUMN] <foo> SET ( */

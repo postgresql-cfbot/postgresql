@@ -172,6 +172,8 @@ mdinit(void)
 bool
 mdexists(SMgrRelation reln, ForkNumber forknum)
 {
+	MdSMgrRelation mdreln = (MdSMgrRelation) reln;
+
 	/*
 	 * Close it first, to ensure that we notice if the fork has been unlinked
 	 * since we opened it.  As an optimization, we can skip that in recovery,
@@ -180,7 +182,7 @@ mdexists(SMgrRelation reln, ForkNumber forknum)
 	if (!InRecovery)
 		mdclose(reln, forknum);
 
-	return (mdopenfork(reln, forknum, EXTENSION_RETURN_NULL) != NULL);
+	return (mdopenfork(mdreln, forknum, EXTENSION_RETURN_NULL) != NULL);
 }
 
 /*
@@ -241,7 +243,7 @@ mdcreate(SMgrRelation reln, ForkNumber forknum, bool isRedo)
 	mdfd->mdfd_segno = 0;
 
 	if (!SmgrIsTemp(reln))
-		register_dirty_segment(reln, forknum, mdfd);
+		register_dirty_segment(mdreln, forknum, mdfd);
 }
 
 /*

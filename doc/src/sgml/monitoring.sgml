@@ -4035,6 +4035,19 @@ description | Waiting for a newly initialized WAL file to reach durable storage
    </para>
   </note>
 
+  <note>
+   <para>
+    Every time an index is searched, the index's
+    <structname>pg_stat_all_indexes</structname>.<structfield>idx_scan</structfield>
+    field is incremented.  This usually happens once per index scan node
+    execution, but might take place several times during execution of a scan
+    that searches for multiple values together.  Only queries that use certain
+    <acronym>SQL</acronym> constructs to search for rows matching any value
+    out of a list (or an array) of multiple scalar values are affected.  See
+    <xref linkend="functions-comparisons"/> for details.
+   </para>
+  </note>
+
  </sect2>
 
  <sect2 id="monitoring-pg-statio-all-tables-view">

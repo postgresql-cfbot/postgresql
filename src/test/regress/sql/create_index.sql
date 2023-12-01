@@ -753,7 +753,7 @@ SELECT count(*) FROM dupindexcols
   WHERE f1 BETWEEN 'WA' AND 'ZZZ' and id < 1000 and f1 ~<~ 'YX';
 
 --
--- Check ordering of =ANY indexqual results (bug in 9.2.0)
+-- Check that index scans with =ANY indexquals return rows in index order
 --
 
 explain (costs off)
@@ -774,6 +774,15 @@ SELECT thousand, tenthous FROM tenk1
 WHERE thousand < 2 AND tenthous IN (1001,3000)
 ORDER BY thousand;
 
+explain (costs off)
+SELECT thousand, tenthous FROM tenk1
+WHERE thousand < 2 AND tenthous IN (1001,3000)
+ORDER BY thousand DESC, tenthous DESC;
+
+SELECT thousand, tenthous FROM tenk1
+WHERE thousand < 2 AND tenthous IN (1001,3000)
+ORDER BY thousand DESC, tenthous DESC;
+
 SET enable_indexonlyscan = OFF;
 
 explain (costs off)
@@ -784,6 +793,15 @@ ORDER BY thousand;
 SELECT thousand, tenthous FROM tenk1
 WHERE thousand < 2 AND tenthous IN (1001,3000)
 ORDER BY thousand;
+
+explain (costs off)
+SELECT thousand, tenthous FROM tenk1
+WHERE thousand < 2 AND tenthous IN (1001,3000)
+ORDER BY thousand DESC, tenthous DESC;
+
+SELECT thousand, tenthous FROM tenk1
+WHERE thousand < 2 AND tenthous IN (1001,3000)
+ORDER BY thousand DESC, tenthous DESC;
 
 RESET enable_indexonlyscan;
 

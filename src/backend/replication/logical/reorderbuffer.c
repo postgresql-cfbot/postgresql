@@ -463,6 +463,16 @@ ReorderBufferReturnTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
 }
 
 /*
+ * Pointer to the data stored in a TupleBuf.
+ * Implemented as an inlined function for type safety.
+ */
+inline static HeapTupleHeader
+ReorderBufferTupleBufData(ReorderBufferTupleBuf* p)
+{
+	return (HeapTupleHeader) MAXALIGN(((char *) p) + sizeof(ReorderBufferTupleBuf));
+}
+
+/*
  * Get a fresh ReorderBufferChange.
  */
 ReorderBufferChange *
@@ -562,7 +572,6 @@ ReorderBufferGetTupleBuf(ReorderBuffer *rb, Size tuple_len)
 		MemoryContextAlloc(rb->tup_context,
 						   sizeof(ReorderBufferTupleBuf) +
 						   MAXIMUM_ALIGNOF + alloc_len);
-	tuple->alloc_tuple_size = alloc_len;
 	tuple->tuple.t_data = ReorderBufferTupleBufData(tuple);
 
 	return tuple;

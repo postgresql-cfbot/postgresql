@@ -42,9 +42,12 @@ RESET ROLE
 
   <para>
    The specified <replaceable class="parameter">role_name</replaceable>
-   must be a role that the current session user is a member of.
-   (If the session user is a superuser, any role can be selected.)
-  </para>
+   must be a role that the current session user is a member of. The current
+   session user must have the SET option for the specified
+   <replaceable class="parameter">role_name</replaceable>, either directly
+   or indirectly via a chain of memberships with the SET option. (If the
+   session user is a superuser, any role can be selected.)
+   </para>
 
   <para>
    The <literal>SESSION</literal> and <literal>LOCAL</literal> modifiers act the same
@@ -88,7 +91,9 @@ RESET ROLE
 
   <para>
    Note that when a superuser chooses to <command>SET ROLE</command> to a
-   non-superuser role, they lose their superuser privileges.
+   non-superuser role, they lose their superuser privileges, except for
+   the privilege to change to another role again using <command>SET ROLE</command>
+   or <command>RESET ROLE</command>.
   </para>
 
   <para>

@@ -160,8 +160,8 @@ extern void CreateAuxProcessResourceOwner(void);
 extern void ReleaseAuxProcessResources(bool isCommit);
 
 /* special support for local lock management */
-struct LOCALLOCK;
-extern void ResourceOwnerRememberLock(ResourceOwner owner, struct LOCALLOCK *locallock);
-extern void ResourceOwnerForgetLock(ResourceOwner owner, struct LOCALLOCK *locallock);
+struct LOCALLOCKOWNER;
+extern void ResourceOwnerRememberLock(ResourceOwner owner, struct LOCALLOCKOWNER *locallockowner);
+extern void ResourceOwnerForgetLock(struct LOCALLOCKOWNER *locallockowner);
 
 #endif							/* RESOWNER_H */

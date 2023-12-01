@@ -41,6 +41,7 @@
 #include "utils/memutils.h"
 #include "utils/memutils_memorychunk.h"
 #include "utils/memutils_internal.h"
+#include "utils/memtrack.h"
 
 
 #define Generation_BLOCKHDRSZ	MAXALIGN(sizeof(GenerationBlock))
@@ -203,7 +204,7 @@ GenerationContextCreate(MemoryContext parent,
 	 * Allocate the initial block.  Unlike other generation.c blocks, it
 	 * starts with the context header and its block header follows that.
 	 */
-	set = (GenerationContext *) malloc(allocSize);
+	set = (GenerationContext *) malloc_tracked(allocSize, PG_ALLOC_GENERATION);
 	if (set == NULL)
 	{
 		MemoryContextStats(TopMemoryContext);
@@ -262,7 +263,7 @@ GenerationContextCreate(MemoryContext parent,
 						parent,
 						name);
 
-	((MemoryContext) set)->mem_allocated = firstBlockSize;
+	((MemoryContext) set)->mem_allocated = allocSize;
 
 	return (MemoryContext) set;
 }
@@ -325,7 +326,7 @@ GenerationDelete(MemoryContext context)
 	/* Reset to release all releasable GenerationBlocks */
 	GenerationReset(context);
 	/* And free the context header and keeper block */
-	free(context);
+	free_tracked(context, context->mem_allocated, PG_ALLOC_GENERATION);  // TODO: don't add if earlier change also made.
 }
 
 /*
@@ -365,7 +366,7 @@ GenerationAlloc(MemoryContext context, Size size)
 	{
 		Size		blksize = required_size + Generation_BLOCKHDRSZ;
 
-		block = (GenerationBlock *) malloc(blksize);
+		block = (GenerationBlock *) malloc_tracked(blksize, PG_ALLOC_GENERATION);
 		if (block == NULL)
 			return NULL;
 
@@ -467,8 +468,7 @@ GenerationAlloc(MemoryContext context, Size size)
 			if (blksize < required_size)
 				blksize = pg_nextpower2_size_t(required_size);
 
-			block = (GenerationBlock *) malloc(blksize);
-
+			block = (GenerationBlock *) malloc_tracked(blksize, PG_ALLOC_GENERATION);
 			if (block == NULL)
 				return NULL;
 
@@ -607,11 +607,7 @@ GenerationBlockFree(GenerationContext *set, GenerationBlock *block)
 
 	((MemoryContext) set)->mem_allocated -= block->blksize;
 
-#ifdef CLOBBER_FREED_MEMORY
-	wipe_mem(block, block->blksize);
-#endif
-
-	free(block);
+	free_tracked(block, block->blksize, PG_ALLOC_GENERATION);
 }
 
 /*
@@ -725,7 +721,7 @@ GenerationFree(void *pointer)
 	dlist_delete(&block->node);
 
 	set->header.mem_allocated -= block->blksize;
-	free(block);
+	free_tracked(block, block->blksize, PG_ALLOC_GENERATION);
 }
 
 /*
@@ -1028,7 +1024,7 @@ GenerationCheck(MemoryContext context)
 	GenerationContext *gen = (GenerationContext *) context;
 	const char *name = context->name;
 	dlist_iter	iter;
-	Size		total_allocated = 0;
+	Size		total_allocated = sizeof(GenerationContext);
 
 	/* walk all blocks in this context */
 	dlist_foreach(iter, &gen->blocks)

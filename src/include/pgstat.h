@@ -51,10 +51,10 @@ typedef enum PgStat_Kind
 	PGSTAT_KIND_IO,
 	PGSTAT_KIND_SLRU,
 	PGSTAT_KIND_WAL,
+	PGSTAT_KIND_MEMORYTRACK,
 } PgStat_Kind;
-
 #define PGSTAT_KIND_FIRST_VALID PGSTAT_KIND_DATABASE
-#define PGSTAT_KIND_LAST PGSTAT_KIND_WAL
+#define PGSTAT_KIND_LAST PGSTAT_KIND_MEMORYTRACK
 #define PGSTAT_NUM_KINDS (PGSTAT_KIND_LAST + 1)
 
 /* Values for track_functions GUC variable --- order is significant! */
@@ -453,6 +453,15 @@ typedef struct PgStat_PendingWalStats
 	instr_time	wal_sync_time;
 } PgStat_PendingWalStats;
 
+/*
+ * snapshot of global memory tracking statistics, including postmaster.
+ */
+typedef struct PgStat_Memtrack
+{
+	PgStat_Memory	postmasterMemory;
+	int64			total_reserved;
+	int64			dsm_reserved;
+} PgStat_Memtrack;
 
 /*
  * Functions in pgstat.c
@@ -717,6 +726,11 @@ extern void pgstat_execute_transactional_drops(int ndrops, struct xl_xact_stats_
 extern void pgstat_report_wal(bool force);
 extern PgStat_WalStats *pgstat_fetch_stat_wal(void);
 
+/*
+ * Functions in pgstat_memtrack.c
+ */
+extern PgStat_Memtrack *pgstat_fetch_stat_memtrack(void);
+extern void pgstat_report_postmaster_memory(void);
 
 /*
  * Variables in pgstat.c

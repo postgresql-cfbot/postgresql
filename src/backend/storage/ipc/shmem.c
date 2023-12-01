@@ -582,3 +582,13 @@ pg_get_shmem_allocations(PG_FUNCTION_ARGS)
 
 	return (Datum) 0;
 }
+
+/*
+ * Return the size of shared memory
+ */
+Size
+ShmemGetSize(void)
+{
+	Assert(ShmemSegHdr != NULL);
+	return ShmemSegHdr->totalsize;
+}

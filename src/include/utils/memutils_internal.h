@@ -31,6 +31,7 @@ extern void AllocSetStats(MemoryContext context,
 						  MemoryStatsPrintFunc printfunc, void *passthru,
 						  MemoryContextCounters *totals,
 						  bool print_to_stderr);
+extern int64 AllocSetGetFreeMem(void);
 #ifdef MEMORY_CONTEXT_CHECKING
 extern void AllocSetCheck(MemoryContext context);
 #endif

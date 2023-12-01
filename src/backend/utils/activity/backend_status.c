@@ -24,6 +24,7 @@
 #include "utils/backend_status.h"
 #include "utils/guc.h"			/* for application_name */
 #include "utils/memutils.h"
+#include "utils/memtrack.h"
 
 
 /* ----------
@@ -73,7 +74,6 @@ static MemoryContext backendStatusSnapContext;
 
 
 static void pgstat_beshutdown_hook(int code, Datum arg);
-static void pgstat_read_current_status(void);
 static void pgstat_setup_backend_status_context(void);
 
 
@@ -272,6 +272,9 @@ pgstat_beinit(void)
 
 	/* Set up a process-exit hook to clean up */
 	on_shmem_exit(pgstat_beshutdown_hook, 0);
+
+	/* Post the memory used so far to pgstats */
+	update_global_reservation(0, 0);
 }
 
 
@@ -401,6 +404,9 @@ pgstat_bestart(void)
 	lbeentry.st_progress_command_target = InvalidOid;
 	lbeentry.st_query_id = UINT64CONST(0);
 
+	/* BEEntry memory should always match reported memory. (None in this case) */
+	lbeentry.st_memory = reported_memory;
+
 	/*
 	 * we don't zero st_progress_param here to save cycles; nobody should
 	 * examine it until st_progress_command has been set to something other
@@ -470,6 +476,9 @@ pgstat_beshutdown_hook(int code, Datum arg)
 	beentry->st_procpid = 0;	/* mark invalid */
 
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
+
+	/* Stop reporting memory allocation changes to shared memory */
+	exit_tracked_memory();
 
 	/* so that functions can check if backend_status.c is up via MyBEEntry */
 	MyBEEntry = NULL;
@@ -724,7 +733,7 @@ pgstat_report_xact_timestamp(TimestampTz tstamp)
  *	if not already done in this transaction.
  * ----------
  */
-static void
+void
 pgstat_read_current_status(void)
 {
 	volatile PgBackendStatus *beentry;
@@ -740,6 +749,13 @@ pgstat_read_current_status(void)
 	PgBackendGSSStatus *localgssstatus;
 #endif
 	int			i;
+
+	/*
+	 * For consistency, take a snapshot of the memtrack globals.
+	 * We do both snapshots to ensure the global memory total matches
+	 * the sum of backend memory.
+	 */
+	pgstat_snapshot_fixed(PGSTAT_KIND_MEMORYTRACK);
 
 	if (localBackendStatusTable)
 		return;					/* already done */

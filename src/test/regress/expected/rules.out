@@ -1303,6 +1303,13 @@ pg_available_extensions| SELECT e.name,
     e.comment
    FROM (pg_available_extensions() e(name, default_version, comment)
      LEFT JOIN pg_extension x ON ((e.name = x.extname)));
+pg_backend_memory_allocation| SELECT pid,
+    total_top_context_allocated,
+    aset_allocated,
+    dsm_allocated,
+    generation_allocated,
+    slab_allocated
+   FROM pg_get_backend_memory_allocation() pg_get_backend_memory_allocation(pid, total_top_context_allocated, aset_allocated, dsm_allocated, generation_allocated, slab_allocated);
 pg_backend_memory_contexts| SELECT name,
     ident,
     parent,
@@ -1872,6 +1879,11 @@ pg_stat_database_conflicts| SELECT oid AS datid,
     pg_stat_get_db_conflict_startup_deadlock(oid) AS confl_deadlock,
     pg_stat_get_db_conflict_logicalslot(oid) AS confl_active_logicalslot
    FROM pg_database d;
+pg_stat_global_memory_tracking| SELECT total_memory_reserved,
+    dsm_memory_reserved,
+    total_memory_available,
+    static_shared_memory
+   FROM pg_stat_get_global_memory_tracking() pg_stat_get_global_memory_tracking(total_memory_reserved, dsm_memory_reserved, total_memory_available, static_shared_memory);
 pg_stat_gssapi| SELECT pid,
     gss_auth AS gss_authenticated,
     gss_princ AS principal,
@@ -1898,6 +1910,14 @@ pg_stat_io| SELECT backend_type,
     fsync_time,
     stats_reset
    FROM pg_stat_get_io() b(backend_type, object, context, reads, read_time, writes, write_time, writebacks, writeback_time, extends, extend_time, op_bytes, hits, evictions, reuses, fsyncs, fsync_time, stats_reset);
+pg_stat_memory_reservation| SELECT pid,
+    total_reserved,
+    init_reserved,
+    aset_reserved,
+    dsm_reserved,
+    generation_reserved,
+    slab_reserved
+   FROM pg_stat_get_memory_reservation() pg_stat_get_memory_reservation(pid, total_reserved, init_reserved, aset_reserved, dsm_reserved, generation_reserved, slab_reserved);
 pg_stat_progress_analyze| SELECT s.pid,
     s.datid,
     d.datname,

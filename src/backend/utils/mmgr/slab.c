@@ -70,6 +70,7 @@
 
 #include "lib/ilist.h"
 #include "utils/memdebug.h"
+#include "utils/memtrack.h"
 #include "utils/memutils.h"
 #include "utils/memutils_memorychunk.h"
 #include "utils/memutils_internal.h"
@@ -359,9 +360,7 @@ SlabContextCreate(MemoryContext parent,
 		elog(ERROR, "block size %zu for slab is too small for %zu-byte chunks",
 			 blockSize, chunkSize);
 
-
-
-	slab = (SlabContext *) malloc(Slab_CONTEXT_HDRSZ(chunksPerBlock));
+	slab = (SlabContext *) malloc_tracked(Slab_CONTEXT_HDRSZ(chunksPerBlock), PG_ALLOC_SLAB);
 	if (slab == NULL)
 	{
 		MemoryContextStats(TopMemoryContext);
@@ -417,6 +416,7 @@ SlabContextCreate(MemoryContext parent,
 						parent,
 						name);
 
+	slab->header.mem_allocated = Slab_CONTEXT_HDRSZ(slab->chunksPerBlock);
 	return (MemoryContext) slab;
 }
 
@@ -448,10 +448,7 @@ SlabReset(MemoryContext context)
 
 		dclist_delete_from(&slab->emptyblocks, miter.cur);
 
-#ifdef CLOBBER_FREED_MEMORY
-		wipe_mem(block, slab->blockSize);
-#endif
-		free(block);
+		free_tracked(block, slab->blockSize, PG_ALLOC_SLAB);
 		context->mem_allocated -= slab->blockSize;
 	}
 
@@ -464,17 +461,14 @@ SlabReset(MemoryContext context)
 
 			dlist_delete(miter.cur);
 
-#ifdef CLOBBER_FREED_MEMORY
-			wipe_mem(block, slab->blockSize);
-#endif
-			free(block);
+			free_tracked(block, slab->blockSize, PG_ALLOC_SLAB);
 			context->mem_allocated -= slab->blockSize;
 		}
 	}
 
 	slab->curBlocklistIndex = 0;
 
-	Assert(context->mem_allocated == 0);
+	Assert(context->mem_allocated == Slab_CONTEXT_HDRSZ(((SlabContext *) context)->chunksPerBlock));
 }
 
 /*
@@ -487,7 +481,8 @@ SlabDelete(MemoryContext context)
 	/* Reset to release all the SlabBlocks */
 	SlabReset(context);
 	/* And free the context header */
-	free(context);
+	free_tracked(context, Slab_CONTEXT_HDRSZ(((SlabContext *) context)->chunksPerBlock),
+				 PG_ALLOC_SLAB);
 }
 
 /*
@@ -543,8 +538,7 @@ SlabAlloc(MemoryContext context, Size size)
 		}
 		else
 		{
-			block = (SlabBlock *) malloc(slab->blockSize);
-
+			block = (SlabBlock *) malloc_tracked(slab->blockSize, PG_ALLOC_SLAB);
 			if (unlikely(block == NULL))
 				return NULL;
 
@@ -739,10 +733,7 @@ SlabFree(void *pointer)
 			 * When we have enough empty blocks stored already, we actually
 			 * free the block.
 			 */
-#ifdef CLOBBER_FREED_MEMORY
-			wipe_mem(block, slab->blockSize);
-#endif
-			free(block);
+			free_tracked(block, slab->blockSize, PG_ALLOC_SLAB);
 			slab->header.mem_allocated -= slab->blockSize;
 		}
 
@@ -860,7 +851,7 @@ SlabIsEmpty(MemoryContext context)
 {
 	Assert(SlabIsValid((SlabContext *) context));
 
-	return (context->mem_allocated == 0);
+	return (context->mem_allocated == Slab_CONTEXT_HDRSZ(((SlabContext *) context)->chunksPerBlock));
 }
 
 /*
@@ -1095,7 +1086,7 @@ SlabCheck(MemoryContext context)
 	/* the stored empty blocks are tracked in mem_allocated too */
 	nblocks += dclist_count(&slab->emptyblocks);
 
-	Assert(nblocks * slab->blockSize == context->mem_allocated);
+	Assert(nblocks * slab->blockSize + Slab_CONTEXT_HDRSZ(((SlabContext *) context)->chunksPerBlock) == context->mem_allocated);
 }
 
 #endif							/* MEMORY_CONTEXT_CHECKING */

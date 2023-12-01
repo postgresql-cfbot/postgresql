@@ -236,4 +236,26 @@ pg_atomic_fetch_add_u64_impl(volatile pg_atomic_uint64 *ptr, int64 add_)
 	return oldval;
 }
 
+
+/*
+ * Emulate the atomic op using a spinlock.
+ */
+bool
+pg_atomic_fetch_add_limit_u64_impl(volatile pg_atomic_uint64 *sum,, uint64 add, uint64 limit, uint64 *oldval)
+{
+	uint64		newval;
+	bool		success;
+
+	SpinLockAcquire((slock_t *) &ptr->sema);
+	*oldval = ptr->value;
+	newval = *oldval + add;
+
+	success = newval <= limit && newval >= *oldval; /* overflow check */
+	if (success)
+		ptr->value = newval;
+	SpinLockRelease((slock_t *) &ptr->sema);
+
+	return success;
+}
+
 #endif							/* PG_HAVE_ATOMIC_U64_SIMULATION */

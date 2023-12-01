@@ -1369,3 +1369,12 @@ CREATE VIEW pg_stat_subscription_stats AS
 
 CREATE VIEW pg_wait_events AS
     SELECT * FROM pg_get_wait_events();
+
+CREATE VIEW pg_stat_memory_reservation AS
+    SELECT * FROM pg_stat_get_memory_reservation();
+
+CREATE VIEW pg_backend_memory_allocation AS
+    SELECT * from pg_get_backend_memory_allocation();
+
+CREATE VIEW pg_stat_global_memory_tracking AS
+    SELECT * from pg_stat_get_global_memory_tracking();

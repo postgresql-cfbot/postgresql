@@ -4563,6 +4563,301 @@ description | Waiting for a newly initialized WAL file to reach durable storage
 
  </sect2>
 
+ <sect2 id="monitoring-pg-stat-memory-reservation-view">
+  <title><structname>pg_stat_memory_reservation</structname></title>
+
+  <indexterm>
+   <primary>pg_stat_memory_reservation</primary>
+  </indexterm>
+
+  <para>
+   The <structname>pg_stat_memory_reservation</structname> view will have one
+   row per server process, including the postmaster, showing how much memory is currently
+   reserved by that process.  Note that reservations are taken in chunks and therefore
+   will always be a bit more than the process has actually requested.
+   Dynamic shared memory (dsm) is attributed to the backend which created the
+   shared memory segment, not to backends which only attach to it.
+   When a backend exits, dsm allocations that have
+   not been freed are considered long lived and will continue to be part of
+   <structfield>dsm_memory_allocated</structfield>, found in the
+   <link linkend="monitoring-pg-stat-global-memory-tracking-view">
+   <structname>pg_stat_global_memory_tracking</structname></link> view.
+   Use <function>pg_size_pretty</function> described in
+   <xref linkend="functions-admin-dbsize"/> to make these values more easily
+   readable.
+  </para>
+
+  <table id="pg-stat-memory-reservation-view" xreflabel="pg_stat_memory_reservation">
+   <title><structname>pg_stat_memory_reservation</structname> View</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>pid</structfield> <type>integer</type>
+      </para>
+      <para>
+       Process ID of this backend
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_reserved</structfield> <type>bigint</type>
+      </para>
+     <para>
+      Total memory currently reserved to this backend.
+     </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>aset_reserved</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Subtotal of memory reserved via the allocation set allocator.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>dsm_reserved</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Subtotal representing dynamic shared memory (dsm) reserved by this backend.
+       When a backend exits, dsm allocations that have
+       not been freed are considered long lived and will continue to be part of
+       <structfield>dsm_memory_allocated</structfield>, found in the
+       <link linkend="monitoring-pg-stat-global-memory-tracking-view">
+       <structname>pg_global_memory_tracking</structname></link> view.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>generation_reserved</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Subtotal of memory reserved via the generation allocator.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>slab_reserved</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Subtotal of memory reserved via the slab allocator.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>init_reserved</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Subtotal of memory which was automatically reserved when a backend starts up.
+      </para></entry>
+     </row>
+
+    </tbody>
+   </tgroup>
+  </table>
+
+ </sect2>
+
+ <sect2 id="monitoring-pg-backend-memory-allocation-view">
+   <title><structname>pg_backend_memory_allocation</structname></title>
+
+   <indexterm>
+    <primary>pg_backend_memory_allocation</primary>
+   </indexterm>
+
+   <para>
+    The <structname>pg_backend_memory_allocation</structname> view has
+    a single row showing memory allocated by the current backend process.
+    The row contains similar fields to <structname>pg_stat_memory_reservation</structname>,
+    except these numbers are the actual amounts allocated and therefore will always be less
+    than or possibly equal to the amount reserved.
+   </para>
+
+   <table id="pg-backend-memory-allocation-view" xreflabel="pg_backend_memory_allocation">
+    <title><structname>pg_backend_memory_allocation</structname> View</title>
+    <tgroup cols="1">
+     <thead>
+      <row>
+       <entry role="catalog_table_entry"><para role="column_definition">
+        Column Type
+       </para>
+       <para>
+        Description
+       </para></entry>
+      </row>
+     </thead>
+
+     <tbody>
+      <row>
+       <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>pid</structfield> <type>integer</type>
+       </para>
+       <para>
+        Process ID of this backend
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>total_top_context_allocated</structfield> <type>bigint</type>
+       </para>
+      <para>
+       Total private memory currently allocated by this backend.
+       Note this total includes the TopMemoryContext, all its children,
+       along with any free lists maintained by the memory allocators.
+       This value should match the sum of memory allocated
+       for the allocation set, generation and slab allocators.
+      </para></entry>
+      </row>
+
+      <row>
+       <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>aset_allocated</structfield> <type>bigint</type>
+       </para>
+       <para>
+        Subtotal of memory allocated via the allocation set allocator.
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>dsm_allocated</structfield> <type>bigint</type>
+       </para>
+       <para>
+        Subtotal representing dynamic shared memory (dsm) allocated by this backend.
+        When a backend exits, dsm allocations that have
+        not been freed are considered long lived and will continue to be part of
+        <structfield>dsm_memory_allocated</structfield>, found in the
+        <link linkend="monitoring-pg-stat-global-memory-tracking-view">
+        <structname>pg_global_memory_tracking</structname></link> view.
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>generation_allocated</structfield> <type>bigint</type>
+       </para>
+       <para>
+        Subtotal of memory allocated via the generation allocator.
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>slab_allocated</structfield> <type>bigint</type>
+       </para>
+       <para>
+        Subtotal of memory allocated via the slab allocator.
+       </para></entry>
+      </row>
+
+     </tbody>
+    </tgroup>
+   </table>
+
+  </sect2>
+
+ <sect2 id="monitoring-pg-stat-global-memory-tracking-view">
+  <title><structname>pg_stat_global_memory_tracking</structname></title>
+
+  <indexterm>
+   <primary>pg_stat_global_memory_tracking</primary>
+  </indexterm>
+
+  <para>
+   The <structname>pg_stat_global_memory_tracking</structname> view shows
+   a memory reservation summary for the entire server. This view
+   has a single row with a column for each global value.
+   Use <function>pg_size_pretty</function> described in
+   <xref linkend="functions-admin-dbsize"/> to make the byte populated values
+   more easily readable.
+  </para>
+
+  <table id="pg-stat-global-memory-tracking-view" xreflabel="pg_stat_global_memory_tracking">
+   <title><structname>pg_stat_global_memory_tracking</structname> View</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_memory_reserved</structfield> <type>bigint</type>
+      </para>
+     <para>
+      Reports the total amount of memory (in bytes) currently reserved by the server.
+      This total includes shared memory as well as private memory by the backends.
+     </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>dsm_memory_allocated</structfield> <type>bigint</type>
+      </para>
+     <para>
+      Reports the amount of dynamic shared memory (dsm) in bytes currently allocated by the server.
+     </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_memory_available</structfield> <type>bigint</type>
+      </para>
+     <para>
+      Reports how much memory remains available to the server. If a
+      backend process attempts to allocate more memory than remains,
+      the process will fail with an out of memory error, resulting in
+      cancellation of the process's active query/transaction.
+      If memory is not being limited (ie. max_total_memory is zero or not set),
+      this column returns NULL.
+      <xref linkend="guc-max-total-memory"/>.
+     </para></entry>
+     </row>
+
+      <row>
+       <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>static_shared_memory</structfield> <type>bigint</type>
+       </para>
+      <para>
+       Reports how much static shared memory (non-DSM shared memory) is being used by
+       the server. Static shared memory is configured by the postmaster at
+       at server startup.
+       <xref linkend="guc-max-total-memory"/>.
+      </para></entry>
+      </row>
+
+    </tbody>
+   </tgroup>
+  </table>
+
+ </sect2>
+
  <sect2 id="monitoring-stats-functions">
   <title>Statistics Functions</title>
 

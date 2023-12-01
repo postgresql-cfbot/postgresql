@@ -79,6 +79,7 @@
 #include "utils/float.h"
 #include "utils/guc_hooks.h"
 #include "utils/guc_tables.h"
+#include "utils/memtrack.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
 #include "utils/portal.h"
@@ -3525,6 +3526,17 @@ struct config_int ConfigureNamesInt[] =
 		},
 		&scram_sha_256_iterations,
 		SCRAM_SHA_256_DEFAULT_ITERATIONS, 1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_total_memory", PGC_SU_BACKEND, RESOURCES_MEM,
+			gettext_noop("Restrict total memory used by the database server."),
+			gettext_noop("0 turns this feature off."),
+			GUC_UNIT_MB
+		},
+		&max_total_memory_mb,
+		0, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 

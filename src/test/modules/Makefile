@@ -22,6 +22,7 @@ SUBDIRS = \
 		  test_ginpostinglist \
 		  test_integerset \
 		  test_lfind \
+		  test_memtrack \
 		  test_misc \
 		  test_oat_hooks \
 		  test_parser \

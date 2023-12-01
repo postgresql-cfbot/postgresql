@@ -399,3 +399,30 @@ pg_atomic_sub_fetch_u64_impl(volatile pg_atomic_uint64 *ptr, int64 sub_)
 	return pg_atomic_fetch_sub_u64_impl(ptr, sub_) - sub_;
 }
 #endif
+
+#if !defined(PG_HAVE_ATOMIC_FETCH_ADD_LIMIT_U64) && defined(PG_HAVE_ATOMIC_COMPARE_EXCHANGE_U64)
+#define PG_HAVE_ATOMIC_FETCH_ADD_LIMIT_U64
+
+/*
+ * Emulate the atomic op using a Compare And Swap (CAS) loop.
+ * This emulation is used for most platforms, but some (eg RISC-V)
+ * can implement it directly.
+ */
+static inline bool
+pg_atomic_fetch_add_limit_u64_impl(volatile pg_atomic_uint64 *sum, uint64 add, uint64 limit, uint64 *oldval)
+{
+	uint64		newval;
+
+	/* CAS loop until successful or until new sum would be out of bounds */
+	*oldval = pg_atomic_read_u64_impl(sum);
+	do
+	{
+		newval = *oldval + add;
+		if (newval > limit || newval < *oldval)	/* Includes overflow test */
+			return false;
+
+	} while (!pg_atomic_compare_exchange_u64_impl(sum, oldval, newval));
+
+	return true;
+}
+#endif

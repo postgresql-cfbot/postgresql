@@ -55,6 +55,8 @@
 				 #expr, __FILE__, __LINE__); \
 	} while (0)
 
+#define EXPECT_FALSE(expr)  EXPECT_TRUE(!(expr))
+
 #define EXPECT_EQ_U32(result_expr, expected_expr)	\
 	do { \
 		uint32		actual_result = (result_expr); \
@@ -778,6 +780,7 @@ test_atomic_uint64(void)
 {
 	pg_atomic_uint64 var;
 	uint64		expected;
+	uint64		oldval;
 	int			i;
 
 	pg_atomic_init_u64(&var, 0);
@@ -818,6 +821,18 @@ test_atomic_uint64(void)
 	EXPECT_EQ_U64(pg_atomic_fetch_and_u64(&var, ~1), 1);
 	/* no bits set anymore */
 	EXPECT_EQ_U64(pg_atomic_fetch_and_u64(&var, ~0), 0);
+
+	/* Verify limit counters add and respect the limit */
+	pg_atomic_write_u64(&var, 0);
+	EXPECT_TRUE(pg_atomic_fetch_add_limit_u64(&var, 1, 1, &oldval));
+	EXPECT_EQ_U64(pg_atomic_read_u64(&var), 1);
+	EXPECT_EQ_U64(oldval, 0);
+	EXPECT_FALSE(pg_atomic_fetch_add_limit_u64(&var, 1, 1, &oldval));
+	EXPECT_EQ_U64(pg_atomic_read_u64(&var), 1);
+	EXPECT_EQ_U64(oldval, 1);
+	EXPECT_FALSE(pg_atomic_fetch_add_limit_u64(&var, ULONG_MAX, ULONG_MAX, &oldval));
+	EXPECT_EQ_U64(pg_atomic_read_u64(&var), 1);
+	EXPECT_EQ_U64(oldval, 1);
 }
 
 /*

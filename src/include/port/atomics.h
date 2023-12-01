@@ -514,6 +514,25 @@ pg_atomic_sub_fetch_u64(volatile pg_atomic_uint64 *ptr, int64 sub_)
 	return pg_atomic_sub_fetch_u64_impl(ptr, sub_);
 }
 
+/*
+ * Add to an atomic sum, returning true if the new sum is within
+ * the specified limit. Return false and don't add if the new sum
+ * would exceed the limit.
+ *
+ * This routine implements a "Limit Counter" as described
+ * in "Is Parallel Programming Hard ...?" by Paul McKenney.
+ * https://mirrors.edge.kernel.org/pub/linux/kernel/people/paulmck/perfbook/perfbook.html
+ */
+static inline bool
+pg_atomic_fetch_add_limit_u64(volatile pg_atomic_uint64 *ptr, int64 add,
+							  uint64 limit, uint64 *oldval)
+{
+#ifndef PG_HAVE_ATOMIC_U64_SIMULATION
+	AssertPointerAlignment(ptr, 8);
+#endif
+	return pg_atomic_fetch_add_limit_u64_impl(ptr, add, limit, oldval);
+}
+
 #undef INSIDE_ATOMICS_H
 
 #endif							/* ATOMICS_H */

@@ -1,0 +1,4 @@
+comment = 'Test code for PostgreSQL memory tracking'
+default_version = '1.0'
+module_pathname = '$libdir/test_memtrack'
+relocatable = true

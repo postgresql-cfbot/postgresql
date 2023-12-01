@@ -15,6 +15,7 @@
 #include "pgstat.h"
 #include "storage/shmem.h"
 #include "utils/memutils.h"
+#include "utils/memtrack.h"
 #include "utils/pgstat_internal.h"
 
 
@@ -158,6 +159,9 @@ StatsShmemInit(void)
 		/* the allocation of pgStatLocal.shmem itself */
 		p += MAXALIGN(sizeof(PgStat_ShmemControl));
 
+		/* Initialize memory tracking before any new memory is allocated */
+		pgstat_init_memtrack(&ctl->memtrack);
+
 		/*
 		 * Create a small dsa allocation in plain shared memory. This is
 		 * required because postmaster cannot use dsm segments. It also
@@ -211,6 +215,9 @@ StatsShmemInit(void)
 	{
 		Assert(found);
 	}
+
+	/* Report startup memory allocations to pgstat */
+	update_global_reservation(0, 0);
 }
 
 void

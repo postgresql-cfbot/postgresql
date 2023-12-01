@@ -355,6 +355,15 @@ typedef struct PgStatShared_Wal
 } PgStatShared_Wal;
 
 
+typedef struct PgStatShared_Memtrack
+{
+	LWLock		lock;
+	uint32		postmasterChangeCount;
+	PgStat_Memory	postmasterMemory;
+	pg_atomic_uint64  total_memory_reserved;
+	pg_atomic_uint64  total_dsm_reserved;
+} PgStatShared_Memtrack;
+
 
 /* ----------
  * Types and definitions for different kinds of variable-amount stats.
@@ -394,7 +403,6 @@ typedef struct PgStatShared_ReplSlot
 	PgStat_StatReplSlotEntry stats;
 } PgStatShared_ReplSlot;
 
-
 /*
  * Central shared memory entry for the cumulative stats system.
  *
@@ -433,6 +441,7 @@ typedef struct PgStat_ShmemControl
 	PgStatShared_IO io;
 	PgStatShared_SLRU slru;
 	PgStatShared_Wal wal;
+	PgStatShared_Memtrack memtrack;
 } PgStat_ShmemControl;
 
 
@@ -459,6 +468,8 @@ typedef struct PgStat_Snapshot
 	PgStat_SLRUStats slru[SLRU_NUM_ELEMENTS];
 
 	PgStat_WalStats wal;
+
+	PgStat_Memtrack memtrack;
 
 	/* to free snapshot in bulk */
 	MemoryContext context;
@@ -658,6 +669,10 @@ extern PgStat_SubXactStatus *pgstat_get_xact_stack_level(int nest_level);
 extern void pgstat_drop_transactional(PgStat_Kind kind, Oid dboid, Oid objoid);
 extern void pgstat_create_transactional(PgStat_Kind kind, Oid dboid, Oid objoid);
 
+/*
+ * Functions in pgstat_memtrack.c
+ */
+extern void pgstat_memtrack_snapshot_cb(void);
 
 /*
  * Variables in pgstat.c

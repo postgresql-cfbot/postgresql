@@ -82,6 +82,33 @@ typedef struct PgBackendGSSStatus
 } PgBackendGSSStatus;
 
 
+/*
+ * Track memory coming from the following allocators
+ */
+typedef enum pg_allocator_type
+{
+	PG_ALLOC_INIT = 0,			/* Assumed as part of process initialization */
+	PG_ALLOC_ASET,				/* Allocation Set */
+	PG_ALLOC_DSM,				/* Dynamic shared memory */
+	PG_ALLOC_GENERATION,		/* Generation allocator (all freed at once) */
+	PG_ALLOC_SLAB,				/* Slab allocator 		 */
+} pg_allocator_type;
+
+#define PG_ALLOC_TYPE_MAX  (PG_ALLOC_SLAB + 1)
+
+/*
+ * Track memory reserved by each process,
+ * This structure is used both for backends and for the postmaster.
+ * Note subTotal[PG_ALLOC_DSM] can go negative if one process
+ * frees DSM memory which was reserved by another process.
+ */
+typedef struct PgStat_Memory
+{
+	int64	total;
+	int64	subTotal[PG_ALLOC_TYPE_MAX];
+} PgStat_Memory;
+
+
 /* ----------
  * PgBackendStatus
  *
@@ -170,6 +197,10 @@ typedef struct PgBackendStatus
 
 	/* query identifier, optionally computed using post_parse_analyze_hook */
 	uint64		st_query_id;
+
+	/* Memory allocated to this backend, both total and subtotals by type. */
+	PgStat_Memory st_memory;
+
 } PgBackendStatus;
 
 
@@ -332,6 +363,7 @@ extern uint64 pgstat_get_my_query_id(void);
  * generate the pgstat* views.
  * ----------
  */
+extern void pgstat_read_current_status(void);
 extern int	pgstat_fetch_stat_numbackends(void);
 extern PgBackendStatus *pgstat_get_beentry_by_backend_id(BackendId beid);
 extern LocalPgBackendStatus *pgstat_get_local_beentry_by_backend_id(BackendId beid);

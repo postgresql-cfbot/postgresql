@@ -167,4 +167,8 @@ extern bool pg_atomic_compare_exchange_u64_impl(volatile pg_atomic_uint64 *ptr,
 #define PG_HAVE_ATOMIC_FETCH_ADD_U64
 extern uint64 pg_atomic_fetch_add_u64_impl(volatile pg_atomic_uint64 *ptr, int64 add_);
 
+#define PG_HAVE_ATOMIC_FETCH_ADD_LIMIT_U64
+extern bool pg_atomic_fetch_add_limit_u64_impl(volatile pg_atomic_uint64 *ptr,
+											   int64 add, uint64 limit, uint64 *oldval);
+
 #endif /* PG_HAVE_ATOMIC_U64_SIMULATION */

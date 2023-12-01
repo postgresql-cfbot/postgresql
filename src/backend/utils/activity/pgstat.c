@@ -104,6 +104,7 @@
 #include "storage/pg_shmem.h"
 #include "storage/shmem.h"
 #include "utils/guc_hooks.h"
+#include "utils/memtrack.h"
 #include "utils/memutils.h"
 #include "utils/pgstat_internal.h"
 #include "utils/timestamp.h"
@@ -393,6 +394,12 @@ static const PgStat_KindInfo pgstat_kind_infos[PGSTAT_NUM_KINDS] = {
 		.reset_all_cb = pgstat_wal_reset_all_cb,
 		.snapshot_cb = pgstat_wal_snapshot_cb,
 	},
+
+	[PGSTAT_KIND_MEMORYTRACK] = {
+		.name = "memtrack",
+		.fixed_amount = true,
+		.snapshot_cb = pgstat_memtrack_snapshot_cb,
+	}
 };
 
 
@@ -762,7 +769,10 @@ pgstat_reset_of_kind(PgStat_Kind kind)
 	TimestampTz ts = GetCurrentTimestamp();
 
 	if (kind_info->fixed_amount)
-		kind_info->reset_all_cb(ts);
+	{
+		if (kind_info->reset_all_cb != NULL)
+			kind_info->reset_all_cb(ts);
+	}
 	else
 		pgstat_reset_entries_of_kind(kind, ts);
 }
@@ -1690,7 +1700,7 @@ pgstat_reset_after_failure(void)
 	{
 		const PgStat_KindInfo *kind_info = pgstat_get_kind_info(kind);
 
-		if (!kind_info->fixed_amount)
+		if (!kind_info->fixed_amount || kind_info->reset_all_cb == NULL)
 			continue;
 
 		kind_info->reset_all_cb(ts);

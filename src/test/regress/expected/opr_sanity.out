@@ -468,9 +468,11 @@ WHERE proallargtypes IS NOT NULL AND
   ARRAY(SELECT proallargtypes[i]
         FROM generate_series(1, array_length(proallargtypes, 1)) g(i)
         WHERE proargmodes IS NULL OR proargmodes[i] IN ('i', 'b', 'v'));
- oid | proname | proargtypes | proallargtypes | proargmodes 
------+---------+-------------+----------------+-------------
-(0 rows)
+ oid  |             proname              | proargtypes |      proallargtypes       |    proargmodes    
+------+----------------------------------+-------------+---------------------------+-------------------
+ 9890 | pg_stat_get_memory_reservation   |             | {23,23,20,20,20,20,20,20} | {i,o,o,o,o,o,o,o}
+ 9891 | pg_get_backend_memory_allocation |             | {23,23,20,20,20,20,20}    | {i,o,o,o,o,o,o}
+(2 rows)
 
 -- Check for type of the variadic array parameter's elements.
 -- provariadic should be ANYOID if the type of the last element is ANYOID,

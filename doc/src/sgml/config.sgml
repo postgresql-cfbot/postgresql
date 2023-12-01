@@ -2167,6 +2167,32 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-max-total-memory" xreflabel="max_total_memory">
+      <term><varname>max_total_memory</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>max_total_memory</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies a limit to the total amount of memory a database server
+        is allowed to allocate.
+        If this value is specified without units, it is taken as megabytes.
+        If unset or set to 0, the limit is disabled. If set, max_total_memory must be
+        larger than <xref linkend="guc-shared-memory-size"/>, and it should include at least an additional
+        2MB per connection allowed by <xref linkend="guc-max-connections"/>.
+        </para>
+        <para>
+        A memory request that would exhaust the limit will
+        be denied with an out of memory error, causing that process's current
+        query/transaction to fail and all of the memory allocated for that action to be released.
+        Total memory currently reserved (<varname>total_memory_reserved</varname>) is displayed in the
+        <link linkend="monitoring-pg-stat-global-memory-tracking-view">
+        <structname>pg_stat_global_memory_tracking</structname></link> view.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
      </sect2>
 

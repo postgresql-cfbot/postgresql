@@ -61,7 +61,7 @@ static char *libpqrcv_identify_system(WalReceiverConn *conn,
 static int	libpqrcv_server_version(WalReceiverConn *conn);
 static void libpqrcv_readtimelinehistoryfile(WalReceiverConn *conn,
 											 TimeLineID tli, char **filename,
-											 char **content, int *len);
+											 char **content, int *len, bool missing_ok);
 static bool libpqrcv_startstreaming(WalReceiverConn *conn,
 									const WalRcvStreamOptions *options);
 static void libpqrcv_endstreaming(WalReceiverConn *conn,
@@ -603,7 +603,7 @@ libpqrcv_endstreaming(WalReceiverConn *conn, TimeLineID *next_tli)
 static void
 libpqrcv_readtimelinehistoryfile(WalReceiverConn *conn,
 								 TimeLineID tli, char **filename,
-								 char **content, int *len)
+								 char **content, int *len, bool missing_ok)
 {
 	PGresult   *res;
 	char		cmd[64];
@@ -618,11 +618,23 @@ libpqrcv_readtimelinehistoryfile(WalReceiverConn *conn,
 	if (PQresultStatus(res) != PGRES_TUPLES_OK)
 	{
 		PQclear(res);
-		ereport(ERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("could not receive timeline history file from "
-						"the primary server: %s",
-						pchomp(PQerrorMessage(conn->streamConn)))));
+
+		if (missing_ok)
+		{
+			*filename = NULL;
+			*content = NULL;
+			ereport(WARNING,
+					(errmsg("could not receive timeline history file from "
+							"the primary server: %s",
+							pchomp(PQerrorMessage(conn->streamConn)))));
+			return;
+		}
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("could not receive timeline history file from "
+							"the primary server: %s",
+							pchomp(PQerrorMessage(conn->streamConn)))));
 	}
 	if (PQnfields(res) != 2 || PQntuples(res) != 1)
 	{

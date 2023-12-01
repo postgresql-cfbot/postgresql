@@ -533,7 +533,7 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 	 * replay our earlier WAL entries. If we do not fsync those pages here,
 	 * they might still not be on disk when the crash occurs.
 	 */
-	if (use_wal || copying_initfork)
+	if (use_wal || relpersistence == RELPERSISTENCE_UNLOGGED)
 		smgrimmedsync(dst, forkNum);
 }
 

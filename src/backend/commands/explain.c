@@ -21,6 +21,7 @@
 #include "executor/nodeHash.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
+#include "miscadmin.h"
 #include "nodes/extensible.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -28,7 +29,10 @@
 #include "parser/parsetree.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/bufmgr.h"
+#include "storage/procarray.h"
+#include "tcop/pquery.h"
 #include "tcop/tcopprot.h"
+#include "utils/backend_status.h"
 #include "utils/builtins.h"
 #include "utils/guc_tables.h"
 #include "utils/json.h"
@@ -734,6 +738,37 @@ ExplainPrintSettings(ExplainState *es)
 		}
 
 		ExplainPropertyText("Settings", str.data, es);
+	}
+}
+
+/*
+ * ExplainAssembleLogOutput -
+ *   Assemble es->str for logging according to specified contents and format
+ */
+
+void
+ExplainAssembleLogOutput(ExplainState *es, QueryDesc *queryDesc, int logFormat,
+						 bool logTriggers, int logParameterMaxLength)
+{
+	ExplainBeginOutput(es);
+	ExplainQueryText(es, queryDesc);
+	ExplainQueryParameters(es, queryDesc->params, logParameterMaxLength);
+	ExplainPrintPlan(es, queryDesc);
+	if (es->analyze && logTriggers)
+		ExplainPrintTriggers(es, queryDesc);
+	if (es->costs)
+		ExplainPrintJITSummary(es, queryDesc);
+	ExplainEndOutput(es);
+
+	/* Remove last line break */
+	if (es->str->len > 0 && es->str->data[es->str->len - 1] == '\n')
+		es->str->data[--es->str->len] = '\0';
+
+	/* Fix JSON to output an object */
+	if (logFormat == EXPLAIN_FORMAT_JSON)
+	{
+		es->str->data[0] = '{';
+		es->str->data[es->str->len - 1] = '}';
 	}
 }
 
@@ -1647,6 +1682,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	/*
 	 * We have to forcibly clean up the instrumentation state because we
 	 * haven't done ExecutorEnd yet.  This is pretty grotty ...
+	 * This cleanup should not be done when the query has already been
+	 * executed and explain has been called by signal, as the target query
+	 * may use instrumentation and clean itself up.
 	 *
 	 * Note: contrib/auto_explain could cause instrumentation to be set up
 	 * even though we didn't ask for it here.  Be careful not to print any
@@ -1654,7 +1692,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	 * InstrEndLoop call anyway, if possible, to reduce the number of cases
 	 * auto_explain has to contend with.
 	 */
-	if (planstate->instrument)
+	if (planstate->instrument && !es->signaled)
 		InstrEndLoop(planstate->instrument);
 
 	if (es->analyze &&
@@ -5081,4 +5119,173 @@ static void
 escape_yaml(StringInfo buf, const char *str)
 {
 	escape_json(buf, str);
+}
+
+/*
+ * HandleLogQueryPlanInterrupt
+ *		Handle receipt of an interrupt indicating logging the plan of
+ *		the currently running query.
+ *
+ * All the actual work is deferred to ProcessLogQueryPlanInterrupt(),
+ * because we cannot safely emit a log message inside the signal handler.
+ */
+void
+HandleLogQueryPlanInterrupt(void)
+{
+	InterruptPending = true;
+	LogQueryPlanPending = true;
+	/* latch will be set by procsignal_sigusr1_handler */
+}
+
+bool ProcessLogQueryPlanInterruptActive = false;
+/*
+ * ProcessLogQueryPlanInterrupt
+ * 		Perform logging the plan of the currently running query on this
+ * 		backend process.
+ *
+ * Any backend that participates in ProcSignal signaling must arrange to call
+ * this function if we see LogQueryPlanPending set.
+ * It is called from CHECK_FOR_INTERRUPTS(), which is enough because the target
+ * process for logging plan is a backend.
+ */
+void
+ProcessLogQueryPlanInterrupt(void)
+{
+	ExplainState *es;
+	HASH_SEQ_STATUS status;
+	LOCALLOCK  *locallock;
+	MemoryContext cxt;
+	MemoryContext old_cxt;
+	LogQueryPlanPending = false;
+
+	/* Cannot re-enter. */
+	if (ProcessLogQueryPlanInterruptActive)
+		return;
+
+	ProcessLogQueryPlanInterruptActive = true;
+
+	if (ActiveQueryDesc == NULL)
+	{
+		ereport(LOG_SERVER_ONLY,
+				errmsg("backend with PID %d is not running a query or a subtransaction is aborted",
+					MyProcPid),
+				errhidestmt(true),
+				errhidecontext(true));
+
+		ProcessLogQueryPlanInterruptActive = false;
+		return;
+	}
+
+	/*
+	 * Ensure no page lock is held on this process.
+	 *
+	 * If page lock is held at the time of the interrupt, we can't acquire any
+	 * other heavyweight lock, which might be necessary for explaining the plan
+	 * when retrieving column names.
+	 *
+	 * This may be overkill, but since page locks are held for a short duration
+	 * we check all the LocalLock entries and when finding even one, give up
+	 * logging the plan.
+	 */
+	hash_seq_init(&status, GetLockMethodLocalHash());
+	while ((locallock = (LOCALLOCK *) hash_seq_search(&status)) != NULL)
+	{
+		if (LOCALLOCK_LOCKTAG(*locallock) == LOCKTAG_PAGE)
+		{
+			ereport(LOG_SERVER_ONLY,
+				errmsg("ignored request for logging query plan due to page lock confilcts"),
+				errdetail("You can try again in a moment."));
+			hash_seq_term(&status);
+
+			ProcessLogQueryPlanInterruptActive = false;
+			return;
+		}
+	}
+
+	/*
+	 * Ensure no locks already held on the lockable object.
+	 *
+	 * Otherwise EXPLAIN can be also hold on it.
+	 */
+	if (MyProc->heldLocks)
+	{
+		ereport(LOG_SERVER_ONLY,
+			errmsg("ignored request for logging query plan due to lock confilcts"),
+			errdetail("You can try again in a moment."));
+			return;
+	}
+
+	cxt = AllocSetContextCreate(CurrentMemoryContext,
+								"log_query_plan temporary context",
+								ALLOCSET_DEFAULT_SIZES);
+
+	old_cxt = MemoryContextSwitchTo(cxt);
+
+	es = NewExplainState();
+
+	es->format = EXPLAIN_FORMAT_TEXT;
+	es->settings = true;
+	es->verbose = true;
+	es->signaled = true;
+
+	ExplainAssembleLogOutput(es, ActiveQueryDesc, EXPLAIN_FORMAT_TEXT, 0, -1);
+
+	ereport(LOG_SERVER_ONLY,
+			errmsg("query plan running on backend with PID %d is:\n%s",
+					MyProcPid, es->str->data),
+			 errhidestmt(true),
+			 errhidecontext(true));
+
+	MemoryContextSwitchTo(old_cxt);
+	MemoryContextDelete(cxt);
+
+	ProcessLogQueryPlanInterruptActive = false;
+}
+
+/*
+ * pg_log_query_plan
+ *		Signal a backend process to log the query plan of the running query.
+ *
+ * By default, only superusers are allowed to signal to log the plan because
+ * allowing any users to issue this request at an unbounded rate would
+ * cause lots of log messages and which can lead to denial of service.
+ * Additional roles can be permitted with GRANT.
+ */
+Datum
+pg_log_query_plan(PG_FUNCTION_ARGS)
+{
+	int			pid = PG_GETARG_INT32(0);
+	PGPROC	   *proc;
+	PgBackendStatus	*be_status;
+
+	proc = BackendPidGetProc(pid);
+
+	if (proc == NULL)
+	{
+		/*
+		 * This is just a warning so a loop-through-resultset will not abort
+		 * if one backend terminated on its own during the run.
+		 */
+		ereport(WARNING,
+				(errmsg("PID %d is not a PostgreSQL backend process", pid)));
+		PG_RETURN_BOOL(false);
+	}
+
+	be_status = pgstat_get_beentry_by_backend_id(proc->backendId);
+	if (be_status->st_backendType != B_BACKEND)
+	{
+		ereport(WARNING,
+				(errmsg("PID %d is not a PostgreSQL client backend process", pid)));
+		PG_RETURN_BOOL(false);
+	}
+
+	if (SendProcSignal(pid, PROCSIG_LOG_QUERY_PLAN, proc->backendId) < 0)
+	{
+		/* Again, just a warning to allow loops */
+		ereport(WARNING,
+				(errmsg("could not send signal to process %d: %m", pid)));
+		PG_RETURN_BOOL(false);
+	}
+
+	PG_RETURN_BOOL(true);
 }

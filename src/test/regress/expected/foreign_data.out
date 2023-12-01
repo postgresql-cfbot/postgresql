@@ -742,8 +742,6 @@ COMMENT ON COLUMN ft1.c1 IS 'ft1.c1';
 Check constraints:
     "ft1_c2_check" CHECK (c2 <> ''::text)
     "ft1_c3_check" CHECK (c3 >= '01-01-1994'::date AND c3 <= '01-31-1994'::date)
-Not-null constraints:
-    "ft1_c1_not_null" NOT NULL "c1"
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 
@@ -866,9 +864,6 @@ ALTER FOREIGN TABLE ft1 ALTER COLUMN c8 SET STORAGE PLAIN;
 Check constraints:
     "ft1_c2_check" CHECK (c2 <> ''::text)
     "ft1_c3_check" CHECK (c3 >= '01-01-1994'::date AND c3 <= '01-31-1994'::date)
-Not-null constraints:
-    "ft1_c1_not_null" NOT NULL "c1"
-    "ft1_c6_not_null" NOT NULL "c6"
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 
@@ -1409,8 +1404,6 @@ CREATE FOREIGN TABLE ft2 () INHERITS (fd_pt1)
  c1     | integer |           | not null |         | plain    |              | 
  c2     | text    |           |          |         | extended |              | 
  c3     | date    |           |          |         | plain    |              | 
-Not-null constraints:
-    "fd_pt1_c1_not_null" NOT NULL "c1"
 Child tables: ft2, FOREIGN
 
 \d+ ft2
@@ -1420,8 +1413,6 @@ Child tables: ft2, FOREIGN
  c1     | integer |           | not null |         |             | plain    |              | 
  c2     | text    |           |          |         |             | extended |              | 
  c3     | date    |           |          |         |             | plain    |              | 
-Not-null constraints:
-    "fd_pt1_c1_not_null" NOT NULL "c1" (inherited)
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
@@ -1434,8 +1425,6 @@ DROP FOREIGN TABLE ft2;
  c1     | integer |           | not null |         | plain    |              | 
  c2     | text    |           |          |         | extended |              | 
  c3     | date    |           |          |         | plain    |              | 
-Not-null constraints:
-    "fd_pt1_c1_not_null" NOT NULL "c1"
 
 CREATE FOREIGN TABLE ft2 (
 	c1 integer NOT NULL,
@@ -1449,8 +1438,6 @@ CREATE FOREIGN TABLE ft2 (
  c1     | integer |           | not null |         |             | plain    |              | 
  c2     | text    |           |          |         |             | extended |              | 
  c3     | date    |           |          |         |             | plain    |              | 
-Not-null constraints:
-    "ft2_c1_not_null" NOT NULL "c1"
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 
@@ -1462,8 +1449,6 @@ ALTER FOREIGN TABLE ft2 INHERIT fd_pt1;
  c1     | integer |           | not null |         | plain    |              | 
  c2     | text    |           |          |         | extended |              | 
  c3     | date    |           |          |         | plain    |              | 
-Not-null constraints:
-    "fd_pt1_c1_not_null" NOT NULL "c1"
 Child tables: ft2, FOREIGN
 
 \d+ ft2
@@ -1473,8 +1458,6 @@ Child tables: ft2, FOREIGN
  c1     | integer |           | not null |         |             | plain    |              | 
  c2     | text    |           |          |         |             | extended |              | 
  c3     | date    |           |          |         |             | plain    |              | 
-Not-null constraints:
-    "ft2_c1_not_null" NOT NULL "c1" (local, inherited)
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
@@ -1496,8 +1479,6 @@ NOTICE:  merging column "c3" with inherited definition
  c1     | integer |           | not null |         |             | plain    |              | 
  c2     | text    |           |          |         |             | extended |              | 
  c3     | date    |           |          |         |             | plain    |              | 
-Not-null constraints:
-    "ft2_c1_not_null" NOT NULL "c1" (local, inherited)
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
@@ -1511,8 +1492,6 @@ Child tables: ct3,
  c1     | integer |           | not null |         | plain    |              | 
  c2     | text    |           |          |         | extended |              | 
  c3     | date    |           |          |         | plain    |              | 
-Not-null constraints:
-    "ft2_c1_not_null" NOT NULL "c1" (inherited)
 Inherits: ft2
 
 \d+ ft3
@@ -1522,8 +1501,6 @@ Inherits: ft2
  c1     | integer |           | not null |         |             | plain    |              | 
  c2     | text    |           |          |         |             | extended |              | 
  c3     | date    |           |          |         |             | plain    |              | 
-Not-null constraints:
-    "ft3_c1_not_null" NOT NULL "c1" (local, inherited)
 Server: s0
 Inherits: ft2
 
@@ -1545,10 +1522,9 @@ ALTER TABLE fd_pt1 ADD COLUMN c8 integer;
  c6     | integer |           |          |         | plain    |              | 
  c7     | integer |           | not null |         | plain    |              | 
  c8     | integer |           |          |         | plain    |              | 
-Not-null constraints:
-    "fd_pt1_c1_not_null" NOT NULL "c1"
-    "fd_pt1_c7_not_null" NOT NULL "c7"
-Child tables: ft2, FOREIGN
+Child tables: ft2, FOREIGN,
+              	ct3,
+              	ft3, FOREIGN
 
 \d+ ft2
                                        Foreign table "public.ft2"
@@ -1562,9 +1538,6 @@ Child tables: ft2, FOREIGN
  c6     | integer |           |          |         |             | plain    |              | 
  c7     | integer |           | not null |         |             | plain    |              | 
  c8     | integer |           |          |         |             | plain    |              | 
-Not-null constraints:
-    "ft2_c1_not_null" NOT NULL "c1" (local, inherited)
-    "fd_pt1_c7_not_null" NOT NULL "c7" (inherited)
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
@@ -1583,9 +1556,6 @@ Child tables: ct3,
  c6     | integer |           |          |         | plain    |              | 
  c7     | integer |           | not null |         | plain    |              | 
  c8     | integer |           |          |         | plain    |              | 
-Not-null constraints:
-    "ft2_c1_not_null" NOT NULL "c1" (inherited)
-    "fd_pt1_c7_not_null" NOT NULL "c7" (inherited)
 Inherits: ft2
 
 \d+ ft3
@@ -1600,9 +1570,6 @@ Inherits: ft2
  c6     | integer |           |          |         |             | plain    |              | 
  c7     | integer |           | not null |         |             | plain    |              | 
  c8     | integer |           |          |         |             | plain    |              | 
-Not-null constraints:
-    "ft3_c1_not_null" NOT NULL "c1" (local, inherited)
-    "fd_pt1_c7_not_null" NOT NULL "c7" (inherited)
 Server: s0
 Inherits: ft2
 
@@ -1631,10 +1598,9 @@ ALTER TABLE fd_pt1 ALTER COLUMN c8 SET STORAGE EXTERNAL;
  c6     | integer |           | not null |         | plain    |              | 
  c7     | integer |           |          |         | plain    |              | 
  c8     | text    |           |          |         | external |              | 
-Not-null constraints:
-    "fd_pt1_c1_not_null" NOT NULL "c1"
-    "fd_pt1_c6_not_null" NOT NULL "c6"
-Child tables: ft2, FOREIGN
+Child tables: ft2, FOREIGN,
+              	ct3,
+              	ft3, FOREIGN
 
 \d+ ft2
                                        Foreign table "public.ft2"
@@ -1648,9 +1614,6 @@ Child tables: ft2, FOREIGN
  c6     | integer |           | not null |         |             | plain    |              | 
  c7     | integer |           |          |         |             | plain    |              | 
  c8     | text    |           |          |         |             | external |              | 
-Not-null constraints:
-    "ft2_c1_not_null" NOT NULL "c1" (local, inherited)
-    "fd_pt1_c6_not_null" NOT NULL "c6" (inherited)
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
@@ -1670,9 +1633,9 @@ ALTER TABLE fd_pt1 DROP COLUMN c8;
  c1     | integer |           | not null |         | plain    | 10000        | 
  c2     | text    |           |          |         | extended |              | 
  c3     | date    |           |          |         | plain    |              | 
-Not-null constraints:
-    "fd_pt1_c1_not_null" NOT NULL "c1"
-Child tables: ft2, FOREIGN
+Child tables: ft2, FOREIGN,
+              	ct3,
+              	ft3, FOREIGN
 
 \d+ ft2
                                        Foreign table "public.ft2"
@@ -1681,8 +1644,6 @@ Child tables: ft2, FOREIGN
  c1     | integer |           | not null |         |             | plain    | 10000        | 
  c2     | text    |           |          |         |             | extended |              | 
  c3     | date    |           |          |         |             | plain    |              | 
-Not-null constraints:
-    "ft2_c1_not_null" NOT NULL "c1" (local, inherited)
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
@@ -1697,12 +1658,11 @@ SELECT relname, conname, contype, conislocal, coninhcount, connoinherit
   FROM pg_class AS pc JOIN pg_constraint AS pgc ON (conrelid = pc.oid)
   WHERE pc.relname = 'fd_pt1'
   ORDER BY 1,2;
- relname |      conname       | contype | conislocal | coninhcount | connoinherit 
----------+--------------------+---------+------------+-------------+--------------
- fd_pt1  | fd_pt1_c1_not_null | n       | t          |           0 | f
- fd_pt1  | fd_pt1chk1         | c       | t          |           0 | t
- fd_pt1  | fd_pt1chk2         | c       | t          |           0 | f
-(3 rows)
+ relname |  conname   | contype | conislocal | coninhcount | connoinherit 
+---------+------------+---------+------------+-------------+--------------
+ fd_pt1  | fd_pt1chk1 | c       | t          |           0 | t
+ fd_pt1  | fd_pt1chk2 | c       | t          |           0 | f
+(2 rows)
 
 -- child does not inherit NO INHERIT constraints
 \d+ fd_pt1
@@ -1715,9 +1675,9 @@ SELECT relname, conname, contype, conislocal, coninhcount, connoinherit
 Check constraints:
     "fd_pt1chk1" CHECK (c1 > 0) NO INHERIT
     "fd_pt1chk2" CHECK (c2 <> ''::text)
-Not-null constraints:
-    "fd_pt1_c1_not_null" NOT NULL "c1"
-Child tables: ft2, FOREIGN
+Child tables: ft2, FOREIGN,
+              	ct3,
+              	ft3, FOREIGN
 
 \d+ ft2
                                        Foreign table "public.ft2"
@@ -1728,8 +1688,6 @@ Child tables: ft2, FOREIGN
  c3     | date    |           |          |         |             | plain    |              | 
 Check constraints:
     "fd_pt1chk2" CHECK (c2 <> ''::text)
-Not-null constraints:
-    "ft2_c1_not_null" NOT NULL "c1" (local, inherited)
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
@@ -1766,8 +1724,6 @@ ALTER FOREIGN TABLE ft2 INHERIT fd_pt1;
 Check constraints:
     "fd_pt1chk1" CHECK (c1 > 0) NO INHERIT
     "fd_pt1chk2" CHECK (c2 <> ''::text)
-Not-null constraints:
-    "fd_pt1_c1_not_null" NOT NULL "c1"
 Child tables: ft2, FOREIGN
 
 \d+ ft2
@@ -1779,8 +1735,6 @@ Child tables: ft2, FOREIGN
  c3     | date    |           |          |         |             | plain    |              | 
 Check constraints:
     "fd_pt1chk2" CHECK (c2 <> ''::text)
-Not-null constraints:
-    "ft2_c1_not_null" NOT NULL "c1" (local, inherited)
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
@@ -1800,8 +1754,6 @@ ALTER TABLE fd_pt1 ADD CONSTRAINT fd_pt1chk3 CHECK (c2 <> '') NOT VALID;
  c3     | date    |           |          |         | plain    |              | 
 Check constraints:
     "fd_pt1chk3" CHECK (c2 <> ''::text) NOT VALID
-Not-null constraints:
-    "fd_pt1_c1_not_null" NOT NULL "c1"
 Child tables: ft2, FOREIGN
 
 \d+ ft2
@@ -1814,8 +1766,6 @@ Child tables: ft2, FOREIGN
 Check constraints:
     "fd_pt1chk2" CHECK (c2 <> ''::text)
     "fd_pt1chk3" CHECK (c2 <> ''::text) NOT VALID
-Not-null constraints:
-    "ft2_c1_not_null" NOT NULL "c1" (local, inherited)
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
@@ -1831,8 +1781,6 @@ ALTER TABLE fd_pt1 VALIDATE CONSTRAINT fd_pt1chk3;
  c3     | date    |           |          |         | plain    |              | 
 Check constraints:
     "fd_pt1chk3" CHECK (c2 <> ''::text)
-Not-null constraints:
-    "fd_pt1_c1_not_null" NOT NULL "c1"
 Child tables: ft2, FOREIGN
 
 \d+ ft2
@@ -1845,8 +1793,6 @@ Child tables: ft2, FOREIGN
 Check constraints:
     "fd_pt1chk2" CHECK (c2 <> ''::text)
     "fd_pt1chk3" CHECK (c2 <> ''::text)
-Not-null constraints:
-    "ft2_c1_not_null" NOT NULL "c1" (local, inherited)
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
@@ -1866,8 +1812,6 @@ ALTER TABLE fd_pt1 RENAME CONSTRAINT fd_pt1chk3 TO f2_check;
  f3     | date    |           |          |         | plain    |              | 
 Check constraints:
     "f2_check" CHECK (f2 <> ''::text)
-Not-null constraints:
-    "fd_pt1_c1_not_null" NOT NULL "f1"
 Child tables: ft2, FOREIGN
 
 \d+ ft2
@@ -1880,8 +1824,6 @@ Child tables: ft2, FOREIGN
 Check constraints:
     "f2_check" CHECK (f2 <> ''::text)
     "fd_pt1chk2" CHECK (f2 <> ''::text)
-Not-null constraints:
-    "ft2_c1_not_null" NOT NULL "f1" (local, inherited)
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
@@ -1928,8 +1870,6 @@ CREATE FOREIGN TABLE fd_pt2_1 PARTITION OF fd_pt2 FOR VALUES IN (1)
  c2     | text    |           |          |         | extended |              | 
  c3     | date    |           |          |         | plain    |              | 
 Partition key: LIST (c1)
-Not-null constraints:
-    "fd_pt2_c1_not_null" NOT NULL "c1"
 Partitions: fd_pt2_1 FOR VALUES IN (1), FOREIGN
 
 \d+ fd_pt2_1
@@ -1941,8 +1881,6 @@ Partitions: fd_pt2_1 FOR VALUES IN (1), FOREIGN
  c3     | date    |           |          |         |             | plain    |              | 
 Partition of: fd_pt2 FOR VALUES IN (1)
 Partition constraint: ((c1 IS NOT NULL) AND (c1 = 1))
-Not-null constraints:
-    "fd_pt2_c1_not_null" NOT NULL "c1" (inherited)
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 
@@ -1962,8 +1900,6 @@ CREATE FOREIGN TABLE fd_pt2_1 (
  c2     | text         |           |          |         |             | extended |              | 
  c3     | date         |           |          |         |             | plain    |              | 
  c4     | character(1) |           |          |         |             | extended |              | 
-Not-null constraints:
-    "fd_pt2_1_c1_not_null" NOT NULL "c1"
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 
@@ -1979,8 +1915,6 @@ DROP FOREIGN TABLE fd_pt2_1;
  c2     | text    |           |          |         | extended |              | 
  c3     | date    |           |          |         | plain    |              | 
 Partition key: LIST (c1)
-Not-null constraints:
-    "fd_pt2_c1_not_null" NOT NULL "c1"
 Number of partitions: 0
 
 CREATE FOREIGN TABLE fd_pt2_1 (
@@ -1995,8 +1929,6 @@ CREATE FOREIGN TABLE fd_pt2_1 (
  c1     | integer |           | not null |         |             | plain    |              | 
  c2     | text    |           |          |         |             | extended |              | 
  c3     | date    |           |          |         |             | plain    |              | 
-Not-null constraints:
-    "fd_pt2_1_c1_not_null" NOT NULL "c1"
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 
@@ -2010,8 +1942,6 @@ ALTER TABLE fd_pt2 ATTACH PARTITION fd_pt2_1 FOR VALUES IN (1);
  c2     | text    |           |          |         | extended |              | 
  c3     | date    |           |          |         | plain    |              | 
 Partition key: LIST (c1)
-Not-null constraints:
-    "fd_pt2_c1_not_null" NOT NULL "c1"
 Partitions: fd_pt2_1 FOR VALUES IN (1), FOREIGN
 
 \d+ fd_pt2_1
@@ -2023,8 +1953,6 @@ Partitions: fd_pt2_1 FOR VALUES IN (1), FOREIGN
  c3     | date    |           |          |         |             | plain    |              | 
 Partition of: fd_pt2 FOR VALUES IN (1)
 Partition constraint: ((c1 IS NOT NULL) AND (c1 = 1))
-Not-null constraints:
-    "fd_pt2_1_c1_not_null" NOT NULL "c1" (inherited)
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 
@@ -2042,8 +1970,6 @@ ALTER TABLE fd_pt2_1 ADD CONSTRAINT p21chk CHECK (c2 <> '');
  c2     | text    |           |          |         | extended |              | 
  c3     | date    |           |          |         | plain    |              | 
 Partition key: LIST (c1)
-Not-null constraints:
-    "fd_pt2_c1_not_null" NOT NULL "c1"
 Partitions: fd_pt2_1 FOR VALUES IN (1), FOREIGN
 
 \d+ fd_pt2_1
@@ -2057,9 +1983,6 @@ Partition of: fd_pt2 FOR VALUES IN (1)
 Partition constraint: ((c1 IS NOT NULL) AND (c1 = 1))
 Check constraints:
     "p21chk" CHECK (c2 <> ''::text)
-Not-null constraints:
-    "fd_pt2_1_c1_not_null" NOT NULL "c1" (inherited)
-    "fd_pt2_1_c3_not_null" NOT NULL "c3"
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 
@@ -2077,9 +2000,6 @@ ALTER TABLE fd_pt2 ALTER c2 SET NOT NULL;
  c2     | text    |           | not null |         | extended |              | 
  c3     | date    |           |          |         | plain    |              | 
 Partition key: LIST (c1)
-Not-null constraints:
-    "fd_pt2_c1_not_null" NOT NULL "c1"
-    "fd_pt2_c2_not_null" NOT NULL "c2"
 Number of partitions: 0
 
 \d+ fd_pt2_1
@@ -2091,9 +2011,6 @@ Number of partitions: 0
  c3     | date    |           | not null |         |             | plain    |              | 
 Check constraints:
     "p21chk" CHECK (c2 <> ''::text)
-Not-null constraints:
-    "fd_pt2_1_c1_not_null" NOT NULL "c1"
-    "fd_pt2_1_c3_not_null" NOT NULL "c3"
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 
@@ -2113,9 +2030,6 @@ ALTER TABLE fd_pt2 ADD CONSTRAINT fd_pt2chk1 CHECK (c1 > 0);
 Partition key: LIST (c1)
 Check constraints:
     "fd_pt2chk1" CHECK (c1 > 0)
-Not-null constraints:
-    "fd_pt2_c1_not_null" NOT NULL "c1"
-    "fd_pt2_c2_not_null" NOT NULL "c2"
 Number of partitions: 0
 
 \d+ fd_pt2_1
@@ -2127,10 +2041,6 @@ Number of partitions: 0
  c3     | date    |           | not null |         |             | plain    |              | 
 Check constraints:
     "p21chk" CHECK (c2 <> ''::text)
-Not-null constraints:
-    "fd_pt2_1_c1_not_null" NOT NULL "c1"
-    "fd_pt2_1_c2_not_null" NOT NULL "c2"
-    "fd_pt2_1_c3_not_null" NOT NULL "c3"
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 

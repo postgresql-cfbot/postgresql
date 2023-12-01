@@ -455,11 +455,20 @@ from hash_parted order by part;
 Partition key: LIST (lower(a))
 Partitions: part_aa_bb FOR VALUES IN ('aa', 'bb'),
             part_cc_dd FOR VALUES IN ('cc', 'dd'),
+            part_default DEFAULT, PARTITIONED,
+            	part_default_p1 FOR VALUES FROM (20) TO (30),
+            	part_default_p2 FOR VALUES FROM (30) TO (40),
             part_ee_ff FOR VALUES IN ('ee', 'ff'), PARTITIONED,
+            	part_ee_ff1 FOR VALUES FROM (1) TO (10),
+            	part_ee_ff2 FOR VALUES FROM (10) TO (20),
+            	part_ee_ff3 FOR VALUES FROM (20) TO (30), PARTITIONED,
             part_gg FOR VALUES IN ('gg'), PARTITIONED,
+            	part_gg1 FOR VALUES FROM (MINVALUE) TO (1),
+            	part_gg2 FOR VALUES FROM (1) TO (10), PARTITIONED,
             part_null FOR VALUES IN (NULL),
             part_xx_yy FOR VALUES IN ('xx', 'yy'), PARTITIONED,
-            part_default DEFAULT, PARTITIONED
+            	part_xx_yy_defpart DEFAULT,
+            	part_xx_yy_p1 FOR VALUES IN ('xx')
 
 -- cleanup
 drop table range_parted, list_parted;

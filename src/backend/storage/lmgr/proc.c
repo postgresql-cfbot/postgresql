@@ -706,6 +706,7 @@ LockErrorCleanup(void)
 {
 	LWLock	   *partitionLock;
 	DisableTimeoutParams timeouts[2];
+	LatchGroup	wakeups = {0};
 
 	HOLD_INTERRUPTS();
 
@@ -739,7 +740,7 @@ LockErrorCleanup(void)
 	if (!dlist_node_is_detached(&MyProc->links))
 	{
 		/* We could not have been granted the lock yet */
-		RemoveFromWaitQueue(MyProc, lockAwaited->hashcode);
+		RemoveFromWaitQueue(MyProc, lockAwaited->hashcode, &wakeups);
 	}
 	else
 	{
@@ -756,6 +757,7 @@ LockErrorCleanup(void)
 	lockAwaited = NULL;
 
 	LWLockRelease(partitionLock);
+	SetLatches(&wakeups);
 
 	RESUME_INTERRUPTS();
 }
@@ -1005,7 +1007,7 @@ AuxiliaryPidGetProc(int pid)
  * Caller must have set MyProc->heldLocks to reflect locks already held
  * on the lockable object by this process (under all XIDs).
  *
- * The lock table's partition lock must be held at entry, and will be held
+ * The lock table's partition lock must be held at entry, and will be released
  * at exit.
  *
  * Result: PROC_WAIT_STATUS_OK if we acquired the lock, PROC_WAIT_STATUS_ERROR if not (deadlock).
@@ -1016,7 +1018,7 @@ AuxiliaryPidGetProc(int pid)
  * NOTES: The process queue is now a priority queue for locking.
  */
 ProcWaitStatus
-ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
+ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable, LatchGroup *wakeups)
 {
 	LOCKMODE	lockmode = locallock->tag.mode;
 	LOCK	   *lock = locallock->lock;
@@ -1032,6 +1034,12 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 	bool		logged_recovery_conflict = false;
 	ProcWaitStatus myWaitStatus;
 	PGPROC	   *leader = MyProc->lockGroupLeader;
+
+	/*
+	 * Every way out of this function will release the partition lock and send
+	 * buffered latch wakeups.
+	 */
+	Assert(LWLockHeldByMeInMode(partitionLock, LW_EXCLUSIVE));
 
 	/*
 	 * If group locking is in use, locks held by members of my locking group
@@ -1117,6 +1125,8 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 					/* Skip the wait and just grant myself the lock. */
 					GrantLock(lock, proclock, lockmode);
 					GrantAwaitedLock();
+					LWLockRelease(partitionLock);
+					SetLatches(wakeups);
 					return PROC_WAIT_STATUS_OK;
 				}
 
@@ -1152,7 +1162,9 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 	 */
 	if (early_deadlock)
 	{
-		RemoveFromWaitQueue(MyProc, hashcode);
+		RemoveFromWaitQueue(MyProc, hashcode, wakeups);
+		LWLockRelease(partitionLock);
+		SetLatches(wakeups);
 		return PROC_WAIT_STATUS_ERROR;
 	}
 
@@ -1168,6 +1180,7 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 	 * LockErrorCleanup will clean up if cancel/die happens.
 	 */
 	LWLockRelease(partitionLock);
+	SetLatches(wakeups);
 
 	/*
 	 * Also, now that we will successfully clean up after an ereport, it's
@@ -1481,6 +1494,7 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 			}
 
 			LWLockRelease(partitionLock);
+			SetLatches(wakeups);
 
 			if (deadlock_state == DS_SOFT_DEADLOCK)
 				ereport(LOG,
@@ -1583,13 +1597,6 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 							NULL, false);
 
 	/*
-	 * Re-acquire the lock table's partition lock.  We have to do this to hold
-	 * off cancel/die interrupts before we can mess with lockAwaited (else we
-	 * might have a missed or duplicated locallock update).
-	 */
-	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
-
-	/*
 	 * We no longer want LockErrorCleanup to do anything.
 	 */
 	lockAwaited = NULL;
@@ -1609,7 +1616,7 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 
 
 /*
- * ProcWakeup -- wake up a process by setting its latch.
+ * ProcWakeup -- prepare to wake up a process by setting its latch.
  *
  *	 Also remove the process from the wait queue and set its links invalid.
  *
@@ -1621,7 +1628,7 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
  * Hence, in practice the waitStatus parameter must be PROC_WAIT_STATUS_OK.
  */
 void
-ProcWakeup(PGPROC *proc, ProcWaitStatus waitStatus)
+ProcWakeup(PGPROC *proc, ProcWaitStatus waitStatus, LatchGroup *wakeups)
 {
 	if (dlist_node_is_detached(&proc->links))
 		return;
@@ -1637,8 +1644,8 @@ ProcWakeup(PGPROC *proc, ProcWaitStatus waitStatus)
 	proc->waitStatus = waitStatus;
 	pg_atomic_write_u64(&MyProc->waitStart, 0);
 
-	/* And awaken it */
-	SetLatch(&proc->procLatch);
+	/* Schedule it to be awoken */
+	AddLatch(wakeups, &proc->procLatch);
 }
 
 /*
@@ -1649,7 +1656,7 @@ ProcWakeup(PGPROC *proc, ProcWaitStatus waitStatus)
  * The appropriate lock partition lock must be held by caller.
  */
 void
-ProcLockWakeup(LockMethod lockMethodTable, LOCK *lock)
+ProcLockWakeup(LockMethod lockMethodTable, LOCK *lock, LatchGroup *wakeups)
 {
 	dclist_head *waitQueue = &lock->waitProcs;
 	LOCKMASK	aheadRequests = 0;
@@ -1674,7 +1681,7 @@ ProcLockWakeup(LockMethod lockMethodTable, LOCK *lock)
 			/* OK to waken */
 			GrantLock(lock, proc->waitProcLock, lockmode);
 			/* removes proc from the lock's waiting process queue */
-			ProcWakeup(proc, PROC_WAIT_STATUS_OK);
+			ProcWakeup(proc, PROC_WAIT_STATUS_OK, wakeups);
 		}
 		else
 		{
@@ -1700,6 +1707,7 @@ static void
 CheckDeadLock(void)
 {
 	int			i;
+	LatchGroup	wakeups = {0};
 
 	/*
 	 * Acquire exclusive lock on the entire shared lock data structures. Must
@@ -1734,7 +1742,7 @@ CheckDeadLock(void)
 #endif
 
 	/* Run the deadlock check, and set deadlock_state for use by ProcSleep */
-	deadlock_state = DeadLockCheck(MyProc);
+	deadlock_state = DeadLockCheck(MyProc, &wakeups);
 
 	if (deadlock_state == DS_HARD_DEADLOCK)
 	{
@@ -1751,7 +1759,8 @@ CheckDeadLock(void)
 		 * return from the signal handler.
 		 */
 		Assert(MyProc->waitLock != NULL);
-		RemoveFromWaitQueue(MyProc, LockTagHashCode(&(MyProc->waitLock->tag)));
+		RemoveFromWaitQueue(MyProc, LockTagHashCode(&(MyProc->waitLock->tag)),
+							&wakeups);
 
 		/*
 		 * We're done here.  Transaction abort caused by the error that
@@ -1775,6 +1784,8 @@ CheckDeadLock(void)
 check_done:
 	for (i = NUM_LOCK_PARTITIONS; --i >= 0;)
 		LWLockRelease(LockHashPartitionLockByIndex(i));
+
+	SetLatches(&wakeups);
 }
 
 /*
@@ -1815,18 +1826,6 @@ ProcWaitForSignal(uint32 wait_event_info)
 					 wait_event_info);
 	ResetLatch(MyLatch);
 	CHECK_FOR_INTERRUPTS();
-}
-
-/*
- * ProcSendSignal - set the latch of a backend identified by pgprocno
- */
-void
-ProcSendSignal(int pgprocno)
-{
-	if (pgprocno < 0 || pgprocno >= ProcGlobal->allProcCount)
-		elog(ERROR, "pgprocno out of range");
-
-	SetLatch(&ProcGlobal->allProcs[pgprocno].procLatch);
 }
 
 /*

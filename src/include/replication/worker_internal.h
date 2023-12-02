@@ -335,7 +335,8 @@ extern void pa_xact_finish(ParallelApplyWorkerInfo *winfo,
 static inline bool
 am_tablesync_worker(void)
 {
-	return isTablesyncWorker(MyLogicalRepWorker);
+	Assert(MyLogicalRepWorker->in_use);
+	return (MyLogicalRepWorker->type == WORKERTYPE_TABLESYNC);
 }
 
 static inline bool
@@ -349,7 +350,7 @@ static inline bool
 am_parallel_apply_worker(void)
 {
 	Assert(MyLogicalRepWorker->in_use);
-	return isParallelApplyWorker(MyLogicalRepWorker);
+	return (MyLogicalRepWorker->type == WORKERTYPE_PARALLEL_APPLY);
 }
 
 #endif							/* WORKER_INTERNAL_H */

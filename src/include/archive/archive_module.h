@@ -36,7 +36,7 @@ typedef struct ArchiveModuleState
  * archive modules documentation.
  */
 typedef void (*ArchiveStartupCB) (ArchiveModuleState *state);
-typedef bool (*ArchiveCheckConfiguredCB) (ArchiveModuleState *state);
+typedef bool (*ArchiveCheckConfiguredCB) (ArchiveModuleState *state, char **logdetail);
 typedef bool (*ArchiveFileCB) (ArchiveModuleState *state, const char *file, const char *path);
 typedef void (*ArchiveShutdownCB) (ArchiveModuleState *state);
 

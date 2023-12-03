@@ -390,7 +390,8 @@ pgarch_ArchiverCopyLoop(void)
 		{
 			struct stat stat_buf;
 			char		pathname[MAXPGPATH];
-
+			char       *logdetail;
+			
 			/*
 			 * Do not initiate any more archive commands after receiving
 			 * SIGTERM, nor after the postmaster has died unexpectedly. The
@@ -410,10 +411,13 @@ pgarch_ArchiverCopyLoop(void)
 
 			/* can't do anything if not configured ... */
 			if (ArchiveCallbacks->check_configured_cb != NULL &&
-				!ArchiveCallbacks->check_configured_cb(archive_module_state))
+				!ArchiveCallbacks->check_configured_cb(archive_module_state, &logdetail))
 			{
 				ereport(WARNING,
-						(errmsg("archive_mode enabled, yet archiving is not configured")));
+						(errmsg("archive_mode enabled, yet archiving is not configured")),
+						(logdetail != NULL) ? errdetail("%s", logdetail) : 0);
+				if (logdetail != NULL)
+					pfree(logdetail);
 				return;
 			}
 

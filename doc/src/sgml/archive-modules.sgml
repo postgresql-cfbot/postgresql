@@ -101,7 +101,7 @@ typedef void (*ArchiveStartupCB) (ArchiveModuleState *state);
     assumes the module is configured.
 
 <programlisting>
-typedef bool (*ArchiveCheckConfiguredCB) (ArchiveModuleState *state);
+typedef bool (*ArchiveCheckConfiguredCB) (ArchiveModuleState *state, char **logdetail);
 </programlisting>
 
     If <literal>true</literal> is returned, the server will proceed with
@@ -112,7 +112,10 @@ typedef bool (*ArchiveCheckConfiguredCB) (ArchiveModuleState *state);
 WARNING:  archive_mode enabled, yet archiving is not configured
 </screen>
     In the latter case, the server will periodically call this function, and
-    archiving will proceed only when it returns <literal>true</literal>.
+    archiving will proceed only when it returns <literal>true</literal>. The
+    archiver may also emit the detail explaining how the module is not configured
+    to the sever log if the archive module has any. The detail message of archive
+    module should be an allocated string which the caller can free.
    </para>
   </sect2>
 

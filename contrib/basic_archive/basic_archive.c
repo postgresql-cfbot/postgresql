@@ -48,7 +48,7 @@ typedef struct BasicArchiveData
 static char *archive_directory = NULL;
 
 static void basic_archive_startup(ArchiveModuleState *state);
-static bool basic_archive_configured(ArchiveModuleState *state);
+static bool basic_archive_configured(ArchiveModuleState *state, char **logdetail);
 static bool basic_archive_file(ArchiveModuleState *state, const char *file, const char *path);
 static void basic_archive_file_internal(const char *file, const char *path);
 static bool check_archive_directory(char **newval, void **extra, GucSource source);
@@ -159,9 +159,15 @@ check_archive_directory(char **newval, void **extra, GucSource source)
  * Checks that archive_directory is not blank.
  */
 static bool
-basic_archive_configured(ArchiveModuleState *state)
+basic_archive_configured(ArchiveModuleState *state, char **logdetail)
 {
-	return archive_directory != NULL && archive_directory[0] != '\0';
+	if (archive_directory == NULL || archive_directory[0] == '\0')
+    {
+        *logdetail = pstrdup("WAL archiving failed because basic_archive.archive_directory is not set.");
+        return false;
+    }
+    else
+        return true;
 }
 
 /*

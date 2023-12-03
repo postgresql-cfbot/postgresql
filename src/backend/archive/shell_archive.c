@@ -23,7 +23,7 @@
 #include "common/percentrepl.h"
 #include "pgstat.h"
 
-static bool shell_archive_configured(ArchiveModuleState *state);
+static bool shell_archive_configured(ArchiveModuleState *state, char **logdetail);
 static bool shell_archive_file(ArchiveModuleState *state,
 							   const char *file,
 							   const char *path);
@@ -43,7 +43,7 @@ shell_archive_init(void)
 }
 
 static bool
-shell_archive_configured(ArchiveModuleState *state)
+shell_archive_configured(ArchiveModuleState *state, char **logdetail)
 {
 	return XLogArchiveCommand[0] != '\0';
 }

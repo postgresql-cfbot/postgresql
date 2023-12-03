@@ -31,6 +31,7 @@
 #include "access/xlogrecord.h"
 #include "catalog/pg_control.h"
 #include "common/pg_lzcompress.h"
+#include "portability/instr_time.h"
 #include "replication/origin.h"
 
 #ifndef FRONTEND
@@ -1473,21 +1474,80 @@ err:
  * Returns true if succeeded, false if an error occurs, in which case
  * 'errinfo' receives error details.
  *
- * XXX probably this should be improved to suck data directly from the
- * WAL buffers when possible.
+ * When possible, this function reads data directly from WAL buffers. When
+ * requested WAL isn't available in WAL buffers, the WAL is read from the WAL
+ * file as usual. The callers may avoid reading WAL from the WAL file thus
+ * reducing read system calls or even disk IOs.
  */
 bool
-WALRead(XLogReaderState *state,
-		char *buf, XLogRecPtr startptr, Size count, TimeLineID tli,
-		WALReadError *errinfo)
+WALRead(XLogReaderState *state, char *buf, XLogRecPtr startptr, Size count,
+		TimeLineID tli, WALReadError *errinfo, WALReadStats * stats,
+		bool capture_wal_io_timing)
 {
 	char	   *p;
 	XLogRecPtr	recptr;
 	Size		nbytes;
+#ifndef FRONTEND
+	Size		nread;
+#endif
+	instr_time	start;
+
+#ifndef FRONTEND
+
+	if (stats != NULL && capture_wal_io_timing)
+		INSTR_TIME_SET_CURRENT(start);
+
+	/*
+	 * Try reading WAL from WAL buffers. Frontend code has no idea of WAL
+	 * buffers.
+	 */
+	nread = XLogReadFromBuffers(state, startptr, tli, count, buf);
+
+	Assert(nread >= 0);
+
+	/* Collect I/O stats if requested by the caller. */
+	if (stats != NULL)
+	{
+		stats->wal_read_buffers++;
+		stats->wal_read_bytes_buffers += nread;
+
+		/* Increment the I/O timing. */
+		if (capture_wal_io_timing)
+		{
+			instr_time	duration;
+
+			INSTR_TIME_SET_CURRENT(duration);
+			INSTR_TIME_SUBTRACT(duration, start);
+			stats->wal_read_time_buffers += INSTR_TIME_GET_MICROSEC(duration);
+		}
+	}
+
+	/*
+	 * Check if we have read fully (hit), partially (partial hit) or nothing
+	 * (miss) from WAL buffers. If we have read either partially or nothing,
+	 * then continue to read the remaining bytes the usual way, that is, read
+	 * from WAL file.
+	 *
+	 * XXX: It might be worth to expose WAL buffer read stats.
+	 */
+	if (count == nread)
+		return true;			/* Buffer hit, so return. */
+	else if (count > nread)
+	{
+		/*
+		 * Buffer partial hit, so reset the state to count the read bytes and
+		 * continue.
+		 */
+		buf += nread;
+		startptr += nread;
+		count -= nread;
+	}
+#endif
 
 	p = buf;
 	recptr = startptr;
 	nbytes = count;
+	INSTR_TIME_SET_ZERO(start);
 
 	while (nbytes > 0)
 	{
@@ -1528,6 +1588,10 @@ WALRead(XLogReaderState *state,
 		else
 			segbytes = nbytes;
 
+		/* Measure I/O timing to read WAL data if requested by the caller. */
+		if (stats != NULL && capture_wal_io_timing)
+			INSTR_TIME_SET_CURRENT(start);
+
 #ifndef FRONTEND
 		pgstat_report_wait_start(WAIT_EVENT_WAL_READ);
 #endif
@@ -1548,6 +1612,21 @@ WALRead(XLogReaderState *state,
 			errinfo->wre_off = startoff;
 			errinfo->wre_seg = state->seg;
 			return false;
+		}
+
+		if (stats != NULL)
+		{
+			stats->wal_read++;
+			stats->wal_read_bytes += readbytes;
+
+			if (capture_wal_io_timing)
+			{
+				instr_time	duration;
+
+				INSTR_TIME_SET_CURRENT(duration);
+				INSTR_TIME_SUBTRACT(duration, start);
+				stats->wal_read_time += INSTR_TIME_GET_MICROSEC(duration);
+			}
 		}
 
 		/* Update state for read */

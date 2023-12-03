@@ -13,6 +13,7 @@
 #define _WALSENDER_PRIVATE_H
 
 #include "access/xlog.h"
+#include "access/xlogreader.h"
 #include "lib/ilist.h"
 #include "nodes/nodes.h"
 #include "nodes/replnodes.h"
@@ -83,6 +84,8 @@ typedef struct WalSnd
 	TimestampTz replyTime;
 
 	ReplicationKind kind;
+
+	WALReadStats wal_read_stats;
 } WalSnd;
 
 extern PGDLLIMPORT WalSnd *MyWalSnd;

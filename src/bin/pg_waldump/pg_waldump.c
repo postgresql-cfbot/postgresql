@@ -407,7 +407,7 @@ WALDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
 	}
 
 	if (!WALRead(state, readBuff, targetPagePtr, count, private->timeline,
-				 &errinfo))
+				 &errinfo, NULL, false))
 	{
 		WALOpenSegment *seg = &errinfo.wre_seg;
 		char		fname[MAXPGPATH];

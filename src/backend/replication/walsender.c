@@ -259,7 +259,7 @@ static bool TransactionIdInRecentPast(TransactionId xid, uint32 epoch);
 
 static void WalSndSegmentOpen(XLogReaderState *state, XLogSegNo nextSegNo,
 							  TimeLineID *tli_p);
-
+static void WalSndAccumulateWalReadStats(WALReadStats * stats);
 
 /* Initialize walsender process before entering the main command loop */
 void
@@ -907,6 +907,7 @@ logical_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr, int req
 	WALReadError errinfo;
 	XLogSegNo	segno;
 	TimeLineID	currTLI;
+	WALReadStats stats;
 
 	/*
 	 * Make sure we have enough WAL available before retrieving the current
@@ -943,6 +944,8 @@ logical_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr, int req
 	else
 		count = flushptr - targetPagePtr;	/* part of the page available */
 
+	MemSet(&stats, 0, sizeof(WALReadStats));
+
 	/* now actually read the data, we know it's there */
 	if (!WALRead(state,
 				 cur_page,
@@ -951,8 +954,12 @@ logical_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr, int req
 				 currTLI,		/* Pass the current TLI because only
 								 * WalSndSegmentOpen controls whether new TLI
 								 * is needed. */
-				 &errinfo))
+				 &errinfo,
+				 &stats,
+				 track_wal_io_timing))
 		WALReadRaiseError(&errinfo);
+
+	WalSndAccumulateWalReadStats(&stats);
 
 	/*
 	 * After reading into the buffer, check that what we read was valid. We do
@@ -2630,6 +2637,13 @@ InitWalSenderSlot(void)
 			else
 				walsnd->kind = REPLICATION_KIND_LOGICAL;
 
+			walsnd->wal_read_stats.wal_read = 0;
+			walsnd->wal_read_stats.wal_read_bytes = 0;
+			walsnd->wal_read_stats.wal_read_time = 0;
+			walsnd->wal_read_stats.wal_read_buffers = 0;
+			walsnd->wal_read_stats.wal_read_bytes_buffers = 0;
+			walsnd->wal_read_stats.wal_read_time_buffers = 0;
+
 			SpinLockRelease(&walsnd->mutex);
 			/* don't need the lock anymore */
 			MyWalSnd = (WalSnd *) walsnd;
@@ -2750,6 +2764,7 @@ XLogSendPhysical(void)
 	Size		nbytes;
 	XLogSegNo	segno;
 	WALReadError errinfo;
+	WALReadStats stats;
 
 	/* If requested switch the WAL sender to the stopping state. */
 	if (got_STOPPING)
@@ -2965,6 +2980,8 @@ XLogSendPhysical(void)
 	enlargeStringInfo(&output_message, nbytes);
 
 retry:
+	MemSet(&stats, 0, sizeof(WALReadStats));
+
 	if (!WALRead(xlogreader,
 				 &output_message.data[output_message.len],
 				 startptr,
@@ -2972,8 +2989,12 @@ retry:
 				 xlogreader->seg.ws_tli,	/* Pass the current TLI because
 											 * only WalSndSegmentOpen controls
 											 * whether new TLI is needed. */
-				 &errinfo))
+				 &errinfo,
+				 &stats,
+				 track_wal_io_timing))
 		WALReadRaiseError(&errinfo);
+
+	WalSndAccumulateWalReadStats(&stats);
 
 	/* See logical_read_xlog_page(). */
 	XLByteToSeg(startptr, segno, xlogreader->segcxt.ws_segsize);
@@ -3523,7 +3544,7 @@ offset_to_interval(TimeOffset offset)
 Datum
 pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_WAL_SENDERS_COLS	12
+#define PG_STAT_GET_WAL_SENDERS_COLS	18
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	SyncRepStandbyData *sync_standbys;
 	int			num_standbys;
@@ -3552,9 +3573,16 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 		WalSndState state;
 		TimestampTz replyTime;
 		bool		is_sync_standby;
+		int64		wal_read;
+		uint64		wal_read_bytes;
+		int64		wal_read_time;
+		int64		wal_read_buffers;
+		uint64		wal_read_bytes_buffers;
+		int64		wal_read_time_buffers;
 		Datum		values[PG_STAT_GET_WAL_SENDERS_COLS];
 		bool		nulls[PG_STAT_GET_WAL_SENDERS_COLS] = {0};
 		int			j;
+		char		buf[256];
 
 		/* Collect data from shared memory */
 		SpinLockAcquire(&walsnd->mutex);
@@ -3574,6 +3602,12 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 		applyLag = walsnd->applyLag;
 		priority = walsnd->sync_standby_priority;
 		replyTime = walsnd->replyTime;
+		wal_read = walsnd->wal_read_stats.wal_read;
+		wal_read_bytes = walsnd->wal_read_stats.wal_read_bytes;
+		wal_read_time = walsnd->wal_read_stats.wal_read_time;
+		wal_read_buffers = walsnd->wal_read_stats.wal_read_buffers;
+		wal_read_bytes_buffers = walsnd->wal_read_stats.wal_read_bytes_buffers;
+		wal_read_time_buffers = walsnd->wal_read_stats.wal_read_time_buffers;
 		SpinLockRelease(&walsnd->mutex);
 
 		/*
@@ -3670,6 +3704,31 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 				nulls[11] = true;
 			else
 				values[11] = TimestampTzGetDatum(replyTime);
+
+			values[12] = Int64GetDatum(wal_read);
+
+			/* Convert to numeric. */
+			snprintf(buf, sizeof buf, UINT64_FORMAT, wal_read_bytes);
+			values[13] = DirectFunctionCall3(numeric_in,
+											 CStringGetDatum(buf),
+											 ObjectIdGetDatum(0),
+											 Int32GetDatum(-1));
+
+			/* Convert counter from microsec to millisec for display. */
+			values[14] = Float8GetDatum(((double) wal_read_time) / 1000.0);
+
+			values[15] = Int64GetDatum(wal_read_buffers);
+
+			/* Convert to numeric. */
+			MemSet(buf, '\0', sizeof buf);
+			snprintf(buf, sizeof buf, UINT64_FORMAT, wal_read_bytes_buffers);
+			values[16] = DirectFunctionCall3(numeric_in,
+											 CStringGetDatum(buf),
+											 ObjectIdGetDatum(0),
+											 Int32GetDatum(-1));
+
+			/* Convert counter from microsec to millisec for display. */
+			values[17] = Float8GetDatum(((double) wal_read_time_buffers) / 1000.0);
 		}
 
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc,
@@ -3913,4 +3972,23 @@ LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now)
 	/* Return the elapsed time since local flush time in microseconds. */
 	Assert(time != 0);
 	return now - time;
+}
+
+/*
+ * Function to accumulate WAL Read stats for WAL sender.
+ */
+static void
+WalSndAccumulateWalReadStats(WALReadStats * stats)
+{
+	/* Collect I/O stats for walsender. */
+	SpinLockAcquire(&MyWalSnd->mutex);
+	MyWalSnd->wal_read_stats.wal_read += stats->wal_read;
+	MyWalSnd->wal_read_stats.wal_read_bytes += stats->wal_read_bytes;
+	MyWalSnd->wal_read_stats.wal_read_time += stats->wal_read_time;
+	MyWalSnd->wal_read_stats.wal_read_buffers += stats->wal_read_buffers;
+	MyWalSnd->wal_read_stats.wal_read_bytes_buffers +=
+		stats->wal_read_bytes_buffers;
+	MyWalSnd->wal_read_stats.wal_read_time_buffers +=
+		stats->wal_read_time_buffers;
+	SpinLockRelease(&MyWalSnd->mutex);
 }

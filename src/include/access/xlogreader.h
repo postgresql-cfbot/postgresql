@@ -388,9 +388,33 @@ typedef struct WALReadError
 	WALOpenSegment wre_seg;		/* Segment we tried to read from. */
 } WALReadError;
 
-extern bool WALRead(XLogReaderState *state,
-					char *buf, XLogRecPtr startptr, Size count,
-					TimeLineID tli, WALReadError *errinfo);
+/*
+ * WAL read stats from WALRead that the callers can use.
+ */
+typedef struct WALReadStats
+{
+	/* Number of times WAL read from disk. */
+	int64		wal_read;
+
+	/* Total amount of WAL read from disk in bytes. */
+	uint64		wal_read_bytes;
+
+	/* Total amount of time spent reading WAL from disk. */
+	int64		wal_read_time;
+
+	/* Number of times WAL read from WAL buffers. */
+	int64		wal_read_buffers;
+
+	/* Total amount of WAL read from WAL buffers in bytes. */
+	uint64		wal_read_bytes_buffers;
+
+	/* Total amount of time spent reading WAL from WAL buffers. */
+	int64		wal_read_time_buffers;
+}			WALReadStats;
+
+extern bool WALRead(XLogReaderState *state, char *buf, XLogRecPtr startptr,
+					Size count, TimeLineID tli, WALReadError *errinfo,
+					WALReadStats * stats, bool capture_wal_io_timing);
 
 /* Functions for decoding an XLogRecord */
 

@@ -2078,9 +2078,15 @@ pg_stat_replication| SELECT s.pid,
     w.replay_lag,
     w.sync_priority,
     w.sync_state,
-    w.reply_time
+    w.reply_time,
+    w.wal_read,
+    w.wal_read_bytes,
+    w.wal_read_time,
+    w.wal_read_buffers,
+    w.wal_read_bytes_buffers,
+    w.wal_read_time_buffers
    FROM ((pg_stat_get_activity(NULL::integer) s(datid, pid, usesysid, application_name, state, query, wait_event_type, wait_event, xact_start, query_start, backend_start, state_change, client_addr, client_hostname, client_port, backend_xid, backend_xmin, backend_type, ssl, sslversion, sslcipher, sslbits, ssl_client_dn, ssl_client_serial, ssl_issuer_dn, gss_auth, gss_princ, gss_enc, gss_delegation, leader_pid, query_id)
-     JOIN pg_stat_get_wal_senders() w(pid, state, sent_lsn, write_lsn, flush_lsn, replay_lsn, write_lag, flush_lag, replay_lag, sync_priority, sync_state, reply_time) ON ((s.pid = w.pid)))
+     JOIN pg_stat_get_wal_senders() w(pid, state, sent_lsn, write_lsn, flush_lsn, replay_lsn, write_lag, flush_lag, replay_lag, sync_priority, sync_state, reply_time, wal_read, wal_read_bytes, wal_read_time, wal_read_buffers, wal_read_bytes_buffers, wal_read_time_buffers) ON ((s.pid = w.pid)))
      LEFT JOIN pg_authid u ON ((s.usesysid = u.oid)));
 pg_stat_replication_slots| SELECT s.slot_name,
     s.spill_txns,

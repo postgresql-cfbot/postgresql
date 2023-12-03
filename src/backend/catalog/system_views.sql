@@ -914,7 +914,13 @@ CREATE VIEW pg_stat_replication AS
             W.replay_lag,
             W.sync_priority,
             W.sync_state,
-            W.reply_time
+            W.reply_time,
+            W.wal_read,
+            W.wal_read_bytes,
+            W.wal_read_time,
+            W.wal_read_buffers,
+            W.wal_read_bytes_buffers,
+            W.wal_read_time_buffers
     FROM pg_stat_get_activity(NULL) AS S
         JOIN pg_stat_get_wal_senders() AS W ON (S.pid = W.pid)
         LEFT JOIN pg_authid AS U ON (S.usesysid = U.oid);

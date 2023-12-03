@@ -501,7 +501,7 @@ typedef struct XLogCtlData
 	 * WALBufMappingLock.
 	 */
 	char	   *pages;			/* buffers for unwritten XLOG pages */
-	XLogRecPtr *xlblocks;		/* 1st byte ptr-s + XLOG_BLCKSZ */
+	pg_atomic_uint64 *xlblocks; /* 1st byte ptr-s + XLOG_BLCKSZ */
 	int			XLogCacheBlck;	/* highest allocated xlog buffer index */
 
 	/*
@@ -1634,20 +1634,19 @@ GetXLogBuffer(XLogRecPtr ptr, TimeLineID tli)
 	 * out to disk and evicted, and the caller is responsible for making sure
 	 * that doesn't happen.
 	 *
-	 * However, we don't hold a lock while we read the value. If someone has
-	 * just initialized the page, it's possible that we get a "torn read" of
-	 * the XLogRecPtr if 64-bit fetches are not atomic on this platform. In
-	 * that case we will see a bogus value. That's ok, we'll grab the mapping
-	 * lock (in AdvanceXLInsertBuffer) and retry if we see anything else than
-	 * the page we're looking for. But it means that when we do this unlocked
-	 * read, we might see a value that appears to be ahead of the page we're
-	 * looking for. Don't PANIC on that, until we've verified the value while
-	 * holding the lock.
+	 * However, we don't hold a lock while we read the value. If someone is
+	 * just about to initialize or has just initialized the page, it's
+	 * possible that we get InvalidXLogRecPtr. That's ok, we'll grab the
+	 * mapping lock (in AdvanceXLInsertBuffer) and retry if we see anything
+	 * else than the page we're looking for. But it means that when we do this
+	 * unlocked read, we might see a value that appears to be ahead of the
+	 * page we're looking for. Don't PANIC on that, until we've verified the
+	 * value while holding the lock.
 	 */
 	expectedEndPtr = ptr;
 	expectedEndPtr += XLOG_BLCKSZ - ptr % XLOG_BLCKSZ;
 
-	endptr = XLogCtl->xlblocks[idx];
+	endptr = pg_atomic_read_u64(&XLogCtl->xlblocks[idx]);
 	if (expectedEndPtr != endptr)
 	{
 		XLogRecPtr	initializedUpto;
@@ -1678,7 +1677,7 @@ GetXLogBuffer(XLogRecPtr ptr, TimeLineID tli)
 		WALInsertLockUpdateInsertingAt(initializedUpto);
 
 		AdvanceXLInsertBuffer(ptr, tli, false);
-		endptr = XLogCtl->xlblocks[idx];
+		endptr = pg_atomic_read_u64(&XLogCtl->xlblocks[idx]);
 
 		if (expectedEndPtr != endptr)
 			elog(PANIC, "could not find WAL buffer for %X/%X",
@@ -1704,6 +1703,173 @@ GetXLogBuffer(XLogRecPtr ptr, TimeLineID tli)
 	Assert(((XLogPageHeader) cachedPos)->xlp_pageaddr == ptr - (ptr % XLOG_BLCKSZ));
 
 	return cachedPos + ptr % XLOG_BLCKSZ;
+}
+
+/*
+ * Read WAL from WAL buffers.
+ *
+ * Read 'count' bytes of WAL from WAL buffers into 'buf', starting at location
+ * 'startptr', on timeline 'tli' and return total read bytes.
+ *
+ * This function returns quickly in the following cases:
+ * - When passed-in timeline is different than server's current insertion
+ * timeline as WAL is always inserted into WAL buffers on insertion timeline.
+ *
+ * - When server is in recovery as WAL buffers aren't currently used in
+ * recovery.
+ *
+ * Note that this function reads as much as it can from WAL buffers, meaning,
+ * it may not read all the requested 'count' bytes. Caller must be aware of
+ * this and deal with it.
+ *
+ * Note that function reads WAL from WAL buffers without holding any lock.
+ * First it reads xlblocks atomically for checking page existence, then it
+ * reads the page contents, validates. Finally, it rechecks the page existence
+ * by rereading xlblocks, if the read page is replaced, it discards read page
+ * and returns.
+ *
+ * Note that this function is not available for frontend code as WAL buffers is
+ * an internal mechanism to the server.
+ */
+Size
+XLogReadFromBuffers(XLogReaderState *state,
+					XLogRecPtr startptr,
+					TimeLineID tli,
+					Size count,
+					char *buf)
+{
+	XLogRecPtr	ptr;
+	Size		nbytes;
+	Size		ntotal;
+	char	   *dst;
+
+	if (RecoveryInProgress())
+		return 0;
+
+	if (tli != GetWALInsertionTimeLine())
+		return 0;
+
+	Assert(!XLogRecPtrIsInvalid(startptr));
+
+	ptr = startptr;
+	nbytes = count;				/* Total bytes requested to be read by caller. */
+	ntotal = 0;					/* Total bytes read. */
+	dst = buf;
+
+	while (nbytes > 0)
+	{
+		XLogRecPtr	expectedEndPtr;
+		XLogRecPtr	endptr;
+		int			idx;
+		char	   *page;
+		char	   *data;
+		XLogPageHeader phdr;
+		Size		nread;
+
+		idx = XLogRecPtrToBufIdx(ptr);
+		expectedEndPtr = ptr;
+		expectedEndPtr += XLOG_BLCKSZ - ptr % XLOG_BLCKSZ;
+		endptr = pg_atomic_read_u64(&XLogCtl->xlblocks[idx]);
+
+		/* Requested WAL isn't available in WAL buffers. */
+		if (expectedEndPtr != endptr)
+			break;
+
+		/*
+		 * We found WAL buffer page containing given XLogRecPtr. Get starting
+		 * address of the page and a pointer to the right location of given
+		 * XLogRecPtr in that page.
+		 */
+		page = XLogCtl->pages + idx * (Size) XLOG_BLCKSZ;
+		data = page + ptr % XLOG_BLCKSZ;
+
+		/* Make sure to not read a page that just got initialized. */
+		phdr = (XLogPageHeader) page;
+		if (!(phdr->xlp_magic == XLOG_PAGE_MAGIC &&
+			  phdr->xlp_pageaddr == (ptr - (ptr % XLOG_BLCKSZ)) &&
+			  phdr->xlp_tli == tli))
+			break;
+
+		/*
+		 * Note that we don't perform all page header checks here to avoid
+		 * extra work in production builds; callers will anyway do those
+		 * checks extensively. However, in an assert-enabled build, we perform
+		 * all the checks here and raise an error if failed.
+		 */
+#ifdef USE_ASSERT_CHECKING
+		if (unlikely(state != NULL &&
+					 !XLogReaderValidatePageHeader(state, (endptr - XLOG_BLCKSZ),
+												   (char *) phdr)))
+		{
+			if (state->errormsg_buf[0])
+				ereport(ERROR,
+						(errcode(ERRCODE_INTERNAL_ERROR),
+						 errmsg_internal("%s", state->errormsg_buf)));
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_INTERNAL_ERROR),
+						 errmsg_internal("could not read WAL from WAL buffers")));
+		}
+#endif
+
+		/*
+		 * Make sure we don't read xlblocks up above before the page contents
+		 * down below.
+		 */
+		pg_read_barrier();
+
+		nread = 0;
+
+		/* Read what is wanted, not the whole page. */
+		if ((data + nbytes) <= (page + XLOG_BLCKSZ))
+		{
+			/* All the bytes are in one page. */
+			nread = nbytes;
+		}
+		else
+		{
+			/*
+			 * All the bytes are not in one page. Read available bytes on the
+			 * current page, copy them over to output buffer and continue to
+			 * read remaining bytes.
+			 */
+			nread = XLOG_BLCKSZ - (data - page);
+			Assert(nread > 0 && nread <= nbytes);
+		}
+
+		Assert(nread > 0);
+		memcpy(dst, data, nread);
+
+		/*
+		 * Make sure we don't read xlblocks down below before the page
+		 * contents up above.
+		 */
+		pg_read_barrier();
+
+		/* Recheck if the read page still exists in WAL buffers. */
+		endptr = pg_atomic_read_u64(&XLogCtl->xlblocks[idx]);
+
+		/* Return if the page got initalized while we were reading it. */
+		if (expectedEndPtr != endptr)
+			break;
+
+		dst += nread;
+		ptr += nread;
+		ntotal += nread;
+		nbytes -= nread;
+	}
+
+	/* We never read more than what the caller has asked for. */
+	Assert(ntotal <= count);
+
+#ifdef WAL_DEBUG
+	if (XLOG_DEBUG)
+		ereport(DEBUG1,
+				(errmsg_internal("read %zu bytes out of %zu bytes from WAL buffers for given start LSN %X/%X, timeline ID %u",
+								 ntotal, count, LSN_FORMAT_ARGS(startptr), tli)));
+#endif
+
+	return ntotal;
 }
 
 /*
@@ -1865,7 +2031,7 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli, bool opportunistic)
 		 * be zero if the buffer hasn't been used yet).  Fall through if it's
 		 * already written out.
 		 */
-		OldPageRqstPtr = XLogCtl->xlblocks[nextidx];
+		OldPageRqstPtr = pg_atomic_read_u64(&XLogCtl->xlblocks[nextidx]);
 		if (LogwrtResult.Write < OldPageRqstPtr)
 		{
 			/*
@@ -1935,6 +2101,20 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli, bool opportunistic)
 		NewPage = (XLogPageHeader) (XLogCtl->pages + nextidx * (Size) XLOG_BLCKSZ);
 
 		/*
+		 * Make sure to mark the xlblocks with InvalidXLogRecPtr before the
+		 * initialization of the page begins so that others, reading xlblocks
+		 * without holding a lock, will know that the page initialization has
+		 * just begun.
+		 */
+		pg_atomic_write_u64(&XLogCtl->xlblocks[nextidx], InvalidXLogRecPtr);
+
+		/*
+		 * A write barrier here helps to not reorder the above xlblocks atomic
+		 * write with below page initialization.
+		 */
+		pg_write_barrier();
+
+		/*
 		 * Be sure to re-zero the buffer so that bytes beyond what we've
 		 * written will look like zeroes and not valid XLOG records...
 		 */
@@ -1987,8 +2167,7 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli, bool opportunistic)
 		 */
 		pg_write_barrier();
 
-		*((volatile XLogRecPtr *) &XLogCtl->xlblocks[nextidx]) = NewPageEndPtr;
-
+		pg_atomic_write_u64(&XLogCtl->xlblocks[nextidx], NewPageEndPtr);
 		XLogCtl->InitializedUpTo = NewPageEndPtr;
 
 		npages++;
@@ -2206,7 +2385,7 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 		 * if we're passed a bogus WriteRqst.Write that is past the end of the
 		 * last page that's been initialized by AdvanceXLInsertBuffer.
 		 */
-		XLogRecPtr	EndPtr = XLogCtl->xlblocks[curridx];
+		XLogRecPtr	EndPtr = pg_atomic_read_u64(&XLogCtl->xlblocks[curridx]);
 
 		if (LogwrtResult.Write >= EndPtr)
 			elog(PANIC, "xlog write request %X/%X is past end of log %X/%X",
@@ -4708,10 +4887,13 @@ XLOGShmemInit(void)
 	 * needed here.
 	 */
 	allocptr = ((char *) XLogCtl) + sizeof(XLogCtlData);
-	XLogCtl->xlblocks = (XLogRecPtr *) allocptr;
-	memset(XLogCtl->xlblocks, 0, sizeof(XLogRecPtr) * XLOGbuffers);
-	allocptr += sizeof(XLogRecPtr) * XLOGbuffers;
+	XLogCtl->xlblocks = (pg_atomic_uint64 *) allocptr;
+	allocptr += sizeof(pg_atomic_uint64) * XLOGbuffers;
 
+	for (i = 0; i < XLOGbuffers; i++)
+	{
+		pg_atomic_init_u64(&XLogCtl->xlblocks[i], InvalidXLogRecPtr);
+	}
 
 	/* WAL insertion locks. Ensure they're aligned to the full padded size */
 	allocptr += sizeof(WALInsertLockPadded) -
@@ -5748,7 +5930,7 @@ StartupXLOG(void)
 		memcpy(page, endOfRecoveryInfo->lastPage, len);
 		memset(page + len, 0, XLOG_BLCKSZ - len);
 
-		XLogCtl->xlblocks[firstIdx] = endOfRecoveryInfo->lastPageBeginPtr + XLOG_BLCKSZ;
+		pg_atomic_write_u64(&XLogCtl->xlblocks[firstIdx], endOfRecoveryInfo->lastPageBeginPtr + XLOG_BLCKSZ);
 		XLogCtl->InitializedUpTo = endOfRecoveryInfo->lastPageBeginPtr + XLOG_BLCKSZ;
 	}
 	else

@@ -12591,7 +12591,7 @@ msgstr ""
 
 #: commands/user.c:871
 #, c-format
-msgid "The bootstrap user must have the %s attribute."
+msgid "The bootstrap superuser must have the %s attribute."
 msgstr ""
 
 #: commands/user.c:1076

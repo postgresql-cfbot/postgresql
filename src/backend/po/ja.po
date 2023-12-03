@@ -11911,7 +11911,7 @@ msgstr "ロール\"%2$s\"に対する%1$sオプションを持つロールのみ
 
 #: commands/user.c:871
 #, c-format
-msgid "The bootstrap user must have the %s attribute."
+msgid "The bootstrap superuser must have the %s attribute."
 msgstr "ブートストラップユーザーは%s属性を持つ必要があります。"
 
 #: commands/user.c:1076

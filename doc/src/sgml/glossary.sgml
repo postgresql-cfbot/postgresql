@@ -243,7 +243,8 @@
     <para>
      This user owns all system catalog tables in each database.  It is also the role
      from which all granted permissions originate.  Because of these things, this
-     role may not be dropped.
+     role may not be dropped. This role must always be a superuser, it can't be changed
+     to be a non-superuser.
     </para>
     <para>
      This role also behaves as a normal

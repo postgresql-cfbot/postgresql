@@ -12402,7 +12402,7 @@ msgstr "Bara roller med flaggan %s på rollen \"%s\" får lägga till medlemmar.
 
 #: commands/user.c:871
 #, c-format
-msgid "The bootstrap user must have the %s attribute."
+msgid "The bootstrap superuser must have the %s attribute."
 msgstr "Bootstrap-användaren måste ha attributet %s."
 
 #: commands/user.c:1076

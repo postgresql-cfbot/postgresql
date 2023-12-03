@@ -833,6 +833,7 @@ typedef struct XmlSerialize
 	Node	   *expr;
 	TypeName   *typeName;
 	bool		indent;			/* [NO] INDENT */
+	XmlSerializeFormat	format;	/* serialization format */
 	int			location;		/* token location, or -1 if unknown */
 } XmlSerialize;
 

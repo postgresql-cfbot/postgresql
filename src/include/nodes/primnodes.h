@@ -1528,6 +1528,14 @@ typedef enum XmlOptionType
 	XMLOPTION_CONTENT,
 } XmlOptionType;
 
+typedef enum XmlSerializeFormat
+{
+	XMLSERIALIZE_INDENT,						/* pretty-printed xml serialization  */
+	XMLSERIALIZE_CANONICAL,						/* canonical form with xml comments */
+	XMLSERIALIZE_CANONICAL_WITH_NO_COMMENTS,	/* canonical form without xml comments */
+	XMLSERIALIZE_NO_FORMAT						/* unformatted xml representation */
+} XmlSerializeFormat;
+
 typedef struct XmlExpr
 {
 	Expr		xpr;
@@ -1543,13 +1551,13 @@ typedef struct XmlExpr
 	List	   *args;
 	/* DOCUMENT or CONTENT */
 	XmlOptionType xmloption pg_node_attr(query_jumble_ignore);
-	/* INDENT option for XMLSERIALIZE */
-	bool		indent;
 	/* target type/typmod for XMLSERIALIZE */
 	Oid			type pg_node_attr(query_jumble_ignore);
 	int32		typmod pg_node_attr(query_jumble_ignore);
 	/* token location, or -1 if unknown */
 	int			location;
+	/* serialization format: XMLCANONICAL, XMLCANONICAL_WITH_COMMENTS, XMLINDENT */
+	XmlSerializeFormat format pg_node_attr(query_jumble_ignore);
 } XmlExpr;
 
 /*

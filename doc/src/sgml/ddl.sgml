@@ -1224,6 +1224,19 @@ CREATE TABLE posts (
     syntax in the reference documentation for
     <xref linkend="sql-createtable"/>.
    </para>
+
+   <note>
+    <para>
+     Foreign key constraints are implemented as system triggers in
+     <productname>PostgreSQL</productname>.  As such, they are subject to the
+     trigger firing rules described in <xref linkend="trigger-definition"/>.
+     In particular, user-defined triggers on the referencing table can cancel
+     or modify the effects of cascading deletes or updates, thereby breaking
+     referential integrity.  This is not considered a bug, and it is the
+     responsibility of the user to write triggers so that such problems are
+     avoided.
+    </para>
+   </note>
   </sect2>
 
   <sect2 id="ddl-constraints-exclusion">

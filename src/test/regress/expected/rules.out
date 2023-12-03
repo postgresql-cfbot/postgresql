@@ -2404,6 +2404,77 @@ pg_statio_user_tables| SELECT relid,
     tidx_blks_hit
    FROM pg_statio_all_tables
   WHERE ((schemaname <> ALL (ARRAY['pg_catalog'::name, 'information_schema'::name])) AND (schemaname !~ '^pg_toast'::text));
+pg_statistic_export| SELECT n.nspname AS schemaname,
+    r.relname,
+    (current_setting('server_version_num'::text))::integer AS server_version_num,
+    r.reltuples AS n_tuples,
+    r.relpages AS n_pages,
+    ( WITH per_column_stats AS (
+                 SELECT s.stainherit,
+                    a_1.attname,
+                    jsonb_build_object('stanullfrac', (s.stanullfrac)::text, 'stawidth', (s.stawidth)::text, 'stadistinct', (s.stadistinct)::text, 'stakinds', ( SELECT jsonb_agg(
+                                CASE kind.kind
+                                    WHEN 0 THEN 'TRIVIAL'::text
+                                    WHEN 1 THEN 'MCV'::text
+                                    WHEN 2 THEN 'HISTOGRAM'::text
+                                    WHEN 3 THEN 'CORRELATION'::text
+                                    WHEN 4 THEN 'MCELEM'::text
+                                    WHEN 5 THEN 'DECHIST'::text
+                                    WHEN 6 THEN 'RANGE_LENGTH_HISTOGRAM'::text
+                                    WHEN 7 THEN 'BOUNDS_HISTOGRAM'::text
+                                    ELSE NULL::text
+                                END ORDER BY kind.ord) AS jsonb_agg
+                           FROM unnest(ARRAY[s.stakind1, s.stakind2, s.stakind3, s.stakind4, s.stakind5]) WITH ORDINALITY kind(kind, ord)), 'stanumbers', jsonb_build_array(((s.stanumbers1)::text)::text[], ((s.stanumbers2)::text)::text[], ((s.stanumbers3)::text)::text[], ((s.stanumbers4)::text)::text[], ((s.stanumbers5)::text)::text[]), 'stavalues', jsonb_build_array(((s.stavalues1)::text)::text[], ((s.stavalues2)::text)::text[], ((s.stavalues3)::text)::text[], ((s.stavalues4)::text)::text[], ((s.stavalues5)::text)::text[])) AS stats
+                   FROM (pg_attribute a_1
+                     JOIN pg_statistic s ON (((s.starelid = a_1.attrelid) AND (s.staattnum = a_1.attnum))))
+                  WHERE ((a_1.attrelid = r.oid) AND (NOT a_1.attisdropped) AND (a_1.attnum > 0) AND has_column_privilege(a_1.attrelid, a_1.attnum, 'SELECT'::text))
+                ), attagg AS (
+                 SELECT pcs.stainherit,
+                    jsonb_build_object('columns', jsonb_object_agg(pcs.attname, pcs.stats)) AS stats
+                   FROM per_column_stats pcs
+                  GROUP BY pcs.stainherit
+                ), extended_object_stats AS (
+                 SELECT sd.stxdinherit,
+                    e_1.stxname,
+                    jsonb_build_object('stxkinds', to_jsonb(e_1.stxkind), 'stxdndistinct', ndist.stxdndistinct, 'stxdndependencies', ndep.stxdndependencies, 'stxdmcv', mcv.stxdmcv, 'stxdexprs', x.stdxdexprs) AS stats
+                   FROM (((((pg_statistic_ext e_1
+                     JOIN pg_statistic_ext_data sd ON ((sd.stxoid = e_1.oid)))
+                     LEFT JOIN LATERAL ( SELECT jsonb_agg(jsonb_build_object('attnums', string_to_array(nd.attnums, ', '::text), 'ndistinct', nd.ndistinct) ORDER BY nd.ord) AS jsonb_agg
+                           FROM json_each_text(((sd.stxdndistinct)::text)::json) WITH ORDINALITY nd(attnums, ndistinct, ord)) ndist(stxdndistinct) ON ((sd.stxdndistinct IS NOT NULL)))
+                     LEFT JOIN LATERAL ( SELECT jsonb_agg(jsonb_build_object('attnums', string_to_array(replace(dep.attrs, ' => '::text, ', '::text), ', '::text), 'degree', dep.degree) ORDER BY dep.ord) AS jsonb_agg
+                           FROM json_each_text(((sd.stxddependencies)::text)::json) WITH ORDINALITY dep(attrs, degree, ord)) ndep(stxdndependencies) ON ((sd.stxddependencies IS NOT NULL)))
+                     LEFT JOIN LATERAL ( SELECT NULL::text AS stxdmcv) mcv(stxdmcv) ON ((sd.stxdmcv IS NOT NULL)))
+                     LEFT JOIN LATERAL ( SELECT jsonb_agg(jsonb_build_object('stanullfrac', (s.stanullfrac)::text, 'stawidth', (s.stawidth)::text, 'stadistinct', (s.stadistinct)::text, 'stakinds', ( SELECT jsonb_agg(
+CASE kind.kind
+ WHEN 0 THEN 'TRIVIAL'::text
+ WHEN 1 THEN 'MCV'::text
+ WHEN 2 THEN 'HISTOGRAM'::text
+ WHEN 3 THEN 'CORRELATION'::text
+ WHEN 4 THEN 'MCELEM'::text
+ WHEN 5 THEN 'DECHIST'::text
+ WHEN 6 THEN 'RANGE_LENGTH_HISTOGRAM'::text
+ WHEN 7 THEN 'BOUNDS_HISTOGRAM'::text
+ ELSE NULL::text
+END ORDER BY kind.ord) AS jsonb_agg
+                                   FROM unnest(ARRAY[s.stakind1, s.stakind2, s.stakind3, s.stakind4, s.stakind5]) WITH ORDINALITY kind(kind, ord)), 'stanumbers', jsonb_build_array(((s.stanumbers1)::text)::text[], ((s.stanumbers2)::text)::text[], ((s.stanumbers3)::text)::text[], ((s.stanumbers4)::text)::text[], ((s.stanumbers5)::text)::text[]), 'stavalues', jsonb_build_array(((s.stavalues1)::text)::text[], ((s.stavalues2)::text)::text[], ((s.stavalues3)::text)::text[], ((s.stavalues4)::text)::text[], ((s.stavalues5)::text)::text[])) ORDER BY s.ordinality) AS jsonb_agg
+                           FROM unnest(sd.stxdexpr) WITH ORDINALITY s(starelid, staattnum, stainherit, stanullfrac, stawidth, stadistinct, stakind1, stakind2, stakind3, stakind4, stakind5, staop1, staop2, staop3, staop4, staop5, stacoll1, stacoll2, stacoll3, stacoll4, stacoll5, stanumbers1, stanumbers2, stanumbers3, stanumbers4, stanumbers5, stavalues1, stavalues2, stavalues3, stavalues4, stavalues5, ordinality)) x(stdxdexprs) ON ((sd.stxdexpr IS NOT NULL)))
+                  WHERE (e_1.stxrelid = r.oid)
+                ), extagg AS (
+                 SELECT eos.stxdinherit,
+                    jsonb_build_object('extended', jsonb_object_agg(eos.stxname, eos.stats)) AS stats
+                   FROM extended_object_stats eos
+                  GROUP BY eos.stxdinherit
+                )
+         SELECT jsonb_object_agg(
+                CASE COALESCE(a.stainherit, e.stxdinherit)
+                    WHEN true THEN 'inherited'::text
+                    ELSE 'regular'::text
+                END, (COALESCE(a.stats, '{}'::jsonb) || COALESCE(e.stats, '{}'::jsonb))) AS jsonb_object_agg
+           FROM (attagg a
+             FULL JOIN extagg e ON ((a.stainherit = e.stxdinherit)))) AS stats
+   FROM (pg_class r
+     JOIN pg_namespace n ON ((n.oid = r.relnamespace)))
+  WHERE ((r.relkind = ANY (ARRAY['r'::"char", 'm'::"char", 'f'::"char", 'p'::"char"])) AND (n.nspname <> ALL (ARRAY['pg_catalog'::name, 'information_schema'::name])));
 pg_stats| SELECT n.nspname AS schemaname,
     c.relname AS tablename,
     a.attname,

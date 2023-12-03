@@ -2177,3 +2177,9 @@ mcv_clause_selectivity_or(PlannerInfo *root, StatisticExtInfo *stat,
 
 	return s;
 }
+
+MCVList *import_mcv(JsonbContainer *cont)
+{
+	return NULL;
+}
+

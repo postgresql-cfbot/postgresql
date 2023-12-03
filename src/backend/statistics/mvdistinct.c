@@ -31,6 +31,8 @@
 #include "lib/stringinfo.h"
 #include "statistics/extended_stats_internal.h"
 #include "statistics/statistics.h"
+#include "utils/builtins.h"
+#include "utils/float.h"
 #include "utils/fmgrprotos.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
@@ -697,4 +699,122 @@ generate_combinations(CombinationGenerator *state)
 	generate_combinations_recurse(state, 0, 0, current);
 
 	pfree(current);
+}
+
+
+/*
+ * Import ndistinct values from JsonB.
+ *
+ * To handle expressions easily, we treat them as system attributes with
+ * negative attnums, and offset everything by number of expressions to
+ * allow using Bitmapsets.
+ */
+MVNDistinct *
+import_ndistinct(JsonbContainer *cont)
+{
+	MVNDistinct *result;
+	int			numcombs;
+	int			i;
+
+	/* no ndistinct to import */
+	if (cont == NULL)
+		return NULL;
+
+	/* each row of the JSON is a combination */
+	numcombs = JsonContainerSize(cont);
+
+	/* no ndistinct to import */
+	if (numcombs == 0)
+		return NULL;
+
+	result = palloc(offsetof(MVNDistinct, items) +
+					numcombs * sizeof(MVNDistinctItem));
+	result->magic = STATS_NDISTINCT_MAGIC;
+	result->type = STATS_NDISTINCT_TYPE_BASIC;
+	result->nitems = numcombs;
+
+	/*
+	 * format example:
+	 *
+	 * "stxdndistinct": [
+	 *     {
+	 *       "attnums": [ "2", "1" ],
+	 *       "ndistinct": "4"
+	 *     },
+	 *     ...
+	 *   ]
+	 *
+	 */
+	for (i = 0; i < numcombs; i++)
+	{
+		MVNDistinctItem	   *item;
+		JsonbValue		   *elem;
+		JsonbContainer	   *combo;
+		JsonbValue		   *attnums;
+		JsonbContainer	   *attnumscont;
+		JsonbValue		   *ndistinct;
+		char			   *ndist_str;
+		int					numattnums;
+		int					j;
+
+		item = &result->items[i];
+
+		elem = getIthJsonbValueFromContainer(cont, i);
+
+		if ((elem->type != jbvBinary) ||
+			(!JsonContainerIsObject(elem->val.binary.data)))
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("invalid statistics format, stxndistinct elements must be a binary objects")));
+
+		combo = elem->val.binary.data;
+
+		attnums = getKeyJsonValueFromContainer(combo, "attnums", strlen("attnums"), NULL);
+		if ((attnums == NULL) || (attnums->type != jbvBinary) ||
+			(!JsonContainerIsArray(attnums->val.binary.data)))
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("invalid statistics format, stxndistinct must contain attnums array")));
+
+		attnumscont = attnums->val.binary.data;
+		numattnums = JsonContainerSize(attnumscont);
+
+		item->attributes = palloc(sizeof(AttrNumber) * numattnums);
+		item->nattributes = numattnums;
+
+		for (j = 0; j < numattnums; j++)
+		{
+			JsonbValue	   *attnum;
+			char		   *s;
+			attnum = getIthJsonbValueFromContainer(attnumscont, j);
+
+			if (attnum->type != jbvString)
+				ereport(ERROR,
+				  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				   errmsg("invalid statistics format, stxndistinct attnums elements must be strings, but one is %s", 
+						  JsonbTypeName(attnum))));
+
+			s = JsonbStringValueToCString(attnum);
+
+			item->attributes[j] = pg_strtoint16(s);
+			pfree(s);
+			pfree(attnum);
+		}
+
+		ndistinct = getKeyJsonValueFromContainer(combo, "ndistinct", strlen("ndistinct"), NULL);
+		if ((ndistinct == NULL) || (ndistinct->type != jbvString))
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("invalid statistics format, stxndistinct elements must have ndistinct element")));
+
+		ndist_str = JsonbStringValueToCString(ndistinct);
+		item->ndistinct = float8in_internal(ndist_str, NULL, "double", ndist_str, NULL);
+
+		pfree(ndist_str);
+		pfree(ndistinct);
+		pfree(attnums);
+		pfree(elem);
+	}
+
+	return result;
 }

@@ -72,15 +72,18 @@ typedef struct StatsBuildData
 extern MVNDistinct *statext_ndistinct_build(double totalrows, StatsBuildData *data);
 extern bytea *statext_ndistinct_serialize(MVNDistinct *ndistinct);
 extern MVNDistinct *statext_ndistinct_deserialize(bytea *data);
+extern MVNDistinct *import_ndistinct(JsonbContainer *cont);
 
 extern MVDependencies *statext_dependencies_build(StatsBuildData *data);
 extern bytea *statext_dependencies_serialize(MVDependencies *dependencies);
 extern MVDependencies *statext_dependencies_deserialize(bytea *data);
+extern MVDependencies * import_dependencies(JsonbContainer *cont);
 
 extern MCVList *statext_mcv_build(StatsBuildData *data,
 								  double totalrows, int stattarget);
 extern bytea *statext_mcv_serialize(MCVList *mcvlist, VacAttrStats **stats);
 extern MCVList *statext_mcv_deserialize(bytea *data);
+extern MCVList *import_mcv(JsonbContainer *cont);
 
 extern MultiSortSupport multi_sort_init(int ndims);
 extern void multi_sort_add_dimension(MultiSortSupport mss, int sortdim,

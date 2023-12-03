@@ -16,7 +16,7 @@ subdir = src/bin/scripts
 top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
-PROGRAMS = createdb createuser dropdb dropuser clusterdb vacuumdb reindexdb pg_isready
+PROGRAMS = createdb createuser dropdb dropuser clusterdb vacuumdb reindexdb pg_isready pg_export_stats pg_import_stats
 
 override CPPFLAGS := -I$(libpq_srcdir) $(CPPFLAGS)
 LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport)
@@ -31,6 +31,8 @@ clusterdb: clusterdb.o common.o $(WIN32RES) | submake-libpq submake-libpgport su
 vacuumdb: vacuumdb.o common.o $(WIN32RES) | submake-libpq submake-libpgport submake-libpgfeutils
 reindexdb: reindexdb.o common.o $(WIN32RES) | submake-libpq submake-libpgport submake-libpgfeutils
 pg_isready: pg_isready.o common.o $(WIN32RES) | submake-libpq submake-libpgport submake-libpgfeutils
+pg_export_stats: pg_export_stats.o common.o $(WIN32RES) | submake-libpq submake-libpgport submake-libpgfeutils
+pg_import_stats: pg_import_stats.o common.o $(WIN32RES) | submake-libpq submake-libpgport submake-libpgfeutils
 
 install: all installdirs
 	$(INSTALL_PROGRAM) createdb$(X)   '$(DESTDIR)$(bindir)'/createdb$(X)
@@ -41,6 +43,8 @@ install: all installdirs
 	$(INSTALL_PROGRAM) vacuumdb$(X)   '$(DESTDIR)$(bindir)'/vacuumdb$(X)
 	$(INSTALL_PROGRAM) reindexdb$(X)  '$(DESTDIR)$(bindir)'/reindexdb$(X)
 	$(INSTALL_PROGRAM) pg_isready$(X) '$(DESTDIR)$(bindir)'/pg_isready$(X)
+	$(INSTALL_PROGRAM) pg_export_stats$(X) '$(DESTDIR)$(bindir)'/pg_export_stats$(X)
+	$(INSTALL_PROGRAM) pg_import_stats$(X) '$(DESTDIR)$(bindir)'/pg_import_stats$(X)
 
 installdirs:
 	$(MKDIR_P) '$(DESTDIR)$(bindir)'

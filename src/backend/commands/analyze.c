@@ -18,6 +18,7 @@
 
 #include "access/detoast.h"
 #include "access/genam.h"
+#include "access/heapam.h"
 #include "access/multixact.h"
 #include "access/relation.h"
 #include "access/sysattr.h"
@@ -33,6 +34,7 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
+#include "catalog/pg_operator.h"
 #include "catalog/pg_statistic_ext.h"
 #include "commands/dbcommands.h"
 #include "commands/progress.h"
@@ -40,6 +42,7 @@
 #include "commands/vacuum.h"
 #include "common/pg_prng.h"
 #include "executor/executor.h"
+#include "fmgr.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
@@ -57,16 +60,20 @@
 #include "utils/attoptcache.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
+#include "utils/float.h"
 #include "utils/fmgroids.h"
 #include "utils/guc.h"
+#include "utils/jsonb.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/numeric.h"
 #include "utils/pg_rusage.h"
 #include "utils/sampling.h"
 #include "utils/sortsupport.h"
 #include "utils/spccache.h"
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
+#include "utils/typcache.h"
 
 
 /* Per-index data for ANALYZE */
@@ -109,6 +116,12 @@ static void update_attstats(Oid relid, bool inh,
 static Datum std_fetch_func(VacAttrStatsP stats, int rownum, bool *isNull);
 static Datum ind_fetch_func(VacAttrStatsP stats, int rownum, bool *isNull);
 
+static AnlIndexData *build_indexdata(Relation onerel, Relation *Irel,
+									 int nindexes, bool all_columns);
+static VacAttrStats **examine_rel_attributes(Relation onerel, int *attr_cnt);
+
+static
+void import_pg_statistics(Relation onerel, bool inh, JsonbContainer *cont);
 
 /*
  *	analyze_rel() -- analyze one relation
@@ -403,29 +416,8 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 		attr_cnt = tcnt;
 	}
 	else
-	{
-		attr_cnt = onerel->rd_att->natts;
-		vacattrstats = (VacAttrStats **)
-			palloc(attr_cnt * sizeof(VacAttrStats *));
-		tcnt = 0;
-		for (i = 1; i <= attr_cnt; i++)
-		{
-			vacattrstats[tcnt] = examine_attribute(onerel, i, NULL);
-			if (vacattrstats[tcnt] != NULL)
-				tcnt++;
-		}
-		attr_cnt = tcnt;
-	}
+		vacattrstats = examine_rel_attributes(onerel, &attr_cnt);
 
-	/*
-	 * Open all indexes of the relation, and see if there are any analyzable
-	 * columns in the indexes.  We do not analyze index columns if there was
-	 * an explicit column list in the ANALYZE command, however.
-	 *
-	 * If we are doing a recursive scan, we don't want to touch the parent's
-	 * indexes at all.  If we're processing a partitioned table, we need to
-	 * know if there are any indexes, but we don't want to process them.
-	 */
 	if (onerel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
 		List	   *idxs = RelationGetIndexList(onerel);
@@ -446,48 +438,8 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 		nindexes = 0;
 		hasindex = false;
 	}
-	indexdata = NULL;
-	if (nindexes > 0)
-	{
-		indexdata = (AnlIndexData *) palloc0(nindexes * sizeof(AnlIndexData));
-		for (ind = 0; ind < nindexes; ind++)
-		{
-			AnlIndexData *thisdata = &indexdata[ind];
-			IndexInfo  *indexInfo;
 
-			thisdata->indexInfo = indexInfo = BuildIndexInfo(Irel[ind]);
-			thisdata->tupleFract = 1.0; /* fix later if partial */
-			if (indexInfo->ii_Expressions != NIL && va_cols == NIL)
-			{
-				ListCell   *indexpr_item = list_head(indexInfo->ii_Expressions);
-
-				thisdata->vacattrstats = (VacAttrStats **)
-					palloc(indexInfo->ii_NumIndexAttrs * sizeof(VacAttrStats *));
-				tcnt = 0;
-				for (i = 0; i < indexInfo->ii_NumIndexAttrs; i++)
-				{
-					int			keycol = indexInfo->ii_IndexAttrNumbers[i];
-
-					if (keycol == 0)
-					{
-						/* Found an index expression */
-						Node	   *indexkey;
-
-						if (indexpr_item == NULL)	/* shouldn't happen */
-							elog(ERROR, "too few entries in indexprs list");
-						indexkey = (Node *) lfirst(indexpr_item);
-						indexpr_item = lnext(indexInfo->ii_Expressions,
-											 indexpr_item);
-						thisdata->vacattrstats[tcnt] =
-							examine_attribute(Irel[ind], i + 1, indexkey);
-						if (thisdata->vacattrstats[tcnt] != NULL)
-							tcnt++;
-					}
-				}
-				thisdata->attr_cnt = tcnt;
-			}
-		}
-	}
+	indexdata = build_indexdata(onerel, Irel, nindexes, (va_cols == NIL));
 
 	/*
 	 * Determine how many rows we need to sample, using the worst case from
@@ -821,6 +773,92 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 	MemoryContextSwitchTo(caller_context);
 	MemoryContextDelete(anl_context);
 	anl_context = NULL;
+}
+
+
+/*
+ * Create VacAttrStats entries for all attributes in a relation.
+ */
+static
+VacAttrStats **examine_rel_attributes(Relation onerel, int *attr_cnt)
+{
+	int natts = onerel->rd_att->natts;
+	int nfound = 0;
+	int i;
+	VacAttrStats **attrstats;
+
+	*attr_cnt = natts;
+	attrstats = (VacAttrStats **) palloc(natts * sizeof(VacAttrStats *));
+	for (i = 1; i <= natts; i++)
+	{
+		attrstats[nfound] = examine_attribute(onerel, i, NULL);
+		if (attrstats[nfound] != NULL)
+			nfound++;
+	}
+	*attr_cnt = nfound;
+	return attrstats;
+}
+
+/*
+ * Open all indexes of the relation, and see if there are any analyzable
+ * columns in the indexes.  We do not analyze index columns if there was
+ * an explicit column list in the ANALYZE command, however.
+ *
+ * If we are doing a recursive scan, we don't want to touch the parent's
+ * indexes at all.  If we're processing a partitioned table, we need to
+ * know if there are any indexes, but we don't want to process them.
+ */
+static
+AnlIndexData *build_indexdata(Relation onerel, Relation *Irel, int nindexes, bool all_columns)
+{
+	AnlIndexData   *indexdata;
+	int				ind,
+					tcnt,
+					i;
+
+	if (nindexes == 0)
+		return NULL;
+
+	indexdata = (AnlIndexData *) palloc0(nindexes * sizeof(AnlIndexData));
+
+	for (ind = 0; ind < nindexes; ind++)
+	{
+		AnlIndexData *thisdata = &indexdata[ind];
+		IndexInfo  *indexInfo;
+
+		thisdata->indexInfo = indexInfo = BuildIndexInfo(Irel[ind]);
+		thisdata->tupleFract = 1.0; /* fix later if partial */
+		if (indexInfo->ii_Expressions != NIL && all_columns)
+		{
+			ListCell   *indexpr_item = list_head(indexInfo->ii_Expressions);
+
+			thisdata->vacattrstats = (VacAttrStats **)
+				palloc(indexInfo->ii_NumIndexAttrs * sizeof(VacAttrStats *));
+			tcnt = 0;
+			for (i = 0; i < indexInfo->ii_NumIndexAttrs; i++)
+			{
+				int			keycol = indexInfo->ii_IndexAttrNumbers[i];
+
+				if (keycol == 0)
+				{
+					/* Found an index expression */
+					Node	   *indexkey;
+
+					if (indexpr_item == NULL)	/* shouldn't happen */
+						elog(ERROR, "too few entries in indexprs list");
+					indexkey = (Node *) lfirst(indexpr_item);
+					indexpr_item = lnext(indexInfo->ii_Expressions,
+										 indexpr_item);
+					thisdata->vacattrstats[tcnt] =
+						examine_attribute(Irel[ind], i + 1, indexkey);
+					if (thisdata->vacattrstats[tcnt] != NULL)
+						tcnt++;
+				}
+			}
+			thisdata->attr_cnt = tcnt;
+		}
+	}
+	return indexdata;
 }
 
 /*
@@ -3072,4 +3110,549 @@ analyze_mcv_list(int *mcv_counts,
 		}
 	}
 	return num_mcv;
+}
+
+/*
+ * Get a JsonbValue from a JsonbContainer and ensure that it is a string,
+ * and return the cstring.
+ */
+char *key_lookup_cstring(JsonbContainer *cont, const char *key)
+{
+	JsonbValue	j;
+
+	if (!getKeyJsonValueFromContainer(cont, key, strlen(key), &j))
+		return NULL;
+
+	if (j.type != jbvString)
+		ereport(ERROR,
+		  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		   errmsg("invalid statistics format, %s must be a string but is type %s",
+				  key, JsonbTypeName(&j))));
+
+	return JsonbStringValueToCString(&j);
+}
+
+/*
+ * Get a JsonbContainer from a JsonbContainer and ensure that it is a object
+ */
+JsonbContainer *key_lookup_object(JsonbContainer *cont, const char *key)
+{
+	JsonbValue	j;
+
+	if (!getKeyJsonValueFromContainer(cont, key, strlen(key), &j))
+		return NULL;
+
+	if (j.type != jbvBinary)
+		ereport(ERROR,
+		  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		   errmsg("invalid statistics format, %s must be an object but is type %s",
+				  key, JsonbTypeName(&j))));
+
+	if (!JsonContainerIsObject(j.val.binary.data))
+		ereport(ERROR,
+		  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		   errmsg("invalid statistics format, %s must be an object but is type %s",
+				  key, JsonbContainerTypeName(j.val.binary.data))));
+
+	return j.val.binary.data;
+}
+
+/*
+ * Get a JsonbContainer from a JsonbContainer and ensure that it is an array
+ */
+JsonbContainer *key_lookup_array(JsonbContainer *cont, const char *key)
+{
+	JsonbValue	j;
+
+	if (!getKeyJsonValueFromContainer(cont, key, strlen(key), &j))
+		return NULL;
+
+	if (j.type != jbvBinary)
+		ereport(ERROR,
+		  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		   errmsg("invalid statistics format, %s must be an array but is type %s",
+				  key, JsonbTypeName(&j))));
+
+	if (!JsonContainerIsArray(j.val.binary.data))
+		ereport(ERROR,
+		  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		   errmsg("invalid statistics format, %s must be an array but is type %s",
+				  key, JsonbContainerTypeName(j.val.binary.data))));
+
+	return j.val.binary.data;
+}
+
+/*
+ * Import statistics from JSONB export into relation
+ *
+ * Format is:
+ *
+ * {
+ *   "columns": { "colname1": ... },
+ *   "extended": { "statname1": ...}
+ * }
+ */
+Datum
+pg_import_rel_stats(PG_FUNCTION_ARGS)
+{
+	Oid			relid;
+	int32		stats_version_num;
+	Jsonb	   *jb;
+	Relation	onerel;
+	Oid			save_userid;
+	int			save_sec_context;
+	int			save_nestlevel;
+
+	if (PG_ARGISNULL(0))
+		ereport(ERROR,
+		  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		   errmsg("relation cannot be NULL")));
+	relid = PG_GETARG_OID(0);
+
+	if (PG_ARGISNULL(1))
+		ereport(ERROR,
+		  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		   errmsg("server_version_number cannot be NULL")));
+	stats_version_num = PG_GETARG_INT32(1);
+
+	if (stats_version_num < 80000)
+		ereport(ERROR,
+		  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		   errmsg("invalid statistics version: %d is earlier than earliest supported version",
+				  stats_version_num)));
+
+	if (PG_ARGISNULL(4))
+		jb = NULL;
+	else
+	{
+		jb = PG_GETARG_JSONB_P(4);
+		if (!JB_ROOT_IS_OBJECT(jb))
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("columns must be jsonb object at root")));
+	}
+
+	onerel = vacuum_open_relation(relid, NULL, VACOPT_ANALYZE, true,
+								  ShareUpdateExclusiveLock);
+
+	if (onerel == NULL)
+		PG_RETURN_BOOL(false);
+
+	if (!vacuum_is_relation_owner(RelationGetRelid(onerel),
+								onerel->rd_rel,
+								VACOPT_ANALYZE))
+	{
+		relation_close(onerel, ShareUpdateExclusiveLock);
+		PG_RETURN_BOOL(false);
+	}
+
+	/*
+	 * Switch to the table owner's userid, so that any index functions are run
+	 * as that user.  Also lock down security-restricted operations and
+	 * arrange to make GUC variable changes local to this command.
+	 */
+	GetUserIdAndSecContext(&save_userid, &save_sec_context);
+	SetUserIdAndSecContext(onerel->rd_rel->relowner,
+						   save_sec_context | SECURITY_RESTRICTED_OPERATION);
+	save_nestlevel = NewGUCNestLevel();
+
+	/*
+	 * Apply statistical updates, if any, to copied tuple.
+	 *
+	 * Format is:
+	 * {
+	 *   "regular": { "columns": ..., "extended": ...},
+	 *   "inherited": { "columns": ..., "extended": ...}
+	 * }
+	 *
+	 */
+	if (jb != NULL)
+	{
+		JsonbContainer	   *cont;
+
+		cont = key_lookup_object(&jb->root, "regular");
+		import_pg_statistics(onerel, false, cont);
+
+		if (onerel->rd_rel->relhassubclass)
+		{
+			cont = key_lookup_object(&jb->root, "inherited");
+			import_pg_statistics(onerel, true, cont);
+		}
+	}
+
+	/* only modify pg_class row if changes are to be made */
+	if ( ! PG_ARGISNULL(2) || ! PG_ARGISNULL(3) )
+	{
+		Relation		pg_class_rel;
+		HeapTuple		ctup;
+		Form_pg_class	pgcform;
+
+		/*
+		 * Open the relation, getting ShareUpdateExclusiveLock to ensure that no
+		 * other stat-setting operation can run on it concurrently.
+		 */
+		pg_class_rel = table_open(RelationRelationId, ShareUpdateExclusiveLock);
+
+		/* leave if relation could not be opened or locked */
+		if (!pg_class_rel)
+			PG_RETURN_BOOL(false);
+
+		ctup = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(relid));
+		if (!HeapTupleIsValid(ctup))
+			elog(ERROR, "pg_class entry for relid %u vanished during statistics import",
+				 relid);
+		pgcform = (Form_pg_class) GETSTRUCT(ctup);
+
+		/* leave un-set values alone */
+		if (! PG_ARGISNULL(2))
+			pgcform->reltuples = PG_GETARG_FLOAT4(2);
+		if (! PG_ARGISNULL(3))
+			pgcform->relpages = PG_GETARG_INT32(3);
+
+		heap_inplace_update(pg_class_rel, ctup);
+		table_close(pg_class_rel, ShareUpdateExclusiveLock);
+	}
+
+	/* relation_close(onerel, ShareUpdateExclusiveLock); */
+	relation_close(onerel, NoLock);
+
+	/* Roll back any GUC changes executed by index functions */
+	AtEOXact_GUC(false, save_nestlevel);
+
+	/* Restore userid and security context */
+	SetUserIdAndSecContext(save_userid, save_sec_context);
+
+	PG_RETURN_BOOL(true);
+}
+
+/*
+ * Convert the STATISTICS_KIND strings defined in pg_statistic_export
+ * back to their defined enum values.
+ */
+static int16
+decode_stakind_string(char *s)
+{
+	if (strcmp(s,"MCV") == 0)
+		return STATISTIC_KIND_MCV;
+	if (strcmp(s,"HISTOGRAM") == 0)
+		return STATISTIC_KIND_HISTOGRAM;
+	if (strcmp(s,"CORRELATION") == 0)
+		return STATISTIC_KIND_CORRELATION;
+	if (strcmp(s,"MCELEM") == 0)
+		return STATISTIC_KIND_MCELEM;
+	if (strcmp(s,"DECHIST") == 0)
+		return STATISTIC_KIND_DECHIST;
+	if (strcmp(s,"RANGE_LENGTH_HISTOGRAM") == 0)
+		return STATISTIC_KIND_RANGE_LENGTH_HISTOGRAM;
+	if (strcmp(s,"BOUNDS_HISTOGRAM") == 0)
+		return STATISTIC_KIND_BOUNDS_HISTOGRAM;
+	if (strcmp(s,"TRIVIAL") != 0)
+		ereport(ERROR,
+		  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		   errmsg("unknown statistics kind: %s", s)));
+
+	return 0;
+}
+
+/*
+ *
+ * Format is:
+ *
+ * {
+ *   "regular":
+ *     {
+ *       "columns": { "colname1": ... }},
+ *       "extended": { "statname1": ...}
+ *     },
+ *   "inherited":
+ *     {
+ *       "columns": { "colname1": ... }},
+ *       "extended": { "statname1": ...}
+ *     },
+ * }
+ */
+static
+void import_pg_statistics(Relation onerel, bool inh, JsonbContainer *cont)
+{
+	VacAttrStats	  **vacattrstats;
+	JsonbContainer	   *colscont;
+	JsonbContainer	   *extscont;
+	int					natts;
+	AnlIndexData	   *indexdata = NULL;
+	int					nindexes = 0;
+	int					i,
+						ind;
+	Relation		   *Irel = NULL;
+
+	/* skip if no statistics of this inheritance type available */
+	if (cont == NULL)
+		return;
+
+	vacattrstats = examine_rel_attributes(onerel, &natts);
+
+	if ((!inh) &&
+		(onerel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE))
+	{
+		vac_open_indexes(onerel, AccessShareLock, &nindexes, &Irel);
+		if (nindexes > 0)
+			indexdata = build_indexdata(onerel, Irel, nindexes, true);
+	}
+
+	colscont = key_lookup_object(cont, "columns");
+	if (colscont != NULL)
+	{
+		for (i = 0; i < natts; i++)
+		{
+			VacAttrStats   *stats;
+			JsonbContainer *attrcont;
+			const char	   *name;
+
+			stats = vacattrstats[i];
+			name = NameStr(*attnumAttName(onerel, stats->tupattnum));
+
+			attrcont = key_lookup_object(colscont, name);
+			ImportVacAttrStats(stats, attrcont);
+		}
+		update_attstats(RelationGetRelid(onerel), inh, natts, vacattrstats);
+
+		/* now compute the index stats based on imported table stats */
+		for (ind = 0; ind < nindexes; ind++)
+		{
+			AnlIndexData *thisdata = &indexdata[ind];
+
+			update_attstats(RelationGetRelid(Irel[ind]), false,
+							thisdata->attr_cnt, thisdata->vacattrstats);
+		}
+	}
+
+	extscont = key_lookup_object(cont, "extended");
+
+	if (extscont != NULL)
+	{
+		/* Build extended statistics (if there are any). */
+
+		ImportRelationExtStatistics(onerel, false, natts, vacattrstats, extscont);
+
+		if (onerel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+			ImportRelationExtStatistics(onerel, true, natts, vacattrstats, extscont);
+	}
+
+	if ((!inh) &&
+		(onerel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE))
+		vac_close_indexes(nindexes, Irel, NoLock);
+}
+
+/*
+ * Apply all found statistics within a JSON structure to a pre-examined
+ * VacAttrStats.
+ */
+void
+ImportVacAttrStats( VacAttrStats *stats, JsonbContainer *cont)
+{
+	JsonbContainer *arraycont;
+	char		   *s;
+	int				k;
+
+	/* nothing to import, skip */
+	if (cont == NULL)
+		return;
+
+	stats->stats_valid = true;
+
+	s = key_lookup_cstring(cont, "stanullfrac");
+	if (s != NULL)
+	{
+		stats->stanullfrac = float4in_internal(s, NULL, "real", s, NULL);
+		pfree(s);
+	}
+	s = key_lookup_cstring(cont, "stawidth");
+	if (s != NULL)
+	{
+		stats->stawidth = pg_strtoint32(s);
+		pfree(s);
+	}
+
+	s = key_lookup_cstring(cont, "stadistinct");
+	if (s != NULL)
+	{
+		stats->stadistinct = float4in_internal(s, NULL, "real", s, NULL);
+		pfree(s);
+	}
+
+	arraycont = key_lookup_array(cont, "stakinds");
+	if (arraycont != NULL)
+	{
+		for (k = 0; k < STATISTIC_NUM_SLOTS; k++)
+		{
+			StdAnalyzeData *mystats;
+			JsonbValue	   *e;
+			char		   *stakindstr;
+
+			mystats = (StdAnalyzeData *) stats->extra_data;
+			e = getIthJsonbValueFromContainer(arraycont, k);
+
+			if (e == NULL || (e->type != jbvString))
+				ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("invalid format: stakind elements must be strings")));
+
+			stakindstr = JsonbStringValueToCString(e);
+			stats->stakind[k] = decode_stakind_string(stakindstr);
+			pfree(stakindstr);
+			pfree(e);
+
+			switch(stats->stakind[k])
+			{
+				case STATISTIC_KIND_MCV:
+				case STATISTIC_KIND_DECHIST:
+					stats->staop[k] = mystats->eqopr;
+					stats->stacoll[k] = stats->attrcollid;
+					break;
+
+				case STATISTIC_KIND_HISTOGRAM:
+				case STATISTIC_KIND_CORRELATION:
+					stats->staop[k] = mystats->ltopr;
+					stats->stacoll[k] = stats->attrcollid;
+					break;
+
+				case STATISTIC_KIND_MCELEM:
+					stats->staop[k] = TextEqualOperator;
+					stats->stacoll[k] = DEFAULT_COLLATION_OID;
+					break;
+
+				case STATISTIC_KIND_RANGE_LENGTH_HISTOGRAM:
+					stats->staop[k] = Float8LessOperator;
+					stats->stacoll[k] = InvalidOid;
+					break;
+
+				case STATISTIC_KIND_BOUNDS_HISTOGRAM:
+				default:
+					stats->staop[k] = InvalidOid;
+					stats->stacoll[k] = InvalidOid;
+					break;
+			}
+		}
+	}
+
+	/* stanumbers is an array of arrays of floats */
+	arraycont = key_lookup_array(cont, "stanumbers");
+	if (arraycont != NULL)
+	{
+		for (k = 0; k < STATISTIC_NUM_SLOTS; k++)
+		{
+			JsonbValue	   *j;
+			JsonbContainer *numarr;
+			int				nelems;
+			int				e;
+
+			j = getIthJsonbValueFromContainer(arraycont, k);
+
+			/* skip out-of-bounds and explicit nulls */
+			if (j == NULL)
+				continue;
+
+			if (j->type == jbvNull)
+			{
+				pfree(j);
+				continue;
+			}
+
+			if ((j->type != jbvBinary) ||
+				(!JsonContainerIsArray(j->val.binary.data)))
+				ereport(ERROR,
+				  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				   errmsg("invalid statistics format, stanumbers must be a binary array or null")));
+
+			numarr = j->val.binary.data;
+			pfree(j);
+
+			nelems = JsonContainerSize(numarr);
+			stats->numnumbers[k] = nelems;
+			stats->stanumbers[k] = (float4 *) palloc(nelems * sizeof(float4));
+
+			for (e = 0; e < nelems; e++)
+			{
+				JsonbValue *f = getIthJsonbValueFromContainer(numarr, e);
+				float4		floatval;
+				char	   *fstr;
+
+				/* skip out-of-bounds and explicit nulls */
+				if (f == NULL || f->type != jbvString)
+					ereport(ERROR,
+					  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					   errmsg("invalid statistics format, elements of stanumbers must a string")));
+
+				fstr = JsonbStringValueToCString(f);
+				floatval = float4in_internal(fstr, NULL, "realx3", fstr, NULL);
+				stats->stanumbers[k][e] = floatval;
+				pfree(f);
+				pfree(fstr);
+			}
+		}
+	}
+
+	/* stavalues is an array of arrays of the column attr type */
+	arraycont = key_lookup_array(cont, "stavalues");
+	if (arraycont != NULL)
+	{
+		Oid			in_func;
+		Oid			typioparam;
+		FmgrInfo	finfo;
+
+		getTypeInputInfo(stats->attrtypid, &in_func, &typioparam);
+		fmgr_info(in_func, &finfo);
+
+		for (k = 0; k < STATISTIC_NUM_SLOTS; k++)
+		{
+			JsonbValue	   *j;
+			JsonbContainer *attrarr;
+			int				nelems;
+			int				e;
+
+			j = getIthJsonbValueFromContainer(arraycont, k);
+
+			/* skip out-of-bounds and explicit nulls */
+			if (j == NULL)
+				continue;
+
+			if (j->type == jbvNull)
+			{
+				pfree(j);
+				continue;
+			}
+
+			if ((j->type != jbvBinary) ||
+				(!JsonContainerIsArray(j->val.binary.data)))
+				ereport(ERROR,
+				  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				   errmsg("invalid statistics format, stavalues must be a binary array or null")));
+
+			attrarr = j->val.binary.data;
+			pfree(j);
+			nelems = JsonContainerSize(attrarr);
+			stats->numvalues[k] = nelems;
+			stats->stavalues[k] = (Datum *) palloc(nelems * sizeof(Datum));
+
+			for (e = 0; e < nelems; e++)
+			{
+				JsonbValue *f;
+				char	   *fstr;
+				Datum		datum;
+
+				f = getIthJsonbValueFromContainer(attrarr, e);
+
+				/* skip out-of-bounds and explicit nulls */
+				if (f == NULL || f->type != jbvString)
+					ereport(ERROR,
+					  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					   errmsg("invalid statistics format, elements of stavalues must be a string")));
+
+				fstr = JsonbStringValueToCString(f);
+				datum = InputFunctionCall(&finfo, fstr, typioparam, stats->attrtypmod);
+				stats->stavalues[k][e] = datum;
+				pfree(fstr);
+				pfree(f);
+			}
+		}
+	}
 }

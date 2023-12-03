@@ -27,7 +27,9 @@
 #include "parser/parsetree.h"
 #include "statistics/extended_stats_internal.h"
 #include "statistics/statistics.h"
+#include "utils/builtins.h"
 #include "utils/bytea.h"
+#include "utils/float.h"
 #include "utils/fmgroids.h"
 #include "utils/fmgrprotos.h"
 #include "utils/lsyscache.h"
@@ -1828,4 +1830,135 @@ dependencies_clauselist_selectivity(PlannerInfo *root,
 	pfree(unique_exprs);
 
 	return s1;
+}
+
+
+/*
+ * imports functional dependencies between groups of columns
+ *
+ * Generates all possible subsets of columns (variations) and computes
+ * the degree of validity for each one. For example when creating statistics
+ * on three columns (a,b,c) there are 9 possible dependencies
+ *
+ *	   two columns			  three columns
+ *	   -----------			  -------------
+ *	   (a) -> b				  (a,b) -> c
+ *	   (a) -> c				  (a,c) -> b
+ *	   (b) -> a				  (b,c) -> a
+ *	   (b) -> c
+ *	   (c) -> a
+ *	   (c) -> b
+ */
+MVDependencies *
+import_dependencies(JsonbContainer *cont)
+{
+	MVDependencies *dependencies = NULL;
+
+	int			numcombs;
+	int			i;
+
+	/* no dependencies to import */
+	if (cont == NULL)
+		return NULL;
+
+	/*
+	 *
+	 * format example:
+	 *
+	 * "stxdndependencies": <= you are here
+	 *   [
+	 *     {
+	 *       "attnums": [ "2", "-1" ],
+	 *       "degree": "0.500"
+	 *     },
+	 *     ...
+	 *   ]
+	 *
+	 */
+	numcombs = JsonContainerSize(cont);
+
+	/* no dependencies to import */
+	if (numcombs == 0)
+		return NULL;
+
+	dependencies = palloc(offsetof(MVDependencies, deps)
+							+ numcombs * sizeof(MVDependency *));
+
+	dependencies->magic = STATS_DEPS_MAGIC;
+	dependencies->type = STATS_DEPS_TYPE_BASIC;
+	dependencies->ndeps = numcombs;
+
+	for (i = 0; i < numcombs; i++)
+	{
+		MVDependency	   *d = dependencies->deps[i];
+		JsonbValue		   *elem;
+		JsonbContainer	   *dep;
+		JsonbValue		   *attnums;
+		JsonbContainer	   *attnumscont;
+		JsonbValue		   *degree;
+		char			   *degree_str;
+		int					numattnums;
+		int					j;
+
+		elem = getIthJsonbValueFromContainer(cont, i);
+
+		if ((elem->type != jbvBinary) ||
+			(!JsonContainerIsObject(elem->val.binary.data)))
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("invalid statistics format, stxnddependencies elements must be binary objects")));
+
+		dep = elem->val.binary.data;
+		pfree(elem);
+
+		attnums = getKeyJsonValueFromContainer(dep, "attnums", strlen("attnums"), NULL);
+		if ((attnums == NULL) || (attnums->type != jbvBinary) ||
+			(!JsonContainerIsArray(attnums->val.binary.data)))
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("invalid statistics format, stxndependencies must contain attnums array")));
+
+		attnumscont = attnums->val.binary.data;
+		pfree(attnums);
+		numattnums = JsonContainerSize(attnumscont);
+
+		d = palloc(offsetof(MVDependency, attributes)
+							+ numattnums * sizeof(AttrNumber));
+
+		d->nattributes = numattnums;
+
+		for (j = 0; j < numattnums; j++)
+		{
+			JsonbValue	   *attnum;
+			char		   *s;
+
+			attnum = getIthJsonbValueFromContainer(attnumscont, j);
+
+			if (attnum->type != jbvString)
+				ereport(ERROR,
+				  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				   errmsg("invalid statistics format, stxndependencies attnums elements must be strings")));
+
+			s = JsonbStringValueToCString(attnum);
+			pfree(attnum);
+
+			d->attributes[j] = pg_strtoint16(s);
+			pfree(s);
+		}
+
+		degree = getKeyJsonValueFromContainer(dep, "degree", strlen("degree"), NULL);
+		if ((degree == NULL) || (degree->type != jbvString))
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("invalid statistics format, stxndependencies elements must have degree element")));
+
+		degree_str = JsonbStringValueToCString(degree);
+		pfree(degree);
+		d->degree = float8in_internal(degree_str, NULL, "double", degree_str, NULL);
+		pfree(degree_str);
+		dependencies->deps[i] = d;
+	}
+
+
+	return dependencies;
 }

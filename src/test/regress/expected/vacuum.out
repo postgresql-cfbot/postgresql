@@ -508,3 +508,156 @@ RESET ROLE;
 DROP TABLE vacowned;
 DROP TABLE vacowned_parted;
 DROP ROLE regress_vacuum;
+CREATE TYPE stats_import_complex_type AS (
+    a integer,
+    b float,
+    c text,
+    d date,
+    e jsonb);
+CREATE TABLE stats_import_test(
+    id INTEGER PRIMARY KEY,
+    name text,
+    comp stats_import_complex_type
+);
+INSERT INTO stats_import_test
+SELECT 1, 'one', (1, 1.1, 'ONE', '2001-01-01', '{ "xkey": "xval" }')::stats_import_complex_type
+UNION ALL
+SELECT 2, 'two', (2, 2.2, 'TWO', '2002-02-02', '[true, 4, "six"]')::stats_import_complex_type
+UNION ALL
+SELECT 3, 'tre', (3, 3.3, 'TRE', '2003-03-03', NULL)::stats_import_complex_type
+UNION ALL
+SELECT 4, 'four', NULL;
+CREATE INDEX is_odd ON stats_import_test(((comp).a % 2 = 1));
+CREATE STATISTICS oddness ON name, ((comp).a % 2 = 1) FROM stats_import_test;
+ANALYZE stats_import_test;
+CREATE TABLE stats_export AS
+SELECT e.*
+FROM pg_catalog.pg_statistic_export AS e
+WHERE e.schemaname = 'public'
+AND e.relname = 'stats_import_test';
+SELECT c.reltuples AS before_tuples, c.relpages AS before_pages
+FROM pg_class AS c
+WHERE oid = 'stats_import_test'::regclass;
+ before_tuples | before_pages 
+---------------+--------------
+             4 |            1
+(1 row)
+
+-- test settting tuples and pages but no columns
+SELECT pg_import_rel_stats(c.oid, current_setting('server_version_num')::integer,
+                           1000.0, 200, NULL::jsonb)
+FROM pg_class AS c
+WHERE oid = 'stats_import_test'::regclass;
+ pg_import_rel_stats 
+---------------------
+ t
+(1 row)
+
+SELECT c.reltuples AS after_tuples, c.relpages AS after_pages
+FROM pg_class AS c
+WHERE oid = 'stats_import_test'::regclass;
+ after_tuples | after_pages 
+--------------+-------------
+         1000 |         200
+(1 row)
+
+CREATE TEMPORARY TABLE orig_stats
+AS
+SELECT staattnum, stainherit, stanullfrac, stawidth, stadistinct,
+        stakind1, stakind2, stakind3, stakind4, stakind5,
+        staop1, staop2, staop3, staop4, staop5, stacoll1, stacoll2, stacoll3, stacoll4, stacoll5,
+        stanumbers1, stanumbers2, stanumbers3, stanumbers4, stanumbers5,
+        stavalues1::text AS sv1, stavalues2::text AS sv2, stavalues3::text AS sv3,
+        stavalues4::text AS sv4, stavalues5::text AS sv5
+FROM pg_statistic AS s
+WHERE s.starelid = 'stats_import_test'::regclass;
+CREATE TEMPORARY TABLE orig_export
+AS
+SELECT e.*
+FROM stats_export AS e
+WHERE e.schemaname = 'public'
+AND e.relname = 'stats_import_test';
+-- create a table just like stats_import_test
+CREATE TABLE stats_import_clone ( LIKE stats_import_test );
+-- create an index that does not exist on stats_import_test
+CREATE INDEX is_even ON stats_import_clone(((comp).a % 2 = 0));
+-- rename statistics object to allow for a same-named one on the clone
+ALTER STATISTICS oddness RENAME TO oddness_original;
+CREATE STATISTICS oddness ON name, ((comp).a % 2 = 1) FROM stats_import_clone;
+-- copy table stats to clone table
+SELECT pg_import_rel_stats(c.oid, e.server_version_num,
+                            e.n_tuples, e.n_pages, e.stats)
+FROM pg_class AS c
+JOIN pg_namespace AS n
+ON n.oid = c.relnamespace
+JOIN orig_export AS e
+ON e.schemaname = 'public'
+AND e.relname = 'stats_import_test'
+WHERE c.oid = 'stats_import_clone'::regclass;
+ pg_import_rel_stats 
+---------------------
+ t
+(1 row)
+
+-- stats should match
+SELECT staattnum, stainherit, stanullfrac, stawidth, stadistinct,
+        stakind1, stakind2, stakind3, stakind4, stakind5,
+        staop1, staop2, staop3, staop4, staop5, stacoll1, stacoll2, stacoll3, stacoll4, stacoll5,
+        stanumbers1, stanumbers2, stanumbers3, stanumbers4, stanumbers5,
+        stavalues1::text AS sv1, stavalues2::text AS sv2, stavalues3::text AS sv3,
+        stavalues4::text AS sv4, stavalues5::text AS sv5
+FROM pg_statistic AS s
+WHERE s.starelid = 'stats_import_test'::regclass
+EXCEPT
+SELECT staattnum, stainherit, stanullfrac, stawidth, stadistinct,
+        stakind1, stakind2, stakind3, stakind4, stakind5,
+        staop1, staop2, staop3, staop4, staop5, stacoll1, stacoll2, stacoll3, stacoll4, stacoll5,
+        stanumbers1, stanumbers2, stanumbers3, stanumbers4, stanumbers5,
+        stavalues1::text AS sv1, stavalues2::text AS sv2, stavalues3::text AS sv3,
+        stavalues4::text AS sv4, stavalues5::text AS sv5
+FROM pg_statistic AS s
+WHERE s.starelid = 'stats_import_clone'::regclass;
+ staattnum | stainherit | stanullfrac | stawidth | stadistinct | stakind1 | stakind2 | stakind3 | stakind4 | stakind5 | staop1 | staop2 | staop3 | staop4 | staop5 | stacoll1 | stacoll2 | stacoll3 | stacoll4 | stacoll5 | stanumbers1 | stanumbers2 | stanumbers3 | stanumbers4 | stanumbers5 | sv1 | sv2 | sv3 | sv4 | sv5 
+-----------+------------+-------------+----------+-------------+----------+----------+----------+----------+----------+--------+--------+--------+--------+--------+----------+----------+----------+----------+----------+-------------+-------------+-------------+-------------+-------------+-----+-----+-----+-----+-----
+(0 rows)
+
+-- compare all except stxdmcv and oid-related stxdexprs
+SELECT d.stxdinherit, d.stxdndistinct, d.stxddependencies, xpr.xpr
+FROM pg_statistic_ext AS e
+JOIN pg_statistic_ext_data AS d ON d.stxoid = e.oid
+LEFT JOIN LATERAL (
+    SELECT
+        array_agg(ROW(x.staattnum, x.stainherit, x.stanullfrac, x.stawidth,
+                      x.stadistinct, x.stakind1, x.stakind2, x.stakind3,
+                      x.stakind4, x.stakind5, x.stanumbers1, x.stanumbers2,
+                      x.stanumbers3, x.stanumbers4, x.stanumbers5, x.stavalues1,
+                      x.stavalues2, x.stavalues3, x.stavalues4, x.stavalues5
+                      )::text ORDER BY x.ordinality)
+    FROM unnest(d.stxdexpr) WITH ORDINALITY AS x
+) AS xpr(xpr) ON d.stxdexpr IS NOT NULL
+WHERE e.stxrelid = 'stats_import_test'::regclass
+AND e.stxname = 'oddness_original'
+EXCEPT
+SELECT d.stxdinherit, d.stxdndistinct, d.stxddependencies, xpr.xpr
+FROM pg_statistic_ext AS e
+JOIN pg_statistic_ext_data AS d ON d.stxoid = e.oid
+LEFT JOIN LATERAL (
+    SELECT
+        array_agg(ROW(x.staattnum, x.stainherit, x.stanullfrac, x.stawidth,
+                      x.stadistinct, x.stakind1, x.stakind2, x.stakind3,
+                      x.stakind4, x.stakind5, x.stanumbers1, x.stanumbers2,
+                      x.stanumbers3, x.stanumbers4, x.stanumbers5, x.stavalues1,
+                      x.stavalues2, x.stavalues3, x.stavalues4, x.stavalues5
+                      )::text ORDER BY x.ordinality)
+    FROM unnest(d.stxdexpr) WITH ORDINALITY AS x
+) AS xpr(xpr) ON d.stxdexpr IS NOT NULL
+WHERE e.stxrelid = 'stats_import_clone'::regclass
+AND e.stxname = 'oddness';
+ stxdinherit | stxdndistinct | stxddependencies | xpr 
+-------------+---------------+------------------+-----
+(0 rows)
+
+DROP TABLE stats_export;
+DROP TABLE stats_import_clone;
+DROP TABLE stats_import_test;
+DROP TYPE stats_import_complex_type;

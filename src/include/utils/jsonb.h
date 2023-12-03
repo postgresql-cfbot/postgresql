@@ -424,6 +424,8 @@ extern char *JsonbToCStringIndent(StringInfo out, JsonbContainer *in,
 								  int estimated_len);
 extern bool JsonbExtractScalar(JsonbContainer *jbc, JsonbValue *res);
 extern const char *JsonbTypeName(JsonbValue *val);
+extern const char *JsonbContainerTypeName(JsonbContainer *jbc);
+
 
 extern Datum jsonb_set_element(Jsonb *jb, Datum *path, int path_len,
 							   JsonbValue *newval);
@@ -435,5 +437,7 @@ extern Datum jsonb_build_object_worker(int nargs, const Datum *args, const bool 
 									   bool unique_keys);
 extern Datum jsonb_build_array_worker(int nargs, const Datum *args, const bool *nulls,
 									  const Oid *types, bool absent_on_null);
+
+extern char *JsonbStringValueToCString(JsonbValue *j);
 
 #endif							/* __JSONB_H__ */

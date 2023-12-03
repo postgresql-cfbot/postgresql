@@ -24,6 +24,7 @@
 #include "storage/buf.h"
 #include "storage/lock.h"
 #include "utils/relcache.h"
+#include "utils/jsonb.h"
 
 /*
  * Flags for amparallelvacuumoptions to control the participation of bulkdelete
@@ -385,5 +386,8 @@ extern bool std_typanalyze(VacAttrStats *stats);
 extern double anl_random_fract(void);
 extern double anl_init_selection_state(int n);
 extern double anl_get_next_S(double t, int n, double *stateptr);
+
+extern Datum pg_import_rel_stats(PG_FUNCTION_ARGS);
+
 
 #endif							/* VACUUM_H */

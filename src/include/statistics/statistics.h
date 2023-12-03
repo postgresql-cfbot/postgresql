@@ -101,6 +101,7 @@ extern MCVList *statext_mcv_load(Oid mvoid, bool inh);
 extern void BuildRelationExtStatistics(Relation onerel, bool inh, double totalrows,
 									   int numrows, HeapTuple *rows,
 									   int natts, VacAttrStats **vacattrstats);
+
 extern int	ComputeExtStatisticsRows(Relation onerel,
 									 int natts, VacAttrStats **vacattrstats);
 extern bool statext_is_kind_built(HeapTuple htup, char type);
@@ -126,5 +127,14 @@ extern StatisticExtInfo *choose_best_statistics(List *stats, char requiredkind,
 												List **clause_exprs,
 												int nclauses);
 extern HeapTuple statext_expressions_load(Oid stxoid, bool inh, int idx);
+
+extern void ImportVacAttrStats( VacAttrStats *stats, JsonbContainer *cont);
+extern void ImportRelationExtStatistics(Relation onerel, bool inh, int natts,
+										VacAttrStats **vacattrstats,
+										JsonbContainer *cont);
+
+extern char *key_lookup_cstring(JsonbContainer *cont, const char *key);
+extern JsonbContainer *key_lookup_object(JsonbContainer *cont, const char *key);
+extern JsonbContainer *key_lookup_array(JsonbContainer *cont, const char *key);
 
 #endif							/* STATISTICS_H */

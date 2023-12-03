@@ -2636,3 +2636,262 @@ make_build_data(Relation rel, StatExtEntry *stat, int numrows, HeapTuple *rows,
 
 	return result;
 }
+
+/* form an array of pg_statistic rows (per update_attstats) */
+static Datum
+serialize_vacattrstats(VacAttrStats **exprstats, int nexprs)
+{
+	int			exprno;
+	Oid			typOid;
+	Relation	sd;
+
+	ArrayBuildState *astate = NULL;
+
+	sd = table_open(StatisticRelationId, RowExclusiveLock);
+
+	/* lookup OID of composite type for pg_statistic */
+	typOid = get_rel_type_id(StatisticRelationId);
+	if (!OidIsValid(typOid))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("relation \"%s\" does not have a composite type",
+						"pg_statistic")));
+
+	for (exprno = 0; exprno < nexprs; exprno++)
+	{
+		int			i,
+					k;
+		VacAttrStats *stats = exprstats[exprno];
+
+		Datum		values[Natts_pg_statistic];
+		bool		nulls[Natts_pg_statistic];
+		HeapTuple	stup;
+
+		if (!stats->stats_valid)
+		{
+			astate = accumArrayResult(astate,
+									  (Datum) 0,
+									  true,
+									  typOid,
+									  CurrentMemoryContext);
+			continue;
+		}
+
+		/*
+		 * Construct a new pg_statistic tuple
+		 */
+		for (i = 0; i < Natts_pg_statistic; ++i)
+		{
+			nulls[i] = false;
+		}
+
+		values[Anum_pg_statistic_starelid - 1] = ObjectIdGetDatum(InvalidOid);
+		values[Anum_pg_statistic_staattnum - 1] = Int16GetDatum(InvalidAttrNumber);
+		values[Anum_pg_statistic_stainherit - 1] = BoolGetDatum(false);
+		values[Anum_pg_statistic_stanullfrac - 1] = Float4GetDatum(stats->stanullfrac);
+		values[Anum_pg_statistic_stawidth - 1] = Int32GetDatum(stats->stawidth);
+		values[Anum_pg_statistic_stadistinct - 1] = Float4GetDatum(stats->stadistinct);
+		i = Anum_pg_statistic_stakind1 - 1;
+		for (k = 0; k < STATISTIC_NUM_SLOTS; k++)
+		{
+			values[i++] = Int16GetDatum(stats->stakind[k]); /* stakindN */
+		}
+		i = Anum_pg_statistic_staop1 - 1;
+		for (k = 0; k < STATISTIC_NUM_SLOTS; k++)
+		{
+			values[i++] = ObjectIdGetDatum(stats->staop[k]);	/* staopN */
+		}
+		i = Anum_pg_statistic_stacoll1 - 1;
+		for (k = 0; k < STATISTIC_NUM_SLOTS; k++)
+		{
+			values[i++] = ObjectIdGetDatum(stats->stacoll[k]);	/* stacollN */
+		}
+		i = Anum_pg_statistic_stanumbers1 - 1;
+		for (k = 0; k < STATISTIC_NUM_SLOTS; k++)
+		{
+			int			nnum = stats->numnumbers[k];
+
+			if (nnum > 0)
+			{
+				int			n;
+				Datum	   *numdatums = (Datum *) palloc(nnum * sizeof(Datum));
+				ArrayType  *arry;
+
+				for (n = 0; n < nnum; n++)
+					numdatums[n] = Float4GetDatum(stats->stanumbers[k][n]);
+				arry = construct_array_builtin(numdatums, nnum, FLOAT4OID);
+				values[i++] = PointerGetDatum(arry);	/* stanumbersN */
+			}
+			else
+			{
+				nulls[i] = true;
+				values[i++] = (Datum) 0;
+			}
+		}
+		i = Anum_pg_statistic_stavalues1 - 1;
+		for (k = 0; k < STATISTIC_NUM_SLOTS; k++)
+		{
+			if (stats->numvalues[k] > 0)
+			{
+				ArrayType  *arry;
+
+				arry = construct_array(stats->stavalues[k],
+									   stats->numvalues[k],
+									   stats->statypid[k],
+									   stats->statyplen[k],
+									   stats->statypbyval[k],
+									   stats->statypalign[k]);
+				values[i++] = PointerGetDatum(arry);	/* stavaluesN */
+			}
+			else
+			{
+				nulls[i] = true;
+				values[i++] = (Datum) 0;
+			}
+		}
+
+		stup = heap_form_tuple(RelationGetDescr(sd), values, nulls);
+
+		astate = accumArrayResult(astate,
+								  heap_copy_tuple_as_datum(stup, RelationGetDescr(sd)),
+								  false,
+								  typOid,
+								  CurrentMemoryContext);
+	}
+
+	table_close(sd, RowExclusiveLock);
+
+	return makeArrayResult(astate, CurrentMemoryContext);
+}
+
+/*
+ * Import requested extended stats, using the pre-computed (single-column)
+ * stats.
+ *
+ * This fetches a list of stats types from pg_statistic_ext, extracts the
+ * requested stats from the jsonb, and serializes them back into the catalog.
+ */
+void
+ImportRelationExtStatistics(Relation onerel, bool inh,
+						   int natts,
+						   VacAttrStats **vacattrstats,
+						   JsonbContainer *cont)
+{
+	Relation	pg_stext;
+	ListCell   *lc;
+	List	   *statslist;
+
+	/* Do nothing if there are no columns to analyze. */
+	if (!natts)
+		return;
+
+	/* Do nothing if there are no stats to import */
+	if (cont == NULL)
+		return;
+
+	/* the list of stats has to be allocated outside the memory context */
+	pg_stext = table_open(StatisticExtRelationId, RowExclusiveLock);
+	statslist = fetch_statentries_for_relation(pg_stext, RelationGetRelid(onerel));
+
+	/*
+	 * format:
+	 *
+	 * { <= you are here
+	 *   <stat-name>:
+	 *     {
+	 *        "stxkinds": array of single characters (up to 3?),
+	 *        "stxdndistinct": [ {ndistinct}, ... ],
+	 *        "stxdndependencies": [ {dependency}, ... ]
+	 *        "stxdmcv": [ {mcv}, ... ]
+	 *        "stxdexprs" : [ {pg_statistic}, ... ]
+	 *     },
+	 *     ...
+	 * }
+	 */
+
+	foreach(lc, statslist)
+	{
+		StatExtEntry *stat = (StatExtEntry *) lfirst(lc);
+		MVNDistinct *ndistinct = NULL;
+		MVDependencies *dependencies = NULL;
+		MCVList    *mcv = NULL;
+		Datum		exprstats = (Datum) 0;
+		VacAttrStats **stats;
+		JsonbValue	   *exprval;
+		JsonbContainer *attrcont,
+					   *ndistcont,
+					   *depcont,
+					   *exprcont;
+
+		/*
+		 * Check if we can build these stats based on the column analyzed. If
+		 * not, report this fact (except in autovacuum) and move on.
+		 */
+		stats = lookup_var_attr_stats(onerel, stat->columns, stat->exprs,
+									  natts, vacattrstats);
+		if (!stats)
+			continue;
+
+		attrcont = key_lookup_object(cont, stat->name);
+
+		/* staname not found, skip */
+		if (attrcont == NULL)
+			continue;
+
+		ndistcont = key_lookup_array(attrcont, "stxdndistinct");
+
+		if (ndistcont != NULL)
+			ndistinct = import_ndistinct(ndistcont);
+
+		depcont = key_lookup_array(attrcont, "stxdndependencies");
+		if (depcont != NULL)
+			dependencies = import_dependencies(depcont);
+
+		/* TODO mcvcont for "stxdmcv" and import_mcv() */
+
+		exprval = getKeyJsonValueFromContainer(attrcont, "stxdexprs", strlen("stxdexprs"), NULL);
+		if (exprval != NULL)
+		{
+			if (exprval->type != jbvNull)
+			{
+				int	nexprs;
+				int	k;
+
+				if (!JsonContainerIsArray(exprval->val.binary.data))
+			   		errmsg("invalid statistics format, stxndeprs must be array or null");
+
+				exprcont = exprval->val.binary.data;
+
+				nexprs = JsonContainerSize(exprcont);
+
+				for (k = 0; k < nexprs; k++)
+				{
+					JsonbValue *statelem;
+
+					statelem = getIthJsonbValueFromContainer(exprcont, k);
+					if ((statelem->type != jbvBinary) ||
+						(!JsonContainerIsObject(statelem->val.binary.data)))
+						ereport(ERROR,
+						  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						   errmsg("invalid statistics format, stxdexprs elements must be binary objects")));
+
+					ImportVacAttrStats(stats[k], statelem->val.binary.data);
+					pfree(statelem);
+				}
+
+				exprstats = serialize_vacattrstats(stats, nexprs);
+
+			}
+			pfree(exprval);
+		}
+
+
+		/* store the statistics in the catalog */
+		statext_store(stat->statOid, inh,
+					  ndistinct, dependencies, mcv, exprstats, stats);
+	}
+
+	list_free(statslist);
+
+	table_close(pg_stext, RowExclusiveLock);
+}

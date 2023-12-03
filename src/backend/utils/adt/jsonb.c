@@ -160,7 +160,7 @@ jsonb_from_text(text *js, bool unique_keys)
 /*
  * Get the type name of a jsonb container.
  */
-static const char *
+const char *
 JsonbContainerTypeName(JsonbContainer *jbc)
 {
 	JsonbValue	scalar;

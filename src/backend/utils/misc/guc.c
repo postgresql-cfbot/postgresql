@@ -3270,6 +3270,86 @@ parse_and_validate_value(struct config_generic *record,
 	return true;
 }
 
+/*
+ * Helper for pg_config_unitless_value
+ *
+ * Return the the value of the enum at the given index, or NULL if not found.
+ */
+static const char *
+config_enum_lookup_by_value_soft(struct config_enum *record, int val)
+{
+	const struct config_enum_entry *entry;
+
+	for (entry = record->options; entry && entry->name; entry++)
+	{
+		if (entry->val == val)
+			return entry->name;
+	}
+
+	return NULL;
+}
+
+/*
+ * Convert value to unitless value according to the specified GUC variable
+ */
+Datum
+pg_config_unitless_value(PG_FUNCTION_ARGS)
+{
+	char	   *name;
+	char	   *value;
+	struct config_generic *record;
+	const char *result = "";
+	void	   *extra;
+	union config_var_val val;
+	char		buffer[256];
+
+	name = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	value = text_to_cstring(PG_GETARG_TEXT_PP(1));
+
+	record = find_option(name, true, false, ERROR);
+
+	/*
+	 * This function doesn't reveal values of the variables, but be consistent
+	 * with similar functions.
+	 */
+	if ((record->flags & GUC_SUPERUSER_ONLY) &&
+		!ConfigOptionIsVisible(record))
+		ereport(ERROR,
+				errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				errmsg("permission denied to examine \"%s\"", name),
+				errdetail("Only roles with privileges of the \"%s\" role may examine this parameter.",
+						  "pg_read_all_settings"));
+
+	parse_and_validate_value(record, name, value, PGC_S_TEST, WARNING,
+							 &val, &extra);
+
+	switch (record->vartype)
+	{
+		case PGC_BOOL:
+			result = (val.boolval ? "on" : "off");
+			break;
+		case PGC_INT:
+			snprintf(buffer, sizeof(buffer), "%d", val.intval);
+			result = buffer;
+			break;
+		case PGC_REAL:
+			snprintf(buffer, sizeof(buffer), "%g", val.realval);
+			result = buffer;
+			break;
+		case PGC_STRING:
+			result = val.stringval;
+			break;
+		case PGC_ENUM:
+			result = config_enum_lookup_by_value_soft((struct config_enum *) record,
+												 val.intval);
+			break;
+	}
+
+	if (result == NULL)
+		PG_RETURN_NULL();
+
+	PG_RETURN_TEXT_P(cstring_to_text(result));
+}
 
 /*
  * set_config_option: sets option `name' to given value.

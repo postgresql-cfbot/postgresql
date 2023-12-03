@@ -3,6 +3,11 @@
 # For instructions on how to enable the CI integration in a repository and
 # further details, see src/tools/ci/README
 
+# When changes are only in docs or in the READMEs, skip all the tasks.
+#
+# This skip is overriden in 'SanityCheck' and 'Build the Docs' tasks. So,
+# these two tasks might have not been skipped.
+skip: changesIncludeOnly('doc/**', '**/README')
 
 env:
   # The lower depth accelerates git clone. Use a bit of depth so that
@@ -54,12 +59,12 @@ on_failure_meson: &on_failure_meson
 # broken commits, have a minimal task that all others depend on.
 task:
   name: SanityCheck
-
-  # If a specific OS is requested, don't run the sanity check. This shortens
+  # If a specific OS is requested or if there are changes only in the docs
+  # or in the READMEs, don't run the sanity check. This shortens
   # push-wait-for-ci cycle time a bit when debugging operating system specific
   # failures. Uses skip instead of only_if, as cirrus otherwise warns about
   # only_if conditions not matching.
-  skip: $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:.*'
+  skip: $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:.*' || changesIncludeOnly('doc/**', '**/README')
 
   env:
     CPUS: 4
@@ -740,21 +745,6 @@ task:
       make -s -j${BUILD_JOBS} clean
       time make -s -j${BUILD_JOBS} world-bin
 
-  ###
-  # Verify docs can be built
-  ###
-  # XXX: Only do this if there have been changes in doc/ since last build
-  always:
-    docs_build_script: |
-      time ./configure \
-        --cache gcc.cache \
-        CC="ccache gcc" \
-        CXX="ccache g++" \
-        CLANG="ccache clang"
-      make -s -j${BUILD_JOBS} clean
-      time make -s -j${BUILD_JOBS} -C doc
-
-  ###
   # Verify headerscheck / cpluspluscheck succeed
   #
   # - Don't use ccache, the files are uncacheable, polluting ccache's
@@ -774,6 +764,68 @@ task:
       time make -s headerscheck EXTRAFLAGS='-fmax-errors=10'
     headers_cpluspluscheck_script: |
       time make -s cpluspluscheck EXTRAFLAGS='-fmax-errors=10'
+
+  always:
+    upload_caches: ccache
+
+
+task:
+  name: Build the Docs
+  depends_on: SanityCheck
+  # Only run if a specific OS is not requested and if there are changes in docs
+  # or in the CI files.
+  skip: >
+    $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:.*' ||
+    !changesInclude('doc/**',
+                    '.cirrus.yml',
+                    '.cirrus.tasks.yml',
+                    'src/backend/catalog/sql_feature_packages.txt',
+                    'src/backend/catalog/sql_features.txt',
+                    'src/backend/utils/errcodes.txt',
+                    'src/backend/utils/activity/wait_event_names.txt',
+                    'src/backend/utils/activity/generate-wait_event_types.pl',
+                    'src/include/parser/kwlist.h')
+
+  env:
+    CPUS: 4
+    BUILD_JOBS: 4
+    IMAGE_FAMILY: pg-ci-bullseye
+    CCACHE_MAXSIZE: "10M"
+    CCACHE_DIR: "/tmp/ccache_dir"
+
+    LINUX_CONFIGURE_FEATURES: *LINUX_CONFIGURE_FEATURES
+    LINUX_MESON_FEATURES: *LINUX_MESON_FEATURES
+
+  <<: *linux_task_template
+
+  sysinfo_script: |
+    id
+    uname -a
+    cat /proc/cmdline
+    ulimit -a -H && ulimit -a -S
+    gcc -v
+    clang -v
+    export
+
+  ccache_cache:
+    folder: $CCACHE_DIR
+
+  setup_additional_packages_script: |
+    #apt-get update
+    #DEBIAN_FRONTEND=noninteractive apt-get -y install ...
+
+  setup_script: echo "COPT=-Werror" > src/Makefile.custom
+
+  # Verify docs can be built
+  always:
+    docs_build_script: |
+      time ./configure \
+        --cache gcc.cache \
+        CC="ccache gcc" \
+        CXX="ccache g++" \
+        CLANG="ccache clang"
+      make -s -j${BUILD_JOBS} clean
+      time make -s -j${BUILD_JOBS} -C doc
 
   always:
     upload_caches: ccache

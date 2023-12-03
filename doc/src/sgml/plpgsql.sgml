@@ -766,6 +766,40 @@ SELECT merge_fields(t.*) FROM table1 t WHERE ... ;
    </para>
   </sect2>
 
+  <sect2 id="plpgsql-declaration-typearrays">
+   <title>Arrays of Copying Types and Row Types</title>
+
+<synopsis>
+<replaceable>name</replaceable> variable%TYPE[];
+<replaceable>name</replaceable> table_name%ROWTYPE[];
+</synopsis>
+
+   <para>
+    Arrays of Copying Types and Row Types is defined by appending square brackets
+    (<literal>[]</literal>) to the <literal>%TYPE</literal> or <literal>%ROWTYPE</literal>.
+    Its definition is similar to PostgreSQL's arrays described in <xref linkend="arrays"/>.
+    For example:
+<programlisting>
+user_id users.user_id%TYPE[];
+users_row users%ROWTYPE[];
+</programlisting>
+    The syntax allows the exact size of arrays to be specified. However, the current
+    implementation ignores any supplied array size limits, i.e., the behavior is the
+    same as for arrays of unspecified length.
+   </para>
+
+   <para>
+    An alternative syntax, which conforms to the SQL standard by using the keyword
+    <literal>ARRAY</literal>, can be used for one-dimensional or multi-dimensional
+    arrays too:
+<programlisting>
+user_id users.user_id%TYPE ARRAY;
+users_row users%ROWTYPE ARRAY[4][3];
+</programlisting>
+    As before, however, PostgreSQL does not enforce the size restriction in any case.
+   </para>
+  </sect2>
+
   <sect2 id="plpgsql-declaration-records">
    <title>Record Types</title>
 
@@ -793,6 +827,12 @@ SELECT merge_fields(t.*) FROM table1 t WHERE ... ;
     returning <type>record</type> the actual structure is determined when the
     calling query is parsed, whereas a record variable can change its row
     structure on-the-fly.
+   </para>
+
+   <para>
+    The <literal>RECORD</literal> cannot be used for declaration of variable
+    of an array type. "Copying Types" as shown in <xref linkend="plpgsql-declaration-type"/>
+    are not supported too.
    </para>
   </sect2>
 

@@ -2096,6 +2096,29 @@ plpgsql_build_datatype(Oid typeOid, int32 typmod,
 }
 
 /*
+ * Returns an array for type specified as argument.
+ */
+PLpgSQL_type *
+plpgsql_datatype_arrayof(PLpgSQL_type *dtype)
+{
+	Oid			array_typeid;
+
+	if (dtype->typisarray)
+		return dtype;
+
+	array_typeid = get_array_type(dtype->typoid);
+
+	if (!OidIsValid(array_typeid))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("could not find array type for data type \"%s\"",
+						format_type_be(dtype->typoid))));
+
+	return plpgsql_build_datatype(array_typeid, dtype->atttypmod,
+								  dtype->collation, NULL);
+}
+
+/*
  * Utility subroutine to make a PLpgSQL_type struct given a pg_type entry
  * and additional details (see comments for plpgsql_build_datatype).
  */

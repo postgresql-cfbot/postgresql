@@ -2789,7 +2789,7 @@ read_datatype(int tok)
 	StringInfoData ds;
 	char	   *type_name;
 	int			startlocation;
-	PLpgSQL_type *result;
+	PLpgSQL_type *result = NULL;
 	int			parenlevel = 0;
 
 	/* Should only be called while parsing DECLARE sections */
@@ -2817,15 +2817,11 @@ read_datatype(int tok)
 							   K_TYPE, "type"))
 			{
 				result = plpgsql_parse_wordtype(dtname);
-				if (result)
-					return result;
 			}
 			else if (tok_is_keyword(tok, &yylval,
 									K_ROWTYPE, "rowtype"))
 			{
 				result = plpgsql_parse_wordrowtype(dtname);
-				if (result)
-					return result;
 			}
 		}
 	}
@@ -2841,15 +2837,11 @@ read_datatype(int tok)
 							   K_TYPE, "type"))
 			{
 				result = plpgsql_parse_wordtype(dtname);
-				if (result)
-					return result;
 			}
 			else if (tok_is_keyword(tok, &yylval,
 									K_ROWTYPE, "rowtype"))
 			{
 				result = plpgsql_parse_wordrowtype(dtname);
-				if (result)
-					return result;
 			}
 		}
 	}
@@ -2865,17 +2857,59 @@ read_datatype(int tok)
 							   K_TYPE, "type"))
 			{
 				result = plpgsql_parse_cwordtype(dtnames);
-				if (result)
-					return result;
 			}
 			else if (tok_is_keyword(tok, &yylval,
 									K_ROWTYPE, "rowtype"))
 			{
 				result = plpgsql_parse_cwordrowtype(dtnames);
-				if (result)
-					return result;
 			}
 		}
+	}
+
+	/*
+	 * After %TYPE or %ROWTYPE syntax (the result type is known
+	 * already), we should to check syntax of an array declaration.
+	 * Supported syntax is same like SQL parser. Although array's
+	 * dimensions and dimension's sizes can be specified, they are
+	 * ignored.
+	 */
+	if (result)
+	{
+		bool		be_array = false;
+
+		tok = yylex();
+
+		/* Supported syntax: [ ARRAY ] [ '[' [ iconst ] ']' [ ... ] ] */
+		if (tok_is_keyword(tok, &yylval,
+						   K_ARRAY, "array"))
+		{
+			be_array = true;
+			tok = yylex();
+		}
+
+		if (tok == '[')
+		{
+			be_array = true;
+
+			while (tok == '[')
+			{
+				tok = yylex();
+				if (tok == ICONST)
+					tok = yylex();
+
+				if (tok != ']')
+					yyerror("syntax error, expected \"]\"");
+
+				tok = yylex();
+			}
+		}
+
+		plpgsql_push_back_token(tok);
+
+		if (be_array)
+			result = plpgsql_datatype_arrayof(result);
+
+		return result;
 	}
 
 	while (tok != ';')

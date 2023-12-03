@@ -234,6 +234,7 @@ extern List *make_pathkeys_for_sortclauses_extended(PlannerInfo *root,
 													List **sortclauses,
 													List *tlist,
 													bool remove_redundant,
+													bool remove_grouping_set_rtindex,
 													bool *sortable);
 extern void initialize_mergeclause_eclasses(PlannerInfo *root,
 											RestrictInfo *restrictinfo);

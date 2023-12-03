@@ -50,6 +50,7 @@
 #include "optimizer/paramassign.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
+#include "optimizer/placeholder.h"
 #include "optimizer/plancat.h"
 #include "optimizer/planmain.h"
 #include "optimizer/planner.h"
@@ -133,6 +134,9 @@ static Node *preprocess_expression(PlannerInfo *root, Node *expr, int kind);
 static void preprocess_qual_conditions(PlannerInfo *root, Node *jtnode);
 static void grouping_planner(PlannerInfo *root, double tuple_fraction);
 static grouping_sets_data *preprocess_grouping_sets(PlannerInfo *root);
+static void markNullableByGroupingSets(PlannerInfo *root);
+static void markTargetEntryNullable(PlannerInfo *root, TargetEntry *tle,
+									int rtindex);
 static List *remap_to_groupclause_idx(List *groupClause, List *gsets,
 									  int *tleref_to_colnum_map);
 static void preprocess_rowmarks(PlannerInfo *root);
@@ -641,6 +645,7 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	root->plan_params = NIL;
 	root->outer_params = NULL;
 	root->planner_cxt = CurrentMemoryContext;
+	root->nullable_sortgroup_refs = NULL;
 	root->init_plans = NIL;
 	root->cte_plan_ids = NIL;
 	root->multiexpr_params = NIL;
@@ -2031,6 +2036,9 @@ preprocess_grouping_sets(PlannerInfo *root)
 	gd->unsortable_refs = NULL;
 	gd->unsortable_sets = NIL;
 
+	/* Mark the exprs in TargetEntrys nullable by the grouping sets */
+	markNullableByGroupingSets(root);
+
 	/*
 	 * We don't currently make any attempt to optimize the groupClause when
 	 * there are grouping sets, so just duplicate it in processed_groupClause.
@@ -2190,6 +2198,126 @@ preprocess_grouping_sets(PlannerInfo *root)
 	}
 
 	return gd;
+}
+
+/*
+ * If the expression of a TargetEntry is nullable by grouping sets, set its
+ * nullingrels to include the RT index of grouping sets.
+ *
+ * We also compute nullable_sortgroup_refs in this function.
+ */
+static void
+markNullableByGroupingSets(PlannerInfo *root)
+{
+	Query	   *parse = root->parse;
+	ListCell   *lc;
+
+	/* nothing to do if there are no grouping sets */
+	if (parse->groupingSets == NIL)
+		return;
+
+	foreach(lc, parse->groupClause)
+	{
+		SortGroupClause *gc = lfirst_node(SortGroupClause, lc);
+		Index		ref = gc->tleSortGroupRef;
+		ListCell   *l;
+
+		foreach(l, parse->groupingSets)
+		{
+			List   *content = lfirst(l);
+
+			/*
+			 * The current TargetEntry is a group clause but not contained in
+			 * this grouping set, so it would be nulled by the grouping sets.
+			 * Mark it so.
+			 */
+			if (!list_member_int(content, ref))
+			{
+				TargetEntry *tle;
+
+				tle = get_sortgroupref_tle(ref, parse->targetList);
+				markTargetEntryNullable(root, tle, GROUPING_SET_RTINDEX);
+
+				root->nullable_sortgroup_refs =
+					bms_add_member(root->nullable_sortgroup_refs, ref);
+
+				break;
+			}
+		}
+	}
+}
+
+/*
+ * Mark the expr of the given TargetEntry nullable by the 'rtindex'.
+ */
+static void
+markTargetEntryNullable(PlannerInfo *root, TargetEntry *tle, int rtindex)
+{
+	Node   *newnode;
+
+	newnode = (Node *) copyObject(tle->expr);
+	if (IsA(newnode, Var))
+	{
+		Var   *var = (Var *) newnode;
+
+		var->varnullingrels = bms_add_member(var->varnullingrels, rtindex);
+	}
+	else if (IsA(newnode, PlaceHolderVar))
+	{
+		PlaceHolderVar   *phv = (PlaceHolderVar *) newnode;
+
+		phv->phnullingrels = bms_add_member(phv->phnullingrels, rtindex);
+	}
+	else
+	{
+		/*
+		 * XXX Where should we add the nullingrels if tle->expr is neither a
+		 * Var nor a PlaceHolderVar?  Wrap it in a new PlaceHolderVar to carry
+		 * the nullingrels?
+		 */
+
+		Relids	relids = pull_varnos(root, newnode);
+
+		/*
+		 * If tle->expr is not variable-free, we set the nullingrels of Vars or
+		 * PHVs that are contained in the expr.  This is not really 'correct'
+		 * in theory, because it is the whole expression that can be nullable
+		 * by grouping sets, not its individual vars.  But it works in
+		 * practice, because what we need is that the expression can be somehow
+		 * distinguished from the same expression in ECs, and marking its vars
+		 * is sufficient for this purpose.
+		 */
+		if (!bms_is_empty(relids))
+		{
+			newnode = add_nulling_relids(newnode,
+										 relids,
+										 bms_make_singleton(rtindex));
+		}
+		else	/* variable-free? */
+		{
+			/*
+			 * For Const, we can wrap it in a new PlaceHolderVar to carry the
+			 * nullingrels.
+			 */
+			if (IsA(newnode, Const))
+			{
+				PlaceHolderVar *newphv;
+				Relids		phrels =
+					get_relids_in_jointree((Node *) root->parse->jointree,
+										   true, false);
+
+				newphv = make_placeholder_expr(root, (Expr *) newnode, phrels);
+				newphv->phnullingrels =
+					bms_add_member(newphv->phnullingrels, rtindex);
+				newnode = (Node *) newphv;
+			}
+			/*
+			 * TODO What if the variable-free expression is not Const?
+			 */
+		}
+	}
+
+	tle->expr = (Expr *) newnode;
 }
 
 /*
@@ -3434,9 +3562,20 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 
 		if (grouping_is_sortable(groupClause))
 		{
-			root->group_pathkeys = make_pathkeys_for_sortclauses(root,
-																 groupClause,
-																 tlist);
+			bool		sortable;
+
+			/*
+			 * Note that the groupClause is logically below the grouping sets.
+			 * So set remove_grouping_set_rtindex to true.
+			 */
+			root->group_pathkeys =
+				make_pathkeys_for_sortclauses_extended(root,
+													   &groupClause,
+													   tlist,
+													   false,
+													   true,
+													   &sortable);
+			Assert(sortable);
 			root->num_groupby_pathkeys = list_length(root->group_pathkeys);
 		}
 		else
@@ -3462,6 +3601,7 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 												   &root->processed_groupClause,
 												   tlist,
 												   true,
+												   false,
 												   &sortable);
 		if (!sortable)
 		{
@@ -3512,6 +3652,7 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 												   &root->processed_distinctClause,
 												   tlist,
 												   true,
+												   false,
 												   &sortable);
 		if (!sortable)
 			root->distinct_pathkeys = NIL;
@@ -5372,7 +5513,15 @@ make_group_input_target(PlannerInfo *root, PathTarget *final_target)
 		{
 			/*
 			 * It's a grouping column, so add it to the input target as-is.
+			 *
+			 * Note that the target is logically below the grouping sets.  So
+			 * if the grouping expr is nullable by grouping sets, we need to
+			 * remove the RT index of grouping sets from its nullingrels.
 			 */
+			if (bms_is_member(sgref, root->nullable_sortgroup_refs))
+				expr = (Expr *) remove_nulling_relids((Node *) expr,
+													  bms_make_singleton(GROUPING_SET_RTINDEX),
+													  NULL);
 			add_column_to_pathtarget(input_target, expr, sgref);
 		}
 		else
@@ -6053,6 +6202,7 @@ make_pathkeys_for_window(PlannerInfo *root, WindowClause *wc,
 																 &wc->partitionClause,
 																 tlist,
 																 true,
+																 false,
 																 &sortable);
 
 		Assert(sortable);

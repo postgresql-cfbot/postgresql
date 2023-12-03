@@ -26,6 +26,7 @@
 #include "optimizer/subselect.h"
 #include "optimizer/tlist.h"
 #include "parser/parse_relation.h"
+#include "rewrite/rewriteManip.h"
 #include "tcop/utility.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
@@ -2419,14 +2420,29 @@ set_upper_references(PlannerInfo *root, Plan *plan, int rtoffset)
 		/* If it's a sort/group item, first try to match by sortref */
 		if (tle->ressortgroupref != 0)
 		{
+			Expr   *expr = tle->expr;
+
+			/*
+			 * If it's an Agg node for grouping sets, any Vars and PHVs
+			 * appearing here should have nullingrels that include the effects
+			 * of the grouping sets, ie they will have nullingrels equal to the
+			 * input Vars/PHVs' nullingrels plus the RT index of grouping sets.
+			 * In order to perform exact match, we can remove the RT index of
+			 * grouping sets first.
+			 */
+			if (IsA(plan, Agg) &&
+				bms_is_member(tle->ressortgroupref, root->nullable_sortgroup_refs))
+				expr = (Expr *) remove_nulling_relids((Node *) expr,
+													  bms_make_singleton(GROUPING_SET_RTINDEX),
+													  NULL);
 			newexpr = (Node *)
-				search_indexed_tlist_for_sortgroupref(tle->expr,
+				search_indexed_tlist_for_sortgroupref(expr,
 													  tle->ressortgroupref,
 													  subplan_itlist,
 													  OUTER_VAR);
 			if (!newexpr)
 				newexpr = fix_upper_expr(root,
-										 (Node *) tle->expr,
+										 (Node *) expr,
 										 subplan_itlist,
 										 OUTER_VAR,
 										 rtoffset,

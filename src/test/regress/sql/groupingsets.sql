@@ -589,4 +589,42 @@ explain (costs off)
 select (select grouping(v1)) from (values ((select 1))) v(v1) group by v1;
 select (select grouping(v1)) from (values ((select 1))) v(v1) group by v1;
 
+-- expressions nullable by grouping sets
+explain (costs off)
+select distinct on (a, b) a, b
+from (values (1, 1), (2, 2)) as t (a, b) where a = b
+group by grouping sets((a, b), (a))
+order by a, b;
+
+select distinct on (a, b) a, b
+from (values (1, 1), (2, 2)) as t (a, b) where a = b
+group by grouping sets((a, b), (a))
+order by a, b;
+
+explain (costs off)
+select distinct on (a, b+1) a, b+1
+from (values (1, 0), (2, 1)) as t (a, b) where a = b+1
+group by grouping sets((a, b+1), (a))
+order by a, b+1;
+
+select distinct on (a, b+1) a, b+1
+from (values (1, 0), (2, 1)) as t (a, b) where a = b+1
+group by grouping sets((a, b+1), (a))
+order by a, b+1;
+
+explain (costs off)
+select a, b
+from (values (1, 1), (2, 2)) as t (a, b) where a = b
+group by grouping sets((a, b), (a))
+order by a, b nulls first;
+
+select a, b
+from (values (1, 1), (2, 2)) as t (a, b) where a = b
+group by grouping sets((a, b), (a))
+order by a, b nulls first;
+
+explain (costs off)
+select 1 as one group by rollup(one) order by one nulls first;
+select 1 as one group by rollup(one) order by one nulls first;
+
 -- end

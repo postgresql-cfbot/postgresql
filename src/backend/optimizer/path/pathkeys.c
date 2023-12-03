@@ -26,6 +26,7 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "partitioning/partbounds.h"
+#include "rewrite/rewriteManip.h"
 #include "utils/lsyscache.h"
 
 
@@ -1141,6 +1142,7 @@ make_pathkeys_for_sortclauses(PlannerInfo *root,
 													&sortclauses,
 													tlist,
 													false,
+													false,
 													&sortable);
 	/* It's caller error if not all clauses were sortable */
 	Assert(sortable);
@@ -1158,6 +1160,9 @@ make_pathkeys_for_sortclauses(PlannerInfo *root,
  * give rise to redundant pathkeys are removed from the sortclauses list
  * (which therefore must be pass-by-reference in this version).
  *
+ * If remove_grouping_set_rtindex is true, then we need to remove the RT index
+ * of grouping sets from the sort exprs before we make PathKeys for them.
+ *
  * *sortable is set to true if all the sort clauses are in fact sortable.
  * If any are not, they are ignored except for setting *sortable false.
  * (In that case, the output pathkey list isn't really useful.  However,
@@ -1171,6 +1176,7 @@ make_pathkeys_for_sortclauses_extended(PlannerInfo *root,
 									   List **sortclauses,
 									   List *tlist,
 									   bool remove_redundant,
+									   bool remove_grouping_set_rtindex,
 									   bool *sortable)
 {
 	List	   *pathkeys = NIL;
@@ -1189,6 +1195,11 @@ make_pathkeys_for_sortclauses_extended(PlannerInfo *root,
 			*sortable = false;
 			continue;
 		}
+		if (remove_grouping_set_rtindex &&
+			bms_is_member(sortcl->tleSortGroupRef, root->nullable_sortgroup_refs))
+			sortkey = (Expr *) remove_nulling_relids((Node *) sortkey,
+													 bms_make_singleton(GROUPING_SET_RTINDEX),
+													 NULL);
 		pathkey = make_pathkey_from_sortop(root,
 										   sortkey,
 										   sortcl->sortop,

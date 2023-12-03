@@ -1016,6 +1016,17 @@ typedef enum RTEKind
 								 * present during parsing or rewriting */
 } RTEKind;
 
+/*
+ * RT index for grouping sets.
+ *
+ * There might be vars in the target list that are nulled by grouping sets, so
+ * we need a RT index for grouping sets to mark these vars in nullingrels.  In
+ * practice we do not need to create a real RangeTblEntry for grouping sets.
+ *
+ * Here we use 0 because it's not a valid outer join relid.
+ */
+#define GROUPING_SET_RTINDEX	0
+
 typedef struct RangeTblEntry
 {
 	pg_node_attr(custom_read_write, custom_query_jumble)

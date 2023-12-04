@@ -46,7 +46,9 @@
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
 #include "catalog/pg_publication.h"
+#include "catalog/pg_variable.h"
 #include "commands/matview.h"
+#include "commands/session_variable.h"
 #include "commands/trigger.h"
 #include "executor/execdebug.h"
 #include "executor/nodeSubplan.h"
@@ -200,6 +202,63 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	/* We now require all callers to provide sourceText */
 	Assert(queryDesc->sourceText != NULL);
 	estate->es_sourceText = queryDesc->sourceText;
+
+	/*
+	 * The executor doesn't work with session variables directly. Values of
+	 * related session variables are copied to dedicated array, and this array
+	 * is passed to executor.
+	 */
+	if (queryDesc->num_session_variables > 0)
+	{
+		/*
+		 * When a parallel query needs to access query parameters (including
+		 * related session variables), then related session variables are
+		 * restored (deserialized) in queryDesc already. So just push pointer
+		 * of this array to executor's estate.
+		 */
+		Assert(IsParallelWorker());
+		estate->es_session_variables = queryDesc->session_variables;
+		estate->es_num_session_variables = queryDesc->num_session_variables;
+	}
+	else if (queryDesc->plannedstmt->sessionVariables)
+	{
+		ListCell   *lc;
+		int			nSessionVariables;
+		int			i = 0;
+
+		/*
+		 * In this case, the query uses session variables, but we have to
+		 * prepare the array with passed values (of used session variables)
+		 * first.
+		 */
+		Assert(!IsParallelWorker());
+		nSessionVariables = list_length(queryDesc->plannedstmt->sessionVariables);
+
+		/* Create the array used for passing values of used session variables */
+		estate->es_session_variables = (SessionVariableValue *)
+			palloc(nSessionVariables * sizeof(SessionVariableValue));
+
+		/* Fill the array */
+		foreach(lc, queryDesc->plannedstmt->sessionVariables)
+		{
+			AclResult	aclresult;
+			Oid			varid = lfirst_oid(lc);
+
+			aclresult = object_aclcheck(VariableRelationId, varid, GetUserId(), ACL_SELECT);
+			if (aclresult != ACLCHECK_OK)
+				aclcheck_error(aclresult, OBJECT_VARIABLE,
+							   get_session_variable_name(varid));
+
+			estate->es_session_variables[i].varid = varid;
+			estate->es_session_variables[i].value = GetSessionVariable(varid,
+																	   &estate->es_session_variables[i].isnull,
+																	   &estate->es_session_variables[i].typid);
+
+			i++;
+		}
+
+		estate->es_num_session_variables = nSessionVariables;
+	}
 
 	/*
 	 * Fill in the query environment, if any, from queryDesc.

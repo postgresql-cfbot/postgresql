@@ -101,6 +101,12 @@ GRANT <replaceable class="parameter">role_name</replaceable> [, ...] TO <replace
     [ WITH { ADMIN | INHERIT | SET } { OPTION | TRUE | FALSE } ]
     [ GRANTED BY <replaceable class="parameter">role_specification</replaceable> ]
 
+GRANT { SELECT | UPDATE | ALL [ PRIVILEGES ] }
+    ON VARIABLE <replaceable>variable_name</replaceable> [, ...]
+       | ALL VARIABLES IN SCHEMA <replaceable class="parameter">schema_name</replaceable> [, ...] }
+    TO <replaceable class="parameter">role_specification</replaceable> [, ...] [ WITH GRANT OPTION ]
+    [ GRANTED BY <replaceable class="parameter">role_specification</replaceable> ]
+
 <phrase>where <replaceable class="parameter">role_specification</replaceable> can be:</phrase>
 
     [ GROUP ] <replaceable class="parameter">role_name</replaceable>

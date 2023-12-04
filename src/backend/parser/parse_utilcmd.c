@@ -106,6 +106,7 @@ typedef struct
 	List	   *indexes;		/* CREATE INDEX items */
 	List	   *triggers;		/* CREATE TRIGGER items */
 	List	   *grants;			/* GRANT items */
+	List	   *variables;		/* CREATE VARIABLE items */
 } CreateSchemaStmtContext;
 
 
@@ -3944,6 +3945,7 @@ transformCreateSchemaStmtElements(List *schemaElts, const char *schemaName)
 	cxt.indexes = NIL;
 	cxt.triggers = NIL;
 	cxt.grants = NIL;
+	cxt.variables = NIL;
 
 	/*
 	 * Run through each schema element in the schema element list. Separate
@@ -4012,6 +4014,15 @@ transformCreateSchemaStmtElements(List *schemaElts, const char *schemaName)
 				cxt.grants = lappend(cxt.grants, element);
 				break;
 
+			case T_CreateSessionVarStmt:
+				{
+					CreateSessionVarStmt *elp = (CreateSessionVarStmt *) element;
+
+					setSchemaName(cxt.schemaname, &elp->variable->schemaname);
+					cxt.variables = lappend(cxt.variables, element);
+				}
+				break;
+
 			default:
 				elog(ERROR, "unrecognized node type: %d",
 					 (int) nodeTag(element));
@@ -4025,6 +4036,7 @@ transformCreateSchemaStmtElements(List *schemaElts, const char *schemaName)
 	result = list_concat(result, cxt.indexes);
 	result = list_concat(result, cxt.triggers);
 	result = list_concat(result, cxt.grants);
+	result = list_concat(result, cxt.variables);
 
 	return result;
 }

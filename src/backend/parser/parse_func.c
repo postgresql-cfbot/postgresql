@@ -2618,6 +2618,7 @@ check_srf_call_placement(ParseState *pstate, Node *last_srf, int location)
 			break;
 		case EXPR_KIND_COLUMN_DEFAULT:
 		case EXPR_KIND_FUNCTION_DEFAULT:
+		case EXPR_KIND_VARIABLE_DEFAULT:
 			err = _("set-returning functions are not allowed in DEFAULT expressions");
 			break;
 		case EXPR_KIND_INDEX_EXPRESSION:
@@ -2654,6 +2655,8 @@ check_srf_call_placement(ParseState *pstate, Node *last_srf, int location)
 			err = _("set-returning functions are not allowed in column generation expressions");
 			break;
 		case EXPR_KIND_CYCLE_MARK:
+		case EXPR_KIND_ASSIGN_VARIABLE:
+		case EXPR_KIND_LET_TARGET:
 			errkind = true;
 			break;
 

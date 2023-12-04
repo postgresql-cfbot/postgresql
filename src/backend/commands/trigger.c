@@ -2815,10 +2815,11 @@ ExecARDeleteTriggers(EState *estate,
 
 bool
 ExecIRDeleteTriggers(EState *estate, ResultRelInfo *relinfo,
-					 HeapTuple trigtuple)
+					 TupleTableSlot *slot)
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
-	TupleTableSlot *slot = ExecGetTriggerOldSlot(estate, relinfo);
+	HeapTuple	newtuple = NULL;
+	bool		should_free;
 	TriggerData LocTriggerData = {0};
 	int			i;
 
@@ -2828,12 +2829,10 @@ ExecIRDeleteTriggers(EState *estate, ResultRelInfo *relinfo,
 		TRIGGER_EVENT_INSTEAD;
 	LocTriggerData.tg_relation = relinfo->ri_RelationDesc;
 
-	ExecForceStoreHeapTuple(trigtuple, slot, false);
-
 	for (i = 0; i < trigdesc->numtriggers; i++)
 	{
-		HeapTuple	rettuple;
 		Trigger    *trigger = &trigdesc->triggers[i];
+		HeapTuple	oldtuple;
 
 		if (!TRIGGER_TYPE_MATCHES(trigger->tgtype,
 								  TRIGGER_TYPE_ROW,
@@ -2844,18 +2843,33 @@ ExecIRDeleteTriggers(EState *estate, ResultRelInfo *relinfo,
 							NULL, slot, NULL))
 			continue;
 
+		if (!newtuple)
+			newtuple = ExecFetchSlotHeapTuple(slot, true, &should_free);
+
 		LocTriggerData.tg_trigslot = slot;
-		LocTriggerData.tg_trigtuple = trigtuple;
+		LocTriggerData.tg_trigtuple = oldtuple = newtuple;
 		LocTriggerData.tg_trigger = trigger;
-		rettuple = ExecCallTriggerFunc(&LocTriggerData,
+		newtuple = ExecCallTriggerFunc(&LocTriggerData,
 									   i,
 									   relinfo->ri_TrigFunctions,
 									   relinfo->ri_TrigInstrument,
 									   GetPerTupleMemoryContext(estate));
-		if (rettuple == NULL)
+		if (newtuple == NULL)
+		{
+			if (should_free)
+				heap_freetuple(oldtuple);
 			return false;		/* Delete was suppressed */
-		if (rettuple != trigtuple)
-			heap_freetuple(rettuple);
+		}
+		else if (newtuple != oldtuple)
+		{
+			ExecForceStoreHeapTuple(newtuple, slot, false);
+
+			if (should_free)
+				heap_freetuple(oldtuple);
+
+			/* signal tuple should be re-fetched if used */
+			newtuple = NULL;
+		}
 	}
 	return true;
 }

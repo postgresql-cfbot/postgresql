@@ -1385,6 +1385,15 @@ end;
 $$;
 CREATE TRIGGER city_update_trig INSTEAD OF UPDATE ON city_view
 FOR EACH ROW EXECUTE PROCEDURE city_update();
+CREATE VIEW static_view AS SELECT 1 AS a;
+CREATE FUNCTION static_view_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+begin
+    OLD.a := OLD.a + 3;
+    RETURN OLD;
+end;
+$$;
+CREATE TRIGGER static_delete_trig INSTEAD OF DELETE ON static_view
+FOR EACH ROW EXECUTE PROCEDURE static_view_delete();
 \set QUIET false
 -- INSERT .. RETURNING
 INSERT INTO city_view(city_name) VALUES('Tokyo') RETURNING *;
@@ -1476,6 +1485,13 @@ DELETE FROM city_view WHERE city_name = 'Birmingham' RETURNING *;
  city_id | city_name  | population | country_name | continent 
 ---------+------------+------------+--------------+-----------
   234567 | Birmingham |    1016800 | UK           | Europe
+(1 row)
+
+DELETE 1
+DELETE FROM static_view RETURNING *;
+ a 
+---
+ 4
 (1 row)
 
 DELETE 1

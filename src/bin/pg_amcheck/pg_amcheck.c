@@ -989,6 +989,7 @@ should_processing_continue(PGresult *res)
 		case PGRES_COPY_IN:
 		case PGRES_COPY_BOTH:
 		case PGRES_SINGLE_TUPLE:
+		case PGRES_TUPLES_CHUNK:
 		case PGRES_PIPELINE_SYNC:
 		case PGRES_PIPELINE_ABORTED:
 			return false;

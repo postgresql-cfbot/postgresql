@@ -85,7 +85,8 @@ extern MemoryContext MemoryContextGetParent(MemoryContext context);
 extern bool MemoryContextIsEmpty(MemoryContext context);
 extern Size MemoryContextMemAllocated(MemoryContext context, bool recurse);
 extern void MemoryContextStats(MemoryContext context);
-extern void MemoryContextStatsDetail(MemoryContext context, int max_children,
+extern void MemoryContextStatsDetail(MemoryContext context,
+									 int max_level, int max_children,
 									 bool print_to_stderr);
 extern void MemoryContextAllowInCriticalSection(MemoryContext context,
 												bool allow);

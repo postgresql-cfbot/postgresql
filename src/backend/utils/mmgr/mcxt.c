@@ -149,9 +149,10 @@ MemoryContext CurTransactionContext = NULL;
 /* This is a transient link to the active portal's memory context: */
 MemoryContext PortalContext = NULL;
 
+static void MemoryContextDeleteOnly(MemoryContext context);
 static void MemoryContextCallResetCallbacks(MemoryContext context);
 static void MemoryContextStatsInternal(MemoryContext context, int level,
-									   bool print, int max_children,
+									   int max_level, int max_children,
 									   MemoryContextCounters *totals,
 									   bool print_to_stderr);
 static void MemoryContextStatsPrint(MemoryContext context, void *passthru,
@@ -258,6 +259,41 @@ BogusGetChunkSpace(void *pointer)
 	elog(ERROR, "GetMemoryChunkSpace called with invalid pointer %p (header 0x%016llx)",
 		 pointer, (unsigned long long) GetMemoryChunkHeader(pointer));
 	return 0;					/* keep compiler quiet */
+}
+
+/*
+ * MemoryContextTraverse
+ *		Helper function to traverse all descendants of a memory context
+ *		without recursion.
+ *
+ * Recursion could lead to out-of-stack errors with deep context hierarchies,
+ * which would be unpleasant in error cleanup code paths.
+ *
+ * To process 'context' and all its descendants, use a loop like this:
+ *
+ *     <process 'context'>
+ *     for (MemoryContext curr = context->firstchild;
+ *          curr != NULL;
+ *          curr = MemoryContextTraverse(curr, context))
+ *     {
+ *         <process 'curr'>
+ *     }
+ *
+ * This visits all the contexts in preorder.
+ */
+static MemoryContext
+MemoryContextTraverse(MemoryContext curr, MemoryContext top)
+{
+	if (curr->firstchild != NULL)
+		return curr->firstchild;
+
+	while (curr->nextchild == NULL)
+	{
+		curr = curr->parent;
+		if (curr == top)
+			return NULL;
+	}
+	return curr->nextchild;
 }
 
 
@@ -379,14 +415,13 @@ MemoryContextResetOnly(MemoryContext context)
 void
 MemoryContextResetChildren(MemoryContext context)
 {
-	MemoryContext child;
-
 	Assert(MemoryContextIsValid(context));
 
-	for (child = context->firstchild; child != NULL; child = child->nextchild)
+	for (MemoryContext curr = context->firstchild;
+		 curr != NULL;
+		 curr = MemoryContextTraverse(curr, context))
 	{
-		MemoryContextResetChildren(child);
-		MemoryContextResetOnly(child);
+		MemoryContextResetOnly(curr);
 	}
 }
 
@@ -402,15 +437,52 @@ MemoryContextResetChildren(MemoryContext context)
 void
 MemoryContextDelete(MemoryContext context)
 {
+	MemoryContext curr;
+
+	/*
+	 * Delete subcontexts from the bottom up.
+	 *
+	 * Note: Do not use recursion here.  A "stack depth limit exceeded" error
+	 * would be unpleasant if we're already in the process of cleaning up from
+	 * transaction abort.  We also cannot use MemoryContextTraverse() here
+	 * because we modify the tree as we go.
+	 */
+	curr = context;
+	for (;;)
+	{
+		MemoryContext parent;
+
+		/* Descend down until we find a leaf context with no children */
+		while (curr->firstchild != NULL)
+			curr = curr->firstchild;
+
+		/*
+		 * We're now at a leaf with no children. Free it and continue from the
+		 * parent.  Or if this was the original node, we're all done.
+		 */
+		parent = curr->parent;
+		MemoryContextDeleteOnly(curr);
+
+		if (curr == context)
+			break;
+		curr = parent;
+	}
+}
+
+/*
+ * Subroutine of MemoryContextDelete, to delete a context that has no
+ * children.
+ */
+static void
+MemoryContextDeleteOnly(MemoryContext context)
+{
 	Assert(MemoryContextIsValid(context));
 	/* We had better not be deleting TopMemoryContext ... */
 	Assert(context != TopMemoryContext);
 	/* And not CurrentMemoryContext, either */
 	Assert(context != CurrentMemoryContext);
-
-	/* save a function call in common case where there are no children */
-	if (context->firstchild != NULL)
-		MemoryContextDeleteChildren(context);
+	/* All the children should've been deleted already */
+	Assert(context->firstchild == NULL);
 
 	/*
 	 * It's not entirely clear whether 'tis better to do this before or after
@@ -676,12 +748,12 @@ MemoryContextMemAllocated(MemoryContext context, bool recurse)
 
 	if (recurse)
 	{
-		MemoryContext child;
-
-		for (child = context->firstchild;
-			 child != NULL;
-			 child = child->nextchild)
-			total += MemoryContextMemAllocated(child, true);
+		for (MemoryContext curr = context->firstchild;
+			 curr != NULL;
+			 curr = MemoryContextTraverse(curr, context))
+		{
+			total += curr->mem_allocated;
+		}
 	}
 
 	return total;
@@ -698,8 +770,8 @@ MemoryContextMemAllocated(MemoryContext context, bool recurse)
 void
 MemoryContextStats(MemoryContext context)
 {
-	/* A hard-wired limit on the number of children is usually good enough */
-	MemoryContextStatsDetail(context, 100, true);
+	/* Hard-wired limits are usually good enough */
+	MemoryContextStatsDetail(context, 100, 100, true);
 }
 
 /*
@@ -711,14 +783,15 @@ MemoryContextStats(MemoryContext context)
  * with fprintf(stderr), otherwise use ereport().
  */
 void
-MemoryContextStatsDetail(MemoryContext context, int max_children,
+MemoryContextStatsDetail(MemoryContext context,
+						 int max_level, int max_children,
 						 bool print_to_stderr)
 {
 	MemoryContextCounters grand_totals;
 
 	memset(&grand_totals, 0, sizeof(grand_totals));
 
-	MemoryContextStatsInternal(context, 0, true, max_children, &grand_totals, print_to_stderr);
+	MemoryContextStatsInternal(context, 0, max_level, max_children, &grand_totals, print_to_stderr);
 
 	if (print_to_stderr)
 		fprintf(stderr,
@@ -756,77 +829,88 @@ MemoryContextStatsDetail(MemoryContext context, int max_children,
  */
 static void
 MemoryContextStatsInternal(MemoryContext context, int level,
-						   bool print, int max_children,
+						   int max_level, int max_children,
 						   MemoryContextCounters *totals,
 						   bool print_to_stderr)
 {
-	MemoryContextCounters local_totals;
 	MemoryContext child;
 	int			ichild;
 
 	Assert(MemoryContextIsValid(context));
 
 	/* Examine the context itself */
-	context->methods->stats(context,
-							print ? MemoryContextStatsPrint : NULL,
-							(void *) &level,
-							totals, print_to_stderr);
-
-	/*
-	 * Examine children.  If there are more than max_children of them, we do
-	 * not print the rest explicitly, but just summarize them.
-	 */
-	memset(&local_totals, 0, sizeof(local_totals));
-
-	for (child = context->firstchild, ichild = 0;
-		 child != NULL;
-		 child = child->nextchild, ichild++)
 	{
-		if (ichild < max_children)
-			MemoryContextStatsInternal(child, level + 1,
-									   print, max_children,
-									   totals,
-									   print_to_stderr);
-		else
-			MemoryContextStatsInternal(child, level + 1,
-									   false, max_children,
-									   &local_totals,
-									   print_to_stderr);
+		context->methods->stats(context,
+								MemoryContextStatsPrint,
+								(void *) &level,
+								totals,
+								print_to_stderr);
 	}
 
-	/* Deal with excess children */
-	if (ichild > max_children)
+	/*
+	 * Examine children.
+	 *
+	 * If we are past the recursion depth limit or already running low on
+	 * stack, do not print them explicitly but just summarize them. Similarly,
+	 * if there are more than max_children of them, we do not print the rest
+	 * explicitly, but just summarize them.
+	 */
+	ichild = 0;
+	child = context->firstchild;
+	if (level < max_level && !stack_is_too_deep())
 	{
-		if (print)
+		for (; child != NULL && ichild < max_children;
+			 child = child->nextchild)
 		{
-			if (print_to_stderr)
-			{
-				int			i;
-
-				for (i = 0; i <= level; i++)
-					fprintf(stderr, "  ");
-				fprintf(stderr,
-						"%d more child contexts containing %zu total in %zu blocks; %zu free (%zu chunks); %zu used\n",
-						ichild - max_children,
-						local_totals.totalspace,
-						local_totals.nblocks,
-						local_totals.freespace,
-						local_totals.freechunks,
-						local_totals.totalspace - local_totals.freespace);
-			}
-			else
-				ereport(LOG_SERVER_ONLY,
-						(errhidestmt(true),
-						 errhidecontext(true),
-						 errmsg_internal("level: %d; %d more child contexts containing %zu total in %zu blocks; %zu free (%zu chunks); %zu used",
-										 level,
-										 ichild - max_children,
-										 local_totals.totalspace,
-										 local_totals.nblocks,
-										 local_totals.freespace,
-										 local_totals.freechunks,
-										 local_totals.totalspace - local_totals.freespace)));
+			MemoryContextStatsInternal(child, level + 1,
+									   max_level, max_children,
+									   totals,
+									   print_to_stderr);
+			ichild++;
 		}
+	}
+
+	if (child != NULL)
+	{
+		/* Summarize the rest of the children, avoiding recursion. */
+		MemoryContextCounters local_totals;
+
+		memset(&local_totals, 0, sizeof(local_totals));
+
+		while (child != NULL)
+		{
+			child->methods->stats(child, NULL, NULL, &local_totals, print_to_stderr);
+			child = MemoryContextTraverse(child, context);
+			ichild++;
+		}
+
+		if (print_to_stderr)
+		{
+			int			i;
+
+			for (i = 0; i <= level; i++)
+				fprintf(stderr, "  ");
+			fprintf(stderr,
+					"%d more child contexts containing %zu total in %zu blocks; %zu free (%zu chunks); %zu used\n",
+					ichild - max_children,
+					local_totals.totalspace,
+					local_totals.nblocks,
+					local_totals.freespace,
+					local_totals.freechunks,
+					local_totals.totalspace - local_totals.freespace);
+		}
+		else
+			ereport(LOG_SERVER_ONLY,
+					(errhidestmt(true),
+					 errhidecontext(true),
+					 errmsg_internal("level: %d; %d more child contexts containing %zu total in %zu blocks; %zu free (%zu chunks); %zu used",
+									 level,
+									 ichild - max_children,
+									 local_totals.totalspace,
+									 local_totals.nblocks,
+									 local_totals.freespace,
+									 local_totals.freechunks,
+									 local_totals.totalspace - local_totals.freespace)));
 
 		if (totals)
 		{
@@ -847,8 +931,7 @@ MemoryContextStatsInternal(MemoryContext context, int level,
  */
 static void
 MemoryContextStatsPrint(MemoryContext context, void *passthru,
-						const char *stats_string,
-						bool print_to_stderr)
+						const char *stats_string, bool print_to_stderr)
 {
 	int			level = *(int *) passthru;
 	const char *name = context->name;
@@ -927,13 +1010,15 @@ MemoryContextStatsPrint(MemoryContext context, void *passthru,
 void
 MemoryContextCheck(MemoryContext context)
 {
-	MemoryContext child;
-
 	Assert(MemoryContextIsValid(context));
-
 	context->methods->check(context);
-	for (child = context->firstchild; child != NULL; child = child->nextchild)
-		MemoryContextCheck(child);
+
+	for (MemoryContext curr = context->firstchild;
+		 curr != NULL;
+		 curr = MemoryContextTraverse(curr, context))
+	{
+		curr->methods->check(curr);
+	}
 }
 #endif
 
@@ -1212,14 +1297,15 @@ ProcessLogMemoryContextInterrupt(void)
 	/*
 	 * When a backend process is consuming huge memory, logging all its memory
 	 * contexts might overrun available disk space. To prevent this, we limit
-	 * the number of child contexts to log per parent to 100.
+	 * the depth of the hierarchy, as well as the number of child contexts to
+	 * log per parent to 100.
 	 *
 	 * As with MemoryContextStats(), we suppose that practical cases where the
 	 * dump gets long will typically be huge numbers of siblings under the
 	 * same parent context; while the additional debugging value from seeing
 	 * details about individual siblings beyond 100 will not be large.
 	 */
-	MemoryContextStatsDetail(TopMemoryContext, 100, false);
+	MemoryContextStatsDetail(TopMemoryContext, 100, 100, false);
 }
 
 void *

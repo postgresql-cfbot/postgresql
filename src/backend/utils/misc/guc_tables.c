@@ -28,6 +28,7 @@
 
 #include "access/commit_ts.h"
 #include "access/gin.h"
+#include "access/slru.h"
 #include "access/toast_compression.h"
 #include "access/twophase.h"
 #include "access/xlog_internal.h"
@@ -2285,6 +2286,82 @@ struct config_int ConfigureNamesInt[] =
 		&shared_memory_size_in_huge_pages,
 		-1, -1, INT_MAX,
 		NULL, NULL, NULL
+	},
+
+	{
+		{"multixact_offsets_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of shared memory buffers used for the MultiXact offset SLRU cache."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&multixact_offsets_buffers,
+		64, 16, SLRU_MAX_ALLOWED_BUFFERS,
+		check_multixact_offsets_buffers, NULL, NULL
+	},
+
+	{
+		{"multixact_members_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of shared memory buffers used for the MultiXact member SLRU cache."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&multixact_members_buffers,
+		64, 16, SLRU_MAX_ALLOWED_BUFFERS,
+		check_multixact_members_buffers, NULL, NULL
+	},
+
+	{
+		{"subtrans_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of shared memory buffers used for the sub-transaction SLRU cache."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&subtrans_buffers,
+		64, 16, SLRU_MAX_ALLOWED_BUFFERS,
+		check_subtrans_buffers, NULL, NULL
+	},
+	{
+		{"notify_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of shared memory buffers used for the NOTIFY message SLRU cache."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&notify_buffers,
+		64, 16, SLRU_MAX_ALLOWED_BUFFERS,
+		check_notify_buffers, NULL, NULL
+	},
+
+	{
+		{"serial_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of shared memory buffers used for the serializable transaction SLRU cache."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&serial_buffers,
+		64, 16, SLRU_MAX_ALLOWED_BUFFERS,
+		check_serial_buffers, NULL, NULL
+	},
+
+	{
+		{"xact_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of shared memory buffers used for the transaction status SLRU cache."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&xact_buffers,
+		64, 0, SLRU_MAX_ALLOWED_BUFFERS,
+		check_xact_buffers, NULL, show_xact_buffers
+	},
+
+	{
+		{"commit_ts_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the size of the dedicated buffer pool used for the commit timestamp SLRU cache."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&commit_ts_buffers,
+		64, 0, SLRU_MAX_ALLOWED_BUFFERS,
+		check_commit_ts_buffers, NULL, show_commit_ts_buffers
 	},
 
 	{

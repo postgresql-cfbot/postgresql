@@ -190,6 +190,20 @@ static const char *const BuiltinTrancheNames[] = {
 	"LogicalRepLauncherDSA",
 	/* LWTRANCHE_LAUNCHER_HASH: */
 	"LogicalRepLauncherHash",
+	/* LWTRANCHE_XACT_SLRU: */
+	"XactSLRU",
+	/* LWTRANCHE_COMMITTS_SLRU: */
+	"CommitTSSLRU",
+	/* LWTRANCHE_SUBTRANS_SLRU: */
+	"SubtransSLRU",
+	/* LWTRANCHE_MULTIXACTOFFSET_SLRU: */
+	"MultixactOffsetSLRU",
+	/* LWTRANCHE_MULTIXACTMEMBER_SLRU: */
+	"MultixactMemberSLRU",
+	/* LWTRANCHE_NOTIFY_SLRU: */
+	"NotifySLRU",
+	/* LWTRANCHE_SERIAL_SLRU: */
+	"SerialSLRU"
 };
 
 StaticAssertDecl(lengthof(BuiltinTrancheNames) ==

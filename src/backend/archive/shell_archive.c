@@ -66,9 +66,6 @@ shell_archive_file(ArchiveModuleState *state, const char *file,
 											   "archive_command", "fp",
 											   file, nativePath);
 
-	if (nativePath)
-		pfree(nativePath);
-
 	ereport(DEBUG3,
 			(errmsg_internal("executing archive command \"%s\"",
 							 xlogarchcmd)));
@@ -126,8 +123,6 @@ shell_archive_file(ArchiveModuleState *state, const char *file,
 
 		return false;
 	}
-
-	pfree(xlogarchcmd);
 
 	elog(DEBUG1, "archived write-ahead log file \"%s\"", file);
 	return true;

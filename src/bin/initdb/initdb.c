@@ -2775,26 +2775,17 @@ void
 setup_signals(void)
 {
 	/* some of these are not valid on Windows */
-#ifdef SIGHUP
-	pqsignal(SIGHUP, trapsig);
-#endif
-#ifdef SIGINT
-	pqsignal(SIGINT, trapsig);
-#endif
-#ifdef SIGQUIT
-	pqsignal(SIGQUIT, trapsig);
-#endif
-#ifdef SIGTERM
 	pqsignal(SIGTERM, trapsig);
-#endif
+
+#ifndef WIN32
+	pqsignal(SIGINT, trapsig);
+	pqsignal(SIGHUP, trapsig);
+	pqsignal(SIGQUIT, trapsig);
 
 	/* Ignore SIGPIPE when writing to backend, so we can clean up */
-#ifdef SIGPIPE
 	pqsignal(SIGPIPE, SIG_IGN);
-#endif
 
 	/* Prevent SIGSYS so we can probe for kernel calls that might not work */
-#ifdef SIGSYS
 	pqsignal(SIGSYS, SIG_IGN);
 #endif
 }

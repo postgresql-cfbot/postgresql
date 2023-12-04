@@ -307,7 +307,7 @@ ExecScanSubPlan(SubPlanState *node,
 		Datum		rowresult;
 		bool		rownull;
 		int			col;
-		ListCell   *plst;
+		int			paramid;
 
 		if (subLinkType == EXISTS_SUBLINK)
 		{
@@ -367,9 +367,8 @@ ExecScanSubPlan(SubPlanState *node,
 			 * Now set all the setParam params from the columns of the tuple
 			 */
 			col = 1;
-			foreach(plst, subplan->setParam)
+			for_each_int(paramid, subplan->setParam)
 			{
-				int			paramid = lfirst_int(plst);
 				ParamExecData *prmdata;
 
 				prmdata = &(econtext->ecxt_param_exec_vals[paramid]);
@@ -412,9 +411,8 @@ ExecScanSubPlan(SubPlanState *node,
 		 * combining expression.
 		 */
 		col = 1;
-		foreach(plst, subplan->paramIds)
+		for_each_int(paramid, subplan->paramIds)
 		{
-			int			paramid = lfirst_int(plst);
 			ParamExecData *prmdata;
 
 			prmdata = &(econtext->ecxt_param_exec_vals[paramid]);
@@ -480,10 +478,11 @@ ExecScanSubPlan(SubPlanState *node,
 		}
 		else if (subLinkType == MULTIEXPR_SUBLINK)
 		{
+			int			paramid;
+
 			/* We don't care about function result, but set the setParams */
-			foreach(l, subplan->setParam)
+			for_each_int(paramid, subplan->setParam)
 			{
-				int			paramid = lfirst_int(l);
 				ParamExecData *prmdata;
 
 				prmdata = &(econtext->ecxt_param_exec_vals[paramid]);
@@ -604,16 +603,15 @@ buildSubPlanHash(SubPlanState *node, ExprContext *econtext)
 		 slot = ExecProcNode(planstate))
 	{
 		int			col = 1;
-		ListCell   *plst;
 		bool		isnew;
+		int			paramid;
 
 		/*
 		 * Load up the Params representing the raw sub-select outputs, then
 		 * form the projection tuple to store in the hashtable.
 		 */
-		foreach(plst, subplan->paramIds)
+		for_each_int(paramid, subplan->paramIds)
 		{
-			int			paramid = lfirst_int(plst);
 			ParamExecData *prmdata;
 
 			prmdata = &(innerecontext->ecxt_param_exec_vals[paramid]);
@@ -880,11 +878,10 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 	if (subplan->setParam != NIL && subplan->parParam == NIL &&
 		subplan->subLinkType != CTE_SUBLINK)
 	{
-		ListCell   *lst;
+		int			paramid;
 
-		foreach(lst, subplan->setParam)
+		for_each_int(paramid, subplan->setParam)
 		{
-			int			paramid = lfirst_int(lst);
 			ParamExecData *prm = &(estate->es_param_exec_vals[paramid]);
 
 			prm->execPlan = sstate;
@@ -906,7 +903,7 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 		List	   *oplist,
 				   *lefttlist,
 				   *righttlist;
-		ListCell   *l;
+		OpExpr	   *opexpr;
 
 		/* We need a memory context to hold the hash table(s) */
 		sstate->hashtablecxt =
@@ -966,9 +963,8 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 		cross_eq_funcoids = (Oid *) palloc(ncols * sizeof(Oid));
 
 		i = 1;
-		foreach(l, oplist)
+		for_each_node(OpExpr, opexpr, oplist)
 		{
-			OpExpr	   *opexpr = lfirst_node(OpExpr, l);
 			Expr	   *expr;
 			TargetEntry *tle;
 			Oid			rhs_eq_oper;

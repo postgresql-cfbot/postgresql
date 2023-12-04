@@ -416,7 +416,6 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 		TimestampTz last_start_time;
 	};
 	static HTAB *last_start_times = NULL;
-	ListCell   *lc;
 	bool		started_tx = false;
 	bool		should_exit = false;
 
@@ -453,10 +452,8 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 	/*
 	 * Process all tables that are being synchronized.
 	 */
-	foreach(lc, table_states_not_ready)
+	for_each_object(SubscriptionRelState, rstate, table_states_not_ready)
 	{
-		SubscriptionRelState *rstate = (SubscriptionRelState *) lfirst(lc);
-
 		if (rstate->state == SUBREL_STATE_SYNCDONE)
 		{
 			/*

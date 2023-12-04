@@ -383,13 +383,14 @@ lnext(const List *l, const ListCell *c)
  *	  delete the current list element from the List associated with a
  *	  surrounding foreach() loop, returning the new List pointer.
  *
- * This is equivalent to list_delete_cell(), but it also adjusts the foreach
- * loop's state so that no list elements will be missed.  Do not delete
- * elements from an active foreach loop's list in any other way!
+ * This is similar to list_delete_cell(), but it also works when using
+ * for_each_xyz macros that don't require passing in a "ListCell *".
+ * Furthermore it adjusts the foreach loop's state so that no list elements
+ * will be missed. Do not delete elements from an active foreach loop's list in
+ * any other way!
  */
-#define foreach_delete_current(lst, cell)	\
-	(cell##__state.i--, \
-	 (List *) (cell##__state.l = list_delete_cell(lst, cell)))
+#define foreach_delete_current(lst, var)	\
+	((List *) (var##__state.l = list_delete_cell(lst, &var##__state.l->elements[var##__state.i--])))
 
 /*
  * foreach_current_index -
@@ -451,6 +452,127 @@ for_each_cell_setup(const List *lst, const ListCell *initcell)
 
 	return r;
 }
+
+/*
+ * for_each_ptr -
+ *	  a convenience macro which loops through a list of pointers without
+ *	  needing a "ListCell *", just a declared pointer variable to store the
+ *	  current pointer int;
+ *
+ * Unlike with foreach() it's not possible to detect if an early "break"
+ * occured by checking the value of the loop variable at the end of the loop.
+ * If you need this, it's recommended to use foreach() instead or manually keep
+ * track of a break occured using a boolean flag variable called e.g. "found".
+ *
+ * The caveats for foreach() apply equally here.
+ */
+#define for_each_ptr(var, lst) \
+	for (ForEachState var##__state = {(lst), 0}; \
+		 (var##__state.l != NIL && \
+		  var##__state.i < var##__state.l->length && \
+		  (var = lfirst(&var##__state.l->elements[var##__state.i]), true));\
+		 var##__state.i++)
+
+/*
+ * for_each_object -
+ *	  a convenience macro which loops through a list of pointers without
+ *	  needing a "ListCell *" only a type and variable name. It automatically
+ *	  declares a loop variable with the given name and type;
+ *
+ * Unlike with foreach() it's not possible to detect if an early "break"
+ * occured by checking the value of the loop variable at the end of the loop.
+ * If you need this, it's recommended to use foreach() instead or manually keep
+ * track of a break occured using a boolean flag variable called e.g. "found".
+ *
+ * The caveats for foreach() apply equally here.
+ */
+#define for_each_object(type, var, lst) \
+	for (type * var = NULL, *var##__outerloop = (type *) 1; \
+		 var##__outerloop; \
+		 var##__outerloop = NULL) \
+		for (ForEachState var##__state = {(lst), 0}; \
+			 (var##__state.l != NIL && \
+			  var##__state.i < var##__state.l->length && \
+			  (var = lfirst(&var##__state.l->elements[var##__state.i]), true));\
+			 var##__state.i++)
+
+/*
+ * for_each_int -
+ *	  a convenience macro which loops through a list of ints without needing a
+ *	  "ListCell *", just a declared int variable to store the current int in.
+ *
+ * Unlike with foreach() it's not possible to detect if an early "break"
+ * occured by checking the value of the loop variable at the end of the loop.
+ * If you need this, it's recommended to use foreach() instead or manually keep
+ * track of a break occured using a boolean flag variable called e.g. "found".
+ *
+ * The caveats for foreach() apply equally here.
+ */
+#define for_each_int(var, lst) \
+	for (ForEachState var##__state = {(lst), 0}; \
+		 (var##__state.l != NIL && \
+		  var##__state.i < var##__state.l->length && \
+		  (var = lfirst_int(&var##__state.l->elements[var##__state.i]), true));\
+		 var##__state.i++)
+
+/*
+ * foreach_oid -
+ *	  a convenience macro which loops through an oid list without needing a
+ *	  "ListCell *", just a declared Oid variable to store the current oid in.
+ *
+ * Unlike with foreach() it's not possible to detect if an early "break"
+ * occured by checking the value of the loop variable at the end of the loop.
+ * If you need this, it's recommended to use foreach() instead or manually keep
+ * track of a break occured using a boolean flag variable called e.g. "found".
+ *
+ * The caveats for foreach() apply equally here.
+ */
+#define for_each_oid(var, lst) \
+	for (ForEachState var##__state = {(lst), 0}; \
+		 (var##__state.l != NIL && \
+		  var##__state.i < var##__state.l->length && \
+		  (var = lfirst_oid(&var##__state.l->elements[var##__state.i]), true));\
+		 var##__state.i++)
+
+/*
+ * foreach_xid -
+ *	  a convenience macro which loops through an xid list without needing a
+ *	  "ListCell *", just a declared TransactionId variable to store the current
+ *	  xid in.
+ *
+ * Unlike with foreach() it's not possible to detect if an early "break"
+ * occured by checking the value of the loop variable at the end of the loop.
+ * If you need this, it's recommended to use foreach() instead or manually keep
+ * track of a break occured using a boolean flag variable called e.g. "found".
+ *
+ * The caveats for foreach() apply equally here.
+ */
+#define for_each_xid(var, lst) \
+	for (ForEachState var##__state = {(lst), 0}; \
+		 (var##__state.l != NIL && \
+		  var##__state.i < var##__state.l->length && \
+		  (var = lfirst_xid(&var##__state.l->elements[var##__state.i]), true));\
+		 var##__state.i++)
+
+/*
+ * for_each_node -
+ *	  a convenience macro which loops through a node list without needing a
+ *	  "ListCell *", just a declared pointer variable to store the pointer of
+ *	  the current node in.
+ *
+ * Unlike with foreach() it's not possible to detect if an early "break"
+ * occured by checking the value of the loop variable at the end of the loop.
+ * If you need this, it's recommended to use foreach() instead or manually keep
+ * track of a break occured using a boolean flag variable called e.g. "found".
+ *
+ * The caveats for foreach() apply equally here.
+ */
+#define for_each_node(type, var, lst) \
+	for (ForEachState var##__state = {(lst), 0}; \
+		 (var##__state.l != NIL && \
+		  var##__state.i < var##__state.l->length && \
+		  (var = lfirst_node(type, &var##__state.l->elements[var##__state.i]), true));\
+		 var##__state.i++)
 
 /*
  * forboth -

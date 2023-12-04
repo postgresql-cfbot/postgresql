@@ -82,25 +82,47 @@ explain (costs off) select * from lp where a is null;
 (2 rows)
 
 explain (costs off) select * from lp where a = 'a' or a = 'c';
-                        QUERY PLAN                        
-----------------------------------------------------------
+                  QUERY PLAN                   
+-----------------------------------------------
  Append
    ->  Seq Scan on lp_ad lp_1
-         Filter: ((a = 'a'::bpchar) OR (a = 'c'::bpchar))
+         Filter: (a = ANY ('{a,c}'::bpchar[]))
    ->  Seq Scan on lp_bc lp_2
-         Filter: ((a = 'a'::bpchar) OR (a = 'c'::bpchar))
+         Filter: (a = ANY ('{a,c}'::bpchar[]))
 (5 rows)
 
 explain (costs off) select * from lp where a is not null and (a = 'a' or a = 'c');
-                                   QUERY PLAN                                   
---------------------------------------------------------------------------------
+                             QUERY PLAN                              
+---------------------------------------------------------------------
  Append
    ->  Seq Scan on lp_ad lp_1
-         Filter: ((a IS NOT NULL) AND ((a = 'a'::bpchar) OR (a = 'c'::bpchar)))
+         Filter: ((a IS NOT NULL) AND (a = ANY ('{a,c}'::bpchar[])))
    ->  Seq Scan on lp_bc lp_2
-         Filter: ((a IS NOT NULL) AND ((a = 'a'::bpchar) OR (a = 'c'::bpchar)))
+         Filter: ((a IS NOT NULL) AND (a = ANY ('{a,c}'::bpchar[])))
 (5 rows)
 
+SET enable_or_transformation = on;
+explain (costs off) select * from lp where a = 'a' or a = 'c';
+                  QUERY PLAN                   
+-----------------------------------------------
+ Append
+   ->  Seq Scan on lp_ad lp_1
+         Filter: (a = ANY ('{a,c}'::bpchar[]))
+   ->  Seq Scan on lp_bc lp_2
+         Filter: (a = ANY ('{a,c}'::bpchar[]))
+(5 rows)
+
+explain (costs off) select * from lp where a is not null and (a = 'a' or a = 'c');
+                             QUERY PLAN                              
+---------------------------------------------------------------------
+ Append
+   ->  Seq Scan on lp_ad lp_1
+         Filter: ((a IS NOT NULL) AND (a = ANY ('{a,c}'::bpchar[])))
+   ->  Seq Scan on lp_bc lp_2
+         Filter: ((a IS NOT NULL) AND (a = ANY ('{a,c}'::bpchar[])))
+(5 rows)
+
+RESET enable_or_transformation;
 explain (costs off) select * from lp where a <> 'g';
              QUERY PLAN             
 ------------------------------------
@@ -515,10 +537,10 @@ explain (costs off) select * from rlp where a <= 31;
 (27 rows)
 
 explain (costs off) select * from rlp where a = 1 or a = 7;
-           QUERY PLAN           
---------------------------------
+                QUERY PLAN                
+------------------------------------------
  Seq Scan on rlp2 rlp
-   Filter: ((a = 1) OR (a = 7))
+   Filter: (a = ANY ('{1,7}'::integer[]))
 (2 rows)
 
 explain (costs off) select * from rlp where a = 1 or b = 'ab';
@@ -589,20 +611,20 @@ explain (costs off) select * from rlp where a < 1 or (a > 20 and a < 25);
 ------------------------------------------------------
  Append
    ->  Seq Scan on rlp1 rlp_1
-         Filter: ((a < 1) OR ((a > 20) AND (a < 25)))
+         Filter: (((a > 20) AND (a < 25)) OR (a < 1))
    ->  Seq Scan on rlp4_1 rlp_2
-         Filter: ((a < 1) OR ((a > 20) AND (a < 25)))
+         Filter: (((a > 20) AND (a < 25)) OR (a < 1))
 (5 rows)
 
 -- where clause contradicts sub-partition's constraint
 explain (costs off) select * from rlp where a = 20 or a = 40;
-               QUERY PLAN               
-----------------------------------------
+                    QUERY PLAN                    
+--------------------------------------------------
  Append
    ->  Seq Scan on rlp4_1 rlp_1
-         Filter: ((a = 20) OR (a = 40))
+         Filter: (a = ANY ('{20,40}'::integer[]))
    ->  Seq Scan on rlp5_default rlp_2
-         Filter: ((a = 20) OR (a = 40))
+         Filter: (a = ANY ('{20,40}'::integer[]))
 (5 rows)
 
 explain (costs off) select * from rlp3 where a = 20;   /* empty */
@@ -671,6 +693,163 @@ explain (costs off) select * from rlp where (a = 1 and a = 3) or (a > 1 and a = 
          Filter: (((a = 1) AND (a = 3)) OR ((a > 1) AND (a = 15)))
 (11 rows)
 
+SET enable_or_transformation = on;
+explain (costs off) select * from rlp where a = 1 or a = 7;
+                QUERY PLAN                
+------------------------------------------
+ Seq Scan on rlp2 rlp
+   Filter: (a = ANY ('{1,7}'::integer[]))
+(2 rows)
+
+explain (costs off) select * from rlp where a = 1 or b = 'ab';
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Append
+   ->  Seq Scan on rlp1 rlp_1
+         Filter: ((a = 1) OR ((b)::text = 'ab'::text))
+   ->  Seq Scan on rlp2 rlp_2
+         Filter: ((a = 1) OR ((b)::text = 'ab'::text))
+   ->  Seq Scan on rlp3abcd rlp_3
+         Filter: ((a = 1) OR ((b)::text = 'ab'::text))
+   ->  Seq Scan on rlp4_1 rlp_4
+         Filter: ((a = 1) OR ((b)::text = 'ab'::text))
+   ->  Seq Scan on rlp4_2 rlp_5
+         Filter: ((a = 1) OR ((b)::text = 'ab'::text))
+   ->  Seq Scan on rlp4_default rlp_6
+         Filter: ((a = 1) OR ((b)::text = 'ab'::text))
+   ->  Seq Scan on rlp5_1 rlp_7
+         Filter: ((a = 1) OR ((b)::text = 'ab'::text))
+   ->  Seq Scan on rlp5_default rlp_8
+         Filter: ((a = 1) OR ((b)::text = 'ab'::text))
+   ->  Seq Scan on rlp_default_10 rlp_9
+         Filter: ((a = 1) OR ((b)::text = 'ab'::text))
+   ->  Seq Scan on rlp_default_30 rlp_10
+         Filter: ((a = 1) OR ((b)::text = 'ab'::text))
+   ->  Seq Scan on rlp_default_null rlp_11
+         Filter: ((a = 1) OR ((b)::text = 'ab'::text))
+   ->  Seq Scan on rlp_default_default rlp_12
+         Filter: ((a = 1) OR ((b)::text = 'ab'::text))
+(25 rows)
+
+explain (costs off) select * from rlp where a > 20 and a < 27;
+               QUERY PLAN                
+-----------------------------------------
+ Append
+   ->  Seq Scan on rlp4_1 rlp_1
+         Filter: ((a > 20) AND (a < 27))
+   ->  Seq Scan on rlp4_2 rlp_2
+         Filter: ((a > 20) AND (a < 27))
+(5 rows)
+
+explain (costs off) select * from rlp where a = 29;
+          QUERY PLAN          
+------------------------------
+ Seq Scan on rlp4_default rlp
+   Filter: (a = 29)
+(2 rows)
+
+explain (costs off) select * from rlp where a >= 29;
+                 QUERY PLAN                  
+---------------------------------------------
+ Append
+   ->  Seq Scan on rlp4_default rlp_1
+         Filter: (a >= 29)
+   ->  Seq Scan on rlp5_1 rlp_2
+         Filter: (a >= 29)
+   ->  Seq Scan on rlp5_default rlp_3
+         Filter: (a >= 29)
+   ->  Seq Scan on rlp_default_30 rlp_4
+         Filter: (a >= 29)
+   ->  Seq Scan on rlp_default_default rlp_5
+         Filter: (a >= 29)
+(11 rows)
+
+explain (costs off) select * from rlp where a < 1 or (a > 20 and a < 25);
+                      QUERY PLAN                      
+------------------------------------------------------
+ Append
+   ->  Seq Scan on rlp1 rlp_1
+         Filter: (((a > 20) AND (a < 25)) OR (a < 1))
+   ->  Seq Scan on rlp4_1 rlp_2
+         Filter: (((a > 20) AND (a < 25)) OR (a < 1))
+(5 rows)
+
+explain (costs off) select * from rlp where a = 20 or a = 40;
+                    QUERY PLAN                    
+--------------------------------------------------
+ Append
+   ->  Seq Scan on rlp4_1 rlp_1
+         Filter: (a = ANY ('{20,40}'::integer[]))
+   ->  Seq Scan on rlp5_default rlp_2
+         Filter: (a = ANY ('{20,40}'::integer[]))
+(5 rows)
+
+explain (costs off) select * from rlp3 where a = 20;   /* empty */
+        QUERY PLAN        
+--------------------------
+ Result
+   One-Time Filter: false
+(2 rows)
+
+explain (costs off) select * from rlp where a > 1 and a = 10;	/* only default */
+            QUERY PLAN            
+----------------------------------
+ Seq Scan on rlp_default_10 rlp
+   Filter: ((a > 1) AND (a = 10))
+(2 rows)
+
+explain (costs off) select * from rlp where a > 1 and a >=15;	/* rlp3 onwards, including default */
+                  QUERY PLAN                  
+----------------------------------------------
+ Append
+   ->  Seq Scan on rlp3abcd rlp_1
+         Filter: ((a > 1) AND (a >= 15))
+   ->  Seq Scan on rlp3efgh rlp_2
+         Filter: ((a > 1) AND (a >= 15))
+   ->  Seq Scan on rlp3nullxy rlp_3
+         Filter: ((a > 1) AND (a >= 15))
+   ->  Seq Scan on rlp3_default rlp_4
+         Filter: ((a > 1) AND (a >= 15))
+   ->  Seq Scan on rlp4_1 rlp_5
+         Filter: ((a > 1) AND (a >= 15))
+   ->  Seq Scan on rlp4_2 rlp_6
+         Filter: ((a > 1) AND (a >= 15))
+   ->  Seq Scan on rlp4_default rlp_7
+         Filter: ((a > 1) AND (a >= 15))
+   ->  Seq Scan on rlp5_1 rlp_8
+         Filter: ((a > 1) AND (a >= 15))
+   ->  Seq Scan on rlp5_default rlp_9
+         Filter: ((a > 1) AND (a >= 15))
+   ->  Seq Scan on rlp_default_30 rlp_10
+         Filter: ((a > 1) AND (a >= 15))
+   ->  Seq Scan on rlp_default_default rlp_11
+         Filter: ((a > 1) AND (a >= 15))
+(23 rows)
+
+explain (costs off) select * from rlp where a = 1 and a = 3;	/* empty */
+        QUERY PLAN        
+--------------------------
+ Result
+   One-Time Filter: false
+(2 rows)
+
+explain (costs off) select * from rlp where (a = 1 and a = 3) or (a > 1 and a = 15);
+                            QUERY PLAN                             
+-------------------------------------------------------------------
+ Append
+   ->  Seq Scan on rlp2 rlp_1
+         Filter: (((a = 1) AND (a = 3)) OR ((a > 1) AND (a = 15)))
+   ->  Seq Scan on rlp3abcd rlp_2
+         Filter: (((a = 1) AND (a = 3)) OR ((a > 1) AND (a = 15)))
+   ->  Seq Scan on rlp3efgh rlp_3
+         Filter: (((a = 1) AND (a = 3)) OR ((a > 1) AND (a = 15)))
+   ->  Seq Scan on rlp3nullxy rlp_4
+         Filter: (((a = 1) AND (a = 3)) OR ((a > 1) AND (a = 15)))
+   ->  Seq Scan on rlp3_default rlp_5
+         Filter: (((a = 1) AND (a = 3)) OR ((a > 1) AND (a = 15)))
+(11 rows)
+
+RESET enable_or_transformation;
 -- multi-column keys
 create table mc3p (a int, b int, c int) partition by range (a, abs(b), c);
 create table mc3p_default partition of mc3p default;
@@ -1933,10 +2112,10 @@ explain (costs off) select * from hp where a = 1 and b = 'abcde';
 
 explain (costs off) select * from hp where a = 1 and b = 'abcde' and
   (c = 2 or c = 3);
-                              QUERY PLAN                              
-----------------------------------------------------------------------
+                                   QUERY PLAN                                   
+--------------------------------------------------------------------------------
  Seq Scan on hp2 hp
-   Filter: ((a = 1) AND (b = 'abcde'::text) AND ((c = 2) OR (c = 3)))
+   Filter: ((c = ANY ('{2,3}'::integer[])) AND (a = 1) AND (b = 'abcde'::text))
 (2 rows)
 
 drop table hp2;

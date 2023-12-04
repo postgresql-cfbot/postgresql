@@ -2560,7 +2560,7 @@ explain (costs off) select * from list_parted where a = 'ab' or a in (null, 'cd'
                                    QUERY PLAN                                    
 ---------------------------------------------------------------------------------
  Seq Scan on part_ab_cd list_parted
-   Filter: (((a)::text = 'ab'::text) OR ((a)::text = ANY ('{NULL,cd}'::text[])))
+   Filter: (((a)::text = ANY ('{NULL,cd}'::text[])) OR ((a)::text = 'ab'::text))
 (2 rows)
 
 explain (costs off) select * from list_parted where a = 'ab';

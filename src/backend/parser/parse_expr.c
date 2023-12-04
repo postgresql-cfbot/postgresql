@@ -16,12 +16,14 @@
 #include "postgres.h"
 
 #include "catalog/pg_aggregate.h"
+#include "catalog/pg_operator.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
 #include "commands/dbcommands.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/queryjumble.h"
 #include "optimizer/optimizer.h"
 #include "parser/analyze.h"
 #include "parser/parse_agg.h"
@@ -38,11 +40,13 @@
 #include "utils/date.h"
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
+#include "utils/syscache.h"
 #include "utils/timestamp.h"
 #include "utils/xml.h"
 
 /* GUC parameters */
 bool		Transform_null_equals = false;
+bool		enable_or_transformation = true;
 
 
 static Node *transformExprRecurse(ParseState *pstate, Node *expr);
@@ -99,6 +103,310 @@ static Expr *make_distinct_op(ParseState *pstate, List *opname,
 static Node *make_nulltest_from_distinct(ParseState *pstate,
 										 A_Expr *distincta, Node *arg);
 
+typedef struct OrClauseGroupKey
+{
+	Expr   *expr; /* Pointer to the expression tree which has been a source for
+					the hashkey value */
+	Oid		opno;
+	Oid		exprtype;
+} OrClauseGroupKey;
+
+typedef struct OrClauseGroupEntry
+{
+	OrClauseGroupKey key;
+
+	Node		   *node;
+	List		   *consts;
+	Oid				scalar_type;
+	List 		   *exprs;
+} OrClauseGroupEntry;
+
+/*
+ * Hash function that's compatible with guc_name_compare
+ */
+static uint32
+orclause_hash(const void *data, Size keysize)
+{
+	OrClauseGroupKey   *key = (OrClauseGroupKey *) data;
+	uint64				hash;
+
+	(void) JumbleExpr(key->expr, &hash);
+	hash += ((uint64) key->opno + (uint64) key->exprtype) % UINT64_MAX;
+	return hash;
+}
+
+static void *
+orclause_keycopy(void *dest, const void *src, Size keysize)
+{
+	OrClauseGroupKey *src_key = (OrClauseGroupKey *) src;
+	OrClauseGroupKey *dst_key = (OrClauseGroupKey *) dest;
+
+	Assert(sizeof(OrClauseGroupKey) == keysize);
+
+	dst_key->expr = src_key->expr;
+	dst_key->opno = src_key->opno;
+	dst_key->exprtype = src_key->exprtype;
+	return dst_key;
+}
+
+/*
+ * Dynahash match function to use in guc_hashtab
+ */
+static int
+orclause_match(const void *data1, const void *data2, Size keysize)
+{
+	OrClauseGroupKey   *key1 = (OrClauseGroupKey *) data1;
+	OrClauseGroupKey   *key2 = (OrClauseGroupKey *) data2;
+
+	Assert(sizeof(OrClauseGroupKey) == keysize);
+
+	if (key1->opno == key2->opno && key1->exprtype == key2->exprtype &&
+		equal(key1->expr, key2->expr))
+		return 0;
+
+	return 1;
+}
+
+static Node *
+transformBoolExprOr(ParseState *pstate, BoolExpr *expr)
+{
+	List				   *or_list = NIL;
+	List				   *entries = NIL;
+	ListCell			   *lc;
+	HASHCTL					info;
+	HTAB 				   *or_group_htab = NULL;
+	int 					len_ors = list_length(expr->args);
+	OrClauseGroupEntry	   *entry = NULL;
+
+	/* If this is not an 'OR' expression, skip the transformation */
+	if (!enable_or_transformation || expr->boolop != OR_EXPR || len_ors < 2)
+		return transformBoolExpr(pstate, (BoolExpr *) expr);
+
+	MemSet(&info, 0, sizeof(info));
+	info.keysize = sizeof(OrClauseGroupKey);
+	info.entrysize = sizeof(OrClauseGroupEntry);
+	info.hash = orclause_hash;
+	info.keycopy = orclause_keycopy;
+	info.match = orclause_match;
+	or_group_htab = hash_create("OR Groups",
+								len_ors,
+								&info,
+								HASH_ELEM | HASH_FUNCTION | HASH_COMPARE | HASH_KEYCOPY);
+
+	foreach(lc, expr->args)
+	{
+		Node				   *arg = lfirst(lc);
+		Node				   *orqual;
+		Node				   *const_expr;
+		Node				   *nconst_expr;
+		OrClauseGroupKey		hashkey;
+		bool					found;
+		Oid						opno;
+		Node				   *leftop, *rightop;
+
+		/* At first, transform the arg and evaluate constant expressions. */
+		orqual = transformExprRecurse(pstate, (Node *) arg);
+		orqual = coerce_to_boolean(pstate, orqual, "OR");
+
+		if (!IsA(orqual, OpExpr))
+		{
+			or_list = lappend(or_list, orqual);
+			continue;
+		}
+
+		opno = ((OpExpr *) orqual)->opno;
+		if (get_op_rettype(opno) != BOOLOID)
+		{
+			/* Only operator returning boolean suits OR -> ANY transformation */
+			or_list = lappend(or_list, orqual);
+			continue;
+		}
+
+		/*
+		 * Detect the constant side of the clause. Recall non-constant
+		 * expression can be made not only with Vars, but also with Params,
+		 * which is not bonded with any relation. Thus, we detect the const
+		 * side - if another side is constant too, the orqual couldn't be
+		 * an OpExpr.
+		 * Get pointers to constant and expression sides of the qual.
+		 */
+		leftop = get_leftop(orqual);
+		if (IsA(leftop, RelabelType))
+			leftop = (Node *) ((RelabelType *) leftop)->arg;
+		rightop = get_rightop(orqual);
+		if (IsA(rightop, RelabelType))
+			rightop = (Node *) ((RelabelType *) rightop)->arg;
+
+		if (IsA(leftop, Const))
+		{
+			opno = get_commutator(opno);
+
+			if (!OidIsValid(opno))
+			{
+				/* Commuter doesn't exist, we can't reverse the order */
+				or_list = lappend(or_list, orqual);
+				continue;
+			}
+
+			nconst_expr = get_rightop(orqual);
+			const_expr = get_leftop(orqual);
+		}
+		else if (IsA(rightop, Const))
+		{
+			const_expr = get_rightop(orqual);
+			nconst_expr = get_leftop(orqual);
+		}
+		else
+		{
+			or_list = lappend(or_list, orqual);
+			continue;
+		}
+
+		/*
+		* At this point we definitely have a transformable clause.
+		* Classify it and add into specific group of clauses, or create new
+		* group.
+		*/
+		hashkey.expr = (Expr *) nconst_expr;
+		hashkey.opno = opno;
+		hashkey.exprtype = exprType(nconst_expr);
+		entry = hash_search(or_group_htab, &hashkey, HASH_ENTER, &found);
+
+		if (unlikely(found))
+		{
+			entry->consts = lappend(entry->consts, const_expr);
+			entry->exprs = lappend(entry->exprs, orqual);
+		}
+		else
+		{
+			entry->node = nconst_expr;
+			entry->consts = list_make1(const_expr);
+			entry->exprs = list_make1(orqual);
+
+			/*
+			 * Add the entry to the list. It is needed exclusively to manage the
+			 * problem with the order of transformed clauses in explain.
+			 * Hash value can depend on the platform and version. Hence,
+			 * sequental scan of the hash table would prone to change the order
+			 * of clauses in lists and, as a result, break regression tests
+			 * accidentially.
+			 */
+			entries = lappend(entries, entry);
+		}
+	}
+
+	/* Let's convert each group of clauses to an IN operation. */
+
+	/*
+	 * Go through the list of groups and convert each, where number of
+	 * consts more than 1. trivial groups move to OR-list again
+	 */
+
+	foreach (lc, entries)
+	{
+		Oid				    scalar_type;
+		Oid					array_type;
+
+		entry = (OrClauseGroupEntry *) lfirst(lc);
+
+		Assert(list_length(entry->consts) > 0);
+		Assert(list_length(entry->exprs) == list_length(entry->consts));
+
+		if (list_length(entry->consts) == 1)
+		{
+			/*
+			 * Only one element in the class. Return origin expression into
+			 * the BoolExpr args list unchanged.
+			 */
+			list_free(entry->consts);
+			or_list = list_concat(or_list, entry->exprs);
+			continue;
+		}
+
+		/*
+		 * Do the transformation.
+		 */
+
+		scalar_type = entry->key.exprtype;
+		if (scalar_type != RECORDOID && OidIsValid(scalar_type))
+			array_type = get_array_type(scalar_type);
+		else
+			array_type = InvalidOid;
+
+		if (array_type != InvalidOid)
+		{
+			/*
+			 * OK: coerce all the right-hand non-Var inputs to the common
+			 * type and build an ArrayExpr for them.
+			 */
+			List			   *aexprs = NIL;
+			ArrayExpr		   *newa = NULL;
+			ScalarArrayOpExpr  *saopexpr = NULL;
+			HeapTuple			opertup;
+			Form_pg_operator	operform;
+			List			   *namelist = NIL;
+			ListCell		   *lc1;
+
+			foreach(lc1, entry->consts)
+			{
+				Node   *rexpr = (Node *) lfirst(lc1);
+
+				rexpr = coerce_to_common_type(pstate, rexpr,
+											  scalar_type,
+											  "IN");
+				aexprs = lappend(aexprs, rexpr);
+			}
+
+			newa = makeNode(ArrayExpr);
+			/* array_collid will be set by parse_collate.c */
+			newa->element_typeid = scalar_type;
+			newa->array_typeid = array_type;
+			newa->multidims = false;
+			newa->elements = aexprs;
+			newa->location = -1;
+
+			opertup = SearchSysCache1(OPEROID,
+									  ObjectIdGetDatum(entry->key.opno));
+			if (!HeapTupleIsValid(opertup))
+				elog(ERROR, "cache lookup failed for operator %u",
+					 entry->key.opno);
+
+			operform = (Form_pg_operator) GETSTRUCT(opertup);
+			if (!OperatorIsVisible(entry->key.opno))
+				namelist = lappend(namelist, makeString(get_namespace_name(operform->oprnamespace)));
+
+			namelist = lappend(namelist, makeString(pstrdup(NameStr(operform->oprname))));
+			ReleaseSysCache(opertup);
+
+			saopexpr =
+				(ScalarArrayOpExpr *)
+					make_scalar_array_op(pstate,
+										 namelist,
+										 true,
+										 entry->node,
+										 (Node *) newa,
+										 -1);
+
+			or_list = lappend(or_list, (void *) saopexpr);
+		}
+		else
+		{
+			/*
+			 * This part works on intarray test (OR there is made on
+			 * elements of a custom type)
+			 */
+			list_free(entry->consts);
+			or_list = list_concat(or_list, entry->exprs);
+		}
+	}
+	hash_destroy(or_group_htab);
+	list_free(entries);
+
+	/* One more trick: assemble correct clause */
+	return (Node *) ((list_length(or_list) > 1) ?
+					 makeBoolExpr(OR_EXPR, or_list, expr->location) :
+					 linitial(or_list));
+}
 
 /*
  * transformExpr -
@@ -212,7 +520,7 @@ transformExprRecurse(ParseState *pstate, Node *expr)
 			}
 
 		case T_BoolExpr:
-			result = transformBoolExpr(pstate, (BoolExpr *) expr);
+			result = transformBoolExprOr(pstate, (BoolExpr *) expr);
 			break;
 
 		case T_FuncCall:

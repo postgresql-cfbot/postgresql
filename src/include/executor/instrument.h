@@ -33,6 +33,8 @@ typedef struct BufferUsage
 	int64		local_blks_written; /* # of local disk blocks written */
 	int64		temp_blks_read; /* # of temp blocks read */
 	int64		temp_blks_written;	/* # of temp blocks written */
+	int64		blks_prefetch_rounds;	/* # of prefetch rounds */
+	int64		blks_prefetches;	/* # of buffers prefetched */
 	instr_time	shared_blk_read_time;	/* time spent reading shared blocks */
 	instr_time	shared_blk_write_time;	/* time spent writing shared blocks */
 	instr_time	local_blk_read_time;	/* time spent reading local blocks */

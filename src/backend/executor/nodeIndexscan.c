@@ -43,6 +43,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+#include "utils/spccache.h"
 
 /*
  * When an ordering operator is used, tuples fetched from the index that
@@ -85,6 +86,7 @@ IndexNext(IndexScanState *node)
 	ScanDirection direction;
 	IndexScanDesc scandesc;
 	TupleTableSlot *slot;
+	Relation heapRel = node->ss.ss_currentRelation;
 
 	/*
 	 * extract necessary information from index scan node
@@ -103,6 +105,21 @@ IndexNext(IndexScanState *node)
 
 	if (scandesc == NULL)
 	{
+		int	prefetch_max;
+
+		/*
+		 * Determine number of heap pages to prefetch for this index scan. This
+		 * is essentially just effective_io_concurrency for the table (or the
+		 * tablespace it's in).
+		 *
+		 * XXX Should this also look at plan.plan_rows and maybe cap the target
+		 * to that? Pointless to prefetch more than we expect to use. Or maybe
+		 * just reset to that value during prefetching, after reading the next
+		 * index page (or rather after rescan)?
+		 */
+		prefetch_max = Min(get_tablespace_io_concurrency(heapRel->rd_rel->reltablespace),
+						   node->ss.ps.plan->plan_rows);
+
 		/*
 		 * We reach here if the index scan is not parallel, or if we're
 		 * serially executing an index scan that was planned to be parallel.
@@ -111,7 +128,8 @@ IndexNext(IndexScanState *node)
 								   node->iss_RelationDesc,
 								   estate->es_snapshot,
 								   node->iss_NumScanKeys,
-								   node->iss_NumOrderByKeys);
+								   node->iss_NumOrderByKeys,
+								   prefetch_max);
 
 		node->iss_ScanDesc = scandesc;
 
@@ -177,6 +195,7 @@ IndexNextWithReorder(IndexScanState *node)
 	Datum	   *lastfetched_vals;
 	bool	   *lastfetched_nulls;
 	int			cmp;
+	Relation	heapRel = node->ss.ss_currentRelation;
 
 	estate = node->ss.ps.state;
 
@@ -198,6 +217,21 @@ IndexNextWithReorder(IndexScanState *node)
 
 	if (scandesc == NULL)
 	{
+		int	prefetch_max;
+
+		/*
+		 * Determine number of heap pages to prefetch for this index. This is
+		 * essentially just effective_io_concurrency for the table (or the
+		 * tablespace it's in).
+		 *
+		 * XXX Should this also look at plan.plan_rows and maybe cap the target
+		 * to that? Pointless to prefetch more than we expect to use. Or maybe
+		 * just reset to that value during prefetching, after reading the next
+		 * index page (or rather after rescan)?
+		 */
+		prefetch_max = Min(get_tablespace_io_concurrency(heapRel->rd_rel->reltablespace),
+						   node->ss.ps.plan->plan_rows);
+
 		/*
 		 * We reach here if the index scan is not parallel, or if we're
 		 * serially executing an index scan that was planned to be parallel.
@@ -206,7 +240,8 @@ IndexNextWithReorder(IndexScanState *node)
 								   node->iss_RelationDesc,
 								   estate->es_snapshot,
 								   node->iss_NumScanKeys,
-								   node->iss_NumOrderByKeys);
+								   node->iss_NumOrderByKeys,
+								   prefetch_max);
 
 		node->iss_ScanDesc = scandesc;
 
@@ -1662,6 +1697,24 @@ ExecIndexScanInitializeDSM(IndexScanState *node,
 {
 	EState	   *estate = node->ss.ps.state;
 	ParallelIndexScanDesc piscan;
+	Relation	heapRel = node->ss.ss_currentRelation;
+	int			prefetch_max;
+
+	/*
+	 * Determine number of heap pages to prefetch for this index. This is
+	 * essentially just effective_io_concurrency for the table (or the
+	 * tablespace it's in).
+	 *
+	 * XXX Should this also look at plan.plan_rows and maybe cap the target
+	 * to that? Pointless to prefetch more than we expect to use. Or maybe
+	 * just reset to that value during prefetching, after reading the next
+	 * index page (or rather after rescan)?
+	 *
+	 * XXX Maybe reduce the value with parallel workers?
+	 */
+
+	prefetch_max = Min(get_tablespace_io_concurrency(heapRel->rd_rel->reltablespace),
+					   node->ss.ps.plan->plan_rows);
 
 	piscan = shm_toc_allocate(pcxt->toc, node->iss_PscanLen);
 	index_parallelscan_initialize(node->ss.ss_currentRelation,
@@ -1674,7 +1727,8 @@ ExecIndexScanInitializeDSM(IndexScanState *node,
 								 node->iss_RelationDesc,
 								 node->iss_NumScanKeys,
 								 node->iss_NumOrderByKeys,
-								 piscan);
+								 piscan,
+								 prefetch_max);
 
 	/*
 	 * If no run-time keys to calculate or they are ready, go ahead and pass
@@ -1710,6 +1764,23 @@ ExecIndexScanInitializeWorker(IndexScanState *node,
 							  ParallelWorkerContext *pwcxt)
 {
 	ParallelIndexScanDesc piscan;
+	Relation	heapRel = node->ss.ss_currentRelation;
+	int			prefetch_max;
+
+	/*
+	 * Determine number of heap pages to prefetch for this index. This is
+	 * essentially just effective_io_concurrency for the table (or the
+	 * tablespace it's in).
+	 *
+	 * XXX Should this also look at plan.plan_rows and maybe cap the target
+	 * to that? Pointless to prefetch more than we expect to use. Or maybe
+	 * just reset to that value during prefetching, after reading the next
+	 * index page (or rather after rescan)?
+	 *
+	 * XXX Maybe reduce the value with parallel workers?
+	 */
+	prefetch_max = Min(get_tablespace_io_concurrency(heapRel->rd_rel->reltablespace),
+					   node->ss.ps.plan->plan_rows);
 
 	piscan = shm_toc_lookup(pwcxt->toc, node->ss.ps.plan->plan_node_id, false);
 	node->iss_ScanDesc =
@@ -1717,7 +1788,8 @@ ExecIndexScanInitializeWorker(IndexScanState *node,
 								 node->iss_RelationDesc,
 								 node->iss_NumScanKeys,
 								 node->iss_NumOrderByKeys,
-								 piscan);
+								 piscan,
+								 prefetch_max);
 
 	/*
 	 * If no run-time keys to calculate or they are ready, go ahead and pass

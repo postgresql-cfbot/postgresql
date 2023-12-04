@@ -17,6 +17,7 @@
 #include "access/sdir.h"
 #include "access/skey.h"
 #include "nodes/tidbitmap.h"
+#include "storage/bufmgr.h"
 #include "storage/lockdefs.h"
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
@@ -154,7 +155,8 @@ extern void index_insert_cleanup(Relation indexRelation,
 extern IndexScanDesc index_beginscan(Relation heapRelation,
 									 Relation indexRelation,
 									 Snapshot snapshot,
-									 int nkeys, int norderbys);
+									 int nkeys, int norderbys,
+									 int prefetch_max);
 extern IndexScanDesc index_beginscan_bitmap(Relation indexRelation,
 											Snapshot snapshot,
 											int nkeys);
@@ -171,9 +173,13 @@ extern void index_parallelscan_initialize(Relation heapRelation,
 extern void index_parallelrescan(IndexScanDesc scan);
 extern IndexScanDesc index_beginscan_parallel(Relation heaprel,
 											  Relation indexrel, int nkeys, int norderbys,
-											  ParallelIndexScanDesc pscan);
+											  ParallelIndexScanDesc pscan,
+											  int prefetch_max);
 extern ItemPointer index_getnext_tid(IndexScanDesc scan,
 									 ScanDirection direction);
+extern ItemPointer index_getnext_tid_vm(IndexScanDesc scan,
+										ScanDirection direction,
+										bool *all_visible);
 struct TupleTableSlot;
 extern bool index_fetch_heap(IndexScanDesc scan, struct TupleTableSlot *slot);
 extern bool index_getnext_slot(IndexScanDesc scan, ScanDirection direction,
@@ -231,5 +237,105 @@ extern SysScanDesc systable_beginscan_ordered(Relation heapRelation,
 extern HeapTuple systable_getnext_ordered(SysScanDesc sysscan,
 										  ScanDirection direction);
 extern void systable_endscan_ordered(SysScanDesc sysscan);
+
+/*
+ * Cache of recently prefetched blocks, organized as a hash table of
+ * small LRU caches. Doesn't need to be perfectly accurate, but we
+ * aim to make false positives/negatives reasonably low.
+ */
+typedef struct PrefetchCacheEntry {
+	BlockNumber		block;
+	uint64			request;
+} PrefetchCacheEntry;
+
+/*
+ * Size of the cache of recently prefetched blocks - shouldn't be too
+ * small or too large. 1024 seems about right, it covers ~8MB of data.
+ * It's somewhat arbitrary, there's no particular formula saying it
+ * should not be higher/lower.
+ *
+ * The cache is structured as an array of small LRU caches, so the total
+ * size needs to be a multiple of LRU size. The LRU should be tiny to
+ * keep linear search cheap enough.
+ *
+ * XXX Maybe we could consider effective_cache_size or something?
+ */
+#define		PREFETCH_LRU_SIZE		8
+#define		PREFETCH_LRU_COUNT		128
+#define		PREFETCH_CACHE_SIZE		(PREFETCH_LRU_SIZE * PREFETCH_LRU_COUNT)
+
+/*
+ * Used to detect sequential patterns (and disable prefetching).
+ */
+#define		PREFETCH_QUEUE_HISTORY			8
+#define		PREFETCH_SEQ_PATTERN_BLOCKS		4
+
+typedef struct PrefetchEntry
+{
+	ItemPointerData		tid;
+	bool				all_visible;
+} PrefetchEntry;
+
+typedef struct IndexPrefetchData
+{
+	/*
+	 * XXX We need to disable this in some cases (e.g. when using index-only
+	 * scans, we don't want to prefetch pages). Or maybe we should prefetch
+	 * only pages that are not all-visible, that'd be even better.
+	 */
+	int			prefetchTarget;	/* how far we should be prefetching */
+	int			prefetchMaxTarget;	/* maximum prefetching distance */
+	int			prefetchReset;	/* reset to this distance on rescan */
+	bool		prefetchDone;	/* did we get all TIDs from the index? */
+
+	/* runtime statistics */
+	uint64		countAll;		/* all prefetch requests */
+	uint64		countPrefetch;	/* actual prefetches */
+	uint64		countSkipSequential;
+	uint64		countSkipCached;
+
+	/* used when prefetching index-only scans */
+	Buffer		vmBuffer;
+
+	/*
+	 * Queue of TIDs to prefetch.
+	 *
+	 * XXX Sizing for MAX_IO_CONCURRENCY may be overkill, but it seems simpler
+	 * than dynamically adjusting for custom values.
+	 */
+	PrefetchEntry	queueItems[MAX_IO_CONCURRENCY];
+	uint64			queueIndex;	/* next TID to prefetch */
+	uint64			queueStart;	/* first valid TID in queue */
+	uint64			queueEnd;	/* first invalid (empty) TID in queue */
+
+	/*
+	 * A couple of last prefetched blocks, used to check for certain access
+	 * pattern and skip prefetching - e.g. for sequential access).
+	 *
+	 * XXX Separate from the main queue, because we only want to compare the
+	 * block numbers, not the whole TID. In sequential access it's likely we
+	 * read many items from each page, and we don't want to check many items
+	 * (as that is much more expensive).
+	 */
+	BlockNumber		blockItems[PREFETCH_QUEUE_HISTORY];
+	uint64			blockIndex;	/* index in the block (points to the first
+								 * empty entry)*/
+
+	/*
+	 * Cache of recently prefetched blocks, organized as a hash table of
+	 * small LRU caches.
+	 */
+	uint64				prefetchReqNumber;
+	PrefetchCacheEntry	prefetchCache[PREFETCH_CACHE_SIZE];
+
+} IndexPrefetchData;
+
+#define PREFETCH_QUEUE_INDEX(a)	((a) % (MAX_IO_CONCURRENCY))
+#define PREFETCH_QUEUE_EMPTY(p)	((p)->queueEnd == (p)->queueIndex)
+#define PREFETCH_ENABLED(p)		((p) && ((p)->prefetchMaxTarget > 0))
+#define PREFETCH_FULL(p)		((p)->queueEnd - (p)->queueIndex == (p)->prefetchTarget)
+#define PREFETCH_DONE(p)		((p) && ((p)->prefetchDone && PREFETCH_QUEUE_EMPTY(p)))
+#define PREFETCH_ACTIVE(p)		(PREFETCH_ENABLED(p) && !(p)->prefetchDone)
+#define PREFETCH_BLOCK_INDEX(v)	((v) % PREFETCH_QUEUE_HISTORY)
 
 #endif							/* GENAM_H */

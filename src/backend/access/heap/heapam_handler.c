@@ -44,6 +44,7 @@
 #include "storage/smgr.h"
 #include "utils/builtins.h"
 #include "utils/rel.h"
+#include "utils/spccache.h"
 
 static void reform_and_rewrite_tuple(HeapTuple tuple,
 									 Relation OldHeap, Relation NewHeap,
@@ -747,6 +748,14 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 			PROGRESS_CLUSTER_INDEX_RELID
 		};
 		int64		ci_val[2];
+		int			prefetch_max;
+
+		/*
+		 * Get the prefetch target for the old tablespace (which is what we'll
+		 * read using the index). We'll use it as a reset value too, although
+		 * there should be no rescans for CLUSTER etc.
+		 */
+		prefetch_max = get_tablespace_io_concurrency(OldHeap->rd_rel->reltablespace);
 
 		/* Set phase and OIDOldIndex to columns */
 		ci_val[0] = PROGRESS_CLUSTER_PHASE_INDEX_SCAN_HEAP;
@@ -755,7 +764,8 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 
 		tableScan = NULL;
 		heapScan = NULL;
-		indexScan = index_beginscan(OldHeap, OldIndex, SnapshotAny, 0, 0);
+		indexScan = index_beginscan(OldHeap, OldIndex, SnapshotAny, 0, 0,
+									prefetch_max);
 		index_rescan(indexScan, NULL, 0, NULL, 0);
 	}
 	else

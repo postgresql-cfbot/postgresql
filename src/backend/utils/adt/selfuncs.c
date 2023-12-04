@@ -6289,9 +6289,10 @@ get_actual_variable_endpoint(Relation heapRel,
 	InitNonVacuumableSnapshot(SnapshotNonVacuumable,
 							  GlobalVisTestFor(heapRel));
 
+	/* XXX Maybe should do prefetching using the default prefetch parameters? */
 	index_scan = index_beginscan(heapRel, indexRel,
 								 &SnapshotNonVacuumable,
-								 1, 0);
+								 1, 0, 0);
 	/* Set it up for index-only scan */
 	index_scan->xs_want_itup = true;
 	index_rescan(index_scan, scankeys, 1, NULL, 0);

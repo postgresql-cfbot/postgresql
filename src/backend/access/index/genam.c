@@ -126,6 +126,9 @@ RelationGetIndexScan(Relation indexRelation, int nkeys, int norderbys)
 	scan->xs_hitup = NULL;
 	scan->xs_hitupdesc = NULL;
 
+	/* Information used for asynchronous prefetching during index scans. */
+	scan->xs_prefetch = NULL;
+
 	return scan;
 }
 
@@ -440,8 +443,20 @@ systable_beginscan(Relation heapRelation,
 				elog(ERROR, "column is not in index");
 		}
 
+		/*
+		 * We don't do any prefetching on system catalogs, for two main reasons.
+		 *
+		 * Firstly, we usually do PK lookups, which makes prefetching pointles,
+		 * or we often don't know how many rows to expect (and the numbers tend
+		 * to be fairly low). So it's not clear it'd help. Furthermore, places
+		 * that are sensitive tend to use syscache anyway.
+		 *
+		 * Secondly, we can't call get_tablespace_io_concurrency() because that
+		 * does a sysscan internally, so it might lead to a cycle. We could use
+		 * use effective_io_concurrency, but it doesn't seem worth it.
+		 */
 		sysscan->iscan = index_beginscan(heapRelation, irel,
-										 snapshot, nkeys, 0);
+										 snapshot, nkeys, 0, 0);
 		index_rescan(sysscan->iscan, key, nkeys, NULL, 0);
 		sysscan->scan = NULL;
 	}
@@ -696,8 +711,20 @@ systable_beginscan_ordered(Relation heapRelation,
 			elog(ERROR, "column is not in index");
 	}
 
+	/*
+	 * We don't do any prefetching on system catalogs, for two main reasons.
+	 *
+	 * Firstly, we usually do PK lookups, which makes prefetching pointles,
+	 * or we often don't know how many rows to expect (and the numbers tend
+	 * to be fairly low). So it's not clear it'd help. Furthermore, places
+	 * that are sensitive tend to use syscache anyway.
+	 *
+	 * Secondly, we can't call get_tablespace_io_concurrency() because that
+	 * does a sysscan internally, so it might lead to a cycle. We could use
+	 * use effective_io_concurrency, but it doesn't seem worth it.
+	 */
 	sysscan->iscan = index_beginscan(heapRelation, indexRelation,
-									 snapshot, nkeys, 0);
+									 snapshot, nkeys, 0, 0);
 	index_rescan(sysscan->iscan, key, nkeys, NULL, 0);
 	sysscan->scan = NULL;
 

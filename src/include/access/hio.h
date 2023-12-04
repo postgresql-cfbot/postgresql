@@ -48,6 +48,8 @@ typedef struct BulkInsertStateData
 	BlockNumber next_free;
 	BlockNumber last_free;
 	uint32		already_extended_by;
+
+	struct BulkInsertStateData *toast_state;
 } BulkInsertStateData;
 
 

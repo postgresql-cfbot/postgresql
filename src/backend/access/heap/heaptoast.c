@@ -94,7 +94,7 @@ heap_toast_delete(Relation rel, HeapTuple oldtup, bool is_speculative)
  */
 HeapTuple
 heap_toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
-							int options)
+							int options, BulkInsertState bistate)
 {
 	HeapTuple	result_tuple;
 	TupleDesc	tupleDesc;
@@ -109,6 +109,9 @@ heap_toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 	Datum		toast_oldvalues[MaxHeapAttributeNumber];
 	ToastAttrInfo toast_attr[MaxHeapAttributeNumber];
 	ToastTupleContext ttc;
+
+	/* Bulk insert is not supported for updates, only inserts. */
+	Assert(bistate == NULL || oldtup == NULL);
 
 	/*
 	 * Ignore the INSERT_SPECULATIVE option. Speculative insertions/super
@@ -214,7 +217,7 @@ heap_toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 		 */
 		if (toast_attr[biggest_attno].tai_size > maxDataLen &&
 			rel->rd_rel->reltoastrelid != InvalidOid)
-			toast_tuple_externalize(&ttc, biggest_attno, options);
+			toast_tuple_externalize(&ttc, biggest_attno, options, bistate);
 	}
 
 	/*
@@ -231,7 +234,7 @@ heap_toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 		biggest_attno = toast_tuple_find_biggest_attribute(&ttc, false, false);
 		if (biggest_attno < 0)
 			break;
-		toast_tuple_externalize(&ttc, biggest_attno, options);
+		toast_tuple_externalize(&ttc, biggest_attno, options, bistate);
 	}
 
 	/*
@@ -267,7 +270,7 @@ heap_toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 		if (biggest_attno < 0)
 			break;
 
-		toast_tuple_externalize(&ttc, biggest_attno, options);
+		toast_tuple_externalize(&ttc, biggest_attno, options, bistate);
 	}
 
 	/*

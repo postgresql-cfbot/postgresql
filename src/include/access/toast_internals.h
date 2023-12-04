@@ -12,6 +12,7 @@
 #ifndef TOAST_INTERNALS_H
 #define TOAST_INTERNALS_H
 
+#include "access/hio.h"
 #include "access/toast_compression.h"
 #include "storage/lockdefs.h"
 #include "utils/relcache.h"
@@ -50,7 +51,8 @@ extern Oid	toast_get_valid_index(Oid toastoid, LOCKMODE lock);
 
 extern void toast_delete_datum(Relation rel, Datum value, bool is_speculative);
 extern Datum toast_save_datum(Relation rel, Datum value,
-							  struct varlena *oldexternal, int options);
+							  struct varlena *oldexternal, int options,
+							  BulkInsertStateData *bistate);
 
 extern int	toast_open_indexes(Relation toastrel,
 							   LOCKMODE lock,

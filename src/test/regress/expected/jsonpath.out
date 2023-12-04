@@ -381,10 +381,34 @@ select 'true.type()'::jsonpath;
  true.type()
 (1 row)
 
+select '$.boolean()'::jsonpath;
+  jsonpath   
+-------------
+ $.boolean()
+(1 row)
+
+select '$.string()'::jsonpath;
+  jsonpath  
+------------
+ $.string()
+(1 row)
+
 select '$.double().floor().ceiling().abs()'::jsonpath;
               jsonpath              
 ------------------------------------
  $.double().floor().ceiling().abs()
+(1 row)
+
+select '$.bigint().integer().number().decimal()'::jsonpath;
+                jsonpath                 
+-----------------------------------------
+ $.bigint().integer().number().decimal()
+(1 row)
+
+select '$.decimal(4,2)'::jsonpath;
+    jsonpath    
+----------------
+ $.decimal(4,2)
 (1 row)
 
 select '$.keyvalue().key'::jsonpath;
@@ -403,6 +427,60 @@ select '$.datetime("datetime template")'::jsonpath;
             jsonpath             
 ---------------------------------
  $.datetime("datetime template")
+(1 row)
+
+select '$.date()'::jsonpath;
+ jsonpath 
+----------
+ $.date()
+(1 row)
+
+select '$.time()'::jsonpath;
+ jsonpath 
+----------
+ $.time()
+(1 row)
+
+select '$.time(6)'::jsonpath;
+ jsonpath  
+-----------
+ $.time(6)
+(1 row)
+
+select '$.time_tz()'::jsonpath;
+  jsonpath   
+-------------
+ $.time_tz()
+(1 row)
+
+select '$.time_tz(4)'::jsonpath;
+   jsonpath   
+--------------
+ $.time_tz(4)
+(1 row)
+
+select '$.timestamp()'::jsonpath;
+   jsonpath    
+---------------
+ $.timestamp()
+(1 row)
+
+select '$.timestamp(2)'::jsonpath;
+    jsonpath    
+----------------
+ $.timestamp(2)
+(1 row)
+
+select '$.timestamp_tz()'::jsonpath;
+     jsonpath     
+------------------
+ $.timestamp_tz()
+(1 row)
+
+select '$.timestamp_tz(0)'::jsonpath;
+     jsonpath      
+-------------------
+ $.timestamp_tz(0)
 (1 row)
 
 select '$ ? (@ starts with "abc")'::jsonpath;

@@ -66,13 +66,6 @@ typedef enum JsonPathItemType
 	jpiGreater,					/* expr > expr */
 	jpiLessOrEqual,				/* expr <= expr */
 	jpiGreaterOrEqual,			/* expr >= expr */
-	jpiAdd,						/* expr + expr */
-	jpiSub,						/* expr - expr */
-	jpiMul,						/* expr * expr */
-	jpiDiv,						/* expr / expr */
-	jpiMod,						/* expr % expr */
-	jpiPlus,					/* + expr */
-	jpiMinus,					/* - expr */
 	jpiAnyArray,				/* [*] */
 	jpiAnyKey,					/* .* */
 	jpiIndexArray,				/* [subscript, ...] */
@@ -83,14 +76,39 @@ typedef enum JsonPathItemType
 	jpiVariable,				/* $variable */
 	jpiFilter,					/* ? (predicate) */
 	jpiExists,					/* EXISTS (expr) predicate */
+
+	/*
+	 * For better maintainability or readability, keep the order of the below
+	 * jsonpath Operators and Methods at the other places, like in the
+	 * documentation, switch() cases, keywords list, etc., too.
+	 */
+	jpiAdd,						/* expr + expr */
+	jpiPlus,					/* + expr */
+	jpiSub,						/* expr - expr */
+	jpiMinus,					/* - expr */
+	jpiMul,						/* expr * expr */
+	jpiDiv,						/* expr / expr */
+	jpiMod,						/* expr % expr */
 	jpiType,					/* .type() item method */
 	jpiSize,					/* .size() item method */
-	jpiAbs,						/* .abs() item method */
-	jpiFloor,					/* .floor() item method */
-	jpiCeiling,					/* .ceiling() item method */
+	jpiBoolean,					/* .boolean() item method */
+	jpiStringFunc,				/* .string() item method */
 	jpiDouble,					/* .double() item method */
+	jpiNumber,					/* .number() item method */
+	jpiDecimal,					/* .decimal() item method */
+	jpiBigint,					/* .bigint() item method */
+	jpiInteger,					/* .integer() item method */
+	jpiAbs,						/* .abs() item method */
+	jpiCeiling,					/* .ceiling() item method */
+	jpiFloor,					/* .floor() item method */
 	jpiDatetime,				/* .datetime() item method */
+	jpiDate,					/* .date() item method */
+	jpiTime,					/* .time() item method */
+	jpiTimeTz,					/* .time_tz() item method */
+	jpiTimestamp,				/* .timestamp() item method */
+	jpiTimestampTz,				/* .timestamp_tz() item method */
 	jpiKeyValue,				/* .keyvalue() item method */
+
 	jpiSubscript,				/* array subscript: 'expr' or 'expr TO expr' */
 	jpiLast,					/* LAST array subscript */
 	jpiStartsWith,				/* STARTS WITH predicate */

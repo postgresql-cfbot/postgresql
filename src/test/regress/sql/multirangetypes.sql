@@ -861,3 +861,30 @@ create function mr_inoutparam_fail(inout i anyelement, out r anymultirange)
 --should fail
 create function mr_table_fail(i anyelement) returns table(i anyelement, r anymultirange)
   as $$ select $1, '[1,10]' $$ language sql;
+
+--
+-- test selectivity of multirange join operators
+--
+create table test_multirange_join_1 (imr1 int4multirange);
+create table test_multirange_join_2 (imr2 int4multirange);
+create table test_multirange_join_3 (imr3 int4multirange);
+
+insert into test_multirange_join_1 select int4multirange(int4range(g, g+10)) from generate_series(1, 1000) g;
+insert into test_multirange_join_1 select int4multirange(int4range(g, g+100)) from generate_series(1, 1000, 10) g;
+insert into test_multirange_join_2 select int4multirange(int4range(g, g+10)) from generate_series(1, 500) g;
+insert into test_multirange_join_2 select int4multirange(int4range(g, g+100)) from generate_series(1, 500, 10) g;
+insert into test_multirange_join_3 select int4multirange(int4range(g, g+10)) from generate_series(501, 1000) g;
+insert into test_multirange_join_3 select int4multirange(int4range(g, g+100)) from generate_series(501, 1000, 10) g;
+
+analyze test_multirange_join_1;
+analyze test_multirange_join_2;
+analyze test_multirange_join_3;
+
+--reorder joins based on computed selectivity
+explain (costs off) select count(*) from test_multirange_join_1, test_multirange_join_2, test_multirange_join_3 where imr1 && imr2 and imr2 && imr3;
+explain (costs off) select count(*) from test_multirange_join_1, test_multirange_join_2, test_multirange_join_3 where imr1 << imr2 and imr2 << imr3;
+explain (costs off) select count(*) from test_multirange_join_1, test_multirange_join_2, test_multirange_join_3 where imr1 >> imr2 and imr2 >> imr3;
+
+drop table test_multirange_join_1;
+drop table test_multirange_join_2;
+drop table test_multirange_join_3;

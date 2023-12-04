@@ -629,3 +629,30 @@ create function inoutparam_fail(inout i anyelement, out r anyrange)
 --should fail
 create function table_fail(i anyelement) returns table(i anyelement, r anyrange)
   as $$ select $1, '[1,10]' $$ language sql;
+
+--
+-- test selectivity of range join operators
+--
+create table test_range_join_1 (ir1 int4range);
+create table test_range_join_2 (ir2 int4range);
+create table test_range_join_3 (ir3 int4range);
+
+insert into test_range_join_1 select int4range(g, g+10) from generate_series(1, 1000) g;
+insert into test_range_join_1 select int4range(g, g+100) from generate_series(1, 1000, 10) g;
+insert into test_range_join_2 select int4range(g, g+10) from generate_series(1, 500) g;
+insert into test_range_join_2 select int4range(g, g+100) from generate_series(1, 500, 10) g;
+insert into test_range_join_3 select int4range(g, g+10) from generate_series(501, 1000) g;
+insert into test_range_join_3 select int4range(g, g+100) from generate_series(501, 1000, 10) g;
+
+analyze test_range_join_1;
+analyze test_range_join_2;
+analyze test_range_join_3;
+
+--reorder joins based on computed selectivity
+explain (costs off) select count(*) from test_range_join_1, test_range_join_2, test_range_join_3 where ir1 && ir2 and ir2 && ir3;
+explain (costs off) select count(*) from test_range_join_1, test_range_join_2, test_range_join_3 where ir1 << ir2 and ir2 << ir3;
+explain (costs off) select count(*) from test_range_join_1, test_range_join_2, test_range_join_3 where ir1 >> ir2 and ir2 >> ir3;
+
+drop table test_range_join_1;
+drop table test_range_join_2;
+drop table test_range_join_3;

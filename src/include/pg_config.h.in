@@ -686,6 +686,12 @@
 /* Define to 1 to use ARMv8 CRC Extension with a runtime check. */
 #undef USE_ARMV8_CRC32C_WITH_RUNTIME_CHECK
 
+/* Define to 1 to use ARMv8 CRYPTO Extension. */
+#undef USE_ARMV8_CRYPTO
+
+/* Define to 1 to use ARMv8 CRYPTO Extension with a runtime check. */
+#undef USE_ARMV8_CRYPTO_WITH_RUNTIME_CHECK
+
 /* Define to 1 to build with assertion checks. (--enable-cassert) */
 #undef USE_ASSERT_CHECKING
 

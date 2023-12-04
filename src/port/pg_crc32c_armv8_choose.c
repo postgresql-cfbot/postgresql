@@ -4,8 +4,8 @@
  *	  Choose between ARMv8 and software CRC-32C implementation.
  *
  * On first call, checks if the CPU we're running on supports the ARMv8
- * CRC Extension. If it does, use the special instructions for CRC-32C
- * computation. Otherwise, fall back to the pure software implementation
+ * CRC Extension and VMULL Extension. If it does, use the special instructions
+ * for CRC-32C computation. Otherwise, fall back to the pure software implementation
  * (slicing-by-8).
  *
  * Portions Copyright (c) 1996-2023, PostgreSQL Global Development Group
@@ -26,6 +26,7 @@
 
 #include <setjmp.h>
 #include <signal.h>
+#include <arm_neon.h>
 
 #include "port/pg_crc32c.h"
 
@@ -77,6 +78,39 @@ pg_crc32c_armv8_available(void)
 	return (result > 0);
 }
 
+static bool
+pg_vmull_armv8_available(void)
+{
+#if defined(USE_ARMV8_CRYPTO)
+	return true;
+#elif defined(USE_ARMV8_CRYPTO_WITH_RUNTIME_CHECK)
+	int			result;
+
+	pqsignal(SIGILL, illegal_instruction_handler);
+	if (sigsetjmp(illegal_instruction_jump, 1) == 0)
+	{
+		result = ((uint64_t) vmull_p64(0x12345678, 0x9abcde01) == 0x8860e9abc170678);
+	}
+	else
+	{
+		/* We got the SIGILL trap */
+		result = -1;
+	}
+	pqsignal(SIGILL, SIG_DFL);
+
+#ifndef FRONTEND
+	/* We don't expect this case, so complain loudly */
+	if (result == 0)
+		elog(ERROR, "vmull_p64 hardware results error");
+
+	elog(DEBUG1, "using armv8 vmull_p64 hardware = %d", (result > 0));
+#endif
+	return (result > 0);
+#else
+	return false;
+#endif
+}
+
 /*
  * This gets called on the first call. It replaces the function pointer
  * so that subsequent calls are routed directly to the chosen implementation.
@@ -85,9 +119,20 @@ static pg_crc32c
 pg_comp_crc32c_choose(pg_crc32c crc, const void *data, size_t len)
 {
 	if (pg_crc32c_armv8_available())
-		pg_comp_crc32c = pg_comp_crc32c_armv8;
+	{
+		if (pg_vmull_armv8_available())
+		{
+			pg_comp_crc32c = pg_comp_crc32c_armv8_parallel;
+		}
+		else
+		{
+			pg_comp_crc32c = pg_comp_crc32c_armv8;
+		}
+	}
 	else
+	{
 		pg_comp_crc32c = pg_comp_crc32c_sb8;
+	}
 
 	return pg_comp_crc32c(crc, data, len);
 }

@@ -2105,6 +2105,52 @@ endif
 
 
 ###############################################################
+# Check for ARMv8 CRYPTO Extension intrinsics to do polynomial multiplication
+#
+# If we are targeting an ARM processor that has the vmull_p64 instruction
+# that is part of the ARMv8 CRYPTO Extension, use them. And if we're not
+# targeting such a processor, but can nevertheless produce code that
+# uses the vmull_p64 instruction, compile both, and select at runtime.
+###############################################################
+cflags_crypto = []
+if (host_cpu == 'arm' or host_cpu == 'aarch64')
+
+  prog = '''
+#include <arm_neon.h>
+
+int main(void)
+{
+    return ((uint64_t)vmull_p64(0x12345678, 0x9abcde01) == 0x8860e9abc170678);
+}
+'''
+
+  if cc.links(prog, name: 'vmull_p64 without -march=armv8-a+crypto',
+      args: test_c_args)
+    # Use ARM CRYPTO Extension
+    cdata.set('USE_ARMV8_CRYPTO', 1)
+  elif cc.links(prog, name: 'vmull_p64 with -march=armv8-a+crypto',
+      args: test_c_args + ['-march=armv8-a+crypto'])
+    # Use ARM CRYPTO Extension, with runtime check
+    cflags_crypto += '-march=armv8-a+crypto'
+    cdata.set('USE_ARMV8_CRYPTO', false)
+    cdata.set('USE_ARMV8_CRYPTO_WITH_RUNTIME_CHECK', 1)
+  endif
+endif
+
+
+
+###############################################################
+# Set a new CFLAGS, cflags_crc_crypto for files that
+# require both ARMv8 CRC Extension and ARMv8 CRYPTO Extension.
+###############################################################
+cflags_crc_crypto = []
+if cflags_crc.length() != 0 or cflags_crypto.length() != 0
+  cflags_crc_crypto += '-march=armv8-a+crc+crypto'
+endif
+
+
+
+###############################################################
 # Other CPU specific stuff
 ###############################################################
 

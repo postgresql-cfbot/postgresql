@@ -85,9 +85,9 @@ replace_funcs_pos = [
   ['pg_crc32c_sb8', 'USE_SSE42_CRC32C_WITH_RUNTIME_CHECK'],
 
   # arm / aarch64
-  ['pg_crc32c_armv8', 'USE_ARMV8_CRC32C'],
-  ['pg_crc32c_armv8', 'USE_ARMV8_CRC32C_WITH_RUNTIME_CHECK', 'crc'],
-  ['pg_crc32c_armv8_choose', 'USE_ARMV8_CRC32C_WITH_RUNTIME_CHECK'],
+  ['pg_crc32c_armv8', 'USE_ARMV8_CRC32C', 'crc_crypto'],
+  ['pg_crc32c_armv8', 'USE_ARMV8_CRC32C_WITH_RUNTIME_CHECK', 'crc_crypto'],
+  ['pg_crc32c_armv8_choose', 'USE_ARMV8_CRC32C_WITH_RUNTIME_CHECK', 'crypto'],
   ['pg_crc32c_sb8', 'USE_ARMV8_CRC32C_WITH_RUNTIME_CHECK'],
 
   # loongarch
@@ -97,8 +97,8 @@ replace_funcs_pos = [
   ['pg_crc32c_sb8', 'USE_SLICING_BY_8_CRC32C'],
 ]
 
-pgport_cflags = {'crc': cflags_crc}
-pgport_sources_cflags = {'crc': []}
+pgport_cflags = {'crc': cflags_crc, 'crypto': cflags_crypto, 'crc_crypto': cflags_crc_crypto}
+pgport_sources_cflags = {'crc': [], 'crypto': [], 'crc_crypto': []}
 
 foreach f : replace_funcs_neg
   func = f.get(0)

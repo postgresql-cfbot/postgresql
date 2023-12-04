@@ -47,6 +47,7 @@ typedef struct ExplainState
 	bool		summary;		/* print total planning and execution timing */
 	bool		settings;		/* print modified settings */
 	bool		generic;		/* generate a generic plan */
+	bool		memory;			/* print planner's memory usage information */
 	ExplainFormat format;		/* output format */
 	/* state for output formatting --- not reset for each new plan tree */
 	int			indent;			/* current indentation level */
@@ -92,7 +93,8 @@ extern void ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into,
 						   ExplainState *es, const char *queryString,
 						   ParamListInfo params, QueryEnvironment *queryEnv,
 						   const instr_time *planduration,
-						   const BufferUsage *bufusage);
+						   const BufferUsage *bufusage,
+						   const MemoryUsage *mem_usage);
 
 extern void ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc);
 extern void ExplainPrintTriggers(ExplainState *es, QueryDesc *queryDesc);

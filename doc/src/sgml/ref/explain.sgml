@@ -44,6 +44,7 @@ EXPLAIN [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] <rep
     WAL [ <replaceable class="parameter">boolean</replaceable> ]
     TIMING [ <replaceable class="parameter">boolean</replaceable> ]
     SUMMARY [ <replaceable class="parameter">boolean</replaceable> ]
+    MEMORY [ <replaceable class="parameter">boolean</replaceable> ]
     FORMAT { TEXT | XML | JSON | YAML }
 </synopsis>
  </refsynopsisdiv>
@@ -246,6 +247,15 @@ ROLLBACK;
       <command>EXPLAIN EXECUTE</command> includes the time required to fetch
       the plan from the cache and the time required for re-planning, if
       necessary.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>MEMORY</literal></term>
+    <listitem>
+     <para>
+      Include information on planner's memory consumption. Specially, include the total memory allocated by the planner and net memory that remains used at the end of the planning. It defaults to <literal>FALSE</literal>.
      </para>
     </listitem>
    </varlistentry>
@@ -510,6 +520,20 @@ EXPLAIN (GENERIC_PLAN)
   SELECT sum(bar) FROM test
     WHERE id &gt; $1::integer AND id &lt; $2::integer
     GROUP BY foo;
+</programlisting>
+  </para>
+
+  <para>
+   Here's an example using MEMORY option.
+
+<programlisting>
+EXPLAIN (MEMORY) SELECT * FROM foo;
+
+                       QUERY PLAN
+---------------------------------------------------------
+ Seq Scan on foo  (cost=0.00..155.00 rows=10000 width=4)
+ Planner Memory: used=22688 bytes allocated=32768 bytes
+(2 rows)
 </programlisting>
   </para>
  </refsect1>

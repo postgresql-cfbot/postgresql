@@ -688,6 +688,32 @@ MemoryContextMemAllocated(MemoryContext context, bool recurse)
 }
 
 /*
+ * Compute memory usage from the start and end memory counts.
+ */
+void
+MemoryContextSizeDifference(MemoryUsage *mem_usage,
+							MemoryContextCounters *start,
+							MemoryContextCounters *end)
+{
+	/*
+	 * We compute the memory "used" as the difference, between end situation
+	 * and start situation, of the memory that's allocated according to the
+	 * counters, excluding memory in freelists.
+	 */
+	mem_usage->bytes_used =
+		(end->totalspace - end->freespace) -
+		(start->totalspace - start->freespace);
+
+	/*
+	 * The net memory used is from total memory allocated and not necessarily
+	 * the net memory allocated between the two given samples. Hence do not
+	 * compute the difference between allocated memory reported in the two
+	 * given samples.
+	 */
+	mem_usage->bytes_allocated = end->totalspace;
+}
+
+/*
  * MemoryContextStats
  *		Print statistics about the named context and all its descendants.
  *
@@ -745,6 +771,18 @@ MemoryContextStatsDetail(MemoryContext context, int max_children,
 								 grand_totals.totalspace, grand_totals.nblocks,
 								 grand_totals.freespace, grand_totals.freechunks,
 								 grand_totals.totalspace - grand_totals.freespace)));
+}
+
+/*
+ * Return the memory used in the given context and its children.
+ */
+extern void
+MemoryContextMemConsumed(MemoryContext context,
+						 MemoryContextCounters *consumed)
+{
+	memset(consumed, 0, sizeof(*consumed));
+
+	MemoryContextStatsInternal(context, 0, false, 0, consumed, false);
 }
 
 /*

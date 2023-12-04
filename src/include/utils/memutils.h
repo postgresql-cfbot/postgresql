@@ -84,6 +84,11 @@ extern Size GetMemoryChunkSpace(void *pointer);
 extern MemoryContext MemoryContextGetParent(MemoryContext context);
 extern bool MemoryContextIsEmpty(MemoryContext context);
 extern Size MemoryContextMemAllocated(MemoryContext context, bool recurse);
+extern void MemoryContextMemConsumed(MemoryContext context,
+									 MemoryContextCounters *consumed);
+extern void MemoryContextSizeDifference(MemoryUsage *mem_usage,
+										MemoryContextCounters *start,
+										MemoryContextCounters *end);
 extern void MemoryContextStats(MemoryContext context);
 extern void MemoryContextStatsDetail(MemoryContext context, int max_children,
 									 bool print_to_stderr);

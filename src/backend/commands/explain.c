@@ -122,6 +122,8 @@ static const char *explain_get_index_name(Oid indexId);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage,
 							  bool planning);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
+static void show_planner_memory(ExplainState *es,
+								const MemoryUsage *usage);
 static void ExplainIndexScanDetails(Oid indexid, ScanDirection indexorderdir,
 									ExplainState *es);
 static void ExplainScanTarget(Scan *plan, ExplainState *es);
@@ -202,6 +204,8 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 			summary_set = true;
 			es->summary = defGetBoolean(opt);
 		}
+		else if (strcmp(opt->defname, "memory") == 0)
+			es->memory = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "format") == 0)
 		{
 			char	   *p = defGetString(opt);
@@ -393,13 +397,30 @@ ExplainOneQuery(Query *query, int cursorOptions,
 	else
 	{
 		PlannedStmt *plan;
+		MemoryContext planner_ctx;
 		instr_time	planstart,
 					planduration;
 		BufferUsage bufusage_start,
 					bufusage;
+		MemoryContextCounters mem_counts_start;
+		MemoryContextCounters mem_counts_end;
+		MemoryUsage mem_usage;
+		MemoryContext saved_ctx;
 
+		/*
+		 * Create a new memory context to accurately measure memory malloc'ed
+		 * by the planner. For further accuracy we should use the same type of
+		 * memory context as the planner would use. That's usually AllocSet
+		 * but ensure that.
+		 */
+		Assert(IsA(CurrentMemoryContext, AllocSetContext));
+		planner_ctx = AllocSetContextCreate(CurrentMemoryContext,
+											"explain analyze planner context",
+											ALLOCSET_DEFAULT_SIZES);
 		if (es->buffers)
 			bufusage_start = pgBufferUsage;
+		MemoryContextMemConsumed(planner_ctx, &mem_counts_start);
+		saved_ctx = MemoryContextSwitchTo(planner_ctx);
 		INSTR_TIME_SET_CURRENT(planstart);
 
 		/* plan the query */
@@ -407,6 +428,9 @@ ExplainOneQuery(Query *query, int cursorOptions,
 
 		INSTR_TIME_SET_CURRENT(planduration);
 		INSTR_TIME_SUBTRACT(planduration, planstart);
+		MemoryContextSwitchTo(saved_ctx);
+		MemoryContextMemConsumed(planner_ctx, &mem_counts_end);
+		MemoryContextSizeDifference(&mem_usage, &mem_counts_start, &mem_counts_end);
 
 		/* calc differences of buffer counters. */
 		if (es->buffers)
@@ -417,7 +441,8 @@ ExplainOneQuery(Query *query, int cursorOptions,
 
 		/* run it (if needed) and produce output */
 		ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
-					   &planduration, (es->buffers ? &bufusage : NULL));
+					   &planduration, (es->buffers ? &bufusage : NULL),
+					   &mem_usage);
 	}
 }
 
@@ -527,7 +552,7 @@ void
 ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			   const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
-			   const BufferUsage *bufusage)
+			   const BufferUsage *bufusage, const MemoryUsage *mem_usage)
 {
 	DestReceiver *dest;
 	QueryDesc  *queryDesc;
@@ -628,6 +653,13 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		double		plantime = INSTR_TIME_GET_DOUBLE(*planduration);
 
 		ExplainPropertyFloat("Planning Time", "ms", 1000.0 * plantime, 3, es);
+	}
+
+	if (es->memory && mem_usage)
+	{
+		ExplainOpenGroup("Planner Memory", "Planner Memory", true, es);
+		show_planner_memory(es, mem_usage);
+		ExplainCloseGroup("Planner Memory", "Planner Memory", true, es);
 	}
 
 	/* Print info about runtime of triggers */
@@ -3765,6 +3797,27 @@ show_wal_usage(ExplainState *es, const WalUsage *usage)
 								usage->wal_bytes, es);
 	}
 }
+
+/*
+ * Show planner's memory usage details.
+ */
+static void
+show_planner_memory(ExplainState *es, const MemoryUsage *usage)
+{
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+		appendStringInfo(es->str,
+						 "Planner Memory: used=%zu bytes allocated=%zu bytes",
+						 usage->bytes_used, usage->bytes_allocated);
+		appendStringInfoChar(es->str, '\n');
+	}
+	else
+	{
+		ExplainPropertyInteger("Used", "bytes", usage->bytes_used, es);
+		ExplainPropertyInteger("Allocated", "bytes", usage->bytes_allocated, es);
+	}
+}
+
 
 /*
  * Add some additional details about an IndexScan or IndexOnlyScan

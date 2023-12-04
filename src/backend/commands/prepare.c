@@ -583,9 +583,27 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	instr_time	planduration;
 	BufferUsage bufusage_start,
 				bufusage;
+	MemoryContextCounters mem_counts_start;
+	MemoryContextCounters mem_counts_end;
+	MemoryUsage mem_usage;
+	MemoryContext planner_ctx;
+	MemoryContext saved_ctx;
+
+	/*
+	 * Create a new memory context to accurately measure memory malloc'ed by
+	 * the planner. For further accuracy we should use the same type of memory
+	 * context as the planner would use. That's usually AllocSet but ensure
+	 * that.
+	 */
+	Assert(IsA(CurrentMemoryContext, AllocSetContext));
+	planner_ctx = AllocSetContextCreate(CurrentMemoryContext,
+										"explain analyze planner context",
+										ALLOCSET_DEFAULT_SIZES);
 
 	if (es->buffers)
 		bufusage_start = pgBufferUsage;
+	MemoryContextMemConsumed(planner_ctx, &mem_counts_start);
+	saved_ctx = MemoryContextSwitchTo(planner_ctx);
 	INSTR_TIME_SET_CURRENT(planstart);
 
 	/* Look it up in the hash table */
@@ -623,6 +641,9 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 
 	INSTR_TIME_SET_CURRENT(planduration);
 	INSTR_TIME_SUBTRACT(planduration, planstart);
+	MemoryContextSwitchTo(saved_ctx);
+	MemoryContextMemConsumed(planner_ctx, &mem_counts_end);
+	MemoryContextSizeDifference(&mem_usage, &mem_counts_start, &mem_counts_end);
 
 	/* calc differences of buffer counters. */
 	if (es->buffers)
@@ -640,7 +661,8 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 
 		if (pstmt->commandType != CMD_UTILITY)
 			ExplainOnePlan(pstmt, into, es, query_string, paramLI, queryEnv,
-						   &planduration, (es->buffers ? &bufusage : NULL));
+						   &planduration, (es->buffers ? &bufusage : NULL),
+						   &mem_usage);
 		else
 			ExplainOneUtility(pstmt->utilityStmt, into, es, query_string,
 							  paramLI, queryEnv);

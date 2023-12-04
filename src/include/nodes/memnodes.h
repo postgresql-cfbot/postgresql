@@ -35,6 +35,16 @@ typedef struct MemoryContextCounters
 } MemoryContextCounters;
 
 /*
+ * MemoryUsage
+ *		For concise reporting of memory consumption
+ */
+typedef struct MemoryUsage
+{
+	Size		bytes_used;
+	Size		bytes_allocated;
+} MemoryUsage;
+
+/*
  * MemoryContext
  *		A logical context in which memory allocations occur.
  *

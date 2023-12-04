@@ -390,6 +390,11 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
 		{
 			ExplainState *es = NewExplainState();
 
+			/*
+			 * auto_explain doesn't implement planner_hook and hence can not
+			 * gather information about planner's memory usage. Hence we leave
+			 * es->memory = false.
+			 */
 			es->analyze = (queryDesc->instrument_options && auto_explain_log_analyze);
 			es->verbose = auto_explain_log_verbose;
 			es->buffers = (es->analyze && auto_explain_log_buffers);

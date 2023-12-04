@@ -1554,6 +1554,7 @@ MemoryContextData
 MemoryContextMethodID
 MemoryContextMethods
 MemoryStatsPrintFunc
+MemoryUsage
 MergeAction
 MergeActionState
 MergeAppend

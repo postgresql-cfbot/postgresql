@@ -3225,6 +3225,16 @@ pqPipelineProcessQueue(PGconn *conn)
 int
 PQpipelineSync(PGconn *conn)
 {
+	return PQsendPipelineSync(conn) && pqFlush(conn) >= 0;
+}
+
+/*
+ * PQsendPipelineSync
+ *		Send a Sync message as part of a pipeline without flushing to server
+ */
+int
+PQsendPipelineSync(PGconn *conn)
+{
 	PGcmdQueueEntry *entry;
 
 	if (!conn)
@@ -3267,10 +3277,11 @@ PQpipelineSync(PGconn *conn)
 		goto sendFailed;
 
 	/*
-	 * Give the data a push.  In nonblock mode, don't complain if we're unable
-	 * to send it all; PQgetResult() will do any additional flushing needed.
+	 * Give the data a push if we're past the size threshold. In nonblock
+	 * mode, don't complain if we're unable to send it all; the caller is
+	 * expected to execute PQflush() at some point anyway.
 	 */
-	if (PQflush(conn) < 0)
+	if (pqPipelineFlush(conn) < 0)
 		goto sendFailed;
 
 	/* OK, it's launched! */

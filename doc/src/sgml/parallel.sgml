@@ -523,6 +523,16 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
     </listitem>
   </itemizedlist>
 
+  <indexterm>
+    <primary>parallel safety</primary>
+    <secondary>functions</secondary>
+  </indexterm>
+
+  <indexterm>
+    <primary>parallel safety</primary>
+    <secondary>aggregates</secondary>
+  </indexterm>
+
  <sect2 id="parallel-labeling">
   <title>Parallel Labeling for Functions and Aggregates</title>
 

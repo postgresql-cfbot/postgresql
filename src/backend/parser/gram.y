@@ -755,7 +755,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	RESET RESTART RESTRICT RETURN RETURNING RETURNS REVOKE RIGHT ROLE ROLLBACK ROLLUP
 	ROUTINE ROUTINES ROW ROWS RULE
 
-	SAVEPOINT SCALAR SCHEMA SCHEMAS SCROLL SEARCH SECOND_P SECURITY SELECT
+	SAVE_ERROR SAVEPOINT SCALAR SCHEMA SCHEMAS SCROLL SEARCH SECOND_P SECURITY SELECT
 	SEQUENCE SEQUENCES
 	SERIALIZABLE SERVER SESSION SESSION_USER SET SETS SETOF SHARE SHOW
 	SIMILAR SIMPLE SKIP SMALLINT SNAPSHOT SOME SQL_P STABLE STANDALONE_P
@@ -3447,6 +3447,10 @@ copy_opt_item:
 			| ENCODING Sconst
 				{
 					$$ = makeDefElem("encoding", (Node *) makeString($2), @1);
+				}
+			| SAVE_ERROR
+				{
+					$$ = makeDefElem("save_error", (Node *) makeBoolean(true), @1);
 				}
 		;
 
@@ -17328,6 +17332,7 @@ unreserved_keyword:
 			| ROUTINES
 			| ROWS
 			| RULE
+			| SAVE_ERROR
 			| SAVEPOINT
 			| SCALAR
 			| SCHEMA
@@ -17936,6 +17941,7 @@ bare_label_keyword:
 			| ROW
 			| ROWS
 			| RULE
+			| SAVE_ERROR
 			| SAVEPOINT
 			| SCALAR
 			| SCHEMA

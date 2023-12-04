@@ -16,6 +16,7 @@
 
 #include "commands/copy.h"
 #include "commands/trigger.h"
+#include "nodes/miscnodes.h"
 
 /*
  * Represents the different source cases we need to worry about at
@@ -94,6 +95,12 @@ typedef struct CopyFromStateData
 								 * default value */
 	FmgrInfo   *in_functions;	/* array of input functions for each attrs */
 	Oid		   *typioparams;	/* array of element types for in_functions */
+	ErrorSaveContext *escontext; 	/* soft error trapper during in_functions execution */
+	int64		error_rows_cnt; /* total number of rows that have errors */
+	const char 	*error_rel;		/* the error row save table name */
+	const char 	*error_nsp;		/* the error row table's namespace */
+	bool	 	line_error_occured;	/* does this line conversion error happened */
+	bool	 	error_firsttime;	/* first time create error save table */
 	int		   *defmap;			/* array of default att numbers related to
 								 * missing att */
 	ExprState **defexprs;		/* array of default att expressions for all

@@ -564,6 +564,113 @@ ERROR:  conflicting or redundant options
 LINE 1: ... b, c) FROM STDIN WITH (FORMAT csv, FORCE_NULL *, FORCE_NULL...
                                                              ^
 ROLLBACK;
+--
+-- tests for SAVE_ERROR option with force_not_null, force_null
+\pset null NULL
+CREATE TABLE save_error_csv(
+    a INT NOT NULL,
+    b TEXT NOT NULL,
+    c TEXT,
+    d TEXT
+);
+--- copy success, error save table will be dropped automatically.
+COPY save_error_csv (a, b, c) FROM STDIN WITH (save_error);
+NOTICE:  No error happened.Error holding table public.save_error_csv_error will be droped
+select count(*) as expected_zero from pg_class where relname = 'save_error_csv_error';
+ expected_zero 
+---------------
+             0
+(1 row)
+
+--save_error not allowed in binary mode
+COPY save_error_csv (a, b, c) FROM STDIN WITH (save_error,FORMAT binary);
+ERROR:  cannot specify SAVE_ERROR in BINARY mode
+create table save_error_csv_error();
+--should fail. since error save table already exists.
+--error save table name = copy destination tablename + "_error"
+COPY save_error_csv (a, b, c) FROM STDIN WITH (save_error);
+ERROR:  Error save table public.save_error_csv_error already exists. Cannot use it for COPY FROM error saving
+DROP TABLE save_error_csv_error;
+BEGIN;
+COPY save_error_csv (a, b, c) FROM STDIN WITH (save_error,FORMAT csv, FORCE_NOT_NULL(b), FORCE_NULL(c));
+NOTICE:  2 rows were skipped because of error. skipped row saved to table public.save_error_csv_error
+SELECT *, b is null as b_null, b = '' as empty FROM save_error_csv;
+ a | b |  c   |  d   | b_null | empty 
+---+---+------+------+--------+-------
+ 2 |   | NULL | NULL | f      | t
+(1 row)
+
+SELECT count(*) as expect_one FROM pg_class WHERE relname = 'save_error_csv_error';
+ expect_one 
+------------
+          1
+(1 row)
+
+ROLLBACK;
+DROP TABLE save_error_csv;
+--error TABLE should already droppped.
+SELECT 1 as expect_zero FROM pg_class WHERE relname = 'save_error_csv_error';
+ expect_zero 
+-------------
+(0 rows)
+
+CREATE TABLE check_ign_err (n int, m int[], k bigint, l text);
+COPY check_ign_err FROM STDIN WITH (save_error);
+NOTICE:  8 rows were skipped because of error. skipped row saved to table public.check_ign_err_error
+--special case. will work,but the error TABLE should not DROP.
+COPY check_ign_err FROM STDIN WITH (save_error, format csv, FORCE_NULL *);
+NOTICE:  No error happened. All the past error holding saved at public.check_ign_err_error 
+--expect error TABLE exists
+SELECT * FROM check_ign_err_error;
+ lineno |                    line                    | field |         source          |                           err_message                           |        err_detail         | errorcode 
+--------+--------------------------------------------+-------+-------------------------+-----------------------------------------------------------------+---------------------------+-----------
+      2 | \n      {1}     1       \-                 | n     |                        +| invalid input syntax for type integer: "                       +| NULL                      | 22P02
+        |                                            |       |                         | "                                                               |                           | 
+      3 | a       {2}     2       \r                 | n     | a                       | invalid input syntax for type integer: "a"                      | NULL                      | 22P02
+      4 | 3       {\3}    3333333333      \n         | m     | {\x03}                  | invalid input syntax for type integer: "\x03"                   | NULL                      | 22P02
+      5 | 0x11    {3,}    3333333333      \\.        | m     | {3,}                    | malformed array literal: "{3,}"                                 | Unexpected "}" character. | 22P02
+      6 | d       {3,1/}  3333333333      \\0        | n     | d                       | invalid input syntax for type integer: "d"                      | NULL                      | 22P02
+      6 | d       {3,1/}  3333333333      \\0        | m     | {3,1/}                  | invalid input syntax for type integer: "1/"                     | NULL                      | 22P02
+      7 | e       {3,\1}  -3323879289873933333333 \n | n     | e                       | invalid input syntax for type integer: "e"                      | NULL                      | 22P02
+      7 | e       {3,\1}  -3323879289873933333333 \n | m     | {3,\x01}                | invalid input syntax for type integer: "\x01"                   | NULL                      | 22P02
+      7 | e       {3,\1}  -3323879289873933333333 \n | k     | -3323879289873933333333 | value "-3323879289873933333333" is out of range for type bigint | NULL                      | 22003
+      8 | f       {3,1}   3323879289873933333333  \r | n     | f                       | invalid input syntax for type integer: "f"                      | NULL                      | 22P02
+      8 | f       {3,1}   3323879289873933333333  \r | k     | 3323879289873933333333  | value "3323879289873933333333" is out of range for type bigint  | NULL                      | 22003
+      9 | b       {a, 4}  1.1     h                  | n     | b                       | invalid input syntax for type integer: "b"                      | NULL                      | 22P02
+      9 | b       {a, 4}  1.1     h                  | m     | {a, 4}                  | invalid input syntax for type integer: "a"                      | NULL                      | 22P02
+      9 | b       {a, 4}  1.1     h                  | k     | 1.1                     | invalid input syntax for type bigint: "1.1"                     | NULL                      | 22P02
+(14 rows)
+
+-- redundant options not allowed.
+COPY check_ign_err FROM STDIN WITH (save_error, save_error off);
+ERROR:  conflicting or redundant options
+LINE 1: COPY check_ign_err FROM STDIN WITH (save_error, save_error o...
+                                                        ^
+DROP TABLE check_ign_err CASCADE;
+DROP TABLE IF EXISTS check_ign_err_error CASCADE;
+--(type textrange was already made in test_setup.sql)
+--using textrange doing test
+CREATE TABLE textrange_input(a textrange, b textrange, c textrange);
+COPY textrange_input(a, b, c) FROM STDIN WITH (save_error,FORMAT csv, FORCE_NULL *);
+NOTICE:  4 rows were skipped because of error. skipped row saved to table public.textrange_input_error
+SELECT * FROM textrange_input_error;
+ lineno |            line            | field |  source  |                            err_message                            |                err_detail                | errorcode 
+--------+----------------------------+-------+----------+-------------------------------------------------------------------+------------------------------------------+-----------
+      1 | ,-[a\","z),[a","-inf)      | b     | -[a\,z)  | malformed range literal: "-[a\,z)"                                | Missing left parenthesis or bracket.     | 22P02
+      1 | ,-[a\","z),[a","-inf)      | c     | [a,-inf) | range lower bound must be less than or equal to range upper bound | NULL                                     | 22000
+      2 | (",a),(",",a),()",a)       | a     | (,a),(   | malformed range literal: "(,a),("                                 | Junk after right parenthesis or bracket. | 22P02
+      2 | (",a),(",",a),()",a)       | b     | ,a),()   | malformed range literal: ",a),()"                                 | Missing left parenthesis or bracket.     | 22P02
+      2 | (",a),(",",a),()",a)       | c     | a)       | malformed range literal: "a)"                                     | Missing left parenthesis or bracket.     | 22P02
+      3 | (a",")),(]","a),(a","])    | a     | (a,))    | malformed range literal: "(a,))"                                  | Junk after right parenthesis or bracket. | 22P02
+      3 | (a",")),(]","a),(a","])    | b     | (],a)    | malformed range literal: "(],a)"                                  | Missing comma after lower bound.         | 22P02
+      3 | (a",")),(]","a),(a","])    | c     | (a,])    | malformed range literal: "(a,])"                                  | Junk after right parenthesis or bracket. | 22P02
+      4 | [z","a],[z","2],[(","",")] | a     | [z,a]    | range lower bound must be less than or equal to range upper bound | NULL                                     | 22000
+      4 | [z","a],[z","2],[(","",")] | b     | [z,2]    | range lower bound must be less than or equal to range upper bound | NULL                                     | 22000
+      4 | [z","a],[z","2],[(","",")] | c     | [(,",)]  | malformed range literal: "[(,",)]"                                | Unexpected end of input.                 | 22P02
+(11 rows)
+
+DROP TABLE textrange_input;
+DROP TABLE textrange_input_error;
 \pset null ''
 -- test case with whole-row Var in a check constraint
 create table check_con_tbl (f1 int);
@@ -822,3 +929,28 @@ truncate copy_default;
 -- DEFAULT cannot be used in COPY TO
 copy (select 1 as test) TO stdout with (default '\D');
 ERROR:  COPY DEFAULT only available using COPY FROM
+-- DEFAULT WITH SAVE_ERROR.
+create table copy_default_error_save (
+	id integer,
+	text_value text not null default 'test',
+	ts_value timestamp without time zone not null default '2022-07-05'
+);
+copy copy_default_error_save from stdin with (save_error, default '\D');
+NOTICE:  3 rows were skipped because of error. skipped row saved to table public.copy_default_error_save_error
+select count(*) as expect_zero from copy_default_error_save;
+ expect_zero 
+-------------
+           0
+(1 row)
+
+select  * from copy_default_error_save_error;
+ lineno |               line               |  field   |      source      |                         err_message                         | err_detail | errorcode 
+--------+----------------------------------+----------+------------------+-------------------------------------------------------------+------------+-----------
+      1 | k       value   '2022-07-04'     | id       | k                | invalid input syntax for type integer: "k"                  |            | 22P02
+      2 | z       \D      '2022-07-03ASKL' | id       | z                | invalid input syntax for type integer: "z"                  |            | 22P02
+      2 | z       \D      '2022-07-03ASKL' | ts_value | '2022-07-03ASKL' | invalid input syntax for type timestamp: "'2022-07-03ASKL'" |            | 22007
+      3 | s       \D      \D               | id       | s                | invalid input syntax for type integer: "s"                  |            | 22P02
+(4 rows)
+
+drop table copy_default_error_save_error,copy_default_error_save;
+truncate copy_default;

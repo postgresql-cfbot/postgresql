@@ -44,6 +44,7 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
     FORCE_NOT_NULL { ( <replaceable class="parameter">column_name</replaceable> [, ...] ) | * }
     FORCE_NULL { ( <replaceable class="parameter">column_name</replaceable> [, ...] ) | * }
     ENCODING '<replaceable class="parameter">encoding_name</replaceable>'
+    SAVE_ERROR [ <replaceable class="parameter">boolean</replaceable> ]
 </synopsis>
  </refsynopsisdiv>
 
@@ -411,6 +412,17 @@ WHERE <replaceable class="parameter">condition</replaceable>
     </listitem>
    </varlistentry>
 
+   <varlistentry>
+    <term><literal>SAVE_ERROR</literal></term>
+    <listitem>
+     <para>
+      Specifies malformed data make data type conversion failure while copying will automatically report error information to a regualar table.
+      This option is not allowed when using <literal>binary</literal> format. Note that this
+      is only supported in current <command>COPY FROM</command> syntax.
+     </para>
+    </listitem>
+   </varlistentry>
+
   </variablelist>
  </refsect1>
 
@@ -570,6 +582,13 @@ COPY <replaceable class="parameter">count</replaceable>
     <literal>FORCE_NULL</literal> and <literal>FORCE_NOT_NULL</literal> can be used
     simultaneously on the same column. This results in converting quoted
     null strings to null values and unquoted null strings to empty strings.
+   </para>
+
+   <para>
+    if <literal>SAVE_ERROR</literal> spceicfied, error actually happened then
+     <productname>PostgreSQL</productname> will create one table for you, if no error happened
+     error_table not exist, nothing will happed.
+
    </para>
 
  </refsect1>
@@ -962,6 +981,75 @@ versions of <productname>PostgreSQL</productname>.
      check against somehow getting out of sync with the data.
     </para>
    </refsect3>
+
+   <refsect3>
+    <title>Error Save Table </title>
+    <para>
+        If <literal>SAVE_ERROR</literal> spceicfied, all the data type conversion fail while copying will automatically saved in a regular table.
+        <xref linkend="copy-errorsave-table"/> shows the error save table name, data type, and description.
+    </para>
+
+   <table id="copy-errorsave-table">
+
+    <title>COPY ERROR SAVE TABLE </title>
+
+    <tgroup cols="2">
+     <thead>
+      <row>
+       <entry>Column name</entry>
+       <entry>Data type</entry>
+       <entry>Description</entry>
+      </row>
+     </thead>
+
+      <tbody>
+       <row>
+       <entry> <literal>lineno</literal> </entry>
+       <entry><type>bigint</type></entry>
+       <entry>Line number where error occurred, counting from 1</entry>
+       </row>
+
+       <row>
+       <entry> <literal>line</literal> </entry>
+       <entry><type>text</type></entry>
+       <entry> Raw content of error occuring line</entry>
+       </row>
+
+       <row>
+       <entry> <literal>field</literal> </entry>
+       <entry><type>text</type></entry>
+       <entry> Field name of the error occuring </entry>
+       </row>
+
+       <row>
+       <entry> <literal>source</literal> </entry>
+       <entry><type>text</type></entry>
+       <entry> Raw content of the error occuring field </entry>
+       </row>
+
+       <row>
+       <entry> <literal>err_message </literal> </entry>
+       <entry><type>text</type></entry>
+       <entry>The error message text </entry>
+       </row>
+
+       <row>
+       <entry> <literal>err_detail</literal> </entry>
+       <entry><type>text</type></entry>
+       <entry> Detailed error message </entry>
+       </row>
+
+       <row>
+       <entry> <literal>errorcode </literal> </entry>
+       <entry><type>text</type></entry>
+       <entry> The error code for the copying error <literal>*</literal> </entry>
+       </row>
+
+      </tbody>
+     </tgroup>
+    </table>
+   </refsect3>
+
   </refsect2>
  </refsect1>
 

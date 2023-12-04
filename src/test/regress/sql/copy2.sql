@@ -374,6 +374,89 @@ BEGIN;
 COPY forcetest (a, b, c) FROM STDIN WITH (FORMAT csv, FORCE_NULL *, FORCE_NULL(b));
 ROLLBACK;
 
+--
+-- tests for SAVE_ERROR option with force_not_null, force_null
+\pset null NULL
+CREATE TABLE save_error_csv(
+    a INT NOT NULL,
+    b TEXT NOT NULL,
+    c TEXT,
+    d TEXT
+);
+
+--- copy success, error save table will be dropped automatically.
+COPY save_error_csv (a, b, c) FROM STDIN WITH (save_error);
+\.
+
+select count(*) as expected_zero from pg_class where relname = 'save_error_csv_error';
+
+--save_error not allowed in binary mode
+COPY save_error_csv (a, b, c) FROM STDIN WITH (save_error,FORMAT binary);
+create table save_error_csv_error();
+--should fail. since error save table already exists.
+--error save table name = copy destination tablename + "_error"
+COPY save_error_csv (a, b, c) FROM STDIN WITH (save_error);
+
+DROP TABLE save_error_csv_error;
+
+BEGIN;
+COPY save_error_csv (a, b, c) FROM STDIN WITH (save_error,FORMAT csv, FORCE_NOT_NULL(b), FORCE_NULL(c));
+z,,""
+\0,,
+2,,
+\.
+
+SELECT *, b is null as b_null, b = '' as empty FROM save_error_csv;
+SELECT count(*) as expect_one FROM pg_class WHERE relname = 'save_error_csv_error';
+ROLLBACK;
+
+DROP TABLE save_error_csv;
+
+--error TABLE should already droppped.
+SELECT 1 as expect_zero FROM pg_class WHERE relname = 'save_error_csv_error';
+
+CREATE TABLE check_ign_err (n int, m int[], k bigint, l text);
+COPY check_ign_err FROM STDIN WITH (save_error);
+1	{1}	1	1
+\n	{1}	1	\-
+a	{2}	2	\r
+3	{\3}	3333333333	\n
+0x11	{3,}	3333333333	\\.
+d	{3,1/}	3333333333	\\0
+e	{3,\1}	-3323879289873933333333	\n
+f	{3,1}	3323879289873933333333	\r
+b	{a, 4}	1.1	h
+5	{5}	5	\\
+\.
+
+--special case. will work,but the error TABLE should not DROP.
+COPY check_ign_err FROM STDIN WITH (save_error, format csv, FORCE_NULL *);
+,,,
+\.
+
+--expect error TABLE exists
+SELECT * FROM check_ign_err_error;
+
+-- redundant options not allowed.
+COPY check_ign_err FROM STDIN WITH (save_error, save_error off);
+
+DROP TABLE check_ign_err CASCADE;
+DROP TABLE IF EXISTS check_ign_err_error CASCADE;
+
+--(type textrange was already made in test_setup.sql)
+--using textrange doing test
+CREATE TABLE textrange_input(a textrange, b textrange, c textrange);
+COPY textrange_input(a, b, c) FROM STDIN WITH (save_error,FORMAT csv, FORCE_NULL *);
+,-[a\","z),[a","-inf)
+(",a),(",",a),()",a)
+(a",")),(]","a),(a","])
+[z","a],[z","2],[(","",")]
+\.
+
+SELECT * FROM textrange_input_error;
+DROP TABLE textrange_input;
+DROP TABLE textrange_input_error;
+
 \pset null ''
 
 -- test case with whole-row Var in a check constraint
@@ -609,3 +692,19 @@ truncate copy_default;
 
 -- DEFAULT cannot be used in COPY TO
 copy (select 1 as test) TO stdout with (default '\D');
+
+-- DEFAULT WITH SAVE_ERROR.
+create table copy_default_error_save (
+	id integer,
+	text_value text not null default 'test',
+	ts_value timestamp without time zone not null default '2022-07-05'
+);
+copy copy_default_error_save from stdin with (save_error, default '\D');
+k	value	'2022-07-04'
+z	\D	'2022-07-03ASKL'
+s	\D	\D
+\.
+select count(*) as expect_zero from copy_default_error_save;
+select  * from copy_default_error_save_error;
+drop table copy_default_error_save_error,copy_default_error_save;
+truncate copy_default;

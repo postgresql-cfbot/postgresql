@@ -419,6 +419,7 @@ ProcessCopyOptions(ParseState *pstate,
 	bool		format_specified = false;
 	bool		freeze_specified = false;
 	bool		header_specified = false;
+	bool		save_error_specified = false;
 	ListCell   *option;
 
 	/* Support external use for option sanity checking */
@@ -457,6 +458,13 @@ ProcessCopyOptions(ParseState *pstate,
 				errorConflictingDefElem(defel, pstate);
 			freeze_specified = true;
 			opts_out->freeze = defGetBoolean(defel);
+		}
+		else if (strcmp(defel->defname, "save_error") == 0)
+		{
+			if (save_error_specified)
+				errorConflictingDefElem(defel, pstate);
+			save_error_specified = true;
+			opts_out->save_error = defGetBoolean(defel);
 		}
 		else if (strcmp(defel->defname, "delimiter") == 0)
 		{
@@ -598,6 +606,10 @@ ProcessCopyOptions(ParseState *pstate,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("cannot specify DEFAULT in BINARY mode")));
 
+	if (opts_out->binary && opts_out->save_error)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("cannot specify SAVE_ERROR in BINARY mode")));
 	/* Set defaults for omitted options */
 	if (!opts_out->delim)
 		opts_out->delim = opts_out->csv_mode ? "," : "\t";

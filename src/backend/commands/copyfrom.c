@@ -38,6 +38,7 @@
 #include "executor/executor.h"
 #include "executor/nodeModifyTable.h"
 #include "executor/tuptable.h"
+#include "executor/spi.h"
 #include "foreign/fdwapi.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
@@ -652,10 +653,12 @@ CopyFrom(CopyFromState cstate)
 	bool		has_before_insert_row_trig;
 	bool		has_instead_insert_row_trig;
 	bool		leafpart_use_multi_insert = false;
+	StringInfo	err_save_buf;
 
 	Assert(cstate->rel);
 	Assert(list_length(cstate->range_table) == 1);
-
+	if (cstate->opts.save_error)
+		Assert(cstate->escontext);
 	/*
 	 * The target must be a plain, foreign, or partitioned relation, or have
 	 * an INSTEAD OF INSERT row trigger.  (Currently, such triggers are only
@@ -952,6 +955,7 @@ CopyFrom(CopyFromState cstate)
 	errcallback.previous = error_context_stack;
 	error_context_stack = &errcallback;
 
+	err_save_buf = makeStringInfo();
 	for (;;)
 	{
 		TupleTableSlot *myslot;
@@ -989,8 +993,54 @@ CopyFrom(CopyFromState cstate)
 		ExecClearTuple(myslot);
 
 		/* Directly store the values/nulls array in the slot */
-		if (!NextCopyFrom(cstate, econtext, myslot->tts_values, myslot->tts_isnull))
+		if (!NextCopyFrom(cstate, econtext, myslot->tts_values, myslot->tts_isnull, err_save_buf))
+		{
+			if (cstate->opts.save_error)
+			{
+				Assert(cstate->error_nsp && cstate->error_rel);
+
+				if (cstate->error_rows_cnt > 0)
+				{
+					ereport(NOTICE,
+							errmsg("%ld rows were skipped because of error."
+									" skipped row saved to table %s.%s",
+									cstate->error_rows_cnt,
+									cstate->error_nsp, cstate->error_rel));
+				}
+				else
+				{
+					StringInfoData 	querybuf;
+					if (cstate->error_firsttime)
+					{
+						ereport(NOTICE,
+								errmsg("No error happened."
+										"Error holding table %s.%s will be droped",
+										cstate->error_nsp, cstate->error_rel));
+						initStringInfo(&querybuf);
+						appendStringInfo(&querybuf,
+										"DROP TABLE IF EXISTS %s.%s CASCADE ",
+										cstate->error_nsp, cstate->error_rel);
+
+						if (SPI_connect() != SPI_OK_CONNECT)
+							elog(ERROR, "SPI_connect failed");
+						if (SPI_execute(querybuf.data, false, 0) != SPI_OK_UTILITY)
+							elog(ERROR, "SPI_exec failed: %s", querybuf.data);
+						if (SPI_finish() != SPI_OK_FINISH)
+							elog(ERROR, "SPI_finish failed");
+					}
+					else
+						ereport(NOTICE,
+								errmsg("No error happened. "
+										"All the past error holding saved at %s.%s ",
+										cstate->error_nsp, cstate->error_rel));
+				}
+			}
 			break;
+		}
+
+		/* Soft error occured, skip this tuple */
+		if (cstate->opts.save_error && cstate->line_error_occured)
+			continue;
 
 		ExecStoreVirtualTuple(myslot);
 
@@ -1443,6 +1493,103 @@ BeginCopyFrom(ParseState *pstate,
 			cstate->opts.force_null_flags[attnum - 1] = true;
 		}
 	}
+
+	/* Set up soft error handler for SAVE_ERROR */
+	if (cstate->opts.save_error)
+	{
+		char	*err_nsp;
+		char	error_rel[NAMEDATALEN];
+		StringInfoData 	querybuf;
+		bool		isnull;
+		bool		error_table_ok;
+
+		cstate->escontext = makeNode(ErrorSaveContext);
+		cstate->escontext->type = T_ErrorSaveContext;
+		cstate->escontext->details_wanted = true;
+		cstate->escontext->error_occurred = false;
+
+		snprintf(error_rel, sizeof(error_rel), "%s",
+							RelationGetRelationName(cstate->rel));
+		strlcat(error_rel,"_error", NAMEDATALEN);
+		err_nsp = get_namespace_name(RelationGetNamespace(cstate->rel));
+
+		initStringInfo(&querybuf);
+		/* The build query is used to validate:
+		* . err_nsp.error_rel table exists
+		* . column list(order by attnum, begin from ctid) =
+		*	{ctid, lineno,line,field,source,err_message,err_detail,errorcode}
+		* . data types (from attnum = -1) ={tid, int8,text,text,text,text,text,text}
+		* 	We need ctid system column when
+		*		save_error table already exists and have zero column.
+		*
+		*/
+		appendStringInfo(&querybuf,
+						"SELECT (array_agg(pa.attname ORDER BY pa.attnum) "
+							"= '{ctid,lineno,line,field,source,err_message,err_detail,errorcode}') AND "
+							"(array_agg(pt.typname ORDER BY pa.attnum) "
+							"= '{tid,int8,text,text,text,text,text,text}') "
+							"FROM pg_catalog.pg_attribute pa "
+							"JOIN pg_catalog.pg_class	pc ON pc.oid = pa.attrelid "
+							"JOIN pg_catalog.pg_type 	pt ON pt.oid = pa.atttypid "
+							"JOIN pg_catalog.pg_namespace pn "
+							"ON pn.oid = pc.relnamespace WHERE ");
+
+		appendStringInfo(&querybuf,
+							"relname = $$%s$$ AND pn.nspname = $$%s$$ "
+							" AND pa.attnum >= -1 AND NOT attisdropped ",
+							error_rel, err_nsp);
+
+		if (SPI_connect() != SPI_OK_CONNECT)
+			elog(ERROR, "SPI_connect failed");
+
+		if (SPI_execute(querybuf.data, false, 0) != SPI_OK_SELECT)
+			elog(ERROR, "SPI_exec failed: %s", querybuf.data);
+
+		error_table_ok = DatumGetBool(SPI_getbinval(SPI_tuptable->vals[0],
+									   SPI_tuptable->tupdesc,
+									   1, &isnull));
+
+		/* no err_nsp.error_rel table then crete one. for holding error. */
+		if (isnull)
+		{
+			resetStringInfo(&querybuf);
+			appendStringInfo(&querybuf,
+							"CREATE TABLE %s.%s (LINENO BIGINT, LINE TEXT, "
+							"FIELD TEXT, SOURCE TEXT, ERR_MESSAGE TEXT, "
+							"ERR_DETAIL TEXT, ERRORCODE TEXT)",
+							 err_nsp,error_rel);
+			if (SPI_execute(querybuf.data, false, 0) != SPI_OK_UTILITY)
+				elog(ERROR, "SPI_exec failed: %s", querybuf.data);
+
+			cstate->error_firsttime = true;
+			elog(DEBUG1, "%s.%s created ", err_nsp, error_rel);
+		}
+		else if (error_table_ok)
+			/* error save table already exists. Set error_firsttime to false */
+			cstate->error_firsttime = false;
+		else if(!error_table_ok)
+			ereport(ERROR,
+					(errmsg("Error save table %s.%s already exists. "
+								 "Cannot use it for COPY FROM error saving",
+								 err_nsp, error_rel)));
+
+		if (SPI_finish() != SPI_OK_FINISH)
+			elog(ERROR, "SPI_finish failed");
+
+		/* these info need, no error will drop err_nsp.error_rel table */
+		cstate->error_rel = pstrdup(error_rel);
+		cstate->error_nsp = err_nsp;
+	}
+	else
+	{
+		/* set to NULL */
+		cstate->error_rel = NULL;
+		cstate->error_nsp = NULL;
+		cstate->escontext = NULL;
+	}
+
+	cstate->error_rows_cnt = 0;  		/* set the default to 0 */
+	cstate->line_error_occured = false;	/* default, assume conversion be ok. */
 
 	/* Convert convert_selectively name list to per-column flags */
 	if (cstate->opts.convert_selectively)

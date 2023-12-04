@@ -66,10 +66,12 @@
 #include "commands/copyfrom_internal.h"
 #include "commands/progress.h"
 #include "executor/executor.h"
+#include "executor/spi.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "nodes/miscnodes.h"
 #include "pgstat.h"
 #include "port/pg_bswap.h"
 #include "utils/builtins.h"
@@ -852,7 +854,7 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
  */
 bool
 NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
-			 Datum *values, bool *nulls)
+			 Datum *values, bool *nulls, StringInfo err_save_buf)
 {
 	TupleDesc	tupDesc;
 	AttrNumber	num_phys_attrs,
@@ -885,6 +887,11 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 		if (!NextCopyFromRawFields(cstate, &field_strings, &fldct))
 			return false;
 
+		/* reset to false for next new line if SAVE_ERROR specified */
+		if (cstate->opts.save_error)
+		{
+			cstate->line_error_occured = false;
+		}
 		/* check for overflowing fields */
 		if (attr_count > 0 && fldct > attr_count)
 			ereport(ERROR,
@@ -956,15 +963,87 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 				values[m] = ExecEvalExpr(defexprs[m], econtext, &nulls[m]);
 			}
 			else
-				values[m] = InputFunctionCall(&in_functions[m],
-											  string,
-											  typioparams[m],
-											  att->atttypmod);
+			{
+				/*
+				*
+				* InputFunctionCall is more faster than InputFunctionCallSafe.
+				* So there is two function.
+				*/
+				if(!cstate->opts.save_error)
+				{
+					values[m] = InputFunctionCall(&in_functions[m],
+												string,
+												typioparams[m],
+												att->atttypmod);
+				}
+				else
+				{
+					if (!InputFunctionCallSafe(&in_functions[m],
+											string,
+											typioparams[m],
+											att->atttypmod,
+											(Node *) cstate->escontext,
+											&values[m]))
+					{
+						char	errcode[12];
+						char	*err_detail;
 
+						snprintf(errcode, sizeof(errcode),
+									"%s",
+									unpack_sql_state(cstate->escontext->error_data->sqlerrcode));
+
+						if (!cstate->escontext->error_data->detail)
+							err_detail = NULL;
+						else
+							err_detail = cstate->escontext->error_data->detail;
+
+						resetStringInfo(err_save_buf);
+						/* error table first column is bigint, reset is text.*/
+						appendStringInfo(err_save_buf,
+										"insert into %s.%s(lineno,line,field, "
+										"source, err_message, errorcode,err_detail) "
+										"select $$%ld$$::bigint, $$%s$$, $$%s$$, "
+										"$$%s$$, $$%s$$, $$%s$$, ",
+										cstate->error_nsp, cstate->error_rel,
+										cstate->cur_lineno, cstate->line_buf.data,
+										cstate->cur_attname, string,
+										cstate->escontext->error_data->message,
+										errcode);
+
+						if (!err_detail)
+							appendStringInfo(err_save_buf, "NULL::text");
+						else
+							appendStringInfo(err_save_buf,"$$%s$$", err_detail);
+
+						if (SPI_connect() != SPI_OK_CONNECT)
+							elog(ERROR, "SPI_connect failed");
+						if (SPI_execute(err_save_buf->data, false, 0) != SPI_OK_INSERT)
+							elog(ERROR, "SPI_exec failed: %s", err_save_buf->data);
+						if (SPI_processed != 1)
+							elog(FATAL, "not a singleton result");
+						if (SPI_finish() != SPI_OK_FINISH)
+							elog(ERROR, "SPI_finish failed");
+
+						/* line error occured, set it once per line */
+						if (!cstate->line_error_occured)
+							cstate->line_error_occured = true;
+
+						cstate->escontext->error_occurred = false;
+						cstate->escontext->details_wanted = true;
+						memset(cstate->escontext->error_data,0, sizeof(ErrorData));
+					}
+				}
+			}
 			cstate->cur_attname = NULL;
 			cstate->cur_attval = NULL;
 		}
 
+		/* record error rows count. */
+		if (cstate->line_error_occured)
+		{
+			cstate->error_rows_cnt++;
+			Assert(cstate->opts.save_error);
+		}
 		Assert(fieldno == attr_count);
 	}
 	else

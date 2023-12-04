@@ -475,6 +475,8 @@ AutoVacLauncherMain(int argc, char *argv[])
 	pqsignal(SIGFPE, FloatExceptionHandler);
 	pqsignal(SIGCHLD, SIG_DFL);
 
+	LoadBacktraceFunctions();
+
 	/*
 	 * Create a per-backend PGPROC struct in shared memory.  We must do this
 	 * before we can use LWLocks or access any shared memory.
@@ -1542,6 +1544,8 @@ AutoVacWorkerMain(int argc, char *argv[])
 	pqsignal(SIGUSR2, SIG_IGN);
 	pqsignal(SIGFPE, FloatExceptionHandler);
 	pqsignal(SIGCHLD, SIG_DFL);
+
+	LoadBacktraceFunctions();
 
 	/*
 	 * Create a per-backend PGPROC struct in shared memory.  We must do this

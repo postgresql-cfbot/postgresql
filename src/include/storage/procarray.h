@@ -68,6 +68,7 @@ extern PGPROC *BackendPidGetProc(int pid);
 extern PGPROC *BackendPidGetProcWithLock(int pid);
 extern int	BackendXidGetPid(TransactionId xid);
 extern bool IsBackendPid(int pid);
+extern bool SendProcSignalBackendOrAuxproc(int pid, ProcSignalReason reason);
 
 extern VirtualTransactionId *GetCurrentVirtualXIDs(TransactionId limitXmin,
 												   bool excludeXmin0, bool allDbs, int excludeVacuum,

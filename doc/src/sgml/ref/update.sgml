@@ -442,6 +442,29 @@ COMMIT;
 <programlisting>
 UPDATE films SET kind = 'Dramatic' WHERE CURRENT OF c_films;
 </programlisting></para>
+
+  <para>
+   To break up a large <command>UPDATE</command> into more manageable pieces,
+   it is possible to do a self-join on the
+   <link linkend="ddl-system-columns-ctid">ctid</link> system column using
+   <link linkend="queries-with">Common Table Expression</link> to limit the
+   number of rows to be updated:
+<programlisting>
+WITH exceeded_max_retries AS (
+  SELECT w.ctid
+  FROM work_item AS w
+  WHERE w.status = 'active'
+  AND w.num_retries > 10
+  ORDER BY w.retry_timestamp
+  FOR UPDATE
+  LIMIT 5000
+)
+UPDATE work_item
+SET status = 'failed'
+FROM exceeded_max_retries AS emr
+WHERE work_item.ctid = emr.ctid
+</programlisting>
+  </para>
  </refsect1>
 
  <refsect1>

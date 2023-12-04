@@ -79,3 +79,21 @@ step slto: SET lock_timeout = '10s'; SET statement_timeout = '10ms';
 step update: DELETE FROM accounts WHERE accountid = 'checking'; <waiting ...>
 step update: <... completed>
 ERROR:  canceling statement due to statement timeout
+
+starting permutation: tsto sleep0 sleep1000
+step tsto: SET transaction_timeout = '30ms'; SET statement_timeout = '10s';
+step sleep0: SELECT pg_sleep(0.0001)
+pg_sleep
+--------
+        
+(1 row)
+
+step sleep1000: SELECT pg_sleep(1000) <waiting ...>
+step sleep1000: <... completed>
+ERROR:  canceling statement due to transaction timeout
+
+starting permutation: stto sleep1000
+step stto: SET transaction_timeout = '10s'; SET statement_timeout = '10ms';
+step sleep1000: SELECT pg_sleep(1000) <waiting ...>
+step sleep1000: <... completed>
+ERROR:  canceling statement due to statement timeout

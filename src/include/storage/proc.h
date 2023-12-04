@@ -428,6 +428,7 @@ extern PGDLLIMPORT int DeadlockTimeout;
 extern PGDLLIMPORT int StatementTimeout;
 extern PGDLLIMPORT int LockTimeout;
 extern PGDLLIMPORT int IdleInTransactionSessionTimeout;
+extern PGDLLIMPORT int TransactionTimeout;
 extern PGDLLIMPORT int IdleSessionTimeout;
 extern PGDLLIMPORT bool log_lock_waits;
 

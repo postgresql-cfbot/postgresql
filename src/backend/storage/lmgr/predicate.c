@@ -814,7 +814,7 @@ SerialInit(void)
 	SimpleLruInit(SerialSlruCtl, "serializable",
 				  serializable_buffers, 0, "pg_serial",
 				  LWTRANCHE_SERIAL_BUFFER, LWTRANCHE_SERIAL_SLRU,
-				  SYNC_HANDLER_NONE, false);
+				  SYNC_HANDLER_NONE, true);
 #ifdef USE_ASSERT_CHECKING
 	SerialPagePrecedesLogicallyUnitTests();
 #endif

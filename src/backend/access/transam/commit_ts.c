@@ -558,7 +558,7 @@ CommitTsShmemInit(void)
 				  "pg_commit_ts", LWTRANCHE_COMMITTS_BUFFER,
 				  LWTRANCHE_COMMITTS_SLRU,
 				  SYNC_HANDLER_COMMIT_TS,
-				  false);
+				  true);
 	SlruPagePrecedesUnitTests(CommitTsCtl, COMMIT_TS_XACTS_PER_PAGE);
 
 	commitTsShared = ShmemInitStruct("CommitTs shared",

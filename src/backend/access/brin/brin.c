@@ -227,6 +227,7 @@ static bool add_values_to_range(Relation idxRel, BrinDesc *bdesc,
 static bool check_null_keys(BrinValues *bval, ScanKey *nullkeys, int nnullkeys);
 static void brin_fill_empty_ranges(BrinBuildState *state,
 								   BlockNumber prevRange, BlockNumber maxRange);
+static BlockNumber brin_next_range(BrinBuildState *state, BlockNumber blkno);
 
 /* parallel index builds */
 static void _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
@@ -2935,7 +2936,7 @@ brin_fill_empty_ranges(BrinBuildState *state,
 	 * If we already summarized some ranges, we need to start with the next
 	 * one. Otherwise start from the first range of the table.
 	 */
-	blkno = (prevRange == InvalidBlockNumber) ? 0 : (prevRange + state->bs_pagesPerRange);
+	blkno = (prevRange == InvalidBlockNumber) ? 0 : brin_next_range(state, prevRange);
 
 	/* Generate empty ranges until we hit the next non-empty range. */
 	while (blkno < nextRange)
@@ -2948,6 +2949,18 @@ brin_fill_empty_ranges(BrinBuildState *state,
 					  blkno, state->bs_emptyTuple, state->bs_emptyTupleLen);
 
 		/* try next page range */
-		blkno += state->bs_pagesPerRange;
+		blkno = brin_next_range(state, blkno);
 	}
+}
+
+static BlockNumber
+brin_next_range(BrinBuildState *state, BlockNumber blkno)
+{
+	BlockNumber ret = (blkno + state->bs_pagesPerRange);
+
+	/* overflow */
+	if (ret < blkno)
+		ret = InvalidBlockNumber;
+
+	return ret;
 }

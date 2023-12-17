@@ -14,8 +14,6 @@
 #ifndef JSONAPI_H
 #define JSONAPI_H
 
-#include "lib/stringinfo.h"
-
 typedef enum JsonTokenType
 {
 	JSON_TOKEN_INVALID,
@@ -48,6 +46,7 @@ typedef enum JsonParseErrorType
 	JSON_EXPECTED_OBJECT_NEXT,
 	JSON_EXPECTED_STRING,
 	JSON_INVALID_TOKEN,
+	JSON_OUT_OF_MEMORY,
 	JSON_UNICODE_CODE_POINT_ZERO,
 	JSON_UNICODE_ESCAPE_FORMAT,
 	JSON_UNICODE_HIGH_ESCAPE,
@@ -57,6 +56,17 @@ typedef enum JsonParseErrorType
 	JSON_SEM_ACTION_FAILED,		/* error should already be reported */
 } JsonParseErrorType;
 
+/*
+ * Don't depend on the internal type header for strval; if callers need access
+ * then they can include the appropriate header themselves.
+ */
+#ifdef FRONTEND
+#define StrValType PQExpBufferData
+#else
+#define StrValType StringInfoData
+#endif
+
+typedef struct StrValType StrValType;
 
 /*
  * All the fields in this structure should be treated as read-only.
@@ -88,7 +98,9 @@ typedef struct JsonLexContext
 	bits32		flags;
 	int			line_number;	/* line number, starting from 1 */
 	char	   *line_start;		/* where that line starts within input */
-	StringInfo	strval;
+	bool		parse_strval;
+	StrValType *strval;			/* only used if parse_strval == true */
+	StrValType *errormsg;
 } JsonLexContext;
 
 typedef JsonParseErrorType (*json_struct_action) (void *state);

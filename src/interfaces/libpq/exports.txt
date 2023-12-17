@@ -191,3 +191,6 @@ PQclosePrepared           188
 PQclosePortal             189
 PQsendClosePrepared       190
 PQsendClosePortal         191
+PQsetAuthDataHook         192
+PQgetAuthDataHook         193
+PQdefaultAuthDataHook     194

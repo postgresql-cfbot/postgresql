@@ -118,6 +118,10 @@ option('lz4', type: 'feature', value: 'auto',
 option('nls', type: 'feature', value: 'auto',
   description: 'Native language support')
 
+option('oauth', type : 'combo', choices : ['auto', 'none', 'curl', 'iddawc'],
+  value: 'auto',
+  description: 'use LIB for OAuth 2.0 support (curl, iddawc)')
+
 option('pam', type: 'feature', value: 'auto',
   description: 'PAM support')
 

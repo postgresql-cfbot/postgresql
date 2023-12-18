@@ -6,7 +6,7 @@
  * This source file contains functions controlling WAL recovery.
  * InitWalRecovery() initializes the system for crash or archive recovery,
  * or standby mode, depending on configuration options and the state of
- * the control file and possible backup label file.  PerformWalRecovery()
+ * the control file and possible backup recovery.  PerformWalRecovery()
  * performs the actual WAL replay, calling the rmgr-specific redo routines.
  * FinishWalRecovery() performs end-of-recovery checks and cleanup actions,
  * and prepares information needed to initialize the WAL for writes.  In
@@ -152,11 +152,12 @@ static bool recovery_signal_file_found = false;
 
 /*
  * CheckPointLoc is the position of the checkpoint record that determines
- * where to start the replay.  It comes from the backup label file or the
- * control file.
+ * where to start the replay.  It comes from the control file, either from the
+ * default location or from a backup recovery field.
  *
- * RedoStartLSN is the checkpoint's REDO location, also from the backup label
- * file or the control file.  In standby mode, XLOG streaming usually starts
+ * RedoStartLSN is the checkpoint's REDO location, also from the default
+ * control file location or from a backup recovery field.  In standby mode,
+ * XLOG streaming usually starts
  * from the position where an invalid record was found.  But if we fail to
  * read even the initial checkpoint record, we use the REDO location instead
  * of the checkpoint location as the start position of XLOG streaming.
@@ -388,9 +389,6 @@ static void ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record, Time
 static void EnableStandbyMode(void);
 static void readRecoverySignalFile(void);
 static void validateRecoveryParameters(void);
-static bool read_backup_label(XLogRecPtr *checkPointLoc,
-							  TimeLineID *backupLabelTLI,
-							  bool *backupEndRequired, bool *backupFromStandby);
 static bool read_tablespace_map(List **tablespaces);
 
 static void xlogrecovery_redo(XLogReaderState *record, TimeLineID replayTLI);
@@ -492,8 +490,8 @@ EnableStandbyMode(void)
  * Prepare the system for WAL recovery, if needed.
  *
  * This is called by StartupXLOG() which coordinates the server startup
- * sequence.  This function analyzes the control file and the backup label
- * file, if any, and figures out whether we need to perform crash recovery or
+ * sequence.  This function analyzes the control file and backup recovery
+ * info, if any, and figures out whether we need to perform crash recovery or
  * archive recovery, and how far we need to replay the WAL to reach a
  * consistent state.
  *
@@ -510,7 +508,7 @@ EnableStandbyMode(void)
  */
 void
 InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
-				bool *haveBackupLabel_ptr, bool *haveTblspcMap_ptr)
+				bool *haveTblspcMap_ptr)
 {
 	XLogPageReadPrivate *private;
 	struct stat st;
@@ -518,7 +516,7 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 	XLogRecord *record;
 	DBState		dbstate_at_startup;
 	bool		haveTblspcMap = false;
-	bool		haveBackupLabel = false;
+	bool		backupRecoveryRequired = false;
 	CheckPoint	checkPoint;
 	bool		backupFromStandby = false;
 
@@ -549,7 +547,7 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 
 	/*
 	 * Set the WAL reading processor now, as it will be needed when reading
-	 * the checkpoint record required (backup_label or not).
+	 * the checkpoint record required (backup recovery required or not).
 	 */
 	private = palloc0(sizeof(XLogPageReadPrivate));
 	xlogreader =
@@ -585,18 +583,33 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 	primary_image_masked = (char *) palloc(BLCKSZ);
 
 	/*
-	 * Read the backup_label file.  We want to run this part of the recovery
-	 * process after checking for signal files and after performing validation
-	 * of the recovery parameters.
+	 * Load recovery settings from pg_control.  We want to run this part of the
+	 * recovery process after checking for signal files and after performing
+	 * validation of the recovery parameters.
 	 */
-	if (read_backup_label(&CheckPointLoc, &CheckPointTLI, &backupEndRequired,
-						  &backupFromStandby))
+	if (ControlFile->backupRecoveryRequired)
 	{
 		List	   *tablespaces = NIL;
 
+		/* Initialize recovery from fields stored in pg_control */
+		CheckPointLoc = ControlFile->backupCheckPoint;
+		CheckPointTLI = ControlFile->backupStartPointTLI;
+		RedoStartLSN = ControlFile->backupStartPoint;
+		RedoStartTLI = ControlFile->backupStartPointTLI;
+		backupEndRequired = ControlFile->backupEndRequired;
+		backupFromStandby = ControlFile->backupFromStandby;
+
 		/*
-		 * Archive recovery was requested, and thanks to the backup label
-		 * file, we know how far we need to replay to reach consistency. Enter
+		* Clear backupRecoveryRequired in ControlFile so we do not initialize
+		* recovery settings again, but also set a local variable so later logic
+		* knows that backup recovery was initialized.
+		*/
+		ControlFile->backupRecoveryRequired = false;
+		backupRecoveryRequired = true;
+
+		/*
+		 * Archive recovery was requested, and thanks to the recovery
+		 * info, we know how far we need to replay to reach consistency. Enter
 		 * archive recovery directly.
 		 */
 		InArchiveRecovery = true;
@@ -604,8 +617,9 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 			EnableStandbyMode();
 
 		/*
-		 * When a backup_label file is present, we want to roll forward from
-		 * the checkpoint it identifies, rather than using pg_control.
+		 * When backup recovery is requested, we want to roll forward from
+		 * the checkpoint it identifies, rather than using the default
+		 * checkpoint.
 		 */
 		record = ReadCheckpointRecord(xlogprefetcher, CheckPointLoc,
 									  CheckPointTLI);
@@ -620,9 +634,8 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 
 			/*
 			 * Make sure that REDO location exists. This may not be the case
-			 * if there was a crash during an online backup, which left a
-			 * backup_label around that references a WAL segment that's
-			 * already been archived.
+			 * if recovery.signal is missing and the WAL has already been
+			 * archived.
 			 */
 			if (checkPoint.redo < CheckPointLoc)
 			{
@@ -631,20 +644,16 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 								checkPoint.ThisTimeLineID))
 					ereport(FATAL,
 							(errmsg("could not find redo location referenced by checkpoint record"),
-							 errhint("If you are restoring from a backup, touch \"%s/recovery.signal\" or \"%s/standby.signal\" and add required recovery options.\n"
-									 "If you are not restoring from a backup, try removing the file \"%s/backup_label\".\n"
-									 "Be careful: removing \"%s/backup_label\" will result in a corrupt cluster if restoring from a backup.",
-									 DataDir, DataDir, DataDir, DataDir)));
+							 errhint("If you are restoring from a backup, touch \"%s/recovery.signal\" or \"%s/standby.signal\" and add required recovery options.\n",
+									 DataDir, DataDir)));
 			}
 		}
 		else
 		{
 			ereport(FATAL,
 					(errmsg("could not locate required checkpoint record"),
-					 errhint("If you are restoring from a backup, touch \"%s/recovery.signal\" or \"%s/standby.signal\" and add required recovery options.\n"
-							 "If you are not restoring from a backup, try removing the file \"%s/backup_label\".\n"
-							 "Be careful: removing \"%s/backup_label\" will result in a corrupt cluster if restoring from a backup.",
-							 DataDir, DataDir, DataDir, DataDir)));
+					 errhint("If you are restoring from a backup, touch \"%s/recovery.signal\" or \"%s/standby.signal\" and add required recovery options.\n",
+							 DataDir, DataDir)));
 			wasShutdown = false;	/* keep compiler quiet */
 		}
 
@@ -679,37 +688,32 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 			/* tell the caller to delete it later */
 			haveTblspcMap = true;
 		}
-
-		/* tell the caller to delete it later */
-		haveBackupLabel = true;
 	}
 	else
 	{
-		/* No backup_label file has been found if we are here. */
-
 		/*
-		 * If tablespace_map file is present without backup_label file, there
-		 * is no use of such file.  There is no harm in retaining it, but it
-		 * is better to get rid of the map file so that we don't have any
+		 * If tablespace_map file is present without backup recovery requested,
+		 * there is no use of such file.  There is no harm in retaining it, but
+		 * it is better to get rid of the map file so that we don't have any
 		 * redundant file in data directory and it will avoid any sort of
 		 * confusion.  It seems prudent though to just rename the file out of
 		 * the way rather than delete it completely, also we ignore any error
 		 * that occurs in rename operation as even if map file is present
-		 * without backup_label file, it is harmless.
+		 * without backup recovery requested, it is harmless.
 		 */
 		if (stat(TABLESPACE_MAP, &st) == 0)
 		{
 			unlink(TABLESPACE_MAP_OLD);
 			if (durable_rename(TABLESPACE_MAP, TABLESPACE_MAP_OLD, DEBUG1) == 0)
 				ereport(LOG,
-						(errmsg("ignoring file \"%s\" because no file \"%s\" exists",
-								TABLESPACE_MAP, BACKUP_LABEL_FILE),
+						(errmsg("ignoring file \"%s\" because backup recovery was not requested",
+								TABLESPACE_MAP),
 						 errdetail("File \"%s\" was renamed to \"%s\".",
 								   TABLESPACE_MAP, TABLESPACE_MAP_OLD)));
 			else
 				ereport(LOG,
-						(errmsg("ignoring file \"%s\" because no file \"%s\" exists",
-								TABLESPACE_MAP, BACKUP_LABEL_FILE),
+						(errmsg("ignoring file \"%s\" because backup recovery was not requested",
+								TABLESPACE_MAP),
 						 errdetail("Could not rename file \"%s\" to \"%s\": %m.",
 								   TABLESPACE_MAP, TABLESPACE_MAP_OLD)));
 		}
@@ -943,7 +947,7 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		 * Any other state indicates that the backup somehow became corrupted
 		 * and we can't sensibly continue with recovery.
 		 */
-		if (haveBackupLabel)
+		if (backupRecoveryRequired)
 		{
 			ControlFile->backupStartPoint = checkPoint.redo;
 			ControlFile->backupEndRequired = backupEndRequired;
@@ -953,7 +957,7 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 				if (dbstate_at_startup != DB_IN_ARCHIVE_RECOVERY &&
 					dbstate_at_startup != DB_SHUTDOWNED_IN_RECOVERY)
 					ereport(FATAL,
-							(errmsg("backup_label contains data inconsistent with control file"),
+							(errmsg("pg_control contains inconsistent data for standby backup"),
 							 errhint("This means that the backup is corrupted and you will "
 									 "have to use another backup for recovery.")));
 				ControlFile->backupEndPoint = ControlFile->minRecoveryPoint;
@@ -983,7 +987,6 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 	missingContrecPtr = InvalidXLogRecPtr;
 
 	*wasShutdown_ptr = wasShutdown;
-	*haveBackupLabel_ptr = haveBackupLabel;
 	*haveTblspcMap_ptr = haveTblspcMap;
 }
 
@@ -1154,154 +1157,6 @@ validateRecoveryParameters(void)
 		 */
 		Assert(recoveryTargetTimeLineGoal == RECOVERY_TARGET_TIMELINE_CONTROLFILE);
 	}
-}
-
-/*
- * read_backup_label: check to see if a backup_label file is present
- *
- * If we see a backup_label during recovery, we assume that we are recovering
- * from a backup dump file, and we therefore roll forward from the checkpoint
- * identified by the label file, NOT what pg_control says.  This avoids the
- * problem that pg_control might have been archived one or more checkpoints
- * later than the start of the dump, and so if we rely on it as the start
- * point, we will fail to restore a consistent database state.
- *
- * Returns true if a backup_label was found (and fills the checkpoint
- * location and TLI into *checkPointLoc and *backupLabelTLI, respectively);
- * returns false if not. If this backup_label came from a streamed backup,
- * *backupEndRequired is set to true. If this backup_label was created during
- * recovery, *backupFromStandby is set to true.
- *
- * Also sets the global variables RedoStartLSN and RedoStartTLI with the LSN
- * and TLI read from the backup file.
- */
-static bool
-read_backup_label(XLogRecPtr *checkPointLoc, TimeLineID *backupLabelTLI,
-				  bool *backupEndRequired, bool *backupFromStandby)
-{
-	char		startxlogfilename[MAXFNAMELEN];
-	TimeLineID	tli_from_walseg,
-				tli_from_file;
-	FILE	   *lfp;
-	char		ch;
-	char		backuptype[20];
-	char		backupfrom[20];
-	char		backuplabel[MAXPGPATH];
-	char		backuptime[128];
-	uint32		hi,
-				lo;
-
-	/* suppress possible uninitialized-variable warnings */
-	*checkPointLoc = InvalidXLogRecPtr;
-	*backupLabelTLI = 0;
-	*backupEndRequired = false;
-	*backupFromStandby = false;
-
-	/*
-	 * See if label file is present
-	 */
-	lfp = AllocateFile(BACKUP_LABEL_FILE, "r");
-	if (!lfp)
-	{
-		if (errno != ENOENT)
-			ereport(FATAL,
-					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\": %m",
-							BACKUP_LABEL_FILE)));
-		return false;			/* it's not there, all is fine */
-	}
-
-	/*
-	 * Read and parse the START WAL LOCATION and CHECKPOINT lines (this code
-	 * is pretty crude, but we are not expecting any variability in the file
-	 * format).
-	 */
-	if (fscanf(lfp, "START WAL LOCATION: %X/%X (file %08X%16s)%c",
-			   &hi, &lo, &tli_from_walseg, startxlogfilename, &ch) != 5 || ch != '\n')
-		ereport(FATAL,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("invalid data in file \"%s\"", BACKUP_LABEL_FILE)));
-	RedoStartLSN = ((uint64) hi) << 32 | lo;
-	RedoStartTLI = tli_from_walseg;
-	if (fscanf(lfp, "CHECKPOINT LOCATION: %X/%X%c",
-			   &hi, &lo, &ch) != 3 || ch != '\n')
-		ereport(FATAL,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("invalid data in file \"%s\"", BACKUP_LABEL_FILE)));
-	*checkPointLoc = ((uint64) hi) << 32 | lo;
-	*backupLabelTLI = tli_from_walseg;
-
-	/*
-	 * BACKUP METHOD lets us know if this was a typical backup ("streamed",
-	 * which could mean either pg_basebackup or the pg_backup_start/stop
-	 * method was used) or if this label came from somewhere else (the only
-	 * other option today being from pg_rewind).  If this was a streamed
-	 * backup then we know that we need to play through until we get to the
-	 * end of the WAL which was generated during the backup (at which point we
-	 * will have reached consistency and backupEndRequired will be reset to be
-	 * false).
-	 */
-	if (fscanf(lfp, "BACKUP METHOD: %19s\n", backuptype) == 1)
-	{
-		if (strcmp(backuptype, "streamed") == 0)
-			*backupEndRequired = true;
-	}
-
-	/*
-	 * BACKUP FROM lets us know if this was from a primary or a standby.  If
-	 * it was from a standby, we'll double-check that the control file state
-	 * matches that of a standby.
-	 */
-	if (fscanf(lfp, "BACKUP FROM: %19s\n", backupfrom) == 1)
-	{
-		if (strcmp(backupfrom, "standby") == 0)
-			*backupFromStandby = true;
-	}
-
-	/*
-	 * Parse START TIME and LABEL. Those are not mandatory fields for recovery
-	 * but checking for their presence is useful for debugging and the next
-	 * sanity checks. Cope also with the fact that the result buffers have a
-	 * pre-allocated size, hence if the backup_label file has been generated
-	 * with strings longer than the maximum assumed here an incorrect parsing
-	 * happens. That's fine as only minor consistency checks are done
-	 * afterwards.
-	 */
-	if (fscanf(lfp, "START TIME: %127[^\n]\n", backuptime) == 1)
-		ereport(DEBUG1,
-				(errmsg_internal("backup time %s in file \"%s\"",
-								 backuptime, BACKUP_LABEL_FILE)));
-
-	if (fscanf(lfp, "LABEL: %1023[^\n]\n", backuplabel) == 1)
-		ereport(DEBUG1,
-				(errmsg_internal("backup label %s in file \"%s\"",
-								 backuplabel, BACKUP_LABEL_FILE)));
-
-	/*
-	 * START TIMELINE is new as of 11. Its parsing is not mandatory, still use
-	 * it as a sanity check if present.
-	 */
-	if (fscanf(lfp, "START TIMELINE: %u\n", &tli_from_file) == 1)
-	{
-		if (tli_from_walseg != tli_from_file)
-			ereport(FATAL,
-					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-					 errmsg("invalid data in file \"%s\"", BACKUP_LABEL_FILE),
-					 errdetail("Timeline ID parsed is %u, but expected %u.",
-							   tli_from_file, tli_from_walseg)));
-
-		ereport(DEBUG1,
-				(errmsg_internal("backup timeline %u in file \"%s\"",
-								 tli_from_file, BACKUP_LABEL_FILE)));
-	}
-
-	if (ferror(lfp) || FreeFile(lfp))
-		ereport(FATAL,
-				(errcode_for_file_access(),
-				 errmsg("could not read file \"%s\": %m",
-						BACKUP_LABEL_FILE)));
-
-	return true;
 }
 
 /*

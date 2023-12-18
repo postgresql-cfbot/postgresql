@@ -56,7 +56,8 @@ IsManifestEnabled(backup_manifest_info *manifest)
 void
 InitializeBackupManifest(backup_manifest_info *manifest,
 						 backup_manifest_option want_manifest,
-						 pg_checksum_type manifest_checksum_type)
+						 pg_checksum_type manifest_checksum_type,
+						 const char *label)
 {
 	memset(manifest, 0, sizeof(backup_manifest_info));
 	manifest->checksum_type = manifest_checksum_type;
@@ -78,9 +79,21 @@ InitializeBackupManifest(backup_manifest_info *manifest,
 	manifest->still_checksumming = true;
 
 	if (want_manifest != MANIFEST_OPTION_NO)
+	{
+		StringInfoData buf;
+
 		AppendToManifest(manifest,
 						 "{ \"PostgreSQL-Backup-Manifest-Version\": 1,\n"
-						 "\"Files\": [");
+						 "\"Backup-Label\": ");
+
+		/* JSON encode label and add it to manifest */
+		initStringInfo(&buf);
+		escape_json(&buf, label);
+		AppendStringToManifest(manifest, buf.data);
+		pfree(buf.data);
+
+		AppendToManifest(manifest, ",\n\"Files\": [");
+	}
 }
 
 /*
@@ -306,6 +319,45 @@ AddWALInfoToBackupManifest(backup_manifest_info *manifest, XLogRecPtr startptr,
 
 	/* Terminate the list of WAL ranges. */
 	AppendStringToManifest(manifest, "\n],\n");
+}
+
+/*
+ * Add backup start/end time information to the manifest.
+ */
+void
+AddTimeInfoToBackupManifest(backup_manifest_info *manifest, pg_time_t starttime,
+							pg_time_t endtime)
+{
+	StringInfoData buf;
+
+	if (!IsManifestEnabled(manifest))
+		return;
+
+	/* Start the time range. */
+	AppendStringToManifest(manifest, "\"Time-Range\": { ");
+
+	/*
+	 * Convert start/end time to strings and append them to the manifest. Since
+	 * it's not clear what time zone to use and since time zone definitions can
+	 * change, possibly causing confusion, use GMT always.
+	 */
+	initStringInfo(&buf);
+
+	appendStringInfoString(&buf, "\"Start-Time\": \"");
+	enlargeStringInfo(&buf, 128);
+	buf.len += pg_strftime(&buf.data[buf.len], 128, "%Y-%m-%d %H:%M:%S %Z",
+						   pg_gmtime(&starttime));
+	appendStringInfoString(&buf, "\", \"End-Time\": \"");
+	enlargeStringInfo(&buf, 128);
+	buf.len += pg_strftime(&buf.data[buf.len], 128, "%Y-%m-%d %H:%M:%S %Z",
+						   pg_gmtime(&endtime));
+	appendStringInfoString(&buf, "\" },\n");
+
+	/* Add to the manifest. */
+	AppendStringToManifest(manifest, buf.data);
+
+	/* Avoid leaking memory. */
+	pfree(buf.data);
 }
 
 /*

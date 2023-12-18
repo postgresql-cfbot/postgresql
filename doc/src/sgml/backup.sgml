@@ -935,19 +935,20 @@ SELECT * FROM pg_backup_stop(wait_for_archive => true);
      ready to archive.
     </para>
     <para>
-     <function>pg_backup_stop</function> will return one row with three
-     values. The second of these fields should be written to a file named
-     <filename>backup_label</filename> in the root directory of the backup. The
-     third field should be written to a file named
-     <filename>tablespace_map</filename> unless the field is empty. These files are
+     <function>pg_backup_stop</function> returns the
+     <filename>pg_control</filename> file, which must be stored in the
+     <filename>global</filename> directory of the backup. It also returns the
+     <filename>tablespace_map</filename> file, which should be written in the
+     root directory of the backup unless the field is empty. These files are
      vital to the backup working and must be written byte for byte without
-     modification, which may require opening the file in binary mode.
+     modification, which will require opening the file in binary mode.
     </para>
    </listitem>
    <listitem>
     <para>
      Once the WAL segment files active during the backup are archived, you are
-     done.  The file identified by <function>pg_backup_stop</function>'s first return
+     done.  The file identified by <function>pg_backup_stop</function>'s
+     <parameter>lsn</parameter> return
      value is the last segment that is required to form a complete set of
      backup files.  On a primary, if <varname>archive_mode</varname> is enabled and the
      <literal>wait_for_archive</literal> parameter is <literal>true</literal>,
@@ -1013,7 +1014,15 @@ SELECT * FROM pg_backup_stop(wait_for_archive => true);
    </para>
 
    <para>
-    You should, however, omit from the backup the files within the
+    You must exclude <filename>global/pg_control</filename> from your backup
+    and put the contents of the <parameter>pg_control_file</parameter> column
+    returned from <function>pg_backup_stop</function> in your backup at
+    <filename>global/pg_control</filename>. This file contains the information
+    required to safely recover.
+   </para>
+
+   <para>
+    You should also omit from the backup the files within the
     cluster's <filename>pg_wal/</filename> subdirectory.  This
     slight adjustment is worthwhile because it reduces the risk
     of mistakes when restoring.  This is easy to arrange if
@@ -1062,11 +1071,11 @@ SELECT * FROM pg_backup_stop(wait_for_archive => true);
    </para>
 
    <para>
-    The backup label
-    file includes the label string you gave to <function>pg_backup_start</function>,
+    The backup history file (which is archived like WAL) includes the label
+    string you gave to <function>pg_backup_start</function>,
     as well as the time at which <function>pg_backup_start</function> was run, and
     the name of the starting WAL file.  In case of confusion it is therefore
-    possible to look inside a backup file and determine exactly which
+    possible to look inside a backup history file and determine exactly which
     backup session the dump file came from.  The tablespace map file includes
     the symbolic link names as they exist in the directory
     <filename>pg_tblspc/</filename> and the full path of each symbolic link.

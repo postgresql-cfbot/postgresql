@@ -74,6 +74,7 @@
 #include "pg_trace.h"
 #include "pgstat.h"
 #include "port/atomics.h"
+#include "port/pg_crc32c.h"
 #include "port/pg_iovec.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/startup.h"
@@ -5151,7 +5152,6 @@ StartupXLOG(void)
 	bool		wasShutdown;
 	bool		didCrash;
 	bool		haveTblspcMap;
-	bool		haveBackupLabel;
 	XLogRecPtr	EndOfLog;
 	TimeLineID	EndOfLogTLI;
 	TimeLineID	newTLI;
@@ -5275,13 +5275,14 @@ StartupXLOG(void)
 	/*
 	 * Prepare for WAL recovery if needed.
 	 *
-	 * InitWalRecovery analyzes the control file and the backup label file, if
-	 * any.  It updates the in-memory ControlFile buffer according to the
-	 * starting checkpoint, and sets InRecovery and ArchiveRecoveryRequested.
+	 * InitWalRecovery analyzes the control file and checks if backup recovery
+	 * has been requested.  It updates the in-memory ControlFile buffer
+	 * according to the starting checkpoint, and sets InRecovery and
+	 * ArchiveRecoveryRequested.
+	 *
 	 * It also applies the tablespace map file, if any.
 	 */
-	InitWalRecovery(ControlFile, &wasShutdown,
-					&haveBackupLabel, &haveTblspcMap);
+	InitWalRecovery(ControlFile, &wasShutdown, &haveTblspcMap);
 	checkPoint = ControlFile->checkPointCopy;
 
 	/* initialize shared memory variables from the checkpoint record */
@@ -5423,20 +5424,6 @@ StartupXLOG(void)
 		 * No need to hold ControlFileLock yet, we aren't up far enough.
 		 */
 		UpdateControlFile();
-
-		/*
-		 * If there was a backup label file, it's done its job and the info
-		 * has now been propagated into pg_control.  We must get rid of the
-		 * label file so that if we crash during recovery, we'll pick up at
-		 * the latest recovery restartpoint instead of going all the way back
-		 * to the backup start point.  It seems prudent though to just rename
-		 * the file out of the way rather than delete it completely.
-		 */
-		if (haveBackupLabel)
-		{
-			unlink(BACKUP_LABEL_OLD);
-			durable_rename(BACKUP_LABEL_FILE, BACKUP_LABEL_OLD, FATAL);
-		}
 
 		/*
 		 * If there was a tablespace_map file, it's done its job and the
@@ -5587,10 +5574,8 @@ StartupXLOG(void)
 	 * (at which point we reset backupStartPoint to be Invalid), for
 	 * backup-from-replica (which can't inject records into the WAL stream),
 	 * that point is when we reach the minRecoveryPoint in pg_control (which
-	 * we purposefully copy last when backing up from a replica).  For
-	 * pg_rewind (which creates a backup_label with a method of "pg_rewind")
-	 * or snapshot-style backups (which don't), backupEndRequired will be set
-	 * to false.
+	 * we purposefully copy last when backing up).  For pg_rewind or
+	 * snapshot-style backups, backupEndRequired will be set to false.
 	 *
 	 * Note: it is indeed okay to look at the local variable
 	 * LocalMinRecoveryPoint here, even though ControlFile->minRecoveryPoint
@@ -5967,8 +5952,11 @@ ReachedEndOfBackup(XLogRecPtr EndRecPtr, TimeLineID tli)
 		ControlFile->minRecoveryPointTLI = tli;
 	}
 
+	ControlFile->backupCheckPoint = InvalidXLogRecPtr;
 	ControlFile->backupStartPoint = InvalidXLogRecPtr;
+	ControlFile->backupStartPointTLI = 0;
 	ControlFile->backupEndPoint = InvalidXLogRecPtr;
+	ControlFile->backupFromStandby = false;
 	ControlFile->backupEndRequired = false;
 	UpdateControlFile();
 
@@ -8760,10 +8748,32 @@ do_pg_backup_stop(BackupState *state, bool waitforarchive)
 	int			seconds_before_warning;
 	int			waits = 0;
 	bool		reported_waiting = false;
+	ControlFileData *controlFileCopy = (ControlFileData *)state->controlFile;
 
 	Assert(state != NULL);
 
 	backup_stopped_in_recovery = RecoveryInProgress();
+
+	/*
+	 * Create a copy of control data and update it with fields required for
+	 * recovery. Also recalculate the CRC.
+	 */
+	memset(controlFileCopy, 0, PG_CONTROL_FILE_SIZE);
+
+	LWLockAcquire(ControlFileLock, LW_SHARED);
+	memcpy(controlFileCopy, ControlFile, sizeof(ControlFileData));
+	LWLockRelease(ControlFileLock);
+
+	controlFileCopy->backupRecoveryRequired = true;
+	controlFileCopy->backupFromStandby = backup_stopped_in_recovery;
+	controlFileCopy->backupEndRequired = true;
+	controlFileCopy->backupCheckPoint = state->checkpointloc;
+	controlFileCopy->backupStartPoint = state->startpoint;
+	controlFileCopy->backupStartPointTLI = state->starttli;
+
+	INIT_CRC32C(controlFileCopy->crc);
+	COMP_CRC32C(controlFileCopy->crc, controlFileCopy, offsetof(ControlFileData, crc));
+	FIN_CRC32C(controlFileCopy->crc);
 
 	/*
 	 * During recovery, we don't need to check WAL level. Because, if WAL
@@ -8866,11 +8876,8 @@ do_pg_backup_stop(BackupState *state, bool waitforarchive)
 							 "Enable full_page_writes and run CHECKPOINT on the primary, "
 							 "and then try an online backup again.")));
 
-
-		LWLockAcquire(ControlFileLock, LW_SHARED);
-		state->stoppoint = ControlFile->minRecoveryPoint;
-		state->stoptli = ControlFile->minRecoveryPointTLI;
-		LWLockRelease(ControlFileLock);
+		state->stoppoint = controlFileCopy->minRecoveryPoint;
+		state->stoptli = controlFileCopy->minRecoveryPointTLI;
 	}
 	else
 	{
@@ -8912,7 +8919,7 @@ do_pg_backup_stop(BackupState *state, bool waitforarchive)
 							histfilepath)));
 
 		/* Build and save the contents of the backup history file */
-		history_file = build_backup_content(state, true);
+		history_file = build_backup_history_content(state);
 		fprintf(fp, "%s", history_file);
 		pfree(history_file);
 

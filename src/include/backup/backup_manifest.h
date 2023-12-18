@@ -37,7 +37,8 @@ typedef struct backup_manifest_info
 
 extern void InitializeBackupManifest(backup_manifest_info *manifest,
 									 backup_manifest_option want_manifest,
-									 pg_checksum_type manifest_checksum_type);
+									 pg_checksum_type manifest_checksum_type,
+									 const char *label);
 extern void AddFileToBackupManifest(backup_manifest_info *manifest,
 									Oid spcoid,
 									const char *pathname, size_t size,
@@ -47,6 +48,8 @@ extern void AddWALInfoToBackupManifest(backup_manifest_info *manifest,
 									   XLogRecPtr startptr,
 									   TimeLineID starttli, XLogRecPtr endptr,
 									   TimeLineID endtli);
+extern void AddTimeInfoToBackupManifest(backup_manifest_info *manifest,
+										pg_time_t starttime, pg_time_t endtime);
 
 extern void SendBackupManifest(backup_manifest_info *manifest, bbsink *sink);
 extern void FreeBackupManifest(backup_manifest_info *manifest);

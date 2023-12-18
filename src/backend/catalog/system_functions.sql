@@ -384,13 +384,15 @@ BEGIN ATOMIC
 END;
 
 CREATE OR REPLACE FUNCTION
-  pg_backup_start(label text, fast boolean DEFAULT false)
-  RETURNS pg_lsn STRICT VOLATILE LANGUAGE internal AS 'pg_backup_start'
+  pg_backup_start(label text, fast boolean DEFAULT false, OUT lsn pg_lsn,
+        OUT timeline_id int8, OUT start timestamptz)
+  RETURNS record STRICT VOLATILE LANGUAGE internal AS 'pg_backup_start'
   PARALLEL RESTRICTED;
 
 CREATE OR REPLACE FUNCTION pg_backup_stop (
-        wait_for_archive boolean DEFAULT true, OUT lsn pg_lsn,
-        OUT labelfile text, OUT spcmapfile text)
+        wait_for_archive boolean DEFAULT true, OUT pg_control_file bytea,
+        OUT tablespace_map_file text, OUT lsn pg_lsn, OUT timeline_id int8,
+        OUT stop timestamptz)
   RETURNS record STRICT VOLATILE LANGUAGE internal as 'pg_backup_stop'
   PARALLEL RESTRICTED;
 

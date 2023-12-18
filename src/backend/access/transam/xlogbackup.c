@@ -18,19 +18,19 @@
 #include "access/xlogbackup.h"
 
 /*
- * Build contents for backup_label or backup history file.
- *
- * When ishistoryfile is true, it creates the contents for a backup history
- * file, otherwise it creates contents for a backup_label file.
+ * Build contents for backup history file.
  *
  * Returns the result generated as a palloc'd string.
  */
 char *
-build_backup_content(BackupState *state, bool ishistoryfile)
+build_backup_history_content(BackupState *state)
 {
 	char		startstrbuf[128];
+	char		stopstrfbuf[128];
 	char		startxlogfile[MAXFNAMELEN]; /* backup start WAL file */
+	char		stopxlogfile[MAXFNAMELEN];	/* backup stop WAL file */
 	XLogSegNo	startsegno;
+	XLogSegNo	stopsegno;
 	StringInfo	result = makeStringInfo();
 	char	   *data;
 
@@ -45,16 +45,10 @@ build_backup_content(BackupState *state, bool ishistoryfile)
 	appendStringInfo(result, "START WAL LOCATION: %X/%X (file %s)\n",
 					 LSN_FORMAT_ARGS(state->startpoint), startxlogfile);
 
-	if (ishistoryfile)
-	{
-		char		stopxlogfile[MAXFNAMELEN];	/* backup stop WAL file */
-		XLogSegNo	stopsegno;
-
-		XLByteToSeg(state->stoppoint, stopsegno, wal_segment_size);
-		XLogFileName(stopxlogfile, state->stoptli, stopsegno, wal_segment_size);
-		appendStringInfo(result, "STOP WAL LOCATION: %X/%X (file %s)\n",
-						 LSN_FORMAT_ARGS(state->stoppoint), stopxlogfile);
-	}
+	XLByteToSeg(state->stoppoint, stopsegno, wal_segment_size);
+	XLogFileName(stopxlogfile, state->stoptli, stopsegno, wal_segment_size);
+	appendStringInfo(result, "STOP WAL LOCATION: %X/%X (file %s)\n",
+						LSN_FORMAT_ARGS(state->stoppoint), stopxlogfile);
 
 	appendStringInfo(result, "CHECKPOINT LOCATION: %X/%X\n",
 					 LSN_FORMAT_ARGS(state->checkpointloc));
@@ -65,17 +59,12 @@ build_backup_content(BackupState *state, bool ishistoryfile)
 	appendStringInfo(result, "LABEL: %s\n", state->name);
 	appendStringInfo(result, "START TIMELINE: %u\n", state->starttli);
 
-	if (ishistoryfile)
-	{
-		char		stopstrfbuf[128];
+	/* Use the log timezone here, not the session timezone */
+	pg_strftime(stopstrfbuf, sizeof(stopstrfbuf), "%Y-%m-%d %H:%M:%S %Z",
+				pg_localtime(&state->stoptime, log_timezone));
 
-		/* Use the log timezone here, not the session timezone */
-		pg_strftime(stopstrfbuf, sizeof(stopstrfbuf), "%Y-%m-%d %H:%M:%S %Z",
-					pg_localtime(&state->stoptime, log_timezone));
-
-		appendStringInfo(result, "STOP TIME: %s\n", stopstrfbuf);
-		appendStringInfo(result, "STOP TIMELINE: %u\n", state->stoptli);
-	}
+	appendStringInfo(result, "STOP TIME: %s\n", stopstrfbuf);
+	appendStringInfo(result, "STOP TIMELINE: %u\n", state->stoptli);
 
 	data = result->data;
 	pfree(result);

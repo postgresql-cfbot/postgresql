@@ -43,6 +43,16 @@
    </varlistentry>
 
    <varlistentry>
+    <term><literal>Backup-Label</literal></term>
+    <listitem>
+     <para>
+      Backup label specified by the user. This will be set to a default value
+      if no backup label was specified.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><literal>Files</literal></term>
     <listitem>
      <para>
@@ -63,6 +73,17 @@
       range of WAL records that must be readable from a particular timeline
       in order to make use of the backup.  The structure of these objects is
       further described in <xref linkend="backup-manifest-wal-ranges" />.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>Time-Range</literal></term>
+    <listitem>
+     <para>
+      The associated value is always an object describing the start/stop time
+      of the backup. The structure of this object is further described in
+      <xref linkend="backup-manifest-time-range" />.
      </para>
     </listitem>
    </varlistentry>
@@ -212,5 +233,35 @@
    with a different timeline. There will never be multiple WAL ranges present
    for the same timeline.
   </para>
+ </sect1>
+
+ <sect1 id="backup-manifest-time-range">
+  <title>Backup Manifest Time Range Object</title>
+
+  <para>
+   The object which describes the time range always has three keys:
+  </para>
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>Start-Time</literal></term>
+    <listitem>
+     <para>
+      The start time for the backup.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>End-Time</literal></term>
+    <listitem>
+     <para>
+      The end time for the backup. This is when the backup was stopped in
+      <productname>PostgreSQL</productname> and represents the earliest time
+      that can be used for time-based Point-In-Time Recovery.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
  </sect1>
 </chapter>

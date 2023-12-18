@@ -870,8 +870,12 @@ RewriteControlFile(void)
 	ControlFile.checkPoint = ControlFile.checkPointCopy.redo;
 	ControlFile.minRecoveryPoint = 0;
 	ControlFile.minRecoveryPointTLI = 0;
+	ControlFile.backupCheckPoint = 0;
 	ControlFile.backupStartPoint = 0;
+	ControlFile.backupStartPointTLI = 0;
 	ControlFile.backupEndPoint = 0;
+	ControlFile.backupRecoveryRequired = false;
+	ControlFile.backupFromStandby = false;
 	ControlFile.backupEndRequired = false;
 
 	/*

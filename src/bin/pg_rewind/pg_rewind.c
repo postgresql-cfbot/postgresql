@@ -39,9 +39,6 @@ static void perform_rewind(filemap_t *filemap, rewind_source *source,
 						   TimeLineID chkpttli,
 						   XLogRecPtr chkptredo);
 
-static void createBackupLabel(XLogRecPtr startpoint, TimeLineID starttli,
-							  XLogRecPtr checkpointloc);
-
 static void digestControlFile(ControlFileData *ControlFile,
 							  const char *content, size_t size);
 static void getRestoreCommand(const char *argv0);
@@ -651,10 +648,10 @@ perform_rewind(filemap_t *filemap, rewind_source *source,
 	}
 
 	if (showprogress)
-		pg_log_info("creating backup label and updating control file");
+		pg_log_info("updating control file");
 
 	/*
-	 * Create a backup label file, to tell the target where to begin the WAL
+	 * Get recovery fields to tell the target where to begin the WAL
 	 * replay. Normally, from the last common checkpoint between the source
 	 * and the target. But if the source is a standby server, it's possible
 	 * that the last common checkpoint is *after* the standby's restartpoint.
@@ -672,7 +669,6 @@ perform_rewind(filemap_t *filemap, rewind_source *source,
 		chkpttli = ControlFile_source.checkPointCopy.ThisTimeLineID;
 		chkptrec = ControlFile_source.checkPoint;
 	}
-	createBackupLabel(chkptredo, chkpttli, chkptrec);
 
 	/*
 	 * Update control file of target, to tell the target how far it must
@@ -722,6 +718,12 @@ perform_rewind(filemap_t *filemap, rewind_source *source,
 	ControlFile_new.minRecoveryPoint = endrec;
 	ControlFile_new.minRecoveryPointTLI = endtli;
 	ControlFile_new.state = DB_IN_ARCHIVE_RECOVERY;
+	ControlFile_new.backupRecoveryRequired = true;
+	ControlFile_new.backupFromStandby = true;
+	ControlFile_new.backupEndRequired = false;
+	ControlFile_new.backupCheckPoint = chkptrec;
+	ControlFile_new.backupStartPoint = chkptredo;
+	ControlFile_new.backupStartPointTLI = chkpttli;
 	if (!dry_run)
 		update_controlfile(datadir_target, &ControlFile_new, do_sync);
 }
@@ -729,7 +731,10 @@ perform_rewind(filemap_t *filemap, rewind_source *source,
 static void
 sanityChecks(void)
 {
-	/* TODO Check that there's no backup_label in either cluster */
+	/*
+	 * TODO Check that neither cluster has backupRecoveryRequested set in
+	 * pg_control.
+	 */
 
 	/* Check system_identifier match */
 	if (ControlFile_target.system_identifier != ControlFile_source.system_identifier)
@@ -949,51 +954,6 @@ findCommonAncestorTimeline(TimeLineHistoryEntry *a_history, int a_nentries,
 	{
 		pg_fatal("could not find common ancestor of the source and target cluster's timelines");
 	}
-}
-
-
-/*
- * Create a backup_label file that forces recovery to begin at the last common
- * checkpoint.
- */
-static void
-createBackupLabel(XLogRecPtr startpoint, TimeLineID starttli, XLogRecPtr checkpointloc)
-{
-	XLogSegNo	startsegno;
-	time_t		stamp_time;
-	char		strfbuf[128];
-	char		xlogfilename[MAXFNAMELEN];
-	struct tm  *tmp;
-	char		buf[1000];
-	int			len;
-
-	XLByteToSeg(startpoint, startsegno, WalSegSz);
-	XLogFileName(xlogfilename, starttli, startsegno, WalSegSz);
-
-	/*
-	 * Construct backup label file
-	 */
-	stamp_time = time(NULL);
-	tmp = localtime(&stamp_time);
-	strftime(strfbuf, sizeof(strfbuf), "%Y-%m-%d %H:%M:%S %Z", tmp);
-
-	len = snprintf(buf, sizeof(buf),
-				   "START WAL LOCATION: %X/%X (file %s)\n"
-				   "CHECKPOINT LOCATION: %X/%X\n"
-				   "BACKUP METHOD: pg_rewind\n"
-				   "BACKUP FROM: standby\n"
-				   "START TIME: %s\n",
-	/* omit LABEL: line */
-				   LSN_FORMAT_ARGS(startpoint), xlogfilename,
-				   LSN_FORMAT_ARGS(checkpointloc),
-				   strfbuf);
-	if (len >= sizeof(buf))
-		pg_fatal("backup label buffer too small");	/* shouldn't happen */
-
-	/* TODO: move old file out of the way, if any. */
-	open_target_file("backup_label", true); /* BACKUP_LABEL_FILE */
-	write_target_range(buf, 0, len);
-	close_target_file();
 }
 
 /*

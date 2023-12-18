@@ -26876,7 +26876,10 @@ LOG:  Grand total: 1651920 bytes in 201 blocks; 622360 free (88 chunks); 1029560
           <parameter>label</parameter> <type>text</type>
           <optional>, <parameter>fast</parameter> <type>boolean</type>
           </optional> )
-        <returnvalue>pg_lsn</returnvalue>
+        <returnvalue>record</returnvalue>
+        ( <parameter>lsn</parameter> <type>pg_lsn</type>,
+        <parameter>timeline_id</parameter> <type>int8</type>,
+        <parameter>start</parameter> <type>timestamptz</type> )
        </para>
        <para>
         Prepares the server to begin an on-line backup.  The only required
@@ -26887,6 +26890,13 @@ LOG:  Grand total: 1651920 bytes in 201 blocks; 622360 free (88 chunks); 1029560
         it specifies executing <function>pg_backup_start</function> as quickly
         as possible.  This forces an immediate checkpoint which will cause a
         spike in I/O operations, slowing any concurrently executing queries.
+       </para>
+       <para>
+        The result columns contain information about the start of the backup
+        and can be ignored: the <parameter>lsn</parameter> column holds the
+        starting write-ahead log location, the
+        <parameter>timeline_id</parameter> column holds the starting timeline,
+        and the <parameter>stop</parameter> column holds the starting timestamp.
        </para>
        <para>
         This function is restricted to superusers by default, but other users
@@ -26903,13 +26913,15 @@ LOG:  Grand total: 1651920 bytes in 201 blocks; 622360 free (88 chunks); 1029560
           <optional><parameter>wait_for_archive</parameter> <type>boolean</type>
           </optional> )
         <returnvalue>record</returnvalue>
-        ( <parameter>lsn</parameter> <type>pg_lsn</type>,
-        <parameter>labelfile</parameter> <type>text</type>,
-        <parameter>spcmapfile</parameter> <type>text</type> )
+        ( <parameter>pg_control_file</parameter> <type>text</type>,
+        <parameter>tablespace_map_file</parameter> <type>text</type>,
+        <parameter>lsn</parameter> <type>pg_lsn</type>,
+        <parameter>timeline_id</parameter> <type>int8</type>,
+        <parameter>stop</parameter> <type>timestamptz</type> )
        </para>
        <para>
         Finishes performing an on-line backup.  The desired contents of the
-        backup label file and the tablespace map file are returned as part of
+        pg_control file and the tablespace map file are returned as part of
         the result of the function and must be written to files in the
         backup area.  These files must not be written to the live data directory
         (doing so will cause PostgreSQL to fail to restart in the event of a
@@ -26941,13 +26953,18 @@ LOG:  Grand total: 1651920 bytes in 201 blocks; 622360 free (88 chunks); 1029560
         backup.
        </para>
        <para>
-        The result of the function is a single record.
-        The <parameter>lsn</parameter> column holds the backup's ending
-        write-ahead log location (which again can be ignored).  The second
-        column returns the contents of the backup label file, and the third
-        column returns the contents of the tablespace map file.  These must be
-        stored as part of the backup and are required as part of the restore
-        process.
+        The result of the function is a single record. The first column returns
+        the contents of the <filename>pg_control</filename> file and the
+        second column returns the contents of the
+        <filename>tablespace_map</filename> file.  These must be stored as part
+        of the backup and are required as part of the restore process. Note that
+        <filename>pg_control</filename> will be 8192KiB to match the on-disk
+        size of <filename>pg_control</filename>. The remainder of the columns
+        contain information about the end of the backup and can be ignored: the
+        <parameter>lsn</parameter> column holds the ending write-ahead log
+        location, the <parameter>timeline_id</parameter> column holds the ending
+        timeline, and the <parameter>stop</parameter> column holds the ending
+        timestamp.
        </para>
        <para>
         This function is restricted to superusers by default, but other users

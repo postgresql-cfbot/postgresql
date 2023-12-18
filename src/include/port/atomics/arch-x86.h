@@ -184,6 +184,20 @@ pg_atomic_compare_exchange_u32_impl(volatile pg_atomic_uint32 *ptr,
 	return (bool) ret;
 }
 
+#define PG_HAVE_ATOMIC_EXCHANGE_U32
+static inline uint32
+pg_atomic_exchange_u32_impl(volatile pg_atomic_uint32 *ptr, uint32 newval)
+{
+	uint32 res;
+	__asm__ __volatile__(
+		"	lock				\n"
+		"	xchgl		%0,%1	\n"
+:		"=q" (res), "=m" (ptr->value)
+:		"0"(newval), "m" (ptr->value)
+:		"memory");
+	return res;
+}
+
 #define PG_HAVE_ATOMIC_FETCH_ADD_U32
 static inline uint32
 pg_atomic_fetch_add_u32_impl(volatile pg_atomic_uint32 *ptr, int32 add_)
@@ -219,6 +233,20 @@ pg_atomic_compare_exchange_u64_impl(volatile pg_atomic_uint64 *ptr,
 :		"a" (*expected), "r" (newval), "m"(ptr->value)
 :		"memory", "cc");
 	return (bool) ret;
+}
+
+#define PG_HAVE_ATOMIC_EXCHANGE_U64
+static inline uint64
+pg_atomic_exchange_u64_impl(volatile pg_atomic_uint64 *ptr, uint64 newval)
+{
+	uint64 res;
+	__asm__ __volatile__(
+		"	lock				\n"
+		"	xchgq		%0,%1	\n"
+:		"=q" (res), "=m" (ptr->value)
+:		"0"(newval), "m" (ptr->value)
+:		"memory");
+	return res;
 }
 
 #define PG_HAVE_ATOMIC_FETCH_ADD_U64

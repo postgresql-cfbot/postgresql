@@ -29,6 +29,7 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
 #include "common/link-canary.h"
+#include "common/string.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -49,6 +50,8 @@ uint32		bootstrap_data_checksum_version = 0;	/* No checksum */
 
 
 static void CheckerModeMain(void);
+static FILE *open_bki(char *bki_file);
+static bool verify_bki_hdr(FILE *fp);
 static void bootstrap_signals(void);
 static Form_pg_attribute AllocateAttribute(void);
 static void populate_typ_list(void);
@@ -206,6 +209,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	char	   *progname = argv[0];
 	int			flag;
 	char	   *userDoption = NULL;
+	char	   *bki_file = NULL;
 
 	Assert(!IsUnderPostmaster);
 
@@ -221,10 +225,13 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	argv++;
 	argc--;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:X:-:")) != -1)
+	while ((flag = getopt(argc, argv, "b:B:c:d:D:Fkr:X:-:")) != -1)
 	{
 		switch (flag)
 		{
+			case 'b':
+				bki_file = pstrdup(optarg);
+				break;
 			case 'B':
 				SetConfigOption("shared_buffers", optarg, PGC_POSTMASTER, PGC_S_ARGV);
 				break;
@@ -354,9 +361,29 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 		Nulls[i] = false;
 	}
 
+	/* Point boot_yyin to bki file. */
+	elog(DEBUG4, "Open bki file %s\n", bki_file);
+	if ((boot_yyin = open_bki(bki_file)) == NULL)
+	{
+		write_stderr("Opening bki_file=%s failed with error=%d.",
+					 bki_file ? bki_file : "", errno);
+		cleanup();
+		proc_exit(1);
+	}
+
 	/*
-	 * Process bootstrap input.
+	 * Verify bki header match with binary version. Bki parser ignore
+	 * commments hence no need to rewind boot_yyin.
 	 */
+	if (!verify_bki_hdr(boot_yyin))
+	{
+		write_stderr("Version in bki file(%s) does not match PostgreSQL version %s",
+					 bki_file, PG_VERSION);
+		cleanup();
+		proc_exit(1);
+	}
+
+	/* Process bootstrap input from bki file (boot_yyin) */
 	StartTransactionCommand();
 	boot_yyparse();
 	CommitTransactionCommand();
@@ -480,6 +507,59 @@ closerel(char *relname)
 	}
 }
 
+/* -----------------------
+ * open_bki
+ *
+ * Open bki file with the flags
+ * required per platform.
+ * -----------------------
+ */
+static FILE *
+open_bki(char *bki_file)
+{
+#if defined(WIN32) && !defined(__CYGWIN__)
+	/*
+	 * On Windows, in front end code, text mode open is enforced. Please refer
+	 * to src/port/open.c for more details. In backend, bki file opens in
+	 * binary mode. Add text mode flag explicitly to handle EOL properly.
+	 */
+	return fopen(bki_file, "rt");
+#else
+	return fopen(bki_file, "r");
+#endif
+}
+
+
+/* -----------------------
+ * verify_bki_hdr
+ *
+ * Verify that the bki file is generated for the
+ * same major version as that of the bootstrap.
+ * -----------------------
+ */
+static bool
+verify_bki_hdr(FILE *b)
+{
+	StringInfoData line;
+	char		headerline[MAXPGPATH];
+	bool		ret = true;
+
+	initStringInfo(&line);
+	if (!pg_get_line_buf(b, &line))
+	{
+		return false;
+	}
+
+	snprintf(headerline, sizeof(headerline), "# PostgreSQL %s\n",
+			 PG_MAJORVERSION);
+	if (strcmp(headerline, line.data) != 0)
+	{
+		ret = false;
+	}
+
+	pfree(line.data);
+	return ret;
+}
 
 
 /* ----------------

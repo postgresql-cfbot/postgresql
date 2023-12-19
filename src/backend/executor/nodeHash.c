@@ -1155,6 +1155,9 @@ ExecParallelHashIncreaseNumBatches(HashJoinTable hashtable)
 					double		dtuples;
 					double		dbuckets;
 					int			new_nbuckets;
+					const uint32 max_buckets =
+							pg_prevpower2_32((uint32)
+								(MaxAllocSize / sizeof(dsa_pointer_atomic)));
 
 					/*
 					 * We probably also need a smaller bucket array.  How many
@@ -1168,8 +1171,7 @@ ExecParallelHashIncreaseNumBatches(HashJoinTable hashtable)
 					 */
 					dtuples = (old_batch0->ntuples * 2.0) / new_nbatch;
 					dbuckets = ceil(dtuples / NTUP_PER_BUCKET);
-					dbuckets = Min(dbuckets,
-								   MaxAllocSize / sizeof(dsa_pointer_atomic));
+					dbuckets = Min(dbuckets, max_buckets);
 					new_nbuckets = (int) dbuckets;
 					new_nbuckets = Max(new_nbuckets, 1024);
 					new_nbuckets = pg_nextpower2_32(new_nbuckets);

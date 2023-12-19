@@ -3178,6 +3178,28 @@ sub create_logical_slot_on_standby
 
 =pod
 
+=item $node->advance_wal($n)
+
+Advance WAL of given node by $n segments
+
+=cut
+
+sub advance_wal
+{
+	my ($self, $n) = @_;
+
+	# Advance by $n segments (= (wal_segment_size * $n) bytes).
+	for (my $i = 0; $i < $n; $i++)
+	{
+		$self->safe_psql('postgres', qq{
+			SELECT pg_logical_emit_message(false, '', 'foo');
+			SELECT pg_switch_wal();
+			});
+	}
+}
+
+=pod
+
 =back
 
 =cut

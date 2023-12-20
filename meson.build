@@ -2456,7 +2456,7 @@ func_checks = [
   ['strsignal'],
   ['sync_file_range'],
   ['syncfs'],
-  ['uselocale'],
+  ['uselocale', {'skip': host_system == 'windows'}],
   ['wcstombs_l'],
 ]
 

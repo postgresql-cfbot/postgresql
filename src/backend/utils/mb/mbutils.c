@@ -39,6 +39,7 @@
 #include "mb/pg_wchar.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
+#include "utils/pg_locale.h"
 #include "utils/syscache.h"
 #include "varatt.h"
 
@@ -1237,9 +1238,7 @@ pg_bind_textdomain_codeset(const char *domainname)
 	int			new_msgenc;
 
 #ifndef WIN32
-	const char *ctype = setlocale(LC_CTYPE, NULL);
-
-	if (pg_strcasecmp(ctype, "C") == 0 || pg_strcasecmp(ctype, "POSIX") == 0)
+	if (locale_is_c(pg_setlocale(LC_CTYPE, NULL), true))
 #endif
 		if (encoding != PG_SQL_ASCII &&
 			raw_pg_bind_textdomain_codeset(domainname, encoding))

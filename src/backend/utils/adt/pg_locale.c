@@ -102,6 +102,23 @@ char	   *locale_time;
 
 int			icu_validation_level = WARNING;
 
+#ifdef HAVE_USELOCALE
+/*
+ * Current locale settings
+ *
+ * uselocale() and friends don't have an equivalent to setlocale(cat, NULL), so
+ * as we set locales for various categories, stash them for retrieval as needed.
+ */
+static struct {
+	char *collate;
+	char *ctype;
+	char *messages;
+	char *monetary;
+	char *numeric;
+	char *time;
+} curr_locales = { 0 };
+#endif /* HAVE_USELOCALE */
+
 /*
  * lc_time localization cache.
  *
@@ -195,28 +212,162 @@ wcstombs_l(char *dest, const wchar_t *src, size_t n, locale_t loc)
 }
 #endif
 
+
 /*
- * pg_perm_setlocale
+ * Check if a locale is the C locale
  *
- * This wraps the libc function setlocale(), with two additions.  First, when
- * changing LC_CTYPE, update gettext's encoding for the current message
- * domain.  GNU gettext automatically tracks LC_CTYPE on most platforms, but
- * not on Windows.  Second, if the operation is successful, the corresponding
- * LC_XXX environment variable is set to match.  By setting the environment
- * variable, we ensure that any subsequent use of setlocale(..., "") will
- * preserve the settings made through this routine.  Of course, LC_ALL must
- * also be unset to fully ensure that, but that has to be done elsewhere after
- * all the individual LC_XXX variables have been set correctly.  (Thank you
- * Perl for making this kluge necessary.)
+ * POSIX is an alias for C. Passing ingore_case as true will use
+ * pg_strcasecmp() instead of strcmp().
+ */
+bool
+locale_is_c(const char *locale, bool ignore_case)
+{
+	if (!ignore_case)
+		return strcmp(locale, "C") == 0 || strcmp(locale, "POSIX") == 0;
+
+	return pg_strcasecmp(locale, "C") == 0 || pg_strcasecmp(locale, "POSIX") == 0;
+}
+
+
+#ifdef HAVE_USELOCALE
+/*
+ * Turns locale categories into their mask equivalents for use in newlocale(3)
+ *
+ * GCC has the masks defined as (1 << category), but this isn't guaranteed to be
+ * the same in other libcs.
+ */
+static int
+category_to_mask(int category)
+{
+	switch (category) {
+	case LC_ALL:
+		return LC_ALL_MASK;
+	case LC_COLLATE:
+		return LC_COLLATE_MASK;
+	case LC_CTYPE:
+		return LC_CTYPE_MASK;
+#ifdef LC_MESSAGES
+	case LC_MESSAGES:
+		return LC_MESSAGES_MASK;
+#endif
+	case LC_MONETARY:
+		return LC_MONETARY_MASK;
+	case LC_NUMERIC:
+		return LC_NUMERIC_MASK;
+	case LC_TIME:
+		return LC_TIME_MASK;
+	}
+
+	pg_unreachable();
+}
+
+
+static char *
+pg_getlocale(int category)
+{
+	switch (category) {
+	case LC_COLLATE:
+		return curr_locales.collate;
+	case LC_CTYPE:
+		return curr_locales.ctype;
+	case LC_MESSAGES:
+		return curr_locales.messages;
+	case LC_MONETARY:
+		return curr_locales.monetary;
+	case LC_NUMERIC:
+		return curr_locales.numeric;
+	case LC_TIME:
+		return curr_locales.time;
+	default:
+		pg_unreachable();
+	}
+}
+#endif /* HAVE_USELOCALE */
+
+
+/*
+ * pg_setlocale
+ *
+ * This wraps the libc functions uselocale() or setlocale() (depending on the
+ * platform), with a single addition.  When changing LC_CTYPE, update gettext's
+ * encoding for the current message domain. GNU gettext automatically tracks
+ * LC_CTYPE on most platforms, but not on Windows.  This function will abort if
+ * locale is the empty string.  A workaround is to pass the output of
+ * setlocale(category, "") to the locale argument.
  */
 char *
-pg_perm_setlocale(int category, const char *locale)
+pg_setlocale(int category, const char *locale)
 {
 	char	   *result;
-	const char *envvar;
+#ifdef HAVE_USELOCALE
+	char	  **save;
+	int			category_mask;
+	locale_t	prev_locale;
+	locale_t	temp_locale;
+	locale_t	work_locale;
 
-#ifndef WIN32
-	result = setlocale(category, locale);
+	if (locale == NULL)
+		return pg_getlocale(category);
+
+	Assert(locale[0] != '\0');
+
+	category_mask = category_to_mask(category);
+
+	prev_locale = uselocale((locale_t) 0);
+	Assert(saved_locale != (locale_t) 0);
+
+	result = strdup(locale);
+	work_locale = duplocale(prev_locale);
+	if (!result || work_locale == (locale_t) 0) {
+		ereport(ERROR,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of memory")));
+
+		return NULL;
+	}
+
+	temp_locale = newlocale(category_mask, locale, work_locale);
+	if (temp_locale == (locale_t) 0) {
+		freelocale(work_locale);
+
+		return NULL;			/* fall out immediately on failure */
+	}
+	work_locale = temp_locale;
+
+	uselocale(work_locale);
+	if (prev_locale != LC_GLOBAL_LOCALE)
+		freelocale(prev_locale);
+
+	/*
+	 * Copying the locale must occur before we potentially bind the text domain.
+	 */
+	switch (category) {
+	case LC_COLLATE:
+		save = &curr_locales.collate;
+		break;
+	case LC_CTYPE:
+		save = &curr_locales.ctype;
+		break;
+	case LC_MESSAGES:
+		save = &curr_locales.messages;
+		break;
+	case LC_MONETARY:
+		save = &curr_locales.monetary;
+		break;
+	case LC_NUMERIC:
+		save = &curr_locales.numeric;
+		break;
+	case LC_TIME:
+		save = &curr_locales.time;
+		break;
+	default:
+		pg_unreachable();
+	}
+
+	/* Free old locale string, and stash the new one */
+	free(*save);
+	*save = result;
+
 #else
 
 	/*
@@ -235,10 +386,11 @@ pg_perm_setlocale(int category, const char *locale)
 	else
 #endif
 		result = setlocale(category, locale);
-#endif							/* WIN32 */
 
 	if (result == NULL)
 		return result;			/* fall out immediately on failure */
+
+#endif /* HAVE_USELOCALE */
 
 	/*
 	 * Use the right encoding in translated messages.  Under ENABLE_NLS, let
@@ -249,11 +401,13 @@ pg_perm_setlocale(int category, const char *locale)
 	 */
 	if (category == LC_CTYPE)
 	{
+#ifndef HAVE_USELOCALE
 		static char save_lc_ctype[LOCALE_NAME_BUFLEN];
 
 		/* copy setlocale() return value before callee invokes it again */
 		strlcpy(save_lc_ctype, result, sizeof(save_lc_ctype));
 		result = save_lc_ctype;
+#endif
 
 #ifdef ENABLE_NLS
 		SetMessageEncoding(pg_bind_textdomain_codeset(textdomain(NULL)));
@@ -261,42 +415,6 @@ pg_perm_setlocale(int category, const char *locale)
 		SetMessageEncoding(GetDatabaseEncoding());
 #endif
 	}
-
-	switch (category)
-	{
-		case LC_COLLATE:
-			envvar = "LC_COLLATE";
-			break;
-		case LC_CTYPE:
-			envvar = "LC_CTYPE";
-			break;
-#ifdef LC_MESSAGES
-		case LC_MESSAGES:
-			envvar = "LC_MESSAGES";
-#ifdef WIN32
-			result = IsoLocaleName(locale);
-			if (result == NULL)
-				result = (char *) locale;
-			elog(DEBUG3, "IsoLocaleName() executed; locale: \"%s\"", result);
-#endif							/* WIN32 */
-			break;
-#endif							/* LC_MESSAGES */
-		case LC_MONETARY:
-			envvar = "LC_MONETARY";
-			break;
-		case LC_NUMERIC:
-			envvar = "LC_NUMERIC";
-			break;
-		case LC_TIME:
-			envvar = "LC_TIME";
-			break;
-		default:
-			elog(FATAL, "unrecognized LC category: %d", category);
-			return NULL;		/* keep compiler quiet */
-	}
-
-	if (setenv(envvar, result, 1) != 0)
-		return NULL;
 
 	return result;
 }
@@ -315,6 +433,47 @@ pg_perm_setlocale(int category, const char *locale)
 bool
 check_locale(int category, const char *locale, char **canonname)
 {
+#ifdef HAVE_USELOCALE
+	locale_t	saved_locale;
+	locale_t	temp_locale;
+	locale_t	work_locale;
+	int			category_mask;
+
+	category_mask = category_to_mask(category);
+
+	if (canonname)
+		*canonname = NULL;		/* in case of failure */
+
+	saved_locale = uselocale((locale_t) 0);
+	work_locale = duplocale(saved_locale);
+	if (work_locale == (locale_t) 0) {
+		if (errno == ENOMEM)
+			ereport(ERROR,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+					 errmsg("out of memory")));
+
+		return false;
+	}
+
+	temp_locale = newlocale(category_mask, locale, work_locale);
+	if (temp_locale == (locale_t) 0) {
+		freelocale(work_locale);
+
+		return false;
+	}
+	work_locale = temp_locale;
+
+	uselocale(work_locale);
+	if (canonname)
+		*canonname = pstrdup(locale); /* TODO: This does not handle "" as the locale */
+
+	uselocale(saved_locale);
+	freelocale(work_locale);
+
+	return true;
+
+#else
+
 	char	   *save;
 	char	   *res;
 
@@ -341,6 +500,7 @@ check_locale(int category, const char *locale, char **canonname)
 	pfree(save);
 
 	return (res != NULL);
+#endif /* HAVE_USELOCALE */
 }
 
 
@@ -353,7 +513,7 @@ check_locale(int category, const char *locale, char **canonname)
  *
  * Note: we accept value = "" as selecting the postmaster's environment
  * value, whatever it was (so long as the environment setting is legal).
- * This will have been locked down by an earlier call to pg_perm_setlocale.
+ * This will have been locked down by an earlier call to pg_setlocale.
  */
 bool
 check_locale_monetary(char **newval, void **extra, GucSource source)
@@ -432,7 +592,7 @@ assign_locale_messages(const char *newval, void *extra)
 	 * We ignore failure, as per comment above.
 	 */
 #ifdef LC_MESSAGES
-	(void) pg_perm_setlocale(LC_MESSAGES, newval);
+	(void) pg_setlocale(LC_MESSAGES, newval);
 #endif
 }
 
@@ -528,11 +688,8 @@ PGLC_localeconv(void)
 	static bool CurrentLocaleConvAllocated = false;
 	struct lconv *extlconv;
 	struct lconv worklconv;
-	char	   *save_lc_monetary;
-	char	   *save_lc_numeric;
-#ifdef WIN32
-	char	   *save_lc_ctype;
-#endif
+	locale_t	saved_locale;
+	locale_t	work_locale;
 
 	/* Did we do it already? */
 	if (CurrentLocaleConvValid)
@@ -559,16 +716,15 @@ PGLC_localeconv(void)
 	 */
 	memset(&worklconv, 0, sizeof(worklconv));
 
-	/* Save prevailing values of monetary and numeric locales */
-	save_lc_monetary = setlocale(LC_MONETARY, NULL);
-	if (!save_lc_monetary)
-		elog(ERROR, "setlocale(NULL) failed");
-	save_lc_monetary = pstrdup(save_lc_monetary);
+	/* Save prevailing locale */
+	saved_locale = uselocale((locale_t) 0);
+	Assert(saved_locale != (locale_t) 0);
 
-	save_lc_numeric = setlocale(LC_NUMERIC, NULL);
-	if (!save_lc_numeric)
-		elog(ERROR, "setlocale(NULL) failed");
-	save_lc_numeric = pstrdup(save_lc_numeric);
+	work_locale = duplocale(saved_locale);
+	if (work_locale == (locale_t) 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of memory")));
 
 #ifdef WIN32
 
@@ -586,37 +742,37 @@ PGLC_localeconv(void)
 	 * results.  Hence, we must temporarily set that category as well.
 	 */
 
-	/* Save prevailing value of ctype locale */
-	save_lc_ctype = setlocale(LC_CTYPE, NULL);
-	if (!save_lc_ctype)
-		elog(ERROR, "setlocale(NULL) failed");
-	save_lc_ctype = pstrdup(save_lc_ctype);
-
 	/* Here begins the critical section where we must not throw error */
 
 	/* use numeric to set the ctype */
-	setlocale(LC_CTYPE, locale_numeric);
+	work_locale = newlocale(LC_CTYPE_MASK, locale_numeric, work_locale);
+	Assert(work_locale != (locale_t) 0);
 #endif
 
 	/* Get formatting information for numeric */
-	setlocale(LC_NUMERIC, locale_numeric);
+	work_locale = newlocale(LC_NUMERIC_MASK, locale_numeric, work_locale);
+	Assert(work_locale != (locale_t) 0);
+	uselocale(work_locale);
 	extlconv = localeconv();
 
-	/* Must copy data now in case setlocale() overwrites it */
+	/* Must copy data now in case updating the locale overwrites it */
 	worklconv.decimal_point = strdup(extlconv->decimal_point);
 	worklconv.thousands_sep = strdup(extlconv->thousands_sep);
 	worklconv.grouping = strdup(extlconv->grouping);
 
 #ifdef WIN32
 	/* use monetary to set the ctype */
-	setlocale(LC_CTYPE, locale_monetary);
+	work_locale = newlocale(LC_CTYPE_MASK, locale_monetary, work_locale);
+	Assert(work_locale != (locale_t) 0);
 #endif
 
 	/* Get formatting information for monetary */
-	setlocale(LC_MONETARY, locale_monetary);
+	work_locale = newlocale(LC_MONETARY_MASK, locale_monetary, work_locale);
+	Assert(work_locale != (locale_t) 0);
+	uselocale(work_locale);
 	extlconv = localeconv();
 
-	/* Must copy data now in case setlocale() overwrites it */
+	/* Must copy data now in case updating the locale overwrites it */
 	worklconv.int_curr_symbol = strdup(extlconv->int_curr_symbol);
 	worklconv.currency_symbol = strdup(extlconv->currency_symbol);
 	worklconv.mon_decimal_point = strdup(extlconv->mon_decimal_point);
@@ -634,22 +790,9 @@ PGLC_localeconv(void)
 	worklconv.p_sign_posn = extlconv->p_sign_posn;
 	worklconv.n_sign_posn = extlconv->n_sign_posn;
 
-	/*
-	 * Restore the prevailing locale settings; failure to do so is fatal.
-	 * Possibly we could limp along with nondefault LC_MONETARY or LC_NUMERIC,
-	 * but proceeding with the wrong value of LC_CTYPE would certainly be bad
-	 * news; and considering that the prevailing LC_MONETARY and LC_NUMERIC
-	 * are almost certainly "C", there's really no reason that restoring those
-	 * should fail.
-	 */
-#ifdef WIN32
-	if (!setlocale(LC_CTYPE, save_lc_ctype))
-		elog(FATAL, "failed to restore LC_CTYPE to \"%s\"", save_lc_ctype);
-#endif
-	if (!setlocale(LC_MONETARY, save_lc_monetary))
-		elog(FATAL, "failed to restore LC_MONETARY to \"%s\"", save_lc_monetary);
-	if (!setlocale(LC_NUMERIC, save_lc_numeric))
-		elog(FATAL, "failed to restore LC_NUMERIC to \"%s\"", save_lc_numeric);
+	/* Restore the prevailing locale settings; failure to do so is fatal. */
+	uselocale(saved_locale);
+	freelocale(work_locale);
 
 	/*
 	 * At this point we've done our best to clean up, and can call functions
@@ -659,13 +802,6 @@ PGLC_localeconv(void)
 	PG_TRY();
 	{
 		int			encoding;
-
-		/* Release the pstrdup'd locale names */
-		pfree(save_lc_monetary);
-		pfree(save_lc_numeric);
-#ifdef WIN32
-		pfree(save_lc_ctype);
-#endif
 
 		/* If any of the preceding strdup calls failed, complain now. */
 		if (!struct_lconv_is_valid(&worklconv))
@@ -813,10 +949,8 @@ cache_locale_time(void)
 	bool		strftimefail = false;
 	int			encoding;
 	int			i;
-	char	   *save_lc_time;
-#ifdef WIN32
-	char	   *save_lc_ctype;
-#endif
+	locale_t	saved_locale;
+	locale_t	work_locale;
 
 	/* did we do this already? */
 	if (CurrentLCTimeValid)
@@ -831,11 +965,15 @@ cache_locale_time(void)
 	 * results afterwards.
 	 */
 
-	/* Save prevailing value of time locale */
-	save_lc_time = setlocale(LC_TIME, NULL);
-	if (!save_lc_time)
-		elog(ERROR, "setlocale(NULL) failed");
-	save_lc_time = pstrdup(save_lc_time);
+	/* Save prevailing locale */
+	saved_locale = uselocale((locale_t) 0);
+	Assert(saved_locale != (locale_t) 0);
+
+	work_locale = duplocale(saved_locale);
+	if (work_locale == (locale_t) 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of memory")));
 
 #ifdef WIN32
 
@@ -846,17 +984,14 @@ cache_locale_time(void)
 	 * the encoding we'll get back from strftime_win32().
 	 */
 
-	/* Save prevailing value of ctype locale */
-	save_lc_ctype = setlocale(LC_CTYPE, NULL);
-	if (!save_lc_ctype)
-		elog(ERROR, "setlocale(NULL) failed");
-	save_lc_ctype = pstrdup(save_lc_ctype);
-
 	/* use lc_time to set the ctype */
-	setlocale(LC_CTYPE, locale_time);
+	work_locale = newlocale(LC_CTYPE_MASK, locale_time, work_locale);
+	Assert(work_locale != (locale_t) 0);
 #endif
 
-	setlocale(LC_TIME, locale_time);
+	work_locale = newlocale(LC_TIME_MASK, locale_time, work_locale);
+	Assert(work_locale != (locale_t) 0);
+	uselocale(work_locale);
 
 	/* We use times close to current time as data for strftime(). */
 	timenow = time(NULL);
@@ -904,12 +1039,8 @@ cache_locale_time(void)
 	 * Restore the prevailing locale settings; as in PGLC_localeconv(),
 	 * failure to do so is fatal.
 	 */
-#ifdef WIN32
-	if (!setlocale(LC_CTYPE, save_lc_ctype))
-		elog(FATAL, "failed to restore LC_CTYPE to \"%s\"", save_lc_ctype);
-#endif
-	if (!setlocale(LC_TIME, save_lc_time))
-		elog(FATAL, "failed to restore LC_TIME to \"%s\"", save_lc_time);
+	uselocale(saved_locale);
+	freelocale(work_locale);
 
 	/*
 	 * At this point we've done our best to clean up, and can throw errors, or
@@ -917,12 +1048,6 @@ cache_locale_time(void)
 	 */
 	if (strftimefail)
 		elog(ERROR, "strftime() failed: %m");
-
-	/* Release the pstrdup'd locale names */
-	pfree(save_lc_time);
-#ifdef WIN32
-	pfree(save_lc_ctype);
-#endif
 
 #ifndef WIN32
 
@@ -1280,10 +1405,8 @@ lookup_collation_cache(Oid collation, bool set_flags)
 			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_collctype);
 			collctype = TextDatumGetCString(datum);
 
-			cache_entry->collate_is_c = ((strcmp(collcollate, "C") == 0) ||
-										 (strcmp(collcollate, "POSIX") == 0));
-			cache_entry->ctype_is_c = ((strcmp(collctype, "C") == 0) ||
-									   (strcmp(collctype, "POSIX") == 0));
+			cache_entry->collate_is_c = locale_is_c(collcollate, false);
+			cache_entry->ctype_is_c = locale_is_c(collctype, false);
 		}
 		else
 		{
@@ -1320,23 +1443,15 @@ lc_collate_is_c(Oid collation)
 	if (collation == DEFAULT_COLLATION_OID)
 	{
 		static int	result = -1;
-		char	   *localeptr;
 
 		if (default_locale.provider == COLLPROVIDER_ICU)
 			return false;
 
 		if (result >= 0)
 			return (bool) result;
-		localeptr = setlocale(LC_COLLATE, NULL);
-		if (!localeptr)
-			elog(ERROR, "invalid LC_COLLATE setting");
 
-		if (strcmp(localeptr, "C") == 0)
-			result = true;
-		else if (strcmp(localeptr, "POSIX") == 0)
-			result = true;
-		else
-			result = false;
+		result = locale_is_c(curr_locales.collate, false);
+
 		return (bool) result;
 	}
 
@@ -1368,28 +1483,20 @@ lc_ctype_is_c(Oid collation)
 
 	/*
 	 * If we're asked about the default collation, we have to inquire of the C
-	 * library.  Cache the result so we only have to compute it once.
+	 * library.
 	 */
 	if (collation == DEFAULT_COLLATION_OID)
 	{
 		static int	result = -1;
-		char	   *localeptr;
 
 		if (default_locale.provider == COLLPROVIDER_ICU)
 			return false;
 
 		if (result >= 0)
 			return (bool) result;
-		localeptr = setlocale(LC_CTYPE, NULL);
-		if (!localeptr)
-			elog(ERROR, "invalid LC_CTYPE setting");
 
-		if (strcmp(localeptr, "C") == 0)
-			result = true;
-		else if (strcmp(localeptr, "POSIX") == 0)
-			result = true;
-		else
-			result = false;
+		result = locale_is_c(curr_locales.ctype, false);
+
 		return (bool) result;
 	}
 

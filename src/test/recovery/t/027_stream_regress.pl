@@ -32,8 +32,7 @@ $node_primary->append_conf('postgresql.conf', 'synchronize_seqscans = off');
 
 # WAL consistency checking is resource intensive so require opt-in with the
 # PG_TEST_EXTRA environment variable.
-if (   $ENV{PG_TEST_EXTRA}
-	&& $ENV{PG_TEST_EXTRA} =~ m/\bwal_consistency_checking\b/)
+if (PostgreSQL::Test::Utils::check_extra_text_enabled('wal_consistency_checking'))
 {
 	$node_primary->append_conf('postgresql.conf',
 		'wal_consistency_checking = all');

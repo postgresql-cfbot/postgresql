@@ -45,7 +45,7 @@ endif
 
 # Test runs an LDAP server, so only run if ldap is in PG_TEST_EXTRA
 ifeq ($(with_ldap),yes)
-ifneq (,$(filter ldap,$(PG_TEST_EXTRA)))
+ifneq (,$(filter all ldap,$(PG_TEST_EXTRA)))
 SUBDIRS += ldap_password_func
 else
 ALWAYS_SUBDIRS += ldap_password_func

@@ -604,6 +604,7 @@ compute_array_stats(VacAttrStats *stats, AnalyzeAttrFetchFunc fetchfunc,
 			/*
 			 * Prepare to fill stanumbers with the histogram, followed by the
 			 * average count.  This array must be stored in anl_context.
+			 * We use the average count in estimate_array_length.
 			 */
 			hist = (float4 *)
 				MemoryContextAlloc(stats->anl_context,

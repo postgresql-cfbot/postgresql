@@ -2131,7 +2131,7 @@ scalararraysel(PlannerInfo *root,
  * It's important that this agree with scalararraysel.
  */
 int
-estimate_array_length(Node *arrayexpr)
+estimate_array_length(PlannerInfo *root, Node *arrayexpr)
 {
 	/* look through any binary-compatible relabeling of arrayexpr */
 	arrayexpr = strip_array_coercion(arrayexpr);
@@ -2152,11 +2152,36 @@ estimate_array_length(Node *arrayexpr)
 	{
 		return list_length(((ArrayExpr *) arrayexpr)->elements);
 	}
-	else
+	else if (arrayexpr && IsA(arrayexpr, Var))
 	{
-		/* default guess --- see also scalararraysel */
-		return 10;
+		/*
+		 * It's a column, so use its average elem count.
+		 * This is stored in the last stanumbers element of the DECHIST statistics.
+		 * Actually that is the count of *distinct* elements,
+		 * but this is still better than 10.
+		 */
+		VariableStatData vardata;
+		AttStatsSlot sslot;
+		int nelem = -1;
+
+		examine_variable(root, arrayexpr, 0, &vardata);
+
+		if (HeapTupleIsValid(vardata.statsTuple))
+		{
+			if (get_attstatsslot(&sslot, vardata.statsTuple, STATISTIC_KIND_DECHIST, InvalidOid, ATTSTATSSLOT_NUMBERS))
+			{
+				nelem = clamp_row_est(sslot.numbers[sslot.nnumbers - 1]);
+				free_attstatsslot(&sslot);
+			}
+		}
+		ReleaseVariableStats(vardata);
+
+		if (nelem >= 0)
+			return nelem;
 	}
+
+	/* default guess --- see also scalararraysel */
+	return 10;
 }
 
 /*
@@ -6540,7 +6565,7 @@ genericcostestimate(PlannerInfo *root,
 		if (IsA(rinfo->clause, ScalarArrayOpExpr))
 		{
 			ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) rinfo->clause;
-			int			alength = estimate_array_length(lsecond(saop->args));
+			int			alength = estimate_array_length(root, lsecond(saop->args));
 
 			if (alength > 1)
 				num_sa_scans *= alength;
@@ -6820,7 +6845,7 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 			{
 				ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) clause;
 				Node	   *other_operand = (Node *) lsecond(saop->args);
-				int			alength = estimate_array_length(other_operand);
+				int			alength = estimate_array_length(root, other_operand);
 
 				clause_op = saop->opno;
 				found_saop = true;
@@ -7414,7 +7439,7 @@ gincost_scalararrayopexpr(PlannerInfo *root,
 	{
 		counts->exactEntries++;
 		counts->searchEntries++;
-		counts->arrayScans *= estimate_array_length(rightop);
+		counts->arrayScans *= estimate_array_length(root, rightop);
 		return true;
 	}
 

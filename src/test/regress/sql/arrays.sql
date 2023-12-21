@@ -825,3 +825,14 @@ SELECT array_dims(array_sample('[-1:2][2:3]={{1,2},{3,NULL},{5,6},{7,8}}'::int[]
 SELECT array_dims(array_sample('{{{1,2},{3,NULL}},{{5,6},{7,8}},{{9,10},{11,12}}}'::int[], 2));
 SELECT array_sample('{1,2,3,4,5,6}'::int[], -1); -- fail
 SELECT array_sample('{1,2,3,4,5,6}'::int[], 7); --fail
+
+-- test rowcount estimate of unnest(column)
+EXPLAIN (COSTS OFF)
+WITH flat AS (
+  SELECT  UNNEST(i) AS elem
+  FROM    array_op_test
+  WHERE   seqno <= 50
+)
+SELECT  flat.*
+FROM    flat
+JOIN    tenk1 ON thousand = elem;

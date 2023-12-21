@@ -2699,3 +2699,23 @@ SELECT array_sample('{1,2,3,4,5,6}'::int[], -1); -- fail
 ERROR:  sample size must be between 0 and 6
 SELECT array_sample('{1,2,3,4,5,6}'::int[], 7); --fail
 ERROR:  sample size must be between 0 and 6
+-- test rowcount estimate of unnest(column)
+EXPLAIN (COSTS OFF)
+WITH flat AS (
+  SELECT  UNNEST(i) AS elem
+  FROM    array_op_test
+  WHERE   seqno <= 50
+)
+SELECT  flat.*
+FROM    flat
+JOIN    tenk1 ON thousand = elem;
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Nested Loop
+   ->  ProjectSet
+         ->  Seq Scan on array_op_test
+               Filter: (seqno <= 50)
+   ->  Index Only Scan using tenk1_thous_tenthous on tenk1
+         Index Cond: (thousand = (unnest(array_op_test.i)))
+(6 rows)
+

@@ -573,8 +573,9 @@ extern HTAB *GetLockMethodLocalHash(void);
 #endif
 extern bool LockHasWaiters(const LOCKTAG *locktag,
 						   LOCKMODE lockmode, bool sessionLock);
-extern VirtualTransactionId *GetLockConflicts(const LOCKTAG *locktag,
-											  LOCKMODE lockmode, int *countp);
+extern VirtualTransactionId *GetLockers(const LOCKTAG *locktag,
+										LOCKMODE lockmode, bool conflicting,
+										int *countp);
 extern void AtPrepare_Locks(void);
 extern void PostPrepare_Locks(TransactionId xid);
 extern bool LockCheckConflicts(LockMethod lockMethodTable,

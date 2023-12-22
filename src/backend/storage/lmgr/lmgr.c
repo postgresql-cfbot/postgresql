@@ -922,8 +922,8 @@ WaitForLockersMultiple(List *locktags, LOCKMODE lockmode, bool progress)
 		int			count;
 
 		holders = lappend(holders,
-						  GetLockConflicts(locktag, lockmode,
-										   progress ? &count : NULL));
+						  GetLockers(locktag, lockmode, true,
+									 progress ? &count : NULL));
 		if (progress)
 			total += count;
 	}
@@ -932,8 +932,8 @@ WaitForLockersMultiple(List *locktags, LOCKMODE lockmode, bool progress)
 		pgstat_progress_update_param(PROGRESS_WAITFOR_TOTAL, total);
 
 	/*
-	 * Note: GetLockConflicts() never reports our own xid, hence we need not
-	 * check for that.  Also, prepared xacts are reported and awaited.
+	 * Note: GetLockers() never reports our own xid, hence we need not check for
+	 * that.  Also, prepared xacts are reported and awaited.
 	 */
 
 	/* Finally wait for each such transaction to complete */

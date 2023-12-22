@@ -19108,7 +19108,8 @@ ATExecDetachPartition(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		 * partition itself, since we will acquire AccessExclusiveLock below.
 		 */
 		SET_LOCKTAG_RELATION(tag, MyDatabaseId, parentrelid);
-		WaitForLockersMultiple(list_make1(&tag), AccessExclusiveLock, false);
+		WaitForLockersMultiple(list_make1(&tag), AccessExclusiveLock, true,
+							   false);
 
 		/*
 		 * Now acquire locks in both relations again.  Note they may have been

@@ -52,6 +52,9 @@ typedef struct
 	int			num_vars;		/* number of plain Var tlist entries */
 	bool		has_ph_vars;	/* are there PlaceHolderVar entries? */
 	bool		has_non_vars;	/* are there other entries? */
+	bool		has_conv_whole_rows;	/* are there ConvertRowtypeExpr
+								* entries encapsulating a whole-row
+								* Var? */
 	tlist_vinfo vars[FLEXIBLE_ARRAY_MEMBER];	/* has num_vars entries */
 } indexed_tlist;
 
@@ -211,6 +214,7 @@ static List *set_windowagg_runcondition_references(PlannerInfo *root,
 												   List *runcondition,
 												   Plan *plan);
 
+static bool is_converted_whole_row_reference(Node *node);
 
 /*****************************************************************************
  *
@@ -2711,6 +2715,7 @@ build_tlist_index(List *tlist)
 	itlist->tlist = tlist;
 	itlist->has_ph_vars = false;
 	itlist->has_non_vars = false;
+	itlist->has_conv_whole_rows = false;
 
 	/* Find the Vars and fill in the index array */
 	vinfo = itlist->vars;
@@ -2730,6 +2735,8 @@ build_tlist_index(List *tlist)
 		}
 		else if (tle->expr && IsA(tle->expr, PlaceHolderVar))
 			itlist->has_ph_vars = true;
+		else if (is_converted_whole_row_reference((Node *) tle->expr))
+			itlist->has_conv_whole_rows = true;
 		else
 			itlist->has_non_vars = true;
 	}
@@ -2745,7 +2752,10 @@ build_tlist_index(List *tlist)
  * This is like build_tlist_index, but we only index tlist entries that
  * are Vars belonging to some rel other than the one specified.  We will set
  * has_ph_vars (allowing PlaceHolderVars to be matched), but not has_non_vars
- * (so nothing other than Vars and PlaceHolderVars can be matched).
+ * (so nothing other than Vars and PlaceHolderVars can be matched).  In case of
+ * DML, where this function will be used, returning lists from child relations
+ * will be appended similar to a simple append relation. That does not require
+ * fixing ConvertRowtypeExpr references. So, those are not considered here.
  */
 static indexed_tlist *
 build_tlist_index_other_vars(List *tlist, int ignore_rel)
@@ -2762,6 +2772,7 @@ build_tlist_index_other_vars(List *tlist, int ignore_rel)
 	itlist->tlist = tlist;
 	itlist->has_ph_vars = false;
 	itlist->has_non_vars = false;
+	itlist->has_conv_whole_rows = false;
 
 	/* Find the desired Vars and fill in the index array */
 	vinfo = itlist->vars;
@@ -3067,6 +3078,7 @@ static Node *
 fix_join_expr_mutator(Node *node, fix_join_expr_context *context)
 {
 	Var		   *newvar;
+	bool            converted_whole_row;
 
 	if (node == NULL)
 		return NULL;
@@ -3140,7 +3152,8 @@ fix_join_expr_mutator(Node *node, fix_join_expr_context *context)
 		return fix_join_expr_mutator((Node *) phv->phexpr, context);
 	}
 	/* Try matching more complex expressions too, if tlists have any */
-	if (context->outer_itlist && context->outer_itlist->has_non_vars)
+	converted_whole_row = is_converted_whole_row_reference(node);
+	if (context->outer_itlist && (context->outer_itlist->has_non_vars || (context->outer_itlist->has_conv_whole_rows && converted_whole_row)))
 	{
 		newvar = search_indexed_tlist_for_non_var((Expr *) node,
 												  context->outer_itlist,
@@ -3148,7 +3161,7 @@ fix_join_expr_mutator(Node *node, fix_join_expr_context *context)
 		if (newvar)
 			return (Node *) newvar;
 	}
-	if (context->inner_itlist && context->inner_itlist->has_non_vars)
+	if (context->inner_itlist && (context->inner_itlist->has_non_vars || (context->inner_itlist->has_conv_whole_rows && converted_whole_row)))
 	{
 		newvar = search_indexed_tlist_for_non_var((Expr *) node,
 												  context->inner_itlist,
@@ -3261,7 +3274,7 @@ fix_upper_expr_mutator(Node *node, fix_upper_expr_context *context)
 		return fix_upper_expr_mutator((Node *) phv->phexpr, context);
 	}
 	/* Try matching more complex expressions too, if tlist has any */
-	if (context->subplan_itlist->has_non_vars)
+	if (context->subplan_itlist->has_non_vars || (context->subplan_itlist->has_conv_whole_rows && is_converted_whole_row_reference(node)))
 	{
 		newvar = search_indexed_tlist_for_non_var((Expr *) node,
 												  context->subplan_itlist,
@@ -3662,4 +3675,34 @@ extract_query_dependencies_walker(Node *node, PlannerInfo *context)
 	fix_expr_common(context, node);
 	return expression_tree_walker(node, extract_query_dependencies_walker,
 								  (void *) context);
+}
+
+/*
+ * is_converted_whole_row_reference
+ *             If the given node is a ConvertRowtypeExpr encapsulating a whole-row
+ *             reference as implicit cast, return true. Otherwise return false.
+ */
+static bool
+is_converted_whole_row_reference(Node *node)
+{
+	ConvertRowtypeExpr *convexpr;
+
+	if (!node || !IsA(node, ConvertRowtypeExpr))
+		return false;
+
+	/* Traverse nested ConvertRowtypeExpr's. */
+	convexpr = castNode(ConvertRowtypeExpr, node);
+	while (convexpr->convertformat == COERCE_IMPLICIT_CAST &&
+		IsA(convexpr->arg, ConvertRowtypeExpr))
+		convexpr = castNode(ConvertRowtypeExpr, convexpr->arg);
+
+	if (IsA(convexpr->arg, Var))
+	{
+		Var                *var = castNode(Var, convexpr->arg);
+
+		if (var->varattno == 0)
+			return true;
+	}
+
+	return false;
 }

@@ -976,8 +976,7 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 	 */
 	if (enable_partitionwise_join &&
 		rel->reloptkind == RELOPT_BASEREL &&
-		rte->relkind == RELKIND_PARTITIONED_TABLE &&
-		bms_is_empty(rel->attr_needed[InvalidAttrNumber - rel->min_attr]))
+		rte->relkind == RELKIND_PARTITIONED_TABLE)
 		rel->consider_partitionwise_join = true;
 
 	/*

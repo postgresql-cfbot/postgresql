@@ -214,8 +214,6 @@ static List *set_windowagg_runcondition_references(PlannerInfo *root,
 												   List *runcondition,
 												   Plan *plan);
 
-static bool is_converted_whole_row_reference(Node *node);
-
 /*****************************************************************************
  *
  *		SUBPLAN REFERENCES
@@ -3675,34 +3673,4 @@ extract_query_dependencies_walker(Node *node, PlannerInfo *context)
 	fix_expr_common(context, node);
 	return expression_tree_walker(node, extract_query_dependencies_walker,
 								  (void *) context);
-}
-
-/*
- * is_converted_whole_row_reference
- *             If the given node is a ConvertRowtypeExpr encapsulating a whole-row
- *             reference as implicit cast, return true. Otherwise return false.
- */
-static bool
-is_converted_whole_row_reference(Node *node)
-{
-	ConvertRowtypeExpr *convexpr;
-
-	if (!node || !IsA(node, ConvertRowtypeExpr))
-		return false;
-
-	/* Traverse nested ConvertRowtypeExpr's. */
-	convexpr = castNode(ConvertRowtypeExpr, node);
-	while (convexpr->convertformat == COERCE_IMPLICIT_CAST &&
-		IsA(convexpr->arg, ConvertRowtypeExpr))
-		convexpr = castNode(ConvertRowtypeExpr, convexpr->arg);
-
-	if (IsA(convexpr->arg, Var))
-	{
-		Var                *var = castNode(Var, convexpr->arg);
-
-		if (var->varattno == 0)
-			return true;
-	}
-
-	return false;
 }

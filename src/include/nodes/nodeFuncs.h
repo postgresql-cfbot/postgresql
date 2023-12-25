@@ -221,4 +221,5 @@ extern bool planstate_tree_walker_impl(struct PlanState *planstate,
 									   planstate_tree_walker_callback walker,
 									   void *context);
 
+extern bool is_converted_whole_row_reference(Node *node);
 #endif							/* NODEFUNCS_H */

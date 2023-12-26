@@ -1476,6 +1476,22 @@ get_tupdesc_for_join_scan_tuples(ForeignScanState *node)
 		 */
 		var = (Var *) list_nth_node(TargetEntry, fsplan->fdw_scan_tlist,
 									i)->expr;
+
+		/*
+		 * TODO: Do we really need this? Target list can contain not only
+		 * Vars, but ConvertRowtypeExpr will certainly contribute to
+		 * ss.ss_ScanTupleSlot->tts_tupleDescriptor attribute type in
+		 * ExecTypeFromTL() (called from ExecInitForeignScan()) in the same
+		 * way.
+		 */
+		if (IsA(var, ConvertRowtypeExpr))
+		{
+			ConvertRowtypeExpr *convexpr = castNode(ConvertRowtypeExpr, var);
+
+			att->atttypid = convexpr->resulttype;
+			continue;
+		}
+
 		if (!IsA(var, Var) || var->varattno != 0)
 			continue;
 		rte = list_nth(estate->es_range_table, var->varno - 1);
@@ -6119,7 +6135,7 @@ add_paths_with_pathkeys_for_rel(PlannerInfo *root, RelOptInfo *rel,
 		/* Include columns required for evaluating PHVs in the tlist. */
 		add_new_columns_to_pathtarget(target,
 									  pull_var_clause((Node *) target->exprs,
-													  PVC_RECURSE_PLACEHOLDERS));
+													  PVC_RECURSE_PLACEHOLDERS | PVC_INCLUDE_CONVERTROWTYPES));
 
 		/* Include columns required for evaluating the local conditions. */
 		foreach(lc, fpinfo->local_conds)
@@ -6128,7 +6144,7 @@ add_paths_with_pathkeys_for_rel(PlannerInfo *root, RelOptInfo *rel,
 
 			add_new_columns_to_pathtarget(target,
 										  pull_var_clause((Node *) rinfo->clause,
-														  PVC_RECURSE_PLACEHOLDERS));
+														  PVC_RECURSE_PLACEHOLDERS | PVC_INCLUDE_CONVERTROWTYPES));
 		}
 
 		/*

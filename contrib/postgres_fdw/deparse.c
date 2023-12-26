@@ -166,6 +166,8 @@ static void deparseBoolExpr(BoolExpr *node, deparse_expr_cxt *context);
 static void deparseNullTest(NullTest *node, deparse_expr_cxt *context);
 static void deparseCaseExpr(CaseExpr *node, deparse_expr_cxt *context);
 static void deparseArrayExpr(ArrayExpr *node, deparse_expr_cxt *context);
+static void deparseConvertRowtypeExpr(ConvertRowtypeExpr *cre,
+									  deparse_expr_cxt *context);
 static void printRemoteParam(int paramindex, Oid paramtype, int32 paramtypmod,
 							 deparse_expr_cxt *context);
 static void printRemotePlaceholder(Oid paramtype, int32 paramtypmod,
@@ -202,9 +204,9 @@ static Node *deparseSortGroupClause(Index ref, List *tlist, bool force_colno,
 /*
  * Helper functions
  */
-static bool is_subquery_var(Var *node, RelOptInfo *foreignrel,
+static bool is_subquery_var(Node *node, Index varno, int varattno, RelOptInfo *foreignrel,
 							int *relno, int *colno);
-static void get_relation_column_alias_ids(Var *node, RelOptInfo *foreignrel,
+static void get_relation_column_alias_ids(Node *node, Index varno, int varattno, RelOptInfo *foreignrel,
 										  int *relno, int *colno);
 
 
@@ -1188,18 +1190,25 @@ build_tlist_to_deparse(RelOptInfo *foreignrel)
 
 	/*
 	 * We require columns specified in foreignrel->reltarget->exprs and those
-	 * required for evaluating the local conditions.
+	 * required for evaluating the local conditions.  Child relation's
+	 * targetlist or local conditions may have ConvertRowtypeExpr when parent
+	 * whole-row Vars were translated. We need to include those in targetlist
+	 * to be pushed down to match the targetlists produced for the joining
+	 * relations (in case we are using subqueries in the deparsed query) and
+	 * also to match the targetlist of outer plan if foreign scan has one.
 	 */
 	tlist = add_to_flat_tlist(tlist,
 							  pull_var_clause((Node *) foreignrel->reltarget->exprs,
-											  PVC_RECURSE_PLACEHOLDERS));
+											  PVC_RECURSE_PLACEHOLDERS |
+											  PVC_INCLUDE_CONVERTROWTYPES));
 	foreach(lc, fpinfo->local_conds)
 	{
 		RestrictInfo *rinfo = lfirst_node(RestrictInfo, lc);
 
 		tlist = add_to_flat_tlist(tlist,
 								  pull_var_clause((Node *) rinfo->clause,
-												  PVC_RECURSE_PLACEHOLDERS));
+												  PVC_RECURSE_PLACEHOLDERS |
+												  PVC_INCLUDE_CONVERTROWTYPES));
 	}
 
 	return tlist;
@@ -2930,6 +2939,10 @@ deparseExpr(Expr *node, deparse_expr_cxt *context)
 		case T_Aggref:
 			deparseAggref((Aggref *) node, context);
 			break;
+		case T_ConvertRowtypeExpr:
+			deparseConvertRowtypeExpr(castNode(ConvertRowtypeExpr, node),
+									  context);
+			break;
 		default:
 			elog(ERROR, "unsupported expression type for deparse: %d",
 				 (int) nodeTag(node));
@@ -2960,7 +2973,8 @@ deparseVar(Var *node, deparse_expr_cxt *context)
 	 * subquery, use the relation and column alias to the Var provided by the
 	 * subquery, instead of the remote name.
 	 */
-	if (is_subquery_var(node, context->scanrel, &relno, &colno))
+	if (is_subquery_var((Node *) node, node->varno, node->varattno, context->scanrel, &relno,
+						&colno))
 	{
 		appendStringInfo(context->buf, "%s%d.%s%d",
 						 SUBQUERY_REL_ALIAS_PREFIX, relno,
@@ -3743,6 +3757,115 @@ deparseAggref(Aggref *node, deparse_expr_cxt *context)
 }
 
 /*
+ * Deparse a ConvertRowtypeExpr node.
+ *
+ * The function handles ConvertRowtypeExpr nodes constructed to convert a child
+ * tuple to parent tuple. The function deparses a ConvertRowtypeExpr as a ROW
+ * expression child column refrences arranged according to the tuple conversion
+ * map for converting child tuple to that of the parent. The ROW expression is
+ * decorated with CASE similar to deparseColumnRef() to take care of
+ * ConvertRowtypeExpr nodes on nullable side of the join.
+ */
+static void
+deparseConvertRowtypeExpr(ConvertRowtypeExpr *cre,
+						  deparse_expr_cxt *context)
+{
+	ConvertRowtypeExpr *expr = cre;
+	Var		   *child_var;
+	TupleDesc	parent_desc;
+	TupleDesc	child_desc;
+	TupleConversionMap *conv_map;
+	AttrMap    *attrMap;
+	int			cnt;
+	bool		qualify_col = (bms_num_members(context->scanrel->relids) > 1);
+	StringInfo	buf = context->buf;
+	PlannerInfo *root = context->root;
+	int			relno;
+	int			colno;
+	bool		first_col;
+
+	/*
+	 * Multi-level partitioned hierarchies produce nested ConvertRowtypeExprs,
+	 * where the top ConvertRowtypeExpr gives the parent relation and the leaf
+	 * Var node gives the child relation.  Fetch the leaf Var node
+	 * corresponding to the lowest child.
+	 */
+	while (IsA(expr->arg, ConvertRowtypeExpr))
+		expr = castNode(ConvertRowtypeExpr, expr->arg);
+	child_var = castNode(Var, expr->arg);
+	Assert(child_var->varattno == 0);
+
+	/*
+	 * If the child Var belongs to the foreign relation that is deparsed as a
+	 * subquery, use the relation and column alias to the child Var provided
+	 * by the subquery, instead of the remote name.
+	 */
+	if (is_subquery_var((Node *) cre, child_var->varno, child_var->varattno, context->scanrel,
+						&relno, &colno))
+	{
+		appendStringInfo(context->buf, "%s%d.%s%d",
+						 SUBQUERY_REL_ALIAS_PREFIX, relno,
+						 SUBQUERY_COL_ALIAS_PREFIX, colno);
+		return;
+	}
+
+	/* Construct the conversion map. */
+	parent_desc = lookup_rowtype_tupdesc(cre->resulttype, -1);
+	child_desc = lookup_rowtype_tupdesc(child_var->vartype,
+										child_var->vartypmod);
+	conv_map = convert_tuples_by_name(child_desc, parent_desc);
+
+	ReleaseTupleDesc(parent_desc);
+	ReleaseTupleDesc(child_desc);
+
+	/* If no conversion is needed, deparse the child Var as is. */
+	if (conv_map == NULL)
+	{
+		deparseVar(child_var, context);
+		return;
+	}
+
+	attrMap = conv_map->attrMap;
+
+	/*
+	 * In case the whole-row reference is under an outer join then it has to
+	 * go NULL whenever the rest of the row goes NULL. Deparsing a join query
+	 * would always involve multiple relations, thus qualify_col would be
+	 * true.
+	 */
+	if (qualify_col)
+	{
+		appendStringInfoString(buf, "CASE WHEN (");
+		ADD_REL_QUALIFIER(buf, child_var->varno);
+		appendStringInfoString(buf, "*)::text IS NOT NULL THEN ");
+	}
+
+	/* Construct ROW expression according to the conversion map. */
+	appendStringInfoString(buf, "ROW(");
+	first_col = true;
+	for (cnt = 0; cnt < parent_desc->natts; cnt++)
+	{
+		/* Ignore dropped columns. */
+		if (attrMap->attnums[cnt] == 0)
+			continue;
+
+		if (!first_col)
+			appendStringInfoString(buf, ", ");
+		deparseColumnRef(buf, child_var->varno, attrMap->attnums[cnt],
+						 planner_rt_fetch(child_var->varno, root),
+						 qualify_col);
+		first_col = false;
+	}
+	appendStringInfoChar(buf, ')');
+
+	/* Complete the CASE WHEN statement started above. */
+	if (qualify_col)
+		appendStringInfoString(buf, " END");
+
+	free_conversion_map(conv_map);
+}
+
+/*
  * Append ORDER BY within aggregate function.
  */
 static void
@@ -4104,12 +4227,18 @@ deparseSortGroupClause(Index ref, List *tlist, bool force_colno,
 
 
 /*
- * Returns true if given Var is deparsed as a subquery output column, in
+ * Returns true if given Node is deparsed as a subquery output column, in
  * which case, *relno and *colno are set to the IDs for the relation and
- * column alias to the Var provided by the subquery.
+ * column alias to the Node provided by the subquery.
+ *
+ * We do not allow relations with PlaceHolderVars to be pushed down. We call
+ * this function only for simple or join relations, whose targetlists can
+ * contain only Var and ConvertRowtypeExpr (in case of child-joins) nodes
+ * (apart from PHVs). So support only Var and ConvertRowtypeExpr nodes.
  */
 static bool
-is_subquery_var(Var *node, RelOptInfo *foreignrel, int *relno, int *colno)
+is_subquery_var(Node *node, Index varno, int varattno, RelOptInfo *foreignrel,
+				int *relno, int *colno)
 {
 	PgFdwRelationInfo *fpinfo = (PgFdwRelationInfo *) foreignrel->fdw_private;
 	RelOptInfo *outerrel = fpinfo->outerrel;
@@ -4117,6 +4246,8 @@ is_subquery_var(Var *node, RelOptInfo *foreignrel, int *relno, int *colno)
 
 	/* Should only be called in these cases. */
 	Assert(IS_SIMPLE_REL(foreignrel) || IS_JOIN_REL(foreignrel));
+
+	Assert(IsA(node, ConvertRowtypeExpr) || IsA(node, Var));
 
 	/*
 	 * If the given relation isn't a join relation, it doesn't have any lower
@@ -4129,10 +4260,10 @@ is_subquery_var(Var *node, RelOptInfo *foreignrel, int *relno, int *colno)
 	 * If the Var doesn't belong to any lower subqueries, it isn't a subquery
 	 * output column.
 	 */
-	if (!bms_is_member(node->varno, fpinfo->lower_subquery_rels))
+	if (!bms_is_member(varno, fpinfo->lower_subquery_rels))
 		return false;
 
-	if (bms_is_member(node->varno, outerrel->relids))
+	if (bms_is_member(varno, outerrel->relids))
 	{
 		/*
 		 * If outer relation is deparsed as a subquery, the Var is an output
@@ -4140,16 +4271,16 @@ is_subquery_var(Var *node, RelOptInfo *foreignrel, int *relno, int *colno)
 		 */
 		if (fpinfo->make_outerrel_subquery)
 		{
-			get_relation_column_alias_ids(node, outerrel, relno, colno);
+			get_relation_column_alias_ids(node, varno, varattno, outerrel, relno, colno);
 			return true;
 		}
 
 		/* Otherwise, recurse into the outer relation. */
-		return is_subquery_var(node, outerrel, relno, colno);
+		return is_subquery_var(node, varno, varattno, outerrel, relno, colno);
 	}
 	else
 	{
-		Assert(bms_is_member(node->varno, innerrel->relids));
+		Assert(bms_is_member(varno, innerrel->relids));
 
 		/*
 		 * If inner relation is deparsed as a subquery, the Var is an output
@@ -4157,12 +4288,12 @@ is_subquery_var(Var *node, RelOptInfo *foreignrel, int *relno, int *colno)
 		 */
 		if (fpinfo->make_innerrel_subquery)
 		{
-			get_relation_column_alias_ids(node, innerrel, relno, colno);
+			get_relation_column_alias_ids(node, varno, varattno, innerrel, relno, colno);
 			return true;
 		}
 
 		/* Otherwise, recurse into the inner relation. */
-		return is_subquery_var(node, innerrel, relno, colno);
+		return is_subquery_var(node, varno, varattno, innerrel, relno, colno);
 	}
 }
 
@@ -4171,7 +4302,7 @@ is_subquery_var(Var *node, RelOptInfo *foreignrel, int *relno, int *colno)
  * given relation, which are returned into *relno and *colno.
  */
 static void
-get_relation_column_alias_ids(Var *node, RelOptInfo *foreignrel,
+get_relation_column_alias_ids(Node *node, Index varno, int varattno, RelOptInfo *foreignrel,
 							  int *relno, int *colno)
 {
 	PgFdwRelationInfo *fpinfo = (PgFdwRelationInfo *) foreignrel->fdw_private;
@@ -4191,11 +4322,12 @@ get_relation_column_alias_ids(Var *node, RelOptInfo *foreignrel,
 		 * Match reltarget entries only on varno/varattno.  Ideally there
 		 * would be some cross-check on varnullingrels, but it's unclear what
 		 * to do exactly; we don't have enough context to know what that value
-		 * should be.
+		 * should be.  Also match posible converted whole-row references.
 		 */
-		if (IsA(tlvar, Var) &&
-			tlvar->varno == node->varno &&
-			tlvar->varattno == node->varattno)
+		if ((IsA(tlvar, Var) &&
+			 tlvar->varno == varno &&
+			 tlvar->varattno == varattno)
+			|| is_equal_converted_whole_row_references((Node *) tlvar, node))
 		{
 			*colno = i;
 			return;

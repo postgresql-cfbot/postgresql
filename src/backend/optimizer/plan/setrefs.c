@@ -2948,7 +2948,7 @@ search_indexed_tlist_for_non_var(Expr *node,
 	if (IsA(node, Const))
 		return NULL;
 
-	tle = tlist_member(node, itlist->tlist);
+	tle = tlist_member_match_converted_whole_row(node, itlist->tlist);
 	if (tle)
 	{
 		/* Found a matching subplan output expression */

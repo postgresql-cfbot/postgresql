@@ -4839,3 +4839,52 @@ is_converted_whole_row_reference(Node *node)
 
 	return false;
 }
+
+/*
+ * is_equal_converted_whole_row_references
+ *		Determine if both nodes are equivalent ConvertRowtypeExprs
+ *		over the same var.
+ *		It differs from equal(), because we ignore varnullingrels.
+ */
+bool
+is_equal_converted_whole_row_references(Node *node1, Node *node2)
+{
+	ConvertRowtypeExpr *convexpr1;
+	ConvertRowtypeExpr *convexpr2;
+
+	if (!node1 || !IsA(node1, ConvertRowtypeExpr))
+		return false;
+
+	if (!node2 || !IsA(node2, ConvertRowtypeExpr))
+		return false;
+
+	convexpr1 = castNode(ConvertRowtypeExpr, node1);
+	convexpr2 = castNode(ConvertRowtypeExpr, node2);
+
+	while (convexpr1->convertformat == COERCE_IMPLICIT_CAST &&
+		 convexpr2->convertformat == COERCE_IMPLICIT_CAST &&
+		 convexpr1->resulttype == convexpr2->resulttype &&
+		 IsA(convexpr1->arg, ConvertRowtypeExpr) &&
+		 IsA(convexpr2->arg, ConvertRowtypeExpr))
+	{
+		convexpr1 = castNode(ConvertRowtypeExpr, convexpr1->arg);
+		convexpr2 = castNode(ConvertRowtypeExpr, convexpr2->arg);
+	}
+
+	if (IsA(convexpr1->arg, Var) && IsA(convexpr2->arg, Var))
+	{
+		Var		*var1 = castNode(Var, convexpr1->arg);
+		Var		*var2 = castNode(Var, convexpr2->arg);
+
+		if ((var1->varno == var2->varno) &&
+			(var1->varattno == var2->varattno) &&
+			(var1->varlevelsup == var2->varlevelsup) &&
+			(var1->vartype == var2->vartype))
+		{
+			/* TODO: Can we state that both varattnos is 0? */
+			return true;
+		}
+	}
+
+	return false;
+}

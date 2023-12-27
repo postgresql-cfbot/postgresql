@@ -50,6 +50,7 @@ tests += {
       'user_activity',
       'wal',
       'entry_timestamp',
+      'max',
       'cleanup',
       'oldextversions',
     ],
@@ -58,5 +59,10 @@ tests += {
     # "shared_preload_libraries=pg_stat_statements", which typical
     # runningcheck users do not have (e.g. buildfarm clients).
     'runningcheck': false,
+  },
+  'tap': {
+    'tests': [
+      't/010_restart.pl',
+    ],
   },
 }

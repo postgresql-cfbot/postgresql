@@ -311,13 +311,15 @@ static bool pgss_save = true;	/* whether to save stats across shutdown */
 PG_FUNCTION_INFO_V1(pg_stat_statements_reset);
 PG_FUNCTION_INFO_V1(pg_stat_statements_reset_1_7);
 PG_FUNCTION_INFO_V1(pg_stat_statements_reset_1_11);
+/* LCOV_EXCL_START */
+PG_FUNCTION_INFO_V1(pg_stat_statements);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_2);
+/* LCOV_EXCL_STOP */
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_3);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_8);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_9);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_10);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_11);
-PG_FUNCTION_INFO_V1(pg_stat_statements);
 PG_FUNCTION_INFO_V1(pg_stat_statements_info);
 
 static void pgss_shmem_request(void);
@@ -1610,6 +1612,8 @@ pg_stat_statements_1_3(PG_FUNCTION_ARGS)
 	return (Datum) 0;
 }
 
+/* LCOV_EXCL_START */
+
 Datum
 pg_stat_statements_1_2(PG_FUNCTION_ARGS)
 {
@@ -1632,6 +1636,8 @@ pg_stat_statements(PG_FUNCTION_ARGS)
 
 	return (Datum) 0;
 }
+
+/* LCOV_EXCL_STOP */
 
 /* Common code for all versions of pg_stat_statements() */
 static void

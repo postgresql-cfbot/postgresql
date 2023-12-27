@@ -245,6 +245,9 @@ typedef struct PgFdwDirectModifyState
 	AttrNumber	oidAttno;		/* attnum of input oid column */
 	bool		hasSystemCols;	/* are there system columns of resultRel? */
 
+	List	   *tidAttnos;		/* attnos of output tid columns */
+	List	   *tidVarnos;		/* varnos of output tid columns */
+
 	/* working memory context */
 	MemoryContext temp_cxt;		/* context for per-tuple temporary data */
 } PgFdwDirectModifyState;
@@ -2482,6 +2485,7 @@ postgresPlanDirectModify(PlannerInfo *root,
 	List	   *params_list = NIL;
 	List	   *returningList = NIL;
 	List	   *retrieved_attrs = NIL;
+	Relids		child_relids = NULL;
 
 	/*
 	 * Decide whether it is safe to modify a foreign table directly.
@@ -2513,6 +2517,12 @@ postgresPlanDirectModify(PlannerInfo *root,
 		foreignrel = find_join_rel(root, fscan->fs_relids);
 		/* We should have a rel for this foreign join. */
 		Assert(foreignrel);
+
+		/*
+		 * If it's a child joinrel, record relids to translate.
+		 */
+		if (IS_OTHER_REL(foreignrel))
+			child_relids = foreignrel->relids;
 	}
 	else
 		foreignrel = root->simple_rel_array[resultRelation];
@@ -2532,7 +2542,7 @@ postgresPlanDirectModify(PlannerInfo *root,
 		 * The expressions of concern are the first N columns of the processed
 		 * targetlist, where N is the length of the rel's update_colnos.
 		 */
-		get_translated_update_targetlist(root, resultRelation,
+		get_translated_update_targetlist(root, resultRelation, child_relids,
 										 &processed_tlist, &targetAttrs);
 		forboth(lc, processed_tlist, lc2, targetAttrs)
 		{
@@ -2585,8 +2595,17 @@ postgresPlanDirectModify(PlannerInfo *root,
 		 * node below.
 		 */
 		if (fscan->scan.scanrelid == 0)
+		{
+			if (foreignrel->reloptkind == RELOPT_OTHER_JOINREL)
+			{
+				returningList = (List *) adjust_appendrel_attrs_multilevel(root,
+																		   (Node *) returningList,
+																		   foreignrel,
+																		   foreignrel->top_parent);
+			}
 			returningList = build_remote_returning(resultRelation, rel,
 												   returningList);
+		}
 	}
 
 	/*
@@ -3263,7 +3282,7 @@ estimate_path_cost_size(PlannerInfo *root,
 				/* Shouldn't get here unless we have LIMIT */
 				Assert(fpextra->has_limit);
 				Assert(foreignrel->reloptkind == RELOPT_BASEREL ||
-					   foreignrel->reloptkind == RELOPT_JOINREL);
+					   IS_JOIN_REL(foreignrel));
 				startup_cost += foreignrel->reltarget->cost.startup;
 				run_cost += foreignrel->reltarget->cost.per_tuple * rows;
 			}
@@ -4455,7 +4474,7 @@ build_remote_returning(Index rtindex, Relation rel, List *returningList)
 
 	Assert(returningList);
 
-	vars = pull_var_clause((Node *) returningList, PVC_INCLUDE_PLACEHOLDERS);
+	vars = pull_var_clause((Node *) returningList, PVC_INCLUDE_PLACEHOLDERS | PVC_INCLUDE_CONVERTROWTYPES);
 
 	/*
 	 * If there's a whole-row reference to the target relation, then we'll
@@ -4464,6 +4483,9 @@ build_remote_returning(Index rtindex, Relation rel, List *returningList)
 	foreach(lc, vars)
 	{
 		Var		   *var = (Var *) lfirst(lc);
+
+		while (IsA(var, ConvertRowtypeExpr))
+			var = (Var *) (((ConvertRowtypeExpr *) var)->arg);
 
 		if (IsA(var, Var) &&
 			var->varno == rtindex &&
@@ -4518,6 +4540,29 @@ build_remote_returning(Index rtindex, Relation rel, List *returningList)
 			var->varattno <= InvalidAttrNumber &&
 			var->varattno != SelfItemPointerAttributeNumber)
 			continue;			/* don't need it */
+
+		/*
+		 * Also no need in whole-row references to the target relation under
+		 * ConvertRowtypeExpr
+		 */
+		if (IsA(var, ConvertRowtypeExpr))
+		{
+			ConvertRowtypeExpr *cre = (ConvertRowtypeExpr *) var;
+			Var		   *cre_var;
+
+			while (IsA(cre->arg, ConvertRowtypeExpr))
+				cre = (ConvertRowtypeExpr *) cre->arg;
+
+
+			cre_var = (Var *) cre->arg;
+
+			if (IsA(cre_var, Var) &&
+				cre_var->varno == rtindex)
+			{
+				Assert(cre_var->varattno == InvalidAttrNumber);
+				continue;
+			}
+		}
 
 		if (tlist_member((Expr *) var, tlist))
 			continue;			/* already got it */
@@ -4724,15 +4769,26 @@ init_returning_filter(PgFdwDirectModifyState *dmstate,
 		palloc0(resultTupType->natts * sizeof(AttrNumber));
 
 	dmstate->ctidAttno = dmstate->oidAttno = 0;
+	dmstate->tidAttnos = dmstate->tidVarnos = NIL;
 
 	i = 1;
 	dmstate->hasSystemCols = false;
 	foreach(lc, fdw_scan_tlist)
 	{
 		TargetEntry *tle = (TargetEntry *) lfirst(lc);
-		Var		   *var = (Var *) tle->expr;
+		Expr	   *expr;
+		Var		   *var;
 
-		Assert(IsA(var, Var));
+		expr = tle->expr;
+
+		while (IsA(expr, ConvertRowtypeExpr))
+		{
+			ConvertRowtypeExpr *cre = castNode(ConvertRowtypeExpr, expr);
+
+			expr = cre->arg;
+		}
+
+		var = castNode(Var, expr);
 
 		/*
 		 * If the Var is a column of the target relation to be retrieved from
@@ -4761,9 +4817,14 @@ init_returning_filter(PgFdwDirectModifyState *dmstate,
 				 * relation either.
 				 */
 				Assert(attrno > 0);
-
 				dmstate->attnoMap[attrno - 1] = i;
 			}
+		}
+		/* Record tableoid attributes and corresponding varnos */
+		if (var->varattno == TableOidAttributeNumber)
+		{
+			dmstate->tidAttnos = lappend_int(dmstate->tidAttnos, i);
+			dmstate->tidVarnos = lappend_int(dmstate->tidVarnos, var->varno);
 		}
 		i++;
 	}
@@ -4785,6 +4846,8 @@ apply_returning_filter(PgFdwDirectModifyState *dmstate,
 	Datum	   *old_values;
 	bool	   *old_isnull;
 	int			i;
+	ListCell   *lc1,
+			   *lc2;
 
 	/*
 	 * Use the return tuple slot as a place to store the result tuple.
@@ -4822,6 +4885,29 @@ apply_returning_filter(PgFdwDirectModifyState *dmstate,
 			values[i] = old_values[j - 1];
 			isnull[i] = old_isnull[j - 1];
 		}
+	}
+
+	/*
+	 * Set tableoid attributes
+	 */
+	forboth(lc1, dmstate->tidAttnos, lc2, dmstate->tidVarnos)
+	{
+		AttrNumber	attno;
+		Index		varno;
+		RangeTblEntry *rte;
+
+		attno = lfirst_int(lc1);
+		varno = lfirst_int(lc2);
+
+		rte = list_nth(estate->es_range_table, varno - 1);
+		Assert(rte->rtekind == RTE_RELATION);
+		Assert(rte->relkind == RELKIND_FOREIGN_TABLE);
+
+		/* Attributes numbering in init_returning_filter() starts with 1 */
+		Assert(attno >= 1);
+
+		slot->tts_values[attno - 1] = ObjectIdGetDatum(rte->relid);
+		slot->tts_isnull[attno - 1] = false;
 	}
 
 	/*

@@ -2309,7 +2309,7 @@ deparseDirectUpdateSql(StringInfo buf, PlannerInfo *root,
 
 	appendStringInfoString(buf, "UPDATE ");
 	deparseRelation(buf, rel);
-	if (foreignrel->reloptkind == RELOPT_JOINREL)
+	if (IS_JOIN_REL(foreignrel))
 		appendStringInfo(buf, " %s%d", REL_ALIAS_PREFIX, rtindex);
 	appendStringInfoString(buf, " SET ");
 
@@ -2336,7 +2336,7 @@ deparseDirectUpdateSql(StringInfo buf, PlannerInfo *root,
 
 	reset_transmission_modes(nestlevel);
 
-	if (foreignrel->reloptkind == RELOPT_JOINREL)
+	if (IS_JOIN_REL(foreignrel))
 	{
 		List	   *ignore_conds = NIL;
 
@@ -2352,7 +2352,7 @@ deparseDirectUpdateSql(StringInfo buf, PlannerInfo *root,
 	if (additional_conds != NIL)
 		list_free_deep(additional_conds);
 
-	if (foreignrel->reloptkind == RELOPT_JOINREL)
+	if (IS_JOIN_REL(foreignrel))
 		deparseExplicitTargetList(returningList, true, retrieved_attrs,
 								  &context);
 	else
@@ -2417,10 +2417,10 @@ deparseDirectDeleteSql(StringInfo buf, PlannerInfo *root,
 
 	appendStringInfoString(buf, "DELETE FROM ");
 	deparseRelation(buf, rel);
-	if (foreignrel->reloptkind == RELOPT_JOINREL)
+	if (IS_JOIN_REL(foreignrel))
 		appendStringInfo(buf, " %s%d", REL_ALIAS_PREFIX, rtindex);
 
-	if (foreignrel->reloptkind == RELOPT_JOINREL)
+	if (IS_JOIN_REL(foreignrel))
 	{
 		List	   *ignore_conds = NIL;
 
@@ -2435,7 +2435,7 @@ deparseDirectDeleteSql(StringInfo buf, PlannerInfo *root,
 	if (additional_conds != NIL)
 		list_free_deep(additional_conds);
 
-	if (foreignrel->reloptkind == RELOPT_JOINREL)
+	if (IS_JOIN_REL(foreignrel))
 		deparseExplicitTargetList(returningList, true, retrieved_attrs,
 								  &context);
 	else

@@ -3181,6 +3181,44 @@ SELECT t1.a, t2.b FROM fprt1 t1 INNER JOIN fprt2 t2 ON (t1.a = t2.b) WHERE t1.a 
 SELECT t1.a, t2.b FROM fprt1 t1 INNER JOIN fprt2 t2 ON (t1.a = t2.b) WHERE t1.a % 25 = 0 ORDER BY t2.a FOR UPDATE OF t1;
 reset enable_sort;
 
+-- test partition-wise DML
+EXPLAIN (COSTS OFF, VERBOSE)
+UPDATE fprt1 SET b=fprt1.b+1 FROM fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0;
+UPDATE fprt1 SET b=fprt1.b+1 FROM fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0;
+
+EXPLAIN (COSTS OFF, VERBOSE)
+UPDATE fprt1 SET b=(fprt1.a+fprt2.b)/2 FROM fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0;
+UPDATE fprt1 SET b=(fprt1.a+fprt2.b)/2 FROM fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0;
+
+-- returning whole row references
+EXPLAIN (COSTS OFF)
+UPDATE fprt1 SET b=fprt1.b+1 FROM fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0 RETURNING fprt1, fprt2;
+UPDATE fprt1 SET b=fprt1.b+1 FROM fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0 RETURNING fprt1, fprt2;
+
+-- tableoids are returned correctly
+EXPLAIN (COSTS OFF)
+UPDATE fprt1 t1 SET b = t1.b + 1 FROM fprt2 t2 WHERE t1.a = t2.b AND t1.a % 25 = 0  RETURNING t2.tableoid::regclass;
+UPDATE fprt1 t1 SET b = t1.b + 1 FROM fprt2 t2 WHERE t1.a = t2.b AND t1.a % 25 = 0  RETURNING t2.tableoid::regclass;
+
+-- join of several tables
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE fprt1 t1 SET b = t1.b + 1 FROM fprt2 t2, fprt1 t3 WHERE t1.a = t2.b AND t2.b = t3.a AND t1.a % 25 = 0  RETURNING *;
+UPDATE fprt1 t1 SET b = t1.b + 1 FROM fprt2 t2, fprt1 t3 WHERE t1.a = t2.b AND t2.b = t3.a AND t1.a % 25 = 0  RETURNING *;
+
+-- left join
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE fprt1 t1 SET b = t1.b + 1 FROM fprt2 t2 LEFT JOIN fprt1 t3 ON (t2.b = t3.a) WHERE t1.a = t2.b AND t1.a % 25 = 0  RETURNING *;
+UPDATE fprt1 t1 SET b = t1.b + 1 FROM fprt2 t2 LEFT JOIN fprt1 t3 ON (t2.b = t3.a) WHERE t1.a = t2.b AND t1.a % 25 = 0  RETURNING *;
+
+-- delete
+EXPLAIN (COSTS OFF)
+DELETE FROM fprt1 USING fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 30 = 29;
+DELETE FROM fprt1 USING fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 30 = 29;
+
+EXPLAIN (COSTS OFF)
+DELETE FROM fprt1 USING fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0 RETURNING *;
+DELETE FROM fprt1 USING fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0 RETURNING *;
+
 RESET enable_partitionwise_join;
 
 

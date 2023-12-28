@@ -8571,7 +8571,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 	appendPQExpBufferStr(q,
 						 "LEFT JOIN pg_catalog.pg_constraint copk ON "
 						 "(copk.conrelid = src.tbloid\n"
-						 "   AND copk.contype = 'p' AND "
+						 "   AND copk.contype = 'p' AND copk.condeferrable = false AND "
 						 "copk.conkey @> array[a.attnum])\n"
 						 "WHERE a.attnum > 0::pg_catalog.int2\n"
 						 "ORDER BY a.attrelid, a.attnum");

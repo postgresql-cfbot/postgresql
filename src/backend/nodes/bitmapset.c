@@ -16,6 +16,15 @@
  * containing only a single word (likely the majority of them) this halves the
  * number of loop condition checks.
  *
+ * Because manipulation of a bitmapset can often be done without having to
+ * reallocate the memory for the set, we support REALLOCATE_BITMAPSETS as a
+ * debug option to have the code *always* reallocate the bitmapset when the
+ * set *could* be reallocated as a result of the modification.  This increases
+ * the likelihood of finding bugs in cases where there's more than one
+ * reference to a set and the additional ones are left pointing to freed
+ * memory.  Such bugs are unlikely to be otherwise found by our regression
+ * tests as the vast majority of bitmapsets will only ever contain a single
+ * bitmapword.
  *
  * Copyright (c) 2003-2023, PostgreSQL Global Development Group
  *
@@ -72,6 +81,45 @@
 #error "invalid BITS_PER_BITMAPWORD"
 #endif
 
+#ifdef USE_ASSERT_CHECKING
+/*
+ * bms_is_valid_set - for cassert builds to check for valid sets
+ */
+static bool
+bms_is_valid_set(const Bitmapset *a)
+{
+	/* NULL is the correct representation of an empty set */
+	if (a == NULL)
+		return true;
+
+	/* check the node tag is set correctly.  Freed pointer, maybe? */
+	if (!IsA(a, Bitmapset))
+		return false;
+
+	/* trailing zero words are not allowed */
+	if (a->words[a->nwords - 1] == 0)
+		return false;
+
+	return true;
+}
+#endif
+
+#ifdef REALLOCATE_BITMAPSETS
+/*
+ * bms_copy_and_free
+ *		Only required in REALLOCATE_BITMAPSETS builds.  Provide a simple way to
+ *		return a freshly allocated set similar to what would happen if the set
+ *		had to be enlarged to add additional words.
+ */
+static Bitmapset *
+bms_copy_and_free(Bitmapset *a)
+{
+	Bitmapset  *c = bms_copy(a);
+
+	bms_free(a);
+	return c;
+}
+#endif
 
 /*
  * bms_copy - make a palloc'd copy of a bitmapset
@@ -82,9 +130,11 @@ bms_copy(const Bitmapset *a)
 	Bitmapset  *result;
 	size_t		size;
 
+	Assert(bms_is_valid_set(a));
+
 	if (a == NULL)
 		return NULL;
-	Assert(IsA(a, Bitmapset));
+
 	size = BITMAPSET_SIZE(a->nwords);
 	result = (Bitmapset *) palloc(size);
 	memcpy(result, a, size);
@@ -99,8 +149,8 @@ bms_equal(const Bitmapset *a, const Bitmapset *b)
 {
 	int			i;
 
-	Assert(a == NULL || (IsA(a, Bitmapset) && a->words[a->nwords - 1] != 0));
-	Assert(b == NULL || (IsA(b, Bitmapset) && b->words[b->nwords - 1] != 0));
+	Assert(bms_is_valid_set(a));
+	Assert(bms_is_valid_set(b));
 
 	/* Handle cases where either input is NULL */
 	if (a == NULL)
@@ -140,8 +190,8 @@ bms_compare(const Bitmapset *a, const Bitmapset *b)
 {
 	int			i;
 
-	Assert(a == NULL || (IsA(a, Bitmapset) && a->words[a->nwords - 1] != 0));
-	Assert(b == NULL || (IsA(b, Bitmapset) && b->words[b->nwords - 1] != 0));
+	Assert(bms_is_valid_set(a));
+	Assert(bms_is_valid_set(b));
 
 	/* Handle cases where either input is NULL */
 	if (a == NULL)
@@ -216,8 +266,8 @@ bms_union(const Bitmapset *a, const Bitmapset *b)
 	int			otherlen;
 	int			i;
 
-	Assert(a == NULL || IsA(a, Bitmapset));
-	Assert(b == NULL || IsA(b, Bitmapset));
+	Assert(bms_is_valid_set(a));
+	Assert(bms_is_valid_set(b));
 
 	/* Handle cases where either input is NULL */
 	if (a == NULL)
@@ -257,8 +307,8 @@ bms_intersect(const Bitmapset *a, const Bitmapset *b)
 	int			resultlen;
 	int			i;
 
-	Assert(a == NULL || IsA(a, Bitmapset));
-	Assert(b == NULL || IsA(b, Bitmapset));
+	Assert(bms_is_valid_set(a));
+	Assert(bms_is_valid_set(b));
 
 	/* Handle cases where either input is NULL */
 	if (a == NULL || b == NULL)
@@ -307,16 +357,14 @@ bms_difference(const Bitmapset *a, const Bitmapset *b)
 	Bitmapset  *result;
 	int			i;
 
-	Assert(a == NULL || (IsA(a, Bitmapset) && a->words[a->nwords - 1] != 0));
-	Assert(b == NULL || (IsA(b, Bitmapset) && b->words[b->nwords - 1] != 0));
+	Assert(bms_is_valid_set(a));
+	Assert(bms_is_valid_set(b));
 
 	/* Handle cases where either input is NULL */
 	if (a == NULL)
 		return NULL;
 	if (b == NULL)
 		return bms_copy(a);
-
-	Assert(IsA(a, Bitmapset) && IsA(b, Bitmapset));
 
 	/*
 	 * In Postgres' usage, an empty result is a very common case, so it's
@@ -374,16 +422,14 @@ bms_is_subset(const Bitmapset *a, const Bitmapset *b)
 {
 	int			i;
 
-	Assert(a == NULL || (IsA(a, Bitmapset) && a->words[a->nwords - 1] != 0));
-	Assert(b == NULL || (IsA(b, Bitmapset) && b->words[b->nwords - 1] != 0));
+	Assert(bms_is_valid_set(a));
+	Assert(bms_is_valid_set(b));
 
 	/* Handle cases where either input is NULL */
 	if (a == NULL)
 		return true;			/* empty set is a subset of anything */
 	if (b == NULL)
 		return false;
-
-	Assert(IsA(a, Bitmapset) && IsA(b, Bitmapset));
 
 	/* 'a' can't be a subset of 'b' if it contains more words */
 	if (a->nwords > b->nwords)
@@ -411,8 +457,8 @@ bms_subset_compare(const Bitmapset *a, const Bitmapset *b)
 	int			shortlen;
 	int			i;
 
-	Assert(a == NULL || (IsA(a, Bitmapset) && a->words[a->nwords - 1] != 0));
-	Assert(b == NULL || (IsA(b, Bitmapset) && b->words[b->nwords - 1] != 0));
+	Assert(bms_is_valid_set(a));
+	Assert(bms_is_valid_set(b));
 
 	/* Handle cases where either input is NULL */
 	if (a == NULL)
@@ -423,8 +469,6 @@ bms_subset_compare(const Bitmapset *a, const Bitmapset *b)
 	}
 	if (b == NULL)
 		return BMS_SUBSET2;
-
-	Assert(IsA(a, Bitmapset) && IsA(b, Bitmapset));
 
 	/* Check common words */
 	result = BMS_EQUAL;			/* status so far */
@@ -477,13 +521,13 @@ bms_is_member(int x, const Bitmapset *a)
 	int			wordnum,
 				bitnum;
 
+	Assert(bms_is_valid_set(a));
+
 	/* XXX better to just return false for x<0 ? */
 	if (x < 0)
 		elog(ERROR, "negative bitmapset member not allowed");
 	if (a == NULL)
 		return false;
-
-	Assert(IsA(a, Bitmapset));
 
 	wordnum = WORDNUM(x);
 	bitnum = BITNUM(x);
@@ -509,11 +553,11 @@ bms_member_index(Bitmapset *a, int x)
 	int			result = 0;
 	bitmapword	mask;
 
+	Assert(bms_is_valid_set(a));
+
 	/* return -1 if not a member of the bitmap */
 	if (!bms_is_member(x, a))
 		return -1;
-
-	Assert(IsA(a, Bitmapset));
 
 	wordnum = WORDNUM(x);
 	bitnum = BITNUM(x);
@@ -549,8 +593,8 @@ bms_overlap(const Bitmapset *a, const Bitmapset *b)
 	int			shortlen;
 	int			i;
 
-	Assert(a == NULL || IsA(a, Bitmapset));
-	Assert(b == NULL || IsA(b, Bitmapset));
+	Assert(bms_is_valid_set(a));
+	Assert(bms_is_valid_set(b));
 
 	/* Handle cases where either input is NULL */
 	if (a == NULL || b == NULL)
@@ -576,7 +620,7 @@ bms_overlap_list(const Bitmapset *a, const List *b)
 	int			wordnum,
 				bitnum;
 
-	Assert(a == NULL || IsA(a, Bitmapset));
+	Assert(bms_is_valid_set(a));
 
 	if (a == NULL || b == NIL)
 		return false;
@@ -607,8 +651,8 @@ bms_nonempty_difference(const Bitmapset *a, const Bitmapset *b)
 {
 	int			i;
 
-	Assert(a == NULL || (IsA(a, Bitmapset) && a->words[a->nwords - 1] != 0));
-	Assert(b == NULL || (IsA(b, Bitmapset) && b->words[b->nwords - 1] != 0));
+	Assert(bms_is_valid_set(a));
+	Assert(bms_is_valid_set(b));
 
 	/* Handle cases where either input is NULL */
 	if (a == NULL)
@@ -640,10 +684,10 @@ bms_singleton_member(const Bitmapset *a)
 	int			nwords;
 	int			wordnum;
 
+	Assert(bms_is_valid_set(a));
+
 	if (a == NULL)
 		elog(ERROR, "bitmapset is empty");
-
-	Assert(IsA(a, Bitmapset));
 
 	nwords = a->nwords;
 	wordnum = 0;
@@ -683,9 +727,11 @@ bms_get_singleton_member(const Bitmapset *a, int *member)
 	int			nwords;
 	int			wordnum;
 
+	Assert(bms_is_valid_set(a));
+
 	if (a == NULL)
 		return false;
-	Assert(IsA(a, Bitmapset));
+
 	nwords = a->nwords;
 	wordnum = 0;
 	do
@@ -717,9 +763,11 @@ bms_num_members(const Bitmapset *a)
 	int			nwords;
 	int			wordnum;
 
+	Assert(bms_is_valid_set(a));
+
 	if (a == NULL)
 		return 0;
-	Assert(IsA(a, Bitmapset));
+
 	nwords = a->nwords;
 	wordnum = 0;
 	do
@@ -745,9 +793,11 @@ bms_membership(const Bitmapset *a)
 	int			nwords;
 	int			wordnum;
 
+	Assert(bms_is_valid_set(a));
+
 	if (a == NULL)
 		return BMS_EMPTY_SET;
-	Assert(IsA(a, Bitmapset));
+
 	nwords = a->nwords;
 	wordnum = 0;
 	do
@@ -786,11 +836,13 @@ bms_add_member(Bitmapset *a, int x)
 	int			wordnum,
 				bitnum;
 
+	Assert(bms_is_valid_set(a));
+
 	if (x < 0)
 		elog(ERROR, "negative bitmapset member not allowed");
 	if (a == NULL)
 		return bms_make_singleton(x);
-	Assert(IsA(a, Bitmapset));
+
 	wordnum = WORDNUM(x);
 	bitnum = BITNUM(x);
 
@@ -799,15 +851,8 @@ bms_add_member(Bitmapset *a, int x)
 	{
 		int			oldnwords = a->nwords;
 		int			i;
-#ifdef REALLOCATE_BITMAPSETS
-		Bitmapset  *tmp = a;
 
-		a = (Bitmapset *) palloc(BITMAPSET_SIZE(wordnum + 1));
-		memcpy(a, tmp, BITMAPSET_SIZE(tmp->nwords));
-		pfree(tmp);
-#else
 		a = (Bitmapset *) repalloc(a, BITMAPSET_SIZE(wordnum + 1));
-#endif
 		a->nwords = wordnum + 1;
 		/* zero out the enlarged portion */
 		i = oldnwords;
@@ -816,19 +861,14 @@ bms_add_member(Bitmapset *a, int x)
 			a->words[i] = 0;
 		} while (++i < a->nwords);
 	}
-#ifdef REALLOCATE_BITMAPSETS
-	else
-	{
-		Bitmapset  *tmp = a;
-
-		a = (Bitmapset *) palloc(BITMAPSET_SIZE(tmp->nwords));
-		memcpy(a, tmp, BITMAPSET_SIZE(tmp->nwords));
-		pfree(tmp);
-	}
-#endif
 
 	a->words[wordnum] |= ((bitmapword) 1 << bitnum);
+
+#ifdef REALLOCATE_BITMAPSETS
+	return bms_copy_and_free(a);
+#else
 	return a;
+#endif
 }
 
 /*
@@ -843,25 +883,16 @@ bms_del_member(Bitmapset *a, int x)
 {
 	int			wordnum,
 				bitnum;
-#ifdef REALLOCATE_BITMAPSETS
-	Bitmapset  *tmp = a;
-#endif
+
+	Assert(bms_is_valid_set(a));
 
 	if (x < 0)
 		elog(ERROR, "negative bitmapset member not allowed");
 	if (a == NULL)
 		return NULL;
 
-	Assert(IsA(a, Bitmapset));
-
 	wordnum = WORDNUM(x);
 	bitnum = BITNUM(x);
-
-#ifdef REALLOCATE_BITMAPSETS
-	a = (Bitmapset *) palloc(BITMAPSET_SIZE(tmp->nwords));
-	memcpy(a, tmp, BITMAPSET_SIZE(tmp->nwords));
-	pfree(tmp);
-#endif
 
 	/* member can't exist.  Return 'a' unmodified */
 	if (unlikely(wordnum >= a->nwords))
@@ -900,8 +931,8 @@ bms_add_members(Bitmapset *a, const Bitmapset *b)
 	int			otherlen;
 	int			i;
 
-	Assert(a == NULL || IsA(a, Bitmapset));
-	Assert(b == NULL || IsA(b, Bitmapset));
+	Assert(bms_is_valid_set(a));
+	Assert(bms_is_valid_set(b));
 
 	/* Handle cases where either input is NULL */
 	if (a == NULL)
@@ -916,13 +947,6 @@ bms_add_members(Bitmapset *a, const Bitmapset *b)
 	}
 	else
 	{
-#ifdef REALLOCATE_BITMAPSETS
-		Bitmapset  *tmp = a;
-
-		a = (Bitmapset *) palloc(BITMAPSET_SIZE(tmp->nwords));
-		memcpy(a, tmp, BITMAPSET_SIZE(tmp->nwords));
-		pfree(tmp);
-#endif
 		result = a;
 		other = b;
 	}
@@ -935,7 +959,12 @@ bms_add_members(Bitmapset *a, const Bitmapset *b)
 	} while (++i < otherlen);
 	if (result != a)
 		pfree(a);
+
+#ifdef REALLOCATE_BITMAPSETS
+	return bms_copy_and_free(result);
+#else
 	return result;
+#endif
 }
 
 /*
@@ -955,7 +984,7 @@ bms_add_range(Bitmapset *a, int lower, int upper)
 				ushiftbits,
 				wordnum;
 
-	Assert(a == NULL || IsA(a, Bitmapset));
+	Assert(bms_is_valid_set(a));
 
 	/* do nothing if nothing is called for, without further checking */
 	if (upper < lower)
@@ -975,16 +1004,9 @@ bms_add_range(Bitmapset *a, int lower, int upper)
 	{
 		int			oldnwords = a->nwords;
 		int			i;
-#ifdef REALLOCATE_BITMAPSETS
-		Bitmapset  *tmp = a;
 
-		a = (Bitmapset *) palloc(BITMAPSET_SIZE(uwordnum + 1));
-		memcpy(a, tmp, BITMAPSET_SIZE(tmp->nwords));
-		pfree(tmp);
-#else
 		/* ensure we have enough words to store the upper bit */
 		a = (Bitmapset *) repalloc(a, BITMAPSET_SIZE(uwordnum + 1));
-#endif
 		a->nwords = uwordnum + 1;
 		/* zero out the enlarged portion */
 		i = oldnwords;
@@ -1021,7 +1043,11 @@ bms_add_range(Bitmapset *a, int lower, int upper)
 		a->words[uwordnum] |= (~(bitmapword) 0) >> ushiftbits;
 	}
 
+#ifdef REALLOCATE_BITMAPSETS
+	return bms_copy_and_free(a);
+#else
 	return a;
+#endif
 }
 
 /*
@@ -1033,15 +1059,9 @@ bms_int_members(Bitmapset *a, const Bitmapset *b)
 	int			lastnonzero;
 	int			shortlen;
 	int			i;
-#ifdef REALLOCATE_BITMAPSETS
-	Bitmapset  *tmp = a;
-#endif
 
-	Assert(a == NULL || IsA(a, Bitmapset));
-	Assert(b == NULL || IsA(b, Bitmapset));
-
-	Assert(a == NULL || IsA(a, Bitmapset));
-	Assert(b == NULL || IsA(b, Bitmapset));
+	Assert(bms_is_valid_set(a));
+	Assert(bms_is_valid_set(b));
 
 	/* Handle cases where either input is NULL */
 	if (a == NULL)
@@ -1051,12 +1071,6 @@ bms_int_members(Bitmapset *a, const Bitmapset *b)
 		pfree(a);
 		return NULL;
 	}
-
-#ifdef REALLOCATE_BITMAPSETS
-	a = (Bitmapset *) palloc(BITMAPSET_SIZE(tmp->nwords));
-	memcpy(a, tmp, BITMAPSET_SIZE(tmp->nwords));
-	pfree(tmp);
-#endif
 
 	/* Intersect b into a; we need never copy */
 	shortlen = Min(a->nwords, b->nwords);
@@ -1089,24 +1103,15 @@ Bitmapset *
 bms_del_members(Bitmapset *a, const Bitmapset *b)
 {
 	int			i;
-#ifdef REALLOCATE_BITMAPSETS
-	Bitmapset  *tmp = a;
-#endif
 
-	Assert(a == NULL || (IsA(a, Bitmapset) && a->words[a->nwords - 1] != 0));
-	Assert(b == NULL || (IsA(b, Bitmapset) && b->words[b->nwords - 1] != 0));
+	Assert(bms_is_valid_set(a));
+	Assert(bms_is_valid_set(b));
 
 	/* Handle cases where either input is NULL */
 	if (a == NULL)
 		return NULL;
 	if (b == NULL)
 		return a;
-
-#ifdef REALLOCATE_BITMAPSETS
-	a = (Bitmapset *) palloc(BITMAPSET_SIZE(tmp->nwords));
-	memcpy(a, tmp, BITMAPSET_SIZE(tmp->nwords));
-	pfree(tmp);
-#endif
 
 	/* Remove b's bits from a; we need never copy */
 	if (a->nwords > b->nwords)
@@ -1160,27 +1165,15 @@ bms_join(Bitmapset *a, Bitmapset *b)
 	Bitmapset  *other;
 	int			otherlen;
 	int			i;
-#ifdef REALLOCATE_BITMAPSETS
-	Bitmapset  *tmp = a;
-#endif
 
-	Assert(a == NULL || IsA(a, Bitmapset));
-	Assert(b == NULL || IsA(b, Bitmapset));
-
-	Assert(a == NULL || IsA(a, Bitmapset));
-	Assert(b == NULL || IsA(b, Bitmapset));
+	Assert(bms_is_valid_set(a));
+	Assert(bms_is_valid_set(b));
 
 	/* Handle cases where either input is NULL */
 	if (a == NULL)
 		return b;
 	if (b == NULL)
 		return a;
-
-#ifdef REALLOCATE_BITMAPSETS
-	a = (Bitmapset *) palloc(BITMAPSET_SIZE(tmp->nwords));
-	memcpy(a, tmp, BITMAPSET_SIZE(tmp->nwords));
-	pfree(tmp);
-#endif
 
 	/* Identify shorter and longer input; use longer one as result */
 	if (a->nwords < b->nwords)
@@ -1231,7 +1224,7 @@ bms_next_member(const Bitmapset *a, int prevbit)
 	int			wordnum;
 	bitmapword	mask;
 
-	Assert(a == NULL || IsA(a, Bitmapset));
+	Assert(bms_is_valid_set(a));
 
 	if (a == NULL)
 		return -2;
@@ -1292,7 +1285,7 @@ bms_prev_member(const Bitmapset *a, int prevbit)
 	int			ushiftbits;
 	bitmapword	mask;
 
-	Assert(a == NULL || IsA(a, Bitmapset));
+	Assert(bms_is_valid_set(a));
 
 	/*
 	 * If set is NULL or if there are no more bits to the right then we've
@@ -1337,6 +1330,8 @@ bms_prev_member(const Bitmapset *a, int prevbit)
 uint32
 bms_hash_value(const Bitmapset *a)
 {
+	Assert(bms_is_valid_set(a));
+
 	if (a == NULL)
 		return 0;				/* All empty sets hash to 0 */
 	return DatumGetUInt32(hash_any((const unsigned char *) a->words,

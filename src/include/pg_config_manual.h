@@ -336,8 +336,9 @@
 /* #define COPY_PARSE_PLAN_TREES */
 
 /*
- * Define this to force Bitmapset reallocation on each modification.  Helps
- * to find hangling pointers to Bitmapset's.
+ * Define this to force Bitmapset reallocation on modifications which *could*
+ * result in the set having to be reallocated.  This helps find dangling
+ * pointers to Bitmapset's.
  */
 /* #define REALLOCATE_BITMAPSETS */
 

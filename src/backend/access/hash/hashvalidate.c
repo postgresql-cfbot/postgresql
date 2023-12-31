@@ -104,11 +104,11 @@ hashvalidate(Oid opclassoid)
 		switch (procform->amprocnum)
 		{
 			case HASHSTANDARD_PROC:
-				ok = check_amproc_signature(procform->amproc, INT4OID, true,
+				ok = check_amproc_signature(procform->amproc, INT4OID, false, true,
 											1, 1, procform->amproclefttype);
 				break;
 			case HASHEXTENDED_PROC:
-				ok = check_amproc_signature(procform->amproc, INT8OID, true,
+				ok = check_amproc_signature(procform->amproc, INT8OID, false, true,
 											2, 2, procform->amproclefttype, INT8OID);
 				break;
 			case HASHOPTIONS_PROC:

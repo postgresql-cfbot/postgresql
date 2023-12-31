@@ -907,6 +907,10 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	 * many of them are actually useful for this query.  This is not relevant
 	 * if we are only trying to build bitmap indexscans.
 	 */
+	useful_pathkeys = NIL;
+	orderbyclauses = NIL;
+	orderbyclausecols = NIL;
+
 	pathkeys_possibly_useful = (scantype != ST_BITMAPSCAN &&
 								has_useful_pathkeys(root, rel));
 	index_is_ordered = (index->sortopfamily != NULL);
@@ -916,16 +920,19 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 											  ForwardScanDirection);
 		useful_pathkeys = truncate_useless_pathkeys(root, rel,
 													index_pathkeys);
-		orderbyclauses = NIL;
-		orderbyclausecols = NIL;
 	}
-	else if (index->amcanorderbyop && pathkeys_possibly_useful)
+
+	if (useful_pathkeys == NIL &&
+		index->amcanorderbyop && pathkeys_possibly_useful)
 	{
 		/*
 		 * See if we can generate ordering operators for query_pathkeys or at
 		 * least some prefix thereof.  Matching to just a prefix of the
 		 * query_pathkeys will allow an incremental sort to be considered on
 		 * the index's partially sorted results.
+		 * Index  access method can be both ordered and supporting ordering by
+		 * operator.  We're looking for ordering by operator only when native
+		 * ordering doesn't match.
 		 */
 		match_pathkeys_to_index(index, root->query_pathkeys,
 								&orderbyclauses,
@@ -935,12 +942,6 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 		else
 			useful_pathkeys = list_copy_head(root->query_pathkeys,
 											 list_length(orderbyclauses));
-	}
-	else
-	{
-		useful_pathkeys = NIL;
-		orderbyclauses = NIL;
-		orderbyclausecols = NIL;
 	}
 
 	/*

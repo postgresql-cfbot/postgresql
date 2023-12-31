@@ -4162,27 +4162,27 @@ _bt_checkkeys_look_ahead(IndexScanDesc scan, BTReadPageState *pstate,
  * away and the TID was re-used by a completely different heap tuple.
  */
 void
-_bt_killitems(IndexScanDesc scan)
+_bt_killitems(BTScanState state, Relation indexRelation)
 {
-	BTScanOpaque so = (BTScanOpaque) scan->opaque;
+	BTScanPos	pos = &state->currPos;
 	Page		page;
 	BTPageOpaque opaque;
 	OffsetNumber minoff;
 	OffsetNumber maxoff;
 	int			i;
-	int			numKilled = so->numKilled;
+	int			numKilled = state->numKilled;
 	bool		killedsomething = false;
 	bool		droppedpin PG_USED_FOR_ASSERTS_ONLY;
 
-	Assert(BTScanPosIsValid(so->currPos));
+	Assert(BTScanPosIsValid(state->currPos));
 
 	/*
 	 * Always reset the scan state, so we don't look for same items on other
 	 * pages.
 	 */
-	so->numKilled = 0;
+	state->numKilled = 0;
 
-	if (BTScanPosIsPinned(so->currPos))
+	if (BTScanPosIsPinned(*pos))
 	{
 		/*
 		 * We have held the pin on this page since we read the index tuples,
@@ -4191,9 +4191,7 @@ _bt_killitems(IndexScanDesc scan)
 		 * LSN.
 		 */
 		droppedpin = false;
-		_bt_lockbuf(scan->indexRelation, so->currPos.buf, BT_READ);
-
-		page = BufferGetPage(so->currPos.buf);
+		_bt_lockbuf(indexRelation, pos->buf, BT_READ);
 	}
 	else
 	{
@@ -4201,31 +4199,31 @@ _bt_killitems(IndexScanDesc scan)
 
 		droppedpin = true;
 		/* Attempt to re-read the buffer, getting pin and lock. */
-		buf = _bt_getbuf(scan->indexRelation, so->currPos.currPage, BT_READ);
+		buf = _bt_getbuf(indexRelation, pos->currPage, BT_READ);
 
-		page = BufferGetPage(buf);
-		if (BufferGetLSNAtomic(buf) == so->currPos.lsn)
-			so->currPos.buf = buf;
+		if (BufferGetLSNAtomic(buf) == pos->lsn)
+			pos->buf = buf;
 		else
 		{
 			/* Modified while not pinned means hinting is not safe. */
-			_bt_relbuf(scan->indexRelation, buf);
+			_bt_relbuf(indexRelation, buf);
 			return;
 		}
 	}
 
+	page = BufferGetPage(pos->buf);
 	opaque = BTPageGetOpaque(page);
 	minoff = P_FIRSTDATAKEY(opaque);
 	maxoff = PageGetMaxOffsetNumber(page);
 
 	for (i = 0; i < numKilled; i++)
 	{
-		int			itemIndex = so->killedItems[i];
-		BTScanPosItem *kitem = &so->currPos.items[itemIndex];
+		int			itemIndex = state->killedItems[i];
+		BTScanPosItem *kitem = &pos->items[itemIndex];
 		OffsetNumber offnum = kitem->indexOffset;
 
-		Assert(itemIndex >= so->currPos.firstItem &&
-			   itemIndex <= so->currPos.lastItem);
+		Assert(itemIndex >= pos->firstItem &&
+			   itemIndex <= pos->lastItem);
 		if (offnum < minoff)
 			continue;			/* pure paranoia */
 		while (offnum <= maxoff)
@@ -4283,7 +4281,7 @@ _bt_killitems(IndexScanDesc scan)
 					 * correctly -- posting tuple still gets killed).
 					 */
 					if (pi < numKilled)
-						kitem = &so->currPos.items[so->killedItems[pi++]];
+						kitem = &state->currPos.items[state->killedItems[pi++]];
 				}
 
 				/*
@@ -4330,10 +4328,10 @@ _bt_killitems(IndexScanDesc scan)
 	if (killedsomething)
 	{
 		opaque->btpo_flags |= BTP_HAS_GARBAGE;
-		MarkBufferDirtyHint(so->currPos.buf, true);
+		MarkBufferDirtyHint(pos->buf, true);
 	}
 
-	_bt_unlockbuf(scan->indexRelation, so->currPos.buf);
+	_bt_unlockbuf(indexRelation, pos->buf);
 }
 
 
@@ -5169,4 +5167,15 @@ _bt_allequalimage(Relation rel, bool debugmessage)
 	}
 
 	return allequalimage;
+}
+
+/*
+ * _bt_allocate_tuple_workspaces() -- Allocate buffers for saving index tuples
+ * 		in index-only scans.
+ */
+void
+_bt_allocate_tuple_workspaces(BTScanState state)
+{
+	state->currTuples = (char *) palloc(BLCKSZ * 2);
+	state->markTuples = state->currTuples + BLCKSZ;
 }

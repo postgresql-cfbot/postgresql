@@ -40,6 +40,7 @@
 
 /* include stuff common to fe and be */
 #include "libpq/pqcomm.h"
+#include "common/zpq_stream.h"
 /* include stuff found in fe only */
 #include "fe-auth-sasl.h"
 #include "pqexpbuffer.h"
@@ -81,6 +82,7 @@ typedef struct
 #endif
 #endif							/* USE_OPENSSL */
 
+#include "common/io_stream.h"
 #include "common/pg_prng.h"
 
 /*
@@ -405,6 +407,16 @@ struct pg_conn
 	char	   *gssdelegation;	/* Try to delegate GSS credentials? (0 or 1) */
 	char	   *ssl_min_protocol_version;	/* minimum TLS protocol version */
 	char	   *ssl_max_protocol_version;	/* maximum TLS protocol version */
+	char	   *compression;	/* stream compression (boolean value, "any" or
+								 * list of compression algorithms separated by
+								 * comma) */
+	pg_compress_specification compressors[COMPRESSION_ALGORITHM_COUNT]; /* descriptors of
+																		 * compression
+																		 * algorithms chosen by
+																		 * client */
+	unsigned	n_compressors;	/* size of compressors array  */
+	char	   *server_compression; /* compression settings set by server */
+
 	char	   *target_session_attrs;	/* desired session properties */
 	char	   *require_auth;	/* name of the expected auth method */
 	char	   *load_balance_hosts; /* load balance over hosts */
@@ -456,6 +468,7 @@ struct pg_conn
 	PGcmdQueueEntry *cmd_queue_recycle;
 
 	/* Connection data */
+	IoStream   *io_stream;
 	pgsocket	sock;			/* FD for socket, PGINVALID_SOCKET if
 								 * unconnected */
 	SockAddr	laddr;			/* Local address */
@@ -619,6 +632,9 @@ struct pg_conn
 
 	/* Buffer for receiving various parts of messages */
 	PQExpBufferData workBuffer; /* expansible string */
+
+	/* Compression stream */
+	ZpqStream  *zpqStream;
 };
 
 /* PGcancel stores all data necessary to cancel a connection. A copy of this
@@ -678,6 +694,7 @@ extern void pqDropConnection(PGconn *conn, bool flushInput);
 extern int	pqPacketSend(PGconn *conn, char pack_type,
 						 const void *buf, size_t buf_len);
 extern bool pqGetHomeDirectory(char *buf, int bufsize);
+extern void pqConfigureCompression(PGconn *conn, const char *compressors);
 
 extern pgthreadlock_t pg_g_threadlock;
 
@@ -710,7 +727,7 @@ extern void pqParseInput3(PGconn *conn);
 extern int	pqGetErrorNotice3(PGconn *conn, bool isError);
 extern void pqBuildErrorMessage3(PQExpBuffer msg, const PGresult *res,
 								 PGVerbosity verbosity, PGContextVisibility show_context);
-extern int	pqGetNegotiateProtocolVersion3(PGconn *conn);
+extern int	pqProcessNegotiateProtocolVersion3(PGconn *conn);
 extern int	pqGetCopyData3(PGconn *conn, char **buffer, int async);
 extern int	pqGetline3(PGconn *conn, char *s, int maxlen);
 extern int	pqGetlineAsync3(PGconn *conn, char *buffer, int bufsize);
@@ -748,16 +765,12 @@ extern int	pqWaitTimed(int forRead, int forWrite, PGconn *conn,
 						time_t finish_time);
 extern int	pqReadReady(PGconn *conn);
 extern int	pqWriteReady(PGconn *conn);
+extern int	pqReadPending(PGconn *conn);
 
 /* === in fe-secure.c === */
 
 extern int	pqsecure_initialize(PGconn *, bool, bool);
 extern PostgresPollingStatusType pqsecure_open_client(PGconn *);
-extern void pqsecure_close(PGconn *);
-extern ssize_t pqsecure_read(PGconn *, void *ptr, size_t len);
-extern ssize_t pqsecure_write(PGconn *, const void *ptr, size_t len);
-extern ssize_t pqsecure_raw_read(PGconn *, void *ptr, size_t len);
-extern ssize_t pqsecure_raw_write(PGconn *, const void *ptr, size_t len);
 
 #if !defined(WIN32)
 extern int	pq_block_sigpipe(sigset_t *osigset, bool *sigpipe_pending);
@@ -794,34 +807,6 @@ extern int	pgtls_init(PGconn *conn, bool do_ssl, bool do_crypto);
 extern PostgresPollingStatusType pgtls_open_client(PGconn *conn);
 
 /*
- *	Close SSL connection.
- */
-extern void pgtls_close(PGconn *conn);
-
-/*
- *	Read data from a secure connection.
- *
- * On failure, this function is responsible for appending a suitable message
- * to conn->errorMessage.  The caller must still inspect errno, but only
- * to determine whether to continue/retry after error.
- */
-extern ssize_t pgtls_read(PGconn *conn, void *ptr, size_t len);
-
-/*
- *	Is there unread data waiting in the SSL read buffer?
- */
-extern bool pgtls_read_pending(PGconn *conn);
-
-/*
- *	Write data to a secure connection.
- *
- * On failure, this function is responsible for appending a suitable message
- * to conn->errorMessage.  The caller must still inspect errno, but only
- * to determine whether to continue/retry after error.
- */
-extern ssize_t pgtls_write(PGconn *conn, const void *ptr, size_t len);
-
-/*
  * Get the hash of the server certificate, for SCRAM channel binding type
  * tls-server-end-point.
  *
@@ -851,13 +836,6 @@ extern int	pgtls_verify_peer_name_matches_certificate_guts(PGconn *conn,
  * Establish a GSSAPI-encrypted connection.
  */
 extern PostgresPollingStatusType pqsecure_open_gss(PGconn *conn);
-
-/*
- * Read and write functions for GSSAPI-encrypted connections, with internal
- * buffering to handle nonblocking sockets.
- */
-extern ssize_t pg_GSS_write(PGconn *conn, const void *ptr, size_t len);
-extern ssize_t pg_GSS_read(PGconn *conn, void *ptr, size_t len);
 #endif
 
 /* === in fe-trace.c === */

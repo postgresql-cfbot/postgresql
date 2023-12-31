@@ -74,6 +74,12 @@ static int	PqGSSResultNext;	/* Next index to read a byte from
 static uint32 PqGSSMaxPktSize;	/* Maximum size we can encrypt and fit the
 								 * results into our output buffer */
 
+static ssize_t be_gssapi_read(IoStreamLayer * self, Port *port, void *ptr, size_t len, bool buffered_only);
+static int	be_gssapi_write(IoStreamLayer * self, Port *port, void const *ptr, size_t len, size_t *bytes_written);
+IoStreamProcessor be_gssapi_processor = {
+	.read = (io_stream_read_func) be_gssapi_read,
+	.write = (io_stream_write_func) be_gssapi_write
+};
 
 /*
  * Attempt to write len bytes of data from ptr to a GSSAPI-encrypted connection.
@@ -91,8 +97,8 @@ static uint32 PqGSSMaxPktSize;	/* Maximum size we can encrypt and fit the
  * recursion.  Instead, use elog(COMMERROR) to log extra info about the
  * failure if necessary, and then return an errno indicating connection loss.
  */
-ssize_t
-be_gssapi_write(Port *port, void *ptr, size_t len)
+static int
+be_gssapi_write(IoStreamLayer * self, Port *port, void const *ptr, size_t len, size_t *bytes_written)
 {
 	OM_uint32	major,
 				minor;
@@ -101,6 +107,8 @@ be_gssapi_write(Port *port, void *ptr, size_t len)
 	size_t		bytes_to_encrypt;
 	size_t		bytes_encrypted;
 	gss_ctx_id_t gctx = port->gss->ctx;
+
+	*bytes_written = 0;
 
 	/*
 	 * When we get a retryable failure, we must not tell the caller we have
@@ -148,20 +156,21 @@ be_gssapi_write(Port *port, void *ptr, size_t len)
 		 */
 		if (PqGSSSendLength)
 		{
-			ssize_t		ret;
+			int			retval;
+			size_t		count;
 			ssize_t		amount = PqGSSSendLength - PqGSSSendNext;
 
-			ret = secure_raw_write(port, PqGSSSendBuffer + PqGSSSendNext, amount);
-			if (ret <= 0)
-				return ret;
+			retval = io_stream_next_write(self, PqGSSSendBuffer + PqGSSSendNext, amount, &count);
+			if (retval < 0 || count == 0)
+				return retval;
 
 			/*
 			 * Check if this was a partial write, and if so, move forward that
 			 * far in our buffer and try again.
 			 */
-			if (ret < amount)
+			if (count < amount)
 			{
-				PqGSSSendNext += ret;
+				PqGSSSendNext += count;
 				continue;
 			}
 
@@ -242,7 +251,8 @@ be_gssapi_write(Port *port, void *ptr, size_t len)
 	/* We're reporting all the data as sent, so reset PqGSSSendConsumed. */
 	PqGSSSendConsumed = 0;
 
-	return bytes_encrypted;
+	*bytes_written = bytes_encrypted;
+	return 0;
 }
 
 /*
@@ -258,8 +268,8 @@ be_gssapi_write(Port *port, void *ptr, size_t len)
  * We treat fatal errors the same as in be_gssapi_write(), even though the
  * argument about infinite recursion doesn't apply here.
  */
-ssize_t
-be_gssapi_read(Port *port, void *ptr, size_t len)
+static ssize_t
+be_gssapi_read(IoStreamLayer * self, Port *port, void *ptr, size_t len, bool buffered_only)
 {
 	OM_uint32	major,
 				minor;
@@ -268,6 +278,9 @@ be_gssapi_read(Port *port, void *ptr, size_t len)
 	ssize_t		ret;
 	size_t		bytes_returned = 0;
 	gss_ctx_id_t gctx = port->gss->ctx;
+
+	if (buffered_only)
+		return false;
 
 	/*
 	 * The plan here is to read one incoming encrypted packet into
@@ -325,10 +338,10 @@ be_gssapi_read(Port *port, void *ptr, size_t len)
 		/* Collect the length if we haven't already */
 		if (PqGSSRecvLength < sizeof(uint32))
 		{
-			ret = secure_raw_read(port, PqGSSRecvBuffer + PqGSSRecvLength,
-								  sizeof(uint32) - PqGSSRecvLength);
+			ret = io_stream_next_read(self, PqGSSRecvBuffer + PqGSSRecvLength,
+									  sizeof(uint32) - PqGSSRecvLength, false);
 
-			/* If ret <= 0, secure_raw_read already set the correct errno */
+			/* If ret <= 0, io_stream_next_read already set the correct errno */
 			if (ret <= 0)
 				return ret;
 
@@ -359,8 +372,8 @@ be_gssapi_read(Port *port, void *ptr, size_t len)
 		 * Read as much of the packet as we are able to on this call into
 		 * wherever we left off from the last time we were called.
 		 */
-		ret = secure_raw_read(port, PqGSSRecvBuffer + PqGSSRecvLength,
-							  input.length - (PqGSSRecvLength - sizeof(uint32)));
+		ret = io_stream_next_read(self, PqGSSRecvBuffer + PqGSSRecvLength,
+								  input.length - (PqGSSRecvLength - sizeof(uint32)), false);
 		/* If ret <= 0, secure_raw_read already set the correct errno */
 		if (ret <= 0)
 			return ret;
@@ -413,7 +426,8 @@ be_gssapi_read(Port *port, void *ptr, size_t len)
 
 /*
  * Read the specified number of bytes off the wire, waiting using
- * WaitLatchOrSocket if we would block.
+ * WaitLatchOrSocket if we would block. Only used during connecition setup
+ * before GSS is added to the io_stream.
  *
  * Results are read into PqGSSRecvBuffer.
  *
@@ -430,7 +444,7 @@ read_or_wait(Port *port, ssize_t len)
 	 */
 	while (PqGSSRecvLength < len)
 	{
-		ret = secure_raw_read(port, PqGSSRecvBuffer + PqGSSRecvLength, len - PqGSSRecvLength);
+		ret = io_stream_read(port->io_stream, PqGSSRecvBuffer + PqGSSRecvLength, len - PqGSSRecvLength, false);
 
 		/*
 		 * If we got back an error and it wasn't just
@@ -465,7 +479,7 @@ read_or_wait(Port *port, ssize_t len)
 			 */
 			if (ret == 0)
 			{
-				ret = secure_raw_read(port, PqGSSRecvBuffer + PqGSSRecvLength, len - PqGSSRecvLength);
+				ret = io_stream_read(port->io_stream, PqGSSRecvBuffer + PqGSSRecvLength, len - PqGSSRecvLength, false);
 				if (ret == 0)
 					return -1;
 			}
@@ -648,8 +662,10 @@ secure_open_gssapi(Port *port)
 
 			while (PqGSSSendNext < PqGSSSendLength)
 			{
-				ret = secure_raw_write(port, PqGSSSendBuffer + PqGSSSendNext,
-									   PqGSSSendLength - PqGSSSendNext);
+				size_t		count;
+
+				ret = io_stream_write(port->io_stream, PqGSSSendBuffer + PqGSSSendNext,
+									  PqGSSSendLength - PqGSSSendNext, &count);
 
 				/*
 				 * If we got back an error and it wasn't just
@@ -663,7 +679,7 @@ secure_open_gssapi(Port *port)
 				}
 
 				/* Wait and retry if we couldn't write yet */
-				if (ret <= 0)
+				if (ret < 0 || count == 0)
 				{
 					WaitLatchOrSocket(MyLatch,
 									  WL_SOCKET_WRITEABLE | WL_EXIT_ON_PM_DEATH,
@@ -671,7 +687,7 @@ secure_open_gssapi(Port *port)
 					continue;
 				}
 
-				PqGSSSendNext += ret;
+				PqGSSSendNext += count;
 			}
 
 			/* Done sending the packet, reset our buffer */
@@ -701,6 +717,7 @@ secure_open_gssapi(Port *port)
 		pg_GSS_error(_("GSSAPI size check error"), major, minor);
 		return -1;
 	}
+	io_stream_add_layer(port->io_stream, &be_gssapi_processor, port);
 
 	port->gss->enc = true;
 

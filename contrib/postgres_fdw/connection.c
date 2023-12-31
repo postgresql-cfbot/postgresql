@@ -872,11 +872,14 @@ pgfdw_get_result(PGconn *conn, const char *query)
 					pgfdw_we_get_result = WaitEventExtensionNew("PostgresFdwGetResult");
 
 				/* Sleep until there's something to do */
-				wc = WaitLatchOrSocket(MyLatch,
-									   WL_LATCH_SET | WL_SOCKET_READABLE |
-									   WL_EXIT_ON_PM_DEATH,
-									   PQsocket(conn),
-									   -1L, pgfdw_we_get_result);
+				if (PQreadPending(conn))
+					wc = WL_SOCKET_READABLE;
+				else
+					wc = WaitLatchOrSocket(MyLatch,
+											WL_LATCH_SET | WL_SOCKET_READABLE |
+											WL_EXIT_ON_PM_DEATH,
+											PQsocket(conn),
+											-1L, pgfdw_we_get_result);
 				ResetLatch(MyLatch);
 
 				CHECK_FOR_INTERRUPTS();
@@ -1580,11 +1583,14 @@ pgfdw_get_cleanup_result(PGconn *conn, TimestampTz endtime, PGresult **result,
 					pgfdw_we_cleanup_result = WaitEventExtensionNew("PostgresFdwCleanupResult");
 
 				/* Sleep until there's something to do */
-				wc = WaitLatchOrSocket(MyLatch,
-									   WL_LATCH_SET | WL_SOCKET_READABLE |
-									   WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-									   PQsocket(conn),
-									   cur_timeout, pgfdw_we_cleanup_result);
+				if (PQreadPending(conn))
+					wc = WL_SOCKET_READABLE;
+				else
+					wc = WaitLatchOrSocket(MyLatch,
+											WL_LATCH_SET | WL_SOCKET_READABLE |
+											WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+											PQsocket(conn),
+											cur_timeout, pgfdw_we_cleanup_result);
 				ResetLatch(MyLatch);
 
 				CHECK_FOR_INTERRUPTS();

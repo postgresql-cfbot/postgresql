@@ -2793,14 +2793,14 @@ frontend_common_code = declare_dependency(
   compile_args: ['-DFRONTEND'],
   include_directories: [postgres_inc],
   sources: generated_headers,
-  dependencies: [os_deps, zlib, zstd],
+  dependencies: [os_deps, lz4, zlib, zstd],
 )
 
 backend_common_code = declare_dependency(
   compile_args: ['-DBUILDING_DLL'],
   include_directories: [postgres_inc],
   sources: generated_headers,
-  dependencies: [os_deps, zlib, zstd],
+  dependencies: [os_deps, lz4, zlib, zstd],
 )
 
 subdir('src/common')

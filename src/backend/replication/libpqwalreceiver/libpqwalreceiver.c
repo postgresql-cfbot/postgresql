@@ -727,12 +727,15 @@ libpqrcv_PQgetResult(PGconn *streamConn)
 		 * since we'll get interrupted by signals and can handle any
 		 * interrupts here.
 		 */
-		rc = WaitLatchOrSocket(MyLatch,
-							   WL_EXIT_ON_PM_DEATH | WL_SOCKET_READABLE |
-							   WL_LATCH_SET,
-							   PQsocket(streamConn),
-							   0,
-							   WAIT_EVENT_LIBPQWALRECEIVER_RECEIVE);
+		if (PQreadPending(streamConn))
+			rc = WL_SOCKET_READABLE;
+		else
+			rc = WaitLatchOrSocket(MyLatch,
+								   WL_EXIT_ON_PM_DEATH | WL_SOCKET_READABLE |
+								   WL_LATCH_SET,
+								   PQsocket(streamConn),
+								   0,
+								   WAIT_EVENT_LIBPQWALRECEIVER_RECEIVE);
 
 		/* Interrupted? */
 		if (rc & WL_LATCH_SET)

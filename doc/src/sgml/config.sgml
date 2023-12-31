@@ -1066,6 +1066,44 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-libpq-compression" xreflabel="libpq_compression">
+      <term><varname>libpq_compression</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>libpq_compression</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This parameter controls the available client-server traffic compression methods.
+        It allows rejecting compression requests even if it is supported by the server (for example, due to security, or CPU consumption).
+        The default is <literal>off</literal>, which means that no compression methods are allowed.
+        The value <literal>on</literal> means all supported compression methods are allowed.
+        For more precise control, a list of the allowed compression methods can be specified.
+        For example, to allow only <literal>lz4</literal> and <literal>gzip</literal>, set the setting to <literal>lz4;gzip</literal>.
+        The server will choose the first algorithm from the list also supported by a given client.
+       </para>
+       <para>
+        The compression methods can be specified as <literal>gzip</literal>,
+        <literal>lz4</literal>, or <literal>zstd</literal>.
+        A compression detail string can optionally be specified.
+        If the detail string is an integer, it specifies the compression
+        level.  Otherwise, it should be a comma-separated list of items,
+        each of the form
+        <replaceable>keyword</replaceable> or
+        <replaceable>keyword=value</replaceable>.
+        Currently, the supported keywords are <literal>level</literal>,
+        <literal>compress</literal>, and <literal>decompress</literal>.
+        The detail string cannot be used when the compression method
+        is specified as a plain integer.
+        <literal>compress</literal> and <literal>decompress</literal>
+        both default to true, but can be set to false to allow using an algorithm for only compression or
+        only for decompression, which is most useful when enabling asymmetric compression.
+        e.g. to enable compression for client-to-server traffic but not server-to-client traffic,
+        you can set the parameter to <literal>"gzip:compress=false"</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
      </sect2>
 

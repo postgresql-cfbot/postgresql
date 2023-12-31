@@ -59,7 +59,7 @@ openssl_tls_init_hook_typ openssl_tls_init_hook = default_openssl_tls_init;
 static int	my_sock_read(BIO *h, char *buf, int size);
 static int	my_sock_write(BIO *h, const char *buf, int size);
 static BIO_METHOD *my_BIO_s_socket(void);
-static int	my_SSL_set_fd(Port *port, int fd);
+static int	my_SSL_set_fd(SSL *ssl, int fd, IoStreamLayer * layer);
 
 static DH  *load_dh_file(char *filename, bool isServerStart);
 static DH  *load_dh_buffer(const char *buffer, size_t len);
@@ -70,6 +70,16 @@ static void info_cb(const SSL *ssl, int type, int args);
 static bool initialize_dh(SSL_CTX *context, bool isServerStart);
 static bool initialize_ecdh(SSL_CTX *context, bool isServerStart);
 static const char *SSLerrmessage(unsigned long ecode);
+
+static ssize_t be_tls_read(IoStreamLayer * self, Port *port, void *ptr, size_t len, bool buffered_only);
+static int	be_tls_write(IoStreamLayer * self, Port *port, void const *ptr, size_t len, size_t *bytes_written);
+static void be_tls_close(Port *port);
+
+IoStreamProcessor be_tls_processor = {
+	.read = (io_stream_read_func) be_tls_read,
+	.write = (io_stream_write_func) be_tls_write,
+	.destroy = (io_stream_consumer) be_tls_close
+};
 
 static char *X509_NAME_to_cstring(X509_NAME *name);
 
@@ -440,7 +450,8 @@ be_tls_open_server(Port *port)
 						SSLerrmessage(ERR_get_error()))));
 		return -1;
 	}
-	if (!my_SSL_set_fd(port, port->sock))
+	if (!my_SSL_set_fd(port->ssl, port->sock,
+					   io_stream_add_layer(port->io_stream, &be_tls_processor, port)))
 	{
 		ereport(COMMERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
@@ -674,7 +685,7 @@ aloop:
 	return 0;
 }
 
-void
+static void
 be_tls_close(Port *port)
 {
 	if (port->ssl)
@@ -704,14 +715,27 @@ be_tls_close(Port *port)
 	}
 }
 
-ssize_t
-be_tls_read(Port *port, void *ptr, size_t len, int *waitfor)
+static ssize_t
+be_tls_read(IoStreamLayer * self, Port *port, void *ptr, size_t len, bool buffered_only)
 {
 	ssize_t		n;
 	int			err;
 	unsigned long ecode;
 
+	port->waitfor = 0;
 	errno = 0;
+
+	if (buffered_only)
+	{
+		/*
+		 * SSL_pending bytes are guaranteed to be available and readable
+		 * without blocking
+		 */
+		len = Min(len, SSL_pending(port->ssl));
+		if (len == 0)
+			return 0;
+	}
+
 	ERR_clear_error();
 	n = SSL_read(port->ssl, ptr, len);
 	err = SSL_get_error(port->ssl, n);
@@ -722,12 +746,12 @@ be_tls_read(Port *port, void *ptr, size_t len, int *waitfor)
 			/* a-ok */
 			break;
 		case SSL_ERROR_WANT_READ:
-			*waitfor = WL_SOCKET_READABLE;
+			port->waitfor = WL_SOCKET_READABLE;
 			errno = EWOULDBLOCK;
 			n = -1;
 			break;
 		case SSL_ERROR_WANT_WRITE:
-			*waitfor = WL_SOCKET_WRITEABLE;
+			port->waitfor = WL_SOCKET_WRITEABLE;
 			errno = EWOULDBLOCK;
 			n = -1;
 			break;
@@ -763,13 +787,14 @@ be_tls_read(Port *port, void *ptr, size_t len, int *waitfor)
 	return n;
 }
 
-ssize_t
-be_tls_write(Port *port, void *ptr, size_t len, int *waitfor)
+static int
+be_tls_write(IoStreamLayer * self, Port *port, void const *ptr, size_t len, size_t *bytes_written)
 {
 	ssize_t		n;
 	int			err;
 	unsigned long ecode;
 
+	port->waitfor = 0;
 	errno = 0;
 	ERR_clear_error();
 	n = SSL_write(port->ssl, ptr, len);
@@ -781,12 +806,12 @@ be_tls_write(Port *port, void *ptr, size_t len, int *waitfor)
 			/* a-ok */
 			break;
 		case SSL_ERROR_WANT_READ:
-			*waitfor = WL_SOCKET_READABLE;
+			port->waitfor = WL_SOCKET_READABLE;
 			errno = EWOULDBLOCK;
 			n = -1;
 			break;
 		case SSL_ERROR_WANT_WRITE:
-			*waitfor = WL_SOCKET_WRITEABLE;
+			port->waitfor = WL_SOCKET_WRITEABLE;
 			errno = EWOULDBLOCK;
 			n = -1;
 			break;
@@ -830,7 +855,16 @@ be_tls_write(Port *port, void *ptr, size_t len, int *waitfor)
 			break;
 	}
 
-	return n;
+	if (n >= 0)
+	{
+		*bytes_written = n;
+		return 0;
+	}
+	else
+	{
+		*bytes_written = 0;
+		return n;
+	}
 }
 
 /* ------------------------------------------------------------ */
@@ -858,7 +892,7 @@ my_sock_read(BIO *h, char *buf, int size)
 
 	if (buf != NULL)
 	{
-		res = secure_raw_read(((Port *) BIO_get_app_data(h)), buf, size);
+		res = io_stream_next_read(BIO_get_app_data(h), buf, size, false);
 		BIO_clear_retry_flags(h);
 		if (res <= 0)
 		{
@@ -876,11 +910,12 @@ my_sock_read(BIO *h, char *buf, int size)
 static int
 my_sock_write(BIO *h, const char *buf, int size)
 {
-	int			res = 0;
+	int			res;
+	size_t		bytes_written;
 
-	res = secure_raw_write(((Port *) BIO_get_app_data(h)), buf, size);
+	res = io_stream_next_write(BIO_get_app_data(h), buf, size, &bytes_written);
 	BIO_clear_retry_flags(h);
-	if (res <= 0)
+	if (res < 0 || bytes_written == 0)
 	{
 		/* If we were interrupted, tell caller to retry */
 		if (errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)
@@ -889,7 +924,7 @@ my_sock_write(BIO *h, const char *buf, int size)
 		}
 	}
 
-	return res;
+	return res ? res : bytes_written;
 }
 
 static BIO_METHOD *
@@ -935,7 +970,7 @@ my_BIO_s_socket(void)
 
 /* This should exactly match OpenSSL's SSL_set_fd except for using my BIO */
 static int
-my_SSL_set_fd(Port *port, int fd)
+my_SSL_set_fd(SSL *ssl, int fd, IoStreamLayer * layer)
 {
 	int			ret = 0;
 	BIO		   *bio;
@@ -954,10 +989,10 @@ my_SSL_set_fd(Port *port, int fd)
 		SSLerr(SSL_F_SSL_SET_FD, ERR_R_BUF_LIB);
 		goto err;
 	}
-	BIO_set_app_data(bio, port);
+	BIO_set_app_data(bio, layer);
 
 	BIO_set_fd(bio, fd, BIO_NOCLOSE);
-	SSL_set_bio(port->ssl, bio, bio);
+	SSL_set_bio(ssl, bio, bio);
 	ret = 1;
 err:
 	return ret;

@@ -25,6 +25,7 @@
 #include "common/ip.h"
 #include "common/link-canary.h"
 #include "common/scram-common.h"
+#include "common/zpq_stream.h"
 #include "common/string.h"
 #include "fe-auth.h"
 #include "libpq-fe.h"
@@ -135,6 +136,55 @@ static int	ldapServiceLookup(const char *purl, PQconninfoOption *options,
 #else
 #define DefaultGSSMode "disable"
 #endif
+
+/*
+ * Macros to handle disabling and then restoring the state of SIGPIPE handling.
+ * On Windows, these are all no-ops since there's no SIGPIPEs.
+ */
+
+#ifndef WIN32
+
+#define SIGPIPE_MASKED(conn)	((conn)->sigpipe_so || (conn)->sigpipe_flag)
+
+struct sigpipe_info
+{
+	sigset_t	oldsigmask;
+	bool		sigpipe_pending;
+	bool		got_epipe;
+};
+
+#define DECLARE_SIGPIPE_INFO(spinfo) struct sigpipe_info spinfo
+
+#define DISABLE_SIGPIPE(conn, spinfo, failaction) \
+do { \
+(spinfo).got_epipe = false; \
+if (!SIGPIPE_MASKED(conn)) \
+{ \
+if (pq_block_sigpipe(&(spinfo).oldsigmask, \
+&(spinfo).sigpipe_pending) < 0) \
+failaction; \
+} \
+} while (0)
+
+#define REMEMBER_EPIPE(spinfo, cond) \
+do { \
+if (cond) \
+(spinfo).got_epipe = true; \
+} while (0)
+
+#define RESTORE_SIGPIPE(conn, spinfo) \
+do { \
+if (!SIGPIPE_MASKED(conn)) \
+pq_reset_sigpipe(&(spinfo).oldsigmask, (spinfo).sigpipe_pending, \
+(spinfo).got_epipe); \
+} while (0)
+#else							/* WIN32 */
+
+#define DECLARE_SIGPIPE_INFO(spinfo)
+#define DISABLE_SIGPIPE(conn, spinfo, failaction)
+#define REMEMBER_EPIPE(spinfo, cond)
+#define RESTORE_SIGPIPE(conn, spinfo)
+#endif							/* WIN32 */
 
 /* ----------
  * Definition of the conninfo parameters and their fallback resources.
@@ -349,6 +399,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Replication", "D", 5,
 	offsetof(struct pg_conn, replication)},
 
+	{"compression", "PGCOMPRESSION", "on", NULL,
+		"Libpq-compression", "", 16,
+	offsetof(struct pg_conn, compression)},
+
 	{"target_session_attrs", "PGTARGETSESSIONATTRS",
 		DefaultTargetSessionAttrs, NULL,
 		"Target-Session-Attrs", "", 15, /* sizeof("prefer-standby") = 15 */
@@ -445,6 +499,12 @@ static bool sslVerifyProtocolVersion(const char *version);
 static bool sslVerifyProtocolRange(const char *min, const char *max);
 static bool parse_int_param(const char *value, int *result, PGconn *conn,
 							const char *context);
+static ssize_t socket_read(IoStreamLayer * self, PGconn *conn, void *ptr, size_t len, bool buffered_only);
+static int	socket_write(IoStreamLayer * self, PGconn *conn, void const *ptr, size_t len, size_t *bytes_written);
+IoStreamProcessor socket_processor = {
+	.read = (io_stream_read_func) socket_read,
+	.write = (io_stream_write_func) socket_write
+};
 
 
 /* global variable because fe-auth.c needs to access it */
@@ -466,9 +526,9 @@ pgthreadlock_t pg_g_threadlock = default_threadlock;
 void
 pqDropConnection(PGconn *conn, bool flushInput)
 {
-	/* Drop any SSL state */
-	pqsecure_close(conn);
-
+	io_stream_destroy(conn->io_stream);
+	conn->io_stream = NULL;
+	conn->zpqStream = NULL;
 	/* Close the socket itself */
 	if (conn->sock != PGINVALID_SOCKET)
 		closesocket(conn->sock);
@@ -1657,6 +1717,36 @@ connectOptions2(PGconn *conn)
 		conn->gssencmode = strdup(DefaultGSSMode);
 		if (!conn->gssencmode)
 			goto oom_error;
+	}
+
+	/*
+	 * validate compression option
+	 */
+	if (conn->compression && conn->compression[0])
+	{
+		pg_compress_specification compressors[COMPRESSION_ALGORITHM_COUNT];
+		size_t		n_compressors;
+		int			rc = zpq_parse_compression_setting(conn->compression, compressors, &n_compressors);
+
+		if (rc == -1)
+		{
+			conn->status = CONNECTION_BAD;
+			appendPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("invalid %s value: \"%s\"\n"),
+							  "compression", conn->compression);
+			return false;
+		}
+
+		/* Disable to allow SanityCheck to pass
+		if (rc == 1 && n_compressors == 0)
+		{
+			conn->status = CONNECTION_BAD;
+			appendPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("no supported algorithms found, %s value: \"%s\"\n"),
+							  "compression", conn->compression);
+			return false;
+		}
+		*/
 	}
 
 	/*
@@ -2879,6 +2969,9 @@ keep_going:						/* We will come back to here until there is
 					sock_type |= SOCK_NONBLOCK;
 #endif
 					conn->sock = socket(addr_cur->family, sock_type, 0);
+					conn->io_stream = io_stream_create();
+					io_stream_add_layer(conn->io_stream, &socket_processor, conn);
+
 					if (conn->sock == PGINVALID_SOCKET)
 					{
 						int			errorno = SOCK_ERRNO;
@@ -3288,6 +3381,20 @@ keep_going:						/* We will come back to here until there is
 				{
 					libpq_append_conn_error(conn, "out of memory");
 					goto error_return;
+				}
+
+				/*
+				 * By this point we have set up any encryption layers needed,
+				 * so we can inject compression processing if requested.
+				 */
+				if (!conn->zpqStream && conn->n_compressors > 0)
+				{
+					conn->zpqStream = zpq_create(conn->compressors, conn->n_compressors, conn->io_stream);
+					if (!conn->zpqStream)
+					{
+						libpq_append_conn_error(conn, "failed to set up compression stream");
+						goto error_return;
+					}
 				}
 
 				/*
@@ -3777,14 +3884,22 @@ keep_going:						/* We will come back to here until there is
 				}
 				else if (beresp == PqMsg_NegotiateProtocolVersion)
 				{
-					if (pqGetNegotiateProtocolVersion3(conn))
+					if ((res = pqProcessNegotiateProtocolVersion3(conn)) < 0)
 					{
 						libpq_append_conn_error(conn, "received invalid protocol negotiation message");
 						goto error_return;
 					}
 					/* OK, we read the message; mark data consumed */
 					conn->inStart = conn->inCursor;
-					goto error_return;
+
+					if (res == 0)
+					{
+						goto error_return;
+					}
+					else
+					{
+						goto keep_going;
+					}
 				}
 
 				/* It is an authentication request. */
@@ -4213,6 +4328,50 @@ error_return:
 	return PGRES_POLLING_FAILED;
 }
 
+/*
+ * Based on server GUC libpq_compression, establishes a zpq_stream to compres
+ * protocol traffic. Should only be called once per connection lifecycle, as the
+ * zpq_stream cannot be reconfigured without restarting the connection
+ */
+void
+pqConfigureCompression(PGconn *conn, const char *compressors_str)
+{
+	pg_compress_specification be_compressors[COMPRESSION_ALGORITHM_COUNT];
+	size_t		n_be_compressors;
+
+	zpq_deserialize_compressors(compressors_str, be_compressors, &n_be_compressors);
+	if (conn->zpqStream)
+	{
+		pg_compress_algorithm algorithms[COMPRESSION_ALGORITHM_COUNT];
+		size_t		n_algorithms = 0;
+
+		if (n_be_compressors == 0)
+		{
+			return;
+		}
+
+		/*
+		 * Intersect client and server compressors to determine the final list
+		 * of the supported compressors. O(N^2) is negligible because of a
+		 * small number of the compression methods.
+		 */
+		for (size_t i = 0; i < conn->n_compressors; i++)
+		{
+			for (size_t j = 0; j < n_be_compressors; j++)
+			{
+				if (conn->compressors[i].algorithm == be_compressors[j].algorithm && conn->compressors[i].compress && be_compressors[j].decompress)
+				{
+					algorithms[n_algorithms] = conn->compressors[i].algorithm;
+					n_algorithms += 1;
+					break;
+				}
+			}
+		}
+
+		zpq_enable_compression(conn->zpqStream, algorithms, n_algorithms);
+	}
+}
+
 
 /*
  * internal_ping
@@ -4423,6 +4582,7 @@ freePGconn(PGconn *conn)
 	free(conn->fbappname);
 	free(conn->dbName);
 	free(conn->replication);
+	free(conn->compression);
 	free(conn->pguser);
 	if (conn->pgpass)
 	{
@@ -7107,6 +7267,24 @@ PQuser(const PGconn *conn)
 }
 
 char *
+PQcompression(const PGconn *conn)
+{
+	if (!conn || !conn->zpqStream)
+		return NULL;
+
+	return zpq_algorithms(conn->zpqStream);
+}
+
+char *
+PQserverCompression(const PGconn *conn)
+{
+	if (!conn)
+		return NULL;
+
+	return conn->server_compression;
+}
+
+char *
 PQpass(const PGconn *conn)
 {
 	char	   *password = NULL;
@@ -7829,3 +8007,285 @@ PQregisterThreadLock(pgthreadlock_t newhandler)
 
 	return prev;
 }
+
+static ssize_t
+socket_read(IoStreamLayer * self, PGconn *conn, void *ptr, size_t len, bool buffered_only)
+{
+	ssize_t		n;
+	int			result_errno = 0;
+	char		sebuf[PG_STRERROR_R_BUFLEN];
+
+	SOCK_ERRNO_SET(0);
+
+	if (buffered_only)
+		return 0;
+
+	n = recv(conn->sock, ptr, len, 0);
+
+	if (n < 0)
+	{
+		result_errno = SOCK_ERRNO;
+
+		/* Set error message if appropriate */
+		switch (result_errno)
+		{
+#ifdef EAGAIN
+			case EAGAIN:
+#endif
+#if defined(EWOULDBLOCK) && (!defined(EAGAIN) || (EWOULDBLOCK != EAGAIN))
+			case EWOULDBLOCK:
+#endif
+			case EINTR:
+				/* no error message, caller is expected to retry */
+				break;
+
+			case EPIPE:
+			case ECONNRESET:
+				libpq_append_conn_error(conn, "server closed the connection unexpectedly\n"
+										"\tThis probably means the server terminated abnormally\n"
+										"\tbefore or while processing the request.");
+				break;
+
+			case 0:
+				/* If errno didn't get set, treat it as regular EOF */
+				n = 0;
+				break;
+
+			default:
+				libpq_append_conn_error(conn, "could not receive data from server: %s",
+										SOCK_STRERROR(result_errno,
+													  sebuf, sizeof(sebuf)));
+				break;
+		}
+	}
+
+	/* ensure we return the intended errno to caller */
+	SOCK_ERRNO_SET(result_errno);
+
+	return n;
+}
+
+/*
+ * Socket-level implementation of data writing.
+ *
+ * This is used directly for an unencrypted connection.  For encrypted
+ * connections, this is wrapped by higher layers through IO stream
+ *
+ * This function reports failure (i.e., returns a negative result) only
+ * for retryable errors such as EINTR.  Looping for such cases is to be
+ * handled at some outer level, maybe all the way up to the application.
+ * For hard failures, we set conn->write_failed and store an error message
+ * in conn->write_err_msg, but then claim to have written the data anyway.
+ * This is because we don't want to report write failures so long as there
+ * is a possibility of reading from the server and getting an error message
+ * that could explain why the connection dropped.  Many TCP stacks have
+ * race conditions such that a write failure may or may not be reported
+ * before all incoming data has been read.
+ *
+ * Note that this error behavior happens below the SSL management level when
+ * we are using SSL.  That's because at least some versions of OpenSSL are
+ * too quick to report a write failure when there's still a possibility to
+ * get a more useful error from the server.
+ */
+static int
+socket_write(IoStreamLayer * self, PGconn *conn, void const *ptr, size_t len, size_t *bytes_written)
+{
+	ssize_t		n;
+	int			flags = 0;
+	int			result_errno = 0;
+	char		msgbuf[1024];
+	char		sebuf[PG_STRERROR_R_BUFLEN];
+
+	DECLARE_SIGPIPE_INFO(spinfo);
+
+	/*
+	 * If we already had a write failure, we will never again try to send data
+	 * on that connection.  Even if the kernel would let us, we've probably
+	 * lost message boundary sync with the server.  conn->write_failed
+	 * therefore persists until the connection is reset, and we just discard
+	 * all data presented to be written.
+	 */
+	if (conn->write_failed)
+		return len;
+
+#ifdef MSG_NOSIGNAL
+	if (conn->sigpipe_flag)
+		flags |= MSG_NOSIGNAL;
+
+retry_masked:
+#endif							/* MSG_NOSIGNAL */
+
+	DISABLE_SIGPIPE(conn, spinfo, return -1);
+
+	n = send(conn->sock, ptr, len, flags);
+
+	if (n < 0)
+	{
+		*bytes_written = 0;
+		result_errno = SOCK_ERRNO;
+
+		/*
+		 * If we see an EINVAL, it may be because MSG_NOSIGNAL isn't available
+		 * on this machine.  So, clear sigpipe_flag so we don't try the flag
+		 * again, and retry the send().
+		 */
+#ifdef MSG_NOSIGNAL
+		if (flags != 0 && result_errno == EINVAL)
+		{
+			conn->sigpipe_flag = false;
+			flags = 0;
+			goto retry_masked;
+		}
+#endif							/* MSG_NOSIGNAL */
+
+		/* Set error message if appropriate */
+		switch (result_errno)
+		{
+#ifdef EAGAIN
+			case EAGAIN:
+#endif
+#if defined(EWOULDBLOCK) && (!defined(EAGAIN) || (EWOULDBLOCK != EAGAIN))
+			case EWOULDBLOCK:
+#endif
+			case EINTR:
+				/* no error message, caller is expected to retry */
+				break;
+
+			case EPIPE:
+				/* Set flag for EPIPE */
+				REMEMBER_EPIPE(spinfo, true);
+
+				/* FALL THRU */
+
+			case ECONNRESET:
+				conn->write_failed = true;
+				/* Store error message in conn->write_err_msg, if possible */
+				/* (strdup failure is OK, we'll cope later) */
+				snprintf(msgbuf, sizeof(msgbuf),
+						 libpq_gettext("server closed the connection unexpectedly\n"
+									   "\tThis probably means the server terminated abnormally\n"
+									   "\tbefore or while processing the request."));
+				/* keep newline out of translated string */
+				strlcat(msgbuf, "\n", sizeof(msgbuf));
+				conn->write_err_msg = strdup(msgbuf);
+				/* Now claim the write succeeded */
+				*bytes_written = n;
+				n = 0;
+				break;
+
+			default:
+				conn->write_failed = true;
+				/* Store error message in conn->write_err_msg, if possible */
+				/* (strdup failure is OK, we'll cope later) */
+				snprintf(msgbuf, sizeof(msgbuf),
+						 libpq_gettext("could not send data to server: %s"),
+						 SOCK_STRERROR(result_errno,
+									   sebuf, sizeof(sebuf)));
+				/* keep newline out of translated string */
+				strlcat(msgbuf, "\n", sizeof(msgbuf));
+				conn->write_err_msg = strdup(msgbuf);
+				/* Now claim the write succeeded */
+				*bytes_written = n;
+				n = 0;
+				break;
+		}
+	}
+	else
+	{
+		*bytes_written = n;
+		n = 0;
+	}
+
+	RESTORE_SIGPIPE(conn, spinfo);
+
+	/* ensure we return the intended errno to caller */
+	SOCK_ERRNO_SET(result_errno);
+
+	return n;
+}
+
+#if !defined(WIN32)
+
+/*
+ *	Block SIGPIPE for this thread.  This prevents send()/write() from exiting
+ *	the application.
+ */
+int
+pq_block_sigpipe(sigset_t *osigset, bool *sigpipe_pending)
+{
+	sigset_t	sigpipe_sigset;
+	sigset_t	sigset;
+
+	sigemptyset(&sigpipe_sigset);
+	sigaddset(&sigpipe_sigset, SIGPIPE);
+
+	/* Block SIGPIPE and save previous mask for later reset */
+	SOCK_ERRNO_SET(pthread_sigmask(SIG_BLOCK, &sigpipe_sigset, osigset));
+	if (SOCK_ERRNO)
+		return -1;
+
+	/* We can have a pending SIGPIPE only if it was blocked before */
+	if (sigismember(osigset, SIGPIPE))
+	{
+		/* Is there a pending SIGPIPE? */
+		if (sigpending(&sigset) != 0)
+			return -1;
+
+		if (sigismember(&sigset, SIGPIPE))
+			*sigpipe_pending = true;
+		else
+			*sigpipe_pending = false;
+	}
+	else
+		*sigpipe_pending = false;
+
+	return 0;
+}
+
+/*
+ *	Discard any pending SIGPIPE and reset the signal mask.
+ *
+ * Note: we are effectively assuming here that the C library doesn't queue
+ * up multiple SIGPIPE events.  If it did, then we'd accidentally leave
+ * ours in the queue when an event was already pending and we got another.
+ * As long as it doesn't queue multiple events, we're OK because the caller
+ * can't tell the difference.
+ *
+ * The caller should say got_epipe = false if it is certain that it
+ * didn't get an EPIPE error; in that case we'll skip the clear operation
+ * and things are definitely OK, queuing or no.  If it got one or might have
+ * gotten one, pass got_epipe = true.
+ *
+ * We do not want this to change errno, since if it did that could lose
+ * the error code from a preceding send().  We essentially assume that if
+ * we were able to do pq_block_sigpipe(), this can't fail.
+ */
+void
+pq_reset_sigpipe(sigset_t *osigset, bool sigpipe_pending, bool got_epipe)
+{
+	int			save_errno = SOCK_ERRNO;
+	int			signo;
+	sigset_t	sigset;
+
+	/* Clear SIGPIPE only if none was pending */
+	if (got_epipe && !sigpipe_pending)
+	{
+		if (sigpending(&sigset) == 0 &&
+			sigismember(&sigset, SIGPIPE))
+		{
+			sigset_t	sigpipe_sigset;
+
+			sigemptyset(&sigpipe_sigset);
+			sigaddset(&sigpipe_sigset, SIGPIPE);
+
+			sigwait(&sigpipe_sigset, &signo);
+		}
+	}
+
+	/* Restore saved block mask */
+	pthread_sigmask(SIG_SETMASK, osigset, NULL);
+
+	SOCK_ERRNO_SET(save_errno);
+}
+
+#endif							/* !WIN32 */

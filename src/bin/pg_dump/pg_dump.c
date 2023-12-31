@@ -759,7 +759,7 @@ main(int argc, char **argv)
 				 compression_algorithm_str);
 
 	parse_compress_specification(compression_algorithm, compression_detail,
-								 &compression_spec);
+								 &compression_spec, PG_COMPRESSION_OPTION_LONG_DISTANCE);
 	error_detail = validate_compress_specification(&compression_spec);
 	if (error_detail != NULL)
 		pg_fatal("invalid compression specification: %s",
@@ -768,15 +768,6 @@ main(int argc, char **argv)
 	error_detail = supports_compression(compression_spec);
 	if (error_detail != NULL)
 		pg_fatal("%s", error_detail);
-
-	/*
-	 * Disable support for zstd workers for now - these are based on
-	 * threading, and it's unclear how it interacts with parallel dumps on
-	 * platforms where that relies on threads too (e.g. Windows).
-	 */
-	if (compression_spec.options & PG_COMPRESSION_OPTION_WORKERS)
-		pg_log_warning("compression option \"%s\" is not currently supported by pg_dump",
-					   "workers");
 
 	/*
 	 * If emitting an archive format, we always want to emit a DATABASE item,

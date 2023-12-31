@@ -75,6 +75,20 @@ pqParseInput3(PGconn *conn)
 	for (;;)
 	{
 		/*
+		 * Read any available buffered data io_stream may be null when
+		 * draining the final messages from an aborted connection
+		 */
+		if (conn->io_stream && pqReadPending(conn) && (conn->inBufSize - conn->inEnd > 0))
+		{
+			int			rc = io_stream_read(conn->io_stream, conn->inBuffer + conn->inEnd, conn->inBufSize - conn->inEnd, true);
+
+			if (rc > 0)
+			{
+				conn->inEnd += rc;
+			}
+		}
+
+		/*
 		 * Try to read a message.  First get the type code and length. Return
 		 * if not enough data.
 		 */
@@ -1404,16 +1418,18 @@ reportErrorPosition(PQExpBuffer msg, const char *query, int loc, int encoding)
 /*
  * Attempt to read a NegotiateProtocolVersion message.
  * Entry: 'v' message type and length have already been consumed.
- * Exit: returns 0 if successfully consumed message.
+ * Exit: returns 0 if successfully consumed message and should exit,
+ *		 returns 1 if successfully consumed message and should continue with warning,
  *		 returns EOF if not enough data.
  */
 int
-pqGetNegotiateProtocolVersion3(PGconn *conn)
+pqProcessNegotiateProtocolVersion3(PGconn *conn)
 {
 	int			tmp;
 	ProtocolVersion their_version;
 	int			num;
 	PQExpBufferData buf;
+	int			retval = 1;
 
 	if (pqGetInt(&tmp, 4, conn) != 0)
 		return EOF;
@@ -1436,9 +1452,12 @@ pqGetNegotiateProtocolVersion3(PGconn *conn)
 	}
 
 	if (their_version < conn->pversion)
+	{
 		libpq_append_conn_error(conn, "protocol version not supported by server: client uses %u.%u, server supports up to %u.%u",
 								PG_PROTOCOL_MAJOR(conn->pversion), PG_PROTOCOL_MINOR(conn->pversion),
 								PG_PROTOCOL_MAJOR(their_version), PG_PROTOCOL_MINOR(their_version));
+		retval = 0;
+	}
 	if (num > 0)
 	{
 		appendPQExpBuffer(&conn->errorMessage,
@@ -1446,14 +1465,26 @@ pqGetNegotiateProtocolVersion3(PGconn *conn)
 										 "protocol extensions not supported by server: %s", num),
 						  buf.data);
 		appendPQExpBufferChar(&conn->errorMessage, '\n');
+
+		/*
+		 * We can continue to use the connection if the server doesn't support
+		 * compression
+		 */
+		if (num > 1 || (strcmp(buf.data, "_pq_.libpq_compression") != 0))
+		{
+			retval = 0;
+		}
 	}
 
 	/* neither -- server shouldn't have sent it */
 	if (!(their_version < conn->pversion) && !(num > 0))
+	{
 		libpq_append_conn_error(conn, "invalid %s message", "NegotiateProtocolVersion");
+		retval = 0;
+	}
 
 	termPQExpBuffer(&buf);
-	return 0;
+	return retval;
 }
 
 
@@ -1764,7 +1795,7 @@ pqGetCopyData3(PGconn *conn, char **buffer, int async)
 		if (msgLength == 0)
 		{
 			/* Don't block if async read requested */
-			if (async)
+			if (async && !pqReadPending(conn))
 				return 0;
 			/* Need to load more data */
 			if (pqWait(true, false, conn) ||
@@ -2247,6 +2278,46 @@ pqBuildStartupPacket3(PGconn *conn, int *packetlen,
 }
 
 /*
+ * Build semicolon-separated list of compression algorithms requested by client.
+ * It can be either explicitly specified by user in connection string, or
+ * include all algorithms supported by client library.
+ * This function returns true if the compression string is successfully parsed and
+ * stores a comma-separated list of algorithms in *client_compressors.
+ * If compression is disabled, then NULL is assigned to *client_compressors.
+ * Also it creates an array of compressor descriptors, each element of which corresponds to
+ * the corresponding algorithm name in *client_compressors list. This array is stored in PGconn
+ * and is used during handshake when a compression acknowledgment response is received from the server.
+ */
+static bool
+build_compressors_list(PGconn *conn, char **client_compressors, bool build_descriptors)
+{
+	pg_compress_specification compressors[COMPRESSION_ALGORITHM_COUNT];
+	size_t		n_compressors;
+
+	if (zpq_parse_compression_setting(conn->compression, compressors, &n_compressors) < 0)
+	{
+		return false;
+	}
+
+	*client_compressors = NULL;
+	if (build_descriptors)
+	{
+		memcpy(conn->compressors, compressors, sizeof(compressors));
+		conn->n_compressors = n_compressors;
+	}
+
+	if (n_compressors == 0)
+	{
+		/* no compressors available, return */
+		return true;
+	}
+
+	*client_compressors = zpq_serialize_compressors(compressors, n_compressors);
+
+	return true;
+}
+
+/*
  * Build a startup packet given a filled-in PGconn structure.
  *
  * We need to figure out how much space is needed, then fill it in.
@@ -2292,6 +2363,19 @@ build_startup_packet(const PGconn *conn, char *packet,
 		ADD_STARTUP_OPTION("replication", conn->replication);
 	if (conn->pgoptions && conn->pgoptions[0])
 		ADD_STARTUP_OPTION("options", conn->pgoptions);
+	if (conn->compression && conn->compression[0])
+	{
+		char	   *client_compression_algorithms;
+
+		if (build_compressors_list((PGconn *) conn, &client_compression_algorithms, packet == NULL))
+		{
+			if (client_compression_algorithms)
+			{
+				ADD_STARTUP_OPTION("_pq_.libpq_compression", client_compression_algorithms);
+				free(client_compression_algorithms);
+			}
+		}
+	}
 	if (conn->send_appname)
 	{
 		/* Use appname if present, otherwise use fallback */

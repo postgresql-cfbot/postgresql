@@ -63,7 +63,7 @@
 
 #define PqMsg_CopyDone				'c'
 #define PqMsg_CopyData				'd'
-
+#define PqMsg_CompressedMessage				'z'
 
 /* These are the authentication request codes sent by the backend. */
 

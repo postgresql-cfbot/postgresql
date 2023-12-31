@@ -68,10 +68,12 @@ extern int	StreamServerPort(int family, const char *hostName,
 							 unsigned short portNumber, const char *unixSocketDir,
 							 pgsocket ListenSocket[], int *NumListenSockets, int MaxListen);
 extern int	StreamConnection(pgsocket server_fd, Port *port);
+extern int	StreamSetupIo(Port *port);
 extern void StreamClose(pgsocket sock);
 extern void TouchSocketFiles(void);
 extern void RemoveSocketFiles(void);
 extern void pq_init(void);
+extern int	pq_configure(Port *port);
 extern int	pq_getbytes(char *s, size_t len);
 extern void pq_startmsgread(void);
 extern void pq_endmsgread(void);
@@ -104,11 +106,6 @@ extern int	secure_initialize(bool isServerStart);
 extern bool secure_loaded_verify_locations(void);
 extern void secure_destroy(void);
 extern int	secure_open_server(Port *port);
-extern void secure_close(Port *port);
-extern ssize_t secure_read(Port *port, void *ptr, size_t len);
-extern ssize_t secure_write(Port *port, void *ptr, size_t len);
-extern ssize_t secure_raw_read(Port *port, void *ptr, size_t len);
-extern ssize_t secure_raw_write(Port *port, const void *ptr, size_t len);
 
 /*
  * prototypes for functions in be-secure-gssapi.c

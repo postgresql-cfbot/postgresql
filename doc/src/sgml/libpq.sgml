@@ -1354,6 +1354,68 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       </listitem>
      </varlistentry>
 
+     <varlistentry id="libpq-connect-compression" xreflabel="compression">
+      <term><literal>compression</literal></term>
+      <listitem>
+      <para>
+        Request compression of libpq traffic. The client sends a request with
+        a list of compression algorithms. Compression can be requested by a client
+        by including the <literal>"compression"</literal> option in its connection string.
+        This can either be a boolean value to enable or disable compression
+        (<literal>"true"</literal>/<literal>"false"</literal>,
+        <literal>"on"</literal>/<literal>"off"</literal>,
+        <literal>"yes"</literal>/<literal>"no"</literal>,
+        <literal>"1"</literal>/<literal>"0"</literal>),
+        or an explicit list of semicolon-separated compression algorithms (<literal>"gzip;lz4:2"</literal>).
+        The default value is <literal>"off"</literal>.
+        If compression is enabled but an algorithm is not explicitly specified,
+        the client library sends its full list of supported algorithms.
+        The server sends its list of supported parameters in the <varname>libpq_compression</varname>
+        parameter.
+        Both the client and server will prefer the first algorithm in their list that is supported by
+        the other side.
+      </para>
+      <para>
+       The compression methods can be specified as <literal>gzip</literal>,
+       <literal>lz4</literal>, or <literal>zstd</literal>.
+       A compression detail string can optionally be specified.
+       If the detail string is an integer, it specifies the compression
+       level.  Otherwise, it should be a comma-separated list of items,
+       each of the form
+       <replaceable>keyword</replaceable> or
+       <replaceable>keyword=value</replaceable>.
+       Currently, the supported keywords are <literal>level</literal>,
+       <literal>compress</literal>, and <literal>decompress</literal>.
+       The detail string cannot be used when the compression method
+       is specified as a plain integer.
+       <literal>compress</literal> and <literal>decompress</literal>
+       both default to true, but can be set to false to allow using an algorithm for only compression or
+       only for decompression, which is most useful when enabling asymmetric compression.
+       e.g. to enable compression for server-to-client traffic but not client-to-server traffic,
+       you can set the parameter to <literal>"gzip:compress=false"</literal>.
+      </para>
+      <para>
+        After receiving a startup packet with <varname>_pq_.libpq_compression</varname> set, the
+        server can send CompressedData messages referencing any of the specified algorithms, for
+        server-to-client traffic compression.
+        After receiving a parameter status message with <varname>libpq_compression</varname> set,
+        the client can send CompressedData messages referencing any of the specified algorithms for
+        client-to-server traffic compression. (Note that if the client has not requested the
+        <varname>_pq_.libpq_compression</varname> protocol extension in the startup packet, the
+        server may reject all CompressedData messages even if <varname>libpq_compression</varname>
+        is non-empty.)
+      </para>
+      <para>
+        Support for compression algorithms must be enabled when the server is compiled.
+        Currently, three algorithms are supported: gzip (default), lz4 (if Postgres was
+        configured with --with-lz4 option), and zstd (if Postgres was configured with
+        --with-zstd option). In all cases, streaming mode is used.
+        Please note that using compression together with SSL may expose extra vulnerabilities:
+        <ulink url="https://en.wikipedia.org/wiki/CRIME">CRIME</ulink>
+      </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="libpq-connect-client-encoding" xreflabel="client_encoding">
       <term><literal>client_encoding</literal></term>
       <listitem>

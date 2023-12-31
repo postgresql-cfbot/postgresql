@@ -81,8 +81,17 @@ static int	PQssl_passwd_cb(char *buf, int size, int rwflag, void *userdata);
 static int	my_sock_read(BIO *h, char *buf, int size);
 static int	my_sock_write(BIO *h, const char *buf, int size);
 static BIO_METHOD *my_BIO_s_socket(void);
-static int	my_SSL_set_fd(PGconn *conn, int fd);
-
+static int	my_SSL_set_fd(SSL *ssl, int fd, IoStreamLayer * layer);
+static ssize_t pgtls_read(IoStreamLayer * self, PGconn *conn, void *ptr, size_t len, bool buffered_only);
+static int	pgtls_write(IoStreamLayer * self, PGconn *conn, void const *ptr, size_t len, size_t *bytes_written);
+static bool pgtls_read_pending(PGconn *conn);
+static void pgtls_close(PGconn *conn);
+IoStreamProcessor pgtls_processor = {
+	.read = (io_stream_read_func) pgtls_read,
+	.write = (io_stream_write_func) pgtls_write,
+	.buffered_read_data = (io_stream_predicate) pgtls_read_pending,
+	.destroy = (io_stream_consumer) pgtls_close
+};
 
 static bool pq_init_ssl_lib = true;
 static bool pq_init_crypto_lib = true;
@@ -141,8 +150,8 @@ pgtls_open_client(PGconn *conn)
 	return open_client_SSL(conn);
 }
 
-ssize_t
-pgtls_read(PGconn *conn, void *ptr, size_t len)
+static ssize_t
+pgtls_read(IoStreamLayer * self, PGconn *conn, void *ptr, size_t len, bool buffered_only)
 {
 	ssize_t		n;
 	int			result_errno = 0;
@@ -150,7 +159,19 @@ pgtls_read(PGconn *conn, void *ptr, size_t len)
 	int			err;
 	unsigned long ecode;
 
+	if (buffered_only)
+	{
+		/*
+		 * SSL_pending bytes are guaranteed to be available and readable
+		 * without blocking
+		 */
+		len = Min(len, SSL_pending(conn->ssl));
+		if (len == 0)
+			return 0;
+	}
+
 rloop:
+
 
 	/*
 	 * Prepare to call SSL_get_error() by clearing thread's OpenSSL error
@@ -257,14 +278,14 @@ rloop:
 	return n;
 }
 
-bool
+static bool
 pgtls_read_pending(PGconn *conn)
 {
 	return SSL_pending(conn->ssl) > 0;
 }
 
-ssize_t
-pgtls_write(PGconn *conn, const void *ptr, size_t len)
+static int
+pgtls_write(IoStreamLayer * self, PGconn *conn, const void *ptr, size_t len, size_t *bytes_written)
 {
 	ssize_t		n;
 	int			result_errno = 0;
@@ -360,7 +381,17 @@ pgtls_write(PGconn *conn, const void *ptr, size_t len)
 	/* ensure we return the intended errno to caller */
 	SOCK_ERRNO_SET(result_errno);
 
-	return n;
+
+	if (n >= 0)
+	{
+		*bytes_written = n;
+		return 0;
+	}
+	else
+	{
+		*bytes_written = 0;
+		return n;
+	}
 }
 
 char *
@@ -1211,7 +1242,8 @@ initialize_SSL(PGconn *conn)
 	 */
 	if (!(conn->ssl = SSL_new(SSL_context)) ||
 		!SSL_set_app_data(conn->ssl, conn) ||
-		!my_SSL_set_fd(conn, conn->sock))
+		!my_SSL_set_fd(conn->ssl, conn->sock,
+					   io_stream_add_layer(conn->io_stream, &pgtls_processor, conn)))
 	{
 		char	   *err = SSLerrmessage(ERR_get_error());
 
@@ -1613,7 +1645,7 @@ open_client_SSL(PGconn *conn)
 	return PGRES_POLLING_OK;
 }
 
-void
+static void
 pgtls_close(PGconn *conn)
 {
 	bool		destroy_needed = false;
@@ -1815,7 +1847,7 @@ PQsslAttribute(PGconn *conn, const char *attribute_name)
 
 /*
  * Private substitute BIO: this does the sending and receiving using
- * pqsecure_raw_write() and pqsecure_raw_read() instead, to allow those
+ * io_stream_next_write() and io_stream_next_read() instead, to allow those
  * functions to disable SIGPIPE and give better error messages on I/O errors.
  *
  * These functions are closely modelled on the standard socket BIO in OpenSSL;
@@ -1830,7 +1862,7 @@ my_sock_read(BIO *h, char *buf, int size)
 {
 	int			res;
 
-	res = pqsecure_raw_read((PGconn *) BIO_get_app_data(h), buf, size);
+	res = io_stream_next_read(BIO_get_app_data(h), buf, size, false);
 	BIO_clear_retry_flags(h);
 	if (res < 0)
 	{
@@ -1859,8 +1891,9 @@ static int
 my_sock_write(BIO *h, const char *buf, int size)
 {
 	int			res;
+	size_t		count;
 
-	res = pqsecure_raw_write((PGconn *) BIO_get_app_data(h), buf, size);
+	res = io_stream_next_write(BIO_get_app_data(h), buf, size, &count);
 	BIO_clear_retry_flags(h);
 	if (res < 0)
 	{
@@ -1882,7 +1915,7 @@ my_sock_write(BIO *h, const char *buf, int size)
 		}
 	}
 
-	return res;
+	return res == 0 ? count : res;
 }
 
 static BIO_METHOD *
@@ -1952,7 +1985,7 @@ err:
 
 /* This should exactly match OpenSSL's SSL_set_fd except for using my BIO */
 static int
-my_SSL_set_fd(PGconn *conn, int fd)
+my_SSL_set_fd(SSL *ssl, int fd, IoStreamLayer * layer)
 {
 	int			ret = 0;
 	BIO		   *bio;
@@ -1965,15 +1998,16 @@ my_SSL_set_fd(PGconn *conn, int fd)
 		goto err;
 	}
 	bio = BIO_new(bio_method);
+
 	if (bio == NULL)
 	{
 		SSLerr(SSL_F_SSL_SET_FD, ERR_R_BUF_LIB);
 		goto err;
 	}
-	BIO_set_app_data(bio, conn);
+	BIO_set_app_data(bio, layer);
 
-	SSL_set_bio(conn->ssl, bio, bio);
 	BIO_set_fd(bio, fd, BIO_NOCLOSE);
+	SSL_set_bio(ssl, bio, bio);
 	ret = 1;
 err:
 	return ret;

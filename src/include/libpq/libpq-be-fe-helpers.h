@@ -206,11 +206,14 @@ libpqsrv_connect_internal(PGconn *conn, uint32 wait_event_info)
 			else
 				io_flag = WL_SOCKET_WRITEABLE;
 
-			rc = WaitLatchOrSocket(MyLatch,
-								   WL_EXIT_ON_PM_DEATH | WL_LATCH_SET | io_flag,
-								   PQsocket(conn),
-								   0,
-								   wait_event_info);
+			if (PQreadPending(conn))
+				rc = WL_SOCKET_READABLE;
+			else
+				rc = WaitLatchOrSocket(MyLatch,
+										WL_EXIT_ON_PM_DEATH | WL_LATCH_SET | io_flag,
+										PQsocket(conn),
+										0,
+										wait_event_info);
 
 			/* Interrupted? */
 			if (rc & WL_LATCH_SET)

@@ -2649,7 +2649,7 @@ main(int argc, char **argv)
 			pg_fatal("unrecognized compression algorithm: \"%s\"",
 					 compression_algorithm);
 
-		parse_compress_specification(alg, compression_detail, &client_compress);
+		parse_compress_specification(alg, compression_detail, &client_compress, PG_COMPRESSION_OPTION_WORKERS | PG_COMPRESSION_OPTION_LONG_DISTANCE);
 		error_detail = validate_compress_specification(&client_compress);
 		if (error_detail != NULL)
 			pg_fatal("invalid compression specification: %s",

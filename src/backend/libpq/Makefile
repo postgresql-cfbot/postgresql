@@ -21,6 +21,7 @@ OBJS = \
 	be-fsstubs.o \
 	be-secure-common.o \
 	be-secure.o \
+	compression.o \
 	crypt.o \
 	hba.o \
 	ifaddr.o \

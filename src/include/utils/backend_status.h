@@ -146,6 +146,12 @@ typedef struct PgBackendStatus
 	/* application name; MUST be null-terminated */
 	char	   *st_appname;
 
+	/* client-server traffic information */
+	uint64		st_rx_socket_bytes;
+	uint64		st_tx_socket_bytes;
+	uint64		st_rx_pq_bytes;
+	uint64		st_tx_pq_bytes;
+
 	/*
 	 * Current command string; MUST be null-terminated. Note that this string
 	 * possibly is truncated in the middle of a multi-byte character. As
@@ -321,6 +327,10 @@ extern void pgstat_report_query_id(uint64 query_id, bool force);
 extern void pgstat_report_tempfile(size_t filesize);
 extern void pgstat_report_appname(const char *appname);
 extern void pgstat_report_xact_timestamp(TimestampTz tstamp);
+extern void pgstat_report_rx_socket_traffic(uint64 bytes);
+extern void pgstat_report_tx_socket_traffic(uint64 bytes);
+extern void pgstat_report_rx_pq_traffic(uint64 bytes);
+extern void pgstat_report_tx_pq_traffic(uint64 bytes);
 extern const char *pgstat_get_backend_current_activity(int pid, bool checkUser);
 extern const char *pgstat_get_crashed_backend_activity(int pid, char *buffer,
 													   int buflen);

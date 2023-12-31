@@ -7,6 +7,7 @@ backend_sources += files(
   'be-fsstubs.c',
   'be-secure-common.c',
   'be-secure.c',
+  'compression.c',
   'crypt.c',
   'hba.c',
   'ifaddr.c',

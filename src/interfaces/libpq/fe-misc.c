@@ -51,6 +51,8 @@
 #include "pg_config_paths.h"
 #include "port/pg_bswap.h"
 
+#include  <common/zpq_stream.h>
+
 static int	pqPutMsgBytes(const void *buf, size_t len, PGconn *conn);
 static int	pqSendSome(PGconn *conn, int len);
 static int	pqSocketCheck(PGconn *conn, int forRead, int forWrite,
@@ -614,10 +616,18 @@ pqReadData(PGconn *conn)
 
 	/* OK, try to read some data */
 retry3:
-	nread = pqsecure_read(conn, conn->inBuffer + conn->inEnd,
-						  conn->inBufSize - conn->inEnd);
+	nread = io_stream_read(conn->io_stream, conn->inBuffer + conn->inEnd,
+						   conn->inBufSize - conn->inEnd, false);
 	if (nread < 0)
 	{
+		if (nread == ZS_DECOMPRESS_ERROR)
+		{
+			printfPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("decompress error: %s\n"),
+							  zpq_decompress_error(conn->zpqStream));
+			return -1;
+		}
+
 		switch (SOCK_ERRNO)
 		{
 			case EINTR:
@@ -709,10 +719,18 @@ retry3:
 	 * arrived.
 	 */
 retry4:
-	nread = pqsecure_read(conn, conn->inBuffer + conn->inEnd,
-						  conn->inBufSize - conn->inEnd);
+	nread = io_stream_read(conn->io_stream, conn->inBuffer + conn->inEnd,
+						   conn->inBufSize - conn->inEnd, false);
 	if (nread < 0)
 	{
+		if (nread == ZS_DECOMPRESS_ERROR)
+		{
+			printfPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("decompress error: %s\n"),
+							  zpq_decompress_error(conn->zpqStream));
+			return -1;
+		}
+
 		switch (SOCK_ERRNO)
 		{
 			case EINTR:
@@ -822,12 +840,13 @@ pqSendSome(PGconn *conn, int len)
 	}
 
 	/* while there's still data to send */
-	while (len > 0)
+	while (len > 0 || io_stream_buffered_write_data(conn->io_stream))
 	{
-		int			sent;
+		size_t		sent;
+		int			rc;
 
 #ifndef WIN32
-		sent = pqsecure_write(conn, ptr, len);
+		rc = io_stream_write(conn->io_stream, ptr, len, &sent);
 #else
 
 		/*
@@ -835,10 +854,13 @@ pqSendSome(PGconn *conn, int len)
 		 * failure-point appears to be different in different versions of
 		 * Windows, but 64k should always be safe.
 		 */
-		sent = pqsecure_write(conn, ptr, Min(len, 65536));
+		rc = io_stream_write(conn->io_stream, ptr, Min(len, 65536), &sent);
 #endif
+		ptr += sent;
+		len -= sent;
+		remaining -= sent;
 
-		if (sent < 0)
+		if (rc < 0)
 		{
 			/* Anything except EAGAIN/EWOULDBLOCK/EINTR is trouble */
 			switch (SOCK_ERRNO)
@@ -878,14 +900,8 @@ pqSendSome(PGconn *conn, int len)
 						return -1;
 			}
 		}
-		else
-		{
-			ptr += sent;
-			len -= sent;
-			remaining -= sent;
-		}
 
-		if (len > 0)
+		if (len > 0 || rc < 0 || io_stream_buffered_write_data(conn->io_stream))
 		{
 			/*
 			 * We didn't send it all, wait till we can send more.
@@ -953,7 +969,7 @@ pqSendSome(PGconn *conn, int len)
 int
 pqFlush(PGconn *conn)
 {
-	if (conn->outCount > 0)
+	if (conn->outCount > 0 || io_stream_buffered_write_data(conn->io_stream))
 	{
 		if (conn->Pfdebug)
 			fflush(conn->Pfdebug);
@@ -978,6 +994,8 @@ pqFlush(PGconn *conn)
 int
 pqWait(int forRead, int forWrite, PGconn *conn)
 {
+	if (forRead && conn->inCursor < conn->inEnd)
+		return 0;
 	return pqWaitTimed(forRead, forWrite, conn, (time_t) -1);
 }
 
@@ -1032,8 +1050,9 @@ pqWriteReady(PGconn *conn)
  * or both.  Returns >0 if one or more conditions are met, 0 if it timed
  * out, -1 if an error occurred.
  *
- * If SSL is in use, the SSL buffer is checked prior to checking the socket
- * for read data directly.
+ * If protocol layers are using buffering, the buffers are checked prior
+ * to checking the socket for read data directly.
+ *
  */
 static int
 pqSocketCheck(PGconn *conn, int forRead, int forWrite, time_t end_time)
@@ -1048,14 +1067,11 @@ pqSocketCheck(PGconn *conn, int forRead, int forWrite, time_t end_time)
 		return -1;
 	}
 
-#ifdef USE_SSL
-	/* Check for SSL library buffering read bytes */
-	if (forRead && conn->ssl_in_use && pgtls_read_pending(conn))
+	if (forRead && io_stream_buffered_read_data(conn->io_stream))
 	{
 		/* short-circuit the select */
 		return 1;
 	}
-#endif
 
 	/* We will retry as long as we get EINTR */
 	do
@@ -1073,6 +1089,22 @@ pqSocketCheck(PGconn *conn, int forRead, int forWrite, time_t end_time)
 	return result;
 }
 
+/*
+ * Check if there is some data pending in stream buffers.
+ * Returns -1 on failure, 0 if no, 1 if yes.
+ */
+int
+pqReadPending(PGconn *conn)
+{
+	if (!conn)
+		return -1;
+
+	if (io_stream_buffered_read_data(conn->io_stream))
+		/* short-circuit the select */
+		return 1;
+
+	return 0;
+}
 
 /*
  * Check a file descriptor for read and/or write data, possibly waiting.

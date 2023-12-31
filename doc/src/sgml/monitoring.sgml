@@ -351,6 +351,15 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      </row>
 
      <row>
+      <entry><structname>pg_stat_network_traffic</structname><indexterm><primary>pg_stat_network_traffic</primary></indexterm></entry>
+      <entry>One row per connection (regular and replication), showing information about
+       network traffic of this connection.
+       See <link linkend="monitoring-pg-stat-network-traffic-view">
+       <structname>pg_stat_network_traffic</structname></link> for details.
+      </entry>
+     </row>
+
+     <row>
       <entry><structname>pg_stat_ssl</structname><indexterm><primary>pg_stat_ssl</primary></indexterm></entry>
       <entry>One row per connection (regular and replication), showing information about
        SSL used on this connection.
@@ -2168,6 +2177,97 @@ description | Waiting for a newly initialized WAL file to reach durable storage
       </para>
       <para>
        Time at which these statistics were last reset
+      </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+ </sect2>
+
+ <sect2 id="monitoring-pg-stat-network-traffic-view">
+  <title><structname>pg_stat_network_traffic</structname></title>
+
+  <indexterm>
+   <primary>pg_stat_network_traffic</primary>
+  </indexterm>
+
+  <para>
+   The <structname>pg_stat_network_traffic</structname> view will contain one row per
+   backend or WAL sender process, showing statistics about network traffic on
+   this connection. It can be joined to <structname>pg_stat_activity</structname>
+   or <structname>pg_stat_replication</structname> on the
+   <structfield>pid</structfield> column to get more details about the
+   connection.
+  </para>
+
+  <table id="pg-stat-network-traffic-view" xreflabel="pg_stat_network_traffic">
+   <title><structname>pg_stat_network_traffic</structname> View</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>pid</structfield> <type>integer</type>
+      </para>
+      <para>
+       Process ID of a backend or WAL sender process
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>rx_socket_bytes</structfield> <type>integer</type>
+      </para>
+      <para>
+       Number of bytes received from the underlying socket of this connection
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>tx_socket_bytes</structfield> <type>integer</type>
+      </para>
+      <para>
+       Number of bytes sent to the underlying socket of this connection
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>rx_pq_bytes</structfield> <type>integer</type>
+      </para>
+      <para>
+       Number of bytes of raw libpq traffic recieved from this connection.
+       This can be used to estimate the overhead of SSL, which will generally
+       make this number smaller than <structfield>rx_socket_bytes</structfield>,
+       and to estimate the compression ratio when using protocol compression,
+       as compression will generally make this number larger than
+       <structfield>rx_socket_bytes</structfield>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>tx_pq_bytes</structfield> <type>integer</type>
+      </para>
+      <para>
+       Number of bytes of raw libpq traffic sent through this connection.
+       This can be used to estimate the overhead of SSL, which will generally
+       make this number smaller than <structfield>tx_socket_bytes</structfield>,
+       and to estimate the compression ratio when using protocol compression,
+       as compression will generally make this number larger than
+       <structfield>tx_socket_bytes</structfield>.
       </para></entry>
      </row>
     </tbody>

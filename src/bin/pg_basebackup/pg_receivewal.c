@@ -803,7 +803,7 @@ main(int argc, char **argv)
 				 compression_algorithm_str);
 
 	parse_compress_specification(compression_algorithm, compression_detail,
-								 &compression_spec);
+								 &compression_spec, PG_COMPRESSION_OPTION_WORKERS | PG_COMPRESSION_OPTION_LONG_DISTANCE);
 	error_detail = validate_compress_specification(&compression_spec);
 	if (error_detail != NULL)
 		pg_fatal("invalid compression specification: %s",

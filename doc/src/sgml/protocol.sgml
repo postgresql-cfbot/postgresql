@@ -92,6 +92,15 @@
    such as <command>COPY</command>.
   </para>
 
+  <para>
+    The protocol supports compressing data to reduce traffic and speed-up client-server interaction.
+    Compression is especially useful for importing/exporting data to/from the database using the <literal>COPY</literal> command
+    and for replication (both physical and logical). Compression can also reduce the server's response time
+    for queries returning a large amount of data (for example, JSON, BLOBs, text, ...).
+    Currently, three algorithms are supported: DEFLATE (if PostgreSQL was built with zlib support),
+    LZ4 (if PostgreSQL was built with lz4 support), and ZStandard (if PostgresSQL was built with zstd support).
+  </para>
+
  <sect2 id="protocol-message-concepts">
   <title>Messaging Overview</title>
 
@@ -4213,6 +4222,55 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
        </listitem>
       </varlistentry>
      </variablelist>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="protocol-message-formats-CompressedData">
+    <term>CompressedData (F &amp; B)</term>
+    <listitem>
+    <para>
+
+     <variablelist>
+      <varlistentry>
+       <term>Byte1('z')</term>
+       <listitem>
+        <para>
+         Identifies the message as compressed data.
+        </para>
+       </listitem>
+      </varlistentry>
+      <varlistentry>
+       <term>Int32</term>
+       <listitem>
+        <para>
+         Length of message contents in bytes, including self.
+        </para>
+       </listitem>
+      </varlistentry>
+      <varlistentry>
+       <term>Int8</term>
+       <listitem>
+        <para>
+         Selected compression algorithm, as specified in the pg_compress_algorithm enum, or
+         <literal>0</literal> to continue using the decompression stream started in a previous
+         <literal>CompressedData</literal> message.  When processing a message with a non-zero
+         value for this parameter, the client must first restart the decompression stream.
+        </para>
+       </listitem>
+      </varlistentry>
+      <varlistentry>
+       <term>
+        Byte<replaceable>n</replaceable>
+       </term>
+       <listitem>
+        <para>
+         Compressed message data.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+
+    </para>
     </listitem>
    </varlistentry>
 

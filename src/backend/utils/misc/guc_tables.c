@@ -46,6 +46,7 @@
 #include "common/scram-common.h"
 #include "jit/jit.h"
 #include "libpq/auth.h"
+#include "libpq/compression.h"
 #include "libpq/libpq.h"
 #include "libpq/scram.h"
 #include "nodes/queryjumble.h"
@@ -4540,6 +4541,17 @@ struct config_string ConfigureNamesString[] =
 		&ssl_passphrase_command,
 		"",
 		NULL, NULL, NULL
+	},
+
+	{
+		{"libpq_compression", PGC_SIGHUP, CLIENT_CONN_OTHER,
+			gettext_noop("Sets the list of allowed libpq compression algorithms."),
+			NULL,
+			GUC_REPORT
+		},
+		&libpq_compress_algorithms,
+		"on",
+		check_libpq_compression, assign_libpq_compression, NULL
 	},
 
 	{

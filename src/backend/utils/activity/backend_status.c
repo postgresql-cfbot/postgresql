@@ -338,6 +338,9 @@ pgstat_bestart(void)
 	lbeentry.st_xact_start_timestamp = 0;
 	lbeentry.st_databaseid = MyDatabaseId;
 
+	lbeentry.st_rx_socket_bytes = lbeentry.st_tx_socket_bytes =
+		lbeentry.st_rx_pq_bytes = lbeentry.st_tx_pq_bytes = 0;
+
 	/* We have userid for client-backends, wal-sender and bgworker processes */
 	if (lbeentry.st_backendType == B_BACKEND
 		|| lbeentry.st_backendType == B_WAL_SENDER
@@ -713,6 +716,89 @@ pgstat_report_xact_timestamp(TimestampTz tstamp)
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
 
 	beentry->st_xact_start_timestamp = tstamp;
+
+	PGSTAT_END_WRITE_ACTIVITY(beentry);
+}
+
+/*
+ * Report network raw or compressed tx/rx traffic as the specified values.
+ */
+void
+pgstat_report_rx_socket_traffic(uint64 bytes)
+{
+	volatile PgBackendStatus *beentry = MyBEEntry;
+
+	if (!pgstat_track_activities || !beentry)
+		return;
+
+	/*
+	 * Update my status entry, following the protocol of bumping
+	 * st_changecount before and after.  We use a volatile pointer here to
+	 * ensure the compiler doesn't try to get cute.
+	 */
+	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
+
+	beentry->st_rx_socket_bytes += bytes;
+
+	PGSTAT_END_WRITE_ACTIVITY(beentry);
+}
+
+void
+pgstat_report_tx_socket_traffic(uint64 bytes)
+{
+	volatile PgBackendStatus *beentry = MyBEEntry;
+
+	if (!pgstat_track_activities || !beentry)
+		return;
+
+	/*
+	 * Update my status entry, following the protocol of bumping
+	 * st_changecount before and after.  We use a volatile pointer here to
+	 * ensure the compiler doesn't try to get cute.
+	 */
+	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
+
+	beentry->st_tx_socket_bytes += bytes;
+
+	PGSTAT_END_WRITE_ACTIVITY(beentry);
+}
+
+void
+pgstat_report_rx_pq_traffic(uint64 bytes)
+{
+	volatile PgBackendStatus *beentry = MyBEEntry;
+
+	if (!pgstat_track_activities || !beentry)
+		return;
+
+	/*
+	 * Update my status entry, following the protocol of bumping
+	 * st_changecount before and after.  We use a volatile pointer here to
+	 * ensure the compiler doesn't try to get cute.
+	 */
+	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
+
+	beentry->st_rx_pq_bytes += bytes;
+
+	PGSTAT_END_WRITE_ACTIVITY(beentry);
+}
+
+void
+pgstat_report_tx_pq_traffic(uint64 bytes)
+{
+	volatile PgBackendStatus *beentry = MyBEEntry;
+
+	if (!pgstat_track_activities || !beentry)
+		return;
+
+	/*
+	 * Update my status entry, following the protocol of bumping
+	 * st_changecount before and after.  We use a volatile pointer here to
+	 * ensure the compiler doesn't try to get cute.
+	 */
+	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
+
+	beentry->st_tx_pq_bytes += bytes;
 
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }

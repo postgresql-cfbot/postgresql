@@ -53,6 +53,9 @@ typedef struct
 #endif
 #endif							/* ENABLE_SSPI */
 
+#include <common/zpq_stream.h>
+
+#include "common/io_stream.h"
 #include "datatype/timestamp.h"
 #include "libpq/hba.h"
 #include "libpq/pqcomm.h"
@@ -145,8 +148,11 @@ typedef struct ClientConnectionInfo
 
 typedef struct Port
 {
+	IoStream   *io_stream;
 	pgsocket	sock;			/* File descriptor */
 	bool		noblock;		/* is the socket in non-blocking mode? */
+	int			waitfor;		/* Events to wait on the socket for after
+								 * attempted read/write */
 	ProtocolVersion proto;		/* FE/BE protocol version */
 	SockAddr	laddr;			/* local addr (postmaster) */
 	SockAddr	raddr;			/* remote addr (client) */
@@ -157,6 +163,7 @@ typedef struct Port
 	int			remote_hostname_errcode;	/* see above */
 	char	   *remote_port;	/* text rep of remote port */
 	CAC_state	canAcceptConnections;	/* postmaster connection status */
+	ZpqStream  *zpq_stream;		/* streaming compression state */
 
 	/*
 	 * Information that needs to be saved from the startup packet and passed
@@ -275,21 +282,6 @@ extern void be_tls_destroy(void);
 extern int	be_tls_open_server(Port *port);
 
 /*
- * Close SSL connection.
- */
-extern void be_tls_close(Port *port);
-
-/*
- * Read data from a secure connection.
- */
-extern ssize_t be_tls_read(Port *port, void *ptr, size_t len, int *waitfor);
-
-/*
- * Write data to a secure connection.
- */
-extern ssize_t be_tls_write(Port *port, void *ptr, size_t len, int *waitfor);
-
-/*
  * Return information about the SSL connection.
  */
 extern int	be_tls_get_cipher_bits(Port *port);
@@ -324,10 +316,6 @@ extern bool be_gssapi_get_auth(Port *port);
 extern bool be_gssapi_get_enc(Port *port);
 extern const char *be_gssapi_get_princ(Port *port);
 extern bool be_gssapi_get_delegation(Port *port);
-
-/* Read and write to a GSSAPI-encrypted connection. */
-extern ssize_t be_gssapi_read(Port *port, void *ptr, size_t len);
-extern ssize_t be_gssapi_write(Port *port, void *ptr, size_t len);
 #endif							/* ENABLE_GSS */
 
 extern PGDLLIMPORT ProtocolVersion FrontendProtocol;

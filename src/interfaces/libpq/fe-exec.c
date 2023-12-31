@@ -1185,6 +1185,15 @@ pqSaveParameterStatus(PGconn *conn, const char *name, const char *value)
 	{
 		conn->scram_sha_256_iterations = atoi(value);
 	}
+	else if (strcmp(name, "libpq_compression") == 0)
+	{
+		if (conn->server_compression)
+		{
+			free(conn->server_compression);
+		}
+		conn->server_compression = strdup(value);
+		pqConfigureCompression(conn, value);
+	}
 }
 
 
@@ -3960,6 +3969,12 @@ pqPipelineFlush(PGconn *conn)
 		(conn->outCount >= OUTBUFFER_THRESHOLD))
 		return pqFlush(conn);
 	return 0;
+}
+
+int
+PQreadPending(PGconn *conn)
+{
+	return pqReadPending(conn);
 }
 
 

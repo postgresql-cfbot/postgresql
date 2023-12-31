@@ -74,6 +74,9 @@
 					# (change requires restart)
 #bonjour_name = ''			# defaults to the computer name
 					# (change requires restart)
+#libpq_compression = on    # on to allow all supported compression
+                    # methods; off to disable all compression;
+                    # semicolon separated list of algorithms to allow some
 
 # - TCP settings -
 # see "man tcp" for details

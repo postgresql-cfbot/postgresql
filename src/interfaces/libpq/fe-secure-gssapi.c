@@ -69,6 +69,13 @@
 #define PqGSSResultNext (conn->gss_ResultNext)
 #define PqGSSMaxPktSize (conn->gss_MaxPktSize)
 
+static ssize_t pg_GSS_read(IoStreamLayer * self, PGconn *conn, void *ptr, size_t len, bool buffered_only);
+static int	pg_GSS_write(IoStreamLayer * self, PGconn *conn, const void *ptr, size_t len, size_t *bytes_written);
+
+IoStreamProcessor pg_GSS_processor = {
+	.read = (io_stream_read_func) pg_GSS_read,
+	.write = (io_stream_write_func) pg_GSS_write
+};
 
 /*
  * Attempt to write len bytes of data from ptr to a GSSAPI-encrypted connection.
@@ -82,8 +89,8 @@
  * For retryable errors, caller should call again (passing the same or more
  * data) once the socket is ready.
  */
-ssize_t
-pg_GSS_write(PGconn *conn, const void *ptr, size_t len)
+static int
+pg_GSS_write(IoStreamLayer * self, PGconn *conn, const void *ptr, size_t len, size_t *bytes_written)
 {
 	OM_uint32	major,
 				minor;
@@ -93,6 +100,8 @@ pg_GSS_write(PGconn *conn, const void *ptr, size_t len)
 	size_t		bytes_to_encrypt;
 	size_t		bytes_encrypted;
 	gss_ctx_id_t gctx = conn->gctx;
+
+	*bytes_written = 0;
 
 	/*
 	 * When we get a retryable failure, we must not tell the caller we have
@@ -124,7 +133,7 @@ pg_GSS_write(PGconn *conn, const void *ptr, size_t len)
 
 	/*
 	 * Loop through encrypting data and sending it out until it's all done or
-	 * pqsecure_raw_write() complains (which would likely mean that the socket
+	 * io_stream_next_write() complains (which would likely mean that the socket
 	 * is non-blocking and the requested send() would block, or there was some
 	 * kind of actual error).
 	 */
@@ -141,20 +150,21 @@ pg_GSS_write(PGconn *conn, const void *ptr, size_t len)
 		 */
 		if (PqGSSSendLength)
 		{
-			ssize_t		retval;
+			int			retval;
+			size_t		count;
 			ssize_t		amount = PqGSSSendLength - PqGSSSendNext;
 
-			retval = pqsecure_raw_write(conn, PqGSSSendBuffer + PqGSSSendNext, amount);
-			if (retval <= 0)
+			retval = io_stream_next_write(self, PqGSSSendBuffer + PqGSSSendNext, amount, &count);
+			if (retval < 0 || count == 0)
 				return retval;
 
 			/*
 			 * Check if this was a partial write, and if so, move forward that
 			 * far in our buffer and try again.
 			 */
-			if (retval < amount)
+			if (count < amount)
 			{
-				PqGSSSendNext += retval;
+				PqGSSSendNext += count;
 				continue;
 			}
 
@@ -235,7 +245,8 @@ pg_GSS_write(PGconn *conn, const void *ptr, size_t len)
 	/* We're reporting all the data as sent, so reset PqGSSSendConsumed. */
 	PqGSSSendConsumed = 0;
 
-	ret = bytes_encrypted;
+	ret = 0;
+	*bytes_written = bytes_encrypted;
 
 cleanup:
 	/* Release GSSAPI buffer storage, if we didn't already */
@@ -255,8 +266,8 @@ cleanup:
  * error, a message is added to conn->errorMessage.  For retryable errors,
  * caller should call again once the socket is ready.
  */
-ssize_t
-pg_GSS_read(PGconn *conn, void *ptr, size_t len)
+static ssize_t
+pg_GSS_read(IoStreamLayer * self, PGconn *conn, void *ptr, size_t len, bool buffered_only)
 {
 	OM_uint32	major,
 				minor;
@@ -265,6 +276,9 @@ pg_GSS_read(PGconn *conn, void *ptr, size_t len)
 	ssize_t		ret;
 	size_t		bytes_returned = 0;
 	gss_ctx_id_t gctx = conn->gctx;
+
+	if (buffered_only)
+		return 0;
 
 	/*
 	 * The plan here is to read one incoming encrypted packet into
@@ -322,10 +336,10 @@ pg_GSS_read(PGconn *conn, void *ptr, size_t len)
 		/* Collect the length if we haven't already */
 		if (PqGSSRecvLength < sizeof(uint32))
 		{
-			ret = pqsecure_raw_read(conn, PqGSSRecvBuffer + PqGSSRecvLength,
-									sizeof(uint32) - PqGSSRecvLength);
+			ret = io_stream_next_read(self, PqGSSRecvBuffer + PqGSSRecvLength,
+									  sizeof(uint32) - PqGSSRecvLength, false);
 
-			/* If ret <= 0, pqsecure_raw_read already set the correct errno */
+			/* If ret <= 0, io_stream_next_read already set the correct errno */
 			if (ret <= 0)
 				return ret;
 
@@ -355,9 +369,9 @@ pg_GSS_read(PGconn *conn, void *ptr, size_t len)
 		 * Read as much of the packet as we are able to on this call into
 		 * wherever we left off from the last time we were called.
 		 */
-		ret = pqsecure_raw_read(conn, PqGSSRecvBuffer + PqGSSRecvLength,
-								input.length - (PqGSSRecvLength - sizeof(uint32)));
-		/* If ret <= 0, pqsecure_raw_read already set the correct errno */
+		ret = io_stream_next_read(self, PqGSSRecvBuffer + PqGSSRecvLength,
+								  input.length - (PqGSSRecvLength - sizeof(uint32)), false);
+		/* If ret <= 0, io_stream_next_read already set the correct errno */
 		if (ret <= 0)
 			return ret;
 
@@ -418,16 +432,17 @@ cleanup:
 }
 
 /*
- * Simple wrapper for reading from pqsecure_raw_read.
+ * Simple wrapper for reading from io_stream_read. Only used during connecition setup
+ * before GSS is added to the io_stream.
  *
- * This takes the same arguments as pqsecure_raw_read, plus an output parameter
+ * This takes the same arguments as io_stream_read, plus an output parameter
  * to return the number of bytes read.  This handles if blocking would occur and
  * if we detect EOF on the connection.
  */
 static PostgresPollingStatusType
 gss_read(PGconn *conn, void *recv_buffer, size_t length, ssize_t *ret)
 {
-	*ret = pqsecure_raw_read(conn, recv_buffer, length);
+	*ret = io_stream_read(conn->io_stream, recv_buffer, length, false);
 	if (*ret < 0)
 	{
 		if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
@@ -447,7 +462,7 @@ gss_read(PGconn *conn, void *recv_buffer, size_t length, ssize_t *ret)
 		if (!result)
 			return PGRES_POLLING_READING;
 
-		*ret = pqsecure_raw_read(conn, recv_buffer, length);
+		*ret = io_stream_read(conn->io_stream, recv_buffer, length, false);
 		if (*ret < 0)
 		{
 			if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
@@ -506,8 +521,9 @@ pqsecure_open_gss(PGconn *conn)
 	if (PqGSSSendLength)
 	{
 		ssize_t		amount = PqGSSSendLength - PqGSSSendNext;
+		size_t		count;
 
-		ret = pqsecure_raw_write(conn, PqGSSSendBuffer + PqGSSSendNext, amount);
+		ret = io_stream_write(conn->io_stream, PqGSSSendBuffer + PqGSSSendNext, amount, &count);
 		if (ret < 0)
 		{
 			if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
@@ -516,7 +532,7 @@ pqsecure_open_gss(PGconn *conn)
 				return PGRES_POLLING_FAILED;
 		}
 
-		if (ret < amount)
+		if (count < amount)
 		{
 			PqGSSSendNext += ret;
 			return PGRES_POLLING_WRITING;
@@ -662,6 +678,8 @@ pqsecure_open_gss(PGconn *conn)
 		 */
 		conn->gssenc = true;
 		conn->gssapi_used = true;
+		io_stream_add_layer(conn->io_stream, &pg_GSS_processor, conn);
+
 
 		/* Clean up */
 		gss_release_cred(&minor, &conn->gcred);

@@ -31,6 +31,7 @@
  * setup/teardown:
  *		StreamServerPort	- Open postmaster's server port
  *		StreamConnection	- Create new connection with client
+ *		StreamSetupIo			- Configures IO stream on connection
  *		StreamClose			- Close a client/backend connection
  *		TouchSocketFiles	- Protect socket files against /tmp cleaners
  *		pq_init			- initialize libpq at backend startup
@@ -60,6 +61,7 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <grp.h>
+#include <pgstat.h>
 #include <unistd.h>
 #include <sys/file.h>
 #include <sys/socket.h>
@@ -74,12 +76,18 @@
 #endif
 
 #include "common/ip.h"
+#include "common/io_stream.h"
+#include "common/zpq_stream.h"
 #include "libpq/libpq.h"
+#include "libpq/pqformat.h"
 #include "miscadmin.h"
 #include "port/pg_bswap.h"
 #include "storage/ipc.h"
+#include "tcop/tcopprot.h"
 #include "utils/guc_hooks.h"
 #include "utils/memutils.h"
+#include "utils/wait_event.h"
+#include "utils/builtins.h"
 
 /*
  * Cope with the various platform-specific ways to spell TCP keepalive socket
@@ -146,6 +154,15 @@ static int	socket_putmessage(char msgtype, const char *s, size_t len);
 static void socket_putmessage_noblock(char msgtype, const char *s, size_t len);
 static int	internal_putbytes(const char *s, size_t len);
 static int	internal_flush(void);
+static ssize_t socket_read(IoStreamLayer * self, Port *port, void *ptr, size_t len, bool buffered_only);
+static int	socket_write(IoStreamLayer * self, Port *port, void const *ptr, size_t len, size_t *bytes_written);
+static ssize_t io_read_with_wait(Port *port, void *ptr, size_t len);
+static int	io_write_with_wait(Port *port, char const *ptr, size_t len, size_t *bytes_written);
+
+IoStreamProcessor socket_processor = {
+	.read = (io_stream_read_func) socket_read,
+	.write = (io_stream_write_func) socket_write
+};
 
 static int	Lock_AF_UNIX(const char *unixSocketDir, const char *unixSocketPath);
 static int	Setup_AF_UNIX(const char *sock_path);
@@ -277,7 +294,8 @@ socket_close(int code, Datum arg)
 		 * Cleanly shut down SSL layer.  Nowhere else does a postmaster child
 		 * call this, so this is safe when interrupting BackendInitialize().
 		 */
-		secure_close(MyProcPort);
+		io_stream_destroy(MyProcPort->io_stream);
+		MyProcPort->io_stream = NULL;
 
 		/*
 		 * Formerly we did an explicit close() here, but it seems better to
@@ -817,6 +835,30 @@ StreamConnection(pgsocket server_fd, Port *port)
 	return STATUS_OK;
 }
 
+/* This must be called after the child process is launched or the data structures
+ * do not comre across correctly
+ */
+int
+StreamSetupIo(Port *port)
+{
+	if (port->io_stream)
+	{
+		ereport(LOG,
+				(errmsg("%s() failed: io_stream already configured", "io_stream_create")));
+		return STATUS_ERROR;
+	}
+	port->io_stream = io_stream_create();
+	if (!port->io_stream)
+	{
+		ereport(LOG,
+				(errmsg("%s() failed: %m", "io_stream_create")));
+		return STATUS_ERROR;
+	}
+	io_stream_add_layer(port->io_stream, &socket_processor, port);
+
+	return STATUS_OK;
+}
+
 /*
  * StreamClose -- close a client/backend connection
  *
@@ -905,14 +947,210 @@ socket_set_nonblocking(bool nonblocking)
 	MyProcPort->noblock = nonblocking;
 }
 
+static ssize_t
+socket_read(IoStreamLayer * self, Port *port, void *ptr, size_t len, bool buffered_only)
+{
+	ssize_t		n;
+
+	if (buffered_only)
+		return 0;
+
+	/*
+	 * Try to read from the socket without blocking. If it succeeds we're
+	 * done, otherwise we'll wait for the socket using the latch mechanism.
+	 */
+#ifdef WIN32
+	pgwin32_noblock = true;
+#endif
+	n = recv(port->sock, ptr, len, 0);
+#ifdef WIN32
+	pgwin32_noblock = false;
+#endif
+	if (n > 0)
+		pgstat_report_rx_socket_traffic(n);
+
+	return n;
+}
+
+static int
+socket_write(IoStreamLayer * self, Port *port, const void *ptr, size_t len, size_t *bytes_written)
+{
+	ssize_t		n;
+
+#ifdef WIN32
+	pgwin32_noblock = true;
+#endif
+	n = send(port->sock, ptr, len, 0);
+#ifdef WIN32
+	pgwin32_noblock = false;
+#endif
+	if (n > 0)
+		pgstat_report_tx_socket_traffic(n);
+
+	if (n >= 0)
+	{
+		*bytes_written = n;
+		return 0;
+	}
+	else
+	{
+		*bytes_written = 0;
+		return n;
+	}
+}
+
+/*
+ *	Read protocol-level data, processed through any intermediate streams like TLS
+ */
+static ssize_t
+io_read_with_wait(Port *port, void *ptr, size_t len)
+{
+	ssize_t		n;
+
+	/* Deal with any already-pending interrupt condition. */
+	ProcessClientReadInterrupt(false);
+
+retry:
+	port->waitfor = WL_SOCKET_READABLE;
+	n = io_stream_read(port->io_stream, ptr, len, false);
+	if (n > 0)
+		pgstat_report_rx_pq_traffic(n);
+
+	/* In blocking mode, wait until the socket is ready */
+	if (n < 0 && !port->noblock && (errno == EWOULDBLOCK || errno == EAGAIN))
+	{
+		WaitEvent	event;
+
+		Assert(port->waitfor);
+
+		ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetSocketPos, port->waitfor, NULL);
+
+		WaitEventSetWait(FeBeWaitSet, -1 /* no timeout */ , &event, 1,
+						 WAIT_EVENT_CLIENT_READ);
+
+		/*
+		 * If the postmaster has died, it's not safe to continue running,
+		 * because it is the postmaster's job to kill us if some other backend
+		 * exits uncleanly.  Moreover, we won't run very well in this state;
+		 * helper processes like walwriter and the bgwriter will exit, so
+		 * performance may be poor.  Finally, if we don't exit, pg_ctl will be
+		 * unable to restart the postmaster without manual intervention, so no
+		 * new connections can be accepted.  Exiting clears the deck for a
+		 * postmaster restart.
+		 *
+		 * (Note that we only make this check when we would otherwise sleep on
+		 * our latch.  We might still continue running for a while if the
+		 * postmaster is killed in mid-query, or even through multiple queries
+		 * if we never have to wait for read.  We don't want to burn too many
+		 * cycles checking for this very rare condition, and this should cause
+		 * us to exit quickly in most cases.)
+		 */
+		if (event.events & WL_POSTMASTER_DEATH)
+			ereport(FATAL,
+					(errcode(ERRCODE_ADMIN_SHUTDOWN),
+					 errmsg("terminating connection due to unexpected postmaster exit")));
+
+		/* Handle interrupt. */
+		if (event.events & WL_LATCH_SET)
+		{
+			ResetLatch(MyLatch);
+			ProcessClientReadInterrupt(true);
+
+			/*
+			 * We'll retry the read. Most likely it will return immediately
+			 * because there's still no data available, and we'll wait for the
+			 * socket to become ready again.
+			 */
+		}
+		goto retry;
+	}
+
+	/*
+	 * Process interrupts that happened during a successful (or non-blocking,
+	 * or hard-failed) read.
+	 */
+	ProcessClientReadInterrupt(false);
+
+	return n;
+}
+
+
+/*
+ *	Write protocol-level data to be processed through any intermediate streams like TLS
+ */
+static int
+io_write_with_wait(Port *port, char const *ptr, size_t len, size_t *bytes_processed)
+{
+	int			rc;
+	size_t		count = 0;
+
+	*bytes_processed = 0;
+
+	/* Deal with any already-pending interrupt condition. */
+	ProcessClientWriteInterrupt(false);
+
+retry:
+	port->waitfor = WL_SOCKET_WRITEABLE;
+
+	/*
+	 * on retry it is possible some of the input will have already been
+	 * processed, so make sure we offset our retries
+	 */
+	rc = io_stream_write(port->io_stream, ptr + *bytes_processed, len - *bytes_processed, &count);
+	*bytes_processed += count;
+	if (count > 0)
+		pgstat_report_tx_pq_traffic(count);
+
+	if (rc < 0 && !port->noblock && (errno == EWOULDBLOCK || errno == EAGAIN))
+	{
+		WaitEvent	event;
+
+		Assert(port->waitfor);
+
+		ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetSocketPos, port->waitfor, NULL);
+
+		WaitEventSetWait(FeBeWaitSet, -1 /* no timeout */ , &event, 1,
+						 WAIT_EVENT_CLIENT_WRITE);
+
+		/* See comments in secure_read. */
+		if (event.events & WL_POSTMASTER_DEATH)
+			ereport(FATAL,
+					(errcode(ERRCODE_ADMIN_SHUTDOWN),
+					 errmsg("terminating connection due to unexpected postmaster exit")));
+
+		/* Handle interrupt. */
+		if (event.events & WL_LATCH_SET)
+		{
+			ResetLatch(MyLatch);
+			ProcessClientWriteInterrupt(true);
+
+			/*
+			 * We'll retry the write. Most likely it will return immediately
+			 * because there's still no buffer space available, and we'll wait
+			 * for the socket to become ready again.
+			 */
+		}
+		goto retry;
+	}
+
+	/*
+	 * Process interrupts that happened during a successful (or non-blocking,
+	 * or hard-failed) write.
+	 */
+	ProcessClientWriteInterrupt(false);
+
+	return rc;
+}
+
 /* --------------------------------
  *		pq_recvbuf - load some bytes into the input buffer
  *
- *		returns 0 if OK, EOF if trouble
+ *      nowait parameter toggles non-blocking mode.
+ *		returns number of read bytes, EOF if trouble
  * --------------------------------
  */
 static int
-pq_recvbuf(void)
+pq_recvbuf(bool nowait)
 {
 	if (PqRecvPointer > 0)
 	{
@@ -928,8 +1166,8 @@ pq_recvbuf(void)
 			PqRecvLength = PqRecvPointer = 0;
 	}
 
-	/* Ensure that we're in blocking mode */
-	socket_set_nonblocking(false);
+	/* Ensure that we're in the appropriate mode */
+	socket_set_nonblocking(nowait);
 
 	/* Can fill buffer from PqRecvLength and upwards */
 	for (;;)
@@ -938,13 +1176,27 @@ pq_recvbuf(void)
 
 		errno = 0;
 
-		r = secure_read(MyProcPort, PqRecvBuffer + PqRecvLength,
-						PQ_RECV_BUFFER_SIZE - PqRecvLength);
+		r = io_read_with_wait(MyProcPort, PqRecvBuffer + PqRecvLength,
+							  PQ_RECV_BUFFER_SIZE - PqRecvLength);
 
 		if (r < 0)
 		{
+			if (r == ZS_DECOMPRESS_ERROR)
+			{
+				char const *msg = zpq_decompress_error(MyProcPort->zpq_stream);
+
+				if (msg == NULL)
+					msg = "end of stream";
+				ereport(COMMERROR,
+						(errcode_for_socket_access(),
+						 errmsg("failed to decompress data: %s", msg)));
+				return EOF;
+			}
 			if (errno == EINTR)
 				continue;		/* Ok if interrupted */
+
+			if (nowait && (errno == EAGAIN || errno == EWOULDBLOCK))
+				return 0;
 
 			/*
 			 * Careful: an ereport() that tries to write to the client would
@@ -969,7 +1221,7 @@ pq_recvbuf(void)
 		}
 		/* r contains number of bytes read, so just incr length */
 		PqRecvLength += r;
-		return 0;
+		return r;
 	}
 }
 
@@ -984,7 +1236,8 @@ pq_getbyte(void)
 
 	while (PqRecvPointer >= PqRecvLength)
 	{
-		if (pq_recvbuf())		/* If nothing in buffer, then recv some */
+		if (pq_recvbuf(false) == EOF)	/* If nothing in buffer, then recv
+										 * some */
 			return EOF;			/* Failed to recv data */
 	}
 	return (unsigned char) PqRecvBuffer[PqRecvPointer++];
@@ -1003,7 +1256,8 @@ pq_peekbyte(void)
 
 	while (PqRecvPointer >= PqRecvLength)
 	{
-		if (pq_recvbuf())		/* If nothing in buffer, then recv some */
+		if (pq_recvbuf(false) == EOF)	/* If nothing in buffer, then recv
+										 * some */
 			return EOF;			/* Failed to recv data */
 	}
 	return (unsigned char) PqRecvBuffer[PqRecvPointer];
@@ -1024,47 +1278,10 @@ pq_getbyte_if_available(unsigned char *c)
 
 	Assert(PqCommReadingMsg);
 
-	if (PqRecvPointer < PqRecvLength)
+	if (PqRecvPointer < PqRecvLength || (r = pq_recvbuf(true)) > 0)
 	{
 		*c = PqRecvBuffer[PqRecvPointer++];
 		return 1;
-	}
-
-	/* Put the socket into non-blocking mode */
-	socket_set_nonblocking(true);
-
-	errno = 0;
-
-	r = secure_read(MyProcPort, c, 1);
-	if (r < 0)
-	{
-		/*
-		 * Ok if no data available without blocking or interrupted (though
-		 * EINTR really shouldn't happen with a non-blocking socket). Report
-		 * other errors.
-		 */
-		if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
-			r = 0;
-		else
-		{
-			/*
-			 * Careful: an ereport() that tries to write to the client would
-			 * cause recursion to here, leading to stack overflow and core
-			 * dump!  This message must go *only* to the postmaster log.
-			 *
-			 * If errno is zero, assume it's EOF and let the caller complain.
-			 */
-			if (errno != 0)
-				ereport(COMMERROR,
-						(errcode_for_socket_access(),
-						 errmsg("could not receive data from client: %m")));
-			r = EOF;
-		}
-	}
-	else if (r == 0)
-	{
-		/* EOF detected */
-		r = EOF;
 	}
 
 	return r;
@@ -1087,7 +1304,8 @@ pq_getbytes(char *s, size_t len)
 	{
 		while (PqRecvPointer >= PqRecvLength)
 		{
-			if (pq_recvbuf())	/* If nothing in buffer, then recv some */
+			if (pq_recvbuf(false) == EOF)	/* If nothing in buffer, then recv
+											 * some */
 				return EOF;		/* Failed to recv data */
 		}
 		amount = PqRecvLength - PqRecvPointer;
@@ -1121,7 +1339,8 @@ pq_discardbytes(size_t len)
 	{
 		while (PqRecvPointer >= PqRecvLength)
 		{
-			if (pq_recvbuf())	/* If nothing in buffer, then recv some */
+			if (pq_recvbuf(false) == EOF)	/* If nothing in buffer, then recv
+											 * some */
 				return EOF;		/* Failed to recv data */
 		}
 		amount = PqRecvLength - PqRecvPointer;
@@ -1349,13 +1568,17 @@ internal_flush(void)
 	char	   *bufptr = PqSendBuffer + PqSendStart;
 	char	   *bufend = PqSendBuffer + PqSendPointer;
 
-	while (bufptr < bufend)
+	while (bufptr < bufend || io_stream_buffered_write_data(MyProcPort->io_stream) != 0)
 	{
-		int			r;
+		int			rc;
+		size_t		bytes_sent;
+		size_t		available = bufend - bufptr;
 
-		r = secure_write(MyProcPort, bufptr, bufend - bufptr);
+		rc = io_write_with_wait(MyProcPort, bufptr, available, &bytes_sent);
+		bufptr += bytes_sent;
+		PqSendStart += bytes_sent;
 
-		if (r <= 0)
+		if (rc < 0 || (bytes_sent == 0 && available))
 		{
 			if (errno == EINTR)
 				continue;		/* Ok if we were interrupted */
@@ -1396,12 +1619,11 @@ internal_flush(void)
 			PqSendStart = PqSendPointer = 0;
 			ClientConnectionLost = 1;
 			InterruptPending = 1;
+			io_stream_reset_write_state(MyProcPort->io_stream);
 			return EOF;
 		}
 
 		last_reported_send_errno = 0;	/* reset after any successful send */
-		bufptr += r;
-		PqSendStart += r;
 	}
 
 	PqSendStart = PqSendPointer = 0;
@@ -1420,7 +1642,7 @@ socket_flush_if_writable(void)
 	int			res;
 
 	/* Quick exit if nothing to do */
-	if (PqSendPointer == PqSendStart)
+	if ((PqSendPointer == PqSendStart) && (io_stream_buffered_write_data(MyProcPort->io_stream) == 0))
 		return 0;
 
 	/* No-op if reentrant call */
@@ -1443,7 +1665,7 @@ socket_flush_if_writable(void)
 static bool
 socket_is_send_pending(void)
 {
-	return (PqSendStart < PqSendPointer);
+	return (PqSendStart < PqSendPointer || (io_stream_buffered_write_data(MyProcPort->io_stream) != 0));
 }
 
 /* --------------------------------

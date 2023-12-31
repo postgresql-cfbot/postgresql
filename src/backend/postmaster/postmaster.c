@@ -99,6 +99,7 @@
 #include "common/string.h"
 #include "lib/ilist.h"
 #include "libpq/auth.h"
+#include "libpq/compression.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "libpq/pqsignal.h"
@@ -2210,12 +2211,15 @@ retry1:
 									valptr),
 							 errhint("Valid values are: \"false\", 0, \"true\", 1, \"database\".")));
 			}
+			else if (strcmp(nameptr, "_pq_.libpq_compression") == 0)
+			{
+				configure_libpq_compression(port, valptr);
+			}
 			else if (strncmp(nameptr, "_pq_.", 5) == 0)
 			{
 				/*
 				 * Any option beginning with _pq_. is reserved for use as a
-				 * protocol-level option, but at present no such options are
-				 * defined.
+				 * protocol-level option.
 				 */
 				unrecognized_protocol_options =
 					lappend(unrecognized_protocol_options, pstrdup(nameptr));
@@ -4232,6 +4236,11 @@ BackendInitialize(Port *port)
 	/* Save port etc. for ps status */
 	MyProcPort = port;
 
+	if (StreamSetupIo(port))
+		ereport(ERROR,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("Unable to configure backend I/O")));
+
 	/* Tell fd.c about the long-lived FD associated with the port */
 	ReserveExternalFD();
 
@@ -4417,7 +4426,9 @@ BackendInitialize(Port *port)
 	 * already did any appropriate error reporting.
 	 */
 	if (status != STATUS_OK)
+	{
 		proc_exit(0);
+	}
 
 	/*
 	 * Now that we have the user and database name, we can set the process

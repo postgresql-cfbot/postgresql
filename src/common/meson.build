@@ -13,6 +13,7 @@ common_sources = files(
   'file_perm.c',
   'file_utils.c',
   'hashfn.c',
+  'io_stream.c',
   'ip.c',
   'jsonapi.c',
   'keywords.c',
@@ -37,6 +38,8 @@ common_sources = files(
   'username.c',
   'wait_error.c',
   'wchar.c',
+  'z_stream.c',
+  'zpq_stream.c'
 )
 
 if ssl.found()

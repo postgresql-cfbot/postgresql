@@ -968,7 +968,7 @@ parse_basebackup_options(List *options, basebackup_options *opt)
 		char	   *error_detail;
 
 		parse_compress_specification(opt->compression, compression_detail_str,
-									 &opt->compression_specification);
+									 &opt->compression_specification, PG_COMPRESSION_OPTION_WORKERS | PG_COMPRESSION_OPTION_LONG_DISTANCE);
 		error_detail =
 			validate_compress_specification(&opt->compression_specification);
 		if (error_detail != NULL)

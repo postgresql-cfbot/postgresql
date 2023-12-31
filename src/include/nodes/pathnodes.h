@@ -1188,6 +1188,8 @@ struct IndexOptInfo
 	 * (IndexAmRoutine).  These fields are not set for partitioned indexes.
 	 */
 	bool		amcanorderbyop;
+	bool		amorderbyopfirstcol;	/* order by op is supported only on
+										 * first column? */
 	bool		amoptionalkey;
 	bool		amsearcharray;
 	bool		amsearchnulls;

@@ -112,6 +112,7 @@ blhandler(PG_FUNCTION_ARGS)
 	amroutine->amoptsprocnum = BLOOM_OPTIONS_PROC;
 	amroutine->amcanorder = false;
 	amroutine->amcanorderbyop = false;
+	amroutine->amorderbyopfirstcol = false;
 	amroutine->amcanbackward = false;
 	amroutine->amcanunique = false;
 	amroutine->amcanmulticol = true;

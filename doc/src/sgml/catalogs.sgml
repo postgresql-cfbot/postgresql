@@ -865,7 +865,7 @@
       </para>
       <para>
        The B-tree operator family this entry sorts according to, if an
-       ordering operator; zero if a search operator
+       ordering operator; zero if a search operator or portion operator
       </para></entry>
      </row>
     </tbody>

@@ -682,7 +682,7 @@ BTreeTupleGetMaxHeapTID(IndexTuple itup)
  *	The strategy numbers are chosen so that we can commute them by
  *	subtraction, thus:
  */
-#define BTCommuteStrategyNumber(strat)	(BTMaxStrategyNumber + 1 - (strat))
+#define BTCommuteStrategyNumber(strat)	(BTMaxSearchStrategyNumber + 1 - (strat))
 
 /*
  *	When a new operator class is declared, we require that the user
@@ -1064,6 +1064,12 @@ typedef struct BTScanStateData
 	/* keep these last in struct for efficiency */
 	BTScanPosData currPos;		/* current position data */
 	BTScanPosData markPos;		/* marked position, if any */
+
+	/* KNN-search fields: */
+	Datum		currDistance;	/* distance to the current item */
+	Datum		markDistance;	/* distance to the marked item */
+	bool		currIsNull;		/* current item is NULL */
+	bool		markIsNull;		/* marked item is NULL */
 } BTScanStateData;
 
 typedef BTScanStateData *BTScanState;
@@ -1083,8 +1089,20 @@ typedef struct BTScanOpaqueData
 	FmgrInfo   *orderProcs;		/* ORDER procs for required equality keys */
 	MemoryContext arrayContext; /* scan-lifespan context for array data */
 
-	/* the state of tree scan */
+	/* the state of main tree scan */
 	BTScanStateData state;
+
+	/* kNN-search fields: */
+	bool		useBidirectionalKnnScan;	/* use bidirectional kNN scan? */
+	BTScanState forwardState;
+	BTScanState backwardState;	/* optional scan state for kNN search */
+	ScanDirection scanDirection;	/* selected scan direction for
+									 * unidirectional kNN scan */
+	FmgrInfo	distanceCmpProc;	/* distance comparison procedure */
+	int16		distanceTypeLen;	/* distance typlen */
+	bool		distanceTypeByVal;	/* distance typebyval */
+	bool		currRightIsNearest; /* current right item is nearest */
+	bool		markRightIsNearest; /* marked right item is nearest */
 } BTScanOpaqueData;
 
 typedef BTScanOpaqueData *BTScanOpaque;
@@ -1199,12 +1217,13 @@ extern bool btcanreturn(Relation index, int attno);
 /*
  * prototypes for internal functions in nbtree.c
  */
-extern bool _bt_parallel_seize(IndexScanDesc scan, BlockNumber *pageno,
+extern bool _bt_parallel_seize(IndexScanDesc scan, BTScanState state, BlockNumber *pageno,
 							   bool first);
-extern void _bt_parallel_release(IndexScanDesc scan, BlockNumber scan_page);
-extern void _bt_parallel_done(IndexScanDesc scan);
+extern void _bt_parallel_release(IndexScanDesc scan, BTScanState state, BlockNumber scan_page);
+extern void _bt_parallel_done(IndexScanDesc scan, BTScanState state);
 extern void _bt_parallel_primscan_schedule(IndexScanDesc scan,
 										   BlockNumber prev_scan_page);
+
 
 /*
  * prototypes for functions in nbtdedup.c
@@ -1322,6 +1341,9 @@ extern void _bt_check_third_page(Relation rel, Relation heap,
 								 bool needheaptidspace, Page page, IndexTuple newtup);
 extern bool _bt_allequalimage(Relation rel, bool debugmessage);
 extern void _bt_allocate_tuple_workspaces(BTScanState state);
+extern void _bt_init_distance_comparison(IndexScanDesc scan);
+extern int	_bt_init_knn_start_keys(IndexScanDesc scan, ScanKey *startKeys,
+									ScanKey bufKeys);
 
 /*
  * prototypes for functions in nbtvalidate.c

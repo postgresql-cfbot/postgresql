@@ -20,6 +20,7 @@
 #include "access/nbtree.h"
 #include "access/reloptions.h"
 #include "access/relscan.h"
+#include "catalog/pg_amop.h"
 #include "commands/progress.h"
 #include "lib/qunique.h"
 #include "miscadmin.h"
@@ -28,6 +29,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+#include "utils/syscache.h"
 
 #define LOOK_AHEAD_REQUIRED_RECHECKS 	3
 #define LOOK_AHEAD_DEFAULT_DISTANCE 	5
@@ -35,6 +37,9 @@
 typedef struct BTSortArrayContext
 {
 	FmgrInfo   *sortproc;
+	FmgrInfo	distflinfo;
+	FmgrInfo	distcmpflinfo;
+	ScanKey		distkey;
 	Oid			collation;
 	bool		reverse;
 } BTSortArrayContext;
@@ -51,7 +56,7 @@ static void _bt_setup_array_cmp(IndexScanDesc scan, ScanKey skey, Oid elemtype,
 static Datum _bt_find_extreme_element(IndexScanDesc scan, ScanKey skey,
 									  Oid elemtype, StrategyNumber strat,
 									  Datum *elems, int nelems);
-static int	_bt_sort_array_elements(ScanKey skey, FmgrInfo *sortproc,
+static int	_bt_sort_array_elements(IndexScanDesc scan, ScanKey skey, FmgrInfo *sortproc,
 									bool reverse, Datum *elems, int nelems);
 static bool _bt_merge_arrays(IndexScanDesc scan, ScanKey skey,
 							 FmgrInfo *sortproc, bool reverse,
@@ -102,6 +107,11 @@ static void _bt_checkkeys_look_ahead(IndexScanDesc scan, BTReadPageState *pstate
 									 int tupnatts, TupleDesc tupdesc);
 static int	_bt_keep_natts(Relation rel, IndexTuple lastleft,
 						   IndexTuple firstright, BTScanInsert itup_key);
+static inline StrategyNumber _bt_select_knn_strategy_for_key(IndexScanDesc scan,
+															 ScanKey cond);
+static void _bt_get_distance_cmp_proc(ScanKey distkey, Oid opfamily,
+									  Oid leftargtype, FmgrInfo *finfo,
+									  int16 *typlen, bool *typbyval);
 
 
 /*
@@ -441,7 +451,7 @@ _bt_preprocess_array_keys(IndexScanDesc scan)
 		 * the index's key space.
 		 */
 		reverse = (indoption[cur->sk_attno - 1] & INDOPTION_DESC) != 0;
-		num_elems = _bt_sort_array_elements(cur, sortprocp, reverse,
+		num_elems = _bt_sort_array_elements(scan, cur, sortprocp, reverse,
 											elem_values, num_nonnulls);
 
 		if (origarrayatt == cur->sk_attno)
@@ -846,18 +856,77 @@ _bt_find_extreme_element(IndexScanDesc scan, ScanKey skey, Oid elemtype,
  * we sort in descending order.
  */
 static int
-_bt_sort_array_elements(ScanKey skey, FmgrInfo *sortproc, bool reverse,
+_bt_sort_array_elements(IndexScanDesc scan, ScanKey skey, FmgrInfo *sortproc, bool reverse,
 						Datum *elems, int nelems)
 {
+	Relation	rel = scan->indexRelation;
+	Oid			elemtype;
+	Oid			opfamily;
 	BTSortArrayContext cxt;
 
 	if (nelems <= 1)
 		return nelems;			/* no work to do */
 
+	/*
+	 * Determine the nominal datatype of the array elements.  We have to
+	 * support the convention that sk_subtype == InvalidOid means the opclass
+	 * input type; this is a hack to simplify life for ScanKeyInit().
+	 */
+	elemtype = skey->sk_subtype;
+	if (elemtype == InvalidOid)
+		elemtype = rel->rd_opcintype[skey->sk_attno - 1];
+
+	opfamily = rel->rd_opfamily[skey->sk_attno - 1];
+
+	if (scan->numberOfOrderBys <= 0 ||
+		scan->orderByData[0].sk_attno != skey->sk_attno)
+	{
+		cxt.distkey = NULL;
+		cxt.reverse = reverse;
+	}
+	else
+	{
+		/* Init procedures for distance calculation and comparison. */
+		ScanKey		distkey = &scan->orderByData[0];
+		ScanKeyData distkey2;
+		Oid			disttype = distkey->sk_subtype;
+		Oid			distopr;
+		RegProcedure distproc;
+
+		if (!OidIsValid(disttype))
+			disttype = rel->rd_opcintype[skey->sk_attno - 1];
+
+		/* Lookup distance operator in index column's operator family. */
+		distopr = get_opfamily_member(opfamily,
+									  elemtype,
+									  disttype,
+									  distkey->sk_strategy);
+
+		if (!OidIsValid(distopr))
+			elog(ERROR, "missing operator (%u,%u) for strategy %d in opfamily %u",
+				 elemtype, disttype, BTMaxStrategyNumber, opfamily);
+
+		distproc = get_opcode(distopr);
+
+		if (!RegProcedureIsValid(distproc))
+			elog(ERROR, "missing code for operator %u", distopr);
+
+		fmgr_info(distproc, &cxt.distflinfo);
+
+		distkey2 = *distkey;
+		fmgr_info_copy(&distkey2.sk_func, &cxt.distflinfo, CurrentMemoryContext);
+		distkey2.sk_subtype = disttype;
+
+		_bt_get_distance_cmp_proc(&distkey2, opfamily, elemtype,
+								  &cxt.distcmpflinfo, NULL, NULL);
+
+		cxt.distkey = distkey;
+		cxt.reverse = false;	/* supported only ascending ordering */
+	}
+
 	/* Sort the array elements */
 	cxt.sortproc = sortproc;
 	cxt.collation = skey->sk_collation;
-	cxt.reverse = reverse;
 	qsort_arg(elems, nelems, sizeof(Datum),
 			  _bt_compare_array_elements, &cxt);
 
@@ -930,6 +999,7 @@ _bt_merge_arrays(IndexScanDesc scan, ScanKey skey, FmgrInfo *sortproc,
 	cxt.sortproc = mergeproc;
 	cxt.collation = skey->sk_collation;
 	cxt.reverse = reverse;
+	cxt.distkey = NULL;
 
 	for (int i = 0, j = 0; i < nelems_orig_start && j < nelems_next;)
 	{
@@ -1102,6 +1172,24 @@ _bt_compare_array_elements(const void *a, const void *b, void *arg)
 	Datum		db = *((const Datum *) b);
 	BTSortArrayContext *cxt = (BTSortArrayContext *) arg;
 	int32		compare;
+
+	if (cxt->distkey)
+	{
+		Datum		dista = FunctionCall2Coll(&cxt->distflinfo,
+											  cxt->collation,
+											  da,
+											  cxt->distkey->sk_argument);
+		Datum		distb = FunctionCall2Coll(&cxt->distflinfo,
+											  cxt->collation,
+											  db,
+											  cxt->distkey->sk_argument);
+		bool		cmp = DatumGetBool(FunctionCall2Coll(&cxt->distcmpflinfo,
+														 cxt->collation,
+														 dista,
+														 distb));
+
+		return cmp ? -1 : 1;
+	}
 
 	compare = DatumGetInt32(FunctionCall2Coll(cxt->sortproc,
 											  cxt->collation,
@@ -1721,7 +1809,7 @@ _bt_start_prim_scan(IndexScanDesc scan, ScanDirection dir)
 
 	/* The top-level index scan ran out of tuples in this scan direction */
 	if (scan->parallel_scan != NULL)
-		_bt_parallel_done(scan);
+		_bt_parallel_done(scan, &so->state);
 
 	return false;
 }
@@ -2456,6 +2544,69 @@ end_toplevel_scan:
 	/* Caller's tuple doesn't match any qual */
 	return false;
 }
+/*
+ * _bt_emit_scan_key() -- Emit one prepared scan key
+ *
+ * Push the scan key into the so->keyData[] array, and then mark it if it is
+ * required.  Also update selected kNN strategy.
+ */
+static void
+_bt_emit_scan_key(IndexScanDesc scan, ScanKey skey, int numberOfEqualCols)
+{
+	BTScanOpaque so = (BTScanOpaque) scan->opaque;
+	ScanKey		outkey = &so->keyData[so->numberOfKeys++];
+
+	memcpy(outkey, skey, sizeof(ScanKeyData));
+
+	/*
+	 * We can mark the qual as required (possibly only in one direction) if
+	 * all attrs before this one had "=".
+	 */
+	if (outkey->sk_attno - 1 == numberOfEqualCols)
+		_bt_mark_scankey_required(outkey);
+
+	/* Update kNN strategy if it is not already selected. */
+	if (so->useBidirectionalKnnScan)
+	{
+		switch (_bt_select_knn_strategy_for_key(scan, outkey))
+		{
+			case BTLessStrategyNumber:
+			case BTLessEqualStrategyNumber:
+
+				/*
+				 * Ordering key argument is greater than all values in scan
+				 * range, select backward scan direction.
+				 */
+				so->scanDirection = BackwardScanDirection;
+				so->useBidirectionalKnnScan = false;
+				break;
+
+			case BTEqualStrategyNumber:
+				/* Use default unidirectional scan direction. */
+				so->useBidirectionalKnnScan = false;
+				break;
+
+			case BTGreaterEqualStrategyNumber:
+			case BTGreaterStrategyNumber:
+
+				/*
+				 * Ordering key argument is lesser than all values in scan
+				 * range, select forward scan direction.
+				 */
+				so->scanDirection = ForwardScanDirection;
+				so->useBidirectionalKnnScan = false;
+				break;
+
+			case BTMaxStrategyNumber:
+
+				/*
+				 * Ordering key argument falls into scan range, keep using
+				 * bidirectional scan.
+				 */
+				break;
+		}
+	}
+}
 
 /*
  *	_bt_preprocess_keys() -- Preprocess scan keys
@@ -2548,12 +2699,10 @@ _bt_preprocess_keys(IndexScanDesc scan)
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 	int			numberOfKeys = scan->numberOfKeys;
 	int16	   *indoption = scan->indexRelation->rd_indoption;
-	int			new_numberOfKeys;
 	int			numberOfEqualCols;
 	ScanKey		inkeys;
-	ScanKey		outkeys;
 	ScanKey		cur;
-	BTScanKeyPreproc xform[BTMaxStrategyNumber];
+	BTScanKeyPreproc xform[BTMaxSearchStrategyNumber];
 	bool		test_result;
 	int			i,
 				j;
@@ -2574,6 +2723,25 @@ _bt_preprocess_keys(IndexScanDesc scan)
 		 */
 		Assert(_bt_verify_keys_with_arraykeys(scan));
 		return;
+	}
+
+	if (scan->numberOfOrderBys > 0)
+	{
+		ScanKey		ord = scan->orderByData;
+
+		if (scan->numberOfOrderBys > 1 || ord->sk_attno != 1)
+			/* it should not happen, see btmatchorderby() */
+			elog(ERROR, "only one btree ordering operator "
+				 "for the first index column is supported");
+
+		Assert(ord->sk_strategy == BTMaxStrategyNumber);
+
+		/* use bidirectional kNN scan by default */
+		so->useBidirectionalKnnScan = true;
+	}
+	else
+	{
+		so->useBidirectionalKnnScan = false;
 	}
 
 	/* initialize result variables */
@@ -2607,7 +2775,6 @@ _bt_preprocess_keys(IndexScanDesc scan)
 	else
 		inkeys = scan->keyData;
 
-	outkeys = so->keyData;
 	cur = &inkeys[0];
 	/* we check that input keys are correctly ordered */
 	if (cur->sk_attno < 1)
@@ -2619,11 +2786,9 @@ _bt_preprocess_keys(IndexScanDesc scan)
 		/* Apply indoption to scankey (might change sk_strategy!) */
 		if (!_bt_fix_scankey_strategy(cur, indoption))
 			so->qual_ok = false;
-		memcpy(outkeys, cur, sizeof(ScanKeyData));
-		so->numberOfKeys = 1;
-		/* We can mark the qual as required if it's for first index col */
-		if (cur->sk_attno == 1)
-			_bt_mark_scankey_required(outkeys);
+
+		_bt_emit_scan_key(scan, cur, 0);
+
 		if (arrayKeyData)
 		{
 			/*
@@ -2636,14 +2801,12 @@ _bt_preprocess_keys(IndexScanDesc scan)
 				   (so->arrayKeys[0].scan_key == 0 &&
 					OidIsValid(so->orderProcs[0].fn_oid)));
 		}
-
 		return;
 	}
 
 	/*
 	 * Otherwise, do the full set of pushups.
 	 */
-	new_numberOfKeys = 0;
 	numberOfEqualCols = 0;
 
 	/*
@@ -2716,7 +2879,7 @@ _bt_preprocess_keys(IndexScanDesc scan)
 					Assert(OidIsValid(orderproc->fn_oid));
 				}
 
-				for (j = BTMaxStrategyNumber; --j >= 0;)
+				for (j = BTMaxSearchStrategyNumber; --j >= 0;)
 				{
 					ScanKey		chk = xform[j].skey;
 
@@ -2786,21 +2949,17 @@ _bt_preprocess_keys(IndexScanDesc scan)
 			}
 
 			/*
-			 * Emit the cleaned-up keys into the outkeys[] array, and then
+			 * Emit the cleaned-up keys into the so->keyData[] array, and then
 			 * mark them if they are required.  They are required (possibly
 			 * only in one direction) if all attrs before this one had "=".
 			 */
-			for (j = BTMaxStrategyNumber; --j >= 0;)
+			for (j = BTMaxSearchStrategyNumber; --j >= 0;)
 			{
 				if (xform[j].skey)
 				{
-					ScanKey		outkey = &outkeys[new_numberOfKeys++];
-
-					memcpy(outkey, xform[j].skey, sizeof(ScanKeyData));
+					_bt_emit_scan_key(scan, xform[j].skey, priorNumberOfEqualCols);
 					if (arrayKeyData)
-						keyDataMap[new_numberOfKeys - 1] = xform[j].ikey;
-					if (priorNumberOfEqualCols == attno - 1)
-						_bt_mark_scankey_required(outkey);
+						keyDataMap[so->numberOfKeys - 1] = xform[j].ikey;
 				}
 			}
 
@@ -2821,19 +2980,16 @@ _bt_preprocess_keys(IndexScanDesc scan)
 		/* if row comparison, push it directly to the output array */
 		if (cur->sk_flags & SK_ROW_HEADER)
 		{
-			ScanKey		outkey = &outkeys[new_numberOfKeys++];
-
-			memcpy(outkey, cur, sizeof(ScanKeyData));
+			_bt_emit_scan_key(scan, cur, numberOfEqualCols);
 			if (arrayKeyData)
-				keyDataMap[new_numberOfKeys - 1] = i;
-			if (numberOfEqualCols == attno - 1)
-				_bt_mark_scankey_required(outkey);
+				keyDataMap[so->numberOfKeys - 1] = i;
 
 			/*
 			 * We don't support RowCompare using equality; such a qual would
 			 * mess up the numberOfEqualCols tracking.
 			 */
 			Assert(j != (BTEqualStrategyNumber - 1));
+
 			continue;
 		}
 
@@ -2959,22 +3115,15 @@ _bt_preprocess_keys(IndexScanDesc scan)
 				 * even with incomplete opfamilies.  _bt_advance_array_keys
 				 * depends on this.
 				 */
-				ScanKey		outkey = &outkeys[new_numberOfKeys++];
-
-				memcpy(outkey, xform[j].skey, sizeof(ScanKeyData));
+				_bt_emit_scan_key(scan, xform[j].skey, numberOfEqualCols);
 				if (arrayKeyData)
-					keyDataMap[new_numberOfKeys - 1] = xform[j].ikey;
-				if (numberOfEqualCols == attno - 1)
-					_bt_mark_scankey_required(outkey);
+					keyDataMap[so->numberOfKeys - 1] = xform[j].ikey;
 				xform[j].skey = cur;
 				xform[j].ikey = i;
 				xform[j].arrayidx = arrayidx;
 			}
 		}
 	}
-
-	so->numberOfKeys = new_numberOfKeys;
-
 	/*
 	 * Now that we've built a temporary mapping from so->keyData[] (output
 	 * scan keys) to scan->keyData[] (input scan keys), fix array->scan_key
@@ -4583,6 +4732,39 @@ btproperty(Oid index_oid, int attno,
 			*res = true;
 			return true;
 
+		case AMPROP_DISTANCE_ORDERABLE:
+			{
+				Oid			opclass,
+							opfamily,
+							opcindtype;
+
+				/* answer only for columns, not AM or whole index */
+				if (attno == 0)
+					return false;
+
+				opclass = get_index_column_opclass(index_oid, attno);
+
+				if (!OidIsValid(opclass))
+				{
+					*res = false;	/* non-key attribute */
+					return true;
+				}
+
+				if (!get_opclass_opfamily_and_input_type(opclass,
+														 &opfamily, &opcindtype))
+				{
+					*isnull = true;
+					return true;
+				}
+
+				*res = SearchSysCacheExists(AMOPSTRATEGY,
+											ObjectIdGetDatum(opfamily),
+											ObjectIdGetDatum(opcindtype),
+											ObjectIdGetDatum(opcindtype),
+											Int16GetDatum(BTMaxStrategyNumber));
+				return true;
+			}
+
 		default:
 			return false;		/* punt to generic code */
 	}
@@ -5178,4 +5360,217 @@ _bt_allocate_tuple_workspaces(BTScanState state)
 {
 	state->currTuples = (char *) palloc(BLCKSZ * 2);
 	state->markTuples = state->currTuples + BLCKSZ;
+}
+
+static bool
+_bt_compare_row_key_with_ordering_key(ScanKey row, ScanKey ord, bool *result)
+{
+	ScanKey		subkey = (ScanKey) DatumGetPointer(row->sk_argument);
+	int32		cmpresult;
+
+	Assert(subkey->sk_attno == 1);
+	Assert(subkey->sk_flags & SK_ROW_MEMBER);
+
+	if (subkey->sk_flags & SK_ISNULL)
+		return false;
+
+	/* Perform the test --- three-way comparison not bool operator */
+	cmpresult = DatumGetInt32(FunctionCall2Coll(&subkey->sk_func,
+												subkey->sk_collation,
+												ord->sk_argument,
+												subkey->sk_argument));
+
+	if (subkey->sk_flags & SK_BT_DESC)
+		cmpresult = -cmpresult;
+
+	/*
+	 * At this point cmpresult indicates the overall result of the row
+	 * comparison, and subkey points to the deciding column (or the last
+	 * column if the result is "=").
+	 */
+	switch (subkey->sk_strategy)
+	{
+			/* EQ and NE cases aren't allowed here */
+		case BTLessStrategyNumber:
+			*result = cmpresult < 0;
+			break;
+		case BTLessEqualStrategyNumber:
+			*result = cmpresult <= 0;
+			break;
+		case BTGreaterEqualStrategyNumber:
+			*result = cmpresult >= 0;
+			break;
+		case BTGreaterStrategyNumber:
+			*result = cmpresult > 0;
+			break;
+		default:
+			elog(ERROR, "unrecognized RowCompareType: %d",
+				 (int) subkey->sk_strategy);
+			*result = false;	/* keep compiler quiet */
+	}
+
+	return true;
+}
+
+/*
+ * _bt_select_knn_strategy_for_key() -- Determine which kNN scan strategy to use:
+ *		bidirectional or unidirectional.  We are checking here if the
+ *		ordering scankey argument falls into the scan range: if it falls
+ *		we must use bidirectional scan, otherwise we use unidirectional.
+ *
+ *	Returns BTMaxStrategyNumber for bidirectional scan or
+ *	strategy number of non-matched scankey for unidirectional.
+ */
+static inline StrategyNumber
+_bt_select_knn_strategy_for_key(IndexScanDesc scan, ScanKey cond)
+{
+	ScanKey		ord = scan->orderByData;
+	bool		result;
+
+	/* only interesting in the first index attribute */
+	if (cond->sk_attno != 1)
+		return BTMaxStrategyNumber;
+
+	if (cond->sk_strategy == BTEqualStrategyNumber)
+		/* always use simple unidirectional scan for equals operators */
+		return BTEqualStrategyNumber;
+
+	if (cond->sk_flags & SK_ROW_HEADER)
+	{
+		if (!_bt_compare_row_key_with_ordering_key(cond, ord, &result))
+			return BTEqualStrategyNumber;	/* ROW(fist_index_attr, ...) IS
+											 * NULL */
+	}
+	else
+	{
+		if (!_bt_compare_scankey_args(scan, cond, ord, cond, NULL, NULL, &result))
+			elog(ERROR, "could not compare ordering key");
+	}
+
+	if (!result)
+
+		/*
+		 * Ordering scankey argument is out of scan range, use unidirectional
+		 * scan.
+		 */
+		return cond->sk_strategy;
+
+	return BTMaxStrategyNumber;
+}
+
+int
+_bt_init_knn_start_keys(IndexScanDesc scan, ScanKey *startKeys, ScanKey bufKeys)
+{
+	ScanKey		ord = scan->orderByData;
+	int			indopt = scan->indexRelation->rd_indoption[ord->sk_attno - 1];
+	int			flags = (indopt << SK_BT_INDOPTION_SHIFT) |
+	SK_ORDER_BY |
+	SK_SEARCHNULL;				/* only for invalid procedure oid, see assert
+								 * in ScanKeyEntryInitialize() */
+	int			keysCount = 0;
+
+	/* Init btree search key with ordering key argument. */
+	ScanKeyEntryInitialize(&bufKeys[0],
+						   flags,
+						   ord->sk_attno,
+						   BTMaxStrategyNumber,
+						   ord->sk_subtype,
+						   ord->sk_collation,
+						   InvalidOid,
+						   ord->sk_argument);
+
+	startKeys[keysCount++] = &bufKeys[0];
+
+	return keysCount;
+}
+
+static Oid
+_bt_get_sortfamily_for_opfamily_op(Oid opfamily, Oid lefttype, Oid righttype,
+								   StrategyNumber strategy)
+{
+	HeapTuple	tp;
+	Form_pg_amop amop_tup;
+	Oid			sortfamily;
+
+	tp = SearchSysCache4(AMOPSTRATEGY,
+						 ObjectIdGetDatum(opfamily),
+						 ObjectIdGetDatum(lefttype),
+						 ObjectIdGetDatum(righttype),
+						 Int16GetDatum(strategy));
+	if (!HeapTupleIsValid(tp))
+		return InvalidOid;
+	amop_tup = (Form_pg_amop) GETSTRUCT(tp);
+	sortfamily = amop_tup->amopsortfamily;
+	ReleaseSysCache(tp);
+
+	return sortfamily;
+}
+
+/*
+ * _bt_get_distance_cmp_proc() -- Init procedure for comparsion of distances
+ *		between "leftargtype" and "distkey".
+ */
+static void
+_bt_get_distance_cmp_proc(ScanKey distkey, Oid opfamily, Oid leftargtype,
+						  FmgrInfo *finfo, int16 *typlen, bool *typbyval)
+{
+	RegProcedure opcode;
+	Oid			sortfamily;
+	Oid			opno;
+	Oid			distanceType;
+
+	distanceType = get_func_rettype(distkey->sk_func.fn_oid);
+
+	sortfamily = _bt_get_sortfamily_for_opfamily_op(opfamily, leftargtype,
+													distkey->sk_subtype,
+													distkey->sk_strategy);
+
+	if (!OidIsValid(sortfamily))
+		elog(ERROR, "could not find sort family for btree ordering operator");
+
+	opno = get_opfamily_member(sortfamily,
+							   distanceType,
+							   distanceType,
+							   BTLessEqualStrategyNumber);
+
+	if (!OidIsValid(opno))
+		elog(ERROR, "could not find operator for btree distance comparison");
+
+	opcode = get_opcode(opno);
+
+	if (!RegProcedureIsValid(opcode))
+		elog(ERROR,
+			 "could not find procedure for btree distance comparison operator");
+
+	fmgr_info(opcode, finfo);
+
+	if (typlen)
+		get_typlenbyval(distanceType, typlen, typbyval);
+}
+
+/*
+ *  _bt_init_distance_comparison() -- Init distance typlen/typbyval and its
+ *  	comparison procedure.
+ */
+void
+_bt_init_distance_comparison(IndexScanDesc scan)
+{
+	BTScanOpaque so = (BTScanOpaque) scan->opaque;
+	Relation	rel = scan->indexRelation;
+	ScanKey		ord = scan->orderByData;
+
+	_bt_get_distance_cmp_proc(ord,
+							  rel->rd_opfamily[ord->sk_attno - 1],
+							  rel->rd_opcintype[ord->sk_attno - 1],
+							  &so->distanceCmpProc,
+							  &so->distanceTypeLen,
+							  &so->distanceTypeByVal);
+
+	/*
+	 * In fact, distance values need to be initialized only for by-ref types,
+	 * because previous distance values are pfreed before writing new ones
+	 * (see _bt_calc_current_dist()).
+	 */
+	so->state.currDistance = (Datum) 0;
+	so->state.markDistance = (Datum) 0;
 }

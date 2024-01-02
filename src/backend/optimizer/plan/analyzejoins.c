@@ -1658,6 +1658,26 @@ update_eclasses(EquivalenceClass *ec, int from, int to)
 }
 
 /*
+ * "Logically" compares two RestrictInfo's ignoring the 'rinfo_serial' field,
+ * which makes almost every RestrictInfo unique.
+ *
+ * XXX: In the future, we might remove the 'rinfo_serial' field completely and get
+ * rid of this function.
+ */
+static bool
+restrict_infos_logically_equal(RestrictInfo *a, RestrictInfo *b)
+{
+	int			saved_rinfo_serial = a->rinfo_serial;
+	bool		result;
+
+	a->rinfo_serial = b->rinfo_serial;
+	result = equal(a, b);
+	a->rinfo_serial = saved_rinfo_serial;
+
+	return result;
+}
+
+/*
  * Remove a relation after we have proven that it participates only in an
  * unneeded unique self join.
  *
@@ -1760,7 +1780,7 @@ remove_self_join_rel(PlannerInfo *root, PlanRowMark *kmark, PlanRowMark *rmark,
 			if (src == rinfo ||
 				(rinfo->parent_ec != NULL
 				 && src->parent_ec == rinfo->parent_ec)
-				|| equal(rinfo->clause, src->clause))
+				|| restrict_infos_logically_equal(rinfo, src))
 			{
 				is_redundant = true;
 				break;
@@ -1788,7 +1808,7 @@ remove_self_join_rel(PlannerInfo *root, PlanRowMark *kmark, PlanRowMark *rmark,
 			if (src == rinfo ||
 				(rinfo->parent_ec != NULL
 				 && src->parent_ec == rinfo->parent_ec)
-				|| equal(rinfo->clause, src->clause))
+				|| restrict_infos_logically_equal(rinfo, src))
 			{
 				is_redundant = true;
 				break;

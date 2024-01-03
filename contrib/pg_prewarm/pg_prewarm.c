@@ -27,6 +27,7 @@
 #include "utils/rel.h"
 
 #define PREWARM_PREFETCH_RANGE	RELSEG_SIZE
+#define PREWARM_READ_RANGE	8
 
 PG_MODULE_MAGIC;
 
@@ -39,7 +40,7 @@ typedef enum
 	PREWARM_BUFFER,
 } PrewarmType;
 
-static PGIOAlignedBlock blockbuffer;
+static PGIOAlignedBlock blockbuffers[PREWARM_READ_RANGE];
 
 /*
  * pg_prewarm(regclass, mode text, fork text,
@@ -188,11 +189,19 @@ pg_prewarm(PG_FUNCTION_ARGS)
 		 * buffers.  This is more portable than prefetch mode (it works
 		 * everywhere) and is synchronous.
 		 */
-		for (block = first_block; block <= last_block; ++block)
+		char	*buffers[PREWARM_READ_RANGE];
+		for (int i=0; i < PREWARM_READ_RANGE; i++)
+			buffers[i] = blockbuffers[i].data;
+		for (block = first_block; block <= last_block;
+			 block += PREWARM_READ_RANGE)
 		{
+			int seek = Min(PREWARM_READ_RANGE, (last_block - block + 1));
+
 			CHECK_FOR_INTERRUPTS();
-			smgrread(RelationGetSmgr(rel), forkNumber, block, blockbuffer.data);
-			++blocks_done;
+
+			smgrreadv(RelationGetSmgr(rel), forkNumber, block, (void *) buffers,
+					  seek);
+			blocks_done += seek;
 		}
 	}
 	else if (ptype == PREWARM_BUFFER)

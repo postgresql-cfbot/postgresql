@@ -26,6 +26,8 @@
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 
+#define PREWARM_PREFETCH_RANGE	RELSEG_SIZE
+
 PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(pg_prewarm);
@@ -157,11 +159,21 @@ pg_prewarm(PG_FUNCTION_ARGS)
 		 * no practical way to do that at present without a gross modularity
 		 * violation, so we just do this.
 		 */
-		for (block = first_block; block <= last_block; ++block)
+		for (block = first_block; block <= last_block;
+			 block += PREWARM_PREFETCH_RANGE)
 		{
+			int seek = Min(PREWARM_PREFETCH_RANGE, (last_block - block + 1));
+
+			/*
+			 * if handling a multi-TB relation, we need a way to interrupt the
+			 * prefetching: smgrprefetch (mdprefetch) will loop on all segments
+			 * without interruption so we use a range and keep the following
+			 * CHECK in place
+			 */
 			CHECK_FOR_INTERRUPTS();
-			PrefetchBuffer(rel, forkNumber, block);
-			++blocks_done;
+
+			smgrprefetch(RelationGetSmgr(rel), forkNumber, block, seek);
+			blocks_done += seek;
 		}
 #else
 		ereport(ERROR,

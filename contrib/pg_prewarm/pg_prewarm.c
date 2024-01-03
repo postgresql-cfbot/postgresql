@@ -134,10 +134,11 @@ pg_prewarm(PG_FUNCTION_ARGS)
 	else
 	{
 		last_block = PG_GETARG_INT64(4);
-		if (last_block < 0 || last_block >= nblocks)
+		if (last_block < first_block || last_block >= nblocks)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("ending block number must be between 0 and %lld",
+					 errmsg("ending block number must be between %lld and %lld",
+							(long long) (first_block),
 							(long long) (nblocks - 1))));
 	}
 

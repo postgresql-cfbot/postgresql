@@ -199,6 +199,29 @@ begin
   raise notice 'r1.nosuchfield = %', r1.nosuchfield;
 end$$;
 
+-- check that type record can be passed through %type
+do $$
+declare r1 record;
+        r2 r1%type;
+begin
+  r2 := row(1,2);
+  raise notice 'r2 = %', r2;
+  r2 := row(3,4,5);
+  raise notice 'r2 = %', r2;
+end$$;
+
+-- arrays of record are not supported at the moment
+do $$
+declare r1 record[];
+begin
+end$$;
+
+do $$
+declare r1 record;
+        r2 r1%type[];
+begin
+end$$;
+
 -- check repeated assignments to composite fields
 create table some_table (id int, data text);
 

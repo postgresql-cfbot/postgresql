@@ -590,6 +590,8 @@ extern BlockedProcsData *GetBlockerStatusData(int blocked_pid);
 
 extern xl_standby_lock *GetRunningTransactionLocks(int *nlocks);
 extern const char *GetLockmodeName(LOCKMETHODID lockmethodid, LOCKMODE mode);
+extern LOCKMODE ParseLockmodeName(LOCKMETHODID lockmethodid,
+								  const char *mode_name);
 
 extern void lock_twophase_recover(TransactionId xid, uint16 info,
 								  void *recdata, uint32 len);

@@ -4055,6 +4055,29 @@ GetLockmodeName(LOCKMETHODID lockmethodid, LOCKMODE mode)
 	return LockMethods[lockmethodid]->lockModeNames[mode];
 }
 
+/*
+ * Convert the (case-insensitive) textual name of any lock mode to the LOCKMODE
+ * value
+ */
+LOCKMODE
+ParseLockmodeName(LOCKMETHODID lockmethodid, const char *mode_name)
+{
+	int	i;
+	LockMethod	lockMethodTable;
+
+	Assert(lockmethodid > 0 && lockmethodid < lengthof(LockMethods));
+	lockMethodTable = LockMethods[lockmethodid];
+	for (i = 1; i <= lockMethodTable->numLockModes; i++)
+		if (pg_strcasecmp(mode_name, lockMethodTable->lockModeNames[i]) == 0)
+			return i;
+
+	ereport(ERROR,
+			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			errmsg("invalid lock mode name %s", mode_name)));
+	/* unreachable but appease compiler */
+	return NoLock;
+}
+
 #ifdef LOCK_DEBUG
 /*
  * Dump all locks in the given proc's myProcLocks lists.

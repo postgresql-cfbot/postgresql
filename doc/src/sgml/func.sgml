@@ -30323,6 +30323,82 @@ SELECT convert_from(pg_read_binary_file('file_in_utf8.txt'), 'UTF8');
 
   </sect2>
 
+  <sect2 id="functions-table-lock">
+   <title>Table Lock Functions</title>
+
+   <indexterm>
+    <primary>Table Lock Functions</primary>
+   </indexterm>
+
+   <para>
+    The functions shown in <xref linkend="functions-table-lock-table"/> interact
+    with table locks. For details about these locks, see
+    <xref linkend="locking-tables"/>.
+   </para>
+
+   <table id="functions-table-lock-table">
+    <title>Table Lock Functions</title>
+    <tgroup cols="1">
+     <thead>
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        Function
+       </para>
+       <para>
+        Description
+       </para></entry>
+      </row>
+     </thead>
+
+     <tbody>
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_wait_for_lockers</primary>
+        </indexterm>
+        <function>pg_wait_for_lockers</function> ( <parameter>tables</parameter> <type>regclass[]</type>, <parameter>lockmode</parameter> <type>text</type>, <parameter>conflicting</parameter> <type>boolean</type> )
+        <returnvalue>void</returnvalue>
+       </para>
+       <para>
+        Waits for already-held table-level locks on the specified tables to be
+        released, and does not take any new table-level locks.
+       </para>
+       <para>
+        <parameter>lockmode</parameter> must be a string that specifies a
+        table-level lock mode, such as <literal>'ShareLock'</literal>. If
+        <parameter>conflicting</parameter> is true, the function waits for locks
+        in modes that conflict with <parameter>lockmode</parameter>; otherwise
+        it waits for locks in <parameter>lockmode</parameter>. Note that a lock
+        mode may or may not conflict with itself.
+       </para>
+       <para>
+        The function first builds a set of transactions that hold matching
+        locks on any of the tables, and then waits for the transactions in the
+        set to release those locks. The set does not include any transaction
+        that is only waiting to take a matching lock but does not yet hold one,
+        nor any transaction that only takes a matching lock after the function
+        finishes building the set. The set may or may not include a transaction
+        that only takes a matching lock while the function is building the set.
+        The set never includes the transaction that is calling the function,
+        even if it holds a matching lock, to avoid a trivial deadlock.
+       </para>
+       <para>
+        The function waits for table-level locks on only the specified tables.
+        To wait for locks on ancestor or descendant tables (if any), you must
+        specify them explicitly.
+       </para>
+       <para>
+        Since the function does not take any table-level locks, a table may be
+        dropped by another transaction while waiting. Once the drop commits,
+        there can be no more locks on the table to wait for.
+       </para></entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
+  </sect2>
+
   <sect2 id="functions-advisory-locks">
    <title>Advisory Lock Functions</title>
 

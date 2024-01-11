@@ -75,6 +75,7 @@
 #include "access/xact.h"
 #include "catalog/dependency.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_database.h"
 #include "commands/dbcommands.h"
 #include "commands/vacuum.h"
@@ -2024,6 +2025,12 @@ do_autovacuum(void)
 										  "Autovacuum worker",
 										  ALLOCSET_DEFAULT_SIZES);
 	MemoryContextSwitchTo(AutovacMemCxt);
+
+	/*
+	 * Autovacuum must be run as superuser, so set the session userid to the
+	 * bootstrap superuser id.
+	 */
+	SetSessionUserId(BOOTSTRAP_SUPERUSERID, true);
 
 	/* Start a transaction so our commands have one to play into. */
 	StartTransactionCommand();

@@ -1,0 +1,207 @@
+-- Tests for dummy table access method
+CREATE EXTENSION dummy_table_am;
+CREATE TABLE dummy_table (a int, b text) USING dummy_table_am;
+INFO:  dummy_table_am_relation_set_new_filelocator
+INFO:  dummy_table_am_relation_needs_toast_table
+-- Will error out
+CREATE INDEX dummy_table_idx ON dummy_table (a);
+INFO:  dummy_table_am_estimate_rel_size
+ERROR:  dummy_table_am_index_build_range_scan
+SELECT * FROM dummy_table;
+INFO:  dummy_table_am_estimate_rel_size
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_scan_begin
+INFO:  dummy_table_am_scan_getnextslot
+INFO:  dummy_table_am_scan_end
+ a | b 
+---+---
+(0 rows)
+
+INSERT INTO dummy_table VALUES (1, 'dummy');
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_tuple_insert
+SELECT * FROM dummy_table;
+INFO:  dummy_table_am_estimate_rel_size
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_scan_begin
+INFO:  dummy_table_am_scan_getnextslot
+INFO:  dummy_table_am_scan_end
+ a | b 
+---+---
+(0 rows)
+
+INSERT INTO dummy_table VALUES (1, 'dummy'), (2, 'dummy');
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_tuple_insert
+INFO:  dummy_table_am_tuple_insert
+SELECT * FROM dummy_table;
+INFO:  dummy_table_am_estimate_rel_size
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_scan_begin
+INFO:  dummy_table_am_scan_getnextslot
+INFO:  dummy_table_am_scan_end
+ a | b 
+---+---
+(0 rows)
+
+UPDATE dummy_table SET a = 0 WHERE a = 1;
+INFO:  dummy_table_am_estimate_rel_size
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_scan_begin
+INFO:  dummy_table_am_scan_getnextslot
+INFO:  dummy_table_am_scan_end
+SELECT * FROM dummy_table;
+INFO:  dummy_table_am_estimate_rel_size
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_scan_begin
+INFO:  dummy_table_am_scan_getnextslot
+INFO:  dummy_table_am_scan_end
+ a | b 
+---+---
+(0 rows)
+
+-- Update without WHERE
+UPDATE dummy_table SET a = 0, b = NULL;
+INFO:  dummy_table_am_estimate_rel_size
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_scan_begin
+INFO:  dummy_table_am_scan_getnextslot
+INFO:  dummy_table_am_scan_end
+SELECT * FROM dummy_table;
+INFO:  dummy_table_am_estimate_rel_size
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_scan_begin
+INFO:  dummy_table_am_scan_getnextslot
+INFO:  dummy_table_am_scan_end
+ a | b 
+---+---
+(0 rows)
+
+DELETE FROM dummy_table WHERE a = 1;
+INFO:  dummy_table_am_estimate_rel_size
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_scan_begin
+INFO:  dummy_table_am_scan_getnextslot
+INFO:  dummy_table_am_scan_end
+SELECT * FROM dummy_table;
+INFO:  dummy_table_am_estimate_rel_size
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_scan_begin
+INFO:  dummy_table_am_scan_getnextslot
+INFO:  dummy_table_am_scan_end
+ a | b 
+---+---
+(0 rows)
+
+TRUNCATE dummy_table;
+INFO:  dummy_table_am_relation_set_new_filelocator
+SELECT * FROM dummy_table;
+INFO:  dummy_table_am_estimate_rel_size
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_scan_begin
+INFO:  dummy_table_am_scan_getnextslot
+INFO:  dummy_table_am_scan_end
+ a | b 
+---+---
+(0 rows)
+
+VACUUM dummy_table;
+INFO:  dummy_table_am_vacuum
+ANALYZE dummy_table;
+INFO:  dummy_table_am_relation_size
+INFO:  dummy_table_am_relation_size
+INFO:  dummy_table_am_scan_begin
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_scan_end
+VACUUM (FULL) dummy_table;
+INFO:  dummy_table_am_relation_set_new_filelocator
+INFO:  dummy_table_am_copy_for_cluster
+INFO:  dummy_table_am_relation_size
+SELECT * FROM dummy_table;
+INFO:  dummy_table_am_estimate_rel_size
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_scan_begin
+INFO:  dummy_table_am_scan_getnextslot
+INFO:  dummy_table_am_scan_end
+ a | b 
+---+---
+(0 rows)
+
+COPY dummy_table TO STDOUT;
+INFO:  dummy_table_am_scan_begin
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_scan_getnextslot
+INFO:  dummy_table_am_scan_end
+COPY dummy_table (a, b) FROM STDIN;
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_multi_insert
+INFO:  dummy_table_am_finish_bulk_insert
+SELECT * FROM dummy_table;
+INFO:  dummy_table_am_estimate_rel_size
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_scan_begin
+INFO:  dummy_table_am_scan_getnextslot
+INFO:  dummy_table_am_scan_end
+ a | b 
+---+---
+(0 rows)
+
+ALTER TABLE dummy_table ADD COLUMN c BOOLEAN DEFAULT true;
+INFO:  dummy_table_am_relation_needs_toast_table
+INSERT INTO dummy_table VALUES (1, 'dummy');
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_tuple_insert
+SELECT * FROM dummy_table;
+INFO:  dummy_table_am_estimate_rel_size
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_scan_begin
+INFO:  dummy_table_am_scan_getnextslot
+INFO:  dummy_table_am_scan_end
+ a | b | c 
+---+---+---
+(0 rows)
+
+-- ALTER TABLE SET ACCESS METHOD
+ALTER TABLE dummy_table SET ACCESS METHOD heap;
+INFO:  dummy_table_am_relation_needs_toast_table
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_scan_begin
+INFO:  dummy_table_am_scan_getnextslot
+INFO:  dummy_table_am_scan_end
+CREATE INDEX dummy_table_idx ON dummy_table (a);
+INSERT INTO dummy_table VALUES (1, 'heap', false);
+SELECT * FROM dummy_table;
+ a |  b   | c 
+---+------+---
+ 1 | heap | f
+(1 row)
+
+-- Will error out, the index must be dropped
+ALTER TABLE dummy_table SET ACCESS METHOD dummy_table_am;
+INFO:  dummy_table_am_relation_set_new_filelocator
+INFO:  dummy_table_am_relation_needs_toast_table
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_tuple_insert
+INFO:  dummy_table_am_finish_bulk_insert
+INFO:  dummy_table_am_estimate_rel_size
+ERROR:  dummy_table_am_index_build_range_scan
+DROP INDEX dummy_table_idx;
+ALTER TABLE dummy_table SET ACCESS METHOD dummy_table_am;
+INFO:  dummy_table_am_relation_set_new_filelocator
+INFO:  dummy_table_am_relation_needs_toast_table
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_tuple_insert
+INFO:  dummy_table_am_finish_bulk_insert
+SELECT * FROM dummy_table;
+INFO:  dummy_table_am_estimate_rel_size
+INFO:  dummy_table_am_slot_callbacks
+INFO:  dummy_table_am_scan_begin
+INFO:  dummy_table_am_scan_getnextslot
+INFO:  dummy_table_am_scan_end
+ a | b | c 
+---+---+---
+(0 rows)
+
+-- Clean up
+DROP TABLE dummy_table;

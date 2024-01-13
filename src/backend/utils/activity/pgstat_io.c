@@ -16,6 +16,7 @@
 
 #include "postgres.h"
 
+#include "access/xlog.h"
 #include "executor/instrument.h"
 #include "storage/bufmgr.h"
 #include "utils/pgstat_internal.h"
@@ -116,13 +117,48 @@ pgstat_prepare_io_time(bool track_io_guc)
 }
 
 /*
+ * Decide if IO timings need to be tracked.  Timings associated to
+ * IOOBJECT_WAL objects are tracked if track_wal_io_timing is enabled,
+ * else rely on track_io_timing.
+ */
+static bool
+pgstat_should_track_io_time(IOObject io_object)
+{
+	if (io_object == IOOBJECT_WAL)
+		return track_wal_io_timing;
+
+	return track_io_timing;
+}
+
+/*
  * Like pgstat_count_io_op_n() except it also accumulates time.
  */
 void
 pgstat_count_io_op_time(IOObject io_object, IOContext io_context, IOOp io_op,
 						instr_time start_time, uint32 cnt)
 {
-	if (track_io_timing)
+	/*
+	 * B_WAL_RECEIVER backend does IOOBJECT_WAL IOObject & IOOP_READ IOOp IOs
+	 * but these IOs are not countable for now because IOOP_READ IOs' op_bytes
+	 * (number of bytes per unit of I/O) might not be the same all the time.
+	 * The current implementation requires that the op_bytes must be the same
+	 * for the same IOObject, IOContext and IOOp. To avoid confusion, the
+	 * B_WAL_RECEIVER backend & IOOBJECT_WAL IOObject IOs are disabled for
+	 * now.
+	 */
+	if (MyBackendType == B_WAL_RECEIVER && io_object == IOOBJECT_WAL)
+		return;
+
+	/*
+	 * Accumulate timing data.  pgstat_count_buffer is for pgstat_database. As
+	 * pg_stat_database only counts blk_read_time and blk_write_time, it is
+	 * set for IOOP_READ and IOOP_WRITE.
+	 *
+	 * pgBufferUsage is for EXPLAIN.  pgBufferUsage has write and read stats
+	 * for shared, local and temporary blocks.  Temporary blocks are ignored
+	 * here.
+	 */
+	if (pgstat_should_track_io_time(io_object))
 	{
 		instr_time	io_time;
 
@@ -131,7 +167,9 @@ pgstat_count_io_op_time(IOObject io_object, IOContext io_context, IOOp io_op,
 
 		if (io_op == IOOP_WRITE || io_op == IOOP_EXTEND)
 		{
-			pgstat_count_buffer_write_time(INSTR_TIME_GET_MICROSEC(io_time));
+			if (io_object != IOOBJECT_WAL)
+				pgstat_count_buffer_write_time(INSTR_TIME_GET_MICROSEC(io_time));
+
 			if (io_object == IOOBJECT_RELATION)
 				INSTR_TIME_ADD(pgBufferUsage.shared_blk_write_time, io_time);
 			else if (io_object == IOOBJECT_TEMP_RELATION)
@@ -139,7 +177,9 @@ pgstat_count_io_op_time(IOObject io_object, IOContext io_context, IOOp io_op,
 		}
 		else if (io_op == IOOP_READ)
 		{
-			pgstat_count_buffer_read_time(INSTR_TIME_GET_MICROSEC(io_time));
+			if (io_object != IOOBJECT_WAL)
+				pgstat_count_buffer_read_time(INSTR_TIME_GET_MICROSEC(io_time));
+
 			if (io_object == IOOBJECT_RELATION)
 				INSTR_TIME_ADD(pgBufferUsage.shared_blk_read_time, io_time);
 			else if (io_object == IOOBJECT_TEMP_RELATION)
@@ -226,6 +266,8 @@ pgstat_get_io_context_name(IOContext io_context)
 			return "bulkread";
 		case IOCONTEXT_BULKWRITE:
 			return "bulkwrite";
+		case IOCONTEXT_INIT:
+			return "init";
 		case IOCONTEXT_NORMAL:
 			return "normal";
 		case IOCONTEXT_VACUUM:
@@ -234,6 +276,30 @@ pgstat_get_io_context_name(IOContext io_context)
 
 	elog(ERROR, "unrecognized IOContext value: %d", io_context);
 	pg_unreachable();
+}
+
+/*
+ * Get the number of bytes associated to an operation depending on
+ * an IOObject and an IOContext.
+ *
+ * Returns BLCKSZ by default because that is what most of the
+ * IOObject/IOContext combinations use.  The number of bytes for an
+ * IOOBJECT_WAL depends on the context.
+ */
+int
+pgstat_get_io_op_bytes(IOObject io_object, IOContext io_context)
+{
+	if (io_object == IOOBJECT_WAL)
+	{
+		if (io_context == IOCONTEXT_NORMAL)
+			return XLOG_BLCKSZ;
+		else if (io_context == IOCONTEXT_INIT)
+			return wal_segment_size;
+
+		Assert(false);			/* not reachable */
+	}
+
+	return BLCKSZ;
 }
 
 const char *
@@ -245,6 +311,8 @@ pgstat_get_io_object_name(IOObject io_object)
 			return "relation";
 		case IOOBJECT_TEMP_RELATION:
 			return "temp relation";
+		case IOOBJECT_WAL:
+			return "wal";
 	}
 
 	elog(ERROR, "unrecognized IOObject value: %d", io_object);
@@ -306,8 +374,8 @@ pgstat_io_snapshot_cb(void)
 * - Syslogger because it is not connected to shared memory
 * - Archiver because most relevant archiving IO is delegated to a
 *   specialized command or module
-* - WAL Receiver, WAL Writer, and WAL Summarizer IO are not tracked in
-*   pg_stat_io for now
+* - WAL Receiver and WAL Summarizer IO are not tracked in pg_stat_io for
+*   now.
 *
 * Function returns true if BackendType participates in the cumulative stats
 * subsystem for IO and false if it does not.
@@ -328,7 +396,13 @@ pgstat_tracks_io_bktype(BackendType bktype)
 		case B_ARCHIVER:
 		case B_LOGGER:
 		case B_WAL_RECEIVER:
-		case B_WAL_WRITER:
+
+			/*
+			 * B_WAL_RECEIVER can do IOs but it is disabled for now to avoid
+			 * confusion. See comment at the top of the
+			 * pgstat_count_io_op_time() function.
+			 */
+
 		case B_WAL_SUMMARIZER:
 			return false;
 
@@ -341,6 +415,7 @@ pgstat_tracks_io_bktype(BackendType bktype)
 		case B_STANDALONE_BACKEND:
 		case B_STARTUP:
 		case B_WAL_SENDER:
+		case B_WAL_WRITER:
 			return true;
 	}
 
@@ -364,6 +439,15 @@ pgstat_tracks_io_object(BackendType bktype, IOObject io_object,
 	 * Some BackendTypes should never track IO statistics.
 	 */
 	if (!pgstat_tracks_io_bktype(bktype))
+		return false;
+
+	/*
+	 * Currently, IO on IOOBJECT_WAL objects can only occur in the
+	 * IOCONTEXT_NORMAL and IOCONTEXT_INIT IOContexts.
+	 */
+	if (io_object == IOOBJECT_WAL &&
+		(io_context != IOCONTEXT_NORMAL &&
+		 io_context != IOCONTEXT_INIT))
 		return false;
 
 	/*
@@ -441,6 +525,13 @@ pgstat_tracks_io_op(BackendType bktype, IOObject io_object,
 		return false;
 
 	/*
+	 * Most BackendTypes don't do reads with IOOBJECT_WAL.
+	 */
+	if (io_object == IOOBJECT_WAL && io_op == IOOP_READ &&
+		!(bktype == B_STANDALONE_BACKEND || bktype == B_STARTUP))
+		return false;
+
+	/*
 	 * Temporary tables are not logged and thus do not require fsync'ing.
 	 * Writeback is not requested for temporary tables.
 	 */
@@ -462,6 +553,22 @@ pgstat_tracks_io_op(BackendType bktype, IOObject io_object,
 	 * IOOP_REUSE is only relevant when a BufferAccessStrategy is in use.
 	 */
 	if (!strategy_io_context && io_op == IOOP_REUSE)
+		return false;
+
+	/*
+	 * An IOCONTEXT_INIT done for an IOOBJECT_WAL io_object does writes and
+	 * syncs.
+	 */
+	if (io_object == IOOBJECT_WAL && io_context == IOCONTEXT_INIT &&
+		!(io_op == IOOP_WRITE || io_op == IOOP_FSYNC))
+		return false;
+
+	/*
+	 * An IOCONTEXT_NORMAL done for an IOOBJECT_WAL io_object does writes,
+	 * reads and syncs.
+	 */
+	if (io_object == IOOBJECT_WAL && io_context == IOCONTEXT_NORMAL &&
+		!(io_op == IOOP_WRITE || io_op == IOOP_READ || io_op == IOOP_FSYNC))
 		return false;
 
 	/*

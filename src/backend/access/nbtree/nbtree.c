@@ -34,6 +34,7 @@
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
 #include "storage/smgr.h"
+#include "storage/streaming_read.h"
 #include "utils/builtins.h"
 #include "utils/index_selfuncs.h"
 #include "utils/memutils.h"
@@ -81,7 +82,7 @@ typedef struct BTParallelScanDescData *BTParallelScanDesc;
 static void btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 						 IndexBulkDeleteCallback callback, void *callback_state,
 						 BTCycleId cycleid);
-static void btvacuumpage(BTVacState *vstate, BlockNumber scanblkno);
+static void btvacuumpage(BTVacState *vstate, Buffer buf, BlockNumber scanblkno);
 static BTVacuumPosting btreevacuumposting(BTVacState *vstate,
 										  IndexTuple posting,
 										  OffsetNumber updatedoffset,
@@ -893,6 +894,24 @@ btvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 	return stats;
 }
 
+static BlockNumber
+btvacuumscan_pgsr_next(PgStreamingRead *pgsr, void *pgsr_private,
+					   void *per_buffer_data)
+{
+	BTVacState *vstate = (BTVacState *) pgsr_private;
+
+	if (vstate->nextblock == vstate->num_pages)
+		return InvalidBlockNumber;
+
+	/*
+	 * We can't use _bt_getbuf() here because it always applies
+	 * _bt_checkpage(), which will barf on an all-zero page. We want to
+	 * recycle all-zero pages, not fail.  Also, we want to use a nondefault
+	 * buffer access strategy. Also want to use AIO.
+	 */
+	return vstate->nextblock++;
+}
+
 /*
  * btvacuumscan --- scan the index for VACUUMing purposes
  *
@@ -986,6 +1005,8 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	scanblkno = BTREE_METAPAGE + 1;
 	for (;;)
 	{
+		PgStreamingRead *pgsr;
+
 		/* Get the current relation length */
 		if (needLock)
 			LockRelationForExtension(rel, ExclusiveLock);
@@ -1000,14 +1021,40 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 		/* Quit if we've scanned the whole relation */
 		if (scanblkno >= num_pages)
 			break;
+
+		vstate.nextblock = scanblkno;
+		vstate.num_pages = num_pages;
+
+		pgsr = pg_streaming_read_buffer_alloc(PGSR_FLAG_MAINTENANCE,
+											  &vstate,
+											  0,
+											  vstate.info->strategy,
+											  BMR_REL(vstate.info->index),
+											  MAIN_FORKNUM,
+											  btvacuumscan_pgsr_next);
+
 		/* Iterate over pages, then loop back to recheck length */
 		for (; scanblkno < num_pages; scanblkno++)
 		{
-			btvacuumpage(&vstate, scanblkno);
+			Buffer		buf = pg_streaming_read_buffer_get_next(pgsr, NULL);
+
+			Assert(BufferIsValid(buf));
+			Assert(BufferGetBlockNumber(buf) == scanblkno);
+
+			btvacuumpage(&vstate, buf, scanblkno);
+
 			if (info->report_progress)
 				pgstat_progress_update_param(PROGRESS_SCAN_BLOCKS_DONE,
 											 scanblkno);
+
+			/* call vacuum_delay_point while not holding any buffer lock */
+			vacuum_delay_point();
 		}
+
+		if (pg_streaming_read_buffer_get_next(pgsr, NULL) != 0)
+			elog(ERROR, "aio and plain pos out of sync");
+
+		pg_streaming_read_free(pgsr);
 	}
 
 	/* Set statistics num_pages field to final size of index */
@@ -1040,7 +1087,7 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
  * recycled (i.e. before the page split).
  */
 static void
-btvacuumpage(BTVacState *vstate, BlockNumber scanblkno)
+btvacuumpage(BTVacState *vstate, Buffer buf, BlockNumber scanblkno)
 {
 	IndexVacuumInfo *info = vstate->info;
 	IndexBulkDeleteResult *stats = vstate->stats;
@@ -1051,28 +1098,28 @@ btvacuumpage(BTVacState *vstate, BlockNumber scanblkno)
 	bool		attempt_pagedel;
 	BlockNumber blkno,
 				backtrack_to;
-	Buffer		buf;
 	Page		page;
 	BTPageOpaque opaque;
 
 	blkno = scanblkno;
 
+	Assert(BufferIsValid(buf));
 backtrack:
 
 	attempt_pagedel = false;
 	backtrack_to = P_NONE;
 
-	/* call vacuum_delay_point while not holding any buffer lock */
-	vacuum_delay_point();
-
 	/*
-	 * We can't use _bt_getbuf() here because it always applies
-	 * _bt_checkpage(), which will barf on an all-zero page. We want to
-	 * recycle all-zero pages, not fail.  Also, we want to use a nondefault
-	 * buffer access strategy.
+	 * If we're not backtracking we already read the page asynchronously. Not
+	 * using AIO when backtracking isn't too tragic - it's relatively rare,
+	 * and the buffer quite possibly is still in shared buffers.
 	 */
-	buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
-							 info->strategy);
+	if (!BufferIsValid(buf))
+		buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
+								 info->strategy);
+
+	Assert(BufferGetBlockNumber(buf) == blkno);
+
 	_bt_lockbuf(rel, buf, BT_READ);
 	page = BufferGetPage(buf);
 	opaque = NULL;
@@ -1359,6 +1406,7 @@ backtrack:
 	if (backtrack_to != P_NONE)
 	{
 		blkno = backtrack_to;
+		buf = InvalidBuffer;
 		goto backtrack;
 	}
 }

@@ -657,7 +657,7 @@ XLogDropDatabase(Oid dbid)
 	 * This is unnecessarily heavy-handed, as it will close SMgrRelation
 	 * objects for other databases as well. DROP DATABASE occurs seldom enough
 	 * that it's not worth introducing a variant of smgrclose for just this
-	 * purpose. XXX: Or should we rather leave the smgr entries dangling?
+	 * purpose.
 	 */
 	smgrcloseall();
 

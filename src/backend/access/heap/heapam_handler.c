@@ -44,6 +44,7 @@
 #include "storage/smgr.h"
 #include "utils/builtins.h"
 #include "utils/rel.h"
+#include "storage/streaming_read.h"
 
 static void reform_and_rewrite_tuple(HeapTuple tuple,
 									 Relation OldHeap, Relation NewHeap,
@@ -2110,38 +2111,55 @@ heapam_estimate_rel_size(Relation rel, int32 *attr_widths,
  * Executor related callbacks for the heap AM
  * ------------------------------------------------------------------------
  */
-
 static bool
-heapam_scan_bitmap_next_block(TableScanDesc scan,
-							  TBMIterateResult *tbmres)
+heapam_scan_bitmap_next_block(TableScanDesc scan, bool *recheck)
 {
 	HeapScanDesc hscan = (HeapScanDesc) scan;
-	BlockNumber block = tbmres->blockno;
+	TBMIterateResult *tbmres;
+	void	   *io_private;
 	Buffer		buffer;
 	Snapshot	snapshot;
 	int			ntup;
 
+	Assert(hscan->pgsr);
+
+	/*
+	 * Release the buffer containing the previous block and reset the per-page
+	 * counters. Reset hscan->rs_ntuples here just to be safe.
+	 */
+	if (BufferIsValid(hscan->rs_cbuf))
+	{
+		ReleaseBuffer(hscan->rs_cbuf);
+		hscan->rs_cbuf = InvalidBuffer;
+	}
+
 	hscan->rs_cindex = 0;
 	hscan->rs_ntuples = 0;
 
-	/*
-	 * Ignore any claimed entries past what we think is the end of the
-	 * relation. It may have been extended after the start of our scan (we
-	 * only hold an AccessShareLock, and it could be inserts from this
-	 * backend).  We don't take this optimization in SERIALIZABLE isolation
-	 * though, as we need to examine all invisible tuples reachable by the
-	 * index.
-	 */
-	if (!IsolationIsSerializable() && block >= hscan->rs_nblocks)
-		return false;
+	hscan->rs_cbuf = pg_streaming_read_buffer_get_next(hscan->pgsr, &io_private);
 
-	/*
-	 * Acquire pin on the target heap page, trading in any pin we held before.
-	 */
-	hscan->rs_cbuf = ReleaseAndReadBuffer(hscan->rs_cbuf,
-										  scan->rs_rd,
-										  block);
-	hscan->rs_cblock = block;
+	if (BufferIsInvalid(hscan->rs_cbuf))
+	{
+		if (BufferIsValid(hscan->vmbuffer))
+		{
+			ReleaseBuffer(hscan->vmbuffer);
+			hscan->vmbuffer = InvalidBuffer;
+		}
+
+		return hscan->empty_tuples > 0;
+	}
+
+	Assert(io_private);
+
+	tbmres = (TBMIterateResult *) io_private;
+
+	Assert(BufferGetBlockNumber(hscan->rs_cbuf) == tbmres->blockno);
+
+	*recheck = tbmres->recheck;
+
+	hscan->rs_cblock = tbmres->blockno;
+	hscan->rs_ntuples = tbmres->ntuples;
+
 	buffer = hscan->rs_cbuf;
 	snapshot = scan->rs_snapshot;
 
@@ -2177,7 +2195,7 @@ heapam_scan_bitmap_next_block(TableScanDesc scan,
 			ItemPointerData tid;
 			HeapTupleData heapTuple;
 
-			ItemPointerSet(&tid, block, offnum);
+			ItemPointerSet(&tid, tbmres->blockno, offnum);
 			if (heap_hot_search_buffer(&tid, scan->rs_rd, buffer, snapshot,
 									   &heapTuple, NULL, true))
 				hscan->rs_vistuples[ntup++] = ItemPointerGetOffsetNumber(&tid);
@@ -2205,7 +2223,7 @@ heapam_scan_bitmap_next_block(TableScanDesc scan,
 			loctup.t_data = (HeapTupleHeader) PageGetItem(page, lp);
 			loctup.t_len = ItemIdGetLength(lp);
 			loctup.t_tableOid = scan->rs_rd->rd_id;
-			ItemPointerSet(&loctup.t_self, block, offnum);
+			ItemPointerSet(&loctup.t_self, tbmres->blockno, offnum);
 			valid = HeapTupleSatisfiesVisibility(&loctup, snapshot, buffer);
 			if (valid)
 			{
@@ -2223,18 +2241,23 @@ heapam_scan_bitmap_next_block(TableScanDesc scan,
 	Assert(ntup <= MaxHeapTuplesPerPage);
 	hscan->rs_ntuples = ntup;
 
-	return ntup > 0;
+	return true;
 }
 
 static bool
-heapam_scan_bitmap_next_tuple(TableScanDesc scan,
-							  TBMIterateResult *tbmres,
-							  TupleTableSlot *slot)
+heapam_scan_bitmap_next_tuple(TableScanDesc scan, TupleTableSlot *slot)
 {
 	HeapScanDesc hscan = (HeapScanDesc) scan;
 	OffsetNumber targoffset;
 	Page		page;
 	ItemId		lp;
+
+	if (hscan->empty_tuples)
+	{
+		ExecStoreAllNullTuple(slot);
+		hscan->empty_tuples--;
+		return true;
+	}
 
 	/*
 	 * Out of range?  If so, nothing more to look at on this page
@@ -2242,6 +2265,7 @@ heapam_scan_bitmap_next_tuple(TableScanDesc scan,
 	if (hscan->rs_cindex < 0 || hscan->rs_cindex >= hscan->rs_ntuples)
 		return false;
 
+	Assert(BufferIsValid(hscan->rs_cbuf));
 	targoffset = hscan->rs_vistuples[hscan->rs_cindex];
 	page = BufferGetPage(hscan->rs_cbuf);
 	lp = PageGetItemId(page, targoffset);
@@ -2335,7 +2359,7 @@ heapam_scan_sample_next_block(TableScanDesc scan, SampleScanState *scanstate)
 		return false;
 	}
 
-	heapgetpage(scan, blockno);
+	heapgetpage(scan, blockno, InvalidBuffer);
 	hscan->rs_inited = true;
 
 	return true;

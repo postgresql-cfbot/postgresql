@@ -2089,6 +2089,8 @@ PgStat_TableCounts
 PgStat_TableStatus
 PgStat_TableXactStatus
 PgStat_WalStats
+PgStreamingRead
+PgStreamingReadRange
 PgXmlErrorContext
 PgXmlStrictness
 Pg_finfo_record
@@ -2955,6 +2957,8 @@ VacDeadItems
 VacErrPhase
 VacObjFilter
 VacOptValue
+VacuumHeapBlockState
+VacuumHeapState
 VacuumParams
 VacuumRelation
 VacuumStmt

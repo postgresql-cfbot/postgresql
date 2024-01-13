@@ -32,6 +32,7 @@ extern PGDLLIMPORT char *default_table_access_method;
 extern PGDLLIMPORT bool synchronize_seqscans;
 
 
+struct BitmapHeapScanState;
 struct BulkInsertStateData;
 struct IndexInfo;
 struct SampleScanState;
@@ -62,7 +63,8 @@ typedef enum ScanOptions
 
 	/* unregister snapshot at scan end? */
 	SO_TEMP_SNAPSHOT = 1 << 9,
-}			ScanOptions;
+	SO_CAN_SKIP_FETCH = 1 << 10
+} ScanOptions;
 
 /*
  * Result codes for table_{update,delete,lock_tuple}, and for visibility
@@ -773,53 +775,36 @@ typedef struct TableAmRoutine
 	 */
 
 	/*
-	 * Prepare to fetch / check / return tuples from `tbmres->blockno` as part
-	 * of a bitmap table scan. `scan` was started via table_beginscan_bm().
-	 * Return false if there are no tuples to be found on the page, true
-	 * otherwise.
+	 * Prepare to fetch / check / return tuples obtained from the streaming
+	 * read helper as part of a bitmap table scan. `scan` was started via
+	 * table_beginscan_bm(). Return false if the relation is exhausted and
+	 * true otherwise.
 	 *
 	 * This will typically read and pin the target block, and do the necessary
 	 * work to allow scan_bitmap_next_tuple() to return tuples (e.g. it might
 	 * make sense to perform tuple visibility checks at this time). For some
-	 * AMs it will make more sense to do all the work referencing `tbmres`
-	 * contents here, for others it might be better to defer more work to
-	 * scan_bitmap_next_tuple.
+	 * AMs, it might be better to defer more work to scan_bitmap_next_tuple().
 	 *
-	 * If `tbmres->blockno` is -1, this is a lossy scan and all visible tuples
-	 * on the page have to be returned, otherwise the tuples at offsets in
-	 * `tbmres->offsets` need to be returned.
+	 * After examining the page from the TBMIterateResult returned by the
+	 * streaming read helper, most AMs will set relevant fields in the `scan`
+	 * for the benefit of scan_bitmap_next_tuple(). All AMs must set
+	 * `recheck`, passed in by the caller, based on the value in the
+	 * TBMIterateResult so that BitmapHeapNext() can determine whether or not
+	 * to yield tuples.
 	 *
-	 * XXX: Currently this may only be implemented if the AM uses md.c as its
-	 * storage manager, and uses ItemPointer->ip_blkid in a manner that maps
-	 * blockids directly to the underlying storage. nodeBitmapHeapscan.c
-	 * performs prefetching directly using that interface.  This probably
-	 * needs to be rectified at a later point.
-	 *
-	 * XXX: Currently this may only be implemented if the AM uses the
-	 * visibilitymap, as nodeBitmapHeapscan.c unconditionally accesses it to
-	 * perform prefetching.  This probably needs to be rectified at a later
-	 * point.
-	 *
-	 * Optional callback, but either both scan_bitmap_next_block and
-	 * scan_bitmap_next_tuple need to exist, or neither.
+	 * Optional callback, but scan_bitmap_setup, scan_bitmap_next_block, and
+	 * scan_bitmap_next_tuple need to exist, or none of them.
 	 */
-	bool		(*scan_bitmap_next_block) (TableScanDesc scan,
-										   struct TBMIterateResult *tbmres);
+	bool		(*scan_bitmap_next_block) (TableScanDesc scan, bool *recheck);
 
 	/*
 	 * Fetch the next tuple of a bitmap table scan into `slot` and return true
 	 * if a visible tuple was found, false otherwise.
 	 *
-	 * For some AMs it will make more sense to do all the work referencing
-	 * `tbmres` contents in scan_bitmap_next_block, for others it might be
-	 * better to defer more work to this callback.
-	 *
-	 * Optional callback, but either both scan_bitmap_next_block and
-	 * scan_bitmap_next_tuple need to exist, or neither.
+	 * Optional callback, but scan_bitmap_setup, scan_bitmap_next_block, and
+	 * scan_bitmap_next_tuple need to exist, or none of them.
 	 */
-	bool		(*scan_bitmap_next_tuple) (TableScanDesc scan,
-										   struct TBMIterateResult *tbmres,
-										   TupleTableSlot *slot);
+	bool		(*scan_bitmap_next_tuple) (TableScanDesc scan, TupleTableSlot *slot);
 
 	/*
 	 * Prepare to fetch tuples from the next block in a sample scan. Return
@@ -944,9 +929,12 @@ table_beginscan_strat(Relation rel, Snapshot snapshot,
  */
 static inline TableScanDesc
 table_beginscan_bm(Relation rel, Snapshot snapshot,
-				   int nkeys, struct ScanKeyData *key)
+				   int nkeys, struct ScanKeyData *key, bool can_skip_fetch)
 {
 	uint32		flags = SO_TYPE_BITMAPSCAN | SO_ALLOW_PAGEMODE;
+
+	if (can_skip_fetch)
+		flags |= SO_CAN_SKIP_FETCH;
 
 	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key, NULL, flags);
 }
@@ -1955,8 +1943,7 @@ table_relation_estimate_size(Relation rel, int32 *attr_widths,
  * used after verifying the presence (at plan time or such).
  */
 static inline bool
-table_scan_bitmap_next_block(TableScanDesc scan,
-							 struct TBMIterateResult *tbmres)
+table_scan_bitmap_next_block(TableScanDesc scan, bool *recheck)
 {
 	/*
 	 * We don't expect direct calls to table_scan_bitmap_next_block with valid
@@ -1966,8 +1953,7 @@ table_scan_bitmap_next_block(TableScanDesc scan,
 	if (unlikely(TransactionIdIsValid(CheckXidAlive) && !bsysscan))
 		elog(ERROR, "unexpected table_scan_bitmap_next_block call during logical decoding");
 
-	return scan->rs_rd->rd_tableam->scan_bitmap_next_block(scan,
-														   tbmres);
+	return scan->rs_rd->rd_tableam->scan_bitmap_next_block(scan, recheck);
 }
 
 /*
@@ -1979,9 +1965,7 @@ table_scan_bitmap_next_block(TableScanDesc scan,
  * returned false.
  */
 static inline bool
-table_scan_bitmap_next_tuple(TableScanDesc scan,
-							 struct TBMIterateResult *tbmres,
-							 TupleTableSlot *slot)
+table_scan_bitmap_next_tuple(TableScanDesc scan, TupleTableSlot *slot)
 {
 	/*
 	 * We don't expect direct calls to table_scan_bitmap_next_tuple with valid
@@ -1992,7 +1976,6 @@ table_scan_bitmap_next_tuple(TableScanDesc scan,
 		elog(ERROR, "unexpected table_scan_bitmap_next_tuple call during logical decoding");
 
 	return scan->rs_rd->rd_tableam->scan_bitmap_next_tuple(scan,
-														   tbmres,
 														   slot);
 }
 

@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include "access/relscan.h"
 #include "access/xact.h"
 #include "catalog/pg_type.h"
 #include "commands/createas.h"
@@ -112,7 +113,7 @@ static void show_hash_info(HashState *hashstate, ExplainState *es);
 static void show_memoize_info(MemoizeState *mstate, List *ancestors,
 							  ExplainState *es);
 static void show_hashagg_info(AggState *aggstate, ExplainState *es);
-static void show_tidbitmap_info(BitmapHeapScanState *planstate,
+static void show_tidbitmap_info(TableScanDesc tdesc,
 								ExplainState *es);
 static void show_instrumentation_count(const char *qlabel, int which,
 									   PlanState *planstate, ExplainState *es);
@@ -1827,7 +1828,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 				show_instrumentation_count("Rows Removed by Filter", 1,
 										   planstate, es);
 			if (es->analyze)
-				show_tidbitmap_info((BitmapHeapScanState *) planstate, es);
+				show_tidbitmap_info(((BitmapHeapScanState *) planstate)->ss.ss_currentScanDesc, es);
 			break;
 		case T_SampleScan:
 			show_tablesample(((SampleScan *) plan)->tablesample,
@@ -3416,25 +3417,25 @@ show_hashagg_info(AggState *aggstate, ExplainState *es)
  * If it's EXPLAIN ANALYZE, show exact/lossy pages for a BitmapHeapScan node
  */
 static void
-show_tidbitmap_info(BitmapHeapScanState *planstate, ExplainState *es)
+show_tidbitmap_info(TableScanDesc tdesc, ExplainState *es)
 {
 	if (es->format != EXPLAIN_FORMAT_TEXT)
 	{
 		ExplainPropertyInteger("Exact Heap Blocks", NULL,
-							   planstate->exact_pages, es);
+							   tdesc->exact_pages, es);
 		ExplainPropertyInteger("Lossy Heap Blocks", NULL,
-							   planstate->lossy_pages, es);
+							   tdesc->lossy_pages, es);
 	}
 	else
 	{
-		if (planstate->exact_pages > 0 || planstate->lossy_pages > 0)
+		if (tdesc->exact_pages > 0 || tdesc->lossy_pages > 0)
 		{
 			ExplainIndentText(es);
 			appendStringInfoString(es->str, "Heap Blocks:");
-			if (planstate->exact_pages > 0)
-				appendStringInfo(es->str, " exact=%ld", planstate->exact_pages);
-			if (planstate->lossy_pages > 0)
-				appendStringInfo(es->str, " lossy=%ld", planstate->lossy_pages);
+			if (tdesc->exact_pages > 0)
+				appendStringInfo(es->str, " exact=%ld", tdesc->exact_pages);
+			if (tdesc->lossy_pages > 0)
+				appendStringInfo(es->str, " lossy=%ld", tdesc->lossy_pages);
 			appendStringInfoChar(es->str, '\n');
 		}
 	}

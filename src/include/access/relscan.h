@@ -16,6 +16,7 @@
 
 #include "access/htup_details.h"
 #include "access/itup.h"
+#include "nodes/tidbitmap.h"
 #include "port/atomics.h"
 #include "storage/buf.h"
 #include "storage/spin.h"
@@ -39,6 +40,13 @@ typedef struct TableScanDescData
 	/* Range of ItemPointers for table_scan_getnextslot_tidrange() to scan. */
 	ItemPointerData rs_mintid;
 	ItemPointerData rs_maxtid;
+
+	/* Only used for Bitmap table scans */
+	TBMIterator *tbmiterator;
+	TBMSharedIterator *shared_tbmiterator;
+	long		exact_pages;
+	long		lossy_pages;
+	int			empty_tuples;
 
 	/*
 	 * Information about type and behaviour of the scan, a bitmask of members

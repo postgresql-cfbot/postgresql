@@ -469,10 +469,12 @@ CheckpointerMain(void)
 				ckpt_performed = CreateRestartPoint(flags);
 
 			/*
-			 * After any checkpoint, close all smgr files.  This is so we
-			 * won't hang onto smgr references to deleted files indefinitely.
+			 * After any checkpoint, free all smgr objects.  Otherwise we
+			 * would never do so for dropped relations, as the checkpointer
+			 * does not process shared invalidation messages or call
+			 * AtEOXact_SMgr().
 			 */
-			smgrcloseall();
+			smgrdestroyall();
 
 			/*
 			 * Indicate checkpoint completion to any waiting backends.
@@ -958,11 +960,8 @@ RequestCheckpoint(int flags)
 		 */
 		CreateCheckPoint(flags | CHECKPOINT_IMMEDIATE);
 
-		/*
-		 * After any checkpoint, close all smgr files.  This is so we won't
-		 * hang onto smgr references to deleted files indefinitely.
-		 */
-		smgrcloseall();
+		/* Free all smgr objects, as CheckpointerMain() normally would. */
+		smgrdestroyall();
 
 		return;
 	}

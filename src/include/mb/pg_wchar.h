@@ -724,6 +724,22 @@ extern WCHAR *pgwin32_message_to_UTF16(const char *str, int len, int *utf16len);
 
 
 /*
+ * Number of bytes needed to represent the given char in UTF8.
+ */
+static inline int
+unicode_utf8len(pg_wchar c)
+{
+	if (c <= 0x7F)
+		return 1;
+	else if (c <= 0x7FF)
+		return 2;
+	else if (c <= 0xFFFF)
+		return 3;
+	else
+		return 4;
+}
+
+/*
  * Verify a chunk of bytes for valid ASCII.
  *
  * Returns false if the input contains any zero bytes or bytes with the

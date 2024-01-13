@@ -2982,7 +2982,7 @@ dumpDatabase(Archive *fout)
 				i_datlocprovider,
 				i_collate,
 				i_ctype,
-				i_daticulocale,
+				i_datlocale,
 				i_daticurules,
 				i_frozenxid,
 				i_minmxid,
@@ -3001,7 +3001,7 @@ dumpDatabase(Archive *fout)
 			   *datlocprovider,
 			   *collate,
 			   *ctype,
-			   *iculocale,
+			   *locale,
 			   *icurules,
 			   *datistemplate,
 			   *datconnlimit,
@@ -3025,10 +3025,12 @@ dumpDatabase(Archive *fout)
 		appendPQExpBufferStr(dbQry, "datminmxid, ");
 	else
 		appendPQExpBufferStr(dbQry, "0 AS datminmxid, ");
-	if (fout->remoteVersion >= 150000)
-		appendPQExpBufferStr(dbQry, "datlocprovider, daticulocale, datcollversion, ");
+	if (fout->remoteVersion >= 170000)
+		appendPQExpBufferStr(dbQry, "datlocprovider, datlocale, datcollversion, ");
+	else if (fout->remoteVersion >= 150000)
+		appendPQExpBufferStr(dbQry, "datlocprovider, daticulocale AS datlocale, datcollversion, ");
 	else
-		appendPQExpBufferStr(dbQry, "'c' AS datlocprovider, NULL AS daticulocale, NULL AS datcollversion, ");
+		appendPQExpBufferStr(dbQry, "'c' AS datlocprovider, NULL AS datlocale, NULL AS datcollversion, ");
 	if (fout->remoteVersion >= 160000)
 		appendPQExpBufferStr(dbQry, "daticurules, ");
 	else
@@ -3049,7 +3051,7 @@ dumpDatabase(Archive *fout)
 	i_datlocprovider = PQfnumber(res, "datlocprovider");
 	i_collate = PQfnumber(res, "datcollate");
 	i_ctype = PQfnumber(res, "datctype");
-	i_daticulocale = PQfnumber(res, "daticulocale");
+	i_datlocale = PQfnumber(res, "datlocale");
 	i_daticurules = PQfnumber(res, "daticurules");
 	i_frozenxid = PQfnumber(res, "datfrozenxid");
 	i_minmxid = PQfnumber(res, "datminmxid");
@@ -3068,10 +3070,10 @@ dumpDatabase(Archive *fout)
 	datlocprovider = PQgetvalue(res, 0, i_datlocprovider);
 	collate = PQgetvalue(res, 0, i_collate);
 	ctype = PQgetvalue(res, 0, i_ctype);
-	if (!PQgetisnull(res, 0, i_daticulocale))
-		iculocale = PQgetvalue(res, 0, i_daticulocale);
+	if (!PQgetisnull(res, 0, i_datlocale))
+		locale = PQgetvalue(res, 0, i_datlocale);
 	else
-		iculocale = NULL;
+		locale = NULL;
 	if (!PQgetisnull(res, 0, i_daticurules))
 		icurules = PQgetvalue(res, 0, i_daticurules);
 	else
@@ -3110,7 +3112,9 @@ dumpDatabase(Archive *fout)
 	}
 
 	appendPQExpBufferStr(creaQry, " LOCALE_PROVIDER = ");
-	if (datlocprovider[0] == 'c')
+	if (datlocprovider[0] == 'b')
+		appendPQExpBufferStr(creaQry, "builtin");
+	else if (datlocprovider[0] == 'c')
 		appendPQExpBufferStr(creaQry, "libc");
 	else if (datlocprovider[0] == 'i')
 		appendPQExpBufferStr(creaQry, "icu");
@@ -3118,29 +3122,36 @@ dumpDatabase(Archive *fout)
 		pg_fatal("unrecognized locale provider: %s",
 				 datlocprovider);
 
-	if (strlen(collate) > 0 && strcmp(collate, ctype) == 0)
+	if (!locale && datlocprovider[0] != 'c')
+		pg_log_warning("database '%s' with provider '%s' missing datlocale",
+					   datname, datlocprovider);
+
+	if (locale && datlocprovider[0] == 'c')
+		pg_log_warning("database '%s' with provider 'c' has non-NULL locale '%s'",
+					   datname, locale);
+
+	/* if collate and ctype are equal, and locale is NULL, use LOCALE */
+	if (!locale && strlen(collate) > 0 && strcmp(collate, ctype) == 0)
+		locale = collate;
+
+	/* output LC_COLLATE and LC_CTYPE if different from LOCALE */
+	if (strlen(collate) > 0 && (!locale || strcmp(collate, locale) != 0))
 	{
-		appendPQExpBufferStr(creaQry, " LOCALE = ");
+		appendPQExpBufferStr(creaQry, " LC_COLLATE = ");
 		appendStringLiteralAH(creaQry, collate, fout);
 	}
-	else
+	if (strlen(ctype) > 0 && (!locale || strcmp(ctype, locale) != 0))
 	{
-		if (strlen(collate) > 0)
-		{
-			appendPQExpBufferStr(creaQry, " LC_COLLATE = ");
-			appendStringLiteralAH(creaQry, collate, fout);
-		}
-		if (strlen(ctype) > 0)
-		{
-			appendPQExpBufferStr(creaQry, " LC_CTYPE = ");
-			appendStringLiteralAH(creaQry, ctype, fout);
-		}
+		appendPQExpBufferStr(creaQry, " LC_CTYPE = ");
+		appendStringLiteralAH(creaQry, ctype, fout);
 	}
-	if (iculocale)
+
+	if (locale)
 	{
-		appendPQExpBufferStr(creaQry, " ICU_LOCALE = ");
-		appendStringLiteralAH(creaQry, iculocale, fout);
+		appendPQExpBufferStr(creaQry, " LOCALE = ");
+		appendStringLiteralAH(creaQry, locale, fout);
 	}
+
 	if (icurules)
 	{
 		appendPQExpBufferStr(creaQry, " ICU_RULES = ");
@@ -13801,12 +13812,12 @@ dumpCollation(Archive *fout, const CollInfo *collinfo)
 	int			i_collisdeterministic;
 	int			i_collcollate;
 	int			i_collctype;
-	int			i_colliculocale;
+	int			i_colllocale;
 	int			i_collicurules;
 	const char *collprovider;
 	const char *collcollate;
 	const char *collctype;
-	const char *colliculocale;
+	const char *colllocale;
 	const char *collicurules;
 
 	/* Do nothing in data-only dump */
@@ -13838,12 +13849,15 @@ dumpCollation(Archive *fout, const CollInfo *collinfo)
 		appendPQExpBufferStr(query,
 							 "true AS collisdeterministic, ");
 
-	if (fout->remoteVersion >= 150000)
+	if (fout->remoteVersion >= 170000)
 		appendPQExpBufferStr(query,
-							 "colliculocale, ");
+							 "colllocale, ");
+	else if (fout->remoteVersion >= 150000)
+		appendPQExpBufferStr(query,
+							 "colliculocale AS colllocale, ");
 	else
 		appendPQExpBufferStr(query,
-							 "NULL AS colliculocale, ");
+							 "NULL AS colllocale, ");
 
 	if (fout->remoteVersion >= 160000)
 		appendPQExpBufferStr(query,
@@ -13865,7 +13879,7 @@ dumpCollation(Archive *fout, const CollInfo *collinfo)
 	i_collisdeterministic = PQfnumber(res, "collisdeterministic");
 	i_collcollate = PQfnumber(res, "collcollate");
 	i_collctype = PQfnumber(res, "collctype");
-	i_colliculocale = PQfnumber(res, "colliculocale");
+	i_colllocale = PQfnumber(res, "colllocale");
 	i_collicurules = PQfnumber(res, "collicurules");
 
 	collprovider = PQgetvalue(res, 0, i_collprovider);
@@ -13892,10 +13906,10 @@ dumpCollation(Archive *fout, const CollInfo *collinfo)
 			collctype = NULL;
 	}
 
-	if (!PQgetisnull(res, 0, i_colliculocale))
-		colliculocale = PQgetvalue(res, 0, i_colliculocale);
+	if (!PQgetisnull(res, 0, i_colllocale))
+		colllocale = PQgetvalue(res, 0, i_colllocale);
 	else
-		colliculocale = NULL;
+		colllocale = NULL;
 
 	if (!PQgetisnull(res, 0, i_collicurules))
 		collicurules = PQgetvalue(res, 0, i_collicurules);
@@ -13909,7 +13923,9 @@ dumpCollation(Archive *fout, const CollInfo *collinfo)
 					  fmtQualifiedDumpable(collinfo));
 
 	appendPQExpBufferStr(q, "provider = ");
-	if (collprovider[0] == 'c')
+	if (collprovider[0] == 'b')
+		appendPQExpBufferStr(q, "builtin");
+	else if (collprovider[0] == 'c')
 		appendPQExpBufferStr(q, "libc");
 	else if (collprovider[0] == 'i')
 		appendPQExpBufferStr(q, "icu");
@@ -13925,25 +13941,32 @@ dumpCollation(Archive *fout, const CollInfo *collinfo)
 
 	if (collprovider[0] == 'd')
 	{
-		if (collcollate || collctype || colliculocale || collicurules)
+		if (collcollate || collctype || colllocale || collicurules)
 			pg_log_warning("invalid collation \"%s\"", qcollname);
 
 		/* no locale -- the default collation cannot be reloaded anyway */
+	}
+	else if (collprovider[0] == 'b')
+	{
+		if (collcollate || collctype || colllocale || collicurules)
+			pg_log_warning("invalid collation \"%s\"", qcollname);
+
+		appendPQExpBufferStr(q, ", locale = 'C'");
 	}
 	else if (collprovider[0] == 'i')
 	{
 		if (fout->remoteVersion >= 150000)
 		{
-			if (collcollate || collctype || !colliculocale)
+			if (collcollate || collctype || !colllocale)
 				pg_log_warning("invalid collation \"%s\"", qcollname);
 
 			appendPQExpBufferStr(q, ", locale = ");
-			appendStringLiteralAH(q, colliculocale ? colliculocale : "",
+			appendStringLiteralAH(q, colllocale ? colllocale : "",
 								  fout);
 		}
 		else
 		{
-			if (!collcollate || !collctype || colliculocale ||
+			if (!collcollate || !collctype || colllocale ||
 				strcmp(collcollate, collctype) != 0)
 				pg_log_warning("invalid collation \"%s\"", qcollname);
 
@@ -13959,7 +13982,7 @@ dumpCollation(Archive *fout, const CollInfo *collinfo)
 	}
 	else if (collprovider[0] == 'c')
 	{
-		if (colliculocale || collicurules || !collcollate || !collctype)
+		if (colllocale || collicurules || !collcollate || !collctype)
 			pg_log_warning("invalid collation \"%s\"", qcollname);
 
 		if (collcollate && collctype && strcmp(collcollate, collctype) == 0)

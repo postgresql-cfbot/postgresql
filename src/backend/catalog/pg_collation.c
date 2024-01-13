@@ -49,7 +49,7 @@ CollationCreate(const char *collname, Oid collnamespace,
 				bool collisdeterministic,
 				int32 collencoding,
 				const char *collcollate, const char *collctype,
-				const char *colliculocale,
+				const char *colllocale,
 				const char *collicurules,
 				const char *collversion,
 				bool if_not_exists,
@@ -68,7 +68,10 @@ CollationCreate(const char *collname, Oid collnamespace,
 	Assert(collname);
 	Assert(collnamespace);
 	Assert(collowner);
-	Assert((collcollate && collctype) || colliculocale);
+	Assert((collprovider == COLLPROVIDER_LIBC &&
+			 collcollate &&  collctype && !colllocale) ||
+		   (collprovider != COLLPROVIDER_LIBC &&
+			!collcollate && !collctype &&  colllocale));
 
 	/*
 	 * Make sure there is no existing collation of same name & encoding.
@@ -191,10 +194,10 @@ CollationCreate(const char *collname, Oid collnamespace,
 		values[Anum_pg_collation_collctype - 1] = CStringGetTextDatum(collctype);
 	else
 		nulls[Anum_pg_collation_collctype - 1] = true;
-	if (colliculocale)
-		values[Anum_pg_collation_colliculocale - 1] = CStringGetTextDatum(colliculocale);
+	if (colllocale)
+		values[Anum_pg_collation_colllocale - 1] = CStringGetTextDatum(colllocale);
 	else
-		nulls[Anum_pg_collation_colliculocale - 1] = true;
+		nulls[Anum_pg_collation_colllocale - 1] = true;
 	if (collicurules)
 		values[Anum_pg_collation_collicurules - 1] = CStringGetTextDatum(collicurules);
 	else

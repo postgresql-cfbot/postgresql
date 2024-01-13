@@ -42,7 +42,7 @@ CATALOG(pg_collation,3456,CollationRelationId)
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 	text		collcollate BKI_DEFAULT(_null_);	/* LC_COLLATE setting */
 	text		collctype BKI_DEFAULT(_null_);	/* LC_CTYPE setting */
-	text		colliculocale BKI_DEFAULT(_null_);	/* ICU locale ID */
+	text		colllocale BKI_DEFAULT(_null_);	/* locale ID */
 	text		collicurules BKI_DEFAULT(_null_);	/* ICU collation rules */
 	text		collversion BKI_DEFAULT(_null_);	/* provider-dependent
 													 * version of collation
@@ -65,6 +65,7 @@ DECLARE_UNIQUE_INDEX_PKEY(pg_collation_oid_index, 3085, CollationOidIndexId, pg_
 #ifdef EXPOSE_TO_CLIENT_CODE
 
 #define COLLPROVIDER_DEFAULT	'd'
+#define COLLPROVIDER_BUILTIN	'b'
 #define COLLPROVIDER_ICU		'i'
 #define COLLPROVIDER_LIBC		'c'
 
@@ -73,6 +74,8 @@ collprovider_name(char c)
 {
 	switch (c)
 	{
+		case COLLPROVIDER_BUILTIN:
+			return "builtin";
 		case COLLPROVIDER_ICU:
 			return "icu";
 		case COLLPROVIDER_LIBC:
@@ -91,7 +94,7 @@ extern Oid	CollationCreate(const char *collname, Oid collnamespace,
 							bool collisdeterministic,
 							int32 collencoding,
 							const char *collcollate, const char *collctype,
-							const char *colliculocale,
+							const char *colllocale,
 							const char *collicurules,
 							const char *collversion,
 							bool if_not_exists,

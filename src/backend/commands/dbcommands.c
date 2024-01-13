@@ -118,7 +118,7 @@ static bool get_db_info(const char *name, LOCKMODE lockmode,
 						Oid *dbIdP, Oid *ownerIdP,
 						int *encodingP, bool *dbIsTemplateP, bool *dbAllowConnP, bool *dbHasLoginEvtP,
 						TransactionId *dbFrozenXidP, MultiXactId *dbMinMultiP,
-						Oid *dbTablespace, char **dbCollate, char **dbCtype, char **dbIculocale,
+						Oid *dbTablespace, char **dbCollate, char **dbCtype, char **dbLocale,
 						char **dbIcurules,
 						char *dbLocProvider,
 						char **dbCollversion);
@@ -675,7 +675,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	int			src_encoding = -1;
 	char	   *src_collate = NULL;
 	char	   *src_ctype = NULL;
-	char	   *src_iculocale = NULL;
+	char	   *src_locale = NULL;
 	char	   *src_icurules = NULL;
 	char		src_locprovider = '\0';
 	char	   *src_collversion = NULL;
@@ -698,6 +698,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	DefElem    *dtemplate = NULL;
 	DefElem    *dencoding = NULL;
 	DefElem    *dlocale = NULL;
+	DefElem    *dbuiltinlocale = NULL;
 	DefElem    *dcollate = NULL;
 	DefElem    *dctype = NULL;
 	DefElem    *diculocale = NULL;
@@ -713,7 +714,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	const char *dbtemplate = NULL;
 	char	   *dbcollate = NULL;
 	char	   *dbctype = NULL;
-	char	   *dbiculocale = NULL;
+	const char *dblocale = NULL;
 	char	   *dbicurules = NULL;
 	char		dblocprovider = '\0';
 	char	   *canonname;
@@ -761,6 +762,12 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 			if (dlocale)
 				errorConflictingDefElem(defel, pstate);
 			dlocale = defel;
+		}
+		else if (strcmp(defel->defname, "builtin_locale") == 0)
+		{
+			if (dbuiltinlocale)
+				errorConflictingDefElem(defel, pstate);
+			dbuiltinlocale = defel;
 		}
 		else if (strcmp(defel->defname, "lc_collate") == 0)
 		{
@@ -897,20 +904,25 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	{
 		dbcollate = defGetString(dlocale);
 		dbctype = defGetString(dlocale);
+		dblocale = defGetString(dlocale);
 	}
+	if (dbuiltinlocale && dbuiltinlocale->arg)
+		dblocale = defGetString(dbuiltinlocale);
 	if (dcollate && dcollate->arg)
 		dbcollate = defGetString(dcollate);
 	if (dctype && dctype->arg)
 		dbctype = defGetString(dctype);
 	if (diculocale && diculocale->arg)
-		dbiculocale = defGetString(diculocale);
+		dblocale = defGetString(diculocale);
 	if (dicurules && dicurules->arg)
 		dbicurules = defGetString(dicurules);
 	if (dlocprovider && dlocprovider->arg)
 	{
 		char	   *locproviderstr = defGetString(dlocprovider);
 
-		if (pg_strcasecmp(locproviderstr, "icu") == 0)
+		if (pg_strcasecmp(locproviderstr, "builtin") == 0)
+			dblocprovider = COLLPROVIDER_BUILTIN;
+		else if (pg_strcasecmp(locproviderstr, "icu") == 0)
 			dblocprovider = COLLPROVIDER_ICU;
 		else if (pg_strcasecmp(locproviderstr, "libc") == 0)
 			dblocprovider = COLLPROVIDER_LIBC;
@@ -971,7 +983,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 					 &src_dboid, &src_owner, &src_encoding,
 					 &src_istemplate, &src_allowconn, &src_hasloginevt,
 					 &src_frozenxid, &src_minmxid, &src_deftablespace,
-					 &src_collate, &src_ctype, &src_iculocale, &src_icurules, &src_locprovider,
+					 &src_collate, &src_ctype, &src_locale, &src_icurules, &src_locprovider,
 					 &src_collversion))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_DATABASE),
@@ -1027,14 +1039,9 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 		dbctype = src_ctype;
 	if (dblocprovider == '\0')
 		dblocprovider = src_locprovider;
-	if (dbiculocale == NULL && dblocprovider == COLLPROVIDER_ICU)
-	{
-		if (dlocale && dlocale->arg)
-			dbiculocale = defGetString(dlocale);
-		else
-			dbiculocale = src_iculocale;
-	}
-	if (dbicurules == NULL && dblocprovider == COLLPROVIDER_ICU)
+	if (dblocale == NULL)
+		dblocale = src_locale;
+	if (dbicurules == NULL)
 		dbicurules = src_icurules;
 
 	/* Some encodings are client only */
@@ -1059,6 +1066,27 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 
 	check_encoding_locale_matches(encoding, dbcollate, dbctype);
 
+	if (dblocprovider == COLLPROVIDER_BUILTIN)
+	{
+		/*
+		 * This would happen if template0 uses the libc provider but the new
+		 * database uses builtin.
+		 */
+		if (!dblocale)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("LOCALE must be specified for the builtin provider")));
+
+		dblocale = builtin_validate_locale(encoding, dblocale);
+	}
+	else
+	{
+		if (dbuiltinlocale && dbuiltinlocale->arg)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+					 errmsg("BUILTIN_LOCALE cannot be specified unless locale provider is builtin")));
+	}
+
 	if (dblocprovider == COLLPROVIDER_ICU)
 	{
 		if (!(is_encoding_supported_by_icu(encoding)))
@@ -1071,7 +1099,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 		 * This would happen if template0 uses the libc provider but the new
 		 * database uses icu.
 		 */
-		if (!dbiculocale)
+		if (!dblocale)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("LOCALE or ICU_LOCALE must be specified")));
@@ -1081,26 +1109,26 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 		 * database, preserve locale string. Otherwise, canonicalize to a
 		 * language tag.
 		 */
-		if (!IsBinaryUpgrade && dbiculocale != src_iculocale)
+		if (!IsBinaryUpgrade && dblocale != src_locale)
 		{
-			char	   *langtag = icu_language_tag(dbiculocale,
+			char	   *langtag = icu_language_tag(dblocale,
 												   icu_validation_level);
 
-			if (langtag && strcmp(dbiculocale, langtag) != 0)
+			if (langtag && strcmp(dblocale, langtag) != 0)
 			{
 				ereport(NOTICE,
 						(errmsg("using standard form \"%s\" for ICU locale \"%s\"",
-								langtag, dbiculocale)));
+								langtag, dblocale)));
 
-				dbiculocale = langtag;
+				dblocale = langtag;
 			}
 		}
 
-		icu_validate_locale(dbiculocale);
+		icu_validate_locale(dblocale);
 	}
 	else
 	{
-		if (dbiculocale)
+		if (diculocale && diculocale->arg)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 					 errmsg("ICU locale cannot be specified unless locale provider is ICU")));
@@ -1110,6 +1138,10 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 					 errmsg("ICU rules cannot be specified unless locale provider is ICU")));
 	}
+
+	/* for libc, locale comes from datcollate and datctype */
+	if (dblocprovider == COLLPROVIDER_LIBC)
+		dblocale = NULL;
 
 	/*
 	 * Check that the new encoding and locale settings match the source
@@ -1157,13 +1189,13 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 			char	   *val1;
 			char	   *val2;
 
-			Assert(dbiculocale);
-			Assert(src_iculocale);
-			if (strcmp(dbiculocale, src_iculocale) != 0)
+			Assert(dblocale);
+			Assert(src_locale);
+			if (strcmp(dblocale, src_locale) != 0)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("new ICU locale (%s) is incompatible with the ICU locale of the template database (%s)",
-								dbiculocale, src_iculocale),
+								dblocale, src_locale),
 						 errhint("Use the same ICU locale as in the template database, or use template0 as template.")));
 
 			val1 = dbicurules;
@@ -1195,9 +1227,17 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	 */
 	if (src_collversion && !dcollversion)
 	{
-		char	   *actual_versionstr;
+		char		*actual_versionstr;
+		const char	*locale;
 
-		actual_versionstr = get_collation_actual_version(dblocprovider, dblocprovider == COLLPROVIDER_ICU ? dbiculocale : dbcollate);
+		if (dblocprovider == COLLPROVIDER_ICU)
+			locale = dblocale;
+		else if (dblocprovider == COLLPROVIDER_LIBC)
+			locale = dbcollate;
+		else
+			locale = NULL; /* COLLPROVIDER_BUILTIN */
+
+		actual_versionstr = get_collation_actual_version(dblocprovider, locale);
 		if (!actual_versionstr)
 			ereport(ERROR,
 					(errmsg("template database \"%s\" has a collation version, but no actual collation version could be determined",
@@ -1225,7 +1265,18 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	 * collation version, which is normally only the case for template0.
 	 */
 	if (dbcollversion == NULL)
-		dbcollversion = get_collation_actual_version(dblocprovider, dblocprovider == COLLPROVIDER_ICU ? dbiculocale : dbcollate);
+	{
+		const char *locale;
+
+		if (dblocprovider == COLLPROVIDER_ICU)
+			locale = dblocale;
+		else if (dblocprovider == COLLPROVIDER_LIBC)
+			locale = dbcollate;
+		else
+			locale = NULL; /* COLLPROVIDER_BUILTIN */
+
+		dbcollversion = get_collation_actual_version(dblocprovider, locale);
+	}
 
 	/* Resolve default tablespace for new database */
 	if (dtablespacename && dtablespacename->arg)
@@ -1364,8 +1415,8 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	 * block on the unique index, and fail after we commit).
 	 */
 
-	Assert((dblocprovider == COLLPROVIDER_ICU && dbiculocale) ||
-		   (dblocprovider != COLLPROVIDER_ICU && !dbiculocale));
+	Assert((dblocprovider != COLLPROVIDER_LIBC && dblocale) ||
+		   (dblocprovider == COLLPROVIDER_LIBC && !dblocale));
 
 	/* Form tuple */
 	new_record[Anum_pg_database_oid - 1] = ObjectIdGetDatum(dboid);
@@ -1383,10 +1434,10 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	new_record[Anum_pg_database_dattablespace - 1] = ObjectIdGetDatum(dst_deftablespace);
 	new_record[Anum_pg_database_datcollate - 1] = CStringGetTextDatum(dbcollate);
 	new_record[Anum_pg_database_datctype - 1] = CStringGetTextDatum(dbctype);
-	if (dbiculocale)
-		new_record[Anum_pg_database_daticulocale - 1] = CStringGetTextDatum(dbiculocale);
+	if (dblocale)
+		new_record[Anum_pg_database_datlocale - 1] = CStringGetTextDatum(dblocale);
 	else
-		new_record_nulls[Anum_pg_database_daticulocale - 1] = true;
+		new_record_nulls[Anum_pg_database_datlocale - 1] = true;
 	if (dbicurules)
 		new_record[Anum_pg_database_daticurules - 1] = CStringGetTextDatum(dbicurules);
 	else
@@ -2446,6 +2497,7 @@ AlterDatabaseRefreshColl(AlterDatabaseRefreshCollStmt *stmt)
 	ObjectAddress address;
 	Datum		datum;
 	bool		isnull;
+	char	   *locale;
 	char	   *oldversion;
 	char	   *newversion;
 
@@ -2472,10 +2524,24 @@ AlterDatabaseRefreshColl(AlterDatabaseRefreshCollStmt *stmt)
 	datum = heap_getattr(tuple, Anum_pg_database_datcollversion, RelationGetDescr(rel), &isnull);
 	oldversion = isnull ? NULL : TextDatumGetCString(datum);
 
-	datum = heap_getattr(tuple, datForm->datlocprovider == COLLPROVIDER_ICU ? Anum_pg_database_daticulocale : Anum_pg_database_datcollate, RelationGetDescr(rel), &isnull);
-	if (isnull)
-		elog(ERROR, "unexpected null in pg_database");
-	newversion = get_collation_actual_version(datForm->datlocprovider, TextDatumGetCString(datum));
+	if (datForm->datlocprovider == COLLPROVIDER_ICU)
+	{
+		datum = heap_getattr(tuple, Anum_pg_database_datlocale, RelationGetDescr(rel), &isnull);
+		if (isnull)
+			elog(ERROR, "unexpected null in pg_database");
+		locale = TextDatumGetCString(datum);
+	}
+	else if (datForm->datlocprovider == COLLPROVIDER_LIBC)
+	{
+		datum = heap_getattr(tuple, Anum_pg_database_datcollate, RelationGetDescr(rel), &isnull);
+		if (isnull)
+			elog(ERROR, "unexpected null in pg_database");
+		locale = TextDatumGetCString(datum);
+	}
+	else
+		locale = NULL; /* COLLPROVIDER_BUILTIN */
+
+	newversion = get_collation_actual_version(datForm->datlocprovider, locale);
 
 	/* cannot change from NULL to non-NULL or vice versa */
 	if ((!oldversion && newversion) || (oldversion && !newversion))
@@ -2660,6 +2726,7 @@ pg_database_collation_actual_version(PG_FUNCTION_ARGS)
 	HeapTuple	tp;
 	char		datlocprovider;
 	Datum		datum;
+	char	   *locale;
 	char	   *version;
 
 	tp = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(dbid));
@@ -2670,8 +2737,20 @@ pg_database_collation_actual_version(PG_FUNCTION_ARGS)
 
 	datlocprovider = ((Form_pg_database) GETSTRUCT(tp))->datlocprovider;
 
-	datum = SysCacheGetAttrNotNull(DATABASEOID, tp, datlocprovider == COLLPROVIDER_ICU ? Anum_pg_database_daticulocale : Anum_pg_database_datcollate);
-	version = get_collation_actual_version(datlocprovider, TextDatumGetCString(datum));
+	if (datlocprovider == COLLPROVIDER_ICU)
+	{
+		datum = SysCacheGetAttrNotNull(DATABASEOID, tp, Anum_pg_database_datlocale);
+		locale = TextDatumGetCString(datum);
+	}
+	else if (datlocprovider == COLLPROVIDER_LIBC)
+	{
+		datum = SysCacheGetAttrNotNull(DATABASEOID, tp, Anum_pg_database_datcollate);
+		locale = TextDatumGetCString(datum);
+	}
+	else
+		locale = NULL; /* COLLPROVIDER_BUILTIN */
+
+	version = get_collation_actual_version(datlocprovider, locale);
 
 	ReleaseSysCache(tp);
 
@@ -2697,7 +2776,7 @@ get_db_info(const char *name, LOCKMODE lockmode,
 			Oid *dbIdP, Oid *ownerIdP,
 			int *encodingP, bool *dbIsTemplateP, bool *dbAllowConnP, bool *dbHasLoginEvtP,
 			TransactionId *dbFrozenXidP, MultiXactId *dbMinMultiP,
-			Oid *dbTablespace, char **dbCollate, char **dbCtype, char **dbIculocale,
+			Oid *dbTablespace, char **dbCollate, char **dbCtype, char **dbLocale,
 			char **dbIcurules,
 			char *dbLocProvider,
 			char **dbCollversion)
@@ -2808,13 +2887,13 @@ get_db_info(const char *name, LOCKMODE lockmode,
 					datum = SysCacheGetAttrNotNull(DATABASEOID, tuple, Anum_pg_database_datctype);
 					*dbCtype = TextDatumGetCString(datum);
 				}
-				if (dbIculocale)
+				if (dbLocale)
 				{
-					datum = SysCacheGetAttr(DATABASEOID, tuple, Anum_pg_database_daticulocale, &isnull);
+					datum = SysCacheGetAttr(DATABASEOID, tuple, Anum_pg_database_datlocale, &isnull);
 					if (isnull)
-						*dbIculocale = NULL;
+						*dbLocale = NULL;
 					else
-						*dbIculocale = TextDatumGetCString(datum);
+						*dbLocale = TextDatumGetCString(datum);
 				}
 				if (dbIcurules)
 				{

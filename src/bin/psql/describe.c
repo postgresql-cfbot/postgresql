@@ -926,7 +926,7 @@ listAllDbs(const char *pattern, bool verbose)
 					  gettext_noop("Encoding"));
 	if (pset.sversion >= 150000)
 		appendPQExpBuffer(&buf,
-						  "  CASE d.datlocprovider WHEN 'c' THEN 'libc' WHEN 'i' THEN 'icu' END AS \"%s\",\n",
+						  "  CASE d.datlocprovider WHEN 'b' THEN 'builtin' WHEN 'c' THEN 'libc' WHEN 'i' THEN 'icu' END AS \"%s\",\n",
 						  gettext_noop("Locale Provider"));
 	else
 		appendPQExpBuffer(&buf,
@@ -937,14 +937,18 @@ listAllDbs(const char *pattern, bool verbose)
 					  "  d.datctype as \"%s\",\n",
 					  gettext_noop("Collate"),
 					  gettext_noop("Ctype"));
-	if (pset.sversion >= 150000)
+	if (pset.sversion >= 170000)
+		appendPQExpBuffer(&buf,
+						  "  d.datlocale as \"%s\",\n",
+						  gettext_noop("Locale"));
+	else if (pset.sversion >= 150000)
 		appendPQExpBuffer(&buf,
 						  "  d.daticulocale as \"%s\",\n",
-						  gettext_noop("ICU Locale"));
+						  gettext_noop("Locale"));
 	else
 		appendPQExpBuffer(&buf,
 						  "  NULL as \"%s\",\n",
-						  gettext_noop("ICU Locale"));
+						  gettext_noop("Locale"));
 	if (pset.sversion >= 160000)
 		appendPQExpBuffer(&buf,
 						  "  d.daticurules as \"%s\",\n",
@@ -4962,7 +4966,7 @@ listCollations(const char *pattern, bool verbose, bool showSystem)
 
 	if (pset.sversion >= 100000)
 		appendPQExpBuffer(&buf,
-						  "  CASE c.collprovider WHEN 'd' THEN 'default' WHEN 'c' THEN 'libc' WHEN 'i' THEN 'icu' END AS \"%s\",\n",
+						  "  CASE c.collprovider WHEN 'd' THEN 'default' WHEN 'b' THEN 'builtin' WHEN 'c' THEN 'libc' WHEN 'i' THEN 'icu' END AS \"%s\",\n",
 						  gettext_noop("Provider"));
 	else
 		appendPQExpBuffer(&buf,
@@ -4975,14 +4979,18 @@ listCollations(const char *pattern, bool verbose, bool showSystem)
 					  gettext_noop("Collate"),
 					  gettext_noop("Ctype"));
 
-	if (pset.sversion >= 150000)
+	if (pset.sversion >= 170000)
+		appendPQExpBuffer(&buf,
+						  "  c.colllocale AS \"%s\",\n",
+						  gettext_noop("Locale"));
+	else if (pset.sversion >= 150000)
 		appendPQExpBuffer(&buf,
 						  "  c.colliculocale AS \"%s\",\n",
-						  gettext_noop("ICU Locale"));
+						  gettext_noop("Locale"));
 	else
 		appendPQExpBuffer(&buf,
 						  "  c.collcollate AS \"%s\",\n",
-						  gettext_noop("ICU Locale"));
+						  gettext_noop("Locale"));
 
 	if (pset.sversion >= 160000)
 		appendPQExpBuffer(&buf,

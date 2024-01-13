@@ -318,7 +318,7 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 	bool		isnull;
 	char	   *collate;
 	char	   *ctype;
-	char	   *iculocale;
+	char	   *datlocale;
 
 	/* Fetch our pg_database row normally, via syscache */
 	tup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
@@ -423,12 +423,21 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 		strcmp(ctype, "POSIX") == 0)
 		database_ctype_is_c = true;
 
-	if (dbform->datlocprovider == COLLPROVIDER_ICU)
+	if (dbform->datlocprovider == COLLPROVIDER_BUILTIN)
+	{
+		datum = SysCacheGetAttrNotNull(DATABASEOID, tup, Anum_pg_database_datlocale);
+		datlocale = TextDatumGetCString(datum);
+
+		default_locale.info.builtin.locale = MemoryContextStrdup(
+			TopMemoryContext, datlocale);
+		default_locale.info.builtin.cclass_posix = true;
+	}
+	else if (dbform->datlocprovider == COLLPROVIDER_ICU)
 	{
 		char	   *icurules;
 
-		datum = SysCacheGetAttrNotNull(DATABASEOID, tup, Anum_pg_database_daticulocale);
-		iculocale = TextDatumGetCString(datum);
+		datum = SysCacheGetAttrNotNull(DATABASEOID, tup, Anum_pg_database_datlocale);
+		datlocale = TextDatumGetCString(datum);
 
 		datum = SysCacheGetAttr(DATABASEOID, tup, Anum_pg_database_daticurules, &isnull);
 		if (!isnull)
@@ -436,10 +445,10 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 		else
 			icurules = NULL;
 
-		make_icu_collator(iculocale, icurules, &default_locale);
+		make_icu_collator(datlocale, icurules, &default_locale);
 	}
 	else
-		iculocale = NULL;
+		datlocale = NULL;
 
 	default_locale.provider = dbform->datlocprovider;
 
@@ -461,10 +470,16 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 	{
 		char	   *actual_versionstr;
 		char	   *collversionstr;
+		char	   *locale;
 
 		collversionstr = TextDatumGetCString(datum);
 
-		actual_versionstr = get_collation_actual_version(dbform->datlocprovider, dbform->datlocprovider == COLLPROVIDER_ICU ? iculocale : collate);
+		if (dbform->datlocprovider == COLLPROVIDER_LIBC)
+			locale = collate;
+		else
+			locale = datlocale;
+
+		actual_versionstr = get_collation_actual_version(dbform->datlocprovider, locale);
 		if (!actual_versionstr)
 			/* should not happen */
 			elog(WARNING,

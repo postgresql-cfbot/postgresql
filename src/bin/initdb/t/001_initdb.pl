@@ -117,7 +117,7 @@ if ($ENV{with_icu} eq 'yes')
 {
 	command_fails_like(
 		[ 'initdb', '--no-sync', '--locale-provider=icu', "$tempdir/data2" ],
-		qr/initdb: error: ICU locale must be specified/,
+		qr/initdb: error: locale must be specified unless provider is libc/,
 		'locale provider ICU requires --icu-locale');
 
 	command_ok(
@@ -138,7 +138,7 @@ if ($ENV{with_icu} eq 'yes')
 			'--lc-monetary=C', '--lc-time=C',
 			"$tempdir/data4"
 		],
-		qr/^\s+ICU locale:\s+und\n/ms,
+		qr/^\s+default collation locale:\s+und\n/ms,
 		'options --locale-provider=icu --locale=und --lc-*=C');
 
 	command_fails_like(
@@ -183,6 +183,61 @@ else
 		[ 'initdb', '--no-sync', '--locale-provider=icu', "$tempdir/data2" ],
 		'locale provider ICU fails since no ICU support');
 }
+
+command_fails(
+	[
+		'initdb', '--no-sync', '--locale-provider=builtin', "$tempdir/data6"
+	],
+	'locale provider builtin fails without --locale'
+);
+
+command_ok(
+	[
+		'initdb', '--no-sync', '--locale-provider=builtin', '--locale=C',
+		"$tempdir/data7"
+	],
+	'locale provider builtin with --locale'
+);
+
+command_ok(
+	[
+		'initdb', '--no-sync', '--locale-provider=builtin', '-E UTF-8',
+		'--builtin-locale=C.UTF-8', "$tempdir/data8"
+	],
+	'locale provider builtin with -E UTF-8 --builtin-locale=C.UTF-8'
+);
+
+command_fails(
+	[
+		'initdb', '--no-sync', '--locale-provider=builtin', '-E SQL_ASCII',
+		'--builtin-locale=C.UTF-8', "$tempdir/data9"
+	],
+	'locale provider builtin with --builtin-locale=C.UTF-8 fails for SQL_ASCII'
+);
+
+command_ok(
+	[
+		'initdb', '--no-sync', '--locale-provider=builtin', '--lc-ctype=C',
+		'--locale=C', "$tempdir/data10"
+	],
+	'locale provider builtin with --lc-ctype'
+);
+
+command_fails(
+	[
+		'initdb', '--no-sync', '--locale-provider=builtin', '--icu-locale=en',
+		"$tempdir/dataX"
+	],
+	'fails for locale provider builtin with ICU locale'
+);
+
+command_fails(
+	[
+		'initdb', '--no-sync', '--locale-provider=builtin', '--icu-rules=""',
+		"$tempdir/dataX"
+	],
+	'fails for locale provider builtin with ICU rules'
+);
 
 command_fails(
 	[ 'initdb', '--no-sync', '--locale-provider=xyz', "$tempdir/dataX" ],

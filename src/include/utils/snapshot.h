@@ -181,7 +181,8 @@ typedef struct SnapshotData
 	int32		subxcnt;		/* # of xact ids in subxip[] */
 	bool		suboverflowed;	/* has the subxip array overflowed? */
 
-	bool		takenDuringRecovery;	/* recovery-shaped snapshot? */
+	bool		takenDuringRecovery;	/* taken on a standby? */
+	bool		mixed;			/* both top and sub xids are mixed in subxip */
 	bool		copied;			/* false if it's a static snapshot */
 
 	CommandId	curcid;			/* in my xact, CID < curcid are visible */

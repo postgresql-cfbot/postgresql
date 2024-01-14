@@ -205,6 +205,7 @@ typedef struct SerializedSnapshotData
 	int32		subxcnt;
 	bool		suboverflowed;
 	bool		takenDuringRecovery;
+	bool		mixed;
 	CommandId	curcid;
 	TimestampTz whenTaken;
 	XLogRecPtr	lsn;
@@ -519,6 +520,7 @@ SetTransactionSnapshot(Snapshot sourcesnap, VirtualTransactionId *sourcevxid,
 			   sourcesnap->subxcnt * sizeof(TransactionId));
 	CurrentSnapshot->suboverflowed = sourcesnap->suboverflowed;
 	CurrentSnapshot->takenDuringRecovery = sourcesnap->takenDuringRecovery;
+	CurrentSnapshot->mixed = sourcesnap->mixed;
 	/* NB: curcid should NOT be copied, it's a local matter */
 
 	CurrentSnapshot->snapXactCompletionCount = 0;
@@ -616,8 +618,7 @@ CopySnapshot(Snapshot snapshot)
 	 * snapshot taken during recovery; all the top-level XIDs are in subxip as
 	 * well in that case, so we mustn't lose them.
 	 */
-	if (snapshot->subxcnt > 0 &&
-		(!snapshot->suboverflowed || snapshot->takenDuringRecovery))
+	if (snapshot->subxcnt > 0 && (!snapshot->suboverflowed || snapshot->mixed))
 	{
 		newsnap->subxip = (TransactionId *) ((char *) newsnap + subxipoff);
 		memcpy(newsnap->subxip, snapshot->subxip,
@@ -1226,6 +1227,7 @@ ExportSnapshot(Snapshot snapshot)
 			appendStringInfo(&buf, "sxp:%u\n", children[i]);
 	}
 	appendStringInfo(&buf, "rec:%u\n", snapshot->takenDuringRecovery);
+	appendStringInfo(&buf, "mixed:%u\n", snapshot->mixed);
 
 	/*
 	 * Now write the text representation into a file.  We first write to a
@@ -1502,6 +1504,7 @@ ImportSnapshot(const char *idstr)
 	}
 
 	snapshot.takenDuringRecovery = parseIntFromText("rec:", &filebuf, path);
+	snapshot.mixed = parseIntFromText("mixed:", &filebuf, path);
 
 	/*
 	 * Do some additional sanity checking, just to protect ourselves.  We
@@ -1706,7 +1709,7 @@ EstimateSnapshotSpace(Snapshot snapshot)
 	size = add_size(sizeof(SerializedSnapshotData),
 					mul_size(snapshot->xcnt, sizeof(TransactionId)));
 	if (snapshot->subxcnt > 0 &&
-		(!snapshot->suboverflowed || snapshot->takenDuringRecovery))
+		(!snapshot->suboverflowed || snapshot->mixed))
 		size = add_size(size,
 						mul_size(snapshot->subxcnt, sizeof(TransactionId)));
 
@@ -1732,6 +1735,7 @@ SerializeSnapshot(Snapshot snapshot, char *start_address)
 	serialized_snapshot.subxcnt = snapshot->subxcnt;
 	serialized_snapshot.suboverflowed = snapshot->suboverflowed;
 	serialized_snapshot.takenDuringRecovery = snapshot->takenDuringRecovery;
+	serialized_snapshot.mixed = snapshot->mixed;
 	serialized_snapshot.curcid = snapshot->curcid;
 	serialized_snapshot.whenTaken = snapshot->whenTaken;
 	serialized_snapshot.lsn = snapshot->lsn;
@@ -1741,7 +1745,7 @@ SerializeSnapshot(Snapshot snapshot, char *start_address)
 	 * taken during recovery - in that case, top-level XIDs are in subxip as
 	 * well, and we mustn't lose them.
 	 */
-	if (serialized_snapshot.suboverflowed && !snapshot->takenDuringRecovery)
+	if (serialized_snapshot.suboverflowed && !snapshot->mixed)
 		serialized_snapshot.subxcnt = 0;
 
 	/* Copy struct to possibly-unaligned buffer */
@@ -1806,6 +1810,7 @@ RestoreSnapshot(char *start_address)
 	snapshot->subxcnt = serialized_snapshot.subxcnt;
 	snapshot->suboverflowed = serialized_snapshot.suboverflowed;
 	snapshot->takenDuringRecovery = serialized_snapshot.takenDuringRecovery;
+	snapshot->mixed = serialized_snapshot.mixed;
 	snapshot->curcid = serialized_snapshot.curcid;
 	snapshot->whenTaken = serialized_snapshot.whenTaken;
 	snapshot->lsn = serialized_snapshot.lsn;
@@ -1880,7 +1885,7 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
 	 * Snapshot information is stored slightly differently in snapshots taken
 	 * during recovery.
 	 */
-	if (!snapshot->takenDuringRecovery)
+	if (!snapshot->mixed)
 	{
 		/*
 		 * If the snapshot contains full subxact data, the fastest way to

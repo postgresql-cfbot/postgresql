@@ -2377,6 +2377,7 @@ GetSnapshotData(Snapshot snapshot)
 		 * those newly added transaction ids would be filtered away, so we
 		 * need not be concerned about them.
 		 */
+		snapshot->mixed = true;
 		subcount = KnownAssignedXidsGetAndSetXmin(snapshot->subxip, &xmin,
 												  xmax);
 

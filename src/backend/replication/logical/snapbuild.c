@@ -388,6 +388,7 @@ SnapBuildFreeSnapshot(Snapshot snap)
 	Assert(snap->curcid == FirstCommandId);
 	Assert(!snap->suboverflowed);
 	Assert(!snap->takenDuringRecovery);
+	Assert(!snap->mixed);
 	Assert(snap->regd_count == 0);
 
 	/* slightly more likely, so it's checked even without c-asserts */
@@ -464,6 +465,7 @@ SnapBuildSnapDecRefcount(Snapshot snap)
 	Assert(snap->curcid == FirstCommandId);
 	Assert(!snap->suboverflowed);
 	Assert(!snap->takenDuringRecovery);
+	Assert(!snap->mixed);
 
 	Assert(snap->regd_count == 0);
 
@@ -550,6 +552,7 @@ SnapBuildBuildSnapshot(SnapBuild *builder)
 
 	snapshot->suboverflowed = false;
 	snapshot->takenDuringRecovery = false;
+	snapshot->mixed = false;
 	snapshot->copied = false;
 	snapshot->curcid = FirstCommandId;
 	snapshot->active_count = 0;
@@ -572,8 +575,8 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 	Snapshot	snap;
 	TransactionId xid;
 	TransactionId safeXid;
-	TransactionId *newxip;
-	int			newxcnt = 0;
+	TransactionId *newsubxip;
+	int			newsubxcnt = 0;
 
 	Assert(XactIsoLevel == XACT_REPEATABLE_READ);
 	Assert(builder->building_full_snapshot);
@@ -616,8 +619,8 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 	MyProc->xmin = snap->xmin;
 
 	/* allocate in transaction context */
-	newxip = (TransactionId *)
-		palloc(sizeof(TransactionId) * GetMaxSnapshotXidCount());
+	newsubxip = (TransactionId *)
+		palloc(sizeof(TransactionId) * GetMaxSnapshotSubxidCount());
 
 	/*
 	 * snapbuild.c builds transactions in an "inverted" manner, which means it
@@ -638,12 +641,12 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 
 		if (test == NULL)
 		{
-			if (newxcnt >= GetMaxSnapshotXidCount())
+			if (newsubxcnt >= GetMaxSnapshotSubxidCount())
 				ereport(ERROR,
 						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 						 errmsg("initial slot snapshot too large")));
 
-			newxip[newxcnt++] = xid;
+			newsubxip[newsubxcnt++] = xid;
 		}
 
 		TransactionIdAdvance(xid);
@@ -651,8 +654,11 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 
 	/* adjust remaining snapshot fields as needed */
 	snap->snapshot_type = SNAPSHOT_MVCC;
-	snap->xcnt = newxcnt;
-	snap->xip = newxip;
+	snap->xcnt = 0;
+	snap->xip = NULL;
+	snap->subxcnt = newsubxcnt;
+	snap->subxip = newsubxip;
+	snap->mixed = true;
 
 	return snap;
 }

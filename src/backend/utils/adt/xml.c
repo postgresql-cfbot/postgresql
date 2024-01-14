@@ -1795,7 +1795,7 @@ xml_parse(text *data, XmlOptionType xmloption_arg,
 			doc = xmlCtxtReadDoc(ctxt, utf8string,
 								 NULL,
 								 "UTF-8",
-								 XML_PARSE_NOENT | XML_PARSE_DTDATTR
+								 XML_PARSE_NOENT | XML_PARSE_DTDATTR | XML_PARSE_HUGE
 								 | (preserve_whitespace ? 0 : XML_PARSE_NOBLANKS));
 			if (doc == NULL || xmlerrcxt->err_occurred)
 			{
@@ -1828,10 +1828,25 @@ xml_parse(text *data, XmlOptionType xmloption_arg,
 			/* allow empty content */
 			if (*(utf8string + count))
 			{
-				res_code = xmlParseBalancedChunkMemory(doc, NULL, NULL, 0,
-													   utf8string + count,
-													   parsed_nodes);
-				if (res_code != 0 || xmlerrcxt->err_occurred)
+				const char *data;
+				xmlNodePtr	root;
+				xmlParserErrors xml_error;
+				xmlNodePtr	lst;
+
+				data = (const char *) (utf8string + count);
+
+				/* Create fake root node. */
+				root = xmlNewNode(NULL, (const xmlChar *) "content-root");
+				if (root == NULL || xmlerrcxt->err_occurred)
+					xml_ereport(xmlerrcxt, ERROR, ERRCODE_OUT_OF_MEMORY,
+								"could not allocate xml node");
+				xmlDocSetRootElement(doc, root);
+
+				/* Try to parse string with using root node context. */
+				xml_error = xmlParseInNodeContext(root, data, strlen(data),
+												  XML_PARSE_HUGE,
+												  parsed_nodes ? parsed_nodes : &lst);
+				if (xml_error != XML_ERR_OK || xmlerrcxt->err_occurred)
 				{
 					xml_errsave(escontext, xmlerrcxt,
 								ERRCODE_INVALID_XML_CONTENT,
@@ -4344,7 +4359,7 @@ xpath_internal(text *xpath_expr_text, xmltype *data, ArrayType *namespaces,
 			xml_ereport(xmlerrcxt, ERROR, ERRCODE_OUT_OF_MEMORY,
 						"could not allocate parser context");
 		doc = xmlCtxtReadMemory(ctxt, (char *) string + xmldecl_len,
-								len - xmldecl_len, NULL, NULL, 0);
+								len - xmldecl_len, NULL, NULL, XML_PARSE_HUGE);
 		if (doc == NULL || xmlerrcxt->err_occurred)
 			xml_ereport(xmlerrcxt, ERROR, ERRCODE_INVALID_XML_DOCUMENT,
 						"could not parse XML document");
@@ -4675,7 +4690,7 @@ XmlTableSetDocument(TableFuncScanState *state, Datum value)
 
 	PG_TRY();
 	{
-		doc = xmlCtxtReadMemory(xtCxt->ctxt, (char *) xstr, length, NULL, NULL, 0);
+		doc = xmlCtxtReadMemory(xtCxt->ctxt, (char *) xstr, length, NULL, NULL, XML_PARSE_HUGE);
 		if (doc == NULL || xtCxt->xmlerrcxt->err_occurred)
 			xml_ereport(xtCxt->xmlerrcxt, ERROR, ERRCODE_INVALID_XML_DOCUMENT,
 						"could not parse XML document");

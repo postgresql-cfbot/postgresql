@@ -7,6 +7,7 @@
 #include "btree_utils_num.h"
 #include "utils/builtins.h"
 #include "utils/date.h"
+#include "utils/sortsupport.h"
 #include "utils/timestamp.h"
 
 typedef struct
@@ -28,6 +29,8 @@ PG_FUNCTION_INFO_V1(gbt_time_distance);
 PG_FUNCTION_INFO_V1(gbt_timetz_consistent);
 PG_FUNCTION_INFO_V1(gbt_time_penalty);
 PG_FUNCTION_INFO_V1(gbt_time_same);
+PG_FUNCTION_INFO_V1(gbt_time_sortsupport);
+PG_FUNCTION_INFO_V1(gbt_timetz_sortsupport);
 
 
 #ifdef USE_FLOAT8_BYVAL
@@ -35,6 +38,19 @@ PG_FUNCTION_INFO_V1(gbt_time_same);
 #else
 #define TimeADTGetDatumFast(X) PointerGetDatum(&(X))
 #endif
+
+
+static int
+time_fast_cmp(Datum x, Datum y, SortSupport ssup)
+{
+	return DatumGetInt32(DirectFunctionCall2(time_cmp, x, y));
+}
+
+static int
+timetz_fast_cmp(Datum x, Datum y, SortSupport ssup)
+{
+	return DatumGetInt32(DirectFunctionCall2(timetz_cmp, x, y));
+}
 
 
 static bool
@@ -331,4 +347,26 @@ gbt_time_same(PG_FUNCTION_ARGS)
 
 	*result = gbt_num_same((void *) b1, (void *) b2, &tinfo, fcinfo->flinfo);
 	PG_RETURN_POINTER(result);
+}
+
+Datum
+gbt_time_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = time_fast_cmp;
+	ssup->ssup_extra = NULL;
+
+	PG_RETURN_VOID();
+}
+
+Datum
+gbt_timetz_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = timetz_fast_cmp;
+	ssup->ssup_extra = NULL;
+
+	PG_RETURN_VOID();
 }

@@ -172,9 +172,9 @@ static ReplicationState *replication_states;
 static ReplicationStateCtl *replication_states_ctl;
 
 /*
- * Backend-local, cached element from ReplicationState for use in a backend
- * replaying remote commits, so we don't have to search ReplicationState for
- * the backends current RepOriginId.
+ * A backend-local cached pointer to backend's ReplicationState in the shared
+ * memory array of replication states so that the backend while replaying
+ * remote commits doesn't have to search the array with current RepOriginId.
  */
 static ReplicationState *session_replication_state = NULL;
 
@@ -1056,10 +1056,12 @@ ReplicationOriginExitCleanup(int code, Datum arg)
 {
 	ConditionVariable *cv = NULL;
 
+	if (session_replication_state == NULL)
+		return;
+
 	LWLockAcquire(ReplicationOriginLock, LW_EXCLUSIVE);
 
-	if (session_replication_state != NULL &&
-		session_replication_state->acquired_by == MyProcPid)
+	if (session_replication_state->acquired_by == MyProcPid)
 	{
 		cv = &session_replication_state->origin_cv;
 

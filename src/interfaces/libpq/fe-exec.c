@@ -81,6 +81,7 @@ static int	PQsendTypedCommand(PGconn *conn, char command, char type,
 							   const char *target);
 static int	check_field_number(const PGresult *res, int field_num);
 static void pqPipelineProcessQueue(PGconn *conn);
+static int	pqPipelineSyncInternal(PGconn *conn, bool immediate_flush);
 static int	pqPipelineFlush(PGconn *conn);
 
 
@@ -3224,6 +3225,25 @@ pqPipelineProcessQueue(PGconn *conn)
 /*
  * PQpipelineSync
  *		Send a Sync message as part of a pipeline, and flush to server
+ */
+int
+PQpipelineSync(PGconn *conn)
+{
+	return pqPipelineSyncInternal(conn, true);
+}
+
+/*
+ * PQsendPipelineSync
+ *		Send a Sync message as part of a pipeline, without flushing to server
+ */
+int
+PQsendPipelineSync(PGconn *conn)
+{
+	return pqPipelineSyncInternal(conn, false);
+}
+
+/*
+ * Wrapper for PQpipelineSync and PQsendPipelineSync.
  *
  * It's legal to start submitting more commands in the pipeline immediately,
  * without waiting for the results of the current pipeline. There's no need to
@@ -3240,9 +3260,12 @@ pqPipelineProcessQueue(PGconn *conn)
  * The connection will remain in pipeline mode and unavailable for new
  * synchronous command execution functions until all results from the pipeline
  * are processed by the client.
+ *
+ * immediate_flush controls if the flush happens immediately after sending the
+ * Sync message or not.
  */
-int
-PQpipelineSync(PGconn *conn)
+static int
+pqPipelineSyncInternal(PGconn *conn, bool immediate_flush)
 {
 	PGcmdQueueEntry *entry;
 
@@ -3288,9 +3311,19 @@ PQpipelineSync(PGconn *conn)
 	/*
 	 * Give the data a push.  In nonblock mode, don't complain if we're unable
 	 * to send it all; PQgetResult() will do any additional flushing needed.
+	 * If immediate_flush is disabled, the data is pushed if we are past the
+	 * size threshold.
 	 */
-	if (PQflush(conn) < 0)
-		goto sendFailed;
+	if (immediate_flush)
+	{
+		if (pqFlush(conn) < 0)
+			goto sendFailed;
+	}
+	else
+	{
+		if (pqPipelineFlush(conn) < 0)
+			goto sendFailed;
+	}
 
 	/* OK, it's launched! */
 	pqAppendCmdQueueEntry(conn, entry);

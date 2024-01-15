@@ -313,11 +313,10 @@ logicalrep_worker_launch(LogicalRepWorkerType wtype,
 	int			i;
 	int			slot = 0;
 	LogicalRepWorker *worker = NULL;
-	int			nsyncworkers;
-	int			nparallelapplyworkers;
 	TimestampTz now;
 	bool		is_tablesync_worker = (wtype == WORKERTYPE_TABLESYNC);
 	bool		is_parallel_apply_worker = (wtype == WORKERTYPE_PARALLEL_APPLY);
+	bool		reached_limit_for_type = false;
 
 	/*----------
 	 * Sanity checks:
@@ -359,7 +358,19 @@ retry:
 		}
 	}
 
-	nsyncworkers = logicalrep_sync_worker_count(subid);
+	/* Check if we are at the configured limit for the worker type */
+	if (is_tablesync_worker)
+	{
+		int n = logicalrep_sync_worker_count(subid);
+
+		reached_limit_for_type = (n >= max_sync_workers_per_subscription);
+	}
+	else if (is_parallel_apply_worker)
+	{
+		int n = logicalrep_pa_worker_count(subid);
+
+		reached_limit_for_type = (n >= max_parallel_apply_workers_per_subscription);
+	}
 
 	now = GetCurrentTimestamp();
 
@@ -367,8 +378,12 @@ retry:
 	 * If we didn't find a free slot, try to do garbage collection.  The
 	 * reason we do this is because if some worker failed to start up and its
 	 * parent has crashed while waiting, the in_use state was never cleared.
+	 *
+	 * If the worker type has reached its limit we also want to trigger garbage
+	 * collection. This is in case one of those workers was previously in error
+	 * and maybe now can be re-used.
 	 */
-	if (worker == NULL || nsyncworkers >= max_sync_workers_per_subscription)
+	if (worker == NULL || reached_limit_for_type)
 	{
 		bool		did_cleanup = false;
 
@@ -402,20 +417,17 @@ retry:
 	 * sync worker limit per subscription. So, just return silently as we
 	 * might get here because of an otherwise harmless race condition.
 	 */
-	if (is_tablesync_worker && nsyncworkers >= max_sync_workers_per_subscription)
+	if (is_tablesync_worker && reached_limit_for_type)
 	{
 		LWLockRelease(LogicalRepWorkerLock);
 		return false;
 	}
 
-	nparallelapplyworkers = logicalrep_pa_worker_count(subid);
-
 	/*
 	 * Return false if the number of parallel apply workers reached the limit
 	 * per subscription.
 	 */
-	if (is_parallel_apply_worker &&
-		nparallelapplyworkers >= max_parallel_apply_workers_per_subscription)
+	if (is_parallel_apply_worker && reached_limit_for_type)
 	{
 		LWLockRelease(LogicalRepWorkerLock);
 		return false;
@@ -858,7 +870,10 @@ logicalrep_sync_worker_count(Oid subid)
 
 	Assert(LWLockHeldByMe(LogicalRepWorkerLock));
 
-	/* Search for attached worker for a given subscription id. */
+	/*
+	 * Scan all attached tablesync workers, only counting those which
+	 * have the given subscription id.
+	 */
 	for (i = 0; i < max_logical_replication_workers; i++)
 	{
 		LogicalRepWorker *w = &LogicalRepCtx->workers[i];

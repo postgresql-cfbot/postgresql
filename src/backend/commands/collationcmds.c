@@ -226,7 +226,12 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 								collproviderstr)));
 		}
 		else
-			collprovider = COLLPROVIDER_LIBC;
+		{
+			if (lccollateEl || lcctypeEl)
+				collprovider = COLLPROVIDER_LIBC;
+			else
+				collprovider = default_locale.provider;
+		}
 
 		if (localeEl)
 		{

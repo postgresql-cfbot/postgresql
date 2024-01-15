@@ -18,6 +18,7 @@
 #include "postgres.h"
 
 #include "access/twophase_rmgr.h"
+#include "access/visibilitymapdefs.h"
 #include "access/xact.h"
 #include "catalog/partition.h"
 #include "postmaster/autovacuum.h"
@@ -43,6 +44,16 @@ typedef struct TwoPhasePgStatRecord
 	bool		truncdropped;	/* was the relation truncated/dropped? */
 } TwoPhasePgStatRecord;
 
+/*
+ * The Z-score used to calculate the freeze threshold from the distribution of
+ * early unsets. See:
+ *
+ * https://en.wikipedia.org/wiki/Standard_normal_table#Cumulative_(less_than_Z)
+ *
+ * This Z-score has a cumulative probability (from negative infinity) of
+ * approximately 0.94950, or 94.950%.
+ */
+static const double FRZ_THRESHOLD_ZSCORE = 1.64;
 
 static PgStat_TableStatus *pgstat_prep_relation_pending(Oid rel_id, bool isshared);
 static void add_tabstat_xact_level(PgStat_TableStatus *pgstat_info, int nest_level);
@@ -205,6 +216,212 @@ pgstat_drop_relation(Relation rel)
 	}
 }
 
+
+/*
+ * The first time a page is modified after having been set all visible, we
+ * check the duration it was unmodified against the target_freeze_duration. The
+ * page has only an LSN, not a timestmap, so we must translate the page LSN to
+ * time using the LSNTimeline. Because the LSN consumption rate can change, we
+ * want to refresh this translated value periodically. Doing so at the start of
+ * each table vacuum is convenient.
+ */
+XLogRecPtr
+pgstat_refresh_frz_stats(Oid tableoid, bool shared)
+{
+	PgStat_EntryRef *entry_ref;
+	PgStat_StatTabEntry *tabentry;
+	TimestampTz cur_time;
+	XLogRecPtr	cur_lsn;
+	TimestampTz target_time;
+	XLogRecPtr	target_lsn;
+	uint64		target_dur_usecs;
+	double		mean;
+	double		stddev;
+	double		n;
+	Oid			dboid = (shared ? InvalidOid : MyDatabaseId);
+	XLogRecPtr	frz_threshold_min;
+
+	if (!pgstat_track_counts)
+		return InvalidXLogRecPtr;
+
+	target_dur_usecs = target_freeze_duration * USECS_PER_SEC;
+
+	cur_time = GetCurrentTimestamp();
+
+	/*
+	 * We can afford to acquire exact (not approximate) insert LSN at the
+	 * start of each relation vacuum. The translation of the GUC value to time
+	 * will be more accurate.
+	 */
+	cur_lsn = GetXLogInsertRecPtr();
+
+	/*
+	 * How long ago would a page have to have been set all visible for it to
+	 * qualify as having remained unmodified for target_freeze_duration. It
+	 * shouldn't happen that current time - target_freeze_duration is less
+	 * than zero, but TimestampTz is signed, so we better do this check.
+	 */
+	target_time = target_dur_usecs >= cur_time ? 0 : cur_time - target_dur_usecs;
+
+	/*
+	 * Use the global LSNTimeline stored in WAL statistics to translate the
+	 * target_time into an LSN based on our LSN consumption over that period.
+	 */
+	target_lsn = pgstat_wal_estimate_lsn_at_time(target_time);
+
+	/* Now get the table-level stats */
+	entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_RELATION,
+											dboid, tableoid, false);
+
+	Assert(entry_ref != NULL && entry_ref->shared_stats != NULL);
+
+	tabentry = &((PgStatShared_Relation *) entry_ref->shared_stats)->stats;
+
+	/*
+	 * Update the translated value of target_freeze_duration so that table
+	 * modifications use a fresh value when determining whether or not a page
+	 * was modified sooner than target_freeze_duration after having been set
+	 * all visible. There is no reason for this to be cached at the table
+	 * level, but it is easiest to keep it here for now.
+	 */
+	tabentry->target_frz_dur_lsns = cur_lsn - target_lsn;
+
+	/*
+	 * Calculate the mean and standard deviation of the distribution of early
+	 * unsets.
+	 *
+	 * Each time an all-visible page is modified, i.e. its all-visible bit is
+	 * unset, and that modification is considered "early", the duration (in
+	 * LSNs) that that page spent all-visible is entered into the early unsets
+	 * accumulator. Here, the data collected in that accumulator is extracted
+	 * into the parameters of a normal distribution (mean and standard
+	 * deviation).
+	 */
+	accumulator_calculate(&tabentry->vm_unset.early_unsets, &mean, &stddev);
+
+	/*
+	 * Calculate the age of the youngest page that should be opportunistically
+	 * frozen.
+	 *
+	 * We'll opportunistically freeze a page if the probability that it will
+	 * be early unset is less than approximately 5%. This threshold occurs
+	 * when the cumulative distribution function of the early unsets
+	 * distribution exceeds 95%. We assume that if a page has survived past
+	 * the age when 95% of early unsets have occurred, then it's safe to
+	 * freeze.
+	 *
+	 * If we couldn't produce a distribution from the accumulator, or the
+	 * standard deviation of that distribution is infinite, then err on the
+	 * side of freezing everything.
+	 */
+	n = mean + FRZ_THRESHOLD_ZSCORE * stddev;
+	if (isnan(n) || isinf(n))
+		frz_threshold_min = InvalidXLogRecPtr;
+	else
+		frz_threshold_min = n;
+
+	/*
+	 * If the number of entries in the accumulator is small, then the mean and
+	 * standard deviation extracted from it may be unreliable. We can probably
+	 * devise a way to represent low confidence using a modifier. For example,
+	 * we could skew the mean and standard deviation to favor more freezing
+	 * (perhaps using standard error). The internet says that a sample size >=
+	 * 30ish is required for the central limit theorem to hold. So, before we
+	 * have 30 unsets, just freeze everything on the given vacuum.
+	 */
+	if (tabentry->vm_unset.early_unsets.n < 30)
+		frz_threshold_min = InvalidXLogRecPtr;
+
+	pgstat_unlock_entry(entry_ref);
+
+	/*
+	 * MTODO: would like to flush table stats so future unsets use
+	 * target_frz_dur_lsns new value. However pgstat_report_stat() can't be
+	 * called here due to being in a transaction. Is there some other way to
+	 * do this?
+	 */
+
+	return frz_threshold_min;
+}
+
+
+/*
+ * Upon update, delete, or tuple lock, if the page being modified was
+ * previously set all visible in the visibility map, check and record whether
+ * or not the page has remained unmodified for longer than
+ * target_freeze_duration. Record both the page age and the page's former
+ * status in the VM. The distribution of ages can be used to predict whether or
+ * not a given page is likely to remain unmodified for longer than
+ * target_freeze_duration.
+ *
+ * Note that we do not count inserts as unsets even when they are modifying a
+ * formerly all visible page. This is because vacuum updates the freespace map
+ * after pruning, freezing, and reaping dead tuples. The next insert is likely
+ * to be to this page, so the page's age at insert is unrelated to the page
+ * modification pattern and will only reflect that vacuum made space available
+ * on the page.
+ */
+void
+pgstat_count_vm_unset(Relation relation, XLogRecPtr page_lsn,
+					  XLogRecPtr current_lsn, uint8 old_vmbits)
+{
+	PgStat_StatTabEntry *tabentry;
+	XLogRecPtr	target_frz_duration;
+	XLogRecPtr	vm_duration_lsns;
+	PgStat_TableCounts *tabcounts;
+
+	/*
+	 * Can't be all frozen without being all visible and we shouldn't call
+	 * this function if all bits were unset
+	 */
+	Assert(old_vmbits & VISIBILITYMAP_ALL_VISIBLE);
+
+	if (!pgstat_track_counts)
+		return;
+
+	tabentry = pgstat_fetch_stat_tabentry_ext(relation->rd_rel->relisshared,
+											  RelationGetRelid(relation));
+
+	/*
+	 * MTODO: Where can we cache this such that it is easy to get here but not
+	 * table-level?
+	 */
+	target_frz_duration = tabentry->target_frz_dur_lsns;
+
+	vm_duration_lsns = current_lsn - page_lsn;
+	vm_duration_lsns = Max(vm_duration_lsns, 0);
+
+	tabcounts = &relation->pgstat_info->counts;
+
+	tabcounts->unsets.unvis++;
+
+	/*
+	 * If the page is being modified before target_freeze_duration, count it
+	 * as an unset for vacuum freeze statistics. We want to determine the
+	 * likelihood that a page being vacuumed will be modified before that
+	 * amount of time has elapsed, irrespective of whether or not we got it
+	 * right last vacuum.
+	 */
+	if (vm_duration_lsns < target_frz_duration)
+		accumulator_insert(&tabcounts->unsets.early_unsets, vm_duration_lsns);
+
+	/*
+	 * If it was frozen and modified before the target duration, it is an
+	 * early unfreeze. If it was not frozen and remained unmodified for longer
+	 * than the target duration, it is a missed opportunity to freeze.
+	 */
+	if (old_vmbits & VISIBILITYMAP_ALL_FROZEN)
+	{
+		tabcounts->unsets.vm_unfreezes++;
+
+		if (vm_duration_lsns < target_frz_duration)
+			tabcounts->unsets.early_unfreezes++;
+	}
+	else if (vm_duration_lsns >= target_frz_duration)
+		tabcounts->unsets.missed_freezes++;
+}
+
+
 /*
  * Report that the table was just vacuumed and flush IO statistics.
  */
@@ -267,6 +484,32 @@ pgstat_report_vacuum(Oid tableoid, bool shared,
 	 */
 	pgstat_flush_io(false);
 }
+
+void
+pgstat_report_heap_vacfrz(Oid tableoid, bool shared, PgStat_VMSet *vmsets)
+{
+	PgStat_EntryRef *entry_ref;
+	PgStat_StatTabEntry *tabentry;
+	Oid			dboid = (shared ? InvalidOid : MyDatabaseId);
+
+	if (!pgstat_track_counts)
+		return;
+
+
+	/* block acquiring lock for the same reason as pgstat_report_autovac() */
+	entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_RELATION,
+											dboid, tableoid, false);
+
+	tabentry = &((PgStatShared_Relation *) entry_ref->shared_stats)->stats;
+
+	tabentry->vm_set.vis += vmsets->vis;
+	tabentry->vm_set.page_freezes += vmsets->page_freezes;
+	tabentry->vm_set.vm_freezes += vmsets->vm_freezes;
+	tabentry->vm_set.freeze_fpis += vmsets->freeze_fpis;
+
+	pgstat_unlock_entry(entry_ref);
+}
+
 
 /*
  * Report that the table was just analyzed and flush IO statistics.
@@ -844,6 +1087,8 @@ pgstat_relation_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
 	tabentry->tuples_deleted += lstats->counts.tuples_deleted;
 	tabentry->tuples_hot_updated += lstats->counts.tuples_hot_updated;
 	tabentry->tuples_newpage_updated += lstats->counts.tuples_newpage_updated;
+
+	pgstat_unset_absorb(&tabentry->vm_unset, &lstats->counts.unsets);
 
 	/*
 	 * If table was truncated/dropped, first reset the live/dead counters.

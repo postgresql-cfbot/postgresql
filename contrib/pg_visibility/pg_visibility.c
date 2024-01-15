@@ -44,7 +44,7 @@ PG_FUNCTION_INFO_V1(pg_visibility_map);
 PG_FUNCTION_INFO_V1(pg_visibility_map_rel);
 PG_FUNCTION_INFO_V1(pg_visibility);
 PG_FUNCTION_INFO_V1(pg_visibility_rel);
-PG_FUNCTION_INFO_V1(pg_visibility_map_summary);
+PG_FUNCTION_INFO_V1(pg_visibility_map_summary_extended);
 PG_FUNCTION_INFO_V1(pg_check_frozen);
 PG_FUNCTION_INFO_V1(pg_check_visible);
 PG_FUNCTION_INFO_V1(pg_truncate_visibility_map);
@@ -247,11 +247,11 @@ pg_visibility_rel(PG_FUNCTION_ARGS)
 }
 
 /*
- * Count the number of all-visible and all-frozen pages in the visibility
- * map for a particular relation.
+ * Count the number of all-visible and all-frozen pages in the visibility map
+ * as well as the total number of blocks of a particular relation.
  */
 Datum
-pg_visibility_map_summary(PG_FUNCTION_ARGS)
+pg_visibility_map_summary_extended(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	Relation	rel;
@@ -261,8 +261,8 @@ pg_visibility_map_summary(PG_FUNCTION_ARGS)
 	int64		all_visible = 0;
 	int64		all_frozen = 0;
 	TupleDesc	tupdesc;
-	Datum		values[2];
-	bool		nulls[2] = {0};
+	Datum		values[3];
+	bool		nulls[3] = {0};
 
 	rel = relation_open(relid, AccessShareLock);
 
@@ -296,6 +296,7 @@ pg_visibility_map_summary(PG_FUNCTION_ARGS)
 
 	values[0] = Int64GetDatum(all_visible);
 	values[1] = Int64GetDatum(all_frozen);
+	values[2] = Int64GetDatum(nblocks);
 
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
 }

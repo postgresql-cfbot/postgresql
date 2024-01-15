@@ -134,9 +134,9 @@ static Buffer vm_extend(Relation rel, BlockNumber vm_nblocks);
  *
  * You must pass a buffer containing the correct map page to this function.
  * Call visibilitymap_pin first to pin the right one. This function doesn't do
- * any I/O.  Returns true if any bits have been cleared and false otherwise.
+ * any I/O.  Returns the visibility map status before clearing the bits.
  */
-bool
+uint8
 visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer vmbuf, uint8 flags)
 {
 	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
@@ -144,7 +144,7 @@ visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer vmbuf, uint8 flags
 	int			mapOffset = HEAPBLK_TO_OFFSET(heapBlk);
 	uint8		mask = flags << mapOffset;
 	char	   *map;
-	bool		cleared = false;
+	uint8		status;
 
 	/* Must never clear all_visible bit while leaving all_frozen bit set */
 	Assert(flags & VISIBILITYMAP_VALID_BITS);
@@ -160,17 +160,18 @@ visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer vmbuf, uint8 flags
 	LockBuffer(vmbuf, BUFFER_LOCK_EXCLUSIVE);
 	map = PageGetContents(BufferGetPage(vmbuf));
 
+	status = ((map[mapByte] >> mapOffset) & VISIBILITYMAP_VALID_BITS);
+
 	if (map[mapByte] & mask)
 	{
 		map[mapByte] &= ~mask;
 
 		MarkBufferDirty(vmbuf);
-		cleared = true;
 	}
 
 	LockBuffer(vmbuf, BUFFER_LOCK_UNLOCK);
 
-	return cleared;
+	return status;
 }
 
 /*
@@ -240,9 +241,9 @@ visibilitymap_pin_ok(BlockNumber heapBlk, Buffer vmbuf)
  *
  * You must pass a buffer containing the correct map page to this function.
  * Call visibilitymap_pin first to pin the right one. This function doesn't do
- * any I/O.
+ * any I/O. Returns the visibility map status before setting the bits.
  */
-void
+uint8
 visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 				  XLogRecPtr recptr, Buffer vmBuf, TransactionId cutoff_xid,
 				  uint8 flags)
@@ -252,6 +253,7 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 	uint8		mapOffset = HEAPBLK_TO_OFFSET(heapBlk);
 	Page		page;
 	uint8	   *map;
+	uint8		status;
 
 #ifdef TRACE_VISIBILITYMAP
 	elog(DEBUG1, "vm_set %s %d", RelationGetRelationName(rel), heapBlk);
@@ -276,6 +278,7 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 	map = (uint8 *) PageGetContents(page);
 	LockBuffer(vmBuf, BUFFER_LOCK_EXCLUSIVE);
 
+	status = ((map[mapByte] >> mapOffset) & VISIBILITYMAP_VALID_BITS);
 	if (flags != (map[mapByte] >> mapOffset & VISIBILITYMAP_VALID_BITS))
 	{
 		START_CRIT_SECTION();
@@ -313,6 +316,7 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 	}
 
 	LockBuffer(vmBuf, BUFFER_LOCK_UNLOCK);
+	return status;
 }
 
 /*

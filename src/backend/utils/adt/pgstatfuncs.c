@@ -32,6 +32,7 @@
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/inet.h"
+#include "utils/pg_lsn.h"
 #include "utils/timestamp.h"
 
 #define UINT32_ACCESS_ONCE(var)		 ((uint32)(*((volatile uint32 *)&(var))))
@@ -107,6 +108,102 @@ PG_STAT_GET_RELENTRY_INT64(tuples_updated)
 
 /* pg_stat_get_vacuum_count */
 PG_STAT_GET_RELENTRY_INT64(vacuum_count)
+
+Datum
+pg_stat_get_vm_vis(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	PgStat_StatTabEntry *tabentry;
+
+	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
+		PG_RETURN_NULL();
+
+	PG_RETURN_INT64(tabentry->vm_set.vis);
+}
+
+Datum
+pg_stat_get_vm_unvis(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	PgStat_StatTabEntry *tabentry;
+
+	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
+		PG_RETURN_NULL();
+
+	PG_RETURN_INT64(tabentry->vm_unset.unvis);
+}
+
+Datum
+pg_stat_get_vm_freezes(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	PgStat_StatTabEntry *tabentry;
+
+	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
+		PG_RETURN_NULL();
+
+	PG_RETURN_INT64(tabentry->vm_set.vm_freezes);
+}
+
+Datum
+pg_stat_get_page_freezes(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	PgStat_StatTabEntry *tabentry;
+
+	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
+		PG_RETURN_NULL();
+
+	PG_RETURN_INT64(tabentry->vm_set.page_freezes);
+}
+
+Datum
+pg_stat_get_vm_unfreezes(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	PgStat_StatTabEntry *tabentry;
+
+	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
+		PG_RETURN_NULL();
+
+	PG_RETURN_INT64(tabentry->vm_unset.vm_unfreezes);
+}
+
+Datum
+pg_stat_get_missed_freezes(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	PgStat_StatTabEntry *tabentry;
+
+	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
+		PG_RETURN_NULL();
+
+	PG_RETURN_INT64(tabentry->vm_unset.missed_freezes);
+}
+
+Datum
+pg_stat_get_early_unfreezes(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	PgStat_StatTabEntry *tabentry;
+
+	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
+		PG_RETURN_NULL();
+
+	PG_RETURN_INT64(tabentry->vm_unset.early_unfreezes);
+}
+
+Datum
+pg_stat_get_freeze_fpis(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	PgStat_StatTabEntry *tabentry;
+
+	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
+		PG_RETURN_NULL();
+
+	PG_RETURN_INT64(tabentry->vm_set.freeze_fpis);
+}
 
 #define PG_STAT_GET_RELENTRY_TIMESTAMPTZ(stat)					\
 Datum															\

@@ -3893,6 +3893,77 @@ description | Waiting for a newly initialized WAL file to reach durable storage
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>vm_all_vis</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of times pages of this table were set all visible in the
+       visibility map by vacuum.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>vm_un_all_vis</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of times pages of this table marked all visible in the visibility
+       map were modified and the all visible bit unset.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>vm_freezes</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of times pages of this table were set all frozen in the
+       visibility map by vacuum.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>page_freezes</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of times pages of this table had tuples newly frozen by vacuum.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>vm_unfreezes</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of times pages of this table marked all frozen in the visibility
+       map were modified and the all frozen bit unset.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>missed_freezes</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of times pages of this table which had been set all visible in
+       the visibility map by vacuum remained unmodified for longer than target
+       page freeze duration.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>early_unfreezes</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of times frozen pages of this table were modified and the frozen
+       bit unset in the visibility map before target page freeze duration had
+       elapsed.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>analyze_count</structfield> <type>bigint</type>
       </para>
       <para>

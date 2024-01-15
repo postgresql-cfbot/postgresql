@@ -11,6 +11,9 @@
 #ifndef PGSTAT_H
 #define PGSTAT_H
 
+#include <math.h>
+
+#include "access/xlogdefs.h"
 #include "datatype/timestamp.h"
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"	/* for MAX_XFN_CHARS */
@@ -137,6 +140,106 @@ typedef struct PgStat_BackendSubEntry
 	PgStat_Counter sync_error_count;
 } PgStat_BackendSubEntry;
 
+/*
+ * Used both in backend local and shared memory, this accumulator keeps track of
+ * the counters needed to calculate a mean and standard deviation online.
+ */
+typedef struct PgStat_Accumulator
+{
+	/* Number of values in this accumulator */
+	uint64		n;
+
+	/* Sum of values */
+	double		s;
+
+	/* Sum of squared values */
+	double		q;
+} PgStat_Accumulator;
+
+static inline void
+accumulator_insert(PgStat_Accumulator *accumulator, double v)
+{
+	accumulator->n++;
+	accumulator->s += v;
+	accumulator->q += pow(v, 2);
+}
+
+static inline double
+accumulator_remove(PgStat_Accumulator *accumulator)
+{
+	double		result;
+
+	Assert(accumulator->n > 0);
+
+	result = accumulator->s / accumulator->n;
+
+	accumulator->n--;
+	accumulator->s -= result;
+	accumulator->q -= pow(result, 2);
+
+	return result;
+}
+
+static inline void
+accumulator_absorb(PgStat_Accumulator *target, PgStat_Accumulator *source)
+{
+	target->n += source->n;
+	target->s += source->s;
+	target->q += source->q;
+}
+
+static inline void
+accumulator_calculate(PgStat_Accumulator *accumulator, double *mean,
+					  double *stddev)
+{
+	*mean = NAN;
+	*stddev = INFINITY;
+
+	if (accumulator->n == 0)
+		return;
+
+	*mean = accumulator->s / accumulator->n;
+	*stddev = sqrt((accumulator->q - pow(accumulator->s, 2) / accumulator->n) / accumulator->n);
+}
+
+typedef struct PgStat_VMUnset
+{
+	/* times a page marked frozen in the VM was modified */
+	int64		vm_unfreezes;
+	/* times a page was unfrozen before target_freeze_duration elapsed */
+	int64		early_unfreezes;
+	/* times a page marked all visible in the VM was modified */
+	int64		unvis;
+
+	/*
+	 * times a page only marked all visible and not all frozen in the VM
+	 * remained unmodified for longer than target_freeze_duration
+	 */
+	int64		missed_freezes;
+
+	/*
+	 * times that pages marked either all visible or all visible and all
+	 * frozen in the VM were modified before target_freeze_duration elapsed.
+	 * The accumulator tracks their ages as well as occurrences. We include
+	 * pages which were marked all visible but not all frozen because we care
+	 * about how long pages remain unmodified in general. If we only counted
+	 * the ages of early unfreezes, it would skew our data based on our own
+	 * failure to freeze the right pages.
+	 */
+	PgStat_Accumulator early_unsets;
+} PgStat_VMUnset;
+
+static inline void
+pgstat_unset_absorb(PgStat_VMUnset *target, PgStat_VMUnset *source)
+{
+	target->vm_unfreezes += source->vm_unfreezes;
+	target->early_unfreezes += source->early_unfreezes;
+	target->unvis += source->unvis;
+	target->missed_freezes += source->missed_freezes;
+
+	accumulator_absorb(&target->early_unsets, &source->early_unsets);
+}
+
 /* ----------
  * PgStat_TableCounts			The actual per-table counts kept by a backend
  *
@@ -170,6 +273,8 @@ typedef struct PgStat_TableCounts
 	PgStat_Counter tuples_hot_updated;
 	PgStat_Counter tuples_newpage_updated;
 	bool		truncdropped;
+
+	PgStat_VMUnset unsets;
 
 	PgStat_Counter delta_live_tuples;
 	PgStat_Counter delta_dead_tuples;
@@ -396,6 +501,21 @@ typedef struct PgStat_StatSubEntry
 	TimestampTz stat_reset_timestamp;
 } PgStat_StatSubEntry;
 
+
+typedef struct PgStat_VMSet
+{
+	/* number of pages set all visible in the VM */
+	int64		vis;
+	/* number of pages newly marked frozen in the visibility map by vacuum */
+	int64		vm_freezes;
+	/* Number of pages with newly frozen tuples */
+	int64		page_freezes;
+	/* number of freeze records emitted by vacuum containing FPIs */
+	int64		freeze_fpis;
+} PgStat_VMSet;
+
+
+
 typedef struct PgStat_StatTabEntry
 {
 	PgStat_Counter numscans;
@@ -426,7 +546,47 @@ typedef struct PgStat_StatTabEntry
 	PgStat_Counter analyze_count;
 	TimestampTz last_autoanalyze_time;	/* autovacuum initiated */
 	PgStat_Counter autoanalyze_count;
+
+	/* calculated at vac start and used upon unset */
+	XLogRecPtr	target_frz_dur_lsns;
+	/* updated upon VM unset */
+	PgStat_VMUnset vm_unset;
+	/* updated during vacuum and used in stats */
+	PgStat_VMSet vm_set;
 } PgStat_StatTabEntry;
+
+/*
+ * The elements of an LSNTimeline. Each LSNTime represents one or more time,
+ * LSN pairs. The LSN is typically the insert LSN recorded at the time. Members
+ * is the number of logical members -- each a time, LSN pair -- represented in
+ * the LSNTime.
+ */
+typedef struct LSNTime
+{
+	TimestampTz time;
+	XLogRecPtr	lsn;
+	uint64		members;
+} LSNTime;
+
+/*
+ * A timeline consists of LSNTimes from most to least recent. Each element of
+ * the array in the timeline may represent 2^array index logical members --
+ * meaning that each element's capacity is twice that of the preceding element.
+ * This gives more recent times greater precision than less recent ones. An
+ * array of size 64 should provide sufficient capacity without accounting for
+ * what to do when all elements of the array are at capacity.
+ *
+ * When LSNTimes are inserted into the timeline, they are absorbed into the
+ * first array element with spare capacity -- with the new combined element
+ * having the lesser of the two values. The timeline's length is the highest
+ * array index representing one or more logical members. Use the timeline for
+ * LSN <-> time conversion using linear interpolation.
+ */
+typedef struct LSNTimeline
+{
+	int			length;
+	LSNTime		data[64];
+} LSNTimeline;
 
 typedef struct PgStat_WalStats
 {
@@ -438,6 +598,7 @@ typedef struct PgStat_WalStats
 	PgStat_Counter wal_sync;
 	PgStat_Counter wal_write_time;
 	PgStat_Counter wal_sync_time;
+	LSNTimeline timeline;
 	TimestampTz stat_reset_timestamp;
 } PgStat_WalStats;
 
@@ -596,6 +757,13 @@ extern void pgstat_report_analyze(Relation rel,
 								  PgStat_Counter livetuples, PgStat_Counter deadtuples,
 								  bool resetcounter);
 
+extern XLogRecPtr pgstat_refresh_frz_stats(Oid tableoid, bool shared);
+
+extern void pgstat_report_heap_vacfrz(Oid tableoid, bool shared, PgStat_VMSet *vmsets);
+
+extern void pgstat_count_vm_unset(Relation relation, XLogRecPtr page_lsn,
+								  XLogRecPtr current_lsn, uint8 old_vmbits);
+
 /*
  * If stats are enabled, but pending data hasn't been prepared yet, call
  * pgstat_assoc_relation() to do so. See its comment for why this is done
@@ -719,6 +887,11 @@ extern void pgstat_execute_transactional_drops(int ndrops, struct xl_xact_stats_
 
 extern void pgstat_report_wal(bool force);
 extern PgStat_WalStats *pgstat_fetch_stat_wal(void);
+
+/* Helpers for maintaining the LSNTimeline */
+extern XLogRecPtr pgstat_wal_estimate_lsn_at_time(TimestampTz time);
+extern TimestampTz pgstat_wal_estimate_time_at_lsn(XLogRecPtr lsn);
+extern void pgstat_wal_update_lsntimeline(TimestampTz time, XLogRecPtr lsn);
 
 
 /*

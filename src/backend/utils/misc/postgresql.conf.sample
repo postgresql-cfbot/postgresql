@@ -669,6 +669,8 @@
 #autovacuum_vacuum_cost_limit = -1	# default vacuum cost limit for
 					# autovacuum, -1 means use
 					# vacuum_cost_limit
+#opp_freeze_algo = 0 # default opp_freeze_algo is 0 which means master
+#target_freeze_duration = 1 # desired time for page to stay frozen in seconds
 
 
 #------------------------------------------------------------------------------

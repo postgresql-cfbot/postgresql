@@ -100,6 +100,18 @@
    </varlistentry>
 
    <varlistentry>
+    <term><function>pg_visibility_map_summary_extended(relation regclass, all_visible OUT bigint, all_frozen OUT bigint, nblocks OUT bigint) returns record</function></term>
+
+    <listitem>
+     <para>
+      Returns the number of all-visible pages, the number of all-frozen pages,
+      and the total number of blocks in the relation according to the
+      visibility map.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><function>pg_check_frozen(relation regclass, t_ctid OUT tid) returns setof tid</function></term>
 
     <listitem>

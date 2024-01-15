@@ -146,6 +146,8 @@ bool		XLOG_DEBUG = false;
 
 int			wal_segment_size = DEFAULT_XLOG_SEG_SIZE;
 
+XLogRecPtr	PgStartLSN = InvalidXLogRecPtr;
+
 /*
  * Number of WAL insertion locks to use. A higher value allows more insertions
  * to happen concurrently, but adds some CPU overhead to flushing the WAL,

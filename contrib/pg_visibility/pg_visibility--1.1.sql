@@ -37,12 +37,19 @@ RETURNS SETOF record
 AS 'MODULE_PATHNAME', 'pg_visibility_rel'
 LANGUAGE C STRICT;
 
+-- Show summary of visibility map bits for a relation and the number of blocks
+CREATE FUNCTION pg_visibility_map_summary_extended(regclass,
+    OUT all_visible bigint, OUT all_frozen bigint, OUT nblocks bigint)
+RETURNS record
+AS 'MODULE_PATHNAME', 'pg_visibility_map_summary_extended'
+LANGUAGE C STRICT;
+
 -- Show summary of visibility map bits for a relation.
 CREATE FUNCTION pg_visibility_map_summary(regclass,
     OUT all_visible bigint, OUT all_frozen bigint)
 RETURNS record
-AS 'MODULE_PATHNAME', 'pg_visibility_map_summary'
-LANGUAGE C STRICT;
+AS $$ SELECT all_visible, all_frozen FROM pg_visibility_map_summary_extended($1) $$
+LANGUAGE SQL;
 
 -- Show tupleids of non-frozen tuples if any in all_frozen pages
 -- for a relation.

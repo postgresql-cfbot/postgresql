@@ -49,6 +49,7 @@ DETAIL:  This operation is not supported for partitioned tables.
 select pg_visibility_map_summary('test_partitioned');
 ERROR:  relation "test_partitioned" is of wrong relation kind
 DETAIL:  This operation is not supported for partitioned tables.
+CONTEXT:  SQL function "pg_visibility_map_summary" statement 1
 select pg_check_frozen('test_partitioned');
 ERROR:  relation "test_partitioned" is of wrong relation kind
 DETAIL:  This operation is not supported for partitioned tables.
@@ -67,6 +68,7 @@ DETAIL:  This operation is not supported for indexes.
 select pg_visibility_map_summary('test_index');
 ERROR:  relation "test_index" is of wrong relation kind
 DETAIL:  This operation is not supported for indexes.
+CONTEXT:  SQL function "pg_visibility_map_summary" statement 1
 select pg_check_frozen('test_index');
 ERROR:  relation "test_index" is of wrong relation kind
 DETAIL:  This operation is not supported for indexes.
@@ -84,6 +86,7 @@ DETAIL:  This operation is not supported for views.
 select pg_visibility_map_summary('test_view');
 ERROR:  relation "test_view" is of wrong relation kind
 DETAIL:  This operation is not supported for views.
+CONTEXT:  SQL function "pg_visibility_map_summary" statement 1
 select pg_check_frozen('test_view');
 ERROR:  relation "test_view" is of wrong relation kind
 DETAIL:  This operation is not supported for views.
@@ -101,6 +104,7 @@ DETAIL:  This operation is not supported for sequences.
 select pg_visibility_map_summary('test_sequence');
 ERROR:  relation "test_sequence" is of wrong relation kind
 DETAIL:  This operation is not supported for sequences.
+CONTEXT:  SQL function "pg_visibility_map_summary" statement 1
 select pg_check_frozen('test_sequence');
 ERROR:  relation "test_sequence" is of wrong relation kind
 DETAIL:  This operation is not supported for sequences.
@@ -120,6 +124,7 @@ DETAIL:  This operation is not supported for foreign tables.
 select pg_visibility_map_summary('test_foreign_table');
 ERROR:  relation "test_foreign_table" is of wrong relation kind
 DETAIL:  This operation is not supported for foreign tables.
+CONTEXT:  SQL function "pg_visibility_map_summary" statement 1
 select pg_check_frozen('test_foreign_table');
 ERROR:  relation "test_foreign_table" is of wrong relation kind
 DETAIL:  This operation is not supported for foreign tables.

@@ -17,6 +17,7 @@
 #include "fmgr.h"
 #include "nodes/nodes.h"
 #include "utils/fmgrprotos.h"
+#include "access/xlogdefs.h"
 
 /* Sign + the most decimal digits an 8-byte number could have */
 #define MAXINT8LEN 20
@@ -81,6 +82,8 @@ extern void generate_operator_clause(fmStringInfo buf,
 									 const char *leftop, Oid leftoptype,
 									 Oid opoid,
 									 const char *rightop, Oid rightoptype);
+
+extern PGDLLIMPORT XLogRecPtr PgStartLSN;
 
 /* varchar.c */
 extern int	bpchartruelen(char *s, int len);

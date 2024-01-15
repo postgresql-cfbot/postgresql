@@ -2489,6 +2489,27 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"opp_freeze_algo", PGC_USERSET, AUTOVACUUM,
+			gettext_noop("algorithm used to determine whether or not to freeze a page during vacuum"),
+			NULL
+		},
+		&opp_freeze_algo,
+		0, 0, 10000,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"target_freeze_duration", PGC_USERSET, AUTOVACUUM,
+			gettext_noop("minimum amount of time in seconds that a page should stay frozen."),
+			NULL,
+			GUC_UNIT_S
+		},
+		&target_freeze_duration,
+		1, 0, 10000000,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"max_files_per_process", PGC_POSTMASTER, RESOURCES_KERNEL,
 			gettext_noop("Sets the maximum number of simultaneously open files for each server process."),
 			NULL

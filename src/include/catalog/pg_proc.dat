@@ -5419,6 +5419,48 @@
   proname => 'pg_stat_get_vacuum_count', provolatile => 's', proparallel => 'r',
   prorettype => 'int8', proargtypes => 'oid',
   prosrc => 'pg_stat_get_vacuum_count' },
+
+{ oid => '9990', descr => 'statistics: number of times pages of this relation were set all visible by vacuum',
+  proname => 'pg_stat_get_vm_vis', provolatile => 's', proparallel => 'r',
+  prorettype => 'int8', proargtypes => 'oid',
+  prosrc => 'pg_stat_get_vm_vis' },
+
+{ oid => '9991', descr => 'statistics: number of times all visible pages of this relation were modified',
+  proname => 'pg_stat_get_vm_unvis', provolatile => 's', proparallel => 'r',
+  prorettype => 'int8', proargtypes => 'oid',
+  prosrc => 'pg_stat_get_vm_unvis' },
+
+{ oid => '9992', descr => 'statistics: number of times pages of this relation were set all frozen in the VM',
+  proname => 'pg_stat_get_vm_freezes', provolatile => 's', proparallel => 'r',
+  prorettype => 'int8', proargtypes => 'oid',
+  prosrc => 'pg_stat_get_vm_freezes' },
+
+{ oid => '9993', descr => 'statistics: number of times pages of this relation had tuples newly frozen by a vacuum',
+  proname => 'pg_stat_get_page_freezes', provolatile => 's', proparallel => 'r',
+  prorettype => 'int8', proargtypes => 'oid',
+  prosrc => 'pg_stat_get_page_freezes' },
+
+{ oid => '9995', descr => 'statistics: number of times all frozen pages pages of this relation were modified',
+  proname => 'pg_stat_get_vm_unfreezes', provolatile => 's', proparallel => 'r',
+  prorettype => 'int8', proargtypes => 'oid',
+  prosrc => 'pg_stat_get_vm_unfreezes' },
+
+{ oid => '9996', descr => 'statistics: number of missed opportunities to freeze pages of this relation',
+  proname => 'pg_stat_get_missed_freezes', provolatile => 's', proparallel => 'r',
+  prorettype => 'int8', proargtypes => 'oid',
+  prosrc => 'pg_stat_get_missed_freezes' },
+
+{ oid => '9997', descr => 'statistics: number of pages of this relation were mistakenly frozen',
+  proname => 'pg_stat_get_early_unfreezes', provolatile => 's', proparallel => 'r',
+  prorettype => 'int8', proargtypes => 'oid',
+  prosrc => 'pg_stat_get_early_unfreezes' },
+
+{ oid => '9998', descr => 'statistics: number of freeze WAL records emitted containing FPIs',
+  proname => 'pg_stat_get_freeze_fpis', provolatile => 's', proparallel => 'r',
+  prorettype => 'int8', proargtypes => 'oid',
+  prosrc => 'pg_stat_get_freeze_fpis' },
+
+
 { oid => '3055', descr => 'statistics: number of auto vacuums for a table',
   proname => 'pg_stat_get_autovacuum_count', provolatile => 's',
   proparallel => 'r', prorettype => 'int8', proargtypes => 'oid',

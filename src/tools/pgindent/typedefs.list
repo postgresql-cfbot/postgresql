@@ -1520,6 +1520,8 @@ LogicalTapeSet
 LsnReadQueue
 LsnReadQueueNextFun
 LsnReadQueueNextStatus
+LSNTime
+LSNTimeline
 LtreeGistOptions
 LtreeSignature
 MAGIC
@@ -2056,6 +2058,7 @@ PgStatShared_ReplSlot
 PgStatShared_SLRU
 PgStatShared_Subscription
 PgStatShared_Wal
+PgStat_Accumulator
 PgStat_ArchiverStats
 PgStat_BackendSubEntry
 PgStat_BgWriterStats
@@ -2088,6 +2091,8 @@ PgStat_SubXactStatus
 PgStat_TableCounts
 PgStat_TableStatus
 PgStat_TableXactStatus
+PgStat_VMSet
+PgStat_VMUnset
 PgStat_WalStats
 PgXmlErrorContext
 PgXmlStrictness

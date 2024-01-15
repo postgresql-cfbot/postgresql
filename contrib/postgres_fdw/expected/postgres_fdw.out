@@ -1349,7 +1349,7 @@ SELECT t1.c1, t1.c2, t2.c1, t2.c2 FROM ft4 t1 LEFT JOIN (SELECT * FROM ft5 WHERE
  Foreign Scan
    Output: t1.c1, t1.c2, ft5.c1, ft5.c2
    Relations: (public.ft4 t1) LEFT JOIN (public.ft5)
-   Remote SQL: SELECT r1.c1, r1.c2, r4.c1, r4.c2 FROM ("S 1"."T 3" r1 LEFT JOIN "S 1"."T 4" r4 ON (((r1.c1 = r4.c1)) AND ((r4.c1 < 10)))) WHERE (((r4.c1 < 10) OR (r4.c1 IS NULL))) AND ((r1.c1 < 10))
+   Remote SQL: SELECT r1.c1, r1.c2, r4.c1, r4.c2 FROM ("S 1"."T 3" r1 LEFT JOIN "S 1"."T 4" r4 ON (((r1.c1 = r4.c1)) AND ((r4.c1 < 10)))) WHERE (((r4.c1 IS NULL) OR (r4.c1 < 10))) AND ((r1.c1 < 10))
 (4 rows)
 
 SELECT t1.c1, t1.c2, t2.c1, t2.c2 FROM ft4 t1 LEFT JOIN (SELECT * FROM ft5 WHERE c1 < 10) t2 ON (t1.c1 = t2.c1)
@@ -3105,7 +3105,7 @@ select array_agg(distinct (t1.c1)%5) from ft4 t1 full join ft5 t2 on (t1.c1 = t2
  Foreign Scan
    Output: (array_agg(DISTINCT (t1.c1 % 5))), ((t2.c1 % 3))
    Relations: Aggregate on ((public.ft4 t1) FULL JOIN (public.ft5 t2))
-   Remote SQL: SELECT array_agg(DISTINCT (r1.c1 % 5)), (r2.c1 % 3) FROM ("S 1"."T 3" r1 FULL JOIN "S 1"."T 4" r2 ON (((r1.c1 = r2.c1)))) WHERE (((r1.c1 < 20) OR ((r1.c1 IS NULL) AND (r2.c1 < 5)))) GROUP BY 2 ORDER BY array_agg(DISTINCT (r1.c1 % 5)) ASC NULLS LAST
+   Remote SQL: SELECT array_agg(DISTINCT (r1.c1 % 5)), (r2.c1 % 3) FROM ("S 1"."T 3" r1 FULL JOIN "S 1"."T 4" r2 ON (((r1.c1 = r2.c1)))) WHERE ((((r1.c1 IS NULL) AND (r2.c1 < 5)) OR (r1.c1 < 20))) GROUP BY 2 ORDER BY array_agg(DISTINCT (r1.c1 % 5)) ASC NULLS LAST
 (4 rows)
 
 select array_agg(distinct (t1.c1)%5) from ft4 t1 full join ft5 t2 on (t1.c1 = t2.c1) where t1.c1 < 20 or (t1.c1 is null and t2.c1 < 5) group by (t2.c1)%3 order by 1;
@@ -3123,7 +3123,7 @@ select array_agg(distinct (t1.c1)%5 order by (t1.c1)%5) from ft4 t1 full join ft
  Foreign Scan
    Output: (array_agg(DISTINCT (t1.c1 % 5) ORDER BY (t1.c1 % 5))), ((t2.c1 % 3))
    Relations: Aggregate on ((public.ft4 t1) FULL JOIN (public.ft5 t2))
-   Remote SQL: SELECT array_agg(DISTINCT (r1.c1 % 5) ORDER BY ((r1.c1 % 5)) ASC NULLS LAST), (r2.c1 % 3) FROM ("S 1"."T 3" r1 FULL JOIN "S 1"."T 4" r2 ON (((r1.c1 = r2.c1)))) WHERE (((r1.c1 < 20) OR ((r1.c1 IS NULL) AND (r2.c1 < 5)))) GROUP BY 2 ORDER BY array_agg(DISTINCT (r1.c1 % 5) ORDER BY ((r1.c1 % 5)) ASC NULLS LAST) ASC NULLS LAST
+   Remote SQL: SELECT array_agg(DISTINCT (r1.c1 % 5) ORDER BY ((r1.c1 % 5)) ASC NULLS LAST), (r2.c1 % 3) FROM ("S 1"."T 3" r1 FULL JOIN "S 1"."T 4" r2 ON (((r1.c1 = r2.c1)))) WHERE ((((r1.c1 IS NULL) AND (r2.c1 < 5)) OR (r1.c1 < 20))) GROUP BY 2 ORDER BY array_agg(DISTINCT (r1.c1 % 5) ORDER BY ((r1.c1 % 5)) ASC NULLS LAST) ASC NULLS LAST
 (4 rows)
 
 select array_agg(distinct (t1.c1)%5 order by (t1.c1)%5) from ft4 t1 full join ft5 t2 on (t1.c1 = t2.c1) where t1.c1 < 20 or (t1.c1 is null and t2.c1 < 5) group by (t2.c1)%3 order by 1;
@@ -3140,7 +3140,7 @@ select array_agg(distinct (t1.c1)%5 order by (t1.c1)%5 desc nulls last) from ft4
  Foreign Scan
    Output: (array_agg(DISTINCT (t1.c1 % 5) ORDER BY (t1.c1 % 5) DESC NULLS LAST)), ((t2.c1 % 3))
    Relations: Aggregate on ((public.ft4 t1) FULL JOIN (public.ft5 t2))
-   Remote SQL: SELECT array_agg(DISTINCT (r1.c1 % 5) ORDER BY ((r1.c1 % 5)) DESC NULLS LAST), (r2.c1 % 3) FROM ("S 1"."T 3" r1 FULL JOIN "S 1"."T 4" r2 ON (((r1.c1 = r2.c1)))) WHERE (((r1.c1 < 20) OR ((r1.c1 IS NULL) AND (r2.c1 < 5)))) GROUP BY 2 ORDER BY array_agg(DISTINCT (r1.c1 % 5) ORDER BY ((r1.c1 % 5)) DESC NULLS LAST) ASC NULLS LAST
+   Remote SQL: SELECT array_agg(DISTINCT (r1.c1 % 5) ORDER BY ((r1.c1 % 5)) DESC NULLS LAST), (r2.c1 % 3) FROM ("S 1"."T 3" r1 FULL JOIN "S 1"."T 4" r2 ON (((r1.c1 = r2.c1)))) WHERE ((((r1.c1 IS NULL) AND (r2.c1 < 5)) OR (r1.c1 < 20))) GROUP BY 2 ORDER BY array_agg(DISTINCT (r1.c1 % 5) ORDER BY ((r1.c1 % 5)) DESC NULLS LAST) ASC NULLS LAST
 (4 rows)
 
 select array_agg(distinct (t1.c1)%5 order by (t1.c1)%5 desc nulls last) from ft4 t1 full join ft5 t2 on (t1.c1 = t2.c1) where t1.c1 < 20 or (t1.c1 is null and t2.c1 < 5) group by (t2.c1)%3 order by 1;
@@ -8797,18 +8797,18 @@ insert into utrtest values (2, 'qux');
 -- Check case where the foreign partition is a subplan target rel
 explain (verbose, costs off)
 update utrtest set a = 1 where a = 1 or a = 2 returning *;
-                                             QUERY PLAN                                             
-----------------------------------------------------------------------------------------------------
+                                                  QUERY PLAN                                                  
+--------------------------------------------------------------------------------------------------------------
  Update on public.utrtest
    Output: utrtest_1.a, utrtest_1.b
    Foreign Update on public.remp utrtest_1
    Update on public.locp utrtest_2
    ->  Append
          ->  Foreign Update on public.remp utrtest_1
-               Remote SQL: UPDATE public.loct SET a = 1 WHERE (((a = 1) OR (a = 2))) RETURNING a, b
+               Remote SQL: UPDATE public.loct SET a = 1 WHERE ((a = ANY ('{1,2}'::integer[]))) RETURNING a, b
          ->  Seq Scan on public.locp utrtest_2
                Output: 1, utrtest_2.tableoid, utrtest_2.ctid, NULL::record
-               Filter: ((utrtest_2.a = 1) OR (utrtest_2.a = 2))
+               Filter: (utrtest_2.a = ANY ('{1,2}'::integer[]))
 (10 rows)
 
 -- The new values are concatenated with ' triggered !'

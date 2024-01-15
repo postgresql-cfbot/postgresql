@@ -379,6 +379,7 @@
 # - Planner Method Configuration -
 
 #enable_async_append = on
+#enable_or_transformation = on
 #enable_bitmapscan = on
 #enable_gathermerge = on
 #enable_hashagg = on

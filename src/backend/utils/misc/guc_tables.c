@@ -1062,6 +1062,17 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"enable_or_transformation", PGC_USERSET, QUERY_TUNING_OTHER,
+			gettext_noop("Transform a sequence of OR clauses to an IN expression."),
+			gettext_noop("The planner will replace clauses like 'x=c1 OR x=c2 .."
+						 "to the clause 'x IN (c1,c2,...)'"),
+			GUC_EXPLAIN
+		},
+		&enable_or_transformation,
+		true,
+		NULL, NULL, NULL
+	},
+	{
 		/*
 		 * Not for general use --- used by SET SESSION AUTHORIZATION and SET
 		 * ROLE

@@ -2059,9 +2059,9 @@ my %tests = (
 		regexp => qr/^
 			\QCREATE DOMAIN dump_test.us_postal_code AS text COLLATE pg_catalog."C" DEFAULT '10014'::text\E\n\s+
 			\QCONSTRAINT us_postal_code_check CHECK \E
-			\Q(((VALUE ~ '^\d{5}\E
-			\$\Q'::text) OR (VALUE ~ '^\d{5}-\d{4}\E\$
-			\Q'::text)));\E(.|\n)*
+			\Q((VALUE ~ ANY (ARRAY['^\d{5}\E
+			\$\Q'::text, '^\d{5}-\d{4}\E\$
+			\Q'::text])));\E(.|\n)*
 			\QCOMMENT ON CONSTRAINT us_postal_code_check ON DOMAIN dump_test.us_postal_code IS 'check it';\E
 			/xm,
 		like =>

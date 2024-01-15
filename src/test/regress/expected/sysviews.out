@@ -123,6 +123,7 @@ select name, setting from pg_settings where name like 'enable%';
  enable_memoize                 | on
  enable_mergejoin               | on
  enable_nestloop                | on
+ enable_or_transformation       | on
  enable_parallel_append         | on
  enable_parallel_hash           | on
  enable_partition_pruning       | on
@@ -133,7 +134,7 @@ select name, setting from pg_settings where name like 'enable%';
  enable_seqscan                 | on
  enable_sort                    | on
  enable_tidscan                 | on
-(22 rows)
+(23 rows)
 
 -- There are always wait event descriptions for various types.
 select type, count(*) > 0 as ok FROM pg_wait_events

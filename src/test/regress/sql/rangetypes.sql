@@ -629,3 +629,95 @@ create function inoutparam_fail(inout i anyelement, out r anyrange)
 --should fail
 create function table_fail(i anyelement) returns table(i anyelement, r anyrange)
   as $$ select $1, '[1,10]' $$ language sql;
+
+--
+-- Test support functions
+--
+
+CREATE TEMP TABLE date_support_test AS
+   SELECT '2000-01-01'::DATE + g AS some_date
+   FROM generate_series(-1000, 1000) sub(g);
+CREATE UNIQUE INDEX date_support_test_idx ON date_support_test (some_date);
+INSERT INTO date_support_test values ('-infinity'), ('infinity');
+ANALYZE date_support_test;
+
+-- empty ranges
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange 'empty';
+
+-- only lower bound present
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange('2000-01-01', NULL, '[)');
+
+-- only upper bound present
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange(NULL, '2000-01-01', '(]');
+
+-- unbounded range
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange(NULL, NULL);
+
+-- lower range "-Infinity" excluded
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange('-Infinity', '1997-04-10'::DATE, '()');
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange('-Infinity', '1997-04-10'::DATE, '()');
+
+-- lower range "-Infinity" included
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange('-Infinity', '1997-04-10'::DATE, '[)');
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange('-Infinity', '1997-04-10'::DATE, '[)');
+
+-- upper range "Infinity" excluded
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange('2002-09-25'::DATE, 'Infinity', '[)');
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange('2002-09-25'::DATE, 'Infinity', '[)');
+
+-- upper range "Infinity" included
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange('2002-09-25'::DATE, 'Infinity', '[]');
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange('2002-09-25'::DATE, 'Infinity', '[]');
+
+-- should also work if we use "@>"
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE daterange('-Infinity', '1997-04-10'::DATE, '()') @> some_date;
+SELECT some_date FROM date_support_test
+WHERE daterange('-Infinity', '1997-04-10'::DATE, '()') @> some_date;
+
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE daterange('2002-09-25'::DATE, 'Infinity', '[]') @> some_date;
+SELECT some_date FROM date_support_test
+WHERE daterange('2002-09-25'::DATE, 'Infinity', '[]') @> some_date;
+
+DROP TABLE date_support_test;
+
+-- test a custom range type with a non-default operator class
+CREATE TYPE textrange_supp AS RANGE (
+   SUBTYPE = text,
+   SUBTYPE_OPCLASS = text_pattern_ops
+);
+
+CREATE TEMP TABLE text_support_test (t text COLLATE "C");
+
+INSERT INTO text_support_test VALUES ('a'), ('c'), ('d'), ('ch');
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM text_support_test WHERE t <@ textrange_supp('a', 'd');
+SELECT * FROM text_support_test WHERE t <@ textrange_supp('a', 'd');
+
+DROP TABLE text_support_test;
+
+DROP TYPE textrange_supp;

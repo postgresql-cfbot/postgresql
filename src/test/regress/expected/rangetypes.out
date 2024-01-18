@@ -1834,3 +1834,196 @@ create function table_fail(i anyelement) returns table(i anyelement, r anyrange)
   as $$ select $1, '[1,10]' $$ language sql;
 ERROR:  cannot determine result data type
 DETAIL:  A result of type anyrange requires at least one input of type anyrange or anymultirange.
+--
+-- Test support functions
+--
+CREATE TEMP TABLE date_support_test AS
+   SELECT '2000-01-01'::DATE + g AS some_date
+   FROM generate_series(-1000, 1000) sub(g);
+CREATE UNIQUE INDEX date_support_test_idx ON date_support_test (some_date);
+INSERT INTO date_support_test values ('-infinity'), ('infinity');
+ANALYZE date_support_test;
+-- empty ranges
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange 'empty';
+        QUERY PLAN        
+--------------------------
+ Result
+   One-Time Filter: false
+(2 rows)
+
+-- only lower bound present
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange('2000-01-01', NULL, '[)');
+                 QUERY PLAN                  
+---------------------------------------------
+ Seq Scan on date_support_test
+   Filter: (some_date >= '01-01-2000'::date)
+(2 rows)
+
+-- only upper bound present
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange(NULL, '2000-01-01', '(]');
+                 QUERY PLAN                 
+--------------------------------------------
+ Seq Scan on date_support_test
+   Filter: (some_date < '01-02-2000'::date)
+(2 rows)
+
+-- unbounded range
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange(NULL, NULL);
+          QUERY PLAN           
+-------------------------------
+ Seq Scan on date_support_test
+(1 row)
+
+-- lower range "-Infinity" excluded
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange('-Infinity', '1997-04-10'::DATE, '()');
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
+ Index Only Scan using date_support_test_idx on date_support_test
+   Index Cond: ((some_date > '-infinity'::date) AND (some_date < '04-10-1997'::date))
+(2 rows)
+
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange('-Infinity', '1997-04-10'::DATE, '()');
+ some_date  
+------------
+ 04-06-1997
+ 04-07-1997
+ 04-08-1997
+ 04-09-1997
+(4 rows)
+
+-- lower range "-Infinity" included
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange('-Infinity', '1997-04-10'::DATE, '[)');
+                                      QUERY PLAN                                       
+---------------------------------------------------------------------------------------
+ Index Only Scan using date_support_test_idx on date_support_test
+   Index Cond: ((some_date >= '-infinity'::date) AND (some_date < '04-10-1997'::date))
+(2 rows)
+
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange('-Infinity', '1997-04-10'::DATE, '[)');
+ some_date  
+------------
+ -infinity
+ 04-06-1997
+ 04-07-1997
+ 04-08-1997
+ 04-09-1997
+(5 rows)
+
+-- upper range "Infinity" excluded
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange('2002-09-25'::DATE, 'Infinity', '[)');
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
+ Index Only Scan using date_support_test_idx on date_support_test
+   Index Cond: ((some_date >= '09-25-2002'::date) AND (some_date < 'infinity'::date))
+(2 rows)
+
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange('2002-09-25'::DATE, 'Infinity', '[)');
+ some_date  
+------------
+ 09-25-2002
+ 09-26-2002
+ 09-27-2002
+(3 rows)
+
+-- upper range "Infinity" included
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange('2002-09-25'::DATE, 'Infinity', '[]');
+                                      QUERY PLAN                                       
+---------------------------------------------------------------------------------------
+ Index Only Scan using date_support_test_idx on date_support_test
+   Index Cond: ((some_date >= '09-25-2002'::date) AND (some_date <= 'infinity'::date))
+(2 rows)
+
+SELECT some_date FROM date_support_test
+WHERE some_date <@ daterange('2002-09-25'::DATE, 'Infinity', '[]');
+ some_date  
+------------
+ 09-25-2002
+ 09-26-2002
+ 09-27-2002
+ infinity
+(4 rows)
+
+-- should also work if we use "@>"
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE daterange('-Infinity', '1997-04-10'::DATE, '()') @> some_date;
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
+ Index Only Scan using date_support_test_idx on date_support_test
+   Index Cond: ((some_date > '-infinity'::date) AND (some_date < '04-10-1997'::date))
+(2 rows)
+
+SELECT some_date FROM date_support_test
+WHERE daterange('-Infinity', '1997-04-10'::DATE, '()') @> some_date;
+ some_date  
+------------
+ 04-06-1997
+ 04-07-1997
+ 04-08-1997
+ 04-09-1997
+(4 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT some_date FROM date_support_test
+WHERE daterange('2002-09-25'::DATE, 'Infinity', '[]') @> some_date;
+                                      QUERY PLAN                                       
+---------------------------------------------------------------------------------------
+ Index Only Scan using date_support_test_idx on date_support_test
+   Index Cond: ((some_date >= '09-25-2002'::date) AND (some_date <= 'infinity'::date))
+(2 rows)
+
+SELECT some_date FROM date_support_test
+WHERE daterange('2002-09-25'::DATE, 'Infinity', '[]') @> some_date;
+ some_date  
+------------
+ 09-25-2002
+ 09-26-2002
+ 09-27-2002
+ infinity
+(4 rows)
+
+DROP TABLE date_support_test;
+-- test a custom range type with a non-default operator class
+CREATE TYPE textrange_supp AS RANGE (
+   SUBTYPE = text,
+   SUBTYPE_OPCLASS = text_pattern_ops
+);
+CREATE TEMP TABLE text_support_test (t text COLLATE "C");
+INSERT INTO text_support_test VALUES ('a'), ('c'), ('d'), ('ch');
+EXPLAIN (COSTS OFF)
+SELECT * FROM text_support_test WHERE t <@ textrange_supp('a', 'd');
+                      QUERY PLAN                      
+------------------------------------------------------
+ Seq Scan on text_support_test
+   Filter: ((t ~>=~ 'a'::text) AND (t ~<~ 'd'::text))
+(2 rows)
+
+SELECT * FROM text_support_test WHERE t <@ textrange_supp('a', 'd');
+ t  
+----
+ a
+ c
+ ch
+(3 rows)
+
+DROP TABLE text_support_test;
+DROP TYPE textrange_supp;

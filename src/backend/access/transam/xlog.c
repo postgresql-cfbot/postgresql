@@ -100,6 +100,7 @@
 #include "storage/sync.h"
 #include "utils/guc_hooks.h"
 #include "utils/guc_tables.h"
+#include "utils/injection_point.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/relmapper.h"
@@ -7427,6 +7428,12 @@ CreateRestartPoint(int flags)
 	update_checkpoint_display(flags, true, false);
 
 	CheckPointGuts(lastCheckPoint.redo, flags);
+
+	/*
+	 * This location is important to be after CheckPointGuts() to ensure
+	 * that some work has happened.
+	 */
+	INJECTION_POINT("CreateRestartPoint");
 
 	/*
 	 * Remember the prior checkpoint's redo ptr for

@@ -1145,6 +1145,8 @@ IdentLine
 IdentifierLookup
 IdentifySystemCmd
 IfStackElem
+InjectionPointCacheEntry
+InjectionPointEntry
 ImportForeignSchemaStmt
 ImportForeignSchemaType
 ImportForeignSchema_function

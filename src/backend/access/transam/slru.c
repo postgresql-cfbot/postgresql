@@ -57,6 +57,7 @@
 #include "access/xlogutils.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "storage/bufpage.h"
 #include "storage/fd.h"
 #include "storage/shmem.h"
 
@@ -154,13 +155,13 @@ typedef enum
 	SLRU_WRITE_FAILED,
 	SLRU_FSYNC_FAILED,
 	SLRU_CLOSE_FAILED,
+	SLRU_DATA_CORRUPTED,
 } SlruErrorCause;
 
 static SlruErrorCause slru_errcause;
 static int	slru_errno;
 
 
-static void SimpleLruZeroLSNs(SlruCtl ctl, int slotno);
 static void SimpleLruWaitIO(SlruCtl ctl, int slotno);
 static void SlruInternalWritePage(SlruCtl ctl, int slotno, SlruWriteAll fdata);
 static bool SlruPhysicalReadPage(SlruCtl ctl, int64 pageno, int slotno);
@@ -179,7 +180,7 @@ static void SlruInternalDeleteSegment(SlruCtl ctl, int64 segno);
  */
 
 Size
-SimpleLruShmemSize(int nslots, int nlsns)
+SimpleLruShmemSize(int nslots)
 {
 	Size		sz;
 
@@ -192,9 +193,6 @@ SimpleLruShmemSize(int nslots, int nlsns)
 	sz += MAXALIGN(nslots * sizeof(int));	/* page_lru_count[] */
 	sz += MAXALIGN(nslots * sizeof(LWLockPadded));	/* buffer_locks[] */
 
-	if (nlsns > 0)
-		sz += MAXALIGN(nslots * nlsns * sizeof(XLogRecPtr));	/* group_lsn[] */
-
 	return BUFFERALIGN(sz) + BLCKSZ * nslots;
 }
 
@@ -204,14 +202,13 @@ SimpleLruShmemSize(int nslots, int nlsns)
  * ctl: address of local (unshared) control structure.
  * name: name of SLRU.  (This is user-visible, pick with care!)
  * nslots: number of page slots to use.
- * nlsns: number of LSN groups per page (set to zero if not relevant).
  * ctllock: LWLock to use to control access to the shared control structure.
  * subdir: PGDATA-relative subdirectory that will contain the files.
  * tranche_id: LWLock tranche ID to use for the SLRU's per-buffer LWLocks.
  * sync_handler: which set of functions to use to handle sync requests
  */
 void
-SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
+SimpleLruInit(SlruCtl ctl, const char *name, int nslots,
 			  LWLock *ctllock, const char *subdir, int tranche_id,
 			  SyncRequestHandler sync_handler, bool long_segment_names)
 {
@@ -219,7 +216,7 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 	bool		found;
 
 	shared = (SlruShared) ShmemInitStruct(name,
-										  SimpleLruShmemSize(nslots, nlsns),
+										  SimpleLruShmemSize(nslots),
 										  &found);
 
 	if (!IsUnderPostmaster)
@@ -236,7 +233,6 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		shared->ControlLock = ctllock;
 
 		shared->num_slots = nslots;
-		shared->lsn_groups_per_page = nlsns;
 
 		shared->cur_lru_count = 0;
 
@@ -261,12 +257,6 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		shared->buffer_locks = (LWLockPadded *) (ptr + offset);
 		offset += MAXALIGN(nslots * sizeof(LWLockPadded));
 
-		if (nlsns > 0)
-		{
-			shared->group_lsn = (XLogRecPtr *) (ptr + offset);
-			offset += MAXALIGN(nslots * nlsns * sizeof(XLogRecPtr));
-		}
-
 		ptr += BUFFERALIGN(offset);
 		for (slotno = 0; slotno < nslots; slotno++)
 		{
@@ -281,7 +271,7 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		}
 
 		/* Should fit to estimated shmem size */
-		Assert(ptr - (char *) shared <= SimpleLruShmemSize(nslots, nlsns));
+		Assert(ptr - (char *) shared <= SimpleLruShmemSize(nslots));
 	}
 	else
 		Assert(found);
@@ -323,11 +313,8 @@ SimpleLruZeroPage(SlruCtl ctl, int64 pageno)
 	shared->page_dirty[slotno] = true;
 	SlruRecentlyUsed(shared, slotno);
 
-	/* Set the buffer to zeroes */
-	MemSet(shared->page_buffer[slotno], 0, BLCKSZ);
-
-	/* Set the LSNs for this new page to zero */
-	SimpleLruZeroLSNs(ctl, slotno);
+    /* Initialize the page. */
+	PageInitSLRU(shared->page_buffer[slotno], BLCKSZ, 0);
 
 	/* Assume this page is now the latest active page */
 	shared->latest_page_number = pageno;
@@ -336,26 +323,6 @@ SimpleLruZeroPage(SlruCtl ctl, int64 pageno)
 	pgstat_count_slru_page_zeroed(shared->slru_stats_idx);
 
 	return slotno;
-}
-
-/*
- * Zero all the LSNs we store for this slru page.
- *
- * This should be called each time we create a new page, and each time we read
- * in a page from disk into an existing buffer.  (Such an old page cannot
- * have any interesting LSNs, since we'd have flushed them before writing
- * the page in the first place.)
- *
- * This assumes that InvalidXLogRecPtr is bitwise-all-0.
- */
-static void
-SimpleLruZeroLSNs(SlruCtl ctl, int slotno)
-{
-	SlruShared	shared = ctl->shared;
-
-	if (shared->lsn_groups_per_page > 0)
-		MemSet(&shared->group_lsn[slotno * shared->lsn_groups_per_page], 0,
-			   shared->lsn_groups_per_page * sizeof(XLogRecPtr));
 }
 
 /*
@@ -477,9 +444,6 @@ SimpleLruReadPage(SlruCtl ctl, int64 pageno, bool write_ok,
 
 		/* Do the read */
 		ok = SlruPhysicalReadPage(ctl, pageno, slotno);
-
-		/* Set the LSNs for this newly read-in page to zero */
-		SimpleLruZeroLSNs(ctl, slotno);
 
 		/* Re-acquire control lock and update page state */
 		LWLockAcquire(shared->ControlLock, LW_EXCLUSIVE);
@@ -740,7 +704,7 @@ SlruPhysicalReadPage(SlruCtl ctl, int64 pageno, int slotno)
 		ereport(LOG,
 				(errmsg("file \"%s\" doesn't exist, reading as zeroes",
 						path)));
-		MemSet(shared->page_buffer[slotno], 0, BLCKSZ);
+		PageInitSLRU(shared->page_buffer[slotno], BLCKSZ, 0);
 		return true;
 	}
 
@@ -760,6 +724,13 @@ SlruPhysicalReadPage(SlruCtl ctl, int64 pageno, int slotno)
 	{
 		slru_errcause = SLRU_CLOSE_FAILED;
 		slru_errno = errno;
+		return false;
+	}
+
+	if (!PageIsVerifiedExtended(shared->page_buffer[slotno], pageno, PIV_REPORT_STAT))
+	{
+		slru_errcause = SLRU_DATA_CORRUPTED;
+		slru_errno = 0;
 		return false;
 	}
 
@@ -789,6 +760,8 @@ SlruPhysicalWritePage(SlruCtl ctl, int64 pageno, int slotno, SlruWriteAll fdata)
 	off_t		offset = rpageno * BLCKSZ;
 	char		path[MAXPGPATH];
 	int			fd = -1;
+	Page		page = shared->page_buffer[slotno];
+	XLogRecPtr	lsn;
 
 	/* update the stats counter of written pages */
 	pgstat_count_slru_page_written(shared->slru_stats_idx);
@@ -798,41 +771,18 @@ SlruPhysicalWritePage(SlruCtl ctl, int64 pageno, int slotno, SlruWriteAll fdata)
 	 * write out data before associated WAL records.  This is the same action
 	 * performed during FlushBuffer() in the main buffer manager.
 	 */
-	if (shared->group_lsn != NULL)
+	lsn = PageGetLSN(page);
+	if (!XLogRecPtrIsInvalid(lsn))
 	{
 		/*
-		 * We must determine the largest async-commit LSN for the page. This
-		 * is a bit tedious, but since this entire function is a slow path
-		 * anyway, it seems better to do this here than to maintain a per-page
-		 * LSN variable (which'd need an extra comparison in the
-		 * transaction-commit path).
+		 * As noted above, elog(ERROR) is not acceptable here, so if
+		 * XLogFlush were to fail, we must PANIC.  This isn't much of a
+		 * restriction because XLogFlush is just about all critical
+		 * section anyway, but let's make sure.
 		 */
-		XLogRecPtr	max_lsn;
-		int			lsnindex,
-					lsnoff;
-
-		lsnindex = slotno * shared->lsn_groups_per_page;
-		max_lsn = shared->group_lsn[lsnindex++];
-		for (lsnoff = 1; lsnoff < shared->lsn_groups_per_page; lsnoff++)
-		{
-			XLogRecPtr	this_lsn = shared->group_lsn[lsnindex++];
-
-			if (max_lsn < this_lsn)
-				max_lsn = this_lsn;
-		}
-
-		if (!XLogRecPtrIsInvalid(max_lsn))
-		{
-			/*
-			 * As noted above, elog(ERROR) is not acceptable here, so if
-			 * XLogFlush were to fail, we must PANIC.  This isn't much of a
-			 * restriction because XLogFlush is just about all critical
-			 * section anyway, but let's make sure.
-			 */
-			START_CRIT_SECTION();
-			XLogFlush(max_lsn);
-			END_CRIT_SECTION();
-		}
+		START_CRIT_SECTION();
+		XLogFlush(lsn);
+		END_CRIT_SECTION();
 	}
 
 	/*
@@ -898,6 +848,8 @@ SlruPhysicalWritePage(SlruCtl ctl, int64 pageno, int slotno, SlruWriteAll fdata)
 			}
 		}
 	}
+
+	PageSetChecksumInplace(shared->page_buffer[slotno], pageno);
 
 	errno = 0;
 	pgstat_report_wait_start(WAIT_EVENT_SLRU_WRITE);
@@ -1018,6 +970,13 @@ SlruReportIOError(SlruCtl ctl, int64 pageno, TransactionId xid)
 					 errmsg("could not access status of transaction %u", xid),
 					 errdetail("Could not close file \"%s\": %m.",
 							   path)));
+			break;
+		case SLRU_DATA_CORRUPTED:
+			ereport(ERROR,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg("could not access status of transaction %u", xid),
+					 errdetail("Invalid page from file \"%s\" at offset %d.",
+							   path, offset)));
 			break;
 		default:
 			/* can't get here, we trust */

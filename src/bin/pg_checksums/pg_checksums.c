@@ -16,6 +16,7 @@
 
 #include <dirent.h>
 #include <limits.h>
+#include <stdbool.h>
 #include <time.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -589,12 +590,20 @@ main(int argc, char *argv[])
 		{
 			total_size = scan_directory(DataDir, "global", true);
 			total_size += scan_directory(DataDir, "base", true);
+			total_size += scan_directory(DataDir, "pg_commit_ts", true);
+			total_size += scan_directory(DataDir, "pg_multixact", true);
+			total_size += scan_directory(DataDir, "pg_serial", true);
 			total_size += scan_directory(DataDir, "pg_tblspc", true);
+			total_size += scan_directory(DataDir, "pg_xact", true);
 		}
 
 		(void) scan_directory(DataDir, "global", false);
 		(void) scan_directory(DataDir, "base", false);
+		(void) scan_directory(DataDir, "pg_commit_ts", false);
+		(void) scan_directory(DataDir, "pg_multixact", false);
+		(void) scan_directory(DataDir, "pg_serial", false);
 		(void) scan_directory(DataDir, "pg_tblspc", false);
+		(void) scan_directory(DataDir, "pg_xact", false);
 
 		if (showprogress)
 			progress_report(true);

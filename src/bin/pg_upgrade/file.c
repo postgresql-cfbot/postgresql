@@ -9,6 +9,7 @@
 
 #include "postgres_fe.h"
 
+#include <dirent.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #ifdef HAVE_COPYFILE_H
@@ -374,4 +375,175 @@ check_hard_link(void)
 				 strerror(errno));
 
 	unlink(new_link_file);
+}
+
+
+/*
+ * Copy SLRU_PAGES_PER_SEGMENT from access/slru.h to avoid including it.
+ */
+#define SLRU_PAGES_PER_SEGMENT	32
+
+#define SEGMENT_SIZE			(BLCKSZ * SLRU_PAGES_PER_SEGMENT)
+
+/*
+ * Copy PageInitSLRU from storage/bufpage.c to avoid linking to the backend.
+ */
+void
+PageInitSLRU(Page page, Size pageSize, Size specialSize)
+{
+	PageHeader	p = (PageHeader) page;
+
+	specialSize = MAXALIGN(specialSize);
+
+	Assert(pageSize == BLCKSZ);
+	Assert(pageSize > specialSize + SizeOfPageHeaderData);
+
+	/* Make sure all fields of page are zero, as well as unused space */
+	MemSet(p, 0, pageSize);
+
+	p->pd_flags = 0;
+	p->pd_lower = SizeOfPageHeaderData;
+	p->pd_upper = pageSize - specialSize;
+	p->pd_special = pageSize - specialSize;
+	PageSetPageSizeAndVersion(page, pageSize, PG_SLRU_PAGE_LAYOUT_VERSION);
+}
+
+/*
+ * Filter function for scandir(3) to select only segment files.
+ */
+static int
+segment_file_filter(const struct dirent *dirent)
+{
+	return strspn(dirent->d_name, "0123456789ABCDEF") == strlen(dirent->d_name);
+}
+
+static void
+upgrade_file(const char *src_dir, const char *src_file, const char *dst_dir)
+{
+	char	src[MAXPGPATH];
+	char	dst[MAXPGPATH];
+
+	int		seg_name_len;
+	int		src_segno;
+	int64	src_pageno;
+	int		dst_segno;
+	int64	dst_pageno;
+	int		dst_offset;
+
+	int		src_fd;
+	int		dst_fd;
+
+	char		   *src_buf;
+	ssize_t			src_len;
+	ssize_t			src_buf_offset;
+	PGAlignedBlock	dst_block;
+	Page			page = dst_block.data;
+	int				len_to_copy;
+
+	seg_name_len = strlen(src_file);
+	src_segno = (int) strtol(src_file, NULL, 16);
+	src_pageno = src_segno * SLRU_PAGES_PER_SEGMENT;
+
+	dst_pageno = src_pageno * BLCKSZ / SizeOfPageContents;
+	dst_offset = src_pageno * BLCKSZ - dst_pageno * SizeOfPageContents;
+	dst_segno  = dst_pageno / SLRU_PAGES_PER_SEGMENT;
+
+	snprintf(src, sizeof(src), "%s/%s", src_dir, src_file);
+	snprintf(dst, sizeof(dst), "%s/%0*X", dst_dir, seg_name_len, dst_segno);
+
+	src_buf = pg_malloc(SEGMENT_SIZE);
+	if ((src_fd = open(src, O_RDONLY | PG_BINARY, 0)) == -1)
+		pg_fatal("could not open file \"%s\": %s", src, strerror(errno));
+	if ((src_len = read(src_fd, src_buf, SEGMENT_SIZE)) == -1)
+		pg_fatal("could not read file \"%s\": %s", src, strerror(errno));
+
+	if ((dst_fd = open(dst, O_RDWR | O_CREAT | PG_BINARY, S_IRUSR | S_IWUSR)) == -1)
+		pg_fatal("could not open file \"%s\": %s", dst, strerror(errno));
+	if (ftruncate(dst_fd, SEGMENT_SIZE) == -1)
+		pg_fatal("could not truncate file \"%s\": %s", dst, strerror(errno));
+
+	/*
+	 * Read the destination page at dst_pageno into the buffer.  The page may contain
+	 * data from the previous source segment.  Initialize the page if the page is new.
+	 */
+	if (lseek(dst_fd, (dst_pageno % SLRU_PAGES_PER_SEGMENT) * BLCKSZ, SEEK_SET) == -1)
+		pg_fatal("could not seek in file \"%s\": %s", dst, strerror(errno));
+	if (read(dst_fd, page, BLCKSZ) == -1)
+		pg_fatal("could not read file \"%s\": %s", dst, strerror(errno));
+	if (PageIsNew(page))
+		PageInitSLRU(page, BLCKSZ, 0);
+
+	/*
+	 * Rewind the file position, so the first write will overwrite the page.
+	 */
+	if (lseek(dst_fd, (dst_pageno % SLRU_PAGES_PER_SEGMENT) * BLCKSZ, SEEK_SET) == -1)
+		pg_fatal("could not seek in file \"%s\": %s", dst, strerror(errno));
+
+	src_buf_offset = 0;
+	while (src_buf_offset < src_len)
+	{
+		len_to_copy = Min(src_len - src_buf_offset, SizeOfPageContents - dst_offset);
+		memcpy(PageGetContents(page) + dst_offset, src_buf + src_buf_offset, len_to_copy);
+		src_buf_offset += len_to_copy;
+
+		if (new_cluster.controldata.data_checksum_version > 0)
+			((PageHeader) page)->pd_checksum = pg_checksum_page(page, dst_pageno);
+		if (write(dst_fd, page, BLCKSZ) == -1)
+			pg_fatal("could not write file \"%s\": %s", dst, strerror(errno));
+
+		dst_pageno++;
+		dst_offset = 0;
+		PageInitSLRU(page, BLCKSZ, 0);
+
+        /*
+		 * Switch segments if we reached the end of the current segment.
+		 */
+		if (dst_pageno % SLRU_PAGES_PER_SEGMENT == 0)
+		{
+			if (fsync(dst_fd) == -1)
+				pg_fatal("could not fsync file \"%s\": %s", dst, strerror(errno));
+			if (close(dst_fd) == -1)
+				pg_fatal("could not close file \"%s\": %s", dst, strerror(errno));
+
+			dst_segno++;
+			snprintf(dst, sizeof(dst), "%s/%0*X", dst_dir, seg_name_len, dst_segno);
+			if ((dst_fd = open(dst, O_RDWR | O_CREAT | PG_BINARY, S_IRUSR | S_IWUSR)) == -1)
+				pg_fatal("could not open file \"%s\": %s", dst, strerror(errno));
+			if (ftruncate(dst_fd, SEGMENT_SIZE) == -1)
+				pg_fatal("could not truncate file \"%s\": %s", dst, strerror(errno));
+		}
+	}
+
+	if (fsync(dst_fd) == -1)
+		pg_fatal("could not fsync file \"%s\": %s", dst, strerror(errno));
+	if (close(dst_fd) == -1)
+		pg_fatal("could not close file \"%s\": %s", dst, strerror(errno));
+
+	pg_free(src_buf);
+	close(src_fd);
+}
+
+void
+upgrade_xact_cache(const char *src_subdir, const char *dst_subdir)
+{
+	char	src_dir[MAXPGPATH];
+	char	dst_dir[MAXPGPATH];
+
+	DIR				   *src_dirp;
+	struct dirent	   *src_dirent;
+
+	snprintf(src_dir, sizeof(src_dir), "%s/%s", old_cluster.pgdata, src_subdir);
+	snprintf(dst_dir, sizeof(dst_dir), "%s/%s", new_cluster.pgdata, dst_subdir);
+
+	if ((src_dirp = opendir(src_dir)) == NULL)
+		pg_fatal("could not open directory \"%s\": %s", src_dir, strerror(errno));
+
+	while (errno = 0, (src_dirent = readdir(src_dirp)) != NULL)
+	{
+		if (segment_file_filter(src_dirent))
+			upgrade_file(src_dir, src_dirent->d_name, dst_dir);
+	}
+
+	if (closedir(src_dirp) != 0)
+		pg_fatal("could not close directory \"%s\": %s", src_dir, strerror(errno));
 }

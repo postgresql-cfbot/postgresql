@@ -68,17 +68,6 @@ typedef struct SlruSharedData
 	int		   *page_lru_count;
 	LWLockPadded *buffer_locks;
 
-	/*
-	 * Optional array of WAL flush LSNs associated with entries in the SLRU
-	 * pages.  If not zero/NULL, we must flush WAL before writing pages (true
-	 * for pg_xact, false for multixact, pg_subtrans, pg_notify).  group_lsn[]
-	 * has lsn_groups_per_page entries per buffer slot, each containing the
-	 * highest LSN known for a contiguous group of SLRU entries on that slot's
-	 * page.
-	 */
-	XLogRecPtr *group_lsn;
-	int			lsn_groups_per_page;
-
 	/*----------
 	 * We mark a page "most recently used" by setting
 	 *		page_lru_count[slotno] = ++cur_lru_count;
@@ -147,8 +136,8 @@ typedef struct SlruCtlData
 typedef SlruCtlData *SlruCtl;
 
 
-extern Size SimpleLruShmemSize(int nslots, int nlsns);
-extern void SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
+extern Size SimpleLruShmemSize(int nslots);
+extern void SimpleLruInit(SlruCtl ctl, const char *name, int nslots,
 						  LWLock *ctllock, const char *subdir, int tranche_id,
 						  SyncRequestHandler sync_handler,
 						  bool long_segment_names);

@@ -206,7 +206,7 @@ push @cmd,
   sprintf("%d,%d", hex($files[0]) == 0 ? 3 : hex($files[0]), hex($files[-1]));
 
 @files = get_slru_files('pg_multixact/offsets');
-$mult = 32 * $blcksz / 4;
+$mult = 32 * ($blcksz - 24) / 4;
 # -m argument is "new,old"
 push @cmd, '-m',
   sprintf("%d,%d",
@@ -214,11 +214,11 @@ push @cmd, '-m',
 	hex($files[0]) == 0 ? 1 : hex($files[0] * $mult));
 
 @files = get_slru_files('pg_multixact/members');
-$mult = 32 * int($blcksz / 20) * 4;
+$mult = 32 * int(($blcksz - 24) / 20) * 4;
 push @cmd, '-O', (hex($files[-1]) + 1) * $mult;
 
 @files = get_slru_files('pg_xact');
-$mult = 32 * $blcksz * 4;
+$mult = 32 * ($blcksz - 24) * 4;
 push @cmd,
   '-u', (hex($files[0]) == 0 ? 3 : hex($files[0]) * $mult),
   '-x', ((hex($files[-1]) + 1) * $mult);

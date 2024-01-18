@@ -140,6 +140,7 @@
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
+#include "storage/bufpage.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
 #include "storage/proc.h"
@@ -162,7 +163,7 @@
  * than that, so changes in that data structure won't affect user-visible
  * restrictions.
  */
-#define NOTIFY_PAYLOAD_MAX_LENGTH	(BLCKSZ - NAMEDATALEN - 128)
+#define NOTIFY_PAYLOAD_MAX_LENGTH	(SizeOfPageContents - NAMEDATALEN - 128)
 
 /*
  * Struct representing an entry in the global notify queue
@@ -311,7 +312,7 @@ static SlruCtlData NotifyCtlData;
 
 #define NotifyCtl					(&NotifyCtlData)
 #define QUEUE_PAGESIZE				BLCKSZ
-
+#define QUEUE_PAGE_CAPACITY			(QUEUE_PAGESIZE - MAXALIGN(SizeOfPageHeaderData))
 #define QUEUE_FULL_WARN_INTERVAL	5000	/* warn at most once every 5s */
 
 /*
@@ -492,7 +493,7 @@ AsyncShmemSize(void)
 	size = mul_size(MaxBackends + 1, sizeof(QueueBackendStatus));
 	size = add_size(size, offsetof(AsyncQueueControl, backend));
 
-	size = add_size(size, SimpleLruShmemSize(NUM_NOTIFY_BUFFERS, 0));
+	size = add_size(size, SimpleLruShmemSize(NUM_NOTIFY_BUFFERS));
 
 	return size;
 }
@@ -541,7 +542,7 @@ AsyncShmemInit(void)
 	 * names are used in order to avoid wraparound.
 	 */
 	NotifyCtl->PagePrecedes = asyncQueuePagePrecedes;
-	SimpleLruInit(NotifyCtl, "Notify", NUM_NOTIFY_BUFFERS, 0,
+	SimpleLruInit(NotifyCtl, "Notify", NUM_NOTIFY_BUFFERS,
 				  NotifySLRULock, "pg_notify", LWTRANCHE_NOTIFY_BUFFER,
 				  SYNC_HANDLER_NONE, true);
 
@@ -1301,14 +1302,14 @@ asyncQueueAdvance(volatile QueuePosition *position, int entryLength)
 	 * written or read.
 	 */
 	offset += entryLength;
-	Assert(offset <= QUEUE_PAGESIZE);
+	Assert(offset <= QUEUE_PAGE_CAPACITY);
 
 	/*
 	 * In a second step check if another entry can possibly be written to the
 	 * page. If so, stay here, we have reached the next position. If not, then
 	 * we need to move on to the next page.
 	 */
-	if (offset + QUEUEALIGN(AsyncQueueEntryEmptySize) > QUEUE_PAGESIZE)
+	if (offset + QUEUEALIGN(AsyncQueueEntryEmptySize) > QUEUE_PAGE_CAPACITY)
 	{
 		pageno++;
 		offset = 0;
@@ -1408,7 +1409,7 @@ asyncQueueAddEntries(ListCell *nextNotify)
 		offset = QUEUE_POS_OFFSET(queue_head);
 
 		/* Check whether the entry really fits on the current page */
-		if (offset + qe.length <= QUEUE_PAGESIZE)
+		if (offset + qe.length <= QUEUE_PAGE_CAPACITY)
 		{
 			/* OK, so advance nextNotify past this item */
 			nextNotify = lnext(pendingNotifies->events, nextNotify);
@@ -1420,14 +1421,14 @@ asyncQueueAddEntries(ListCell *nextNotify)
 			 * only check dboid and since it won't match any reader's database
 			 * OID, they will ignore this entry and move on.
 			 */
-			qe.length = QUEUE_PAGESIZE - offset;
+			qe.length = QUEUE_PAGE_CAPACITY - offset;
 			qe.dboid = InvalidOid;
 			qe.data[0] = '\0';	/* empty channel */
 			qe.data[1] = '\0';	/* empty payload */
 		}
 
 		/* Now copy qe into the shared buffer page */
-		memcpy(NotifyCtl->shared->page_buffer[slotno] + offset,
+		memcpy(PageGetContents(NotifyCtl->shared->page_buffer[slotno]) + offset,
 			   &qe,
 			   qe.length);
 
@@ -1947,10 +1948,10 @@ asyncQueueReadAllNotifications(void)
 			else
 			{
 				/* fetch all the rest of the page */
-				copysize = QUEUE_PAGESIZE - curoffset;
+				copysize = QUEUE_PAGE_CAPACITY - curoffset;
 			}
-			memcpy(page_buffer.buf + curoffset,
-				   NotifyCtl->shared->page_buffer[slotno] + curoffset,
+			memcpy(PageGetContents(page_buffer.buf) + curoffset,
+				   PageGetContents(NotifyCtl->shared->page_buffer[slotno]) + curoffset,
 				   copysize);
 			/* Release lock that we got from SimpleLruReadPage_ReadOnly() */
 			LWLockRelease(NotifySLRULock);
@@ -2021,7 +2022,7 @@ asyncQueueProcessPageEntries(volatile QueuePosition *current,
 		if (QUEUE_POS_EQUAL(thisentry, stop))
 			break;
 
-		qe = (AsyncQueueEntry *) (page_buffer + QUEUE_POS_OFFSET(thisentry));
+		qe = (AsyncQueueEntry *) (PageGetContents(page_buffer) + QUEUE_POS_OFFSET(thisentry));
 
 		/*
 		 * Advance *current over this message, possibly to the next page. As

@@ -201,6 +201,7 @@ typedef PageHeaderData *PageHeader;
  * handling pages.
  */
 #define PG_PAGE_LAYOUT_VERSION		4
+#define PG_SLRU_PAGE_LAYOUT_VERSION	1
 #define PG_DATA_CHECKSUM_VERSION	1
 
 /* ----------------------------------------------------------------
@@ -256,6 +257,11 @@ PageGetContents(Page page)
 {
 	return (char *) page + MAXALIGN(SizeOfPageHeaderData);
 }
+
+/*
+ * Space available for storing page contents.
+ */
+#define SizeOfPageContents	(BLCKSZ - MAXALIGN(SizeOfPageHeaderData))
 
 /* ----------------
  *		functions to access page size info
@@ -486,6 +492,7 @@ StaticAssertDecl(BLCKSZ == ((BLCKSZ / sizeof(size_t)) * sizeof(size_t)),
 				 "BLCKSZ has to be a multiple of sizeof(size_t)");
 
 extern void PageInit(Page page, Size pageSize, Size specialSize);
+extern void PageInitSLRU(Page page, Size pageSize, Size specialSize);
 extern bool PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags);
 extern OffsetNumber PageAddItemExtended(Page page, Item item, Size size,
 										OffsetNumber offsetNumber, int flags);

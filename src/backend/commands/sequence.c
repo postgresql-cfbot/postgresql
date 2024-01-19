@@ -136,6 +136,9 @@ DefineSequence(ParseState *pstate, CreateSeqStmt *seq)
 	TupleDesc	tupDesc;
 	Datum		value[SEQ_COL_LASTCOL];
 	bool		null[SEQ_COL_LASTCOL];
+	List	   *elts = NIL;
+	List	   *atcmds = NIL;
+	ListCell   *lc;
 	Datum		pgs_values[Natts_pg_sequence];
 	bool		pgs_nulls[Natts_pg_sequence];
 	int			i;
@@ -174,7 +177,6 @@ DefineSequence(ParseState *pstate, CreateSeqStmt *seq)
 	/*
 	 * Create relation (and fill value[] and null[] for the tuple)
 	 */
-	stmt->tableElts = NIL;
 	for (i = SEQ_COL_FIRSTCOL; i <= SEQ_COL_LASTCOL; i++)
 	{
 		ColumnDef  *coldef = NULL;
@@ -198,7 +200,7 @@ DefineSequence(ParseState *pstate, CreateSeqStmt *seq)
 		coldef->is_not_null = true;
 		null[i - 1] = false;
 
-		stmt->tableElts = lappend(stmt->tableElts, coldef);
+		elts = lappend(elts, coldef);
 	}
 
 	stmt->relation = seq->sequence;
@@ -208,12 +210,35 @@ DefineSequence(ParseState *pstate, CreateSeqStmt *seq)
 	stmt->oncommit = ONCOMMIT_NOOP;
 	stmt->tablespacename = NULL;
 	stmt->if_not_exists = seq->if_not_exists;
+	/*
+	 * Initial relation has no attributes, these are added later.
+	 */
+	stmt->tableElts = NIL;
 
 	address = DefineRelation(stmt, RELKIND_SEQUENCE, seq->ownerId, NULL, NULL);
 	seqoid = address.objectId;
 	Assert(seqoid != InvalidOid);
 
 	rel = sequence_open(seqoid, AccessExclusiveLock);
+
+	/* Add all the attributes to the sequence */
+	foreach(lc, elts)
+	{
+		AlterTableCmd *atcmd;
+
+		atcmd = makeNode(AlterTableCmd);
+		atcmd->subtype = AT_AddColumnToSequence;
+		atcmd->def = (Node *) lfirst(lc);
+		atcmds = lappend(atcmds, atcmd);
+	}
+
+	/*
+	 * No recursion needed.  Note that EventTriggerAlterTableStart() should
+	 * have been called.
+	 */
+	AlterTableInternal(RelationGetRelid(rel), atcmds, false);
+	CommandCounterIncrement();
+
 	tupDesc = RelationGetDescr(rel);
 
 	/* now initialize the sequence's data */

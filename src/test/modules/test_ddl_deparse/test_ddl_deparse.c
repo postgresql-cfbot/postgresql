@@ -114,6 +114,9 @@ get_altertable_subcmdinfo(PG_FUNCTION_ARGS)
 			case AT_AddColumn:
 				strtype = "ADD COLUMN";
 				break;
+			case AT_AddColumnToSequence:
+				strtype = "ADD COLUMN TO SEQUENCE";
+				break;
 			case AT_AddColumnToView:
 				strtype = "ADD COLUMN TO VIEW";
 				break;

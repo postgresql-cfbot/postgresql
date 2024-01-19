@@ -569,3 +569,105 @@ ExecuteLetStmt(ParseState *pstate,
 
 	PopActiveSnapshot();
 }
+
+/*
+ * pg_session_variables - designed for testing
+ *
+ * This is a function designed for testing and debugging.  It returns the
+ * content of sessionvars as-is, and can therefore display entries about
+ * session variables that were dropped but for which this backend didn't
+ * process the shared invalidations yet.
+ */
+Datum
+pg_session_variables(PG_FUNCTION_ARGS)
+{
+#define NUM_PG_SESSION_VARIABLES_ATTS 8
+
+	elog(DEBUG1, "pg_session_variables start");
+
+	InitMaterializedSRF(fcinfo, 0);
+
+	if (sessionvars)
+	{
+		ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+		HASH_SEQ_STATUS status;
+		SVariable	svar;
+
+		hash_seq_init(&status, sessionvars);
+
+		while ((svar = (SVariable) hash_seq_search(&status)) != NULL)
+		{
+			Datum		values[NUM_PG_SESSION_VARIABLES_ATTS];
+			bool		nulls[NUM_PG_SESSION_VARIABLES_ATTS];
+			HeapTuple	tp;
+			bool		var_is_valid = false;
+
+			memset(values, 0, sizeof(values));
+			memset(nulls, 0, sizeof(nulls));
+
+			values[0] = ObjectIdGetDatum(svar->varid);
+			values[3] = ObjectIdGetDatum(svar->typid);
+
+			/* check if session variable is visible in system catalog */
+			tp = SearchSysCache1(VARIABLEOID, ObjectIdGetDatum(svar->varid));
+
+			/*
+			 * Sessionvars can hold data of variables removed from catalog,
+			 * (and not purged) and then namespacename and name cannot be read
+			 * from catalog.
+			 */
+			if (HeapTupleIsValid(tp))
+			{
+				Form_pg_variable varform = (Form_pg_variable) GETSTRUCT(tp);
+
+				/* when we see data in catalog */
+				if (svar->create_lsn == varform->varcreate_lsn)
+				{
+					/* and when when these data are not out of date */
+					values[1] = CStringGetTextDatum(
+													get_namespace_name(varform->varnamespace));
+
+					values[2] = CStringGetTextDatum(NameStr(varform->varname));
+					values[4] = CStringGetTextDatum(format_type_be(svar->typid));
+					values[5] = BoolGetDatum(false);
+
+					values[6] = BoolGetDatum(
+											 object_aclcheck(VariableRelationId, svar->varid,
+															 GetUserId(), ACL_SELECT) == ACLCHECK_OK);
+
+					values[7] = BoolGetDatum(
+											 object_aclcheck(VariableRelationId, svar->varid,
+															 GetUserId(), ACL_UPDATE) == ACLCHECK_OK);
+
+					var_is_valid = true;
+				}
+
+				ReleaseSysCache(tp);
+			}
+
+			if (!var_is_valid)
+			{
+				/*
+				 * When session variable was removed from catalog, but we
+				 * haven't processed the invlidation yet. In this case, we can
+				 * display only few oids. Other data are not available
+				 * (without Form_pg_variable record), or can be lost (because
+				 * there is not protection by dependency (more).
+				 */
+				nulls[1] = true;
+				nulls[2] = true;
+				nulls[4] = true;
+				nulls[6] = true;
+				nulls[7] = true;
+
+				values[5] = BoolGetDatum(true);
+			}
+
+			tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+		}
+	}
+
+	elog(DEBUG1, "pg_session_variables end");
+
+	return (Datum) 0;
+}

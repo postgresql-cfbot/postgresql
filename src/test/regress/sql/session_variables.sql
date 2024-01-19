@@ -892,5 +892,62 @@ EXPLAIN (COSTS OFF, TIMING OFF, ANALYZE, SUMMARY OFF) LET var1 = (SELECT count(*
 -- should be 10
 SELECT var1;
 
+SET plan_cache_mode TO force_generic_plan;
+
+PREPARE p1 AS LET var1 = (SELECT count(*) FROM var_tab_test_table);
+
+LET var1 = NULL;
+
+EXPLAIN (COSTS OFF) EXECUTE p1;
+
+-- should be NULL
+SELECT var1;
+
+EXPLAIN (COSTS OFF, TIMING OFF, ANALYZE, SUMMARY OFF) EXECUTE p1;
+
+-- should be 10
+SELECT var1;
+
+SET plan_cache_mode TO DEFAULT;
+
+DEALLOCATE p1;
+
 DROP VARIABLE var1;
 DROP TABLE var_tab_test_table;
+
+CREATE VARIABLE var1 numeric;
+
+SET plan_cache_mode TO force_generic_plan;
+
+PREPARE p1(numeric) AS LET var1 = $1;
+PREPARE p2 AS SELECT var1;
+
+EXECUTE p1(pi() + 100);
+EXECUTE p2;
+
+-- prepared plan cache invalidation test
+DROP VARIABLE var1;
+CREATE VARIABLE var1 numeric;
+
+-- should be NULL
+EXECUTE p2;
+
+DEALLOCATE p1;
+DEALLOCATE p2;
+
+DROP VARIABLE var1;
+
+SET plan_cache_mode TO force_generic_plan;
+
+CREATE VARIABLE var1 numeric[];
+
+PREPARE p1(int, numeric) AS LET var1[$1] = $2;
+
+LET var1 = '{}'::numeric[];
+EXECUTE p1(1, 10.2);
+EXECUTE p1(2, 10.3);
+
+SELECT var1;
+
+DEALLOCATE p1;
+DROP VARIABLE var1;

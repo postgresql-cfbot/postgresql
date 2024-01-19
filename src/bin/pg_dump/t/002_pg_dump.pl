@@ -789,6 +789,16 @@ my %tests = (
 		unlike => { no_privs => 1, },
 	  },
 
+	'ALTER DEFAULT PRIVILEGES FOR ROLE regress_dump_test_role GRANT SELECT ON VARIABLES TO PUBLIC'
+	  => {
+		create_order => 56,
+		create_sql   => 'ALTER DEFAULT PRIVILEGES FOR ROLE regress_dump_test_role GRANT SELECT ON VARIABLES TO PUBLIC;',
+		regexp => qr/^
+			\QALTER DEFAULT PRIVILEGES FOR ROLE regress_dump_test_role GRANT SELECT ON VARIABLES TO PUBLIC;\E/xm,
+		like => { %full_runs, section_post_data => 1, },
+		unlike => { no_privs => 1, },
+	  },
+
 	'ALTER ROLE regress_dump_test_role' => {
 		regexp => qr/^
 			\QALTER ROLE regress_dump_test_role WITH \E
@@ -1671,6 +1681,23 @@ my %tests = (
 		unlike => {
 			exclude_dump_test_schema => 1,
 			only_dump_measurement => 1,
+		},
+	},
+
+	'COMMENT ON VARIABLE dump_test.variable1' => {
+		create_order => 71,
+		create_sql   => 'COMMENT ON VARIABLE dump_test.variable1
+					   IS \'comment on variable\';',
+		regexp =>
+		  qr/^\QCOMMENT ON VARIABLE dump_test.variable1 IS 'comment on variable';\E/m,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			section_pre_data     => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement    => 1,
 		},
 	},
 
@@ -3932,6 +3959,24 @@ my %tests = (
 		},
 	},
 
+	'CREATE VARIABLE test_variable' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 61,
+		create_sql   => 'CREATE VARIABLE dump_test.variable1 AS integer;',
+		regexp => qr/^
+			\QCREATE VARIABLE dump_test.variable1 AS integer;\E/xm,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			section_pre_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement    => 1,
+		},
+	},
+
 	'CREATE VIEW test_view' => {
 		create_order => 61,
 		create_sql => 'CREATE VIEW dump_test.test_view
@@ -4392,6 +4437,25 @@ my %tests = (
 
 		# this shouldn't ever get emitted anymore
 		like => {},
+	},
+
+	'GRANT SELECT ON VARIABLE dump_test.variable1' => {
+		create_order => 73,
+		create_sql =>
+		  'GRANT SELECT ON VARIABLE dump_test.variable1 TO regress_dump_test_role;',
+		regexp => qr/^
+			\QGRANT SELECT ON VARIABLE dump_test.variable1 TO regress_dump_test_role;\E
+			/xm,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			section_pre_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			no_privs                 => 1,
+			only_dump_measurement    => 1,
+		},
 	},
 
 	'REFRESH MATERIALIZED VIEW matview' => {

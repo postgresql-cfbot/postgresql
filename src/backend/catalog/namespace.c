@@ -41,6 +41,7 @@
 #include "catalog/pg_ts_parser.h"
 #include "catalog/pg_ts_template.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_variable.h"
 #include "commands/dbcommands.h"
 #include "common/hashfn_unstable.h"
 #include "funcapi.h"
@@ -986,6 +987,67 @@ RelationIsVisibleExt(Oid relid, bool *is_missing)
 	return visible;
 }
 
+/*
+ * VariableIsVisible
+ *		Determine whether a variable (identified by OID) is visible in the
+ *		current search path. Visible means "would be found by searching
+ *		for the unqualified variable name".
+ */
+bool
+VariableIsVisible(Oid varid)
+{
+	HeapTuple	vartup;
+	Form_pg_variable varform;
+	Oid			varnamespace;
+	bool		visible;
+
+	vartup = SearchSysCache1(VARIABLEOID, ObjectIdGetDatum(varid));
+	if (!HeapTupleIsValid(vartup))
+		elog(ERROR, "cache lookup failed for session variable %u", varid);
+	varform = (Form_pg_variable) GETSTRUCT(vartup);
+
+	recomputeNamespacePath();
+
+	/*
+	 * Quick check: if it ain't in the path at all, it ain't visible. We
+	 * don't expect usage of session variables in the system namespace.
+	 */
+	varnamespace = varform->varnamespace;
+	if (!list_member_oid(activeSearchPath, varnamespace))
+		visible = false;
+	else
+	{
+		/*
+		 * If it is in the path, it might still not be visible; it could be
+		 * hidden by another variable of the same name earlier in the path. So
+		 * we must do a slow check for conflicting relations.
+		 */
+		char	   *varname = NameStr(varform->varname);
+		ListCell   *l;
+
+		visible = false;
+		foreach(l, activeSearchPath)
+		{
+			Oid			namespaceId = lfirst_oid(l);
+
+			if (namespaceId == varnamespace)
+			{
+				/* found it first in path */
+				visible = true;
+				break;
+			}
+			if (OidIsValid(get_varname_varid(varname, namespaceId)))
+			{
+				/* found something else first in path */
+				break;
+			}
+		}
+	}
+
+	ReleaseSysCache(vartup);
+
+	return visible;
+}
 
 /*
  * TypenameGetTypid
@@ -3289,6 +3351,66 @@ TSConfigIsVisibleExt(Oid cfgid, bool *is_missing)
 	return visible;
 }
 
+/*
+ * Returns oid of session variable specified by possibly qualified identifier.
+ *
+ * If not found, returns InvalidOid if missing_ok, else throws error.
+ */
+Oid
+LookupVariable(const char *nspname,
+			   const char *varname,
+			   bool missing_ok)
+{
+	Oid			namespaceId;
+	Oid			varoid = InvalidOid;
+	ListCell   *l;
+
+	if (nspname)
+	{
+		namespaceId = LookupExplicitNamespace(nspname, missing_ok);
+
+		/* if nspname is a known namespace, the variable must be there */
+		if (OidIsValid(namespaceId))
+		{
+			varoid = GetSysCacheOid2(VARIABLENAMENSP, Anum_pg_variable_oid,
+									 PointerGetDatum(varname),
+									 ObjectIdGetDatum(namespaceId));
+		}
+	}
+	else
+	{
+		/* iterate over the schemas on the search_path */
+		recomputeNamespacePath();
+
+		foreach(l, activeSearchPath)
+		{
+			namespaceId = lfirst_oid(l);
+
+			varoid = GetSysCacheOid2(VARIABLENAMENSP, Anum_pg_variable_oid,
+									 PointerGetDatum(varname),
+									 ObjectIdGetDatum(namespaceId));
+
+			if (OidIsValid(varoid))
+				break;
+		}
+	}
+
+	if (!OidIsValid(varoid) && !missing_ok)
+	{
+		if (nspname)
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("session variable \"%s.%s\" does not exist",
+							nspname, varname)));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("session variable \"%s\" does not exist",
+							varname)));
+	}
+
+	return varoid;
+}
 
 /*
  * DeconstructQualifiedName
@@ -5084,4 +5206,15 @@ pg_is_other_temp_schema(PG_FUNCTION_ARGS)
 	Oid			oid = PG_GETARG_OID(0);
 
 	PG_RETURN_BOOL(isOtherTempNamespace(oid));
+}
+
+Datum
+pg_variable_is_visible(PG_FUNCTION_ARGS)
+{
+	Oid			oid = PG_GETARG_OID(0);
+
+	if (!SearchSysCacheExists1(VARIABLEOID, ObjectIdGetDatum(oid)))
+		PG_RETURN_NULL();
+
+	PG_RETURN_BOOL(VariableIsVisible(oid));
 }

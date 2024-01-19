@@ -65,12 +65,14 @@
 #include "catalog/pg_ts_template.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_user_mapping.h"
+#include "catalog/pg_variable.h"
 #include "commands/comment.h"
 #include "commands/defrem.h"
 #include "commands/event_trigger.h"
 #include "commands/extension.h"
 #include "commands/policy.h"
 #include "commands/publicationcmds.h"
+#include "commands/schemacmds.h"
 #include "commands/seclabel.h"
 #include "commands/sequence.h"
 #include "commands/trigger.h"
@@ -1442,6 +1444,10 @@ doDeletion(const ObjectAddress *object, int flags)
 
 		case PublicationRelationId:
 			RemovePublicationById(object->objectId);
+			break;
+
+		case VariableRelationId:
+			DropVariableById(object->objectId);
 			break;
 
 		case CastRelationId:

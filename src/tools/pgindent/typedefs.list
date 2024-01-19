@@ -535,6 +535,7 @@ CreateRoleStmt
 CreateSchemaStmt
 CreateSchemaStmtContext
 CreateSeqStmt
+CreateSessionVarStmt
 CreateStatsStmt
 CreateStmt
 CreateStmtContext
@@ -874,6 +875,7 @@ FormData_pg_ts_parser
 FormData_pg_ts_template
 FormData_pg_type
 FormData_pg_user_mapping
+FormData_pg_variable
 FormExtraData_pg_attribute
 Form_pg_aggregate
 Form_pg_am
@@ -933,6 +935,7 @@ Form_pg_ts_parser
 Form_pg_ts_template
 Form_pg_type
 Form_pg_user_mapping
+Form_pg_variable
 FormatNode
 FreeBlockNumberArray
 FreeListData
@@ -3075,6 +3078,7 @@ VarString
 VarStringSortSupport
 Variable
 VariableAssignHook
+VariableInfo
 VariableSetKind
 VariableSetStmt
 VariableShowStmt

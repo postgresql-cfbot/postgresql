@@ -53,6 +53,7 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_trigger.h"
+#include "catalog/pg_variable.h"
 #include "commands/defrem.h"
 #include "commands/trigger.h"
 #include "gramparse.h"
@@ -294,8 +295,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		ConstraintsSetStmt CopyStmt CreateAsStmt CreateCastStmt
 		CreateDomainStmt CreateExtensionStmt CreateGroupStmt CreateOpClassStmt
 		CreateOpFamilyStmt AlterOpFamilyStmt CreatePLangStmt
-		CreateSchemaStmt CreateSeqStmt CreateStmt CreateStatsStmt CreateTableSpaceStmt
-		CreateFdwStmt CreateForeignServerStmt CreateForeignTableStmt
+		CreateSchemaStmt CreateSeqStmt CreateSessionVarStmt CreateStmt CreateStatsStmt
+		CreateTableSpaceStmt CreateFdwStmt CreateForeignServerStmt CreateForeignTableStmt
 		CreateAssertionStmt CreateTransformStmt CreateTrigStmt CreateEventTrigStmt
 		CreateUserStmt CreateUserMappingStmt CreateRoleStmt CreatePolicyStmt
 		CreatedbStmt DeclareCursorStmt DefineStmt DeleteStmt DiscardStmt DoStmt
@@ -788,8 +789,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	UESCAPE UNBOUNDED UNCONDITIONAL UNCOMMITTED UNENCRYPTED UNION UNIQUE UNKNOWN
 	UNLISTEN UNLOGGED UNTIL UPDATE USER USING
 
-	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARCHAR VARIADIC VARYING
-	VERBOSE VERSION_P VIEW VIEWS VOLATILE
+	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARCHAR VARIABLE VARIABLES
+	VARIADIC VARYING VERBOSE VERSION_P VIEW VIEWS VOLATILE
 
 	WHEN WHERE WHITESPACE_P WINDOW WITH WITHIN WITHOUT WORK WRAPPER WRITE
 
@@ -1059,6 +1060,7 @@ stmt:
 			| CreatePolicyStmt
 			| CreatePLangStmt
 			| CreateSchemaStmt
+			| CreateSessionVarStmt
 			| CreateSeqStmt
 			| CreateStmt
 			| CreateSubscriptionStmt
@@ -1603,6 +1605,7 @@ schema_stmt:
 			| CreateTrigStmt
 			| GrantStmt
 			| ViewStmt
+			| CreateSessionVarStmt
 		;
 
 
@@ -5211,6 +5214,34 @@ create_extension_opt_item:
 
 /*****************************************************************************
  *
+ *		QUERY :
+ *				CREATE VARIABLE varname [AS] type
+ *
+ *****************************************************************************/
+
+CreateSessionVarStmt:
+			CREATE VARIABLE qualified_name opt_as Typename opt_collate_clause
+				{
+					CreateSessionVarStmt *n = makeNode(CreateSessionVarStmt);
+					n->variable = $3;
+					n->typeName = $5;
+					n->collClause = (CollateClause *) $6;
+					n->if_not_exists = false;
+					$$ = (Node *) n;
+				}
+			| CREATE VARIABLE IF_P NOT EXISTS qualified_name opt_as Typename opt_collate_clause
+				{
+					CreateSessionVarStmt *n = makeNode(CreateSessionVarStmt);
+					n->variable = $6;
+					n->typeName = $8;
+					n->collClause = (CollateClause *) $9;
+					n->if_not_exists = true;
+					$$ = (Node *) n;
+				}
+		;
+
+/*****************************************************************************
+ *
  * ALTER EXTENSION name UPDATE [ TO version ]
  *
  *****************************************************************************/
@@ -6995,6 +7026,7 @@ object_type_any_name:
 			| TEXT_P SEARCH DICTIONARY				{ $$ = OBJECT_TSDICTIONARY; }
 			| TEXT_P SEARCH TEMPLATE				{ $$ = OBJECT_TSTEMPLATE; }
 			| TEXT_P SEARCH CONFIGURATION			{ $$ = OBJECT_TSCONFIGURATION; }
+			| VARIABLE								{ $$ = OBJECT_VARIABLE; }
 		;
 
 /*
@@ -7871,6 +7903,14 @@ privilege_target:
 					n->objs = $2;
 					$$ = n;
 				}
+			| VARIABLE qualified_name_list
+				{
+					PrivTarget *n = (PrivTarget *) palloc(sizeof(PrivTarget));
+					n->targtype = ACL_TARGET_OBJECT;
+					n->objtype = OBJECT_VARIABLE;
+					n->objs = $2;
+					$$ = n;
+				}
 			| ALL TABLES IN_P SCHEMA name_list
 				{
 					PrivTarget *n = (PrivTarget *) palloc(sizeof(PrivTarget));
@@ -7913,6 +7953,14 @@ privilege_target:
 
 					n->targtype = ACL_TARGET_ALL_IN_SCHEMA;
 					n->objtype = OBJECT_ROUTINE;
+					n->objs = $5;
+					$$ = n;
+				}
+			| ALL VARIABLES IN_P SCHEMA name_list
+				{
+					PrivTarget *n = (PrivTarget *) palloc(sizeof(PrivTarget));
+					n->targtype = ACL_TARGET_ALL_IN_SCHEMA;
+					n->objtype = OBJECT_VARIABLE;
 					n->objs = $5;
 					$$ = n;
 				}
@@ -8113,6 +8161,7 @@ defacl_privilege_target:
 			| SEQUENCES		{ $$ = OBJECT_SEQUENCE; }
 			| TYPES_P		{ $$ = OBJECT_TYPE; }
 			| SCHEMAS		{ $$ = OBJECT_SCHEMA; }
+			| VARIABLES		{ $$ = OBJECT_VARIABLE; }
 		;
 
 
@@ -9895,6 +9944,24 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->missing_ok = false;
 					$$ = (Node *) n;
 				}
+			| ALTER VARIABLE any_name RENAME TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_VARIABLE;
+					n->object = (Node *) $3;
+					n->newname = $6;
+					n->missing_ok = false;
+					$$ = (Node *)n;
+				}
+			| ALTER VARIABLE IF_P EXISTS any_name RENAME TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_VARIABLE;
+					n->object = (Node *) $5;
+					n->newname = $8;
+					n->missing_ok = true;
+					$$ = (Node *)n;
+				}
 		;
 
 opt_column: COLUMN
@@ -10256,6 +10323,24 @@ AlterObjectSchemaStmt:
 					n->missing_ok = false;
 					$$ = (Node *) n;
 				}
+			| ALTER VARIABLE any_name SET SCHEMA name
+				{
+					AlterObjectSchemaStmt *n = makeNode(AlterObjectSchemaStmt);
+					n->objectType = OBJECT_VARIABLE;
+					n->object = (Node *) $3;
+					n->newschema = $6;
+					n->missing_ok = false;
+					$$ = (Node *)n;
+				}
+			| ALTER VARIABLE IF_P EXISTS any_name SET SCHEMA name
+				{
+					AlterObjectSchemaStmt *n = makeNode(AlterObjectSchemaStmt);
+					n->objectType = OBJECT_VARIABLE;
+					n->object = (Node *) $5;
+					n->newschema = $8;
+					n->missing_ok = true;
+					$$ = (Node *)n;
+				}
 		;
 
 /*****************************************************************************
@@ -10536,6 +10621,14 @@ AlterOwnerStmt: ALTER AGGREGATE aggregate_with_argtypes OWNER TO RoleSpec
 					n->object = (Node *) makeString($3);
 					n->newowner = $6;
 					$$ = (Node *) n;
+				}
+			| ALTER VARIABLE any_name OWNER TO RoleSpec
+				{
+					AlterOwnerStmt *n = makeNode(AlterOwnerStmt);
+					n->objectType = OBJECT_VARIABLE;
+					n->object = (Node *) $3;
+					n->newowner = $6;
+					$$ = (Node *)n;
 				}
 		;
 
@@ -17865,6 +17958,8 @@ unreserved_keyword:
 			| VALIDATE
 			| VALIDATOR
 			| VALUE_P
+			| VARIABLE
+			| VARIABLES
 			| VARYING
 			| VERSION_P
 			| VIEW
@@ -18518,6 +18613,8 @@ bare_label_keyword:
 			| VALUE_P
 			| VALUES
 			| VARCHAR
+			| VARIABLE
+			| VARIABLES
 			| VARIADIC
 			| VERBOSE
 			| VERSION_P

@@ -1,0 +1,151 @@
+<!--
+doc/src/sgml/ref/create_variable.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-createvariable">
+ <indexterm zone="sql-createvariable">
+  <primary>CREATE VARIABLE</primary>
+ </indexterm>
+
+ <indexterm>
+  <primary>session variable</primary>
+  <secondary>defining</secondary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>CREATE VARIABLE</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>CREATE VARIABLE</refname>
+  <refpurpose>define a session variable</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+CREATE VARIABLE [ IF NOT EXISTS ] <replaceable class="parameter">name</replaceable> [ AS ] <replaceable class="parameter">data_type</replaceable> ] [ COLLATE <replaceable class="parameter">collation</replaceable> ]
+</synopsis>
+ </refsynopsisdiv>
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   The <command>CREATE VARIABLE</command> command creates a session variable.
+   Session variables, like relations, exist within a schema and their access is
+   controlled via the commands <command>GRANT</command> and <command>REVOKE</command>.
+  </para>
+
+  <para>
+   The value of a session variable is local to the current session.  Retrieving
+   a session variable's value returns NULL, unless its value is set to
+   something else in the current session with a <command>LET</command> command.
+   The content of a session variable is not transactional. This is the same as
+   regular variables in procedural languages.
+  </para>
+
+  <para>
+   Session variables are retrieved by the <command>SELECT</command>
+   command.  Their value is set with the <command>LET</command> command.
+  </para>
+
+  <note>
+   <para>
+    Session variables can be <quote>shadowed</quote> by other identifiers.
+    For details, see <xref linkend="ddl-session-variables"/>.
+   </para>
+  </note>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+
+   <varlistentry  id="sql-createvariable-if-not-exists">
+    <term><literal>IF NOT EXISTS</literal></term>
+    <listitem>
+     <para>
+      Do not throw an error if the name already exists. A notice is issued in
+      this case.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-createvariable-name">
+    <term><replaceable class="parameter">name</replaceable></term>
+    <listitem>
+     <para>
+      The name, optionally schema-qualified, of the session variable.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-createvariable-data_type">
+    <term><replaceable class="parameter">data_type</replaceable></term>
+    <listitem>
+     <para>
+      The name, optionally schema-qualified, of the data type of the session
+      variable.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-createvariable-collate">
+    <term><literal>COLLATE <replaceable>collation</replaceable></literal></term>
+    <listitem>
+     <para>
+      The <literal>COLLATE</literal> clause assigns a collation to the session
+      variable (which must be of a collatable data type).  If not specified,
+      the data type's default collation is used.
+     </para>
+    </listitem>
+   </varlistentry>
+
+  </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Notes</title>
+
+  <para>
+   Use the <command>DROP VARIABLE</command> command to remove a session
+   variable.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+   Create an date session variable <literal>var1</literal>:
+<programlisting>
+CREATE VARIABLE var1 AS date;
+LET var1 = current_date;
+SELECT var1;
+</programlisting>
+  </para>
+
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   The <command>CREATE VARIABLE</command> command is a
+   <productname>PostgreSQL</productname> extension.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-altervariable"/></member>
+   <member><xref linkend="sql-dropvariable"/></member>
+  </simplelist>
+ </refsect1>
+
+</refentry>

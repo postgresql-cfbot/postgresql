@@ -2306,6 +2306,7 @@ typedef enum ObjectType
 	OBJECT_TSTEMPLATE,
 	OBJECT_TYPE,
 	OBJECT_USER_MAPPING,
+	OBJECT_VARIABLE,
 	OBJECT_VIEW,
 } ObjectType;
 
@@ -3436,6 +3437,21 @@ typedef struct AlterStatsStmt
 	Node	   *stxstattarget;	/* statistics target */
 	bool		missing_ok;		/* skip error if statistics object is missing */
 } AlterStatsStmt;
+
+
+/* ----------------------
+ *		{Create|Alter} VARIABLE Statement
+ * ----------------------
+ */
+typedef struct CreateSessionVarStmt
+{
+	NodeTag		type;
+	RangeVar   *variable;		/* the variable to create */
+	TypeName   *typeName;		/* the type of variable */
+	CollateClause *collClause;
+	bool		if_not_exists;	/* do nothing if it already exists */
+} CreateSessionVarStmt;
+
 
 /* ----------------------
  *		Create Function Statement

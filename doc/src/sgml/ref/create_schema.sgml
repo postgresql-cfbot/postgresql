@@ -103,9 +103,10 @@ CREATE SCHEMA IF NOT EXISTS AUTHORIZATION <replaceable class="parameter">role_sp
         schema. Currently, only <command>CREATE
         TABLE</command>, <command>CREATE VIEW</command>, <command>CREATE
         INDEX</command>, <command>CREATE SEQUENCE</command>, <command>CREATE
-        TRIGGER</command> and <command>GRANT</command> are accepted as clauses
-        within <command>CREATE SCHEMA</command>. Other kinds of objects may
-        be created in separate commands after the schema is created.
+        TRIGGER</command>, <command>GRANT</command> and <command>CREATE
+        VARIABLE</command> are accepted as clauses within <command>CREATE
+        SCHEMA</command>. Other kinds of objects may be created in separate
+        commands after the schema is created.
        </para>
       </listitem>
      </varlistentry>

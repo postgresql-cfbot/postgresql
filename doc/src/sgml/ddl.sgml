@@ -5263,6 +5263,37 @@ EXPLAIN SELECT count(*) FROM measurement WHERE logdate &gt;= DATE '2008-01-01';
    </para>
  </sect1>
 
+  <sect1 id="ddl-session-variables">
+   <title>Session Variables</title>
+
+   <indexterm zone="ddl-session-variables">
+    <primary>Session variables</primary>
+   </indexterm>
+
+   <indexterm>
+    <primary>session variable</primary>
+   </indexterm>
+
+   <para>
+    Session variables are database objects that can hold a value.
+    Session variables, like relations, exist within a schema and their access
+    is controlled via <command>GRANT</command> and <command>REVOKE</command>
+    commands.  A session variable can be created by the <command>CREATE
+    VARIABLE</command> command.
+   </para>
+
+   <para>
+    Inside a query or an expression, a session variable can be
+    <quote>shadowed</quote> by a column with the same name.  Similarly, the
+    name of a function or procedure argument or a PL/pgSQL variable (see
+    <xref linkend="plpgsql-declarations"/>) can shadow a session variable
+    in the routine's body.  Such collisions of identifiers can be resolved
+    by using qualified identifiers: Session variables can be qualified with
+    the schema name, columns can use table aliases, routine variables can use
+    block labels, and routine arguments can use the routine name.
+   </para>
+  </sect1>
+
  <sect1 id="ddl-others">
   <title>Other Database Objects</title>
 

@@ -573,8 +573,6 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 	WRITE_BOOL_FIELD(lateral);
 	WRITE_BOOL_FIELD(inFromCl);
 	WRITE_NODE_FIELD(securityQuals);
-	WRITE_BITMAPSET_FIELD(eclass_source_indexes);
-	WRITE_BITMAPSET_FIELD(eclass_derive_indexes);
 }
 
 static void

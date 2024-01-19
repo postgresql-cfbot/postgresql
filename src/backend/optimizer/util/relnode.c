@@ -119,6 +119,9 @@ setup_simple_rel_arrays(PlannerInfo *root)
 		root->simple_rte_array[rti++] = rte;
 	}
 
+	root->eclass_indexes_array = (EquivalenceClassIndexes *)
+		palloc0(size * sizeof(EquivalenceClassIndexes));
+
 	/* append_rel_array is not needed if there are no AppendRelInfos */
 	if (root->append_rel_list == NIL)
 	{
@@ -217,6 +220,9 @@ expand_planner_arrays(PlannerInfo *root, int add_size)
 		 */
 		root->top_parent_relid_array = NULL;
 	}
+
+	root->eclass_indexes_array =
+		repalloc0_array(root->eclass_indexes_array, EquivalenceClassIndexes, root->simple_rel_array_size, new_size);
 
 	root->simple_rel_array_size = new_size;
 }

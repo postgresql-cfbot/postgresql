@@ -12152,7 +12152,8 @@ PreparableStmt:
 			| InsertStmt
 			| UpdateStmt
 			| DeleteStmt
-			| MergeStmt						/* by default all are $$=$1 */
+			| MergeStmt
+			| LetStmt						/* by default all are $$=$1 */
 		;
 
 /*****************************************************************************

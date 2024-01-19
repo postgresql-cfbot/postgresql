@@ -12366,4 +12366,12 @@
   proargtypes => 'int2',
   prosrc => 'gist_stratnum_identity' },
 
+# Session variables support
+{ oid => '8488', descr => 'list of used session variables',
+  proname => 'pg_session_variables', prorows => '1000', proretset => 't',
+  provolatile => 's', proparallel => 'r', prorettype => 'record',
+  proargtypes => '', proallargtypes => '{oid,text,text,oid,text,bool,bool,bool}',
+  proargmodes => '{o,o,o,o,o,o,o,o}',
+  proargnames => '{varid,schema,name,typid,typname,removed,can_select,can_update}',
+  prosrc => 'pg_session_variables' },
 ]

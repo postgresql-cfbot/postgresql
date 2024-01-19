@@ -685,6 +685,7 @@ EphemeralNamedRelationMetadata
 EphemeralNamedRelationMetadataData
 EquivalenceChildMemberIterator
 EquivalenceClass
+EquivalenceClassIndexes
 EquivalenceMember
 ErrorContextCallback
 ErrorData

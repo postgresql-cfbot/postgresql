@@ -192,6 +192,8 @@ typedef struct PlannerInfo PlannerInfo;
 #define HAVE_PLANNERINFO_TYPEDEF 1
 #endif
 
+struct EquivalenceClassIndexes;
+
 struct PlannerInfo
 {
 	pg_node_attr(no_copy_equal, no_read, no_query_jumble)
@@ -247,6 +249,13 @@ struct PlannerInfo
 	 * because it'd be redundant with append_rel_list.)
 	 */
 	struct AppendRelInfo **append_rel_array pg_node_attr(read_write_ignore);
+
+	/*
+	 * eclass_indexes_array is the same length as simple_rel_array and holds
+	 * the indexes of the corresponding rels for faster lookups of
+	 * RestrictInfo. See the EquivalenceClass comment for more details.
+	 */
+	struct EquivalenceClassIndexes *eclass_indexes_array pg_node_attr(read_write_ignore);
 
 	/*
 	 * top_parent_relid_array is the same length as simple_rel_array and holds
@@ -1536,6 +1545,23 @@ typedef struct
 	bool		modified;		/* is 'ec_members' a newly allocated one? */
 	List	   *ec_members;		/* parent and child members */
 } EquivalenceChildMemberIterator;
+
+/*
+ * EquivalenceClassIndexes
+ *
+ * As mentioned in the EquivalenceClass comment, we introduce a
+ * bitmapset-based indexing mechanism for faster lookups of RestrictInfo. This
+ * struct exists for each relation and holds the corresponding indexes.
+ */
+typedef struct EquivalenceClassIndexes
+{
+	Bitmapset  *source_indexes; /* Indexes in PlannerInfo's eq_sources list
+								 * for RestrictInfos that mention this
+								 * relation */
+	Bitmapset  *derive_indexes; /* Indexes in PlannerInfo's eq_derives list
+								 * for RestrictInfos that mention this
+								 * relation */
+} EquivalenceClassIndexes;
 
 /*
  * PathKeys

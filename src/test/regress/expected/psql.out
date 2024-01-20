@@ -214,7 +214,7 @@ select $1::int as col \bind 1 \g \bind 2 \g
 -- errors
 -- parse error
 SELECT foo \bind \g
-ERROR:  column "foo" does not exist
+ERROR:  column or variable "foo" does not exist
 LINE 1: SELECT foo 
                ^
 -- tcop error

@@ -10,7 +10,7 @@ test
 
 step drop: DROP VARIABLE myvar;
 step val: SELECT myvar;
-ERROR:  column "myvar" does not exist
+ERROR:  column or variable "myvar" does not exist
 
 starting permutation: let val s1 drop val sr1
 step let: LET myvar = 'test';
@@ -23,7 +23,7 @@ test
 step s1: BEGIN;
 step drop: DROP VARIABLE myvar;
 step val: SELECT myvar;
-ERROR:  column "myvar" does not exist
+ERROR:  column or variable "myvar" does not exist
 step sr1: ROLLBACK;
 
 starting permutation: let val dbg drop create dbg val

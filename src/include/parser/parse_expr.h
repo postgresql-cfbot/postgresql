@@ -23,4 +23,6 @@ extern Node *transformExpr(ParseState *pstate, Node *expr, ParseExprKind exprKin
 
 extern const char *ParseExprKindName(ParseExprKind exprKind);
 
+extern bool expr_kind_allows_session_variables(ParseExprKind p_expr_kind);
+
 #endif							/* PARSE_EXPR_H */

@@ -309,7 +309,7 @@ ERROR:  session variable "var1" doesn't exist
 LINE 1: LET var1 = pi();
             ^
 SELECT var1;
-ERROR:  column "var1" does not exist
+ERROR:  column or variable "var1" does not exist
 LINE 1: SELECT var1;
                ^
 -- should be ok
@@ -520,7 +520,7 @@ SELECT v1;
 
 -- should fail, attribute doesn't exist
 LET v1.x = 10;
-ERROR:  cannot assign to field "x" of column "v1" because there is no such column in data type t1
+ERROR:  cannot assign to field "x" of column or variable "v1" because there is no such column in data type t1
 LINE 1: LET v1.x = 10;
             ^
 -- should fail, don't allow multi column query
@@ -1067,7 +1067,7 @@ BEGIN;
 DROP VARIABLE var1;
 -- should fail
 SELECT var1;
-ERROR:  column "var1" does not exist
+ERROR:  column or variable "var1" does not exist
 LINE 1: SELECT var1;
                ^
 ROLLBACK;

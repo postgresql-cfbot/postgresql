@@ -232,7 +232,7 @@ SET ROLE TO DEFAULT;
 SET ROLE TO regress_var_exec_role;
 -- should to fail, but not crash
 SELECT var_read_func();
-ERROR:  column "plpgsql_sv_var1" does not exist
+ERROR:  column or variable "plpgsql_sv_var1" does not exist
 LINE 1: plpgsql_sv_var1
         ^
 QUERY:  plpgsql_sv_var1

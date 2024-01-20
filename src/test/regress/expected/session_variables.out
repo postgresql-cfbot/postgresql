@@ -107,8 +107,7 @@ ERROR:  permission denied for session variable var1
 CONTEXT:  SQL function "sqlfx" statement 1
 SELECT plpgsqlfx(20);
 ERROR:  permission denied for session variable var1
-CONTEXT:  SQL expression "$1 + var1"
-PL/pgSQL function plpgsqlfx(integer) line 1 at RETURN
+CONTEXT:  PL/pgSQL function plpgsqlfx(integer) line 1 at RETURN
 -- should be ok
 SELECT sqlfx_sd(20);
  sqlfx_sd 
@@ -278,27 +277,28 @@ $$;
 NOTICE:  result array: {1,2,3,4,5,6,7,8,9,10}
 DROP VARIABLE var1;
 DROP VARIABLE var2;
--- CALL statement is not supported yet
--- requires direct access to session variable from expression executor
+-- CALL statement is supported
 CREATE VARIABLE v int;
+LET v = 1;
 CREATE PROCEDURE p(arg int) AS $$ BEGIN RAISE NOTICE '%', arg; END $$ LANGUAGE plpgsql;
--- should not crash (but is not supported yet)
+-- should to work
 CALL p(v);
-ERROR:  session variable cannot be used as an argument
+NOTICE:  1
 DO $$ BEGIN CALL p(v); END $$;
-ERROR:  session variable cannot be used as an argument
-CONTEXT:  SQL statement "CALL p(v)"
-PL/pgSQL function inline_code_block line 1 at CALL
+NOTICE:  1
 DROP PROCEDURE p(int);
 DROP VARIABLE v;
--- EXECUTE statement is not supported yet
--- requires direct access to session variable from expression executor
+-- EXECUTE statement
 CREATE VARIABLE v int;
 LET v = 20;
 PREPARE ptest(int) AS SELECT $1;
--- should fail
+-- should be ok
 EXECUTE ptest(v);
-ERROR:  session variable cannot be used as an argument
+ ?column? 
+----------
+       20
+(1 row)
+
 DEALLOCATE ptest;
 DROP VARIABLE v;
 -- test search path

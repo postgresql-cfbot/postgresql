@@ -207,13 +207,14 @@ $$;
 DROP VARIABLE var1;
 DROP VARIABLE var2;
 
--- CALL statement is not supported yet
--- requires direct access to session variable from expression executor
+-- CALL statement is supported
 CREATE VARIABLE v int;
+
+LET v = 1;
 
 CREATE PROCEDURE p(arg int) AS $$ BEGIN RAISE NOTICE '%', arg; END $$ LANGUAGE plpgsql;
 
--- should not crash (but is not supported yet)
+-- should to work
 CALL p(v);
 
 DO $$ BEGIN CALL p(v); END $$;
@@ -221,13 +222,12 @@ DO $$ BEGIN CALL p(v); END $$;
 DROP PROCEDURE p(int);
 DROP VARIABLE v;
 
--- EXECUTE statement is not supported yet
--- requires direct access to session variable from expression executor
+-- EXECUTE statement
 CREATE VARIABLE v int;
 LET v = 20;
 PREPARE ptest(int) AS SELECT $1;
 
--- should fail
+-- should be ok
 EXECUTE ptest(v);
 
 DEALLOCATE ptest;

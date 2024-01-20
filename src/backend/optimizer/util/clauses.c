@@ -4744,8 +4744,7 @@ inline_function(Oid funcid, Oid result_type, Oid result_collid,
 		querytree->limitOffset ||
 		querytree->limitCount ||
 		querytree->setOperations ||
-		(list_length(querytree->targetList) != 1) ||
-		querytree->hasSessionVariables)
+		(list_length(querytree->targetList) != 1))
 		goto fail;
 
 	/* If the function result is composite, resolve it */
@@ -4949,21 +4948,39 @@ substitute_actual_parameters_mutator(Node *node,
 {
 	if (node == NULL)
 		return NULL;
+
+
+	/*
+	 * SQL functions can contain two different kind of params. The nodes with
+	 * paramkind PARAM_EXTERN are related to function's arguments (and should
+	 * be replaced in this step), because this is how we apply the function's
+	 * arguments for an expression.
+	 *
+	 * The nodes with paramkind PARAM_VARIABLE are related to usage of session
+	 * variables. The values of session variables are not passed to expression
+	 * by expression arguments, so it should not be replaced here by
+	 * function's arguments.
+	 */
 	if (IsA(node, Param))
 	{
 		Param	   *param = (Param *) node;
 
-		if (param->paramkind != PARAM_EXTERN)
+		if (param->paramkind != PARAM_EXTERN &&
+			param->paramkind != PARAM_VARIABLE)
 			elog(ERROR, "unexpected paramkind: %d", (int) param->paramkind);
-		if (param->paramid <= 0 || param->paramid > context->nargs)
-			elog(ERROR, "invalid paramid: %d", param->paramid);
 
-		/* Count usage of parameter */
-		context->usecounts[param->paramid - 1]++;
+		if (param->paramkind == PARAM_EXTERN)
+		{
+			if (param->paramid <= 0 || param->paramid > context->nargs)
+				elog(ERROR, "invalid paramid: %d", param->paramid);
 
-		/* Select the appropriate actual arg and replace the Param with it */
-		/* We don't need to copy at this time (it'll get done later) */
-		return list_nth(context->args, param->paramid - 1);
+			/* Count usage of parameter */
+			context->usecounts[param->paramid - 1]++;
+
+			/* Select the appropriate actual arg and replace the Param with it */
+			/* We don't need to copy at this time (it'll get done later) */
+			return list_nth(context->args, param->paramid - 1);
+		}
 	}
 	return expression_tree_mutator(node, substitute_actual_parameters_mutator,
 								   (void *) context);

@@ -104,7 +104,6 @@ SELECT var1;
 ERROR:  permission denied for session variable var1
 SELECT sqlfx(20);
 ERROR:  permission denied for session variable var1
-CONTEXT:  SQL function "sqlfx" statement 1
 SELECT plpgsqlfx(20);
 ERROR:  permission denied for session variable var1
 CONTEXT:  PL/pgSQL function plpgsqlfx(integer) line 1 at RETURN
@@ -211,10 +210,10 @@ SELECT sqlfx1(sqlfx2('Hello'));
 
 -- inlining is blocked
 EXPLAIN (COSTS OFF, VERBOSE) SELECT sqlfx1(sqlfx2('Hello'));
-                      QUERY PLAN                      
-------------------------------------------------------
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
  Result
-   Output: sqlfx1(sqlfx2('Hello'::character varying))
+   Output: ((var1 || ', '::text) || ((var2 || ', '::text) || 'Hello'::text))
 (2 rows)
 
 DROP FUNCTION sqlfx1(varchar);

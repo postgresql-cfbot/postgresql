@@ -211,8 +211,7 @@ SET ROLE TO regress_var_exec_role;
 -- should to fail
 SELECT var_read_func();
 ERROR:  permission denied for session variable plpgsql_sv_var1
-CONTEXT:  SQL expression "plpgsql_sv_var1"
-PL/pgSQL function var_read_func() line 3 at RAISE
+CONTEXT:  PL/pgSQL function var_read_func() line 3 at RAISE
 SET ROLE TO DEFAULT;
 SET ROLE TO regress_var_owner_role;
 GRANT SELECT ON VARIABLE plpgsql_sv_var1 TO regress_var_reader_role;

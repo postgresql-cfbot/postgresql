@@ -522,7 +522,7 @@ transformIndirection(ParseState *pstate, A_Indirection *ind)
  * printed.  When we are in an expression where session variables cannot be
  * used, we raise the first form of error message.
  */
-static bool
+bool
 expr_kind_allows_session_variables(ParseExprKind p_expr_kind)
 {
 	bool		result = false;

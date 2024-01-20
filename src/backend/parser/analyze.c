@@ -1929,6 +1929,18 @@ transformLetStmt(ParseState *pstate, LetStmt *stmt)
 
 	stmt->query = (Node *) query;
 
+	/*
+	 * Inside PL/pgSQL we don't want to execute LET statement as utility
+	 * command, because it disallow to execute expression as simple
+	 * expression. So for PL/pgSQL we have extra path, and we return SELECT.
+	 * Then it can be executed by exec_eval_expr. Result is dirrectly assigned
+	 * to target session variable inside PL/pgSQL LET statement handler. This
+	 * is extra code, extra path, but possibility to get faster execution is
+	 * too attractive.
+	 */
+	if (stmt->plpgsql_mode)
+		return query;
+
 	/* represent the command as a utility Query */
 	result = makeNode(Query);
 	result->commandType = CMD_UTILITY;

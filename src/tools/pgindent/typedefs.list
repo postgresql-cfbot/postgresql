@@ -1889,6 +1889,7 @@ PLpgSQL_stmt_forq
 PLpgSQL_stmt_fors
 PLpgSQL_stmt_getdiag
 PLpgSQL_stmt_if
+PLpgSQL_stmt_let
 PLpgSQL_stmt_loop
 PLpgSQL_stmt_open
 PLpgSQL_stmt_perform

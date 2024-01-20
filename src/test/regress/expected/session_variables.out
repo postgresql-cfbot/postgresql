@@ -642,12 +642,14 @@ SELECT count(*) FROM svar_test WHERE a%10 = zero;
 
 -- parallel execution is not supported yet
 EXPLAIN (COSTS OFF) SELECT count(*) FROM svar_test WHERE a%10 = zero;
-            QUERY PLAN             
------------------------------------
+                 QUERY PLAN                 
+--------------------------------------------
  Aggregate
-   ->  Seq Scan on svar_test
-         Filter: ((a % 10) = zero)
-(3 rows)
+   ->  Gather
+         Workers Planned: 2
+         ->  Parallel Seq Scan on svar_test
+               Filter: ((a % 10) = zero)
+(5 rows)
 
 LET zero = (SELECT count(*) FROM svar_test);
 -- result should be 1000

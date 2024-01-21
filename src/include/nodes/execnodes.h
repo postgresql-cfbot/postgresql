@@ -1571,6 +1571,31 @@ typedef struct IndexScanState
 	Relation	iss_RelationDesc;
 	struct IndexScanDescData *iss_ScanDesc;
 
+	/*
+	 * index-only filters
+	 *
+	 * The "qual" (in PlanState) contains all the original quals, including
+	 * those that might be evaluated on the index tuple only. This is needed
+	 * when the optimization can't be used (pages that are not all-visible).
+	 * With the optimization enabled we also split the lists into two parts,
+	 * one for clauses evaluated on the index tuple, the other for clauses
+	 * that need to be evaluated on the heap tuple.
+	 *
+	 * indexfilter/indexfilterorig contains the quals to be evaluated on the
+	 * index tuple. indexfilterqual contains quals to be evaluated on the
+	 * original heap tuple.
+	 *
+	 * XXX The indexfilterqual name is a bit strange/misleading, as it seems
+	 * like "index filter quals" but it's "non-index filter quals".
+	 */
+	ExprState  *indexfilter;			/* evaluate on index tuple */
+	ExprState  *indexfilterorig;
+	ExprState  *indexfilterqual;		/* evaluate on heap tuple */
+
+	TupleTableSlot *iss_TableSlot;
+	Buffer			iss_VMBuffer;
+	IndexInfo	   *iss_IndexInfo;
+
 	/* These are needed for re-checking ORDER BY expr ordering */
 	pairingheap *iss_ReorderQueue;
 	bool		iss_ReachedEnd;

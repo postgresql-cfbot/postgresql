@@ -425,6 +425,17 @@ typedef struct SampleScan
  * by Var nodes identifying the index columns (their varno is INDEX_VAR and
  * their varattno is the index column number).
  *
+ * indexfilter and indexfilterorig resembles indexqual/indexqualorig, but it
+ * contains quals that are not regular index quals, but still can be evaluated
+ * on the index tuple (in a way similar to what index-only scans do). The
+ * expressions may be more complex (not simple OpExpr etc.), but the index
+ * keys are replaced by Var nodes identifying the index column etc.
+ *
+ * indexfilterqual contains quals that can't be evaluated on the index tuple
+ * (due to referencing a column not included in the index). In principle we
+ * could simply evaluate the quals from the Plan node, but that contains all
+ * quals, including those already evaluated on the index tuple.
+ *
  * indexorderbyorig is similarly the original form of any ORDER BY expressions
  * that are being implemented by the index, while indexorderby is modified to
  * have index column Vars on the left-hand side.  Here, multiple expressions
@@ -450,6 +461,9 @@ typedef struct IndexScan
 	Oid			indexid;		/* OID of index to scan */
 	List	   *indexqual;		/* list of index quals (usually OpExprs) */
 	List	   *indexqualorig;	/* the same in original form */
+	List	   *indexfilter;	/* quals for index-only filters */
+	List	   *indexfilterorig;	/* the same in original form */
+	List	   *indexfilterqual;	/* quals for non-index-only filters */
 	List	   *indexorderby;	/* list of index ORDER BY exprs */
 	List	   *indexorderbyorig;	/* the same in original form */
 	List	   *indexorderbyops;	/* OIDs of sort ops for ORDER BY exprs */

@@ -51,9 +51,11 @@ typedef enum
 /* Data structure for collecting qual clauses that match an index */
 typedef struct
 {
-	bool		nonempty;		/* True if lists are not all empty */
+	bool		nonempty;		/* True if lists are not all empty (does not
+								 * consider the indexfilters list). */
 	/* Lists of IndexClause nodes, one list per index column */
 	List	   *indexclauses[INDEX_MAX_KEYS];
+	List	   *indexfilters;
 } IndexClauseSet;
 
 /* Per-path data used within choose_bitmap_and() */
@@ -124,6 +126,7 @@ static PathClauseUsage *classify_index_clause_usage(Path *path,
 static void find_indexpath_quals(Path *bitmapqual, List **quals, List **preds);
 static int	find_list_position(Node *node, List **nodelist);
 static bool check_index_only(RelOptInfo *rel, IndexOptInfo *index);
+static bool check_index_filter(RelOptInfo *rel, IndexOptInfo *index, Node *clause);
 static double get_loop_count(PlannerInfo *root, Index cur_relid, Relids outer_relids);
 static double adjust_rowcount_for_semijoins(PlannerInfo *root,
 											Index cur_relid,
@@ -152,6 +155,9 @@ static IndexClause *match_clause_to_indexcol(PlannerInfo *root,
 											 RestrictInfo *rinfo,
 											 int indexcol,
 											 IndexOptInfo *index);
+static RestrictInfo *match_filter_to_index(PlannerInfo *root,
+										  RestrictInfo *rinfo,
+										  IndexOptInfo *index);
 static bool IsBooleanOpfamily(Oid opfamily);
 static IndexClause *match_boolean_index_clause(PlannerInfo *root,
 											   RestrictInfo *rinfo,
@@ -833,7 +839,8 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
  */
 static List *
 build_index_paths(PlannerInfo *root, RelOptInfo *rel,
-				  IndexOptInfo *index, IndexClauseSet *clauses,
+				  IndexOptInfo *index,
+				  IndexClauseSet *clauses,
 				  bool useful_predicate,
 				  ScanTypeControl scantype,
 				  bool *skip_nonnative_saop,
@@ -842,6 +849,7 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	List	   *result = NIL;
 	IndexPath  *ipath;
 	List	   *index_clauses;
+	List	   *index_filters;
 	Relids		outer_relids;
 	double		loop_count;
 	List	   *orderbyclauses;
@@ -947,6 +955,29 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 			return NIL;
 	}
 
+	/*
+	 * If we have index-only filters, combine the clauses into a simple list and
+	 * add the relids to outer relids.
+	 *
+	 * XXX Shouldn't we try to order the clauses in some particular order, say by
+	 * procost / selectivity? It's difficult, though.
+	 */
+	index_filters = NIL;
+	if (clauses->indexfilters)
+	{
+		ListCell   *lc;
+
+		foreach(lc, clauses->indexfilters)
+		{
+			RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+
+			/* OK to include this clause (as a filter) */
+			index_filters = lappend(index_filters, rinfo);
+			outer_relids = bms_add_members(outer_relids,
+										   rinfo->clause_relids);
+		}
+	}
+
 	/* We do not want the index's rel itself listed in outer_relids */
 	outer_relids = bms_del_member(outer_relids, rel->relid);
 
@@ -1015,6 +1046,7 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	{
 		ipath = create_index_path(root, index,
 								  index_clauses,
+								  index_filters,
 								  orderbyclauses,
 								  orderbyclausecols,
 								  useful_pathkeys,
@@ -1035,6 +1067,7 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 		{
 			ipath = create_index_path(root, index,
 									  index_clauses,
+									  index_filters,
 									  orderbyclauses,
 									  orderbyclausecols,
 									  useful_pathkeys,
@@ -1068,6 +1101,7 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 		{
 			ipath = create_index_path(root, index,
 									  index_clauses,
+									  index_filters,
 									  NIL,
 									  NIL,
 									  useful_pathkeys,
@@ -1085,6 +1119,7 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 			{
 				ipath = create_index_path(root, index,
 										  index_clauses,
+										  index_filters,
 										  NIL,
 										  NIL,
 										  useful_pathkeys,
@@ -1196,6 +1231,9 @@ build_paths_for_OR(PlannerInfo *root, RelOptInfo *rel,
 		/*
 		 * If no matches so far, and the index predicate isn't useful, we
 		 * don't want it.
+		 *
+		 * XXX Maybe this should check the index filters too? nonempty=true only
+		 * deals with index clauses, it does not consider filters.
 		 */
 		if (!clauseset.nonempty && !useful_predicate)
 			continue;
@@ -1854,6 +1892,70 @@ check_index_only(RelOptInfo *rel, IndexOptInfo *index)
 }
 
 /*
+ * check_index_filter
+ *		Determine whether a clause can be executed directly on the index tuple.
+ *
+ * This checks the clause references only columns that can be returned by the
+ * index, same as in index-only scan.
+ *
+ * XXX It's a bit annoying we build the bitmap from index columns over and over,
+ * so if there are multiple clauses to check, we will do that multiple times.
+ * However, it's not that expensive, there usually are only few such clauses, so
+ * it doesn't seem worth worrying about.
+ */
+static bool
+check_index_filter(RelOptInfo *rel, IndexOptInfo *index, Node *clause)
+{
+	bool		result;
+	Bitmapset  *attrs_used = NULL;
+	Bitmapset  *index_canreturn_attrs = NULL;
+	int			i;
+
+	/* Index-only filters must be enabled */
+	if (!enable_indexonlyfilter)
+		return false;
+
+	/*
+	 * Check that all needed attributes of the relation are available from the
+	 * index.
+	 */
+
+	/*
+	 * First, identify all the attributes needed by the clause.
+	 */
+	pull_varattnos(clause, rel->relid, &attrs_used);
+
+	/*
+	 * Construct a bitmapset of columns that the index can return back in an
+	 * index-only scan.
+	 */
+	for (i = 0; i < index->ncolumns; i++)
+	{
+		int			attno = index->indexkeys[i];
+
+		/*
+		 * For the moment, we just ignore index expressions.  It might be nice
+		 * to do something with them, later.
+		 */
+		if (attno == 0)
+			continue;
+
+		if (index->canreturn[i])
+			index_canreturn_attrs =
+				bms_add_member(index_canreturn_attrs,
+							   attno - FirstLowInvalidHeapAttributeNumber);
+	}
+
+	/* Do we have all the necessary attributes? */
+	result = bms_is_subset(attrs_used, index_canreturn_attrs);
+
+	bms_free(attrs_used);
+	bms_free(index_canreturn_attrs);
+
+	return result;
+}
+
+/*
  * get_loop_count
  *		Choose the loop count estimate to use for costing a parameterized path
  *		with the given set of outer relids.
@@ -2187,6 +2289,16 @@ match_clause_to_index(PlannerInfo *root,
 			return;
 		}
 	}
+
+	/*
+	 * If we got here, it means we didn't record the clause as a regular index
+	 * clause, but maybe we could still evaluate it as an index-only filter,
+	 * without fetching the heap tuple.
+	 *
+	 * FIXME maybe check/prevent duplicates, like above?
+	 */
+	if ((rinfo = match_filter_to_index(root, rinfo, index)) != NULL)
+		clauseset->indexfilters = lappend(clauseset->indexfilters, rinfo);
 }
 
 /*
@@ -2320,6 +2432,35 @@ match_clause_to_indexcol(PlannerInfo *root,
 	}
 
 	return NULL;
+}
+
+static RestrictInfo *
+match_filter_to_index(PlannerInfo *root,
+					  RestrictInfo *rinfo,
+					  IndexOptInfo *index)
+{
+	Expr	   *clause = rinfo->clause;
+
+	/*
+	 * Historically this code has coped with NULL clauses.  That's probably
+	 * not possible anymore, but we might as well continue to cope.
+	 *
+	 * XXX This code is new, the comment comes from match_clause_to_indexcol.
+	 * Not sure if we need to handle NULL clauses here. Maybe not.
+	 */
+	if (clause == NULL)
+		return NULL;
+
+	/*
+	 * Can the clause be evaluated only using the index tuple?
+	 *
+	 * XXX Maybe we should just do the check_index_filter here, if it's the only
+	 * thing we need to do. There's no point in having yet another function.
+	 */
+	if (!check_index_filter(index->rel, index, (Node *) rinfo->clause))
+		return NULL;
+
+	return rinfo;
 }
 
 /*

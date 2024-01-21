@@ -667,6 +667,15 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 				splan->indexqualorig =
 					fix_scan_list(root, splan->indexqualorig,
 								  rtoffset, NUM_EXEC_QUAL(plan));
+				splan->indexfilter =
+					fix_scan_list(root, splan->indexfilter,
+								  rtoffset, 1);
+				splan->indexfilterorig =
+					fix_scan_list(root, splan->indexfilterorig,
+								  rtoffset, NUM_EXEC_QUAL(plan));
+				splan->indexfilterqual =
+					fix_scan_list(root, splan->indexfilterqual,
+								  rtoffset, NUM_EXEC_QUAL(plan));
 				splan->indexorderby =
 					fix_scan_list(root, splan->indexorderby,
 								  rtoffset, 1);

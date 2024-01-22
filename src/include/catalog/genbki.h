@@ -82,8 +82,8 @@
  * The macro definitions are just to keep the C compiler from spitting up.
  */
 #define DECLARE_INDEX(name,oid,oidmacro,tblname,decl) extern int no_such_variable
-#define DECLARE_UNIQUE_INDEX(name,oid,oidmacro,tblname,decl) extern int no_such_variable
-#define DECLARE_UNIQUE_INDEX_PKEY(name,oid,oidmacro,tblname,decl) extern int no_such_variable
+#define DECLARE_UNIQUE_INDEX(name,oid,oidmacro,tblname,decl,...) extern int no_such_variable
+#define DECLARE_UNIQUE_INDEX_PKEY(name,oid,oidmacro,tblname,decl,...) extern int no_such_variable
 
 /*
  * These lines inform genbki.pl about manually-assigned OIDs that do not
@@ -119,6 +119,12 @@
 #define DECLARE_FOREIGN_KEY_OPT(cols,reftbl,refcols) extern int no_such_variable
 #define DECLARE_ARRAY_FOREIGN_KEY(cols,reftbl,refcols) extern int no_such_variable
 #define DECLARE_ARRAY_FOREIGN_KEY_OPT(cols,reftbl,refcols) extern int no_such_variable
+
+/*
+ * Create a syscache with the given name, index, and bucket size.  See
+ * syscache.c.
+ */
+#define MAKE_SYSCACHE(name,idxname,nbuckets) extern int no_such_variable
 
 /* The following are never defined; they are here only for documentation. */
 

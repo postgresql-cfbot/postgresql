@@ -19,8 +19,10 @@ use Getopt::Long;
 
 use FindBin;
 use lib $FindBin::RealBin;
+use lib "$FindBin::RealBin/../../tools";
 
 use Catalog;
+use PerfectHash;
 
 my $output_path = '';
 my $major_version;
@@ -56,8 +58,11 @@ my %catalogs;
 my %catalog_data;
 my @toast_decls;
 my @index_decls;
+my %syscaches;
+my %syscache_catalogs;
 my %oidcounts;
 my @system_constraints;
+my @object_properties;
 
 foreach my $header (@ARGV)
 {
@@ -121,6 +126,9 @@ foreach my $header (@ARGV)
 		}
 	}
 
+	# Lookup table to get index info by index name
+	my %indexes;
+
 	# If the header file contained toast or index info, build BKI
 	# commands for those, which we'll output later.
 	foreach my $toast (@{ $catalog->{toasting} })
@@ -132,8 +140,11 @@ foreach my $header (@ARGV)
 		$oidcounts{ $toast->{toast_oid} }++;
 		$oidcounts{ $toast->{toast_index_oid} }++;
 	}
+	my ($oid_index, $oid_syscache, $name_index, $name_syscache, $is_nsp_name_unique);
 	foreach my $index (@{ $catalog->{indexing} })
 	{
+		$indexes{$index->{index_name}} = $index;
+
 		push @index_decls,
 		  sprintf "declare %sindex %s %s on %s using %s\n",
 		  $index->{is_unique} ? 'unique ' : '',
@@ -150,7 +161,158 @@ foreach my $header (@ARGV)
 			  $index->{is_pkey} ? "PRIMARY KEY" : "UNIQUE",
 			  $index->{index_name};
 		}
+
+		if ($index->{index_decl} eq 'btree(oid oid_ops)')
+		{
+			$oid_index = $index;
+		}
+		if ($index->{index_decl} =~ /\(\w+name name_ops(, \w+namespace oid_ops)?\)/)
+		{
+			$name_index = $index;
+			$is_nsp_name_unique = 1 if $index->{is_unique};
+		}
 	}
+
+	# Analyze syscache info
+	foreach my $syscache (@{ $catalog->{syscaches} })
+	{
+		my $index = $indexes{$syscache->{index_name}};
+		my $tblname = $index->{table_name};
+		my $key = $index->{index_decl};
+		$key =~ s/^\w+\(//;
+		$key =~ s/\)$//;
+		$key =~ s/(\w+)\s+\w+/Anum_${tblname}_$1/g;
+
+		$syscaches{$syscache->{syscache_name}} = {
+			table_oid_macro => $catalogs{$tblname}->{relation_oid_macro},
+			index_oid_macro => $index->{index_oid_macro},
+			key => $key,
+			nbuckets => $syscache->{syscache_nbuckets},
+		};
+
+		$syscache_catalogs{$catname} = 1;
+
+		$oid_syscache = $syscache->{syscache_name} if $oid_index && $syscache->{index_name} eq $oid_index->{index_name};
+		$name_syscache = $syscache->{syscache_name} if $name_index && $syscache->{index_name} eq $name_index->{index_name};
+	}
+
+	my ($attnum_oid, $attnum_name, $attnum_namespace, $attnum_owner, $attnum_acl);
+	foreach my $att (@$schema)
+	{
+		if ($att->{name} eq 'oid' && $att->{type} eq 'oid')
+		{
+			$attnum_oid = "Anum_${catname}_" . $att->{name};
+		}
+		elsif ($att->{name} =~ /^\w{2,4}name$/ && $att->{type} eq 'name')
+		{
+			$attnum_name = "Anum_${catname}_" . $att->{name};
+		}
+		elsif ($att->{name} =~ /^\w{2,4}namespace$/ && $att->{type} eq 'oid' && $att->{lookup} eq 'pg_namespace')
+		{
+			$attnum_namespace = "Anum_${catname}_" . $att->{name};
+		}
+		elsif ($att->{name} =~ /^\w{2,4}owner$/ && $att->{type} eq 'oid' && $att->{lookup} eq 'pg_authid')
+		{
+			$attnum_owner = "Anum_${catname}_" . $att->{name};
+		}
+		elsif ($att->{name} =~ /^\w{2,4}acl$/ && $att->{type} eq '_aclitem')
+		{
+			$attnum_acl = "Anum_${catname}_" . $att->{name};
+		}
+	}
+
+	# XXX hardcoded exceptions
+	# extension doesn't belong to extnamespace
+	$attnum_namespace = undef if $catname eq 'pg_extension';
+	# pg_database owner is spelled datdba
+	$attnum_owner = "Anum_pg_database_datdba" if $catname eq 'pg_database';
+	# XXX?
+	$name_syscache = "SUBSCRIPTIONNAME" if $catname eq 'pg_subscription';
+	# XXX?
+	$is_nsp_name_unique = 1 if $catname eq 'pg_collation';
+	$is_nsp_name_unique = 1 if $catname eq 'pg_opclass';
+	$is_nsp_name_unique = 1 if $catname eq 'pg_opfamily';
+	$is_nsp_name_unique = 1 if $catname eq 'pg_subscription';
+
+	# XXX These catalogs were not covered by the previous hand-maintained table.
+	my @skip = qw(
+		AttrDefaultRelationId EnumRelationId IndexRelationId
+		LargeObjectRelationId ParameterAclRelationId
+		PublicationNamespaceRelationId PublicationRelRelationId
+		InheritsRelationId AggregateRelationId StatisticRelationId
+		StatisticExtDataRelationId DescriptionRelationId
+		DependRelationId DbRoleSettingRelationId
+		SharedDependRelationId SharedDescriptionRelationId
+		TSConfigMapRelationId ForeignTableRelationId
+		ReplicationOriginRelationId InitPrivsRelationId
+		SecLabelRelationId SharedSecLabelRelationId
+		PartitionedRelationId RangeRelationId SequenceRelationId
+		SubscriptionRelRelationId);
+	# XXX This one neither, but if I add it to @skip, PerfectHash will fail. (???)
+	#FIXME: AttributeRelationId
+
+	# XXX hardcoded ObjectType mapping -- where to put this?
+	my %objtypes = (
+		'AccessMethodRelationId' => 'OBJECT_ACCESS_METHOD',
+		'AccessMethodOperatorRelationId' => 'OBJECT_AMOP',
+		'AccessMethodProcedureRelationId' => 'OBJECT_AMPROC',
+		'CastRelationId' => 'OBJECT_CAST',
+		'CollationRelationId' => 'OBJECT_COLLATION',
+		'ConversionRelationId' => 'OBJECT_CONVERSION',
+		'DatabaseRelationId' => 'OBJECT_DATABASE',
+		'DefaultAclRelationId' => 'OBJECT_DEFACL',
+		'ExtensionRelationId' => 'OBJECT_EXTENSION',
+		'ForeignDataWrapperRelationId' => 'OBJECT_FDW',
+		'ForeignServerRelationId' => 'OBJECT_FOREIGN_SERVER',
+		'ProcedureRelationId' => 'OBJECT_FUNCTION',
+		'LanguageRelationId' => 'OBJECT_LANGUAGE',
+		'LargeObjectMetadataRelationId' => 'OBJECT_LARGEOBJECT',
+		'OperatorClassRelationId' => 'OBJECT_OPCLASS',
+		'OperatorRelationId' => 'OBJECT_OPERATOR',
+		'OperatorFamilyRelationId' => 'OBJECT_OPFAMILY',
+		'AuthIdRelationId' => 'OBJECT_ROLE',
+		'RewriteRelationId' => 'OBJECT_RULE',
+		'NamespaceRelationId' => 'OBJECT_SCHEMA',
+		'RelationRelationId' => 'OBJECT_TABLE',
+		'TableSpaceRelationId' => 'OBJECT_TABLESPACE',
+		'TransformRelationId' => 'OBJECT_TRANSFORM',
+		'TriggerRelationId' => 'OBJECT_TRIGGER',
+		'PolicyRelationId' => 'OBJECT_POLICY',
+		'EventTriggerRelationId' => 'OBJECT_EVENT_TRIGGER',
+		'TSConfigRelationId' => 'OBJECT_TSCONFIGURATION',
+		'TSDictionaryRelationId' => 'OBJECT_TSDICTIONARY',
+		'TSParserRelationId' => 'OBJECT_TSPARSER',
+		'TSTemplateRelationId' => 'OBJECT_TSTEMPLATE',
+		'TypeRelationId' => 'OBJECT_TYPE',
+		'PublicationRelationId' => 'OBJECT_PUBLICATION',
+		'SubscriptionRelationId' => 'OBJECT_SUBSCRIPTION',
+		'StatisticExtRelationId' => 'OBJECT_STATISTIC_EXT',
+		'UserMappingRelationId' => 'OBJECT_USER_MAPPING',
+	);
+	my $objtype = $objtypes{$catalog->{relation_oid_macro}};
+
+	# XXX This just uses the catalog name as a string rather than the
+	# previous natural-language description.  This could be changed if
+	# we decide on a place to store this.  But maybe for what we are
+	# using it, this is actually better.
+	my $class_descr = qq{"${catname}"};
+
+	push @object_properties, {
+		class_descr => $class_descr,
+		class_oid => $catalog->{relation_oid_macro},
+		_class_oid => $catalog->{relation_oid},
+		oid_index_oid => $oid_index->{index_oid_macro},
+		oid_catcache_id => $oid_syscache || '-1',
+		name_catcache_id => $name_syscache || '-1',
+		attnum_oid => $attnum_oid,
+		attnum_name => $attnum_name,
+		attnum_namespace => $attnum_namespace,
+		attnum_owner => $attnum_owner,
+		attnum_acl => $attnum_acl,
+		objtype => $objtype,
+		is_nsp_name_unique => $is_nsp_name_unique ? 'true' : 'false',
+	}
+	unless grep { $_ eq $catalog->{relation_oid_macro} } @skip;
 }
 
 # Complain and exit if we found any duplicate OIDs.
@@ -419,6 +581,15 @@ open my $fk_info, '>', $fk_info_file . $tmpext
 my $constraints_file = $output_path . 'system_constraints.sql';
 open my $constraints, '>', $constraints_file . $tmpext
   or die "can't open $constraints_file$tmpext: $!";
+my $syscache_ids_file = $output_path . 'syscache_ids.h';
+open my $syscache_ids_fh, '>', $syscache_ids_file . $tmpext
+  or die "can't open $syscache_ids_file$tmpext: $!";
+my $syscache_info_file = $output_path . 'syscache_info.h';
+open my $syscache_info_fh, '>', $syscache_info_file . $tmpext
+  or die "can't open $syscache_info_file$tmpext: $!";
+my $objectproperty_info_file = $output_path . 'objectproperty_info.h';
+open my $objectproperty_info_fh, '>', $objectproperty_info_file . $tmpext
+  or die "can't open $objectproperty_info_file$tmpext: $!";
 
 # Generate postgres.bki and pg_*_d.h headers.
 
@@ -753,17 +924,87 @@ foreach my $catname (@catnames)
 # Closing boilerplate for system_fk_info.h
 print $fk_info "};\n\n#endif\t\t\t\t\t\t\t/* SYSTEM_FK_INFO_H */\n";
 
+# Now generate syscache info
+
+print_boilerplate($syscache_ids_fh, "syscache_ids.h", "SysCache identifiers");
+print $syscache_ids_fh "enum SysCacheIdentifier
+{
+";
+
+print_boilerplate($syscache_info_fh, "syscache_info.h", "SysCache definitions");
+print $syscache_info_fh "\n";
+foreach my $catname (sort keys %syscache_catalogs)
+{
+	print $syscache_info_fh qq{#include "catalog/${catname}_d.h"\n};
+}
+print $syscache_info_fh "\n";
+print $syscache_info_fh "static const struct cachedesc cacheinfo[] = {\n";
+
+my $last_syscache;
+foreach my $syscache (sort keys %syscaches)
+{
+	print $syscache_ids_fh "\t$syscache,\n";
+	$last_syscache = $syscache;
+
+	print $syscache_info_fh "\t[$syscache] = {\n";
+	print $syscache_info_fh "\t\t", $syscaches{$syscache}{table_oid_macro}, ",\n";
+	print $syscache_info_fh "\t\t", $syscaches{$syscache}{index_oid_macro}, ",\n";
+	print $syscache_info_fh "\t\tKEY(", $syscaches{$syscache}{key}, "),\n";
+	print $syscache_info_fh "\t\t", $syscaches{$syscache}{nbuckets}, "\n";
+	print $syscache_info_fh "\t},\n";
+}
+
+print $syscache_ids_fh "};\n";
+print $syscache_ids_fh "#define SysCacheSize ($last_syscache + 1)\n";
+
+print $syscache_info_fh "};\n";
+
+# Now generate objectproperty_info
+
+print_boilerplate($objectproperty_info_fh, "objectproperty_info.h", "object property data");
+print $objectproperty_info_fh "\n";
+foreach my $catname (@catnames)
+{
+	print $objectproperty_info_fh qq{#include "catalog/${catname}_d.h"\n};
+}
+print $objectproperty_info_fh "\n";
+print $objectproperty_info_fh "static const ObjectPropertyType ObjectProperty[] =
+{
+";
+
+my @class_oids;
+foreach my $op (@object_properties)
+{
+	print $objectproperty_info_fh "\t{\n";
+	foreach my $p (sort keys %{$op})
+	{
+		printf $objectproperty_info_fh "\t\t.%s = %s,\n", $p, ${$op}{$p} if $p !~ /^_/ && ${$op}{$p};
+	}
+	push @class_oids, pack('N', ${$op}{_class_oid});
+	print $objectproperty_info_fh "\t},\n";
+}
+
+print $objectproperty_info_fh "};\n";
+
+print $objectproperty_info_fh "\nstatic " . PerfectHash::generate_hash_function(\@class_oids, 'objectproperty_hash_func', fixed_key_length => 4);
+
 # We're done emitting data
 close $bki;
 close $schemapg;
 close $fk_info;
 close $constraints;
+close $syscache_ids_fh;
+close $syscache_info_fh;
+close $objectproperty_info_fh;
 
 # Finally, rename the completed files into place.
 Catalog::RenameTempFile($bkifile, $tmpext);
 Catalog::RenameTempFile($schemafile, $tmpext);
 Catalog::RenameTempFile($fk_info_file, $tmpext);
 Catalog::RenameTempFile($constraints_file, $tmpext);
+Catalog::RenameTempFile($syscache_ids_file, $tmpext);
+Catalog::RenameTempFile($syscache_info_file, $tmpext);
+Catalog::RenameTempFile($objectproperty_info_file, $tmpext);
 
 exit($num_errors != 0 ? 1 : 0);
 

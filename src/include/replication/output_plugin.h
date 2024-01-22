@@ -27,6 +27,7 @@ typedef struct OutputPluginOptions
 {
 	OutputPluginOutputType output_type;
 	bool		receive_rewrites;
+	bool		receive_sequences;
 } OutputPluginOptions;
 
 /*
@@ -89,6 +90,16 @@ typedef void (*LogicalDecodeMessageCB) (struct LogicalDecodingContext *ctx,
 										const char *prefix,
 										Size message_size,
 										const char *message);
+
+/*
+ * Called for the generic logical decoding sequences.
+ */
+typedef void (*LogicalDecodeSequenceCB) (struct LogicalDecodingContext *ctx,
+										 ReorderBufferTXN *txn,
+										 XLogRecPtr sequence_lsn,
+										 Relation rel,
+										 bool transactional,
+										 int64 value);
 
 /*
  * Filter changes by origin.
@@ -202,6 +213,17 @@ typedef void (*LogicalDecodeStreamMessageCB) (struct LogicalDecodingContext *ctx
 											  const char *message);
 
 /*
+ * Called for the streaming generic logical decoding sequences from in-progress
+ * transactions.
+ */
+typedef void (*LogicalDecodeStreamSequenceCB) (struct LogicalDecodingContext *ctx,
+											   ReorderBufferTXN *txn,
+											   XLogRecPtr sequence_lsn,
+											   Relation rel,
+											   bool transactional,
+											   int64 value);
+
+/*
  * Callback for streaming truncates from in-progress transactions.
  */
 typedef void (*LogicalDecodeStreamTruncateCB) (struct LogicalDecodingContext *ctx,
@@ -221,6 +243,7 @@ typedef struct OutputPluginCallbacks
 	LogicalDecodeTruncateCB truncate_cb;
 	LogicalDecodeCommitCB commit_cb;
 	LogicalDecodeMessageCB message_cb;
+	LogicalDecodeSequenceCB sequence_cb;
 	LogicalDecodeFilterByOriginCB filter_by_origin_cb;
 	LogicalDecodeShutdownCB shutdown_cb;
 
@@ -239,6 +262,7 @@ typedef struct OutputPluginCallbacks
 	LogicalDecodeStreamCommitCB stream_commit_cb;
 	LogicalDecodeStreamChangeCB stream_change_cb;
 	LogicalDecodeStreamMessageCB stream_message_cb;
+	LogicalDecodeStreamSequenceCB stream_sequence_cb;
 	LogicalDecodeStreamTruncateCB stream_truncate_cb;
 } OutputPluginCallbacks;
 

@@ -91,6 +91,11 @@ typedef struct LogicalDecodingContext
 	bool		twophase;
 
 	/*
+	 * Does the output pluging support decoding of sequence changes?
+	 */
+	bool		sequences;
+
+	/*
 	 * Is two-phase option given by output plugin?
 	 *
 	 * This flag indicates that the plugin passed in the two-phase option as

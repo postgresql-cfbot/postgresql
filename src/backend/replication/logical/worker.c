@@ -154,6 +154,7 @@
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_tablespace.h"
+#include "commands/sequence.h"
 #include "commands/tablecmds.h"
 #include "commands/tablespace.h"
 #include "commands/trigger.h"
@@ -1435,6 +1436,97 @@ apply_handle_origin(StringInfo s)
 		ereport(ERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
 				 errmsg_internal("ORIGIN message sent out of order")));
+}
+
+/*
+ * Handle SEQUENCE message.
+ */
+static void
+apply_handle_sequence(StringInfo s)
+{
+	LogicalRepSequence seq;
+	LogicalRepRelMapEntry *rel;
+	Oid			relid;
+	bool		already_in_transaction PG_USED_FOR_ASSERTS_ONLY;
+
+	if (is_skipping_changes() ||
+		handle_streamed_transaction(LOGICAL_REP_MSG_SEQUENCE, s))
+		return;
+
+	/*
+	 * Remember if we're already in transaction (begin_replication step starts
+	 * a transaction, so we can't use IsTransactionState() after that point.
+	 */
+	already_in_transaction = IsTransactionState();
+
+	/*
+	 * Make sure we're in a transaction (needed by SetSequence). For
+	 * non-transactional updates we're guaranteed to start a new one, and
+	 * we'll commit it at the end.
+	 */
+	begin_replication_step();
+
+	relid = logicalrep_read_sequence(s, &seq);
+
+	/*
+	 * Non-transactional sequence updates should not be part of a remote
+	 * transaction. There should not be any running transaction.
+	 */
+	Assert((!seq.transactional) || in_remote_transaction);
+	Assert(!(!seq.transactional && in_remote_transaction));
+	Assert(!(!seq.transactional && already_in_transaction));
+
+	/* lock the sequence in AccessExclusiveLock, as expected by SetSequence */
+	rel = logicalrep_rel_open(relid, AccessExclusiveLock);
+	if (!should_apply_changes_for_rel(rel))
+	{
+		/*
+		 * The relation can't become interesting in the middle of the
+		 * transaction so it's safe to unlock it.
+		 */
+		logicalrep_rel_close(rel, AccessExclusiveLock);
+		end_replication_step();
+
+		/*
+		 * Commit the per-stream transaction (we only do this when not in
+		 * remote transaction, i.e. for non-transactional sequence updates.)
+		 */
+		if (!in_remote_transaction)
+			CommitTransactionCommand();
+
+		return;
+	}
+
+	/*
+	 * apply the sequence change
+	 *
+	 * XXX We don't need to reconstruct the value from last_value, log_cnt
+	 * etc. because that happens on the publisher.
+	 */
+	SetSequence(rel->localreloid, seq.transactional, seq.value);
+
+	logicalrep_rel_close(rel, NoLock);
+
+	end_replication_step();
+
+	/*
+	 * Commit the per-stream transaction (we only do this when not in remote
+	 * transaction, i.e. for non-transactional sequence updates.)
+	 */
+	if (!in_remote_transaction)
+	{
+		CommitTransactionCommand();
+
+		/*
+		 * Update origin state so we don't try applying this sequence change
+		 * in case of crash. We only do this for non-trasactional changes,
+		 * that are replayed directly.
+		 *
+		 * XXX We don't have replorigin_session_origin_timestamp, but we can
+		 * just leave that set to 0.
+		 */
+		replorigin_session_origin_lsn = seq.lsn;
+	}
 }
 
 /*
@@ -3347,6 +3439,10 @@ apply_dispatch(StringInfo s)
 			 */
 			break;
 
+		case LOGICAL_REP_MSG_SEQUENCE:
+			apply_handle_sequence(s);
+			return;
+
 		case LOGICAL_REP_MSG_STREAM_START:
 			apply_handle_stream_start(s);
 			break;
@@ -3944,6 +4040,7 @@ maybe_reread_subscription(void)
 		strcmp(newsub->slotname, MySubscription->slotname) != 0 ||
 		newsub->binary != MySubscription->binary ||
 		newsub->stream != MySubscription->stream ||
+		newsub->sequences != MySubscription->sequences ||
 		newsub->passwordrequired != MySubscription->passwordrequired ||
 		strcmp(newsub->origin, MySubscription->origin) != 0 ||
 		newsub->owner != MySubscription->owner ||
@@ -4365,6 +4462,7 @@ set_stream_options(WalRcvStreamOptions *options,
 
 	server_version = walrcv_server_version(LogRepWorkerWalRcvConn);
 	options->proto.logical.proto_version =
+		server_version >= 170000 ? LOGICALREP_PROTO_SEQUENCES_VERSION_NUM :
 		server_version >= 160000 ? LOGICALREP_PROTO_STREAM_PARALLEL_VERSION_NUM :
 		server_version >= 150000 ? LOGICALREP_PROTO_TWOPHASE_VERSION_NUM :
 		server_version >= 140000 ? LOGICALREP_PROTO_STREAM_VERSION_NUM :
@@ -4372,6 +4470,15 @@ set_stream_options(WalRcvStreamOptions *options,
 
 	options->proto.logical.publication_names = MySubscription->publications;
 	options->proto.logical.binary = MySubscription->binary;
+
+	/*
+	 * FIXME maybe this should depend on server_version too? We don't want
+	 * to request sequences from old releases, but maybe we should not just
+	 * ignore that? Might easily lead to surprises.
+	 *
+	 * XXX Now there's a server_version check in libpqrcv_startstreaming.
+	 */
+	options->proto.logical.sequences = MySubscription->sequences;
 
 	/*
 	 * Assign the appropriate option value for streaming option according to

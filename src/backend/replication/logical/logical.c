@@ -75,6 +75,9 @@ static void truncate_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 static void message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 							   XLogRecPtr message_lsn, bool transactional,
 							   const char *prefix, Size message_size, const char *message);
+static void sequence_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+								XLogRecPtr sequence_lsn, Relation rel,
+								bool transactional, int64 value);
 
 /* streaming callbacks */
 static void stream_start_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
@@ -92,6 +95,9 @@ static void stream_change_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn
 static void stream_message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 									  XLogRecPtr message_lsn, bool transactional,
 									  const char *prefix, Size message_size, const char *message);
+static void stream_sequence_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+									   XLogRecPtr sequence_lsn, Relation rel,
+									   bool transactional, int64 value);
 static void stream_truncate_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 									   int nrelations, Relation relations[], ReorderBufferChange *change);
 
@@ -223,13 +229,14 @@ StartupDecodingContext(List *output_plugin_options,
 	ctx->reorder->apply_truncate = truncate_cb_wrapper;
 	ctx->reorder->commit = commit_cb_wrapper;
 	ctx->reorder->message = message_cb_wrapper;
+	ctx->reorder->sequence = sequence_cb_wrapper;
 
 	/*
 	 * To support streaming, we require start/stop/abort/commit/change
-	 * callbacks. The message and truncate callbacks are optional, similar to
-	 * regular output plugins. We however enable streaming when at least one
-	 * of the methods is enabled so that we can easily identify missing
-	 * methods.
+	 * callbacks. The message, sequence and truncate callbacks are optional,
+	 * similar to regular output plugins. We however enable streaming when at
+	 * least one of the methods is enabled so that we can easily identify
+	 * missing methods.
 	 *
 	 * We decide it here, but only check it later in the wrappers.
 	 */
@@ -239,6 +246,7 @@ StartupDecodingContext(List *output_plugin_options,
 		(ctx->callbacks.stream_commit_cb != NULL) ||
 		(ctx->callbacks.stream_change_cb != NULL) ||
 		(ctx->callbacks.stream_message_cb != NULL) ||
+		(ctx->callbacks.stream_sequence_cb != NULL) ||
 		(ctx->callbacks.stream_truncate_cb != NULL);
 
 	/*
@@ -256,6 +264,7 @@ StartupDecodingContext(List *output_plugin_options,
 	ctx->reorder->stream_commit = stream_commit_cb_wrapper;
 	ctx->reorder->stream_change = stream_change_cb_wrapper;
 	ctx->reorder->stream_message = stream_message_cb_wrapper;
+	ctx->reorder->stream_sequence = stream_sequence_cb_wrapper;
 	ctx->reorder->stream_truncate = stream_truncate_cb_wrapper;
 
 
@@ -288,6 +297,13 @@ StartupDecodingContext(List *output_plugin_options,
 	 * transaction (and its subtransactions) to the output plugin.
 	 */
 	ctx->reorder->update_progress_txn = update_progress_txn_cb_wrapper;
+
+	/*
+	 * To support logical decoding of sequences, we require the sequence
+	 * callback. We decide it here, but only check it later in the wrappers.
+	 */
+	ctx->sequences = ((ctx->callbacks.sequence_cb != NULL) ||
+					  (ctx->callbacks.stream_sequence_cb != NULL));
 
 	ctx->out = makeStringInfo();
 	ctx->prepare_write = prepare_write;
@@ -459,6 +475,16 @@ CreateInitDecodingContext(const char *plugin,
 
 	ctx->reorder->output_rewrites = ctx->options.receive_rewrites;
 
+	/*
+	 * StartupDecodingContext only checks which callbacks are defined, and
+	 * startup_cb_wrapper sets receiver_sequences flag. We need to combine
+	 * those two pieces and disable sequences if receiver_sequences=false.
+	 *
+	 * XXX We could also leave this up to the plugin startup, but it seems
+	 * cleaner to just do it here.
+	 */
+	ctx->sequences &= ctx->options.receive_sequences;
+
 	return ctx;
 }
 
@@ -605,6 +631,16 @@ CreateDecodingContext(XLogRecPtr start_lsn,
 	}
 
 	ctx->reorder->output_rewrites = ctx->options.receive_rewrites;
+
+	/*
+	 * StartupDecodingContext only checks which callbacks are defined, and
+	 * startup_cb_wrapper sets receiver_sequences flag. We need to combine
+	 * those two pieces and disable sequences if receiver_sequences=false.
+	 *
+	 * XXX We could also leave this up to the plugin startup, but it seems
+	 * cleaner to just do it here.
+	 */
+	ctx->sequences &= ctx->options.receive_sequences;
 
 	ereport(LOG,
 			(errmsg("starting logical decoding for slot \"%s\"",
@@ -1263,6 +1299,42 @@ message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 }
 
 static void
+sequence_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+					XLogRecPtr sequence_lsn, Relation rel, bool transactional,
+					int64 value)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+
+	Assert(!ctx->fast_forward);
+
+	if (ctx->callbacks.sequence_cb == NULL)
+		return;
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "sequence";
+	state.report_location = sequence_lsn;
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = true;
+	ctx->write_xid = txn != NULL ? txn->xid : InvalidTransactionId;
+	ctx->write_location = sequence_lsn;
+
+	/* do the actual work: call callback */
+	ctx->callbacks.sequence_cb(ctx, txn, sequence_lsn, rel,
+							   transactional, value);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+}
+
+static void
 stream_start_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 						XLogRecPtr first_lsn)
 {
@@ -1572,6 +1644,46 @@ stream_message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	/* do the actual work: call callback */
 	ctx->callbacks.stream_message_cb(ctx, txn, message_lsn, transactional, prefix,
 									 message_size, message);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+}
+
+static void
+stream_sequence_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+						   XLogRecPtr sequence_lsn, Relation rel,
+						   bool transactional, int64 value)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+
+	Assert(!ctx->fast_forward);
+
+	/* We're only supposed to call this when streaming is supported. */
+	Assert(ctx->streaming);
+
+	/* this callback is optional */
+	if (ctx->callbacks.stream_sequence_cb == NULL)
+		return;
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "stream_sequence";
+	state.report_location = sequence_lsn;
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = true;
+	ctx->write_xid = txn != NULL ? txn->xid : InvalidTransactionId;
+	ctx->write_location = sequence_lsn;
+
+	/* do the actual work: call callback */
+	ctx->callbacks.sequence_cb(ctx, txn, sequence_lsn, rel,
+							   transactional, value);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;

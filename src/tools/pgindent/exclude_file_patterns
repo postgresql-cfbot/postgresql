@@ -52,6 +52,10 @@ src/include/pg_config\.h$
 src/pl/plperl/ppport\.h$
 src/pl/plperl/SPI\.c$
 src/pl/plperl/Util\.c$
+src/backend/nodes/nodetags\.h$
+src/backend/utils/activity/pgstat_wait_event\.c$
+src/backend/utils/activity/wait_event_types\.h$
+src/backend/utils/activity/wait_event_funcs_data\.c$
 #
 # pg_bsd_indent has its own, idiosyncratic indentation style.
 # We'll stick to that to permit comparison with the FreeBSD upstream.

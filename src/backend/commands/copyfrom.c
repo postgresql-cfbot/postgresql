@@ -1711,7 +1711,7 @@ BeginCopyFrom(ParseState *pstate,
 							pg_encoding_to_char(GetDatabaseEncoding()))));
 	}
 
-	cstate->copy_src = COPY_FILE;	/* default */
+	cstate->copy_src = COPY_SOURCE_FILE;	/* default */
 
 	cstate->whereClause = whereClause;
 
@@ -1839,7 +1839,7 @@ BeginCopyFrom(ParseState *pstate,
 	if (data_source_cb)
 	{
 		progress_vals[1] = PROGRESS_COPY_TYPE_CALLBACK;
-		cstate->copy_src = COPY_CALLBACK;
+		cstate->copy_src = COPY_SOURCE_CALLBACK;
 		cstate->data_source_cb = data_source_cb;
 	}
 	else if (pipe)

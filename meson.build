@@ -190,6 +190,10 @@ sema_kind = 'sysv'
 if host_system == 'dragonfly'
   # apparently the most similar
   host_system = 'netbsd'
+elif host_system == 'android'
+  # while android isn't quite a normal linux, it seems close enough for our
+  # purposes so far
+  host_system = 'linux'
 endif
 
 if host_system == 'aix'

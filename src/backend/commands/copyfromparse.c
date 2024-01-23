@@ -740,6 +740,20 @@ CopyReadBinaryData(CopyFromState cstate, char *dest, int nbytes)
 }
 
 /*
+ * CopyFromStateRead
+ *
+ * Export CopyReadBinaryData() for extensions. We want to keep
+ * CopyReadBinaryData() as a static function for
+ * optimization. CopyReadBinaryData() calls in this file may be optimized by
+ * a compiler.
+ */
+int
+CopyFromStateRead(CopyFromState cstate, char *dest, int nbytes)
+{
+	return CopyReadBinaryData(cstate, dest, nbytes);
+}
+
+/*
  * Read raw fields in the next line for COPY FROM in text or csv mode.
  * Return false if no more lines.
  *

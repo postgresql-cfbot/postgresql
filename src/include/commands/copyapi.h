@@ -299,7 +299,12 @@ typedef struct CopyFromStateData
 #define RAW_BUF_BYTES(cstate) ((cstate)->raw_buf_len - (cstate)->raw_buf_index)
 
 	uint64		bytes_processed;	/* number of bytes processed so far */
+
+	/* For custom format implementation */
+	void	   *opaque;			/* private space */
 } CopyFromStateData;
+
+extern int	CopyFromStateRead(CopyFromState cstate, char *dest, int nbytes);
 
 
 typedef struct CopyToStateData *CopyToState;
@@ -402,6 +407,11 @@ typedef struct CopyToStateData
 	FmgrInfo   *out_functions;	/* lookup info for output functions */
 	MemoryContext rowcontext;	/* per-row evaluation context */
 	uint64		bytes_processed;	/* number of bytes processed so far */
+
+	/* For custom format implementation */
+	void	   *opaque;			/* private space */
 } CopyToStateData;
+
+extern void CopyToStateFlush(CopyToState cstate);
 
 #endif							/* COPYAPI_H */

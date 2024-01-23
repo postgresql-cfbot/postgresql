@@ -501,6 +501,20 @@ CopySendEndOfRow(CopyToState cstate)
 }
 
 /*
+ * CopyToStateFlush
+ *
+ * Export CopySendEndOfRow() for extensions. We want to keep
+ * CopySendEndOfRow() as a static function for
+ * optimization. CopySendEndOfRow() calls in this file may be optimized by a
+ * compiler.
+ */
+void
+CopyToStateFlush(CopyToState cstate)
+{
+	CopySendEndOfRow(cstate);
+}
+
+/*
  * These functions do apply some data conversion
  */
 

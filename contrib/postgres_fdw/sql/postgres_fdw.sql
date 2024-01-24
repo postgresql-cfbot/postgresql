@@ -1546,6 +1546,10 @@ DELETE FROM ft2
 DELETE FROM ft2 WHERE ft2.c1 > 2000;
 ALTER SERVER loopback OPTIONS (ADD extensions 'postgres_fdw');
 
+-- Test UPDATE/DELETE with FOR PORTION OF
+UPDATE ft2 FOR PORTION OF c3 FROM 'a' TO 'b' SET c1 = 1;
+DELETE FROM ft2 FOR PORTION OF c3 FROM 'a' TO 'b';
+
 -- Test that trigger on remote table works as expected
 CREATE OR REPLACE FUNCTION "S 1".F_BRTRIG() RETURNS trigger AS $$
 BEGIN

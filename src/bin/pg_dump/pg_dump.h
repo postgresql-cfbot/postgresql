@@ -59,6 +59,7 @@ typedef enum
 	DO_TRIGGER,
 	DO_CONSTRAINT,
 	DO_FK_CONSTRAINT,			/* see note for ConstraintInfo */
+	DO_PERIOD,
 	DO_PROCLANG,
 	DO_CAST,
 	DO_TABLE_DATA,
@@ -300,12 +301,14 @@ typedef struct _tableInfo
 	bool		rowsec;			/* is row security enabled? */
 	bool		forcerowsec;	/* is row security forced? */
 	bool		hasoids;		/* does it have OIDs? */
+	bool		hasperiods;		/* does it have any periods? */
 	uint32		frozenxid;		/* table's relfrozenxid */
 	uint32		minmxid;		/* table's relminmxid */
 	Oid			toast_oid;		/* toast table's OID, or 0 if none */
 	uint32		toast_frozenxid;	/* toast table's relfrozenxid, if any */
 	uint32		toast_minmxid;	/* toast table's relminmxid */
 	int			ncheck;			/* # of CHECK expressions */
+	int			nperiod;		/* # of PERIOD definitions */
 	Oid			reltype;		/* OID of table's composite type, if any */
 	Oid			reloftype;		/* underlying type for typed table */
 	Oid			foreign_server; /* foreign server oid, if applicable */
@@ -355,6 +358,7 @@ typedef struct _tableInfo
 	bool	   *notnull_inh;	/* true if NOT NULL has no local definition */
 	struct _attrDefInfo **attrdefs; /* DEFAULT expressions */
 	struct _constraintInfo *checkexprs; /* CHECK constraints */
+	struct _periodInfo *periods;	/* PERIOD definitions */
 	bool		needs_override; /* has GENERATED ALWAYS AS IDENTITY */
 	char	   *amname;			/* relation access method */
 
@@ -484,6 +488,16 @@ typedef struct _constraintInfo
 	bool		conislocal;		/* true if constraint has local definition */
 	bool		separate;		/* true if must dump as separate item */
 } ConstraintInfo;
+
+typedef struct _periodInfo
+{
+	DumpableObject dobj;
+	TableInfo  *pertable;
+	char	   *perstart;		/* the name of the start column */
+	char	   *perend;			/* the name of the end column */
+	char	   *rngtype;		/* the name of the range type */
+	char	   *conname;		/* the name of the CHECK constraint */
+} PeriodInfo;
 
 typedef struct _procLangInfo
 {

@@ -2656,6 +2656,9 @@ check_srf_call_placement(ParseState *pstate, Node *last_srf, int location)
 		case EXPR_KIND_CYCLE_MARK:
 			errkind = true;
 			break;
+		case EXPR_KIND_UPDATE_PORTION:
+			err = _("set-returning functions are not allowed in FOR PORTION OF expressions");
+			break;
 
 			/*
 			 * There is intentionally no default: case here, so that the

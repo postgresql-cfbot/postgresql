@@ -481,6 +481,60 @@ select range_minus(numrange(10.1,12.2,'[]'), numrange(0.0,120.2,'(]'));
  empty
 (1 row)
 
+select 'empty'::numrange @- numrange(2.0, 3.0);
+ ?column? 
+----------
+ {}
+(1 row)
+
+select numrange(1.1, 2.2) @- 'empty'::numrange;
+   ?column?    
+---------------
+ {"[1.1,2.2)"}
+(1 row)
+
+select numrange(1.1, 2.2) @- numrange(2.0, 3.0);
+   ?column?    
+---------------
+ {"[1.1,2.0)"}
+(1 row)
+
+select numrange(1.1, 2.2) @- numrange(2.2, 3.0);
+   ?column?    
+---------------
+ {"[1.1,2.2)"}
+(1 row)
+
+select numrange(1.1, 2.2,'[]') @- numrange(2.0, 3.0);
+   ?column?    
+---------------
+ {"[1.1,2.0)"}
+(1 row)
+
+select numrange(1.0, 3.0) @- numrange(1.5, 2.0);
+         ?column?          
+---------------------------
+ {"[1.0,1.5)","[2.0,3.0)"}
+(1 row)
+
+select range_without_portion(numrange(10.1,12.2,'[]'), numrange(110.0,120.2,'(]'));
+ range_without_portion 
+-----------------------
+ {"[10.1,12.2]"}
+(1 row)
+
+select range_without_portion(numrange(10.1,12.2,'[]'), numrange(0.0,120.2,'(]'));
+ range_without_portion 
+-----------------------
+ {}
+(1 row)
+
+select range_without_portion(numrange(1.0,3.0,'[]'), numrange(1.5,2.0,'(]'));
+   range_without_portion   
+---------------------------
+ {"[1.0,1.5]","(2.0,3.0]"}
+(1 row)
+
 select numrange(4.5, 5.5, '[]') && numrange(5.5, 6.5);
  ?column? 
 ----------

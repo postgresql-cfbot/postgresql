@@ -231,6 +231,11 @@
      </row>
 
      <row>
+      <entry><link linkend="catalog-pg-period"><structname>pg_period</structname></link></entry>
+      <entry>periods</entry>
+     </row>
+
+     <row>
       <entry><link linkend="catalog-pg-policy"><structname>pg_policy</structname></link></entry>
       <entry>row-security policies</entry>
      </row>
@@ -757,12 +762,14 @@
    The catalog <structname>pg_amop</structname> stores information about
    operators associated with access method operator families.  There is one
    row for each operator that is a member of an operator family.  A family
-   member can be either a <firstterm>search</firstterm> operator or an
-   <firstterm>ordering</firstterm> operator.  An operator
-   can appear in more than one family, but cannot appear in more than one
-   search position nor more than one ordering position within a family.
-   (It is allowed, though unlikely, for an operator to be used for both
-   search and ordering purposes.)
+   member can be either a <firstterm>search</firstterm> operator, an
+   <firstterm>ordering</firstterm> operator, or a
+   <firstterm>portion</firstterm> operator. A
+   <firstterm>portion</firstterm> operator is used for computing
+   <literal>FOR PORTION OF</literal> results. An operator can appear in more
+   than one family, but cannot appear in more than one search, ordering, or
+   portion position within a family. (It is allowed, though unlikely, for an
+   operator to be used for more than one purpose.)
   </para>
 
   <table>
@@ -833,8 +840,9 @@
        <structfield>amoppurpose</structfield> <type>char</type>
       </para>
       <para>
-       Operator purpose, either <literal>s</literal> for search or
-       <literal>o</literal> for ordering
+       Operator purpose, either <literal>s</literal> for search,
+       <literal>o</literal> for ordering,
+       or <literal>p</literal> for portion
       </para></entry>
      </row>
 
@@ -865,7 +873,7 @@
       </para>
       <para>
        The B-tree operator family this entry sorts according to, if an
-       ordering operator; zero if a search operator
+       ordering operator; zero if a search operator or portion operator
       </para></entry>
      </row>
     </tbody>
@@ -5723,6 +5731,113 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
        are simple references.
       </para></entry>
      </row>
+
+    </tbody>
+   </tgroup>
+  </table>
+ </sect1>
+
+
+ <sect1 id="catalog-pg-period">
+  <title><structname>pg_period</structname></title>
+
+  <indexterm zone="catalog-pg-period">
+   <primary>pg_period</primary>
+  </indexterm>
+
+  <para>
+   The catalog <structname>pg_period</structname> stores
+   information about system and application time periods.
+  </para>
+
+  <para>
+   Periods are described in <xref linkend="ddl-periods"/>.
+  </para>
+
+  <table>
+   <title><structname>pg_period</structname> Columns</title>
+
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>oid</structfield> <type>oid</type>
+      </para>
+      <para>
+       Row identifier
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>pername</structfield> <type>text</type>
+      </para>
+      <para>
+       Period name
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>perrelid</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-class"><structname>pg_class</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       The table this period belongs to
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>perstart</structfield> <type>int2</type>
+       (references <link linkend="catalog-pg-attribute"><structname>pg_attribute</structname></link>.<structfield>attnum</structfield>)
+      </para>
+      <para>
+       The number of the start column
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>perend</structfield> <type>int2</type>
+       (references <link linkend="catalog-pg-attribute"><structname>pg_attribute</structname></link>.<structfield>attnum</structfield>)
+      </para>
+      <para>
+       The number of the end column
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>perrange</structfield> <type>int2</type>
+       (references <link linkend="catalog-pg-attribute"><structname>pg_attribute</structname></link>.<structfield>attnum</structfield>)
+      </para>
+      <para>
+       The number of the <literal>GENERATED</literal> column that implements the <literal>PERIOD</literal>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>perconstraint</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-constraint"><structname>pg_constraint</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       The OID of the period's <literal>CHECK</literal> constraint
+      </para></entry>
+     </row>
+
     </tbody>
    </tgroup>
   </table>

@@ -300,6 +300,10 @@ CREATE INDEX ON my_table USING GIST (my_inet_column inet_ops);
    <filename>src/include/access/stratnum.h</filename>) into strategy numbers
    used by the operator class.  This lets the core code look up operators for
    temporal constraint indexes.
+   The optional thirteenth method <function>referencedagg</function> is used by
+   temporal foreign keys to combined referenced rows with the same
+   non-<literal>WITHOUT OVERLAPS</literal> into one <literal>WITHOUT OVERLAPS</literal>
+   span to compare against referencing rows.
  </para>
 
  <variablelist>
@@ -1241,6 +1245,114 @@ my_stratnum(PG_FUNCTION_ARGS)
        extension defines a second translation function,
        <literal>gist_stratnum_btree</literal>, for operator classes that use
        the <literal>BT*StrategyNumber</literal> constants.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><function>referencedagg</function></term>
+     <listitem>
+      <para>
+       An aggregate function. Given values of this opclass,
+       it returns a value combining them all. The return value
+       need not be the same type as the input, but it must be a
+       type that can appear on the right hand side of the "contained by"
+       operator. For example the built-in <literal>range_ops</literal>
+       opclass uses <literal>range_agg</literal> here, so that foreign
+       keys can check <literal>fkperiod @> range_agg(pkperiod)</literal>.
+      </para>
+      <para>
+       This is used for temporal foreign key constraints.
+       If you omit this support function, your type cannot be used
+       as the <literal>PERIOD</literal> part of a foreign key.
+      </para>
+
+      <para>
+       The <acronym>SQL</acronym> declaration of the function must look like
+       this (using <literal>my_range_agg</literal> as an example):
+
+<programlisting>
+CREATE OR REPLACE FUNCTION my_range_agg_transfn(internal, anyrange)
+RETURNS internal
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT;
+
+CREATE OR REPLACE FUNCTION my_range_agg_finalfn(internal, anyrange)
+RETURNS anymultirange
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT;
+
+CREATE AGGREGATE my_range_agg(anyrange) {
+  SFUNC = my_range_agg_transfn,
+  STYPE = internal,
+  FINALFUNC = my_range_agg_finalfn
+};
+</programlisting>
+      </para>
+
+       <para>
+        The matching code in the C module could then follow this example:
+
+<programlisting>
+Datum
+my_range_agg_transfn(PG_FUNCTION_ARGS)
+{
+    MemoryContext    aggContext;
+    Oid              rngtypoid;
+    ArrayBuildState *state;
+
+    if (!AggCheckCallContext(fcinfo, &amp;aggContext))
+        elog(ERROR, "range_agg_transfn called in non-aggregate context");
+
+    rngtypoid = get_fn_expr_argtype(fcinfo-&gt;flinfo, 1);
+    if (!type_is_range(rngtypoid))
+        elog(ERROR, "range_agg must be called with a range");
+
+    if (PG_ARGISNULL(0))
+        state = initArrayResult(rngtypoid, aggContext, false);
+    else
+        state = (ArrayBuildState *) PG_GETARG_POINTER(0);
+
+    /* skip NULLs */
+    if (!PG_ARGISNULL(1))
+        accumArrayResult(state, PG_GETARG_DATUM(1), false, rngtypoid, aggContext);
+
+    PG_RETURN_POINTER(state);
+}
+
+Datum
+my_range_agg_finalfn(PG_FUNCTION_ARGS)
+{
+    MemoryContext    aggContext;
+    Oid              mltrngtypoid;
+    TypeCacheEntry  *typcache;
+    ArrayBuildState *state;
+    int32            range_count;
+    RangeType      **ranges;
+    int              i;
+
+    if (!AggCheckCallContext(fcinfo, &amp;aggContext))
+        elog(ERROR, "range_agg_finalfn called in non-aggregate context");
+
+    state = PG_ARGISNULL(0) ? NULL : (ArrayBuildState *) PG_GETARG_POINTER(0);
+    if (state == NULL)
+        /* This shouldn't be possible, but just in case.... */
+        PG_RETURN_NULL();
+
+    /* Also return NULL if we had zero inputs, like other aggregates */
+    range_count = state-&gt;nelems;
+    if (range_count == 0)
+        PG_RETURN_NULL();
+
+    mltrngtypoid = get_fn_expr_rettype(fcinfo-&gt;flinfo);
+    typcache = multirange_get_typcache(fcinfo, mltrngtypoid);
+
+    ranges = palloc0(range_count * sizeof(RangeType *));
+    for (i = 0; i &lt; range_count; i++)
+        ranges[i] = DatumGetRangeTypeP(state-&gt;dvalues[i]);
+
+    PG_RETURN_MULTIRANGE_P(make_multirange(mltrngtypoid, typcache-&gt;rngtype, range_count, ranges));
+}
+</programlisting>
       </para>
      </listitem>
     </varlistentry>

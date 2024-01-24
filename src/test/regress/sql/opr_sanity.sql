@@ -1241,6 +1241,7 @@ WHERE a1.amopfamily = 0 OR a1.amoplefttype = 0 OR a1.amoprighttype = 0
 SELECT a1.amopfamily, a1.amopstrategy
 FROM pg_amop as a1
 WHERE NOT ((a1.amoppurpose = 's' AND a1.amopsortfamily = 0) OR
+           (a1.amoppurpose = 'p' AND a1.amopsortfamily = 0) OR
            (a1.amoppurpose = 'o' AND a1.amopsortfamily <> 0));
 
 -- amopmethod must match owning opfamily's opfmethod

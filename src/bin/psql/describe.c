@@ -1943,6 +1943,8 @@ describeOneTableDetails(const char *schemaname,
 
 	appendPQExpBufferStr(&buf, "\nFROM pg_catalog.pg_attribute a");
 	appendPQExpBuffer(&buf, "\nWHERE a.attrelid = '%s' AND a.attnum > 0 AND NOT a.attisdropped", oid);
+	if (pset.sversion >= 170000)
+		appendPQExpBuffer(&buf, "\nAND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_period p WHERE p.perrelid = a.attrelid AND p.perrange = a.attnum)");
 	appendPQExpBufferStr(&buf, "\nORDER BY a.attnum;");
 
 	res = PSQLexec(buf.data);
@@ -2364,6 +2366,40 @@ describeOneTableDetails(const char *schemaname,
 		/* Footer information about a table */
 		PGresult   *result = NULL;
 		int			tuples = 0;
+
+		/* print periods */
+		if (pset.sversion >= 170000)
+		{
+			printfPQExpBuffer(&buf,
+							  "SELECT quote_ident(p.pername), quote_ident(s.attname) AS startatt, quote_ident(e.attname) AS endatt\n"
+							  "FROM pg_period AS p\n"
+							  "JOIN pg_attribute AS s ON (s.attrelid, s.attnum) = (p.perrelid, p.perstart)\n"
+							  "JOIN pg_attribute AS e ON (e.attrelid, e.attnum) = (p.perrelid, p.perend)\n"
+							  "WHERE p.perrelid = '%s'\n"
+							  "ORDER BY 1;",
+							  oid);
+			result = PSQLexec(buf.data);
+			if (!result)
+				goto error_return;
+			else
+				tuples = PQntuples(result);
+
+			if (tuples > 0)
+			{
+				printTableAddFooter(&cont, _("Periods:"));
+				for (i = 0; i < tuples; i++)
+				{
+					/* untranslated constraint name and def */
+					printfPQExpBuffer(&buf, "    %s (%s, %s)",
+									  PQgetvalue(result, i, 0),
+									  PQgetvalue(result, i, 1),
+									  PQgetvalue(result, i, 2));
+
+					printTableAddFooter(&cont, buf.data);
+				}
+			}
+			PQclear(result);
+		}
 
 		/* print indexes */
 		if (tableinfo.hasindex)

@@ -1942,6 +1942,7 @@ WHERE a1.amopfamily = 0 OR a1.amoplefttype = 0 OR a1.amoprighttype = 0
 SELECT a1.amopfamily, a1.amopstrategy
 FROM pg_amop as a1
 WHERE NOT ((a1.amoppurpose = 's' AND a1.amopsortfamily = 0) OR
+           (a1.amoppurpose = 'p' AND a1.amopsortfamily = 0) OR
            (a1.amoppurpose = 'o' AND a1.amopsortfamily <> 0));
  amopfamily | amopstrategy 
 ------------+--------------
@@ -2008,6 +2009,9 @@ ORDER BY 1, 2, 3;
         783 |           28 | <@
         783 |           29 | <^
         783 |           30 | >^
+        783 |           31 | #
+        783 |           31 | *
+        783 |           32 | @-
         783 |           48 | <@
         783 |           68 | <@
        2742 |            1 | &&
@@ -2088,7 +2092,7 @@ ORDER BY 1, 2, 3;
        4000 |           28 | ^@
        4000 |           29 | <^
        4000 |           30 | >^
-(124 rows)
+(127 rows)
 
 -- Check that all opclass search operators have selectivity estimators.
 -- This is not absolutely required, but it seems a reasonable thing

@@ -372,7 +372,7 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 					pstate->p_is_insert = false;
 					action->targetList =
 						transformUpdateTargetList(pstate,
-												  mergeWhenClause->targetList);
+												  mergeWhenClause->targetList, NULL);
 				}
 				break;
 			case CMD_DELETE:

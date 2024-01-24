@@ -1108,6 +1108,9 @@
 { amopfamily => 'gist/box_ops', amoplefttype => 'box', amoprighttype => 'point',
   amopstrategy => '15', amoppurpose => 'o', amopopr => '<->(box,point)',
   amopmethod => 'gist', amopsortfamily => 'btree/float_ops' },
+{ amopfamily => 'gist/box_ops', amoplefttype => 'box', amoprighttype => 'box',
+  amopstrategy => '31', amoppurpose => 'p', amopopr => '#(box,box)',
+  amopmethod => 'gist' },
 
 # gist point_ops
 { amopfamily => 'gist/point_ops', amoplefttype => 'point',
@@ -1397,6 +1400,12 @@
 { amopfamily => 'gist/range_ops', amoplefttype => 'anyrange',
   amoprighttype => 'anyrange', amopstrategy => '18',
   amopopr => '=(anyrange,anyrange)', amopmethod => 'gist' },
+{ amopfamily => 'gist/range_ops', amoplefttype => 'anyrange',
+  amoprighttype => 'anyrange', amopstrategy => '31', amoppurpose => 'p',
+  amopopr => '*(anyrange,anyrange)', amopmethod => 'gist' },
+{ amopfamily => 'gist/range_ops', amoplefttype => 'anyrange',
+  amoprighttype => 'anyrange', amopstrategy => '32', amoppurpose => 'p',
+  amopopr => '@-(anyrange,anyrange)', amopmethod => 'gist' },
 
 # GiST multirange_ops
 { amopfamily => 'gist/multirange_ops', amoplefttype => 'anymultirange',
@@ -1453,6 +1462,12 @@
 { amopfamily => 'gist/multirange_ops', amoplefttype => 'anymultirange',
   amoprighttype => 'anymultirange', amopstrategy => '18',
   amopopr => '=(anymultirange,anymultirange)', amopmethod => 'gist' },
+{ amopfamily => 'gist/multirange_ops', amoplefttype => 'anymultirange',
+  amoprighttype => 'anymultirange', amopstrategy => '31', amoppurpose => 'p',
+  amopopr => '*(anymultirange,anymultirange)', amopmethod => 'gist' },
+{ amopfamily => 'gist/multirange_ops', amoplefttype => 'anymultirange',
+  amoprighttype => 'anymultirange', amopstrategy => '32', amoppurpose => 'p',
+  amopopr => '@-(anymultirange,anymultirange)', amopmethod => 'gist' },
 
 # btree multirange_ops
 { amopfamily => 'btree/multirange_ops', amoplefttype => 'anymultirange',

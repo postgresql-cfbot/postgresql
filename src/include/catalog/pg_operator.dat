@@ -3457,5 +3457,11 @@
   oprresult => 'bool', oprcom => '<<(anymultirange,anymultirange)',
   oprcode => 'multirange_after_multirange', oprrest => 'multirangesel',
   oprjoin => 'scalargtjoinsel' },
+{ oid => '8409', descr => 'range without portion',
+  oprname => '@-', oprleft => 'anyrange', oprright => 'anyrange',
+  oprresult => 'anyarray', oprcode => 'range_without_portion' },
+{ oid => '8407', descr => 'multirange without portion',
+  oprname => '@-', oprleft => 'anymultirange', oprright => 'anymultirange',
+  oprresult => 'anyarray', oprcode => 'multirange_without_portion' },
 
 ]

@@ -3708,7 +3708,8 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 						List *updateColnosLists,
 						List *withCheckOptionLists, List *returningLists,
 						List *rowMarks, OnConflictExpr *onconflict,
-						List *mergeActionLists, int epqParam)
+						List *mergeActionLists, ForPortionOfExpr *forPortionOf,
+						int epqParam)
 {
 	ModifyTablePath *pathnode = makeNode(ModifyTablePath);
 
@@ -3774,6 +3775,7 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->returningLists = returningLists;
 	pathnode->rowMarks = rowMarks;
 	pathnode->onconflict = onconflict;
+	pathnode->forPortionOf = forPortionOf;
 	pathnode->epqParam = epqParam;
 	pathnode->mergeActionLists = mergeActionLists;
 

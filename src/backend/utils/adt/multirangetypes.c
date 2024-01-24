@@ -1226,6 +1226,55 @@ multirange_minus_internal(Oid mltrngtypoid, TypeCacheEntry *rangetyp,
 	return make_multirange(mltrngtypoid, rangetyp, range_count3, ranges3);
 }
 
+/*
+ * multirange minus but returning an array of one,
+ * or zero if the result would be empty.
+ */
+
+Datum
+multirange_without_portion(PG_FUNCTION_ARGS)
+{
+	MultirangeType *mr1 = PG_GETARG_MULTIRANGE_P(0);
+	MultirangeType *mr2 = PG_GETARG_MULTIRANGE_P(1);
+	Oid			mltrngtypoid = MultirangeTypeGetOid(mr1);
+	TypeCacheEntry *typcache;
+	TypeCacheEntry *rangetyp;
+	int32		range_count1;
+	int32		range_count2;
+	RangeType **ranges1;
+	RangeType **ranges2;
+	MultirangeType *mr;
+	Datum	datums[1];
+	ArrayType *ret;
+
+	typcache = multirange_get_typcache(fcinfo, mltrngtypoid);
+	rangetyp = typcache->rngtype;
+
+	if (MultirangeIsEmpty(mr1) || MultirangeIsEmpty(mr2))
+		mr = mr1;
+	else
+	{
+		multirange_deserialize(typcache->rngtype, mr1, &range_count1, &ranges1);
+		multirange_deserialize(typcache->rngtype, mr2, &range_count2, &ranges2);
+
+		mr = multirange_minus_internal(mltrngtypoid,
+									   rangetyp,
+									   range_count1,
+									   ranges1,
+									   range_count2,
+									   ranges2);
+	}
+
+	if (MultirangeIsEmpty(mr))
+		PG_RETURN_ARRAYTYPE_P(construct_empty_array(typcache->type_id));
+	else
+	{
+		datums[0] = MultirangeTypePGetDatum(mr);
+		ret = construct_array(datums, 1, typcache->type_id, typcache->typlen, typcache->typbyval, typcache->typalign);
+		PG_RETURN_ARRAYTYPE_P(ret);
+	}
+}
+
 /* multirange intersection */
 Datum
 multirange_intersect(PG_FUNCTION_ARGS)

@@ -462,7 +462,9 @@ _readConstraint(void)
 		case CONSTR_FOREIGN:
 			READ_NODE_FIELD(pktable);
 			READ_NODE_FIELD(fk_attrs);
+			READ_NODE_FIELD(fk_period);
 			READ_NODE_FIELD(pk_attrs);
+			READ_NODE_FIELD(pk_period);
 			READ_CHAR_FIELD(fk_matchtype);
 			READ_CHAR_FIELD(fk_upd_action);
 			READ_CHAR_FIELD(fk_del_action);

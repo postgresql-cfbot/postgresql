@@ -15,7 +15,9 @@
 #define JSONPATH_H
 
 #include "fmgr.h"
+#include "executor/tablefunc.h"
 #include "nodes/pg_list.h"
+#include "nodes/primnodes.h"
 #include "utils/jsonb.h"
 
 typedef struct
@@ -191,6 +193,7 @@ extern bool jspGetBool(JsonPathItem *v);
 extern char *jspGetString(JsonPathItem *v, int32 *len);
 extern bool jspGetArraySubscript(JsonPathItem *v, JsonPathItem *from,
 								 JsonPathItem *to, int i);
+extern bool jspIsMutable(JsonPath *path, List *varnames, List *varexprs);
 
 extern const char *jspOperationName(JsonPathItemType type);
 
@@ -267,5 +270,29 @@ extern JsonPathParseResult *parsejsonpath(const char *str, int len,
 extern bool jspConvertRegexFlags(uint32 xflags, int *result,
 								 struct Node *escontext);
 
+
+/*
+ * Evaluation of jsonpath
+ */
+
+/* External variable passed into jsonpath. */
+typedef struct JsonPathVariable
+{
+	char	   *name;
+	Oid			typid;
+	int32		typmod;
+	Datum		value;
+	bool		isnull;
+} JsonPathVariable;
+
+
+/* SQL/JSON item */
+extern bool JsonPathExists(Datum jb, JsonPath *path, bool *error, List *vars);
+extern Datum JsonPathQuery(Datum jb, JsonPath *jp, JsonWrapper wrapper,
+						   bool *empty, bool *error, List *vars);
+extern JsonbValue *JsonPathValue(Datum jb, JsonPath *jp, bool *empty,
+								 bool *error, List *vars);
+
+extern PGDLLIMPORT const TableFuncRoutine JsonbTableRoutine;
 
 #endif

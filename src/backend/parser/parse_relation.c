@@ -2073,17 +2073,19 @@ addRangeTableEntryForTableFunc(ParseState *pstate,
 	Assert(list_length(tf->coltypmods) == list_length(tf->colnames));
 	Assert(list_length(tf->colcollations) == list_length(tf->colnames));
 
-	refname = alias ? alias->aliasname : pstrdup("xmltable");
-
 	rte->rtekind = RTE_TABLEFUNC;
 	rte->relid = InvalidOid;
 	rte->subquery = NULL;
 	rte->tablefunc = tf;
+	rte->tablefunc_name = pstrdup(tf->functype == TFT_XMLTABLE ?
+								  "XMLTABLE" : "JSON_TABLE");
 	rte->coltypes = tf->coltypes;
 	rte->coltypmods = tf->coltypmods;
 	rte->colcollations = tf->colcollations;
 	rte->alias = alias;
 
+	refname = alias ? alias->aliasname :
+		pstrdup(tf->functype == TFT_XMLTABLE ? "xmltable" : "json_table");
 	eref = alias ? copyObject(alias) : makeAlias(refname, NIL);
 	numaliases = list_length(eref->colnames);
 
@@ -2096,7 +2098,7 @@ addRangeTableEntryForTableFunc(ParseState *pstate,
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
 				 errmsg("%s function has %d columns available but %d columns specified",
-						"XMLTABLE",
+						tf->functype == TFT_XMLTABLE ? "XMLTABLE" : "JSON_TABLE",
 						list_length(tf->colnames), numaliases)));
 
 	rte->eref = eref;

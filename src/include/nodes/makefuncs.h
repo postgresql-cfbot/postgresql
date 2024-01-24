@@ -100,6 +100,7 @@ extern IndexInfo *makeIndexInfo(int numattrs, int numkeyattrs, Oid amoid,
 								bool isready, bool concurrent,
 								bool summarizing);
 
+extern Node *makeStringConst(char *str, int location);
 extern DefElem *makeDefElem(char *name, Node *arg, int location);
 extern DefElem *makeDefElemExtended(char *nameSpace, char *name, Node *arg,
 									DefElemAction defaction, int location);
@@ -112,6 +113,16 @@ extern JsonFormat *makeJsonFormat(JsonFormatType type, JsonEncoding encoding,
 								  int location);
 extern JsonValueExpr *makeJsonValueExpr(Expr *raw_expr, Expr *formatted_expr,
 										JsonFormat *format);
+extern JsonBehavior *makeJsonBehavior(JsonBehaviorType type, Node *expr,
+									  JsonCoercion *coercion, int location);
+extern JsonTablePath *makeJsonTablePath(Const *pathvalue, char *pathname);
+extern Node *makeJsonTablePathSpec(char *string, char *name,
+								   int string_location, int name_location);
+extern Node *makeJsonTableDefaultPlan(JsonTablePlanJoinType join_type,
+									  int location);
+extern Node *makeJsonTableSimplePlan(char *pathname, int location);
+extern Node *makeJsonTableJoinedPlan(JsonTablePlanJoinType type,
+									 Node *plan1, Node *plan2, int location);
 extern Node *makeJsonKeyValue(Node *key, Node *value);
 extern Node *makeJsonIsPredicate(Node *expr, JsonFormat *format,
 								 JsonValueType item_type, bool unique_keys,

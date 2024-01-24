@@ -1,0 +1,20 @@
+[NO_PID]: ECPGdebug: set to 1
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: ECPGconnect: opening database ecpg1_regression on <DEFAULT> port <DEFAULT>  
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: ECPGsetcommit on line 14: action "on"; connection "ecpg1_regression"
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: ecpg_execute on line 16: query: select * from json_table ( jsonb 'null' , '$[*]' as p0 columns ( nested '$' as p1 columns ( nested path '$' as p11 columns ( foo int ) , nested path '$' as p12 columns ( bar int ) ) , nested path '$' as p2 columns ( nested path '$' as p21 columns ( baz int ) ) ) plan ( p1 ) ) jt; with 0 parameter(s) on connection ecpg1_regression
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: ecpg_execute on line 16: using PQexec
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: ecpg_check_PQresult on line 16: bad response - ERROR:  invalid JSON_TABLE plan
+LINE 1: ...ted path '$' as p21 columns ( baz int ) ) ) plan ( p1 ) ) jt
+                                                              ^
+DETAIL:  PATH name mismatch: expected p0 but p1 is given.
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: raising sqlstate 42601 (sqlcode -400): invalid JSON_TABLE plan on line 16
+[NO_PID]: sqlca: code: -400, state: 42601
+SQL error: invalid JSON_TABLE plan on line 16
+[NO_PID]: ecpg_finish: connection ecpg1_regression closed
+[NO_PID]: sqlca: code: 0, state: 00000

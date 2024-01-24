@@ -528,6 +528,7 @@ _readRangeTblEntry(void)
 			break;
 		case RTE_TABLEFUNC:
 			READ_NODE_FIELD(tablefunc);
+			READ_STRING_FIELD(tablefunc_name);
 			/* The RTE must have a copy of the column type info, if any */
 			if (local_node->tablefunc)
 			{

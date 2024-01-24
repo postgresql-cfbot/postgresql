@@ -539,6 +539,22 @@ makeFuncExpr(Oid funcid, Oid rettype, List *args,
 }
 
 /*
+ * makeStringConst -
+ * 	build a A_Const node of type T_String for given string
+ */
+Node *
+makeStringConst(char *str, int location)
+{
+	A_Const	   *n = makeNode(A_Const);
+
+	n->val.sval.type = T_String;
+	n->val.sval.sval = str;
+	n->location = location;
+
+   return (Node *) n;
+}
+
+/*
  * makeDefElem -
  *	build a DefElem node
  *
@@ -855,6 +871,116 @@ makeJsonValueExpr(Expr *raw_expr, Expr *formatted_expr,
 	jve->format = format;
 
 	return jve;
+}
+
+/*
+ * makeJsonBehavior -
+ *	  creates a JsonBehavior node
+ */
+JsonBehavior *
+makeJsonBehavior(JsonBehaviorType type, Node *expr, JsonCoercion *coercion,
+				 int location)
+{
+	JsonBehavior *behavior = makeNode(JsonBehavior);
+
+	behavior->btype = type;
+	behavior->expr = expr;
+	behavior->coercion = coercion;
+	behavior->location = location;
+
+	return behavior;
+}
+
+/*
+ * makeJsonTablePath -
+ *		Make JsonTablePath node from given path string and name (if any)
+ */
+JsonTablePath *
+makeJsonTablePath(Const *pathvalue, char *pathname)
+{
+	JsonTablePath *path = makeNode(JsonTablePath);
+
+	Assert(IsA(pathvalue, Const));
+	path->value = pathvalue;
+	if (pathname)
+		path->name = pathname;
+
+	return path;
+}
+
+/*
+ * makeJsonTablePathSpec -
+ *		Make JsonTablePathSpec node from given path string and name (if any)
+ */
+Node *
+makeJsonTablePathSpec(char *string, char *name, int string_location,
+					  int name_location)
+{
+	JsonTablePathSpec *pathspec = makeNode(JsonTablePathSpec);
+
+	Assert(string != NULL);
+	pathspec->string = makeStringConst(string, string_location);
+	if (name != NULL)
+		pathspec->name = pstrdup(name);
+
+	pathspec->name_location = name_location;
+	pathspec->location = string_location;
+
+	return (Node *) pathspec;
+}
+
+/*
+ * makeJsonTableDefaultPlan -
+ *	   creates a JsonTablePlanSpec node to represent a "default" JSON_TABLE plan
+ *	   with given join strategy
+ */
+Node *
+makeJsonTableDefaultPlan(JsonTablePlanJoinType join_type, int location)
+{
+	JsonTablePlanSpec *n = makeNode(JsonTablePlanSpec);
+
+	n->plan_type = JSTP_DEFAULT;
+	n->join_type = join_type;
+	n->location = location;
+
+	return (Node *) n;
+}
+
+/*
+ * makeJsonTableSimplePlan -
+ *	   creates a JsonTablePlanSpec node to represent a "simple" JSON_TABLE plan
+ *	   for given PATH
+ */
+Node *
+makeJsonTableSimplePlan(char *pathname, int location)
+{
+	JsonTablePlanSpec *n = makeNode(JsonTablePlanSpec);
+
+	n->plan_type = JSTP_SIMPLE;
+	n->pathname = pathname;
+	n->location = location;
+
+	return (Node *) n;
+}
+
+/*
+ * makeJsonTableJoinedPlan -
+ *	   creates a JsonTablePlanSpec node to represent join between the given
+ *	   pair of plans
+ */
+Node *
+makeJsonTableJoinedPlan(JsonTablePlanJoinType type, Node *plan1, Node *plan2,
+						int location)
+{
+	JsonTablePlanSpec *n = makeNode(JsonTablePlanSpec);
+
+	n->plan_type = JSTP_JOINED;
+	n->join_type = type;
+	n->plan1 = castNode(JsonTablePlanSpec, plan1);
+	n->plan2 = castNode(JsonTablePlanSpec, plan2);
+	n->location = location;
+
+	return (Node *) n;
 }
 
 /*

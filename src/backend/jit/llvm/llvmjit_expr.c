@@ -1930,6 +1930,150 @@ llvm_compile_expr(ExprState *state)
 				LLVMBuildBr(b, opblocks[opno + 1]);
 				break;
 
+			case EEOP_JSONEXPR_PATH:
+				{
+					JsonExprState *jsestate = op->d.jsonexpr.jsestate;
+					LLVMValueRef v_ret;
+
+					/*
+					 * Call ExecEvalJsonExprPath().  It returns the address of
+					 * the step to perform next.
+					 */
+					v_ret = build_EvalXFunc(b, mod, "ExecEvalJsonExprPath",
+											v_state, op, v_econtext);
+
+					/*
+					 * Build a switch to map the return value, which is a
+					 * runtime value of the step address to perform next, to
+					 * either jump_empty, jump_error, or the coercion
+					 * expression.
+					 */
+					if (jsestate->jump_empty >= 0 ||
+						jsestate->jump_error >= 0 ||
+						jsestate->jump_eval_result_coercion >= 0 ||
+						jsestate->num_item_coercions > 0)
+					{
+						int			i;
+						LLVMValueRef v_jump_empty;
+						LLVMValueRef v_jump_error;
+						LLVMValueRef v_jump_coercion;
+						LLVMValueRef v_switch;
+						LLVMBasicBlockRef b_done,
+									b_empty,
+									b_error,
+									b_result_coercion,
+								   *b_item_coercions = NULL;
+
+						b_empty =
+							l_bb_before_v(opblocks[opno + 1],
+										  "op.%d.jsonexpr_empty", opno);
+						b_error =
+							l_bb_before_v(opblocks[opno + 1],
+										  "op.%d.jsonexpr_error", opno);
+						b_result_coercion =
+							l_bb_before_v(opblocks[opno + 1],
+										  "op.%d.jsonexpr_result_coercion", opno);
+						if (jsestate->num_item_coercions > 0)
+						{
+							b_item_coercions = palloc(sizeof(LLVMBasicBlockRef) *
+													  jsestate->num_item_coercions);
+							for (i = 0; i < jsestate->num_item_coercions; i++)
+							{
+								b_item_coercions[i] =
+									l_bb_before_v(opblocks[opno + 1],
+												  "op.%d.jsonexpr_item_coercion.%d",
+												  opno, i);
+							}
+						}
+						b_done =
+							l_bb_before_v(opblocks[opno + 1],
+										  "op.%d.jsonexpr_done", opno);
+
+						v_switch = LLVMBuildSwitch(b,
+												   v_ret,
+												   b_done,
+												   jsestate->num_item_coercions + 3);
+						/* Returned jsestate->jump_empty? */
+						if (jsestate->jump_empty >= 0)
+						{
+							v_jump_empty = l_int32_const(lc, jsestate->jump_empty);
+							LLVMAddCase(v_switch, v_jump_empty, b_empty);
+						}
+						/* Returned jsestate->jump_error? */
+						if (jsestate->jump_error >= 0)
+						{
+							v_jump_error = l_int32_const(lc, jsestate->jump_error);
+							LLVMAddCase(v_switch, v_jump_error, b_error);
+						}
+						/* Returned jsestate->jump_eval_result_coercion? */
+						if (jsestate->jump_eval_result_coercion >= 0)
+						{
+							v_jump_coercion = l_int32_const(lc, jsestate->jump_eval_result_coercion);
+							LLVMAddCase(v_switch, v_jump_coercion, b_result_coercion);
+						}
+
+						/*
+						 * Returned one of
+						 * jsestate->eval_item_coercion_jumps[]?
+						 */
+						for (i = 0; i < jsestate->num_item_coercions; i++)
+						{
+							if (jsestate->eval_item_coercion_jumps[i] >= 0)
+							{
+								v_jump_coercion = l_int32_const(lc, jsestate->eval_item_coercion_jumps[i]);
+								LLVMAddCase(v_switch, v_jump_coercion, b_item_coercions[i]);
+							}
+						}
+
+						/* ON EMPTY code */
+						LLVMPositionBuilderAtEnd(b, b_empty);
+						if (jsestate->jump_empty >= 0)
+							LLVMBuildBr(b, opblocks[jsestate->jump_empty]);
+						else
+							LLVMBuildUnreachable(b);
+						/* ON ERROR code */
+						LLVMPositionBuilderAtEnd(b, b_error);
+						if (jsestate->jump_error >= 0)
+							LLVMBuildBr(b, opblocks[jsestate->jump_error]);
+						else
+							LLVMBuildUnreachable(b);
+						/* result_coercion code */
+						LLVMPositionBuilderAtEnd(b, b_result_coercion);
+						if (jsestate->jump_eval_result_coercion >= 0)
+							LLVMBuildBr(b, opblocks[jsestate->jump_eval_result_coercion]);
+						else
+							LLVMBuildUnreachable(b);
+						/* item coercion code blocks */
+						for (i = 0; i < jsestate->num_item_coercions; i++)
+						{
+							LLVMPositionBuilderAtEnd(b, b_item_coercions[i]);
+							if (jsestate->eval_item_coercion_jumps[i] >= 0)
+								LLVMBuildBr(b, opblocks[jsestate->eval_item_coercion_jumps[i]]);
+							else
+								LLVMBuildUnreachable(b);
+						}
+
+						LLVMPositionBuilderAtEnd(b, b_done);
+					}
+
+					LLVMBuildBr(b, opblocks[opno + 1]);
+					break;
+				}
+
+			case EEOP_JSONEXPR_COERCION:
+				build_EvalXFunc(b, mod, "ExecEvalJsonCoercion",
+								v_state, op, v_econtext);
+
+				LLVMBuildBr(b, opblocks[opno + 1]);
+				break;
+
+			case EEOP_JSONEXPR_COERCION_FINISH:
+				build_EvalXFunc(b, mod, "ExecEvalJsonCoercionFinish",
+								v_state, op);
+
+				LLVMBuildBr(b, opblocks[opno + 1]);
+				break;
+
 			case EEOP_AGGREF:
 				{
 					LLVMValueRef v_aggno;

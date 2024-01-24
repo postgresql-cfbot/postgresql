@@ -3892,7 +3892,7 @@ ExplainTargetRel(Plan *plan, Index rti, ExplainState *es)
 			break;
 		case T_TableFuncScan:
 			Assert(rte->rtekind == RTE_TABLEFUNC);
-			objectname = "xmltable";
+			objectname = rte->tablefunc_name;
 			objecttag = "Table Function Name";
 			break;
 		case T_ValuesScan:

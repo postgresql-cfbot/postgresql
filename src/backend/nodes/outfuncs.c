@@ -531,6 +531,7 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 			break;
 		case RTE_TABLEFUNC:
 			WRITE_NODE_FIELD(tablefunc);
+			WRITE_STRING_FIELD(tablefunc_name);
 			break;
 		case RTE_VALUES:
 			WRITE_NODE_FIELD(values_lists);

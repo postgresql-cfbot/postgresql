@@ -1008,6 +1008,93 @@ typedef struct DomainConstraintState
 	ExprState  *check_exprstate;	/* check_expr's eval state, or NULL */
 } DomainConstraintState;
 
+/*
+ * Information about the state of JsonPath* evaluation.
+ */
+typedef struct JsonExprPostEvalState
+{
+	/* Did JsonPath* evaluation cause an error? */
+	NullableDatum error;
+
+	/* Is the result of JsonPath* evaluation empty? */
+	NullableDatum empty;
+
+	/*
+	 * ExecEvalJsonExprPath() will set this to the address of the step to use
+	 * to coerce the result of JsonPath* evaluation to the RETURNING type.
+	 * Also see the description of possible step addresses that this could be
+	 * set to in the definition of JsonExprState.
+	 */
+	int			jump_eval_coercion;
+} JsonExprPostEvalState;
+
+/* State for evaluating a JsonExpr, too big to inline */
+typedef struct JsonExprState
+{
+	/* original expression node */
+	JsonExpr   *jsexpr;
+
+	/* value/isnull for formatted_expr */
+	NullableDatum formatted_expr;
+
+	/* value/isnull for pathspec */
+	NullableDatum pathspec;
+
+	/* JsonPathVariable entries for passing_values */
+	List	   *args;
+
+	/*
+	 * Per-row result status info populated by ExecEvalJsonExprPath() and
+	 * ExecEvalJsonCoercionFinish().
+	 */
+	JsonExprPostEvalState post_eval;
+
+	/*
+	 * Addresses of the steps that implements the non-ERROR variant of ON
+	 * EMPTY and ON ERROR behaviors, respectively.
+	 */
+	int			jump_empty;
+	int			jump_error;
+
+	/*
+	 * Addresses of steps to perform the coercion of the JsonPath* result
+	 * value to the RETURNING type.  Each address points to either 1) a
+	 * special EEOP_JSONEXPR_COERCION step that handles coercion using the
+	 * RETURNING type's input function or by using json_via_populate(), or 2)
+	 * an expression such as CoerceViaIO.  It may be -1 if no coercion is
+	 * necessary.
+	 *
+	 * jump_eval_result_coercion points to the step to evaluate the coercion
+	 * given in JsonExpr.result_coercion.
+	 */
+	int			jump_eval_result_coercion;
+
+	/* Jump to end to skip all the steps after EEOP_JSONEXPR_PATH. */
+	int			jump_end;
+
+	/*
+	 * eval_item_coercion_jumps is an array of num_item_coercions elements
+	 * each containing a step address to evaluate the coercion from a value of
+	 * the given JsonItemType to the RETURNING type, or -1 if no coercion is
+	 * necessary.  item_coercion_via_expr is an array of boolean flags of the
+	 * same length that indicates whether each valid step address in the
+	 * eval_item_coercion_jumps array points to an expression or a
+	 * EEOP_JSONEXPR_COERCION step.  ExecEvalJsonExprPath() will cause an
+	 * error if it's the latter, because that mode of coercion is not
+	 * supported for all JsonItemTypes.
+	 */
+	int			num_item_coercions;
+	int		   *eval_item_coercion_jumps;
+	bool	   *item_coercion_via_expr;
+
+	/*
+	 * For passing when initializing a EEOP_IOCOERCE_SAFE step for any
+	 * CoerceViaIO nodes in the expression that must be evaluated in an
+	 * error-safe manner.
+	 */
+	ErrorSaveContext escontext;
+} JsonExprState;
+
 
 /* ----------------------------------------------------------------
  *				 Executor State Trees
@@ -1882,6 +1969,8 @@ typedef struct TableFuncScanState
 	ExprState  *rowexpr;		/* state for row-generating expression */
 	List	   *colexprs;		/* state for column-generating expression */
 	List	   *coldefexprs;	/* state for column default expressions */
+	List	   *colvalexprs;	/* state for column value expression */
+	List	   *passingvalexprs;	/* state for PASSING argument expression */
 	List	   *ns_names;		/* same as TableFunc.ns_names */
 	List	   *ns_uris;		/* list of states of namespace URI exprs */
 	Bitmapset  *notnulls;		/* nullability flag for each output column */

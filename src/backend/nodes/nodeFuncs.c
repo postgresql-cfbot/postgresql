@@ -3694,47 +3694,32 @@ range_table_mutator_impl(List *rtable,
 		RangeTblEntry *newrte;
 
 		FLATCOPY(newrte, rte, RangeTblEntry);
-		switch (rte->rtekind)
+
+		MUTATE(newrte->tablesample, rte->tablesample, TableSampleClause *);
+
+		if (!(flags & QTW_IGNORE_RT_SUBQUERIES))
+			MUTATE(newrte->subquery, rte->subquery, Query *);
+		else
 		{
-			case RTE_RELATION:
-				MUTATE(newrte->tablesample, rte->tablesample,
-					   TableSampleClause *);
-				/* we don't bother to copy eref, aliases, etc; OK? */
-				break;
-			case RTE_SUBQUERY:
-				if (!(flags & QTW_IGNORE_RT_SUBQUERIES))
-					MUTATE(newrte->subquery, rte->subquery, Query *);
-				else
-				{
-					/* else, copy RT subqueries as-is */
-					newrte->subquery = copyObject(rte->subquery);
-				}
-				break;
-			case RTE_JOIN:
-				if (!(flags & QTW_IGNORE_JOINALIASES))
-					MUTATE(newrte->joinaliasvars, rte->joinaliasvars, List *);
-				else
-				{
-					/* else, copy join aliases as-is */
-					newrte->joinaliasvars = copyObject(rte->joinaliasvars);
-				}
-				break;
-			case RTE_FUNCTION:
-				MUTATE(newrte->functions, rte->functions, List *);
-				break;
-			case RTE_TABLEFUNC:
-				MUTATE(newrte->tablefunc, rte->tablefunc, TableFunc *);
-				break;
-			case RTE_VALUES:
-				MUTATE(newrte->values_lists, rte->values_lists, List *);
-				break;
-			case RTE_CTE:
-			case RTE_NAMEDTUPLESTORE:
-			case RTE_RESULT:
-				/* nothing to do */
-				break;
+			/* else, copy RT subqueries as-is */
+			newrte->subquery = copyObject(rte->subquery);
 		}
+
+		if (!(flags & QTW_IGNORE_JOINALIASES))
+			MUTATE(newrte->joinaliasvars, rte->joinaliasvars, List *);
+		else
+		{
+			/* else, copy join aliases as-is */
+			newrte->joinaliasvars = copyObject(rte->joinaliasvars);
+		}
+
+		MUTATE(newrte->functions, rte->functions, List *);
+		MUTATE(newrte->tablefunc, rte->tablefunc, TableFunc *);
+		MUTATE(newrte->values_lists, rte->values_lists, List *);
 		MUTATE(newrte->securityQuals, rte->securityQuals, List *);
+
+		/* we don't bother to copy eref, aliases, etc; OK? */
+
 		newrt = lappend(newrt, newrte);
 	}
 	return newrt;

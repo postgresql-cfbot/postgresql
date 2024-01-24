@@ -1018,8 +1018,6 @@ typedef enum RTEKind
 
 typedef struct RangeTblEntry
 {
-	pg_node_attr(custom_read_write, custom_query_jumble)
-
 	NodeTag		type;
 
 	RTEKind		rtekind;		/* see above */
@@ -1029,6 +1027,14 @@ typedef struct RangeTblEntry
 	 * a union.  I didn't do this yet because the diffs would impact a lot of
 	 * code that is being actively worked on.  FIXME someday.
 	 */
+
+	/*
+	 * Fields valid in all RTEs:
+	 *
+	 * put alias + eref first to make dump more legible
+	 */
+	Alias	   *alias pg_node_attr(query_jumble_ignore);			/* user-written alias clause, if any */
+	Alias	   *eref pg_node_attr(query_jumble_ignore);			/* expanded reference names */
 
 	/*
 	 * Fields valid for a plain relation RTE (else zero):
@@ -1062,16 +1068,16 @@ typedef struct RangeTblEntry
 	 * tables to be invalidated if the underlying table is altered.
 	 */
 	Oid			relid;			/* OID of the relation */
-	char		relkind;		/* relation kind (see pg_class.relkind) */
-	int			rellockmode;	/* lock level that query requires on the rel */
+	char		relkind pg_node_attr(query_jumble_ignore);		/* relation kind (see pg_class.relkind) */
+	int			rellockmode pg_node_attr(query_jumble_ignore);	/* lock level that query requires on the rel */
 	struct TableSampleClause *tablesample;	/* sampling info, or NULL */
-	Index		perminfoindex;
+	Index		perminfoindex pg_node_attr(query_jumble_ignore);
 
 	/*
 	 * Fields valid for a subquery RTE (else NULL):
 	 */
 	Query	   *subquery;		/* the sub-query */
-	bool		security_barrier;	/* is from security_barrier view? */
+	bool		security_barrier pg_node_attr(query_jumble_ignore);	/* is from security_barrier view? */
 
 	/*
 	 * Fields valid for a join RTE (else NULL/zero):
@@ -1117,17 +1123,17 @@ typedef struct RangeTblEntry
 	 * joinleftcols/joinrighttcols.
 	 */
 	JoinType	jointype;		/* type of join */
-	int			joinmergedcols; /* number of merged (JOIN USING) columns */
-	List	   *joinaliasvars;	/* list of alias-var expansions */
-	List	   *joinleftcols;	/* left-side input column numbers */
-	List	   *joinrightcols;	/* right-side input column numbers */
+	int			joinmergedcols pg_node_attr(query_jumble_ignore); /* number of merged (JOIN USING) columns */
+	List	   *joinaliasvars pg_node_attr(query_jumble_ignore);	/* list of alias-var expansions */
+	List	   *joinleftcols pg_node_attr(query_jumble_ignore);	/* left-side input column numbers */
+	List	   *joinrightcols pg_node_attr(query_jumble_ignore);	/* right-side input column numbers */
 
 	/*
 	 * join_using_alias is an alias clause attached directly to JOIN/USING. It
 	 * is different from the alias field (below) in that it does not hide the
 	 * range variables of the tables being joined.
 	 */
-	Alias	   *join_using_alias;
+	Alias	   *join_using_alias pg_node_attr(query_jumble_ignore);
 
 	/*
 	 * Fields valid for a function RTE (else NIL/zero):
@@ -1138,7 +1144,7 @@ typedef struct RangeTblEntry
 	 * expandRTE().
 	 */
 	List	   *functions;		/* list of RangeTblFunction nodes */
-	bool		funcordinality; /* is this called WITH ORDINALITY? */
+	bool		funcordinality pg_node_attr(query_jumble_ignore); /* is this called WITH ORDINALITY? */
 
 	/*
 	 * Fields valid for a TableFunc RTE (else NULL):
@@ -1155,7 +1161,7 @@ typedef struct RangeTblEntry
 	 */
 	char	   *ctename;		/* name of the WITH list item */
 	Index		ctelevelsup;	/* number of query levels up */
-	bool		self_reference; /* is this a recursive self-reference? */
+	bool		self_reference pg_node_attr(query_jumble_ignore); /* is this a recursive self-reference? */
 
 	/*
 	 * Fields valid for CTE, VALUES, ENR, and TableFunc RTEs (else NIL):
@@ -1175,25 +1181,23 @@ typedef struct RangeTblEntry
 	 * all three lists (as well as an empty-string entry in eref).  Testing
 	 * for zero coltype is the standard way to detect a dropped column.
 	 */
-	List	   *coltypes;		/* OID list of column type OIDs */
-	List	   *coltypmods;		/* integer list of column typmods */
-	List	   *colcollations;	/* OID list of column collation OIDs */
+	List	   *coltypes pg_node_attr(query_jumble_ignore);		/* OID list of column type OIDs */
+	List	   *coltypmods pg_node_attr(query_jumble_ignore);		/* integer list of column typmods */
+	List	   *colcollations pg_node_attr(query_jumble_ignore);	/* OID list of column collation OIDs */
 
 	/*
 	 * Fields valid for ENR RTEs (else NULL/zero):
 	 */
 	char	   *enrname;		/* name of ephemeral named relation */
-	Cardinality enrtuples;		/* estimated or actual from caller */
+	Cardinality enrtuples pg_node_attr(query_jumble_ignore);		/* estimated or actual from caller */
 
 	/*
 	 * Fields valid in all RTEs:
 	 */
-	Alias	   *alias;			/* user-written alias clause, if any */
-	Alias	   *eref;			/* expanded reference names */
-	bool		lateral;		/* subquery, function, or values is LATERAL? */
+	bool		lateral pg_node_attr(query_jumble_ignore);		/* subquery, function, or values is LATERAL? */
 	bool		inh;			/* inheritance requested? */
-	bool		inFromCl;		/* present in FROM clause? */
-	List	   *securityQuals;	/* security barrier quals to apply, if any */
+	bool		inFromCl pg_node_attr(query_jumble_ignore);		/* present in FROM clause? */
+	List	   *securityQuals pg_node_attr(query_jumble_ignore);	/* security barrier quals to apply, if any */
 } RangeTblEntry;
 
 /*
@@ -2566,43 +2570,33 @@ typedef enum ConstrType			/* types of constraints */
 
 typedef struct Constraint
 {
-	pg_node_attr(custom_read_write)
-
 	NodeTag		type;
 	ConstrType	contype;		/* see above */
-
-	/* Fields used for most/all constraint types: */
 	char	   *conname;		/* Constraint name, or NULL if unnamed */
 	bool		deferrable;		/* DEFERRABLE? */
 	bool		initdeferred;	/* INITIALLY DEFERRED? */
-	int			location;		/* token location, or -1 if unknown */
-
-	/* Fields used for constraints with expressions (CHECK and DEFAULT): */
+	bool		skip_validation;	/* skip validation of existing rows? */
+	bool		initially_valid;	/* mark the new constraint as valid? */
 	bool		is_no_inherit;	/* is constraint non-inheritable? */
-	Node	   *raw_expr;		/* expr, as untransformed parse tree */
-	char	   *cooked_expr;	/* expr, as nodeToString representation */
+	Node	   *raw_expr;		/* CHECK or DEFAULT expression, as
+								 * untransformed parse tree */
+	char	   *cooked_expr;	/* CHECK or DEFAULT expression, as
+								 * nodeToString representation */
 	char		generated_when; /* ALWAYS or BY DEFAULT */
-
-	/* Fields used for "raw" NOT NULL constraints: */
-	int			inhcount;		/* initial inheritance count to apply */
-
-	/* Fields used for unique constraints (UNIQUE and PRIMARY KEY): */
+	int			inhcount;		/* initial inheritance count to apply, for
+								 * "raw" NOT NULL constraints */
 	bool		nulls_not_distinct; /* null treatment for UNIQUE constraints */
 	List	   *keys;			/* String nodes naming referenced key
-								 * column(s); also used for NOT NULL */
+								 * column(s); for UNIQUE/PK/NOT NULL */
 	List	   *including;		/* String nodes naming referenced nonkey
-								 * column(s) */
-
-	/* Fields used for EXCLUSION constraints: */
-	List	   *exclusions;		/* list of (IndexElem, operator name) pairs */
-
-	/* Fields used for index constraints (UNIQUE, PRIMARY KEY, EXCLUSION): */
+								 * column(s); for UNIQUE/PK */
+	List	   *exclusions;		/* list of (IndexElem, operator name) pairs;
+								 * for exclusion constraints */
 	List	   *options;		/* options from WITH clause */
 	char	   *indexname;		/* existing index to use; otherwise NULL */
 	char	   *indexspace;		/* index tablespace; NULL for default */
 	bool		reset_default_tblspc;	/* reset default_tablespace prior to
 										 * creating the index */
-	/* These could be, but currently are not, used for UNIQUE/PKEY: */
 	char	   *access_method;	/* index access method; NULL for default */
 	Node	   *where_clause;	/* partial index predicate */
 
@@ -2618,9 +2612,7 @@ typedef struct Constraint
 	Oid			old_pktable_oid;	/* pg_constraint.confrelid of my former
 									 * self */
 
-	/* Fields used for constraints that allow a NOT VALID specification */
-	bool		skip_validation;	/* skip validation of existing rows? */
-	bool		initially_valid;	/* mark the new constraint as valid? */
+	int			location;		/* token location, or -1 if unknown */
 } Constraint;
 
 /* ----------------------

@@ -1083,6 +1083,19 @@ AlterRoleSet(AlterRoleSetStmt *stmt)
 	return roleid;
 }
 
+/* list_sort comparator to sort ObjectAddress by objectId */
+static int
+objectId_comparator(const ListCell *p1, const ListCell *p2)
+{
+    Oid o1 = ((ObjectAddress *) lfirst(p1))->objectId;
+	Oid o2 = ((ObjectAddress *) lfirst(p2))->objectId;
+
+    if (o1 > o2)
+		return -1;
+	if (o1 < o2)
+		return 1;
+    return 0;
+}
 
 /*
  * DROP ROLE
@@ -1093,6 +1106,7 @@ DropRole(DropRoleStmt *stmt)
 	Relation	pg_authid_rel,
 				pg_auth_members_rel;
 	ListCell   *item;
+    ObjectAddress   *pre_object = NULL;
 	List	   *role_addresses = NIL;
 
 	if (!have_createrole_privilege())
@@ -1268,6 +1282,9 @@ DropRole(DropRoleStmt *stmt)
 		role_addresses = lappend(role_addresses, role_address);
 	}
 
+    /* Sort the role_addresses to avoid to remove same roleid repeatedly */
+    list_sort(role_addresses, objectId_comparator);
+
 	/*
 	 * Second pass over the roles to be removed.
 	 */
@@ -1280,6 +1297,12 @@ DropRole(DropRoleStmt *stmt)
 		char	   *detail;
 		char	   *detail_log;
 
+        /* Skip same roleid */
+        if (pre_object &&
+            pre_object->objectId == role_address->objectId)
+            continue;
+        else
+            pre_object = role_address;
 		/*
 		 * Re-find the pg_authid tuple.
 		 *

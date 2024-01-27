@@ -4,6 +4,9 @@ CREATE ROLE regress_role_admin CREATEDB CREATEROLE REPLICATION BYPASSRLS;
 GRANT CREATE ON DATABASE regression TO regress_role_admin WITH GRANT OPTION;
 CREATE ROLE regress_role_limited_admin CREATEROLE;
 CREATE ROLE regress_role_normal;
+--ok, can drop same role repeatedly
+CREATE ROLE regress_role_dropped;
+DROP ROLE regress_role_dropped, regress_role_dropped;
 -- fail, CREATEROLE user can't give away role attributes without having them
 SET SESSION AUTHORIZATION regress_role_limited_admin;
 CREATE ROLE regress_nosuch_superuser SUPERUSER;

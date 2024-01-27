@@ -2777,6 +2777,19 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"reserved_page_size", PGC_INTERNAL, PRESET_OPTIONS,
+			gettext_noop("Shows the size of reserved space for extended pages."),
+			NULL,
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			},
+		(int*)&ReservedPageSize,
+		0,
+		0,
+		MaxReservedPageSize,
+		NULL, NULL, NULL
+		},
+
+	{
 		{"checkpoint_timeout", PGC_SIGHUP, WAL_CHECKPOINTS,
 			gettext_noop("Sets the maximum time between automatic WAL checkpoints."),
 			NULL,

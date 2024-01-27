@@ -312,9 +312,9 @@ hashgettuple(IndexScanDesc scan, ScanDirection dir)
 			 */
 			if (so->killedItems == NULL)
 				so->killedItems = (int *)
-					palloc(MaxIndexTuplesPerPage * sizeof(int));
+					palloc(ClusterMaxIndexTuplesPerPage * sizeof(int));
 
-			if (so->numKilled < MaxIndexTuplesPerPage)
+			if (so->numKilled < ClusterMaxIndexTuplesPerPage)
 				so->killedItems[so->numKilled++] = so->currPos.itemIndex;
 		}
 

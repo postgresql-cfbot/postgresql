@@ -1160,7 +1160,7 @@ _bt_delitems_vacuum(Relation rel, Buffer buf,
 	bool		needswal = RelationNeedsWAL(rel);
 	char	   *updatedbuf = NULL;
 	Size		updatedbuflen = 0;
-	OffsetNumber updatedoffsets[MaxIndexTuplesPerPage];
+	OffsetNumber updatedoffsets[MaxIndexTuplesPerPageLimit];
 
 	/* Shouldn't be called unless there's something to do */
 	Assert(ndeletable > 0 || nupdatable > 0);
@@ -1291,7 +1291,7 @@ _bt_delitems_delete(Relation rel, Buffer buf,
 	bool		needswal = RelationNeedsWAL(rel);
 	char	   *updatedbuf = NULL;
 	Size		updatedbuflen = 0;
-	OffsetNumber updatedoffsets[MaxIndexTuplesPerPage];
+	OffsetNumber updatedoffsets[MaxIndexTuplesPerPageLimit];
 
 	/* Shouldn't be called unless there's something to do */
 	Assert(ndeletable > 0 || nupdatable > 0);
@@ -1524,8 +1524,8 @@ _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
 	OffsetNumber postingidxoffnum = InvalidOffsetNumber;
 	int			ndeletable = 0,
 				nupdatable = 0;
-	OffsetNumber deletable[MaxIndexTuplesPerPage];
-	BTVacuumPosting updatable[MaxIndexTuplesPerPage];
+	OffsetNumber deletable[MaxIndexTuplesPerPageLimit];
+	BTVacuumPosting updatable[MaxIndexTuplesPerPageLimit];
 
 	/* Use tableam interface to determine which tuples to delete first */
 	snapshotConflictHorizon = table_index_delete_tuples(heapRel, delstate);

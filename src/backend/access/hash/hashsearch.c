@@ -532,7 +532,7 @@ _hash_readpage(IndexScanDesc scan, Buffer *bufP, ScanDirection dir)
 
 			itemIndex = _hash_load_qualified_items(scan, page, offnum, dir);
 
-			if (itemIndex != MaxIndexTuplesPerPage)
+			if (itemIndex != ClusterMaxIndexTuplesPerPage)
 				break;
 
 			/*
@@ -571,8 +571,8 @@ _hash_readpage(IndexScanDesc scan, Buffer *bufP, ScanDirection dir)
 		}
 
 		so->currPos.firstItem = itemIndex;
-		so->currPos.lastItem = MaxIndexTuplesPerPage - 1;
-		so->currPos.itemIndex = MaxIndexTuplesPerPage - 1;
+		so->currPos.lastItem = ClusterMaxIndexTuplesPerPage - 1;
+		so->currPos.itemIndex = ClusterMaxIndexTuplesPerPage - 1;
 	}
 
 	if (so->currPos.buf == so->hashso_bucket_buf ||
@@ -652,13 +652,13 @@ _hash_load_qualified_items(IndexScanDesc scan, Page page,
 			offnum = OffsetNumberNext(offnum);
 		}
 
-		Assert(itemIndex <= MaxIndexTuplesPerPage);
+		Assert(itemIndex <= ClusterMaxIndexTuplesPerPage);
 		return itemIndex;
 	}
 	else
 	{
 		/* load items[] in descending order */
-		itemIndex = MaxIndexTuplesPerPage;
+		itemIndex = ClusterMaxIndexTuplesPerPage;
 
 		while (offnum >= FirstOffsetNumber)
 		{

@@ -2379,8 +2379,8 @@ msgstr "Databasklustret initierades med INDEX_MAX_KEYS %d, men servern kompilera
 
 #: access/transam/xlog.c:4105
 #, c-format
-msgid "The database cluster was initialized with TOAST_MAX_CHUNK_SIZE %d, but the server was compiled with TOAST_MAX_CHUNK_SIZE %d."
-msgstr "Databasklustret initierades med TOAST_MAX_CHUNK_SIZE %d, men servern kompilerades med TOAST_MAX_CHUNK_SIZE %d."
+msgid "The database cluster was initialized with ClusterToastMaxChunkSize %d, but the server was compiled with ClusterToastMaxChunkSize %d."
+msgstr "Databasklustret initierades med ClusterToastMaxChunkSize %d, men servern kompilerades med ClusterToastMaxChunkSize %d."
 
 #: access/transam/xlog.c:4112
 #, c-format

@@ -961,7 +961,7 @@ storeGettuple(SpGistScanOpaque so, ItemPointer heapPtr,
 			  SpGistLeafTuple leafTuple, bool recheck,
 			  bool recheckDistances, double *nonNullDistances)
 {
-	Assert(so->nPtrs < MaxIndexTuplesPerPage);
+	Assert(so->nPtrs < ClusterMaxIndexTuplesPerPage);
 	so->heapPtrs[so->nPtrs] = *heapPtr;
 	so->recheck[so->nPtrs] = recheck;
 	so->recheckDistances[so->nPtrs] = recheckDistances;

@@ -120,7 +120,7 @@ mask_page_content(Page page)
 {
 	/* Mask Page Content */
 	memset(page + SizeOfPageHeaderData, MASK_MARKER,
-		   BLCKSZ - SizeOfPageHeaderData);
+		   PageUsableSpace);
 
 	/* Mask pd_lower and pd_upper */
 	memset(&((PageHeader) page)->pd_lower, MASK_MARKER,

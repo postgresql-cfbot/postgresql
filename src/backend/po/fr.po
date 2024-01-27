@@ -2424,10 +2424,10 @@ msgstr ""
 
 #: access/transam/xlog.c:4131
 #, c-format
-msgid "The database cluster was initialized with TOAST_MAX_CHUNK_SIZE %d, but the server was compiled with TOAST_MAX_CHUNK_SIZE %d."
+msgid "The database cluster was initialized with ClusterToastMaxChunkSize %d, but the server was compiled with ClusterToastMaxChunkSize %d."
 msgstr ""
-"Le cluster de bases de données a été initialisé avec un TOAST_MAX_CHUNK_SIZE\n"
-"à %d alors que le serveur a été compilé avec un TOAST_MAX_CHUNK_SIZE à %d."
+"Le cluster de bases de données a été initialisé avec un ClusterToastMaxChunkSize\n"
+"à %d alors que le serveur a été compilé avec un ClusterToastMaxChunkSize à %d."
 
 #: access/transam/xlog.c:4138
 #, c-format

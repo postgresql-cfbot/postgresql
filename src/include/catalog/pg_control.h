@@ -227,6 +227,7 @@ typedef struct ControlFileData
 	 */
 	char		mock_authentication_nonce[MOCK_AUTH_NONCE_LEN];
 
+	uint32		reserved_page_size;	/* how much space per disk block is reserved */
 	/* CRC of all above ... MUST BE LAST! */
 	pg_crc32c	crc;
 } ControlFileData;

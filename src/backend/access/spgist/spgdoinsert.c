@@ -135,7 +135,7 @@ spgPageIndexMultiDelete(SpGistState *state, Page page,
 						BlockNumber blkno, OffsetNumber offnum)
 {
 	OffsetNumber firstItem;
-	OffsetNumber sortednos[MaxIndexTuplesPerPage];
+	OffsetNumber sortednos[MaxIndexTuplesPerPageLimit];
 	SpGistDeadTuple tuple = NULL;
 	int			i;
 

@@ -2126,8 +2126,8 @@ msgstr "データベースクラスタは INDEX_MAX_KEYS %d で初期化され�
 
 #: access/transam/xlog.c:4105
 #, c-format
-msgid "The database cluster was initialized with TOAST_MAX_CHUNK_SIZE %d, but the server was compiled with TOAST_MAX_CHUNK_SIZE %d."
-msgstr "データベースクラスタは TOAST_MAX_CHUNK_SIZE %d で初期化されましたが、サーバーは TOAST_MAX_CHUNK_SIZE %d でコンパイルされています。"
+msgid "The database cluster was initialized with ClusterToastMaxChunkSize %d, but the server was compiled with ClusterToastMaxChunkSize %d."
+msgstr "データベースクラスタは ClusterToastMaxChunkSize %d で初期化されましたが、サーバーは ClusterToastMaxChunkSize %d でコンパイルされています。"
 
 #: access/transam/xlog.c:4112
 #, c-format

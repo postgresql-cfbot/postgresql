@@ -166,7 +166,7 @@ typedef struct BloomOptions
  * on the fact that the filter header is ~20B alone, which is about
  * the same as the filter bitmap for 16 distinct items with 1% false
  * positive rate. So by allowing lower values we'd not gain much. In
- * any case, the min should not be larger than MaxHeapTuplesPerPage
+ * any case, the min should not be larger than ClusterMaxHeapTuplesPerPage
  * (~290), which is the theoretical maximum for single-page ranges.
  */
 #define		BLOOM_MIN_NDISTINCT_PER_RANGE		16
@@ -478,7 +478,7 @@ brin_bloom_opcinfo(PG_FUNCTION_ARGS)
  *
  * Adjust the ndistinct value based on the pagesPerRange value. First,
  * if it's negative, it's assumed to be relative to maximum number of
- * tuples in the range (assuming each page gets MaxHeapTuplesPerPage
+ * tuples in the range (assuming each page gets ClusterMaxHeapTuplesPerPage
  * tuples, which is likely a significant over-estimate). We also clamp
  * the value, not to over-size the bloom filter unnecessarily.
  *
@@ -493,7 +493,7 @@ brin_bloom_opcinfo(PG_FUNCTION_ARGS)
  * seems better to rely on the upper estimate.
  *
  * XXX We might also calculate a better estimate of rows per BRIN range,
- * instead of using MaxHeapTuplesPerPage (which probably produces values
+ * instead of using ClusterMaxHeapTuplesPerPage (which probably produces values
  * much higher than reality).
  */
 static int
@@ -508,7 +508,7 @@ brin_bloom_get_ndistinct(BrinDesc *bdesc, BloomOptions *opts)
 
 	Assert(BlockNumberIsValid(pagesPerRange));
 
-	maxtuples = MaxHeapTuplesPerPage * pagesPerRange;
+	maxtuples = ClusterMaxHeapTuplesPerPage * pagesPerRange;
 
 	/*
 	 * Similarly to n_distinct, negative values are relative - in this case to

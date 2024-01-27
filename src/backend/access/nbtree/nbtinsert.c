@@ -2685,7 +2685,7 @@ _bt_delete_or_dedup_one_page(Relation rel, Relation heapRel,
 							 bool simpleonly, bool checkingunique,
 							 bool uniquedup, bool indexUnchanged)
 {
-	OffsetNumber deletable[MaxIndexTuplesPerPage];
+	OffsetNumber deletable[MaxIndexTuplesPerPageLimit];
 	int			ndeletable = 0;
 	OffsetNumber offnum,
 				minoff,
@@ -2829,8 +2829,8 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 	delstate.bottomup = false;
 	delstate.bottomupfreespace = 0;
 	delstate.ndeltids = 0;
-	delstate.deltids = palloc(MaxTIDsPerBTreePage * sizeof(TM_IndexDelete));
-	delstate.status = palloc(MaxTIDsPerBTreePage * sizeof(TM_IndexStatus));
+	delstate.deltids = palloc(ClusterMaxTIDsPerBTreePage * sizeof(TM_IndexDelete));
+	delstate.status = palloc(ClusterMaxTIDsPerBTreePage * sizeof(TM_IndexStatus));
 
 	for (offnum = minoff;
 		 offnum <= maxoff;

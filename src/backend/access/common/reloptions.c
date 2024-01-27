@@ -328,7 +328,8 @@ static relopt_int intRelOpts[] =
 			RELOPT_KIND_HEAP,
 			ShareUpdateExclusiveLock
 		},
-		TOAST_TUPLE_TARGET, 128, TOAST_TUPLE_TARGET_MAIN
+		/* NOTE: these limits are dynamically initialized */
+		0, 0, 0
 	},
 	{
 		{
@@ -563,6 +564,8 @@ static void initialize_reloptions(void);
 static void parse_one_reloption(relopt_value *option, char *text_str,
 								int text_len, bool validate);
 
+static void update_dynamic_reloptions(void);
+
 /*
  * Get the length of a string reloption (either default or the user-defined
  * value).  This is used for allocation purposes when building a set of
@@ -571,6 +574,26 @@ static void parse_one_reloption(relopt_value *option, char *text_str,
 #define GET_STRING_RELOPTION_LEN(option) \
 	((option).isset ? strlen((option).values.string_val) : \
 	 ((relopt_string *) (option).gen)->default_len)
+
+/*
+ * handle adjustments to the config table based on dynamic parameters' limits
+ */
+
+static void
+update_dynamic_reloptions(void)
+{
+	int i;
+
+	for (i = 0; intRelOpts[i].gen.name; i++)
+	{
+		if (strcmp("toast_tuple_target", intRelOpts[i].gen.name) == 0)
+		{
+			intRelOpts[i].min = 128;
+			intRelOpts[i].default_val = CalcMaximumBytesPerTuple(PageUsableSpace,TOAST_TUPLES_PER_PAGE);
+			intRelOpts[i].max = CalcMaximumBytesPerTuple(PageUsableSpace,TOAST_TUPLES_PER_PAGE_MAIN);
+		}
+	}
+}
 
 /*
  * initialize_reloptions
@@ -583,6 +606,13 @@ initialize_reloptions(void)
 {
 	int			i;
 	int			j;
+
+	/*
+	 * Set the dynamic limits based on block size; if we get multiple can make
+	 * more sophisticated.
+	 */
+
+	update_dynamic_reloptions();
 
 	j = 0;
 	for (i = 0; boolRelOpts[i].gen.name; i++)

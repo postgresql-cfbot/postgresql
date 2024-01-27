@@ -75,6 +75,7 @@ static TimeLineID minXlogTli = 0;
 static XLogSegNo minXlogSegNo = 0;
 static int	WalSegSz;
 static int	set_wal_segsize;
+static int	set_reserved_page_size = -1;
 
 static void CheckDataVersion(void);
 static bool read_controlfile(void);
@@ -94,6 +95,7 @@ int
 main(int argc, char *argv[])
 {
 	static struct option long_options[] = {
+		{"reserved-size", required_argument, NULL, 'b'},
 		{"commit-timestamp-ids", required_argument, NULL, 'c'},
 		{"pgdata", required_argument, NULL, 'D'},
 		{"epoch", required_argument, NULL, 'e'},
@@ -138,10 +140,18 @@ main(int argc, char *argv[])
 	}
 
 
-	while ((c = getopt_long(argc, argv, "c:D:e:fl:m:no:O:u:x:", long_options, NULL)) != -1)
+	while ((c = getopt_long(argc, argv, "b:c:D:e:fl:m:no:O:u:x:", long_options, NULL)) != -1)
 	{
 		switch (c)
 		{
+			case 'b':
+				errno = 0;
+				set_reserved_page_size = strtol(optarg, &endptr, 10);
+				if (endptr == optarg || *endptr != '\0' || errno != 0)
+					pg_fatal("argument of --reserved-size must be a number");
+				if (!IsValidReservedPageSize(set_reserved_page_size))
+					pg_fatal("argument of --reserved-size must be a multiple of 8 between 0 and 256");
+				break;
 			case 'D':
 				DataDir = optarg;
 				break;
@@ -391,6 +401,34 @@ main(int argc, char *argv[])
 	else
 		WalSegSz = ControlFile.xlog_seg_size;
 
+	/*
+	 * If a reserved page size was specified, compare to existing ControlFile; if we
+	 * are wrong, we won't be able to read the data.  We will only want to set
+	 * it if we guessed.
+	 */
+	if (set_reserved_page_size == -1)
+	{
+		if (guessed)
+			pg_fatal("Cannot determine reserved page size; provide explicitly via --reserved-size");
+	}
+	else
+	{
+		if (!guessed && set_reserved_page_size != ControlFile.reserved_page_size)
+			pg_fatal("Cannot change reserved page size in existing cluster");
+
+		/* hope this is right, but by default we don't know; likely this is
+		 * 0 */
+		ControlFile.reserved_page_size = set_reserved_page_size;
+	}
+
+	/*
+	 * Set some dependent calculated fields stored in pg_control
+	 */
+	BlockSizeInit(ControlFile.blcksz, ControlFile.reserved_page_size);
+
+	ControlFile.toast_max_chunk_size = ClusterToastMaxChunkSize;
+	ControlFile.loblksize = ClusterLargeObjectBlockSize;
+
 	if (log_fname != NULL)
 		XLogFromFileName(log_fname, &minXlogTli, &minXlogSegNo, WalSegSz);
 
@@ -617,6 +655,16 @@ read_controlfile(void)
 			return false;
 		}
 
+		/* return false if block size is not valid */
+		if (!IsValidReservedPageSize(ControlFile.reserved_page_size))
+		{
+			pg_log_warning(ngettext("pg_control specifies invalid reserved page size (%d byte); proceed with caution",
+									"pg_control specifies invalid reserved page size (%d bytes); proceed with caution",
+									ControlFile.reserved_page_size),
+						   ControlFile.reserved_page_size);
+			return false;
+		}
+
 		return true;
 	}
 
@@ -695,7 +743,7 @@ GuessControlValues(void)
 	ControlFile.xlog_seg_size = DEFAULT_XLOG_SEG_SIZE;
 	ControlFile.nameDataLen = NAMEDATALEN;
 	ControlFile.indexMaxKeys = INDEX_MAX_KEYS;
-	ControlFile.toast_max_chunk_size = TOAST_MAX_CHUNK_SIZE;
+	ControlFile.toast_max_chunk_size = ClusterToastMaxChunkSize;
 	ControlFile.loblksize = LOBLKSIZE;
 	ControlFile.float8ByVal = FLOAT8PASSBYVAL;
 
@@ -1176,6 +1224,9 @@ usage(void)
 	printf(_("  -n, --dry-run          no update, just show what would be done\n"));
 	printf(_("  -V, --version          output version information, then exit\n"));
 	printf(_("  -?, --help             show this help, then exit\n"));
+
+	printf(_("\nOptions required when guessing control file values:\n"));
+	printf(_("  -b, --reserved-size=SIZE         reserved page size, in bytes\n"));
 
 	printf(_("\nOptions to override control file values:\n"));
 	printf(_("  -c, --commit-timestamp-ids=XID,XID\n"

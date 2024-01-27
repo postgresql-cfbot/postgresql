@@ -67,6 +67,7 @@
 #include "catalog/catversion.h"
 #include "catalog/pg_control.h"
 #include "catalog/pg_database.h"
+#include "common/blocksize.h"
 #include "common/controldata_utils.h"
 #include "common/file_utils.h"
 #include "executor/instrument.h"
@@ -4078,12 +4079,13 @@ WriteControlFile(void)
 	ControlFile->relseg_size = RELSEG_SIZE;
 	ControlFile->xlog_blcksz = XLOG_BLCKSZ;
 	ControlFile->xlog_seg_size = wal_segment_size;
+	ControlFile->reserved_page_size = ReservedPageSize;
 
 	ControlFile->nameDataLen = NAMEDATALEN;
 	ControlFile->indexMaxKeys = INDEX_MAX_KEYS;
 
-	ControlFile->toast_max_chunk_size = TOAST_MAX_CHUNK_SIZE;
-	ControlFile->loblksize = LOBLKSIZE;
+	ControlFile->toast_max_chunk_size = ClusterToastMaxChunkSize;
+	ControlFile->loblksize = ClusterLargeObjectBlockSize;
 
 	ControlFile->float8ByVal = FLOAT8PASSBYVAL;
 
@@ -4147,8 +4149,9 @@ ReadControlFile(void)
 	pg_crc32c	crc;
 	int			fd;
 	static char wal_segsz_str[20];
+	static char reserved_page_size_str[20];
 	int			r;
-
+	int reserved_page_size;
 	/*
 	 * Read data...
 	 */
@@ -4215,6 +4218,26 @@ ReadControlFile(void)
 				(errmsg("incorrect checksum in control file")));
 
 	/*
+	 * Block size computations affect a number of things that are later
+	 * checked, so ensure that we calculate as soon as CRC has been validated
+	 * before checking other things that may depend on it.
+	 */
+
+	reserved_page_size = ControlFile->reserved_page_size;
+
+	if (!IsValidReservedPageSize(reserved_page_size))
+		ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg_plural("Reserved Page Size must be a multiple of 8 between 0 and 256, but the control file specifies %d byte",
+									  "Reserved Page Size must be a multiple of 8 between 0 and 256, but the control file specifies %d bytes",
+									  reserved_page_size,
+									  reserved_page_size)));
+
+	BlockSizeInit(ControlFile->blcksz, reserved_page_size);
+	snprintf(reserved_page_size_str, sizeof(reserved_page_size_str), "%d", reserved_page_size);
+	SetConfigOption("reserved_page_size", reserved_page_size_str, PGC_INTERNAL,
+					PGC_S_DYNAMIC_DEFAULT);
+
+	/*
 	 * Do compatibility checking immediately.  If the database isn't
 	 * compatible with the backend executable, we want to abort before we can
 	 * possibly do any damage.
@@ -4273,19 +4296,19 @@ ReadControlFile(void)
 						   " but the server was compiled with INDEX_MAX_KEYS %d.",
 						   ControlFile->indexMaxKeys, INDEX_MAX_KEYS),
 				 errhint("It looks like you need to recompile or initdb.")));
-	if (ControlFile->toast_max_chunk_size != TOAST_MAX_CHUNK_SIZE)
+	if (ControlFile->toast_max_chunk_size != ClusterToastMaxChunkSize)
 		ereport(FATAL,
 				(errmsg("database files are incompatible with server"),
-				 errdetail("The database cluster was initialized with TOAST_MAX_CHUNK_SIZE %d,"
-						   " but the server was compiled with TOAST_MAX_CHUNK_SIZE %d.",
-						   ControlFile->toast_max_chunk_size, (int) TOAST_MAX_CHUNK_SIZE),
+				 errdetail("The database cluster was initialized with ClusterToastMaxChunkSize %d,"
+						   " but the server was configured with ClusterToastMaxChunkSize %d.",
+						   ControlFile->toast_max_chunk_size, (int) ClusterToastMaxChunkSize),
 				 errhint("It looks like you need to recompile or initdb.")));
-	if (ControlFile->loblksize != LOBLKSIZE)
+	if (ControlFile->loblksize != ClusterLargeObjectBlockSize)
 		ereport(FATAL,
 				(errmsg("database files are incompatible with server"),
 				 errdetail("The database cluster was initialized with LOBLKSIZE %d,"
-						   " but the server was compiled with LOBLKSIZE %d.",
-						   ControlFile->loblksize, (int) LOBLKSIZE),
+						   " but the server was configured with LOBLKSIZE %d.",
+						   ControlFile->loblksize, (int) ClusterLargeObjectBlockSize),
 				 errhint("It looks like you need to recompile or initdb.")));
 
 #ifdef USE_FLOAT8_BYVAL

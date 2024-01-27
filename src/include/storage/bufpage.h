@@ -15,6 +15,7 @@
 #define BUFPAGE_H
 
 #include "access/xlogdefs.h"
+#include "common/blocksize.h"
 #include "storage/block.h"
 #include "storage/item.h"
 #include "storage/off.h"
@@ -36,10 +37,10 @@
  * |			 v pd_upper							  |
  * +-------------+------------------------------------+
  * |			 | tupleN ...                         |
- * +-------------+------------------+-----------------+
- * |	   ... tuple3 tuple2 tuple1 | "special space" |
- * +--------------------------------+-----------------+
- *									^ pd_special
+ * +-------------+------------------------+-----------+
+ * | ... tuple3 tuple2 tuple1 | "special" | reserved  |
+ * +--------------------------+-----------------------+
+ *                            ^ pd_special
  *
  * a page is full when nothing can be added between pd_lower and
  * pd_upper.
@@ -68,11 +69,16 @@
  *
  * AM-generic per-page information is kept in PageHeaderData.
  *
- * AM-specific per-page data (if any) is kept in the area marked "special
- * space"; each AM has an "opaque" structure defined somewhere that is
- * stored as the page trailer.  an access method should always
- * initialize its pages with PageInit and then set its own opaque
- * fields.
+ * Reserved page space is defined at initdb time and reserves the final bytes
+ * of each disk page for conditional feature use, for instance storing
+ * authenticated data or IVs for encryption.
+ *
+ * AM-specific per-page data (if any) is kept in the area marked "special";
+ * each AM has an "opaque" structure defined somewhere that is
+ * stored as the page trailer, right before any reserved page space.
+ * An access method should always initialize its pages with PageInit
+ * and then set its own opaque fields at the pd_special offset that
+ * was assigned in PageInit.
  */
 
 typedef Pointer Page;
@@ -213,6 +219,10 @@ typedef PageHeaderData *PageHeader;
  */
 #define SizeOfPageHeaderData (offsetof(PageHeaderData, pd_linp))
 
+/* ignore page usable space */
+#define PageUsableSpaceMax (BLCKSZ - SizeOfPageHeaderData)
+#define PageUsableSpace (BLCKSZ - SizeOfPageHeaderData - ReservedPageSize)
+
 /*
  * PageIsEmpty
  *		returns true iff no itemid has been allocated on the page
@@ -302,6 +312,16 @@ PageSetPageSizeAndVersion(Page page, Size size, uint8 version)
 	((PageHeader) page)->pd_pagesize_version = size | version;
 }
 
+/*
+ * PageGetUsablePageSize
+ *		Returns the usable space on a page (from end of page header to reserved space)
+ */
+static inline uint16
+PageGetUsablePageSize(Page page)
+{
+	return PageGetPageSize(page) - SizeOfPageHeaderData - ReservedPageSize;
+}
+
 /* ----------------
  *		page special data functions
  * ----------------
@@ -313,7 +333,7 @@ PageSetPageSizeAndVersion(Page page, Size size, uint8 version)
 static inline uint16
 PageGetSpecialSize(Page page)
 {
-	return (PageGetPageSize(page) - ((PageHeader) page)->pd_special);
+	return (PageGetPageSize(page) - ((PageHeader) page)->pd_special - ReservedPageSize);
 }
 
 /*

@@ -44,17 +44,17 @@ typedef struct
 	int			ndead;
 	int			nunused;
 	/* arrays that accumulate indexes of items to be changed */
-	OffsetNumber redirected[MaxHeapTuplesPerPage * 2];
-	OffsetNumber nowdead[MaxHeapTuplesPerPage];
-	OffsetNumber nowunused[MaxHeapTuplesPerPage];
+	OffsetNumber redirected[MaxHeapTuplesPerPageLimit * 2];
+	OffsetNumber nowdead[MaxHeapTuplesPerPageLimit];
+	OffsetNumber nowunused[MaxHeapTuplesPerPageLimit];
 
 	/*
 	 * marked[i] is true if item i is entered in one of the above arrays.
 	 *
-	 * This needs to be MaxHeapTuplesPerPage + 1 long as FirstOffsetNumber is
+	 * This needs to be ClusterMaxHeapTuplesPerPage + 1 long as FirstOffsetNumber is
 	 * 1. Otherwise every access would need to subtract 1.
 	 */
-	bool		marked[MaxHeapTuplesPerPage + 1];
+	bool		marked[MaxHeapTuplesPerPageLimit + 1];
 } PruneState;
 
 /* Local functions */
@@ -496,7 +496,7 @@ heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum,
 	OffsetNumber latestdead = InvalidOffsetNumber,
 				maxoff = PageGetMaxOffsetNumber(dp),
 				offnum;
-	OffsetNumber chainitems[MaxHeapTuplesPerPage];
+	OffsetNumber chainitems[MaxHeapTuplesPerPageLimit];
 	int			nchain = 0,
 				i;
 
@@ -777,7 +777,7 @@ static void
 heap_prune_record_redirect(PruneState *prstate,
 						   OffsetNumber offnum, OffsetNumber rdoffnum)
 {
-	Assert(prstate->nredirected < MaxHeapTuplesPerPage);
+	Assert(prstate->nredirected < ClusterMaxHeapTuplesPerPage);
 	prstate->redirected[prstate->nredirected * 2] = offnum;
 	prstate->redirected[prstate->nredirected * 2 + 1] = rdoffnum;
 	prstate->nredirected++;
@@ -791,7 +791,7 @@ heap_prune_record_redirect(PruneState *prstate,
 static void
 heap_prune_record_dead(PruneState *prstate, OffsetNumber offnum)
 {
-	Assert(prstate->ndead < MaxHeapTuplesPerPage);
+	Assert(prstate->ndead < ClusterMaxHeapTuplesPerPage);
 	prstate->nowdead[prstate->ndead] = offnum;
 	prstate->ndead++;
 	Assert(!prstate->marked[offnum]);
@@ -823,7 +823,7 @@ heap_prune_record_dead_or_unused(PruneState *prstate, OffsetNumber offnum)
 static void
 heap_prune_record_unused(PruneState *prstate, OffsetNumber offnum)
 {
-	Assert(prstate->nunused < MaxHeapTuplesPerPage);
+	Assert(prstate->nunused < ClusterMaxHeapTuplesPerPage);
 	prstate->nowunused[prstate->nunused] = offnum;
 	prstate->nunused++;
 	Assert(!prstate->marked[offnum]);
@@ -1036,7 +1036,7 @@ page_verify_redirects(Page page)
  * If item k is part of a HOT-chain with root at item j, then we set
  * root_offsets[k - 1] = j.
  *
- * The passed-in root_offsets array must have MaxHeapTuplesPerPage entries.
+ * The passed-in root_offsets array must have ClusterMaxHeapTuplesPerPage entries.
  * Unused entries are filled with InvalidOffsetNumber (zero).
  *
  * The function must be called with at least share lock on the buffer, to
@@ -1053,7 +1053,7 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
 				maxoff;
 
 	MemSet(root_offsets, InvalidOffsetNumber,
-		   MaxHeapTuplesPerPage * sizeof(OffsetNumber));
+		   ClusterMaxHeapTuplesPerPage * sizeof(OffsetNumber));
 
 	maxoff = PageGetMaxOffsetNumber(page);
 	for (offnum = FirstOffsetNumber; offnum <= maxoff; offnum = OffsetNumberNext(offnum))

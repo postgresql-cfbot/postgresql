@@ -1124,8 +1124,8 @@ msgstr "cluster database telah diinisialkan dengan INDEX_MAX_KEYS %d, tapi serve
 
 #: access/transam/xlog.c:3690
 #, c-format
-msgid "The database cluster was initialized with TOAST_MAX_CHUNK_SIZE %d, but the server was compiled with TOAST_MAX_CHUNK_SIZE %d."
-msgstr "cluster database telah diinisialkan dengan TOAST_MAX_CHUNK_SIZE %d, tapi server telah dikompilasi dengan TOAST_MAX_CHUNK_SIZE %d."
+msgid "The database cluster was initialized with ClusterToastMaxChunkSize %d, but the server was compiled with ClusterToastMaxChunkSize %d."
+msgstr "cluster database telah diinisialkan dengan ClusterToastMaxChunkSize %d, tapi server telah dikompilasi dengan ClusterToastMaxChunkSize %d."
 
 #: access/transam/xlog.c:3699
 #, c-format

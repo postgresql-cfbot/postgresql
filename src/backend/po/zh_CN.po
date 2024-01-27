@@ -1887,8 +1887,8 @@ msgstr "数据库集群是以 INDEX_MAX_KEYS  %d 初始化的, 但是 服务器�
 
 #: access/transam/xlog.c:4712
 #, c-format
-msgid "The database cluster was initialized with TOAST_MAX_CHUNK_SIZE %d, but the server was compiled with TOAST_MAX_CHUNK_SIZE %d."
-msgstr "数据库集群是以 TOAST_MAX_CHUNK_SIZE %d 初始化的, 但是 服务器是以 TOAST_MAX_CHUNK_SIZE %d 编译的."
+msgid "The database cluster was initialized with ClusterToastMaxChunkSize %d, but the server was compiled with ClusterToastMaxChunkSize %d."
+msgstr "数据库集群是以 ClusterToastMaxChunkSize %d 初始化的, 但是 服务器是以 ClusterToastMaxChunkSize %d 编译的."
 
 #: access/transam/xlog.c:4719
 #, c-format

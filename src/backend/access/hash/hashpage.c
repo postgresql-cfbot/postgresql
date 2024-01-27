@@ -1087,8 +1087,8 @@ _hash_splitbucket(Relation rel,
 	Page		npage;
 	HashPageOpaque oopaque;
 	HashPageOpaque nopaque;
-	OffsetNumber itup_offsets[MaxIndexTuplesPerPage];
-	IndexTuple	itups[MaxIndexTuplesPerPage];
+	OffsetNumber itup_offsets[MaxIndexTuplesPerPageLimit];
+	IndexTuple	itups[MaxIndexTuplesPerPageLimit];
 	Size		all_tups_size = 0;
 	int			i;
 	uint16		nitups = 0;

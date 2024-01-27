@@ -752,8 +752,12 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 	hashNode = (Hash *) innerPlan(node);
 
 	outerPlanState(hjstate) = ExecInitNode(outerNode, estate, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return hjstate;
 	outerDesc = ExecGetResultType(outerPlanState(hjstate));
 	innerPlanState(hjstate) = ExecInitNode((Plan *) hashNode, estate, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return hjstate;
 	innerDesc = ExecGetResultType(innerPlanState(hjstate));
 
 	/*
@@ -861,7 +865,7 @@ ExecEndHashJoin(HashJoinState *node)
 	/*
 	 * Free hash table
 	 */
-	if (node->hj_HashTable)
+	if (node->hj_HashTable != NULL)
 	{
 		ExecHashTableDestroy(node->hj_HashTable);
 		node->hj_HashTable = NULL;
@@ -871,7 +875,9 @@ ExecEndHashJoin(HashJoinState *node)
 	 * clean up subtrees
 	 */
 	ExecEndNode(outerPlanState(node));
+	outerPlanState(node) = NULL;
 	ExecEndNode(innerPlanState(node));
+	innerPlanState(node) = NULL;
 }
 
 /*

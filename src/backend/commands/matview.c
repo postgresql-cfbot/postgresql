@@ -408,12 +408,17 @@ refresh_matview_datafill(DestReceiver *dest, Query *query,
 	UpdateActiveSnapshotCommandId();
 
 	/* Create a QueryDesc, redirecting output to our tuple receiver */
-	queryDesc = CreateQueryDesc(plan, queryString,
+	queryDesc = CreateQueryDesc(plan, NULL, queryString,
 								GetActiveSnapshot(), InvalidSnapshot,
 								dest, NULL, NULL, 0);
 
-	/* call ExecutorStart to prepare the plan for execution */
-	ExecutorStart(queryDesc, 0);
+	/*
+	 * call ExecutorStart to prepare the plan for execution
+	 *
+	 * OK to ignore the return value; plan can't become invalid,
+	 * because there's no CachedPlan.
+	 */
+	(void) ExecutorStart(queryDesc, 0);
 
 	/* run the plan */
 	ExecutorRun(queryDesc, ForwardScanDirection, 0, true);

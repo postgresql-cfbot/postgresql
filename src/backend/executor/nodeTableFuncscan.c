@@ -217,8 +217,10 @@ ExecEndTableFuncScan(TableFuncScanState *node)
 	 * Release tuplestore resources
 	 */
 	if (node->tupstore != NULL)
+	{
 		tuplestore_end(node->tupstore);
-	node->tupstore = NULL;
+		node->tupstore = NULL;
+	}
 }
 
 /* ----------------------------------------------------------------

@@ -136,6 +136,8 @@ ExecInitUnique(Unique *node, EState *estate, int eflags)
 	 * then initialize outer plan
 	 */
 	outerPlanState(uniquestate) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return uniquestate;
 
 	/*
 	 * Initialize result slot and type. Unique nodes do no projections, so
@@ -169,6 +171,7 @@ void
 ExecEndUnique(UniqueState *node)
 {
 	ExecEndNode(outerPlanState(node));
+	outerPlanState(node) = NULL;
 }
 
 

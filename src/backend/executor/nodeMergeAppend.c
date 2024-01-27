@@ -81,6 +81,20 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 	mergestate->ps.state = estate;
 	mergestate->ps.ExecProcNode = ExecMergeAppend;
 
+	/*
+	 * Lock non-leaf partitions whose leaf children are present in
+	 * node->mergeplans.  Only need to do so if executing a cached
+	 * plan, because child tables present in cached plans are not
+	 * locked before execution.
+	 *
+	 * XXX - some of the non-leaf partitions may also be mentioned in
+	 * part_prune_info, which if they are would get locked again in
+	 * ExecInitPartitionPruning() because it calls
+	 * ExecGetRangeTableRelation() which locks child tables.
+	 */
+	if (estate->es_cachedplan)
+		ExecLockAppendNonLeafPartitions(estate, node->allpartrelids);
+
 	/* If run-time partition pruning is enabled, then set that up now */
 	if (node->part_prune_info != NULL)
 	{
@@ -120,7 +134,7 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 		mergestate->ms_prune_state = NULL;
 	}
 
-	mergeplanstates = (PlanState **) palloc(nplans * sizeof(PlanState *));
+	mergeplanstates = (PlanState **) palloc0(nplans * sizeof(PlanState *));
 	mergestate->mergeplans = mergeplanstates;
 	mergestate->ms_nplans = nplans;
 
@@ -151,6 +165,8 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 		Plan	   *initNode = (Plan *) list_nth(node->mergeplans, i);
 
 		mergeplanstates[j++] = ExecInitNode(initNode, estate, eflags);
+		if (unlikely(!ExecPlanStillValid(estate)))
+			return mergestate;
 	}
 
 	mergestate->ps.ps_ProjInfo = NULL;
@@ -333,7 +349,10 @@ ExecEndMergeAppend(MergeAppendState *node)
 	 * shut down each of the subscans
 	 */
 	for (i = 0; i < nplans; i++)
+	{
 		ExecEndNode(mergeplans[i]);
+		mergeplans[i] = NULL;
+	}
 }
 
 void

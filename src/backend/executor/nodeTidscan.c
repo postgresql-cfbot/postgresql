@@ -470,8 +470,14 @@ ExecReScanTidScan(TidScanState *node)
 void
 ExecEndTidScan(TidScanState *node)
 {
-	if (node->ss.ss_currentScanDesc)
+	/*
+	 * close heap scan (no-op if we didn't start it)
+	 */
+	if (node->ss.ss_currentScanDesc != NULL)
+	{
 		table_endscan(node->ss.ss_currentScanDesc);
+		node->ss.ss_currentScanDesc = NULL;
+	}
 }
 
 /* ----------------------------------------------------------------
@@ -517,6 +523,8 @@ ExecInitTidScan(TidScan *node, EState *estate, int eflags)
 	 * open the scan relation
 	 */
 	currentRelation = ExecOpenScanRelation(estate, node->scan.scanrelid, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return tidstate;
 
 	tidstate->ss.ss_currentRelation = currentRelation;
 	tidstate->ss.ss_currentScanDesc = NULL; /* no heap scan here */

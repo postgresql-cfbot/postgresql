@@ -476,6 +476,8 @@ ExecInitLimit(Limit *node, EState *estate, int eflags)
 	 */
 	outerPlan = outerPlan(node);
 	outerPlanState(limitstate) = ExecInitNode(outerPlan, estate, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return limitstate;
 
 	/*
 	 * initialize child expressions
@@ -535,6 +537,7 @@ void
 ExecEndLimit(LimitState *node)
 {
 	ExecEndNode(outerPlanState(node));
+	outerPlanState(node) = NULL;
 }
 
 

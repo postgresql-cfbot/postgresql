@@ -124,6 +124,8 @@ ExecInitSubqueryScan(SubqueryScan *node, EState *estate, int eflags)
 	 * initialize subquery
 	 */
 	subquerystate->subplan = ExecInitNode(node->subplan, estate, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return subquerystate;
 
 	/*
 	 * Initialize scan slot and type (needed by ExecAssignScanProjectionInfo)
@@ -171,6 +173,7 @@ ExecEndSubqueryScan(SubqueryScanState *node)
 	 * close down subquery
 	 */
 	ExecEndNode(node->subplan);
+	node->subplan = NULL;
 }
 
 /* ----------------------------------------------------------------

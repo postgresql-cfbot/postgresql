@@ -364,15 +364,6 @@ ExecReScanIndexOnlyScan(IndexOnlyScanState *node)
 void
 ExecEndIndexOnlyScan(IndexOnlyScanState *node)
 {
-	Relation	indexRelationDesc;
-	IndexScanDesc indexScanDesc;
-
-	/*
-	 * extract information from the node
-	 */
-	indexRelationDesc = node->ioss_RelationDesc;
-	indexScanDesc = node->ioss_ScanDesc;
-
 	/* Release VM buffer pin, if any. */
 	if (node->ioss_VMBuffer != InvalidBuffer)
 	{
@@ -380,13 +371,21 @@ ExecEndIndexOnlyScan(IndexOnlyScanState *node)
 		node->ioss_VMBuffer = InvalidBuffer;
 	}
 
+	/* close the scan (no-op if we didn't start it) */
+	if (node->ioss_ScanDesc != NULL)
+	{
+		index_endscan(node->ioss_ScanDesc);
+		node->ioss_ScanDesc = NULL;
+	}
+
 	/*
 	 * close the index relation (no-op if we didn't open it)
 	 */
-	if (indexScanDesc)
-		index_endscan(indexScanDesc);
-	if (indexRelationDesc)
-		index_close(indexRelationDesc, NoLock);
+	if (node->ioss_RelationDesc != NULL)
+	{
+		index_close(node->ioss_RelationDesc, NoLock);
+		node->ioss_RelationDesc = NULL;
+	}
 }
 
 /* ----------------------------------------------------------------
@@ -496,6 +495,8 @@ ExecInitIndexOnlyScan(IndexOnlyScan *node, EState *estate, int eflags)
 	 * open the scan relation
 	 */
 	currentRelation = ExecOpenScanRelation(estate, node->scan.scanrelid, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return indexstate;
 
 	indexstate->ss.ss_currentRelation = currentRelation;
 	indexstate->ss.ss_currentScanDesc = NULL;	/* no heap scan here */

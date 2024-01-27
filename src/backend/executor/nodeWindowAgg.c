@@ -1351,11 +1351,14 @@ release_partition(WindowAggState *winstate)
 	 * any aggregate temp data).  We don't rely on retail pfree because some
 	 * aggregates might have allocated data we don't have direct pointers to.
 	 */
-	MemoryContextReset(winstate->partcontext);
-	MemoryContextReset(winstate->aggcontext);
+	if (winstate->partcontext != NULL)
+		MemoryContextReset(winstate->partcontext);
+	if (winstate->aggcontext != NULL)
+		MemoryContextReset(winstate->aggcontext);
 	for (i = 0; i < winstate->numaggs; i++)
 	{
-		if (winstate->peragg[i].aggcontext != winstate->aggcontext)
+		if (winstate->peragg[i].aggcontext != NULL &&
+			winstate->peragg[i].aggcontext != winstate->aggcontext)
 			MemoryContextReset(winstate->peragg[i].aggcontext);
 	}
 
@@ -2458,6 +2461,8 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 	 */
 	outerPlan = outerPlan(node);
 	outerPlanState(winstate) = ExecInitNode(outerPlan, estate, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return winstate;
 
 	/*
 	 * initialize source tuple type (which is also the tuple type that we'll
@@ -2681,24 +2686,40 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 void
 ExecEndWindowAgg(WindowAggState *node)
 {
-	PlanState  *outerPlan;
 	int			i;
 
 	release_partition(node);
 
 	for (i = 0; i < node->numaggs; i++)
 	{
-		if (node->peragg[i].aggcontext != node->aggcontext)
+		if (node->peragg[i].aggcontext != NULL &&
+			node->peragg[i].aggcontext != node->aggcontext)
 			MemoryContextDelete(node->peragg[i].aggcontext);
 	}
-	MemoryContextDelete(node->partcontext);
-	MemoryContextDelete(node->aggcontext);
+	if (node->partcontext != NULL)
+	{
+		MemoryContextDelete(node->partcontext);
+		node->partcontext = NULL;
+	}
+	if (node->aggcontext != NULL)
+	{
+		MemoryContextDelete(node->aggcontext);
+		node->aggcontext = NULL;
+	}
 
-	pfree(node->perfunc);
-	pfree(node->peragg);
+	if (node->perfunc != NULL)
+	{
+		pfree(node->perfunc);
+		node->perfunc = NULL;
+	}
+	if (node->peragg != NULL)
+	{
+		pfree(node->peragg);
+		node->peragg = NULL;
+	}
 
-	outerPlan = outerPlanState(node);
-	ExecEndNode(outerPlan);
+	ExecEndNode(outerPlanState(node));
+	outerPlanState(node) = NULL;
 }
 
 /* -----------------

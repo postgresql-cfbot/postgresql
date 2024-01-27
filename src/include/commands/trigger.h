@@ -257,6 +257,7 @@ extern void ExecASTruncateTriggers(EState *estate,
 
 extern void AfterTriggerBeginXact(void);
 extern void AfterTriggerBeginQuery(void);
+extern void AfterTriggerCancelQuery(void);
 extern void AfterTriggerEndQuery(EState *estate);
 extern void AfterTriggerFireDeferred(void);
 extern void AfterTriggerEndXact(bool isCommit);

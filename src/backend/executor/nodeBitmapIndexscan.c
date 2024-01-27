@@ -175,22 +175,21 @@ ExecReScanBitmapIndexScan(BitmapIndexScanState *node)
 void
 ExecEndBitmapIndexScan(BitmapIndexScanState *node)
 {
-	Relation	indexRelationDesc;
-	IndexScanDesc indexScanDesc;
-
-	/*
-	 * extract information from the node
-	 */
-	indexRelationDesc = node->biss_RelationDesc;
-	indexScanDesc = node->biss_ScanDesc;
+	/* close the scan (no-op if we didn't start it) */
+	if (node->biss_ScanDesc != NULL)
+	{
+		index_endscan(node->biss_ScanDesc);
+		node->biss_ScanDesc = NULL;
+	}
 
 	/*
 	 * close the index relation (no-op if we didn't open it)
 	 */
-	if (indexScanDesc)
-		index_endscan(indexScanDesc);
-	if (indexRelationDesc)
-		index_close(indexRelationDesc, NoLock);
+	if (node->biss_RelationDesc != NULL)
+	{
+		index_close(node->biss_RelationDesc, NoLock);
+		node->biss_RelationDesc = NULL;
+	}
 }
 
 /* ----------------------------------------------------------------

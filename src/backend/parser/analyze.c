@@ -3308,10 +3308,9 @@ transformLockingClause(ParseState *pstate, Query *qry, LockingClause *lc,
 		/*
 		 * Lock all regular tables used in query and its subqueries.  We
 		 * examine inFromCl to exclude auto-added RTEs, particularly NEW/OLD
-		 * in rules.  This is a bit of an abuse of a mostly-obsolete flag, but
-		 * it's convenient.  We can't rely on the namespace mechanism that has
-		 * largely replaced inFromCl, since for example we need to lock
-		 * base-relation RTEs even if they are masked by upper joins.
+		 * in rules.  We can't rely on the namespace mechanism since for
+		 * example we need to lock base-relation RTEs even if they are masked
+		 * by upper joins.
 		 */
 		i = 0;
 		foreach(rt, qry->rtable)

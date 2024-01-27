@@ -263,6 +263,8 @@ ExecInitSort(Sort *node, EState *estate, int eflags)
 	eflags &= ~(EXEC_FLAG_REWIND | EXEC_FLAG_BACKWARD | EXEC_FLAG_MARK);
 
 	outerPlanState(sortstate) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return sortstate;
 
 	/*
 	 * Initialize scan slot and type.
@@ -307,13 +309,16 @@ ExecEndSort(SortState *node)
 	 * Release tuplesort resources
 	 */
 	if (node->tuplesortstate != NULL)
+	{
 		tuplesort_end((Tuplesortstate *) node->tuplesortstate);
-	node->tuplesortstate = NULL;
+		node->tuplesortstate = NULL;
+	}
 
 	/*
 	 * shut down the subplan
 	 */
 	ExecEndNode(outerPlanState(node));
+	outerPlanState(node) = NULL;
 
 	SO1_printf("ExecEndSort: %s\n",
 			   "sort node shutdown");

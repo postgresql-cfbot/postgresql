@@ -125,6 +125,8 @@ ExecInitSampleScan(SampleScan *node, EState *estate, int eflags)
 		ExecOpenScanRelation(estate,
 							 node->scan.scanrelid,
 							 eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return scanstate;
 
 	/* we won't set up the HeapScanDesc till later */
 	scanstate->ss.ss_currentScanDesc = NULL;
@@ -185,14 +187,17 @@ ExecEndSampleScan(SampleScanState *node)
 	/*
 	 * Tell sampling function that we finished the scan.
 	 */
-	if (node->tsmroutine->EndSampleScan)
+	if (node->tsmroutine != NULL && node->tsmroutine->EndSampleScan)
 		node->tsmroutine->EndSampleScan(node);
 
 	/*
-	 * close heap scan
+	 * close heap scan (no-op if we didn't start it)
 	 */
 	if (node->ss.ss_currentScanDesc)
+	{
 		table_endscan(node->ss.ss_currentScanDesc);
+		node->ss.ss_currentScanDesc = NULL;
+	}
 }
 
 /* ----------------------------------------------------------------

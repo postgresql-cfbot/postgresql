@@ -208,6 +208,8 @@ ExecInitResult(Result *node, EState *estate, int eflags)
 	 * initialize child nodes
 	 */
 	outerPlanState(resstate) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return resstate;
 
 	/*
 	 * we don't use inner plan
@@ -244,6 +246,7 @@ ExecEndResult(ResultState *node)
 	 * shut down subplans
 	 */
 	ExecEndNode(outerPlanState(node));
+	outerPlanState(node) = NULL;
 }
 
 void

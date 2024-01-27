@@ -797,11 +797,16 @@ execute_sql_string(const char *sql)
 				QueryDesc  *qdesc;
 
 				qdesc = CreateQueryDesc(stmt,
+										NULL,
 										sql,
 										GetActiveSnapshot(), NULL,
 										dest, NULL, NULL, 0);
 
-				ExecutorStart(qdesc, 0);
+				/*
+				 * OK to ignore the return value; plan can't become invalid,
+				 * because there's no CachedPlan.
+				 */
+				(void) ExecutorStart(qdesc, 0);
 				ExecutorRun(qdesc, ForwardScanDirection, 0, true);
 				ExecutorFinish(qdesc);
 				ExecutorEnd(qdesc);

@@ -957,6 +957,8 @@ ExecInitMemoize(Memoize *node, EState *estate, int eflags)
 
 	outerNode = outerPlan(node);
 	outerPlanState(mstate) = ExecInitNode(outerNode, estate, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return mstate;
 
 	/*
 	 * Initialize return slot and type. No need to initialize projection info
@@ -1062,6 +1064,7 @@ ExecEndMemoize(MemoizeState *node)
 {
 #ifdef USE_ASSERT_CHECKING
 	/* Validate the memory accounting code is correct in assert builds. */
+	if (node->hashtable != NULL)
 	{
 		int			count;
 		uint64		mem = 0;
@@ -1108,12 +1111,17 @@ ExecEndMemoize(MemoizeState *node)
 	}
 
 	/* Remove the cache context */
-	MemoryContextDelete(node->tableContext);
+	if (node->tableContext != NULL)
+	{
+		MemoryContextDelete(node->tableContext);
+		node->tableContext = NULL;
+	}
 
 	/*
 	 * shut down the subplan
 	 */
 	ExecEndNode(outerPlanState(node));
+	outerPlanState(node) = NULL;
 }
 
 void

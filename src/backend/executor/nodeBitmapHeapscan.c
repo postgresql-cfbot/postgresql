@@ -648,40 +648,59 @@ ExecReScanBitmapHeapScan(BitmapHeapScanState *node)
 void
 ExecEndBitmapHeapScan(BitmapHeapScanState *node)
 {
-	TableScanDesc scanDesc;
-
-	/*
-	 * extract information from the node
-	 */
-	scanDesc = node->ss.ss_currentScanDesc;
-
 	/*
 	 * close down subplans
 	 */
 	ExecEndNode(outerPlanState(node));
+	outerPlanState(node) = NULL;
 
 	/*
 	 * release bitmaps and buffers if any
 	 */
-	if (node->tbmiterator)
+	if (node->tbmiterator != NULL)
+	{
 		tbm_end_iterate(node->tbmiterator);
-	if (node->prefetch_iterator)
+		node->tbmiterator = NULL;
+	}
+	if (node->prefetch_iterator != NULL)
+	{
 		tbm_end_iterate(node->prefetch_iterator);
-	if (node->tbm)
+		node->prefetch_iterator = NULL;
+	}
+	if (node->tbm != NULL)
+	{
 		tbm_free(node->tbm);
-	if (node->shared_tbmiterator)
+		node->tbm = NULL;
+	}
+	if (node->shared_tbmiterator != NULL)
+	{
 		tbm_end_shared_iterate(node->shared_tbmiterator);
-	if (node->shared_prefetch_iterator)
+		node->shared_tbmiterator = NULL;
+	}
+	if (node->shared_prefetch_iterator != NULL)
+	{
 		tbm_end_shared_iterate(node->shared_prefetch_iterator);
+		node->shared_prefetch_iterator = NULL;
+	}
 	if (node->vmbuffer != InvalidBuffer)
+	{
 		ReleaseBuffer(node->vmbuffer);
+		node->vmbuffer = InvalidBuffer;
+	}
 	if (node->pvmbuffer != InvalidBuffer)
+	{
 		ReleaseBuffer(node->pvmbuffer);
+		node->pvmbuffer = InvalidBuffer;
+	}
 
 	/*
-	 * close heap scan
+	 * close heap scan (no-op if we didn't start it)
 	 */
-	table_endscan(scanDesc);
+	if (node->ss.ss_currentScanDesc != NULL)
+	{
+		table_endscan(node->ss.ss_currentScanDesc);
+		node->ss.ss_currentScanDesc = NULL;
+	}
 }
 
 /* ----------------------------------------------------------------
@@ -751,11 +770,15 @@ ExecInitBitmapHeapScan(BitmapHeapScan *node, EState *estate, int eflags)
 	 * open the scan relation
 	 */
 	currentRelation = ExecOpenScanRelation(estate, node->scan.scanrelid, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return scanstate;
 
 	/*
 	 * initialize child nodes
 	 */
 	outerPlanState(scanstate) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (unlikely(!ExecPlanStillValid(estate)))
+		return scanstate;
 
 	/*
 	 * get the scan type from the relation descriptor.

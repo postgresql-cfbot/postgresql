@@ -71,6 +71,7 @@
 #define PARALLEL_KEY_QUERY_TEXT			UINT64CONST(0xA000000000000004)
 #define PARALLEL_KEY_WAL_USAGE			UINT64CONST(0xA000000000000005)
 #define PARALLEL_KEY_BUFFER_USAGE		UINT64CONST(0xA000000000000006)
+#define PARALLEL_KEY_CUST_USAGE		    UINT64CONST(0xA000000000000007)
 
 /*
  * DISABLE_LEADER_PARTICIPATION disables the leader's participation in
@@ -197,6 +198,7 @@ typedef struct BTLeader
 	Snapshot	snapshot;
 	WalUsage   *walusage;
 	BufferUsage *bufferusage;
+	char       *custusage;
 } BTLeader;
 
 /*
@@ -1467,6 +1469,7 @@ _bt_begin_parallel(BTBuildState *buildstate, bool isconcurrent, int request)
 	BTLeader   *btleader = (BTLeader *) palloc0(sizeof(BTLeader));
 	WalUsage   *walusage;
 	BufferUsage *bufferusage;
+	char        *custusage;
 	bool		leaderparticipates = true;
 	int			querylen;
 
@@ -1531,6 +1534,9 @@ _bt_begin_parallel(BTBuildState *buildstate, bool isconcurrent, int request)
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 	shm_toc_estimate_chunk(&pcxt->estimator,
 						   mul_size(sizeof(BufferUsage), pcxt->nworkers));
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+	shm_toc_estimate_chunk(&pcxt->estimator,
+						   mul_size(pgCustUsageSize, pcxt->nworkers));
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 
 	/* Finally, estimate PARALLEL_KEY_QUERY_TEXT space */
@@ -1625,6 +1631,10 @@ _bt_begin_parallel(BTBuildState *buildstate, bool isconcurrent, int request)
 	bufferusage = shm_toc_allocate(pcxt->toc,
 								   mul_size(sizeof(BufferUsage), pcxt->nworkers));
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_BUFFER_USAGE, bufferusage);
+	custusage = shm_toc_allocate(pcxt->toc,
+								 mul_size(pgCustUsageSize, pcxt->nworkers));
+	shm_toc_insert(pcxt->toc, PARALLEL_KEY_CUST_USAGE, custusage);
+
 
 	/* Launch workers, saving status for leader/caller */
 	LaunchParallelWorkers(pcxt);
@@ -1638,6 +1648,7 @@ _bt_begin_parallel(BTBuildState *buildstate, bool isconcurrent, int request)
 	btleader->snapshot = snapshot;
 	btleader->walusage = walusage;
 	btleader->bufferusage = bufferusage;
+	btleader->custusage = custusage;
 
 	/* If no workers were successfully launched, back out (do serial build) */
 	if (pcxt->nworkers_launched == 0)
@@ -1676,7 +1687,7 @@ _bt_end_parallel(BTLeader *btleader)
 	 * or we might get incomplete data.)
 	 */
 	for (i = 0; i < btleader->pcxt->nworkers_launched; i++)
-		InstrAccumParallelQuery(&btleader->bufferusage[i], &btleader->walusage[i]);
+		InstrAccumParallelQuery(&btleader->bufferusage[i], &btleader->walusage[i], btleader->custusage + pgCustUsageSize*i);
 
 	/* Free last reference to MVCC snapshot, if one was used */
 	if (IsMVCCSnapshot(btleader->snapshot))
@@ -1811,6 +1822,7 @@ _bt_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 	LOCKMODE	indexLockmode;
 	WalUsage   *walusage;
 	BufferUsage *bufferusage;
+	char       *custusage;
 	int			sortmem;
 
 #ifdef BTREE_BUILD_STATS
@@ -1891,8 +1903,10 @@ _bt_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 	/* Report WAL/buffer usage during parallel execution */
 	bufferusage = shm_toc_lookup(toc, PARALLEL_KEY_BUFFER_USAGE, false);
 	walusage = shm_toc_lookup(toc, PARALLEL_KEY_WAL_USAGE, false);
+	custusage = shm_toc_lookup(toc, PARALLEL_KEY_CUST_USAGE, false);
 	InstrEndParallelQuery(&bufferusage[ParallelWorkerNumber],
-						  &walusage[ParallelWorkerNumber]);
+						  &walusage[ParallelWorkerNumber],
+						  custusage + ParallelWorkerNumber*pgCustUsageSize);
 
 #ifdef BTREE_BUILD_STATS
 	if (log_btree_build_stats)

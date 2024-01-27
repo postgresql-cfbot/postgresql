@@ -50,6 +50,7 @@
 #define PARALLEL_VACUUM_KEY_BUFFER_USAGE	4
 #define PARALLEL_VACUUM_KEY_WAL_USAGE		5
 #define PARALLEL_VACUUM_KEY_INDEX_STATS		6
+#define PARALLEL_VACUUM_KEY_CUSTOM_USAGE	7
 
 /*
  * Shared information among parallel workers.  So this is allocated in the DSM
@@ -184,6 +185,9 @@ struct ParallelVacuumState
 	/* Points to WAL usage area in DSM */
 	WalUsage   *wal_usage;
 
+	/* Points to custom usage area in DSM */
+	char *custom_usage;
+
 	/*
 	 * False if the index is totally unsuitable target for all parallel
 	 * processing. For example, the index could be <
@@ -242,6 +246,7 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 	PVIndStats *indstats;
 	BufferUsage *buffer_usage;
 	WalUsage   *wal_usage;
+	char       *custom_usage;
 	bool	   *will_parallel_vacuum;
 	Size		est_indstats_len;
 	Size		est_shared_len;
@@ -312,6 +317,9 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 	shm_toc_estimate_chunk(&pcxt->estimator,
 						   mul_size(sizeof(WalUsage), pcxt->nworkers));
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+	shm_toc_estimate_chunk(&pcxt->estimator,
+						   mul_size(pgCustUsageSize, pcxt->nworkers));
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 
 	/* Finally, estimate PARALLEL_VACUUM_KEY_QUERY_TEXT space */
@@ -403,6 +411,10 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 								 mul_size(sizeof(WalUsage), pcxt->nworkers));
 	shm_toc_insert(pcxt->toc, PARALLEL_VACUUM_KEY_WAL_USAGE, wal_usage);
 	pvs->wal_usage = wal_usage;
+    custom_usage = shm_toc_allocate(pcxt->toc,
+									mul_size(pgCustUsageSize, pcxt->nworkers));
+	shm_toc_insert(pcxt->toc, PARALLEL_VACUUM_KEY_CUSTOM_USAGE, custom_usage);
+	pvs->custom_usage = custom_usage;
 
 	/* Store query string for workers */
 	if (debug_query_string)
@@ -706,7 +718,7 @@ parallel_vacuum_process_all_indexes(ParallelVacuumState *pvs, int num_index_scan
 		WaitForParallelWorkersToFinish(pvs->pcxt);
 
 		for (int i = 0; i < pvs->pcxt->nworkers_launched; i++)
-			InstrAccumParallelQuery(&pvs->buffer_usage[i], &pvs->wal_usage[i]);
+			InstrAccumParallelQuery(&pvs->buffer_usage[i], &pvs->wal_usage[i], pvs->custom_usage + pgCustUsageSize*i);
 	}
 
 	/*
@@ -964,6 +976,7 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 	VacDeadItems *dead_items;
 	BufferUsage *buffer_usage;
 	WalUsage   *wal_usage;
+	char       *custom_usage;
 	int			nindexes;
 	char	   *sharedquery;
 	ErrorContextCallback errcallback;
@@ -1053,8 +1066,10 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 	/* Report buffer/WAL usage during parallel execution */
 	buffer_usage = shm_toc_lookup(toc, PARALLEL_VACUUM_KEY_BUFFER_USAGE, false);
 	wal_usage = shm_toc_lookup(toc, PARALLEL_VACUUM_KEY_WAL_USAGE, false);
+	custom_usage = shm_toc_lookup(toc, PARALLEL_VACUUM_KEY_CUSTOM_USAGE, false);
 	InstrEndParallelQuery(&buffer_usage[ParallelWorkerNumber],
-						  &wal_usage[ParallelWorkerNumber]);
+						  &wal_usage[ParallelWorkerNumber],
+						  custom_usage + pgCustUsageSize*ParallelWorkerNumber);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;

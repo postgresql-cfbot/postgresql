@@ -18,6 +18,7 @@
 #include "access/reloptions.h"
 #include "bloom.h"
 #include "catalog/index.h"
+#include "commands/explain.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
@@ -33,6 +34,55 @@
 #define GETBIT(x,i) ( (GETWORD(x,i) >> ( (i) % SIGNWORDBITS )) & 0x01 )
 
 PG_FUNCTION_INFO_V1(blhandler);
+
+BloomUsage bloomUsage;
+
+static void
+bloomUsageAdd(CustomResourceUsage* dst, CustomResourceUsage const* add)
+{
+	((BloomUsage*)dst)->matches += ((BloomUsage*)add)->matches;
+}
+
+static void
+bloomUsageAccum(CustomResourceUsage* acc, CustomResourceUsage const* end, CustomResourceUsage const* start)
+{
+	((BloomUsage*)acc)->matches += ((BloomUsage*)end)->matches - ((BloomUsage*)start)->matches;;
+}
+
+static void
+bloomUsageShow(ExplainState* es, CustomResourceUsage const* usage, bool planning)
+{
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+		if (planning)
+		{
+			ExplainIndentText(es);
+			appendStringInfoString(es->str, "Planning:\n");
+			es->indent++;
+		}
+		ExplainIndentText(es);
+		appendStringInfoString(es->str, "Bloom:");
+		appendStringInfo(es->str, " matches=%lld",
+						 (long long) ((BloomUsage*)usage)->matches);
+		appendStringInfoChar(es->str, '\n');
+		if (planning)
+			es->indent--;
+	}
+	else
+	{
+		ExplainPropertyInteger("Bloom Matches", NULL,
+							   ((BloomUsage*)usage)->matches, es);
+	}
+}
+
+static CustomInstrumentation bloomInstr = {
+	"bloom",
+	sizeof(BloomUsage),
+	&bloomUsage,
+	bloomUsageAdd,
+	bloomUsageAccum,
+	bloomUsageShow
+};
 
 /* Kind of relation options for bloom index */
 static relopt_kind bl_relopt_kind;
@@ -78,6 +128,7 @@ _PG_init(void)
 		bl_relopt_tab[i + 1].opttype = RELOPT_TYPE_INT;
 		bl_relopt_tab[i + 1].offset = offsetof(BloomOptions, bitSize[0]) + sizeof(int) * i;
 	}
+	RegisterCustomInsrumentation(&bloomInstr);
 }
 
 /*

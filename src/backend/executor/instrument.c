@@ -16,15 +16,62 @@
 #include <unistd.h>
 
 #include "executor/instrument.h"
+#include "utils/memutils.h"
 
 BufferUsage pgBufferUsage;
 static BufferUsage save_pgBufferUsage;
 WalUsage	pgWalUsage;
 static WalUsage save_pgWalUsage;
 
+List* pgCustInstr; /* description of custom instriumentations */
+Size pgCustUsageSize;
+static CustomInstrumentationData save_pgCustUsage; /* saved custom instrumentation state */
+
+
 static void BufferUsageAdd(BufferUsage *dst, const BufferUsage *add);
 static void WalUsageAdd(WalUsage *dst, WalUsage *add);
 
+void
+RegisterCustomInsrumentation(CustomInstrumentation* inst)
+{
+	MemoryContext oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+	pgCustInstr = lappend(pgCustInstr, inst);
+	pgCustUsageSize += inst->size;
+	MemoryContextSwitchTo(oldcontext);
+	if (pgCustUsageSize > MAX_CUSTOM_INSTR_SIZE)
+		elog(ERROR, "Total size of custom instrumentations exceed limit %d",  MAX_CUSTOM_INSTR_SIZE);
+}
+
+void
+GetCustomInstrumentationState(char* dst)
+{
+	ListCell* lc;
+
+	foreach (lc, pgCustInstr)
+	{
+		CustomInstrumentation *ci = (CustomInstrumentation*)lfirst(lc);	
+		memcpy(dst, ci->usage, ci->size);
+		dst += ci->size;
+	}
+}
+
+void
+AccumulateCustomInstrumentationState(char* dst, char const* before)
+{
+	ListCell* lc;
+
+	foreach (lc, pgCustInstr)
+	{
+		CustomInstrumentation *ci = (CustomInstrumentation*)lfirst(lc);	
+		if (ci->selected)
+		{
+			memset(dst, 0, ci->size);
+			ci->accum(dst, ci->usage, before);
+		}
+		dst += ci->size;
+		before += ci->size;
+	}
+}
 
 /* Allocate new instrumentation structure(s) */
 Instrumentation *
@@ -49,7 +96,6 @@ InstrAlloc(int n, int instrument_options, bool async_mode)
 			instr[i].async_mode = async_mode;
 		}
 	}
-
 	return instr;
 }
 
@@ -67,6 +113,8 @@ InstrInit(Instrumentation *instr, int instrument_options)
 void
 InstrStartNode(Instrumentation *instr)
 {
+	ListCell *lc;
+	char* cust_start = instr->cust_usage_start.data;
 	if (instr->need_timer &&
 		!INSTR_TIME_SET_CURRENT_LAZY(instr->starttime))
 		elog(ERROR, "InstrStartNode called twice in a row");
@@ -77,6 +125,13 @@ InstrStartNode(Instrumentation *instr)
 
 	if (instr->need_walusage)
 		instr->walusage_start = pgWalUsage;
+
+	foreach (lc, pgCustInstr)
+	{
+		CustomInstrumentation *ci = (CustomInstrumentation*)lfirst(lc);
+		memcpy(cust_start, ci->usage, ci->size);
+		cust_start += ci->size;
+	}
 }
 
 /* Exit from a plan node */
@@ -85,6 +140,9 @@ InstrStopNode(Instrumentation *instr, double nTuples)
 {
 	double		save_tuplecount = instr->tuplecount;
 	instr_time	endtime;
+	ListCell *lc;
+	char *cust_start = instr->cust_usage_start.data;
+	char *cust_usage = instr->cust_usage.data;
 
 	/* count the returned tuples */
 	instr->tuplecount += nTuples;
@@ -110,7 +168,15 @@ InstrStopNode(Instrumentation *instr, double nTuples)
 		WalUsageAccumDiff(&instr->walusage,
 						  &pgWalUsage, &instr->walusage_start);
 
-	/* Is this the first tuple of this cycle? */
+	foreach (lc, pgCustInstr)
+	{
+		CustomInstrumentation *ci = (CustomInstrumentation*)lfirst(lc);
+		ci->accum(cust_usage, ci->usage, cust_start);
+		cust_start += ci->size;
+		cust_usage += ci->size;
+	}
+
+    /* Is this the first tuple of this cycle? */
 	if (!instr->running)
 	{
 		instr->running = true;
@@ -168,6 +234,10 @@ InstrEndLoop(Instrumentation *instr)
 void
 InstrAggNode(Instrumentation *dst, Instrumentation *add)
 {
+	ListCell *lc;
+	char *cust_dst = dst->cust_usage.data;
+	char *cust_add = add->cust_usage.data;
+
 	if (!dst->running && add->running)
 	{
 		dst->running = true;
@@ -193,32 +263,69 @@ InstrAggNode(Instrumentation *dst, Instrumentation *add)
 
 	if (dst->need_walusage)
 		WalUsageAdd(&dst->walusage, &add->walusage);
+
+	foreach (lc, pgCustInstr)
+	{
+		CustomInstrumentation *ci = (CustomInstrumentation*)lfirst(lc);
+		ci->add(cust_dst, cust_add);
+		cust_dst += ci->size;
+		cust_add += ci->size;
+	}
 }
 
 /* note current values during parallel executor startup */
 void
 InstrStartParallelQuery(void)
 {
+	ListCell* lc;
+	char* cust_dst = save_pgCustUsage.data;
+
 	save_pgBufferUsage = pgBufferUsage;
 	save_pgWalUsage = pgWalUsage;
+
+	foreach (lc, pgCustInstr)
+	{
+		CustomInstrumentation *ci = (CustomInstrumentation*)lfirst(lc);
+		memcpy(cust_dst, ci->usage, ci->size);
+		cust_dst += ci->size;
+	}
 }
 
 /* report usage after parallel executor shutdown */
 void
-InstrEndParallelQuery(BufferUsage *bufusage, WalUsage *walusage)
+InstrEndParallelQuery(BufferUsage *bufusage, WalUsage *walusage, char* cust_usage)
 {
+	ListCell *lc;
+	char* cust_save = save_pgCustUsage.data;
+
 	memset(bufusage, 0, sizeof(BufferUsage));
 	BufferUsageAccumDiff(bufusage, &pgBufferUsage, &save_pgBufferUsage);
 	memset(walusage, 0, sizeof(WalUsage));
 	WalUsageAccumDiff(walusage, &pgWalUsage, &save_pgWalUsage);
+
+	foreach (lc, pgCustInstr)
+	{
+		CustomInstrumentation *ci = (CustomInstrumentation*)lfirst(lc);
+		ci->accum(cust_usage, ci->usage, cust_save);
+		cust_usage += ci->size;
+		cust_save += ci->size;
+	}
 }
 
 /* accumulate work done by workers in leader's stats */
 void
-InstrAccumParallelQuery(BufferUsage *bufusage, WalUsage *walusage)
+InstrAccumParallelQuery(BufferUsage *bufusage, WalUsage *walusage, char* cust_usage)
 {
+	ListCell *lc;
 	BufferUsageAdd(&pgBufferUsage, bufusage);
 	WalUsageAdd(&pgWalUsage, walusage);
+
+	foreach (lc, pgCustInstr)
+	{
+		CustomInstrumentation *ci = (CustomInstrumentation*)lfirst(lc);
+		ci->add(ci->usage, cust_usage);
+		cust_usage += ci->size;
+	}
 }
 
 /* dst += add */

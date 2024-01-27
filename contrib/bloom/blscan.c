@@ -166,6 +166,6 @@ blgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 		CHECK_FOR_INTERRUPTS();
 	}
 	FreeAccessStrategy(bas);
-
+	bloomUsage.matches += ntids;
 	return ntids;
 }

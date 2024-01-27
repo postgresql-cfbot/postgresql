@@ -583,9 +583,13 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	instr_time	planduration;
 	BufferUsage bufusage_start,
 				bufusage;
+	CustomInstrumentationData custusage_start, custusage;
 
 	if (es->buffers)
 		bufusage_start = pgBufferUsage;
+	if (es->custom)
+		GetCustomInstrumentationState(custusage_start.data);
+
 	INSTR_TIME_SET_CURRENT(planstart);
 
 	/* Look it up in the hash table */
@@ -630,6 +634,8 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 		memset(&bufusage, 0, sizeof(BufferUsage));
 		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
 	}
+	if (es->custom)
+		AccumulateCustomInstrumentationState(custusage.data, custusage_start.data);
 
 	plan_list = cplan->stmt_list;
 
@@ -640,7 +646,9 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 
 		if (pstmt->commandType != CMD_UTILITY)
 			ExplainOnePlan(pstmt, into, es, query_string, paramLI, queryEnv,
-						   &planduration, (es->buffers ? &bufusage : NULL));
+						   &planduration,
+						   (es->buffers ? &bufusage : NULL),
+						   (es->custom ? &custusage : NULL));
 		else
 			ExplainOneUtility(pstmt->utilityStmt, into, es, query_string,
 							  paramLI, queryEnv);

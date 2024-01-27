@@ -119,6 +119,8 @@ static void show_instrumentation_count(const char *qlabel, int which,
 static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
 static void show_eval_params(Bitmapset *bms_params, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
+static void show_custom_usage(ExplainState *es, const char* usage,
+							  bool planning);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage,
 							  bool planning);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
@@ -149,7 +151,6 @@ static void ExplainRestoreGroup(ExplainState *es, int depth, int *state_save);
 static void ExplainDummyGroup(const char *objtype, const char *labelname,
 							  ExplainState *es);
 static void ExplainXMLTag(const char *tagname, int flags, ExplainState *es);
-static void ExplainIndentText(ExplainState *es);
 static void ExplainJSONLineEnding(ExplainState *es);
 static void ExplainYAMLLineStarting(ExplainState *es);
 static void escape_yaml(StringInfo buf, const char *str);
@@ -170,6 +171,7 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 	Query	   *query;
 	List	   *rewritten;
 	ListCell   *lc;
+	ListCell   *c;
 	bool		timing_set = false;
 	bool		summary_set = false;
 
@@ -222,11 +224,28 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 						 parser_errposition(pstate, opt->location)));
 		}
 		else
-			ereport(ERROR,
+		{
+			bool found = false;
+			foreach (c, pgCustInstr)
+			{
+				CustomInstrumentation *ci = (CustomInstrumentation*)lfirst(c);
+				if (strcmp(opt->defname, ci->name) == 0)
+				{
+					ci->selected = true;
+					es->custom = true;
+					found = true;
+					break;
+				}
+			}
+			if (!found)
+			{
+				ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
 					 errmsg("unrecognized EXPLAIN option \"%s\"",
 							opt->defname),
 					 parser_errposition(pstate, opt->location)));
+			}
+		}
 	}
 
 	/* check that WAL is used with EXPLAIN ANALYZE */
@@ -320,12 +339,19 @@ ExplainState *
 NewExplainState(void)
 {
 	ExplainState *es = (ExplainState *) palloc0(sizeof(ExplainState));
+	ListCell* lc;
 
 	/* Set default options (most fields can be left as zeroes). */
 	es->costs = true;
 	/* Prepare output buffer. */
 	es->str = makeStringInfo();
 
+	/* Reset custom instrumentations selection flag */
+	foreach (lc, pgCustInstr)
+	{
+		CustomInstrumentation *ci = (CustomInstrumentation*)lfirst(lc);
+		ci->selected = false;
+	}
 	return es;
 }
 
@@ -397,9 +423,14 @@ ExplainOneQuery(Query *query, int cursorOptions,
 					planduration;
 		BufferUsage bufusage_start,
 					bufusage;
+		CustomInstrumentationData custusage_start, custusage;
 
 		if (es->buffers)
 			bufusage_start = pgBufferUsage;
+
+		if (es->custom)
+			GetCustomInstrumentationState(custusage_start.data);
+
 		INSTR_TIME_SET_CURRENT(planstart);
 
 		/* plan the query */
@@ -415,9 +446,14 @@ ExplainOneQuery(Query *query, int cursorOptions,
 			BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
 		}
 
+		if (es->custom)
+			AccumulateCustomInstrumentationState(custusage.data, custusage_start.data);
+
 		/* run it (if needed) and produce output */
 		ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
-					   &planduration, (es->buffers ? &bufusage : NULL));
+					   &planduration,
+					   (es->buffers ? &bufusage : NULL),
+					   (es->custom ? &custusage : NULL));
 	}
 }
 
@@ -527,7 +563,8 @@ void
 ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			   const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
-			   const BufferUsage *bufusage)
+			   const BufferUsage *bufusage,
+			   const CustomInstrumentationData *custusage)
 {
 	DestReceiver *dest;
 	QueryDesc  *queryDesc;
@@ -620,6 +657,13 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	{
 		ExplainOpenGroup("Planning", "Planning", true, es);
 		show_buffer_usage(es, bufusage, true);
+		ExplainCloseGroup("Planning", "Planning", true, es);
+	}
+
+	if (custusage)
+	{
+		ExplainOpenGroup("Planning", "Planning", true, es);
+		show_custom_usage(es, custusage->data, true);
 		ExplainCloseGroup("Planning", "Planning", true, es);
 	}
 
@@ -2110,8 +2154,12 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	if (es->wal && planstate->instrument)
 		show_wal_usage(es, &planstate->instrument->walusage);
 
+	/* Show custom instrumentation */
+	if (es->custom && planstate->instrument)
+		show_custom_usage(es, planstate->instrument->cust_usage.data, false);
+
 	/* Prepare per-worker buffer/WAL usage */
-	if (es->workers_state && (es->buffers || es->wal) && es->verbose)
+	if (es->workers_state && (es->buffers || es->wal || es->custom) && es->verbose)
 	{
 		WorkerInstrumentation *w = planstate->worker_instrument;
 
@@ -2128,6 +2176,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 				show_buffer_usage(es, &instrument->bufusage, false);
 			if (es->wal)
 				show_wal_usage(es, &instrument->walusage);
+			if (es->custom)
+				show_custom_usage(es, instrument->cust_usage.data, false);
 			ExplainCloseWorker(n, es);
 		}
 	}
@@ -3542,6 +3592,23 @@ explain_get_index_name(Oid indexId)
 			elog(ERROR, "cache lookup failed for index %u", indexId);
 	}
 	return result;
+}
+
+/*
+ * Show select custom usage details
+ */
+static void
+show_custom_usage(ExplainState *es, const char* usage, bool planning)
+{
+	ListCell* lc;
+
+	foreach (lc, pgCustInstr)
+	{
+		CustomInstrumentation *ci = (CustomInstrumentation*)lfirst(lc);
+		if (ci->selected)
+			ci->show(es, usage, planning);
+		usage += ci->size;
+	}
 }
 
 /*
@@ -5017,7 +5084,7 @@ ExplainXMLTag(const char *tagname, int flags, ExplainState *es)
  * data for a parallel worker there might already be data on the current line
  * (cf. ExplainOpenWorker); in that case, don't indent any more.
  */
-static void
+void
 ExplainIndentText(ExplainState *es)
 {
 	Assert(es->format == EXPLAIN_FORMAT_TEXT);

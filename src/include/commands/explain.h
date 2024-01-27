@@ -41,6 +41,7 @@ typedef struct ExplainState
 	bool		verbose;		/* be verbose */
 	bool		analyze;		/* print actual times */
 	bool		costs;			/* print estimated costs */
+	bool		custom;		    /* print custom usage */
 	bool		buffers;		/* print buffer usage */
 	bool		wal;			/* print WAL usage */
 	bool		timing;			/* print detailed node timing */
@@ -92,7 +93,8 @@ extern void ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into,
 						   ExplainState *es, const char *queryString,
 						   ParamListInfo params, QueryEnvironment *queryEnv,
 						   const instr_time *planduration,
-						   const BufferUsage *bufusage);
+						   const BufferUsage *bufusage,
+						   const CustomInstrumentationData *custusage);
 
 extern void ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc);
 extern void ExplainPrintTriggers(ExplainState *es, QueryDesc *queryDesc);
@@ -125,5 +127,6 @@ extern void ExplainOpenGroup(const char *objtype, const char *labelname,
 							 bool labeled, ExplainState *es);
 extern void ExplainCloseGroup(const char *objtype, const char *labelname,
 							  bool labeled, ExplainState *es);
+extern void ExplainIndentText(ExplainState *es);
 
 #endif							/* EXPLAIN_H */

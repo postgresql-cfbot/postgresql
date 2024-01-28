@@ -18,11 +18,15 @@
 #include "catalog/pg_foreign_server.h"
 #include "catalog/pg_foreign_table.h"
 #include "catalog/pg_user_mapping.h"
+#include "commands/defrem.h"
 #include "foreign/fdwapi.h"
 #include "foreign/foreign.h"
 #include "funcapi.h"
 #include "lib/stringinfo.h"
+#include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "replication/walreceiver.h"
+#include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
@@ -144,6 +148,7 @@ GetForeignServerExtended(Oid serverid, bits16 flags)
 	server->servername = pstrdup(NameStr(serverform->srvname));
 	server->owner = serverform->srvowner;
 	server->fdwid = serverform->srvfdw;
+	server->forsubscription = serverform->srvforsubscription;
 
 	/* Extract server type */
 	datum = SysCacheGetAttr(FOREIGNSERVEROID,
@@ -176,6 +181,31 @@ GetForeignServerExtended(Oid serverid, bits16 flags)
 
 
 /*
+ * ForeignServerName - get name of foreign server.
+ */
+char *
+ForeignServerName(Oid serverid)
+{
+	Form_pg_foreign_server serverform;
+	char *servername;
+	HeapTuple	tp;
+
+	tp = SearchSysCache1(FOREIGNSERVEROID, ObjectIdGetDatum(serverid));
+
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for foreign server %u", serverid);
+
+	serverform = (Form_pg_foreign_server) GETSTRUCT(tp);
+
+	servername = pstrdup(NameStr(serverform->srvname));
+
+	ReleaseSysCache(tp);
+
+	return servername;
+}
+
+
+/*
  * GetForeignServerByName - look up the foreign server definition by name.
  */
 ForeignServer *
@@ -187,6 +217,146 @@ GetForeignServerByName(const char *srvname, bool missing_ok)
 		return NULL;
 
 	return GetForeignServer(serverid);
+}
+
+
+/*
+ * Values in connection strings must be enclosed in single quotes. Single
+ * quotes and backslashes must be escaped with backslash. NB: these rules are
+ * different from the rules for escaping a SQL literal.
+ */
+static void
+appendEscapedValue(StringInfo str, const char *val)
+{
+	appendStringInfoChar(str, '\'');
+	for (int i = 0; val[i] != '\0'; i++)
+	{
+		if (val[i] == '\\' || val[i] == '\'')
+			appendStringInfoChar(str, '\\');
+		appendStringInfoChar(str, val[i]);
+	}
+	appendStringInfoChar(str, '\'');
+}
+
+
+/*
+ * Check if the provided option is one of libpq conninfo options.
+ * context is the Oid of the catalog the option came from, or 0 if we
+ * don't care.
+ */
+static bool
+is_libpq_conninfo_option(const char *option, Oid context)
+{
+	const ConnectionOption *opt;
+
+	/* skip options that must be overridden */
+	if (strcmp(option, "client_encoding") == 0)
+		return false;
+
+	for (opt = walrcv_conninfo_options(); opt->optname; opt++)
+	{
+		if (strcmp(opt->optname, option) == 0)
+		{
+			if (opt->isdebug)
+				return false;
+
+			if (opt->issecret || strcmp(opt->optname, "user") == 0)
+				return (context == UserMappingRelationId);
+
+			return (context == ForeignServerRelationId);
+		}
+	}
+	return false;
+}
+
+
+/*
+ * Helper for ForeignServerConnectionString().
+ *
+ * Transform a List of DefElem into a connection string.
+ */
+static char *
+options_to_conninfo(List *options, bool append_overrides)
+{
+	StringInfoData	 str;
+	ListCell		*lc;
+	char			*sep = "";
+
+	initStringInfo(&str);
+	foreach(lc, options)
+	{
+		DefElem *d = (DefElem *) lfirst(lc);
+		char *name = d->defname;
+		char *value;
+
+		/* ignore unknown options */
+		if (!is_libpq_conninfo_option(name, ForeignServerRelationId) &&
+			!is_libpq_conninfo_option(name, UserMappingRelationId))
+			continue;
+
+		value = defGetString(d);
+
+		appendStringInfo(&str, "%s%s = ", sep, name);
+		appendEscapedValue(&str, value);
+		sep = " ";
+	}
+
+	/* override client_encoding */
+	if (append_overrides)
+	{
+		appendStringInfo(&str, "%sclient_encoding = ", sep);
+		appendEscapedValue(&str, GetDatabaseEncodingName());
+		sep = " ";
+	}
+
+	return str.data;
+}
+
+
+/*
+ * Given a user ID and server ID, return a postgres connection string suitable
+ * to pass to libpq.
+ */
+char *
+ForeignServerConnectionString(Oid userid, Oid serverid, bool append_overrides)
+{
+	static MemoryContext	 tmpcontext = NULL;
+	ForeignServer			*server;
+	UserMapping				*um;
+	List					*options;
+	char					*conninfo;
+	MemoryContext			 oldcontext;
+
+	/* Load the library providing us libpq calls. */
+	load_file("libpqwalreceiver", false);
+
+	/*
+	 * Use a temporary context rather than trying to track individual
+	 * allocations in GetForeignServer() and GetUserMapping().
+	 */
+	if (tmpcontext == NULL)
+		tmpcontext = AllocSetContextCreate(TopMemoryContext,
+										   "temp context for building connection string",
+										   ALLOCSET_DEFAULT_SIZES);
+
+	oldcontext = MemoryContextSwitchTo(tmpcontext);
+
+	server = GetForeignServer(serverid);
+	um = GetUserMapping(userid, serverid);
+
+	/* user mapping options override server options */
+	options = list_concat(server->options, um->options);
+
+	conninfo = options_to_conninfo(options, append_overrides);
+
+	MemoryContextSwitchTo(oldcontext);
+
+	/* copy only conninfo into the current context */
+	conninfo = pstrdup(conninfo);
+
+	MemoryContextReset(tmpcontext);
+
+	return conninfo;
 }
 
 
@@ -550,9 +720,102 @@ pg_options_to_table(PG_FUNCTION_ARGS)
 
 
 /*
+ * pg_conninfo_from_server
+ *
+ * Extract connection string from the given foreign server.
+ */
+Datum
+pg_conninfo_from_server(PG_FUNCTION_ARGS)
+{
+	char *server_name = text_to_cstring(PG_GETARG_TEXT_P(0));
+	char *user_name = text_to_cstring(PG_GETARG_TEXT_P(1));
+	bool  append_overrides = PG_GETARG_BOOL(2);
+	Oid serverid = get_foreign_server_oid(server_name, false);
+	Oid userid = get_role_oid_or_public(user_name);
+	AclResult aclresult;
+	char *conninfo;
+
+	/* if the specified userid is not PUBLIC, check SET ROLE privileges */
+	if (userid != ACL_ID_PUBLIC)
+		check_can_set_role(GetUserId(), userid);
+
+	/* ACL check on foreign server */
+	aclresult = object_aclcheck(ForeignServerRelationId, serverid,
+								GetUserId(), ACL_USAGE);
+	if (aclresult != ACLCHECK_OK)
+		aclcheck_error(aclresult, OBJECT_FOREIGN_SERVER, server_name);
+
+	conninfo = ForeignServerConnectionString(userid, serverid,
+											 append_overrides);
+
+	PG_RETURN_TEXT_P(cstring_to_text(conninfo));
+}
+
+
+/*
+ * Validate the generic option given to SERVER or USER MAPPING.
+ * Raise an ERROR if the option or its value is considered invalid.
+ *
+ * Valid server options are all libpq conninfo options except
+ * user and password -- these may only appear in USER MAPPING options.
+ */
+Datum
+pg_connection_validator(PG_FUNCTION_ARGS)
+{
+	List	   *options_list = untransformRelOptions(PG_GETARG_DATUM(0));
+	Oid			catalog = PG_GETARG_OID(1);
+
+	ListCell   *cell;
+
+	/* Load the library providing us libpq calls. */
+	load_file("libpqwalreceiver", false);
+
+	foreach(cell, options_list)
+	{
+		DefElem    *def = lfirst(cell);
+
+		if (!is_libpq_conninfo_option(def->defname, catalog))
+		{
+			const ConnectionOption *opt;
+			const char *closest_match;
+			ClosestMatchState match_state;
+			bool		has_valid_options = false;
+
+			/*
+			 * Unknown option specified, complain about it. Provide a hint
+			 * with a valid option that looks similar, if there is one.
+			 */
+			initClosestMatch(&match_state, def->defname, 4);
+			for (opt = walrcv_conninfo_options(); opt->optname; opt++)
+			{
+				if (is_libpq_conninfo_option(opt->optname, catalog))
+				{
+					has_valid_options = true;
+					updateClosestMatch(&match_state, opt->optname);
+				}
+			}
+
+			closest_match = getClosestMatch(&match_state);
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("invalid option \"%s\"", def->defname),
+					 has_valid_options ? closest_match ?
+					 errhint("Perhaps you meant the option \"%s\".",
+							 closest_match) : 0 :
+					 errhint("There are no valid options in this context.")));
+
+			PG_RETURN_BOOL(false);
+		}
+	}
+
+	PG_RETURN_BOOL(true);
+}
+
+
+/*
  * Describes the valid options for postgresql FDW, server, and user mapping.
  */
-struct ConnectionOption
+struct TestConnectionOption
 {
 	const char *optname;
 	Oid			optcontext;		/* Oid of catalog in which option may appear */
@@ -563,7 +826,7 @@ struct ConnectionOption
  *
  * The list is small - don't bother with bsearch if it stays so.
  */
-static const struct ConnectionOption libpq_conninfo_options[] = {
+static const struct TestConnectionOption test_conninfo_options[] = {
 	{"authtype", ForeignServerRelationId},
 	{"service", ForeignServerRelationId},
 	{"user", UserMappingRelationId},
@@ -584,16 +847,16 @@ static const struct ConnectionOption libpq_conninfo_options[] = {
 
 
 /*
- * Check if the provided option is one of libpq conninfo options.
+ * Check if the provided option is one of the test conninfo options.
  * context is the Oid of the catalog the option came from, or 0 if we
  * don't care.
  */
 static bool
-is_conninfo_option(const char *option, Oid context)
+is_test_conninfo_option(const char *option, Oid context)
 {
-	const struct ConnectionOption *opt;
+	const struct TestConnectionOption *opt;
 
-	for (opt = libpq_conninfo_options; opt->optname; opt++)
+	for (opt = test_conninfo_options; opt->optname; opt++)
 		if (context == opt->optcontext && strcmp(opt->optname, option) == 0)
 			return true;
 	return false;
@@ -624,9 +887,9 @@ postgresql_fdw_validator(PG_FUNCTION_ARGS)
 	{
 		DefElem    *def = lfirst(cell);
 
-		if (!is_conninfo_option(def->defname, catalog))
+		if (!is_test_conninfo_option(def->defname, catalog))
 		{
-			const struct ConnectionOption *opt;
+			const struct TestConnectionOption *opt;
 			const char *closest_match;
 			ClosestMatchState match_state;
 			bool		has_valid_options = false;
@@ -636,7 +899,7 @@ postgresql_fdw_validator(PG_FUNCTION_ARGS)
 			 * with a valid option that looks similar, if there is one.
 			 */
 			initClosestMatch(&match_state, def->defname, 4);
-			for (opt = libpq_conninfo_options; opt->optname; opt++)
+			for (opt = test_conninfo_options; opt->optname; opt++)
 			{
 				if (catalog == opt->optcontext)
 				{

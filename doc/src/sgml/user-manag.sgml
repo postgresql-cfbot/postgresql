@@ -688,10 +688,18 @@ DROP ROLE doomed_role;
        <xref linkend="guc-reserved-connections"/>.</entry>
       </row>
       <row>
+       <entry>pg_create_connection</entry>
+       <entry>Allow users to specify a connection string directly in <link
+       linkend="sql-createsubscription"><command>CREATE
+       SUBSCRIPTION</command></link>.</entry>
+      </row>
+      <row>
        <entry>pg_create_subscription</entry>
        <entry>Allow users with <literal>CREATE</literal> permission on the
-       database to issue
-       <link linkend="sql-createsubscription"><command>CREATE SUBSCRIPTION</command></link>.</entry>
+       database to issue <link
+       linkend="sql-createsubscription"><command>CREATE
+       SUBSCRIPTION</command></link>.  This role is a member of
+       <literal>pg_create_connection</literal>.</entry>
       </row>
      </tbody>
     </tgroup>

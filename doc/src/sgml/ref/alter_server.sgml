@@ -22,6 +22,7 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 ALTER SERVER <replaceable class="parameter">name</replaceable> [ VERSION '<replaceable class="parameter">new_version</replaceable>' ]
+    [ { FOR | NO } SUBSCRIPTION ]
     [ OPTIONS ( [ ADD | SET | DROP ] <replaceable class="parameter">option</replaceable> ['<replaceable class="parameter">value</replaceable>'] [, ... ] ) ]
 ALTER SERVER <replaceable class="parameter">name</replaceable> OWNER TO { <replaceable>new_owner</replaceable> | CURRENT_ROLE | CURRENT_USER | SESSION_USER }
 ALTER SERVER <replaceable class="parameter">name</replaceable> RENAME TO <replaceable>new_name</replaceable>
@@ -66,6 +67,19 @@ ALTER SERVER <replaceable class="parameter">name</replaceable> RENAME TO <replac
     <listitem>
      <para>
       New server version.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>{ FOR | NO } SUBSCRIPTION</literal></term>
+    <listitem>
+     <para>
+      This clause specifies whether the foreign server may be used for a
+      subscription (see <xref linkend="sql-createsubscription"/>). The default
+      is <literal>NO SUBSCRIPTION</literal>. Only members of the role
+      <literal>pg_create_connection</literal> may specify <literal>FOR
+      SUBSCRIPTION</literal>.
      </para>
     </listitem>
    </varlistentry>

@@ -39,4 +39,9 @@ tests += {
     ],
     'regress_args': ['--dlpath', meson.build_root() / 'src/test/regress'],
   },
+  'tap': {
+    'tests': [
+      't/010_subscription.pl',
+    ],
+  },
 }

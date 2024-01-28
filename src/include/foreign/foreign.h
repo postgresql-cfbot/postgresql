@@ -36,6 +36,7 @@ typedef struct ForeignServer
 	Oid			serverid;		/* server Oid */
 	Oid			fdwid;			/* foreign-data wrapper */
 	Oid			owner;			/* server owner user Oid */
+	bool		forsubscription;	/* usable for a subscription */
 	char	   *servername;		/* name of the server */
 	char	   *servertype;		/* server type, optional */
 	char	   *serverversion;	/* server version, optional */
@@ -65,10 +66,13 @@ typedef struct ForeignTable
 
 
 extern ForeignServer *GetForeignServer(Oid serverid);
+extern char *ForeignServerName(Oid serverid);
 extern ForeignServer *GetForeignServerExtended(Oid serverid,
 											   bits16 flags);
 extern ForeignServer *GetForeignServerByName(const char *srvname,
 											 bool missing_ok);
+extern char *ForeignServerConnectionString(Oid userid, Oid serverid,
+										   bool append_overrides);
 extern UserMapping *GetUserMapping(Oid userid, Oid serverid);
 extern ForeignDataWrapper *GetForeignDataWrapper(Oid fdwid);
 extern ForeignDataWrapper *GetForeignDataWrapperExtended(Oid fdwid,

@@ -7516,6 +7516,14 @@
   proname => 'postgresql_fdw_validator', prorettype => 'bool',
   proargtypes => '_text oid', prosrc => 'postgresql_fdw_validator' },
 
+{ oid => '6015', descr => '(internal)',
+  proname => 'pg_connection_validator', prorettype => 'bool',
+  proargtypes => '_text oid', prosrc => 'pg_connection_validator' },
+
+{ oid => '6123', descr => 'extract connection string from the given foreign server',
+  proname => 'pg_conninfo_from_server', prorettype => 'text',
+  proargtypes => 'text text bool', prosrc => 'pg_conninfo_from_server' },
+
 { oid => '2290', descr => 'I/O',
   proname => 'record_in', provolatile => 's', prorettype => 'record',
   proargtypes => 'cstring oid int4', prosrc => 'record_in' },

@@ -291,6 +291,64 @@ RESET ROLE;
 DROP SERVER s7;
 \deu
 
+--
+-- test pg_conninfo_from_server().
+--
+
+-- use test validator function (not all libpq options supported)
+CREATE FOREIGN DATA WRAPPER regress_connection_fdw
+  VALIDATOR pg_connection_validator;
+
+\set VERBOSITY terse
+CREATE SERVER connection_server FOREIGN DATA WRAPPER regress_connection_fdw
+  OPTIONS (host 'thehost', client_encoding 'LATIN1'); -- fail
+CREATE SERVER connection_server FOREIGN DATA WRAPPER regress_connection_fdw
+  OPTIONS (host 'thehost', nonsense 'asdf'); -- fail
+CREATE SERVER connection_server FOREIGN DATA WRAPPER regress_connection_fdw
+  OPTIONS (host 'thehost', password 'secret'); -- fail
+\set VERBOSITY default
+
+CREATE SERVER connection_server FOREIGN DATA WRAPPER regress_connection_fdw
+  OPTIONS (hsot 'thehost'); -- fail - misspelling
+
+CREATE SERVER connection_server FOREIGN DATA WRAPPER regress_connection_fdw
+  OPTIONS (host 'thehost', port '5432');
+
+CREATE USER MAPPING FOR regress_test_role SERVER connection_server
+  OPTIONS (user 'role', password 'secret', host 'otherhost'); -- fail
+
+CREATE USER MAPPING FOR regress_test_role SERVER connection_server
+  OPTIONS (user 'role', password 'secret');
+CREATE USER MAPPING FOR PUBLIC SERVER connection_server
+  OPTIONS (user 'publicuser', password $pwd$'\"$# secret'$pwd$);
+
+SELECT pg_conninfo_from_server('connection_server', 'regress_test_role', false);
+
+SELECT pg_conninfo_from_server('connection_server', 'regress_test_role2', false);
+
+DROP USER MAPPING FOR regress_test_role SERVER connection_server;
+DROP USER MAPPING FOR PUBLIC SERVER connection_server;
+DROP SERVER connection_server;
+
+SET ROLE regress_test_role;
+CREATE SERVER t3 FOREIGN DATA WRAPPER regress_connection_fdw;   -- ERROR: no permissions on FDW
+RESET ROLE;
+GRANT USAGE ON FOREIGN DATA WRAPPER regress_connection_fdw TO regress_test_role;
+SET ROLE regress_test_role;
+
+CREATE SERVER t3 FOREIGN DATA WRAPPER regress_connection_fdw;
+
+IMPORT FOREIGN SCHEMA foo FROM SERVER t3 INTO bar; -- fails
+
+CREATE USER MAPPING FOR PUBLIC SERVER t3 OPTIONS (user 'x', password 'secret');
+DROP USER MAPPING FOR PUBLIC SERVER t3;
+DROP SERVER t3;
+
+RESET ROLE;
+REVOKE USAGE ON FOREIGN DATA WRAPPER regress_connection_fdw FROM regress_test_role;
+
+DROP FOREIGN DATA WRAPPER regress_connection_fdw;
+
 -- CREATE FOREIGN TABLE
 CREATE SCHEMA foreign_schema;
 CREATE SERVER s0 FOREIGN DATA WRAPPER dummy;

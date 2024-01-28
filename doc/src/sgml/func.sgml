@@ -28410,6 +28410,25 @@ postgres=# SELECT '0/0'::pg_lsn + pd.segment_number * ps.setting::int + :offset 
       </row>
 
       <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_conninfo_from_server</primary>
+        </indexterm>
+        <function>pg_conninfo_from_server</function> ( <parameter>servername</parameter> <type>text</type>, <parameter>username</parameter> <type>text</type>, <parameter>append_overrides</parameter> <type>boolean</type> )
+        <returnvalue>text</returnvalue>
+       </para>
+       <para>
+        Returns connection string generated from the foreign server and user
+        mapping associated with the given
+        <replaceable>servername</replaceable> and
+        <replaceable>username</replaceable>. If
+        <replaceable>append_overrides</replaceable> is
+        <literal>true</literal>, it appends override parameters necessary for
+        making outbound connections.
+       </para></entry>
+      </row>
+
+      <row>
        <entry id="pg-logical-emit-message" role="func_table_entry"><para role="func_signature">
         <indexterm>
          <primary>pg_logical_emit_message</primary>

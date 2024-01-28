@@ -28,6 +28,8 @@ $node_publisher->safe_psql('postgres',
 $node_publisher->safe_psql('postgres',
 	"CREATE TABLE tab_ins AS SELECT generate_series(1,1002) AS a");
 $node_publisher->safe_psql('postgres',
+	"CREATE TABLE tab_ins2 AS SELECT generate_series(1,1002) AS a");
+$node_publisher->safe_psql('postgres',
 	"CREATE TABLE tab_full AS SELECT generate_series(1,10) AS a");
 $node_publisher->safe_psql('postgres', "CREATE TABLE tab_full2 (x text)");
 $node_publisher->safe_psql('postgres',
@@ -65,6 +67,7 @@ $node_publisher->safe_psql('postgres',
 # Setup structure on subscriber
 $node_subscriber->safe_psql('postgres', "CREATE TABLE tab_notrep (a int)");
 $node_subscriber->safe_psql('postgres', "CREATE TABLE tab_ins (a int)");
+$node_subscriber->safe_psql('postgres', "CREATE TABLE tab_ins2 (a int)");
 $node_subscriber->safe_psql('postgres', "CREATE TABLE tab_full (a int)");
 $node_subscriber->safe_psql('postgres', "CREATE TABLE tab_full2 (x text)");
 $node_subscriber->safe_psql('postgres',
@@ -110,6 +113,25 @@ $node_subscriber->safe_psql('postgres',
 	"CREATE SUBSCRIPTION tap_sub CONNECTION '$publisher_connstr' PUBLICATION tap_pub, tap_pub_ins_only"
 );
 
+my $publisher_host = $node_publisher->host;
+my $publisher_port = $node_publisher->port;
+$node_subscriber->safe_psql('postgres',
+	"CREATE FOREIGN DATA WRAPPER test_connection_fdw VALIDATOR pg_connection_validator"
+);
+$node_subscriber->safe_psql('postgres',
+	"CREATE SERVER tap_sub2_server FOREIGN DATA WRAPPER test_connection_fdw FOR SUBSCRIPTION OPTIONS (host '$publisher_host', port '$publisher_port', dbname 'postgres')"
+);
+
+$node_subscriber->safe_psql('postgres',
+	"CREATE USER MAPPING FOR PUBLIC SERVER tap_sub2_server"
+);
+
+$node_publisher->safe_psql('postgres', "CREATE PUBLICATION tap_simple_pub FOR TABLE tab_ins2");
+
+$node_subscriber->safe_psql('postgres',
+	"CREATE SUBSCRIPTION tap_sub2 SERVER tap_sub2_server PUBLICATION tap_simple_pub WITH (password_required=false)"
+);
+
 # Wait for initial table sync to finish
 $node_subscriber->wait_for_subscription_sync($node_publisher, 'tap_sub');
 
@@ -121,10 +143,21 @@ $result =
   $node_subscriber->safe_psql('postgres', "SELECT count(*) FROM tab_ins");
 is($result, qq(1002), 'check initial data was copied to subscriber');
 
+$result =
+  $node_subscriber->safe_psql('postgres', "SELECT count(*) FROM tab_ins2");
+is($result, qq(1002), 'check initial data was copied to subscriber');
+
+$node_subscriber->safe_psql('postgres', "ALTER SUBSCRIPTION tap_sub2 CONNECTION '$publisher_connstr'");
+
 $node_publisher->safe_psql('postgres',
 	"INSERT INTO tab_ins SELECT generate_series(1,50)");
 $node_publisher->safe_psql('postgres', "DELETE FROM tab_ins WHERE a > 20");
 $node_publisher->safe_psql('postgres', "UPDATE tab_ins SET a = -a");
+
+$node_publisher->safe_psql('postgres',
+	"INSERT INTO tab_ins2 SELECT generate_series(1,50)");
+
+$node_subscriber->safe_psql('postgres', "ALTER SUBSCRIPTION tap_sub2 SERVER tap_sub2_server");
 
 $node_publisher->safe_psql('postgres',
 	"INSERT INTO tab_rep SELECT generate_series(1,50)");
@@ -156,6 +189,10 @@ $node_publisher->wait_for_catchup('tap_sub');
 
 $result = $node_subscriber->safe_psql('postgres',
 	"SELECT count(*), min(a), max(a) FROM tab_ins");
+is($result, qq(1052|1|1002), 'check replicated inserts on subscriber');
+
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT count(*), min(a), max(a) FROM tab_ins2");
 is($result, qq(1052|1|1002), 'check replicated inserts on subscriber');
 
 $result = $node_subscriber->safe_psql('postgres',
@@ -449,9 +486,26 @@ $node_publisher->poll_query_until('postgres',
   or die
   "Timed out while waiting for apply to restart after changing PUBLICATION";
 
+# test that changes to a foreign server subscription cause the worker
+# to restart
+$oldpid = $node_publisher->safe_psql('postgres',
+	"SELECT pid FROM pg_stat_replication WHERE application_name = 'tap_sub2' AND state = 'streaming';"
+);
+$node_subscriber->safe_psql('postgres',
+	"ALTER SERVER tap_sub2_server OPTIONS (sslmode 'disable')"
+);
+$node_publisher->poll_query_until('postgres',
+	"SELECT pid != $oldpid FROM pg_stat_replication WHERE application_name = 'tap_sub2' AND state = 'streaming';"
+  )
+  or die
+  "Timed out while waiting for apply to restart after changing PUBLICATION";
+
 $node_publisher->safe_psql('postgres',
 	"INSERT INTO tab_ins SELECT generate_series(1001,1100)");
 $node_publisher->safe_psql('postgres', "DELETE FROM tab_rep");
+
+$node_publisher->safe_psql('postgres',
+	"INSERT INTO tab_ins2 SELECT generate_series(1001,1100)");
 
 # Restart the publisher and check the state of the subscriber which
 # should be in a streaming state after catching up.
@@ -462,6 +516,11 @@ $node_publisher->wait_for_catchup('tap_sub');
 
 $result = $node_subscriber->safe_psql('postgres',
 	"SELECT count(*), min(a), max(a) FROM tab_ins");
+is($result, qq(1152|1|1100),
+	'check replicated inserts after subscription publication change');
+
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT count(*), min(a), max(a) FROM tab_ins2");
 is($result, qq(1152|1|1100),
 	'check replicated inserts after subscription publication change');
 
@@ -533,6 +592,7 @@ $node_publisher->poll_query_until('postgres',
 
 # check all the cleanup
 $node_subscriber->safe_psql('postgres', "DROP SUBSCRIPTION tap_sub_renamed");
+$node_subscriber->safe_psql('postgres', "DROP SUBSCRIPTION tap_sub2");
 
 $result = $node_subscriber->safe_psql('postgres',
 	"SELECT count(*) FROM pg_subscription");

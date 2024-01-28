@@ -23,6 +23,7 @@ PostgreSQL documentation
 <synopsis>
 CREATE SERVER [ IF NOT EXISTS ] <replaceable class="parameter">server_name</replaceable> [ TYPE '<replaceable class="parameter">server_type</replaceable>' ] [ VERSION '<replaceable class="parameter">server_version</replaceable>' ]
     FOREIGN DATA WRAPPER <replaceable class="parameter">fdw_name</replaceable>
+    [ { FOR | NO } SUBSCRIPTION ]
     [ OPTIONS ( <replaceable class="parameter">option</replaceable> '<replaceable class="parameter">value</replaceable>' [, ... ] ) ]
 </synopsis>
  </refsynopsisdiv>
@@ -100,6 +101,19 @@ CREATE SERVER [ IF NOT EXISTS ] <replaceable class="parameter">server_name</repl
     <listitem>
      <para>
       The name of the foreign-data wrapper that manages the server.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>{ FOR | NO } SUBSCRIPTION</literal></term>
+    <listitem>
+     <para>
+      This clause specifies whether the foreign server may be used for a
+      subscription (see <xref linkend="sql-createsubscription"/>). The default
+      is <literal>NO SUBSCRIPTION</literal>. Only members of the role
+      <literal>pg_create_connection</literal> may specify <literal>FOR
+      SUBSCRIPTION</literal>.
      </para>
     </listitem>
    </varlistentry>

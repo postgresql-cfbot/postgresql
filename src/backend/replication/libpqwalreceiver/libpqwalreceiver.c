@@ -52,6 +52,7 @@ static WalReceiverConn *libpqrcv_connect(const char *conninfo,
 										 const char *appname, char **err);
 static void libpqrcv_check_conninfo(const char *conninfo,
 									bool must_use_password);
+static const ConnectionOption *libpqrcv_conninfo_options(void);
 static char *libpqrcv_get_conninfo(WalReceiverConn *conn);
 static void libpqrcv_get_senderinfo(WalReceiverConn *conn,
 									char **sender_host, int *sender_port);
@@ -85,6 +86,7 @@ static void libpqrcv_disconnect(WalReceiverConn *conn);
 static WalReceiverFunctionsType PQWalReceiverFunctions = {
 	.walrcv_connect = libpqrcv_connect,
 	.walrcv_check_conninfo = libpqrcv_check_conninfo,
+	.walrcv_conninfo_options = libpqrcv_conninfo_options,
 	.walrcv_get_conninfo = libpqrcv_get_conninfo,
 	.walrcv_get_senderinfo = libpqrcv_get_senderinfo,
 	.walrcv_identify_system = libpqrcv_identify_system,
@@ -335,6 +337,52 @@ libpqrcv_check_conninfo(const char *conninfo, bool must_use_password)
 	}
 
 	PQconninfoFree(opts);
+}
+
+static const ConnectionOption *
+libpqrcv_conninfo_options(void)
+{
+	static ConnectionOption	*connection_options = NULL;
+
+	if (connection_options == NULL)
+	{
+		PQconninfoOption	*conndefaults	= PQconndefaults();
+		PQconninfoOption	*lopt;
+		ConnectionOption	*tmp_options	= NULL;
+		ConnectionOption	*popt;
+		size_t				 options_size	= 0;
+		int					 num_libpq_opts	= 0;
+
+		for (lopt = conndefaults; lopt->keyword; lopt++)
+			num_libpq_opts++;
+
+		/* leave room for all-zero entry at the end */
+		options_size = sizeof(ConnectionOption) * (num_libpq_opts + 1);
+		tmp_options = MemoryContextAllocZero(TopMemoryContext, options_size);
+
+		popt = tmp_options;
+		for (lopt = conndefaults; lopt->keyword; lopt++)
+		{
+			if (strchr(lopt->dispchar, '*'))
+				popt->issecret = true;
+			else if (strchr(lopt->dispchar, 'D'))
+				popt->isdebug = true;
+
+			popt->optname = MemoryContextStrdup(TopMemoryContext,
+												lopt->keyword);
+			popt++;
+		}
+
+		/* last entry is all zero */
+		Assert(popt->optname == NULL);
+
+		PQconninfoFree(conndefaults);
+
+		/* if everything succeeded, set static variable */
+		connection_options = tmp_options;
+	}
+
+	return connection_options;
 }
 
 /*

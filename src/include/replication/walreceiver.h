@@ -223,6 +223,16 @@ typedef struct WalRcvExecResult
 	TupleDesc	tupledesc;
 } WalRcvExecResult;
 
+/*
+ * Describes the valid options for postgresql FDW, server, and user mapping.
+ */
+typedef struct ConnectionOption
+{
+	const char *optname;
+	bool		issecret;		/* is option for a password? */
+	bool		isdebug;		/* is option a debug option? */
+} ConnectionOption;
+
 /* WAL receiver - libpqwalreceiver hooks */
 
 /*
@@ -249,6 +259,13 @@ typedef WalReceiverConn *(*walrcv_connect_fn) (const char *conninfo,
  */
 typedef void (*walrcv_check_conninfo_fn) (const char *conninfo,
 										  bool must_use_password);
+
+/*
+ * walrcv_conninfo_options_fn
+ *
+ * Return a pointer to a static array of the available options from libpq.
+ */
+typedef const struct ConnectionOption *(*walrcv_conninfo_options_fn) (void);
 
 /*
  * walrcv_get_conninfo_fn
@@ -389,6 +406,7 @@ typedef struct WalReceiverFunctionsType
 {
 	walrcv_connect_fn walrcv_connect;
 	walrcv_check_conninfo_fn walrcv_check_conninfo;
+	walrcv_conninfo_options_fn walrcv_conninfo_options;
 	walrcv_get_conninfo_fn walrcv_get_conninfo;
 	walrcv_get_senderinfo_fn walrcv_get_senderinfo;
 	walrcv_identify_system_fn walrcv_identify_system;
@@ -410,6 +428,8 @@ extern PGDLLIMPORT WalReceiverFunctionsType *WalReceiverFunctions;
 	WalReceiverFunctions->walrcv_connect(conninfo, logical, must_use_password, appname, err)
 #define walrcv_check_conninfo(conninfo, must_use_password) \
 	WalReceiverFunctions->walrcv_check_conninfo(conninfo, must_use_password)
+#define walrcv_conninfo_options() \
+	WalReceiverFunctions->walrcv_conninfo_options()
 #define walrcv_get_conninfo(conn) \
 	WalReceiverFunctions->walrcv_get_conninfo(conn)
 #define walrcv_get_senderinfo(conn, sender_host, sender_port) \

@@ -31,6 +31,7 @@ CATALOG(pg_foreign_server,1417,ForeignServerRelationId)
 	NameData	srvname;		/* foreign server name */
 	Oid			srvowner BKI_LOOKUP(pg_authid); /* server owner */
 	Oid			srvfdw BKI_LOOKUP(pg_foreign_data_wrapper); /* server FDW */
+	bool		srvforsubscription BKI_DEFAULT(f); /* usable for subscription */
 
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 	text		srvtype;

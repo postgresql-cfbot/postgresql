@@ -101,7 +101,7 @@ static void expandTupleDesc(TupleDesc tupdesc, Alias *eref,
 static int	specialAttNum(const char *attname);
 static bool rte_visible_if_lateral(ParseState *pstate, RangeTblEntry *rte);
 static bool rte_visible_if_qualified(ParseState *pstate, RangeTblEntry *rte);
-static bool isQueryUsingTempRelation_walker(Node *node, void *context);
+static bool isQueryUsingTempObject_walker(Node *node, void *context);
 
 
 /*
@@ -3896,13 +3896,13 @@ rte_visible_if_qualified(ParseState *pstate, RangeTblEntry *rte)
  * the query is a temporary relation (table, view, or materialized view).
  */
 bool
-isQueryUsingTempRelation(Query *query)
+isQueryUsingTempObject(Query *query)
 {
-	return isQueryUsingTempRelation_walker((Node *) query, NULL);
+	return isQueryUsingTempObject_walker((Node *) query, NULL);
 }
 
 static bool
-isQueryUsingTempRelation_walker(Node *node, void *context)
+isQueryUsingTempObject_walker(Node *node, void *context)
 {
 	if (node == NULL)
 		return false;
@@ -3928,13 +3928,23 @@ isQueryUsingTempRelation_walker(Node *node, void *context)
 		}
 
 		return query_tree_walker(query,
-								 isQueryUsingTempRelation_walker,
+								 isQueryUsingTempObject_walker,
 								 context,
 								 QTW_IGNORE_JOINALIASES);
 	}
+	else if (IsA(node, Param))
+	{
+		Param	   *p = (Param *) node;
+
+		if (p->paramkind == PARAM_VARIABLE)
+		{
+			if (isAnyTempNamespace(get_session_variable_namespace(p->paramvarid)))
+				return true;
+		}
+	}
 
 	return expression_tree_walker(node,
-								  isQueryUsingTempRelation_walker,
+								  isQueryUsingTempObject_walker,
 								  context);
 }
 

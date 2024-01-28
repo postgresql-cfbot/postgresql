@@ -3467,6 +3467,7 @@ typedef struct CreateSessionVarStmt
 	TypeName   *typeName;		/* the type of variable */
 	CollateClause *collClause;
 	bool		if_not_exists;	/* do nothing if it already exists */
+	char		XactEndAction;	/* on transaction end action */
 } CreateSessionVarStmt;
 
 

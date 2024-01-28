@@ -5163,7 +5163,7 @@ listVariables(const char *pattern, bool verbose)
 	PQExpBufferData buf;
 	PGresult   *res;
 	printQueryOpt myopt = pset.popt;
-	static const bool translate_columns[] = {false, false, false, false, false, false, false};
+	static const bool translate_columns[] = {false, false, false, false, false, false, false, false};
 
 	if (pset.sversion < 180000)
 	{
@@ -5183,12 +5183,16 @@ listVariables(const char *pattern, bool verbose)
 					  "  pg_catalog.format_type(v.vartype, v.vartypmod) as \"%s\",\n"
 					  "  (SELECT c.collname FROM pg_catalog.pg_collation c, pg_catalog.pg_type bt\n"
 					  "   WHERE c.oid = v.varcollation AND bt.oid = v.vartype AND v.varcollation <> bt.typcollation) as \"%s\",\n"
-					  "  pg_catalog.pg_get_userbyid(v.varowner) as \"%s\"\n",
+					  "  pg_catalog.pg_get_userbyid(v.varowner) as \"%s\",\n"
+					  "  CASE v.varxactendaction\n"
+					  "    WHEN 'd' THEN 'ON COMMIT DROP'\n"
+					  "  END as \"%s\"\n",
 					  gettext_noop("Schema"),
 					  gettext_noop("Name"),
 					  gettext_noop("Type"),
 					  gettext_noop("Collation"),
-					  gettext_noop("Owner"));
+					  gettext_noop("Owner"),
+					  gettext_noop("Transactional end action"));
 
 	if (verbose)
 	{

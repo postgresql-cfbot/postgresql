@@ -21,8 +21,11 @@
 #include "tcop/cmdtag.h"
 #include "utils/queryenvironment.h"
 
-extern void SessionVariableDropPostprocess(Oid varid);
-extern void AtPreEOXact_SessionVariables(void);
+extern void SessionVariableCreatePostprocess(Oid varid, char XactEndAction);
+extern void SessionVariableDropPostprocess(Oid varid, char XactEndAction);
+extern void AtPreEOXact_SessionVariables(bool isCommit);
+extern void AtEOSubXact_SessionVariables(bool isCommit, SubTransactionId mySubid,
+										 SubTransactionId parentSubid);
 
 extern void SetSessionVariable(Oid varid, Datum value, bool isNull);
 extern void SetSessionVariableWithSecurityCheck(Oid varid, Datum value, bool isNull);

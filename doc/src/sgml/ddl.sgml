@@ -5309,9 +5309,9 @@ SELECT current_user_id;
     <command>LET</command> command.  Session variables are not transactional:
     any changes made to the value of a session variable in a transaction won't
     be undone if the transaction is rolled back (just like variables in
-    procedural languages).  Session variables themselves are persistent, but
-    their values are neither persistent nor shared (like the content of
-    temporary tables).
+    procedural languages).  Session variables themselves can be persistent
+    or temporary, but their values are neither persistent nor shared (like the
+    content of temporary tables).
    </para>
 
    <para>

@@ -732,3 +732,124 @@ DISCARD VARIABLES;
 
 -- should be zero again
 SELECT count(*) FROM pg_session_variables();
+
+-- dropped variables should be removed from memory
+-- at the end of transaction or before next usage
+-- of any session variable in next transaction.
+
+LET var1 = 'Ahoj';
+SELECT name, typname, can_select, can_update FROM pg_session_variables();
+DROP VARIABLE var1;
+
+-- should be zero
+SELECT count(*) FROM pg_session_variables();
+
+-- the content of value should be preserved when variable is dropped
+-- by aborted transaction
+CREATE VARIABLE var1 AS varchar;
+LET var1 = 'Ahoj';
+BEGIN;
+DROP VARIABLE var1;
+
+-- should fail
+SELECT var1;
+
+ROLLBACK;
+
+-- should be ok
+SELECT var1;
+
+-- another test
+BEGIN;
+DROP VARIABLE var1;
+CREATE VARIABLE var1 AS int;
+LET var1 = 100;
+-- should be ok, result 100
+SELECT var1;
+ROLLBACK;
+-- should be ok, result 'Ahoj'
+SELECT var1;
+
+DROP VARIABLE var1;
+
+-- should be zero
+SELECT count(*) FROM pg_session_variables();
+
+BEGIN;
+  CREATE VARIABLE var1 AS int;
+  LET var1 = 100;
+  SELECT var1;
+  SELECT name, typname, can_select, can_update FROM pg_session_variables();
+  DROP VARIABLE var1;
+COMMIT;
+
+-- should be zero
+SELECT count(*) FROM pg_session_variables();
+
+BEGIN;
+  CREATE VARIABLE var1 AS int;
+  LET var1 = 100;
+  SELECT var1;
+  SELECT name, typname, can_select, can_update FROM pg_session_variables();
+  DROP VARIABLE var1;
+COMMIT;
+
+-- should be zero
+SELECT count(*) FROM pg_session_variables();
+
+CREATE VARIABLE var1 AS int;
+CREATE VARIABLE var2 AS int;
+LET var1 = 10;
+LET var2 = 0;
+BEGIN;
+  SAVEPOINT s1;
+  DROP VARIABLE var1;
+  -- force cleaning by touching another session variable
+  SELECT var2;
+  ROLLBACK TO s1;
+  SAVEPOINT s2;
+  DROP VARIABLE var1;
+  SELECT var2;
+  ROLLBACK TO s2;
+COMMIT;
+-- should be ok
+SELECT var1;
+
+BEGIN;
+  SAVEPOINT s1;
+  DROP VARIABLE var1;
+  -- force cleaning by touching another session variable
+  SELECT var2;
+  ROLLBACK TO s1;
+  SAVEPOINT s2;
+  DROP VARIABLE var1;
+  SELECT var2;
+ROLLBACK;
+-- should be ok
+SELECT var1;
+
+BEGIN;
+  SAVEPOINT s1;
+  DROP VARIABLE var1;
+  -- force cleaning by touching another session variable
+  SELECT var2;
+
+  SAVEPOINT s2;
+  -- force cleaning by touching another session variable
+  SELECT var2;
+  ROLLBACK TO s1;
+  -- force cleaning by touching another session variable
+  SELECT var2;
+COMMIT;
+-- should be ok
+SELECT var1;
+
+-- repeated aborted transaction
+BEGIN; DROP VARIABLE var1; ROLLBACK;
+BEGIN; DROP VARIABLE var1; ROLLBACK;
+BEGIN; DROP VARIABLE var1; ROLLBACK;
+
+-- should be ok
+SELECT var1;
+
+DROP VARIABLE var1, var2;

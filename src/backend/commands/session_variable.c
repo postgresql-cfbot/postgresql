@@ -14,6 +14,7 @@
  */
 #include "postgres.h"
 
+#include "access/xact.h"
 #include "catalog/pg_variable.h"
 #include "commands/session_variable.h"
 #include "executor/svariableReceiver.h"
@@ -68,6 +69,14 @@ typedef struct SVariableData
 	LocalTransactionId domain_check_extra_lxid;
 
 	/*
+	 * Top level local transaction id of the last transaction that dropped the
+	 * variable if any.  We need this information to avoid freeing memory for
+	 * variable dropped by the local backend that may be eventually
+	 * rollbacked.
+	 */
+	LocalTransactionId drop_lxid;
+
+	/*
 	 * Stored value and type description can be outdated when we receive a
 	 * sinval message.  We then have to check if the stored data are still
 	 * trustworthy.
@@ -82,6 +91,19 @@ typedef SVariableData *SVariable;
 static HTAB *sessionvars = NULL;	/* hash table for session variables */
 
 static MemoryContext SVariableMemoryContext = NULL;
+
+/* true after accepted sinval message */
+static bool needs_validation = false;
+
+/*
+ * The content of session variables is not removed immediately. When it
+ * is possible we do this at the transaction end. But when the transaction failed,
+ * we cannot do it, because we lost access to the system catalog. So we
+ * try to do it in the next transaction before any get or set of any session
+ * variable. We don't want to repeat this opening cleaning in transaction,
+ * So we store the id of the transaction where opening validation was done.
+ */
+static LocalTransactionId validated_lxid = InvalidLocalTransactionId;
 
 /*
  * Callback function for session variable invalidation.
@@ -114,6 +136,39 @@ pg_variable_cache_callback(Datum arg, int cacheid, uint32 hashvalue)
 		if (hashvalue == 0 || svar->hashvalue == hashvalue)
 		{
 			svar->is_valid = false;
+			needs_validation = true;
+		}
+	}
+}
+
+/*
+ * Handle the local memory cleanup for a DROP VARIABLE command.
+ *
+ * Caller should take care of removing the pg_variable entry first.
+ */
+void
+SessionVariableDropPostprocess(Oid varid)
+{
+	Assert(LocalTransactionIdIsValid(MyProc->vxid.lxid));
+
+	if (sessionvars)
+	{
+		bool		found;
+		SVariable	svar = (SVariable) hash_search(sessionvars, &varid,
+												   HASH_FIND, &found);
+
+		if (found)
+		{
+			/*
+			 * Save the current top level local transaction id to make sure we
+			 * don't automatically remove the local variable storage in
+			 * validate_all_session_variables, as the DROP VARIABLE will send
+			 * an invalidation message.
+			 */
+			svar->is_valid = false;
+			svar->drop_lxid = MyProc->vxid.lxid;
+
+			needs_validation = true;
 		}
 	}
 }
@@ -168,6 +223,83 @@ is_session_variable_valid(SVariable svar)
 }
 
 /*
+ * It checks all possibly invalid entries against the system catalog.
+ * During this validation, the system cache can be invalidated, and the
+ * some sinval message can be accepted. This routine doesn't ensure
+ * all living entries of sessionvars will have is_valid flag, but it ensures
+ * that all entries are checked once.
+ *
+ * This routine is called before any usage (read, write, debug) of session
+ * variables (only once in a transaction) or at a transaction end.  At the
+ * end of transaction (specified by true of argument atEOX) we can
+ * throw all invalid variables. Inside the transaction (atEOX is false) we want
+ * to postpone cleaning of variables dropped inside the current transaction.
+ * The current transaction can be aborted, the related drop command will be
+ * aborted too. In this case we don't want lose the content of the variable,
+ * and therefore we need to hold the content of the dropped session variable
+ * until the end of the transaction (where the variable was dropped).
+ */
+static void
+remove_invalid_session_variables(bool atEOX)
+{
+	HASH_SEQ_STATUS status;
+	SVariable	svar;
+
+	/*
+	 * The validation requires an access to system catalog, and then the
+	 * session state should be "in transaction".
+	 */
+	Assert(IsTransactionState());
+
+	if (!needs_validation || !sessionvars)
+		return;
+
+	/*
+	 * Reset this flag here, before we start the validation. It can be set to
+	 * on by incomming sinval message.
+	 */
+	needs_validation = false;
+
+	elog(DEBUG1, "effective call of validate_all_session_variables()");
+
+	hash_seq_init(&status, sessionvars);
+	while ((svar = (SVariable) hash_seq_search(&status)) != NULL)
+	{
+		if (!svar->is_valid)
+		{
+			if (!atEOX && svar->drop_lxid == MyProc->vxid.lxid)
+			{
+				needs_validation = true;
+				continue;
+			}
+
+			if (!is_session_variable_valid(svar))
+			{
+				Oid			varid = svar->varid;
+
+				free_session_variable_value(svar);
+				hash_search(sessionvars, &varid, HASH_REMOVE, NULL);
+				svar = NULL;
+			}
+			else
+				svar->is_valid = true;
+		}
+	}
+}
+
+/*
+ * Remove values of dropped session variables from memory.
+ */
+void
+AtPreEOXact_SessionVariables(void)
+{
+	/* we cannot to do it when transaction is aborted */
+	Assert(IsTransactionState());
+
+	remove_invalid_session_variables(true);
+}
+
+/*
  * Initialize attributes cached in "svar"
  */
 static void
@@ -195,6 +327,8 @@ setup_session_variable(SVariable svar, Oid varid)
 	svar->is_domain = (get_typtype(varform->vartype) == TYPTYPE_DOMAIN);
 	svar->domain_check_extra = NULL;
 	svar->domain_check_extra_lxid = InvalidLocalTransactionId;
+
+	svar->drop_lxid = InvalidTransactionId;
 
 	svar->isnull = true;
 	svar->value = (Datum) 0;
@@ -319,22 +453,44 @@ get_session_variable(Oid varid)
 	if (!sessionvars)
 		create_sessionvars_hashtables();
 
+	if (validated_lxid == InvalidLocalTransactionId ||
+		validated_lxid != MyProc->vxid.lxid)
+	{
+		/* throw invalid entries, skip entries dropped by this transaction. */
+		remove_invalid_session_variables(false);
+
+		/* don't repeat it in this transaction */
+		validated_lxid = MyProc->vxid.lxid;
+	}
+
 	svar = (SVariable) hash_search(sessionvars, &varid,
 								   HASH_ENTER, &found);
 
 	if (found)
 	{
+		/*
+		 * The session variable can be dropped by DROP VARIABLE command,
+		 * but effect of this command can be reverted by ROLLBACK to savepoint,
+		 * so we can work here with readable value in variable marked as invalid.
+		 */
 		if (!svar->is_valid)
 		{
 			/*
 			 * If there was an invalidation message, the variable might still be
 			 * valid, but we have to check with the system catalog.
+			 *
+			 * If we access this session variable, then the variable should be
+			 * possibly validated. The oid should be valid, because related
+			 * session variable is locked already, and remove_invalid_session_variables
+			 * should to remove variables dropped by other transactions.
 			 */
 			if (is_session_variable_valid(svar))
 				svar->is_valid = true;
 			else
-				/* if the value cannot be validated, we have to discard it */
-				free_session_variable_value(svar);
+			{
+				/* we don't expect it */
+				elog(ERROR, "unexpected state of session variable %u", varid);
+			}
 		}
 	}
 	else
@@ -394,6 +550,16 @@ SetSessionVariable(Oid varid, Datum value, bool isNull)
 
 	if (!sessionvars)
 		create_sessionvars_hashtables();
+
+	if (validated_lxid == InvalidLocalTransactionId ||
+		validated_lxid != MyProc->vxid.lxid)
+	{
+		/* throw invalid entries, skip entries dropped by this transaction */
+		remove_invalid_session_variables(false);
+
+		/* don't repeat it in this transaction */
+		validated_lxid = MyProc->vxid.lxid;
+	}
 
 	svar = (SVariable) hash_search(sessionvars, &varid,
 								   HASH_ENTER, &found);
@@ -590,6 +756,8 @@ pg_session_variables(PG_FUNCTION_ARGS)
 #define NUM_PG_SESSION_VARIABLES_ATTS 8
 
 	elog(DEBUG1, "pg_session_variables start");
+
+	remove_invalid_session_variables(false);
 
 	InitMaterializedSRF(fcinfo, 0);
 

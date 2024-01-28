@@ -29,4 +29,6 @@ extern Datum GetSessionVariableWithTypeCheck(Oid varid, bool *isNull, Oid expect
 extern void ExecuteLetStmt(ParseState *pstate, LetStmt *stmt, ParamListInfo params,
 						   QueryEnvironment *queryEnv, QueryCompletion *qc);
 
+extern void ResetSessionVariables(void);
+
 #endif

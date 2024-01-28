@@ -26,7 +26,8 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-CREATE VARIABLE [ IF NOT EXISTS ] <replaceable class="parameter">name</replaceable> [ AS ] <replaceable class="parameter">data_type</replaceable> ] [ COLLATE <replaceable class="parameter">collation</replaceable> ]
+CREATE [ { TEMPORARY | TEMP } ] VARIABLE [ IF NOT EXISTS ] <replaceable class="parameter">name</replaceable> [ AS ] <replaceable class="parameter">data_type</replaceable> ] [ COLLATE <replaceable class="parameter">collation</replaceable> ]
+    [ ON COMMIT DROP ]
 </synopsis>
  </refsynopsisdiv>
  <refsect1>
@@ -100,6 +101,18 @@ CREATE VARIABLE [ IF NOT EXISTS ] <replaceable class="parameter">name</replaceab
       The <literal>COLLATE</literal> clause assigns a collation to the session
       variable (which must be of a collatable data type).  If not specified,
       the data type's default collation is used.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-createvariable-on-commit-drop">
+    <term><literal>ON COMMIT DROP</literal></term>
+    <listitem>
+     <para>
+      The <literal>ON COMMIT DROP</literal> clause specifies the behaviour of a
+      temporary session variable at transaction commit. With this clause, the
+      session variable is dropped at commit time. The clause is only allowed
+      for temporary variables.
      </para>
     </listitem>
    </varlistentry>

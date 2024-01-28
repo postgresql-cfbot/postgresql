@@ -825,6 +825,7 @@ BEGIN;
   DROP VARIABLE var1;
   SELECT var2;
 ROLLBACK;
+
 -- should be ok
 SELECT var1;
 
@@ -951,3 +952,68 @@ SELECT var1;
 
 DEALLOCATE p1;
 DROP VARIABLE var1;
+
+-- temporary variables
+CREATE TEMP VARIABLE var1 AS int;
+-- this view should be temporary
+CREATE VIEW var_test_view AS SELECT var1;
+
+DROP VARIABLE var1 CASCADE;
+
+BEGIN;
+  CREATE TEMP VARIABLE var1 AS int ON COMMIT DROP;
+  LET var1 = 100;
+  SELECT var1;
+COMMIT;
+
+-- should be zero
+SELECT count(*) FROM pg_variable WHERE varname = 'var1';
+-- should be zero
+SELECT count(*) FROM pg_session_variables();
+
+BEGIN;
+  CREATE TEMP VARIABLE var1 AS int ON COMMIT DROP;
+  LET var1 = 100;
+  SELECT var1;
+ROLLBACK;
+
+-- should be zero
+SELECT count(*) FROM pg_variable WHERE varname = 'var1';
+-- should be zero
+SELECT count(*) FROM pg_session_variables();
+
+BEGIN;
+  CREATE TEMP VARIABLE var1 AS int ON COMMIT DROP;
+  LET var1 = 100;
+  DROP VARIABLE var1;
+COMMIT;
+
+-- should be zero
+SELECT count(*) FROM pg_variable WHERE varname = 'var1';
+-- should be zero
+SELECT count(*) FROM pg_session_variables();
+
+BEGIN;
+  CREATE TEMP VARIABLE var1 AS int ON COMMIT DROP;
+  LET var1 = 100;
+  DROP VARIABLE var1;
+ROLLBACK;
+
+-- should be zero
+SELECT count(*) FROM pg_variable WHERE varname = 'var1';
+-- should be zero
+SELECT count(*) FROM pg_session_variables();
+
+BEGIN;
+  CREATE TEMP VARIABLE var1 AS int ON COMMIT DROP;
+  LET var1 = 100;
+  SAVEPOINT s1;
+  DROP VARIABLE var1;
+  ROLLBACK TO s1;
+  SELECT var1;
+COMMIT;
+
+-- should be zero
+SELECT count(*) FROM pg_variable WHERE varname = 'var1';
+-- should be zero
+SELECT count(*) FROM pg_session_variables();

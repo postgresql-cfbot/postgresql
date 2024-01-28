@@ -51,7 +51,9 @@ typedef struct Alias
 	List	   *colnames;		/* optional list of column aliases */
 } Alias;
 
-/* What to do at commit time for temporary relations */
+/*
+ * What to do at commit time for temporary relations or session variables.
+ */
 typedef enum OnCommitAction
 {
 	ONCOMMIT_NOOP,				/* No ON COMMIT clause (do nothing) */

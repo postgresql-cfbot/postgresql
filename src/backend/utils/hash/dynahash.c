@@ -104,7 +104,6 @@
 #include "utils/dynahash.h"
 #include "utils/memutils.h"
 
-
 /*
  * Constants
  *
@@ -359,7 +358,6 @@ hash_create(const char *tabname, long nelem, const HASHCTL *info, int flags)
 	Assert(flags & HASH_ELEM);
 	Assert(info->keysize > 0);
 	Assert(info->entrysize >= info->keysize);
-
 	/*
 	 * For shared hash tables, we have a local hash header (HTAB struct) that
 	 * we allocate in TopMemoryContext; all else is in shared memory.
@@ -377,6 +375,7 @@ hash_create(const char *tabname, long nelem, const HASHCTL *info, int flags)
 	}
 	else
 	{
+		/* Set up to allocate the hash header */
 		/* Create the hash table's private memory context */
 		if (flags & HASH_CONTEXT)
 			CurrentDynaHashCxt = info->hcxt;

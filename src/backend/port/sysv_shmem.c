@@ -34,6 +34,7 @@
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/pg_shmem.h"
+#include "utils/backend_status.h"
 #include "utils/guc_hooks.h"
 #include "utils/pidfile.h"
 
@@ -917,6 +918,14 @@ PGSharedMemoryReAttach(void)
 	dsm_set_control_handle(hdr->dsm_control);
 
 	UsedShmemSegAddr = hdr;		/* probably redundant */
+
+	/*
+	 * Init allocated bytes to avoid double counting parent allocation for
+	 * fork/exec processes. Forked processes perform this action in
+	 * InitPostmasterChild. For EXEC_BACKEND processes we have to wait for
+	 * shared memory to be reattached.
+	 */
+	pgstat_init_allocated_bytes();
 }
 
 /*

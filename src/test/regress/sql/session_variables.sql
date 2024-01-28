@@ -696,3 +696,39 @@ DROP VARIABLE :"DBNAME".:"DBNAME".:"DBNAME";
 DROP SCHEMA :"DBNAME";
 
 RESET search_path;
+
+-- memory cleaning by DISCARD command
+CREATE VARIABLE var1 AS varchar;
+LET var1 = 'Hello';
+SELECT var1;
+
+DISCARD ALL;
+SELECT var1;
+
+LET var1 = 'AHOJ';
+SELECT var1;
+
+DISCARD VARIABLES;
+SELECT var1;
+
+DROP VARIABLE var1;
+
+-- initial test of debug pg_session_variables function
+-- should be zero now
+DISCARD VARIABLES;
+
+SELECT count(*) FROM pg_session_variables();
+
+CREATE VARIABLE var1 AS varchar;
+
+-- should be zero still
+SELECT count(*) FROM pg_session_variables();
+
+LET var1 = 'AHOJ';
+
+SELECT name, typname, can_select, can_update FROM pg_session_variables();
+
+DISCARD VARIABLES;
+
+-- should be zero again
+SELECT count(*) FROM pg_session_variables();

@@ -45,11 +45,11 @@ SET ROLE TO regress_variable_owner;
 CREATE VARIABLE svartest.var1 AS int;
 SET ROLE TO DEFAULT;
 \dV+ svartest.var1
-                                                        List of variables
-  Schema  | Name |  Type   | Collation |         Owner          |                Access privileges                 | Description 
-----------+------+---------+-----------+------------------------+--------------------------------------------------+-------------
- svartest | var1 | integer |           | regress_variable_owner | regress_variable_owner=rw/regress_variable_owner+| 
-          |      |         |           |                        | regress_variable_reader=r/regress_variable_owner | 
+                                                                     List of variables
+  Schema  | Name |  Type   | Collation |         Owner          | Transactional end action |                Access privileges                 | Description 
+----------+------+---------+-----------+------------------------+--------------------------+--------------------------------------------------+-------------
+ svartest | var1 | integer |           | regress_variable_owner |                          | regress_variable_owner=rw/regress_variable_owner+| 
+          |      |         |           |                        |                          | regress_variable_reader=r/regress_variable_owner | 
 (1 row)
 
 DROP VARIABLE svartest.var1;
@@ -1397,3 +1397,123 @@ SELECT var1;
 
 DEALLOCATE p1;
 DROP VARIABLE var1;
+-- temporary variables
+CREATE TEMP VARIABLE var1 AS int;
+-- this view should be temporary
+CREATE VIEW var_test_view AS SELECT var1;
+NOTICE:  view "var_test_view" will be a temporary view
+DROP VARIABLE var1 CASCADE;
+NOTICE:  drop cascades to view var_test_view
+BEGIN;
+  CREATE TEMP VARIABLE var1 AS int ON COMMIT DROP;
+  LET var1 = 100;
+  SELECT var1;
+ var1 
+------
+  100
+(1 row)
+
+COMMIT;
+-- should be zero
+SELECT count(*) FROM pg_variable WHERE varname = 'var1';
+ count 
+-------
+     0
+(1 row)
+
+-- should be zero
+SELECT count(*) FROM pg_session_variables();
+ count 
+-------
+     0
+(1 row)
+
+BEGIN;
+  CREATE TEMP VARIABLE var1 AS int ON COMMIT DROP;
+  LET var1 = 100;
+  SELECT var1;
+ var1 
+------
+  100
+(1 row)
+
+ROLLBACK;
+-- should be zero
+SELECT count(*) FROM pg_variable WHERE varname = 'var1';
+ count 
+-------
+     0
+(1 row)
+
+-- should be zero
+SELECT count(*) FROM pg_session_variables();
+ count 
+-------
+     0
+(1 row)
+
+BEGIN;
+  CREATE TEMP VARIABLE var1 AS int ON COMMIT DROP;
+  LET var1 = 100;
+  DROP VARIABLE var1;
+COMMIT;
+-- should be zero
+SELECT count(*) FROM pg_variable WHERE varname = 'var1';
+ count 
+-------
+     0
+(1 row)
+
+-- should be zero
+SELECT count(*) FROM pg_session_variables();
+ count 
+-------
+     0
+(1 row)
+
+BEGIN;
+  CREATE TEMP VARIABLE var1 AS int ON COMMIT DROP;
+  LET var1 = 100;
+  DROP VARIABLE var1;
+ROLLBACK;
+-- should be zero
+SELECT count(*) FROM pg_variable WHERE varname = 'var1';
+ count 
+-------
+     0
+(1 row)
+
+-- should be zero
+SELECT count(*) FROM pg_session_variables();
+ count 
+-------
+     0
+(1 row)
+
+BEGIN;
+  CREATE TEMP VARIABLE var1 AS int ON COMMIT DROP;
+  LET var1 = 100;
+  SAVEPOINT s1;
+  DROP VARIABLE var1;
+  ROLLBACK TO s1;
+  SELECT var1;
+ var1 
+------
+  100
+(1 row)
+
+COMMIT;
+-- should be zero
+SELECT count(*) FROM pg_variable WHERE varname = 'var1';
+ count 
+-------
+     0
+(1 row)
+
+-- should be zero
+SELECT count(*) FROM pg_session_variables();
+ count 
+-------
+     0
+(1 row)
+

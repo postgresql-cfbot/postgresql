@@ -3305,10 +3305,10 @@ transformCreateTableAsStmt(ParseState *pstate, CreateTableAsStmt *stmt)
 		 * creation query. It would be hard to refresh data or incrementally
 		 * maintain it if a source disappeared.
 		 */
-		if (isQueryUsingTempRelation(query))
+		if (isQueryUsingTempObject(query))
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("materialized views must not use temporary tables or views")));
+					 errmsg("materialized views must not use temporary tables, views or session variables")));
 
 		/*
 		 * A materialized view would either need to save parameters for use in

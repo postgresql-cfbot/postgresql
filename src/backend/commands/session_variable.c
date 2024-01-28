@@ -16,6 +16,8 @@
 
 #include "access/xact.h"
 #include "catalog/pg_variable.h"
+#include "catalog/dependency.h"
+#include "catalog/namespace.h"
 #include "commands/session_variable.h"
 #include "executor/svariableReceiver.h"
 #include "funcapi.h"
@@ -30,6 +32,19 @@
 #include "utils/lsyscache.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
+
+typedef struct SVariableXActDropItem
+{
+	Oid			varid;			/* varid of session variable */
+
+	/*
+	 * creating_subid is the ID of the creating subxact. If the action was
+	 * unregistered during the current transaction, deleting_subid is the ID
+	 * of the deleting subxact, otherwise InvalidSubTransactionId.
+	 */
+	SubTransactionId creating_subid;
+	SubTransactionId deleting_subid;
+} SVariableXActDropItem;
 
 /*
  * The values of session variables are stored in the backend's private memory
@@ -105,6 +120,12 @@ static bool needs_validation = false;
  */
 static LocalTransactionId validated_lxid = InvalidLocalTransactionId;
 
+/* list holds fields of SVariableXActDropItem type */
+static List *xact_drop_items = NIL;
+
+static void register_session_variable_xact_drop(Oid varid);
+static void unregister_session_variable_xact_drop(Oid varid);
+
 /*
  * Callback function for session variable invalidation.
  */
@@ -142,14 +163,43 @@ pg_variable_cache_callback(Datum arg, int cacheid, uint32 hashvalue)
 }
 
 /*
+ * Do the necessary work to setup local memory management of a new
+ * variable.
+ *
+ * Caller should already have created the necessary entry in catalog
+ * and made them visible.
+ */
+void
+SessionVariableCreatePostprocess(Oid varid, char XactEndAction)
+{
+	/*
+	 * For temporary variables, we need to create a new end of xact action to
+	 * ensure deletion from catalog.
+	 */
+	if (XactEndAction == VARIABLE_XACTEND_DROP)
+	{
+		Assert(isTempNamespace(get_session_variable_namespace(varid)));
+
+		register_session_variable_xact_drop(varid);
+	}
+}
+
+/*
  * Handle the local memory cleanup for a DROP VARIABLE command.
  *
  * Caller should take care of removing the pg_variable entry first.
  */
 void
-SessionVariableDropPostprocess(Oid varid)
+SessionVariableDropPostprocess(Oid varid, char XactEndAction)
 {
 	Assert(LocalTransactionIdIsValid(MyProc->vxid.lxid));
+
+	if (XactEndAction == VARIABLE_XACTEND_DROP)
+	{
+		Assert(isTempNamespace(get_session_variable_namespace(varid)));
+
+		unregister_session_variable_xact_drop(varid);
+	}
 
 	if (sessionvars)
 	{
@@ -170,6 +220,57 @@ SessionVariableDropPostprocess(Oid varid)
 
 			needs_validation = true;
 		}
+	}
+}
+
+/*
+ * Registration of actions to be executed on session variables at transaction
+ * end time. We want to drop temporary session variables with clause ON COMMIT
+ * DROP.
+ */
+
+/*
+ * Register a session variable xact action.
+ */
+static void
+register_session_variable_xact_drop(Oid varid)
+{
+	SVariableXActDropItem *xact_ai;
+	MemoryContext oldcxt;
+
+	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+
+	xact_ai = (SVariableXActDropItem *)
+		palloc(sizeof(SVariableXActDropItem));
+
+	xact_ai->varid = varid;
+
+	xact_ai->creating_subid = GetCurrentSubTransactionId();
+	xact_ai->deleting_subid = InvalidSubTransactionId;
+
+	xact_drop_items = lcons(xact_ai, xact_drop_items);
+
+	MemoryContextSwitchTo(oldcxt);
+}
+
+/*
+ * Unregister an id of a given session variable from drop list. In this
+ * moment, the action is just marked as deleted by setting deleting_subid. The
+ * calling even might be rollbacked, in which case we should not lose this
+ * action.
+ */
+static void
+unregister_session_variable_xact_drop(Oid varid)
+{
+	ListCell   *l;
+
+	foreach(l, xact_drop_items)
+	{
+		SVariableXActDropItem *xact_ai =
+			(SVariableXActDropItem *) lfirst(l);
+
+		if (xact_ai->varid == varid)
+			xact_ai->deleting_subid = GetCurrentSubTransactionId();
 	}
 }
 
@@ -288,15 +389,92 @@ remove_invalid_session_variables(bool atEOX)
 }
 
 /*
- * Remove values of dropped session variables from memory.
+  * Perform ON COMMIT DROP for temporary session variables,
+  * and remove all dropped variables from memory.
  */
 void
-AtPreEOXact_SessionVariables(void)
+AtPreEOXact_SessionVariables(bool isCommit)
 {
-	/* we cannot to do it when transaction is aborted */
-	Assert(IsTransactionState());
+	if (isCommit)
+	{
+		if (xact_drop_items)
+		{
+			ListCell   *l;
 
-	remove_invalid_session_variables(true);
+			foreach(l, xact_drop_items)
+			{
+				SVariableXActDropItem *xact_ai =
+					(SVariableXActDropItem *) lfirst(l);
+
+				/* iterate only over entries that are still pending */
+				if (xact_ai->deleting_subid == InvalidSubTransactionId)
+				{
+					ObjectAddress object;
+
+					object.classId = VariableRelationId;
+					object.objectId = xact_ai->varid;
+					object.objectSubId = 0;
+
+					/*
+					 * Since this is an automatic drop, rather than one
+					 * directly initiated by the user, we pass the
+					 * PERFORM_DELETION_INTERNAL flag.
+					 */
+					elog(DEBUG1, "session variable (oid:%u) will be deleted (forced by ON COMMIT DROP clause)",
+						 xact_ai->varid);
+
+					performDeletion(&object, DROP_CASCADE,
+									PERFORM_DELETION_INTERNAL |
+									PERFORM_DELETION_QUIETLY);
+				}
+			}
+		}
+
+		remove_invalid_session_variables(true);
+	}
+
+	/*
+	 * We have to clean xact_drop_items. All related variables are dropped
+	 * now, or lost inside aborted transaction.
+	 */
+	list_free_deep(xact_drop_items);
+	xact_drop_items = NULL;
+}
+
+/*
+ * Post-subcommit or post-subabort cleanup of xact drop list.
+ *
+ * During subabort, we can immediately remove entries created during this
+ * subtransaction. During subcommit, just transfer entries marked during
+ * this subtransaction as being the parent's responsibility.
+ */
+void
+AtEOSubXact_SessionVariables(bool isCommit,
+							 SubTransactionId mySubid,
+							 SubTransactionId parentSubid)
+{
+	ListCell   *cur_item;
+
+	foreach(cur_item, xact_drop_items)
+	{
+		SVariableXActDropItem *xact_ai =
+			(SVariableXActDropItem *) lfirst(cur_item);
+
+		if (!isCommit && xact_ai->creating_subid == mySubid)
+		{
+			/* cur_item must be removed */
+			xact_drop_items = foreach_delete_current(xact_drop_items, cur_item);
+			pfree(xact_ai);
+		}
+		else
+		{
+			/* cur_item must be preserved */
+			if (xact_ai->creating_subid == mySubid)
+				xact_ai->creating_subid = parentSubid;
+			if (xact_ai->deleting_subid == mySubid)
+				xact_ai->deleting_subid = isCommit ? parentSubid : InvalidSubTransactionId;
+		}
+	}
 }
 
 /*

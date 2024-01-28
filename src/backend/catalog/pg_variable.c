@@ -22,6 +22,7 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_variable.h"
+#include "commands/session_variable.h"
 #include "miscadmin.h"
 #include "parser/parse_type.h"
 #include "utils/builtins.h"
@@ -254,4 +255,7 @@ DropVariableById(Oid varid)
 	ReleaseSysCache(tup);
 
 	table_close(rel, RowExclusiveLock);
+
+	/* do the necessary cleanup if needed in local memory */
+	SessionVariableDropPostprocess(varid);
 }

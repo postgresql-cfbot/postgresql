@@ -2096,7 +2096,13 @@ DiscardStmt:
 					n->target = DISCARD_SEQUENCES;
 					$$ = (Node *) n;
 				}
+			| DISCARD VARIABLES
+				{
+					DiscardStmt *n = makeNode(DiscardStmt);
 
+					n->target = DISCARD_VARIABLES;
+					$$ = (Node *) n;
+				}
 		;
 
 

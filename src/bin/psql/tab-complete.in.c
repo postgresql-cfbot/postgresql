@@ -4083,7 +4083,7 @@ match_previous_words(int pattern_id,
 
 /* DISCARD */
 	else if (Matches("DISCARD"))
-		COMPLETE_WITH("ALL", "PLANS", "SEQUENCES", "TEMP");
+		COMPLETE_WITH("ALL", "PLANS", "SEQUENCES", "TEMP", "VARIABLES");
 
 /* DO */
 	else if (Matches("DO"))

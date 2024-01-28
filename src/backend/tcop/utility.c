@@ -2959,6 +2959,9 @@ CreateCommandTag(Node *parsetree)
 				case DISCARD_SEQUENCES:
 					tag = CMDTAG_DISCARD_SEQUENCES;
 					break;
+				case DISCARD_VARIABLES:
+					tag = CMDTAG_DISCARD_VARIABLES;
+					break;
 				default:
 					tag = CMDTAG_UNKNOWN;
 			}

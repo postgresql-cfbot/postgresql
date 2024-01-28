@@ -2494,6 +2494,8 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 			}
 		case CONSTRAINT_NOTNULL:
 			{
+				if (conForm->conrelid)
+				{
 				AttrNumber	attnum;
 
 				attnum = extractNotNullColumn(tup);
@@ -2503,6 +2505,12 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 															  attnum, false)));
 				if (((Form_pg_constraint) GETSTRUCT(tup))->connoinherit)
 					appendStringInfoString(&buf, " NO INHERIT");
+				}
+				else if (conForm->contypid)
+				{
+					/* conkey is null for domain not-null constraints */
+					appendStringInfoString(&buf, "NOT NULL VALUE");
+				}
 				break;
 			}
 

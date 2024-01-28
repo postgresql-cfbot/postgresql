@@ -9845,6 +9845,16 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>varxactendaction</structfield> <type>char</type>
+      </para>
+      <para>
+       Action performed at end of transaction:
+       <literal>n</literal> = no action, <literal>d</literal> = drop the variable.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>varcollation</structfield> <type>oid</type>
        (references <link linkend="catalog-pg-collation"><structname>pg_collation</structname></link>.<structfield>oid</structfield>)
       </para>

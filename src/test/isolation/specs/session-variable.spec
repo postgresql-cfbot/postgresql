@@ -24,6 +24,7 @@ step create		{ CREATE VARIABLE myvar AS text; }
 session s3
 step s3			{ BEGIN; }
 step let3		{ LET myvar3 = 'test'; }
+step o_c_d		{ CREATE TEMP VARIABLE myvar_o_c_d AS text ON COMMIT DROP; }
 step create4	{ CREATE VARIABLE myvar4 AS text; }
 step let4		{ LET myvar4 = 'test'; }
 step drop4		{ DROP VARIABLE myvar4; }
@@ -47,4 +48,4 @@ permutation let val dbg drop create dbg val
 # calling the dbg step after the concurrent drop
 permutation let val s1 dbg drop create dbg val sr1
 # test for DISCARD ALL when all internal queues have actions registered
-permutation create3 let3 s3 create4 let4 drop4 drop3 inval3 discard sc3 state
+permutation create3 let3 s3 o_c_d create4 let4 drop4 drop3 inval3 discard sc3 state

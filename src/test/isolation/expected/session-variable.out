@@ -85,10 +85,11 @@ myvar
 
 step sr1: ROLLBACK;
 
-starting permutation: create3 let3 s3 create4 let4 drop4 drop3 inval3 discard sc3 state
+starting permutation: create3 let3 s3 o_c_d create4 let4 drop4 drop3 inval3 discard sc3 state
 step create3: CREATE VARIABLE myvar3 AS text;
 step let3: LET myvar3 = 'test';
 step s3: BEGIN;
+step o_c_d: CREATE TEMP VARIABLE myvar_o_c_d AS text ON COMMIT DROP;
 step create4: CREATE VARIABLE myvar4 AS text;
 step let4: LET myvar4 = 'test';
 step drop4: DROP VARIABLE myvar4;

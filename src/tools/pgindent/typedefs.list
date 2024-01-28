@@ -2794,6 +2794,7 @@ SupportRequestWFuncMonotonic
 SVariable
 SVariableData
 SVariableState
+SVariableXActDropItem
 Syn
 SyncOps
 SyncRepConfigData

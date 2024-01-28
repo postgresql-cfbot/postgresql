@@ -3593,7 +3593,7 @@ match_previous_words(int pattern_id,
 /* CREATE TABLE --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	/* Complete "CREATE TEMP/TEMPORARY" with the possible temp objects */
 	else if (TailMatches("CREATE", "TEMP|TEMPORARY"))
-		COMPLETE_WITH("SEQUENCE", "TABLE", "VIEW");
+		COMPLETE_WITH("SEQUENCE", "TABLE", "VARIABLE", "VIEW");
 	/* Complete "CREATE UNLOGGED" with TABLE or SEQUENCE */
 	else if (TailMatches("CREATE", "UNLOGGED"))
 		COMPLETE_WITH("TABLE", "SEQUENCE");
@@ -3944,7 +3944,8 @@ match_previous_words(int pattern_id,
 	}
 /* CREATE VARIABLE --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	/* Complete CREATE VARIABLE <name> with AS */
-	else if (TailMatches("CREATE", "VARIABLE", MatchAny))
+	else if (TailMatches("CREATE", "VARIABLE", MatchAny) ||
+			 TailMatches("TEMP|TEMPORARY", "VARIABLE", MatchAny))
 		COMPLETE_WITH("AS");
 	else if (TailMatches("VARIABLE", MatchAny, "AS"))
 		/* Complete CREATE VARIABLE <name> with AS types */

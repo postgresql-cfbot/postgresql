@@ -41,7 +41,7 @@ Btree
 Hash
 Gin
 Gist
-Sequence
+LocalSequence
 SPGist
 BRIN
 CommitTs

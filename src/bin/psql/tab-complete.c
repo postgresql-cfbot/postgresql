@@ -2197,7 +2197,7 @@ psql_completion(const char *text, int start, int end)
 	else if (Matches("ALTER", "SEQUENCE", MatchAny))
 		COMPLETE_WITH("AS", "INCREMENT", "MINVALUE", "MAXVALUE", "RESTART",
 					  "START", "NO", "CACHE", "CYCLE", "SET", "OWNED BY",
-					  "OWNER TO", "RENAME TO");
+					  "OWNER TO", "RENAME TO", "USING");
 	/* ALTER SEQUENCE <name> AS */
 	else if (TailMatches("ALTER", "SEQUENCE", MatchAny, "AS"))
 		COMPLETE_WITH_CS("smallint", "integer", "bigint");
@@ -3217,7 +3217,7 @@ psql_completion(const char *text, int start, int end)
 	else if (TailMatches("CREATE", "SEQUENCE", MatchAny) ||
 			 TailMatches("CREATE", "TEMP|TEMPORARY", "SEQUENCE", MatchAny))
 		COMPLETE_WITH("AS", "INCREMENT BY", "MINVALUE", "MAXVALUE", "NO",
-					  "CACHE", "CYCLE", "OWNED BY", "START WITH");
+					  "CACHE", "CYCLE", "OWNED BY", "START WITH", "USING");
 	else if (TailMatches("CREATE", "SEQUENCE", MatchAny, "AS") ||
 			 TailMatches("CREATE", "TEMP|TEMPORARY", "SEQUENCE", MatchAny, "AS"))
 		COMPLETE_WITH_CS("smallint", "integer", "bigint");

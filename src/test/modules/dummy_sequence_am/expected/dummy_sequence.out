@@ -1,0 +1,35 @@
+CREATE EXTENSION dummy_sequence_am;
+CREATE SEQUENCE dummyseq USING dummy_sequence_am;
+SELECT nextval('dummyseq'::regclass);
+ nextval 
+---------
+       2
+(1 row)
+
+SELECT setval('dummyseq'::regclass, 14);
+ setval 
+--------
+     14
+(1 row)
+
+SELECT nextval('dummyseq'::regclass);
+ nextval 
+---------
+      15
+(1 row)
+
+-- Sequence relation exists, but it has no attributes.
+SELECT * FROM dummyseq;
+--
+(0 rows)
+
+-- Reset connection, which will reset the sequence
+\c
+SELECT nextval('dummyseq'::regclass);
+ nextval 
+---------
+       2
+(1 row)
+
+DROP SEQUENCE dummyseq;
+DROP EXTENSION dummy_sequence_am;

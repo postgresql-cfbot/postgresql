@@ -161,10 +161,12 @@ describeAccessMethods(const char *pattern, bool verbose)
 					  "SELECT amname AS \"%s\",\n"
 					  "  CASE amtype"
 					  " WHEN 'i' THEN '%s'"
+					  " WHEN 's' THEN '%s'"
 					  " WHEN 't' THEN '%s'"
 					  " END AS \"%s\"",
 					  gettext_noop("Name"),
 					  gettext_noop("Index"),
+					  gettext_noop("Sequence"),
 					  gettext_noop("Table"),
 					  gettext_noop("Type"));
 

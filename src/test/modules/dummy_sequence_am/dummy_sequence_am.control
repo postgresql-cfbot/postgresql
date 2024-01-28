@@ -1,0 +1,5 @@
+# dummy_sequence_am extension
+comment = 'dummy_sequence_am - sequence access method template'
+default_version = '1.0'
+module_pathname = '$libdir/dummy_sequence_am'
+relocatable = true

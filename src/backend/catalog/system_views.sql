@@ -178,7 +178,11 @@ CREATE VIEW pg_sequences AS
         S.seqcache AS cache_size,
         CASE
             WHEN has_sequence_privilege(C.oid, 'SELECT,USAGE'::text)
-                THEN pg_sequence_last_value(C.oid)
+                THEN (SELECT
+                          CASE WHEN sl.is_called
+                              THEN sl.last_value ELSE NULL
+                          END
+                      FROM pg_sequence_last_value(C.oid) sl)
             ELSE NULL
         END AS last_value
     FROM pg_sequence S JOIN pg_class C ON (C.oid = S.seqrelid)

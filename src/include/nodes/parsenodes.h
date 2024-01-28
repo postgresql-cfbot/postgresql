@@ -2186,6 +2186,7 @@ typedef struct AlterTableStmt
 typedef enum AlterTableType
 {
 	AT_AddColumn,				/* add column */
+	AT_AddColumnToSequence,		/* implicitly via CREATE SEQUENCE */
 	AT_AddColumnToView,			/* implicitly via CREATE OR REPLACE VIEW */
 	AT_ColumnDefault,			/* alter column default */
 	AT_CookedColumnDefault,		/* add a pre-cooked column default */
@@ -2973,6 +2974,7 @@ typedef struct CreateSeqStmt
 	List	   *options;
 	Oid			ownerId;		/* ID of owner, or InvalidOid for default */
 	bool		for_identity;
+	char	   *accessMethod;	/* USING name of access method (eg. local) */
 	bool		if_not_exists;	/* just do nothing if it already exists? */
 } CreateSeqStmt;
 

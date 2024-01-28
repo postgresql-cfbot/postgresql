@@ -117,9 +117,6 @@ SELECT INTO tableam_tblselectinto_heap2 USING heap2 FROM tableam_tbl_heap2;
 -- CREATE VIEW doesn't support USING
 CREATE VIEW tableam_view_heap2 USING heap2 AS SELECT * FROM tableam_tbl_heap2;
 
--- CREATE SEQUENCE doesn't support USING
-CREATE SEQUENCE tableam_seq_heap2 USING heap2;
-
 -- CREATE MATERIALIZED VIEW does support USING
 CREATE MATERIALIZED VIEW tableam_tblmv_heap2 USING heap2 AS SELECT * FROM tableam_tbl_heap2;
 SELECT f1 FROM tableam_tblmv_heap2 ORDER BY f1;
@@ -222,9 +219,13 @@ CREATE TABLE tableam_parted_1_heapx PARTITION OF tableam_parted_heapx FOR VALUES
 -- but an explicitly set AM overrides it
 CREATE TABLE tableam_parted_2_heapx PARTITION OF tableam_parted_heapx FOR VALUES IN ('c', 'd') USING heap;
 
--- sequences, views and foreign servers shouldn't have an AM
-CREATE VIEW tableam_view_heapx AS SELECT * FROM tableam_tbl_heapx;
+-- sequences have an AM
+SET LOCAL default_sequence_access_method = 'local';
 CREATE SEQUENCE tableam_seq_heapx;
+RESET default_sequence_access_method;
+
+-- views and foreign servers shouldn't have an AM
+CREATE VIEW tableam_view_heapx AS SELECT * FROM tableam_tbl_heapx;
 CREATE FOREIGN DATA WRAPPER fdw_heap2 VALIDATOR postgresql_fdw_validator;
 CREATE SERVER fs_heap2 FOREIGN DATA WRAPPER fdw_heap2 ;
 CREATE FOREIGN table tableam_fdw_heapx () SERVER fs_heap2;
@@ -257,3 +258,16 @@ CREATE TABLE i_am_a_failure() USING "btree";
 DROP ACCESS METHOD heap2;
 
 -- we intentionally leave the objects created above alive, to verify pg_dump support
+
+-- Checks for sequence access methods
+
+-- Create new sequence access method which uses standard local handler
+CREATE ACCESS METHOD local2 TYPE SEQUENCE HANDLER local_sequenceam_handler;
+-- Create and use sequence
+CREATE SEQUENCE test_seqam USING local2;
+SELECT nextval('test_seqam'::regclass);
+-- Try to drop and fail on dependency
+DROP ACCESS METHOD local2;
+-- And cleanup
+DROP SEQUENCE test_seqam;
+DROP ACCESS METHOD local2;

@@ -2065,14 +2065,14 @@ connectFailureMessage(PGconn *conn, int errorno)
 static int
 useKeepalives(PGconn *conn)
 {
-	char	   *ep;
 	int			val;
 
 	if (conn->keepalives == NULL)
 		return 1;
-	val = strtol(conn->keepalives, &ep, 10);
-	if (*ep)
+
+	if (!parse_int_param(conn->keepalives, &val, conn, "keepalives"))
 		return -1;
+
 	return val != 0 ? 1 : 0;
 }
 
@@ -4712,11 +4712,17 @@ PQgetCancel(PGconn *conn)
 		return NULL;
 
 	if (conn->sock == PGINVALID_SOCKET)
+	{
+		libpq_append_conn_error(conn, "connection is not open");
 		return NULL;
+	}
 
 	cancel = malloc(sizeof(PGcancel));
 	if (cancel == NULL)
+	{
+		libpq_append_conn_error(conn, "out of memory");
 		return NULL;
+	}
 
 	memcpy(&cancel->raddr, &conn->raddr, sizeof(SockAddr));
 	cancel->be_pid = conn->be_pid;
@@ -4727,40 +4733,49 @@ PQgetCancel(PGconn *conn)
 	cancel->keepalives_idle = -1;
 	cancel->keepalives_interval = -1;
 	cancel->keepalives_count = -1;
-	if (conn->pgtcp_user_timeout != NULL)
+
+	/*
+	 * Parse and interpret the TCP connection parameters, but only
+	 * if the connection is not made through a Unix-domain socket.
+	 * This is because Unix-domain sockets do not require these parameters.
+	 */
+	if (cancel->raddr.addr.ss_family != AF_UNIX)
 	{
-		if (!parse_int_param(conn->pgtcp_user_timeout,
-							 &cancel->pgtcp_user_timeout,
-							 conn, "tcp_user_timeout"))
-			goto fail;
-	}
-	if (conn->keepalives != NULL)
-	{
-		if (!parse_int_param(conn->keepalives,
-							 &cancel->keepalives,
-							 conn, "keepalives"))
-			goto fail;
-	}
-	if (conn->keepalives_idle != NULL)
-	{
-		if (!parse_int_param(conn->keepalives_idle,
-							 &cancel->keepalives_idle,
-							 conn, "keepalives_idle"))
-			goto fail;
-	}
-	if (conn->keepalives_interval != NULL)
-	{
-		if (!parse_int_param(conn->keepalives_interval,
-							 &cancel->keepalives_interval,
-							 conn, "keepalives_interval"))
-			goto fail;
-	}
-	if (conn->keepalives_count != NULL)
-	{
-		if (!parse_int_param(conn->keepalives_count,
-							 &cancel->keepalives_count,
-							 conn, "keepalives_count"))
-			goto fail;
+		if (conn->pgtcp_user_timeout != NULL)
+		{
+			if (!parse_int_param(conn->pgtcp_user_timeout,
+								 &cancel->pgtcp_user_timeout,
+								 conn, "tcp_user_timeout"))
+				goto fail;
+		}
+		if (conn->keepalives != NULL)
+		{
+			if (!parse_int_param(conn->keepalives,
+								 &cancel->keepalives,
+								 conn, "keepalives"))
+				goto fail;
+		}
+		if (conn->keepalives_idle != NULL)
+		{
+			if (!parse_int_param(conn->keepalives_idle,
+								 &cancel->keepalives_idle,
+								 conn, "keepalives_idle"))
+				goto fail;
+		}
+		if (conn->keepalives_interval != NULL)
+		{
+			if (!parse_int_param(conn->keepalives_interval,
+								 &cancel->keepalives_interval,
+								 conn, "keepalives_interval"))
+				goto fail;
+		}
+		if (conn->keepalives_count != NULL)
+		{
+			if (!parse_int_param(conn->keepalives_count,
+								 &cancel->keepalives_count,
+								 conn, "keepalives_count"))
+				goto fail;
+		}
 	}
 
 	return cancel;

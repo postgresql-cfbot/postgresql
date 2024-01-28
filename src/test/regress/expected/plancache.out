@@ -15,7 +15,7 @@ EXECUTE prepstmt;
 (5 rows)
 
 -- and one with parameters
-PREPARE prepstmt2(bigint) AS SELECT * FROM pcachetest WHERE q1 = $1;
+PREPARE prepstmt2(unknown) AS SELECT * FROM pcachetest WHERE q1 = $1;
 EXECUTE prepstmt2(123);
  q1  |        q2        
 -----+------------------
@@ -49,14 +49,26 @@ EXECUTE prepstmt2(123);
  123 | 4567890123456789
 (2 rows)
 
--- prepared statements should prevent change in output tupdesc,
--- since clients probably aren't expecting that to change on the fly
-ALTER TABLE pcachetest ADD COLUMN q3 bigint;
+-- prepared statements should work even if the output tupdesc changes
+ALTER TABLE pcachetest ADD COLUMN q3 bigint DEFAULT 20;
 EXECUTE prepstmt;
-ERROR:  cached plan must not change result type
+        q1        |        q2         | q3 
+------------------+-------------------+----
+ 4567890123456789 | -4567890123456789 | 20
+ 4567890123456789 |               123 | 20
+              123 |               456 | 20
+              123 |  4567890123456789 | 20
+ 4567890123456789 |  4567890123456789 | 20
+(5 rows)
+
 EXECUTE prepstmt2(123);
-ERROR:  cached plan must not change result type
--- but we're nice guys and will let you undo your mistake
+ q1  |        q2        | q3 
+-----+------------------+----
+ 123 |              456 | 20
+ 123 | 4567890123456789 | 20
+(2 rows)
+
+-- changing it back should also work fine
 ALTER TABLE pcachetest DROP COLUMN q3;
 EXECUTE prepstmt;
         q1        |        q2         
@@ -101,6 +113,34 @@ EXECUTE vprep;
               123 |  2283945061728394
  4567890123456789 |  2283945061728394
 (5 rows)
+
+DROP VIEW pcacheview;
+-- When using unknown as an argument type in a prpared statement, the resolved
+-- argument types can change due to DDL or search_path changes.
+ALTER TABLE pcachetest ALTER COLUMN q1 TYPE text;
+EXECUTE prepstmt2('123');
+ q1  |        q2        
+-----+------------------
+ 123 |              456
+ 123 | 4567890123456789
+(2 rows)
+
+EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF) EXECUTE prepstmt2('123');
+                   QUERY PLAN                   
+------------------------------------------------
+ Seq Scan on pcachetest (actual rows=2 loops=1)
+   Filter: (q1 = $1)
+   Rows Removed by Filter: 3
+(3 rows)
+
+ALTER TABLE pcachetest ALTER COLUMN q1 TYPE bigint USING q1::bigint;
+EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF) EXECUTE prepstmt2(123);
+                   QUERY PLAN                   
+------------------------------------------------
+ Seq Scan on pcachetest (actual rows=2 loops=1)
+   Filter: (q1 = $1)
+   Rows Removed by Filter: 3
+(3 rows)
 
 -- Check basic SPI plan invalidation
 create function cache_test(int) returns int as $$

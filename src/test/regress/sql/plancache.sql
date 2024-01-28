@@ -10,7 +10,7 @@ PREPARE prepstmt AS SELECT * FROM pcachetest;
 EXECUTE prepstmt;
 
 -- and one with parameters
-PREPARE prepstmt2(bigint) AS SELECT * FROM pcachetest WHERE q1 = $1;
+PREPARE prepstmt2(unknown) AS SELECT * FROM pcachetest WHERE q1 = $1;
 
 EXECUTE prepstmt2(123);
 
@@ -27,14 +27,13 @@ CREATE TEMP TABLE pcachetest AS SELECT * FROM int8_tbl ORDER BY 2;
 EXECUTE prepstmt;
 EXECUTE prepstmt2(123);
 
--- prepared statements should prevent change in output tupdesc,
--- since clients probably aren't expecting that to change on the fly
-ALTER TABLE pcachetest ADD COLUMN q3 bigint;
+-- prepared statements should work even if the output tupdesc changes
+ALTER TABLE pcachetest ADD COLUMN q3 bigint DEFAULT 20;
 
 EXECUTE prepstmt;
 EXECUTE prepstmt2(123);
 
--- but we're nice guys and will let you undo your mistake
+-- changing it back should also work fine
 ALTER TABLE pcachetest DROP COLUMN q3;
 
 EXECUTE prepstmt;
@@ -53,6 +52,16 @@ CREATE OR REPLACE TEMP VIEW pcacheview AS
   SELECT q1, q2/2 AS q2 FROM pcachetest;
 
 EXECUTE vprep;
+
+DROP VIEW pcacheview;
+-- When using unknown as an argument type in a prpared statement, the resolved
+-- argument types can change due to DDL or search_path changes.
+ALTER TABLE pcachetest ALTER COLUMN q1 TYPE text;
+EXECUTE prepstmt2('123');
+
+EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF) EXECUTE prepstmt2('123');
+ALTER TABLE pcachetest ALTER COLUMN q1 TYPE bigint USING q1::bigint;
+EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF) EXECUTE prepstmt2(123);
 
 -- Check basic SPI plan invalidation
 

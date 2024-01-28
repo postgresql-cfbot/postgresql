@@ -21,6 +21,9 @@
 #include "tcop/cmdtag.h"
 #include "utils/queryenvironment.h"
 
+extern void SessionVariableDropPostprocess(Oid varid);
+extern void AtPreEOXact_SessionVariables(void);
+
 extern void SetSessionVariable(Oid varid, Datum value, bool isNull);
 extern void SetSessionVariableWithSecurityCheck(Oid varid, Datum value, bool isNull);
 extern Datum GetSessionVariable(Oid varid, bool *isNull, Oid *typid);

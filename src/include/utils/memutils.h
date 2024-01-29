@@ -89,6 +89,8 @@ extern void MemoryContextStatsDetail(MemoryContext context, int max_children,
 									 bool print_to_stderr);
 extern void MemoryContextAllowInCriticalSection(MemoryContext context,
 												bool allow);
+extern void MemoryContextMemConsumed(MemoryContext context,
+									 MemoryContextCounters *mem_consumed);
 
 #ifdef MEMORY_CONTEXT_CHECKING
 extern void MemoryContextCheck(MemoryContext context);

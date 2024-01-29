@@ -65,8 +65,9 @@ select explain_filter('explain (analyze) select * from int8_tbl i8');
 -----------------------------------------------------------------------------------------------
  Seq Scan on int8_tbl i8  (cost=N.N..N.N rows=N width=N) (actual time=N.N..N.N rows=N loops=N)
  Planning Time: N.N ms
+ Planning Memory: used=N bytes allocated=N bytes
  Execution Time: N.N ms
-(3 rows)
+(4 rows)
 
 select explain_filter('explain (analyze, verbose) select * from int8_tbl i8');
                                             explain_filter                                            
@@ -74,16 +75,18 @@ select explain_filter('explain (analyze, verbose) select * from int8_tbl i8');
  Seq Scan on public.int8_tbl i8  (cost=N.N..N.N rows=N width=N) (actual time=N.N..N.N rows=N loops=N)
    Output: q1, q2
  Planning Time: N.N ms
+ Planning Memory: used=N bytes allocated=N bytes
  Execution Time: N.N ms
-(4 rows)
+(5 rows)
 
 select explain_filter('explain (analyze, buffers, format text) select * from int8_tbl i8');
                                         explain_filter                                         
 -----------------------------------------------------------------------------------------------
  Seq Scan on int8_tbl i8  (cost=N.N..N.N rows=N width=N) (actual time=N.N..N.N rows=N loops=N)
  Planning Time: N.N ms
+ Planning Memory: used=N bytes allocated=N bytes
  Execution Time: N.N ms
-(3 rows)
+(4 rows)
 
 select explain_filter('explain (analyze, buffers, format xml) select * from int8_tbl i8');
                      explain_filter                     
@@ -128,6 +131,10 @@ select explain_filter('explain (analyze, buffers, format xml) select * from int8
        <Temp-Written-Blocks>N</Temp-Written-Blocks>    +
      </Planning>                                       +
      <Planning-Time>N.N</Planning-Time>                +
+     <Planning-Memory>                                 +
+       <Used>N</Used>                                  +
+       <Allocated>N</Allocated>                        +
+     </Planning-Memory>                                +
      <Triggers>                                        +
      </Triggers>                                       +
      <Execution-Time>N.N</Execution-Time>              +
@@ -174,6 +181,9 @@ select explain_filter('explain (analyze, buffers, format yaml) select * from int
      Temp Read Blocks: N      +
      Temp Written Blocks: N   +
    Planning Time: N.N         +
+   Planning Memory:           +
+     Used: N                  +
+     Allocated: N             +
    Triggers:                  +
    Execution Time: N.N
 (1 row)
@@ -284,6 +294,10 @@ select explain_filter('explain (analyze, buffers, format json) select * from int
        "Temp I/O Write Time": N.N   +
      },                             +
      "Planning Time": N.N,          +
+     "Planning Memory": {           +
+       "Used": N,                   +
+       "Allocated": N               +
+     },                             +
      "Triggers": [                  +
      ],                             +
      "Execution Time": N.N          +
@@ -535,7 +549,11 @@ select jsonb_pretty(
          "Triggers": [                                      +
          ],                                                 +
          "Planning Time": 0.0,                              +
-         "Execution Time": 0.0                              +
+         "Execution Time": 0.0,                             +
+         "Planning Memory": {                               +
+             "Used": 0,                                     +
+             "Allocated": 0                                 +
+         }                                                  +
      }                                                      +
  ]
 (1 row)

@@ -1721,6 +1721,72 @@ test_uniqviol(PGconn *conn)
 }
 
 /*
+ * Test of ReportGUC message
+ */
+static void
+test_reportguc(PGconn *conn)
+{
+	PGresult   *res;
+	const char *param;
+	const char *errmsg;
+
+	fprintf(stderr, "reportguc ...");
+
+	res = PQexec(conn, "SELECT pg_catalog.set_config('test.test', 'Hello', false)");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("failed to create custom config variable: %s", PQerrorMessage(conn));
+	PQclear(res);
+
+	/* we should to see in protocol so variable is reported */
+	res = PQlinkParameterStatus(conn, "test.test");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to link custom variable: %s", PQerrorMessage(conn));
+	PQclear(res);
+
+	param = PQparameterStatus(conn, "test.test");
+	if (!param || strcmp(param, "Hello") != 0)
+		pg_fatal("the parameter has not expected value");
+
+	/* we should to see in protocol so variable is reported */
+	res = PQexec(conn, "SELECT pg_catalog.set_config('test.test', 'Bonjour', false)");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("failed to create custom config variable: %s", PQerrorMessage(conn));
+	PQclear(res);
+
+	param = PQparameterStatus(conn, "test.test");
+	if (!param || strcmp(param, "Bonjour") != 0)
+		pg_fatal("the parameter has not expected value");
+
+	res = PQunlinkParameterStatus(conn, "test.test");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to unlink custom variable: %s", PQerrorMessage(conn));
+	PQclear(res);
+
+	/* we should to get error when reported variable doesn't exists */
+	res = PQlinkParameterStatus(conn, "not_exists_variable");
+	if (PQresultStatus(res) != PGRES_FATAL_ERROR)
+		pg_fatal("unexpected status: %s", PQresStatus(PQresultStatus(res)));
+
+	/* the error message should not be empty */
+	errmsg = PQerrorMessage(conn);
+	if (!errmsg || *errmsg == '\0')
+		pg_fatal("missing error message");
+	PQclear(res);
+
+	/* now, this change should not be reported */
+	res = PQexec(conn, "SELECT pg_catalog.set_config('test.test', 'Ahoj', false)");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("failed to create custom config variable: %s", PQerrorMessage(conn));
+	PQclear(res);
+
+	param = PQparameterStatus(conn, "test.test");
+	if (!param || strcmp(param, "Bonjour") != 0)
+		pg_fatal("the parameter has not expected value");
+
+	fprintf(stderr, "ok\n");
+}
+
+/*
  * Subroutine for test_uniqviol; given a PGresult, print it out and consume
  * the expected NULL that should follow it.
  *
@@ -1800,6 +1866,7 @@ print_test_list(void)
 	printf("singlerow\n");
 	printf("transaction\n");
 	printf("uniqviol\n");
+	printf("reportguc\n");
 }
 
 int
@@ -1912,6 +1979,8 @@ main(int argc, char **argv)
 		test_transaction(conn);
 	else if (strcmp(testname, "uniqviol") == 0)
 		test_uniqviol(conn);
+	else if (strcmp(testname, "reportguc") == 0)
+		test_reportguc(conn);
 	else
 	{
 		fprintf(stderr, "\"%s\" is not a recognized test name\n", testname);

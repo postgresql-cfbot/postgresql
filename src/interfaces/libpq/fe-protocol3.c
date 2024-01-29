@@ -1435,10 +1435,23 @@ pqGetNegotiateProtocolVersion3(PGconn *conn)
 		appendPQExpBufferStr(&buf, conn->workBuffer.data);
 	}
 
-	if (their_version < conn->pversion)
-		libpq_append_conn_error(conn, "protocol version not supported by server: client uses %u.%u, server supports up to %u.%u",
-								PG_PROTOCOL_MAJOR(conn->pversion), PG_PROTOCOL_MINOR(conn->pversion),
-								PG_PROTOCOL_MAJOR(their_version), PG_PROTOCOL_MINOR(their_version));
+	if (their_version != conn->pversion)
+	{
+		if ((PG_PROTOCOL_MAJOR(their_version) < PG_PROTOCOL_MAJOR(PG_PROTOCOL_EARLIEST)) ||
+			((PG_PROTOCOL_MAJOR(their_version) == PG_PROTOCOL_MAJOR(PG_PROTOCOL_EARLIEST)) &&
+			 (PG_PROTOCOL_MINOR(their_version) < PG_PROTOCOL_MINOR(PG_PROTOCOL_EARLIEST))) ||
+			(PG_PROTOCOL_MAJOR(their_version) > PG_PROTOCOL_MAJOR(PG_PROTOCOL_LATEST)) ||
+			((PG_PROTOCOL_MAJOR(their_version) == PG_PROTOCOL_MAJOR(PG_PROTOCOL_LATEST)) &&
+			 (PG_PROTOCOL_MINOR(their_version) >  PG_PROTOCOL_MINOR(PG_PROTOCOL_LATEST))))
+		{
+			libpq_append_conn_error(conn, "protocol version not supported by server: client uses %u.%u, server supports up to %u.%u",
+									PG_PROTOCOL_MAJOR(conn->pversion), PG_PROTOCOL_MINOR(conn->pversion),
+									PG_PROTOCOL_MAJOR(their_version), PG_PROTOCOL_MINOR(their_version));
+		}
+		else
+			conn->pversion = their_version;
+	}
+
 	if (num > 0)
 	{
 		appendPQExpBuffer(&conn->errorMessage,
@@ -1997,7 +2010,6 @@ pqEndcopy3(PGconn *conn)
 
 	return 1;
 }
-
 
 /*
  * PQfn - Send a function call to the POSTGRES backend.

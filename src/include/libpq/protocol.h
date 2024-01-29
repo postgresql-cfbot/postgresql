@@ -27,6 +27,7 @@
 #define PqMsg_Sync					'S'
 #define PqMsg_Terminate				'X'
 #define PqMsg_CopyFail				'f'
+#define PqMsg_ReportGUC				'r'
 #define PqMsg_GSSResponse			'p'
 #define PqMsg_PasswordMessage		'p'
 #define PqMsg_SASLInitialResponse	'p'

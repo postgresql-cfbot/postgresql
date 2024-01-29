@@ -154,6 +154,7 @@ typedef struct _psqlSettings
 	PGVerbosity verbosity;		/* current error verbosity level */
 	bool		show_all_results;
 	PGContextVisibility show_context;	/* current context display level */
+	bool		prompt_shows_role;
 } PsqlSettings;
 
 extern PsqlSettings pset;

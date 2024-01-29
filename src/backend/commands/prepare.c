@@ -583,6 +583,26 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	instr_time	planduration;
 	BufferUsage bufusage_start,
 				bufusage;
+	MemoryContextCounters mem_counts;
+	MemoryContext planner_ctx = NULL;
+	MemoryContext saved_ctx = NULL;
+
+	if (es->memory)
+	{
+		/*
+		 * In order to measure planner's memory consumption accurately, create
+		 * a separate AllocSet memory context.
+		 *
+		 * XXX if planner is called under some other memory context type, this
+		 * code overrides that.  Do we need support to create context of
+		 * programmatically determined type?
+		 */
+		Assert(IsA(CurrentMemoryContext, AllocSetContext));
+		planner_ctx = AllocSetContextCreate(CurrentMemoryContext,
+											"explain analyze planner context",
+											ALLOCSET_DEFAULT_SIZES);
+		saved_ctx = MemoryContextSwitchTo(planner_ctx);
+	}
 
 	if (es->buffers)
 		bufusage_start = pgBufferUsage;
@@ -624,6 +644,12 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	INSTR_TIME_SET_CURRENT(planduration);
 	INSTR_TIME_SUBTRACT(planduration, planstart);
 
+	if (es->memory)
+	{
+		MemoryContextSwitchTo(saved_ctx);
+		MemoryContextMemConsumed(planner_ctx, &mem_counts);
+	}
+
 	/* calc differences of buffer counters. */
 	if (es->buffers)
 	{
@@ -640,7 +666,8 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 
 		if (pstmt->commandType != CMD_UTILITY)
 			ExplainOnePlan(pstmt, into, es, query_string, paramLI, queryEnv,
-						   &planduration, (es->buffers ? &bufusage : NULL));
+						   &planduration, (es->buffers ? &bufusage : NULL),
+						   (es->memory ? &mem_counts : NULL));
 		else
 			ExplainOneUtility(pstmt->utilityStmt, into, es, query_string,
 							  paramLI, queryEnv);

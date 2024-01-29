@@ -119,9 +119,12 @@ static void show_instrumentation_count(const char *qlabel, int which,
 static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
 static void show_eval_params(Bitmapset *bms_params, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
-static void show_buffer_usage(ExplainState *es, const BufferUsage *usage,
+static bool show_buffer_usage(ExplainState *es, const BufferUsage *usage,
 							  bool planning);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
+static bool show_planner_memory(ExplainState *es,
+								const MemoryContextCounters *mem_counts,
+								bool show_planning);
 static void ExplainIndexScanDetails(Oid indexid, ScanDirection indexorderdir,
 									ExplainState *es);
 static void ExplainScanTarget(Scan *plan, ExplainState *es);
@@ -202,6 +205,8 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 			summary_set = true;
 			es->summary = defGetBoolean(opt);
 		}
+		else if (strcmp(opt->defname, "memory") == 0)
+			es->memory = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "format") == 0)
 		{
 			char	   *p = defGetString(opt);
@@ -397,6 +402,24 @@ ExplainOneQuery(Query *query, int cursorOptions,
 					planduration;
 		BufferUsage bufusage_start,
 					bufusage;
+		MemoryContextCounters mem_counts;
+		MemoryContext planner_ctx = NULL;
+		MemoryContext saved_ctx = NULL;
+
+		if (es->memory)
+		{
+			/*
+			 * Create a new memory context to measure planner's memory
+			 * consumption accurately. We should use the same type of memory
+			 * context as the planner would use. That's usually AllocSet but
+			 * ensure that.
+			 */
+			Assert(IsA(CurrentMemoryContext, AllocSetContext));
+			planner_ctx = AllocSetContextCreate(CurrentMemoryContext,
+												"explain analyze planner context",
+												ALLOCSET_DEFAULT_SIZES);
+			saved_ctx = MemoryContextSwitchTo(planner_ctx);
+		}
 
 		if (es->buffers)
 			bufusage_start = pgBufferUsage;
@@ -408,6 +431,12 @@ ExplainOneQuery(Query *query, int cursorOptions,
 		INSTR_TIME_SET_CURRENT(planduration);
 		INSTR_TIME_SUBTRACT(planduration, planstart);
 
+		if (es->memory)
+		{
+			MemoryContextSwitchTo(saved_ctx);
+			MemoryContextMemConsumed(planner_ctx, &mem_counts);
+		}
+
 		/* calc differences of buffer counters. */
 		if (es->buffers)
 		{
@@ -417,7 +446,8 @@ ExplainOneQuery(Query *query, int cursorOptions,
 
 		/* run it (if needed) and produce output */
 		ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
-					   &planduration, (es->buffers ? &bufusage : NULL));
+					   &planduration, (es->buffers ? &bufusage : NULL),
+					   (es->memory ? &mem_counts : NULL));
 	}
 }
 
@@ -527,7 +557,8 @@ void
 ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			   const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
-			   const BufferUsage *bufusage)
+			   const BufferUsage *bufusage,
+			   const MemoryContextCounters *mem_counts)
 {
 	DestReceiver *dest;
 	QueryDesc  *queryDesc;
@@ -615,11 +646,22 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	/* Create textual dump of plan tree */
 	ExplainPrintPlan(es, queryDesc);
 
-	/* Show buffer usage in planning */
-	if (bufusage)
+	/* Show buffer and/or memory usage in planning */
+	if (bufusage || mem_counts)
 	{
+		bool		showed_planning = false;
+
 		ExplainOpenGroup("Planning", "Planning", true, es);
-		show_buffer_usage(es, bufusage, true);
+
+		if (bufusage)
+			showed_planning = show_buffer_usage(es, bufusage, true);
+
+		if (mem_counts)
+			showed_planning |= show_planner_memory(es, mem_counts, !showed_planning);
+
+		if (showed_planning)
+			es->indent--;
+
 		ExplainCloseGroup("Planning", "Planning", true, es);
 	}
 
@@ -3546,10 +3588,20 @@ explain_get_index_name(Oid indexId)
 
 /*
  * Show buffer usage details.
+ *
+ * When reporting in TEXT format this function opens "planning" section if only there are counts to
+ * be reported for planning. The function returns true if the section was
+ * opened, false otherwise. The function does not close the section. The caller is expected to use the return value to
+ * close the section if required.
+ *
+ * When reporting in non-TEXT format the caller is expected to open and close the section,
+ * if required. Hence the function always returns false for non-TEXT formats.
  */
-static void
+static bool
 show_buffer_usage(ExplainState *es, const BufferUsage *usage, bool planning)
 {
+	bool		show_planning = false;
+
 	if (es->format == EXPLAIN_FORMAT_TEXT)
 	{
 		bool		has_shared = (usage->shared_blks_hit > 0 ||
@@ -3568,12 +3620,10 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage, bool planning)
 										!INSTR_TIME_IS_ZERO(usage->local_blk_write_time));
 		bool		has_temp_timing = (!INSTR_TIME_IS_ZERO(usage->temp_blk_read_time) ||
 									   !INSTR_TIME_IS_ZERO(usage->temp_blk_write_time));
-		bool		show_planning = (planning && (has_shared ||
-												  has_local || has_temp ||
-												  has_shared_timing ||
-												  has_local_timing ||
-												  has_temp_timing));
 
+		show_planning = (planning && (has_shared || has_local || has_temp ||
+									  has_shared_timing || has_local_timing ||
+									  has_temp_timing));
 		if (show_planning)
 		{
 			ExplainIndentText(es);
@@ -3678,9 +3728,6 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage, bool planning)
 			}
 			appendStringInfoChar(es->str, '\n');
 		}
-
-		if (show_planning)
-			es->indent--;
 	}
 	else
 	{
@@ -3726,6 +3773,8 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage, bool planning)
 								 3, es);
 		}
 	}
+
+	return show_planning;
 }
 
 /*
@@ -3765,6 +3814,51 @@ show_wal_usage(ExplainState *es, const WalUsage *usage)
 								usage->wal_bytes, es);
 	}
 }
+
+/*
+ * Show planner's memory usage details.
+ *
+ * When reporting in TEXT format this function opens the "planning" section if only it was not opened already. The function returns true if it opened the section,
+ * false otherwise. The caller is expected to use the return value to
+ * close the section if required.
+ *
+ * When reporting in non-TEXT format the caller is expected to open and close the section,
+ * if required. Hence the function always returns false for non-TEXT formats.
+ */
+static bool
+show_planner_memory(ExplainState *es,
+					const MemoryContextCounters *mem_counts, bool show_planning)
+{
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+		if (show_planning)
+		{
+			ExplainIndentText(es);
+			appendStringInfoString(es->str, "Planning:\n");
+			es->indent++;
+		}
+
+		ExplainIndentText(es);
+		appendStringInfo(es->str,
+						 "Memory: used=%lld bytes, allocated=%lld bytes",
+						 (long long) (mem_counts->totalspace - mem_counts->freespace),
+						 (long long) mem_counts->totalspace);
+		appendStringInfoChar(es->str, '\n');
+	}
+	else
+	{
+		show_planning = false;
+
+		ExplainPropertyInteger("Memory Used", "bytes",
+							   mem_counts->totalspace - mem_counts->freespace,
+							   es);
+		ExplainPropertyInteger("Memory Allocated", "bytes",
+							   mem_counts->totalspace, es);
+	}
+
+	return show_planning;
+}
+
 
 /*
  * Add some additional details about an IndexScan or IndexOnlyScan

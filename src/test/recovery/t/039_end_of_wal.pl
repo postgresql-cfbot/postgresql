@@ -258,16 +258,29 @@ my $prev_lsn;
 note "Single-page end-of-WAL detection";
 ###########################################################################
 
-# xl_tot_len is 0 (a common case, we hit trailing zeroes).
-emit_message($node, 0);
-$end_lsn = advance_out_of_record_splitting_zone($node);
+# empty record without trailing garbage bytes until the page end - not error
 $node->stop('immediate');
 my $log_size = -s $node->logfile;
 $node->start;
 ok( $node->log_contains(
+		"LOG:  reached end of WAL at.*\n.* DETAIL:  empty record at",
+		$log_size),
+	"end-of-WAL by empty record");
+
+# xl_tot_len is 0 with following garbage bytes in the page
+emit_message($node, 0);
+$end_lsn = advance_out_of_record_splitting_zone($node);
+$node->stop('immediate');
+write_wal($node, $TLI,
+		  # last byte in the page at $end_lsn
+		  $end_lsn - ($end_lsn % $WAL_BLOCK_SIZE) + $WAL_BLOCK_SIZE - 1,
+		  pack("c", 1)); # garbage byte
+$log_size = -s $node->logfile;
+$node->start;
+ok( $node->log_contains(
 		"invalid record length at .*: expected at least 24, got 0", $log_size
 	),
-	"xl_tot_len zero");
+	"zero xl_tot_len followed by garbage bytes");
 
 # xl_tot_len is < 24 (presumably recycled garbage).
 emit_message($node, 0);
@@ -328,7 +341,7 @@ note "Multi-page end-of-WAL detection, header is not split";
 # This series of tests requires a valid xl_prev set in the record header
 # written to WAL.
 
-# Good xl_prev, we hit zero page next (zero magic).
+# Good xl_prev, we hit zero page next
 emit_message($node, 0);
 $prev_lsn = advance_out_of_record_splitting_zone($node);
 $end_lsn = emit_message($node, 0);
@@ -337,8 +350,24 @@ write_wal($node, $TLI, $end_lsn,
 	build_record_header(2 * 1024 * 1024 * 1024, 0, $prev_lsn));
 $log_size = -s $node->logfile;
 $node->start;
-ok($node->log_contains("invalid magic number 0000 .* LSN .*", $log_size),
-	"xlp_magic zero");
+ok( $node->log_contains("WARNING:  empty page in WAL segment .*, offset .* while reading continuation record at .*", $log_size),
+   "empty page");
+
+# Good xl_prev, we hit zero page magic with following garbage bytes.
+emit_message($node, 0);
+$prev_lsn = advance_out_of_record_splitting_zone($node);
+$end_lsn = emit_message($node, 0);
+$node->stop('immediate');
+write_wal($node, $TLI, $end_lsn,
+		  build_record_header(2 * 1024 * 1024 * 1024, 0, $prev_lsn));
+# place garbage at the end of the next page
+write_wal($node, $TLI,
+		  start_of_next_page(start_of_next_page($end_lsn)) - 1,
+		  pack("i", 1));
+$log_size = -s $node->logfile;
+$node->start;
+ok( $node->log_contains("invalid magic number 0000 .* LSN .*", $log_size),
+   "bad magic");
 
 # Good xl_prev, we hit garbage page next (bad magic).
 emit_message($node, 0);
@@ -442,8 +471,8 @@ write_wal($node, $TLI, $end_lsn,
 	build_record_header(2 * 1024 * 1024 * 1024, 0, 0xdeadbeef));
 $log_size = -s $node->logfile;
 $node->start;
-ok($node->log_contains("invalid magic number 0000 .* LSN .*", $log_size),
-	"xlp_magic zero (split record header)");
+ok( $node->log_contains("WARNING:  empty page in WAL segment .*, offset .* while reading continuation record at .*", $log_size),
+	"zero page while reading a record (split record header)");
 
 # And we'll also check xlp_pageaddr before any header checks.
 emit_message($node, 0);

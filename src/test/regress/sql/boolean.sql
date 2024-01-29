@@ -251,6 +251,12 @@ SELECT istrue OR isfalse OR isnul FROM booltbl4;
 SELECT isnul OR istrue OR isfalse FROM booltbl4;
 
 
+-- Casts
+SELECT 0::boolean;
+SELECT 1::boolean;
+SELECT 2::boolean;
+
+
 --
 -- Clean up
 -- Many tables are retained by the regression test, but these do not seem

@@ -596,6 +596,7 @@ typedef enum
 typedef struct
 {
 	PGconn	   *con;			/* connection handle to DB */
+	PGcancel   *cancel;			/* query cancel */
 	int			id;				/* client No. */
 	ConnectionStateEnum state;	/* state machine's current state. */
 	ConditionalStack cstack;	/* enclosing conditionals state */
@@ -638,6 +639,8 @@ typedef struct
 								 * and failed transactions are also counted
 								 * here */
 } CState;
+
+CState	*client_states;		/* status of all clients */
 
 /*
  * Thread state
@@ -838,6 +841,10 @@ static void clear_socket_set(socket_set *sa);
 static void add_socket_to_set(socket_set *sa, int fd, int idx);
 static int	wait_on_socket_set(socket_set *sa, int64 usecs);
 static bool socket_has_input(socket_set *sa, int fd, int idx);
+
+#ifdef WIN32
+static void pgbench_cancel_callback(void);
+#endif
 
 /* callback used to build rows for COPY during data loading */
 typedef void (*initRowMethod) (PQExpBufferData *sql, int64 curr);
@@ -3652,6 +3659,7 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 						st->state = CSTATE_ABORTED;
 						break;
 					}
+					st->cancel = PQgetCancel(st->con);
 
 					/* reset now after connection */
 					now = pg_time_now();
@@ -4707,6 +4715,21 @@ disconnect_all(CState *state, int length)
 
 	for (i = 0; i < length; i++)
 		finishCon(&state[i]);
+}
+
+/* send cancel requests to all connections */
+static void
+cancel_all()
+{
+	for (int i = 0; i < nclients; i++)
+	{
+		char errbuf[256];
+		if (client_states[i].cancel != NULL)
+		{
+			if (!PQcancel(client_states[i].cancel, errbuf, sizeof(errbuf)))
+				pg_log_error("Could not send cancel request: %s", errbuf);
+		}
+	}
 }
 
 /*
@@ -7186,6 +7209,9 @@ main(int argc, char **argv)
 		}
 	}
 
+	/* enable threads to access the status of all clients */
+	client_states = state;
+
 	/* other CState initializations */
 	for (i = 0; i < nclients; i++)
 	{
@@ -7398,6 +7424,39 @@ threadRun(void *arg)
 	StatsData	last,
 				aggs;
 
+	/*
+	 * Query cancellation is handled only in thread #0.
+	 *
+	 * On Windows, a callback function is set in which query cancel requests
+	 * are sent to all benchmark queries running in the backend. This is
+	 * required because all threads running queries continue to run without
+	 * interrupted even when the signal is received.
+	 *
+	 * On non-Windows, any callback function is not set. When SIGINT is
+	 * received, CancelRequested is just set, and only thread #0 is
+	 * interrupted and returns from waiting input from the backend. After
+	 * that, the thread sends cancel requests to all benchmark queries.
+	 */
+	if (thread->tid == 0)
+#ifdef WIN32
+		setup_cancel_handler(pgbench_cancel_callback);
+#else
+		setup_cancel_handler(NULL);
+#endif
+
+#ifndef WIN32
+	if (thread->tid > 0)
+	{
+		sigset_t	sigint_sigset;
+		sigset_t	osigset;
+		sigemptyset(&sigint_sigset);
+		sigaddset(&sigint_sigset, SIGINT);
+
+		/* Block SIGINT in all threads except one. */
+		pthread_sigmask(SIG_BLOCK, &sigint_sigset, &osigset);
+	}
+#endif
+
 	/* open log file if requested */
 	if (use_log)
 	{
@@ -7440,6 +7499,7 @@ threadRun(void *arg)
 				pg_fatal("could not create connection for client %d",
 						 state[i].id);
 			}
+			state[i].cancel = PQgetCancel(state[i].con);
 		}
 	}
 
@@ -7466,6 +7526,26 @@ threadRun(void *arg)
 		int			nsocks;		/* number of sockets to be waited for */
 		pg_time_usec_t min_usec;
 		pg_time_usec_t now = 0; /* set this only if needed */
+
+		/*
+		 * If pgbench is cancelled, send cancel requests to all connections
+		 * and exit the benchmark.
+		 *
+		 * Note that only thread #0 can be interrupted by SIGINT while waiting
+		 * the result from the backend. Other threads will return from waiting
+		 * just after queries they running are cancelled by thread #0.
+		 *
+		 * On Windows, cancel requests are sent in the callback function, so
+		 * do nothing but exit the benchmark.
+		 */
+		if (CancelRequested)
+		{
+#ifndef WIN32
+			if (thread->tid == 0)
+				cancel_all();
+#endif
+			goto done;
+		}
 
 		/*
 		 * identify which client sockets should be checked for input, and
@@ -7690,6 +7770,8 @@ finishCon(CState *st)
 	{
 		PQfinish(st->con);
 		st->con = NULL;
+		PQfreeCancel(st->cancel);
+		st->cancel = NULL;
 	}
 }
 
@@ -7916,3 +7998,15 @@ socket_has_input(socket_set *sa, int fd, int idx)
 }
 
 #endif							/* POLL_USING_SELECT */
+
+#ifdef WIN32
+/*
+ * query cancellation callback for Windows
+ */
+static void
+pgbench_cancel_callback(void)
+{
+	/* send cancel requests to all connections */
+	cancel_all();
+}
+#endif

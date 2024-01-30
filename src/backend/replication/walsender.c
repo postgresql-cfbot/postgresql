@@ -3486,6 +3486,8 @@ WalSndSignals(void)
 
 	/* Reset some signals that are accepted by postmaster but not here */
 	pqsignal(SIGCHLD, SIG_DFL);
+
+	LoadBacktraceFunctions();
 }
 
 /* Report shared-memory space needed by WalSndShmemInit */

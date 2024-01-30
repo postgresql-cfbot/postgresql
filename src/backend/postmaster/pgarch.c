@@ -232,6 +232,8 @@ PgArchiverMain(void)
 	/* Unblock signals (they were blocked when the postmaster forked us) */
 	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
 
+	LoadBacktraceFunctions();
+
 	/* We shouldn't be launched unnecessarily. */
 	Assert(XLogArchivingActive());
 

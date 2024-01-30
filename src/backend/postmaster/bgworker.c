@@ -772,6 +772,8 @@ BackgroundWorkerMain(void)
 	pqsignal(SIGUSR2, SIG_IGN);
 	pqsignal(SIGCHLD, SIG_DFL);
 
+	LoadBacktraceFunctions();
+
 	/*
 	 * If an exception is encountered, processing resumes here.
 	 *

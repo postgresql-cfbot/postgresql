@@ -198,6 +198,8 @@ CheckpointerMain(void)
 	 */
 	pqsignal(SIGCHLD, SIG_DFL);
 
+	LoadBacktraceFunctions();
+
 	/*
 	 * Initialize so that first time-driven event happens at the correct time.
 	 */

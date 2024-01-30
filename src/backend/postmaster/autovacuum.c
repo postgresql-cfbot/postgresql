@@ -479,6 +479,8 @@ AutoVacLauncherMain(int argc, char *argv[])
 
 	SetProcessingMode(NormalProcessing);
 
+	LoadBacktraceFunctions();
+
 	/*
 	 * Create a memory context that we will do all our work in.  We do this so
 	 * that we can reset the context during error recovery and thereby avoid
@@ -1533,6 +1535,8 @@ AutoVacWorkerMain(int argc, char *argv[])
 
 	/* Early initialization */
 	BaseInit();
+
+	LoadBacktraceFunctions();
 
 	/*
 	 * If an exception is encountered, processing resumes here.

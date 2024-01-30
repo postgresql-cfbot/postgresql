@@ -258,6 +258,8 @@ StartupProcessMain(void)
 	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
 	pqsignal(SIGUSR2, StartupProcTriggerHandler);
 
+	LoadBacktraceFunctions();
+
 	/*
 	 * Reset some signals that are accepted by postmaster but not here
 	 */

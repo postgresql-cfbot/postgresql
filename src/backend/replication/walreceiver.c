@@ -287,6 +287,8 @@ WalReceiverMain(void)
 	/* Reset some signals that are accepted by postmaster but not here */
 	pqsignal(SIGCHLD, SIG_DFL);
 
+	LoadBacktraceFunctions();
+
 	/* Load the libpq-specific functions */
 	load_file("libpqwalreceiver", false);
 	if (WalReceiverFunctions == NULL)

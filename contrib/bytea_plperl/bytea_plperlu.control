@@ -1,0 +1,6 @@
+# bytea_plperlu extension
+comment = 'transform between bytea and plperlu'
+default_version = '1.0'
+module_pathname = '$libdir/bytea_plperl'
+relocatable = true
+requires = 'plperlu'

@@ -35,6 +35,8 @@ EOM
 
 # Now take an incremental backup.
 my $backup2path = $node1->backup_dir . '/backup2';
+my $manifest = slurp_file("$backup1path/backup_manifest");
+note "$backup1path/backup_manifest:\n$manifest";
 $node1->command_ok(
 	[ 'pg_basebackup', '-D', $backup2path, '--no-sync', '-cfast',
 	  '--incremental', $backup1path . '/backup_manifest' ],

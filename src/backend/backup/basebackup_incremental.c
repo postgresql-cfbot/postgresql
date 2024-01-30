@@ -32,6 +32,14 @@
 #define	BLOCKS_PER_READ			512
 
 /*
+ * we expect the find the last lines of the manifest, including the checksum,
+ * in the last MIN_CHUNK bytes of the manifest. We trigger an incremental
+ * parse step if we are about to overflow MAX_CHUNK bytes.
+ */
+#define MIN_CHUNK  1024
+#define MAX_CHUNK (128 *  1024)
+
+/*
  * Details extracted from the WAL ranges present in the supplied backup manifest.
  */
 typedef struct
@@ -110,6 +118,11 @@ struct IncrementalBackupInfo
 	 * turns out to be a problem in practice, we'll need to be more clever.
 	 */
 	BlockRefTable *brtab;
+
+	/*
+	 * State object for incremental JSON parsing
+	 */
+	JsonManifestParseIncrementalState *inc_state;
 };
 
 static void manifest_process_file(JsonManifestParseContext *context,
@@ -136,6 +149,7 @@ CreateIncrementalBackupInfo(MemoryContext mcxt)
 {
 	IncrementalBackupInfo *ib;
 	MemoryContext oldcontext;
+	JsonManifestParseContext *context;
 
 	oldcontext = MemoryContextSwitchTo(mcxt);
 
@@ -150,6 +164,15 @@ CreateIncrementalBackupInfo(MemoryContext mcxt)
 	 * substantially higher.
 	 */
 	ib->manifest_files = backup_file_create(mcxt, 10000, NULL);
+
+	context = palloc0(sizeof(JsonManifestParseContext));
+	/* Parse the manifest. */
+	context->private_data = ib;
+	context->per_file_cb = manifest_process_file;
+	context->per_wal_range_cb = manifest_process_wal_range;
+	context->error_cb = manifest_report_error;
+
+	ib->inc_state = json_parse_manifest_incremental_init(context);
 
 	MemoryContextSwitchTo(oldcontext);
 
@@ -170,13 +193,25 @@ AppendIncrementalManifestData(IncrementalBackupInfo *ib, const char *data,
 	/* Switch to our memory context. */
 	oldcontext = MemoryContextSwitchTo(ib->mcxt);
 
-	/*
-	 * XXX. Our json parser is at present incapable of parsing json blobs
-	 * incrementally, so we have to accumulate the entire backup manifest
-	 * before we can do anything with it. This should really be fixed, since
-	 * some users might have very large numbers of files in the data
-	 * directory.
-	 */
+	if (ib->buf.len > MIN_CHUNK && ib->buf.len + len > MAX_CHUNK)
+	{
+		/*
+		 * time for an incremental parse. We'll do all but the last but so
+		 * that we have enough left for the final piece.
+		 */
+		char chunk_start[100], chunk_end[100];
+
+		snprintf(chunk_start, 100, "%s", ib->buf.data);
+		snprintf(chunk_end, 100, "%s", ib->buf.data + (ib->buf.len - (MIN_CHUNK + 99)));
+		elog(NOTICE,"incremental manifest:\nchunk_start='%s',\nchunk_end='%s'", chunk_start, chunk_end);
+
+		json_parse_manifest_incremental_chunk(
+											  ib->inc_state, ib->buf.data, ib->buf.len - MIN_CHUNK, false);
+		/* now remove what we just parsed  */
+		memmove(ib->buf.data, ib->buf.data + (ib->buf.len - MIN_CHUNK), MIN_CHUNK + 1);
+		ib->buf.len = MIN_CHUNK;
+	}
+
 	appendBinaryStringInfo(&ib->buf, data, len);
 
 	/* Switch back to previous memory context. */
@@ -190,18 +225,21 @@ AppendIncrementalManifestData(IncrementalBackupInfo *ib, const char *data,
 void
 FinalizeIncrementalManifest(IncrementalBackupInfo *ib)
 {
-	JsonManifestParseContext context;
 	MemoryContext oldcontext;
 
 	/* Switch to our memory context. */
 	oldcontext = MemoryContextSwitchTo(ib->mcxt);
 
-	/* Parse the manifest. */
-	context.private_data = ib;
-	context.per_file_cb = manifest_process_file;
-	context.per_wal_range_cb = manifest_process_wal_range;
-	context.error_cb = manifest_report_error;
-	json_parse_manifest(&context, ib->buf.data, ib->buf.len);
+	{
+		char chunk_start[100];
+
+		snprintf(chunk_start, 100, "%s", ib->buf.data);
+		elog(NOTICE,"incremental manifest:\nfinal chunk_start='%s'", chunk_start);
+	}
+
+	/* parse the last chunk of the manifest */
+	json_parse_manifest_incremental_chunk(
+										  ib->inc_state, ib->buf.data, ib->buf.len, true);
 
 	/* Done with the buffer, so release memory. */
 	pfree(ib->buf.data);

@@ -43,6 +43,169 @@ typedef enum					/* contexts of JSON parser */
 	JSON_PARSE_END,				/* saw the end of a document, expect nothing */
 } JsonParseContext;
 
+/*
+ * Setup for table-driven parser.
+ * These enums need to be separate from the JsonTokenType and from each other
+ * so we can have all of them on the prediction stack, which consists of
+ * tokens, non-terminals, and semantic action markers.
+ */
+
+typedef enum
+{
+	JSON_NT_JSON = 32,
+	JSON_NT_ARRAY_ELEMENTS,
+	JSON_NT_MORE_ARRAY_ELEMENTS,
+	JSON_NT_KEY_PAIRS,
+	JSON_NT_MORE_KEY_PAIRS,
+} JsonNonTerminal;
+
+typedef enum
+{
+	JSON_SEM_OSTART = 64,
+	JSON_SEM_OEND,
+	JSON_SEM_ASTART,
+	JSON_SEM_AEND,
+	JSON_SEM_OFIELD_INIT,
+	JSON_SEM_OFIELD_START,
+	JSON_SEM_OFIELD_END,
+	JSON_SEM_AELEM_START,
+	JSON_SEM_AELEM_END,
+	JSON_SEM_SCALAR_INIT,
+	JSON_SEM_SCALAR_CALL,
+} JsonParserSem;
+
+/*
+ * struct containing the 3 stacks used in non-recursive parsing,
+ * and the token and value for scalars that need to be preserved
+ * across calls.
+ */
+typedef struct JsonParserStack
+{
+	int			stack_size;
+	char	   *prediction;
+	int			pred_index;
+	/* these two are indexed by lex_level */
+	char	  **fnames;
+	bool	   *fnull;
+	JsonTokenType scalar_tok;
+	char	   *scalar_val;
+} JsonParserStack;
+
+/*
+ * struct containing state used when there is a possible partial token at the
+ * end of a json chunk when we are doing incremental parsing.
+ */
+typedef struct JsonIncrementalState
+{
+	bool		is_last_chunk;
+	bool		partial_completed;
+	StringInfoData partial_token;
+} JsonIncrementalState;
+
+/*
+ * constants and macros used in the nonrecursive parser
+ */
+#define JSON_NUM_TERMINALS 13
+#define JSON_NUM_NONTERMINALS 6
+#define JSON_NT_OFFSET JSON_NT_JSON
+/* for indexing the table */
+#define OFS(NT) (NT) - JSON_NT_OFFSET
+/* classify items we get off the stack */
+#define IS_SEM(x) ((x) & 0x40)
+#define IS_NT(x)  ((x) & 0x20)
+
+/*
+ * These productions are stored in reverse order right to left so that when
+ * they are pushed on the stack what we expect next is at the top of the stack.
+ */
+static char JSON_PROD_EPSILON[] = {0};	/* epsilon - an empty production */
+
+/* JSON -> string */
+static char JSON_PROD_SCALAR_STRING[] = {JSON_SEM_SCALAR_CALL, JSON_TOKEN_STRING, JSON_SEM_SCALAR_INIT, 0};
+
+/* JSON -> number */
+static char JSON_PROD_SCALAR_NUMBER[] = {JSON_SEM_SCALAR_CALL, JSON_TOKEN_NUMBER, JSON_SEM_SCALAR_INIT, 0};
+
+/* JSON -> 'true' */
+static char JSON_PROD_SCALAR_TRUE[] = {JSON_SEM_SCALAR_CALL, JSON_TOKEN_TRUE, JSON_SEM_SCALAR_INIT, 0};
+
+/* JSON -> 'false' */
+static char JSON_PROD_SCALAR_FALSE[] = {JSON_SEM_SCALAR_CALL, JSON_TOKEN_FALSE, JSON_SEM_SCALAR_INIT, 0};
+
+/* JSON -> 'null' */
+static char JSON_PROD_SCALAR_NULL[] = {JSON_SEM_SCALAR_CALL, JSON_TOKEN_NULL, JSON_SEM_SCALAR_INIT, 0};
+
+/* JSON -> '{' KEY_PAIRS '}' */
+static char JSON_PROD_OBJECT[] = {JSON_SEM_OEND, JSON_TOKEN_OBJECT_END, JSON_NT_KEY_PAIRS, JSON_TOKEN_OBJECT_START, JSON_SEM_OSTART, 0};
+
+/* JSON -> '[' ARRAY_ELEMENTS ']' */
+static char JSON_PROD_ARRAY[] = {JSON_SEM_AEND, JSON_TOKEN_ARRAY_END, JSON_NT_ARRAY_ELEMENTS, JSON_TOKEN_ARRAY_START, JSON_SEM_ASTART, 0};
+
+/* ARRAY_ELEMENTS -> JSON MORE_ARRAY_ELEMENTS */
+static char JSON_PROD_ARRAY_ELEMENTS[] = {JSON_NT_MORE_ARRAY_ELEMENTS, JSON_SEM_AELEM_END, JSON_NT_JSON, JSON_SEM_AELEM_START, 0};
+
+/* MORE_ARRAY_ELEMENTS -> ',' JSON MORE_ARRAY_ELEMENTS */
+static char JSON_PROD_MORE_ARRAY_ELEMENTS[] = {JSON_NT_MORE_ARRAY_ELEMENTS, JSON_SEM_AELEM_END, JSON_NT_JSON, JSON_SEM_AELEM_START, JSON_TOKEN_COMMA, 0};
+
+/* KEY_PAIRS -> string ':' JSON MORE_KEY_PAIRS */
+static char JSON_PROD_KEY_PAIRS[] = {JSON_NT_MORE_KEY_PAIRS, JSON_SEM_OFIELD_END, JSON_NT_JSON, JSON_SEM_OFIELD_START, JSON_TOKEN_COLON, JSON_TOKEN_STRING, JSON_SEM_OFIELD_INIT, 0};
+
+/* MORE_KEY_PAIRS -> ',' string ':'  JSON MORE_KEY_PAIRS */
+static char JSON_PROD_MORE_KEY_PAIRS[] = {JSON_NT_MORE_KEY_PAIRS, JSON_SEM_OFIELD_END, JSON_NT_JSON, JSON_SEM_OFIELD_START, JSON_TOKEN_COLON, JSON_TOKEN_STRING, JSON_SEM_OFIELD_INIT, JSON_TOKEN_COMMA, 0};
+
+/*
+ * Note: there are also epsilon productions for ARRAY_ELEMENTS,
+ * MORE_ARRAY_ELEMENTS, KEY_PAIRS and MORE_KEY_PAIRS
+ * They are all the same as none require any semantic actions.
+ */
+
+/*
+ * Table connecting the productions with their director sets of
+ * terminal symbols.
+ * Any combination not specified here represents an error.
+ */
+
+typedef struct
+{
+	size_t		len;
+	char	   *prod;
+}			td_entry;
+
+#define TD_ENTRY(PROD) { sizeof(PROD) - 1, (PROD) }
+
+static td_entry td_parser_table[JSON_NUM_NONTERMINALS][JSON_NUM_TERMINALS] =
+{
+	/* JSON */
+	[OFS(JSON_NT_JSON)][JSON_TOKEN_STRING] = TD_ENTRY(JSON_PROD_SCALAR_STRING),
+		[OFS(JSON_NT_JSON)][JSON_TOKEN_NUMBER] = TD_ENTRY(JSON_PROD_SCALAR_NUMBER),
+		[OFS(JSON_NT_JSON)][JSON_TOKEN_TRUE] = TD_ENTRY(JSON_PROD_SCALAR_TRUE),
+		[OFS(JSON_NT_JSON)][JSON_TOKEN_FALSE] = TD_ENTRY(JSON_PROD_SCALAR_FALSE),
+		[OFS(JSON_NT_JSON)][JSON_TOKEN_NULL] = TD_ENTRY(JSON_PROD_SCALAR_NULL),
+		[OFS(JSON_NT_JSON)][JSON_TOKEN_ARRAY_START] = TD_ENTRY(JSON_PROD_ARRAY),
+		[OFS(JSON_NT_JSON)][JSON_TOKEN_OBJECT_START] = TD_ENTRY(JSON_PROD_OBJECT),
+	/* ARRAY_ELEMENTS */
+		[OFS(JSON_NT_ARRAY_ELEMENTS)][JSON_TOKEN_ARRAY_START] = TD_ENTRY(JSON_PROD_ARRAY_ELEMENTS),
+		[OFS(JSON_NT_ARRAY_ELEMENTS)][JSON_TOKEN_OBJECT_START] = TD_ENTRY(JSON_PROD_ARRAY_ELEMENTS),
+		[OFS(JSON_NT_ARRAY_ELEMENTS)][JSON_TOKEN_STRING] = TD_ENTRY(JSON_PROD_ARRAY_ELEMENTS),
+		[OFS(JSON_NT_ARRAY_ELEMENTS)][JSON_TOKEN_NUMBER] = TD_ENTRY(JSON_PROD_ARRAY_ELEMENTS),
+		[OFS(JSON_NT_ARRAY_ELEMENTS)][JSON_TOKEN_TRUE] = TD_ENTRY(JSON_PROD_ARRAY_ELEMENTS),
+		[OFS(JSON_NT_ARRAY_ELEMENTS)][JSON_TOKEN_FALSE] = TD_ENTRY(JSON_PROD_ARRAY_ELEMENTS),
+		[OFS(JSON_NT_ARRAY_ELEMENTS)][JSON_TOKEN_NULL] = TD_ENTRY(JSON_PROD_ARRAY_ELEMENTS),
+		[OFS(JSON_NT_ARRAY_ELEMENTS)][JSON_TOKEN_ARRAY_END] = TD_ENTRY(JSON_PROD_EPSILON),
+	/* MORE_ARRAY_ELEMENTS */
+		[OFS(JSON_NT_MORE_ARRAY_ELEMENTS)][JSON_TOKEN_COMMA] = TD_ENTRY(JSON_PROD_MORE_ARRAY_ELEMENTS),
+		[OFS(JSON_NT_MORE_ARRAY_ELEMENTS)][JSON_TOKEN_ARRAY_END] = TD_ENTRY(JSON_PROD_EPSILON),
+	/* KEY_PAIRS */
+		[OFS(JSON_NT_KEY_PAIRS)][JSON_TOKEN_STRING] = TD_ENTRY(JSON_PROD_KEY_PAIRS),
+		[OFS(JSON_NT_KEY_PAIRS)][JSON_TOKEN_OBJECT_END] = TD_ENTRY(JSON_PROD_EPSILON),
+	/* MORE_KEY_PAIRS */
+		[OFS(JSON_NT_MORE_KEY_PAIRS)][JSON_TOKEN_COMMA] = TD_ENTRY(JSON_PROD_MORE_KEY_PAIRS),
+		[OFS(JSON_NT_MORE_KEY_PAIRS)][JSON_TOKEN_OBJECT_END] = TD_ENTRY(JSON_PROD_EPSILON),
+};
+
+/* the GOAL production. Not stored in the table, but will be the initial contents of the prediction stack */
+static char JSON_PROD_GOAL[] = {JSON_TOKEN_END, JSON_NT_JSON, 0};
+
 static inline JsonParseErrorType json_lex_string(JsonLexContext *lex);
 static inline JsonParseErrorType json_lex_number(JsonLexContext *lex, char *s,
 												 bool *num_err, int *total_len);
@@ -60,7 +223,7 @@ JsonSemAction nullSemAction =
 	NULL, NULL, NULL, NULL, NULL
 };
 
-/* Recursive Descent parser support routines */
+/* Parser support routines */
 
 /*
  * lex_peek
@@ -110,6 +273,8 @@ IsValidJsonNumber(const char *str, int len)
 
 	if (len <= 0)
 		return false;
+
+	dummy_lex.incremental = false;
 
 	/*
 	 * json_lex_number expects a leading  '-' to have been eaten already.
@@ -174,6 +339,139 @@ makeJsonLexContextCstringLen(JsonLexContext *lex, char *json,
 	return lex;
 }
 
+
+/*
+ * makeJsonLexContextIncremental
+ *
+ * Similar to above but set up for use in incremental parsing. That means we
+ * need explicit stacks for predictions, field names and null indicators, but
+ * we don't need the input, that will be handed in bit by bit to the
+ * parse routine. We also need an accumulator for partial tokens in case
+ * the boundary between chunks happns to fall in the middle of a token.
+ */
+#define JS_STACK_CHUNK_SIZE 64
+#define JS_MAX_PROD_LEN 10		/* more than we need */
+#define JSON_TD_MAX_STACK 6400	/* hard coded for now - this is a REALLY high
+								 * number */
+
+JsonLexContext *
+makeJsonLexContextIncremental(JsonLexContext *lex, int encoding,
+							  bool need_escapes)
+{
+	if (lex == NULL)
+	{
+		lex = palloc0(sizeof(JsonLexContext));
+		lex->flags |= JSONLEX_FREE_STRUCT;
+	}
+	else
+		memset(lex, 0, sizeof(JsonLexContext));
+
+	lex->line_number = 1;
+	lex->input_encoding = encoding;
+	lex->incremental = true;
+	lex->inc_state = palloc0(sizeof(JsonIncrementalState));
+	initStringInfo(&(lex->inc_state->partial_token));
+	lex->pstack = palloc(sizeof(JsonParserStack));
+	lex->pstack->stack_size = JS_STACK_CHUNK_SIZE;
+	lex->pstack->prediction = palloc(JS_STACK_CHUNK_SIZE * JS_MAX_PROD_LEN);
+	lex->pstack->pred_index = 0;
+	lex->pstack->fnames = palloc(JS_STACK_CHUNK_SIZE * sizeof(char *));
+	lex->pstack->fnull = palloc(JS_STACK_CHUNK_SIZE * sizeof(bool));
+	if (need_escapes)
+	{
+		lex->strval = makeStringInfo();
+		lex->flags |= JSONLEX_FREE_STRVAL;
+	}
+	return lex;
+}
+
+static inline void
+inc_lex_level(JsonLexContext *lex)
+{
+	lex->lex_level += 1;
+	/* could possibly use something like max_stack_depth * 64 here */
+	if (lex->lex_level > JSON_TD_MAX_STACK)
+	{
+#ifndef FRONTEND
+		elog(ERROR, "maximum number of levels for json is %d", JSON_TD_MAX_STACK);
+#else
+		fprintf(stderr, "maximum number of levels for json is %d", JSON_TD_MAX_STACK);
+		exit(1);
+#endif
+	}
+	if (lex->incremental && lex->lex_level >= lex->pstack->stack_size)
+	{
+		lex->pstack->stack_size += JS_STACK_CHUNK_SIZE;
+		lex->pstack->prediction =
+			repalloc(lex->pstack->prediction,
+					 lex->pstack->stack_size * JS_MAX_PROD_LEN);
+		if (lex->pstack->fnames)
+			lex->pstack->fnames =
+				repalloc(lex->pstack->fnames,
+						 lex->pstack->stack_size * sizeof(char *));
+		if (lex->pstack->fnull)
+			lex->pstack->fnull =
+				repalloc(lex->pstack->fnull, lex->pstack->stack_size * sizeof(bool));
+	}
+}
+
+static inline void
+dec_lex_level(JsonLexContext *lex)
+{
+	lex->lex_level -= 1;
+}
+
+static inline void
+push_prediction(JsonParserStack *pstack, td_entry entry)
+{
+	memcpy(pstack->prediction + pstack->pred_index, entry.prod, entry.len);
+	pstack->pred_index += entry.len;
+}
+
+static inline char
+pop_prediction(JsonParserStack *pstack)
+{
+	Assert(pstack->pred_index > 0);
+	return pstack->prediction[--pstack->pred_index];
+}
+
+static inline char
+next_prediction(JsonParserStack *pstack)
+{
+	Assert(pstack->pred_index > 0);
+	return pstack->prediction[pstack->pred_index - 1];
+}
+
+static inline bool
+have_prediction(JsonParserStack *pstack)
+{
+	return pstack->pred_index > 0;
+}
+
+static inline void
+set_fname(JsonLexContext *lex, char *fname)
+{
+	lex->pstack->fnames[lex->lex_level] = fname;
+}
+
+static inline char *
+get_fname(JsonLexContext *lex)
+{
+	return lex->pstack->fnames[lex->lex_level];
+}
+
+static inline void
+set_fnull(JsonLexContext *lex, bool fnull)
+{
+	lex->pstack->fnull[lex->lex_level] = fnull;
+}
+
+static inline bool
+get_fnull(JsonLexContext *lex)
+{
+	return lex->pstack->fnull[lex->lex_level];
+}
+
 /*
  * Free memory in a JsonLexContext.  There's no need for this if a *lex
  * pointer was given when the object was made and need_escapes was false,
@@ -188,7 +486,18 @@ freeJsonLexContext(JsonLexContext *lex)
 		pfree(lex->strval);
 	}
 	if (lex->flags & JSONLEX_FREE_STRUCT)
+	{
+		if (lex->incremental)
+		{
+			pfree(lex->inc_state->partial_token.data);
+			pfree(lex->inc_state);
+			pfree(lex->pstack->prediction);
+			pfree(lex->pstack->fnames);
+			pfree(lex->pstack->fnull);
+			pfree(lex->pstack);
+		}
 		pfree(lex);
+	}
 }
 
 /*
@@ -200,10 +509,32 @@ freeJsonLexContext(JsonLexContext *lex)
  * makeJsonLexContext(). sem is a structure of function pointers to semantic
  * action routines to be called at appropriate spots during parsing, and a
  * pointer to a state object to be passed to those routines.
+ *
+ * If FORCE_JSON_PSTACK is defined then the routine will call the non-recursive
+ * JSON parser. This is a useful way to validate that it's doing the right
+ * think at least for non-incremental cases. If this is on we expect to see
+ * regression diffs relating to error messages about stack depth, but no
+ * other differences.
  */
 JsonParseErrorType
 pg_parse_json(JsonLexContext *lex, JsonSemAction *sem)
 {
+#ifdef FORCE_JSON_PSTACK
+
+	lex->incremental = true;
+	lex->inc_state = palloc0(sizeof(JsonIncrementalState));
+	initStringInfo(&(lex->inc_state->partial_token));
+	lex->pstack = palloc(sizeof(JsonParserStack));
+	lex->pstack->stack_size = JS_STACK_CHUNK_SIZE;
+	lex->pstack->prediction = palloc(JS_STACK_CHUNK_SIZE * JS_MAX_PROD_LEN);
+	lex->pstack->pred_index = 0;
+	lex->pstack->fnames = palloc(JS_STACK_CHUNK_SIZE * sizeof(char *));
+	lex->pstack->fnull = palloc(JS_STACK_CHUNK_SIZE * sizeof(bool));
+
+	return pg_parse_json_incremental(lex, sem, lex->input, lex->input_length, true);
+
+#else
+
 	JsonTokenType tok;
 	JsonParseErrorType result;
 
@@ -231,6 +562,7 @@ pg_parse_json(JsonLexContext *lex, JsonSemAction *sem)
 		result = lex_expect(JSON_PARSE_END, lex, JSON_TOKEN_END);
 
 	return result;
+#endif
 }
 
 /*
@@ -283,6 +615,333 @@ json_count_array_elements(JsonLexContext *lex, int *elements)
 		return result;
 
 	*elements = count;
+	return JSON_SUCCESS;
+}
+
+/*
+ * pg_parse_json_incremental
+ *
+ * Routine for incremental parsing of json. This uses the non-recursive top
+ * down method of the Dragon Book Algorithm 4.3. It's somewhat slower than
+ * the Recursive Descent pattern used above, so we only use it for incremental
+ * parsing of JSON.
+ *
+ * The lexing context needs to be set up by a call to
+ * makeJsonLexContextIncremental(). sem is a structure of function pointers
+ * to semantic action routines, which should function exactly as those used
+ * in the recursive descent parser.
+ *
+ * This routine can be called repeatedly with chunks of JSON. On the final
+ * chunk is_last must be set to true. len is the length of the json chunk,
+ * which does not need to be null terminated.
+ */
+JsonParseErrorType
+pg_parse_json_incremental(JsonLexContext *lex,
+						  JsonSemAction *sem,
+						  char *json,
+						  int len,
+						  bool is_last)
+{
+	JsonTokenType tok;
+	JsonParseErrorType result;
+	JsonParseContext ctx = JSON_PARSE_VALUE;
+	JsonParserStack *pstack = lex->pstack;
+
+
+	if (lex->incremental)
+	{
+		lex->input = lex->token_terminator = lex->line_start = json;
+		lex->input_length = len;
+		lex->inc_state->is_last_chunk = is_last;
+	}
+	else
+	{
+#ifdef FRONTEND
+		fprintf(stderr, "JsonLexContext not set up for incremental parsing");
+		exit(1);
+#else
+		elog(ERROR, "JsonLexContext not set up for incremental parsing");
+#endif
+	}
+
+	/* get the initial token */
+	result = json_lex(lex);
+	if (result != JSON_SUCCESS)
+		return result;
+
+	tok = lex_peek(lex);
+
+	/* use prediction stack for incremental parsing */
+
+	if (!have_prediction(pstack))
+	{
+		td_entry	goal = TD_ENTRY(JSON_PROD_GOAL);
+
+		push_prediction(pstack, goal);
+	}
+
+	while (have_prediction(pstack))
+	{
+		char		top = pop_prediction(pstack);
+		td_entry	entry;
+
+		/*
+		 * these first two branches are the guts of the Table Driven method
+		 */
+		if (top == tok)
+		{
+			/*
+			 * tok can only be a terminal symbol, so top must be too. the
+			 * token matches the top of the stack, so get the next token.
+			 */
+			if (tok < JSON_TOKEN_END)
+			{
+				result = json_lex(lex);
+				if (result != JSON_SUCCESS)
+					return result;
+				tok = lex_peek(lex);
+			}
+		}
+		else if (IS_NT(top) && (entry = td_parser_table[OFS(top)][tok]).prod != NULL)
+		{
+			/*
+			 * the token is in the director set for a production of the
+			 * non-terminal at the top of the stack, so push the reversed RHS
+			 * of the production onto the stack.
+			 */
+			push_prediction(pstack, entry);
+		}
+		else if (IS_SEM(top))
+		{
+			/*
+			 * top is a semantic action marker, so take action accordingly.
+			 * It's important to have these markers in the prediction stack
+			 * before any token they might need so we don't advance the token
+			 * prematurely. Note in a couple of cases we need to do something
+			 * both before and after the token.
+			 */
+			switch (top)
+			{
+				case JSON_SEM_OSTART:
+					{
+						json_struct_action ostart = sem->object_start;
+
+						if (ostart != NULL)
+							(*ostart) (sem->semstate);
+						inc_lex_level(lex);
+					}
+					break;
+				case JSON_SEM_OEND:
+					{
+						json_struct_action oend = sem->object_end;
+
+						dec_lex_level(lex);
+						if (oend != NULL)
+							(*oend) (sem->semstate);
+					}
+					break;
+				case JSON_SEM_ASTART:
+					{
+						json_struct_action astart = sem->array_start;
+
+						if (astart != NULL)
+							(*astart) (sem->semstate);
+						inc_lex_level(lex);
+					}
+					break;
+				case JSON_SEM_AEND:
+					{
+						json_struct_action aend = sem->array_end;
+
+						dec_lex_level(lex);
+						if (aend != NULL)
+							(*aend) (sem->semstate);
+					}
+					break;
+				case JSON_SEM_OFIELD_INIT:
+					{
+						/*
+						 * all we do here is save out the field name. We have
+						 * to wait to get past the ':' to see if the next
+						 * value is null so we can call the semantic routine
+						 */
+						char	   *fname = NULL;
+						json_ofield_action ostart = sem->object_field_start;
+						json_ofield_action oend = sem->object_field_end;
+
+						if ((ostart != NULL || oend != NULL) && lex->strval != NULL)
+						{
+							fname = pstrdup(lex->strval->data);
+						}
+						set_fname(lex, fname);
+					}
+					break;
+				case JSON_SEM_OFIELD_START:
+					{
+						/*
+						 * the current token should be the first token of the
+						 * value
+						 */
+						bool		isnull = tok == JSON_TOKEN_NULL;
+						json_ofield_action ostart = sem->object_field_start;
+
+						set_fnull(lex, isnull);
+
+						if (ostart != NULL)
+						{
+							char	   *fname = get_fname(lex);
+
+							(*ostart) (sem->semstate, fname, isnull);
+						}
+					}
+					break;
+				case JSON_SEM_OFIELD_END:
+					{
+						json_ofield_action oend = sem->object_field_end;
+
+						if (oend != NULL)
+						{
+							char	   *fname = get_fname(lex);
+							bool		isnull = get_fnull(lex);
+
+							(*oend) (sem->semstate, fname, isnull);
+						}
+					}
+					break;
+				case JSON_SEM_AELEM_START:
+					{
+						json_aelem_action astart = sem->array_element_start;
+						bool		isnull = tok == JSON_TOKEN_NULL;
+
+						set_fnull(lex, isnull);
+
+						if (astart != NULL)
+							(*astart) (sem->semstate, isnull);
+					}
+					break;
+				case JSON_SEM_AELEM_END:
+					{
+						json_aelem_action aend = sem->array_element_end;
+
+						if (aend != NULL)
+						{
+							bool		isnull = get_fnull(lex);
+
+							(*aend) (sem->semstate, isnull);
+						}
+					}
+					break;
+				case JSON_SEM_SCALAR_INIT:
+					{
+						json_scalar_action sfunc = sem->scalar;
+
+						pstack->scalar_val = NULL;
+
+						if (sfunc != NULL)
+						{
+							/*
+							 * extract the de-escaped string value, or the raw
+							 * lexeme
+							 */
+							/*
+							 * XXX copied from RD parser but looks like a
+							 * buglet
+							 */
+							if (tok == JSON_TOKEN_STRING)
+							{
+								if (lex->strval != NULL)
+									pstack->scalar_val = pstrdup(lex->strval->data);
+							}
+							else
+							{
+								int			tlen = (lex->token_terminator - lex->token_start);
+
+								pstack->scalar_val = palloc(tlen + 1);
+								memcpy(pstack->scalar_val, lex->token_start, tlen);
+								pstack->scalar_val[tlen] = '\0';
+							}
+							pstack->scalar_tok = tok;
+						}
+					}
+					break;
+				case JSON_SEM_SCALAR_CALL:
+					{
+						/*
+						 * We'd like to be able to get rid of this business of
+						 * two bits of scalar action, but we can't. It breaks
+						 * certain semantic actions which expect that when
+						 * called the lexer has consumed the item. See for
+						 * example get_scalar() in jsonfuncs.c.
+						 */
+						json_scalar_action sfunc = sem->scalar;
+
+						if (sfunc != NULL)
+							(*sfunc) (sem->semstate, pstack->scalar_val, pstack->scalar_tok);
+					}
+					break;
+				default:
+					/* should not happen */
+					break;
+			}
+		}
+		else
+		{
+			/*
+			 * The token didn't match the stack top if it's a terminal nor a
+			 * production for the stack top if it's a non-terminal.
+			 */
+			switch (top)
+			{
+				case JSON_TOKEN_STRING:
+					if (next_prediction(pstack) == JSON_TOKEN_COLON)
+						ctx = JSON_PARSE_STRING;
+					else
+						ctx = JSON_PARSE_VALUE;
+					break;
+				case JSON_TOKEN_NUMBER:
+				case JSON_TOKEN_TRUE:
+				case JSON_TOKEN_FALSE:
+				case JSON_TOKEN_NULL:
+				case JSON_TOKEN_ARRAY_START:
+				case JSON_TOKEN_OBJECT_START:
+					ctx = JSON_PARSE_VALUE;
+					break;
+				case JSON_TOKEN_ARRAY_END:
+					ctx = JSON_PARSE_ARRAY_NEXT;
+					break;
+				case JSON_TOKEN_OBJECT_END:
+					ctx = JSON_PARSE_OBJECT_NEXT;
+					break;
+				case JSON_TOKEN_COMMA:
+					if (next_prediction(pstack) == JSON_TOKEN_STRING)
+						ctx = JSON_PARSE_OBJECT_NEXT;
+					else
+						ctx = JSON_PARSE_ARRAY_NEXT;
+					break;
+				case JSON_TOKEN_COLON:
+					ctx = JSON_PARSE_OBJECT_LABEL;
+					break;
+				case JSON_TOKEN_END:
+					ctx = JSON_PARSE_END;
+					break;
+
+					/*
+					 * mostly we don't need to worry about non-terminals here,
+					 * but there are a few cases where we do.
+					 */
+				case JSON_NT_MORE_KEY_PAIRS:
+					ctx = JSON_PARSE_OBJECT_NEXT;
+					break;
+				case JSON_NT_KEY_PAIRS:
+					ctx = JSON_PARSE_OBJECT_START;
+					break;
+				default:
+					ctx = JSON_PARSE_VALUE;
+			}
+			return report_parse_error(ctx, lex);
+		}
+	}
+
 	return JSON_SUCCESS;
 }
 
@@ -591,8 +1250,138 @@ json_lex(JsonLexContext *lex)
 	char	   *const end = lex->input + lex->input_length;
 	JsonParseErrorType result;
 
-	/* Skip leading whitespace. */
+	if (lex->incremental && lex->inc_state->partial_completed)
+	{
+		/*
+		 * We just lexed a completed partial token on the last call, so reset
+		 * everything
+		 */
+		resetStringInfo(&(lex->inc_state->partial_token));
+		lex->token_terminator = lex->input;
+		lex->inc_state->partial_completed = false;
+	}
+
 	s = lex->token_terminator;
+
+	if (lex->incremental && lex->inc_state->partial_token.len)
+	{
+		/*
+		 * We have a partial token. Extend it and if completed lex it by a
+		 * recursive call
+		 */
+		StringInfo	ptok = &(lex->inc_state->partial_token);
+		int			added = 0;
+		bool		tok_done = false;
+		JsonLexContext dummy_lex;
+		JsonParseErrorType partial_result;
+
+		if (ptok->data[0] == '"')
+		{
+			/*
+			 * It's a string. Accumulate characters until we reach an
+			 * unescaped '"'.
+			 */
+			int			escapes = 0;
+
+			for (int i = ptok->len - 1; i > 0; i--)
+			{
+				/* count the trailing backslashes on the partial token */
+				if (ptok->data[i] == '\\')
+					escapes++;
+				else
+					break;
+			}
+
+			for (int i = 0; i < lex->input_length; i++)
+			{
+				char		c = lex->input[i];
+
+				appendStringInfoCharMacro(ptok, c);
+				added++;
+				if (c == '"' && escapes % 2 == 0)
+				{
+					tok_done = true;
+					break;
+				}
+				if (c == '\\')
+					escapes++;
+				else
+					escapes = 0;
+			}
+		}
+		else
+		{
+			/* not a string */
+			char		c = ptok->data[0];
+
+			if (c == '-' || (c >= '0' && c <= '9'))
+			{
+				/* for numbers look for possible numeric continuations */
+				size_t		nums = strspn(lex->input, "+-.eE0123456789");
+
+				for (int i = 0; i < nums; i++)
+				{
+					char		cc = lex->input[i];
+
+					appendStringInfoCharMacro(ptok, cc);
+					added++;
+				}
+			}
+			/* add any remaining alpha_numeric chars */
+			for (int i = added; i < lex->input_length; i++)
+			{
+				char		cc = lex->input[i];
+
+				if (JSON_ALPHANUMERIC_CHAR(cc))
+				{
+					appendStringInfoCharMacro(ptok, cc);
+					added++;
+				}
+				else
+				{
+					tok_done = true;
+					break;
+				}
+			}
+		}
+
+		if (!tok_done)
+		{
+			if (lex->inc_state->is_last_chunk)
+				return JSON_INVALID_TOKEN;
+			else
+				return JSON_INCOMPLETE;
+		}
+
+		lex->input += added;
+		lex->input_length -= added;
+
+		dummy_lex.input = dummy_lex.token_terminator =
+			dummy_lex.line_start = ptok->data;
+		dummy_lex.line_number = lex->line_number;
+		dummy_lex.input_length = ptok->len;
+		dummy_lex.input_encoding = lex->input_encoding;
+		dummy_lex.incremental = false;
+		dummy_lex.strval = lex->strval;
+
+		partial_result = json_lex(&dummy_lex);
+		if (partial_result != JSON_SUCCESS)
+			return partial_result;
+		lex->token_type = dummy_lex.token_type;
+		lex->line_number = dummy_lex.line_number;
+
+		/*
+		 * Need to point here so semantic routines can get the correct token.
+		 * We will readjust on the next call to json_lex.
+		 */
+		lex->token_start = ptok->data;
+		lex->token_terminator = ptok->data + ptok->len;
+		lex->inc_state->partial_completed = true;
+		return JSON_SUCCESS;
+		/* end of partial token processing */
+	}
+
+	/* Skip leading whitespace. */
 	while (s < end && (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r'))
 	{
 		if (*s++ == '\n')
@@ -704,6 +1493,14 @@ json_lex(JsonLexContext *lex)
 						return JSON_INVALID_TOKEN;
 					}
 
+					if (lex->incremental && !lex->inc_state->is_last_chunk &&
+						p == lex->input + lex->input_length)
+					{
+						appendStringInfoString(
+											   &(lex->inc_state->partial_token), s);
+						return JSON_INCOMPLETE;
+					}
+
 					/*
 					 * We've got a real alphanumeric token here.  If it
 					 * happens to be true, false, or null, all is well.  If
@@ -728,7 +1525,10 @@ json_lex(JsonLexContext *lex)
 		}						/* end of switch */
 	}
 
-	return JSON_SUCCESS;
+	if (lex->incremental && lex->token_type == JSON_TOKEN_END && !lex->inc_state->is_last_chunk)
+		return JSON_INCOMPLETE;
+	else
+		return JSON_SUCCESS;
 }
 
 /*
@@ -750,8 +1550,14 @@ json_lex_string(JsonLexContext *lex)
 	int			hi_surrogate = -1;
 
 	/* Convenience macros for error exits */
-#define FAIL_AT_CHAR_START(code) \
+#define FAIL_OR_INCOMPLETE_AT_CHAR_START(code) \
 	do { \
+		if (lex->incremental && !lex->inc_state->is_last_chunk) \
+		{ \
+			appendStringInfoString(&lex->inc_state->partial_token, \
+								   lex->token_start); \
+			return JSON_INCOMPLETE; \
+		} \
 		lex->token_terminator = s; \
 		return code; \
 	} while (0)
@@ -772,7 +1578,7 @@ json_lex_string(JsonLexContext *lex)
 		s++;
 		/* Premature end of the string. */
 		if (s >= end)
-			FAIL_AT_CHAR_START(JSON_INVALID_TOKEN);
+			FAIL_OR_INCOMPLETE_AT_CHAR_START(JSON_INVALID_TOKEN);
 		else if (*s == '"')
 			break;
 		else if (*s == '\\')
@@ -780,7 +1586,7 @@ json_lex_string(JsonLexContext *lex)
 			/* OK, we have an escape character. */
 			s++;
 			if (s >= end)
-				FAIL_AT_CHAR_START(JSON_INVALID_TOKEN);
+				FAIL_OR_INCOMPLETE_AT_CHAR_START(JSON_INVALID_TOKEN);
 			else if (*s == 'u')
 			{
 				int			i;
@@ -790,7 +1596,7 @@ json_lex_string(JsonLexContext *lex)
 				{
 					s++;
 					if (s >= end)
-						FAIL_AT_CHAR_START(JSON_INVALID_TOKEN);
+						FAIL_OR_INCOMPLETE_AT_CHAR_START(JSON_INVALID_TOKEN);
 					else if (*s >= '0' && *s <= '9')
 						ch = (ch * 16) + (*s - '0');
 					else if (*s >= 'a' && *s <= 'f')
@@ -975,7 +1781,7 @@ json_lex_string(JsonLexContext *lex)
 	lex->token_terminator = s + 1;
 	return JSON_SUCCESS;
 
-#undef FAIL_AT_CHAR_START
+#undef FAIL_OR_INCOMPLETE_AT_CHAR_START
 #undef FAIL_AT_CHAR_END
 }
 
@@ -1084,7 +1890,14 @@ json_lex_number(JsonLexContext *lex, char *s,
 	if (total_len != NULL)
 		*total_len = len;
 
-	if (num_err != NULL)
+	if (lex->incremental && !lex->inc_state->is_last_chunk &&
+		len >= lex->input_length)
+	{
+		appendStringInfoString(&lex->inc_state->partial_token,
+							   lex->token_start);
+		return JSON_INCOMPLETE;
+	}
+	else if (num_err != NULL)
 	{
 		/* let the caller handle any error */
 		*num_err = error;
@@ -1173,6 +1986,7 @@ json_errdetail(JsonParseErrorType error, JsonLexContext *lex)
 {
 	switch (error)
 	{
+		case JSON_INCOMPLETE:
 		case JSON_SUCCESS:
 			/* fall through to the error code after switch */
 			break;

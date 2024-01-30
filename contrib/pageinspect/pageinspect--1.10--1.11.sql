@@ -26,3 +26,13 @@ ALTER FUNCTION hash_bitmap_info(regclass, int8) PARALLEL RESTRICTED;
 -- Likewise for gist_page_items.
 ALTER FUNCTION brin_page_items(bytea, regclass) PARALLEL RESTRICTED;
 ALTER FUNCTION gist_page_items(bytea, regclass) PARALLEL RESTRICTED;
+
+CREATE FUNCTION estimate_lsn_at_time(IN input_time timestamp with time zone,
+    OUT lsn pg_lsn)
+AS 'MODULE_PATHNAME', 'estimate_lsn_at_time'
+LANGUAGE C STRICT PARALLEL SAFE;
+
+CREATE FUNCTION estimate_time_at_lsn(IN lsn pg_lsn,
+    OUT result timestamp with time zone)
+AS 'MODULE_PATHNAME', 'estimate_time_at_lsn'
+LANGUAGE C STRICT PARALLEL SAFE;

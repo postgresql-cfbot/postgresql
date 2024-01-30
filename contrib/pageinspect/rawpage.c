@@ -22,6 +22,7 @@
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "pageinspect.h"
+#include "pgstat.h"
 #include "storage/bufmgr.h"
 #include "storage/checksum.h"
 #include "utils/builtins.h"
@@ -335,6 +336,9 @@ page_header(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(page_checksum_1_9);
 PG_FUNCTION_INFO_V1(page_checksum);
 
+PG_FUNCTION_INFO_V1(estimate_lsn_at_time);
+PG_FUNCTION_INFO_V1(estimate_time_at_lsn);
+
 static Datum
 page_checksum_internal(PG_FUNCTION_ARGS, enum pageinspect_version ext_version)
 {
@@ -373,4 +377,26 @@ Datum
 page_checksum(PG_FUNCTION_ARGS)
 {
 	return page_checksum_internal(fcinfo, PAGEINSPECT_V1_8);
+}
+
+Datum
+estimate_time_at_lsn(PG_FUNCTION_ARGS)
+{
+	XLogRecPtr	lsn = PG_GETARG_LSN(0);
+	TimestampTz result;
+
+	result = pgstat_wal_estimate_time_at_lsn(lsn);
+
+	PG_RETURN_TIMESTAMPTZ(result);
+}
+
+Datum
+estimate_lsn_at_time(PG_FUNCTION_ARGS)
+{
+	TimestampTz time = PG_GETARG_TIMESTAMPTZ(0);
+	XLogRecPtr	result;
+
+	result = pgstat_wal_estimate_lsn_at_time(time);
+
+	PG_RETURN_LSN(result);
 }

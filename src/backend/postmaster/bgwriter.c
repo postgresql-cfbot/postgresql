@@ -277,6 +277,7 @@ BackgroundWriterMain(void)
 		{
 			TimestampTz timeout = 0;
 			TimestampTz now = GetCurrentTimestamp();
+			XLogRecPtr	current_lsn = GetLastImportantRecPtr();
 
 			timeout = TimestampTzPlusMilliseconds(last_snapshot_ts,
 												  LOG_SNAPSHOT_INTERVAL_MS);
@@ -289,10 +290,11 @@ BackgroundWriterMain(void)
 			 * the end of the record.
 			 */
 			if (now >= timeout &&
-				last_snapshot_lsn <= GetLastImportantRecPtr())
+				last_snapshot_lsn <= current_lsn)
 			{
 				last_snapshot_lsn = LogStandbySnapshot();
 				last_snapshot_ts = now;
+				pgstat_wal_update_lsntimeline(now, current_lsn);
 			}
 		}
 

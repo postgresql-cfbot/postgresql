@@ -153,6 +153,51 @@ test=# SELECT fsm_page_contents(get_raw_page('pg_class', 'fsm', 0));
      </para>
     </listitem>
    </varlistentry>
+
+   <varlistentry>
+    <term>
+     <function>estimate_lsn_at_time(lsn timestamptz) returns pg_lsn</function>
+     <indexterm>
+      <primary>estimate_lsn_at_time</primary>
+     </indexterm>
+    </term>
+
+    <listitem>
+     <para>
+      <function>estimate_lsn_at_time</function> estimates the LSN at the provided time.
+     </para>
+
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>
+     <function>estimate_time_at_lsn(lsn pg_lsn) returns timestamp with timezone</function>
+     <indexterm>
+      <primary>estimate_time_at_lsn</primary>
+     </indexterm>
+    </term>
+
+    <listitem>
+     <para>
+      <function>estimate_time_at_lsn</function> estimates the time at provided LSN.
+     </para>
+
+     <para>
+      One useful application is approximating the last modification time of a
+      given page in a relation. For example, when combined with pageinspect
+      functions returning a page LSN:
+<screen>
+test=# SELECT estimate_time_at_lsn((SELECT lsn from page_header(get_raw_page('pg_class', 0))));
+     estimate_time_at_lsn
+-------------------------------
+ 2023-12-22 08:01:02.393598-05
+</screen>
+     </para>
+
+    </listitem>
+   </varlistentry>
+
   </variablelist>
  </sect2>
 

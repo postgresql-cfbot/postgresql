@@ -11,6 +11,7 @@
 #ifndef PGSTAT_H
 #define PGSTAT_H
 
+#include "access/xlogdefs.h"
 #include "datatype/timestamp.h"
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"	/* for MAX_XFN_CHARS */
@@ -428,6 +429,39 @@ typedef struct PgStat_StatTabEntry
 	PgStat_Counter autoanalyze_count;
 } PgStat_StatTabEntry;
 
+/*
+ * The elements of an LSNTimeline. Each LSNTime represents one or more time,
+ * LSN pairs. The LSN is typically the insert LSN recorded at the time. Members
+ * is the number of logical members -- each a time, LSN pair -- represented in
+ * the LSNTime.
+ */
+typedef struct LSNTime
+{
+	TimestampTz time;
+	XLogRecPtr	lsn;
+	uint64		members;
+} LSNTime;
+
+/*
+ * A timeline consists of LSNTimes from most to least recent. Each element of
+ * the array in the timeline may represent 2^array index logical members --
+ * meaning that each element's capacity is twice that of the preceding element.
+ * This gives more recent times greater precision than less recent ones. An
+ * array of size 64 should provide sufficient capacity without accounting for
+ * what to do when all elements of the array are at capacity.
+ *
+ * When LSNTimes are inserted into the timeline, they are absorbed into the
+ * first array element with spare capacity -- with the new combined element
+ * having the lesser of the two values. The timeline's length is the highest
+ * array index representing one or more logical members. Use the timeline for
+ * LSN <-> time conversion using linear interpolation.
+ */
+typedef struct LSNTimeline
+{
+	int			length;
+	LSNTime		data[64];
+} LSNTimeline;
+
 typedef struct PgStat_WalStats
 {
 	PgStat_Counter wal_records;
@@ -438,6 +472,7 @@ typedef struct PgStat_WalStats
 	PgStat_Counter wal_sync;
 	PgStat_Counter wal_write_time;
 	PgStat_Counter wal_sync_time;
+	LSNTimeline timeline;
 	TimestampTz stat_reset_timestamp;
 } PgStat_WalStats;
 
@@ -719,6 +754,11 @@ extern void pgstat_execute_transactional_drops(int ndrops, struct xl_xact_stats_
 
 extern void pgstat_report_wal(bool force);
 extern PgStat_WalStats *pgstat_fetch_stat_wal(void);
+
+/* Helpers for maintaining the LSNTimeline */
+extern XLogRecPtr pgstat_wal_estimate_lsn_at_time(TimestampTz time);
+extern TimestampTz pgstat_wal_estimate_time_at_lsn(XLogRecPtr lsn);
+extern void pgstat_wal_update_lsntimeline(TimestampTz time, XLogRecPtr lsn);
 
 
 /*

@@ -76,6 +76,7 @@
 #include "catalog/dependency.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_database.h"
+#include "catalog/pg_namespace.h"
 #include "commands/dbcommands.h"
 #include "commands/vacuum.h"
 #include "lib/ilist.h"
@@ -2302,6 +2303,19 @@ do_autovacuum(void)
 			continue;
 		}
 
+		/*
+		 * Try to lock the table namespace.  As explained above, we try to avoid
+		 * concurrency on table removals. If backend or another autovacuum
+		 * worker tries to drop orphan temp tables, let it do its job.
+		 */
+		if (!ConditionalLockDatabaseObject(NamespaceRelationId,
+										   classForm->relnamespace, 0,
+										   AccessShareLock))
+		{
+			UnlockRelationOid(relid, AccessExclusiveLock);
+			continue;
+		}
+
 		/* OK, let's delete it */
 		ereport(LOG,
 				(errmsg("autovacuum: dropping orphan temp table \"%s.%s.%s\"",
@@ -2327,6 +2341,12 @@ do_autovacuum(void)
 		/* StartTransactionCommand changed current memory context */
 		MemoryContextSwitchTo(AutovacMemCxt);
 	}
+
+	if (orphan_oids != NIL) {
+		ereport(LOG,
+				(errmsg("autovacuum: dropping orphan temp tables completed")));
+	}
+
 
 	/*
 	 * Optionally, create a buffer access strategy object for VACUUM to use.

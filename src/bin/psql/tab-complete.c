@@ -4915,7 +4915,7 @@ psql_completion(const char *text, int start, int end)
 	else if (TailMatchesCS("\\pset", MatchAny))
 	{
 		if (TailMatchesCS("format"))
-			COMPLETE_WITH_CS("aligned", "asciidoc", "csv", "html", "latex",
+			COMPLETE_WITH_CS("aligned", "asciidoc", "csv", "html", "json", "latex",
 							 "latex-longtable", "troff-ms", "unaligned",
 							 "wrapped");
 		else if (TailMatchesCS("xheader_width"))

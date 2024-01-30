@@ -8,17 +8,20 @@
  </indexterm>
 
  <para>
-  <filename>basic_archive</filename> is an example of an archive module.  This
-  module copies completed WAL segment files to the specified directory.  This
-  may not be especially useful, but it can serve as a starting point for
-  developing your own archive module.  For more information about archive
-  modules, see <xref linkend="archive-modules"/>.
+  <filename>basic_archive</filename> is an example of an archive and restore
+  module.  This module copies completed WAL segment files to or from the
+  specified directory.  This may not be especially useful, but it can serve as
+  a starting point for developing your own archive and restore modules.  For
+  more information about archive and restore modules, see\
+  <xref linkend="archive-and-restore-modules"/>.
  </para>
 
  <para>
-  In order to function, this module must be loaded via
+  For use as an archive module, this module must be loaded via
   <xref linkend="guc-archive-library"/>, and <xref linkend="guc-archive-mode"/>
-  must be enabled.
+  must be enabled.  For use as a restore module, this module must be loaded
+  via <xref linkend="guc-restore-library"/>, and recovery must be enabled (see
+  <xref linkend="runtime-config-wal-archive-recovery"/>).
  </para>
 
  <sect2 id="basic-archive-configuration-parameters">
@@ -34,11 +37,12 @@
     </term>
     <listitem>
      <para>
-      The directory where the server should copy WAL segment files.  This
-      directory must already exist.  The default is an empty string, which
-      effectively halts WAL archiving, but if <xref linkend="guc-archive-mode"/>
-      is enabled, the server will accumulate WAL segment files in the
-      expectation that a value will soon be provided.
+      The directory where the server should copy WAL segment files to or from.
+      This directory must already exist.  The default is an empty string,
+      which, when used for archiving, effectively halts WAL archival, but if
+      <xref linkend="guc-archive-mode"/> is enabled, the server will accumulate
+      WAL segment files in the expectation that a value will soon be provided.
+      When an empty string is used for recovery, restore will fail.
      </para>
     </listitem>
    </varlistentry>
@@ -46,7 +50,7 @@
 
   <para>
    These parameters must be set in <filename>postgresql.conf</filename>.
-   Typical usage might be:
+   Typical usage as an archive module might be:
   </para>
 
 <programlisting>
@@ -61,6 +65,7 @@ basic_archive.archive_directory = '/path/to/archive/directory'
   <title>Notes</title>
 
   <para>
+   When <filename>basic_archive</filename> is used as an archive module,
    Server crashes may leave temporary files with the prefix
    <filename>archtemp</filename> in the archive directory.  It is recommended to
    delete such files before restarting the server after a crash.  It is safe to

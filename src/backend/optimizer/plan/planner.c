@@ -1644,8 +1644,8 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 		 */
 		root->upper_targets[UPPERREL_FINAL] = final_target;
 		root->upper_targets[UPPERREL_ORDERED] = final_target;
-		root->upper_targets[UPPERREL_PARTIAL_DISTINCT] = sort_input_target;
 		root->upper_targets[UPPERREL_DISTINCT] = sort_input_target;
+		root->upper_targets[UPPERREL_PARTIAL_DISTINCT] = sort_input_target;
 		root->upper_targets[UPPERREL_WINDOW] = sort_input_target;
 		root->upper_targets[UPPERREL_GROUP_AGG] = grouping_target;
 
@@ -4664,7 +4664,6 @@ create_partial_distinct_paths(PlannerInfo *root, RelOptInfo *input_rel,
 
 	partial_distinct_rel = fetch_upper_rel(root, UPPERREL_PARTIAL_DISTINCT,
 										   NULL);
-	partial_distinct_rel->reltarget = root->upper_targets[UPPERREL_PARTIAL_DISTINCT];
 	partial_distinct_rel->consider_parallel = input_rel->consider_parallel;
 
 	/*
@@ -4785,7 +4784,15 @@ create_partial_distinct_paths(PlannerInfo *root, RelOptInfo *input_rel,
 
 	if (partial_distinct_rel->partial_pathlist != NIL)
 	{
-		generate_gather_paths(root, partial_distinct_rel, true);
+		/*
+		 * Set target for partial_distinct_rel as generate_useful_gather_paths
+		 * requires that the input rel has a valid reltarget.
+		 */
+		partial_distinct_rel->reltarget = cheapest_partial_path->pathtarget;
+
+		/* Consider generating Gather or Gather Merge paths */
+		generate_useful_gather_paths(root, partial_distinct_rel, true);
+
 		set_cheapest(partial_distinct_rel);
 
 		/*

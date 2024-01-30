@@ -33,3 +33,14 @@ CREATE FUNCTION injection_points_detach(IN point_name TEXT)
 RETURNS void
 AS 'MODULE_PATHNAME', 'injection_points_detach'
 LANGUAGE C STRICT PARALLEL UNSAFE;
+
+
+CREATE FUNCTION create_test_multixact()
+RETURNS xid
+AS 'MODULE_PATHNAME', 'create_test_multixact'
+LANGUAGE C STRICT PARALLEL UNSAFE;
+
+CREATE FUNCTION read_test_multixact(xid)
+RETURNS void
+AS 'MODULE_PATHNAME', 'read_test_multixact'
+LANGUAGE C STRICT PARALLEL UNSAFE;

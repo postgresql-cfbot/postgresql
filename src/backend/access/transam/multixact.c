@@ -82,12 +82,14 @@
 #include "lib/ilist.h"
 #include "miscadmin.h"
 #include "pg_trace.h"
+#include "pgstat.h"
 #include "postmaster/autovacuum.h"
 #include "storage/lmgr.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "utils/builtins.h"
+#include "utils/injection_point.h"
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
 
@@ -233,6 +235,7 @@ typedef struct MultiXactStateData
 	/* support for members anti-wraparound measures */
 	MultiXactOffset offsetStopLimit;	/* known if oldestOffsetKnown */
 
+	ConditionVariable nextoff_cv;
 	/*
 	 * Per-backend data starts here.  We have two arrays stored in the area
 	 * immediately following the MultiXactStateData struct. Each is indexed by
@@ -894,6 +897,14 @@ RecordNewMultiXact(MultiXactId multi, MultiXactOffset offset,
 	/* Exchange our lock */
 	LWLockRelease(MultiXactOffsetSLRULock);
 
+	/*
+	 *  Let everybody know the offset of this mxid is recorded now. The waiters
+	 *  are waiting for the offset of the mxid next of the target to know the
+	 *  number of members of the target mxid, so we don't need to wait for
+	 *  members of this mxid are recorded.
+	 */
+	ConditionVariableBroadcast(&MultiXactState->nextoff_cv);
+
 	LWLockAcquire(MultiXactMemberSLRULock, LW_EXCLUSIVE);
 
 	prev_pageno = -1;
@@ -1190,6 +1201,8 @@ GetNewMultiXactId(int nmembers, MultiXactOffset *offset)
 
 	LWLockRelease(MultiXactGenLock);
 
+	INJECTION_POINT("GetNewMultiXactId-done");
+
 	debug_elog4(DEBUG2, "GetNew: returning %u offset %u", result, *offset);
 	return result;
 }
@@ -1388,9 +1401,21 @@ retry:
 		if (nextMXOffset == 0)
 		{
 			/* Corner case 2: next multixact is still being filled in */
+
+			/*
+			 * The recorder of the next mxid is just before writing the offset.
+			 * Wait for the offset to be written.
+			 */
+			ConditionVariablePrepareToSleep(&MultiXactState->nextoff_cv);
+
 			LWLockRelease(MultiXactOffsetSLRULock);
 			CHECK_FOR_INTERRUPTS();
-			pg_usleep(1000L);
+
+			INJECTION_POINT("GetMultiXactIdMembers-CV-sleep");
+
+			ConditionVariableSleep(&MultiXactState->nextoff_cv,
+								   WAIT_EVENT_NEXT_MXMEMBERS);
+			ConditionVariableCancelSleep();
 			goto retry;
 		}
 
@@ -1875,6 +1900,7 @@ MultiXactShmemInit(void)
 
 		/* Make sure we zero out the per-backend state */
 		MemSet(MultiXactState, 0, SHARED_MULTIXACT_STATE_SIZE);
+		ConditionVariableInit(&MultiXactState->nextoff_cv);
 	}
 	else
 		Assert(found);

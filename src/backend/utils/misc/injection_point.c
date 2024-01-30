@@ -253,6 +253,26 @@ InjectionPointDetach(const char *name)
 }
 
 /*
+ * Test if injection point is attached.
+ */
+bool
+InjectionPointIsAttach(const char *name)
+{
+#ifdef USE_INJECTION_POINTS
+	bool		found;
+
+	LWLockAcquire(InjectionPointLock, LW_EXCLUSIVE);
+	hash_search(InjectionPointHash, name, HASH_FIND, &found);
+	LWLockRelease(InjectionPointLock);
+
+	return found;
+
+#else
+	elog(ERROR, "Injection points are not supported by this build");
+#endif
+}
+
+/*
  * Execute an injection point, if defined.
  *
  * Check first the shared hash table, and adapt the local cache depending

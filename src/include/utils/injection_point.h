@@ -33,5 +33,6 @@ extern void InjectionPointAttach(const char *name,
 								 const char *function);
 extern void InjectionPointRun(const char *name);
 extern void InjectionPointDetach(const char *name);
+extern bool InjectionPointIsAttach(const char *name);
 
 #endif							/* INJECTION_POINT_H */

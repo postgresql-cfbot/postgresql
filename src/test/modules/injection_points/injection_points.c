@@ -18,6 +18,7 @@
 #include "postgres.h"
 
 #include "fmgr.h"
+#include "miscadmin.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
 #include "utils/builtins.h"
@@ -28,6 +29,7 @@ PG_MODULE_MAGIC;
 
 extern PGDLLEXPORT void injection_error(const char *name);
 extern PGDLLEXPORT void injection_notice(const char *name);
+extern PGDLLEXPORT void injection_wait(const char *name);
 
 
 /* Set of callbacks available to be attached to an injection point. */
@@ -41,6 +43,18 @@ void
 injection_notice(const char *name)
 {
 	elog(NOTICE, "notice triggered for injection point %s", name);
+}
+
+void
+injection_wait(const char *name)
+{
+	elog(NOTICE, "waiting triggered for injection point %s", name);
+	do
+	{
+		CHECK_FOR_INTERRUPTS();
+		pg_usleep(1000L);
+	} while (InjectionPointIsAttach(name));
+	elog(NOTICE, "waiting done for injection point %s", name);
 }
 
 /*
@@ -58,6 +72,8 @@ injection_points_attach(PG_FUNCTION_ARGS)
 		function = "injection_error";
 	else if (strcmp(action, "notice") == 0)
 		function = "injection_notice";
+	else if (strcmp(action, "wait") == 0)
+		function = "injection_wait";
 	else
 		elog(ERROR, "incorrect action \"%s\" for injection point creation", action);
 
@@ -91,5 +107,31 @@ injection_points_detach(PG_FUNCTION_ARGS)
 
 	InjectionPointDetach(name);
 
+	PG_RETURN_VOID();
+}
+
+#include "access/multixact.h"
+#include "access/xact.h"
+
+PG_FUNCTION_INFO_V1(create_test_multixact);
+Datum
+create_test_multixact(PG_FUNCTION_ARGS)
+{
+	MultiXactId id;
+	MultiXactIdSetOldestMember();
+	id = MultiXactIdCreate(GetCurrentTransactionId(), MultiXactStatusUpdate,
+						GetCurrentTransactionId(), MultiXactStatusForShare);
+	PG_RETURN_TRANSACTIONID(id);
+}
+
+PG_FUNCTION_INFO_V1(read_test_multixact);
+Datum
+read_test_multixact(PG_FUNCTION_ARGS)
+{
+	MultiXactId id = PG_GETARG_TRANSACTIONID(0);
+	MultiXactMember *members;
+	INJECTION_POINT("read_test_multixact");
+	if (GetMultiXactIdMembers(id,&members,false, false) == -1)
+		elog(ERROR, "MultiXactId not found");
 	PG_RETURN_VOID();
 }

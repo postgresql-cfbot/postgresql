@@ -624,6 +624,19 @@ reset enable_nestloop;
 
 drop table matest0 cascade;
 
+-- Check that merge append is chosen in presence of filters.
+create table ma0(a smallint primary key);
+create table ma1() inherits (ma0);
+insert into ma0 select generate_series(1, 1000);
+insert into ma1 select generate_series(1, 1000);
+analyze ma0;
+analyze ma1;
+
+explain (costs off) select * from ma0 where a < 100 order by a;
+
+drop table ma0 cascade;
+
+
 --
 -- Test merge-append for UNION ALL append relations
 --

@@ -1716,6 +1716,28 @@ order by t1.b limit 10;
 reset enable_nestloop;
 drop table matest0 cascade;
 NOTICE:  drop cascades to table matest1
+-- Check that merge append is chosen in presence of filters.
+create table ma0(a smallint primary key);
+create table ma1() inherits (ma0);
+insert into ma0 select generate_series(1, 1000);
+insert into ma1 select generate_series(1, 1000);
+analyze ma0;
+analyze ma1;
+explain (costs off) select * from ma0 where a < 100 order by a;
+                    QUERY PLAN                     
+---------------------------------------------------
+ Merge Append
+   Sort Key: ma0.a
+   ->  Index Only Scan using ma0_pkey on ma0 ma0_1
+         Index Cond: (a < 100)
+   ->  Sort
+         Sort Key: ma0_2.a
+         ->  Seq Scan on ma1 ma0_2
+               Filter: (a < 100)
+(8 rows)
+
+drop table ma0 cascade;
+NOTICE:  drop cascades to table ma1
 --
 -- Test merge-append for UNION ALL append relations
 --

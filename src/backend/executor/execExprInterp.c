@@ -158,17 +158,25 @@ static void ExecEvalRowNullInt(ExprState *state, ExprEvalStep *op,
 static Datum ExecJustInnerVar(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustOuterVar(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustScanVar(ExprState *state, ExprContext *econtext, bool *isnull);
+static Datum ExecJustOldVar(ExprState *state, ExprContext *econtext, bool *isnull);
+static Datum ExecJustNewVar(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustAssignInnerVar(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustAssignOuterVar(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustAssignScanVar(ExprState *state, ExprContext *econtext, bool *isnull);
+static Datum ExecJustAssignOldVar(ExprState *state, ExprContext *econtext, bool *isnull);
+static Datum ExecJustAssignNewVar(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustApplyFuncToCase(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustConst(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustInnerVarVirt(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustOuterVarVirt(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustScanVarVirt(ExprState *state, ExprContext *econtext, bool *isnull);
+static Datum ExecJustOldVarVirt(ExprState *state, ExprContext *econtext, bool *isnull);
+static Datum ExecJustNewVarVirt(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustAssignInnerVarVirt(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustAssignOuterVarVirt(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustAssignScanVarVirt(ExprState *state, ExprContext *econtext, bool *isnull);
+static Datum ExecJustAssignOldVarVirt(ExprState *state, ExprContext *econtext, bool *isnull);
+static Datum ExecJustAssignNewVarVirt(ExprState *state, ExprContext *econtext, bool *isnull);
 
 /* execution helper functions */
 static pg_attribute_always_inline void ExecAggPlainTransByVal(AggState *aggstate,
@@ -296,6 +304,18 @@ ExecReadyInterpretedExpr(ExprState *state)
 			state->evalfunc_private = (void *) ExecJustScanVar;
 			return;
 		}
+		else if (step0 == EEOP_OLD_FETCHSOME &&
+				 step1 == EEOP_OLD_VAR)
+		{
+			state->evalfunc_private = (void *) ExecJustOldVar;
+			return;
+		}
+		else if (step0 == EEOP_NEW_FETCHSOME &&
+				 step1 == EEOP_NEW_VAR)
+		{
+			state->evalfunc_private = (void *) ExecJustNewVar;
+			return;
+		}
 		else if (step0 == EEOP_INNER_FETCHSOME &&
 				 step1 == EEOP_ASSIGN_INNER_VAR)
 		{
@@ -312,6 +332,18 @@ ExecReadyInterpretedExpr(ExprState *state)
 				 step1 == EEOP_ASSIGN_SCAN_VAR)
 		{
 			state->evalfunc_private = (void *) ExecJustAssignScanVar;
+			return;
+		}
+		else if (step0 == EEOP_OLD_FETCHSOME &&
+				 step1 == EEOP_ASSIGN_OLD_VAR)
+		{
+			state->evalfunc_private = (void *) ExecJustAssignOldVar;
+			return;
+		}
+		else if (step0 == EEOP_NEW_FETCHSOME &&
+				 step1 == EEOP_ASSIGN_NEW_VAR)
+		{
+			state->evalfunc_private = (void *) ExecJustAssignNewVar;
 			return;
 		}
 		else if (step0 == EEOP_CASE_TESTVAL &&
@@ -346,6 +378,16 @@ ExecReadyInterpretedExpr(ExprState *state)
 			state->evalfunc_private = (void *) ExecJustScanVarVirt;
 			return;
 		}
+		else if (step0 == EEOP_OLD_VAR)
+		{
+			state->evalfunc_private = (void *) ExecJustOldVarVirt;
+			return;
+		}
+		else if (step0 == EEOP_NEW_VAR)
+		{
+			state->evalfunc_private = (void *) ExecJustNewVarVirt;
+			return;
+		}
 		else if (step0 == EEOP_ASSIGN_INNER_VAR)
 		{
 			state->evalfunc_private = (void *) ExecJustAssignInnerVarVirt;
@@ -359,6 +401,16 @@ ExecReadyInterpretedExpr(ExprState *state)
 		else if (step0 == EEOP_ASSIGN_SCAN_VAR)
 		{
 			state->evalfunc_private = (void *) ExecJustAssignScanVarVirt;
+			return;
+		}
+		else if (step0 == EEOP_ASSIGN_OLD_VAR)
+		{
+			state->evalfunc_private = (void *) ExecJustAssignOldVarVirt;
+			return;
+		}
+		else if (step0 == EEOP_ASSIGN_NEW_VAR)
+		{
+			state->evalfunc_private = (void *) ExecJustAssignNewVarVirt;
 			return;
 		}
 	}
@@ -400,6 +452,8 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 	TupleTableSlot *innerslot;
 	TupleTableSlot *outerslot;
 	TupleTableSlot *scanslot;
+	TupleTableSlot *oldslot;
+	TupleTableSlot *newslot;
 
 	/*
 	 * This array has to be in the same order as enum ExprEvalOp.
@@ -410,16 +464,24 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		&&CASE_EEOP_INNER_FETCHSOME,
 		&&CASE_EEOP_OUTER_FETCHSOME,
 		&&CASE_EEOP_SCAN_FETCHSOME,
+		&&CASE_EEOP_OLD_FETCHSOME,
+		&&CASE_EEOP_NEW_FETCHSOME,
 		&&CASE_EEOP_INNER_VAR,
 		&&CASE_EEOP_OUTER_VAR,
 		&&CASE_EEOP_SCAN_VAR,
+		&&CASE_EEOP_OLD_VAR,
+		&&CASE_EEOP_NEW_VAR,
 		&&CASE_EEOP_INNER_SYSVAR,
 		&&CASE_EEOP_OUTER_SYSVAR,
 		&&CASE_EEOP_SCAN_SYSVAR,
+		&&CASE_EEOP_OLD_SYSVAR,
+		&&CASE_EEOP_NEW_SYSVAR,
 		&&CASE_EEOP_WHOLEROW,
 		&&CASE_EEOP_ASSIGN_INNER_VAR,
 		&&CASE_EEOP_ASSIGN_OUTER_VAR,
 		&&CASE_EEOP_ASSIGN_SCAN_VAR,
+		&&CASE_EEOP_ASSIGN_OLD_VAR,
+		&&CASE_EEOP_ASSIGN_NEW_VAR,
 		&&CASE_EEOP_ASSIGN_TMP,
 		&&CASE_EEOP_ASSIGN_TMP_MAKE_RO,
 		&&CASE_EEOP_CONST,
@@ -519,6 +581,8 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 	innerslot = econtext->ecxt_innertuple;
 	outerslot = econtext->ecxt_outertuple;
 	scanslot = econtext->ecxt_scantuple;
+	oldslot = econtext->ecxt_oldtuple;
+	newslot = econtext->ecxt_newtuple;
 
 #if defined(EEO_USE_COMPUTED_GOTO)
 	EEO_DISPATCH();
@@ -554,6 +618,24 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			CheckOpSlotCompatibility(op, scanslot);
 
 			slot_getsomeattrs(scanslot, op->d.fetch.last_var);
+
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_OLD_FETCHSOME)
+		{
+			CheckOpSlotCompatibility(op, oldslot);
+
+			slot_getsomeattrs(oldslot, op->d.fetch.last_var);
+
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_NEW_FETCHSOME)
+		{
+			CheckOpSlotCompatibility(op, newslot);
+
+			slot_getsomeattrs(newslot, op->d.fetch.last_var);
 
 			EEO_NEXT();
 		}
@@ -601,6 +683,32 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			EEO_NEXT();
 		}
 
+		EEO_CASE(EEOP_OLD_VAR)
+		{
+			int			attnum = op->d.var.attnum;
+
+			/* See EEOP_INNER_VAR comments */
+
+			Assert(attnum >= 0 && attnum < oldslot->tts_nvalid);
+			*op->resvalue = oldslot->tts_values[attnum];
+			*op->resnull = oldslot->tts_isnull[attnum];
+
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_NEW_VAR)
+		{
+			int			attnum = op->d.var.attnum;
+
+			/* See EEOP_INNER_VAR comments */
+
+			Assert(attnum >= 0 && attnum < newslot->tts_nvalid);
+			*op->resvalue = newslot->tts_values[attnum];
+			*op->resnull = newslot->tts_isnull[attnum];
+
+			EEO_NEXT();
+		}
+
 		EEO_CASE(EEOP_INNER_SYSVAR)
 		{
 			ExecEvalSysVar(state, op, econtext, innerslot);
@@ -616,6 +724,18 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		EEO_CASE(EEOP_SCAN_SYSVAR)
 		{
 			ExecEvalSysVar(state, op, econtext, scanslot);
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_OLD_SYSVAR)
+		{
+			ExecEvalSysVar(state, op, econtext, oldslot);
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_NEW_SYSVAR)
+		{
+			ExecEvalSysVar(state, op, econtext, newslot);
 			EEO_NEXT();
 		}
 
@@ -674,6 +794,40 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			Assert(resultnum >= 0 && resultnum < resultslot->tts_tupleDescriptor->natts);
 			resultslot->tts_values[resultnum] = scanslot->tts_values[attnum];
 			resultslot->tts_isnull[resultnum] = scanslot->tts_isnull[attnum];
+
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_ASSIGN_OLD_VAR)
+		{
+			int			resultnum = op->d.assign_var.resultnum;
+			int			attnum = op->d.assign_var.attnum;
+
+			/*
+			 * We do not need CheckVarSlotCompatibility here; that was taken
+			 * care of at compilation time.  But see EEOP_INNER_VAR comments.
+			 */
+			Assert(attnum >= 0 && attnum < oldslot->tts_nvalid);
+			Assert(resultnum >= 0 && resultnum < resultslot->tts_tupleDescriptor->natts);
+			resultslot->tts_values[resultnum] = oldslot->tts_values[attnum];
+			resultslot->tts_isnull[resultnum] = oldslot->tts_isnull[attnum];
+
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_ASSIGN_NEW_VAR)
+		{
+			int			resultnum = op->d.assign_var.resultnum;
+			int			attnum = op->d.assign_var.attnum;
+
+			/*
+			 * We do not need CheckVarSlotCompatibility here; that was taken
+			 * care of at compilation time.  But see EEOP_INNER_VAR comments.
+			 */
+			Assert(attnum >= 0 && attnum < newslot->tts_nvalid);
+			Assert(resultnum >= 0 && resultnum < resultslot->tts_tupleDescriptor->natts);
+			resultslot->tts_values[resultnum] = newslot->tts_values[attnum];
+			resultslot->tts_isnull[resultnum] = newslot->tts_isnull[attnum];
 
 			EEO_NEXT();
 		}
@@ -1891,10 +2045,14 @@ CheckExprStillValid(ExprState *state, ExprContext *econtext)
 	TupleTableSlot *innerslot;
 	TupleTableSlot *outerslot;
 	TupleTableSlot *scanslot;
+	TupleTableSlot *oldslot;
+	TupleTableSlot *newslot;
 
 	innerslot = econtext->ecxt_innertuple;
 	outerslot = econtext->ecxt_outertuple;
 	scanslot = econtext->ecxt_scantuple;
+	oldslot = econtext->ecxt_oldtuple;
+	newslot = econtext->ecxt_newtuple;
 
 	for (int i = 0; i < state->steps_len; i++)
 	{
@@ -1923,6 +2081,22 @@ CheckExprStillValid(ExprState *state, ExprContext *econtext)
 					int			attnum = op->d.var.attnum;
 
 					CheckVarSlotCompatibility(scanslot, attnum + 1, op->d.var.vartype);
+					break;
+				}
+
+			case EEOP_OLD_VAR:
+				{
+					int			attnum = op->d.var.attnum;
+
+					CheckVarSlotCompatibility(oldslot, attnum + 1, op->d.var.vartype);
+					break;
+				}
+
+			case EEOP_NEW_VAR:
+				{
+					int			attnum = op->d.var.attnum;
+
+					CheckVarSlotCompatibility(newslot, attnum + 1, op->d.var.vartype);
 					break;
 				}
 			default:
@@ -2099,7 +2273,7 @@ get_cached_rowtype(Oid type_id, int32 typmod,
  * Fast-path functions, for very simple expressions
  */
 
-/* implementation of ExecJust(Inner|Outer|Scan)Var */
+/* implementation of ExecJust(Inner|Outer|Scan|Old|New)Var */
 static pg_attribute_always_inline Datum
 ExecJustVarImpl(ExprState *state, TupleTableSlot *slot, bool *isnull)
 {
@@ -2137,7 +2311,21 @@ ExecJustScanVar(ExprState *state, ExprContext *econtext, bool *isnull)
 	return ExecJustVarImpl(state, econtext->ecxt_scantuple, isnull);
 }
 
-/* implementation of ExecJustAssign(Inner|Outer|Scan)Var */
+/* Simple reference to OLD Var in RETURNING */
+static Datum
+ExecJustOldVar(ExprState *state, ExprContext *econtext, bool *isnull)
+{
+	return ExecJustVarImpl(state, econtext->ecxt_oldtuple, isnull);
+}
+
+/* Simple reference to NEW Var in RETURNING */
+static Datum
+ExecJustNewVar(ExprState *state, ExprContext *econtext, bool *isnull)
+{
+	return ExecJustVarImpl(state, econtext->ecxt_newtuple, isnull);
+}
+
+/* implementation of ExecJustAssign(Inner|Outer|Scan|Old|New)Var */
 static pg_attribute_always_inline Datum
 ExecJustAssignVarImpl(ExprState *state, TupleTableSlot *inslot, bool *isnull)
 {
@@ -2182,6 +2370,20 @@ static Datum
 ExecJustAssignScanVar(ExprState *state, ExprContext *econtext, bool *isnull)
 {
 	return ExecJustAssignVarImpl(state, econtext->ecxt_scantuple, isnull);
+}
+
+/* Evaluate OLD Var and assign to appropriate column of result tuple */
+static Datum
+ExecJustAssignOldVar(ExprState *state, ExprContext *econtext, bool *isnull)
+{
+	return ExecJustAssignVarImpl(state, econtext->ecxt_oldtuple, isnull);
+}
+
+/* Evaluate NEW Var and assign to appropriate column of result tuple */
+static Datum
+ExecJustAssignNewVar(ExprState *state, ExprContext *econtext, bool *isnull)
+{
+	return ExecJustAssignVarImpl(state, econtext->ecxt_newtuple, isnull);
 }
 
 /* Evaluate CASE_TESTVAL and apply a strict function to it */
@@ -2232,7 +2434,7 @@ ExecJustConst(ExprState *state, ExprContext *econtext, bool *isnull)
 	return op->d.constval.value;
 }
 
-/* implementation of ExecJust(Inner|Outer|Scan)VarVirt */
+/* implementation of ExecJust(Inner|Outer|Scan|Old|New)VarVirt */
 static pg_attribute_always_inline Datum
 ExecJustVarVirtImpl(ExprState *state, TupleTableSlot *slot, bool *isnull)
 {
@@ -2275,7 +2477,21 @@ ExecJustScanVarVirt(ExprState *state, ExprContext *econtext, bool *isnull)
 	return ExecJustVarVirtImpl(state, econtext->ecxt_scantuple, isnull);
 }
 
-/* implementation of ExecJustAssign(Inner|Outer|Scan)VarVirt */
+/* Like ExecJustOldVar, optimized for virtual slots */
+static Datum
+ExecJustOldVarVirt(ExprState *state, ExprContext *econtext, bool *isnull)
+{
+	return ExecJustVarVirtImpl(state, econtext->ecxt_oldtuple, isnull);
+}
+
+/* Like ExecJustNewVar, optimized for virtual slots */
+static Datum
+ExecJustNewVarVirt(ExprState *state, ExprContext *econtext, bool *isnull)
+{
+	return ExecJustVarVirtImpl(state, econtext->ecxt_newtuple, isnull);
+}
+
+/* implementation of ExecJustAssign(Inner|Outer|Scan|Old|New)VarVirt */
 static pg_attribute_always_inline Datum
 ExecJustAssignVarVirtImpl(ExprState *state, TupleTableSlot *inslot, bool *isnull)
 {
@@ -2316,6 +2532,20 @@ static Datum
 ExecJustAssignScanVarVirt(ExprState *state, ExprContext *econtext, bool *isnull)
 {
 	return ExecJustAssignVarVirtImpl(state, econtext->ecxt_scantuple, isnull);
+}
+
+/* Like ExecJustAssignOldVar, optimized for virtual slots */
+static Datum
+ExecJustAssignOldVarVirt(ExprState *state, ExprContext *econtext, bool *isnull)
+{
+	return ExecJustAssignVarVirtImpl(state, econtext->ecxt_oldtuple, isnull);
+}
+
+/* Like ExecJustAssignNewVar, optimized for virtual slots */
+static Datum
+ExecJustAssignNewVarVirt(ExprState *state, ExprContext *econtext, bool *isnull)
+{
+	return ExecJustAssignVarVirtImpl(state, econtext->ecxt_newtuple, isnull);
 }
 
 #if defined(EEO_USE_COMPUTED_GOTO)
@@ -4295,8 +4525,25 @@ ExecEvalWholeRowVar(ExprState *state, ExprEvalStep *op, ExprContext *econtext)
 			/* INDEX_VAR is handled by default case */
 
 		default:
-			/* get the tuple from the relation being scanned */
-			slot = econtext->ecxt_scantuple;
+
+			/*
+			 * Get the tuple from the relation being scanned.
+			 *
+			 * By default, this uses the "scan" tuple slot, but a wholerow Var
+			 * in the RETURNING list may explicitly refer to OLD/NEW.
+			 */
+			switch (variable->varreturningtype)
+			{
+				case VAR_RETURNING_OLD:
+					slot = econtext->ecxt_oldtuple;
+					break;
+				case VAR_RETURNING_NEW:
+					slot = econtext->ecxt_newtuple;
+					break;
+				default:
+					slot = econtext->ecxt_scantuple;
+					break;
+			}
 			break;
 	}
 
@@ -4504,9 +4751,6 @@ ExecEvalSysVar(ExprState *state, ExprEvalStep *op, ExprContext *econtext,
 						op->d.var.attnum,
 						op->resnull);
 	*op->resvalue = d;
-	/* this ought to be unreachable, but it's cheap enough to check */
-	if (unlikely(*op->resnull))
-		elog(ERROR, "failed to fetch attribute from slot");
 }
 
 /*

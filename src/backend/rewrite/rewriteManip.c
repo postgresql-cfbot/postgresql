@@ -875,6 +875,68 @@ IncrementVarSublevelsUp_rtable(List *rtable, int delta_sublevels_up,
 					   QTW_EXAMINE_RTES_BEFORE);
 }
 
+/*
+ * SetVarReturningType - adjust Vars by setting their returning type.
+ *
+ * Find all Var nodes referring to the specified result relation in the given
+ * expression and set their varreturningtype to the specified value.
+ *
+ * NOTE: although this has the form of a walker, we cheat and modify the
+ * Var nodes in-place.  The given expression tree should have been copied
+ * earlier to ensure that no unwanted side-effects occur!
+ */
+
+typedef struct
+{
+	int			result_relation;
+	int			sublevels_up;
+	VarReturningType returning_type;
+} SetVarReturningType_context;
+
+static bool
+SetVarReturningType_walker(Node *node, SetVarReturningType_context *context)
+{
+	if (node == NULL)
+		return false;
+	if (IsA(node, Var))
+	{
+		Var		   *var = (Var *) node;
+
+		if (var->varno == context->result_relation &&
+			var->varlevelsup == context->sublevels_up)
+			var->varreturningtype = context->returning_type;
+
+		return false;
+	}
+
+	if (IsA(node, Query))
+	{
+		/* Recurse into subselects */
+		bool		result;
+
+		context->sublevels_up++;
+		result = query_tree_walker((Query *) node, SetVarReturningType_walker,
+								   (void *) context, 0);
+		context->sublevels_up--;
+		return result;
+	}
+	return expression_tree_walker(node, SetVarReturningType_walker,
+								  (void *) context);
+}
+
+static void
+SetVarReturningType(Node *node, int result_relation, int sublevels_up,
+					VarReturningType returning_type)
+{
+	SetVarReturningType_context context;
+
+	context.result_relation = result_relation;
+	context.sublevels_up = sublevels_up;
+	context.returning_type = returning_type;
+
+	/* Expect to start with an expression */
+	SetVarReturningType_walker(node, &context);
+}
 
 /*
  * rangeTableEntry_used - detect whether an RTE is referenced somewhere
@@ -1675,8 +1737,8 @@ ReplaceVarsFromTargetList_callback(Var *var,
 		 * the RowExpr for use of the executor and ruleutils.c.
 		 */
 		expandRTE(rcon->target_rte,
-				  var->varno, var->varlevelsup, var->location,
-				  (var->vartype != RECORDOID),
+				  var->varno, var->varlevelsup, VAR_RETURNING_DEFAULT,
+				  var->location, (var->vartype != RECORDOID),
 				  &colnames, &fields);
 		/* Adjust the generated per-field Vars... */
 		fields = (List *) replace_rte_variables_mutator((Node *) fields,
@@ -1775,6 +1837,61 @@ ReplaceVarsFromTargetList(Node *node,
 
 	return replace_rte_variables(node, target_varno, sublevels_up,
 								 ReplaceVarsFromTargetList_callback,
+								 (void *) &context,
+								 outer_hasSubLinks);
+}
+
+
+/*
+ * ReplaceReturningVarsFromTargetList -
+ *	replace RETURNING list Vars with items from a targetlist
+ *
+ * This is equivalent to calling ReplaceVarsFromTargetList() with a
+ * nomatch_option of REPLACEVARS_REPORT_ERROR, but with the added effect of
+ * copying varreturningtype onto any Vars referring to new_result_relation,
+ * allowing RETURNING OLD/NEW to work in the rewritten query.
+ */
+
+typedef struct
+{
+	ReplaceVarsFromTargetList_context rv_con;
+	int			new_result_relation;
+} ReplaceReturningVarsFromTargetList_context;
+
+static Node *
+ReplaceReturningVarsFromTargetList_callback(Var *var,
+											replace_rte_variables_context *context)
+{
+	ReplaceReturningVarsFromTargetList_context *rcon = (ReplaceReturningVarsFromTargetList_context *) context->callback_arg;
+	Node	   *newnode;
+
+	newnode = ReplaceVarsFromTargetList_callback(var, context);
+
+	if (var->varreturningtype != VAR_RETURNING_DEFAULT)
+		SetVarReturningType((Node *) newnode, rcon->new_result_relation,
+							var->varlevelsup, var->varreturningtype);
+
+	return newnode;
+}
+
+Node *
+ReplaceReturningVarsFromTargetList(Node *node,
+								   int target_varno, int sublevels_up,
+								   RangeTblEntry *target_rte,
+								   List *targetlist,
+								   int new_result_relation,
+								   bool *outer_hasSubLinks)
+{
+	ReplaceReturningVarsFromTargetList_context context;
+
+	context.rv_con.target_rte = target_rte;
+	context.rv_con.targetlist = targetlist;
+	context.rv_con.nomatch_option = REPLACEVARS_REPORT_ERROR;
+	context.rv_con.nomatch_varno = 0;
+	context.new_result_relation = new_result_relation;
+
+	return replace_rte_variables(node, target_varno, sublevels_up,
+								 ReplaceReturningVarsFromTargetList_callback,
 								 (void *) &context,
 								 outer_hasSubLinks);
 }

@@ -117,6 +117,8 @@ typedef struct
 	List	   *namespaces;		/* List of deparse_namespace nodes */
 	List	   *windowClause;	/* Current query level's WINDOW clause */
 	List	   *windowTList;	/* targetlist for resolving WINDOW clause */
+	char	   *returningOld;	/* alias for OLD in RETURNING list */
+	char	   *returningNew;	/* alias for NEW in RETURNING list */
 	int			prettyFlags;	/* enabling of pretty-print functions */
 	int			wrapColumn;		/* max line length, or -1 for no limit */
 	int			indentLevel;	/* current indent level for pretty-print */
@@ -418,6 +420,8 @@ static void get_basic_select_query(Query *query, deparse_context *context,
 								   TupleDesc resultDesc, bool colNamesVisible);
 static void get_target_list(List *targetList, deparse_context *context,
 							TupleDesc resultDesc, bool colNamesVisible);
+static void get_returning_clause(Query *query, deparse_context *context,
+								 bool colNamesVisible);
 static void get_setop_query(Node *setOp, Query *query,
 							deparse_context *context,
 							TupleDesc resultDesc, bool colNamesVisible);
@@ -1083,6 +1087,8 @@ pg_get_triggerdef_worker(Oid trigid, bool pretty)
 		context.namespaces = list_make1(&dpns);
 		context.windowClause = NIL;
 		context.windowTList = NIL;
+		context.returningOld = NULL;
+		context.returningNew = NULL;
 		context.varprefix = true;
 		context.prettyFlags = GET_PRETTY_FLAGS(pretty);
 		context.wrapColumn = WRAP_COLUMN_DEFAULT;
@@ -3638,6 +3644,8 @@ deparse_expression_pretty(Node *expr, List *dpcontext,
 	context.namespaces = dpcontext;
 	context.windowClause = NIL;
 	context.windowTList = NIL;
+	context.returningOld = NULL;
+	context.returningNew = NULL;
 	context.varprefix = forceprefix;
 	context.prettyFlags = prettyFlags;
 	context.wrapColumn = WRAP_COLUMN_DEFAULT;
@@ -4369,8 +4377,8 @@ set_relation_column_names(deparse_namespace *dpns, RangeTblEntry *rte,
 		if (rte->rtekind == RTE_FUNCTION && rte->functions != NIL)
 		{
 			/* Since we're not creating Vars, rtindex etc. don't matter */
-			expandRTE(rte, 1, 0, -1, true /* include dropped */ ,
-					  &colnames, NULL);
+			expandRTE(rte, 1, 0, VAR_RETURNING_DEFAULT, -1,
+					  true /* include dropped */ , &colnames, NULL);
 		}
 		else
 			colnames = rte->eref->colnames;
@@ -5286,6 +5294,8 @@ make_ruledef(StringInfo buf, HeapTuple ruletup, TupleDesc rulettc,
 		context.namespaces = list_make1(&dpns);
 		context.windowClause = NIL;
 		context.windowTList = NIL;
+		context.returningOld = NULL;
+		context.returningNew = NULL;
 		context.varprefix = (list_length(query->rtable) != 1);
 		context.prettyFlags = prettyFlags;
 		context.wrapColumn = WRAP_COLUMN_DEFAULT;
@@ -5454,6 +5464,8 @@ get_query_def(Query *query, StringInfo buf, List *parentnamespace,
 	context.namespaces = lcons(&dpns, list_copy(parentnamespace));
 	context.windowClause = NIL;
 	context.windowTList = NIL;
+	context.returningOld = NULL;
+	context.returningNew = NULL;
 	context.varprefix = (parentnamespace != NIL ||
 						 list_length(query->rtable) != 1);
 	context.prettyFlags = prettyFlags;
@@ -6159,6 +6171,52 @@ get_target_list(List *targetList, deparse_context *context,
 }
 
 static void
+get_returning_clause(Query *query, deparse_context *context,
+					 bool colNamesVisible)
+{
+	StringInfo	buf = context->buf;
+
+	if (query->returningList)
+	{
+		char	   *saved_returning_old = context->returningOld;
+		char	   *saved_returning_new = context->returningNew;
+		bool		have_with = false;
+
+		appendContextKeyword(context, " RETURNING",
+							 -PRETTYINDENT_STD, PRETTYINDENT_STD, 1);
+
+		/* Add WITH options, if they're not the defaults */
+		if (query->returningOld && strcmp(query->returningOld, "old") != 0)
+		{
+			appendStringInfo(buf, " WITH (OLD AS %s", query->returningOld);
+			have_with = true;
+		}
+		if (query->returningNew && strcmp(query->returningNew, "new") != 0)
+		{
+			if (have_with)
+				appendStringInfo(buf, ", ");
+			else
+			{
+				appendStringInfo(buf, " WITH (");
+				have_with = true;
+			}
+			appendStringInfo(buf, "NEW AS %s", query->returningNew);
+		}
+		if (have_with)
+			appendStringInfo(buf, ")");
+
+		/* Add the returning expressions themselves (may refer to OLD/NEW) */
+		context->returningOld = query->returningOld;
+		context->returningNew = query->returningNew;
+
+		get_target_list(query->returningList, context, NULL, colNamesVisible);
+
+		context->returningOld = saved_returning_old;
+		context->returningNew = saved_returning_new;
+	}
+}
+
+static void
 get_setop_query(Node *setOp, Query *query, deparse_context *context,
 				TupleDesc resultDesc, bool colNamesVisible)
 {
@@ -6812,12 +6870,7 @@ get_insert_query_def(Query *query, deparse_context *context,
 	}
 
 	/* Add RETURNING if present */
-	if (query->returningList)
-	{
-		appendContextKeyword(context, " RETURNING",
-							 -PRETTYINDENT_STD, PRETTYINDENT_STD, 1);
-		get_target_list(query->returningList, context, NULL, colNamesVisible);
-	}
+	get_returning_clause(query, context, colNamesVisible);
 }
 
 
@@ -6869,12 +6922,7 @@ get_update_query_def(Query *query, deparse_context *context,
 	}
 
 	/* Add RETURNING if present */
-	if (query->returningList)
-	{
-		appendContextKeyword(context, " RETURNING",
-							 -PRETTYINDENT_STD, PRETTYINDENT_STD, 1);
-		get_target_list(query->returningList, context, NULL, colNamesVisible);
-	}
+	get_returning_clause(query, context, colNamesVisible);
 }
 
 
@@ -7073,12 +7121,7 @@ get_delete_query_def(Query *query, deparse_context *context,
 	}
 
 	/* Add RETURNING if present */
-	if (query->returningList)
-	{
-		appendContextKeyword(context, " RETURNING",
-							 -PRETTYINDENT_STD, PRETTYINDENT_STD, 1);
-		get_target_list(query->returningList, context, NULL, colNamesVisible);
-	}
+	get_returning_clause(query, context, colNamesVisible);
 }
 
 
@@ -7347,7 +7390,13 @@ get_variable(Var *var, int levelsup, bool istoplevel, deparse_context *context)
 		}
 
 		rte = rt_fetch(varno, dpns->rtable);
-		refname = (char *) list_nth(dpns->rtable_names, varno - 1);
+		if (var->varreturningtype == VAR_RETURNING_OLD)
+			refname = context->returningOld;
+		else if (var->varreturningtype == VAR_RETURNING_NEW)
+			refname = context->returningNew;
+		else
+			refname = (char *) list_nth(dpns->rtable_names, varno - 1);
+
 		colinfo = deparse_columns_fetch(varno, dpns);
 		attnum = varattno;
 	}

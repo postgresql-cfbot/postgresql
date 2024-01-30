@@ -106,6 +106,8 @@ llvm_compile_expr(ExprState *state)
 	LLVMValueRef v_outerslot;
 	LLVMValueRef v_scanslot;
 	LLVMValueRef v_resultslot;
+	LLVMValueRef v_oldslot;
+	LLVMValueRef v_newslot;
 
 	/* nulls/values of slots */
 	LLVMValueRef v_innervalues;
@@ -114,6 +116,10 @@ llvm_compile_expr(ExprState *state)
 	LLVMValueRef v_outernulls;
 	LLVMValueRef v_scanvalues;
 	LLVMValueRef v_scannulls;
+	LLVMValueRef v_oldvalues;
+	LLVMValueRef v_oldnulls;
+	LLVMValueRef v_newvalues;
+	LLVMValueRef v_newnulls;
 	LLVMValueRef v_resultvalues;
 	LLVMValueRef v_resultnulls;
 
@@ -205,6 +211,16 @@ llvm_compile_expr(ExprState *state)
 									 v_state,
 									 FIELDNO_EXPRSTATE_RESULTSLOT,
 									 "v_resultslot");
+	v_oldslot = l_load_struct_gep(b,
+								  StructExprContext,
+								  v_econtext,
+								  FIELDNO_EXPRCONTEXT_OLDTUPLE,
+								  "v_oldslot");
+	v_newslot = l_load_struct_gep(b,
+								  StructExprContext,
+								  v_econtext,
+								  FIELDNO_EXPRCONTEXT_NEWTUPLE,
+								  "v_newslot");
 
 	/* build global values/isnull pointers */
 	v_scanvalues = l_load_struct_gep(b,
@@ -217,6 +233,26 @@ llvm_compile_expr(ExprState *state)
 									v_scanslot,
 									FIELDNO_TUPLETABLESLOT_ISNULL,
 									"v_scannulls");
+	v_oldvalues = l_load_struct_gep(b,
+									StructTupleTableSlot,
+									v_oldslot,
+									FIELDNO_TUPLETABLESLOT_VALUES,
+									"v_oldvalues");
+	v_oldnulls = l_load_struct_gep(b,
+								   StructTupleTableSlot,
+								   v_oldslot,
+								   FIELDNO_TUPLETABLESLOT_ISNULL,
+								   "v_oldnulls");
+	v_newvalues = l_load_struct_gep(b,
+									StructTupleTableSlot,
+									v_newslot,
+									FIELDNO_TUPLETABLESLOT_VALUES,
+									"v_newvalues");
+	v_newnulls = l_load_struct_gep(b,
+								   StructTupleTableSlot,
+								   v_newslot,
+								   FIELDNO_TUPLETABLESLOT_ISNULL,
+								   "v_newnulls");
 	v_innervalues = l_load_struct_gep(b,
 									  StructTupleTableSlot,
 									  v_innerslot,
@@ -302,6 +338,8 @@ llvm_compile_expr(ExprState *state)
 			case EEOP_INNER_FETCHSOME:
 			case EEOP_OUTER_FETCHSOME:
 			case EEOP_SCAN_FETCHSOME:
+			case EEOP_OLD_FETCHSOME:
+			case EEOP_NEW_FETCHSOME:
 				{
 					TupleDesc	desc = NULL;
 					LLVMValueRef v_slot;
@@ -326,8 +364,12 @@ llvm_compile_expr(ExprState *state)
 						v_slot = v_innerslot;
 					else if (opcode == EEOP_OUTER_FETCHSOME)
 						v_slot = v_outerslot;
-					else
+					else if (opcode == EEOP_SCAN_FETCHSOME)
 						v_slot = v_scanslot;
+					else if (opcode == EEOP_OLD_FETCHSOME)
+						v_slot = v_oldslot;
+					else
+						v_slot = v_newslot;
 
 					/*
 					 * Check if all required attributes are available, or
@@ -396,6 +438,8 @@ llvm_compile_expr(ExprState *state)
 			case EEOP_INNER_VAR:
 			case EEOP_OUTER_VAR:
 			case EEOP_SCAN_VAR:
+			case EEOP_OLD_VAR:
+			case EEOP_NEW_VAR:
 				{
 					LLVMValueRef value,
 								isnull;
@@ -413,10 +457,20 @@ llvm_compile_expr(ExprState *state)
 						v_values = v_outervalues;
 						v_nulls = v_outernulls;
 					}
-					else
+					else if (opcode == EEOP_SCAN_VAR)
 					{
 						v_values = v_scanvalues;
 						v_nulls = v_scannulls;
+					}
+					else if (opcode == EEOP_OLD_VAR)
+					{
+						v_values = v_oldvalues;
+						v_nulls = v_oldnulls;
+					}
+					else
+					{
+						v_values = v_newvalues;
+						v_nulls = v_newnulls;
 					}
 
 					v_attnum = l_int32_const(lc, op->d.var.attnum);
@@ -432,6 +486,8 @@ llvm_compile_expr(ExprState *state)
 			case EEOP_INNER_SYSVAR:
 			case EEOP_OUTER_SYSVAR:
 			case EEOP_SCAN_SYSVAR:
+			case EEOP_OLD_SYSVAR:
+			case EEOP_NEW_SYSVAR:
 				{
 					LLVMValueRef v_slot;
 
@@ -439,8 +495,12 @@ llvm_compile_expr(ExprState *state)
 						v_slot = v_innerslot;
 					else if (opcode == EEOP_OUTER_SYSVAR)
 						v_slot = v_outerslot;
-					else
+					else if (opcode == EEOP_SCAN_SYSVAR)
 						v_slot = v_scanslot;
+					else if (opcode == EEOP_OLD_SYSVAR)
+						v_slot = v_oldslot;
+					else
+						v_slot = v_newslot;
 
 					build_EvalXFunc(b, mod, "ExecEvalSysVar",
 									v_state, op, v_econtext, v_slot);
@@ -458,6 +518,8 @@ llvm_compile_expr(ExprState *state)
 			case EEOP_ASSIGN_INNER_VAR:
 			case EEOP_ASSIGN_OUTER_VAR:
 			case EEOP_ASSIGN_SCAN_VAR:
+			case EEOP_ASSIGN_OLD_VAR:
+			case EEOP_ASSIGN_NEW_VAR:
 				{
 					LLVMValueRef v_value;
 					LLVMValueRef v_isnull;
@@ -478,10 +540,20 @@ llvm_compile_expr(ExprState *state)
 						v_values = v_outervalues;
 						v_nulls = v_outernulls;
 					}
-					else
+					else if (opcode == EEOP_ASSIGN_SCAN_VAR)
 					{
 						v_values = v_scanvalues;
 						v_nulls = v_scannulls;
+					}
+					else if (opcode == EEOP_ASSIGN_OLD_VAR)
+					{
+						v_values = v_oldvalues;
+						v_nulls = v_oldnulls;
+					}
+					else
+					{
+						v_values = v_newvalues;
+						v_nulls = v_newnulls;
 					}
 
 					/* load data */

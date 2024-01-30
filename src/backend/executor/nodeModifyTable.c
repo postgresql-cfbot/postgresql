@@ -98,6 +98,13 @@ typedef struct ModifyTableContext
 	TM_FailureData tmfd;
 
 	/*
+	 * The tuple deleted when doing a cross-partition UPDATE with a RETURNING
+	 * clause that refers to OLD columns (converted to the root's tuple
+	 * descriptor).
+	 */
+	TupleTableSlot *cpDeletedSlot;
+
+	/*
 	 * The tuple projected by the INSERT's RETURNING clause, when doing a
 	 * cross-partition UPDATE
 	 */
@@ -238,33 +245,40 @@ ExecCheckPlanOutput(Relation resultRel, List *targetList)
  * ExecProcessReturning --- evaluate a RETURNING list
  *
  * resultRelInfo: current result rel
- * tupleSlot: slot holding tuple actually inserted/updated/deleted
+ * cmdType: operation performed (INSERT, UPDATE, or DELETE only)
+ * oldSlot: slot holding old tuple deleted or updated
+ * newSlot: slot holding new tuple inserted or updated
  * planSlot: slot holding tuple returned by top subplan node
  *
- * Note: If tupleSlot is NULL, the FDW should have already provided econtext's
- * scan tuple.
+ * Note: If oldSlot/newSlot are NULL, the FDW should have already provided
+ * econtext's scan/old/new tuples.
  *
  * Returns a slot holding the result tuple
  */
 static TupleTableSlot *
 ExecProcessReturning(ResultRelInfo *resultRelInfo,
-					 TupleTableSlot *tupleSlot,
+					 CmdType cmdType,
+					 TupleTableSlot *oldSlot,
+					 TupleTableSlot *newSlot,
 					 TupleTableSlot *planSlot)
 {
 	ProjectionInfo *projectReturning = resultRelInfo->ri_projectReturning;
 	ExprContext *econtext = projectReturning->pi_exprContext;
 
-	/* Make tuple and any needed join variables available to ExecProject */
-	if (tupleSlot)
-		econtext->ecxt_scantuple = tupleSlot;
+	/* Make tuples and any needed join variables available to ExecProject */
+	if (oldSlot)
+	{
+		econtext->ecxt_oldtuple = oldSlot;
+		if (cmdType == CMD_DELETE)
+			econtext->ecxt_scantuple = oldSlot;
+	}
+	if (newSlot)
+	{
+		econtext->ecxt_newtuple = newSlot;
+		if (cmdType != CMD_DELETE)
+			econtext->ecxt_scantuple = newSlot;
+	}
 	econtext->ecxt_outertuple = planSlot;
-
-	/*
-	 * RETURNING expressions might reference the tableoid column, so
-	 * reinitialize tts_tableOid before evaluating them.
-	 */
-	econtext->ecxt_scantuple->tts_tableOid =
-		RelationGetRelid(resultRelInfo->ri_RelationDesc);
 
 	/* Compute the RETURNING expressions */
 	return ExecProject(projectReturning);
@@ -761,6 +775,7 @@ ExecInsert(ModifyTableContext *context,
 	Relation	resultRelationDesc;
 	List	   *recheckIndexes = NIL;
 	TupleTableSlot *planSlot = context->planSlot;
+	TupleTableSlot *oldSlot;
 	TupleTableSlot *result = NULL;
 	TransitionCaptureState *ar_insert_trig_tcs;
 	ModifyTable *node = (ModifyTable *) mtstate->ps.plan;
@@ -1195,7 +1210,63 @@ ExecInsert(ModifyTableContext *context,
 
 	/* Process RETURNING if present */
 	if (resultRelInfo->ri_projectReturning)
-		result = ExecProcessReturning(resultRelInfo, slot, planSlot);
+	{
+		/*
+		 * If this is part of a cross-partition UPDATE, and the RETURNING list
+		 * refers to any OLD columns, ExecDelete() will have saved the tuple
+		 * deleted from the original partition, which we must use here to
+		 * compute the OLD column values.  Otherwise, set all OLD columns
+		 * values to NULL, if requested.
+		 */
+		if (context->cpDeletedSlot)
+		{
+			TupleConversionMap *tupconv_map;
+
+			/*
+			 * Convert the OLD tuple to the new partition's format/slot, if
+			 * needed.  Note that ExceDelete() already converted it to the
+			 * root's partition's format/slot.
+			 */
+			oldSlot = context->cpDeletedSlot;
+			tupconv_map = ExecGetRootToChildMap(resultRelInfo, estate);
+			if (tupconv_map != NULL)
+			{
+				oldSlot = execute_attr_map_slot(tupconv_map->attrMap,
+												oldSlot,
+												ExecGetReturningSlot(estate,
+																	 resultRelInfo));
+
+				oldSlot->tts_tableOid = context->cpDeletedSlot->tts_tableOid;
+				ItemPointerCopy(&context->cpDeletedSlot->tts_tid, &oldSlot->tts_tid);
+			}
+		}
+		else if (resultRelInfo->ri_projectReturning->pi_state.flags & EEO_FLAG_HAS_OLD)
+		{
+			oldSlot = ExecGetReturningSlot(estate, resultRelInfo);
+
+			ExecStoreAllNullTuple(oldSlot);
+			oldSlot->tts_tableOid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
+		}
+		else
+			oldSlot = NULL;		/* No references to OLD columns */
+
+		result = ExecProcessReturning(resultRelInfo, CMD_INSERT,
+									  oldSlot, slot, planSlot);
+
+		/*
+		 * For a cross-partition UPDATE, release the old tuple, first making
+		 * sure that the result slot has a local copy of any pass-by-reference
+		 * values.
+		 */
+		if (context->cpDeletedSlot)
+		{
+			ExecMaterializeSlot(result);
+			ExecClearTuple(oldSlot);
+			if (context->cpDeletedSlot != oldSlot)
+				ExecClearTuple(context->cpDeletedSlot);
+			context->cpDeletedSlot = NULL;
+		}
+	}
 
 	if (inserted_tuple)
 		*inserted_tuple = slot;
@@ -1433,6 +1504,7 @@ ExecDelete(ModifyTableContext *context,
 	Relation	resultRelationDesc = resultRelInfo->ri_RelationDesc;
 	TupleTableSlot *slot = NULL;
 	TM_Result	result;
+	bool		saveOld;
 
 	if (tupleDeleted)
 		*tupleDeleted = false;
@@ -1667,13 +1739,23 @@ ldelete:
 
 	ExecDeleteEpilogue(context, resultRelInfo, tupleid, oldtuple, changingPart);
 
-	/* Process RETURNING if present and if requested */
-	if (processReturning && resultRelInfo->ri_projectReturning)
+	/*
+	 * Process RETURNING if present and if requested.
+	 *
+	 * If this is part of a cross-partition UPDATE, and the RETURNING list
+	 * refers to any OLD column values, save the old tuple here for later
+	 * processing of the RETURNING list by ExecInsert().
+	 */
+	saveOld = changingPart && resultRelInfo->ri_projectReturning &&
+		resultRelInfo->ri_projectReturning->pi_state.flags & EEO_FLAG_HAS_OLD;
+
+	if (resultRelInfo->ri_projectReturning && (processReturning || saveOld))
 	{
 		/*
 		 * We have to put the target tuple into a slot, which means first we
 		 * gotta fetch it.  We can use the trigger tuple slot.
 		 */
+		TupleTableSlot *newSlot;
 		TupleTableSlot *rslot;
 
 		if (resultRelInfo->ri_FdwRoutine)
@@ -1696,7 +1778,57 @@ ldelete:
 			}
 		}
 
-		rslot = ExecProcessReturning(resultRelInfo, slot, context->planSlot);
+		/*
+		 * If required, save the old tuple for later processing of the
+		 * RETURNING list by ExecInsert().
+		 */
+		if (saveOld)
+		{
+			TupleConversionMap *tupconv_map;
+			ResultRelInfo *rootRelInfo;
+			TupleTableSlot *oldSlot;
+
+			/*
+			 * Convert the tuple into the root partition's format/slot, if
+			 * needed.  ExecInsert() will then convert it to the new
+			 * partition's format/slot, if necessary.
+			 */
+			tupconv_map = ExecGetChildToRootMap(resultRelInfo);
+			if (tupconv_map != NULL)
+			{
+				rootRelInfo = context->mtstate->rootResultRelInfo;
+				oldSlot = slot;
+				slot = execute_attr_map_slot(tupconv_map->attrMap,
+											 slot,
+											 ExecGetReturningSlot(estate,
+																  rootRelInfo));
+
+				slot->tts_tableOid = oldSlot->tts_tableOid;
+				ItemPointerCopy(&oldSlot->tts_tid, &slot->tts_tid);
+			}
+
+			context->cpDeletedSlot = slot;
+
+			return NULL;
+		}
+
+		/*
+		 * If the RETURNING list refers to NEW columns, return NULLs.  Use
+		 * ExecGetTriggerNewSlot() to store an all-NULL new tuple, since it is
+		 * of the right type, and isn't being used for anything else.
+		 */
+		if (resultRelInfo->ri_projectReturning->pi_state.flags & EEO_FLAG_HAS_NEW)
+		{
+			newSlot = ExecGetTriggerNewSlot(estate, resultRelInfo);
+
+			ExecStoreAllNullTuple(newSlot);
+			newSlot->tts_tableOid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
+		}
+		else
+			newSlot = NULL;		/* No references to NEW columns */
+
+		rslot = ExecProcessReturning(resultRelInfo, CMD_DELETE,
+									 slot, newSlot, context->planSlot);
 
 		/*
 		 * Before releasing the target tuple again, make sure rslot has a
@@ -1749,6 +1881,7 @@ ExecCrossPartitionUpdate(ModifyTableContext *context,
 	bool		tuple_deleted;
 	TupleTableSlot *epqslot = NULL;
 
+	context->cpDeletedSlot = NULL;
 	context->cpUpdateReturningSlot = NULL;
 	*retry_slot = NULL;
 
@@ -2253,6 +2386,7 @@ ExecCrossPartitionUpdateForeignKey(ModifyTableContext *context,
  *		foreign table triggers; it is NULL when the foreign table has
  *		no relevant triggers.
  *
+ *		oldSlot contains the old tuple value.
  *		slot contains the new tuple value to be stored.
  *		planSlot is the output of the ModifyTable's subplan; we use it
  *		to access values from other input tables (for RETURNING),
@@ -2263,8 +2397,8 @@ ExecCrossPartitionUpdateForeignKey(ModifyTableContext *context,
  */
 static TupleTableSlot *
 ExecUpdate(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
-		   ItemPointer tupleid, HeapTuple oldtuple, TupleTableSlot *slot,
-		   bool canSetTag)
+		   ItemPointer tupleid, HeapTuple oldtuple, TupleTableSlot *oldSlot,
+		   TupleTableSlot *slot, bool canSetTag)
 {
 	EState	   *estate = context->estate;
 	Relation	resultRelationDesc = resultRelInfo->ri_RelationDesc;
@@ -2379,7 +2513,6 @@ redo_act:
 				{
 					TupleTableSlot *inputslot;
 					TupleTableSlot *epqslot;
-					TupleTableSlot *oldSlot;
 
 					if (IsolationUsesXactSnapshot())
 						ereport(ERROR,
@@ -2486,7 +2619,8 @@ redo_act:
 
 	/* Process RETURNING if present */
 	if (resultRelInfo->ri_projectReturning)
-		return ExecProcessReturning(resultRelInfo, slot, context->planSlot);
+		return ExecProcessReturning(resultRelInfo, CMD_UPDATE,
+									oldSlot, slot, context->planSlot);
 
 	return NULL;
 }
@@ -2698,16 +2832,23 @@ ExecOnConflictUpdate(ModifyTableContext *context,
 
 	/* Execute UPDATE with projection */
 	*returning = ExecUpdate(context, resultRelInfo,
-							conflictTid, NULL,
+							conflictTid, NULL, existing,
 							resultRelInfo->ri_onConflict->oc_ProjSlot,
 							canSetTag);
 
 	/*
 	 * Clear out existing tuple, as there might not be another conflict among
 	 * the next input rows. Don't want to hold resources till the end of the
-	 * query.
+	 * query.  First though, make sure that the returning slot, if any, has a
+	 * local copy of any OLD pass-by-reference values, if it refers to any OLD
+	 * columns.
 	 */
+	if (*returning != NULL &&
+		resultRelInfo->ri_projectReturning->pi_state.flags & EEO_FLAG_HAS_OLD)
+		ExecMaterializeSlot(*returning);
+
 	ExecClearTuple(existing);
+
 	return true;
 }
 
@@ -3635,6 +3776,7 @@ ExecModifyTable(PlanState *pstate)
 			ResetExprContext(pstate->ps_ExprContext);
 
 		context.planSlot = ExecProcNode(subplanstate);
+		context.cpDeletedSlot = NULL;
 
 		/* No more tuples to process? */
 		if (TupIsNull(context.planSlot))
@@ -3693,9 +3835,12 @@ ExecModifyTable(PlanState *pstate)
 			 * A scan slot containing the data that was actually inserted,
 			 * updated or deleted has already been made available to
 			 * ExecProcessReturning by IterateDirectModify, so no need to
-			 * provide it here.
+			 * provide it here.  The individual old and new slots are not
+			 * needed, since RETURNING OLD/NEW is not supported for foreign
+			 * tables.
 			 */
-			slot = ExecProcessReturning(resultRelInfo, NULL, context.planSlot);
+			slot = ExecProcessReturning(resultRelInfo, operation,
+										NULL, NULL, context.planSlot);
 
 			return slot;
 		}
@@ -3842,7 +3987,7 @@ ExecModifyTable(PlanState *pstate)
 
 				/* Now apply the update. */
 				slot = ExecUpdate(&context, resultRelInfo, tupleid, oldtuple,
-								  slot, node->canSetTag);
+								  oldSlot, slot, node->canSetTag);
 				break;
 
 			case CMD_DELETE:

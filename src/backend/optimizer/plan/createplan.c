@@ -7144,6 +7144,34 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 		}
 
 		/*
+		 * Similarly, RETURNING OLD/NEW is not supported for foreign tables.
+		 */
+		if (root->parse->returningList && fdwroutine != NULL)
+		{
+			List	   *ret_vars = pull_var_clause((Node *) root->parse->returningList,
+												   PVC_RECURSE_AGGREGATES |
+												   PVC_RECURSE_WINDOWFUNCS |
+												   PVC_INCLUDE_PLACEHOLDERS);
+			ListCell   *lc2;
+
+			foreach(lc2, ret_vars)
+			{
+				Var		   *var = lfirst_node(Var, lc2);
+
+				if (var->varreturningtype != VAR_RETURNING_DEFAULT)
+				{
+					RangeTblEntry *rte = planner_rt_fetch(rti, root);
+
+					ereport(ERROR,
+							errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							errmsg("cannot return OLD/NEW values from relation \"%s\"",
+								   get_rel_name(rte->relid)),
+							errdetail_relkind_not_supported(rte->relkind));
+				}
+			}
+		}
+
+		/*
 		 * Try to modify the foreign table directly if (1) the FDW provides
 		 * callback functions needed for that and (2) there are no local
 		 * structures that need to be run for each modified row: row-level

@@ -411,12 +411,21 @@ slot_getsysattr(TupleTableSlot *slot, int attnum, bool *isnull)
 {
 	Assert(attnum < 0);			/* caller error */
 
+	/*
+	 * If the tid is not valid, there is no physical row, and all system
+	 * attributes are deemed to be NULL, except for the tableoid.
+	 */
 	if (attnum == TableOidAttributeNumber)
 	{
 		*isnull = false;
 		return ObjectIdGetDatum(slot->tts_tableOid);
 	}
-	else if (attnum == SelfItemPointerAttributeNumber)
+	if (!ItemPointerIsValid(&slot->tts_tid))
+	{
+		*isnull = true;
+		return PointerGetDatum(NULL);
+	}
+	if (attnum == SelfItemPointerAttributeNumber)
 	{
 		*isnull = false;
 		return PointerGetDatum(&slot->tts_tid);

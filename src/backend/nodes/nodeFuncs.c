@@ -3833,6 +3833,7 @@ raw_expression_tree_walker_impl(Node *node,
 		case T_ParamRef:
 		case T_A_Const:
 		case T_A_Star:
+		case T_ReturningOption:
 			/* primitive node types with no subnodes */
 			break;
 		case T_Alias:
@@ -4001,7 +4002,7 @@ raw_expression_tree_walker_impl(Node *node,
 					return true;
 				if (WALK(stmt->onConflictClause))
 					return true;
-				if (WALK(stmt->returningList))
+				if (WALK(stmt->returningClause))
 					return true;
 				if (WALK(stmt->withClause))
 					return true;
@@ -4017,7 +4018,7 @@ raw_expression_tree_walker_impl(Node *node,
 					return true;
 				if (WALK(stmt->whereClause))
 					return true;
-				if (WALK(stmt->returningList))
+				if (WALK(stmt->returningClause))
 					return true;
 				if (WALK(stmt->withClause))
 					return true;
@@ -4035,7 +4036,7 @@ raw_expression_tree_walker_impl(Node *node,
 					return true;
 				if (WALK(stmt->fromClause))
 					return true;
-				if (WALK(stmt->returningList))
+				if (WALK(stmt->returningClause))
 					return true;
 				if (WALK(stmt->withClause))
 					return true;
@@ -4066,6 +4067,16 @@ raw_expression_tree_walker_impl(Node *node,
 				if (WALK(mergeWhenClause->targetList))
 					return true;
 				if (WALK(mergeWhenClause->values))
+					return true;
+			}
+			break;
+		case T_ReturningClause:
+			{
+				ReturningClause *returning = (ReturningClause *) node;
+
+				if (WALK(returning->options))
+					return true;
+				if (WALK(returning->exprs))
 					return true;
 			}
 			break;

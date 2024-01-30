@@ -93,4 +93,12 @@ extern Node *ReplaceVarsFromTargetList(Node *node,
 									   int nomatch_varno,
 									   bool *outer_hasSubLinks);
 
+extern Node *ReplaceReturningVarsFromTargetList(Node *node,
+												int target_varno,
+												int sublevels_up,
+												RangeTblEntry *target_rte,
+												List *targetlist,
+												int new_result_relation,
+												bool *outer_hasSubLinks);
+
 #endif							/* REWRITEMANIP_H */

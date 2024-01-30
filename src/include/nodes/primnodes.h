@@ -209,6 +209,11 @@ typedef struct Expr
  * Note that it affects the meaning of all of varno, varnullingrels, and
  * varnosyn, all of which refer to the range table of that query level.
  *
+ * varreturningtype is used for Vars in the RETURNING list of data-modifying
+ * queries, for Vars that refer to the target relation.  For such Vars, there
+ * are 3 possible behaviors, depending on whether the target relation was
+ * referred to directly, or via the OLD or NEW aliases.
+ *
  * In the parser, varnosyn and varattnosyn are either identical to
  * varno/varattno, or they specify the column's position in an aliased JOIN
  * RTE that hides the semantic referent RTE's refname.  This is a syntactic
@@ -229,6 +234,14 @@ typedef struct Expr
 /* Symbols for the indexes of the special RTE entries in rules */
 #define    PRS2_OLD_VARNO			1
 #define    PRS2_NEW_VARNO			2
+
+/* Returning behavior for Vars in RETURNING list */
+typedef enum VarReturningType
+{
+	VAR_RETURNING_DEFAULT,		/* return OLD for DELETE, else return NEW */
+	VAR_RETURNING_OLD,			/* return OLD for DELETE/UPDATE, else NULL */
+	VAR_RETURNING_NEW,			/* return NEW for INSERT/UPDATE, else NULL */
+} VarReturningType;
 
 typedef struct Var
 {
@@ -264,6 +277,9 @@ typedef struct Var
 	 * >0 means N levels up
 	 */
 	Index		varlevelsup;
+
+	/* returning type of this var (see above) */
+	VarReturningType varreturningtype;
 
 	/*
 	 * varnosyn/varattnosyn are ignored for equality, because Vars with

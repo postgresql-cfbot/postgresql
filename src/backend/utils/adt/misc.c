@@ -45,6 +45,7 @@
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/ruleutils.h"
+#include "utils/syscache.h"
 #include "utils/timestamp.h"
 
 
@@ -566,6 +567,19 @@ pg_typeof(PG_FUNCTION_ARGS)
 	PG_RETURN_OID(get_fn_expr_argtype(fcinfo->flinfo, 0));
 }
 
+/*
+ * Return the base type of the argument.
+ */
+Datum
+pg_basetype(PG_FUNCTION_ARGS)
+{
+	Oid			oid = PG_GETARG_OID(0);
+
+	if (!SearchSysCacheExists1(TYPEOID, ObjectIdGetDatum(oid)))
+		PG_RETURN_NULL();
+
+	PG_RETURN_OID(getBaseType(oid));
+}
 
 /*
  * Implementation of the COLLATE FOR expression; returns the collation

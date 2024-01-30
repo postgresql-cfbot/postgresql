@@ -4906,7 +4906,7 @@ BootStrapXLOG(void)
 	recptr = ((char *) page + SizeOfXLogLongPHD);
 	record = (XLogRecord *) recptr;
 	record->xl_prev = 0;
-	record->xl_xid = InvalidTransactionId;
+	record->xl_xid = InvalidFullTransactionId;
 	record->xl_tot_len = SizeOfXLogRecord + SizeOfXLogRecordDataHeaderShort + sizeof(checkPoint);
 	record->xl_info = XLOG_CHECKPOINT_SHUTDOWN;
 	record->xl_rmid = RM_XLOG_ID;

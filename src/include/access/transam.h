@@ -52,8 +52,8 @@
 #define FullTransactionIdPrecedesOrEquals(a, b) ((a).value <= (b).value)
 #define FullTransactionIdFollows(a, b) ((a).value > (b).value)
 #define FullTransactionIdFollowsOrEquals(a, b) ((a).value >= (b).value)
-#define FullTransactionIdIsValid(x)		TransactionIdIsValid(XidFromFullTransactionId(x))
 #define InvalidFullTransactionId		FullTransactionIdFromEpochAndXid(0, InvalidTransactionId)
+#define BootstrapFullTransactionId		FullTransactionIdFromEpochAndXid(0, BootstrapTransactionId)
 #define FirstNormalFullTransactionId	FullTransactionIdFromEpochAndXid(0, FirstNormalTransactionId)
 #define FullTransactionIdIsNormal(x)	FullTransactionIdFollowsOrEquals(x, FirstNormalFullTransactionId)
 
@@ -66,6 +66,19 @@ typedef struct FullTransactionId
 {
 	uint64		value;
 } FullTransactionId;
+
+static inline bool
+FullTransactionIdIsValid(FullTransactionId fxid)
+{
+	/* XXX: why without epoch? Should it be fxid.value == InvalidTransactionId? */
+	return TransactionIdIsValid(XidFromFullTransactionId(fxid));
+}
+
+static inline bool
+FullTransactionIdIsInvalid(FullTransactionId fxid)
+{
+	return !FullTransactionIdIsValid(fxid);
+}
 
 static inline FullTransactionId
 FullTransactionIdFromEpochAndXid(uint32 epoch, TransactionId xid)

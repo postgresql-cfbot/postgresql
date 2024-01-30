@@ -234,6 +234,8 @@ static void MarkAsPreparingGuts(GlobalTransaction gxact, TransactionId xid,
 static void RemoveTwoPhaseFile(TransactionId xid, bool giveWarning);
 static void RecreateTwoPhaseFile(TransactionId xid, void *content, int len);
 
+static inline FullTransactionId AdjustToFullTransactionId(TransactionId xid);
+
 /*
  * Initialization of shared memory
  */
@@ -477,7 +479,7 @@ MarkAsPreparingGuts(GlobalTransaction gxact, TransactionId xid, const char *gid,
 		proc->lxid = xid;
 		proc->backendId = InvalidBackendId;
 	}
-	proc->xid = xid;
+	proc->xid = AdjustToFullTransactionId(xid);
 	Assert(proc->xmin == InvalidTransactionId);
 	proc->delayChkptFlags = 0;
 	proc->statusFlags = 0;
@@ -793,7 +795,7 @@ pg_prepared_xact(PG_FUNCTION_ARGS)
 		 * Form tuple with appropriate data.
 		 */
 
-		values[0] = TransactionIdGetDatum(proc->xid);
+		values[0] = TransactionIdGetDatum(XidFromFullTransactionId(proc->xid));
 		values[1] = CStringGetTextDatum(gxact->gid);
 		values[2] = TimestampTzGetDatum(gxact->prepared_at);
 		values[3] = ObjectIdGetDatum(gxact->owner);

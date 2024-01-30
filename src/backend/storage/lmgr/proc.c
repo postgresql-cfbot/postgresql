@@ -377,7 +377,7 @@ InitProcess(void)
 	MyProc->lxid = InvalidLocalTransactionId;
 	MyProc->fpVXIDLock = false;
 	MyProc->fpLocalTransactionId = InvalidLocalTransactionId;
-	MyProc->xid = InvalidTransactionId;
+	MyProc->xid = InvalidFullTransactionId;
 	MyProc->xmin = InvalidTransactionId;
 	MyProc->pid = MyProcPid;
 	/* backendId, databaseId and roleId will be filled in later */
@@ -574,7 +574,7 @@ InitAuxiliaryProcess(void)
 	MyProc->lxid = InvalidLocalTransactionId;
 	MyProc->fpVXIDLock = false;
 	MyProc->fpLocalTransactionId = InvalidLocalTransactionId;
-	MyProc->xid = InvalidTransactionId;
+	MyProc->xid = InvalidFullTransactionId;
 	MyProc->xmin = InvalidTransactionId;
 	MyProc->backendId = InvalidBackendId;
 	MyProc->databaseId = InvalidOid;

@@ -1901,7 +1901,7 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record, TimeLineID *repl
 	/*
 	 * TransamVariables->nextXid must be beyond record's xid.
 	 */
-	AdvanceNextFullTransactionIdPastXid(record->xl_xid);
+	AdvanceNextFullTransactionIdPastXid(XidFromFullTransactionId(record->xl_xid));
 
 	/*
 	 * Before replaying this record, check if this record causes the current
@@ -1959,8 +1959,8 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record, TimeLineID *repl
 	 * If we are attempting to enter Hot Standby mode, process XIDs we see
 	 */
 	if (standbyState >= STANDBY_INITIALIZED &&
-		TransactionIdIsValid(record->xl_xid))
-		RecordKnownAssignedTransactionIds(record->xl_xid);
+		FullTransactionIdIsValid(record->xl_xid))
+		RecordKnownAssignedTransactionIds(XidFromFullTransactionId(record->xl_xid));
 
 	/*
 	 * Some XLOG record types that are related to recovery are processed

@@ -409,7 +409,7 @@ extern bool DecodeXLogRecord(XLogReaderState *state,
 #define XLogRecGetPrev(decoder) ((decoder)->record->header.xl_prev)
 #define XLogRecGetInfo(decoder) ((decoder)->record->header.xl_info)
 #define XLogRecGetRmid(decoder) ((decoder)->record->header.xl_rmid)
-#define XLogRecGetXid(decoder) ((decoder)->record->header.xl_xid)
+#define XLogRecGetXid(decoder) ((uint32) ((decoder)->record->header.xl_xid.value))
 #define XLogRecGetOrigin(decoder) ((decoder)->record->record_origin)
 #define XLogRecGetTopXid(decoder) ((decoder)->record->toplevel_xid)
 #define XLogRecGetData(decoder) ((decoder)->record->main_data)

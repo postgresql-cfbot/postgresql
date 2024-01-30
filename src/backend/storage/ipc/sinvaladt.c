@@ -429,7 +429,7 @@ BackendIdGetTransactionIds(int backendID, TransactionId *xid,
 
 		if (proc != NULL)
 		{
-			*xid = proc->xid;
+			*xid = XidFromFullTransactionId(proc->xid);
 			*xmin = proc->xmin;
 			*nsubxid = proc->subxidStatus.count;
 			*overflowed = proc->subxidStatus.overflowed;

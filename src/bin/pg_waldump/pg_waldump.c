@@ -1261,7 +1261,7 @@ main(int argc, char **argv)
 			continue;
 
 		if (config.filter_by_xid_enabled &&
-			config.filter_by_xid != record->xl_xid)
+			config.filter_by_xid != XidFromFullTransactionId(record->xl_xid))
 			continue;
 
 		/* check for extended filtering */

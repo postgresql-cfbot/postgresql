@@ -4548,7 +4548,7 @@ set_indexsafe_procflags(void)
 	 * This should only be called before installing xid or xmin in MyProc;
 	 * otherwise, concurrent processes could see an Xmin that moves backwards.
 	 */
-	Assert(MyProc->xid == InvalidTransactionId &&
+	Assert(FullTransactionIdIsInvalid(MyProc->xid) &&
 		   MyProc->xmin == InvalidTransactionId);
 
 	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);

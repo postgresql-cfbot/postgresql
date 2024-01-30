@@ -251,14 +251,6 @@ main(int argc, char *argv[])
 	}
 	else
 	{
-		/*
-		 * Index-level REINDEX is not supported with multiple jobs as we
-		 * cannot control the concurrent processing of multiple indexes
-		 * depending on the same relation.
-		 */
-		if (concurrentCons > 1 && indexes.head != NULL)
-			pg_fatal("cannot use multiple jobs to reindex indexes");
-
 		if (dbname == NULL)
 		{
 			if (getenv("PGDATABASE"))
@@ -279,7 +271,7 @@ main(int argc, char *argv[])
 		if (indexes.head != NULL)
 			reindex_one_database(&cparams, REINDEX_INDEX, &indexes,
 								 progname, echo, verbose,
-								 concurrently, 1, tablespace);
+								 concurrently, concurrentCons, tablespace);
 
 		if (tables.head != NULL)
 			reindex_one_database(&cparams, REINDEX_TABLE, &tables,
@@ -299,6 +291,67 @@ main(int argc, char *argv[])
 	exit(0);
 }
 
+static SimpleStringList *
+sort_indices_by_tables(PGconn *conn, SimpleStringList *user_list, SimpleStringList *indices_tables_list,
+					   SimpleStringList ***indices_process_list, bool echo)
+{
+	SimpleStringList *process_list = pg_malloc0(sizeof(SimpleStringList));
+	SimpleStringListCell *idx_cell,
+			   *idx_table,
+			   *cell;
+	int			ipl_len = 10,
+				current_tables_num = 0,
+				i;
+
+	*indices_process_list = pg_malloc0(sizeof(*indices_process_list) * ipl_len);
+
+	for (idx_cell = user_list->head, idx_table = indices_tables_list->head;
+		 idx_cell;
+		 idx_cell = idx_cell->next, idx_table = idx_table->next)
+	{
+		SimpleStringList *list_to_add = NULL;
+
+		if (!current_tables_num)
+		{
+			simple_string_list_append(process_list, idx_table->val);
+			(*indices_process_list)[0] = pg_malloc0(sizeof(SimpleStringList));
+			current_tables_num++;
+		}
+
+		cell = process_list->head;
+		for (i = 0; i < current_tables_num; i++)
+		{
+			if (!strcmp(idx_table->val, cell->val))
+			{
+				list_to_add = (*indices_process_list)[i];
+				break;
+			}
+
+		}
+
+		if (!list_to_add)
+		{
+			simple_string_list_append(process_list, idx_table->val);
+
+			if (current_tables_num >= ipl_len)
+			{
+				ipl_len *= 2;
+				*indices_process_list = pg_realloc(*indices_process_list,
+												   sizeof(*indices_process_list) * ipl_len);
+			}
+
+			(*indices_process_list)[current_tables_num] = pg_malloc0(sizeof(SimpleStringList));
+			list_to_add = (*indices_process_list)[current_tables_num];
+			current_tables_num++;
+		}
+
+		simple_string_list_append(list_to_add, idx_cell->val);
+
+	}
+
+	return process_list;
+}
+
 static void
 reindex_one_database(ConnParams *cparams, ReindexType type,
 					 SimpleStringList *user_list,
@@ -310,10 +363,13 @@ reindex_one_database(ConnParams *cparams, ReindexType type,
 	SimpleStringListCell *cell;
 	bool		parallel = concurrentCons > 1;
 	SimpleStringList *process_list = user_list;
+	SimpleStringList **indices_process_list = NULL;
+	SimpleStringList *indices_tables_list = NULL;
 	ReindexType process_type = type;
 	ParallelSlotArray *sa;
 	bool		failed = false;
-	int			items_count = 0;
+	int			items_count = 0,
+				i = 0;
 
 	conn = connectDatabase(cparams, progname, echo, false, true);
 
@@ -383,8 +439,23 @@ reindex_one_database(ConnParams *cparams, ReindexType type,
 					return;
 				break;
 
-			case REINDEX_SYSTEM:
 			case REINDEX_INDEX:
+				Assert(user_list != NULL);
+
+				/* Build a list of relations from the indices */
+				indices_tables_list = get_parallel_object_list(conn, process_type,
+															   user_list, echo);
+				/* Distribute indices by tables */
+				process_list = sort_indices_by_tables(conn, user_list, indices_tables_list,
+													  &indices_process_list, echo);
+				simple_string_list_destroy(indices_tables_list);
+
+				/* Bail out if nothing to process */
+				if (process_list == NULL)
+					return;
+				break;
+
+			case REINDEX_SYSTEM:
 				/* not supported */
 				Assert(false);
 				break;
@@ -440,8 +511,19 @@ reindex_one_database(ConnParams *cparams, ReindexType type,
 		}
 
 		ParallelSlotSetHandler(free_slot, TableCommandResultHandler, NULL);
-		run_reindex_command(free_slot->connection, process_type, objname,
-							echo, verbose, concurrently, true, tablespace);
+		if (parallel && process_type == REINDEX_INDEX)
+		{
+			SimpleStringListCell *idx_cell;
+
+			for (idx_cell = indices_process_list[i]->head; idx_cell; idx_cell = idx_cell->next)
+				run_reindex_command(free_slot->connection, process_type, idx_cell->val,
+									echo, verbose, concurrently, true, tablespace);
+			simple_string_list_destroy(indices_process_list[i]);
+			i++;
+		}
+		else
+			run_reindex_command(free_slot->connection, process_type, objname,
+								echo, verbose, concurrently, true, tablespace);
 
 		cell = cell->next;
 	} while (cell != NULL);
@@ -455,6 +537,9 @@ finish:
 		simple_string_list_destroy(process_list);
 		pg_free(process_list);
 	}
+
+	if (indices_process_list)
+		pg_free(indices_process_list);
 
 	ParallelSlotsTerminate(sa);
 	pfree(sa);
@@ -667,8 +752,53 @@ get_parallel_object_list(PGconn *conn, ReindexType type,
 			}
 			break;
 
-		case REINDEX_SYSTEM:
 		case REINDEX_INDEX:
+			{
+				SimpleStringListCell *cell;
+				bool		idx_listed = false;
+
+				Assert(user_list != NULL);
+
+				/*
+				 * Straight forward index-level REINDEX is not supported with
+				 * multiple jobs as we cannot control the concurrent
+				 * processing of multiple indexes depending on the same
+				 * relation.  But we can extract appropriate table name for
+				 * the index and put REINDEX INDEX commands into different
+				 * jobs, accordingly to the parent tables.
+				 */
+				appendPQExpBufferStr(&catalog_query,
+									 "WITH idx as (\n"
+									 "  SELECT c.relname, ns.nspname\n"
+									 "  FROM pg_catalog.pg_class c,\n"
+									 "       pg_catalog.pg_namespace ns\n"
+									 "  WHERE c.relnamespace OPERATOR(pg_catalog.=) ns.oid AND\n"
+									 "        c.oid OPERATOR(pg_catalog.=) ANY(ARRAY['\n");
+
+				for (cell = user_list->head; cell; cell = cell->next)
+				{
+					if (idx_listed)
+						appendPQExpBufferStr(&catalog_query, "', '");
+					else
+						idx_listed = true;
+
+					appendQualifiedRelation(&catalog_query, cell->val, conn, echo);
+				}
+
+				appendPQExpBufferStr(&catalog_query,
+									 "'\n"
+									 "        ]::pg_catalog.regclass[])\n"
+									 ") \n"
+									 "SELECT pi.tablename, pi.schemaname \n"
+									 "FROM pg_catalog.pg_indexes as pi, idx\n"
+									 "WHERE pi.schemaname OPERATOR(pg_catalog.=) idx.nspname AND \n"
+									 "      pi.indexname OPERATOR(pg_catalog.=) idx.relname;\n");
+
+				executeCommand(conn, "RESET search_path;", false);
+			}
+			break;
+
+		case REINDEX_SYSTEM:
 		case REINDEX_TABLE:
 			Assert(false);
 			break;

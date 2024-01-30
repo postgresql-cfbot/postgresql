@@ -80,7 +80,7 @@
  * instant, even in transaction-snapshot mode.  It should only be used for
  * special-purpose code (say, RI checking.)  CatalogSnapshot points to an
  * MVCC snapshot intended to be used for catalog scans; we must invalidate it
- * whenever a system catalog change occurs.
+ * whenever a system catalog change occurs in other backends.
  *
  * These SnapshotData structs are static to simplify memory allocation
  * (see the hack in GetSnapshotData to avoid repeated malloc/free).
@@ -462,6 +462,9 @@ InvalidateCatalogSnapshotConditionally(void)
 void
 SnapshotSetCommandId(CommandId curcid)
 {
+	if (CatalogSnapshot)
+		CatalogSnapshot->curcid = curcid;
+
 	if (!FirstSnapshotSet)
 		return;
 
@@ -469,7 +472,6 @@ SnapshotSetCommandId(CommandId curcid)
 		CurrentSnapshot->curcid = curcid;
 	if (SecondarySnapshot)
 		SecondarySnapshot->curcid = curcid;
-	/* Should we do the same with CatalogSnapshot? */
 }
 
 /*

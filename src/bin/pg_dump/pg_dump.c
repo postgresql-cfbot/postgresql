@@ -161,6 +161,13 @@ static int	nseclabels = 0;
 #define DUMP_DEFAULT_ROWS_PER_INSERT 1
 
 /*
+ * Maximum number of large objects to group into a single ArchiveEntry.
+ * At some point we might want to make this user-controllable, but for now
+ * a hard-wired setting will suffice.
+ */
+#define MAX_BLOBS_PER_ARCHIVE_ENTRY 1000
+
+/*
  * Macro for producing quoted, schema-qualified name of a dumpable object.
  */
 #define fmtQualifiedDumpable(obj) \
@@ -3581,11 +3588,10 @@ getLOs(Archive *fout)
 {
 	DumpOptions *dopt = fout->dopt;
 	PQExpBuffer loQry = createPQExpBuffer();
-	LoInfo	   *loinfo;
-	DumpableObject *lodata;
 	PGresult   *res;
 	int			ntups;
 	int			i;
+	int			n;
 	int			i_oid;
 	int			i_lomowner;
 	int			i_lomacl;
@@ -3593,11 +3599,15 @@ getLOs(Archive *fout)
 
 	pg_log_info("reading large objects");
 
-	/* Fetch LO OIDs, and owner/ACL data */
+	/*
+	 * Fetch LO OIDs and owner/ACL data.  Order the data so that all the blobs
+	 * with the same owner/ACL appear together.
+	 */
 	appendPQExpBufferStr(loQry,
 						 "SELECT oid, lomowner, lomacl, "
 						 "acldefault('L', lomowner) AS acldefault "
-						 "FROM pg_largeobject_metadata");
+						 "FROM pg_largeobject_metadata "
+						 "ORDER BY lomowner, lomacl::pg_catalog.text, oid");
 
 	res = ExecuteSqlQuery(fout, loQry->data, PGRES_TUPLES_OK);
 
@@ -3609,30 +3619,72 @@ getLOs(Archive *fout)
 	ntups = PQntuples(res);
 
 	/*
-	 * Each large object has its own "BLOB" archive entry.
+	 * Group the blobs into suitably-sized groups that have the same owner and
+	 * ACL setting, and build a metadata and a data DumpableObject for each
+	 * group.  (If we supported initprivs for blobs, we'd have to insist that
+	 * groups also share initprivs settings, since the DumpableObject only has
+	 * room for one.)  i is the index of the first tuple in the current group,
+	 * and n is the number of tuples we include in the group.
 	 */
-	loinfo = (LoInfo *) pg_malloc(ntups * sizeof(LoInfo));
-
-	for (i = 0; i < ntups; i++)
+	for (i = 0; i < ntups; i += n)
 	{
-		loinfo[i].dobj.objType = DO_LARGE_OBJECT;
-		loinfo[i].dobj.catId.tableoid = LargeObjectRelationId;
-		loinfo[i].dobj.catId.oid = atooid(PQgetvalue(res, i, i_oid));
-		AssignDumpId(&loinfo[i].dobj);
+		Oid			thisoid = atooid(PQgetvalue(res, i, i_oid));
+		char	   *thisowner = PQgetvalue(res, i, i_lomowner);
+		char	   *thisacl = PQgetvalue(res, i, i_lomacl);
+		LoInfo	   *loinfo;
+		DumpableObject *lodata;
+		char		namebuf[64];
 
-		loinfo[i].dobj.name = pg_strdup(PQgetvalue(res, i, i_oid));
-		loinfo[i].dacl.acl = pg_strdup(PQgetvalue(res, i, i_lomacl));
-		loinfo[i].dacl.acldefault = pg_strdup(PQgetvalue(res, i, i_acldefault));
-		loinfo[i].dacl.privtype = 0;
-		loinfo[i].dacl.initprivs = NULL;
-		loinfo[i].rolname = getRoleName(PQgetvalue(res, i, i_lomowner));
+		/* Scan to find first tuple not to be included in group */
+		n = 1;
+		while (n < MAX_BLOBS_PER_ARCHIVE_ENTRY && i + n < ntups)
+		{
+			if (strcmp(thisowner, PQgetvalue(res, i + n, i_lomowner)) != 0 ||
+				strcmp(thisacl, PQgetvalue(res, i + n, i_lomacl)) != 0)
+				break;
+			n++;
+		}
+
+		/* Build the metadata DumpableObject */
+		loinfo = (LoInfo *) pg_malloc(offsetof(LoInfo, looids) + n * sizeof(Oid));
+
+		loinfo->dobj.objType = DO_LARGE_OBJECT;
+		loinfo->dobj.catId.tableoid = LargeObjectRelationId;
+		loinfo->dobj.catId.oid = thisoid;
+		AssignDumpId(&loinfo->dobj);
+
+		if (n > 1)
+			snprintf(namebuf, sizeof(namebuf), "%u..%u", thisoid,
+					 atooid(PQgetvalue(res, i + n - 1, i_oid)));
+		else
+			snprintf(namebuf, sizeof(namebuf), "%u", thisoid);
+		loinfo->dobj.name = pg_strdup(namebuf);
+		loinfo->dacl.acl = pg_strdup(thisacl);
+		loinfo->dacl.acldefault = pg_strdup(PQgetvalue(res, i, i_acldefault));
+		loinfo->dacl.privtype = 0;
+		loinfo->dacl.initprivs = NULL;
+		loinfo->rolname = getRoleName(thisowner);
+		loinfo->numlos = n;
+		loinfo->looids[0] = thisoid;
+		/* Collect OIDs of the remaining blobs in this group */
+		for (int k = 1; k < n; k++)
+		{
+			CatalogId	extraID;
+
+			loinfo->looids[k] = atooid(PQgetvalue(res, i + k, i_oid));
+
+			/* Make sure we can look up loinfo by any of the blobs' OIDs */
+			extraID.tableoid = LargeObjectRelationId;
+			extraID.oid = loinfo->looids[k];
+			recordAdditionalCatalogID(extraID, &loinfo->dobj);
+		}
 
 		/* LOs have data */
-		loinfo[i].dobj.components |= DUMP_COMPONENT_DATA;
+		loinfo->dobj.components |= DUMP_COMPONENT_DATA;
 
-		/* Mark whether LO has an ACL */
+		/* Mark whether LO group has a non-empty ACL */
 		if (!PQgetisnull(res, i, i_lomacl))
-			loinfo[i].dobj.components |= DUMP_COMPONENT_ACL;
+			loinfo->dobj.components |= DUMP_COMPONENT_ACL;
 
 		/*
 		 * In binary-upgrade mode for LOs, we do *not* dump out the LO data,
@@ -3642,21 +3694,22 @@ getLOs(Archive *fout)
 		 * pg_largeobject_metadata, after the dump is restored.
 		 */
 		if (dopt->binary_upgrade)
-			loinfo[i].dobj.dump &= ~DUMP_COMPONENT_DATA;
-	}
+			loinfo->dobj.dump &= ~DUMP_COMPONENT_DATA;
 
-	/*
-	 * If we have any large objects, a "BLOBS" archive entry is needed. This
-	 * is just a placeholder for sorting; it carries no data now.
-	 */
-	if (ntups > 0)
-	{
+		/*
+		 * Create a "BLOBS" data item for the group, too. This is just a
+		 * placeholder for sorting; it carries no data now.
+		 */
 		lodata = (DumpableObject *) pg_malloc(sizeof(DumpableObject));
 		lodata->objType = DO_LARGE_OBJECT_DATA;
 		lodata->catId = nilCatalogId;
 		AssignDumpId(lodata);
-		lodata->name = pg_strdup("BLOBS");
+		lodata->name = pg_strdup(namebuf);
 		lodata->components |= DUMP_COMPONENT_DATA;
+		/* Set up explicit dependency from data to metadata */
+		lodata->dependencies = (DumpId *) pg_malloc(sizeof(DumpId));
+		lodata->dependencies[0] = loinfo->dobj.dumpId;
+		lodata->nDeps = lodata->allocDeps = 1;
 	}
 
 	PQclear(res);
@@ -3666,123 +3719,109 @@ getLOs(Archive *fout)
 /*
  * dumpLO
  *
- * dump the definition (metadata) of the given large object
+ * dump the definition (metadata) of the given large object group
  */
 static void
 dumpLO(Archive *fout, const LoInfo *loinfo)
 {
 	PQExpBuffer cquery = createPQExpBuffer();
-	PQExpBuffer dquery = createPQExpBuffer();
 
-	appendPQExpBuffer(cquery,
-					  "SELECT pg_catalog.lo_create('%s');\n",
-					  loinfo->dobj.name);
-
-	appendPQExpBuffer(dquery,
-					  "SELECT pg_catalog.lo_unlink('%s');\n",
-					  loinfo->dobj.name);
+	/*
+	 * The "definition" is just a newline-separated list of OIDs.  We need to
+	 * put something into the dropStmt too, but it can just be a comment.
+	 */
+	for (int i = 0; i < loinfo->numlos; i++)
+		appendPQExpBuffer(cquery, "%u\n", loinfo->looids[i]);
 
 	if (loinfo->dobj.dump & DUMP_COMPONENT_DEFINITION)
 		ArchiveEntry(fout, loinfo->dobj.catId, loinfo->dobj.dumpId,
 					 ARCHIVE_OPTS(.tag = loinfo->dobj.name,
 								  .owner = loinfo->rolname,
-								  .description = "BLOB",
-								  .section = SECTION_PRE_DATA,
+								  .description = "BLOB METADATA",
+								  .section = SECTION_DATA,
 								  .createStmt = cquery->data,
-								  .dropStmt = dquery->data));
+								  .dropStmt = "-- dummy"));
 
-	/* Dump comment if any */
-	if (loinfo->dobj.dump & DUMP_COMPONENT_COMMENT)
-		dumpComment(fout, "LARGE OBJECT", loinfo->dobj.name,
-					NULL, loinfo->rolname,
-					loinfo->dobj.catId, 0, loinfo->dobj.dumpId);
+	/*
+	 * Dump per-blob comments, seclabels, and ACLs if any.  We assume these
+	 * are rare enough that it's okay to generate retail TOC entries for them.
+	 */
+	if (loinfo->dobj.dump & (DUMP_COMPONENT_COMMENT |
+							 DUMP_COMPONENT_SECLABEL |
+							 DUMP_COMPONENT_ACL))
+	{
+		for (int i = 0; i < loinfo->numlos; i++)
+		{
+			CatalogId	catId;
+			char		namebuf[32];
 
-	/* Dump security label if any */
-	if (loinfo->dobj.dump & DUMP_COMPONENT_SECLABEL)
-		dumpSecLabel(fout, "LARGE OBJECT", loinfo->dobj.name,
-					 NULL, loinfo->rolname,
-					 loinfo->dobj.catId, 0, loinfo->dobj.dumpId);
+			/* Build identifying info for this blob */
+			catId.tableoid = loinfo->dobj.catId.tableoid;
+			catId.oid = loinfo->looids[i];
+			snprintf(namebuf, sizeof(namebuf), "%u", loinfo->looids[i]);
 
-	/* Dump ACL if any */
-	if (loinfo->dobj.dump & DUMP_COMPONENT_ACL)
-		dumpACL(fout, loinfo->dobj.dumpId, InvalidDumpId, "LARGE OBJECT",
-				loinfo->dobj.name, NULL,
-				NULL, loinfo->rolname, &loinfo->dacl);
+			if (loinfo->dobj.dump & DUMP_COMPONENT_COMMENT)
+				dumpComment(fout, "LARGE OBJECT", namebuf,
+							NULL, loinfo->rolname,
+							catId, 0, loinfo->dobj.dumpId);
+
+			if (loinfo->dobj.dump & DUMP_COMPONENT_SECLABEL)
+				dumpSecLabel(fout, "LARGE OBJECT", namebuf,
+							 NULL, loinfo->rolname,
+							 catId, 0, loinfo->dobj.dumpId);
+
+			if (loinfo->dobj.dump & DUMP_COMPONENT_ACL)
+				dumpACL(fout, loinfo->dobj.dumpId, InvalidDumpId,
+						"LARGE OBJECT", namebuf, NULL,
+						NULL, loinfo->rolname, &loinfo->dacl);
+		}
+	}
 
 	destroyPQExpBuffer(cquery);
-	destroyPQExpBuffer(dquery);
 }
 
 /*
  * dumpLOs:
- *	dump the data contents of all large objects
+ *	dump the data contents of the large objects in the given group
  */
 static int
 dumpLOs(Archive *fout, const void *arg)
 {
-	const char *loQry;
-	const char *loFetchQry;
+	const LoInfo *loinfo = (const LoInfo *) arg;
 	PGconn	   *conn = GetConnection(fout);
-	PGresult   *res;
 	char		buf[LOBBUFSIZE];
-	int			ntups;
-	int			i;
-	int			cnt;
 
-	pg_log_info("saving large objects");
+	pg_log_info("saving large objects \"%s\"", loinfo->dobj.name);
 
-	/*
-	 * Currently, we re-fetch all LO OIDs using a cursor.  Consider scanning
-	 * the already-in-memory dumpable objects instead...
-	 */
-	loQry =
-		"DECLARE looid CURSOR FOR "
-		"SELECT oid FROM pg_largeobject_metadata ORDER BY 1";
-
-	ExecuteSqlStatement(fout, loQry);
-
-	/* Command to fetch from cursor */
-	loFetchQry = "FETCH 1000 IN looid";
-
-	do
+	for (int i = 0; i < loinfo->numlos; i++)
 	{
-		/* Do a fetch */
-		res = ExecuteSqlQuery(fout, loFetchQry, PGRES_TUPLES_OK);
+		Oid			loOid = loinfo->looids[i];
+		int			loFd;
+		int			cnt;
 
-		/* Process the tuples, if any */
-		ntups = PQntuples(res);
-		for (i = 0; i < ntups; i++)
+		/* Open the LO */
+		loFd = lo_open(conn, loOid, INV_READ);
+		if (loFd == -1)
+			pg_fatal("could not open large object %u: %s",
+					 loOid, PQerrorMessage(conn));
+
+		StartLO(fout, loOid);
+
+		/* Now read it in chunks, sending data to archive */
+		do
 		{
-			Oid			loOid;
-			int			loFd;
-
-			loOid = atooid(PQgetvalue(res, i, 0));
-			/* Open the LO */
-			loFd = lo_open(conn, loOid, INV_READ);
-			if (loFd == -1)
-				pg_fatal("could not open large object %u: %s",
+			cnt = lo_read(conn, loFd, buf, LOBBUFSIZE);
+			if (cnt < 0)
+				pg_fatal("error reading large object %u: %s",
 						 loOid, PQerrorMessage(conn));
 
-			StartLO(fout, loOid);
+			WriteData(fout, buf, cnt);
+		} while (cnt > 0);
 
-			/* Now read it in chunks, sending data to archive */
-			do
-			{
-				cnt = lo_read(conn, loFd, buf, LOBBUFSIZE);
-				if (cnt < 0)
-					pg_fatal("error reading large object %u: %s",
-							 loOid, PQerrorMessage(conn));
+		lo_close(conn, loFd);
 
-				WriteData(fout, buf, cnt);
-			} while (cnt > 0);
-
-			lo_close(conn, loFd);
-
-			EndLO(fout, loOid);
-		}
-
-		PQclear(res);
-	} while (ntups > 0);
+		EndLO(fout, loOid);
+	}
 
 	return 1;
 }
@@ -10612,28 +10651,34 @@ dumpDumpableObject(Archive *fout, DumpableObject *dobj)
 		case DO_LARGE_OBJECT_DATA:
 			if (dobj->dump & DUMP_COMPONENT_DATA)
 			{
+				LoInfo	   *loinfo;
 				TocEntry   *te;
+
+				loinfo = (LoInfo *) findObjectByDumpId(dobj->dependencies[0]);
+				if (loinfo == NULL)
+					pg_fatal("missing metadata for large objects \"%s\"",
+							 dobj->name);
 
 				te = ArchiveEntry(fout, dobj->catId, dobj->dumpId,
 								  ARCHIVE_OPTS(.tag = dobj->name,
+											   .owner = loinfo->rolname,
 											   .description = "BLOBS",
 											   .section = SECTION_DATA,
-											   .dumpFn = dumpLOs));
+											   .deps = dobj->dependencies,
+											   .nDeps = dobj->nDeps,
+											   .dumpFn = dumpLOs,
+											   .dumpArg = loinfo));
 
 				/*
 				 * Set the TocEntry's dataLength in case we are doing a
 				 * parallel dump and want to order dump jobs by table size.
 				 * (We need some size estimate for every TocEntry with a
 				 * DataDumper function.)  We don't currently have any cheap
-				 * way to estimate the size of LOs, but it doesn't matter;
-				 * let's just set the size to a large value so parallel dumps
-				 * will launch this job first.  If there's lots of LOs, we
-				 * win, and if there aren't, we don't lose much.  (If you want
-				 * to improve on this, really what you should be thinking
-				 * about is allowing LO dumping to be parallelized, not just
-				 * getting a smarter estimate for the single TOC entry.)
+				 * way to estimate the size of LOs, but fortunately it doesn't
+				 * matter too much as long as we get large batches of LOs
+				 * processed reasonably early.  Assume 8K per blob.
 				 */
-				te->dataLength = INT_MAX;
+				te->dataLength = loinfo->numlos * (pgoff_t) 8192;
 			}
 			break;
 		case DO_POLICY:
@@ -18584,12 +18629,12 @@ addBoundaryDependencies(DumpableObject **dobjs, int numObjs,
 			case DO_FDW:
 			case DO_FOREIGN_SERVER:
 			case DO_TRANSFORM:
-			case DO_LARGE_OBJECT:
 				/* Pre-data objects: must come before the pre-data boundary */
 				addObjectDependency(preDataBound, dobj->dumpId);
 				break;
 			case DO_TABLE_DATA:
 			case DO_SEQUENCE_SET:
+			case DO_LARGE_OBJECT:
 			case DO_LARGE_OBJECT_DATA:
 				/* Data objects: must come between the boundaries */
 				addObjectDependency(dobj, preDataBound->dumpId);

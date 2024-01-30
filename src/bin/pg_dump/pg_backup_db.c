@@ -541,29 +541,57 @@ CommitTransaction(Archive *AHX)
 	ExecuteSqlCommand(AH, "COMMIT", "could not commit database transaction");
 }
 
+/*
+ * Issue per-blob commands for the large object(s) listed in the TocEntry
+ *
+ * The TocEntry's defn string is assumed to consist of large object OIDs,
+ * one per line.  Wrap these in the given SQL command fragments and issue
+ * the commands.  (cmdEnd need not include a semicolon.)
+ */
+void
+IssueCommandPerBlob(ArchiveHandle *AH, TocEntry *te,
+					const char *cmdBegin, const char *cmdEnd)
+{
+	/* Make a writable copy of the command string */
+	char	   *buf = pg_strdup(te->defn);
+	RestoreOptions *ropt = AH->public.ropt;
+	char	   *st;
+	char	   *en;
+
+	st = buf;
+	while ((en = strchr(st, '\n')) != NULL)
+	{
+		*en++ = '\0';
+		ahprintf(AH, "%s%s%s;\n", cmdBegin, st, cmdEnd);
+
+		/* In --transaction-size mode, count each command as an action */
+		if (ropt && ropt->txn_size > 0)
+		{
+			if (++AH->txnCount >= ropt->txn_size)
+			{
+				if (AH->connection)
+				{
+					CommitTransaction(&AH->public);
+					StartTransaction(&AH->public);
+				}
+				else
+					ahprintf(AH, "COMMIT;\nBEGIN;\n\n");
+				AH->txnCount = 0;
+			}
+		}
+
+		st = en;
+	}
+	ahprintf(AH, "\n");
+	pg_free(buf);
+}
+
 void
 DropLOIfExists(ArchiveHandle *AH, Oid oid)
 {
-	/*
-	 * If we are not restoring to a direct database connection, we have to
-	 * guess about how to detect whether the LO exists.  Assume new-style.
-	 */
-	if (AH->connection == NULL ||
-		PQserverVersion(AH->connection) >= 90000)
-	{
-		ahprintf(AH,
-				 "SELECT pg_catalog.lo_unlink(oid) "
-				 "FROM pg_catalog.pg_largeobject_metadata "
-				 "WHERE oid = '%u';\n",
-				 oid);
-	}
-	else
-	{
-		/* Restoring to pre-9.0 server, so do it the old way */
-		ahprintf(AH,
-				 "SELECT CASE WHEN EXISTS("
-				 "SELECT 1 FROM pg_catalog.pg_largeobject WHERE loid = '%u'"
-				 ") THEN pg_catalog.lo_unlink('%u') END;\n",
-				 oid, oid);
-	}
+	ahprintf(AH,
+			 "SELECT pg_catalog.lo_unlink(oid) "
+			 "FROM pg_catalog.pg_largeobject_metadata "
+			 "WHERE oid = '%u';\n",
+			 oid);
 }

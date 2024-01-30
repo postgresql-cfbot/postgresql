@@ -4737,11 +4737,39 @@ create_partial_distinct_paths(PlannerInfo *root, RelOptInfo *input_rel,
 																		-1.0);
 			}
 
-			add_partial_path(partial_distinct_rel, (Path *)
-							 create_upper_unique_path(root, partial_distinct_rel,
-													  sorted_path,
-													  list_length(root->distinct_pathkeys),
-													  numDistinctRows));
+			/*
+			 * See comments in create_final_distinct_paths().
+			 */
+			if (root->distinct_pathkeys == NIL)
+			{
+				Node	   *limitCount;
+
+				limitCount = (Node *) makeConst(INT8OID, -1, InvalidOid,
+												sizeof(int64),
+												Int64GetDatum(1), false,
+												FLOAT8PASSBYVAL);
+
+				/*
+				 * If the query already has a LIMIT clause, then we could end
+				 * up with a duplicate LimitPath in the final plan. That does
+				 * not seem worth troubling over too much.
+				 */
+				add_partial_path(partial_distinct_rel, (Path *)
+								 create_limit_path(root, partial_distinct_rel,
+												   sorted_path,
+												   NULL,
+												   limitCount,
+												   LIMIT_OPTION_COUNT,
+												   0, 1));
+			}
+			else
+			{
+				add_partial_path(partial_distinct_rel, (Path *)
+								 create_upper_unique_path(root, partial_distinct_rel,
+														  sorted_path,
+														  list_length(root->distinct_pathkeys),
+														  numDistinctRows));
+			}
 		}
 	}
 

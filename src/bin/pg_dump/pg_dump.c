@@ -136,6 +136,9 @@ static SimpleOidList foreign_servers_include_oids = {NULL, NULL};
 static SimpleStringList extension_include_patterns = {NULL, NULL};
 static SimpleOidList extension_include_oids = {NULL, NULL};
 
+static SimpleStringList extension_exclude_patterns = {NULL, NULL};
+static SimpleOidList extension_exclude_oids = {NULL, NULL};
+
 static const CatalogId nilCatalogId = {0, 0};
 
 /* override for standard extra_float_digits setting */
@@ -437,6 +440,7 @@ main(int argc, char **argv)
 		{"exclude-table-data-and-children", required_argument, NULL, 14},
 		{"sync-method", required_argument, NULL, 15},
 		{"filter", required_argument, NULL, 16},
+		{"exclude-extension", required_argument, NULL, 17},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -672,6 +676,11 @@ main(int argc, char **argv)
 				read_dump_filters(optarg, &dopt);
 				break;
 
+			case 17:			/* exclude extension(s) */
+				simple_string_list_append(&extension_exclude_patterns,
+										  optarg);
+				break;
+
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -890,6 +899,10 @@ main(int argc, char **argv)
 		if (extension_include_oids.head == NULL)
 			pg_fatal("no matching extensions were found");
 	}
+	expand_extension_name_patterns(fout, &extension_exclude_patterns,
+									&extension_exclude_oids,
+									false);
+	/* non-matching exclusion patterns aren't an error */
 
 	/*
 	 * Dumping LOs is the default for dumps where an inclusion switch is not
@@ -1095,6 +1108,7 @@ help(const char *progname)
 	printf(_("  -c, --clean                  clean (drop) database objects before recreating\n"));
 	printf(_("  -C, --create                 include commands to create database in dump\n"));
 	printf(_("  -e, --extension=PATTERN      dump the specified extension(s) only\n"));
+	printf(_("  --exclude-extension=PATTERN  do NOT dump the specified extension(s)\n"));
 	printf(_("  -E, --encoding=ENCODING      dump the data in encoding ENCODING\n"));
 	printf(_("  -n, --schema=PATTERN         dump the specified schema(s) only\n"));
 	printf(_("  -N, --exclude-schema=PATTERN do NOT dump the specified schema(s)\n"));
@@ -2026,6 +2040,11 @@ selectDumpableExtension(ExtensionInfo *extinfo, DumpOptions *dopt)
 			extinfo->dobj.dump = extinfo->dobj.dump_contains =
 				dopt->include_everything ?
 				DUMP_COMPONENT_ALL : DUMP_COMPONENT_NONE;
+
+		if (extension_exclude_oids.head != NULL && 
+				simple_oid_list_member(&extension_exclude_oids,
+									   extinfo->dobj.catId.oid))
+			extinfo->dobj.dump = extinfo->dobj.dump_contains = DUMP_COMPONENT_NONE;
 	}
 }
 
@@ -18235,6 +18254,15 @@ processExtensionTables(Archive *fout, ExtensionInfo extinfo[],
 		 */
 		if (extension_include_oids.head != NULL &&
 			!simple_oid_list_member(&extension_include_oids,
+									curext->dobj.catId.oid))
+			continue;
+		
+		/*
+		 * Check if this extension is listed as to exclude in the dump.  If
+		 * yes, any table data associated with it is discarded.
+		 */
+		if (extension_exclude_oids.head != NULL &&
+			simple_oid_list_member(&extension_exclude_oids,
 									curext->dobj.catId.oid))
 			continue;
 

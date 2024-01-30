@@ -498,9 +498,9 @@ CreateStatistics(CreateStatsStmt *stmt)
 	values[Anum_pg_statistic_ext_stxrelid - 1] = ObjectIdGetDatum(relid);
 	values[Anum_pg_statistic_ext_stxname - 1] = NameGetDatum(&stxname);
 	values[Anum_pg_statistic_ext_stxnamespace - 1] = ObjectIdGetDatum(namespaceId);
-	values[Anum_pg_statistic_ext_stxstattarget - 1] = Int16GetDatum(-1);
 	values[Anum_pg_statistic_ext_stxowner - 1] = ObjectIdGetDatum(stxowner);
 	values[Anum_pg_statistic_ext_stxkeys - 1] = PointerGetDatum(stxkeys);
+	nulls[Anum_pg_statistic_ext_stxstattarget - 1] = true;
 	values[Anum_pg_statistic_ext_stxkind - 1] = PointerGetDatum(stxkind);
 
 	values[Anum_pg_statistic_ext_stxexprs - 1] = exprsDatum;
@@ -609,7 +609,19 @@ AlterStatistics(AlterStatsStmt *stmt)
 	bool		repl_null[Natts_pg_statistic_ext];
 	bool		repl_repl[Natts_pg_statistic_ext];
 	ObjectAddress address;
-	int			newtarget = stmt->stxstattarget;
+	int			newtarget;
+
+	if (stmt->stxstattarget)
+	{
+		newtarget = intVal(stmt->stxstattarget);
+	}
+	else
+	{
+		/*
+		 * -1 was used in previous versions to represent the default setting
+		 */
+		newtarget = -1;
+	}
 
 	/* Limit statistics target to a sane range */
 	if (newtarget < -1)
@@ -676,7 +688,10 @@ AlterStatistics(AlterStatsStmt *stmt)
 
 	/* replace the stxstattarget column */
 	repl_repl[Anum_pg_statistic_ext_stxstattarget - 1] = true;
-	repl_val[Anum_pg_statistic_ext_stxstattarget - 1] = Int16GetDatum(newtarget);
+	if (newtarget != -1)
+		repl_val[Anum_pg_statistic_ext_stxstattarget - 1] = Int16GetDatum(newtarget);
+	else
+		repl_null[Anum_pg_statistic_ext_stxstattarget - 1] = true;
 
 	newtup = heap_modify_tuple(oldtup, RelationGetDescr(rel),
 							   repl_val, repl_null, repl_repl);

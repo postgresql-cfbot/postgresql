@@ -3757,7 +3757,7 @@ xcrun --show-sdk-path
     MinGW, the Unix-like build tools, and MSYS, a collection
     of Unix tools required to run shell scripts
     like <command>configure</command>, can be downloaded
-    from <ulink url="http://www.mingw.org/"></ulink>.  Neither is
+    from <ulink url="https://www.mingw-w64.org/"></ulink>.  Neither is
     required to run the resulting binaries; they are needed only for
     creating the binaries.
    </para>
@@ -3923,13 +3923,6 @@ make: *** [postgres] Error 1
    </para>
 
    <para>
-    Native builds of <application>psql</application> don't support command
-    line editing. The <productname>Cygwin</productname> build does support
-    command line editing, so it should be used where psql is needed for
-    interactive use on <productname>Windows</productname>.
-   </para>
-
-   <para>
     PostgreSQL can be built using the Visual C++ compiler suite from Microsoft.
     These compilers can be either from <productname>Visual Studio</productname>,
     <productname>Visual Studio Express</productname> or some versions of the
@@ -3987,14 +3980,14 @@ make: *** [postgres] Error 1
 
      <variablelist>
       <varlistentry>
-       <term><productname>ActiveState Perl</productname></term>
+       <term><productname>Perl</productname></term>
        <listitem><para>
-        ActiveState Perl is required to run the build generation scripts. MinGW
-        or Cygwin Perl will not work. It must also be present in the PATH.
-        Binaries can be downloaded from
-        <ulink url="https://www.activestate.com"></ulink>
-        (Note: version 5.14 or later is required,
-        the free Standard Distribution is sufficient).
+         Perl is required to run the build generation scripts.
+         Perl from  <ulink url="https://packages.msys2.org/base/perl"></ulink> or
+         <ulink url="https://community.chocolatey.org/packages/StrawberryPerl">
+          Strawberry Perl</ulink> from the package manager
+         <ulink url="https://community.chocolatey.org/">Chocolatey</ulink>
+         are good alternatives. Perl must be present in the PATH.
        </para></listitem>
       </varlistentry>
 
@@ -4011,8 +4004,7 @@ make: *** [postgres] Error 1
        <para>
         Both <productname>Bison</productname> and <productname>Flex</productname>
         are included in the <productname>msys</productname> tool suite, available
-        from <ulink url="http://www.mingw.org/wiki/MSYS"></ulink> as part of the
-        <productname>MinGW</productname> compiler suite.
+        from <ulink url="https://www.msys2.org/"></ulink>.
        </para>
 
        <para>
@@ -4046,10 +4038,11 @@ make: *** [postgres] Error 1
 
      <variablelist>
       <varlistentry>
-       <term><productname>ActiveState Tcl</productname></term>
+       <term><productname>Tcl</productname></term>
        <listitem><para>
         Required for building <application>PL/Tcl</application> (Note: version
-        8.4 is required, the free Standard Distribution is sufficient).
+        8.4 is required, the free Standard Distribution is sufficient). One
+        option is from <ulink url="https://packages.msys2.org/base/tcl"></ulink>.
        </para></listitem>
       </varlistentry>
 

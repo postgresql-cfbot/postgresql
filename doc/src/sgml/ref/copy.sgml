@@ -782,11 +782,7 @@ COPY <replaceable class="parameter">count</replaceable>
     format, <literal>\.</literal>, the end-of-data marker, could also appear
     as a data value.  To avoid any misinterpretation, a <literal>\.</literal>
     data value appearing as a lone entry on a line is automatically
-    quoted on output, and on input, if quoted, is not interpreted as the
-    end-of-data marker.  If you are loading a file created by another
-    application that has a single unquoted column and might have a
-    value of <literal>\.</literal>, you might need to quote that value in the
-    input file.
+    quoted on output.
    </para>
 
    <note>

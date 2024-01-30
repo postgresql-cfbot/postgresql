@@ -11076,6 +11076,11 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
        </para>
 
        <para>
+        A single <literal>*</literal> character is interpreted as a wildcard and
+        will cause all errors in the log to contain backtraces.
+       </para>
+
+       <para>
         Backtrace support is not available on all platforms, and the quality
         of the backtraces depends on compilation options.
        </para>

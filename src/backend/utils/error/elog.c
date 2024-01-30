@@ -842,6 +842,8 @@ matches_backtrace_functions(const char *funcname)
 		if (*p == '\0')			/* end of backtrace_function_list */
 			break;
 
+		if (strcmp("*", p) == 0)
+			return true;
 		if (strcmp(funcname, p) == 0)
 			return true;
 		p += strlen(p) + 1;
@@ -2130,14 +2132,14 @@ check_backtrace_functions(char **newval, void **extra, GucSource source)
 	int			j;
 
 	/*
-	 * Allow characters that can be C identifiers and commas as separators, as
-	 * well as some whitespace for readability.
+	 * Allow characters that can be C identifiers, commas as separators, the
+	 * wildcard symbol, as well as some whitespace for readability.
 	 */
 	validlen = strspn(*newval,
 					  "0123456789_"
 					  "abcdefghijklmnopqrstuvwxyz"
 					  "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-					  ", \n\t");
+					  ",* \n\t");
 	if (validlen != newvallen)
 	{
 		GUC_check_errdetail("Invalid character");

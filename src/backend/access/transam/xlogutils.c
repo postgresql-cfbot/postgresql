@@ -894,6 +894,8 @@ read_local_xlog_page_guts(XLogReaderState *state, XLogRecPtr targetPagePtr,
 	int			count;
 	WALReadError errinfo;
 	TimeLineID	currTLI;
+	Size		nbytes;
+	Size		rbytes;
 
 	loc = targetPagePtr + reqLen;
 
@@ -1006,12 +1008,22 @@ read_local_xlog_page_guts(XLogReaderState *state, XLogRecPtr targetPagePtr,
 		count = read_upto - targetPagePtr;
 	}
 
+	/* Attempt to read WAL from WAL buffers first. */
+	nbytes = XLOG_BLCKSZ;
+	rbytes = WALReadFromBuffers(cur_page, targetPagePtr, nbytes, currTLI);
+	cur_page += rbytes;
+	targetPagePtr += rbytes;
+	nbytes -= rbytes;
+
 	/*
+	 * Now read the remaining WAL from WAL file.
+	 *
 	 * Even though we just determined how much of the page can be validly read
 	 * as 'count', read the whole page anyway. It's guaranteed to be
 	 * zero-padded up to the page boundary if it's incomplete.
 	 */
-	if (!WALRead(state, cur_page, targetPagePtr, XLOG_BLCKSZ, tli,
+	if (nbytes > 0 &&
+		!WALRead(state, cur_page, targetPagePtr, nbytes, tli,
 				 &errinfo))
 		WALReadRaiseError(&errinfo);
 

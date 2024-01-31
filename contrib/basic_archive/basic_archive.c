@@ -161,7 +161,13 @@ check_archive_directory(char **newval, void **extra, GucSource source)
 static bool
 basic_archive_configured(ArchiveModuleState *state)
 {
-	return archive_directory != NULL && archive_directory[0] != '\0';
+	if (archive_directory == NULL || archive_directory[0] == '\0')
+	{
+		arch_module_check_errdetail("basic_archive.archive_directory is not set.");
+		return false;
+	}
+
+	return true;
 }
 
 /*

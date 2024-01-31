@@ -28,6 +28,8 @@ OBJS = \
 	util.o \
 	version.o
 
+file.o: CFLAGS += ${CFLAGS_UNROLL_LOOPS} ${CFLAGS_VECTORIZE}
+
 override CPPFLAGS := -I$(srcdir) -I$(libpq_srcdir) $(CPPFLAGS)
 LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport)
 

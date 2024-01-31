@@ -3394,8 +3394,8 @@ typedef struct AggTransInfo
 	Oid			aggtranstype;
 
 	/* Additional data about transtype */
-	int32		aggtranstypmod;
-	int			transtypeLen;
+	int32		aggtranstypmod pg_node_attr(default(-1));
+	int			transtypeLen pg_node_attr(default(-1));
 	bool		transtypeByVal;
 
 	/* Space-consumption estimate */

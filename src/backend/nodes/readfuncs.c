@@ -56,112 +56,207 @@
 	READ_LOCALS_NO_FIELDS(nodeTypeName);	\
 	READ_TEMP_LOCALS()
 
+/* a scaffold function to read an optionally-omitted field */
+#define READ_OPT_SCAFFOLD(fldname, read_field_code, default_value) \
+	if (pg_strtoken_next(":" CppAsString(fldname))) \
+	{ \
+		read_field_code; \
+	} \
+	else \
+		local_node->fldname = default_value
+
 /* Read an integer field (anything written as ":fldname %d") */
-#define READ_INT_FIELD(fldname) \
+#define READ_INT_FIELD_DIRECT(fldname) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
+	Assert(strncmp(token, ":" CppAsString(fldname), length) == 0); \
 	token = pg_strtok(&length);		/* get field value */ \
 	local_node->fldname = atoi(token)
+#define READ_INT_FIELD_DEFAULT(fldname, default_value) \
+	READ_OPT_SCAFFOLD(fldname, READ_INT_FIELD_DIRECT(fldname), default_value)
+#define READ_INT_FIELD(fldname) \
+	READ_INT_FIELD_DEFAULT(fldname, 0)
 
 /* Read an unsigned integer field (anything written as ":fldname %u") */
-#define READ_UINT_FIELD(fldname) \
+#define READ_UINT_FIELD_DIRECT(fldname) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
+	Assert(strncmp(token, ":" CppAsString(fldname), length) == 0); \
 	token = pg_strtok(&length);		/* get field value */ \
 	local_node->fldname = atoui(token)
+#define READ_UINT_FIELD_DEFAULT(fldname, default_value) \
+	READ_OPT_SCAFFOLD(fldname, READ_UINT_FIELD_DIRECT(fldname), default_value)
+#define READ_UINT_FIELD(fldname) \
+	READ_UINT_FIELD_DEFAULT(fldname, 0)
 
 /* Read an unsigned integer field (anything written using UINT64_FORMAT) */
-#define READ_UINT64_FIELD(fldname) \
+#define READ_UINT64_FIELD_DIRECT(fldname) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
+	Assert(strncmp(token, ":" CppAsString(fldname), length) == 0); \
 	token = pg_strtok(&length);		/* get field value */ \
 	local_node->fldname = strtou64(token, NULL, 10)
+#define READ_UINT64_FIELD_DEFAULT(fldname, default_value) \
+	READ_OPT_SCAFFOLD(fldname, READ_UINT64_FIELD_DIRECT(fldname), default_value)
+#define READ_UINT64_FIELD(fldname) \
+	READ_UINT64_FIELD_DEFAULT(fldname, 0)
 
 /* Read a long integer field (anything written as ":fldname %ld") */
-#define READ_LONG_FIELD(fldname) \
+#define READ_LONG_FIELD_DIRECT(fldname) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
+	Assert(strncmp(token, ":" CppAsString(fldname), length) == 0); \
 	token = pg_strtok(&length);		/* get field value */ \
 	local_node->fldname = atol(token)
+#define READ_LONG_FIELD_DEFAULT(fldname, default_value) \
+	READ_OPT_SCAFFOLD(fldname, READ_LONG_FIELD_DIRECT(fldname), default_value)
+#define READ_LONG_FIELD(fldname) \
+	READ_LONG_FIELD_DEFAULT(fldname, 0)
 
 /* Read an OID field (don't hard-wire assumption that OID is same as uint) */
-#define READ_OID_FIELD(fldname) \
+#define READ_OID_FIELD_DIRECT(fldname) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
+	Assert(strncmp(token, ":" CppAsString(fldname), length) == 0); \
 	token = pg_strtok(&length);		/* get field value */ \
 	local_node->fldname = atooid(token)
+#define READ_OID_FIELD_DEFAULT(fldname, default_value) \
+	READ_OPT_SCAFFOLD(fldname, READ_OID_FIELD_DIRECT(fldname), default_value)
+#define READ_OID_FIELD(fldname) \
+	READ_OID_FIELD_DEFAULT(fldname, 0)
 
 /* Read a char field (ie, one ascii character) */
-#define READ_CHAR_FIELD(fldname) \
+#define READ_CHAR_FIELD_DIRECT(fldname) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
+	Assert(strncmp(token, ":" CppAsString(fldname), length) == 0); \
 	token = pg_strtok(&length);		/* get field value */ \
 	/* avoid overhead of calling debackslash() for one char */ \
 	local_node->fldname = (length == 0) ? '\0' : (token[0] == '\\' ? token[1] : token[0])
+#define READ_CHAR_FIELD_DEFAULT(fldname, default_value) \
+	READ_OPT_SCAFFOLD(fldname, READ_CHAR_FIELD_DIRECT(fldname), default_value)
+#define READ_CHAR_FIELD(fldname) \
+	READ_CHAR_FIELD_DEFAULT(fldname, '\0')
 
 /* Read an enumerated-type field that was written as an integer code */
-#define READ_ENUM_FIELD(fldname, enumtype) \
+#define READ_ENUM_FIELD_DIRECT(fldname, enumtype) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
+	Assert(strncmp(token, ":" CppAsString(fldname), length) == 0); \
 	token = pg_strtok(&length);		/* get field value */ \
 	local_node->fldname = (enumtype) atoi(token)
+#define READ_ENUM_FIELD_DEFAULT(fldname, enumtype, default_value) \
+	READ_OPT_SCAFFOLD(fldname, READ_ENUM_FIELD_DIRECT(fldname, enumtype), default_value)
+#define READ_ENUM_FIELD(fldname, enumtype) \
+	READ_ENUM_FIELD_DEFAULT(fldname, enumtype, 0)
 
 /* Read a float field */
-#define READ_FLOAT_FIELD(fldname) \
+#define READ_FLOAT_FIELD_DIRECT(fldname) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
+	Assert(strncmp(token, ":" CppAsString(fldname), length) == 0); \
 	token = pg_strtok(&length);		/* get field value */ \
 	local_node->fldname = atof(token)
+#define READ_FLOAT_FIELD_DEFAULT(fldname, default_value) \
+	READ_OPT_SCAFFOLD(fldname, READ_FLOAT_FIELD_DIRECT(fldname), default_value)
+#define READ_FLOAT_FIELD(fldname) \
+	READ_FLOAT_FIELD_DEFAULT(fldname, 0.0)
 
 /* Read a boolean field */
-#define READ_BOOL_FIELD(fldname) \
+#define READ_BOOL_FIELD_DIRECT(fldname) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
+	Assert(strncmp(token, ":" CppAsString(fldname), length) == 0); \
 	token = pg_strtok(&length);		/* get field value */ \
 	local_node->fldname = strtobool(token)
+#define READ_BOOL_FIELD_DEFAULT(fldname, default_value) \
+	READ_OPT_SCAFFOLD(fldname, READ_BOOL_FIELD_DIRECT(fldname), default_value)
+#define READ_BOOL_FIELD(fldname) \
+	READ_BOOL_FIELD_DEFAULT(fldname, false)
 
 /* Read a character-string field */
-#define READ_STRING_FIELD(fldname) \
+#define READ_STRING_FIELD_DIRECT(fldname) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
+	Assert(strncmp(token, ":" CppAsString(fldname), length) == 0); \
 	token = pg_strtok(&length);		/* get field value */ \
 	local_node->fldname = nullable_string(token, length)
+/* see WRITE_STRING_FIELD in outfuncs.c */
+#define READ_STRING_FIELD(fldname) \
+	READ_OPT_SCAFFOLD(fldname, READ_STRING_FIELD_DIRECT(fldname), NULL)
 
 /* Read a parse location field (and possibly throw away the value) */
 #ifdef WRITE_READ_PARSE_PLAN_TREES
-#define READ_LOCATION_FIELD(fldname) \
+#define READ_LOCATION_FIELD_DIRECT(fldname) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
+	Assert(strncmp(token, ":" CppAsString(fldname), length) == 0); \
 	token = pg_strtok(&length);		/* get field value */ \
 	local_node->fldname = restore_location_fields ? atoi(token) : -1
 #else
-#define READ_LOCATION_FIELD(fldname) \
+#define READ_LOCATION_FIELD_DIRECT(fldname) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
+	Assert(strncmp(token, ":" CppAsString(fldname), length) == 0); \
 	token = pg_strtok(&length);		/* get field value */ \
 	(void) token;				/* in case not used elsewhere */ \
 	local_node->fldname = -1	/* set field to "unknown" */
 #endif
+/* The default Location field value is -1 ('unknown') */
+#define READ_LOCATION_FIELD(fldname) \
+	READ_OPT_SCAFFOLD(fldname, READ_LOCATION_FIELD_DIRECT(fldname), -1)
 
 /* Read a Node field */
-#define READ_NODE_FIELD(fldname) \
+#define READ_NODE_FIELD_DIRECT(fldname) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
+	Assert(strncmp(token, ":" CppAsString(fldname), length) == 0); \
 	(void) token;				/* in case not used elsewhere */ \
 	local_node->fldname = nodeRead(NULL, 0)
+#define READ_NODE_FIELD_DEFAULT(fldname, default_value) \
+	READ_OPT_SCAFFOLD(fldname, READ_NODE_FIELD_DIRECT(fldname), default_value)
+#define READ_NODE_FIELD(fldname) \
+	READ_NODE_FIELD_DEFAULT(fldname, NULL)
 
 /* Read a bitmapset field */
-#define READ_BITMAPSET_FIELD(fldname) \
+#define READ_BITMAPSET_FIELD_DIRECT(fldname) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
+	Assert(strncmp(token, ":" CppAsString(fldname), length) == 0); \
 	(void) token;				/* in case not used elsewhere */ \
 	local_node->fldname = _readBitmapset()
+#define READ_BITMAPSET_FIELD_DEFAULT(fldname, default_value) \
+	READ_OPT_SCAFFOLD(fldname, READ_BITMAPSET_FIELD_DIRECT(fldname), default_value)
+#define READ_BITMAPSET_FIELD(fldname) \
+	READ_BITMAPSET_FIELD_DEFAULT(fldname, NULL)
 
 /* Read an attribute number array */
-#define READ_ATTRNUMBER_ARRAY(fldname, len) \
+#define READ_ATTRNUMBER_ARRAY_DIRECT(fldname, len) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
+	Assert(strncmp(token, ":" CppAsString(fldname), length) == 0); \
 	local_node->fldname = readAttrNumberCols(len)
+#define READ_ATTRNUMBER_ARRAY_DEFAULT(fldname, len, default_value) \
+	READ_OPT_SCAFFOLD(fldname, READ_ATTRNUMBER_ARRAY_DIRECT(fldname, len), default_value)
+#define READ_ATTRNUMBER_ARRAY(fldname, len) \
+	READ_ATTRNUMBER_ARRAY_DEFAULT(fldname, len, NULL)
 
 /* Read an oid array */
-#define READ_OID_ARRAY(fldname, len) \
+#define READ_OID_ARRAY_DIRECT(fldname, len) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
+	Assert(strncmp(token, ":" CppAsString(fldname), length) == 0); \
 	local_node->fldname = readOidCols(len)
+#define READ_OID_ARRAY_DEFAULT(fldname, len, default_value) \
+	READ_OPT_SCAFFOLD(fldname, READ_OID_ARRAY_DIRECT(fldname, len), default_value)
+#define READ_OID_ARRAY(fldname, len) \
+	READ_OID_ARRAY_DEFAULT(fldname, len, NULL)
 
 /* Read an int array */
-#define READ_INT_ARRAY(fldname, len) \
+#define READ_INT_ARRAY_DIRECT(fldname, len) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
+	Assert(strncmp(token, ":" CppAsString(fldname), length) == 0); \
 	local_node->fldname = readIntCols(len)
+#define READ_INT_ARRAY_DEFAULT(fldname, len, default_value) \
+	READ_OPT_SCAFFOLD(fldname, READ_INT_ARRAY_DIRECT(fldname, len), default_value)
+#define READ_INT_ARRAY(fldname, len) \
+	READ_INT_ARRAY_DEFAULT(fldname, len, NULL)
 
 /* Read a bool array */
-#define READ_BOOL_ARRAY(fldname, len) \
+#define READ_BOOL_ARRAY_DIRECT(fldname, len) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
+	Assert(strncmp(token, ":" CppAsString(fldname), length) == 0); \
 	local_node->fldname = readBoolCols(len)
+#define READ_BOOL_ARRAY_DEFAULT(fldname, len, default_value) \
+	READ_OPT_SCAFFOLD(fldname, READ_BOOL_ARRAY_DIRECT(fldname, len), default_value)
+#define READ_BOOL_ARRAY(fldname, len) \
+	READ_BOOL_ARRAY_DEFAULT(fldname, len, NULL)
+
+#define NODE_FIELD(fldname) (local_node->fldname)
 
 /* Routine exit */
 #define READ_DONE() \
@@ -203,6 +298,7 @@ static Bitmapset *
 _readBitmapset(void)
 {
 	Bitmapset  *result = NULL;
+	int			prev = 0;
 
 	READ_TEMP_LOCALS();
 
@@ -231,7 +327,19 @@ _readBitmapset(void)
 		val = (int) strtol(token, &endptr, 10);
 		if (endptr != token + length)
 			elog(ERROR, "unrecognized integer: \"%.*s\"", length, token);
-		result = bms_add_member(result, val);
+		if (val > 0 && token[0] == '+')
+		{
+			for (int i = 0; i < val; i++)
+			{
+				prev++;
+				result = bms_add_member(result, prev);
+			}
+		}
+		else
+		{
+			prev += val;
+			result = bms_add_member(result, prev);
+		}
 	}
 
 	return result;
@@ -261,18 +369,23 @@ _readConst(void)
 	READ_LOCALS(Const);
 
 	READ_OID_FIELD(consttype);
-	READ_INT_FIELD(consttypmod);
+	READ_INT_FIELD_DEFAULT(consttypmod, -1);
 	READ_OID_FIELD(constcollid);
-	READ_INT_FIELD(constlen);
+	READ_INT_FIELD_DEFAULT(constlen, -1);
 	READ_BOOL_FIELD(constbyval);
 	READ_BOOL_FIELD(constisnull);
 	READ_LOCATION_FIELD(location);
 
-	token = pg_strtok(&length); /* skip :constvalue */
-	if (local_node->constisnull)
-		token = pg_strtok(&length); /* skip "<>" */
-	else
+	if (pg_strtoken_next(":constvalue"))
+	{
+		token = pg_strtok(&length); /* skip :constvalue */
+		Assert(strncmp(token, ":constvalue", sizeof(":constvalue") - 1) == 0);
 		local_node->constvalue = readDatum(local_node->constbyval);
+	}
+	else
+	{
+		/* value was omitted */
+	}
 
 	READ_DONE();
 }
@@ -398,7 +511,7 @@ _readConstraint(void)
 			READ_INT_FIELD(inhcount);
 			READ_BOOL_FIELD(is_no_inherit);
 			READ_BOOL_FIELD(skip_validation);
-			READ_BOOL_FIELD(initially_valid);
+			READ_BOOL_FIELD_DEFAULT(initially_valid, true);
 			break;
 
 		case CONSTR_DEFAULT:
@@ -422,7 +535,7 @@ _readConstraint(void)
 			READ_NODE_FIELD(raw_expr);
 			READ_STRING_FIELD(cooked_expr);
 			READ_BOOL_FIELD(skip_validation);
-			READ_BOOL_FIELD(initially_valid);
+			READ_BOOL_FIELD_DEFAULT(initially_valid, true);
 			break;
 
 		case CONSTR_PRIMARY:
@@ -437,7 +550,7 @@ _readConstraint(void)
 			break;
 
 		case CONSTR_UNIQUE:
-			READ_BOOL_FIELD(nulls_not_distinct);
+			READ_BOOL_FIELD_DEFAULT(nulls_not_distinct, true);
 			READ_NODE_FIELD(keys);
 			READ_BOOL_FIELD(without_overlaps);
 			READ_NODE_FIELD(including);
@@ -470,7 +583,7 @@ _readConstraint(void)
 			READ_NODE_FIELD(old_conpfeqop);
 			READ_OID_FIELD(old_pktable_oid);
 			READ_BOOL_FIELD(skip_validation);
-			READ_BOOL_FIELD(initially_valid);
+			READ_BOOL_FIELD_DEFAULT(initially_valid, true);
 			break;
 
 		case CONSTR_ATTR_DEFERRABLE:
@@ -502,10 +615,10 @@ _readRangeTblEntry(void)
 	{
 		case RTE_RELATION:
 			READ_OID_FIELD(relid);
-			READ_CHAR_FIELD(relkind);
-			READ_INT_FIELD(rellockmode);
+			READ_CHAR_FIELD_DEFAULT(relkind, 'r');
+			READ_INT_FIELD_DEFAULT(rellockmode, 1);
 			READ_NODE_FIELD(tablesample);
-			READ_UINT_FIELD(perminfoindex);
+			READ_UINT_FIELD_DEFAULT(perminfoindex, 1);
 			break;
 		case RTE_SUBQUERY:
 			READ_NODE_FIELD(subquery);
@@ -514,7 +627,7 @@ _readRangeTblEntry(void)
 			READ_OID_FIELD(relid);
 			READ_CHAR_FIELD(relkind);
 			READ_INT_FIELD(rellockmode);
-			READ_UINT_FIELD(perminfoindex);
+			READ_UINT_FIELD_DEFAULT(perminfoindex, 1);
 			break;
 		case RTE_JOIN:
 			READ_ENUM_FIELD(jointype, JoinType);
@@ -573,8 +686,8 @@ _readRangeTblEntry(void)
 	}
 
 	READ_BOOL_FIELD(lateral);
-	READ_BOOL_FIELD(inh);
-	READ_BOOL_FIELD(inFromCl);
+	READ_BOOL_FIELD_DEFAULT(inh, true); /* safe assumption */
+	READ_BOOL_FIELD_DEFAULT(inFromCl, true); /* safe assumption */
 	READ_NODE_FIELD(securityQuals);
 
 	READ_DONE();
@@ -759,9 +872,14 @@ readDatum(bool typbyval)
 		s = (char *) (&res);
 		for (i = 0; i < (Size) sizeof(Datum); i++)
 		{
+			if (pg_strtoken_next("]"))
+				break;
+
 			token = pg_strtok(&tokenLength);
 			s[i] = (char) atoi(token);
 		}
+		for (; i < (Size) sizeof(Datum); i++)
+			s[i] = 0;
 	}
 	else if (length <= 0)
 		res = (Datum) NULL;
@@ -770,9 +888,17 @@ readDatum(bool typbyval)
 		s = (char *) palloc(length);
 		for (i = 0; i < length; i++)
 		{
+			if (pg_strtoken_next("]"))
+				break;
+
 			token = pg_strtok(&tokenLength);
+
 			s[i] = (char) atoi(token);
 		}
+
+		for (; i < length; i++)
+			s[i] = 0;
+
 		res = PointerGetDatum(s);
 	}
 

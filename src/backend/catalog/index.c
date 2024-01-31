@@ -587,6 +587,7 @@ UpdateIndexRelation(Oid indexoid,
 	{
 		char	   *exprsString;
 
+		reset_querytext_references((Node *) indexInfo->ii_Expressions, NULL);
 		exprsString = nodeToString(indexInfo->ii_Expressions);
 		exprsDatum = CStringGetTextDatum(exprsString);
 		pfree(exprsString);
@@ -602,6 +603,7 @@ UpdateIndexRelation(Oid indexoid,
 	{
 		char	   *predString;
 
+		reset_querytext_references((Node *) indexInfo->ii_Predicate, NULL);
 		predString = nodeToString(make_ands_explicit(indexInfo->ii_Predicate));
 		predDatum = CStringGetTextDatum(predString);
 		pfree(predString);

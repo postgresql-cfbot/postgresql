@@ -82,7 +82,7 @@ typedef struct RangeVar
 	char	   *relname;
 
 	/* expand rel by inheritance? recursively act on children? */
-	bool		inh;
+	bool		inh pg_node_attr(default(true));
 
 	/* see RELPERSISTENCE_* in pg_class.h */
 	char		relpersistence;
@@ -126,7 +126,7 @@ typedef struct TableFunc
 	/* nullability flag for each output column */
 	Bitmapset  *notnulls pg_node_attr(query_jumble_ignore);
 	/* counts from 0; -1 if none specified */
-	int			ordinalitycol pg_node_attr(query_jumble_ignore);
+	int			ordinalitycol pg_node_attr(query_jumble_ignore, default(-1));
 	/* token location, or -1 if unknown */
 	int			location;
 } TableFunc;
@@ -237,18 +237,20 @@ typedef struct Var
 	/*
 	 * index of this var's relation in the range table, or
 	 * INNER_VAR/OUTER_VAR/etc
+	 *
+	 * As we start at 1, using that as a default reduces our serialized size.
 	 */
-	int			varno;
+	int			varno pg_node_attr(default(1));
 
 	/*
 	 * attribute number of this var, or zero for all attrs ("whole-row Var")
 	 */
-	AttrNumber	varattno;
+	AttrNumber	varattno pg_node_attr(default(1));
 
 	/* pg_type OID for the type of this var */
 	Oid			vartype pg_node_attr(query_jumble_ignore);
 	/* pg_attribute typmod value */
-	int32		vartypmod pg_node_attr(query_jumble_ignore);
+	int32		vartypmod pg_node_attr(query_jumble_ignore, default(-1));
 	/* OID of collation, or InvalidOid if none */
 	Oid			varcollid pg_node_attr(query_jumble_ignore);
 
@@ -269,11 +271,13 @@ typedef struct Var
 	 * varnosyn/varattnosyn are ignored for equality, because Vars with
 	 * different syntactic identifiers are semantically the same as long as
 	 * their varno/varattno match.
+	 * As they're generally the same value as varno/varattno, we refer to
+	 * those fields for initial/default values.
 	 */
 	/* syntactic relation index (0 if unknown) */
-	Index		varnosyn pg_node_attr(equal_ignore, query_jumble_ignore);
+	Index		varnosyn pg_node_attr(equal_ignore, query_jumble_ignore, default_ref(varno));
 	/* syntactic attribute number */
-	AttrNumber	varattnosyn pg_node_attr(equal_ignore, query_jumble_ignore);
+	AttrNumber	varattnosyn pg_node_attr(equal_ignore, query_jumble_ignore, default_ref(varattno));
 
 	/* token location, or -1 if unknown */
 	int			location;
@@ -297,11 +301,11 @@ typedef struct Const
 	/* pg_type OID of the constant's datatype */
 	Oid			consttype;
 	/* typmod value, if any */
-	int32		consttypmod pg_node_attr(query_jumble_ignore);
+	int32		consttypmod pg_node_attr(query_jumble_ignore, default(-1));
 	/* OID of collation, or InvalidOid if none */
 	Oid			constcollid pg_node_attr(query_jumble_ignore);
 	/* typlen of the constant's datatype */
-	int			constlen pg_node_attr(query_jumble_ignore);
+	int			constlen pg_node_attr(query_jumble_ignore, default(-1));
 	/* the constant's value */
 	Datum		constvalue pg_node_attr(query_jumble_ignore);
 	/* whether the constant is null (if true, constvalue is undefined) */
@@ -360,10 +364,11 @@ typedef struct Param
 {
 	Expr		xpr;
 	ParamKind	paramkind;		/* kind of parameter. See above */
-	int			paramid;		/* numeric ID for parameter */
+	/* numeric ID for parameter */
+	int			paramid pg_node_attr(default(1));
 	Oid			paramtype;		/* pg_type OID of parameter's datatype */
 	/* typmod value, if known */
-	int32		paramtypmod pg_node_attr(query_jumble_ignore);
+	int32		paramtypmod pg_node_attr(query_jumble_ignore, default(-1));
 	/* OID of collation, or InvalidOid if none */
 	Oid			paramcollid pg_node_attr(query_jumble_ignore);
 	/* token location, or -1 if unknown */
@@ -472,7 +477,7 @@ typedef struct Aggref
 	bool		aggvariadic pg_node_attr(query_jumble_ignore);
 
 	/* aggregate kind (see pg_aggregate.h) */
-	char		aggkind pg_node_attr(query_jumble_ignore);
+	char		aggkind pg_node_attr(query_jumble_ignore, default('n'));
 
 	/* aggregate input already sorted */
 	bool		aggpresorted pg_node_attr(equal_ignore, query_jumble_ignore);
@@ -621,7 +626,7 @@ typedef struct SubscriptingRef
 	/* type of the SubscriptingRef's result */
 	Oid			refrestype pg_node_attr(query_jumble_ignore);
 	/* typmod of the result */
-	int32		reftypmod pg_node_attr(query_jumble_ignore);
+	int32		reftypmod pg_node_attr(query_jumble_ignore, default(-1));
 	/* collation of result, or InvalidOid if none */
 	Oid			refcollid pg_node_attr(query_jumble_ignore);
 	/* expressions that evaluate to upper container indexes */
@@ -756,7 +761,7 @@ typedef struct OpExpr
 	Oid			opfuncid pg_node_attr(equal_ignore_if_zero, query_jumble_ignore);
 
 	/* PG_TYPE OID of result value */
-	Oid			opresulttype pg_node_attr(query_jumble_ignore);
+	Oid			opresulttype pg_node_attr(query_jumble_ignore, default(BOOLOID));
 
 	/* true if operator returns set */
 	bool		opretset pg_node_attr(query_jumble_ignore);
@@ -841,8 +846,8 @@ typedef struct ScalarArrayOpExpr
 	/* PG_PROC OID of negator of opfuncid function or InvalidOid.  See above */
 	Oid			negfuncid pg_node_attr(equal_ignore_if_zero, query_jumble_ignore);
 
-	/* true for ANY, false for ALL */
-	bool		useOr;
+	/* true for ANY, false for ALL - usually users use ANY */
+	bool		useOr pg_node_attr(default(true));
 
 	/* OID of collation that operator should use */
 	Oid			inputcollid pg_node_attr(query_jumble_ignore);
@@ -1065,7 +1070,7 @@ typedef struct FieldSelect
 	/* type of the field (result type of this node) */
 	Oid			resulttype pg_node_attr(query_jumble_ignore);
 	/* output typmod (usually -1) */
-	int32		resulttypmod pg_node_attr(query_jumble_ignore);
+	int32		resulttypmod pg_node_attr(query_jumble_ignore, default(-1));
 	/* OID of collation of the field */
 	Oid			resultcollid pg_node_attr(query_jumble_ignore);
 } FieldSelect;
@@ -1119,11 +1124,11 @@ typedef struct RelabelType
 	Expr	   *arg;			/* input expression */
 	Oid			resulttype;		/* output type of coercion expression */
 	/* output typmod (usually -1) */
-	int32		resulttypmod pg_node_attr(query_jumble_ignore);
+	int32		resulttypmod pg_node_attr(query_jumble_ignore, default(-1));
 	/* OID of collation, or InvalidOid if none */
 	Oid			resultcollid pg_node_attr(query_jumble_ignore);
 	/* how to display this node */
-	CoercionForm relabelformat pg_node_attr(query_jumble_ignore);
+	CoercionForm relabelformat pg_node_attr(query_jumble_ignore, default(COERCE_EXPLICIT_CAST));
 	int			location;		/* token location, or -1 if unknown */
 } RelabelType;
 
@@ -1144,8 +1149,8 @@ typedef struct CoerceViaIO
 	/* output typmod is not stored, but is presumed -1 */
 	/* OID of collation, or InvalidOid if none */
 	Oid			resultcollid pg_node_attr(query_jumble_ignore);
-	/* how to display this node */
-	CoercionForm coerceformat pg_node_attr(query_jumble_ignore);
+	/* how to display this node, in pg_rewrite this is generally an implicit cast */
+	CoercionForm coerceformat pg_node_attr(query_jumble_ignore, default(COERCE_IMPLICIT_CAST));
 	int			location;		/* token location, or -1 if unknown */
 } CoerceViaIO;
 
@@ -1169,11 +1174,12 @@ typedef struct ArrayCoerceExpr
 	Expr	   *elemexpr;		/* expression representing per-element work */
 	Oid			resulttype;		/* output type of coercion (an array type) */
 	/* output typmod (also element typmod) */
-	int32		resulttypmod pg_node_attr(query_jumble_ignore);
+	int32		resulttypmod pg_node_attr(query_jumble_ignore, default(-1));
 	/* OID of collation, or InvalidOid if none */
 	Oid			resultcollid pg_node_attr(query_jumble_ignore);
-	/* how to display this node */
-	CoercionForm coerceformat pg_node_attr(query_jumble_ignore);
+	/* How to display this node. Arrays don't often have implicit casts, so
+	 * we default to explicit casts */
+	CoercionForm coerceformat pg_node_attr(query_jumble_ignore, default(COERCE_EXPLICIT_CAST));
 	int			location;		/* token location, or -1 if unknown */
 } ArrayCoerceExpr;
 
@@ -1289,7 +1295,7 @@ typedef struct CaseTestExpr
 	Expr		xpr;
 	Oid			typeId;			/* type for substituted value */
 	/* typemod for substituted value */
-	int32		typeMod pg_node_attr(query_jumble_ignore);
+	int32		typeMod pg_node_attr(query_jumble_ignore, default(-1));
 	/* collation for the substituted value */
 	Oid			collation pg_node_attr(query_jumble_ignore);
 } CaseTestExpr;
@@ -1495,7 +1501,7 @@ typedef struct SQLValueFunction
 	 * include this Oid in the query jumbling.
 	 */
 	Oid			type pg_node_attr(query_jumble_ignore);
-	int32		typmod;
+	int32		typmod pg_node_attr(default(-1));
 	int			location;		/* token location, or -1 if unknown */
 } SQLValueFunction;
 
@@ -1547,7 +1553,7 @@ typedef struct XmlExpr
 	bool		indent;
 	/* target type/typmod for XMLSERIALIZE */
 	Oid			type pg_node_attr(query_jumble_ignore);
-	int32		typmod pg_node_attr(query_jumble_ignore);
+	int32		typmod pg_node_attr(query_jumble_ignore, default(-1));
 	/* token location, or -1 if unknown */
 	int			location;
 } XmlExpr;
@@ -1597,7 +1603,7 @@ typedef struct JsonReturning
 	NodeTag		type;
 	JsonFormat *format;			/* output JSON format */
 	Oid			typid;			/* target type Oid */
-	int32		typmod;			/* target type modifier */
+	int32		typmod pg_node_attr(default(-1)); /* target type modifier */
 } JsonReturning;
 
 /*
@@ -1698,7 +1704,8 @@ typedef struct NullTest
 {
 	Expr		xpr;
 	Expr	   *arg;			/* input expression */
-	NullTestType nulltesttype;	/* IS NULL, IS NOT NULL */
+	/* IS NULL, IS NOT NULL */
+	NullTestType nulltesttype pg_node_attr(default(IS_NOT_NULL));
 	/* T to perform field-by-field null checks */
 	bool		argisrow pg_node_attr(query_jumble_ignore);
 	int			location;		/* token location, or -1 if unknown */
@@ -1760,11 +1767,13 @@ typedef struct CoerceToDomain
 	Expr	   *arg;			/* input expression */
 	Oid			resulttype;		/* domain type ID (result type) */
 	/* output typmod (currently always -1) */
-	int32		resulttypmod pg_node_attr(query_jumble_ignore);
+	int32		resulttypmod pg_node_attr(query_jumble_ignore, default(-1));
 	/* OID of collation, or InvalidOid if none */
 	Oid			resultcollid pg_node_attr(query_jumble_ignore);
-	/* how to display this node */
-	CoercionForm coercionformat pg_node_attr(query_jumble_ignore);
+	/* how to display this node.
+	 * This node usually only remains after explicit cast, so that's chosen as
+	 * the default. */
+	CoercionForm coercionformat pg_node_attr(query_jumble_ignore, default(COERCE_EXPLICIT_CAST));
 	int			location;		/* token location, or -1 if unknown */
 } CoerceToDomain;
 
@@ -1783,7 +1792,7 @@ typedef struct CoerceToDomainValue
 	/* type for substituted value */
 	Oid			typeId;
 	/* typemod for substituted value */
-	int32		typeMod pg_node_attr(query_jumble_ignore);
+	int32		typeMod pg_node_attr(query_jumble_ignore, default(-1));
 	/* collation for the substituted value */
 	Oid			collation pg_node_attr(query_jumble_ignore);
 	/* token location, or -1 if unknown */
@@ -1803,7 +1812,7 @@ typedef struct SetToDefault
 	/* type for substituted value */
 	Oid			typeId;
 	/* typemod for substituted value */
-	int32		typeMod pg_node_attr(query_jumble_ignore);
+	int32		typeMod pg_node_attr(query_jumble_ignore, default(-1));
 	/* collation for the substituted value */
 	Oid			collation pg_node_attr(query_jumble_ignore);
 	/* token location, or -1 if unknown */
@@ -1920,8 +1929,9 @@ typedef struct TargetEntry
 	Expr		xpr;
 	/* expression to evaluate */
 	Expr	   *expr;
-	/* attribute number (see notes above) */
-	AttrNumber	resno;
+	/* attribute number (see notes above).
+	 * Counting starts at 1, so that's the default for serialization, too. */
+	AttrNumber	resno pg_node_attr(default(1));
 	/* name of the column (could be NULL) */
 	char	   *resname pg_node_attr(query_jumble_ignore);
 	/* nonzero if referenced by a sort/group clause */
@@ -1975,7 +1985,7 @@ typedef struct TargetEntry
 typedef struct RangeTblRef
 {
 	NodeTag		type;
-	int			rtindex;
+	int			rtindex pg_node_attr(default(1));
 } RangeTblRef;
 
 /*----------

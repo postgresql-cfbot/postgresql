@@ -30,6 +30,7 @@
 #include "commands/policy.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
+#include "nodes/nodeFuncs.h"
 #include "nodes/pg_list.h"
 #include "parser/parse_clause.h"
 #include "parser/parse_collate.h"
@@ -701,13 +702,19 @@ CreatePolicy(CreatePolicyStmt *stmt)
 
 	/* Add qual if present. */
 	if (qual)
+	{
+		reset_querytext_references(qual, NULL);
 		values[Anum_pg_policy_polqual - 1] = CStringGetTextDatum(nodeToString(qual));
+	}
 	else
 		isnull[Anum_pg_policy_polqual - 1] = true;
 
 	/* Add WITH CHECK qual if present */
 	if (with_check_qual)
+	{
+		reset_querytext_references(with_check_qual, NULL);
 		values[Anum_pg_policy_polwithcheck - 1] = CStringGetTextDatum(nodeToString(with_check_qual));
+	}
 	else
 		isnull[Anum_pg_policy_polwithcheck - 1] = true;
 

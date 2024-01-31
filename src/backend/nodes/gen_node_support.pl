@@ -362,6 +362,12 @@ foreach my $infile (@ARGV)
 						{
 							$manual_nodetag_number{$in_struct} = $1;
 						}
+						elsif ($attr =~ /^default\(([\w\d."'-]+)\)$/)
+						{
+						}
+						elsif ($attr =~ /^default_ref\(([\w\d."'-]+)\)$/)
+						{
+						}
 						else
 						{
 							die
@@ -436,7 +442,7 @@ foreach my $infile (@ARGV)
 			}
 			# normal struct field
 			elsif ($line =~
-				/^\s*(.+)\s*\b(\w+)(\[[\w\s+]+\])?\s*(?:pg_node_attr\(([\w(), ]*)\))?;/
+				/^\s*(.+)\s*\b(\w+)(\[[\w\s+]+\])?\s*(?:pg_node_attr\(([\w\d(), ."'-]*)\))?;/
 			  )
 			{
 				if ($is_node_struct)
@@ -468,6 +474,8 @@ foreach my $infile (@ARGV)
 							if (   $attr !~ /^array_size\(\w+\)$/
 								&& $attr !~ /^copy_as\(\w+\)$/
 								&& $attr !~ /^read_as\(\w+\)$/
+								&& $attr !~ /^default\([\w\d."'-]+\)$/
+								&& $attr !~ /^default_ref\([\w\d."'-]+\)$/
 								&& !elem $attr,
 								qw(copy_as_scalar
 								equal_as_scalar
@@ -494,7 +502,7 @@ foreach my $infile (@ARGV)
 			}
 			# function pointer field
 			elsif ($line =~
-				/^\s*([\w\s*]+)\s*\(\*(\w+)\)\s*\((.*)\)\s*(?:pg_node_attr\(([\w(), ]*)\))?;/
+				/^\s*([\w\s*]+)\s*\(\*(\w+)\)\s*\((.*)\)\s*(?:pg_node_attr\(([\w\d(), ."'-]*)\))?;/
 			  )
 			{
 				if ($is_node_struct)
@@ -969,6 +977,11 @@ _read${n}(void)
 		my $array_size_field;
 		my $read_as_field;
 		my $read_write_ignore = 0;
+		# macro suffix ("_DEFAULT" for manual default overrides) and default
+		# value argument.
+		my $s = "";
+		my $d = "";
+
 		foreach my $a (@a)
 		{
 			if ($a =~ /^array_size\(([\w.]+)\)$/)
@@ -987,6 +1000,19 @@ _read${n}(void)
 			{
 				$read_write_ignore = 1;
 			}
+			elsif ($a =~ /^default\(([\w\d+."'-]+)\)$/)
+			{
+				$d = ", $1";
+			}
+			elsif ($a =~ /^default_ref\(([\w\d+."'-]+)\)$/)
+			{
+				$d = ", NODE_FIELD($1)";
+			}
+		}
+
+		if (!($d eq ""))
+		{
+			$s = "_DEFAULT";
 		}
 
 		if ($read_write_ignore)
@@ -1007,13 +1033,13 @@ _read${n}(void)
 		# select instructions by field type
 		if ($t eq 'bool')
 		{
-			print $off "\tWRITE_BOOL_FIELD($f);\n";
-			print $rff "\tREAD_BOOL_FIELD($f);\n" unless $no_read;
+			print $off "\tWRITE_BOOL_FIELD$s($f$d);\n";
+			print $rff "\tREAD_BOOL_FIELD$s($f$d);\n" unless $no_read;
 		}
 		elsif ($t eq 'int' && $f =~ 'location$')
 		{
-			print $off "\tWRITE_LOCATION_FIELD($f);\n";
-			print $rff "\tREAD_LOCATION_FIELD($f);\n" unless $no_read;
+			print $off "\tWRITE_LOCATION_FIELD$s($f$d);\n";
+			print $rff "\tREAD_LOCATION_FIELD$s($f$d);\n" unless $no_read;
 		}
 		elsif ($t eq 'int'
 			|| $t eq 'int16'
@@ -1021,8 +1047,8 @@ _read${n}(void)
 			|| $t eq 'AttrNumber'
 			|| $t eq 'StrategyNumber')
 		{
-			print $off "\tWRITE_INT_FIELD($f);\n";
-			print $rff "\tREAD_INT_FIELD($f);\n" unless $no_read;
+			print $off "\tWRITE_INT_FIELD$s($f$d);\n";
+			print $rff "\tREAD_INT_FIELD$s($f$d);\n" unless $no_read;
 		}
 		elsif ($t eq 'uint32'
 			|| $t eq 'bits32'
@@ -1030,44 +1056,44 @@ _read${n}(void)
 			|| $t eq 'Index'
 			|| $t eq 'SubTransactionId')
 		{
-			print $off "\tWRITE_UINT_FIELD($f);\n";
-			print $rff "\tREAD_UINT_FIELD($f);\n" unless $no_read;
+			print $off "\tWRITE_UINT_FIELD$s($f$d);\n";
+			print $rff "\tREAD_UINT_FIELD$s($f$d);\n" unless $no_read;
 		}
 		elsif ($t eq 'uint64'
 			|| $t eq 'AclMode')
 		{
-			print $off "\tWRITE_UINT64_FIELD($f);\n";
-			print $rff "\tREAD_UINT64_FIELD($f);\n" unless $no_read;
+			print $off "\tWRITE_UINT64_FIELD$s($f$d);\n";
+			print $rff "\tREAD_UINT64_FIELD$s($f$d);\n" unless $no_read;
 		}
 		elsif ($t eq 'Oid' || $t eq 'RelFileNumber')
 		{
-			print $off "\tWRITE_OID_FIELD($f);\n";
-			print $rff "\tREAD_OID_FIELD($f);\n" unless $no_read;
+			print $off "\tWRITE_OID_FIELD$s($f$d);\n";
+			print $rff "\tREAD_OID_FIELD$s($f$d);\n" unless $no_read;
 		}
 		elsif ($t eq 'long')
 		{
-			print $off "\tWRITE_LONG_FIELD($f);\n";
-			print $rff "\tREAD_LONG_FIELD($f);\n" unless $no_read;
+			print $off "\tWRITE_LONG_FIELD$s($f$d);\n";
+			print $rff "\tREAD_LONG_FIELD$s($f$d);\n" unless $no_read;
 		}
 		elsif ($t eq 'char')
 		{
-			print $off "\tWRITE_CHAR_FIELD($f);\n";
-			print $rff "\tREAD_CHAR_FIELD($f);\n" unless $no_read;
+			print $off "\tWRITE_CHAR_FIELD$s($f$d);\n";
+			print $rff "\tREAD_CHAR_FIELD$s($f$d);\n" unless $no_read;
 		}
 		elsif ($t eq 'double')
 		{
-			print $off "\tWRITE_FLOAT_FIELD($f);\n";
-			print $rff "\tREAD_FLOAT_FIELD($f);\n" unless $no_read;
+			print $off "\tWRITE_FLOAT_FIELD$s($f$d);\n";
+			print $rff "\tREAD_FLOAT_FIELD$s($f$d);\n" unless $no_read;
 		}
 		elsif ($t eq 'Cardinality')
 		{
-			print $off "\tWRITE_FLOAT_FIELD($f);\n";
-			print $rff "\tREAD_FLOAT_FIELD($f);\n" unless $no_read;
+			print $off "\tWRITE_FLOAT_FIELD$s($f$d);\n";
+			print $rff "\tREAD_FLOAT_FIELD$s($f$d);\n" unless $no_read;
 		}
 		elsif ($t eq 'Cost')
 		{
-			print $off "\tWRITE_FLOAT_FIELD($f);\n";
-			print $rff "\tREAD_FLOAT_FIELD($f);\n" unless $no_read;
+			print $off "\tWRITE_FLOAT_FIELD$s($f$d);\n";
+			print $rff "\tREAD_FLOAT_FIELD$s($f$d);\n" unless $no_read;
 		}
 		elsif ($t eq 'QualCost')
 		{
@@ -1078,13 +1104,13 @@ _read${n}(void)
 		}
 		elsif ($t eq 'Selectivity')
 		{
-			print $off "\tWRITE_FLOAT_FIELD($f);\n";
-			print $rff "\tREAD_FLOAT_FIELD($f);\n" unless $no_read;
+			print $off "\tWRITE_FLOAT_FIELD$s($f$d);\n";
+			print $rff "\tREAD_FLOAT_FIELD$s($f$d);\n" unless $no_read;
 		}
 		elsif ($t eq 'char*')
 		{
-			print $off "\tWRITE_STRING_FIELD($f);\n";
-			print $rff "\tREAD_STRING_FIELD($f);\n" unless $no_read;
+			print $off "\tWRITE_STRING_FIELD($f$d);\n";
+			print $rff "\tREAD_STRING_FIELD($f$d);\n" unless $no_read;
 		}
 		elsif ($t eq 'Bitmapset*' || $t eq 'Relids')
 		{
@@ -1093,8 +1119,8 @@ _read${n}(void)
 		}
 		elsif (elem $t, @enum_types)
 		{
-			print $off "\tWRITE_ENUM_FIELD($f, $t);\n";
-			print $rff "\tREAD_ENUM_FIELD($f, $t);\n" unless $no_read;
+			print $off "\tWRITE_ENUM_FIELD$s($f, $t$d);\n";
+			print $rff "\tREAD_ENUM_FIELD$s($f, $t$d);\n" unless $no_read;
 		}
 		# arrays of scalar types
 		elsif ($t =~ /^(\w+)(\*|\[\w+\])$/ and elem $1, @scalar_types)

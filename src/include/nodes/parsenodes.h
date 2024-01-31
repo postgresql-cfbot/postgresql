@@ -117,7 +117,8 @@ typedef struct Query
 {
 	NodeTag		type;
 
-	CmdType		commandType;	/* select|insert|update|delete|merge|utility */
+	/* select|insert|update|delete|merge|utility */
+	CmdType		commandType pg_node_attr(default(CMD_SELECT));
 
 	/* where did I come from? */
 	QuerySource querySource pg_node_attr(query_jumble_ignore);
@@ -130,7 +131,7 @@ typedef struct Query
 	uint64		queryId pg_node_attr(equal_ignore, query_jumble_ignore, read_write_ignore, read_as(0));
 
 	/* do I set the command result tag? */
-	bool		canSetTag pg_node_attr(query_jumble_ignore);
+	bool		canSetTag pg_node_attr(query_jumble_ignore, default(true));
 
 	Node	   *utilityStmt;	/* non-null if commandType == CMD_UTILITY */
 
@@ -260,7 +261,7 @@ typedef struct TypeName
 	bool		setof;			/* is a set? */
 	bool		pct_type;		/* %TYPE specified? */
 	List	   *typmods;		/* type modifier expression(s) */
-	int32		typemod;		/* prespecified type modifier */
+	int32		typemod pg_node_attr(default(-1)); /* prespecified type modifier */
 	List	   *arrayBounds;	/* array bounds */
 	int			location;		/* token location, or -1 if unknown */
 } TypeName;
@@ -555,7 +556,8 @@ typedef struct WindowDef
 	char	   *refname;		/* referenced window name, if any */
 	List	   *partitionClause;	/* PARTITION BY expression list */
 	List	   *orderClause;	/* ORDER BY (list of SortBy) */
-	int			frameOptions;	/* frame_clause options, see below */
+	/* frame_clause options, see below */
+	int			frameOptions pg_node_attr(default(FRAMEOPTION_DEFAULTS));
 	Node	   *startOffset;	/* expression for starting bound, if any */
 	Node	   *endOffset;		/* expression for ending bound, if any */
 	int			location;		/* parse location, or -1 if none/unknown */
@@ -1234,8 +1236,10 @@ typedef struct RTEPermissionInfo
 	NodeTag		type;
 
 	Oid			relid;			/* relation OID */
-	bool		inh;			/* separately check inheritance children? */
-	AclMode		requiredPerms;	/* bitmask of required access permissions */
+	/* separately check inheritance children? */
+	bool		inh pg_node_attr(default(true));
+	/* bitmask of required access permissions, in views usually ACL_SELECT */
+	AclMode		requiredPerms pg_node_attr(default(ACL_SELECT));
 	Oid			checkAsUser;	/* if valid, check access as this role */
 	Bitmapset  *selectedCols;	/* columns needing SELECT permission */
 	Bitmapset  *insertedCols;	/* columns needing INSERT permission */
@@ -1386,8 +1390,8 @@ typedef struct SortGroupClause
 	Oid			eqop;			/* the equality operator ('=' op) */
 	Oid			sortop;			/* the ordering operator ('<' op), or 0 */
 	bool		nulls_first;	/* do NULLs come before normal values? */
-	/* can eqop be implemented by hashing? */
-	bool		hashable pg_node_attr(query_jumble_ignore);
+	/* can eqop be implemented by hashing? (often true for builtin operators) */
+	bool		hashable pg_node_attr(query_jumble_ignore, default(true));
 } SortGroupClause;
 
 /*
@@ -1489,7 +1493,8 @@ typedef struct WindowClause
 	List	   *partitionClause;	/* PARTITION BY list */
 	/* ORDER BY list */
 	List	   *orderClause;
-	int			frameOptions;	/* frame_clause options, see WindowDef */
+	/* frame_clause options, see WindowDef */
+	int			frameOptions pg_node_attr(default(FRAMEOPTION_DEFAULTS));
 	Node	   *startOffset;	/* expression for starting bound, if any */
 	Node	   *endOffset;		/* expression for ending bound, if any */
 	/* qual to help short-circuit execution */
@@ -1608,7 +1613,7 @@ typedef struct CTECycleClause
 	int			location;
 	/* These fields are set during parse analysis: */
 	Oid			cycle_mark_type;	/* common type of _value and _default */
-	int			cycle_mark_typmod;
+	int			cycle_mark_typmod pg_node_attr(default(-1));
 	Oid			cycle_mark_collation;
 	Oid			cycle_mark_neop;	/* <> operator for type */
 } CTECycleClause;
@@ -2023,7 +2028,7 @@ typedef struct SelectStmt
 typedef struct SetOperationStmt
 {
 	NodeTag		type;
-	SetOperation op;			/* type of set op */
+	SetOperation op pg_node_attr(default(1)); /* type of set op */
 	bool		all;			/* ALL specified? */
 	Node	   *larg;			/* left child */
 	Node	   *rarg;			/* right child */

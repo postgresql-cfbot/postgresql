@@ -41,94 +41,159 @@ static void outDouble(StringInfo str, double d);
 	appendStringInfoString(str, nodelabel)
 
 /* Write an integer field (anything written as ":fldname %d") */
-#define WRITE_INT_FIELD(fldname) \
+#define WRITE_INT_FIELD_DIRECT(fldname) \
 	appendStringInfo(str, " :" CppAsString(fldname) " %d", node->fldname)
+#define WRITE_INT_FIELD_DEFAULT(fldname, default) \
+	((node->fldname == default) ? (0) : WRITE_INT_FIELD_DIRECT(fldname))
+#define WRITE_INT_FIELD(fldname) \
+	WRITE_INT_FIELD_DEFAULT(fldname, 0)
 
 /* Write an unsigned integer field (anything written as ":fldname %u") */
-#define WRITE_UINT_FIELD(fldname) \
+#define WRITE_UINT_FIELD_DIRECT(fldname) \
 	appendStringInfo(str, " :" CppAsString(fldname) " %u", node->fldname)
+#define WRITE_UINT_FIELD_DEFAULT(fldname, default) \
+	((node->fldname == default) ? (0) : WRITE_UINT_FIELD_DIRECT(fldname))
+#define WRITE_UINT_FIELD(fldname) \
+	WRITE_UINT_FIELD_DEFAULT(fldname, 0)
 
 /* Write an unsigned integer field (anything written with UINT64_FORMAT) */
-#define WRITE_UINT64_FIELD(fldname) \
+#define WRITE_UINT64_FIELD_DIRECT(fldname) \
 	appendStringInfo(str, " :" CppAsString(fldname) " " UINT64_FORMAT, \
 					 node->fldname)
+#define WRITE_UINT64_FIELD_DEFAULT(fldname, default) \
+	((node->fldname == default) ? (0) : WRITE_UINT64_FIELD_DIRECT(fldname))
+#define WRITE_UINT64_FIELD(fldname) \
+	WRITE_UINT64_FIELD_DEFAULT(fldname, 0)
 
 /* Write an OID field (don't hard-wire assumption that OID is same as uint) */
-#define WRITE_OID_FIELD(fldname) \
+#define WRITE_OID_FIELD_DIRECT(fldname) \
 	appendStringInfo(str, " :" CppAsString(fldname) " %u", node->fldname)
+#define WRITE_OID_FIELD_DEFAULT(fldname, default) \
+	((node->fldname == default) ? (0) : WRITE_OID_FIELD_DIRECT(fldname))
+#define WRITE_OID_FIELD(fldname) \
+	WRITE_OID_FIELD_DEFAULT(fldname, 0)
 
 /* Write a long-integer field */
-#define WRITE_LONG_FIELD(fldname) \
+#define WRITE_LONG_FIELD_DIRECT(fldname) \
 	appendStringInfo(str, " :" CppAsString(fldname) " %ld", node->fldname)
+#define WRITE_LONG_FIELD_DEFAULT(fldname, default) \
+	((node->fldname == default) ? (0) : WRITE_LONG_FIELD_DIRECT(fldname))
+#define WRITE_LONG_FIELD(fldname) \
+	WRITE_LONG_FIELD_DEFAULT(fldname, 0)
+
 
 /* Write a char field (ie, one ascii character) */
-#define WRITE_CHAR_FIELD(fldname) \
+#define WRITE_CHAR_FIELD_DIRECT(fldname) \
 	(appendStringInfo(str, " :" CppAsString(fldname) " "), \
 	 outChar(str, node->fldname))
+#define WRITE_CHAR_FIELD_DEFAULT(fldname, default) \
+	((node->fldname == default) ? (0) : WRITE_CHAR_FIELD_DIRECT(fldname))
+#define WRITE_CHAR_FIELD(fldname) \
+	WRITE_CHAR_FIELD_DEFAULT(fldname, '\0')
 
 /* Write an enumerated-type field as an integer code */
-#define WRITE_ENUM_FIELD(fldname, enumtype) \
+#define WRITE_ENUM_FIELD_DIRECT(fldname, enumtype) \
 	appendStringInfo(str, " :" CppAsString(fldname) " %d", \
 					 (int) node->fldname)
+#define WRITE_ENUM_FIELD_DEFAULT(fldname, enumtype, default) \
+	((node->fldname == default) ? (0) : WRITE_ENUM_FIELD_DIRECT(fldname, enumtype))
+#define WRITE_ENUM_FIELD(fldname, enumtype) \
+	WRITE_ENUM_FIELD_DEFAULT(fldname, enumtype, 0)
 
 /* Write a float field (actually, they're double) */
-#define WRITE_FLOAT_FIELD(fldname) \
+#define WRITE_FLOAT_FIELD_DIRECT(fldname) \
 	(appendStringInfo(str, " :" CppAsString(fldname) " "), \
 	 outDouble(str, node->fldname))
+#define WRITE_FLOAT_FIELD_DEFAULT(fldname, default) \
+	((node->fldname == default) ? (0) : WRITE_FLOAT_FIELD_DIRECT(fldname))
+#define WRITE_FLOAT_FIELD(fldname) \
+	WRITE_FLOAT_FIELD_DEFAULT(fldname, 0.0)
 
 /* Write a boolean field */
-#define WRITE_BOOL_FIELD(fldname) \
+#define WRITE_BOOL_FIELD_DIRECT(fldname) \
 	appendStringInfo(str, " :" CppAsString(fldname) " %s", \
 					 booltostr(node->fldname))
+#define WRITE_BOOL_FIELD_DEFAULT(fldname, default) \
+	((node->fldname == default) ? (0) : WRITE_BOOL_FIELD_DIRECT(fldname))
+#define WRITE_BOOL_FIELD(fldname) \
+	WRITE_BOOL_FIELD_DEFAULT(fldname, false)
+
+/*
+ * Non-null defaults of by-ref types are exceedingly rare (if not generally
+ * nonexistent), so we don't (yet) have a specialized macro for non-NULL
+ * defaults omission.
+ */
 
 /* Write a character-string (possibly NULL) field */
-#define WRITE_STRING_FIELD(fldname) \
+#define WRITE_STRING_FIELD_DIRECT(fldname) \
 	(appendStringInfoString(str, " :" CppAsString(fldname) " "), \
 	 outToken(str, node->fldname))
+#define WRITE_STRING_FIELD(fldname) \
+	((node->fldname == NULL) ? (0) : WRITE_STRING_FIELD_DIRECT(fldname))
 
 /* Write a parse location field (actually same as INT case) */
-#define WRITE_LOCATION_FIELD(fldname) \
+#define WRITE_LOCATION_FIELD_DIRECT(fldname) \
 	appendStringInfo(str, " :" CppAsString(fldname) " %d", node->fldname)
+#define WRITE_LOCATION_FIELD(fldname) \
+	(node->fldname == -1 ? (0) : WRITE_LOCATION_FIELD_DIRECT(fldname))
 
 /* Write a Node field */
-#define WRITE_NODE_FIELD(fldname) \
+#define WRITE_NODE_FIELD_DIRECT(fldname) \
 	(appendStringInfoString(str, " :" CppAsString(fldname) " "), \
 	 outNode(str, node->fldname))
+#define WRITE_NODE_FIELD(fldname) \
+	(node->fldname == NULL ? (0) : WRITE_NODE_FIELD_DIRECT(fldname))
 
 /* Write a bitmapset field */
-#define WRITE_BITMAPSET_FIELD(fldname) \
+#define WRITE_BITMAPSET_FIELD_DIRECT(fldname) \
 	(appendStringInfoString(str, " :" CppAsString(fldname) " "), \
 	 outBitmapset(str, node->fldname))
+#define WRITE_BITMAPSET_FIELD(fldname) \
+	(node->fldname == NULL ? (0) : WRITE_BITMAPSET_FIELD_DIRECT(fldname))
 
 /* Write a variable-length array (not a List) of Node pointers */
-#define WRITE_NODE_ARRAY(fldname, len) \
+#define WRITE_NODE_ARRAY_DIRECT(fldname, len) \
 	(appendStringInfoString(str, " :" CppAsString(fldname) " "), \
 	 writeNodeArray(str, (const Node * const *) node->fldname, len))
+#define WRITE_NODE_ARRAY(fldname, len) \
+	(node->fldname == NULL ? (0) : WRITE_NODE_ARRAY_DIRECT(fldname, len))
 
 /* Write a variable-length array of AttrNumber */
-#define WRITE_ATTRNUMBER_ARRAY(fldname, len) \
+#define WRITE_ATTRNUMBER_ARRAY_DIRECT(fldname, len) \
 	(appendStringInfoString(str, " :" CppAsString(fldname) " "), \
 	 writeAttrNumberCols(str, node->fldname, len))
+#define WRITE_ATTRNUMBER_ARRAY(fldname, len) \
+	(node->fldname == NULL ? (0) : WRITE_ATTRNUMBER_ARRAY_DIRECT(fldname, len))
 
 /* Write a variable-length array of Oid */
-#define WRITE_OID_ARRAY(fldname, len) \
+#define WRITE_OID_ARRAY_DIRECT(fldname, len) \
 	(appendStringInfoString(str, " :" CppAsString(fldname) " "), \
 	 writeOidCols(str, node->fldname, len))
+#define WRITE_OID_ARRAY(fldname, len) \
+	(node->fldname == NULL ? (0) : WRITE_OID_ARRAY_DIRECT(fldname, len))
 
 /* Write a variable-length array of Index */
-#define WRITE_INDEX_ARRAY(fldname, len) \
+#define WRITE_INDEX_ARRAY_DIRECT(fldname, len) \
 	(appendStringInfoString(str, " :" CppAsString(fldname) " "), \
 	 writeIndexCols(str, node->fldname, len))
+#define WRITE_INDEX_ARRAY(fldname, len) \
+	(node->fldname == NULL ? (0) : WRITE_INDEX_ARRAY_DIRECT(fldname, len))
 
 /* Write a variable-length array of int */
-#define WRITE_INT_ARRAY(fldname, len) \
+#define WRITE_INT_ARRAY_DIRECT(fldname, len) \
 	(appendStringInfoString(str, " :" CppAsString(fldname) " "), \
 	 writeIntCols(str, node->fldname, len))
+#define WRITE_INT_ARRAY(fldname, len) \
+	(node->fldname == NULL ? (0) : WRITE_INT_ARRAY_DIRECT(fldname, len))
 
 /* Write a variable-length array of bool */
-#define WRITE_BOOL_ARRAY(fldname, len) \
+#define WRITE_BOOL_ARRAY_DIRECT(fldname, len) \
 	(appendStringInfoString(str, " :" CppAsString(fldname) " "), \
 	 writeBoolCols(str, node->fldname, len))
+#define WRITE_BOOL_ARRAY(fldname, len) \
+	(node->fldname == NULL ? (0) : WRITE_BOOL_ARRAY_DIRECT(fldname, len))
+
+#define NODE_FIELD(fldname) (node->fldname)
 
 #define booltostr(x)  ((x) ? "true" : "false")
 
@@ -272,18 +337,49 @@ static void
 _outList(StringInfo str, const List *node)
 {
 	const ListCell *lc;
+	union LCSurrogate {
+		int32 i;
+		Oid o;
+		TransactionId x;
+	}				previous = { .i = 0};
+	int				run = 0;
+	int				run_delta;
+	const char	   *fmt;
 
 	appendStringInfoChar(str, '(');
 
 	if (IsA(node, IntList))
+	{
 		appendStringInfoChar(str, 'i');
+		fmt = " %d";
+		run_delta = 1;
+	}
 	else if (IsA(node, OidList))
+	{
 		appendStringInfoChar(str, 'o');
+		fmt = " %u";
+		run_delta = 0;
+	}
 	else if (IsA(node, XidList))
+	{
 		appendStringInfoChar(str, 'x');
+		fmt = " %u";
+		run_delta = 1;
+	}
+	else if (IsA(node, List))
+	{
+		/* silence the compiler about uninitialized variables */
+		fmt = "";
+		run_delta = 0;
+	}
+	else
+		elog(ERROR, "unrecognized list node type: %d",
+			 (int) node->type);
 
 	foreach(lc, node)
 	{
+		union LCSurrogate val = {.i = 0};
+
 		/*
 		 * For the sake of backward compatibility, we emit a slightly
 		 * different whitespace format for lists of nodes vs. other types of
@@ -294,17 +390,29 @@ _outList(StringInfo str, const List *node)
 			outNode(str, lfirst(lc));
 			if (lnext(node, lc))
 				appendStringInfoChar(str, ' ');
+			continue;
 		}
 		else if (IsA(node, IntList))
-			appendStringInfo(str, " %d", lfirst_int(lc));
+			val.i = lfirst_int(lc);
 		else if (IsA(node, OidList))
-			appendStringInfo(str, " %u", lfirst_oid(lc));
+			val.o = lfirst_oid(lc);
 		else if (IsA(node, XidList))
-			appendStringInfo(str, " %u", lfirst_xid(lc));
+			val.x = lfirst_xid(lc);
+
+		if (val.i == previous.i + run_delta)
+			run += 1;
 		else
-			elog(ERROR, "unrecognized list node type: %d",
-				 (int) node->type);
+		{
+			if (run > 0)
+				appendStringInfo(str, " +%d", run);
+			run = 0;
+			appendStringInfo(str, fmt, val.i);
+		}
+		previous = val;
 	}
+
+	if (run > 0)
+		appendStringInfo(str, " +%d", run);
 
 	appendStringInfoChar(str, ')');
 }
@@ -322,12 +430,46 @@ void
 outBitmapset(StringInfo str, const Bitmapset *bms)
 {
 	int			x;
+	int			prev = 0;
+	int			run = 0;
 
 	appendStringInfoChar(str, '(');
 	appendStringInfoChar(str, 'b');
 	x = -1;
 	while ((x = bms_next_member(bms, x)) >= 0)
-		appendStringInfo(str, " %d", x);
+	{
+		int increment = x - prev;
+		if (increment == 1)
+		{
+			run++;
+		}
+		else if (run != 0)
+		{
+			/*
+			 * If the run is only one value, the '-' sign of run notation is
+			 * larger than just the plain differential value, so only
+			 * write out runs longer than 1.
+			 */
+			if (run == 1)
+				appendStringInfo(str, " %d", 1);
+			else
+				appendStringInfo(str, " +%d", run);
+
+			appendStringInfo(str, " %d", increment);
+			run = 0;
+		}
+		else
+		{
+			appendStringInfo(str, " %d", increment);
+		}
+		prev = x;
+	}
+
+	if (run == 1)
+		appendStringInfo(str, " %d", run);
+	else if (run > 1)
+		appendStringInfo(str, " +%d", run);
+
 	appendStringInfoChar(str, ')');
 }
 
@@ -345,9 +487,15 @@ outDatum(StringInfo str, Datum value, int typlen, bool typbyval)
 
 	if (typbyval)
 	{
+		int write_length = sizeof(Datum);
 		s = (char *) (&value);
 		appendStringInfo(str, "%u [ ", (unsigned int) length);
-		for (i = 0; i < (Size) sizeof(Datum); i++)
+
+		/* truncate postfix zeroes */
+		while (write_length != 0 && s[write_length - 1] == 0)
+			write_length -= 1;
+
+		for (i = 0; i < write_length; i++)
 			appendStringInfo(str, "%d ", (int) (s[i]));
 		appendStringInfoChar(str, ']');
 	}
@@ -359,6 +507,11 @@ outDatum(StringInfo str, Datum value, int typlen, bool typbyval)
 		else
 		{
 			appendStringInfo(str, "%u [ ", (unsigned int) length);
+
+			/* truncate postfix zeroes */
+			while (length != 0 && s[length - 1] == 0)
+				length -= 1;
+
 			for (i = 0; i < length; i++)
 				appendStringInfo(str, "%d ", (int) (s[i]));
 			appendStringInfoChar(str, ']');
@@ -381,18 +534,18 @@ _outConst(StringInfo str, const Const *node)
 	WRITE_NODE_TYPE("CONST");
 
 	WRITE_OID_FIELD(consttype);
-	WRITE_INT_FIELD(consttypmod);
+	WRITE_INT_FIELD_DEFAULT(consttypmod, -1);
 	WRITE_OID_FIELD(constcollid);
-	WRITE_INT_FIELD(constlen);
+	WRITE_INT_FIELD_DEFAULT(constlen, -1);
 	WRITE_BOOL_FIELD(constbyval);
 	WRITE_BOOL_FIELD(constisnull);
 	WRITE_LOCATION_FIELD(location);
 
-	appendStringInfoString(str, " :constvalue ");
-	if (node->constisnull)
-		appendStringInfoString(str, "<>");
-	else
+	if (!node->constisnull)
+	{
+		appendStringInfoString(str, " :constvalue ");
 		outDatum(str, node->constvalue, node->constlen, node->constbyval);
+	}
 }
 
 static void
@@ -503,10 +656,10 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 	{
 		case RTE_RELATION:
 			WRITE_OID_FIELD(relid);
-			WRITE_CHAR_FIELD(relkind);
-			WRITE_INT_FIELD(rellockmode);
+			WRITE_CHAR_FIELD_DEFAULT(relkind, 'r'); /* default: 'r'elation */
+			WRITE_INT_FIELD_DEFAULT(rellockmode, 1); /* AccessShareLock */
 			WRITE_NODE_FIELD(tablesample);
-			WRITE_UINT_FIELD(perminfoindex);
+			WRITE_UINT_FIELD_DEFAULT(perminfoindex, 1); /* Index starts at 1 */
 			break;
 		case RTE_SUBQUERY:
 			WRITE_NODE_FIELD(subquery);
@@ -515,7 +668,7 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 			WRITE_OID_FIELD(relid);
 			WRITE_CHAR_FIELD(relkind);
 			WRITE_INT_FIELD(rellockmode);
-			WRITE_UINT_FIELD(perminfoindex);
+			WRITE_UINT_FIELD_DEFAULT(perminfoindex, 1); /* Index starts at 1 */
 			break;
 		case RTE_JOIN:
 			WRITE_ENUM_FIELD(jointype, JoinType);
@@ -564,8 +717,8 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 	}
 
 	WRITE_BOOL_FIELD(lateral);
-	WRITE_BOOL_FIELD(inh);
-	WRITE_BOOL_FIELD(inFromCl);
+	WRITE_BOOL_FIELD_DEFAULT(inh, true); /* safe assumption */
+	WRITE_BOOL_FIELD_DEFAULT(inFromCl, true); /* safe assumption */
 	WRITE_NODE_FIELD(securityQuals);
 }
 
@@ -722,7 +875,7 @@ _outConstraint(StringInfo str, const Constraint *node)
 			WRITE_INT_FIELD(inhcount);
 			WRITE_BOOL_FIELD(is_no_inherit);
 			WRITE_BOOL_FIELD(skip_validation);
-			WRITE_BOOL_FIELD(initially_valid);
+			WRITE_BOOL_FIELD_DEFAULT(initially_valid, true);
 			break;
 
 		case CONSTR_DEFAULT:
@@ -750,7 +903,7 @@ _outConstraint(StringInfo str, const Constraint *node)
 			WRITE_NODE_FIELD(raw_expr);
 			WRITE_STRING_FIELD(cooked_expr);
 			WRITE_BOOL_FIELD(skip_validation);
-			WRITE_BOOL_FIELD(initially_valid);
+			WRITE_BOOL_FIELD_DEFAULT(initially_valid, true);
 			break;
 
 		case CONSTR_PRIMARY:
@@ -767,7 +920,7 @@ _outConstraint(StringInfo str, const Constraint *node)
 
 		case CONSTR_UNIQUE:
 			appendStringInfoString(str, "UNIQUE");
-			WRITE_BOOL_FIELD(nulls_not_distinct);
+			WRITE_BOOL_FIELD_DEFAULT(nulls_not_distinct, true);
 			WRITE_NODE_FIELD(keys);
 			WRITE_BOOL_FIELD(without_overlaps);
 			WRITE_NODE_FIELD(including);
@@ -802,7 +955,7 @@ _outConstraint(StringInfo str, const Constraint *node)
 			WRITE_NODE_FIELD(old_conpfeqop);
 			WRITE_OID_FIELD(old_pktable_oid);
 			WRITE_BOOL_FIELD(skip_validation);
-			WRITE_BOOL_FIELD(initially_valid);
+			WRITE_BOOL_FIELD_DEFAULT(initially_valid, true);
 			break;
 
 		case CONSTR_ATTR_DEFERRABLE:

@@ -58,6 +58,7 @@
 #include "executor/executor.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
+#include "nodes/nodeFuncs.h"
 #include "optimizer/optimizer.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_collate.h"
@@ -924,6 +925,7 @@ DefineDomain(CreateDomainStmt *stmt)
 						defaultValue =
 							deparse_expression(defaultExpr,
 											   NIL, false, false);
+						reset_querytext_references(defaultExpr, NULL);
 						defaultValueBin = nodeToString(defaultExpr);
 					}
 				}
@@ -3506,8 +3508,10 @@ domainAddConstraint(Oid domainOid, Oid domainNamespace, Oid baseTypeOid,
 				 errmsg("cannot use table references in domain check constraint")));
 
 	/*
-	 * Convert to string form for storage.
+	 * Remove location references into the original query string (which won't
+	 * be stored) and convert to string form for storage.
 	 */
+	reset_querytext_references(expr, NULL);
 	ccbin = nodeToString(expr);
 
 	/*

@@ -331,7 +331,10 @@ ProcedureCreate(const char *procedureName,
 	else
 		nulls[Anum_pg_proc_proargnames - 1] = true;
 	if (parameterDefaults != NIL)
+	{
+		reset_querytext_references((Node *) parameterDefaults, NULL);
 		values[Anum_pg_proc_proargdefaults - 1] = CStringGetTextDatum(nodeToString(parameterDefaults));
+	}
 	else
 		nulls[Anum_pg_proc_proargdefaults - 1] = true;
 	if (trftypes != PointerGetDatum(NULL))
@@ -344,7 +347,10 @@ ProcedureCreate(const char *procedureName,
 	else
 		nulls[Anum_pg_proc_probin - 1] = true;
 	if (prosqlbody)
+	{
+		reset_querytext_references(prosqlbody, NULL);
 		values[Anum_pg_proc_prosqlbody - 1] = CStringGetTextDatum(nodeToString(prosqlbody));
+	}
 	else
 		nulls[Anum_pg_proc_prosqlbody - 1] = true;
 	if (proconfig != PointerGetDatum(NULL))

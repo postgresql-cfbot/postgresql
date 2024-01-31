@@ -39,6 +39,7 @@
 #include "miscadmin.h"
 #include "nodes/bitmapset.h"
 #include "nodes/makefuncs.h"
+#include "nodes/nodeFuncs.h"
 #include "optimizer/optimizer.h"
 #include "parser/parse_clause.h"
 #include "parser/parse_collate.h"
@@ -674,6 +675,7 @@ CreateTriggerFiringOn(CreateTrigStmt *stmt, const char *queryString,
 		/* we'll need the rtable for recordDependencyOnExpr */
 		whenRtable = pstate->p_rtable;
 
+		reset_querytext_references(whenClause, NULL);
 		qual = nodeToString(whenClause);
 
 		free_parsestate(pstate);

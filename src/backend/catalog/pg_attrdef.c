@@ -23,6 +23,7 @@
 #include "catalog/objectaccess.h"
 #include "catalog/pg_attrdef.h"
 #include "executor/executor.h"
+#include "nodes/nodeFuncs.h"
 #include "optimizer/optimizer.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
@@ -62,8 +63,10 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 	adrel = table_open(AttrDefaultRelationId, RowExclusiveLock);
 
 	/*
-	 * Flatten expression to string form for storage.
+	 * Reset any references to the original query text (which isn't stored),
+	 * and flatten the expression to string form for storage.
 	 */
+	reset_querytext_references(expr, NULL);
 	adbin = nodeToString(expr);
 
 	/*

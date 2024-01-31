@@ -474,6 +474,14 @@ DefineQueryRewrite(const char *rulename,
 	/* discard rule if it's null action and not INSTEAD; it's a no-op */
 	if (action != NIL || is_instead)
 	{
+		/*
+		 * Clear location info from the action and event_qual data. We don't
+		 * store the original query, so keeping track of this information is
+		 * meaningless and hinders serialization/compression efforts.
+		 */
+		reset_querytext_references(event_qual, NULL);
+		reset_querytext_references((Node *) action, NULL);
+
 		ruleId = InsertRule(rulename,
 							event_type,
 							event_relid,

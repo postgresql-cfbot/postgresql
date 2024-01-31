@@ -1903,6 +1903,101 @@ check_functions_in_node(Node *node, check_function_callback checker,
 	return false;
 }
 
+/*
+ * Reset all query text related fields to their original value.
+ *
+ * This is used for reducing the size of nodeToText, like in pg_rewrite.
+ */
+bool
+reset_querytext_references(Node *node, void *context)
+{
+	const int query_recurse_flags = 0;
+	ListCell   *temp;
+
+#define RESET_FOR(_type_) \
+	case T_##_type_: \
+	{ \
+		castNode(_type_, node)->location = -1; \
+		break; \
+	}
+
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, Query))
+	{
+		Query *query = castNode(Query, node);
+		query->stmt_location = -1;
+		query->stmt_len = 0;
+
+		return query_tree_walker(query, reset_querytext_references, context,
+								 query_recurse_flags);
+	}
+
+	switch (nodeTag(node))
+	{
+	RESET_FOR(RangeVar);
+	RESET_FOR(TableFunc);
+	RESET_FOR(Var);
+	RESET_FOR(Const);
+	RESET_FOR(Param);
+	RESET_FOR(Aggref);
+	RESET_FOR(GroupingFunc);
+	RESET_FOR(WindowFunc);
+	RESET_FOR(FuncExpr);
+	RESET_FOR(NamedArgExpr);
+	RESET_FOR(OpExpr);
+	RESET_FOR(DistinctExpr);
+	RESET_FOR(NullIfExpr);
+	RESET_FOR(ScalarArrayOpExpr);
+	RESET_FOR(BoolExpr);
+	RESET_FOR(SubLink);
+	RESET_FOR(RelabelType);
+	RESET_FOR(CoerceViaIO);
+	RESET_FOR(ArrayCoerceExpr);
+	RESET_FOR(ConvertRowtypeExpr);
+	RESET_FOR(CollateExpr);
+	RESET_FOR(CaseWhen);
+	RESET_FOR(ArrayExpr);
+	RESET_FOR(RowExpr);
+	RESET_FOR(CoalesceExpr);
+	RESET_FOR(MinMaxExpr);
+	RESET_FOR(SQLValueFunction);
+	RESET_FOR(XmlExpr);
+	RESET_FOR(JsonFormat);
+	RESET_FOR(JsonConstructorExpr);
+	RESET_FOR(JsonIsPredicate);
+	RESET_FOR(NullTest);
+	RESET_FOR(BooleanTest);
+	RESET_FOR(CoerceToDomain);
+	RESET_FOR(CoerceToDomainValue);
+	RESET_FOR(SetToDefault);
+	case T_CaseExpr:
+	{
+		/*
+		 * The expression_tree_walker does not call us for CaseWhen nodes,
+		 * but instead directly wires us through to its inner Nodes.
+		 * To correctly reset the location fields, we manually iterate
+		 * to get those fields reset.
+		 */
+		CaseExpr *caseExpr = castNode(CaseExpr, node);
+		caseExpr->location = -1;
+		foreach(temp, caseExpr->args)
+		{
+			CaseWhen *when = lfirst_node(CaseWhen, temp);
+			when->location = -1;
+		}
+		break;
+	}
+	default:
+		break;
+	}
+
+	return expression_tree_walker(node, reset_querytext_references,
+								  (void *) context);
+#undef RESET_FOR
+}
+
 
 /*
  * Standard expression-tree walking support

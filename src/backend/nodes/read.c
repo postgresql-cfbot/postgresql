@@ -206,6 +206,51 @@ pg_strtok(int *length)
 }
 
 /*
+ * Check if the next token is 'expect_token'.
+ *
+ * It handles similar to pg_strtok, except that this does not consume the
+ * next token, and has special casing for some less common tokens.
+ */
+bool
+pg_strtoken_next(const char *expect_token)
+{
+	const char *local_str;		/* working pointer to string */
+	Size expect_len = strlen(expect_token);
+	char next_char;
+
+	local_str = pg_strtok_ptr;
+
+	while (*local_str == ' ' || *local_str == '\n' || *local_str == '\t')
+		local_str++;
+
+	if (*local_str == '\0')
+		return false;			/* no more tokens */
+
+	Assert(expect_len > 0);
+
+	next_char = local_str[expect_len];
+
+	/* check if the next few bytes match the token */
+	if (strncmp(local_str, expect_token, expect_len) != 0)
+		return false;
+
+	/*
+	 * Check that the token was actually terminated at the end of the
+	 * expected token with a character that is a separate token.
+	 * Otherwise, we'd get positive matches for mathing the token of "is"
+	 * against a local_str of "isn't", which is clearly wrong.
+	 */
+	return (next_char == '\0' ||
+			next_char == ' ' ||
+			next_char == '\n' ||
+			next_char == '\t' ||
+			next_char == '(' ||
+			next_char == ')' ||
+			next_char == '{' ||
+			next_char == '}');
+}
+
+/*
  * debackslash -
  *	  create a palloc'd string holding the given token.
  *	  any protective backslashes in the token are removed.
@@ -357,6 +402,8 @@ nodeRead(const char *token, int tok_len)
 					elog(ERROR, "unterminated List structure");
 				if (tok_len == 1 && token[0] == 'i')
 				{
+					int		prev = 0;
+
 					/* List of integers */
 					for (;;)
 					{
@@ -372,12 +419,23 @@ nodeRead(const char *token, int tok_len)
 						if (endptr != token + tok_len)
 							elog(ERROR, "unrecognized integer: \"%.*s\"",
 								 tok_len, token);
-						l = lappend_int(l, val);
+
+						if (val > 0 && token[0] == '+')
+						{
+							for (int i = 0; i < val; i++)
+								l = lappend_int(l, ++prev);
+						}
+						else
+						{
+							prev = val;
+							l = lappend_int(l, val);
+						}
 					}
 					result = (Node *) l;
 				}
 				else if (tok_len == 1 && token[0] == 'o')
 				{
+					Oid		prev = 0;
 					/* List of OIDs */
 					for (;;)
 					{
@@ -393,12 +451,22 @@ nodeRead(const char *token, int tok_len)
 						if (endptr != token + tok_len)
 							elog(ERROR, "unrecognized OID: \"%.*s\"",
 								 tok_len, token);
-						l = lappend_oid(l, val);
+						if (token[0] == '+')
+						{
+							for (int i = 0; i < val; i++)
+								l = lappend_oid(l, prev);
+						}
+						else
+						{
+							prev = val;
+							l = lappend_oid(l, val);
+						}
 					}
 					result = (Node *) l;
 				}
 				else if (tok_len == 1 && token[0] == 'x')
 				{
+					TransactionId	prev = 0;
 					/* List of TransactionIds */
 					for (;;)
 					{
@@ -414,7 +482,16 @@ nodeRead(const char *token, int tok_len)
 						if (endptr != token + tok_len)
 							elog(ERROR, "unrecognized Xid: \"%.*s\"",
 								 tok_len, token);
-						l = lappend_xid(l, val);
+						if (token[0] == '+')
+						{
+							for (int i = 0; i < val; i++)
+								l = lappend_xid(l, ++prev);
+						}
+						else
+						{
+							prev = val;
+							l = lappend_xid(l, val);
+						}
 					}
 					result = (Node *) l;
 				}

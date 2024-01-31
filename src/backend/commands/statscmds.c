@@ -477,6 +477,7 @@ CreateStatistics(CreateStatsStmt *stmt)
 	{
 		char	   *exprsString;
 
+		reset_querytext_references((Node *) stxexprs, NULL);
 		exprsString = nodeToString(stxexprs);
 		exprsDatum = CStringGetTextDatum(exprsString);
 		pfree(exprsString);

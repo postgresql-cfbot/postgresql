@@ -2060,8 +2060,10 @@ StoreRelCheck(Relation rel, const char *ccname, Node *expr,
 	Oid			constrOid;
 
 	/*
-	 * Flatten expression to string form for storage.
+	 * Remove references into the (to be dropped) query string, and
+	 * flatten expression to string form for storage.
 	 */
+	reset_querytext_references(expr, NULL);
 	ccbin = nodeToString(expr);
 
 	/*
@@ -3676,6 +3678,7 @@ StorePartitionKey(Relation rel,
 	{
 		char	   *exprString;
 
+		reset_querytext_references((Node *) partexprs, NULL);
 		exprString = nodeToString(partexprs);
 		partexprDatum = CStringGetTextDatum(exprString);
 		pfree(exprString);
@@ -3834,6 +3837,12 @@ StorePartitionBound(Relation rel, Relation parent, PartitionBoundSpec *bound)
 	memset(new_val, 0, sizeof(new_val));
 	memset(new_null, false, sizeof(new_null));
 	memset(new_repl, false, sizeof(new_repl));
+
+	/*
+	 * We don't keep the original query text around, so remove any
+	 * references to it to reduce its stored size.
+	 */
+	reset_querytext_references((Node *) bound, NULL);
 	new_val[Anum_pg_class_relpartbound - 1] = CStringGetTextDatum(nodeToString(bound));
 	new_null[Anum_pg_class_relpartbound - 1] = false;
 	new_repl[Anum_pg_class_relpartbound - 1] = true;

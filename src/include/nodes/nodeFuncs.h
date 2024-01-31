@@ -139,6 +139,8 @@ get_notclausearg(const void *notclause)
 extern bool check_functions_in_node(Node *node, check_function_callback checker,
 									void *context);
 
+extern bool reset_querytext_references(Node *node, void *context);
+
 /*
  * The following functions are usually passed walker or mutator callbacks
  * that are declared like "bool walker(Node *node, my_struct *context)"

@@ -28745,16 +28745,20 @@ postgres=# SELECT '0/0'::pg_lsn + pd.segment_number * ps.setting::int + :offset 
         <indexterm>
          <primary>pg_filenode_relation</primary>
         </indexterm>
-        <function>pg_filenode_relation</function> ( <parameter>tablespace</parameter> <type>oid</type>, <parameter>filenode</parameter> <type>oid</type> )
+        <function>pg_filenode_relation</function>
+        ( <parameter>tablespace</parameter> <type>oid</type>,
+        <parameter>filenode</parameter> <type>oid</type>)
         <returnvalue>regclass</returnvalue>
        </para>
        <para>
         Returns a relation's OID given the tablespace OID and filenode it is
-        stored under.  This is essentially the inverse mapping of
-        <function>pg_relation_filepath</function>.  For a relation in the
-        database's default tablespace, the tablespace can be specified as zero.
-        Returns <literal>NULL</literal> if no relation in the current database
-        is associated with the given values.
+        stored under, if the given values match a permanent relation.  This is
+        essentially the inverse mapping
+        of <function>pg_relation_filepath</function> only regarding permanent
+        relations.  For a relation in the database's default tablespace, the
+        tablespace can be specified as zero.  Returns <literal>NULL</literal>
+        if no permanent relation in the current database is associated with
+        the given values.
        </para></entry>
       </row>
      </tbody>

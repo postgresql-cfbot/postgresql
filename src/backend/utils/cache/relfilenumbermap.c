@@ -129,10 +129,11 @@ InitializeRelfilenumberMap(void)
 }
 
 /*
- * Map a relation's (tablespace, relfilenumber) to a relation's oid and cache
- * the result.
+ * Map a relation's (tablespace, relfilenumber) to a permanent relation's oid
+ * and cache the result.
  *
- * Returns InvalidOid if no relation matching the criteria could be found.
+ * Returns InvalidOid if no permanent relation matching the criteria could be
+ * found.
  */
 Oid
 RelidByRelfilenumber(Oid reltablespace, RelFileNumber relfilenumber)
@@ -210,6 +211,16 @@ RelidByRelfilenumber(Oid reltablespace, RelFileNumber relfilenumber)
 		while (HeapTupleIsValid(ntp = systable_getnext(scandesc)))
 		{
 			Form_pg_class classform = (Form_pg_class) GETSTRUCT(ntp);
+
+			/*
+			 * Temporary relations should be excluded. This exclusion is
+			 * necessary because they can lead to the wrong result; the
+			 * relfilenumber space is shared with persistent
+			 * relations. Additionally, excluding them is possible since they
+			 * are not the focus in this context.
+			 */
+			if (classform->relpersistence == RELPERSISTENCE_TEMP)
+				continue;
 
 			if (found)
 				elog(ERROR,

@@ -3641,12 +3641,12 @@ my %tests = (
 	'CREATE TABLE test_table_generated' => {
 		create_order => 3,
 		create_sql => 'CREATE TABLE dump_test.test_table_generated (
-						   col1 int primary key,
+						   col1 int primary key deferrable,
 						   col2 int generated always as (col1 * 2) stored
 					   );',
 		regexp => qr/^
 			\QCREATE TABLE dump_test.test_table_generated (\E\n
-			\s+\Qcol1 integer CONSTRAINT \E[a-z0-9_]*\Q NOT NULL NO INHERIT,\E\n
+			\s+\Qcol1 integer,\E\n
 			\s+\Qcol2 integer GENERATED ALWAYS AS ((col1 * 2)) STORED\E\n
 			\);
 			/xms,

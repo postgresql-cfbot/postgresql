@@ -375,6 +375,17 @@
     trigger.
    </para>
 
+   <indexterm>
+     <primary>parallel safety</primary>
+     <secondary>triggers</secondary>
+   </indexterm>
+
+   <para>
+     Trigger authors need not concern themselves with parallel safety.
+     <link linkend="parallel-query">Parallel execution</link>
+     is supported only in queries, 
+   </para>
+
    <para>
     Each programming language that supports triggers has its own method
     for making the trigger input data available to the trigger function.

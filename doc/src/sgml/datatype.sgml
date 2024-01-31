@@ -4762,6 +4762,17 @@ INSERT INTO mytable VALUES(-1);  -- fails
     signed-versus-unsigned confusion if you do this.)
    </para>
 
+   <indexterm zone="datatype-oid">
+    <primary>oidvector</primary>
+   </indexterm>
+
+   <para>
+     The legacy <type>oidvector</type> type can be cast to an array of OIDs,
+     and vice versa, for examination and manipulation.
+     The resultant array of OIDs, unlike a typical array, is indexed
+     zero-relative.
+   </para>
+
    <para>
     The OID alias types have no operations of their own except
     for specialized input and output routines.  These routines are able

@@ -829,6 +829,34 @@ ERROR:  could not serialize access due to read/write dependencies among transact
        query execution time.
       </para>
      </listitem>
+     <listitem>
+
+       <indexterm>
+         <primary>WAL</primary>
+         <secondary>Serializeable Snapshot Isolation and
+           WAL checkpoint delay</secondary>
+       </indexterm>
+       
+       <indexterm>
+         <primary>Serializable Snapshot Isolation</primary>
+         <secondary>WAL checkpoint delay</secondary>
+       </indexterm>
+
+       <para>
+         Predicate locks are held per-cluster, not per database.
+         This means that serializeable transactions in one database can have
+         effects in another.
+         Long running serializeable transactions, as might occur accidentally
+         when
+         <link linkend="app-psql-meta-command-pset-pager">pagination</link>
+         halts <link linkend="app-psql">psql</link> output, can have
+         significant inter-database effects.
+         These include exhausting available predicate locks and
+         cluster-wide <link linkend="ports12">WAL checkpoint delay</link>.
+         When making use of serializeable transactions consider having
+         separate clusters for production and non-production use.
+       </para>
+     </listitem>
     </itemizedlist>
    </para>
 

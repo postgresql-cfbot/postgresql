@@ -3243,12 +3243,14 @@ SHOW search_path;
    <para>
     The first schema in the search path that exists is the default
     location for creating new objects.  That is the reason that by
-    default objects are created in the public schema.  When objects
-    are referenced in any other context without schema qualification
-    (table modification, data modification, or query commands) the
-    search path is traversed until a matching object is found.
-    Therefore, in the default configuration, any unqualified access
-    again can only refer to the public schema.
+    default objects are created in the public schema.
+    When objects are referenced in a context without schema qualification
+    (table modification, data modification, or query commands) the search path
+    is traversed until a matching object is found.
+    Therefore, again, in the default configuration, any unqualified name
+    refers to an object in the public schema; unless, given the default search
+    path, there is an object with that name accessible in the schema having
+    the name of the current user.
    </para>
 
    <para>
@@ -3297,6 +3299,54 @@ SELECT 3 OPERATOR(pg_catalog.+) 4;
     In practice one usually relies on the search path for operators,
     so as not to have to write anything so ugly as that.
    </para>
+  </sect2>
+
+  <sect2 id="ddl-schema-resolution">
+    <title>Schema Resolution</title>
+
+    <indexterm>
+     <primary>schema</primary>
+     <secondary>resolution</secondary>
+    </indexterm>
+
+    <para>
+      Schema resolution happens when SQL is run.
+
+      Exactly what this means is usually obvious; using an unqualified table
+      name when creating a table creates the table in the first schema of the
+      search path in effect, the current search path is used to find
+      unqualified table names when executing a <literal>SELECT</literal>, and
+      so forth.
+      But there are less obvious implications when it comes to statements
+      that manipulate <link linkend="ddl-others">database objects</link>:
+      tables, triggers, functions and the like.
+    </para>
+
+    <para>
+      Most SQL expressions appearing within the statements that manipulate
+      database objects are resolved at the time of manipulation.
+      Consider the creation of tables and triggers.
+      The schemas of foreign key table references, the functions and operators
+      used in table and column constraint expressions, table partition
+      expressions, and so forth are resolved at the time of table creation.
+      So is the schema of the function named when a trigger is created.
+      These already-resolved tables, functions, operators,
+      etc. need <emphasis>not</emphasis> be in the search path when the
+      constraints or triggers are executed, when the content of the table is
+      modified and the data validation occurs.
+      This is just as if all the objects were fully schema qualified in the
+      SQL that created the table, trigger, or other database object.
+    </para>
+
+    <para>
+      But functions are different.
+      The point of function creation is to store code for execution later.
+      Schemas are resolved within a function body when the function is called,
+      not when the function is created.
+      This has implications for function behavior consistency and
+      <link linkend="sql-createfunction-security">security</link>.
+      For these reasons function bodies can have their own search paths.
+    </para>
   </sect2>
 
   <sect2 id="ddl-schemas-priv">

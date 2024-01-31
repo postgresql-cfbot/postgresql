@@ -672,7 +672,7 @@ DECLARE
    </sect2>
 
   <sect2 id="plpgsql-declaration-type">
-   <title>Copying Types</title>
+   <title>Re-Using the Type of Columns and Variables</title>
 
 <synopsis>
 <replaceable>name</replaceable> <replaceable>table</replaceable>.<replaceable>column</replaceable>%TYPE
@@ -1149,7 +1149,7 @@ PERFORM create_mv('cs_session_page_requests_mv', my_query);
    </sect2>
 
    <sect2 id="plpgsql-statements-sql-onerow">
-    <title>Executing a Command with a Single-Row Result</title>
+    <title>Saving a Single-Row of a Command's Result</title>
 
     <indexterm zone="plpgsql-statements-sql-onerow">
      <primary>SELECT INTO</primary>
@@ -2779,7 +2779,7 @@ NOTICE:  row = {10,11,12}
    </sect2>
 
    <sect2 id="plpgsql-error-trapping">
-    <title>Trapping Errors</title>
+    <title>Error Processing and Trapping Exceptions</title>
 
     <indexterm>
      <primary>exceptions</primary>
@@ -2788,8 +2788,11 @@ NOTICE:  row = {10,11,12}
 
     <para>
      By default, any error occurring in a <application>PL/pgSQL</application>
-     function aborts execution of the function and the
-     surrounding transaction.  You can trap errors and recover
+     function aborts execution of the function and the surrounding
+     transaction.
+     You can raise an exception and throw an error
+     with <link linkend="plpgsql-statements-raise">RAISE EXCEPTION ...</link>.
+     You can trap errors and recover
      from them by using a <command>BEGIN</command> block with an
      <literal>EXCEPTION</literal> clause.  The syntax is an extension of the
      normal syntax for a <command>BEGIN</command> block:

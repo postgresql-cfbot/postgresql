@@ -9,7 +9,7 @@ PGFILEDESC = "test_predtest - test code for optimizer/util/predtest.c"
 EXTENSION = test_predtest
 DATA = test_predtest--1.0.sql
 
-REGRESS = test_predtest
+REGRESS = test_predtest test_all_permutations
 
 ifdef USE_PGXS
 PG_CONFIG = pg_config

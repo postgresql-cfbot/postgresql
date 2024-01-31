@@ -99,6 +99,8 @@ static bool predicate_implied_by_simple_clause(Expr *predicate, Node *clause,
 											   bool weak);
 static bool predicate_refuted_by_simple_clause(Expr *predicate, Node *clause,
 											   bool weak);
+static bool predicate_implied_not_null_by_clause(Expr *predicate, Node *clause,
+												 bool weak);
 static Node *extract_not_arg(Node *clause);
 static Node *extract_strong_not_arg(Node *clause);
 static bool clause_is_strict_for(Node *clause, Node *subexpr, bool allow_false);
@@ -197,6 +199,11 @@ predicate_implied_by(List *predicate_list, List *clause_list,
  * "Weak" refutation: A refutes B means truth of A implies non-truth of B
  * (i.e., B must yield false or NULL).  We use this to detect mutually
  * contradictory WHERE clauses.
+ *
+ * A notable difference between implication and refutation proofs is that
+ * strong/weak refutations don't vary the input of A (both must be true) but
+ * vary the allowed outcomes of B (false vs. non-truth), while for implications
+ * we vary both A (truth vs. non-falsity) and B (truth vs. non-falsity).
  *
  * Weak refutation can be proven in some cases where strong refutation doesn't
  * hold, so it's useful to use it when possible.  We don't currently have
@@ -740,6 +747,16 @@ predicate_refuted_by_recurse(Node *clause, Node *predicate,
 											 !weak))
 				return true;
 
+			/*
+			 * Because weak refutation expands the allowed outcomes for B
+			 * from "false" to "false or null", we can additionally prove
+			 * weak refutation in the case that strong refutation is proven.
+			 */
+			if (weak && not_arg &&
+				predicate_implied_by_recurse(predicate, not_arg,
+											 true))
+				return true;
+
 			switch (pclass)
 			{
 				case CLASS_AND:
@@ -1087,38 +1104,12 @@ arrayexpr_cleanup_fn(PredIterInfo info)
 }
 
 
-/*----------
+/*
  * predicate_implied_by_simple_clause
  *	  Does the predicate implication test for a "simple clause" predicate
  *	  and a "simple clause" restriction.
  *
  * We return true if able to prove the implication, false if not.
- *
- * We have several strategies for determining whether one simple clause
- * implies another:
- *
- * A simple and general way is to see if they are equal(); this works for any
- * kind of expression, and for either implication definition.  (Actually,
- * there is an implied assumption that the functions in the expression are
- * immutable --- but this was checked for the predicate by the caller.)
- *
- * Another way that always works is that for boolean x, "x = TRUE" is
- * equivalent to "x", likewise "x = FALSE" is equivalent to "NOT x".
- * These can be worth checking because, while we preferentially simplify
- * boolean comparisons down to "x" and "NOT x", the other form has to be
- * dealt with anyway in the context of index conditions.
- *
- * If the predicate is of the form "foo IS NOT NULL", and we are considering
- * strong implication, we can conclude that the predicate is implied if the
- * clause is strict for "foo", i.e., it must yield false or NULL when "foo"
- * is NULL.  In that case truth of the clause ensures that "foo" isn't NULL.
- * (Again, this is a safe conclusion because "foo" must be immutable.)
- * This doesn't work for weak implication, though.
- *
- * Finally, if both clauses are binary operator expressions, we may be able
- * to prove something using the system's knowledge about operators; those
- * proof rules are encapsulated in operator_predicate_proof().
- *----------
  */
 static bool
 predicate_implied_by_simple_clause(Expr *predicate, Node *clause,
@@ -1127,97 +1118,421 @@ predicate_implied_by_simple_clause(Expr *predicate, Node *clause,
 	/* Allow interrupting long proof attempts */
 	CHECK_FOR_INTERRUPTS();
 
-	/* First try the equal() test */
+	/*
+	 * A simple and general rule is that a clause implies itself, hence we
+	 * check if they are equal(); this works for any kind of expression, and
+	 * for either implication definition.  (Actually, there is an implied
+	 * assumption that the functions in the expression are immutable --- but
+	 * this was checked for the predicate by the caller.)
+	 */
 	if (equal((Node *) predicate, clause))
 		return true;
 
-	/* Next see if clause is boolean equality to a constant */
-	if (is_opclause(clause) &&
-		((OpExpr *) clause)->opno == BooleanEqualOperator)
+	/* Next we have some clause-type-specific strategies */
+	switch (nodeTag(clause))
 	{
-		OpExpr	   *op = (OpExpr *) clause;
-		Node	   *rightop;
-
-		Assert(list_length(op->args) == 2);
-		rightop = lsecond(op->args);
-		/* We might never see a null Const here, but better check anyway */
-		if (rightop && IsA(rightop, Const) &&
-			!((Const *) rightop)->constisnull)
-		{
-			Node	   *leftop = linitial(op->args);
-
-			if (DatumGetBool(((Const *) rightop)->constvalue))
+		case T_OpExpr:
 			{
-				/* X = true implies X */
-				if (equal(predicate, leftop))
-					return true;
+				OpExpr	   *op = (OpExpr *) clause;
+
+				/*----------
+				 * For boolean x, "x = TRUE" is equivalent to "x", likewise
+				 * "x = FALSE" is equivalent to "NOT x".  These can be worth
+				 * checking because, while we preferentially simplify boolean
+				 * comparisons down to "x" and "NOT x", the other form has to
+				 * be dealt with anyway in the context of index conditions.
+				 *
+				 * We could likewise check whether the predicate is boolean
+				 * equality to a constant; but there are no known use-cases
+				 * for that at the moment, assuming that the predicate has
+				 * been through constant-folding.
+				 *----------
+				 */
+				if (op->opno == BooleanEqualOperator)
+				{
+					Node	   *rightop;
+
+					Assert(list_length(op->args) == 2);
+					rightop = lsecond(op->args);
+
+					if (rightop && IsA(rightop, Const))
+					{
+						Const	*constexpr = (Const *) rightop;
+						Node	   *leftop = linitial(op->args);
+
+						/*
+						 * We might never see a null Const here, but better
+						 * check anyway.
+						 */
+						if (constexpr->constisnull)
+							return false;
+
+						if (DatumGetBool(constexpr->constvalue))
+						{
+							/* x = true implies x */
+							if (equal(predicate, leftop))
+								return true;
+						}
+						else
+						{
+							/* x = false implies NOT x */
+							if (is_notclause(predicate) &&
+								equal(get_notclausearg(predicate), leftop))
+								return true;
+						}
+					}
+				}
 			}
-			else
+			break;
+		case T_NullTest:
 			{
-				/* X = false implies NOT X */
-				if (is_notclause(predicate) &&
-					equal(get_notclausearg(predicate), leftop))
-					return true;
+				NullTest *clausentest = (NullTest *) clause;
+
+				/*
+				 * row IS NOT NULL does not act in the simple way we have in
+				 * mind
+				 */
+				if (clausentest->argisrow)
+					return false;
+
+				switch (clausentest->nulltesttype)
+				{
+					case IS_NULL:
+						/*
+						 * A clause in the form "foo IS NULL" implies a
+						 * predicate "NOT foo" that is strict for "foo", but
+						 * only weakly since "foo" being null will result in
+						 * the clause evaluating to true while the predicate
+						 * will evaluate to null.
+						 */
+						if (weak && is_notclause(predicate) &&
+							clause_is_strict_for((Node *) get_notclausearg(predicate), (Node *) clausentest->arg, true))
+							return true;
+
+						break;
+					case IS_NOT_NULL:
+						break;
+				}
 			}
-		}
+			break;
+		case T_BooleanTest:
+			{
+				BooleanTest	*clausebtest = (BooleanTest *) clause;
+
+				switch (clausebtest->booltesttype)
+				{
+					case IS_TRUE:
+						/* x IS TRUE implies x */
+						if (equal(predicate, clausebtest->arg))
+							return true;
+						break;
+					case IS_FALSE:
+						/* x IS FALSE implies NOT x */
+						if (is_notclause(predicate) &&
+							equal(get_notclausearg(predicate), clausebtest->arg))
+							return true;
+						break;
+					case IS_NOT_TRUE:
+						/*
+						 * A clause in the form "foo IS NOT TRUE" implies a
+						 * predicate "NOT foo", but only weakly since "foo"
+						 * being null will result in the clause evaluating to
+						 * true while the predicate will evaluate to null.
+						 */
+						if (weak && is_notclause(predicate) &&
+							equal(get_notclausearg(predicate), clausebtest->arg))
+							return true;
+						break;
+					case IS_NOT_FALSE:
+						/*
+						 * A clause in the form "foo IS NOT FALSE" implies a
+						 * predicate "foo", but only weakly since "foo" being
+						 * null will result in the clause evaluating to true
+						 * when the predicate is null.
+						 */
+						if (weak && equal(predicate, clausebtest->arg))
+							return true;
+						break;
+					case IS_UNKNOWN:
+						/*
+						 * A clause in the form "foo IS UNKNOWN" implies a
+						 * predicate "NOT foo" that is strict for "foo", but
+						 * only weakly since "foo" being null will result in
+						 * the clause evaluating to true while the predicate
+						 * will evaluate to null.
+						 */
+						if (weak && is_notclause(predicate) &&
+							clause_is_strict_for((Node *) get_notclausearg(predicate), (Node *) clausebtest->arg, true))
+							return true;
+						break;
+					case IS_NOT_UNKNOWN:
+						/*
+						 * "foo IS NOT UKNOWN" implies "foo IS NOT NULL", but
+						 * we handle that in the predicate-type-specific cases
+						 * below.
+						 * */
+						break;
+				}
+			}
+			break;
+		default:
+			break;
+	}
+
+	/* ... and some predicate-type-specific ones */
+	switch (nodeTag(predicate))
+	{
+		case T_NullTest:
+			{
+				NullTest   *predntest = (NullTest *) predicate;
+
+				/*
+				 * row IS NOT NULL does not act in the simple way we have in
+				 * mind
+				 */
+				if (predntest->argisrow)
+					return false;
+
+				switch (predntest->nulltesttype)
+				{
+					case IS_NOT_NULL:
+						/*
+						 * When the predicate is of the form "foo IS NOT NULL",
+						 * we can conclude that the predicate is implied if
+						 * truth of the clause would imply that the predicate
+						 * must be not null.
+						 */
+						if (predicate_implied_not_null_by_clause(predntest->arg,
+																 clause, weak))
+							return true;
+						break;
+					case IS_NULL:
+						if (IsA(clause, BooleanTest))
+						{
+							BooleanTest* clausebtest = (BooleanTest *) clause;
+
+							/* x IS NULL is implied by x IS UNKNOWN */
+							if (clausebtest->booltesttype == IS_UNKNOWN &&
+								equal(predntest->arg, clausebtest->arg))
+								return true;
+						}
+						break;
+				}
+			}
+			break;
+		case T_BooleanTest:
+			{
+				BooleanTest	*predbtest = (BooleanTest *) predicate;
+
+				switch (predbtest->booltesttype)
+				{
+					case IS_TRUE:
+						/*
+						 * x implies x is true
+						 *
+						 * We can only prove strong implication here since
+						 * "null is true" is false rather than null.
+						 */
+						if (!weak && equal(clause, predbtest->arg))
+							return true;
+						break;
+					case IS_FALSE:
+						/*
+						 * NOT x implies x is false
+						 *
+						 * We can only prove strong implication here since "not
+						 * null" is null rather than true.
+						 */
+						if (!weak && is_notclause(clause) &&
+							equal(get_notclausearg(clause), predbtest->arg))
+							return true;
+						break;
+					case IS_NOT_TRUE:
+						{
+							/* NOT x implies x is not true */
+							if (is_notclause(clause) &&
+								equal(get_notclausearg(clause), predbtest->arg))
+								return true;
+
+							if (IsA(clause, BooleanTest))
+							{
+								BooleanTest *clausebtest = (BooleanTest *) clause;
+
+								/* x is unknown implies x is not true */
+								if (clausebtest->booltesttype == IS_UNKNOWN &&
+									equal(clausebtest->arg, predbtest->arg))
+									return true;
+							}
+						}
+						break;
+					case IS_NOT_FALSE:
+						{
+							/* x implies x is not false*/
+							if (equal(clause, predbtest->arg))
+								return true;
+
+							if (IsA(clause, BooleanTest))
+							{
+								BooleanTest *clausebtest = (BooleanTest *) clause;
+
+								/* x is unknown implies x is not false */
+								if (clausebtest->booltesttype == IS_UNKNOWN &&
+									equal(clausebtest->arg, predbtest->arg))
+									return true;
+							}
+						}
+						break;
+					case IS_UNKNOWN:
+						if (IsA(clause, NullTest))
+						{
+							NullTest   *clausentest = (NullTest *) clause;
+
+							/* x IS NULL implies x is unknown */
+							if (clausentest->nulltesttype == IS_NULL &&
+								equal(clausentest->arg, predbtest->arg))
+								return true;
+						}
+						break;
+					case IS_NOT_UNKNOWN:
+						/*
+						 * Since "foo IS NOT UNKNOWN" has the same meaning
+						 * as "foo is NOT NULL" (assuming "foo" is a boolean)
+						 * we can prove the same things as we did earlier for
+						 * for NullTest's IS_NOT_NULL case.
+						 *
+						 * For example: truth of x implies x is not unknown.
+						 */
+						if (predicate_implied_not_null_by_clause(predbtest->arg, clause, weak))
+							return true;
+						break;
+				}
+			}
+			break;
+		default:
+			break;
 	}
 
 	/*
-	 * We could likewise check whether the predicate is boolean equality to a
-	 * constant; but there are no known use-cases for that at the moment,
-	 * assuming that the predicate has been through constant-folding.
+	 * Finally, if both clauses are binary operator expressions, we may be
+	 * able to prove something using the system's knowledge about operators;
+	 * those proof rules are encapsulated in operator_predicate_proof().
 	 */
-
-	/* Next try the IS NOT NULL case */
-	if (!weak &&
-		predicate && IsA(predicate, NullTest))
-	{
-		NullTest   *ntest = (NullTest *) predicate;
-
-		/* row IS NOT NULL does not act in the simple way we have in mind */
-		if (ntest->nulltesttype == IS_NOT_NULL &&
-			!ntest->argisrow)
-		{
-			/* strictness of clause for foo implies foo IS NOT NULL */
-			if (clause_is_strict_for(clause, (Node *) ntest->arg, true))
-				return true;
-		}
-		return false;			/* we can't succeed below... */
-	}
-
-	/* Else try operator-related knowledge */
 	return operator_predicate_proof(predicate, clause, false, weak);
 }
 
-/*----------
+/*
+ * predicate_implied_not_null_by_clause
+ *	  Tests a "simple clause" predicate to see if truth of the "simple clause"
+ *	  restriction implies that that predicate is not null.
+ *
+ * We return true if able to prove the implication, false if not. It is expected
+ * that the predicate argument to this function has already been reduced to the
+ * argument of any BooleanTest or NullTest predicate expressions.
+ *
+ * This function encapsulates a specific subcase of
+ * predicate_implied_by_simple_clause cases which is useful in several cases of
+ * both refutation and implication.
+ *
+ * Proving implication of "NOT NULL" is particularly useful for proving it's
+ * safe to use partial indexes defined with a "foo NOT NULL" condition.
+ *
+ * In several of the cases below (e.g., BooleanTest and NullTest) we could
+ * recurse into the argument of those expressions. For example, if the argument
+ * in a BooleanTest is itself a BooleanTest or a NullTest, then if the argument
+ * to that nested test expression matches the clause's subexpression we can
+ * trivially prove implication of "NOT NULL" since BooleanTest and NullTest
+ * always evaluate to true or false. However that doesn't seem useful to expend
+ * cycles on at this point.
+ */
+static bool
+predicate_implied_not_null_by_clause(Expr *predicate, Node *clause, bool weak)
+{
+	switch (nodeTag(clause))
+	{
+		case T_BooleanTest:
+			{
+				BooleanTest *clausebtest = (BooleanTest *) clause;
+
+				/*
+				 * Because the obvious case of "foo IS NOT UNKNOWN" proving
+				 * "foo" isn't null, we can also prove "foo" isn't null if we
+				 * know that it has to be true or false.
+				 */
+				switch (clausebtest->booltesttype)
+				{
+					case IS_TRUE:
+					case IS_FALSE:
+					case IS_NOT_UNKNOWN:
+						if (equal(clausebtest->arg, predicate))
+							return true;
+						break;
+					default:
+						break;
+				}
+			}
+			break;
+		case T_NullTest:
+			{
+				NullTest *clausentest = (NullTest *) clause;
+
+				/*
+				 * row IS NULL does not act in the simple way we have in mind
+				 */
+				if (clausentest->argisrow)
+					return false;
+
+				/*
+				 * It's self-evident that "foo IS NOT NULL" implies "foo"
+				 * isn't NULL.
+				 */
+				if (clausentest->nulltesttype == IS_NOT_NULL &&
+					equal(predicate, clausentest->arg))
+					return true;
+			}
+			break;
+		case T_DistinctExpr:
+			/*
+			 * If both of the two arguments to IS [NOT] DISTINCT FROM separately
+			 * imply that the predicate is not null or are strict for the
+			 * predicate, then we could prove implication that the predicate is
+			 * not null. But it's not obvious that it's worth expending time
+			 * on that check since having the predicate in the expression on
+			 * both sides of the distinct expression is likely uncommon.
+			 */
+			break;
+		case T_Const:
+			/*
+			 * We don't currently have to consider Const expressions because constant
+			 * folding would have eliminated the node types we consider here.
+			 */
+			break;
+		default:
+			break;
+	}
+
+	/*
+	 * We can conclude that a predicate "foo" is not null if the clause is
+	 * strict for "foo", i.e., it must yield false or NULL when "foo" is NULL.
+	 * In that case truth of the clause ensures that "foo" isn't NULL.  (Again,
+	 * this is a safe conclusion because "foo" must be immutable.) This doesn't
+	 * work for weak implication, though, since the clause yielding the
+	 * non-false value NULL means the predicate will evaluate to false.
+	 */
+	if (!weak && clause_is_strict_for(clause, (Node *) predicate, true))
+		return true;
+
+	return false;
+}
+
+/*
  * predicate_refuted_by_simple_clause
  *	  Does the predicate refutation test for a "simple clause" predicate
  *	  and a "simple clause" restriction.
  *
  * We return true if able to prove the refutation, false if not.
  *
- * Unlike the implication case, checking for equal() clauses isn't helpful.
- * But relation_excluded_by_constraints() checks for self-contradictions in a
- * list of clauses, so that we may get here with predicate and clause being
- * actually pointer-equal, and that is worth eliminating quickly.
- *
- * When the predicate is of the form "foo IS NULL", we can conclude that
- * the predicate is refuted if the clause is strict for "foo" (see notes for
- * implication case), or is "foo IS NOT NULL".  That works for either strong
- * or weak refutation.
- *
- * A clause "foo IS NULL" refutes a predicate "foo IS NOT NULL" in all cases.
- * If we are considering weak refutation, it also refutes a predicate that
- * is strict for "foo", since then the predicate must yield false or NULL
- * (and since "foo" appears in the predicate, it's known immutable).
- *
- * (The main motivation for covering these IS [NOT] NULL cases is to support
- * using IS NULL/IS NOT NULL as partition-defining constraints.)
- *
- * Finally, if both clauses are binary operator expressions, we may be able
- * to prove something using the system's knowledge about operators; those
- * proof rules are encapsulated in operator_predicate_proof().
- *----------
+ * The main motivation for covering IS [NOT] NULL cases to support using
+ * IS NULL/IS NOT NULL as partition-defining constraints.
  */
 static bool
 predicate_refuted_by_simple_clause(Expr *predicate, Node *clause,
@@ -1226,61 +1541,243 @@ predicate_refuted_by_simple_clause(Expr *predicate, Node *clause,
 	/* Allow interrupting long proof attempts */
 	CHECK_FOR_INTERRUPTS();
 
-	/* A simple clause can't refute itself */
-	/* Worth checking because of relation_excluded_by_constraints() */
+	/*
+	 * A simple clause can't refute itself, so unlike the implication case,
+	 * checking for equal() clauses isn't helpful.
+	 *
+	 * But relation_excluded_by_constraints() checks for self-contradictions
+	 * in a list of clauses, so that we may get here with predicate and clause
+	 * being actually pointer-equal, and that is worth eliminating quickly.
+	 */
 	if ((Node *) predicate == clause)
 		return false;
 
-	/* Try the predicate-IS-NULL case */
-	if (predicate && IsA(predicate, NullTest) &&
-		((NullTest *) predicate)->nulltesttype == IS_NULL)
+	/* Next we have some clause-type-specific strategies */
+	switch (nodeTag(clause))
 	{
-		Expr	   *isnullarg = ((NullTest *) predicate)->arg;
+		case T_NullTest:
+			{
+				NullTest   *clausentest = (NullTest *) clause;
 
-		/* row IS NULL does not act in the simple way we have in mind */
-		if (((NullTest *) predicate)->argisrow)
-			return false;
+				/* row IS NULL does not act in the simple way we have in mind */
+				if (clausentest->argisrow)
+					return false;
 
-		/* strictness of clause for foo refutes foo IS NULL */
-		if (clause_is_strict_for(clause, (Node *) isnullarg, true))
-			return true;
+				switch (clausentest->nulltesttype)
+				{
+					case IS_NULL:
+						{
+							/*
+							 * A clause in the form "foo IS NULL" refutes any
+							 * predicate that is itself implied not null, but
+							 * we have to exclude cases where we'd allow false
+							 * in strictness checking so we always pass
+							 * weak=true here. This is because we aren't
+							 * assuming anything about the form of the
+							 * predicate in that case, and, for example, we
+							 * might have a predicate of simply "foo", but "foo
+							 * = false" would mean both our clause and our
+							 * predicate would evaluate to "false".
+							 */
+							if (predicate_implied_not_null_by_clause(clausentest->arg, (Node *) predicate, true))
+								return true;
 
-		/* foo IS NOT NULL refutes foo IS NULL */
-		if (clause && IsA(clause, NullTest) &&
-			((NullTest *) clause)->nulltesttype == IS_NOT_NULL &&
-			!((NullTest *) clause)->argisrow &&
-			equal(((NullTest *) clause)->arg, isnullarg))
-			return true;
+							/*
+							 * foo IS NULL weakly refutes any predicate that
+							 * is strict for foo, since then the predicate
+							 * must yield false or NULL (and since foo appears
+							 * in the predicate, it's known immutable).
+							 */
+							if (weak &&
+								clause_is_strict_for((Node *) predicate, (Node *) clausentest->arg, true))
+								return true;
 
-		return false;			/* we can't succeed below... */
+							return false;	/* we can't succeed below... */
+						}
+						break;
+					case IS_NOT_NULL:
+						/*
+						 * "foo IS NOT NULL" refutes both "foo IS NULL"
+						 * and "foo IS UNKNOWN", but we handle that in the
+						 * predicate switch statement.
+						 */
+						break;
+				}
+			}
+			break;
+		case T_BooleanTest:
+			{
+				BooleanTest 	*clausebtest = (BooleanTest *) clause;
+
+				switch (clausebtest->booltesttype)
+				{
+					case IS_TRUE:
+						/*
+						 * We've already previously checked for the clause
+						 * being a NOT arg and determined refutation based on
+						 * implication of the predicate by that arg. That check
+						 * handles the case "foos IS TRUE" refuting "NOT foo",
+						 * so we don't have to do anything special here.
+						 */
+						break;
+					case IS_NOT_TRUE:
+						{
+							if (IsA(predicate, BooleanTest))
+							{
+								BooleanTest	*predbtest = (BooleanTest *) predicate;
+
+								/* foo IS NOT TRUE refutes foo IS TRUE */
+								if (predbtest->booltesttype == IS_TRUE &&
+									equal(predbtest->arg, clausebtest->arg))
+									return true;
+							}
+
+							/* foo IS NOT TRUE weakly refutes foo */
+							if (weak && equal(predicate, clausebtest->arg))
+								return true;
+
+						}
+						break;
+					case IS_FALSE:
+						if (IsA(predicate, BooleanTest))
+						{
+							BooleanTest	*predbtest = (BooleanTest *) predicate;
+
+							/* foo IS UNKNOWN refutes foo IS TRUE */
+							/* foo IS UNKNOWN refutes foo IS NOT UNKNOWN */
+							if (predbtest->booltesttype == IS_UNKNOWN &&
+								equal(predbtest->arg, clausebtest->arg))
+								return true;
+						}
+						break;
+					case IS_NOT_FALSE:
+						break;
+					case IS_UNKNOWN:
+						{
+							/*
+							 * A clause in the form "foo IS UNKNOWN" refutes any
+							 * predicate that is itself implied not null, but
+							 * we have to exclude cases where we'd allow false
+							 * in strictness checking so we always pass
+							 * weak=true here. This is because we aren't
+							 * assuming anything about the form of the
+							 * predicate in that case, and, for example, we
+							 * might have a predicate of simply "foo", but "foo
+							 * = false" would mean both our clause and our
+							 * predicate would evaluate to "false".
+							 */
+							if (predicate_implied_not_null_by_clause(clausebtest->arg, (Node *) predicate, true))
+								return true;
+
+							/*
+							 * A clause in the form "foo IS UNKNOWN" implies
+							 * that "foo" is null, so if the predicate is
+							 * strict for "foo" then that clause weakly refutes
+							 * the predicate since "foo" being null will cause
+							 * the predicate to evaluate to non-true, therefore
+							 * proving weak refutation.
+							 *
+							 * This doesn't work for strong refutation, however,
+							 * since evaluating the predicate with "foo" set to
+							 * null may result in "null" rather than "false".
+							 */
+							if (weak &&
+								clause_is_strict_for((Node *) predicate, (Node *) clausebtest->arg, true))
+								return true;
+
+							return false;			/* we can't succeed below... */
+						}
+						break;
+					case IS_NOT_UNKNOWN:
+						/*
+						 * "foo IS NOT UNKNOWN" refutes both "foo IS UNKNOWN"
+						 * and "foo IS NULL", but we handle that in the
+						 * predicate switch statement.
+						 */
+						break;
+				}
+			}
+		default:
+			break;
 	}
 
-	/* Try the clause-IS-NULL case */
-	if (clause && IsA(clause, NullTest) &&
-		((NullTest *) clause)->nulltesttype == IS_NULL)
+	/* ... and some predicate-type-specific ones */
+	switch (nodeTag(predicate))
 	{
-		Expr	   *isnullarg = ((NullTest *) clause)->arg;
+		case T_NullTest:
+			{
+				NullTest   *predntest = (NullTest *) predicate;
 
-		/* row IS NULL does not act in the simple way we have in mind */
-		if (((NullTest *) clause)->argisrow)
-			return false;
+				/* row IS NULL does not act in the simple way we have in mind */
+				if (predntest->argisrow)
+					return false;
 
-		/* foo IS NULL refutes foo IS NOT NULL */
-		if (predicate && IsA(predicate, NullTest) &&
-			((NullTest *) predicate)->nulltesttype == IS_NOT_NULL &&
-			!((NullTest *) predicate)->argisrow &&
-			equal(((NullTest *) predicate)->arg, isnullarg))
-			return true;
+				switch (predntest->nulltesttype)
+				{
+					case IS_NULL:
+						{
+							/*
+							 * A predicate in the form "foo IS NULL" is refuted
+							 * if truth of the clause would imply that the
+							 * predicate must be not null.
+							 *
+							 * We always pass weak=false here because there are
+							 * some cases where we can only prove strong
+							 * implication of "foo is not null", but that will
+							 * also prove weak refutation since strong
+							 * refutation is a strict superset of weak
+							 * refutation.
+							 */
+							if (predicate_implied_not_null_by_clause(predntest->arg, clause, false))
+								return true;
+						}
+						break;
+					case IS_NOT_NULL:
+						break;
+				}
 
-		/* foo IS NULL weakly refutes any predicate that is strict for foo */
-		if (weak &&
-			clause_is_strict_for((Node *) predicate, (Node *) isnullarg, true))
-			return true;
+				return false;	/* we can't succeed below... */
+			}
+			break;
+		case T_BooleanTest:
+			{
+				BooleanTest 	*predbtest = (BooleanTest *) predicate;
 
-		return false;			/* we can't succeed below... */
+				switch (predbtest->booltesttype)
+				{
+					case IS_UNKNOWN:
+						{
+							/*
+							 * A predicate in the form "foo IS UNKNOWN" is refuted
+							 * if truth of the clause would imply that the
+							 * predicate must be not null.
+							 *
+							 * We always pass weak=false here because there are
+							 * some cases where we can only prove strong
+							 * implication of "foo is not null", but that will
+							 * also prove weak refutation since strong
+							 * refutation is a strict superset of weak
+							 * refutation.
+							 */
+							if (predicate_implied_not_null_by_clause(predbtest->arg, clause, false))
+								return true;
+
+							return false;			/* we can't succeed below... */
+						}
+						break;
+					default:
+						break;
+				}
+			}
+			break;
+		default:
+			break;
 	}
 
-	/* Else try operator-related knowledge */
+	/*
+	 * Finally, if both clauses are binary operator expressions, we may be
+	 * able to prove something using the system's knowledge about operators.
+	 */
 	return operator_predicate_proof(predicate, clause, true, weak);
 }
 
@@ -1414,6 +1911,17 @@ clause_is_strict_for(Node *clause, Node *subexpr, bool allow_false)
 	}
 
 	/*
+	 * We can recurse into "not foo" without any additional processing because
+	 * the "not" operator is itself strict, evaluating to null when its
+	 * argument is null. We can't pass along allow_false=true, and instead
+	 * always pass allow_false=false since "not (false)" is true rather than
+	 * null.
+	 */
+	if (is_notclause(clause) &&
+		clause_is_strict_for((Node *) get_notclausearg(clause), subexpr, false))
+		return true;
+
+	/*
 	 * CoerceViaIO is strict (whether or not the I/O functions it calls are).
 	 * Likewise, ArrayCoerceExpr is strict for its array argument (regardless
 	 * of what the per-element expression is), ConvertRowtypeExpr is strict at
@@ -1498,6 +2006,33 @@ clause_is_strict_for(Node *clause, Node *subexpr, bool allow_false)
 		 * NULL array.  Otherwise, we're done here.
 		 */
 		return clause_is_strict_for(arraynode, subexpr, false);
+	}
+
+	/*
+	 * BooleanTest expressions never evaluate to null so we can't do anything
+	 * if allow_false isn't true.
+	 */
+	if (allow_false && IsA(clause, BooleanTest))
+	{
+		BooleanTest *test = (BooleanTest *) clause;
+
+		switch (test->booltesttype)
+		{
+			case IS_TRUE:
+			case IS_FALSE:
+			case IS_NOT_UNKNOWN:
+				return clause_is_strict_for((Node *) test->arg, subexpr, false);
+				break;
+			/*
+			 * null is not true, null is not false, and null is unknown are
+			 * true, hence we know they can't be strict.
+			 */
+			case IS_NOT_TRUE:
+			case IS_NOT_FALSE:
+			case IS_UNKNOWN:
+				return false;
+				break;
+		}
 	}
 
 	/*

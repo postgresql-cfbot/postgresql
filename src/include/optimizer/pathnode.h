@@ -324,6 +324,24 @@ extern Relids min_join_parameterization(PlannerInfo *root,
 extern RelOptInfo *fetch_upper_rel(PlannerInfo *root, UpperRelationKind kind,
 								   Relids relids);
 extern Relids find_childrel_parents(PlannerInfo *root, RelOptInfo *rel);
+
+/*
+ * find_relids_top_parents
+ *	  Compute the set of top-parent relids of rel.
+ *
+ * Replaces all Relids appearing in the given 'relids' as their top-level
+ * parents. The result will be NULL if and only if all of the given relids are
+ * top-level.
+ *
+ * The motivation for having this feature as a macro rather than a function is
+ * that Relids are top-level in most cases. We can quickly determine when
+ * root->top_parent_relid_array is NULL.
+ */
+#define find_relids_top_parents(root, relids) \
+	(likely((root)->top_parent_relid_array == NULL) \
+	 ? NULL : find_relids_top_parents_slow(root, relids))
+extern Relids find_relids_top_parents_slow(PlannerInfo *root, Relids relids);
+
 extern ParamPathInfo *get_baserel_parampathinfo(PlannerInfo *root,
 												RelOptInfo *baserel,
 												Relids required_outer);

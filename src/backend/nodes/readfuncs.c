@@ -191,6 +191,26 @@ nullable_string(const char *token, int length)
 	return debackslash(token, length);
 }
 
+/* Read an equivalence field (anything written as ":fldname %u") and check it */
+#define READ_EQ_BITMAPSET_FIELD_CHECK(fldname) \
+{ \
+	int save_length = length; \
+	const char *context; \
+	pg_strtok_save_context(&context); \
+	token = pg_strtok(&length); \
+	if (length > 0 && strncmp(token, ":"#fldname, strlen(":"#fldname))) \
+	{ \
+		/* "fldname" field was not found - fill it and restore context. */ \
+		local_node->fldname = NULL; \
+		pg_strtok_restore_context(context); \
+		length = save_length; \
+	} \
+	else \
+	{ \
+		local_node->fldname = _readBitmapset(); \
+	} \
+}
+
 
 /*
  * _readBitmapset
@@ -576,6 +596,8 @@ _readRangeTblEntry(void)
 	READ_BOOL_FIELD(inh);
 	READ_BOOL_FIELD(inFromCl);
 	READ_NODE_FIELD(securityQuals);
+	READ_EQ_BITMAPSET_FIELD_CHECK(eclass_source_indexes);
+	READ_EQ_BITMAPSET_FIELD_CHECK(eclass_derive_indexes);
 
 	READ_DONE();
 }

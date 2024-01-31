@@ -247,6 +247,9 @@ make_restrictinfo_internal(PlannerInfo *root,
 	restrictinfo->left_hasheqoperator = InvalidOid;
 	restrictinfo->right_hasheqoperator = InvalidOid;
 
+	restrictinfo->eq_sources_index = -1;
+	restrictinfo->eq_derives_index = -1;
+
 	return restrictinfo;
 }
 
@@ -403,6 +406,8 @@ commute_restrictinfo(RestrictInfo *rinfo, Oid comm_op)
 	result->right_mcvfreq = rinfo->left_mcvfreq;
 	result->left_hasheqoperator = InvalidOid;
 	result->right_hasheqoperator = InvalidOid;
+	result->eq_sources_index = -1;
+	result->eq_derives_index = -1;
 
 	return result;
 }

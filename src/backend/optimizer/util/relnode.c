@@ -123,11 +123,14 @@ setup_simple_rel_arrays(PlannerInfo *root)
 	if (root->append_rel_list == NIL)
 	{
 		root->append_rel_array = NULL;
+		root->top_parent_relid_array = NULL;
 		return;
 	}
 
 	root->append_rel_array = (AppendRelInfo **)
 		palloc0(size * sizeof(AppendRelInfo *));
+	root->top_parent_relid_array = (Index *)
+		palloc0(size * sizeof(Index));
 
 	/*
 	 * append_rel_array is filled with any already-existing AppendRelInfos,
@@ -147,6 +150,27 @@ setup_simple_rel_arrays(PlannerInfo *root)
 			elog(ERROR, "child relation already exists");
 
 		root->append_rel_array[child_relid] = appinfo;
+	}
+
+	/*
+	 * Find a top parent rel's relid for each AppendRelInfo. We cannot do this
+	 * in the last foreach loop because there may be multi-level parent-child
+	 * relations.
+	 */
+	for (int i = 0; i < size; i++)
+	{
+		int top_parent_relid;
+
+		if (root->append_rel_array[i] == NULL)
+			continue;
+
+		top_parent_relid = root->append_rel_array[i]->parent_relid;
+
+		while (root->append_rel_array[top_parent_relid] != NULL &&
+			   root->append_rel_array[top_parent_relid]->parent_relid != 0)
+			top_parent_relid = root->append_rel_array[top_parent_relid]->parent_relid;
+
+		root->top_parent_relid_array[i] = top_parent_relid;
 	}
 }
 
@@ -175,11 +199,23 @@ expand_planner_arrays(PlannerInfo *root, int add_size)
 		repalloc0_array(root->simple_rte_array, RangeTblEntry *, root->simple_rel_array_size, new_size);
 
 	if (root->append_rel_array)
+	{
 		root->append_rel_array =
 			repalloc0_array(root->append_rel_array, AppendRelInfo *, root->simple_rel_array_size, new_size);
+		root->top_parent_relid_array =
+			repalloc0_array(root->top_parent_relid_array, Index, root->simple_rel_array_size, new_size);
+	}
 	else
+	{
 		root->append_rel_array =
 			palloc0_array(AppendRelInfo *, new_size);
+		/*
+		 * We do not allocate top_parent_relid_array here so that
+		 * find_relids_top_parents() can early find all of the given Relids are
+		 * top-level.
+		 */
+		root->top_parent_relid_array = NULL;
+	}
 
 	root->simple_rel_array_size = new_size;
 }
@@ -234,6 +270,7 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 	rel->subplan_params = NIL;
 	rel->rel_parallel_workers = -1; /* set up in get_relation_info */
 	rel->amflags = 0;
+	rel->eclass_child_members = NIL;
 	rel->serverid = InvalidOid;
 	if (rte->rtekind == RTE_RELATION)
 	{
@@ -622,6 +659,12 @@ add_join_rel(PlannerInfo *root, RelOptInfo *joinrel)
 	/* GEQO requires us to append the new joinrel to the end of the list! */
 	root->join_rel_list = lappend(root->join_rel_list, joinrel);
 
+	/*
+	 * Store the index of this joinrel to use in
+	 * add_child_join_rel_equivalences().
+	 */
+	joinrel->join_rel_list_index = list_length(root->join_rel_list) - 1;
+
 	/* store it into the auxiliary hashtable if there is one. */
 	if (root->join_rel_hash)
 	{
@@ -734,6 +777,7 @@ build_join_rel(PlannerInfo *root,
 	joinrel->subplan_params = NIL;
 	joinrel->rel_parallel_workers = -1;
 	joinrel->amflags = 0;
+	joinrel->eclass_child_members = NIL;
 	joinrel->serverid = InvalidOid;
 	joinrel->userid = InvalidOid;
 	joinrel->useridiscurrent = false;
@@ -931,6 +975,7 @@ build_child_join_rel(PlannerInfo *root, RelOptInfo *outer_rel,
 	joinrel->subroot = NULL;
 	joinrel->subplan_params = NIL;
 	joinrel->amflags = 0;
+	joinrel->eclass_child_members = NIL;
 	joinrel->serverid = InvalidOid;
 	joinrel->userid = InvalidOid;
 	joinrel->useridiscurrent = false;
@@ -1495,6 +1540,7 @@ fetch_upper_rel(PlannerInfo *root, UpperRelationKind kind, Relids relids)
 	upperrel->cheapest_total_path = NULL;
 	upperrel->cheapest_unique_path = NULL;
 	upperrel->cheapest_parameterized_paths = NIL;
+	upperrel->eclass_child_members = NIL;	/* XXX Is this required? */
 
 	root->upper_rels[kind] = lappend(root->upper_rels[kind], upperrel);
 
@@ -1530,6 +1576,48 @@ find_childrel_parents(PlannerInfo *root, RelOptInfo *rel)
 	} while (rel->reloptkind == RELOPT_OTHER_MEMBER_REL);
 
 	Assert(rel->reloptkind == RELOPT_BASEREL);
+
+	return result;
+}
+
+
+/*
+ * find_relids_top_parents_slow
+ *	  Slow path of find_relids_top_parents() macro.
+ *
+ * Do not call this directly; use the macro instead. See the macro comment for
+ * more details.
+ */
+Relids
+find_relids_top_parents_slow(PlannerInfo *root, Relids relids)
+{
+	Index  *top_parent_relid_array = root->top_parent_relid_array;
+	Relids	result;
+	bool	is_top_parent;
+	int		i;
+
+	/* This function should be called in the slow path */
+	Assert(top_parent_relid_array != NULL);
+
+	result = NULL;
+	is_top_parent = true;
+	i = -1;
+	while ((i = bms_next_member(relids, i)) >= 0)
+	{
+		int		top_parent_relid = (int) top_parent_relid_array[i];
+
+		if (top_parent_relid == 0)
+			top_parent_relid = i;	/* 'i' has no parents, so add itself */
+		else if (top_parent_relid != i)
+			is_top_parent = false;
+		result = bms_add_member(result, top_parent_relid);
+	}
+
+	if (is_top_parent)
+	{
+		bms_free(result);
+		return NULL;
+	}
 
 	return result;
 }

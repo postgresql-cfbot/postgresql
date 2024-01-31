@@ -29,6 +29,8 @@ extern PGDLLIMPORT bool restore_location_fields;
 extern const char *pg_strtok(int *length);
 extern char *debackslash(const char *token, int length);
 extern void *nodeRead(const char *token, int tok_len);
+extern void pg_strtok_save_context(const char **pcontext);
+extern void pg_strtok_restore_context(const char *context);
 
 /*
  * prototypes for functions in readfuncs.c

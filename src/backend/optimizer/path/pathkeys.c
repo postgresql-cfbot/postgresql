@@ -1151,8 +1151,8 @@ convert_subquery_pathkeys(PlannerInfo *root, RelOptInfo *rel,
 				Oid			sub_expr_coll = sub_eclass->ec_collation;
 				ListCell   *k;
 
-				if (sub_member->em_is_child)
-					continue;	/* ignore children here */
+				/* Child members should not exist in ec_members */
+				Assert(!sub_member->em_is_child);
 
 				foreach(k, subquery_tlist)
 				{
@@ -1678,8 +1678,11 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 		{
 			EquivalenceMember *em = (EquivalenceMember *) lfirst(lc2);
 
+			/* Child members should not exist in ec_members */
+			Assert(!em->em_is_child);
+
 			/* Potential future join partner? */
-			if (!em->em_is_const && !em->em_is_child &&
+			if (!em->em_is_const &&
 				!bms_overlap(em->em_relids, joinrel->relids))
 				score++;
 		}

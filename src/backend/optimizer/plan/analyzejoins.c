@@ -39,6 +39,7 @@
  */
 typedef struct
 {
+	PlannerInfo *root;
 	int			from;
 	int			to;
 } ReplaceVarnoContext;
@@ -59,9 +60,10 @@ static bool join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo);
 
 static void remove_leftjoinrel_from_query(PlannerInfo *root, int relid,
 										  SpecialJoinInfo *sjinfo);
-static void remove_rel_from_restrictinfo(RestrictInfo *rinfo,
+static void remove_rel_from_restrictinfo(PlannerInfo *root,
+										 RestrictInfo *rinfo,
 										 int relid, int ojrelid);
-static void remove_rel_from_eclass(EquivalenceClass *ec,
+static void remove_rel_from_eclass(PlannerInfo *root, EquivalenceClass *ec,
 								   int relid, int ojrelid);
 static List *remove_rel_from_joinlist(List *joinlist, int relid, int *nremoved);
 static bool rel_supports_distinctness(PlannerInfo *root, RelOptInfo *rel);
@@ -76,7 +78,7 @@ static bool is_innerrel_unique_for(PlannerInfo *root,
 								   List *restrictlist,
 								   List **extra_clauses);
 static Bitmapset *replace_relid(Relids relids, int oldId, int newId);
-static void replace_varno(Node *node, int from, int to);
+static void replace_varno(PlannerInfo *root, Node *node, int from, int to);
 static bool replace_varno_walker(Node *node, ReplaceVarnoContext *ctx);
 static int	self_join_candidates_cmp(const void *a, const void *b);
 
@@ -395,7 +397,7 @@ remove_rel_from_query(PlannerInfo *root, RelOptInfo *rel,
 		}
 
 		/* Update lateral references. */
-		replace_varno((Node *) otherrel->lateral_vars, relid, subst);
+		replace_varno(root, (Node *) otherrel->lateral_vars, relid, subst);
 	}
 
 	/*
@@ -432,7 +434,7 @@ remove_rel_from_query(PlannerInfo *root, RelOptInfo *rel,
 		sjinf->commute_below_l = replace_relid(sjinf->commute_below_l, ojrelid, subst);
 		sjinf->commute_below_r = replace_relid(sjinf->commute_below_r, ojrelid, subst);
 
-		replace_varno((Node *) sjinf->semi_rhs_exprs, relid, subst);
+		replace_varno(root, (Node *) sjinf->semi_rhs_exprs, relid, subst);
 	}
 
 	/*
@@ -477,7 +479,7 @@ remove_rel_from_query(PlannerInfo *root, RelOptInfo *rel,
 			phv->phrels = replace_relid(phv->phrels, relid, subst);
 			phv->phrels = replace_relid(phv->phrels, ojrelid, subst);
 			Assert(!bms_is_empty(phv->phrels));
-			replace_varno((Node *) phv->phexpr, relid, subst);
+			replace_varno(root, (Node *) phv->phexpr, relid, subst);
 			Assert(phv->phnullingrels == NULL); /* no need to adjust */
 		}
 	}
@@ -551,7 +553,7 @@ remove_leftjoinrel_from_query(PlannerInfo *root, int relid,
 			 * that any such PHV is safe (and updated its ph_eval_at), so we
 			 * can just drop those references.
 			 */
-			remove_rel_from_restrictinfo(rinfo, relid, ojrelid);
+			remove_rel_from_restrictinfo(root, rinfo, relid, ojrelid);
 
 			/*
 			 * Cross-check that the clause itself does not reference the
@@ -580,7 +582,7 @@ remove_leftjoinrel_from_query(PlannerInfo *root, int relid,
 
 		if (bms_is_member(relid, ec->ec_relids) ||
 			bms_is_member(ojrelid, ec->ec_relids))
-			remove_rel_from_eclass(ec, relid, ojrelid);
+			remove_rel_from_eclass(root, ec, relid, ojrelid);
 	}
 
 	/*
@@ -608,16 +610,24 @@ remove_leftjoinrel_from_query(PlannerInfo *root, int relid,
  * we have to also clean up the sub-clauses.
  */
 static void
-remove_rel_from_restrictinfo(RestrictInfo *rinfo, int relid, int ojrelid)
+remove_rel_from_restrictinfo(PlannerInfo *root, RestrictInfo *rinfo, int relid,
+							 int ojrelid)
 {
+	Relids		new_clause_relids;
+
 	/*
-	 * The clause_relids probably aren't shared with anything else, but let's
+	 * The 'new_clause_relids' passed to update_clause_relids() must be a
+	 * different instance from the current rinfo->clause_relids, so we make a
+	 * copy of them.
+	 */
+	new_clause_relids = bms_copy(rinfo->clause_relids);
+	new_clause_relids = bms_del_member(new_clause_relids, relid);
+	new_clause_relids = bms_del_member(new_clause_relids, ojrelid);
+	update_clause_relids(root, rinfo, new_clause_relids);
+	/*
+	 * The required_relids probably aren't shared with anything else, but let's
 	 * copy them just to be sure.
 	 */
-	rinfo->clause_relids = bms_copy(rinfo->clause_relids);
-	rinfo->clause_relids = bms_del_member(rinfo->clause_relids, relid);
-	rinfo->clause_relids = bms_del_member(rinfo->clause_relids, ojrelid);
-	/* Likewise for required_relids */
 	rinfo->required_relids = bms_copy(rinfo->required_relids);
 	rinfo->required_relids = bms_del_member(rinfo->required_relids, relid);
 	rinfo->required_relids = bms_del_member(rinfo->required_relids, ojrelid);
@@ -642,14 +652,14 @@ remove_rel_from_restrictinfo(RestrictInfo *rinfo, int relid, int ojrelid)
 				{
 					RestrictInfo *rinfo2 = lfirst_node(RestrictInfo, lc2);
 
-					remove_rel_from_restrictinfo(rinfo2, relid, ojrelid);
+					remove_rel_from_restrictinfo(root, rinfo2, relid, ojrelid);
 				}
 			}
 			else
 			{
 				RestrictInfo *rinfo2 = castNode(RestrictInfo, orarg);
 
-				remove_rel_from_restrictinfo(rinfo2, relid, ojrelid);
+				remove_rel_from_restrictinfo(root, rinfo2, relid, ojrelid);
 			}
 		}
 	}
@@ -665,9 +675,11 @@ remove_rel_from_restrictinfo(RestrictInfo *rinfo, int relid, int ojrelid)
  * level(s).
  */
 static void
-remove_rel_from_eclass(EquivalenceClass *ec, int relid, int ojrelid)
+remove_rel_from_eclass(PlannerInfo *root, EquivalenceClass *ec, int relid,
+					   int ojrelid)
 {
 	ListCell   *lc;
+	int			i;
 
 	/* Fix up the EC's overall relids */
 	ec->ec_relids = bms_del_member(ec->ec_relids, relid);
@@ -689,16 +701,24 @@ remove_rel_from_eclass(EquivalenceClass *ec, int relid, int ojrelid)
 			cur_em->em_relids = bms_del_member(cur_em->em_relids, relid);
 			cur_em->em_relids = bms_del_member(cur_em->em_relids, ojrelid);
 			if (bms_is_empty(cur_em->em_relids))
+			{
 				ec->ec_members = foreach_delete_current(ec->ec_members, lc);
+				/* XXX performance of list_delete_ptr()?? */
+				ec->ec_norel_members = list_delete_ptr(ec->ec_norel_members,
+													   cur_em);
+				ec->ec_rel_members = list_delete_ptr(ec->ec_rel_members,
+													 cur_em);
+			}
 		}
 	}
 
 	/* Fix up the source clauses, in case we can re-use them later */
-	foreach(lc, ec->ec_sources)
+	i = -1;
+	while ((i = bms_next_member(ec->ec_source_indexes, i)) >= 0)
 	{
-		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+		RestrictInfo *rinfo = list_nth_node(RestrictInfo, root->eq_sources, i);
 
-		remove_rel_from_restrictinfo(rinfo, relid, ojrelid);
+		remove_rel_from_restrictinfo(root, rinfo, relid, ojrelid);
 	}
 
 	/*
@@ -706,7 +726,7 @@ remove_rel_from_eclass(EquivalenceClass *ec, int relid, int ojrelid)
 	 * drop them.  (At this point, any such clauses would be base restriction
 	 * clauses, which we'd not need anymore anyway.)
 	 */
-	ec->ec_derives = NIL;
+	ec->ec_derive_indexes = NULL;
 }
 
 /*
@@ -1438,13 +1458,14 @@ is_innerrel_unique_for(PlannerInfo *root,
  * Replace each occurrence of removing relid with the keeping one
  */
 static void
-replace_varno(Node *node, int from, int to)
+replace_varno(PlannerInfo *root, Node *node, int from, int to)
 {
 	ReplaceVarnoContext ctx;
 
 	if (to <= 0)
 		return;
 
+	ctx.root = root;
 	ctx.from = from;
 	ctx.to = to;
 	replace_varno_walker(node, &ctx);
@@ -1488,9 +1509,9 @@ replace_varno_walker(Node *node, ReplaceVarnoContext *ctx)
 
 		if (bms_is_member(ctx->from, rinfo->clause_relids))
 		{
-			replace_varno((Node *) rinfo->clause, ctx->from, ctx->to);
-			replace_varno((Node *) rinfo->orclause, ctx->from, ctx->to);
-			rinfo->clause_relids = replace_relid(rinfo->clause_relids, ctx->from, ctx->to);
+			replace_varno(ctx->root, (Node *) rinfo->clause, ctx->from, ctx->to);
+			replace_varno(ctx->root, (Node *) rinfo->orclause, ctx->from, ctx->to);
+			update_clause_relids(ctx->root, rinfo, replace_relid(rinfo->clause_relids, ctx->from, ctx->to));
 			rinfo->left_relids = replace_relid(rinfo->left_relids, ctx->from, ctx->to);
 			rinfo->right_relids = replace_relid(rinfo->right_relids, ctx->from, ctx->to);
 		}
@@ -1579,10 +1600,12 @@ replace_relid(Relids relids, int oldId, int newId)
  * delete them.
  */
 static void
-update_eclasses(EquivalenceClass *ec, int from, int to)
+update_eclasses(PlannerInfo *root, EquivalenceClass *ec, int from, int to)
 {
 	List	   *new_members = NIL;
-	List	   *new_sources = NIL;
+	Bitmapset  *new_source_indexes = NULL;
+	int			i;
+	int			j;
 	ListCell   *lc;
 	ListCell   *lc1;
 
@@ -1601,7 +1624,7 @@ update_eclasses(EquivalenceClass *ec, int from, int to)
 		em->em_jdomain->jd_relids = replace_relid(em->em_jdomain->jd_relids, from, to);
 
 		/* We only process inner joins */
-		replace_varno((Node *) em->em_expr, from, to);
+		replace_varno(root, (Node *) em->em_expr, from, to);
 
 		foreach(lc1, new_members)
 		{
@@ -1624,31 +1647,64 @@ update_eclasses(EquivalenceClass *ec, int from, int to)
 	list_free(ec->ec_members);
 	ec->ec_members = new_members;
 
-	list_free(ec->ec_derives);
-	ec->ec_derives = NULL;
+	i = -1;
+	while ((i = bms_next_member(ec->ec_derive_indexes, i)) >= 0)
+	{
+		RestrictInfo *rinfo = list_nth_node(RestrictInfo, root->eq_derives, i);
+
+		/*
+		 * Remove all references between this RestrictInfo and its relating
+		 * RangeTblEntry.
+		 */
+		j = -1;
+		while ((j = bms_next_member(rinfo->clause_relids, j)) >= 0)
+		{
+			RangeTblEntry *rte = root->simple_rte_array[j];
+
+			Assert(bms_is_member(i, rte->eclass_derive_indexes));
+			rte->eclass_derive_indexes =
+				bms_del_member(rte->eclass_derive_indexes, i);
+		}
+
+		/*
+		 * Can't delete the element because we would need to rebuild all
+		 * the eq_derives indexes. But set a null to detect potential problems.
+		 */
+		list_nth_cell(root->eq_derives, i)->ptr_value = NULL;
+
+		/*
+		 * Since this RestrictInfo no longer exists in root->eq_derives, we
+		 * must reset the stored index.
+		 */
+		rinfo->eq_derives_index = -1;
+	}
+	bms_free(ec->ec_derive_indexes);
+	ec->ec_derive_indexes = NULL;
 
 	/* Update EC source expressions */
-	foreach(lc, ec->ec_sources)
+	i = -1;
+	while ((i = bms_next_member(ec->ec_source_indexes, i)) >= 0)
 	{
-		RestrictInfo *rinfo = lfirst_node(RestrictInfo, lc);
+		RestrictInfo *rinfo = list_nth_node(RestrictInfo, root->eq_sources, i);
 		bool		is_redundant = false;
 
 		if (!bms_is_member(from, rinfo->required_relids))
 		{
-			new_sources = lappend(new_sources, rinfo);
+			new_source_indexes = bms_add_member(new_source_indexes, i);
 			continue;
 		}
 
-		replace_varno((Node *) rinfo, from, to);
+		replace_varno(root, (Node *) rinfo, from, to);
 
 		/*
 		 * After switching the clause to the remaining relation, check it for
 		 * redundancy with existing ones. We don't have to check for
 		 * redundancy with derived clauses, because we've just deleted them.
 		 */
-		foreach(lc1, new_sources)
+		j = -1;
+		while ((j = bms_next_member(new_source_indexes, j)) >= 0)
 		{
-			RestrictInfo *other = lfirst_node(RestrictInfo, lc1);
+			RestrictInfo *other = list_nth_node(RestrictInfo, root->eq_sources, j);
 
 			if (!equal(rinfo->clause_relids, other->clause_relids))
 				continue;
@@ -1660,12 +1716,40 @@ update_eclasses(EquivalenceClass *ec, int from, int to)
 			}
 		}
 
-		if (!is_redundant)
-			new_sources = lappend(new_sources, rinfo);
+		if (is_redundant)
+		{
+			/*
+			 * Remove all references between this RestrictInfo and its relating
+			 * RangeTblEntry.
+			 */
+			j = -1;
+			while ((j = bms_next_member(rinfo->clause_relids, j)) >= 0)
+			{
+				RangeTblEntry *rte = root->simple_rte_array[j];
+
+				Assert(bms_is_member(i, rte->eclass_source_indexes));
+				rte->eclass_source_indexes =
+					bms_del_member(rte->eclass_source_indexes, i);
+			}
+
+			/*
+			 * Can't delete the element because we would need to rebuild all
+			 * the eq_sources indexes. But set a null to detect potential problems.
+			 */
+			list_nth_cell(root->eq_sources, i)->ptr_value = NULL;
+
+			/*
+			 * Since this RestrictInfo no longer exists in root->eq_sources, we
+			 * must reset the stored index.
+			 */
+			rinfo->eq_sources_index = -1;
+		}
+		else
+			new_source_indexes = bms_add_member(new_source_indexes, i);
 	}
 
-	list_free(ec->ec_sources);
-	ec->ec_sources = new_sources;
+	bms_free(ec->ec_source_indexes);
+	ec->ec_source_indexes = new_source_indexes;
 	ec->ec_relids = replace_relid(ec->ec_relids, from, to);
 }
 
@@ -1721,7 +1805,7 @@ remove_self_join_rel(PlannerInfo *root, PlanRowMark *kmark, PlanRowMark *rmark,
 	int			i;
 	List	   *jinfo_candidates = NIL;
 	List	   *binfo_candidates = NIL;
-	ReplaceVarnoContext ctx = {.from = toRemove->relid,.to = toKeep->relid};
+	ReplaceVarnoContext ctx = {.root = root,.from = toRemove->relid,.to = toKeep->relid};
 
 	Assert(toKeep->relid != -1);
 
@@ -1737,7 +1821,7 @@ remove_self_join_rel(PlannerInfo *root, PlanRowMark *kmark, PlanRowMark *rmark,
 		RestrictInfo *rinfo = lfirst_node(RestrictInfo, lc);
 
 		remove_join_clause_from_rels(root, rinfo, rinfo->required_relids);
-		replace_varno((Node *) rinfo, toRemove->relid, toKeep->relid);
+		replace_varno(root, (Node *) rinfo, toRemove->relid, toKeep->relid);
 
 		if (bms_membership(rinfo->required_relids) == BMS_MULTIPLE)
 			jinfo_candidates = lappend(jinfo_candidates, rinfo);
@@ -1757,7 +1841,7 @@ remove_self_join_rel(PlannerInfo *root, PlanRowMark *kmark, PlanRowMark *rmark,
 	{
 		RestrictInfo *rinfo = lfirst_node(RestrictInfo, lc);
 
-		replace_varno((Node *) rinfo, toRemove->relid, toKeep->relid);
+		replace_varno(root, (Node *) rinfo, toRemove->relid, toKeep->relid);
 
 		if (bms_membership(rinfo->required_relids) == BMS_MULTIPLE)
 			jinfo_candidates = lappend(jinfo_candidates, rinfo);
@@ -1845,7 +1929,7 @@ remove_self_join_rel(PlannerInfo *root, PlanRowMark *kmark, PlanRowMark *rmark,
 	{
 		EquivalenceClass *ec = (EquivalenceClass *) list_nth(root->eq_classes, i);
 
-		update_eclasses(ec, toRemove->relid, toKeep->relid);
+		update_eclasses(root, ec, toRemove->relid, toKeep->relid);
 		toKeep->eclass_indexes = bms_add_member(toKeep->eclass_indexes, i);
 	}
 
@@ -1857,7 +1941,7 @@ remove_self_join_rel(PlannerInfo *root, PlanRowMark *kmark, PlanRowMark *rmark,
 	{
 		Node	   *node = lfirst(lc);
 
-		replace_varno(node, toRemove->relid, toKeep->relid);
+		replace_varno(root, node, toRemove->relid, toKeep->relid);
 		if (!list_member(toKeep->reltarget->exprs, node))
 			toKeep->reltarget->exprs = lappend(toKeep->reltarget->exprs, node);
 	}
@@ -1909,9 +1993,9 @@ remove_self_join_rel(PlannerInfo *root, PlanRowMark *kmark, PlanRowMark *rmark,
 	remove_rel_from_query(root, toRemove, toKeep->relid, NULL, NULL);
 
 	/* At last, replace varno in root targetlist and HAVING clause */
-	replace_varno((Node *) root->processed_tlist,
+	replace_varno(root, (Node *) root->processed_tlist,
 				  toRemove->relid, toKeep->relid);
-	replace_varno((Node *) root->processed_groupClause,
+	replace_varno(root, (Node *) root->processed_groupClause,
 				  toRemove->relid, toKeep->relid);
 	replace_relid(root->all_result_relids, toRemove->relid, toKeep->relid);
 	replace_relid(root->leaf_result_relids, toRemove->relid, toKeep->relid);
@@ -1988,7 +2072,7 @@ split_selfjoin_quals(PlannerInfo *root, List *joinquals, List **selfjoinquals,
 		 * when we have cast of the same var to different (but compatible)
 		 * types.
 		 */
-		replace_varno(rightexpr, bms_singleton_member(rinfo->right_relids),
+		replace_varno(root, rightexpr, bms_singleton_member(rinfo->right_relids),
 					  bms_singleton_member(rinfo->left_relids));
 
 		if (equal(leftexpr, rightexpr))
@@ -2029,7 +2113,7 @@ match_unique_clauses(PlannerInfo *root, RelOptInfo *outer, List *uclauses,
 			   bms_is_empty(rinfo->right_relids));
 
 		clause = (Expr *) copyObject(rinfo->clause);
-		replace_varno((Node *) clause, relid, outer->relid);
+		replace_varno(root, (Node *) clause, relid, outer->relid);
 
 		iclause = bms_is_empty(rinfo->left_relids) ? get_rightop(clause) :
 			get_leftop(clause);

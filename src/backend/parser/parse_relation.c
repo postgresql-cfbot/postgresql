@@ -579,37 +579,18 @@ GetCTEForRTE(ParseState *pstate, RangeTblEntry *rte, int rtelevelsup)
 	return NULL;				/* keep compiler quiet */
 }
 
-/*
- * updateFuzzyAttrMatchState
- *	  Using Levenshtein distance, consider if column is best fuzzy match.
- */
 static void
-updateFuzzyAttrMatchState(int fuzzy_rte_penalty,
-						  FuzzyAttrMatchState *fuzzystate, RangeTblEntry *rte,
-						  const char *actual, const char *match, int attnum)
+updateFuzzyAttrMatchStateSingleString(int fuzzy_rte_penalty,
+									  FuzzyAttrMatchState *fuzzystate, RangeTblEntry *rte,
+									  const char *actual, const char *match, int attnum, int matchlen)
 {
-	int			columndistance;
-	int			matchlen;
-
-	/* Bail before computing the Levenshtein distance if there's no hope. */
-	if (fuzzy_rte_penalty > fuzzystate->distance)
-		return;
-
-	/*
-	 * Outright reject dropped columns, which can appear here with apparent
-	 * empty actual names, per remarks within scanRTEForColumn().
-	 */
-	if (actual[0] == '\0')
-		return;
-
 	/* Use Levenshtein to compute match distance. */
-	matchlen = strlen(match);
-	columndistance =
-		varstr_levenshtein_less_equal(actual, strlen(actual), match, matchlen,
-									  1, 1, 1,
-									  fuzzystate->distance + 1
-									  - fuzzy_rte_penalty,
-									  true);
+	int			columndistance =
+	varstr_levenshtein_less_equal(actual, strlen(actual), match, matchlen,
+								  1, 1, 1,
+								  fuzzystate->distance + 1
+								  - fuzzy_rte_penalty,
+								  true);
 
 	/*
 	 * If more than half the characters are different, don't treat it as a
@@ -664,6 +645,207 @@ updateFuzzyAttrMatchState(int fuzzy_rte_penalty,
 			 * want to consider acceptable, so we should ignore this match.
 			 */
 		}
+	}
+}
+
+static void
+putUnderscores(char *string, int start, int underscore_amount, int len)
+{
+	for (int i = 0; start + i < len && i < underscore_amount; i++)
+		string[start + i] = '_';
+}
+
+/*
+ * updateFuzzyAttrMatchState
+ *	  Using Levenshtein distance, consider if column is best fuzzy match.
+ */
+static void
+updateFuzzyAttrMatchState(int fuzzy_rte_penalty,
+						  FuzzyAttrMatchState *fuzzystate, RangeTblEntry *rte,
+						  const char *actual, const char *match, int attnum)
+{
+	/* Memory segment to store the current permutation of the match string. */
+	char	   *tmp_match;
+	int			matchlen = strlen(match);
+
+	/*
+	 * We keep track how many permutations we have already processed, to avoid
+	 * long runtimes.
+	 */
+	int			underscore_permutations_count = 0;
+
+	/*
+	 * The location the underscore we currently process within the match
+	 * string.
+	 */
+	int			underscore_current = 1;
+
+	/* Variables to track the amount of underscores delimiting sections */
+	int			underscore_amount = 1;
+	int			underscore_second_amount = 1;
+
+	/*
+	 * The entries of the permutation matrix tell us, where we should copy the
+	 * tree segments to. The zeroth dimension iterates over the permutations,
+	 * while the first dimension iterates over the three segments are permuted
+	 * to. Considering the string A_B_C the three segments are:
+	 * - A: before the initial underscore sections
+	 * - B: between the underscore sections
+	 * - C: after the later underscore sections
+	 *
+	 * Please note that the _ in above example are placeholders for
+	 * underscore_amount underscores, which might be more than one.
+	 */
+	int			permutation_matrix[3][3];
+
+	/* Bail before computing the Levenshtein distance if there's no hope. */
+	if (fuzzy_rte_penalty > fuzzystate->distance)
+		return;
+
+	/*
+	 * Outright reject dropped columns, which can appear here with apparent
+	 * empty actual names, per remarks within scanRTEForColumn().
+	 */
+	if (actual[0] == '\0')
+		return;
+
+	updateFuzzyAttrMatchStateSingleString(fuzzy_rte_penalty, fuzzystate, rte, actual, match, attnum, matchlen);
+
+	/*
+	 * We don't want to permute zero length strings, so check whether the
+	 * string starts with an underscore.
+	 */
+	if (match[0] == '_')
+	{
+		while (underscore_current < matchlen - 1 && match[underscore_current] == '_')
+		{
+			underscore_current++;
+		}
+	}
+
+	/*
+	 * Advance to the next underscore. We do this once here to avoid
+	 * pallocing, if the string does't contain an underscore at all.
+	 */
+	while (underscore_current < matchlen - 1 && match[underscore_current] != '_')
+	{
+		underscore_current++;
+	}
+
+	/*
+	 * Check for permuting up to three sections separated by underscores.
+	 *
+	 * We count the number of underscores here, because we want to know
+	 * whether we should consider permuting underscore separated sections.
+	 */
+	if (underscore_current < matchlen - 1)
+	{
+		tmp_match = palloc(matchlen + 1);
+		tmp_match[matchlen] = '\0';
+		while (underscore_permutations_count < 300 && underscore_current < matchlen - 1)
+		{
+			/*
+			 * If sections contain more than one underscore, we want to swap
+			 * the sections separated by more than one instead. There would be
+			 * no point in swapping zero length strings around. So we check
+			 * how many consecutive underscores we have here.
+			 */
+			underscore_amount = 1;
+			while (underscore_current + underscore_amount < matchlen && match[underscore_current + underscore_amount] == '_')
+			{
+				underscore_amount++;
+			}
+			/* Stop if we reached the end of the string. */
+			if (underscore_current + underscore_amount == matchlen)
+			{
+				underscore_current = matchlen;
+				break;
+			}
+			/* Consider swapping two sections. */
+			memcpy(tmp_match, &match[underscore_current + underscore_amount], matchlen - underscore_current - underscore_amount);
+			for (int i = 0; i < underscore_amount; i++)
+			{
+				tmp_match[matchlen - underscore_current + i - 1] = '_';
+			}
+			memcpy(&tmp_match[matchlen - 1 - underscore_current + underscore_amount], match, underscore_current);
+			updateFuzzyAttrMatchStateSingleString(fuzzy_rte_penalty + 1, fuzzystate, rte, actual, tmp_match, attnum, matchlen);
+			underscore_permutations_count++;
+
+			/*
+			 * Consider swapping three sections.
+			 *
+			 * Skip this is if we tried to many permutations
+			 * (underscore_permutations_count) already, to avoid long times
+			 * for the user. Otherwise just loop through all places, where can
+			 * potentially find an underscore delimited section, which is
+			 * delimited by the same amount of underscores.
+			 */
+			for (int underscore_second_current = underscore_current + 1 + underscore_amount;
+				 underscore_permutations_count < 200 && underscore_second_current < matchlen - underscore_amount;
+				 underscore_second_current += underscore_second_amount)
+			{
+				underscore_second_amount = 1;
+				/* Advance to a second underscore delimiter. */
+				if (match[underscore_second_current] != '_')
+					continue;
+
+				/*
+				 * Determine how many underscores we have delimiting the
+				 * potential second section.
+				 */
+				while (underscore_second_current < matchlen - underscore_second_amount && match[underscore_second_current + underscore_second_amount] == '_')
+					underscore_second_amount++;
+
+				/*
+				 * Advance, if we either reached the end of the string or the
+				 * amount of underscores does not match.
+				 */
+				if (underscore_second_current >= matchlen - underscore_second_amount || underscore_amount != underscore_second_amount)
+					continue;
+
+				/*
+				 * Only consider mirroring permutations, since the three
+				 * simple rotations are already (or will be for a later
+				 * underscore_current) covered above.
+				 */
+
+				/* Swap A and B. */
+				permutation_matrix[0][0] = underscore_second_current - underscore_current;
+				permutation_matrix[0][1] = 0;
+				permutation_matrix[0][2] = underscore_second_current + underscore_amount;
+				/* Swap A and C. */
+				permutation_matrix[1][0] = matchlen - underscore_current;
+				permutation_matrix[1][1] = matchlen - underscore_second_current;
+				permutation_matrix[1][2] = 0;
+				/* Swap B and C. */
+				permutation_matrix[2][0] = 0;
+				permutation_matrix[2][1] = matchlen - underscore_second_current + underscore_current + underscore_amount;
+				permutation_matrix[2][2] = underscore_current + underscore_amount;
+
+				/* We now loop over the mirroring permutations one by one. */
+				for (int k = 0; k < 3; k++)
+				{
+					memcpy(&tmp_match[permutation_matrix[k][0]], match, underscore_current);
+					/* A */
+					putUnderscores(tmp_match, permutation_matrix[k][0] + underscore_current, underscore_amount, matchlen);
+					memcpy(&tmp_match[permutation_matrix[k][1]], &match[underscore_current + underscore_amount], underscore_second_current - underscore_current - underscore_amount);
+					/* B */
+					putUnderscores(tmp_match, permutation_matrix[k][1] + underscore_second_current - underscore_current - underscore_amount, underscore_amount, matchlen);
+					memcpy(&tmp_match[permutation_matrix[k][2]], &match[underscore_second_current + underscore_amount], matchlen - underscore_second_current - underscore_amount);
+					/* C */
+					putUnderscores(tmp_match, permutation_matrix[k][2] + matchlen - underscore_second_current - underscore_amount, underscore_amount, matchlen);
+					tmp_match[matchlen] = '\0';
+					updateFuzzyAttrMatchStateSingleString(fuzzy_rte_penalty + 1, fuzzystate, rte, actual, tmp_match, attnum, matchlen);
+				}
+				underscore_permutations_count += 3;
+			}
+			underscore_current++;
+			while (underscore_current < matchlen - 1 && match[underscore_current] != '_')
+			{
+				underscore_current++;
+			}
+		}
+		pfree(tmp_match);
 	}
 }
 

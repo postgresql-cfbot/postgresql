@@ -990,6 +990,7 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 	subroot->planner_cxt = CurrentMemoryContext;
 	subroot->init_plans = NIL;
 	subroot->cte_plan_ids = NIL;
+	subroot->cte_paths = NIL;
 	subroot->multiexpr_params = NIL;
 	subroot->join_domains = NIL;
 	subroot->eq_classes = NIL;

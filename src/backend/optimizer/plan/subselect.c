@@ -885,16 +885,17 @@ hash_ok_operator(OpExpr *expr)
  * unreferenced SELECT), "inline" it to create a regular sub-SELECT-in-FROM,
  * or convert it to an initplan.
  *
- * A side effect is to fill in root->cte_plan_ids with a list that
- * parallels root->parse->cteList and provides the subplan ID for
- * each CTE's initplan, or a dummy ID (-1) if we didn't make an initplan.
+ * A side effect is to fill in root->cte_plan_ids and root->cte_paths with
+ * lists that parallel root->parse->cteList and provide the subplan ID and
+ * best path for each CTE, or a dummy ID (-1) and a dummy Path (NULL) if we
+ * didn't make a subplan.
  */
 void
 SS_process_ctes(PlannerInfo *root)
 {
 	ListCell   *lc;
 
-	Assert(root->cte_plan_ids == NIL);
+	Assert(root->cte_plan_ids == NIL && root->cte_paths == NIL);
 
 	foreach(lc, root->parse->cteList)
 	{
@@ -913,8 +914,9 @@ SS_process_ctes(PlannerInfo *root)
 		 */
 		if (cte->cterefcount == 0 && cmdType == CMD_SELECT)
 		{
-			/* Make a dummy entry in cte_plan_ids */
+			/* Make a dummy entry in cte_plan_ids and cte_paths */
 			root->cte_plan_ids = lappend_int(root->cte_plan_ids, -1);
+			root->cte_paths = lappend(root->cte_paths, NULL);
 			continue;
 		}
 
@@ -960,8 +962,9 @@ SS_process_ctes(PlannerInfo *root)
 			!contain_volatile_functions(cte->ctequery))
 		{
 			inline_cte(root, cte);
-			/* Make a dummy entry in cte_plan_ids */
+			/* Make a dummy entry in cte_plan_ids and cte_paths */
 			root->cte_plan_ids = lappend_int(root->cte_plan_ids, -1);
+			root->cte_paths = lappend(root->cte_paths, NULL);
 			continue;
 		}
 
@@ -1051,6 +1054,7 @@ SS_process_ctes(PlannerInfo *root)
 		root->init_plans = lappend(root->init_plans, splan);
 
 		root->cte_plan_ids = lappend_int(root->cte_plan_ids, splan->plan_id);
+		root->cte_paths = lappend(root->cte_paths, best_path);
 
 		/* Label the subplan for EXPLAIN purposes */
 		splan->plan_name = psprintf("CTE %s", cte->ctename);

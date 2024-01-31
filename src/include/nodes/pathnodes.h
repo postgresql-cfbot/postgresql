@@ -301,6 +301,11 @@ struct PlannerInfo
 	 */
 	List	   *cte_plan_ids;
 
+	/*
+	 * per-CTE-item list of Paths (or NULL if no Path was made for that CTE)
+	 */
+	List	   *cte_paths;
+
 	/* List of Lists of Params for MULTIEXPR subquery outputs */
 	List	   *multiexpr_params;
 

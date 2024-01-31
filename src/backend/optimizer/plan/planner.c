@@ -643,6 +643,7 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	root->planner_cxt = CurrentMemoryContext;
 	root->init_plans = NIL;
 	root->cte_plan_ids = NIL;
+	root->cte_paths = NIL;
 	root->multiexpr_params = NIL;
 	root->join_domains = NIL;
 	root->eq_classes = NIL;

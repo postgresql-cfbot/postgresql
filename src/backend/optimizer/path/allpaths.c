@@ -2882,6 +2882,8 @@ set_cte_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 	ListCell   *lc;
 	int			plan_id;
 	Relids		required_outer;
+	Path	   *ctepath;
+	List	   *pathkeys;
 
 	/*
 	 * Find the referenced CTE, and locate the plan previously made for it.
@@ -2922,6 +2924,19 @@ set_cte_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 	set_cte_size_estimates(root, rel, cteplan->plan_rows);
 
 	/*
+	 * Locate the best path previously made for the referenced CTE.  We need to
+	 * know its pathkeys.
+	 */
+	Assert(list_length(cteroot->cte_plan_ids) == list_length(cteroot->cte_paths));
+	ctepath = (Path *) list_nth(cteroot->cte_paths, ndx);
+
+	/* Convert the pathkeys to outer representation */
+	pathkeys = convert_subquery_pathkeys(root,
+										 rel,
+										 ctepath->pathkeys,
+										 cteplan->targetlist);
+
+	/*
 	 * We don't support pushing join clauses into the quals of a CTE scan, but
 	 * it could still have required parameterization due to LATERAL refs in
 	 * its tlist.
@@ -2929,7 +2944,7 @@ set_cte_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 	required_outer = rel->lateral_relids;
 
 	/* Generate appropriate path */
-	add_path(rel, create_ctescan_path(root, rel, required_outer));
+	add_path(rel, create_ctescan_path(root, rel, pathkeys, required_outer));
 }
 
 /*

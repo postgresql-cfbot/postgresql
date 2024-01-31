@@ -25008,13 +25008,13 @@ SELECT pg_type_is_visible('myschema.widget'::regtype);
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
-         <primary>pg_get_serial_sequence</primary>
+         <primary>pg_get_identity_sequence</primary>
         </indexterm>
-        <function>pg_get_serial_sequence</function> ( <parameter>table</parameter> <type>text</type>, <parameter>column</parameter> <type>text</type> )
-        <returnvalue>text</returnvalue>
+        <function>pg_get_identity_sequence</function> ( <parameter>table</parameter> <type>regclass</type>, <parameter>column</parameter> <type>name</type> )
+        <returnvalue>regclass</returnvalue>
        </para>
        <para>
-        Returns the name of the sequence associated with a column,
+        Returns the sequence associated with identity or serial column,
         or NULL if no sequence is associated with the column.
         If the column is an identity column, the associated sequence is the
         sequence internally created for that column.
@@ -25023,10 +25023,31 @@ SELECT pg_type_is_visible('myschema.widget'::regtype);
         it is the sequence created for that serial column definition.
         In the latter case, the association can be modified or removed
         with <command>ALTER SEQUENCE OWNED BY</command>.
-        (This function probably should have been
-        called <function>pg_get_owned_sequence</function>; its current name
-        reflects the fact that it has historically been used with serial-type
-        columns.)  The first parameter is a table name with optional
+        The result is suitable for passing to the sequence functions (see
+        <xref linkend="functions-sequence"/>).
+       </para>
+       <para>
+        A typical use is in reading the current value of the sequence for an
+        identity or serial column, for example:
+<programlisting>
+SELECT currval(pg_get_identity_sequence('sometable', 'id'));
+</programlisting>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_get_serial_sequence</primary>
+        </indexterm>
+        <function>pg_get_serial_sequence</function> ( <parameter>table</parameter> <type>text</type>, <parameter>column</parameter> <type>text</type> )
+        <returnvalue>text</returnvalue>
+       </para>
+       <para>
+        A backwards-compatibility wrapper
+        for <function>pg_get_identity_sequence</function>, which
+        uses <type>text</type> for the table and sequence names instead of
+        <type>regclass</type>.  The first parameter is a table name with optional
         schema, and the second parameter is a column name.  Because the first
         parameter potentially contains both schema and table names, it is
         parsed per usual SQL rules, meaning it is lower-cased by default.

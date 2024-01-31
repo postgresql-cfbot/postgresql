@@ -3194,47 +3194,62 @@ CommitTransactionCommand(void)
 				CommitSubTransaction();
 				s = CurrentTransactionState;	/* changed by pop */
 			} while (s->blockState == TBLOCK_SUBCOMMIT);
+			/*
+			 * REVIEWER NOTE: We used to have duplicated code here, to handle
+			 * the TBLOCK_END and TBLOCK_PREPARE cases exactly the same way
+			 * that we do above.  I replaced that with a recursive call to
+			 * CommitTransactionCommand(), to make this consistent with the
+			 * TBLOCK_SUBABORT_END and TBLOCK_SUBABORT_PENDING handling.  This
+			 * can only recurse once, so there's no risk of stack overflow.
+			 */
 			/* If we had a COMMIT command, finish off the main xact too */
-			if (s->blockState == TBLOCK_END)
-			{
-				Assert(s->parent == NULL);
-				CommitTransaction();
-				s->blockState = TBLOCK_DEFAULT;
-				if (s->chain)
-				{
-					StartTransaction();
-					s->blockState = TBLOCK_INPROGRESS;
-					s->chain = false;
-					RestoreTransactionCharacteristics(&savetc);
-				}
-			}
-			else if (s->blockState == TBLOCK_PREPARE)
-			{
-				Assert(s->parent == NULL);
-				PrepareTransaction();
-				s->blockState = TBLOCK_DEFAULT;
-			}
-			else
+			if (s->blockState != TBLOCK_END && s->blockState != TBLOCK_PREPARE)
 				elog(ERROR, "CommitTransactionCommand: unexpected state %s",
 					 BlockStateAsString(s->blockState));
-			break;
-
-			/*
-			 * The current already-failed subtransaction is ending due to a
-			 * ROLLBACK or ROLLBACK TO command, so pop it and recursively
-			 * examine the parent (which could be in any of several states).
-			 */
-		case TBLOCK_SUBABORT_END:
-			CleanupSubTransaction();
 			CommitTransactionCommand();
 			break;
 
 			/*
-			 * As above, but it's not dead yet, so abort first.
+			 * The current subtransaction is ending due to a ROLLBACK or
+			 * ROLLBACK TO command.  Pop it, as well as any of it parents that
+			 * are also being rolled back.
 			 */
+		case TBLOCK_SUBABORT_END:
 		case TBLOCK_SUBABORT_PENDING:
-			AbortSubTransaction();
-			CleanupSubTransaction();
+			do {
+				/*
+				 * The difference between SUBABORT_END and SUBABORT_PENDING is
+				 * whether the subtransaction has already been aborted and we
+				 * just need to clean it up, or if we need to also abort it
+				 * first.
+				 */
+				if (s->blockState == TBLOCK_SUBABORT_PENDING)
+					AbortSubTransaction();
+				CleanupSubTransaction();
+				s = CurrentTransactionState;	/* changed by pop */
+			} while (s->blockState == TBLOCK_SUBABORT_END ||
+					 s->blockState == TBLOCK_SUBABORT_PENDING);
+
+			/*
+			 * REVIEWER NOTE: the old comment said that the parent can be "in
+			 * any of several states".  I looked at the code that sets the
+			 * state to TBLOCK_SUBABORT_END or TBLOCK_SUBABORT_PENDING, and
+			 * came to the conclusion that these are the only possible states
+			 * above the chain of TBLOCK_SUBABORT_END or
+			 * TBLOCK_SUBABORT_PENDING subtransactions.
+			 */
+			/*
+			 * Recurse to roll back the top-level transaction too, or to
+			 * restart at a savepoint in case of ROLLBACK TO.
+			 */
+			if (s->blockState != TBLOCK_ABORT_PENDING &&
+				s->blockState != TBLOCK_ABORT &&
+				s->blockState != TBLOCK_SUBRESTART &&
+				s->blockState != TBLOCK_SUBABORT_RESTART)
+			{
+				elog(ERROR, "CommitTransactionCommand: unexpected state %s",
+					 BlockStateAsString(s->blockState));
+			}
 			CommitTransactionCommand();
 			break;
 
@@ -3243,35 +3258,13 @@ CommitTransactionCommand(void)
 			 * command.  Abort and pop it, then start a new subtransaction
 			 * with the same name.
 			 */
-		case TBLOCK_SUBRESTART:
-			{
-				char	   *name;
-				int			savepointLevel;
-
-				/* save name and keep Cleanup from freeing it */
-				name = s->name;
-				s->name = NULL;
-				savepointLevel = s->savepointLevel;
-
-				AbortSubTransaction();
-				CleanupSubTransaction();
-
-				DefineSavepoint(NULL);
-				s = CurrentTransactionState;	/* changed by push */
-				s->name = name;
-				s->savepointLevel = savepointLevel;
-
-				/* This is the same as TBLOCK_SUBBEGIN case */
-				Assert(s->blockState == TBLOCK_SUBBEGIN);
-				StartSubTransaction();
-				s->blockState = TBLOCK_SUBINPROGRESS;
-			}
-			break;
-
 			/*
-			 * Same as above, but the subtransaction had already failed, so we
-			 * don't need AbortSubTransaction.
+			 * REVIEWER NOTE: I merged the TBLOCK_SUBRESTART and
+			 * TBLOCK_SUBABORT_RESTART cases. Not strictly necessary, but it
+			 * makes this more similar to how the TBLOCK_SUBABORT_END and
+			 * TBLOCK_SUBABORT_PENDING cases are handled now.
 			 */
+		case TBLOCK_SUBRESTART:
 		case TBLOCK_SUBABORT_RESTART:
 			{
 				char	   *name;
@@ -3282,6 +3275,12 @@ CommitTransactionCommand(void)
 				s->name = NULL;
 				savepointLevel = s->savepointLevel;
 
+				/*
+				 * In SUBABORT_RESTART state, the subtransaction had already
+				 * failed, so we don't need AbortSubTransaction.
+				 */
+				if (s->blockState == TBLOCK_SUBRESTART)
+					AbortSubTransaction();
 				CleanupSubTransaction();
 
 				DefineSavepoint(NULL);
@@ -3437,17 +3436,27 @@ AbortCurrentTransaction(void)
 		case TBLOCK_SUBCOMMIT:
 		case TBLOCK_SUBABORT_PENDING:
 		case TBLOCK_SUBRESTART:
-			AbortSubTransaction();
-			CleanupSubTransaction();
-			AbortCurrentTransaction();
-			break;
-
-			/*
-			 * Same as above, except the Abort() was already done.
-			 */
 		case TBLOCK_SUBABORT_END:
 		case TBLOCK_SUBABORT_RESTART:
-			CleanupSubTransaction();
+			/*
+			 * If multiple subtransactions need to be cleaned up, iterate
+			 * through them here. The recursion would handle them too, but
+			 * this avoids running out of stack if there is a deep stack of
+			 * aborted subtransactions, and the compiler isn't smart enough
+			 * to optimize away the tail recursion.
+			 */
+			do {
+				if (s->blockState == TBLOCK_SUBABORT_END || s->blockState == TBLOCK_SUBABORT_RESTART)
+					AbortSubTransaction();
+				CleanupSubTransaction();
+			} while(s->blockState == TBLOCK_SUBBEGIN ||
+					s->blockState == TBLOCK_SUBRELEASE ||
+					s->blockState == TBLOCK_SUBCOMMIT ||
+					s->blockState == TBLOCK_SUBABORT_PENDING ||
+					s->blockState == TBLOCK_SUBRESTART ||
+					s->blockState == TBLOCK_SUBABORT_END ||
+					s->blockState == TBLOCK_SUBABORT_RESTART);
+			/* Abort the top-level transaction, too */
 			AbortCurrentTransaction();
 			break;
 	}

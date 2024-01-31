@@ -27974,6 +27974,27 @@ postgres=# SELECT '0/0'::pg_lsn + pd.segment_number * ps.setting::int + :offset 
        </para></entry>
       </row>
      </tbody>
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_import_ext_stats</primary>
+        </indexterm>
+        <function>pg_import_ext_stats</function> ( <parameter>extended stats object</parameter> <type>oid</type>, <parameter>server_version_num</parameter> <type>integer</type>, <parameter>extended_stats</parameter> <type>jsonb</type> )
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Modifies the <structname>pg_statistic_ext_data</structname> rows for the
+        <structfield>oid</structfield> matching
+        <parameter>extended statistics object</parameter> are transactionally
+        replaced with the values found in <parameter>extended_stats</parameter>.
+        The purpose of this function is to apply statistics values in an upgrade
+        situation that are "good enough" for system operation until they are
+        replaced by the next auto-analyze. This function could be used by
+        <program>pg_upgrade</program> and <program>pg_restore</program> to
+        convey the statistics from the old system version into the new one.
+       </para></entry>
+      </row>
+     </tbody>
     </tgroup>
    </table>
 
@@ -28688,6 +28709,49 @@ postgres=# SELECT '0/0'::pg_lsn + pd.segment_number * ps.setting::int + :offset 
     The functions shown in <xref linkend="functions-admin-dblocation"/> assist
     in identifying the specific disk files associated with database objects.
    </para>
+
+   <table id="functions-admin-statsimport">
+    <title>Database Object Statistics Import Functions</title>
+    <tgroup cols="1">
+     <thead>
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        Function
+       </para>
+       <para>
+        Description
+       </para></entry>
+      </row>
+     </thead>
+
+     <tbody>
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_import_rel_stats</primary>
+        </indexterm>
+        <function>pg_import_rel_stats</function> ( <parameter>relation</parameter> <type>regclass</type>, <parameter>server_version_num</parameter> <type>integer</type>, <parameter>num_tuples</parameter> <type>float4</type>, <parameter>num_pages</parameter> <type>integer</type>, <parameter>column_stats</parameter> <type>jsonb</type> )
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Modifies the <structname>pg_class</structname> row with the
+        <structfield>oid</structfield> matching <parameter>relation</parameter>
+        to set the <structfield>reltuples</structfield> and
+        <structfield>relpages</structfield> fields. This is done nontransactionally.
+        The <structname>pg_statistic</structname> rows for the
+        <structfield>statrelid</structfield> matching <parameter>relation</parameter>
+        are replaced with the values found in <parameter>column_stats</parameter>,
+        and this is done transactionally. The purpose of this function is to apply
+        statistics values in an upgrade situation that are "good enough" for system
+        operation until they are replaced by the next auto-analyze. This function
+        could be used by <program>pg_upgrade</program> and
+        <program>pg_restore</program> to convey the statistics from the old system
+        version into the new one.
+       </para></entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
 
    <table id="functions-admin-dblocation">
     <title>Database Object Location Functions</title>

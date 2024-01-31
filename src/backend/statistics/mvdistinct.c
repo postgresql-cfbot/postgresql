@@ -31,6 +31,8 @@
 #include "lib/stringinfo.h"
 #include "statistics/extended_stats_internal.h"
 #include "statistics/statistics.h"
+#include "utils/builtins.h"
+#include "utils/float.h"
 #include "utils/fmgrprotos.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
@@ -697,4 +699,103 @@ generate_combinations(CombinationGenerator *state)
 	generate_combinations_recurse(state, 0, 0, current);
 
 	pfree(current);
+}
+
+
+/*
+ * statext_ndistinct_import
+ *
+ * Like statext_ndistinct_build, but import the data
+ * from a JSON container.
+ *
+ * import format:
+ * [
+ *   {
+ *     "attnums": [ intstr, ... ],
+ *     "ndistinct": floatstr
+ *   }
+ * ]
+ *
+ */
+MVNDistinct *
+statext_ndistinct_import(JsonbContainer *cont)
+{
+	MVNDistinct	   *result;
+	int				nitems;
+	int				i;
+
+	if (cont == NULL)
+		return NULL;
+
+	nitems = JsonContainerSize(cont);
+
+	if (nitems == 0)
+		return NULL;
+
+	result = palloc(offsetof(MVNDistinct, items) +
+					(nitems * sizeof(MVNDistinctItem)));
+	result->magic = STATS_NDISTINCT_MAGIC;
+	result->type = STATS_NDISTINCT_TYPE_BASIC;
+	result->nitems = nitems;
+
+	for (i = 0; i < nitems; i++)
+	{
+		JsonbValue	   *j;
+		JsonbContainer *elemobj,
+					   *attnumarr;
+		int				a;
+		int				natts;
+		char		   *s;
+
+		MVNDistinctItem *item = &result->items[i];
+
+		j = getIthJsonbValueFromContainer(cont, i);
+
+		if ((j == NULL)
+				|| (j->type != jbvBinary)
+				|| (!JsonContainerIsObject(j->val.binary.data)))
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("invalid statistics format, elements of stxdndistinct "
+					  "must be objects.")));
+
+		elemobj = j->val.binary.data;
+
+		s = key_lookup_cstring(elemobj, "ndistinct");
+		item->ndistinct = float8in_internal(s, NULL, "double", s, NULL);
+		pfree(s);
+
+		attnumarr = key_lookup_array(elemobj, "attnums");
+
+		if (attnumarr == NULL)
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("invalid statistics format, elements of stxdndistinct "
+					  "must contain an element called attnums which is an array.")));
+
+		natts = JsonContainerSize(attnumarr);
+		item->nattributes = natts;
+		item->attributes = palloc(sizeof(AttrNumber) * natts);
+
+		for (a = 0; a < natts; a++)
+		{
+			JsonbValue *aj;
+
+			aj = getIthJsonbValueFromContainer(attnumarr, a);
+
+			if ((aj == NULL) || (aj->type != jbvString))
+				ereport(ERROR,
+				  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				   errmsg("invalid statistics format, elements of attnums "
+						  "must be string representations of integers.")));
+			s = JsonbStringValueToCString(aj);
+			item->attributes[a] = pg_strtoint16(s);
+			pfree(s);
+			pfree(aj);
+		}
+
+		pfree(j);
+	}
+
+	return result;
 }

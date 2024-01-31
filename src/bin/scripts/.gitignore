@@ -6,5 +6,7 @@
 /reindexdb
 /vacuumdb
 /pg_isready
+/pg_export_stats
+/pg_import_stats
 
 /tmp_check/

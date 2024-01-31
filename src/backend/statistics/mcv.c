@@ -29,6 +29,7 @@
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/bytea.h"
+#include "utils/float.h"
 #include "utils/fmgroids.h"
 #include "utils/fmgrprotos.h"
 #include "utils/lsyscache.h"
@@ -679,7 +680,6 @@ statext_mcv_serialize(MCVList *mcvlist, VacAttrStats **stats)
 			/* skip NULL values - we don't need to deduplicate those */
 			if (mcvlist->items[i].isnull[dim])
 				continue;
-
 			/* append the value at the end */
 			values[dim][counts[dim]] = mcvlist->items[i].values[dim];
 			counts[dim] += 1;
@@ -2176,4 +2176,219 @@ mcv_clause_selectivity_or(PlannerInfo *root, StatisticExtInfo *stat,
 	pfree(new_matches);
 
 	return s;
+}
+
+/*
+ * statext_mcv_import
+ *      like statext_mcv_build, but import from JSON.
+ *
+ * import format:
+ * [
+ *   {
+ *     "index": intstr,
+ *     "values": '{va1ue, ...}',
+ *     "nulls": '{t,f,...}',
+ *     "frequency": floatstr,
+ *     "base_frequency": floatstr
+ *   }
+ * ]
+ *
+ */
+MCVList *
+statext_mcv_import(JsonbContainer *cont, VacAttrStats **stats, int ndims)
+{
+	int			nitems;
+	int			i;
+	MCVList	   *mcvlist;
+	Oid		    ioparams[STATS_MAX_DIMENSIONS];
+	FmgrInfo	finfos[STATS_MAX_DIMENSIONS];
+
+	if (cont != NULL)
+		nitems = JsonContainerSize(cont);
+	else
+		nitems = 0;
+
+	mcvlist = (MCVList *) palloc0(offsetof(MCVList, items) +
+								  (sizeof(MCVItem) * nitems));
+
+	mcvlist->magic = STATS_MCV_MAGIC;
+	mcvlist->type = STATS_MCV_TYPE_BASIC;
+	mcvlist->nitems = nitems;
+	mcvlist->ndimensions = ndims;
+
+	/* We will need these input functions $nitems times. */
+	for (i = 0; i < ndims; i++)
+	{
+		Oid		typid = stats[i]->attrtypid;
+		Oid		infunc;
+
+		mcvlist->types[i] = typid;
+		getTypeInputInfo(typid, &infunc, &ioparams[i]);
+		fmgr_info(infunc, &finfos[i]);
+	}
+
+	for (i = 0; i < nitems; i++)
+	{
+		JsonbValue	   *j;
+		JsonbContainer *itemobj,
+					   *valuesarr,
+					   *nullsarr;
+		int				numvalues,
+						numnulls;
+		int				k;
+		MCVItem		   *item = &mcvlist->items[i];
+		char		   *s;
+
+		item->values = (Datum *) palloc0(sizeof(Datum) * ndims);
+		item->isnull = (bool *) palloc0(sizeof(bool) * ndims);
+
+		j = getIthJsonbValueFromContainer(cont, i);
+
+		if ((j == NULL)
+				|| (j->type != jbvBinary)
+				|| (!JsonContainerIsObject(j->val.binary.data)))
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("invalid statistics format, elements of stxdmcv "
+					  "must be objects.")));
+
+		itemobj = j->val.binary.data;
+
+		s = key_lookup_cstring(itemobj, "frequency");
+		if (s != NULL)
+		{
+			item->frequency = float8in_internal(s, NULL, "double", s, NULL);
+			pfree(s);
+		}
+		else
+			item->frequency = 0.0;
+
+		s = key_lookup_cstring(itemobj, "base_frequency");
+		if (s != NULL)
+		{
+			item->base_frequency = float8in_internal(s, NULL, "double", s, NULL);
+			pfree(s);
+		}
+		else
+			item->base_frequency = 0.0;
+
+		/*
+		 * Import the nulls array first, because that tells us which elements
+		 * of the values array we can skip.
+		 */
+		nullsarr = key_lookup_array(itemobj, "nulls");
+
+		if (nullsarr == NULL)
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("invalid statistics format, elements of stxdmcv "
+					  "must contain an element called nulls which is an array.")));
+
+		numnulls = JsonContainerSize(nullsarr);
+
+		/* having more nulls than dimensions is concerning. */
+		if (numnulls > ndims)
+		{
+			ereport(WARNING,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("statistics import has %d mcv dimensions, "
+					  "but the expects %d. Skipping excess dimensions.",
+						numnulls, ndims)));
+			numnulls = ndims;
+		}
+
+		for (k = 0; k < numnulls; k++)
+		{
+			JsonbValue  *nj = getIthJsonbValueFromContainer(nullsarr, k);
+
+			if ((nj == NULL) || (nj->type != jbvBool))
+				ereport(ERROR,
+				  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				   errmsg("invalid statistics format, elements of nulls "
+						  "must be boolens.")));
+
+			item->isnull[k] = nj->val.boolean;
+
+			pfree(nj);
+		}
+
+		/* Any remaining slots are marked null */
+		for (k = numnulls; k < ndims; k++)
+			item->isnull[k] = true;
+
+		valuesarr = key_lookup_array(itemobj, "values");
+
+		if (valuesarr == NULL)
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("invalid statistics format, elements of stxdmcv "
+					  "must contain an element called values which is an array.")));
+
+		numvalues = JsonContainerSize(valuesarr);
+
+		/* having more values than dimensions is concerning. */
+		if (numvalues > ndims)
+		{
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("statistics import has %d mcv dimensions, "
+					  "but the expects %d. Skipping excess dimensions.",
+						numvalues, ndims)));
+			numvalues = ndims;
+		}
+
+		for (k = 0; k < numvalues; k++)
+		{
+			JsonbValue *vj;
+			bool		import_error = true;
+
+			/* if the element was null flagged, don't bother */
+			if (item->isnull[k])
+			{
+				item->values[k] = (Datum) 0;
+				continue;
+			}
+
+			vj = getIthJsonbValueFromContainer(valuesarr, k);
+
+			if (vj != NULL)
+			{
+				if (vj->type == jbvString)
+				{
+					char   *str = JsonbStringValueToCString(vj);
+
+					item->values[k] = InputFunctionCall(&finfos[k],
+														str,
+														ioparams[k],
+														stats[k]->attrtypmod);
+
+					import_error = false;
+					pfree(str);
+				}
+				else if (vj->type == jbvNull)
+				{
+					item->values[k] = (Datum) 0;
+					item->isnull[k] = true; /* mark just in case */
+					import_error = false;
+				}
+				pfree(vj);
+			}
+
+			if (import_error)
+				ereport(ERROR,
+				  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				   errmsg("invalid statistics format, elements of values "
+						  "must be strings or null.")));
+
+		}
+
+		/* Any remaining slots are marked null */
+		for (k = numvalues; k < ndims; k++)
+		{
+			item->values[k] = (Datum) 0;
+			item->isnull[k] = true;
+		}
+	}
+
+	return mcvlist;
 }

@@ -15,6 +15,7 @@
 
 #include "commands/vacuum.h"
 #include "nodes/pathnodes.h"
+#include "utils/jsonb.h"
 
 #define STATS_MAX_DIMENSIONS	8	/* max number of attributes */
 
@@ -101,6 +102,7 @@ extern MCVList *statext_mcv_load(Oid mvoid, bool inh);
 extern void BuildRelationExtStatistics(Relation onerel, bool inh, double totalrows,
 									   int numrows, HeapTuple *rows,
 									   int natts, VacAttrStats **vacattrstats);
+
 extern int	ComputeExtStatisticsRows(Relation onerel,
 									 int natts, VacAttrStats **vacattrstats);
 extern bool statext_is_kind_built(HeapTuple htup, char type);
@@ -126,5 +128,19 @@ extern StatisticExtInfo *choose_best_statistics(List *stats, char requiredkind,
 												List **clause_exprs,
 												int nclauses);
 extern HeapTuple statext_expressions_load(Oid stxoid, bool inh, int idx);
+
+extern char *key_lookup_cstring(JsonbContainer *cont, const char *key);
+extern JsonbContainer *key_lookup_object(JsonbContainer *cont, const char *key);
+extern JsonbContainer *key_lookup_array(JsonbContainer *cont, const char *key);
+
+extern Datum pg_import_rel_stats(PG_FUNCTION_ARGS);
+
+extern VacAttrStats *examine_rel_attribute(Form_pg_attribute attr,
+										   Relation onerel, Node *index_expr);
+
+extern
+void import_attribute(Oid relid, const VacAttrStats *stat,
+					  JsonbContainer *cont, bool inh, Datum values[],
+					  bool nulls[], bool replaces[]);
 
 #endif							/* STATISTICS_H */

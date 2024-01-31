@@ -19,6 +19,7 @@
 #include "access/detoast.h"
 #include "access/genam.h"
 #include "access/htup_details.h"
+#include "access/relation.h"
 #include "access/table.h"
 #include "catalog/indexing.h"
 #include "catalog/pg_collation.h"
@@ -419,6 +420,115 @@ statext_is_kind_built(HeapTuple htup, char type)
 }
 
 /*
+ * Create a single StatExtEntry from a fetched heap tuple
+ */
+static StatExtEntry *
+create_stat_ext_entry(HeapTuple htup)
+{
+	StatExtEntry *entry;
+	Datum		datum;
+	bool		isnull;
+	int			i;
+	ArrayType  *arr;
+	char	   *enabled;
+	Form_pg_statistic_ext staForm;
+	List	   *exprs = NIL;
+
+	entry = palloc0(sizeof(StatExtEntry));
+	staForm = (Form_pg_statistic_ext) GETSTRUCT(htup);
+	entry->statOid = staForm->oid;
+	entry->schema = get_namespace_name(staForm->stxnamespace);
+	entry->name = pstrdup(NameStr(staForm->stxname));
+	entry->stattarget = staForm->stxstattarget;
+	for (i = 0; i < staForm->stxkeys.dim1; i++)
+	{
+		entry->columns = bms_add_member(entry->columns,
+										staForm->stxkeys.values[i]);
+	}
+
+	/* decode the stxkind char array into a list of chars */
+	datum = SysCacheGetAttrNotNull(STATEXTOID, htup,
+								   Anum_pg_statistic_ext_stxkind);
+	arr = DatumGetArrayTypeP(datum);
+	if (ARR_NDIM(arr) != 1 ||
+		ARR_HASNULL(arr) ||
+		ARR_ELEMTYPE(arr) != CHAROID)
+		elog(ERROR, "stxkind is not a 1-D char array");
+	enabled = (char *) ARR_DATA_PTR(arr);
+	for (i = 0; i < ARR_DIMS(arr)[0]; i++)
+	{
+		Assert((enabled[i] == STATS_EXT_NDISTINCT) ||
+			   (enabled[i] == STATS_EXT_DEPENDENCIES) ||
+			   (enabled[i] == STATS_EXT_MCV) ||
+			   (enabled[i] == STATS_EXT_EXPRESSIONS));
+		entry->types = lappend_int(entry->types, (int) enabled[i]);
+	}
+
+	/* decode expression (if any) */
+	datum = SysCacheGetAttr(STATEXTOID, htup,
+							Anum_pg_statistic_ext_stxexprs, &isnull);
+
+	if (!isnull)
+	{
+		char	   *exprsString;
+
+		exprsString = TextDatumGetCString(datum);
+		exprs = (List *) stringToNode(exprsString);
+
+		pfree(exprsString);
+
+		/*
+		 * Run the expressions through eval_const_expressions. This is not
+		 * just an optimization, but is necessary, because the planner
+		 * will be comparing them to similarly-processed qual clauses, and
+		 * may fail to detect valid matches without this.  We must not use
+		 * canonicalize_qual, however, since these aren't qual
+		 * expressions.
+		 */
+		exprs = (List *) eval_const_expressions(NULL, (Node *) exprs);
+
+		/* May as well fix opfuncids too */
+		fix_opfuncids((Node *) exprs);
+	}
+
+	entry->exprs = exprs;
+
+	return entry;
+}
+
+/*
+ * Return a list (of StatExtEntry) of statistics objects for the given relation.
+ */
+/* TODO needed????
+static StatExtEntry *
+fetch_statentry(Relation pg_statext, Oid stxid)
+{
+	SysScanDesc scan;
+	ScanKeyData skey;
+	HeapTuple	htup;
+	StatExtEntry *entry = NULL;
+
+	/-*
+	 * Prepare to scan pg_statistic_ext for entries having given oid.
+	 *-/
+	ScanKeyInit(&skey,
+				Anum_pg_statistic_ext_oid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(stxid));
+
+	scan = systable_beginscan(pg_statext, StatisticExtRelidIndexId, true,
+							  NULL, 1, &skey);
+
+	if (HeapTupleIsValid(htup = systable_getnext(scan)))
+		entry = create_stat_ext_entry(htup);
+
+	systable_endscan(scan);
+
+	return entry;
+}
+*/
+
+/*
  * Return a list (of StatExtEntry) of statistics objects for the given relation.
  */
 static List *
@@ -443,74 +553,7 @@ fetch_statentries_for_relation(Relation pg_statext, Oid relid)
 
 	while (HeapTupleIsValid(htup = systable_getnext(scan)))
 	{
-		StatExtEntry *entry;
-		Datum		datum;
-		bool		isnull;
-		int			i;
-		ArrayType  *arr;
-		char	   *enabled;
-		Form_pg_statistic_ext staForm;
-		List	   *exprs = NIL;
-
-		entry = palloc0(sizeof(StatExtEntry));
-		staForm = (Form_pg_statistic_ext) GETSTRUCT(htup);
-		entry->statOid = staForm->oid;
-		entry->schema = get_namespace_name(staForm->stxnamespace);
-		entry->name = pstrdup(NameStr(staForm->stxname));
-		entry->stattarget = staForm->stxstattarget;
-		for (i = 0; i < staForm->stxkeys.dim1; i++)
-		{
-			entry->columns = bms_add_member(entry->columns,
-											staForm->stxkeys.values[i]);
-		}
-
-		/* decode the stxkind char array into a list of chars */
-		datum = SysCacheGetAttrNotNull(STATEXTOID, htup,
-									   Anum_pg_statistic_ext_stxkind);
-		arr = DatumGetArrayTypeP(datum);
-		if (ARR_NDIM(arr) != 1 ||
-			ARR_HASNULL(arr) ||
-			ARR_ELEMTYPE(arr) != CHAROID)
-			elog(ERROR, "stxkind is not a 1-D char array");
-		enabled = (char *) ARR_DATA_PTR(arr);
-		for (i = 0; i < ARR_DIMS(arr)[0]; i++)
-		{
-			Assert((enabled[i] == STATS_EXT_NDISTINCT) ||
-				   (enabled[i] == STATS_EXT_DEPENDENCIES) ||
-				   (enabled[i] == STATS_EXT_MCV) ||
-				   (enabled[i] == STATS_EXT_EXPRESSIONS));
-			entry->types = lappend_int(entry->types, (int) enabled[i]);
-		}
-
-		/* decode expression (if any) */
-		datum = SysCacheGetAttr(STATEXTOID, htup,
-								Anum_pg_statistic_ext_stxexprs, &isnull);
-
-		if (!isnull)
-		{
-			char	   *exprsString;
-
-			exprsString = TextDatumGetCString(datum);
-			exprs = (List *) stringToNode(exprsString);
-
-			pfree(exprsString);
-
-			/*
-			 * Run the expressions through eval_const_expressions. This is not
-			 * just an optimization, but is necessary, because the planner
-			 * will be comparing them to similarly-processed qual clauses, and
-			 * may fail to detect valid matches without this.  We must not use
-			 * canonicalize_qual, however, since these aren't qual
-			 * expressions.
-			 */
-			exprs = (List *) eval_const_expressions(NULL, (Node *) exprs);
-
-			/* May as well fix opfuncids too */
-			fix_opfuncids((Node *) exprs);
-		}
-
-		entry->exprs = exprs;
-
+		StatExtEntry *entry = create_stat_ext_entry(htup);
 		result = lappend(result, entry);
 	}
 
@@ -2411,6 +2454,8 @@ serialize_expr_stats(AnlExprData *exprdata, int nexprs)
 								  false,
 								  typOid,
 								  CurrentMemoryContext);
+
+		heap_freetuple(stup);
 	}
 
 	table_close(sd, RowExclusiveLock);
@@ -2635,4 +2680,260 @@ make_build_data(Relation rel, StatExtEntry *stat, int numrows, HeapTuple *rows,
 	FreeExecutorState(estate);
 
 	return result;
+}
+
+/*
+ * Generate VacAttrStats for a single pg_statistic_ext
+ */
+static VacAttrStats **
+examine_ext_stat_types(StatExtEntry *stxentry, Relation rel)
+{
+	TupleDesc		tupdesc = RelationGetDescr(rel);
+	Bitmapset	   *columns = stxentry->columns;
+	List		   *exprs = stxentry->exprs;
+	int				natts = bms_num_members(columns) + list_length(exprs);
+	int				i = 0;
+	int				m = -1;
+
+	VacAttrStats  **stats;
+	ListCell   *lc;
+
+	stats = (VacAttrStats **) palloc(natts * sizeof(VacAttrStats *));
+
+	/* lookup VacAttrStats info for the requested columns (same attnum) */
+	while ((m = bms_next_member(columns, m)) >= 0)
+	{
+		Form_pg_attribute	attform = TupleDescAttr(tupdesc, m - 1);
+
+		stats[i] = examine_rel_attribute(attform, rel, NULL);
+
+		/* ext expr stats remove the tupattnum */
+		stats[i]->tupattnum = InvalidAttrNumber;
+		i++;
+	}
+
+	/* also add info for expressions */
+	foreach(lc, exprs)
+	{
+		Node	   *expr = (Node *) lfirst(lc);
+
+		stats[i] = examine_attribute(expr);
+		i++;
+	}
+
+	return stats;
+}
+
+/*
+ * Generate expressions from imported data.
+ */
+static Datum
+import_expressions(Relation rel, JsonbContainer *cont,
+					VacAttrStats **expr_stats, int nexprs)
+{
+	int			i;
+	int			nelems;
+	Oid			typOid;
+	Relation	sd;
+
+	ArrayBuildState *astate = NULL;
+
+	/* skip if no stats to import */
+	if (cont == NULL)
+		return (Datum) 0;
+
+	nelems = JsonContainerSize(cont);
+
+	if (nelems == 0)
+		return (Datum) 0;
+
+	sd = table_open(StatisticRelationId, RowExclusiveLock);
+
+	/* lookup OID of composite type for pg_statistic */
+	typOid = get_rel_type_id(StatisticRelationId);
+	if (!OidIsValid(typOid))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("relation \"%s\" does not have a composite type",
+						"pg_statistic")));
+
+	/*
+	 * The number of elements should not exceed the number of columns in the
+	 * extended statistics object. The elements should follow the same order
+	 * as they do on disk: regular attributes first, followed by expressions.
+	 * TODO make this a warning
+	 */
+	if (nelems > nexprs)
+	{
+		nelems = nexprs;
+	}
+	nelems = Min(nelems, nexprs);
+
+	for (i = 0; i < nelems; i++)
+	{
+		Datum		values[Natts_pg_statistic] = { 0 };
+		bool		nulls[Natts_pg_statistic] = { false };
+		bool		replaces[Natts_pg_statistic] = { false };
+		HeapTuple	stup;
+
+		JsonbValue   *j = getIthJsonbValueFromContainer(cont, i);
+		VacAttrStats *stat = expr_stats[i];
+
+		JsonbContainer *exprobj;
+
+		if ((j == NULL)
+				|| (j->type != jbvBinary)
+				|| (!JsonContainerIsObject(j->val.binary.data)))
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("invalid statistics format, elements of stxdexprs "
+					  "must be objects.")));
+
+		exprobj = j->val.binary.data;
+
+		import_attribute(InvalidOid, stat, exprobj, false, values, nulls, replaces);
+
+		stup = heap_form_tuple(RelationGetDescr(sd), values, nulls);
+
+		astate = accumArrayResult(astate,
+								  heap_copy_tuple_as_datum(stup, RelationGetDescr(sd)),
+								  false,
+								  typOid,
+								  CurrentMemoryContext);
+		pfree(j);
+	}
+
+	table_close(sd, RowExclusiveLock);
+
+	return makeArrayResult(astate, CurrentMemoryContext);
+}
+
+/*
+ * import_pg_ext_stats
+ *
+ * Import stats for one aspect (inherited / regular) of an Extended Statistics
+ * object.
+ *
+ * The JSON container should look like this:
+ * {
+ *     "stxkinds": array of single characters (up to 3?),
+ *     "stxdndistinct": [ {ndistinct}, ... ],
+ *     "stxdndependencies": [ {dependency}, ... ]
+ *     "stxdmcv": [ {mcv}, ... ]
+ *     "stxdexprs" : [ {pg_statistic}, ... ]
+ * }
+ */
+static void
+import_pg_statistic_ext_data(StatExtEntry *stxentry, Relation rel,
+							 bool inh, JsonbContainer *cont,
+							 VacAttrStats **stats)
+{
+	int				ncols;
+	int				nexprs;
+	int				natts;
+	VacAttrStats  **expr_stats;
+
+	JsonbContainer *arraycont;
+	MCVList		   *mcvlist;
+	MVDependencies *dependencies;
+	MVNDistinct	   *ndistinct;
+	Datum			exprs;
+
+	/* skip if no stats to import */
+	if (cont == NULL)
+		return;
+
+	ncols = bms_num_members(stxentry->columns);
+	nexprs = list_length(stxentry->exprs);
+	natts = ncols + nexprs;
+	expr_stats = &stats[ncols];
+
+	arraycont = key_lookup_array(cont, "stxdndistinct");
+	ndistinct = statext_ndistinct_import(arraycont);
+
+	arraycont = key_lookup_array(cont, "stxdndependencies");
+	dependencies = statext_dependencies_import(arraycont);
+
+	arraycont = key_lookup_array(cont, "stxdmcv");
+	mcvlist = statext_mcv_import(arraycont, stats, natts);
+
+	arraycont = key_lookup_array(cont, "stxdexprs");
+	exprs = import_expressions(rel, arraycont, expr_stats, nexprs);
+
+	statext_store(stxentry->statOid, inh, ndistinct, dependencies, mcvlist,
+				  exprs, stats);
+}
+
+/*
+ * Import JSON-serialized stats to an Extended Statistics object.
+ */
+Datum
+pg_import_ext_stats(PG_FUNCTION_ARGS)
+{
+	Oid				stxid;
+	int32			stats_version_num;
+	Jsonb		   *jb;
+	JsonbContainer *cont;
+	Relation		rel;
+	HeapTuple		etup;
+	Relation		sd;
+	StatExtEntry   *stxentry;
+	VacAttrStats  **stats;
+
+	Form_pg_statistic_ext stxform;
+
+	if (PG_ARGISNULL(0))
+		ereport(ERROR,
+		  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		   errmsg("extended statistics oid cannot be NULL")));
+	stxid = PG_GETARG_OID(0);
+
+	if (PG_ARGISNULL(1))
+		ereport(ERROR,
+		  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		   errmsg("server_version_number cannot be NULL")));
+	stats_version_num = PG_GETARG_INT32(1);
+
+	if (stats_version_num < 100000)
+		ereport(ERROR,
+		  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		   errmsg("invalid statistics version: %d is earlier than earliest supported version",
+				  stats_version_num)));
+
+	if (PG_ARGISNULL(2))
+		PG_RETURN_BOOL(false);
+
+	jb = PG_GETARG_JSONB_P(2);
+	if (!JB_ROOT_IS_OBJECT(jb))
+		ereport(ERROR,
+		  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		   errmsg("extended_stats must be jsonb object at root")));
+
+	sd = table_open(StatisticRelationId, RowExclusiveLock);
+	etup = SearchSysCacheCopy1(STATEXTOID, ObjectIdGetDatum(stxid));
+	if (!HeapTupleIsValid(etup))
+		elog(ERROR, "pg_statistic_ext entry for oid %u vanished during statistics import",
+			 stxid);
+
+	stxform = (Form_pg_statistic_ext) GETSTRUCT(etup);
+
+	rel = relation_open(stxform->stxrelid, ShareUpdateExclusiveLock);
+
+	stxentry = create_stat_ext_entry(etup);
+
+	stats = examine_ext_stat_types(stxentry, rel);
+
+	cont = key_lookup_object(&jb->root, "regular");
+	import_pg_statistic_ext_data(stxentry, rel, false, cont, stats);
+
+	if (rel->rd_rel->relhassubclass)
+	{
+		cont = key_lookup_object(&jb->root, "inherited");
+		import_pg_statistic_ext_data(stxentry, rel, true, cont, stats);
+	}
+
+	relation_close(rel, NoLock);
+	table_close(sd, RowExclusiveLock);
+
+	PG_RETURN_BOOL(true);
 }

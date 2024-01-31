@@ -27,7 +27,9 @@
 #include "parser/parsetree.h"
 #include "statistics/extended_stats_internal.h"
 #include "statistics/statistics.h"
+#include "utils/builtins.h"
 #include "utils/bytea.h"
+#include "utils/float.h"
 #include "utils/fmgroids.h"
 #include "utils/fmgrprotos.h"
 #include "utils/lsyscache.h"
@@ -1828,4 +1830,113 @@ dependencies_clauselist_selectivity(PlannerInfo *root,
 	pfree(unique_exprs);
 
 	return s1;
+}
+
+/*
+ * statext_dependencies_import
+ *
+ * Like statext_dependencies_build, but import the data
+ * from a JSON object.
+ *
+ * import format:
+ * [
+ *   {
+ *     "attnums": [ intstr, ... ],
+ *     "degree": floatstr
+ *   }
+ * ]
+ *
+ */
+MVDependencies *
+statext_dependencies_import(JsonbContainer *cont)
+{
+	MVDependencies *dependencies = NULL;
+	int				ndeps;
+	int				i;
+
+
+	if (cont == NULL)
+		ndeps = 0;
+	else
+		ndeps = JsonContainerSize(cont);
+
+	if (ndeps == 0)
+		dependencies = (MVDependencies *) palloc0(sizeof(MVDependencies));
+	else
+		dependencies = (MVDependencies *) palloc0(offsetof(MVDependencies, deps)
+												   + (ndeps * sizeof(MVDependency *)));
+
+	dependencies->magic = STATS_DEPS_MAGIC;
+	dependencies->type = STATS_DEPS_TYPE_BASIC;
+	dependencies->ndeps = ndeps;
+
+	/* compute length of output */
+	for (i = 0; i < ndeps; i++)
+	{
+		JsonbValue	   *j;
+		JsonbContainer *elemobj,
+					   *attnumarr;
+		MVDependency   *d;
+		char		   *s;
+		int				a;
+		int				natts;
+
+		j = getIthJsonbValueFromContainer(cont, i);
+
+		if ((j == NULL)
+				|| (j->type != jbvBinary)
+				|| (!JsonContainerIsObject(j->val.binary.data)))
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("invalid statistics format, elements of stxdepndencies "
+					  "must be objects.")));
+
+		elemobj = j->val.binary.data;
+		attnumarr = key_lookup_array(elemobj, "attnums");
+
+		if (attnumarr == NULL)
+			ereport(ERROR,
+			  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			   errmsg("invalid statistics format, elements of stxdependencies "
+					  "must contain an element called attnums which is an array.")));
+
+		natts = JsonContainerSize(attnumarr);
+		d = (MVDependency *) palloc0(offsetof(MVDependency, attributes)
+									 + (natts * sizeof(AttrNumber)));
+		dependencies->deps[i] = d;
+
+		d->nattributes = natts;
+
+		s = key_lookup_cstring(elemobj, "degree");
+		if (s != NULL)
+		{
+			d->degree = float8in_internal(s, NULL, "double", s, NULL);
+			pfree(s);
+		}
+		else
+			d->degree = 0;
+
+		for (a = 0; a < natts; a++)
+		{
+			JsonbValue *aj;
+			char	   *str;
+
+			aj = getIthJsonbValueFromContainer(attnumarr, a);
+
+			if ((aj == NULL) || (aj->type != jbvString))
+				ereport(ERROR,
+				  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				   errmsg("invalid statistics format, elements of attnums "
+						  "must be string representations of integers.")));
+
+			str = JsonbStringValueToCString(aj);
+			d->attributes[a] = pg_strtoint16(str);
+			pfree(str);
+			pfree(aj);
+		}
+
+		pfree(j);
+	}
+
+	return dependencies;
 }

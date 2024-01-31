@@ -68,17 +68,21 @@ typedef struct StatsBuildData
 	bool	  **nulls;
 } StatsBuildData;
 
-
 extern MVNDistinct *statext_ndistinct_build(double totalrows, StatsBuildData *data);
+extern MVNDistinct *statext_ndistinct_import(JsonbContainer *cont);
 extern bytea *statext_ndistinct_serialize(MVNDistinct *ndistinct);
 extern MVNDistinct *statext_ndistinct_deserialize(bytea *data);
 
 extern MVDependencies *statext_dependencies_build(StatsBuildData *data);
+extern MVDependencies *statext_dependencies_import(JsonbContainer *cont);
 extern bytea *statext_dependencies_serialize(MVDependencies *dependencies);
 extern MVDependencies *statext_dependencies_deserialize(bytea *data);
+extern bytea *import_dependencies(JsonbContainer *cont);
 
 extern MCVList *statext_mcv_build(StatsBuildData *data,
 								  double totalrows, int stattarget);
+extern MCVList *statext_mcv_import(JsonbContainer *cont,
+									VacAttrStats **stats, int natts);
 extern bytea *statext_mcv_serialize(MCVList *mcvlist, VacAttrStats **stats);
 extern MCVList *statext_mcv_deserialize(bytea *data);
 
@@ -126,5 +130,7 @@ extern Selectivity mcv_clause_selectivity_or(PlannerInfo *root,
 											 Selectivity *overlap_mcvsel,
 											 Selectivity *overlap_basesel,
 											 Selectivity *totalsel);
+
+extern Datum pg_import_ext_stats(PG_FUNCTION_ARGS);
 
 #endif							/* EXTENDED_STATS_INTERNAL_H */

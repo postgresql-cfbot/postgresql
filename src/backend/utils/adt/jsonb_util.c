@@ -1992,3 +1992,18 @@ uniqueifyJsonbObject(JsonbValue *object, bool unique_keys, bool skip_nulls)
 		}
 	}
 }
+
+/*
+ * Extract a JsonbValue as a cstring.
+ */
+char *JsonbStringValueToCString(JsonbValue *j)
+{
+	char *s;
+
+	Assert(j->type == jbvString);
+	/* make a string that we are sure is null-terminated */
+	s = palloc(j->val.string.len + 1);
+	memcpy(s, j->val.string.val, j->val.string.len);
+	s[j->val.string.len] = '\0';
+	return s;
+}

@@ -1,0 +1,7 @@
+CREATE EXTENSION test_misc;
+SELECT test_bitset();
+ test_bitset 
+-------------
+ 
+(1 row)
+

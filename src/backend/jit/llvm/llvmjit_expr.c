@@ -396,30 +396,52 @@ llvm_compile_expr(ExprState *state)
 			case EEOP_INNER_VAR:
 			case EEOP_OUTER_VAR:
 			case EEOP_SCAN_VAR:
+			case EEOP_INNER_VAR_TOAST:
+			case EEOP_OUTER_VAR_TOAST:
+			case EEOP_SCAN_VAR_TOAST:
 				{
 					LLVMValueRef value,
 								isnull;
 					LLVMValueRef v_attnum;
 					LLVMValueRef v_values;
 					LLVMValueRef v_nulls;
+					LLVMValueRef v_slot;
 
-					if (opcode == EEOP_INNER_VAR)
+					if (opcode == EEOP_INNER_VAR || opcode == EEOP_INNER_VAR_TOAST)
 					{
+						v_slot = v_innerslot;
 						v_values = v_innervalues;
 						v_nulls = v_innernulls;
 					}
-					else if (opcode == EEOP_OUTER_VAR)
+					else if (opcode == EEOP_OUTER_VAR || opcode == EEOP_OUTER_VAR_TOAST)
 					{
+						v_slot = v_outerslot;
 						v_values = v_outervalues;
 						v_nulls = v_outernulls;
 					}
 					else
 					{
+						v_slot = v_scanslot;
 						v_values = v_scanvalues;
 						v_nulls = v_scannulls;
 					}
 
 					v_attnum = l_int32_const(lc, op->d.var.attnum);
+
+					if (opcode == EEOP_INNER_VAR_TOAST ||
+						opcode == EEOP_OUTER_VAR_TOAST ||
+						opcode == EEOP_SCAN_VAR_TOAST)
+					{
+						LLVMValueRef params[2];
+
+						params[0] = v_slot;
+						params[1] = l_int32_const(lc, op->d.var.attnum);
+						l_call(b,
+							   llvm_pg_var_func_type("ExecSlotDetoastDatumExternal"),
+							   llvm_pg_func(mod, "ExecSlotDetoastDatumExternal"),
+							   params, lengthof(params), "");
+					}
+
 					value = l_load_gep1(b, TypeSizeT, v_values, v_attnum, "");
 					isnull = l_load_gep1(b, TypeStorageBool, v_nulls, v_attnum, "");
 					LLVMBuildStore(b, value, v_resvaluep);

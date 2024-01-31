@@ -1497,6 +1497,8 @@ ExecInitMergeJoin(MergeJoin *node, EState *estate, int eflags)
 											  (eflags | EXEC_FLAG_MARK));
 	innerDesc = ExecGetResultType(innerPlanState(mergestate));
 
+	SetPredetoastAttrsForJoin((JoinState *) mergestate);
+
 	/*
 	 * For certain types of inner child nodes, it is advantageous to issue
 	 * MARK every time we advance past an inner tuple we will never return to.

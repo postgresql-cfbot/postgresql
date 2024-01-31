@@ -55,6 +55,24 @@ typedef struct Bitmapset
 	bitmapword	words[FLEXIBLE_ARRAY_MEMBER];	/* really [nwords] */
 } Bitmapset;
 
+/*
+ * While Bitmapset is designed for variable-length of bits, Bitset is
+ * designed for fixed-length of bits, the fixed length must be specified at
+ * the bitset_init stage and keep unchanged at the whole lifespan. Because
+ * of this, some operations on Bitset is simpler than Bitmapset.
+ *
+ * The bitset_clear unsets all the bits but kept the allocated memory, this
+ * capacity is impossible for bit Bitmapset for some solid reasons.
+ *
+ * Also for performance aspect, the functions for Bitset removed some
+ * unlikely checks, instead with some Asserts.
+ */
+
+typedef struct Bitset
+{
+	int			nwords;			/* number of words in array */
+	bitmapword	words[FLEXIBLE_ARRAY_MEMBER];	/* really [nwords] */
+} Bitset;
 
 /* result of bms_subset_compare */
 typedef enum
@@ -124,4 +142,14 @@ extern uint32 bms_hash_value(const Bitmapset *a);
 extern uint32 bitmap_hash(const void *key, Size keysize);
 extern int	bitmap_match(const void *key1, const void *key2, Size keysize);
 
+extern Bitset *bitset_init(size_t size);
+extern void bitset_clear(Bitset *a);
+extern void bitset_free(Bitset *a);
+extern bool bitset_is_empty(Bitset *a);
+extern Bitset *bitset_copy(Bitset *a);
+extern void bitset_add_member(Bitset *a, int x);
+extern void bitset_del_member(Bitset *a, int x);
+extern int	bitset_is_member(int bit, Bitset *a);
+extern int	bitset_next_member(const Bitset *a, int prevbit);
+extern Bitmapset *bitset_to_bitmap(Bitset *a);
 #endif							/* BITMAPSET_H */

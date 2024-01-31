@@ -57,6 +57,7 @@
 #include "postgres.h"
 
 #include "access/heaptoast.h"
+#include "access/detoast.h"
 #include "catalog/pg_type.h"
 #include "commands/sequence.h"
 #include "executor/execExpr.h"
@@ -158,6 +159,9 @@ static void ExecEvalRowNullInt(ExprState *state, ExprEvalStep *op,
 static Datum ExecJustInnerVar(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustOuterVar(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustScanVar(ExprState *state, ExprContext *econtext, bool *isnull);
+static Datum ExecJustInnerVarToast(ExprState *state, ExprContext *econtext, bool *isnull);
+static Datum ExecJustOuterVarToast(ExprState *state, ExprContext *econtext, bool *isnull);
+static Datum ExecJustScanVarToast(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustAssignInnerVar(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustAssignOuterVar(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustAssignScanVar(ExprState *state, ExprContext *econtext, bool *isnull);
@@ -166,6 +170,9 @@ static Datum ExecJustConst(ExprState *state, ExprContext *econtext, bool *isnull
 static Datum ExecJustInnerVarVirt(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustOuterVarVirt(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustScanVarVirt(ExprState *state, ExprContext *econtext, bool *isnull);
+static Datum ExecJustInnerVarVirtToast(ExprState *state, ExprContext *econtext, bool *isnull);
+static Datum ExecJustOuterVarVirtToast(ExprState *state, ExprContext *econtext, bool *isnull);
+static Datum ExecJustScanVarVirtToast(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustAssignInnerVarVirt(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustAssignOuterVarVirt(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustAssignScanVarVirt(ExprState *state, ExprContext *econtext, bool *isnull);
@@ -181,6 +188,43 @@ static pg_attribute_always_inline void ExecAggPlainTransByRef(AggState *aggstate
 															  AggStatePerGroup pergroup,
 															  ExprContext *aggcontext,
 															  int setno);
+static inline void
+ExecSlotDetoastDatum(TupleTableSlot *slot, int attnum)
+{
+	if (!slot->tts_isnull[attnum] &&
+		VARATT_IS_EXTENDED(slot->tts_values[attnum]))
+	{
+		Datum		oldDatum;
+		MemoryContext old = MemoryContextSwitchTo(slot->tts_mcxt);
+
+		oldDatum = slot->tts_values[attnum];
+		slot->tts_values[attnum] = PointerGetDatum(detoast_attr(
+																(struct varlena *) oldDatum));
+		Assert(slot->tts_nvalid > attnum);
+		if (oldDatum != slot->tts_values[attnum])
+			bitset_add_member(slot->pre_detoasted_attrs, attnum);
+		MemoryContextSwitchTo(old);
+	}
+}
+
+/* JIT requires a non-static (and external?) function */
+void
+ExecSlotDetoastDatumExternal(TupleTableSlot *slot, int attnum)
+{
+	return ExecSlotDetoastDatum(slot, attnum);
+}
+
+
+static inline void
+ExecEvalToastVar(TupleTableSlot *slot,
+				 ExprEvalStep *op,
+				 int attnum)
+{
+	ExecSlotDetoastDatum(slot, attnum);
+
+	*op->resvalue = slot->tts_values[attnum];
+	*op->resnull = slot->tts_isnull[attnum];
+}
 
 /*
  * ScalarArrayOpExprHashEntry
@@ -296,6 +340,24 @@ ExecReadyInterpretedExpr(ExprState *state)
 			state->evalfunc_private = (void *) ExecJustScanVar;
 			return;
 		}
+		if (step0 == EEOP_INNER_FETCHSOME &&
+			step1 == EEOP_INNER_VAR_TOAST)
+		{
+			state->evalfunc_private = (void *) ExecJustInnerVarToast;
+			return;
+		}
+		else if (step0 == EEOP_OUTER_FETCHSOME &&
+				 step1 == EEOP_OUTER_VAR_TOAST)
+		{
+			state->evalfunc_private = (void *) ExecJustOuterVarToast;
+			return;
+		}
+		else if (step0 == EEOP_SCAN_FETCHSOME &&
+				 step1 == EEOP_SCAN_VAR_TOAST)
+		{
+			state->evalfunc_private = (void *) ExecJustScanVarToast;
+			return;
+		}
 		else if (step0 == EEOP_INNER_FETCHSOME &&
 				 step1 == EEOP_ASSIGN_INNER_VAR)
 		{
@@ -344,6 +406,21 @@ ExecReadyInterpretedExpr(ExprState *state)
 		else if (step0 == EEOP_SCAN_VAR)
 		{
 			state->evalfunc_private = (void *) ExecJustScanVarVirt;
+			return;
+		}
+		else if (step0 == EEOP_INNER_VAR_TOAST)
+		{
+			state->evalfunc_private = (void *) ExecJustInnerVarVirtToast;
+			return;
+		}
+		else if (step0 == EEOP_OUTER_VAR_TOAST)
+		{
+			state->evalfunc_private = (void *) ExecJustOuterVarVirtToast;
+			return;
+		}
+		else if (step0 == EEOP_SCAN_VAR_TOAST)
+		{
+			state->evalfunc_private = (void *) ExecJustScanVarVirtToast;
 			return;
 		}
 		else if (step0 == EEOP_ASSIGN_INNER_VAR)
@@ -413,6 +490,9 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		&&CASE_EEOP_INNER_VAR,
 		&&CASE_EEOP_OUTER_VAR,
 		&&CASE_EEOP_SCAN_VAR,
+		&&CASE_EEOP_INNER_VAR_TOAST,
+		&&CASE_EEOP_OUTER_VAR_TOAST,
+		&&CASE_EEOP_SCAN_VAR_TOAST,
 		&&CASE_EEOP_INNER_SYSVAR,
 		&&CASE_EEOP_OUTER_SYSVAR,
 		&&CASE_EEOP_SCAN_SYSVAR,
@@ -597,6 +677,25 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			Assert(attnum >= 0 && attnum < scanslot->tts_nvalid);
 			*op->resvalue = scanslot->tts_values[attnum];
 			*op->resnull = scanslot->tts_isnull[attnum];
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_INNER_VAR_TOAST)
+		{
+			ExecEvalToastVar(innerslot, op, op->d.var.attnum);
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_OUTER_VAR_TOAST)
+		{
+			ExecEvalToastVar(outerslot, op, op->d.var.attnum);
+
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_SCAN_VAR_TOAST)
+		{
+			ExecEvalToastVar(scanslot, op, op->d.var.attnum);
 
 			EEO_NEXT();
 		}
@@ -2137,6 +2236,42 @@ ExecJustScanVar(ExprState *state, ExprContext *econtext, bool *isnull)
 	return ExecJustVarImpl(state, econtext->ecxt_scantuple, isnull);
 }
 
+static pg_attribute_always_inline Datum
+ExecJustVarImplToast(ExprState *state, TupleTableSlot *slot, bool *isnull)
+{
+	ExprEvalStep *op = &state->steps[1];
+	int			attnum = op->d.var.attnum;
+
+	CheckOpSlotCompatibility(&state->steps[0], slot);
+
+	slot_getattr(slot, attnum + 1, isnull);
+
+	ExecSlotDetoastDatum(slot, attnum);
+
+	return slot->tts_values[attnum];
+}
+
+/* Simple reference to inner Var */
+static Datum
+ExecJustInnerVarToast(ExprState *state, ExprContext *econtext, bool *isnull)
+{
+	return ExecJustVarImplToast(state, econtext->ecxt_innertuple, isnull);
+}
+
+/* Simple reference to outer Var */
+static Datum
+ExecJustOuterVarToast(ExprState *state, ExprContext *econtext, bool *isnull)
+{
+	return ExecJustVarImplToast(state, econtext->ecxt_outertuple, isnull);
+}
+
+/* Simple reference to scan Var */
+static Datum
+ExecJustScanVarToast(ExprState *state, ExprContext *econtext, bool *isnull)
+{
+	return ExecJustVarImplToast(state, econtext->ecxt_scantuple, isnull);
+}
+
 /* implementation of ExecJustAssign(Inner|Outer|Scan)Var */
 static pg_attribute_always_inline Datum
 ExecJustAssignVarImpl(ExprState *state, TupleTableSlot *inslot, bool *isnull)
@@ -2273,6 +2408,51 @@ static Datum
 ExecJustScanVarVirt(ExprState *state, ExprContext *econtext, bool *isnull)
 {
 	return ExecJustVarVirtImpl(state, econtext->ecxt_scantuple, isnull);
+}
+
+/* implementation of ExecJust(Inner|Outer|Scan)VarVirt */
+static pg_attribute_always_inline Datum
+ExecJustVarVirtImplToast(ExprState *state, TupleTableSlot *slot, bool *isnull)
+{
+	ExprEvalStep *op = &state->steps[0];
+	int			attnum = op->d.var.attnum;
+
+	/*
+	 * As it is guaranteed that a virtual slot is used, there never is a need
+	 * to perform tuple deforming (nor would it be possible). Therefore
+	 * execExpr.c has not emitted an EEOP_*_FETCHSOME step. Verify, as much as
+	 * possible, that that determination was accurate.
+	 */
+	Assert(TTS_IS_VIRTUAL(slot));
+	Assert(TTS_FIXED(slot));
+	Assert(attnum >= 0 && attnum < slot->tts_nvalid);
+
+	*isnull = slot->tts_isnull[attnum];
+
+	ExecSlotDetoastDatum(slot, attnum);
+
+	return slot->tts_values[attnum];
+}
+
+/* Like ExecJustInnerVar, optimized for virtual slots */
+static Datum
+ExecJustInnerVarVirtToast(ExprState *state, ExprContext *econtext, bool *isnull)
+{
+	return ExecJustVarVirtImplToast(state, econtext->ecxt_innertuple, isnull);
+}
+
+/* Like ExecJustOuterVar, optimized for virtual slots */
+static Datum
+ExecJustOuterVarVirtToast(ExprState *state, ExprContext *econtext, bool *isnull)
+{
+	return ExecJustVarVirtImplToast(state, econtext->ecxt_outertuple, isnull);
+}
+
+/* Like ExecJustScanVar, optimized for virtual slots */
+static Datum
+ExecJustScanVarVirtToast(ExprState *state, ExprContext *econtext, bool *isnull)
+{
+	return ExecJustVarVirtImplToast(state, econtext->ecxt_scantuple, isnull);
 }
 
 /* implementation of ExecJustAssign(Inner|Outer|Scan)VarVirt */

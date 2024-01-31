@@ -78,6 +78,11 @@ typedef enum ExprEvalOp
 	EEOP_OUTER_VAR,
 	EEOP_SCAN_VAR,
 
+	/* compute non-system Var value with shared-detoast-datum logic */
+	EEOP_INNER_VAR_TOAST,
+	EEOP_OUTER_VAR_TOAST,
+	EEOP_SCAN_VAR_TOAST,
+
 	/* compute system Var value */
 	EEOP_INNER_SYSVAR,
 	EEOP_OUTER_SYSVAR,
@@ -830,5 +835,6 @@ extern void ExecEvalAggOrderedTransDatum(ExprState *state, ExprEvalStep *op,
 										 ExprContext *econtext);
 extern void ExecEvalAggOrderedTransTuple(ExprState *state, ExprEvalStep *op,
 										 ExprContext *econtext);
+extern void ExecSlotDetoastDatumExternal(TupleTableSlot *slot, int attnum);
 
 #endif							/* EXEC_EXPR_H */

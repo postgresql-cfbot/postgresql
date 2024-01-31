@@ -186,16 +186,20 @@ castNodeImpl(NodeTag type, void *ptr)
  * nodes/{outfuncs.c,print.c}
  */
 struct Bitmapset;				/* not to include bitmapset.h here */
+struct Bitset;					/* not to include bitmapset.h here */
 struct StringInfoData;			/* not to include stringinfo.h here */
 
 extern void outNode(struct StringInfoData *str, const void *obj);
 extern void outToken(struct StringInfoData *str, const char *s);
 extern void outBitmapset(struct StringInfoData *str,
 						 const struct Bitmapset *bms);
+extern void outBitset(struct StringInfoData *str, const struct Bitset *bs);
+
 extern void outDatum(struct StringInfoData *str, uintptr_t value,
 					 int typlen, bool typbyval);
 extern char *nodeToString(const void *obj);
 extern char *bmsToString(const struct Bitmapset *bms);
+extern char *bitsetToString(const struct Bitset *bs, bool asBitmap);
 
 /*
  * nodes/{readfuncs.c,read.c}

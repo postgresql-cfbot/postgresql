@@ -169,6 +169,13 @@ typedef struct Plan
 	 */
 	Bitmapset  *extParam;
 	Bitmapset  *allParam;
+
+	/*
+	 * A list of Vars which should not apply the shared-detoast-datum logic
+	 * since the upper nodes like Sort/Hash wants them as small as possible.
+	 * Its a subset of targetlist in each Plan node.
+	 */
+	List	   *forbid_pre_detoast_vars;
 } Plan;
 
 /* ----------------
@@ -385,6 +392,13 @@ typedef struct Scan
 
 	Plan		plan;
 	Index		scanrelid;		/* relid is index into the range table */
+
+	/*
+	 * Records of var's varattno - 1 where the Var is accessed indirectly by
+	 * any expression, like a > 3.  However a IS [NOT] NULL is not included
+	 * since it doesn't access the tts_values[*] at all.
+	 */
+	Bitmapset  *reference_attrs;
 } Scan;
 
 /* ----------------
@@ -789,6 +803,14 @@ typedef struct Join
 	JoinType	jointype;
 	bool		inner_unique;
 	List	   *joinqual;		/* JOIN quals (in addition to plan.qual) */
+
+	/*
+	 * Records of var's varattno - 1 where the Var is accessed indirectly by
+	 * any expression, like a > 3.  However a IS [NOT] NULL is not included
+	 * since it doesn't access the tts_values[*] at all.
+	 */
+	Bitmapset  *outer_reference_attrs;
+	Bitmapset  *inner_reference_attrs;
 } Join;
 
 /* ----------------
@@ -869,6 +891,11 @@ typedef struct HashJoin
 	 * perform lookups in the hashtable over the inner plan.
 	 */
 	List	   *hashkeys;
+
+	/*
+	 * Whether the left plan tree should use a SMALL_TLIST.
+	 */
+	bool		left_small_tlist;
 } HashJoin;
 
 /* ----------------
@@ -1587,5 +1614,25 @@ typedef enum MonotonicFunction
 	MONOTONICFUNC_DECREASING = (1 << 1),
 	MONOTONICFUNC_BOTH = MONOTONICFUNC_INCREASING | MONOTONICFUNC_DECREASING,
 } MonotonicFunction;
+
+static inline bool
+is_join_plan(Plan *plan)
+{
+	return (plan != NULL) && (IsA(plan, NestLoop) || IsA(plan, HashJoin) || IsA(plan, MergeJoin));
+}
+
+static inline bool
+is_scan_plan(Plan *plan)
+{
+	return (plan != NULL) &&
+		(IsA(plan, SeqScan) ||
+		 IsA(plan, SampleScan) ||
+		 IsA(plan, IndexScan) ||
+		 IsA(plan, IndexOnlyScan) ||
+		 IsA(plan, BitmapIndexScan) ||
+		 IsA(plan, BitmapHeapScan) ||
+		 IsA(plan, TidScan) ||
+		 IsA(plan, SubqueryScan));
+}
 
 #endif							/* PLANNODES_H */

@@ -18,6 +18,7 @@
 #include "access/htup_details.h"
 #include "access/sysattr.h"
 #include "access/tupdesc.h"
+#include "nodes/bitmapset.h"
 #include "storage/buf.h"
 
 /*----------
@@ -128,6 +129,11 @@ typedef struct TupleTableSlot
 	MemoryContext tts_mcxt;		/* slot itself is in this context */
 	ItemPointerData tts_tid;	/* stored tuple's tid */
 	Oid			tts_tableOid;	/* table oid of tuple */
+
+	/*
+	 * The attributes populated by EEOP_{INNER/OUTER/SCAN}_VAR_TOAST step.
+	 */
+	Bitset	   *pre_detoasted_attrs;
 } TupleTableSlot;
 
 /* routines for a TupleTableSlot implementation */
@@ -426,12 +432,38 @@ slot_getsysattr(TupleTableSlot *slot, int attnum, bool *isnull)
 	return slot->tts_ops->getsysattr(slot, attnum, isnull);
 }
 
+static inline void
+ExecFreePreDetoastDatum(TupleTableSlot *slot)
+{
+	int			attnum;
+
+	if (bitset_is_empty(slot->pre_detoasted_attrs))
+		return;
+
+	attnum = -1;
+	/* free the memory used by pre-detoasted datum and reset the flags. */
+	while ((attnum = bitset_next_member(slot->pre_detoasted_attrs, attnum)) >= 0)
+	{
+		pfree((void *) slot->tts_values[attnum]);
+	}
+
+	/*
+	 * bms_free each time cost too much, so just zero these bits and keep its
+	 * memory, just like what we did for TupleTableSlot. but.. see the
+	 * comments about the bms_zero.
+	 */
+	bitset_clear(slot->pre_detoasted_attrs);
+}
+
+
 /*
  * ExecClearTuple - clear the slot's contents
  */
 static inline TupleTableSlot *
 ExecClearTuple(TupleTableSlot *slot)
 {
+	ExecFreePreDetoastDatum(slot);
+
 	slot->tts_ops->clear(slot);
 
 	return slot;
@@ -450,6 +482,10 @@ ExecClearTuple(TupleTableSlot *slot)
 static inline void
 ExecMaterializeSlot(TupleTableSlot *slot)
 {
+	/*
+	 * XXX: pre_detoasted_attrs doesn't dependent on any external storage, so
+	 * nothing should be done here.
+	 */
 	slot->tts_ops->materialize(slot);
 }
 
@@ -494,6 +530,30 @@ ExecCopySlot(TupleTableSlot *dstslot, TupleTableSlot *srcslot)
 
 	dstslot->tts_ops->copyslot(dstslot, srcslot);
 
+	/* Assert this assumption the below code depends on. */
+	Assert(dstslot->tts_nvalid == 0 ||
+		   dstslot->tts_nvalid == srcslot->tts_nvalid);
+
+	if (dstslot->tts_nvalid == srcslot->tts_nvalid &&
+		!bitset_is_empty(srcslot->pre_detoasted_attrs))
+	{
+		int			attnum = -1;
+		MemoryContext old = MemoryContextSwitchTo(dstslot->tts_mcxt);
+
+		dstslot->pre_detoasted_attrs = bitset_copy(srcslot->pre_detoasted_attrs);
+
+		while ((attnum = bitset_next_member(dstslot->pre_detoasted_attrs, attnum)) >= 0)
+		{
+			struct varlena *datum = (struct varlena *) srcslot->tts_values[attnum];
+			Size		len;
+
+			Assert(!VARATT_IS_EXTENDED(datum));
+			len = VARSIZE(datum);
+			dstslot->tts_values[attnum] = (Datum) palloc(len);
+			memcpy((void *) dstslot->tts_values[attnum], datum, len);
+		}
+		MemoryContextSwitchTo(old);
+	}
 	return dstslot;
 }
 

@@ -79,6 +79,9 @@ static inline void tts_buffer_heap_store_tuple(TupleTableSlot *slot,
 											   bool transfer_pin);
 static void tts_heap_store_tuple(TupleTableSlot *slot, HeapTuple tuple, bool shouldFree);
 
+static Bitmapset *cal_final_pre_detoast_attrs(Bitmapset *reference_attrs,
+											  TupleDesc tupleDesc,
+											  List *forbid_pre_detoast_vars);
 
 const TupleTableSlotOps TTSOpsVirtual;
 const TupleTableSlotOps TTSOpsHeapTuple;
@@ -174,6 +177,10 @@ tts_virtual_materialize(TupleTableSlot *slot)
 		Datum		val;
 
 		if (att->attbyval || slot->tts_isnull[natt])
+			continue;
+
+		if (bitset_is_member(natt, slot->pre_detoasted_attrs))
+			/* it has been in slot->tts_mcxt already. */
 			continue;
 
 		val = slot->tts_values[natt];
@@ -392,6 +399,13 @@ tts_heap_materialize(TupleTableSlot *slot)
 	slot->tts_flags |= TTS_FLAG_SHOULDFREE;
 
 	MemoryContextSwitchTo(oldContext);
+
+	/*
+	 * tts_values is treated since tts_nvalid is set to 0, so let free the
+	 * pre-detoast datum.
+	 */
+	ExecFreePreDetoastDatum(slot);
+
 }
 
 static void
@@ -457,6 +471,9 @@ tts_heap_store_tuple(TupleTableSlot *slot, HeapTuple tuple, bool shouldFree)
 
 	if (shouldFree)
 		slot->tts_flags |= TTS_FLAG_SHOULDFREE;
+
+	/* slot_nvalid = 0 */
+	ExecFreePreDetoastDatum(slot);
 }
 
 
@@ -567,6 +584,12 @@ tts_minimal_materialize(TupleTableSlot *slot)
 	mslot->minhdr.t_data = (HeapTupleHeader) ((char *) mslot->mintuple - MINIMAL_TUPLE_OFFSET);
 
 	MemoryContextSwitchTo(oldContext);
+
+	/*
+	 * tts_values is treated as non valid (tts_nvalid = 0), free the
+	 * pre-detoast datum.
+	 */
+	ExecFreePreDetoastDatum(slot);
 }
 
 static void
@@ -637,6 +660,9 @@ tts_minimal_store_tuple(TupleTableSlot *slot, MinimalTuple mtup, bool shouldFree
 
 	if (shouldFree)
 		slot->tts_flags |= TTS_FLAG_SHOULDFREE;
+
+	/* tts_nvalid = 0 */
+	ExecFreePreDetoastDatum(slot);
 }
 
 
@@ -771,6 +797,12 @@ tts_buffer_heap_materialize(TupleTableSlot *slot)
 	slot->tts_flags |= TTS_FLAG_SHOULDFREE;
 
 	MemoryContextSwitchTo(oldContext);
+
+	/*
+	 * tts_nvalid = 0 means tts_values will be not reliable, so clear the
+	 * information about pre-detoast-datum.
+	 */
+	ExecFreePreDetoastDatum(slot);
 }
 
 static void
@@ -904,6 +936,9 @@ tts_buffer_heap_store_tuple(TupleTableSlot *slot, HeapTuple tuple,
 		 */
 		ReleaseBuffer(buffer);
 	}
+
+	/* tts_nvalid = 0 */
+	ExecFreePreDetoastDatum(slot);
 }
 
 /*
@@ -1150,7 +1185,10 @@ MakeTupleTableSlot(TupleDesc tupleDesc,
 			 + MAXALIGN(tupleDesc->natts * sizeof(Datum)));
 
 		PinTupleDesc(tupleDesc);
+		slot->pre_detoasted_attrs = bitset_init(tupleDesc->natts);
 	}
+	else
+		slot->pre_detoasted_attrs = NULL;
 
 	/*
 	 * And allow slot type specific initialization.
@@ -1304,6 +1342,10 @@ ExecSetSlotDescriptor(TupleTableSlot *slot, /* slot to change */
 		pfree(slot->tts_values);
 	if (slot->tts_isnull)
 		pfree(slot->tts_isnull);
+	if (slot->pre_detoasted_attrs)
+		bitset_free(slot->pre_detoasted_attrs);
+
+	slot->pre_detoasted_attrs = bitset_init(tupdesc->natts);
 
 	/*
 	 * Install the new descriptor; if it's refcounted, bump its refcount.
@@ -1810,12 +1852,26 @@ void
 ExecInitScanTupleSlot(EState *estate, ScanState *scanstate,
 					  TupleDesc tupledesc, const TupleTableSlotOps *tts_ops)
 {
+	Scan	   *splan = (Scan *) scanstate->ps.plan;
+
 	scanstate->ss_ScanTupleSlot = ExecAllocTableSlot(&estate->es_tupleTable,
 													 tupledesc, tts_ops);
 	scanstate->ps.scandesc = tupledesc;
 	scanstate->ps.scanopsfixed = tupledesc != NULL;
 	scanstate->ps.scanops = tts_ops;
 	scanstate->ps.scanopsset = true;
+
+	if (is_scan_plan((Plan *) splan))
+	{
+		/*
+		 * We may run detoast in Qual or Projection, but all of them happen at
+		 * the ss_ScanTupleSlot rather than ps_ResultTupleSlot. So we can only
+		 * take care of the ss_ScanTupleSlot.
+		 */
+		scanstate->scan_pre_detoast_attrs = cal_final_pre_detoast_attrs(splan->reference_attrs,
+																		tupledesc,
+																		splan->plan.forbid_pre_detoast_vars);
+	}
 }
 
 /* ----------------
@@ -2335,4 +2391,83 @@ end_tup_output(TupOutputState *tstate)
 	/* note that destroying the dest is not ours to do */
 	ExecDropSingleTupleTableSlot(tstate->slot);
 	pfree(tstate);
+}
+
+/*
+ * cal_final_pre_detoast_attrs
+ *		Calculate the final attributes which pre-detoast be helpful.
+ *
+ * reference_attrs: the attributes which will be detoast at this plan level.
+ * due to the implementation issue, some non-toast attribute may be included
+ * which should be filtered out with tupleDesc.
+ *
+ * forbid_pre_detoast_vars: the vars which should not be pre-detoast as the
+ * small_tlist reason.
+ */
+static Bitmapset *
+cal_final_pre_detoast_attrs(Bitmapset *reference_attrs,
+							TupleDesc tupleDesc,
+							List *forbid_pre_detoast_vars)
+{
+	Bitmapset  *final = NULL,
+			   *toast_attrs = NULL,
+			   *forbid_pre_detoast_attrs = NULL;
+
+	int			i;
+	ListCell   *lc;
+
+	if (bms_is_empty(reference_attrs))
+		return NULL;
+
+	/*
+	 * there is no exact data type in create_plan or set_plan_refs stage, so
+	 * reference_attrs may have some attribute which is not toast attrs at
+	 * all, which should be removed.
+	 */
+	for (i = 0; i < tupleDesc->natts; i++)
+	{
+		Form_pg_attribute attr = TupleDescAttr(tupleDesc, i);
+
+		if (attr->attlen == -1 && attr->attstorage != TYPSTORAGE_PLAIN)
+			toast_attrs = bms_add_member(toast_attrs, attr->attnum - 1);
+	}
+
+	final = bms_intersect(reference_attrs, toast_attrs);
+
+	/*
+	 * Due to the fact of detoast-datum will make the tuple bigger which is
+	 * bad for some nodes like Sort/Hash, to avoid performance regression,
+	 * such attribute should be removed as well.
+	 */
+	foreach(lc, forbid_pre_detoast_vars)
+	{
+		Var		   *var = lfirst_node(Var, lc);
+
+		forbid_pre_detoast_attrs = bms_add_member(forbid_pre_detoast_attrs, var->varattno - 1);
+	}
+
+	final = bms_del_members(final, forbid_pre_detoast_attrs);
+
+	bms_free(toast_attrs);
+	bms_free(forbid_pre_detoast_attrs);
+
+	return final;
+}
+
+
+void
+SetPredetoastAttrsForJoin(JoinState *j)
+{
+	PlanState  *outerstate = outerPlanState(j);
+	PlanState  *innerstate = innerPlanState(j);
+
+	j->outer_pre_detoast_attrs = cal_final_pre_detoast_attrs(
+															 ((Join *) j->ps.plan)->outer_reference_attrs,
+															 outerstate->ps_ResultTupleDesc,
+															 outerstate->plan->forbid_pre_detoast_vars);
+
+	j->inner_pre_detoast_attrs = cal_final_pre_detoast_attrs(
+															 ((Join *) j->ps.plan)->inner_reference_attrs,
+															 innerstate->ps_ResultTupleDesc,
+															 innerstate->plan->forbid_pre_detoast_vars);
 }

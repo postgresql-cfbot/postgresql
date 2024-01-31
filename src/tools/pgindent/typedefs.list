@@ -268,6 +268,7 @@ BitmapOr
 BitmapOrPath
 BitmapOrState
 Bitmapset
+Bitset
 Block
 BlockId
 BlockIdData
@@ -4044,6 +4045,8 @@ cb_cleanup_dir
 cb_options
 cb_tablespace
 cb_tablespace_mapping
+intermediate_var_ref_context
+intermediate_level_context
 manifest_data
 manifest_writer
 rfile

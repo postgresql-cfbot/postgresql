@@ -756,6 +756,8 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 	innerPlanState(hjstate) = ExecInitNode((Plan *) hashNode, estate, eflags);
 	innerDesc = ExecGetResultType(innerPlanState(hjstate));
 
+	SetPredetoastAttrsForJoin((JoinState *) hjstate);
+
 	/*
 	 * Initialize result slot, type and projection.
 	 */

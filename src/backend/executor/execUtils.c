@@ -572,6 +572,8 @@ ExecConditionalAssignProjectionInfo(PlanState *planstate, TupleDesc inputDesc,
 		planstate->resultopsset = planstate->scanopsset;
 		planstate->resultopsfixed = planstate->scanopsfixed;
 		planstate->resultops = planstate->scanops;
+
+		Assert(planstate->ps_ResultTupleDesc != NULL);
 	}
 	else
 	{

@@ -331,6 +331,43 @@ outBitmapset(StringInfo str, const Bitmapset *bms)
 	appendStringInfoChar(str, ')');
 }
 
+
+
+/*
+ * outBitset -
+ *	similar to outBitmapset, but for Bitset.
+ */
+static void
+outBitsetInternal(struct StringInfoData *str,
+				  const struct Bitset *bs,
+				  bool asBitmap)
+{
+	int			x;
+
+	appendStringInfoChar(str, '(');
+	if (asBitmap)
+		appendStringInfoChar(str, 'b');
+	else
+		appendStringInfo(str, "bs");
+	x = -1;
+	while ((x = bitset_next_member(bs, x)) >= 0)
+		appendStringInfo(str, " %d", x);
+	appendStringInfoChar(str, ')');
+}
+
+
+/*
+ * outBitset -
+ *	similar to outBitmapset, but for Bitset.
+ */
+void
+outBitset(struct StringInfoData *str,
+		  const struct Bitset *bs)
+{
+	outBitsetInternal(str, bs, false);
+}
+
+
 /*
  * Print the value of a Datum given its type.
  */
@@ -904,5 +941,19 @@ bmsToString(const Bitmapset *bms)
 	/* see stringinfo.h for an explanation of this maneuver */
 	initStringInfo(&str);
 	outBitmapset(&str, bms);
+	return str.data;
+}
+
+/*
+ * bitsetToString -
+ *	   similar to bmsToString, but for Bitset
+ */
+char *
+bitsetToString(const struct Bitset *bs, bool asBitmap)
+{
+	StringInfoData str;
+
+	initStringInfo(&str);
+	outBitsetInternal(&str, bs, asBitmap);
 	return str.data;
 }

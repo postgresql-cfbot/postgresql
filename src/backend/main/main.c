@@ -40,6 +40,7 @@
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
 #include "utils/ps_status.h"
+#include "parser/parser.h"
 
 
 const char *progname;
@@ -50,6 +51,7 @@ static void startup_hacks(const char *progname);
 static void init_locale(const char *categoryname, int category, const char *locale);
 static void help(const char *progname);
 static void check_root(const char *progname);
+static void check_syntax(void);
 
 
 /*
@@ -152,6 +154,10 @@ main(int argc, char *argv[])
 		{
 			fputs(PG_BACKEND_VERSIONSTR, stdout);
 			exit(0);
+		}
+		if (strcmp(argv[1], "--syntax") == 0)
+		{
+			check_syntax();
 		}
 
 		/*
@@ -341,6 +347,7 @@ help(const char *progname)
 	printf(_("  -s                 show statistics after each query\n"));
 	printf(_("  -S WORK-MEM        set amount of memory for sorts (in kB)\n"));
 	printf(_("  -V, --version      output version information, then exit\n"));
+	printf(_("  --syntax           checks SQL on STDIN is valid, then exit\n"));
 	printf(_("  --NAME=VALUE       set run-time parameter\n"));
 	printf(_("  --describe-config  describe configuration parameters, then exit\n"));
 	printf(_("  -?, --help         show this help, then exit\n"));
@@ -414,6 +421,44 @@ check_root(const char *progname)
 		exit(1);
 	}
 #endif							/* WIN32 */
+}
+
+static void
+check_syntax() {
+	List *parsetree_list;
+	bool valid = false;
+	char buffer[1024 * 1024];
+	char ch;
+	int i = 0;
+
+	// TODO: check for buffer overflow
+	while ((ch = getchar()) != EOF)
+	{
+		buffer[i] = ch;
+		i++;
+	}
+
+	PG_TRY();
+	{
+		parsetree_list = raw_parser(buffer, RAW_PARSE_DEFAULT);
+		valid = true;
+	}
+	PG_CATCH();
+	{
+		EmitErrorReport();
+		FlushErrorState();
+		valid = false;
+	}
+	PG_END_TRY();
+
+	// TODO: translate output
+	if (valid && parsetree_list) {
+		printf("Valid SQL\n");
+		exit(0);
+	} else {
+		printf("Invalid SQL\n");
+		exit(1);
+	}
 }
 
 /*

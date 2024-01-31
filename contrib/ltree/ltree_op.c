@@ -9,6 +9,7 @@
 
 #include "access/htup_details.h"
 #include "catalog/pg_statistic.h"
+#include "common/hashfn.h"
 #include "ltree.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
@@ -37,6 +38,8 @@ PG_FUNCTION_INFO_V1(lca);
 PG_FUNCTION_INFO_V1(ltree2text);
 PG_FUNCTION_INFO_V1(text2ltree);
 PG_FUNCTION_INFO_V1(ltreeparentsel);
+PG_FUNCTION_INFO_V1(hash_ltree);
+PG_FUNCTION_INFO_V1(hash_ltree_extended);
 
 int
 ltree_compare(const ltree *a, const ltree *b)
@@ -587,4 +590,69 @@ ltreeparentsel(PG_FUNCTION_ARGS)
 											0.001);
 
 	PG_RETURN_FLOAT8((float8) selec);
+}
+
+/*
+ * Hashes the elements of the path using the same logic as hash_array
+ */
+Datum
+hash_ltree(PG_FUNCTION_ARGS)
+{
+	ltree	   *a = PG_GETARG_LTREE_P(0);
+
+	uint32		result = 1;
+	int			an = a->numlevel;
+	ltree_level *al = LTREE_FIRST(a);
+
+	while (an > 0)
+	{
+		uint32		levelHash = hash_any((unsigned char *) al->name, al->len);
+
+		result = (result << 5) - result + levelHash;
+
+		an--;
+		al = LEVEL_NEXT(al);
+	}
+
+	PG_FREE_IF_COPY(a, 0);
+	PG_RETURN_UINT32(result);
+}
+
+
+/*
+ * Hashes the elements of the path using the same logic as hash_array_extended
+ * (and hash_ltree). It differs from hash_array_extended only in how it handles
+ * zero length label paths. We return 1 + seed to ensure that the low 32 bits
+ * of the result match hash_ltree when the seed is 0, as required by the hash
+ * index support functions, but to also return a different value when there is
+ * a seed.
+ */
+Datum
+hash_ltree_extended(PG_FUNCTION_ARGS)
+{
+	ltree	   *a = PG_GETARG_LTREE_P(0);
+	const uint64 seed = PG_GETARG_INT64(1);
+
+	uint64		result = 1;
+	int			an = a->numlevel;
+	ltree_level *al = LTREE_FIRST(a);
+
+	if (an == 0)
+	{
+		PG_FREE_IF_COPY(a, 0);
+		PG_RETURN_UINT64(result + seed);
+	}
+
+	while (an > 0)
+	{
+		uint64		levelHash = hash_any_extended((unsigned char *) al->name, al->len, seed);
+
+		result = (result << 5) - result + levelHash;
+
+		an--;
+		al = LEVEL_NEXT(al);
+	}
+
+	PG_FREE_IF_COPY(a, 0);
+	PG_RETURN_UINT64(result);
 }

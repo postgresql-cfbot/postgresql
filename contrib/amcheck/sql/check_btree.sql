@@ -1,3 +1,4 @@
+-- directory paths are passed to us in environment variables
 CREATE TABLE bttest_a(id int8);
 CREATE TABLE bttest_b(id int8);
 CREATE TABLE bttest_multi(id int8, data int8);
@@ -148,6 +149,40 @@ SELECT bt_index_check('bttest_unique_nulls_c_key', heapallindexed => true, check
 CREATE INDEX on bttest_unique_nulls (b,c);
 SELECT bt_index_check('bttest_unique_nulls_b_c_idx', heapallindexed => true, checkunique => true);
 
+--
+-- BUG: must support different header size of short varlena datum
+-- https://postgr.es/m/7bdbe559-d61a-4ae4-a6e1-48abdf3024cc@postgrespro.ru
+--
+
+CREATE TABLE varlena_bug (v text);
+ALTER TABLE varlena_bug ALTER column v SET storage plain;
+INSERT INTO varlena_bug VALUES ('x');
+COPY varlena_bug from stdin;
+x
+\.
+CREATE INDEX varlena_bug_idx on varlena_bug(v);
+SELECT bt_index_check('varlena_bug_idx', true);
+
+-- Check extended varlena
+CREATE TABLE tbl(t text);
+ALTER TABLE tbl ALTER COLUMN t SET STORAGE plain;
+CREATE INDEX tbl_idx ON tbl (t);
+INSERT INTO tbl VALUES (repeat('Test', 250));
+ALTER TABLE tbl ALTER COLUMN t SET STORAGE extended;
+
+SELECT bt_index_check('tbl_idx', true);
+DROP TABLE tbl;
+
+-- Check oversized datums that cannot be inserted into index
+
+CREATE TABLE t(f1 text);
+CREATE INDEX t_idx ON t(f1);
+INSERT INTO t VALUES(repeat('1234567890', 1000));
+ALTER TABLE t ALTER COLUMN f1 SET STORAGE plain;
+
+SELECT bt_index_check('t_idx', true);
+DROP TABLE t;
+
 -- cleanup
 DROP TABLE bttest_a;
 DROP TABLE bttest_b;
@@ -158,3 +193,4 @@ DROP FUNCTION ifun(int8);
 DROP TABLE bttest_unique_nulls;
 DROP OWNED BY regress_bttest_role; -- permissions
 DROP ROLE regress_bttest_role;
+DROP TABLE varlena_bug;

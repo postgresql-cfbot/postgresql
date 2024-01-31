@@ -23,6 +23,7 @@
  */
 #include "postgres.h"
 
+#include "access/heaptoast.h"
 #include "access/htup_details.h"
 #include "access/nbtree.h"
 #include "access/table.h"
@@ -127,6 +128,11 @@ typedef struct BtreeCheckState
 	bloom_filter *filter;
 	/* Debug counter */
 	int64		heaptuplespresent;
+	/*
+	 * During check we might find tuples that due to current TOAST policies
+	 * should not reside in index, but still are there.
+	 */
+	bool has_oversized_tuples;
 } BtreeCheckState;
 
 /*
@@ -1623,10 +1629,17 @@ bt_target_page_check(BtreeCheckState *state)
 
 					logtuple = bt_posting_plain_tuple(itup, i);
 					norm = bt_normalize_tuple(state, logtuple);
-					bloom_add_element(state->filter, (unsigned char *) norm,
+					if (norm == NULL)
+					{
+						if (!state->has_oversized_tuples)
+							elog(NOTICE, "Index contain tuples that cannot fit into index page, if toasted with current toast policy");
+						state->has_oversized_tuples = true;
+					}
+					else
+						bloom_add_element(state->filter, (unsigned char *) norm,
 									  IndexTupleSize(norm));
 					/* Be tidy */
-					if (norm != logtuple)
+					if (norm != logtuple && norm != NULL)
 						pfree(norm);
 					pfree(logtuple);
 				}
@@ -1634,10 +1647,17 @@ bt_target_page_check(BtreeCheckState *state)
 			else
 			{
 				norm = bt_normalize_tuple(state, itup);
-				bloom_add_element(state->filter, (unsigned char *) norm,
-								  IndexTupleSize(norm));
+				if (norm == NULL)
+				{
+					if (!state->has_oversized_tuples)
+						elog(NOTICE, "Index contain tuples that cannot fit into index page, if toasted with current toast policy");
+					state->has_oversized_tuples = true;
+				}
+				else
+					bloom_add_element(state->filter, (unsigned char *) norm,
+								IndexTupleSize(norm));
 				/* Be tidy */
-				if (norm != itup)
+				if (norm != itup && norm != NULL)
 					pfree(norm);
 			}
 		}
@@ -2882,9 +2902,19 @@ bt_tuple_present_callback(Relation index, ItemPointer tid, Datum *values,
 	itup = index_form_tuple(RelationGetDescr(index), values, isnull);
 	itup->t_tid = *tid;
 	norm = bt_normalize_tuple(state, itup);
+	if (norm == NULL)
+	{
+		if (state->has_oversized_tuples)
+		{
+			/* exempt this oversized tuple */
+			state->heaptuplespresent++;
+			pfree(itup);
+			return;
+		}
+	}
 
 	/* Probe Bloom filter -- tuple should be present */
-	if (bloom_lacks_element(state->filter, (unsigned char *) norm,
+	if ((norm == NULL) || bloom_lacks_element(state->filter, (unsigned char *) norm,
 							IndexTupleSize(norm)))
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
@@ -2935,6 +2965,9 @@ bt_tuple_present_callback(Relation index, ItemPointer tid, Datum *values,
  * Caller does normalization for non-pivot tuples that have a posting list,
  * since dummy CREATE INDEX callback code generates new tuples with the same
  * normalized representation.
+ * 
+ * If the tuple is exampt from checking due to has_oversized_tuples this function
+ * returns NULL.
  */
 static IndexTuple
 bt_normalize_tuple(BtreeCheckState *state, IndexTuple itup)
@@ -2942,10 +2975,11 @@ bt_normalize_tuple(BtreeCheckState *state, IndexTuple itup)
 	TupleDesc	tupleDescriptor = RelationGetDescr(state->rel);
 	Datum		normalized[INDEX_MAX_KEYS];
 	bool		isnull[INDEX_MAX_KEYS];
-	bool		toast_free[INDEX_MAX_KEYS];
+	bool		need_free[INDEX_MAX_KEYS];
 	bool		formnewtup = false;
 	IndexTuple	reformed;
 	int			i;
+	Size		data_size;
 
 	/* Caller should only pass "logical" non-pivot tuples here */
 	Assert(!BTreeTupleIsPosting(itup) && !BTreeTupleIsPivot(itup));
@@ -2961,7 +2995,7 @@ bt_normalize_tuple(BtreeCheckState *state, IndexTuple itup)
 		att = TupleDescAttr(tupleDescriptor, i);
 
 		/* Assume untoasted/already normalized datum initially */
-		toast_free[i] = false;
+		need_free[i] = false;
 		normalized[i] = index_getattr(itup, att->attnum,
 									  tupleDescriptor,
 									  &isnull[i]);
@@ -2973,6 +3007,7 @@ bt_normalize_tuple(BtreeCheckState *state, IndexTuple itup)
 		 * index without further processing, so an external varlena header
 		 * should never be encountered here
 		 */
+
 		if (VARATT_IS_EXTERNAL(DatumGetPointer(normalized[i])))
 			ereport(ERROR,
 					(errcode(ERRCODE_INDEX_CORRUPTED),
@@ -2980,23 +3015,67 @@ bt_normalize_tuple(BtreeCheckState *state, IndexTuple itup)
 							ItemPointerGetBlockNumber(&(itup->t_tid)),
 							ItemPointerGetOffsetNumber(&(itup->t_tid)),
 							RelationGetRelationName(state->rel))));
+		else if (!VARATT_IS_EXTENDED(DatumGetPointer(normalized[i])) &&
+			VARSIZE(DatumGetPointer(normalized[i])) > TOAST_INDEX_TARGET &&
+			(att->attstorage == TYPSTORAGE_EXTENDED ||
+			 att->attstorage == TYPSTORAGE_MAIN))
+		{
+			/*
+			 * this attribute will be compressed by index_form_tuple(),
+			 * this might be already done in heap, so force forming.
+			 */
+			formnewtup = true;
+		}
 		else if (VARATT_IS_COMPRESSED(DatumGetPointer(normalized[i])))
 		{
 			formnewtup = true;
 			normalized[i] = PointerGetDatum(PG_DETOAST_DATUM(normalized[i]));
-			toast_free[i] = true;
+			need_free[i] = true;
 		}
+		/*
+		 * Short tuples may have 1B or 4B header. Convert 4B header of short
+		 * tuples to 1B
+		 */
+		else if (VARATT_CAN_MAKE_SHORT(DatumGetPointer(normalized[i])))
+		{
+			/* convert to short varlena */
+			Size len = VARATT_CONVERTED_SHORT_SIZE(DatumGetPointer(normalized[i]));
+			char *data = palloc(len);
+
+			SET_VARSIZE_SHORT(data, len);
+			memcpy(data + 1, VARDATA(DatumGetPointer(normalized[i])), len - 1);
+
+			formnewtup = true;
+			normalized[i] = PointerGetDatum(data);
+			need_free[i] = true;
+		}
+
 	}
 
-	/* Easier case: Tuple has varlena datums, none of which are compressed */
+	/*
+	 * Easier case: Tuple has varlena datums, none of which are compressed or
+	 * short with 4B header
+	 */
 	if (!formnewtup)
 		return itup;
+
+	data_size = MAXALIGN(heap_compute_data_size(tupleDescriptor,
+									   normalized, isnull)
+				+ MAXALIGN(sizeof(IndexTupleData) + sizeof(IndexAttributeBitMapData)));
+	if ((data_size & INDEX_SIZE_MASK) != data_size)
+	{
+		return NULL;
+	}
 
 	/*
 	 * Hard case: Tuple had compressed varlena datums that necessitate
 	 * creating normalized version of the tuple from uncompressed input datums
 	 * (normalized input datums).  This is rather naive, but shouldn't be
 	 * necessary too often.
+	 * Also tuple had short varlena datums with 4B header. Actually there is no
+	 * restriction with have heap tuple containing varlena datum with 4B header
+	 * and corresponding index tuple containing varlena datum with 1B header.
+	 * For fingerprinting let's convert heap tuple varlena datum to 1B format.
 	 *
 	 * Note that we rely on deterministic index_form_tuple() TOAST compression
 	 * of normalized input.
@@ -3006,7 +3085,7 @@ bt_normalize_tuple(BtreeCheckState *state, IndexTuple itup)
 
 	/* Cannot leak memory here */
 	for (i = 0; i < tupleDescriptor->natts; i++)
-		if (toast_free[i])
+		if (need_free[i])
 			pfree(DatumGetPointer(normalized[i]));
 
 	return reformed;

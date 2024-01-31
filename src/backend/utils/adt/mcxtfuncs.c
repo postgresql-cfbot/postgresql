@@ -20,6 +20,7 @@
 #include "mb/pg_wchar.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
+#include "utils/array.h"
 #include "utils/builtins.h"
 
 /* ----------
@@ -28,6 +29,8 @@
  */
 #define MEMORY_CONTEXT_IDENT_DISPLAY_SIZE	1024
 
+static Datum convert_path_to_datum(List *path);
+
 /*
  * PutMemoryContextsStatsTupleStore
  *		One recursion level for pg_get_backend_memory_contexts.
@@ -35,9 +38,10 @@
 static void
 PutMemoryContextsStatsTupleStore(Tuplestorestate *tupstore,
 								 TupleDesc tupdesc, MemoryContext context,
-								 const char *parent, int level)
+								 const char *parent, int level, int *context_id,
+								 List *path, Size *total_bytes_inc_children)
 {
-#define PG_GET_BACKEND_MEMORY_CONTEXTS_COLS	9
+#define PG_GET_BACKEND_MEMORY_CONTEXTS_COLS	12
 
 	Datum		values[PG_GET_BACKEND_MEMORY_CONTEXTS_COLS];
 	bool		nulls[PG_GET_BACKEND_MEMORY_CONTEXTS_COLS];
@@ -45,6 +49,8 @@ PutMemoryContextsStatsTupleStore(Tuplestorestate *tupstore,
 	MemoryContext child;
 	const char *name;
 	const char *ident;
+	int  current_context_id = (*context_id)++;
+	Size total_bytes_children = 0;
 
 	Assert(MemoryContextIsValid(context));
 
@@ -73,6 +79,8 @@ PutMemoryContextsStatsTupleStore(Tuplestorestate *tupstore,
 	else
 		nulls[0] = true;
 
+	values[1] = Int32GetDatum(current_context_id);
+
 	if (ident)
 	{
 		int			idlen = strlen(ident);
@@ -87,29 +95,44 @@ PutMemoryContextsStatsTupleStore(Tuplestorestate *tupstore,
 
 		memcpy(clipped_ident, ident, idlen);
 		clipped_ident[idlen] = '\0';
-		values[1] = CStringGetTextDatum(clipped_ident);
+		values[2] = CStringGetTextDatum(clipped_ident);
 	}
-	else
-		nulls[1] = true;
-
-	if (parent)
-		values[2] = CStringGetTextDatum(parent);
 	else
 		nulls[2] = true;
 
-	values[3] = Int32GetDatum(level);
-	values[4] = Int64GetDatum(stat.totalspace);
-	values[5] = Int64GetDatum(stat.nblocks);
-	values[6] = Int64GetDatum(stat.freespace);
-	values[7] = Int64GetDatum(stat.freechunks);
-	values[8] = Int64GetDatum(stat.totalspace - stat.freespace);
-	tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	if (parent)
+		values[3] = CStringGetTextDatum(parent);
+	else
+		nulls[3] = true;
 
+	values[4] = Int32GetDatum(level);
+
+	if (path == NIL)
+		nulls[5] = true;
+	else
+		values[5] = convert_path_to_datum(path);
+
+	values[6] = Int64GetDatum(stat.totalspace);
+
+	path = lappend_int(path, current_context_id);
 	for (child = context->firstchild; child != NULL; child = child->nextchild)
 	{
-		PutMemoryContextsStatsTupleStore(tupstore, tupdesc,
-										 child, name, level + 1);
+		PutMemoryContextsStatsTupleStore(tupstore, tupdesc, child, name,
+										 level+1, context_id, path,
+										 &total_bytes_children);
 	}
+	path = list_delete_last(path);
+
+	total_bytes_children += stat.totalspace;
+	values[7] = Int64GetDatum(total_bytes_children);
+	values[8] = Int64GetDatum(stat.nblocks);
+	values[9] = Int64GetDatum(stat.freespace);
+	values[10] = Int64GetDatum(stat.freechunks);
+	values[11] = Int64GetDatum(stat.totalspace - stat.freespace);
+
+	tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+
+	*total_bytes_inc_children += total_bytes_children;
 }
 
 /*
@@ -120,10 +143,14 @@ Datum
 pg_get_backend_memory_contexts(PG_FUNCTION_ARGS)
 {
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	int context_id = 0;
+	List *path = NIL;
+	Size total_bytes_inc_children = 0;
 
 	InitMaterializedSRF(fcinfo, 0);
 	PutMemoryContextsStatsTupleStore(rsinfo->setResult, rsinfo->setDesc,
-									 TopMemoryContext, NULL, 0);
+									 TopMemoryContext, NULL, 0, &context_id,
+									 path, &total_bytes_inc_children);
 
 	return (Datum) 0;
 }
@@ -192,4 +219,26 @@ pg_log_backend_memory_contexts(PG_FUNCTION_ARGS)
 	}
 
 	PG_RETURN_BOOL(true);
+}
+
+/*
+ * Convert a list of context ids to a int[] Datum
+ */
+static Datum
+convert_path_to_datum(List *path)
+{
+	Datum	   *datum_array;
+	int			length;
+	ArrayType  *result_array;
+
+	length = list_length(path);
+	datum_array = (Datum *) palloc(length * sizeof(Datum));
+	length = 0;
+	foreach_int(id, path)
+	{
+		datum_array[length++] = Int32GetDatum(id);
+	}
+	result_array = construct_array_builtin(datum_array, length, INT4OID);
+
+	return PointerGetDatum(result_array);
 }

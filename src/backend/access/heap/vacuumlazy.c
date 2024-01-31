@@ -3,18 +3,17 @@
  * vacuumlazy.c
  *	  Concurrent ("lazy") vacuuming.
  *
- * The major space usage for vacuuming is storage for the array of dead TIDs
+ * The major space usage for vacuuming is TidStore, a storage for dead TIDs
  * that are to be removed from indexes.  We want to ensure we can vacuum even
  * the very largest relations with finite memory space usage.  To do that, we
- * set upper bounds on the number of TIDs we can keep track of at once.
+ * set upper bounds on the maximum memory that can be used for keeping track
+ * of dead TIDs at once.
  *
  * We are willing to use at most maintenance_work_mem (or perhaps
- * autovacuum_work_mem) memory space to keep track of dead TIDs.  We initially
- * allocate an array of TIDs of that size, with an upper limit that depends on
- * table size (this limit ensures we don't allocate a huge area uselessly for
- * vacuuming small tables).  If the array threatens to overflow, we must call
- * lazy_vacuum to vacuum indexes (and to vacuum the pages that we've pruned).
- * This frees up the memory space dedicated to storing dead TIDs.
+ * autovacuum_work_mem) memory space to keep track of dead TIDs.  If the
+ * TidStore is full, we must call lazy_vacuum to vacuum indexes (and to vacuum
+ * the pages that we've pruned). This frees up the memory space dedicated to
+ * to store dead TIDs.
  *
  * In practice VACUUM will often complete its initial pass over the target
  * heap relation without ever running out of space to store TIDs.  This means
@@ -40,6 +39,7 @@
 #include "access/heapam_xlog.h"
 #include "access/htup_details.h"
 #include "access/multixact.h"
+#include "access/tidstore.h"
 #include "access/transam.h"
 #include "access/visibilitymap.h"
 #include "access/xact.h"
@@ -186,7 +186,8 @@ typedef struct LVRelState
 	 * lazy_vacuum_heap_rel, which marks the same LP_DEAD line pointers as
 	 * LP_UNUSED during second heap pass.
 	 */
-	VacDeadItems *dead_items;	/* TIDs whose index tuples we'll delete */
+	TidStore *dead_items;	/* TIDs whose index tuples we'll delete */
+	VacDeadItemsInfo	*di_info;
 	BlockNumber rel_pages;		/* total number of pages */
 	BlockNumber scanned_pages;	/* # pages examined (not skipped via VM) */
 	BlockNumber removed_pages;	/* # pages removed by relation truncation */
@@ -240,8 +241,9 @@ static bool lazy_scan_noprune(LVRelState *vacrel, Buffer buf,
 static void lazy_vacuum(LVRelState *vacrel);
 static bool lazy_vacuum_all_indexes(LVRelState *vacrel);
 static void lazy_vacuum_heap_rel(LVRelState *vacrel);
-static int	lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno,
-								  Buffer buffer, int index, Buffer vmbuffer);
+static void	lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno,
+								  Buffer buffer, OffsetNumber *offsets,
+								  int num_offsets, Buffer vmbuffer);
 static bool lazy_check_wraparound_failsafe(LVRelState *vacrel);
 static void lazy_cleanup_all_indexes(LVRelState *vacrel);
 static IndexBulkDeleteResult *lazy_vacuum_one_index(Relation indrel,
@@ -258,6 +260,7 @@ static void lazy_truncate_heap(LVRelState *vacrel);
 static BlockNumber count_nondeletable_pages(LVRelState *vacrel,
 											bool *lock_waiter_detected);
 static void dead_items_alloc(LVRelState *vacrel, int nworkers);
+static void dead_items_reset(LVRelState *vacrel);
 static void dead_items_cleanup(LVRelState *vacrel);
 static bool heap_page_is_all_visible(LVRelState *vacrel, Buffer buf,
 									 TransactionId *visibility_cutoff_xid, bool *all_frozen);
@@ -473,11 +476,11 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	}
 
 	/*
-	 * Allocate dead_items array memory using dead_items_alloc.  This handles
-	 * parallel VACUUM initialization as part of allocating shared memory
-	 * space used for dead_items.  (But do a failsafe precheck first, to
-	 * ensure that parallel VACUUM won't be attempted at all when relfrozenxid
-	 * is already dangerously old.)
+	 * Allocate dead_items memory using dead_items_alloc.  This handles parallel
+	 * VACUUM initialization as part of allocating shared memory space used for
+	 * dead_items.  (But do a failsafe precheck first, to ensure that parallel
+	 * VACUUM won't be attempted at all when relfrozenxid is already dangerously
+	 * old.)
 	 */
 	lazy_check_wraparound_failsafe(vacrel);
 	dead_items_alloc(vacrel, params->nworkers);
@@ -783,7 +786,7 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
  *		have collected the TIDs whose index tuples need to be removed.
  *
  *		Finally, invokes lazy_vacuum_heap_rel to vacuum heap pages, which
- *		largely consists of marking LP_DEAD items (from collected TID array)
+ *		largely consists of marking LP_DEAD items (from vacrel->dead_items)
  *		as LP_UNUSED.  This has to happen in a second, final pass over the
  *		heap, to preserve a basic invariant that all index AMs rely on: no
  *		extant index tuple can ever be allowed to contain a TID that points to
@@ -811,21 +814,22 @@ lazy_scan_heap(LVRelState *vacrel)
 				blkno,
 				next_unskippable_block,
 				next_fsm_block_to_vacuum = 0;
-	VacDeadItems *dead_items = vacrel->dead_items;
+	TidStore *dead_items = vacrel->dead_items;
+	VacDeadItemsInfo *di_info = vacrel->di_info;
 	Buffer		vmbuffer = InvalidBuffer;
 	bool		next_unskippable_allvis,
 				skipping_current_range;
 	const int	initprog_index[] = {
 		PROGRESS_VACUUM_PHASE,
 		PROGRESS_VACUUM_TOTAL_HEAP_BLKS,
-		PROGRESS_VACUUM_MAX_DEAD_TUPLES
+		PROGRESS_VACUUM_MAX_DEAD_TUPLE_BYTES
 	};
 	int64		initprog_val[3];
 
 	/* Report that we're scanning the heap, advertising total # of blocks */
 	initprog_val[0] = PROGRESS_VACUUM_PHASE_SCAN_HEAP;
 	initprog_val[1] = rel_pages;
-	initprog_val[2] = dead_items->max_items;
+	initprog_val[2] = di_info->max_bytes;
 	pgstat_progress_update_multi_param(3, initprog_index, initprog_val);
 
 	/* Set up an initial range of skippable blocks using the visibility map */
@@ -893,8 +897,7 @@ lazy_scan_heap(LVRelState *vacrel)
 		 * dead_items TIDs, pause and do a cycle of vacuuming before we tackle
 		 * this page.
 		 */
-		Assert(dead_items->max_items >= MaxHeapTuplesPerPage);
-		if (dead_items->max_items - dead_items->num_items < MaxHeapTuplesPerPage)
+		if (TidStoreMemoryUsage(dead_items) > di_info->max_bytes)
 		{
 			/*
 			 * Before beginning index vacuuming, we release any pin we may
@@ -957,11 +960,11 @@ lazy_scan_heap(LVRelState *vacrel)
 
 		/*
 		 * If we didn't get the cleanup lock, we can still collect LP_DEAD
-		 * items in the dead_items array for later vacuuming, count live and
-		 * recently dead tuples for vacuum logging, and determine if this
-		 * block could later be truncated. If we encounter any xid/mxids that
-		 * require advancing the relfrozenxid/relminxid, we'll have to wait
-		 * for a cleanup lock and call lazy_scan_prune().
+		 * items in the dead_items for later vacuuming, count live and recently
+		 * dead tuples for vacuum logging, and determine if this block could
+		 * later be truncated. If we encounter any xid/mxids that require
+		 * advancing the relfrozenxid/relminxid, we'll have to wait for a
+		 * cleanup lock and call lazy_scan_prune().
 		 */
 		if (!got_cleanup_lock &&
 			!lazy_scan_noprune(vacrel, buf, blkno, page, &has_lpdead_items))
@@ -985,9 +988,9 @@ lazy_scan_heap(LVRelState *vacrel)
 		 * Like lazy_scan_noprune(), lazy_scan_prune() will count
 		 * recently_dead_tuples and live tuples for vacuum logging, determine
 		 * if the block can later be truncated, and accumulate the details of
-		 * remaining LP_DEAD line pointers on the page in the dead_items
-		 * array. These dead items include those pruned by lazy_scan_prune()
-		 * as well we line pointers previously marked LP_DEAD.
+		 * remaining LP_DEAD line pointers on the page in the dead_items.
+		 * These dead items include those pruned by lazy_scan_prune() as well
+		 * we line pointers previously marked LP_DEAD.
 		 */
 		if (got_cleanup_lock)
 			lazy_scan_prune(vacrel, buf, blkno, page,
@@ -1064,7 +1067,7 @@ lazy_scan_heap(LVRelState *vacrel)
 	 * Do index vacuuming (call each index's ambulkdelete routine), then do
 	 * related heap vacuuming
 	 */
-	if (dead_items->num_items > 0)
+	if (di_info->num_items > 0)
 		lazy_vacuum(vacrel);
 
 	/*
@@ -1713,22 +1716,15 @@ lazy_scan_prune(LVRelState *vacrel,
 	 */
 	if (lpdead_items > 0)
 	{
-		VacDeadItems *dead_items = vacrel->dead_items;
-		ItemPointerData tmp;
+		TidStore *dead_items = vacrel->dead_items;
 
 		vacrel->lpdead_item_pages++;
 
-		ItemPointerSetBlockNumber(&tmp, blkno);
+		TidStoreSetBlockOffsets(dead_items, blkno, deadoffsets, lpdead_items);
+		vacrel->di_info->num_items += lpdead_items;
 
-		for (int i = 0; i < lpdead_items; i++)
-		{
-			ItemPointerSetOffsetNumber(&tmp, deadoffsets[i]);
-			dead_items->items[dead_items->num_items++] = tmp;
-		}
-
-		Assert(dead_items->num_items <= dead_items->max_items);
-		pgstat_progress_update_param(PROGRESS_VACUUM_NUM_DEAD_TUPLES,
-									 dead_items->num_items);
+		pgstat_progress_update_param(PROGRESS_VACUUM_DEAD_TUPLE_BYTES,
+									 TidStoreMemoryUsage(dead_items));
 
 		/*
 		 * It was convenient to ignore LP_DEAD items in all_visible earlier on
@@ -1875,7 +1871,7 @@ lazy_scan_prune(LVRelState *vacrel,
  * lazy_scan_prune, which requires a full cleanup lock.  While pruning isn't
  * performed here, it's quite possible that an earlier opportunistic pruning
  * operation left LP_DEAD items behind.  We'll at least collect any such items
- * in the dead_items array for removal from indexes.
+ * in the dead_items for removal from indexes.
  *
  * For aggressive VACUUM callers, we may return false to indicate that a full
  * cleanup lock is required for processing by lazy_scan_prune.  This is only
@@ -2034,7 +2030,7 @@ lazy_scan_noprune(LVRelState *vacrel,
 	vacrel->NewRelfrozenXid = NoFreezePageRelfrozenXid;
 	vacrel->NewRelminMxid = NoFreezePageRelminMxid;
 
-	/* Save any LP_DEAD items found on the page in dead_items array */
+	/* Save any LP_DEAD items found on the page in dead_items */
 	if (vacrel->nindexes == 0)
 	{
 		/* Using one-pass strategy (since table has no indexes) */
@@ -2054,8 +2050,7 @@ lazy_scan_noprune(LVRelState *vacrel,
 	}
 	else if (lpdead_items > 0)
 	{
-		VacDeadItems *dead_items = vacrel->dead_items;
-		ItemPointerData tmp;
+		TidStore *dead_items = vacrel->dead_items;
 
 		/*
 		 * Page has LP_DEAD items, and so any references/TIDs that remain in
@@ -2064,17 +2059,11 @@ lazy_scan_noprune(LVRelState *vacrel,
 		 */
 		vacrel->lpdead_item_pages++;
 
-		ItemPointerSetBlockNumber(&tmp, blkno);
+		TidStoreSetBlockOffsets(dead_items, blkno, deadoffsets, lpdead_items);
+		vacrel->di_info->num_items += lpdead_items;
 
-		for (int i = 0; i < lpdead_items; i++)
-		{
-			ItemPointerSetOffsetNumber(&tmp, deadoffsets[i]);
-			dead_items->items[dead_items->num_items++] = tmp;
-		}
-
-		Assert(dead_items->num_items <= dead_items->max_items);
-		pgstat_progress_update_param(PROGRESS_VACUUM_NUM_DEAD_TUPLES,
-									 dead_items->num_items);
+		pgstat_progress_update_param(PROGRESS_VACUUM_DEAD_TUPLE_BYTES,
+									 TidStoreMemoryUsage(dead_items));
 
 		vacrel->lpdead_items += lpdead_items;
 	}
@@ -2124,7 +2113,7 @@ lazy_vacuum(LVRelState *vacrel)
 	if (!vacrel->do_index_vacuuming)
 	{
 		Assert(!vacrel->do_index_cleanup);
-		vacrel->dead_items->num_items = 0;
+		dead_items_reset(vacrel);
 		return;
 	}
 
@@ -2153,7 +2142,7 @@ lazy_vacuum(LVRelState *vacrel)
 		BlockNumber threshold;
 
 		Assert(vacrel->num_index_scans == 0);
-		Assert(vacrel->lpdead_items == vacrel->dead_items->num_items);
+		Assert(vacrel->lpdead_items == vacrel->di_info->num_items);
 		Assert(vacrel->do_index_vacuuming);
 		Assert(vacrel->do_index_cleanup);
 
@@ -2180,8 +2169,8 @@ lazy_vacuum(LVRelState *vacrel)
 		 * cases then this may need to be reconsidered.
 		 */
 		threshold = (double) vacrel->rel_pages * BYPASS_THRESHOLD_PAGES;
-		bypass = (vacrel->lpdead_item_pages < threshold &&
-				  vacrel->lpdead_items < MAXDEADITEMS(32L * 1024L * 1024L));
+		bypass = (vacrel->lpdead_item_pages < threshold) &&
+			TidStoreMemoryUsage(vacrel->dead_items) < (32L * 1024L * 1024L);
 	}
 
 	if (bypass)
@@ -2226,7 +2215,7 @@ lazy_vacuum(LVRelState *vacrel)
 	 * Forget the LP_DEAD items that we just vacuumed (or just decided to not
 	 * vacuum)
 	 */
-	vacrel->dead_items->num_items = 0;
+	dead_items_reset(vacrel);
 }
 
 /*
@@ -2318,7 +2307,7 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 	 * place).
 	 */
 	Assert(vacrel->num_index_scans > 0 ||
-		   vacrel->dead_items->num_items == vacrel->lpdead_items);
+		   vacrel->di_info->num_items == vacrel->lpdead_items);
 	Assert(allindexes || VacuumFailsafeActive);
 
 	/*
@@ -2340,9 +2329,8 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 /*
  *	lazy_vacuum_heap_rel() -- second pass over the heap for two pass strategy
  *
- * This routine marks LP_DEAD items in vacrel->dead_items array as LP_UNUSED.
- * Pages that never had lazy_scan_prune record LP_DEAD items are not visited
- * at all.
+ * This routine marks LP_DEAD items in vacrel->dead_items as LP_UNUSED. Pages
+ * that never had lazy_scan_prune record LP_DEAD items are not visited at all.
  *
  * We may also be able to truncate the line pointer array of the heap pages we
  * visit.  If there is a contiguous group of LP_UNUSED items at the end of the
@@ -2358,10 +2346,11 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 static void
 lazy_vacuum_heap_rel(LVRelState *vacrel)
 {
-	int			index = 0;
 	BlockNumber vacuumed_pages = 0;
 	Buffer		vmbuffer = InvalidBuffer;
 	LVSavedErrInfo saved_err_info;
+	TidStoreIter *iter;
+	TidStoreIterResult *iter_result;
 
 	Assert(vacrel->do_index_vacuuming);
 	Assert(vacrel->do_index_cleanup);
@@ -2376,7 +2365,8 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 							 VACUUM_ERRCB_PHASE_VACUUM_HEAP,
 							 InvalidBlockNumber, InvalidOffsetNumber);
 
-	while (index < vacrel->dead_items->num_items)
+	iter = TidStoreBeginIterate(vacrel->dead_items);
+	while ((iter_result = TidStoreIterateNext(iter)) != NULL)
 	{
 		BlockNumber blkno;
 		Buffer		buf;
@@ -2385,7 +2375,7 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 
 		vacuum_delay_point();
 
-		blkno = ItemPointerGetBlockNumber(&vacrel->dead_items->items[index]);
+		blkno = iter_result->blkno;
 		vacrel->blkno = blkno;
 
 		/*
@@ -2399,7 +2389,8 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 		buf = ReadBufferExtended(vacrel->rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
 								 vacrel->bstrategy);
 		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
-		index = lazy_vacuum_heap_page(vacrel, blkno, buf, index, vmbuffer);
+		lazy_vacuum_heap_page(vacrel, blkno, buf, iter_result->offsets,
+							  iter_result->num_offsets, vmbuffer);
 
 		/* Now that we've vacuumed the page, record its available space */
 		page = BufferGetPage(buf);
@@ -2409,6 +2400,7 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 		RecordPageWithFreeSpace(vacrel->rel, blkno, freespace);
 		vacuumed_pages++;
 	}
+	TidStoreEndIterate(iter);
 
 	vacrel->blkno = InvalidBlockNumber;
 	if (BufferIsValid(vmbuffer))
@@ -2418,14 +2410,13 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 	 * We set all LP_DEAD items from the first heap pass to LP_UNUSED during
 	 * the second heap pass.  No more, no less.
 	 */
-	Assert(index > 0);
 	Assert(vacrel->num_index_scans > 1 ||
-		   (index == vacrel->lpdead_items &&
+		   (vacrel->di_info->num_items == vacrel->lpdead_items &&
 			vacuumed_pages == vacrel->lpdead_item_pages));
 
 	ereport(DEBUG2,
-			(errmsg("table \"%s\": removed %lld dead item identifiers in %u pages",
-					vacrel->relname, (long long) index, vacuumed_pages)));
+			(errmsg("table \"%s\": removed " INT64_FORMAT "dead item identifiers in %u pages",
+					vacrel->relname, vacrel->di_info->num_items, vacuumed_pages)));
 
 	/* Revert to the previous phase information for error traceback */
 	restore_vacuum_error_info(vacrel, &saved_err_info);
@@ -2433,21 +2424,17 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 
 /*
  *	lazy_vacuum_heap_page() -- free page's LP_DEAD items listed in the
- *						  vacrel->dead_items array.
+ *						  vacrel->dead_items store.
  *
  * Caller must have an exclusive buffer lock on the buffer (though a full
  * cleanup lock is also acceptable).  vmbuffer must be valid and already have
  * a pin on blkno's visibility map page.
- *
- * index is an offset into the vacrel->dead_items array for the first listed
- * LP_DEAD item on the page.  The return value is the first index immediately
- * after all LP_DEAD items for the same page in the array.
  */
-static int
+static void
 lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno, Buffer buffer,
-					  int index, Buffer vmbuffer)
+					  OffsetNumber *deadoffsets, int num_offsets,
+					  Buffer vmbuffer)
 {
-	VacDeadItems *dead_items = vacrel->dead_items;
 	Page		page = BufferGetPage(buffer);
 	OffsetNumber unused[MaxHeapTuplesPerPage];
 	int			nunused = 0;
@@ -2466,16 +2453,11 @@ lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno, Buffer buffer,
 
 	START_CRIT_SECTION();
 
-	for (; index < dead_items->num_items; index++)
+	for (int i = 0; i < num_offsets; i++)
 	{
-		BlockNumber tblk;
-		OffsetNumber toff;
 		ItemId		itemid;
+		OffsetNumber	toff = deadoffsets[i];
 
-		tblk = ItemPointerGetBlockNumber(&dead_items->items[index]);
-		if (tblk != blkno)
-			break;				/* past end of tuples for this block */
-		toff = ItemPointerGetOffsetNumber(&dead_items->items[index]);
 		itemid = PageGetItemId(page, toff);
 
 		Assert(ItemIdIsDead(itemid) && !ItemIdHasStorage(itemid));
@@ -2545,7 +2527,6 @@ lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno, Buffer buffer,
 
 	/* Revert to the previous phase information for error traceback */
 	restore_vacuum_error_info(vacrel, &saved_err_info);
-	return index;
 }
 
 /*
@@ -2672,8 +2653,8 @@ lazy_cleanup_all_indexes(LVRelState *vacrel)
  *	lazy_vacuum_one_index() -- vacuum index relation.
  *
  *		Delete all the index tuples containing a TID collected in
- *		vacrel->dead_items array.  Also update running statistics.
- *		Exact details depend on index AM's ambulkdelete routine.
+ *		vacrel->dead_items.  Also update running statistics. Exact
+ *		details depend on index AM's ambulkdelete routine.
  *
  *		reltuples is the number of heap tuples to be passed to the
  *		bulkdelete callback.  It's always assumed to be estimated.
@@ -2710,7 +2691,8 @@ lazy_vacuum_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 							 InvalidBlockNumber, InvalidOffsetNumber);
 
 	/* Do bulk deletion */
-	istat = vac_bulkdel_one_index(&ivinfo, istat, (void *) vacrel->dead_items);
+	istat = vac_bulkdel_one_index(&ivinfo, istat, (void *) vacrel->dead_items,
+								  vacrel->di_info);
 
 	/* Revert to the previous phase information for error traceback */
 	restore_vacuum_error_info(vacrel, &saved_err_info);
@@ -3076,46 +3058,6 @@ count_nondeletable_pages(LVRelState *vacrel, bool *lock_waiter_detected)
 }
 
 /*
- * Returns the number of dead TIDs that VACUUM should allocate space to
- * store, given a heap rel of size vacrel->rel_pages, and given current
- * maintenance_work_mem setting (or current autovacuum_work_mem setting,
- * when applicable).
- *
- * See the comments at the head of this file for rationale.
- */
-static int
-dead_items_max_items(LVRelState *vacrel)
-{
-	int64		max_items;
-	int			vac_work_mem = IsAutoVacuumWorkerProcess() &&
-		autovacuum_work_mem != -1 ?
-		autovacuum_work_mem : maintenance_work_mem;
-
-	if (vacrel->nindexes > 0)
-	{
-		BlockNumber rel_pages = vacrel->rel_pages;
-
-		max_items = MAXDEADITEMS(vac_work_mem * 1024L);
-		max_items = Min(max_items, INT_MAX);
-		max_items = Min(max_items, MAXDEADITEMS(MaxAllocSize));
-
-		/* curious coding here to ensure the multiplication can't overflow */
-		if ((BlockNumber) (max_items / MaxHeapTuplesPerPage) > rel_pages)
-			max_items = rel_pages * MaxHeapTuplesPerPage;
-
-		/* stay sane if small maintenance_work_mem */
-		max_items = Max(max_items, MaxHeapTuplesPerPage);
-	}
-	else
-	{
-		/* One-pass case only stores a single heap page's TIDs at a time */
-		max_items = MaxHeapTuplesPerPage;
-	}
-
-	return (int) max_items;
-}
-
-/*
  * Allocate dead_items (either using palloc, or in dynamic shared memory).
  * Sets dead_items in vacrel for caller.
  *
@@ -3125,11 +3067,10 @@ dead_items_max_items(LVRelState *vacrel)
 static void
 dead_items_alloc(LVRelState *vacrel, int nworkers)
 {
-	VacDeadItems *dead_items;
-	int			max_items;
-
-	max_items = dead_items_max_items(vacrel);
-	Assert(max_items >= MaxHeapTuplesPerPage);
+	VacDeadItemsInfo *di_info;
+	int			vac_work_mem = IsAutoVacuumWorkerProcess() &&
+		autovacuum_work_mem != -1 ?
+		autovacuum_work_mem * 1024L : maintenance_work_mem * 1024L;
 
 	/*
 	 * Initialize state for a parallel vacuum.  As of now, only one worker can
@@ -3156,24 +3097,48 @@ dead_items_alloc(LVRelState *vacrel, int nworkers)
 		else
 			vacrel->pvs = parallel_vacuum_init(vacrel->rel, vacrel->indrels,
 											   vacrel->nindexes, nworkers,
-											   max_items,
+											   vac_work_mem,
 											   vacrel->verbose ? INFO : DEBUG2,
 											   vacrel->bstrategy);
 
 		/* If parallel mode started, dead_items space is allocated in DSM */
 		if (ParallelVacuumIsActive(vacrel))
 		{
-			vacrel->dead_items = parallel_vacuum_get_dead_items(vacrel->pvs);
+			vacrel->dead_items = parallel_vacuum_get_dead_items(vacrel->pvs,
+																&vacrel->di_info);
 			return;
 		}
 	}
 
 	/* Serial VACUUM case */
-	dead_items = (VacDeadItems *) palloc(vac_max_items_to_alloc_size(max_items));
-	dead_items->max_items = max_items;
-	dead_items->num_items = 0;
+	vacrel->dead_items = TidStoreCreate(vac_work_mem, NULL);
 
-	vacrel->dead_items = dead_items;
+	di_info = (VacDeadItemsInfo *) palloc(sizeof(VacDeadItemsInfo));
+	di_info->max_bytes = vac_work_mem;
+	di_info->num_items = 0;
+	vacrel->di_info = di_info;
+}
+
+/*
+ * Forget all collected dead items.
+ */
+static void
+dead_items_reset(LVRelState *vacrel)
+{
+	TidStore	*dead_items = vacrel->dead_items;
+
+	if (ParallelVacuumIsActive(vacrel))
+	{
+		parallel_vacuum_reset_dead_items(vacrel->pvs);
+		return;
+	}
+
+	/* Recreate the tidstore with the same max_bytes limitation */
+	TidStoreDestroy(dead_items);
+	vacrel->dead_items = TidStoreCreate(vacrel->di_info->max_bytes, NULL);
+
+	/* Reset the counter */
+	vacrel->di_info->num_items = 0;
 }
 
 /*

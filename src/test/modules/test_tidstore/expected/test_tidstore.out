@@ -1,0 +1,129 @@
+CREATE EXTENSION test_tidstore;
+-- Constant values used in the tests.
+\set maxblkno 4294967295
+-- The maximum number of heap tuples (MaxHeapTuplesPerPage) in 8kB block is 291.
+-- We use a higher number to test tidstore.
+\set maxoffset 512
+-- Support functions.
+CREATE FUNCTION make_tid(a bigint, b int2) RETURNS tid
+BEGIN ATOMIC
+RETURN ('(' || a || ', ' || b || ')')::tid;
+END;
+-- Lookup test function. Search 1 to (:maxoffset + 5) offset numbers in
+-- 4 blocks, and return TIDS if found in the tidstore.
+CREATE FUNCTION lookup_test() RETURNS SETOF tid
+BEGIN ATOMIC;
+WITH blocks (blk) AS (
+VALUES (0), (2), (:maxblkno - 2), (:maxblkno)
+)
+SELECT t_ctid
+  FROM
+    (SELECT array_agg(make_tid(blk, off::int2)) AS tids
+      FROM blocks, generate_series(1, :maxoffset + 5) off) AS foo,
+    LATERAL tidstore_lookup_tids(foo.tids)
+  WHERE found ORDER BY t_ctid;
+END;
+-- Test a local tdistore. A shared tidstore is created by passing true.
+SELECT tidstore_create(false);
+ tidstore_create 
+-----------------
+ 
+(1 row)
+
+-- Test on empty tidstore.
+SELECT *
+    FROM tidstore_lookup_tids(ARRAY[make_tid(0, 1::int2),
+        make_tid(:maxblkno, :maxoffset::int2)]::tid[]);
+      t_ctid      | found 
+------------------+-------
+ (0,1)            | f
+ (4294967295,512) | f
+(2 rows)
+
+SELECT tidstore_is_full();
+ tidstore_is_full 
+------------------
+ f
+(1 row)
+
+-- Add tids in random order.
+WITH blocks (blk) AS(
+VALUES (0), (1), (:maxblkno - 1), (:maxblkno / 2), (:maxblkno)
+),
+offsets (off) AS (
+VALUES (1), (2), (:maxoffset / 2), (:maxoffset - 1), (:maxoffset)
+)
+SELECT row_number() over(ORDER BY blk),
+     tidstore_set_block_offsets(blk, array_agg(offsets.off)::int2[])
+  FROM blocks, offsets
+  GROUP BY blk;
+ row_number | tidstore_set_block_offsets 
+------------+----------------------------
+          1 | 
+          2 | 
+          3 | 
+          4 | 
+          5 | 
+(5 rows)
+
+-- Lookup test and dump (sorted) tids.
+SELECT lookup_test();
+   lookup_test    
+------------------
+ (0,1)
+ (0,2)
+ (0,256)
+ (0,511)
+ (0,512)
+ (4294967295,1)
+ (4294967295,2)
+ (4294967295,256)
+ (4294967295,511)
+ (4294967295,512)
+(10 rows)
+
+SELECT tidstore_is_full();
+ tidstore_is_full 
+------------------
+ f
+(1 row)
+
+SELECT tidstore_dump_tids();
+ tidstore_dump_tids 
+--------------------
+ (0,1)
+ (0,2)
+ (0,256)
+ (0,511)
+ (0,512)
+ (1,1)
+ (1,2)
+ (1,256)
+ (1,511)
+ (1,512)
+ (2147483647,1)
+ (2147483647,2)
+ (2147483647,256)
+ (2147483647,511)
+ (2147483647,512)
+ (4294967294,1)
+ (4294967294,2)
+ (4294967294,256)
+ (4294967294,511)
+ (4294967294,512)
+ (4294967295,1)
+ (4294967295,2)
+ (4294967295,256)
+ (4294967295,511)
+ (4294967295,512)
+(25 rows)
+
+-- cleanup
+SELECT tidstore_destroy();
+ tidstore_destroy 
+------------------
+ 
+(1 row)
+
+DROP FUNCTION lookup_test();
+DROP FUNCTION make_tid(a bigint, b int2);

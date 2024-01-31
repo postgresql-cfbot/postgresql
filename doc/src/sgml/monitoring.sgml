@@ -1100,6 +1100,10 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       </entry>
      </row>
      <row>
+      <entry><literal>SharedTidStore</literal></entry>
+      <entry>Waiting to access a shared TID store.</entry>
+     </row>
+     <row>
       <entry><literal>Timeout</literal></entry>
       <entry>The server process is waiting for a timeout
        to expire.  <literal>wait_event</literal> will identify the specific wait
@@ -6229,10 +6233,10 @@ FROM pg_stat_get_backend_idset() AS backendid;
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
-       <structfield>max_dead_tuples</structfield> <type>bigint</type>
+       <structfield>max_dead_tuple_bytes</structfield> <type>bigint</type>
       </para>
       <para>
-       Number of dead tuples that we can store before needing to perform
+       Amount of dead tuple data that we can store before needing to perform
        an index vacuum cycle, based on
        <xref linkend="guc-maintenance-work-mem"/>.
       </para></entry>
@@ -6240,10 +6244,10 @@ FROM pg_stat_get_backend_idset() AS backendid;
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
-       <structfield>num_dead_tuples</structfield> <type>bigint</type>
+       <structfield>dead_tuple_bytes</structfield> <type>bigint</type>
       </para>
       <para>
-       Number of dead tuples collected since the last index vacuum cycle.
+       Amount of dead tuple data collected since the last index vacuum cycle.
       </para></entry>
      </row>
 

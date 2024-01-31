@@ -154,6 +154,7 @@ static const char *const BuiltinTrancheNames[] = {
 	[LWTRANCHE_PER_SESSION_RECORD_TYPMOD] = "PerSessionRecordTypmod",
 	[LWTRANCHE_SHARED_TUPLESTORE] = "SharedTupleStore",
 	[LWTRANCHE_SHARED_TIDBITMAP] = "SharedTidBitmap",
+	[LWTRANCHE_SHARED_TIDSTORE] = "SharedTidStore",
 	[LWTRANCHE_PARALLEL_APPEND] = "ParallelAppend",
 	[LWTRANCHE_PER_XACT_PREDICATE_LIST] = "PerXactPredicateList",
 	[LWTRANCHE_PGSTATS_DSA] = "PgStatsDSA",
@@ -163,6 +164,7 @@ static const char *const BuiltinTrancheNames[] = {
 	[LWTRANCHE_LAUNCHER_HASH] = "LogicalRepLauncherHash",
 	[LWTRANCHE_DSM_REGISTRY_DSA] = "DSMRegistryDSA",
 	[LWTRANCHE_DSM_REGISTRY_HASH] = "DSMRegistryHash",
+	[LWTRANCHE_PARALLEL_VACUUM_DSA] = "ParallelVacuumDSA",
 };
 
 StaticAssertDecl(lengthof(BuiltinTrancheNames) ==

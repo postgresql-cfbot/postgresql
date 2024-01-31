@@ -893,19 +893,20 @@ XactLockTableWaitErrorCb(void *arg)
 
 /*
  * WaitForLockersMultiple
- *		Wait until no transaction holds locks that conflict with the given
- *		locktags at the given lockmode.
+ *		Wait until no transaction holds locks on the given locktags, either in
+ *		or conflicting with the given lockmode, depending on the value of the
+ *		conflicting argument.
  *
  * To do this, obtain the current list of lockers, and wait on their VXIDs
  * until they are finished.
  *
  * Note we don't try to acquire the locks on the given locktags, only the
- * VXIDs and XIDs of their lock holders; if somebody grabs a conflicting lock
- * on the objects after we obtained our initial list of lockers, we will not
- * wait for them.
+ * VXIDs and XIDs of their lock holders; if somebody grabs a lock on the objects
+ * after we obtained our initial list of lockers, we will not wait for them.
  */
 void
-WaitForLockersMultiple(List *locktags, LOCKMODE lockmode, bool progress)
+WaitForLockersMultiple(List *locktags, LOCKMODE lockmode, bool conflicting,
+					   bool progress)
 {
 	List	   *holders = NIL;
 	ListCell   *lc;
@@ -923,8 +924,8 @@ WaitForLockersMultiple(List *locktags, LOCKMODE lockmode, bool progress)
 		int			count;
 
 		holders = lappend(holders,
-						  GetLockConflicts(locktag, lockmode,
-										   progress ? &count : NULL));
+						  GetLockers(locktag, lockmode, conflicting,
+									 progress ? &count : NULL));
 		if (progress)
 			total += count;
 	}
@@ -933,8 +934,8 @@ WaitForLockersMultiple(List *locktags, LOCKMODE lockmode, bool progress)
 		pgstat_progress_update_param(PROGRESS_WAITFOR_TOTAL, total);
 
 	/*
-	 * Note: GetLockConflicts() never reports our own xid, hence we need not
-	 * check for that.  Also, prepared xacts are reported and awaited.
+	 * Note: GetLockers() never reports our own xid, hence we need not check for
+	 * that.  Also, prepared xacts are reported and awaited.
 	 */
 
 	/* Finally wait for each such transaction to complete */
@@ -983,15 +984,15 @@ WaitForLockersMultiple(List *locktags, LOCKMODE lockmode, bool progress)
  * Same as WaitForLockersMultiple, for a single lock tag.
  */
 void
-WaitForLockers(LOCKTAG heaplocktag, LOCKMODE lockmode, bool progress)
+WaitForLockers(LOCKTAG heaplocktag, LOCKMASK lockmask, bool conflicting,
+			   bool progress)
 {
 	List	   *l;
 
 	l = list_make1(&heaplocktag);
-	WaitForLockersMultiple(l, lockmode, progress);
+	WaitForLockersMultiple(l, lockmask, conflicting, progress);
 	list_free(l);
 }
-
 
 /*
  *		LockDatabaseObject

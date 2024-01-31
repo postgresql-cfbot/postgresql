@@ -574,8 +574,9 @@ extern HTAB *GetLockMethodLocalHash(void);
 #endif
 extern bool LockHasWaiters(const LOCKTAG *locktag,
 						   LOCKMODE lockmode, bool sessionLock);
-extern VirtualTransactionId *GetLockConflicts(const LOCKTAG *locktag,
-											  LOCKMODE lockmode, int *countp);
+extern VirtualTransactionId *GetLockers(const LOCKTAG *locktag,
+										LOCKMODE lockmode, bool conflicting,
+										int *countp);
 extern void AtPrepare_Locks(void);
 extern void PostPrepare_Locks(TransactionId xid);
 extern bool LockCheckConflicts(LockMethod lockMethodTable,
@@ -590,6 +591,8 @@ extern BlockedProcsData *GetBlockerStatusData(int blocked_pid);
 
 extern xl_standby_lock *GetRunningTransactionLocks(int *nlocks);
 extern const char *GetLockmodeName(LOCKMETHODID lockmethodid, LOCKMODE mode);
+extern LOCKMODE ParseLockmodeName(LOCKMETHODID lockmethodid,
+								  const char *mode_name);
 
 extern void lock_twophase_recover(TransactionId xid, uint16 info,
 								  void *recdata, uint32 len);

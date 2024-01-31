@@ -14,12 +14,16 @@
 
 #include "access/htup_details.h"
 #include "access/xact.h"
+#include "catalog/catalog.h"
 #include "catalog/pg_type.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "storage/lmgr.h"
 #include "storage/predicate_internals.h"
+#include "utils/acl.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/lsyscache.h"
 
 
 /*
@@ -598,6 +602,95 @@ pg_safe_snapshot_blocking_pids(PG_FUNCTION_ARGS)
 		blocker_datums = NULL;
 
 	PG_RETURN_ARRAYTYPE_P(construct_array_builtin(blocker_datums, num_blockers, INT4OID));
+}
+
+
+/*
+ * pg_wait_for_lockers - wait for already-held table-level locks without taking
+ * any new table-level locks
+ *
+ * The semantics are primarily just those of WaitForLockersMultiple(). For now,
+ * only plain tables are supported, and there is no automatic handling of
+ * descendant tables (if any).
+ *
+ * Since no table-level locks are taken, there are some inherent races. The
+ * specified tables must exist long enough to check their permissions, but could
+ * be dropped afterward.
+ */
+Datum
+pg_wait_for_lockers(PG_FUNCTION_ARGS)
+{
+	ArrayType  *reloids_a = PG_GETARG_ARRAYTYPE_P(0);
+	char	   *mode_str = text_to_cstring(PG_GETARG_TEXT_PP(1));
+	bool		conflicting = PG_GETARG_BOOL(2);
+	List	   *locktags = NIL;
+	int			i;
+	Oid		   *reloids;
+	int			num_reloids;
+	LOCKMODE	mode;
+
+	/* Validate the passed-in array */
+	Assert(ARR_ELEMTYPE(reloids_a) == REGCLASSOID);
+	if (array_contains_nulls(reloids_a))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("relation oid must not be null")));
+	reloids = (Oid *) ARR_DATA_PTR(reloids_a);
+	num_reloids = ArrayGetNItems(ARR_NDIM(reloids_a), ARR_DIMS(reloids_a));
+
+	/*
+	 * Determine lock mode. We only support relations, which use the default
+	 * lock method.
+	 */
+	mode = ParseLockmodeName(DEFAULT_LOCKMETHOD, mode_str);
+
+	for (i = 0; i < num_reloids; i++)
+	{
+		char		relkind;
+		AclResult	aclresult;
+		LOCKTAG	   *heaplocktag;
+		Oid			dbid;
+		Oid			reloid = reloids[i];
+		char	   *relname;
+
+		if (!OidIsValid(reloid))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("relation oid %d is invalid", reloid)));
+
+		relkind = get_rel_relkind(reloid);
+		/* For error messages only */
+		relname = get_rel_name(reloid);
+		if (!relkind || relname == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("relation oid %d does not exist", reloid)));
+
+		if (relkind != RELKIND_RELATION && relkind != RELKIND_PARTITIONED_TABLE)
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("cannot wait for lockers on %s", relname),
+					 errdetail_relkind_not_supported(relkind)));
+
+		/* Require some permission */
+		aclresult = pg_class_aclcheck(reloid, GetUserId(),
+									  (ACL_SELECT | ACL_UPDATE | ACL_INSERT |
+									   ACL_DELETE | ACL_TRUNCATE));
+		if (aclresult != ACLCHECK_OK)
+			aclcheck_error(aclresult, get_relkind_objtype(relkind), relname);
+
+		heaplocktag = palloc_object(LOCKTAG);
+		if (IsSharedRelation(reloid))
+			dbid = InvalidOid;
+		else
+			dbid = MyDatabaseId;
+		SET_LOCKTAG_RELATION(*heaplocktag, dbid, reloid);
+
+		locktags = lappend(locktags, heaplocktag);
+	}
+	WaitForLockersMultiple(locktags, mode, conflicting, false);
+
+	PG_RETURN_VOID();
 }
 
 

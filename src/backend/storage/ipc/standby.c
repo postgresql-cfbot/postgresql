@@ -657,7 +657,7 @@ ResolveRecoveryConflictWithLock(LOCKTAG locktag, bool logging_conflict)
 		 */
 		VirtualTransactionId *backends;
 
-		backends = GetLockConflicts(&locktag, AccessExclusiveLock, NULL);
+		backends = GetLockers(&locktag, AccessExclusiveLock, true, NULL);
 
 		/*
 		 * Prevent ResolveRecoveryConflictWithVirtualXIDs() from reporting
@@ -711,7 +711,7 @@ ResolveRecoveryConflictWithLock(LOCKTAG locktag, bool logging_conflict)
 	{
 		VirtualTransactionId *backends;
 
-		backends = GetLockConflicts(&locktag, AccessExclusiveLock, NULL);
+		backends = GetLockers(&locktag, AccessExclusiveLock, true, NULL);
 
 		/* Quick exit if there's no work to be done */
 		if (!VirtualTransactionIdIsValid(*backends))

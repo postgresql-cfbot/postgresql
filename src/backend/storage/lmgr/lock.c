@@ -2833,43 +2833,50 @@ FastPathGetRelationLockEntry(LOCALLOCK *locallock)
 }
 
 /*
- * GetLockConflicts
+ * GetLockers
  *		Get an array of VirtualTransactionIds of xacts currently holding locks
- *		that would conflict with the specified lock/lockmode.
- *		xacts merely awaiting such a lock are NOT reported.
+ *		on the specified locktag either in or conflicting with the given
+ *		lockmode, depending on the value of the conflicting argument. xacts
+ *		merely awaiting such a lock are NOT reported.
  *
  * The result array is palloc'd and is terminated with an invalid VXID.
  * *countp, if not null, is updated to the number of items set.
  *
  * Of course, the result could be out of date by the time it's returned, so
  * use of this function has to be thought about carefully.  Similarly, a
- * PGPROC with no "lxid" will be considered non-conflicting regardless of any
- * lock it holds.  Existing callers don't care about a locker after that
- * locker's pg_xact updates complete.  CommitTransaction() clears "lxid" after
- * pg_xact updates and before releasing locks.
+ * PGPROC with no "lxid" will not be returned regardless of any lock it holds.
+ * Existing callers don't care about a locker after that locker's pg_xact
+ * updates complete.  CommitTransaction() clears "lxid" after pg_xact updates
+ * and before releasing locks.
  *
- * Note we never include the current xact's vxid in the result array,
- * since an xact never blocks itself.
+ * Note we never include the current xact's vxid in the result array, because
+ * existing callers don't care to know about it, since an xact never blocks
+ * itself and can see its own uncommitted changes.
  */
 VirtualTransactionId *
-GetLockConflicts(const LOCKTAG *locktag, LOCKMODE lockmode, int *countp)
+GetLockers(const LOCKTAG *locktag, LOCKMODE lockmode, bool conflicting,
+		   int *countp)
 {
 	static VirtualTransactionId *vxids;
 	LOCKMETHODID lockmethodid = locktag->locktag_lockmethodid;
 	LockMethod	lockMethodTable;
+	int			numLockModes;
 	LOCK	   *lock;
-	LOCKMASK	conflictMask;
+	LOCKMASK	getMask;
 	dlist_iter	proclock_iter;
 	PROCLOCK   *proclock;
 	uint32		hashcode;
 	LWLock	   *partitionLock;
 	int			count = 0;
+	int			i;
+	bool		checkFast = false;
 	int			fast_count = 0;
 
 	if (lockmethodid <= 0 || lockmethodid >= lengthof(LockMethods))
 		elog(ERROR, "unrecognized lock method: %d", lockmethodid);
 	lockMethodTable = LockMethods[lockmethodid];
-	if (lockmode <= 0 || lockmode > lockMethodTable->numLockModes)
+	numLockModes = lockMethodTable->numLockModes;
+	if (lockmode <= 0 || lockmode > numLockModes)
 		elog(ERROR, "unrecognized lock mode: %d", lockmode);
 
 	/*
@@ -2890,19 +2897,27 @@ GetLockConflicts(const LOCKTAG *locktag, LOCKMODE lockmode, int *countp)
 			palloc0(sizeof(VirtualTransactionId) *
 					(MaxBackends + max_prepared_xacts + 1));
 
-	/* Compute hash code and partition lock, and look up conflicting modes. */
+	/* Compute hash code and partition lock, and construct lock mask */
 	hashcode = LockTagHashCode(locktag);
 	partitionLock = LockHashPartitionLock(hashcode);
-	conflictMask = lockMethodTable->conflictTab[lockmode];
+	getMask = conflicting ? lockMethodTable->conflictTab[lockmode] :
+		LOCKBIT_ON(lockmode);
 
 	/*
 	 * Fast path locks might not have been entered in the primary lock table.
-	 * If the lock we're dealing with could conflict with such a lock, we must
-	 * examine each backend's fast-path array for conflicts.
+	 * If getMask could match such a lock, we must examine each backend's
+	 * fast-path array.
 	 */
-	if (ConflictsWithRelationFastPath(locktag, lockmode))
+	for (i = 1; i <= numLockModes; i++)
 	{
-		int			i;
+		if (((getMask & LOCKBIT_ON(i)) != 0) &&
+			EligibleForRelationFastPath(locktag, i)) {
+			checkFast = true;
+			break;
+		}
+	}
+	if (checkFast)
+	{
 		Oid			relid = locktag->locktag_field2;
 		VirtualTransactionId vxid;
 
@@ -2955,12 +2970,12 @@ GetLockConflicts(const LOCKTAG *locktag, LOCKMODE lockmode, int *countp)
 
 				/*
 				 * There can only be one entry per relation, so if we found it
-				 * and it doesn't conflict, we can skip the rest of the slots.
+				 * and it doesn't match, we can skip the rest of the slots.
 				 */
-				if ((lockmask & conflictMask) == 0)
+				if ((lockmask & getMask) == 0)
 					break;
 
-				/* Conflict! */
+				/* Match! */
 				GET_VXID_FROM_PGPROC(vxid, *proc);
 
 				if (VirtualTransactionIdIsValid(vxid))
@@ -2975,7 +2990,7 @@ GetLockConflicts(const LOCKTAG *locktag, LOCKMODE lockmode, int *countp)
 		}
 	}
 
-	/* Remember how many fast-path conflicts we found. */
+	/* Remember how many fast-path matches we found. */
 	fast_count = count;
 
 	/*
@@ -3009,11 +3024,11 @@ GetLockConflicts(const LOCKTAG *locktag, LOCKMODE lockmode, int *countp)
 	{
 		proclock = dlist_container(PROCLOCK, lockLink, proclock_iter.cur);
 
-		if (conflictMask & proclock->holdMask)
+		if (getMask & proclock->holdMask)
 		{
 			PGPROC	   *proc = proclock->tag.myProc;
 
-			/* A backend never blocks itself */
+			/* A backend doesn't care about its own locks */
 			if (proc != MyProc)
 			{
 				VirtualTransactionId vxid;
@@ -3022,8 +3037,6 @@ GetLockConflicts(const LOCKTAG *locktag, LOCKMODE lockmode, int *countp)
 
 				if (VirtualTransactionIdIsValid(vxid))
 				{
-					int			i;
-
 					/* Avoid duplicate entries. */
 					for (i = 0; i < fast_count; ++i)
 						if (VirtualTransactionIdEquals(vxids[i], vxid))
@@ -3039,7 +3052,7 @@ GetLockConflicts(const LOCKTAG *locktag, LOCKMODE lockmode, int *countp)
 	LWLockRelease(partitionLock);
 
 	if (count > MaxBackends + max_prepared_xacts)	/* should never happen */
-		elog(PANIC, "too many conflicting locks found");
+		elog(PANIC, "too many locks found");
 
 	vxids[count].backendId = InvalidBackendId;
 	vxids[count].localTransactionId = InvalidLocalTransactionId;
@@ -4023,6 +4036,29 @@ GetLockmodeName(LOCKMETHODID lockmethodid, LOCKMODE mode)
 	Assert(lockmethodid > 0 && lockmethodid < lengthof(LockMethods));
 	Assert(mode > 0 && mode <= LockMethods[lockmethodid]->numLockModes);
 	return LockMethods[lockmethodid]->lockModeNames[mode];
+}
+
+/*
+ * Convert the (case-insensitive) textual name of any lock mode to the LOCKMODE
+ * value
+ */
+LOCKMODE
+ParseLockmodeName(LOCKMETHODID lockmethodid, const char *mode_name)
+{
+	int	i;
+	LockMethod	lockMethodTable;
+
+	Assert(lockmethodid > 0 && lockmethodid < lengthof(LockMethods));
+	lockMethodTable = LockMethods[lockmethodid];
+	for (i = 1; i <= lockMethodTable->numLockModes; i++)
+		if (pg_strcasecmp(mode_name, lockMethodTable->lockModeNames[i]) == 0)
+			return i;
+
+	ereport(ERROR,
+			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			errmsg("invalid lock mode name %s", mode_name)));
+	/* unreachable but appease compiler */
+	return NoLock;
 }
 
 #ifdef LOCK_DEBUG

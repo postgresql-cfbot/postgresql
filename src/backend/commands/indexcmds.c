@@ -1674,7 +1674,7 @@ DefineIndex(Oid tableId,
 	 * exclusive lock on our table.  The lock code will detect deadlock and
 	 * error out properly.
 	 */
-	WaitForLockers(heaplocktag, ShareLock, true);
+	WaitForLockers(heaplocktag, ShareLock, true, true);
 
 	/*
 	 * At this moment we are sure that there are no transactions with the
@@ -1721,7 +1721,7 @@ DefineIndex(Oid tableId,
 	 */
 	pgstat_progress_update_param(PROGRESS_CREATEIDX_PHASE,
 								 PROGRESS_CREATEIDX_PHASE_WAIT_2);
-	WaitForLockers(heaplocktag, ShareLock, true);
+	WaitForLockers(heaplocktag, ShareLock, true, true);
 
 	/*
 	 * Now take the "reference snapshot" that will be used by validate_index()
@@ -4039,7 +4039,7 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 
 	pgstat_progress_update_param(PROGRESS_CREATEIDX_PHASE,
 								 PROGRESS_CREATEIDX_PHASE_WAIT_1);
-	WaitForLockersMultiple(lockTags, ShareLock, true);
+	WaitForLockersMultiple(lockTags, ShareLock, true, true);
 	CommitTransactionCommand();
 
 	foreach(lc, newIndexIds)
@@ -4098,7 +4098,7 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 
 	pgstat_progress_update_param(PROGRESS_CREATEIDX_PHASE,
 								 PROGRESS_CREATEIDX_PHASE_WAIT_2);
-	WaitForLockersMultiple(lockTags, ShareLock, true);
+	WaitForLockersMultiple(lockTags, ShareLock, true, true);
 	CommitTransactionCommand();
 
 	foreach(lc, newIndexIds)
@@ -4256,7 +4256,7 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 
 	pgstat_progress_update_param(PROGRESS_CREATEIDX_PHASE,
 								 PROGRESS_CREATEIDX_PHASE_WAIT_4);
-	WaitForLockersMultiple(lockTags, AccessExclusiveLock, true);
+	WaitForLockersMultiple(lockTags, AccessExclusiveLock, true, true);
 
 	foreach(lc, indexIds)
 	{
@@ -4290,7 +4290,7 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 
 	pgstat_progress_update_param(PROGRESS_CREATEIDX_PHASE,
 								 PROGRESS_CREATEIDX_PHASE_WAIT_5);
-	WaitForLockersMultiple(lockTags, AccessExclusiveLock, true);
+	WaitForLockersMultiple(lockTags, AccessExclusiveLock, true, true);
 
 	PushActiveSnapshot(GetTransactionSnapshot());
 

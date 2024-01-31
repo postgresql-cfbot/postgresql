@@ -1,0 +1,180 @@
+Parsed test spec with 3 sessions
+
+starting permutation: w1_lae2 w2_in1 w2_c w1_c r_wflc r_sel1 r_c
+step w1_lae2: LOCK TABLE t2 IN ACCESS EXCLUSIVE MODE;
+step w2_in1: INSERT INTO t1 VALUES (DEFAULT);
+step w2_c: COMMIT;
+step w1_c: COMMIT;
+step r_wflc: SELECT pg_wait_for_lockers(array['t1','t2']::regclass[],
+											 'ShareLock', TRUE);
+pg_wait_for_lockers
+-------------------
+                   
+(1 row)
+
+step r_sel1: SELECT id from t1;
+id
+--
+ 1
+(1 row)
+
+step r_c: COMMIT;
+
+starting permutation: w1_lae2 w2_in1 r_wfl w2_c r_sel1 w1_c r_c
+step w1_lae2: LOCK TABLE t2 IN ACCESS EXCLUSIVE MODE;
+step w2_in1: INSERT INTO t1 VALUES (DEFAULT);
+step r_wfl: SELECT pg_wait_for_lockers(array['t1','t2']::regclass[],
+											 'RowExclusiveLock', FALSE); <waiting ...>
+step w2_c: COMMIT;
+step r_wfl: <... completed>
+pg_wait_for_lockers
+-------------------
+                   
+(1 row)
+
+step r_sel1: SELECT id from t1;
+id
+--
+ 1
+(1 row)
+
+step w1_c: COMMIT;
+step r_c: COMMIT;
+
+starting permutation: w1_lae2 w2_in1 r_wflc w2_c w1_c r_sel1 r_c
+step w1_lae2: LOCK TABLE t2 IN ACCESS EXCLUSIVE MODE;
+step w2_in1: INSERT INTO t1 VALUES (DEFAULT);
+step r_wflc: SELECT pg_wait_for_lockers(array['t1','t2']::regclass[],
+											 'ShareLock', TRUE); <waiting ...>
+step w2_c: COMMIT;
+step w1_c: COMMIT;
+step r_wflc: <... completed>
+pg_wait_for_lockers
+-------------------
+                   
+(1 row)
+
+step r_sel1: SELECT id from t1;
+id
+--
+ 1
+(1 row)
+
+step r_c: COMMIT;
+
+starting permutation: w1_in1 r_wflc w2_in1 w2_c w1_c r_sel1 r_c
+step w1_in1: INSERT INTO t1 VALUES (DEFAULT);
+step r_wflc: SELECT pg_wait_for_lockers(array['t1','t2']::regclass[],
+											 'ShareLock', TRUE); <waiting ...>
+step w2_in1: INSERT INTO t1 VALUES (DEFAULT);
+step w2_c: COMMIT;
+step w1_c: COMMIT;
+step r_wflc: <... completed>
+pg_wait_for_lockers
+-------------------
+                   
+(1 row)
+
+step r_sel1: SELECT id from t1;
+id
+--
+ 1
+ 2
+(2 rows)
+
+step r_c: COMMIT;
+
+starting permutation: w1_in1 r_sv r_l w2_in1 w1_c r_rb w2_c r_sel1 r_c
+step w1_in1: INSERT INTO t1 VALUES (DEFAULT);
+step r_sv: SAVEPOINT foo;
+step r_l: LOCK TABLE t1, t2 IN SHARE MODE; <waiting ...>
+step w2_in1: INSERT INTO t1 VALUES (DEFAULT); <waiting ...>
+step w1_c: COMMIT;
+step r_l: <... completed>
+step r_rb: ROLLBACK TO foo;
+step w2_in1: <... completed>
+step w2_c: COMMIT;
+step r_sel1: SELECT id from t1;
+id
+--
+ 1
+ 2
+(2 rows)
+
+step r_c: COMMIT;
+
+starting permutation: w2_in1 r_wflc w1_lae2 w1_in1 w2_c r_sel1 w1_c r_c
+step w2_in1: INSERT INTO t1 VALUES (DEFAULT);
+step r_wflc: SELECT pg_wait_for_lockers(array['t1','t2']::regclass[],
+											 'ShareLock', TRUE); <waiting ...>
+step w1_lae2: LOCK TABLE t2 IN ACCESS EXCLUSIVE MODE;
+step w1_in1: INSERT INTO t1 VALUES (DEFAULT);
+step w2_c: COMMIT;
+step r_wflc: <... completed>
+pg_wait_for_lockers
+-------------------
+                   
+(1 row)
+
+step r_sel1: SELECT id from t1;
+id
+--
+ 1
+(1 row)
+
+step w1_c: COMMIT;
+step r_c: COMMIT;
+
+starting permutation: w2_in1 r_sv r_l w1_lae2 w2_c w1_c r_rb r_sel1 r_c
+step w2_in1: INSERT INTO t1 VALUES (DEFAULT);
+step r_sv: SAVEPOINT foo;
+step r_l: LOCK TABLE t1, t2 IN SHARE MODE; <waiting ...>
+step w1_lae2: LOCK TABLE t2 IN ACCESS EXCLUSIVE MODE;
+step w2_c: COMMIT;
+step w1_c: COMMIT;
+step r_l: <... completed>
+step r_rb: ROLLBACK TO foo;
+step r_sel1: SELECT id from t1;
+id
+--
+ 1
+(1 row)
+
+step r_c: COMMIT;
+
+starting permutation: w1_lae1 w2_in1 r_wflc w1_c r_sel1 w2_c r_c
+step w1_lae1: LOCK TABLE t1 IN ACCESS EXCLUSIVE MODE;
+step w2_in1: INSERT INTO t1 VALUES (DEFAULT); <waiting ...>
+step r_wflc: SELECT pg_wait_for_lockers(array['t1','t2']::regclass[],
+											 'ShareLock', TRUE); <waiting ...>
+step w1_c: COMMIT;
+step w2_in1: <... completed>
+step r_wflc: <... completed>
+pg_wait_for_lockers
+-------------------
+                   
+(1 row)
+
+step r_sel1: SELECT id from t1;
+id
+--
+(0 rows)
+
+step w2_c: COMMIT;
+step r_c: COMMIT;
+
+starting permutation: w1_lae1 w2_in1 r_l w1_c w2_c r_sel1 r_c
+step w1_lae1: LOCK TABLE t1 IN ACCESS EXCLUSIVE MODE;
+step w2_in1: INSERT INTO t1 VALUES (DEFAULT); <waiting ...>
+step r_l: LOCK TABLE t1, t2 IN SHARE MODE; <waiting ...>
+step w1_c: COMMIT;
+step w2_in1: <... completed>
+step w2_c: COMMIT;
+step r_l: <... completed>
+step r_sel1: SELECT id from t1;
+id
+--
+ 1
+(1 row)
+
+step r_c: COMMIT;

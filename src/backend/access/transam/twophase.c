@@ -473,7 +473,7 @@ MarkAsPreparingGuts(GlobalTransaction gxact, TransactionId xid, const char *gid,
 	else
 	{
 		Assert(AmStartupProcess() || !IsPostmasterEnvironment);
-		/* GetLockConflicts() uses this to specify a wait on the XID */
+		/* GetLockers() uses this to specify a wait on the XID */
 		proc->lxid = xid;
 		proc->backendId = InvalidBackendId;
 	}

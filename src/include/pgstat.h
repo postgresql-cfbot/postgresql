@@ -18,6 +18,7 @@
 #include "utils/backend_status.h"	/* for backward compatibility */
 #include "utils/relcache.h"
 #include "utils/wait_event.h"	/* for backward compatibility */
+#include "access/xlogdefs.h"
 
 
 /* ----------
@@ -322,6 +323,7 @@ typedef struct PgStat_IO
 
 typedef struct PgStat_StatDBEntry
 {
+	XLogRecPtr	last_commit_lsn;
 	PgStat_Counter xact_commit;
 	PgStat_Counter xact_rollback;
 	PgStat_Counter blocks_fetched;
@@ -704,7 +706,7 @@ extern PgStat_StatSubEntry *pgstat_fetch_stat_subscription(Oid subid);
  * Functions in pgstat_xact.c
  */
 
-extern void AtEOXact_PgStat(bool isCommit, bool parallel);
+extern void AtEOXact_PgStat(bool isCommit, XLogRecPtr commit_lsn, bool parallel);
 extern void AtEOSubXact_PgStat(bool isCommit, int nestDepth);
 extern void AtPrepare_PgStat(void);
 extern void PostPrepare_PgStat(void);

@@ -907,7 +907,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	 */
 	if (!so->qual_ok)
 	{
-		/* Notify any other workers that we're done with this scan key. */
+		/* Notify any other workers that this primitive scan is done */
 		_bt_parallel_done(scan);
 		return false;
 	}
@@ -1527,10 +1527,11 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 	BTPageOpaque opaque;
 	OffsetNumber minoff;
 	OffsetNumber maxoff;
-	int			itemIndex;
-	bool		continuescan;
+	BTReadPageState pstate;
+	int			numArrayKeys,
+				itemIndex;
 	int			indnatts;
-	bool		continuescanPrechecked;
+	bool		continuescanPrechecked = false;
 	bool		haveFirstMatch = false;
 
 	/*
@@ -1551,8 +1552,13 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 			_bt_parallel_release(scan, BufferGetBlockNumber(so->currPos.buf));
 	}
 
-	continuescan = true;		/* default assumption */
+	pstate.dir = dir;
+	pstate.finaltup = NULL;
+	pstate.continuescan = true; /* default assumption */
+	pstate.finaltupchecked = false;
 	indnatts = IndexRelationGetNumberOfAttributes(scan->indexRelation);
+	numArrayKeys = so->numArrayKeys;
+
 	minoff = P_FIRSTDATAKEY(opaque);
 	maxoff = PageGetMaxOffsetNumber(page);
 
@@ -1599,9 +1605,12 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 	 * the last item on the page would give a more precise answer.
 	 *
 	 * We skip this for the first page in the scan to evade the possible
-	 * slowdown of the point queries.
+	 * slowdown of point queries.  Never apply the optimization with a scan
+	 * that uses array keys, either, since that breaks certain assumptions.
+	 * (Our search-type scan keys change whenever _bt_checkkeys advances the
+	 * arrays, invalidating any precheck.  Tracking all that would be tricky.)
 	 */
-	if (!firstPage && minoff < maxoff)
+	if (!firstPage && !numArrayKeys && minoff < maxoff)
 	{
 		ItemId		iid;
 		IndexTuple	itup;
@@ -1610,21 +1619,24 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 		itup = (IndexTuple) PageGetItem(page, iid);
 
 		/*
-		 * Do the precheck.  Note that we pass the pointer to the
-		 * 'continuescanPrechecked' to the 'continuescan' argument. That will
-		 * set flag to true if all required keys are satisfied and false
-		 * otherwise.
+		 * Flag variable is set when all scan keys that are required in the
+		 * current scan direction are satisfied by the last item on the page
 		 */
-		(void) _bt_checkkeys(scan, itup, indnatts, dir,
-							 &continuescanPrechecked, false, false);
-	}
-	else
-	{
-		continuescanPrechecked = false;
+		_bt_checkkeys(scan, &pstate, itup, false, indnatts, false, false);
+		continuescanPrechecked = pstate.continuescan;
+		pstate.continuescan = true; /* reset */
 	}
 
 	if (ScanDirectionIsForward(dir))
 	{
+		/* SK_SEARCHARRAY forward scans must provide high key up front */
+		if (numArrayKeys && !P_RIGHTMOST(opaque))
+		{
+			ItemId		iid = PageGetItemId(page, P_HIKEY);
+
+			pstate.finaltup = (IndexTuple) PageGetItem(page, iid);
+		}
+
 		/* load items[] in ascending order */
 		itemIndex = 0;
 
@@ -1649,8 +1661,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 			itup = (IndexTuple) PageGetItem(page, iid);
 			Assert(!BTreeTupleIsPivot(itup));
 
-			passes_quals = _bt_checkkeys(scan, itup, indnatts, dir,
-										 &continuescan,
+			passes_quals = _bt_checkkeys(scan, &pstate, itup, false, indnatts,
 										 continuescanPrechecked,
 										 haveFirstMatch);
 
@@ -1659,9 +1670,9 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 			 * assert-enabled builds we also recheck that the _bt_checkkeys()
 			 * result is the same.
 			 */
-			Assert((!continuescanPrechecked && haveFirstMatch) ||
-				   passes_quals == _bt_checkkeys(scan, itup, indnatts, dir,
-												 &continuescan, false, false));
+			Assert((!continuescanPrechecked && haveFirstMatch) || numArrayKeys ||
+				   passes_quals == _bt_checkkeys(scan, &pstate, itup, false,
+												 indnatts, false, false));
 			if (passes_quals)
 			{
 				/* tuple passes all scan key conditions */
@@ -1696,7 +1707,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 				}
 			}
 			/* When !continuescan, there can't be any more matches, so stop */
-			if (!continuescan)
+			if (!pstate.continuescan)
 				break;
 
 			offnum = OffsetNumberNext(offnum);
@@ -1713,17 +1724,17 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 		 * only appear on non-pivot tuples on the right sibling page are
 		 * common.
 		 */
-		if (continuescan && !P_RIGHTMOST(opaque))
+		if (pstate.continuescan && !P_RIGHTMOST(opaque))
 		{
 			ItemId		iid = PageGetItemId(page, P_HIKEY);
 			IndexTuple	itup = (IndexTuple) PageGetItem(page, iid);
 			int			truncatt;
 
 			truncatt = BTreeTupleGetNAtts(itup, scan->indexRelation);
-			_bt_checkkeys(scan, itup, truncatt, dir, &continuescan, false, false);
+			_bt_checkkeys(scan, &pstate, itup, true, truncatt, false, false);
 		}
 
-		if (!continuescan)
+		if (!pstate.continuescan)
 			so->currPos.moreRight = false;
 
 		Assert(itemIndex <= MaxTIDsPerBTreePage);
@@ -1733,6 +1744,14 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 	}
 	else
 	{
+		/* SK_SEARCHARRAY backward scans must provide final tuple up front */
+		if (numArrayKeys && minoff <= maxoff)
+		{
+			ItemId		iid = PageGetItemId(page, minoff);
+
+			pstate.finaltup = (IndexTuple) PageGetItem(page, iid);
+		}
+
 		/* load items[] in descending order */
 		itemIndex = MaxTIDsPerBTreePage;
 
@@ -1744,6 +1763,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 			IndexTuple	itup;
 			bool		tuple_alive;
 			bool		passes_quals;
+			bool		finaltup = (offnum == minoff);
 
 			/*
 			 * If the scan specifies not to return killed tuples, then we
@@ -1754,12 +1774,18 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 			 * tuple on the page, we do check the index keys, to prevent
 			 * uselessly advancing to the page to the left.  This is similar
 			 * to the high key optimization used by forward scans.
+			 *
+			 * Separately, _bt_checkkeys actually requires that we call it
+			 * with the final non-pivot tuple from the page, if there's one
+			 * (final processed tuple, or first tuple in offset number terms).
+			 * We must indicate which particular tuple comes last, too.
 			 */
 			if (scan->ignore_killed_tuples && ItemIdIsDead(iid))
 			{
 				Assert(offnum >= P_FIRSTDATAKEY(opaque));
-				if (offnum > P_FIRSTDATAKEY(opaque))
+				if (!finaltup)
 				{
+					Assert(offnum > minoff);
 					offnum = OffsetNumberPrev(offnum);
 					continue;
 				}
@@ -1772,9 +1798,8 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 			itup = (IndexTuple) PageGetItem(page, iid);
 			Assert(!BTreeTupleIsPivot(itup));
 
-			passes_quals = _bt_checkkeys(scan, itup, indnatts, dir,
-										 &continuescan,
-										 continuescanPrechecked,
+			passes_quals = _bt_checkkeys(scan, &pstate, itup, finaltup,
+										 indnatts, continuescanPrechecked,
 										 haveFirstMatch);
 
 			/*
@@ -1782,9 +1807,10 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 			 * assert-enabled builds we also recheck that the _bt_checkkeys()
 			 * result is the same.
 			 */
-			Assert((!continuescanPrechecked && !haveFirstMatch) ||
-				   passes_quals == _bt_checkkeys(scan, itup, indnatts, dir,
-												 &continuescan, false, false));
+			Assert((!continuescanPrechecked && !haveFirstMatch) || numArrayKeys ||
+				   passes_quals == _bt_checkkeys(scan, &pstate, itup,
+												 finaltup, indnatts,
+												 false, false));
 			if (passes_quals && tuple_alive)
 			{
 				/* tuple passes all scan key conditions */
@@ -1824,7 +1850,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 					}
 				}
 			}
-			if (!continuescan)
+			if (!pstate.continuescan)
 			{
 				/* there can't be any more matches, so stop */
 				so->currPos.moreLeft = false;
@@ -1999,6 +2025,20 @@ _bt_steppage(IndexScanDesc scan, ScanDirection dir)
 		/* Remember we left a page with data */
 		so->currPos.moreLeft = true;
 
+		/*
+		 * If the scan direction changed since our array keys (if any) last
+		 * advanced, we cannot trust _bt_readpage's determination that there
+		 * are no matches to be found to the right
+		 */
+		if (ScanDirectionIsBackward(so->advanceDir))
+		{
+			Assert(so->numArrayKeys);
+
+			so->currPos.moreRight = true;
+			so->advanceDir = dir;
+			so->needPrimScan = false;
+		}
+
 		/* release the previous buffer, if pinned */
 		BTScanPosUnpinIfPinned(so->currPos);
 	}
@@ -2006,6 +2046,20 @@ _bt_steppage(IndexScanDesc scan, ScanDirection dir)
 	{
 		/* Remember we left a page with data */
 		so->currPos.moreRight = true;
+
+		/*
+		 * If the scan direction changed since our array keys (if any) last
+		 * advanced, we cannot trust _bt_readpage's determination that there
+		 * are no matches to be found to the left
+		 */
+		if (ScanDirectionIsForward(so->advanceDir))
+		{
+			Assert(so->numArrayKeys);
+
+			so->currPos.moreLeft = true;
+			so->advanceDir = dir;
+			so->needPrimScan = false;
+		}
 
 		if (scan->parallel_scan != NULL)
 		{

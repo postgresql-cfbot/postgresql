@@ -267,3 +267,150 @@ CREATE TABLE btree_part (id int4) PARTITION BY RANGE (id);
 CREATE INDEX btree_part_idx ON btree_part(id);
 ALTER INDEX btree_part_idx ALTER COLUMN id SET (n_distinct=100);
 DROP TABLE btree_part;
+
+-- Add tests to give coverage of various subtle issues.
+--
+-- XXX This may not be suitable for commit, due to taking up too many cycles.
+--
+-- Here we don't remember the scan's array keys before processing a page, only
+-- after processing a page (which is implicit, it's just the scan's current
+-- keys).  So when we move the scan backwards we think that the top-level scan
+-- should terminate, when in reality it should jump backwards to the leaf page
+-- that we last visited.
+create temp table backup_wrong_tbl (district int4, warehouse int4, orderid int4, orderline int4);
+create index backup_wrong_idx on backup_wrong_tbl (district, warehouse, orderid, orderline);
+insert into backup_wrong_tbl
+select district, warehouse, orderid, orderline
+from
+  generate_series(1, 3) district,
+  generate_series(1, 2) warehouse,
+  generate_series(1, 51) orderid,
+  generate_series(1, 10) orderline;
+
+begin;
+declare back_up_terminate_toplevel_wrong cursor for
+select * from backup_wrong_tbl
+where district in (1, 3) and warehouse in (1,2)
+and orderid in (48, 50)
+order by district, warehouse, orderid, orderline;
+
+fetch forward 60 from back_up_terminate_toplevel_wrong;
+fetch backward 29 from back_up_terminate_toplevel_wrong;
+fetch forward 12 from back_up_terminate_toplevel_wrong;
+fetch backward 30 from back_up_terminate_toplevel_wrong;
+fetch forward  31 from back_up_terminate_toplevel_wrong;
+fetch backward 32 from back_up_terminate_toplevel_wrong;
+fetch forward  33 from back_up_terminate_toplevel_wrong;
+fetch backward 34 from back_up_terminate_toplevel_wrong;
+fetch forward  35 from back_up_terminate_toplevel_wrong;
+commit;
+
+create temp table outer_table                  (a int, b int);
+create temp table restore_buggy_primscan_table (x int, y int);
+
+create index buggy_idx on restore_buggy_primscan_table (x, y) with (deduplicate_items=off);
+
+insert into outer_table                  select 1, b_vals from generate_series(1006, 1580) b_vals;
+insert into restore_buggy_primscan_table select 1, x_vals from generate_series(1006, 1580) x_vals;
+
+insert into outer_table                  select 1, 1370 from generate_series(1, 9) j;
+insert into restore_buggy_primscan_table select 1, 1371 from generate_series(1, 9) j;
+insert into restore_buggy_primscan_table select 1, 1380 from generate_series(1, 9) j;
+
+vacuum analyze outer_table;
+vacuum analyze restore_buggy_primscan_table;
+
+select count(*), o.a, o.b
+  from
+    outer_table o
+  inner join
+    restore_buggy_primscan_table bug
+  on o.a = bug.x and o.b = bug.y
+where
+  bug.x = 1 and
+  bug.y = any(array[(select array_agg(i) from generate_series(1370, 1390) i where i % 10 = 0)])
+group by o.a, o.b;
+
+-- Get test coverage for when so->needPrimScan is set at the point of calling
+-- _bt_restore_array_keys().  This is handled like the case where the scan
+-- direction changes "within" a page, relying on code from _bt_readnextpage().
+create temp table outer_tab(
+  a int,
+  b int
+);
+create index outer_tab_idx on outer_tab(a, b) with (deduplicate_items = off);
+
+create temp table primscanmarkcov_table(
+  a int,
+  b int
+);
+create index interesting_coverage_idx on primscanmarkcov_table(a, b) with (deduplicate_items = off);
+
+insert into outer_tab             select 1, i from generate_series(1530, 1780) i;
+insert into primscanmarkcov_table select 1, i from generate_series(1530, 1780) i;
+
+insert into outer_tab             select 1, 1550 from generate_series(1, 200) i;
+insert into primscanmarkcov_table select 1, 1551 from generate_series(1, 200) i;
+
+vacuum analyze outer_tab;
+vacuum analyze primscanmarkcov_table ;
+
+with range_ints as ( select i from generate_series(1530, 1780) i)
+
+select
+  count(*), buggy.a, buggy.b from
+outer_tab o
+  inner join
+primscanmarkcov_table buggy
+  on o.a = buggy.a and o.b = buggy.b
+where
+  o.a = 1     and     o.b = any (array[(select array_agg(i) from range_ints where i % 50 = 0)])  and
+  buggy.a = 1 and buggy.b = any (array[(select array_agg(i) from range_ints where i % 50 = 0)])
+group by buggy.a, buggy.b
+order by buggy.a, buggy.b;
+
+-- Get test coverage for when so->needPrimScan is set at the point of calling
+-- _bt_restore_array_keys() for backwards scans.  More or less comparable to
+-- the last test.
+create temp table backwards_prim_outer_table             (a int, b int);
+create temp table backwards_restore_buggy_primscan_table (x int, y int);
+
+create index backward_prim_buggy_idx  on backwards_restore_buggy_primscan_table (x, y) with (deduplicate_items=off);
+create index backwards_prim_drive_idx on backwards_prim_outer_table             (a, b) with (deduplicate_items=off);
+
+insert into backwards_prim_outer_table                  select 0, 1360;
+insert into backwards_prim_outer_table                  select 1, b_vals from generate_series(1012, 1406) b_vals where b_vals % 10 = 0;
+insert into backwards_prim_outer_table                  select 1, 1370;
+vacuum analyze backwards_prim_outer_table; -- Be tidy
+
+-- Fill up "backwards_prim_drive_idx" index with 396 items, just about fitting
+-- onto its only page, which is a root leaf page:
+insert into backwards_restore_buggy_primscan_table select 0, 1360;
+insert into backwards_restore_buggy_primscan_table select 1, x_vals from generate_series(1012, 1406) x_vals;
+vacuum analyze backwards_restore_buggy_primscan_table; -- Be tidy
+
+-- Now cause two page splits, leaving 4 leaf pages in total:
+insert into backwards_restore_buggy_primscan_table select 1, 1370 from generate_series(1,250) i;
+
+-- Now "buggy" index looks like this:
+--
+-- ┌───┬───────┬───────┬────────┬────────┬────────────┬───────┬───────┬───────────────────┬─────────┬───────────┬──────────────────┐
+-- │ i │ blkno │ flags │ nhtids │ nhblks │ ndeadhblks │ nlive │ ndead │ nhtidschecksimple │ avgsize │ freespace │     highkey      │
+-- ├───┼───────┼───────┼────────┼────────┼────────────┼───────┼───────┼───────────────────┼─────────┼───────────┼──────────────────┤
+-- │ 1 │     1 │     1 │    203 │      1 │          0 │   204 │     0 │                 0 │      16 │     4,068 │ (x, y)=(1, 1214) │
+-- │ 2 │     4 │     1 │    156 │      2 │          0 │   157 │     0 │                 0 │      16 │     5,008 │ (x, y)=(1, 1370) │
+-- │ 3 │     5 │     1 │    251 │      2 │          0 │   252 │     0 │                 0 │      16 │     3,108 │ (x, y)=(1, 1371) │
+-- │ 4 │     2 │     1 │     36 │      1 │          0 │    36 │     0 │                 0 │      16 │     7,428 │ ∅                │
+-- └───┴───────┴───────┴────────┴────────┴────────────┴───────┴───────┴───────────────────┴─────────┴───────────┴──────────────────┘
+
+select count(*), o.a, o.b
+  from
+    backwards_prim_outer_table o
+  inner join
+    backwards_restore_buggy_primscan_table bug
+  on o.a = bug.x and o.b = bug.y
+where
+  bug.x in (0, 1) and
+  bug.y = any(array[(select array_agg(i) from generate_series(1360, 1370) i where i % 10 = 0)])
+group by o.a, o.b
+order by o.a desc, o.b desc;

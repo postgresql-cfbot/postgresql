@@ -48,7 +48,7 @@
  * We ran out of opcodes, so heapam.c now has a second RmgrId.  These opcodes
  * are associated with RM_HEAP2_ID, but are not logically different from
  * the ones above associated with RM_HEAP_ID.  XLOG_HEAP_OPMASK applies to
- * these, too.
+ * these, too.  The BYVACUUM bit is used in place of RM_HEAP_ID's init bit.
  */
 #define XLOG_HEAP2_REWRITE		0x00
 #define XLOG_HEAP2_PRUNE		0x10
@@ -58,6 +58,12 @@
 #define XLOG_HEAP2_MULTI_INSERT 0x50
 #define XLOG_HEAP2_LOCK_UPDATED 0x60
 #define XLOG_HEAP2_NEW_CID		0x70
+
+/*
+ * RM_HEAP2_ID operations that take place during VACUUM set the BYVACUUM bit
+ * as instrumentation.  Only set in XLOG_HEAP2_PRUNE records, for now.
+ */
+#define XLOG_HEAP2_BYVACUUM		0x80
 
 /*
  * xl_heap_insert/xl_heap_multi_insert flag values, 8 bits are available.

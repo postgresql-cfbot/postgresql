@@ -205,8 +205,8 @@ heap_page_prune_opt(Relation relation, Buffer buffer)
  * mark_unused_now indicates whether or not dead items can be set LP_UNUSED during
  * pruning.
  *
- * off_loc is the offset location required by the caller to use in error
- * callback.
+ * off_loc_vacuum is the offset location required by VACUUM caller to use in
+ * error callback.  Opportunistic pruning caller should pass NULL.
  *
  * presult contains output parameters needed by callers such as the number of
  * tuples removed and the number of line pointers newly marked LP_DEAD.
@@ -217,7 +217,7 @@ heap_page_prune(Relation relation, Buffer buffer,
 				GlobalVisState *vistest,
 				bool mark_unused_now,
 				PruneResult *presult,
-				OffsetNumber *off_loc)
+				OffsetNumber *off_loc_vacuum)
 {
 	Page		page = BufferGetPage(buffer);
 	BlockNumber blockno = BufferGetBlockNumber(buffer);
@@ -298,8 +298,8 @@ heap_page_prune(Relation relation, Buffer buffer,
 		 * Set the offset number so that we can display it along with any
 		 * error that occurred while processing this tuple.
 		 */
-		if (off_loc)
-			*off_loc = offnum;
+		if (off_loc_vacuum)
+			*off_loc_vacuum = offnum;
 
 		presult->htsv[offnum] = heap_prune_satisfies_vacuum(&prstate, &tup,
 															buffer);
@@ -317,8 +317,8 @@ heap_page_prune(Relation relation, Buffer buffer,
 			continue;
 
 		/* see preceding loop */
-		if (off_loc)
-			*off_loc = offnum;
+		if (off_loc_vacuum)
+			*off_loc_vacuum = offnum;
 
 		/* Nothing to do if slot is empty */
 		itemid = PageGetItemId(page, offnum);
@@ -331,8 +331,8 @@ heap_page_prune(Relation relation, Buffer buffer,
 	}
 
 	/* Clear the offset information once we have processed the given page. */
-	if (off_loc)
-		*off_loc = InvalidOffsetNumber;
+	if (off_loc_vacuum)
+		*off_loc_vacuum = InvalidOffsetNumber;
 
 	/* Any error while applying the changes is critical */
 	START_CRIT_SECTION();
@@ -370,6 +370,7 @@ heap_page_prune(Relation relation, Buffer buffer,
 		if (RelationNeedsWAL(relation))
 		{
 			xl_heap_prune xlrec;
+			uint8		info = XLOG_HEAP2_PRUNE;
 			XLogRecPtr	recptr;
 
 			xlrec.isCatalogRel = RelationIsAccessibleInLogicalDecoding(relation);
@@ -400,7 +401,11 @@ heap_page_prune(Relation relation, Buffer buffer,
 				XLogRegisterBufData(0, (char *) prstate.nowunused,
 									prstate.nunused * sizeof(OffsetNumber));
 
-			recptr = XLogInsert(RM_HEAP2_ID, XLOG_HEAP2_PRUNE);
+			/* Set bit indicating pruning by VACUUM where appropriate */
+			if (off_loc_vacuum)
+				info |= XLOG_HEAP2_BYVACUUM;
+
+			recptr = XLogInsert(RM_HEAP2_ID, info);
 
 			PageSetLSN(BufferGetPage(buffer), recptr);
 		}

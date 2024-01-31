@@ -2415,6 +2415,7 @@ PrepareTransaction(void)
 	TransactionId xid = GetCurrentTransactionId();
 	GlobalTransaction gxact;
 	TimestampTz prepared_at;
+	HTAB		   *sessionandxactlocks;
 
 	Assert(!IsInParallelMode());
 
@@ -2560,7 +2561,17 @@ PrepareTransaction(void)
 	StartPrepare(gxact);
 
 	AtPrepare_Notify();
-	AtPrepare_Locks();
+
+	/*
+	 * Prepare the locks and save the returned hash table that describes if
+	 * the lock is held at the session and/or transaction level.  We need to
+	 * know if we're dealing with session locks inside PostPrepare_Locks(),
+	 * but we're unable to build the hash table there due to that function
+	 * only discovering if we're dealing with a session lock while we're in a
+	 * critical section, in which case we can't allocate memory for the hash
+	 * table.
+	 */
+	sessionandxactlocks = AtPrepare_Locks();
 	AtPrepare_PredicateLocks();
 	AtPrepare_PgStat();
 	AtPrepare_MultiXact();
@@ -2587,7 +2598,10 @@ PrepareTransaction(void)
 	 * ProcArrayClearTransaction().  Otherwise, a GetLockConflicts() would
 	 * conclude "xact already committed or aborted" for our locks.
 	 */
-	PostPrepare_Locks(xid);
+	PostPrepare_Locks(xid, sessionandxactlocks);
+
+	/* We no longer need this hash table */
+	hash_destroy(sessionandxactlocks);
 
 	/*
 	 * Let others know about no transaction in progress by me.  This has to be

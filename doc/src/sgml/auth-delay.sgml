@@ -17,6 +17,22 @@
  </para>
 
  <para>
+  It is optionally possible to let <filename>auth_delay</filename> wait longer
+  on each successive authentication failure if the configuration parameter
+  <varname>auth_delay.exponential_backoff</varname> is active.  If enabled,
+  <filename>auth_delay</filename> will double the delay after each consecutive
+  authentication failure from a particular host, up to the given
+  <varname>auth_delay.max_seconds</varname> (default: 10s). If the host
+  authenticates successfully, the delay is reset.
+ </para>
+
+ <para>
+  In this case, it might be desirable to decrease the configuration parameter
+  <varname>auth_delay.milliseconds</varname> from the default of 1 second in
+  order to not delay as long for single accidental authentication failures.
+ </para>
+
+ <para>
   In order to function, this module must be loaded via
   <xref linkend="guc-shared-preload-libraries"/> in <filename>postgresql.conf</filename>.
  </para>
@@ -39,6 +55,34 @@
      </para>
     </listitem>
    </varlistentry>
+   <varlistentry>
+    <term>
+     <varname>auth_delay.exp_backoff</varname> (<type>bool</type>)
+     <indexterm>
+      <primary><varname>auth_delay.exp_backoff</varname> configuration parameter</primary>
+     </indexterm>
+    </term>
+    <listitem>
+     <para>
+      Whether to use exponential backoff per remote host on authentication
+      failure.  The default is off.
+     </para>
+    </listitem>
+   </varlistentry>
+   <varlistentry>
+    <term>
+     <varname>auth_delay.max_seconds</varname> (<type>integer</type>)
+     <indexterm>
+      <primary><varname>auth_delay.max_seconds</varname> configuration parameter</primary>
+     </indexterm>
+    </term>
+    <listitem>
+     <para>
+      The maximum delay, in seconds, when exponential backoff is
+      enabled.  The default is 10 seconds.
+     </para>
+    </listitem>
+   </varlistentry>
   </variablelist>
 
   <para>
@@ -50,7 +94,9 @@
 # postgresql.conf
 shared_preload_libraries = 'auth_delay'
 
-auth_delay.milliseconds = '500'
+auth_delay.milliseconds = '125'
+auth_delay.exp_backoff = 'on'
+auth_delay.max_seconds = '20'
 </programlisting>
  </sect2>
 

@@ -487,6 +487,10 @@ ProcessCopyOptions(ParseState *pstate,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("COPY format \"%s\" not recognized", fmt),
 						 parser_errposition(pstate, defel->location)));
+			if (is_from)
+				ProcessCopyOptionFormatFrom(pstate, opts_out, fmt);
+			else
+				ProcessCopyOptionFormatTo(pstate, opts_out, fmt);
 		}
 		else if (strcmp(defel->defname, "freeze") == 0)
 		{
@@ -621,6 +625,14 @@ ProcessCopyOptions(ParseState *pstate,
 					 errmsg("option \"%s\" not recognized",
 							defel->defname),
 					 parser_errposition(pstate, defel->location)));
+	}
+	if (!format_specified)
+	{
+		/* Set the default format. */
+		if (is_from)
+			ProcessCopyOptionFormatFrom(pstate, opts_out, "text");
+		else
+			ProcessCopyOptionFormatTo(pstate, opts_out, "text");
 	}
 
 	/*

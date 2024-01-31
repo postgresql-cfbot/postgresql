@@ -108,6 +108,171 @@ static char *limit_printout_length(const char *str);
 
 static void ClosePipeFromProgram(CopyFromState cstate);
 
+
+/*
+ * CopyFromRoutine implementations.
+ */
+
+/*
+ * CopyFromRoutine implementation for "text" and "csv". CopyFromTextBased*()
+ * are shared by both of "text" and "csv". CopyFromText*() are only for "text"
+ * and CopyFromCSV*() are only for "csv".
+ *
+ * We can use the same functions for all callbacks by referring
+ * cstate->opts.csv_mode but splitting callbacks to eliminate "if
+ * (cstate->opts.csv_mode)" branches from all callbacks has performance merit
+ * when many tuples are copied. So we use separated callbacks for "text" and
+ * "csv".
+ */
+
+/*
+ * This must initialize cstate->in_functions for CopyFromTextBasedOneRow().
+ */
+static void
+CopyFromTextBasedStart(CopyFromState cstate, TupleDesc tupDesc)
+{
+	AttrNumber	num_phys_attrs = tupDesc->natts;
+	AttrNumber	attr_count;
+
+	/*
+	 * If encoding conversion is needed, we need another buffer to hold the
+	 * converted input data.  Otherwise, we can just point input_buf to the
+	 * same buffer as raw_buf.
+	 */
+	if (cstate->need_transcoding)
+	{
+		cstate->input_buf = (char *) palloc(INPUT_BUF_SIZE + 1);
+		cstate->input_buf_index = cstate->input_buf_len = 0;
+	}
+	else
+		cstate->input_buf = cstate->raw_buf;
+	cstate->input_reached_eof = false;
+
+	initStringInfo(&cstate->line_buf);
+
+	/*
+	 * Pick up the required catalog information for each attribute in the
+	 * relation, including the input function, the element type (to pass to
+	 * the input function).
+	 */
+	cstate->in_functions = (FmgrInfo *) palloc(num_phys_attrs * sizeof(FmgrInfo));
+	cstate->typioparams = (Oid *) palloc(num_phys_attrs * sizeof(Oid));
+	for (int attnum = 1; attnum <= num_phys_attrs; attnum++)
+	{
+		Form_pg_attribute att = TupleDescAttr(tupDesc, attnum - 1);
+		Oid			in_func_oid;
+
+		/* We don't need info for dropped attributes */
+		if (att->attisdropped)
+			continue;
+
+		/* Fetch the input function and typioparam info */
+		getTypeInputInfo(att->atttypid,
+						 &in_func_oid, &cstate->typioparams[attnum - 1]);
+		fmgr_info(in_func_oid, &cstate->in_functions[attnum - 1]);
+	}
+
+	/* create workspace for CopyReadAttributes results */
+	attr_count = list_length(cstate->attnumlist);
+	cstate->max_fields = attr_count;
+	cstate->raw_fields = (char **) palloc(attr_count * sizeof(char *));
+}
+
+static void
+CopyFromTextBasedEnd(CopyFromState cstate)
+{
+}
+
+/*
+ * CopyFromRoutine implementation for "binary".
+ */
+
+/*
+ * This must initialize cstate->in_functions for CopyFromBinaryOneRow().
+ */
+static void
+CopyFromBinaryStart(CopyFromState cstate, TupleDesc tupDesc)
+{
+	AttrNumber	num_phys_attrs = tupDesc->natts;
+
+	/*
+	 * Pick up the required catalog information for each attribute in the
+	 * relation, including the input function, the element type (to pass to
+	 * the input function).
+	 */
+	cstate->in_functions = (FmgrInfo *) palloc(num_phys_attrs * sizeof(FmgrInfo));
+	cstate->typioparams = (Oid *) palloc(num_phys_attrs * sizeof(Oid));
+	for (int attnum = 1; attnum <= num_phys_attrs; attnum++)
+	{
+		Form_pg_attribute att = TupleDescAttr(tupDesc, attnum - 1);
+		Oid			in_func_oid;
+
+		/* We don't need info for dropped attributes */
+		if (att->attisdropped)
+			continue;
+
+		/* Fetch the input function and typioparam info */
+		getTypeBinaryInputInfo(att->atttypid,
+							   &in_func_oid, &cstate->typioparams[attnum - 1]);
+		fmgr_info(in_func_oid, &cstate->in_functions[attnum - 1]);
+	}
+
+	/* Read and verify binary header */
+	ReceiveCopyBinaryHeader(cstate);
+}
+
+static void
+CopyFromBinaryEnd(CopyFromState cstate)
+{
+}
+
+/*
+ * CopyFromTextBased*() are shared with "csv". CopyFromText*() are only for "text".
+ */
+static const CopyFromRoutine CopyFromRoutineText = {
+	.CopyFromStart = CopyFromTextBasedStart,
+	.CopyFromOneRow = CopyFromTextOneRow,
+	.CopyFromEnd = CopyFromTextBasedEnd,
+};
+
+/*
+ * CopyFromTextBased*() are shared with "text". CopyFromCSV*() are only for "csv".
+ */
+static const CopyFromRoutine CopyFromRoutineCSV = {
+	.CopyFromStart = CopyFromTextBasedStart,
+	.CopyFromOneRow = CopyFromCSVOneRow,
+	.CopyFromEnd = CopyFromTextBasedEnd,
+};
+
+static const CopyFromRoutine CopyFromRoutineBinary = {
+	.CopyFromStart = CopyFromBinaryStart,
+	.CopyFromOneRow = CopyFromBinaryOneRow,
+	.CopyFromEnd = CopyFromBinaryEnd,
+};
+
+/*
+ * Process the FORMAT option for COPY FROM.
+ *
+ * 'format' must be "text", "csv" or "binary".
+ */
+void
+ProcessCopyOptionFormatFrom(ParseState *pstate,
+							CopyFormatOptions *opts_out,
+							const char *format)
+{
+	if (strcmp(format, "text") == 0)
+		opts_out->from_routine = &CopyFromRoutineText;
+	else if (strcmp(format, "csv") == 0)
+	{
+		opts_out->from_routine = &CopyFromRoutineCSV;
+	}
+	else if (strcmp(format, "binary") == 0)
+	{
+		opts_out->from_routine = &CopyFromRoutineBinary;
+	}
+}
+
+
 /*
  * error context callback for COPY FROM
  *
@@ -1384,9 +1549,6 @@ BeginCopyFrom(ParseState *pstate,
 	TupleDesc	tupDesc;
 	AttrNumber	num_phys_attrs,
 				num_defaults;
-	FmgrInfo   *in_functions;
-	Oid		   *typioparams;
-	Oid			in_func_oid;
 	int		   *defmap;
 	ExprState **defexprs;
 	MemoryContext oldcontext;
@@ -1571,25 +1733,6 @@ BeginCopyFrom(ParseState *pstate,
 	cstate->raw_buf_index = cstate->raw_buf_len = 0;
 	cstate->raw_reached_eof = false;
 
-	if (!cstate->opts.binary)
-	{
-		/*
-		 * If encoding conversion is needed, we need another buffer to hold
-		 * the converted input data.  Otherwise, we can just point input_buf
-		 * to the same buffer as raw_buf.
-		 */
-		if (cstate->need_transcoding)
-		{
-			cstate->input_buf = (char *) palloc(INPUT_BUF_SIZE + 1);
-			cstate->input_buf_index = cstate->input_buf_len = 0;
-		}
-		else
-			cstate->input_buf = cstate->raw_buf;
-		cstate->input_reached_eof = false;
-
-		initStringInfo(&cstate->line_buf);
-	}
-
 	initStringInfo(&cstate->attribute_buf);
 
 	/* Assign range table and rteperminfos, we'll need them in CopyFrom. */
@@ -1608,8 +1751,6 @@ BeginCopyFrom(ParseState *pstate,
 	 * the input function), and info about defaults and constraints. (Which
 	 * input function we use depends on text/binary format choice.)
 	 */
-	in_functions = (FmgrInfo *) palloc(num_phys_attrs * sizeof(FmgrInfo));
-	typioparams = (Oid *) palloc(num_phys_attrs * sizeof(Oid));
 	defmap = (int *) palloc(num_phys_attrs * sizeof(int));
 	defexprs = (ExprState **) palloc(num_phys_attrs * sizeof(ExprState *));
 
@@ -1620,15 +1761,6 @@ BeginCopyFrom(ParseState *pstate,
 		/* We don't need info for dropped attributes */
 		if (att->attisdropped)
 			continue;
-
-		/* Fetch the input function and typioparam info */
-		if (cstate->opts.binary)
-			getTypeBinaryInputInfo(att->atttypid,
-								   &in_func_oid, &typioparams[attnum - 1]);
-		else
-			getTypeInputInfo(att->atttypid,
-							 &in_func_oid, &typioparams[attnum - 1]);
-		fmgr_info(in_func_oid, &in_functions[attnum - 1]);
 
 		/* Get default info if available */
 		defexprs[attnum - 1] = NULL;
@@ -1689,8 +1821,6 @@ BeginCopyFrom(ParseState *pstate,
 	cstate->bytes_processed = 0;
 
 	/* We keep those variables in cstate. */
-	cstate->in_functions = in_functions;
-	cstate->typioparams = typioparams;
 	cstate->defmap = defmap;
 	cstate->defexprs = defexprs;
 	cstate->volatile_defexprs = volatile_defexprs;
@@ -1763,20 +1893,7 @@ BeginCopyFrom(ParseState *pstate,
 
 	pgstat_progress_update_multi_param(3, progress_cols, progress_vals);
 
-	if (cstate->opts.binary)
-	{
-		/* Read and verify binary header */
-		ReceiveCopyBinaryHeader(cstate);
-	}
-
-	/* create workspace for CopyReadAttributes results */
-	if (!cstate->opts.binary)
-	{
-		AttrNumber	attr_count = list_length(cstate->attnumlist);
-
-		cstate->max_fields = attr_count;
-		cstate->raw_fields = (char **) palloc(attr_count * sizeof(char *));
-	}
+	cstate->opts.from_routine->CopyFromStart(cstate, tupDesc);
 
 	MemoryContextSwitchTo(oldcontext);
 
@@ -1789,6 +1906,8 @@ BeginCopyFrom(ParseState *pstate,
 void
 EndCopyFrom(CopyFromState cstate)
 {
+	cstate->opts.from_routine->CopyFromEnd(cstate);
+
 	/* No COPY FROM related resources except memory. */
 	if (cstate->is_program)
 	{

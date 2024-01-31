@@ -14,6 +14,7 @@
 #ifndef COPY_H
 #define COPY_H
 
+#include "commands/copyapi.h"
 #include "nodes/execnodes.h"
 #include "nodes/parsenodes.h"
 #include "parser/parse_node.h"
@@ -74,11 +75,10 @@ typedef struct CopyFormatOptions
 	bool		convert_selectively;	/* do selective binary conversion? */
 	CopyOnErrorChoice on_error; /* what to do when error happened */
 	List	   *convert_select; /* list of column names (can be NIL) */
+	const		CopyFromRoutine *from_routine;	/* callback routines for COPY
+												 * FROM */
+	const		CopyToRoutine *to_routine;	/* callback routines for COPY TO */
 } CopyFormatOptions;
-
-/* These are private in commands/copy[from|to].c */
-typedef struct CopyFromStateData *CopyFromState;
-typedef struct CopyToStateData *CopyToState;
 
 typedef int (*copy_data_source_cb) (void *outbuf, int minread, int maxread);
 typedef void (*copy_data_dest_cb) (void *data, int len);
@@ -88,6 +88,8 @@ extern void DoCopy(ParseState *pstate, const CopyStmt *stmt,
 				   uint64 *processed);
 
 extern void ProcessCopyOptions(ParseState *pstate, CopyFormatOptions *opts_out, bool is_from, List *options);
+extern void ProcessCopyOptionFormatFrom(ParseState *pstate, CopyFormatOptions *opts_out, const char *format);
+extern void ProcessCopyOptionFormatTo(ParseState *pstate, CopyFormatOptions *opts_out, const char *format);
 extern CopyFromState BeginCopyFrom(ParseState *pstate, Relation rel, Node *whereClause,
 								   const char *filename,
 								   bool is_program, copy_data_source_cb data_source_cb, List *attnamelist, List *options);

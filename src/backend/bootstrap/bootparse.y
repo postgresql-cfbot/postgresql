@@ -99,7 +99,7 @@ static int num_columns_read = 0;
 /* NULLVAL is a reserved keyword */
 %token NULLVAL
 /* All the rest are unreserved, and should be handled in boot_ident! */
-%token <kw> OPEN XCLOSE XCREATE INSERT_TUPLE
+%token <kw> XCLOSE XCREATE INSERT_TUPLE
 %token <kw> XDECLARE INDEX ON USING XBUILD INDICES UNIQUE XTOAST
 %token <kw> OBJ_ID XBOOTSTRAP XSHARED_RELATION XROWTYPE_OID
 %token <kw> XFORCE XNOT XNULL
@@ -119,8 +119,7 @@ Boot_Queries:
 		;
 
 Boot_Query :
-		  Boot_OpenStmt
-		| Boot_CloseStmt
+		  Boot_CloseStmt
 		| Boot_CreateStmt
 		| Boot_InsertStmt
 		| Boot_DeclareIndexStmt
@@ -129,20 +128,11 @@ Boot_Query :
 		| Boot_BuildIndsStmt
 		;
 
-Boot_OpenStmt:
-		  OPEN boot_ident
-				{
-					do_start();
-					boot_openrel($2);
-					do_end();
-				}
-		;
-
 Boot_CloseStmt:
 		  XCLOSE boot_ident
 				{
 					do_start();
-					closerel($2);
+					boot_closerel($2);
 					do_end();
 				}
 		;
@@ -185,16 +175,16 @@ Boot_CreateStmt:
 					 */
 					mapped_relation = ($4 || shared_relation);
 
+					if (boot_reldesc)
+					{
+						elog(DEBUG4, "create: warning, open relation exists, closing first");
+						boot_closerel(NULL);
+					}
+
 					if ($4)
 					{
 						TransactionId relfrozenxid;
 						MultiXactId relminmxid;
-
-						if (boot_reldesc)
-						{
-							elog(DEBUG4, "create bootstrap: warning, open relation exists, closing first");
-							closerel(NULL);
-						}
 
 						boot_reldesc = heap_create($2,
 												   PG_CATALOG_NAMESPACE,
@@ -239,6 +229,7 @@ Boot_CreateStmt:
 													  InvalidOid,
 													  NULL);
 						elog(DEBUG4, "relation created with OID %u", id);
+						boot_openrel(id);
 					}
 					do_end();
 				}
@@ -466,7 +457,6 @@ boot_column_val:
 
 boot_ident:
 		  ID			{ $$ = $1; }
-		| OPEN			{ $$ = pstrdup($1); }
 		| XCLOSE		{ $$ = pstrdup($1); }
 		| XCREATE		{ $$ = pstrdup($1); }
 		| INSERT_TUPLE	{ $$ = pstrdup($1); }

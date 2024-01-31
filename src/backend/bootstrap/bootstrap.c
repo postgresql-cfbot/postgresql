@@ -409,12 +409,9 @@ bootstrap_signals(void)
  * ----------------
  */
 void
-boot_openrel(char *relname)
+boot_openrel(Oid id)
 {
 	int			i;
-
-	if (strlen(relname) >= NAMEDATALEN)
-		relname[NAMEDATALEN - 1] = '\0';
 
 	/*
 	 * pg_type must be filled before any OPEN command is executed, hence we
@@ -424,12 +421,12 @@ boot_openrel(char *relname)
 		populate_typ_list();
 
 	if (boot_reldesc != NULL)
-		closerel(NULL);
+		boot_closerel(NULL);
 
-	elog(DEBUG4, "open relation %s, attrsize %d",
-		 relname, (int) ATTRIBUTE_FIXED_PART_SIZE);
+	elog(DEBUG4, "open relation %u, attrsize %d",
+		 id, (int) ATTRIBUTE_FIXED_PART_SIZE);
 
-	boot_reldesc = table_openrv(makeRangeVar(NULL, relname, -1), NoLock);
+	boot_reldesc = table_open(id, NoLock);
 	numattr = RelationGetNumberOfAttributes(boot_reldesc);
 	for (i = 0; i < numattr; i++)
 	{
@@ -450,11 +447,11 @@ boot_openrel(char *relname)
 }
 
 /* ----------------
- *		closerel
+ *		boot_closerel
  * ----------------
  */
 void
-closerel(char *relname)
+boot_closerel(char *relname)
 {
 	if (relname)
 	{
@@ -498,7 +495,7 @@ DefineAttr(char *name, char *type, int attnum, int nullness)
 	if (boot_reldesc != NULL)
 	{
 		elog(WARNING, "no open relations allowed with CREATE command");
-		closerel(NULL);
+		boot_closerel(NULL);
 	}
 
 	if (attrtypes[attnum] == NULL)
@@ -686,7 +683,7 @@ static void
 cleanup(void)
 {
 	if (boot_reldesc != NULL)
-		closerel(NULL);
+		boot_closerel(NULL);
 }
 
 /* ----------------

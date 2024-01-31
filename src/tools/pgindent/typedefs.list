@@ -1575,6 +1575,8 @@ MergePath
 MergeScanSelCache
 MergeStmt
 MergeWhenClause
+MergingFunc
+MergingFuncOp
 MetaCommand
 MinMaxAggInfo
 MinMaxAggPath

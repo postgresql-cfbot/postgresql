@@ -1108,6 +1108,21 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				break;
 			}
 
+		case T_MergingFunc:
+			{
+				MergingFunc *mf_node = (MergingFunc *) node;
+
+				if (!state->parent ||
+					!IsA(state->parent, ModifyTableState) ||
+					((ModifyTableState *) state->parent)->operation != CMD_MERGE)
+					elog(ERROR, "MergingFunc found in non-merge plan node");
+
+				scratch.opcode = EEOP_MERGING_FUNC;
+				scratch.d.merging_func.mfop = mf_node->mfop;
+				ExprEvalPushStep(state, &scratch);
+				break;
+			}
+
 		case T_SubscriptingRef:
 			{
 				SubscriptingRef *sbsref = (SubscriptingRef *) node;

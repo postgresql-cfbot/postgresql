@@ -572,6 +572,39 @@ typedef struct WindowFunc
 } WindowFunc;
 
 /*
+ * MergingFunc
+ *
+ * A MergingFunc is a MERGING(...) expression that can only appear in the
+ * RETURNING list of a MERGE command.  It returns information about the
+ * currently executing merge action.  Possible operations are:
+ *
+ *	MERGING_ACTION:
+ *		Return the command string of the current merge action ("INSERT",
+ *		"UPDATE" or "DELETE").
+ *
+ *	MERGING_CLAUSE_NUMBER:
+ *		Return the 1-based index of the current merge WHEN clause.
+ */
+typedef enum MergingFuncOp
+{
+	MERGING_ACTION,
+	MERGING_CLAUSE_NUMBER,
+} MergingFuncOp;
+
+typedef struct MergingFunc
+{
+	Expr		xpr;
+	/* operation to perform */
+	MergingFuncOp mfop;
+	/* type Oid of result */
+	Oid			mftype pg_node_attr(query_jumble_ignore);
+	/* OID of collation, or InvalidOid if none */
+	Oid			mfcollid pg_node_attr(query_jumble_ignore);
+	/* token location, or -1 if unknown */
+	int			location;
+} MergingFunc;
+
+/*
  * SubscriptingRef: describes a subscripting operation over a container
  * (array, etc).
  *
@@ -1735,6 +1768,7 @@ typedef struct BooleanTest
 typedef struct MergeAction
 {
 	NodeTag		type;
+	int			index;			/* 1-based index of the clause */
 	bool		matched;		/* true=MATCHED, false=NOT MATCHED */
 	CmdType		commandType;	/* INSERT/UPDATE/DELETE/DO NOTHING */
 	/* OVERRIDING clause */

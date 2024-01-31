@@ -243,6 +243,7 @@ typedef enum ExprEvalOp
 	EEOP_AGGREF,
 	EEOP_GROUPING_FUNC,
 	EEOP_WINDOW_FUNC,
+	EEOP_MERGING_FUNC,
 	EEOP_SUBPLAN,
 
 	/* aggregation related nodes */
@@ -626,6 +627,12 @@ typedef struct ExprEvalStep
 			WindowFuncExprState *wfstate;
 		}			window_func;
 
+		/* for EEOP_MERGING_FUNC */
+		struct
+		{
+			MergingFuncOp mfop; /* the MERGING() operation to perform */
+		}			merging_func;
+
 		/* for EEOP_SUBPLAN */
 		struct
 		{
@@ -810,6 +817,8 @@ extern void ExecEvalJsonConstructor(ExprState *state, ExprEvalStep *op,
 									ExprContext *econtext);
 extern void ExecEvalJsonIsPredicate(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalGroupingFunc(ExprState *state, ExprEvalStep *op);
+extern void ExecEvalMergingFunc(ExprState *state, ExprEvalStep *op,
+								ExprContext *econtext);
 extern void ExecEvalSubPlan(ExprState *state, ExprEvalStep *op,
 							ExprContext *econtext);
 extern void ExecEvalWholeRowVar(ExprState *state, ExprEvalStep *op,

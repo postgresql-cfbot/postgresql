@@ -156,6 +156,7 @@ pgstat_count_io_op_time(IOObject io_object, IOContext io_context, IOOp io_op,
 PgStat_IO *
 pgstat_fetch_stat_io(void)
 {
+	pgstat_clear_snapshot_if_needed();
 	pgstat_snapshot_fixed(PGSTAT_KIND_IO);
 
 	return &pgStatLocal.snapshot.io;

@@ -1714,3 +1714,11 @@ assign_stats_fetch_consistency(int newval, void *extra)
 	if (pgstat_fetch_consistency != newval)
 		force_stats_snapshot_clear = true;
 }
+
+
+void
+pgstat_clear_snapshot_if_needed(void)
+{
+	if (force_stats_snapshot_clear)
+		pgstat_clear_snapshot();
+}

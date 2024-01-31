@@ -70,6 +70,7 @@ pgstat_report_bgwriter(void)
 PgStat_BgWriterStats *
 pgstat_fetch_stat_bgwriter(void)
 {
+	pgstat_clear_snapshot_if_needed();
 	pgstat_snapshot_fixed(PGSTAT_KIND_BGWRITER);
 
 	return &pgStatLocal.snapshot.bgwriter;

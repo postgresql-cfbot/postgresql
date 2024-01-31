@@ -66,6 +66,7 @@ pgstat_report_wal(bool force)
 PgStat_WalStats *
 pgstat_fetch_stat_wal(void)
 {
+	pgstat_clear_snapshot_if_needed();
 	pgstat_snapshot_fixed(PGSTAT_KIND_WAL);
 
 	return &pgStatLocal.snapshot.wal;

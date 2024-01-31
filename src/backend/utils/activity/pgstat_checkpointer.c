@@ -79,6 +79,7 @@ pgstat_report_checkpointer(void)
 PgStat_CheckpointerStats *
 pgstat_fetch_stat_checkpointer(void)
 {
+	pgstat_clear_snapshot_if_needed();
 	pgstat_snapshot_fixed(PGSTAT_KIND_CHECKPOINTER);
 
 	return &pgStatLocal.snapshot.checkpointer;

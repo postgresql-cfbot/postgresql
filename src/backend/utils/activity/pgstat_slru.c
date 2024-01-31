@@ -104,6 +104,7 @@ pgstat_count_slru_truncate(int slru_idx)
 PgStat_SLRUStats *
 pgstat_fetch_slru(void)
 {
+	pgstat_clear_snapshot_if_needed();
 	pgstat_snapshot_fixed(PGSTAT_KIND_SLRU);
 
 	return pgStatLocal.snapshot.slru;

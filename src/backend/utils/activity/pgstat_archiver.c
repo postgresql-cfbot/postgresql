@@ -57,6 +57,7 @@ pgstat_report_archiver(const char *xlog, bool failed)
 PgStat_ArchiverStats *
 pgstat_fetch_stat_archiver(void)
 {
+	pgstat_clear_snapshot_if_needed();
 	pgstat_snapshot_fixed(PGSTAT_KIND_ARCHIVER);
 
 	return &pgStatLocal.snapshot.archiver;

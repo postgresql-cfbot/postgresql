@@ -217,6 +217,8 @@ extern void xlog_redo(struct XLogReaderState *record);
 extern void xlog_desc(StringInfo buf, struct XLogReaderState *record);
 extern const char *xlog_identify(uint8 info);
 
+extern int XLogGetSyncBit(void);
+extern const char *XLogFsyncFile(int fd);
 extern void issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli);
 
 extern bool RecoveryInProgress(void);

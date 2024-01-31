@@ -305,6 +305,7 @@ void		setup_signals(void);
 void		setup_text_search(void);
 void		create_data_directory(void);
 void		create_xlog_or_symlink(void);
+void		create_ulog(void);
 void		warn_on_mount_point(int error);
 void		initialize_data_directory(void);
 
@@ -2933,6 +2934,21 @@ create_xlog_or_symlink(void)
 	free(subdirloc);
 }
 
+/* Create undo log directory */
+void
+create_ulog(void)
+{
+	char	   *subdirloc;
+
+	/* form name of the place for the subdirectory */
+	subdirloc = psprintf("%s/pg_ulog", pg_data);
+
+	if (mkdir(subdirloc, pg_dir_create_mode) < 0)
+		pg_fatal("could not create directory \"%s\": %m",
+				 subdirloc);
+
+	free(subdirloc);
+}
 
 void
 warn_on_mount_point(int error)
@@ -2967,6 +2983,7 @@ initialize_data_directory(void)
 	create_data_directory();
 
 	create_xlog_or_symlink();
+	create_ulog();
 
 	/* Create required subdirectories (other than pg_wal) */
 	printf(_("creating subdirectories ... "));

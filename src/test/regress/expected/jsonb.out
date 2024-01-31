@@ -457,8 +457,242 @@ CREATE TEMP TABLE test_jsonb (
 );
 INSERT INTO test_jsonb VALUES
 ('scalar','"a scalar"'),
+('scalarint','2'),
 ('array','["zero", "one","two",null,"four","five", [1,2,3],{"f1":9}]'),
-('object','{"field1":"val1","field2":"val2","field3":null, "field4": 4, "field5": [1,2,3], "field6": {"f1":9}}');
+('object','{"field1":"val1","field2":"val2","field3":null, "field4": 4
+			,"field5": [1,2,3], "field6": {"f1":9}
+			,"field7": true, "field8": [1,2,3,4,5]}');
+\pset null NULL
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT	(test_json -> 'field4')::numeric
+FROM 	test_jsonb
+WHERE 	json_type = 'object';
+                                                  QUERY PLAN                                                  
+--------------------------------------------------------------------------------------------------------------
+ Seq Scan on pg_temp.test_jsonb
+   Output: jsonb_finish_numeric(jsonb_object_field_start((test_json)::internal, 'field4'::text), '1700'::oid)
+   Filter: (test_jsonb.json_type = 'object'::text)
+(3 rows)
+
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT	(test_json -> 'field4')::int2
+FROM 	test_jsonb
+WHERE 	json_type = 'object';
+                                                       QUERY PLAN                                                       
+------------------------------------------------------------------------------------------------------------------------
+ Seq Scan on pg_temp.test_jsonb
+   Output: (jsonb_finish_numeric(jsonb_object_field_start((test_json)::internal, 'field4'::text), '21'::oid))::smallint
+   Filter: (test_jsonb.json_type = 'object'::text)
+(3 rows)
+
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT (test_json -> 'field4')::int4
+FROM 	test_jsonb
+WHERE 	json_type = 'object';
+                                                      QUERY PLAN                                                       
+-----------------------------------------------------------------------------------------------------------------------
+ Seq Scan on pg_temp.test_jsonb
+   Output: (jsonb_finish_numeric(jsonb_object_field_start((test_json)::internal, 'field4'::text), '23'::oid))::integer
+   Filter: (test_jsonb.json_type = 'object'::text)
+(3 rows)
+
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT (test_json -> 'field4')::int8
+FROM 	test_jsonb
+WHERE 	json_type = 'object';
+                                                      QUERY PLAN                                                      
+----------------------------------------------------------------------------------------------------------------------
+ Seq Scan on pg_temp.test_jsonb
+   Output: (jsonb_finish_numeric(jsonb_object_field_start((test_json)::internal, 'field4'::text), '20'::oid))::bigint
+   Filter: (test_jsonb.json_type = 'object'::text)
+(3 rows)
+
+EXPLAIN	(COSTS OFF, VERBOSE)
+SELECT	(test_json -> 'field4')::float4
+FROM 	test_jsonb
+WHERE 	json_type = 'object';
+                                                     QUERY PLAN                                                      
+---------------------------------------------------------------------------------------------------------------------
+ Seq Scan on pg_temp.test_jsonb
+   Output: (jsonb_finish_numeric(jsonb_object_field_start((test_json)::internal, 'field4'::text), '700'::oid))::real
+   Filter: (test_jsonb.json_type = 'object'::text)
+(3 rows)
+
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT (test_json -> 'field4')::float8
+FROM 	test_jsonb
+WHERE 	json_type = 'object';
+                                                           QUERY PLAN                                                            
+---------------------------------------------------------------------------------------------------------------------------------
+ Seq Scan on pg_temp.test_jsonb
+   Output: (jsonb_finish_numeric(jsonb_object_field_start((test_json)::internal, 'field4'::text), '701'::oid))::double precision
+   Filter: (test_jsonb.json_type = 'object'::text)
+(3 rows)
+
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT (test_json->'field5' -> 0)::numeric
+FROM 	test_jsonb
+WHERE 	json_type = 'object';
+                                                      QUERY PLAN                                                      
+----------------------------------------------------------------------------------------------------------------------
+ Seq Scan on pg_temp.test_jsonb
+   Output: jsonb_finish_numeric(jsonb_array_element_start(((test_json -> 'field5'::text))::internal, 0), '1700'::oid)
+   Filter: (test_jsonb.json_type = 'object'::text)
+(3 rows)
+
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT (test_json->'field5' -> 10)::numeric
+FROM 	test_jsonb
+WHERE 	json_type = 'object';
+                                                      QUERY PLAN                                                       
+-----------------------------------------------------------------------------------------------------------------------
+ Seq Scan on pg_temp.test_jsonb
+   Output: jsonb_finish_numeric(jsonb_array_element_start(((test_json -> 'field5'::text))::internal, 10), '1700'::oid)
+   Filter: (test_jsonb.json_type = 'object'::text)
+(3 rows)
+
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT (test_json#>'{"field6", "f1"}')::numeric
+FROM 	test_jsonb
+WHERE 	json_type = 'object';
+                                                          QUERY PLAN                                                          
+------------------------------------------------------------------------------------------------------------------------------
+ Seq Scan on pg_temp.test_jsonb
+   Output: jsonb_finish_numeric(jsonb_extract_path_start((test_json)::internal, VARIADIC '{field6,f1}'::text[]), '1700'::oid)
+   Filter: (test_jsonb.json_type = 'object'::text)
+(3 rows)
+
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT (test_json#>'{"field6", "f2"}')::numeric
+FROM 	test_jsonb
+WHERE 	json_type = 'object';
+                                                          QUERY PLAN                                                          
+------------------------------------------------------------------------------------------------------------------------------
+ Seq Scan on pg_temp.test_jsonb
+   Output: jsonb_finish_numeric(jsonb_extract_path_start((test_json)::internal, VARIADIC '{field6,f2}'::text[]), '1700'::oid)
+   Filter: (test_jsonb.json_type = 'object'::text)
+(3 rows)
+
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT	(test_json#>'{"field7"}')::bool
+FROM 	test_jsonb
+WHERE 	json_type = 'object';
+                                                QUERY PLAN                                                 
+-----------------------------------------------------------------------------------------------------------
+ Seq Scan on pg_temp.test_jsonb
+   Output: jsonb_finish_bool(jsonb_extract_path_start((test_json)::internal, VARIADIC '{field7}'::text[]))
+   Filter: (test_jsonb.json_type = 'object'::text)
+(3 rows)
+
+SELECT
+(test_json -> 'field4')::numeric,
+(test_json -> 'field4')::int2,
+(test_json -> 'field4')::int4,
+(test_json -> 'field4')::int8,
+(test_json -> 'field4')::float4,
+(test_json -> 'field4')::float8,
+(test_json -> 'field5' -> 0)::numeric,
+(test_json -> 'field5' -> 10)::numeric,
+(test_json #> '{"field6", "f1"}')::numeric,
+(test_json #> '{"field6", "f2"}')::numeric,
+(test_json#>'{"field7"}')::bool
+FROM test_jsonb
+WHERE json_type = 'object';
+ numeric | int2 | int4 | int8 | float4 | float8 | numeric | numeric | numeric | numeric | bool 
+---------+------+------+------+--------+--------+---------+---------+---------+---------+------
+       4 |    4 |    4 |    4 |      4 |      4 |       1 |    NULL |       9 |    NULL | t
+(1 row)
+
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT	jsonb_path_query(test_json,'$.field8[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}')
+FROM test_jsonb	WHERE json_type = 'object';
+                                                             QUERY PLAN                                                              
+-------------------------------------------------------------------------------------------------------------------------------------
+ ProjectSet
+   Output: jsonb_path_query(test_json, '$."field8"[*]?(@ >= $"min" && @ <= $"max")'::jsonpath, '{"max": 4, "min": 2}'::jsonb, false)
+   ->  Seq Scan on pg_temp.test_jsonb
+         Output: json_type, test_json
+         Filter: (test_jsonb.json_type = 'object'::text)
+(5 rows)
+
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT	jsonb_path_query_first(test_json, '$.field8[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}')
+FROM test_jsonb	WHERE json_type = 'object';
+                                                                QUERY PLAN                                                                 
+-------------------------------------------------------------------------------------------------------------------------------------------
+ Seq Scan on pg_temp.test_jsonb
+   Output: jsonb_path_query_first(test_json, '$."field8"[*]?(@ >= $"min" && @ <= $"max")'::jsonpath, '{"max": 4, "min": 2}'::jsonb, false)
+   Filter: (test_jsonb.json_type = 'object'::text)
+(3 rows)
+
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT	jsonb_path_query(test_json,'$.field8[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}')::int2
+FROM test_jsonb	WHERE json_type = 'object';
+                                                                                              QUERY PLAN                                                                                              
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Result
+   Output: (jsonb_finish_numeric((jsonb_path_query_start((test_json)::internal, '$."field8"[*]?(@ >= $"min" && @ <= $"max")'::jsonpath, '{"max": 4, "min": 2}'::jsonb, false)), '21'::oid))::smallint
+   ->  ProjectSet
+         Output: jsonb_path_query_start((test_json)::internal, '$."field8"[*]?(@ >= $"min" && @ <= $"max")'::jsonpath, '{"max": 4, "min": 2}'::jsonb, false)
+         ->  Seq Scan on pg_temp.test_jsonb
+               Output: json_type, test_json
+               Filter: (test_jsonb.json_type = 'object'::text)
+(7 rows)
+
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT	jsonb_path_query_first(test_json, '$.field8[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}')::int2
+FROM 	test_jsonb	WHERE json_type = 'object';
+                                                                                                QUERY PLAN                                                                                                
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Seq Scan on pg_temp.test_jsonb
+   Output: (jsonb_finish_numeric(jsonb_path_query_first_start((test_json)::internal, '$."field8"[*]?(@ >= $"min" && @ <= $"max")'::jsonpath, '{"max": 4, "min": 2}'::jsonb, false), '21'::oid))::smallint
+   Filter: (test_jsonb.json_type = 'object'::text)
+(3 rows)
+
+SELECT
+jsonb_path_query(test_json,'$.field8[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}'),
+jsonb_path_query_first(test_json, '$.field8[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}'),
+jsonb_path_query(test_json,'$.field8[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}')::int2,
+jsonb_path_query_first(test_json, '$.field8[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}')::int2
+FROM test_jsonb
+WHERE json_type = 'object';
+ jsonb_path_query | jsonb_path_query_first | jsonb_path_query | jsonb_path_query_first 
+------------------+------------------------+------------------+------------------------
+ 2                | 2                      |                2 |                      2
+ 3                | 2                      |                3 |                      2
+ 4                | 2                      |                4 |                      2
+(3 rows)
+
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT (test_json #> '{}')::numeric FROM test_jsonb WHERE json_type = 'scalarint';
+                                                     QUERY PLAN                                                      
+---------------------------------------------------------------------------------------------------------------------
+ Seq Scan on pg_temp.test_jsonb
+   Output: jsonb_finish_numeric(jsonb_extract_path_start((test_json)::internal, VARIADIC '{}'::text[]), '1700'::oid)
+   Filter: (test_jsonb.json_type = 'scalarint'::text)
+(3 rows)
+
+SELECT (test_json #> '{}')::numeric FROM test_jsonb WHERE json_type = 'scalarint';
+ numeric 
+---------
+       2
+(1 row)
+
+-- let raise some errors.
+EXPLAIN (COSTS OFF, VERBOSE)
+SELECT (test_json -> 'field1')::int4 FROM test_jsonb WHERE json_type = 'object';
+                                                      QUERY PLAN                                                       
+-----------------------------------------------------------------------------------------------------------------------
+ Seq Scan on pg_temp.test_jsonb
+   Output: (jsonb_finish_numeric(jsonb_object_field_start((test_json)::internal, 'field1'::text), '23'::oid))::integer
+   Filter: (test_jsonb.json_type = 'object'::text)
+(3 rows)
+
+SELECT (test_json -> 'field1')::int4 FROM test_jsonb WHERE json_type = 'object';
+ERROR:  cannot cast jsonb string to type integer
+SELECT (test_json -> 'field1')::bool FROM test_jsonb WHERE json_type = 'object';
+ERROR:  cannot cast jsonb string to type boolean
+\pset null ''
 SELECT test_json -> 'x' FROM test_jsonb WHERE json_type = 'scalar';
  ?column? 
 ----------
@@ -586,7 +820,9 @@ SELECT jsonb_object_keys(test_json) FROM test_jsonb WHERE json_type = 'object';
  field4
  field5
  field6
-(6 rows)
+ field7
+ field8
+(8 rows)
 
 -- nulls
 SELECT (test_json->'field3') IS NULL AS expect_false FROM test_jsonb WHERE json_type = 'object';

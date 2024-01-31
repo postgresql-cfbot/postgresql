@@ -126,12 +126,16 @@ typedef struct
 {
 	List	   *activeWindows;	/* active windows, if any */
 	grouping_sets_data *gset_data;	/* grouping sets data, if any */
+	SetOperationStmt *setop;	/* parent set operation or NULL if not a
+								 * subquery belonging to a set operation */
 } standard_qp_extra;
 
 /* Local functions */
 static Node *preprocess_expression(PlannerInfo *root, Node *expr, int kind);
 static void preprocess_qual_conditions(PlannerInfo *root, Node *jtnode);
 static void grouping_planner(PlannerInfo *root, double tuple_fraction);
+static Path *build_final_modify_table_path(PlannerInfo *root,
+										   RelOptInfo *final_rel, Path *path);
 static grouping_sets_data *preprocess_grouping_sets(PlannerInfo *root);
 static List *remap_to_groupclause_idx(List *groupClause, List *gsets,
 									  int *tleref_to_colnum_map);
@@ -1506,6 +1510,18 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 		qp_extra.gset_data = gset_data;
 
 		/*
+		 * Check if we're a subquery for a set operation.  If we are, store
+		 * the SetOperationStmt in qp_extra.
+		 */
+		if (root->parent_root != NULL &&
+			root->parent_root->parse->setOperations != NULL &&
+			IsA(root->parent_root->parse->setOperations, SetOperationStmt))
+			qp_extra.setop =
+				(SetOperationStmt *) root->parent_root->parse->setOperations;
+		else
+			qp_extra.setop = NULL;
+
+		/*
 		 * Generate the best unsorted and presorted paths for the scan/join
 		 * portion of this Query, ie the processing represented by the
 		 * FROM/WHERE clauses.  (Note there may not be any presorted paths.)
@@ -1753,6 +1769,13 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 	foreach(lc, current_rel->pathlist)
 	{
 		Path	   *path = (Path *) lfirst(lc);
+		Path	   *input_path;
+
+		/*
+		 * Keep record of the unmodified path so that we can still tell which
+		 * one is the cheapest_input_path.
+		 */
+		input_path = path;
 
 		/*
 		 * If there is a FOR [KEY] UPDATE/SHARE clause, add the LockRows node.
@@ -1781,190 +1804,85 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 		}
 
 		/*
-		 * If this is an INSERT/UPDATE/DELETE/MERGE, add the ModifyTable node.
+		 * Create paths to suit final sort order required for setop_pathkeys.
+		 * Here we'll sort the cheapest input path (if not sorted already) and
+		 * incremental sort any paths which are partially sorted.  We also
+		 * include the cheapest path as-is so that the set operation can be
+		 * cheaply implemented using a method which does not require the input
+		 * to be sorted.
+		 */
+		if (root->setop_pathkeys != NIL)
+		{
+			Path	   *cheapest_input_path = current_rel->cheapest_total_path;
+			bool		is_sorted;
+			int			presorted_keys;
+
+			is_sorted = pathkeys_count_contained_in(root->setop_pathkeys,
+													path->pathkeys,
+													&presorted_keys);
+
+			if (!is_sorted)
+			{
+				/*
+				 * Try at least sorting the cheapest path and also try
+				 * incrementally sorting any path which is partially sorted
+				 * already (no need to deal with paths which have presorted
+				 * keys when incremental sort is disabled unless it's the
+				 * cheapest input path).
+				 */
+				if (input_path != cheapest_input_path)
+				{
+					if (presorted_keys == 0 || !enable_incremental_sort)
+						continue;
+				}
+				else
+				{
+					/*
+					 * If this is an INSERT/UPDATE/DELETE/MERGE, add a
+					 * ModifyTable path.
+					 */
+					if (parse->commandType != CMD_SELECT)
+						path = build_final_modify_table_path(root,
+															 final_rel,
+															 path);
+
+					/*
+					 * The union planner might want to try a hash-based method
+					 * of executing the set operation, so let's provide the
+					 * cheapest input path so that it can do that as cheaply
+					 * as possible.  If the cheapest_input_path happens to be
+					 * already correctly sorted then we'll add it to final_rel
+					 * at the end of the loop.
+					 */
+					add_path(final_rel, path);
+				}
+
+				/*
+				 * We've no need to consider both a sort and incremental sort.
+				 * We'll just do a sort if there are no presorted keys and an
+				 * incremental sort when there are presorted keys.
+				 */
+				if (presorted_keys == 0 || !enable_incremental_sort)
+					path = (Path *) create_sort_path(root,
+													 final_rel,
+													 path,
+													 root->setop_pathkeys,
+													 limit_tuples);
+				else
+					path = (Path *) create_incremental_sort_path(root,
+																 final_rel,
+																 path,
+																 root->setop_pathkeys,
+																 presorted_keys,
+																 limit_tuples);
+			}
+		}
+
+		/*
+		 * If this is an INSERT/UPDATE/DELETE/MERGE, add a ModifyTable path.
 		 */
 		if (parse->commandType != CMD_SELECT)
-		{
-			Index		rootRelation;
-			List	   *resultRelations = NIL;
-			List	   *updateColnosLists = NIL;
-			List	   *withCheckOptionLists = NIL;
-			List	   *returningLists = NIL;
-			List	   *mergeActionLists = NIL;
-			List	   *rowMarks;
-
-			if (bms_membership(root->all_result_relids) == BMS_MULTIPLE)
-			{
-				/* Inherited UPDATE/DELETE/MERGE */
-				RelOptInfo *top_result_rel = find_base_rel(root,
-														   parse->resultRelation);
-				int			resultRelation = -1;
-
-				/* Pass the root result rel forward to the executor. */
-				rootRelation = parse->resultRelation;
-
-				/* Add only leaf children to ModifyTable. */
-				while ((resultRelation = bms_next_member(root->leaf_result_relids,
-														 resultRelation)) >= 0)
-				{
-					RelOptInfo *this_result_rel = find_base_rel(root,
-																resultRelation);
-
-					/*
-					 * Also exclude any leaf rels that have turned dummy since
-					 * being added to the list, for example, by being excluded
-					 * by constraint exclusion.
-					 */
-					if (IS_DUMMY_REL(this_result_rel))
-						continue;
-
-					/* Build per-target-rel lists needed by ModifyTable */
-					resultRelations = lappend_int(resultRelations,
-												  resultRelation);
-					if (parse->commandType == CMD_UPDATE)
-					{
-						List	   *update_colnos = root->update_colnos;
-
-						if (this_result_rel != top_result_rel)
-							update_colnos =
-								adjust_inherited_attnums_multilevel(root,
-																	update_colnos,
-																	this_result_rel->relid,
-																	top_result_rel->relid);
-						updateColnosLists = lappend(updateColnosLists,
-													update_colnos);
-					}
-					if (parse->withCheckOptions)
-					{
-						List	   *withCheckOptions = parse->withCheckOptions;
-
-						if (this_result_rel != top_result_rel)
-							withCheckOptions = (List *)
-								adjust_appendrel_attrs_multilevel(root,
-																  (Node *) withCheckOptions,
-																  this_result_rel,
-																  top_result_rel);
-						withCheckOptionLists = lappend(withCheckOptionLists,
-													   withCheckOptions);
-					}
-					if (parse->returningList)
-					{
-						List	   *returningList = parse->returningList;
-
-						if (this_result_rel != top_result_rel)
-							returningList = (List *)
-								adjust_appendrel_attrs_multilevel(root,
-																  (Node *) returningList,
-																  this_result_rel,
-																  top_result_rel);
-						returningLists = lappend(returningLists,
-												 returningList);
-					}
-					if (parse->mergeActionList)
-					{
-						ListCell   *l;
-						List	   *mergeActionList = NIL;
-
-						/*
-						 * Copy MergeActions and translate stuff that
-						 * references attribute numbers.
-						 */
-						foreach(l, parse->mergeActionList)
-						{
-							MergeAction *action = lfirst(l),
-									   *leaf_action = copyObject(action);
-
-							leaf_action->qual =
-								adjust_appendrel_attrs_multilevel(root,
-																  (Node *) action->qual,
-																  this_result_rel,
-																  top_result_rel);
-							leaf_action->targetList = (List *)
-								adjust_appendrel_attrs_multilevel(root,
-																  (Node *) action->targetList,
-																  this_result_rel,
-																  top_result_rel);
-							if (leaf_action->commandType == CMD_UPDATE)
-								leaf_action->updateColnos =
-									adjust_inherited_attnums_multilevel(root,
-																		action->updateColnos,
-																		this_result_rel->relid,
-																		top_result_rel->relid);
-							mergeActionList = lappend(mergeActionList,
-													  leaf_action);
-						}
-
-						mergeActionLists = lappend(mergeActionLists,
-												   mergeActionList);
-					}
-				}
-
-				if (resultRelations == NIL)
-				{
-					/*
-					 * We managed to exclude every child rel, so generate a
-					 * dummy one-relation plan using info for the top target
-					 * rel (even though that may not be a leaf target).
-					 * Although it's clear that no data will be updated or
-					 * deleted, we still need to have a ModifyTable node so
-					 * that any statement triggers will be executed.  (This
-					 * could be cleaner if we fixed nodeModifyTable.c to allow
-					 * zero target relations, but that probably wouldn't be a
-					 * net win.)
-					 */
-					resultRelations = list_make1_int(parse->resultRelation);
-					if (parse->commandType == CMD_UPDATE)
-						updateColnosLists = list_make1(root->update_colnos);
-					if (parse->withCheckOptions)
-						withCheckOptionLists = list_make1(parse->withCheckOptions);
-					if (parse->returningList)
-						returningLists = list_make1(parse->returningList);
-					if (parse->mergeActionList)
-						mergeActionLists = list_make1(parse->mergeActionList);
-				}
-			}
-			else
-			{
-				/* Single-relation INSERT/UPDATE/DELETE/MERGE. */
-				rootRelation = 0;	/* there's no separate root rel */
-				resultRelations = list_make1_int(parse->resultRelation);
-				if (parse->commandType == CMD_UPDATE)
-					updateColnosLists = list_make1(root->update_colnos);
-				if (parse->withCheckOptions)
-					withCheckOptionLists = list_make1(parse->withCheckOptions);
-				if (parse->returningList)
-					returningLists = list_make1(parse->returningList);
-				if (parse->mergeActionList)
-					mergeActionLists = list_make1(parse->mergeActionList);
-			}
-
-			/*
-			 * If there was a FOR [KEY] UPDATE/SHARE clause, the LockRows node
-			 * will have dealt with fetching non-locked marked rows, else we
-			 * need to have ModifyTable do that.
-			 */
-			if (parse->rowMarks)
-				rowMarks = NIL;
-			else
-				rowMarks = root->rowMarks;
-
-			path = (Path *)
-				create_modifytable_path(root, final_rel,
-										path,
-										parse->commandType,
-										parse->canSetTag,
-										parse->resultRelation,
-										rootRelation,
-										root->partColsUpdated,
-										resultRelations,
-										updateColnosLists,
-										withCheckOptionLists,
-										returningLists,
-										rowMarks,
-										parse->onConflict,
-										mergeActionLists,
-										assign_special_exec_param(root));
-		}
+			path = build_final_modify_table_path(root, final_rel, path);
 
 		/* And shove it into final_rel */
 		add_path(final_rel, path);
@@ -1978,11 +1896,124 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 		!limit_needed(parse))
 	{
 		Assert(!parse->rowMarks && parse->commandType == CMD_SELECT);
+
+		/*
+		 * XXX adding all of these seems excessive. Why not just the cheapest?
+		 */
 		foreach(lc, current_rel->partial_pathlist)
 		{
 			Path	   *partial_path = (Path *) lfirst(lc);
 
 			add_partial_path(final_rel, partial_path);
+		}
+
+		/*
+		 * When planning for set operations, try sorting the cheapest partial
+		 * path.
+		 */
+		if (root->setop_pathkeys != NIL &&
+			current_rel->partial_pathlist != NIL)
+		{
+			Path	   *cheapest_partial_path;
+
+			cheapest_partial_path = linitial(current_rel->partial_pathlist);
+
+			/*
+			 * If cheapest partial path doesn't need a sort, this is redundant
+			 * with what's already been tried.
+			 */
+			if (!pathkeys_contained_in(root->setop_pathkeys,
+									   cheapest_partial_path->pathkeys))
+			{
+				Path	   *path;
+				double		total_groups;
+
+				path = (Path *) create_sort_path(root,
+												 final_rel,
+												 cheapest_partial_path,
+												 root->setop_pathkeys,
+												 limit_tuples);
+
+				total_groups = cheapest_partial_path->rows *
+					cheapest_partial_path->parallel_workers;
+				path = (Path *) create_gather_merge_path(root,
+														 final_rel,
+														 path,
+														 path->pathtarget,
+														 root->setop_pathkeys,
+														 NULL,
+														 &total_groups);
+
+				add_path(final_rel, path);
+			}
+
+			/*
+			 * Consider incremental sort with a gather merge on partial paths.
+			 *
+			 * We can also skip the entire loop when we only have a single
+			 * pathkey in setop_pathkeys because we can't have partially
+			 * sorted paths when there's just a single pathkey to sort by.
+			 */
+			if (enable_incremental_sort &&
+				list_length(root->setop_pathkeys) > 1)
+			{
+				foreach(lc, current_rel->partial_pathlist)
+				{
+					Path	   *input_path = (Path *) lfirst(lc);
+					Path	   *sorted_path;
+					bool		is_sorted;
+					int			presorted_keys;
+					double		total_groups;
+
+					/*
+					 * We don't care if this is the cheapest partial path - we
+					 * can't simply skip it, because it may be partially
+					 * sorted in which case we want to consider adding
+					 * incremental sort (instead of full sort, which is what
+					 * happens above).
+					 */
+
+					is_sorted =
+						pathkeys_count_contained_in(root->setop_pathkeys,
+													input_path->pathkeys,
+													&presorted_keys);
+
+					/*
+					 * No point in adding incremental sort on fully sorted
+					 * paths.
+					 */
+					if (is_sorted)
+						continue;
+
+					if (presorted_keys == 0)
+						continue;
+
+					/*
+					 * Since we have presorted keys, consider incremental
+					 * sort.
+					 */
+					sorted_path = (Path *)
+						create_incremental_sort_path(root,
+													 final_rel,
+													 input_path,
+													 root->setop_pathkeys,
+													 presorted_keys,
+													 limit_tuples);
+					total_groups =
+						input_path->rows * input_path->parallel_workers;
+					sorted_path = (Path *)
+						create_gather_merge_path(root,
+												 final_rel,
+												 sorted_path,
+												 sorted_path->pathtarget,
+												 root->setop_pathkeys,
+												 NULL,
+												 &total_groups);
+
+					add_path(final_rel, sorted_path);
+				}
+			}
+
 		}
 	}
 
@@ -2007,6 +2038,187 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 									current_rel, final_rel, &extra);
 
 	/* Note: currently, we leave it to callers to do set_cheapest() */
+}
+
+static Path *
+build_final_modify_table_path(PlannerInfo *root, RelOptInfo *final_rel,
+							  Path *path)
+{
+	Query	   *parse = root->parse;
+	Index		rootRelation;
+	List	   *resultRelations = NIL;
+	List	   *updateColnosLists = NIL;
+	List	   *withCheckOptionLists = NIL;
+	List	   *returningLists = NIL;
+	List	   *mergeActionLists = NIL;
+	List	   *rowMarks;
+
+	if (bms_membership(root->all_result_relids) == BMS_MULTIPLE)
+	{
+		/* Inherited UPDATE/DELETE/MERGE */
+		RelOptInfo *top_result_rel = find_base_rel(root,
+												   parse->resultRelation);
+		int			resultRelation = -1;
+
+		/* Pass the root result rel forward to the executor. */
+		rootRelation = parse->resultRelation;
+
+		/* Add only leaf children to ModifyTable. */
+		while ((resultRelation = bms_next_member(root->leaf_result_relids,
+												 resultRelation)) >= 0)
+		{
+			RelOptInfo *this_result_rel = find_base_rel(root, resultRelation);
+
+			/*
+			 * Also exclude any leaf rels that have turned dummy since being
+			 * added to the list, for example, by being excluded by constraint
+			 * exclusion.
+			 */
+			if (IS_DUMMY_REL(this_result_rel))
+				continue;
+
+			/* Build per-target-rel lists needed by ModifyTable */
+			resultRelations = lappend_int(resultRelations, resultRelation);
+			if (parse->commandType == CMD_UPDATE)
+			{
+				List	   *update_colnos = root->update_colnos;
+
+				if (this_result_rel != top_result_rel)
+					update_colnos =
+						adjust_inherited_attnums_multilevel(root,
+															update_colnos,
+															this_result_rel->relid,
+															top_result_rel->relid);
+				updateColnosLists = lappend(updateColnosLists, update_colnos);
+			}
+			if (parse->withCheckOptions)
+			{
+				List	   *withCheckOptions = parse->withCheckOptions;
+
+				if (this_result_rel != top_result_rel)
+					withCheckOptions = (List *)
+						adjust_appendrel_attrs_multilevel(root,
+														  (Node *) withCheckOptions,
+														  this_result_rel,
+														  top_result_rel);
+				withCheckOptionLists = lappend(withCheckOptionLists,
+											   withCheckOptions);
+			}
+			if (parse->returningList)
+			{
+				List	   *returningList = parse->returningList;
+
+				if (this_result_rel != top_result_rel)
+					returningList = (List *)
+						adjust_appendrel_attrs_multilevel(root,
+														  (Node *) returningList,
+														  this_result_rel,
+														  top_result_rel);
+				returningLists = lappend(returningLists, returningList);
+			}
+			if (parse->mergeActionList)
+			{
+				ListCell   *l;
+				List	   *mergeActionList = NIL;
+
+				/*
+				 * Copy MergeActions and translate stuff that references
+				 * attribute numbers.
+				 */
+				foreach(l, parse->mergeActionList)
+				{
+					MergeAction *action = lfirst(l),
+							   *leaf_action = copyObject(action);
+
+					leaf_action->qual =
+						adjust_appendrel_attrs_multilevel(root,
+														  (Node *) action->qual,
+														  this_result_rel,
+														  top_result_rel);
+					leaf_action->targetList = (List *)
+						adjust_appendrel_attrs_multilevel(root,
+														  (Node *) action->targetList,
+														  this_result_rel,
+														  top_result_rel);
+					if (leaf_action->commandType == CMD_UPDATE)
+						leaf_action->updateColnos =
+							adjust_inherited_attnums_multilevel(root,
+																action->updateColnos,
+																this_result_rel->relid,
+																top_result_rel->relid);
+					mergeActionList = lappend(mergeActionList, leaf_action);
+				}
+
+				mergeActionLists = lappend(mergeActionLists, mergeActionList);
+			}
+		}
+
+		if (resultRelations == NIL)
+		{
+			/*
+			 * We managed to exclude every child rel, so generate a dummy
+			 * one-relation plan using info for the top target rel (even
+			 * though that may not be a leaf target). Although it's clear that
+			 * no data will be updated or deleted, we still need to have a
+			 * ModifyTable node so that any statement triggers will be
+			 * executed.  (This could be cleaner if we fixed nodeModifyTable.c
+			 * to allow zero target relations, but that probably wouldn't be a
+			 * net win.)
+			 */
+			resultRelations = list_make1_int(parse->resultRelation);
+			if (parse->commandType == CMD_UPDATE)
+				updateColnosLists = list_make1(root->update_colnos);
+			if (parse->withCheckOptions)
+				withCheckOptionLists = list_make1(parse->withCheckOptions);
+			if (parse->returningList)
+				returningLists = list_make1(parse->returningList);
+			if (parse->mergeActionList)
+				mergeActionLists = list_make1(parse->mergeActionList);
+		}
+	}
+	else
+	{
+		/* Single-relation INSERT/UPDATE/DELETE/MERGE. */
+		rootRelation = 0;		/* there's no separate root rel */
+		resultRelations = list_make1_int(parse->resultRelation);
+		if (parse->commandType == CMD_UPDATE)
+			updateColnosLists = list_make1(root->update_colnos);
+		if (parse->withCheckOptions)
+			withCheckOptionLists = list_make1(parse->withCheckOptions);
+		if (parse->returningList)
+			returningLists = list_make1(parse->returningList);
+		if (parse->mergeActionList)
+			mergeActionLists = list_make1(parse->mergeActionList);
+	}
+
+	/*
+	 * If there was a FOR [KEY] UPDATE/SHARE clause, the LockRows node will
+	 * have dealt with fetching non-locked marked rows, else we need to have
+	 * ModifyTable do that.
+	 */
+	if (parse->rowMarks)
+		rowMarks = NIL;
+	else
+		rowMarks = root->rowMarks;
+
+	path = (Path *) create_modifytable_path(root,
+											final_rel,
+											path,
+											parse->commandType,
+											parse->canSetTag,
+											parse->resultRelation,
+											rootRelation,
+											root->partColsUpdated,
+											resultRelations,
+											updateColnosLists,
+											withCheckOptionLists,
+											returningLists,
+											rowMarks,
+											parse->onConflict,
+											mergeActionLists,
+											assign_special_exec_param(root));
+
+	return path;
 }
 
 /*
@@ -3437,6 +3649,38 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 									  parse->sortClause,
 									  tlist);
 
+	/* setting setop_pathkeys might be useful to the union planner */
+	if (qp_extra->setop != NULL &&
+		set_operation_ordered_results_useful(qp_extra->setop))
+	{
+		List	   *groupClauses;
+		ListCell   *lc;
+		bool		sortable;
+
+		foreach(lc, root->processed_tlist)
+		{
+			TargetEntry *tle = lfirst_node(TargetEntry, lc);
+
+			if (tle->resjunk)
+				continue;
+
+			tle->ressortgroupref = tle->resno;
+		}
+
+		groupClauses = generate_setop_grouplist(qp_extra->setop, tlist);
+
+		root->setop_pathkeys =
+			make_pathkeys_for_sortclauses_extended(root,
+												   &groupClauses,
+												   tlist,
+												   false,
+												   &sortable);
+		if (!sortable)
+			root->setop_pathkeys = NIL;
+	}
+	else
+		root->setop_pathkeys = NIL;
+
 	/*
 	 * Figure out whether we want a sorted result from query_planner.
 	 *
@@ -3446,7 +3690,9 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 	 * sortable DISTINCT clause that's more rigorous than the ORDER BY clause,
 	 * we try to produce output that's sufficiently well sorted for the
 	 * DISTINCT.  Otherwise, if there is an ORDER BY clause, we want to sort
-	 * by the ORDER BY clause.
+	 * by the ORDER BY clause.  Otherwise, if we're a subquery being planned
+	 * for a set operation with a sortable targetlist, we want to sort by the
+	 * target list.
 	 *
 	 * Note: if we have both ORDER BY and GROUP BY, and ORDER BY is a superset
 	 * of GROUP BY, it would be tempting to request sort by ORDER BY --- but
@@ -3464,6 +3710,8 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 		root->query_pathkeys = root->distinct_pathkeys;
 	else if (root->sort_pathkeys)
 		root->query_pathkeys = root->sort_pathkeys;
+	else if (root->setop_pathkeys != NIL)
+		root->query_pathkeys = root->setop_pathkeys;
 	else
 		root->query_pathkeys = NIL;
 }
@@ -5224,11 +5472,8 @@ create_ordered_paths(PlannerInfo *root,
 		(*create_upper_paths_hook) (root, UPPERREL_ORDERED,
 									input_rel, ordered_rel, NULL);
 
-	/*
-	 * No need to bother with set_cheapest here; grouping_planner does not
-	 * need us to do it.
-	 */
-	Assert(ordered_rel->pathlist != NIL);
+	/* Now choose the best path(s) */
+	set_cheapest(ordered_rel);
 
 	return ordered_rel;
 }

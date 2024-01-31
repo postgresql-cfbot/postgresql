@@ -986,6 +986,71 @@ build_partition_pathkeys(PlannerInfo *root, RelOptInfo *partrel,
 }
 
 /*
+ * build_setop_pathkeys
+ *	  Build and return a list of PathKeys, one for each non-junk target in
+ *	  'tlist'.
+ */
+List *
+build_setop_pathkeys(PlannerInfo *root, SetOperationStmt *op,
+					 Relids relids, List *tlist)
+{
+	ListCell   *lc;
+	ListCell   *sgccell = list_head(op->groupClauses);
+	List	   *retval = NIL;
+
+	foreach(lc, tlist)
+	{
+		TargetEntry *tle = lfirst_node(TargetEntry, lc);
+		SortGroupClause *sgc;
+
+		Oid			opfamily;
+		Oid			opcintype;
+		int16		strategy;
+		PathKey    *cpathkey;
+
+		if (tle->resjunk)
+			continue;
+
+		/*
+		 * XXX query_is_distinct_for() is happy to Assert this, should this do
+		 * that rather than ERROR?
+		 */
+		if (sgccell == NULL)
+			elog(ERROR, "too few group clauses");
+
+		sgc = lfirst_node(SortGroupClause, sgccell);
+
+		/* Find the operator in pg_amop --- failure shouldn't happen */
+		if (!get_ordering_op_properties(sgc->sortop,
+										&opfamily, &opcintype, &strategy))
+			elog(ERROR, "operator %u is not a valid ordering operator",
+				 sgc->eqop);
+
+		cpathkey = make_pathkey_from_sortinfo(root,
+											  tle->expr,
+											  opfamily,
+											  opcintype,
+											  exprCollation((Node *) tle->expr),
+											  false,
+											  sgc->nulls_first,
+											  0,
+											  relids,
+											  true);
+		retval = lappend(retval, cpathkey);
+		sgccell = lnext(op->groupClauses, sgccell);
+
+		/*
+		 * There's no need to look for redundant pathkeys as set operations
+		 * have no ability to have non-child constants in an EquivalenceClass.
+		 * Let's just make sure that remains true.
+		 */
+		Assert(!EC_MUST_BE_REDUNDANT(cpathkey->pk_eclass));
+	}
+
+	return retval;
+}
+
+/*
  * build_expression_pathkey
  *	  Build a pathkeys list that describes an ordering by a single expression
  *	  using the given sort operator.

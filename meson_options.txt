@@ -27,6 +27,8 @@ option('krb_srvnam', type: 'string', value: 'postgres',
 option('system_tzdata', type: 'string', value: '',
   description: 'Use system time zone data in specified directory')
 
+option('doxygen_graphs', type: 'boolean', value: false,
+   description: 'Include graphs in "ninja doxygen" output. Generating graphs can be very slow.')
 
 # Defaults
 

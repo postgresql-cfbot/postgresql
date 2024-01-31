@@ -33,6 +33,10 @@
   Additionally, a number of plain-text <filename>README</filename> files can
   be found throughout the <productname>PostgreSQL</productname> source tree,
   documenting various implementation issues.
+  Doxygen output describing <productname>PostgreSQL</productname> functions
+  and data types can be found at <ulink url="https://doxygen.postgresql.org"></ulink>.
+  If desired, Doxygen output can be  generated locally with the
+  <command>ninja doxygen</command> command.
  </para>
 
  <para>

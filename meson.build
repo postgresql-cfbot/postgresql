@@ -2902,6 +2902,7 @@ subdir('src/interfaces/libpq/test')
 subdir('src/interfaces/ecpg/test')
 
 subdir('doc/src/sgml')
+subdir('doc/doxygen')
 
 generated_sources_ac += {'': ['GNUmakefile']}
 

@@ -1,0 +1,71 @@
+################################################################################
+#
+# This file holds Doxygen settings used for creating PostgreSQL Documentation.
+# It only shows non-default values.
+# For a list of config values and what they mean, see the
+# complete Doxyfile shipped with Doxygen.
+#
+# Values surrounded by "@" are filled in by Meson config.
+#
+# Creating DOT graphs is very slow, so graphs are disabled by default.
+# If you want to enable then, configure the build with
+#    meson configure -Ddoxygen_graphs=true
+#
+#################################################################################
+
+# Postgres project info
+PROJECT_NAME           = PostgreSQL
+PROJECT_NUMBER         = @PROJECT_NUMBER@
+PROJECT_BRIEF          = "The world's most advanced open source database"
+PROJECT_LOGO           =
+
+# Where the output files go.
+OUTPUT_DIRECTORY       = @OUTPUT_DIRECTORY@
+CREATE_SUBDIRS         = YES
+STRIP_FROM_PATH        = @STRIP_FROM_PATH@
+
+# Output file format.
+GENERATE_LATEX         = NO
+GENERATE_HTML          = YES
+GENERATE_TREEVIEW      = YES
+FULL_SIDEBAR           = YES
+
+# What the output contains.
+JAVADOC_AUTOBRIEF      = YES
+JAVADOC_BANNER         = YES
+OPTIMIZE_OUTPUT_FOR_C  = YES
+DISTRIBUTE_GROUP_DOC   = YES
+INLINE_SIMPLE_STRUCTS  = YES
+TYPEDEF_HIDES_STRUCT   = YES
+SHOW_INCLUDE_FILES     = NO
+SOURCE_BROWSER         = YES
+STRIP_CODE_COMMENTS    = NO
+
+# Performance
+LOOKUP_CACHE_SIZE      = 3
+NUM_PROC_THREADS       = 0
+
+# Which files to process.
+INPUT                  = @INPUT@
+RECURSIVE              = YES
+EXCLUDE_PATTERNS       = ppport.h c.h postgres.h */test/*
+EXCLUDE_SYMBOLS        = __atribute__
+INPUT_FILTER           = @INPUT_FILTER@
+FILTER_PATTERNS        = *.c *.h
+CLANG_ASSISTED_PARSING = YES
+
+# Grephs.
+HAVE_DOT               = @GRAPHS@
+CLASS_GRAPH            = @GRAPHS@
+COLLABORATION_GRAPH    = @GRAPHS@
+GROUP_GRAPHS           = @GRAPHS@
+DOT_UML_DETAILS        = YES
+INCLUDE_GRAPH          = @GRAPHS@
+INCLUDED_BY_GRAPH      = @GRAPHS@
+CALL_GRAPH             = @GRAPHS@
+CALLER_GRAPH           = @GRAPHS@
+GRAPHICAL_HIERARCHY    = @GRAPHS@
+DIRECTORY_GRAPH        = @GRAPHS@
+DOT_IMAGE_FORMAT       = svg
+INTERACTIVE_SVG        = YES
+DOT_MULTI_TARGETS      = YES

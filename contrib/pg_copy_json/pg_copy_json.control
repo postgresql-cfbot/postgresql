@@ -1,0 +1,5 @@
+# pg_copy_json extension
+comment = 'COPY TO JSON format'
+default_version = '1.0'
+module_pathname = '$libdir/pg_copy_json'
+relocatable = true

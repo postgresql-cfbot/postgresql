@@ -165,14 +165,13 @@ static int	CopyGetData(CopyFromState cstate, void *databuf,
 static inline bool CopyGetInt32(CopyFromState cstate, int32 *val);
 static inline bool CopyGetInt16(CopyFromState cstate, int16 *val);
 static void CopyLoadInputBuf(CopyFromState cstate);
-static int	CopyReadBinaryData(CopyFromState cstate, char *dest, int nbytes);
 
 void
 ReceiveCopyBegin(CopyFromState cstate)
 {
 	StringInfoData buf;
 	int			natts = list_length(cstate->attnumlist);
-	int16		format = (cstate->opts.binary ? 1 : 0);
+	int16		format = cstate->opts.from_routine->CopyFromGetFormat(cstate);
 	int			i;
 
 	pq_beginmessage(&buf, PqMsg_CopyInResponse);
@@ -181,7 +180,7 @@ ReceiveCopyBegin(CopyFromState cstate)
 	for (i = 0; i < natts; i++)
 		pq_sendint16(&buf, format); /* per-column formats */
 	pq_endmessage(&buf);
-	cstate->copy_src = COPY_FRONTEND;
+	cstate->copy_src = COPY_SOURCE_FRONTEND;
 	cstate->fe_msgbuf = makeStringInfo();
 	/* We *must* flush here to ensure FE knows it can send. */
 	pq_flush();
@@ -194,7 +193,7 @@ ReceiveCopyBinaryHeader(CopyFromState cstate)
 	int32		tmp;
 
 	/* Signature */
-	if (CopyReadBinaryData(cstate, readSig, 11) != 11 ||
+	if (CopyFromStateRead(cstate, readSig, 11) != 11 ||
 		memcmp(readSig, BinarySignature, 11) != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
@@ -222,7 +221,7 @@ ReceiveCopyBinaryHeader(CopyFromState cstate)
 	/* Skip extension header, if present */
 	while (tmp-- > 0)
 	{
-		if (CopyReadBinaryData(cstate, readSig, 1) != 1)
+		if (CopyFromStateRead(cstate, readSig, 1) != 1)
 			ereport(ERROR,
 					(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
 					 errmsg("invalid COPY file header (wrong length)")));
@@ -249,7 +248,7 @@ CopyGetData(CopyFromState cstate, void *databuf, int minread, int maxread)
 
 	switch (cstate->copy_src)
 	{
-		case COPY_FILE:
+		case COPY_SOURCE_FILE:
 			bytesread = fread(databuf, 1, maxread, cstate->copy_file);
 			if (ferror(cstate->copy_file))
 				ereport(ERROR,
@@ -258,7 +257,7 @@ CopyGetData(CopyFromState cstate, void *databuf, int minread, int maxread)
 			if (bytesread == 0)
 				cstate->raw_reached_eof = true;
 			break;
-		case COPY_FRONTEND:
+		case COPY_SOURCE_FRONTEND:
 			while (maxread > 0 && bytesread < minread && !cstate->raw_reached_eof)
 			{
 				int			avail;
@@ -341,7 +340,7 @@ CopyGetData(CopyFromState cstate, void *databuf, int minread, int maxread)
 				bytesread += avail;
 			}
 			break;
-		case COPY_CALLBACK:
+		case COPY_SOURCE_CALLBACK:
 			bytesread = cstate->data_source_cb(databuf, minread, maxread);
 			break;
 	}
@@ -364,7 +363,7 @@ CopyGetInt32(CopyFromState cstate, int32 *val)
 {
 	uint32		buf;
 
-	if (CopyReadBinaryData(cstate, (char *) &buf, sizeof(buf)) != sizeof(buf))
+	if (CopyFromStateRead(cstate, (char *) &buf, sizeof(buf)) != sizeof(buf))
 	{
 		*val = 0;				/* suppress compiler warning */
 		return false;
@@ -381,7 +380,7 @@ CopyGetInt16(CopyFromState cstate, int16 *val)
 {
 	uint16		buf;
 
-	if (CopyReadBinaryData(cstate, (char *) &buf, sizeof(buf)) != sizeof(buf))
+	if (CopyFromStateRead(cstate, (char *) &buf, sizeof(buf)) != sizeof(buf))
 	{
 		*val = 0;				/* suppress compiler warning */
 		return false;
@@ -692,14 +691,14 @@ CopyLoadInputBuf(CopyFromState cstate)
 }
 
 /*
- * CopyReadBinaryData
+ * CopyFromStateRead
  *
  * Reads up to 'nbytes' bytes from cstate->copy_file via cstate->raw_buf
  * and writes them to 'dest'.  Returns the number of bytes read (which
  * would be less than 'nbytes' only if we reach EOF).
  */
-static int
-CopyReadBinaryData(CopyFromState cstate, char *dest, int nbytes)
+int
+CopyFromStateRead(CopyFromState cstate, char *dest, int nbytes)
 {
 	int			copied_bytes = 0;
 
@@ -840,6 +839,185 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
 	return true;
 }
 
+bool
+CopyFromTextOneRow(CopyFromState cstate, ExprContext *econtext, Datum *values, bool *nulls)
+{
+	TupleDesc	tupDesc;
+	AttrNumber	attr_count;
+	FmgrInfo   *in_functions = cstate->in_functions;
+	Oid		   *typioparams = cstate->typioparams;
+	ExprState **defexprs = cstate->defexprs;
+	char	  **field_strings;
+	ListCell   *cur;
+	int			fldct;
+	int			fieldno;
+	char	   *string;
+
+	tupDesc = RelationGetDescr(cstate->rel);
+	attr_count = list_length(cstate->attnumlist);
+
+	/* read raw fields in the next line */
+	if (!NextCopyFromRawFields(cstate, &field_strings, &fldct))
+		return false;
+
+	/* check for overflowing fields */
+	if (attr_count > 0 && fldct > attr_count)
+		ereport(ERROR,
+				(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+				 errmsg("extra data after last expected column")));
+
+	fieldno = 0;
+
+	/* Loop to read the user attributes on the line. */
+	foreach(cur, cstate->attnumlist)
+	{
+		int			attnum = lfirst_int(cur);
+		int			m = attnum - 1;
+		Form_pg_attribute att = TupleDescAttr(tupDesc, m);
+
+		if (fieldno >= fldct)
+			ereport(ERROR,
+					(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+					 errmsg("missing data for column \"%s\"",
+							NameStr(att->attname))));
+		string = field_strings[fieldno++];
+
+		if (cstate->convert_select_flags &&
+			!cstate->convert_select_flags[m])
+		{
+			/* ignore input field, leaving column as NULL */
+			continue;
+		}
+
+		if (cstate->opts.csv_mode)
+		{
+			if (string == NULL &&
+				cstate->opts.force_notnull_flags[m])
+			{
+				/*
+				 * FORCE_NOT_NULL option is set and column is NULL - convert
+				 * it to the NULL string.
+				 */
+				string = cstate->opts.null_print;
+			}
+			else if (string != NULL && cstate->opts.force_null_flags[m]
+					 && strcmp(string, cstate->opts.null_print) == 0)
+			{
+				/*
+				 * FORCE_NULL option is set and column matches the NULL
+				 * string. It must have been quoted, or otherwise the string
+				 * would already have been set to NULL. Convert it to NULL as
+				 * specified.
+				 */
+				string = NULL;
+			}
+		}
+
+		cstate->cur_attname = NameStr(att->attname);
+		cstate->cur_attval = string;
+
+		if (string != NULL)
+			nulls[m] = false;
+
+		if (cstate->defaults[m])
+		{
+			/*
+			 * The caller must supply econtext and have switched into the
+			 * per-tuple memory context in it.
+			 */
+			Assert(econtext != NULL);
+			Assert(CurrentMemoryContext == econtext->ecxt_per_tuple_memory);
+
+			values[m] = ExecEvalExpr(defexprs[m], econtext, &nulls[m]);
+		}
+
+		/*
+		 * If ON_ERROR is specified with IGNORE, skip rows with soft errors
+		 */
+		else if (!InputFunctionCallSafe(&in_functions[m],
+										string,
+										typioparams[m],
+										att->atttypmod,
+										(Node *) cstate->escontext,
+										&values[m]))
+		{
+			cstate->num_errors++;
+			return true;
+		}
+
+		cstate->cur_attname = NULL;
+		cstate->cur_attval = NULL;
+	}
+
+	Assert(fieldno == attr_count);
+
+	return true;
+}
+
+bool
+CopyFromBinaryOneRow(CopyFromState cstate, ExprContext *econtext, Datum *values, bool *nulls)
+{
+	TupleDesc	tupDesc;
+	AttrNumber	attr_count;
+	FmgrInfo   *in_functions = cstate->in_functions;
+	Oid		   *typioparams = cstate->typioparams;
+	int16		fld_count;
+	ListCell   *cur;
+
+	tupDesc = RelationGetDescr(cstate->rel);
+	attr_count = list_length(cstate->attnumlist);
+
+	cstate->cur_lineno++;
+
+	if (!CopyGetInt16(cstate, &fld_count))
+	{
+		/* EOF detected (end of file, or protocol-level EOF) */
+		return false;
+	}
+
+	if (fld_count == -1)
+	{
+		/*
+		 * Received EOF marker.  Wait for the protocol-level EOF, and complain
+		 * if it doesn't come immediately.  In COPY FROM STDIN, this ensures
+		 * that we correctly handle CopyFail, if client chooses to send that
+		 * now.  When copying from file, we could ignore the rest of the file
+		 * like in text mode, but we choose to be consistent with the COPY
+		 * FROM STDIN case.
+		 */
+		char		dummy;
+
+		if (CopyFromStateRead(cstate, &dummy, 1) > 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+					 errmsg("received copy data after EOF marker")));
+		return false;
+	}
+
+	if (fld_count != attr_count)
+		ereport(ERROR,
+				(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+				 errmsg("row field count is %d, expected %d",
+						(int) fld_count, attr_count)));
+
+	foreach(cur, cstate->attnumlist)
+	{
+		int			attnum = lfirst_int(cur);
+		int			m = attnum - 1;
+		Form_pg_attribute att = TupleDescAttr(tupDesc, m);
+
+		cstate->cur_attname = NameStr(att->attname);
+		values[m] = CopyReadBinaryAttribute(cstate,
+											&in_functions[m],
+											typioparams[m],
+											att->atttypmod,
+											&nulls[m]);
+		cstate->cur_attname = NULL;
+	}
+
+	return true;
+}
+
 /*
  * Read next tuple from file for COPY FROM. Return false if no more tuples.
  *
@@ -857,181 +1035,22 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 {
 	TupleDesc	tupDesc;
 	AttrNumber	num_phys_attrs,
-				attr_count,
 				num_defaults = cstate->num_defaults;
-	FmgrInfo   *in_functions = cstate->in_functions;
-	Oid		   *typioparams = cstate->typioparams;
 	int			i;
 	int		   *defmap = cstate->defmap;
 	ExprState **defexprs = cstate->defexprs;
 
 	tupDesc = RelationGetDescr(cstate->rel);
 	num_phys_attrs = tupDesc->natts;
-	attr_count = list_length(cstate->attnumlist);
 
 	/* Initialize all values for row to NULL */
 	MemSet(values, 0, num_phys_attrs * sizeof(Datum));
 	MemSet(nulls, true, num_phys_attrs * sizeof(bool));
 	MemSet(cstate->defaults, false, num_phys_attrs * sizeof(bool));
 
-	if (!cstate->opts.binary)
-	{
-		char	  **field_strings;
-		ListCell   *cur;
-		int			fldct;
-		int			fieldno;
-		char	   *string;
-
-		/* read raw fields in the next line */
-		if (!NextCopyFromRawFields(cstate, &field_strings, &fldct))
-			return false;
-
-		/* check for overflowing fields */
-		if (attr_count > 0 && fldct > attr_count)
-			ereport(ERROR,
-					(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-					 errmsg("extra data after last expected column")));
-
-		fieldno = 0;
-
-		/* Loop to read the user attributes on the line. */
-		foreach(cur, cstate->attnumlist)
-		{
-			int			attnum = lfirst_int(cur);
-			int			m = attnum - 1;
-			Form_pg_attribute att = TupleDescAttr(tupDesc, m);
-
-			if (fieldno >= fldct)
-				ereport(ERROR,
-						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-						 errmsg("missing data for column \"%s\"",
-								NameStr(att->attname))));
-			string = field_strings[fieldno++];
-
-			if (cstate->convert_select_flags &&
-				!cstate->convert_select_flags[m])
-			{
-				/* ignore input field, leaving column as NULL */
-				continue;
-			}
-
-			if (cstate->opts.csv_mode)
-			{
-				if (string == NULL &&
-					cstate->opts.force_notnull_flags[m])
-				{
-					/*
-					 * FORCE_NOT_NULL option is set and column is NULL -
-					 * convert it to the NULL string.
-					 */
-					string = cstate->opts.null_print;
-				}
-				else if (string != NULL && cstate->opts.force_null_flags[m]
-						 && strcmp(string, cstate->opts.null_print) == 0)
-				{
-					/*
-					 * FORCE_NULL option is set and column matches the NULL
-					 * string. It must have been quoted, or otherwise the
-					 * string would already have been set to NULL. Convert it
-					 * to NULL as specified.
-					 */
-					string = NULL;
-				}
-			}
-
-			cstate->cur_attname = NameStr(att->attname);
-			cstate->cur_attval = string;
-
-			if (string != NULL)
-				nulls[m] = false;
-
-			if (cstate->defaults[m])
-			{
-				/*
-				 * The caller must supply econtext and have switched into the
-				 * per-tuple memory context in it.
-				 */
-				Assert(econtext != NULL);
-				Assert(CurrentMemoryContext == econtext->ecxt_per_tuple_memory);
-
-				values[m] = ExecEvalExpr(defexprs[m], econtext, &nulls[m]);
-			}
-
-			/*
-			 * If ON_ERROR is specified with IGNORE, skip rows with soft
-			 * errors
-			 */
-			else if (!InputFunctionCallSafe(&in_functions[m],
-											string,
-											typioparams[m],
-											att->atttypmod,
-											(Node *) cstate->escontext,
-											&values[m]))
-			{
-				cstate->num_errors++;
-				return true;
-			}
-
-			cstate->cur_attname = NULL;
-			cstate->cur_attval = NULL;
-		}
-
-		Assert(fieldno == attr_count);
-	}
-	else
-	{
-		/* binary */
-		int16		fld_count;
-		ListCell   *cur;
-
-		cstate->cur_lineno++;
-
-		if (!CopyGetInt16(cstate, &fld_count))
-		{
-			/* EOF detected (end of file, or protocol-level EOF) */
-			return false;
-		}
-
-		if (fld_count == -1)
-		{
-			/*
-			 * Received EOF marker.  Wait for the protocol-level EOF, and
-			 * complain if it doesn't come immediately.  In COPY FROM STDIN,
-			 * this ensures that we correctly handle CopyFail, if client
-			 * chooses to send that now.  When copying from file, we could
-			 * ignore the rest of the file like in text mode, but we choose to
-			 * be consistent with the COPY FROM STDIN case.
-			 */
-			char		dummy;
-
-			if (CopyReadBinaryData(cstate, &dummy, 1) > 0)
-				ereport(ERROR,
-						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-						 errmsg("received copy data after EOF marker")));
-			return false;
-		}
-
-		if (fld_count != attr_count)
-			ereport(ERROR,
-					(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-					 errmsg("row field count is %d, expected %d",
-							(int) fld_count, attr_count)));
-
-		foreach(cur, cstate->attnumlist)
-		{
-			int			attnum = lfirst_int(cur);
-			int			m = attnum - 1;
-			Form_pg_attribute att = TupleDescAttr(tupDesc, m);
-
-			cstate->cur_attname = NameStr(att->attname);
-			values[m] = CopyReadBinaryAttribute(cstate,
-												&in_functions[m],
-												typioparams[m],
-												att->atttypmod,
-												&nulls[m]);
-			cstate->cur_attname = NULL;
-		}
-	}
+	if (!cstate->opts.from_routine->CopyFromOneRow(cstate, econtext, values,
+												   nulls))
+		return false;
 
 	/*
 	 * Now compute and insert any defaults available for the columns not
@@ -1079,7 +1098,7 @@ CopyReadLine(CopyFromState cstate)
 		 * after \. up to the protocol end of copy data.  (XXX maybe better
 		 * not to treat \. as special?)
 		 */
-		if (cstate->copy_src == COPY_FRONTEND)
+		if (cstate->copy_src == COPY_SOURCE_FRONTEND)
 		{
 			int			inbytes;
 
@@ -1977,8 +1996,8 @@ CopyReadBinaryAttribute(CopyFromState cstate, FmgrInfo *flinfo,
 	resetStringInfo(&cstate->attribute_buf);
 
 	enlargeStringInfo(&cstate->attribute_buf, fld_size);
-	if (CopyReadBinaryData(cstate, cstate->attribute_buf.data,
-						   fld_size) != fld_size)
+	if (CopyFromStateRead(cstate, cstate->attribute_buf.data,
+						  fld_size) != fld_size)
 		ereport(ERROR,
 				(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
 				 errmsg("unexpected EOF in COPY data")));

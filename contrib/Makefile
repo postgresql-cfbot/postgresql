@@ -32,6 +32,7 @@ SUBDIRS = \
 		pageinspect	\
 		passwordcheck	\
 		pg_buffercache	\
+		pg_copy_json	\
 		pg_freespacemap \
 		pg_prewarm	\
 		pg_stat_statements \

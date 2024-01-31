@@ -32,6 +32,7 @@
 #include "parser/parse_coerce.h"
 #include "parser/parse_collate.h"
 #include "parser/parse_expr.h"
+#include "parser/parse_func.h"
 #include "parser/parse_relation.h"
 #include "rewrite/rewriteHandler.h"
 #include "utils/acl.h"
@@ -431,6 +432,90 @@ defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
 }
 
 /*
+ * Process the "format" option.
+ *
+ * This function checks whether the option value is a built-in format such as
+ * "text" and "csv" or not. If the option value isn't a built-in format, this
+ * function finds a COPY format handler that returns a CopyToRoutine. If no
+ * COPY format handler is found, this function reports an error.
+ */
+static void
+ProcessCopyOptionCustomFormat(ParseState *pstate,
+							  CopyFormatOptions *opts_out,
+							  bool is_from,
+							  DefElem *defel)
+{
+	char	   *format;
+	Oid			funcargtypes[1];
+	Oid			handlerOid = InvalidOid;
+	Datum		datum;
+	void	   *routine;
+
+	format = defGetString(defel);
+
+	/* built-in formats */
+	if (strcmp(format, "text") == 0)
+		 /* default format */ return;
+	else if (strcmp(format, "csv") == 0)
+	{
+		opts_out->csv_mode = true;
+		opts_out->from_routine = &CopyFromRoutineCSV;
+		opts_out->to_routine = &CopyToRoutineCSV;
+		return;
+	}
+	else if (strcmp(format, "binary") == 0)
+	{
+		opts_out->binary = true;
+		opts_out->from_routine = &CopyFromRoutineBinary;
+		opts_out->to_routine = &CopyToRoutineBinary;
+		return;
+	}
+
+	/* custom format */
+	funcargtypes[0] = INTERNALOID;
+	handlerOid = LookupFuncName(list_make1(makeString(format)), 1,
+								funcargtypes, true);
+	if (!OidIsValid(handlerOid))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("COPY format \"%s\" not recognized", format),
+				 parser_errposition(pstate, defel->location)));
+
+	datum = OidFunctionCall1(handlerOid, BoolGetDatum(is_from));
+	routine = DatumGetPointer(datum);
+	if (is_from)
+	{
+		if (routine == NULL || !IsA(routine, CopyFromRoutine))
+			ereport(
+					ERROR,
+					(errcode(
+							 ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("COPY handler function "
+							"%s(%u) did not return a "
+							"CopyFromRoutine struct",
+							format, handlerOid),
+					 parser_errposition(
+										pstate, defel->location)));
+		opts_out->from_routine = routine;
+	}
+	else
+	{
+		if (routine == NULL || !IsA(routine, CopyToRoutine))
+			ereport(
+					ERROR,
+					(errcode(
+							 ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("COPY handler function "
+							"%s(%u) did not return a "
+							"CopyToRoutine struct",
+							format, handlerOid),
+					 parser_errposition(
+										pstate, defel->location)));
+		opts_out->to_routine = routine;
+	}
+}
+
+/*
  * Process the statement option list for COPY.
  *
  * Scan the options list (a list of DefElem) and transpose the information
@@ -442,6 +527,9 @@ defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
  * a list of options.  In that usage, 'opts_out' can be passed as NULL and
  * the collected data is just leaked until CurrentMemoryContext is reset.
  *
+ * 'cstate' is CopyToState* for !is_from, CopyFromState* for is_from. 'cstate'
+ * may be NULL. For example, file_fdw uses NULL.
+ *
  * Note that additional checking, such as whether column names listed in FORCE
  * QUOTE actually exist, has to be applied later.  This just checks for
  * self-consistency of the options list.
@@ -450,6 +538,7 @@ void
 ProcessCopyOptions(ParseState *pstate,
 				   CopyFormatOptions *opts_out,
 				   bool is_from,
+				   void *cstate,
 				   List *options)
 {
 	bool		format_specified = false;
@@ -464,30 +553,33 @@ ProcessCopyOptions(ParseState *pstate,
 
 	opts_out->file_encoding = -1;
 
-	/* Extract options from the statement node tree */
+	/* Text is the default format. */
+	opts_out->from_routine = &CopyFromRoutineText;
+	opts_out->to_routine = &CopyToRoutineText;
+
+	/*
+	 * Extract only the "format" option to detect target routine as the first
+	 * step
+	 */
 	foreach(option, options)
 	{
 		DefElem    *defel = lfirst_node(DefElem, option);
 
 		if (strcmp(defel->defname, "format") == 0)
 		{
-			char	   *fmt = defGetString(defel);
-
 			if (format_specified)
 				errorConflictingDefElem(defel, pstate);
 			format_specified = true;
-			if (strcmp(fmt, "text") == 0)
-				 /* default format */ ;
-			else if (strcmp(fmt, "csv") == 0)
-				opts_out->csv_mode = true;
-			else if (strcmp(fmt, "binary") == 0)
-				opts_out->binary = true;
-			else
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("COPY format \"%s\" not recognized", fmt),
-						 parser_errposition(pstate, defel->location)));
+			ProcessCopyOptionCustomFormat(pstate, opts_out, is_from, defel);
 		}
+	}
+	/* Extract options except "format" from the statement node tree */
+	foreach(option, options)
+	{
+		DefElem    *defel = lfirst_node(DefElem, option);
+
+		if (strcmp(defel->defname, "format") == 0)
+			continue;
 		else if (strcmp(defel->defname, "freeze") == 0)
 		{
 			if (freeze_specified)
@@ -616,11 +708,22 @@ ProcessCopyOptions(ParseState *pstate,
 			opts_out->on_error = defGetCopyOnErrorChoice(defel, pstate, is_from);
 		}
 		else
-			ereport(ERROR,
-					(errcode(ERRCODE_SYNTAX_ERROR),
-					 errmsg("option \"%s\" not recognized",
-							defel->defname),
-					 parser_errposition(pstate, defel->location)));
+		{
+			bool		processed = false;
+
+			if (is_from)
+				processed =
+					opts_out->from_routine->CopyFromProcessOption(
+																  cstate, defel);
+			else
+				processed = opts_out->to_routine->CopyToProcessOption(cstate, defel);
+			if (!processed)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("option \"%s\" not recognized",
+								defel->defname),
+						 parser_errposition(pstate, defel->location)));
+		}
 	}
 
 	/*

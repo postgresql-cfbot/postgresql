@@ -1,0 +1,29 @@
+CREATE EXTENSION test_copy_format;
+CREATE TABLE public.test (a INT, b INT, c INT);
+INSERT INTO public.test VALUES (1, 2, 3), (12, 34, 56), (123, 456, 789);
+COPY public.test FROM stdin WITH (
+	option_before 'before',
+	format 'test_copy_format',
+	option_after 'after'
+);
+NOTICE:  test_copy_format: is_from=true
+NOTICE:  CopyFromProcessOption: "option_before"="before"
+NOTICE:  CopyFromProcessOption: "option_after"="after"
+NOTICE:  CopyFromGetFormat
+NOTICE:  CopyFromStart: natts=3
+NOTICE:  CopyFromOneRow
+NOTICE:  CopyFromEnd
+COPY public.test TO stdout WITH (
+	option_before 'before',
+	format 'test_copy_format',
+	option_after 'after'
+);
+NOTICE:  test_copy_format: is_from=false
+NOTICE:  CopyToProcessOption: "option_before"="before"
+NOTICE:  CopyToProcessOption: "option_after"="after"
+NOTICE:  CopyToGetFormat
+NOTICE:  CopyToStart: natts=3
+NOTICE:  CopyToOneRow: tts_nvalid=3
+NOTICE:  CopyToOneRow: tts_nvalid=3
+NOTICE:  CopyToOneRow: tts_nvalid=3
+NOTICE:  CopyToEnd

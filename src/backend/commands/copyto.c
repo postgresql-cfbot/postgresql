@@ -43,64 +43,6 @@
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
 
-/*
- * Represents the different dest cases we need to worry about at
- * the bottom level
- */
-typedef enum CopyDest
-{
-	COPY_FILE,					/* to file (or a piped program) */
-	COPY_FRONTEND,				/* to frontend */
-	COPY_CALLBACK,				/* to callback function */
-} CopyDest;
-
-/*
- * This struct contains all the state variables used throughout a COPY TO
- * operation.
- *
- * Multi-byte encodings: all supported client-side encodings encode multi-byte
- * characters by having the first byte's high bit set. Subsequent bytes of the
- * character can have the high bit not set. When scanning data in such an
- * encoding to look for a match to a single-byte (ie ASCII) character, we must
- * use the full pg_encoding_mblen() machinery to skip over multibyte
- * characters, else we might find a false match to a trailing byte. In
- * supported server encodings, there is no possibility of a false match, and
- * it's faster to make useless comparisons to trailing bytes than it is to
- * invoke pg_encoding_mblen() to skip over them. encoding_embeds_ascii is true
- * when we have to do it the hard way.
- */
-typedef struct CopyToStateData
-{
-	/* low-level state data */
-	CopyDest	copy_dest;		/* type of copy source/destination */
-	FILE	   *copy_file;		/* used if copy_dest == COPY_FILE */
-	StringInfo	fe_msgbuf;		/* used for all dests during COPY TO */
-
-	int			file_encoding;	/* file or remote side's character encoding */
-	bool		need_transcoding;	/* file encoding diff from server? */
-	bool		encoding_embeds_ascii;	/* ASCII can be non-first byte? */
-
-	/* parameters from the COPY command */
-	Relation	rel;			/* relation to copy to */
-	QueryDesc  *queryDesc;		/* executable query to copy from */
-	List	   *attnumlist;		/* integer list of attnums to copy */
-	char	   *filename;		/* filename, or NULL for STDOUT */
-	bool		is_program;		/* is 'filename' a program to popen? */
-	copy_data_dest_cb data_dest_cb; /* function for writing data */
-
-	CopyFormatOptions opts;
-	Node	   *whereClause;	/* WHERE condition (or NULL) */
-
-	/*
-	 * Working state
-	 */
-	MemoryContext copycontext;	/* per-copy execution context */
-
-	FmgrInfo   *out_functions;	/* lookup info for output functions */
-	MemoryContext rowcontext;	/* per-row evaluation context */
-	uint64		bytes_processed;	/* number of bytes processed so far */
-} CopyToStateData;
-
 /* DestReceiver for COPY (query) TO */
 typedef struct
 {
@@ -124,24 +66,31 @@ static void CopyAttributeOutCSV(CopyToState cstate, const char *string,
 /* Low-level communications functions */
 static void SendCopyBegin(CopyToState cstate);
 static void SendCopyEnd(CopyToState cstate);
-static void CopySendData(CopyToState cstate, const void *databuf, int datasize);
-static void CopySendString(CopyToState cstate, const char *str);
-static void CopySendChar(CopyToState cstate, char c);
-static void CopySendEndOfRow(CopyToState cstate);
-static void CopySendInt32(CopyToState cstate, int32 val);
-static void CopySendInt16(CopyToState cstate, int16 val);
-
 
 /*
- * Send copy start/stop messages for frontend copies.  These have changed
- * in past protocol redesigns.
+ * CopyToRoutine implementations.
  */
+
+/*
+ * CopyToRoutine implementation for "text" and "csv". CopyToText*()
+ * refer cstate->opts.csv_mode and change their behavior. We can split this
+ * implementation and stop referring cstate->opts.csv_mode later.
+ */
+
+/* All "text" and "csv" options are parsed in ProcessCopyOptions(). We may
+ * move the code to here later. */
+static bool
+CopyToTextProcessOption(CopyToState cstate, DefElem *defel)
+{
+	return false;
+}
+
 static void
-SendCopyBegin(CopyToState cstate)
+CopyToTextSendCopyBegin(CopyToState cstate)
 {
 	StringInfoData buf;
 	int			natts = list_length(cstate->attnumlist);
-	int16		format = (cstate->opts.binary ? 1 : 0);
+	int16		format = 0;
 	int			i;
 
 	pq_beginmessage(&buf, PqMsg_CopyOutResponse);
@@ -150,7 +99,273 @@ SendCopyBegin(CopyToState cstate)
 	for (i = 0; i < natts; i++)
 		pq_sendint16(&buf, format); /* per-column formats */
 	pq_endmessage(&buf);
-	cstate->copy_dest = COPY_FRONTEND;
+}
+
+static void
+CopyToTextSendEndOfRow(CopyToState cstate)
+{
+	switch (cstate->copy_dest)
+	{
+		case COPY_DEST_FILE:
+			/* Default line termination depends on platform */
+#ifndef WIN32
+			CopySendChar(cstate, '\n');
+#else
+			CopySendString(cstate, "\r\n");
+#endif
+			break;
+		case COPY_DEST_FRONTEND:
+			/* The FE/BE protocol uses \n as newline for all platforms */
+			CopySendChar(cstate, '\n');
+			break;
+		default:
+			break;
+	}
+	CopyToStateFlush(cstate);
+}
+
+static void
+CopyToTextStart(CopyToState cstate, TupleDesc tupDesc)
+{
+	int			num_phys_attrs;
+	ListCell   *cur;
+
+	num_phys_attrs = tupDesc->natts;
+	/* Get info about the columns we need to process. */
+	cstate->out_functions = (FmgrInfo *) palloc(num_phys_attrs * sizeof(FmgrInfo));
+	foreach(cur, cstate->attnumlist)
+	{
+		int			attnum = lfirst_int(cur);
+		Oid			out_func_oid;
+		bool		isvarlena;
+		Form_pg_attribute attr = TupleDescAttr(tupDesc, attnum - 1);
+
+		getTypeOutputInfo(attr->atttypid, &out_func_oid, &isvarlena);
+		fmgr_info(out_func_oid, &cstate->out_functions[attnum - 1]);
+	}
+
+	/*
+	 * For non-binary copy, we need to convert null_print to file encoding,
+	 * because it will be sent directly with CopySendString.
+	 */
+	if (cstate->need_transcoding)
+		cstate->opts.null_print_client = pg_server_to_any(cstate->opts.null_print,
+														  cstate->opts.null_print_len,
+														  cstate->file_encoding);
+
+	/* if a header has been requested send the line */
+	if (cstate->opts.header_line)
+	{
+		bool		hdr_delim = false;
+
+		foreach(cur, cstate->attnumlist)
+		{
+			int			attnum = lfirst_int(cur);
+			char	   *colname;
+
+			if (hdr_delim)
+				CopySendChar(cstate, cstate->opts.delim[0]);
+			hdr_delim = true;
+
+			colname = NameStr(TupleDescAttr(tupDesc, attnum - 1)->attname);
+
+			if (cstate->opts.csv_mode)
+				CopyAttributeOutCSV(cstate, colname, false,
+									list_length(cstate->attnumlist) == 1);
+			else
+				CopyAttributeOutText(cstate, colname);
+		}
+
+		CopyToTextSendEndOfRow(cstate);
+	}
+}
+
+static void
+CopyToTextOneRow(CopyToState cstate, TupleTableSlot *slot)
+{
+	bool		need_delim = false;
+	FmgrInfo   *out_functions = cstate->out_functions;
+	ListCell   *cur;
+
+	foreach(cur, cstate->attnumlist)
+	{
+		int			attnum = lfirst_int(cur);
+		Datum		value = slot->tts_values[attnum - 1];
+		bool		isnull = slot->tts_isnull[attnum - 1];
+
+		if (need_delim)
+			CopySendChar(cstate, cstate->opts.delim[0]);
+		need_delim = true;
+
+		if (isnull)
+		{
+			CopySendString(cstate, cstate->opts.null_print_client);
+		}
+		else
+		{
+			char	   *string;
+
+			string = OutputFunctionCall(&out_functions[attnum - 1], value);
+			if (cstate->opts.csv_mode)
+				CopyAttributeOutCSV(cstate, string,
+									cstate->opts.force_quote_flags[attnum - 1],
+									list_length(cstate->attnumlist) == 1);
+			else
+				CopyAttributeOutText(cstate, string);
+		}
+	}
+
+	CopyToTextSendEndOfRow(cstate);
+}
+
+static void
+CopyToTextEnd(CopyToState cstate)
+{
+}
+
+/*
+ * CopyToRoutine implementation for "binary".
+ */
+
+/* All "binary" options are parsed in ProcessCopyOptions(). We may move the
+ * code to here later. */
+static bool
+CopyToBinaryProcessOption(CopyToState cstate, DefElem *defel)
+{
+	return false;
+}
+
+static void
+CopyToBinarySendCopyBegin(CopyToState cstate)
+{
+	StringInfoData buf;
+	int			natts = list_length(cstate->attnumlist);
+	int16		format = 1;
+	int			i;
+
+	pq_beginmessage(&buf, PqMsg_CopyOutResponse);
+	pq_sendbyte(&buf, format);	/* overall format */
+	pq_sendint16(&buf, natts);
+	for (i = 0; i < natts; i++)
+		pq_sendint16(&buf, format); /* per-column formats */
+	pq_endmessage(&buf);
+}
+
+static void
+CopyToBinaryStart(CopyToState cstate, TupleDesc tupDesc)
+{
+	int			num_phys_attrs;
+	ListCell   *cur;
+
+	num_phys_attrs = tupDesc->natts;
+	/* Get info about the columns we need to process. */
+	cstate->out_functions = (FmgrInfo *) palloc(num_phys_attrs * sizeof(FmgrInfo));
+	foreach(cur, cstate->attnumlist)
+	{
+		int			attnum = lfirst_int(cur);
+		Oid			out_func_oid;
+		bool		isvarlena;
+		Form_pg_attribute attr = TupleDescAttr(tupDesc, attnum - 1);
+
+		getTypeBinaryOutputInfo(attr->atttypid, &out_func_oid, &isvarlena);
+		fmgr_info(out_func_oid, &cstate->out_functions[attnum - 1]);
+	}
+
+	{
+		/* Generate header for a binary copy */
+		int32		tmp;
+
+		/* Signature */
+		CopySendData(cstate, BinarySignature, 11);
+		/* Flags field */
+		tmp = 0;
+		CopySendInt32(cstate, tmp);
+		/* No header extension */
+		tmp = 0;
+		CopySendInt32(cstate, tmp);
+	}
+}
+
+static void
+CopyToBinaryOneRow(CopyToState cstate, TupleTableSlot *slot)
+{
+	FmgrInfo   *out_functions = cstate->out_functions;
+	ListCell   *cur;
+
+	/* Binary per-tuple header */
+	CopySendInt16(cstate, list_length(cstate->attnumlist));
+
+	foreach(cur, cstate->attnumlist)
+	{
+		int			attnum = lfirst_int(cur);
+		Datum		value = slot->tts_values[attnum - 1];
+		bool		isnull = slot->tts_isnull[attnum - 1];
+
+		if (isnull)
+		{
+			CopySendInt32(cstate, -1);
+		}
+		else
+		{
+			bytea	   *outputbytes;
+
+			outputbytes = SendFunctionCall(&out_functions[attnum - 1], value);
+			CopySendInt32(cstate, VARSIZE(outputbytes) - VARHDRSZ);
+			CopySendData(cstate, VARDATA(outputbytes),
+						 VARSIZE(outputbytes) - VARHDRSZ);
+		}
+	}
+
+	CopyToStateFlush(cstate);
+}
+
+static void
+CopyToBinaryEnd(CopyToState cstate)
+{
+	/* Generate trailer for a binary copy */
+	CopySendInt16(cstate, -1);
+	/* Need to flush out the trailer */
+	CopyToStateFlush(cstate);
+}
+
+CopyToRoutine CopyToRoutineText = {
+	.CopyToProcessOption = CopyToTextProcessOption,
+	.CopyToSendCopyBegin = CopyToTextSendCopyBegin,
+	.CopyToStart = CopyToTextStart,
+	.CopyToOneRow = CopyToTextOneRow,
+	.CopyToEnd = CopyToTextEnd,
+};
+
+/*
+ * We can use the same CopyToRoutine for both of "text" and "csv" because
+ * CopyToText*() refer cstate->opts.csv_mode and change their behavior. We can
+ * split the implementations and stop referring cstate->opts.csv_mode later.
+ */
+CopyToRoutine CopyToRoutineCSV = {
+	.CopyToProcessOption = CopyToTextProcessOption,
+	.CopyToSendCopyBegin = CopyToTextSendCopyBegin,
+	.CopyToStart = CopyToTextStart,
+	.CopyToOneRow = CopyToTextOneRow,
+	.CopyToEnd = CopyToTextEnd,
+};
+
+CopyToRoutine CopyToRoutineBinary = {
+	.CopyToProcessOption = CopyToBinaryProcessOption,
+	.CopyToSendCopyBegin = CopyToBinarySendCopyBegin,
+	.CopyToStart = CopyToBinaryStart,
+	.CopyToOneRow = CopyToBinaryOneRow,
+	.CopyToEnd = CopyToBinaryEnd,
+};
+
+/*
+ * Send copy start/stop messages for frontend copies.  These have changed
+ * in past protocol redesigns.
+ */
+static void
+SendCopyBegin(CopyToState cstate)
+{
+	cstate->opts.to_routine->CopyToSendCopyBegin(cstate);
+	cstate->copy_dest = COPY_DEST_FRONTEND;
 }
 
 static void
@@ -166,48 +381,38 @@ SendCopyEnd(CopyToState cstate)
  * CopySendData sends output data to the destination (file or frontend)
  * CopySendString does the same for null-terminated strings
  * CopySendChar does the same for single characters
- * CopySendEndOfRow does the appropriate thing at end of each data row
- *	(data is not actually flushed except by CopySendEndOfRow)
+ * CopyToStateFlush flushes the buffered data
+ *	(data is not actually flushed except by CopyToStateFlush)
  *
  * NB: no data conversion is applied by these functions
  *----------
  */
-static void
+void
 CopySendData(CopyToState cstate, const void *databuf, int datasize)
 {
 	appendBinaryStringInfo(cstate->fe_msgbuf, databuf, datasize);
 }
 
-static void
+void
 CopySendString(CopyToState cstate, const char *str)
 {
 	appendBinaryStringInfo(cstate->fe_msgbuf, str, strlen(str));
 }
 
-static void
+void
 CopySendChar(CopyToState cstate, char c)
 {
 	appendStringInfoCharMacro(cstate->fe_msgbuf, c);
 }
 
-static void
-CopySendEndOfRow(CopyToState cstate)
+void
+CopyToStateFlush(CopyToState cstate)
 {
 	StringInfo	fe_msgbuf = cstate->fe_msgbuf;
 
 	switch (cstate->copy_dest)
 	{
-		case COPY_FILE:
-			if (!cstate->opts.binary)
-			{
-				/* Default line termination depends on platform */
-#ifndef WIN32
-				CopySendChar(cstate, '\n');
-#else
-				CopySendString(cstate, "\r\n");
-#endif
-			}
-
+		case COPY_DEST_FILE:
 			if (fwrite(fe_msgbuf->data, fe_msgbuf->len, 1,
 					   cstate->copy_file) != 1 ||
 				ferror(cstate->copy_file))
@@ -241,15 +446,11 @@ CopySendEndOfRow(CopyToState cstate)
 							 errmsg("could not write to COPY file: %m")));
 			}
 			break;
-		case COPY_FRONTEND:
-			/* The FE/BE protocol uses \n as newline for all platforms */
-			if (!cstate->opts.binary)
-				CopySendChar(cstate, '\n');
-
+		case COPY_DEST_FRONTEND:
 			/* Dump the accumulated row as one CopyData message */
 			(void) pq_putmessage(PqMsg_CopyData, fe_msgbuf->data, fe_msgbuf->len);
 			break;
-		case COPY_CALLBACK:
+		case COPY_DEST_CALLBACK:
 			cstate->data_dest_cb(fe_msgbuf->data, fe_msgbuf->len);
 			break;
 	}
@@ -268,7 +469,7 @@ CopySendEndOfRow(CopyToState cstate)
 /*
  * CopySendInt32 sends an int32 in network byte order
  */
-static inline void
+inline void
 CopySendInt32(CopyToState cstate, int32 val)
 {
 	uint32		buf;
@@ -280,7 +481,7 @@ CopySendInt32(CopyToState cstate, int32 val)
 /*
  * CopySendInt16 sends an int16 in network byte order
  */
-static inline void
+inline void
 CopySendInt16(CopyToState cstate, int16 val)
 {
 	uint16		buf;
@@ -431,7 +632,7 @@ BeginCopyTo(ParseState *pstate,
 	oldcontext = MemoryContextSwitchTo(cstate->copycontext);
 
 	/* Extract options from the statement node tree */
-	ProcessCopyOptions(pstate, &cstate->opts, false /* is_from */ , options);
+	ProcessCopyOptions(pstate, &cstate->opts, false /* is_from */ , cstate, options);
 
 	/* Process the source/target relation or query */
 	if (rel)
@@ -622,12 +823,12 @@ BeginCopyTo(ParseState *pstate,
 	/* See Multibyte encoding comment above */
 	cstate->encoding_embeds_ascii = PG_ENCODING_IS_CLIENT_ONLY(cstate->file_encoding);
 
-	cstate->copy_dest = COPY_FILE;	/* default */
+	cstate->copy_dest = COPY_DEST_FILE; /* default */
 
 	if (data_dest_cb)
 	{
 		progress_vals[1] = PROGRESS_COPY_TYPE_CALLBACK;
-		cstate->copy_dest = COPY_CALLBACK;
+		cstate->copy_dest = COPY_DEST_CALLBACK;
 		cstate->data_dest_cb = data_dest_cb;
 	}
 	else if (pipe)
@@ -748,8 +949,6 @@ DoCopyTo(CopyToState cstate)
 	bool		pipe = (cstate->filename == NULL && cstate->data_dest_cb == NULL);
 	bool		fe_copy = (pipe && whereToSendOutput == DestRemote);
 	TupleDesc	tupDesc;
-	int			num_phys_attrs;
-	ListCell   *cur;
 	uint64		processed;
 
 	if (fe_copy)
@@ -759,31 +958,10 @@ DoCopyTo(CopyToState cstate)
 		tupDesc = RelationGetDescr(cstate->rel);
 	else
 		tupDesc = cstate->queryDesc->tupDesc;
-	num_phys_attrs = tupDesc->natts;
 	cstate->opts.null_print_client = cstate->opts.null_print;	/* default */
 
 	/* We use fe_msgbuf as a per-row buffer regardless of copy_dest */
 	cstate->fe_msgbuf = makeStringInfo();
-
-	/* Get info about the columns we need to process. */
-	cstate->out_functions = (FmgrInfo *) palloc(num_phys_attrs * sizeof(FmgrInfo));
-	foreach(cur, cstate->attnumlist)
-	{
-		int			attnum = lfirst_int(cur);
-		Oid			out_func_oid;
-		bool		isvarlena;
-		Form_pg_attribute attr = TupleDescAttr(tupDesc, attnum - 1);
-
-		if (cstate->opts.binary)
-			getTypeBinaryOutputInfo(attr->atttypid,
-									&out_func_oid,
-									&isvarlena);
-		else
-			getTypeOutputInfo(attr->atttypid,
-							  &out_func_oid,
-							  &isvarlena);
-		fmgr_info(out_func_oid, &cstate->out_functions[attnum - 1]);
-	}
 
 	/*
 	 * Create a temporary memory context that we can reset once per row to
@@ -795,57 +973,7 @@ DoCopyTo(CopyToState cstate)
 											   "COPY TO",
 											   ALLOCSET_DEFAULT_SIZES);
 
-	if (cstate->opts.binary)
-	{
-		/* Generate header for a binary copy */
-		int32		tmp;
-
-		/* Signature */
-		CopySendData(cstate, BinarySignature, 11);
-		/* Flags field */
-		tmp = 0;
-		CopySendInt32(cstate, tmp);
-		/* No header extension */
-		tmp = 0;
-		CopySendInt32(cstate, tmp);
-	}
-	else
-	{
-		/*
-		 * For non-binary copy, we need to convert null_print to file
-		 * encoding, because it will be sent directly with CopySendString.
-		 */
-		if (cstate->need_transcoding)
-			cstate->opts.null_print_client = pg_server_to_any(cstate->opts.null_print,
-															  cstate->opts.null_print_len,
-															  cstate->file_encoding);
-
-		/* if a header has been requested send the line */
-		if (cstate->opts.header_line)
-		{
-			bool		hdr_delim = false;
-
-			foreach(cur, cstate->attnumlist)
-			{
-				int			attnum = lfirst_int(cur);
-				char	   *colname;
-
-				if (hdr_delim)
-					CopySendChar(cstate, cstate->opts.delim[0]);
-				hdr_delim = true;
-
-				colname = NameStr(TupleDescAttr(tupDesc, attnum - 1)->attname);
-
-				if (cstate->opts.csv_mode)
-					CopyAttributeOutCSV(cstate, colname, false,
-										list_length(cstate->attnumlist) == 1);
-				else
-					CopyAttributeOutText(cstate, colname);
-			}
-
-			CopySendEndOfRow(cstate);
-		}
-	}
+	cstate->opts.to_routine->CopyToStart(cstate, tupDesc);
 
 	if (cstate->rel)
 	{
@@ -884,13 +1012,7 @@ DoCopyTo(CopyToState cstate)
 		processed = ((DR_copy *) cstate->queryDesc->dest)->processed;
 	}
 
-	if (cstate->opts.binary)
-	{
-		/* Generate trailer for a binary copy */
-		CopySendInt16(cstate, -1);
-		/* Need to flush out the trailer */
-		CopySendEndOfRow(cstate);
-	}
+	cstate->opts.to_routine->CopyToEnd(cstate);
 
 	MemoryContextDelete(cstate->rowcontext);
 
@@ -906,71 +1028,15 @@ DoCopyTo(CopyToState cstate)
 static void
 CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot)
 {
-	bool		need_delim = false;
-	FmgrInfo   *out_functions = cstate->out_functions;
 	MemoryContext oldcontext;
-	ListCell   *cur;
-	char	   *string;
 
 	MemoryContextReset(cstate->rowcontext);
 	oldcontext = MemoryContextSwitchTo(cstate->rowcontext);
 
-	if (cstate->opts.binary)
-	{
-		/* Binary per-tuple header */
-		CopySendInt16(cstate, list_length(cstate->attnumlist));
-	}
-
 	/* Make sure the tuple is fully deconstructed */
 	slot_getallattrs(slot);
 
-	foreach(cur, cstate->attnumlist)
-	{
-		int			attnum = lfirst_int(cur);
-		Datum		value = slot->tts_values[attnum - 1];
-		bool		isnull = slot->tts_isnull[attnum - 1];
-
-		if (!cstate->opts.binary)
-		{
-			if (need_delim)
-				CopySendChar(cstate, cstate->opts.delim[0]);
-			need_delim = true;
-		}
-
-		if (isnull)
-		{
-			if (!cstate->opts.binary)
-				CopySendString(cstate, cstate->opts.null_print_client);
-			else
-				CopySendInt32(cstate, -1);
-		}
-		else
-		{
-			if (!cstate->opts.binary)
-			{
-				string = OutputFunctionCall(&out_functions[attnum - 1],
-											value);
-				if (cstate->opts.csv_mode)
-					CopyAttributeOutCSV(cstate, string,
-										cstate->opts.force_quote_flags[attnum - 1],
-										list_length(cstate->attnumlist) == 1);
-				else
-					CopyAttributeOutText(cstate, string);
-			}
-			else
-			{
-				bytea	   *outputbytes;
-
-				outputbytes = SendFunctionCall(&out_functions[attnum - 1],
-											   value);
-				CopySendInt32(cstate, VARSIZE(outputbytes) - VARHDRSZ);
-				CopySendData(cstate, VARDATA(outputbytes),
-							 VARSIZE(outputbytes) - VARHDRSZ);
-			}
-		}
-	}
-
-	CopySendEndOfRow(cstate);
+	cstate->opts.to_routine->CopyToOneRow(cstate, slot);
 
 	MemoryContextSwitchTo(oldcontext);
 }

@@ -901,6 +901,26 @@ large groups of duplicates, maximizing space utilization.  Note also that
 deduplication more efficient.  Deduplication can be performed infrequently,
 without merging together existing posting list tuples too often.
 
+Notes about the right separator/HIKEY moveright optimization
+------------------------------------------------------------
+
+Page splits consistently cause the HIKEY of the split page to be inserted
+into the parent page as the right separator of the page's downlink (or,
+as the split page's new right sibling's left link), with the only
+difference between the HIKEY and the separator being the contents of the
+IndexTupleData struct of these tuples: the payloads are bit-identical.
+This allows us to reuse the _bt_compare result of the right separator key
+for the downlinked page's HIKEY, if we can determine that those are indeed
+bit-identical: Concurrent page splits and deletions may have caused the
+downlinked page to get a different HIKEY, which could have a different
+_bt_compare result.  To make this work, in _bt_search we cache the
+current downlink's right separator key, to then in the _bt_moveright
+phase of the layer below use memcmp() to validate our assumptions about
+the HIKEY matching the downlink's right separator key.  Only if the
+assumption is proven wrong (memcmp(HIKEY, right_sep) != 0), we call
+_bt_compare(), otherwise we can be certain that the parent page's result
+is unchanged, i.e. that _bt_compare would return "<".
+
 Notes about deduplication
 -------------------------
 

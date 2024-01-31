@@ -312,7 +312,9 @@ join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo)
 		 * above the outer join, even if it references no other rels (it might
 		 * be from WHERE, for example).
 		 */
-		if (RINFO_IS_PUSHED_DOWN(restrictinfo, joinrelids))
+		if (RINFO_IS_PUSHED_DOWN(restrictinfo,
+								 bms_make_singleton(sjinfo->ojrelid),
+								 joinrelids))
 			continue;			/* ignore; not useful here */
 
 		/* Ignore if it's not a mergejoinable clause */
@@ -542,7 +544,9 @@ remove_leftjoinrel_from_query(PlannerInfo *root, int relid,
 
 		remove_join_clause_from_rels(root, rinfo, rinfo->required_relids);
 
-		if (RINFO_IS_PUSHED_DOWN(rinfo, join_plus_commute))
+		if (RINFO_IS_PUSHED_DOWN(rinfo,
+								 bms_make_singleton(sjinfo->ojrelid),
+								 join_plus_commute))
 		{
 			/*
 			 * There might be references to relid or ojrelid in the
@@ -1393,6 +1397,9 @@ is_innerrel_unique_for(PlannerInfo *root,
 {
 	List	   *clause_list = NIL;
 	ListCell   *lc;
+	Relids		ojrelids = CALC_OUTER_JOIN_RELIDS(joinrelids,
+												  outerrelids,
+												  innerrel->relids);
 
 	/*
 	 * Search for mergejoinable clauses that constrain the inner rel against
@@ -1410,7 +1417,7 @@ is_innerrel_unique_for(PlannerInfo *root,
 		 * join, we can't use it.
 		 */
 		if (IS_OUTER_JOIN(jointype) &&
-			RINFO_IS_PUSHED_DOWN(restrictinfo, joinrelids))
+			RINFO_IS_PUSHED_DOWN(restrictinfo, ojrelids, joinrelids))
 			continue;
 
 		/* Ignore if it's not a mergejoinable clause */

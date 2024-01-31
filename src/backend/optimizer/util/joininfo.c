@@ -115,7 +115,6 @@ add_join_clause_to_rels(PlannerInfo *root,
 
 		restrictinfo = make_restrictinfo(root,
 										 (Expr *) makeBoolConst(false, false),
-										 restrictinfo->is_pushed_down,
 										 restrictinfo->has_clone,
 										 restrictinfo->is_clone,
 										 restrictinfo->pseudoconstant,

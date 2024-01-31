@@ -83,6 +83,7 @@ static List *select_mergejoin_clauses(PlannerInfo *root,
 									  RelOptInfo *innerrel,
 									  List *restrictlist,
 									  JoinType jointype,
+									  JoinPathExtraData *extra,
 									  bool *mergejoin_allowed);
 static void generate_mergejoin_paths(PlannerInfo *root,
 									 RelOptInfo *joinrel,
@@ -149,6 +150,9 @@ add_paths_to_joinrel(PlannerInfo *root,
 	extra.mergeclause_list = NIL;
 	extra.sjinfo = sjinfo;
 	extra.param_source_rels = NULL;
+	extra.ojrelids = CALC_OUTER_JOIN_RELIDS(joinrel->relids,
+											outerrel->relids,
+											innerrel->relids);
 
 	/*
 	 * See if the inner relation is provably unique for this outer rel.
@@ -213,6 +217,7 @@ add_paths_to_joinrel(PlannerInfo *root,
 														  innerrel,
 														  restrictlist,
 														  jointype,
+														  &extra,
 														  &mergejoin_allowed);
 
 	/*
@@ -222,7 +227,7 @@ add_paths_to_joinrel(PlannerInfo *root,
 	if (jointype == JOIN_SEMI || jointype == JOIN_ANTI || extra.inner_unique)
 		compute_semi_anti_join_factors(root, joinrel, outerrel, innerrel,
 									   jointype, sjinfo, restrictlist,
-									   &extra.semifactors);
+									   &extra);
 
 	/*
 	 * Decide whether it's sensible to generate parameterized paths for this
@@ -2129,7 +2134,8 @@ hash_inner_and_outer(PlannerInfo *root,
 		 * If processing an outer join, only use its own join clauses for
 		 * hashing.  For inner joins we need not be so picky.
 		 */
-		if (isouterjoin && RINFO_IS_PUSHED_DOWN(restrictinfo, joinrel->relids))
+		if (isouterjoin &&
+			RINFO_IS_PUSHED_DOWN(restrictinfo, extra->ojrelids, joinrel->relids))
 			continue;
 
 		if (!restrictinfo->can_join ||
@@ -2361,6 +2367,7 @@ select_mergejoin_clauses(PlannerInfo *root,
 						 RelOptInfo *innerrel,
 						 List *restrictlist,
 						 JoinType jointype,
+						 JoinPathExtraData *extra,
 						 bool *mergejoin_allowed)
 {
 	List	   *result_list = NIL;
@@ -2378,7 +2385,8 @@ select_mergejoin_clauses(PlannerInfo *root,
 		 * we don't set have_nonmergeable_joinclause here because pushed-down
 		 * clauses will become otherquals not joinquals.)
 		 */
-		if (isouterjoin && RINFO_IS_PUSHED_DOWN(restrictinfo, joinrel->relids))
+		if (isouterjoin &&
+			RINFO_IS_PUSHED_DOWN(restrictinfo, extra->ojrelids, joinrel->relids))
 			continue;
 
 		/* Check that clause is a mergeable operator clause */

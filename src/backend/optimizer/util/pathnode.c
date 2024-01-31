@@ -2505,6 +2505,7 @@ create_nestloop_path(PlannerInfo *root,
 	pathnode->jpath.outerjoinpath = outer_path;
 	pathnode->jpath.innerjoinpath = inner_path;
 	pathnode->jpath.joinrestrictinfo = restrict_clauses;
+	pathnode->jpath.ojrelids = extra->ojrelids;
 
 	final_cost_nestloop(root, pathnode, workspace, extra);
 
@@ -2569,6 +2570,7 @@ create_mergejoin_path(PlannerInfo *root,
 	pathnode->jpath.outerjoinpath = outer_path;
 	pathnode->jpath.innerjoinpath = inner_path;
 	pathnode->jpath.joinrestrictinfo = restrict_clauses;
+	pathnode->jpath.ojrelids = extra->ojrelids;
 	pathnode->path_mergeclauses = mergeclauses;
 	pathnode->outersortkeys = outersortkeys;
 	pathnode->innersortkeys = innersortkeys;
@@ -2646,6 +2648,7 @@ create_hashjoin_path(PlannerInfo *root,
 	pathnode->jpath.outerjoinpath = outer_path;
 	pathnode->jpath.innerjoinpath = inner_path;
 	pathnode->jpath.joinrestrictinfo = restrict_clauses;
+	pathnode->jpath.ojrelids = extra->ojrelids;
 	pathnode->path_hashclauses = hashclauses;
 	/* final_cost_hashjoin will fill in pathnode->num_batches */
 

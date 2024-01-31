@@ -61,6 +61,9 @@ bool		SSLPreferServerCiphers;
 int			ssl_min_protocol_version = PG_TLS1_2_VERSION;
 int			ssl_max_protocol_version = PG_TLS_ANY;
 
+/* GUC variable: if false ignore ALPN negotiation */
+bool		ssl_enable_alpn = true;
+
 /* ------------------------------------------------------------ */
 /*			 Procedures common to all secure sessions			*/
 /* ------------------------------------------------------------ */
@@ -112,18 +115,50 @@ secure_loaded_verify_locations(void)
 int
 secure_open_server(Port *port)
 {
-	int			r = 0;
-
 #ifdef USE_SSL
+	int			r = 0;
+	ssize_t len;
+
+	/* push unencrypted buffered data back through SSL setup */
+	len = pq_buffer_has_data();
+	if (len > 0)
+	{
+		char	   *buf = palloc(len);
+
+		pq_startmsgread();
+		if (pq_getbytes(buf, len) == EOF)
+			return STATUS_ERROR; /* shouldn't be possible */
+		pq_endmsgread();
+		port->raw_buf = buf;
+		port->raw_buf_remaining = len;
+		port->raw_buf_consumed = 0;
+	}
+	Assert(pq_buffer_has_data() == 0);
+
 	r = be_tls_open_server(port);
+
+	if (port->raw_buf_remaining > 0)
+	{
+		ereport(COMMERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("received unencrypted data after SSL request"),
+				 errdetail("This could be either a client-software bug or evidence of an attempted man-in-the-middle attack.")));
+		return STATUS_ERROR;
+	}
+	if (port->raw_buf != NULL)
+	{
+		pfree(port->raw_buf);
+		port->raw_buf = NULL;
+	}
 
 	ereport(DEBUG2,
 			(errmsg_internal("SSL connection from DN:\"%s\" CN:\"%s\"",
 							 port->peer_dn ? port->peer_dn : "(anonymous)",
 							 port->peer_cn ? port->peer_cn : "(anonymous)")));
-#endif
-
 	return r;
+#else
+	return 0;
+#endif
 }
 
 /*
@@ -234,6 +269,19 @@ ssize_t
 secure_raw_read(Port *port, void *ptr, size_t len)
 {
 	ssize_t		n;
+
+	/* Read from the "unread" buffered data first. c.f. libpq-be.h */
+	if (port->raw_buf_remaining > 0)
+	{
+		/* consume up to len bytes from the raw_buf */
+		if (len > port->raw_buf_remaining)
+			len = port->raw_buf_remaining;
+		Assert(port->raw_buf);
+		memcpy(ptr, port->raw_buf + port->raw_buf_consumed, len);
+		port->raw_buf_consumed += len;
+		port->raw_buf_remaining -= len;
+		return len;
+	}
 
 	/*
 	 * Try to read from the socket without blocking. If it succeeds we're

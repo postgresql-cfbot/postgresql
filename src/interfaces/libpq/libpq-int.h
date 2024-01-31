@@ -76,6 +76,7 @@ typedef struct
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
+
 #ifndef OPENSSL_NO_ENGINE
 #define USE_SSL_ENGINE
 #endif
@@ -230,6 +231,12 @@ typedef enum
 	PGASYNC_COPY_BOTH,			/* Copy In/Out data transfer in progress */
 	PGASYNC_PIPELINE_IDLE,		/* "Idle" between commands in pipeline mode */
 } PGAsyncStatusType;
+
+#define ENC_ERROR			0
+#define ENC_DIRECT_SSL		0x01
+#define ENC_GSSAPI			0x02
+#define ENC_NEGOTIATED_SSL	0x04
+#define ENC_PLAINTEXT		0x08
 
 /* Target server type (decoded value of target_session_attrs) */
 typedef enum
@@ -388,6 +395,7 @@ struct pg_conn
 	char	   *keepalives_count;	/* maximum number of TCP keepalive
 									 * retransmits */
 	char	   *sslmode;		/* SSL mode (require,prefer,allow,disable) */
+	char	   *sslnegotiation;	/* SSL initiation style (postgres,direct,requiredirect) */
 	char	   *sslcompression; /* SSL compression (0 or 1) */
 	char	   *sslkey;			/* client key filename */
 	char	   *sslcert;		/* client certificate filename */
@@ -397,6 +405,7 @@ struct pg_conn
 	char	   *sslcrl;			/* certificate revocation list filename */
 	char	   *sslcrldir;		/* certificate revocation list directory name */
 	char	   *sslsni;			/* use SSL SNI extension (0 or 1) */
+	char       *sslalpn;        /* use SSL ALPN extension (0 or 1) */
 	char	   *requirepeer;	/* required peer credentials for local sockets */
 	char	   *gssencmode;		/* GSS mode (require,prefer,disable) */
 	char	   *krbsrvname;		/* Kerberos service name */
@@ -543,15 +552,17 @@ struct pg_conn
 	void	   *sasl_state;
 	int			scram_sha_256_iterations;
 
+	uint8		allowed_enc_methods;
+	uint8		failed_enc_methods;
+	uint8		current_enc_method;
+
 	/* SSL structures */
 	bool		ssl_in_use;
+	bool		ssl_handshake_started;
 	bool		ssl_cert_requested; /* Did the server ask us for a cert? */
 	bool		ssl_cert_sent;	/* Did we send one in reply? */
 
 #ifdef USE_SSL
-	bool		allow_ssl_try;	/* Allowed to try SSL negotiation */
-	bool		wait_ssl_try;	/* Delay SSL negotiation until after
-								 * attempting normal connection */
 #ifdef USE_OPENSSL
 	SSL		   *ssl;			/* SSL status, if have SSL connection */
 	X509	   *peer;			/* X509 cert of server */
@@ -574,7 +585,6 @@ struct pg_conn
 	gss_name_t	gtarg_nam;		/* GSS target name */
 
 	/* The following are encryption-only */
-	bool		try_gss;		/* GSS attempting permitted */
 	bool		gssenc;			/* GSS encryption is usable */
 	gss_cred_id_t gcred;		/* GSS credential temp storage. */
 

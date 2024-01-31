@@ -132,6 +132,8 @@ static char sockself[MAXPGPATH];
 static char socklock[MAXPGPATH];
 static StringInfo failed_tests = NULL;
 static bool in_note = false;
+static _stringlist *globals_before = NULL;
+static _stringlist *globals_after = NULL;
 
 static _resultmap *resultmap = NULL;
 
@@ -242,6 +244,60 @@ split_to_stringlist(const char *s, const char *delim, _stringlist **listhead)
 		token = strtok(NULL, delim);
 	}
 	free(sc);
+}
+
+/*
+ * Query the cluster and save the first column of the results into a
+ * stringlist.
+ */
+static void
+query_to_stringlist(const char *dbname, const char *query, _stringlist **listhead)
+{
+	PGconn	   *conn;
+	PGresult   *res;
+	StringInfo	buf = makeStringInfo();
+
+	appendStringInfo(buf, "dbname=%s", dbname);
+
+	conn = PQconnectdb(buf->data);
+	if (PQstatus(conn) != CONNECTION_OK)
+		bail("unable to connect to cluster: %s", PQerrorMessage(conn));
+
+	res = PQexec(conn, query);
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		bail("unable to query database: %s", PQerrorMessage(conn));
+
+	for (int i = 0; i < PQntuples(res); i++)
+		add_stringlist_item(listhead, pstrdup(PQgetvalue(res, i, 0)));
+
+	pfree(buf->data);
+	PQclear(res);
+	PQfinish(conn);
+}
+
+/*
+ * Compare two stringlists for string equality
+ */
+static bool
+diff_stringlist(_stringlist *a, _stringlist *b)
+{
+	_stringlist *sla = a;
+	_stringlist *slb = b;
+
+	for (; sla && slb; sla = sla->next, slb = slb->next)
+	{
+		if (strcmp(sla->str, slb->str) != 0)
+		{
+			diag("left over global object detected: %s", slb->str);
+			return false;
+		}
+	}
+
+	/* If we reached the end of both lists at the same time, they are equal */
+	if (sla == NULL && slb == NULL)
+		return true;
+
+	return false;
 }
 
 /*
@@ -2609,6 +2665,18 @@ regression_main(int argc, char *argv[],
 	}
 
 	/*
+	 * Store the global objects before the test starts such that we can check
+	 * for any objects left behind after the tests finish.
+	 */
+	query_to_stringlist("postgres",
+						"(SELECT rolname AS obj FROM pg_catalog.pg_roles ORDER BY 1) "
+						"UNION ALL "
+						"(SELECT spcname AS obj FROM pg_catalog.pg_tablespace ORDER BY 1) "
+						"UNION ALL "
+						"(SELECT subname AS obj FROM pg_catalog.pg_subscription ORDER BY 1)",
+						&globals_before);
+
+	/*
 	 * Ready to run the tests
 	 */
 	for (sl = schedulelist; sl != NULL; sl = sl->next)
@@ -2619,6 +2687,27 @@ regression_main(int argc, char *argv[],
 	for (sl = extra_tests; sl != NULL; sl = sl->next)
 	{
 		run_single_test(sl->str, startfunc, postfunc);
+	}
+
+	/*
+	 * Store the global objects again after the tests have finished and
+	 * compare with the list from before the tests.
+	 */
+	query_to_stringlist("postgres",
+						"(SELECT rolname AS obj FROM pg_catalog.pg_roles ORDER BY 1) "
+						"UNION ALL "
+						"(SELECT spcname AS obj FROM pg_catalog.pg_tablespace ORDER BY 1) "
+						"UNION ALL "
+						"(SELECT subname AS obj FROM pg_catalog.pg_subscription ORDER BY 1)",
+						&globals_after);
+
+	if (!diff_stringlist(globals_before, globals_after))
+	{
+		test_status_failed("global_objects", 0.0, false);
+	}
+	else
+	{
+		test_status_ok("global_objects", 0.0, false);
 	}
 
 	/*

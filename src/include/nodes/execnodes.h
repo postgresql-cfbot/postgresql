@@ -2551,6 +2551,7 @@ typedef struct WindowAggState
 									 * date for current row */
 	bool		grouptail_valid;	/* true if grouptailpos is known up to
 									 * date for current row */
+	Tuplesortstate *sortstates;
 
 	TupleTableSlot *first_part_slot;	/* first tuple of current or next
 										 * partition */

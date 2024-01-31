@@ -533,6 +533,7 @@ typedef struct
 	bool		redirection_done;
 	bool		IsBinaryUpgrade;
 	bool		query_id_enabled;
+	int			query_id_const_merge_threshold;
 	int			max_safe_fds;
 	int			MaxBackends;
 #ifdef WIN32
@@ -6112,6 +6113,7 @@ save_backend_variables(BackendParameters *param, Port *port, BackgroundWorker *w
 	param->redirection_done = redirection_done;
 	param->IsBinaryUpgrade = IsBinaryUpgrade;
 	param->query_id_enabled = query_id_enabled;
+	param->query_id_const_merge_threshold = query_id_const_merge_threshold;
 	param->max_safe_fds = max_safe_fds;
 
 	param->MaxBackends = MaxBackends;
@@ -6357,6 +6359,7 @@ restore_backend_variables(BackendParameters *param, Port **port, BackgroundWorke
 	redirection_done = param->redirection_done;
 	IsBinaryUpgrade = param->IsBinaryUpgrade;
 	query_id_enabled = param->query_id_enabled;
+	query_id_const_merge_threshold = param->query_id_const_merge_threshold;
 	max_safe_fds = param->max_safe_fds;
 
 	MaxBackends = param->MaxBackends;

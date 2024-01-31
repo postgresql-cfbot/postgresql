@@ -100,6 +100,8 @@ pgxs_kv = {
     ' '.join(cflags_no_decl_after_statement),
 
   'CFLAGS_CRC': ' '.join(cflags_crc),
+  'CFLAGS_CRYPTO': ' '.join(cflags_crypto),
+  'CFLAGS_CRC_CRYPTO': ' '.join(cflags_crc_crypto),
   'CFLAGS_UNROLL_LOOPS': ' '.join(unroll_loops_cflags),
   'CFLAGS_VECTORIZE': ' '.join(vectorize_cflags),
 

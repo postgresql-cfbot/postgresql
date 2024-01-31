@@ -646,6 +646,8 @@ MSGMERGE
 MSGFMT_FLAGS
 MSGFMT
 PG_CRC32C_OBJS
+CFLAGS_CRC_CRYPTO
+CFLAGS_CRYPTO
 CFLAGS_CRC
 LIBOBJS
 OPENSSL
@@ -17930,6 +17932,82 @@ fi
 
 fi
 
+# Check for ARMv8 CRYPTO Extension intrinsics to do polynomial multiplication
+#
+# First check if vmull_p64 intrinsics can be used with the default compiler
+# flags. If not, check if adding -march=armv8-a+crypto flag helps.
+# CFLAGS_CRYPTO is set if the extra flag is required.
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for vmull_p64 with CFLAGS=" >&5
+$as_echo_n "checking for vmull_p64 with CFLAGS=... " >&6; }
+if ${pgac_cv_armv8_crypto_intrinsics_+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  pgac_save_CFLAGS=$CFLAGS
+CFLAGS="$pgac_save_CFLAGS "
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <arm_neon.h>
+int
+main ()
+{
+return ((uint64_t)vmull_p64(0x12345678, 0x9abcde01) == 0x8860e9abc170678);
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  pgac_cv_armv8_crypto_intrinsics_=yes
+else
+  pgac_cv_armv8_crypto_intrinsics_=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+CFLAGS="$pgac_save_CFLAGS"
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $pgac_cv_armv8_crypto_intrinsics_" >&5
+$as_echo "$pgac_cv_armv8_crypto_intrinsics_" >&6; }
+if test x"$pgac_cv_armv8_crypto_intrinsics_" = x"yes"; then
+  CFLAGS_CRYPTO=""
+  pgac_armv8_crypto_intrinsics=yes
+fi
+
+if test x"$pgac_armv8_crypto_intrinsics" != x"yes"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for vmull_p64 with CFLAGS=-march=armv8-a+crypto" >&5
+$as_echo_n "checking for vmull_p64 with CFLAGS=-march=armv8-a+crypto... " >&6; }
+if ${pgac_cv_armv8_crypto_intrinsics__march_armv8_apcrypto+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  pgac_save_CFLAGS=$CFLAGS
+CFLAGS="$pgac_save_CFLAGS -march=armv8-a+crypto"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <arm_neon.h>
+int
+main ()
+{
+return ((uint64_t)vmull_p64(0x12345678, 0x9abcde01) == 0x8860e9abc170678);
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  pgac_cv_armv8_crypto_intrinsics__march_armv8_apcrypto=yes
+else
+  pgac_cv_armv8_crypto_intrinsics__march_armv8_apcrypto=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+CFLAGS="$pgac_save_CFLAGS"
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $pgac_cv_armv8_crypto_intrinsics__march_armv8_apcrypto" >&5
+$as_echo "$pgac_cv_armv8_crypto_intrinsics__march_armv8_apcrypto" >&6; }
+if test x"$pgac_cv_armv8_crypto_intrinsics__march_armv8_apcrypto" = x"yes"; then
+  CFLAGS_CRYPTO="-march=armv8-a+crypto"
+  pgac_armv8_crypto_intrinsics=yes
+fi
+
+fi
+
 # Check for LoongArch CRC intrinsics to do CRC calculations.
 #
 # Check if __builtin_loongarch_crcc_* intrinsics can be used
@@ -17971,6 +18049,14 @@ if test x"$pgac_cv_loongarch_crc32c_intrinsics" = x"yes"; then
 fi
 
 
+
+
+
+# Set a new CFLAGS, cflags_crc_crypto for files that
+# require both ARMv8 CRC Extension and ARMv8 CRYPTO Extension.
+if test x"$CFLAGS_CRC" != x"" || test x"$CFLAGS_CRYPTO" != x""; then
+  CFLAGS_CRC_CRYPTO='-march=armv8-a+crc+crypto'
+fi
 
 
 # Select CRC-32C implementation.
@@ -18020,6 +18106,17 @@ if test x"$USE_SLICING_BY_8_CRC32C" = x"" && test x"$USE_SSE42_CRC32C" = x"" && 
           fi
         fi
       fi
+    fi
+  fi
+fi
+
+# Use ARM CRYPTO Extension if available.
+if test x"$USE_ARMV8_CRYPTO" = x"" && test x"$USE_ARMV8_CRYPTO_WITH_RUNTIME_CHECK" = x""; then
+  if test x"$pgac_armv8_crypto_intrinsics" = x"yes" && test x"$CFLAGS_CRYPTO" = x""; then
+    USE_ARMV8_CRYPTO=1
+  else
+    if test x"$pgac_armv8_crypto_intrinsics" = x"yes"; then
+      USE_ARMV8_CRYPTO_WITH_RUNTIME_CHECK=1
     fi
   fi
 fi
@@ -18080,6 +18177,26 @@ $as_echo "slicing-by-8" >&6; }
 fi
 
 
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to use ARM CRYPTO Extension" >&5
+$as_echo_n "checking whether to use ARM CRYPTO Extension... " >&6; }
+if test x"$USE_ARMV8_CRYPTO" = x"1"; then
+
+$as_echo "#define USE_ARMV8_CRYPTO 1" >>confdefs.h
+
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+else
+  if test x"$USE_ARMV8_CRYPTO_WITH_RUNTIME_CHECK" = x"1"; then
+
+$as_echo "#define USE_ARMV8_CRYPTO_WITH_RUNTIME_CHECK 1" >>confdefs.h
+
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: with a runtime check" >&5
+$as_echo "with a runtime check" >&6; }
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+  fi
+fi
 
 # Select semaphore implementation type.
 if test "$PORTNAME" != "win32"; then

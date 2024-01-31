@@ -662,6 +662,32 @@ fi
 undefine([Ac_cachevar])dnl
 ])# PGAC_ARMV8_CRC32C_INTRINSICS
 
+# PGAC_ARMV8_CRYPTO_INTRINSICS
+# ----------------------------
+# Check if the compiler supports the PMULL instructions
+# using the vmull_p64 intrinsic function. These instructions
+# were first introduced in ARMv8 CRYPTO Extension.
+#
+# An optional compiler flag can be passed as argument (e.g.
+# -march=armv8-a+crypto). If the intrinsics are supported, sets
+# pgac_armv8_crypto_intrinsics, and CFLAGS_CRYPTO.
+AC_DEFUN([PGAC_ARMV8_CRYPTO_INTRINSICS],
+[define([Ac_cachevar], [AS_TR_SH([pgac_cv_armv8_crypto_intrinsics_$1])])dnl
+AC_CACHE_CHECK([for vmull_p64 with CFLAGS=$1], [Ac_cachevar],
+[pgac_save_CFLAGS=$CFLAGS
+CFLAGS="$pgac_save_CFLAGS $1"
+AC_LINK_IFELSE([AC_LANG_PROGRAM([#include <arm_neon.h>],
+  [return ((uint64_t)vmull_p64(0x12345678, 0x9abcde01) == 0x8860e9abc170678);])],
+  [Ac_cachevar=yes],
+  [Ac_cachevar=no])
+CFLAGS="$pgac_save_CFLAGS"])
+if test x"$Ac_cachevar" = x"yes"; then
+  CFLAGS_CRYPTO="$1"
+  pgac_armv8_crypto_intrinsics=yes
+fi
+undefine([Ac_cachevar])dnl
+])# PGAC_ARMV8_CRYPTO_INTRINSICS
+
 # PGAC_LOONGARCH_CRC32C_INTRINSICS
 # ---------------------------
 # Check if the compiler supports the LoongArch CRCC instructions, using

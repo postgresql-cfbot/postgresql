@@ -2106,6 +2106,16 @@ if test x"$pgac_armv8_crc32c_intrinsics" != x"yes"; then
   PGAC_ARMV8_CRC32C_INTRINSICS([-march=armv8-a+crc])
 fi
 
+# Check for ARMv8 CRYPTO Extension intrinsics to do polynomial multiplication
+#
+# First check if vmull_p64 intrinsics can be used with the default compiler
+# flags. If not, check if adding -march=armv8-a+crypto flag helps.
+# CFLAGS_CRYPTO is set if the extra flag is required.
+PGAC_ARMV8_CRYPTO_INTRINSICS([])
+if test x"$pgac_armv8_crypto_intrinsics" != x"yes"; then
+  PGAC_ARMV8_CRYPTO_INTRINSICS([-march=armv8-a+crypto])
+fi
+
 # Check for LoongArch CRC intrinsics to do CRC calculations.
 #
 # Check if __builtin_loongarch_crcc_* intrinsics can be used
@@ -2113,6 +2123,14 @@ fi
 PGAC_LOONGARCH_CRC32C_INTRINSICS()
 
 AC_SUBST(CFLAGS_CRC)
+AC_SUBST(CFLAGS_CRYPTO)
+
+# Set a new CFLAGS, cflags_crc_crypto for files that
+# require both ARMv8 CRC Extension and ARMv8 CRYPTO Extension.
+if test x"$CFLAGS_CRC" != x"" || test x"$CFLAGS_CRYPTO" != x""; then
+  CFLAGS_CRC_CRYPTO='-march=armv8-a+crc+crypto'
+fi
+AC_SUBST(CFLAGS_CRC_CRYPTO)
 
 # Select CRC-32C implementation.
 #
@@ -2164,6 +2182,17 @@ if test x"$USE_SLICING_BY_8_CRC32C" = x"" && test x"$USE_SSE42_CRC32C" = x"" && 
     fi
   fi
 fi
+ 
+# Use ARM CRYPTO Extension if available.
+if test x"$USE_ARMV8_CRYPTO" = x"" && test x"$USE_ARMV8_CRYPTO_WITH_RUNTIME_CHECK" = x""; then
+  if test x"$pgac_armv8_crypto_intrinsics" = x"yes" && test x"$CFLAGS_CRYPTO" = x""; then
+    USE_ARMV8_CRYPTO=1
+  else
+    if test x"$pgac_armv8_crypto_intrinsics" = x"yes"; then
+      USE_ARMV8_CRYPTO_WITH_RUNTIME_CHECK=1
+    fi
+  fi
+fi
 
 # Set PG_CRC32C_OBJS appropriately depending on the selected implementation.
 AC_MSG_CHECKING([which CRC-32C implementation to use])
@@ -2202,6 +2231,18 @@ else
 fi
 AC_SUBST(PG_CRC32C_OBJS)
 
+AC_MSG_CHECKING([whether to use ARM CRYPTO Extension])
+if test x"$USE_ARMV8_CRYPTO" = x"1"; then
+  AC_DEFINE(USE_ARMV8_CRYPTO, 1, [Define to 1 to use ARMv8 CRYPTO Extension.])
+  AC_MSG_RESULT(yes)
+else
+  if test x"$USE_ARMV8_CRYPTO_WITH_RUNTIME_CHECK" = x"1"; then
+    AC_DEFINE(USE_ARMV8_CRYPTO_WITH_RUNTIME_CHECK, 1, [Define to 1 to use ARMv8 CRYPTO Extension with a runtime check.])
+    AC_MSG_RESULT(with a runtime check)
+  else
+    AC_MSG_RESULT(no)
+  fi
+fi
 
 # Select semaphore implementation type.
 if test "$PORTNAME" != "win32"; then

@@ -251,23 +251,114 @@ tts_virtual_materialize(TupleTableSlot *slot)
 static void
 tts_virtual_copyslot(TupleTableSlot *dstslot, TupleTableSlot *srcslot)
 {
-	TupleDesc	srcdesc = srcslot->tts_tupleDescriptor;
+	TupleDesc srcdesc = srcslot->tts_tupleDescriptor;
+	TupleDesc dstdesc = dstslot->tts_tupleDescriptor;
+	Size	sz = 0;
+	char   *data;
 
 	tts_virtual_clear(dstslot);
 
 	slot_getallattrs(srcslot);
 
-	for (int natt = 0; natt < srcdesc->natts; natt++)
+	/* make sure storage doesn't depend on external memory */
+	for (int natt = 0; natt < dstdesc->natts; natt++)
 	{
-		dstslot->tts_values[natt] = srcslot->tts_values[natt];
-		dstslot->tts_isnull[natt] = srcslot->tts_isnull[natt];
+		Form_pg_attribute att = TupleDescAttr(dstdesc, natt);
+		Datum val;
+		bool isnull;
+
+		/* copy the values/isnull from the srcslot */
+		if (natt < srcdesc->natts)
+		{
+			dstslot->tts_values[natt] = val = srcslot->tts_values[natt];
+			dstslot->tts_isnull[natt] = isnull = srcslot->tts_isnull[natt];
+		}
+		else
+		{
+			/*
+			 * when dstslot has more ntts than srcslot we must materialize
+			 * the values from dstslot
+			 */
+			val = dstslot->tts_values[natt];
+			isnull = dstslot->tts_isnull[natt];
+		}
+
+		if (att->attbyval || isnull)
+			continue;
+
+		if (att->attlen == -1 &&
+			VARATT_IS_EXTERNAL_EXPANDED(DatumGetPointer(val)))
+		{
+			/*
+			 * We want to flatten the expanded value so that the materialized
+			 * slot doesn't depend on it.
+			 */
+			sz = att_align_nominal(sz, att->attalign);
+			sz += EOH_get_flat_size(DatumGetEOHP(val));
+		}
+		else
+		{
+			sz = att_align_nominal(sz, att->attalign);
+			sz = att_addlength_datum(sz, att->attlen, val);
+		}
+	}
+
+	/* do we need to materialize any columns? */
+	if (sz > 0)
+	{
+		VirtualTupleTableSlot *vdstslot = (VirtualTupleTableSlot *) dstslot;
+
+		/* allocate memory */
+		vdstslot->data = data = MemoryContextAlloc(dstslot->tts_mcxt, sz);
+		dstslot->tts_flags |= TTS_FLAG_SHOULDFREE;
+
+		/* and copy all attributes into the pre-allocated space */
+		for (int natt = 0; natt < dstdesc->natts; natt++)
+		{
+			Form_pg_attribute att = TupleDescAttr(dstdesc, natt);
+			Datum val;
+
+			if (att->attbyval || dstslot->tts_isnull[natt])
+				continue;
+
+			val = dstslot->tts_values[natt];
+
+			if (att->attlen == -1 &&
+				VARATT_IS_EXTERNAL_EXPANDED(DatumGetPointer(val)))
+			{
+				Size data_length;
+
+				/*
+				 * We want to flatten the expanded value so that the
+				 * materialized slot doesn't depend on it.
+				 */
+				ExpandedObjectHeader *eoh = DatumGetEOHP(val);
+
+				data = (char *) att_align_nominal(data, att->attalign);
+				data_length = EOH_get_flat_size(eoh);
+				EOH_flatten_into(eoh, data, data_length);
+
+				dstslot->tts_values[natt] = PointerGetDatum(data);
+				data += data_length;
+			}
+			else
+			{
+				Size data_length = 0;
+
+				data = (char *) att_align_nominal(data, att->attalign);
+				data_length = att_addlength_datum(data_length, att->attlen,
+												  val);
+
+				memcpy(data, DatumGetPointer(val), data_length);
+
+				dstslot->tts_values[natt] = PointerGetDatum(data);
+				data += data_length;
+			}
+		}
 	}
 
 	dstslot->tts_nvalid = srcdesc->natts;
 	dstslot->tts_flags &= ~TTS_FLAG_EMPTY;
-
-	/* make sure storage doesn't depend on external memory */
-	tts_virtual_materialize(dstslot);
 }
 
 static HeapTuple

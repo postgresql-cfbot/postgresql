@@ -248,7 +248,7 @@ WalSummarizerMain(void)
 	/* Advertise ourselves. */
 	on_shmem_exit(WalSummarizerShutdown, (Datum) 0);
 	LWLockAcquire(WALSummarizerLock, LW_EXCLUSIVE);
-	WalSummarizerCtl->summarizer_pgprocno = MyProc->pgprocno;
+	WalSummarizerCtl->summarizer_pgprocno = GetNumberFromPGProc(MyProc);
 	LWLockRelease(WALSummarizerLock);
 
 	/* Create and switch to a memory context that we can reset on error. */

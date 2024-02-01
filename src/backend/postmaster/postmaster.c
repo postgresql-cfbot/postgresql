@@ -440,7 +440,7 @@ static int	CountChildren(int target);
 static bool assign_backendlist_entry(RegisteredBgWorker *rw);
 static void maybe_start_bgworkers(void);
 static bool CreateOptsFile(int argc, char *argv[], char *fullprogname);
-static pid_t StartChildProcess(AuxProcType type);
+static pid_t StartChildProcess(BackendType type);
 static void StartAutovacuumWorker(void);
 static void MaybeStartWalReceiver(void);
 static void MaybeStartWalSummarizer(void);
@@ -561,13 +561,13 @@ static void ShmemBackendArrayAdd(Backend *bn);
 static void ShmemBackendArrayRemove(Backend *bn);
 #endif							/* EXEC_BACKEND */
 
-#define StartupDataBase()		StartChildProcess(StartupProcess)
-#define StartArchiver()			StartChildProcess(ArchiverProcess)
-#define StartBackgroundWriter() StartChildProcess(BgWriterProcess)
-#define StartCheckpointer()		StartChildProcess(CheckpointerProcess)
-#define StartWalWriter()		StartChildProcess(WalWriterProcess)
-#define StartWalReceiver()		StartChildProcess(WalReceiverProcess)
-#define StartWalSummarizer()	StartChildProcess(WalSummarizerProcess)
+#define StartupDataBase()		StartChildProcess(B_STARTUP)
+#define StartArchiver()			StartChildProcess(B_ARCHIVER)
+#define StartBackgroundWriter() StartChildProcess(B_BG_WRITER)
+#define StartCheckpointer()		StartChildProcess(B_CHECKPOINTER)
+#define StartWalWriter()		StartChildProcess(B_WAL_WRITER)
+#define StartWalReceiver()		StartChildProcess(B_WAL_RECEIVER)
+#define StartWalSummarizer()	StartChildProcess(B_WAL_SUMMARIZER)
 
 /* Macros to check exit status of a child process */
 #define EXIT_STATUS_0(st)  ((st) == 0)
@@ -4953,7 +4953,7 @@ SubPostmasterMain(int argc, char *argv[])
 	}
 	if (strcmp(argv[1], "--forkaux") == 0)
 	{
-		AuxProcType auxtype;
+		BackendType auxtype;
 
 		Assert(argc == 4);
 
@@ -4979,9 +4979,6 @@ SubPostmasterMain(int argc, char *argv[])
 	}
 	if (strcmp(argv[1], "--forkbgworker") == 0)
 	{
-		/* do this as early as possible; in particular, before InitProcess() */
-		IsBackgroundWorker = true;
-
 		/* Restore basic shared memory pointers */
 		InitShmemAccess(UsedShmemSegAddr);
 
@@ -5292,7 +5289,7 @@ CountChildren(int target)
  * to start subprocess.
  */
 static pid_t
-StartChildProcess(AuxProcType type)
+StartChildProcess(BackendType type)
 {
 	pid_t		pid;
 
@@ -5344,31 +5341,31 @@ StartChildProcess(AuxProcType type)
 		errno = save_errno;
 		switch (type)
 		{
-			case StartupProcess:
+			case B_STARTUP:
 				ereport(LOG,
 						(errmsg("could not fork startup process: %m")));
 				break;
-			case ArchiverProcess:
+			case B_ARCHIVER:
 				ereport(LOG,
 						(errmsg("could not fork archiver process: %m")));
 				break;
-			case BgWriterProcess:
+			case B_BG_WRITER:
 				ereport(LOG,
 						(errmsg("could not fork background writer process: %m")));
 				break;
-			case CheckpointerProcess:
+			case B_CHECKPOINTER:
 				ereport(LOG,
 						(errmsg("could not fork checkpointer process: %m")));
 				break;
-			case WalWriterProcess:
+			case B_WAL_WRITER:
 				ereport(LOG,
 						(errmsg("could not fork WAL writer process: %m")));
 				break;
-			case WalReceiverProcess:
+			case B_WAL_RECEIVER:
 				ereport(LOG,
 						(errmsg("could not fork WAL receiver process: %m")));
 				break;
-			case WalSummarizerProcess:
+			case B_WAL_SUMMARIZER:
 				ereport(LOG,
 						(errmsg("could not fork WAL summarizer process: %m")));
 				break;
@@ -5382,7 +5379,7 @@ StartChildProcess(AuxProcType type)
 		 * fork failure is fatal during startup, but there's no need to choke
 		 * immediately if starting other child types fails.
 		 */
-		if (type == StartupProcess)
+		if (type == B_STARTUP)
 			ExitPostmaster(1);
 		return 0;
 	}

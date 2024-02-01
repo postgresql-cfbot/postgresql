@@ -458,7 +458,7 @@ TransactionGroupUpdateXidStatus(TransactionId xid, XidStatus status,
 		 * less efficiently.
 		 */
 		if (nextidx != INVALID_PGPROCNO &&
-			ProcGlobal->allProcs[nextidx].clogGroupMemberPage != proc->clogGroupMemberPage)
+			GetPGProcByNumber(nextidx)->clogGroupMemberPage != proc->clogGroupMemberPage)
 		{
 			/*
 			 * Ensure that this proc is not a member of any clog group that
@@ -473,7 +473,7 @@ TransactionGroupUpdateXidStatus(TransactionId xid, XidStatus status,
 
 		if (pg_atomic_compare_exchange_u32(&procglobal->clogGroupFirst,
 										   &nextidx,
-										   (uint32) proc->pgprocno))
+										   (uint32) GetNumberFromPGProc(proc)))
 			break;
 	}
 

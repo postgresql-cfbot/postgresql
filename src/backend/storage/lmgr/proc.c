@@ -41,7 +41,6 @@
 #include "postmaster/autovacuum.h"
 #include "replication/slot.h"
 #include "replication/syncrep.h"
-#include "replication/walsender.h"
 #include "storage/condition_variable.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
@@ -227,7 +226,6 @@ InitProcGlobal(void)
 			InitSharedLatch(&(proc->procLatch));
 			LWLockInitialize(&(proc->fpInfoLock), LWTRANCHE_LOCK_FASTPATH);
 		}
-		proc->pgprocno = i;
 
 		/*
 		 * Newly created PGPROCs for normal backends, autovacuum and bgworkers
@@ -240,25 +238,25 @@ InitProcGlobal(void)
 		if (i < MaxConnections)
 		{
 			/* PGPROC for normal backend, add to freeProcs list */
-			dlist_push_head(&ProcGlobal->freeProcs, &proc->links);
+			dlist_push_tail(&ProcGlobal->freeProcs, &proc->links);
 			proc->procgloballist = &ProcGlobal->freeProcs;
 		}
 		else if (i < MaxConnections + autovacuum_max_workers + 1)
 		{
 			/* PGPROC for AV launcher/worker, add to autovacFreeProcs list */
-			dlist_push_head(&ProcGlobal->autovacFreeProcs, &proc->links);
+			dlist_push_tail(&ProcGlobal->autovacFreeProcs, &proc->links);
 			proc->procgloballist = &ProcGlobal->autovacFreeProcs;
 		}
 		else if (i < MaxConnections + autovacuum_max_workers + 1 + max_worker_processes)
 		{
 			/* PGPROC for bgworker, add to bgworkerFreeProcs list */
-			dlist_push_head(&ProcGlobal->bgworkerFreeProcs, &proc->links);
+			dlist_push_tail(&ProcGlobal->bgworkerFreeProcs, &proc->links);
 			proc->procgloballist = &ProcGlobal->bgworkerFreeProcs;
 		}
 		else if (i < MaxBackends)
 		{
 			/* PGPROC for walsender, add to walsenderFreeProcs list */
-			dlist_push_head(&ProcGlobal->walsenderFreeProcs, &proc->links);
+			dlist_push_tail(&ProcGlobal->walsenderFreeProcs, &proc->links);
 			proc->procgloballist = &ProcGlobal->walsenderFreeProcs;
 		}
 
@@ -309,11 +307,11 @@ InitProcess(void)
 		elog(ERROR, "you already exist");
 
 	/* Decide which list should supply our PGPROC. */
-	if (IsAnyAutoVacuumProcess())
+	if (AmAutoVacuumLauncherProcess() || AmAutoVacuumWorkerProcess())
 		procgloballist = &ProcGlobal->autovacFreeProcs;
-	else if (IsBackgroundWorker)
+	else if (AmBackgroundWorkerProcess())
 		procgloballist = &ProcGlobal->bgworkerFreeProcs;
-	else if (am_walsender)
+	else if (AmWalSenderProcess())
 		procgloballist = &ProcGlobal->walsenderFreeProcs;
 	else
 		procgloballist = &ProcGlobal->freeProcs;
@@ -343,7 +341,7 @@ InitProcess(void)
 		 * in the autovacuum case?
 		 */
 		SpinLockRelease(ProcStructLock);
-		if (am_walsender)
+		if (AmWalSenderProcess())
 			ereport(FATAL,
 					(errcode(ERRCODE_TOO_MANY_CONNECTIONS),
 					 errmsg("number of requested standby connections exceeds max_wal_senders (currently %d)",
@@ -352,6 +350,7 @@ InitProcess(void)
 				(errcode(ERRCODE_TOO_MANY_CONNECTIONS),
 				 errmsg("sorry, too many clients already")));
 	}
+	MyBackendId = GetBackendIdFromPGProc(MyProc);
 
 	/*
 	 * Cross-check that the PGPROC is of the type we expect; if this were not
@@ -365,7 +364,7 @@ InitProcess(void)
 	 * cleaning up.  (XXX autovac launcher currently doesn't participate in
 	 * this; it probably should.)
 	 */
-	if (IsUnderPostmaster && !IsAutoVacuumLauncherProcess())
+	if (IsUnderPostmaster && !AmAutoVacuumLauncherProcess())
 		MarkPostmasterChildActive();
 
 	/*
@@ -374,22 +373,22 @@ InitProcess(void)
 	 */
 	dlist_node_init(&MyProc->links);
 	MyProc->waitStatus = PROC_WAIT_STATUS_OK;
-	MyProc->lxid = InvalidLocalTransactionId;
 	MyProc->fpVXIDLock = false;
 	MyProc->fpLocalTransactionId = InvalidLocalTransactionId;
 	MyProc->xid = InvalidTransactionId;
 	MyProc->xmin = InvalidTransactionId;
 	MyProc->pid = MyProcPid;
-	/* backendId, databaseId and roleId will be filled in later */
-	MyProc->backendId = InvalidBackendId;
+	MyProc->vxid.backendId = MyBackendId;
+	MyProc->vxid.lxid = InvalidLocalTransactionId;
+	/* databaseId and roleId will be filled in later */
 	MyProc->databaseId = InvalidOid;
 	MyProc->roleId = InvalidOid;
 	MyProc->tempNamespaceId = InvalidOid;
-	MyProc->isBackgroundWorker = IsBackgroundWorker;
+	MyProc->isBackgroundWorker = AmBackgroundWorkerProcess();
 	MyProc->delayChkptFlags = 0;
 	MyProc->statusFlags = 0;
 	/* NB -- autovac launcher intentionally does not set IS_AUTOVACUUM */
-	if (IsAutoVacuumWorkerProcess())
+	if (AmAutoVacuumWorkerProcess())
 		MyProc->statusFlags |= PROC_IS_AUTOVACUUM;
 	MyProc->lwWaiting = LW_WS_NOT_WAITING;
 	MyProc->lwWaitMode = 0;
@@ -561,9 +560,10 @@ InitAuxiliaryProcess(void)
 	/* use volatile pointer to prevent code rearrangement */
 	((volatile PGPROC *) auxproc)->pid = MyProcPid;
 
-	MyProc = auxproc;
-
 	SpinLockRelease(ProcStructLock);
+
+	MyProc = auxproc;
+	MyBackendId = GetBackendIdFromPGProc(MyProc);
 
 	/*
 	 * Initialize all fields of MyProc, except for those previously
@@ -571,16 +571,16 @@ InitAuxiliaryProcess(void)
 	 */
 	dlist_node_init(&MyProc->links);
 	MyProc->waitStatus = PROC_WAIT_STATUS_OK;
-	MyProc->lxid = InvalidLocalTransactionId;
 	MyProc->fpVXIDLock = false;
 	MyProc->fpLocalTransactionId = InvalidLocalTransactionId;
 	MyProc->xid = InvalidTransactionId;
 	MyProc->xmin = InvalidTransactionId;
-	MyProc->backendId = InvalidBackendId;
+	MyProc->vxid.backendId = InvalidBackendId;
+	MyProc->vxid.lxid = InvalidLocalTransactionId;
 	MyProc->databaseId = InvalidOid;
 	MyProc->roleId = InvalidOid;
 	MyProc->tempNamespaceId = InvalidOid;
-	MyProc->isBackgroundWorker = IsBackgroundWorker;
+	MyProc->isBackgroundWorker = AmBackgroundWorkerProcess();
 	MyProc->delayChkptFlags = 0;
 	MyProc->statusFlags = 0;
 	MyProc->lwWaiting = LW_WS_NOT_WAITING;
@@ -906,7 +906,13 @@ ProcKill(int code, Datum arg)
 
 	proc = MyProc;
 	MyProc = NULL;
+	MyBackendId = InvalidBackendId;
 	DisownLatch(&proc->procLatch);
+
+	/* Mark the proc no longer in use */
+	proc->pid = 0;
+	proc->vxid.backendId = InvalidBackendId;
+	proc->vxid.lxid = InvalidTransactionId;
 
 	procgloballist = proc->procgloballist;
 	SpinLockAcquire(ProcStructLock);
@@ -935,7 +941,7 @@ ProcKill(int code, Datum arg)
 	 * way, so tell the postmaster we've cleaned up acceptably well. (XXX
 	 * autovac launcher should be included here someday)
 	 */
-	if (IsUnderPostmaster && !IsAutoVacuumLauncherProcess())
+	if (IsUnderPostmaster && !AmAutoVacuumLauncherProcess())
 		MarkPostmasterChildInactive();
 
 	/* wake autovac launcher if needed -- see comments in FreeWorkerInfo */
@@ -977,6 +983,7 @@ AuxiliaryProcKill(int code, Datum arg)
 
 	proc = MyProc;
 	MyProc = NULL;
+	MyBackendId = InvalidBackendId;
 	DisownLatch(&proc->procLatch);
 
 	SpinLockAcquire(ProcStructLock);

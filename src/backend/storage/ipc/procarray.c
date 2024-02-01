@@ -505,7 +505,7 @@ ProcArrayAdd(PGPROC *proc)
 		Assert(allProcs[procno].pgxactoff == index);
 
 		/* If we have found our right position in the array, break */
-		if (arrayP->pgprocnos[index] > proc->pgprocno)
+		if (arrayP->pgprocnos[index] > GetNumberFromPGProc(proc))
 			break;
 	}
 
@@ -523,7 +523,7 @@ ProcArrayAdd(PGPROC *proc)
 			&ProcGlobal->statusFlags[index],
 			movecount * sizeof(*ProcGlobal->statusFlags));
 
-	arrayP->pgprocnos[index] = proc->pgprocno;
+	arrayP->pgprocnos[index] = GetNumberFromPGProc(proc);
 	proc->pgxactoff = index;
 	ProcGlobal->xids[index] = proc->xid;
 	ProcGlobal->subxidStates[index] = proc->subxidStatus;
@@ -700,7 +700,7 @@ ProcArrayEndTransaction(PGPROC *proc, TransactionId latestXid)
 		Assert(proc->subxidStatus.count == 0);
 		Assert(!proc->subxidStatus.overflowed);
 
-		proc->lxid = InvalidLocalTransactionId;
+		proc->vxid.lxid = InvalidLocalTransactionId;
 		proc->xmin = InvalidTransactionId;
 
 		/* be sure this is cleared in abort */
@@ -742,7 +742,7 @@ ProcArrayEndTransactionInternal(PGPROC *proc, TransactionId latestXid)
 
 	ProcGlobal->xids[pgxactoff] = InvalidTransactionId;
 	proc->xid = InvalidTransactionId;
-	proc->lxid = InvalidLocalTransactionId;
+	proc->vxid.lxid = InvalidLocalTransactionId;
 	proc->xmin = InvalidTransactionId;
 
 	/* be sure this is cleared in abort */
@@ -808,7 +808,7 @@ ProcArrayGroupClearXid(PGPROC *proc, TransactionId latestXid)
 
 		if (pg_atomic_compare_exchange_u32(&procglobal->procArrayGroupFirst,
 										   &nextidx,
-										   (uint32) proc->pgprocno))
+										   (uint32) GetNumberFromPGProc(proc)))
 			break;
 	}
 
@@ -928,7 +928,7 @@ ProcArrayClearTransaction(PGPROC *proc)
 	ProcGlobal->xids[pgxactoff] = InvalidTransactionId;
 	proc->xid = InvalidTransactionId;
 
-	proc->lxid = InvalidLocalTransactionId;
+	proc->vxid.lxid = InvalidLocalTransactionId;
 	proc->xmin = InvalidTransactionId;
 	proc->recoveryConflictPending = false;
 
@@ -2534,6 +2534,11 @@ ProcArrayInstallImportedXmin(TransactionId xmin,
 	/* Get lock so source xact can't end while we're doing this */
 	LWLockAcquire(ProcArrayLock, LW_SHARED);
 
+	/*
+	 * Find the PGPROC entry of the source transaction. (This could use
+	 * GetPGProcByBackendId(), unless it's a prepared xact.  But this isn't
+	 * performance critical.)
+	 */
 	for (index = 0; index < arrayP->numProcs; index++)
 	{
 		int			pgprocno = arrayP->pgprocnos[index];
@@ -2546,9 +2551,9 @@ ProcArrayInstallImportedXmin(TransactionId xmin,
 			continue;
 
 		/* We are only interested in the specific virtual transaction. */
-		if (proc->backendId != sourcevxid->backendId)
+		if (proc->vxid.backendId != sourcevxid->backendId)
 			continue;
-		if (proc->lxid != sourcevxid->localTransactionId)
+		if (proc->vxid.lxid != sourcevxid->localTransactionId)
 			continue;
 
 		/*
@@ -3095,6 +3100,64 @@ HaveVirtualXIDsDelayingChkpt(VirtualTransactionId *vxids, int nvxids, int type)
 	LWLockRelease(ProcArrayLock);
 
 	return result;
+}
+
+/*
+ * BackendIdGetProc -- get a backend's PGPROC given its backend ID
+ *
+ * The result may be out of date arbitrarily quickly, so the caller
+ * must be careful about how this information is used.  NULL is
+ * returned if the backend is not active.
+ */
+PGPROC *
+BackendIdGetProc(int backendID)
+{
+	PGPROC	   *result;
+
+	if (backendID < 1 || backendID > ProcGlobal->allProcCount)
+		return NULL;
+	result = GetPGProcByBackendId(backendID);
+
+	if (result->pid == 0)
+		return NULL;
+
+	return result;
+}
+
+/*
+ * BackendIdGetTransactionIds -- get a backend's transaction status
+ *
+ * Get the xid, xmin, nsubxid and overflow status of the backend.  The
+ * result may be out of date arbitrarily quickly, so the caller must be
+ * careful about how this information is used.
+ */
+void
+BackendIdGetTransactionIds(int backendID, TransactionId *xid,
+						   TransactionId *xmin, int *nsubxid, bool *overflowed)
+{
+	PGPROC	   *proc;
+
+	*xid = InvalidTransactionId;
+	*xmin = InvalidTransactionId;
+	*nsubxid = 0;
+	*overflowed = false;
+
+	if (backendID < 1 || backendID > ProcGlobal->allProcCount)
+		return;
+	proc = GetPGProcByBackendId(backendID);
+
+	/* Need to lock out additions/removals of backends */
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+
+	if (proc->pid != 0)
+	{
+		*xid = proc->xid;
+		*xmin = proc->xmin;
+		*nsubxid = proc->subxidStatus.count;
+		*overflowed = proc->subxidStatus.overflowed;
+	}
+
+	LWLockRelease(ProcArrayLock);
 }
 
 /*

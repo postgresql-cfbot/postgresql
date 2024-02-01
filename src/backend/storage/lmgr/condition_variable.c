@@ -57,7 +57,7 @@ ConditionVariableInit(ConditionVariable *cv)
 void
 ConditionVariablePrepareToSleep(ConditionVariable *cv)
 {
-	int			pgprocno = MyProc->pgprocno;
+	int			pgprocno = GetNumberFromPGProc(MyProc);
 
 	/*
 	 * If some other sleep is already prepared, cancel it; this is necessary
@@ -181,10 +181,10 @@ ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 		 * guarantee not to return spuriously, we'll avoid this obvious case.
 		 */
 		SpinLockAcquire(&cv->mutex);
-		if (!proclist_contains(&cv->wakeup, MyProc->pgprocno, cvWaitLink))
+		if (!proclist_contains(&cv->wakeup, GetNumberFromPGProc(MyProc), cvWaitLink))
 		{
 			done = true;
-			proclist_push_tail(&cv->wakeup, MyProc->pgprocno, cvWaitLink);
+			proclist_push_tail(&cv->wakeup, GetNumberFromPGProc(MyProc), cvWaitLink);
 		}
 		SpinLockRelease(&cv->mutex);
 
@@ -236,8 +236,8 @@ ConditionVariableCancelSleep(void)
 		return false;
 
 	SpinLockAcquire(&cv->mutex);
-	if (proclist_contains(&cv->wakeup, MyProc->pgprocno, cvWaitLink))
-		proclist_delete(&cv->wakeup, MyProc->pgprocno, cvWaitLink);
+	if (proclist_contains(&cv->wakeup, GetNumberFromPGProc(MyProc), cvWaitLink))
+		proclist_delete(&cv->wakeup, GetNumberFromPGProc(MyProc), cvWaitLink);
 	else
 		signaled = true;
 	SpinLockRelease(&cv->mutex);
@@ -281,7 +281,7 @@ ConditionVariableSignal(ConditionVariable *cv)
 void
 ConditionVariableBroadcast(ConditionVariable *cv)
 {
-	int			pgprocno = MyProc->pgprocno;
+	int			pgprocno = GetNumberFromPGProc(MyProc);
 	PGPROC	   *proc = NULL;
 	bool		have_sentinel = false;
 

@@ -186,21 +186,31 @@ struct PGPROC
 								 * vacuum must not remove tuples deleted by
 								 * xid >= xmin ! */
 
-	LocalTransactionId lxid;	/* local id of top-level transaction currently
-								 * being executed by this proc, if running;
-								 * else InvalidLocalTransactionId */
 	int			pid;			/* Backend's process ID; 0 if prepared xact */
 
 	int			pgxactoff;		/* offset into various ProcGlobal->arrays with
 								 * data mirrored from this PGPROC */
 
-	int			pgprocno;		/* Number of this PGPROC in
-								 * ProcGlobal->allProcs array. This is set
-								 * once by InitProcGlobal().
-								 * ProcGlobal->allProcs[n].pgprocno == n */
+	/*
+	 * Currently running top-level transaction's virtual xid. Together these
+	 * form a VirtualTransactionId, but we don't use that struct because this
+	 * is not atomically assignable as whole, and we want to enforce code to
+	 * consider both parts separately.  See comments at VirtualTransactionId.
+	 */
+	struct {
+		BackendId	backendId;		/* For regular backends, equal to
+									 * GetBackendIdFromPGProc(proc).  For
+									 * prepared xacts, ID of the original
+									 * backend that processed the
+									 * transaction. For unused PGPROC entries,
+									 * InvalidbackendID. */
+		LocalTransactionId lxid;	/* local id of top-level transaction
+									 * currently * being executed by this
+									 * proc, if running; else
+									 * InvalidLocaltransactionId */
+	} vxid;
 
 	/* These fields are zero while a backend is still starting up: */
-	BackendId	backendId;		/* This backend's backend ID (if assigned) */
 	Oid			databaseId;		/* OID of database this backend is using */
 	Oid			roleId;			/* OID of role using this backend */
 
@@ -410,8 +420,16 @@ extern PGDLLIMPORT PROC_HDR *ProcGlobal;
 
 extern PGDLLIMPORT PGPROC *PreparedXactProcs;
 
-/* Accessor for PGPROC given a pgprocno. */
+/*
+ * Accessors for getting PGPROC given a pgprocno or BackendId, and vice versa.
+ *
+ * For historical reasons, some code uses 0-based "proc numbers", while other
+ * code uses 1-based backend IDs.
+ */
 #define GetPGProcByNumber(n) (&ProcGlobal->allProcs[(n)])
+#define GetNumberFromPGProc(proc) ((proc) - &ProcGlobal->allProcs[0])
+#define GetPGProcByBackendId(n) (&ProcGlobal->allProcs[(n) - 1])
+#define GetBackendIdFromPGProc(proc) (GetNumberFromPGProc(proc) + 1)
 
 /*
  * We set aside some extra PGPROC structures for auxiliary processes,

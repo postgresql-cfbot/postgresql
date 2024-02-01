@@ -43,9 +43,9 @@ static void setNamespaceVisibilityForRTE(List *namespace, RangeTblEntry *rte,
  * Make appropriate changes to the namespace visibility while transforming
  * individual action's quals and targetlist expressions. In particular, for
  * INSERT actions we must only see the source relation (since INSERT action is
- * invoked for NOT MATCHED tuples and hence there is no target tuple to deal
- * with). On the other hand, UPDATE and DELETE actions can see both source and
- * target relations.
+ * invoked for NOT MATCHED [BY TARGET] tuples and hence there is no target
+ * tuple to deal with). On the other hand, UPDATE and DELETE actions can see
+ * both source and target relations, unless invoked for NOT MATCHED BY SOURCE.
  *
  * Also, since the internal join node can hide the source and target
  * relations, we must explicitly make the respective relation as visible so
@@ -61,7 +61,7 @@ setNamespaceForMergeWhen(ParseState *pstate, MergeWhenClause *mergeWhenClause,
 	targetRelRTE = rt_fetch(targetRTI, pstate->p_rtable);
 	sourceRelRTE = rt_fetch(sourceRTI, pstate->p_rtable);
 
-	if (mergeWhenClause->matched)
+	if (mergeWhenClause->matchKind == MERGE_WHEN_MATCHED)
 	{
 		Assert(mergeWhenClause->commandType == CMD_UPDATE ||
 			   mergeWhenClause->commandType == CMD_DELETE ||
@@ -73,11 +73,25 @@ setNamespaceForMergeWhen(ParseState *pstate, MergeWhenClause *mergeWhenClause,
 		setNamespaceVisibilityForRTE(pstate->p_namespace,
 									 sourceRelRTE, true, true);
 	}
-	else
+	else if (mergeWhenClause->matchKind == MERGE_WHEN_NOT_MATCHED_BY_SOURCE)
 	{
 		/*
-		 * NOT MATCHED actions can't see target relation, but they can see
-		 * source relation.
+		 * NOT MATCHED BY SOURCE actions can see the target relation, but they
+		 * can't see the source relation.
+		 */
+		Assert(mergeWhenClause->commandType == CMD_UPDATE ||
+			   mergeWhenClause->commandType == CMD_DELETE ||
+			   mergeWhenClause->commandType == CMD_NOTHING);
+		setNamespaceVisibilityForRTE(pstate->p_namespace,
+									 targetRelRTE, true, true);
+		setNamespaceVisibilityForRTE(pstate->p_namespace,
+									 sourceRelRTE, false, false);
+	}
+	else						/* MERGE_WHEN_NOT_MATCHED_BY_TARGET */
+	{
+		/*
+		 * NOT MATCHED [BY TARGET] actions can't see target relation, but they
+		 * can see source relation.
 		 */
 		Assert(mergeWhenClause->commandType == CMD_INSERT ||
 			   mergeWhenClause->commandType == CMD_NOTHING);
@@ -98,8 +112,7 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 	Query	   *qry = makeNode(Query);
 	ListCell   *l;
 	AclMode		targetPerms = ACL_NO_RIGHTS;
-	bool		is_terminal[2];
-	Index		sourceRTI;
+	bool		is_terminal[3];
 	List	   *mergeActionList;
 	Node	   *joinExpr;
 	ParseNamespaceItem *nsitem;
@@ -125,12 +138,12 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 	/*
 	 * Check WHEN clauses for permissions and sanity
 	 */
-	is_terminal[0] = false;
-	is_terminal[1] = false;
+	is_terminal[MERGE_WHEN_MATCHED] = false;
+	is_terminal[MERGE_WHEN_NOT_MATCHED_BY_SOURCE] = false;
+	is_terminal[MERGE_WHEN_NOT_MATCHED_BY_TARGET] = false;
 	foreach(l, stmt->mergeWhenClauses)
 	{
 		MergeWhenClause *mergeWhenClause = (MergeWhenClause *) lfirst(l);
-		int			when_type = (mergeWhenClause->matched ? 0 : 1);
 
 		/*
 		 * Collect action types so we can check target permissions
@@ -155,12 +168,12 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 		/*
 		 * Check for unreachable WHEN clauses
 		 */
-		if (is_terminal[when_type])
+		if (is_terminal[mergeWhenClause->matchKind])
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
 					 errmsg("unreachable WHEN clause specified after unconditional WHEN clause")));
 		if (mergeWhenClause->condition == NULL)
-			is_terminal[when_type] = true;
+			is_terminal[mergeWhenClause->matchKind] = true;
 	}
 
 	/*
@@ -193,8 +206,8 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 	/* Now transform the source relation to produce the source RTE. */
 	transformFromClause(pstate,
 						list_make1(stmt->sourceRelation));
-	sourceRTI = list_length(pstate->p_rtable);
-	nsitem = GetNSItemByRangeTablePosn(pstate, sourceRTI, 0);
+	qry->mergeSourceRelation = list_length(pstate->p_rtable);
+	nsitem = GetNSItemByRangeTablePosn(pstate, qry->mergeSourceRelation, 0);
 
 	/*
 	 * Check that the target table doesn't conflict with the source table.
@@ -255,11 +268,7 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 
 		action = makeNode(MergeAction);
 		action->commandType = mergeWhenClause->commandType;
-		action->matched = mergeWhenClause->matched;
-
-		/* Use an outer join if any INSERT actions exist in the command. */
-		if (action->commandType == CMD_INSERT)
-			qry->mergeUseOuterJoin = true;
+		action->matchKind = mergeWhenClause->matchKind;
 
 		/*
 		 * Set namespace for the specific action. This must be done before
@@ -267,7 +276,7 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 		 */
 		setNamespaceForMergeWhen(pstate, mergeWhenClause,
 								 qry->resultRelation,
-								 sourceRTI);
+								 qry->mergeSourceRelation);
 
 		/*
 		 * Transform the WHEN condition.

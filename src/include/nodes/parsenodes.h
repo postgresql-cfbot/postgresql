@@ -175,8 +175,9 @@ typedef struct Query
 								 * also USING clause for MERGE */
 
 	List	   *mergeActionList;	/* list of actions for MERGE (only) */
-	/* whether to use outer join */
-	bool		mergeUseOuterJoin pg_node_attr(query_jumble_ignore);
+
+	/* rtable index of source relation for MERGE */
+	int			mergeSourceRelation pg_node_attr(query_jumble_ignore);
 
 	List	   *targetList;		/* target list (of TargetEntry) */
 
@@ -1665,7 +1666,7 @@ typedef struct CommonTableExpr
 typedef struct MergeWhenClause
 {
 	NodeTag		type;
-	bool		matched;		/* true=MATCHED, false=NOT MATCHED */
+	MergeMatchKind matchKind;	/* MATCHED/NOT MATCHED BY SOURCE/TARGET */
 	CmdType		commandType;	/* INSERT/UPDATE/DELETE/DO NOTHING */
 	OverridingKind override;	/* OVERRIDING clause */
 	Node	   *condition;		/* WHEN conditions (raw parser) */

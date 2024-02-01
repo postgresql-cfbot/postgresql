@@ -1,0 +1,4 @@
+comment = 'Test extension wildcard 1'
+default_version = '1.0'
+relocatable = true
+wildcard_upgrades = true

@@ -111,6 +111,8 @@ do
 	test "$f" = src/pl/tcl/pltclerrcodes.h && continue
 
 	# Also not meant to be included standalone.
+	test "$f" = src/include/access/nbtree_spec.h && continue
+	test "$f" = src/include/access/nbtree_specfuncs.h && continue
 	test "$f" = src/include/common/unicode_nonspacing_table.h && continue
 	test "$f" = src/include/common/unicode_east_asian_fw_table.h && continue
 

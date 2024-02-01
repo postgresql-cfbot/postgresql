@@ -890,3 +890,114 @@ ResOwnerPrintTupleDesc(Datum res)
 	return psprintf("TupleDesc %p (%u,%d)",
 					tupdesc, tupdesc->tdtypeid, tupdesc->tdtypmod);
 }
+
+/*
+ * PopulateTupleDescCacheOffsets
+ *
+ * Populate the attcacheoff fields of a TupleDesc, returning the last
+ * attcacheoff with a valid offset value.
+ *
+ * Populates attcacheoff with a negative cache value when no offset
+ * can be calculated (due to e.g. variable length attributes).
+ * The negative value is a value relative to the last cacheable attribute
+ *   attcacheoff = -1 - (thisattno - cachedattno)
+ * so that the last attribute with cached offset can be found with
+ *   cachedattno = attcacheoff + 1 + thisattno
+ *   
+ * The value returned is the AttrNumber of the last (1-based) attribute that
+ * had its offset cached.
+ * 
+ * When the TupleDesc has 0 attributes, it returns 0.
+ */
+AttrNumber
+PopulateTupleDescCacheOffsets(TupleDesc desc)
+{
+	int			numberOfAttributes = desc->natts;
+	AttrNumber	currAttNo, lastCachedAttNo;
+
+	if (numberOfAttributes == 0)
+		return 0;
+
+	/* Non-negative value: this attribute is cached */
+	if (TupleDescAttr(desc, desc->natts - 1)->attcacheoff >= 0)
+		return (AttrNumber) desc->natts;
+	/*
+	 * Attribute has been filled with relative offset to last cached value, but
+	 * it itself is unreachable.
+	 */
+	if (TupleDescAttr(desc, desc->natts - 1)->attcacheoff != -1)
+		return (AttrNumber) (TupleDescAttr(desc, desc->natts - 1)->attcacheoff + 1 + desc->natts);
+
+	/* last attribute of the tupledesc may or may not support attcacheoff */
+
+	/*
+	 * First attribute always starts at offset zero.
+	 */
+	TupleDescAttr(desc, 0)->attcacheoff = 0;
+
+	currAttNo = 1;
+	/*
+	 * Other code may have populated the value previously.
+	 * Skip all positive offsets to get to the first attribute without
+	 * attcacheoff.
+	 */
+	while (currAttNo < numberOfAttributes &&
+		   TupleDescAttr(desc, currAttNo)->attcacheoff >= 0)
+		currAttNo++;
+
+	/*
+	 * Cache offset is undetermined. Start calculating offsets if possible.
+	 * 
+	 * When we exit this block, currAttNo will point at the first uncacheable
+	 * attribute, or past the end of the attribute array.
+	 */
+	if (currAttNo < numberOfAttributes &&
+		TupleDescAttr(desc, currAttNo)->attcacheoff == -1)
+	{
+		Form_pg_attribute att = TupleDescAttr(desc, currAttNo - 1);
+		int32 off = att->attcacheoff;
+
+		if (att->attlen >= 0) {
+			off += att->attlen;
+
+			while (currAttNo < numberOfAttributes)
+			{
+				att = TupleDescAttr(desc, currAttNo);
+
+				if (att->attlen < 0)
+				{
+					if (off == att_align_nominal(off, att->attalign))
+					{
+						att->attcacheoff = off;
+						currAttNo++;
+					}
+					break;
+				}
+
+				off = att_align_nominal(off, att->attalign);
+				att->attcacheoff = off;
+				off += att->attlen;
+				currAttNo++;
+			}
+		}
+	}
+
+	Assert(currAttNo == numberOfAttributes || (
+		currAttNo < numberOfAttributes
+		&& TupleDescAttr(desc, (currAttNo - 1))->attcacheoff >= 0
+		&& TupleDescAttr(desc, currAttNo)->attcacheoff == -1
+	));
+	/*
+	 * No cacheable offsets left. Fill the rest with negative cache values,
+	 * but return the latest cached offset.
+	 */
+	lastCachedAttNo = currAttNo;
+
+	while (currAttNo < numberOfAttributes)
+	{
+		TupleDescAttr(desc, currAttNo)->attcacheoff = -1 - (currAttNo - lastCachedAttNo);
+		currAttNo++;
+	}
+
+	return lastCachedAttNo;
+}

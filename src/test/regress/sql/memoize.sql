@@ -74,6 +74,30 @@ LATERAL (
 ON t1.two = t2.two
 WHERE t1.unique1 < 10;
 
+-- Try with LATERAL references within PlaceHolderVars at a baserel
+SELECT explain_memoize('
+SELECT COUNT(*),AVG(t1.twenty) FROM tenk1 t1 LEFT JOIN
+LATERAL (SELECT t1.twenty as c1, t2.unique1 as c2 FROM tenk1 t2) s on true
+WHERE s.c1 = s.c2 and t1.unique1 < 1000;', false);
+
+-- And check we get the expected results.
+SELECT COUNT(*), AVG(t1.twenty) FROM tenk1 t1 LEFT JOIN
+LATERAL (SELECT t1.twenty as c1, t2.unique1 as c2 FROM tenk1 t2) s on true
+WHERE s.c1 = s.c2 and t1.unique1 < 1000;
+
+-- Try with LATERAL references within PlaceHolderVars at a joinrel
+SELECT explain_memoize('
+SELECT COUNT(*),AVG(t1.twenty) FROM tenk1 t1 LEFT JOIN
+LATERAL (SELECT t1.twenty as c1, t2.unique1 as c2 FROM tenk1 t2, tenk1 t3
+         WHERE t3.unique1 = 1) s on true
+WHERE s.c1 = s.c2 and t1.unique1 < 1000;', false);
+
+-- And check we get the expected results.
+SELECT COUNT(*),AVG(t1.twenty) FROM tenk1 t1 LEFT JOIN
+LATERAL (SELECT t1.twenty as c1, t2.unique1 as c2 FROM tenk1 t2, tenk1 t3
+         WHERE t3.unique1 = 1) s on true
+WHERE s.c1 = s.c2 and t1.unique1 < 1000;
+
 -- Reduce work_mem and hash_mem_multiplier so that we see some cache evictions
 SET work_mem TO '64kB';
 SET hash_mem_multiplier TO 1.0;

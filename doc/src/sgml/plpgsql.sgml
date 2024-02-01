@@ -6128,4 +6128,195 @@ $$ LANGUAGE plpgsql STRICT IMMUTABLE;
 
  </sect1>
 
+ <sect1 id="plpgsql-quickstart">
+  <title>Quick Start: Creating a PostgreSQL Extension using PL/pgSQL</title>
+
+  <para>
+    In this quick start guide, we will create a simple PostgreSQL extension using PL/pgSQL.
+  </para>
+
+  <sect2 id="plpgsql-prerequisites">
+    <title>Prerequisites</title>
+
+    <itemizedlist>
+      <listitem>
+        <para>
+          <ulink url="https://www.postgresql.org/download/">PostgreSQL</ulink> installed and running on your system.
+        </para>
+      </listitem>
+      <listitem>
+        <para>
+          Basic knowledge of SQL and <literal>PL/pgSQL</literal> programming.
+        </para>
+      </listitem>
+      <listitem>
+        <para>
+          <literal>make</literal> utility for building and compiling software.
+        </para>
+      </listitem>
+      <listitem>
+        <para>
+          Knowledge about the Postgres Development Libraries.
+        </para>
+      </listitem>
+    </itemizedlist>
+  </sect2>
+
+  <sect2 id="plpgsql-step1">
+    <title>Create the Extension Directory</title>
+
+    <para>
+      Create a new directory for your extension project.
+    </para>
+
+    <screen>
+      $ mkdir ~/pg_plpgsql_ext
+      $ cd ~/pg_plpgsql_ext
+    </screen>
+  </sect2>
+
+  <sect2 id="plpgsql-step2">
+    <title>Create the SQL Script File</title>
+
+    <para>
+      Create a file named <filename>pg_plpgsql_ext--1.0.0.sql</filename> in the <filename>pg_plpgsql_ext</filename> directory with the following content:
+    </para>
+
+    <screen>
+      -- pg_plpgsql_ext--1.0.0.sql
+      -- Create the function that uses PL/pgSQL
+      CREATE OR REPLACE FUNCTION subtract_numbers(a integer, b integer)
+      RETURNS integer
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+          RETURN a - b;
+      END;
+      $$;
+    </screen>
+
+    <para>
+      Explanation of the SQL Script:
+      <itemizedlist>
+        <listitem>
+          <para>
+            <literal>CREATE OR REPLACE FUNCTION subtract_numbers(a integer, b integer) RETURNS integer LANGUAGE plpgsql AS $$</literal>: 
+            This statement creates the function <literal>subtract_numbers</literal> with two integer arguments (<literal>a</literal> and <literal>b</literal>). The function will return an integer. The <literal>LANGUAGE plpgsql</literal> specifies that the function is written in PL/pgSQL.
+          </para>
+        </listitem>
+        <listitem>
+          <para>
+            <literal>BEGIN</literal>: 
+            This is the beginning of the PL/pgSQL code block.
+          </para>
+        </listitem>
+        <listitem>
+          <para>
+            <literal>RETURN a - b;</literal>: 
+            This line calculates the subtraction of <literal>b</literal> from <literal>a</literal> and returns the result.
+          </para>
+        </listitem>
+      </itemizedlist>
+    </para>
+  </sect2>
+
+  <sect2 id="plpgsql-step3">
+    <title>Create the Control File</title>
+
+    <para>
+      Create a file named <filename>pg_plpgsql_ext.control</filename> in the <filename>pg_plpgsql_ext</filename> directory with the following content:
+    </para>
+
+    <screen>
+      # pg_plpgsql_ext.control
+
+      # Extension name
+      comment = 'A simple PostgreSQL extension using PL/pgSQL.'
+
+      # Default version of the extension
+      default_version = '1.0.0'
+
+      # Extension is relocatable
+      relocatable = true
+    </screen>
+  </sect2>
+
+  <sect2 id="plpgsql-step4">
+    <title>Create the Makefile</title>
+
+    <para>
+      Create a Makefile in the <filename>pg_plpgsql_ext</filename> directory with the following content:
+    </para>
+
+    <screen>
+      # Makefile for pg_plpgsql_ext
+      EXTENSION = pg_plpgsql_ext
+      DATA = pg_plpgsql_ext--1.0.0.sql
+
+      PG_CONFIG = pg_config
+      PGXS := $(shell $(PG_CONFIG) --pgxs)
+      include $(PGXS)
+    </screen>
+  </sect2>
+
+  <sect2 id="plpgsql-step5">
+    <title>Build and Install the Extension</title>
+
+    <para>
+      Let's build and install the <filename>pg_plpgsql_ext</filename> extension:
+    </para>
+
+    <screen>
+      # Build the extension
+      $ make
+
+      # Install the extension
+      $ make install
+    </screen>
+
+    <para>
+      For more information on the installation procedures, you can refer to the <xref linkend="install-make"/>
+    </para>
+  </sect2>
+
+  <sect2 id="plpgsql-step6">
+    <title>Enable the Extension in PostgreSQL</title>
+
+    <para>
+      Connect to your PostgreSQL database using <literal>psql</literal>:
+    </para>
+
+    <screen>
+      $ psql -U your_username -d your_database
+    </screen>
+
+    <para>
+      Inside the PostgreSQL interactive terminal, enable the extension:
+    </para>
+
+    <screen>
+      CREATE EXTENSION pg_plpgsql_ext;
+    </screen>
+
+    <para>
+      For more information on the <literal>CREATE EXTENSION</literal> command, you can refer to the PostgreSQL documentation on <xref linkend="sql-createextension"/>.
+    </para>
+  </sect2>
+
+  <sect2 id="plpgsql-step7">
+    <title>Test the Extension</title>
+
+    <screen>
+      -- Example usage of the function
+      SELECT subtract_numbers(10, 5);
+
+      -- Output:
+      subtract_numbers
+      -----------------
+                   5
+      (1 row)
+    </screen>
+  </sect2>
+</sect1>
+
 </chapter>

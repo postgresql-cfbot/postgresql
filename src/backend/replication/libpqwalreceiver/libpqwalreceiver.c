@@ -1183,6 +1183,7 @@ libpqrcv_exec(WalReceiverConn *conn, const char *query,
 	switch (PQresultStatus(pgres))
 	{
 		case PGRES_SINGLE_TUPLE:
+		case PGRES_TUPLES_CHUNK:
 		case PGRES_TUPLES_OK:
 			walres->status = WALRCV_OK_TUPLES;
 			libpqrcv_processTuples(pgres, walres, nRetTypes, retTypes);

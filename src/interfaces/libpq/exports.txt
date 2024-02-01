@@ -193,3 +193,4 @@ PQsendClosePrepared       190
 PQsendClosePortal         191
 PQchangePassword          192
 PQsendPipelineSync        193
+PQsetChunkedRowsMode	  194

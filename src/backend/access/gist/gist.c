@@ -92,7 +92,6 @@ gisthandler(PG_FUNCTION_ARGS)
 	amroutine->amvacuumcleanup = gistvacuumcleanup;
 	amroutine->amcanreturn = gistcanreturn;
 	amroutine->amcostestimate = gistcostestimate;
-	amroutine->amoptions = gistoptions;
 	amroutine->amproperty = gistproperty;
 	amroutine->ambuildphasename = NULL;
 	amroutine->amvalidate = gistvalidate;
@@ -107,6 +106,7 @@ gisthandler(PG_FUNCTION_ARGS)
 	amroutine->amestimateparallelscan = NULL;
 	amroutine->aminitparallelscan = NULL;
 	amroutine->amparallelrescan = NULL;
+	amroutine->amreloptspecset = gistgetreloptspecset;
 
 	PG_RETURN_POINTER(amroutine);
 }

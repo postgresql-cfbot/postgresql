@@ -322,7 +322,8 @@ typedef enum
 	PGQUERY_PREPARE,			/* Parse only (PQprepare) */
 	PGQUERY_DESCRIBE,			/* Describe Statement or Portal */
 	PGQUERY_SYNC,				/* Sync (at end of a pipeline) */
-	PGQUERY_CLOSE				/* Close Statement or Portal */
+	PGQUERY_CLOSE,				/* Close Statement or Portal */
+	PGQUERY_PARAMETER_SET,		/* Set a server parameter */
 } PGQueryClass;
 
 /*
@@ -408,6 +409,8 @@ struct pg_conn
 	char	   *target_session_attrs;	/* desired session properties */
 	char	   *require_auth;	/* name of the expected auth method */
 	char	   *load_balance_hosts; /* load balance over hosts */
+	char	   *pq_protocol_managed_params; /* _pq_.protocol_managed_params */
+	char	   *pq_report_parameters;	/* _pq_.report_parameters */
 
 	/* Optional file to write trace info to */
 	FILE	   *Pfdebug;
@@ -461,6 +464,8 @@ struct pg_conn
 	SockAddr	laddr;			/* Local address */
 	SockAddr	raddr;			/* Remote address */
 	ProtocolVersion pversion;	/* FE/BE protocol version in use */
+	char	  **unsupported_pextension_params;	/* Unsupported protocol
+											 * extensions, null-terminated */
 	int			sversion;		/* server version, e.g. 70401 for 7.4.1 */
 	bool		auth_req_received;	/* true if any type of auth req received */
 	bool		password_needed;	/* true if server demanded a password */

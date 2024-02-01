@@ -297,6 +297,28 @@ pqParseInput3(PGconn *conn)
 						conn->asyncStatus = PGASYNC_READY;
 					}
 					break;
+				case PqMsg_ParameterSetComplete:
+
+					/*
+					 * If we're doing PQsendParameterSet, we're done; else
+					 * ignore
+					 */
+					if (conn->cmd_queue_head &&
+						conn->cmd_queue_head->queryclass == PGQUERY_PARAMETER_SET)
+					{
+						if (!pgHavePendingResult(conn))
+						{
+							conn->result = PQmakeEmptyPGresult(conn,
+															   PGRES_COMMAND_OK);
+							if (!conn->result)
+							{
+								libpq_append_conn_error(conn, "out of memory");
+								pqSaveErrorResult(conn);
+							}
+						}
+						conn->asyncStatus = PGASYNC_READY;
+					}
+					break;
 				case PqMsg_ParameterStatus:
 					if (getParameterStatus(conn))
 						return;
@@ -1410,49 +1432,33 @@ reportErrorPosition(PQExpBuffer msg, const char *query, int loc, int encoding)
 int
 pqGetNegotiateProtocolVersion3(PGconn *conn)
 {
-	int			tmp;
-	ProtocolVersion their_version;
+	int			their_version;
 	int			num;
-	PQExpBufferData buf;
 
-	if (pqGetInt(&tmp, 4, conn) != 0)
+	if (pqGetInt(&their_version, 4, conn) != 0)
 		return EOF;
-	their_version = tmp;
 
 	if (pqGetInt(&num, 4, conn) != 0)
 		return EOF;
 
-	initPQExpBuffer(&buf);
-	for (int i = 0; i < num; i++)
+	conn->pversion = their_version;
+	if (num)
 	{
-		if (pqGets(&conn->workBuffer, conn))
+		conn->unsupported_pextension_params = calloc(num + 1, sizeof(char *));
+		for (int i = 0; i < num; i++)
 		{
-			termPQExpBuffer(&buf);
-			return EOF;
+			if (pqGets(&conn->workBuffer, conn))
+			{
+				return EOF;
+			}
+			conn->unsupported_pextension_params[i] = strdup(conn->workBuffer.data);
+			if (!conn->unsupported_pextension_params[i])
+			{
+				return EOF;
+			}
 		}
-		if (buf.len > 0)
-			appendPQExpBufferChar(&buf, ' ');
-		appendPQExpBufferStr(&buf, conn->workBuffer.data);
 	}
 
-	if (their_version < conn->pversion)
-		libpq_append_conn_error(conn, "protocol version not supported by server: client uses %u.%u, server supports up to %u.%u",
-								PG_PROTOCOL_MAJOR(conn->pversion), PG_PROTOCOL_MINOR(conn->pversion),
-								PG_PROTOCOL_MAJOR(their_version), PG_PROTOCOL_MINOR(their_version));
-	if (num > 0)
-	{
-		appendPQExpBuffer(&conn->errorMessage,
-						  libpq_ngettext("protocol extension not supported by server: %s",
-										 "protocol extensions not supported by server: %s", num),
-						  buf.data);
-		appendPQExpBufferChar(&conn->errorMessage, '\n');
-	}
-
-	/* neither -- server shouldn't have sent it */
-	if (!(their_version < conn->pversion) && !(num > 0))
-		libpq_append_conn_error(conn, "invalid %s message", "NegotiateProtocolVersion");
-
-	termPQExpBuffer(&buf);
 	return 0;
 }
 
@@ -2312,6 +2318,12 @@ build_startup_packet(const PGconn *conn, char *packet,
 				ADD_STARTUP_OPTION(next_eo->pgName, val);
 		}
 	}
+
+	if (conn->pq_protocol_managed_params && conn->pq_protocol_managed_params[0])
+		ADD_STARTUP_OPTION("_pq_.protocol_managed_params", conn->pq_protocol_managed_params);
+
+	if (conn->pq_report_parameters)
+		ADD_STARTUP_OPTION("_pq_.report_parameters", conn->pq_report_parameters);
 
 	/* Add trailing terminator */
 	if (packet)

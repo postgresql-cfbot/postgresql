@@ -124,6 +124,7 @@
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
 #include "utils/datetime.h"
+#include "utils/guc_tables.h"
 #include "utils/memutils.h"
 #include "utils/pidfile.h"
 #include "utils/ps_status.h"
@@ -2210,12 +2211,11 @@ retry1:
 									valptr),
 							 errhint("Valid values are: \"false\", 0, \"true\", 1, \"database\".")));
 			}
-			else if (strncmp(nameptr, "_pq_.", 5) == 0)
+			else if (strncmp(nameptr, "_pq_.", 5) == 0 && !find_option(nameptr, false, true, ERROR))
 			{
 				/*
-				 * Any option beginning with _pq_. is reserved for use as a
-				 * protocol-level option, but at present no such options are
-				 * defined.
+				 * We report unkown protocol extensions using the
+				 * NegotiateProtocolVersion message instead of erroring
 				 */
 				unrecognized_protocol_options =
 					lappend(unrecognized_protocol_options, pstrdup(nameptr));

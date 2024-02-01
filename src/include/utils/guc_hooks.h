@@ -25,6 +25,8 @@
  * Please keep the declarations in order by GUC variable name.
  */
 
+extern bool check_protocol_managed_params(char **newval, void **extra, GucSource source);
+extern void assign_protocol_managed_params(const char *newval, void *extra);
 extern bool check_application_name(char **newval, void **extra,
 								   GucSource source);
 extern void assign_application_name(const char *newval, void *extra);
@@ -117,6 +119,8 @@ extern void assign_recovery_target_timeline(const char *newval, void *extra);
 extern bool check_recovery_target_xid(char **newval, void **extra,
 									  GucSource source);
 extern void assign_recovery_target_xid(const char *newval, void *extra);
+extern bool check_report_parameters(char **newval, void **extra, GucSource source);
+extern void assign_report_parameters(const char *newval, void *extra);
 extern bool check_role(char **newval, void **extra, GucSource source);
 extern void assign_role(const char *newval, void *extra);
 extern const char *show_role(void);

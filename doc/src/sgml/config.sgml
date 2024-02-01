@@ -10978,6 +10978,88 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
     </variablelist>
    </sect1>
 
+   <sect1 id="runtime-config-protocol">
+    <title>Protocol extension parameters</title>
+    <para>
+     Some parameters control the behaviour of the protocol, these are called
+     protocol extension parameters. These types of parameters are different
+     from all other runtime parameters in a few important ways. First, they all
+     start with a <literal>_pq_.</literal> prefix. Secondly, they can only be
+     set at the protocol level using the StartupMessage and ParameterSet
+     messages.
+     It's not possible to set them in any other way (not through command line
+     arguments, configuration files, SET, etc). Finally, if you configure one
+     of them in the StartupMessage, but the server doesn't support the
+     parameter the connection attempt does not fail like with other options.
+     Instead the connection attempt continues as normal as these protocol
+     parameters are considered optional to implement by the server. To check if
+     the parameter was set you need to check the return value of
+     <xref linkend="libpq-PQunsupportedProtocolExtensionParameters"/>. If one of the
+     requested parameters was not supported by the server it will be listed
+     there.
+    </para>
+
+     <variablelist>
+
+     <varlistentry id="guc-pq-protocol-managed-params" xreflabel="_pq_.protocol_managed_params">
+      <term><varname>_pq_.protocol_managed_params</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>_pq_.protocol_managed_params</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This parameter can be used to "upgrade" regular runtime parameters to a
+        protocol extension parameter. Thus disallowing it to be set in any
+        other way than through the StartupMessage and ParameterSet protocol
+        messages.
+        This can be useful to limit the power of an attacker with arbitrary SQL
+        execution. For example, if you set
+        <literal>_pq_.protocol_managed_params</literal> to
+        <literal>role</literal> then you can connect as a
+        highly privileged user to <productname>PostgreSQL</productname> but
+        change role to a user with fewer privileges. And then the attacker with
+        only SQL access is unable to change back the session authorization.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-pq-report-parameters" xreflabel="_pq_.protocol_managed_params">
+      <term><varname>_pq_.report_parameters</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>_pq_.report_parameters</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This parameter specifies for which backend parameters the server
+        uses the ParameterStatus message to report their value on connection
+        startup and whenever their value changes. Changing this parameter can
+        be useful to limit unnecessary network traffic for clients that don't
+        care about all of the the parameters that are reported by default. Or
+        it can be used to report changes for additional parameters that are not
+        reported by default. The parameters that are in this list by default
+        are
+        <varname>server_version</varname>,
+        <varname>server_encoding</varname>,
+        <varname>client_encoding</varname>,
+        <varname>application_name</varname>,
+        <varname>default_transaction_read_only</varname>,
+        <varname>in_hot_standby</varname>,
+        <varname>is_superuser</varname>,
+        <varname>session_authorization</varname>,
+        <varname>DateStyle</varname>,
+        <varname>IntervalStyle</varname>,
+        <varname>TimeZone</varname>,
+        <varname>integer_datetimes</varname>, and
+        <varname>standard_conforming_strings</varname>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     </variablelist>
+   </sect1>
+
    <sect1 id="runtime-config-custom">
     <title>Customized Options</title>
 

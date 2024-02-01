@@ -72,6 +72,7 @@
 #include "tcop/tcopprot.h"
 #include "tcop/utility.h"
 #include "utils/guc_hooks.h"
+#include "utils/guc_tables.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
@@ -427,6 +428,7 @@ SocketBackend(StringInfo inBuf)
 		case PqMsg_Describe:
 		case PqMsg_Execute:
 		case PqMsg_Flush:
+		case PqMsg_ParameterSet:
 			maxmsglen = PQ_SMALL_MESSAGE_LIMIT;
 			doing_extended_query_message = true;
 			break;
@@ -4849,6 +4851,43 @@ PostgresMain(const char *dbname, const char *username)
 				finish_xact_command();
 				valgrind_report_error_query("SYNC message");
 				send_ready_for_query = true;
+				break;
+
+			case PqMsg_ParameterSet:
+				{
+					const char *parameter_name;
+					const char *parameter_value;
+					struct config_generic *config;
+
+					forbidden_in_wal_sender(firstchar);
+
+					parameter_name = pq_getmsgstring(&input_message);
+					parameter_value = pq_getmsgstring(&input_message);
+					pq_getmsgend(&input_message);
+
+					config = find_option(parameter_name, false, false, ERROR);
+					if (config->context == PGC_PROTOCOL || config->context == PGC_SU_PROTOCOL)
+					{
+						if (IsTransactionOrTransactionBlock())
+						{
+							ereport(ERROR,
+									(errcode(ERRCODE_ACTIVE_SQL_TRANSACTION),
+									 errmsg("parameter \"%s\" cannot be changed within a transaction", parameter_name)));
+						}
+					}
+					else
+					{
+						start_xact_command();
+					}
+
+					SetConfigOption(
+									parameter_name,
+									parameter_value,
+									(superuser() ? PGC_SU_PROTOCOL : PGC_PROTOCOL),
+									PGC_S_SESSION);
+					if (whereToSendOutput == DestRemote)
+						pq_putemptymessage(PqMsg_ParameterSetComplete);
+				}
 				break;
 
 				/*

@@ -347,6 +347,7 @@ extern PGTransactionStatusType PQtransactionStatus(const PGconn *conn);
 extern const char *PQparameterStatus(const PGconn *conn,
 									 const char *paramName);
 extern int	PQprotocolVersion(const PGconn *conn);
+extern const char **PQunsupportedProtocolExtensionParameters(const PGconn *conn);
 extern int	PQserverVersion(const PGconn *conn);
 extern char *PQerrorMessage(const PGconn *conn);
 extern int	PQsocket(const PGconn *conn);
@@ -554,6 +555,9 @@ extern PGresult *PQclosePrepared(PGconn *conn, const char *stmt);
 extern PGresult *PQclosePortal(PGconn *conn, const char *portal);
 extern int	PQsendClosePrepared(PGconn *conn, const char *stmt);
 extern int	PQsendClosePortal(PGconn *conn, const char *portal);
+
+extern PGresult *PQparameterSet(PGconn *conn, const char *parameter, const char *value);
+extern int	PQsendParameterSet(PGconn *conn, const char *parameter, const char *value);
 
 /* Delete a PGresult */
 extern void PQclear(PGresult *res);

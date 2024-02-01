@@ -492,6 +492,9 @@ extern const struct config_enum_entry dynamic_shared_memory_options[];
 /*
  * GUC option variables that are exported from this module
  */
+char	   *protocol_managed_params = "";
+char	   *report_parameters = "client_encoding,DateStyle,server_encoding,server_version,session_authorization,TimeZone,application_name,IntervalStyle,is_superuser,default_transaction_read_only,integer_datetimes,standard_conforming_strings,in_hot_standby,scram_iterations";
+
 bool		log_duration = false;
 bool		Debug_print_plan = false;
 bool		Debug_print_parse = false;
@@ -631,6 +634,8 @@ const char *const GucContext_Names[] =
 	 /* PGC_SIGHUP */ "sighup",
 	 /* PGC_SU_BACKEND */ "superuser-backend",
 	 /* PGC_BACKEND */ "backend",
+	 /* PGC_SU_PROTOCOL */ "superuser-protocol",
+	 /* PGC_PROTOCOL */ "protocol",
 	 /* PGC_SUSET */ "superuser",
 	 /* PGC_USERSET */ "user"
 };
@@ -1079,7 +1084,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"is_superuser", PGC_INTERNAL, UNGROUPED,
 			gettext_noop("Shows whether the current user is a superuser."),
 			NULL,
-			GUC_REPORT | GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
 		&current_role_is_superuser,
 		false,
@@ -1584,7 +1589,6 @@ struct config_bool ConfigureNamesBool[] =
 		{"default_transaction_read_only", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Sets the default read-only status of new transactions."),
 			NULL,
-			GUC_REPORT
 		},
 		&DefaultXactReadOnly,
 		false,
@@ -1742,7 +1746,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"integer_datetimes", PGC_INTERNAL, PRESET_OPTIONS,
 			gettext_noop("Shows whether datetimes are integer based."),
 			NULL,
-			GUC_REPORT | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
 		&integer_datetimes,
 		true,
@@ -1783,7 +1787,6 @@ struct config_bool ConfigureNamesBool[] =
 		{"standard_conforming_strings", PGC_USERSET, COMPAT_OPTIONS_PREVIOUS,
 			gettext_noop("Causes '...' strings to treat backslashes literally."),
 			NULL,
-			GUC_REPORT
 		},
 		&standard_conforming_strings,
 		true,
@@ -1844,7 +1847,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"in_hot_standby", PGC_INTERNAL, PRESET_OPTIONS,
 			gettext_noop("Shows whether hot standby is currently active."),
 			NULL,
-			GUC_REPORT | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
 		&in_hot_standby_guc,
 		false,
@@ -3567,7 +3570,6 @@ struct config_int ConfigureNamesInt[] =
 		{"scram_iterations", PGC_USERSET, CONN_AUTH_AUTH,
 			gettext_noop("Sets the iteration count for SCRAM secret generation."),
 			NULL,
-			GUC_REPORT
 		},
 		&scram_sha_256_iterations,
 		SCRAM_SHA_256_DEFAULT_ITERATIONS, 1, INT_MAX,
@@ -3865,6 +3867,26 @@ struct config_real ConfigureNamesReal[] =
 struct config_string ConfigureNamesString[] =
 {
 	{
+		{"_pq_.protocol_managed_params", PGC_PROTOCOL, PROTOCOL_EXTENSION,
+			gettext_noop("List of additional parameters to be only managed at the protocol level."),
+			NULL,
+			GUC_LIST_INPUT | GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&protocol_managed_params,
+		"",
+		check_protocol_managed_params, assign_protocol_managed_params, NULL
+	},
+	{
+		{"_pq_.report_parameters", PGC_PROTOCOL, PROTOCOL_EXTENSION,
+			gettext_noop("List of parameters for which changes should be reported using ParameterStatus."),
+			NULL,
+			GUC_LIST_INPUT | GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&report_parameters,
+		"client_encoding,DateStyle,server_encoding,server_version,session_authorization,TimeZone,application_name,IntervalStyle,is_superuser,default_transaction_read_only,integer_datetimes,standard_conforming_strings,in_hot_standby,scram_iterations",
+		check_report_parameters, assign_report_parameters, NULL
+	},
+	{
 		{"archive_command", PGC_SIGHUP, WAL_ARCHIVING,
 			gettext_noop("Sets the shell command that will be called to archive a WAL file."),
 			gettext_noop("This is used only if archive_library is not set.")
@@ -3995,7 +4017,7 @@ struct config_string ConfigureNamesString[] =
 		{"client_encoding", PGC_USERSET, CLIENT_CONN_LOCALE,
 			gettext_noop("Sets the client's character set encoding."),
 			NULL,
-			GUC_IS_NAME | GUC_REPORT
+			GUC_IS_NAME
 		},
 		&client_encoding_string,
 		"SQL_ASCII",
@@ -4027,7 +4049,7 @@ struct config_string ConfigureNamesString[] =
 			gettext_noop("Sets the display format for date and time values."),
 			gettext_noop("Also controls interpretation of ambiguous "
 						 "date inputs."),
-			GUC_LIST_INPUT | GUC_REPORT
+			GUC_LIST_INPUT
 		},
 		&datestyle_string,
 		"ISO, MDY",
@@ -4203,7 +4225,7 @@ struct config_string ConfigureNamesString[] =
 		{"server_encoding", PGC_INTERNAL, PRESET_OPTIONS,
 			gettext_noop("Shows the server (database) character set encoding."),
 			NULL,
-			GUC_IS_NAME | GUC_REPORT | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			GUC_IS_NAME | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
 		&server_encoding_string,
 		"SQL_ASCII",
@@ -4215,7 +4237,7 @@ struct config_string ConfigureNamesString[] =
 		{"server_version", PGC_INTERNAL, PRESET_OPTIONS,
 			gettext_noop("Shows the server version."),
 			NULL,
-			GUC_REPORT | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
 		&server_version_string,
 		PG_VERSION,
@@ -4239,7 +4261,7 @@ struct config_string ConfigureNamesString[] =
 		{"session_authorization", PGC_USERSET, UNGROUPED,
 			gettext_noop("Sets the session user name."),
 			NULL,
-			GUC_IS_NAME | GUC_REPORT | GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_NOT_WHILE_SEC_REST
+			GUC_IS_NAME | GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_NOT_WHILE_SEC_REST
 		},
 		&session_authorization_string,
 		NULL,
@@ -4306,7 +4328,6 @@ struct config_string ConfigureNamesString[] =
 		{"TimeZone", PGC_USERSET, CLIENT_CONN_LOCALE,
 			gettext_noop("Sets the time zone for displaying and interpreting time stamps."),
 			NULL,
-			GUC_REPORT
 		},
 		&timezone_string,
 		"GMT",
@@ -4556,7 +4577,7 @@ struct config_string ConfigureNamesString[] =
 		{"application_name", PGC_USERSET, LOGGING_WHAT,
 			gettext_noop("Sets the application name to be reported in statistics and logs."),
 			NULL,
-			GUC_IS_NAME | GUC_REPORT | GUC_NOT_IN_SAMPLE
+			GUC_IS_NAME | GUC_NOT_IN_SAMPLE
 		},
 		&application_name,
 		"",
@@ -4716,7 +4737,6 @@ struct config_enum ConfigureNamesEnum[] =
 		{"IntervalStyle", PGC_USERSET, CLIENT_CONN_LOCALE,
 			gettext_noop("Sets the display format for interval values."),
 			NULL,
-			GUC_REPORT
 		},
 		&IntervalStyle,
 		INTSTYLE_POSTGRES, intervalstyle_options,

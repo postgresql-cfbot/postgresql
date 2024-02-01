@@ -5955,6 +5955,37 @@ StartupXLOG(void)
 		ShutdownRecoveryTransactionEnvironment();
 
 	/*
+	 * It's possible that this could be the first time WAL archiving has been
+	 * enabled.  If the timeline is greater than 1, we need to check if the
+	 * current timeline history file needs to be archived.  This will prevent
+	 * any PITR-related issues later on where a timeline history file is
+	 * required.
+	 */
+	if (XLogArchivingActive())
+	{
+		TimeLineID	currentTimeLineID;
+
+		currentTimeLineID = GetWALInsertionTimeLine();
+		if (currentTimeLineID > 1) {
+			char	histfname[MAXFNAMELEN];
+
+			/*
+			 * Timeline history .done files do not get removed automatically
+			 * so this check should be valid to make sure we don't archive the
+			 * timeline history file again on restart.  However, if the
+			 * timeline history .done file was manually removed for some
+			 * reason, then we make the assumption that the archive_command is
+			 * set up properly to gracefully handle the re-archiving attempt.
+			 * If there's already a .ready or .done file, then there's nothing
+			 * to do.
+			 */
+			TLHistoryFileName(histfname, currentTimeLineID);
+			if (!XLogArchiveIsReadyOrDone(histfname))
+				XLogArchiveNotify(histfname);
+		}
+	}
+
+	/*
 	 * If there were cascading standby servers connected to us, nudge any wal
 	 * sender processes to notice that we've been promoted.
 	 */

@@ -254,3 +254,26 @@ FROM pg_walfile_name_offset('0/0'::pg_lsn + :segment_size - 1),
 -- test stratnum support functions
 SELECT gist_stratnum_identity(3::smallint);
 SELECT gist_stratnum_identity(18::smallint);
+
+-- Test pg_column_toast_chunk_id:
+-- Check if the returned chunk_id exists in the TOAST table
+CREATE TABLE test_chunk_id (v1 text, v2 text);
+-- Use uncompressed toast data
+ALTER TABLE test_chunk_id ALTER COLUMN v2 SET STORAGE EXTERNAL;
+
+-- v1: small enough not to be TOASTed
+-- v2: large enough to be TOASTed
+INSERT INTO test_chunk_id(v1,v2)
+  VALUES (repeat('x', 1), repeat('x', 2048));
+
+DO $$
+  DECLARE result text default 'not_ok';
+  BEGIN
+  EXECUTE format(
+    'SELECT ''ok'' FROM test_chunk_id
+	   WHERE pg_column_toast_chunk_id(v1) IS NULL AND
+	         pg_column_toast_chunk_id(v2) IN (SELECT chunk_id FROM pg_toast.pg_toast_%s)',
+    regclass('test_chunk_id')::int::text) INTO result;
+  RAISE INFO '%', result;
+END; $$;
+DROP TABLE test_chunk_id;

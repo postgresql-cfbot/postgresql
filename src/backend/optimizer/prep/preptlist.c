@@ -177,7 +177,7 @@ preprocess_targetlist(PlannerInfo *root)
 
 				tle = makeTargetEntry((Expr *) var,
 									  list_length(tlist) + 1,
-									  NULL, true);
+									  NULL, JUNK_OTHER);
 				tlist = lappend(tlist, tle);
 			}
 			list_free(vars);
@@ -223,7 +223,7 @@ preprocess_targetlist(PlannerInfo *root)
 			tle = makeTargetEntry((Expr *) var,
 								  list_length(tlist) + 1,
 								  pstrdup(resname),
-								  true);
+								  JUNK_OTHER);
 			tlist = lappend(tlist, tle);
 		}
 		if (rc->allMarkTypes & (1 << ROW_MARK_COPY))
@@ -232,12 +232,12 @@ preprocess_targetlist(PlannerInfo *root)
 			var = makeWholeRowVar(rt_fetch(rc->rti, range_table),
 								  rc->rti,
 								  0,
-								  false);
+								  NOT_JUNK);
 			snprintf(resname, sizeof(resname), "wholerow%u", rc->rowmarkId);
 			tle = makeTargetEntry((Expr *) var,
 								  list_length(tlist) + 1,
 								  pstrdup(resname),
-								  true);
+								  JUNK_OTHER);
 			tlist = lappend(tlist, tle);
 		}
 
@@ -254,7 +254,7 @@ preprocess_targetlist(PlannerInfo *root)
 			tle = makeTargetEntry((Expr *) var,
 								  list_length(tlist) + 1,
 								  pstrdup(resname),
-								  true);
+								  JUNK_OTHER);
 			tlist = lappend(tlist, tle);
 		}
 	}
@@ -290,7 +290,7 @@ preprocess_targetlist(PlannerInfo *root)
 			tle = makeTargetEntry((Expr *) var,
 								  list_length(tlist) + 1,
 								  NULL,
-								  true);
+								  JUNK_OTHER);
 
 			tlist = lappend(tlist, tle);
 		}
@@ -442,7 +442,7 @@ expand_insert_targetlist(List *tlist, Relation rel)
 			new_tle = makeTargetEntry((Expr *) new_expr,
 									  attrno,
 									  pstrdup(NameStr(att_tup->attname)),
-									  false);
+									  NOT_JUNK);
 		}
 
 		new_tlist = lappend(new_tlist, new_tle);

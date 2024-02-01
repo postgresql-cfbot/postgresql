@@ -388,6 +388,14 @@ explain (costs off)
 select f1, (select min(unique1) from tenk1 where unique1 > f1) AS gt
   from int4_tbl;
 
+-- check kNN search
+begin;
+set local enable_seqscan = off;
+explain (costs off)
+  SELECT min(f1 <-> '(0,0)'::point) FROM polygon_tbl;
+SELECT min(f1 <-> '(0,0)'::point) FROM polygon_tbl;
+rollback;
+
 -- check some cases that were handled incorrectly in 8.3.0
 explain (costs off)
   select distinct max(unique2) from tenk1;

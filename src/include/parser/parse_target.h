@@ -25,7 +25,7 @@ extern void resolveTargetListUnknowns(ParseState *pstate, List *targetlist);
 extern void markTargetListOrigins(ParseState *pstate, List *targetlist);
 extern TargetEntry *transformTargetEntry(ParseState *pstate,
 										 Node *node, Node *expr, ParseExprKind exprKind,
-										 char *colname, bool resjunk);
+										 char *colname, JunkKind resjunk);
 extern Expr *transformAssignedExpr(ParseState *pstate, Expr *expr,
 								   ParseExprKind exprKind,
 								   const char *colname,

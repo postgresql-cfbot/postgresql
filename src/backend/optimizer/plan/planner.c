@@ -1301,6 +1301,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 	List	   *final_targets;
 	List	   *final_targets_contain_srfs;
 	bool		final_target_parallel_safe;
+	PathTarget *very_final_target;
 	RelOptInfo *current_rel;
 	RelOptInfo *final_rel;
 	FinalPathExtraData extra;
@@ -1357,6 +1358,17 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 		root->processed_tlist =
 			postprocess_setop_tlist(copyObject(root->processed_tlist),
 									parse->targetList);
+
+		root->final_tlist = NIL;
+		foreach (lc, root->processed_tlist)
+		{
+			TargetEntry *tle = (TargetEntry *) lfirst(lc);
+
+			if (tle->resjunk == JUNK_SORT_GROUP_COL || tle->resjunk == JUNK_PLANNER_ONLY)
+				continue;
+
+			root->final_tlist = lappend(root->final_tlist, tle);
+		}
 
 		/* Also extract the PathTarget form of the setop result tlist */
 		final_target = current_rel->cheapest_total_path->pathtarget;
@@ -1747,12 +1759,55 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 	final_rel->fdwroutine = current_rel->fdwroutine;
 
 	/*
+	 * If the target list contains any junk columns that are not needed in the
+	 * executor, project them away. 'very_final_target' is the target list
+	 * with such columns removed.
+	 *
+	 * We used to let the executor filter these away with a "junk filter", if
+	 * the junk columns are expensive to compute, it's better to not compute
+	 * them in the first place. Usually we need such columns anyway, but one
+	 * case where we can avoid some real work is if we use an index to satisfy
+	 * the ORDER BY.
+	 *
+	 * XXX: The executor still has a junk filter and would filter these away
+	 * if we didn't. We could work a little harder here, and also add a
+	 * projection on top of the possible LockRows node, to remove any junk
+	 * columns created for row marks. With that, we could get rid of the junk
+	 * filter in the executor altogether.
+	 */
+	{
+		List	   *very_final_tlist = NIL;
+
+		foreach (lc, root->processed_tlist)
+		{
+			TargetEntry *tle = (TargetEntry *) lfirst(lc);
+
+			if (tle->resjunk == JUNK_SORT_GROUP_COL || tle->resjunk == JUNK_PLANNER_ONLY)
+				continue;
+
+			very_final_tlist = lappend(very_final_tlist, tle);
+		}
+		if (list_length(very_final_tlist) != list_length(root->processed_tlist))
+			very_final_target = create_pathtarget(root, very_final_tlist);
+		else
+			very_final_target = final_target;
+
+		/* Stash the final tlist that we will produce for create_plan() */
+		root->final_tlist = very_final_tlist;
+	}
+
+	/*
 	 * Generate paths for the final_rel.  Insert all surviving paths, with
 	 * LockRows, Limit, and/or ModifyTable steps added if needed.
 	 */
 	foreach(lc, current_rel->pathlist)
 	{
 		Path	   *path = (Path *) lfirst(lc);
+
+		/* see comment above */
+		if (very_final_target != final_target)
+			path = apply_projection_to_path(root, final_rel,
+											path, very_final_target);
 
 		/*
 		 * If there is a FOR [KEY] UPDATE/SHARE clause, add the LockRows node.

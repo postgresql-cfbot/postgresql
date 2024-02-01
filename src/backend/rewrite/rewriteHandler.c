@@ -1021,7 +1021,7 @@ rewriteTargetListIU(List *targetList,
 				new_tle = makeTargetEntry((Expr *) new_expr,
 										  attrno,
 										  pstrdup(NameStr(att_tup->attname)),
-										  false);
+										  NOT_JUNK);
 		}
 
 		if (new_tle)
@@ -1799,7 +1799,7 @@ ApplyRetrieveRule(Query *parsetree,
 			tle = makeTargetEntry((Expr *) var,
 								  list_length(parsetree->targetList) + 1,
 								  pstrdup("wholerow"),
-								  true);
+								  JUNK_OTHER);
 
 			parsetree->targetList = lappend(parsetree->targetList, tle);
 

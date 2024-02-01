@@ -982,7 +982,7 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 			tle = makeTargetEntry(expr,
 								  i,
 								  NULL,
-								  false);
+								  NOT_JUNK);
 			lefttlist = lappend(lefttlist, tle);
 
 			/* Process righthand argument */
@@ -990,7 +990,7 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 			tle = makeTargetEntry(expr,
 								  i,
 								  NULL,
-								  false);
+								  NOT_JUNK);
 			righttlist = lappend(righttlist, tle);
 
 			/* Lookup the equality function (potentially cross-type) */

@@ -3316,18 +3316,19 @@ create index on ma_test (b);
 analyze ma_test;
 prepare mt_q1 (int) as select a from ma_test where a >= $1 and a % 10 = 5 order by b;
 explain (analyze, costs off, summary off, timing off) execute mt_q1(15);
-                                       QUERY PLAN                                        
------------------------------------------------------------------------------------------
- Merge Append (actual rows=2 loops=1)
-   Sort Key: ma_test.b
-   Subplans Removed: 1
-   ->  Index Scan using ma_test_p2_b_idx on ma_test_p2 ma_test_1 (actual rows=1 loops=1)
-         Filter: ((a >= $1) AND ((a % 10) = 5))
-         Rows Removed by Filter: 9
-   ->  Index Scan using ma_test_p3_b_idx on ma_test_p3 ma_test_2 (actual rows=1 loops=1)
-         Filter: ((a >= $1) AND ((a % 10) = 5))
-         Rows Removed by Filter: 9
-(9 rows)
+                                          QUERY PLAN                                           
+-----------------------------------------------------------------------------------------------
+ Result (actual rows=2 loops=1)
+   ->  Merge Append (actual rows=2 loops=1)
+         Sort Key: ma_test.b
+         Subplans Removed: 1
+         ->  Index Scan using ma_test_p2_b_idx on ma_test_p2 ma_test_1 (actual rows=1 loops=1)
+               Filter: ((a >= $1) AND ((a % 10) = 5))
+               Rows Removed by Filter: 9
+         ->  Index Scan using ma_test_p3_b_idx on ma_test_p3 ma_test_2 (actual rows=1 loops=1)
+               Filter: ((a >= $1) AND ((a % 10) = 5))
+               Rows Removed by Filter: 9
+(10 rows)
 
 execute mt_q1(15);
  a  
@@ -3337,15 +3338,16 @@ execute mt_q1(15);
 (2 rows)
 
 explain (analyze, costs off, summary off, timing off) execute mt_q1(25);
-                                       QUERY PLAN                                        
------------------------------------------------------------------------------------------
- Merge Append (actual rows=1 loops=1)
-   Sort Key: ma_test.b
-   Subplans Removed: 2
-   ->  Index Scan using ma_test_p3_b_idx on ma_test_p3 ma_test_1 (actual rows=1 loops=1)
-         Filter: ((a >= $1) AND ((a % 10) = 5))
-         Rows Removed by Filter: 9
-(6 rows)
+                                          QUERY PLAN                                           
+-----------------------------------------------------------------------------------------------
+ Result (actual rows=1 loops=1)
+   ->  Merge Append (actual rows=1 loops=1)
+         Sort Key: ma_test.b
+         Subplans Removed: 2
+         ->  Index Scan using ma_test_p3_b_idx on ma_test_p3 ma_test_1 (actual rows=1 loops=1)
+               Filter: ((a >= $1) AND ((a % 10) = 5))
+               Rows Removed by Filter: 9
+(7 rows)
 
 execute mt_q1(25);
  a  
@@ -3355,12 +3357,13 @@ execute mt_q1(25);
 
 -- Ensure MergeAppend behaves correctly when no subplans match
 explain (analyze, costs off, summary off, timing off) execute mt_q1(35);
-              QUERY PLAN              
---------------------------------------
- Merge Append (actual rows=0 loops=1)
-   Sort Key: ma_test.b
-   Subplans Removed: 3
-(3 rows)
+                 QUERY PLAN                 
+--------------------------------------------
+ Result (actual rows=0 loops=1)
+   ->  Merge Append (actual rows=0 loops=1)
+         Sort Key: ma_test.b
+         Subplans Removed: 3
+(4 rows)
 
 execute mt_q1(35);
  a 

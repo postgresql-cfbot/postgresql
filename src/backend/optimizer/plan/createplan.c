@@ -354,7 +354,7 @@ create_plan(PlannerInfo *root, Path *best_path)
 	 * nodes don't have a tlist matching the querytree targetlist.
 	 */
 	if (!IsA(plan, ModifyTable))
-		apply_tlist_labeling(plan->targetlist, root->processed_tlist);
+		apply_tlist_labeling(plan->targetlist, root->final_tlist);
 
 	/*
 	 * Attach any initPlans created in this query level to the topmost plan
@@ -844,7 +844,7 @@ build_path_tlist(PlannerInfo *root, Path *path)
 		tle = makeTargetEntry((Expr *) node,
 							  resno,
 							  NULL,
-							  false);
+							  NOT_JUNK);
 		if (sortgrouprefs)
 			tle->ressortgroupref = sortgrouprefs[resno - 1];
 
@@ -1772,7 +1772,7 @@ create_unique_plan(PlannerInfo *root, UniquePath *best_path, int flags)
 			tle = makeTargetEntry((Expr *) uniqexpr,
 								  nextresno,
 								  NULL,
-								  false);
+								  NOT_JUNK);
 			newtlist = lappend(newtlist, tle);
 			nextresno++;
 			newitems = true;
@@ -2819,7 +2819,7 @@ create_modifytable_plan(PlannerInfo *root, ModifyTablePath *best_path)
 	subplan = create_plan_recurse(root, subpath, CP_EXACT_TLIST);
 
 	/* Transfer resname/resjunk labeling, too, to keep executor happy */
-	apply_tlist_labeling(subplan->targetlist, root->processed_tlist);
+	apply_tlist_labeling(subplan->targetlist, root->final_tlist);
 
 	plan = make_modifytable(root,
 							subplan,
@@ -3156,7 +3156,7 @@ create_indexscan_plan(PlannerInfo *root,
 		{
 			TargetEntry *indextle = (TargetEntry *) lfirst(l);
 
-			indextle->resjunk = !indexinfo->canreturn[i];
+			indextle->resjunk = indexinfo->canreturn[i] ? NOT_JUNK: JUNK_PLANNER_ONLY;
 			i++;
 		}
 	}
@@ -6279,7 +6279,7 @@ prepare_sort_from_pathkeys(Plan *lefttree, List *pathkeys,
 			tle = makeTargetEntry(copyObject(em->em_expr),
 								  list_length(tlist) + 1,
 								  NULL,
-								  true);
+								  JUNK_SORT_GROUP_COL);
 			tlist = lappend(tlist, tle);
 			lefttree->targetlist = tlist;	/* just in case NIL before */
 		}

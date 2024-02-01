@@ -1556,23 +1556,25 @@ insert into matest3 (name) values ('Test 5');
 insert into matest3 (name) values ('Test 6');
 set enable_indexscan = off;  -- force use of seqscan/sort, so no merge
 explain (verbose, costs off) select * from matest0 order by 1-id;
-                         QUERY PLAN                         
-------------------------------------------------------------
- Sort
-   Output: matest0.id, matest0.name, ((1 - matest0.id))
-   Sort Key: ((1 - matest0.id))
-   ->  Result
-         Output: matest0.id, matest0.name, (1 - matest0.id)
-         ->  Append
-               ->  Seq Scan on public.matest0 matest0_1
-                     Output: matest0_1.id, matest0_1.name
-               ->  Seq Scan on public.matest1 matest0_2
-                     Output: matest0_2.id, matest0_2.name
-               ->  Seq Scan on public.matest2 matest0_3
-                     Output: matest0_3.id, matest0_3.name
-               ->  Seq Scan on public.matest3 matest0_4
-                     Output: matest0_4.id, matest0_4.name
-(14 rows)
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Result
+   Output: matest0.id, matest0.name
+   ->  Sort
+         Output: matest0.id, matest0.name, ((1 - matest0.id))
+         Sort Key: ((1 - matest0.id))
+         ->  Result
+               Output: matest0.id, matest0.name, (1 - matest0.id)
+               ->  Append
+                     ->  Seq Scan on public.matest0 matest0_1
+                           Output: matest0_1.id, matest0_1.name
+                     ->  Seq Scan on public.matest1 matest0_2
+                           Output: matest0_2.id, matest0_2.name
+                     ->  Seq Scan on public.matest2 matest0_3
+                           Output: matest0_3.id, matest0_3.name
+                     ->  Seq Scan on public.matest3 matest0_4
+                           Output: matest0_4.id, matest0_4.name
+(16 rows)
 
 select * from matest0 order by 1-id;
  id |  name  
@@ -1611,22 +1613,24 @@ reset enable_indexscan;
 set enable_seqscan = off;  -- plan with fewest seqscans should be merge
 set enable_parallel_append = off; -- Don't let parallel-append interfere
 explain (verbose, costs off) select * from matest0 order by 1-id;
-                               QUERY PLAN                               
-------------------------------------------------------------------------
- Merge Append
-   Sort Key: ((1 - matest0.id))
-   ->  Index Scan using matest0i on public.matest0 matest0_1
-         Output: matest0_1.id, matest0_1.name, (1 - matest0_1.id)
-   ->  Index Scan using matest1i on public.matest1 matest0_2
-         Output: matest0_2.id, matest0_2.name, (1 - matest0_2.id)
-   ->  Sort
-         Output: matest0_3.id, matest0_3.name, ((1 - matest0_3.id))
-         Sort Key: ((1 - matest0_3.id))
-         ->  Seq Scan on public.matest2 matest0_3
-               Output: matest0_3.id, matest0_3.name, (1 - matest0_3.id)
-   ->  Index Scan using matest3i on public.matest3 matest0_4
-         Output: matest0_4.id, matest0_4.name, (1 - matest0_4.id)
-(13 rows)
+                                  QUERY PLAN                                  
+------------------------------------------------------------------------------
+ Result
+   Output: matest0.id, matest0.name
+   ->  Merge Append
+         Sort Key: ((1 - matest0.id))
+         ->  Index Scan using matest0i on public.matest0 matest0_1
+               Output: matest0_1.id, matest0_1.name, (1 - matest0_1.id)
+         ->  Index Scan using matest1i on public.matest1 matest0_2
+               Output: matest0_2.id, matest0_2.name, (1 - matest0_2.id)
+         ->  Sort
+               Output: matest0_3.id, matest0_3.name, ((1 - matest0_3.id))
+               Sort Key: ((1 - matest0_3.id))
+               ->  Seq Scan on public.matest2 matest0_3
+                     Output: matest0_3.id, matest0_3.name, (1 - matest0_3.id)
+         ->  Index Scan using matest3i on public.matest3 matest0_4
+               Output: matest0_4.id, matest0_4.name, (1 - matest0_4.id)
+(15 rows)
 
 select * from matest0 order by 1-id;
  id |  name  
@@ -2867,46 +2871,49 @@ drop table parted_minmax;
 create index mcrparted_a_abs_c_idx on mcrparted (a, abs(b), c);
 -- MergeAppend must be used when a default partition exists
 explain (costs off) select * from mcrparted order by a, abs(b), c;
-                                  QUERY PLAN                                   
--------------------------------------------------------------------------------
- Merge Append
-   Sort Key: mcrparted.a, (abs(mcrparted.b)), mcrparted.c
-   ->  Index Scan using mcrparted0_a_abs_c_idx on mcrparted0 mcrparted_1
-   ->  Index Scan using mcrparted1_a_abs_c_idx on mcrparted1 mcrparted_2
-   ->  Index Scan using mcrparted2_a_abs_c_idx on mcrparted2 mcrparted_3
-   ->  Index Scan using mcrparted3_a_abs_c_idx on mcrparted3 mcrparted_4
-   ->  Index Scan using mcrparted4_a_abs_c_idx on mcrparted4 mcrparted_5
-   ->  Index Scan using mcrparted5_a_abs_c_idx on mcrparted5 mcrparted_6
-   ->  Index Scan using mcrparted_def_a_abs_c_idx on mcrparted_def mcrparted_7
-(9 rows)
+                                     QUERY PLAN                                      
+-------------------------------------------------------------------------------------
+ Result
+   ->  Merge Append
+         Sort Key: mcrparted.a, (abs(mcrparted.b)), mcrparted.c
+         ->  Index Scan using mcrparted0_a_abs_c_idx on mcrparted0 mcrparted_1
+         ->  Index Scan using mcrparted1_a_abs_c_idx on mcrparted1 mcrparted_2
+         ->  Index Scan using mcrparted2_a_abs_c_idx on mcrparted2 mcrparted_3
+         ->  Index Scan using mcrparted3_a_abs_c_idx on mcrparted3 mcrparted_4
+         ->  Index Scan using mcrparted4_a_abs_c_idx on mcrparted4 mcrparted_5
+         ->  Index Scan using mcrparted5_a_abs_c_idx on mcrparted5 mcrparted_6
+         ->  Index Scan using mcrparted_def_a_abs_c_idx on mcrparted_def mcrparted_7
+(10 rows)
 
 drop table mcrparted_def;
 -- Append is used for a RANGE partitioned table with no default
 -- and no subpartitions
 explain (costs off) select * from mcrparted order by a, abs(b), c;
-                               QUERY PLAN                                
--------------------------------------------------------------------------
- Append
-   ->  Index Scan using mcrparted0_a_abs_c_idx on mcrparted0 mcrparted_1
-   ->  Index Scan using mcrparted1_a_abs_c_idx on mcrparted1 mcrparted_2
-   ->  Index Scan using mcrparted2_a_abs_c_idx on mcrparted2 mcrparted_3
-   ->  Index Scan using mcrparted3_a_abs_c_idx on mcrparted3 mcrparted_4
-   ->  Index Scan using mcrparted4_a_abs_c_idx on mcrparted4 mcrparted_5
-   ->  Index Scan using mcrparted5_a_abs_c_idx on mcrparted5 mcrparted_6
-(7 rows)
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
+ Result
+   ->  Append
+         ->  Index Scan using mcrparted0_a_abs_c_idx on mcrparted0 mcrparted_1
+         ->  Index Scan using mcrparted1_a_abs_c_idx on mcrparted1 mcrparted_2
+         ->  Index Scan using mcrparted2_a_abs_c_idx on mcrparted2 mcrparted_3
+         ->  Index Scan using mcrparted3_a_abs_c_idx on mcrparted3 mcrparted_4
+         ->  Index Scan using mcrparted4_a_abs_c_idx on mcrparted4 mcrparted_5
+         ->  Index Scan using mcrparted5_a_abs_c_idx on mcrparted5 mcrparted_6
+(8 rows)
 
 -- Append is used with subpaths in reverse order with backwards index scans
 explain (costs off) select * from mcrparted order by a desc, abs(b) desc, c desc;
-                                    QUERY PLAN                                    
-----------------------------------------------------------------------------------
- Append
-   ->  Index Scan Backward using mcrparted5_a_abs_c_idx on mcrparted5 mcrparted_6
-   ->  Index Scan Backward using mcrparted4_a_abs_c_idx on mcrparted4 mcrparted_5
-   ->  Index Scan Backward using mcrparted3_a_abs_c_idx on mcrparted3 mcrparted_4
-   ->  Index Scan Backward using mcrparted2_a_abs_c_idx on mcrparted2 mcrparted_3
-   ->  Index Scan Backward using mcrparted1_a_abs_c_idx on mcrparted1 mcrparted_2
-   ->  Index Scan Backward using mcrparted0_a_abs_c_idx on mcrparted0 mcrparted_1
-(7 rows)
+                                       QUERY PLAN                                       
+----------------------------------------------------------------------------------------
+ Result
+   ->  Append
+         ->  Index Scan Backward using mcrparted5_a_abs_c_idx on mcrparted5 mcrparted_6
+         ->  Index Scan Backward using mcrparted4_a_abs_c_idx on mcrparted4 mcrparted_5
+         ->  Index Scan Backward using mcrparted3_a_abs_c_idx on mcrparted3 mcrparted_4
+         ->  Index Scan Backward using mcrparted2_a_abs_c_idx on mcrparted2 mcrparted_3
+         ->  Index Scan Backward using mcrparted1_a_abs_c_idx on mcrparted1 mcrparted_2
+         ->  Index Scan Backward using mcrparted0_a_abs_c_idx on mcrparted0 mcrparted_1
+(8 rows)
 
 -- check that Append plan is used containing a MergeAppend for sub-partitions
 -- that are unordered.
@@ -2915,51 +2922,54 @@ create table mcrparted5 partition of mcrparted for values from (20, 20, 20) to (
 create table mcrparted5a partition of mcrparted5 for values in(20);
 create table mcrparted5_def partition of mcrparted5 default;
 explain (costs off) select * from mcrparted order by a, abs(b), c;
-                                      QUERY PLAN                                       
----------------------------------------------------------------------------------------
- Append
-   ->  Index Scan using mcrparted0_a_abs_c_idx on mcrparted0 mcrparted_1
-   ->  Index Scan using mcrparted1_a_abs_c_idx on mcrparted1 mcrparted_2
-   ->  Index Scan using mcrparted2_a_abs_c_idx on mcrparted2 mcrparted_3
-   ->  Index Scan using mcrparted3_a_abs_c_idx on mcrparted3 mcrparted_4
-   ->  Index Scan using mcrparted4_a_abs_c_idx on mcrparted4 mcrparted_5
-   ->  Merge Append
-         Sort Key: mcrparted_7.a, (abs(mcrparted_7.b)), mcrparted_7.c
-         ->  Index Scan using mcrparted5a_a_abs_c_idx on mcrparted5a mcrparted_7
-         ->  Index Scan using mcrparted5_def_a_abs_c_idx on mcrparted5_def mcrparted_8
-(10 rows)
+                                         QUERY PLAN                                          
+---------------------------------------------------------------------------------------------
+ Result
+   ->  Append
+         ->  Index Scan using mcrparted0_a_abs_c_idx on mcrparted0 mcrparted_1
+         ->  Index Scan using mcrparted1_a_abs_c_idx on mcrparted1 mcrparted_2
+         ->  Index Scan using mcrparted2_a_abs_c_idx on mcrparted2 mcrparted_3
+         ->  Index Scan using mcrparted3_a_abs_c_idx on mcrparted3 mcrparted_4
+         ->  Index Scan using mcrparted4_a_abs_c_idx on mcrparted4 mcrparted_5
+         ->  Merge Append
+               Sort Key: mcrparted_7.a, (abs(mcrparted_7.b)), mcrparted_7.c
+               ->  Index Scan using mcrparted5a_a_abs_c_idx on mcrparted5a mcrparted_7
+               ->  Index Scan using mcrparted5_def_a_abs_c_idx on mcrparted5_def mcrparted_8
+(11 rows)
 
 drop table mcrparted5_def;
 -- check that an Append plan is used and the sub-partitions are flattened
 -- into the main Append when the sub-partition is unordered but contains
 -- just a single sub-partition.
 explain (costs off) select a, abs(b) from mcrparted order by a, abs(b), c;
-                                QUERY PLAN                                 
----------------------------------------------------------------------------
- Append
-   ->  Index Scan using mcrparted0_a_abs_c_idx on mcrparted0 mcrparted_1
-   ->  Index Scan using mcrparted1_a_abs_c_idx on mcrparted1 mcrparted_2
-   ->  Index Scan using mcrparted2_a_abs_c_idx on mcrparted2 mcrparted_3
-   ->  Index Scan using mcrparted3_a_abs_c_idx on mcrparted3 mcrparted_4
-   ->  Index Scan using mcrparted4_a_abs_c_idx on mcrparted4 mcrparted_5
-   ->  Index Scan using mcrparted5a_a_abs_c_idx on mcrparted5a mcrparted_6
-(7 rows)
+                                   QUERY PLAN                                    
+---------------------------------------------------------------------------------
+ Result
+   ->  Append
+         ->  Index Scan using mcrparted0_a_abs_c_idx on mcrparted0 mcrparted_1
+         ->  Index Scan using mcrparted1_a_abs_c_idx on mcrparted1 mcrparted_2
+         ->  Index Scan using mcrparted2_a_abs_c_idx on mcrparted2 mcrparted_3
+         ->  Index Scan using mcrparted3_a_abs_c_idx on mcrparted3 mcrparted_4
+         ->  Index Scan using mcrparted4_a_abs_c_idx on mcrparted4 mcrparted_5
+         ->  Index Scan using mcrparted5a_a_abs_c_idx on mcrparted5a mcrparted_6
+(8 rows)
 
 -- check that Append is used when the sub-partitioned tables are pruned
 -- during planning.
 explain (costs off) select * from mcrparted where a < 20 order by a, abs(b), c;
-                               QUERY PLAN                                
--------------------------------------------------------------------------
- Append
-   ->  Index Scan using mcrparted0_a_abs_c_idx on mcrparted0 mcrparted_1
-         Index Cond: (a < 20)
-   ->  Index Scan using mcrparted1_a_abs_c_idx on mcrparted1 mcrparted_2
-         Index Cond: (a < 20)
-   ->  Index Scan using mcrparted2_a_abs_c_idx on mcrparted2 mcrparted_3
-         Index Cond: (a < 20)
-   ->  Index Scan using mcrparted3_a_abs_c_idx on mcrparted3 mcrparted_4
-         Index Cond: (a < 20)
-(9 rows)
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
+ Result
+   ->  Append
+         ->  Index Scan using mcrparted0_a_abs_c_idx on mcrparted0 mcrparted_1
+               Index Cond: (a < 20)
+         ->  Index Scan using mcrparted1_a_abs_c_idx on mcrparted1 mcrparted_2
+               Index Cond: (a < 20)
+         ->  Index Scan using mcrparted2_a_abs_c_idx on mcrparted2 mcrparted_3
+               Index Cond: (a < 20)
+         ->  Index Scan using mcrparted3_a_abs_c_idx on mcrparted3 mcrparted_4
+               Index Cond: (a < 20)
+(10 rows)
 
 set enable_bitmapscan to off;
 set enable_sort to off;
@@ -3106,34 +3116,36 @@ create index on mcrparted2 (a, abs(b), c);
 create index on mcrparted3 (a, abs(b), c);
 create index on mcrparted4 (a, abs(b), c);
 explain (costs off) select * from mcrparted where a < 20 order by a, abs(b), c limit 1;
-                                  QUERY PLAN                                   
--------------------------------------------------------------------------------
+                                     QUERY PLAN                                      
+-------------------------------------------------------------------------------------
  Limit
-   ->  Append
-         ->  Sort
-               Sort Key: mcrparted_1.a, (abs(mcrparted_1.b)), mcrparted_1.c
-               ->  Seq Scan on mcrparted0 mcrparted_1
-                     Filter: (a < 20)
-         ->  Index Scan using mcrparted1_a_abs_c_idx on mcrparted1 mcrparted_2
-               Index Cond: (a < 20)
-         ->  Index Scan using mcrparted2_a_abs_c_idx on mcrparted2 mcrparted_3
-               Index Cond: (a < 20)
-         ->  Index Scan using mcrparted3_a_abs_c_idx on mcrparted3 mcrparted_4
-               Index Cond: (a < 20)
-(12 rows)
+   ->  Result
+         ->  Append
+               ->  Sort
+                     Sort Key: mcrparted_1.a, (abs(mcrparted_1.b)), mcrparted_1.c
+                     ->  Seq Scan on mcrparted0 mcrparted_1
+                           Filter: (a < 20)
+               ->  Index Scan using mcrparted1_a_abs_c_idx on mcrparted1 mcrparted_2
+                     Index Cond: (a < 20)
+               ->  Index Scan using mcrparted2_a_abs_c_idx on mcrparted2 mcrparted_3
+                     Index Cond: (a < 20)
+               ->  Index Scan using mcrparted3_a_abs_c_idx on mcrparted3 mcrparted_4
+                     Index Cond: (a < 20)
+(13 rows)
 
 set enable_bitmapscan = 0;
 -- Ensure Append node can be used when the partition is ordered by some
 -- pathkeys which were deemed redundant.
 explain (costs off) select * from mcrparted where a = 10 order by a, abs(b), c;
-                               QUERY PLAN                                
--------------------------------------------------------------------------
- Append
-   ->  Index Scan using mcrparted1_a_abs_c_idx on mcrparted1 mcrparted_1
-         Index Cond: (a = 10)
-   ->  Index Scan using mcrparted2_a_abs_c_idx on mcrparted2 mcrparted_2
-         Index Cond: (a = 10)
-(5 rows)
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
+ Result
+   ->  Append
+         ->  Index Scan using mcrparted1_a_abs_c_idx on mcrparted1 mcrparted_1
+               Index Cond: (a = 10)
+         ->  Index Scan using mcrparted2_a_abs_c_idx on mcrparted2 mcrparted_2
+               Index Cond: (a = 10)
+(6 rows)
 
 reset enable_bitmapscan;
 drop table mcrparted;

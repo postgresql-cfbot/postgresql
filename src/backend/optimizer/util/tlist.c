@@ -145,7 +145,7 @@ add_to_flat_tlist(List *tlist, List *exprs)
 			tle = makeTargetEntry(copyObject(expr), /* copy needed?? */
 								  next_resno++,
 								  NULL,
-								  false);
+								  NOT_JUNK);
 			tlist = lappend(tlist, tle);
 		}
 	}
@@ -356,6 +356,26 @@ get_sortgroupref_tle(Index sortref, List *targetList)
 
 	elog(ERROR, "ORDER/GROUP BY expression not found in targetlist");
 	return NULL;				/* keep compiler quiet */
+}
+
+/*
+ * get_sortgroupref_tle_noerr
+ *		As above, but return NULL rather than throwing an error if not found.
+ */
+TargetEntry *
+get_sortgroupref_tle_noerr(Index sortref, List *targetList)
+{
+	ListCell   *l;
+
+	foreach(l, targetList)
+	{
+		TargetEntry *tle = (TargetEntry *) lfirst(l);
+
+		if (tle->ressortgroupref == sortref)
+			return tle;
+	}
+
+	return NULL;
 }
 
 /*
@@ -636,7 +656,7 @@ make_tlist_from_pathtarget(PathTarget *target)
 		tle = makeTargetEntry(expr,
 							  i + 1,
 							  NULL,
-							  false);
+							  NOT_JUNK);
 		if (target->sortgrouprefs)
 			tle->ressortgroupref = target->sortgrouprefs[i];
 		tlist = lappend(tlist, tle);

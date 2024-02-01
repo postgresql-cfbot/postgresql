@@ -111,25 +111,26 @@ SELECT COUNT(*) FROM prt1 t1
 -- left outer join, with whole-row reference; partitionwise join does not apply
 EXPLAIN (COSTS OFF)
 SELECT t1, t2 FROM prt1 t1 LEFT JOIN prt2 t2 ON t1.a = t2.b WHERE t1.b = 0 ORDER BY t1.a, t2.b;
-                    QUERY PLAN                    
---------------------------------------------------
- Sort
-   Sort Key: t1.a, t2.b
-   ->  Hash Right Join
-         Hash Cond: (t2.b = t1.a)
-         ->  Append
-               ->  Seq Scan on prt2_p1 t2_1
-               ->  Seq Scan on prt2_p2 t2_2
-               ->  Seq Scan on prt2_p3 t2_3
-         ->  Hash
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Result
+   ->  Sort
+         Sort Key: t1.a, t2.b
+         ->  Hash Right Join
+               Hash Cond: (t2.b = t1.a)
                ->  Append
-                     ->  Seq Scan on prt1_p1 t1_1
-                           Filter: (b = 0)
-                     ->  Seq Scan on prt1_p2 t1_2
-                           Filter: (b = 0)
-                     ->  Seq Scan on prt1_p3 t1_3
-                           Filter: (b = 0)
-(16 rows)
+                     ->  Seq Scan on prt2_p1 t2_1
+                     ->  Seq Scan on prt2_p2 t2_2
+                     ->  Seq Scan on prt2_p3 t2_3
+               ->  Hash
+                     ->  Append
+                           ->  Seq Scan on prt1_p1 t1_1
+                                 Filter: (b = 0)
+                           ->  Seq Scan on prt1_p2 t1_2
+                                 Filter: (b = 0)
+                           ->  Seq Scan on prt1_p3 t1_3
+                                 Filter: (b = 0)
+(17 rows)
 
 SELECT t1, t2 FROM prt1 t1 LEFT JOIN prt2 t2 ON t1.a = t2.b WHERE t1.b = 0 ORDER BY t1.a, t2.b;
       t1      |      t2      

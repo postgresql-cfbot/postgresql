@@ -1658,7 +1658,7 @@ pull_up_simple_values(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte)
 						makeTargetEntry((Expr *) lfirst(lc),
 										attrno,
 										NULL,
-										false));
+										NOT_JUNK));
 		attrno++;
 	}
 	rvcontext.root = root;
@@ -1816,7 +1816,7 @@ pull_up_constant_function(PlannerInfo *root, Node *jtnode,
 	rvcontext.targetlist = list_make1(makeTargetEntry((Expr *) rtf->funcexpr,
 													  1,	/* resno */
 													  NULL, /* resname */
-													  false));	/* resjunk */
+													  NOT_JUNK));	/* resjunk */
 	rvcontext.target_rte = rte;
 
 	/*

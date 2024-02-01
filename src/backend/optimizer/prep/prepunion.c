@@ -1227,7 +1227,7 @@ generate_setop_tlist(List *colTypes, List *colCollations,
 		tle = makeTargetEntry((Expr *) expr,
 							  (AttrNumber) resno++,
 							  pstrdup(reftle->resname),
-							  false);
+							  NOT_JUNK);
 
 		/*
 		 * By convention, all non-resjunk columns in a setop tree have
@@ -1253,7 +1253,7 @@ generate_setop_tlist(List *colTypes, List *colCollations,
 		tle = makeTargetEntry((Expr *) expr,
 							  (AttrNumber) resno++,
 							  pstrdup("flag"),
-							  true);
+							  JUNK_OTHER);
 		tlist = lappend(tlist, tle);
 		*trivial_tlist = false; /* the extra entry makes it not trivial */
 	}
@@ -1361,7 +1361,7 @@ generate_append_tlist(List *colTypes, List *colCollations,
 		tle = makeTargetEntry((Expr *) expr,
 							  (AttrNumber) resno++,
 							  pstrdup(reftle->resname),
-							  false);
+							  NOT_JUNK);
 
 		/*
 		 * By convention, all non-resjunk columns in a setop tree have
@@ -1386,7 +1386,7 @@ generate_append_tlist(List *colTypes, List *colCollations,
 		tle = makeTargetEntry((Expr *) expr,
 							  (AttrNumber) resno++,
 							  pstrdup("flag"),
-							  true);
+							  JUNK_OTHER);
 		tlist = lappend(tlist, tle);
 	}
 

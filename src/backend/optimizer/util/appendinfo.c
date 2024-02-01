@@ -810,7 +810,7 @@ add_row_identity_var(PlannerInfo *root, Var *orig_var,
 		tle = makeTargetEntry((Expr *) orig_var,
 							  list_length(root->processed_tlist) + 1,
 							  pstrdup(rowid_name),
-							  true);
+							  JUNK_OTHER);
 		root->processed_tlist = lappend(root->processed_tlist, tle);
 		return;
 	}
@@ -869,7 +869,7 @@ add_row_identity_var(PlannerInfo *root, Var *orig_var,
 	tle = makeTargetEntry((Expr *) rowid_var,
 						  list_length(root->processed_tlist) + 1,
 						  pstrdup(rowid_name),
-						  true);
+						  JUNK_OTHER);
 	root->processed_tlist = lappend(root->processed_tlist, tle);
 }
 

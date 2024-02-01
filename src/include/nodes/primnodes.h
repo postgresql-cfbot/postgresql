@@ -21,6 +21,24 @@
 #include "nodes/bitmapset.h"
 #include "nodes/pg_list.h"
 
+/*
+ * These are numbered so that to check if a column is junk or not, you can
+ * use "if (resjunk)" or "if (!resjunk)".
+ */
+typedef enum JunkKind
+{
+	/* Regular column, not junk */
+	NOT_JUNK = 0,
+
+	/* An ORDER or GROUP BY column. These are left out from the final plan. */	
+	JUNK_SORT_GROUP_COL = 1,
+
+	/* Other junk column used only in planner. Also left out from final plan. */	
+	JUNK_PLANNER_ONLY,
+	
+	/* Other junk column, needs to be preserved in the final plan. */
+	JUNK_OTHER,
+} JunkKind;
 
 typedef enum OverridingKind
 {
@@ -1908,13 +1926,14 @@ typedef struct InferenceElem
  * simple reference to a column of a base table (or view).  If it is not
  * a simple reference, these fields are zeroes.
  *
- * If resjunk is true then the column is a working column (such as a sort key)
+ * If XXX resjunk is true then the column is a working column (such as a sort key)
  * that should be removed from the final output of the query.  Resjunk columns
  * must have resnos that cannot duplicate any regular column's resno.  Also
  * note that there are places that assume resjunk columns come after non-junk
  * columns.
  *--------------------
  */
+
 typedef struct TargetEntry
 {
 	Expr		xpr;
@@ -1931,7 +1950,7 @@ typedef struct TargetEntry
 	/* column's number in source table */
 	AttrNumber	resorigcol pg_node_attr(query_jumble_ignore);
 	/* set to true to eliminate the attribute from final target list */
-	bool		resjunk pg_node_attr(query_jumble_ignore);
+	JunkKind	resjunk pg_node_attr(query_jumble_ignore);
 } TargetEntry;
 
 

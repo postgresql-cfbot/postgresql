@@ -260,7 +260,7 @@ expand_inherited_rtentry(PlannerInfo *root, RelOptInfo *rel,
 			tle = makeTargetEntry((Expr *) var,
 								  list_length(root->processed_tlist) + 1,
 								  pstrdup(resname),
-								  true);
+								  JUNK_OTHER);
 			root->processed_tlist = lappend(root->processed_tlist, tle);
 			newvars = lappend(newvars, var);
 		}
@@ -277,7 +277,7 @@ expand_inherited_rtentry(PlannerInfo *root, RelOptInfo *rel,
 			tle = makeTargetEntry((Expr *) var,
 								  list_length(root->processed_tlist) + 1,
 								  pstrdup(resname),
-								  true);
+								  JUNK_OTHER);
 			root->processed_tlist = lappend(root->processed_tlist, tle);
 			newvars = lappend(newvars, var);
 		}
@@ -295,7 +295,7 @@ expand_inherited_rtentry(PlannerInfo *root, RelOptInfo *rel,
 			tle = makeTargetEntry((Expr *) var,
 								  list_length(root->processed_tlist) + 1,
 								  pstrdup(resname),
-								  true);
+								  JUNK_OTHER);
 			root->processed_tlist = lappend(root->processed_tlist, tle);
 			newvars = lappend(newvars, var);
 		}

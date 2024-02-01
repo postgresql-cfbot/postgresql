@@ -139,7 +139,7 @@ transformAggregateCall(ParseState *pstate, Aggref *agg,
 			TargetEntry *tle;
 
 			/* We don't bother to assign column names to the entries */
-			tle = makeTargetEntry(arg, attno++, NULL, false);
+			tle = makeTargetEntry(arg, attno++, NULL, NOT_JUNK);
 			tlist = lappend(tlist, tle);
 
 			torder = addTargetToSortList(pstate, tle,
@@ -163,7 +163,7 @@ transformAggregateCall(ParseState *pstate, Aggref *agg,
 			TargetEntry *tle;
 
 			/* We don't bother to assign column names to the entries */
-			tle = makeTargetEntry(arg, attno++, NULL, false);
+			tle = makeTargetEntry(arg, attno++, NULL, NOT_JUNK);
 			tlist = lappend(tlist, tle);
 		}
 

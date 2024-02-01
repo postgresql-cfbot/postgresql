@@ -1778,7 +1778,7 @@ build_physical_tlist(PlannerInfo *root, RelOptInfo *rel)
 								makeTargetEntry((Expr *) var,
 												attrno,
 												NULL,
-												false));
+												NOT_JUNK));
 			}
 
 			table_close(relation, NoLock);
@@ -1793,7 +1793,13 @@ build_physical_tlist(PlannerInfo *root, RelOptInfo *rel)
 				/*
 				 * A resjunk column of the subquery can be reflected as
 				 * resjunk in the physical tlist; we need not punt.
+				 *
+				 * Subquery planner will filter out these junk columns
+				 * from the final plan, so reflect that here.
 				 */
+				if (tle->resjunk == JUNK_SORT_GROUP_COL || tle->resjunk == JUNK_PLANNER_ONLY)
+					continue;
+
 				var = makeVarFromTargetEntry(varno, tle);
 
 				tlist = lappend(tlist,
@@ -1831,7 +1837,7 @@ build_physical_tlist(PlannerInfo *root, RelOptInfo *rel)
 								makeTargetEntry((Expr *) var,
 												var->varattno,
 												NULL,
-												false));
+												NOT_JUNK));
 			}
 			break;
 
@@ -1900,7 +1906,7 @@ build_index_tlist(PlannerInfo *root, IndexOptInfo *index,
 						makeTargetEntry(indexvar,
 										i + 1,
 										NULL,
-										false));
+										NOT_JUNK));
 	}
 	if (indexpr_item != NULL)
 		elog(ERROR, "wrong number of index expressions");

@@ -78,7 +78,7 @@ transformTargetEntry(ParseState *pstate,
 					 Node *expr,
 					 ParseExprKind exprKind,
 					 char *colname,
-					 bool resjunk)
+					 JunkKind resjunk)
 {
 	/* Transform the node if caller didn't do it already */
 	if (expr == NULL)
@@ -184,7 +184,7 @@ transformTargetList(ParseState *pstate, List *targetlist,
 												NULL,
 												exprKind,
 												res->name,
-												false));
+												NOT_JUNK));
 	}
 
 	/*
@@ -1480,7 +1480,7 @@ ExpandRowReference(ParseState *pstate, Node *expr,
 			te = makeTargetEntry((Expr *) fselect,
 								 (AttrNumber) pstate->p_next_resno++,
 								 pstrdup(NameStr(att->attname)),
-								 false);
+								 NOT_JUNK);
 			result = lappend(result, te);
 		}
 		else

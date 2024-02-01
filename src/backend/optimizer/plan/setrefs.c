@@ -1474,6 +1474,7 @@ trivial_subqueryscan(SubqueryScan *plan)
 		TargetEntry *ptle = (TargetEntry *) lfirst(lp);
 		TargetEntry *ctle = (TargetEntry *) lfirst(lc);
 
+		/* XXX: do the kind has to match exactly? */
 		if (ptle->resjunk != ctle->resjunk)
 			return false;		/* tlist doesn't match junk status */
 
@@ -2568,7 +2569,7 @@ convert_combining_aggrefs(Node *node, void *context)
 		 * And set up parent_agg to represent the second phase.
 		 */
 		parent_agg->args = list_make1(makeTargetEntry((Expr *) child_agg,
-													  1, NULL, false));
+													  1, NULL, NOT_JUNK));
 		mark_partial_aggref(parent_agg, AGGSPLIT_FINAL_DESERIAL);
 
 		return (Node *) parent_agg;

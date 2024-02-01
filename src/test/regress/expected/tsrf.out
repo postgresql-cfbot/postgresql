@@ -666,17 +666,19 @@ select generate_series(1,3) as x, generate_series(1,3) + 1 as xp1;
 
 explain (verbose, costs off)
 select generate_series(1,3)+1 order by generate_series(1,3);
-                               QUERY PLAN                               
-------------------------------------------------------------------------
- Sort
-   Output: (((generate_series(1, 3)) + 1)), (generate_series(1, 3))
-   Sort Key: (generate_series(1, 3))
-   ->  Result
-         Output: ((generate_series(1, 3)) + 1), (generate_series(1, 3))
-         ->  ProjectSet
-               Output: generate_series(1, 3)
-               ->  Result
-(8 rows)
+                                  QUERY PLAN                                  
+------------------------------------------------------------------------------
+ Result
+   Output: (((generate_series(1, 3)) + 1))
+   ->  Sort
+         Output: (((generate_series(1, 3)) + 1)), (generate_series(1, 3))
+         Sort Key: (generate_series(1, 3))
+         ->  Result
+               Output: ((generate_series(1, 3)) + 1), (generate_series(1, 3))
+               ->  ProjectSet
+                     Output: generate_series(1, 3)
+                     ->  Result
+(10 rows)
 
 select generate_series(1,3)+1 order by generate_series(1,3);
  ?column? 

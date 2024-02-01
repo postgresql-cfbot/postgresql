@@ -642,12 +642,13 @@ EXPLAIN (COSTS OFF)
 
 EXPLAIN (COSTS OFF)
   SELECT * FROM collate_test10 ORDER BY x DESC, y COLLATE "C" ASC NULLS FIRST;
-                        QUERY PLAN                         
------------------------------------------------------------
- Sort
-   Sort Key: x COLLATE "C" DESC, y COLLATE "C" NULLS FIRST
-   ->  Seq Scan on collate_test10
-(3 rows)
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Result
+   ->  Sort
+         Sort Key: x COLLATE "C" DESC, y COLLATE "C" NULLS FIRST
+         ->  Seq Scan on collate_test10
+(4 rows)
 
 -- CREATE/DROP COLLATION
 CREATE COLLATION mycoll1 FROM "C";

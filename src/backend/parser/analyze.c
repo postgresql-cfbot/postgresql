@@ -953,7 +953,7 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 		tle = makeTargetEntry(expr,
 							  attr_num,
 							  col->name,
-							  false);
+							  NOT_JUNK);
 		qry->targetList = lappend(qry->targetList, tle);
 
 		perminfo->insertedCols = bms_add_member(perminfo->insertedCols,
@@ -1250,7 +1250,7 @@ BuildOnConflictExcludedTargetlist(Relation targetrel,
 		te = makeTargetEntry((Expr *) var,
 							 attno + 1,
 							 name,
-							 false);
+							 NOT_JUNK);
 
 		result = lappend(result, te);
 	}
@@ -1265,7 +1265,8 @@ BuildOnConflictExcludedTargetlist(Relation targetrel,
 	var = makeVar(exclRelIndex, InvalidAttrNumber,
 				  targetrel->rd_rel->reltype,
 				  -1, InvalidOid, 0);
-	te = makeTargetEntry((Expr *) var, InvalidAttrNumber, NULL, true);
+	// XXX: right junk kind?
+	te = makeTargetEntry((Expr *) var, InvalidAttrNumber, NULL, JUNK_OTHER);
 	result = lappend(result, te);
 
 	return result;
@@ -1832,7 +1833,7 @@ transformSetOperationStmt(ParseState *pstate, SelectStmt *stmt)
 		tle = makeTargetEntry((Expr *) var,
 							  (AttrNumber) pstate->p_next_resno++,
 							  colName,
-							  false);
+							  NOT_JUNK);
 		qry->targetList = lappend(qry->targetList, tle);
 		targetvars = lappend(targetvars, var);
 		targetnames = lappend(targetnames, makeString(colName));
@@ -2306,7 +2307,7 @@ transformSetOperationTree(ParseState *pstate, SelectStmt *stmt,
 				restle = makeTargetEntry((Expr *) rescolnode,
 										 0, /* no need to set resno */
 										 NULL,
-										 false);
+										 NOT_JUNK);
 				*targetlist = lappend(*targetlist, restle);
 			}
 		}
@@ -2360,7 +2361,7 @@ determineRecursiveColTypes(ParseState *pstate, Node *larg, List *nrtargetlist)
 		tle = makeTargetEntry(nrtle->expr,
 							  next_resno++,
 							  colName,
-							  false);
+							  NOT_JUNK);
 		targetList = lappend(targetList, tle);
 	}
 
@@ -2382,7 +2383,7 @@ transformReturnStmt(ParseState *pstate, ReturnStmt *stmt)
 	qry->isReturn = true;
 
 	qry->targetList = list_make1(makeTargetEntry((Expr *) transformExpr(pstate, stmt->returnval, EXPR_KIND_SELECT_TARGET),
-												 1, NULL, false));
+												 1, NULL, NOT_JUNK));
 
 	if (pstate->p_resolve_unknowns)
 		resolveTargetListUnknowns(pstate, qry->targetList);

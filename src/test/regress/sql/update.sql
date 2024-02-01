@@ -670,3 +670,26 @@ update hash_parted set b = b + 8 where b = 1;
 drop table hash_parted;
 drop operator class custom_opclass using hash;
 drop function dummy_hashint4(a int4, seed int8);
+
+create table block_local_updates(id int, b int) with (fillfactor = 10, autovacuum_enabled = false);
+insert into block_local_updates select generate_series(1, 88), 0;
+
+select (ctid::text::point)[0], count(*) from block_local_updates group by 1 order by 1;
+
+-- Test local update limit still works if there is no space available earlier in the table (after accounting for fillfactor)
+alter table block_local_updates set (local_update_limit=0);
+update block_local_updates set b = 1;
+select (ctid::text::point)[0], count(*) from block_local_updates group by 1 order by 1;
+
+-- FF 10=>100 -> all blocks now have ~ 90% space left
+alter table block_local_updates set (fillfactor = 100);
+-- vacuum to clear "FULL" hint bits on all pages, and clear dead LPs
+vacuum (disable_page_skipping true) block_local_updates;
+
+-- ~90% space left on each page, all updates would be page-local if not for local_update_limit
+update block_local_updates set b = 2;
+-- all tuples moved to first page, 88 total
+select (ctid::text::point)[0], count(*) from block_local_updates group by 1 order by 1;
+
+-- cleanup
+drop table block_local_updates;

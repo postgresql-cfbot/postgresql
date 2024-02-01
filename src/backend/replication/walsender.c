@@ -855,6 +855,15 @@ StartReplication(StartReplicationCmd *cmd)
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 					 errmsg("cannot use a logical replication slot for physical replication")));
 
+		if (MyReplicationSlot->data.invalidated == RS_INVAL_WAL_REMOVED)
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					 errmsg("cannot use replication slot \"%s\" for physical replication",
+							NameStr(MyReplicationSlot->data.name)),
+					 errdetail("This slot has been invalidated because it exceeded the maximum reserved size.")));
+
+		Assert(MyReplicationSlot->data.invalidated == RS_INVAL_NONE);
+
 		/*
 		 * We don't need to verify the slot's restart_lsn here; instead we
 		 * rely on the caller requesting the starting point to use.  If the

@@ -26,6 +26,7 @@
 #include "optimizer/optimizer.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
+#include "optimizer/placeholder.h"
 #include "optimizer/planmain.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
@@ -56,6 +57,8 @@ static int	append_startup_cost_compare(const ListCell *a, const ListCell *b);
 static List *reparameterize_pathlist_by_child(PlannerInfo *root,
 											  List *pathlist,
 											  RelOptInfo *child_rel);
+static bool contain_references_to(PlannerInfo *root, Node *clause,
+								  Relids relids);
 
 
 /*****************************************************************************
@@ -4142,12 +4145,67 @@ do { \
 	switch (nodeTag(path))
 	{
 		case T_Path:
-			FLAT_COPY_PATH(new_path, path, Path);
+			{
+				List	   *scan_clauses;
+
+				/*
+				 * If the path's restriction clauses contain lateral references
+				 * to the other relation, we can't reparameterize, because we
+				 * must not change the RelOptInfo's contents here.  (Doing so
+				 * would break things if we end up using a non-partitionwise
+				 * join.)
+				 */
+				scan_clauses =
+					extract_actual_clauses(path->parent->baserestrictinfo,
+										   false);
+				if (contain_references_to(root, (Node *) scan_clauses,
+										  child_rel->top_parent_relids))
+					return NULL;
+
+				/*
+				 * If it's a SampleScan with tablesample parameters referencing
+				 * the other relation, we can't reparameterize, because we must
+				 * not change the RTE's contents here.  (Doing so would break
+				 * things if we end up using a non-partitionwise join.)
+				 */
+				if (path->pathtype == T_SampleScan)
+				{
+					Index		scan_relid = path->parent->relid;
+					RangeTblEntry *rte;
+
+					/* it should be a base rel with a tablesample clause... */
+					Assert(scan_relid > 0);
+					rte = planner_rt_fetch(scan_relid, root);
+					Assert(rte->rtekind == RTE_RELATION);
+					Assert(rte->tablesample != NULL);
+
+					if (contain_references_to(root, (Node *) rte->tablesample,
+											  child_rel->top_parent_relids))
+						return NULL;
+				}
+
+				FLAT_COPY_PATH(new_path, path, Path);
+			}
 			break;
 
 		case T_IndexPath:
 			{
 				IndexPath  *ipath;
+				List	   *scan_clauses;
+
+				/*
+				 * If the path's restriction clauses contain lateral references
+				 * to the other relation, we can't reparameterize, because we
+				 * must not change the IndexOptInfo's contents here.  (Doing so
+				 * would break things if we end up using a non-partitionwise
+				 * join.)
+				 */
+				scan_clauses =
+					extract_actual_clauses(((IndexPath *) path)->indexinfo->indrestrictinfo,
+										   false);
+				if (contain_references_to(root, (Node *) scan_clauses,
+										  child_rel->top_parent_relids))
+					return NULL;
 
 				FLAT_COPY_PATH(ipath, path, IndexPath);
 				ADJUST_CHILD_ATTRS(ipath->indexclauses);
@@ -4158,6 +4216,21 @@ do { \
 		case T_BitmapHeapPath:
 			{
 				BitmapHeapPath *bhpath;
+				List		   *scan_clauses;
+
+				/*
+				 * If the path's restriction clauses contain lateral references
+				 * to the other relation, we can't reparameterize, because we
+				 * must not change the RelOptInfo's contents here.  (Doing so
+				 * would break things if we end up using a non-partitionwise
+				 * join.)
+				 */
+				scan_clauses =
+					extract_actual_clauses(path->parent->baserestrictinfo,
+										   false);
+				if (contain_references_to(root, (Node *) scan_clauses,
+										  child_rel->top_parent_relids))
+					return NULL;
 
 				FLAT_COPY_PATH(bhpath, path, BitmapHeapPath);
 				REPARAMETERIZE_CHILD_PATH(bhpath->bitmapqual);
@@ -4189,6 +4262,21 @@ do { \
 			{
 				ForeignPath *fpath;
 				ReparameterizeForeignPathByChild_function rfpc_func;
+				List	   *scan_clauses;
+
+				/*
+				 * If the path's restriction clauses contain lateral references
+				 * to the other relation, we can't reparameterize, because we
+				 * must not change the RelOptInfo's contents here.  (Doing so
+				 * would break things if we end up using a non-partitionwise
+				 * join.)
+				 */
+				scan_clauses =
+					extract_actual_clauses(path->parent->baserestrictinfo,
+										   false);
+				if (contain_references_to(root, (Node *) scan_clauses,
+										  child_rel->top_parent_relids))
+					return NULL;
 
 				FLAT_COPY_PATH(fpath, path, ForeignPath);
 				if (fpath->fdw_outerpath)
@@ -4209,6 +4297,21 @@ do { \
 		case T_CustomPath:
 			{
 				CustomPath *cpath;
+				List	   *scan_clauses;
+
+				/*
+				 * If the path's restriction clauses contain lateral references
+				 * to the other relation, we can't reparameterize, because we
+				 * must not change the RelOptInfo's contents here.  (Doing so
+				 * would break things if we end up using a non-partitionwise
+				 * join.)
+				 */
+				scan_clauses =
+					extract_actual_clauses(path->parent->baserestrictinfo,
+										   false);
+				if (contain_references_to(root, (Node *) scan_clauses,
+										  child_rel->top_parent_relids))
+					return NULL;
 
 				FLAT_COPY_PATH(cpath, path, CustomPath);
 				REPARAMETERIZE_CHILD_PATH_LIST(cpath->custom_paths);
@@ -4400,4 +4503,58 @@ reparameterize_pathlist_by_child(PlannerInfo *root,
 	}
 
 	return result;
+}
+
+/*
+ * contain_references_to
+ *		Detect whether any Vars or PlaceHolderVars in the given clause contain
+ *		lateral references to the given 'relids'.
+ */
+static bool
+contain_references_to(PlannerInfo *root, Node *clause, Relids relids)
+{
+	List	   *vars;
+	ListCell   *lc;
+	bool		ret = false;
+
+	/*
+	 * Examine all Vars and PlaceHolderVars used in the clause.
+	 *
+	 * By omitting the relevant flags, this also gives us a cheap sanity check
+	 * that no aggregates or window functions appear in the clause.
+	 */
+	vars = pull_var_clause(clause, PVC_INCLUDE_PLACEHOLDERS);
+	foreach(lc, vars)
+	{
+		Node	   *node = (Node *) lfirst(lc);
+
+		if (IsA(node, Var))
+		{
+			Var	   *var = (Var *) node;
+
+			if (bms_is_member(var->varno, relids))
+			{
+				ret = true;
+				break;
+			}
+		}
+		else if (IsA(node, PlaceHolderVar))
+		{
+			PlaceHolderVar *phv = (PlaceHolderVar *) node;
+			PlaceHolderInfo *phinfo = find_placeholder_info(root, phv);
+
+			if (bms_overlap(phinfo->ph_eval_at, relids) ||
+				bms_overlap(phinfo->ph_lateral, relids))
+			{
+				ret = true;
+				break;
+			}
+		}
+		else
+			Assert(false);
+	}
+
+	list_free(vars);
+
+	return ret;
 }

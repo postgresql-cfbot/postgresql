@@ -167,6 +167,20 @@ is($result, 't', "ssl_issuer_field() for commonName");
 
 $result = $node->safe_psql(
 	"certdb",
+	"SELECT ssl_client_get_notbefore()::date = not_before::date, "
+	  . "not_before::date = '2023-06-29' FROM pg_stat_ssl WHERE pid = pg_backend_pid();",
+	connstr => $common_connstr);
+is($result, 't|t', "ssl_client_get_notbefore() for not_before timestamp");
+
+$result = $node->safe_psql(
+	"certdb",
+	"SELECT ssl_client_get_notafter()::date = not_after::date, "
+	  . "not_after::date = '2050-01-01' FROM pg_stat_ssl WHERE pid = pg_backend_pid();",
+	connstr => $common_connstr);
+is($result, 't|t', "ssl_client_get_notafter() for not_after timestamp");
+
+$result = $node->safe_psql(
+	"certdb",
 	"SELECT value, critical FROM ssl_extension_info() WHERE name = 'basicConstraints';",
 	connstr => $common_connstr);
 is($result, 'CA:FALSE|t', 'extract extension from cert');

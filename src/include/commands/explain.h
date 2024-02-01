@@ -89,7 +89,8 @@ extern void ExplainOneUtility(Node *utilityStmt, IntoClause *into,
 							  ExplainState *es, const char *queryString,
 							  ParamListInfo params, QueryEnvironment *queryEnv);
 
-extern void ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into,
+extern void ExplainOnePlan(PlannedStmt *plannedstmt,
+						   IntoClause *into, Oid targetvar,
 						   ExplainState *es, const char *queryString,
 						   ParamListInfo params, QueryEnvironment *queryEnv,
 						   const instr_time *planduration,

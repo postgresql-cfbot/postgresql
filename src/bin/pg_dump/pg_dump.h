@@ -52,6 +52,7 @@ typedef enum
 	DO_TABLE,
 	DO_TABLE_ATTACH,
 	DO_ATTRDEF,
+	DO_VARIABLE,
 	DO_INDEX,
 	DO_INDEX_ATTACH,
 	DO_STATSEXT,
@@ -690,6 +691,27 @@ typedef struct _SubRelInfo
 } SubRelInfo;
 
 /*
+ * The VariableInfo struct is used to represent session variables
+ */
+typedef struct _VariableInfo
+{
+	DumpableObject dobj;
+	DumpableAcl dacl;
+	Oid			vartype;
+	char	   *vartypname;
+	char	   *vardefexpr;
+	char	   *vareoxaction;
+	char	   *varacl;
+	char	   *rvaracl;
+	char	   *initvaracl;
+	char	   *initrvaracl;
+	Oid			varcollation;
+	const char *rolname;		/* name of owner, or empty string */
+	bool		varisnotnull;
+	bool		varisimmutable;
+} VariableInfo;
+
+/*
  *	common utility functions
  */
 
@@ -774,5 +796,6 @@ extern void getPublicationTables(Archive *fout, TableInfo tblinfo[],
 								 int numTables);
 extern void getSubscriptions(Archive *fout);
 extern void getSubscriptionTables(Archive *fout);
+extern void getVariables(Archive *fout);
 
 #endif							/* PG_DUMP_H */

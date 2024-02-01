@@ -483,6 +483,7 @@ check_agglevels_and_constraints(ParseState *pstate, Node *expr)
 			break;
 		case EXPR_KIND_COLUMN_DEFAULT:
 		case EXPR_KIND_FUNCTION_DEFAULT:
+		case EXPR_KIND_VARIABLE_DEFAULT:
 
 			if (isAgg)
 				err = _("aggregate functions are not allowed in DEFAULT expressions");
@@ -572,6 +573,11 @@ check_agglevels_and_constraints(ParseState *pstate, Node *expr)
 			break;
 
 		case EXPR_KIND_CYCLE_MARK:
+			errkind = true;
+			break;
+
+		case EXPR_KIND_ASSIGN_TARGET:
+		case EXPR_KIND_LET_TARGET:
 			errkind = true;
 			break;
 
@@ -926,6 +932,7 @@ transformWindowFuncCall(ParseState *pstate, WindowFunc *wfunc,
 			break;
 		case EXPR_KIND_COLUMN_DEFAULT:
 		case EXPR_KIND_FUNCTION_DEFAULT:
+		case EXPR_KIND_VARIABLE_DEFAULT:
 			err = _("window functions are not allowed in DEFAULT expressions");
 			break;
 		case EXPR_KIND_INDEX_EXPRESSION:
@@ -962,6 +969,10 @@ transformWindowFuncCall(ParseState *pstate, WindowFunc *wfunc,
 			err = _("window functions are not allowed in column generation expressions");
 			break;
 		case EXPR_KIND_CYCLE_MARK:
+			errkind = true;
+			break;
+		case EXPR_KIND_ASSIGN_TARGET:
+		case EXPR_KIND_LET_TARGET:
 			errkind = true;
 			break;
 

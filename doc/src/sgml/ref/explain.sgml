@@ -97,7 +97,8 @@ EXPLAIN [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] <rep
     <command>INSERT</command>, <command>UPDATE</command>,
     <command>DELETE</command>, <command>MERGE</command>,
     <command>CREATE TABLE AS</command>,
-    or <command>EXECUTE</command> statement
+    <command>EXECUTE</command>,
+    or <command>LET</command> statement
     without letting the command affect your data, use this approach:
 <programlisting>
 BEGIN;

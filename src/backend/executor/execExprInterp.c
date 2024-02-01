@@ -4019,7 +4019,7 @@ ExecEvalXmlExpr(ExprState *state, ExprEvalStep *op)
 				*op->resvalue =
 					PointerGetDatum(xmltotext_with_options(DatumGetXmlP(value),
 														   xexpr->xmloption,
-														   xexpr->indent));
+														   xexpr->format));
 				*op->resnull = false;
 			}
 			break;

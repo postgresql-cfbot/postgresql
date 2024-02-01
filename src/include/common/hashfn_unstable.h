@@ -211,11 +211,13 @@ fasthash_accum_cstring_aligned(fasthash_state *hs, const char *str)
 	const char *const start = str;
 	int			remainder;
 	uint64		zero_bytes_le;
+	uint64		chunk;
+	uint64		mask;
 
 	Assert(PointerIsAligned(start, uint64));
 	for (;;)
 	{
-		uint64		chunk = *(uint64 *) str;
+		chunk = *(uint64 *) str;
 
 		/*
 		 * With little-endian representation, we can use this calculation,
@@ -243,9 +245,26 @@ fasthash_accum_cstring_aligned(fasthash_state *hs, const char *str)
 	 * byte within the input word by counting the number of trailing (because
 	 * little-endian) zeros and dividing the result by 8.
 	 */
-	remainder = pg_rightmost_one_pos64(zero_bytes_le) / BITS_PER_BYTE;
-	fasthash_accum(hs, str, remainder);
-	str += remainder;
+	/*
+	 * Create a mask for the remaining bytes and
+	 * combine them into the hash. It would be harmless if the mask also covered the NUL
+	 * terminator, except for the case where it is the first byte in the last input read.
+	 * In that case, we need to return, so we perform a check for that as we form the mask
+	 * for the bytes we need.
+	 */
+	mask = zero_bytes_le >> BITS_PER_BYTE;
+	if (mask)
+	{
+		remainder = pg_rightmost_one_pos64(zero_bytes_le) / BITS_PER_BYTE;
+		mask |= mask - 1;
+#ifdef WORDS_BIGENDIAN
+		mask = pg_bswap64(mask);
+#endif
+		hs->accum = chunk & mask;
+		fasthash_combine(hs);
+
+		str += remainder;
+	}
 
 	return str - start;
 }

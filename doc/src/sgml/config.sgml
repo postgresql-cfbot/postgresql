@@ -10185,11 +10185,12 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
        </para>
 
        <para>
-        When <xref linkend="guc-log-lock-waits"/> is set,
-        this parameter also determines the amount of time to wait before
-        a log message is issued about the lock wait.  If you are trying
-        to investigate locking delays you might want to set a shorter than
-        normal <varname>deadlock_timeout</varname>.
+        When <xref linkend="guc-log-lock-waits"/> is set to
+        <literal>on</literal> (which is the default), this parameter also
+        determines the amount of time to wait before a log message is issued
+        about the lock wait.  If you are trying to investigate locking delays
+        you might want to set a shorter than normal
+        <varname>deadlock_timeout</varname>.
        </para>
       </listitem>
      </varlistentry>

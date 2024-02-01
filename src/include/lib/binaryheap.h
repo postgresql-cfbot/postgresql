@@ -11,6 +11,8 @@
 #ifndef BINARYHEAP_H
 #define BINARYHEAP_H
 
+#include "utils/palloc.h"
+
 /*
  * We provide a Datum-based API for backend code and a void *-based API for
  * frontend code (since the Datum definitions are not available to frontend
@@ -30,6 +32,28 @@ typedef Datum bh_node_type;
 typedef int (*binaryheap_comparator) (bh_node_type a, bh_node_type b, void *arg);
 
 /*
+ * Struct for A hash table element to store the node's index in the bh_nodes
+ * array.
+ */
+typedef struct bh_nodeidx_entry
+{
+	bh_node_type	key;
+	char			status;
+	int				idx;
+} bh_nodeidx_entry;
+
+/* define parameters necessary to generate the hash table interface */
+#define SH_PREFIX bh_nodeidx
+#define SH_ELEMENT_TYPE bh_nodeidx_entry
+#define SH_KEY_TYPE bh_node_type
+#define SH_SCOPE extern
+#ifdef FRONTEND
+#define SH_RAW_ALLOCATOR pg_malloc0
+#endif
+#define SH_DECLARE
+#include "lib/simplehash.h"
+
+/*
  * binaryheap
  *
  *		bh_size			how many nodes are currently in "nodes"
@@ -46,12 +70,20 @@ typedef struct binaryheap
 	bool		bh_has_heap_property;	/* debugging cross-check */
 	binaryheap_comparator bh_compare;
 	void	   *bh_arg;
-	bh_node_type bh_nodes[FLEXIBLE_ARRAY_MEMBER];
+	bh_node_type *bh_nodes;
+
+	/*
+	 * If bh_indexed is true, the bh_nodeidx is used to track of each
+	 * node's index in bh_nodes. This enables the caller to perform
+	 * binaryheap_remove_node_ptr(), binaryheap_update_up/down in O(log n).
+	 */
+	bool		bh_indexed;
+	bh_nodeidx_hash	*bh_nodeidx;
 } binaryheap;
 
 extern binaryheap *binaryheap_allocate(int capacity,
 									   binaryheap_comparator compare,
-									   void *arg);
+									   bool indexed, void *arg);
 extern void binaryheap_reset(binaryheap *heap);
 extern void binaryheap_free(binaryheap *heap);
 extern void binaryheap_add_unordered(binaryheap *heap, bh_node_type d);
@@ -60,7 +92,11 @@ extern void binaryheap_add(binaryheap *heap, bh_node_type d);
 extern bh_node_type binaryheap_first(binaryheap *heap);
 extern bh_node_type binaryheap_remove_first(binaryheap *heap);
 extern void binaryheap_remove_node(binaryheap *heap, int n);
+extern void binaryheap_remove_node_ptr(binaryheap *heap, bh_node_type d);
+extern void binaryheap_remove_node_ptr_unordered(binaryheap *heap, bh_node_type d);
 extern void binaryheap_replace_first(binaryheap *heap, bh_node_type d);
+extern void binaryheap_update_up(binaryheap *heap, bh_node_type d);
+extern void binaryheap_update_down(binaryheap *heap, bh_node_type d);
 
 #define binaryheap_empty(h)			((h)->bh_size == 0)
 #define binaryheap_size(h)			((h)->bh_size)

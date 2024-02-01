@@ -67,6 +67,27 @@
  *	  allocator, evicting the oldest changes would make it more likely the
  *	  memory gets actually freed.
  *
+ *	  We use max-heap with transaction size as the key to find the largest
+ *	  transaction, and use two strategies depending on the number of transactions
+ *	  being decoded:
+ *
+ *	  Since the transaction memory counter is updated frequently, it's expensive
+ *	  to update max-heap while preserving the heap property each time the memory
+ *	  counter is updated. So when the number of transactions is small, transactions
+ *	  are added to the max-heap while not preserving the heap property. We heapify
+ *	  it just before picking the largest transaction. In this case, updating the
+ *	  memory counter is done in O(1) whereas picking the largest transaction is
+ *	  done in O(n), where n is the total number of transactions being decoded.
+ *
+ *	  On the other hand, when the number of transactions being decoded is large,
+ *	  such as when a transaction has many subtransactions, selecting the largest
+ *	  transaction in O(1) is too costly. Therefore, each time the memory counter
+ *	  of a transaction is updated, the max-heap is updated while preserving the
+ *	  heap property, and the largest transaction is picked at a low cost. In
+ *	  this case, updating the memory counter is done in O(log n) whereas picking
+ *	  the largest transaction is done in O(1). This minimizes the cost of choosing
+ *	  the largest transaction.
+ *
  *	  We still rely on max_changes_in_memory when loading serialized changes
  *	  back into memory. At that point we can't use the memory limit directly
  *	  as we load the subxacts independently. One option to deal with this
@@ -295,6 +316,7 @@ static Size ReorderBufferChangeSize(ReorderBufferChange *change);
 static void ReorderBufferChangeMemoryUpdate(ReorderBuffer *rb,
 											ReorderBufferChange *change,
 											bool addition, Size sz);
+static int ReorderBufferTXNSizeCompare(Datum a, Datum b, void *arg);
 
 /*
  * Allocate a new ReorderBuffer and clean out any old serialized state from
@@ -355,6 +377,14 @@ ReorderBufferAllocate(void)
 	buffer->outbuf = NULL;
 	buffer->outbufsize = 0;
 	buffer->size = 0;
+
+	/*
+	 * We start with an arbitrary number. Which should be enough for most of
+	 * cases.
+	 */
+	buffer->memtrack_state = REORDER_BUFFER_MEM_TRACK_NORMAL;
+	buffer->txn_heap = binaryheap_allocate(1024, ReorderBufferTXNSizeCompare,
+										   true, NULL);
 
 	buffer->spillTxns = 0;
 	buffer->spillCount = 0;
@@ -1295,6 +1325,7 @@ ReorderBufferIterTXNInit(ReorderBuffer *rb, ReorderBufferTXN *txn,
 	/* allocate heap */
 	state->heap = binaryheap_allocate(state->nr_txns,
 									  ReorderBufferIterCompare,
+									  false,
 									  state);
 
 	/* Now that the state fields are initialized, it is safe to return it. */
@@ -3199,11 +3230,31 @@ ReorderBufferChangeMemoryUpdate(ReorderBuffer *rb,
 
 	if (addition)
 	{
+		bool init = (txn->size == 0);
+
 		txn->size += sz;
 		rb->size += sz;
 
 		/* Update the total size in the top transaction. */
 		toptxn->total_size += sz;
+
+		/* Update the transaction in the max-heap */
+		if (init)
+		{
+			/* Add the transaction to the max-heap */
+			if (rb->memtrack_state == REORDER_BUFFER_MEM_TRACK_NORMAL)
+				binaryheap_add_unordered(rb->txn_heap, PointerGetDatum(txn));
+			else
+				binaryheap_add(rb->txn_heap, PointerGetDatum(txn));
+		}
+		else if (rb->memtrack_state == REORDER_BUFFER_MEM_TRACK_MAINTAIN_MAXHEAP)
+		{
+			/*
+			 * If we're maintaining max-heap even while updating the memory counter,
+			 * we reflect the updates to the max-heap.
+			 */
+			binaryheap_update_up(rb->txn_heap, PointerGetDatum(txn));
+		}
 	}
 	else
 	{
@@ -3213,6 +3264,24 @@ ReorderBufferChangeMemoryUpdate(ReorderBuffer *rb,
 
 		/* Update the total size in the top transaction. */
 		toptxn->total_size -= sz;
+
+		/* Remove the transaction from the max-heap */
+		if (txn->size == 0)
+		{
+			/* Remove the transaction */
+			if (rb->memtrack_state == REORDER_BUFFER_MEM_TRACK_NORMAL)
+				binaryheap_remove_node_ptr_unordered(rb->txn_heap, PointerGetDatum(txn));
+			else
+				binaryheap_remove_node_ptr(rb->txn_heap, PointerGetDatum(txn));
+		}
+		else if (rb->memtrack_state == REORDER_BUFFER_MEM_TRACK_MAINTAIN_MAXHEAP)
+		{
+			/*
+			 * If we're maintaining max-heap even while updating the memory counter,
+			 * we reflect the updates to the max-heap.
+			 */
+			binaryheap_update_down(rb->txn_heap, PointerGetDatum(txn));
+		}
 	}
 
 	Assert(txn->size <= rb->size);
@@ -3470,31 +3539,44 @@ ReorderBufferSerializeReserve(ReorderBuffer *rb, Size sz)
 
 /*
  * Find the largest transaction (toplevel or subxact) to evict (spill to disk).
- *
- * XXX With many subtransactions this might be quite slow, because we'll have
- * to walk through all of them. There are some options how we could improve
- * that: (a) maintain some secondary structure with transactions sorted by
- * amount of changes, (b) not looking for the entirely largest transaction,
- * but e.g. for transaction using at least some fraction of the memory limit,
- * and (c) evicting multiple transactions at once, e.g. to free a given portion
- * of the memory limit (e.g. 50%).
  */
 static ReorderBufferTXN *
 ReorderBufferLargestTXN(ReorderBuffer *rb)
 {
-	HASH_SEQ_STATUS hash_seq;
-	ReorderBufferTXNByIdEnt *ent;
+	/*
+	 * The threshold of the number of transactions in the max-heap (rb->txn_heap)
+	 * to switch the state.
+	 */
+#define REORDE_BUFFER_MEM_TRACK_THRESHOLD 1024
+
 	ReorderBufferTXN *largest = NULL;
 
-	hash_seq_init(&hash_seq, rb->by_txn);
-	while ((ent = hash_seq_search(&hash_seq)) != NULL)
+	if (rb->memtrack_state == REORDER_BUFFER_MEM_TRACK_NORMAL)
 	{
-		ReorderBufferTXN *txn = ent->txn;
+		binaryheap_build(rb->txn_heap);
 
-		/* if the current transaction is larger, remember it */
-		if ((!largest) || (txn->size > largest->size))
-			largest = txn;
+		/*
+		 * If the number of transactions exceeds the threshold, switch to the
+		 * state where we maintain the max-heap even while updating the memory
+		 * counter.
+		 */
+		if (binaryheap_size(rb->txn_heap) >= REORDE_BUFFER_MEM_TRACK_THRESHOLD)
+			rb->memtrack_state = REORDER_BUFFER_MEM_TRACK_MAINTAIN_MAXHEAP;
 	}
+	else
+	{
+		Assert(rb->memtrack_state == REORDER_BUFFER_MEM_TRACK_MAINTAIN_MAXHEAP);
+
+		/*
+		 * If the number of transactions gets lowered than the threshold, switch
+		 * to the state where we heapify the max-heap right before picking the
+		 * largest transaction while doing nothing for memory counter update.
+		 */
+		if (binaryheap_size(rb->txn_heap) < REORDE_BUFFER_MEM_TRACK_THRESHOLD)
+			rb->memtrack_state = REORDER_BUFFER_MEM_TRACK_NORMAL;
+	}
+
+	largest = (ReorderBufferTXN *) DatumGetPointer(binaryheap_first(rb->txn_heap));
 
 	Assert(largest);
 	Assert(largest->size > 0);
@@ -5274,4 +5356,21 @@ restart:
 	if (cmax)
 		*cmax = ent->cmax;
 	return true;
+}
+
+/*
+ * Compare between sizes of two transactions. This is for a binary heap
+ * comparison function.
+ */
+static int
+ReorderBufferTXNSizeCompare(Datum a, Datum b, void *arg)
+{
+	ReorderBufferTXN	*ta = (ReorderBufferTXN *) DatumGetPointer(a);
+	ReorderBufferTXN	*tb = (ReorderBufferTXN *) DatumGetPointer(b);
+
+	if (ta->size < tb->size)
+		return -1;
+	if (ta->size > tb->size)
+		return 1;
+	return 0;
 }

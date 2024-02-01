@@ -22,7 +22,27 @@
 #ifdef FRONTEND
 #include "common/logging.h"
 #endif
+#include "common/hashfn.h"
 #include "lib/binaryheap.h"
+
+/*
+ * Define parameters for hash table code generation. The interface is *also*"
+ * declared in binaryheaph.h (to generate the types, which are externally
+ * visible).
+ */
+#define SH_PREFIX bh_nodeidx
+#define SH_ELEMENT_TYPE bh_nodeidx_entry
+#define SH_KEY_TYPE bh_node_type
+#define SH_KEY key
+#define SH_HASH_KEY(tb, key) \
+	hash_bytes((const unsigned char *) &key, sizeof(bh_node_type))
+#define SH_EQUAL(tb, a, b) (memcmp(&a, &b, sizeof(bh_node_type)) == 0)
+#define SH_SCOPE extern
+#ifdef FRONTEND
+#define SH_RAW_ALLOCATOR pg_malloc0
+#endif
+#define SH_DEFINE
+#include "lib/simplehash.h"
 
 static void sift_down(binaryheap *heap, int node_off);
 static void sift_up(binaryheap *heap, int node_off);
@@ -36,19 +56,30 @@ static void sift_up(binaryheap *heap, int node_off);
  * argument specified by 'arg'.
  */
 binaryheap *
-binaryheap_allocate(int capacity, binaryheap_comparator compare, void *arg)
+binaryheap_allocate(int capacity, binaryheap_comparator compare,
+					bool indexed, void *arg)
 {
-	int			sz;
 	binaryheap *heap;
 
-	sz = offsetof(binaryheap, bh_nodes) + sizeof(bh_node_type) * capacity;
-	heap = (binaryheap *) palloc(sz);
+	heap = (binaryheap *) palloc(sizeof(binaryheap));
 	heap->bh_space = capacity;
 	heap->bh_compare = compare;
 	heap->bh_arg = arg;
 
 	heap->bh_size = 0;
 	heap->bh_has_heap_property = true;
+	heap->bh_nodes = (bh_node_type *) palloc(sizeof(bh_node_type) * capacity);
+
+	heap->bh_indexed = indexed;
+	if (heap->bh_indexed)
+	{
+#ifdef FRONTEND
+		heap->bh_nodeidx = bh_nodeidx_create(capacity, NULL);
+#else
+		heap->bh_nodeidx = bh_nodeidx_create(CurrentMemoryContext, capacity,
+											 NULL);
+#endif
+	}
 
 	return heap;
 }
@@ -64,6 +95,9 @@ binaryheap_reset(binaryheap *heap)
 {
 	heap->bh_size = 0;
 	heap->bh_has_heap_property = true;
+
+	if (heap->bh_indexed)
+		bh_nodeidx_reset(heap->bh_nodeidx);
 }
 
 /*
@@ -74,6 +108,8 @@ binaryheap_reset(binaryheap *heap)
 void
 binaryheap_free(binaryheap *heap)
 {
+	if (heap->bh_indexed)
+		bh_nodeidx_destroy(heap->bh_nodeidx);
 	pfree(heap);
 }
 
@@ -105,6 +141,58 @@ parent_offset(int i)
 }
 
 /*
+ * Make sure there is enough space for nodes.
+ */
+static void
+bh_enlarge_node_array(binaryheap *heap)
+{
+	if (heap->bh_size < heap->bh_space)
+		return;
+
+	heap->bh_space *= 2;
+	heap->bh_nodes = repalloc(heap->bh_nodes,
+							  sizeof(bh_node_type) * heap->bh_space);
+}
+
+/*
+ * Set the given node at the 'idx' and updates its position accordingly.
+ */
+static void
+bh_set_node(binaryheap *heap, bh_node_type d, int idx)
+{
+	bh_nodeidx_entry *ent;
+	bool	found;
+
+	/* Set the node to the nodes array */
+	heap->bh_nodes[idx] = d;
+
+	if (heap->bh_indexed)
+	{
+		/* Remember its index in the nodes array */
+		ent = bh_nodeidx_insert(heap->bh_nodeidx, d, &found);
+		ent->idx = idx;
+	}
+}
+
+/*
+ * Replace the node at 'idx' with the given node 'replaced_by'. Also
+ * update their positions accordingly.
+ */
+static void
+bh_replace_node(binaryheap *heap, int idx, bh_node_type replaced_by)
+{
+	bh_node_type	node = heap->bh_nodes[idx];
+
+	/* Remove overwritten node's index */
+	if (heap->bh_indexed)
+		(void) bh_nodeidx_delete(heap->bh_nodeidx, node);
+
+	/* Replace it with the given new node */
+	if (idx < heap->bh_size)
+		bh_set_node(heap, replaced_by, idx);
+}
+
+/*
  * binaryheap_add_unordered
  *
  * Adds the given datum to the end of the heap's list of nodes in O(1) without
@@ -115,16 +203,10 @@ parent_offset(int i)
 void
 binaryheap_add_unordered(binaryheap *heap, bh_node_type d)
 {
-	if (heap->bh_size >= heap->bh_space)
-	{
-#ifdef FRONTEND
-		pg_fatal("out of binary heap slots");
-#else
-		elog(ERROR, "out of binary heap slots");
-#endif
-	}
+	bh_enlarge_node_array(heap);
+
 	heap->bh_has_heap_property = false;
-	heap->bh_nodes[heap->bh_size] = d;
+	bh_set_node(heap, d, heap->bh_size);
 	heap->bh_size++;
 }
 
@@ -153,15 +235,9 @@ binaryheap_build(binaryheap *heap)
 void
 binaryheap_add(binaryheap *heap, bh_node_type d)
 {
-	if (heap->bh_size >= heap->bh_space)
-	{
-#ifdef FRONTEND
-		pg_fatal("out of binary heap slots");
-#else
-		elog(ERROR, "out of binary heap slots");
-#endif
-	}
-	heap->bh_nodes[heap->bh_size] = d;
+	bh_enlarge_node_array(heap);
+
+	bh_set_node(heap, d, heap->bh_size);
 	heap->bh_size++;
 	sift_up(heap, heap->bh_size - 1);
 }
@@ -202,6 +278,10 @@ binaryheap_remove_first(binaryheap *heap)
 	if (heap->bh_size == 1)
 	{
 		heap->bh_size--;
+
+		if (heap->bh_indexed)
+			bh_nodeidx_delete(heap->bh_nodeidx, result);
+
 		return result;
 	}
 
@@ -209,7 +289,7 @@ binaryheap_remove_first(binaryheap *heap)
 	 * Remove the last node, placing it in the vacated root entry, and sift
 	 * the new root node down to its correct position.
 	 */
-	heap->bh_nodes[0] = heap->bh_nodes[--heap->bh_size];
+	bh_replace_node(heap, 0, heap->bh_nodes[--heap->bh_size]);
 	sift_down(heap, 0);
 
 	return result;
@@ -235,13 +315,104 @@ binaryheap_remove_node(binaryheap *heap, int n)
 						   heap->bh_arg);
 
 	/* remove the last node, placing it in the vacated entry */
-	heap->bh_nodes[n] = heap->bh_nodes[heap->bh_size];
+	bh_replace_node(heap, n, heap->bh_nodes[heap->bh_size]);
 
 	/* sift as needed to preserve the heap property */
 	if (cmp > 0)
 		sift_up(heap, n);
 	else if (cmp < 0)
 		sift_down(heap, n);
+}
+
+/*
+ * binaryheap_remove_node_ptr
+ *
+ * Similar to binaryheap_remove_node() but removes the given node. The caller
+ * must ensure that the given node is in the heap. O(log n) worst case.
+ *
+ * This function can be used only if bh_indexed is true.
+ */
+void
+binaryheap_remove_node_ptr(binaryheap *heap, bh_node_type d)
+{
+	bh_nodeidx_entry *ent;
+
+	Assert(!binaryheap_empty(heap) && heap->bh_has_heap_property);
+	Assert(heap->bh_indexed);
+
+	ent = bh_nodeidx_lookup(heap->bh_nodeidx, d);
+	Assert(ent);
+
+	binaryheap_remove_node(heap, ent->idx);
+}
+
+/*
+ * binaryheap_remove_node_ptr_unordered
+ *
+ * Remove the given datum from binaryheap in O(1) without preserving the heap property.
+ * To obtain a valid heap, one must call binaryheap_build() afterwards.
+ *
+ * This function can be used only if bh_indexed is true.
+ */
+void
+binaryheap_remove_node_ptr_unordered(binaryheap *heap, bh_node_type d)
+{
+	bh_nodeidx_entry *ent;
+
+	Assert(!binaryheap_empty(heap));
+	Assert(heap->bh_indexed);
+
+	ent = bh_nodeidx_lookup(heap->bh_nodeidx, d);
+	Assert(ent);
+
+	heap->bh_has_heap_property = false;
+	bh_replace_node(heap, ent->idx, heap->bh_nodes[--heap->bh_size]);
+}
+
+/*
+ * binaryheap_update_up
+ *
+ * Sift the given node up after the node's key is updated. The caller must
+ * ensure that the given node is in the heap. O(log n) worst case.
+ *
+ * This function can be used only if bh_indexed is true.
+ */
+void
+binaryheap_update_up(binaryheap *heap, bh_node_type d)
+{
+	bh_nodeidx_entry *ent;
+
+	Assert(!binaryheap_empty(heap) && heap->bh_has_heap_property);
+	Assert(heap->bh_indexed);
+
+	ent = bh_nodeidx_lookup(heap->bh_nodeidx, d);
+	Assert(ent);
+	Assert(ent->idx >= 0 && ent->idx < heap->bh_size);
+
+	sift_up(heap, ent->idx);
+}
+
+/*
+ * binaryheap_update_down
+ *
+ * Sift the given node down after the node's key is updated. The caller must
+ * ensure that the given node is in the heap. O(log n) worst case.
+ *
+ * This function can be used only if bh_indexed is true.
+ */
+void
+binaryheap_update_down(binaryheap *heap, bh_node_type d)
+{
+	bh_nodeidx_entry *ent;
+
+	Assert(!binaryheap_empty(heap) && heap->bh_has_heap_property);
+	Assert(heap->bh_indexed);
+
+	ent = bh_nodeidx_lookup(heap->bh_nodeidx, d);
+	Assert(ent);
+	Assert(ent->idx >= 0 && ent->idx < heap->bh_size);
+
+	sift_down(heap, ent->idx);
 }
 
 /*
@@ -256,7 +427,7 @@ binaryheap_replace_first(binaryheap *heap, bh_node_type d)
 {
 	Assert(!binaryheap_empty(heap) && heap->bh_has_heap_property);
 
-	heap->bh_nodes[0] = d;
+	bh_replace_node(heap, 0, d);
 
 	if (heap->bh_size > 1)
 		sift_down(heap, 0);
@@ -298,11 +469,11 @@ sift_up(binaryheap *heap, int node_off)
 		 * Otherwise, swap the parent value with the hole, and go on to check
 		 * the node's new parent.
 		 */
-		heap->bh_nodes[node_off] = parent_val;
+		bh_set_node(heap, parent_val, node_off);
 		node_off = parent_off;
 	}
 	/* Re-fill the hole */
-	heap->bh_nodes[node_off] = node_val;
+	bh_set_node(heap, node_val, node_off);
 }
 
 /*
@@ -357,9 +528,9 @@ sift_down(binaryheap *heap, int node_off)
 		 * Otherwise, swap the hole with the child that violates the heap
 		 * property; then go on to check its children.
 		 */
-		heap->bh_nodes[node_off] = heap->bh_nodes[swap_off];
+		bh_set_node(heap, heap->bh_nodes[swap_off], node_off);
 		node_off = swap_off;
 	}
 	/* Re-fill the hole */
-	heap->bh_nodes[node_off] = node_val;
+	bh_set_node(heap, node_val, node_off);
 }

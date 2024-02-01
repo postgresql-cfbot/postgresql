@@ -250,7 +250,8 @@ PgArchiverMain(void)
 
 	/* Initialize our max-heap for prioritizing files to archive. */
 	arch_files->arch_heap = binaryheap_allocate(NUM_FILES_PER_DIRECTORY_SCAN,
-												ready_file_comparator, NULL);
+												ready_file_comparator, false,
+												NULL);
 
 	/* Load the archive_library. */
 	LoadArchiveLibrary();

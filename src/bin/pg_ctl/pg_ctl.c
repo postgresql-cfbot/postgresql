@@ -131,6 +131,7 @@ static void adjust_data_dir(void);
 
 #ifdef WIN32
 #include <versionhelpers.h>
+#include <tlhelp32.h>
 static bool pgwin32_IsInstalled(SC_HANDLE);
 static char *pgwin32_CommandLine(bool);
 static void pgwin32_doRegister(void);
@@ -141,6 +142,7 @@ static void WINAPI pgwin32_ServiceMain(DWORD, LPTSTR *);
 static void pgwin32_doRunAsService(void);
 static int	CreateRestrictedProcess(char *cmd, PROCESS_INFORMATION *processInfo, bool as_service);
 static PTOKEN_PRIVILEGES GetPrivilegesToDelete(HANDLE hToken);
+static pid_t pgwin32_find_postmaster_pid(pid_t shell_pid);
 #endif
 
 static pid_t get_pgpid(bool is_status_request);
@@ -608,7 +610,11 @@ wait_for_postmaster_start(pid_t pm_pid, bool do_checkpoint)
 			/* File is complete enough for us, parse it */
 			pid_t		pmpid;
 			time_t		pmstart;
-
+#ifndef WIN32
+			pid_t		wait_pid = pm_pid;
+#else
+			pid_t		wait_pid = pgwin32_find_postmaster_pid(pm_pid);
+#endif
 			/*
 			 * Make sanity checks.  If it's for the wrong PID, or the recorded
 			 * start time is before pg_ctl started, then either we are looking
@@ -618,14 +624,8 @@ wait_for_postmaster_start(pid_t pm_pid, bool do_checkpoint)
 			 */
 			pmpid = atol(optlines[LOCK_FILE_LINE_PID - 1]);
 			pmstart = atol(optlines[LOCK_FILE_LINE_START_TIME - 1]);
-			if (pmstart >= start_time - 2 &&
-#ifndef WIN32
-				pmpid == pm_pid
-#else
-			/* Windows can only reject standalone-backend PIDs */
-				pmpid > 0
-#endif
-				)
+
+			if (pmstart >= start_time - 2 && pmpid == wait_pid)
 			{
 				/*
 				 * OK, seems to be a valid pidfile from our child.  Check the
@@ -1948,6 +1948,93 @@ GetPrivilegesToDelete(HANDLE hToken)
 	}
 
 	return tokenPrivs;
+}
+
+/*
+ * Find the PID of the launched postmaster.
+ *
+ * On Windows, the cmd.exe doesn't support the exec command. As a result, we
+ * don't directly get the postmaster's PID. This function identifies the PID of
+ * the postmaster started by the child cmd.exe.
+ *
+ * Returns the postmaster's PID. If the shell is alive but the postmaster is
+ * missing, returns 0. Otherwise terminates this command with an error.
+ *
+ * This function uses PID 0 as an invalid value, assuming the system idle
+ * process occupies it and it won't be a PID for a shell or postmaster.
+ */
+static pid_t
+pgwin32_find_postmaster_pid(pid_t shell_pid)
+{
+	HANDLE hSnapshot;
+	PROCESSENTRY32 ppe;
+	pid_t pm_pid = 0;			/* abusing 0 as an invalid value */
+	bool multiple_children = false;
+	DWORD last_error;
+
+	/* create a process snapshot */
+	hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+	if (hSnapshot == INVALID_HANDLE_VALUE)
+	{
+		write_stderr(_("%s: CreateToolhelp32Snapshot failed: error code %lu\n"),
+					 progname, (unsigned long) GetLastError());
+		exit(1);
+	}
+
+	/* start iterating on the snapshot */
+	ppe.dwSize = sizeof(PROCESSENTRY32);
+	if (!Process32First(hSnapshot, &ppe))
+	{
+		write_stderr(_("%s: Process32First failed: error code %lu\n"),
+					 progname, (unsigned long) GetLastError());
+		exit(1);
+	}
+
+	/*
+	 * Iterate over the snapshot
+	 *
+	 * Check for duplicate processes to ensure reliability.
+	 *
+	 * The ppe entry to be examined is identified by th32ParentProcessID, which
+	 * should correspond to the cmd.exe process that executes the postgres.exe
+	 * binary. Additionally, th32ProcessID in the same entry should be the PID
+	 * of the launched postgres.exe. However, even though we have launched the
+	 * parent cmd.exe with the /D option specified, it is sometimes observed
+	 * that another cmd.exe is launched for unknown reasons. Therefore, it is
+	 * crucial to verify the program file name to avoid returning the wrong
+	 * PID.
+	 */
+	do
+	{
+		if (ppe.th32ParentProcessID == shell_pid &&
+			strcmp("postgres.exe", ppe.szExeFile) == 0)
+		{
+			if (pm_pid != ppe.th32ProcessID && pm_pid != 0)
+				multiple_children = true;
+			pm_pid = ppe.th32ProcessID;
+		}
+	}
+	while (Process32Next(hSnapshot, &ppe));
+
+	/* avoid multiple calls primary for clarity, not out of necessity */
+	last_error = GetLastError();
+	if (last_error != ERROR_NO_MORE_FILES)
+	{
+		write_stderr(_("%s: Process32Next failed: error code %lu\n"),
+					 progname, (unsigned long) last_error);
+		exit(1);
+	}
+	CloseHandle(hSnapshot);
+
+	/* assuming the launching shell executes a single process */
+	if (multiple_children)
+	{
+		write_stderr(_("%s: multiple postmasters found\n"),
+					 progname);
+		exit(1);
+	}
+
+	return pm_pid;
 }
 #endif							/* WIN32 */
 

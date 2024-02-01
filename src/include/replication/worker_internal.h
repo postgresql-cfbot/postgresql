@@ -237,6 +237,11 @@ extern PGDLLIMPORT bool in_remote_transaction;
 
 extern PGDLLIMPORT bool InitializingApplyWorker;
 
+/* Slot sync worker objects */
+extern PGDLLIMPORT char *PrimaryConnInfo;
+extern PGDLLIMPORT char *PrimarySlotName;
+extern PGDLLIMPORT bool enable_syncslot;
+
 extern void logicalrep_worker_attach(int slot);
 extern LogicalRepWorker *logicalrep_worker_find(Oid subid, Oid relid,
 												bool only_running);
@@ -324,6 +329,13 @@ extern void pa_decr_and_wait_stream_block(void);
 
 extern void pa_xact_finish(ParallelApplyWorkerInfo *winfo,
 						   XLogRecPtr remote_lsn);
+#ifdef EXEC_BACKEND
+extern void ReplSlotSyncWorkerMain(int argc, char *argv[]) pg_attribute_noreturn();
+#endif
+extern int	StartSlotSyncWorker(void);
+extern bool SlotSyncWorkerCanRestart(void);
+extern void ShutDownSlotSync(void);
+extern void SlotSyncWorkerShmemInit(void);
 
 #define isParallelApplyWorker(worker) ((worker)->in_use && \
 									   (worker)->type == WORKERTYPE_PARALLEL_APPLY)

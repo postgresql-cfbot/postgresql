@@ -39,6 +39,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
+#include "replication/logicalworker.h"
 #include "replication/slot.h"
 #include "replication/syncrep.h"
 #include "replication/walsender.h"
@@ -364,8 +365,12 @@ InitProcess(void)
 	 * child; this is so that the postmaster can detect it if we exit without
 	 * cleaning up.  (XXX autovac launcher currently doesn't participate in
 	 * this; it probably should.)
+	 *
+	 * Slot sync worker also does not participate in it, see comments atop
+	 * 'struct bkend' in postmaster.c.
 	 */
-	if (IsUnderPostmaster && !IsAutoVacuumLauncherProcess())
+	if (IsUnderPostmaster && !IsAutoVacuumLauncherProcess() &&
+		!IsLogicalSlotSyncWorker())
 		MarkPostmasterChildActive();
 
 	/*
@@ -934,8 +939,12 @@ ProcKill(int code, Datum arg)
 	 * This process is no longer present in shared memory in any meaningful
 	 * way, so tell the postmaster we've cleaned up acceptably well. (XXX
 	 * autovac launcher should be included here someday)
+	 *
+	 * Slot sync worker is also not a postmaster child, so skip this shared
+	 * memory related processing here.
 	 */
-	if (IsUnderPostmaster && !IsAutoVacuumLauncherProcess())
+	if (IsUnderPostmaster && !IsAutoVacuumLauncherProcess() &&
+		!IsLogicalSlotSyncWorker())
 		MarkPostmasterChildInactive();
 
 	/* wake autovac launcher if needed -- see comments in FreeWorkerInfo */

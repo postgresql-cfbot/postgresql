@@ -237,6 +237,7 @@ typedef struct WalRcvExecResult
  * returned with 'err' including the error generated.
  */
 typedef WalReceiverConn *(*walrcv_connect_fn) (const char *conninfo,
+											   bool replication,
 											   bool logical,
 											   bool must_use_password,
 											   const char *appname,
@@ -278,6 +279,13 @@ typedef void (*walrcv_get_senderinfo_fn) (WalReceiverConn *conn,
  */
 typedef char *(*walrcv_identify_system_fn) (WalReceiverConn *conn,
 											TimeLineID *primary_tli);
+
+/*
+ * walrcv_get_dbname_from_conninfo_fn
+ *
+ * Returns the dbid from the primary_conninfo
+ */
+typedef char *(*walrcv_get_dbname_from_conninfo_fn) (const char *conninfo);
 
 /*
  * walrcv_server_version_fn
@@ -403,6 +411,7 @@ typedef struct WalReceiverFunctionsType
 	walrcv_get_conninfo_fn walrcv_get_conninfo;
 	walrcv_get_senderinfo_fn walrcv_get_senderinfo;
 	walrcv_identify_system_fn walrcv_identify_system;
+	walrcv_get_dbname_from_conninfo_fn walrcv_get_dbname_from_conninfo;
 	walrcv_server_version_fn walrcv_server_version;
 	walrcv_readtimelinehistoryfile_fn walrcv_readtimelinehistoryfile;
 	walrcv_startstreaming_fn walrcv_startstreaming;
@@ -418,8 +427,8 @@ typedef struct WalReceiverFunctionsType
 
 extern PGDLLIMPORT WalReceiverFunctionsType *WalReceiverFunctions;
 
-#define walrcv_connect(conninfo, logical, must_use_password, appname, err) \
-	WalReceiverFunctions->walrcv_connect(conninfo, logical, must_use_password, appname, err)
+#define walrcv_connect(conninfo, replication, logical, must_use_password, appname, err) \
+	WalReceiverFunctions->walrcv_connect(conninfo, replication, logical, must_use_password, appname, err)
 #define walrcv_check_conninfo(conninfo, must_use_password) \
 	WalReceiverFunctions->walrcv_check_conninfo(conninfo, must_use_password)
 #define walrcv_get_conninfo(conn) \
@@ -428,6 +437,8 @@ extern PGDLLIMPORT WalReceiverFunctionsType *WalReceiverFunctions;
 	WalReceiverFunctions->walrcv_get_senderinfo(conn, sender_host, sender_port)
 #define walrcv_identify_system(conn, primary_tli) \
 	WalReceiverFunctions->walrcv_identify_system(conn, primary_tli)
+#define walrcv_get_dbname_from_conninfo(conninfo) \
+	WalReceiverFunctions->walrcv_get_dbname_from_conninfo(conninfo)
 #define walrcv_server_version(conn) \
 	WalReceiverFunctions->walrcv_server_version(conn)
 #define walrcv_readtimelinehistoryfile(conn, tli, filename, content, size) \
@@ -485,6 +496,7 @@ extern void RequestXLogStreaming(TimeLineID tli, XLogRecPtr recptr,
 								 bool create_temp_slot);
 extern XLogRecPtr GetWalRcvFlushRecPtr(XLogRecPtr *latestChunkStart, TimeLineID *receiveTLI);
 extern XLogRecPtr GetWalRcvWriteRecPtr(void);
+extern XLogRecPtr GetWalRcvLatestWalEnd(void);
 extern int	GetReplicationApplyDelay(void);
 extern int	GetReplicationTransferLatency(void);
 

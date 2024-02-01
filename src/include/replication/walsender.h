@@ -12,6 +12,8 @@
 #ifndef _WALSENDER_H
 #define _WALSENDER_H
 
+#include "access/xlogdefs.h"
+
 /*
  * What to do with a snapshot in create replication slot command.
  */
@@ -45,6 +47,8 @@ extern void WalSndInitStopping(void);
 extern void WalSndWaitStopping(void);
 extern void HandleWalSndInitStopping(void);
 extern void WalSndRqstFileReload(void);
+extern void PhysicalWakeupLogicalWalSnd(void);
+extern XLogRecPtr GetStandbyFlushRecPtr(TimeLineID *tli);
 
 /*
  * Remember that we want to wakeup walsenders later

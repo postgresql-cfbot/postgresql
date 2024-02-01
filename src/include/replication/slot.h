@@ -53,6 +53,14 @@ typedef enum ReplicationSlotInvalidationCause
 } ReplicationSlotInvalidationCause;
 
 /*
+ * The possible values for 'conflict_reason' returned in
+ * pg_get_replication_slots.
+ */
+#define SLOT_INVAL_WAL_REMOVED_TEXT "wal_removed"
+#define SLOT_INVAL_HORIZON_TEXT     "rows_removed"
+#define SLOT_INVAL_WAL_LEVEL_TEXT   "wal_level_insufficient"
+
+/*
  * On-Disk data of a replication slot, preserved across restarts.
  */
 typedef struct ReplicationSlotPersistentData
@@ -111,6 +119,11 @@ typedef struct ReplicationSlotPersistentData
 
 	/* plugin name */
 	NameData	plugin;
+
+	/*
+	 * Was this slot synchronized from the primary server?
+	 */
+	char		synced;
 
 	/*
 	 * Is this a failover slot (sync candidate for standbys)? Only relevant
@@ -216,6 +229,7 @@ extern PGDLLIMPORT ReplicationSlot *MyReplicationSlot;
 
 /* GUCs */
 extern PGDLLIMPORT int max_replication_slots;
+extern PGDLLIMPORT char *standby_slot_names;
 
 /* shmem initialization functions */
 extern Size ReplicationSlotsShmemSize(void);
@@ -224,9 +238,11 @@ extern void ReplicationSlotsShmemInit(void);
 /* management of individual slots */
 extern void ReplicationSlotCreate(const char *name, bool db_specific,
 								  ReplicationSlotPersistency persistency,
-								  bool two_phase, bool failover);
+								  bool two_phase, bool failover,
+								  bool synced);
 extern void ReplicationSlotPersist(void);
 extern void ReplicationSlotDrop(const char *name, bool nowait);
+extern void ReplicationSlotDropAcquired(void);
 extern void ReplicationSlotAlter(const char *name, bool failover);
 
 extern void ReplicationSlotAcquire(const char *name, bool nowait);
@@ -259,5 +275,11 @@ extern void CheckPointReplicationSlots(bool is_shutdown);
 
 extern void CheckSlotRequirements(void);
 extern void CheckSlotPermissions(void);
+
+extern List *GetStandbySlotList(bool copy);
+extern void WaitForStandbyConfirmation(XLogRecPtr wait_for_lsn);
+extern void FilterStandbySlots(XLogRecPtr wait_for_lsn,
+							   List **standby_slots);
+extern void RereadConfigAndReInitSlotList(List **standby_slots);
 
 #endif							/* SLOT_H */

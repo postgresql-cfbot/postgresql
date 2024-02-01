@@ -3596,6 +3596,9 @@ XLogGetLastRemovedSegno(void)
 /*
  * Return the oldest WAL segment on the given TLI that still exists in
  * XLOGDIR, or 0 if none.
+ *
+ * If the given TLI is 0, return the oldest WAL segment among all the currently
+ * existing WAL segments.
  */
 XLogSegNo
 XLogGetOldestSegno(TimeLineID tli)
@@ -3619,7 +3622,7 @@ XLogGetOldestSegno(TimeLineID tli)
 						 wal_segment_size);
 
 		/* Ignore anything that's not from the TLI of interest. */
-		if (tli != file_tli)
+		if (tli != 0 && tli != file_tli)
 			continue;
 
 		/* If it's the oldest so far, update oldest_segno. */

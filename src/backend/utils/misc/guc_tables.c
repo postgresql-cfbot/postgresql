@@ -68,6 +68,7 @@
 #include "replication/logicallauncher.h"
 #include "replication/slot.h"
 #include "replication/syncrep.h"
+#include "replication/worker_internal.h"
 #include "storage/bufmgr.h"
 #include "storage/large_object.h"
 #include "storage/pg_shmem.h"
@@ -2051,6 +2052,15 @@ struct config_bool ConfigureNamesBool[] =
 		},
 		&event_triggers,
 		true,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"enable_syncslot", PGC_SIGHUP, REPLICATION_STANDBY,
+			gettext_noop("Enables a physical standby to synchronize logical failover slots from the primary server."),
+		},
+		&enable_syncslot,
+		false,
 		NULL, NULL, NULL
 	},
 
@@ -4616,6 +4626,20 @@ struct config_string ConfigureNamesString[] =
 		&debug_io_direct_string,
 		"",
 		check_debug_io_direct, assign_debug_io_direct, NULL
+	},
+
+	{
+		{"standby_slot_names", PGC_SIGHUP, REPLICATION_PRIMARY,
+			gettext_noop("Lists streaming replication standby server slot "
+						 "names that logical WAL sender processes will wait for."),
+			gettext_noop("Decoded changes are sent out to plugins by logical "
+						 "WAL sender processes only after specified "
+						 "replication slots confirm receiving WAL."),
+			GUC_LIST_INPUT | GUC_LIST_QUOTE
+		},
+		&standby_slot_names,
+		"",
+		check_standby_slot_names, assign_standby_slot_names, NULL
 	},
 
 	/* End-of-list marker */

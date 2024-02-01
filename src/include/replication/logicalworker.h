@@ -22,6 +22,7 @@ extern void TablesyncWorkerMain(Datum main_arg);
 
 extern bool IsLogicalWorker(void);
 extern bool IsLogicalParallelApplyWorker(void);
+extern bool IsLogicalSlotSyncWorker(void);
 
 extern void HandleParallelApplyMessageInterrupt(void);
 extern void HandleParallelApplyMessages(void);

@@ -21,6 +21,7 @@
 #include "replication/decode.h"
 #include "replication/logical.h"
 #include "replication/slot.h"
+#include "replication/walsender.h"
 #include "utils/builtins.h"
 #include "utils/inval.h"
 #include "utils/pg_lsn.h"
@@ -43,7 +44,7 @@ create_physical_replication_slot(char *name, bool immediately_reserve,
 	/* acquire replication slot, this will check for conflicting names */
 	ReplicationSlotCreate(name, false,
 						  temporary ? RS_TEMPORARY : RS_PERSISTENT, false,
-						  false);
+						  false, false);
 
 	if (immediately_reserve)
 	{
@@ -136,7 +137,7 @@ create_logical_replication_slot(char *name, char *plugin,
 	 */
 	ReplicationSlotCreate(name, true,
 						  temporary ? RS_TEMPORARY : RS_EPHEMERAL, two_phase,
-						  failover);
+						  failover, false);
 
 	/*
 	 * Create logical decoding context to find start point or, if we don't
@@ -237,7 +238,7 @@ pg_drop_replication_slot(PG_FUNCTION_ARGS)
 Datum
 pg_get_replication_slots(PG_FUNCTION_ARGS)
 {
-#define PG_GET_REPLICATION_SLOTS_COLS 16
+#define PG_GET_REPLICATION_SLOTS_COLS 17
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	XLogRecPtr	currlsn;
 	int			slotno;
@@ -418,20 +419,22 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 					break;
 
 				case RS_INVAL_WAL_REMOVED:
-					values[i++] = CStringGetTextDatum("wal_removed");
+					values[i++] = CStringGetTextDatum(SLOT_INVAL_WAL_REMOVED_TEXT);
 					break;
 
 				case RS_INVAL_HORIZON:
-					values[i++] = CStringGetTextDatum("rows_removed");
+					values[i++] = CStringGetTextDatum(SLOT_INVAL_HORIZON_TEXT);
 					break;
 
 				case RS_INVAL_WAL_LEVEL:
-					values[i++] = CStringGetTextDatum("wal_level_insufficient");
+					values[i++] = CStringGetTextDatum(SLOT_INVAL_WAL_LEVEL_TEXT);
 					break;
 			}
 		}
 
 		values[i++] = BoolGetDatum(slot_contents.data.failover);
+
+		values[i++] = BoolGetDatum(slot_contents.data.synced);
 
 		Assert(i == PG_GET_REPLICATION_SLOTS_COLS);
 
@@ -472,6 +475,8 @@ pg_physical_replication_slot_advance(XLogRecPtr moveto)
 		 * crash, but this makes the data consistent after a clean shutdown.
 		 */
 		ReplicationSlotMarkDirty();
+
+		PhysicalWakeupLogicalWalSnd();
 	}
 
 	return retlsn;
@@ -511,6 +516,12 @@ pg_logical_replication_slot_advance(XLogRecPtr moveto)
 											   .segment_open = wal_segment_open,
 											   .segment_close = wal_segment_close),
 									NULL, NULL, NULL);
+
+		/*
+		 * Wait for specified streaming replication standby servers (if any)
+		 * to confirm receipt of WAL up to moveto lsn.
+		 */
+		WaitForStandbyConfirmation(moveto);
 
 		/*
 		 * Start reading at the slot's restart_lsn, which we know to point to
@@ -700,7 +711,6 @@ copy_replication_slot(FunctionCallInfo fcinfo, bool logical_slot)
 	XLogRecPtr	src_restart_lsn;
 	bool		src_islogical;
 	bool		temporary;
-	bool		failover;
 	char	   *plugin;
 	Datum		values[2];
 	bool		nulls[2];
@@ -756,7 +766,6 @@ copy_replication_slot(FunctionCallInfo fcinfo, bool logical_slot)
 	src_islogical = SlotIsLogical(&first_slot_contents);
 	src_restart_lsn = first_slot_contents.data.restart_lsn;
 	temporary = (first_slot_contents.data.persistency == RS_TEMPORARY);
-	failover = first_slot_contents.data.failover;
 	plugin = logical_slot ? NameStr(first_slot_contents.data.plugin) : NULL;
 
 	/* Check type of replication slot */
@@ -791,12 +800,20 @@ copy_replication_slot(FunctionCallInfo fcinfo, bool logical_slot)
 		 * We must not try to read WAL, since we haven't reserved it yet --
 		 * hence pass find_startpoint false.  confirmed_flush will be set
 		 * below, by copying from the source slot.
+		 *
+		 * To avoid potential issues with the slotsync worker when the
+		 * restart_lsn of a replication slot goes backwards, we set the
+		 * failover option to false here. This situation occurs when a slot on
+		 * the primary server is dropped and immediately replaced with a new
+		 * slot of the same name, created by copying from another existing
+		 * slot. However, the slotsync worker will only observe the
+		 * restart_lsn of the same slot going backwards.
 		 */
 		create_logical_replication_slot(NameStr(*dst_name),
 										plugin,
 										temporary,
 										false,
-										failover,
+										false,
 										src_restart_lsn,
 										false);
 	}

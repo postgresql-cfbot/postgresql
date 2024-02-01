@@ -6,6 +6,9 @@
  * loaded as a dynamic module to avoid linking the main server binary with
  * libpq.
  *
+ * Apart from walreceiver, the libpq-specific routines here are now being used
+ * by logical replication worker as well.
+
  * Portions Copyright (c) 2010-2024, PostgreSQL Global Development Group
  *
  *
@@ -33,6 +36,7 @@
 #include "utils/memutils.h"
 #include "utils/pg_lsn.h"
 #include "utils/tuplestore.h"
+#include "utils/varlena.h"
 
 PG_MODULE_MAGIC;
 
@@ -48,7 +52,8 @@ struct WalReceiverConn
 
 /* Prototypes for interface functions */
 static WalReceiverConn *libpqrcv_connect(const char *conninfo,
-										 bool logical, bool must_use_password,
+										 bool replication, bool logical,
+										 bool must_use_password,
 										 const char *appname, char **err);
 static void libpqrcv_check_conninfo(const char *conninfo,
 									bool must_use_password);
@@ -57,6 +62,7 @@ static void libpqrcv_get_senderinfo(WalReceiverConn *conn,
 									char **sender_host, int *sender_port);
 static char *libpqrcv_identify_system(WalReceiverConn *conn,
 									  TimeLineID *primary_tli);
+static char *libpqrcv_get_dbname_from_conninfo(const char *conninfo);
 static int	libpqrcv_server_version(WalReceiverConn *conn);
 static void libpqrcv_readtimelinehistoryfile(WalReceiverConn *conn,
 											 TimeLineID tli, char **filename,
@@ -99,6 +105,7 @@ static WalReceiverFunctionsType PQWalReceiverFunctions = {
 	.walrcv_send = libpqrcv_send,
 	.walrcv_create_slot = libpqrcv_create_slot,
 	.walrcv_alter_slot = libpqrcv_alter_slot,
+	.walrcv_get_dbname_from_conninfo = libpqrcv_get_dbname_from_conninfo,
 	.walrcv_get_backend_pid = libpqrcv_get_backend_pid,
 	.walrcv_exec = libpqrcv_exec,
 	.walrcv_disconnect = libpqrcv_disconnect
@@ -121,7 +128,12 @@ _PG_init(void)
 }
 
 /*
- * Establish the connection to the primary server for XLOG streaming
+ * Establish the connection to the primary server.
+ *
+ * The connection established could be either a replication one or
+ * a non-replication one based on input argument 'replication'. And further
+ * if it is a replication connection, it could be either logical or physical
+ * based on input argument 'logical'.
  *
  * If an error occurs, this function will normally return NULL and set *err
  * to a palloc'ed error message. However, if must_use_password is true and
@@ -132,8 +144,8 @@ _PG_init(void)
  * case.
  */
 static WalReceiverConn *
-libpqrcv_connect(const char *conninfo, bool logical, bool must_use_password,
-				 const char *appname, char **err)
+libpqrcv_connect(const char *conninfo, bool replication, bool logical,
+				 bool must_use_password, const char *appname, char **err)
 {
 	WalReceiverConn *conn;
 	PostgresPollingStatusType status;
@@ -156,17 +168,26 @@ libpqrcv_connect(const char *conninfo, bool logical, bool must_use_password,
 	 */
 	keys[i] = "dbname";
 	vals[i] = conninfo;
-	keys[++i] = "replication";
-	vals[i] = logical ? "database" : "true";
-	if (!logical)
+
+	/* We can not have logical without replication */
+	Assert(replication || !logical);
+
+	if (replication)
 	{
-		/*
-		 * The database name is ignored by the server in replication mode, but
-		 * specify "replication" for .pgpass lookup.
-		 */
-		keys[++i] = "dbname";
-		vals[i] = "replication";
+		keys[++i] = "replication";
+		vals[i] = logical ? "database" : "true";
+
+		if (!logical)
+		{
+			/*
+			 * The database name is ignored by the server in replication mode,
+			 * but specify "replication" for .pgpass lookup.
+			 */
+			keys[++i] = "dbname";
+			vals[i] = "replication";
+		}
 	}
+
 	keys[++i] = "fallback_application_name";
 	vals[i] = appname;
 	if (logical)
@@ -469,6 +490,44 @@ static int
 libpqrcv_server_version(WalReceiverConn *conn)
 {
 	return PQserverVersion(conn->streamConn);
+}
+
+/*
+ * Get database name from the primary server's conninfo.
+ *
+ * If dbname is not found in connInfo, return NULL value.
+ */
+static char *
+libpqrcv_get_dbname_from_conninfo(const char *connInfo)
+{
+	PQconninfoOption *opts;
+	char	   *dbname = NULL;
+	char	   *err = NULL;
+
+	opts = PQconninfoParse(connInfo, &err);
+	if (opts == NULL)
+	{
+		/* The error string is malloc'd, so we must free it explicitly */
+		char	   *errcopy = err ? pstrdup(err) : "out of memory";
+
+		PQfreemem(err);
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("invalid connection string syntax: %s", errcopy)));
+	}
+
+	for (PQconninfoOption *opt = opts; opt->keyword != NULL; ++opt)
+	{
+		/*
+		 * If multiple dbnames are specified, then the last one will be
+		 * returned
+		 */
+		if (strcmp(opt->keyword, "dbname") == 0 && opt->val &&
+			opt->val[0] != '\0')
+			dbname = pstrdup(opt->val);
+	}
+
+	return dbname;
 }
 
 /*

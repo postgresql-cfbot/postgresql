@@ -346,6 +346,22 @@ GetWalRcvFlushRecPtr(XLogRecPtr *latestChunkStart, TimeLineID *receiveTLI)
 }
 
 /*
+ * Returns the latest reported end of WAL on the sender
+ */
+XLogRecPtr
+GetWalRcvLatestWalEnd()
+{
+	WalRcvData *walrcv = WalRcv;
+	XLogRecPtr	recptr;
+
+	SpinLockAcquire(&walrcv->mutex);
+	recptr = walrcv->latestWalEnd;
+	SpinLockRelease(&walrcv->mutex);
+
+	return recptr;
+}
+
+/*
  * Returns the last+1 byte position that walreceiver has written.
  * This returns a recently written value without taking a lock.
  */

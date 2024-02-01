@@ -1018,39 +1018,18 @@ AuxiliaryPidGetProc(int pid)
 	return result;
 }
 
-
 /*
- * ProcSleep -- put a process to sleep on the specified lock
- *
- * Caller must have set MyProc->heldLocks to reflect locks already held
- * on the lockable object by this process (under all XIDs).
- *
- * The lock table's partition lock must be held at entry, and will be held
- * at exit.
- *
- * Result: PROC_WAIT_STATUS_OK if we acquired the lock, PROC_WAIT_STATUS_ERROR if not (deadlock).
- *
- * ASSUME: that no one will fiddle with the queue until after
- *		we release the partition lock.
- *
- * NOTES: The process queue is now a priority queue for locking.
+ * InsertSelfIntoWaitQueue -- Insert self into queue if dontWait is false
  */
 ProcWaitStatus
-ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
+InsertSelfIntoWaitQueue(LOCALLOCK *locallock, LockMethod lockMethodTable, bool dontWait, bool *early_deadlock)
 {
 	LOCKMODE	lockmode = locallock->tag.mode;
 	LOCK	   *lock = locallock->lock;
 	PROCLOCK   *proclock = locallock->proclock;
-	uint32		hashcode = locallock->hashcode;
-	LWLock	   *partitionLock = LockHashPartitionLock(hashcode);
 	dclist_head *waitQueue = &lock->waitProcs;
 	PGPROC	   *insert_before = NULL;
 	LOCKMASK	myHeldLocks = MyProc->heldLocks;
-	TimestampTz standbyWaitStart = 0;
-	bool		early_deadlock = false;
-	bool		allow_autovacuum_cancel = true;
-	bool		logged_recovery_conflict = false;
-	ProcWaitStatus myWaitStatus;
 	PGPROC	   *leader = MyProc->lockGroupLeader;
 
 	/*
@@ -1125,8 +1104,11 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 					 * a flag to check below, and break out of loop.  Also,
 					 * record deadlock info for later message.
 					 */
-					RememberSimpleDeadLock(MyProc, lockmode, lock, proc);
-					early_deadlock = true;
+					if (!dontWait)
+					{
+						RememberSimpleDeadLock(MyProc, lockmode, lock, proc);
+						*early_deadlock = true;
+					}
 					break;
 				}
 				/* I must go before this waiter.  Check special case. */
@@ -1135,8 +1117,6 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 										proclock))
 				{
 					/* Skip the wait and just grant myself the lock. */
-					GrantLock(lock, proclock, lockmode);
-					GrantAwaitedLock();
 					return PROC_WAIT_STATUS_OK;
 				}
 
@@ -1149,22 +1129,56 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 		}
 	}
 
-	/*
-	 * Insert self into queue, at the position determined above.
-	 */
-	if (insert_before)
-		dclist_insert_before(waitQueue, &insert_before->links, &MyProc->links);
-	else
-		dclist_push_tail(waitQueue, &MyProc->links);
+	if (!dontWait)
+	{
+		/*
+		 * Insert self into queue, at the position determined above.
+		 */
+		if (insert_before)
+			dclist_insert_before(waitQueue, &insert_before->links, &MyProc->links);
+		else
+			dclist_push_tail(waitQueue, &MyProc->links);
 
-	lock->waitMask |= LOCKBIT_ON(lockmode);
+		lock->waitMask |= LOCKBIT_ON(lockmode);
 
-	/* Set up wait information in PGPROC object, too */
-	MyProc->waitLock = lock;
-	MyProc->waitProcLock = proclock;
-	MyProc->waitLockMode = lockmode;
+		/* Set up wait information in PGPROC object, too */
+		MyProc->waitLock = lock;
+		MyProc->waitProcLock = proclock;
+		MyProc->waitLockMode = lockmode;
 
-	MyProc->waitStatus = PROC_WAIT_STATUS_WAITING;
+		MyProc->waitStatus = PROC_WAIT_STATUS_WAITING;
+	}
+	return PROC_WAIT_STATUS_WAITING;
+}
+
+
+/*
+ * ProcSleep -- put a process to sleep on the specified lock
+ *
+ * Caller must have set MyProc->heldLocks to reflect locks already held
+ * on the lockable object by this process (under all XIDs).
+ *
+ * The lock table's partition lock must be held at entry, and will be held
+ * at exit.
+ *
+ * Result: PROC_WAIT_STATUS_OK if we acquired the lock, PROC_WAIT_STATUS_ERROR if not (deadlock).
+ *
+ * ASSUME: that no one will fiddle with the queue until after
+ *		we release the partition lock.
+ *
+ * NOTES: The process queue is now a priority queue for locking.
+ */
+ProcWaitStatus
+ProcSleep(LOCALLOCK *locallock, bool early_deadlock)
+{
+	LOCKMODE	lockmode = locallock->tag.mode;
+	LOCK	   *lock = locallock->lock;
+	uint32		hashcode = locallock->hashcode;
+	LWLock	   *partitionLock = LockHashPartitionLock(hashcode);
+	TimestampTz standbyWaitStart = 0;
+	bool		allow_autovacuum_cancel = true;
+	bool		logged_recovery_conflict = false;
+	ProcWaitStatus myWaitStatus;
 
 	/*
 	 * If we detected deadlock, give up without waiting.  This must agree with

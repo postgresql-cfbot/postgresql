@@ -1383,8 +1383,10 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	const char *pk_only;
 	int			save_nestlevel;
 	char		workmembuf[32];
+	char		maxmntworkers[4];
 	int			spi_result;
 	SPIPlanPtr	qplan;
+	SPIPrepareOptions options;
 
 	riinfo = ri_FetchConstraintInfo(trigger, fk_rel, false);
 
@@ -1531,6 +1533,8 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 		}
 	}
 	appendStringInfoChar(&querybuf, ')');
+	elog(DEBUG2, "The RI_Initial_Check() query string built is \"%s\"",
+		 querybuf.data);
 
 	/*
 	 * Temporarily increase work_mem so that the check query can be executed
@@ -1540,7 +1544,8 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	 * this seems to meet the criteria for being considered a "maintenance"
 	 * operation, and accordingly we use maintenance_work_mem.  However, we
 	 * must also set hash_mem_multiplier to 1, since it is surely not okay to
-	 * let that get applied to the maintenance_work_mem value.
+	 * let that get applied to the maintenance_work_mem value. In the same
+	 * fashion, cap parallel processes by max_parallel_maintenance_workers.
 	 *
 	 * We use the equivalent of a function SET option to allow the setting to
 	 * persist for exactly the duration of the check query.  guc.c also takes
@@ -1549,10 +1554,16 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	save_nestlevel = NewGUCNestLevel();
 
 	snprintf(workmembuf, sizeof(workmembuf), "%d", maintenance_work_mem);
+	/* max_parallel_maintenance_workers <= 1024, so maxmntworkers is char[4] */
+	snprintf(maxmntworkers, sizeof(maxmntworkers), "%d",
+			 max_parallel_maintenance_workers);
 	(void) set_config_option("work_mem", workmembuf,
 							 PGC_USERSET, PGC_S_SESSION,
 							 GUC_ACTION_SAVE, true, 0, false);
 	(void) set_config_option("hash_mem_multiplier", "1",
+							 PGC_USERSET, PGC_S_SESSION,
+							 GUC_ACTION_SAVE, true, 0, false);
+	(void) set_config_option("max_parallel_workers_per_gather", maxmntworkers,
 							 PGC_USERSET, PGC_S_SESSION,
 							 GUC_ACTION_SAVE, true, 0, false);
 
@@ -1563,10 +1574,12 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	 * Generate the plan.  We don't need to cache it, and there are no
 	 * arguments to the plan.
 	 */
-	qplan = SPI_prepare(querybuf.data, 0, NULL);
+	memset(&options, 0, sizeof(options));
+	options.cursorOptions |= CURSOR_OPT_PARALLEL_OK;
+	qplan = SPI_prepare_extended(querybuf.data, &options);
 
 	if (qplan == NULL)
-		elog(ERROR, "SPI_prepare returned %s for %s",
+		elog(ERROR, "SPI_prepare_extended returned %s for %s",
 			 SPI_result_code_string(SPI_result), querybuf.data);
 
 	/*

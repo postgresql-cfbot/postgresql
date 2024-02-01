@@ -3072,3 +3072,14 @@ alter table alter1.t1 set schema alter2;
 drop publication pub1;
 drop schema alter1 cascade;
 drop schema alter2 cascade;
+
+-- ALTER TABLE operations that can be parallel
+CREATE TABLE parallel_pk_table (a int) WITH (autovacuum_enabled = off);
+CREATE TABLE parallel_fk_table (a int) WITH (autovacuum_enabled = off);
+SET max_parallel_maintenance_workers TO 4;
+SET parallel_setup_cost TO 0;
+SET parallel_tuple_cost TO 0;
+SET parallel_leader_participation TO 0;
+SET min_parallel_table_scan_size TO 0;
+ALTER TABLE parallel_pk_table ADD PRIMARY KEY (a);
+ALTER TABLE parallel_fk_table ADD CONSTRAINT parallel_fk FOREIGN KEY (a) REFERENCES parallel_pk_table (a);

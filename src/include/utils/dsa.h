@@ -77,6 +77,28 @@ typedef pg_atomic_uint64 dsa_pointer_atomic;
 /* A sentinel value for dsa_pointer used to indicate failure to allocate. */
 #define InvalidDsaPointer ((dsa_pointer) 0)
 
+/*
+ * The default size of the initial DSM segment that backs a dsa_area created
+ * by dsa_create.  After creating some number of segments of this size we'll
+ * double this size, and so on.  Larger segments may be created if necessary
+ * to satisfy large requests.
+ */
+#define DSA_INITIAL_SEGMENT_SIZE ((size_t) (1 * 1024 * 1024))
+
+/*
+ * The number of bits used to represent the offset part of a dsa_pointer.
+ * This controls the maximum size of a segment, the maximum possible
+ * allocation size and also the maximum number of segments per area.
+ */
+#if SIZEOF_DSA_POINTER == 4
+#define DSA_OFFSET_WIDTH 27		/* 32 segments of size up to 128MB */
+#else
+#define DSA_OFFSET_WIDTH 40		/* 1024 segments of size up to 1TB */
+#endif
+
+/* The maximum size of a DSM segment. */
+#define DSA_MAX_SEGMENT_SIZE ((size_t) 1 << DSA_OFFSET_WIDTH)
+
 /* Check if a dsa_pointer value is valid. */
 #define DsaPointerIsValid(x) ((x) != InvalidDsaPointer)
 
@@ -87,6 +109,19 @@ typedef pg_atomic_uint64 dsa_pointer_atomic;
 /* Allocate zero-initialized memory with error on out-of-memory. */
 #define dsa_allocate0(area, size) \
 	dsa_allocate_extended(area, size, DSA_ALLOC_ZERO)
+
+/* Create dsa_area with default segment sizes */
+#define dsa_create(tranch_id) \
+	dsa_create_extended(tranch_id, DSA_INITIAL_SEGMENT_SIZE, \
+						DSA_MAX_SEGMENT_SIZE)
+
+/*
+ * Create dsa_area with default segment sizes in an existing share memory
+ * space.
+ */
+#define dsa_create_in_place(place, size, tranch_id, segment) \
+	dsa_create_in_place_extended(place, size, tranch_id, segment, \
+								 DSA_INITIAL_SEGMENT_SIZE, DSA_MAX_SEGMENT_SIZE)
 
 /*
  * The type used for dsa_area handles.  dsa_handle values can be shared with
@@ -102,10 +137,12 @@ typedef dsm_handle dsa_handle;
 /* Sentinel value to use for invalid dsa_handles. */
 #define DSA_HANDLE_INVALID ((dsa_handle) DSM_HANDLE_INVALID)
 
-
-extern dsa_area *dsa_create(int tranche_id);
-extern dsa_area *dsa_create_in_place(void *place, size_t size,
-									 int tranche_id, dsm_segment *segment);
+extern dsa_area *dsa_create_extended(int tranche_id, size_t init_segment_size,
+									 size_t max_segment_size);
+extern dsa_area *dsa_create_in_place_extended(void *place, size_t size,
+											  int tranche_id, dsm_segment *segment,
+											  size_t init_segment_size,
+											  size_t max_segment_size);
 extern dsa_area *dsa_attach(dsa_handle handle);
 extern dsa_area *dsa_attach_in_place(void *place, dsm_segment *segment);
 extern void dsa_release_in_place(void *place);

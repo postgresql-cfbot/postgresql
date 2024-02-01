@@ -178,6 +178,14 @@ extern PGDLLIMPORT int MaxConnections;
 extern PGDLLIMPORT int max_worker_processes;
 extern PGDLLIMPORT int max_parallel_workers;
 
+extern PGDLLIMPORT int commit_timestamp_buffers;
+extern PGDLLIMPORT int multixact_members_buffers;
+extern PGDLLIMPORT int multixact_offsets_buffers;
+extern PGDLLIMPORT int notify_buffers;
+extern PGDLLIMPORT int serializable_buffers;
+extern PGDLLIMPORT int subtransaction_buffers;
+extern PGDLLIMPORT int transaction_buffers;
+
 extern PGDLLIMPORT int MyProcPid;
 extern PGDLLIMPORT pg_time_t MyStartTime;
 extern PGDLLIMPORT TimestampTz MyStartTimestamp;

@@ -14128,13 +14128,68 @@ CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple
    <primary>gen_random_uuid</primary>
   </indexterm>
 
+  <indexterm>
+   <primary>uuidv4</primary>
+  </indexterm>
+
+  <indexterm>
+   <primary>uuidv7</primary>
+  </indexterm>
+
+  <indexterm>
+   <primary>uuid_extract_time</primary>
+  </indexterm>
+
+  <indexterm>
+   <primary>uuid_extract_ver</primary>
+  </indexterm>
+
+  <indexterm>
+   <primary>uuid_extract_var</primary>
+  </indexterm>
+
   <para>
-   <productname>PostgreSQL</productname> includes one function to generate a UUID:
+   <productname>PostgreSQL</productname> includes several functions to generate a UUID:
+   <function>gen_random_uuid</function>, <function>uuidv4</function>, and <function>uuidv7</function>.
 <synopsis>
 <function>gen_random_uuid</function> () <returnvalue>uuid</returnvalue>
+<function>uuidv4</function> () <returnvalue>uuid</returnvalue>
 </synopsis>
-   This function returns a version 4 (random) UUID.  This is the most commonly
-   used type of UUID and is appropriate for most applications.
+   These functions return a version 4 (random) UUID. UUIDv4 is one of the
+   most commonly used types of UUID. It is appropriate when random
+   distribution of keys does not affect performance of an application or
+   when exposing the generation time of a UUID has unacceptable security
+   or business intelligence implications.
+<synopsis>
+<function>uuidv7</function> () <returnvalue>uuid</returnvalue>
+</synopsis>
+   This function returns a version 7 UUID (UNIX timestamp with 1ms precision +
+   randomly seeded counter + random). It provides much better data locality
+   than UUIDv4, which can greatly improve performance when UUID is used in a
+   B-tree index (the default index type in PostgreSQL). To achieve this data
+   locality, UUIDv7 embeds its own generation time into the UUID. If exposing
+   such a timestamp has unacceptable security or business intelligence
+   implications, then uuidv4() should be used instead.
+<synopsis>
+<function>uuid_extract_time</function> (uuid) <returnvalue>timestamptz</returnvalue>
+</synopsis>
+   This function extracts a timestamptz from UUID versions 1, 6 and 7. For other
+   versions and variants this function returns NULL. The extracted timestamp
+   does not necessarily equate to the time of UUID generation. How close it is
+   to the actual time depends on the implementation that generated to UUID.
+   The uuidv7() function provided by PostgreSQL will normally store the actual time,
+   with some exceptions: prevention of time leaps backwards and counter overflow
+   being carried to time step.
+<synopsis>
+<function>uuid_extract_ver</function> (uuid) <returnvalue>int2</returnvalue>
+</synopsis>
+   This function extracts a version bits from UUID of variant described by
+   <ulink url="https://datatracker.ietf.org/doc/html/draft-ietf-uuidrev-rfc4122bis">IETF standard</ulink>
+   (b10xx variant). For other variants this function returns NULL.
+<synopsis>
+<function>uuid_extract_var</function> (uuid) <returnvalue>int2</returnvalue>
+</synopsis>
+   This function extracts a vartiant bits from UUID.
   </para>
 
   <para>

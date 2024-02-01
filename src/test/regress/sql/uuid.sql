@@ -85,5 +85,31 @@ INSERT INTO guid1 (guid_field) VALUES (gen_random_uuid());
 INSERT INTO guid1 (guid_field) VALUES (gen_random_uuid());
 SELECT count(DISTINCT guid_field) FROM guid1;
 
+-- test of uuidv4() alias
+TRUNCATE guid1;
+INSERT INTO guid1 (guid_field) VALUES (uuidv4());
+INSERT INTO guid1 (guid_field) VALUES (uuidv4());
+SELECT count(DISTINCT guid_field) FROM guid1;
+
+-- generation test for v7
+TRUNCATE guid1;
+INSERT INTO guid1 (guid_field) VALUES (uuidv7());
+INSERT INTO guid1 (guid_field) VALUES (uuidv7());
+SELECT count(DISTINCT guid_field) FROM guid1;
+
+-- support functions for UUID versions and variants
+SELECT uuid_extract_ver(uuidv7());
+SELECT uuid_extract_ver('{11111111-1111-1111-1111-111111111111}') IS NULL;
+SELECT uuid_extract_ver('{11111111-1111-5111-8111-111111111111}');
+SELECT uuid_extract_var(uuidv7());
+
+-- uuid_extract_time() must refuse to accept non-UUIDv7
+SELECT uuid_extract_time(gen_random_uuid());
+
+-- extract UUID v1, v6 and v7 timestamp
+SELECT uuid_extract_time('C232AB00-9414-11EC-B3C8-9F6BDECED846') = 'Tuesday, February 22, 2022 2:22:22.00 PM GMT+05:00';
+SELECT uuid_extract_time('1EC9414C-232A-6B00-B3C8-9F6BDECED846') = 'Tuesday, February 22, 2022 2:22:22.00 PM GMT+05:00';
+SELECT uuid_extract_time('017F22E2-79B0-7CC3-98C4-DC0C0C07398F') = 'Tuesday, February 22, 2022 2:22:22.00 PM GMT+05:00';
+
 -- clean up
 DROP TABLE guid1, guid2 CASCADE;

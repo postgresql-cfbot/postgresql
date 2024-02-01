@@ -13,13 +13,18 @@
 
 #include "postgres.h"
 
+#include <sys/time.h>
+
+#include "access/xlog.h"
 #include "common/hashfn.h"
 #include "lib/hyperloglog.h"
 #include "libpq/pqformat.h"
 #include "port/pg_bswap.h"
 #include "utils/builtins.h"
+#include "utils/datetime.h"
 #include "utils/guc.h"
 #include "utils/sortsupport.h"
+#include "utils/timestamp.h"
 #include "utils/uuid.h"
 
 /* sortsupport for uuid */
@@ -420,4 +425,177 @@ gen_random_uuid(PG_FUNCTION_ARGS)
 	uuid->data[8] = (uuid->data[8] & 0x3f) | 0x80;	/* clock_seq_hi_and_reserved */
 
 	PG_RETURN_UUID_P(uuid);
+}
+
+static uint32_t sequence_counter;
+static uint64_t previous_timestamp = 0;
+
+
+Datum
+uuidv7(PG_FUNCTION_ARGS)
+{
+	pg_uuid_t  *uuid = palloc(UUID_LEN);
+	uint64_t tms;
+	struct timeval tp;
+	bool increment_counter;
+
+	gettimeofday(&tp, NULL);
+	tms = ((uint64_t)tp.tv_sec) * 1000 + (tp.tv_usec) / 1000;
+	/* time from clock is protected from backward leaps */
+	increment_counter = (tms <= previous_timestamp);
+
+	if (increment_counter)
+	{
+		/* Time did not advance from the previous generation, we must increment counter */
+		++sequence_counter;
+		if (sequence_counter > 0x3ffff)
+		{
+			/* We only have 18-bit counter */
+			sequence_counter = 0;
+			previous_timestamp++;
+		}
+
+		/* protection from leap backward */
+		tms = previous_timestamp;
+
+		/* fill everything after the timestamp and counter with random bytes */
+		if (!pg_strong_random(&uuid->data[8], UUID_LEN - 8))
+			ereport(ERROR,
+					(errcode(ERRCODE_INTERNAL_ERROR),
+					errmsg("could not generate random values")));
+
+		/* most significant 4 bits of 18-bit counter */
+		uuid->data[6] = (unsigned char)(sequence_counter >> 14);
+		/* next 8 bits */
+		uuid->data[7] = (unsigned char)(sequence_counter >> 6);
+		/* least significant 6 bits */
+		uuid->data[8] = (unsigned char)(sequence_counter);
+	}
+	else
+	{
+		/* fill everything after the timestamp with random bytes */
+		if (!pg_strong_random(&uuid->data[6], UUID_LEN - 6))
+			ereport(ERROR,
+					(errcode(ERRCODE_INTERNAL_ERROR),
+					errmsg("could not generate random values")));
+
+		/*
+		 * Left-most counter bits are initialized as zero for the sole purpose
+		 * of guarding against counter rollovers.
+		 * See section "Fixed-Length Dedicated Counter Seeding"
+		 * https://datatracker.ietf.org/doc/html/draft-ietf-uuidrev-rfc4122bis-09#monotonicity_counters
+		 */
+		uuid->data[6] = (uuid->data[6] & 0xf7);
+
+		/* read randomly initialized bits of counter */
+		sequence_counter = ((uint32_t)uuid->data[8] & 0x3f) +
+							(((uint32_t)uuid->data[7]) << 6) +
+							(((uint32_t)uuid->data[6] & 0x0f) << 14);
+
+		previous_timestamp = tms;
+	}
+
+	/* Fill in time part */
+	uuid->data[0] = (unsigned char)(tms >> 40);
+	uuid->data[1] = (unsigned char)(tms >> 32);
+	uuid->data[2] = (unsigned char)(tms >> 24);
+	uuid->data[3] = (unsigned char)(tms >> 16);
+	uuid->data[4] = (unsigned char)(tms >> 8);
+	uuid->data[5] = (unsigned char)tms;
+
+	/*
+	 * Set magic numbers for a "version 7" (pseudorandom) UUID, see
+	 * https://datatracker.ietf.org/doc/html/draft-ietf-uuidrev-rfc4122bis
+	 */
+	/* set version field, top four bits are 0, 1, 1, 1 */
+	uuid->data[6] = (uuid->data[6] & 0x0f) | 0x70;
+	/* set variant field, top two bits are 1, 0 */
+	uuid->data[8] = (uuid->data[8] & 0x3f) | 0x80;
+
+	PG_RETURN_UUID_P(uuid);
+}
+
+Datum
+uuid_extract_time(PG_FUNCTION_ARGS)
+{
+	pg_uuid_t  *uuid = PG_GETARG_UUID_P(0);
+	TimestampTz ts;
+	uint64_t tms;
+
+	if ((uuid->data[8] & 0xc0) != 0x80)
+		PG_RETURN_NULL();
+
+	if ((uuid->data[6] & 0xf0) == 0x70)
+	{
+		tms =			  uuid->data[5];
+		tms += ((uint64_t)uuid->data[4]) << 8;
+		tms += ((uint64_t)uuid->data[3]) << 16;
+		tms += ((uint64_t)uuid->data[2]) << 24;
+		tms += ((uint64_t)uuid->data[1]) << 32;
+		tms += ((uint64_t)uuid->data[0]) << 40;
+
+		ts = (TimestampTz) (tms * 1000) - /* convert ms to us, than adjust */
+			(POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY * USECS_PER_SEC;
+
+		PG_RETURN_TIMESTAMPTZ(ts);
+	}
+
+	if ((uuid->data[6] & 0xf0) == 0x10)
+	{
+		tms =  ((uint64_t)uuid->data[0]) << 24;
+		tms += ((uint64_t)uuid->data[1]) << 16;
+		tms += ((uint64_t)uuid->data[2]) << 8;
+		tms += ((uint64_t)uuid->data[3]);
+		tms += ((uint64_t)uuid->data[4]) << 40;
+		tms += ((uint64_t)uuid->data[5]) << 32;
+		tms += (((uint64_t)uuid->data[6])&0xf) << 56;
+		tms += ((uint64_t)uuid->data[7]) << 48;
+
+		ts = (TimestampTz) (tms / 10) - /* convert 100-ns intervals to us, than adjust */
+			((uint64_t)POSTGRES_EPOCH_JDATE - GREGORIAN_EPOCH_JDATE) * SECS_PER_DAY * USECS_PER_SEC;
+
+		PG_RETURN_TIMESTAMPTZ(ts);
+	}
+
+	if ((uuid->data[6] & 0xf0) == 0x60)
+	{
+		tms =  ((uint64_t)uuid->data[0]) << 52;
+		tms += ((uint64_t)uuid->data[1]) << 44;
+		tms += ((uint64_t)uuid->data[2]) << 36;
+		tms += ((uint64_t)uuid->data[3]) << 28;
+		tms += ((uint64_t)uuid->data[4]) << 20;
+		tms += ((uint64_t)uuid->data[5]) << 12;
+		tms += (((uint64_t)uuid->data[6])&0xf) << 8;
+		tms += ((uint64_t)uuid->data[7]);
+
+		ts = (TimestampTz) (tms / 10) - /* convert 100-ns intervals to us, than adjust */
+			((uint64_t)POSTGRES_EPOCH_JDATE - GREGORIAN_EPOCH_JDATE) * SECS_PER_DAY * USECS_PER_SEC;
+
+		PG_RETURN_TIMESTAMPTZ(ts);
+	}
+
+	PG_RETURN_NULL();
+}
+
+Datum
+uuid_extract_ver(PG_FUNCTION_ARGS)
+{
+	pg_uuid_t  *uuid = PG_GETARG_UUID_P(0);
+	uint16_t result;
+
+	if ((uuid->data[8] & 0xc0) != 0x80)
+		PG_RETURN_NULL();
+	result = uuid->data[6] >> 4;
+
+	PG_RETURN_UINT16(result);
+}
+
+Datum
+uuid_extract_var(PG_FUNCTION_ARGS)
+{
+	pg_uuid_t  *uuid = PG_GETARG_UUID_P(0);
+	uint16_t result;
+	result = uuid->data[8] >> 6;
+
+	PG_RETURN_UINT16(result);
 }

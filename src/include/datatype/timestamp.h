@@ -230,9 +230,10 @@ struct pg_itm_in
 	 ((y) < JULIAN_MAXYEAR || \
 	  ((y) == JULIAN_MAXYEAR && ((m) < JULIAN_MAXMONTH))))
 
-/* Julian-date equivalents of Day 0 in Unix and Postgres reckoning */
+/* Julian-date equivalents of Day 0 in Unix, Postgres and Gregorian epochs */
 #define UNIX_EPOCH_JDATE		2440588 /* == date2j(1970, 1, 1) */
 #define POSTGRES_EPOCH_JDATE	2451545 /* == date2j(2000, 1, 1) */
+#define GREGORIAN_EPOCH_JDATE	2299161 /* == date2j(1582,10,15) */
 
 /*
  * Range limits for dates and timestamps.

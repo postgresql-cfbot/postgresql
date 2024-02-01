@@ -1,5 +1,6 @@
 /pg_basebackup
 /pg_receivewal
 /pg_recvlogical
+/pg_createsubscriber
 
 /tmp_check/

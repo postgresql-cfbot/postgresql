@@ -1507,6 +1507,8 @@ LogicalRepCommitPreparedTxnData
 LogicalRepCtxStruct
 LogicalRepMsgType
 LogicalRepPartMapEntry
+LogicalRepPerdbInfo
+LogicalRepPerdbInfoArr
 LogicalRepPreparedTxnData
 LogicalRepRelId
 LogicalRepRelMapEntry
@@ -1885,6 +1887,7 @@ PREDICATELOCK
 PREDICATELOCKTAG
 PREDICATELOCKTARGET
 PREDICATELOCKTARGETTAG
+PrimaryInfo
 PROCESS_INFORMATION
 PROCLOCK
 PROCLOCKTAG
@@ -2460,6 +2463,7 @@ SQLValueFunctionOp
 SSL
 SSLExtensionInfoContext
 SSL_CTX
+StandbyInfo
 STARTUPINFO
 STRLEN
 SV

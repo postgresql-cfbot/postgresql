@@ -285,6 +285,7 @@
    &pgCtl;
    &pgResetwal;
    &pgRewind;
+   &pgCreateSubscriber;
    &pgtestfsync;
    &pgtesttiming;
    &pgupgrade;

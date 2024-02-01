@@ -1,0 +1,306 @@
+<!--
+doc/src/sgml/ref/pg_createsubscriber.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="app-pgcreatesubscriber">
+ <indexterm zone="app-pgcreatesubscriber">
+  <primary>pg_createsubscriber</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle><application>pg_createsubscriber</application></refentrytitle>
+  <manvolnum>1</manvolnum>
+  <refmiscinfo>Application</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>pg_createsubscriber</refname>
+  <refpurpose>convert a physical replica into a new logical replica</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+  <cmdsynopsis>
+   <command>pg_createsubscriber</command>
+   <arg rep="repeat"><replaceable>option</replaceable></arg>
+   <group choice="plain">
+    <group choice="req">
+     <arg choice="plain"><option>-D</option> </arg>
+     <arg choice="plain"><option>--pgdata</option></arg>
+    </group>
+    <replaceable>datadir</replaceable>
+    <group choice="req">
+     <arg choice="plain"><option>-S</option></arg>
+     <arg choice="plain"><option>--subscriber-server</option></arg>
+    </group>
+    <replaceable>connstr</replaceable>
+    <group choice="req">
+     <arg choice="plain"><option>-d</option></arg>
+     <arg choice="plain"><option>--database</option></arg>
+    </group>
+    <replaceable>dbname</replaceable>
+   </group>
+  </cmdsynopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+  <para>
+   <application>pg_createsubscriber</application> takes the publisher and subscriber
+   connection strings, a cluster directory from a physical replica and a list of
+   database names and it sets up a new logical replica using the physical
+   recovery process.
+  </para>
+
+  <para>
+   The <application>pg_createsubscriber</application> should be run at the target
+   server. The source server (known as publisher server) should accept logical
+   replication connections from the target server (known as subscriber server).
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Options</title>
+
+   <para>
+    <application>pg_createsubscriber</application> accepts the following
+    command-line arguments:
+
+    <variablelist>
+     <varlistentry>
+      <term><option>-D <replaceable class="parameter">directory</replaceable></option></term>
+      <term><option>--pgdata=<replaceable class="parameter">directory</replaceable></option></term>
+      <listitem>
+       <para>
+        The target directory that contains a cluster directory from a physical
+        replica.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-S <replaceable class="parameter">connstr</replaceable></option></term>
+      <term><option>--subscriber-server=<replaceable class="parameter">connstr</replaceable></option></term>
+      <listitem>
+       <para>
+        The connection string to the subscriber. For details see <xref linkend="libpq-connstring"/>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-d <replaceable class="parameter">dbname</replaceable></option></term>
+      <term><option>--database=<replaceable class="parameter">dbname</replaceable></option></term>
+      <listitem>
+       <para>
+        The database name to create the subscription. Multiple databases can be
+        selected by writing multiple <option>-d</option> switches.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-n</option></term>
+      <term><option>--dry-run</option></term>
+      <listitem>
+       <para>
+        Do everything except actually modifying the target directory.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-r</option></term>
+      <term><option>--retain</option></term>
+      <listitem>
+       <para>
+        Retain log file even after successful completion.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+       <term><option>-t <replaceable class="parameter">seconds</replaceable></option></term>
+       <term><option>--recovery-timeout=<replaceable class="parameter">seconds</replaceable></option></term>
+       <listitem>
+       <para>
+        The maximum number of seconds to wait for recovery to end. Setting to 0
+        disables. The default is 0.
+       </para>
+       </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-v</option></term>
+      <term><option>--verbose</option></term>
+      <listitem>
+       <para>
+        Enables verbose mode. This will cause
+        <application>pg_createsubscriber</application> to output progress messages
+        and detailed information about each step to standard error.
+        Repeating the option causes additional debug-level messages to appear on
+        standard error.
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
+   </para>
+
+   <para>
+    Other options are also available:
+
+    <variablelist>
+     <varlistentry>
+       <term><option>-V</option></term>
+       <term><option>--version</option></term>
+       <listitem>
+       <para>
+       Print the <application>pg_createsubscriber</application> version and exit.
+       </para>
+       </listitem>
+     </varlistentry>
+
+     <varlistentry>
+       <term><option>-?</option></term>
+       <term><option>--help</option></term>
+       <listitem>
+       <para>
+       Show help about <application>pg_createsubscriber</application> command
+       line arguments, and exit.
+       </para>
+       </listitem>
+     </varlistentry>
+
+    </variablelist>
+   </para>
+
+ </refsect1>
+
+ <refsect1>
+  <title>Notes</title>
+
+  <para>
+   The transformation proceeds in the following steps:
+  </para>
+
+  <procedure>
+   <step>
+    <para>
+     <application>pg_createsubscriber</application> checks if the given target data
+     directory has the same system identifier than the source data directory.
+     Since it uses the recovery process as one of the steps, it starts the
+     target server as a replica from the source server. If the system
+     identifier is not the same, <application>pg_createsubscriber</application> will
+     terminate with an error.
+    </para>
+   </step>
+
+   <step>
+    <para>
+     <application>pg_createsubscriber</application> checks if the target data
+     directory is used by a physical replica. Stop the physical replica if it is
+     running. One of the next steps is to add some recovery parameters that
+     requires a server start. This step avoids an error.
+    </para>
+   </step>
+
+   <step>
+    <para>
+     <application>pg_createsubscriber</application> creates one replication slot for
+     each specified database on the source server. The replication slot name
+     contains a <literal>pg_createsubscriber</literal> prefix. These replication
+     slots will be used by the subscriptions in a future step.  A temporary
+     replication slot is used to get a consistent start location. This
+     consistent LSN will be used as a stopping point in the <xref
+     linkend="guc-recovery-target-lsn"/> parameter and by the
+     subscriptions as a replication starting point. It guarantees that no
+     transaction will be lost.
+    </para>
+   </step>
+
+   <step>
+    <para>
+     <application>pg_createsubscriber</application> writes recovery parameters into
+     the target data directory and start the target server. It specifies a LSN
+     (consistent LSN that was obtained in the previous step) of write-ahead
+     log location up to which recovery will proceed. It also specifies
+     <literal>promote</literal> as the action that the server should take once
+     the recovery target is reached. This step finishes once the server ends
+     standby mode and is accepting read-write operations.
+    </para>
+   </step>
+
+   <step>
+    <para>
+     Next, <application>pg_createsubscriber</application> creates one publication
+     for each specified database on the source server. Each publication
+     replicates changes for all tables in the database. The publication name
+     contains a <literal>pg_createsubscriber</literal> prefix. These publication
+     will be used by a corresponding subscription in a next step.
+    </para>
+   </step>
+
+   <step>
+    <para>
+     <application>pg_createsubscriber</application> creates one subscription for
+     each specified database on the target server. Each subscription name
+     contains a <literal>pg_createsubscriber</literal> prefix. The replication slot
+     name is identical to the subscription name. It does not copy existing data
+     from the source server. It does not create a replication slot. Instead, it
+     uses the replication slot that was created in a previous step. The
+     subscription is created but it is not enabled yet. The reason is the
+     replication progress must be set to the consistent LSN but replication
+     origin name contains the subscription oid in its name. Hence, the
+     subscription will be enabled in a separate step.
+    </para>
+   </step>
+
+   <step>
+    <para>
+     <application>pg_createsubscriber</application> sets the replication progress to
+     the consistent LSN that was obtained in a previous step. When the target
+     server started the recovery process, it caught up to the consistent LSN.
+     This is the exact LSN to be used as a initial location for each
+     subscription.
+    </para>
+   </step>
+
+   <step>
+    <para>
+     Finally, <application>pg_createsubscriber</application> enables the subscription
+     for each specified database on the target server. The subscription starts
+     streaming from the consistent LSN.
+    </para>
+   </step>
+
+   <step>
+    <para>
+     <application>pg_createsubscriber</application> stops the target server to change
+     its system identifier.
+    </para>
+   </step>
+  </procedure>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+   To create a logical replica for databases <literal>hr</literal> and
+   <literal>finance</literal> from a physical replica at <literal>foo</literal>:
+<screen>
+<prompt>$</prompt> <userinput>pg_createsubscriber -D /usr/local/pgsql/data -S "host=localhost" -d hr -d finance</userinput>
+</screen>
+  </para>
+
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="app-pgbasebackup"/></member>
+  </simplelist>
+ </refsect1>
+
+</refentry>

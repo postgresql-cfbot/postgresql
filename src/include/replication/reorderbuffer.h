@@ -409,8 +409,17 @@ typedef struct ReorderBufferTXN
 	/* Size of top-transaction including sub-transactions. */
 	Size		total_size;
 
-	/* If we have detected concurrent abort then ignore future changes. */
-	bool		concurrent_abort;
+	/*
+	 * True if the transaction committed. Then we skip transaction status
+	 * check for this transaction.
+	 */
+	bool		committed;
+
+	/*
+	 * True if the transaction (concurrently) aborted. Then we ignore
+	 * future changes.
+	 */
+	bool		aborted;
 
 	/*
 	 * Private data pointer of the output plugin.

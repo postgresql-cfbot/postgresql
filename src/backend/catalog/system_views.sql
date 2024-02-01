@@ -24,10 +24,10 @@ CREATE VIEW pg_roles AS
         rolcanlogin,
         rolreplication,
         rolconnlimit,
-        '********'::text as rolpassword,
+        CASE WHEN rolpassword IS NOT NULL THEN '********'::text END AS rolpassword,
         rolvaliduntil,
         rolbypassrls,
-        setconfig as rolconfig,
+        setconfig AS rolconfig,
         pg_authid.oid
     FROM pg_authid LEFT JOIN pg_db_role_setting s
     ON (pg_authid.oid = setrole AND setdatabase = 0);
@@ -65,7 +65,7 @@ CREATE VIEW pg_user AS
         usesuper,
         userepl,
         usebypassrls,
-        '********'::text as passwd,
+        CASE WHEN passwd IS NOT NULL THEN '********'::text END AS passwd,
         valuntil,
         useconfig
     FROM pg_shadow;

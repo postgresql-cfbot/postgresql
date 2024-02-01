@@ -3003,6 +3003,92 @@ order by tbl1.col1, tprt.col1;
 ------+------
 (0 rows)
 
+-- join partition pruning
+-- The 'Memory Usage' from the Hash node can vary between machines.  Let's just
+-- replace the number with an 'N'.
+-- We need to run EXPLAIN ANALYZE because we need to see '(never executed)'
+-- notations because that's the only way to verify runtime pruning.
+create function explain_join_partition_pruning(text) returns setof text
+language plpgsql as
+$$
+declare
+    ln text;
+begin
+    for ln in
+        execute format('explain (analyze, verbose, costs off, summary off, timing off) %s',
+            $1)
+    loop
+        ln := regexp_replace(ln, 'Memory Usage: \d+', 'Memory Usage: N');
+        return next ln;
+    end loop;
+end;
+$$;
+delete from tbl1;
+insert into tbl1 values (501), (505);
+analyze tbl1, tprt;
+set enable_nestloop = off;
+set enable_mergejoin = off;
+set enable_hashjoin = on;
+select explain_join_partition_pruning('
+select * from tprt p1
+   inner join tprt p2 on p1.col1 = p2.col1
+   right join tbl1 t on p1.col1 = t.col1 and p2.col1 = t.col1;');
+                         explain_join_partition_pruning                         
+--------------------------------------------------------------------------------
+ Hash Right Join (actual rows=2 loops=1)
+   Output: p1.col1, p2.col1, t.col1
+   Hash Cond: ((p1.col1 = t.col1) AND (p2.col1 = t.col1))
+   ->  Hash Join (actual rows=3 loops=1)
+         Output: p1.col1, p2.col1
+         Hash Cond: (p1.col1 = p2.col1)
+         ->  Append (actual rows=3 loops=1)
+               Join Partition Pruning: $0
+               ->  Seq Scan on public.tprt_1 p1_1 (never executed)
+                     Output: p1_1.col1
+               ->  Seq Scan on public.tprt_2 p1_2 (actual rows=3 loops=1)
+                     Output: p1_2.col1
+               ->  Seq Scan on public.tprt_3 p1_3 (never executed)
+                     Output: p1_3.col1
+               ->  Seq Scan on public.tprt_4 p1_4 (never executed)
+                     Output: p1_4.col1
+               ->  Seq Scan on public.tprt_5 p1_5 (never executed)
+                     Output: p1_5.col1
+               ->  Seq Scan on public.tprt_6 p1_6 (never executed)
+                     Output: p1_6.col1
+         ->  Hash (actual rows=3 loops=1)
+               Output: p2.col1
+               Buckets: 1024  Batches: 1  Memory Usage: NkB
+               ->  Append (actual rows=3 loops=1)
+                     Join Partition Pruning: $1
+                     ->  Seq Scan on public.tprt_1 p2_1 (never executed)
+                           Output: p2_1.col1
+                     ->  Seq Scan on public.tprt_2 p2_2 (actual rows=3 loops=1)
+                           Output: p2_2.col1
+                     ->  Seq Scan on public.tprt_3 p2_3 (never executed)
+                           Output: p2_3.col1
+                     ->  Seq Scan on public.tprt_4 p2_4 (never executed)
+                           Output: p2_4.col1
+                     ->  Seq Scan on public.tprt_5 p2_5 (never executed)
+                           Output: p2_5.col1
+                     ->  Seq Scan on public.tprt_6 p2_6 (never executed)
+                           Output: p2_6.col1
+   ->  Hash (actual rows=2 loops=1)
+         Output: t.col1
+         Buckets: 1024  Batches: 1  Memory Usage: NkB
+         Partition Prune: $0, $1
+         ->  Seq Scan on public.tbl1 t (actual rows=2 loops=1)
+               Output: t.col1
+(43 rows)
+
+select * from tprt p1
+   inner join tprt p2 on p1.col1 = p2.col1
+   right join tbl1 t on p1.col1 = t.col1 and p2.col1 = t.col1;
+ col1 | col1 | col1 
+------+------+------
+  501 |  501 |  501
+  505 |  505 |  505
+(2 rows)
+
 drop table tbl1, tprt;
 -- Test with columns defined in varying orders between each level
 create table part_abc (a int not null, b int not null, c int not null) partition by list (a);

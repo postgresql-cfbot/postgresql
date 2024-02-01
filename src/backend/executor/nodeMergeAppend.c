@@ -99,11 +99,13 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 		nplans = bms_num_members(validsubplans);
 
 		/*
-		 * When no run-time pruning is required and there's at least one
-		 * subplan, we can fill ms_valid_subplans immediately, preventing
-		 * later calls to ExecFindMatchingSubPlans.
+		 * When no run-time pruning or join pruning is required and there's at
+		 * least one subplan, we can fill ms_valid_subplans immediately,
+		 * preventing later calls to ExecFindMatchingSubPlans.
 		 */
-		if (!prunestate->do_exec_prune && nplans > 0)
+		if (!prunestate->do_exec_prune &&
+			bms_is_empty(node->join_prune_paramids) &&
+			nplans > 0)
 			mergestate->ms_valid_subplans = bms_add_range(NULL, 0, nplans - 1);
 	}
 	else
@@ -115,9 +117,15 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 		 * subplans as valid; they must also all be initialized.
 		 */
 		Assert(nplans > 0);
-		mergestate->ms_valid_subplans = validsubplans =
-			bms_add_range(NULL, 0, nplans - 1);
+		validsubplans = bms_add_range(NULL, 0, nplans - 1);
 		mergestate->ms_prune_state = NULL;
+
+		/*
+		 * When join pruning is not enabled we can fill ms_valid_subplans
+		 * immediately, preventing later calls to ExecFindMatchingSubPlans.
+		 */
+		if (bms_is_empty(node->join_prune_paramids))
+			mergestate->ms_valid_subplans = validsubplans;
 	}
 
 	mergeplanstates = (PlanState **) palloc(nplans * sizeof(PlanState *));
@@ -218,7 +226,7 @@ ExecMergeAppend(PlanState *pstate)
 		 */
 		if (node->ms_valid_subplans == NULL)
 			node->ms_valid_subplans =
-				ExecFindMatchingSubPlans(node->ms_prune_state, false);
+				ExecFindMatchingSubPlans(node->ms_prune_state, false, &node->ps);
 
 		/*
 		 * First time through: pull the first tuple from each valid subplan,

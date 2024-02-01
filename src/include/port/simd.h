@@ -18,7 +18,15 @@
 #ifndef SIMD_H
 #define SIMD_H
 
-#if (defined(__x86_64__) || defined(_M_AMD64))
+#if defined(__AVX2__)
+
+#include <immintrin.h>
+#define USE_AVX2
+typedef __m256i Vector8;
+typedef __m256i Vector32;
+
+#elif (defined(__x86_64__) || defined(_M_AMD64))
+
 /*
  * SSE2 instructions are part of the spec for the 64-bit x86 ISA. We assume
  * that compilers targeting this architecture understand SSE2 intrinsics.
@@ -105,7 +113,9 @@ static inline Vector32 vector32_eq(const Vector32 v1, const Vector32 v2);
 static inline void
 vector8_load(Vector8 *v, const uint8 *s)
 {
-#if defined(USE_SSE2)
+#if defined(USE_AVX2)
+	*v = _mm256_loadu_si256((const __m256i *) s);
+#elif defined(USE_SSE2)
 	*v = _mm_loadu_si128((const __m128i *) s);
 #elif defined(USE_NEON)
 	*v = vld1q_u8(s);
@@ -118,7 +128,9 @@ vector8_load(Vector8 *v, const uint8 *s)
 static inline void
 vector32_load(Vector32 *v, const uint32 *s)
 {
-#ifdef USE_SSE2
+#if defined(USE_AVX2)
+	*v = _mm256_loadu_si256((const __m256i *) s);
+#elif defined(USE_SSE2)
 	*v = _mm_loadu_si128((const __m128i *) s);
 #elif defined(USE_NEON)
 	*v = vld1q_u32(s);
@@ -132,7 +144,9 @@ vector32_load(Vector32 *v, const uint32 *s)
 static inline Vector8
 vector8_broadcast(const uint8 c)
 {
-#if defined(USE_SSE2)
+#if defined(USE_AVX2)
+	return _mm256_set1_epi8(c);
+#elif defined(USE_SSE2)
 	return _mm_set1_epi8(c);
 #elif defined(USE_NEON)
 	return vdupq_n_u8(c);
@@ -145,7 +159,9 @@ vector8_broadcast(const uint8 c)
 static inline Vector32
 vector32_broadcast(const uint32 c)
 {
-#ifdef USE_SSE2
+#if defined(USE_AVX2)
+	return _mm256_set1_epi32(c);
+#elif defined(USE_SSE2)
 	return _mm_set1_epi32(c);
 #elif defined(USE_NEON)
 	return vdupq_n_u32(c);
@@ -268,7 +284,9 @@ vector8_has_le(const Vector8 v, const uint8 c)
 static inline bool
 vector8_is_highbit_set(const Vector8 v)
 {
-#ifdef USE_SSE2
+#if defined(USE_AVX2)
+	return _mm256_movemask_epi8(v) != 0;
+#elif defined(USE_SSE2)
 	return _mm_movemask_epi8(v) != 0;
 #elif defined(USE_NEON)
 	return vmaxvq_u8(v) > 0x7F;
@@ -305,7 +323,9 @@ vector32_is_highbit_set(const Vector32 v)
 static inline Vector8
 vector8_or(const Vector8 v1, const Vector8 v2)
 {
-#ifdef USE_SSE2
+#if defined(USE_AVX2)
+	return _mm256_or_si256(v1, v2);
+#elif defined(USE_SSE2)
 	return _mm_or_si128(v1, v2);
 #elif defined(USE_NEON)
 	return vorrq_u8(v1, v2);
@@ -318,7 +338,9 @@ vector8_or(const Vector8 v1, const Vector8 v2)
 static inline Vector32
 vector32_or(const Vector32 v1, const Vector32 v2)
 {
-#ifdef USE_SSE2
+#if defined(USE_AVX2)
+	return _mm256_or_si256(v1, v2);
+#elif defined(USE_SSE2)
 	return _mm_or_si128(v1, v2);
 #elif defined(USE_NEON)
 	return vorrq_u32(v1, v2);
@@ -336,7 +358,9 @@ vector32_or(const Vector32 v1, const Vector32 v2)
 static inline Vector8
 vector8_ssub(const Vector8 v1, const Vector8 v2)
 {
-#ifdef USE_SSE2
+#if defined(USE_AVX2)
+	return _mm256_subs_epu8(v1, v2);
+#elif defined(USE_SSE2)
 	return _mm_subs_epu8(v1, v2);
 #elif defined(USE_NEON)
 	return vqsubq_u8(v1, v2);
@@ -352,7 +376,9 @@ vector8_ssub(const Vector8 v1, const Vector8 v2)
 static inline Vector8
 vector8_eq(const Vector8 v1, const Vector8 v2)
 {
-#ifdef USE_SSE2
+#if defined(USE_AVX2)
+	return _mm256_cmpeq_epi8(v1, v2);
+#elif defined(USE_SSE2)
 	return _mm_cmpeq_epi8(v1, v2);
 #elif defined(USE_NEON)
 	return vceqq_u8(v1, v2);
@@ -364,7 +390,9 @@ vector8_eq(const Vector8 v1, const Vector8 v2)
 static inline Vector32
 vector32_eq(const Vector32 v1, const Vector32 v2)
 {
-#ifdef USE_SSE2
+#if defined(USE_AVX2)
+	return _mm256_cmpeq_epi32(v1, v2);
+#elif defined(USE_SSE2)
 	return _mm_cmpeq_epi32(v1, v2);
 #elif defined(USE_NEON)
 	return vceqq_u32(v1, v2);

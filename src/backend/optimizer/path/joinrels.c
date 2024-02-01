@@ -19,6 +19,7 @@
 #include "optimizer/joininfo.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
+#include "optimizer/restrictinfo.h"
 #include "partitioning/partbounds.h"
 #include "utils/memutils.h"
 
@@ -1437,6 +1438,76 @@ restriction_is_constant_false(List *restrictlist,
 }
 
 /*
+ * Build the child RestrictInfo by translating the given parent RestrictInfo. If
+ * the translation is already available use it. Otherwise translate the parent
+ * clause and add to the available translations.
+ */
+static RestrictInfo *
+build_child_clause(PlannerInfo *root,
+				   RestrictInfo *parent_rinfo,
+				   int nappinfos, AppendRelInfo **appinfos)
+{
+	Relids		child_req_relids =
+		adjust_child_relids(parent_rinfo->required_relids,
+							nappinfos, appinfos);
+	RestrictInfo *child_rinfo;
+
+	/* If no child relids are involved no translation is required. */
+	if (bms_equal(child_req_relids, parent_rinfo->required_relids))
+		return parent_rinfo;
+
+	child_rinfo = find_child_rinfo(root, parent_rinfo, child_req_relids);
+	if (!child_rinfo)
+	{
+		child_rinfo = castNode(RestrictInfo,
+							   adjust_appendrel_attrs(root,
+													  (Node *) parent_rinfo,
+													  nappinfos,
+													  appinfos));
+		add_child_rinfo(root, parent_rinfo, child_rinfo);
+	}
+	bms_free(child_req_relids);
+
+	/* If the parent clause is commuted, return commuted child clause. */
+	if (parent_rinfo->is_commuted != child_rinfo->is_commuted)
+	{
+		if (!child_rinfo->comm_rinfo)
+		{
+			OpExpr	   *parent_clause = castNode(OpExpr, parent_rinfo->clause);
+
+			commute_restrictinfo(child_rinfo, parent_clause->opno);
+		}
+		child_rinfo = child_rinfo->comm_rinfo;
+	}
+
+	Assert(parent_rinfo->is_commuted == child_rinfo->is_commuted);
+	return child_rinfo;
+}
+
+/*
+ * Build the child RestrictInfo list by translating the given parent
+ * RestrictInfo list.
+ */
+List *
+build_child_clauses(PlannerInfo *root, List *parent_clauselist,
+					int nappinfos, AppendRelInfo **appinfos)
+{
+	ListCell   *lc;
+	List	   *child_clauselist = NIL;
+
+	foreach(lc, parent_clauselist)
+	{
+		RestrictInfo *parent_rinfo = lfirst_node(RestrictInfo, lc);
+		RestrictInfo *child_rinfo = build_child_clause(root, parent_rinfo,
+													   nappinfos, appinfos);
+
+		child_clauselist = lappend(child_clauselist, child_rinfo);
+	}
+
+	return child_clauselist;
+}
+
+/*
  * Assess whether join between given two partitioned relations can be broken
  * down into joins between matching partitions; a technique called
  * "partitionwise join"
@@ -1631,9 +1702,8 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 		 * applicable to the parent join.
 		 */
 		child_restrictlist =
-			(List *) adjust_appendrel_attrs(root,
-											(Node *) parent_restrictlist,
-											nappinfos, appinfos);
+			build_child_clauses(root, parent_restrictlist, nappinfos,
+								appinfos);
 
 		/* Find or construct the child join's RelOptInfo */
 		child_joinrel = joinrel->part_rels[cnt_parts];

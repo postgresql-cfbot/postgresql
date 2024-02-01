@@ -1827,7 +1827,7 @@ create_join_clause(PlannerInfo *root,
 				   EquivalenceMember *rightem,
 				   EquivalenceClass *parent_ec)
 {
-	RestrictInfo *rinfo;
+	RestrictInfo *rinfo = NULL;
 	RestrictInfo *parent_rinfo = NULL;
 	ListCell   *lc;
 	MemoryContext oldcontext;
@@ -1895,11 +1895,6 @@ create_join_clause(PlannerInfo *root,
 										bms_union(leftem->em_relids,
 												  rightem->em_relids),
 										ec->ec_min_security);
-
-	/* If it's a child clause, copy the parent's rinfo_serial */
-	if (parent_rinfo)
-		rinfo->rinfo_serial = parent_rinfo->rinfo_serial;
-
 	/* Mark the clause as redundant, or not */
 	rinfo->parent_ec = parent_ec;
 
@@ -1917,6 +1912,25 @@ create_join_clause(PlannerInfo *root,
 	ec->ec_derives = lappend(ec->ec_derives, rinfo);
 
 	MemoryContextSwitchTo(oldcontext);
+
+	/* We have obtained a translation through EC machinery, save it. */
+	if (parent_rinfo)
+	{
+		rinfo->rinfo_serial = parent_rinfo->rinfo_serial;
+
+		/*
+		 * If the child clause is commuted translation of the parent clause,
+		 * mark it accordingly.
+		 */
+		if ((leftem->em_parent &&
+			 leftem->em_parent == parent_rinfo->right_em) ||
+			(rightem->em_parent &&
+			 rightem->em_parent == parent_rinfo->left_em))
+			rinfo->is_commuted = !parent_rinfo->is_commuted;
+		else
+			rinfo->is_commuted = parent_rinfo->is_commuted;
+		add_child_rinfo(root, parent_rinfo, rinfo);
+	}
 
 	return rinfo;
 }

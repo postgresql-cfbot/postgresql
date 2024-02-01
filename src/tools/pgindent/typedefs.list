@@ -379,6 +379,7 @@ CheckPointStmt
 CheckpointStatsData
 CheckpointerRequest
 CheckpointerShmemStruct
+ChildRinfoTabEntry
 Chromosome
 CkptSortItem
 CkptTsStatus
@@ -2395,6 +2396,7 @@ RewriteMappingDataEntry
 RewriteMappingFile
 RewriteRule
 RewriteState
+RinfoHashTabEntry
 RmgrData
 RmgrDescData
 RmgrId

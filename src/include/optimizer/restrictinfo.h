@@ -47,5 +47,10 @@ extern bool join_clause_is_movable_to(RestrictInfo *rinfo, RelOptInfo *baserel);
 extern bool join_clause_is_movable_into(RestrictInfo *rinfo,
 										Relids currentrelids,
 										Relids current_and_outer);
+extern RestrictInfo *find_child_rinfo(PlannerInfo *root,
+									  RestrictInfo *parent_rinfo,
+									  Bitmapset *child_required_relids);
+extern void add_child_rinfo(PlannerInfo *root, RestrictInfo *parent_rinfo,
+							RestrictInfo *child_rinfo);
 
 #endif							/* RESTRICTINFO_H */

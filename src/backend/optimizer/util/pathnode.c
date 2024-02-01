@@ -4063,6 +4063,89 @@ reparameterize_path(PlannerInfo *root, Path *path,
 }
 
 /*
+ * build_child_clauses_multilevel
+ *		Similar to build_child_clauses() but for translations through multiple levels of inheritance (actually partitioning) hierarchy.
+ *
+ * In a way this is similar to adjust_appendrel_attrs_multilevel() except that this function uses a translated RestrictInfo if it's available.
+ */
+static List *
+build_child_clauses_multilevel(PlannerInfo *root, List *parent_clauselist,
+							   RelOptInfo *child_rel,
+							   RelOptInfo *top_parent)
+{
+	AppendRelInfo **appinfos;
+	int			nappinfos;
+	List	   *tmp_clauselist = parent_clauselist;
+	List	   *child_clauselist;
+
+	if (child_rel->parent != top_parent)
+	{
+		if (child_rel->parent)
+		{
+			tmp_clauselist = build_child_clauses_multilevel(root,
+															parent_clauselist,
+															child_rel->parent,
+															top_parent);
+		}
+		else
+			elog(ERROR, "child_rel is not a child of top_parent");
+	}
+
+	appinfos = find_appinfos_by_relids(root, child_rel->relids, &nappinfos);
+	child_clauselist = build_child_clauses(root, tmp_clauselist,
+										   nappinfos, appinfos);
+	pfree(appinfos);
+	/* Build any intermediate clauselist this function built. */
+	if (tmp_clauselist != parent_clauselist)
+		list_free(tmp_clauselist);
+
+	return child_clauselist;
+}
+
+/*
+ * build_child_iclauses_multilevel
+ * 		Translate IndexClause list to be used for the
+ * given top parent relation for given child relation through the hierarchy of inheritance (actually partitioning).
+ *
+ * This is similar to adjust_appendrel_attrs_multilevel() for IndexClause except that it uses translated RestrictInfos if already available.
+ */
+static List *
+build_child_iclauses_multilevel(PlannerInfo *root,
+								List *parent_iclauselist,
+								RelOptInfo *childrel,
+								RelOptInfo *top_parent)
+{
+	ListCell   *lc;
+	List	   *child_iclauses = NIL;
+
+	foreach(lc, parent_iclauselist)
+	{
+		IndexClause *iclause = lfirst_node(IndexClause, lc);
+		List	   *rinfo_list = NIL;
+		List	   *child_rinfo_list;
+		IndexClause *child_iclause = makeNode(IndexClause);
+
+		/*
+		 * Collect the RestrictInfos to be translated. That's all what needs
+		 * to be translated right now.
+		 */
+		rinfo_list = lappend(rinfo_list, iclause->rinfo);
+		rinfo_list = list_concat(rinfo_list, iclause->indexquals);
+
+		child_rinfo_list = build_child_clauses_multilevel(root, rinfo_list,
+														  childrel, top_parent);
+		memcpy(child_iclause, iclause, sizeof(IndexClause));
+		child_iclause->rinfo = linitial(child_rinfo_list);
+		child_iclause->indexquals = list_delete_first(child_rinfo_list);
+
+		list_free(rinfo_list);
+		child_iclauses = lappend(child_iclauses, child_iclause);
+	}
+
+	return child_iclauses;
+}
+
+/*
  * reparameterize_path_by_child
  * 		Given a path parameterized by the parent of the given child relation,
  * 		translate the path to be parameterized by the given child relation.
@@ -4150,7 +4233,10 @@ do { \
 				IndexPath  *ipath;
 
 				FLAT_COPY_PATH(ipath, path, IndexPath);
-				ADJUST_CHILD_ATTRS(ipath->indexclauses);
+				ipath->indexclauses =
+					build_child_iclauses_multilevel(root,
+													ipath->indexclauses,
+													child_rel, child_rel->top_parent);
 				new_path = (Path *) ipath;
 			}
 			break;
@@ -4234,7 +4320,11 @@ do { \
 				jpath = (JoinPath *) npath;
 				REPARAMETERIZE_CHILD_PATH(jpath->outerjoinpath);
 				REPARAMETERIZE_CHILD_PATH(jpath->innerjoinpath);
-				ADJUST_CHILD_ATTRS(jpath->joinrestrictinfo);
+				jpath->joinrestrictinfo =
+					build_child_clauses_multilevel(root,
+												   jpath->joinrestrictinfo,
+												   child_rel,
+												   child_rel->top_parent);
 				new_path = (Path *) npath;
 			}
 			break;
@@ -4249,8 +4339,16 @@ do { \
 				jpath = (JoinPath *) mpath;
 				REPARAMETERIZE_CHILD_PATH(jpath->outerjoinpath);
 				REPARAMETERIZE_CHILD_PATH(jpath->innerjoinpath);
-				ADJUST_CHILD_ATTRS(jpath->joinrestrictinfo);
-				ADJUST_CHILD_ATTRS(mpath->path_mergeclauses);
+				jpath->joinrestrictinfo =
+					build_child_clauses_multilevel(root,
+												   jpath->joinrestrictinfo,
+												   child_rel,
+												   child_rel->top_parent);
+				mpath->path_mergeclauses =
+					build_child_clauses_multilevel(root,
+												   mpath->path_mergeclauses,
+												   child_rel,
+												   child_rel->top_parent);
 				new_path = (Path *) mpath;
 			}
 			break;
@@ -4265,8 +4363,16 @@ do { \
 				jpath = (JoinPath *) hpath;
 				REPARAMETERIZE_CHILD_PATH(jpath->outerjoinpath);
 				REPARAMETERIZE_CHILD_PATH(jpath->innerjoinpath);
-				ADJUST_CHILD_ATTRS(jpath->joinrestrictinfo);
-				ADJUST_CHILD_ATTRS(hpath->path_hashclauses);
+				jpath->joinrestrictinfo =
+					build_child_clauses_multilevel(root,
+												   jpath->joinrestrictinfo,
+												   child_rel,
+												   child_rel->top_parent);
+				hpath->path_hashclauses =
+					build_child_clauses_multilevel(root,
+												   hpath->path_hashclauses,
+												   child_rel,
+												   child_rel->top_parent);
 				new_path = (Path *) hpath;
 			}
 			break;
@@ -4348,7 +4454,10 @@ do { \
 		new_ppi->ppi_req_outer = bms_copy(required_outer);
 		new_ppi->ppi_rows = old_ppi->ppi_rows;
 		new_ppi->ppi_clauses = old_ppi->ppi_clauses;
-		ADJUST_CHILD_ATTRS(new_ppi->ppi_clauses);
+		new_ppi->ppi_clauses =
+			build_child_clauses_multilevel(root,
+										   new_ppi->ppi_clauses, child_rel,
+										   child_rel->top_parent);
 		new_ppi->ppi_serials = bms_copy(old_ppi->ppi_serials);
 		rel->ppilist = lappend(rel->ppilist, new_ppi);
 

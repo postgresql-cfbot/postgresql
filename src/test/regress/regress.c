@@ -853,11 +853,17 @@ test_spinlock(void)
 		/* test basic operations via underlying S_* API */
 		S_INIT_LOCK(&struct_w_lock.lock);
 		S_LOCK(&struct_w_lock.lock);
-		S_UNLOCK(&struct_w_lock.lock);
+		SpinLockRelease(&struct_w_lock.lock);
 
 		/* and that "contended" acquisition works */
 		s_lock(&struct_w_lock.lock, "testfile", 17, "testfunc");
-		S_UNLOCK(&struct_w_lock.lock);
+
+		/*
+		 * XXX: can't use S_UNLOCK directly since it will leak spinStatus.file
+		 * reset. This should be OK since "none of the macros in this file are
+		 * intended to be called directly." in s_lock.h
+		 */
+		SpinLockRelease(&struct_w_lock.lock);
 
 		/*
 		 * Check, using TAS directly, that a single spin cycle doesn't block
@@ -874,7 +880,7 @@ test_spinlock(void)
 			elog(ERROR, "acquired already held spinlock");
 #endif							/* defined(TAS_SPIN) */
 
-		S_UNLOCK(&struct_w_lock.lock);
+		SpinLockRelease(&struct_w_lock.lock);
 #endif							/* defined(TAS) */
 
 		/*

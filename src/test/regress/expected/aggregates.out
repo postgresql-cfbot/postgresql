@@ -735,22 +735,24 @@ explain (verbose, costs off)
 select array(select sum(x+y) s
             from generate_series(1,3) y group by y order by s)
   from generate_series(1,3) x;
-                            QUERY PLAN                             
--------------------------------------------------------------------
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
  Function Scan on pg_catalog.generate_series x
    Output: (SubPlan 1)
    Function Call: generate_series(1, 3)
    SubPlan 1
-     ->  Sort
-           Output: (sum((x.x + y.y))), y.y
-           Sort Key: (sum((x.x + y.y)))
-           ->  HashAggregate
-                 Output: sum((x.x + y.y)), y.y
-                 Group Key: y.y
-                 ->  Function Scan on pg_catalog.generate_series y
-                       Output: y.y
-                       Function Call: generate_series(1, 3)
-(13 rows)
+     ->  Result
+           Output: (sum((x.x + y.y)))
+           ->  Sort
+                 Output: (sum((x.x + y.y))), y.y
+                 Sort Key: (sum((x.x + y.y)))
+                 ->  HashAggregate
+                       Output: sum((x.x + y.y)), y.y
+                       Group Key: y.y
+                       ->  Function Scan on pg_catalog.generate_series y
+                             Output: y.y
+                             Function Call: generate_series(1, 3)
+(15 rows)
 
 select array(select sum(x+y) s
             from generate_series(1,3) y group by y order by s)
@@ -1063,6 +1065,28 @@ select f1, (select min(unique1) from tenk1 where unique1 > f1) AS gt
  -2147483647 |  0
 (5 rows)
 
+-- check kNN search
+begin;
+set local enable_seqscan = off;
+explain (costs off)
+  SELECT min(f1 <-> '(0,0)'::point) FROM polygon_tbl;
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Result
+   InitPlan 1 (returns $0)
+     ->  Limit
+           ->  Index Scan using gpolygonind on polygon_tbl
+                 Order By: (f1 <-> '(0,0)'::point)
+                 Filter: ((f1 <-> '(0,0)'::point) IS NOT NULL)
+(6 rows)
+
+SELECT min(f1 <-> '(0,0)'::point) FROM polygon_tbl;
+ min 
+-----
+   0
+(1 row)
+
+rollback;
 -- check some cases that were handled incorrectly in 8.3.0
 explain (costs off)
   select distinct max(unique2) from tenk1;
@@ -1125,14 +1149,15 @@ explain (costs off)
   select max(unique2) from tenk1 order by max(unique2)+1;
                              QUERY PLAN                              
 ---------------------------------------------------------------------
- Sort
-   Sort Key: (($0 + 1))
+ Result
    InitPlan 1 (returns $0)
      ->  Limit
            ->  Index Only Scan Backward using tenk1_unique2 on tenk1
                  Index Cond: (unique2 IS NOT NULL)
-   ->  Result
-(7 rows)
+   ->  Sort
+         Sort Key: (($0 + 1))
+         ->  Result
+(8 rows)
 
 select max(unique2) from tenk1 order by max(unique2)+1;
  max  

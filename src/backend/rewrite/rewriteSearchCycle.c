@@ -306,7 +306,7 @@ rewriteSearchAndCycle(CommonTableExpr *cte)
 					  list_nth_int(cte->ctecoltypmods, i),
 					  list_nth_oid(cte->ctecolcollations, i),
 					  0);
-		tle = makeTargetEntry((Expr *) var, i + 1, strVal(list_nth(cte->ctecolnames, i)), false);
+		tle = makeTargetEntry((Expr *) var, i + 1, strVal(list_nth(cte->ctecolnames, i)), NOT_JUNK);
 		tle->resorigtbl = list_nth_node(TargetEntry, rte1->subquery->targetList, i)->resorigtbl;
 		tle->resorigcol = list_nth_node(TargetEntry, rte1->subquery->targetList, i)->resorigcol;
 		newq1->targetList = lappend(newq1->targetList, tle);
@@ -330,7 +330,7 @@ rewriteSearchAndCycle(CommonTableExpr *cte)
 		tle = makeTargetEntry(texpr,
 							  list_length(newq1->targetList) + 1,
 							  cte->search_clause->search_seq_column,
-							  false);
+							  NOT_JUNK);
 		newq1->targetList = lappend(newq1->targetList, tle);
 	}
 	if (cte->cycle_clause)
@@ -338,13 +338,13 @@ rewriteSearchAndCycle(CommonTableExpr *cte)
 		tle = makeTargetEntry((Expr *) cte->cycle_clause->cycle_mark_default,
 							  list_length(newq1->targetList) + 1,
 							  cte->cycle_clause->cycle_mark_column,
-							  false);
+							  NOT_JUNK);
 		newq1->targetList = lappend(newq1->targetList, tle);
 		cycle_col_rowexpr = make_path_rowexpr(cte, cte->cycle_clause->cycle_col_list);
 		tle = makeTargetEntry(make_path_initial_array(cycle_col_rowexpr),
 							  list_length(newq1->targetList) + 1,
 							  cte->cycle_clause->cycle_path_column,
-							  false);
+							  NOT_JUNK);
 		newq1->targetList = lappend(newq1->targetList, tle);
 	}
 
@@ -426,7 +426,7 @@ rewriteSearchAndCycle(CommonTableExpr *cte)
 		tle = makeTargetEntry((Expr *) var,
 							  list_length(newsubquery->targetList) + 1,
 							  cte->search_clause->search_seq_column,
-							  false);
+							  NOT_JUNK);
 		newsubquery->targetList = lappend(newsubquery->targetList, tle);
 	}
 	if (cte->cycle_clause)
@@ -441,7 +441,7 @@ rewriteSearchAndCycle(CommonTableExpr *cte)
 		tle = makeTargetEntry((Expr *) var,
 							  list_length(newsubquery->targetList) + 1,
 							  cte->cycle_clause->cycle_mark_column,
-							  false);
+							  NOT_JUNK);
 		newsubquery->targetList = lappend(newsubquery->targetList, tle);
 
 		/* ctename.cpa */
@@ -450,7 +450,7 @@ rewriteSearchAndCycle(CommonTableExpr *cte)
 		tle = makeTargetEntry((Expr *) var,
 							  list_length(newsubquery->targetList) + 1,
 							  cte->cycle_clause->cycle_path_column,
-							  false);
+							  NOT_JUNK);
 		newsubquery->targetList = lappend(newsubquery->targetList, tle);
 	}
 
@@ -494,7 +494,7 @@ rewriteSearchAndCycle(CommonTableExpr *cte)
 					  list_nth_int(cte->ctecoltypmods, i),
 					  list_nth_oid(cte->ctecolcollations, i),
 					  0);
-		tle = makeTargetEntry((Expr *) var, i + 1, strVal(list_nth(cte->ctecolnames, i)), false);
+		tle = makeTargetEntry((Expr *) var, i + 1, strVal(list_nth(cte->ctecolnames, i)), NOT_JUNK);
 		tle->resorigtbl = list_nth_node(TargetEntry, rte2->subquery->targetList, i)->resorigtbl;
 		tle->resorigcol = list_nth_node(TargetEntry, rte2->subquery->targetList, i)->resorigcol;
 		newq2->targetList = lappend(newq2->targetList, tle);
@@ -537,7 +537,7 @@ rewriteSearchAndCycle(CommonTableExpr *cte)
 		tle = makeTargetEntry(texpr,
 							  list_length(newq2->targetList) + 1,
 							  cte->search_clause->search_seq_column,
-							  false);
+							  NOT_JUNK);
 		newq2->targetList = lappend(newq2->targetList, tle);
 	}
 
@@ -572,7 +572,7 @@ rewriteSearchAndCycle(CommonTableExpr *cte)
 		tle = makeTargetEntry((Expr *) caseexpr,
 							  list_length(newq2->targetList) + 1,
 							  cte->cycle_clause->cycle_mark_column,
-							  false);
+							  NOT_JUNK);
 		newq2->targetList = lappend(newq2->targetList, tle);
 
 		/*
@@ -581,7 +581,7 @@ rewriteSearchAndCycle(CommonTableExpr *cte)
 		tle = makeTargetEntry(make_path_cat_expr(cycle_col_rowexpr, cpa_attno),
 							  list_length(newq2->targetList) + 1,
 							  cte->cycle_clause->cycle_path_column,
-							  false);
+							  NOT_JUNK);
 		newq2->targetList = lappend(newq2->targetList, tle);
 	}
 
@@ -636,7 +636,7 @@ rewriteSearchAndCycle(CommonTableExpr *cte)
 																		search_seq_type, -1, InvalidOid, 0),
 													   list_length(ctequery->targetList) + 1,
 													   cte->search_clause->search_seq_column,
-													   false));
+													   NOT_JUNK));
 	}
 	if (cte->cycle_clause)
 	{
@@ -647,13 +647,13 @@ rewriteSearchAndCycle(CommonTableExpr *cte)
 																		cte->cycle_clause->cycle_mark_collation, 0),
 													   list_length(ctequery->targetList) + 1,
 													   cte->cycle_clause->cycle_mark_column,
-													   false));
+													   NOT_JUNK));
 		ctequery->targetList = lappend(ctequery->targetList,
 									   makeTargetEntry((Expr *) makeVar(1, cpa_attno,
 																		RECORDARRAYOID, -1, InvalidOid, 0),
 													   list_length(ctequery->targetList) + 1,
 													   cte->cycle_clause->cycle_path_column,
-													   false));
+													   NOT_JUNK));
 	}
 
 	/*

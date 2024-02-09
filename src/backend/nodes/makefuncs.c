@@ -241,7 +241,7 @@ TargetEntry *
 makeTargetEntry(Expr *expr,
 				AttrNumber resno,
 				char *resname,
-				bool resjunk)
+				JunkKind resjunk)
 {
 	TargetEntry *tle = makeNode(TargetEntry);
 

@@ -2201,11 +2201,11 @@ findTargetlistEntrySQL99(ParseState *pstate, Node *node, List **tlist,
 
 	/*
 	 * If no matches, construct a new target entry which is appended to the
-	 * end of the target list.  This target is given resjunk = true so that it
+	 * end of the target list.  This target is given resjunk = true XXX so that it
 	 * will not be projected into the final tuple.
 	 */
 	target_result = transformTargetEntry(pstate, node, expr, exprKind,
-										 NULL, true);
+										 NULL, JUNK_SORT_GROUP_COL);
 
 	*tlist = lappend(*tlist, target_result);
 

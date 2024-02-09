@@ -452,6 +452,9 @@ struct PlannerInfo
 	 */
 	List	   *processed_tlist;
 
+	/* same as processed_tlist, but with the planner JUNK_* cols removed */
+	List	   *final_tlist;
+
 	/*
 	 * For UPDATE, this list contains the target table's attribute numbers to
 	 * which the first N entries of processed_tlist are to be assigned.  (Any

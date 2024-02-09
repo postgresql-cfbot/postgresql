@@ -3731,10 +3731,10 @@ SELECT
     count(*) OVER (PARTITION BY depname ORDER BY enroll_date RANGE BETWEEN
                    CURRENT ROW AND CURRENT ROW) cnt
 FROM empsalary;
-                                              QUERY PLAN                                              
-------------------------------------------------------------------------------------------------------
+                                       QUERY PLAN                                        
+-----------------------------------------------------------------------------------------
  WindowAgg
-   Output: empno, depname, (row_number() OVER (?)), (rank() OVER (?)), count(*) OVER (?), enroll_date
+   Output: empno, depname, (row_number() OVER (?)), (rank() OVER (?)), count(*) OVER (?)
    ->  WindowAgg
          Output: depname, enroll_date, empno, row_number() OVER (?), rank() OVER (?)
          ->  Sort
@@ -3777,16 +3777,15 @@ SELECT * FROM
           min(salary) OVER (PARTITION BY depname || 'A', depname) depminsalary
    FROM empsalary) emp
 WHERE depname = 'sales';
-                                QUERY PLAN                                
---------------------------------------------------------------------------
- Subquery Scan on emp
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ WindowAgg
    ->  WindowAgg
-         ->  WindowAgg
-               ->  Sort
-                     Sort Key: (((empsalary.depname)::text || 'A'::text))
-                     ->  Seq Scan on empsalary
-                           Filter: ((depname)::text = 'sales'::text)
-(7 rows)
+         ->  Sort
+               Sort Key: (((empsalary.depname)::text || 'A'::text))
+               ->  Seq Scan on empsalary
+                     Filter: ((depname)::text = 'sales'::text)
+(6 rows)
 
 -- pushdown is unsafe because there's a PARTITION BY clause without depname:
 EXPLAIN (COSTS OFF)
@@ -4147,23 +4146,22 @@ SELECT * FROM
           ntile(2) OVER (PARTITION BY depname) nt -- w2
    FROM empsalary
 ) e WHERE rn <= 1 AND c1 <= 3 AND nt < 2;
-                                          QUERY PLAN                                           
------------------------------------------------------------------------------------------------
- Subquery Scan on e
-   ->  WindowAgg
-         Filter: (((row_number() OVER (?)) <= 1) AND ((ntile(2) OVER (?)) < 2))
-         Run Condition: (count(empsalary.salary) OVER (?) <= 3)
-         ->  Sort
-               Sort Key: (((empsalary.depname)::text || ''::text))
-               ->  WindowAgg
-                     Run Condition: ((row_number() OVER (?) <= 1) AND (ntile(2) OVER (?) < 2))
-                     ->  Sort
-                           Sort Key: empsalary.depname
-                           ->  WindowAgg
-                                 ->  Sort
-                                       Sort Key: ((''::text || (empsalary.depname)::text))
-                                       ->  Seq Scan on empsalary
-(14 rows)
+                                       QUERY PLAN                                        
+-----------------------------------------------------------------------------------------
+ WindowAgg
+   Filter: (((row_number() OVER (?)) <= 1) AND ((ntile(2) OVER (?)) < 2))
+   Run Condition: (count(empsalary.salary) OVER (?) <= 3)
+   ->  Sort
+         Sort Key: (((empsalary.depname)::text || ''::text))
+         ->  WindowAgg
+               Run Condition: ((row_number() OVER (?) <= 1) AND (ntile(2) OVER (?) < 2))
+               ->  Sort
+                     Sort Key: empsalary.depname
+                     ->  WindowAgg
+                           ->  Sort
+                                 Sort Key: ((''::text || (empsalary.depname)::text))
+                                 ->  Seq Scan on empsalary
+(13 rows)
 
 -- Ensure we correctly filter out all of the run conditions from each window
 SELECT * FROM
@@ -4294,16 +4292,15 @@ SELECT * FROM
           min(salary) OVER (PARTITION BY depname, empno order by enroll_date) depminsalary
    FROM empsalary) emp
 WHERE depname = 'sales';
-                              QUERY PLAN                              
-----------------------------------------------------------------------
- Subquery Scan on emp
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ WindowAgg
    ->  WindowAgg
-         ->  WindowAgg
-               ->  Sort
-                     Sort Key: empsalary.empno, empsalary.enroll_date
-                     ->  Seq Scan on empsalary
-                           Filter: ((depname)::text = 'sales'::text)
-(7 rows)
+         ->  Sort
+               Sort Key: empsalary.empno, empsalary.enroll_date
+               ->  Seq Scan on empsalary
+                     Filter: ((depname)::text = 'sales'::text)
+(6 rows)
 
 -- Ensure that the evaluation order of the WindowAggs results in the WindowAgg
 -- with the same sort order that's required by the ORDER BY is evaluated last.
@@ -5356,14 +5353,13 @@ AS $$
     WINDOW w AS (ORDER BY s ROWS BETWEEN CURRENT ROW AND GROUP_SIZE FOLLOWING)
 $$ LANGUAGE SQL STABLE;
 EXPLAIN (costs off) SELECT * FROM pg_temp.f(2);
-                      QUERY PLAN                      
-------------------------------------------------------
- Subquery Scan on f
-   ->  WindowAgg
-         ->  Sort
-               Sort Key: s.s
-               ->  Function Scan on generate_series s
-(5 rows)
+                   QUERY PLAN                   
+------------------------------------------------
+ WindowAgg
+   ->  Sort
+         Sort Key: s.s
+         ->  Function Scan on generate_series s
+(4 rows)
 
 SELECT * FROM pg_temp.f(2);
     f    

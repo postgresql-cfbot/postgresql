@@ -1853,7 +1853,7 @@ check_sql_fn_retval(List *queryTreeLists,
 										  makeTargetEntry(null_expr,
 														  list_length(upper_tlist) + 1,
 														  NULL,
-														  false));
+														  NOT_JUNK));
 					upper_tlist_nontrivial = true;
 				}
 			} while (attr->attisdropped);
@@ -1899,7 +1899,7 @@ check_sql_fn_retval(List *queryTreeLists,
 									  makeTargetEntry(null_expr,
 													  list_length(upper_tlist) + 1,
 													  NULL,
-													  false));
+													  NOT_JUNK));
 				upper_tlist_nontrivial = true;
 			}
 		}
@@ -2041,7 +2041,7 @@ coerce_fn_result_column(TargetEntry *src_tle,
 	}
 	new_tle = makeTargetEntry(new_tle_expr,
 							  list_length(*upper_tlist) + 1,
-							  src_tle->resname, false);
+							  src_tle->resname, NOT_JUNK);
 	*upper_tlist = lappend(*upper_tlist, new_tle);
 	return true;
 }

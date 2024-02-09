@@ -3221,7 +3221,7 @@ expandNSItemAttrs(ParseState *pstate, ParseNamespaceItem *nsitem,
 		te = makeTargetEntry((Expr *) varnode,
 							 (AttrNumber) pstate->p_next_resno++,
 							 label,
-							 false);
+							 NOT_JUNK);
 		te_list = lappend(te_list, te);
 
 		if (require_col_privs)

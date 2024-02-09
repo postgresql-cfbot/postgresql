@@ -42,7 +42,7 @@ extern Var *makeWholeRowVar(RangeTblEntry *rte,
 extern TargetEntry *makeTargetEntry(Expr *expr,
 									AttrNumber resno,
 									char *resname,
-									bool resjunk);
+									JunkKind junk_kind);
 
 extern TargetEntry *flatCopyTargetEntry(TargetEntry *src_tle);
 

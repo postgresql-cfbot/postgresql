@@ -1826,7 +1826,7 @@ convert_EXISTS_to_ANY(PlannerInfo *root, Query *subselect,
 						makeTargetEntry((Expr *) rightarg,
 										resno++,
 										NULL,
-										false));
+										NOT_JUNK));
 		testlist = lappend(testlist,
 						   make_opclause(opid, BOOLOID, false,
 										 (Expr *) leftarg, (Expr *) param,

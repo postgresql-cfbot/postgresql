@@ -215,7 +215,7 @@ EXPLAIN (COSTS OFF)
 SELECT count(*) FROM point_tbl p WHERE p.f1 ~= '(-5, -12)';
 SELECT count(*) FROM point_tbl p WHERE p.f1 ~= '(-5, -12)';
 
-EXPLAIN (COSTS OFF)
+EXPLAIN (VERBOSE, COSTS OFF)
 SELECT * FROM point_tbl ORDER BY f1 <-> '0,1';
 SELECT * FROM point_tbl ORDER BY f1 <-> '0,1';
 

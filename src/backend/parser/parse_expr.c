@@ -1480,7 +1480,7 @@ transformMultiAssignRef(ParseState *pstate, MultiAssignRef *maref)
 			 * about selecting a resno for it; transformUpdateStmt will do
 			 * that.
 			 */
-			tle = makeTargetEntry((Expr *) sublink, 0, NULL, true);
+			tle = makeTargetEntry((Expr *) sublink, 0, NULL, JUNK_OTHER);
 			pstate->p_multiassign_exprs = lappend(pstate->p_multiassign_exprs,
 												  tle);
 
@@ -1509,7 +1509,7 @@ transformMultiAssignRef(ParseState *pstate, MultiAssignRef *maref)
 			 * Temporarily append it to p_multiassign_exprs, so we can get it
 			 * back when we come back here for additional columns.
 			 */
-			tle = makeTargetEntry((Expr *) rexpr, 0, NULL, true);
+			tle = makeTargetEntry((Expr *) rexpr, 0, NULL, JUNK_OTHER);
 			pstate->p_multiassign_exprs = lappend(pstate->p_multiassign_exprs,
 												  tle);
 		}

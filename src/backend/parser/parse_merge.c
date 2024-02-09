@@ -358,7 +358,7 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 						tle = makeTargetEntry(expr,
 											  attr_num,
 											  col->name,
-											  false);
+											  NOT_JUNK);
 						action->targetList = lappend(action->targetList, tle);
 
 						perminfo->insertedCols =

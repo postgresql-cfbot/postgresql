@@ -1093,13 +1093,15 @@ convert_subquery_pathkeys(PlannerInfo *root, RelOptInfo *rel,
 			TargetEntry *tle;
 			Var		   *outer_var;
 
+			/* Is the TLE actually available to the outer query? */
 			if (sub_eclass->ec_sortref == 0)	/* can't happen */
 				elog(ERROR, "volatile EquivalenceClass has no sortref");
-			tle = get_sortgroupref_tle(sub_eclass->ec_sortref, subquery_tlist);
-			Assert(tle);
-			/* Is TLE actually available to the outer query? */
-			outer_var = find_var_for_subquery_tle(rel, tle);
-			if (outer_var)
+			tle = get_sortgroupref_tle_noerr(sub_eclass->ec_sortref, subquery_tlist);
+			if (tle)
+			{
+				outer_var = find_var_for_subquery_tle(rel, tle);
+				if (outer_var)
+					/* XXX: funny indentation just to avoid unnecessary churn in review; needs to be pgindented */
 			{
 				/* We can represent this sub_pathkey */
 				EquivalenceMember *sub_member;
@@ -1137,6 +1139,7 @@ convert_subquery_pathkeys(PlannerInfo *root, RelOptInfo *rel,
 											   sub_pathkey->pk_opfamily,
 											   sub_pathkey->pk_strategy,
 											   sub_pathkey->pk_nulls_first);
+			}
 			}
 		}
 		else

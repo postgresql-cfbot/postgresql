@@ -472,10 +472,10 @@ select grouping(ss.x)
 from int8_tbl i1
 cross join lateral (select (select i1.q1) as x) ss
 group by ss.x;
-                   QUERY PLAN                   
-------------------------------------------------
+                 QUERY PLAN                 
+--------------------------------------------
  GroupAggregate
-   Output: GROUPING((SubPlan 1)), ((SubPlan 2))
+   Output: GROUPING((SubPlan 1))
    Group Key: ((SubPlan 2))
    ->  Sort
          Output: ((SubPlan 2)), i1.q1
@@ -505,7 +505,7 @@ group by ss.x;
                  QUERY PLAN                 
 --------------------------------------------
  GroupAggregate
-   Output: (SubPlan 2), ((SubPlan 3))
+   Output: (SubPlan 2)
    Group Key: ((SubPlan 3))
    ->  Sort
          Output: ((SubPlan 3)), i1.q1
@@ -1204,17 +1204,18 @@ explain (costs off)
          count(*), sum(v)
     from gstest4 group by grouping sets ((v,unhashable_col),(v,unsortable_col))
    order by 3,5;
-                            QUERY PLAN                            
-------------------------------------------------------------------
- Sort
-   Sort Key: (GROUPING(unhashable_col, unsortable_col)), (sum(v))
-   ->  MixedAggregate
-         Hash Key: v, unsortable_col
-         Group Key: v, unhashable_col
-         ->  Sort
-               Sort Key: v, unhashable_col
-               ->  Seq Scan on gstest4
-(8 rows)
+                               QUERY PLAN                               
+------------------------------------------------------------------------
+ Result
+   ->  Sort
+         Sort Key: (GROUPING(unhashable_col, unsortable_col)), (sum(v))
+         ->  MixedAggregate
+               Hash Key: v, unsortable_col
+               Group Key: v, unhashable_col
+               ->  Sort
+                     Sort Key: v, unhashable_col
+                     ->  Seq Scan on gstest4
+(9 rows)
 
 -- empty input: first is 0 rows, second 1, third 3 etc.
 select a, b, sum(v), count(*) from gstest_empty group by grouping sets ((a,b),a);
@@ -1376,16 +1377,17 @@ select a, b, grouping(a,b), sum(v), count(*), max(v)
 explain (costs off)
   select a, b, grouping(a,b), sum(v), count(*), max(v)
     from gstest1 group by grouping sets ((a,b),(a+1,b+1),(a+2,b+2)) order by 3,6;
-                                        QUERY PLAN                                         
--------------------------------------------------------------------------------------------
- Sort
-   Sort Key: (GROUPING("*VALUES*".column1, "*VALUES*".column2)), (max("*VALUES*".column3))
-   ->  HashAggregate
-         Hash Key: "*VALUES*".column1, "*VALUES*".column2
-         Hash Key: ("*VALUES*".column1 + 1), ("*VALUES*".column2 + 1)
-         Hash Key: ("*VALUES*".column1 + 2), ("*VALUES*".column2 + 2)
-         ->  Values Scan on "*VALUES*"
-(7 rows)
+                                           QUERY PLAN                                            
+-------------------------------------------------------------------------------------------------
+ Result
+   ->  Sort
+         Sort Key: (GROUPING("*VALUES*".column1, "*VALUES*".column2)), (max("*VALUES*".column3))
+         ->  HashAggregate
+               Hash Key: "*VALUES*".column1, "*VALUES*".column2
+               Hash Key: ("*VALUES*".column1 + 1), ("*VALUES*".column2 + 1)
+               Hash Key: ("*VALUES*".column1 + 2), ("*VALUES*".column2 + 2)
+               ->  Values Scan on "*VALUES*"
+(8 rows)
 
 select a, b, sum(c), sum(sum(c)) over (order by a,b) as rsum
   from gstest2 group by cube (a,b) order by rsum, a, b;

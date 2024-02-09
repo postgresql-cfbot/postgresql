@@ -371,7 +371,7 @@ build_minmax_path(PlannerInfo *root, MinMaxAggInfo *mminfo,
 	tle = makeTargetEntry(copyObject(mminfo->target),
 						  (AttrNumber) 1,
 						  pstrdup("agg_target"),
-						  false);
+						  NOT_JUNK);
 	tlist = list_make1(tle);
 	subroot->processed_tlist = parse->targetList = tlist;
 
@@ -419,6 +419,8 @@ build_minmax_path(PlannerInfo *root, MinMaxAggInfo *mminfo,
 	subroot->limit_tuples = 1.0;
 
 	final_rel = query_planner(subroot, minmax_qp_callback, NULL);
+
+	subroot->final_tlist = subroot->processed_tlist;
 
 	/*
 	 * Since we didn't go through subquery_planner() to handle the subquery,

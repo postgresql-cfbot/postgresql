@@ -281,7 +281,7 @@ BitmapHeapNext(BitmapHeapScanState *node)
 		/*
 		 * Attempt to fetch tuple from AM.
 		 */
-		if (!table_scan_bitmap_next_tuple(scan, tbmres, slot))
+		if (!table_scan_bitmap_next_tuple(scan, slot))
 		{
 			/* nothing more to look at on this page */
 			node->tbmres = tbmres = NULL;

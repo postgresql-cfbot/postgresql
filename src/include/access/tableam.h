@@ -787,10 +787,7 @@ typedef struct TableAmRoutine
 	 *
 	 * This will typically read and pin the target block, and do the necessary
 	 * work to allow scan_bitmap_next_tuple() to return tuples (e.g. it might
-	 * make sense to perform tuple visibility checks at this time). For some
-	 * AMs it will make more sense to do all the work referencing `tbmres`
-	 * contents here, for others it might be better to defer more work to
-	 * scan_bitmap_next_tuple.
+	 * make sense to perform tuple visibility checks at this time).
 	 *
 	 * If `tbmres->blockno` is -1, this is a lossy scan and all visible tuples
 	 * on the page have to be returned, otherwise the tuples at offsets in
@@ -822,15 +819,10 @@ typedef struct TableAmRoutine
 	 * Fetch the next tuple of a bitmap table scan into `slot` and return true
 	 * if a visible tuple was found, false otherwise.
 	 *
-	 * For some AMs it will make more sense to do all the work referencing
-	 * `tbmres` contents in scan_bitmap_next_block, for others it might be
-	 * better to defer more work to this callback.
-	 *
 	 * Optional callback, but either both scan_bitmap_next_block and
 	 * scan_bitmap_next_tuple need to exist, or neither.
 	 */
 	bool		(*scan_bitmap_next_tuple) (TableScanDesc scan,
-										   struct TBMIterateResult *tbmres,
 										   TupleTableSlot *slot);
 
 	/*
@@ -1996,7 +1988,6 @@ table_scan_bitmap_next_block(TableScanDesc scan,
  */
 static inline bool
 table_scan_bitmap_next_tuple(TableScanDesc scan,
-							 struct TBMIterateResult *tbmres,
 							 TupleTableSlot *slot)
 {
 	/*
@@ -2008,7 +1999,6 @@ table_scan_bitmap_next_tuple(TableScanDesc scan,
 		elog(ERROR, "unexpected table_scan_bitmap_next_tuple call during logical decoding");
 
 	return scan->rs_rd->rd_tableam->scan_bitmap_next_tuple(scan,
-														   tbmres,
 														   slot);
 }
 

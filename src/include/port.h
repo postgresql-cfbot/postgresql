@@ -438,6 +438,9 @@ extern bool pg_get_user_name(uid_t user_id, char *buffer, size_t buflen);
 extern bool pg_get_user_home_dir(uid_t user_id, char *buffer, size_t buflen);
 #endif
 
+/*
+ * NB: Callers should use qsort() instead of calling pg_qsort() directly.
+ */
 extern void pg_qsort(void *base, size_t nel, size_t elsize,
 					 int (*cmp) (const void *, const void *));
 extern int	pg_qsort_strcmp(const void *a, const void *b);

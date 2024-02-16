@@ -4,6 +4,9 @@
 
 #include "c.h"
 
+/*
+ * NB: Callers should use qsort() instead of calling pg_qsort() directly.
+ */
 #define ST_SORT pg_qsort
 #define ST_ELEMENT_TYPE_VOID
 #define ST_COMPARE_RUNTIME_POINTER

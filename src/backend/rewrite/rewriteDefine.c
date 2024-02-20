@@ -350,7 +350,7 @@ DefineQueryRewrite(const char *rulename,
 		/*
 		 * ... it cannot contain data-modifying WITH ...
 		 */
-		if (query->hasModifyingCTE)
+		if (QueryHasModifyingCTE(query))
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("rules on SELECT must not contain data-modifying statements in WITH")));
@@ -685,7 +685,7 @@ setRuleCheckAsUser_Query(Query *qry, Oid userid)
 	}
 
 	/* If there are sublinks, search for them and process their RTEs */
-	if (qry->hasSubLinks)
+	if (QueryHasSubLinks(qry))
 		query_tree_walker(qry, setRuleCheckAsUser_walker, (void *) &userid,
 						  QTW_IGNORE_RC_SUBQUERIES);
 }

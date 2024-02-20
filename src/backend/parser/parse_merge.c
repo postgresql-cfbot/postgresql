@@ -108,7 +108,7 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 	Assert(pstate->p_ctenamespace == NIL);
 
 	qry->commandType = CMD_MERGE;
-	qry->hasRecursive = false;
+	QueryClearFlag(qry, HAS_RECURSIVE);
 
 	/* process the WITH clause independently of all else */
 	if (stmt->withClause)
@@ -119,7 +119,7 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 					 errmsg("WITH RECURSIVE is not supported for MERGE statement")));
 
 		qry->cteList = transformWithClause(pstate, stmt->withClause);
-		qry->hasModifyingCTE = pstate->p_hasModifyingCTE;
+		QueryCondSetFlag(qry, pstate->p_hasModifyingCTE, HAS_MODIFYING_CTE);
 	}
 
 	/*
@@ -259,7 +259,7 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 
 		/* Use an outer join if any INSERT actions exist in the command. */
 		if (action->commandType == CMD_INSERT)
-			qry->mergeUseOuterJoin = true;
+			QuerySetFlag(qry, MERGE_USE_OUTERJOIN);
 
 		/*
 		 * Set namespace for the specific action. This must be done before
@@ -393,8 +393,8 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 	/* RETURNING could potentially be added in the future, but not in SQL std */
 	qry->returningList = NULL;
 
-	qry->hasTargetSRFs = false;
-	qry->hasSubLinks = pstate->p_hasSubLinks;
+	QueryClearFlag(qry, HAS_TARGET_SRFS);
+	QueryCondSetFlag(qry, pstate->p_hasSubLinks, HAS_SUB_LINKS);
 
 	assign_query_collations(pstate, qry);
 

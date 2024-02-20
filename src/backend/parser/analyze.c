@@ -420,7 +420,7 @@ transformStmt(ParseState *pstate, Node *parseTree)
 
 	/* Mark as original query until we learn differently */
 	result->querySource = QSRC_ORIGINAL;
-	result->canSetTag = true;
+	QuerySetFlag(result, CAN_SET_TAG);
 
 	return result;
 }
@@ -519,9 +519,9 @@ transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt)
 	/* process the WITH clause independently of all else */
 	if (stmt->withClause)
 	{
-		qry->hasRecursive = stmt->withClause->recursive;
+		QueryCondSetFlag(qry, stmt->withClause->recursive, HAS_RECURSIVE);
 		qry->cteList = transformWithClause(pstate, stmt->withClause);
-		qry->hasModifyingCTE = pstate->p_hasModifyingCTE;
+		QueryCondSetFlag(qry, pstate->p_hasModifyingCTE, HAS_MODIFYING_CTE);
 	}
 
 	/* set up range table with just the result rel */
@@ -560,10 +560,10 @@ transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt)
 	qry->rteperminfos = pstate->p_rteperminfos;
 	qry->jointree = makeFromExpr(pstate->p_joinlist, qual);
 
-	qry->hasSubLinks = pstate->p_hasSubLinks;
-	qry->hasWindowFuncs = pstate->p_hasWindowFuncs;
-	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
-	qry->hasAggs = pstate->p_hasAggs;
+	QueryCondSetFlag(qry, pstate->p_hasSubLinks, HAS_SUB_LINKS);
+	QueryCondSetFlag(qry, pstate->p_hasWindowFuncs, HAS_WINDOW_FUNCS);
+	QueryCondSetFlag(qry, pstate->p_hasTargetSRFs, HAS_TARGET_SRFS);
+	QueryCondSetFlag(qry, pstate->p_hasAggs, HAS_AGGS);
 
 	assign_query_collations(pstate, qry);
 
@@ -607,9 +607,9 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 	/* process the WITH clause independently of all else */
 	if (stmt->withClause)
 	{
-		qry->hasRecursive = stmt->withClause->recursive;
+		QueryCondSetFlag(qry, stmt->withClause->recursive, HAS_RECURSIVE);
 		qry->cteList = transformWithClause(pstate, stmt->withClause);
-		qry->hasModifyingCTE = pstate->p_hasModifyingCTE;
+		QueryCondSetFlag(qry, pstate->p_hasModifyingCTE, HAS_MODIFYING_CTE);
 	}
 
 	qry->override = stmt->override;
@@ -987,8 +987,8 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 	qry->rteperminfos = pstate->p_rteperminfos;
 	qry->jointree = makeFromExpr(pstate->p_joinlist, NULL);
 
-	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
-	qry->hasSubLinks = pstate->p_hasSubLinks;
+	QueryCondSetFlag(qry, pstate->p_hasTargetSRFs, HAS_TARGET_SRFS);
+	QueryCondSetFlag(qry, pstate->p_hasSubLinks, HAS_SUB_LINKS);
 
 	assign_query_collations(pstate, qry);
 
@@ -1335,9 +1335,9 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt)
 	/* process the WITH clause independently of all else */
 	if (stmt->withClause)
 	{
-		qry->hasRecursive = stmt->withClause->recursive;
+		QueryCondSetFlag(qry, stmt->withClause->recursive, HAS_RECURSIVE);
 		qry->cteList = transformWithClause(pstate, stmt->withClause);
-		qry->hasModifyingCTE = pstate->p_hasModifyingCTE;
+		QueryCondSetFlag(qry, pstate->p_hasModifyingCTE, HAS_MODIFYING_CTE);
 	}
 
 	/* Complain if we get called from someplace where INTO is not allowed */
@@ -1396,7 +1396,7 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt)
 	if (stmt->distinctClause == NIL)
 	{
 		qry->distinctClause = NIL;
-		qry->hasDistinctOn = false;
+		QueryClearFlag(qry, HAS_DISTINCT_ON);
 	}
 	else if (linitial(stmt->distinctClause) == NULL)
 	{
@@ -1405,7 +1405,7 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt)
 													  &qry->targetList,
 													  qry->sortClause,
 													  false);
-		qry->hasDistinctOn = false;
+		QueryClearFlag(qry, HAS_DISTINCT_ON);
 	}
 	else
 	{
@@ -1414,7 +1414,7 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt)
 														stmt->distinctClause,
 														&qry->targetList,
 														qry->sortClause);
-		qry->hasDistinctOn = true;
+		QuerySetFlag(qry, HAS_DISTINCT_ON);
 	}
 
 	/* transform LIMIT */
@@ -1439,10 +1439,11 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt)
 	qry->rteperminfos = pstate->p_rteperminfos;
 	qry->jointree = makeFromExpr(pstate->p_joinlist, qual);
 
-	qry->hasSubLinks = pstate->p_hasSubLinks;
-	qry->hasWindowFuncs = pstate->p_hasWindowFuncs;
-	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
-	qry->hasAggs = pstate->p_hasAggs;
+	QueryCondSetFlag(qry, pstate->p_hasSubLinks, HAS_SUB_LINKS);
+	QueryCondSetFlag(qry, pstate->p_hasWindowFuncs, HAS_WINDOW_FUNCS);
+	QueryCondSetFlag(qry, pstate->p_hasTargetSRFs, HAS_TARGET_SRFS);
+	QueryCondSetFlag(qry, pstate->p_hasAggs, HAS_AGGS);
+
 
 	foreach(l, stmt->lockingClause)
 	{
@@ -1498,9 +1499,9 @@ transformValuesClause(ParseState *pstate, SelectStmt *stmt)
 	/* process the WITH clause independently of all else */
 	if (stmt->withClause)
 	{
-		qry->hasRecursive = stmt->withClause->recursive;
+		QueryCondSetFlag(qry, stmt->withClause->recursive, HAS_RECURSIVE);
 		qry->cteList = transformWithClause(pstate, stmt->withClause);
-		qry->hasModifyingCTE = pstate->p_hasModifyingCTE;
+		QueryCondSetFlag(qry, pstate->p_hasModifyingCTE, HAS_MODIFYING_CTE);
 	}
 
 	/*
@@ -1668,7 +1669,7 @@ transformValuesClause(ParseState *pstate, SelectStmt *stmt)
 	qry->rteperminfos = pstate->p_rteperminfos;
 	qry->jointree = makeFromExpr(pstate->p_joinlist, NULL);
 
-	qry->hasSubLinks = pstate->p_hasSubLinks;
+	QueryCondSetFlag(qry, pstate->p_hasSubLinks, HAS_SUB_LINKS);
 
 	assign_query_collations(pstate, qry);
 
@@ -1765,9 +1766,9 @@ transformSetOperationStmt(ParseState *pstate, SelectStmt *stmt)
 	/* Process the WITH clause independently of all else */
 	if (withClause)
 	{
-		qry->hasRecursive = withClause->recursive;
+		QueryCondSetFlag(qry, withClause->recursive, HAS_RECURSIVE);
 		qry->cteList = transformWithClause(pstate, withClause);
-		qry->hasModifyingCTE = pstate->p_hasModifyingCTE;
+		QueryCondSetFlag(qry, pstate->p_hasModifyingCTE, HAS_MODIFYING_CTE);
 	}
 
 	/*
@@ -1915,10 +1916,10 @@ transformSetOperationStmt(ParseState *pstate, SelectStmt *stmt)
 	qry->rteperminfos = pstate->p_rteperminfos;
 	qry->jointree = makeFromExpr(pstate->p_joinlist, NULL);
 
-	qry->hasSubLinks = pstate->p_hasSubLinks;
-	qry->hasWindowFuncs = pstate->p_hasWindowFuncs;
-	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
-	qry->hasAggs = pstate->p_hasAggs;
+	QueryCondSetFlag(qry, pstate->p_hasSubLinks, HAS_SUB_LINKS);
+	QueryCondSetFlag(qry, pstate->p_hasWindowFuncs, HAS_WINDOW_FUNCS);
+	QueryCondSetFlag(qry, pstate->p_hasTargetSRFs, HAS_TARGET_SRFS);
+	QueryCondSetFlag(qry, pstate->p_hasAggs, HAS_AGGS);
 
 	foreach(l, lockingClause)
 	{
@@ -2379,7 +2380,7 @@ transformReturnStmt(ParseState *pstate, ReturnStmt *stmt)
 	Query	   *qry = makeNode(Query);
 
 	qry->commandType = CMD_SELECT;
-	qry->isReturn = true;
+	QuerySetFlag(qry, IS_RETURN);
 
 	qry->targetList = list_make1(makeTargetEntry((Expr *) transformExpr(pstate, stmt->returnval, EXPR_KIND_SELECT_TARGET),
 												 1, NULL, false));
@@ -2389,10 +2390,10 @@ transformReturnStmt(ParseState *pstate, ReturnStmt *stmt)
 	qry->rtable = pstate->p_rtable;
 	qry->rteperminfos = pstate->p_rteperminfos;
 	qry->jointree = makeFromExpr(pstate->p_joinlist, NULL);
-	qry->hasSubLinks = pstate->p_hasSubLinks;
-	qry->hasWindowFuncs = pstate->p_hasWindowFuncs;
-	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
-	qry->hasAggs = pstate->p_hasAggs;
+	QueryCondSetFlag(qry, pstate->p_hasSubLinks, HAS_SUB_LINKS);
+	QueryCondSetFlag(qry, pstate->p_hasWindowFuncs, HAS_WINDOW_FUNCS);
+	QueryCondSetFlag(qry, pstate->p_hasTargetSRFs, HAS_TARGET_SRFS);
+	QueryCondSetFlag(qry, pstate->p_hasAggs, HAS_AGGS);
 
 	assign_query_collations(pstate, qry);
 
@@ -2417,9 +2418,9 @@ transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt)
 	/* process the WITH clause independently of all else */
 	if (stmt->withClause)
 	{
-		qry->hasRecursive = stmt->withClause->recursive;
+		QueryCondSetFlag(qry, stmt->withClause->recursive, HAS_RECURSIVE);
 		qry->cteList = transformWithClause(pstate, stmt->withClause);
-		qry->hasModifyingCTE = pstate->p_hasModifyingCTE;
+		QueryCondSetFlag(qry, pstate->p_hasModifyingCTE, HAS_MODIFYING_CTE);
 	}
 
 	qry->resultRelation = setTargetTable(pstate, stmt->relation,
@@ -2457,8 +2458,9 @@ transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt)
 	qry->rteperminfos = pstate->p_rteperminfos;
 	qry->jointree = makeFromExpr(pstate->p_joinlist, qual);
 
-	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
-	qry->hasSubLinks = pstate->p_hasSubLinks;
+	QueryCondSetFlag(qry, pstate->p_hasTargetSRFs, HAS_TARGET_SRFS);
+	QueryCondSetFlag(qry, pstate->p_hasSubLinks, HAS_SUB_LINKS);
+
 
 	assign_query_collations(pstate, qry);
 
@@ -2781,7 +2783,7 @@ transformPLAssignStmt(ParseState *pstate, PLAssignStmt *stmt)
 	if (sstmt->distinctClause == NIL)
 	{
 		qry->distinctClause = NIL;
-		qry->hasDistinctOn = false;
+		QueryClearFlag(qry, HAS_DISTINCT_ON);
 	}
 	else if (linitial(sstmt->distinctClause) == NULL)
 	{
@@ -2790,7 +2792,7 @@ transformPLAssignStmt(ParseState *pstate, PLAssignStmt *stmt)
 													  &qry->targetList,
 													  qry->sortClause,
 													  false);
-		qry->hasDistinctOn = false;
+		QueryClearFlag(qry, HAS_DISTINCT_ON);
 	}
 	else
 	{
@@ -2799,7 +2801,7 @@ transformPLAssignStmt(ParseState *pstate, PLAssignStmt *stmt)
 														sstmt->distinctClause,
 														&qry->targetList,
 														qry->sortClause);
-		qry->hasDistinctOn = true;
+		QuerySetFlag(qry, HAS_DISTINCT_ON);
 	}
 
 	/* transform LIMIT */
@@ -2820,10 +2822,10 @@ transformPLAssignStmt(ParseState *pstate, PLAssignStmt *stmt)
 	qry->rteperminfos = pstate->p_rteperminfos;
 	qry->jointree = makeFromExpr(pstate->p_joinlist, qual);
 
-	qry->hasSubLinks = pstate->p_hasSubLinks;
-	qry->hasWindowFuncs = pstate->p_hasWindowFuncs;
-	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
-	qry->hasAggs = pstate->p_hasAggs;
+	QueryCondSetFlag(qry, pstate->p_hasSubLinks, HAS_SUB_LINKS);
+	QueryCondSetFlag(qry, pstate->p_hasWindowFuncs, HAS_WINDOW_FUNCS);
+	QueryCondSetFlag(qry, pstate->p_hasTargetSRFs, HAS_TARGET_SRFS);
+	QueryCondSetFlag(qry, pstate->p_hasAggs, HAS_AGGS);
 
 	foreach(l, sstmt->lockingClause)
 	{
@@ -2887,7 +2889,7 @@ transformDeclareCursorStmt(ParseState *pstate, DeclareCursorStmt *stmt)
 	 * allowed, but the semantics of when the updates occur might be
 	 * surprising.)
 	 */
-	if (query->hasModifyingCTE)
+	if (QueryHasModifyingCTE(query))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("DECLARE CURSOR must not contain data-modifying statements in WITH")));
@@ -3014,7 +3016,7 @@ transformCreateTableAsStmt(ParseState *pstate, CreateTableAsStmt *stmt)
 		 * materialized view. It's not sufficiently clear what the user would
 		 * want to happen if the MV is refreshed or incrementally maintained.
 		 */
-		if (query->hasModifyingCTE)
+		if (QueryHasModifyingCTE(query))
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("materialized views must not use data-modifying statements in WITH")));
@@ -3254,21 +3256,21 @@ CheckSelectLocking(Query *qry, LockClauseStrength strength)
 		  translator: %s is a SQL row locking clause such as FOR UPDATE */
 				 errmsg("%s is not allowed with HAVING clause",
 						LCS_asString(strength))));
-	if (qry->hasAggs)
+	if (QueryHasAggs(qry))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 		/*------
 		  translator: %s is a SQL row locking clause such as FOR UPDATE */
 				 errmsg("%s is not allowed with aggregate functions",
 						LCS_asString(strength))));
-	if (qry->hasWindowFuncs)
+	if (QueryHasWindowFuncs(qry))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 		/*------
 		  translator: %s is a SQL row locking clause such as FOR UPDATE */
 				 errmsg("%s is not allowed with window functions",
 						LCS_asString(strength))));
-	if (qry->hasTargetSRFs)
+	if (QueryHasTargetSRFs(qry))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 		/*------
@@ -3523,7 +3525,7 @@ applyLockingClause(Query *qry, Index rtindex,
 
 	/* If it's an explicit clause, make sure hasForUpdate gets set */
 	if (!pushedDown)
-		qry->hasForUpdate = true;
+		QuerySetFlag(qry, HAS_FOR_UPDATE);
 
 	/* Check for pre-existing entry for same rtindex */
 	if ((rc = get_parse_rowmark(qry, rtindex)) != NULL)

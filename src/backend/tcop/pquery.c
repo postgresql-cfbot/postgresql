@@ -225,11 +225,11 @@ ChoosePortalStrategy(List *stmts)
 		{
 			Query	   *query = (Query *) stmt;
 
-			if (query->canSetTag)
+			if (QueryCanSetTag(query))
 			{
 				if (query->commandType == CMD_SELECT)
 				{
-					if (query->hasModifyingCTE)
+					if (QueryHasModifyingCTE(query))
 						return PORTAL_ONE_MOD_WITH;
 					else
 						return PORTAL_ONE_SELECT;
@@ -283,7 +283,7 @@ ChoosePortalStrategy(List *stmts)
 		{
 			Query	   *query = (Query *) stmt;
 
-			if (query->canSetTag)
+			if (QueryCanSetTag(query))
 			{
 				if (++nSetTag > 1)
 					return PORTAL_MULTI_QUERY;	/* no need to look further */

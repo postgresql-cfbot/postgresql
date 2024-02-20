@@ -129,9 +129,6 @@ typedef struct Query
 	 */
 	uint64		queryId pg_node_attr(equal_ignore, query_jumble_ignore, read_write_ignore, read_as(0));
 
-	/* do I set the command result tag? */
-	bool		canSetTag pg_node_attr(query_jumble_ignore);
-
 	Node	   *utilityStmt;	/* non-null if commandType == CMD_UTILITY */
 
 	/*
@@ -141,26 +138,7 @@ typedef struct Query
 	 */
 	int			resultRelation pg_node_attr(query_jumble_ignore);
 
-	/* has aggregates in tlist or havingQual */
-	bool		hasAggs pg_node_attr(query_jumble_ignore);
-	/* has window functions in tlist */
-	bool		hasWindowFuncs pg_node_attr(query_jumble_ignore);
-	/* has set-returning functions in tlist */
-	bool		hasTargetSRFs pg_node_attr(query_jumble_ignore);
-	/* has subquery SubLink */
-	bool		hasSubLinks pg_node_attr(query_jumble_ignore);
-	/* distinctClause is from DISTINCT ON */
-	bool		hasDistinctOn pg_node_attr(query_jumble_ignore);
-	/* WITH RECURSIVE was specified */
-	bool		hasRecursive pg_node_attr(query_jumble_ignore);
-	/* has INSERT/UPDATE/DELETE in WITH */
-	bool		hasModifyingCTE pg_node_attr(query_jumble_ignore);
-	/* FOR [KEY] UPDATE/SHARE was specified */
-	bool		hasForUpdate pg_node_attr(query_jumble_ignore);
-	/* rewriter has applied some RLS policy */
-	bool		hasRowSecurity pg_node_attr(query_jumble_ignore);
-	/* is a RETURN statement */
-	bool		isReturn pg_node_attr(query_jumble_ignore);
+	int			flags pg_node_attr(query_jumble_ignore);
 
 	List	   *cteList;		/* WITH list (of CommonTableExpr's) */
 
@@ -175,8 +153,6 @@ typedef struct Query
 								 * also USING clause for MERGE */
 
 	List	   *mergeActionList;	/* list of actions for MERGE (only) */
-	/* whether to use outer join */
-	bool		mergeUseOuterJoin pg_node_attr(query_jumble_ignore);
 
 	List	   *targetList;		/* target list (of TargetEntry) */
 
@@ -229,6 +205,60 @@ typedef struct Query
 	/* length in bytes; 0 means "rest of string" */
 	int			stmt_len pg_node_attr(query_jumble_ignore);
 } Query;
+
+/* do I set the command result tag? */
+#define QUERY_CAN_SET_TAG				(1)
+/* has aggregates in tlist or havingQual */
+#define QUERY_HAS_AGGS					(1 << 1)
+/* has window functions in tlist */
+#define QUERY_HAS_WINDOW_FUNCS			(1 << 2)
+/* has set-returning functions in tlist */
+#define QUERY_HAS_TARGET_SRFS			(1 << 3)
+/* has subquery SubLink */
+#define QUERY_HAS_SUB_LINKS				(1 << 4)
+/* distinctClause is from DISTINCT ON */
+#define QUERY_HAS_DISTINCT_ON			(1 << 5)
+/* WITH RECURSIVE was specified */
+#define QUERY_HAS_RECURSIVE				(1 << 6)
+/* has INSERT/UPDATE/DELETE in WITH */
+#define QUERY_HAS_MODIFYING_CTE			(1 << 7)
+/* FOR [KEY] UPDATE/SHARE was specified */
+#define QUERY_HAS_FOR_UPDATE			(1 << 8)
+/* rewriter has applied some RLS policy */
+#define QUERY_HAS_ROW_SECURITY			(1 << 9)
+/* is a RETURN statement */
+#define QUERY_IS_RETURN					(1 << 10)
+/* whether to use outer join */
+#define QUERY_MERGE_USE_OUTERJOIN		(1 << 11)
+
+#define	QueryCanSetTag(query)			((query)->flags & QUERY_CAN_SET_TAG)
+#define	QueryHasAggs(query)				((query)->flags & QUERY_HAS_AGGS)
+#define	QueryHasWindowFuncs(query)		((query)->flags & QUERY_HAS_WINDOW_FUNCS)
+#define	QueryHasTargetSRFs(query)		((query)->flags & QUERY_HAS_TARGET_SRFS)
+#define	QueryHasSubLinks(query)			((query)->flags & QUERY_HAS_SUB_LINKS)
+#define	QueryHasDistinctOn(query)		((query)->flags & QUERY_HAS_DISTINCT_ON)
+#define	QueryHasRecursive(query)		((query)->flags & QUERY_HAS_RECURSIVE)
+#define	QueryHasModifyingCTE(query)		((query)->flags & QUERY_HAS_MODIFYING_CTE)
+#define	QueryHasForUpdate(query)		((query)->flags & QUERY_HAS_FOR_UPDATE)
+#define	QueryHasRowSecurity(query)		((query)->flags & QUERY_HAS_ROW_SECURITY)
+#define	QueryIsReturn(query)			((query)->flags & QUERY_IS_RETURN)
+#define	QueryMergeUseOuterJoin(query)	((query)->flags & QUERY_MERGE_USE_OUTERJOIN)
+
+#define	QueryFlagSet(flags, fname)		((flags) |= (QUERY_##fname))
+#define	QuerySetFlag(query, fname)		QueryFlagSet((query)->flags, fname)
+
+#define	QueryFlagIsSet(flags, fname)	((flags) & (QUERY_##fname))
+
+#define	QueryFlagClear(flags, fname)	((flags) &= ~(QUERY_##fname))
+#define	QueryClearFlag(query, fname)	QueryFlagClear((query)->flags, fname)
+
+#define	QueryCondSetFlag(query, cond, pname) \
+	{ \
+		if (cond) \
+			QuerySetFlag(query, pname); \
+		else \
+			QueryClearFlag(query, pname); \
+	}
 
 
 /****************************************************************************

@@ -3600,7 +3600,7 @@ extract_query_dependencies_walker(Node *node, PlannerInfo *context)
 		}
 
 		/* Remember if any Query has RLS quals applied by rewriter */
-		if (query->hasRowSecurity)
+		if (QueryHasRowSecurity(query))
 			context->glob->dependsOnRole = true;
 
 		/* Collect relation OIDs in this Query's rtable */

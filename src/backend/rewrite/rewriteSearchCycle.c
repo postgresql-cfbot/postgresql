@@ -278,7 +278,7 @@ rewriteSearchAndCycle(CommonTableExpr *cte)
 	 */
 	newq1 = makeNode(Query);
 	newq1->commandType = CMD_SELECT;
-	newq1->canSetTag = true;
+	QuerySetFlag(newq1, CAN_SET_TAG);
 
 	newrte = makeNode(RangeTblEntry);
 	newrte->rtekind = RTE_SUBQUERY;
@@ -365,7 +365,7 @@ rewriteSearchAndCycle(CommonTableExpr *cte)
 	 */
 	newq2 = makeNode(Query);
 	newq2->commandType = CMD_SELECT;
-	newq2->canSetTag = true;
+	QuerySetFlag(newq2, CAN_SET_TAG);
 
 	newrte = makeNode(RangeTblEntry);
 	newrte->rtekind = RTE_SUBQUERY;

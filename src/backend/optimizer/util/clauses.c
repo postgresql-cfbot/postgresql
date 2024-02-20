@@ -4672,10 +4672,10 @@ inline_function(Oid funcid, Oid result_type, Oid result_collid,
 	 */
 	if (!IsA(querytree, Query) ||
 		querytree->commandType != CMD_SELECT ||
-		querytree->hasAggs ||
-		querytree->hasWindowFuncs ||
-		querytree->hasTargetSRFs ||
-		querytree->hasSubLinks ||
+		QueryHasAggs(querytree) ||
+		QueryHasWindowFuncs(querytree) ||
+		QueryHasTargetSRFs(querytree) ||
+		QueryHasSubLinks(querytree) ||
 		querytree->cteList ||
 		querytree->rtable ||
 		querytree->jointree->fromlist ||
@@ -5298,7 +5298,7 @@ inline_set_returning_function(PlannerInfo *root, RangeTblEntry *rte)
 	 * We must also notice if the inserted query adds a dependency on the
 	 * calling role due to RLS quals.
 	 */
-	if (querytree->hasRowSecurity)
+	if (QueryHasRowSecurity(querytree))
 		root->glob->dependsOnRole = true;
 
 	return querytree;

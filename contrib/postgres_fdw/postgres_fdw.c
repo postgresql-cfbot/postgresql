@@ -3341,7 +3341,7 @@ estimate_path_cost_size(PlannerInfo *root,
 
 			/* Collect statistics about aggregates for estimating costs. */
 			MemSet(&aggcosts, 0, sizeof(AggClauseCosts));
-			if (root->parse->hasAggs)
+			if (QueryHasAggs(root->parse))
 			{
 				get_agg_clause_costs(root, AGGSPLIT_SIMPLE, &aggcosts);
 			}
@@ -6762,7 +6762,7 @@ add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	Cost		total_cost;
 
 	/* Nothing to be done, if there is no grouping or aggregation required. */
-	if (!parse->groupClause && !parse->groupingSets && !parse->hasAggs &&
+	if (!parse->groupClause && !parse->groupingSets && !QueryHasAggs(parse) &&
 		!root->hasHavingQual)
 		return;
 
@@ -6859,7 +6859,7 @@ add_foreign_ordered_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	Assert(parse->sortClause);
 
 	/* We don't support cases where there are any SRFs in the targetlist */
-	if (parse->hasTargetSRFs)
+	if (QueryHasTargetSRFs(parse))
 		return;
 
 	/* Save the input_rel as outerrel in fpinfo */
@@ -7007,7 +7007,7 @@ add_foreign_final_paths(PlannerInfo *root, RelOptInfo *input_rel,
 		return;
 
 	/* We don't support cases where there are any SRFs in the targetlist */
-	if (parse->hasTargetSRFs)
+	if (QueryHasTargetSRFs(parse))
 		return;
 
 	/* Save the input_rel as outerrel in fpinfo */

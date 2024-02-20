@@ -346,7 +346,7 @@ analyzeCTE(ParseState *pstate, CommonTableExpr *cte)
 	 * matters for data-modifying statements, for which the flag will be
 	 * propagated to the ModifyTable plan node.)
 	 */
-	query->canSetTag = false;
+	QueryClearFlag(query, CAN_SET_TAG);
 
 	if (!cte->cterecursive)
 	{

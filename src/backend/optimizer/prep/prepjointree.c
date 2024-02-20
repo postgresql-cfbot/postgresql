@@ -49,7 +49,7 @@ typedef struct pullup_replace_vars_context
 	RangeTblEntry *target_rte;	/* RTE of subquery */
 	Relids		relids;			/* relids within subquery, as numbered after
 								 * pullup (set only if target_rte->lateral) */
-	bool	   *outer_hasSubLinks;	/* -> outer query's hasSubLinks */
+	int		   *outer_flags;	/* -> outer query's flags */
 	int			varno;			/* varno of subquery */
 	bool		wrap_non_vars;	/* do we need all non-Var outputs to be PHVs? */
 	Node	  **rv_cache;		/* cache for results with PHVs */
@@ -168,7 +168,7 @@ transform_MERGE_to_join(Query *parse)
 	 * outer join so that we process all unmatched tuples from the source
 	 * relation.  If none exist, we can use an inner join.
 	 */
-	if (parse->mergeUseOuterJoin)
+	if (QueryMergeUseOuterJoin(parse))
 		jointype = JOIN_RIGHT;
 	else
 		jointype = JOIN_INNER;
@@ -1028,7 +1028,7 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 	 * Pull up any SubLinks within the subquery's quals, so that we don't
 	 * leave unoptimized SubLinks behind.
 	 */
-	if (subquery->hasSubLinks)
+	if (QueryHasSubLinks(subquery))
 		pull_up_sublinks(subroot);
 
 	/*
@@ -1119,7 +1119,7 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 												  true, true);
 	else						/* won't need relids */
 		rvcontext.relids = NULL;
-	rvcontext.outer_hasSubLinks = &parse->hasSubLinks;
+	rvcontext.outer_flags = &parse->flags;
 	rvcontext.varno = varno;
 	/* this flag will be set below, if needed */
 	rvcontext.wrap_non_vars = false;
@@ -1260,10 +1260,14 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 	 * and VALUES RTEs copied up from the subquery.  So it's necessary to copy
 	 * subquery->hasSubLinks anyway.  Perhaps this can be improved someday.
 	 */
-	parse->hasSubLinks |= subquery->hasSubLinks;
+	QueryCondSetFlag(parse,
+			QueryHasSubLinks(parse) || QueryHasSubLinks(subquery),
+			HAS_SUB_LINKS);
 
 	/* If subquery had any RLS conditions, now main query does too */
-	parse->hasRowSecurity |= subquery->hasRowSecurity;
+	QueryCondSetFlag(parse,
+			QueryHasRowSecurity(parse) || QueryHasRowSecurity(subquery),
+			HAS_ROW_SECURITY);
 
 	/*
 	 * subquery won't be pulled up if it hasAggs, hasWindowFuncs, or
@@ -1512,9 +1516,9 @@ is_simple_subquery(PlannerInfo *root, Query *subquery, RangeTblEntry *rte,
 	 * that case the locking was originally declared in the upper query
 	 * anyway.
 	 */
-	if (subquery->hasAggs ||
-		subquery->hasWindowFuncs ||
-		subquery->hasTargetSRFs ||
+	if (QueryHasAggs(subquery) ||
+		QueryHasWindowFuncs(subquery) ||
+		QueryHasTargetSRFs(subquery) ||
 		subquery->groupClause ||
 		subquery->groupingSets ||
 		subquery->havingQual ||
@@ -1522,7 +1526,7 @@ is_simple_subquery(PlannerInfo *root, Query *subquery, RangeTblEntry *rte,
 		subquery->distinctClause ||
 		subquery->limitOffset ||
 		subquery->limitCount ||
-		subquery->hasForUpdate ||
+		QueryHasForUpdate(subquery) ||
 		subquery->cteList)
 		return false;
 
@@ -1665,7 +1669,7 @@ pull_up_simple_values(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte)
 	rvcontext.targetlist = tlist;
 	rvcontext.target_rte = rte;
 	rvcontext.relids = NULL;
-	rvcontext.outer_hasSubLinks = &parse->hasSubLinks;
+	rvcontext.outer_flags = &parse->flags;
 	rvcontext.varno = varno;
 	rvcontext.wrap_non_vars = false;
 	/* initialize cache array with indexes 0 .. length(tlist) */
@@ -1826,7 +1830,7 @@ pull_up_constant_function(PlannerInfo *root, Node *jtnode,
 	 */
 	rvcontext.relids = NULL;
 
-	rvcontext.outer_hasSubLinks = &parse->hasSubLinks;
+	rvcontext.outer_flags = &parse->flags;
 	rvcontext.varno = ((RangeTblRef *) jtnode)->rtindex;
 	/* this flag will be set below, if needed */
 	rvcontext.wrap_non_vars = false;
@@ -2302,7 +2306,7 @@ pullup_replace_vars(Node *expr, pullup_replace_vars_context *context)
 								 context->varno, 0,
 								 pullup_replace_vars_callback,
 								 (void *) context,
-								 context->outer_hasSubLinks);
+								 context->outer_flags);
 }
 
 static Node *

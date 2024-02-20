@@ -84,7 +84,7 @@ preprocess_minmax_aggregates(PlannerInfo *root)
 	Assert(root->minmax_aggs == NIL);
 
 	/* Nothing to do if query has no aggregates */
-	if (!parse->hasAggs)
+	if (!QueryHasAggs(parse))
 		return;
 
 	Assert(!parse->setOperations);	/* shouldn't get here if a setop */
@@ -98,7 +98,7 @@ preprocess_minmax_aggregates(PlannerInfo *root)
 	 * so there's not much point in optimizing MIN/MAX.
 	 */
 	if (parse->groupClause || list_length(parse->groupingSets) > 1 ||
-		parse->hasWindowFuncs)
+		QueryHasWindowFuncs(parse))
 		return;
 
 	/*
@@ -379,8 +379,8 @@ build_minmax_path(PlannerInfo *root, MinMaxAggInfo *mminfo,
 	parse->havingQual = NULL;
 	subroot->hasHavingQual = false;
 	parse->distinctClause = NIL;
-	parse->hasDistinctOn = false;
-	parse->hasAggs = false;
+	QueryClearFlag(parse, HAS_DISTINCT_ON);
+	QueryClearFlag(parse, HAS_AGGS);
 
 	/* Build "target IS NOT NULL" expression */
 	ntest = makeNode(NullTest);

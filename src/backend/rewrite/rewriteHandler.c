@@ -292,7 +292,7 @@ AcquireRewriteLocks(Query *parsetree,
 	 * Recurse into sublink subqueries, too.  But we already did the ones in
 	 * the rtable and cteList.
 	 */
-	if (parsetree->hasSubLinks)
+	if (QueryHasSubLinks(parsetree))
 		query_tree_walker(parsetree, acquireLocksOnSubLinks, &context,
 						  QTW_IGNORE_RC_SUBQUERIES);
 }
@@ -457,7 +457,7 @@ rewriteRuleAction(Query *parsetree,
 	 * There could have been some SubLinks in parsetree's rtable, in which
 	 * case we'd better mark the sub_action correctly.
 	 */
-	if (parsetree->hasSubLinks && !sub_action->hasSubLinks)
+	if (QueryHasSubLinks(parsetree) && !QueryHasSubLinks(sub_action))
 	{
 		foreach(lc, parsetree->rtable)
 		{
@@ -466,28 +466,28 @@ rewriteRuleAction(Query *parsetree,
 			switch (rte->rtekind)
 			{
 				case RTE_RELATION:
-					sub_action->hasSubLinks =
-						checkExprHasSubLink((Node *) rte->tablesample);
+					QueryCondSetFlag(sub_action,
+						checkExprHasSubLink((Node *) rte->tablesample), HAS_SUB_LINKS);
 					break;
 				case RTE_FUNCTION:
-					sub_action->hasSubLinks =
-						checkExprHasSubLink((Node *) rte->functions);
+					QueryCondSetFlag(sub_action,
+						checkExprHasSubLink((Node *) rte->functions), HAS_SUB_LINKS);
 					break;
 				case RTE_TABLEFUNC:
-					sub_action->hasSubLinks =
-						checkExprHasSubLink((Node *) rte->tablefunc);
+					QueryCondSetFlag(sub_action,
+						checkExprHasSubLink((Node *) rte->tablefunc), HAS_SUB_LINKS);
 					break;
 				case RTE_VALUES:
-					sub_action->hasSubLinks =
-						checkExprHasSubLink((Node *) rte->values_lists);
+					QueryCondSetFlag(sub_action,
+						checkExprHasSubLink((Node *) rte->values_lists), HAS_SUB_LINKS);
 					break;
 				default:
 					/* other RTE types don't contain bare expressions */
 					break;
 			}
-			sub_action->hasSubLinks |=
-				checkExprHasSubLink((Node *) rte->securityQuals);
-			if (sub_action->hasSubLinks)
+			if (checkExprHasSubLink((Node *) rte->securityQuals))
+				QuerySetFlag(sub_action, HAS_SUB_LINKS);
+			if (QueryHasSubLinks(sub_action))
 				break;			/* no need to keep scanning rtable */
 		}
 	}
@@ -499,7 +499,8 @@ rewriteRuleAction(Query *parsetree,
 	 * this is a no-op because RLS conditions aren't added till later, but it
 	 * seems like good future-proofing to do this anyway.)
 	 */
-	sub_action->hasRowSecurity |= parsetree->hasRowSecurity;
+	if(QueryHasRowSecurity(parsetree))
+		QuerySetFlag(sub_action, HAS_ROW_SECURITY);
 
 	/*
 	 * Each rule action's jointree should be the main parsetree's jointree
@@ -546,9 +547,9 @@ rewriteRuleAction(Query *parsetree,
 			 * There could have been some SubLinks in newjointree, in which
 			 * case we'd better mark the sub_action correctly.
 			 */
-			if (parsetree->hasSubLinks && !sub_action->hasSubLinks)
-				sub_action->hasSubLinks =
-					checkExprHasSubLink((Node *) newjointree);
+			if (QueryHasSubLinks(parsetree) && !QueryHasSubLinks(sub_action))
+				QueryCondSetFlag(sub_action,
+								 checkExprHasSubLink((Node *) newjointree), HAS_SUB_LINKS);
 		}
 	}
 
@@ -590,8 +591,10 @@ rewriteRuleAction(Query *parsetree,
 		sub_action->cteList = list_concat(sub_action->cteList,
 										  copyObject(parsetree->cteList));
 		/* ... and don't forget about the associated flags */
-		sub_action->hasRecursive |= parsetree->hasRecursive;
-		sub_action->hasModifyingCTE |= parsetree->hasModifyingCTE;
+		if (QueryHasRecursive(parsetree))
+			QuerySetFlag(sub_action, HAS_RECURSIVE);
+		if (QueryHasModifyingCTE(parsetree))
+			QuerySetFlag(sub_action, HAS_MODIFYING_CTE);
 
 		/*
 		 * If rule_action is different from sub_action (i.e., the rule action
@@ -605,7 +608,7 @@ rewriteRuleAction(Query *parsetree,
 		 * have to increment ctelevelsup in RTEs and SubLinks copied from the
 		 * original query.  For now, it doesn't seem worth the trouble.
 		 */
-		if (sub_action->hasModifyingCTE && rule_action != sub_action)
+		if (QueryHasModifyingCTE(sub_action) && rule_action != sub_action)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("INSERT ... SELECT rule actions are not supported for queries having data-modifying statements in WITH")));
@@ -672,15 +675,16 @@ rewriteRuleAction(Query *parsetree,
 									  rule_action->returningList,
 									  REPLACEVARS_REPORT_ERROR,
 									  0,
-									  &rule_action->hasSubLinks);
+									  &rule_action->flags);
 
 		/*
 		 * There could have been some SubLinks in parsetree's returningList,
 		 * in which case we'd better mark the rule_action correctly.
 		 */
-		if (parsetree->hasSubLinks && !rule_action->hasSubLinks)
-			rule_action->hasSubLinks =
-				checkExprHasSubLink((Node *) rule_action->returningList);
+		if (QueryHasSubLinks(parsetree) && !QueryHasSubLinks(rule_action))
+			QueryCondSetFlag(rule_action,
+							 checkExprHasSubLink((Node *) rule_action->returningList),
+							 HAS_SUB_LINKS);
 	}
 
 	return rule_action;
@@ -2154,7 +2158,7 @@ fireRIRrules(Query *parsetree, List *activeRIRs)
 	 * Recurse into sublink subqueries, too.  But we already did the ones in
 	 * the rtable and cteList.
 	 */
-	if (parsetree->hasSubLinks)
+	if (QueryHasSubLinks(parsetree))
 		query_tree_walker(parsetree, fireRIRonSubLink, (void *) activeRIRs,
 						  QTW_IGNORE_RC_SUBQUERIES);
 
@@ -2253,9 +2257,9 @@ fireRIRrules(Query *parsetree, List *activeRIRs)
 		 * applies, or if the new quals had sublinks.
 		 */
 		if (hasRowSecurity)
-			parsetree->hasRowSecurity = true;
+			QuerySetFlag(parsetree, HAS_ROW_SECURITY);
 		if (hasSubLinks)
-			parsetree->hasSubLinks = true;
+			QuerySetFlag(parsetree, HAS_SUB_LINKS);
 
 		table_close(rel, NoLock);
 	}
@@ -2311,7 +2315,7 @@ CopyAndAddInvertedQual(Query *parsetree,
 											 REPLACEVARS_CHANGE_VARNO :
 											 REPLACEVARS_SUBSTITUTE_NULL,
 											 rt_index,
-											 &parsetree->hasSubLinks);
+											 &parsetree->flags);
 	/* And attach the fixed qual */
 	AddInvertedQual(parsetree, new_qual);
 
@@ -2419,7 +2423,7 @@ fireRules(Query *parsetree,
 											returning_flag);
 
 			rule_action->querySource = qsrc;
-			rule_action->canSetTag = false; /* might change later */
+			QueryClearFlag(rule_action, CAN_SET_TAG); /* might change later */
 
 			results = lappend(results, rule_action);
 		}
@@ -2622,13 +2626,13 @@ view_query_is_auto_updatable(Query *viewquery, bool check_cols)
 	 * These restrictions ensure that each row of the view corresponds to a
 	 * unique row in the underlying base relation.
 	 */
-	if (viewquery->hasAggs)
+	if (QueryHasAggs(viewquery))
 		return gettext_noop("Views that return aggregate functions are not automatically updatable.");
 
-	if (viewquery->hasWindowFuncs)
+	if (QueryHasWindowFuncs(viewquery))
 		return gettext_noop("Views that return window functions are not automatically updatable.");
 
-	if (viewquery->hasTargetSRFs)
+	if (QueryHasTargetSRFs(viewquery))
 		return gettext_noop("Views that return set-returning functions are not automatically updatable.");
 
 	/*
@@ -3212,7 +3216,7 @@ rewriteTargetView(Query *parsetree, Relation view)
 	 * be any subqueries in the range table or CTEs, so we can skip those, as
 	 * in AcquireRewriteLocks.
 	 */
-	if (viewquery->hasSubLinks)
+	if (QueryHasSubLinks(viewquery))
 	{
 		acquireLocksOnSubLinks_context context;
 
@@ -3473,7 +3477,7 @@ rewriteTargetView(Query *parsetree, Relation view)
 									  tmp_tlist,
 									  REPLACEVARS_REPORT_ERROR,
 									  0,
-									  &parsetree->hasSubLinks);
+									  &parsetree->flags);
 	}
 
 	/*
@@ -3524,8 +3528,8 @@ rewriteTargetView(Query *parsetree, Relation view)
 			 * Make sure that the query is marked correctly if the added qual
 			 * has sublinks.
 			 */
-			if (!parsetree->hasSubLinks)
-				parsetree->hasSubLinks = checkExprHasSubLink(viewqual);
+			if (!QueryHasSubLinks(parsetree))
+				QueryCondSetFlag(parsetree, checkExprHasSubLink(viewqual), HAS_SUB_LINKS);
 		}
 		else
 			AddQual(parsetree, (Node *) viewqual);
@@ -3596,9 +3600,9 @@ rewriteTargetView(Query *parsetree, Relation view)
 				 * case the same qual will have already been added, and this
 				 * check will already have been done.
 				 */
-				if (!parsetree->hasSubLinks &&
+				if (!QueryHasSubLinks(parsetree) &&
 					parsetree->commandType != CMD_UPDATE)
-					parsetree->hasSubLinks = checkExprHasSubLink(wco->qual);
+					QueryCondSetFlag(parsetree, checkExprHasSubLink(wco->qual), HAS_SUB_LINKS);
 			}
 		}
 	}
@@ -3670,7 +3674,7 @@ RewriteQuery(Query *parsetree, List *rewrite_events, int orig_rt_length)
 						 errmsg("DO INSTEAD NOTIFY rules are not supported for data-modifying statements in WITH")));
 			}
 			/* WITH queries should never be canSetTag */
-			Assert(!ctequery->canSetTag);
+			Assert(!QueryCanSetTag(ctequery));
 			/* Push the single Query back into the CTE node */
 			cte->ctequery = (Node *) ctequery;
 		}
@@ -4211,7 +4215,7 @@ QueryRewrite(Query *parsetree)
 	 * This function is only applied to top-level original queries
 	 */
 	Assert(parsetree->querySource == QSRC_ORIGINAL);
-	Assert(parsetree->canSetTag);
+	Assert(QueryCanSetTag(parsetree));
 
 	/*
 	 * Step 1
@@ -4265,7 +4269,7 @@ QueryRewrite(Query *parsetree)
 
 		if (query->querySource == QSRC_ORIGINAL)
 		{
-			Assert(query->canSetTag);
+			Assert(QueryCanSetTag(query));
 			Assert(!foundOriginalQuery);
 			foundOriginalQuery = true;
 #ifndef USE_ASSERT_CHECKING
@@ -4274,7 +4278,7 @@ QueryRewrite(Query *parsetree)
 		}
 		else
 		{
-			Assert(!query->canSetTag);
+			Assert(!QueryCanSetTag(query));
 			if (query->commandType == origCmdType &&
 				(query->querySource == QSRC_INSTEAD_RULE ||
 				 query->querySource == QSRC_QUAL_INSTEAD_RULE))
@@ -4283,7 +4287,7 @@ QueryRewrite(Query *parsetree)
 	}
 
 	if (!foundOriginalQuery && lastInstead != NULL)
-		lastInstead->canSetTag = true;
+		QuerySetFlag(lastInstead, CAN_SET_TAG);
 
 	return results;
 }

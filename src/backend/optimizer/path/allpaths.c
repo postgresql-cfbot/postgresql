@@ -2595,7 +2595,7 @@ set_subquery_pathlist(PlannerInfo *root, RelOptInfo *rel,
 					 * so then it might be useful to use for the WindowAgg's
 					 * runCondition.
 					 */
-					if (!subquery->hasWindowFuncs ||
+					if (!QueryHasWindowFuncs(subquery) ||
 						check_and_push_window_quals(subquery, rte, rti, clause,
 													&run_cond_attrs))
 					{
@@ -2633,7 +2633,7 @@ set_subquery_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	 * we'd better tell the subquery to plan for full retrieval. (XXX This
 	 * could probably be made more intelligent ...)
 	 */
-	if (parse->hasAggs ||
+	if (QueryHasAggs(parse) ||
 		parse->groupClause ||
 		parse->groupingSets ||
 		root->hasHavingQual ||
@@ -3604,8 +3604,8 @@ subquery_is_pushdown_safe(Query *subquery, Query *topquery,
 
 	/* Check points 3, 4, and 5 */
 	if (subquery->distinctClause ||
-		subquery->hasWindowFuncs ||
-		subquery->hasTargetSRFs)
+		QueryHasWindowFuncs(subquery) ||
+		QueryHasTargetSRFs(subquery))
 		safetyInfo->unsafeVolatile = true;
 
 	/*
@@ -3726,7 +3726,7 @@ check_output_expressions(Query *subquery, pushdown_safety_info *safetyInfo)
 			continue;			/* ignore resjunk columns */
 
 		/* Functions returning sets are unsafe (point 1) */
-		if (subquery->hasTargetSRFs &&
+		if (QueryHasTargetSRFs(subquery) &&
 			(safetyInfo->unsafeFlags[tle->resno] &
 			 UNSAFE_HAS_SET_FUNC) == 0 &&
 			expression_returns_set((Node *) tle->expr))
@@ -3745,7 +3745,7 @@ check_output_expressions(Query *subquery, pushdown_safety_info *safetyInfo)
 		}
 
 		/* If subquery uses DISTINCT ON, check point 3 */
-		if (subquery->hasDistinctOn &&
+		if (QueryHasDistinctOn(subquery) &&
 			(safetyInfo->unsafeFlags[tle->resno] &
 			 UNSAFE_NOTIN_DISTINCTON_CLAUSE) == 0 &&
 			!targetIsInSortList(tle, InvalidOid, subquery->distinctClause))
@@ -3756,7 +3756,7 @@ check_output_expressions(Query *subquery, pushdown_safety_info *safetyInfo)
 		}
 
 		/* If subquery uses window functions, check point 4 */
-		if (subquery->hasWindowFuncs &&
+		if (QueryHasWindowFuncs(subquery) &&
 			(safetyInfo->unsafeFlags[tle->resno] &
 			 UNSAFE_NOTIN_DISTINCTON_CLAUSE) == 0 &&
 			!targetIsInAllPartitionLists(tle, subquery))
@@ -3985,14 +3985,14 @@ subquery_push_qual(Query *subquery, RangeTblEntry *rte, Index rti, Node *qual)
 		qual = ReplaceVarsFromTargetList(qual, rti, 0, rte,
 										 subquery->targetList,
 										 REPLACEVARS_REPORT_ERROR, 0,
-										 &subquery->hasSubLinks);
+										 &subquery->flags);
 
 		/*
 		 * Now attach the qual to the proper place: normally WHERE, but if the
 		 * subquery uses grouping or aggregation, put it in HAVING (since the
 		 * qual really refers to the group-result rows).
 		 */
-		if (subquery->hasAggs || subquery->groupClause || subquery->groupingSets || subquery->havingQual)
+		if (QueryHasAggs(subquery) || subquery->groupClause || subquery->groupingSets || subquery->havingQual)
 			subquery->havingQual = make_and_qual(subquery->havingQual, qual);
 		else
 			subquery->jointree->quals =
@@ -4086,7 +4086,7 @@ remove_unused_subquery_outputs(Query *subquery, RelOptInfo *rel,
 	 * If subquery has regular DISTINCT (not DISTINCT ON), we're wasting our
 	 * time: all its output columns must be used in the distinctClause.
 	 */
-	if (subquery->distinctClause && !subquery->hasDistinctOn)
+	if (subquery->distinctClause && !QueryHasDistinctOn(subquery))
 		return;
 
 	/*
@@ -4147,7 +4147,7 @@ remove_unused_subquery_outputs(Query *subquery, RelOptInfo *rel,
 		 * If it contains a set-returning function, we can't remove it since
 		 * that could change the number of rows returned by the subquery.
 		 */
-		if (subquery->hasTargetSRFs &&
+		if (QueryHasTargetSRFs(subquery) &&
 			expression_returns_set(texpr))
 			continue;
 

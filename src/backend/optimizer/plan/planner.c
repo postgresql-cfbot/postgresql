@@ -348,7 +348,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	if ((cursorOptions & CURSOR_OPT_PARALLEL_OK) != 0 &&
 		IsUnderPostmaster &&
 		parse->commandType == CMD_SELECT &&
-		!parse->hasModifyingCTE &&
+		!QueryHasModifyingCTE(parse) &&
 		max_parallel_workers_per_gather > 0 &&
 		!IsParallelWorker())
 	{
@@ -540,8 +540,8 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	result->commandType = parse->commandType;
 	result->queryId = parse->queryId;
 	result->hasReturning = (parse->returningList != NIL);
-	result->hasModifyingCTE = parse->hasModifyingCTE;
-	result->canSetTag = parse->canSetTag;
+	result->hasModifyingCTE = QueryHasModifyingCTE(parse);
+	result->canSetTag = QueryCanSetTag(parse);
 	result->transientPlan = glob->transientPlan;
 	result->dependsOnRole = glob->dependsOnRole;
 	result->parallelModeNeeded = glob->parallelModeNeeded;
@@ -707,7 +707,7 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	 * into subqueries; if we pull up any subqueries below, their SubLinks are
 	 * processed just before pulling them up.
 	 */
-	if (parse->hasSubLinks)
+	if (QueryHasSubLinks(parse))
 		pull_up_sublinks(root);
 
 	/*
@@ -834,8 +834,12 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 							  EXPRKIND_TARGET);
 
 	/* Constant-folding might have removed all set-returning functions */
-	if (parse->hasTargetSRFs)
-		parse->hasTargetSRFs = expression_returns_set((Node *) parse->targetList);
+	if (QueryHasTargetSRFs(parse))
+	{
+		QueryCondSetFlag(parse,
+					expression_returns_set((Node *) parse->targetList),
+					HAS_TARGET_SRFS);
+	}
 
 	newWithCheckOptions = NIL;
 	foreach(l, parse->withCheckOptions)
@@ -1189,7 +1193,7 @@ preprocess_expression(PlannerInfo *root, Node *expr, int kind)
 	}
 
 	/* Expand SubLinks to SubPlans */
-	if (root->parse->hasSubLinks)
+	if (QueryHasSubLinks(root->parse))
 		expr = SS_process_sublinks(root, expr, (kind == EXPRKIND_QUAL));
 
 	/*
@@ -1368,7 +1372,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 			is_parallel_safe(root, (Node *) final_target->exprs);
 
 		/* The setop result tlist couldn't contain any SRFs */
-		Assert(!parse->hasTargetSRFs);
+		Assert(!QueryHasTargetSRFs(parse));
 		final_targets = final_targets_contain_srfs = NIL;
 
 		/*
@@ -1446,7 +1450,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 		 * pathtargets, else some copies of the Aggref nodes might escape
 		 * being marked.
 		 */
-		if (parse->hasAggs)
+		if (QueryHasAggs(parse))
 		{
 			preprocess_aggrefs(root, (Node *) root->processed_tlist);
 			preprocess_aggrefs(root, (Node *) parse->havingQual);
@@ -1458,7 +1462,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 		 * too.)  Note that they could all have been eliminated by constant
 		 * folding, in which case we don't need to do any more work.
 		 */
-		if (parse->hasWindowFuncs)
+		if (QueryHasWindowFuncs(parse))
 		{
 			wflists = find_window_functions((Node *) root->processed_tlist,
 											list_length(parse->windowClause));
@@ -1474,7 +1478,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 				activeWindows = select_active_windows(root, wflists);
 			}
 			else
-				parse->hasWindowFuncs = false;
+				QueryClearFlag(parse, HAS_WINDOW_FUNCS);
 		}
 
 		/*
@@ -1483,7 +1487,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 		 * that is needed in MIN/MAX-optimizable cases will have to be
 		 * duplicated in planagg.c.
 		 */
-		if (parse->hasAggs)
+		if (QueryHasAggs(parse))
 			preprocess_minmax_aggregates(root);
 
 		/*
@@ -1495,9 +1499,9 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 		if (parse->groupClause ||
 			parse->groupingSets ||
 			parse->distinctClause ||
-			parse->hasAggs ||
-			parse->hasWindowFuncs ||
-			parse->hasTargetSRFs ||
+			QueryHasAggs(parse) ||
+			QueryHasWindowFuncs(parse) ||
+			QueryHasTargetSRFs(parse) ||
 			root->hasHavingQual)
 			root->limit_tuples = -1.0;
 		else
@@ -1573,7 +1577,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 		 * should emit grouping_target.
 		 */
 		have_grouping = (parse->groupClause || parse->groupingSets ||
-						 parse->hasAggs || root->hasHavingQual);
+						 QueryHasAggs(parse) || root->hasHavingQual);
 		if (have_grouping)
 		{
 			scanjoin_target = make_group_input_target(root, final_target);
@@ -1592,7 +1596,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 		 * each of the named targets with a SRF-free version, and remember the
 		 * list of additional projection steps we need to add afterwards.
 		 */
-		if (parse->hasTargetSRFs)
+		if (QueryHasTargetSRFs(parse))
 		{
 			/* final_target doesn't recompute any SRFs in sort_input_target */
 			split_pathtarget_at_srfs(root, final_target, sort_input_target,
@@ -1664,7 +1668,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 												grouping_target_parallel_safe,
 												gset_data);
 			/* Fix things up if grouping_target contains SRFs */
-			if (parse->hasTargetSRFs)
+			if (QueryHasTargetSRFs(parse))
 				adjust_paths_for_srfs(root, current_rel,
 									  grouping_targets,
 									  grouping_targets_contain_srfs);
@@ -1684,7 +1688,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 											  wflists,
 											  activeWindows);
 			/* Fix things up if sort_input_target contains SRFs */
-			if (parse->hasTargetSRFs)
+			if (QueryHasTargetSRFs(parse))
 				adjust_paths_for_srfs(root, current_rel,
 									  sort_input_targets,
 									  sort_input_targets_contain_srfs);
@@ -1718,7 +1722,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 										   have_postponed_srfs ? -1.0 :
 										   limit_tuples);
 		/* Fix things up if final_target contains SRFs */
-		if (parse->hasTargetSRFs)
+		if (QueryHasTargetSRFs(parse))
 			adjust_paths_for_srfs(root, current_rel,
 								  final_targets,
 								  final_targets_contain_srfs);
@@ -1955,7 +1959,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 				create_modifytable_path(root, final_rel,
 										path,
 										parse->commandType,
-										parse->canSetTag,
+										QueryCanSetTag(parse),
 										parse->resultRelation,
 										rootRelation,
 										root->partColsUpdated,
@@ -3573,7 +3577,7 @@ get_number_of_groups(PlannerInfo *root,
 		/* Empty grouping sets ... one result row for each one */
 		dNumGroups = list_length(parse->groupingSets);
 	}
-	else if (parse->hasAggs || root->hasHavingQual)
+	else if (QueryHasAggs(parse) || root->hasHavingQual)
 	{
 		/* Plain aggregation, one result row */
 		dNumGroups = 1;
@@ -3776,7 +3780,7 @@ is_degenerate_grouping(PlannerInfo *root)
 	Query	   *parse = root->parse;
 
 	return (root->hasHavingQual || parse->groupingSets) &&
-		!parse->hasAggs && parse->groupClause == NIL;
+		!QueryHasAggs(parse) && parse->groupClause == NIL;
 }
 
 /*
@@ -4665,7 +4669,7 @@ create_partial_distinct_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	parse = root->parse;
 
 	/* can't do parallel DISTINCT ON */
-	if (parse->hasDistinctOn)
+	if (QueryHasDistinctOn(parse))
 		return;
 
 	partial_distinct_rel = fetch_upper_rel(root, UPPERREL_PARTIAL_DISTINCT,
@@ -4855,7 +4859,7 @@ create_final_distinct_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	bool		allow_hash;
 
 	/* Estimate number of distinct rows there will be */
-	if (parse->groupClause || parse->groupingSets || parse->hasAggs ||
+	if (parse->groupClause || parse->groupingSets || QueryHasAggs(parse) ||
 		root->hasHavingQual)
 	{
 		/*
@@ -4902,7 +4906,7 @@ create_final_distinct_paths(PlannerInfo *root, RelOptInfo *input_rel,
 		ListCell   *lc;
 		double		limittuples = root->distinct_pathkeys == NIL ? 1.0 : -1.0;
 
-		if (parse->hasDistinctOn &&
+		if (QueryHasDistinctOn(parse) &&
 			list_length(root->distinct_pathkeys) <
 			list_length(root->sort_pathkeys))
 			needed_pathkeys = root->sort_pathkeys;
@@ -5011,7 +5015,7 @@ create_final_distinct_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	 */
 	if (distinct_rel->pathlist == NIL)
 		allow_hash = true;		/* we have no alternatives */
-	else if (parse->hasDistinctOn || !enable_hashagg)
+	else if (QueryHasDistinctOn(parse) || !enable_hashagg)
 		allow_hash = false;		/* policy-based decision not to hash */
 	else
 		allow_hash = true;		/* default */
@@ -5839,7 +5843,7 @@ make_window_input_target(PlannerInfo *root,
 	int			i;
 	ListCell   *lc;
 
-	Assert(root->parse->hasWindowFuncs);
+	Assert(QueryHasWindowFuncs(root->parse));
 
 	/*
 	 * Collect the sortgroupref numbers of window PARTITION/ORDER BY clauses
@@ -6123,7 +6127,7 @@ make_sort_input_target(PlannerInfo *root,
 			 * Check for SRF or volatile functions.  Check the SRF case first
 			 * because we must know whether we have any postponed SRFs.
 			 */
-			if (parse->hasTargetSRFs &&
+			if (QueryHasTargetSRFs(parse) &&
 				expression_returns_set((Node *) expr))
 			{
 				/* We'll decide below whether these are postponable */
@@ -6163,7 +6167,7 @@ make_sort_input_target(PlannerInfo *root,
 		{
 			/* For sortgroupref cols, just check if any contain SRFs */
 			if (!have_srf_sortcols &&
-				parse->hasTargetSRFs &&
+				QueryHasTargetSRFs(parse) &&
 				expression_returns_set((Node *) expr))
 				have_srf_sortcols = true;
 		}
@@ -6845,7 +6849,7 @@ add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 												path, true, can_hash,
 												gd, agg_costs, dNumGroups);
 				}
-				else if (parse->hasAggs)
+				else if (QueryHasAggs(parse))
 				{
 					/*
 					 * We have aggregation, possibly with plain GROUP BY. Make
@@ -6920,7 +6924,7 @@ add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 					if (path == NULL)
 						continue;
 
-					if (parse->hasAggs)
+					if (QueryHasAggs(parse))
 						add_path(grouped_rel, (Path *)
 								 create_agg_path(root,
 												 grouped_rel,
@@ -7105,7 +7109,7 @@ create_partial_grouping_paths(PlannerInfo *root,
 		 */
 		MemSet(agg_partial_costs, 0, sizeof(AggClauseCosts));
 		MemSet(agg_final_costs, 0, sizeof(AggClauseCosts));
-		if (parse->hasAggs)
+		if (QueryHasAggs(parse))
 		{
 			/* partial phase */
 			get_agg_clause_costs(root, AGGSPLIT_INITIAL_SERIAL,
@@ -7136,7 +7140,7 @@ create_partial_grouping_paths(PlannerInfo *root,
 	if (can_sort && cheapest_total_path != NULL)
 	{
 		/* This should have been checked previously */
-		Assert(parse->hasAggs || parse->groupClause);
+		Assert(QueryHasAggs(parse) || parse->groupClause);
 
 		/*
 		 * Use any available suitably-sorted path as input, and also consider
@@ -7171,7 +7175,7 @@ create_partial_grouping_paths(PlannerInfo *root,
 				if (path == NULL)
 					continue;
 
-				if (parse->hasAggs)
+				if (QueryHasAggs(parse))
 					add_path(partially_grouped_rel, (Path *)
 							 create_agg_path(root,
 											 partially_grouped_rel,
@@ -7228,7 +7232,7 @@ create_partial_grouping_paths(PlannerInfo *root,
 				if (path == NULL)
 					continue;
 
-				if (parse->hasAggs)
+				if (QueryHasAggs(parse))
 					add_partial_path(partially_grouped_rel, (Path *)
 									 create_agg_path(root,
 													 partially_grouped_rel,
@@ -7258,7 +7262,7 @@ create_partial_grouping_paths(PlannerInfo *root,
 	if (can_hash && cheapest_total_path != NULL)
 	{
 		/* Checked above */
-		Assert(parse->hasAggs || parse->groupClause);
+		Assert(QueryHasAggs(parse) || parse->groupClause);
 
 		add_path(partially_grouped_rel, (Path *)
 				 create_agg_path(root,
@@ -7401,7 +7405,7 @@ can_partial_agg(PlannerInfo *root)
 {
 	Query	   *parse = root->parse;
 
-	if (!parse->hasAggs && parse->groupClause == NIL)
+	if (!QueryHasAggs(parse) && parse->groupClause == NIL)
 	{
 		/*
 		 * We don't know how to do parallel aggregation unless we have either
@@ -7560,7 +7564,7 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 	 * cheapest-path fields, which is a good thing because they're bogus right
 	 * now.)
 	 */
-	if (root->parse->hasTargetSRFs)
+	if (QueryHasTargetSRFs(root->parse))
 		adjust_paths_for_srfs(root, rel,
 							  scanjoin_targets,
 							  scanjoin_targets_contain_srfs);

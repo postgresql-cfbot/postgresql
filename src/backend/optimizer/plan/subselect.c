@@ -1562,11 +1562,11 @@ simplify_EXISTS_query(PlannerInfo *root, Query *query)
 	 */
 	if (query->commandType != CMD_SELECT ||
 		query->setOperations ||
-		query->hasAggs ||
+		QueryHasAggs(query) ||
 		query->groupingSets ||
-		query->hasWindowFuncs ||
-		query->hasTargetSRFs ||
-		query->hasModifyingCTE ||
+		QueryHasWindowFuncs(query) ||
+		QueryHasTargetSRFs(query) ||
+		QueryHasModifyingCTE(query) ||
 		query->havingQual ||
 		query->limitOffset ||
 		query->rowMarks)
@@ -1618,7 +1618,7 @@ simplify_EXISTS_query(PlannerInfo *root, Query *query)
 	query->windowClause = NIL;
 	query->distinctClause = NIL;
 	query->sortClause = NIL;
-	query->hasDistinctOn = false;
+	QueryClearFlag(query, HAS_DISTINCT_ON);
 
 	return true;
 }
@@ -1779,7 +1779,7 @@ convert_EXISTS_to_ANY(PlannerInfo *root, Query *subselect,
 	if (contain_vars_of_level((Node *) newWhere, 1) ||
 		contain_vars_of_level((Node *) rightargs, 1))
 		return NULL;
-	if (root->parse->hasAggs &&
+	if (QueryHasAggs(root->parse) &&
 		(contain_aggs_of_level((Node *) newWhere, 1) ||
 		 contain_aggs_of_level((Node *) rightargs, 1)))
 		return NULL;

@@ -1102,8 +1102,8 @@ AddQual(Query *parsetree, Node *qual)
 	 * Make sure query is marked correctly if added qual has sublinks. Need
 	 * not search qual when query is already marked.
 	 */
-	if (!parsetree->hasSubLinks)
-		parsetree->hasSubLinks = checkExprHasSubLink(copy);
+	if (!QueryHasSubLinks(parsetree))
+		QueryCondSetFlag(parsetree, checkExprHasSubLink(copy), HAS_SUB_LINKS);
 }
 
 
@@ -1334,7 +1334,7 @@ Node *
 replace_rte_variables(Node *node, int target_varno, int sublevels_up,
 					  replace_rte_variables_callback callback,
 					  void *callback_arg,
-					  bool *outer_hasSubLinks)
+					  int *outer_flags)
 {
 	Node	   *result;
 	replace_rte_variables_context context;
@@ -1349,9 +1349,9 @@ replace_rte_variables(Node *node, int target_varno, int sublevels_up,
 	 * detect new sublinks because the query already has some.
 	 */
 	if (node && IsA(node, Query))
-		context.inserted_sublink = ((Query *) node)->hasSubLinks;
-	else if (outer_hasSubLinks)
-		context.inserted_sublink = *outer_hasSubLinks;
+		context.inserted_sublink = QueryHasSubLinks((Query *) node);
+	else if (outer_flags)
+		context.inserted_sublink = QueryFlagIsSet(*outer_flags, HAS_SUB_LINKS);
 	else
 		context.inserted_sublink = false;
 
@@ -1367,9 +1367,9 @@ replace_rte_variables(Node *node, int target_varno, int sublevels_up,
 	if (context.inserted_sublink)
 	{
 		if (result && IsA(result, Query))
-			((Query *) result)->hasSubLinks = true;
-		else if (outer_hasSubLinks)
-			*outer_hasSubLinks = true;
+			QuerySetFlag(((Query *) result), HAS_SUB_LINKS);
+		else if (outer_flags)
+			QueryFlagSet(*outer_flags, HAS_SUB_LINKS);
 		else
 			elog(ERROR, "replace_rte_variables inserted a SubLink, but has noplace to record it");
 	}
@@ -1428,12 +1428,13 @@ replace_rte_variables_mutator(Node *node,
 
 		context->sublevels_up++;
 		save_inserted_sublink = context->inserted_sublink;
-		context->inserted_sublink = ((Query *) node)->hasSubLinks;
+		context->inserted_sublink = QueryHasSubLinks((Query *) node);
 		newnode = query_tree_mutator((Query *) node,
 									 replace_rte_variables_mutator,
 									 (void *) context,
 									 0);
-		newnode->hasSubLinks |= context->inserted_sublink;
+		if (context->inserted_sublink)
+			QuerySetFlag(newnode, HAS_SUB_LINKS);
 		context->inserted_sublink = save_inserted_sublink;
 		context->sublevels_up--;
 		return (Node *) newnode;
@@ -1764,7 +1765,7 @@ ReplaceVarsFromTargetList(Node *node,
 						  List *targetlist,
 						  ReplaceVarsNoMatchOption nomatch_option,
 						  int nomatch_varno,
-						  bool *outer_hasSubLinks)
+						  int *outer_flags)
 {
 	ReplaceVarsFromTargetList_context context;
 
@@ -1776,5 +1777,5 @@ ReplaceVarsFromTargetList(Node *node,
 	return replace_rte_variables(node, target_varno, sublevels_up,
 								 ReplaceVarsFromTargetList_callback,
 								 (void *) &context,
-								 outer_hasSubLinks);
+								 outer_flags);
 }

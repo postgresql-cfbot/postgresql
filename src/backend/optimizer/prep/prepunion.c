@@ -340,7 +340,7 @@ recurse_set_operations(Node *setOp, PlannerInfo *root,
 		{
 			if (subquery->groupClause || subquery->groupingSets ||
 				subquery->distinctClause ||
-				subroot->hasHavingQual || subquery->hasAggs)
+				subroot->hasHavingQual || QueryHasAggs(subquery))
 				*pNumGroups = subpath->rows;
 			else
 				*pNumGroups = estimate_num_groups(subroot,

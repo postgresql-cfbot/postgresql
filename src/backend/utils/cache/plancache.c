@@ -1384,7 +1384,7 @@ CachedPlanAllowsSimpleValidityCheck(CachedPlanSource *plansource,
 
 		if (query->commandType == CMD_UTILITY)
 			return false;
-		if (query->rtable || query->cteList || query->hasSubLinks)
+		if (query->rtable || query->cteList || QueryHasSubLinks(query))
 			return false;
 	}
 
@@ -1760,7 +1760,7 @@ QueryListGetPrimaryStmt(List *stmts)
 	{
 		Query	   *stmt = lfirst_node(Query, lc);
 
-		if (stmt->canSetTag)
+		if (QueryCanSetTag(stmt))
 			return stmt;
 	}
 	return NULL;
@@ -1907,7 +1907,7 @@ ScanQueryForLocks(Query *parsetree, bool acquire)
 	 * Recurse into sublink subqueries, too.  But we already did the ones in
 	 * the rtable and cteList.
 	 */
-	if (parsetree->hasSubLinks)
+	if (QueryHasSubLinks(parsetree))
 	{
 		query_tree_walker(parsetree, ScanQueryWalker,
 						  (void *) &acquire,

@@ -984,7 +984,7 @@ pg_plan_queries(List *querytrees, const char *query_string, int cursorOptions,
 			/* Utility commands require no planning. */
 			stmt = makeNode(PlannedStmt);
 			stmt->commandType = CMD_UTILITY;
-			stmt->canSetTag = query->canSetTag;
+			stmt->canSetTag = QueryCanSetTag(query);
 			stmt->utilityStmt = query->utilityStmt;
 			stmt->stmt_location = query->stmt_location;
 			stmt->stmt_len = query->stmt_len;

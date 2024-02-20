@@ -1010,14 +1010,14 @@ bool
 query_supports_distinctness(Query *query)
 {
 	/* SRFs break distinctness except with DISTINCT, see below */
-	if (query->hasTargetSRFs && query->distinctClause == NIL)
+	if (QueryHasTargetSRFs(query) && query->distinctClause == NIL)
 		return false;
 
 	/* check for features we can prove distinctness with */
 	if (query->distinctClause != NIL ||
 		query->groupClause != NIL ||
 		query->groupingSets != NIL ||
-		query->hasAggs ||
+		QueryHasAggs(query) ||
 		query->havingQual ||
 		query->setOperations)
 		return true;
@@ -1081,7 +1081,7 @@ query_is_distinct_for(Query *query, List *colnos, List *opids)
 	 * columns, it would be safe because they'd be expanded before grouping.
 	 * But it doesn't currently seem worth the effort to check for that.)
 	 */
-	if (query->hasTargetSRFs)
+	if (QueryHasTargetSRFs(query))
 		return false;
 
 	/*
@@ -1131,7 +1131,7 @@ query_is_distinct_for(Query *query, List *colnos, List *opids)
 		 * If we have no GROUP BY, but do have aggregates or HAVING, then the
 		 * result is at most one row so it's surely unique, for any operators.
 		 */
-		if (query->hasAggs || query->havingQual)
+		if (QueryHasAggs(query) || query->havingQual)
 			return true;
 	}
 

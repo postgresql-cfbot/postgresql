@@ -488,7 +488,7 @@ init_execution_state(List *queryTree_list,
 				/* Utility commands require no planning. */
 				stmt = makeNode(PlannedStmt);
 				stmt->commandType = CMD_UTILITY;
-				stmt->canSetTag = queryTree->canSetTag;
+				stmt->canSetTag = QueryCanSetTag(queryTree);
 				stmt->utilityStmt = queryTree->utilityStmt;
 				stmt->stmt_location = queryTree->stmt_location;
 				stmt->stmt_len = queryTree->stmt_len;
@@ -540,7 +540,7 @@ init_execution_state(List *queryTree_list,
 			newes->stmt = stmt;
 			newes->qd = NULL;
 
-			if (queryTree->canSetTag)
+			if (QueryCanSetTag(queryTree))
 				lasttages = newes;
 
 			preves = newes;
@@ -1650,7 +1650,7 @@ check_sql_fn_retval(List *queryTreeLists,
 		{
 			Query	   *q = lfirst_node(Query, lc2);
 
-			if (q->canSetTag)
+			if (QueryCanSetTag(q))
 			{
 				parse = q;
 				parse_cell = lc2;
@@ -1934,7 +1934,7 @@ tlist_coercion_finished:
 		newquery = makeNode(Query);
 		newquery->commandType = CMD_SELECT;
 		newquery->querySource = parse->querySource;
-		newquery->canSetTag = true;
+		QuerySetFlag(newquery, CAN_SET_TAG);
 		newquery->targetList = upper_tlist;
 
 		/* We need a moderately realistic colnames list for the subquery RTE */

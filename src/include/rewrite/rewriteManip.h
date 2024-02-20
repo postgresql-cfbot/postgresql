@@ -76,7 +76,7 @@ extern Node *replace_rte_variables(Node *node,
 								   int target_varno, int sublevels_up,
 								   replace_rte_variables_callback callback,
 								   void *callback_arg,
-								   bool *outer_hasSubLinks);
+								   int *outer_flags);
 extern Node *replace_rte_variables_mutator(Node *node,
 										   replace_rte_variables_context *context);
 
@@ -91,6 +91,6 @@ extern Node *ReplaceVarsFromTargetList(Node *node,
 									   List *targetlist,
 									   ReplaceVarsNoMatchOption nomatch_option,
 									   int nomatch_varno,
-									   bool *outer_hasSubLinks);
+									   int *outer_flags);
 
 #endif							/* REWRITEMANIP_H */

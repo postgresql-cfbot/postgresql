@@ -5562,7 +5562,7 @@ get_with_clause(Query *query, deparse_context *context)
 		appendStringInfoChar(buf, ' ');
 	}
 
-	if (query->hasRecursive)
+	if (QueryHasRecursive(query))
 		sep = "WITH RECURSIVE ";
 	else
 		sep = "WITH ";
@@ -5763,7 +5763,7 @@ get_select_query_def(Query *query, deparse_context *context,
 	}
 
 	/* Add FOR [KEY] UPDATE/SHARE clauses if present */
-	if (query->hasForUpdate)
+	if (QueryHasForUpdate(query))
 	{
 		foreach(l, query->rowMarks)
 		{
@@ -5916,7 +5916,7 @@ get_basic_select_query(Query *query, deparse_context *context,
 	/*
 	 * Build up the query string - first we say SELECT
 	 */
-	if (query->isReturn)
+	if (QueryIsReturn(query))
 		appendStringInfoString(buf, "RETURN");
 	else
 		appendStringInfoString(buf, "SELECT");
@@ -5924,7 +5924,7 @@ get_basic_select_query(Query *query, deparse_context *context,
 	/* Add the DISTINCT clause if given */
 	if (query->distinctClause != NIL)
 	{
-		if (query->hasDistinctOn)
+		if (QueryHasDistinctOn(query))
 		{
 			appendStringInfoString(buf, " DISTINCT ON (");
 			sep = "";
@@ -6898,7 +6898,7 @@ get_update_query_targetlist_def(Query *query, List *targetList,
 	 * entries.
 	 */
 	ma_sublinks = NIL;
-	if (query->hasSubLinks)		/* else there can't be any */
+	if (QueryHasSubLinks(query))		/* else there can't be any */
 	{
 		foreach(l, targetList)
 		{

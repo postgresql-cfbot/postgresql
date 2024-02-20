@@ -8020,10 +8020,10 @@ exec_simple_check_plan(PLpgSQL_execstate *estate, PLpgSQL_expr *expr)
 	 * inlining a SQL function; otherwise, inlining could change our
 	 * conclusion about whether an expression is simple, which we don't want.)
 	 */
-	if (query->hasAggs ||
-		query->hasWindowFuncs ||
-		query->hasTargetSRFs ||
-		query->hasSubLinks ||
+	if (QueryHasAggs(query) ||
+		QueryHasWindowFuncs(query) ||
+		QueryHasTargetSRFs(query) ||
+		QueryHasSubLinks(query) ||
 		query->cteList ||
 		query->jointree->fromlist ||
 		query->jointree->quals ||

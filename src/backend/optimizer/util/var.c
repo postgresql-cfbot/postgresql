@@ -756,9 +756,9 @@ flatten_join_alias_vars(PlannerInfo *root, Query *query, Node *node)
 	context.query = query;
 	context.sublevels_up = 0;
 	/* flag whether join aliases could possibly contain SubLinks */
-	context.possible_sublink = query->hasSubLinks;
+	context.possible_sublink = QueryHasSubLinks(query);
 	/* if hasSubLinks is already true, no need to work hard */
-	context.inserted_sublink = query->hasSubLinks;
+	context.inserted_sublink = QueryHasSubLinks(query);
 
 	return flatten_join_alias_vars_mutator(node, &context);
 }
@@ -881,12 +881,13 @@ flatten_join_alias_vars_mutator(Node *node,
 
 		context->sublevels_up++;
 		save_inserted_sublink = context->inserted_sublink;
-		context->inserted_sublink = ((Query *) node)->hasSubLinks;
+		context->inserted_sublink = QueryHasSubLinks(((Query *) node));
 		newnode = query_tree_mutator((Query *) node,
 									 flatten_join_alias_vars_mutator,
 									 (void *) context,
 									 QTW_IGNORE_JOINALIASES);
-		newnode->hasSubLinks |= context->inserted_sublink;
+		if (context->inserted_sublink)
+			QuerySetFlag(newnode, HAS_SUB_LINKS);
 		context->inserted_sublink = save_inserted_sublink;
 		context->sublevels_up--;
 		return (Node *) newnode;

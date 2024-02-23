@@ -2014,6 +2014,7 @@ PatternInfo
 PatternInfoArray
 Pattern_Prefix_Status
 Pattern_Type
+PendingCleanup
 PendingFsyncEntry
 PendingRelDelete
 PendingRelSync
@@ -2578,6 +2579,7 @@ SimplePtrListCell
 SimpleStats
 SimpleStringList
 SimpleStringListCell
+SimpleUndoLogRecord
 SingleBoundSortItem
 Size
 SkipPages
@@ -2940,6 +2942,8 @@ ULONG
 ULONG_PTR
 UV
 UVersionInfo
+UndoDescData
+UndoLogFileHeader
 UnicodeNormalizationForm
 UnicodeNormalizationQC
 Unique
@@ -3861,6 +3865,7 @@ uint8
 uint8_t
 uint8x16_t
 uintptr_t
+ul_uncommitted_storage
 unicodeStyleBorderFormat
 unicodeStyleColumnFormat
 unicodeStyleFormat
@@ -3973,8 +3978,10 @@ xl_replorigin_set
 xl_restore_point
 xl_running_xacts
 xl_seq_rec
+xl_smgr_bufpersistence
 xl_smgr_create
 xl_smgr_truncate
+xl_smgr_unlink
 xl_standby_lock
 xl_standby_locks
 xl_tblspc_create_rec

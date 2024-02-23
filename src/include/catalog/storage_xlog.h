@@ -14,6 +14,7 @@
 #ifndef STORAGE_XLOG_H
 #define STORAGE_XLOG_H
 
+#include "access/simpleundolog.h"
 #include "access/xlogreader.h"
 #include "lib/stringinfo.h"
 #include "storage/block.h"
@@ -29,12 +30,27 @@
 /* XLOG gives us high 4 bits */
 #define XLOG_SMGR_CREATE	0x10
 #define XLOG_SMGR_TRUNCATE	0x20
+#define XLOG_SMGR_UNLINK	0x30
+#define XLOG_SMGR_BUFPERSISTENCE	0x40
 
 typedef struct xl_smgr_create
 {
 	RelFileLocator rlocator;
 	ForkNumber	forkNum;
+	TransactionId	xid;
 } xl_smgr_create;
+
+typedef struct xl_smgr_unlink
+{
+	RelFileLocator rlocator;
+	ForkNumber	forkNum;
+} xl_smgr_unlink;
+
+typedef struct xl_smgr_bufpersistence
+{
+	RelFileLocator rlocator;
+	bool		persistence;
+} xl_smgr_bufpersistence;
 
 /* flags for xl_smgr_truncate */
 #define SMGR_TRUNCATE_HEAP		0x0001
@@ -51,6 +67,9 @@ typedef struct xl_smgr_truncate
 } xl_smgr_truncate;
 
 extern void log_smgrcreate(const RelFileLocator *rlocator, ForkNumber forkNum);
+extern void log_smgrunlink(const RelFileLocator *rlocator, ForkNumber forkNum);
+extern void log_smgrbufpersistence(const RelFileLocator rlocator,
+								   bool persistence);
 
 extern void smgr_redo(XLogReaderState *record);
 extern void smgr_desc(StringInfo buf, XLogReaderState *record);

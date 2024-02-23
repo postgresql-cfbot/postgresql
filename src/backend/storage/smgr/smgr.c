@@ -763,6 +763,15 @@ smgrimmedsync(SMgrRelation reln, ForkNumber forknum)
 }
 
 /*
+ * smgrunlink() -- unlink the storage file
+ */
+void
+smgrunlink(SMgrRelation reln, ForkNumber forknum, bool isRedo)
+{
+	smgrsw[reln->smgr_which].smgr_unlink(reln->smgr_rlocator, forknum, isRedo);
+}
+
+/*
  * AtEOXact_SMgr
  *
  * This routine is called during transaction commit or abort (it doesn't

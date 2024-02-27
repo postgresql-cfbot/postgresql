@@ -62,7 +62,6 @@ PGAC_ARG_REQ(with, template, [NAME], [override operating system template],
 # --with-template not given
 
 case $host_os in
-     aix*) template=aix ;;
   cygwin*|msys*) template=cygwin ;;
   darwin*) template=darwin ;;
 dragonfly*) template=netbsd ;;
@@ -374,10 +373,10 @@ AC_DEFINE_UNQUOTED([XLOG_BLCKSZ], ${XLOG_BLCKSZ}, [
 # variable.
 PGAC_ARG_REQ(with, CC, [CMD], [set compiler (deprecated)], [CC=$with_CC])
 
-case $template in
-  aix) pgac_cc_list="gcc xlc"; pgac_cxx_list="g++ xlC";;
-    *) pgac_cc_list="gcc cc"; pgac_cxx_list="g++ c++";;
-esac
+# If you don't specify a list of compilers to test, the AC_PROG_CC and
+# AC_PROG_CXX macros test for a long list of unsupported compilers.
+pgac_cc_list="gcc cc"
+pgac_cxx_list="g++ c++"
 
 AC_PROG_CC([$pgac_cc_list])
 AC_PROG_CC_C99()
@@ -594,12 +593,6 @@ elif test "$ICC" = yes; then
   # Make sure strict aliasing is off (though this is said to be the default)
   PGAC_PROG_CC_CFLAGS_OPT([-fno-strict-aliasing])
   PGAC_PROG_CXX_CFLAGS_OPT([-fno-strict-aliasing])
-elif test "$PORTNAME" = "aix"; then
-  # AIX's xlc has to have strict aliasing turned off too
-  PGAC_PROG_CC_CFLAGS_OPT([-qnoansialias])
-  PGAC_PROG_CXX_CFLAGS_OPT([-qnoansialias])
-  PGAC_PROG_CC_CFLAGS_OPT([-qlonglong])
-  PGAC_PROG_CXX_CFLAGS_OPT([-qlonglong])
 fi
 
 # If the compiler knows how to hide symbols, add the switch needed for that to
@@ -618,16 +611,6 @@ if test "$GCC" = yes -o "$SUN_STUDIO_CC" = yes ; then
   PGAC_PROG_VARCXX_VARFLAGS_OPT(CXX, CXXFLAGS_SL_MODULE, [-fvisibility=hidden])
   PGAC_PROG_VARCXX_VARFLAGS_OPT(CXX, CXXFLAGS_SL_MODULE, [-fvisibility-inlines-hidden])
   have_visibility_attribute=$pgac_cv_prog_CC_cflags__fvisibility_hidden
-elif test "$PORTNAME" = "aix"; then
-  # Note that xlc accepts -fvisibility=hidden as a file.
-  PGAC_PROG_CC_VAR_OPT(CFLAGS_SL_MODULE, [-qvisibility=hidden])
-  PGAC_PROG_VARCXX_VARFLAGS_OPT(CXX, CXXFLAGS_SL_MODULE, [-qvisibility=hidden])
-  have_visibility_attribute=$pgac_cv_prog_CC_cflags__qvisibility_hidden
-  # Old xlc versions (<13.1) don't have support for -qvisibility. Use expfull to force
-  # all extension module symbols to be exported.
-  if test "$pgac_cv_prog_CC_cflags__qvisibility_hidden" != "yes"; then
-    CFLAGS_SL_MODULE="$CFLAGS_SL_MODULE -Wl,-b,expfull"
-  fi
 fi
 
 if test "$have_visibility_attribute" = "yes"; then
@@ -1407,8 +1390,7 @@ if test "$with_zstd" = yes ; then
   AC_CHECK_LIB(zstd, ZSTD_compress, [], [AC_MSG_ERROR([library 'zstd' is required for ZSTD support])])
 fi
 
-# Note: We can test for libldap_r only after we know PTHREAD_LIBS;
-# also, on AIX, we may need to have openssl in LIBS for this step.
+# Note: We can test for libldap_r only after we know PTHREAD_LIBS
 if test "$with_ldap" = yes ; then
   _LIBS="$LIBS"
   if test "$PORTNAME" != "win32"; then
@@ -1666,12 +1648,8 @@ PGAC_TYPE_LOCALE_T
 # spelling it understands, because it conflicts with
 # __declspec(restrict). Therefore we define pg_restrict to the
 # appropriate definition, which presumably won't conflict.
-#
-# Allow platforms with buggy compilers to force restrict to not be
-# used by setting $FORCE_DISABLE_RESTRICT=yes in the relevant
-# template.
 AC_C_RESTRICT
-if test "$ac_cv_c_restrict" = "no" -o "x$FORCE_DISABLE_RESTRICT" = "xyes"; then
+if test "$ac_cv_c_restrict" = "no"; then
   pg_restrict=""
 else
   pg_restrict="$ac_cv_c_restrict"

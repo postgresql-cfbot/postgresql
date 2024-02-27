@@ -26,12 +26,15 @@ SELECT relname, relkind
 (0 rows)
 
 --
--- When ALIGNOF_DOUBLE==4 (e.g. AIX), the C ABI may impose 8-byte alignment on
+-- When MAXIMUM_ALIGNOF==8 but ALIGNOF_DOUBLE==4, the C ABI may impose 8-byte alignment
 -- some of the C types that correspond to TYPALIGN_DOUBLE SQL types.  To ensure
 -- catalog C struct layout matches catalog tuple layout, arrange for the tuple
 -- offset of each fixed-width, attalign='d' catalog column to be divisible by 8
 -- unconditionally.  Keep such columns before the first NameData column of the
 -- catalog, since packagers can override NAMEDATALEN to an odd number.
+-- (XXX: I'm not sure if any of the supported platforms have MAXIMUM_ALIGNOF==8 and
+-- ALIGNOF_DOUBLE==4.  Perhaps we should just require that
+-- ALIGNOF_DOUBLE==MAXIMUM_ALIGNOF)
 --
 WITH check_columns AS (
  SELECT relname, attname,

@@ -196,26 +196,7 @@ endif
 # that purpose.
 portname = host_system
 
-if host_system == 'aix'
-  library_path_var = 'LIBPATH'
-
-  export_file_format = 'aix'
-  export_fmt = '-Wl,-bE:@0@'
-  mod_link_args_fmt = ['-Wl,-bI:@0@']
-  mod_link_with_dir = 'libdir'
-  mod_link_with_name = '@0@.imp'
-
-  # M:SRE sets a flag indicating that an object is a shared library. Seems to
-  # work in some circumstances without, but required in others.
-  ldflags_sl += '-Wl,-bM:SRE'
-  ldflags_be += '-Wl,-brtllib'
-
-  # Native memset() is faster, tested on:
-  # - AIX 5.1 and 5.2, XLC 6.0 (IBM's cc)
-  # - AIX 5.3 ML3, gcc 4.0.1
-  memset_loop_limit = 0
-
-elif host_system == 'cygwin'
+if host_system == 'cygwin'
   sema_kind = 'unnamed_posix'
   cppflags += '-D_GNU_SOURCE'
   dlsuffix = '.dll'
@@ -1571,7 +1552,7 @@ if cc.links('''
   if not meson.is_cross_build()
     r = cc.run('''
     /* This must match the corresponding code in c.h: */
-    #if defined(__GNUC__) || defined(__SUNPRO_C) || defined(__IBMC__)
+    #if defined(__GNUC__) || defined(__SUNPRO_C)
     #define pg_attribute_aligned(a) __attribute__((aligned(a)))
     #elif defined(_MSC_VER)
     #define pg_attribute_aligned(a) __declspec(align(a))
@@ -2371,10 +2352,6 @@ endif
 # conflict.
 #
 # We assume C99 support, so we don't need to make this conditional.
-#
-# XXX: Historically we allowed platforms to disable restrict in template
-# files, but that was only added for AIX when building with XLC, which we
-# don't support yet.
 cdata.set('pg_restrict', '__restrict')
 
 

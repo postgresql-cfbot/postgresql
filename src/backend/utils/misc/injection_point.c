@@ -253,6 +253,26 @@ InjectionPointDetach(const char *name)
 }
 
 /*
+ * Test if injection point is attached.
+ */
+bool
+InjectionPointIsAttach(const char *name)
+{
+#ifdef USE_INJECTION_POINTS
+	bool		found;
+
+	LWLockAcquire(InjectionPointLock, LW_EXCLUSIVE);
+	hash_search(InjectionPointHash, name, HASH_FIND, &found);
+	LWLockRelease(InjectionPointLock);
+
+	return found;
+
+#else
+	elog(ERROR, "Injection points are not supported by this build");
+#endif
+}
+
+/*
  * Execute an injection point, if defined.
  *
  * Check first the shared hash table, and adapt the local cache depending
@@ -311,6 +331,79 @@ InjectionPointRun(const char *name)
 	}
 
 	injection_callback(name);
+#else
+	elog(ERROR, "Injection points are not supported by this build");
+#endif
+}
+
+InjectionPointCallback prepared_injection_callback = NULL;
+const char* prepared_injection_callback_name;
+
+void
+InjectionPointPrepare(const char *name)
+{
+#ifdef USE_INJECTION_POINTS
+	InjectionPointEntry *entry_by_name;
+	bool		found;
+	Assert(prepared_injection_callback == NULL);
+
+	LWLockAcquire(InjectionPointLock, LW_SHARED);
+	entry_by_name = (InjectionPointEntry *)
+		hash_search(InjectionPointHash, name,
+					HASH_FIND, &found);
+	LWLockRelease(InjectionPointLock);
+
+	/*
+	 * If not found, do nothing and remove it from the local cache if it
+	 * existed there.
+	 */
+	if (!found)
+	{
+		injection_point_cache_remove(name);
+		return;
+	}
+
+	/*
+	 * Check if the callback exists in the local cache, to avoid unnecessary
+	 * external loads.
+	 */
+	prepared_injection_callback = injection_point_cache_get(name);
+	if (prepared_injection_callback == NULL)
+	{
+		char		path[MAXPGPATH];
+
+		/* not found in local cache, so load and register */
+		snprintf(path, MAXPGPATH, "%s/%s%s", pkglib_path,
+				 entry_by_name->library, DLSUFFIX);
+
+		if (!pg_file_exists(path))
+			elog(ERROR, "could not find library \"%s\" for injection point \"%s\"",
+				 path, name);
+
+		prepared_injection_callback = (InjectionPointCallback)
+			load_external_function(path, entry_by_name->function, false, NULL);
+
+		if (prepared_injection_callback == NULL)
+			elog(ERROR, "could not find function \"%s\" in library \"%s\" for injection point \"%s\"",
+				 entry_by_name->function, path, name);
+
+		/* add it to the local cache when found */
+		injection_point_cache_add(name, prepared_injection_callback);
+	}
+
+	prepared_injection_callback_name = name;
+#else
+	elog(ERROR, "Injection points are not supported by this build");
+#endif
+}
+
+void
+InjectionPointRunPrepared()
+{
+#ifdef USE_INJECTION_POINTS
+	if (prepared_injection_callback != NULL)
+		prepared_injection_callback(prepared_injection_callback_name);
+	prepared_injection_callback = NULL;
 #else
 	elog(ERROR, "Injection points are not supported by this build");
 #endif

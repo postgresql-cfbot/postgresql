@@ -83,8 +83,17 @@ initdb --locale=sv_SE
     system under what names depends on what was provided by the operating
     system vendor and what was installed.  On most Unix systems, the command
     <literal>locale -a</literal> will provide a list of available locales.
-    Windows uses more verbose locale names, such as <literal>German_Germany</literal>
-    or <literal>Swedish_Sweden.1252</literal>, but the principles are the same.
+   </para>
+
+   <para>
+    Windows uses BCP 47 language tags, like ICU.
+    For example, <literal>sv-SE</literal> represents Swedish as spoken in Sweden.
+    Windows also supports more verbose locale names based on full names
+    such as <literal>German_Germany</literal> or <literal>Swedish_Sweden.1252</literal>,
+    but these are not recommended because they are not stable across operating
+    system updates due to changes in geographical names, and may contain
+    non-ASCII characters which are not supported in PostgreSQL's shared
+    catalogs.
    </para>
 
    <para>

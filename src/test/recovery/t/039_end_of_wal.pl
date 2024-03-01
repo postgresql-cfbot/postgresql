@@ -21,7 +21,7 @@ use integer;    # causes / operator to use integer math
 my $BIG_ENDIAN = pack("L", 0x12345678) eq pack("N", 0x12345678);
 
 # Header size of record header.
-my $RECORD_HEADER_SIZE = 24;
+my $RECORD_HEADER_SIZE = 26;
 
 # Fields retrieved from code headers.
 my @scan_result = scan_server_header('access/xlog_internal.h',
@@ -131,17 +131,21 @@ sub build_record_header
 
 	# This needs to follow the structure XLogRecord:
 	# I for xl_tot_len
-	# I for xl_xid
+	# I for xl_crc
+	# II for xl_xid
 	# II for xl_prev
 	# C for xl_info
 	# C for xl_rmid
-	# BB for two bytes of padding
-	# I for xl_crc
-	return pack("IIIICCBBI",
-		$xl_tot_len, $xl_xid,
+	# BBBBBB for two bytes of padding
+	return pack("IIIIIICCBBBBBB",
+		$xl_tot_len,
+		$xl_crc,
+		$BIG_ENDIAN ? 0        : $xl_xid,
+		$BIG_ENDIAN ? $xl_xid  : 0,
 		$BIG_ENDIAN ? 0        : $xl_prev,
 		$BIG_ENDIAN ? $xl_prev : 0,
-		$xl_info, $xl_rmid, 0, 0, $xl_crc);
+		$xl_info, $xl_rmid,
+		0, 0, 0, 0, 0, 0);
 }
 
 # Build a fake WAL page header, based on the data given by the caller
@@ -265,7 +269,7 @@ $node->stop('immediate');
 my $log_size = -s $node->logfile;
 $node->start;
 ok( $node->log_contains(
-		"invalid record length at .*: expected at least 24, got 0", $log_size
+		"invalid record length at .*: expected at least 26, got 0", $log_size
 	),
 	"xl_tot_len zero");
 
@@ -277,7 +281,7 @@ write_wal($node, $TLI, $end_lsn, build_record_header(23));
 $log_size = -s $node->logfile;
 $node->start;
 ok( $node->log_contains(
-		"invalid record length at .*: expected at least 24, got 23",
+		"invalid record length at .*: expected at least 26, got 23",
 		$log_size),
 	"xl_tot_len short");
 
@@ -290,7 +294,7 @@ write_wal($node, $TLI, $end_lsn, build_record_header(1));
 $log_size = -s $node->logfile;
 $node->start;
 ok( $node->log_contains(
-		"invalid record length at .*: expected at least 24, got 1", $log_size
+		"invalid record length at .*: expected at least 26, got 1", $log_size
 	),
 	"xl_tot_len short at end-of-page");
 

@@ -526,7 +526,7 @@ ProcArrayAdd(PGPROC *proc)
 
 	arrayP->pgprocnos[index] = GetNumberFromPGProc(proc);
 	proc->pgxactoff = index;
-	ProcGlobal->xids[index] = proc->xid;
+	ProcGlobal->xids[index] = XidFromFullTransactionId(proc->xid);
 	ProcGlobal->subxidStates[index] = proc->subxidStatus;
 	ProcGlobal->statusFlags[index] = proc->statusFlags;
 
@@ -675,7 +675,7 @@ ProcArrayEndTransaction(PGPROC *proc, TransactionId latestXid)
 		 * else is taking a snapshot.  See discussion in
 		 * src/backend/access/transam/README.
 		 */
-		Assert(TransactionIdIsValid(proc->xid));
+		Assert(FullTransactionIdIsValid(proc->xid));
 
 		/*
 		 * If we can immediately acquire ProcArrayLock, we clear our own XID
@@ -697,7 +697,7 @@ ProcArrayEndTransaction(PGPROC *proc, TransactionId latestXid)
 		 * anyone else's calculation of a snapshot.  We might change their
 		 * estimate of global xmin, but that's OK.
 		 */
-		Assert(!TransactionIdIsValid(proc->xid));
+		Assert(!TransactionIdIsValid(XidFromFullTransactionId(proc->xid)));
 		Assert(proc->subxidStatus.count == 0);
 		Assert(!proc->subxidStatus.overflowed);
 
@@ -739,10 +739,10 @@ ProcArrayEndTransactionInternal(PGPROC *proc, TransactionId latestXid)
 	 */
 	Assert(LWLockHeldByMeInMode(ProcArrayLock, LW_EXCLUSIVE));
 	Assert(TransactionIdIsValid(ProcGlobal->xids[pgxactoff]));
-	Assert(ProcGlobal->xids[pgxactoff] == proc->xid);
+	Assert(ProcGlobal->xids[pgxactoff] == XidFromFullTransactionId(proc->xid));
 
 	ProcGlobal->xids[pgxactoff] = InvalidTransactionId;
-	proc->xid = InvalidTransactionId;
+	proc->xid = InvalidFullTransactionId;
 	proc->lxid = InvalidLocalTransactionId;
 	proc->xmin = InvalidTransactionId;
 
@@ -798,7 +798,7 @@ ProcArrayGroupClearXid(PGPROC *proc, TransactionId latestXid)
 	uint32		wakeidx;
 
 	/* We should definitely have an XID to clear. */
-	Assert(TransactionIdIsValid(proc->xid));
+	Assert(FullTransactionIdIsValid(proc->xid));
 
 	/* Add ourselves to the list of processes needing a group XID clear. */
 	proc->procArrayGroupMember = true;
@@ -928,7 +928,7 @@ ProcArrayClearTransaction(PGPROC *proc)
 	pgxactoff = proc->pgxactoff;
 
 	ProcGlobal->xids[pgxactoff] = InvalidTransactionId;
-	proc->xid = InvalidTransactionId;
+	proc->xid = InvalidFullTransactionId;
 
 	proc->lxid = InvalidLocalTransactionId;
 	proc->xmin = InvalidTransactionId;
@@ -1742,7 +1742,8 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h)
 	 * additions.
 	 */
 	{
-		TransactionId initial;
+		TransactionId	initial,
+						myproc_xid = XidFromFullTransactionId(MyProc->xid);
 
 		initial = XidFromFullTransactionId(h->latest_completed);
 		Assert(TransactionIdIsValid(initial));
@@ -1764,8 +1765,8 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h)
 		 * definition, can't be any newer changes in the temp table than
 		 * latestCompletedXid.
 		 */
-		if (TransactionIdIsValid(MyProc->xid))
-			h->temp_oldest_nonremovable = MyProc->xid;
+		if (TransactionIdIsValid(myproc_xid))
+			h->temp_oldest_nonremovable = myproc_xid;
 		else
 			h->temp_oldest_nonremovable = initial;
 	}
@@ -2230,7 +2231,7 @@ GetSnapshotData(Snapshot snapshot)
 	latest_completed = TransamVariables->latestCompletedXid;
 	mypgxactoff = MyProc->pgxactoff;
 	myxid = other_xids[mypgxactoff];
-	Assert(myxid == MyProc->xid);
+	Assert(myxid == XidFromFullTransactionId(MyProc->xid));
 
 	oldestxid = TransamVariables->oldestXid;
 	curXactCompletionCount = TransamVariables->xactCompletionCount;
@@ -3492,7 +3493,7 @@ MinimumActiveBackends(int min)
 			continue;			/* do not count deleted entries */
 		if (proc == MyProc)
 			continue;			/* do not count myself */
-		if (proc->xid == InvalidTransactionId)
+		if (FullTransactionIdIsInvalid(proc->xid))
 			continue;			/* do not count if no XID assigned */
 		if (proc->pid == 0)
 			continue;			/* do not count prepared xacts */

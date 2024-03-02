@@ -95,6 +95,7 @@
 <!ENTITY planstats    SYSTEM "planstats.sgml">
 <!ENTITY tableam    SYSTEM "tableam.sgml">
 <!ENTITY indexam    SYSTEM "indexam.sgml">
+<!ENTITY sequenceam SYSTEM "sequenceam.sgml">
 <!ENTITY nls        SYSTEM "nls.sgml">
 <!ENTITY plhandler  SYSTEM "plhandler.sgml">
 <!ENTITY fdwhandler SYSTEM "fdwhandler.sgml">

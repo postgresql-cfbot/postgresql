@@ -10,13 +10,13 @@
 /gistdesc.c
 /hashdesc.c
 /heapdesc.c
+/localseqdesc.c
 /logicalmsgdesc.c
 /mxactdesc.c
 /nbtdesc.c
 /relmapdesc.c
 /replorigindesc.c
 /rmgrdesc_utils.c
-/seqdesc.c
 /smgrdesc.c
 /spgdesc.c
 /standbydesc.c

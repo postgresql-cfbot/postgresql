@@ -163,11 +163,6 @@ CREATE VIEW tableam_view_heap2 USING heap2 AS SELECT * FROM tableam_tbl_heap2;
 ERROR:  syntax error at or near "USING"
 LINE 1: CREATE VIEW tableam_view_heap2 USING heap2 AS SELECT * FROM ...
                                        ^
--- CREATE SEQUENCE doesn't support USING
-CREATE SEQUENCE tableam_seq_heap2 USING heap2;
-ERROR:  syntax error at or near "USING"
-LINE 1: CREATE SEQUENCE tableam_seq_heap2 USING heap2;
-                                          ^
 -- CREATE MATERIALIZED VIEW does support USING
 CREATE MATERIALIZED VIEW tableam_tblmv_heap2 USING heap2 AS SELECT * FROM tableam_tbl_heap2;
 SELECT f1 FROM tableam_tblmv_heap2 ORDER BY f1;
@@ -331,9 +326,12 @@ CREATE TABLE tableam_parted_heapx (a text, b int) PARTITION BY list (a);
 CREATE TABLE tableam_parted_1_heapx PARTITION OF tableam_parted_heapx FOR VALUES IN ('a', 'b');
 -- but an explicitly set AM overrides it
 CREATE TABLE tableam_parted_2_heapx PARTITION OF tableam_parted_heapx FOR VALUES IN ('c', 'd') USING heap;
--- sequences, views and foreign servers shouldn't have an AM
-CREATE VIEW tableam_view_heapx AS SELECT * FROM tableam_tbl_heapx;
+-- sequences have an AM
+SET LOCAL default_sequence_access_method = 'local';
 CREATE SEQUENCE tableam_seq_heapx;
+RESET default_sequence_access_method;
+-- views and foreign servers shouldn't have an AM
+CREATE VIEW tableam_view_heapx AS SELECT * FROM tableam_tbl_heapx;
 CREATE FOREIGN DATA WRAPPER fdw_heap2 VALIDATOR postgresql_fdw_validator;
 CREATE SERVER fs_heap2 FOREIGN DATA WRAPPER fdw_heap2 ;
 CREATE FOREIGN table tableam_fdw_heapx () SERVER fs_heap2;
@@ -356,7 +354,7 @@ ORDER BY 3, 1, 2;
  r       | heap2  | tableam_parted_1_heapx
  r       | heap   | tableam_parted_2_heapx
  p       |        | tableam_parted_heapx
- S       |        | tableam_seq_heapx
+ S       | local  | tableam_seq_heapx
  r       | heap2  | tableam_tbl_heapx
  r       | heap2  | tableam_tblas_heapx
  m       | heap2  | tableam_tblmv_heapx
@@ -388,3 +386,22 @@ table tableam_parted_b_heap2 depends on access method heap2
 table tableam_parted_d_heap2 depends on access method heap2
 HINT:  Use DROP ... CASCADE to drop the dependent objects too.
 -- we intentionally leave the objects created above alive, to verify pg_dump support
+-- Checks for sequence access methods
+-- Create new sequence access method which uses standard local handler
+CREATE ACCESS METHOD local2 TYPE SEQUENCE HANDLER local_sequenceam_handler;
+-- Create and use sequence
+CREATE SEQUENCE test_seqam USING local2;
+SELECT nextval('test_seqam'::regclass);
+ nextval 
+---------
+       1
+(1 row)
+
+-- Try to drop and fail on dependency
+DROP ACCESS METHOD local2;
+ERROR:  cannot drop access method local2 because other objects depend on it
+DETAIL:  sequence test_seqam depends on access method local2
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+-- And cleanup
+DROP SEQUENCE test_seqam;
+DROP ACCESS METHOD local2;

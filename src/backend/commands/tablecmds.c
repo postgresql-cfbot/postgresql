@@ -22,6 +22,7 @@
 #include "access/reloptions.h"
 #include "access/relscan.h"
 #include "access/sysattr.h"
+#include "access/sequenceam.h"
 #include "access/tableam.h"
 #include "access/toast_compression.h"
 #include "access/xact.h"
@@ -969,10 +970,17 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	}
 	else if (RELKIND_HAS_TABLE_AM(relkind))
 		accessMethod = default_table_access_method;
+	else if (RELKIND_HAS_SEQUENCE_AM(relkind))
+		accessMethod = default_sequence_access_method;
 
-	/* look up the access method, verify it is for a table */
+	/* look up the access method, verify it is for a table or a sequence */
 	if (accessMethod != NULL)
-		accessMethodId = get_table_am_oid(accessMethod, false);
+	{
+		if (RELKIND_HAS_SEQUENCE_AM(relkind))
+			accessMethodId = get_sequence_am_oid(accessMethod, false);
+		else
+			accessMethodId = get_table_am_oid(accessMethod, false);
+	}
 
 	/*
 	 * Create the relation.  Inherited defaults and constraints are passed in
@@ -4544,6 +4552,7 @@ AlterTableGetLockLevel(List *cmds)
 				 * Subcommands that may be visible to concurrent SELECTs
 				 */
 			case AT_DropColumn: /* change visible to SELECT */
+			case AT_AddColumnToSequence:	/* CREATE SEQUENCE */
 			case AT_AddColumnToView:	/* CREATE VIEW */
 			case AT_DropOids:	/* used to equiv to DropColumn */
 			case AT_EnableAlwaysRule:	/* may change SELECT rules */
@@ -4834,6 +4843,13 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 		case AT_AddColumn:		/* ADD COLUMN */
 			ATSimplePermissions(cmd->subtype, rel,
 								ATT_TABLE | ATT_COMPOSITE_TYPE | ATT_FOREIGN_TABLE);
+			ATPrepAddColumn(wqueue, rel, recurse, recursing, false, cmd,
+							lockmode, context);
+			/* Recursion occurs during execution phase */
+			pass = AT_PASS_ADD_COL;
+			break;
+		case AT_AddColumnToSequence:	/* add column via CREATE SEQUENCE */
+			ATSimplePermissions(cmd->subtype, rel, ATT_SEQUENCE);
 			ATPrepAddColumn(wqueue, rel, recurse, recursing, false, cmd,
 							lockmode, context);
 			/* Recursion occurs during execution phase */
@@ -5262,6 +5278,7 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 	switch (cmd->subtype)
 	{
 		case AT_AddColumn:		/* ADD COLUMN */
+		case AT_AddColumnToSequence:	/* add column via CREATE SEQUENCE */
 		case AT_AddColumnToView:	/* add column via CREATE OR REPLACE VIEW */
 			address = ATExecAddColumn(wqueue, tab, rel, &cmd,
 									  cmd->recurse, false,
@@ -6417,6 +6434,7 @@ alter_table_type_to_string(AlterTableType cmdtype)
 	switch (cmdtype)
 	{
 		case AT_AddColumn:
+		case AT_AddColumnToSequence:
 		case AT_AddColumnToView:
 			return "ADD COLUMN";
 		case AT_ColumnDefault:

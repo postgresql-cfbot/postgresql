@@ -217,14 +217,18 @@ MAKE_SYSCACHE(RELNAMENSP, pg_class_relname_nsp_index, 128);
 	 && (relkind) != RELKIND_SEQUENCE)
 
 /*
- * Relation kinds with a table access method (rd_tableam).  Although sequences
- * use the heap table AM, they are enough of a special case in most uses that
- * they are not included here.
+ * Relation kinds with a table access method (rd_tableam).
  */
 #define RELKIND_HAS_TABLE_AM(relkind) \
 	((relkind) == RELKIND_RELATION || \
 	 (relkind) == RELKIND_TOASTVALUE || \
 	 (relkind) == RELKIND_MATVIEW)
+
+/*
+ * Relation kinds with a sequence access method (rd_sequenceam).
+ */
+#define RELKIND_HAS_SEQUENCE_AM(relkind) \
+	((relkind) == RELKIND_SEQUENCE)
 
 extern int	errdetail_relkind_not_supported(char relkind);
 

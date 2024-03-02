@@ -257,6 +257,7 @@ break is not needed in a wider output rendering.
   &geqo;
   &tableam;
   &indexam;
+  &sequenceam;
   &generic-wal;
   &custom-rmgr;
   &btree;

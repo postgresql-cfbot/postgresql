@@ -68,10 +68,11 @@
 #define K_VERS_1_15 MAKE_ARCHIVE_VERSION(1, 15, 0)	/* add
 													 * compression_algorithm
 													 * in header */
+#define K_VERS_1_16 MAKE_ARCHIVE_VERSION(1, 16, 0)	/* add sequenceam */
 
 /* Current archive version number (the format we can output) */
 #define K_VERS_MAJOR 1
-#define K_VERS_MINOR 15
+#define K_VERS_MINOR 16
 #define K_VERS_REV 0
 #define K_VERS_SELF MAKE_ARCHIVE_VERSION(K_VERS_MAJOR, K_VERS_MINOR, K_VERS_REV)
 
@@ -319,6 +320,7 @@ struct _archiveHandle
 	/* these vars track state to avoid sending redundant SET commands */
 	char	   *currUser;		/* current username, or NULL if unknown */
 	char	   *currSchema;		/* current schema, or NULL */
+	char	   *currSequenceAm; /* current sequence access method, or NULL */
 	char	   *currTablespace; /* current tablespace, or NULL */
 	char	   *currTableAm;	/* current table access method, or NULL */
 
@@ -347,6 +349,7 @@ struct _tocEntry
 	char	   *namespace;		/* null or empty string if not in a schema */
 	char	   *tablespace;		/* null if not in a tablespace; empty string
 								 * means use database default */
+	char	   *sequenceam;		/* table access method, only for SEQUENCE tags */
 	char	   *tableam;		/* table access method, only for TABLE tags */
 	char	   *owner;
 	char	   *desc;
@@ -387,6 +390,7 @@ typedef struct _archiveOpts
 	const char *tag;
 	const char *namespace;
 	const char *tablespace;
+	const char *sequenceam;
 	const char *tableam;
 	const char *owner;
 	const char *description;

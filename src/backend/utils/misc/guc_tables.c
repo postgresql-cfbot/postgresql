@@ -30,6 +30,7 @@
 #include "access/gin.h"
 #include "access/slru.h"
 #include "access/toast_compression.h"
+#include "access/sequenceam.h"
 #include "access/twophase.h"
 #include "access/xlog_internal.h"
 #include "access/xlogprefetcher.h"
@@ -4095,6 +4096,17 @@ struct config_string ConfigureNamesString[] =
 		&default_table_access_method,
 		DEFAULT_TABLE_ACCESS_METHOD,
 		check_default_table_access_method, NULL, NULL
+	},
+
+	{
+		{"default_sequence_access_method", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Sets the default sequence access method for new sequences."),
+			NULL,
+			GUC_IS_NAME
+		},
+		&default_sequence_access_method,
+		DEFAULT_SEQUENCE_ACCESS_METHOD,
+		check_default_sequence_access_method, NULL, NULL
 	},
 
 	{

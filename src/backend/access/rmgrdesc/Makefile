@@ -18,13 +18,13 @@ OBJS = \
 	gistdesc.o \
 	hashdesc.o \
 	heapdesc.o \
+	localseqdesc.o \
 	logicalmsgdesc.o \
 	mxactdesc.o \
 	nbtdesc.o \
 	relmapdesc.o \
 	replorigindesc.o \
 	rmgrdesc_utils.o \
-	seqdesc.o \
 	smgrdesc.o \
 	spgdesc.o \
 	standbydesc.o \

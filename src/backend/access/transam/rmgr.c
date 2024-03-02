@@ -15,6 +15,7 @@
 #include "access/gistxlog.h"
 #include "access/hash_xlog.h"
 #include "access/heapam_xlog.h"
+#include "access/localam.h"
 #include "access/multixact.h"
 #include "access/nbtxlog.h"
 #include "access/spgxlog.h"

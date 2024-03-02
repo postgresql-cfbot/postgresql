@@ -25,7 +25,10 @@ NOTICE:  DDL test: type simple, tag CREATE TABLE
 CREATE TABLE grandchild () INHERITS (child);
 NOTICE:  DDL test: type simple, tag CREATE TABLE
 ALTER TABLE parent ADD COLUMN b serial;
-NOTICE:  DDL test: type simple, tag CREATE SEQUENCE
+NOTICE:  DDL test: type alter table, tag CREATE SEQUENCE
+NOTICE:    subcommand: type ADD COLUMN TO SEQUENCE desc column last_value of sequence parent_b_seq
+NOTICE:    subcommand: type ADD COLUMN TO SEQUENCE desc column log_cnt of sequence parent_b_seq
+NOTICE:    subcommand: type ADD COLUMN TO SEQUENCE desc column is_called of sequence parent_b_seq
 NOTICE:  DDL test: type alter table, tag ALTER TABLE
 NOTICE:    subcommand: type ADD COLUMN (and recurse) desc column b of table parent
 NOTICE:    subcommand: type ADD CONSTRAINT (and recurse) desc constraint parent_b_not_null on table parent
@@ -71,7 +74,10 @@ ALTER TABLE parent ALTER COLUMN a SET NOT NULL;
 NOTICE:  DDL test: type alter table, tag ALTER TABLE
 NOTICE:    subcommand: type SET NOT NULL (and recurse) desc constraint parent_a_not_null on table parent
 ALTER TABLE parent ALTER COLUMN a ADD GENERATED ALWAYS AS IDENTITY;
-NOTICE:  DDL test: type simple, tag CREATE SEQUENCE
+NOTICE:  DDL test: type alter table, tag CREATE SEQUENCE
+NOTICE:    subcommand: type ADD COLUMN TO SEQUENCE desc column last_value of sequence parent_a_seq
+NOTICE:    subcommand: type ADD COLUMN TO SEQUENCE desc column log_cnt of sequence parent_a_seq
+NOTICE:    subcommand: type ADD COLUMN TO SEQUENCE desc column is_called of sequence parent_a_seq
 NOTICE:  DDL test: type simple, tag ALTER SEQUENCE
 NOTICE:  DDL test: type alter table, tag ALTER TABLE
 NOTICE:    subcommand: type ADD IDENTITY (and recurse) desc column a of table parent

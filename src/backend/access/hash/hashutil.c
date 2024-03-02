@@ -15,7 +15,7 @@
 #include "postgres.h"
 
 #include "access/hash.h"
-#include "access/reloptions.h"
+#include "access/options.h"
 #include "access/relscan.h"
 #include "port/pg_bitutils.h"
 #include "storage/buf_internals.h"
@@ -270,19 +270,6 @@ _hash_checkpage(Relation rel, Buffer buf, int flags)
 							RelationGetRelationName(rel)),
 					 errhint("Please REINDEX it.")));
 	}
-}
-
-bytea *
-hashoptions(Datum reloptions, bool validate)
-{
-	static const relopt_parse_elt tab[] = {
-		{"fillfactor", RELOPT_TYPE_INT, offsetof(HashOptions, fillfactor)},
-	};
-
-	return (bytea *) build_reloptions(reloptions, validate,
-									  RELOPT_KIND_HASH,
-									  sizeof(HashOptions),
-									  tab, lengthof(tab));
 }
 
 /*
@@ -619,4 +606,23 @@ _hash_kill_items(IndexScanDesc scan)
 		LockBuffer(so->currPos.buf, BUFFER_LOCK_UNLOCK);
 	else
 		_hash_relbuf(rel, buf);
+}
+
+static options_spec_set *hash_relopt_specset = NULL;
+
+void *
+hashgetreloptspecset(void)
+{
+	if (hash_relopt_specset)
+		return hash_relopt_specset;
+
+	hash_relopt_specset = allocateOptionsSpecSet(NULL,
+												 sizeof(HashOptions), false, 1);
+	optionsSpecSetAddInt(hash_relopt_specset, "fillfactor",
+						 "Packs hash index pages only to this percentage",
+						 NoLock,	/* No ALTER -- no lock */
+						 offsetof(HashOptions, fillfactor), NULL,
+						 HASH_DEFAULT_FILLFACTOR, HASH_MIN_FILLFACTOR, 100);
+
+	return hash_relopt_specset;
 }

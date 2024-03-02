@@ -294,6 +294,13 @@ struct JsonbValue
 	}			val;
 };
 
+typedef enum JsonbValueTarget
+{
+	JsonbValue_AsJsonbValue,
+	JsonbValue_AsJsonb,
+	JsonbValue_AsText
+} JsonbValueTarget;
+
 #define IsAJsonbScalar(jsonbval)	(((jsonbval)->type >= jbvNull && \
 									  (jsonbval)->type <= jbvBool) || \
 									  (jsonbval)->type == jbvDatetime)
@@ -428,12 +435,12 @@ extern const char *JsonbTypeName(JsonbValue *val);
 extern Datum jsonb_set_element(Jsonb *jb, Datum *path, int path_len,
 							   JsonbValue *newval);
 extern Datum jsonb_get_element(Jsonb *jb, Datum *path, int npath,
-							   bool *isnull, bool as_text);
+							   bool *isnull, JsonbValueTarget target);
 extern bool to_jsonb_is_immutable(Oid typoid);
 extern Datum jsonb_build_object_worker(int nargs, const Datum *args, const bool *nulls,
 									   const Oid *types, bool absent_on_null,
 									   bool unique_keys);
 extern Datum jsonb_build_array_worker(int nargs, const Datum *args, const bool *nulls,
 									  const Oid *types, bool absent_on_null);
-
+extern Datum convert_jsonbvalue(JsonbValue *jbv, JsonbValueTarget target);
 #endif							/* __JSONB_H__ */

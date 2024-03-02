@@ -1273,6 +1273,7 @@ JsonArrayAgg
 JsonArrayConstructor
 JsonArrayQueryConstructor
 JsonBaseObjectInfo
+JsonbValueTarget
 JsonConstructorExpr
 JsonConstructorExprState
 JsonConstructorType

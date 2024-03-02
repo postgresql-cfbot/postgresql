@@ -943,8 +943,9 @@ AllocSetAllocFromNewBlock(MemoryContext context, Size size, int flags,
 
 /*
  * AllocSetAlloc
- *		Returns pointer to allocated memory of given size or NULL if
- *		request could not be completed; memory is added to the set.
+ *		Returns a pointer to allocated memory of given size or raises an ERROR
+ *		on allocation failure, or returns NULL when flags contains
+ *		MCXT_ALLOC_NO_OOM.
  *
  * No request may exceed:
  *		MAXALIGN_DOWN(SIZE_MAX) - ALLOC_BLOCKHDRSZ - ALLOC_CHUNKHDRSZ

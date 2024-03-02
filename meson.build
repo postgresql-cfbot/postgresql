@@ -1346,7 +1346,8 @@ if uuidopt != 'none'
     uuidfunc = 'uuid_to_string'
     uuidheader = 'uuid.h'
   elif uuidopt == 'ossp'
-    uuid = dependency('ossp-uuid', required: true)
+    # upstream is called "uuid", but many distros change this to "ossp-uuid"
+    uuid = dependency('ossp-uuid', 'uuid', required: true)
     uuidfunc = 'uuid_export'
     uuidheader = 'uuid.h'
   else

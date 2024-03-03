@@ -3297,6 +3297,7 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
 	bool		needToClear;
 	SERIALIZABLEXACT *roXact;
 	dlist_mutable_iter iter;
+	LatchGroup	wakeups = {0};
 
 	/*
 	 * We can't trust XactReadOnly here, because a transaction which started
@@ -3601,7 +3602,7 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
 			 */
 			if (SxactIsDeferrableWaiting(roXact) &&
 				(SxactIsROUnsafe(roXact) || SxactIsROSafe(roXact)))
-				ProcSendSignal(roXact->pgprocno);
+				AddLatch(&wakeups, GetProcLatchByNumber(roXact->pgprocno));
 		}
 	}
 
@@ -3630,6 +3631,8 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
 	}
 
 	LWLockRelease(SerializableXactHashLock);
+
+	SetLatches(&wakeups);
 
 	LWLockAcquire(SerializableFinishedListLock, LW_EXCLUSIVE);
 

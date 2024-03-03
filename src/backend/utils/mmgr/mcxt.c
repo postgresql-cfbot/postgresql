@@ -1125,7 +1125,8 @@ MemoryContextAllocExtended(MemoryContext context, Size size, int flags)
 	void	   *ret;
 
 	Assert(MemoryContextIsValid(context));
-	AssertNotInCriticalSection(context);
+	if ((flags & MCXT_ALLOC_NO_OOM) == 0)
+		AssertNotInCriticalSection(context);
 
 	if (!((flags & MCXT_ALLOC_HUGE) != 0 ? AllocHugeSizeIsValid(size) :
 		  AllocSizeIsValid(size)))
@@ -1256,7 +1257,8 @@ palloc_extended(Size size, int flags)
 	MemoryContext context = CurrentMemoryContext;
 
 	Assert(MemoryContextIsValid(context));
-	AssertNotInCriticalSection(context);
+	if ((flags & MCXT_ALLOC_NO_OOM) == 0)
+		AssertNotInCriticalSection(context);
 
 	context->isReset = false;
 
@@ -1470,7 +1472,8 @@ repalloc_extended(void *pointer, Size size, int flags)
 #endif
 	void	   *ret;
 
-	AssertNotInCriticalSection(context);
+	if ((flags & MCXT_ALLOC_NO_OOM) == 0)
+		AssertNotInCriticalSection(context);
 
 	/* isReset must be false already */
 	Assert(!context->isReset);

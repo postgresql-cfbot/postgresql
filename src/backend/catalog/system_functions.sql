@@ -751,6 +751,8 @@ REVOKE EXECUTE ON FUNCTION pg_ls_dir(text,boolean,boolean) FROM public;
 
 REVOKE EXECUTE ON FUNCTION pg_log_backend_memory_contexts(integer) FROM PUBLIC;
 
+REVOKE EXECUTE ON FUNCTION pg_log_backend_backtrace(integer) FROM PUBLIC;
+
 REVOKE EXECUTE ON FUNCTION pg_ls_logicalsnapdir() FROM PUBLIC;
 
 REVOKE EXECUTE ON FUNCTION pg_ls_logicalmapdir() FROM PUBLIC;

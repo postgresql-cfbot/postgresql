@@ -326,6 +326,63 @@ REVOKE EXECUTE ON FUNCTION pg_log_backend_memory_contexts(integer)
   FROM regress_log_memory;
 DROP ROLE regress_log_memory;
 --
+-- pg_log_backend_backtrace()
+--
+-- Backtraces are logged to stderr and not returned to the function.
+-- Furthermore, the output of this function can vary depending on backtrace
+-- generation support. However, we can at least verify that the code doesn't
+-- fail, and that the permissions are set properly.
+-- Suppress warnings that depend on dynamic output i.e. PID or backtrace
+-- generation support.
+SET client_min_messages = 'ERROR';
+SELECT count(*) > 0 AS ok FROM pg_log_backend_backtrace(pg_backend_pid());
+ ok 
+----
+ t
+(1 row)
+
+SELECT pid AS c_pid FROM pg_stat_activity
+  WHERE backend_type = 'checkpointer' \gset
+SELECT count(*) > 0 AS ok FROM pg_log_backend_backtrace(:c_pid);
+ ok 
+----
+ t
+(1 row)
+
+RESET client_min_messages;
+CREATE ROLE regress_log_backtrace;
+SELECT has_function_privilege('regress_log_backtrace',
+  'pg_log_backend_backtrace(integer)', 'EXECUTE'); -- no
+ has_function_privilege 
+------------------------
+ f
+(1 row)
+
+GRANT EXECUTE ON FUNCTION pg_log_backend_backtrace(integer)
+  TO regress_log_backtrace;
+SELECT has_function_privilege('regress_log_backtrace',
+  'pg_log_backend_backtrace(integer)', 'EXECUTE'); -- yes
+ has_function_privilege 
+------------------------
+ t
+(1 row)
+
+SET ROLE regress_log_backtrace;
+-- Suppress warnings that depend on dynamic output i.e. PID or backtrace
+-- generation support.
+SET client_min_messages = 'ERROR';
+SELECT count(*) > 0 AS ok FROM pg_log_backend_backtrace(pg_backend_pid());
+ ok 
+----
+ t
+(1 row)
+
+RESET client_min_messages;
+RESET ROLE;
+REVOKE EXECUTE ON FUNCTION pg_log_backend_backtrace(integer)
+  FROM regress_log_backtrace;
+DROP ROLE regress_log_backtrace;
+--
 -- Test some built-in SRFs
 --
 -- The outputs of these are variable, so we can't just print their results

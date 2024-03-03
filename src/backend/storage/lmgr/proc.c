@@ -49,6 +49,7 @@
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
+#include "storage/procbacktrace.h"
 #include "storage/procsignal.h"
 #include "storage/spin.h"
 #include "storage/standby.h"
@@ -469,6 +470,8 @@ InitProcess(void)
 	InitLWLockAccess();
 	InitDeadLockChecking();
 
+	LoadBacktraceFunctions();
+
 #ifdef EXEC_BACKEND
 
 	/*
@@ -640,6 +643,8 @@ InitAuxiliaryProcess(void)
 	 * acquired in aux processes.)
 	 */
 	InitLWLockAccess();
+
+	LoadBacktraceFunctions();
 
 #ifdef EXEC_BACKEND
 

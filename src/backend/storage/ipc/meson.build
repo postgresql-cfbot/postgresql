@@ -10,6 +10,7 @@ backend_sources += files(
   'latch.c',
   'pmsignal.c',
   'procarray.c',
+  'procbacktrace.c',
   'procsignal.c',
   'shm_mq.c',
   'shm_toc.c',

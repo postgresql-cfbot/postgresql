@@ -70,6 +70,7 @@
 #include "replication/slot.h"
 #include "replication/slotsync.h"
 #include "replication/syncrep.h"
+#include "restore/restore_module.h"
 #include "storage/bufmgr.h"
 #include "storage/large_object.h"
 #include "storage/pg_shmem.h"
@@ -3942,6 +3943,16 @@ struct config_string ConfigureNamesString[] =
 			NULL
 		},
 		&recoveryRestoreCommand,
+		"",
+		NULL, NULL, NULL
+	},
+
+	{
+		{"restore_library", PGC_SIGHUP, WAL_ARCHIVE_RECOVERY,
+			gettext_noop("Sets the library that will be called for restore actions."),
+			NULL
+		},
+		&restoreLibrary,
 		"",
 		NULL, NULL, NULL
 	},

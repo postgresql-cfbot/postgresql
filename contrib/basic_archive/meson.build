@@ -31,4 +31,9 @@ tests += {
     # typical installcheck users do not have (e.g. buildfarm clients).
     'runningcheck': false,
   },
+  'tap': {
+    'tests': [
+      't/001_restore.pl',
+    ],
+  },
 }

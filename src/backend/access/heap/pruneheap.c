@@ -245,12 +245,9 @@ heap_page_prune(Relation relation, Buffer buffer,
 	prstate.nredirected = prstate.ndead = prstate.nunused = 0;
 	memset(prstate.marked, 0, sizeof(prstate.marked));
 
-	/*
-	 * presult->htsv is not initialized here because all ntuple spots in the
-	 * array will be set either to a valid HTSV_Result value or -1.
-	 */
 	presult->ndeleted = 0;
 	presult->nnewlpdead = 0;
+	memset(presult->htsv, -1, sizeof(presult->htsv));
 
 	maxoff = PageGetMaxOffsetNumber(page);
 	tup.t_tableOid = RelationGetRelid(prstate.rel);
@@ -284,10 +281,7 @@ heap_page_prune(Relation relation, Buffer buffer,
 
 		/* Nothing to do if slot doesn't contain a tuple */
 		if (!ItemIdIsNormal(itemid))
-		{
-			presult->htsv[offnum] = -1;
 			continue;
-		}
 
 		htup = (HeapTupleHeader) PageGetItem(page, itemid);
 		tup.t_data = htup;

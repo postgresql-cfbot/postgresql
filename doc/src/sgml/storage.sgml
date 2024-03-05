@@ -1119,20 +1119,20 @@ data. Empty in ordinary tables.</entry>
    </listitem>
    <listitem>
     <para>
-     Old versions of updated rows can be completely removed during normal
-     operation, including <command>SELECT</command>s, instead of requiring
-     periodic vacuum operations.  (This is possible because indexes
-     do not reference their <link linkend="storage-page-layout">page
-     item identifiers</link>.)
+     Old, no longer visible versions of updated rows may be pruned during
+     normal operation, including <command>SELECT</command>s, instead of
+     requiring periodic vacuum operations. Because indexes always refer to the
+     <link linkend="storage-page-layout">page item identifiers</link> of the
+     original row version, the original row version has its tuple data removed
+     and is changed to redirect to the oldest still-visible version. No longer
+     visible versions other than the original version may be removed entirely.
     </para>
    </listitem>
   </itemizedlist>
  </para>
 
  <para>
-  In summary, heap-only tuple updates can only be created
-  if columns used by indexes are not updated.  You can
-  increase the likelihood of sufficient page space for
+  You can increase the likelihood of sufficient page space for
   <acronym>HOT</acronym> updates by decreasing a table's <link
   linkend="reloption-fillfactor"><literal>fillfactor</literal></link>.
   If you don't, <acronym>HOT</acronym> updates will still happen because

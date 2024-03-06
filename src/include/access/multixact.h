@@ -27,7 +27,7 @@
 
 #define MultiXactIdIsValid(multi) ((multi) != InvalidMultiXactId)
 
-#define MaxMultiXactOffset	((MultiXactOffset) 0xFFFFFFFF)
+#define MaxMultiXactOffset	UINT64CONST(0xFFFFFFFFFFFFFFFF)
 
 /*
  * Possible multixact lock modes ("status").  The first four modes are for

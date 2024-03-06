@@ -264,7 +264,7 @@ main(int argc, char *argv[])
 
 			case 'O':
 				errno = 0;
-				set_mxoff = strtoul(optarg, &endptr, 0);
+				set_mxoff = strtou64(optarg, &endptr, 0);
 				if (endptr == optarg || *endptr != '\0' || errno != 0)
 				{
 					pg_log_error("invalid argument for option %s", "-O");

@@ -63,6 +63,7 @@ typedef struct RelationData
 	bool		rd_isvalid;		/* relcache entry is valid */
 	bool		rd_indexvalid;	/* is rd_indexlist valid? (also rd_pkindex and
 								 * rd_replidindex) */
+	bool		rd_ispkdeferred;
 	bool		rd_statvalid;	/* is rd_statlist valid? */
 
 	/*----------

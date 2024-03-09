@@ -1370,6 +1370,7 @@ bt_target_page_check(BtreeCheckState *state)
 	OffsetNumber offset;
 	OffsetNumber max;
 	BTPageOpaque topaque;
+	nbts_prep_ctx(state->rel);
 
 	/* last visible entry info for checking indexes with unique constraint */
 	int			lVis_i = -1;	/* the position of last visible item for
@@ -3067,6 +3068,7 @@ bt_rootdescend(BtreeCheckState *state, IndexTuple itup)
 	BTStack		stack;
 	Buffer		lbuf;
 	bool		exists;
+	nbts_prep_ctx(state->rel);
 
 	key = _bt_mkscankey(state->rel, itup);
 	Assert(key->heapkeyspace && key->scantid != NULL);
@@ -3165,6 +3167,7 @@ invariant_l_offset(BtreeCheckState *state, BTScanInsert key,
 {
 	ItemId		itemid;
 	int32		cmp;
+	nbts_prep_ctx(state->rel);
 
 	Assert(!key->nextkey && key->backward);
 
@@ -3227,6 +3230,7 @@ invariant_leq_offset(BtreeCheckState *state, BTScanInsert key,
 					 OffsetNumber upperbound)
 {
 	int32		cmp;
+	nbts_prep_ctx(state->rel);
 
 	Assert(!key->nextkey && key->backward);
 
@@ -3250,6 +3254,7 @@ invariant_g_offset(BtreeCheckState *state, BTScanInsert key,
 				   OffsetNumber lowerbound)
 {
 	int32		cmp;
+	nbts_prep_ctx(state->rel);
 
 	Assert(!key->nextkey && key->backward);
 
@@ -3288,6 +3293,7 @@ invariant_l_nontarget_offset(BtreeCheckState *state, BTScanInsert key,
 {
 	ItemId		itemid;
 	int32		cmp;
+	nbts_prep_ctx(state->rel);
 
 	Assert(!key->nextkey && key->backward);
 
@@ -3523,6 +3529,7 @@ static inline BTScanInsert
 bt_mkscankey_pivotsearch(Relation rel, IndexTuple itup)
 {
 	BTScanInsert skey;
+	nbts_prep_ctx(rel);
 
 	skey = _bt_mkscankey(rel, itup);
 	skey->backward = true;

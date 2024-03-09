@@ -634,6 +634,7 @@ _bt_afternewitemoff(FindSplitData *state, OffsetNumber maxoff,
 	ItemId		itemid;
 	IndexTuple	tup;
 	int			keepnatts;
+	nbts_prep_ctx(state->rel);
 
 	Assert(state->is_leaf && !state->is_rightmost);
 
@@ -940,6 +941,7 @@ _bt_strategy(FindSplitData *state, SplitPoint *leftpage,
 			   *rightinterval;
 	int			perfectpenalty;
 	int			indnkeyatts = IndexRelationGetNumberOfKeyAttributes(state->rel);
+	nbts_prep_ctx(state->rel);
 
 	/* Assume that alternative strategy won't be used for now */
 	*strategy = SPLIT_DEFAULT;
@@ -1132,6 +1134,7 @@ _bt_split_penalty(FindSplitData *state, SplitPoint *split)
 {
 	IndexTuple	lastleft;
 	IndexTuple	firstright;
+	nbts_prep_ctx(state->rel);
 
 	if (!state->is_leaf)
 	{

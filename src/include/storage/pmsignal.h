@@ -57,6 +57,9 @@ typedef enum
 /* PMSignalData is an opaque struct, details known only within pmsignal.c */
 typedef struct PMSignalData PMSignalData;
 
+/* Length of query cancel keys generated. */
+#define MAX_CANCEL_KEY_LENGTH	32
+
 /*
  * prototypes for functions in pmsignal.c
  */
@@ -69,11 +72,12 @@ extern QuitSignalReason GetQuitSignalReason(void);
 extern int	AssignPostmasterChildSlot(void);
 extern bool ReleasePostmasterChildSlot(int slot);
 extern bool IsPostmasterChildWalSender(int slot);
-extern void MarkPostmasterChildActive(void);
+extern void MarkPostmasterChildActive(int pid, char *cancelKey, int len);
 extern void MarkPostmasterChildInactive(void);
 extern void MarkPostmasterChildWalSender(void);
 extern bool PostmasterIsAliveInternal(void);
 extern void PostmasterDeathSignalInit(void);
+extern void ProcessCancelRequest(int backendPID, char *cancelKey, int len);
 
 
 /*

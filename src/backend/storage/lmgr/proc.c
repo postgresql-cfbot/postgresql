@@ -36,6 +36,7 @@
 #include "access/transam.h"
 #include "access/twophase.h"
 #include "access/xlogutils.h"
+#include "libpq/libpq-be.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
@@ -64,6 +65,9 @@ bool		log_lock_waits = false;
 
 /* Pointer to this process's PGPROC struct, if any */
 PGPROC	   *MyProc = NULL;
+
+char		MyCancelKey[MAX_CANCEL_KEY_LENGTH];
+int			MyCancelKeyLength;
 
 /*
  * This spinlock protects the freelist of recycled PGPROC structures.
@@ -307,6 +311,22 @@ InitProcess(void)
 	if (MyProc != NULL)
 		elog(ERROR, "you already exist");
 
+	/*
+	 * Generate a random cancel key.
+	 *
+	 * We probably don't need cancel keys for non-backend processes, but we'd
+	 * better have something random in the field to prevent unfriendly people
+	 * from sending cancels to them.
+	 */
+	MyCancelKeyLength = (MyProcPort == NULL || MyProcPort->proto >= PG_PROTOCOL(3,1))
+		? MAX_CANCEL_KEY_LENGTH : 4;
+	if (!pg_strong_random(&MyCancelKey, MyCancelKeyLength))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("could not generate random cancel key")));
+	}
+
 	/* Decide which list should supply our PGPROC. */
 	if (AmAutoVacuumLauncherProcess() || AmAutoVacuumWorkerProcess())
 		procgloballist = &ProcGlobal->autovacFreeProcs;
@@ -370,7 +390,7 @@ InitProcess(void)
 	 */
 	if (IsUnderPostmaster && !AmAutoVacuumLauncherProcess() &&
 		!AmLogicalSlotSyncWorkerProcess())
-		MarkPostmasterChildActive();
+		MarkPostmasterChildActive(MyProcPid, MyCancelKey, MyCancelKeyLength);
 
 	/*
 	 * Initialize all fields of MyProc, except for those previously

@@ -22,6 +22,7 @@
 #endif
 
 #include "miscadmin.h"
+#include "port/atomics.h"
 #include "postmaster/postmaster.h"
 #include "replication/walsender.h"
 #include "storage/pmsignal.h"
@@ -37,9 +38,8 @@
  * if the same reason is signaled more than once simultaneously, the
  * postmaster will observe it only once.)
  *
- * The flags are actually declared as "volatile sig_atomic_t" for maximum
- * portability.  This should ensure that loads and stores of the flag
- * values are atomic, allowing us to dispense with any explicit locking.
+ * The flag fields use atomics, allowing us to dispense with any explicit
+ * locking.
  *
  * In addition to the per-reason flags, we store a set of per-child-process
  * flags that are currently used only for detecting whether a backend has
@@ -67,20 +67,30 @@
 #define PM_CHILD_ACTIVE		2
 #define PM_CHILD_WALSENDER	3
 
+typedef struct ChildSlotData
+{
+	pg_atomic_uint32 state;
+
+	int			pid;
+	int			cancel_key_len;
+	char		cancel_key[MAX_CANCEL_KEY_LENGTH];
+} ChildSlotData;
+
 /* "typedef struct PMSignalData PMSignalData" appears in pmsignal.h */
 struct PMSignalData
 {
 	/* per-reason flags for signaling the postmaster */
-	sig_atomic_t PMSignalFlags[NUM_PMSIGNALS];
+	volatile sig_atomic_t PMSignalFlags[NUM_PMSIGNALS];
 	/* global flags for signals from postmaster to children */
 	QuitSignalReason sigquit_reason;	/* why SIGQUIT was sent */
-	/* per-child-process flags */
-	int			num_child_flags;	/* # of entries in PMChildFlags[] */
-	sig_atomic_t PMChildFlags[FLEXIBLE_ARRAY_MEMBER];
+
+	/* per-child-process slots */
+	int			num_child_slots;	/* # of entries in child_slots[] */
+	ChildSlotData child_slots[FLEXIBLE_ARRAY_MEMBER];
 };
 
 /* PMSignalState pointer is valid in both postmaster and child processes */
-NON_EXEC_STATIC volatile PMSignalData *PMSignalState = NULL;
+NON_EXEC_STATIC PMSignalData *PMSignalState = NULL;
 
 /*
  * These static variables are valid only in the postmaster.  We keep a
@@ -130,9 +140,9 @@ PMSignalShmemSize(void)
 {
 	Size		size;
 
-	size = offsetof(PMSignalData, PMChildFlags);
+	size = offsetof(PMSignalData, child_slots);
 	size = add_size(size, mul_size(MaxLivePostmasterChildren(),
-								   sizeof(sig_atomic_t)));
+								   sizeof(ChildSlotData)));
 
 	return size;
 }
@@ -151,9 +161,9 @@ PMSignalShmemInit(void)
 	if (!found)
 	{
 		/* initialize all flags to zeroes */
-		MemSet(unvolatize(PMSignalData *, PMSignalState), 0, PMSignalShmemSize());
+		MemSet(PMSignalState, 0, PMSignalShmemSize());
 		num_child_inuse = MaxLivePostmasterChildren();
-		PMSignalState->num_child_flags = num_child_inuse;
+		PMSignalState->num_child_slots = num_child_inuse;
 
 		/*
 		 * Also allocate postmaster's private PMChildInUse[] array.  We
@@ -262,14 +272,14 @@ AssignPostmasterChildSlot(void)
 		if (!PMChildInUse[slot])
 		{
 			PMChildInUse[slot] = true;
-			PMSignalState->PMChildFlags[slot] = PM_CHILD_ASSIGNED;
+			pg_atomic_write_u32(&PMSignalState->child_slots[slot].state, PM_CHILD_ASSIGNED);
 			next_child_inuse = slot;
 			return slot + 1;
 		}
 	}
 
 	/* Out of slots ... should never happen, else postmaster.c messed up */
-	elog(FATAL, "no free slots in PMChildFlags array");
+	elog(FATAL, "no free slots in postmaster child array");
 	return 0;					/* keep compiler quiet */
 }
 
@@ -283,7 +293,7 @@ AssignPostmasterChildSlot(void)
 bool
 ReleasePostmasterChildSlot(int slot)
 {
-	bool		result;
+	uint32		oldstate;
 
 	Assert(slot > 0 && slot <= num_child_inuse);
 	slot--;
@@ -293,10 +303,9 @@ ReleasePostmasterChildSlot(int slot)
 	 * postmaster.c is such that this might get called twice when a child
 	 * crashes.  So we don't try to Assert anything about the state.
 	 */
-	result = (PMSignalState->PMChildFlags[slot] == PM_CHILD_ASSIGNED);
-	PMSignalState->PMChildFlags[slot] = PM_CHILD_UNUSED;
+	oldstate = pg_atomic_exchange_u32(&PMSignalState->child_slots[slot].state, PM_CHILD_UNUSED);
 	PMChildInUse[slot] = false;
-	return result;
+	return oldstate == PM_CHILD_ASSIGNED;
 }
 
 /*
@@ -309,7 +318,7 @@ IsPostmasterChildWalSender(int slot)
 	Assert(slot > 0 && slot <= num_child_inuse);
 	slot--;
 
-	if (PMSignalState->PMChildFlags[slot] == PM_CHILD_WALSENDER)
+	if (pg_atomic_read_u32(&PMSignalState->child_slots[slot].state) == PM_CHILD_WALSENDER)
 		return true;
 	else
 		return false;
@@ -320,14 +329,19 @@ IsPostmasterChildWalSender(int slot)
  * actively using shared memory.  This is called in the child process.
  */
 void
-MarkPostmasterChildActive(void)
+MarkPostmasterChildActive(int pid, char *cancelKey, int len)
 {
 	int			slot = MyPMChildSlot;
 
-	Assert(slot > 0 && slot <= PMSignalState->num_child_flags);
+	Assert(len <= MAX_CANCEL_KEY_LENGTH);
+	Assert(slot > 0 && slot <= PMSignalState->num_child_slots);
 	slot--;
-	Assert(PMSignalState->PMChildFlags[slot] == PM_CHILD_ASSIGNED);
-	PMSignalState->PMChildFlags[slot] = PM_CHILD_ACTIVE;
+	Assert(pg_atomic_read_u32(&PMSignalState->child_slots[slot].state) == PM_CHILD_ASSIGNED);
+	PMSignalState->child_slots[slot].pid = pid;
+	memcpy(PMSignalState->child_slots[slot].cancel_key, cancelKey, len);
+	PMSignalState->child_slots[slot].cancel_key_len = len;
+	pg_write_barrier();
+	pg_atomic_write_u32(&PMSignalState->child_slots[slot].state, PM_CHILD_ACTIVE);
 }
 
 /*
@@ -342,10 +356,10 @@ MarkPostmasterChildWalSender(void)
 
 	Assert(am_walsender);
 
-	Assert(slot > 0 && slot <= PMSignalState->num_child_flags);
+	Assert(slot > 0 && slot <= PMSignalState->num_child_slots);
 	slot--;
-	Assert(PMSignalState->PMChildFlags[slot] == PM_CHILD_ACTIVE);
-	PMSignalState->PMChildFlags[slot] = PM_CHILD_WALSENDER;
+	Assert(pg_atomic_read_u32(&PMSignalState->child_slots[slot].state) == PM_CHILD_ACTIVE);
+	pg_atomic_write_u32(&PMSignalState->child_slots[slot].state, PM_CHILD_WALSENDER);
 }
 
 /*
@@ -357,11 +371,17 @@ MarkPostmasterChildInactive(void)
 {
 	int			slot = MyPMChildSlot;
 
-	Assert(slot > 0 && slot <= PMSignalState->num_child_flags);
+	Assert(slot > 0 && slot <= PMSignalState->num_child_slots);
 	slot--;
-	Assert(PMSignalState->PMChildFlags[slot] == PM_CHILD_ACTIVE ||
-		   PMSignalState->PMChildFlags[slot] == PM_CHILD_WALSENDER);
-	PMSignalState->PMChildFlags[slot] = PM_CHILD_ASSIGNED;
+#ifdef USE_ASSERT_CHECKING
+	{
+		uint32		oldstate;
+
+		oldstate = pg_atomic_read_u32(&PMSignalState->child_slots[slot].state);
+		Assert(oldstate == PM_CHILD_ACTIVE || oldstate == PM_CHILD_WALSENDER);
+	}
+#endif
+	pg_atomic_write_u32(&PMSignalState->child_slots[slot].state, PM_CHILD_ASSIGNED);
 }
 
 
@@ -459,4 +479,70 @@ PostmasterDeathSignalInit(void)
 	 */
 	postmaster_possibly_dead = true;
 #endif							/* USE_POSTMASTER_DEATH_SIGNAL */
+}
+
+static int
+pg_const_time_memcmp(const void *a, const void *b, size_t len)
+{
+	/*
+	 * FIXME: need a constant time implementation. Implement one somewhere in
+	 * src/port.
+	 */
+	return memcmp(a, b, len);
+}
+
+/*
+ * Find the backend with given PID, and send SIGINT to it if the cancel key
+ * matches.
+ */
+void
+ProcessCancelRequest(int backendPID, char *cancelKey, int len)
+{
+	/*
+	 * See if we have a matching backend.  In the EXEC_BACKEND case, we can no
+	 * longer access the postmaster's own backend list, and must rely on the
+	 * duplicate array in shared memory. XXX
+	 */
+	for (int i = MaxLivePostmasterChildren() - 1; i >= 0; i--)
+	{
+		ChildSlotData *slot = &PMSignalState->child_slots[i];
+		uint32		state = pg_atomic_read_u32(&slot->state);
+
+		if (state != PM_CHILD_ACTIVE)
+			continue;
+
+		pg_read_barrier();
+		if (slot->pid == backendPID)
+		{
+			/*
+			 * Use pg_const_time_memcmp() to prevent an attacker from using
+			 * timing to reveal the cancel key.
+			 */
+			if (len == slot->cancel_key_len && pg_const_time_memcmp(slot->cancel_key, cancelKey, len) == 0)
+			{
+				/* Found a match; signal that backend to cancel current op */
+				ereport(DEBUG2,
+						(errmsg_internal("processing cancel request: sending SIGINT to process %d",
+										 backendPID)));
+
+				/* If we have setsid(), signal the backend's whole process group */
+#ifdef HAVE_SETSID
+				kill(-backendPID, SIGINT);
+#else
+				kill(backendPID, SIGINT);
+#endif
+			}
+			else
+				/* Right PID, wrong key: no way, Jose */
+				ereport(LOG,
+						(errmsg("wrong key in cancel request for process %d",
+								backendPID)));
+			return;
+		}
+	}
+
+	/* No matching backend */
+	ereport(LOG,
+			(errmsg("PID %d in cancel request did not match any process",
+					backendPID)));
 }

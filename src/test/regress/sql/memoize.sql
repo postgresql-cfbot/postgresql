@@ -103,6 +103,20 @@ SELECT * FROM flt f1 INNER JOIN flt f2 ON f1.f >= f2.f;', false);
 
 DROP TABLE flt;
 
+CREATE TABLE expr_key (x numeric, t text);
+INSERT INTO expr_key (x,t) SELECT d1::numeric, d1::text FROM (
+  SELECT round((d/pi())::numeric,7) AS d1 FROM generate_series(1,20) AS d);
+
+INSERT INTO expr_key SELECT * FROM expr_key;
+CREATE INDEX expr_key_idx_x_t ON expr_key (x,t);
+VACUUM ANALYZE expr_key;
+
+SELECT explain_memoize('
+SELECT * FROM expr_key t1 INNER JOIN expr_key t2
+ON t1.x=t2.t::numeric AND t1.t::numeric=t2.x;', true);
+
+DROP TABLE expr_key;
+
 -- Exercise Memoize in binary mode with a large fixed width type and a
 -- varlena type.
 CREATE TABLE strtest (n name, t text);

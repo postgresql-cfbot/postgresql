@@ -41,7 +41,8 @@ char	   *const pgresStatus[] = {
 	"PGRES_COPY_BOTH",
 	"PGRES_SINGLE_TUPLE",
 	"PGRES_PIPELINE_SYNC",
-	"PGRES_PIPELINE_ABORTED"
+	"PGRES_PIPELINE_ABORTED",
+	"PGRES_TUPLES_CHUNK"
 };
 
 /* We return this if we're unable to make a PGresult at all */
@@ -83,7 +84,7 @@ static int	check_field_number(const PGresult *res, int field_num);
 static void pqPipelineProcessQueue(PGconn *conn);
 static int	pqPipelineSyncInternal(PGconn *conn, bool immediate_flush);
 static int	pqPipelineFlush(PGconn *conn);
-
+static bool canChangeRowMode(PGconn *conn);
 
 /* ----------------
  * Space management for PGresult.
@@ -200,6 +201,7 @@ PQmakeEmptyPGresult(PGconn *conn, ExecStatusType status)
 			case PGRES_COPY_IN:
 			case PGRES_COPY_BOTH:
 			case PGRES_SINGLE_TUPLE:
+			case PGRES_TUPLES_CHUNK:
 				/* non-error cases */
 				break;
 			default:
@@ -913,8 +915,9 @@ pqPrepareAsyncResult(PGconn *conn)
 	/*
 	 * Replace conn->result with next_result, if any.  In the normal case
 	 * there isn't a next result and we're just dropping ownership of the
-	 * current result.  In single-row mode this restores the situation to what
-	 * it was before we created the current single-row result.
+	 * current result.  In single-row and chunked modes this restores the
+	 * situation to what it was before we created the current single-row or
+	 * chunk-of-rows result.
 	 */
 	conn->result = conn->next_result;
 	conn->error_result = false; /* next_result is never an error */
@@ -1200,10 +1203,11 @@ pqSaveParameterStatus(PGconn *conn, const char *name, const char *value)
  * (Such a string should already be translated via libpq_gettext().)
  * If it is left NULL, the error is presumed to be "out of memory".
  *
- * In single-row mode, we create a new result holding just the current row,
- * stashing the previous result in conn->next_result so that it becomes
- * active again after pqPrepareAsyncResult().  This allows the result metadata
- * (column descriptions) to be carried forward to each result row.
+ * In single-row or chunked mode, we create a new result holding just the
+ * current set of rows, stashing the previous result in conn->next_result so
+ * that it becomes active again after pqPrepareAsyncResult().  This allows the
+ * result metadata (column descriptions) to be carried forward to each result
+ * row.
  */
 int
 pqRowProcessor(PGconn *conn, const char **errmsgp)
@@ -1227,6 +1231,28 @@ pqRowProcessor(PGconn *conn, const char **errmsgp)
 						   PG_COPYRES_NOTICEHOOKS);
 		if (!res)
 			return 0;
+	}
+	else if (conn->rowsChunkSize > 0)
+	{
+		/*
+		 * In chunked mode, make a new PGresult that will hold N rows; the
+		 * original conn->result is left unchanged, as in the single-row mode.
+		 */
+		if (!conn->chunk_result)
+		{
+			/* Allocate and initialize the result to hold a chunk of rows */
+			res = PQcopyResult(res,
+							   PG_COPYRES_ATTRS | PG_COPYRES_EVENTS |
+							   PG_COPYRES_NOTICEHOOKS);
+			if (!res)
+				return 0;
+			/* Change result status to special chunk-of-rows value */
+			res->resultStatus = PGRES_TUPLES_CHUNK;
+			/* Keep this result to reuse for the next rows of the chunk */
+			conn->chunk_result = res;
+		}
+		else
+			res = conn->chunk_result;	/* Use the current chunk */
 	}
 
 	/*
@@ -1286,6 +1312,21 @@ pqRowProcessor(PGconn *conn, const char **errmsgp)
 		/* Stash old result for re-use later */
 		conn->next_result = conn->result;
 		conn->result = res;
+		/* And mark the result ready to return */
+		conn->asyncStatus = PGASYNC_READY_MORE;
+	}
+
+	/*
+	 * In chunked mode, if the count has reached the requested limit, make the
+	 * rows of the current chunk available immediately.
+	 */
+	else if (conn->rowsChunkSize > 0 && res->ntups >= conn->rowsChunkSize)
+	{
+		/* Stash old result for re-use later */
+		conn->next_result = conn->result;
+		conn->result = res;
+		/* Do not reuse that chunk of results */
+		conn->chunk_result = NULL;
 		/* And mark the result ready to return */
 		conn->asyncStatus = PGASYNC_READY_MORE;
 	}
@@ -1745,8 +1786,9 @@ PQsendQueryStart(PGconn *conn, bool newQuery)
 		 */
 		pqClearAsyncResult(conn);
 
-		/* reset single-row processing mode */
+		/* reset row-by-row and chunked processing modes */
 		conn->singleRowMode = false;
+		conn->rowsChunkSize = 0;
 	}
 
 	/* ready to send command message */
@@ -1931,24 +1973,50 @@ sendFailed:
 int
 PQsetSingleRowMode(PGconn *conn)
 {
+	if (canChangeRowMode(conn))
+	{
+		conn->singleRowMode = true;
+		return 1;
+	}
+	else
+		return 0;
+}
+
+/*
+ * Select chunked results processing mode
+ */
+int
+PQsetChunkedRowsMode(PGconn *conn, int chunkSize)
+{
+	if (chunkSize >= 0 && canChangeRowMode(conn))
+	{
+		conn->rowsChunkSize = chunkSize;
+		return 1;
+	}
+	else
+		return 0;
+}
+
+static
+bool
+canChangeRowMode(PGconn *conn)
+{
 	/*
-	 * Only allow setting the flag when we have launched a query and not yet
-	 * received any results.
+	 * Only allow setting the row-by-row or by-chunks modes when we have
+	 * launched a query and not yet received any results.
 	 */
 	if (!conn)
-		return 0;
+		return false;
 	if (conn->asyncStatus != PGASYNC_BUSY)
-		return 0;
+		return false;
 	if (!conn->cmd_queue_head ||
 		(conn->cmd_queue_head->queryclass != PGQUERY_SIMPLE &&
 		 conn->cmd_queue_head->queryclass != PGQUERY_EXTENDED))
-		return 0;
+		return false;
 	if (pgHavePendingResult(conn))
-		return 0;
+		return false;
 
-	/* OK, set flag */
-	conn->singleRowMode = true;
-	return 1;
+	return true;
 }
 
 /*
@@ -2115,6 +2183,16 @@ PQgetResult(PGconn *conn)
 			break;
 
 		case PGASYNC_READY:
+			/*
+			 * If there is a pending chunk of results, return it
+			 */
+			if (conn->chunk_result != NULL)
+			{
+				res = conn->chunk_result;
+				conn->chunk_result = NULL;
+				break;
+			}
+
 			res = pqPrepareAsyncResult(conn);
 
 			/* Advance the queue as appropriate */
@@ -3173,10 +3251,11 @@ pqPipelineProcessQueue(PGconn *conn)
 	}
 
 	/*
-	 * Reset single-row processing mode.  (Client has to set it up for each
+	 * Reset to full result sets mode. (Client has to set it up for each
 	 * query, if desired.)
 	 */
 	conn->singleRowMode = false;
+	conn->rowsChunkSize = 0;
 
 	/*
 	 * If there are no further commands to process in the queue, get us in

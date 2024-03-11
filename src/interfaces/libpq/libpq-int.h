@@ -431,6 +431,8 @@ struct pg_conn
 								 * sending semantics */
 	PGpipelineStatus pipelineStatus;	/* status of pipeline mode */
 	bool		singleRowMode;	/* return current query result row-by-row? */
+	int			rowsChunkSize;	/* non-zero to return query results by chunks
+								 * not exceeding that number of rows */
 	char		copy_is_binary; /* 1 = copy binary, 0 = copy text */
 	int			copy_already_done;	/* # bytes already returned in COPY OUT */
 	PGnotify   *notifyHead;		/* oldest unreported Notify msg */
@@ -536,7 +538,10 @@ struct pg_conn
 	 */
 	PGresult   *result;			/* result being constructed */
 	bool		error_result;	/* do we need to make an ERROR result? */
-	PGresult   *next_result;	/* next result (used in single-row mode) */
+	PGresult   *next_result;	/* next result (used in single-row and
+								 * by-chunks modes) */
+	PGresult   *chunk_result;	/* current chunk of results (limited to
+								 * rowsChunkSize) */
 
 	/* Assorted state for SASL, SSL, GSS, etc */
 	const pg_fe_sasl_mech *sasl;

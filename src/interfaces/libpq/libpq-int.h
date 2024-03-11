@@ -547,6 +547,7 @@ struct pg_conn
 	bool		ssl_in_use;
 	bool		ssl_cert_requested; /* Did the server ask us for a cert? */
 	bool		ssl_cert_sent;	/* Did we send one in reply? */
+	bool		last_read_was_eof;
 
 #ifdef USE_SSL
 	bool		allow_ssl_try;	/* Allowed to try SSL negotiation */

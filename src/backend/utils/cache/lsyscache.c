@@ -3503,6 +3503,82 @@ get_index_column_opclass(Oid index_oid, int attno)
 }
 
 /*
+ * get_index_expression
+ *
+ *		Given the index OID, return the index expression.
+ */
+List *
+get_index_expression(Oid index_oid)
+{
+	List	  *result;
+	HeapTuple tuple;
+	Datum	  exprDatum;
+	bool	  isnull;
+	char	  *exprString;
+
+	/* Fetch the pg_index tuple by the Oid of the index */
+	tuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(index_oid));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for index %u", index_oid);
+
+	/* Extract raw index expression from index tuple */
+	exprDatum = SysCacheGetAttr(INDEXRELID, tuple,
+								Anum_pg_index_indexprs, &isnull);
+	if (isnull)
+	{
+		ReleaseSysCache(tuple);
+		return NIL;
+	}
+
+	exprString = TextDatumGetCString(exprDatum);
+	result = (List *) stringToNode(exprString);
+	pfree(exprString);
+
+	/* Clean up */
+	ReleaseSysCache(tuple);
+
+	return result;
+}
+
+/*
+ * get_index_predicate
+ *
+ *		Given the index OID, return index predicate.
+ */
+List *
+get_index_predicate(Oid index_oid)
+{
+	List	  *result;
+	HeapTuple tuple;
+	Datum	  predDatum;
+	bool	  isnull;
+	char	  *predString;
+
+	/* Fetch the pg_index tuple by the Oid of the index */
+	tuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(index_oid));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for index %u", index_oid);
+
+	/* Extract raw index predicate from index tuple */
+	predDatum = SysCacheGetAttr(INDEXRELID, tuple,
+								Anum_pg_index_indpred, &isnull);
+	if (isnull)
+	{
+		ReleaseSysCache(tuple);
+		return NIL;
+	}
+
+	predString = TextDatumGetCString(predDatum);
+	result = (List *) stringToNode(predString);
+	pfree(predString);
+
+	/* Clean up */
+	ReleaseSysCache(tuple);
+
+	return result;
+}
+
+/*
  * get_index_isreplident
  *
  *		Given the index OID, return pg_index.indisreplident.

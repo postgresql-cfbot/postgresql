@@ -48,6 +48,9 @@ extern PGDLLIMPORT char *localized_full_days[];
 extern PGDLLIMPORT char *localized_abbrev_months[];
 extern PGDLLIMPORT char *localized_full_months[];
 
+/* reject unassigned code points? (UTF-8 only) */
+extern PGDLLIMPORT bool database_strict_unicode;
+
 /* is the databases's LC_CTYPE the C locale? */
 extern PGDLLIMPORT bool database_ctype_is_c;
 

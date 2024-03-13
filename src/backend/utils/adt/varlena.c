@@ -138,6 +138,7 @@ static char *text_position_next_internal(char *start_ptr, TextPositionState *sta
 static char *text_position_get_match_ptr(TextPositionState *state);
 static int	text_position_get_match_pos(TextPositionState *state);
 static void text_position_cleanup(TextPositionState *state);
+static void check_strict_unicode(text *input);
 static void check_collation_set(Oid collid);
 static int	text_cmp(text *arg1, text *arg2, Oid collid);
 static bytea *bytea_catenate(bytea *t1, bytea *t2);
@@ -200,6 +201,7 @@ cstring_to_text_with_len(const char *s, int len)
 	SET_VARSIZE(result, len + VARHDRSZ);
 	memcpy(VARDATA(result), s, len);
 
+	check_strict_unicode(result);
 	return result;
 }
 
@@ -609,6 +611,7 @@ textrecv(PG_FUNCTION_ARGS)
 
 	result = cstring_to_text_with_len(str, nbytes);
 	pfree(str);
+
 	PG_RETURN_TEXT_P(result);
 }
 
@@ -6296,6 +6299,38 @@ unicode_assigned(PG_FUNCTION_ARGS)
 	}
 
 	PG_RETURN_BOOL(true);
+}
+
+static void
+check_strict_unicode(text *input)
+{
+	unsigned char *p;
+	int			size;
+
+	if (!database_strict_unicode)
+		return;
+
+	Assert(GetDatabaseEncoding() == PG_UTF8);
+
+	/* convert to pg_wchar */
+	size = pg_mbstrlen_with_len(VARDATA_ANY(input), VARSIZE_ANY_EXHDR(input));
+	p = (unsigned char *) VARDATA_ANY(input);
+	for (int i = 0; i < size; i++)
+	{
+		pg_wchar	code = utf8_to_unicode(p);
+		int			category = unicode_category(code);
+
+		if (category == PG_U_UNASSIGNED)
+			ereport(ERROR,
+					errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("unassigned Unicode code point: %06X", code));
+		else if (category == PG_U_SURROGATE)
+			ereport(ERROR,
+					errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("Unicode code point is surrogate: %06X", code));
+
+		p += pg_utf_mblen(p);
+	}
 }
 
 Datum

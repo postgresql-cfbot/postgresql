@@ -42,6 +42,8 @@ main(int argc, char *argv[])
 		{"locale-provider", required_argument, NULL, 4},
 		{"icu-locale", required_argument, NULL, 5},
 		{"icu-rules", required_argument, NULL, 6},
+		{"no-strict-unicode", no_argument, NULL, 7},
+		{"strict-unicode", no_argument, NULL, 8},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -55,6 +57,7 @@ main(int argc, char *argv[])
 	char	   *host = NULL;
 	char	   *port = NULL;
 	char	   *username = NULL;
+	enum trivalue strict_unicode = TRI_DEFAULT;
 	enum trivalue prompt_password = TRI_DEFAULT;
 	ConnParams	cparams;
 	bool		echo = false;
@@ -139,6 +142,12 @@ main(int argc, char *argv[])
 			case 6:
 				icu_rules = pg_strdup(optarg);
 				break;
+			case 7:
+				strict_unicode = TRI_NO;
+				break;
+			case 8:
+				strict_unicode = TRI_YES;
+				break;
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -206,6 +215,12 @@ main(int argc, char *argv[])
 	{
 		appendPQExpBufferStr(&sql, " ENCODING ");
 		appendStringLiteralConn(&sql, encoding, conn);
+	}
+	if (strict_unicode != TRI_DEFAULT)
+	{
+		const char *val = (strict_unicode == TRI_YES) ? "TRUE" : "FALSE";
+		appendPQExpBufferStr(&sql, " STRICT_UNICODE ");
+		appendStringLiteralConn(&sql, val, conn);
 	}
 	if (strategy)
 		appendPQExpBuffer(&sql, " STRATEGY %s", fmtId(strategy));

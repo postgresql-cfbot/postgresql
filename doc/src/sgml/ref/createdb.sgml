@@ -119,6 +119,29 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--strict-unicode</option></term>
+      <listitem>
+       <para>
+        Specifies that the database will reject Unicode code points that are
+        unassigned as of the version of Unicode returned by
+        <function>unicode_version()</function> (See <xref
+        linkend="functions-version"/>). Only valid if the encoding is
+        <literal>UTF8</literal>.
+       </para>
+       <note>
+        <para>
+         This option affects all textual fields in the database, and should
+         only be used when the applications control the text
+         input. Furthermore, it may not be possible to use recently-assigned
+         code points if <productname>PostgreSQL</productname> is based on an
+         older version of Unicode that does not yet recognize the new
+         assignments.
+        </para>
+       </note>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-l <replaceable class="parameter">locale</replaceable></option></term>
       <term><option>--locale=<replaceable class="parameter">locale</replaceable></option></term>
       <listitem>

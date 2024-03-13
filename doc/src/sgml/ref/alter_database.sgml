@@ -25,6 +25,7 @@ ALTER DATABASE <replaceable class="parameter">name</replaceable> [ [ WITH ] <rep
 
 <phrase>where <replaceable class="parameter">option</replaceable> can be:</phrase>
 
+    STRICT_UNICODE <replaceable class="parameter">strict_unicode</replaceable>
     ALLOW_CONNECTIONS <replaceable class="parameter">allowconn</replaceable>
     CONNECTION LIMIT <replaceable class="parameter">connlimit</replaceable>
     IS_TEMPLATE <replaceable class="parameter">istemplate</replaceable>
@@ -111,6 +112,38 @@ ALTER DATABASE <replaceable class="parameter">name</replaceable> RESET ALL
        </para>
       </listitem>
      </varlistentry>
+
+      <varlistentry>
+       <term><replaceable class="parameter">strict_unicode</replaceable></term>
+       <listitem>
+        <para>
+         If <literal>true</literal>, specifies that the initial databases will
+         reject Unicode code points that are unassigned as of the version of
+         Unicode returned by <function>unicode_version()</function> (See <xref
+         linkend="functions-version"/>). Only valid if the encoding is
+         <literal>UTF8</literal>.
+        </para>
+        <para>
+         This setting may be changed from <literal>true</literal> to
+         <literal>false</literal> to enable storing textual values containing
+         unassigned Unicode code points. However, this setting may not be
+         changed from <literal>false</literal> to <literal>true</literal>,
+         because existing textual values in the database might contain
+         unassigned Unicode code points. A changed setting is recognized in
+         new connections.
+        </para>
+        <note>
+         <para>
+          This option affects all textual fields in the initial databases, and
+          should only be used when the applications control the text
+          input. Furthermore, it may not be possible to use recently-assigned
+          code points if <productname>PostgreSQL</productname> is based on an
+          older version of Unicode that does not yet recognize the new
+          assignments.
+         </para>
+        </note>
+       </listitem>
+      </varlistentry>
 
       <varlistentry>
        <term><replaceable class="parameter">allowconn</replaceable></term>

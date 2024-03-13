@@ -52,6 +52,9 @@ CATALOG(pg_database,1262,DatabaseRelationId) BKI_SHARED_RELATION BKI_ROWTYPE_OID
 	/* database has login event triggers? */
 	bool		dathasloginevt;
 
+	/* reject unassigned code points? (UTF-8 only) */
+	bool		datstrictunicode BKI_DEFAULT(false);
+
 	/*
 	 * Max connections allowed. Negative values have special meaning, see
 	 * DATCONNLIMIT_* defines below.

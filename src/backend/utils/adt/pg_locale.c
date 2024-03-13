@@ -113,6 +113,9 @@ char	   *localized_full_days[7 + 1];
 char	   *localized_abbrev_months[12 + 1];
 char	   *localized_full_months[12 + 1];
 
+/* reject unassigned code points? (UTF-8 only) */
+bool database_strict_unicode = false;
+
 /* is the databases's LC_CTYPE the C locale? */
 bool		database_ctype_is_c = false;
 

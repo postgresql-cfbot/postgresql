@@ -25,6 +25,7 @@ CREATE DATABASE <replaceable class="parameter">name</replaceable>
     [ WITH ] [ OWNER [=] <replaceable class="parameter">user_name</replaceable> ]
            [ TEMPLATE [=] <replaceable class="parameter">template</replaceable> ]
            [ ENCODING [=] <replaceable class="parameter">encoding</replaceable> ]
+           [ STRICT_UNICODE [=] <replaceable class="parameter">strict_unicode</replaceable> ]
            [ STRATEGY [=] <replaceable class="parameter">strategy</replaceable> ]
            [ LOCALE [=] <replaceable class="parameter">locale</replaceable> ]
            [ LC_COLLATE [=] <replaceable class="parameter">lc_collate</replaceable> ]
@@ -118,6 +119,28 @@ CREATE DATABASE <replaceable class="parameter">name</replaceable>
         <xref linkend="multibyte-charset-supported"/>. See below for
         additional restrictions.
        </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry id="create-database-strict-unicode">
+      <term><replaceable class="parameter">strict_unicode</replaceable></term>
+      <listitem>
+       <para>
+        If <literal>true</literal>, specifies that the initial databases will
+        reject Unicode code points that are unassigned as of the version of
+        Unicode returned by <function>unicode_version()</function> (See <xref
+        linkend="functions-version"/>). Only valid if the encoding is
+        <literal>UTF8</literal>.
+       </para>
+       <note>
+        <para>
+         This option affects all textual fields in the initial databases, and
+         should only be used when the applications control the text
+         input. Furthermore, it may not be possible to use recently-assigned
+         code points if <productname>PostgreSQL</productname> is based on an
+         older version of Unicode that does not yet recognize the new
+         assignments.
+        </para>
+       </note>
       </listitem>
      </varlistentry>
      <varlistentry id="create-database-strategy" xreflabel="CREATE DATABASE STRATEGY">

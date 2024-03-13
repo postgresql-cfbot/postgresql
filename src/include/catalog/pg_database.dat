@@ -15,6 +15,7 @@
 { oid => '1', oid_symbol => 'Template1DbOid',
   descr => 'default template for new databases',
   datname => 'template1', encoding => 'ENCODING',
+  datstrictunicode => 'STRICT_UNICODE',
   datlocprovider => 'LOCALE_PROVIDER', datistemplate => 't',
   datallowconn => 't', dathasloginevt => 'f', datconnlimit => '-1', datfrozenxid => '0',
   datminmxid => '1', dattablespace => 'pg_default', datcollate => 'LC_COLLATE',

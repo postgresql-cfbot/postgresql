@@ -399,6 +399,8 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 	SetConfigOption("client_encoding", GetDatabaseEncodingName(),
 					PGC_BACKEND, PGC_S_DYNAMIC_DEFAULT);
 
+	database_strict_unicode = dbform->datstrictunicode;
+
 	/* assign locale variables */
 	datum = SysCacheGetAttrNotNull(DATABASEOID, tup, Anum_pg_database_datcollate);
 	collate = TextDatumGetCString(datum);

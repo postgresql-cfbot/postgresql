@@ -115,7 +115,8 @@ static void movedb(const char *dbname, const char *tblspcname);
 static void movedb_failure_callback(int code, Datum arg);
 static bool get_db_info(const char *name, LOCKMODE lockmode,
 						Oid *dbIdP, Oid *ownerIdP,
-						int *encodingP, bool *dbIsTemplateP, bool *dbAllowConnP, bool *dbHasLoginEvtP,
+						int *encodingP, bool *dbstrictunicodeP, bool *dbIsTemplateP,
+						bool *dbAllowConnP, bool *dbHasLoginEvtP,
 						TransactionId *dbFrozenXidP, MultiXactId *dbMinMultiP,
 						Oid *dbTablespace, char **dbCollate, char **dbCtype, char **dbLocale,
 						char **dbIcurules,
@@ -672,6 +673,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	Oid			src_dboid;
 	Oid			src_owner;
 	int			src_encoding = -1;
+	bool		src_strictunicode = false;
 	char	   *src_collate = NULL;
 	char	   *src_ctype = NULL;
 	char	   *src_locale = NULL;
@@ -696,6 +698,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	DefElem    *downer = NULL;
 	DefElem    *dtemplate = NULL;
 	DefElem    *dencoding = NULL;
+	DefElem	   *dstrictunicode = NULL;
 	DefElem    *dlocale = NULL;
 	DefElem    *dcollate = NULL;
 	DefElem    *dctype = NULL;
@@ -717,6 +720,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	char		dblocprovider = '\0';
 	char	   *canonname;
 	int			encoding = -1;
+	bool		dbstrictunicode = false;
 	bool		dbistemplate = false;
 	bool		dballowconnections = true;
 	int			dbconnlimit = DATCONNLIMIT_UNLIMITED;
@@ -754,6 +758,12 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 			if (dencoding)
 				errorConflictingDefElem(defel, pstate);
 			dencoding = defel;
+		}
+		else if (strcmp(defel->defname, "strict_unicode") == 0)
+		{
+			if (dstrictunicode)
+				errorConflictingDefElem(defel, pstate);
+			dstrictunicode = defel;
 		}
 		else if (strcmp(defel->defname, "locale") == 0)
 		{
@@ -892,6 +902,8 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 						 parser_errposition(pstate, dencoding->location)));
 		}
 	}
+	if (dstrictunicode)
+		dbstrictunicode = defGetBoolean(dstrictunicode);
 	if (dlocale && dlocale->arg)
 	{
 		dbcollate = defGetString(dlocale);
@@ -967,7 +979,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 		dbtemplate = "template1";	/* Default template database name */
 
 	if (!get_db_info(dbtemplate, ShareLock,
-					 &src_dboid, &src_owner, &src_encoding,
+					 &src_dboid, &src_owner, &src_encoding, &src_strictunicode,
 					 &src_istemplate, &src_allowconn, &src_hasloginevt,
 					 &src_frozenxid, &src_minmxid, &src_deftablespace,
 					 &src_collate, &src_ctype, &src_locale, &src_icurules, &src_locprovider,
@@ -1020,6 +1032,8 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	/* If encoding or locales are defaulted, use source's setting */
 	if (encoding < 0)
 		encoding = src_encoding;
+	if (!dstrictunicode)
+		dbstrictunicode  = src_strictunicode;
 	if (dbcollate == NULL)
 		dbcollate = src_collate;
 	if (dbctype == NULL)
@@ -1055,6 +1069,12 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 				 errmsg("invalid LC_CTYPE locale name: \"%s\"", dbctype),
 				 errhint("If the locale name is specific to ICU, use ICU_LOCALE.")));
 	dbctype = canonname;
+
+	if (dbstrictunicode && encoding != PG_UTF8)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("encoding \"%s\" does not support STRICT_UNICODE",
+						pg_encoding_to_char(encoding))));
 
 	check_encoding_locale_matches(encoding, dbcollate, dbctype);
 
@@ -1129,6 +1149,12 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 							pg_encoding_to_char(encoding),
 							pg_encoding_to_char(src_encoding)),
 					 errhint("Use the same encoding as in the template database, or use template0 as template.")));
+
+		if (dbstrictunicode && !src_strictunicode)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("STRICT_UNICODE is incompatible with the template database"),
+					 errhint("Use a template database with STRICT_UNICODE, or use template0 as template.")));
 
 		if (strcmp(dbcollate, src_collate) != 0)
 			ereport(ERROR,
@@ -1372,6 +1398,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 		DirectFunctionCall1(namein, CStringGetDatum(dbname));
 	new_record[Anum_pg_database_datdba - 1] = ObjectIdGetDatum(datdba);
 	new_record[Anum_pg_database_encoding - 1] = Int32GetDatum(encoding);
+	new_record[Anum_pg_database_datstrictunicode - 1] = BoolGetDatum(dbstrictunicode);
 	new_record[Anum_pg_database_datlocprovider - 1] = CharGetDatum(dblocprovider);
 	new_record[Anum_pg_database_datistemplate - 1] = BoolGetDatum(dbistemplate);
 	new_record[Anum_pg_database_datallowconn - 1] = BoolGetDatum(dballowconnections);
@@ -1603,7 +1630,7 @@ dropdb(const char *dbname, bool missing_ok, bool force)
 	 */
 	pgdbrel = table_open(DatabaseRelationId, RowExclusiveLock);
 
-	if (!get_db_info(dbname, AccessExclusiveLock, &db_id, NULL, NULL,
+	if (!get_db_info(dbname, AccessExclusiveLock, &db_id, NULL, NULL, NULL,
 					 &db_istemplate, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL))
 	{
 		if (!missing_ok)
@@ -1818,7 +1845,7 @@ RenameDatabase(const char *oldname, const char *newname)
 	 */
 	rel = table_open(DatabaseRelationId, RowExclusiveLock);
 
-	if (!get_db_info(oldname, AccessExclusiveLock, &db_id, NULL, NULL, NULL,
+	if (!get_db_info(oldname, AccessExclusiveLock, &db_id, NULL, NULL, NULL, NULL,
 					 NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_DATABASE),
@@ -1928,7 +1955,7 @@ movedb(const char *dbname, const char *tblspcname)
 	 */
 	pgdbrel = table_open(DatabaseRelationId, RowExclusiveLock);
 
-	if (!get_db_info(dbname, AccessExclusiveLock, &db_id, NULL, NULL, NULL,
+	if (!get_db_info(dbname, AccessExclusiveLock, &db_id, NULL, NULL, NULL, NULL,
 					 NULL, NULL, NULL, NULL, &src_tblspcoid, NULL, NULL, NULL, NULL, NULL, NULL))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_DATABASE),
@@ -2273,9 +2300,11 @@ AlterDatabase(ParseState *pstate, AlterDatabaseStmt *stmt, bool isTopLevel)
 	ScanKeyData scankey;
 	SysScanDesc scan;
 	ListCell   *option;
+	bool		dbstrictunicode = false;
 	bool		dbistemplate = false;
 	bool		dballowconnections = true;
 	int			dbconnlimit = DATCONNLIMIT_UNLIMITED;
+	DefElem    *dstrictunicode = NULL;
 	DefElem    *distemplate = NULL;
 	DefElem    *dallowconnections = NULL;
 	DefElem    *dconnlimit = NULL;
@@ -2289,7 +2318,13 @@ AlterDatabase(ParseState *pstate, AlterDatabaseStmt *stmt, bool isTopLevel)
 	{
 		DefElem    *defel = (DefElem *) lfirst(option);
 
-		if (strcmp(defel->defname, "is_template") == 0)
+		if (strcmp(defel->defname, "strict_unicode") == 0)
+		{
+			if (dstrictunicode)
+				errorConflictingDefElem(defel, pstate);
+			dstrictunicode = defel;
+		}
+		else if (strcmp(defel->defname, "is_template") == 0)
 		{
 			if (distemplate)
 				errorConflictingDefElem(defel, pstate);
@@ -2339,6 +2374,8 @@ AlterDatabase(ParseState *pstate, AlterDatabaseStmt *stmt, bool isTopLevel)
 		return InvalidOid;
 	}
 
+	if (dstrictunicode && dstrictunicode->arg)
+		dbstrictunicode = defGetBoolean(dstrictunicode);
 	if (distemplate && distemplate->arg)
 		dbistemplate = defGetBoolean(distemplate);
 	if (dallowconnections && dallowconnections->arg)
@@ -2399,6 +2436,15 @@ AlterDatabase(ParseState *pstate, AlterDatabaseStmt *stmt, bool isTopLevel)
 	/*
 	 * Build an updated tuple, perusing the information just obtained
 	 */
+	if (dstrictunicode)
+	{
+		if (dbstrictunicode && !datform->datstrictunicode)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("STRICT_UNICODE cannot be enabled on an existing database")));
+		new_record[Anum_pg_database_datstrictunicode - 1] = BoolGetDatum(dbstrictunicode);
+		new_record_repl[Anum_pg_database_datstrictunicode - 1] = true;
+	}
 	if (distemplate)
 	{
 		new_record[Anum_pg_database_datistemplate - 1] = BoolGetDatum(dbistemplate);
@@ -2694,7 +2740,8 @@ pg_database_collation_actual_version(PG_FUNCTION_ARGS)
 static bool
 get_db_info(const char *name, LOCKMODE lockmode,
 			Oid *dbIdP, Oid *ownerIdP,
-			int *encodingP, bool *dbIsTemplateP, bool *dbAllowConnP, bool *dbHasLoginEvtP,
+			int *encodingP, bool *strictunicodeP, bool *dbIsTemplateP,
+			bool *dbAllowConnP, bool *dbHasLoginEvtP,
 			TransactionId *dbFrozenXidP, MultiXactId *dbMinMultiP,
 			Oid *dbTablespace, char **dbCollate, char **dbCtype, char **dbLocale,
 			char **dbIcurules,
@@ -2776,6 +2823,9 @@ get_db_info(const char *name, LOCKMODE lockmode,
 				/* character encoding */
 				if (encodingP)
 					*encodingP = dbform->encoding;
+				/* reject unassigned code points? (UTF-8 only) */
+				if (strictunicodeP)
+					*strictunicodeP = dbform->datstrictunicode;
 				/* allowed as template? */
 				if (dbIsTemplateP)
 					*dbIsTemplateP = dbform->datistemplate;

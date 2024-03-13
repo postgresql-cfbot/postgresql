@@ -957,6 +957,17 @@ listAllDbs(const char *pattern, bool verbose)
 		appendPQExpBuffer(&buf,
 						  "  NULL as \"%s\",\n",
 						  gettext_noop("ICU Rules"));
+	if (verbose)
+	{
+		if (pset.sversion >= 170000)
+			appendPQExpBuffer(&buf,
+							  "  d.datstrictunicode as \"%s\",\n",
+							  gettext_noop("Strict Unicode"));
+		else
+			appendPQExpBuffer(&buf,
+							  "  'f' as \"%s\",\n",
+							  gettext_noop("Strict Unicode"));
+	}
 	appendPQExpBufferStr(&buf, "  ");
 	printACLColumn(&buf, "d.datacl");
 	if (verbose)

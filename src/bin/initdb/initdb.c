@@ -93,6 +93,13 @@ typedef struct _stringlist
 	struct _stringlist *next;
 } _stringlist;
 
+enum trivalue
+{
+	TRI_DEFAULT,
+	TRI_NO,
+	TRI_YES
+};
+
 static const char *const auth_methods_host[] = {
 	"trust", "reject", "scram-sha-256", "md5", "password", "ident", "radius",
 #ifdef ENABLE_GSS
@@ -149,6 +156,7 @@ static char *datlocale = NULL;
 static char *icu_rules = NULL;
 static const char *default_text_search_config = NULL;
 static char *username = NULL;
+static enum trivalue strict_unicode = TRI_DEFAULT;
 static bool pwprompt = false;
 static char *pwfilename = NULL;
 static char *superuser_password = NULL;
@@ -1514,6 +1522,9 @@ bootstrap_template1(void)
 	bki_lines = replace_token(bki_lines, "ENCODING",
 							  encodingid_to_string(encodingid));
 
+	bki_lines = replace_token(bki_lines, "STRICT_UNICODE",
+							  (strict_unicode == TRI_YES) ? "TRUE" : "FALSE");
+
 	bki_lines = replace_token(bki_lines, "LC_COLLATE",
 							  escape_quotes_bki(lc_collate));
 
@@ -2437,6 +2448,8 @@ usage(const char *progname)
 	printf(_("      --auth-local=METHOD   default authentication method for local-socket connections\n"));
 	printf(_(" [-D, --pgdata=]DATADIR     location for this database cluster\n"));
 	printf(_("  -E, --encoding=ENCODING   set default encoding for new databases\n"));
+	printf(_("      --no-strict-unicode   disable strict unicode\n"));
+	printf(_("      --strict-unicode      enable strict unicode\n"));
 	printf(_("  -g, --allow-group-access  allow group read/execute on data directory\n"));
 	printf(_("      --icu-locale=LOCALE   set ICU locale ID for new databases\n"));
 	printf(_("      --icu-rules=RULES     set additional ICU collation rules for new databases\n"));
@@ -3107,6 +3120,8 @@ main(int argc, char *argv[])
 		{"icu-locale", required_argument, NULL, 16},
 		{"icu-rules", required_argument, NULL, 17},
 		{"sync-method", required_argument, NULL, 18},
+		{"no-strict-unicode", no_argument, NULL, 19},
+		{"strict-unicode", no_argument, NULL, 20},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -3290,6 +3305,12 @@ main(int argc, char *argv[])
 			case 18:
 				if (!parse_sync_method(optarg, &sync_method))
 					exit(1);
+				break;
+			case 19:
+				strict_unicode = TRI_NO;
+				break;
+			case 20:
+				strict_unicode = TRI_YES;
 				break;
 			default:
 				/* getopt_long already emitted a complaint */

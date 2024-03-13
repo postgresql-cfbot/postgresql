@@ -2981,6 +2981,7 @@ dumpDatabase(Archive *fout)
 				i_datname,
 				i_datdba,
 				i_encoding,
+				i_datstrictunicode,
 				i_datlocprovider,
 				i_collate,
 				i_ctype,
@@ -3000,6 +3001,7 @@ dumpDatabase(Archive *fout)
 	const char *datname,
 			   *dba,
 			   *encoding,
+			   *datstrictunicode,
 			   *datlocprovider,
 			   *collate,
 			   *ctype,
@@ -3037,6 +3039,10 @@ dumpDatabase(Archive *fout)
 		appendPQExpBufferStr(dbQry, "daticurules, ");
 	else
 		appendPQExpBufferStr(dbQry, "NULL AS daticurules, ");
+	if (fout->remoteVersion >= 170000)
+		appendPQExpBufferStr(dbQry, "datstrictunicode, ");
+	else
+		appendPQExpBufferStr(dbQry, "'f' AS datstrictunicode, ");
 	appendPQExpBufferStr(dbQry,
 						 "(SELECT spcname FROM pg_tablespace t WHERE t.oid = dattablespace) AS tablespace, "
 						 "shobj_description(oid, 'pg_database') AS description "
@@ -3050,6 +3056,7 @@ dumpDatabase(Archive *fout)
 	i_datname = PQfnumber(res, "datname");
 	i_datdba = PQfnumber(res, "datdba");
 	i_encoding = PQfnumber(res, "encoding");
+	i_datstrictunicode = PQfnumber(res, "datstrictunicode");
 	i_datlocprovider = PQfnumber(res, "datlocprovider");
 	i_collate = PQfnumber(res, "datcollate");
 	i_ctype = PQfnumber(res, "datctype");
@@ -3069,6 +3076,7 @@ dumpDatabase(Archive *fout)
 	datname = PQgetvalue(res, 0, i_datname);
 	dba = getRoleName(PQgetvalue(res, 0, i_datdba));
 	encoding = PQgetvalue(res, 0, i_encoding);
+	datstrictunicode = PQgetvalue(res, 0, i_datstrictunicode);
 	datlocprovider = PQgetvalue(res, 0, i_datlocprovider);
 	collate = PQgetvalue(res, 0, i_collate);
 	ctype = PQgetvalue(res, 0, i_ctype);
@@ -3113,6 +3121,10 @@ dumpDatabase(Archive *fout)
 		appendStringLiteralAH(creaQry, encoding, fout);
 	}
 
+	if (strcmp(datstrictunicode, "t") == 0)
+		appendPQExpBufferStr(creaQry, " STRICT_UNICODE = TRUE");
+	else
+		appendPQExpBufferStr(creaQry, " STRICT_UNICODE = FALSE");
 	appendPQExpBufferStr(creaQry, " LOCALE_PROVIDER = ");
 	if (datlocprovider[0] == 'c')
 		appendPQExpBufferStr(creaQry, "libc");

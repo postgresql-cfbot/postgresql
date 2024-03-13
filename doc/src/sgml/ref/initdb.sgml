@@ -227,6 +227,29 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
+     <varlistentry id="app-initdb-option-strict-unicode">
+      <term><option>--strict-unicode</option></term>
+      <listitem>
+       <para>
+        Specifies that the initial databases will reject Unicode code points
+        that are unassigned as of the version of Unicode returned by
+        <function>unicode_version()</function> (See <xref
+        linkend="functions-version"/>). Only valid if the encoding is
+        <literal>UTF8</literal>.
+       </para>
+       <note>
+        <para>
+         This option affects all textual fields in the initial databases, and
+         should only be used when the applications control the text
+         input. Furthermore, it may not be possible to use recently-assigned
+         code points if <productname>PostgreSQL</productname> is based on an
+         older version of Unicode that does not yet recognize the new
+         assignments.
+        </para>
+       </note>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="app-initdb-allow-group-access" xreflabel="group access">
       <term><option>-g</option></term>
       <term><option>--allow-group-access</option></term>

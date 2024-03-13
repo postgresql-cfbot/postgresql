@@ -16,11 +16,13 @@
 #include "postgres.h"
 
 #include "common/int.h"
+#include "common/unicode_category.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
 #include "utils/formatting.h"
 #include "utils/memutils.h"
+#include "utils/pg_locale.h"
 #include "varatt.h"
 
 
@@ -1030,6 +1032,7 @@ chr			(PG_FUNCTION_ARGS)
 		/* for Unicode we treat the argument as a code point */
 		int			bytes;
 		unsigned char *wch;
+		pg_unicode_category category;
 
 		/*
 		 * We only allow valid Unicode code points; per RFC3629 that stops at
@@ -1041,6 +1044,19 @@ chr			(PG_FUNCTION_ARGS)
 					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 					 errmsg("requested character too large for encoding: %u",
 							cvalue)));
+
+		if (database_strict_unicode)
+		{
+			category = unicode_category(cvalue);
+			if (category == PG_U_UNASSIGNED)
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("unassigned Unicode code point: %06X", cvalue));
+			else if (category == PG_U_SURROGATE)
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("Unicode code point is surrogate: %06X", cvalue));
+		}
 
 		if (cvalue > 0xffff)
 			bytes = 4;

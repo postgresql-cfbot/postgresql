@@ -17,8 +17,13 @@
 
 #include "postgres.h"
 
+#include "access/xlog.h"
+#include "funcapi.h"
 #include "utils/pgstat_internal.h"
 #include "executor/instrument.h"
+#include "utils/builtins.h"
+#include "utils/timestamp.h"
+#include "utils/pg_lsn.h"
 
 
 PgStat_PendingWalStats PendingWalStats = {0};
@@ -31,6 +36,12 @@ PgStat_PendingWalStats PendingWalStats = {0};
  */
 static WalUsage prevWalUsage;
 
+
+static void lsntime_merge(LSNTime *target, LSNTime *src);
+static void lsntime_insert(LSNTimeline *timeline, TimestampTz time, XLogRecPtr lsn);
+
+XLogRecPtr	estimate_lsn_at_time(const LSNTimeline *timeline, TimestampTz time);
+TimestampTz estimate_time_at_lsn(const LSNTimeline *timeline, XLogRecPtr lsn);
 
 /*
  * Calculate how much WAL usage counters have increased and update
@@ -183,4 +194,285 @@ pgstat_wal_snapshot_cb(void)
 	memcpy(&pgStatLocal.snapshot.wal, &stats_shmem->stats,
 		   sizeof(pgStatLocal.snapshot.wal));
 	LWLockRelease(&stats_shmem->lock);
+}
+
+/*
+ * Set *target to be the earlier of *target or *src.
+ */
+static void
+lsntime_merge(LSNTime *target, LSNTime *src)
+{
+	LSNTime		result;
+	uint64		new_members = target->members + src->members;
+
+	if (target->time < src->time)
+		result = *target;
+	else if (src->time < target->time)
+		result = *src;
+	else if (target->lsn < src->lsn)
+		result = *target;
+	else if (src->lsn < target->lsn)
+		result = *src;
+	else
+		result = *target;
+
+	*target = result;
+	target->members = new_members;
+	src->members = 1;
+}
+
+static int
+lsntime_merge_target(LSNTimeline *timeline)
+{
+	/* Don't merge if free space available */
+	Assert(timeline->length == LSNTIMELINE_VOLUME);
+
+	for (int i = timeline->length; i-- > 0;)
+	{
+		/*
+		 * An array element can represent up to twice the number of members
+		 * represented by the preceding array element.
+		 */
+		if (timeline->data[i].members < (2 * timeline->data[i - 1].members))
+			return i;
+	}
+
+	/* Should not be reachable or we are out of space */
+	Assert(false);
+}
+
+/*
+ * Insert a new LSNTime into the LSNTimeline in the first available element,
+ * or, if there are no empty elements, insert it into the element at index 0,
+ * merge the logical members of two old buckets and move the intervening
+ * elements down by one.
+ */
+void
+lsntime_insert(LSNTimeline *timeline, TimestampTz time,
+			   XLogRecPtr lsn)
+{
+	int			merge_target;
+	LSNTime		entrant = {.lsn = lsn,.time = time,.members = 1};
+
+	if (timeline->length < LSNTIMELINE_VOLUME)
+	{
+		/*
+		 * The new entry should exceed the most recent entry to ensure time
+		 * moves forward on the timeline.
+		 */
+		Assert(timeline->length == 0 ||
+			   (lsn >= timeline->data[LSNTIMELINE_VOLUME - timeline->length].lsn &&
+				time >= timeline->data[LSNTIMELINE_VOLUME - timeline->length].time));
+
+		/*
+		 * If there are unfilled elements in the timeline, then insert the
+		 * passed-in LSNTime into the tail of the array.
+		 */
+		timeline->length++;
+		timeline->data[LSNTIMELINE_VOLUME - timeline->length] = entrant;
+		return;
+	}
+
+	/*
+	 * If all elements in the timeline represent at least one member, merge
+	 * the oldest element whose membership is < 2x its predecessor with its
+	 * preceding member. Then shift all elements preceding these two elements
+	 * down by one and insert the passed-in LSNTime at array index 0.
+	 */
+	merge_target = lsntime_merge_target(timeline);
+	Assert(merge_target >= 0 && merge_target < timeline->length);
+	lsntime_merge(&timeline->data[merge_target], &timeline->data[merge_target - 1]);
+	memmove(&timeline->data[1], &timeline->data[0], sizeof(LSNTime) * merge_target - 1);
+	timeline->data[0] = entrant;
+}
+
+/*
+ * Translate time to a LSN using the provided timeline. The timeline will not
+ * be modified.
+ */
+XLogRecPtr
+estimate_lsn_at_time(const LSNTimeline *timeline, TimestampTz time)
+{
+	XLogRecPtr	result;
+	int64		time_elapsed,
+				lsns_elapsed;
+	LSNTime		start = {.time = PgStartTime,.lsn = PgStartLSN};
+	LSNTime		end = {.time = GetCurrentTimestamp(),.lsn = GetXLogInsertRecPtr()};
+
+	/*
+	 * If the provided time is before DB startup, the best we can do is return
+	 * the start LSN.
+	 */
+	if (time < start.time)
+		return start.lsn;
+
+	/*
+	 * If the provided time is after now, the current LSN is our best
+	 * estimate.
+	 */
+	if (time >= end.time)
+		return end.lsn;
+
+	/*
+	 * Loop through the timeline. Stop at the first LSNTime earlier than our
+	 * target time. This LSNTime will be our interpolation start point. If
+	 * there's an LSNTime later than that, then that will be our interpolation
+	 * end point.
+	 */
+	for (int i = LSNTIMELINE_VOLUME - timeline->length; i < LSNTIMELINE_VOLUME; i++)
+	{
+		if (timeline->data[i].time > time)
+			continue;
+
+		start = timeline->data[i];
+		if (i > 0)
+			end = timeline->data[i - 1];
+		goto stop;
+	}
+
+	/*
+	 * If we exhausted the timeline, then use its earliest LSNTime as our
+	 * interpolation end point.
+	 */
+	if (timeline->length > 0)
+		end = timeline->data[timeline->length - 1];
+
+stop:
+	Assert(end.time > start.time);
+	Assert(end.lsn > start.lsn);
+	time_elapsed = end.time - start.time;
+	Assert(time_elapsed != 0);
+	lsns_elapsed = end.lsn - start.lsn;
+	Assert(lsns_elapsed != 0);
+	result = (double) (time - start.time) / time_elapsed * lsns_elapsed + start.lsn;
+	return Max(result, 0);
+}
+
+/*
+ * Translate lsn to a time using the provided timeline. The timeline will not
+ * be modified.
+ */
+TimestampTz
+estimate_time_at_lsn(const LSNTimeline *timeline, XLogRecPtr lsn)
+{
+	int64		time_elapsed,
+				lsns_elapsed;
+	TimestampTz result;
+	LSNTime		start = {.time = PgStartTime,.lsn = PgStartLSN};
+	LSNTime		end = {.time = GetCurrentTimestamp(),.lsn = GetXLogInsertRecPtr()};
+
+	/*
+	 * If the LSN is before DB startup, the best we can do is return that
+	 * time.
+	 */
+	if (lsn <= start.lsn)
+		return start.time;
+
+	/*
+	 * If the target LSN is after the current insert LSN, the current time is
+	 * our best estimate.
+	 */
+	if (lsn >= end.lsn)
+		return end.time;
+
+	/*
+	 * Loop through the timeline. Stop at the first LSNTime earlier than our
+	 * target LSN. This LSNTime will be our interpolation start point. If
+	 * there's an LSNTime later than that, then that will be our interpolation
+	 * end point.
+	 */
+	for (int i = LSNTIMELINE_VOLUME - timeline->length; i < LSNTIMELINE_VOLUME; i++)
+	{
+		if (timeline->data[i].lsn > lsn)
+			continue;
+
+		start = timeline->data[i];
+		if (i > 0)
+			end = timeline->data[i - 1];
+		goto stop;
+	}
+
+	/*
+	 * If we exhausted the timeline, then use its earliest LSNTime as our
+	 * interpolation end point.
+	 */
+	if (timeline->length > 0)
+		end = timeline->data[timeline->length - 1];
+
+stop:
+	Assert(end.time > start.time);
+	Assert(end.lsn > start.lsn);
+	time_elapsed = end.time - start.time;
+	Assert(time_elapsed != 0);
+	lsns_elapsed = end.lsn - start.lsn;
+	Assert(lsns_elapsed != 0);
+	result = (double) (lsn - start.lsn) / lsns_elapsed * time_elapsed + start.time;
+	return Max(result, 0);
+}
+
+void
+pgstat_wal_update_lsntimeline(TimestampTz time, XLogRecPtr lsn)
+{
+	PgStatShared_Wal *stats_shmem = &pgStatLocal.shmem->wal;
+
+	LWLockAcquire(&stats_shmem->lock, LW_EXCLUSIVE);
+	lsntime_insert(&stats_shmem->stats.timeline, time, lsn);
+	LWLockRelease(&stats_shmem->lock);
+}
+
+PG_FUNCTION_INFO_V1(pg_estimate_lsn_at_time);
+PG_FUNCTION_INFO_V1(pg_estimate_time_at_lsn);
+PG_FUNCTION_INFO_V1(pg_lsntimeline);
+
+Datum
+pg_estimate_time_at_lsn(PG_FUNCTION_ARGS)
+{
+	XLogRecPtr	lsn = PG_GETARG_LSN(0);
+	PgStatShared_Wal *stats_shmem = &pgStatLocal.shmem->wal;
+	TimestampTz result;
+
+	LWLockAcquire(&stats_shmem->lock, LW_SHARED);
+	result = estimate_time_at_lsn(&stats_shmem->stats.timeline, lsn);
+	LWLockRelease(&stats_shmem->lock);
+
+	PG_RETURN_TIMESTAMPTZ(result);
+}
+
+Datum
+pg_estimate_lsn_at_time(PG_FUNCTION_ARGS)
+{
+	PgStatShared_Wal *stats_shmem = &pgStatLocal.shmem->wal;
+	TimestampTz time = PG_GETARG_TIMESTAMPTZ(0);
+	XLogRecPtr	result;
+
+	LWLockAcquire(&stats_shmem->lock, LW_SHARED);
+	result = estimate_lsn_at_time(&stats_shmem->stats.timeline, time);
+	LWLockRelease(&stats_shmem->lock);
+
+	PG_RETURN_LSN(result);
+}
+
+Datum
+pg_lsntimeline(PG_FUNCTION_ARGS)
+{
+	ReturnSetInfo *rsinfo;
+	LSNTimeline *timeline;
+	PgStatShared_Wal *stats_shmem = &pgStatLocal.shmem->wal;
+
+	InitMaterializedSRF(fcinfo, 0);
+	rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	LWLockAcquire(&stats_shmem->lock, LW_SHARED);
+	timeline = &stats_shmem->stats.timeline;
+	for (int i = LSNTIMELINE_VOLUME - timeline->length; i < LSNTIMELINE_VOLUME; i++)
+	{
+		Datum		values[2] = {0};
+		bool		nulls[2] = {0};
+
+		values[0] = timeline->data[i].time;
+		values[1] = timeline->data[i].lsn;
+		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc,
+							 values, nulls);
+	}
+	LWLockRelease(&stats_shmem->lock);
+	return (Datum) 0;
 }

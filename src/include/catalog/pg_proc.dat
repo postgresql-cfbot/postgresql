@@ -6326,6 +6326,28 @@
   prorettype => 'timestamptz', proargtypes => 'xid',
   prosrc => 'pg_xact_commit_timestamp' },
 
+{ oid => '9997',
+  descr => 'get approximate LSN at a particular point in time',
+  proname => 'pg_estimate_lsn_at_time', provolatile => 'v',
+  prorettype => 'pg_lsn', proargtypes => 'timestamptz',
+  prosrc => 'pg_estimate_lsn_at_time' },
+
+{ oid => '9996',
+  descr => 'get approximate time at a particular LSN',
+  proname => 'pg_estimate_time_at_lsn', provolatile => 'v',
+  prorettype => 'timestamptz', proargtypes => 'pg_lsn',
+  prosrc => 'pg_estimate_time_at_lsn' },
+
+{ oid => '9994',
+  descr => 'print the LSN timeline',
+  proname => 'pg_lsntimeline', prorows => '64',
+  proretset => 't', provolatile => 'v', proparallel => 's',
+  prorettype => 'record', proargtypes => '',
+  proallargtypes => '{timestamptz,pg_lsn}',
+  proargmodes => '{o,o}',
+  proargnames => '{time, lsn}',
+  prosrc => 'pg_lsntimeline' },
+
 { oid => '6168',
   descr => 'get commit timestamp and replication origin of a transaction',
   proname => 'pg_xact_commit_timestamp_origin', provolatile => 'v',

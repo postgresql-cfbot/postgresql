@@ -68,6 +68,7 @@
 #include "access/xlogutils.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "storage/bufpage.h"
 #include "storage/fd.h"
 #include "storage/shmem.h"
 #include "utils/guc_hooks.h"
@@ -155,6 +156,7 @@ typedef enum
 	SLRU_WRITE_FAILED,
 	SLRU_FSYNC_FAILED,
 	SLRU_CLOSE_FAILED,
+	SLRU_DATA_CORRUPTED,
 } SlruErrorCause;
 
 static SlruErrorCause slru_errcause;
@@ -378,8 +380,8 @@ SimpleLruZeroPage(SlruCtl ctl, int64 pageno)
 	shared->page_dirty[slotno] = true;
 	SlruRecentlyUsed(shared, slotno);
 
-	/* Set the buffer to zeroes */
-	MemSet(shared->page_buffer[slotno], 0, BLCKSZ);
+    /* Initialize the page. */
+	PageInitSLRU(shared->page_buffer[slotno], BLCKSZ, 0);
 
 	/* Set the LSNs for this new page to zero */
 	SimpleLruZeroLSNs(ctl, slotno);
@@ -815,7 +817,7 @@ SlruPhysicalReadPage(SlruCtl ctl, int64 pageno, int slotno)
 		ereport(LOG,
 				(errmsg("file \"%s\" doesn't exist, reading as zeroes",
 						path)));
-		MemSet(shared->page_buffer[slotno], 0, BLCKSZ);
+		PageInitSLRU(shared->page_buffer[slotno], BLCKSZ, 0);
 		return true;
 	}
 
@@ -835,6 +837,13 @@ SlruPhysicalReadPage(SlruCtl ctl, int64 pageno, int slotno)
 	{
 		slru_errcause = SLRU_CLOSE_FAILED;
 		slru_errno = errno;
+		return false;
+	}
+
+	if (!PageIsVerifiedExtended(shared->page_buffer[slotno], pageno, PIV_REPORT_STAT))
+	{
+		slru_errcause = SLRU_DATA_CORRUPTED;
+		slru_errno = 0;
 		return false;
 	}
 
@@ -864,6 +873,8 @@ SlruPhysicalWritePage(SlruCtl ctl, int64 pageno, int slotno, SlruWriteAll fdata)
 	off_t		offset = rpageno * BLCKSZ;
 	char		path[MAXPGPATH];
 	int			fd = -1;
+	Page		page = shared->page_buffer[slotno];
+	XLogRecPtr	lsn;
 
 	/* update the stats counter of written pages */
 	pgstat_count_slru_page_written(shared->slru_stats_idx);
@@ -872,41 +883,21 @@ SlruPhysicalWritePage(SlruCtl ctl, int64 pageno, int slotno, SlruWriteAll fdata)
 	 * Honor the write-WAL-before-data rule, if appropriate, so that we do not
 	 * write out data before associated WAL records.  This is the same action
 	 * performed during FlushBuffer() in the main buffer manager.
+	 *
+	 * The largest async-commit LSN for the page is maintained through page LSN.
 	 */
-	if (shared->group_lsn != NULL)
+	lsn = PageGetLSN(page);
+	if (!XLogRecPtrIsInvalid(lsn))
 	{
 		/*
-		 * We must determine the largest async-commit LSN for the page. This
-		 * is a bit tedious, but since this entire function is a slow path
-		 * anyway, it seems better to do this here than to maintain a per-page
-		 * LSN variable (which'd need an extra comparison in the
-		 * transaction-commit path).
+		 * As noted above, elog(ERROR) is not acceptable here, so if
+		 * XLogFlush were to fail, we must PANIC.  This isn't much of a
+		 * restriction because XLogFlush is just about all critical
+		 * section anyway, but let's make sure.
 		 */
-		XLogRecPtr	max_lsn;
-		int			lsnindex;
-
-		lsnindex = slotno * shared->lsn_groups_per_page;
-		max_lsn = shared->group_lsn[lsnindex++];
-		for (int lsnoff = 1; lsnoff < shared->lsn_groups_per_page; lsnoff++)
-		{
-			XLogRecPtr	this_lsn = shared->group_lsn[lsnindex++];
-
-			if (max_lsn < this_lsn)
-				max_lsn = this_lsn;
-		}
-
-		if (!XLogRecPtrIsInvalid(max_lsn))
-		{
-			/*
-			 * As noted above, elog(ERROR) is not acceptable here, so if
-			 * XLogFlush were to fail, we must PANIC.  This isn't much of a
-			 * restriction because XLogFlush is just about all critical
-			 * section anyway, but let's make sure.
-			 */
-			START_CRIT_SECTION();
-			XLogFlush(max_lsn);
-			END_CRIT_SECTION();
-		}
+		START_CRIT_SECTION();
+		XLogFlush(lsn);
+		END_CRIT_SECTION();
 	}
 
 	/*
@@ -970,6 +961,8 @@ SlruPhysicalWritePage(SlruCtl ctl, int64 pageno, int slotno, SlruWriteAll fdata)
 			}
 		}
 	}
+
+	PageSetChecksumInplace(shared->page_buffer[slotno], pageno);
 
 	errno = 0;
 	pgstat_report_wait_start(WAIT_EVENT_SLRU_WRITE);
@@ -1090,6 +1083,13 @@ SlruReportIOError(SlruCtl ctl, int64 pageno, TransactionId xid)
 					 errmsg("could not access status of transaction %u", xid),
 					 errdetail("Could not close file \"%s\": %m.",
 							   path)));
+			break;
+		case SLRU_DATA_CORRUPTED:
+			ereport(ERROR,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg("could not access status of transaction %u", xid),
+					 errdetail("Invalid page from file \"%s\" at offset %d.",
+							   path, offset)));
 			break;
 		default:
 			/* can't get here, we trust */

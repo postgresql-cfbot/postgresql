@@ -674,14 +674,28 @@ copy_subdir_files(const char *old_subdir, const char *new_subdir)
 static void
 copy_xact_xlog_xid(void)
 {
+	bool	slru_header_changed = false;
+
 	/*
 	 * Copy old commit logs to new data dir. pg_clog has been renamed to
 	 * pg_xact in post-10 clusters.
 	 */
-	copy_subdir_files(GET_MAJOR_VERSION(old_cluster.major_version) <= 906 ?
-					  "pg_clog" : "pg_xact",
-					  GET_MAJOR_VERSION(new_cluster.major_version) <= 906 ?
-					  "pg_clog" : "pg_xact");
+	char	*xact_old_dir = GET_MAJOR_VERSION(old_cluster.major_version) <= 906 ? "pg_clog" : "pg_xact";
+	char	*xact_new_dir = GET_MAJOR_VERSION(new_cluster.major_version) <= 906 ? "pg_clog" : "pg_xact";
+
+    /*
+	 * In post-17 clusters, a page header is added to each SLRU page.
+	 * Perform a one-time conversion of the clog files if the old
+	 * cluster and the new cluster use different SLRU formats.
+	 */
+	if (new_cluster.controldata.cat_ver >= SLRU_PAGE_HEADER_CAT_VER &&
+		old_cluster.controldata.cat_ver < SLRU_PAGE_HEADER_CAT_VER)
+		slru_header_changed = true;
+
+	if (slru_header_changed)
+		upgrade_xact_cache(xact_old_dir, xact_new_dir);
+	else
+		copy_subdir_files(xact_old_dir, xact_new_dir);
 
 	prep_status("Setting oldest XID for new cluster");
 	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
@@ -716,7 +730,8 @@ copy_xact_xlog_xid(void)
 	 * server doesn't attempt to read multis older than the cutoff value.
 	 */
 	if (old_cluster.controldata.cat_ver >= MULTIXACT_FORMATCHANGE_CAT_VER &&
-		new_cluster.controldata.cat_ver >= MULTIXACT_FORMATCHANGE_CAT_VER)
+		new_cluster.controldata.cat_ver >= MULTIXACT_FORMATCHANGE_CAT_VER &&
+		!slru_header_changed)
 	{
 		copy_subdir_files("pg_multixact/offsets", "pg_multixact/offsets");
 		copy_subdir_files("pg_multixact/members", "pg_multixact/members");
@@ -736,7 +751,8 @@ copy_xact_xlog_xid(void)
 				  new_cluster.pgdata);
 		check_ok();
 	}
-	else if (new_cluster.controldata.cat_ver >= MULTIXACT_FORMATCHANGE_CAT_VER)
+	else if (new_cluster.controldata.cat_ver >= MULTIXACT_FORMATCHANGE_CAT_VER ||
+			 slru_header_changed)
 	{
 		/*
 		 * Remove offsets/0000 file created by initdb that no longer matches

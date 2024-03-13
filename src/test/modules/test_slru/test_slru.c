@@ -17,6 +17,7 @@
 #include "access/slru.h"
 #include "access/transam.h"
 #include "miscadmin.h"
+#include "storage/bufpage.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/shmem.h"
@@ -72,8 +73,8 @@ test_slru_page_write(PG_FUNCTION_ARGS)
 	TestSlruCtl->shared->page_status[slotno] = SLRU_PAGE_VALID;
 
 	/* write given data to the page, up to the limit of the page */
-	strncpy(TestSlruCtl->shared->page_buffer[slotno], data,
-			BLCKSZ - 1);
+	strncpy(PageGetContents(TestSlruCtl->shared->page_buffer[slotno]), data,
+			SizeOfPageContents - 1);
 
 	SimpleLruWritePage(TestSlruCtl, slotno);
 	LWLockRelease(lock);
@@ -101,7 +102,7 @@ test_slru_page_read(PG_FUNCTION_ARGS)
 	LWLockAcquire(lock, LW_EXCLUSIVE);
 	slotno = SimpleLruReadPage(TestSlruCtl, pageno,
 							   write_ok, InvalidTransactionId);
-	data = (char *) TestSlruCtl->shared->page_buffer[slotno];
+	data = (char *) PageGetContents(TestSlruCtl->shared->page_buffer[slotno]);
 	LWLockRelease(lock);
 
 	PG_RETURN_TEXT_P(cstring_to_text(data));
@@ -120,7 +121,7 @@ test_slru_page_readonly(PG_FUNCTION_ARGS)
 										pageno,
 										InvalidTransactionId);
 	Assert(LWLockHeldByMe(lock));
-	data = (char *) TestSlruCtl->shared->page_buffer[slotno];
+	data = (char *) PageGetContents(TestSlruCtl->shared->page_buffer[slotno]);
 	LWLockRelease(lock);
 
 	PG_RETURN_TEXT_P(cstring_to_text(data));

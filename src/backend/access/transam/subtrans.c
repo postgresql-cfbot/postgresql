@@ -34,6 +34,7 @@
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "utils/guc_hooks.h"
+#include "storage/bufpage.h"
 #include "utils/snapmgr.h"
 
 
@@ -51,7 +52,7 @@
  */
 
 /* We need four bytes per xact */
-#define SUBTRANS_XACTS_PER_PAGE (BLCKSZ / sizeof(TransactionId))
+#define SUBTRANS_XACTS_PER_PAGE (SizeOfPageContents / sizeof(TransactionId))
 
 /*
  * Although we return an int64 the actual value can't currently exceed
@@ -97,7 +98,7 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 	LWLockAcquire(lock, LW_EXCLUSIVE);
 
 	slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
-	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
+	ptr = (TransactionId *) PageGetContents(SubTransCtl->shared->page_buffer[slotno]);
 	ptr += entryno;
 
 	/*
@@ -137,7 +138,7 @@ SubTransGetParent(TransactionId xid)
 	/* lock is acquired by SimpleLruReadPage_ReadOnly */
 
 	slotno = SimpleLruReadPage_ReadOnly(SubTransCtl, pageno, xid);
-	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
+	ptr = (TransactionId *) PageGetContents(SubTransCtl->shared->page_buffer[slotno]);
 	ptr += entryno;
 
 	parent = *ptr;
@@ -365,7 +366,6 @@ CheckPointSUBTRANS(void)
 	SimpleLruWriteAll(SubTransCtl, true);
 	TRACE_POSTGRESQL_SUBTRANS_CHECKPOINT_DONE(true);
 }
-
 
 /*
  * Make sure that SUBTRANS has room for a newly-allocated XID.

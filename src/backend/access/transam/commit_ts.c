@@ -29,6 +29,7 @@
 #include "access/xlogutils.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "storage/bufpage.h"
 #include "storage/shmem.h"
 #include "utils/fmgrprotos.h"
 #include "utils/guc_hooks.h"
@@ -61,7 +62,7 @@ typedef struct CommitTimestampEntry
 									sizeof(RepOriginId))
 
 #define COMMIT_TS_XACTS_PER_PAGE \
-	(BLCKSZ / SizeOfCommitTimestampEntry)
+	(SizeOfPageContents / SizeOfCommitTimestampEntry)
 
 
 /*
@@ -118,7 +119,7 @@ static int	ZeroCommitTsPage(int64 pageno, bool writeXlog);
 static bool CommitTsPagePrecedes(int64 page1, int64 page2);
 static void ActivateCommitTs(void);
 static void DeactivateCommitTs(void);
-static void WriteZeroPageXlogRec(int64 pageno);
+static XLogRecPtr WriteZeroPageXlogRec(int64 pageno);
 static void WriteTruncateXlogRec(int64 pageno, TransactionId oldestXid);
 
 /*
@@ -253,11 +254,12 @@ TransactionIdSetCommitTs(TransactionId xid, TimestampTz ts,
 	CommitTimestampEntry entry;
 
 	Assert(TransactionIdIsNormal(xid));
+	Assert(xid == slotno * COMMIT_TS_XACTS_PER_PAGE + entryno);
 
 	entry.time = ts;
 	entry.nodeid = nodeid;
 
-	memcpy(CommitTsCtl->shared->page_buffer[slotno] +
+	memcpy(PageGetContents(CommitTsCtl->shared->page_buffer[slotno]) +
 		   SizeOfCommitTimestampEntry * entryno,
 		   &entry, SizeOfCommitTimestampEntry);
 }
@@ -336,7 +338,7 @@ TransactionIdGetCommitTsData(TransactionId xid, TimestampTz *ts,
 	/* lock is acquired by SimpleLruReadPage_ReadOnly */
 	slotno = SimpleLruReadPage_ReadOnly(CommitTsCtl, pageno, xid);
 	memcpy(&entry,
-		   CommitTsCtl->shared->page_buffer[slotno] +
+		   PageGetContents(CommitTsCtl->shared->page_buffer[slotno]) +
 		   SizeOfCommitTimestampEntry * entryno,
 		   SizeOfCommitTimestampEntry);
 
@@ -615,11 +617,17 @@ static int
 ZeroCommitTsPage(int64 pageno, bool writeXlog)
 {
 	int			slotno;
+	Page 		page;
+	XLogRecPtr  lsn = 0;
 
 	slotno = SimpleLruZeroPage(CommitTsCtl, pageno);
+	page = CommitTsCtl->shared->page_buffer[slotno];
 
 	if (writeXlog)
-		WriteZeroPageXlogRec(pageno);
+	{
+		lsn = WriteZeroPageXlogRec(pageno);
+		PageSetLSN(page, lsn);
+	}
 
 	return slotno;
 }
@@ -985,12 +993,12 @@ CommitTsPagePrecedes(int64 page1, int64 page2)
 /*
  * Write a ZEROPAGE xlog record
  */
-static void
+static XLogRecPtr
 WriteZeroPageXlogRec(int64 pageno)
 {
 	XLogBeginInsert();
 	XLogRegisterData((char *) (&pageno), sizeof(pageno));
-	(void) XLogInsert(RM_COMMIT_TS_ID, COMMIT_TS_ZEROPAGE);
+	return XLogInsert(RM_COMMIT_TS_ID, COMMIT_TS_ZEROPAGE);
 }
 
 /*

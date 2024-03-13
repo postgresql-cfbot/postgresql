@@ -207,6 +207,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/pg_lfind.h"
+#include "storage/bufpage.h"
 #include "storage/predicate.h"
 #include "storage/predicate_internals.h"
 #include "storage/proc.h"
@@ -326,8 +327,8 @@ static SlruCtlData SerialSlruCtlData;
 #define SerialSlruCtl			(&SerialSlruCtlData)
 
 #define SERIAL_PAGESIZE			BLCKSZ
-#define SERIAL_ENTRYSIZE			sizeof(SerCommitSeqNo)
-#define SERIAL_ENTRIESPERPAGE	(SERIAL_PAGESIZE / SERIAL_ENTRYSIZE)
+#define SERIAL_ENTRYSIZE		sizeof(SerCommitSeqNo)
+#define SERIAL_ENTRIESPERPAGE	(SERIAL_PAGESIZE - MAXALIGN(SizeOfPageHeaderData) / SERIAL_ENTRYSIZE)
 
 /*
  * Set maximum pages based on the number needed to track all transactions.
@@ -337,7 +338,7 @@ static SlruCtlData SerialSlruCtlData;
 #define SerialNextPage(page) (((page) >= SERIAL_MAX_PAGE) ? 0 : (page) + 1)
 
 #define SerialValue(slotno, xid) (*((SerCommitSeqNo *) \
-	(SerialSlruCtl->shared->page_buffer[slotno] + \
+	(PageGetContents(SerialSlruCtl->shared->page_buffer[slotno]) + \
 	((((uint32) (xid)) % SERIAL_ENTRIESPERPAGE) * SERIAL_ENTRYSIZE))))
 
 #define SerialPage(xid)	(((uint32) (xid)) / SERIAL_ENTRIESPERPAGE)
@@ -789,10 +790,13 @@ SerialPagePrecedesLogicallyUnitTests(void)
 	 * requires burning ~2B XIDs in single-user mode, a negligible
 	 * possibility.  Moreover, if it does happen, the consequence would be
 	 * mild, namely a new transaction failing in SimpleLruReadPage().
+	 *
+	 * NOTE:  After adding the page header, the defect affects two pages.
+	 * We now assert correct treatment of its second to prior page.
 	 */
 	headPage = oldestPage;
 	targetPage = newestPage;
-	Assert(SerialPagePrecedesLogically(headPage, targetPage - 1));
+	Assert(SerialPagePrecedesLogically(headPage, targetPage - 2));
 #if 0
 	Assert(SerialPagePrecedesLogically(headPage, targetPage));
 #endif

@@ -901,10 +901,9 @@ extern void ExceptionalCondition(const char *conditionName,
  * C11 has _Static_assert(), and most C99 compilers already support that.  For
  * portability, we wrap it into StaticAssertDecl().  _Static_assert() is a
  * "declaration", and so it must be placed where for example a variable
- * declaration would be valid.  As long as we compile with
- * -Wno-declaration-after-statement, that also means it cannot be placed after
- * statements in a function.  Macros StaticAssertStmt() and StaticAssertExpr()
- * make it safe to use as a statement or in an expression, respectively.
+ * declaration would be valid.  Macros StaticAssertStmt() and
+ * StaticAssertExpr() make it safe to use as a statement or in an expression,
+ * respectively.
  *
  * For compilers without _Static_assert(), we fall back on a kluge that
  * assumes the compiler will complain about a negative width for a struct

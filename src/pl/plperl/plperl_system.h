@@ -19,9 +19,9 @@
 
 /*
  * Newer versions of the perl headers trigger a lot of warnings with our
- * preferred compiler flags (at least -Wdeclaration-after-statement,
- * -Wshadow=compatible-local are known to be problematic). The system_header
- * pragma hides warnings from within the rest of this file, if supported.
+ * preferred compiler flags (at least Wshadow=compatible-local is known to be
+ * problematic). The system_header pragma hides warnings from within the rest
+ * of this file, if supported.
  */
 #ifdef HAVE_PRAGMA_GCC_SYSTEM_HEADER
 #pragma GCC system_header

@@ -96,8 +96,6 @@ pgxs_kv = {
   'CFLAGS_SL': var_cflags_sl,
   'CFLAGS_SL_MODULE': ' '.join(cflags_mod),
   'CXXFLAGS_SL_MODULE': ' '.join(cxxflags_mod),
-  'PERMIT_DECLARATION_AFTER_STATEMENT':
-    ' '.join(cflags_no_decl_after_statement),
 
   'CFLAGS_CRC': ' '.join(cflags_crc),
   'CFLAGS_UNROLL_LOOPS': ' '.join(unroll_loops_cflags),

@@ -1845,15 +1845,6 @@ if llvm.found()
   cxxflags_warn += cpp.get_supported_arguments(common_warning_flags)
 endif
 
-# A few places with imported code get a pass on -Wdeclaration-after-statement, remember
-# the result for them
-cflags_no_decl_after_statement = []
-if cc.has_argument('-Wdeclaration-after-statement')
-  cflags_warn += '-Wdeclaration-after-statement'
-  cflags_no_decl_after_statement += '-Wno-declaration-after-statement'
-endif
-
-
 # The following tests want to suppress various unhelpful warnings by adding
 # -Wno-foo switches.  But gcc won't complain about unrecognized -Wno-foo
 # switches, so we have to test for the positive form and if that works,

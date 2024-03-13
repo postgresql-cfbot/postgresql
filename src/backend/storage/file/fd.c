@@ -181,6 +181,57 @@ int			io_direct_flags;
 	((void) 0)
 #endif
 
+/* cachestat - use structs as defined in linux */
+typedef struct
+{
+	uint64 nr_cache;		/* Number of cached pages */
+	uint64 nr_dirty;		/* Number of dirty pages */
+	uint64 nr_writeback;	/* Number of pages marked for writeback. */
+	uint64 nr_evicted;		/* Number of pages evicted from the cache. */
+	/*
+	* Number of recently evicted pages. A page is recently evicted if its
+	* last eviction was recent enough that its reentry to the cache would
+	* indicate that it is actively being used by the system, and that there
+	* is memory pressure on the system.
+	*/
+	uint64 nr_recently_evicted;
+} cachestat;
+
+typedef struct
+{
+	uint64 off;
+	uint64 len;
+} cachestat_range;
+
+/*
+ * simple wrapper of linux cachestat syscall
+ * *cstat point to a member in Vfd.
+ * XXX define USE_CACHESTAT ?
+ */
+static inline void vm_cachestat(int fd, cachestat_range csrange,
+								cachestat *cstat)
+{
+
+#define USE_CACHESTAT	1
+
+#if defined(USE_CACHESTAT)
+#define __NR_cachestat 451
+
+	long rc;
+	rc = syscall(__NR_cachestat, fd, &csrange, cstat, 0);
+	if (rc == -1)
+	{
+		if (errno == ENOSYS)
+			ereport(DEBUG1, (errcode(ERRCODE_INTERNAL_ERROR),
+							 errmsg("sys_cachestat is not available: %m"),
+							 errhint("linux 6.5 minimum is required!")));
+
+		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+						errmsg("sys_cachestat returns: %m")));
+	}
+#endif
+}
+
 #define VFD_CLOSED (-1)
 
 #define FileIsValid(file) \
@@ -206,6 +257,9 @@ typedef struct vfd
 	/* NB: fileName is malloc'd, and must be free'd when closing the VFD */
 	int			fileFlags;		/* open(2) flags for (re)opening the file */
 	mode_t		fileMode;		/* mode to pass to open(2) */
+#if defined(USE_CACHESTAT)
+	cachestat	cstat;			/* linux cachestat() */
+#endif
 } Vfd;
 
 /*
@@ -2090,6 +2144,33 @@ FilePrefetch(File file, off_t offset, off_t amount, uint32 wait_event_info)
 	if (returnCode < 0)
 		return returnCode;
 
+#if defined(USE_CACHESTAT)
+	/*
+	 * last time we visit this file (somewhere), nr_recently_evicted pages of
+	 * the range were just removed from vm cache, it's a sign a memory pressure.
+	 * so do not prefetch further.
+	 * it is hard to guess if it is always the right choice in absence of more
+	 * information like:
+	 *  - prefetching distance expected overall
+	 *  - access pattern/backend maybe
+	 */
+	if (VfdCache[file].cstat.nr_recently_evicted > 0)
+	{
+		DO_DB(elog(LOG, "FilePrefetch: nr_recently_evicted="INT64_FORMAT"\t\t\t\tnoway",
+				   VfdCache[file].cstat.nr_recently_evicted));
+		return 0;
+	}
+	vm_cachestat(VfdCache[file].fd, (cachestat_range) {offset, amount},
+				 &VfdCache[file].cstat);
+	if (VfdCache[file].cstat.nr_cache > 0)
+	{
+		DO_DB(elog(LOG, "FilePrefetch: nr_cache="INT64_FORMAT"\t\t\tbypass",
+				   VfdCache[file].cstat.nr_cache));
+		return 0;
+	}
+	DO_DB(elog(LOG, "FilePrefetch: nr_evicted="INT64_FORMAT">0?\t\tBAD?:GOOD",
+			   VfdCache[file].cstat.nr_evicted));
+#endif
 retry:
 	pgstat_report_wait_start(wait_event_info);
 	returnCode = posix_fadvise(VfdCache[file].fd, offset, amount,
@@ -2151,6 +2232,10 @@ FileReadV(File file, const struct iovec *iov, int iovcnt, off_t offset,
 		return returnCode;
 
 	vfdP = &VfdCache[file];
+#if defined(USE_CACHESTAT)
+	vm_cachestat(vfdP->fd, (cachestat_range) {offset, iovcnt * BLCKSZ},
+				 &vfdP->cstat);
+#endif
 
 retry:
 	pgstat_report_wait_start(wait_event_info);

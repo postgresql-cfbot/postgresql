@@ -62,6 +62,7 @@ static ControlFileData ControlFile_source_after;
 
 const char *progname;
 int			WalSegSz;
+int64		rel_segment_size;
 
 /* Configuration options */
 char	   *datadir_target = NULL;
@@ -1040,6 +1041,8 @@ digestControlFile(ControlFileData *ControlFile, const char *content,
 		pg_log_error_detail("The WAL segment size must be a power of two between 1 MB and 1 GB.");
 		exit(1);
 	}
+
+	rel_segment_size = ControlFile->relseg_size;
 
 	/* Additional checks on control file */
 	checkControlFile(ControlFile);

@@ -43,6 +43,7 @@
 #include "storage/dsm_impl.h"
 #include "storage/ipc.h"
 #include "storage/reinit.h"
+#include "storage/smgr.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/ps_status.h"
@@ -1206,7 +1207,7 @@ sendDir(bbsink *sink, const char *path, int basepathlen, bool sizeonly,
 	 * But we don't need it at all if this is not an incremental backup.
 	 */
 	if (ib != NULL)
-		relative_block_numbers = palloc(sizeof(BlockNumber) * RELSEG_SIZE);
+		relative_block_numbers = palloc(sizeof(BlockNumber) * rel_segment_size);
 
 	/*
 	 * Determine if the current path is a database directory that can contain
@@ -1682,7 +1683,7 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 			 */
 			cnt = read_file_data_into_buffer(sink, readfilename, fd,
 											 bytes_done, remaining,
-											 blkno + segno * RELSEG_SIZE,
+											 blkno + segno * rel_segment_size,
 											 verify_checksum,
 											 &checksum_failures);
 		}
@@ -1704,7 +1705,7 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 			cnt = read_file_data_into_buffer(sink, readfilename, fd,
 											 relative_blkno * BLCKSZ,
 											 BLCKSZ,
-											 relative_blkno + segno * RELSEG_SIZE,
+											 relative_blkno + segno * rel_segment_size,
 											 verify_checksum,
 											 &checksum_failures);
 

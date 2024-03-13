@@ -217,7 +217,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	argv++;
 	argc--;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:X:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:X:R:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -274,6 +274,9 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 				break;
 			case 'r':
 				strlcpy(OutputFileName, optarg, MAXPGPATH);
+				break;
+			case 'R':
+				rel_segment_size = strtoi64(optarg, NULL, 0);
 				break;
 			case 'X':
 				SetConfigOption("wal_segment_size", optarg, PGC_INTERNAL, PGC_S_DYNAMIC_DEFAULT);

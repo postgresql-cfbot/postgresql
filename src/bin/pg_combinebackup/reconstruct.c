@@ -22,6 +22,10 @@
 #include "reconstruct.h"
 #include "storage/block.h"
 
+
+/* XXX this will need to be loaded out of a control file! */
+int64		rel_segment_size = 131072;
+
 /*
  * An rfile stores the data that we need in order to be able to use some file
  * on disk for reconstruction. For any given output file, we create one rfile
@@ -447,16 +451,18 @@ make_incremental_rfile(char *filename)
 
 	/* Read block count. */
 	read_bytes(rf, &rf->num_blocks, sizeof(rf->num_blocks));
-	if (rf->num_blocks > RELSEG_SIZE)
-		pg_fatal("file \"%s\" has block count %u in excess of segment size %u",
-				 filename, rf->num_blocks, RELSEG_SIZE);
+	if (rf->num_blocks > rel_segment_size)
+		pg_fatal("file \"%s\" has block count %u in excess of segment size "
+				 INT64_FORMAT,
+				 filename, rf->num_blocks, rel_segment_size);
 
 	/* Read truncation block length. */
 	read_bytes(rf, &rf->truncation_block_length,
 			   sizeof(rf->truncation_block_length));
-	if (rf->truncation_block_length > RELSEG_SIZE)
-		pg_fatal("file \"%s\" has truncation block length %u in excess of segment size %u",
-				 filename, rf->truncation_block_length, RELSEG_SIZE);
+	if (rf->truncation_block_length > rel_segment_size)
+		pg_fatal("file \"%s\" has truncation block length %u in excess of segment size "
+				 INT64_FORMAT,
+				 filename, rf->truncation_block_length, rel_segment_size);
 
 	/* Read block numbers if there are any. */
 	if (rf->num_blocks > 0)

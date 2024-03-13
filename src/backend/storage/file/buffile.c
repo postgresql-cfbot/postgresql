@@ -55,9 +55,9 @@
 #include "utils/resowner.h"
 
 /*
- * We break BufFiles into gigabyte-sized segments, regardless of RELSEG_SIZE.
- * The reason is that we'd like large BufFiles to be spread across multiple
- * tablespaces when available.
+ * We break BufFiles into gigabyte-sized segments, regardless of
+ * rel_segment_size.  The reason is that we'd like large BufFiles to be spread
+ * across multiple tablespaces when available.
  */
 #define MAX_PHYSICAL_FILESIZE	0x40000000
 #define BUFFILE_SEG_SIZE		(MAX_PHYSICAL_FILESIZE / BLCKSZ)

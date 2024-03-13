@@ -81,6 +81,7 @@
 #include "getopt_long.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "port/pg_bitutils.h"
 
 
 /* Ideally this would be in a .h file, but it hardly seems worth the trouble */
@@ -165,6 +166,8 @@ static bool show_setting = false;
 static bool data_checksums = false;
 static char *xlog_dir = NULL;
 static int	wal_segment_size_mb = (DEFAULT_XLOG_SEG_SIZE) / (1024 * 1024);
+static char *str_rel_segment_size = NULL;
+static int64 rel_segment_size;
 static DataDirSyncMethod sync_method = DATA_DIR_SYNC_METHOD_FSYNC;
 
 
@@ -1536,11 +1539,11 @@ bootstrap_template1(void)
 
 	printfPQExpBuffer(&cmd, "\"%s\" --boot %s %s", backend_exec, boot_options, extra_options);
 	appendPQExpBuffer(&cmd, " -X %d", wal_segment_size_mb * (1024 * 1024));
+	appendPQExpBuffer(&cmd, " -R " INT64_FORMAT, rel_segment_size);
 	if (data_checksums)
 		appendPQExpBuffer(&cmd, " -k");
 	if (debug)
 		appendPQExpBuffer(&cmd, " -d 5");
-
 
 	PG_CMD_OPEN(cmd.data);
 
@@ -2456,6 +2459,7 @@ usage(const char *progname)
 	printf(_("  -W, --pwprompt            prompt for a password for the new superuser\n"));
 	printf(_("  -X, --waldir=WALDIR       location for the write-ahead log directory\n"));
 	printf(_("      --wal-segsize=SIZE    size of WAL segments, in megabytes\n"));
+	printf(_("      --rel-segsize=SIZE    size of relation segments\n"));
 	printf(_("\nLess commonly used options:\n"));
 	printf(_("  -c, --set NAME=VALUE      override default setting for server parameter\n"));
 	printf(_("  -d, --debug               generate lots of debugging output\n"));
@@ -3107,6 +3111,7 @@ main(int argc, char *argv[])
 		{"icu-locale", required_argument, NULL, 16},
 		{"icu-rules", required_argument, NULL, 17},
 		{"sync-method", required_argument, NULL, 18},
+		{"rel-segsize", required_argument, NULL, 19},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -3291,6 +3296,9 @@ main(int argc, char *argv[])
 				if (!parse_sync_method(optarg, &sync_method))
 					exit(1);
 				break;
+			case 19:
+				str_rel_segment_size = pg_strdup(optarg);
+				break;
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -3356,6 +3364,43 @@ main(int argc, char *argv[])
 
 	if (!IsValidWalSegSize(wal_segment_size_mb * 1024 * 1024))
 		pg_fatal("argument of %s must be a power of two between 1 and 1024", "--wal-segsize");
+
+	/* set rel segment size */
+	if (str_rel_segment_size == NULL)
+	{
+		rel_segment_size = (1024 * 1024 * 1024) / BLCKSZ;
+	}
+	else
+	{
+		int64		bytes;
+		char	   *endptr;
+
+		bytes = strtol(str_rel_segment_size, &endptr, 10);
+		if (endptr == str_rel_segment_size)
+			pg_fatal("argument of --rel-segsize must begin with a number");
+		if (bytes == 0)
+			pg_fatal("argument of --rel-segsize must be greater than zero");
+
+		if (strcmp(endptr, "kB") == 0)
+			bytes *= 1024;
+		else if (strcmp(endptr, "MB") == 0)
+			bytes *= 1024 * 1024;
+		else if (strcmp(endptr, "GB") == 0)
+			bytes *= 1024 * 1024 * 1024;
+		else if (strcmp(endptr, "TB") == 0)
+			bytes *= UINT64CONST(1024) * 1024 * 1024 * 1024;
+		else
+			pg_fatal("argument of --rel-segsize must end with kB, MB, GB or TB");
+
+		if (bytes % BLCKSZ != 0)
+			pg_fatal("argument of --rel-segsize must be a multiple of BLCKSZ");
+		if (pg_popcount64(bytes) != 1)
+			pg_fatal("argument of --rel-segsize must be a power of two");
+		if (sizeof(off_t) < 8 && bytes > (1 << 31))
+			pg_fatal("argument of --rel-segsize is too large for this platform's off_t");
+
+		rel_segment_size = bytes / BLCKSZ;
+	}
 
 	get_restricted_token();
 

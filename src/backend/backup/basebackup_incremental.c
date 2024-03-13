@@ -28,6 +28,7 @@
 #include "common/int.h"
 #include "datatype/timestamp.h"
 #include "postmaster/walsummarizer.h"
+#include "storage/smgr.h"
 #include "utils/timestamp.h"
 
 #define	BLOCKS_PER_READ			512
@@ -699,9 +700,9 @@ GetIncrementalFilePath(Oid dboid, Oid spcoid, RelFileNumber relfilenumber,
  * an incremental file in the backup instead of the entire file. On return,
  * *num_blocks_required will be set to the number of blocks that need to be
  * sent, and the actual block numbers will have been stored in
- * relative_block_numbers, which should be an array of at least RELSEG_SIZE.
- * In addition, *truncation_block_length will be set to the value that should
- * be included in the incremental file.
+ * relative_block_numbers, which should be an array of at least
+ * rel_segment_size.  * In addition, *truncation_block_length will be set to
+ * the value that should be included in the incremental file.
  */
 FileBackupMethod
 GetFileBackupMethod(IncrementalBackupInfo *ib, const char *path,
@@ -712,7 +713,7 @@ GetFileBackupMethod(IncrementalBackupInfo *ib, const char *path,
 					BlockNumber *relative_block_numbers,
 					unsigned *truncation_block_length)
 {
-	BlockNumber absolute_block_numbers[RELSEG_SIZE];
+	BlockNumber *absolute_block_numbers;
 	BlockNumber limit_block;
 	BlockNumber start_blkno;
 	BlockNumber stop_blkno;
@@ -735,7 +736,7 @@ GetFileBackupMethod(IncrementalBackupInfo *ib, const char *path,
 	 * If the file size is too large or not a multiple of BLCKSZ, then
 	 * something weird is happening, so give up and send the whole file.
 	 */
-	if ((size % BLCKSZ) != 0 || size / BLCKSZ > RELSEG_SIZE)
+	if ((size % BLCKSZ) != 0 || size / BLCKSZ > rel_segment_size)
 		return BACK_UP_FILE_FULLY;
 
 	/*
@@ -823,7 +824,7 @@ GetFileBackupMethod(IncrementalBackupInfo *ib, const char *path,
 	 * If the limit_block is less than or equal to the point where this
 	 * segment starts, send the whole file.
 	 */
-	if (limit_block <= segno * RELSEG_SIZE)
+	if (limit_block <= segno * rel_segment_size)
 		return BACK_UP_FILE_FULLY;
 
 	/*
@@ -832,16 +833,18 @@ GetFileBackupMethod(IncrementalBackupInfo *ib, const char *path,
 	 * We shouldn't overflow computing the start or stop block numbers, but if
 	 * it manages to happen somehow, detect it and throw an error.
 	 */
-	start_blkno = segno * RELSEG_SIZE;
+	start_blkno = segno * rel_segment_size;
 	stop_blkno = start_blkno + (size / BLCKSZ);
-	if (start_blkno / RELSEG_SIZE != segno || stop_blkno < start_blkno)
+	if (start_blkno / rel_segment_size != segno || stop_blkno < start_blkno)
 		ereport(ERROR,
 				errcode(ERRCODE_INTERNAL_ERROR),
 				errmsg_internal("overflow computing block number bounds for segment %u with size %zu",
 								segno, size));
+	absolute_block_numbers = palloc(sizeof(BlockNumber) * rel_segment_size);
 	nblocks = BlockRefTableEntryGetBlocks(brtentry, start_blkno, stop_blkno,
-										  absolute_block_numbers, RELSEG_SIZE);
-	Assert(nblocks <= RELSEG_SIZE);
+										  absolute_block_numbers,
+										  rel_segment_size);
+	Assert(nblocks <= rel_segment_size);
 
 	/*
 	 * If we're going to have to send nearly all of the blocks, then just send
@@ -856,7 +859,10 @@ GetFileBackupMethod(IncrementalBackupInfo *ib, const char *path,
 	 * nothing good about sending an incremental file in that case.
 	 */
 	if (nblocks * BLCKSZ > size * 0.9)
+	{
+		pfree(absolute_block_numbers);
 		return BACK_UP_FILE_FULLY;
+	}
 
 	/*
 	 * Looks like we can send an incremental file, so sort the absolute the
@@ -872,6 +878,7 @@ GetFileBackupMethod(IncrementalBackupInfo *ib, const char *path,
 		  compare_block_numbers);
 	for (i = 0; i < nblocks; ++i)
 		relative_block_numbers[i] = absolute_block_numbers[i] - start_blkno;
+	pfree(absolute_block_numbers);
 	*num_blocks_required = nblocks;
 
 	/*
@@ -885,7 +892,7 @@ GetFileBackupMethod(IncrementalBackupInfo *ib, const char *path,
 	*truncation_block_length = size / BLCKSZ;
 	if (BlockNumberIsValid(limit_block))
 	{
-		unsigned	relative_limit = limit_block - segno * RELSEG_SIZE;
+		unsigned	relative_limit = limit_block - segno * rel_segment_size;
 
 		if (*truncation_block_length < relative_limit)
 			*truncation_block_length = relative_limit;
@@ -904,7 +911,7 @@ GetIncrementalFileSize(unsigned num_blocks_required)
 	size_t		result;
 
 	/* Make sure we're not going to overflow. */
-	Assert(num_blocks_required <= RELSEG_SIZE);
+	Assert(num_blocks_required <= rel_segment_size);
 
 	/*
 	 * Three four byte quantities (magic number, truncation block length,

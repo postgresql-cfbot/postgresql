@@ -105,6 +105,8 @@ typedef struct _psqlSettings
 
 	bool		notty;			/* stdin or stdout is not a tty (as determined
 								 * on startup) */
+	bool		parameterset_flag;	/* one-shot request to crosstab result */
+	char	   *parameterset_args[2];	/* \parameterset arguments */
 	enum trivalue getPassword;	/* prompt the user for a username and password */
 	FILE	   *cur_cmd_source; /* describe the status of the current main
 								 * loop */

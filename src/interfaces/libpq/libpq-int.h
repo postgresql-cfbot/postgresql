@@ -322,7 +322,8 @@ typedef enum
 	PGQUERY_PREPARE,			/* Parse only (PQprepare) */
 	PGQUERY_DESCRIBE,			/* Describe Statement or Portal */
 	PGQUERY_SYNC,				/* Sync (at end of a pipeline) */
-	PGQUERY_CLOSE				/* Close Statement or Portal */
+	PGQUERY_CLOSE,				/* Close Statement or Portal */
+	PGQUERY_PARAMETER_SET,		/* Set a server parameter */
 } PGQueryClass;
 
 /*
@@ -408,6 +409,9 @@ struct pg_conn
 	char	   *target_session_attrs;	/* desired session properties */
 	char	   *require_auth;	/* name of the expected auth method */
 	char	   *load_balance_hosts; /* load balance over hosts */
+	char	   *max_protocol_version;	/* maximum used protocol version */
+	char	   *pq_protocol_managed_params; /* _pq_.protocol_managed_params */
+	char	   *pq_report_parameters;	/* _pq_.report_parameters */
 
 	bool		cancelRequest;	/* true if this connection is used to send a
 								 * cancel request, instead of being a normal
@@ -465,6 +469,8 @@ struct pg_conn
 	SockAddr	laddr;			/* Local address */
 	SockAddr	raddr;			/* Remote address */
 	ProtocolVersion pversion;	/* FE/BE protocol version in use */
+	char	  **unsupported_pextension_params;	/* Unsupported protocol
+												 * extensions, null-terminated */
 	int			sversion;		/* server version, e.g. 70401 for 7.4.1 */
 	bool		auth_req_received;	/* true if any type of auth req received */
 	bool		password_needed;	/* true if server demanded a password */
@@ -493,6 +499,7 @@ struct pg_conn
 	AddrInfo   *addr;			/* the array of addresses for the currently
 								 * tried host */
 	bool		send_appname;	/* okay to send application_name? */
+	ProtocolVersion max_pversion;	/* protocol version to request */
 
 	/* Miscellaneous stuff */
 	int			be_pid;			/* PID of backend --- needed for cancels */

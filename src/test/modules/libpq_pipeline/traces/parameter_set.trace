@@ -1,0 +1,183 @@
+F	19	ParameterSet	 "work_mem" "123MB"
+F	4	Sync
+B	4	ParameterSetComplete
+B	5	ReadyForQuery	 I
+F	18	Query	 "SHOW work_mem"
+B	33	RowDescription	 1 "work_mem" NNNN 0 NNNN 65535 -1 0
+B	15	DataRow	 1 5 '123MB'
+B	9	CommandComplete	 "SHOW"
+B	5	ReadyForQuery	 I
+F	38	Query	 "SHOW _pq_.protocol_managed_params"
+B	53	RowDescription	 1 "_pq_.protocol_managed_params" NNNN 0 NNNN 65535 -1 0
+B	10	DataRow	 1 0 ''
+B	9	CommandComplete	 "SHOW"
+B	5	ReadyForQuery	 I
+F	42	ParameterSet	 "_pq_.protocol_managed_params" "work_mem"
+F	4	Sync
+B	4	ParameterSetComplete
+B	5	ReadyForQuery	 I
+F	38	Query	 "SHOW _pq_.protocol_managed_params"
+B	53	RowDescription	 1 "_pq_.protocol_managed_params" NNNN 0 NNNN 65535 -1 0
+B	18	DataRow	 1 8 'work_mem'
+B	9	CommandComplete	 "SHOW"
+B	5	ReadyForQuery	 I
+F	18	ParameterSet	 "work_mem" "42MB"
+F	4	Sync
+B	4	ParameterSetComplete
+B	5	ReadyForQuery	 I
+F	18	Query	 "SHOW work_mem"
+B	33	RowDescription	 1 "work_mem" NNNN 0 NNNN 65535 -1 0
+B	14	DataRow	 1 4 '42MB'
+B	9	CommandComplete	 "SHOW"
+B	5	ReadyForQuery	 I
+F	14	Query	 "RESET ALL"
+B	10	CommandComplete	 "RESET"
+B	5	ReadyForQuery	 I
+F	38	Query	 "SHOW _pq_.protocol_managed_params"
+B	53	RowDescription	 1 "_pq_.protocol_managed_params" NNNN 0 NNNN 65535 -1 0
+B	18	DataRow	 1 8 'work_mem'
+B	9	CommandComplete	 "SHOW"
+B	5	ReadyForQuery	 I
+F	18	Query	 "SHOW work_mem"
+B	33	RowDescription	 1 "work_mem" NNNN 0 NNNN 65535 -1 0
+B	14	DataRow	 1 4 '42MB'
+B	9	CommandComplete	 "SHOW"
+B	5	ReadyForQuery	 I
+F	18	ParameterSet	 "work_mem" "10MB"
+F	4	Flush
+B	4	ParameterSetComplete
+F	21	Parse	 "" "SHOW work_mem" 0
+F	14	Bind	 "" "" 0 0 1 0
+F	6	Describe	 P ""
+F	9	Execute	 "" 0
+F	4	Flush
+B	4	ParseComplete
+B	4	BindComplete
+B	33	RowDescription	 1 "work_mem" NNNN 0 NNNN 65535 -1 0
+B	14	DataRow	 1 4 '10MB'
+B	9	CommandComplete	 "SHOW"
+F	18	ParameterSet	 "work_mem" "12MB"
+F	4	Flush
+B	NN	ErrorResponse	 S "ERROR" V "ERROR" C "25001" M "parameter "work_mem" cannot be changed within a transaction" F "SSSS" L "SSSS" R "SSSS" \x00
+F	4	Sync
+B	5	ReadyForQuery	 I
+F	18	Query	 "SHOW work_mem"
+B	33	RowDescription	 1 "work_mem" NNNN 0 NNNN 65535 -1 0
+B	14	DataRow	 1 4 '10MB'
+B	9	CommandComplete	 "SHOW"
+B	5	ReadyForQuery	 I
+F	10	Query	 "BEGIN"
+B	10	CommandComplete	 "BEGIN"
+B	5	ReadyForQuery	 T
+F	18	ParameterSet	 "work_mem" "30MB"
+F	4	Sync
+B	NN	ErrorResponse	 S "ERROR" V "ERROR" C "25001" M "parameter "work_mem" cannot be changed within a transaction" F "SSSS" L "SSSS" R "SSSS" \x00
+B	5	ReadyForQuery	 E
+F	18	Query	 "SHOW work_mem"
+B	NN	ErrorResponse	 S "ERROR" V "ERROR" C "25P02" M "current transaction is aborted, commands ignored until end of transaction block" F "SSSS" L "SSSS" R "SSSS" \x00
+B	5	ReadyForQuery	 E
+F	13	Query	 "ROLLBACK"
+B	13	CommandComplete	 "ROLLBACK"
+B	5	ReadyForQuery	 I
+F	18	Query	 "SHOW work_mem"
+B	33	RowDescription	 1 "work_mem" NNNN 0 NNNN 65535 -1 0
+B	14	DataRow	 1 4 '10MB'
+B	9	CommandComplete	 "SHOW"
+B	5	ReadyForQuery	 I
+F	18	Parse	 "" "SELECT 0/0" 0
+F	14	Bind	 "" "" 0 0 1 0
+F	6	Describe	 P ""
+F	9	Execute	 "" 0
+F	18	ParameterSet	 "work_mem" "12MB"
+F	4	Sync
+B	4	ParseComplete
+B	NN	ErrorResponse	 S "ERROR" V "ERROR" C "22012" M "division by zero" F "SSSS" L "SSSS" R "SSSS" \x00
+B	5	ReadyForQuery	 I
+F	18	Query	 "SHOW work_mem"
+B	33	RowDescription	 1 "work_mem" NNNN 0 NNNN 65535 -1 0
+B	14	DataRow	 1 4 '10MB'
+B	9	CommandComplete	 "SHOW"
+B	5	ReadyForQuery	 I
+F	60	ParameterSet	 "_pq_.protocol_managed_params" "role,session_authorization"
+F	4	Sync
+B	4	ParameterSetComplete
+B	5	ReadyForQuery	 I
+F	18	ParameterSet	 "work_mem" "19MB"
+F	4	Sync
+B	4	ParameterSetComplete
+B	5	ReadyForQuery	 I
+F	21	Parse	 "" "SHOW work_mem" 0
+F	14	Bind	 "" "" 0 0 1 0
+F	6	Describe	 P ""
+F	9	Execute	 "" 0
+F	4	Flush
+B	4	ParseComplete
+B	4	BindComplete
+B	33	RowDescription	 1 "work_mem" NNNN 0 NNNN 65535 -1 0
+B	14	DataRow	 1 4 '19MB'
+B	9	CommandComplete	 "SHOW"
+F	18	ParameterSet	 "work_mem" "12MB"
+F	4	Flush
+B	4	ParameterSetComplete
+F	4	Sync
+B	5	ReadyForQuery	 I
+F	18	Query	 "SHOW work_mem"
+B	33	RowDescription	 1 "work_mem" NNNN 0 NNNN 65535 -1 0
+B	14	DataRow	 1 4 '12MB'
+B	9	CommandComplete	 "SHOW"
+B	5	ReadyForQuery	 I
+F	18	ParameterSet	 "work_mem" "28MB"
+F	18	Parse	 "" "SELECT 0/0" 0
+F	14	Bind	 "" "" 0 0 1 0
+F	6	Describe	 P ""
+F	9	Execute	 "" 0
+F	4	Sync
+B	4	ParameterSetComplete
+B	4	ParseComplete
+B	NN	ErrorResponse	 S "ERROR" V "ERROR" C "22012" M "division by zero" F "SSSS" L "SSSS" R "SSSS" \x00
+B	5	ReadyForQuery	 I
+F	18	Query	 "SHOW work_mem"
+B	33	RowDescription	 1 "work_mem" NNNN 0 NNNN 65535 -1 0
+B	14	DataRow	 1 4 '12MB'
+B	9	CommandComplete	 "SHOW"
+B	5	ReadyForQuery	 I
+F	10	Query	 "BEGIN"
+B	10	CommandComplete	 "BEGIN"
+B	5	ReadyForQuery	 T
+F	18	ParameterSet	 "work_mem" "30MB"
+F	4	Sync
+B	4	ParameterSetComplete
+B	5	ReadyForQuery	 T
+F	18	Query	 "SHOW work_mem"
+B	33	RowDescription	 1 "work_mem" NNNN 0 NNNN 65535 -1 0
+B	14	DataRow	 1 4 '30MB'
+B	9	CommandComplete	 "SHOW"
+B	5	ReadyForQuery	 T
+F	13	Query	 "ROLLBACK"
+B	13	CommandComplete	 "ROLLBACK"
+B	5	ReadyForQuery	 I
+F	18	Query	 "SHOW work_mem"
+B	33	RowDescription	 1 "work_mem" NNNN 0 NNNN 65535 -1 0
+B	14	DataRow	 1 4 '12MB'
+B	9	CommandComplete	 "SHOW"
+B	5	ReadyForQuery	 I
+F	41	Query	 "SET SESSION AUTHORIZATION 'postgres'"
+B	NN	ErrorResponse	 S "ERROR" V "ERROR" C "55P02" M "parameter "session_authorization" cannot be set using SQL" F "SSSS" L "SSSS" R "SSSS" \x00
+B	5	ReadyForQuery	 I
+F	24	Query	 "SET ROLE 'postgres'"
+B	NN	ErrorResponse	 S "ERROR" V "ERROR" C "55P02" M "parameter "role" cannot be set using SQL" F "SSSS" L "SSSS" R "SSSS" \x00
+B	5	ReadyForQuery	 I
+F	46	ParameterSet	 "_pq_.protocol_managed_params" "doesnotexist"
+F	4	Sync
+B	NN	NoticeResponse	 S "WARNING" V "WARNING" C "42704" M "unrecognized configuration parameter "doesnotexist"" F "SSSS" L "SSSS" R "SSSS" \x00
+B	4	ParameterSetComplete
+B	5	ReadyForQuery	 I
+F	71	ParameterSet	 "_pq_.protocol_managed_params" "work_mem,_pq_.protocol_managed_params"
+F	4	Sync
+B	NN	ErrorResponse	 S "ERROR" V "ERROR" C "22023" M "invalid value for parameter "_pq_.protocol_managed_params": "work_mem,_pq_.protocol_managed_params"" D "Parameter "_pq_.protocol_managed_params" is a protocol extension." F "SSSS" L "SSSS" R "SSSS" \x00
+B	5	ReadyForQuery	 I
+F	35	ParameterSet	 "_pq_.protocol_managed_params" """
+F	4	Sync
+B	NN	ErrorResponse	 S "ERROR" V "ERROR" C "22023" M "invalid value for parameter "_pq_.protocol_managed_params": """" D "List syntax is invalid." F "SSSS" L "SSSS" R "SSSS" \x00
+B	5	ReadyForQuery	 I
+F	4	Terminate

@@ -1030,6 +1030,29 @@ SELCT 1/0;<!-- this typo is intentional -->
      CloseComplete, or NoData messages.
     </para>
    </note>
+
+   <para>
+    Since protocol version 3.1, the ParameterSet message can be used to change
+    the value of a parameter. For most parameters this is equivalent to issuing
+    a SET command, but can be more convenient to parse for applications that
+    are inbetween a client and a server, such as a connection pooler. For
+    <xref linkend="runtime-config-protocol"/> this message type is the only way
+    of changing their value after the initial StartupMessage. When changing
+    such protocol extension parameters the server behavior is slightly
+    different than for normal backend parameters. The server will not allow
+    changing protocol extension parameters while a transaction is active, and
+    when run in a pipeline each ParameterSet message will implicitly commit.
+   </para>
+
+   <note>
+    <para>
+     It is still possible to change protocol extension parameters with
+     ParameterSet in a pipeline together with other commands but only if no
+     transaction is active. This means that the ParameterSet messages either
+     need to be the first messages in the pipeline or any previous transaction
+     needs to have been explicitely committed.
+    </para>
+   </note>
   </sect2>
 
   <sect2 id="protocol-flow-pipelining">
@@ -1313,8 +1336,9 @@ SELCT 1/0;<!-- this typo is intentional -->
    </para>
 
    <para>
-    At present there is a hard-wired set of parameters for which
-    ParameterStatus will be generated.  They are:
+    It's possible to choose for which parameter values are reported to the
+    client using <xref linkend="guc-pq-report-parameters"/>. The default
+    parameters for which ParameterStatus will be generated are:
     <simplelist type="vert" columns="2">
      <member><varname>application_name</varname></member>
      <member><varname>client_encoding</varname></member>
@@ -1340,7 +1364,8 @@ SELCT 1/0;<!-- this typo is intentional -->
     <varname>server_encoding</varname> and
     <varname>integer_datetimes</varname>
     are pseudo-parameters that cannot change after startup.
-    This set might change in the future, or even become configurable.
+    Since this set is configurable, a frontend can not assume that it only
+    gets these specific defaults.
     Accordingly, a frontend should simply ignore ParameterStatus for
     parameters that it does not understand or care about.
    </para>
@@ -5313,6 +5338,74 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
        <listitem>
         <para>
          The current value of the parameter.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="protocol-message-formats-ParameterSet">
+    <term>ParameterSet (F)</term>
+    <listitem>
+     <variablelist>
+      <varlistentry>
+       <term>Byte1('U')</term>
+       <listitem>
+        <para>
+         Identifies the message as a run-time parameter change.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int32</term>
+       <listitem>
+        <para>
+         Length of message contents in bytes, including self.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>String</term>
+       <listitem>
+        <para>
+         The name of the run-time parameter to change.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>String</term>
+       <listitem>
+        <para>
+         The new value of the parameter.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="protocol-message-formats-ParameterSetComplete">
+    <term>ParameterSetComplete (B)</term>
+    <listitem>
+     <variablelist>
+      <varlistentry>
+       <term>Byte1('U')</term>
+       <listitem>
+        <para>
+         Identifies the message as a ParameterSet-complete indicator.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int32(4)</term>
+       <listitem>
+        <para>
+         Length of message contents in bytes, including self.
         </para>
        </listitem>
       </varlistentry>

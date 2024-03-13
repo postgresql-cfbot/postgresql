@@ -3365,6 +3365,82 @@ PQsendFlushRequest(PGconn *conn)
 	return 1;
 }
 
+/*
+ * PQparameterSet
+ *	  Send a request for the server to change a run-time parameter setting.
+ *
+ * If the query was not even sent, return NULL; conn->errorMessage is set to
+ * a relevant message.
+ * If the query was sent, a new PGresult is returned (which could indicate
+ * either success or failure).  On success, the PGresult contains status
+ * PGRES_COMMAND_OK. The user is responsible for freeing the PGresult via
+ * PQclear() when done with it.
+ */
+PGresult *
+PQparameterSet(PGconn *conn, const char *parameter, const char *value)
+{
+	if (!PQexecStart(conn))
+		return NULL;
+	if (!PQsendParameterSet(conn, parameter, value))
+		return NULL;
+	return PQexecFinish(conn);
+}
+
+/*
+ * PQsendParameterSet
+ *	 Send a request for the server to change a run-time parameter setting.
+ *
+ * Returns 1 on success and 0 on failure.
+ */
+int
+PQsendParameterSet(PGconn *conn, const char *parameter, const char *value)
+{
+	PGcmdQueueEntry *entry = NULL;
+
+	if (!PQsendQueryStart(conn, true))
+		return 0;
+
+	entry = pqAllocCmdQueueEntry(conn);
+	if (entry == NULL)
+		return 0;				/* error msg already set */
+
+	/* construct the Close message */
+	if (pqPutMsgStart(PqMsg_ParameterSet, conn) < 0 ||
+		pqPuts(parameter, conn) < 0 ||
+		pqPuts(value, conn) < 0 ||
+		pqPutMsgEnd(conn) < 0)
+		goto sendFailed;
+
+	/* construct the Sync message */
+	if (conn->pipelineStatus == PQ_PIPELINE_OFF)
+	{
+		if (pqPutMsgStart(PqMsg_Sync, conn) < 0 ||
+			pqPutMsgEnd(conn) < 0)
+			goto sendFailed;
+	}
+
+	entry->queryclass = PGQUERY_PARAMETER_SET;
+
+	/*
+	 * Give the data a push (in pipeline mode, only if we're past the size
+	 * threshold).  In nonblock mode, don't complain if we're unable to send
+	 * it all; PQgetResult() will do any additional flushing needed.
+	 */
+	if (pqPipelineFlush(conn) < 0)
+		goto sendFailed;
+
+	/* OK, it's launched! */
+	pqAppendCmdQueueEntry(conn, entry);
+
+	return 1;
+
+sendFailed:
+	pqRecycleCmdQueueEntry(conn, entry);
+	/* error message should be set up already */
+	return 0;
+}
+
+
 /* ====== accessor funcs for PGresult ======== */
 
 ExecStatusType

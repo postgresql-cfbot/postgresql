@@ -59,6 +59,19 @@ SELECT 1 \; SELECT 2 \bind \g
 -- bind error
 SELECT $1, $2 \bind 'foo' \g
 
+-- \parameterset (protocol version 3.1)
+\parameterset work_mem 1234
+SHOW work_mem;
+\parameterset work_mem 'abc'
+RESET work_mem;
+\parameterset search_path '"some quoted string",and_one_without,""'
+SHOW search_path;
+RESET search_path;
+-- should fail with wrong number of arguments
+\parameterset work_mem
+-- should fail because extension is unknown
+\parameterset _pq_.magic_pixie_dust true
+
 -- \gset
 
 select 10 as test01, 20 as test02, 'Hello' as test03 \gset pref01_
@@ -1020,6 +1033,7 @@ select \if false \\ (bogus \else \\ 42 \endif \\ forty_two;
 	\lo_list
 	\o arg1
 	\p
+	\parameterset abc arg2
 	\password arg1
 	\prompt arg1 arg2
 	\pset arg1 arg2

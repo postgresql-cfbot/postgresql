@@ -129,6 +129,31 @@ ERROR:  cannot insert multiple commands into a prepared statement
 -- bind error
 SELECT $1, $2 \bind 'foo' \g
 ERROR:  bind message supplies 1 parameters, but prepared statement "" requires 2
+-- \parameterset (protocol version 3.1)
+\parameterset work_mem 1234
+SHOW work_mem;
+ work_mem 
+----------
+ 1234kB
+(1 row)
+
+\parameterset work_mem 'abc'
+ERROR:  invalid value for parameter "work_mem": "abc"
+RESET work_mem;
+\parameterset search_path '"some quoted string",and_one_without,""'
+SHOW search_path;
+               search_path               
+-----------------------------------------
+ "some quoted string",and_one_without,""
+(1 row)
+
+RESET search_path;
+-- should fail with wrong number of arguments
+\parameterset work_mem
+\parameterset needs two arguments
+-- should fail because extension is unknown
+\parameterset _pq_.magic_pixie_dust true
+\parameterset cannot be used to change protocol extensions parameters
 -- \gset
 select 10 as test01, 20 as test02, 'Hello' as test03 \gset pref01_
 \echo :pref01_test01 :pref01_test02 :pref01_test03
@@ -4538,6 +4563,7 @@ invalid command \lo
 	\lo_list
 	\o arg1
 	\p
+	\parameterset abc arg2
 	\password arg1
 	\prompt arg1 arg2
 	\pset arg1 arg2

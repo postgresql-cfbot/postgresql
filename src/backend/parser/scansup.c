@@ -36,14 +36,21 @@
 char *
 downcase_truncate_identifier(const char *ident, int len, bool warn)
 {
-	return downcase_identifier(ident, len, warn, true);
+	char	   *result;
+
+	result = downcase_identifier(ident, len);
+
+	if (len >= NAMEDATALEN)
+		truncate_identifier(result, len, warn);
+
+	return result;
 }
 
 /*
  * a workhorse for downcase_truncate_identifier
  */
 char *
-downcase_identifier(const char *ident, int len, bool warn, bool truncate)
+downcase_identifier(const char *ident, int len)
 {
 	char	   *result;
 	int			i;
@@ -72,9 +79,6 @@ downcase_identifier(const char *ident, int len, bool warn, bool truncate)
 		result[i] = (char) ch;
 	}
 	result[i] = '\0';
-
-	if (i >= NAMEDATALEN && truncate)
-		truncate_identifier(result, i, warn);
 
 	return result;
 }

@@ -343,6 +343,7 @@ typedef struct StdRdOptions
 	int			parallel_workers;	/* max number of parallel workers */
 	StdRdOptIndexCleanup vacuum_index_cleanup;	/* controls index vacuuming */
 	bool		vacuum_truncate;	/* enables vacuum to truncate a relation */
+	int			local_update_limit;	/* after this block, always use tuple routing */
 } StdRdOptions;
 
 #define HEAP_MIN_FILLFACTOR			10
@@ -377,6 +378,24 @@ typedef struct StdRdOptions
  */
 #define RelationGetTargetPageFreeSpace(relation, defaultff) \
 	(BLCKSZ * (100 - RelationGetFillFactor(relation, defaultff)) / 100)
+
+/*
+ * RelationGetLocalUpdateLimit
+ *		Returns the size of the relation's local update section (MB).
+ */
+#define RelationGetLocalUpdateLimit(relation, defaultlul) \
+	((relation)->rd_options ? \
+	 ((StdRdOptions *) (relation)->rd_options)->local_update_limit : (defaultlul))
+
+/*
+ * RelationUpdateTupleLocally
+ *		Is an update on blockno allowed to put the new tuple on the current
+ *		page, or should we instead try to find a different page?
+ */
+#define RelationUpdateTupleOnPageLocally(relation, defaultmlu, blockno) \
+	((RelationGetLocalUpdateLimit((relation), (defaultmlu)) == -1) || \
+	  ((blockno) < (BlockNumber) (RelationGetLocalUpdateLimit((relation), (defaultmlu)) * \
+								  (1024 * 1024) / BLCKSZ)))
 
 /*
  * RelationIsUsedAsCatalogTable

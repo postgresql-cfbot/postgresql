@@ -3501,7 +3501,8 @@ l2:
 
 	newtupsize = MAXALIGN(newtup->t_len);
 
-	if (need_toast || newtupsize > pagefree)
+	if (need_toast || newtupsize > pagefree ||
+		!RelationUpdateTupleOnPageLocally(relation, -1, block))
 	{
 		TransactionId xmax_lock_old_tuple;
 		uint16		infomask_lock_old_tuple,
@@ -3513,7 +3514,7 @@ l2:
 		 * temporarily mark it locked, while we release the page-level lock.
 		 *
 		 * To satisfy the rule that any xid potentially appearing in a buffer
-		 * written out to disk, we unfortunately have to WAL log this
+		 * must be written out to disk, we unfortunately have to WAL log this
 		 * temporary modification.  We can reuse xl_heap_lock for this
 		 * purpose.  If we crash/error before following through with the
 		 * actual update, xmax will be of an aborted transaction, allowing
@@ -3638,6 +3639,39 @@ l2:
 				/* We're all done. */
 				break;
 			}
+
+			if (!RelationUpdateTupleOnPageLocally(relation, -1, block))
+			{
+				/*
+				 * We are trying to store updates in an earlier part of the
+				 * table.
+				 */
+				newbuf = RelationGetBufferForTuple(relation, heaptup->t_len,
+												   buffer, 0, NULL,
+												   &vmbuffer_new, &vmbuffer,
+												   0);
+
+				/*
+				 * We'd prefer to move the tuple to an earlier page. However,
+				 * if the page for the new tuple is located after our old
+				 * tuple's page, and the old page still had space, we insert
+				 * the tuple into the old page.
+				 */
+				if (BufferGetBlockNumber(newbuf) > block &&
+					PageGetHeapFreeSpace(page) >= newtupsize)
+				{
+					UnlockReleaseBuffer(newbuf);
+					newbuf = buffer;
+					if (vmbuffer_new != vmbuffer && vmbuffer_new != InvalidBuffer)
+					{
+						UnlockReleaseBuffer(vmbuffer_new);
+						vmbuffer_new = InvalidBuffer;
+					}
+				}
+				/* We're all done. */
+				break;
+			}
+
 			/* Acquire VM page pin if needed and we don't have it. */
 			if (vmbuffer == InvalidBuffer && PageIsAllVisible(page))
 				visibilitymap_pin(relation, block, &vmbuffer);

@@ -27,6 +27,7 @@
 #include "storage/ipc.h"
 #include "storage/proc.h"
 #include "storage/procsignal.h"
+#include "utils/memutils.h"
 #include "utils/ps_status.h"
 
 
@@ -34,19 +35,22 @@ static void ShutdownAuxiliaryProcess(int code, Datum arg);
 
 
 /*
- *	 AuxiliaryProcessMain
+ *	 AuxiliaryProcessMainCommon
  *
- *	 The main entry point for auxiliary processes, such as the bgwriter,
+ *	 Common initialization code for auxiliary processes, such as the bgwriter,
  *	 walwriter, walreceiver, bootstrapper and the shared memory checker code.
- *
- *	 This code is here just because of historical reasons.
  */
 void
-AuxiliaryProcessMain(BackendType auxtype)
+AuxiliaryProcessMainCommon(void)
 {
-	Assert(IsUnderPostmaster);
+	/* Release postmaster's working memory context */
+	if (PostmasterContext)
+	{
+		MemoryContextDelete(PostmasterContext);
+		PostmasterContext = NULL;
+	}
 
-	MyBackendType = auxtype;
+	Assert(IsUnderPostmaster);
 
 	init_ps_display(NULL);
 
@@ -75,7 +79,6 @@ AuxiliaryProcessMain(BackendType auxtype)
 	 */
 	CreateAuxProcessResourceOwner();
 
-
 	/* Initialize backend status information */
 	pgstat_beinit();
 	pgstat_bestart();
@@ -84,41 +87,6 @@ AuxiliaryProcessMain(BackendType auxtype)
 	before_shmem_exit(ShutdownAuxiliaryProcess, 0);
 
 	SetProcessingMode(NormalProcessing);
-
-	switch (MyBackendType)
-	{
-		case B_STARTUP:
-			StartupProcessMain();
-			proc_exit(1);
-
-		case B_ARCHIVER:
-			PgArchiverMain();
-			proc_exit(1);
-
-		case B_BG_WRITER:
-			BackgroundWriterMain();
-			proc_exit(1);
-
-		case B_CHECKPOINTER:
-			CheckpointerMain();
-			proc_exit(1);
-
-		case B_WAL_WRITER:
-			WalWriterMain();
-			proc_exit(1);
-
-		case B_WAL_RECEIVER:
-			WalReceiverMain();
-			proc_exit(1);
-
-		case B_WAL_SUMMARIZER:
-			WalSummarizerMain();
-			proc_exit(1);
-
-		default:
-			elog(PANIC, "unrecognized process type: %d", (int) MyBackendType);
-			proc_exit(1);
-	}
 }
 
 /*

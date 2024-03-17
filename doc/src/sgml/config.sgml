@@ -5472,6 +5472,23 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-enable-or-transformation" xreflabel="enable_or_transformation">
+      <term><varname>enable_or_transformation</varname> (<type>boolean</type>)
+       <indexterm>
+        <primary><varname>enable_or_transformation</varname> configuration parameter</primary>
+       </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Enables or disables the query planner's ability to lookup and group multiple
+        similar OR expressions to ANY (<xref linkend="functions-comparisons-any-some"/>) expressions.
+        The grouping technique of this transformation is based on the equivalence of variable sides.
+        One side of such an expression must be a constant clause, and the other must contain a variable clause.
+        The default is <literal>on</literal>.
+        </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-enable-parallel-append" xreflabel="enable_parallel_append">
       <term><varname>enable_parallel_append</varname> (<type>boolean</type>)
       <indexterm>

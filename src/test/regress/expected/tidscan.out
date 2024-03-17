@@ -43,10 +43,10 @@ SELECT ctid, * FROM tidscan WHERE '(0,1)' = ctid;
 -- OR'd clauses
 EXPLAIN (COSTS OFF)
 SELECT ctid, * FROM tidscan WHERE ctid = '(0,2)' OR '(0,1)' = ctid;
-                          QUERY PLAN                          
---------------------------------------------------------------
+                      QUERY PLAN                       
+-------------------------------------------------------
  Tid Scan on tidscan
-   TID Cond: ((ctid = '(0,2)'::tid) OR ('(0,1)'::tid = ctid))
+   TID Cond: (ctid = ANY ('{"(0,2)","(0,1)"}'::tid[]))
 (2 rows)
 
 SELECT ctid, * FROM tidscan WHERE ctid = '(0,2)' OR '(0,1)' = ctid;
@@ -56,6 +56,23 @@ SELECT ctid, * FROM tidscan WHERE ctid = '(0,2)' OR '(0,1)' = ctid;
  (0,2) |  2
 (2 rows)
 
+SET enable_or_transformation = on;
+EXPLAIN (COSTS OFF)
+SELECT ctid, * FROM tidscan WHERE ctid = '(0,2)' OR '(0,1)' = ctid;
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Tid Scan on tidscan
+   TID Cond: (ctid = ANY ('{"(0,2)","(0,1)"}'::tid[]))
+(2 rows)
+
+SELECT ctid, * FROM tidscan WHERE ctid = '(0,2)' OR '(0,1)' = ctid;
+ ctid  | id 
+-------+----
+ (0,1) |  1
+ (0,2) |  2
+(2 rows)
+
+RESET enable_or_transformation;
 -- ctid = ScalarArrayOp - implemented as tidscan
 EXPLAIN (COSTS OFF)
 SELECT ctid, * FROM tidscan WHERE ctid = ANY(ARRAY['(0,1)', '(0,2)']::tid[]);

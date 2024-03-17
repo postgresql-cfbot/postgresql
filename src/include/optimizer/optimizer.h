@@ -133,6 +133,8 @@ extern void extract_query_dependencies(Node *query,
 
 /* in prep/prepqual.c: */
 
+extern PGDLLIMPORT bool enable_or_transformation;
+
 extern Node *negate_clause(Node *node);
 extern Expr *canonicalize_qual(Expr *qual, bool is_check);
 

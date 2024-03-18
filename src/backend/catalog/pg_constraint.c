@@ -629,6 +629,46 @@ findNotNullConstraint(Oid relid, const char *colname)
 	return findNotNullConstraintAttnum(relid, attnum);
 }
 
+HeapTuple
+findDomainNotNullConstraint(Oid typid)
+{
+	Relation	pg_constraint;
+	HeapTuple	conTup,
+				retval = NULL;
+	SysScanDesc scan;
+	ScanKeyData key;
+
+	pg_constraint = table_open(ConstraintRelationId, AccessShareLock);
+	ScanKeyInit(&key,
+				Anum_pg_constraint_contypid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(typid));
+	scan = systable_beginscan(pg_constraint, ConstraintRelidTypidNameIndexId,
+							  true, NULL, 1, &key);
+
+	while (HeapTupleIsValid(conTup = systable_getnext(scan)))
+	{
+		Form_pg_constraint con = (Form_pg_constraint) GETSTRUCT(conTup);
+
+		/*
+		 * We're looking for a NOTNULL constraint that's marked validated.
+		 */
+		if (con->contype != CONSTRAINT_NOTNULL)
+			continue;
+		if (!con->convalidated)
+			continue;
+
+		/* Found it */
+		retval = heap_copytuple(conTup);
+		break;
+	}
+
+	systable_endscan(scan);
+	table_close(pg_constraint, AccessShareLock);
+
+	return retval;
+}
+
 /*
  * Given a pg_constraint tuple for a not-null constraint, return the column
  * number it is for.

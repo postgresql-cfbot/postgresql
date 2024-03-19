@@ -145,3 +145,17 @@ SELECT * FROM pg_input_error_info('incorrect type name syntax', 'regtype');
 SELECT * FROM pg_input_error_info('numeric(1,2,3)', 'regtype');  -- bogus typmod
 SELECT * FROM pg_input_error_info('way.too.many.names', 'regtype');
 SELECT * FROM pg_input_error_info('no_such_catalog.schema.name', 'regtype');
+
+-- Test to_regtypemod
+SELECT to_regtypemod('text');
+SELECT to_regtypemod('timestamp(4)');
+SELECT to_regtypemod('interval(0)');
+SELECT to_regtypemod('interval second(0)');
+SELECT to_regtypemod('timestamptz');
+SELECT to_regtypemod('timestamptz(6)');
+SELECT to_regtypemod('varchar');
+SELECT to_regtypemod('varchar(128)');
+
+SELECT to_regtypemod(NULL);                -- returns null on null input
+SELECT to_regtypemod('year(4)');           -- error trapped, returns null
+SELECT to_regtypemod('interval nonesuch'); -- grammar error raised, not trapped

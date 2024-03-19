@@ -544,3 +544,69 @@ SELECT * FROM pg_input_error_info('way.too.many.names', 'regtype');
 ERROR:  improper qualified name (too many dotted names): way.too.many.names
 SELECT * FROM pg_input_error_info('no_such_catalog.schema.name', 'regtype');
 ERROR:  cross-database references are not implemented: no_such_catalog.schema.name
+-- Test to_regtypemod
+SELECT to_regtypemod('text');
+ to_regtypemod 
+---------------
+            -1
+(1 row)
+
+SELECT to_regtypemod('timestamp(4)');
+ to_regtypemod 
+---------------
+             4
+(1 row)
+
+SELECT to_regtypemod('interval(0)');
+ to_regtypemod 
+---------------
+    2147418112
+(1 row)
+
+SELECT to_regtypemod('interval second(0)');
+ to_regtypemod 
+---------------
+     268435456
+(1 row)
+
+SELECT to_regtypemod('timestamptz');
+ to_regtypemod 
+---------------
+            -1
+(1 row)
+
+SELECT to_regtypemod('timestamptz(6)');
+ to_regtypemod 
+---------------
+             6
+(1 row)
+
+SELECT to_regtypemod('varchar');
+ to_regtypemod 
+---------------
+            -1
+(1 row)
+
+SELECT to_regtypemod('varchar(128)');
+ to_regtypemod 
+---------------
+           132
+(1 row)
+
+SELECT to_regtypemod(NULL);                -- returns null on null input
+ to_regtypemod 
+---------------
+              
+(1 row)
+
+SELECT to_regtypemod('year(4)');           -- error trapped, returns null
+ to_regtypemod 
+---------------
+              
+(1 row)
+
+SELECT to_regtypemod('interval nonesuch'); -- grammar error raised, not trapped
+ERROR:  syntax error at or near "nonesuch"
+LINE 1: SELECT to_regtypemod('interval nonesuch');
+                 ^
+CONTEXT:  invalid type name "interval nonesuch"

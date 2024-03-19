@@ -1220,6 +1220,35 @@ to_regtype(PG_FUNCTION_ARGS)
 	PG_RETURN_DATUM(result);
 }
 
+
+/*
+ * to_regtypemod() complements to_regtype, returning the typmod for the type,
+ * if any.
+ *
+ * If the type name is not found, we return NULL.
+ *
+ * Internally it relies on the Postgres core parseTypeString() function defined
+ * in src/backend/parser/parse_type.c.
+ */
+Datum
+to_regtypemod(PG_FUNCTION_ARGS)
+{
+	char	   *typ_name = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	Oid         typid;
+	int32       typmod;
+	ErrorSaveContext escontext = {T_ErrorSaveContext};
+
+	/*
+	 * Parse type-name argument to obtain the encoded typmod. Return NULL
+	 * on failure.
+	 */
+	if (!parseTypeString(typ_name, &typid, &typmod, (Node *) &escontext)) {
+		PG_RETURN_NULL();
+	}
+
+	PG_RETURN_INT32(typmod);
+}
+
 /*
  * regtypeout		- converts type OID to "typ_name"
  */

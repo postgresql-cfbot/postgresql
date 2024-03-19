@@ -1098,7 +1098,7 @@ sub lookup_oids
 			{
 				warn sprintf
 				  "unresolved OID reference \"%s\" in %s.dat field %s line %s\n",
-				  $lookupname, $catname, $attname, $bki_values->{line_number};
+				  $lookupname || '', $catname || '', $attname || '', $bki_values->{line_number} || '';
 				$num_errors++;
 			}
 		}

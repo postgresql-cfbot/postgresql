@@ -1049,7 +1049,8 @@ gistFindCorrectParent(Relation r, GISTInsertStack *child, bool is_build)
 	 * concurrent activity during index build, but we might have changed the
 	 * parent ourselves.
 	 */
-	Assert(parent->lsn != PageGetLSN(parent->page) || is_build);
+	Assert(child->downlinkoffnum == InvalidOffsetNumber ||
+		   parent->lsn != PageGetLSN(parent->page) || is_build);
 
 	/*
 	 * Scan the page to re-find the downlink. If the page was split, it might

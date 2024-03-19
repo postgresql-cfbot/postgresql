@@ -1981,6 +1981,8 @@ typedef struct MemoizePath
 	uint32		est_entries;	/* The maximum number of entries that the
 								 * planner expects will fit in the cache, or 0
 								 * if unknown */
+	double		est_hitratio;	/* The estimate of how many call will result in
+								 * cache hit */
 } MemoizePath;
 
 /*

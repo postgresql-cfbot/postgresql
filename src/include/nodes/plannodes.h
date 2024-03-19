@@ -127,6 +127,8 @@ typedef struct Plan
 	 */
 	Cost		startup_cost;	/* cost expended before fetching any tuples */
 	Cost		total_cost;		/* total cost (assuming all tuples fetched) */
+	double		est_calls;		/* estimated number of times this plan will be
+								 * (re)scanned */
 
 	/*
 	 * planner's estimate of result size of this plan step
@@ -144,6 +146,11 @@ typedef struct Plan
 	 * information needed for asynchronous execution
 	 */
 	bool		async_capable;	/* engage asynchronous-capable logic? */
+
+	/*
+	 * information needed for jit
+	 */
+	bool		jit;			/* jit compile for this plan node? */
 
 	/*
 	 * Common structural data for all Plan types.

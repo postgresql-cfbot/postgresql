@@ -1626,6 +1626,12 @@ create_memoize_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 	 */
 	pathnode->est_entries = 0;
 
+	/* 
+	 * We initially set est_hitratio to 0. An estimate will be determined by 
+	 * cost_memoize_rescan() later.
+	 */
+	pathnode->est_hitratio = 0;
+
 	/*
 	 * Add a small additional charge for caching the first entry.  All the
 	 * harder calculations for rescans are performed in cost_memoize_rescan().

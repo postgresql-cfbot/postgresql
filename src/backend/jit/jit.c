@@ -165,6 +165,14 @@ jit_compile_expr(struct ExprState *state)
 	/* if no jitting should be performed at all */
 	if (!(state->parent->state->es_jit_flags & PGJIT_PERFORM))
 		return false;
+	
+	/* don't jit if the plan node is missing */
+	if (state->parent->plan == NULL)
+		return false;
+
+	/* don't jit if it's not enabled for this plan node */
+	if (!state->parent->plan->jit)
+		return false;
 
 	/* or if expressions aren't JITed */
 	if (!(state->parent->state->es_jit_flags & PGJIT_EXPR))

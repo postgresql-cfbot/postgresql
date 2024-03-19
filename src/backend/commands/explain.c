@@ -1685,9 +1685,16 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	{
 		if (es->format == EXPLAIN_FORMAT_TEXT)
 		{
-			appendStringInfo(es->str, "  (cost=%.2f..%.2f rows=%.0f width=%d)",
-							 plan->startup_cost, plan->total_cost,
-							 plan->plan_rows, plan->plan_width);
+			/* only display the expected loops if it's above 1.0 */
+			if (plan->est_calls < 1.0)
+				appendStringInfo(es->str, "  (cost=%.2f..%.2f rows=%.0f width=%d)",
+									plan->startup_cost, plan->total_cost,
+									plan->plan_rows, plan->plan_width);
+			else
+				appendStringInfo(es->str, "  (cost=%.2f..%.2f rows=%.0f width=%d loops=%.0f)",
+									plan->startup_cost, plan->total_cost,
+									plan->plan_rows, plan->plan_width,
+									plan->est_calls);
 		}
 		else
 		{
@@ -1699,6 +1706,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 								 0, es);
 			ExplainPropertyInteger("Plan Width", NULL, plan->plan_width,
 								   es);
+			ExplainPropertyFloat("Plan Calls", NULL, plan->est_calls, 0, es);
 		}
 	}
 
@@ -1820,6 +1828,17 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	/* target list */
 	if (es->verbose)
 		show_plan_tlist(planstate, ancestors, es);
+
+	/*
+	 * Indicate if we did JITing for this node. When format is TEXT, only do
+	 * this when VERBOSE is enabled.
+	 */
+	if ((es->format == EXPLAIN_FORMAT_TEXT && es->verbose) ||
+		es->format != EXPLAIN_FORMAT_TEXT)
+	{
+		if (plan->jit)
+			ExplainPropertyBool("JIT", plan->jit, es);
+	}
 
 	/* unique join */
 	switch (nodeTag(plan))

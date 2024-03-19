@@ -1211,20 +1211,25 @@ SELECT unnest(ARRAY[]::integer[]) + 1 AS pathkey
 -----------------------------------------------------------------------------------------------------
  Sort
    Output: (((unnest('{}'::integer[])) + 1))
+   JIT: true
    Sort Key: (((unnest('{}'::integer[])) + 1))
    ->  Result
          Output: ((unnest('{}'::integer[])) + 1)
+         JIT: true
          ->  ProjectSet
                Output: unnest('{}'::integer[])
                ->  Nested Loop
+                     JIT: true
                      ->  Gather
                            Workers Planned: 4
                            ->  Parallel Index Only Scan using tenk1_hundred on public.tenk1 t1
                      ->  Materialize
                            ->  Gather
+                                 JIT: true
                                  Workers Planned: 4
                                  ->  Parallel Index Only Scan using tenk1_hundred on public.tenk1 t2
-(15 rows)
+                                       JIT: true
+(20 rows)
 
 -- test passing expanded-value representations to workers
 CREATE FUNCTION make_some_array(int,int) returns int[] as

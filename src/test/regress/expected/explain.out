@@ -55,32 +55,32 @@ set jit = off;
 set track_io_timing = off;
 -- Simple cases
 select explain_filter('explain select * from int8_tbl i8');
-                     explain_filter                      
----------------------------------------------------------
- Seq Scan on int8_tbl i8  (cost=N.N..N.N rows=N width=N)
+                         explain_filter                          
+-----------------------------------------------------------------
+ Seq Scan on int8_tbl i8  (cost=N.N..N.N rows=N width=N loops=N)
 (1 row)
 
 select explain_filter('explain (analyze) select * from int8_tbl i8');
-                                        explain_filter                                         
------------------------------------------------------------------------------------------------
- Seq Scan on int8_tbl i8  (cost=N.N..N.N rows=N width=N) (actual time=N.N..N.N rows=N loops=N)
+                                            explain_filter                                             
+-------------------------------------------------------------------------------------------------------
+ Seq Scan on int8_tbl i8  (cost=N.N..N.N rows=N width=N loops=N) (actual time=N.N..N.N rows=N loops=N)
  Planning Time: N.N ms
  Execution Time: N.N ms
 (3 rows)
 
 select explain_filter('explain (analyze, verbose) select * from int8_tbl i8');
-                                            explain_filter                                            
-------------------------------------------------------------------------------------------------------
- Seq Scan on public.int8_tbl i8  (cost=N.N..N.N rows=N width=N) (actual time=N.N..N.N rows=N loops=N)
+                                                explain_filter                                                
+--------------------------------------------------------------------------------------------------------------
+ Seq Scan on public.int8_tbl i8  (cost=N.N..N.N rows=N width=N loops=N) (actual time=N.N..N.N rows=N loops=N)
    Output: q1, q2
  Planning Time: N.N ms
  Execution Time: N.N ms
 (4 rows)
 
 select explain_filter('explain (analyze, buffers, format text) select * from int8_tbl i8');
-                                        explain_filter                                         
------------------------------------------------------------------------------------------------
- Seq Scan on int8_tbl i8  (cost=N.N..N.N rows=N width=N) (actual time=N.N..N.N rows=N loops=N)
+                                            explain_filter                                             
+-------------------------------------------------------------------------------------------------------
+ Seq Scan on int8_tbl i8  (cost=N.N..N.N rows=N width=N loops=N) (actual time=N.N..N.N rows=N loops=N)
  Planning Time: N.N ms
  Execution Time: N.N ms
 (3 rows)
@@ -100,6 +100,7 @@ select explain_filter('explain (analyze, buffers, format xml) select * from int8
        <Total-Cost>N.N</Total-Cost>                    +
        <Plan-Rows>N</Plan-Rows>                        +
        <Plan-Width>N</Plan-Width>                      +
+       <Plan-Calls>N</Plan-Calls>                      +
        <Actual-Startup-Time>N.N</Actual-Startup-Time>  +
        <Actual-Total-Time>N.N</Actual-Total-Time>      +
        <Actual-Rows>N</Actual-Rows>                    +
@@ -148,6 +149,7 @@ select explain_filter('explain (analyze, buffers, format yaml) select * from int
      Total Cost: N.N          +
      Plan Rows: N             +
      Plan Width: N            +
+     Plan Calls: N            +
      Actual Startup Time: N.N +
      Actual Total Time: N.N   +
      Actual Rows: N           +
@@ -179,9 +181,9 @@ select explain_filter('explain (analyze, buffers, format yaml) select * from int
 (1 row)
 
 select explain_filter('explain (buffers, format text) select * from int8_tbl i8');
-                     explain_filter                      
----------------------------------------------------------
- Seq Scan on int8_tbl i8  (cost=N.N..N.N rows=N width=N)
+                         explain_filter                          
+-----------------------------------------------------------------
+ Seq Scan on int8_tbl i8  (cost=N.N..N.N rows=N width=N loops=N)
 (1 row)
 
 select explain_filter('explain (buffers, format json) select * from int8_tbl i8');
@@ -199,6 +201,7 @@ select explain_filter('explain (buffers, format json) select * from int8_tbl i8'
        "Total Cost": N.N,          +
        "Plan Rows": N,             +
        "Plan Width": N,            +
+       "Plan Calls": N,            +
        "Shared Hit Blocks": N,     +
        "Shared Read Blocks": N,    +
        "Shared Dirtied Blocks": N, +
@@ -244,6 +247,7 @@ select explain_filter('explain (analyze, buffers, format json) select * from int
        "Total Cost": N.N,           +
        "Plan Rows": N,              +
        "Plan Width": N,             +
+       "Plan Calls": N,             +
        "Actual Startup Time": N.N,  +
        "Actual Total Time": N.N,    +
        "Actual Rows": N,            +
@@ -316,7 +320,7 @@ rollback;
 select explain_filter('explain (generic_plan) select unique1 from tenk1 where thousand = $1');
                                  explain_filter                                  
 ---------------------------------------------------------------------------------
- Bitmap Heap Scan on tenk1  (cost=N.N..N.N rows=N width=N)
+ Bitmap Heap Scan on tenk1  (cost=N.N..N.N rows=N width=N loops=N)
    Recheck Cond: (thousand = $N)
    ->  Bitmap Index Scan on tenk1_thous_tenthous  (cost=N.N..N.N rows=N width=N)
          Index Cond: (thousand = $N)
@@ -420,12 +424,12 @@ create table gen_part_2
   partition of gen_part for values in (2);
 -- should scan gen_part_1_1 and gen_part_1_2, but not gen_part_2
 select explain_filter('explain (generic_plan) select key1, key2 from gen_part where key1 = 1 and key2 = $1');
-                              explain_filter                               
----------------------------------------------------------------------------
- Append  (cost=N.N..N.N rows=N width=N)
-   ->  Seq Scan on gen_part_1_1 gen_part_1  (cost=N.N..N.N rows=N width=N)
+                                  explain_filter                                   
+-----------------------------------------------------------------------------------
+ Append  (cost=N.N..N.N rows=N width=N loops=N)
+   ->  Seq Scan on gen_part_1_1 gen_part_1  (cost=N.N..N.N rows=N width=N loops=N)
          Filter: ((key1 = N) AND (key2 = $N))
-   ->  Seq Scan on gen_part_1_2 gen_part_2  (cost=N.N..N.N rows=N width=N)
+   ->  Seq Scan on gen_part_1_2 gen_part_2  (cost=N.N..N.N rows=N width=N loops=N)
          Filter: ((key1 = N) AND (key2 = $N))
 (5 rows)
 
@@ -485,6 +489,7 @@ select jsonb_pretty(
                              "Schema": "public",            +
                              "Node Type": "Seq Scan",       +
                              "Plan Rows": 0,                +
+                             "Plan Calls": 0,               +
                              "Plan Width": 0,               +
                              "Total Cost": 0.0,             +
                              "Actual Rows": 0,              +
@@ -531,6 +536,7 @@ select jsonb_pretty(
                      ],                                     +
                      "Node Type": "Sort",                   +
                      "Plan Rows": 0,                        +
+                     "Plan Calls": 0,                       +
                      "Plan Width": 0,                       +
                      "Total Cost": 0.0,                     +
                      "Actual Rows": 0,                      +
@@ -574,6 +580,7 @@ select jsonb_pretty(
              ],                                             +
              "Node Type": "Gather Merge",                   +
              "Plan Rows": 0,                                +
+             "Plan Calls": 0,                               +
              "Plan Width": 0,                               +
              "Total Cost": 0.0,                             +
              "Actual Rows": 0,                              +
@@ -622,9 +629,9 @@ create temp table t1(f1 float8);
 create function pg_temp.mysin(float8) returns float8 language plpgsql
 as 'begin return sin($1); end';
 select explain_filter('explain (verbose) select * from t1 where pg_temp.mysin(f1) < 0.5');
-                       explain_filter                       
-------------------------------------------------------------
- Seq Scan on pg_temp.t1  (cost=N.N..N.N rows=N width=N)
+                         explain_filter                         
+----------------------------------------------------------------
+ Seq Scan on pg_temp.t1  (cost=N.N..N.N rows=N width=N loops=N)
    Output: f1
    Filter: (pg_temp.mysin(t1.f1) < 'N.N'::double precision)
 (3 rows)
@@ -632,9 +639,9 @@ select explain_filter('explain (verbose) select * from t1 where pg_temp.mysin(f1
 -- Test compute_query_id
 set compute_query_id = on;
 select explain_filter('explain (verbose) select * from int8_tbl i8');
-                         explain_filter                         
-----------------------------------------------------------------
- Seq Scan on public.int8_tbl i8  (cost=N.N..N.N rows=N width=N)
+                             explain_filter                             
+------------------------------------------------------------------------
+ Seq Scan on public.int8_tbl i8  (cost=N.N..N.N rows=N width=N loops=N)
    Output: q1, q2
  Query Identifier: N
 (3 rows)

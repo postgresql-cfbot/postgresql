@@ -290,6 +290,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	Plan	   *top_plan;
 	ListCell   *lp,
 			   *lr;
+	CreatePlanContext context;
 
 	/*
 	 * Set up global state for this planner invocation.  This data is needed
@@ -412,7 +413,8 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	final_rel = fetch_upper_rel(root, UPPERREL_FINAL, NULL);
 	best_path = get_cheapest_fractional_path(final_rel, tuple_fraction);
 
-	top_plan = create_plan(root, best_path);
+	context.est_calls = 1.0;
+	top_plan = create_plan(&context, root, best_path);
 
 	/*
 	 * If creating a plan for a scrollable cursor, make sure it can run
@@ -554,9 +556,17 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	result->stmt_location = parse->stmt_location;
 	result->stmt_len = parse->stmt_len;
 
+	/*
+	 * Decision to perform JIT is made at plan node level. Whereas JIT inlining
+	 * and optimization are done either for the whole query or not done at all.
+	 * 
+	 * If the total cost is greater than jit_above_cost, performing JIT is
+	 * allowed but not guaranteed. Whether JIT performed on a node is decided
+	 * in create_plan().
+	 * 
+	 */
 	result->jitFlags = PGJIT_NONE;
-	if (jit_enabled && jit_above_cost >= 0 &&
-		top_plan->total_cost > jit_above_cost)
+	if (jit_enabled && context.jit)
 	{
 		result->jitFlags |= PGJIT_PERFORM;
 

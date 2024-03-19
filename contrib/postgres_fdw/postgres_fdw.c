@@ -330,7 +330,8 @@ static void postgresGetForeignRelSize(PlannerInfo *root,
 static void postgresGetForeignPaths(PlannerInfo *root,
 									RelOptInfo *baserel,
 									Oid foreigntableid);
-static ForeignScan *postgresGetForeignPlan(PlannerInfo *root,
+static ForeignScan *postgresGetForeignPlan(CreatePlanContext *context,
+										   PlannerInfo *root,
 										   RelOptInfo *foreignrel,
 										   Oid foreigntableid,
 										   ForeignPath *best_path,
@@ -1219,7 +1220,8 @@ postgresGetForeignPaths(PlannerInfo *root,
  *		Create ForeignScan plan node which implements selected best path
  */
 static ForeignScan *
-postgresGetForeignPlan(PlannerInfo *root,
+postgresGetForeignPlan(CreatePlanContext *context,
+					   PlannerInfo *root,
 					   RelOptInfo *foreignrel,
 					   Oid foreigntableid,
 					   ForeignPath *best_path,
@@ -1386,7 +1388,8 @@ postgresGetForeignPlan(PlannerInfo *root,
 			 * Now fix the subplan's tlist --- this might result in inserting
 			 * a Result node atop the plan tree.
 			 */
-			outer_plan = change_plan_targetlist(outer_plan, fdw_scan_tlist,
+			outer_plan = change_plan_targetlist(context, outer_plan,
+												fdw_scan_tlist,
 												best_path->path.parallel_safe);
 		}
 	}

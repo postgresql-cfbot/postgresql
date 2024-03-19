@@ -692,9 +692,9 @@ select tableoid::regclass::text as relname, parted_tab.* from parted_tab order b
 
 -- modifies partition key, but no rows will actually be updated
 explain update parted_tab set a = 2 where false;
-                       QUERY PLAN                       
---------------------------------------------------------
- Update on parted_tab  (cost=0.00..0.00 rows=0 width=0)
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Update on parted_tab  (cost=0.00..0.00 rows=0 width=0 loops=1)
    ->  Result  (cost=0.00..0.00 rows=0 width=10)
          One-Time Filter: false
 (3 rows)
@@ -1624,9 +1624,10 @@ explain (verbose, costs off) select * from matest0 order by 1-id;
          Sort Key: ((1 - matest0_3.id))
          ->  Seq Scan on public.matest2 matest0_3
                Output: matest0_3.id, matest0_3.name, (1 - matest0_3.id)
+               JIT: true
    ->  Index Scan using matest3i on public.matest3 matest0_4
          Output: matest0_4.id, matest0_4.name, (1 - matest0_4.id)
-(13 rows)
+(14 rows)
 
 select * from matest0 order by 1-id;
  id |  name  

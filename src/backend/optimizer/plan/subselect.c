@@ -172,6 +172,7 @@ make_subplan(PlannerInfo *root, Query *orig_subquery,
 	Plan	   *plan;
 	List	   *plan_params;
 	Node	   *result;
+	CreatePlanContext context;
 
 	/*
 	 * Copy the source Query node.  This is a quick and dirty kluge to resolve
@@ -233,7 +234,8 @@ make_subplan(PlannerInfo *root, Query *orig_subquery,
 	final_rel = fetch_upper_rel(subroot, UPPERREL_FINAL, NULL);
 	best_path = get_cheapest_fractional_path(final_rel, tuple_fraction);
 
-	plan = create_plan(subroot, best_path);
+	context.est_calls = 1.0;
+	plan = create_plan(&context, subroot, best_path);
 
 	/* And convert to SubPlan or InitPlan format. */
 	result = build_subplan(root, plan, subroot, plan_params,
@@ -284,7 +286,8 @@ make_subplan(PlannerInfo *root, Query *orig_subquery,
 				AlternativeSubPlan *asplan;
 
 				/* OK, finish planning the ANY subquery */
-				plan = create_plan(subroot, best_path);
+				context.est_calls = 1.0;
+				plan = create_plan(&context, subroot, best_path);
 
 				/* ... and convert to SubPlan format */
 				hashplan = castNode(SubPlan,
@@ -907,6 +910,7 @@ SS_process_ctes(PlannerInfo *root)
 		Plan	   *plan;
 		SubPlan    *splan;
 		int			paramid;
+		CreatePlanContext context;
 
 		/*
 		 * Ignore SELECT CTEs that are not actually referenced anywhere.
@@ -997,7 +1001,8 @@ SS_process_ctes(PlannerInfo *root)
 		final_rel = fetch_upper_rel(subroot, UPPERREL_FINAL, NULL);
 		best_path = final_rel->cheapest_total_path;
 
-		plan = create_plan(subroot, best_path);
+		context.est_calls = 1.0;
+		plan = create_plan(&context, subroot, best_path);
 
 		/*
 		 * Make a SubPlan node for it.  This is just enough unlike

@@ -125,7 +125,8 @@ static void fileGetForeignRelSize(PlannerInfo *root,
 static void fileGetForeignPaths(PlannerInfo *root,
 								RelOptInfo *baserel,
 								Oid foreigntableid);
-static ForeignScan *fileGetForeignPlan(PlannerInfo *root,
+static ForeignScan *fileGetForeignPlan(CreatePlanContext *context,
+									   PlannerInfo *root,
 									   RelOptInfo *baserel,
 									   Oid foreigntableid,
 									   ForeignPath *best_path,
@@ -596,7 +597,8 @@ fileGetForeignPaths(PlannerInfo *root,
  *		Create a ForeignScan plan node for scanning the foreign table
  */
 static ForeignScan *
-fileGetForeignPlan(PlannerInfo *root,
+fileGetForeignPlan(CreatePlanContext *context,
+				   PlannerInfo *root,
 				   RelOptInfo *baserel,
 				   Oid foreigntableid,
 				   ForeignPath *best_path,

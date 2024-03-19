@@ -18,7 +18,7 @@
 
 /* To avoid including explain.h here, reference ExplainState thus: */
 struct ExplainState;
-
+struct CreatePlanContext;
 
 /*
  * Callback function signatures --- see fdwhandler.sgml for more info.
@@ -32,7 +32,8 @@ typedef void (*GetForeignPaths_function) (PlannerInfo *root,
 										  RelOptInfo *baserel,
 										  Oid foreigntableid);
 
-typedef ForeignScan *(*GetForeignPlan_function) (PlannerInfo *root,
+typedef ForeignScan *(*GetForeignPlan_function) (struct CreatePlanContext *context,
+												 PlannerInfo *root,
 												 RelOptInfo *baserel,
 												 Oid foreigntableid,
 												 ForeignPath *best_path,

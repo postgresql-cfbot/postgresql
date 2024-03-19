@@ -2590,6 +2590,7 @@ cost_memoize_rescan(PlannerInfo *root, MemoizePath *mpath,
 		(est_cache_entries / Max(ndistinct, est_cache_entries));
 
 	Assert(hit_ratio >= 0 && hit_ratio <= 1.0);
+	mpath->est_hitratio = hit_ratio;
 
 	/*
 	 * Set the total_cost accounting for the expected cache hit ratio.  We

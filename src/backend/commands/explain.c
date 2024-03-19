@@ -18,6 +18,7 @@
 #include "commands/createas.h"
 #include "commands/defrem.h"
 #include "commands/prepare.h"
+#include "executor/execPartition.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
 #include "nodes/extensible.h"
@@ -117,6 +118,9 @@ static void show_instrumentation_count(const char *qlabel, int which,
 									   PlanState *planstate, ExplainState *es);
 static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
 static void show_eval_params(Bitmapset *bms_params, ExplainState *es);
+static void show_join_pruning_result_info(Bitmapset *join_prune_paramids,
+										  ExplainState *es);
+static void show_joinpartprune_info(HashState *hashstate, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
 static bool peek_buffer_usage(ExplainState *es, const BufferUsage *usage);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage);
@@ -2115,9 +2119,17 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			show_incremental_sort_info(castNode(IncrementalSortState, planstate),
 									   es);
 			break;
+		case T_Append:
+			if (es->verbose)
+				show_join_pruning_result_info(((Append *) plan)->join_prune_paramids,
+											  es);
+			break;
 		case T_MergeAppend:
 			show_merge_append_keys(castNode(MergeAppendState, planstate),
 								   ancestors, es);
+			if (es->verbose)
+				show_join_pruning_result_info(((MergeAppend *) plan)->join_prune_paramids,
+											  es);
 			break;
 		case T_Result:
 			show_upper_qual((List *) ((Result *) plan)->resconstantqual,
@@ -2133,6 +2145,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			break;
 		case T_Hash:
 			show_hash_info(castNode(HashState, planstate), es);
+			if (es->verbose)
+				show_joinpartprune_info(castNode(HashState, planstate), es);
 			break;
 		case T_Memoize:
 			show_memoize_info(castNode(MemoizeState, planstate), ancestors,
@@ -3571,6 +3585,53 @@ show_eval_params(Bitmapset *bms_params, ExplainState *es)
 
 	if (params)
 		ExplainPropertyList("Params Evaluated", params, es);
+}
+
+/*
+ * Show join partition pruning results at Append/MergeAppend nodes.
+ */
+static void
+show_join_pruning_result_info(Bitmapset *join_prune_paramids, ExplainState *es)
+{
+	int			paramid = -1;
+	List	   *params = NIL;
+
+	if (bms_is_empty(join_prune_paramids))
+		return;
+
+	while ((paramid = bms_next_member(join_prune_paramids, paramid)) >= 0)
+	{
+		char		param[32];
+
+		snprintf(param, sizeof(param), "$%d", paramid);
+		params = lappend(params, pstrdup(param));
+	}
+
+	ExplainPropertyList("Join Partition Pruning", params, es);
+}
+
+/*
+ * Show join partition pruning infos at Hash nodes.
+ */
+static void
+show_joinpartprune_info(HashState *hashstate, ExplainState *es)
+{
+	List	   *params = NIL;
+	ListCell   *lc;
+
+	if (!hashstate->joinpartprune_state_list)
+		return;
+
+	foreach(lc, hashstate->joinpartprune_state_list)
+	{
+		JoinPartitionPruneState *jpstate = (JoinPartitionPruneState *) lfirst(lc);
+		char		param[32];
+
+		snprintf(param, sizeof(param), "$%d", jpstate->paramid);
+		params = lappend(params, pstrdup(param));
+	}
+
+	ExplainPropertyList("Partition Prune", params, es);
 }
 
 /*

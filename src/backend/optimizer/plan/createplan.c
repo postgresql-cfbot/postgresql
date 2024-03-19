@@ -242,7 +242,8 @@ static Hash *make_hash(Plan *lefttree,
 					   List *hashkeys,
 					   Oid skewTable,
 					   AttrNumber skewColumn,
-					   bool skewInherit);
+					   bool skewInherit,
+					   List *joinpartprune_info_list);
 static MergeJoin *make_mergejoin(List *tlist,
 								 List *joinclauses, List *otherclauses,
 								 List *mergeclauses,
@@ -342,6 +343,7 @@ create_plan(PlannerInfo *root, Path *best_path)
 	/* Initialize this module's workspace in PlannerInfo */
 	root->curOuterRels = NULL;
 	root->curOuterParams = NIL;
+	root->join_partition_prune_candidates = NIL;
 
 	/* Recursively process the path tree, demanding the correct tlist result */
 	plan = create_plan_recurse(root, best_path, CP_EXACT_TLIST);
@@ -368,6 +370,8 @@ create_plan(PlannerInfo *root, Path *best_path)
 	/* Check we successfully assigned all NestLoopParams to plan nodes */
 	if (root->curOuterParams != NIL)
 		elog(ERROR, "failed to assign all NestLoopParams to plan nodes");
+
+	Assert(root->join_partition_prune_candidates == NIL);
 
 	/*
 	 * Reset plan_params to ensure param IDs used for nestloop params are not
@@ -1223,6 +1227,7 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 	int			nasyncplans = 0;
 	RelOptInfo *rel = best_path->path.parent;
 	PartitionPruneInfo *partpruneinfo = NULL;
+	Bitmapset  *join_prune_paramids = NULL;
 	int			nodenumsortkeys = 0;
 	AttrNumber *nodeSortColIdx = NULL;
 	Oid		   *nodeSortOperators = NULL;
@@ -1377,6 +1382,8 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 	 * If any quals exist, they may be useful to perform further partition
 	 * pruning during execution.  Gather information needed by the executor to
 	 * do partition pruning.
+	 *
+	 * Also gather information needed by the executor to do join pruning.
 	 */
 	if (enable_partition_pruning)
 	{
@@ -1399,13 +1406,20 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 			partpruneinfo =
 				make_partition_pruneinfo(root, rel,
 										 best_path->subpaths,
-										 prunequal);
+										 prunequal,
+										 NULL);
+
+		join_prune_paramids =
+			make_join_partition_pruneinfos(root, rel,
+										   (Path *) best_path,
+										   best_path->subpaths);
 	}
 
 	plan->appendplans = subplans;
 	plan->nasyncplans = nasyncplans;
 	plan->first_partial_plan = best_path->first_partial_path;
 	plan->part_prune_info = partpruneinfo;
+	plan->join_prune_paramids = join_prune_paramids;
 
 	copy_generic_path_info(&plan->plan, (Path *) best_path);
 
@@ -1445,6 +1459,7 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
 	ListCell   *subpaths;
 	RelOptInfo *rel = best_path->path.parent;
 	PartitionPruneInfo *partpruneinfo = NULL;
+	Bitmapset  *join_prune_paramids = NULL;
 
 	/*
 	 * We don't have the actual creation of the MergeAppend node split out
@@ -1541,6 +1556,8 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
 	 * If any quals exist, they may be useful to perform further partition
 	 * pruning during execution.  Gather information needed by the executor to
 	 * do partition pruning.
+	 *
+	 * Also gather information needed by the executor to do join pruning.
 	 */
 	if (enable_partition_pruning)
 	{
@@ -1554,11 +1571,18 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
 		if (prunequal != NIL)
 			partpruneinfo = make_partition_pruneinfo(root, rel,
 													 best_path->subpaths,
-													 prunequal);
+													 prunequal,
+													 NULL);
+
+		join_prune_paramids =
+			make_join_partition_pruneinfos(root, rel,
+										   (Path *) best_path,
+										   best_path->subpaths);
 	}
 
 	node->mergeplans = subplans;
 	node->part_prune_info = partpruneinfo;
+	node->join_prune_paramids = join_prune_paramids;
 
 	/*
 	 * If prepare_sort_from_pathkeys added sort columns, but we were told to
@@ -4743,6 +4767,13 @@ create_hashjoin_plan(PlannerInfo *root,
 	AttrNumber	skewColumn = InvalidAttrNumber;
 	bool		skewInherit = false;
 	ListCell   *lc;
+	List	   *joinpartprune_info_list;
+
+	/*
+	 * Collect information required to build JoinPartitionPruneInfos at this
+	 * join.
+	 */
+	prepare_join_partition_prune_candidate(root, &best_path->jpath);
 
 	/*
 	 * HashJoin can project, so we don't have to demand exact tlists from the
@@ -4753,6 +4784,11 @@ create_hashjoin_plan(PlannerInfo *root,
 	 */
 	outer_plan = create_plan_recurse(root, best_path->jpath.outerjoinpath,
 									 (best_path->num_batches > 1) ? CP_SMALL_TLIST : 0);
+
+	/*
+	 * Retrieve all the JoinPartitionPruneInfos for this join.
+	 */
+	joinpartprune_info_list = get_join_partition_prune_candidate(root);
 
 	inner_plan = create_plan_recurse(root, best_path->jpath.innerjoinpath,
 									 CP_SMALL_TLIST);
@@ -4859,7 +4895,8 @@ create_hashjoin_plan(PlannerInfo *root,
 						  inner_hashkeys,
 						  skewTable,
 						  skewColumn,
-						  skewInherit);
+						  skewInherit,
+						  joinpartprune_info_list);
 
 	/*
 	 * Set Hash node's startup & total costs equal to total cost of input
@@ -5986,7 +6023,8 @@ make_hash(Plan *lefttree,
 		  List *hashkeys,
 		  Oid skewTable,
 		  AttrNumber skewColumn,
-		  bool skewInherit)
+		  bool skewInherit,
+		  List *joinpartprune_info_list)
 {
 	Hash	   *node = makeNode(Hash);
 	Plan	   *plan = &node->plan;
@@ -6000,6 +6038,7 @@ make_hash(Plan *lefttree,
 	node->skewTable = skewTable;
 	node->skewColumn = skewColumn;
 	node->skewInherit = skewInherit;
+	node->joinpartprune_info_list = joinpartprune_info_list;
 
 	return node;
 }

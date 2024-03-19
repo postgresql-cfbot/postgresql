@@ -48,7 +48,9 @@
 #include "optimizer/appendinfo.h"
 #include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
+#include "optimizer/paramassign.h"
 #include "optimizer/pathnode.h"
+#include "optimizer/restrictinfo.h"
 #include "parser/parsetree.h"
 #include "partitioning/partbounds.h"
 #include "partitioning/partprune.h"
@@ -102,15 +104,16 @@ typedef enum PartClauseTarget
  *
  * gen_partprune_steps() initializes and returns an instance of this struct.
  *
- * Note that has_mutable_op, has_mutable_arg, and has_exec_param are set if
- * we found any potentially-useful-for-pruning clause having those properties,
- * whether or not we actually used the clause in the steps list.  This
- * definition allows us to skip the PARTTARGET_EXEC pass in some cases.
+ * Note that has_mutable_op, has_mutable_arg, has_exec_param and has_vars are
+ * set if we found any potentially-useful-for-pruning clause having those
+ * properties, whether or not we actually used the clause in the steps list.
+ * This definition allows us to skip the PARTTARGET_EXEC pass in some cases.
  */
 typedef struct GeneratePruningStepsContext
 {
 	/* Copies of input arguments for gen_partprune_steps: */
 	RelOptInfo *rel;			/* the partitioned relation */
+	Bitmapset  *available_rels;	/* rels whose Vars may be used for pruning */
 	PartClauseTarget target;	/* use-case we're generating steps for */
 	/* Result data: */
 	List	   *steps;			/* list of PartitionPruneSteps */
@@ -118,6 +121,7 @@ typedef struct GeneratePruningStepsContext
 	bool		has_mutable_arg;	/* clauses include any mutable comparison
 									 * values, *other than* exec params */
 	bool		has_exec_param; /* clauses include any PARAM_EXEC params */
+	bool		has_vars;		/* clauses include any Vars from 'available_rels' */
 	bool		contradictory;	/* clauses were proven self-contradictory */
 	/* Working state: */
 	int			next_step_id;
@@ -143,8 +147,10 @@ static List *make_partitionedrel_pruneinfo(PlannerInfo *root,
 										   List *prunequal,
 										   Bitmapset *partrelids,
 										   int *relid_subplan_map,
+										   Bitmapset *available_rels,
 										   Bitmapset **matchedsubplans);
 static void gen_partprune_steps(RelOptInfo *rel, List *clauses,
+								Bitmapset *available_rels,
 								PartClauseTarget target,
 								GeneratePruningStepsContext *context);
 static List *gen_partprune_steps_internal(GeneratePruningStepsContext *context,
@@ -203,6 +209,10 @@ static PartClauseMatchStatus match_boolean_partition_clause(Oid partopfamily,
 static void partkey_datum_from_expr(PartitionPruneContext *context,
 									Expr *expr, int stateidx,
 									Datum *value, bool *isnull);
+static bool contain_forbidden_var_clause(Node *node,
+										 GeneratePruningStepsContext *context);
+static bool contain_forbidden_var_clause_walker(Node *node,
+												GeneratePruningStepsContext *context);
 
 
 /*
@@ -215,11 +225,14 @@ static void partkey_datum_from_expr(PartitionPruneContext *context,
  * of scan paths for its child rels.
  * 'prunequal' is a list of potential pruning quals (i.e., restriction
  * clauses that are applicable to the appendrel).
+ * 'available_rels' is the relid set of rels whose Vars may be used for
+ * pruning.
  */
 PartitionPruneInfo *
 make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 						 List *subpaths,
-						 List *prunequal)
+						 List *prunequal,
+						 Bitmapset *available_rels)
 {
 	PartitionPruneInfo *pruneinfo;
 	Bitmapset  *allmatchedsubplans = NULL;
@@ -312,6 +325,7 @@ make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 												  prunequal,
 												  partrelids,
 												  relid_subplan_map,
+												  available_rels,
 												  &matchedsubplans);
 
 		/* When pruning is possible, record the matched subplans */
@@ -357,6 +371,184 @@ make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 		pruneinfo->other_subplans = NULL;
 
 	return pruneinfo;
+}
+
+/*
+ * make_join_partition_pruneinfos
+ *		Builds one JoinPartitionPruneInfo for each join at which join partition
+ *		pruning is possible for this appendrel.
+ *
+ * 'parentrel' is the RelOptInfo for an appendrel, and 'subpaths' is the list
+ * of scan paths for its child rels.
+ */
+Bitmapset *
+make_join_partition_pruneinfos(PlannerInfo *root, RelOptInfo *parentrel,
+							   Path *best_path, List *subpaths)
+{
+	Bitmapset  *result = NULL;
+	ListCell   *lc;
+
+	if (!IS_PARTITIONED_REL(parentrel))
+		return NULL;
+
+	foreach(lc, root->join_partition_prune_candidates)
+	{
+		JoinPartitionPruneCandidateInfo *candidate =
+			(JoinPartitionPruneCandidateInfo *) lfirst(lc);
+		PartitionPruneInfo *part_prune_info;
+		List	   *prunequal;
+		Relids		joinrelids;
+		ListCell   *l;
+		double		prune_cost;
+
+		if (candidate == NULL)
+			continue;
+
+		/*
+		 * Identify all joinclauses that are movable to this appendrel given
+		 * this inner side relids.  Only those clauses can be used for join
+		 * partition pruning.
+		 */
+		joinrelids = bms_union(parentrel->relids, candidate->inner_relids);
+		prunequal = NIL;
+		foreach(l, candidate->joinrestrictinfo)
+		{
+			RestrictInfo *rinfo = (RestrictInfo *) lfirst(l);
+
+			if (join_clause_is_movable_into(rinfo,
+											parentrel->relids,
+											joinrelids))
+				prunequal = lappend(prunequal, rinfo);
+		}
+
+		if (prunequal == NIL)
+			continue;
+
+		/*
+		 * Check the overhead of this pruning
+		 */
+		prune_cost = compute_partprune_cost(root,
+											parentrel,
+											best_path->total_cost,
+											list_length(subpaths),
+											candidate->inner_relids,
+											candidate->inner_rows,
+											prunequal);
+		if (prune_cost > 0)
+			continue;
+
+		part_prune_info = make_partition_pruneinfo(root, parentrel,
+												   subpaths,
+												   prunequal,
+												   candidate->inner_relids);
+
+		if (part_prune_info)
+		{
+			JoinPartitionPruneInfo *jpinfo;
+
+			jpinfo = makeNode(JoinPartitionPruneInfo);
+
+			jpinfo->part_prune_info = part_prune_info;
+			jpinfo->paramid = assign_special_exec_param(root);
+			jpinfo->nplans = list_length(subpaths);
+
+			candidate->joinpartprune_info_list =
+				lappend(candidate->joinpartprune_info_list, jpinfo);
+
+			result = bms_add_member(result, jpinfo->paramid);
+		}
+	}
+
+	return result;
+}
+
+/*
+ * prepare_join_partition_prune_candidate
+ * 		Check if join partition pruning is possible at this join and if so
+ * 		collect information required to build JoinPartitionPruneInfos.
+ *
+ * Note that we may build more than one JoinPartitionPruneInfo at one join, for
+ * different Append/MergeAppend paths.
+ */
+void
+prepare_join_partition_prune_candidate(PlannerInfo *root, JoinPath *jpath)
+{
+	JoinPartitionPruneCandidateInfo *candidate;
+
+	if (!enable_partition_pruning)
+	{
+		root->join_partition_prune_candidates =
+			lappend(root->join_partition_prune_candidates, NULL);
+		return;
+	}
+
+	/*
+	 * For now do not perform join partition pruning for parallel hashjoin.
+	 */
+	if (jpath->path.parallel_workers > 0)
+	{
+		root->join_partition_prune_candidates =
+			lappend(root->join_partition_prune_candidates, NULL);
+		return;
+	}
+
+	/*
+	 * We cannot perform join partition pruning if the outer is the
+	 * non-nullable side.
+	 */
+	if (!(jpath->jointype == JOIN_INNER ||
+		  jpath->jointype == JOIN_SEMI ||
+		  jpath->jointype == JOIN_RIGHT ||
+		  jpath->jointype == JOIN_RIGHT_ANTI))
+	{
+		root->join_partition_prune_candidates =
+			lappend(root->join_partition_prune_candidates, NULL);
+		return;
+	}
+
+	/*
+	 * For now we only support HashJoin.
+	 */
+	if (jpath->path.pathtype != T_HashJoin)
+	{
+		root->join_partition_prune_candidates =
+			lappend(root->join_partition_prune_candidates, NULL);
+		return;
+	}
+
+	candidate = makeNode(JoinPartitionPruneCandidateInfo);
+	candidate->joinrestrictinfo = jpath->joinrestrictinfo;
+	candidate->inner_relids = jpath->innerjoinpath->parent->relids;
+	candidate->inner_rows = jpath->innerjoinpath->parent->rows;
+	candidate->joinpartprune_info_list = NIL;
+
+	root->join_partition_prune_candidates =
+		lappend(root->join_partition_prune_candidates, candidate);
+}
+
+/*
+ * get_join_partition_prune_candidate
+ *		Pop out the JoinPartitionPruneCandidateInfo for this join and retrieve
+ *		the JoinPartitionPruneInfos.
+ */
+List *
+get_join_partition_prune_candidate(PlannerInfo *root)
+{
+	JoinPartitionPruneCandidateInfo *candidate;
+	List   *result;
+
+	candidate = llast(root->join_partition_prune_candidates);
+	root->join_partition_prune_candidates =
+		list_delete_last(root->join_partition_prune_candidates);
+
+	if (candidate == NULL)
+		return NIL;
+
+	result = candidate->joinpartprune_info_list;
+
+	pfree(candidate);
+
+	return result;
 }
 
 /*
@@ -427,6 +619,8 @@ add_part_relids(List *allpartrelids, Bitmapset *partrelids)
  * partrelids: Set of RT indexes identifying relevant partitioned tables
  *   within a single partitioning hierarchy
  * relid_subplan_map[]: maps child relation relids to subplan indexes
+ * available_rels: the relid set of rels whose Vars may be used for
+ *   pruning.
  * matchedsubplans: on success, receives the set of subplan indexes which
  *   were matched to this partition hierarchy
  *
@@ -439,6 +633,7 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 							  List *prunequal,
 							  Bitmapset *partrelids,
 							  int *relid_subplan_map,
+							  Bitmapset *available_rels,
 							  Bitmapset **matchedsubplans)
 {
 	RelOptInfo *targetpart = NULL;
@@ -538,8 +733,8 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 		 * pruning steps and detects whether there's any possibly-useful quals
 		 * that would require per-scan pruning.
 		 */
-		gen_partprune_steps(subpart, partprunequal, PARTTARGET_INITIAL,
-							&context);
+		gen_partprune_steps(subpart, partprunequal, available_rels,
+							PARTTARGET_INITIAL, &context);
 
 		if (context.contradictory)
 		{
@@ -566,14 +761,15 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 			initial_pruning_steps = NIL;
 
 		/*
-		 * If no exec Params appear in potentially-usable pruning clauses,
-		 * then there's no point in even thinking about per-scan pruning.
+		 * If no exec Params or available Vars appear in potentially-usable
+		 * pruning clauses, then there's no point in even thinking about
+		 * per-scan pruning.
 		 */
-		if (context.has_exec_param)
+		if (context.has_exec_param || context.has_vars)
 		{
 			/* ... OK, we'd better think about it */
-			gen_partprune_steps(subpart, partprunequal, PARTTARGET_EXEC,
-								&context);
+			gen_partprune_steps(subpart, partprunequal, available_rels,
+								PARTTARGET_EXEC, &context);
 
 			if (context.contradictory)
 			{
@@ -586,11 +782,14 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 			/*
 			 * Detect which exec Params actually got used; the fact that some
 			 * were in available clauses doesn't mean we actually used them.
-			 * Skip per-scan pruning if there are none.
 			 */
 			execparamids = get_partkey_exec_paramids(exec_pruning_steps);
 
-			if (bms_is_empty(execparamids))
+			/*
+			 * Skip per-scan pruning if there are none used exec Params and
+			 * there are none available Vars.
+			 */
+			if (bms_is_empty(execparamids) && !context.has_vars)
 				exec_pruning_steps = NIL;
 		}
 		else
@@ -702,6 +901,9 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
  *		Process 'clauses' (typically a rel's baserestrictinfo list of clauses)
  *		and create a list of "partition pruning steps".
  *
+ * 'available_rels' is the relid set of rels whose Vars may be used for
+ * pruning.
+ *
  * 'target' tells whether to generate pruning steps for planning (use
  * immutable clauses only), or for executor startup (use any allowable
  * clause except ones containing PARAM_EXEC Params), or for executor
@@ -711,12 +913,13 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
  * some subsidiary flags; see the GeneratePruningStepsContext typedef.
  */
 static void
-gen_partprune_steps(RelOptInfo *rel, List *clauses, PartClauseTarget target,
-					GeneratePruningStepsContext *context)
+gen_partprune_steps(RelOptInfo *rel, List *clauses, Bitmapset *available_rels,
+					PartClauseTarget target, GeneratePruningStepsContext *context)
 {
 	/* Initialize all output values to zero/false/NULL */
 	memset(context, 0, sizeof(GeneratePruningStepsContext));
 	context->rel = rel;
+	context->available_rels = available_rels;
 	context->target = target;
 
 	/*
@@ -772,7 +975,7 @@ prune_append_rel_partitions(RelOptInfo *rel)
 	 * If the clauses are found to be contradictory, we can return the empty
 	 * set.
 	 */
-	gen_partprune_steps(rel, clauses, PARTTARGET_PLANNER,
+	gen_partprune_steps(rel, clauses, NULL, PARTTARGET_PLANNER,
 						&gcontext);
 	if (gcontext.contradictory)
 		return NULL;
@@ -2020,9 +2223,10 @@ match_clause_to_partition_key(GeneratePruningStepsContext *context,
 				return PARTCLAUSE_UNSUPPORTED;
 
 			/*
-			 * We can never prune using an expression that contains Vars.
+			 * We can never prune using an expression that contains Vars except
+			 * for Vars belonging to context->available_rels.
 			 */
-			if (contain_var_clause((Node *) expr))
+			if (contain_forbidden_var_clause((Node *) expr, context))
 				return PARTCLAUSE_UNSUPPORTED;
 
 			/*
@@ -2218,9 +2422,10 @@ match_clause_to_partition_key(GeneratePruningStepsContext *context,
 				return PARTCLAUSE_UNSUPPORTED;
 
 			/*
-			 * We can never prune using an expression that contains Vars.
+			 * We can never prune using an expression that contains Vars except
+			 * for Vars belonging to context->available_rels.
 			 */
-			if (contain_var_clause((Node *) rightop))
+			if (contain_forbidden_var_clause((Node *) rightop, context))
 				return PARTCLAUSE_UNSUPPORTED;
 
 			/*
@@ -3789,4 +3994,55 @@ partkey_datum_from_expr(PartitionPruneContext *context,
 		ectx = context->exprcontext;
 		*value = ExecEvalExprSwitchContext(exprstate, ectx, isnull);
 	}
+}
+
+/*
+ * contain_forbidden_var_clause
+ *	  Recursively scan a clause to discover whether it contains any Var nodes
+ *	  (of the current query level) that do not belong to relations in
+ *	  context->available_rels.
+ *
+ *	  Returns true if any such varnode found.
+ *
+ * Does not examine subqueries, therefore must only be used after reduction
+ * of sublinks to subplans!
+ */
+static bool
+contain_forbidden_var_clause(Node *node, GeneratePruningStepsContext *context)
+{
+	return contain_forbidden_var_clause_walker(node, context);
+}
+
+static bool
+contain_forbidden_var_clause_walker(Node *node, GeneratePruningStepsContext *context)
+{
+	if (node == NULL)
+		return false;
+	if (IsA(node, Var))
+	{
+		Var		*var = (Var *) node;
+
+		if (var->varlevelsup != 0)
+			return false;
+
+		if (!bms_is_member(var->varno, context->available_rels))
+			return true;		/* abort the tree traversal and return true */
+
+		context->has_vars = true;
+
+		if (context->target != PARTTARGET_EXEC)
+			return true;		/* abort the tree traversal and return true */
+
+		return false;
+	}
+	if (IsA(node, CurrentOfExpr))
+		return true;
+	if (IsA(node, PlaceHolderVar))
+	{
+		if (((PlaceHolderVar *) node)->phlevelsup == 0)
+			return true;		/* abort the tree traversal and return true */
+		/* else fall through to check the contained expr */
+	}
+	return expression_tree_walker(node, contain_forbidden_var_clause_walker,
+								  (void *) context);
 }

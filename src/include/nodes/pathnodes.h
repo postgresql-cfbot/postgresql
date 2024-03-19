@@ -530,6 +530,9 @@ struct PlannerInfo
 	/* not-yet-assigned NestLoopParams */
 	List	   *curOuterParams;
 
+	/* a stack of JoinPartitionPruneInfos */
+	List	   *join_partition_prune_candidates;
+
 	/*
 	 * These fields are workspace for setrefs.c.  Each is an array
 	 * corresponding to glob->subplans.  (We could probably teach

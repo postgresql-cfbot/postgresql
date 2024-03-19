@@ -19,6 +19,8 @@
 
 struct PlannerInfo;				/* avoid including pathnodes.h here */
 struct RelOptInfo;
+struct Path;
+struct JoinPath;
 
 
 /*
@@ -73,7 +75,15 @@ typedef struct PartitionPruneContext
 extern PartitionPruneInfo *make_partition_pruneinfo(struct PlannerInfo *root,
 													struct RelOptInfo *parentrel,
 													List *subpaths,
-													List *prunequal);
+													List *prunequal,
+													Bitmapset *available_rels);
+extern Bitmapset *make_join_partition_pruneinfos(struct PlannerInfo *root,
+												 struct RelOptInfo *parentrel,
+												 struct Path *best_path,
+												 List *subpaths);
+extern void prepare_join_partition_prune_candidate(struct PlannerInfo *root,
+												   struct JoinPath *jpath);
+extern List *get_join_partition_prune_candidate(struct PlannerInfo *root);
 extern Bitmapset *prune_append_rel_partitions(struct RelOptInfo *rel);
 extern Bitmapset *get_matching_partitions(PartitionPruneContext *context,
 										  List *pruning_steps);

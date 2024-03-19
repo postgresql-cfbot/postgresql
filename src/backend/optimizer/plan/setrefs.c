@@ -155,6 +155,11 @@ static Plan *set_mergeappend_references(PlannerInfo *root,
 										MergeAppend *mplan,
 										int rtoffset);
 static void set_hash_references(PlannerInfo *root, Plan *plan, int rtoffset);
+static void set_joinpartitionprune_references(PlannerInfo *root,
+											  List *joinpartprune_info_list,
+											  indexed_tlist *outer_itlist,
+											  int rtoffset,
+											  double num_exec);
 static Relids offset_relid_set(Relids relids, int rtoffset);
 static Node *fix_scan_expr(PlannerInfo *root, Node *node,
 						   int rtoffset, double num_exec);
@@ -1896,6 +1901,62 @@ set_hash_references(PlannerInfo *root, Plan *plan, int rtoffset)
 
 	/* Hash nodes don't have their own quals */
 	Assert(plan->qual == NIL);
+
+	set_joinpartitionprune_references(root,
+									  hplan->joinpartprune_info_list,
+									  outer_itlist,
+									  rtoffset,
+									  NUM_EXEC_TLIST(plan));
+}
+
+/*
+ * set_joinpartitionprune_references
+ *	   Do set_plan_references processing on JoinPartitionPruneInfos
+ */
+static void
+set_joinpartitionprune_references(PlannerInfo *root,
+								  List *joinpartprune_info_list,
+								  indexed_tlist *outer_itlist,
+								  int rtoffset,
+								  double num_exec)
+{
+	ListCell   *l;
+
+	foreach(l, joinpartprune_info_list)
+	{
+		JoinPartitionPruneInfo *jpinfo = (JoinPartitionPruneInfo *) lfirst(l);
+		ListCell   *l1;
+
+		foreach(l1, jpinfo->part_prune_info->prune_infos)
+		{
+			List	   *prune_infos = lfirst(l1);
+			ListCell   *l2;
+
+			foreach(l2, prune_infos)
+			{
+				PartitionedRelPruneInfo *pinfo = lfirst(l2);
+
+				pinfo->rtindex += rtoffset;
+
+				pinfo->initial_pruning_steps = (List *)
+					fix_upper_expr(root,
+								   (Node *) pinfo->initial_pruning_steps,
+								   outer_itlist,
+								   OUTER_VAR,
+								   rtoffset,
+								   NRM_EQUAL,
+								   num_exec);
+				pinfo->exec_pruning_steps = (List *)
+					fix_upper_expr(root,
+								   (Node *) pinfo->exec_pruning_steps,
+								   outer_itlist,
+								   OUTER_VAR,
+								   rtoffset,
+								   NRM_EQUAL,
+								   num_exec);
+			}
+		}
+	}
 }
 
 /*

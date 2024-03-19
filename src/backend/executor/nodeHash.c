@@ -30,6 +30,7 @@
 #include "access/parallel.h"
 #include "catalog/pg_statistic.h"
 #include "commands/tablespace.h"
+#include "executor/execPartition.h"
 #include "executor/executor.h"
 #include "executor/hashjoin.h"
 #include "executor/nodeHash.h"
@@ -47,6 +48,8 @@ static void ExecHashIncreaseNumBatches(HashJoinTable hashtable);
 static void ExecHashIncreaseNumBuckets(HashJoinTable hashtable);
 static void ExecParallelHashIncreaseNumBatches(HashJoinTable hashtable);
 static void ExecParallelHashIncreaseNumBuckets(HashJoinTable hashtable);
+static void ExecJoinPartitionPrune(HashState *node);
+static void ExecStoreJoinPartitionPruneResult(HashState *node);
 static void ExecHashBuildSkewHash(HashJoinTable hashtable, Hash *node,
 								  int mcvsToUse);
 static void ExecHashSkewTableInsert(HashJoinTable hashtable,
@@ -188,7 +191,13 @@ MultiExecPrivateHash(HashState *node)
 			}
 			hashtable->totalTuples += 1;
 		}
+
+		/* Perform join partition pruning */
+		ExecJoinPartitionPrune(node);
 	}
+
+	/* Store the surviving partitions for Append/MergeAppend nodes */
+	ExecStoreJoinPartitionPruneResult(node);
 
 	/* resize the hash table if needed (NTUP_PER_BUCKET exceeded) */
 	if (hashtable->nbuckets != hashtable->nbuckets_optimal)
@@ -399,6 +408,12 @@ ExecInitHash(Hash *node, EState *estate, int eflags)
 	Assert(node->plan.qual == NIL);
 	hashstate->hashkeys =
 		ExecInitExprList(node->hashkeys, (PlanState *) hashstate);
+
+	/*
+	 * initialize join partition pruning infos
+	 */
+	hashstate->joinpartprune_state_list =
+		ExecInitJoinpartpruneList(&hashstate->ps, node->joinpartprune_info_list);
 
 	return hashstate;
 }
@@ -1610,6 +1625,56 @@ ExecParallelHashIncreaseNumBuckets(HashJoinTable hashtable)
 }
 
 /*
+ * ExecJoinPartitionPrune
+ *		Perform join partition pruning at this join for each
+ *		JoinPartitionPruneState.
+ */
+static void
+ExecJoinPartitionPrune(HashState *node)
+{
+	ListCell   *lc;
+
+	foreach(lc, node->joinpartprune_state_list)
+	{
+		JoinPartitionPruneState *jpstate = (JoinPartitionPruneState *) lfirst(lc);
+		Bitmapset	   *matching_subPlans;
+
+		if (jpstate->finished)
+			continue;
+
+		matching_subPlans =
+			ExecFindMatchingSubPlans(jpstate->part_prune_state, false, NULL);
+		jpstate->part_prune_result =
+			bms_add_members(jpstate->part_prune_result, matching_subPlans);
+
+		if (bms_num_members(jpstate->part_prune_result) == jpstate->nplans)
+			jpstate->finished = true;
+	}
+}
+
+/*
+ * ExecStoreJoinPartitionPruneResult
+ *		For each JoinPartitionPruneState, store the set of surviving partitions
+ *		to make it available for the Append/MergeAppend node.
+ */
+static void
+ExecStoreJoinPartitionPruneResult(HashState *node)
+{
+	ListCell   *lc;
+
+	foreach(lc, node->joinpartprune_state_list)
+	{
+		JoinPartitionPruneState *jpstate = (JoinPartitionPruneState *) lfirst(lc);
+		ParamExecData	   *param;
+
+		param = &(node->ps.state->es_param_exec_vals[jpstate->paramid]);
+		Assert(param->execPlan == NULL);
+		Assert(!param->isnull);
+		param->value = PointerGetDatum(jpstate);
+	}
+}
+
+/*
  * ExecHashTableInsert
  *		insert a tuple into the hash table depending on the hash value
  *		it may just go to a temp file for later batches
@@ -2353,6 +2418,16 @@ void
 ExecReScanHash(HashState *node)
 {
 	PlanState  *outerPlan = outerPlanState(node);
+	ListCell   *lc;
+
+	/* reset the state in JoinPartitionPruneStates */
+	foreach(lc, node->joinpartprune_state_list)
+	{
+		JoinPartitionPruneState *jpstate = (JoinPartitionPruneState *) lfirst(lc);
+
+		jpstate->finished = false;
+		jpstate->part_prune_result = NULL;
+	}
 
 	/*
 	 * if chgParam of subnode is not null then plan will be re-scanned by

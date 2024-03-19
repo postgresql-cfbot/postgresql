@@ -764,6 +764,45 @@ select tbl1.col1, tprt.col1 from tbl1
 inner join tprt on tbl1.col1 = tprt.col1
 order by tbl1.col1, tprt.col1;
 
+-- join partition pruning
+
+-- The 'Memory Usage' from the Hash node can vary between machines.  Let's just
+-- replace the number with an 'N'.
+-- We need to run EXPLAIN ANALYZE because we need to see '(never executed)'
+-- notations because that's the only way to verify runtime pruning.
+create function explain_join_partition_pruning(text) returns setof text
+language plpgsql as
+$$
+declare
+    ln text;
+begin
+    for ln in
+        execute format('explain (analyze, verbose, costs off, summary off, timing off) %s',
+            $1)
+    loop
+        ln := regexp_replace(ln, 'Memory Usage: \d+', 'Memory Usage: N');
+        return next ln;
+    end loop;
+end;
+$$;
+
+delete from tbl1;
+insert into tbl1 values (501), (505);
+analyze tbl1, tprt;
+
+set enable_nestloop = off;
+set enable_mergejoin = off;
+set enable_hashjoin = on;
+
+select explain_join_partition_pruning('
+select * from tprt p1
+   inner join tprt p2 on p1.col1 = p2.col1
+   right join tbl1 t on p1.col1 = t.col1 and p2.col1 = t.col1;');
+
+select * from tprt p1
+   inner join tprt p2 on p1.col1 = p2.col1
+   right join tbl1 t on p1.col1 = t.col1 and p2.col1 = t.col1;
+
 drop table tbl1, tprt;
 
 -- Test with columns defined in varying orders between each level

@@ -310,6 +310,16 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 					 */
 					node->hj_FirstOuterTupleSlot = NULL;
 				}
+				else if (hashNode->joinpartprune_state_list != NIL)
+				{
+					/*
+					 * Give the hash node a chance to run join partition
+					 * pruning if there is any JoinPartitionPruneState that can
+					 * be evaluated at it.  So do not apply the empty-outer
+					 * optimization in this case.
+					 */
+					node->hj_FirstOuterTupleSlot = NULL;
+				}
 				else if (HJ_FILL_OUTER(node) ||
 						 (outerNode->plan->startup_cost < hashNode->ps.plan->total_cost &&
 						  !node->hj_OuterNotEmpty))

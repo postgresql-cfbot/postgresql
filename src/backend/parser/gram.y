@@ -5258,6 +5258,7 @@ CreateSessionVarStmt:
  * transaction end like tables.
  */
 XactEndActionOption:  ON COMMIT DROP				{ $$ = VARIABLE_XACTEND_DROP; }
+			| ON TRANSACTION END_P RESET			{ $$ = VARIABLE_XACTEND_RESET; }
 			| /*EMPTY*/								{ $$ = VARIABLE_XACTEND_NOOP; }
 		;
 

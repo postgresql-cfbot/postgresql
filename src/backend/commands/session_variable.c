@@ -83,6 +83,8 @@ typedef struct SVariableData
 	void	   *domain_check_extra;
 	LocalTransactionId domain_check_extra_lxid;
 
+	bool		reset_at_eox;
+
 	/*
 	 * Top level local transaction id of the last transaction that dropped the
 	 * variable if any.  We need this information to avoid freeing memory for
@@ -109,6 +111,12 @@ static MemoryContext SVariableMemoryContext = NULL;
 
 /* true after accepted sinval message */
 static bool needs_validation = false;
+
+/*
+ * true, when some used session variable has ON COMMIT DROP
+ * or ON TRANSACTION END RESET clauses
+ */
+static bool has_session_variables_with_reset_at_eox = false;
 
 /*
  * The content of session variables is not removed immediately. When it
@@ -389,12 +397,40 @@ remove_invalid_session_variables(bool atEOX)
 }
 
 /*
+ * remove entries marked as "reset_at_eox"
+ */
+static void
+remove_session_variables_with_reset_at_eox(void)
+{
+	HASH_SEQ_STATUS status;
+	SVariable	svar;
+
+	if (!sessionvars)
+		return;
+
+	/* leave quckly, when there are not that variables */
+	if (!has_session_variables_with_reset_at_eox)
+		return;
+
+	hash_seq_init(&status, sessionvars);
+	while ((svar = (SVariable) hash_seq_search(&status)) != NULL)
+	{
+		if (svar->reset_at_eox)
+			hash_search(sessionvars, &svar->varid, HASH_REMOVE, NULL);
+	}
+
+	has_session_variables_with_reset_at_eox = false;
+}
+
+/*
   * Perform ON COMMIT DROP for temporary session variables,
   * and remove all dropped variables from memory.
  */
 void
 AtPreEOXact_SessionVariables(bool isCommit)
 {
+	remove_session_variables_with_reset_at_eox();
+
 	if (isCommit)
 	{
 		if (xact_drop_items)
@@ -505,6 +541,21 @@ setup_session_variable(SVariable svar, Oid varid)
 	svar->is_domain = (get_typtype(varform->vartype) == TYPTYPE_DOMAIN);
 	svar->domain_check_extra = NULL;
 	svar->domain_check_extra_lxid = InvalidLocalTransactionId;
+
+	/*
+	 * We don't need to explicitly reset variables marked ON COMMIT DROP. It
+	 * can be done by sinval message processing. But this processing can be
+	 * postponed due aborted transaction. On second hand there is not a
+	 * reason, why don't do it at transaction end immediately.
+	 */
+	if (varform->varxactendaction == VARIABLE_XACTEND_RESET ||
+		varform->varxactendaction == VARIABLE_XACTEND_DROP)
+	{
+		svar->reset_at_eox = true;
+		has_session_variables_with_reset_at_eox = true;
+	}
+	else
+		svar->reset_at_eox = false;
 
 	svar->drop_lxid = InvalidTransactionId;
 

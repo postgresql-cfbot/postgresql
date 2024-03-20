@@ -9849,7 +9849,8 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
       </para>
       <para>
        Action performed at end of transaction:
-       <literal>n</literal> = no action, <literal>d</literal> = drop the variable.
+       <literal>n</literal> = no action, <literal>d</literal> = drop the variable,
+       <literal>r</literal> = reset the variable to its default value.
       </para></entry>
      </row>
 

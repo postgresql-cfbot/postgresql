@@ -27,7 +27,7 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 CREATE [ { TEMPORARY | TEMP } ] VARIABLE [ IF NOT EXISTS ] <replaceable class="parameter">name</replaceable> [ AS ] <replaceable class="parameter">data_type</replaceable> ] [ COLLATE <replaceable class="parameter">collation</replaceable> ]
-    [ ON COMMIT DROP ]
+    [ { ON COMMIT DROP | ON TRANSACTION END RESET } ]
 </synopsis>
  </refsynopsisdiv>
  <refsect1>
@@ -113,6 +113,17 @@ CREATE [ { TEMPORARY | TEMP } ] VARIABLE [ IF NOT EXISTS ] <replaceable class="p
       temporary session variable at transaction commit. With this clause, the
       session variable is dropped at commit time. The clause is only allowed
       for temporary variables.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-createvariable-on-transaction-end-reset">
+    <term><literal>ON TRANSACTION END RESET</literal></term>
+    <listitem>
+     <para>
+      The <literal>ON TRANSACTION END RESET</literal> clause causes the session
+      variable to be reset to its default value when the transaction is committed
+      or rolled back.
      </para>
     </listitem>
    </varlistentry>

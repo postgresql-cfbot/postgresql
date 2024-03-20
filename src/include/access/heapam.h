@@ -322,7 +322,7 @@ extern void heap_page_prune(Relation relation, Buffer buffer,
 							struct GlobalVisState *vistest,
 							bool mark_unused_now,
 							PruneResult *presult,
-							OffsetNumber *off_loc);
+							OffsetNumber *off_loc_vacuum);
 extern void heap_page_prune_execute(Buffer buffer,
 									OffsetNumber *redirected, int nredirected,
 									OffsetNumber *nowdead, int ndead,

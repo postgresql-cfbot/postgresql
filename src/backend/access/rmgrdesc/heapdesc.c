@@ -358,6 +358,9 @@ heap2_identify(uint8 info)
 		case XLOG_HEAP2_PRUNE:
 			id = "PRUNE";
 			break;
+		case XLOG_HEAP2_PRUNE | XLOG_HEAP2_BYVACUUM:
+			id = "PRUNE+BYVACUUM";
+			break;
 		case XLOG_HEAP2_VACUUM:
 			id = "VACUUM";
 			break;

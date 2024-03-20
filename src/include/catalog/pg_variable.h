@@ -74,6 +74,7 @@ typedef enum VariableXactEndAction
 {
 	VARIABLE_XACTEND_NOOP = 'n',	/* NOOP */
 	VARIABLE_XACTEND_DROP = 'd',	/* ON COMMIT DROP */
+	VARIABLE_XACTEND_RESET = 'r',	/* ON TRANSACTION END RESET */
 }			VariableXactEndAction;
 
 /* ----------------

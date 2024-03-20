@@ -1017,3 +1017,23 @@ COMMIT;
 SELECT count(*) FROM pg_variable WHERE varname = 'var1';
 -- should be zero
 SELECT count(*) FROM pg_session_variables();
+
+CREATE VARIABLE var1 AS int ON TRANSACTION END RESET;
+
+BEGIN;
+  LET var1 = 100;
+  SELECT var1;
+COMMIT;
+
+-- should be NULL;
+SELECT var1 IS NULL;
+
+BEGIN;
+  LET var1 = 100;
+  SELECT var1;
+ROLLBACK;
+
+-- should be NULL
+SELECT var1 IS NULL;
+
+DROP VARIABLE var1;

@@ -5186,6 +5186,7 @@ listVariables(const char *pattern, bool verbose)
 					  "  pg_catalog.pg_get_userbyid(v.varowner) as \"%s\",\n"
 					  "  CASE v.varxactendaction\n"
 					  "    WHEN 'd' THEN 'ON COMMIT DROP'\n"
+					  "    WHEN 'r' THEN 'ON TRANSACTION END RESET'\n"
 					  "  END as \"%s\"\n",
 					  gettext_noop("Schema"),
 					  gettext_noop("Name"),

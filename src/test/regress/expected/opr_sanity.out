@@ -126,9 +126,10 @@ WHERE p1.oid < p2.oid AND
      p1.proretset != p2.proretset OR
      p1.provolatile != p2.provolatile OR
      p1.pronargs != p2.pronargs);
- oid | proname | oid | proname 
------+---------+-----+---------
-(0 rows)
+ oid  | proname | oid  | proname 
+------+---------+------+---------
+ 9896 | uuidv7  | 9897 | uuidv7
+(1 row)
 
 -- Look for uses of different type OIDs in the argument/result type fields
 -- for different aliases of the same built-in function.
@@ -874,6 +875,9 @@ xid8ne(xid8,xid8)
 xid8cmp(xid8,xid8)
 uuid_extract_timestamp(uuid)
 uuid_extract_version(uuid)
+uuidv4()
+uuidv7()
+uuidv7(interval)
 -- restore normal output mode
 \a\t
 -- List of functions used by libpq's fe-lobj.c

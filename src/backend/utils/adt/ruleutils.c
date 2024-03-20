@@ -520,6 +520,7 @@ static char *generate_qualified_type_name(Oid typid);
 static text *string_to_text(char *str);
 static char *flatten_reloptions(Oid relid);
 static void get_reloptions(StringInfo buf, Datum reloptions);
+static Oid pg_get_identity_sequence_internal(Oid tableOid, char *column);
 
 #define only_marker(rte)  ((rte)->inh ? "" : "ONLY ")
 
@@ -2789,6 +2790,28 @@ pg_get_userbyid(PG_FUNCTION_ARGS)
 
 
 /*
+ * pg_get_identity_sequence
+ *		Get the sequence used by an identity or serial column.
+ */
+Datum
+pg_get_identity_sequence(PG_FUNCTION_ARGS)
+{
+	Oid			tableOid = PG_GETARG_OID(0);
+	char	   *column = NameStr(*PG_GETARG_NAME(1));
+	Oid			sequenceId;
+
+	sequenceId = pg_get_identity_sequence_internal(tableOid, column);
+
+	if (OidIsValid(sequenceId))
+	{
+		PG_RETURN_OID(sequenceId);
+	}
+
+	PG_RETURN_NULL();
+}
+
+
+/*
  * pg_get_serial_sequence
  *		Get the name of the sequence used by an identity or serial column,
  *		formatted suitably for passing to setval, nextval or currval.
@@ -2803,6 +2826,32 @@ pg_get_serial_sequence(PG_FUNCTION_ARGS)
 	RangeVar   *tablerv;
 	Oid			tableOid;
 	char	   *column;
+	Oid			sequenceId;
+
+	/* Look up table name.  Can't lock it - we might not have privileges. */
+	tablerv = makeRangeVarFromNameList(textToQualifiedNameList(tablename));
+	tableOid = RangeVarGetRelid(tablerv, NoLock, false);
+
+	column = text_to_cstring(columnname);
+
+	sequenceId = pg_get_identity_sequence_internal(tableOid, column);
+
+	if (OidIsValid(sequenceId))
+	{
+		char	   *result;
+
+		result = generate_qualified_relation_name(sequenceId);
+
+		PG_RETURN_TEXT_P(string_to_text(result));
+	}
+
+	PG_RETURN_NULL();
+}
+
+
+static Oid
+pg_get_identity_sequence_internal(Oid tableOid, char *column)
+{
 	AttrNumber	attnum;
 	Oid			sequenceId = InvalidOid;
 	Relation	depRel;
@@ -2810,19 +2859,13 @@ pg_get_serial_sequence(PG_FUNCTION_ARGS)
 	SysScanDesc scan;
 	HeapTuple	tup;
 
-	/* Look up table name.  Can't lock it - we might not have privileges. */
-	tablerv = makeRangeVarFromNameList(textToQualifiedNameList(tablename));
-	tableOid = RangeVarGetRelid(tablerv, NoLock, false);
-
 	/* Get the number of the column */
-	column = text_to_cstring(columnname);
-
 	attnum = get_attnum(tableOid, column);
 	if (attnum == InvalidAttrNumber)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_COLUMN),
 				 errmsg("column \"%s\" of relation \"%s\" does not exist",
-						column, tablerv->relname)));
+						column, get_relation_name(tableOid))));
 
 	/* Search the dependency table for the dependent sequence */
 	depRel = table_open(DependRelationId, AccessShareLock);
@@ -2866,17 +2909,9 @@ pg_get_serial_sequence(PG_FUNCTION_ARGS)
 	systable_endscan(scan);
 	table_close(depRel, AccessShareLock);
 
-	if (OidIsValid(sequenceId))
-	{
-		char	   *result;
-
-		result = generate_qualified_relation_name(sequenceId);
-
-		PG_RETURN_TEXT_P(string_to_text(result));
-	}
-
-	PG_RETURN_NULL();
+	return sequenceId;
 }
+
 
 
 /*

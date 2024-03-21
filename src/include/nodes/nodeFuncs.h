@@ -219,4 +219,10 @@ extern bool planstate_tree_walker_impl(struct PlanState *planstate,
 									   planstate_tree_walker_callback walker,
 									   void *context);
 
+#ifdef USE_ASSERT_CHECKING
+extern void AssertRangeTblEntryIsValid(const RangeTblEntry *rte);
+#else
+#define AssertRangeTblEntryIsValid(rte) ((void)true)
+#endif
+
 #endif							/* NODEFUNCS_H */

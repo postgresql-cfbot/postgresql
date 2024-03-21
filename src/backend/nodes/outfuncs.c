@@ -21,6 +21,7 @@
 #include "lib/stringinfo.h"
 #include "miscadmin.h"
 #include "nodes/bitmapset.h"
+#include "nodes/nodeFuncs.h"
 #include "nodes/nodes.h"
 #include "nodes/pg_list.h"
 #include "utils/datum.h"
@@ -487,87 +488,6 @@ _outExtensibleNode(StringInfo str, const ExtensibleNode *node)
 
 	/* serialize the private fields */
 	methods->nodeOut(str, node);
-}
-
-static void
-_outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
-{
-	WRITE_NODE_TYPE("RANGETBLENTRY");
-
-	/* put alias + eref first to make dump more legible */
-	WRITE_NODE_FIELD(alias);
-	WRITE_NODE_FIELD(eref);
-	WRITE_ENUM_FIELD(rtekind, RTEKind);
-
-	switch (node->rtekind)
-	{
-		case RTE_RELATION:
-			WRITE_OID_FIELD(relid);
-			WRITE_BOOL_FIELD(inh);
-			WRITE_CHAR_FIELD(relkind);
-			WRITE_INT_FIELD(rellockmode);
-			WRITE_UINT_FIELD(perminfoindex);
-			WRITE_NODE_FIELD(tablesample);
-			break;
-		case RTE_SUBQUERY:
-			WRITE_NODE_FIELD(subquery);
-			WRITE_BOOL_FIELD(security_barrier);
-			/* we re-use these RELATION fields, too: */
-			WRITE_OID_FIELD(relid);
-			WRITE_BOOL_FIELD(inh);
-			WRITE_CHAR_FIELD(relkind);
-			WRITE_INT_FIELD(rellockmode);
-			WRITE_UINT_FIELD(perminfoindex);
-			break;
-		case RTE_JOIN:
-			WRITE_ENUM_FIELD(jointype, JoinType);
-			WRITE_INT_FIELD(joinmergedcols);
-			WRITE_NODE_FIELD(joinaliasvars);
-			WRITE_NODE_FIELD(joinleftcols);
-			WRITE_NODE_FIELD(joinrightcols);
-			WRITE_NODE_FIELD(join_using_alias);
-			break;
-		case RTE_FUNCTION:
-			WRITE_NODE_FIELD(functions);
-			WRITE_BOOL_FIELD(funcordinality);
-			break;
-		case RTE_TABLEFUNC:
-			WRITE_NODE_FIELD(tablefunc);
-			break;
-		case RTE_VALUES:
-			WRITE_NODE_FIELD(values_lists);
-			WRITE_NODE_FIELD(coltypes);
-			WRITE_NODE_FIELD(coltypmods);
-			WRITE_NODE_FIELD(colcollations);
-			break;
-		case RTE_CTE:
-			WRITE_STRING_FIELD(ctename);
-			WRITE_UINT_FIELD(ctelevelsup);
-			WRITE_BOOL_FIELD(self_reference);
-			WRITE_NODE_FIELD(coltypes);
-			WRITE_NODE_FIELD(coltypmods);
-			WRITE_NODE_FIELD(colcollations);
-			break;
-		case RTE_NAMEDTUPLESTORE:
-			WRITE_STRING_FIELD(enrname);
-			WRITE_FLOAT_FIELD(enrtuples);
-			WRITE_NODE_FIELD(coltypes);
-			WRITE_NODE_FIELD(coltypmods);
-			WRITE_NODE_FIELD(colcollations);
-			/* we re-use these RELATION fields, too: */
-			WRITE_OID_FIELD(relid);
-			break;
-		case RTE_RESULT:
-			/* no extra fields */
-			break;
-		default:
-			elog(ERROR, "unrecognized RTE kind: %d", (int) node->rtekind);
-			break;
-	}
-
-	WRITE_BOOL_FIELD(lateral);
-	WRITE_BOOL_FIELD(inFromCl);
-	WRITE_NODE_FIELD(securityQuals);
 }
 
 static void

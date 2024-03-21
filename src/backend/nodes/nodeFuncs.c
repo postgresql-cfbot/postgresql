@@ -2817,41 +2817,20 @@ range_table_entry_walker_impl(RangeTblEntry *rte,
 		if (WALK(rte))
 			return true;
 
-	switch (rte->rtekind)
-	{
-		case RTE_RELATION:
-			if (WALK(rte->tablesample))
-				return true;
-			break;
-		case RTE_SUBQUERY:
-			if (!(flags & QTW_IGNORE_RT_SUBQUERIES))
-				if (WALK(rte->subquery))
-					return true;
-			break;
-		case RTE_JOIN:
-			if (!(flags & QTW_IGNORE_JOINALIASES))
-				if (WALK(rte->joinaliasvars))
-					return true;
-			break;
-		case RTE_FUNCTION:
-			if (WALK(rte->functions))
-				return true;
-			break;
-		case RTE_TABLEFUNC:
-			if (WALK(rte->tablefunc))
-				return true;
-			break;
-		case RTE_VALUES:
-			if (WALK(rte->values_lists))
-				return true;
-			break;
-		case RTE_CTE:
-		case RTE_NAMEDTUPLESTORE:
-		case RTE_RESULT:
-			/* nothing to do */
-			break;
-	}
-
+	if (WALK(rte->tablesample))
+		return true;
+	if (!(flags & QTW_IGNORE_RT_SUBQUERIES))
+		if (WALK(rte->subquery))
+			return true;
+	if (!(flags & QTW_IGNORE_JOINALIASES))
+		if (WALK(rte->joinaliasvars))
+			return true;
+	if (WALK(rte->functions))
+		return true;
+	if (WALK(rte->tablefunc))
+		return true;
+	if (WALK(rte->values_lists))
+		return true;
 	if (WALK(rte->securityQuals))
 		return true;
 
@@ -3838,47 +3817,32 @@ range_table_mutator_impl(List *rtable,
 		RangeTblEntry *newrte;
 
 		FLATCOPY(newrte, rte, RangeTblEntry);
-		switch (rte->rtekind)
+
+		MUTATE(newrte->tablesample, rte->tablesample, TableSampleClause *);
+
+		if (!(flags & QTW_IGNORE_RT_SUBQUERIES))
+			MUTATE(newrte->subquery, rte->subquery, Query *);
+		else
 		{
-			case RTE_RELATION:
-				MUTATE(newrte->tablesample, rte->tablesample,
-					   TableSampleClause *);
-				/* we don't bother to copy eref, aliases, etc; OK? */
-				break;
-			case RTE_SUBQUERY:
-				if (!(flags & QTW_IGNORE_RT_SUBQUERIES))
-					MUTATE(newrte->subquery, rte->subquery, Query *);
-				else
-				{
-					/* else, copy RT subqueries as-is */
-					newrte->subquery = copyObject(rte->subquery);
-				}
-				break;
-			case RTE_JOIN:
-				if (!(flags & QTW_IGNORE_JOINALIASES))
-					MUTATE(newrte->joinaliasvars, rte->joinaliasvars, List *);
-				else
-				{
-					/* else, copy join aliases as-is */
-					newrte->joinaliasvars = copyObject(rte->joinaliasvars);
-				}
-				break;
-			case RTE_FUNCTION:
-				MUTATE(newrte->functions, rte->functions, List *);
-				break;
-			case RTE_TABLEFUNC:
-				MUTATE(newrte->tablefunc, rte->tablefunc, TableFunc *);
-				break;
-			case RTE_VALUES:
-				MUTATE(newrte->values_lists, rte->values_lists, List *);
-				break;
-			case RTE_CTE:
-			case RTE_NAMEDTUPLESTORE:
-			case RTE_RESULT:
-				/* nothing to do */
-				break;
+			/* else, copy RT subqueries as-is */
+			newrte->subquery = copyObject(rte->subquery);
 		}
+
+		if (!(flags & QTW_IGNORE_JOINALIASES))
+			MUTATE(newrte->joinaliasvars, rte->joinaliasvars, List *);
+		else
+		{
+			/* else, copy join aliases as-is */
+			newrte->joinaliasvars = copyObject(rte->joinaliasvars);
+		}
+
+		MUTATE(newrte->functions, rte->functions, List *);
+		MUTATE(newrte->tablefunc, rte->tablefunc, TableFunc *);
+		MUTATE(newrte->values_lists, rte->values_lists, List *);
 		MUTATE(newrte->securityQuals, rte->securityQuals, List *);
+
+		/* we don't bother to copy eref, aliases, etc; OK? */
+
 		newrt = lappend(newrt, newrte);
 	}
 	return newrt;
@@ -4747,3 +4711,62 @@ planstate_walk_members(PlanState **planstates, int nplans,
 
 	return false;
 }
+
+#ifdef USE_ASSERT_CHECKING
+
+/*
+ * Assertion check that a RangeTblEntry node is filled with a valid
+ * combination of fields.
+ *
+ * Best used together with WRITE_READ_PARSE_PLAN_TREES.
+ */
+void
+AssertRangeTblEntryIsValid(const RangeTblEntry *rte)
+{
+	Assert(rte->rtekind == RTE_RELATION ||
+		   rte->rtekind == RTE_SUBQUERY ||
+		   rte->rtekind == RTE_JOIN ||
+		   rte->rtekind == RTE_FUNCTION ||
+		   rte->rtekind == RTE_TABLEFUNC ||
+		   rte->rtekind == RTE_VALUES ||
+		   rte->rtekind == RTE_CTE ||
+		   rte->rtekind == RTE_NAMEDTUPLESTORE ||
+		   rte->rtekind == RTE_RESULT);
+
+	Assert(rte->eref);
+
+	if (rte->relid)
+		Assert(rte->rtekind == RTE_RELATION || rte->rtekind == RTE_SUBQUERY || rte->rtekind == RTE_NAMEDTUPLESTORE);
+	if (rte->inh)
+		Assert(rte->rtekind == RTE_RELATION || rte->rtekind == RTE_SUBQUERY);
+	if (rte->relkind)
+		Assert(rte->rtekind == RTE_RELATION || rte->rtekind == RTE_SUBQUERY);
+	if (rte->rellockmode)
+		Assert(rte->rtekind == RTE_RELATION || rte->rtekind == RTE_SUBQUERY);
+	if (rte->tablesample)
+		Assert(rte->rtekind == RTE_RELATION);
+	if (rte->perminfoindex)
+		Assert(rte->rtekind == RTE_RELATION || rte->rtekind == RTE_SUBQUERY);
+	if (rte->subquery)
+		Assert(rte->rtekind == RTE_SUBQUERY);
+	if (rte->security_barrier)
+		Assert(rte->rtekind == RTE_SUBQUERY);
+	if (rte->joinmergedcols || rte->joinaliasvars || rte->joinleftcols || rte->joinrightcols || rte->join_using_alias)
+		Assert(rte->rtekind == RTE_JOIN);
+	if (rte->functions || rte->funcordinality)
+		Assert(rte->rtekind == RTE_FUNCTION);
+	if (rte->tablefunc)
+		Assert(rte->rtekind == RTE_TABLEFUNC);
+	if (rte->values_lists)
+		Assert(rte->rtekind == RTE_VALUES);
+	if (rte->ctename || rte->ctelevelsup || rte->self_reference)
+		Assert(rte->rtekind == RTE_CTE);
+	if (rte->coltypes || rte->coltypmods || rte->colcollations)
+		Assert(rte->rtekind == RTE_TABLEFUNC || rte->rtekind == RTE_VALUES || rte->rtekind == RTE_CTE || rte->rtekind == RTE_NAMEDTUPLESTORE);
+	if (rte->enrname || rte->enrtuples)
+		Assert(rte->rtekind == RTE_NAMEDTUPLESTORE);
+	if (rte->lateral)
+		Assert(rte->rtekind == RTE_RELATION || rte->rtekind == RTE_SUBQUERY || rte->rtekind == RTE_FUNCTION || rte->rtekind == RTE_TABLEFUNC || rte->rtekind == RTE_VALUES);
+}
+
+#endif

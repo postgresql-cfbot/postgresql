@@ -30,6 +30,7 @@
 
 #include "miscadmin.h"
 #include "nodes/bitmapset.h"
+#include "nodes/nodeFuncs.h"
 #include "nodes/readfuncs.h"
 
 
@@ -339,99 +340,6 @@ _readA_Const(void)
 	}
 
 	READ_LOCATION_FIELD(location);
-
-	READ_DONE();
-}
-
-static RangeTblEntry *
-_readRangeTblEntry(void)
-{
-	READ_LOCALS(RangeTblEntry);
-
-	/* put alias + eref first to make dump more legible */
-	READ_NODE_FIELD(alias);
-	READ_NODE_FIELD(eref);
-	READ_ENUM_FIELD(rtekind, RTEKind);
-
-	switch (local_node->rtekind)
-	{
-		case RTE_RELATION:
-			READ_OID_FIELD(relid);
-			READ_BOOL_FIELD(inh);
-			READ_CHAR_FIELD(relkind);
-			READ_INT_FIELD(rellockmode);
-			READ_UINT_FIELD(perminfoindex);
-			READ_NODE_FIELD(tablesample);
-			break;
-		case RTE_SUBQUERY:
-			READ_NODE_FIELD(subquery);
-			READ_BOOL_FIELD(security_barrier);
-			/* we re-use these RELATION fields, too: */
-			READ_OID_FIELD(relid);
-			READ_BOOL_FIELD(inh);
-			READ_CHAR_FIELD(relkind);
-			READ_INT_FIELD(rellockmode);
-			READ_UINT_FIELD(perminfoindex);
-			break;
-		case RTE_JOIN:
-			READ_ENUM_FIELD(jointype, JoinType);
-			READ_INT_FIELD(joinmergedcols);
-			READ_NODE_FIELD(joinaliasvars);
-			READ_NODE_FIELD(joinleftcols);
-			READ_NODE_FIELD(joinrightcols);
-			READ_NODE_FIELD(join_using_alias);
-			break;
-		case RTE_FUNCTION:
-			READ_NODE_FIELD(functions);
-			READ_BOOL_FIELD(funcordinality);
-			break;
-		case RTE_TABLEFUNC:
-			READ_NODE_FIELD(tablefunc);
-			/* The RTE must have a copy of the column type info, if any */
-			if (local_node->tablefunc)
-			{
-				TableFunc  *tf = local_node->tablefunc;
-
-				local_node->coltypes = tf->coltypes;
-				local_node->coltypmods = tf->coltypmods;
-				local_node->colcollations = tf->colcollations;
-			}
-			break;
-		case RTE_VALUES:
-			READ_NODE_FIELD(values_lists);
-			READ_NODE_FIELD(coltypes);
-			READ_NODE_FIELD(coltypmods);
-			READ_NODE_FIELD(colcollations);
-			break;
-		case RTE_CTE:
-			READ_STRING_FIELD(ctename);
-			READ_UINT_FIELD(ctelevelsup);
-			READ_BOOL_FIELD(self_reference);
-			READ_NODE_FIELD(coltypes);
-			READ_NODE_FIELD(coltypmods);
-			READ_NODE_FIELD(colcollations);
-			break;
-		case RTE_NAMEDTUPLESTORE:
-			READ_STRING_FIELD(enrname);
-			READ_FLOAT_FIELD(enrtuples);
-			READ_NODE_FIELD(coltypes);
-			READ_NODE_FIELD(coltypmods);
-			READ_NODE_FIELD(colcollations);
-			/* we re-use these RELATION fields, too: */
-			READ_OID_FIELD(relid);
-			break;
-		case RTE_RESULT:
-			/* no extra fields */
-			break;
-		default:
-			elog(ERROR, "unrecognized RTE kind: %d",
-				 (int) local_node->rtekind);
-			break;
-	}
-
-	READ_BOOL_FIELD(lateral);
-	READ_BOOL_FIELD(inFromCl);
-	READ_NODE_FIELD(securityQuals);
 
 	READ_DONE();
 }

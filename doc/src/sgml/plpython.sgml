@@ -1394,4 +1394,185 @@ plpy.execute("UPDATE tbl SET %s = %s WHERE key = %s" % (
    command-line interpreter and not an embedded Python interpreter.)
   </para>
  </sect1>
+
+
+  <sect1 id="plpython-quickstart">
+    <title>Quick Start: Creating a PostgreSQL Extension using PL/Python</title>
+
+    <para>
+      In this quick start guide, we will create a simple PostgreSQL extension using PL/Python.
+    </para>
+
+    <sect2 id="plpython-prerequisites">
+      <title>Prerequisites</title>
+
+      <itemizedlist>
+        <listitem>
+          <para><ulink url="https://www.postgresql.org/download/">PostgreSQL</ulink> installed and running on your system.</para>
+        </listitem>
+        <listitem>
+          <para> <literal>plpython3u </literal> procedural language available in your PostgreSQL installation.</para>
+        </listitem>
+        <listitem>
+          <para>Basic knowledge of <ulink url="https://www.python.org">Python</ulink> programming.</para>
+        </listitem>
+        <listitem>
+          <para><literal>make</literal> utility for building and compiling software.</para>
+        </listitem>
+        <listitem>
+          <para>Knowledge about the Postgres Development Libraries.</para>
+        </listitem>
+      </itemizedlist>
+
+    </sect2>
+
+    <sect2 id="plpython-step1">
+      <title>Create the Extension Directory</title>
+
+      <para>
+        Create a new directory for your extension project.
+      </para>
+
+      <screen>
+        $ mkdir ~/pg_py_ext
+        $ cd ~/pg_py_ext
+      </screen>
+    </sect2>
+
+    <sect2 id="plpython-step2">
+      <title>Create the SQL Script File</title>
+
+      <para>
+        Create a file named <filename>pg_py_ext--1.0.0.sql</filename> in the <filename>pg_py_ext</filename> directory with the following content:
+      </para>
+
+      <screen>
+        -- pg_py_ext--1.0.0.sql
+        -- Create the function that uses the Python script
+        CREATE OR REPLACE FUNCTION add_numbers(a integer, b integer)
+        RETURNS integer
+        LANGUAGE plpython3u
+        AS $$
+        def add_numbers(a, b):
+            return a + b
+        return add_numbers(int(a), int(b))
+        $$;
+      </screen>
+<para>
+  Explanation of the SQL Script:
+  <itemizedlist>
+    <listitem>
+      <para>
+        <literal>CREATE OR REPLACE FUNCTION add_numbers(a integer, b integer) RETURNS integer LANGUAGE plpython3u AS $$</literal>: 
+        This statement creates the function <literal>add_numbers</literal> with two integer arguments (<literal>a</literal> and <literal>b</literal>). The function will return an integer. The <literal>LANGUAGE plpython3u</literal> specifies that the function is written in PL/Python3U.
+      </para>
+    </listitem>
+    <listitem>
+      <para>
+        <literal>def add_numbers(a, b):</literal>: 
+        This is the Python code block that defines the <literal>add_numbers</literal> function. The function takes two arguments (<literal>a</literal> and <literal>b</literal>) and returns their sum.
+      </para>
+    </listitem>
+  </itemizedlist>
+</para>
+    </sect2>
+
+    <sect2 id="plpython-step3">
+      <title>Create the Control File</title>
+
+      <para>
+        Create a file named <filename>pg_py_ext.control</filename> with the following content:
+      </para>
+
+      <screen>
+        # pg_py_ext.control
+
+        # Extension name
+        comment = 'A simple PostgreSQL extension using PL/Python3U.'
+
+        # Default version of the extension
+        default_version = '1.0.0'
+
+        # Extension is relocatable
+        relocatable = true
+      </screen>
+    </sect2>
+
+    <sect2 id="plpython-step4">
+      <title>Create the Makefile</title>
+
+      <para>
+        Create a file named <filename>Makefile</filename> in the <filename>pg_py_ext</filename> directory with the following content:
+      </para>
+
+      <screen>
+        # Makefile for pg_py_ext
+        EXTENSION = pg_py_ext
+        DATA = pg_py_ext--1.0.0.sql
+
+        PG_CONFIG = pg_config
+        PGXS := $(shell $(PG_CONFIG) --pgxs)
+        include $(PGXS)
+      </screen>
+    </sect2>
+
+    <sect2 id="plpython-step5">
+      <title>Build and Install the Extension</title>
+
+      <para>
+        Let's build and install the <filename>pg_py_ext</filename> extension:
+      </para>
+
+      <screen>
+        # Build the extension
+        $ make
+
+        # Install the extension
+        $ make install
+      </screen>
+
+      <para>
+        For more information on the installation procedures, you can refer to the <xref linkend="install-make"/>
+      </para>
+    </sect2>
+
+    <sect2 id="plpython-step6">
+      <title>Enable the Extension in PostgreSQL</title>
+
+      <para>
+        Connect to your PostgreSQL database using <literal>psql</literal>:
+      </para>
+
+      <screen>
+        $ psql -U your_username -d your_database
+      </screen>
+
+      <para>
+        Inside the PostgreSQL interactive terminal, enable the extension:
+      </para>
+
+      <screen>
+        CREATE EXTENSION pg_py_ext;
+      </screen>
+
+      <para>
+        For more information on the <literal>CREATE EXTENSION</literal> command, you can refer to the PostgreSQL documentation on <xref linkend="sql-createextension"/>.
+      </para>
+    </sect2>
+
+    <sect2 id="plpython-step7">
+      <title>Test the Extension</title>
+
+      <screen>
+        -- Example usage of the function
+        SELECT add_numbers(3, 5);
+
+        -- Output:
+        add_numbers
+        -------------
+                 8
+        (1 row)
+      </screen>
+    </sect2>
+  </sect1>
 </chapter>

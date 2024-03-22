@@ -129,6 +129,8 @@ extern bool process_equivalence(PlannerInfo *root,
 extern Expr *canonicalize_ec_expression(Expr *expr,
 										Oid req_type, Oid req_collation);
 extern void reconsider_outer_join_clauses(PlannerInfo *root);
+extern void update_clause_relids(PlannerInfo *root, RestrictInfo *rinfo,
+								 Relids new_clause_relids);
 extern EquivalenceClass *get_eclass_for_sort_expr(PlannerInfo *root,
 												  Expr *expr,
 												  List *opfamilies,
@@ -137,7 +139,8 @@ extern EquivalenceClass *get_eclass_for_sort_expr(PlannerInfo *root,
 												  Index sortref,
 												  Relids rel,
 												  bool create_it);
-extern EquivalenceMember *find_ec_member_matching_expr(EquivalenceClass *ec,
+extern EquivalenceMember *find_ec_member_matching_expr(PlannerInfo *root,
+													   EquivalenceClass *ec,
 													   Expr *expr,
 													   Relids relids);
 extern EquivalenceMember *find_computable_ec_member(PlannerInfo *root,
@@ -163,7 +166,8 @@ extern bool exprs_known_equal(PlannerInfo *root, Node *item1, Node *item2);
 extern EquivalenceClass *match_eclasses_to_foreign_key_col(PlannerInfo *root,
 														   ForeignKeyOptInfo *fkinfo,
 														   int colno);
-extern RestrictInfo *find_derived_clause_for_ec_member(EquivalenceClass *ec,
+extern RestrictInfo *find_derived_clause_for_ec_member(PlannerInfo *root,
+													   EquivalenceClass *ec,
 													   EquivalenceMember *em);
 extern void add_child_rel_equivalences(PlannerInfo *root,
 									   AppendRelInfo *appinfo,
@@ -174,6 +178,15 @@ extern void add_child_join_rel_equivalences(PlannerInfo *root,
 											AppendRelInfo **appinfos,
 											RelOptInfo *parent_joinrel,
 											RelOptInfo *child_joinrel);
+extern void setup_eclass_child_member_iterator(EquivalenceChildMemberIterator *it,
+								   EquivalenceClass *ec);
+extern EquivalenceMember *eclass_child_member_iterator_next(EquivalenceChildMemberIterator *it);
+extern void dispose_eclass_child_member_iterator(EquivalenceChildMemberIterator *it);
+extern void iterate_child_rel_equivalences(EquivalenceChildMemberIterator *it,
+										   PlannerInfo *root,
+										   EquivalenceClass *ec,
+										   EquivalenceMember *parent_em,
+										   Relids child_relids);
 extern List *generate_implied_equalities_for_column(PlannerInfo *root,
 													RelOptInfo *rel,
 													ec_matches_callback_type callback,
@@ -189,6 +202,22 @@ extern bool eclass_useful_for_merging(PlannerInfo *root,
 extern bool is_redundant_derived_clause(RestrictInfo *rinfo, List *clauselist);
 extern bool is_redundant_with_indexclauses(RestrictInfo *rinfo,
 										   List *indexclauses);
+extern Bitmapset *get_ec_source_indexes(PlannerInfo *root,
+										EquivalenceClass *ec,
+										Relids relids);
+extern Bitmapset *get_ec_source_indexes_strict(PlannerInfo *root,
+											   EquivalenceClass *ec,
+											   Relids relids);
+extern Bitmapset *get_ec_derive_indexes(PlannerInfo *root,
+										EquivalenceClass *ec,
+										Relids relids);
+extern Bitmapset *get_ec_derive_indexes_strict(PlannerInfo *root,
+											   EquivalenceClass *ec,
+											   Relids relids);
+#ifdef USE_ASSERT_CHECKING
+extern void verify_eclass_indexes(PlannerInfo *root,
+								  EquivalenceClass *ec);
+#endif
 
 /*
  * pathkeys.c

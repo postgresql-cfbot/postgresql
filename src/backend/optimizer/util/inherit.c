@@ -461,6 +461,7 @@ expand_single_inheritance_child(PlannerInfo *root, RangeTblEntry *parentrte,
 		RelationGetRelid(parentrel);
 	Oid			childOID = RelationGetRelid(childrel);
 	RangeTblEntry *childrte;
+	Index		topParentRTindex;
 	Index		childRTindex;
 	AppendRelInfo *appinfo;
 	TupleDesc	child_tupdesc;
@@ -567,6 +568,19 @@ expand_single_inheritance_child(PlannerInfo *root, RangeTblEntry *parentrte,
 	root->simple_rte_array[childRTindex] = childrte;
 	Assert(root->append_rel_array[childRTindex] == NULL);
 	root->append_rel_array[childRTindex] = appinfo;
+
+	/*
+	 * Find a top parent rel's index and save it to top_parent_relid_array.
+	 */
+	if (root->top_parent_relid_array == NULL)
+		root->top_parent_relid_array =
+			(Index *) palloc0(root->simple_rel_array_size * sizeof(Index));
+	Assert(root->top_parent_relid_array[childRTindex] == 0);
+	topParentRTindex = parentRTindex;
+	while (root->append_rel_array[topParentRTindex] != NULL &&
+		   root->append_rel_array[topParentRTindex]->parent_relid != 0)
+		topParentRTindex = root->append_rel_array[topParentRTindex]->parent_relid;
+	root->top_parent_relid_array[childRTindex] = topParentRTindex;
 
 	/*
 	 * Build a PlanRowMark if parent is marked FOR UPDATE/SHARE.

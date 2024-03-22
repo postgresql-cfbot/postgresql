@@ -184,7 +184,7 @@ static IndexClause *expand_indexqual_rowcompare(PlannerInfo *root,
 												IndexOptInfo *index,
 												Oid expr_op,
 												bool var_on_left);
-static void match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
+static void match_pathkeys_to_index(PlannerInfo *root, IndexOptInfo *index, List *pathkeys,
 									List **orderby_clauses_p,
 									List **clause_columns_p);
 static Expr *match_clause_to_ordering_op(IndexOptInfo *index,
@@ -980,7 +980,7 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 		 * query_pathkeys will allow an incremental sort to be considered on
 		 * the index's partially sorted results.
 		 */
-		match_pathkeys_to_index(index, root->query_pathkeys,
+		match_pathkeys_to_index(root, index, root->query_pathkeys,
 								&orderbyclauses,
 								&orderbyclausecols);
 		if (list_length(root->query_pathkeys) == list_length(orderbyclauses))
@@ -3071,11 +3071,15 @@ expand_indexqual_rowcompare(PlannerInfo *root,
  * item in the given 'pathkeys' list.
  */
 static void
-match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
+match_pathkeys_to_index(PlannerInfo *root, IndexOptInfo *index, List *pathkeys,
 						List **orderby_clauses_p,
 						List **clause_columns_p)
 {
+	Relids		top_parent_index_relids;
 	ListCell   *lc1;
+
+	/* See the comments in get_eclass_for_sort_expr() to see how this works. */
+	top_parent_index_relids = find_relids_top_parents(root, index->rel->relids);
 
 	*orderby_clauses_p = NIL;	/* set default results */
 	*clause_columns_p = NIL;
@@ -3088,7 +3092,8 @@ match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
 	{
 		PathKey    *pathkey = (PathKey *) lfirst(lc1);
 		bool		found = false;
-		ListCell   *lc2;
+		EquivalenceChildMemberIterator it;
+		EquivalenceMember *member;
 
 
 		/* Pathkey must request default sort order for the target opfamily */
@@ -3108,14 +3113,29 @@ match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
 		 * be considered to match more than one pathkey list, which is OK
 		 * here.  See also get_eclass_for_sort_expr.)
 		 */
-		foreach(lc2, pathkey->pk_eclass->ec_members)
+		/* See the comments in get_eclass_for_sort_expr() to see how this works. */
+		setup_eclass_child_member_iterator(&it, pathkey->pk_eclass);
+		while ((member = eclass_child_member_iterator_next(&it)))
 		{
-			EquivalenceMember *member = (EquivalenceMember *) lfirst(lc2);
 			int			indexcol;
 
+			/* See the comments in get_eclass_for_sort_expr() to see how this works. */
+			if (unlikely(top_parent_index_relids != NULL) && !member->em_is_child &&
+				bms_equal(member->em_relids, top_parent_index_relids))
+				iterate_child_rel_equivalences(&it, root, pathkey->pk_eclass, member,
+											   index->rel->relids);
+
 			/* No possibility of match if it references other relations */
-			if (!bms_equal(member->em_relids, index->rel->relids))
+			if (member->em_is_child ||
+				!bms_equal(member->em_relids, index->rel->relids))
 				continue;
+
+			/*
+			 * If this EquivalenceMember is a child, i.e., translated above,
+			 * it should match the request. We cannot assert this if a request
+			 * is bms_is_subset().
+			 */
+			Assert(bms_equal(member->em_relids, index->rel->relids));
 
 			/*
 			 * We allow any column of the index to match each pathkey; they
@@ -3145,6 +3165,7 @@ match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
 			if (found)			/* don't want to look at remaining members */
 				break;
 		}
+		dispose_eclass_child_member_iterator(&it);
 
 		/*
 		 * Return the matches found so far when this pathkey couldn't be

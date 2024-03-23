@@ -39,6 +39,7 @@ OBJS = \
 	pg_namespace.o \
 	pg_operator.o \
 	pg_parameter_acl.o \
+	pg_period.o \
 	pg_proc.o \
 	pg_publication.o \
 	pg_range.o \

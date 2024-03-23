@@ -15,6 +15,7 @@
 #include "postgres.h"
 
 #include "access/genam.h"
+#include "access/gist.h"
 #include "access/htup_details.h"
 #include "access/sysattr.h"
 #include "access/table.h"
@@ -1647,6 +1648,75 @@ DeconstructFkConstraintRow(HeapTuple tuple, int *numfks,
 	}
 
 	*numfks = numkeys;
+}
+
+/*
+ * FindFkPeriodOpersAndProcs -
+ *
+ * Looks up the operator oids used for the PERIOD part of a temporal foreign key.
+ * The opclass should be the opclass of that PERIOD element.
+ * Everything else is an output: containedbyoperoid is the ContainedBy operator for
+ * types matching the PERIOD element.
+ * aggedcontainedbyoperoid is also a ContainedBy operator,
+ * but one whose rhs is a multirange.
+ * That way foreign keys can compare fkattr <@ range_agg(pkattr).
+ * intersectprocoid is used to limit the effect of CASCADE/SET NULL/SET DEFAULT
+ * when the PK record is changed with FOR PORTION OF.
+ */
+void
+FindFKPeriodOpersAndProcs(Oid opclass,
+						  Oid *containedbyoperoid,
+						  Oid *aggedcontainedbyoperoid,
+						  Oid *intersectprocoid)
+{
+	Oid		opfamily = InvalidOid;
+	Oid		opcintype = InvalidOid;
+	StrategyNumber strat;
+
+	/* Make sure we have a range or multirange. */
+	if (get_opclass_opfamily_and_input_type(opclass, &opfamily, &opcintype))
+	{
+		if (opcintype != ANYRANGEOID && opcintype != ANYMULTIRANGEOID)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("Invalid type for PERIOD part in FOREIGN KEY"),
+					 errhint("Use a range or multirange type.")));
+
+	}
+	else
+		elog(ERROR, "cache lookup failed for opclass %u", opclass);
+
+	/*
+	 * Look up the ContainedBy operator whose lhs and rhs are the opclass's type.
+	 * We use this to optimize RI checks: if the new value includes all
+	 * of the old value, then we can treat the attribute as if it didn't change,
+	 * and skip the RI check.
+	 */
+	strat = RTContainedByStrategyNumber;
+	GetOperatorFromWellKnownStrategy(opclass,
+									 InvalidOid,
+									 containedbyoperoid,
+									 &strat);
+
+	/*
+	 * Now look up the ContainedBy operator.
+	 * Its left arg must be the type of the column (or rather of the opclass).
+	 * Its right arg must match the return type of the support proc.
+	 */
+	strat = RTContainedByStrategyNumber;
+	GetOperatorFromWellKnownStrategy(opclass,
+									 ANYMULTIRANGEOID,
+									 aggedcontainedbyoperoid,
+									 &strat);
+
+	/*
+	 * If the command uses FOR PORTION OF,
+	 * we will also need an intersect support proc.
+	 * If this is missing we don't need to complain here,
+	 * because FOR PORTION OF will not be allowed.
+	 */
+	if (opfamily != InvalidOid && opcintype != InvalidOid)
+		*intersectprocoid = get_opfamily_proc(opfamily, opcintype, opcintype, GIST_INTERSECT_PROC);
 }
 
 /*

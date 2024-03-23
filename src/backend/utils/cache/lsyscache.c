@@ -31,6 +31,7 @@
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_operator.h"
+#include "catalog/pg_period.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_publication.h"
 #include "catalog/pg_range.h"
@@ -995,6 +996,68 @@ get_attoptions(Oid relid, int16 attnum)
 	return result;
 }
 
+/*				---------- PG_PERIOD CACHE ----------				 */
+
+/*
+ * get_periodname - given its OID, look up a period
+ *
+ * If missing_ok is false, throw an error if the period is not found.
+ * If true, just return InvalidOid.
+ */
+char *
+get_periodname(Oid periodid, bool missing_ok)
+{
+	HeapTuple	tp;
+
+	tp = SearchSysCache1(PERIODOID,
+						 ObjectIdGetDatum(periodid));
+	if (HeapTupleIsValid(tp))
+	{
+		Form_pg_period period_tup = (Form_pg_period) GETSTRUCT(tp);
+		char	   *result;
+
+		result = pstrdup(NameStr(period_tup->pername));
+		ReleaseSysCache(tp);
+		return result;
+	}
+
+	if (!missing_ok)
+		elog(ERROR, "cache lookup failed for period %d",
+			 periodid);
+	return NULL;
+}
+
+/*
+ * get_period_oid - gets its relation and name, look up a period
+ *
+ * If missing_ok is false, throw an error if the cast is not found.  If
+ * true, just return InvalidOid.
+ */
+Oid
+get_period_oid(Oid relid, const char *periodname, bool missing_ok)
+{
+	HeapTuple	tp;
+
+	tp = SearchSysCache2(PERIODNAME,
+						 ObjectIdGetDatum(relid),
+						 PointerGetDatum(periodname));
+
+	if (HeapTupleIsValid(tp))
+	{
+		Form_pg_period period_tup = (Form_pg_period) GETSTRUCT(tp);
+		Oid result;
+
+		result = period_tup->oid;
+		ReleaseSysCache(tp);
+		return result;
+	}
+
+	if (!missing_ok)
+		elog(ERROR, "cache lookup failed for period %s",
+			 periodname);
+	return InvalidOid;
+}
+
 /*				---------- PG_CAST CACHE ----------					 */
 
 /*
@@ -1607,7 +1670,7 @@ get_func_name(Oid funcid)
  *		Returns the pg_namespace OID associated with a given function.
  */
 Oid
-get_func_namespace(Oid funcid)
+get_func_namespace(Oid funcid, bool missing_ok)
 {
 	HeapTuple	tp;
 
@@ -1621,6 +1684,8 @@ get_func_namespace(Oid funcid)
 		ReleaseSysCache(tp);
 		return result;
 	}
+	else if (!missing_ok)
+		elog(ERROR, "cache lookup failed for function %u", funcid);
 	else
 		return InvalidOid;
 }
@@ -2139,6 +2204,59 @@ get_typisdefined(Oid typid)
 		result = typtup->typisdefined;
 		ReleaseSysCache(tp);
 		return result;
+	}
+	else
+		return false;
+}
+
+/*
+ * get_typname
+ *
+ *	  Returns the name of a given type
+ *
+ * Returns a palloc'd copy of the string, or NULL if no such type.
+ */
+char *
+get_typname(Oid typid)
+{
+	HeapTuple   tp;
+
+	tp = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
+	if (HeapTupleIsValid(tp))
+	{
+		Form_pg_type typtup = (Form_pg_type) GETSTRUCT(tp);
+		char	   *result;
+
+		result = pstrdup(NameStr(typtup->typname));
+		ReleaseSysCache(tp);
+		return result;
+	}
+	else
+		return NULL;
+}
+
+/*
+ * get_typname_and_namespace
+ *
+ *	  Returns the name and namespace of a given type
+ *
+ * Returns true if one found, or false if not.
+ */
+bool
+get_typname_and_namespace(Oid typid, char **typname, char **typnamespace)
+{
+	HeapTuple	tp;
+
+	tp = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
+	if (HeapTupleIsValid(tp))
+	{
+		Form_pg_type typtup = (Form_pg_type) GETSTRUCT(tp);
+
+		*typname = pstrdup(NameStr(typtup->typname));
+		*typnamespace = get_namespace_name(typtup->typnamespace);
+		ReleaseSysCache(tp);
+		/* *typnamespace is NULL if it wasn't found: */
+		return *typnamespace;
 	}
 	else
 		return false;
@@ -3452,6 +3570,30 @@ get_multirange_range(Oid multirangeOid)
 	}
 	else
 		return InvalidOid;
+}
+
+Oid
+get_subtype_range(Oid subtypeOid)
+{
+	CatCList *catlist;
+	Oid	result = InvalidOid;
+
+	catlist = SearchSysCacheList1(RANGESUBTYPE, ObjectIdGetDatum(subtypeOid));
+
+	if (catlist->n_members == 1)
+	{
+		HeapTuple	tuple = &catlist->members[0]->tuple;
+		Form_pg_range rngtup = (Form_pg_range) GETSTRUCT(tuple);
+		result = rngtup->rngtypid;
+		ReleaseCatCacheList(catlist);
+	}
+	else if (catlist->n_members > 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_INDETERMINATE_DATATYPE),
+				 errmsg("ambiguous range for type %s",
+						format_type_be(subtypeOid))));
+
+	return result;
 }
 
 /*				---------- PG_INDEX CACHE ----------				 */

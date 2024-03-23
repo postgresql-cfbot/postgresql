@@ -19,7 +19,9 @@ SELECT table_name, column_name, dependent_column FROM information_schema.column_
  table_name | column_name | dependent_column 
 ------------+-------------+------------------
  gtest1     | a           | b
-(1 row)
+ pt         | de          | p
+ pt         | ds          | p
+(3 rows)
 
 \d gtest1
                             Table "public.gtest1"

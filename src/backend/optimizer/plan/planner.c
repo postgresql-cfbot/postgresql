@@ -1959,6 +1959,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 										rowMarks,
 										parse->onConflict,
 										mergeActionLists,
+										parse->forPortionOf,
 										assign_special_exec_param(root));
 		}
 

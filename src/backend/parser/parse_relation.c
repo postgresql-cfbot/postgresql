@@ -22,6 +22,7 @@
 #include "access/table.h"
 #include "catalog/heap.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_period.h"
 #include "catalog/pg_type.h"
 #include "funcapi.h"
 #include "nodes/makefuncs.h"
@@ -3183,6 +3184,7 @@ expandNSItemAttrs(ParseState *pstate, ParseNamespaceItem *nsitem,
 				  int sublevels_up, bool require_col_privs, int location)
 {
 	RangeTblEntry *rte = nsitem->p_rte;
+	Bitmapset  *periodatts = NULL;
 	RTEPermissionInfo *perminfo = nsitem->p_perminfo;
 	List	   *names,
 			   *vars;
@@ -3206,11 +3208,19 @@ expandNSItemAttrs(ParseState *pstate, ParseNamespaceItem *nsitem,
 		perminfo->requiredPerms |= ACL_SELECT;
 	}
 
+	/* Get PERIOD columns to exclude */
+	if (rte->rtekind == RTE_RELATION)
+		periodatts = get_period_attnos(rte->relid);
+
 	forboth(name, names, var, vars)
 	{
 		char	   *label = strVal(lfirst(name));
 		Var		   *varnode = (Var *) lfirst(var);
 		TargetEntry *te;
+
+		/* If this column is from a PERIOD, skip it */
+		if (bms_is_member(varnode->varattno, periodatts))
+				continue;
 
 		te = makeTargetEntry((Expr *) varnode,
 							 (AttrNumber) pstate->p_next_resno++,

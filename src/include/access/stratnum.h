@@ -79,7 +79,7 @@ typedef uint16 StrategyNumber;
 #define RTOldBelowStrategyNumber		29	/* for old spelling of <<| */
 #define RTOldAboveStrategyNumber		30	/* for old spelling of |>> */
 
-#define RTMaxStrategyNumber				30
+#define RTMaxStrategyNumber				32
 
 
 #endif							/* STRATNUM_H */

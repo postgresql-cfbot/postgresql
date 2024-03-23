@@ -37,6 +37,7 @@
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_operator.h"
+#include "catalog/pg_period.h"
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_type.h"
 #include "commands/comment.h"
@@ -80,6 +81,7 @@ typedef struct
 	bool		isforeign;		/* true if CREATE/ALTER FOREIGN TABLE */
 	bool		isalter;		/* true if altering existing table */
 	List	   *columns;		/* ColumnDef items */
+	List	   *periods;		/* PeriodDef items */
 	List	   *ckconstraints;	/* CHECK constraints */
 	List	   *nnconstraints;	/* NOT NULL constraints */
 	List	   *fkconstraints;	/* FOREIGN KEY constraints */
@@ -111,6 +113,8 @@ typedef struct
 
 static void transformColumnDefinition(CreateStmtContext *cxt,
 									  ColumnDef *column);
+static void transformTablePeriod(CreateStmtContext *cxt,
+								 PeriodDef *period);
 static void transformTableConstraint(CreateStmtContext *cxt,
 									 Constraint *constraint);
 static void transformTableLikeClause(CreateStmtContext *cxt,
@@ -240,6 +244,7 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	cxt.inhRelations = stmt->inhRelations;
 	cxt.isalter = false;
 	cxt.columns = NIL;
+	cxt.periods = NIL;
 	cxt.ckconstraints = NIL;
 	cxt.nnconstraints = NIL;
 	cxt.fkconstraints = NIL;
@@ -278,6 +283,10 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 		{
 			case T_ColumnDef:
 				transformColumnDefinition(&cxt, (ColumnDef *) element);
+				break;
+
+			case T_PeriodDef:
+				transformTablePeriod(&cxt, (PeriodDef *) element);
 				break;
 
 			case T_Constraint:
@@ -347,6 +356,7 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	 * Output results.
 	 */
 	stmt->tableElts = cxt.columns;
+	stmt->periods = cxt.periods;
 	stmt->constraints = cxt.ckconstraints;
 	stmt->nnconstraints = cxt.nnconstraints;
 
@@ -922,6 +932,91 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 	}
 }
 
+void
+transformPeriodOptions(PeriodDef *period)
+{
+	ListCell   *option;
+	DefElem	   *dconstraintname = NULL;
+	DefElem	   *drangetypename = NULL;
+	DefElem	   *dcolexists = NULL;
+
+	foreach(option, period->options)
+	{
+		DefElem    *defel = (DefElem *) lfirst(option);
+
+		if (strcmp(defel->defname, "check_constraint_name") == 0)
+		{
+			if (dconstraintname)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			dconstraintname = defel;
+		}
+		else if (strcmp(defel->defname, "rangetype") == 0)
+		{
+			if (drangetypename)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			drangetypename = defel;
+		}
+		else if (strcmp(defel->defname, "colexists") == 0)
+		{
+			if (dcolexists)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			dcolexists = defel;
+		}
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("option \"%s\" not recognized", defel->defname)));
+	}
+
+	if (dconstraintname != NULL)
+		period->constraintname = defGetString(dconstraintname);
+	else
+		period->constraintname = NULL;
+
+	if (drangetypename != NULL)
+		period->rangetypename = defGetString(drangetypename);
+	else
+		period->rangetypename = NULL;
+
+	if (dcolexists != NULL)
+		period->colexists = defGetBoolean(dcolexists);
+	else
+		period->colexists = false;
+}
+
+/*
+ * transformTablePeriod
+ *		transform a PeriodDef node within CREATE TABLE
+ */
+static void
+transformTablePeriod(CreateStmtContext *cxt, PeriodDef *period)
+{
+	if (strcmp(period->periodname, "system_time") == 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("PERIOD FOR SYSTEM_TIME is not supported"),
+					 parser_errposition(cxt->pstate,
+										period->location)));
+
+	if (strcmp(period->startcolname, period->endcolname) == 0)
+		ereport(ERROR, (errmsg("column \"%s\" can't be the start and end column for period \"%s\"",
+						period->startcolname, period->periodname)));
+
+	/*
+	 * Determine the column info and range type so that transformIndexConstraints
+	 * knows how to create PRIMARY KEY/UNIQUE constraints using this PERIOD.
+	 */
+	transformPeriodOptions(period);
+
+	cxt->periods = lappend(cxt->periods, period);
+}
+
 /*
  * transformTableConstraint
  *		transform a Constraint node within CREATE TABLE or ALTER TABLE
@@ -1012,6 +1107,7 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 	AttrNumber	parent_attno;
 	Relation	relation;
 	TupleDesc	tupleDesc;
+	Bitmapset  *periodatts;
 	AclResult	aclresult;
 	char	   *comment;
 	ParseCallbackState pcbstate;
@@ -1064,6 +1160,7 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 	}
 
 	tupleDesc = RelationGetDescr(relation);
+	periodatts = get_period_attnos(RelationGetRelid(relation));
 
 	/*
 	 * Insert the copied attributes into the cxt for the new table definition.
@@ -1073,9 +1170,17 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 	for (parent_attno = 1; parent_attno <= tupleDesc->natts;
 		 parent_attno++)
 	{
-		Form_pg_attribute attribute = TupleDescAttr(tupleDesc,
-													parent_attno - 1);
+		Form_pg_attribute attribute;
 		ColumnDef  *def;
+
+		/*
+		 * If this column is from a PERIOD, skip it
+		 * (since LIKE never copies PERIODs).
+		 */
+		if (bms_is_member(parent_attno, periodatts))
+			continue;
+
+		attribute = TupleDescAttr(tupleDesc, parent_attno - 1);
 
 		/*
 		 * Ignore dropped columns in the parent.
@@ -2573,6 +2678,7 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 					break;
 				}
 			}
+
 			if (found)
 			{
 				/*
@@ -2587,6 +2693,22 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 					!column->is_from_type)
 				{
 					column->is_not_null = true;
+				}
+			}
+			else if (constraint->without_overlaps &&
+					 lc == list_last_cell(constraint->keys))
+			{
+				/* If the key is WITHOUT OVERLAPS, a PERIOD will work too. */
+				PeriodDef  *period = NULL;
+
+				foreach(columns, cxt->periods)
+				{
+					period = lfirst_node(PeriodDef, columns);
+					if (strcmp(period->periodname, key) == 0)
+					{
+						found = true;
+						break;
+					}
 				}
 			}
 			else if (SystemAttributeByName(key) != NULL)
@@ -3016,6 +3138,10 @@ transformIndexStmt(Oid relid, IndexStmt *stmt, const char *queryString)
 			 */
 		}
 	}
+
+	/* take care of the period */
+	if (stmt->period)
+		stmt->period->oid = get_period_oid(relid, stmt->period->periodname, false);
 
 	/*
 	 * Check that only the base rel is mentioned.  (This should be dead code
@@ -3474,6 +3600,7 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 	cxt.inhRelations = NIL;
 	cxt.isalter = true;
 	cxt.columns = NIL;
+	cxt.periods = NIL;
 	cxt.ckconstraints = NIL;
 	cxt.nnconstraints = NIL;
 	cxt.fkconstraints = NIL;
@@ -3535,6 +3662,22 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 					elog(ERROR, "unrecognized node type: %d",
 						 (int) nodeTag(cmd->def));
 				break;
+
+			case AT_AddPeriod:
+				{
+					/*
+					 * We can't call transformTablePeriod here
+					 * because it looks at cxt->columns
+					 * and in an ALTER statement the columns might already exists
+					 * (or not).
+					 */
+					// TODO: it doesn't look at cxt->columns any more.
+					// So should we call it here? To do what?
+					// Well it might be useful to know about it in cxt->periods at least.
+					transformTablePeriod(&cxt, castNode(PeriodDef, cmd->def));
+					newcmds = lappend(newcmds, cmd);
+					break;
+				}
 
 			case AT_AlterColumnType:
 				{

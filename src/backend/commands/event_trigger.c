@@ -1165,6 +1165,7 @@ EventTriggerSupportsObjectType(ObjectType obtype)
 		case OBJECT_OPCLASS:
 		case OBJECT_OPERATOR:
 		case OBJECT_OPFAMILY:
+		case OBJECT_PERIOD:
 		case OBJECT_POLICY:
 		case OBJECT_PROCEDURE:
 		case OBJECT_PUBLICATION:
@@ -1223,6 +1224,7 @@ EventTriggerSupportsObjectClass(ObjectClass objclass)
 		case OCLASS_CAST:
 		case OCLASS_COLLATION:
 		case OCLASS_CONSTRAINT:
+		case OCLASS_PERIOD:
 		case OCLASS_CONVERSION:
 		case OCLASS_DEFAULT:
 		case OCLASS_LANGUAGE:
@@ -2264,6 +2266,7 @@ stringify_grant_objtype(ObjectType objtype)
 		case OBJECT_OPCLASS:
 		case OBJECT_OPERATOR:
 		case OBJECT_OPFAMILY:
+		case OBJECT_PERIOD:
 		case OBJECT_POLICY:
 		case OBJECT_PUBLICATION:
 		case OBJECT_PUBLICATION_NAMESPACE:
@@ -2348,6 +2351,7 @@ stringify_adefprivs_objtype(ObjectType objtype)
 		case OBJECT_OPERATOR:
 		case OBJECT_OPFAMILY:
 		case OBJECT_PARAMETER_ACL:
+		case OBJECT_PERIOD:
 		case OBJECT_POLICY:
 		case OBJECT_PUBLICATION:
 		case OBJECT_PUBLICATION_NAMESPACE:

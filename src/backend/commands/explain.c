@@ -3963,7 +3963,7 @@ ExplainTargetRel(Plan *plan, Index rti, ExplainState *es)
 
 						objectname = get_func_name(funcid);
 						if (es->verbose)
-							namespace = get_namespace_name_or_temp(get_func_namespace(funcid));
+							namespace = get_namespace_name_or_temp(get_func_namespace(funcid, true));
 					}
 				}
 				objecttag = "Function Name";

@@ -91,16 +91,16 @@ btvalidate(Oid opclassoid)
 		switch (procform->amprocnum)
 		{
 			case BTORDER_PROC:
-				ok = check_amproc_signature(procform->amproc, INT4OID, true,
+				ok = check_amproc_signature(procform->amproc, INT4OID, false, true,
 											2, 2, procform->amproclefttype,
 											procform->amprocrighttype);
 				break;
 			case BTSORTSUPPORT_PROC:
-				ok = check_amproc_signature(procform->amproc, VOIDOID, true,
+				ok = check_amproc_signature(procform->amproc, VOIDOID, false, true,
 											1, 1, INTERNALOID);
 				break;
 			case BTINRANGE_PROC:
-				ok = check_amproc_signature(procform->amproc, BOOLOID, true,
+				ok = check_amproc_signature(procform->amproc, BOOLOID, false, true,
 											5, 5,
 											procform->amproclefttype,
 											procform->amproclefttype,
@@ -108,7 +108,7 @@ btvalidate(Oid opclassoid)
 											BOOLOID, BOOLOID);
 				break;
 			case BTEQUALIMAGE_PROC:
-				ok = check_amproc_signature(procform->amproc, BOOLOID, true,
+				ok = check_amproc_signature(procform->amproc, BOOLOID, false, true,
 											1, 1, OIDOID);
 				break;
 			case BTOPTIONS_PROC:

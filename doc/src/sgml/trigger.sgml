@@ -535,17 +535,18 @@ CALLED_AS_TRIGGER(fcinfo)
 <programlisting>
 typedef struct TriggerData
 {
-    NodeTag          type;
-    TriggerEvent     tg_event;
-    Relation         tg_relation;
-    HeapTuple        tg_trigtuple;
-    HeapTuple        tg_newtuple;
-    Trigger         *tg_trigger;
-    TupleTableSlot  *tg_trigslot;
-    TupleTableSlot  *tg_newslot;
-    Tuplestorestate *tg_oldtable;
-    Tuplestorestate *tg_newtable;
-    const Bitmapset *tg_updatedcols;
+    NodeTag            type;
+    TriggerEvent       tg_event;
+    Relation           tg_relation;
+    HeapTuple          tg_trigtuple;
+    HeapTuple          tg_newtuple;
+    Trigger           *tg_trigger;
+    TupleTableSlot    *tg_trigslot;
+    TupleTableSlot    *tg_newslot;
+    Tuplestorestate   *tg_oldtable;
+    Tuplestorestate   *tg_newtable;
+    const Bitmapset   *tg_updatedcols;
+    ForPortionOfState *tg_temporal;
 } TriggerData;
 </programlisting>
 
@@ -810,6 +811,43 @@ typedef struct Trigger
        <para>
         For triggers other than <literal>UPDATE</literal> triggers, this will
         be <symbol>NULL</symbol>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><structfield>tg_temporal</structfield></term>
+      <listitem>
+       <para>
+        Set for <literal>UPDATE</literal> and <literal>DELETE</literal> queries
+        that use <literal>FOR PORTION OF</literal>, otherwise <symbol>NULL</symbol>.
+        Contains a pointer to a structure of type
+        <structname>ForPortionOfState</structname>, defined in
+        <filename>nodes/execnodes.h</filename>:
+
+<programlisting>
+typedef struct ForPortionOfState
+{
+    NodeTag type;
+
+    char   *fp_rangeName;       /* the column/PERIOD named in FOR PORTION OF */
+    Oid     fp_rangeType;       /* the type of the FOR PORTION OF expression */
+    bool    fp_hasPeriod;       /* true iff this is a PERIOD not a range */
+    char   *fp_periodStartName; /* the PERIOD's start column */
+    char   *fp_periodEndName;   /* the PERIOD's end column */
+    Datum   fp_targetRange;     /* the range from FOR PORTION OF */
+} ForPortionOfState;
+</programlisting>
+
+       where <structfield>fp_rangeName</structfield> is the period or range
+       column named in the <literal>FOR PORTION OF</literal> clause,
+       <structfield>fp_rangeType</structfield> is its range type,
+       <structfield>fp_hasPeriod</structfield> indicates whether a period was used
+       or a range column, <structfield>fp_periodStartName</structfield> and
+       <structfield>fp_periodEndName</structfield> are the names of the period's
+       start and end columns (or <symbol>NULL</symbol> if a range column was used),
+       and <structfield>fp_targetRange</structfield> is a rangetype value created
+       by evaluating the <literal>FOR PORTION OF</literal> bounds.
        </para>
       </listitem>
      </varlistentry>

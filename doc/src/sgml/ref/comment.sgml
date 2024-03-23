@@ -44,6 +44,7 @@ COMMENT ON
   OPERATOR <replaceable class="parameter">operator_name</replaceable> (<replaceable class="parameter">left_type</replaceable>, <replaceable class="parameter">right_type</replaceable>) |
   OPERATOR CLASS <replaceable class="parameter">object_name</replaceable> USING <replaceable class="parameter">index_method</replaceable> |
   OPERATOR FAMILY <replaceable class="parameter">object_name</replaceable> USING <replaceable class="parameter">index_method</replaceable> |
+  PERIOD <replaceable class="parameter">relation_name</replaceable>.<replaceable class="parameter">period_name</replaceable> |
   POLICY <replaceable class="parameter">policy_name</replaceable> ON <replaceable class="parameter">table_name</replaceable> |
   [ PROCEDURAL ] LANGUAGE <replaceable class="parameter">object_name</replaceable> |
   PROCEDURE <replaceable class="parameter">procedure_name</replaceable> [ ( [ [ <replaceable class="parameter">argmode</replaceable> ] [ <replaceable class="parameter">argname</replaceable> ] <replaceable class="parameter">argtype</replaceable> [, ...] ] ) ] |
@@ -341,6 +342,7 @@ COMMENT ON OPERATOR ^ (text, text) IS 'Performs intersection of two texts';
 COMMENT ON OPERATOR - (NONE, integer) IS 'Unary minus';
 COMMENT ON OPERATOR CLASS int4ops USING btree IS '4 byte integer operators for btrees';
 COMMENT ON OPERATOR FAMILY integer_ops USING btree IS 'all integer operators for btrees';
+COMMENT ON PERIOD my_table.my_column IS 'Sales promotion validity';
 COMMENT ON POLICY my_policy ON mytable IS 'Filter rows by users';
 COMMENT ON PROCEDURE my_proc (integer, integer) IS 'Runs a report';
 COMMENT ON PUBLICATION alltables IS 'Publishes all operations on all tables';

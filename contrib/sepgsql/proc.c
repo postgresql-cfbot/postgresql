@@ -161,7 +161,7 @@ sepgsql_proc_drop(Oid functionId)
 	 * check db_schema:{remove_name} permission
 	 */
 	object.classId = NamespaceRelationId;
-	object.objectId = get_func_namespace(functionId);
+	object.objectId = get_func_namespace(functionId, true);
 	object.objectSubId = 0;
 	audit_name = getObjectIdentity(&object, false);
 

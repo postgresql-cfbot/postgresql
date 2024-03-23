@@ -106,36 +106,36 @@ gistvalidate(Oid opclassoid)
 		switch (procform->amprocnum)
 		{
 			case GIST_CONSISTENT_PROC:
-				ok = check_amproc_signature(procform->amproc, BOOLOID, false,
+				ok = check_amproc_signature(procform->amproc, BOOLOID, false, false,
 											5, 5, INTERNALOID, opcintype,
 											INT2OID, OIDOID, INTERNALOID);
 				break;
 			case GIST_UNION_PROC:
-				ok = check_amproc_signature(procform->amproc, opckeytype, false,
+				ok = check_amproc_signature(procform->amproc, opckeytype, false, false,
 											2, 2, INTERNALOID, INTERNALOID);
 				break;
 			case GIST_COMPRESS_PROC:
 			case GIST_DECOMPRESS_PROC:
 			case GIST_FETCH_PROC:
-				ok = check_amproc_signature(procform->amproc, INTERNALOID, true,
+				ok = check_amproc_signature(procform->amproc, INTERNALOID, false, true,
 											1, 1, INTERNALOID);
 				break;
 			case GIST_PENALTY_PROC:
-				ok = check_amproc_signature(procform->amproc, INTERNALOID, true,
+				ok = check_amproc_signature(procform->amproc, INTERNALOID, false, true,
 											3, 3, INTERNALOID,
 											INTERNALOID, INTERNALOID);
 				break;
 			case GIST_PICKSPLIT_PROC:
-				ok = check_amproc_signature(procform->amproc, INTERNALOID, true,
+				ok = check_amproc_signature(procform->amproc, INTERNALOID, false, true,
 											2, 2, INTERNALOID, INTERNALOID);
 				break;
 			case GIST_EQUAL_PROC:
-				ok = check_amproc_signature(procform->amproc, INTERNALOID, false,
+				ok = check_amproc_signature(procform->amproc, INTERNALOID, false, false,
 											3, 3, opckeytype, opckeytype,
 											INTERNALOID);
 				break;
 			case GIST_DISTANCE_PROC:
-				ok = check_amproc_signature(procform->amproc, FLOAT8OID, false,
+				ok = check_amproc_signature(procform->amproc, FLOAT8OID, false, false,
 											5, 5, INTERNALOID, opcintype,
 											INT2OID, OIDOID, INTERNALOID);
 				break;
@@ -143,12 +143,20 @@ gistvalidate(Oid opclassoid)
 				ok = check_amoptsproc_signature(procform->amproc);
 				break;
 			case GIST_SORTSUPPORT_PROC:
-				ok = check_amproc_signature(procform->amproc, VOIDOID, true,
+				ok = check_amproc_signature(procform->amproc, VOIDOID, false, true,
 											1, 1, INTERNALOID);
 				break;
 			case GIST_STRATNUM_PROC:
-				ok = check_amproc_signature(procform->amproc, INT2OID, true,
+				ok = check_amproc_signature(procform->amproc, INT2OID, false, true,
 											1, 1, INT2OID);
+				break;
+			case GIST_INTERSECT_PROC:
+				ok = check_amproc_signature(procform->amproc, InvalidOid, false, true,
+											2, 2, opcintype, opcintype);
+				break;
+			case GIST_WITHOUT_PORTION_PROC:
+				ok = check_amproc_signature(procform->amproc, opcintype, true, true,
+											2, 2, opcintype, opcintype);
 				break;
 			default:
 				ereport(INFO,
@@ -193,7 +201,7 @@ gistvalidate(Oid opclassoid)
 		}
 
 		/* GiST supports ORDER BY operators */
-		if (oprform->amoppurpose != AMOP_SEARCH)
+		if (oprform->amoppurpose == AMOP_ORDER)
 		{
 			/* ... but must have matching distance proc */
 			if (!OidIsValid(get_opfamily_proc(opfamilyoid,
@@ -220,23 +228,37 @@ gistvalidate(Oid opclassoid)
 				result = false;
 			}
 		}
-		else
+		else if (oprform->amoppurpose == AMOP_SEARCH)
 		{
 			/* Search operators must always return bool */
 			op_rettype = BOOLOID;
 		}
-
-		/* Check operator signature */
-		if (!check_amop_signature(oprform->amopopr, op_rettype,
-								  oprform->amoplefttype,
-								  oprform->amoprighttype))
+		else
 		{
+			/* Nothing else it could be */
 			ereport(INFO,
 					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-					 errmsg("operator family \"%s\" of access method %s contains operator %s with wrong signature",
-							opfamilyname, "gist",
-							format_operator(oprform->amopopr))));
+					 errmsg("operator family \"%s\" of access method %s contains unknown purpose %c for operator %s",
+						 opfamilyname, "gist", oprform->amoppurpose,
+						 format_operator(oprform->amopopr))));
+			op_rettype = InvalidOid;
 			result = false;
+		}
+
+		/* Check operator signature */
+		if (OidIsValid(op_rettype))
+		{
+			if (!check_amop_signature(oprform->amopopr, op_rettype,
+									  oprform->amoplefttype,
+									  oprform->amoprighttype))
+			{
+				ereport(INFO,
+						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+						 errmsg("operator family \"%s\" of access method %s contains operator %s with wrong signature",
+								opfamilyname, "gist",
+								format_operator(oprform->amopopr))));
+				result = false;
+			}
 		}
 	}
 
@@ -271,7 +293,8 @@ gistvalidate(Oid opclassoid)
 		if (i == GIST_DISTANCE_PROC || i == GIST_FETCH_PROC ||
 			i == GIST_COMPRESS_PROC || i == GIST_DECOMPRESS_PROC ||
 			i == GIST_OPTIONS_PROC || i == GIST_SORTSUPPORT_PROC ||
-			i == GIST_STRATNUM_PROC)
+			i == GIST_STRATNUM_PROC || i == GIST_INTERSECT_PROC ||
+			i == GIST_WITHOUT_PORTION_PROC)
 			continue;			/* optional methods */
 		ereport(INFO,
 				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),

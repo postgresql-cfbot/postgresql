@@ -24,7 +24,11 @@
 
 #include "postgres.h"
 
+#include "access/gist.h"
+#include "access/stratnum.h"
 #include "access/sysattr.h"
+#include "catalog/pg_am.h"
+#include "catalog/pg_period.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
@@ -47,9 +51,11 @@
 #include "parser/parse_relation.h"
 #include "parser/parse_target.h"
 #include "parser/parse_type.h"
+#include "parser/parser.h"
 #include "parser/parsetree.h"
 #include "utils/backend_status.h"
 #include "utils/builtins.h"
+#include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
 
@@ -58,10 +64,16 @@
 post_parse_analyze_hook_type post_parse_analyze_hook = NULL;
 
 static Query *transformOptionalSelectInto(ParseState *pstate, Node *parseTree);
+static Node *addForPortionOfWhereConditions(Query *qry, ForPortionOfClause *forPortionOf,
+											Node *whereClause);
 static Query *transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt);
 static Query *transformInsertStmt(ParseState *pstate, InsertStmt *stmt);
 static OnConflictExpr *transformOnConflictClause(ParseState *pstate,
 												 OnConflictClause *onConflictClause);
+static ForPortionOfExpr *transformForPortionOfClause(ParseState *pstate,
+													 int rtindex,
+													 ForPortionOfClause *forPortionOfClause,
+													 bool isUpdate);
 static int	count_rowexpr_columns(ParseState *pstate, Node *expr);
 static Query *transformSelectStmt(ParseState *pstate, SelectStmt *stmt);
 static Query *transformValuesClause(ParseState *pstate, SelectStmt *stmt);
@@ -476,6 +488,20 @@ stmt_requires_parse_analysis(RawStmt *parseTree)
 	return result;
 }
 
+static Node *
+addForPortionOfWhereConditions(Query *qry, ForPortionOfClause *forPortionOf, Node *whereClause)
+{
+	if (forPortionOf)
+	{
+		if (whereClause)
+			return (Node *) makeBoolExpr(AND_EXPR, list_make2(qry->forPortionOf->overlapsExpr, whereClause), -1);
+		else
+			return qry->forPortionOf->overlapsExpr;
+	}
+	else
+		return whereClause;
+}
+
 /*
  * analyze_requires_snapshot
  *		Returns true if a snapshot must be set before doing parse analysis
@@ -509,6 +535,7 @@ transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt)
 {
 	Query	   *qry = makeNode(Query);
 	ParseNamespaceItem *nsitem;
+	Node	   *whereClause;
 	Node	   *qual;
 
 	qry->commandType = CMD_DELETE;
@@ -547,7 +574,11 @@ transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt)
 	nsitem->p_lateral_only = false;
 	nsitem->p_lateral_ok = true;
 
-	qual = transformWhereClause(pstate, stmt->whereClause,
+	if (stmt->forPortionOf)
+		qry->forPortionOf = transformForPortionOfClause(pstate, qry->resultRelation, stmt->forPortionOf, false);
+
+	whereClause = addForPortionOfWhereConditions(qry, stmt->forPortionOf, stmt->whereClause);
+	qual = transformWhereClause(pstate, whereClause,
 								EXPR_KIND_WHERE, "WHERE");
 
 	qry->returningList = transformReturningList(pstate, stmt->returningList,
@@ -1183,7 +1214,7 @@ transformOnConflictClause(ParseState *pstate,
 		 * Now transform the UPDATE subexpressions.
 		 */
 		onConflictSet =
-			transformUpdateTargetList(pstate, onConflictClause->targetList);
+			transformUpdateTargetList(pstate, onConflictClause->targetList, NULL);
 
 		onConflictWhere = transformWhereClause(pstate,
 											   onConflictClause->whereClause,
@@ -1213,6 +1244,273 @@ transformOnConflictClause(ParseState *pstate,
 	return result;
 }
 
+/*
+ * transformForPortionOfClause
+ *
+ *	  Transforms a ForPortionOfClause in an UPDATE/DELETE statement.
+ *
+ *	  - Look up the range/period requested.
+ *	  - Build a compatible range value from the FROM and TO expressions.
+ *	  - Build an "overlaps" expression for filtering.
+ *	  - For UPDATEs, build an "intersects" expression the rewriter can add
+ *		to the targetList to change the temporal bounds.
+ */
+static ForPortionOfExpr *
+transformForPortionOfClause(ParseState *pstate,
+							int rtindex,
+							ForPortionOfClause *forPortionOf,
+							bool isUpdate)
+{
+	Relation targetrel = pstate->p_target_relation;
+	RTEPermissionInfo *target_perminfo = pstate->p_target_nsitem->p_perminfo;
+	char *range_name = forPortionOf->range_name;
+	char *range_type_namespace = NULL;
+	char *range_type_name = NULL;
+	AttrNumber range_attno = InvalidAttrNumber;
+	AttrNumber start_attno = InvalidAttrNumber;
+	AttrNumber end_attno = InvalidAttrNumber;
+	char *startcolname = NULL;
+	char *endcolname = NULL;
+	Form_pg_attribute attr;
+	Oid	opclass;
+	Oid opfamily;
+	Oid opcintype;
+	Oid funcid = InvalidOid;
+	StrategyNumber strat;
+	Oid	opid;
+	ForPortionOfExpr *result;
+	Var *rangeVar;
+	Node *targetExpr;
+
+	/* We don't support FOR PORTION OF FDW queries. */
+	if (targetrel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("foreign tables don't support FOR PORTION OF")));
+
+	result = makeNode(ForPortionOfExpr);
+
+	/* Look up the FOR PORTION OF name requested. */
+	range_attno = attnameAttNum(targetrel, range_name, false);
+	if (range_attno == InvalidAttrNumber)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_COLUMN),
+				 errmsg("column or period \"%s\" of relation \"%s\" does not exist",
+						range_name,
+						RelationGetRelationName(targetrel)),
+				 parser_errposition(pstate, forPortionOf->location)));
+	attr = TupleDescAttr(targetrel->rd_att, range_attno - 1);
+
+	rangeVar = makeVar(
+			rtindex,
+			range_attno,
+			attr->atttypid,
+			attr->atttypmod,
+			attr->attcollation,
+			0);
+	rangeVar->location = forPortionOf->location;
+	result->rangeVar = rangeVar;
+	result->rangeType = attr->atttypid;
+	if (!get_typname_and_namespace(attr->atttypid, &range_type_name, &range_type_namespace))
+		elog(ERROR, "cache lookup failed for type %u", attr->atttypid);
+
+	/*
+	 * If we are using a PERIOD, we need the start & end columns.
+	 * If the attribute it not a GENERATED column, we needn't query pg_period.
+	 */
+	if (attr->attgenerated == ATTRIBUTE_GENERATED_STORED)
+	{
+		HeapTuple perTuple = SearchSysCache2(PERIODNAME,
+											 ObjectIdGetDatum(RelationGetRelid(targetrel)),
+											 PointerGetDatum(range_name));
+		if (HeapTupleIsValid(perTuple))
+		{
+			Form_pg_period per = (Form_pg_period) GETSTRUCT(perTuple);
+			Form_pg_attribute perattr;
+
+			start_attno = per->perstart;
+			end_attno = per->perend;
+
+			perattr = TupleDescAttr(targetrel->rd_att, start_attno - 1);
+			startcolname = NameStr(perattr->attname);
+
+			result->startVar = makeVar(
+					rtindex,
+					start_attno,
+					perattr->atttypid,
+					perattr->atttypmod,
+					perattr->attcollation,
+					0);
+
+			perattr = TupleDescAttr(targetrel->rd_att, end_attno - 1);
+			endcolname = NameStr(perattr->attname);
+			result->endVar = makeVar(
+					rtindex,
+					end_attno,
+					perattr->atttypid,
+					perattr->atttypmod,
+					perattr->attcollation,
+					0);
+
+			ReleaseSysCache(perTuple);
+		}
+	}
+
+	if (start_attno == InvalidAttrNumber)
+	{
+		result->startVar = NULL;
+		result->endVar = NULL;
+	}
+
+	if (forPortionOf->target)
+		/*
+		 * We were already given an expression for the target,
+		 * so we don't have to build anything.
+		 */
+		targetExpr = forPortionOf->target;
+	else
+	{
+		/* Make sure it's a range column */
+		if (!type_is_range(attr->atttypid))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
+					 errmsg("column \"%s\" of relation \"%s\" is not a range type",
+							range_name,
+							RelationGetRelationName(targetrel)),
+					 parser_errposition(pstate, forPortionOf->location)));
+
+		/*
+		 * Build a range from the FROM ... TO .... bounds.
+		 * This should give a constant result, so we accept functions like NOW()
+		 * but not column references, subqueries, etc.
+		 *
+		 * It also permits UNBOUNDED in either place.
+		 */
+		targetExpr = (Node *) makeFuncCall(
+				list_make2(makeString(range_type_namespace), makeString(range_type_name)),
+				list_make2(forPortionOf->target_start, forPortionOf->target_end),
+				COERCE_EXPLICIT_CALL,
+				forPortionOf->location);
+	}
+	result->targetRange = transformExpr(pstate, targetExpr, EXPR_KIND_UPDATE_PORTION);
+
+	/*
+	 * Build overlapsExpr to use in the whereClause.
+	 * This means we only hit rows matching the FROM & TO bounds.
+	 * We must look up the overlaps operator (usually "&&").
+	 */
+	opclass = GetDefaultOpClass(attr->atttypid, GIST_AM_OID);
+	strat = RTOverlapStrategyNumber;
+	GetOperatorFromWellKnownStrategy(opclass, InvalidOid, &opid, &strat);
+	result->overlapsExpr = (Node *) makeSimpleA_Expr(AEXPR_OP, get_opname(opid),
+			(Node *) copyObject(rangeVar), targetExpr,
+			forPortionOf->location);
+
+	/*
+	 * Look up the withoutPortionOper so we can compute the leftovers.
+	 * Leftovers will be old_range @- target_range
+	 * (one per element of the result).
+	 */
+	funcid = InvalidOid;
+	if (get_opclass_opfamily_and_input_type(opclass, &opfamily, &opcintype))
+		funcid = get_opfamily_proc(opfamily, opcintype, opcintype, GIST_WITHOUT_PORTION_PROC);
+
+	if (!OidIsValid(funcid))
+		ereport(ERROR,
+				errcode(ERRCODE_UNDEFINED_OBJECT),
+				errmsg("could not identify a without_overlaps support function for type %s", format_type_be(opcintype)),
+				errhint("Define a without_overlaps support function for operator class \"%d\" for access method \"%s\".",
+					 opclass, "gist"));
+
+	result->withoutPortionProc = funcid;
+
+	if (isUpdate)
+	{
+		/*
+		 * Now make sure we update the start/end time of the record.
+		 * For a range/etc col (r) this is `r = r * targetRange`.
+		 * For a PERIOD with cols (s, e) this is `s = lower(tsrange(s, e) * targetRange)`
+		 * and `e = upper(tsrange(s, e) * targetRange` (of course not necessarily with
+		 * tsrange, but with whatever range type is used there).
+		 */
+		Oid funcnamespace;
+		char *funcname;
+		char *funcnamespacename;
+		Expr *rangeTLEExpr;
+		TargetEntry *tle;
+
+		funcid = get_opfamily_proc(opfamily, opcintype, opcintype, GIST_INTERSECT_PROC);
+		if (!OidIsValid(funcid))
+			ereport(ERROR,
+					errcode(ERRCODE_UNDEFINED_OBJECT),
+					errmsg("could not identify an intersect support function for type %s", format_type_be(opcintype)),
+					errhint("Define an intersect support function for operator class \"%d\" for access method \"%s\".",
+						 opclass, "gist"));
+
+		// TODO: do we really need to go through the name here?
+		funcname = get_func_name(funcid);
+		if (!funcname)
+			elog(ERROR, "cache lookup failed for function %u", funcid);
+		funcnamespace = get_func_namespace(funcid, false);
+		funcnamespacename = get_namespace_name(funcnamespace);
+		if (!funcnamespacename)
+			elog(ERROR, "cache lookup failed for namespace %u", funcnamespace);
+
+		rangeTLEExpr = (Expr *) makeFuncCall(
+				list_make2(makeString(funcnamespacename), makeString(funcname)),
+				list_make2(copyObject(rangeVar), targetExpr),
+				COERCE_EXPLICIT_CALL,
+				forPortionOf->location);
+
+		/* Make a TLE to set the range column or start/end columns */
+		result->rangeTargetList = NIL;
+
+		if (result->startVar)
+		{
+			Expr *boundTLEExpr;
+
+			/* set the start column */
+			boundTLEExpr = (Expr *) makeFuncCall(SystemFuncName("lower"),
+					list_make1(rangeTLEExpr),
+					COERCE_EXPLICIT_CALL,
+					forPortionOf->location);
+			boundTLEExpr = (Expr *) transformExpr(pstate, (Node *) boundTLEExpr, EXPR_KIND_UPDATE_PORTION);
+			tle = makeTargetEntry(boundTLEExpr, start_attno, startcolname, false);
+			result->rangeTargetList = lappend(result->rangeTargetList, tle);
+
+			/* set the end column */
+			boundTLEExpr = (Expr *) makeFuncCall(SystemFuncName("upper"),
+					list_make1(rangeTLEExpr),
+					COERCE_EXPLICIT_CALL,
+					forPortionOf->location);
+			boundTLEExpr = (Expr *) transformExpr(pstate, (Node *) boundTLEExpr, EXPR_KIND_UPDATE_PORTION);
+			tle = makeTargetEntry(boundTLEExpr, end_attno, endcolname, false);
+			result->rangeTargetList = lappend(result->rangeTargetList, tle);
+
+			/* Mark the start/end columns as requiring update permissions */
+			target_perminfo->updatedCols = bms_add_member(target_perminfo->updatedCols,
+														  start_attno - FirstLowInvalidHeapAttributeNumber);
+			target_perminfo->updatedCols = bms_add_member(target_perminfo->updatedCols,
+														  end_attno - FirstLowInvalidHeapAttributeNumber);
+		}
+		else
+		{
+			rangeTLEExpr = (Expr *) transformExpr(pstate, (Node *) rangeTLEExpr, EXPR_KIND_UPDATE_PORTION);
+			tle = makeTargetEntry(rangeTLEExpr, range_attno, range_name, false);
+			result->rangeTargetList = lappend(result->rangeTargetList, tle);
+		}
+
+		/* Mark the range column as requiring update permissions */
+		target_perminfo->updatedCols = bms_add_member(target_perminfo->updatedCols,
+													  range_attno - FirstLowInvalidHeapAttributeNumber);
+	}
+	else
+		result->rangeTargetList = NIL;
+
+	result->range_name = range_name;
+
+	return result;
+}
 
 /*
  * BuildOnConflictExcludedTargetlist
@@ -2419,6 +2717,7 @@ transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt)
 {
 	Query	   *qry = makeNode(Query);
 	ParseNamespaceItem *nsitem;
+	Node	   *whereClause;
 	Node	   *qual;
 
 	qry->commandType = CMD_UPDATE;
@@ -2436,6 +2735,10 @@ transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt)
 										 stmt->relation->inh,
 										 true,
 										 ACL_UPDATE);
+
+	if (stmt->forPortionOf)
+		qry->forPortionOf = transformForPortionOfClause(pstate, qry->resultRelation, stmt->forPortionOf, true);
+
 	nsitem = pstate->p_target_nsitem;
 
 	/* subqueries in FROM cannot access the result relation */
@@ -2452,7 +2755,8 @@ transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt)
 	nsitem->p_lateral_only = false;
 	nsitem->p_lateral_ok = true;
 
-	qual = transformWhereClause(pstate, stmt->whereClause,
+	whereClause = addForPortionOfWhereConditions(qry, stmt->forPortionOf, stmt->whereClause);
+	qual = transformWhereClause(pstate, whereClause,
 								EXPR_KIND_WHERE, "WHERE");
 
 	qry->returningList = transformReturningList(pstate, stmt->returningList,
@@ -2462,7 +2766,7 @@ transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt)
 	 * Now we are done with SELECT-like processing, and can get on with
 	 * transforming the target list to match the UPDATE target columns.
 	 */
-	qry->targetList = transformUpdateTargetList(pstate, stmt->targetList);
+	qry->targetList = transformUpdateTargetList(pstate, stmt->targetList, qry->forPortionOf);
 
 	qry->rtable = pstate->p_rtable;
 	qry->rteperminfos = pstate->p_rteperminfos;
@@ -2481,7 +2785,7 @@ transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt)
  *	handle SET clause in UPDATE/MERGE/INSERT ... ON CONFLICT UPDATE
  */
 List *
-transformUpdateTargetList(ParseState *pstate, List *origTlist)
+transformUpdateTargetList(ParseState *pstate, List *origTlist, ForPortionOfExpr *forPortionOf)
 {
 	List	   *tlist = NIL;
 	RTEPermissionInfo *target_perminfo;
@@ -2533,6 +2837,21 @@ transformUpdateTargetList(ParseState *pstate, List *origTlist)
 					  strcmp(origTarget->name, pstate->p_target_nsitem->p_names->aliasname) == 0) ?
 					 errhint("SET target columns cannot be qualified with the relation name.") : 0,
 					 parser_errposition(pstate, origTarget->location)));
+
+		/*
+		 * If this is a FOR PORTION OF update,
+		 * forbid directly setting the range column,
+		 * since that would conflict with the implicit updates.
+		 */
+		if (forPortionOf != NULL)
+		{
+			if (attrno == forPortionOf->rangeVar->varattno)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("can't directly assign to \"%s\" in a FOR PORTION OF update",
+								origTarget->name),
+						 parser_errposition(pstate, origTarget->location)));
+		}
 
 		updateTargetListEntry(pstate, tle, origTarget->name,
 							  attrno,

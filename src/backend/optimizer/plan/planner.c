@@ -201,7 +201,7 @@ static PathTarget *make_group_input_target(PlannerInfo *root,
 										   PathTarget *final_target);
 static PathTarget *make_partial_grouping_target(PlannerInfo *root,
 												PathTarget *grouping_target,
-												Node *havingQual);
+												GroupPathExtraData *extra);
 static List *postprocess_setop_tlist(List *new_tlist, List *orig_tlist);
 static void optimize_window_clauses(PlannerInfo *root,
 									WindowFuncLists *wflists);
@@ -5333,6 +5333,99 @@ make_group_input_target(PlannerInfo *root, PathTarget *final_target)
 }
 
 /*
+ * setGroupClausePartial
+ *	  Generate a groupClause and a pathtarget for partial aggregate
+ *	  pushdown by FDW and set them to GroupPathExtraData.
+ */
+static void
+setGroupClausePartial(PathTarget *partial_target, List *non_group_exprs,
+					  List *groupClause, GroupPathExtraData *extra)
+{
+	int			exprno,
+				refno;
+	ListCell   *lc;
+	Index		maxRef = 0;
+	List	   *exprs_processed = NIL;
+	int			exprs_num = 0;
+
+	foreach(lc, groupClause)
+	{
+		SortGroupClause *sgc = (SortGroupClause *) lfirst(lc);
+
+		if (sgc->tleSortGroupRef > maxRef)
+			maxRef = sgc->tleSortGroupRef;
+	}
+	maxRef++;
+
+	extra->groupClausePartial = list_copy_deep(groupClause);
+	extra->partial_target = copy_pathtarget(partial_target);
+
+	if (partial_target->exprs)
+		exprs_num = partial_target->exprs->length;
+
+	foreach(lc, non_group_exprs)
+	{
+		Expr	   *expr = (Expr *) lfirst(lc);
+
+		refno = -1;
+		if (list_member(exprs_processed, expr) ||
+			(!IsA(expr, Var) && !IsA(expr, PlaceHolderVar)))
+			continue;
+		exprs_processed = lappend(exprs_processed, expr);
+		for (exprno = 0; exprno < exprs_num; exprno++)
+		{
+			Expr	   *target_expr = (Expr *) list_nth(partial_target->exprs, exprno);
+
+			if (equal(target_expr, expr))
+			{
+				refno = exprno;
+				break;
+			}
+		}
+		if (refno < 0)
+		{
+			SortGroupClause *grpcl = makeNode(SortGroupClause);
+
+			grpcl->tleSortGroupRef = maxRef++;
+			extra->groupClausePartial = lappend(extra->groupClausePartial, grpcl);
+			add_column_to_pathtarget(extra->partial_target, expr, grpcl->tleSortGroupRef);
+		}
+	}
+}
+
+/*
+ * adjustAggrefForPartial
+ * Adjust Aggrefs to put them in partial mode
+ */
+static void
+adjustAggrefForPartial(List *exprs)
+{
+	ListCell   *lc;
+
+	foreach(lc, exprs)
+	{
+		Aggref	   *aggref = (Aggref *) lfirst(lc);
+
+		if (IsA(aggref, Aggref))
+		{
+			Aggref	   *newaggref;
+
+			/*
+			 * We shouldn't need to copy the substructure of the Aggref node,
+			 * but flat-copy the node itself to avoid damaging other trees.
+			 */
+			newaggref = makeNode(Aggref);
+			memcpy(newaggref, aggref, sizeof(Aggref));
+
+			/* For now, assume serialization is required */
+			mark_partial_aggref(newaggref, AGGSPLIT_INITIAL_SERIAL);
+
+			lfirst(lc) = newaggref;
+		}
+	}
+}
+
+/*
  * make_partial_grouping_target
  *	  Generate appropriate PathTarget for output of partial aggregate
  *	  (or partial grouping, if there are no aggregates) nodes.
@@ -5347,11 +5440,15 @@ make_group_input_target(PlannerInfo *root, PathTarget *final_target)
  *
  * grouping_target is the tlist to be emitted by the topmost aggregation step.
  * havingQual represents the HAVING clause.
+ *
+ * Modified PathTarget cannot be used by FDW as-is to deparse this statement.
+ * So, before modifying PathTarget, setGroupClausePartial generates
+ * another Pathtarget and another list of SortGroupClauses.
  */
 static PathTarget *
 make_partial_grouping_target(PlannerInfo *root,
 							 PathTarget *grouping_target,
-							 Node *havingQual)
+							 GroupPathExtraData *extra)
 {
 	PathTarget *partial_target;
 	List	   *non_group_cols;
@@ -5393,8 +5490,8 @@ make_partial_grouping_target(PlannerInfo *root,
 	/*
 	 * If there's a HAVING clause, we'll need the Vars/Aggrefs it uses, too.
 	 */
-	if (havingQual)
-		non_group_cols = lappend(non_group_cols, havingQual);
+	if (extra->havingQual)
+		non_group_cols = lappend(non_group_cols, extra->havingQual);
 
 	/*
 	 * Pull out all the Vars, PlaceHolderVars, and Aggrefs mentioned in
@@ -5407,35 +5504,17 @@ make_partial_grouping_target(PlannerInfo *root,
 									  PVC_INCLUDE_AGGREGATES |
 									  PVC_RECURSE_WINDOWFUNCS |
 									  PVC_INCLUDE_PLACEHOLDERS);
-
+	setGroupClausePartial(partial_target, non_group_exprs, root->parse->groupClause, extra);
 	add_new_columns_to_pathtarget(partial_target, non_group_exprs);
+	add_new_columns_to_pathtarget(extra->partial_target, non_group_exprs);
 
 	/*
 	 * Adjust Aggrefs to put them in partial mode.  At this point all Aggrefs
 	 * are at the top level of the target list, so we can just scan the list
 	 * rather than recursing through the expression trees.
 	 */
-	foreach(lc, partial_target->exprs)
-	{
-		Aggref	   *aggref = (Aggref *) lfirst(lc);
-
-		if (IsA(aggref, Aggref))
-		{
-			Aggref	   *newaggref;
-
-			/*
-			 * We shouldn't need to copy the substructure of the Aggref node,
-			 * but flat-copy the node itself to avoid damaging other trees.
-			 */
-			newaggref = makeNode(Aggref);
-			memcpy(newaggref, aggref, sizeof(Aggref));
-
-			/* For now, assume serialization is required */
-			mark_partial_aggref(newaggref, AGGSPLIT_INITIAL_SERIAL);
-
-			lfirst(lc) = newaggref;
-		}
-	}
+	adjustAggrefForPartial(partial_target->exprs);
+	adjustAggrefForPartial(extra->partial_target->exprs);
 
 	/* clean up cruft */
 	list_free(non_group_exprs);
@@ -7088,7 +7167,7 @@ create_partial_grouping_paths(PlannerInfo *root,
 	 */
 	partially_grouped_rel->reltarget =
 		make_partial_grouping_target(root, grouped_rel->reltarget,
-									 extra->havingQual);
+									 extra);
 
 	if (!extra->partial_costs_set)
 	{

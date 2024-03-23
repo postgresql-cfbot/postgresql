@@ -3137,16 +3137,31 @@ RESET enable_partitionwise_join;
 -- ===================================================================
 -- test partitionwise aggregates
 -- ===================================================================
+ALTER SERVER loopback OPTIONS (ADD fdw_tuple_cost '0.1');
 
-CREATE TABLE pagg_tab (a int, b int, c text) PARTITION BY RANGE(a);
+CREATE TYPE mood AS enum ('sad', 'ok', 'happy');
+ALTER EXTENSION postgres_fdw ADD TYPE mood;
+
+CREATE TABLE pagg_tab (a int, b int, c text, c_serial int4,
+					c_int4array _int4, c_interval interval,
+					c_money money, c_1c text, c_1b bytea,
+					c_bit bit(2), c_1or3int2 int2,
+					c_1or3int4 int4, c_1or3int8 int8,
+					c_bool bool, c_enum mood, c_pg_lsn pg_lsn,
+					c_tid tid, c_int4range int4range,
+					c_int4multirange int4multirange,
+					c_time time, c_timetz timetz,
+					c_timestamp timestamp, c_timestamptz timestamptz,
+					c_xid8 xid8)
+	PARTITION BY RANGE(a);
 
 CREATE TABLE pagg_tab_p1 (LIKE pagg_tab);
 CREATE TABLE pagg_tab_p2 (LIKE pagg_tab);
 CREATE TABLE pagg_tab_p3 (LIKE pagg_tab);
 
-INSERT INTO pagg_tab_p1 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 10;
-INSERT INTO pagg_tab_p2 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 20 and (i % 30) >= 10;
-INSERT INTO pagg_tab_p3 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 30 and (i % 30) >= 20;
+INSERT INTO pagg_tab_p1 SELECT i % 30, i % 50, to_char(i/30, 'FM0000'), i, array[(i % 2), 0], ((i % 2) || ' seconds')::interval, (i % 2)::money, ((i - 1) % 10)::text, (((i - 1) % 10)::text)::bytea, case when (i % 2) = 0 then B'01' else B'11' end, case when (i % 2) = 0 then 1 else 3 end, case when (i % 2) = 0 then 1 else 3 end, case when (i % 2) = 0 then 1 else 3 end, case when (i % 2) = 0 then true else false end, (case when (i % 2) = 0 then 'sad' else 'happy' end)::mood, ('0/' || i)::pg_lsn, ('(0,' || i || ')')::tid, int4range(0, i), int4multirange(int4range(0, i), int4range(100, 100 + i)), '00:00:00'::time + (i || ' seconds')::interval, '00:00:00'::timetz + (i || ' seconds')::interval, '2000-01-01'::timestamp + (i || ' seconds')::interval, '2000-01-01'::timestamptz + (i || ' seconds')::interval, ((i % 10)::text)::xid8 FROM generate_series(1, 3000) i WHERE (i % 30) < 10;
+INSERT INTO pagg_tab_p2 SELECT i % 30, i % 50, to_char(i/30, 'FM0000'), i, array[(i % 2), 0], ((i % 2) || ' seconds')::interval, (i % 2)::money, ((i - 1) % 10)::text, (((i - 1) % 10)::text)::bytea, case when (i % 2) = 0 then B'01' else B'11' end, case when (i % 2) = 0 then 1 else 3 end, case when (i % 2) = 0 then 1 else 3 end, case when (i % 2) = 0 then 1 else 3 end, case when (i % 2) = 0 then true else false end, (case when (i % 2) = 0 then 'sad' else 'happy' end)::mood, ('0/' || i)::pg_lsn, ('(0,' || i || ')')::tid, int4range(0, i), int4multirange(int4range(0, i), int4range(100, 100 + i)), '00:00:00'::time + (i || ' seconds')::interval, '00:00:00'::timetz + (i || ' seconds')::interval, '2000-01-01'::timestamp + (i || ' seconds')::interval, '2000-01-01'::timestamptz + (i || ' seconds')::interval, ((i % 10)::text)::xid8 FROM generate_series(1, 3000) i WHERE (i % 30) < 20 and (i % 30) >= 10;
+INSERT INTO pagg_tab_p3 SELECT i % 30, i % 50, to_char(i/30, 'FM0000'), i, array[(i % 2), 0], ((i % 2) || ' seconds')::interval, (i % 2)::money, ((i - 1) % 10)::text, (((i - 1) % 10)::text)::bytea, case when (i % 2) = 0 then B'01' else B'11' end, case when (i % 2) = 0 then 1 else 3 end, case when (i % 2) = 0 then 1 else 3 end, case when (i % 2) = 0 then 1 else 3 end, case when (i % 2) = 0 then true else false end, (case when (i % 2) = 0 then 'sad' else 'happy' end)::mood, ('0/' || i)::pg_lsn, ('(0,' || i || ')')::tid, int4range(0, i), int4multirange(int4range(0, i), int4range(100, 100 + i)), '00:00:00'::time + (i || ' seconds')::interval, '00:00:00'::timetz + (i || ' seconds')::interval, '2000-01-01'::timestamp + (i || ' seconds')::interval, '2000-01-01'::timestamptz + (i || ' seconds')::interval, ((i % 10)::text)::xid8 FROM generate_series(1, 3000) i WHERE (i % 30) < 30 and (i % 30) >= 20;
 
 -- Create foreign partitions
 CREATE FOREIGN TABLE fpagg_tab_p1 PARTITION OF pagg_tab FOR VALUES FROM (0) TO (10) SERVER loopback OPTIONS (table_name 'pagg_tab_p1');
@@ -3154,9 +3169,13 @@ CREATE FOREIGN TABLE fpagg_tab_p2 PARTITION OF pagg_tab FOR VALUES FROM (10) TO 
 CREATE FOREIGN TABLE fpagg_tab_p3 PARTITION OF pagg_tab FOR VALUES FROM (20) TO (30) SERVER loopback OPTIONS (table_name 'pagg_tab_p3');
 
 ANALYZE pagg_tab;
+ANALYZE pagg_tab_p1;
+ANALYZE pagg_tab_p2;
+ANALYZE pagg_tab_p3;
 ANALYZE fpagg_tab_p1;
 ANALYZE fpagg_tab_p2;
 ANALYZE fpagg_tab_p3;
+SET extra_float_digits = 0;
 
 -- When GROUP BY clause matches with PARTITION KEY.
 -- Plan with partitionwise aggregates is disabled
@@ -3176,9 +3195,131 @@ EXPLAIN (VERBOSE, COSTS OFF)
 SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
 SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
 
--- When GROUP BY clause does not match with PARTITION KEY.
-EXPLAIN (COSTS OFF)
+-- Partial aggregates are safe to push down when there is a HAVING clause
+EXPLAIN (VERBOSE, COSTS OFF)
 SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 700 ORDER BY 1;
+SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 700 ORDER BY 1;
+
+-- Partial aggregates are safe to push down without having clause
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b ORDER BY 1;
+SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b ORDER BY 1;
+
+-- Partial aggregates are safe to push down even if we need both variable and variable-based expression
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT avg(a), max(a), count(*), (b/2)::numeric FROM pagg_tab GROUP BY b/2 ORDER BY 4;
+SELECT avg(a), max(a), count(*), (b/2)::numeric FROM pagg_tab GROUP BY b/2 ORDER BY 4;
+
+-- Partial aggregates are safe to push down for all built-in aggregates
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT /* aggregate <> partial aggregate */
+    array_agg(c_int4array), array_agg(b),
+    avg(b::int2), avg(b::int4), avg(b::int8), avg(c_interval), avg(b::float4), avg(b::float8), avg(b::numeric),
+    corr(b::float8, (b * b)::float8),
+    covar_pop(b::float8, (b * b)::float8),
+    covar_samp(b::float8, (b * b)::float8),
+    regr_avgx((2 * b)::float8, b::float8),
+    regr_avgy((2 * b)::float8, b::float8),
+    regr_intercept((2 * b + 3)::float8, b::float8),
+    regr_r2((b * b)::float8, b::float8),
+    regr_slope((2 * b + 3)::float8, b::float8),
+    regr_sxx((2 * b + 3)::float8, b::float8),
+    regr_sxy((b * b)::float8, b::float8),
+    regr_syy((2 * b + 3)::float8, b::float8),
+    stddev(b::float4), stddev(b::float8), stddev(b::int2), stddev(b::int4), stddev(b::int8), stddev(b::numeric),
+    stddev_pop(b::float4), stddev_pop(b::float8), stddev_pop(b::int2), stddev_pop(b::int4), stddev_pop(b::int8), stddev_pop(b::numeric),
+    stddev_samp(b::float4), stddev_samp(b::float8), stddev_samp(b::int2), stddev_samp(b::int4), stddev_samp(b::int8), stddev_samp(b::numeric),
+    string_agg(c_1c, ','), string_agg(c_1b, ','),
+    sum(b::int8), sum(b::numeric),
+    variance(b::float4), variance(b::float8), variance(b::int2), variance(b::int4), variance(b::int8), variance(b::numeric),
+    var_pop(b::float4), var_pop(b::float8), var_pop(b::int2), var_pop(b::int4), var_pop(b::int8), var_pop(b::numeric),
+    var_samp(b::float4), var_samp(b::float8), var_samp(b::int2), var_samp(b::int4), var_samp(b::int8), var_samp(b::numeric),
+    /* aggregate = partial aggregate */
+    any_value(b * 0),
+    bit_and(c_bit), bit_and(c_1or3int2), bit_and(c_1or3int4), bit_and(c_1or3int8),
+    bit_or(c_bit), bit_or(c_1or3int2), bit_or(c_1or3int4), bit_or(c_1or3int8),
+    bit_xor(c_bit), bit_xor(c_1or3int2), bit_xor(c_1or3int4), bit_xor(c_1or3int8),
+    bool_and(c_bool),
+    bool_or(c_bool),
+    count(b), count(*),
+    every(c_bool),
+    max(c_int4array), max(c_enum), max(c_1c::char(1)), max('2000-01-01'::date + b), max('0.0.0.0'::inet + b), max(b::float4), max(b::float8), max(b::int2), max(b::int4), max(b::int8), max(c_interval), max(c_money), max(b::numeric), max(b::oid), max(c_pg_lsn), max(c_tid), max(c_1c), max(c_time), max(c_timetz), max(c_timestamp), max(c_timestamptz), max(c_xid8),
+    min(c_int4array), min(c_enum), min(c_1c::char(1)), min('2000-01-01'::date + b), min('0.0.0.0'::inet + b), min(b::float4), min(b::float8), min(b::int2), min(b::int4), min(b::int8), min(c_interval), min(c_money), min(b::numeric), min(b::oid), min(c_pg_lsn), min(c_tid), min(c_1c), min(c_time), min(c_timetz), min(c_timestamp), min(c_timestamptz), min(c_xid8),
+    range_intersect_agg(c_int4range), range_intersect_agg(c_int4multirange),
+    regr_count((2 * b + 3)::float8, b::float8),
+    sum(b::float4), sum(b::float8), sum(b::int2), sum(b::int4),	sum(c_interval), sum(c_money)
+  FROM pagg_tab WHERE c_serial between 1 and 30;
+
+SELECT /* aggregate <> partial aggregate */
+    array_agg(c_int4array), array_agg(b),
+    avg(b::int2), avg(b::int4), avg(b::int8), avg(c_interval),
+    avg(b::float4), avg(b::float8),
+    corr(b::float8, (b * b)::float8),
+    covar_pop(b::float8, (b * b)::float8),
+    covar_samp(b::float8, (b * b)::float8),
+    regr_avgx((2 * b)::float8, b::float8),
+    regr_avgy((2 * b)::float8, b::float8),
+    regr_intercept((2 * b + 3)::float8, b::float8),
+    regr_r2((b * b)::float8, b::float8),
+    regr_slope((2 * b + 3)::float8, b::float8),
+    regr_sxx((2 * b + 3)::float8, b::float8),
+    regr_sxy((b * b)::float8, b::float8),
+    regr_syy((2 * b + 3)::float8, b::float8),
+    stddev(b::float4), stddev(b::float8), stddev(b::int2), stddev(b::int4), stddev(b::int8), stddev(b::numeric),
+    stddev_pop(b::float4), stddev_pop(b::float8), stddev_pop(b::int2), stddev_pop(b::int4), stddev_pop(b::int8), stddev_pop(b::numeric),
+    stddev_samp(b::float4), stddev_samp(b::float8), stddev_samp(b::int2), stddev_samp(b::int4), stddev_samp(b::int8), stddev_samp(b::numeric),
+    string_agg(c_1c, ','), string_agg(c_1b, ','),
+    sum(b::int8), sum(b::numeric),
+    variance(b::float4), variance(b::float8), variance(b::int2), variance(b::int4), variance(b::int8), variance(b::numeric),
+    var_pop(b::float4), var_pop(b::float8), var_pop(b::int2), var_pop(b::int4), var_pop(b::int8), var_pop(b::numeric),
+    var_samp(b::float4), var_samp(b::float8), var_samp(b::int2), var_samp(b::int4), var_samp(b::int8), var_samp(b::numeric),
+    /* aggregate = partial aggregate */
+    any_value(b * 0),
+    bit_and(c_bit), bit_and(c_1or3int2), bit_and(c_1or3int4), bit_and(c_1or3int8),
+    bit_or(c_bit), bit_or(c_1or3int2), bit_or(c_1or3int4), bit_or(c_1or3int8),
+    bit_xor(c_bit), bit_xor(c_1or3int2), bit_xor(c_1or3int4), bit_xor(c_1or3int8),
+    bool_and(c_bool),
+    bool_or(c_bool),
+    count(b), count(*),
+    every(c_bool),
+    max(c_int4array), max(c_enum), max(c_1c::char(1)), max('2000-01-01'::date + b), max('0.0.0.0'::inet + b), max(b::float4), max(b::float8), max(b::int2), max(b::int4), max(b::int8), max(c_interval), max(c_money), max(b::numeric), max(b::oid), max(c_pg_lsn), max(c_tid), max(c_1c), max(c_time), max(c_timetz), max(c_timestamp), max(c_timestamptz), max(c_xid8),
+    min(c_int4array), min(c_enum), min(c_1c::char(1)), min('2000-01-01'::date + b), min('0.0.0.0'::inet + b), min(b::float4), min(b::float8), min(b::int2), min(b::int4), min(b::int8), min(c_interval), min(c_money), min(b::numeric), min(b::oid), min(c_pg_lsn), min(c_tid), min(c_1c), min(c_time), min(c_timetz), min(c_timestamp), min(c_timestamptz), min(c_xid8),
+    range_intersect_agg(c_int4range), range_intersect_agg(c_int4multirange),
+    regr_count((2 * b + 3)::float8, b::float8),
+    sum(b::float4), sum(b::float8), sum(b::int2), sum(b::int4),	sum(c_interval), sum(c_money)
+  FROM pagg_tab WHERE c_serial between 1 and 30;
+
+-- Tests for backward compatibility
+ALTER SERVER loopback OPTIONS (ADD check_partial_aggregate_support 'false');
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b ORDER BY 1;
+SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b ORDER BY 1;
+
+ALTER SERVER loopback OPTIONS (SET check_partial_aggregate_support 'true');
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b ORDER BY 1;
+SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b ORDER BY 1;
+
+ALTER SERVER loopback OPTIONS (SET fdw_tuple_cost '1.0');
+SET enable_partitionwise_join=on;
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT avg(t1.b), avg(t1.b::int8) FROM pagg_tab t1 JOIN pagg_tab t2 USING(a);
+SELECT avg(t1.b), avg(t1.b::int8) FROM pagg_tab t1 JOIN pagg_tab t2 USING(a);
+RESET enable_partitionwise_join;
+ALTER SERVER loopback OPTIONS (SET fdw_tuple_cost '0.1');
+
+ALTER SERVER loopback OPTIONS (DROP check_partial_aggregate_support);
+
+-- It is unsafe to push down partial aggregates which contain DISTINCT clauses
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT max(a), count(distinct b) FROM pagg_tab;
+SELECT max(a), count(distinct b) FROM pagg_tab;
+
+-- It is unsafe to push down partial aggregates which contain ORDER BY clauses
+EXPLAIN (VERBOSE, COSTS OFF) SELECT array_agg(b order by b) FROM pagg_tab WHERE c_serial between 1 and 30;
+SELECT array_agg(b order by b) FROM pagg_tab WHERE c_serial between 1 and 30;
+
+ALTER SERVER loopback OPTIONS (DROP fdw_tuple_cost);
 
 -- ===================================================================
 -- access rights and superuser

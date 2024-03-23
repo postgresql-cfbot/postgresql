@@ -101,8 +101,8 @@ static Node *make_agg_arg(Oid argtype, Oid argcollation);
  * pstate level.
  */
 void
-transformAggregateCall(ParseState *pstate, Aggref *agg,
-					   List *args, List *aggorder, bool agg_distinct)
+transformAggregateCall(ParseState *pstate, Aggref *agg, List *args,
+					   List *aggorder, bool agg_distinct, bool agg_partial)
 {
 	List	   *argtypes = NIL;
 	List	   *tlist = NIL;
@@ -147,8 +147,8 @@ transformAggregateCall(ParseState *pstate, Aggref *agg,
 										 torder, tlist, sortby);
 		}
 
-		/* Never any DISTINCT in an ordered-set agg */
-		Assert(!agg_distinct);
+		/* Never any DISTINCT and PARTIAL_AGG in an ordered-set agg */
+		Assert(!agg_distinct || !agg_partial);
 	}
 	else
 	{
@@ -222,6 +222,22 @@ transformAggregateCall(ParseState *pstate, Aggref *agg,
 	agg->args = tlist;
 	agg->aggorder = torder;
 	agg->aggdistinct = tdistinct;
+	agg->agg_partial = agg_partial;
+	if(agg->agg_partial){
+		HeapTuple	aggtup;
+		Form_pg_aggregate aggform;
+
+		aggtup = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(agg->aggfnoid));
+		if (!HeapTupleIsValid(aggtup))
+			elog(ERROR, "cache lookup failed for aggregate %u", agg->aggfnoid);
+		aggform = (Form_pg_aggregate) GETSTRUCT(aggtup);
+		ReleaseSysCache(aggtup);
+		if(aggform->aggtranstype == INTERNALOID){
+			agg->aggtype = BYTEAOID;
+		} else {
+			agg->aggtype = aggform->aggtranstype;
+		}
+	}
 
 	/*
 	 * Now build the aggargtypes list with the type OIDs of the direct and

@@ -97,6 +97,7 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 	bool		agg_within_group = (fn ? fn->agg_within_group : false);
 	bool		agg_star = (fn ? fn->agg_star : false);
 	bool		agg_distinct = (fn ? fn->agg_distinct : false);
+	bool		agg_partial = (fn ? fn->agg_partial : false);
 	bool		func_variadic = (fn ? fn->func_variadic : false);
 	CoercionForm funcformat = (fn ? fn->funcformat : COERCE_EXPLICIT_CALL);
 	bool		could_be_projection;
@@ -222,7 +223,8 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 	 */
 	could_be_projection = (nargs == 1 && !proc_call &&
 						   agg_order == NIL && agg_filter == NULL &&
-						   !agg_star && !agg_distinct && over == NULL &&
+						   !agg_star && !agg_distinct &&
+						   !agg_partial && over == NULL &&
 						   !func_variadic && argnames == NIL &&
 						   list_length(funcname) == 1 &&
 						   (actual_arg_types[0] == RECORDOID ||
@@ -322,6 +324,12 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 					 errmsg("DISTINCT specified, but %s is not an aggregate function",
 							NameListToString(funcname)),
 					 parser_errposition(pstate, location)));
+		if (agg_partial)
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("PARTIAL_AGGREGATE specified, but %s is not an aggregate function",
+							NameListToString(funcname)),
+					 parser_errposition(pstate, location)));
 		if (agg_within_group)
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
@@ -392,6 +400,8 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 						 parser_errposition(pstate, location)));
 			/* gram.y rejects DISTINCT + WITHIN GROUP */
 			Assert(!agg_distinct);
+			/* gram.y rejects PARTIAL_AGGREGATE */
+			Assert(!agg_partial);
 			/* gram.y rejects VARIADIC + WITHIN GROUP */
 			Assert(!func_variadic);
 
@@ -814,7 +824,8 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 					 parser_errposition(pstate, location)));
 
 		/* parse_agg.c does additional aggregate-specific processing */
-		transformAggregateCall(pstate, aggref, fargs, agg_order, agg_distinct);
+		transformAggregateCall(pstate, aggref, fargs, agg_order, agg_distinct,
+							   agg_partial);
 
 		retval = (Node *) aggref;
 	}
@@ -843,6 +854,15 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("DISTINCT is not implemented for window functions"),
+					 parser_errposition(pstate, location)));
+
+		/*
+		 * partial aggregates not allowed in windows yet
+		 */
+		if (agg_partial)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("PARTIAL_AGGREGATE is not implemented for window functions"),
 					 parser_errposition(pstate, location)));
 
 		/*

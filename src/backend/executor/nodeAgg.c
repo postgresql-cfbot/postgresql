@@ -1076,9 +1076,14 @@ finalize_aggregate(AggState *aggstate,
 	}
 
 	/*
-	 * Apply the agg's finalfn if one is provided, else return transValue.
+	 * If the agg's finalfn is provided and PARTIAL_AGGREGATE keyword is
+	 * not specified, apply the agg's finalfn.
+	 * If PARTIAL_AGGREGATE keyword is specified and the transValue type
+	 * is internal, apply the agg's serialfn. In this case, if the agg's
+	 * serialfn must not be invalid. Otherwise return transValue.
 	 */
-	if (OidIsValid(peragg->finalfn_oid))
+	if (OidIsValid(peragg->finalfn_oid) &&
+		(peragg->aggref->agg_partial == false))
 	{
 		int			numFinalArgs = peragg->numFinalArgs;
 
@@ -1105,6 +1110,44 @@ finalize_aggregate(AggState *aggstate,
 			fcinfo->args[i].isnull = true;
 			anynull = true;
 		}
+
+		if (fcinfo->flinfo->fn_strict && anynull)
+		{
+			/* don't call a strict function with NULL inputs */
+			*resultVal = (Datum) 0;
+			*resultIsNull = true;
+		}
+		else
+		{
+			Datum		result;
+
+			result = FunctionCallInvoke(fcinfo);
+			*resultIsNull = fcinfo->isnull;
+			*resultVal = MakeExpandedObjectReadOnly(result,
+													fcinfo->isnull,
+													peragg->resulttypeLen);
+		}
+		aggstate->curperagg = NULL;
+	}
+	else if (peragg->aggref->agg_partial
+			&& (peragg->aggref->aggtranstype == INTERNALOID))
+	{
+		if(!OidIsValid(peragg->serialfn_oid))
+			elog(ERROR, "serialfunc is note provided for partial aggregate");
+
+		/* set up aggstate->curperagg for AggGetAggref() */
+		aggstate->curperagg = peragg;
+
+		InitFunctionCallInfoData(*fcinfo, &peragg->serialfn, 1,
+								 InvalidOid, (void *) aggstate, NULL);
+
+		/* Fill in the transition state value */
+		fcinfo->args[0].value =
+			MakeExpandedObjectReadOnly(pergroupstate->transValue,
+									   pergroupstate->transValueIsNull,
+									   pertrans->transtypeLen);
+		fcinfo->args[0].isnull = pergroupstate->transValueIsNull;
+		anynull |= pergroupstate->transValueIsNull;
 
 		if (fcinfo->flinfo->fn_strict && anynull)
 		{
@@ -3662,7 +3705,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 		Oid			serialfn_oid,
 					deserialfn_oid;
 		Oid			aggOwner;
-		Expr	   *finalfnexpr;
+		Expr	   *finalfnexpr, *serialfnexpr;
 		Oid			aggtranstype;
 
 		/* Planner should have assigned aggregate to correct level */
@@ -3818,6 +3861,17 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 										 &finalfnexpr);
 			fmgr_info(finalfn_oid, &peragg->finalfn);
 			fmgr_info_set_expr((Node *) finalfnexpr, &peragg->finalfn);
+		}
+		/*
+		 * build expression trees for the serialfn, if it exists and is required.
+		 */
+		if (OidIsValid(aggform->aggserialfn) && peragg->aggref->agg_partial)
+		{
+			build_aggregate_serialfn_expr(aggform->aggserialfn,
+										 &serialfnexpr);
+			peragg->serialfn_oid = aggform->aggserialfn;
+			fmgr_info(aggform->aggserialfn, &peragg->serialfn);
+			fmgr_info_set_expr((Node *) serialfnexpr, &peragg->serialfn);
 		}
 
 		/* get info about the output value's datatype */

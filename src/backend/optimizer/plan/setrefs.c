@@ -2556,6 +2556,7 @@ convert_combining_aggrefs(Node *node, void *context)
 		parent_agg = copyObject(child_agg);
 		child_agg->args = orig_agg->args;
 		child_agg->aggfilter = orig_agg->aggfilter;
+		child_agg->agg_partial = false;
 
 		/*
 		 * Now, set up child_agg to represent the first phase of partial

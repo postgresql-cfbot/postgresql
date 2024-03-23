@@ -754,7 +754,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	ORDER ORDINALITY OTHERS OUT_P OUTER_P
 	OVER OVERLAPS OVERLAY OVERRIDING OWNED OWNER
 
-	PARALLEL PARAMETER PARSER PARTIAL PARTITION PASSING PASSWORD
+	PARALLEL PARAMETER PARSER PARTIAL PARTIAL_AGGREGATE PARTITION PASSING PASSWORD
 	PLACING PLANS POLICY
 	POSITION PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
 	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROCEDURES PROGRAM PUBLICATION
@@ -15314,6 +15314,26 @@ func_application: func_name '(' ')'
 					n->agg_distinct = true;
 					$$ = (Node *) n;
 				}
+			| func_name '(' PARTIAL_AGGREGATE func_arg_list opt_sort_clause ')'
+				{
+					FuncCall   *n = makeFuncCall($1, $4,
+												 COERCE_EXPLICIT_CALL,
+												 @1);
+
+					n->agg_order = $5;
+					n->agg_partial = true;
+					$$ = (Node *) n;
+				}
+			| func_name '(' PARTIAL_AGGREGATE '*' ')'
+				{
+					FuncCall   *n = makeFuncCall($1, NIL,
+												 COERCE_EXPLICIT_CALL,
+												 @1);
+
+					n->agg_star = true;
+					n->agg_partial = true;
+					$$ = (Node *) n;
+				}
 			| func_name '(' '*' ')'
 				{
 					/*
@@ -15368,6 +15388,11 @@ func_expr: func_application within_group_clause filter_clause over_clause
 							ereport(ERROR,
 									(errcode(ERRCODE_SYNTAX_ERROR),
 									 errmsg("cannot use DISTINCT with WITHIN GROUP"),
+									 parser_errposition(@2)));
+						if (n->agg_partial)
+							ereport(ERROR,
+									(errcode(ERRCODE_SYNTAX_ERROR),
+									 errmsg("cannot use PARTIAL_AGGREGATE with WITHIN GROUP"),
 									 parser_errposition(@2)));
 						if (n->func_variadic)
 							ereport(ERROR,
@@ -17790,6 +17815,7 @@ reserved_keyword:
 			| ONLY
 			| OR
 			| ORDER
+			| PARTIAL_AGGREGATE
 			| PLACING
 			| PRIMARY
 			| REFERENCES
@@ -18105,6 +18131,7 @@ bare_label_keyword:
 			| PARAMETER
 			| PARSER
 			| PARTIAL
+			| PARTIAL_AGGREGATE
 			| PARTITION
 			| PASSING
 			| PASSWORD

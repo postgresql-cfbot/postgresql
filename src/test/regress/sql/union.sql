@@ -302,12 +302,11 @@ select except select;
 set enable_hashagg = true;
 set enable_sort = false;
 
-explain (costs off)
-select from generate_series(1,5) union select from generate_series(1,3);
+-- We've no way to check hashed UNION as the empty pathkeys in the Append are
+-- fine to make use of Unique, which is cheaper than HashAggregate.
 explain (costs off)
 select from generate_series(1,5) intersect select from generate_series(1,3);
 
-select from generate_series(1,5) union select from generate_series(1,3);
 select from generate_series(1,5) union all select from generate_series(1,3);
 select from generate_series(1,5) intersect select from generate_series(1,3);
 select from generate_series(1,5) intersect all select from generate_series(1,3);

@@ -116,7 +116,7 @@ GetBTPageStatistics(BlockNumber blkno, Buffer buffer, BTPageStat *stat)
 
 	stat->blkno = blkno;
 
-	stat->max_avail = BLCKSZ - (BLCKSZ - phdr->pd_special + SizeOfPageHeaderData);
+	stat->max_avail = PageUsableSpace - (BLCKSZ - phdr->pd_special);
 
 	stat->dead_items = stat->live_items = 0;
 

@@ -15,6 +15,7 @@
 #define BUFPAGE_H
 
 #include "access/xlogdefs.h"
+#include "common/blocksize.h"
 #include "storage/block.h"
 #include "storage/item.h"
 #include "storage/off.h"
@@ -36,10 +37,10 @@
  * |			 v pd_upper							  |
  * +-------------+------------------------------------+
  * |			 | tupleN ...                         |
- * +-------------+------------------+-----------------+
- * |	   ... tuple3 tuple2 tuple1 | "special space" |
- * +--------------------------------+-----------------+
- *									^ pd_special
+ * +-------------+------------------------+-----------+
+ * | ... tuple3 tuple2 tuple1 | "special" | reserved  |
+ * +--------------------------+-----------------------+
+ *                            ^ pd_special
  *
  * a page is full when nothing can be added between pd_lower and
  * pd_upper.
@@ -68,11 +69,18 @@
  *
  * AM-generic per-page information is kept in PageHeaderData.
  *
- * AM-specific per-page data (if any) is kept in the area marked "special
- * space"; each AM has an "opaque" structure defined somewhere that is
- * stored as the page trailer.  an access method should always
- * initialize its pages with PageInit and then set its own opaque
- * fields.
+ * Reserved page size is defined at initdb time and reserves the final bytes
+ * of each disk page for conditional feature use, for instance storing
+ * authenticated data or IVs for encryption.  If reserved page size is present
+ * (either through explicit allocation or through implicit definition via
+ * defined page features) then the special space offset will be adjusted to
+ * start not at the end of the block itself, but right before the MAXALIGN'd
+ * ReservedPageSize chunk at the end, which is allocated/managed using the
+ * page features mechanism.  This adjustment is done at PageInit() time
+ * transparently to the AM, which still uses the normal pd_special pointer to
+ * reference its opaque block.  The only difference here is that the
+ * pd_special field + sizeof(opaque structure) will not (necessarily) be the
+ * same as the heap block size, but instead BLCKSZ - ReservedPageSize.
  */
 
 typedef Pointer Page;
@@ -214,6 +222,12 @@ typedef PageHeaderData *PageHeader;
 #define SizeOfPageHeaderData (offsetof(PageHeaderData, pd_linp))
 
 /*
+ * how much space is left after smgr's bookkeeping, etc; should be MAXALIGN
+ */
+#define PageUsableSpace (BLCKSZ - SizeOfPageHeaderData - ReservedPageSize)
+#define PageUsableSpaceMax (BLCKSZ - SizeOfPageHeaderData)
+
+/*
  * PageIsEmpty
  *		returns true iff no itemid has been allocated on the page
  */
@@ -302,6 +316,16 @@ PageSetPageSizeAndVersion(Page page, Size size, uint8 version)
 	((PageHeader) page)->pd_pagesize_version = size | version;
 }
 
+/*
+ * PageGetUsablePageSize
+ *		Returns the usable space on a page (from end of page header to reserved space)
+ */
+static inline uint16
+PageGetUsablePageSize(Page page)
+{
+	return PageGetPageSize(page) - SizeOfPageHeaderData - ReservedPageSize;
+}
+
 /* ----------------
  *		page special data functions
  * ----------------
@@ -313,7 +337,7 @@ PageSetPageSizeAndVersion(Page page, Size size, uint8 version)
 static inline uint16
 PageGetSpecialSize(Page page)
 {
-	return (PageGetPageSize(page) - ((PageHeader) page)->pd_special);
+	return (PageGetPageSize(page) - ((PageHeader) page)->pd_special - ReservedPageSize);
 }
 
 /*

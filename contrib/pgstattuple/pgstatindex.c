@@ -309,7 +309,7 @@ pgstatindex_impl(Relation rel, FunctionCallInfo fcinfo)
 		{
 			int			max_avail;
 
-			max_avail = BLCKSZ - (BLCKSZ - ((PageHeader) page)->pd_special + SizeOfPageHeaderData);
+			max_avail = PageUsableSpace - (BLCKSZ - ((PageHeader) page)->pd_special);
 			indexStat.max_avail += max_avail;
 			indexStat.free_space += PageGetFreeSpace(page);
 

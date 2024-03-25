@@ -2322,8 +2322,8 @@ msgstr "Кластер бази даних було ініціалізовано
 
 #: access/transam/xlog.c:4131
 #, c-format
-msgid "The database cluster was initialized with TOAST_MAX_CHUNK_SIZE %d, but the server was compiled with TOAST_MAX_CHUNK_SIZE %d."
-msgstr "Кластер бази даних було ініціалізовано з TOAST_MAX_CHUNK_SIZE %d, але сервер було скомпільовано з TOAST_MAX_CHUNK_SIZE %d."
+msgid "The database cluster was initialized with ClusterToastMaxChunkSize %d, but the server was compiled with ClusterToastMaxChunkSize %d."
+msgstr "Кластер бази даних було ініціалізовано з ClusterToastMaxChunkSize %d, але сервер було скомпільовано з ClusterToastMaxChunkSize %d."
 
 #: access/transam/xlog.c:4138
 #, c-format

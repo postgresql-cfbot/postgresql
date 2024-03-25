@@ -304,6 +304,8 @@ main(int argc, char *argv[])
 	/* we don't print floatFormat since can't say much useful about it */
 	printf(_("Database block size:                  %u\n"),
 		   ControlFile->blcksz);
+	printf(_("Reserved page size:                   %u\n"),
+		   ControlFile->reserved_page_size);
 	printf(_("Blocks per segment of large relation: %u\n"),
 		   ControlFile->relseg_size);
 	printf(_("WAL block size:                       %u\n"),

@@ -98,7 +98,7 @@ typedef GISTPageOpaqueData *GISTPageOpaque;
  * key size using opclass parameters.
  */
 #define GISTMaxIndexTupleSize	\
-	MAXALIGN_DOWN((BLCKSZ - SizeOfPageHeaderData - sizeof(GISTPageOpaqueData)) / \
+	MAXALIGN_DOWN((PageUsableSpace - sizeof(GISTPageOpaqueData)) / \
 				  4 - sizeof(ItemIdData))
 
 #define GISTMaxIndexKeySize	\

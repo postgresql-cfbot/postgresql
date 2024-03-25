@@ -31,7 +31,7 @@ print $fh pack("x[$size]");
 close $fh;
 
 command_checks_all(
-	[ 'pg_resetwal', '-n', $node->data_dir ],
+	[ 'pg_resetwal', '-b', '0', '-n', $node->data_dir ],
 	0,
 	[qr/pg_control version number/],
 	[
@@ -47,7 +47,7 @@ print $fh $data, pack("x[" . ($size - 16) . "]");
 close $fh;
 
 command_checks_all(
-	[ 'pg_resetwal', '-n', $node->data_dir ],
+	[ 'pg_resetwal', '-b', '0', '-n', $node->data_dir ],
 	0,
 	[qr/pg_control version number/],
 	[
@@ -57,10 +57,10 @@ command_checks_all(
 
 # now try to run it
 command_fails_like(
-	[ 'pg_resetwal', $node->data_dir ],
+	[ 'pg_resetwal', '-b', '0', $node->data_dir ],
 	qr/not proceeding because control file values were guessed/,
 	'does not run when control file values were guessed');
-command_ok([ 'pg_resetwal', '-f', $node->data_dir ],
+command_ok([ 'pg_resetwal', '-b', '0', '-f', $node->data_dir ],
 	'runs with force when control file values were guessed');
 
 done_testing();

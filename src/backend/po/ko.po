@@ -2404,11 +2404,11 @@ msgstr ""
 #: access/transam/xlog.c:4837
 #, c-format
 msgid ""
-"The database cluster was initialized with TOAST_MAX_CHUNK_SIZE %d, but the "
-"server was compiled with TOAST_MAX_CHUNK_SIZE %d."
+"The database cluster was initialized with ClusterToastMaxChunkSize %d, but the "
+"server was compiled with ClusterToastMaxChunkSize %d."
 msgstr ""
-"데이터베이스 클러스터는 TOAST_MAX_CHUNK_SIZE %d(으)로 초기화되었지만 서버는 "
-"TOAST_MAX_CHUNK_SIZE %d(으)로 컴파일 되었습니다."
+"데이터베이스 클러스터는 ClusterToastMaxChunkSize %d(으)로 초기화되었지만 서버는 "
+"ClusterToastMaxChunkSize %d(으)로 컴파일 되었습니다."
 
 #: access/transam/xlog.c:4844
 #, c-format

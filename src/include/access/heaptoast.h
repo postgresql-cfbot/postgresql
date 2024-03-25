@@ -20,10 +20,11 @@
 /*
  * Find the maximum size of a tuple if there are to be N tuples per page.
  */
-#define MaximumBytesPerTuple(tuplesPerPage) \
-	MAXALIGN_DOWN((BLCKSZ - \
-				   MAXALIGN(SizeOfPageHeaderData + (tuplesPerPage) * sizeof(ItemIdData))) \
+#define CalcMaximumBytesPerTuple(usablespace,tuplesPerPage)	\
+	MAXALIGN_DOWN(((usablespace) - ((tuplesPerPage) * sizeof(ItemIdData))) \
 				  / (tuplesPerPage))
+
+#define MaximumBytesPerTuple(tuplesPerPage) CalcMaximumBytesPerTuple(PageUsableSpace,tuplesPerPage)
 
 /*
  * These symbols control toaster activation.  If a tuple is larger than
@@ -65,28 +66,31 @@
  * compress it (we can't move it out-of-line, however).  Note that this
  * number is per-datum, not per-tuple, for simplicity in index_form_tuple().
  */
-#define TOAST_INDEX_TARGET		(MaxHeapTupleSize / 16)
+#define TOAST_INDEX_TARGET		(ClusterMaxHeapTupleSize / 16)
 
 /*
  * When we store an oversize datum externally, we divide it into chunks
- * containing at most TOAST_MAX_CHUNK_SIZE data bytes.  This number *must*
+ * containing at most ClusterToastMaxChunkSize data bytes.  This number *must*
  * be small enough that the completed toast-table tuple (including the
  * ID and sequence fields and all overhead) will fit on a page.
  * The coding here sets the size on the theory that we want to fit
  * EXTERN_TUPLES_PER_PAGE tuples of maximum size onto a page.
  *
- * NB: Changing TOAST_MAX_CHUNK_SIZE requires an initdb.
+ * NB: Changing ClusterToastMaxChunkSize requires an initdb.
  */
 #define EXTERN_TUPLES_PER_PAGE	4	/* tweak only this */
 
 #define EXTERN_TUPLE_MAX_SIZE	MaximumBytesPerTuple(EXTERN_TUPLES_PER_PAGE)
 
-#define TOAST_MAX_CHUNK_SIZE	\
-	(EXTERN_TUPLE_MAX_SIZE -							\
+
+#define CalcToastMaxChunkSize(usablespace)							\
+	(CalcMaximumBytesPerTuple(usablespace,EXTERN_TUPLES_PER_PAGE) - \
 	 MAXALIGN(SizeofHeapTupleHeader) -					\
 	 sizeof(Oid) -										\
 	 sizeof(int32) -									\
 	 VARHDRSZ)
+
+#define TOAST_MAX_CHUNK_SIZE_LIMIT CalcToastMaxChunkSize(PageUsableSpaceMax)
 
 /* ----------
  * heap_toast_insert_or_update -

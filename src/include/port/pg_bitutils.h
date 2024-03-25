@@ -339,4 +339,37 @@ pg_rotate_left32(uint32 word, int n)
 #define pg_prevpower2_size_t pg_prevpower2_64
 #endif
 
+
+/* integer division speedups for constant but runtime divisors */
+
+/*
+ * This value should cached globally and used in the other routines to find
+ * the div/mod quickly relative to `div` operand.  TODO: might have some other
+ * asm-tuned things in port maybe?  general-purpose solution should be ok
+ * though.
+ */
+static inline uint32 pg_fastinverse(uint16 divisor)
+{
+	return UINT32_C(0xFFFFFFFF) / divisor + 1;
+}
+
+/*
+ * pg_fastdiv - calculates the quotient of a 16-bit number against a constant
+ * divisor without using the division operator
+ */
+static inline uint32 pg_fastdiv(uint32 n, uint32 divisor, uint64 fastinv)
+{
+	return (uint32)(((uint64)n * (uint64)(fastinv)) >> 32);
+}
+
+/*
+ * pg_fastmod - calculates the modulus of a 16-bit number against a constant
+ * divisor without using the division operator
+ */
+static inline uint32 pg_fastmod(uint32 n, uint32 divisor, uint64 fastinv)
+{
+	uint32 lowbits = fastinv * n;
+	return ((uint64)lowbits * (uint64)divisor) >> 32;
+}
+
 #endif							/* PG_BITUTILS_H */

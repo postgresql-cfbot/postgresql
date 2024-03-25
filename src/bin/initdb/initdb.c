@@ -69,6 +69,7 @@
 #include "catalog/pg_class_d.h" /* pgrminclude ignore */
 #include "catalog/pg_collation_d.h"
 #include "catalog/pg_database_d.h"	/* pgrminclude ignore */
+#include "common/blocksize.h"
 #include "common/file_perm.h"
 #include "common/file_utils.h"
 #include "common/logging.h"
@@ -158,6 +159,7 @@ static const char *authmethodhost = NULL;
 static const char *authmethodlocal = NULL;
 static _stringlist *extra_guc_names = NULL;
 static _stringlist *extra_guc_values = NULL;
+static _stringlist *init_options = NULL;
 static bool debug = false;
 static bool noclean = false;
 static bool noinstructions = false;
@@ -168,6 +170,8 @@ static bool data_checksums = false;
 static char *xlog_dir = NULL;
 static int	wal_segment_size_mb = (DEFAULT_XLOG_SEG_SIZE) / (1024 * 1024);
 static DataDirSyncMethod sync_method = DATA_DIR_SYNC_METHOD_FSYNC;
+static char *str_reserved_page_size = NULL;
+static int reserved_page_size = 0;
 
 
 /* internal vars */
@@ -399,6 +403,43 @@ add_stringlist_item(_stringlist **listhead, const char *str)
 			 /* skip */ ;
 		oldentry->next = newentry;
 	}
+}
+
+/*
+ * Add an option to our initlist
+ */
+static void
+add_init_option_int(const char *opt, int val)
+{
+	char buf[100];
+
+	snprintf(buf, sizeof(buf)-1, "%s %d", opt, val);
+	add_stringlist_item(&init_options, buf);
+}
+
+/* output our initlist */
+static void
+output_init_list(void)
+{
+	char *path = psprintf("%s/%s", pg_data, "init_opts");
+	int cnt = 0;
+	struct _stringlist *s;
+	FILE *f;
+
+	if (!init_options)
+		return;
+
+	if ((f = fopen(path, "w")) == NULL)
+		pg_fatal("could not open file \"%s\" for writing: %m", path);
+
+	for (s = init_options; s; s=s->next)
+	{
+		if (cnt++)
+			fputc(' ', f);
+		fputs(s->str, f);
+	}
+	fputc('\n', f);
+	fclose(f);
 }
 
 /*
@@ -1156,11 +1197,12 @@ test_specific_config_settings(int test_conns, int test_buffs)
 
 	/* Set up the test postmaster invocation */
 	printfPQExpBuffer(&cmd,
-					  "\"%s\" --check %s %s "
+					  "\"%s\" --check %s %s -b %d "
 					  "-c max_connections=%d "
 					  "-c shared_buffers=%d "
 					  "-c dynamic_shared_memory_type=%s",
 					  backend_exec, boot_options, extra_options,
+					  reserved_page_size,
 					  test_conns, test_buffs,
 					  dynamic_shared_memory_type);
 
@@ -1538,6 +1580,9 @@ bootstrap_template1(void)
 
 	printfPQExpBuffer(&cmd, "\"%s\" --boot %s %s", backend_exec, boot_options, extra_options);
 	appendPQExpBuffer(&cmd, " -X %d", wal_segment_size_mb * (1024 * 1024));
+
+	if (reserved_page_size)
+		appendPQExpBuffer(&cmd, " -b %d", reserved_page_size);
 	if (data_checksums)
 		appendPQExpBuffer(&cmd, " -k");
 	if (debug)
@@ -2450,6 +2495,7 @@ usage(const char *progname)
 	printf(_("  -A, --auth=METHOD         default authentication method for local connections\n"));
 	printf(_("      --auth-host=METHOD    default authentication method for local TCP/IP connections\n"));
 	printf(_("      --auth-local=METHOD   default authentication method for local-socket connections\n"));
+	printf(_("  -b, --reserved-size=SIZE  reserved space in disk pages for page features\n"));
 	printf(_(" [-D, --pgdata=]DATADIR     location for this database cluster\n"));
 	printf(_("  -E, --encoding=ENCODING   set default encoding for new databases\n"));
 	printf(_("  -g, --allow-group-access  allow group read/execute on data directory\n"));
@@ -3037,6 +3083,8 @@ initialize_data_directory(void)
 	 */
 	write_version_file("base/1");
 
+	output_init_list();
+
 	/*
 	 * Create the stuff we don't need to use bootstrap mode for, using a
 	 * backend running in simple standalone mode.
@@ -3124,6 +3172,7 @@ main(int argc, char *argv[])
 		{"sync-only", no_argument, NULL, 'S'},
 		{"waldir", required_argument, NULL, 'X'},
 		{"wal-segsize", required_argument, NULL, 12},
+		{"reserved-size", required_argument, NULL, 'b'},
 		{"data-checksums", no_argument, NULL, 'k'},
 		{"allow-group-access", no_argument, NULL, 'g'},
 		{"discard-caches", no_argument, NULL, 14},
@@ -3173,7 +3222,7 @@ main(int argc, char *argv[])
 
 	/* process command-line options */
 
-	while ((c = getopt_long(argc, argv, "A:c:dD:E:gkL:nNsST:U:WX:",
+	while ((c = getopt_long(argc, argv, "A:b:c:dD:E:gkL:nNsST:U:WX:",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -3196,6 +3245,9 @@ main(int argc, char *argv[])
 				break;
 			case 11:
 				authmethodhost = pg_strdup(optarg);
+				break;
+			case 'b':
+				str_reserved_page_size = pg_strdup(optarg);
 				break;
 			case 'c':
 				{
@@ -3392,6 +3444,28 @@ main(int argc, char *argv[])
 
 	if (!IsValidWalSegSize(wal_segment_size_mb * 1024 * 1024))
 		pg_fatal("argument of %s must be a power of two between 1 and 1024", "--wal-segsize");
+
+	if (str_reserved_page_size == NULL)
+		reserved_page_size = 0;
+	else
+	{
+		char	   *endptr;
+
+		/* check that the argument is a number */
+		reserved_page_size = strtol(str_reserved_page_size, &endptr, 10);
+
+		/* verify that the  segment size is valid */
+		if (endptr == str_reserved_page_size || *endptr != '\0')
+			pg_fatal("argument of --reserved-size must be a number");
+		/* check for valid block_size; last is bitwise power of two check */
+		if (!IsValidReservedPageSize(reserved_page_size))
+			pg_fatal("argument of --reserved-size must be a multiple of 8 between 0 and 256");
+		add_init_option_int("--reserved-size", reserved_page_size);
+	}
+
+	BlockSizeInit(BLCKSZ, reserved_page_size);
+	if (reserved_page_size)
+		printf(_("Reserving %u bytes on disk pages for additional features.\n"), reserved_page_size);
 
 	get_restricted_token();
 

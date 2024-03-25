@@ -1460,7 +1460,7 @@ check_toast_tuple(HeapTuple toasttup, HeapCheckContext *ctx,
 				  uint32 extsize)
 {
 	int32		chunk_seq;
-	int32		last_chunk_seq = (extsize - 1) / TOAST_MAX_CHUNK_SIZE;
+	int32		last_chunk_seq = (extsize - 1) / ClusterToastMaxChunkSize;
 	Pointer		chunk;
 	bool		isnull;
 	int32		chunksize;
@@ -1530,8 +1530,8 @@ check_toast_tuple(HeapTuple toasttup, HeapCheckContext *ctx,
 		return;
 	}
 
-	expected_size = chunk_seq < last_chunk_seq ? TOAST_MAX_CHUNK_SIZE
-		: extsize - (last_chunk_seq * TOAST_MAX_CHUNK_SIZE);
+	expected_size = chunk_seq < last_chunk_seq ? ClusterToastMaxChunkSize
+		: extsize - (last_chunk_seq * ClusterToastMaxChunkSize);
 
 	if (chunksize != expected_size)
 		report_toast_corruption(ctx, ta,
@@ -1773,7 +1773,7 @@ check_toasted_attribute(HeapCheckContext *ctx, ToastedAttribute *ta)
 	int32		last_chunk_seq;
 
 	extsize = VARATT_EXTERNAL_GET_EXTSIZE(ta->toast_pointer);
-	last_chunk_seq = (extsize - 1) / TOAST_MAX_CHUNK_SIZE;
+	last_chunk_seq = (extsize - 1) / ClusterToastMaxChunkSize;
 
 	/*
 	 * Setup a scan key to find chunks in toast table with matching va_valueid

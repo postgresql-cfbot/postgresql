@@ -162,7 +162,7 @@ extern bool GinPageIsRecyclable(Page page);
  *				pointers for that page
  * Note that these are all distinguishable from an "invalid" item pointer
  * (which is InvalidBlockNumber/0) as well as from all normal item
- * pointers (which have item numbers in the range 1..MaxHeapTuplesPerPage).
+ * pointers (which have item numbers in the range 1..ClusterMaxHeapTuplesPerPage).
  */
 #define ItemPointerSetMin(p)  \
 	ItemPointerSet((p), (BlockNumber)0, (OffsetNumber)0)
@@ -318,7 +318,7 @@ typedef signed char GinNullCategory;
 	 GinPageGetOpaque(page)->maxoff * sizeof(PostingItem))
 
 #define GinDataPageMaxDataSize	\
-	(BLCKSZ - MAXALIGN(SizeOfPageHeaderData) \
+	(PageUsableSpace \
 	 - MAXALIGN(sizeof(ItemPointerData)) \
 	 - MAXALIGN(sizeof(GinPageOpaqueData)))
 
@@ -326,7 +326,7 @@ typedef signed char GinNullCategory;
  * List pages
  */
 #define GinListPageSize  \
-	( BLCKSZ - SizeOfPageHeaderData - MAXALIGN(sizeof(GinPageOpaqueData)) )
+	( PageUsableSpace - MAXALIGN(sizeof(GinPageOpaqueData)) )
 
 /*
  * A compressed posting list.

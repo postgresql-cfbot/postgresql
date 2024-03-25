@@ -75,7 +75,7 @@ typedef struct HeapScanDescData
 	/* these fields only used in page-at-a-time mode and for bitmap scans */
 	int			rs_cindex;		/* current tuple's index in vistuples */
 	int			rs_ntuples;		/* number of visible tuples on page */
-	OffsetNumber rs_vistuples[MaxHeapTuplesPerPage];	/* their offsets */
+	OffsetNumber rs_vistuples[MaxHeapTuplesPerPageLimit];	/* their offsets */
 }			HeapScanDescData;
 typedef struct HeapScanDescData *HeapScanDesc;
 
@@ -205,10 +205,10 @@ typedef struct PruneResult
 	 * This is of type int8[], instead of HTSV_Result[], so we can use -1 to
 	 * indicate no visibility has been computed, e.g. for LP_DEAD items.
 	 *
-	 * This needs to be MaxHeapTuplesPerPage + 1 long as FirstOffsetNumber is
+	 * This needs to be ClusterMaxHeapTuplesPerPage + 1 long as FirstOffsetNumber is
 	 * 1. Otherwise every access would need to subtract 1.
 	 */
-	int8		htsv[MaxHeapTuplesPerPage + 1];
+	int8		htsv[MaxHeapTuplesPerPageLimit + 1];
 } PruneResult;
 
 /*

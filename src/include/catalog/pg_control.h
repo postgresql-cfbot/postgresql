@@ -22,7 +22,7 @@
 
 
 /* Version identifier for this pg_control format */
-#define PG_CONTROL_VERSION	1300
+#define PG_CONTROL_VERSION	1700
 
 /* Nonce key length, see below */
 #define MOCK_AUTH_NONCE_LEN		32
@@ -227,6 +227,7 @@ typedef struct ControlFileData
 	 */
 	char		mock_authentication_nonce[MOCK_AUTH_NONCE_LEN];
 
+	uint32		reserved_page_size;	/* how much space per disk block is reserved */
 	/* CRC of all above ... MUST BE LAST! */
 	pg_crc32c	crc;
 } ControlFileData;

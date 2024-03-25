@@ -124,7 +124,7 @@ typedef struct HashScanPosData
 	int			lastItem;		/* last valid index in items[] */
 	int			itemIndex;		/* current index in items[] */
 
-	HashScanPosItem items[MaxIndexTuplesPerPage];	/* MUST BE LAST */
+	HashScanPosItem items[MaxIndexTuplesPerPageLimit];	/* MUST BE LAST */
 } HashScanPosData;
 
 #define HashScanPosIsPinned(scanpos) \
@@ -285,8 +285,7 @@ typedef struct HashOptions
  * Maximum size of a hash index item (it's okay to have only one per page)
  */
 #define HashMaxItemSize(page) \
-	MAXALIGN_DOWN(PageGetPageSize(page) - \
-				  SizeOfPageHeaderData - \
+	MAXALIGN_DOWN(PageGetUsablePageSize(page) - \
 				  sizeof(ItemIdData) - \
 				  MAXALIGN(sizeof(HashPageOpaqueData)))
 
@@ -317,8 +316,8 @@ typedef struct HashOptions
 	((uint32 *) PageGetContents(page))
 
 #define HashGetMaxBitmapSize(page) \
-	(PageGetPageSize((Page) page) - \
-	 (MAXALIGN(SizeOfPageHeaderData) + MAXALIGN(sizeof(HashPageOpaqueData))))
+	(PageGetUsablePageSize((Page) page) - \
+	 MAXALIGN(sizeof(HashPageOpaqueData)))
 
 #define HashPageGetMeta(page) \
 	((HashMetaPage) PageGetContents(page))

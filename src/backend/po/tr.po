@@ -1791,8 +1791,8 @@ msgstr "Veritabanı clusteri INDEX_MAX_KEYS %d ile ilklendirilmiştir, ancak sun
 
 #: access/transam/xlog.c:4711
 #, c-format
-msgid "The database cluster was initialized with TOAST_MAX_CHUNK_SIZE %d, but the server was compiled with TOAST_MAX_CHUNK_SIZE %d."
-msgstr "Veritabanı clusteri TOAST_MAX_CHUNK_SIZE %d ile ilklendirilmiştir, ancak sunucu  TOAST_MAX_CHUNK_SIZE %d ile derlenmiştir."
+msgid "The database cluster was initialized with ClusterToastMaxChunkSize %d, but the server was compiled with ClusterToastMaxChunkSize %d."
+msgstr "Veritabanı clusteri ClusterToastMaxChunkSize %d ile ilklendirilmiştir, ancak sunucu  ClusterToastMaxChunkSize %d ile derlenmiştir."
 
 #: access/transam/xlog.c:4718
 #, c-format

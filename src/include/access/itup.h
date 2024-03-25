@@ -148,11 +148,19 @@ index_getattr(IndexTuple tup, int attnum, TupleDesc tupleDesc, bool *isnull)
 #endif
 
 /*
- * MaxIndexTuplesPerPage is an upper bound on the number of tuples that can
- * fit on one index page.  An index tuple must have either data or a null
- * bitmap, so we can safely assume it's at least 1 byte bigger than a bare
- * IndexTupleData struct.  We arrive at the divisor because each tuple
- * must be maxaligned, and it must have an associated line pointer.
+ * ClusterMaxIndexTuplesPerPage is a cluster-specific upper bound on the
+ * number of tuples that can fit on one index page.  An index tuple must have
+ * either data or a null bitmap, so we can safely assume it's at least 1 byte
+ * bigger than a bare IndexTupleData struct.  We arrive at the divisor because
+ * each tuple must be maxaligned, and it must have an associated line pointer.
+ *
+ * MaxIndexTuplesPerPageLimit is the largest value that
+ * ClusterMaxIndexTuplesPerPage could be.  While these currently evaluate to
+ * the same value, these are being split out so ClusterMaxIndexTuplesPerPage
+ * can become a variable instead of a constant.
+ *
+ * The CalcMaxIndexTuplesPerPage() macro is used to determine the appropriate
+ * values, given the usable page space on a given page.
  *
  * To be index-type-independent, this does not account for any special space
  * on the page, and is thus conservative.
@@ -163,8 +171,8 @@ index_getattr(IndexTuple tup, int attnum, TupleDesc tupleDesc, bool *isnull)
  * estimated here, seemingly allowing one more tuple than estimated here.
  * But such a page always has at least MAXALIGN special space, so we're safe.
  */
-#define MaxIndexTuplesPerPage	\
-	((int) ((BLCKSZ - SizeOfPageHeaderData) / \
+#define CalcMaxIndexTuplesPerPage(size)	((int) ((size) / \
 			(MAXALIGN(sizeof(IndexTupleData) + 1) + sizeof(ItemIdData))))
+#define MaxIndexTuplesPerPageLimit CalcMaxIndexTuplesPerPage(PageUsableSpaceMax)
 
 #endif							/* ITUP_H */

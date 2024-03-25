@@ -106,16 +106,13 @@ typedef struct BloomOptions
 											 * index key */
 } BloomOptions;
 
-/*
- * FreeBlockNumberArray - array of block numbers sized so that metadata fill
- * all space in metapage.
- */
-typedef BlockNumber FreeBlockNumberArray[
-										 MAXALIGN_DOWN(
-													   BLCKSZ - SizeOfPageHeaderData - MAXALIGN(sizeof(BloomPageOpaqueData))
-													   - MAXALIGN(sizeof(uint16) * 2 + sizeof(uint32) + sizeof(BloomOptions))
-													   ) / sizeof(BlockNumber)
-];
+#define CalcFreeBlockNumberArraySize(usablespace) \
+	(MAXALIGN_DOWN((usablespace) -										\
+				   MAXALIGN(sizeof(BloomPageOpaqueData))				\
+				   - MAXALIGN(sizeof(uint16) * 2 + sizeof(uint32) + sizeof(BloomOptions)) \
+		) / sizeof(BlockNumber) )
+
+typedef BlockNumber FreeBlockNumberArray[FLEXIBLE_ARRAY_MEMBER];
 
 /* Metadata of bloom index */
 typedef struct BloomMetaPageData
@@ -127,11 +124,14 @@ typedef struct BloomMetaPageData
 	FreeBlockNumberArray notFullPage;
 } BloomMetaPageData;
 
+#define SizeOfFreeBlockNumberArray CalcFreeBlockNumberArraySize(PageUsableSpace)
+#define SizeOfBloomMetaPageData (offsetof(BloomMetaPageData,notFullPage) + (SizeOfFreeBlockNumberArray))
+
 /* Magic number to distinguish bloom pages from others */
 #define BLOOM_MAGICK_NUMBER (0xDBAC0DED)
 
 /* Number of blocks numbers fit in BloomMetaPageData */
-#define BloomMetaBlockN		(sizeof(FreeBlockNumberArray) / sizeof(BlockNumber))
+#define BloomMetaBlockN		(SizeOfFreeBlockNumberArray / sizeof(BlockNumber))
 
 #define BloomPageGetMeta(page)	((BloomMetaPageData *) PageGetContents(page))
 
@@ -150,7 +150,7 @@ typedef struct BloomState
 } BloomState;
 
 #define BloomPageGetFreeSpace(state, page) \
-	(BLCKSZ - MAXALIGN(SizeOfPageHeaderData) \
+	(PageUsableSpace \
 		- BloomPageGetMaxOffset(page) * (state)->sizeOfBloomTuple \
 		- MAXALIGN(sizeof(BloomPageOpaqueData)))
 

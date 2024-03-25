@@ -172,9 +172,17 @@ typedef struct BTMetaPageData
 				   MAXALIGN(sizeof(BTPageOpaqueData))) / 3)
 
 /*
- * MaxTIDsPerBTreePage is an upper bound on the number of heap TIDs tuples
- * that may be stored on a btree leaf page.  It is used to size the
- * per-page temporary buffers.
+ * ClusterMaxTIDsPerBTreePage is a cluster-specific upper bound on the number
+ * of heap TIDs tuples that may be stored on a btree leaf page.  It is used to
+ * size the per-page temporary buffers.
+ *
+ * MaxTIDsPerBTreePageLimit is the largest value that
+ * ClusterMaxTIDsPerBTreePage could be.  While these currently evaluate to the
+ * same value, these are being split out so ClusterMaxTIDsPerBTreePage can
+ * become a variable instead of a constant.
+ *
+ * The CalcMaxTIDsPerBTreePage() macro is used to determine the appropriate
+ * values, given the usable page space on a given page.
  *
  * Note: we don't bother considering per-tuple overheads here to keep
  * things simple (value is based on how many elements a single array of
@@ -182,9 +190,13 @@ typedef struct BTMetaPageData
  * special area).  The value is slightly higher (i.e. more conservative)
  * than necessary as a result, which is considered acceptable.
  */
-#define MaxTIDsPerBTreePage \
-	(int) ((BLCKSZ - SizeOfPageHeaderData - sizeof(BTPageOpaqueData)) / \
+#define CalcMaxTIDsPerBTreePage(size) \
+	(int) (((size) - sizeof(BTPageOpaqueData)) /	\
 		   sizeof(ItemPointerData))
+#define ClusterMaxTIDsPerBTreePage \
+	CalcMaxTIDsPerBTreePage(BLCKSZ - SizeOfPageHeaderData)
+#define MaxTIDsPerBTreePageLimit \
+	CalcMaxTIDsPerBTreePage(BLCKSZ - SizeOfPageHeaderData)
 
 /*
  * The leaf-page fillfactor defaults to 90% but is user-adjustable.
@@ -887,7 +899,7 @@ typedef struct BTDedupStateData
 	 * are implicitly unchanged by deduplication pass).
 	 */
 	int			nintervals;		/* current number of intervals in array */
-	BTDedupInterval intervals[MaxIndexTuplesPerPage];
+	BTDedupInterval intervals[MaxIndexTuplesPerPageLimit];
 } BTDedupStateData;
 
 typedef BTDedupStateData *BTDedupState;
@@ -982,7 +994,7 @@ typedef struct BTScanPosData
 	int			lastItem;		/* last valid index in items[] */
 	int			itemIndex;		/* current index in items[] */
 
-	BTScanPosItem items[MaxTIDsPerBTreePage];	/* MUST BE LAST */
+	BTScanPosItem items[MaxTIDsPerBTreePageLimit];	/* MUST BE LAST */
 } BTScanPosData;
 
 typedef BTScanPosData *BTScanPos;

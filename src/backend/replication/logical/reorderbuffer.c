@@ -4878,7 +4878,7 @@ ReorderBufferToastReplace(ReorderBuffer *rb, ReorderBufferTXN *txn,
 	 * the tuplebuf because attrs[] will point back into the current content.
 	 */
 	tmphtup = heap_form_tuple(desc, attrs, isnull);
-	Assert(newtup->t_len <= MaxHeapTupleSize);
+	Assert(newtup->t_len <= ClusterMaxHeapTupleSize);
 	Assert(newtup->t_data == (HeapTupleHeader) ((char *) newtup + HEAPTUPLESIZE));
 
 	memcpy(newtup->t_data, tmphtup->t_data, tmphtup->t_len);

@@ -63,7 +63,7 @@
  */
 #define FSM_CATEGORIES	256
 #define FSM_CAT_STEP	(BLCKSZ / FSM_CATEGORIES)
-#define MaxFSMRequestSize	MaxHeapTupleSize
+#define MaxFSMRequestSize	ClusterMaxHeapTupleSize
 
 /*
  * Depth of the on-disk tree. We need to be able to address 2^32-1 blocks,

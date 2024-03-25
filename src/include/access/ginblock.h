@@ -162,7 +162,7 @@ extern bool GinPageIsRecyclable(Page page);
  *				pointers for that page
  * Note that these are all distinguishable from an "invalid" item pointer
  * (which is InvalidBlockNumber/0) as well as from all normal item
- * pointers (which have item numbers in the range 1..MaxHeapTuplesPerPage).
+ * pointers (which have item numbers in the range 1..ClusterMaxHeapTuplesPerPage).
  */
 #define ItemPointerSetMin(p)  \
 	ItemPointerSet((p), (BlockNumber)0, (OffsetNumber)0)

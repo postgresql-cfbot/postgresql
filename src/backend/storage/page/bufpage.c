@@ -186,7 +186,7 @@ PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags)
  *	one that is both unused and deallocated.
  *
  *	If flag PAI_IS_HEAP is set, we enforce that there can't be more than
- *	MaxHeapTuplesPerPage line pointers on the page.
+ *	ClusterMaxHeapTuplesPerPage line pointers on the page.
  *
  *	!!! EREPORT(ERROR) IS DISALLOWED HERE !!!
  */
@@ -295,9 +295,9 @@ PageAddItemExtended(Page page,
 	}
 
 	/* Reject placing items beyond heap boundary, if heap */
-	if ((flags & PAI_IS_HEAP) != 0 && offsetNumber > MaxHeapTuplesPerPage)
+	if ((flags & PAI_IS_HEAP) != 0 && offsetNumber > ClusterMaxHeapTuplesPerPage)
 	{
-		elog(WARNING, "can't put more than MaxHeapTuplesPerPage items in a heap page");
+		elog(WARNING, "can't put more than ClusterMaxHeapTuplesPerPage items in a heap page");
 		return InvalidOffsetNumber;
 	}
 
@@ -702,7 +702,7 @@ PageRepairFragmentation(Page page)
 	Offset		pd_upper = ((PageHeader) page)->pd_upper;
 	Offset		pd_special = ((PageHeader) page)->pd_special;
 	Offset		last_offset;
-	itemIdCompactData itemidbase[MaxHeapTuplesPerPage];
+	itemIdCompactData itemidbase[MaxHeapTuplesPerPageLimit];
 	itemIdCompact itemidptr;
 	ItemId		lp;
 	int			nline,
@@ -979,12 +979,12 @@ PageGetExactFreeSpace(Page page)
  *		reduced by the space needed for a new line pointer.
  *
  * The difference between this and PageGetFreeSpace is that this will return
- * zero if there are already MaxHeapTuplesPerPage line pointers in the page
+ * zero if there are already ClusterMaxHeapTuplesPerPage line pointers in the page
  * and none are free.  We use this to enforce that no more than
- * MaxHeapTuplesPerPage line pointers are created on a heap page.  (Although
+ * ClusterMaxHeapTuplesPerPage line pointers are created on a heap page.  (Although
  * no more tuples than that could fit anyway, in the presence of redirected
  * or dead line pointers it'd be possible to have too many line pointers.
- * To avoid breaking code that assumes MaxHeapTuplesPerPage is a hard limit
+ * To avoid breaking code that assumes ClusterMaxHeapTuplesPerPage is a hard limit
  * on the number of line pointers, we make this extra check.)
  */
 Size
@@ -999,10 +999,10 @@ PageGetHeapFreeSpace(Page page)
 					nline;
 
 		/*
-		 * Are there already MaxHeapTuplesPerPage line pointers in the page?
+		 * Are there already ClusterMaxHeapTuplesPerPage line pointers in the page?
 		 */
 		nline = PageGetMaxOffsetNumber(page);
-		if (nline >= MaxHeapTuplesPerPage)
+		if (nline >= ClusterMaxHeapTuplesPerPage)
 		{
 			if (PageHasFreeLinePointers(page))
 			{
@@ -1165,8 +1165,8 @@ PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems)
 	Offset		pd_upper = phdr->pd_upper;
 	Offset		pd_special = phdr->pd_special;
 	Offset		last_offset;
-	itemIdCompactData itemidbase[MaxIndexTuplesPerPage];
-	ItemIdData	newitemids[MaxIndexTuplesPerPage];
+	itemIdCompactData itemidbase[MaxIndexTuplesPerPageLimit];
+	ItemIdData	newitemids[MaxIndexTuplesPerPageLimit];
 	itemIdCompact itemidptr;
 	ItemId		lp;
 	int			nline,
@@ -1178,7 +1178,7 @@ PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems)
 	OffsetNumber offnum;
 	bool		presorted = true;	/* For now */
 
-	Assert(nitems <= MaxIndexTuplesPerPage);
+	Assert(nitems <= ClusterMaxIndexTuplesPerPage);
 
 	/*
 	 * If there aren't very many items to delete, then retail

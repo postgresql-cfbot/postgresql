@@ -550,33 +550,57 @@ StaticAssertDecl(MaxOffsetNumber < SpecTokenOffsetNumber,
 #define BITMAPLEN(NATTS)	(((int)(NATTS) + 7) / 8)
 
 /*
- * MaxHeapTupleSize is the maximum allowed size of a heap tuple, including
- * header and MAXALIGN alignment padding.  Basically it's BLCKSZ minus the
- * other stuff that has to be on a disk page.  Since heap pages use no
- * "special space", there's no deduction for that.
+ * ClusterMaxHeapTupleSize is a cluster-specific maximum allowed size of a
+ * heap tuple, including header and MAXALIGN alignment padding.  Basically
+ * it's BLCKSZ minus the other stuff that has to be on a disk page.  Since
+ * heap pages use no "special space", there's no deduction for that.
+ *
+ * MaxHeapTuplesSizeLimit is the largest value that ClusterMaxHeapTupleSize
+ * could be.  While these currently evaluate to the same value, these are
+ * being split out so ClusterMaxHeapTupleSize can become a variable
+ * instead of a constant.
+ *
+ * The CalcMaxHeapTupleSize() macro is used to determine the appropriate
+ * values, given the usable page space on a given page.
  *
  * NOTE: we allow for the ItemId that must point to the tuple, ensuring that
  * an otherwise-empty page can indeed hold a tuple of this size.  Because
  * ItemIds and tuples have different alignment requirements, don't assume that
- * you can, say, fit 2 tuples of size MaxHeapTupleSize/2 on the same page.
+ * you can, say, fit 2 tuples of size ClusterMaxHeapTupleSize/2 on the same page.
  */
-#define MaxHeapTupleSize  (BLCKSZ - MAXALIGN(SizeOfPageHeaderData + sizeof(ItemIdData)))
+#define CalcMaxHeapTupleSize(size)  (size - sizeof(ItemIdData))
+#define ClusterMaxHeapTupleSize CalcMaxHeapTupleSize(BLCKSZ - SizeOfPageHeaderData)
+#define MaxHeapTupleSizeLimit CalcMaxHeapTupleSize(BLCKSZ - SizeOfPageHeaderData)
 #define MinHeapTupleSize  MAXALIGN(SizeofHeapTupleHeader)
 
 /*
- * MaxHeapTuplesPerPage is an upper bound on the number of tuples that can
- * fit on one heap page.  (Note that indexes could have more, because they
- * use a smaller tuple header.)  We arrive at the divisor because each tuple
- * must be maxaligned, and it must have an associated line pointer.
+ * ClusterMaxHeapTuplesPerPage is a cluster-specific upper bound on the number
+ * of tuples that can fit on one heap page.  (Note that indexes could have
+ * more, because they use a smaller tuple header.)  We arrive at the divisor
+ * because each tuple must be maxaligned, and it must have an associated line
+ * pointer.
+ *
+ * MaxHeapTuplesPerPageLimit is the largest value that
+ * ClusterMaxHeapTuplesPerPage could be.  While these currently evaluate to
+ * the same value, these are being split out so ClusterMaxHeapTuplesPerPage
+ * can become a variable instead of a constant.
+ *
+ * The CalcMaxHeapTuplesPerPage() macro is used to determine the appropriate
+ * values, given the usable page space on a given page.
+ *
+ * The old MaxHeapTuplesPerPage symbol has been removed; static allocations
+ * should use the MaxHeapTuplesPerPageLimit constant, while runtime code
+ * should use ClusterMaxHeapTuplesPerPage.
  *
  * Note: with HOT, there could theoretically be more line pointers (not actual
  * tuples) than this on a heap page.  However we constrain the number of line
  * pointers to this anyway, to avoid excessive line-pointer bloat and not
  * require increases in the size of work arrays.
  */
-#define MaxHeapTuplesPerPage	\
-	((int) ((BLCKSZ - SizeOfPageHeaderData) / \
+#define CalcMaxHeapTuplesPerPage(size)	((int) ((size) / \
 			(MAXALIGN(SizeofHeapTupleHeader) + sizeof(ItemIdData))))
+#define ClusterMaxHeapTuplesPerPage CalcMaxHeapTuplesPerPage(BLCKSZ - SizeOfPageHeaderData)
+#define MaxHeapTuplesPerPageLimit CalcMaxHeapTuplesPerPage(BLCKSZ - SizeOfPageHeaderData)
 
 /*
  * MaxAttrSize is a somewhat arbitrary upper limit on the declared size of

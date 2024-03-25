@@ -658,12 +658,12 @@ gistgettuple(IndexScanDesc scan, ScanDirection dir)
 							MemoryContextSwitchTo(so->giststate->scanCxt);
 
 						so->killedItems =
-							(OffsetNumber *) palloc(MaxIndexTuplesPerPage
+							(OffsetNumber *) palloc(ClusterMaxIndexTuplesPerPage
 													* sizeof(OffsetNumber));
 
 						MemoryContextSwitchTo(oldCxt);
 					}
-					if (so->numKilled < MaxIndexTuplesPerPage)
+					if (so->numKilled < ClusterMaxIndexTuplesPerPage)
 						so->killedItems[so->numKilled++] =
 							so->pageData[so->curPageData - 1].offnum;
 				}
@@ -695,12 +695,12 @@ gistgettuple(IndexScanDesc scan, ScanDirection dir)
 						MemoryContextSwitchTo(so->giststate->scanCxt);
 
 					so->killedItems =
-						(OffsetNumber *) palloc(MaxIndexTuplesPerPage
+						(OffsetNumber *) palloc(ClusterMaxIndexTuplesPerPage
 												* sizeof(OffsetNumber));
 
 					MemoryContextSwitchTo(oldCxt);
 				}
-				if (so->numKilled < MaxIndexTuplesPerPage)
+				if (so->numKilled < ClusterMaxIndexTuplesPerPage)
 					so->killedItems[so->numKilled++] =
 						so->pageData[so->curPageData - 1].offnum;
 			}

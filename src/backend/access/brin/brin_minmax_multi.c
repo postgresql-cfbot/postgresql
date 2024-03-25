@@ -2006,10 +2006,10 @@ brin_minmax_multi_distance_tid(PG_FUNCTION_ARGS)
 	 * We use the no-check variants here, because user-supplied values may
 	 * have (ip_posid == 0). See ItemPointerCompare.
 	 */
-	da1 = ItemPointerGetBlockNumberNoCheck(pa1) * MaxHeapTuplesPerPage +
+	da1 = ItemPointerGetBlockNumberNoCheck(pa1) * ClusterMaxHeapTuplesPerPage +
 		ItemPointerGetOffsetNumberNoCheck(pa1);
 
-	da2 = ItemPointerGetBlockNumberNoCheck(pa2) * MaxHeapTuplesPerPage +
+	da2 = ItemPointerGetBlockNumberNoCheck(pa2) * ClusterMaxHeapTuplesPerPage +
 		ItemPointerGetOffsetNumberNoCheck(pa2);
 
 	PG_RETURN_FLOAT8(da2 - da1);
@@ -2460,7 +2460,7 @@ brin_minmax_multi_add_value(PG_FUNCTION_ARGS)
 		 * much lower, but meh.
 		 */
 		maxvalues = Min(target_maxvalues * MINMAX_BUFFER_FACTOR,
-						MaxHeapTuplesPerPage * pagesPerRange);
+						ClusterMaxHeapTuplesPerPage * pagesPerRange);
 
 		/* but always at least the original value */
 		maxvalues = Max(maxvalues, target_maxvalues);
@@ -2506,7 +2506,7 @@ brin_minmax_multi_add_value(PG_FUNCTION_ARGS)
 		 * much lower, but meh.
 		 */
 		maxvalues = Min(serialized->maxvalues * MINMAX_BUFFER_FACTOR,
-						MaxHeapTuplesPerPage * pagesPerRange);
+						ClusterMaxHeapTuplesPerPage * pagesPerRange);
 
 		/* but always at least the original value */
 		maxvalues = Max(maxvalues, serialized->maxvalues);

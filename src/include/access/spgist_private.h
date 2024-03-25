@@ -226,17 +226,17 @@ typedef struct SpGistScanOpaqueData
 	TupleDesc	reconTupDesc;	/* if so, descriptor for reconstructed tuples */
 	int			nPtrs;			/* number of TIDs found on current page */
 	int			iPtr;			/* index for scanning through same */
-	ItemPointerData heapPtrs[MaxIndexTuplesPerPage];	/* TIDs from cur page */
-	bool		recheck[MaxIndexTuplesPerPage]; /* their recheck flags */
-	bool		recheckDistances[MaxIndexTuplesPerPage];	/* distance recheck
+	ItemPointerData heapPtrs[MaxIndexTuplesPerPageLimit];	/* TIDs from cur page */
+	bool		recheck[MaxIndexTuplesPerPageLimit]; /* their recheck flags */
+	bool		recheckDistances[MaxIndexTuplesPerPageLimit];	/* distance recheck
 															 * flags */
-	HeapTuple	reconTups[MaxIndexTuplesPerPage];	/* reconstructed tuples */
+	HeapTuple	reconTups[MaxIndexTuplesPerPageLimit];	/* reconstructed tuples */
 
 	/* distances (for recheck) */
-	IndexOrderByDistance *distances[MaxIndexTuplesPerPage];
+	IndexOrderByDistance *distances[MaxIndexTuplesPerPageLimit];
 
 	/*
-	 * Note: using MaxIndexTuplesPerPage above is a bit hokey since
+	 * Note: using ClusterMaxIndexTuplesPerPage above is a bit hokey since
 	 * SpGistLeafTuples aren't exactly IndexTuples; however, they are larger,
 	 * so this is safe.
 	 */

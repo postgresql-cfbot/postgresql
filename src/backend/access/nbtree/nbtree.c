@@ -246,8 +246,8 @@ btgettuple(IndexScanDesc scan, ScanDirection dir)
 				 */
 				if (so->killedItems == NULL)
 					so->killedItems = (int *)
-						palloc(MaxTIDsPerBTreePage * sizeof(int));
-				if (so->numKilled < MaxTIDsPerBTreePage)
+						palloc(ClusterMaxTIDsPerBTreePage * sizeof(int));
+				if (so->numKilled < ClusterMaxTIDsPerBTreePage)
 					so->killedItems[so->numKilled++] = so->currPos.itemIndex;
 			}
 
@@ -1142,9 +1142,9 @@ backtrack:
 	}
 	else if (P_ISLEAF(opaque))
 	{
-		OffsetNumber deletable[MaxIndexTuplesPerPage];
+		OffsetNumber deletable[MaxIndexTuplesPerPageLimit];
 		int			ndeletable;
-		BTVacuumPosting updatable[MaxIndexTuplesPerPage];
+		BTVacuumPosting updatable[MaxIndexTuplesPerPageLimit];
 		int			nupdatable;
 		OffsetNumber offnum,
 					minoff,

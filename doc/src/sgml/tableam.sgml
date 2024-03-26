@@ -35,13 +35,56 @@
   argument of type <type>internal</type> and to return the pseudo-type
   <type>table_am_handler</type>.  The argument is a dummy value that simply
   serves to prevent handler functions from being called directly from SQL commands.
+ </para>
 
+ <para>
+  Here is an example of how to register an extension that provides a
+  table access method handler:
+ </para>
+
+<screen>
+CREATE OR REPLACE FUNCTION my_tableam_handler(internal)
+RETURNS table_am_handler AS 'myextension', 'my_tableam_handler'
+LANGUAGE C STRICT;
+
+CREATE ACCESS METHOD myam TYPE TABLE HANDLER my_tableam_handler;
+</screen>
+
+ <para>
   The result of the function must be a pointer to a struct of type
-  <structname>TableAmRoutine</structname>, which contains everything that the
-  core code needs to know to make use of the table access method. The return
-  value needs to be of server lifetime, which is typically achieved by
-  defining it as a <literal>static const</literal> variable in global
-  scope. The <structname>TableAmRoutine</structname> struct, also called the
+  <structname>TableAmRoutine</structname>, which contains everything
+  that the core code needs to know to make use of the table access
+  method. The return value needs to be of server lifetime, which is
+  typically achieved by defining it as a <literal>static
+  const</literal> variable in global scope.
+ </para>
+
+ <para>
+  Here is what <filename>myextension.c</filename> with the table
+  access method handler might look like:
+ </para>
+
+<screen>
+#include "postgres.h"
+#include "fmgr.h"
+#include "access/tableam.h"
+
+PG_MODULE_MAGIC;
+
+static const TableAmRoutine my_am_methods = {
+  .type = T_TableAmRoutine,
+  /* Methods from TableAmRoutine omitted from example, but all
+     non-optional ones must be provided here. */
+};
+
+PG_FUNCTION_INFO_V1(my_tableam_handler);
+Datum my_tableam_handler(PG_FUNCTION_ARGS) {
+  PG_RETURN_POINTER(&#038;my_am_methods);
+}
+</screen>
+
+ <para>
+  The <structname>TableAmRoutine</structname> struct, also called the
   access method's <firstterm>API struct</firstterm>, defines the behavior of
   the access method using callbacks. These callbacks are pointers to plain C
   functions and are not visible or callable at the SQL level. All the

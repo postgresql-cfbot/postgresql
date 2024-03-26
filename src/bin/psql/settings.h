@@ -100,6 +100,12 @@ typedef struct _psqlSettings
 								 * protocol */
 	int			bind_nparams;	/* number of parameters */
 	char	  **bind_params;	/* parameters for extended query protocol call */
+	bool		close_flag;		/* one-shot request to close a prepared statement using
+								 * extended query protocol */
+	bool		parse_flag;		/* one-shot request to parse query using extended query
+								 * protocol */
+	char	   *stmtName;		/* prepared statement name used for extended query
+								 * protocol commands */
 	bool		crosstab_flag;	/* one-shot request to crosstab result */
 	char	   *ctv_args[4];	/* \crosstabview arguments */
 

@@ -45,6 +45,27 @@ SELECT 1 as one, 2 as two \g (format=csv csv_fieldsep='\t')
 SELECT 1 as one, 2 as two \gx (title='foo bar')
 \g
 
+-- \parse (extended query protocol)
+
+SELECT 1 \parse ''
+SELECT 2 \parse stmt1
+SELECT $1 \parse stmt2
+SELECT $1, $2 \parse stmt3
+
+-- \bindx (extended query protocol)
+
+\bindx '' \g
+\bindx stmt1 \g
+\bindx stmt2 'foo' \g
+\bindx stmt3 'foo' 'bar' \g
+
+-- \close (extended query protocol)
+
+\close
+\close stmt2
+\close stmt2
+select name, statement from pg_prepared_statements order by name;
+
 -- \bind (extended query protocol)
 
 SELECT 1 \bind \g
@@ -58,6 +79,9 @@ SELECT foo \bind \g
 SELECT 1 \; SELECT 2 \bind \g
 -- bind error
 SELECT $1, $2 \bind 'foo' \g
+-- bindx error
+\bindx stmt2 'baz' \g
+\bindx stmt3 'baz' \g
 
 -- \gset
 
@@ -990,9 +1014,11 @@ select \if false \\ (bogus \else \\ 42 \endif \\ forty_two;
 	\pset fieldsep | `nosuchcommand` :foo :'foo' :"foo"
 	\a
 	SELECT $1 \bind 1 \g
+	\bindx stmt1 1 2 \g
 	\C arg1
 	\c arg1 arg2 arg3 arg4
 	\cd arg1
+	\close stmt1
 	\conninfo
 	\copy arg1 arg2 arg3 arg4 arg5 arg6
 	\copyright
@@ -1020,6 +1046,7 @@ select \if false \\ (bogus \else \\ 42 \endif \\ forty_two;
 	\lo_list
 	\o arg1
 	\p
+	SELECT 1 \parse
 	\password arg1
 	\prompt arg1 arg2
 	\pset arg1 arg2

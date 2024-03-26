@@ -185,7 +185,6 @@ WaitForReplicationWorkerAttach(LogicalRepWorker *worker,
 							   BackgroundWorkerHandle *handle)
 {
 	BgwHandleStatus status;
-	int			rc;
 
 	for (;;)
 	{
@@ -220,16 +219,14 @@ WaitForReplicationWorkerAttach(LogicalRepWorker *worker,
 		/*
 		 * We need timeout because we generally don't get notified via latch
 		 * about the worker attach.  But we don't expect to have to wait long.
+		 * Since this latch is also used for subscription creation/modification
+		 * and apply worker process exit signal handling, the latch must not be
+		 * reset here. We should check if the new worker needs to be started or
+		 * not and reset the latch in ApplyLauncherMain.
 		 */
-		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-					   10L, WAIT_EVENT_BGWORKER_STARTUP);
-
-		if (rc & WL_LATCH_SET)
-		{
-			ResetLatch(MyLatch);
-			CHECK_FOR_INTERRUPTS();
-		}
+		(void) WaitLatch(MyLatch,
+						 WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 10L, WAIT_EVENT_BGWORKER_STARTUP);
 	}
 }
 

@@ -2159,6 +2159,128 @@ print_html_vertical(const printTableContent *cont, FILE *fout)
 }
 
 
+/**********************/
+/* JSON				  */
+/**********************/
+
+/*
+ * Print a JSON value. If in is NULL, it's printed as null. Otherwise, quote =
+ * 'f' passes the value through unchanged, 'b' prints a boolean, and 't'
+ * applies JSON string quoting.
+ */
+static void
+json_escaped_print(const char *in, const char quote, FILE *fout)
+{
+	const char *p;
+
+	if (!in)
+	{
+		fputs("null", fout);
+		return;
+	}
+
+	if (quote == 'f')
+	{
+		fputs(in, fout);
+		return;
+	}
+
+	if (quote == 'b')
+	{
+		fputs(*in == 't' ? "true" : "false", fout);
+		return;
+	}
+
+	fputc('"', fout);
+
+	for (p = in; *p; p++)
+	{
+		switch (*p)
+		{
+			case '\\':
+				fputs("\\\\", fout);
+				break;
+			case '"':
+				fputs("\\\"", fout);
+				break;
+			case '\b':
+				fputs("\\b", fout);
+				break;
+			case '\f':
+				fputs("\\f", fout);
+				break;
+			case '\n':
+				fputs("\\n", fout);
+				break;
+			case '\r':
+				fputs("\\r", fout);
+				break;
+			case '\t':
+				fputs("\\t", fout);
+				break;
+			default:
+				if (*p >= 0 && *p < 0x20)
+					fprintf(fout, "\\u%04X", *p);
+				else
+					fputc(*p, fout);
+		}
+	}
+
+	fputc('"', fout);
+}
+
+static void
+print_json_text(const printTableContent *cont, FILE *fout, bool vertical)
+{
+	unsigned int i;
+	const char *const *ptr;
+
+	if (cancel_pressed)
+		return;
+
+	/*
+	 * The title and footer are never printed in json format.
+	 */
+
+	if (cont->opt->start_table)
+		fputc('[', fout);
+	else if (cont->nrows > 0)
+		/* print trailing comma after previous FETCH_COUNT iteration */
+		fputc(',', fout);
+
+	/* print records */
+	for (i = 0, ptr = cont->cells; i < cont->ncolumns * cont->nrows; i++, ptr++)
+	{
+		/* start new record */
+		if (i % cont->ncolumns == 0)
+		{
+			if (cancel_pressed)
+				break;
+			/* print trailing comma after previous record */
+			if (i > 0)
+				fputc(',', fout);
+			fputs(vertical ? "{\n" : "\n{", fout);
+		}
+
+		/* cell */
+		fputs(vertical ? "  " : " ", fout);
+		json_escaped_print(cont->headers[i % cont->ncolumns], 't', fout);
+		fputs(": ", fout);
+		json_escaped_print(*ptr, cont->aligns[i % cont->ncolumns], fout);
+
+		/* next cell */
+		if (i % cont->ncolumns != cont->ncolumns - 1)
+			fputs(vertical ? ",\n" : ",", fout);
+		/* end of record */
+		else
+			fputs(vertical ? "\n}" : " }", fout);
+	}
+
+	if (cont->opt->stop_table)
+		fputs(vertical ? "]\n" : "\n]\n", fout);
+}
+
+
 /*************************/
 /* ASCIIDOC				 */
 /*************************/
@@ -3274,13 +3396,19 @@ printTableAddCell(printTableContent *const content, char *cell,
 		exit(EXIT_FAILURE);
 	}
 
-	*content->cell = (char *) mbvalidate((unsigned char *) cell,
-										 content->opt->encoding);
+	/* cell can be NULL in JSON format */
+	if (cell)
+	{
+		*content->cell = (char *) mbvalidate((unsigned char *) cell,
+											 content->opt->encoding);
 
 #ifdef ENABLE_NLS
-	if (translate)
-		*content->cell = _(*content->cell);
+		if (translate)
+			*content->cell = _(*content->cell);
 #endif
+	}
+	else
+		*content->cell = cell;
 
 	if (mustfree)
 	{
@@ -3502,6 +3630,9 @@ printTable(const printTableContent *cont,
 			else
 				print_html_text(cont, fout);
 			break;
+		case PRINT_JSON:
+			print_json_text(cont, fout, cont->opt->expanded == 1);
+			break;
 		case PRINT_ASCIIDOC:
 			if (cont->opt->expanded == 1)
 				print_asciidoc_vertical(cont, fout);
@@ -3568,7 +3699,10 @@ printQuery(const PGresult *result, const printQueryOpt *opt,
 	{
 		printTableAddHeader(&cont, PQfname(result, i),
 							opt->translate_header,
-							column_type_alignment(PQftype(result, i)));
+							cont.opt->format == PRINT_JSON ?
+								column_type_jsonquote(PQftype(result, i)) :
+								column_type_alignment(PQftype(result, i))
+							);
 	}
 
 	/* set cells */
@@ -3581,7 +3715,12 @@ printQuery(const PGresult *result, const printQueryOpt *opt,
 			bool		translate;
 
 			if (PQgetisnull(result, r, c))
-				cell = opt->nullPrint ? opt->nullPrint : "";
+				/* for JSON output, represent NULL as NULL */
+				if (cont.opt->format == PRINT_JSON)
+					cell = NULL;
+				/* otherwise the configured null string */
+				else
+					cell = opt->nullPrint ? opt->nullPrint : "";
 			else
 			{
 				cell = PQgetvalue(result, r, c);
@@ -3635,6 +3774,37 @@ column_type_alignment(Oid ftype)
 			break;
 	}
 	return align;
+}
+
+/*
+ * Whether a type needs quoting when represented as JSON. Numerical types are
+ * passed through, as are JSON and JSONB. Booleans need conversion from t/f to
+ * true/false.
+ */
+char
+column_type_jsonquote(Oid ftype)
+{
+	char		quote;
+
+	switch (ftype)
+	{
+		case BOOLOID:
+			quote = 'b';
+			break;
+		case INT2OID:
+		case INT4OID:
+		case INT8OID:
+		case FLOAT4OID:
+		case FLOAT8OID:
+		case NUMERICOID:
+		case OIDOID:
+			quote = 'f';
+			break;
+		default:
+			quote = 't';
+			break;
+	}
+	return quote;
 }
 
 void

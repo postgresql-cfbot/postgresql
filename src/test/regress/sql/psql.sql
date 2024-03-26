@@ -674,6 +674,34 @@ execute q;
 \pset tableattr
 
 deallocate q;
+\pset expanded off
+
+-- test json output format
+
+\pset format json
+
+prepare q as
+  select 'some"text' as "a\title", E'  <foo>\n<bar>' as "junk",
+         '' as "empty", n as int, null as "null"
+  from generate_series(1,2) as n;
+execute q;
+execute q \gx
+select null null, true true, false false;
+select 1 int, 1e30::float float, 1.0 numeric;
+select 'text' text, '{"a": null}'::json json, '{"a": "b"}'::jsonb jsonb, 'A\000B'::bytea bytea;
+deallocate q;
+
+-- check if commas are placed correctly with FETCH_COUNT
+\set FETCH_COUNT 2
+select i from generate_series(1, 3) g(i);
+select i from generate_series(1, 3) g(i) \gx
+select i from generate_series(1, 4) g(i);
+select i from generate_series(1, 4) g(i) \gx
+\unset FETCH_COUNT
+
+-- empty output
+select;
+select \gx
 
 -- test latex output format
 

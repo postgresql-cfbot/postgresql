@@ -4299,6 +4299,9 @@ _align2string(enum printFormat in)
 		case PRINT_HTML:
 			return "html";
 			break;
+		case PRINT_JSON:
+			return "json";
+			break;
 		case PRINT_LATEX:
 			return "latex";
 			break;
@@ -4389,6 +4392,7 @@ do_pset(const char *param, const char *value, printQueryOpt *popt, bool quiet)
 			{"asciidoc", PRINT_ASCIIDOC},
 			{"csv", PRINT_CSV},
 			{"html", PRINT_HTML},
+			{"json", PRINT_JSON},
 			{"latex", PRINT_LATEX},
 			{"troff-ms", PRINT_TROFF_MS},
 			{"unaligned", PRINT_UNALIGNED},
@@ -4429,7 +4433,7 @@ do_pset(const char *param, const char *value, printQueryOpt *popt, bool quiet)
 			}
 			else
 			{
-				pg_log_error("\\pset: allowed formats are aligned, asciidoc, csv, html, latex, latex-longtable, troff-ms, unaligned, wrapped");
+				pg_log_error("\\pset: allowed formats are aligned, asciidoc, csv, html, json, latex, latex-longtable, troff-ms, unaligned, wrapped");
 				return false;
 			}
 		}

@@ -32,6 +32,7 @@ enum printFormat
 	PRINT_ASCIIDOC,
 	PRINT_CSV,
 	PRINT_HTML,
+	PRINT_JSON,
 	PRINT_LATEX,
 	PRINT_LATEX_LONGTABLE,
 	PRINT_TROFF_MS,
@@ -176,7 +177,9 @@ typedef struct printTableContent
 	printTableFooter *footers;	/* Pointer to the first footer */
 	printTableFooter *footer;	/* Pointer to the last added footer */
 	char	   *aligns;			/* Array of alignment specifiers; 'l' or 'r',
-								 * one per column */
+								 * one per column. JSON output uses 't' for
+								 * to-be-quoted values, 'b' for booleans, and
+								 * 'f' otherwise. */
 	char	   *align;			/* Pointer to the last added alignment */
 } printTableContent;
 
@@ -228,6 +231,7 @@ extern void printQuery(const PGresult *result, const printQueryOpt *opt,
 					   FILE *fout, bool is_pager, FILE *flog);
 
 extern char column_type_alignment(Oid);
+extern char column_type_jsonquote(Oid);
 
 extern void setDecimalLocale(void);
 extern const printTextFormat *get_line_style(const printTableOpt *opt);

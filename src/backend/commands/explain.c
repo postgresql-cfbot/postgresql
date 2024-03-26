@@ -18,6 +18,7 @@
 #include "commands/createas.h"
 #include "commands/defrem.h"
 #include "commands/prepare.h"
+#include "executor/svariableReceiver.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
 #include "nodes/extensible.h"
@@ -456,8 +457,9 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 	}
 
 	/* run it (if needed) and produce output */
-	ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
-				   &planduration, (es->buffers ? &bufusage : NULL),
+	ExplainOnePlan(plan, into, query->resultVariable, es, queryString,
+				   params, queryEnv, &planduration,
+				   (es->buffers ? &bufusage : NULL),
 				   es->memory ? &mem_counters : NULL);
 }
 
@@ -541,6 +543,25 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
 		else
 			ExplainDummyGroup("Notify", NULL, es);
 	}
+	else if (IsA(utilityStmt, LetStmt))
+	{
+		LetStmt    *letstmt = (LetStmt *) utilityStmt;
+		List	   *rewritten;
+		Query	   *query;
+
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+			appendStringInfoString(es->str, "SET SESSION VARIABLE\n");
+		else
+			ExplainDummyGroup("Set Session Variable", NULL, es);
+
+		rewritten = QueryRewrite(castNode(Query, copyObject(letstmt->query)));
+
+		Assert(list_length(rewritten) == 1);
+		query = linitial_node(Query, rewritten);
+		ExplainOneQuery(query,
+						CURSOR_OPT_PARALLEL_OK, NULL, es,
+						queryString, params, queryEnv);
+	}
 	else
 	{
 		if (es->format == EXPLAIN_FORMAT_TEXT)
@@ -564,8 +585,8 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
  * to call it.
  */
 void
-ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
-			   const char *queryString, ParamListInfo params,
+ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, Oid targetvar,
+			   ExplainState *es, const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
 			   const BufferUsage *bufusage,
 			   const MemoryContextCounters *mem_counters)
@@ -609,6 +630,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	 */
 	if (into)
 		dest = CreateIntoRelDestReceiver(into);
+	else if (OidIsValid(targetvar))
+		dest = CreateVariableDestReceiver(targetvar);
 	else
 		dest = None_Receiver;
 

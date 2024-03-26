@@ -53,6 +53,7 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_trigger.h"
+#include "catalog/pg_variable.h"
 #include "commands/defrem.h"
 #include "commands/trigger.h"
 #include "gramparse.h"
@@ -294,8 +295,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		ConstraintsSetStmt CopyStmt CreateAsStmt CreateCastStmt
 		CreateDomainStmt CreateExtensionStmt CreateGroupStmt CreateOpClassStmt
 		CreateOpFamilyStmt AlterOpFamilyStmt CreatePLangStmt
-		CreateSchemaStmt CreateSeqStmt CreateStmt CreateStatsStmt CreateTableSpaceStmt
-		CreateFdwStmt CreateForeignServerStmt CreateForeignTableStmt
+		CreateSchemaStmt CreateSessionVarStmt CreateSeqStmt CreateStmt CreateStatsStmt
+		CreateTableSpaceStmt CreateFdwStmt CreateForeignServerStmt CreateForeignTableStmt
 		CreateAssertionStmt CreateTransformStmt CreateTrigStmt CreateEventTrigStmt
 		CreateUserStmt CreateUserMappingStmt CreateRoleStmt CreatePolicyStmt
 		CreatedbStmt DeclareCursorStmt DefineStmt DeleteStmt DiscardStmt DoStmt
@@ -305,7 +306,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		DropTransformStmt
 		DropUserMappingStmt ExplainStmt FetchStmt
 		GrantStmt GrantRoleStmt ImportForeignSchemaStmt IndexStmt InsertStmt
-		ListenStmt LoadStmt LockStmt MergeStmt NotifyStmt ExplainableStmt PreparableStmt
+		LetStmt ListenStmt LoadStmt LockStmt MergeStmt NotifyStmt ExplainableStmt PreparableStmt
 		CreateFunctionStmt AlterFunctionStmt ReindexStmt RemoveAggrStmt
 		RemoveFuncStmt RemoveOperStmt RenameStmt ReturnStmt RevokeStmt RevokeRoleStmt
 		RuleActionStmt RuleActionStmtOrEmpty RuleStmt
@@ -455,6 +456,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				TriggerTransitions TriggerReferencing
 				vacuum_relation_list opt_vacuum_relation_list
 				drop_option_list pub_obj_list
+				let_target
 
 %type <node>	opt_routine_body
 %type <groupclause> group_clause
@@ -477,6 +479,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <ival>	 OptTemp
 %type <ival>	 OptNoLog
 %type <oncommit> OnCommitOption
+%type <ival>	 OnEOXActionOption
 
 %type <ival>	for_locking_strength
 %type <node>	for_locking_item
@@ -647,6 +650,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <partboundspec> PartitionBoundSpec
 %type <list>		hash_partbound
 %type <defelt>		hash_partbound_elem
+%type <node>		OptSessionVarDefExpr
 
 %type <node>	json_format_clause
 				json_format_clause_opt
@@ -671,6 +675,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				json_object_constructor_null_clause_opt
 				json_array_constructor_null_clause_opt
 
+%type <boolean>		OptNotNull OptImmutable OptTransactional
 
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
@@ -740,7 +745,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	KEEP KEY KEYS
 
 	LABEL LANGUAGE LARGE_P LAST_P LATERAL_P
-	LEADING LEAKPROOF LEAST LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
+	LEADING LEAKPROOF LEAST LEFT LET LEVEL LIKE LIMIT LISTEN LOAD LOCAL
 	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED LOGGED
 
 	MAPPING MATCH MATCHED MATERIALIZED MAXVALUE MERGE MERGE_ACTION METHOD
@@ -775,15 +780,15 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	SUBSCRIPTION SUBSTRING SUPPORT SYMMETRIC SYSID SYSTEM_P SYSTEM_USER
 
 	TABLE TABLES TABLESAMPLE TABLESPACE TEMP TEMPLATE TEMPORARY TEXT_P THEN
-	TIES TIME TIMESTAMP TO TRAILING TRANSACTION TRANSFORM
+	TIES TIME TIMESTAMP TO TRAILING TRANSACTION TRANSACTIONAL TRANSFORM
 	TREAT TRIGGER TRIM TRUE_P
 	TRUNCATE TRUSTED TYPE_P TYPES_P
 
 	UESCAPE UNBOUNDED UNCONDITIONAL UNCOMMITTED UNENCRYPTED UNION UNIQUE UNKNOWN
 	UNLISTEN UNLOGGED UNTIL UPDATE USER USING
 
-	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARCHAR VARIADIC VARYING
-	VERBOSE VERSION_P VIEW VIEWS VOLATILE
+	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARCHAR VARIABLE VARIABLES
+	VARIADIC VARYING VERBOSE VERSION_P VIEW VIEWS VOLATILE
 
 	WHEN WHERE WHITESPACE_P WINDOW WITH WITHIN WITHOUT WORK WRAPPER WRITE
 
@@ -819,6 +824,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %token		MODE_PLPGSQL_ASSIGN1
 %token		MODE_PLPGSQL_ASSIGN2
 %token		MODE_PLPGSQL_ASSIGN3
+%token		MODE_PLPGSQL_LET
 
 
 /* Precedence: lowest to highest */
@@ -947,6 +953,13 @@ parse_toplevel:
 				pg_yyget_extra(yyscanner)->parsetree =
 					list_make1(makeRawStmt((Node *) n, 0));
 			}
+			| MODE_PLPGSQL_LET LetStmt
+			{
+				LetStmt *n = (LetStmt *) $2;
+				n->plpgsql_mode = true;
+				pg_yyget_extra(yyscanner)->parsetree =
+					list_make1(makeRawStmt((Node *) n, 0));
+			}
 		;
 
 /*
@@ -1050,6 +1063,7 @@ stmt:
 			| CreatePolicyStmt
 			| CreatePLangStmt
 			| CreateSchemaStmt
+			| CreateSessionVarStmt
 			| CreateSeqStmt
 			| CreateStmt
 			| CreateSubscriptionStmt
@@ -1087,6 +1101,7 @@ stmt:
 			| ImportForeignSchemaStmt
 			| IndexStmt
 			| InsertStmt
+			| LetStmt
 			| ListenStmt
 			| RefreshMatViewStmt
 			| LoadStmt
@@ -1594,6 +1609,7 @@ schema_stmt:
 			| CreateTrigStmt
 			| GrantStmt
 			| ViewStmt
+			| CreateSessionVarStmt
 		;
 
 
@@ -2058,7 +2074,13 @@ DiscardStmt:
 					n->target = DISCARD_SEQUENCES;
 					$$ = (Node *) n;
 				}
+			| DISCARD VARIABLES
+				{
+					DiscardStmt *n = makeNode(DiscardStmt);
 
+					n->target = DISCARD_VARIABLES;
+					$$ = (Node *) n;
+				}
 		;
 
 
@@ -5133,6 +5155,74 @@ create_extension_opt_item:
 
 /*****************************************************************************
  *
+ *		QUERY :
+ *				CREATE VARIABLE varname [AS] type
+ *
+ *****************************************************************************/
+
+CreateSessionVarStmt:
+			CREATE OptTemp OptTransactional OptImmutable VARIABLE qualified_name opt_as Typename opt_collate_clause OptNotNull OptSessionVarDefExpr OnEOXActionOption
+				{
+					CreateSessionVarStmt *n = makeNode(CreateSessionVarStmt);
+					$6->relpersistence = $2;
+					n->is_immutable = $4;
+					n->is_transact = $3;
+					n->variable = $6;
+					n->typeName = $8;
+					n->collClause = (CollateClause *) $9;
+					n->is_not_null = $10;
+					n->defexpr = $11;
+					n->eoxaction = $12;
+					n->if_not_exists = false;
+					$$ = (Node *) n;
+				}
+			| CREATE OptTemp OptTransactional OptImmutable VARIABLE IF_P NOT EXISTS qualified_name opt_as Typename opt_collate_clause OptNotNull OptSessionVarDefExpr OnEOXActionOption
+				{
+					CreateSessionVarStmt *n = makeNode(CreateSessionVarStmt);
+					$9->relpersistence = $2;
+					n->is_immutable = $4;
+					n->is_transact = $3;
+					n->variable = $9;
+					n->typeName = $11;
+					n->collClause = (CollateClause *) $12;
+					n->is_not_null = $13;
+					n->defexpr = $14;
+					n->eoxaction = $15;
+					n->if_not_exists = true;
+					$$ = (Node *) n;
+				}
+		;
+
+OptSessionVarDefExpr: DEFAULT b_expr					{ $$ = $2; }
+			| /* EMPTY */							{ $$ = NULL; }
+		;
+
+/*
+ * Temporary session variables can be dropped on successful
+ * transaction end like tables.
+ */
+OnEOXActionOption:  ON COMMIT DROP					{ $$ = VARIABLE_EOX_DROP; }
+			| ON TRANSACTION END_P RESET			{ $$ = VARIABLE_EOX_RESET; }
+			| /*EMPTY*/								{ $$ = VARIABLE_EOX_NOOP; }
+		;
+
+
+OptNotNull: NOT NULL_P								{ $$ = true; }
+			| /* EMPTY */							{ $$ = false; }
+		;
+
+OptImmutable: IMMUTABLE								{ $$ = true; }
+			| /* EMPTY */							{ $$ = false; }
+		;
+
+OptTransactional:
+			TRANSACTION								{ $$ = true; }
+			| TRANSACTIONAL							{ $$ = true; }
+			| /* EMPTY */							{ $$ = false; }
+		;
+
+/*****************************************************************************
+ *
  * ALTER EXTENSION name UPDATE [ TO version ]
  *
  *****************************************************************************/
@@ -6935,6 +7025,7 @@ object_type_any_name:
 			| TEXT_P SEARCH DICTIONARY				{ $$ = OBJECT_TSDICTIONARY; }
 			| TEXT_P SEARCH TEMPLATE				{ $$ = OBJECT_TSTEMPLATE; }
 			| TEXT_P SEARCH CONFIGURATION			{ $$ = OBJECT_TSCONFIGURATION; }
+			| VARIABLE								{ $$ = OBJECT_VARIABLE; }
 		;
 
 /*
@@ -7811,6 +7902,14 @@ privilege_target:
 					n->objs = $2;
 					$$ = n;
 				}
+			| VARIABLE qualified_name_list
+				{
+					PrivTarget *n = (PrivTarget *) palloc(sizeof(PrivTarget));
+					n->targtype = ACL_TARGET_OBJECT;
+					n->objtype = OBJECT_VARIABLE;
+					n->objs = $2;
+					$$ = n;
+				}
 			| ALL TABLES IN_P SCHEMA name_list
 				{
 					PrivTarget *n = (PrivTarget *) palloc(sizeof(PrivTarget));
@@ -7853,6 +7952,14 @@ privilege_target:
 
 					n->targtype = ACL_TARGET_ALL_IN_SCHEMA;
 					n->objtype = OBJECT_ROUTINE;
+					n->objs = $5;
+					$$ = n;
+				}
+			| ALL VARIABLES IN_P SCHEMA name_list
+				{
+					PrivTarget *n = (PrivTarget *) palloc(sizeof(PrivTarget));
+					n->targtype = ACL_TARGET_ALL_IN_SCHEMA;
+					n->objtype = OBJECT_VARIABLE;
 					n->objs = $5;
 					$$ = n;
 				}
@@ -8053,6 +8160,7 @@ defacl_privilege_target:
 			| SEQUENCES		{ $$ = OBJECT_SEQUENCE; }
 			| TYPES_P		{ $$ = OBJECT_TYPE; }
 			| SCHEMAS		{ $$ = OBJECT_SCHEMA; }
+			| VARIABLES		{ $$ = OBJECT_VARIABLE; }
 		;
 
 
@@ -9835,6 +9943,24 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->missing_ok = false;
 					$$ = (Node *) n;
 				}
+			| ALTER VARIABLE any_name RENAME TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_VARIABLE;
+					n->object = (Node *) $3;
+					n->newname = $6;
+					n->missing_ok = false;
+					$$ = (Node *)n;
+				}
+			| ALTER VARIABLE IF_P EXISTS any_name RENAME TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_VARIABLE;
+					n->object = (Node *) $5;
+					n->newname = $8;
+					n->missing_ok = true;
+					$$ = (Node *)n;
+				}
 		;
 
 opt_column: COLUMN
@@ -10196,6 +10322,24 @@ AlterObjectSchemaStmt:
 					n->missing_ok = false;
 					$$ = (Node *) n;
 				}
+			| ALTER VARIABLE any_name SET SCHEMA name
+				{
+					AlterObjectSchemaStmt *n = makeNode(AlterObjectSchemaStmt);
+					n->objectType = OBJECT_VARIABLE;
+					n->object = (Node *) $3;
+					n->newschema = $6;
+					n->missing_ok = false;
+					$$ = (Node *)n;
+				}
+			| ALTER VARIABLE IF_P EXISTS any_name SET SCHEMA name
+				{
+					AlterObjectSchemaStmt *n = makeNode(AlterObjectSchemaStmt);
+					n->objectType = OBJECT_VARIABLE;
+					n->object = (Node *) $5;
+					n->newschema = $8;
+					n->missing_ok = true;
+					$$ = (Node *)n;
+				}
 		;
 
 /*****************************************************************************
@@ -10476,6 +10620,14 @@ AlterOwnerStmt: ALTER AGGREGATE aggregate_with_argtypes OWNER TO RoleSpec
 					n->object = (Node *) makeString($3);
 					n->newowner = $6;
 					$$ = (Node *) n;
+				}
+			| ALTER VARIABLE any_name OWNER TO RoleSpec
+				{
+					AlterOwnerStmt *n = makeNode(AlterOwnerStmt);
+					n->objectType = OBJECT_VARIABLE;
+					n->object = (Node *) $3;
+					n->newowner = $6;
+					$$ = (Node *)n;
 				}
 		;
 
@@ -11960,7 +12112,8 @@ ExplainableStmt:
 			| CreateAsStmt
 			| CreateMatViewStmt
 			| RefreshMatViewStmt
-			| ExecuteStmt					/* by default all are $$=$1 */
+			| ExecuteStmt
+			| LetStmt						/* by default all are $$=$1 */
 		;
 
 /*****************************************************************************
@@ -11990,7 +12143,8 @@ PreparableStmt:
 			| InsertStmt
 			| UpdateStmt
 			| DeleteStmt
-			| MergeStmt						/* by default all are $$=$1 */
+			| MergeStmt
+			| LetStmt						/* by default all are $$=$1 */
 		;
 
 /*****************************************************************************
@@ -12586,6 +12740,47 @@ cursor_options: /*EMPTY*/					{ $$ = 0; }
 opt_hold: /* EMPTY */						{ $$ = 0; }
 			| WITH HOLD						{ $$ = CURSOR_OPT_HOLD; }
 			| WITHOUT HOLD					{ $$ = 0; }
+		;
+
+/*****************************************************************************
+ *
+ *		QUERY:
+ *				LET STATEMENTS
+ *
+ *****************************************************************************/
+LetStmt:	LET let_target '=' a_expr
+				{
+					LetStmt	   *n = makeNode(LetStmt);
+					SelectStmt *select;
+					ResTarget  *res;
+
+					n->target = $2;
+
+					select = makeNode(SelectStmt);
+					res = makeNode(ResTarget);
+
+					/* Create target list for implicit query */
+					res->name = NULL;
+					res->indirection = NIL;
+					res->val = (Node *) $4;
+					res->location = @4;
+
+					select->targetList = list_make1(res);
+					n->query = (Node *) select;
+
+					n->location = @2;
+					$$ = (Node *) n;
+				}
+		;
+
+let_target:
+			ColId opt_indirection
+				{
+					$$ = list_make1(makeString($1));
+					if ($2)
+						  $$ = list_concat($$,
+										   check_indirection($2, yyscanner));
+				}
 		;
 
 /*****************************************************************************
@@ -17456,6 +17651,7 @@ unreserved_keyword:
 			| LARGE_P
 			| LAST_P
 			| LEAKPROOF
+			| LET
 			| LEVEL
 			| LISTEN
 			| LOAD
@@ -17601,6 +17797,7 @@ unreserved_keyword:
 			| TEXT_P
 			| TIES
 			| TRANSACTION
+			| TRANSACTIONAL
 			| TRANSFORM
 			| TRIGGER
 			| TRUNCATE
@@ -17622,6 +17819,8 @@ unreserved_keyword:
 			| VALIDATE
 			| VALIDATOR
 			| VALUE_P
+			| VARIABLE
+			| VARIABLES
 			| VARYING
 			| VERSION_P
 			| VIEW
@@ -18059,6 +18258,7 @@ bare_label_keyword:
 			| LEAKPROOF
 			| LEAST
 			| LEFT
+			| LET
 			| LEVEL
 			| LIKE
 			| LISTEN
@@ -18240,6 +18440,7 @@ bare_label_keyword:
 			| TIMESTAMP
 			| TRAILING
 			| TRANSACTION
+			| TRANSACTIONAL
 			| TRANSFORM
 			| TREAT
 			| TRIGGER
@@ -18269,6 +18470,8 @@ bare_label_keyword:
 			| VALUE_P
 			| VALUES
 			| VARCHAR
+			| VARIABLE
+			| VARIABLES
 			| VARIADIC
 			| VERBOSE
 			| VERSION_P

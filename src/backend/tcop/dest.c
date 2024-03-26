@@ -37,6 +37,7 @@
 #include "executor/functions.h"
 #include "executor/tqueue.h"
 #include "executor/tstoreReceiver.h"
+#include "executor/svariableReceiver.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 
@@ -151,6 +152,9 @@ CreateDestReceiver(CommandDest dest)
 
 		case DestTupleQueue:
 			return CreateTupleQueueDestReceiver(NULL);
+
+		case DestVariable:
+			return CreateVariableDestReceiver(InvalidOid);
 	}
 
 	/* should never get here */
@@ -186,6 +190,7 @@ EndCommand(const QueryCompletion *qc, CommandDest dest, bool force_undecorated_o
 		case DestSQLFunction:
 		case DestTransientRel:
 		case DestTupleQueue:
+		case DestVariable:
 			break;
 	}
 }
@@ -231,6 +236,7 @@ NullCommand(CommandDest dest)
 		case DestSQLFunction:
 		case DestTransientRel:
 		case DestTupleQueue:
+		case DestVariable:
 			break;
 	}
 }
@@ -274,6 +280,7 @@ ReadyForQuery(CommandDest dest)
 		case DestSQLFunction:
 		case DestTransientRel:
 		case DestTupleQueue:
+		case DestVariable:
 			break;
 	}
 }

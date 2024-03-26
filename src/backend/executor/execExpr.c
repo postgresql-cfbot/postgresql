@@ -34,6 +34,7 @@
 #include "catalog/objectaccess.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_variable.h"
 #include "executor/execExpr.h"
 #include "executor/nodeSubplan.h"
 #include "funcapi.h"
@@ -987,6 +988,85 @@ ExecInitExprRec(Expr *node, ExprState *state,
 						scratch.d.param.paramtype = param->paramtype;
 						ExprEvalPushStep(state, &scratch);
 						break;
+
+					case PARAM_VARIABLE:
+						{
+							int			es_num_session_variables = 0;
+							SessionVariableValue *es_session_variables = NULL;
+							SessionVariableValue *var;
+
+							if (state->parent && state->parent->state)
+							{
+								es_session_variables = state->parent->state->es_session_variables;
+								es_num_session_variables = state->parent->state->es_num_session_variables;
+							}
+
+							if (es_session_variables)
+							{
+								/*
+								 * This path is used when expression is
+								 * evaluated inside query evaluation. For
+								 * ensuring of immutability of session variable
+								 * inside query we use special buffer with copy
+								 * of used session variables. This method helps
+								 * with parallel execution too.
+								 */
+
+								/* Parameter sanity checks. */
+								if (param->paramid >= es_num_session_variables)
+									elog(ERROR, "paramid of PARAM_VARIABLE param is out of range");
+
+								var = &es_session_variables[param->paramid];
+
+								if (var->typid != param->paramtype)
+									elog(ERROR, "type of buffered value is different than PARAM_VARIABLE type");
+
+								/*
+								 * In this case, pass the value like a
+								 * constant.
+								 */
+								scratch.opcode = EEOP_CONST;
+								scratch.d.constval.value = var->value;
+								scratch.d.constval.isnull = var->isnull;
+								ExprEvalPushStep(state, &scratch);
+							}
+							else
+							{
+								AclResult	aclresult;
+								Oid			varid = param->paramvarid;
+								Oid			vartype = param->paramtype;
+
+								Assert(!IsParallelWorker());
+
+								/*
+								 * In some cases (plpgsql's simple expression
+								 * evaluation or evaluation of CALL arguments),
+								 * the expression executor is called directly.
+								 * We can allow direct access to session
+								 * variables (copy only), because we know, so
+								 * outside is not any query (and expression
+								 * cannot be executed parallel).
+								 *
+								 * In this case we should to do aclcheck,
+								 * because usual aclcheck from
+								 * standard_ExecutorStart is not executed in
+								 * this case. Fortunately it is just once per
+								 * transaction.
+								 */
+								aclresult = object_aclcheck(VariableRelationId, varid,
+															GetUserId(), ACL_SELECT);
+								if (aclresult != ACLCHECK_OK)
+									aclcheck_error(aclresult, OBJECT_VARIABLE,
+												   get_session_variable_name(varid));
+
+								scratch.opcode = EEOP_PARAM_VARIABLE;
+								scratch.d.vparam.varid = varid;
+								scratch.d.vparam.vartype = vartype;
+								ExprEvalPushStep(state, &scratch);
+							}
+						}
+						break;
+
 					case PARAM_EXTERN:
 
 						/*

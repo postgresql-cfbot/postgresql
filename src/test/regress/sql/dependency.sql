@@ -114,3 +114,16 @@ DROP USER regress_dep_user2;
 DROP OWNED BY regress_dep_user2, regress_dep_user0;
 DROP USER regress_dep_user2;
 DROP USER regress_dep_user0;
+
+-- dependency on type
+CREATE DOMAIN vardomain AS int;
+CREATE TYPE vartype AS (a int, b int, c vardomain);
+CREATE VARIABLE var1 AS vartype;
+
+-- should to fail
+DROP DOMAIN vardomain;
+DROP TYPE vartype;
+
+DROP VARIABLE var1;
+DROP TYPE vartype;
+DROP DOMAIN vardomain;

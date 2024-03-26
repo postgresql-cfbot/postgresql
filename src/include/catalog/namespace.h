@@ -97,6 +97,8 @@ extern Oid	TypenameGetTypid(const char *typname);
 extern Oid	TypenameGetTypidExtended(const char *typname, bool temp_ok);
 extern bool TypeIsVisible(Oid typid);
 
+extern bool VariableIsVisible(Oid varid);
+
 extern FuncCandidateList FuncnameGetCandidates(List *names,
 											   int nargs, List *argnames,
 											   bool expand_variadic,
@@ -169,10 +171,13 @@ extern SearchPathMatcher *GetSearchPathMatcher(MemoryContext context);
 extern SearchPathMatcher *CopySearchPathMatcher(SearchPathMatcher *path);
 extern bool SearchPathMatchesCurrentEnvironment(SearchPathMatcher *path);
 
+extern List *NamesFromList(List *names);
+extern Oid	LookupVariable(const char *nspname, const char *varname, bool missing_ok);
+extern Oid	IdentifyVariable(List *names, char **attrname, bool *not_unique, bool noerror);
+
 extern Oid	get_collation_oid(List *collname, bool missing_ok);
 extern Oid	get_conversion_oid(List *conname, bool missing_ok);
 extern Oid	FindDefaultConversionProc(int32 for_encoding, int32 to_encoding);
-
 
 /* initialization & transaction cleanup code */
 extern void InitializeSearchPath(void);

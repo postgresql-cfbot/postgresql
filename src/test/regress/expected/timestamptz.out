@@ -695,7 +695,7 @@ SELECT d1 - timestamp with time zone '1997-01-02' AS diff
  @ 1460 days 17 hours 32 mins 1 sec
 (56 rows)
 
-SELECT date_trunc( 'week', timestamp with time zone '2004-02-29 15:44:17.71393' ) AS week_trunc;
+SELECT date_trunc('week', timestamp with time zone '2004-02-29 15:44:17.71393') AS week_trunc;
           week_trunc          
 ------------------------------
  Mon Feb 23 00:00:00 2004 PST
@@ -719,11 +719,67 @@ SELECT date_trunc('day', timestamp with time zone '2001-02-16 20:38:40+00', 'VET
  Thu Feb 15 20:00:00 2001 PST
 (1 row)
 
+SELECT date_trunc('7 day'::interval, timestamp with time zone '2004-02-29 15:44:17.71393') AS week_trunc;
+          week_trunc          
+------------------------------
+ Mon Feb 23 00:00:00 2004 PST
+(1 row)
+
+SELECT date_trunc('3 month'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Australia/Sydney') as sydney_trunc;  -- zone name
+         sydney_trunc         
+------------------------------
+ Sun Dec 31 05:00:00 2000 PST
+(1 row)
+
+SELECT date_trunc('12 hour'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'GMT') as gmt_trunc;  -- fixed-offset abbreviation
+          gmt_trunc           
+------------------------------
+ Fri Feb 16 04:00:00 2001 PST
+(1 row)
+
+SELECT date_trunc('6 hour'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'VET') as vet_trunc;  -- variable-offset abbreviation
+          vet_trunc           
+------------------------------
+ Fri Feb 16 08:00:00 2001 PST
+(1 row)
+
+SELECT date_trunc('6 minutes'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'VET') as vet_trunc;  -- variable-offset abbreviation
+          vet_trunc           
+------------------------------
+ Fri Feb 16 12:36:00 2001 PST
+(1 row)
+
+SELECT date_trunc('10 second'::interval, timestamp with time zone '2004-02-29 15:44:17.71393') AS tensec_trunc;
+         tensec_trunc         
+------------------------------
+ Sun Feb 29 15:44:10 2004 PST
+(1 row)
+
+SELECT date_trunc('500 msecond'::interval, timestamp with time zone '2004-02-29 15:44:17.71393') AS halfsec_trunc;
+         halfsec_trunc          
+--------------------------------
+ Sun Feb 29 15:44:17.5 2004 PST
+(1 row)
+
+-- errors
+SELECT date_trunc('1 month 7 day'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval1;
+ERROR:  interval has to be a divisor of a day, week or century.
+SELECT date_trunc('1 month 01:00:00'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval2;
+ERROR:  interval has to be a divisor of a day, week or century.
+SELECT date_trunc('1 day 00:30:00'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval3;
+ERROR:  interval has to be a divisor of a day, week or century.
+SELECT date_trunc('7 month'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval4;
+ERROR:  interval has to be a divisor of a day, week or century.
+SELECT date_trunc('3 day'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval5;
+ERROR:  interval has to be a divisor of a day, week or century.
+SELECT date_trunc('00:23:00'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval6;
+ERROR:  interval has to be a divisor of a day, week or century.
 -- verify date_bin behaves the same as date_trunc for relevant intervals
 SELECT
   str,
   interval,
-  date_trunc(str, ts, 'Australia/Sydney') = date_bin(interval::interval, ts, timestamp with time zone '2001-01-01+11') AS equal
+  date_trunc(str, ts, 'Australia/Sydney') = date_bin(interval::interval, ts, timestamp with time zone '2001-01-01+11') AS equal_str,
+  date_trunc(interval::interval, ts, 'Australia/Sydney') = date_bin(interval::interval, ts, timestamp with time zone '2001-01-01+11') AS equal_interval
 FROM (
   VALUES
   ('day', '1 d'),
@@ -734,14 +790,14 @@ FROM (
   ('microsecond', '1 us')
 ) intervals (str, interval),
 (VALUES (timestamptz '2020-02-29 15:44:17.71393+00')) ts (ts);
-     str     | interval | equal 
--------------+----------+-------
- day         | 1 d      | t
- hour        | 1 h      | t
- minute      | 1 m      | t
- second      | 1 s      | t
- millisecond | 1 ms     | t
- microsecond | 1 us     | t
+     str     | interval | equal_str | equal_interval 
+-------------+----------+-----------+----------------
+ day         | 1 d      | t         | t
+ hour        | 1 h      | t         | t
+ minute      | 1 m      | t         | t
+ second      | 1 s      | t         | t
+ millisecond | 1 ms     | t         | t
+ microsecond | 1 us     | t         | t
 (6 rows)
 
 -- bin timestamps into arbitrary intervals
@@ -2538,6 +2594,75 @@ SELECT * FROM generate_series('2021-12-31 23:00:00+00'::timestamptz,
  Sun Jan 31 23:00:00 2021 UTC
  Thu Dec 31 23:00:00 2020 UTC
 (13 rows)
+
+SET TimeZone to 'Europe/Warsaw';
+-- DST - 23 hours in day
+SELECT ts,
+       date_trunc('1 hour'::interval, ts, 'Europe/Warsaw') AS one_hour_bin,
+       date_trunc('2 hour'::interval, ts, 'Europe/Warsaw') AS two_hours_bin,
+       date_trunc('3 hour'::interval, ts, 'Europe/Warsaw') AS three_hours_bin
+   FROM generate_series('2022-03-26 21:00:00+00'::timestamptz,
+                        '2022-03-27 07:00:00+00'::timestamptz,
+                        '30 min'::interval,
+                        'Europe/Warsaw') AS ts;
+              ts               |         one_hour_bin          |         two_hours_bin         |        three_hours_bin        
+-------------------------------+-------------------------------+-------------------------------+-------------------------------
+ Sat Mar 26 22:00:00 2022 CET  | Sat Mar 26 22:00:00 2022 CET  | Sat Mar 26 22:00:00 2022 CET  | Sat Mar 26 21:00:00 2022 CET
+ Sat Mar 26 22:30:00 2022 CET  | Sat Mar 26 22:00:00 2022 CET  | Sat Mar 26 22:00:00 2022 CET  | Sat Mar 26 21:00:00 2022 CET
+ Sat Mar 26 23:00:00 2022 CET  | Sat Mar 26 23:00:00 2022 CET  | Sat Mar 26 22:00:00 2022 CET  | Sat Mar 26 21:00:00 2022 CET
+ Sat Mar 26 23:30:00 2022 CET  | Sat Mar 26 23:00:00 2022 CET  | Sat Mar 26 22:00:00 2022 CET  | Sat Mar 26 21:00:00 2022 CET
+ Sun Mar 27 00:00:00 2022 CET  | Sun Mar 27 00:00:00 2022 CET  | Sun Mar 27 00:00:00 2022 CET  | Sun Mar 27 00:00:00 2022 CET
+ Sun Mar 27 00:30:00 2022 CET  | Sun Mar 27 00:00:00 2022 CET  | Sun Mar 27 00:00:00 2022 CET  | Sun Mar 27 00:00:00 2022 CET
+ Sun Mar 27 01:00:00 2022 CET  | Sun Mar 27 01:00:00 2022 CET  | Sun Mar 27 00:00:00 2022 CET  | Sun Mar 27 00:00:00 2022 CET
+ Sun Mar 27 01:30:00 2022 CET  | Sun Mar 27 01:00:00 2022 CET  | Sun Mar 27 00:00:00 2022 CET  | Sun Mar 27 00:00:00 2022 CET
+ Sun Mar 27 03:00:00 2022 CEST | Sun Mar 27 03:00:00 2022 CEST | Sun Mar 27 03:00:00 2022 CEST | Sun Mar 27 03:00:00 2022 CEST
+ Sun Mar 27 03:30:00 2022 CEST | Sun Mar 27 03:00:00 2022 CEST | Sun Mar 27 03:00:00 2022 CEST | Sun Mar 27 03:00:00 2022 CEST
+ Sun Mar 27 04:00:00 2022 CEST | Sun Mar 27 04:00:00 2022 CEST | Sun Mar 27 04:00:00 2022 CEST | Sun Mar 27 03:00:00 2022 CEST
+ Sun Mar 27 04:30:00 2022 CEST | Sun Mar 27 04:00:00 2022 CEST | Sun Mar 27 04:00:00 2022 CEST | Sun Mar 27 03:00:00 2022 CEST
+ Sun Mar 27 05:00:00 2022 CEST | Sun Mar 27 05:00:00 2022 CEST | Sun Mar 27 04:00:00 2022 CEST | Sun Mar 27 03:00:00 2022 CEST
+ Sun Mar 27 05:30:00 2022 CEST | Sun Mar 27 05:00:00 2022 CEST | Sun Mar 27 04:00:00 2022 CEST | Sun Mar 27 03:00:00 2022 CEST
+ Sun Mar 27 06:00:00 2022 CEST | Sun Mar 27 06:00:00 2022 CEST | Sun Mar 27 06:00:00 2022 CEST | Sun Mar 27 06:00:00 2022 CEST
+ Sun Mar 27 06:30:00 2022 CEST | Sun Mar 27 06:00:00 2022 CEST | Sun Mar 27 06:00:00 2022 CEST | Sun Mar 27 06:00:00 2022 CEST
+ Sun Mar 27 07:00:00 2022 CEST | Sun Mar 27 07:00:00 2022 CEST | Sun Mar 27 06:00:00 2022 CEST | Sun Mar 27 06:00:00 2022 CEST
+ Sun Mar 27 07:30:00 2022 CEST | Sun Mar 27 07:00:00 2022 CEST | Sun Mar 27 06:00:00 2022 CEST | Sun Mar 27 06:00:00 2022 CEST
+ Sun Mar 27 08:00:00 2022 CEST | Sun Mar 27 08:00:00 2022 CEST | Sun Mar 27 08:00:00 2022 CEST | Sun Mar 27 06:00:00 2022 CEST
+ Sun Mar 27 08:30:00 2022 CEST | Sun Mar 27 08:00:00 2022 CEST | Sun Mar 27 08:00:00 2022 CEST | Sun Mar 27 06:00:00 2022 CEST
+ Sun Mar 27 09:00:00 2022 CEST | Sun Mar 27 09:00:00 2022 CEST | Sun Mar 27 08:00:00 2022 CEST | Sun Mar 27 09:00:00 2022 CEST
+(21 rows)
+
+-- DST - 25 hours in day
+SELECT ts,
+       date_trunc('1 hour'::interval, ts, 'Europe/Warsaw') AS one_hour_bin,
+       date_trunc('2 hour'::interval, ts, 'Europe/Warsaw') AS two_hours_bin,
+       date_trunc('3 hour'::interval, ts, 'Europe/Warsaw') AS three_hours_bin
+   FROM generate_series('2022-10-29 21:00:00+00'::timestamptz,
+                        '2022-10-30 07:00:00+00'::timestamptz,
+                        '30 min'::interval,
+                        'Europe/Warsaw') AS ts;
+              ts               |         one_hour_bin          |         two_hours_bin         |        three_hours_bin        
+-------------------------------+-------------------------------+-------------------------------+-------------------------------
+ Sat Oct 29 23:00:00 2022 CEST | Sat Oct 29 23:00:00 2022 CEST | Sat Oct 29 22:00:00 2022 CEST | Sat Oct 29 21:00:00 2022 CEST
+ Sat Oct 29 23:30:00 2022 CEST | Sat Oct 29 23:00:00 2022 CEST | Sat Oct 29 22:00:00 2022 CEST | Sat Oct 29 21:00:00 2022 CEST
+ Sun Oct 30 00:00:00 2022 CEST | Sun Oct 30 00:00:00 2022 CEST | Sun Oct 30 00:00:00 2022 CEST | Sun Oct 30 00:00:00 2022 CEST
+ Sun Oct 30 00:30:00 2022 CEST | Sun Oct 30 00:00:00 2022 CEST | Sun Oct 30 00:00:00 2022 CEST | Sun Oct 30 00:00:00 2022 CEST
+ Sun Oct 30 01:00:00 2022 CEST | Sun Oct 30 01:00:00 2022 CEST | Sun Oct 30 00:00:00 2022 CEST | Sun Oct 30 00:00:00 2022 CEST
+ Sun Oct 30 01:30:00 2022 CEST | Sun Oct 30 01:00:00 2022 CEST | Sun Oct 30 00:00:00 2022 CEST | Sun Oct 30 00:00:00 2022 CEST
+ Sun Oct 30 02:00:00 2022 CEST | Sun Oct 30 02:00:00 2022 CEST | Sun Oct 30 02:00:00 2022 CET  | Sun Oct 30 00:00:00 2022 CEST
+ Sun Oct 30 02:30:00 2022 CEST | Sun Oct 30 02:00:00 2022 CEST | Sun Oct 30 02:00:00 2022 CET  | Sun Oct 30 00:00:00 2022 CEST
+ Sun Oct 30 02:00:00 2022 CET  | Sun Oct 30 02:00:00 2022 CET  | Sun Oct 30 02:00:00 2022 CET  | Sun Oct 30 00:00:00 2022 CEST
+ Sun Oct 30 02:30:00 2022 CET  | Sun Oct 30 02:00:00 2022 CET  | Sun Oct 30 02:00:00 2022 CET  | Sun Oct 30 00:00:00 2022 CEST
+ Sun Oct 30 03:00:00 2022 CET  | Sun Oct 30 03:00:00 2022 CET  | Sun Oct 30 02:00:00 2022 CET  | Sun Oct 30 03:00:00 2022 CET
+ Sun Oct 30 03:30:00 2022 CET  | Sun Oct 30 03:00:00 2022 CET  | Sun Oct 30 02:00:00 2022 CET  | Sun Oct 30 03:00:00 2022 CET
+ Sun Oct 30 04:00:00 2022 CET  | Sun Oct 30 04:00:00 2022 CET  | Sun Oct 30 04:00:00 2022 CET  | Sun Oct 30 03:00:00 2022 CET
+ Sun Oct 30 04:30:00 2022 CET  | Sun Oct 30 04:00:00 2022 CET  | Sun Oct 30 04:00:00 2022 CET  | Sun Oct 30 03:00:00 2022 CET
+ Sun Oct 30 05:00:00 2022 CET  | Sun Oct 30 05:00:00 2022 CET  | Sun Oct 30 04:00:00 2022 CET  | Sun Oct 30 03:00:00 2022 CET
+ Sun Oct 30 05:30:00 2022 CET  | Sun Oct 30 05:00:00 2022 CET  | Sun Oct 30 04:00:00 2022 CET  | Sun Oct 30 03:00:00 2022 CET
+ Sun Oct 30 06:00:00 2022 CET  | Sun Oct 30 06:00:00 2022 CET  | Sun Oct 30 06:00:00 2022 CET  | Sun Oct 30 06:00:00 2022 CET
+ Sun Oct 30 06:30:00 2022 CET  | Sun Oct 30 06:00:00 2022 CET  | Sun Oct 30 06:00:00 2022 CET  | Sun Oct 30 06:00:00 2022 CET
+ Sun Oct 30 07:00:00 2022 CET  | Sun Oct 30 07:00:00 2022 CET  | Sun Oct 30 06:00:00 2022 CET  | Sun Oct 30 06:00:00 2022 CET
+ Sun Oct 30 07:30:00 2022 CET  | Sun Oct 30 07:00:00 2022 CET  | Sun Oct 30 06:00:00 2022 CET  | Sun Oct 30 06:00:00 2022 CET
+ Sun Oct 30 08:00:00 2022 CET  | Sun Oct 30 08:00:00 2022 CET  | Sun Oct 30 08:00:00 2022 CET  | Sun Oct 30 06:00:00 2022 CET
+(21 rows)
 
 RESET TimeZone;
 --

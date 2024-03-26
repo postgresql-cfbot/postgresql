@@ -247,6 +247,32 @@ typedef struct TM_IndexDeleteOp
 	TM_IndexStatus *status;
 } TM_IndexDeleteOp;
 
+/* Table modify flags */
+
+/* Use multi inserts, i.e. buffer multiple tuples and insert them at once */
+#define TM_FLAG_MULTI_INSERTS	0x000001
+
+/* Use BAS_BULKWRITE buffer access strategy */
+#define TM_FLAG_BAS_BULKWRITE	0x000002
+
+struct TableModifyState;
+
+/* Table AM specific callback that gets called in table_modify_end() */
+typedef void (*TableModifyEndCP) (struct TableModifyState *state);
+
+/* Holds table modify state */
+typedef struct TableModifyState
+{
+	Relation	rel;
+	int			flags;
+	MemoryContext mctx;
+
+	/* Table AM specific data starts here */
+	void	   *data;
+
+	TableModifyEndCP end_cb;
+} TableModifyState;
+
 /* "options" flag bits for table_tuple_insert */
 /* TABLE_INSERT_SKIP_WAL was 0x0001; RelationNeedsWAL() now governs */
 #define TABLE_INSERT_SKIP_FSM		0x0002
@@ -530,6 +556,20 @@ typedef struct TableAmRoutine
 	/* see table_multi_insert() for reference about parameters */
 	void		(*multi_insert) (Relation rel, TupleTableSlot **slots, int nslots,
 								 CommandId cid, int options, struct BulkInsertStateData *bistate);
+
+	TableModifyState *(*tuple_modify_begin) (Relation rel,
+											 int flags);
+
+	void		(*tuple_modify_buffer_insert) (TableModifyState *state,
+											   CommandId cid,
+											   int options,
+											   TupleTableSlot *slot);
+
+	void		(*tuple_modify_buffer_flush) (TableModifyState *state,
+											  CommandId cid,
+											  int options);
+
+	void		(*tuple_modify_end) (TableModifyState *state);
 
 	/* see table_tuple_delete() for reference about parameters */
 	TM_Result	(*tuple_delete) (Relation rel,
@@ -1471,6 +1511,33 @@ table_multi_insert(Relation rel, TupleTableSlot **slots, int nslots,
 {
 	rel->rd_tableam->multi_insert(rel, slots, nslots,
 								  cid, options, bistate);
+}
+
+static inline TableModifyState *
+table_modify_begin(Relation rel, int flags)
+{
+	return rel->rd_tableam->tuple_modify_begin(rel, flags);
+}
+
+static inline void
+table_modify_buffer_insert(TableModifyState *state, CommandId cid,
+						   int options, TupleTableSlot *slot)
+{
+	state->rel->rd_tableam->tuple_modify_buffer_insert(state, cid,
+													   options, slot);
+}
+
+static inline void
+table_modify_buffer_flush(TableModifyState *state, CommandId cid,
+						  int options)
+{
+	state->rel->rd_tableam->tuple_modify_buffer_flush(state, cid, options);
+}
+
+static inline void
+table_modify_end(TableModifyState *state)
+{
+	state->rel->rd_tableam->tuple_modify_end(state);
 }
 
 /*

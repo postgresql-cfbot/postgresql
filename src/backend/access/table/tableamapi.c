@@ -64,6 +64,11 @@ GetTableAmRoutine(Oid amhandler)
 
 	Assert(routine->tuple_insert != NULL);
 
+	Assert(routine->tuple_modify_begin != NULL);
+	Assert(routine->tuple_modify_buffer_insert != NULL);
+	Assert(routine->tuple_modify_buffer_flush != NULL);
+	Assert(routine->tuple_modify_insert_end != NULL);
+
 	/*
 	 * Could be made optional, but would require throwing error during
 	 * parse-analysis.

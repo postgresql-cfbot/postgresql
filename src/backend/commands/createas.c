@@ -55,7 +55,7 @@ typedef struct
 	ObjectAddress reladdr;		/* address of rel, for ExecCreateTableAs */
 	CommandId	output_cid;		/* cmin to insert in output tuples */
 	int			ti_options;		/* table_tuple_insert performance options */
-	BulkInsertState bistate;	/* bulk insert state */
+	TableModifyState *mstate;	/* table insert state */
 } DR_intorel;
 
 /* utility functions for CTAS definition creation */
@@ -560,9 +560,11 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	 * bulk inserts as there are no tuples to insert.
 	 */
 	if (!into->skipData)
-		myState->bistate = GetBulkInsertState();
+		myState->mstate = table_modify_begin(intoRelationDesc,
+											 TM_FLAG_MULTI_INSERTS |
+											 TM_FLAG_BAS_BULKWRITE);
 	else
-		myState->bistate = NULL;
+		myState->mstate = NULL;
 
 	/*
 	 * Valid smgr_targblock implies something already wrote to the relation.
@@ -590,11 +592,10 @@ intorel_receive(TupleTableSlot *slot, DestReceiver *self)
 		 * would not be cheap either. This also doesn't allow accessing per-AM
 		 * data (say a tuple's xmin), but since we don't do that here...
 		 */
-		table_tuple_insert(myState->rel,
-						   slot,
-						   myState->output_cid,
-						   myState->ti_options,
-						   myState->bistate);
+		table_modify_buffer_insert(myState->mstate,
+								   myState->output_cid,
+								   myState->ti_options,
+								   slot);
 	}
 
 	/* We know this is a newly created relation, so there are no indexes */
@@ -613,8 +614,9 @@ intorel_shutdown(DestReceiver *self)
 
 	if (!into->skipData)
 	{
-		FreeBulkInsertState(myState->bistate);
-		table_finish_bulk_insert(myState->rel, myState->ti_options);
+		table_modify_buffer_flush(myState->mstate, myState->output_cid,
+								  myState->ti_options);
+		table_modify_end(myState->mstate);
 	}
 
 	/* close rel, but keep lock until commit */

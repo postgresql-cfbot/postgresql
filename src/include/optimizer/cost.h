@@ -183,7 +183,7 @@ extern void compute_semi_anti_join_factors(PlannerInfo *root,
 										   JoinType jointype,
 										   SpecialJoinInfo *sjinfo,
 										   List *restrictlist,
-										   SemiAntiJoinFactors *semifactors);
+										   JoinPathExtraData *extra);
 extern void set_baserel_size_estimates(PlannerInfo *root, RelOptInfo *rel);
 extern double get_parameterized_baserel_size(PlannerInfo *root,
 											 RelOptInfo *rel,

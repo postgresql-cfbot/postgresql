@@ -24,7 +24,6 @@
 static RestrictInfo *make_restrictinfo_internal(PlannerInfo *root,
 												Expr *clause,
 												Expr *orclause,
-												bool is_pushed_down,
 												bool has_clone,
 												bool is_clone,
 												bool pseudoconstant,
@@ -34,7 +33,6 @@ static RestrictInfo *make_restrictinfo_internal(PlannerInfo *root,
 												Relids outer_relids);
 static Expr *make_sub_restrictinfos(PlannerInfo *root,
 									Expr *clause,
-									bool is_pushed_down,
 									bool has_clone,
 									bool is_clone,
 									bool pseudoconstant,
@@ -49,11 +47,11 @@ static Expr *make_sub_restrictinfos(PlannerInfo *root,
  *
  * Build a RestrictInfo node containing the given subexpression.
  *
- * The is_pushed_down, has_clone, is_clone, and pseudoconstant flags for the
- * RestrictInfo must be supplied by the caller, as well as the correct values
- * for security_level, incompatible_relids, and outer_relids.
- * required_relids can be NULL, in which case it defaults to the actual clause
- * contents (i.e., clause_relids).
+ * The has_clone, is_clone, and pseudoconstant flags for the RestrictInfo
+ * must be supplied by the caller, as well as the correct values for
+ * security_level, incompatible_relids, and outer_relids.  required_relids
+ * can be NULL, in which case it defaults to the actual clause contents
+ * (i.e., clause_relids).
  *
  * We initialize fields that depend only on the given subexpression, leaving
  * others that depend on context (or may never be needed at all) to be filled
@@ -62,7 +60,6 @@ static Expr *make_sub_restrictinfos(PlannerInfo *root,
 RestrictInfo *
 make_restrictinfo(PlannerInfo *root,
 				  Expr *clause,
-				  bool is_pushed_down,
 				  bool has_clone,
 				  bool is_clone,
 				  bool pseudoconstant,
@@ -78,7 +75,6 @@ make_restrictinfo(PlannerInfo *root,
 	if (is_orclause(clause))
 		return (RestrictInfo *) make_sub_restrictinfos(root,
 													   clause,
-													   is_pushed_down,
 													   has_clone,
 													   is_clone,
 													   pseudoconstant,
@@ -93,7 +89,6 @@ make_restrictinfo(PlannerInfo *root,
 	return make_restrictinfo_internal(root,
 									  clause,
 									  NULL,
-									  is_pushed_down,
 									  has_clone,
 									  is_clone,
 									  pseudoconstant,
@@ -112,7 +107,6 @@ static RestrictInfo *
 make_restrictinfo_internal(PlannerInfo *root,
 						   Expr *clause,
 						   Expr *orclause,
-						   bool is_pushed_down,
 						   bool has_clone,
 						   bool is_clone,
 						   bool pseudoconstant,
@@ -126,7 +120,6 @@ make_restrictinfo_internal(PlannerInfo *root,
 
 	restrictinfo->clause = clause;
 	restrictinfo->orclause = orclause;
-	restrictinfo->is_pushed_down = is_pushed_down;
 	restrictinfo->pseudoconstant = pseudoconstant;
 	restrictinfo->has_clone = has_clone;
 	restrictinfo->is_clone = is_clone;
@@ -259,9 +252,9 @@ make_restrictinfo_internal(PlannerInfo *root,
  * implicit-AND lists at top level of RestrictInfo lists.  Only ORs and
  * simple clauses are valid RestrictInfos.
  *
- * The same is_pushed_down, has_clone, is_clone, and pseudoconstant flag
- * values can be applied to all RestrictInfo nodes in the result.  Likewise
- * for security_level, incompatible_relids, and outer_relids.
+ * The same has_clone, is_clone, and pseudoconstant flag values can be
+ * applied to all RestrictInfo nodes in the result.  Likewise for
+ * security_level, incompatible_relids, and outer_relids.
  *
  * The given required_relids are attached to our top-level output,
  * but any OR-clause constituents are allowed to default to just the
@@ -270,7 +263,6 @@ make_restrictinfo_internal(PlannerInfo *root,
 static Expr *
 make_sub_restrictinfos(PlannerInfo *root,
 					   Expr *clause,
-					   bool is_pushed_down,
 					   bool has_clone,
 					   bool is_clone,
 					   bool pseudoconstant,
@@ -288,7 +280,6 @@ make_sub_restrictinfos(PlannerInfo *root,
 			orlist = lappend(orlist,
 							 make_sub_restrictinfos(root,
 													lfirst(temp),
-													is_pushed_down,
 													has_clone,
 													is_clone,
 													pseudoconstant,
@@ -299,7 +290,6 @@ make_sub_restrictinfos(PlannerInfo *root,
 		return (Expr *) make_restrictinfo_internal(root,
 												   clause,
 												   make_orclause(orlist),
-												   is_pushed_down,
 												   has_clone,
 												   is_clone,
 												   pseudoconstant,
@@ -317,7 +307,6 @@ make_sub_restrictinfos(PlannerInfo *root,
 			andlist = lappend(andlist,
 							  make_sub_restrictinfos(root,
 													 lfirst(temp),
-													 is_pushed_down,
 													 has_clone,
 													 is_clone,
 													 pseudoconstant,
@@ -331,7 +320,6 @@ make_sub_restrictinfos(PlannerInfo *root,
 		return (Expr *) make_restrictinfo_internal(root,
 												   clause,
 												   NULL,
-												   is_pushed_down,
 												   has_clone,
 												   is_clone,
 												   pseudoconstant,
@@ -521,6 +509,7 @@ extract_actual_clauses(List *restrictinfo_list,
 void
 extract_actual_join_clauses(List *restrictinfo_list,
 							Relids joinrelids,
+							Relids ojrelids,
 							List **joinquals,
 							List **otherquals)
 {
@@ -533,7 +522,7 @@ extract_actual_join_clauses(List *restrictinfo_list,
 	{
 		RestrictInfo *rinfo = lfirst_node(RestrictInfo, l);
 
-		if (RINFO_IS_PUSHED_DOWN(rinfo, joinrelids))
+		if (RINFO_IS_PUSHED_DOWN(rinfo, ojrelids, joinrelids))
 		{
 			if (!rinfo->pseudoconstant &&
 				!rinfo_is_constant_true(rinfo))

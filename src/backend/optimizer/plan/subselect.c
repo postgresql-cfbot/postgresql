@@ -539,10 +539,12 @@ build_subplan(PlannerInfo *root, Plan *plan, PlannerInfo *subroot,
 	}
 
 	/*
-	 * Add the subplan and its PlannerInfo to the global lists.
+	 * Add the subplan and its PlannerInfo, as well as a dummy Path entry, to
+	 * the global lists.
 	 */
 	root->glob->subplans = lappend(root->glob->subplans, plan);
 	root->glob->subroots = lappend(root->glob->subroots, subroot);
+	root->glob->subpaths = lappend(root->glob->subpaths, NULL);
 	splan->plan_id = list_length(root->glob->subplans);
 
 	if (isInitPlan)
@@ -1029,10 +1031,12 @@ SS_process_ctes(PlannerInfo *root)
 		splan->setParam = list_make1_int(paramid);
 
 		/*
-		 * Add the subplan and its PlannerInfo to the global lists.
+		 * Add the subplan and its PlannerInfo, as well as the best path, to
+		 * the global lists.
 		 */
 		root->glob->subplans = lappend(root->glob->subplans, plan);
 		root->glob->subroots = lappend(root->glob->subroots, subroot);
+		root->glob->subpaths = lappend(root->glob->subpaths, best_path);
 		splan->plan_id = list_length(root->glob->subplans);
 
 		root->init_plans = lappend(root->init_plans, splan);
@@ -3021,10 +3025,12 @@ SS_make_initplan_from_plan(PlannerInfo *root,
 	SubPlan    *node;
 
 	/*
-	 * Add the subplan and its PlannerInfo to the global lists.
+	 * Add the subplan and its PlannerInfo, as well as a dummy Path entry, to
+	 * the global lists.
 	 */
 	root->glob->subplans = lappend(root->glob->subplans, plan);
 	root->glob->subroots = lappend(root->glob->subroots, subroot);
+	root->glob->subpaths = lappend(root->glob->subpaths, NULL);
 
 	/*
 	 * Create a SubPlan node and add it to the outer list of InitPlans. Note

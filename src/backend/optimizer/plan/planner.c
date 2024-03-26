@@ -307,6 +307,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	glob->boundParams = boundParams;
 	glob->subplans = NIL;
 	glob->subroots = NIL;
+	glob->subpaths = NIL;
 	glob->rewindPlanIDs = NULL;
 	glob->finalrtable = NIL;
 	glob->finalrteperminfos = NIL;

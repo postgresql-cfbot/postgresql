@@ -107,6 +107,9 @@ typedef struct PlannerGlobal
 	/* PlannerInfos for SubPlan nodes */
 	List	   *subroots pg_node_attr(read_write_ignore);
 
+	/* best Paths for SubPlan nodes */
+	List	   *subpaths;
+
 	/* indices of subplans that require REWIND */
 	Bitmapset  *rewindPlanIDs;
 

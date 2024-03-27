@@ -7357,6 +7357,9 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	CheckPointSUBTRANS();
 	CheckPointMultiXact();
 	CheckPointPredicate();
+
+	RmgrCheckpoint(flags);
+
 	CheckPointBuffers(flags);
 
 	/* Perform all queued up fsyncs */

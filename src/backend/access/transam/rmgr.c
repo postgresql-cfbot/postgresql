@@ -44,8 +44,8 @@
 
 
 /* must be kept in sync with RmgrData definition in xlog_internal.h */
-#define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask,decode) \
-	{ name, redo, desc, identify, startup, cleanup, mask, decode },
+#define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask,decode,checkpoint) \
+	{ name, redo, desc, identify, startup, cleanup, mask, decode, checkpoint },
 
 RmgrData	RmgrTable[RM_MAX_ID + 1] = {
 #include "access/rmgrlist.h"
@@ -80,6 +80,22 @@ RmgrCleanup(void)
 
 		if (RmgrTable[rmid].rm_cleanup != NULL)
 			RmgrTable[rmid].rm_cleanup();
+	}
+}
+
+/*
+ * Checkpoint all resource managers.
+ */
+void
+RmgrCheckpoint(int flags)
+{
+	for (int rmid = 0; rmid <= RM_MAX_ID; rmid++)
+	{
+		if (!RmgrIdExists(rmid))
+			continue;
+
+		if (RmgrTable[rmid].rm_checkpoint != NULL)
+			RmgrTable[rmid].rm_checkpoint(flags);
 	}
 }
 

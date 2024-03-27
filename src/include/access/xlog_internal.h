@@ -356,11 +356,13 @@ typedef struct RmgrData
 	void		(*rm_mask) (char *pagedata, BlockNumber blkno);
 	void		(*rm_decode) (struct LogicalDecodingContext *ctx,
 							  struct XLogRecordBuffer *buf);
+	void		(*rm_checkpoint) (int flags);
 } RmgrData;
 
 extern PGDLLIMPORT RmgrData RmgrTable[];
 extern void RmgrStartup(void);
 extern void RmgrCleanup(void);
+extern void RmgrCheckpoint(int flags);
 extern void RmgrNotFound(RmgrId rmid);
 extern void RegisterCustomRmgr(RmgrId rmid, const RmgrData *rmgr);
 

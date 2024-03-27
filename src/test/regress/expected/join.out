@@ -1909,18 +1909,18 @@ select * from int4_tbl i4, tenk1 a
 where exists(select * from tenk1 b
              where a.twothousand = b.twothousand and a.fivethous <> b.fivethous)
       and i4.f1 = a.tenthous;
-                  QUERY PLAN                  
-----------------------------------------------
- Hash Semi Join
-   Hash Cond: (a.twothousand = b.twothousand)
+                   QUERY PLAN                    
+-------------------------------------------------
+ Hash Right Semi Join
+   Hash Cond: (b.twothousand = a.twothousand)
    Join Filter: (a.fivethous <> b.fivethous)
-   ->  Hash Join
-         Hash Cond: (a.tenthous = i4.f1)
-         ->  Seq Scan on tenk1 a
-         ->  Hash
-               ->  Seq Scan on int4_tbl i4
+   ->  Seq Scan on tenk1 b
    ->  Hash
-         ->  Seq Scan on tenk1 b
+         ->  Hash Join
+               Hash Cond: (a.tenthous = i4.f1)
+               ->  Seq Scan on tenk1 a
+               ->  Hash
+                     ->  Seq Scan on int4_tbl i4
 (10 rows)
 
 --

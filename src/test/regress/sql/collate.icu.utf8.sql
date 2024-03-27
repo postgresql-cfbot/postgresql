@@ -721,6 +721,14 @@ DELETE FROM test11pk WHERE x = 'abc';
 SELECT * FROM test11pk;
 SELECT * FROM test11fk;
 
+-- Test altering the collation of the referenced column.
+CREATE TABLE pktable (x text COLLATE case_insensitive PRIMARY KEY);
+CREATE TABLE fktable (x text REFERENCES pktable);
+INSERT INTO pktable VALUES ('a');
+INSERT INTO fktable VALUES ('A');
+-- should fail:
+ALTER TABLE pktable ALTER COLUMN x TYPE text COLLATE "C";
+
 -- partitioning
 CREATE TABLE test20 (a int, b text COLLATE case_insensitive) PARTITION BY LIST (b);
 CREATE TABLE test20_1 PARTITION OF test20 FOR VALUES IN ('abc');

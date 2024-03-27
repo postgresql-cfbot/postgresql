@@ -198,6 +198,7 @@ typedef struct AlteredTableInfo
 	/* Objects to rebuild after completing ALTER TYPE operations */
 	List	   *changedConstraintOids;	/* OIDs of constraints to rebuild */
 	List	   *changedConstraintDefs;	/* string definitions of same */
+	List	   *changedCollationOids;	/* collation of each attnum */
 	List	   *changedIndexOids;	/* OIDs of indexes to rebuild */
 	List	   *changedIndexDefs;	/* string definitions of same */
 	char	   *replicaIdentityIndex;	/* index to reset as REPLICA IDENTITY */
@@ -576,6 +577,7 @@ static ObjectAddress ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 										   AlterTableCmd *cmd, LOCKMODE lockmode);
 static void RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
 											  Relation rel, AttrNumber attnum, const char *colName);
+static void RememberCollationForRebuilding(AttrNumber attnum, AlteredTableInfo *tab);
 static void RememberConstraintForRebuilding(Oid conoid, AlteredTableInfo *tab);
 static void RememberIndexForRebuilding(Oid indoid, AlteredTableInfo *tab);
 static void RememberStatisticsForRebuilding(Oid stxoid, AlteredTableInfo *tab);
@@ -583,12 +585,12 @@ static void ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab,
 								   LOCKMODE lockmode);
 static void ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId,
 								 char *cmd, List **wqueue, LOCKMODE lockmode,
-								 bool rewrite);
+								 bool rewrite, List *collationOids);
 static void RebuildConstraintComment(AlteredTableInfo *tab, AlterTablePass pass,
 									 Oid objid, Relation rel, List *domname,
 									 const char *conname);
 static void TryReuseIndex(Oid oldId, IndexStmt *stmt);
-static void TryReuseForeignKey(Oid oldId, Constraint *con);
+static void TryReuseForeignKey(Oid oldId, Constraint *con, List *changedCollationOids);
 static ObjectAddress ATExecAlterColumnGenericOptions(Relation rel, const char *colName,
 													 List *options, LOCKMODE lockmode);
 static void change_owner_fix_column_acls(Oid relationOid,
@@ -9830,6 +9832,7 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	bool		old_check_ok;
 	ObjectAddress address;
 	ListCell   *old_pfeqop_item = list_head(fkconstraint->old_conpfeqop);
+	ListCell   *old_collation_item = list_head(fkconstraint->old_collations);
 
 	/*
 	 * Grab ShareRowExclusiveLock on the pk table, so that someone doesn't
@@ -10216,8 +10219,14 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			CoercionPathType new_pathtype;
 			Oid			old_castfunc;
 			Oid			new_castfunc;
+			Oid			old_collation;
 			Form_pg_attribute attr = TupleDescAttr(tab->oldDesc,
 												   fkattnum[i] - 1);
+
+			/* Get the collation for this key part. */
+			old_collation = lfirst_oid(old_collation_item);
+			old_collation_item = lnext(fkconstraint->old_collations,
+									   old_collation_item);
 
 			/*
 			 * Identify coercion pathways from each of the old and new FK-side
@@ -10254,9 +10263,12 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			 * turn conform to the domain.  Consequently, we need not treat
 			 * domains specially here.
 			 *
-			 * Since we require that all collations share the same notion of
-			 * equality (which they do, because texteq reduces to bitwise
-			 * equality), we don't compare collation here.
+			 * All deterministic collations use bitwise equality to resolve
+			 * ties, but if the previous collation was nondeterministic,
+			 * we must re-check the foreign key, because some references
+			 * that use to be "equal" may not be anymore. If we have
+			 * InvalidOid here, either there was no collation or the
+			 * attribute didn't change.
 			 *
 			 * We need not directly consider the PK type.  It's necessarily
 			 * binary coercible to the opcintype of the unique index column,
@@ -10265,6 +10277,8 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			 */
 			old_check_ok = (new_pathtype == old_pathtype &&
 							new_castfunc == old_castfunc &&
+							(old_collation == InvalidOid ||
+							 get_collation_isdeterministic(old_collation)) &&
 							(!IsPolymorphicType(pfeqop_right) ||
 							 new_fktype == old_fktype));
 		}
@@ -13989,6 +14003,7 @@ RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
 						relKind == RELKIND_PARTITIONED_INDEX)
 					{
 						Assert(foundObject.objectSubId == 0);
+						RememberCollationForRebuilding(attnum, tab);
 						RememberIndexForRebuilding(foundObject.objectId, tab);
 					}
 					else if (relKind == RELKIND_SEQUENCE)
@@ -14010,6 +14025,7 @@ RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
 
 			case ConstraintRelationId:
 				Assert(foundObject.objectSubId == 0);
+				RememberCollationForRebuilding(attnum, tab);
 				RememberConstraintForRebuilding(foundObject.objectId, tab);
 				break;
 
@@ -14152,6 +14168,40 @@ RememberClusterOnForRebuilding(Oid indoid, AlteredTableInfo *tab)
 		elog(ERROR, "relation %u has multiple clustered indexes", tab->relid);
 
 	tab->clusterOnIndex = get_rel_name(indoid);
+}
+
+/*
+ * Subroutine for ATExecAlterColumnType: remember what the collations were
+ * for each attribute of the table. This is because if one of them used to be
+ * nondeterministic, foreign keys that referenced that attribute must be
+ * re-checked. We make a list with one entry for each attribute in the table,
+ * so that FKs can easily look them up by attribute number. But only attributes
+ * that are changing get a non-zero value.
+ */
+static void
+RememberCollationForRebuilding(AttrNumber attnum, AlteredTableInfo *tab)
+{
+	Oid			typid;
+	int32		typmod;
+	Oid			collid;
+	ListCell   *lc;
+
+	/* Fill in the list with InvalidOid if this is our first visit */
+	if (tab->changedCollationOids == NIL)
+	{
+		int len = RelationGetNumberOfAttributes(tab->rel);
+		int i;
+
+		for (i = 0; i < len; i++)
+			tab->changedCollationOids = lappend_oid(tab->changedCollationOids,
+													InvalidOid);
+	}
+
+	get_atttypetypmodcoll(RelationGetRelid(tab->rel), attnum,
+						  &typid, &typmod, &collid);
+
+	lc = list_nth_cell(tab->changedCollationOids, attnum - 1);
+	lfirst_oid(lc) = collid;
 }
 
 /*
@@ -14359,7 +14409,8 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 
 		ATPostAlterTypeParse(oldId, relid, confrelid,
 							 (char *) lfirst(def_item),
-							 wqueue, lockmode, tab->rewrite);
+							 wqueue, lockmode, tab->rewrite,
+							 tab->changedCollationOids);
 	}
 	forboth(oid_item, tab->changedIndexOids,
 			def_item, tab->changedIndexDefs)
@@ -14370,7 +14421,8 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 		relid = IndexGetRelation(oldId, false);
 		ATPostAlterTypeParse(oldId, relid, InvalidOid,
 							 (char *) lfirst(def_item),
-							 wqueue, lockmode, tab->rewrite);
+							 wqueue, lockmode, tab->rewrite,
+							 tab->changedCollationOids);
 
 		ObjectAddressSet(obj, RelationRelationId, oldId);
 		add_exact_object_address(&obj, objects);
@@ -14386,7 +14438,8 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 		relid = StatisticsGetRelation(oldId, false);
 		ATPostAlterTypeParse(oldId, relid, InvalidOid,
 							 (char *) lfirst(def_item),
-							 wqueue, lockmode, tab->rewrite);
+							 wqueue, lockmode, tab->rewrite,
+							 tab->changedCollationOids);
 
 		ObjectAddressSet(obj, StatisticExtRelationId, oldId);
 		add_exact_object_address(&obj, objects);
@@ -14449,7 +14502,8 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
  */
 static void
 ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, char *cmd,
-					 List **wqueue, LOCKMODE lockmode, bool rewrite)
+					 List **wqueue, LOCKMODE lockmode, bool rewrite,
+					 List *changedCollationOids)
 {
 	List	   *raw_parsetree_list;
 	List	   *querytree_list;
@@ -14576,7 +14630,7 @@ ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, char *cmd,
 					/* rewriting neither side of a FK */
 					if (con->contype == CONSTR_FOREIGN &&
 						!rewrite && tab->rewrite == 0)
-						TryReuseForeignKey(oldId, con);
+						TryReuseForeignKey(oldId, con, changedCollationOids);
 					con->reset_default_tblspc = true;
 					cmd->subtype = AT_ReAddConstraint;
 					tab->subcmds[AT_PASS_OLD_CONSTR] =
@@ -14734,20 +14788,22 @@ TryReuseIndex(Oid oldId, IndexStmt *stmt)
  *
  * Stash the old P-F equality operator into the Constraint node, for possible
  * use by ATAddForeignKeyConstraint() in determining whether revalidation of
- * this constraint can be skipped.
+ * this constraint can be skipped. Also stash the collations.
  */
 static void
-TryReuseForeignKey(Oid oldId, Constraint *con)
+TryReuseForeignKey(Oid oldId, Constraint *con, List *changedCollationOids)
 {
 	HeapTuple	tup;
 	Datum		adatum;
 	ArrayType  *arr;
 	Oid		   *rawarr;
+	AttrNumber *attarr;
 	int			numkeys;
 	int			i;
 
 	Assert(con->contype == CONSTR_FOREIGN);
 	Assert(con->old_conpfeqop == NIL);	/* already prepared this node */
+	Assert(con->old_collations == NIL);	/* already prepared this node */
 
 	tup = SearchSysCache1(CONSTROID, ObjectIdGetDatum(oldId));
 	if (!HeapTupleIsValid(tup)) /* should not happen */
@@ -14767,6 +14823,22 @@ TryReuseForeignKey(Oid oldId, Constraint *con)
 	/* stash a List of the operator Oids in our Constraint node */
 	for (i = 0; i < numkeys; i++)
 		con->old_conpfeqop = lappend_oid(con->old_conpfeqop, rawarr[i]);
+
+	adatum = SysCacheGetAttrNotNull(CONSTROID, tup,
+									Anum_pg_constraint_conkey);
+	arr = DatumGetArrayTypeP(adatum);	/* ensure not toasted */
+	numkeys = ARR_DIMS(arr)[0];
+	/* test follows the one in ri_FetchConstraintInfo() */
+	if (ARR_NDIM(arr) != 1 ||
+		ARR_HASNULL(arr) ||
+		ARR_ELEMTYPE(arr) != INT2OID)
+		elog(ERROR, "conkey is not a 1-D smallint array");
+	attarr = (AttrNumber *) ARR_DATA_PTR(arr);
+
+	/* stash a List of the collation Oids in our Constraint node */
+	for (i = 0; i < numkeys; i++)
+		con->old_collations = lappend_oid(con->old_collations,
+										  list_nth_oid(changedCollationOids, attarr[i] - 1));
 
 	ReleaseSysCache(tup);
 }

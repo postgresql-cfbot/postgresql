@@ -2691,6 +2691,8 @@ typedef struct Constraint
 	char		fk_del_action;	/* ON DELETE action */
 	List	   *fk_del_set_cols;	/* ON DELETE SET NULL/DEFAULT (col1, col2) */
 	List	   *old_conpfeqop;	/* pg_constraint.conpfeqop of my former self */
+	List	   *old_collations;	/* collations of referenced columns,
+								   before change */
 	Oid			old_pktable_oid;	/* pg_constraint.confrelid of my former
 									 * self */
 

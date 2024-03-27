@@ -6,8 +6,9 @@ OBJS = \
 	pg_freespacemap.o
 
 EXTENSION = pg_freespacemap
-DATA = pg_freespacemap--1.1.sql pg_freespacemap--1.1--1.2.sql \
-	pg_freespacemap--1.0--1.1.sql
+DATA = pg_freespacemap--1.1.sql pg_freespacemap--1.2--1.3.sql \
+			pg_freespacemap--1.1--1.2.sql \
+			pg_freespacemap--1.0--1.1.sql
 PGFILEDESC = "pg_freespacemap - monitoring of free space map"
 
 REGRESS_OPTS = --temp-config $(top_srcdir)/contrib/pg_freespacemap/pg_freespacemap.conf

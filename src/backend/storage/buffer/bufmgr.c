@@ -3720,7 +3720,7 @@ DropRelationBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 	 *
 	 * In recovery, we cache the value returned by the first lseek(SEEK_END)
 	 * and the future writes keeps the cached value up-to-date. See
-	 * smgrextend. It is possible that the value of the first lseek is smaller
+	 * smgrwritev. It is possible that the value of the first lseek is smaller
 	 * than the actual number of existing blocks in the file due to buggy
 	 * Linux kernels that might not have accounted for the recent write. But
 	 * that should be fine because there must not be any buffers after that

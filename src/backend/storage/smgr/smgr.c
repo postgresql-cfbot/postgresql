@@ -82,8 +82,6 @@ typedef struct f_smgr
 	bool		(*smgr_exists) (SMgrRelation reln, ForkNumber forknum);
 	void		(*smgr_unlink) (RelFileLocatorBackend rlocator, ForkNumber forknum,
 								bool isRedo);
-	void		(*smgr_extend) (SMgrRelation reln, ForkNumber forknum,
-								BlockNumber blocknum, const void *buffer, bool skipFsync);
 	void		(*smgr_zeroextend) (SMgrRelation reln, ForkNumber forknum,
 									BlockNumber blocknum, int nblocks, bool skipFsync);
 	bool		(*smgr_prefetch) (SMgrRelation reln, ForkNumber forknum,
@@ -94,7 +92,7 @@ typedef struct f_smgr
 	void		(*smgr_writev) (SMgrRelation reln, ForkNumber forknum,
 								BlockNumber blocknum,
 								const void **buffers, BlockNumber nblocks,
-								bool skipFsync);
+								int flags);
 	void		(*smgr_writeback) (SMgrRelation reln, ForkNumber forknum,
 								   BlockNumber blocknum, BlockNumber nblocks);
 	BlockNumber (*smgr_nblocks) (SMgrRelation reln, ForkNumber forknum);
@@ -114,7 +112,6 @@ static const f_smgr smgrsw[] = {
 		.smgr_create = mdcreate,
 		.smgr_exists = mdexists,
 		.smgr_unlink = mdunlink,
-		.smgr_extend = mdextend,
 		.smgr_zeroextend = mdzeroextend,
 		.smgr_prefetch = mdprefetch,
 		.smgr_readv = mdreadv,
@@ -521,40 +518,11 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 	pfree(rlocators);
 }
 
-
-/*
- * smgrextend() -- Add a new block to a file.
- *
- * The semantics are nearly the same as smgrwrite(): write at the
- * specified position.  However, this is to be used for the case of
- * extending a relation (i.e., blocknum is at or beyond the current
- * EOF).  Note that we assume writing a block beyond current EOF
- * causes intervening file space to become filled with zeroes.
- */
-void
-smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-		   const void *buffer, bool skipFsync)
-{
-	smgrsw[reln->smgr_which].smgr_extend(reln, forknum, blocknum,
-										 buffer, skipFsync);
-
-	/*
-	 * Normally we expect this to increase nblocks by one, but if the cached
-	 * value isn't as expected, just invalidate it so the next call asks the
-	 * kernel.
-	 */
-	if (reln->smgr_cached_nblocks[forknum] == blocknum)
-		reln->smgr_cached_nblocks[forknum] = blocknum + 1;
-	else
-		reln->smgr_cached_nblocks[forknum] = InvalidBlockNumber;
-}
-
 /*
  * smgrzeroextend() -- Add new zeroed out blocks to a file.
  *
- * Similar to smgrextend(), except the relation can be extended by
- * multiple blocks at once and the added blocks will be filled with
- * zeroes.
+ * Similar to writing with SMGR_WRITE_EXTEND, except the blocks will be filled
+ * with zeroes.
  */
 void
 smgrzeroextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
@@ -607,9 +575,9 @@ smgrreadv(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 /*
  * smgrwritev() -- Write the supplied buffers out.
  *
- * This is to be used only for updating already-existing blocks of a
- * relation (ie, those before the current EOF).  To extend a relation,
- * use smgrextend().
+ * By default this is to be used only for updating already-existing blocks of
+ * a relation (ie, those before the current EOF).  To extend a relation,
+ * specify SMGR_WRITE_EXTEND in flags.
  *
  * This is not a synchronous write -- the block is not necessarily
  * on disk at return, only dumped out to the kernel.  However,
@@ -623,16 +591,29 @@ smgrreadv(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
  * checkpoint happened; that relies on the fact that no other backend can be
  * concurrently modifying the page.
  *
- * skipFsync indicates that the caller will make other provisions to
- * fsync the relation, so we needn't bother.  Temporary relations also
- * do not require fsync.
+ * SMGR_WRITE_SKIP_FSYNC indicates that the caller will make other provisions
+ * to fsync the relation, so we needn't bother.  Temporary relations also do
+ * not require fsync.
  */
 void
 smgrwritev(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-		   const void **buffers, BlockNumber nblocks, bool skipFsync)
+		   const void **buffers, BlockNumber nblocks, int flags)
 {
 	smgrsw[reln->smgr_which].smgr_writev(reln, forknum, blocknum,
-										 buffers, nblocks, skipFsync);
+										 buffers, nblocks, flags);
+
+	if (flags & SMGR_WRITE_EXTEND)
+	{
+		/*
+		 * Normally we expect this to increase the fork size by nblocks, but
+		 * if the cached value isn't as expected, just invalidate it so the
+		 * next call asks the smgr implementation.
+		 */
+		if (reln->smgr_cached_nblocks[forknum] == blocknum)
+			reln->smgr_cached_nblocks[forknum] = blocknum + nblocks;
+		else
+			reln->smgr_cached_nblocks[forknum] = InvalidBlockNumber;
+	}
 }
 
 /*
@@ -743,14 +724,14 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nb
 /*
  * smgrregistersync() -- Request a relation to be sync'd at next checkpoint
  *
- * This can be used after calling smgrwrite() or smgrextend() with skipFsync =
- * true, to register the fsyncs that were skipped earlier.
+ * This can be used after calling smgrwritev() with SMGR_WRITE_SKIP_FSYNC,
+ * to register the fsyncs that were skipped earlier.
  *
  * Note: be mindful that a checkpoint could already have happened between the
- * smgrwrite or smgrextend calls and this!  In that case, the checkpoint
- * already missed fsyncing this relation, and you should use smgrimmedsync
- * instead.  Most callers should use the bulk loading facility in bulk_write.c
- * which handles all that.
+ * smgrwritev calls and this!  In that case, the checkpoint already missed
+ * fsyncing this relation, and you should use smgrimmedsync instead.  Most
+ * callers should use the bulk loading facility in bulk_write.c which handles
+ * all that.
  */
 void
 smgrregistersync(SMgrRelation reln, ForkNumber forknum)
@@ -764,17 +745,16 @@ smgrregistersync(SMgrRelation reln, ForkNumber forknum)
  * Synchronously force all previous writes to the specified relation
  * down to disk.
  *
- * This is useful for building completely new relations (eg, new
- * indexes).  Instead of incrementally WAL-logging the index build
- * steps, we can just write completed index pages to disk with smgrwrite
- * or smgrextend, and then fsync the completed index file before
- * committing the transaction.  (This is sufficient for purposes of
- * crash recovery, since it effectively duplicates forcing a checkpoint
- * for the completed index.  But it is *not* sufficient if one wishes
- * to use the WAL log for PITR or replication purposes: in that case
- * we have to make WAL entries as well.)
+ * This is useful for building completely new relations (eg, new indexes).
+ * Instead of incrementally WAL-logging the index build steps, we can just
+ * write completed index pages to disk with smgrwritev, and then fsync the
+ * completed index file before committing the transaction.  (This is
+ * sufficient for purposes of crash recovery, since it effectively duplicates
+ * forcing a checkpoint for the completed index.  But it is *not* sufficient
+ * if one wishes to use the WAL log for PITR or replication purposes: in that
+ * case we have to make WAL entries as well.)
  *
- * The preceding writes should specify skipFsync = true to avoid
+ * The preceding writes should specify SMGR_WRITE_SKIP_FSYNC to avoid
  * duplicative fsyncs.
  *
  * Note that you need to do FlushRelationBuffers() first if there is

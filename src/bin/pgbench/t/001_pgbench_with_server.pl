@@ -7,6 +7,7 @@ use warnings FATAL => 'all';
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
+use Time::HiRes qw(usleep);
 
 # Check the initial state of the data generated.  Tables for tellers and
 # branches use NULL for their filler attribute.  The table accounts uses
@@ -1565,6 +1566,47 @@ update counter set i = i+1 returning i \gset
 
 # Clean up
 $node->safe_psql('postgres', 'DROP TABLE counter;');
+
+# Test query canceling by sending SIGINT to a running pgbench
+SKIP:
+{
+	skip "sending SIGINT on Windows terminates the test itself", 3
+	  if $windows_os;
+
+	my ($stdin, $stdout, $stderr, @file);
+
+	@file = $node->_pgbench_make_files(
+		{
+			'003_pgbench_cancel' => qq{
+select pg_sleep($PostgreSQL::Test::Utils::timeout_default);
+		}});
+
+	local %ENV = $node->_get_env();
+
+	my $h = IPC::Run::start(
+		[ 'pgbench', '-c', '2', '-j', '2',
+		  '-T', "$PostgreSQL::Test::Utils::timeout_default", @file ],
+		\$stdin, \$stdout, \$stderr);
+
+	$node->poll_query_until('postgres',
+		q{SELECT (SELECT count(*) FROM pg_stat_activity WHERE query ~ '^select pg_sleep') = 2;}
+	) or die "timed out";
+
+	# Send cancel request
+	$h->signal('INT');
+
+	my $result = finish $h;
+
+	ok(!$result, 'pgbench failed as expected');
+	like(
+		$stderr,
+		qr/Run was aborted; the above results are incomplete/,
+		'pgbench was canceled');
+
+	is($node->safe_psql('postgres',
+		q{SELECT count(*) FROM pg_stat_activity WHERE query ~ '^select pg_sleep'}),
+		'0', 'all queries were canceled');
+}
 
 # done
 $node->safe_psql('postgres', 'DROP TABLESPACE regress_pgbench_tap_1_ts');

@@ -154,7 +154,7 @@ static int	recursion_depth = 0;	/* to detect actual recursion */
 
 /*
  * Saved timeval and buffers for formatted timestamps that might be used by
- * both log_line_prefix and csv logs.
+ * log_line_prefix, csv logs and json logs.
  */
 static struct timeval saved_timeval;
 static bool saved_timeval_set = false;
@@ -1679,6 +1679,14 @@ EmitErrorReport(void)
 	oldcontext = MemoryContextSwitchTo(edata->assoc_context);
 
 	/*
+	 * Reset the formatted timestamp fields before emitting any logs.  This
+	 * includes all the log destinations and the hook, as the latter may use
+	 * Log_line_prefix.
+	 */
+	saved_timeval_set = false;
+	formatted_log_time[0] = '\0';
+
+	/*
 	 * Call hook before sending message to log.  The hook function is allowed
 	 * to turn off edata->output_to_server, so we must recheck that afterward.
 	 * Making any other change in the content of edata is not considered
@@ -2948,8 +2956,6 @@ log_status_format(StringInfo buf, const char *format, ErrorData *edata)
 					appendStringInfo(buf, "%ld", log_line_number);
 				break;
 			case 'm':
-				/* force a log timestamp reset */
-				formatted_log_time[0] = '\0';
 				(void) get_formatted_log_time();
 
 				if (padding != 0)
@@ -3150,9 +3156,6 @@ send_message_to_server_log(ErrorData *edata)
 	bool		fallback_to_stderr = false;
 
 	initStringInfo(&buf);
-
-	saved_timeval_set = false;
-	formatted_log_time[0] = '\0';
 
 	log_line_prefix(&buf, edata);
 	appendStringInfo(&buf, "%s:  ", _(error_severity(edata->elevel)));

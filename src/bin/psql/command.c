@@ -36,6 +36,7 @@
 #include "fe_utils/print.h"
 #include "fe_utils/string_utils.h"
 #include "help.h"
+#include "gedit.h"
 #include "input.h"
 #include "large_obj.h"
 #include "libpq-fe.h"
@@ -101,6 +102,8 @@ static backslashResult process_command_g_options(char *first_option,
 static backslashResult exec_command_gdesc(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_getenv(PsqlScanState scan_state, bool active_branch,
 										   const char *cmd);
+static backslashResult exec_command_gedit(PsqlScanState scan_state, bool active_branch,
+									   PQExpBuffer query_buf, PQExpBuffer previous_buf);
 static backslashResult exec_command_gexec(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_gset(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_help(PsqlScanState scan_state, bool active_branch);
@@ -355,6 +358,9 @@ exec_command(const char *cmd,
 		status = exec_command_gdesc(scan_state, active_branch);
 	else if (strcmp(cmd, "getenv") == 0)
 		status = exec_command_getenv(scan_state, active_branch, cmd);
+	else if (strcmp(cmd, "gedit") == 0)
+		status = exec_command_gedit(scan_state, active_branch, query_buf,
+									previous_buf);
 	else if (strcmp(cmd, "gexec") == 0)
 		status = exec_command_gexec(scan_state, active_branch);
 	else if (strcmp(cmd, "gset") == 0)
@@ -1585,6 +1591,115 @@ exec_command_getenv(PsqlScanState scan_state, bool active_branch,
 		ignore_slash_options(scan_state);
 
 	return success ? PSQL_CMD_SKIP_LINE : PSQL_CMD_ERROR;
+}
+
+/*
+ * \gedit -- send query, ask user to edit the result, and transform the diff to
+ * UPDATE commands
+ */
+static backslashResult
+exec_command_gedit(PsqlScanState scan_state, bool active_branch,
+				   PQExpBuffer query_buf, PQExpBuffer previous_buf)
+{
+	backslashResult status = PSQL_CMD_SKIP_LINE;
+
+	if (active_branch)
+	{
+		char		fnametmp[MAXPGPATH];
+		/* make a temp file to store result */
+#ifndef WIN32
+		const char *tmpdir = getenv("TMPDIR");
+
+		if (!tmpdir)
+			tmpdir = "/tmp";
+#else
+		char		tmpdir[MAXPGPATH];
+		int			ret;
+
+		ret = GetTempPath(MAXPGPATH, tmpdir);
+		if (ret == 0 || ret > MAXPGPATH)
+		{
+			pg_log_error("could not locate temporary directory: %s",
+						 !ret ? strerror(errno) : "");
+			return PSQL_CMD_ERROR;
+		}
+#endif
+
+		/* save settings if not done already, then force format=json */
+		if (pset.gsavepopt == NULL)
+			pset.gsavepopt = savePsetInfo(&pset.popt);
+		pset.popt.topt.format = PRINT_JSON;
+
+		/* Consume pset options through trailing ')' ... */
+		if (! process_command_gedit_options(scan_state, active_branch))
+			goto error;
+
+		/* If query_buf is empty, recall previous query */
+		(void) copy_previous_query(query_buf, previous_buf);
+
+		/* extract table name from query if not already given in options */
+		if (! pset.gedit_table)
+			pset.gedit_table = gedit_table_name(query_buf);
+		if (! pset.gedit_table)
+		{
+			pg_log_error("\\gedit: could not determine table name from query");
+			goto error;
+		}
+
+		/* get table key */
+		if (pset.gedit_key_columns)
+		{
+			if (! gedit_check_key_columns(pset.db, query_buf->data, pset.gedit_key_columns))
+				goto error;
+		}
+		else
+			pset.gedit_key_columns = gedit_table_key_columns(pset.db, query_buf->data, pset.gedit_table);
+		if (! pset.gedit_key_columns)
+			goto error;
+
+		/*
+		 * No canonicalize_path() here. EDIT.EXE run from CMD.EXE prepends the
+		 * current directory to the supplied path unless we use only
+		 * backslashes, so we do that.
+		 */
+#ifndef WIN32
+		snprintf(fnametmp, sizeof(fnametmp), "%s%spsql.gedit.%d.json", tmpdir,
+				 "/", (int) getpid());
+#else
+		snprintf(fnametmp, sizeof(fnametmp), "%s%spsql.gedit.%d.json", tmpdir,
+				 "" /* trailing separator already present */ , (int) getpid());
+#endif
+
+		pset.gfname = pstrdup(fnametmp);
+		pset.gedit_flag = true;
+
+		status = PSQL_CMD_SEND;
+	}
+	else
+		ignore_slash_options(scan_state);
+
+	return status;
+
+error:
+	if (pset.gedit_table)
+	{
+		free(pset.gedit_table);
+		pset.gedit_table = NULL;
+	}
+	if (pset.gedit_key_columns)
+	{
+		char **p;
+		for (p = pset.gedit_key_columns; *p; p++)
+			free(*p);
+		free(pset.gedit_key_columns);
+		pset.gedit_key_columns = NULL;
+	}
+
+	/* Reset the query buffer as though for \r */
+	resetPQExpBuffer(query_buf);
+	psql_scan_reset(scan_state);
+
+	return PSQL_CMD_ERROR;
 }
 
 /*
@@ -3929,13 +4044,13 @@ UnsyncVariables(void)
 
 
 /*
- * helper for do_edit(): actually invoke the editor
+ * helper for do_edit() and gedit_build_query(): actually invoke the editor
  *
  * Returns true on success, false if we failed to invoke the editor or
  * it returned nonzero status.  (An error message is printed for failed-
  * to-invoke cases, but not if the editor returns nonzero status.)
  */
-static bool
+bool
 editFile(const char *fname, int lineno)
 {
 	const char *editorName;

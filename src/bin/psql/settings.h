@@ -95,6 +95,9 @@ typedef struct _psqlSettings
 
 	char	   *gset_prefix;	/* one-shot prefix argument for \gset */
 	bool		gdesc_flag;		/* one-shot request to describe query result */
+	bool		gedit_flag;		/* one-shot request to edit query result */
+	char	   *gedit_table;	/* table used with \gedit */
+	char	  **gedit_key_columns;	/* key columns used with \gedit */
 	bool		gexec_flag;		/* one-shot request to execute query result */
 	bool		bind_flag;		/* one-shot request to use extended query
 								 * protocol */

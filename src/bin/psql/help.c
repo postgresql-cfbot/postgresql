@@ -171,6 +171,8 @@ slashUsage(unsigned short int pager)
 	HELP0("  \\g [(OPTIONS)] [FILE]  execute query (and send result to file or |pipe);\n"
 		  "                         \\g with no arguments is equivalent to a semicolon\n");
 	HELP0("  \\gdesc                 describe result of query, without executing it\n");
+	HELP0("  \\gedit                 execute query, edit the result with an external editor,\n");
+	HELP0("                         and send back the changes as UPDATE statements\n");
 	HELP0("  \\gexec                 execute query, then execute each value in its result\n");
 	HELP0("  \\gset [PREFIX]         execute query and store result in psql variables\n");
 	HELP0("  \\gx [(OPTIONS)] [FILE] as \\g, but forces expanded output mode\n");

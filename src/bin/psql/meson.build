@@ -6,6 +6,7 @@ psql_sources = files(
   'copy.c',
   'crosstabview.c',
   'describe.c',
+  'gedit.c',
   'help.c',
   'input.c',
   'large_obj.c',
@@ -67,6 +68,7 @@ tests += {
       't/001_basic.pl',
       't/010_tab_completion.pl',
       't/020_cancel.pl',
+      't/030_gedit.pl',
     ],
   },
 }

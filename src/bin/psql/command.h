@@ -46,4 +46,6 @@ extern void SyncVariables(void);
 
 extern void UnsyncVariables(void);
 
+extern bool editFile(const char *fname, int lineno);
+
 #endif							/* COMMAND_H */

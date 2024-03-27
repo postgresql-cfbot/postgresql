@@ -10,6 +10,7 @@
 #include "command.h"
 #include "common.h"
 #include "common/logging.h"
+#include "gedit.h"
 #include "input.h"
 #include "mainloop.h"
 #include "mb/pg_wchar.h"
@@ -525,8 +526,29 @@ MainLoop(FILE *source)
 
 					/* flush any paren nesting info after forced send */
 					psql_scan_reset(scan_state);
+
+					/* edit query result when gedit was requested */
+					if (pset.gedit_flag)
+					{
+						char **p;
+
+						if (success)
+							slashCmdStatus = gedit_edit_and_build_query(pset.gfname, query_buf);
+
+						/* free all gedit data */
+						pset.gedit_flag = false;
+						free(pset.gfname);
+						pset.gfname = NULL;
+						free(pset.gedit_table);
+						pset.gedit_table = NULL;
+						for (p = pset.gedit_key_columns; *p; p++)
+							free(*p);
+						free(pset.gedit_key_columns);
+						pset.gedit_key_columns = NULL;
+					}
 				}
-				else if (slashCmdStatus == PSQL_CMD_NEWEDIT)
+				/* fall-through to NEWEDIT when \gedit */
+				if (slashCmdStatus == PSQL_CMD_NEWEDIT)
 				{
 					/* should not see this in inactive branch */
 					Assert(conditional_active(cond_stack));

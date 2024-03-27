@@ -12,6 +12,7 @@ SUBDIRS = \
 		  dummy_seclabel \
 		  libpq_pipeline \
 		  plsample \
+		  read_wal_from_buffers \
 		  spgist_name_ops \
 		  test_bloomfilter \
 		  test_copy_callbacks \

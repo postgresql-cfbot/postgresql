@@ -693,7 +693,6 @@ static void ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos,
 									  XLogRecPtr *EndPos, XLogRecPtr *PrevPtr);
 static bool ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 							  XLogRecPtr *PrevPtr);
-static XLogRecPtr WaitXLogInsertionsToFinish(XLogRecPtr upto);
 static char *GetXLogBuffer(XLogRecPtr ptr, TimeLineID tli);
 static XLogRecPtr XLogBytePosToRecPtr(uint64 bytepos);
 static XLogRecPtr XLogBytePosToEndRecPtr(uint64 bytepos);
@@ -1488,7 +1487,7 @@ WALInsertLockUpdateInsertingAt(XLogRecPtr insertingAt)
  * uninitialized page), and the inserter might need to evict an old WAL buffer
  * to make room for a new one, which in turn requires WALWriteLock.
  */
-static XLogRecPtr
+XLogRecPtr
 WaitXLogInsertionsToFinish(XLogRecPtr upto)
 {
 	uint64		bytepos;
@@ -1705,13 +1704,14 @@ GetXLogBuffer(XLogRecPtr ptr, TimeLineID tli)
  * of bytes read successfully.
  *
  * Fewer than 'count' bytes may be read if some of the requested WAL data has
- * already been evicted.
+ * already been evicted from the WAL buffers.
  *
  * No locks are taken.
  *
- * Caller should ensure that it reads no further than LogwrtResult.Write
- * (which should have been updated by the caller when determining how far to
- * read). The 'tli' argument is only used as a convenient safety check so that
+ * Caller should ensure that it reads no further than current insert position
+ * with the help of WaitXLogInsertionsToFinish().
+ *
+ * The 'tli' argument is only used as a convenient safety check so that
  * callers do not read from WAL buffers on a historical timeline.
  */
 Size
@@ -1726,7 +1726,19 @@ WALReadFromBuffers(char *dstbuf, XLogRecPtr startptr, Size count,
 		return 0;
 
 	Assert(!XLogRecPtrIsInvalid(startptr));
-	Assert(startptr + count <= LogwrtResult.Write);
+
+#ifdef USE_ASSERT_CHECKING
+	{
+		XLogRecPtr	upto = startptr + count;
+		XLogRecPtr	insert_pos = GetXLogInsertRecPtr();
+
+		if (upto > insert_pos)
+			ereport(ERROR,
+					(errmsg("cannot read past end of current insert position; request %X/%X, insert position %X/%X",
+							LSN_FORMAT_ARGS(upto),
+							LSN_FORMAT_ARGS(insert_pos))));
+	}
+#endif
 
 	/*
 	 * Loop through the buffers without a lock. For each buffer, atomically

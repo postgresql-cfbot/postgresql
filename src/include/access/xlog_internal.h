@@ -329,6 +329,135 @@ struct LogicalDecodingContext;
 struct XLogRecordBuffer;
 
 /*
+ * XLogSizeClass interactions
+ */
+
+/*
+ * XLogLengthToSizeClass
+ * Turns a length into a size class
+ *
+ * The maxSizeClass argument is used for constant folding, to allow the
+ * compiler to remove any branches that will never be hit.
+ *
+ * Feeding it a length value that is larger than the largest permitted value
+ * in the given maxSizeClass will lead to undefined behavior.
+ */
+static inline XLogSizeClass XLogLengthToSizeClass(uint32 length,
+												  const XLogSizeClass maxSizeClass)
+{
+	XLogSizeClass sizeClass;
+
+	if (length == 0)
+		sizeClass = XLS_EMPTY;
+	else if (length <= UINT8_MAX  && maxSizeClass >= XLS_UINT8)
+		sizeClass = XLS_UINT8;
+	else if (length <= UINT16_MAX && maxSizeClass >= XLS_UINT16)
+		sizeClass = XLS_UINT16;
+	else
+	{
+		Assert(maxSizeClass == XLS_UINT32);
+		sizeClass = XLS_UINT32;
+	}
+
+	Assert(sizeClass <= maxSizeClass);
+
+	return sizeClass;
+}
+
+/*
+ * XLogWriteLength
+ *
+ * Write a length with size determined by sizeClass into the output.
+ * Returns the Size of bytes written. The user is responsible for making sure
+ * there is enough spare space at the pointer. This function writes at most 4
+ * bytes.
+ * 
+ * The maxSizeClass argument is used for constant folding, to allow the
+ * compiler to remove any branches that will never be hit.
+ */
+static inline int XLogWriteLength(uint32 length, XLogSizeClass sizeClass,
+								  const XLogSizeClass maxSizeClass,
+								  char *output)
+{
+	int written = -1;
+
+	Assert(sizeClass <= maxSizeClass &&
+		   XLogLengthToSizeClass(length, maxSizeClass) == sizeClass);
+
+	/*
+	 * The writing version of the READ_OP macro in XLogReadLength, but without
+	 * as many assertions and checks.
+	 */
+#define WRITE_OP(caseSC, field_type) \
+		case caseSC: \
+			if ((caseSC) <= maxSizeClass) \
+			{ \
+				field_type typedLength = length; \
+				memcpy(output, &typedLength, sizeof(field_type)); \
+				written = sizeof(field_type); \
+			} \
+			break
+
+	switch (sizeClass) {
+		case XLS_EMPTY:
+			written = 0;
+			break;
+		WRITE_OP(XLS_UINT8, uint8);
+		WRITE_OP(XLS_UINT16, uint16);
+		WRITE_OP(XLS_UINT32, uint32);
+	}
+
+#undef WRITE_OP
+	return written;
+}
+
+/*
+ * XLogReadLength
+ *
+ * Read a length with size determined by sizeClass from the input into
+ * *length. Returns the Size of bytes read, or -1 if the input size was
+ * too small to read the relevant length field.
+ */
+static inline int XLogReadLength(uint32 *length, XLogSizeClass sizeClass,
+								 const XLogSizeClass maxSizeClass,
+								 char *input, Size inSize)
+{
+	int readSize = -1;
+
+	Assert(sizeClass <= maxSizeClass);
+
+	/*
+	 * A templated version of reading a length using the correct size class+
+	 * field type pair. Handles both 
+	 */
+#define READ_OP(caseSC, field_type) \
+		case caseSC: \
+			if ((caseSC) <= maxSizeClass) \
+			{ \
+				field_type typedLength; \
+				if (inSize < sizeof(field_type)) \
+					return -1; \
+				memcpy(&typedLength, input, sizeof(field_type)); \
+				readSize = sizeof(field_type); \
+				*length = typedLength; \
+			} \
+			break
+
+	switch (sizeClass) {
+		case XLS_EMPTY:
+			readSize = 0;
+			*length = 0;
+			break;
+		READ_OP(XLS_UINT8, uint8);
+		READ_OP(XLS_UINT16, uint16);
+		READ_OP(XLS_UINT32, uint32);
+	}
+
+#undef READ_OP
+	return readSize;
+}
+
+/*
  * Method table for resource managers.
  *
  * This struct must be kept in sync with the PG_RMGR definition in

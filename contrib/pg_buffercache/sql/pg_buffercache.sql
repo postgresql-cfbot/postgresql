@@ -26,3 +26,12 @@ SET ROLE pg_monitor;
 SELECT count(*) > 0 FROM pg_buffercache;
 SELECT buffers_used + buffers_unused > 0 FROM pg_buffercache_summary();
 SELECT count(*) > 0 FROM pg_buffercache_usage_counts();
+
+-- Check pg_buffercache_invalidate
+SELECT pg_buffercache_invalidate(NULL, NULL);
+SELECT pg_buffercache_invalidate(1, NULL);
+SELECT pg_buffercache_invalidate(NULL, false);
+SELECT pg_buffercache_invalidate(NULL);
+
+
+SELECT pg_buffercache_invalidate(1);

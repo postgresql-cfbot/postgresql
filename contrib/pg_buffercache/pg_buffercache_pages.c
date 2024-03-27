@@ -63,6 +63,7 @@ typedef struct
 PG_FUNCTION_INFO_V1(pg_buffercache_pages);
 PG_FUNCTION_INFO_V1(pg_buffercache_summary);
 PG_FUNCTION_INFO_V1(pg_buffercache_usage_counts);
+PG_FUNCTION_INFO_V1(pg_buffercache_invalidate);
 
 Datum
 pg_buffercache_pages(PG_FUNCTION_ARGS)
@@ -346,4 +347,19 @@ pg_buffercache_usage_counts(PG_FUNCTION_ARGS)
 	}
 
 	return (Datum) 0;
+}
+
+/*
+ * Perform buffer invaidation.
+ */
+Datum
+pg_buffercache_invalidate(PG_FUNCTION_ARGS)
+{
+	Buffer		buf = PG_GETARG_INT32(0);
+	bool		force = PG_GETARG_BOOL(1);
+
+	if (buf > NBuffers || buf < -NLocBuffer || BufferIsInvalid(buf))
+		elog(ERROR, "bad buffer ID: %d", buf);
+
+	PG_RETURN_BOOL(TryInvalidateBuffer(buf, force));
 }

@@ -53,13 +53,17 @@ $$ select 'foo'::varchar union all select 'bar'::varchar $$
 language sql stable;
 select sp_test_func() order by 1;
 
--- Parallel Append is not to be used when the subpath depends on the outer param
+-- Parallel Append is can be used when the subpath depends on the outer params
+-- when those params are consumed within the worker that generates them.
 create table part_pa_test(a int, b int) partition by range(a);
 create table part_pa_test_p1 partition of part_pa_test for values from (minvalue) to (0);
 create table part_pa_test_p2 partition of part_pa_test for values from (0) to (maxvalue);
-explain (costs off)
+explain (costs off, verbose)
 	select (select max((select pa1.b from part_pa_test pa1 where pa1.a = pa2.a)))
 	from part_pa_test pa2;
+insert into part_pa_test(a, b) values (-1, 1), (1, 3);
+select (select max((select pa1.b from part_pa_test pa1 where pa1.a = pa2.a)))
+from part_pa_test pa2;
 drop table part_pa_test;
 
 -- test with leader participation disabled
@@ -111,6 +115,39 @@ explain (costs off)
 	(select hundred, thousand from tenk2 where thousand > 100);
 select count(*) from tenk1 where (two, four) not in
 	(select hundred, thousand from tenk2 where thousand > 100);
+-- test parallel plans for queries containing correlated subplans
+-- where the subplan only needs params available from the current
+-- worker's scan.
+explain (costs off, verbose) select
+  (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1)
+  from tenk1 t, generate_series(1, 10);
+explain (costs off, verbose) select
+  (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1)
+  from tenk1 t;
+explain (costs off, verbose) select
+  (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1)
+  from tenk1 t
+  limit 1;
+explain (costs off, verbose) select t.unique1
+  from tenk1 t
+  where t.unique1 = (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1);
+explain (costs off, verbose) select *
+  from tenk1 t
+  order by (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1);
+-- test subplan in join/lateral join
+explain (costs off, verbose, timing off) select t.unique1, l.*
+  from tenk1 t
+  join lateral (
+    select (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1 offset 0)
+  ) l on true;
+-- can't put a gather at the top of a subplan that takes a param
+-- (use a join in the subplan for the harder case)
+explain (costs off, verbose) select * from tenk1 t where t.two in (
+  select t.two
+  from tenk1
+  join tenk1 t3 on t3.stringu1 = tenk1.stringu1
+  where tenk1.four = t.four
+);
 -- this is not parallel-safe due to use of random() within SubLink's testexpr:
 explain (costs off)
 	select * from tenk1 where (unique1 + random())::integer not in

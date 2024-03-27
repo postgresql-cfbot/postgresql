@@ -4,6 +4,12 @@
 # further details, see src/tools/ci/README
 
 
+# If the changes are only in the README files, skip all the tasks.
+#
+# This skip is overriden in 'SanityCheck' task. So, the same check is
+# added 'SanityCheck' task too.
+skip: changesIncludeOnly('**/README')
+
 env:
   # The lower depth accelerates git clone. Use a bit of depth so that
   # concurrent tasks and retrying older jobs have a chance of working.
@@ -55,11 +61,12 @@ on_failure_meson: &on_failure_meson
 task:
   name: SanityCheck
 
-  # If a specific OS is requested, don't run the sanity check. This shortens
-  # push-wait-for-ci cycle time a bit when debugging operating system specific
-  # failures. Uses skip instead of only_if, as cirrus otherwise warns about
-  # only_if conditions not matching.
-  skip: $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:.*'
+  # Don't run the sanity check if the changes are only in the README files or
+  # if a specific OS is requested. The latter shortens push-wait-for-ci cycle
+  # time a bit when debugging operating system specific failures. Uses skip
+  # instead of only_if, as cirrus otherwise warns about only_if conditions not
+  # matching.
+  skip: $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:.*' || changesIncludeOnly('**/README')
 
   env:
     CPUS: 4

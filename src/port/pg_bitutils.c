@@ -142,6 +142,27 @@ pg_popcount_available(void)
 	return (exx[2] & (1 << 23)) != 0;	/* POPCNT */
 }
 
+static inline void
+choose_popcount_functions(void)
+{
+	if (pg_popcount_available())
+	{
+		pg_popcount32 = pg_popcount32_fast;
+		pg_popcount64 = pg_popcount64_fast;
+		pg_popcount = pg_popcount_fast;
+#ifdef TRY_POPCNT_AVX512
+		if (pg_popcount_avx512_available())
+			pg_popcount = pg_popcount_avx512;
+#endif
+	}
+	else
+	{
+		pg_popcount32 = pg_popcount32_slow;
+		pg_popcount64 = pg_popcount64_slow;
+		pg_popcount = pg_popcount_slow;
+	}
+}
+
 /*
  * These functions get called on the first call to pg_popcount32 etc.
  * They detect whether we can use the asm implementations, and replace
@@ -151,57 +172,21 @@ pg_popcount_available(void)
 static int
 pg_popcount32_choose(uint32 word)
 {
-	if (pg_popcount_available())
-	{
-		pg_popcount32 = pg_popcount32_fast;
-		pg_popcount64 = pg_popcount64_fast;
-		pg_popcount = pg_popcount_fast;
-	}
-	else
-	{
-		pg_popcount32 = pg_popcount32_slow;
-		pg_popcount64 = pg_popcount64_slow;
-		pg_popcount = pg_popcount_slow;
-	}
-
+	choose_popcount_functions();
 	return pg_popcount32(word);
 }
 
 static int
 pg_popcount64_choose(uint64 word)
 {
-	if (pg_popcount_available())
-	{
-		pg_popcount32 = pg_popcount32_fast;
-		pg_popcount64 = pg_popcount64_fast;
-		pg_popcount = pg_popcount_fast;
-	}
-	else
-	{
-		pg_popcount32 = pg_popcount32_slow;
-		pg_popcount64 = pg_popcount64_slow;
-		pg_popcount = pg_popcount_slow;
-	}
-
+	choose_popcount_functions();
 	return pg_popcount64(word);
 }
 
 static uint64
 pg_popcount_choose(const char *buf, int bytes)
 {
-	if (pg_popcount_available())
-	{
-		pg_popcount32 = pg_popcount32_fast;
-		pg_popcount64 = pg_popcount64_fast;
-		pg_popcount = pg_popcount_fast;
-	}
-	else
-	{
-		pg_popcount32 = pg_popcount32_slow;
-		pg_popcount64 = pg_popcount64_slow;
-		pg_popcount = pg_popcount_slow;
-	}
-
+	choose_popcount_functions();
 	return pg_popcount(buf, bytes);
 }
 

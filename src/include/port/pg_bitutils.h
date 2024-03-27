@@ -298,6 +298,22 @@ pg_ceil_log2_64(uint64 num)
 #endif
 #endif
 
+/*
+ * We can also try to use the AVX512 popcount instruction on some systems.
+ * The implementation of that is located in its own file because it may
+ * require special compiler flags that we don't want to apply to any other
+ * files.
+ */
+#if defined(TRY_POPCNT_FAST) && \
+	defined(HAVE__IMMINTRIN) && \
+	defined(HAVE__AVX512_POPCNT)
+#if defined(HAVE__GET_CPUID_COUNT) || defined(HAVE__CPUIDEX)
+#define TRY_POPCNT_AVX512 1
+extern bool pg_popcount_avx512_available(void);
+extern uint64 pg_popcount_avx512(const char *buf, int bytes);
+#endif
+#endif
+
 #ifdef TRY_POPCNT_FAST
 /* Attempt to use the POPCNT instruction, but perform a runtime check first */
 extern PGDLLIMPORT int (*pg_popcount32) (uint32 word);

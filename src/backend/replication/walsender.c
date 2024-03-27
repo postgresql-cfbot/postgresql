@@ -94,17 +94,6 @@
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
 
-/*
- * Maximum data payload in a WAL data message.  Must be >= XLOG_BLCKSZ.
- *
- * We don't have a good idea of what a good value would be; there's some
- * overhead per message in both walsender and walreceiver, but on the other
- * hand sending large batches makes walsender less responsive to signals
- * because signals are checked only between messages.  128kB (with
- * default 8k blocks) seems like a reasonable guess for now.
- */
-#define MAX_SEND_SIZE (XLOG_BLCKSZ * 16)
-
 /* Array of WalSnds in shared memory */
 WalSndCtlData *WalSndCtl = NULL;
 
@@ -122,6 +111,8 @@ int			max_wal_senders = 10;	/* the maximum number of concurrent
 									 * walsenders */
 int			wal_sender_timeout = 60 * 1000; /* maximum time to send one WAL
 											 * data message */
+int			wal_sender_max_send_size = XLOG_BLCKSZ * 16;	/* Maximum data payload
+															 * in a WAL data message */
 bool		log_replication_commands = false;
 
 /*
@@ -3055,8 +3046,8 @@ WalSndSegmentOpen(XLogReaderState *state, XLogSegNo nextSegNo,
 /*
  * Send out the WAL in its normal physical/stored form.
  *
- * Read up to MAX_SEND_SIZE bytes of WAL that's been flushed to disk,
- * but not yet sent to the client, and buffer it in the libpq output
+ * Read up to wal_sender_max_send_size bytes of WAL that's been flushed to
+ * disk, but not yet sent to the client, and buffer it in the libpq output
  * buffer.
  *
  * If there is no unsent WAL remaining, WalSndCaughtUp is set to true,
@@ -3238,8 +3229,9 @@ XLogSendPhysical(void)
 
 	/*
 	 * Figure out how much to send in one message. If there's no more than
-	 * MAX_SEND_SIZE bytes to send, send everything. Otherwise send
-	 * MAX_SEND_SIZE bytes, but round back to logfile or page boundary.
+	 * wal_sender_max_send_size bytes to send, send everything. Otherwise send
+	 * wal_sender_max_send_size bytes, but round back to logfile or page
+	 * boundary.
 	 *
 	 * The rounding is not only for performance reasons. Walreceiver relies on
 	 * the fact that we never split a WAL record across two messages. Since a
@@ -3249,7 +3241,7 @@ XLogSendPhysical(void)
 	 */
 	startptr = sentPtr;
 	endptr = startptr;
-	endptr += MAX_SEND_SIZE;
+	endptr += wal_sender_max_send_size;
 
 	/* if we went beyond SendRqstPtr, back off */
 	if (SendRqstPtr <= endptr)
@@ -3268,7 +3260,7 @@ XLogSendPhysical(void)
 	}
 
 	nbytes = endptr - startptr;
-	Assert(nbytes <= MAX_SEND_SIZE);
+	Assert(nbytes <= wal_sender_max_send_size);
 
 	/*
 	 * OK to read and send the slice.

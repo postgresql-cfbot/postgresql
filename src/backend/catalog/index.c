@@ -2272,7 +2272,7 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 		 * here, even though it will only be used when we're called by REINDEX
 		 * CONCURRENTLY and not when called by DROP INDEX CONCURRENTLY.
 		 */
-		WaitForLockers(heaplocktag, AccessExclusiveLock, true);
+		WaitForLockers(heaplocktag, AccessExclusiveLock, true, true);
 
 		/* Finish invalidation of index and mark it as dead */
 		index_concurrently_set_dead(heapId, indexId);
@@ -2288,7 +2288,7 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 		 * Wait till every transaction that saw the old index state has
 		 * finished.  See above about progress reporting.
 		 */
-		WaitForLockers(heaplocktag, AccessExclusiveLock, true);
+		WaitForLockers(heaplocktag, AccessExclusiveLock, true, true);
 
 		/*
 		 * Re-open relations to allow us to complete our actions.

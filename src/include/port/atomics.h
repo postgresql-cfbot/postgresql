@@ -438,6 +438,35 @@ pg_atomic_sub_fetch_u32(volatile pg_atomic_uint32 *ptr, int32 sub_)
 	return pg_atomic_sub_fetch_u32_impl(ptr, sub_);
 }
 
+/*
+ * Monotonically advance the given variable using only atomic operations until
+ * it's at least the target value.
+ *
+ * Full barrier semantics (even when value is unchanged).
+ */
+static inline void
+pg_atomic_monotonic_advance_u32(volatile pg_atomic_uint32 *ptr, uint32 target_)
+{
+	uint32		currval;
+
+	AssertPointerAlignment(ptr, 4);
+
+	currval = pg_atomic_read_u32_impl(ptr);
+	if (currval >= target_)
+	{
+		pg_memory_barrier();
+		return;
+	}
+
+	AssertPointerAlignment(&currval, 4);
+
+	while (currval < target_)
+	{
+		if (pg_atomic_compare_exchange_u32_impl(ptr, &currval, target_))
+			break;
+	}
+}
+
 /* ----
  * The 64 bit operations have the same semantics as their 32bit counterparts
  * if they are available. Check the corresponding 32bit function for
@@ -568,6 +597,33 @@ pg_atomic_sub_fetch_u64(volatile pg_atomic_uint64 *ptr, int64 sub_)
 #endif
 	Assert(sub_ != PG_INT64_MIN);
 	return pg_atomic_sub_fetch_u64_impl(ptr, sub_);
+}
+
+static inline void
+pg_atomic_monotonic_advance_u64(volatile pg_atomic_uint64 *ptr, uint64 target_)
+{
+	uint64		currval;
+
+#ifndef PG_HAVE_ATOMIC_U64_SIMULATION
+	AssertPointerAlignment(ptr, 8);
+#endif
+
+	currval = pg_atomic_read_u64_impl(ptr);
+	if (currval >= target_)
+	{
+		pg_memory_barrier();
+		return;
+	}
+
+#ifndef PG_HAVE_ATOMIC_U64_SIMULATION
+	AssertPointerAlignment(&currval, 8);
+#endif
+
+	while (currval < target_)
+	{
+		if (pg_atomic_compare_exchange_u64_impl(ptr, &currval, target_))
+			break;
+	}
 }
 
 #undef INSIDE_ATOMICS_H

@@ -3150,6 +3150,7 @@ XLogRedoAction
 XLogSegNo
 XLogSource
 XLogStats
+XLogwrtAtomic
 XLogwrtResult
 XLogwrtRqst
 XPV

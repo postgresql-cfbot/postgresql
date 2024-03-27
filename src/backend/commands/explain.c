@@ -20,6 +20,7 @@
 #include "commands/prepare.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
+#include "miscadmin.h"
 #include "nodes/extensible.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -27,7 +28,10 @@
 #include "parser/parsetree.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/bufmgr.h"
+#include "storage/procarray.h"
+#include "tcop/pquery.h"
 #include "tcop/tcopprot.h"
+#include "utils/backend_status.h"
 #include "utils/builtins.h"
 #include "utils/guc_tables.h"
 #include "utils/json.h"
@@ -39,6 +43,7 @@
 #include "utils/typcache.h"
 #include "utils/xml.h"
 
+bool ProcessLogQueryPlanInterruptActive = false;
 
 /* Hook for plugins to get control in ExplainOneQuery() */
 ExplainOneQuery_hook_type ExplainOneQuery_hook = NULL;
@@ -153,6 +158,9 @@ static void ExplainIndentText(ExplainState *es);
 static void ExplainJSONLineEnding(ExplainState *es);
 static void ExplainYAMLLineStarting(ExplainState *es);
 static void escape_yaml(StringInfo buf, const char *str);
+static void WrapExecProcNodeWithExplain(PlanState *ps);
+static void UnWrapExecProcNodeWithExplain(PlanState *ps);
+static TupleTableSlot *ExecProcNodeWithExplain(PlanState *ps);
 
 
 
@@ -791,6 +799,37 @@ ExplainPrintSettings(ExplainState *es)
 		}
 
 		ExplainPropertyText("Settings", str.data, es);
+	}
+}
+
+/*
+ * ExplainAssembleLogOutput -
+ *   Assemble es->str for logging according to specified contents and format
+ */
+
+void
+ExplainAssembleLogOutput(ExplainState *es, QueryDesc *queryDesc, int logFormat,
+						 bool logTriggers, int logParameterMaxLength)
+{
+	ExplainBeginOutput(es);
+	ExplainQueryText(es, queryDesc);
+	ExplainQueryParameters(es, queryDesc->params, logParameterMaxLength);
+	ExplainPrintPlan(es, queryDesc);
+	if (es->analyze && logTriggers)
+		ExplainPrintTriggers(es, queryDesc);
+	if (es->costs)
+		ExplainPrintJITSummary(es, queryDesc);
+	ExplainEndOutput(es);
+
+	/* Remove last line break */
+	if (es->str->len > 0 && es->str->data[es->str->len - 1] == '\n')
+		es->str->data[--es->str->len] = '\0';
+
+	/* Fix JSON to output an object */
+	if (logFormat == EXPLAIN_FORMAT_JSON)
+	{
+		es->str->data[0] = '{';
+		es->str->data[es->str->len - 1] = '}';
 	}
 }
 
@@ -1704,6 +1743,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	/*
 	 * We have to forcibly clean up the instrumentation state because we
 	 * haven't done ExecutorEnd yet.  This is pretty grotty ...
+	 * This cleanup should not be done when the query has already been
+	 * executed and explain has been called by signal, as the target query
+	 * may use instrumentation and clean itself up.
 	 *
 	 * Note: contrib/auto_explain could cause instrumentation to be set up
 	 * even though we didn't ask for it here.  Be careful not to print any
@@ -1711,7 +1753,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	 * InstrEndLoop call anyway, if possible, to reduce the number of cases
 	 * auto_explain has to contend with.
 	 */
-	if (planstate->instrument)
+	if (planstate->instrument && !es->signaled)
 		InstrEndLoop(planstate->instrument);
 
 	if (es->analyze &&
@@ -5160,4 +5202,188 @@ static void
 escape_yaml(StringInfo buf, const char *str)
 {
 	escape_json(buf, str);
+}
+
+/*
+ * HandleLogQueryPlanInterrupt
+ *		Handle receipt of an interrupt indicating logging the plan of
+ *		the currently running query.
+ *
+ * All the actual work is deferred to ProcessLogQueryPlanInterrupt(),
+ * because we cannot safely emit a log message inside the signal handler.
+ */
+void
+HandleLogQueryPlanInterrupt(void)
+{
+	InterruptPending = true;
+	LogQueryPlanPending = true;
+	/* latch will be set by procsignal_sigusr1_handler */
+}
+
+/*
+ * WrapExecProcNodeWithExplain -
+ *	  Wrap ExecProcNode with ExecProcNodeWithExplain recursively
+ */
+static void
+WrapExecProcNodeWithExplain(PlanState *ps)
+{
+	/* wrapping can be done only once */
+	if (ps->ExecProcNodeOriginal != NULL)
+		return;
+
+	ps->ExecProcNodeOriginal = ps->ExecProcNode;
+	ps->ExecProcNode = ExecProcNodeWithExplain;
+
+	if (ps->lefttree != NULL)
+		WrapExecProcNodeWithExplain(ps->lefttree);
+	if (ps->righttree != NULL)
+		WrapExecProcNodeWithExplain(ps->righttree);
+}
+
+/*
+ * UnWrapExecProcNodeWithExplain -
+ *	  Unwrap ExecProcNode with ExecProcNodeWithExplain recursively
+ */
+static void
+UnWrapExecProcNodeWithExplain(PlanState *ps)
+{
+	Assert(ps->ExecProcNodeOriginal != NULL);
+
+	ps->ExecProcNode = ps->ExecProcNodeOriginal;
+	ps->ExecProcNodeOriginal = NULL;
+
+	if (ps->lefttree != NULL)
+		UnWrapExecProcNodeWithExplain(ps->lefttree);
+	if (ps->righttree != NULL)
+		UnWrapExecProcNodeWithExplain(ps->righttree);
+}
+
+/*
+ * ExecProcNodeWithExplain -
+ *	  Wrap ExecProcNode with codes which logs currently running plan
+ */
+static TupleTableSlot *
+ExecProcNodeWithExplain(PlanState *ps)
+{
+	ExplainState *es;
+	MemoryContext cxt;
+	MemoryContext old_cxt;
+
+	check_stack_depth();
+
+	cxt = AllocSetContextCreate(CurrentMemoryContext,
+								"log_query_plan temporary context",
+								ALLOCSET_DEFAULT_SIZES);
+
+	old_cxt = MemoryContextSwitchTo(cxt);
+
+	es = NewExplainState();
+
+	es->format = EXPLAIN_FORMAT_TEXT;
+	es->settings = true;
+	es->verbose = true;
+	es->signaled = true;
+
+	ExplainAssembleLogOutput(es, ActiveQueryDesc, EXPLAIN_FORMAT_TEXT, 0, -1);
+
+	ereport(LOG_SERVER_ONLY,
+			errmsg("query plan running on backend with PID %d is:\n%s",
+					MyProcPid, es->str->data),
+			 errhidestmt(true),
+			 errhidecontext(true));
+
+	MemoryContextSwitchTo(old_cxt);
+	MemoryContextDelete(cxt);
+
+	UnWrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
+
+	/*
+	 * Since unwrapping has already done, call ExecProcNode() not
+	 * ExecProcNodeOriginal().
+	 */
+	return ps->ExecProcNode(ps);
+}
+
+/*
+ * ProcessLogQueryPlanInterrupt
+ *	  Add wrapper which logs explain of the plan to ExecProcNodes
+ *
+ * Since running EXPLAIN codes at any arbitrary CHECK_FOR_INTERRUPTS() seems
+ * unsafe, this function just wraps every ExecProcNodes.
+ * In this way, EXPLAIN code is only executed at the timing of ExecProcNode,
+ * which is safe.
+ */
+void
+ProcessLogQueryPlanInterrupt(void)
+{
+	LogQueryPlanPending = false;
+
+	/* Cannot re-enter */
+	if (ProcessLogQueryPlanInterruptActive)
+		return;
+
+	ProcessLogQueryPlanInterruptActive = true;
+
+	if (ActiveQueryDesc == NULL)
+	{
+		ereport(LOG_SERVER_ONLY,
+				errmsg("backend with PID %d is not running a query or a subtransaction is aborted",
+					MyProcPid),
+				errhidestmt(true),
+				errhidecontext(true));
+
+		ProcessLogQueryPlanInterruptActive = false;
+		return;
+	}
+
+	WrapExecProcNodeWithExplain(ActiveQueryDesc->planstate);
+	ProcessLogQueryPlanInterruptActive = false;
+}
+
+/*
+ * pg_log_query_plan
+ *		Signal a backend process to log the query plan of the running query.
+ *
+ * By default, only superusers are allowed to signal to log the plan because
+ * allowing any users to issue this request at an unbounded rate would
+ * cause lots of log messages and which can lead to denial of service.
+ * Additional roles can be permitted with GRANT.
+ */
+Datum
+pg_log_query_plan(PG_FUNCTION_ARGS)
+{
+	int			pid = PG_GETARG_INT32(0);
+	PGPROC	   *proc;
+	PgBackendStatus	*be_status;
+
+	proc = BackendPidGetProc(pid);
+
+	if (proc == NULL)
+	{
+		/*
+		 * This is just a warning so a loop-through-resultset will not abort
+		 * if one backend terminated on its own during the run.
+		 */
+		ereport(WARNING,
+				(errmsg("PID %d is not a PostgreSQL backend process", pid)));
+		PG_RETURN_BOOL(false);
+	}
+
+	be_status = pgstat_get_beentry_by_proc_number(proc->vxid.procNumber);
+	if (be_status->st_backendType != B_BACKEND)
+	{
+		ereport(WARNING,
+				(errmsg("PID %d is not a PostgreSQL client backend process", pid)));
+		PG_RETURN_BOOL(false);
+	}
+
+	if (SendProcSignal(pid, PROCSIG_LOG_QUERY_PLAN, proc->vxid.procNumber) < 0)
+	{
+		/* Again, just a warning to allow loops */
+		ereport(WARNING,
+				(errmsg("could not send signal to process %d: %m", pid)));
+		PG_RETURN_BOOL(false);
+	}
+
+	PG_RETURN_BOOL(true);
 }

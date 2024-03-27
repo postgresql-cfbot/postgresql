@@ -35,6 +35,8 @@ $node->append_conf('postgresql.conf', "auto_explain.log_min_duration = 0");
 $node->append_conf('postgresql.conf', "auto_explain.log_analyze = on");
 $node->start;
 
+$node->safe_psql('postgres', 'CREATE EXTENSION injection_points');
+
 # Simple query.
 my $log_contents = query_log($node, "SELECT * FROM pg_class;");
 
@@ -211,5 +213,38 @@ $node->safe_psql(
 REVOKE SET ON PARAMETER auto_explain.log_format FROM regress_user1;
 DROP USER regress_user1;
 });
+
+# Check that using both auto_explain and pg_log_query_plan() works fine
+
+$node->safe_psql('postgres', q{SELECT injection_points_attach('executor-run', 'logqueryplan')});
+
+$log_contents = query_log(
+	$node,
+	"SELECT * FROM pg_class;",
+	{
+		"auto_explain.log_verbose" => "on",
+		"auto_explain.log_settings" => "on",
+		"auto_explain.log_analyze" => "off",
+		"compute_query_id" => "on"
+	});
+
+like(
+	$log_contents,
+	qr/query plan running on backend with PID/,
+	"with pg_log_query_plan(), pg_log_query_plan() logged");
+
+like(
+	$log_contents,
+	qr/duration: .+ms  plan:/,
+	"with pg_log_query_plan(), auto_explain logged");
+
+$log_contents =~ /(Query Text:.*Query Identifier: \d+).*(Query Text:.*Query Identifier: \d+)/s;
+my $pg_log_plan_query_output = $1;
+my $auto_explain_output = $2;
+
+cmp_ok(
+	$pg_log_plan_query_output, "eq",
+	$auto_explain_output,
+	"with pg_log_plan_query_log(), logged plans are the same");
 
 done_testing();

@@ -401,26 +401,9 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
 			es->format = auto_explain_log_format;
 			es->settings = auto_explain_log_settings;
 
-			ExplainBeginOutput(es);
-			ExplainQueryText(es, queryDesc);
-			ExplainQueryParameters(es, queryDesc->params, auto_explain_log_parameter_max_length);
-			ExplainPrintPlan(es, queryDesc);
-			if (es->analyze && auto_explain_log_triggers)
-				ExplainPrintTriggers(es, queryDesc);
-			if (es->costs)
-				ExplainPrintJITSummary(es, queryDesc);
-			ExplainEndOutput(es);
-
-			/* Remove last line break */
-			if (es->str->len > 0 && es->str->data[es->str->len - 1] == '\n')
-				es->str->data[--es->str->len] = '\0';
-
-			/* Fix JSON to output an object */
-			if (auto_explain_log_format == EXPLAIN_FORMAT_JSON)
-			{
-				es->str->data[0] = '{';
-				es->str->data[es->str->len - 1] = '}';
-			}
+			ExplainAssembleLogOutput(es, queryDesc, auto_explain_log_format,
+									 auto_explain_log_triggers,
+									 auto_explain_log_parameter_max_length);
 
 			/*
 			 * Note: we rely on the existing logging of context or

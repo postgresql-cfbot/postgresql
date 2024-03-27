@@ -285,7 +285,7 @@ llvm_compile_expr(ExprState *state)
 
 		switch (opcode)
 		{
-			case EEOP_DONE:
+			case EEOP_DONE_RETURN:
 				{
 					LLVMValueRef v_tmpisnull;
 					LLVMValueRef v_tmpvalue;
@@ -298,6 +298,10 @@ llvm_compile_expr(ExprState *state)
 					LLVMBuildRet(b, v_tmpvalue);
 					break;
 				}
+
+			case EEOP_DONE_NO_RETURN:
+				LLVMBuildRet(b, l_sizet_const(0));
+				break;
 
 			case EEOP_INNER_FETCHSOME:
 			case EEOP_OUTER_FETCHSOME:
@@ -586,12 +590,16 @@ llvm_compile_expr(ExprState *state)
 
 			case EEOP_FUNCEXPR:
 			case EEOP_FUNCEXPR_STRICT:
+			case EEOP_FUNCEXPR_STRICT_1:
+			case EEOP_FUNCEXPR_STRICT_2:
 				{
 					FunctionCallInfo fcinfo = op->d.func.fcinfo_data;
 					LLVMValueRef v_fcinfo_isnull;
 					LLVMValueRef v_retval;
 
-					if (opcode == EEOP_FUNCEXPR_STRICT)
+					if (opcode == EEOP_FUNCEXPR_STRICT ||
+						opcode == EEOP_FUNCEXPR_STRICT_1 ||
+						opcode == EEOP_FUNCEXPR_STRICT_2)
 					{
 						LLVMBasicBlockRef b_nonull;
 						LLVMBasicBlockRef *b_checkargnulls;
@@ -2160,6 +2168,7 @@ llvm_compile_expr(ExprState *state)
 				}
 
 			case EEOP_AGG_STRICT_INPUT_CHECK_ARGS:
+			case EEOP_AGG_STRICT_INPUT_CHECK_ARGS_1:
 			case EEOP_AGG_STRICT_INPUT_CHECK_NULLS:
 				{
 					int			nargs = op->d.agg_strict_input_check.nargs;

@@ -65,8 +65,11 @@ typedef struct ExprEvalRowtypeCache
  */
 typedef enum ExprEvalOp
 {
-	/* entire expression has been evaluated completely, return */
-	EEOP_DONE,
+	/* entire expression has been evaluated, return value */
+	EEOP_DONE_RETURN,
+
+	/* entire expression has been evaluated, no return value */
+	EEOP_DONE_NO_RETURN,
 
 	/* apply slot_getsomeattrs on corresponding tuple slot */
 	EEOP_INNER_FETCHSOME,
@@ -105,11 +108,13 @@ typedef enum ExprEvalOp
 
 	/*
 	 * Evaluate function call (including OpExprs etc).  For speed, we
-	 * distinguish in the opcode whether the function is strict and/or
-	 * requires usage stats tracking.
+	 * distinguish in the opcode whether the function is strict with 1, 2, or
+	 * more arguments and/or requires usage stats tracking.
 	 */
 	EEOP_FUNCEXPR,
 	EEOP_FUNCEXPR_STRICT,
+	EEOP_FUNCEXPR_STRICT_1,
+	EEOP_FUNCEXPR_STRICT_2,
 	EEOP_FUNCEXPR_FUSAGE,
 	EEOP_FUNCEXPR_STRICT_FUSAGE,
 
@@ -253,6 +258,7 @@ typedef enum ExprEvalOp
 	EEOP_AGG_STRICT_DESERIALIZE,
 	EEOP_AGG_DESERIALIZE,
 	EEOP_AGG_STRICT_INPUT_CHECK_ARGS,
+	EEOP_AGG_STRICT_INPUT_CHECK_ARGS_1,
 	EEOP_AGG_STRICT_INPUT_CHECK_NULLS,
 	EEOP_AGG_PLAIN_PERGROUP_NULLCHECK,
 	EEOP_AGG_PLAIN_TRANS_INIT_STRICT_BYVAL,

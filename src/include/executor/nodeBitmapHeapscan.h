@@ -28,5 +28,15 @@ extern void ExecBitmapHeapReInitializeDSM(BitmapHeapScanState *node,
 										  ParallelContext *pcxt);
 extern void ExecBitmapHeapInitializeWorker(BitmapHeapScanState *node,
 										   ParallelWorkerContext *pwcxt);
+typedef struct BitmapHeapIterator
+{
+	struct TBMIterator *serial;
+	struct TBMSharedIterator *parallel;
+} BitmapHeapIterator;
+
+extern void bhs_iterate(BitmapHeapIterator *iterator, TBMIterateResult *result);
+
+extern void bhs_end_iterate(BitmapHeapIterator *iterator);
+
 
 #endif							/* NODEBITMAPHEAPSCAN_H */

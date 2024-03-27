@@ -120,7 +120,6 @@ table_beginscan_catalog(Relation relation, int nkeys, struct ScanKeyData *key)
 											NULL, flags);
 }
 
-
 /* ----------------------------------------------------------------------------
  * Parallel table scan related functions.
  * ----------------------------------------------------------------------------

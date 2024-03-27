@@ -20,9 +20,13 @@
 #include "storage/buf.h"
 #include "storage/spin.h"
 #include "utils/relcache.h"
+#include "executor/nodeBitmapHeapscan.h"
 
 
 struct ParallelTableScanDescData;
+
+struct BitmapHeapIterator;
+struct ParallelBitmapHeapState;
 
 /*
  * Generic descriptor for table scans. This is the base-class for table scans,
@@ -39,6 +43,10 @@ typedef struct TableScanDescData
 	/* Range of ItemPointers for table_scan_getnextslot_tidrange() to scan. */
 	ItemPointerData rs_mintid;
 	ItemPointerData rs_maxtid;
+
+	/* Only used for Bitmap table scans */
+	struct BitmapHeapIterator *rs_bhs_iterator;
+	struct ParallelBitmapHeapState *bm_parallel;
 
 	/*
 	 * Information about type and behaviour of the scan, a bitmask of members

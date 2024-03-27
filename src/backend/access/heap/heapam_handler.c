@@ -27,6 +27,7 @@
 #include "access/syncscan.h"
 #include "access/tableam.h"
 #include "access/tsmapi.h"
+#include "access/visibilitymap.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
 #include "catalog/index.h"
@@ -2164,42 +2165,67 @@ heapam_estimate_rel_size(Relation rel, int32 *attr_widths,
 }
 
 
-/* ------------------------------------------------------------------------
- * Executor related callbacks for the heap AM
- * ------------------------------------------------------------------------
- */
-
 static bool
-heapam_scan_bitmap_next_block(TableScanDesc scan,
-							  TBMIterateResult *tbmres)
+heapam_scan_bitmap_next_block(TableScanDesc scan, bool *recheck,
+							  long *lossy_pages, long *exact_pages)
 {
 	HeapScanDesc hscan = (HeapScanDesc) scan;
-	BlockNumber block = tbmres->blockno;
+	void	   *per_buffer_data;
+	BlockNumber block;
 	Buffer		buffer;
 	Snapshot	snapshot;
 	int			ntup;
+	TBMIterateResult *tbmres;
+
+	Assert(hscan->rs_read_stream);
 
 	hscan->rs_cindex = 0;
 	hscan->rs_ntuples = 0;
 
-	/*
-	 * Ignore any claimed entries past what we think is the end of the
-	 * relation. It may have been extended after the start of our scan (we
-	 * only hold an AccessShareLock, and it could be inserts from this
-	 * backend).  We don't take this optimization in SERIALIZABLE isolation
-	 * though, as we need to examine all invisible tuples reachable by the
-	 * index.
-	 */
-	if (!IsolationIsSerializable() && block >= hscan->rs_nblocks)
-		return false;
+	*recheck = true;
 
-	/*
-	 * Acquire pin on the target heap page, trading in any pin we held before.
-	 */
-	hscan->rs_cbuf = ReleaseAndReadBuffer(hscan->rs_cbuf,
-										  scan->rs_rd,
-										  block);
-	hscan->rs_cblock = block;
+	/* Release buffer containing previous block. */
+	if (BufferIsValid(hscan->rs_cbuf))
+	{
+		ReleaseBuffer(hscan->rs_cbuf);
+		hscan->rs_cbuf = InvalidBuffer;
+	}
+
+	hscan->rs_cbuf = read_stream_next_buffer(hscan->rs_read_stream, &per_buffer_data);
+
+	if (BufferIsInvalid(hscan->rs_cbuf))
+	{
+		if (BufferIsValid(hscan->rs_vmbuffer))
+		{
+			ReleaseBuffer(hscan->rs_vmbuffer);
+			hscan->rs_vmbuffer = InvalidBuffer;
+		}
+
+		/*
+		 * Bitmap is exhausted. Time to emit empty tuples if relevant. We emit
+		 * all empty tuples at the end instead of emitting them per block we
+		 * skip fetching. This is necessary because the streaming read API
+		 * will only return TBMIterateResults for blocks actually fetched.
+		 * When we skip fetching a block, we keep track of how many empty
+		 * tuples to emit at the end of the BitmapHeapScan. We do not recheck
+		 * all NULL tuples.
+		 */
+		*recheck = false;
+		return hscan->rs_empty_tuples_pending > 0;
+	}
+
+	Assert(per_buffer_data);
+
+	tbmres = per_buffer_data;
+
+	Assert(BufferGetBlockNumber(hscan->rs_cbuf) == tbmres->blockno);
+
+	*recheck = tbmres->recheck;
+
+	hscan->rs_cblock = tbmres->blockno;
+	hscan->rs_ntuples = tbmres->ntuples;
+
+	block = tbmres->blockno;
 	buffer = hscan->rs_cbuf;
 	snapshot = scan->rs_snapshot;
 
@@ -2281,13 +2307,31 @@ heapam_scan_bitmap_next_block(TableScanDesc scan,
 	Assert(ntup <= MaxHeapTuplesPerPage);
 	hscan->rs_ntuples = ntup;
 
-	return ntup > 0;
+	if (tbmres->ntuples < 0)
+		(*lossy_pages)++;
+	else
+		(*exact_pages)++;
+
+	/*
+	 * Return true to indicate that a valid block was found and the bitmap is
+	 * not exhausted. If there are no visible tuples on this page,
+	 * hscan->rs_ntuples will be 0 and heapam_scan_bitmap_next_tuple() will
+	 * return false returning control to this function to advance to the next
+	 * block in the bitmap.
+	 */
+	return true;
 }
+
+
+/* ------------------------------------------------------------------------
+ * Executor related callbacks for the heap AM
+ * ------------------------------------------------------------------------
+ */
 
 static bool
 heapam_scan_bitmap_next_tuple(TableScanDesc scan,
-							  TBMIterateResult *tbmres,
-							  TupleTableSlot *slot)
+							  TupleTableSlot *slot, bool *recheck,
+							  long *lossy_pages, long *exact_pages)
 {
 	HeapScanDesc hscan = (HeapScanDesc) scan;
 	OffsetNumber targoffset;
@@ -2297,8 +2341,25 @@ heapam_scan_bitmap_next_tuple(TableScanDesc scan,
 	/*
 	 * Out of range?  If so, nothing more to look at on this page
 	 */
-	if (hscan->rs_cindex < 0 || hscan->rs_cindex >= hscan->rs_ntuples)
-		return false;
+	while (hscan->rs_cindex < 0 || hscan->rs_cindex >= hscan->rs_ntuples)
+	{
+		/*
+		 * Emit empty tuples before advancing to the next block
+		 */
+		if (hscan->rs_empty_tuples_pending > 0)
+		{
+			/*
+			 * If we don't have to fetch the tuple, just return nulls.
+			 */
+			ExecStoreAllNullTuple(slot);
+			hscan->rs_empty_tuples_pending--;
+			return true;
+		}
+
+		if (!heapam_scan_bitmap_next_block(scan, recheck,
+										   lossy_pages, exact_pages))
+			return false;
+	}
 
 	targoffset = hscan->rs_vistuples[hscan->rs_cindex];
 	page = BufferGetPage(hscan->rs_cbuf);
@@ -2650,7 +2711,6 @@ static const TableAmRoutine heapam_methods = {
 
 	.relation_estimate_size = heapam_estimate_rel_size,
 
-	.scan_bitmap_next_block = heapam_scan_bitmap_next_block,
 	.scan_bitmap_next_tuple = heapam_scan_bitmap_next_tuple,
 	.scan_sample_next_block = heapam_scan_sample_next_block,
 	.scan_sample_next_tuple = heapam_scan_sample_next_tuple

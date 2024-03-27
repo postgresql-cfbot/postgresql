@@ -40,21 +40,12 @@
 
 #include <limits.h>
 
-#include "access/htup_details.h"
 #include "common/hashfn.h"
 #include "common/int.h"
 #include "nodes/bitmapset.h"
 #include "nodes/tidbitmap.h"
 #include "storage/lwlock.h"
 #include "utils/dsa.h"
-
-/*
- * The maximum number of tuples per page is not large (typically 256 with
- * 8K pages, or 1024 with 32K pages).  So there's not much point in making
- * the per-page bitmaps variable size.  We just legislate that the size
- * is this:
- */
-#define MAX_TUPLES_PER_PAGE  MaxHeapTuplesPerPage
 
 /*
  * When we have to switch over to lossy storage, we use a data structure
@@ -67,7 +58,7 @@
  * table, using identical data structures.  (This is because the memory
  * management for hashtables doesn't easily/efficiently allow space to be
  * transferred easily from one hashtable to another.)  Therefore it's best
- * if PAGES_PER_CHUNK is the same as MAX_TUPLES_PER_PAGE, or at least not
+ * if PAGES_PER_CHUNK is the same as MaxHeapTuplesPerPage, or at least not
  * too different.  But we also want PAGES_PER_CHUNK to be a power of 2 to
  * avoid expensive integer remainder operations.  So, define it like this:
  */
@@ -79,7 +70,7 @@
 #define BITNUM(x)	((x) % BITS_PER_BITMAPWORD)
 
 /* number of active words for an exact page: */
-#define WORDS_PER_PAGE	((MAX_TUPLES_PER_PAGE - 1) / BITS_PER_BITMAPWORD + 1)
+#define WORDS_PER_PAGE	((MaxHeapTuplesPerPage - 1) / BITS_PER_BITMAPWORD + 1)
 /* number of active words for a lossy chunk: */
 #define WORDS_PER_CHUNK  ((PAGES_PER_CHUNK - 1) / BITS_PER_BITMAPWORD + 1)
 
@@ -181,7 +172,6 @@ struct TBMIterator
 	int			spageptr;		/* next spages index */
 	int			schunkptr;		/* next schunks index */
 	int			schunkbit;		/* next bit to check in current schunk */
-	TBMIterateResult output;	/* MUST BE LAST (because variable-size) */
 };
 
 /*
@@ -222,7 +212,6 @@ struct TBMSharedIterator
 	PTEntryArray *ptbase;		/* pagetable element array */
 	PTIterationArray *ptpages;	/* sorted exact page index list */
 	PTIterationArray *ptchunks; /* sorted lossy page index list */
-	TBMIterateResult output;	/* MUST BE LAST (because variable-size) */
 };
 
 /* Local function prototypes */
@@ -390,7 +379,7 @@ tbm_add_tuples(TIDBitmap *tbm, const ItemPointer tids, int ntids,
 					bitnum;
 
 		/* safety check to ensure we don't overrun bit array bounds */
-		if (off < 1 || off > MAX_TUPLES_PER_PAGE)
+		if (off < 1 || off > MaxHeapTuplesPerPage)
 			elog(ERROR, "tuple offset out of range: %u", off);
 
 		/*
@@ -692,12 +681,7 @@ tbm_begin_iterate(TIDBitmap *tbm)
 
 	Assert(tbm->iterating != TBM_ITERATING_SHARED);
 
-	/*
-	 * Create the TBMIterator struct, with enough trailing space to serve the
-	 * needs of the TBMIterateResult sub-struct.
-	 */
-	iterator = (TBMIterator *) palloc(sizeof(TBMIterator) +
-									  MAX_TUPLES_PER_PAGE * sizeof(OffsetNumber));
+	iterator = palloc(sizeof(TBMIterator));
 	iterator->tbm = tbm;
 
 	/*
@@ -958,20 +942,21 @@ tbm_advance_schunkbit(PagetableEntry *chunk, int *schunkbitp)
 /*
  * tbm_iterate - scan through next page of a TIDBitmap
  *
- * Returns a TBMIterateResult representing one page, or NULL if there are
- * no more pages to scan.  Pages are guaranteed to be delivered in numerical
- * order.  If result->ntuples < 0, then the bitmap is "lossy" and failed to
- * remember the exact tuples to look at on this page --- the caller must
- * examine all tuples on the page and check if they meet the intended
- * condition.  If result->recheck is true, only the indicated tuples need
- * be examined, but the condition must be rechecked anyway.  (For ease of
- * testing, recheck is always set true when ntuples < 0.)
+ * Caller must pass in a TBMIterateResult to be filled.
+ *
+ * Pages are guaranteed to be delivered in numerical order.  tbmres->blockno is
+ * set to InvalidBlockNumber when there are no more pages to scan. If
+ * tbmres->ntuples < 0, then the bitmap is "lossy" and failed to remember the
+ * exact tuples to look at on this page --- the caller must examine all tuples
+ * on the page and check if they meet the intended condition.  If
+ * tbmres->recheck is true, only the indicated tuples need be examined, but the
+ * condition must be rechecked anyway.  (For ease of testing, recheck is always
+ * set true when ntuples < 0.)
  */
-TBMIterateResult *
-tbm_iterate(TBMIterator *iterator)
+void
+tbm_iterate(TBMIterator *iterator, TBMIterateResult *tbmres)
 {
 	TIDBitmap  *tbm = iterator->tbm;
-	TBMIterateResult *output = &(iterator->output);
 
 	Assert(tbm->iterating == TBM_ITERATING_PRIVATE);
 
@@ -999,6 +984,7 @@ tbm_iterate(TBMIterator *iterator)
 	 * If both chunk and per-page data remain, must output the numerically
 	 * earlier page.
 	 */
+	Assert(tbmres);
 	if (iterator->schunkptr < tbm->nchunks)
 	{
 		PagetableEntry *chunk = tbm->schunks[iterator->schunkptr];
@@ -1009,11 +995,11 @@ tbm_iterate(TBMIterator *iterator)
 			chunk_blockno < tbm->spages[iterator->spageptr]->blockno)
 		{
 			/* Return a lossy page indicator from the chunk */
-			output->blockno = chunk_blockno;
-			output->ntuples = -1;
-			output->recheck = true;
+			tbmres->blockno = chunk_blockno;
+			tbmres->ntuples = -1;
+			tbmres->recheck = true;
 			iterator->schunkbit++;
-			return output;
+			return;
 		}
 	}
 
@@ -1029,16 +1015,17 @@ tbm_iterate(TBMIterator *iterator)
 			page = tbm->spages[iterator->spageptr];
 
 		/* scan bitmap to extract individual offset numbers */
-		ntuples = tbm_extract_page_tuple(page, output);
-		output->blockno = page->blockno;
-		output->ntuples = ntuples;
-		output->recheck = page->recheck;
+		ntuples = tbm_extract_page_tuple(page, tbmres);
+		tbmres->blockno = page->blockno;
+		tbmres->ntuples = ntuples;
+		tbmres->recheck = page->recheck;
 		iterator->spageptr++;
-		return output;
+		return;
 	}
 
 	/* Nothing more in the bitmap */
-	return NULL;
+	tbmres->blockno = InvalidBlockNumber;
+	return;
 }
 
 /*
@@ -1048,10 +1035,9 @@ tbm_iterate(TBMIterator *iterator)
  *	across multiple processes.  We need to acquire the iterator LWLock,
  *	before accessing the shared members.
  */
-TBMIterateResult *
-tbm_shared_iterate(TBMSharedIterator *iterator)
+void
+tbm_shared_iterate(TBMSharedIterator *iterator, TBMIterateResult *tbmres)
 {
-	TBMIterateResult *output = &iterator->output;
 	TBMSharedIteratorState *istate = iterator->state;
 	PagetableEntry *ptbase = NULL;
 	int		   *idxpages = NULL;
@@ -1102,13 +1088,13 @@ tbm_shared_iterate(TBMSharedIterator *iterator)
 			chunk_blockno < ptbase[idxpages[istate->spageptr]].blockno)
 		{
 			/* Return a lossy page indicator from the chunk */
-			output->blockno = chunk_blockno;
-			output->ntuples = -1;
-			output->recheck = true;
+			tbmres->blockno = chunk_blockno;
+			tbmres->ntuples = -1;
+			tbmres->recheck = true;
 			istate->schunkbit++;
 
 			LWLockRelease(&istate->lock);
-			return output;
+			return;
 		}
 	}
 
@@ -1118,21 +1104,22 @@ tbm_shared_iterate(TBMSharedIterator *iterator)
 		int			ntuples;
 
 		/* scan bitmap to extract individual offset numbers */
-		ntuples = tbm_extract_page_tuple(page, output);
-		output->blockno = page->blockno;
-		output->ntuples = ntuples;
-		output->recheck = page->recheck;
+		ntuples = tbm_extract_page_tuple(page, tbmres);
+		tbmres->blockno = page->blockno;
+		tbmres->ntuples = ntuples;
+		tbmres->recheck = page->recheck;
 		istate->spageptr++;
 
 		LWLockRelease(&istate->lock);
 
-		return output;
+		return;
 	}
 
 	LWLockRelease(&istate->lock);
 
 	/* Nothing more in the bitmap */
-	return NULL;
+	tbmres->blockno = InvalidBlockNumber;
+	return;
 }
 
 /*
@@ -1463,12 +1450,7 @@ tbm_attach_shared_iterate(dsa_area *dsa, dsa_pointer dp)
 	TBMSharedIterator *iterator;
 	TBMSharedIteratorState *istate;
 
-	/*
-	 * Create the TBMSharedIterator struct, with enough trailing space to
-	 * serve the needs of the TBMIterateResult sub-struct.
-	 */
-	iterator = (TBMSharedIterator *) palloc0(sizeof(TBMSharedIterator) +
-											 MAX_TUPLES_PER_PAGE * sizeof(OffsetNumber));
+	iterator = (TBMSharedIterator *) palloc0(sizeof(TBMSharedIterator));
 
 	istate = (TBMSharedIteratorState *) dsa_get_address(dsa, dp);
 

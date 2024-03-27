@@ -332,9 +332,21 @@ restartScanEntry:
 	entry->list = NULL;
 	entry->nlist = 0;
 	entry->matchBitmap = NULL;
-	entry->matchResult = NULL;
 	entry->reduceResult = false;
 	entry->predictNumberResult = 0;
+
+	/*
+	 * MTODO: is it enough to set blockno to InvalidBlockNumber? In all the
+	 * places were we previously set matchResult to NULL, I just set blockno
+	 * to InvalidBlockNumber. It seems like this should be okay because that
+	 * is usually what we check before using the matchResult members. But it
+	 * might be safer to zero out the offsets array. But that is expensive.
+	 */
+	entry->matchResult.blockno = InvalidBlockNumber;
+	entry->matchResult.ntuples = 0;
+	entry->matchResult.recheck = true;
+	memset(entry->matchResult.offsets, 0,
+		   sizeof(OffsetNumber) * MaxHeapTuplesPerPage);
 
 	/*
 	 * we should find entry, and begin scan of posting tree or just store
@@ -374,6 +386,7 @@ restartScanEntry:
 			{
 				if (entry->matchIterator)
 					tbm_end_iterate(entry->matchIterator);
+				entry->matchResult.blockno = InvalidBlockNumber;
 				entry->matchIterator = NULL;
 				tbm_free(entry->matchBitmap);
 				entry->matchBitmap = NULL;
@@ -823,18 +836,19 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
 		{
 			/*
 			 * If we've exhausted all items on this block, move to next block
-			 * in the bitmap.
+			 * in the bitmap. tbm_iterate() sets matchResult->blockno to
+			 * InvalidBlockNumber when the bitmap is exhausted.
 			 */
-			while (entry->matchResult == NULL ||
-				   (entry->matchResult->ntuples >= 0 &&
-					entry->offset >= entry->matchResult->ntuples) ||
-				   entry->matchResult->blockno < advancePastBlk ||
+			while ((!BlockNumberIsValid(entry->matchResult.blockno)) ||
+				   (entry->matchResult.ntuples >= 0 &&
+					entry->offset >= entry->matchResult.ntuples) ||
+				   entry->matchResult.blockno < advancePastBlk ||
 				   (ItemPointerIsLossyPage(&advancePast) &&
-					entry->matchResult->blockno == advancePastBlk))
+					entry->matchResult.blockno == advancePastBlk))
 			{
-				entry->matchResult = tbm_iterate(entry->matchIterator);
+				tbm_iterate(entry->matchIterator, &entry->matchResult);
 
-				if (entry->matchResult == NULL)
+				if (!BlockNumberIsValid(entry->matchResult.blockno))
 				{
 					ItemPointerSetInvalid(&entry->curItem);
 					tbm_end_iterate(entry->matchIterator);
@@ -858,10 +872,10 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
 			 * We're now on the first page after advancePast which has any
 			 * items on it. If it's a lossy result, return that.
 			 */
-			if (entry->matchResult->ntuples < 0)
+			if (entry->matchResult.ntuples < 0)
 			{
 				ItemPointerSetLossyPage(&entry->curItem,
-										entry->matchResult->blockno);
+										entry->matchResult.blockno);
 
 				/*
 				 * We might as well fall out of the loop; we could not
@@ -875,27 +889,27 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
 			 * Not a lossy page. Skip over any offsets <= advancePast, and
 			 * return that.
 			 */
-			if (entry->matchResult->blockno == advancePastBlk)
+			if (entry->matchResult.blockno == advancePastBlk)
 			{
 				/*
 				 * First, do a quick check against the last offset on the
 				 * page. If that's > advancePast, so are all the other
 				 * offsets, so just go back to the top to get the next page.
 				 */
-				if (entry->matchResult->offsets[entry->matchResult->ntuples - 1] <= advancePastOff)
+				if (entry->matchResult.offsets[entry->matchResult.ntuples - 1] <= advancePastOff)
 				{
-					entry->offset = entry->matchResult->ntuples;
+					entry->offset = entry->matchResult.ntuples;
 					continue;
 				}
 
 				/* Otherwise scan to find the first item > advancePast */
-				while (entry->matchResult->offsets[entry->offset] <= advancePastOff)
+				while (entry->matchResult.offsets[entry->offset] <= advancePastOff)
 					entry->offset++;
 			}
 
 			ItemPointerSet(&entry->curItem,
-						   entry->matchResult->blockno,
-						   entry->matchResult->offsets[entry->offset]);
+						   entry->matchResult.blockno,
+						   entry->matchResult.offsets[entry->offset]);
 			entry->offset++;
 
 			/* Done unless we need to reduce the result */

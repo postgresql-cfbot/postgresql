@@ -12192,4 +12192,19 @@
   proargtypes => 'int2',
   prosrc => 'gist_stratnum_identity' },
 
+# Statistics Import
+{ oid => '8048',
+  descr => 'set statistics on relation',
+  proname => 'pg_set_relation_stats', provolatile => 'v', proisstrict => 'f',
+  proparallel => 'u', prorettype => 'void',
+  proargtypes => 'oid int4 float4 int4',
+  proargnames => '{relation,relpages,reltuples,relallvisible}',
+  prosrc => 'pg_set_relation_stats' },
+{ oid => '8049',
+  descr => 'set statistics on attribute',
+  proname => 'pg_set_attribute_stats', provolatile => 'v', proisstrict => 'f',
+  proparallel => 'u', prorettype => 'void',
+  proargtypes => 'oid name bool float4 int4 float4 text _float4 text float4 text _float4 _float4 text float4 text',
+  proargnames => '{relation,attname,inherited,null_frac,avg_width,n_distinct,most_common_vals,most_common_freqs,histogram_bounds,correlation,most_common_elems,most_common_elem_freqs,elem_count_histogram,range_length_histogram,range_empty_frac,range_bounds_histogram}',
+  prosrc => 'pg_set_attribute_stats' },
 ]

@@ -59,6 +59,7 @@
 #include "compress_io.h"
 #include "dumputils.h"
 #include "fe_utils/option_utils.h"
+#include "fe_utils/stats_export.h"
 #include "fe_utils/string_utils.h"
 #include "filter.h"
 #include "getopt_long.h"
@@ -428,6 +429,7 @@ main(int argc, char **argv)
 		{"no-comments", no_argument, &dopt.no_comments, 1},
 		{"no-publications", no_argument, &dopt.no_publications, 1},
 		{"no-security-labels", no_argument, &dopt.no_security_labels, 1},
+		{"no-statistics", no_argument, &dopt.no_statistics, 1},
 		{"no-subscriptions", no_argument, &dopt.no_subscriptions, 1},
 		{"no-toast-compression", no_argument, &dopt.no_toast_compression, 1},
 		{"no-unlogged-table-data", no_argument, &dopt.no_unlogged_table_data, 1},
@@ -1144,6 +1146,7 @@ help(const char *progname)
 	printf(_("  --no-comments                do not dump comments\n"));
 	printf(_("  --no-publications            do not dump publications\n"));
 	printf(_("  --no-security-labels         do not dump security label assignments\n"));
+	printf(_("  --no-statistics              do not dump statistics\n"));
 	printf(_("  --no-subscriptions           do not dump subscriptions\n"));
 	printf(_("  --no-table-access-method     do not dump table access methods\n"));
 	printf(_("  --no-tablespaces             do not dump tablespace assignments\n"));
@@ -7001,6 +7004,7 @@ getTables(Archive *fout, int *numTables)
 
 		/* Tables have data */
 		tblinfo[i].dobj.components |= DUMP_COMPONENT_DATA;
+		tblinfo[i].dobj.components |= DUMP_COMPONENT_STATISTICS;
 
 		/* Mark whether table has an ACL */
 		if (!PQgetisnull(res, i, i_relacl))
@@ -7498,6 +7502,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 			indxinfo[j].dobj.catId.tableoid = atooid(PQgetvalue(res, j, i_tableoid));
 			indxinfo[j].dobj.catId.oid = atooid(PQgetvalue(res, j, i_oid));
 			AssignDumpId(&indxinfo[j].dobj);
+			indxinfo[j].dobj.components |= DUMP_COMPONENT_STATISTICS;
 			indxinfo[j].dobj.dump = tbinfo->dobj.dump;
 			indxinfo[j].dobj.name = pg_strdup(PQgetvalue(res, j, i_indexname));
 			indxinfo[j].dobj.namespace = tbinfo->dobj.namespace;
@@ -10245,6 +10250,82 @@ dumpComment(Archive *fout, const char *type,
 {
 	dumpCommentExtended(fout, type, name, namespace, owner,
 						catalogId, subid, dumpId, NULL);
+}
+
+/*
+ * dumpRelationStats --
+ *
+ * Dump command to import stats into the relation on the new database.
+ */
+static void
+dumpRelationStats(Archive *fout, const DumpableObject *dobj,
+				  const char *reltypename, DumpId dumpid)
+{
+	const char *stmtname = "relstats";
+	static bool prepared = false;
+	const char *values[2];
+	PGconn     *conn;
+	PGresult   *res;
+	PQExpBuffer query;
+	PQExpBuffer tag;
+
+	/* do nothing, if --no-statistics is supplied */
+	if (fout->dopt->no_statistics)
+		return;
+
+	conn = GetConnection(fout);
+
+	if (!prepared)
+	{
+		int		ver = PQserverVersion(conn);
+		char   *sql = exportRelationStatsSQL(ver);
+
+		if (sql == NULL)
+			pg_fatal("could not prepare stats export query for server version %d",
+					 ver);
+
+		res = PQprepare(conn, stmtname, sql, 2, NULL);
+		if (res == NULL || PQresultStatus(res) != PGRES_COMMAND_OK)
+			pg_fatal("prepared statement failed: %s",
+					 PQerrorMessage(conn));
+
+		free(sql);
+		prepared = true;
+	}
+
+	values[0] = fmtQualifiedId(dobj->namespace->dobj.name, dobj->name);
+	values[1] = NULL;
+	res = PQexecPrepared(conn, stmtname, 2, values, NULL, NULL, 0);
+
+
+	/* Result set must be 1x1 */
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("error in statistics extraction: %s", PQerrorMessage(conn));
+
+	if (PQntuples(res) != 1)
+		pg_fatal("statistics extraction expected one row, but got %d rows",
+				 PQntuples(res));
+
+	query = createPQExpBuffer();
+	appendPQExpBufferStr(query, strdup(PQgetvalue(res, 0, 0)));
+	appendPQExpBufferStr(query, ";\n");
+
+	tag = createPQExpBuffer();
+	appendPQExpBuffer(tag, "%s %s", reltypename,
+					  fmtId(dobj->name));
+
+	ArchiveEntry(fout, nilCatalogId, createDumpId(),
+				 ARCHIVE_OPTS(.tag = tag->data,
+							  .namespace = dobj->namespace->dobj.name,
+							  .description = "STATS IMPORT",
+							  .section = SECTION_POST_DATA,
+							  .createStmt = query->data,
+							  .deps = &dumpid,
+							  .nDeps = 1));
+
+	PQclear(res);
+	destroyPQExpBuffer(query);
+	destroyPQExpBuffer(tag);
 }
 
 /*
@@ -16681,6 +16762,15 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 	if (tbinfo->dobj.dump & DUMP_COMPONENT_SECLABEL)
 		dumpTableSecLabel(fout, tbinfo, reltypename);
 
+	/* Statistics are dependent on the definition, not the data */
+	/* Views don't have stats */
+	/* XXX is this check needed? we'd find there's no stats, no? */
+	/* XXX the condition is wrong, though */
+	if ((tbinfo->dobj.dump & DUMP_COMPONENT_STATISTICS) &&
+		(tbinfo->relkind == RELKIND_VIEW))
+		dumpRelationStats(fout, &tbinfo->dobj, reltypename,
+						  tbinfo->dobj.dumpId);
+
 	/* Dump comments on inlined table constraints */
 	for (j = 0; j < tbinfo->ncheck; j++)
 	{
@@ -16882,6 +16972,7 @@ dumpIndex(Archive *fout, const IndxInfo *indxinfo)
 	PQExpBuffer delq;
 	char	   *qindxname;
 	char	   *qqindxname;
+	DumpId		dumpid;
 
 	/* Do nothing in data-only dump */
 	if (dopt->dataOnly)
@@ -16994,14 +17085,22 @@ dumpIndex(Archive *fout, const IndxInfo *indxinfo)
 		free(indstatvalsarray);
 	}
 
+	/* Comments and stats share same .dep */
+	/* XXX what's ".dep"? */
+	dumpid = is_constraint ? indxinfo->indexconstraint :
+							 indxinfo->dobj.dumpId;
+
 	/* Dump Index Comments */
 	if (indxinfo->dobj.dump & DUMP_COMPONENT_COMMENT)
 		dumpComment(fout, "INDEX", qindxname,
 					tbinfo->dobj.namespace->dobj.name,
 					tbinfo->rolname,
 					indxinfo->dobj.catId, 0,
-					is_constraint ? indxinfo->indexconstraint :
-					indxinfo->dobj.dumpId);
+					dumpid);
+
+	/* Dump Index Stats */
+	if (indxinfo->dobj.dump & DUMP_COMPONENT_STATISTICS)
+		dumpRelationStats(fout, &indxinfo->dobj, "INDEX", dumpid);
 
 	destroyPQExpBuffer(q);
 	destroyPQExpBuffer(delq);

@@ -12,6 +12,7 @@ fe_utils_sources = files(
   'query_utils.c',
   'recovery_gen.c',
   'simple_list.c',
+  'stats_export.c',
   'string_utils.c',
 )
 

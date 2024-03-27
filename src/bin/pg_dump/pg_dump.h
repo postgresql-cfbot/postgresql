@@ -101,6 +101,7 @@ typedef uint32 DumpComponents;
 #define DUMP_COMPONENT_ACL			(1 << 4)
 #define DUMP_COMPONENT_POLICY		(1 << 5)
 #define DUMP_COMPONENT_USERMAP		(1 << 6)
+#define DUMP_COMPONENT_STATISTICS	(1 << 7)
 #define DUMP_COMPONENT_ALL			(0xFFFF)
 
 /*

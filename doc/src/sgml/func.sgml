@@ -29123,6 +29123,116 @@ postgres=# SELECT '0/0'::pg_lsn + pd.segment_number * ps.setting::int + :offset 
     in identifying the specific disk files associated with database objects.
    </para>
 
+   <table id="functions-admin-statsimport">
+    <title>Database Object Statistics Import Functions</title>
+    <tgroup cols="1">
+     <thead>
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        Function
+       </para>
+       <para>
+        Description
+       </para></entry>
+      </row>
+     </thead>
+
+     <tbody>
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_set_relation_stats</primary>
+        </indexterm>
+        <function>pg_set_relation_stats</function> (
+         <parameter>relation</parameter> <type>regclass</type>,
+         <parameter>relpages</parameter> <type>integer</type>,
+         <parameter>reltuples</parameter> <type>real</type>,
+         <parameter>relallvisible</parameter> <type>integer</type> )
+        <returnvalue>void</returnvalue>
+       </para>
+       <para>
+        Updates the <structname>pg_class</structname> row for the specified
+        <parameter>relation</parameter>, setting the values for the columns
+        <structfield>reltuples</structfield>,
+        <structfield>relpages</structfield>, and
+        <structfield>relallvisible</structfield>.
+        To avoid table bloat in <structname>pg_class</structname>, this change
+        is made with an in-place update, and therefore cannot be rolled back through
+        normal transaction processing.
+       </para>
+       <para>
+        The purpose of this function is to apply statistics values in an
+        upgrade situation that are "good enough" for system operation until
+        they are replaced by the next <command>ANALYZE</command>, usually via
+        <command>autovacuum</command> This function is used by
+        <command>pg_upgrade</command> and <command>pg_restore</command> to
+        convey the statistics from the old system version into the new one.
+       </para>
+       <para>
+        The caller must either be the owner of the relation, or have superuser
+        privileges.
+       </para>
+       </entry>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_set_attribute_stats</primary>
+        </indexterm>
+        <function>pg_set_attribute_stats</function> (
+         <parameter>relation</parameter> <type>regclass</type>
+         , <parameter>attname</parameter> <type>name</type>
+         , <parameter>inherited</parameter> <type>boolean</type>
+         , <parameter>null_frac</parameter> <type>real</type>
+         , <parameter>avg_width</parameter> <type>integer</type>
+         , <parameter>n_distinct</parameter> <type>real</type>
+         [, <parameter>most_common_vals</parameter> <type>text</type>
+         <literal>DEFAULT</literal> <literal>NULL</literal> ]
+         [, <parameter>most_common_freqs</parameter> <type>real[]</type>
+         <literal>DEFAULT</literal> <literal>NULL</literal> ]
+         [, <parameter>histogram_bounds</parameter> <type>text</type>
+         <literal>DEFAULT</literal> <literal>NULL</literal> ]
+         [, <parameter>correlation</parameter> <type>real</type>
+         <literal>DEFAULT</literal> <literal>NULL</literal> ]
+         [, <parameter>most_common_elems</parameter> <type>text</type>
+         <literal>DEFAULT</literal> <literal>NULL</literal> ]
+         [, <parameter>most_common_elem_freqs</parameter> <type>real[]</type>
+         <literal>DEFAULT</literal> <literal>NULL</literal> ]
+         [, <parameter>elem_count_histogram</parameter> <type>real[]</type>
+         <literal>DEFAULT</literal> <literal>NULL</literal> ]
+         [, <parameter>range_length_histogram</parameter> <type>text</type>
+         <literal>DEFAULT</literal> <literal>NULL</literal> ]
+         [, <parameter>range_empty_frac</parameter> <type>real</type>
+         <literal>DEFAULT</literal> <literal>NULL</literal> ]
+         [, <parameter>range_bounds_histogram</parameter> <type>text</type>
+         <literal>DEFAULT</literal> <literal>NULL</literal> ] )
+        <returnvalue>void</returnvalue>
+       </para>
+       <para>
+        Replaces the <structname>pg_statistic</structname> row for the
+        <structname>pg_attribute</structname> row specified by
+        <parameter>relation</parameter>, <parameter>attname</parameter>
+        and <parameter>inherited</parameter>.  Aside from
+        <parameter>relation</parameter>, the parameters in this are all
+        derived from <structname>pg_stats</structname>, and the values
+        given are most often extracted from there.
+       </para>
+       <para>
+        The purpose of this function is to apply statistics values in an
+        upgrade situation that are "good enough" for system operation until
+        they are replaced by the next <command>ANALYZE</command>, usually via
+        <command>autovacuum</command> This function is used by
+        <command>pg_upgrade</command> and <command>pg_restore</command> to
+        convey the statistics from the old system version into the new one.
+       </para>
+       <para>
+        The caller must either be the owner of the relation, or have superuser
+        privileges.
+       </para>
+       </entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
    <table id="functions-admin-dblocation">
     <title>Database Object Location Functions</title>
     <tgroup cols="1">

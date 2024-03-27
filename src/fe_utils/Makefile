@@ -32,6 +32,7 @@ OBJS = \
 	query_utils.o \
 	recovery_gen.o \
 	simple_list.o \
+	stats_export.o \
 	string_utils.o
 
 ifeq ($(PORTNAME), win32)

@@ -323,7 +323,7 @@ help(const char *progname)
 	printf(_("Usage:\n  %s [OPTION]...\n\n"), progname);
 	printf(_("Options:\n"));
 	printf(_("  -B NBUFFERS        number of shared buffers\n"));
-	printf(_("  -c NAME=VALUE      set run-time parameter\n"));
+	printf(_("  -c NAME=VALUE      set run-time parameter (see also --NAME)\n"));
 	printf(_("  -C NAME            print value of run-time parameter, then exit\n"));
 	printf(_("  -d 1-5             debugging level\n"));
 	printf(_("  -D DATADIR         database directory\n"));
@@ -340,7 +340,7 @@ help(const char *progname)
 	printf(_("  -s                 show statistics after each query\n"));
 	printf(_("  -S WORK-MEM        set amount of memory for sorts (in kB)\n"));
 	printf(_("  -V, --version      output version information, then exit\n"));
-	printf(_("  --NAME=VALUE       set run-time parameter\n"));
+	printf(_("  --NAME=VALUE       set run-time parameter, a shorter form of -c\n"));
 	printf(_("  --describe-config  describe configuration parameters, then exit\n"));
 	printf(_("  -?, --help         show this help, then exit\n"));
 

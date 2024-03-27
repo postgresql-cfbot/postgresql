@@ -311,21 +311,6 @@ SaV9L04ky1qECNDx3XjnoKLC+H7IOQ==
  \xda39a3ee5e6b4b0d3255bfef95601890afd80709
 (1 row)
 
-select digest(pgp_sym_decrypt(dearmor('
------BEGIN PGP MESSAGE-----
-Comment: dat3.aes.sha1.mdc.s2k3.z0
-
-jA0EBwMCxQvxJZ3G/HRg0lgBeYmTa7/uDAjPyFwSX4CYBgpZWVn/JS8JzILrcWF8
-gFnkUKIE0PSaYFp+Yi1VlRfUtRQ/X/LYNGa7tWZS+4VQajz2Xtz4vUeAEiYFYPXk
-73Hb8m1yRhQK
-=ivrD
------END PGP MESSAGE-----
-'), '0123456789abcdefghij'), 'sha1');
-                   digest                   
---------------------------------------------
- \x5e5c135efc0dd00633efc6dfd6e731ea408a5b4c
-(1 row)
-
 -- Checking CRLF
 select digest(pgp_sym_decrypt(dearmor('
 -----BEGIN PGP MESSAGE-----

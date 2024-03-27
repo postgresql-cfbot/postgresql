@@ -2076,10 +2076,11 @@ PgStatShared_Database
 PgStatShared_Function
 PgStatShared_HashEntry
 PgStatShared_IO
-PgStatShared_Relation
+PgStatShared_Index
 PgStatShared_ReplSlot
 PgStatShared_SLRU
 PgStatShared_Subscription
+PgStatShared_Table
 PgStatShared_Wal
 PgStat_ArchiverStats
 PgStat_BackendSubEntry
@@ -2093,6 +2094,7 @@ PgStat_FetchConsistency
 PgStat_FunctionCallUsage
 PgStat_FunctionCounts
 PgStat_HashKey
+PgStat_IndexStatus
 PgStat_IO
 PgStat_Kind
 PgStat_KindInfo

@@ -50,7 +50,7 @@ AtEOXact_PgStat(bool isCommit, bool parallel)
 		Assert(xact_state->nest_level == 1);
 		Assert(xact_state->prev == NULL);
 
-		AtEOXact_PgStat_Relations(xact_state, isCommit);
+		AtEOXact_PgStat_Tables(xact_state, isCommit);
 		AtEOXact_PgStat_DroppedStats(xact_state, isCommit);
 	}
 	pgStatXactStack = NULL;
@@ -121,7 +121,7 @@ AtEOSubXact_PgStat(bool isCommit, int nestDepth)
 		/* delink xact_state from stack immediately to simplify reuse case */
 		pgStatXactStack = xact_state->prev;
 
-		AtEOSubXact_PgStat_Relations(xact_state, isCommit, nestDepth);
+		AtEOSubXact_PgStat_Tables(xact_state, isCommit, nestDepth);
 		AtEOSubXact_PgStat_DroppedStats(xact_state, isCommit, nestDepth);
 
 		pfree(xact_state);
@@ -196,7 +196,7 @@ AtPrepare_PgStat(void)
 		Assert(xact_state->nest_level == 1);
 		Assert(xact_state->prev == NULL);
 
-		AtPrepare_PgStat_Relations(xact_state);
+		AtPrepare_PgStat_Tables(xact_state);
 	}
 }
 
@@ -220,7 +220,7 @@ PostPrepare_PgStat(void)
 		Assert(xact_state->nest_level == 1);
 		Assert(xact_state->prev == NULL);
 
-		PostPrepare_PgStat_Relations(xact_state);
+		PostPrepare_PgStat_Tables(xact_state);
 	}
 	pgStatXactStack = NULL;
 

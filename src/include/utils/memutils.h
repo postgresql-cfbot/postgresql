@@ -108,6 +108,13 @@ extern void ProcessLogMemoryContextInterrupt(void);
  * Memory-context-type-specific functions
  */
 
+/* bump.c */
+extern MemoryContext BumpContextCreate(MemoryContext parent,
+									   const char *name,
+									   Size minContextSize,
+									   Size initBlockSize,
+									   Size maxBlockSize);
+
 /* aset.c */
 extern MemoryContext AllocSetContextCreateInternal(MemoryContext parent,
 												   const char *name,

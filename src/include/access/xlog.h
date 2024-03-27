@@ -24,7 +24,6 @@ typedef enum WalSyncMethod
 	WAL_SYNC_METHOD_FSYNC = 0,
 	WAL_SYNC_METHOD_FDATASYNC,
 	WAL_SYNC_METHOD_OPEN,		/* for O_SYNC */
-	WAL_SYNC_METHOD_FSYNC_WRITETHROUGH,
 	WAL_SYNC_METHOD_OPEN_DSYNC	/* for O_DSYNC */
 } WalSyncMethod;
 extern PGDLLIMPORT int wal_sync_method;

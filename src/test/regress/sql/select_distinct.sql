@@ -221,3 +221,68 @@ SELECT 1 IS NOT DISTINCT FROM 2 as "no";
 SELECT 2 IS NOT DISTINCT FROM 2 as "yes";
 SELECT 2 IS NOT DISTINCT FROM null as "no";
 SELECT null IS NOT DISTINCT FROM null as "yes";
+
+--
+-- DISTINCT optimization by reordering the distinctClause Pathkey nodes to
+-- match the input path's ordering
+--
+
+CREATE TABLE distinct_tbl AS SELECT
+  i % 10 AS x,
+  i % 10 AS y,
+  'abc' || i % 10 AS z,
+  i AS w
+FROM generate_series(1, 1000) AS i;
+CREATE INDEX distinct_tbl_x_y_idx ON distinct_tbl(x, y);
+ANALYZE distinct_tbl;
+
+SET enable_hashagg TO OFF;
+SET enable_seqscan TO OFF;
+
+-- Utilize the ordering of index scan to avoid a Sort operation
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT y, x FROM distinct_tbl;
+
+-- Engage incremental sort
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT z, y, w, x FROM distinct_tbl;
+
+-- Utilize the ordering of subquery scan to avoid a Sort operation
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT w, x, z, y
+	FROM (SELECT * FROM distinct_tbl ORDER BY x, y, w, z) AS s;
+
+-- Utilize the ordering of merge join to avoid a full-Sort operation
+SET enable_nestloop TO OFF;
+SET enable_hashjoin TO OFF;
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT t1.w, t1.x, t1.z, t1.y
+	FROM distinct_tbl t1 JOIN distinct_tbl t2 ON t1.x = t2.x AND t1.y = t2.y;
+
+RESET enable_hashjoin;
+RESET enable_nestloop;
+
+-- Engage ORDER BY
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT z, y, x FROM distinct_tbl ORDER BY x, z;
+
+-- Engage parallel DISTINCT
+SET parallel_tuple_cost=0;
+SET parallel_setup_cost=0;
+SET min_parallel_table_scan_size=0;
+SET min_parallel_index_scan_size=0;
+SET max_parallel_workers_per_gather=2;
+
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT y, x FROM distinct_tbl limit 10;
+
+RESET max_parallel_workers_per_gather;
+RESET min_parallel_index_scan_size;
+RESET min_parallel_table_scan_size;
+RESET parallel_setup_cost;
+RESET parallel_tuple_cost;
+
+RESET enable_seqscan;
+RESET enable_hashagg;
+
+DROP TABLE distinct_tbl;

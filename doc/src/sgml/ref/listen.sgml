@@ -37,6 +37,16 @@ LISTEN <replaceable class="parameter">channel</replaceable>
   </para>
 
   <para>
+   Channel names can be composed of multiple levels in the form
+   <literal>a.b.c</literal> which allows you to organise channel names in
+   hierarchy. Listen channels can contain wildcards which match multiple
+   notification channels. For example, the notification channels
+   <literal>a.b.c</literal>, <literal>a.bc.c</literal> match against the
+   listen channel <literal>a.b%.c</literal> (<literal>%</literal> matches
+   everything until the end of the level).
+  </para>
+
+  <para>
    Whenever the command <command>NOTIFY <replaceable
    class="parameter">channel</replaceable></command> is invoked, either
    by this session or another one connected to the same database, all
@@ -73,8 +83,37 @@ LISTEN <replaceable class="parameter">channel</replaceable>
     <term><replaceable class="parameter">channel</replaceable></term>
     <listitem>
      <para>
-      Name of a notification channel (any identifier).
+      Name of a notification channel. It is a simple string composed of
+      multiple levels in the form <literal>a.b.c</literal> where
+      <literal>a</literal>, <literal>b</literal> and <literal>c</literal> are
+      identifiers which can contain the following wildcards:
      </para>
+
+     <variablelist>
+      <varlistentry>
+       <term><literal>%</literal></term>
+       <listitem>
+        <para>
+         Match everything until the end of a level. Can only appear at the end
+         of a level. For example, the notification channels
+         <literal>a.b.c</literal>, <literal>a.bc.c</literal> match against the
+         listen channel <literal>a.b%.c</literal>.
+        </para>
+       </listitem>
+      </varlistentry>
+      
+      <varlistentry>
+       <term><literal>&gt;</literal></term>
+       <listitem>
+        <para>
+         Match everything to the right. Can only appear at the end of the last
+         level. For example, the notification channels <literal>a.b</literal>,
+         <literal>a.bc.d</literal> match against the listen channel
+         <literal>a.b&gt;</literal>.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
     </listitem>
    </varlistentry>
   </variablelist>

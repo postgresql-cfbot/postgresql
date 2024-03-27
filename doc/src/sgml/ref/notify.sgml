@@ -55,7 +55,9 @@ NOTIFY <replaceable class="parameter">channel</replaceable> [ , <replaceable cla
 
   <para>
    It is up to the database designer to define the channel names that will
-   be used in a given database and what each one means.
+   be used in a given database and what each one means. Channel names can be
+   composed of multiple levels in the form <literal>a.b.c</literal> which
+   allows you to organise channel names in hierarchy.
    Commonly, the channel name is the same as the name of some table in
    the database, and the notify event essentially means, <quote>I changed this table,
    take a look at it to see what's new</quote>.  But no such association is enforced by
@@ -131,7 +133,10 @@ NOTIFY <replaceable class="parameter">channel</replaceable> [ , <replaceable cla
     <term><replaceable class="parameter">channel</replaceable></term>
     <listitem>
      <para>
-      Name of the notification channel to be signaled (any identifier).
+      Name of the notification channel to be signaled (any identifier). It is
+      a simple string composed of multiple levels in the form
+      <literal>a.b.c</literal> where <literal>a</literal>,
+      <literal>b</literal> and <literal>c</literal> are identifiers.
      </para>
     </listitem>
    </varlistentry>

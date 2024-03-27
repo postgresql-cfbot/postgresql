@@ -27,11 +27,118 @@ SELECT pg_notify(NULL,'sample message1');
 ERROR:  channel name cannot be empty
 SELECT pg_notify('notify_async_channel_name_too_long______________________________','sample_message1');
 ERROR:  channel name too long
---Should work. Valid NOTIFY/LISTEN/UNLISTEN commands
-NOTIFY notify_async2;
-LISTEN notify_async2;
-UNLISTEN notify_async2;
+-- Should work. Valid NOTIFY commands, multiple levels
+NOTIFY a;
+NOTIFY a.b;
+NOTIFY a.b.c;
+-- Should fail. Invalid NOTIFY commands, empty levels
+NOTIFY a.b.;
+ERROR:  syntax error at or near ";"
+LINE 1: NOTIFY a.b.;
+                   ^
+NOTIFY .b.c;
+ERROR:  syntax error at or near "."
+LINE 1: NOTIFY .b.c;
+               ^
+NOTIFY a..c;
+ERROR:  syntax error at or near ".."
+LINE 1: NOTIFY a..c;
+                ^
+-- Should work. Valid LISTEN/UNLISTEN commands, multiple levels and wildcards
+LISTEN a;
+LISTEN %;
+LISTEN a%;
+LISTEN >;
+LISTEN a>;
+LISTEN a.b;
+LISTEN %.b;
+LISTEN %.b%;
+LISTEN a.>;
+LISTEN a.b>;
+LISTEN a.b.c;
+LISTEN a.b%.a>;
+UNLISTEN a;
+UNLISTEN %;
+UNLISTEN a%;
+UNLISTEN >;
+UNLISTEN a>;
+UNLISTEN a.b;
+UNLISTEN %.b;
+UNLISTEN %.b%;
+UNLISTEN a.>;
+UNLISTEN a.b>;
+UNLISTEN a.b.c;
+UNLISTEN a.b%.a>;
 UNLISTEN *;
+-- Should fail. Invalid LISTEN/UNLISTEN commands, empty levels
+LISTEN a.b%.;
+ERROR:  syntax error at or near ";"
+LINE 1: LISTEN a.b%.;
+                    ^
+LISTEN .b%.c>;
+ERROR:  syntax error at or near "."
+LINE 1: LISTEN .b%.c>;
+               ^
+LISTEN a..%;
+ERROR:  syntax error at or near ".."
+LINE 1: LISTEN a..%;
+                ^
+UNLISTEN a.b%.;
+ERROR:  syntax error at or near ";"
+LINE 1: UNLISTEN a.b%.;
+                      ^
+UNLISTEN .b%.c>;
+ERROR:  syntax error at or near "."
+LINE 1: UNLISTEN .b%.c>;
+                 ^
+UNLISTEN a..%;
+ERROR:  syntax error at or near ".."
+LINE 1: UNLISTEN a..%;
+                  ^
+-- Should fail. Invalid LISTEN/UNLISTEN commands, the wildcard '%' can only be
+-- located at the end of a level
+LISTEN %a;
+ERROR:  syntax error at or near "a"
+LINE 1: LISTEN %a;
+                ^
+LISTEN %>;
+ERROR:  syntax error at or near "%>"
+LINE 1: LISTEN %>;
+               ^
+UNLISTEN %a;
+ERROR:  syntax error at or near "a"
+LINE 1: UNLISTEN %a;
+                  ^
+UNLISTEN %>;
+ERROR:  syntax error at or near "%>"
+LINE 1: UNLISTEN %>;
+                 ^
+-- Should fail. Invalid LISTEN/UNLISTEN commands, the wildcard '>' can only be
+-- located at the end of a channel name
+LISTEN >.;
+ERROR:  syntax error at or near "."
+LINE 1: LISTEN >.;
+                ^
+LISTEN >a;
+ERROR:  syntax error at or near "a"
+LINE 1: LISTEN >a;
+                ^
+LISTEN >%;
+ERROR:  syntax error at or near ">%"
+LINE 1: LISTEN >%;
+               ^
+UNLISTEN >.;
+ERROR:  syntax error at or near "."
+LINE 1: UNLISTEN >.;
+                  ^
+UNLISTEN >a;
+ERROR:  syntax error at or near "a"
+LINE 1: UNLISTEN >a;
+                  ^
+UNLISTEN >%;
+ERROR:  syntax error at or near ">%"
+LINE 1: UNLISTEN >%;
+                 ^
 -- Should return zero while there are no pending notifications.
 -- src/test/isolation/specs/async-notify.spec tests for actual usage.
 SELECT pg_notification_queue_usage();

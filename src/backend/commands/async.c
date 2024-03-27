@@ -320,6 +320,46 @@ static SlruCtlData NotifyCtlData;
 static List *listenChannels = NIL;	/* list of C strings */
 
 /*
+ * Channel names consist of multiple levels which are separated by the
+ * character '.'. For example, 'a.b.c'. Listen channels can contain the
+ * following wildcards to match against multiple notification channels:
+ * 1. The wildcard '%' matches everything until the end of the level. For
+ *    example, 'aa.b' matches against 'a%.b'.
+ * 2. The wildcard '>' matches everything until the end of the notification
+ *    channel. For example, 'a.b.c' matches against 'a.>'.
+ */
+#define MATCH_OP_LEVEL(c)		((c) == '.' || (c) == '\0')
+#define MATCH_OP_WILDRIGHT(c)	((c) == '>')
+#define MATCH_OP_WILDLEVEL(c)	((c) == '%')
+#define MATCH_OP_NOWILD(c)		((c) != '>' && (c) != '%')
+
+/*
+ * Returns the number of trailing 0-bits in char starting at the least
+ * significant bit position. If char is 0 the result is CHAR_BIT.
+ */
+#define MATCH_CTZC(c)			(pg_rightmost_one_pos32(1 << CHAR_BIT | (c)))
+
+/* Node in the binary trie of the listen channels */
+typedef struct TrieNode
+{
+	const char *channel;		/* Listen channel, C string */
+	unsigned int index;			/* The index of the least significant bit on
+								 * which the listen channel on the left
+								 * differs from the listen channel on the
+								 * right */
+	unsigned int length;		/* Number of bits in the listen channel
+								 * including the last character '\0' */
+	struct TrieNode *left;		/* The left child */
+	struct TrieNode *right;		/* The right child */
+}			TrieNode;
+
+/*
+ * The root of the binary trie which is used to match notification channels
+ * against the listen channels. It is allocated in TopMemoryContext.
+ */
+static TrieNode * matchingTrie = NULL;
+
+/*
  * State for pending LISTEN/UNLISTEN actions consists of an ordered list of
  * all actions requested in the current transaction.  As explained above,
  * we don't actually change listenChannels until we reach transaction commit.
@@ -457,6 +497,14 @@ static void AddEventToPendingNotifies(Notification *n);
 static uint32 notification_hash(const void *key, Size keysize);
 static int	notification_match(const void *key1, const void *key2, Size keysize);
 static void ClearPendingActionsAndNotifies(void);
+static bool IsMatchingOn(const char *channel);
+static void BuildMatchingTrie(void);
+static void DeleteMatchingTrie(void);
+static void FreeMatchingTrieRecursively(TrieNode * node);
+static bool IsTrieMatchingOnRecursively(const char *channel,
+										TrieNode * node,
+										unsigned int channelIndex,
+										unsigned int parentIndex);
 
 /*
  * Compute the difference between two queue page numbers.
@@ -822,6 +870,7 @@ pg_listening_channels(PG_FUNCTION_ARGS)
 static void
 Async_UnlistenOnExit(int code, Datum arg)
 {
+	DeleteMatchingTrie();
 	Exec_UnlistenAllCommit();
 	asyncQueueUnregister();
 }
@@ -1000,6 +1049,13 @@ AtCommit_Notify(void)
 			}
 		}
 	}
+
+	/*
+	 * Build the matching trie which is used to match notification channels
+	 * against the listen channels
+	 */
+	if (pendingActions != NULL)
+		BuildMatchingTrie();
 
 	/* If no longer listening to anything, get out of listener array */
 	if (amRegisteredListener && listenChannels == NIL)
@@ -1203,10 +1259,8 @@ Exec_UnlistenAllCommit(void)
 /*
  * Test whether we are actively listening on the given channel name.
  *
- * Note: this function is executed for every notification found in the queue.
- * Perhaps it is worth further optimization, eg convert the list to a sorted
- * array so we can binary-search it.  In practice the list is likely to be
- * fairly short, though.
+ * Note: this function is not used to match notification channels against
+ * the listen channels so there is not need to optimize it any further.
  */
 static bool
 IsListeningOn(const char *channel)
@@ -2071,7 +2125,7 @@ asyncQueueProcessPageEntries(volatile QueuePosition *current,
 				/* qe->data is the null-terminated channel name */
 				char	   *channel = qe->data;
 
-				if (IsListeningOn(channel))
+				if (IsMatchingOn(channel))
 				{
 					/* payload follows channel name */
 					char	   *payload = qe->data + strlen(channel) + 1;
@@ -2394,4 +2448,414 @@ bool
 check_notify_buffers(int *newval, void **extra, GucSource source)
 {
 	return check_slru_buffers("notify_buffers", newval);
+}
+
+/*
+ * Match the notification channel against the listen channels
+ */
+static bool
+IsMatchingOn(const char *channel)
+{
+	return IsTrieMatchingOnRecursively(channel, matchingTrie, 0, 0);
+}
+
+/*
+ * Build the binary trie of the listen channels which is used to match
+ * notification channels against the listen channels. The time complexity can
+ * be estimated as O(nm) where n is the number of the listen channels and m
+ * is the maximum length among the listen channels. As space complexity is
+ * dominated by the leaf nodes it can be estimated as O(n) where n is the
+ * number of the listen channels. The function builds the matching trie as a
+ * usual binary trie except fo the following two cases:
+ * 1. If a parent node satisfies the following condition:
+ *    channel[parent->index / CHAR_BIT] == '%'
+ *    then the descendants on the left don't satisfy the condition and the
+ *    descendants on the right satisfy the condition.
+ * 2. If a parent node satisfies the following condition:
+ *    channel[parent->index / CHAR_BIT] == '>'
+ *    then either the parent node doesn't have children or it has only the
+ *    left child which we solely preserve to free the memory during the next
+ *    build of the matching trie.
+ */
+static void
+BuildMatchingTrie()
+{
+	ListCell   *p;
+	MemoryContext oldcontext;
+
+	DeleteMatchingTrie();
+
+	/*
+	 * Allocate the matching trie in the TopMemoryContext as the listen
+	 * channels are allocated in there
+	 */
+	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+
+	foreach(p, listenChannels)
+	{
+		char	   *lchan = (char *) lfirst(p);
+		unsigned int i = 0;
+		unsigned int l = strlen(lchan) + 1;
+		unsigned int n = l * CHAR_BIT;
+		unsigned int k = 0;
+		unsigned int r;
+		char		x;
+		TrieNode  **prev;
+		TrieNode   *next;
+
+		if (matchingTrie == NULL)
+		{
+			matchingTrie = (TrieNode *) palloc(sizeof(TrieNode));
+			matchingTrie->channel = lchan;
+			matchingTrie->index = n;
+			matchingTrie->length = l;
+			matchingTrie->left = NULL;
+			matchingTrie->right = NULL;
+			continue;
+		}
+
+		prev = &matchingTrie;
+		next = matchingTrie;
+		while (i < n)
+		{
+			if (MATCH_OP_WILDRIGHT(next->channel[k]))
+			{
+				/* The listen channel is a subset of the trie channel */
+				break;
+			}
+			else if (MATCH_OP_WILDRIGHT(lchan[k]))
+			{
+				/*
+				 * The trie channel is a subset of the listen channel. So
+				 * replace the trie channel with the listen channel. We solely
+				 * preserve the next node to free the memory during the next
+				 * build of the matching trie.
+				 */
+				TrieNode   *parent;
+
+				parent = palloc(sizeof(TrieNode));
+				parent->channel = lchan;
+				parent->index = n;
+				parent->length = l;
+				parent->left = next;
+				parent->right = NULL;
+
+				*prev = parent;
+
+				break;
+			}
+			else if (MATCH_OP_WILDLEVEL(next->channel[k]) &&
+					 !MATCH_OP_WILDLEVEL(lchan[k]))
+			{
+				if (i == next->index)
+				{
+					prev = &next->left;
+					next = next->left;
+				}
+				else
+				{
+					/*
+					 * The trie channel contains the wildcard '%' and the
+					 * listen channel doesn't. So create a parent node with
+					 * the listen channel on the left and the trie channel on
+					 * the right.
+					 */
+					TrieNode   *child;
+					TrieNode   *parent;
+
+					child = palloc(sizeof(TrieNode));
+					child->channel = lchan;
+					child->index = n;
+					child->length = l;
+					child->left = NULL;
+					child->right = NULL;
+
+					parent = palloc(sizeof(TrieNode));
+					parent->channel = next->channel;
+					parent->index = i;
+					parent->length = next->length;
+					parent->left = child;
+					parent->right = next;
+
+					*prev = parent;
+
+					break;
+				}
+			}
+			else if (!MATCH_OP_WILDLEVEL(next->channel[k]) &&
+					 MATCH_OP_WILDLEVEL(lchan[k]))
+			{
+				/*
+				 * The listen channel contains the wildcard '%' and the trie
+				 * channel doesn't. So create a parent node with the trie
+				 * channel on the left and the listen channel on the right.
+				 */
+				TrieNode   *child;
+				TrieNode   *parent;
+
+				child = palloc(sizeof(TrieNode));
+				child->channel = lchan;
+				child->index = n;
+				child->length = l;
+				child->left = NULL;
+				child->right = NULL;
+
+				parent = palloc(sizeof(TrieNode));
+				parent->channel = lchan;
+				parent->index = i;
+				parent->length = l;
+				parent->left = next;
+				parent->right = child;
+
+				*prev = parent;
+
+				break;
+			}
+			else if (MATCH_OP_WILDLEVEL(next->channel[k]) &&
+					 MATCH_OP_WILDLEVEL(lchan[k]))
+			{
+				if (i == next->index)
+				{
+					prev = &next->right;
+					next = next->right;
+				}
+				i += CHAR_BIT;
+				k++;
+			}
+			else
+			{
+				/*
+				 * Find the index of the least significant bit on which the
+				 * listen channel differs from the trie channel
+				 */
+				x = lchan[k] ^ next->channel[k];
+				i = k * CHAR_BIT + MATCH_CTZC(x);
+				if (i < next->index)
+				{
+					if (x != 0)
+					{
+						/*
+						 * Create a parent node with the index of the least
+						 * significant bit on which the listen channel differs
+						 * from the trie channel. If the least significant bit
+						 * of the listen channel equals 0 then locate the
+						 * listen channel on the left and the trie channel on
+						 * the right. In the other case locate the channels in
+						 * the reverse order.
+						 */
+						TrieNode   *child;
+						TrieNode   *parent;
+
+						child = palloc(sizeof(TrieNode));
+						child->channel = lchan;
+						child->index = n;
+						child->length = l;
+						child->left = NULL;
+						child->right = NULL;
+
+						parent = palloc(sizeof(TrieNode));
+						parent->channel = lchan;
+						parent->index = i;
+						parent->length = l;
+
+						k = i / CHAR_BIT;
+						r = i % CHAR_BIT;
+						if (((lchan[k] >> r) & 1) == 0)
+						{
+							parent->left = child;
+							parent->right = next;
+						}
+						else
+						{
+							parent->left = next;
+							parent->right = child;
+						}
+
+						*prev = parent;
+
+						break;
+					}
+
+					k++;
+				}
+				else
+				{
+					i = next->index;
+					k = i / CHAR_BIT;
+					if (i < n &&
+						MATCH_OP_NOWILD(next->channel[k]) &&
+						MATCH_OP_NOWILD(lchan[k]))
+					{
+						/*
+						 * Find the bit of the listen channel on which the
+						 * left child differs from the right child
+						 */
+						r = i % CHAR_BIT;
+						if (((lchan[k] >> r) & 1) == 0)
+						{
+							prev = &next->left;
+							next = next->left;
+						}
+						else
+						{
+							prev = &next->right;
+							next = next->right;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	MemoryContextSwitchTo(oldcontext);
+}
+
+/*
+ * Delete the matching trie
+ */
+static void
+DeleteMatchingTrie()
+{
+	if (matchingTrie == NULL)
+		return;
+
+	FreeMatchingTrieRecursively(matchingTrie);
+	matchingTrie = NULL;
+}
+
+/*
+ * Free the memory allocated to the matching trie
+ */
+static void
+FreeMatchingTrieRecursively(TrieNode * node)
+{
+	/* Since this function recurses, it could be driven to stack overflow */
+	check_stack_depth();
+
+	if (!node)
+		return;
+	if (node->left)
+		FreeMatchingTrieRecursively(node->left);
+	if (node->right)
+		FreeMatchingTrieRecursively(node->right);
+	pfree(node);
+}
+
+/*
+ * Match the notification channel against the binary trie of the listen
+ * channels. If during the search in the mathching trie the function doesn't
+ * encounter the wildcard '%' then the time complexity can be estimated as
+ * O(n) where n is the length of the notification channel. The function
+ * matches the notification channel using a usual search in the binary trie
+ * except for the following two cases:
+ * 1. If the function encounters the wildcard '%' then the function matches
+ *    everything until the end of the level.
+ * 2. If the function encounters the wildcard '>' then a match is found.
+ */
+static bool
+IsTrieMatchingOnRecursively(const char *channel,
+							TrieNode * node,
+							unsigned int channelIndex,
+							unsigned int parentIndex)
+{
+	unsigned int i = channelIndex;
+	unsigned int j = parentIndex;
+	unsigned int l = strlen(channel) + 1;
+	unsigned int n = l * CHAR_BIT;
+	unsigned int k = 0;
+	unsigned int t = 0;
+	unsigned int r;
+	unsigned int d;
+	char		x;
+	TrieNode   *next = node;
+
+	/* Since this function recurses, it could be driven to stack overflow */
+	check_stack_depth();
+
+	if (!node)
+		return false;
+
+	while (i < n)
+	{
+		if (MATCH_OP_WILDRIGHT(next->channel[t]))
+		{
+			/*
+			 * The trie channel contains the wildcard '>' which matches
+			 * everything until the end of the notification channel. So a
+			 * match is found, break the loop and return true.
+			 */
+			i = n;
+		}
+		else if (MATCH_OP_WILDLEVEL(next->channel[t]))
+		{
+			if (j == next->index)
+			{
+				/*
+				 * At first the function goes to the right as if there is a
+				 * match then it is higher likely located on the right
+				 */
+				if (IsTrieMatchingOnRecursively(channel, next->right, i, j))
+					i = n;
+				else
+					next = next->left;
+			}
+			else
+			{
+				/*
+				 * The trie channel contains the wildcard '%' which matches
+				 * everything until the end of the level
+				 */
+				while (!MATCH_OP_LEVEL(channel[k]))
+				{
+					i += CHAR_BIT;
+					k++;
+				}
+				j += CHAR_BIT;
+				t++;
+			}
+		}
+		else
+		{
+			/*
+			 * Find the index of the least significant bit on which the
+			 * notification channel differs from the trie channel
+			 */
+			d = i - j;
+			x = channel[k] ^ next->channel[t];
+			j = t * CHAR_BIT + MATCH_CTZC(x);
+			if (j < next->index)
+			{
+				if (x != 0)
+				{
+					/* No match is found, break the loop and return false */
+					break;
+				}
+
+				i = j + d;
+				k++;
+				t++;
+			}
+			else
+			{
+				j = next->index;
+				i = j + d;
+				k = i / CHAR_BIT;
+				t = j / CHAR_BIT;
+				if (i < n && MATCH_OP_NOWILD(next->channel[t]))
+				{
+					/*
+					 * Find the bit of the notification channel on which the
+					 * left child differs from the right child
+					 */
+					r = i % CHAR_BIT;
+					if (((channel[k] >> r) & 1) == 0)
+						next = next->left;
+					else
+						next = next->right;
+				}
+			}
+		}
+	}
+
+	return i == n;
 }

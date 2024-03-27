@@ -1,4 +1,4 @@
-Parsed test spec with 3 sessions
+Parsed test spec with 4 sessions
 
 starting permutation: listenc notify1 notify2 notify3 notifyf
 step listenc: LISTEN c1; LISTEN c2;
@@ -125,3 +125,133 @@ nonzero
 t      
 (1 row)
 
+
+starting permutation: mnotify
+step mnotify: NOTIFY a; NOTIFY bc; NOTIFY ab; NOTIFY cd.efg.ijk; NOTIFY ab.ef; NOTIFY abcd.eg; NOTIFY abcd.ehfg; NOTIFY abc.efg.ijk; NOTIFY ab.ef.ijk; NOTIFY ab.ee.l;
+
+starting permutation: mlisten1 mnotify
+step mlisten1: LISTEN a;
+step mnotify: NOTIFY a; NOTIFY bc; NOTIFY ab; NOTIFY cd.efg.ijk; NOTIFY ab.ef; NOTIFY abcd.eg; NOTIFY abcd.ehfg; NOTIFY abc.efg.ijk; NOTIFY ab.ef.ijk; NOTIFY ab.ee.l;
+matching: NOTIFY "a" with payload "" from matching
+
+starting permutation: mlisten2 mnotify
+step mlisten2: LISTEN %;
+step mnotify: NOTIFY a; NOTIFY bc; NOTIFY ab; NOTIFY cd.efg.ijk; NOTIFY ab.ef; NOTIFY abcd.eg; NOTIFY abcd.ehfg; NOTIFY abc.efg.ijk; NOTIFY ab.ef.ijk; NOTIFY ab.ee.l;
+matching: NOTIFY "a" with payload "" from matching
+matching: NOTIFY "bc" with payload "" from matching
+matching: NOTIFY "ab" with payload "" from matching
+
+starting permutation: mlisten3 mnotify
+step mlisten3: LISTEN ab%;
+step mnotify: NOTIFY a; NOTIFY bc; NOTIFY ab; NOTIFY cd.efg.ijk; NOTIFY ab.ef; NOTIFY abcd.eg; NOTIFY abcd.ehfg; NOTIFY abc.efg.ijk; NOTIFY ab.ef.ijk; NOTIFY ab.ee.l;
+matching: NOTIFY "ab" with payload "" from matching
+
+starting permutation: mlisten4 mnotify
+step mlisten4: LISTEN >;
+step mnotify: NOTIFY a; NOTIFY bc; NOTIFY ab; NOTIFY cd.efg.ijk; NOTIFY ab.ef; NOTIFY abcd.eg; NOTIFY abcd.ehfg; NOTIFY abc.efg.ijk; NOTIFY ab.ef.ijk; NOTIFY ab.ee.l;
+matching: NOTIFY "a" with payload "" from matching
+matching: NOTIFY "bc" with payload "" from matching
+matching: NOTIFY "ab" with payload "" from matching
+matching: NOTIFY "cd.efg.ijk" with payload "" from matching
+matching: NOTIFY "ab.ef" with payload "" from matching
+matching: NOTIFY "abcd.eg" with payload "" from matching
+matching: NOTIFY "abcd.ehfg" with payload "" from matching
+matching: NOTIFY "abc.efg.ijk" with payload "" from matching
+matching: NOTIFY "ab.ef.ijk" with payload "" from matching
+matching: NOTIFY "ab.ee.l" with payload "" from matching
+
+starting permutation: mlisten5 mnotify
+step mlisten5: LISTEN cd>;
+step mnotify: NOTIFY a; NOTIFY bc; NOTIFY ab; NOTIFY cd.efg.ijk; NOTIFY ab.ef; NOTIFY abcd.eg; NOTIFY abcd.ehfg; NOTIFY abc.efg.ijk; NOTIFY ab.ef.ijk; NOTIFY ab.ee.l;
+matching: NOTIFY "cd.efg.ijk" with payload "" from matching
+
+starting permutation: mlisten6 mnotify
+step mlisten6: LISTEN ab.ef;
+step mnotify: NOTIFY a; NOTIFY bc; NOTIFY ab; NOTIFY cd.efg.ijk; NOTIFY ab.ef; NOTIFY abcd.eg; NOTIFY abcd.ehfg; NOTIFY abc.efg.ijk; NOTIFY ab.ef.ijk; NOTIFY ab.ee.l;
+matching: NOTIFY "ab.ef" with payload "" from matching
+
+starting permutation: mlisten7 mnotify
+step mlisten7: LISTEN ab%.eg;
+step mnotify: NOTIFY a; NOTIFY bc; NOTIFY ab; NOTIFY cd.efg.ijk; NOTIFY ab.ef; NOTIFY abcd.eg; NOTIFY abcd.ehfg; NOTIFY abc.efg.ijk; NOTIFY ab.ef.ijk; NOTIFY ab.ee.l;
+matching: NOTIFY "abcd.eg" with payload "" from matching
+
+starting permutation: mlisten8 mnotify
+step mlisten8: LISTEN %.eh>;
+step mnotify: NOTIFY a; NOTIFY bc; NOTIFY ab; NOTIFY cd.efg.ijk; NOTIFY ab.ef; NOTIFY abcd.eg; NOTIFY abcd.ehfg; NOTIFY abc.efg.ijk; NOTIFY ab.ef.ijk; NOTIFY ab.ee.l;
+matching: NOTIFY "abcd.ehfg" with payload "" from matching
+
+starting permutation: mlisten9 mnotify
+step mlisten9: LISTEN ab.ef%.>;
+step mnotify: NOTIFY a; NOTIFY bc; NOTIFY ab; NOTIFY cd.efg.ijk; NOTIFY ab.ef; NOTIFY abcd.eg; NOTIFY abcd.ehfg; NOTIFY abc.efg.ijk; NOTIFY ab.ef.ijk; NOTIFY ab.ee.l;
+matching: NOTIFY "ab.ef.ijk" with payload "" from matching
+
+starting permutation: mlisten10 mnotify
+step mlisten10: LISTEN ab.ee.l;
+step mnotify: NOTIFY a; NOTIFY bc; NOTIFY ab; NOTIFY cd.efg.ijk; NOTIFY ab.ef; NOTIFY abcd.eg; NOTIFY abcd.ehfg; NOTIFY abc.efg.ijk; NOTIFY ab.ef.ijk; NOTIFY ab.ee.l;
+matching: NOTIFY "ab.ee.l" with payload "" from matching
+
+starting permutation: mlisten1 mlisten8 mnotify
+step mlisten1: LISTEN a;
+step mlisten8: LISTEN %.eh>;
+step mnotify: NOTIFY a; NOTIFY bc; NOTIFY ab; NOTIFY cd.efg.ijk; NOTIFY ab.ef; NOTIFY abcd.eg; NOTIFY abcd.ehfg; NOTIFY abc.efg.ijk; NOTIFY ab.ef.ijk; NOTIFY ab.ee.l;
+matching: NOTIFY "a" with payload "" from matching
+matching: NOTIFY "abcd.ehfg" with payload "" from matching
+
+starting permutation: mlisten6 mlisten7 mnotify
+step mlisten6: LISTEN ab.ef;
+step mlisten7: LISTEN ab%.eg;
+step mnotify: NOTIFY a; NOTIFY bc; NOTIFY ab; NOTIFY cd.efg.ijk; NOTIFY ab.ef; NOTIFY abcd.eg; NOTIFY abcd.ehfg; NOTIFY abc.efg.ijk; NOTIFY ab.ef.ijk; NOTIFY ab.ee.l;
+matching: NOTIFY "ab.ef" with payload "" from matching
+matching: NOTIFY "abcd.eg" with payload "" from matching
+
+starting permutation: mlisten6 mlisten7 mlisten8 mnotify
+step mlisten6: LISTEN ab.ef;
+step mlisten7: LISTEN ab%.eg;
+step mlisten8: LISTEN %.eh>;
+step mnotify: NOTIFY a; NOTIFY bc; NOTIFY ab; NOTIFY cd.efg.ijk; NOTIFY ab.ef; NOTIFY abcd.eg; NOTIFY abcd.ehfg; NOTIFY abc.efg.ijk; NOTIFY ab.ef.ijk; NOTIFY ab.ee.l;
+matching: NOTIFY "ab.ef" with payload "" from matching
+matching: NOTIFY "abcd.eg" with payload "" from matching
+matching: NOTIFY "abcd.ehfg" with payload "" from matching
+
+starting permutation: mlisten1 mlisten6 mlisten7 mnotify
+step mlisten1: LISTEN a;
+step mlisten6: LISTEN ab.ef;
+step mlisten7: LISTEN ab%.eg;
+step mnotify: NOTIFY a; NOTIFY bc; NOTIFY ab; NOTIFY cd.efg.ijk; NOTIFY ab.ef; NOTIFY abcd.eg; NOTIFY abcd.ehfg; NOTIFY abc.efg.ijk; NOTIFY ab.ef.ijk; NOTIFY ab.ee.l;
+matching: NOTIFY "a" with payload "" from matching
+matching: NOTIFY "ab.ef" with payload "" from matching
+matching: NOTIFY "abcd.eg" with payload "" from matching
+
+starting permutation: mlisten1 mlisten3 mlisten5 mlisten6 mlisten8 mlisten9 mnotify
+step mlisten1: LISTEN a;
+step mlisten3: LISTEN ab%;
+step mlisten5: LISTEN cd>;
+step mlisten6: LISTEN ab.ef;
+step mlisten8: LISTEN %.eh>;
+step mlisten9: LISTEN ab.ef%.>;
+step mnotify: NOTIFY a; NOTIFY bc; NOTIFY ab; NOTIFY cd.efg.ijk; NOTIFY ab.ef; NOTIFY abcd.eg; NOTIFY abcd.ehfg; NOTIFY abc.efg.ijk; NOTIFY ab.ef.ijk; NOTIFY ab.ee.l;
+matching: NOTIFY "a" with payload "" from matching
+matching: NOTIFY "ab" with payload "" from matching
+matching: NOTIFY "cd.efg.ijk" with payload "" from matching
+matching: NOTIFY "ab.ef" with payload "" from matching
+matching: NOTIFY "abcd.ehfg" with payload "" from matching
+matching: NOTIFY "ab.ef.ijk" with payload "" from matching
+
+starting permutation: mlisten2 mlisten4 mlisten7 mlisten8 mlisten9 mlisten10 mnotify
+step mlisten2: LISTEN %;
+step mlisten4: LISTEN >;
+step mlisten7: LISTEN ab%.eg;
+step mlisten8: LISTEN %.eh>;
+step mlisten9: LISTEN ab.ef%.>;
+step mlisten10: LISTEN ab.ee.l;
+step mnotify: NOTIFY a; NOTIFY bc; NOTIFY ab; NOTIFY cd.efg.ijk; NOTIFY ab.ef; NOTIFY abcd.eg; NOTIFY abcd.ehfg; NOTIFY abc.efg.ijk; NOTIFY ab.ef.ijk; NOTIFY ab.ee.l;
+matching: NOTIFY "a" with payload "" from matching
+matching: NOTIFY "bc" with payload "" from matching
+matching: NOTIFY "ab" with payload "" from matching
+matching: NOTIFY "cd.efg.ijk" with payload "" from matching
+matching: NOTIFY "ab.ef" with payload "" from matching
+matching: NOTIFY "abcd.eg" with payload "" from matching
+matching: NOTIFY "abcd.ehfg" with payload "" from matching
+matching: NOTIFY "abc.efg.ijk" with payload "" from matching
+matching: NOTIFY "ab.ef.ijk" with payload "" from matching
+matching: NOTIFY "ab.ee.l" with payload "" from matching

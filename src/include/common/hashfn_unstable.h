@@ -213,14 +213,18 @@ fasthash_accum_cstring_unaligned(fasthash_state *hs, const char *str)
  *
  * With an aligned pointer, we consume the string a word at a time.
  * Loading the word containing the NUL terminator cannot segfault since
- * allocation boundaries are suitably aligned.
+ * allocation boundaries are suitably aligned. To keep from setting
+ * off alarms with address sanitizers, exclude this function from
+ * such testing.
  */
+pg_attribute_no_sanitize_address()
 static inline size_t
 fasthash_accum_cstring_aligned(fasthash_state *hs, const char *str)
 {
 	const char *const start = str;
-	size_t		remainder;
+	uint64		chunk;
 	uint64		zero_byte_low;
+	uint64		mask;
 
 	Assert(PointerIsAligned(start, uint64));
 
@@ -239,7 +243,7 @@ fasthash_accum_cstring_aligned(fasthash_state *hs, const char *str)
 	 */
 	for (;;)
 	{
-		uint64		chunk = *(uint64 *) str;
+		chunk = *(uint64 *) str;
 
 #ifdef WORDS_BIGENDIAN
 		zero_byte_low = haszero64(pg_bswap64(chunk));
@@ -254,14 +258,37 @@ fasthash_accum_cstring_aligned(fasthash_state *hs, const char *str)
 		str += FH_SIZEOF_ACCUM;
 	}
 
-	/*
-	 * The byte corresponding to the NUL will be 0x80, so the rightmost bit
-	 * position will be in the range 7, 15, ..., 63. Turn this into byte
-	 * position by dividing by 8.
-	 */
-	remainder = pg_rightmost_one_pos64(zero_byte_low) / BITS_PER_BYTE;
-	fasthash_accum(hs, str, remainder);
-	str += remainder;
+	if (zero_byte_low & 0xFF)
+	{
+		/*
+		 * The next byte in the input is the NUL terminator, so we have
+		 * nothing to do.
+		 */
+	}
+	else
+	{
+		/*
+		 * Create a mask for the remaining bytes so we can combine them into
+		 * the hash. The mask also covers the NUL terminator, but that's
+		 * harmless. The mask could contain 0x80 in bytes corresponding to the
+		 * input past the terminator, but only where the input byte is zero or
+		 * one, so also harmless.
+		 */
+		mask = zero_byte_low | (zero_byte_low - 1);
+#ifdef WORDS_BIGENDIAN
+		/* need to mask the upper bytes */
+		mask = pg_bswap64(mask);
+#endif
+		hs->accum = chunk & mask;
+		fasthash_combine(hs);
+
+		/*
+		 * The byte corresponding to the NUL will be 0x80, so the rightmost
+		 * bit position will be in the range 15, 23, ..., 63. Turn this into
+		 * byte position by dividing by 8.
+		 */
+		str += pg_rightmost_one_pos64(zero_byte_low) / BITS_PER_BYTE;
+	}
 
 	return str - start;
 }
@@ -366,5 +393,8 @@ fasthash32(const char *k, size_t len, uint64 seed)
 {
 	return fasthash_reduce32(fasthash64(k, len, seed));
 }
+
+
+extern uint32 hash_string(const char *s);
 
 #endif							/* HASHFN_UNSTABLE_H */

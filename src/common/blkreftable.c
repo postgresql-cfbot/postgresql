@@ -37,7 +37,7 @@
 #endif
 
 #include "common/blkreftable.h"
-#include "common/hashfn.h"
+#include "common/hashfn_unstable.h"
 #include "port/pg_crc32c.h"
 
 /*
@@ -124,7 +124,7 @@ struct BlockRefTableEntry
 #define SH_KEY_TYPE BlockRefTableKey
 #define SH_KEY key
 #define SH_HASH_KEY(tb, key) \
-	hash_bytes((const unsigned char *) &key, sizeof(BlockRefTableKey))
+	fasthash32((const char *) &key, sizeof(BlockRefTableKey), 0)
 #define SH_EQUAL(tb, a, b) (memcmp(&a, &b, sizeof(BlockRefTableKey)) == 0)
 #define SH_SCOPE static inline
 #ifdef FRONTEND

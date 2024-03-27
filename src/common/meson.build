@@ -13,6 +13,7 @@ common_sources = files(
   'file_perm.c',
   'file_utils.c',
   'hashfn.c',
+  'hashfn_unstable.c',
   'ip.c',
   'jsonapi.c',
   'keywords.c',

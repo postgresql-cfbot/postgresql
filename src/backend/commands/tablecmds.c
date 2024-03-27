@@ -6986,7 +6986,7 @@ check_of_type(HeapTuple typetuple)
 	if (!typeOk)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("type %s is not a composite type",
+				 errmsg("type %s is not a composite type created with CREATE TYPE",
 						format_type_be(typ->oid))));
 }
 

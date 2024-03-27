@@ -115,7 +115,7 @@ REGRESS_OPTS = --dlpath=. --max-concurrent-tests=20 \
 	$(EXTRA_REGRESS_OPTS)
 
 check: all
-	$(pg_regress_check) $(REGRESS_OPTS) --schedule=$(srcdir)/parallel_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
+	$(pg_regress_check) $(REGRESS_OPTS) --globals-check --schedule=$(srcdir)/parallel_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
 
 check-tests: all | temp-install
 	$(pg_regress_check) $(REGRESS_OPTS) $(MAXCONNOPT) $(TESTS) $(EXTRA_TESTS)

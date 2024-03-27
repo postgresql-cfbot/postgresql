@@ -22,6 +22,8 @@ OBJS = \
 	$(WIN32RES) \
 	pg_checksums.o
 
+pg_checksums.o: CFLAGS += ${CFLAGS_UNROLL_LOOPS} ${CFLAGS_VECTORIZE}
+
 all: pg_checksums
 
 pg_checksums: $(OBJS) | submake-libpgport

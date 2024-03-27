@@ -777,27 +777,27 @@ OPTIONS (ADD password_required 'false');
 
   <variablelist>
    <varlistentry>
-    <term><function>postgres_fdw_get_connections(OUT server_name text, OUT valid boolean) returns setof record</function></term>
+    <term><function>postgres_fdw_get_connections(OUT server_name text, OUT user_name text, OUT valid boolean) returns setof record</function></term>
     <listitem>
      <para>
-      This function returns the foreign server names of all the open
-      connections that <filename>postgres_fdw</filename> established from
-      the local session to the foreign servers. It also returns whether
-      each connection is valid or not. <literal>false</literal> is returned
-      if the foreign server connection is used in the current local
-      transaction but its foreign server or user mapping is changed or
-      dropped (Note that server name of an invalid connection will be
-      <literal>NULL</literal> if the server is dropped),
-      and then such invalid connection will be closed at
-      the end of that transaction. <literal>true</literal> is returned
-      otherwise. If there are no open connections, no record is returned.
+      This function returns the foreign server names and user names of all the
+      open connections that <filename>postgres_fdw</filename> established from
+      the local session to the foreign servers. It also returns whether each
+      connection is valid or not. <literal>false</literal> is returned if the
+      foreign server connection is used in the current local transaction but
+      its foreign server or user mapping is changed or dropped (Note that
+      server name and user name of an invalid connection will be
+      <literal>NULL</literal> if the server is dropped), and then such invalid
+      connection will be closed at the end of that transaction.
+      <literal>true</literal> is returned otherwise. If there are no open
+      connections, no record is returned.
       Example usage of the function:
 <screen>
 postgres=# SELECT * FROM postgres_fdw_get_connections() ORDER BY 1;
- server_name | valid
--------------+-------
- loopback1   | t
- loopback2   | f
+ server_name | user_name | validvalid
+-------------+------------------------
+ loopback1   | postgres  | t
+ loopback2   |           | f
 </screen>
      </para>
     </listitem>
@@ -847,6 +847,83 @@ postgres=# SELECT postgres_fdw_disconnect_all();
      </para>
     </listitem>
    </varlistentry>
+
+   <varlistentry>
+    <term><function>postgres_fdw_verify_connection(server_name text <optional>, user_name text </optional>) returns boolean</function></term>
+    <listitem>
+     <para>
+      This function checks the status of remote connections established by
+      <filename>postgres_fdw</filename> from the local session to the foreign
+      server with the given name. If the user name is given, This function
+      checks only remote connections which is associated with the given user by
+      user mapping. Otherwise all the connections with given server name are
+      checked. This check is performed by polling the socket and allows
+      long-running transactions to be aborted sooner if the kernel reports that
+      the connection is closed. This function is currently available only on
+      systems that support the non-standard <symbol>POLLRDHUP</symbol>
+      extension to the <symbol>poll</symbol> system call, including Linux. This
+      returns <literal>true</literal> if existing connection is not closed by
+      the remote peer. <literal>false</literal> is returned if either of
+      checked connections has been closed. <literal>NULL</literal> is returned
+      if a valid connection to the specified foreign server is not established
+      or this function is not available on this platform. If no foreign server
+      with the given name is found, an error is reported.
+      Example usage of the function:
+<screen>
+postgres=# SELECT postgres_fdw_verify_connection('loopback1');
+ postgres_fdw_verify_connection
+--------------------------------
+ t
+</screen>
+     </para>
+    </listitem>
+   </varlistentry>
+   <varlistentry>
+    <term><function>postgres_fdw_verify_connection_all() returns boolean</function></term>
+    <listitem>
+     <para>
+      This function checks the status of all the remote connections established
+      by <filename>postgres_fdw</filename> from the local session to the
+      foreign servers. This check is performed by polling the socket and allows
+      long-running transactions to be aborted sooner if the kernel reports
+      that the connection is closed. This function is currently available only
+      on systems that support the non-standard <symbol>POLLRDHUP</symbol>
+      extension to the <symbol>poll</symbol> system call, including Linux. This
+      returns <literal>true</literal> if all connections are not closed by the
+      remote peer. <literal>false</literal> is returned if the local session
+      seems to be disconnected from at least one remote server. <literal>NULL</literal>
+      is returned if no valid connections are established or this function is
+      not available on this platform. Example usage of the function:
+<screen>
+postgres=# SELECT postgres_fdw_verify_connection_all();
+ postgres_fdw_verify_connection_all
+------------------------------------
+ t
+</screen>
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><function>postgres_fdw_can_verify_connection_states() returns boolean</function></term>
+    <listitem>
+     <para>
+      This function checks whether <function>postgres_fdw_verify_connection</function>
+      and <function>postgres_fdw_verify_connection_all</function> work
+      well or not. This returns <literal>true</literal> if it can be used,
+      otherwise returns <literal>false</literal>. Example usage of the
+      function:
+
+<screen>
+postgres=# SELECT postgres_fdw_can_verify_connection_states();
+ postgres_fdw_can_verify_connection_states
+-------------------------------------------
+ t
+</screen>
+     </para>
+    </listitem>
+   </varlistentry>
+
    </variablelist>
 
 </sect2>

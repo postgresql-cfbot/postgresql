@@ -1850,6 +1850,12 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
   </para>
 
   <para>
+   When specifying a parameter of type <type>boolean</type>, the
+   <replaceable class="parameter">value</replaceable> part can be omitted,
+   which is equivalent to specifying <literal>TRUE</literal>.
+  </para>
+
+  <para>
    The commands accepted in replication mode are:
 
    <variablelist>

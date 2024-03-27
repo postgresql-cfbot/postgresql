@@ -338,6 +338,17 @@ pgstat_bestart(void)
 	else
 		MemSet(&lbeentry.st_clientaddr, 0, sizeof(lbeentry.st_clientaddr));
 
+	lbeentry.st_auth_method = MyClientConnectionInfo.auth_method;
+	if (MyClientConnectionInfo.authn_id)
+	{
+		int			len = pg_mbcliplen(MyClientConnectionInfo.authn_id, strlen(MyClientConnectionInfo.authn_id), NAMEDATALEN - 1);
+
+		memcpy(lbeentry.st_auth_identity, MyClientConnectionInfo.authn_id, len);
+		lbeentry.st_auth_identity[len] = '\0';
+	}
+	else
+		lbeentry.st_auth_identity[0] = '\0';
+
 #ifdef USE_SSL
 	if (MyProcPort && MyProcPort->ssl_in_use)
 	{

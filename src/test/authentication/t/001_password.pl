@@ -176,6 +176,22 @@ is($res, 't',
 	"users with trust authentication use SYSTEM_USER = NULL in parallel workers"
 );
 
+# pg_stat_activity should contain trust and empty string for trust auth
+$res = $node->safe_psql(
+	'postgres',
+	"SELECT auth_method, auth_identity='' FROM pg_stat_activity WHERE pid=pg_backend_pid()",
+	connstr => "user=scram_role");
+is($res, 'trust|t', 'Users with trust authentication should show correctly in pg_stat_activity');
+
+# pg_stat_activity should contain NULL for auth of background processes
+# (test is a bit out of place here, but this is where the other pg_stat_activity.auth* tests are)
+$res = $node->safe_psql(
+	'postgres',
+	"SELECT auth_method IS NULL, auth_identity IS NULL FROM pg_stat_activity WHERE backend_type='checkpointer'",
+);
+is($res, 't|t', 'Background processes should show NULL for auth in pg_stat_activity');
+
+
 # Explicitly specifying an empty require_auth (the default) should always
 # succeed.
 $node->connect_ok("user=scram_role require_auth=",
@@ -482,6 +498,13 @@ $res = $node->safe_psql(
 is($res, 't',
 	"users with md5 authentication use SYSTEM_USER = md5:role in parallel workers"
 );
+
+# Users with md5 auth should show both auth method and identity in pg_stat_activity
+$res = $node->safe_psql(
+	'postgres',
+	"SELECT auth_method, auth_identity FROM pg_stat_activity WHERE pid=pg_backend_pid()",
+	connstr => "user=scram_role");
+is($res, 'md5|scram_role', 'Users with md5 authentication should show correctly in pg_stat_activity');
 
 # Tests for channel binding without SSL.
 # Using the password authentication method; channel binding can't work

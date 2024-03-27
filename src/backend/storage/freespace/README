@@ -188,6 +188,12 @@ goes through fsm_set_avail(), so that the upper nodes on those pages are
 immediately updated.  Periodically, VACUUM calls FreeSpaceMapVacuum[Range]
 to propagate the new free-space info into the upper pages of the FSM tree.
 
+Since we can end up in situations where the FSM is WAL-logged but the empty
+pages it points to are not, we can end up in the situation where the FSM is
+pointing to a block that does not exist on disk after WAL replay. We detect
+this case by comparing against the actual relation size, and mark the block
+as full in that case.
+
 TODO
 ----
 

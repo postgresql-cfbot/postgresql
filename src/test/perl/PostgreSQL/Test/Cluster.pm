@@ -3276,6 +3276,40 @@ sub create_logical_slot_on_standby
 
 =pod
 
+=item $node->get_slot_inactive_since_value(self, slot_name, reference_time)
+
+Get inactive_since column value for a given replication slot validating it
+against optional reference time.
+
+=cut
+
+sub get_slot_inactive_since_value
+{
+	my ($self, $slot_name, $reference_time) = @_;
+	my $name = $self->name;
+
+	my $inactive_since = $self->safe_psql('postgres',
+		qq(SELECT inactive_since FROM pg_replication_slots
+			WHERE slot_name = '$slot_name' AND inactive_since IS NOT NULL;)
+		);
+
+	# Check that the captured time is sane
+	if (defined $reference_time)
+	{
+		is($self->safe_psql('postgres',
+			qq[SELECT '$inactive_since'::timestamptz > to_timestamp(0) AND
+					'$inactive_since'::timestamptz >= '$reference_time'::timestamptz;]
+			),
+			't',
+			"last inactive time for slot $slot_name is valid on node $name")
+			or die "could not validate captured inactive_since for slot $slot_name";
+	}
+
+	return $inactive_since;
+}
+
+=pod
+
 =item $node->advance_wal(num)
 
 Advance WAL of node by given number of segments.

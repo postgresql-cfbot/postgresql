@@ -2530,6 +2530,15 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
       <para>
         The time since the slot has become inactive.
         <literal>NULL</literal> if the slot is currently being used.
+        Note that the slots on the standbys that are being synced from a
+        primary server (whose <structfield>synced</structfield> field is
+        <literal>true</literal>), will get the
+        <structfield>inactive_since</structfield> value from the
+        corresponding remote slot on the primary. Also, after the standby
+        starts up, the <structfield>inactive_since</structfield> value
+        (for such synced slots) will remain <literal>NULL</literal> until
+        the next synchronization (see
+        <xref linkend="logicaldecoding-replication-slots-synchronization"/>).
       </para></entry>
      </row>
 
@@ -2571,6 +2580,13 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
           <literal>wal_level_insufficient</literal> means that the
           primary doesn't have a <xref linkend="guc-wal-level"/> sufficient to
           perform logical decoding.  It is set only for logical slots.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>inactive_timeout</literal> means that the slot has been
+          inactive for the duration specified by
+          <xref linkend="guc-replication-slot-inactive-timeout"/> parameter.
          </para>
         </listitem>
        </itemizedlist>

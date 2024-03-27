@@ -241,6 +241,8 @@ AddSubscriptionRelState(Oid subid, Oid relid, char state,
 	bool		nulls[Natts_pg_subscription_rel];
 	Datum		values[Natts_pg_subscription_rel];
 
+	elog(LOG, "AddSubscriptionRelState relid %d state %c LSN %X/%X", relid, state, LSN_FORMAT_ARGS(sublsn));
+
 	LockSharedObject(SubscriptionRelationId, subid, 0, AccessShareLock);
 
 	rel = table_open(SubscriptionRelRelationId, RowExclusiveLock);
@@ -295,6 +297,8 @@ UpdateSubscriptionRelState(Oid subid, Oid relid, char state,
 	bool		nulls[Natts_pg_subscription_rel];
 	Datum		values[Natts_pg_subscription_rel];
 	bool		replaces[Natts_pg_subscription_rel];
+
+	elog(LOG, "UpdateSubscriptionRelState relid %d state %c LSN %X/%X", relid, state, LSN_FORMAT_ARGS(sublsn));
 
 	LockSharedObject(SubscriptionRelationId, subid, 0, AccessShareLock);
 
@@ -379,6 +383,8 @@ GetSubscriptionRelState(Oid subid, Oid relid, XLogRecPtr *sublsn)
 	ReleaseSysCache(tup);
 
 	table_close(rel, AccessShareLock);
+
+	elog(LOG, "GetSubscriptionRelState relid %d state %c LSN %X/%X", relid, substate, LSN_FORMAT_ARGS(*sublsn));
 
 	return substate;
 }
@@ -541,6 +547,8 @@ GetSubscriptionRelations(Oid subid, bool not_ready)
 			relstate->lsn = InvalidXLogRecPtr;
 		else
 			relstate->lsn = DatumGetLSN(d);
+
+		elog(LOG, "GetSubscriptionRelations relid %d state %c LSN %X/%X", relstate->relid, relstate->state, LSN_FORMAT_ARGS(relstate->lsn));
 
 		res = lappend(res, relstate);
 	}

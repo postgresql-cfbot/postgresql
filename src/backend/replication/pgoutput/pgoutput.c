@@ -1413,9 +1413,12 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	ReorderBufferChangeType action = change->action;
 	TupleTableSlot *old_slot = NULL;
 	TupleTableSlot *new_slot = NULL;
-
+elog(LOG, "pgoutput_change relid %d LSN %X/%X", RelationGetRelid(relation), LSN_FORMAT_ARGS(change->lsn));
 	if (!is_publishable_relation(relation))
+	{
+		elog(LOG, "pgoutput_change relid %d LSN %X/%X not publishable", RelationGetRelid(relation), LSN_FORMAT_ARGS(change->lsn));
 		return;
+	}
 
 	/*
 	 * Remember the xid for the change in streaming mode. We need to send xid
@@ -1433,7 +1436,10 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	{
 		case REORDER_BUFFER_CHANGE_INSERT:
 			if (!relentry->pubactions.pubinsert)
+			{
+				elog(LOG, "pgoutput_change relid %d LSN %X/%X pubinsert=false", RelationGetRelid(relation), LSN_FORMAT_ARGS(change->lsn));
 				return;
+			}
 			break;
 		case REORDER_BUFFER_CHANGE_UPDATE:
 			if (!relentry->pubactions.pubupdate)
@@ -1506,7 +1512,10 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	 * of the row filter for old and new tuple.
 	 */
 	if (!pgoutput_row_filter(targetrel, old_slot, &new_slot, relentry, &action))
+	{
+		elog(LOG, "pgoutput_change relid %d LSN %X/%X pgoutput_row_filter", RelationGetRelid(relation), LSN_FORMAT_ARGS(change->lsn));
 		goto cleanup;
+	}
 
 	/*
 	 * Send BEGIN if we haven't yet.
@@ -1526,10 +1535,13 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 	OutputPluginPrepareWrite(ctx, true);
 
+	elog(LOG, "pgoutput_change relid %d LSN %X/%X sending data", RelationGetRelid(relation), LSN_FORMAT_ARGS(change->lsn));
+
 	/* Send the data */
 	switch (action)
 	{
 		case REORDER_BUFFER_CHANGE_INSERT:
+			elog(LOG, "pgoutput_change relid %d LSN %X/%X write insert message", RelationGetRelid(relation), LSN_FORMAT_ARGS(change->lsn));
 			logicalrep_write_insert(ctx->out, xid, targetrel, new_slot,
 									data->binary, relentry->columns);
 			break;
@@ -1978,6 +1990,7 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 	/* initialize entry, if it's new */
 	if (!found)
 	{
+		elog(LOG, "get_rel_sync_entry relation %d not found", RelationGetRelid(relation));
 		entry->replicate_valid = false;
 		entry->schema_sent = false;
 		entry->streamed_txns = NIL;
@@ -1991,6 +2004,8 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 		entry->columns = NULL;
 		entry->attrmap = NULL;
 	}
+
+	elog(LOG, "get_rel_sync_entry relation %d replicate_valid %d", RelationGetRelid(relation), entry->replicate_valid);
 
 	/* Validate the entry */
 	if (!entry->replicate_valid)
@@ -2011,6 +2026,8 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 		char		relkind = get_rel_relkind(relid);
 		List	   *rel_publications = NIL;
 
+		elog(LOG, "GetRelationPublications relation %d publications %p %d", relid, pubids, list_length(pubids));
+
 		/* Reload publications if needed before use. */
 		if (!publications_valid)
 		{
@@ -2024,6 +2041,8 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 			MemoryContextSwitchTo(oldctx);
 			publications_valid = true;
 		}
+
+		elog(LOG, "get_rel_sync_entry relation %d publications %d", RelationGetRelid(relation), list_length(data->publications));
 
 		/*
 		 * Reset schema_sent status as the relation definition may have
@@ -2101,6 +2120,8 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 				}
 			}
 
+			elog(LOG, "get_rel_sync_entry relation %d publish %d (A)", RelationGetRelid(relation), publish);
+
 			if (!publish)
 			{
 				bool		ancestor_published = false;
@@ -2132,11 +2153,15 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 					}
 				}
 
+				elog(LOG, "get_rel_sync_entry relation %d relation pubs %d subscription pub %d", RelationGetRelid(relation), list_length(pubids), pub->oid);
+
 				if (list_member_oid(pubids, pub->oid) ||
 					list_member_oid(schemaPubids, pub->oid) ||
 					ancestor_published)
 					publish = true;
 			}
+
+			elog(LOG, "get_rel_sync_entry relation %d publish %d (B)", RelationGetRelid(relation), publish);
 
 			/*
 			 * If the relation is to be published, determine actions to
@@ -2213,6 +2238,8 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 
 		entry->replicate_valid = true;
 	}
+
+	elog(LOG, "get_rel_sync_entry relation %d pubinsert %d", RelationGetRelid(relation), entry->pubactions.pubinsert);
 
 	return entry;
 }

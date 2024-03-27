@@ -6125,9 +6125,9 @@ heap_inplace_update(Relation relation, HeapTuple tuple)
  */
 static TransactionId
 FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
-				  const struct VacuumCutoffs *cutoffs, uint16 *flags,
-				  HeapPageFreeze *pagefrz)
+				  uint16 *flags, HeapPageFreeze *pagefrz)
 {
+	const struct VacuumCutoffs *cutoffs = pagefrz->cutoffs;
 	TransactionId newxmax;
 	MultiXactMember *members;
 	int			nmembers;
@@ -6445,9 +6445,9 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
  * XIDs or MultiXactIds that will need to be processed by a future VACUUM.
  *
  * VACUUM caller must assemble HeapTupleFreeze freeze plan entries for every
- * tuple that we returned true for, and call heap_freeze_execute_prepared to
- * execute freezing.  Caller must initialize pagefrz fields for page as a
- * whole before first call here for each heap page.
+ * tuple that we returned true for, and then execute freezing.  Caller must
+ * initialize pagefrz fields for page as a whole before first call here for
+ * each heap page.
  *
  * VACUUM caller decides on whether or not to freeze the page as a whole.
  * We'll often prepare freeze plans for a page that caller just discards.
@@ -6475,10 +6475,10 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
  */
 bool
 heap_prepare_freeze_tuple(HeapTupleHeader tuple,
-						  const struct VacuumCutoffs *cutoffs,
 						  HeapPageFreeze *pagefrz,
 						  HeapTupleFreeze *frz, bool *totally_frozen)
 {
+	const struct VacuumCutoffs *cutoffs = pagefrz->cutoffs;
 	bool		xmin_already_frozen = false,
 				xmax_already_frozen = false;
 	bool		freeze_xmin = false,
@@ -6550,8 +6550,7 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 		 * perform no-op xmax processing.  The only constraint is that the
 		 * FreezeLimit/MultiXactCutoff postcondition must never be violated.
 		 */
-		newxmax = FreezeMultiXactId(xid, tuple->t_infomask, cutoffs,
-									&flags, pagefrz);
+		newxmax = FreezeMultiXactId(xid, tuple->t_infomask, &flags, pagefrz);
 
 		if (flags & FRM_NOOP)
 		{
@@ -6729,7 +6728,7 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 		 * Does this tuple force caller to freeze the entire page?
 		 */
 		pagefrz->freeze_required =
-			heap_tuple_should_freeze(tuple, cutoffs,
+			heap_tuple_should_freeze(tuple, pagefrz->cutoffs,
 									 &pagefrz->NoFreezePageRelfrozenXid,
 									 &pagefrz->NoFreezePageRelminMxid);
 	}
@@ -6763,35 +6762,19 @@ heap_execute_freeze_tuple(HeapTupleHeader tuple, HeapTupleFreeze *frz)
 }
 
 /*
- * heap_freeze_execute_prepared
+ * Perform xmin/xmax XID status sanity checks before actually executing freeze
+ * plans.
  *
- * Executes freezing of one or more heap tuples on a page on behalf of caller.
- * Caller passes an array of tuple plans from heap_prepare_freeze_tuple.
- * Caller must set 'offset' in each plan for us.  Note that we destructively
- * sort caller's tuples array in-place, so caller had better be done with it.
- *
- * WAL-logs the changes so that VACUUM can advance the rel's relfrozenxid
- * later on without any risk of unsafe pg_xact lookups, even following a hard
- * crash (or when querying from a standby).  We represent freezing by setting
- * infomask bits in tuple headers, but this shouldn't be thought of as a hint.
- * See section on buffer access rules in src/backend/storage/buffer/README.
+ * heap_prepare_freeze_tuple doesn't perform these checks directly because
+ * pg_xact lookups are relatively expensive.  They shouldn't be repeated
+ * by successive VACUUMs that each decide against freezing the same page.
  */
 void
-heap_freeze_execute_prepared(Relation rel, Buffer buffer,
-							 TransactionId snapshotConflictHorizon,
-							 HeapTupleFreeze *tuples, int ntuples)
+heap_pre_freeze_checks(Buffer buffer,
+					   HeapTupleFreeze *tuples, int ntuples)
 {
 	Page		page = BufferGetPage(buffer);
 
-	Assert(ntuples > 0);
-
-	/*
-	 * Perform xmin/xmax XID status sanity checks before critical section.
-	 *
-	 * heap_prepare_freeze_tuple doesn't perform these checks directly because
-	 * pg_xact lookups are relatively expensive.  They shouldn't be repeated
-	 * by successive VACUUMs that each decide against freezing the same page.
-	 */
 	for (int i = 0; i < ntuples; i++)
 	{
 		HeapTupleFreeze *frz = tuples + i;
@@ -6830,8 +6813,19 @@ heap_freeze_execute_prepared(Relation rel, Buffer buffer,
 										 xmax)));
 		}
 	}
+}
 
-	START_CRIT_SECTION();
+/*
+ * Helper which executes freezing of one or more heap tuples on a page on
+ * behalf of caller. Caller passes an array of tuple plans from
+ * heap_prepare_freeze_tuple. Caller must set 'offset' in each plan for us.
+ * Must be called in a critical section that also marks the buffer dirty and,
+ * if needed, emits WAL.
+ */
+void
+heap_freeze_prepared_tuples(Buffer buffer, HeapTupleFreeze *tuples, int ntuples)
+{
+	Page		page = BufferGetPage(buffer);
 
 	for (int i = 0; i < ntuples; i++)
 	{
@@ -6842,22 +6836,6 @@ heap_freeze_execute_prepared(Relation rel, Buffer buffer,
 		htup = (HeapTupleHeader) PageGetItem(page, itemid);
 		heap_execute_freeze_tuple(htup, frz);
 	}
-
-	MarkBufferDirty(buffer);
-
-	/* Now WAL-log freezing if necessary */
-	if (RelationNeedsWAL(rel))
-	{
-		log_heap_prune_and_freeze(rel, buffer, snapshotConflictHorizon,
-								  false,	/* no cleanup lock required */
-								  PRUNE_VACUUM_SCAN,
-								  tuples, ntuples,
-								  NULL, 0,	/* redirected */
-								  NULL, 0,	/* dead */
-								  NULL, 0); /* unused */
-	}
-
-	END_CRIT_SECTION();
 }
 
 /*
@@ -6890,8 +6868,9 @@ heap_freeze_tuple(HeapTupleHeader tuple,
 	pagefrz.NoFreezePageRelfrozenXid = FreezeLimit;
 	pagefrz.NoFreezePageRelminMxid = MultiXactCutoff;
 
-	do_freeze = heap_prepare_freeze_tuple(tuple, &cutoffs,
-										  &pagefrz, &frz, &totally_frozen);
+	pagefrz.cutoffs = &cutoffs;
+
+	do_freeze = heap_prepare_freeze_tuple(tuple, &pagefrz, &frz, &totally_frozen);
 
 	/*
 	 * Note that because this is not a WAL-logged operation, we don't need to

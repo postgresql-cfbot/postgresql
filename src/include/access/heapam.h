@@ -14,6 +14,7 @@
 #ifndef HEAPAM_H
 #define HEAPAM_H
 
+#include "access/heapam_xlog.h"
 #include "access/relation.h"	/* for backward compatibility */
 #include "access/relscan.h"
 #include "access/sdir.h"
@@ -101,8 +102,8 @@ typedef enum
 } HTSV_Result;
 
 /*
- * heap_prepare_freeze_tuple may request that heap_freeze_execute_prepared
- * check any tuple's to-be-frozen xmin and/or xmax status using pg_xact
+ * heap_prepare_freeze_tuple may request that any tuple's to-be-frozen xmin
+ * and/or xmax status is checked using pg_xact during freezing execution.
  */
 #define		HEAP_FREEZE_CHECK_XMIN_COMMITTED	0x01
 #define		HEAP_FREEZE_CHECK_XMAX_ABORTED		0x02
@@ -154,14 +155,14 @@ typedef struct HeapPageFreeze
 	/*
 	 * "Freeze" NewRelfrozenXid/NewRelminMxid trackers.
 	 *
-	 * Trackers used when heap_freeze_execute_prepared freezes, or when there
-	 * are zero freeze plans for a page.  It is always valid for vacuumlazy.c
-	 * to freeze any page, by definition.  This even includes pages that have
-	 * no tuples with storage to consider in the first place.  That way the
-	 * 'totally_frozen' results from heap_prepare_freeze_tuple can always be
-	 * used in the same way, even when no freeze plans need to be executed to
-	 * "freeze the page".  Only the "freeze" path needs to consider the need
-	 * to set pages all-frozen in the visibility map under this scheme.
+	 * Trackers used when tuples will be frozen, or when there are zero freeze
+	 * plans for a page.  It is always valid for vacuumlazy.c to freeze any
+	 * page, by definition.  This even includes pages that have no tuples with
+	 * storage to consider in the first place.  That way the 'totally_frozen'
+	 * results from heap_prepare_freeze_tuple can always be used in the same
+	 * way, even when no freeze plans need to be executed to "freeze the
+	 * page". Only the "freeze" path needs to consider the need to set pages
+	 * all-frozen in the visibility map under this scheme.
 	 *
 	 * When we freeze a page, we generally freeze all XIDs < OldestXmin, only
 	 * leaving behind XIDs that are ineligible for freezing, if any.  And so
@@ -189,29 +190,72 @@ typedef struct HeapPageFreeze
 	TransactionId NoFreezePageRelfrozenXid;
 	MultiXactId NoFreezePageRelminMxid;
 
+	struct VacuumCutoffs *cutoffs;
 } HeapPageFreeze;
+
+/*
+ * Actions that can be taken during pruning and freezing. By default, we will
+ * at least attempt regular pruning.
+ */
+
+/*
+ * mark_unused_now indicates whether or not dead items can be set LP_UNUSED
+ * during pruning.
+ */
+#define		PRUNE_DO_MARK_UNUSED_NOW (1 << 1)
+
+/*
+ * Freeze if advantageous or required and try to advance relfrozenxid and
+ * relminmxid. To attempt freezing, we will need to determine if the page is
+ * all frozen. So, if this action is set, we will also inform the caller if the
+ * page is all-visible and/or all-frozen and calculate a snapshot conflict
+ * horizon for updating the visibility map. While doing this, we also count if
+ * tuples are live or recently dead.
+ */
+#define		PRUNE_DO_TRY_FREEZE (1 << 2)
+
 
 /*
  * Per-page state returned from pruning
  */
-typedef struct PruneResult
+typedef struct PruneFreezeResult
 {
 	int			ndeleted;		/* Number of tuples deleted from the page */
 	int			nnewlpdead;		/* Number of newly LP_DEAD items */
+	int			nfrozen;		/* Number of tuples we froze */
+
+	/* Number of live and recently dead tuples on the page, after pruning */
+	int			live_tuples;
+	int			recently_dead_tuples;
 
 	/*
-	 * Tuple visibility is only computed once for each tuple, for correctness
-	 * and efficiency reasons; see comment in heap_page_prune() for details.
-	 * This is of type int8[], instead of HTSV_Result[], so we can use -1 to
-	 * indicate no visibility has been computed, e.g. for LP_DEAD items.
+	 * Whether or not the page makes rel truncation unsafe
 	 *
-	 * This needs to be MaxHeapTuplesPerPage + 1 long as FirstOffsetNumber is
-	 * 1. Otherwise every access would need to subtract 1.
+	 * This is set to 'true', even if the page contains LP_DEAD items. VACUUM
+	 * will remove them before attempting to truncate.
 	 */
-	int8		htsv[MaxHeapTuplesPerPage + 1];
-} PruneResult;
+	bool		hastup;
 
-/* 'reason' codes for heap_page_prune() */
+	/*
+	 * all_visible and all_frozen indicate if the all-visible and all-frozen
+	 * bits in the visibility map can be set for this page, after pruning.
+	 *
+	 * vm_conflict_horizon is the newest xmin of live tuples on the page.  The
+	 * caller can use it as the conflict horizon, when setting the VM bits.
+	 * It is only valid if we froze some tuples, and all_frozen is true.
+	 *
+	 * These are only set if the PRUNE_DO_TRY_FREEZE action flag is set.
+	 */
+	bool		all_visible;
+	bool		all_frozen;
+	TransactionId vm_conflict_horizon;
+
+	/* LP_DEAD items on the page after pruning. Includes existing LP_DEAD items */
+	int			lpdead_items;
+	OffsetNumber deadoffsets[MaxHeapTuplesPerPage];
+} PruneFreezeResult;
+
+/* 'reason' codes for heap_page_prune_and_freeze() */
 typedef enum
 {
 	PRUNE_ON_ACCESS,			/* on-access pruning */
@@ -219,19 +263,6 @@ typedef enum
 	PRUNE_VACUUM_CLEANUP,		/* VACUUM 2nd heap pass */
 } PruneReason;
 
-/*
- * Pruning calculates tuple visibility once and saves the results in an array
- * of int8. See PruneResult.htsv for details. This helper function is meant to
- * guard against examining visibility status array members which have not yet
- * been computed.
- */
-static inline HTSV_Result
-htsv_get_valid_status(int status)
-{
-	Assert(status >= HEAPTUPLE_DEAD &&
-		   status <= HEAPTUPLE_DELETE_IN_PROGRESS);
-	return (HTSV_Result) status;
-}
 
 /* ----------------
  *		function prototypes for heap access method
@@ -303,15 +334,18 @@ extern TM_Result heap_lock_tuple(Relation relation, ItemPointer tid,
 
 extern void heap_inplace_update(Relation relation, HeapTuple tuple);
 extern bool heap_prepare_freeze_tuple(HeapTupleHeader tuple,
-									  const struct VacuumCutoffs *cutoffs,
 									  HeapPageFreeze *pagefrz,
 									  HeapTupleFreeze *frz, bool *totally_frozen);
-extern void heap_freeze_execute_prepared(Relation rel, Buffer buffer,
-										 TransactionId snapshotConflictHorizon,
-										 HeapTupleFreeze *tuples, int ntuples);
+
+extern void heap_pre_freeze_checks(Buffer buffer,
+								   HeapTupleFreeze *tuples, int ntuples);
+
+extern void heap_freeze_prepared_tuples(Buffer buffer,
+										HeapTupleFreeze *tuples, int ntuples);
 extern bool heap_freeze_tuple(HeapTupleHeader tuple,
 							  TransactionId relfrozenxid, TransactionId relminmxid,
 							  TransactionId FreezeLimit, TransactionId MultiXactCutoff);
+
 extern bool heap_tuple_should_freeze(HeapTupleHeader tuple,
 									 const struct VacuumCutoffs *cutoffs,
 									 TransactionId *NoFreezePageRelfrozenXid,
@@ -329,12 +363,15 @@ extern TransactionId heap_index_delete_tuples(Relation rel,
 /* in heap/pruneheap.c */
 struct GlobalVisState;
 extern void heap_page_prune_opt(Relation relation, Buffer buffer);
-extern void heap_page_prune(Relation relation, Buffer buffer,
-							struct GlobalVisState *vistest,
-							bool mark_unused_now,
-							PruneResult *presult,
-							PruneReason reason,
-							OffsetNumber *off_loc);
+extern void heap_page_prune_and_freeze(Relation relation, Buffer buffer,
+									   uint8 actions,
+									   struct GlobalVisState *vistest,
+									   struct VacuumCutoffs *cutoffs,
+									   PruneFreezeResult *presult,
+									   PruneReason reason,
+									   OffsetNumber *off_loc,
+									   TransactionId *new_relfrozen_xid,
+									   MultiXactId *new_relmin_mxid);
 extern void heap_page_prune_execute(Buffer buffer, bool lp_truncate_only,
 									OffsetNumber *redirected, int nredirected,
 									OffsetNumber *nowdead, int ndead,

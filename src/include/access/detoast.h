@@ -12,6 +12,9 @@
 #ifndef DETOAST_H
 #define DETOAST_H
 
+#include "postgres.h"
+#include "fmgr.h"
+
 /*
  * Macro to fetch the possibly-unaligned contents of an EXTERNAL datum
  * into a local "struct varatt_external" toast pointer.  This should be
@@ -78,5 +81,13 @@ extern Size toast_raw_datum_size(Datum value);
  * ----------
  */
 extern Size toast_datum_size(Datum value);
+
+extern PGDLLIMPORT bool enable_toast_cache;
+extern void AtEOXact_ToastCache(void);
+
+extern struct varlena *toast_cache_lookup_datum(Oid toastrelid, Oid valueid);
+extern void toast_cache_add_datum(Oid toastrelid, Oid valueid, struct varlena *attr);
+extern void toast_cache_add_slice_datum(Oid toastrelid, Oid valueid, struct varlena *attr, int32 offset, int32 length);
+extern void toast_cache_remove_datum(Oid toastrelid, Oid valueid);
 
 #endif							/* DETOAST_H */

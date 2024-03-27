@@ -20,6 +20,8 @@
 #include "common/int.h"
 #include "common/pg_lzcompress.h"
 #include "utils/expandeddatum.h"
+#include "utils/hsearch.h"
+#include "utils/memutils.h"
 #include "utils/rel.h"
 
 static struct varlena *toast_fetch_datum(struct varlena *attr);
@@ -28,6 +30,43 @@ static struct varlena *toast_fetch_datum_slice(struct varlena *attr,
 											   int32 slicelength);
 static struct varlena *toast_decompress_datum(struct varlena *attr);
 static struct varlena *toast_decompress_datum_slice(struct varlena *attr, int32 slicelength);
+
+bool enable_toast_cache = false;
+
+HTAB *toastCache = NULL;
+MemoryContext ToastCacheContext = NULL;
+MemoryContext ToastSliceContext = NULL;
+
+static uint64	toast_cache_hits = 0;
+static uint64	toast_cache_misses = 0;
+
+typedef struct toast_cache_key {
+	Oid toastrelid;
+	Oid valueid;
+} toast_cache_key;
+
+typedef struct toast_cache_entry {
+	toast_cache_key key;
+	int32	size;
+	uintptr_t slices;
+	void   *data;
+} toast_cache_entry;
+
+typedef struct toast_slice_entry {
+	int32	offset;
+	int32	length;
+	void   *data;
+} toast_slice_entry;
+
+static toast_cache_entry *toast_cache_lookup(Oid toastrelid, Oid valueid);
+static void toast_cache_add_entry(Oid toastrelid, Oid valueid, struct varlena *attr);
+static void
+toast_cache_add_slice_entry(Oid toastrelid, Oid valueid, struct varlena *attr,
+						 int32 sliceoffset, int32 slicelength);
+void toast_cache_add_slice_datum(Oid toastrelid, Oid valueid, struct varlena *attr, int32 offset, int32 length);
+static void toast_cache_remove_entry(Oid toastrelid, Oid valueid);
+static struct varlena *
+toast_cache_lookup_slice(Oid toastrelid, Oid valueid, int32 offset, int32 length);
 
 /* ----------
  * detoast_external_attr -
@@ -51,7 +90,24 @@ detoast_external_attr(struct varlena *attr)
 		/*
 		 * This is an external stored plain value
 		 */
+		struct varatt_external toast_pointer;
+
+		/* Must copy to access aligned fields */
+		VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
+
+		/* first try to lookup in the toast cache */
+		result = toast_cache_lookup_datum(toast_pointer.va_toastrelid, toast_pointer.va_valueid);
+		if (result)
+			return result;
+
+		/*
+		 * This is an externally stored datum --- fetch it back from there
+		 */
 		result = toast_fetch_datum(attr);
+
+		if (!VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer))
+			toast_cache_add_datum(toast_pointer.va_toastrelid, toast_pointer.va_valueid, result);
+
 	}
 	else if (VARATT_IS_EXTERNAL_INDIRECT(attr))
 	{
@@ -117,6 +173,21 @@ detoast_attr(struct varlena *attr)
 {
 	if (VARATT_IS_EXTERNAL_ONDISK(attr))
 	{
+		struct varlena *result;
+		struct varatt_external toast_pointer;
+
+		/* Get toast pointer */
+		VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
+
+		/* try lookup in the toast cache */
+
+		/* first try to lookup in the toast cache */
+		result = toast_cache_lookup_datum(toast_pointer.va_toastrelid, toast_pointer.va_valueid);
+
+		/* cache hit, we're done */
+		if (result)
+			return result;
+
 		/*
 		 * This is an externally stored datum --- fetch it back from there
 		 */
@@ -129,6 +200,8 @@ detoast_attr(struct varlena *attr)
 			attr = toast_decompress_datum(tmp);
 			pfree(tmp);
 		}
+
+		toast_cache_add_datum(toast_pointer.va_toastrelid, toast_pointer.va_valueid, attr);
 	}
 	else if (VARATT_IS_EXTERNAL_INDIRECT(attr))
 	{
@@ -206,10 +279,12 @@ detoast_attr_slice(struct varlena *attr,
 				   int32 sliceoffset, int32 slicelength)
 {
 	struct varlena *preslice;
-	struct varlena *result;
+	struct varlena *result = NULL;
 	char	   *attrdata;
 	int32		slicelimit;
 	int32		attrsize;
+	Oid toastrelid = InvalidOid;
+	Oid valueid = InvalidOid;
 
 	if (sliceoffset < 0)
 		elog(ERROR, "invalid sliceoffset: %d", sliceoffset);
@@ -229,9 +304,26 @@ detoast_attr_slice(struct varlena *attr,
 
 		VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
 
+
+		/* set the cache key */
+		/* try lookup in the toast cache */
+		toastrelid = toast_pointer.va_toastrelid;
+		valueid = toast_pointer.va_valueid;
+
+		/* first try to lookup in the toast cache */
+		result = toast_cache_lookup_slice(toastrelid, valueid, sliceoffset, slicelength);
+
+		/* cache hit, we're done */
+		if (result)
+			return result;
+
 		/* fast path for non-compressed external datums */
 		if (!VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer))
-			return toast_fetch_datum_slice(attr, sliceoffset, slicelength);
+		{
+			result = toast_fetch_datum_slice(attr, sliceoffset, slicelength);
+			toast_cache_add_slice_datum(toast_pointer.va_toastrelid, toast_pointer.va_valueid, result, sliceoffset, slicelength);
+			return result;
+		}
 
 		/*
 		 * For compressed values, we need to fetch enough slices to decompress
@@ -259,10 +351,13 @@ detoast_attr_slice(struct varlena *attr,
 			 * Fetch enough compressed slices (compressed marker will get set
 			 * automatically).
 			 */
+
 			preslice = toast_fetch_datum_slice(attr, 0, max_size);
 		}
 		else
+		{
 			preslice = toast_fetch_datum(attr);
+		}
 	}
 	else if (VARATT_IS_EXTERNAL_INDIRECT(attr))
 	{
@@ -295,6 +390,14 @@ detoast_attr_slice(struct varlena *attr,
 			preslice = toast_decompress_datum_slice(tmp, slicelimit);
 		else
 			preslice = toast_decompress_datum(tmp);
+
+		if(OidIsValid(toastrelid))
+		{
+			if(slicelimit >= 0)
+				toast_cache_add_slice_datum(toastrelid, valueid, preslice, 0, slicelimit);
+			else
+				toast_cache_add_datum(toastrelid, valueid, preslice);
+		}
 
 		if (tmp != attr)
 			pfree(tmp);
@@ -643,4 +746,345 @@ toast_datum_size(Datum value)
 		result = VARSIZE(attr);
 	}
 	return result;
+}
+
+static bool
+toast_cache_init(void)
+{
+	HASHCTL		ctl;
+
+	if (!enable_toast_cache)
+		return false;
+
+	/* already initialized */
+	if (toastCache)
+		return true;
+
+	toast_cache_hits = 0;
+	toast_cache_misses = 0;
+
+	/* FIXME should really be per transaction */
+	ToastCacheContext = AllocSetContextCreate(TopTransactionContext,
+											  "TOAST cache context",
+											  ALLOCSET_DEFAULT_SIZES);
+
+	ToastSliceContext = AllocSetContextCreate(TopTransactionContext,
+											  "TOAST cached slices context",
+											  ALLOCSET_DEFAULT_SIZES);
+
+	/* Make a new hash table for the cache */
+	ctl.keysize = sizeof(toast_cache_key);
+	ctl.entrysize = sizeof(toast_cache_entry);
+	ctl.hcxt = ToastCacheContext;
+
+	toastCache = hash_create("TOAST cache",
+							 128, &ctl,
+							 HASH_ELEM | HASH_CONTEXT | HASH_BLOBS);
+
+	return true;
+}
+
+static toast_cache_entry *
+toast_cache_lookup(Oid toastrelid, Oid valueid)
+{
+	toast_cache_key		key;
+	toast_cache_entry  *entry;
+	bool found = false;
+
+	/* make sure cache initialized */
+	if (!toast_cache_init())
+		return NULL;
+
+	key.toastrelid = toastrelid;
+	key.valueid = valueid;
+
+	entry = (toast_cache_entry *) hash_search(toastCache, &key,
+											  HASH_FIND, &found);
+
+	if (found)
+		toast_cache_hits++;
+	else
+	{
+		toast_cache_misses++;
+		return NULL;
+	}
+
+	return entry;
+}
+
+static void
+toast_cache_add_entry(Oid toastrelid, Oid valueid, struct varlena *attr)
+{
+	bool				found = false;
+	ListCell		   *lc = NULL;
+	toast_cache_key		key;
+	toast_cache_entry  *entry;
+	MemoryContext ctx;
+
+	/* make sure cache initialized */
+	if (!toast_cache_init())
+		return;
+
+	key.toastrelid = toastrelid;
+	key.valueid = valueid;
+
+	entry = (toast_cache_entry *) hash_search(toastCache, &key,
+											  HASH_FIND, &found);
+
+	/* replace-only flag means that if value was not found - do not*/
+	if(found)
+	{
+		/* if found while adding entry - we have to free old data and replace it with new one */
+		/* if already have some slices - clean up, full value is stored instead of slices */
+		if(entry->slices != 0)
+		{
+			ctx = MemoryContextSwitchTo(ToastSliceContext);
+
+			foreach(lc, (List *) entry->slices)
+			{
+				toast_slice_entry *slice = (toast_slice_entry *) lfirst(lc);
+				pfree(slice->data);
+			}
+			MemoryContextSwitchTo(ctx);
+		}
+	}
+	else
+	{
+		entry = (toast_cache_entry *) hash_search(toastCache, &key,
+											  HASH_ENTER_NULL, &found);
+		if(!entry)
+			return;
+	}
+
+	entry->slices = (uintptr_t) NIL;
+
+	entry->size = VARSIZE_ANY_EXHDR(attr);
+	entry->data = MemoryContextAlloc(ToastCacheContext, entry->size);
+	memcpy(entry->data, VARDATA_ANY(attr), entry->size);
+}
+
+static void
+toast_cache_add_slice_entry(Oid toastrelid, Oid valueid, struct varlena *attr,
+						 int32 sliceoffset, int32 slicelength)
+{
+	ListCell		   *lc = NULL;
+	bool				found = false;
+	toast_cache_key		key;
+	toast_cache_entry  *entry;
+	toast_slice_entry   *slice;
+
+	/* make sure cache initialized */
+	if (!toast_cache_init())
+		return;
+
+	key.toastrelid = toastrelid;
+	key.valueid = valueid;
+
+	entry = (toast_cache_entry *) hash_search(toastCache, &key,
+											  HASH_FIND, &found);
+
+	if(found)
+	{
+		toast_cache_hits++;
+	}
+	else
+		toast_cache_misses++;
+
+	if(!found)
+	{
+		List *slices = NIL;
+		slice = (toast_slice_entry *) MemoryContextAlloc(ToastSliceContext, sizeof(toast_slice_entry));
+		slice->offset = sliceoffset;
+		slice->length = slicelength;
+		slice->data = MemoryContextAlloc(ToastSliceContext, slicelength);
+		memcpy(slice->data, VARDATA_ANY(attr), slicelength);
+
+		entry = (toast_cache_entry *) hash_search(toastCache, &key,
+											  HASH_ENTER_NULL, &found);
+
+		slices = lappend(slices, slice);
+		entry->slices = (uintptr_t) slices;
+		entry->size = slicelength;
+		entry->data = NULL;
+		return;
+	}
+
+	found = false;
+
+	if((List *) entry->slices != NIL)
+	{
+		MemoryContext ctx = MemoryContextSwitchTo(ToastSliceContext);
+
+		foreach(lc, (List *) entry->slices)
+		{
+			toast_slice_entry *lookup_slice = (toast_slice_entry *) lfirst(lc);
+
+			if(sliceoffset >= lookup_slice->offset
+				&& sliceoffset <= (lookup_slice->offset + lookup_slice->length)
+				&& (sliceoffset + slicelength) <= (lookup_slice->offset + lookup_slice->length))
+			{
+				found = true;
+				break;
+			}
+		}
+		MemoryContextSwitchTo(ctx);
+	}
+
+	if(!found)
+	{
+		slice = (toast_slice_entry *) MemoryContextAlloc(ToastSliceContext, sizeof(toast_slice_entry));
+		slice->offset = sliceoffset;
+		slice->length = slicelength;
+		slice->data = MemoryContextAlloc(ToastSliceContext, slicelength);
+		memcpy(slice->data, VARDATA_ANY(attr), slicelength);
+
+		entry->slices = (uintptr_t) lappend((List *) entry->slices, slice);
+		entry->size += slicelength;
+	}
+}
+
+static void
+toast_cache_remove_entry(Oid toastrelid, Oid valueid)
+{
+	ListCell 		   *lc = NULL;
+	bool				found = false;
+	toast_cache_key		key;
+	toast_cache_entry  *entry = NULL;
+
+	/* make sure cache initialized */
+	if (!toast_cache_init())
+		return;
+
+	key.toastrelid = toastrelid;
+	key.valueid = valueid;
+
+	entry = (toast_cache_entry *) hash_search(toastCache, &key,
+											  HASH_REMOVE, &found);
+
+	if(entry)
+	{
+		toast_cache_hits++;
+		if(entry->slices != 0)
+		{
+		foreach(lc, (List *) entry->slices)
+		{
+			toast_slice_entry *slice = (toast_slice_entry *) lfirst(lc);
+			pfree(slice->data);
+		}
+		}
+		pfree(entry->data);
+	}
+	else
+		toast_cache_misses++;
+}
+
+static void
+toast_cache_destroy(void)
+{
+	if (!toastCache)
+		return;
+
+	elog(LOG, "AtEOXact_ToastCache hits %ld misses %ld ratio %.2f%%",
+		 toast_cache_hits, toast_cache_misses,
+		 (toast_cache_hits * 100.0) / Max(1, toast_cache_hits + toast_cache_misses));
+
+	MemoryContextDelete(ToastCacheContext);
+	MemoryContextDelete(ToastSliceContext);
+
+	toastCache = NULL;
+	ToastCacheContext = NULL;
+	ToastSliceContext = NULL;
+}
+
+void
+AtEOXact_ToastCache(void)
+{
+	toast_cache_destroy();
+}
+
+struct varlena *
+toast_cache_lookup_datum(Oid toastrelid, Oid valueid)
+{
+	toast_cache_entry *entry;
+	struct varlena *result = NULL;
+
+	entry = toast_cache_lookup(toastrelid, valueid);
+
+	if (!entry)
+		return NULL;
+
+	if(entry->data == NULL)
+		return NULL;
+
+	result = (struct varlena *) palloc(entry->size + VARHDRSZ);
+	SET_VARSIZE(result, entry->size + VARHDRSZ);
+
+	memcpy(VARDATA(result), entry->data, entry->size);
+
+	return result;
+}
+
+static struct varlena *
+toast_cache_lookup_slice(Oid toastrelid, Oid valueid, int32 offset, int32 length)
+{
+	ListCell	*lc = NULL;
+	toast_cache_entry *entry;
+	struct varlena *result = NULL;
+
+	/* result must be pre-alloc'ed by caller */
+	entry = toast_cache_lookup(toastrelid, valueid);
+
+	if (!entry)
+		return NULL;
+
+	if(entry->data != NULL)
+	{
+		result = (struct varlena *) palloc(length + VARHDRSZ);
+		SET_VARSIZE(result, length + VARHDRSZ);
+		memcpy(VARDATA(result), ((char *) entry->data + offset), length);
+		return result;
+	}
+
+	if(entry->slices == 0 || (List *) entry->slices == NIL)
+		return NULL;
+
+	if((List *) entry->slices != NIL)
+	{
+		foreach(lc, (List *) entry->slices)
+		{
+
+			toast_slice_entry *slice = (toast_slice_entry *) lfirst(lc);
+
+			if(offset >= slice->offset
+				&& (offset + length) <= (slice->offset + slice->length))
+			{
+				result = (struct varlena *) palloc(length + VARHDRSZ);
+				SET_VARSIZE(result, length + VARHDRSZ);
+				memcpy(VARDATA(result), ((char *) slice->data + offset - slice->offset), length);
+				break;
+			}
+			else
+				continue;
+		}
+	}
+
+	return result;
+}
+
+void
+toast_cache_add_slice_datum(Oid toastrelid, Oid valueid, struct varlena *attr, int32 offset, int32 length)
+{
+	toast_cache_add_slice_entry(toastrelid, valueid, attr, offset, length);
+}
+
+void
+toast_cache_remove_datum(Oid toastrelid, Oid valueid)
+{
+	toast_cache_remove_entry(toastrelid, valueid);
+}
+
+void
+toast_cache_add_datum(Oid toastrelid, Oid valueid, struct varlena *attr)
+{
+	return toast_cache_add_entry(toastrelid, valueid, attr);
 }

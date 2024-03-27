@@ -259,9 +259,33 @@ toast_tuple_externalize(ToastTupleContext *ttc, int attribute, int options)
 	Datum		old_value = *value;
 	ToastAttrInfo *attr = &ttc->ttc_attr[attribute];
 
+	/*
+	 * Should we cache any value moved out-of-line?
+	 * For the sake of using it later in transaction
+	 * it makes sense, but in case of mass insertions
+	 * we could quickly run out of cache memory
+	 * so we cache value only if the value with this
+	 * key is already there - we consider it as been
+	 * used previously
+	 */
+	if(value
+		&& attr->tai_oldexternal != NULL
+		&& VARATT_IS_EXTERNAL_ONDISK(attr->tai_oldexternal))
+	{
+		struct varlena *tmp = NULL;
+		struct varatt_external toast_pointer;
+		VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr->tai_oldexternal);
+
+		/* add value to the toast cache with replace-only flag*/
+		tmp = toast_cache_lookup_datum(toast_pointer.va_toastrelid, toast_pointer.va_valueid);
+		if(tmp)
+			toast_cache_add_datum(toast_pointer.va_toastrelid, toast_pointer.va_valueid, (struct varlena *) value);
+	}
+
 	attr->tai_colflags |= TOASTCOL_IGNORE;
 	*value = toast_save_datum(ttc->ttc_rel, old_value, attr->tai_oldexternal,
 							  options);
+
 	if ((attr->tai_colflags & TOASTCOL_NEEDS_FREE) != 0)
 		pfree(DatumGetPointer(old_value));
 	attr->tai_colflags |= TOASTCOL_NEEDS_FREE;
@@ -305,7 +329,17 @@ toast_tuple_cleanup(ToastTupleContext *ttc)
 			ToastAttrInfo *attr = &ttc->ttc_attr[i];
 
 			if ((attr->tai_colflags & TOASTCOL_NEEDS_DELETE_OLD) != 0)
+			{
+				if(VARATT_IS_EXTERNAL(ttc->ttc_oldvalues[i]))
+				{
+					struct varatt_external toast_pointer;
+					VARATT_EXTERNAL_GET_POINTER(toast_pointer, ttc->ttc_oldvalues[i]);
+
+					toast_cache_remove_datum(toast_pointer.va_toastrelid, toast_pointer.va_valueid);
+				}
+
 				toast_delete_datum(ttc->ttc_rel, ttc->ttc_oldvalues[i], false);
+			}
 		}
 	}
 }
@@ -331,7 +365,14 @@ toast_delete_external(Relation rel, const Datum *values, const bool *isnull,
 			if (isnull[i])
 				continue;
 			else if (VARATT_IS_EXTERNAL_ONDISK(value))
+			{
+				struct varatt_external toast_pointer;
+				VARATT_EXTERNAL_GET_POINTER(toast_pointer, value);
+
+				toast_cache_remove_datum(toast_pointer.va_toastrelid, toast_pointer.va_valueid);
+
 				toast_delete_datum(rel, value, is_speculative);
+			}
 		}
 	}
 }

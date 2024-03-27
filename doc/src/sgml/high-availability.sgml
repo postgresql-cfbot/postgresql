@@ -628,12 +628,15 @@ protocol to make nodes agree on a serializable transactional order.
     In standby mode, the server continuously applies WAL received from the
     primary server. The standby server can read WAL from a WAL archive
     (see <xref linkend="guc-restore-command"/>) or directly from the primary
-    over a TCP connection (streaming replication). The standby server will
-    also attempt to restore any WAL found in the standby cluster's
-    <filename>pg_wal</filename> directory. That typically happens after a server
-    restart, when the standby replays again WAL that was streamed from the
-    primary before the restart, but you can also manually copy files to
-    <filename>pg_wal</filename> at any time to have them replayed.
+    over a TCP connection (streaming replication) or attempt to switch to
+    streaming replication after reading from archive when
+    <xref linkend="guc-streaming-replication-retry-interval"/> parameter is
+    set. The standby server will also attempt to restore any WAL found in the
+    standby cluster's <filename>pg_wal</filename> directory. That typically
+    happens after a server restart, when the standby replays again WAL that was
+    streamed from the primary before the restart, but you can also manually
+    copy files to <filename>pg_wal</filename> at any time to have them
+    replayed.
    </para>
 
    <para>

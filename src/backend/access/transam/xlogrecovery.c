@@ -91,6 +91,7 @@ TimestampTz recoveryTargetTime;
 const char *recoveryTargetName;
 XLogRecPtr	recoveryTargetLSN;
 int			recovery_min_apply_delay = 0;
+int			streaming_replication_retry_interval = 0;
 
 /* options formerly taken from recovery.conf for XLOG streaming */
 char	   *PrimaryConnInfo = NULL;
@@ -297,6 +298,20 @@ bool		reachedConsistency = false;
 static char *replay_image_masked = NULL;
 static char *primary_image_masked = NULL;
 
+/*
+ * Represents WAL source switch states.
+ */
+typedef enum
+{
+	SWITCH_TO_STREAMING_NONE,	/* no switch necessary */
+	SWITCH_TO_STREAMING_PENDING,	/* exhausting pg_wal */
+	SWITCH_TO_STREAMING,		/* switch to streaming now */
+} WALSourceSwitchState;
+
+static WALSourceSwitchState wal_source_switch_state = SWITCH_TO_STREAMING_NONE;
+
+/* Holds the timestamp at which standby switched WAL source to archive */
+static TimestampTz switched_to_archive_at = 0;
 
 /*
  * Shared-memory state for WAL recovery.
@@ -439,6 +454,8 @@ static bool HotStandbyActiveInReplay(void);
 
 static void SetCurrentChunkStartTime(TimestampTz xtime);
 static void SetLatestXTime(TimestampTz xtime);
+
+static WALSourceSwitchState SwitchWALSourceToPrimary(void);
 
 /*
  * Initialization of shared memory for WAL recovery
@@ -3546,6 +3563,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 	static TimestampTz last_fail_time = 0;
 	TimestampTz now;
 	bool		streaming_reply_sent = false;
+	XLogSource	readFrom;
 
 	/*-------
 	 * Standby mode is implemented by a state machine:
@@ -3564,6 +3582,12 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 	 * values for "check trigger", "rescan timelines", and "sleep" states,
 	 * those actions are taken when reading from the previous source fails, as
 	 * part of advancing to the next state.
+	 *
+	 * Try reading WAL from primary after being in XLOG_FROM_ARCHIVE state for
+	 * at least streaming_replication_retry_interval seconds. However,
+	 * exhaust all the WAL present in pg_wal before switching. If successful,
+	 * the state machine moves to XLOG_FROM_STREAM state, otherwise it falls
+	 * back to XLOG_FROM_ARCHIVE state.
 	 *
 	 * If standby mode is turned off while reading WAL from stream, we move
 	 * to XLOG_FROM_ARCHIVE and reset lastSourceFailed, to force fetching
@@ -3588,12 +3612,14 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 		bool		startWalReceiver = false;
 
 		/*
-		 * First check if we failed to read from the current source, and
+		 * First check if we failed to read from the current source or we
+		 * intentionally want to switch the source from archive to stream, and
 		 * advance the state machine if so. The failure to read might've
 		 * happened outside this function, e.g when a CRC check fails on a
 		 * record, or within this loop.
 		 */
-		if (lastSourceFailed)
+		if (lastSourceFailed ||
+			wal_source_switch_state == SWITCH_TO_STREAMING)
 		{
 			/*
 			 * Don't allow any retry loops to occur during nonblocking
@@ -3732,9 +3758,26 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 		}
 
 		if (currentSource != oldSource)
-			elog(DEBUG2, "switched WAL source from %s to %s after %s",
-				 xlogSourceNames[oldSource], xlogSourceNames[currentSource],
-				 lastSourceFailed ? "failure" : "success");
+		{
+			/* Save the timestamp at which we are switching to archive */
+			if (currentSource == XLOG_FROM_ARCHIVE)
+				switched_to_archive_at = GetCurrentTimestamp();
+
+			ereport(DEBUG1,
+					errmsg_internal("switched WAL source from %s to %s after %s",
+									xlogSourceNames[oldSource],
+									xlogSourceNames[currentSource],
+									((wal_source_switch_state == SWITCH_TO_STREAMING) ? "timeout" : (lastSourceFailed ? "failure" : "success"))));
+
+			/* Reset the WAL source switch state */
+			if (wal_source_switch_state == SWITCH_TO_STREAMING)
+			{
+				Assert(oldSource == XLOG_FROM_ARCHIVE);
+				Assert(currentSource == XLOG_FROM_STREAM);
+
+				wal_source_switch_state = SWITCH_TO_STREAMING_NONE;
+			}
+		}
 
 		/*
 		 * We've now handled possible failure. Try to read from the chosen
@@ -3763,13 +3806,30 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 				if (randAccess)
 					curFileTLI = 0;
 
+				/* See if we can switch WAL source to streaming */
+				if (wal_source_switch_state == SWITCH_TO_STREAMING_NONE)
+					wal_source_switch_state = SwitchWALSourceToPrimary();
+
 				/*
 				 * Try to restore the file from archive, or read an existing
-				 * file from pg_wal.
+				 * file from pg_wal. However, before switching WAL source to
+				 * streaming, give it a chance to read all the WAL from
+				 * pg_wal.
 				 */
-				readFile = XLogFileReadAnyTLI(readSegNo, DEBUG2,
-											  currentSource == XLOG_FROM_ARCHIVE ? XLOG_FROM_ANY :
-											  currentSource);
+				if (wal_source_switch_state == SWITCH_TO_STREAMING_PENDING)
+				{
+					/*
+					 * We already are in archive when we are trying to switch
+					 * to streaming, see SwitchWALSourceToPrimary.
+					 */
+					Assert(currentSource == XLOG_FROM_ARCHIVE);
+					readFrom = XLOG_FROM_PG_WAL;
+				}
+				else
+					readFrom = currentSource == XLOG_FROM_ARCHIVE ?
+						XLOG_FROM_ANY : currentSource;
+
+				readFile = XLogFileReadAnyTLI(readSegNo, DEBUG2, readFrom);
 				if (readFile >= 0)
 					return XLREAD_SUCCESS;	/* success! */
 
@@ -3777,6 +3837,14 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 				 * Nope, not found in archive or pg_wal.
 				 */
 				lastSourceFailed = true;
+
+				/*
+				 * Read all the WAL in pg_wal. Now ready to switch to
+				 * streaming.
+				 */
+				if (wal_source_switch_state == SWITCH_TO_STREAMING_PENDING)
+					wal_source_switch_state = SWITCH_TO_STREAMING;
+
 				break;
 
 			case XLOG_FROM_STREAM:
@@ -4007,6 +4075,44 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 	return XLREAD_FAIL;			/* not reached */
 }
 
+/*
+ * Check if standby can make an attempt to read WAL from primary after reading
+ * from archive for at least a configurable duration.
+ *
+ * Reading WAL from archive may not always be as efficient and fast as reading
+ * from primary. This can be due to the differences in disk types, IO costs,
+ * network latencies etc. All of these can impact the recovery performance on
+ * standby and increase the replication lag on primary. In addition, the
+ * primary keeps accumulating WAL needed for the standby while the standby
+ * reads WAL from archive because the standby replication slot stays inactive.
+ * To avoid these problems, the standby will try to switch to stream mode
+ * sooner.
+ */
+static WALSourceSwitchState
+SwitchWALSourceToPrimary(void)
+{
+	TimestampTz now;
+
+	if (streaming_replication_retry_interval <= 0 ||
+		!StandbyMode ||
+		currentSource != XLOG_FROM_ARCHIVE)
+		return SWITCH_TO_STREAMING_NONE;
+
+	now = GetCurrentTimestamp();
+
+	/* First time through */
+	if (switched_to_archive_at == 0)
+	{
+		switched_to_archive_at = now;
+		return SWITCH_TO_STREAMING_NONE;
+	}
+
+	if (TimestampDifferenceExceeds(switched_to_archive_at, now,
+								   streaming_replication_retry_interval * 1000))
+		return SWITCH_TO_STREAMING_PENDING;
+
+	return SWITCH_TO_STREAMING_NONE;
+}
 
 /*
  * Determine what log level should be used to report a corrupt WAL record

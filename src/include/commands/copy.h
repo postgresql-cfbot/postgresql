@@ -73,6 +73,7 @@ typedef struct CopyFormatOptions
 	bool	   *force_null_flags;	/* per-column CSV FN flags */
 	bool		convert_selectively;	/* do selective binary conversion? */
 	CopyOnErrorChoice on_error; /* what to do when error happened */
+	int			reject_limit;	/* tolerable number of malformed rows */
 	List	   *convert_select; /* list of column names (can be NIL) */
 } CopyFormatOptions;
 

@@ -407,6 +407,19 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
    </varlistentry>
 
    <varlistentry>
+    <term><literal>REJECT_LIMIT</literal></term>
+    <listitem>
+     <para>
+      Specifies the maximum tolerable number of malformed rows.
+      If input data has caused more malformed errors than this value, entire
+      <command>COPY</command> fails.
+      This option must be used with <literal>ON_ERROR</literal> to be set to
+      other than <literal>stop</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><literal>ENCODING</literal></term>
     <listitem>
      <para>

@@ -17,9 +17,16 @@
 
 #include "access/xlogdefs.h"
 
+typedef enum ArchiveType
+{
+	ARCHIVE_TYPE_WAL_SEGMENT,
+	ARCHIVE_TYPE_TIMELINE_HISTORY,
+	ARCHIVE_TYPE_TIMELINE_HISTORY_EXISTS
+} ArchiveType;
+
 extern bool RestoreArchivedFile(char *path, const char *xlogfname,
 								const char *recovername, off_t expectedSize,
-								bool cleanupEnabled);
+								bool cleanupEnabled, ArchiveType archive_type);
 extern void ExecuteRecoveryCommand(const char *command, const char *commandName,
 								   bool failOnSignal, uint32 wait_event_info);
 extern void KeepFileRestoredFromArchive(const char *path, const char *xlogfname);

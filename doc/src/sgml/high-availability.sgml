@@ -627,7 +627,8 @@ protocol to make nodes agree on a serializable transactional order.
    <para>
     In standby mode, the server continuously applies WAL received from the
     primary server. The standby server can read WAL from a WAL archive
-    (see <xref linkend="guc-restore-command"/>) or directly from the primary
+    (see <xref linkend="guc-restore-command"/> and
+    <xref linkend="guc-restore-library"/>) or directly from the primary
     over a TCP connection (streaming replication). The standby server will
     also attempt to restore any WAL found in the standby cluster's
     <filename>pg_wal</filename> directory. That typically happens after a server
@@ -638,8 +639,10 @@ protocol to make nodes agree on a serializable transactional order.
 
    <para>
     At startup, the standby begins by restoring all WAL available in the
-    archive location, calling <varname>restore_command</varname>. Once it
+    archive location, either by calling <varname>restore_command</varname> or
+    by executing the <varname>restore_library</varname>'s callbacks.  Once it
     reaches the end of WAL available there and <varname>restore_command</varname>
+    or <varname>restore_library</varname>
     fails, it tries to restore any WAL available in the <filename>pg_wal</filename> directory.
     If that fails, and streaming replication has been configured, the
     standby tries to connect to the primary server and start streaming WAL
@@ -698,7 +701,8 @@ protocol to make nodes agree on a serializable transactional order.
     server (see <xref linkend="backup-pitr-recovery"/>). Create a file
     <link linkend="file-standby-signal"><filename>standby.signal</filename></link><indexterm><primary>standby.signal</primary></indexterm>
     in the standby's cluster data
-    directory. Set <xref linkend="guc-restore-command"/> to a simple command to copy files from
+    directory. Set <xref linkend="guc-restore-command"/> or
+    <xref linkend="guc-restore-library"/> to copy files from
     the WAL archive. If you plan to have multiple standby servers for high
     availability purposes, make sure that <varname>recovery_target_timeline</varname> is set to
     <literal>latest</literal> (the default), to make the standby server follow the timeline change
@@ -707,7 +711,8 @@ protocol to make nodes agree on a serializable transactional order.
 
    <note>
      <para>
-     <xref linkend="guc-restore-command"/> should return immediately
+     <xref linkend="guc-restore-command"/> and
+     <xref linkend="guc-restore-library"/> should return immediately
      if the file does not exist; the server will retry the command again if
      necessary.
     </para>
@@ -731,8 +736,9 @@ protocol to make nodes agree on a serializable transactional order.
 
    <para>
     If you're using a WAL archive, its size can be minimized using the <xref
-    linkend="guc-archive-cleanup-command"/> parameter to remove files that are no
-    longer required by the standby server.
+    linkend="guc-archive-cleanup-command"/> parameter or the
+    <xref linkend="guc-restore-library"/>'s archive cleanup callbacks to remove
+    files that are no longer required by the standby server.
     The <application>pg_archivecleanup</application> utility is designed specifically to
     be used with <varname>archive_cleanup_command</varname> in typical single-standby
     configurations, see <xref linkend="pgarchivecleanup"/>.

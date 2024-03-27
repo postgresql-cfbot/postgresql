@@ -1,0 +1,226 @@
+with clauses(expr) as (
+  values
+    ('x'),
+    ('not x'),
+    ('strictf(x, y)'),
+    ('not strictf(x, y)'),
+    ('x is null'),
+    ('x is not null'),
+    ('x is true'),
+    ('x is not true'),
+    ('x is false'),
+    ('x is not false'),
+    ('x is unknown'),
+    ('x is not unknown'),
+    ('x = true'),
+    ('x = false')
+)
+select p.expr predicate, c.expr clause, t.*
+from clauses p, clauses c
+join lateral (
+  select *
+  from test_predtest(
+    'select ' || p.expr || ', ' || c.expr ||
+    ' from booleans'
+  )
+) t on true;
+     predicate     |      clause       | strong_implied_by | weak_implied_by | strong_refuted_by | weak_refuted_by | s_i_holds | w_i_holds | s_r_holds | w_r_holds 
+-------------------+-------------------+-------------------+-----------------+-------------------+-----------------+-----------+-----------+-----------+-----------
+ x                 | x                 | t                 | t               | f                 | f               | t         | t         | f         | f
+ not x             | x                 | f                 | f               | t                 | t               | f         | f         | t         | t
+ strictf(x, y)     | x                 | f                 | f               | f                 | f               | f         | f         | f         | f
+ not strictf(x, y) | x                 | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is null         | x                 | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not null     | x                 | t                 | f               | f                 | f               | t         | f         | f         | f
+ x is true         | x                 | t                 | f               | f                 | f               | t         | f         | f         | f
+ x is not true     | x                 | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is false        | x                 | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not false    | x                 | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is unknown      | x                 | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not unknown  | x                 | t                 | f               | f                 | f               | t         | f         | f         | f
+ x = true          | x                 | t                 | t               | f                 | f               | t         | t         | f         | f
+ x = false         | x                 | f                 | f               | t                 | t               | f         | f         | t         | t
+ x                 | not x             | f                 | f               | t                 | t               | f         | f         | t         | t
+ not x             | not x             | t                 | t               | f                 | f               | t         | t         | f         | f
+ strictf(x, y)     | not x             | f                 | f               | f                 | f               | f         | f         | f         | t
+ not strictf(x, y) | not x             | f                 | f               | f                 | f               | f         | t         | f         | f
+ x is null         | not x             | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not null     | not x             | t                 | f               | f                 | f               | t         | f         | f         | f
+ x is true         | not x             | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not true     | not x             | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is false        | not x             | t                 | f               | f                 | f               | t         | f         | f         | f
+ x is not false    | not x             | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is unknown      | not x             | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not unknown  | not x             | t                 | f               | f                 | f               | t         | f         | f         | f
+ x = true          | not x             | f                 | f               | t                 | t               | f         | f         | t         | t
+ x = false         | not x             | t                 | t               | f                 | f               | t         | t         | f         | f
+ x                 | strictf(x, y)     | f                 | f               | f                 | f               | t         | f         | f         | f
+ not x             | strictf(x, y)     | f                 | f               | f                 | f               | f         | f         | t         | t
+ strictf(x, y)     | strictf(x, y)     | t                 | t               | f                 | f               | t         | t         | f         | f
+ not strictf(x, y) | strictf(x, y)     | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is null         | strictf(x, y)     | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not null     | strictf(x, y)     | t                 | f               | f                 | f               | t         | f         | f         | f
+ x is true         | strictf(x, y)     | f                 | f               | f                 | f               | t         | f         | f         | f
+ x is not true     | strictf(x, y)     | f                 | f               | f                 | f               | f         | f         | t         | t
+ x is false        | strictf(x, y)     | f                 | f               | f                 | f               | f         | f         | t         | t
+ x is not false    | strictf(x, y)     | f                 | f               | f                 | f               | t         | f         | f         | f
+ x is unknown      | strictf(x, y)     | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not unknown  | strictf(x, y)     | t                 | f               | f                 | f               | t         | f         | f         | f
+ x = true          | strictf(x, y)     | f                 | f               | f                 | f               | t         | f         | f         | f
+ x = false         | strictf(x, y)     | f                 | f               | f                 | f               | f         | f         | t         | t
+ x                 | not strictf(x, y) | f                 | f               | f                 | f               | f         | f         | f         | f
+ not x             | not strictf(x, y) | f                 | f               | f                 | f               | f         | f         | f         | f
+ strictf(x, y)     | not strictf(x, y) | f                 | f               | t                 | t               | f         | f         | t         | t
+ not strictf(x, y) | not strictf(x, y) | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is null         | not strictf(x, y) | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not null     | not strictf(x, y) | t                 | f               | f                 | f               | t         | f         | f         | f
+ x is true         | not strictf(x, y) | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is not true     | not strictf(x, y) | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is false        | not strictf(x, y) | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is not false    | not strictf(x, y) | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is unknown      | not strictf(x, y) | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not unknown  | not strictf(x, y) | t                 | f               | f                 | f               | t         | f         | f         | f
+ x = true          | not strictf(x, y) | f                 | f               | f                 | f               | f         | f         | f         | f
+ x = false         | not strictf(x, y) | f                 | f               | f                 | f               | f         | f         | f         | f
+ x                 | x is null         | f                 | f               | f                 | t               | f         | t         | f         | t
+ not x             | x is null         | f                 | t               | f                 | t               | f         | t         | f         | t
+ strictf(x, y)     | x is null         | f                 | f               | f                 | t               | f         | t         | f         | t
+ not strictf(x, y) | x is null         | f                 | t               | f                 | t               | f         | t         | f         | t
+ x is null         | x is null         | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is not null     | x is null         | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is true         | x is null         | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not true     | x is null         | f                 | f               | f                 | f               | t         | t         | f         | f
+ x is false        | x is null         | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not false    | x is null         | f                 | f               | f                 | f               | t         | t         | f         | f
+ x is unknown      | x is null         | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is not unknown  | x is null         | f                 | f               | t                 | t               | f         | f         | t         | t
+ x = true          | x is null         | f                 | f               | f                 | t               | f         | t         | f         | t
+ x = false         | x is null         | f                 | t               | f                 | t               | f         | t         | f         | t
+ x                 | x is not null     | f                 | f               | f                 | f               | f         | f         | f         | f
+ not x             | x is not null     | f                 | f               | f                 | f               | f         | f         | f         | f
+ strictf(x, y)     | x is not null     | f                 | f               | f                 | f               | f         | f         | f         | f
+ not strictf(x, y) | x is not null     | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is null         | x is not null     | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not null     | x is not null     | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is true         | x is not null     | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is not true     | x is not null     | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is false        | x is not null     | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is not false    | x is not null     | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is unknown      | x is not null     | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not unknown  | x is not null     | t                 | t               | f                 | f               | t         | t         | f         | f
+ x = true          | x is not null     | f                 | f               | f                 | f               | f         | f         | f         | f
+ x = false         | x is not null     | f                 | f               | f                 | f               | f         | f         | f         | f
+ x                 | x is true         | t                 | t               | f                 | f               | t         | t         | f         | f
+ not x             | x is true         | f                 | f               | t                 | t               | f         | f         | t         | t
+ strictf(x, y)     | x is true         | f                 | f               | f                 | f               | f         | f         | f         | f
+ not strictf(x, y) | x is true         | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is null         | x is true         | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not null     | x is true         | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is true         | x is true         | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is not true     | x is true         | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is false        | x is true         | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not false    | x is true         | f                 | f               | f                 | f               | t         | t         | f         | f
+ x is unknown      | x is true         | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not unknown  | x is true         | t                 | t               | f                 | f               | t         | t         | f         | f
+ x = true          | x is true         | t                 | t               | f                 | f               | t         | t         | f         | f
+ x = false         | x is true         | f                 | f               | t                 | t               | f         | f         | t         | t
+ x                 | x is not true     | f                 | f               | f                 | t               | f         | f         | f         | t
+ not x             | x is not true     | f                 | t               | f                 | f               | f         | t         | f         | f
+ strictf(x, y)     | x is not true     | f                 | f               | f                 | f               | f         | f         | f         | t
+ not strictf(x, y) | x is not true     | f                 | f               | f                 | f               | f         | t         | f         | f
+ x is null         | x is not true     | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is not null     | x is not true     | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is true         | x is not true     | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not true     | x is not true     | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is false        | x is not true     | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is not false    | x is not true     | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is unknown      | x is not true     | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is not unknown  | x is not true     | f                 | f               | f                 | f               | f         | f         | f         | f
+ x = true          | x is not true     | f                 | f               | f                 | t               | f         | f         | f         | t
+ x = false         | x is not true     | f                 | t               | f                 | f               | f         | t         | f         | f
+ x                 | x is false        | f                 | f               | t                 | t               | f         | f         | t         | t
+ not x             | x is false        | t                 | t               | f                 | f               | t         | t         | f         | f
+ strictf(x, y)     | x is false        | f                 | f               | f                 | f               | f         | f         | f         | t
+ not strictf(x, y) | x is false        | f                 | f               | f                 | f               | f         | t         | f         | f
+ x is null         | x is false        | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not null     | x is false        | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is true         | x is false        | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not true     | x is false        | f                 | f               | f                 | f               | t         | t         | f         | f
+ x is false        | x is false        | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is not false    | x is false        | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is unknown      | x is false        | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not unknown  | x is false        | t                 | t               | f                 | f               | t         | t         | f         | f
+ x = true          | x is false        | f                 | f               | t                 | t               | f         | f         | t         | t
+ x = false         | x is false        | t                 | t               | f                 | f               | t         | t         | f         | f
+ x                 | x is not false    | f                 | t               | f                 | f               | f         | t         | f         | f
+ not x             | x is not false    | f                 | f               | f                 | f               | f         | f         | f         | t
+ strictf(x, y)     | x is not false    | f                 | f               | f                 | f               | f         | f         | f         | f
+ not strictf(x, y) | x is not false    | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is null         | x is not false    | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is not null     | x is not false    | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is true         | x is not false    | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is not true     | x is not false    | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is false        | x is not false    | f                 | f               | f                 | f               | f         | f         | t         | t
+ x is not false    | x is not false    | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is unknown      | x is not false    | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is not unknown  | x is not false    | f                 | f               | f                 | f               | f         | f         | f         | f
+ x = true          | x is not false    | f                 | t               | f                 | f               | f         | t         | f         | f
+ x = false         | x is not false    | f                 | f               | f                 | f               | f         | f         | f         | t
+ x                 | x is unknown      | f                 | f               | f                 | t               | f         | t         | f         | t
+ not x             | x is unknown      | f                 | t               | f                 | t               | f         | t         | f         | t
+ strictf(x, y)     | x is unknown      | f                 | f               | f                 | t               | f         | t         | f         | t
+ not strictf(x, y) | x is unknown      | f                 | t               | f                 | t               | f         | t         | f         | t
+ x is null         | x is unknown      | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is not null     | x is unknown      | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is true         | x is unknown      | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not true     | x is unknown      | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is false        | x is unknown      | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not false    | x is unknown      | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is unknown      | x is unknown      | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is not unknown  | x is unknown      | f                 | f               | t                 | t               | f         | f         | t         | t
+ x = true          | x is unknown      | f                 | f               | f                 | t               | f         | t         | f         | t
+ x = false         | x is unknown      | f                 | t               | f                 | t               | f         | t         | f         | t
+ x                 | x is not unknown  | f                 | f               | f                 | f               | f         | f         | f         | f
+ not x             | x is not unknown  | f                 | f               | f                 | f               | f         | f         | f         | f
+ strictf(x, y)     | x is not unknown  | f                 | f               | f                 | f               | f         | f         | f         | f
+ not strictf(x, y) | x is not unknown  | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is null         | x is not unknown  | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not null     | x is not unknown  | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is true         | x is not unknown  | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is not true     | x is not unknown  | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is false        | x is not unknown  | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is not false    | x is not unknown  | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is unknown      | x is not unknown  | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not unknown  | x is not unknown  | t                 | t               | f                 | f               | t         | t         | f         | f
+ x = true          | x is not unknown  | f                 | f               | f                 | f               | f         | f         | f         | f
+ x = false         | x is not unknown  | f                 | f               | f                 | f               | f         | f         | f         | f
+ x                 | x = true          | t                 | t               | f                 | f               | t         | t         | f         | f
+ not x             | x = true          | f                 | f               | t                 | t               | f         | f         | t         | t
+ strictf(x, y)     | x = true          | f                 | f               | f                 | f               | f         | f         | f         | f
+ not strictf(x, y) | x = true          | f                 | f               | f                 | f               | f         | f         | f         | f
+ x is null         | x = true          | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not null     | x = true          | t                 | f               | f                 | f               | t         | f         | f         | f
+ x is true         | x = true          | t                 | f               | f                 | f               | t         | f         | f         | f
+ x is not true     | x = true          | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is false        | x = true          | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not false    | x = true          | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is unknown      | x = true          | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not unknown  | x = true          | t                 | f               | f                 | f               | t         | f         | f         | f
+ x = true          | x = true          | t                 | t               | f                 | f               | t         | t         | f         | f
+ x = false         | x = true          | f                 | f               | t                 | t               | f         | f         | t         | t
+ x                 | x = false         | f                 | f               | t                 | t               | f         | f         | t         | t
+ not x             | x = false         | t                 | t               | f                 | f               | t         | t         | f         | f
+ strictf(x, y)     | x = false         | f                 | f               | f                 | f               | f         | f         | f         | t
+ not strictf(x, y) | x = false         | f                 | f               | f                 | f               | f         | t         | f         | f
+ x is null         | x = false         | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not null     | x = false         | t                 | f               | f                 | f               | t         | f         | f         | f
+ x is true         | x = false         | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not true     | x = false         | t                 | t               | f                 | f               | t         | t         | f         | f
+ x is false        | x = false         | t                 | f               | f                 | f               | t         | f         | f         | f
+ x is not false    | x = false         | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is unknown      | x = false         | f                 | f               | t                 | t               | f         | f         | t         | t
+ x is not unknown  | x = false         | t                 | f               | f                 | f               | t         | f         | f         | f
+ x = true          | x = false         | f                 | f               | t                 | t               | f         | f         | t         | t
+ x = false         | x = false         | t                 | t               | f                 | f               | t         | t         | f         | f
+(196 rows)
+

@@ -1029,11 +1029,106 @@ INSERT INTO tbl1 VALUES ($1, $2) \bind 'first value' 'second value' \g
       </varlistentry>
 
       <varlistentry id="app-psql-meta-command-conninfo">
-        <term><literal>\conninfo</literal></term>
+        <term><literal>\conninfo[+]</literal></term>
         <listitem>
         <para>
         Outputs information about the current database connection.
+        When no <literal>+</literal> is appended, it simply prints
+        a textual (string) description of a few connection options.
+        When <literal>+</literal> is given, more complete information
+        is displayed as a table containing the following columns:
         </para>
+
+        <para>
+        <literal>Database:</literal> Displays the name of the current
+        database on this connection.
+        </para>
+
+        <para>
+        <literal>Authenticated User:</literal> Displays the authenticated
+        user at the time of psql connection with the server.
+        </para>
+
+        <para>
+        <literal>System User:</literal> Returns the authentication method
+        and the identity (if any) that the user presented during the
+        authentication cycle before they were assigned a database role. It
+        is represented as auth_method:identity or NULL if the user has not
+        been authenticated.
+        </para>
+
+        <para>
+        <literal>Current User:</literal> Displays the user name of the
+        current execution context.
+        </para>
+
+        <para>
+        <literal>Session User:</literal> Displays the session user's name.
+        </para>
+
+        <para>
+        <literal>Backend PID:</literal> Displays the process ID of the server
+        process attached to the current session.
+        </para>
+
+        <para>
+        <literal>Server Address:</literal> Displays the IP address on which
+        the server accepted the current connection, or NULL if the current
+        connection is via a Unix-domain socket.
+        </para>
+
+        <para>
+        <literal>Server Port:</literal> Displays the IP port number on which
+        the server accepted the current connection, or NULL if the current
+        connection is via a Unix-domain socket.
+        </para>
+
+        <para>
+        <literal>Client Address:</literal> Displays the IP address of the
+        current client, or NULL if the current connection is via a Unix-domain socket.
+        </para>
+
+        <para>
+        <literal>Client Port:</literal> Displays the IP port number of the
+        current client, or NULL if the current connection is via a Unix-domain socket.
+        </para>
+
+        <para>
+        <literal>Socket Directory:</literal> Displays the directory where
+        Unix-domain socket was created.
+        </para>
+
+        <para>
+        <literal>Host:</literal> Displays the host of the connection,
+        which refers to the address or name of the machine where the server
+        is running. When a socket connection is established, it displays NULL.
+        </para>
+
+        <para>
+        <literal>GSSAPI:</literal> Displays "true" if GSSAPI is in use, or "false"
+        if GSSAPI is not in use on this connection.
+        </para>
+
+        <para>
+        <literal>SSL Connection:</literal> Displays "true" if the current
+        connection to the server uses SSL, and "false" otherwise.
+        </para>
+
+        <para>
+        <literal>SSL Protocol:</literal> Displays the name of the protocol
+        used for the SSL connection (e.g., TLSv1.0, TLSv1.1, TLSv1.2 or TLSv1.3).
+        </para>
+
+        <para>
+        <literal>SSL Cipher:</literal> Displays the name of the cipher used
+        for the SSL connection (e.g., DHE-RSA-AES256-SHA).
+        </para>
+
+        <para>
+        <literal>SLL Compression:</literal> Displays "on" if SSL compression
+        is in use, "off" if not, or NULL if SSL is not in use on this connection.
+        </para>
+
         </listitem>
       </varlistentry>
 

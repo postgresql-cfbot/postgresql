@@ -26,6 +26,7 @@
 #include "fe_utils/mbprint.h"
 #include "fe_utils/print.h"
 #include "fe_utils/string_utils.h"
+#include "libpq/pqcomm.h"
 #include "settings.h"
 #include "variables.h"
 
@@ -901,6 +902,111 @@ error_return:
 	return false;
 }
 
+/*
+ * listConnectionInformation
+ *
+ * for \conninfo+
+ */
+bool
+listConnectionInformation(void)
+{
+	PGresult   *res;
+	PQExpBufferData buf;
+	printQueryOpt myopt = pset.popt;
+
+	char	   *host = PQhost(pset.db);
+	char	   *hostaddr = PQhostaddr(pset.db);
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+					  "SELECT\n"
+					  "  pg_catalog.current_database() AS \"Database\",\n"
+					  "  '%s' AS \"Authenticated User\",\n",
+					  PQuser(pset.db));
+	if (pset.sversion >= 160000)
+		appendPQExpBuffer(&buf,
+						  "  pg_catalog.system_user() AS \"System User\",\n");
+	else
+		appendPQExpBuffer(&buf,
+						  "  NULL AS \"System User\",\n");
+	appendPQExpBuffer(&buf,
+					  "  pg_catalog.current_user() AS \"Current User\",\n"
+					  "  pg_catalog.session_user() AS \"Session User\",\n"
+					  "  pg_catalog.pg_backend_pid() AS \"Backend PID\",\n"
+					  "  pg_catalog.inet_server_addr() AS \"Server Address\",\n"
+					  "  pg_catalog.current_setting('port') AS \"Server Port\",\n"
+					  "  pg_catalog.inet_client_addr() AS \"Client Address\",\n"
+					  "  pg_catalog.inet_client_port() AS \"Client Port\",\n");
+	if (is_unixsock_path(host) && !(hostaddr && *hostaddr))
+		appendPQExpBuffer(&buf,
+						  "  '%s' AS \"Socket Directory\",\n",
+						  host);
+	else
+		appendPQExpBuffer(&buf,
+						  "  NULL AS \"Socket Directory\",\n");
+	appendPQExpBuffer(&buf,
+					  "  CASE\n"
+					  "    WHEN\n"
+					  "      pg_catalog.inet_server_addr() IS NULL\n"
+					  "      AND pg_catalog.inet_client_addr() IS NULL\n"
+					  "    THEN NULL\n"
+					  "    ELSE '%s'\n"
+					  "  END AS \"Host\",\n",
+					  host);
+	if (pset.sversion >= 120000)
+		appendPQExpBuffer(&buf,
+						  "  (SELECT gss_authenticated AS \"GSSAPI\"\n"
+						  "  FROM pg_catalog.pg_stat_gssapi\n"
+						  "  WHERE pid = pg_catalog.pg_backend_pid()),\n");
+	else
+		appendPQExpBuffer(&buf,
+						  "  NULL AS \"GSSAPI\",\n");
+	if (pset.sversion >= 90500)
+	{
+		if (pset.sversion < 140000)
+			appendPQExpBuffer(&buf,
+							  "  ssl.ssl AS \"SSL Connection\",\n"
+							  "  ssl.version AS \"SSL Protocol\",\n"
+							  "  ssl.cipher AS \"SSL Cipher\",\n"
+							  "  ssl.compression AS \"SSL Compression\"\n"
+							  "FROM\n"
+							  "  pg_catalog.pg_stat_ssl ssl\n"
+							  "WHERE\n"
+							  "  pid = pg_catalog.pg_backend_pid()\n");
+		if (pset.sversion >= 140000)
+			appendPQExpBuffer(&buf,
+							  "  ssl.ssl AS \"SSL Connection\",\n"
+							  "  ssl.version AS \"SSL Protocol\",\n"
+							  "  ssl.cipher AS \"SSL Cipher\",\n"
+							  "  NULL AS \"SSL Compression\"\n"
+							  "FROM\n"
+							  "  pg_catalog.pg_stat_ssl ssl\n"
+							  "WHERE\n"
+							  "  pid = pg_catalog.pg_backend_pid()\n");
+	}
+	else
+		appendPQExpBuffer(&buf,
+						  "  NULL AS \"SSL Connection\",\n"
+						  "  NULL AS \"SSL Protocol\",\n"
+						  "  NULL AS \"SSL Cipher\",\n"
+						  "  NULL AS \"SSL Compression\"\n");
+	appendPQExpBuffer(&buf,
+					  ";");
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	myopt.title = _("Current Connection Information");
+	myopt.translate_header = true;
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+	PQclear(res);
+	return true;
+}
 
 /*
  * listAllDbs

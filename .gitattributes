@@ -1,3 +1,4 @@
+# IMPORTANT: When updating this file, also update .editorconfig to match.
 *		whitespace=space-before-tab,trailing-space
 *.[chly]	whitespace=space-before-tab,trailing-space,indent-with-non-tab,tabwidth=4
 *.pl		whitespace=space-before-tab,trailing-space,tabwidth=4

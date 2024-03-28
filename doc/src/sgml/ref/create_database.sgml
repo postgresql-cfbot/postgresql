@@ -139,6 +139,12 @@ CREATE DATABASE <replaceable class="parameter">name</replaceable>
         it also forces the system to perform a checkpoint both before and
         after the creation of the new database. In some situations, this may
         have a noticeable negative impact on overall system performance.
+        On some platforms and file systems, the <literal>FILE_CLONE</literal>
+        strategy is available.  This works the same way as
+        <literal>FILE_COPY</literal>, except that it uses fast file cloning
+        or copying system calls that might push down the work of copying to the
+        storage, or use copy-on-write techniques.  The effect on disk space
+        usage and execution time is file system-dependent.
        </para>
       </listitem>
      </varlistentry>

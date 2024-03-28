@@ -40,6 +40,13 @@ if gssapi.found()
   )
 endif
 
+if oauth.found()
+  libpq_sources += files('fe-auth-oauth.c')
+  if oauth_library == 'curl'
+    libpq_sources += files('fe-auth-oauth-curl.c')
+  endif
+endif
+
 export_file = custom_target('libpq.exports',
   kwargs: gen_export_kwargs,
 )

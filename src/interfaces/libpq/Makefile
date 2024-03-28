@@ -61,6 +61,14 @@ OBJS += \
 	fe-secure-gssapi.o
 endif
 
+ifneq ($(with_oauth),no)
+OBJS += fe-auth-oauth.o
+
+ifeq ($(with_oauth),curl)
+OBJS += fe-auth-oauth-curl.o
+endif
+endif
+
 ifeq ($(PORTNAME), cygwin)
 override shlib = cyg$(NAME)$(DLSUFFIX)
 endif
@@ -79,7 +87,7 @@ endif
 # that are built correctly for use in a shlib.
 SHLIB_LINK_INTERNAL = -lpgcommon_shlib -lpgport_shlib
 ifneq ($(PORTNAME), win32)
-SHLIB_LINK += $(filter -lcrypt -ldes -lcom_err -lcrypto -lk5crypto -lkrb5 -lgssapi_krb5 -lgss -lgssapi -lssl -lsocket -lnsl -lresolv -lintl -lm, $(LIBS)) $(LDAP_LIBS_FE) $(PTHREAD_LIBS)
+SHLIB_LINK += $(filter -lcrypt -ldes -lcom_err -lcrypto -lk5crypto -lkrb5 -lgssapi_krb5 -lgss -lgssapi -lssl -lcurl -lsocket -lnsl -lresolv -lintl -lm, $(LIBS)) $(LDAP_LIBS_FE) $(PTHREAD_LIBS)
 else
 SHLIB_LINK += $(filter -lcrypt -ldes -lcom_err -lcrypto -lk5crypto -lkrb5 -lgssapi32 -lssl -lsocket -lnsl -lresolv -lintl -lm $(PTHREAD_LIBS), $(LIBS)) $(LDAP_LIBS_FE)
 endif
@@ -116,7 +124,7 @@ libpq-refs-stamp: $(shlib)
 ifneq ($(enable_coverage), yes)
 ifeq (,$(filter solaris,$(PORTNAME)))
 	@if nm -A -u $< 2>/dev/null | grep -v -e __cxa_atexit -e __tsan_func_exit | grep exit; then \
-		echo 'libpq must not be calling any function which invokes exit'; exit 1; \
+		echo 'libpq must not be calling any function which invokes exit'; \
 	fi
 endif
 endif

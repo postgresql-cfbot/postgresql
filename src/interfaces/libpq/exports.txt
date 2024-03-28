@@ -202,3 +202,6 @@ PQcancelSocket            199
 PQcancelErrorMessage      200
 PQcancelReset             201
 PQcancelFinish            202
+PQsetAuthDataHook         203
+PQgetAuthDataHook         204
+PQdefaultAuthDataHook     205

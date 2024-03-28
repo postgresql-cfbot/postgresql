@@ -125,13 +125,18 @@ common_sources_frontend_static += files(
 # least cryptohash_openssl.c, hmac_openssl.c depend on it.
 # controldata_utils.c depends on wait_event_types_h. That's arguably a
 # layering violation, but ...
+#
+# XXX Frontend builds need libpq's pqexpbuffer.h, so adjust the include paths
+# appropriately. This seems completely broken.
 pgcommon = {}
 pgcommon_variants = {
   '_srv': internal_lib_args + {
+    'include_directories': include_directories('.'),
     'sources': common_sources + [lwlocknames_h] + [wait_event_types_h],
     'dependencies': [backend_common_code],
   },
   '': default_lib_args + {
+    'include_directories': include_directories('../interfaces/libpq', '.'),
     'sources': common_sources_frontend_static,
     'dependencies': [frontend_common_code],
     # Files in libpgcommon.a should use/export the "xxx_private" versions
@@ -140,6 +145,7 @@ pgcommon_variants = {
   },
   '_shlib': default_lib_args + {
     'pic': true,
+    'include_directories': include_directories('../interfaces/libpq', '.'),
     'sources': common_sources_frontend_shlib,
     'dependencies': [frontend_common_code],
   },
@@ -157,7 +163,6 @@ foreach name, opts : pgcommon_variants
     c_args = opts.get('c_args', []) + common_cflags[cflagname]
     cflag_libs += static_library('libpgcommon@0@_@1@'.format(name, cflagname),
       c_pch: pch_c_h,
-      include_directories: include_directories('.'),
       kwargs: opts + {
         'sources': sources,
         'c_args': c_args,
@@ -170,7 +175,6 @@ foreach name, opts : pgcommon_variants
   lib = static_library('libpgcommon@0@'.format(name),
       link_with: cflag_libs,
       c_pch: pch_c_h,
-      include_directories: include_directories('.'),
       kwargs: opts + {
         'dependencies': opts['dependencies'] + [ssl],
       }

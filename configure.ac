@@ -928,6 +928,26 @@ AC_SUBST(with_ldap)
 
 
 #
+# OAuth 2.0
+#
+AC_MSG_CHECKING([whether to build with OAuth support])
+PGAC_ARG_REQ(with, oauth, [LIB], [use LIB for OAuth 2.0 support (curl)])
+if test x"$with_oauth" = x"" ; then
+  with_oauth=no
+fi
+
+if test x"$with_oauth" = x"curl"; then
+  AC_DEFINE([USE_OAUTH], 1, [Define to 1 to build with OAuth 2.0 support. (--with-oauth)])
+  AC_DEFINE([USE_OAUTH_CURL], 1, [Define to 1 to use libcurl for OAuth support.])
+elif test x"$with_oauth" != x"no"; then
+  AC_MSG_ERROR([--with-oauth must specify curl])
+fi
+
+AC_MSG_RESULT([$with_oauth])
+AC_SUBST(with_oauth)
+
+
+#
 # Bonjour
 #
 AC_MSG_CHECKING([whether to build with Bonjour support])
@@ -1423,6 +1443,10 @@ fi
 AC_SUBST(LDAP_LIBS_FE)
 AC_SUBST(LDAP_LIBS_BE)
 
+if test "$with_oauth" = curl ; then
+  AC_CHECK_LIB(curl, curl_multi_init, [], [AC_MSG_ERROR([library 'curl' is required for --with-oauth=curl])])
+fi
+
 # for contrib/sepgsql
 if test "$with_selinux" = yes; then
   AC_CHECK_LIB(selinux, security_compute_create_name, [],
@@ -1612,6 +1636,10 @@ elif test "$with_uuid" = ossp ; then
       [AC_EGREP_HEADER([uuid_export], uuid.h, [],
         [AC_MSG_ERROR([header file <uuid.h> does not match OSSP UUID library])])],
       [AC_MSG_ERROR([header file <ossp/uuid.h> or <uuid.h> is required for OSSP UUID])])])
+fi
+
+if test "$with_oauth" = curl; then
+  AC_CHECK_HEADER(curl/curl.h, [], [AC_MSG_ERROR([header file <curl/curl.h> is required for OAuth])])
 fi
 
 if test "$PORTNAME" = "win32" ; then

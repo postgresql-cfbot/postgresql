@@ -38,6 +38,7 @@
 #include "utils/timeout.h"
 
 static void BackendInitialize(ClientSocket *client_sock, CAC_state cac);
+static int	ProcessSSLStartup(Port *port);
 static int	ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done);
 static void SendNegotiateProtocolVersion(List *unrecognized_protocol_options);
 static void process_startup_packet_die(SIGNAL_ARGS);
@@ -252,7 +253,9 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac)
 	 * Receive the startup packet (which might turn out to be a cancel request
 	 * packet).
 	 */
-	status = ProcessStartupPacket(port, false, false);
+	status = ProcessSSLStartup(port);
+	if (status == STATUS_OK)
+		status = ProcessStartupPacket(port, false, false);
 
 	/*
 	 * If we're going to reject the connection due to database state, say so
@@ -342,6 +345,81 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac)
 	pfree(ps_data.data);
 
 	set_ps_display("initializing");
+}
+
+/*
+ * Check for a native direct SSL connection.
+ *
+ * This happens before startup packets so we are careful not to actual read
+ * any bytes from the stream if it's not a direct SSL connection.
+ */
+static int
+ProcessSSLStartup(Port *port)
+{
+	int			firstbyte;
+
+	Assert(!port->ssl_in_use);
+
+	pq_startmsgread();
+	firstbyte = pq_peekbyte();
+	pq_endmsgread();
+	if (firstbyte == EOF)
+	{
+		/*
+		 * Like in ProcessStartupPacket, if we get no data at all, don't
+		 * clutter the log with a complaint.
+		 */
+		return STATUS_ERROR;
+	}
+
+	/*
+	 * First byte indicates standard SSL handshake message
+	 *
+	 * (It can't be a Postgres startup length because in network byte order
+	 * that would be a startup packet hundreds of megabytes long)
+	 */
+	if (firstbyte == 0x16)
+	{
+		elog(LOG, "Detected direct SSL handshake");
+
+		if (!ssl_enable_alpn)
+		{
+			elog(WARNING, "Received direct SSL connection without ssl_enable_alpn enabled");
+		}
+
+#ifdef USE_SSL
+		if (!LoadedSSL || port->laddr.addr.ss_family == AF_UNIX)
+		{
+			/* SSL not supported */
+			return STATUS_ERROR;
+		}
+		else if (secure_open_server(port) == -1)
+		{
+			/*
+			 * we assume secure_open_server() sent an appropriate TLS alert
+			 * already
+			 */
+			return STATUS_ERROR;
+		}
+
+		if (!port->alpn_used)
+		{
+			ereport(COMMERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("Received direct SSL connection request without required ALPN protocol negotiation extension")));
+			return STATUS_ERROR;
+		}
+#else
+		/* SSL not supported by this build */
+		return STATUS_ERROR;
+#endif
+	}
+
+	if (port->ssl_in_use)
+		ereport(DEBUG2,
+				(errmsg_internal("Direct SSL connection established")));
+
+	return STATUS_OK;
 }
 
 /*
@@ -465,8 +543,13 @@ ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done)
 		char		SSLok;
 
 #ifdef USE_SSL
-		/* No SSL when disabled or on Unix sockets */
-		if (!LoadedSSL || port->laddr.addr.ss_family == AF_UNIX)
+
+		/*
+		 * No SSL when disabled or on Unix sockets.
+		 *
+		 * Also no SSL negotiation if we already have a direct SSL connection
+		 */
+		if (!LoadedSSL || port->laddr.addr.ss_family == AF_UNIX || port->ssl_in_use)
 			SSLok = 'N';
 		else
 			SSLok = 'S';		/* Support for SSL */
@@ -474,11 +557,10 @@ ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done)
 		SSLok = 'N';			/* No support for SSL */
 #endif
 
-retry1:
-		if (send(port->sock, &SSLok, 1, 0) != 1)
+		while (secure_write(port, &SSLok, 1) != 1)
 		{
 			if (errno == EINTR)
-				goto retry1;	/* if interrupted, just retry */
+				continue;		/* if interrupted, just retry */
 			ereport(COMMERROR,
 					(errcode_for_socket_access(),
 					 errmsg("failed to send SSL negotiation response: %m")));
@@ -519,7 +601,7 @@ retry1:
 			GSSok = 'G';
 #endif
 
-		while (send(port->sock, &GSSok, 1, 0) != 1)
+		while (secure_write(port, &GSSok, 1) != 1)
 		{
 			if (errno == EINTR)
 				continue;

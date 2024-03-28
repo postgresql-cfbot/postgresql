@@ -862,3 +862,15 @@ SELECT * FROM information_schema.check_constraints
             FROM information_schema.domain_constraints
             WHERE domain_name IN ('con', 'dom', 'pos_int', 'things'))
   ORDER BY constraint_name;
+
+--
+-- Get the base type of a domain
+--
+create domain mytext as text;
+create domain mytext_child_1 as mytext;
+
+select pg_basetype('mytext'::regtype);
+select pg_basetype('mytext_child_1'::regtype);
+select pg_basetype(1);  -- expect 1 not error
+
+drop domain mytext cascade;

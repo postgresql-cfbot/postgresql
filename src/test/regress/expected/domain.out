@@ -1292,3 +1292,28 @@ SELECT * FROM information_schema.check_constraints
  regression         | public            | pos_int_not_null | VALUE IS NOT NULL
 (4 rows)
 
+--
+-- Get the base type of a domain
+--
+create domain mytext as text;
+create domain mytext_child_1 as mytext;
+select pg_basetype('mytext'::regtype);
+ pg_basetype 
+-------------
+ text
+(1 row)
+
+select pg_basetype('mytext_child_1'::regtype);
+ pg_basetype 
+-------------
+ text
+(1 row)
+
+select pg_basetype(1);  -- expect 1 not error
+ pg_basetype 
+-------------
+ 1
+(1 row)
+
+drop domain mytext cascade;
+NOTICE:  drop cascades to type mytext_child_1

@@ -255,6 +255,10 @@ The CA certificate to use. Implementation is SSL backend specific.
 
 The certificate file to use. Implementation is SSL backend specific.
 
+=item ocspfile => B<value>
+
+The ocsp stapling file to use. Implementation is SSL backend specific.
+
 =item keyfile => B<value>
 
 The private key file to use. Implementation is SSL backend specific.

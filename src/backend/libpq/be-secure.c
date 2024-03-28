@@ -34,6 +34,7 @@
 
 char	   *ssl_library;
 char	   *ssl_cert_file;
+char	   *ssl_ocsp_file;
 char	   *ssl_key_file;
 char	   *ssl_ca_file;
 char	   *ssl_crl_file;

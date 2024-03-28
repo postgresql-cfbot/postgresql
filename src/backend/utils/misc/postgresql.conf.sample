@@ -116,6 +116,7 @@
 #ssl = off
 #ssl_ca_file = ''
 #ssl_cert_file = 'server.crt'
+#ssl_ocsp_file = 'server.res'
 #ssl_crl_file = ''
 #ssl_crl_dir = ''
 #ssl_key_file = 'server.key'

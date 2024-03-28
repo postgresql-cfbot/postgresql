@@ -149,26 +149,35 @@ static void slotsync_failure_callback(int code, Datum arg);
  * local slot) return false, otherwise true.
  */
 static bool
-update_local_synced_slot(RemoteSlot *remote_slot, Oid remote_dbid)
+update_local_synced_slot(RemoteSlot *remote_slot, Oid remote_dbid,
+						 bool *found_consistent_point)
 {
 	ReplicationSlot *slot = MyReplicationSlot;
-	bool		xmin_changed;
-	bool		restart_lsn_changed;
 	NameData	plugin_name;
+	bool		updated_lsn = false;
 
 	Assert(slot->data.invalidated == RS_INVAL_NONE);
 
-	xmin_changed = (remote_slot->catalog_xmin != slot->data.catalog_xmin);
-	restart_lsn_changed = (remote_slot->restart_lsn != slot->data.restart_lsn);
+	if (remote_slot->confirmed_lsn != slot->data.confirmed_flush)
+	{
+		/*
+		 * By advancing the restart_lsn, confirmed_lsn, and xmin using
+		 * fast-forward logical decoding, we ensure that the required snapshots
+		 * are saved to disk. This enables logical decoding to quickly reach a
+		 * consistent point at the restart_lsn, eliminating the risk of missing
+		 * data during snapshot creation.
+		 */
+		pg_logical_replication_slot_advance(remote_slot->confirmed_lsn,
+											found_consistent_point);
+		ReplicationSlotsComputeRequiredLSN();
+		updated_lsn = true;
+	}
 
-	if (!xmin_changed &&
-		!restart_lsn_changed &&
-		remote_dbid == slot->data.database &&
+	if (remote_dbid == slot->data.database &&
 		remote_slot->two_phase == slot->data.two_phase &&
 		remote_slot->failover == slot->data.failover &&
-		remote_slot->confirmed_lsn == slot->data.confirmed_flush &&
 		strcmp(remote_slot->plugin, NameStr(slot->data.plugin)) == 0)
-		return false;
+		return updated_lsn;
 
 	/* Avoid expensive operations while holding a spinlock. */
 	namestrcpy(&plugin_name, remote_slot->plugin);
@@ -178,17 +187,7 @@ update_local_synced_slot(RemoteSlot *remote_slot, Oid remote_dbid)
 	slot->data.database = remote_dbid;
 	slot->data.two_phase = remote_slot->two_phase;
 	slot->data.failover = remote_slot->failover;
-	slot->data.restart_lsn = remote_slot->restart_lsn;
-	slot->data.confirmed_flush = remote_slot->confirmed_lsn;
-	slot->data.catalog_xmin = remote_slot->catalog_xmin;
-	slot->effective_catalog_xmin = remote_slot->catalog_xmin;
 	SpinLockRelease(&slot->mutex);
-
-	if (xmin_changed)
-		ReplicationSlotsComputeRequiredXmin(false);
-
-	if (restart_lsn_changed)
-		ReplicationSlotsComputeRequiredLSN();
 
 	return true;
 }
@@ -413,6 +412,7 @@ static bool
 update_and_persist_local_synced_slot(RemoteSlot *remote_slot, Oid remote_dbid)
 {
 	ReplicationSlot *slot = MyReplicationSlot;
+	bool	found_consistent_point;
 
 	/*
 	 * Check if the primary server has caught up. Refer to the comment atop
@@ -443,9 +443,19 @@ update_and_persist_local_synced_slot(RemoteSlot *remote_slot, Oid remote_dbid)
 		return false;
 	}
 
-	/* First time slot update, the function must return true */
-	if (!update_local_synced_slot(remote_slot, remote_dbid))
-		elog(ERROR, "failed to update slot");
+	(void) update_local_synced_slot(remote_slot, remote_dbid,
+									&found_consistent_point);
+
+	/*
+	 * Don't persist the slot if it cannot reach the consistent point from the
+	 * remote restart_lsn.
+	 */
+	if (!found_consistent_point)
+	{
+		elog(DEBUG1, "The synced slot could not find consistent point from %X/%X",
+			 LSN_FORMAT_ARGS(remote_slot->restart_lsn));
+		return false;
+	}
 
 	ReplicationSlotPersist();
 
@@ -578,7 +588,7 @@ synchronize_one_slot(RemoteSlot *remote_slot, Oid remote_dbid)
 					 LSN_FORMAT_ARGS(remote_slot->restart_lsn));
 
 			/* Make sure the slot changes persist across server restart */
-			if (update_local_synced_slot(remote_slot, remote_dbid))
+			if (update_local_synced_slot(remote_slot, remote_dbid, NULL))
 			{
 				ReplicationSlotMarkDirty();
 				ReplicationSlotSave();

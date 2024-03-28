@@ -501,15 +501,22 @@ pg_physical_replication_slot_advance(XLogRecPtr moveto)
  * because we need to digest WAL to advance restart_lsn allowing to recycle
  * WAL and removal of old catalog tuples.  As decoding is done in fast_forward
  * mode, no changes are generated anyway.
+ *
+ * *found_consistent_point will be set to true if the logical decoding reaches
+ * the consistent point; Otherwise, it will be set to false.
  */
-static XLogRecPtr
-pg_logical_replication_slot_advance(XLogRecPtr moveto)
+XLogRecPtr
+pg_logical_replication_slot_advance(XLogRecPtr moveto,
+									bool *found_consistent_point)
 {
 	LogicalDecodingContext *ctx;
 	ResourceOwner old_resowner = CurrentResourceOwner;
 	XLogRecPtr	retlsn;
 
 	Assert(moveto != InvalidXLogRecPtr);
+
+	if (found_consistent_point)
+		*found_consistent_point = false;
 
 	PG_TRY();
 	{
@@ -563,6 +570,9 @@ pg_logical_replication_slot_advance(XLogRecPtr moveto)
 			 */
 			if (record)
 				LogicalDecodingProcessRecord(ctx, ctx->reader);
+
+			if (DecodingContextReady(ctx) && found_consistent_point)
+				*found_consistent_point = true;
 
 			CHECK_FOR_INTERRUPTS();
 		}
@@ -680,7 +690,7 @@ pg_replication_slot_advance(PG_FUNCTION_ARGS)
 
 	/* Do the actual slot update, depending on the slot type */
 	if (OidIsValid(MyReplicationSlot->data.database))
-		endlsn = pg_logical_replication_slot_advance(moveto);
+		endlsn = pg_logical_replication_slot_advance(moveto, NULL);
 	else
 		endlsn = pg_physical_replication_slot_advance(moveto);
 

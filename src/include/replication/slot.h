@@ -282,4 +282,7 @@ extern bool SlotExistsInStandbySlotNames(const char *slot_name);
 extern bool StandbySlotsHaveCaughtup(XLogRecPtr wait_for_lsn, int elevel);
 extern void WaitForStandbyConfirmation(XLogRecPtr wait_for_lsn);
 
+extern XLogRecPtr pg_logical_replication_slot_advance(XLogRecPtr moveto,
+													  bool *found_consistent_point);
+
 #endif							/* SLOT_H */

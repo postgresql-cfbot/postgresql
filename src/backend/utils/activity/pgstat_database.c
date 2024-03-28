@@ -34,6 +34,7 @@ SessionEndType pgStatSessionEndCause = DISCONNECT_NORMAL;
 
 static int	pgStatXactCommit = 0;
 static int	pgStatXactRollback = 0;
+static XLogRecPtr	pgStatLastCommitLSN = InvalidXLogRecPtr;
 static PgStat_Counter pgLastSessionReportTime = 0;
 
 
@@ -246,7 +247,7 @@ pgstat_fetch_stat_dbentry(Oid dboid)
 }
 
 void
-AtEOXact_PgStat_Database(bool isCommit, bool parallel)
+AtEOXact_PgStat_Database(bool isCommit, XLogRecPtr commit_lsn, bool parallel)
 {
 	/* Don't count parallel worker transaction stats */
 	if (!parallel)
@@ -256,7 +257,12 @@ AtEOXact_PgStat_Database(bool isCommit, bool parallel)
 		 * bools, in case the reporting message isn't sent right away.)
 		 */
 		if (isCommit)
+		{
 			pgStatXactCommit++;
+			/* For commits also track the LSN of the commit record. */
+			if (!XLogRecPtrIsInvalid(commit_lsn))
+				pgStatLastCommitLSN = commit_lsn;
+		}
 		else
 			pgStatXactRollback++;
 	}
@@ -279,6 +285,13 @@ pgstat_update_dbstats(TimestampTz ts)
 		return;
 
 	dbentry = pgstat_prep_database_pending(MyDatabaseId);
+
+	/*
+	 * pgStatLastCommitLSN is only ever set when there's a valid commit, so we
+	 * know the LSN must be valid, and since we're local to the current backend
+	 * we don't have to worry if we're advancing or not.
+	 */
+	dbentry->last_commit_lsn = pgStatLastCommitLSN;
 
 	/*
 	 * Accumulate xact commit/rollback and I/O timings to stats entry of the
@@ -311,6 +324,7 @@ pgstat_update_dbstats(TimestampTz ts)
 	pgStatBlockWriteTime = 0;
 	pgStatActiveTime = 0;
 	pgStatTransactionIdleTime = 0;
+	/* No reason to zero out pgStatLastCommitLSN; it's not accumulative. */
 }
 
 /*
@@ -426,6 +440,10 @@ pgstat_database_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
 	PGSTAT_ACCUM_DBCOUNT(sessions_fatal);
 	PGSTAT_ACCUM_DBCOUNT(sessions_killed);
 #undef PGSTAT_ACCUM_DBCOUNT
+
+	/* Only update last_commit_lsn if our backend has the newest commit. */
+	if (pendingent->last_commit_lsn > sharedent->stats.last_commit_lsn)
+		sharedent->stats.last_commit_lsn = pendingent->last_commit_lsn;
 
 	pgstat_unlock_entry(entry_ref);
 

@@ -1055,6 +1055,7 @@ CREATE VIEW pg_stat_database AS
                     WHEN (D.oid = (0)::oid) THEN 0
                     ELSE pg_stat_get_db_numbackends(D.oid)
                 END AS numbackends,
+            pg_stat_get_db_last_commit_lsn(D.oid) AS last_commit_lsn,
             pg_stat_get_db_xact_commit(D.oid) AS xact_commit,
             pg_stat_get_db_xact_rollback(D.oid) AS xact_rollback,
             pg_stat_get_db_blocks_fetched(D.oid) -

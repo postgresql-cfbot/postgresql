@@ -1060,6 +1060,9 @@ PG_STAT_GET_DBENTRY_INT64(tuples_returned)
 /* pg_stat_get_db_tuples_updated */
 PG_STAT_GET_DBENTRY_INT64(tuples_updated)
 
+/* pg_stat_get_db_last_commit_lsn */
+PG_STAT_GET_DBENTRY_INT64(last_commit_lsn)
+
 /* pg_stat_get_db_xact_commit */
 PG_STAT_GET_DBENTRY_INT64(xact_commit)
 

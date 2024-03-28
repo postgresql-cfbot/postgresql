@@ -18859,6 +18859,296 @@ DETAIL:  Missing "]" after array dimensions.
    </tgroup>
   </table>
   </sect2>
+
+ <sect2 id="functions-sqljson-table">
+  <title>JSON_TABLE</title>
+  <indexterm>
+   <primary>json_table</primary>
+  </indexterm>
+
+  <para>
+   <function>json_table</function> is an SQL/JSON function which
+   queries <acronym>JSON</acronym> data
+   and presents the results as a relational view, which can be accessed as a
+   regular SQL table. You can only use <function>json_table</function> inside the
+   <literal>FROM</literal> clause of a <literal>SELECT</literal> statement.
+  </para>
+
+  <para>
+   Taking JSON data as input, <function>json_table</function> uses
+   a path expression to extract a part of the provided data that
+   will be used as a <firstterm>row pattern</firstterm> for the
+   constructed view. Each SQL/JSON item at the top level of the row pattern serves
+   as the source for a separate row in the constructed relational view.
+  </para>
+
+  <para>
+   To split the row pattern into columns, <function>json_table</function>
+   provides the <literal>COLUMNS</literal> clause that defines the
+   schema of the created view. For each column to be constructed,
+   this clause provides a separate path expression that evaluates
+   the row pattern, extracts a JSON item, and returns it as a
+   separate SQL value for the specified column.
+  </para>
+
+  <para>
+   The rows produced by <function>JSON_TABLE</function> are laterally
+   joined to the row that generated them, so you do not have to explicitly join
+   the constructed view with the original table holding <acronym>JSON</acronym>
+   data.
+  </para>
+
+  <para>
+   The syntax is:
+  </para>
+
+<synopsis>
+JSON_TABLE (
+    <replaceable>context_item</replaceable>, <replaceable>path_expression</replaceable> <optional> AS <replaceable>json_path_name</replaceable> </optional> <optional> PASSING { <replaceable>value</replaceable> AS <replaceable>varname</replaceable> } <optional>, ...</optional> </optional>
+    COLUMNS ( <replaceable class="parameter">json_table_column</replaceable> <optional>, ...</optional> )
+    <optional> { <literal>ERROR</literal> | <literal>EMPTY</literal> } <literal>ON ERROR</literal> </optional>
+)
+
+<phrase>
+where <replaceable class="parameter">json_table_column</replaceable> is:
+</phrase>
+  <replaceable>name</replaceable> FOR ORDINALITY
+  | <replaceable>name</replaceable> <replaceable>type</replaceable> <optional> PATH <replaceable>json_path_specification</replaceable> </optional>
+        <optional> { WITHOUT | WITH { CONDITIONAL | <optional>UNCONDITIONAL</optional> } } <optional> ARRAY </optional> WRAPPER </optional>
+        <optional> { KEEP | OMIT } QUOTES <optional> ON SCALAR STRING </optional> </optional>
+        <optional> { ERROR | NULL | DEFAULT <replaceable>expression</replaceable> } ON EMPTY </optional>
+        <optional> { ERROR | NULL | DEFAULT <replaceable>expression</replaceable> } ON ERROR </optional>
+  | <replaceable>name</replaceable> <replaceable>type</replaceable> FORMAT JSON <optional>ENCODING <literal>UTF8</literal></optional>
+        <optional> PATH <replaceable>json_path_specification</replaceable> </optional>
+        <optional> { WITHOUT | WITH { CONDITIONAL | <optional>UNCONDITIONAL</optional> } } <optional> ARRAY </optional> WRAPPER </optional>
+        <optional> { KEEP | OMIT } QUOTES <optional> ON SCALAR STRING </optional> </optional>
+        <optional> { ERROR | NULL | EMPTY { ARRAY | OBJECT } | DEFAULT <replaceable>expression</replaceable> } ON EMPTY </optional>
+        <optional> { ERROR | NULL | EMPTY { ARRAY | OBJECT } | DEFAULT <replaceable>expression</replaceable> } ON ERROR </optional>
+  | <replaceable>name</replaceable> <replaceable>type</replaceable> EXISTS <optional> PATH <replaceable>json_path_specification</replaceable> </optional>
+        <optional> { ERROR | TRUE | FALSE | UNKNOWN } ON ERROR </optional>
+</synopsis>
+
+  <para>
+   Each syntax element is described below in more detail.
+  </para>
+
+  <variablelist>
+   <varlistentry>
+    <term>
+     <literal><replaceable>context_item</replaceable>, <replaceable>path_expression</replaceable> <optional> <literal>AS</literal> <replaceable>json_path_name</replaceable> </optional> <optional> <literal>PASSING</literal> { <replaceable>value</replaceable> <literal>AS</literal> <replaceable>varname</replaceable> } <optional>, ...</optional></optional></literal>
+    </term>
+    <listitem>
+    <para>
+     The input data to query, the JSON path expression defining the query,
+     and an optional <literal>PASSING</literal> clause, which can provide data
+     values to the <replaceable>path_expression</replaceable>.
+     The result of the input data
+     evaluation is called the <firstterm>row pattern</firstterm>. The row
+     pattern is used as the source for row values in the constructed view.
+    </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>
+     <literal>COLUMNS</literal>( <replaceable>json_table_column</replaceable> <optional>, ...</optional> )
+    </term>
+    <listitem>
+
+    <para>
+     The <literal>COLUMNS</literal> clause defining the schema of the
+     constructed view. In this clause, you must specify all the columns
+     to be filled with SQL/JSON items.
+     The <replaceable>json_table_column</replaceable>
+     expression has the following syntax variants:
+    </para>
+
+  <variablelist>
+   <varlistentry>
+    <term>
+     <replaceable>name</replaceable> <literal>FOR ORDINALITY</literal>
+    </term>
+    <listitem>
+    <para>
+     Adds an ordinality column that provides sequential row numbering.
+     You can have only one ordinality column per table. Row numbering
+     is 1-based.
+    </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>
+     <literal><replaceable>name</replaceable> <replaceable>type</replaceable>
+          <optional> <literal>PATH</literal> <replaceable>json_path_specification</replaceable> </optional></literal>
+    </term>
+    <listitem>
+    <para>
+     Inserts a single SQL/JSON item into the output row.
+    </para>
+    <para>
+     The provided <literal>PATH</literal> expression is evaluated and
+     the column is filled with the produced SQL/JSON item, one for each row.
+     If the <literal>PATH</literal> expression is omitted,
+     <function>JSON_TABLE</function> uses the
+     <literal>$.<replaceable>name</replaceable></literal> path expression,
+     where <replaceable>name</replaceable> is the provided column name.
+     In this case, the column name must correspond to one of the
+     keys within the SQL/JSON item produced by the row pattern.
+    </para>
+    <para>
+     Optionally, you can specify <literal>WRAPPER</literal>,
+     <literal>QUOTES</literal> clauses to format the output and
+     <literal>ON EMPTY</literal> and <literal>ON ERROR</literal> to handle
+     those missing values and structural errors, respectively.
+    </para>
+    <note>
+     <para>
+      This clause is internally turned into and has the same semantics as
+      <function>json_value</function> and <function>json_query</function>.
+      The latter if the specified type is not a scalar type or if
+      <literal>WRAPPER</literal> or <literal>QUOTES</literal> clause is
+      present.
+     </para>
+    </note>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>
+     <replaceable>name</replaceable> <replaceable>type</replaceable> <literal>FORMAT JSON</literal> <optional>ENCODING <literal>UTF8</literal></optional>
+          <optional> <literal>PATH</literal> <replaceable>json_path_specification</replaceable> </optional>
+    </term>
+    <listitem>
+    <para>
+     Inserts a composite SQL/JSON item into the output row.
+    </para>
+    <para>
+     The provided <literal>PATH</literal> expression is evaluated and
+     the column is filled with the produced SQL/JSON item.  If the
+     <literal>PATH</literal> expression is omitted, path expression
+     <literal>$.<replaceable>name</replaceable></literal> is used,
+     where <replaceable>name</replaceable> is the provided column name.
+     In this case, the column name must correspond to one of the
+     keys within the SQL/JSON item produced by the row pattern.
+    </para>
+    <para>
+     Optionally, you can specify <literal>WRAPPER</literal>,
+     <literal>QUOTES</literal> clauses to format the output and
+     <literal>ON EMPTY</literal> and <literal>ON ERROR</literal> to handle
+     those scenarios appropriately.
+    </para>
+    <note>
+     <para>
+      This clause is internally turned into and has the same semantics as
+      <function>json_query</function>.
+     </para>
+    </note>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>
+       <replaceable>name</replaceable> <replaceable>type</replaceable>
+       <literal>EXISTS</literal> <optional> <literal>PATH</literal> <replaceable>json_path_specification</replaceable> </optional>
+    </term>
+    <listitem>
+    <para>
+     Inserts a boolean item into each output row.
+    </para>
+    <para>
+     The value corresponds to whether evaluating the <literal>PATH</literal>
+     expression yields any SQL/JSON items.  If the <literal>PATH</literal>
+     expression is omitted, path expression
+     <literal>$.<replaceable>name</replaceable></literal> is used,
+     where <replaceable>name</replaceable> is the provided column name.
+    </para>
+    <para>
+     The specified <parameter>type</parameter> should have a cast from the
+     <type>boolean</type>.
+    </para>
+    <para>
+     Optionally, you can add <literal>ON ERROR</literal> clause to define
+     error behavior.
+    </para>
+    <note>
+     <para>
+      This clause is internally turned into and has the same semantics as
+      <function>json_exists</function>.
+     </para>
+    </note>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>
+     <literal>AS</literal> <replaceable>json_path_name</replaceable>
+    </term>
+    <listitem>
+
+    <para>
+     The optional <replaceable>json_path_name</replaceable> serves as an
+     identifier of the provided <replaceable>json_path_specification</replaceable>.
+     The path name must be unique and distinct from the column names.
+     When using the <literal>PLAN</literal> clause, you must specify the names
+     for all the paths, including the row pattern. Each path name can appear in
+     the <literal>PLAN</literal> clause only once.
+    </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+
+  <para>Examples</para>
+
+     <para>
+     In these examples the following small table storing some JSON data will be used:
+<programlisting>
+CREATE TABLE my_films ( js jsonb );
+
+INSERT INTO my_films VALUES (
+'{ "favorites" : [
+   { "kind" : "comedy", "films" : [
+     { "title" : "Bananas",
+       "director" : "Woody Allen"} ] },
+   { "kind" : "horror", "films" : [
+     { "title" : "Psycho",
+       "director" : "Alfred Hitchcock" } ] },
+   { "kind" : "thriller", "films" : [
+     { "title" : "Vertigo",
+       "director" : "Alfred Hitchcock" } ] },
+   { "kind" : "drama", "films" : [
+     { "title" : "Yojimbo",
+       "director" : "Akira Kurosawa" } ] }
+  ] }');
+</programlisting>
+     </para>
+     <para>
+      Query the <structname>my_films</structname> table holding
+      some JSON data about the films and create a view that
+      distributes the film genre, title, and director between separate columns:
+<screen>
+SELECT jt.* FROM
+ my_films,
+ JSON_TABLE ( js, '$.favorites[*]' COLUMNS (
+   id FOR ORDINALITY,
+   kind text PATH '$.kind',
+   title text PATH '$.films[*].title',
+   director text PATH '$.films[*].director')) AS jt;
+ id |   kind   |  title  |     director
+----+----------+---------+------------------
+  1 | comedy   | Bananas | Woody Allen
+  2 | horror   | Psycho  | Alfred Hitchcock
+  3 | thriller | Vertigo | Alfred Hitchcock
+  4 | drama    | Yojimbo | Akira Kurosawa
+(4 rows)
+</screen>
+     </para>
+  </sect2>
+
  </sect1>
 
  <sect1 id="functions-sequence">

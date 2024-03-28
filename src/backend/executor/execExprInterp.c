@@ -4370,6 +4370,12 @@ ExecEvalJsonExprPath(ExprState *state, ExprEvalStep *op,
 				break;
 			}
 
+		case JSON_TABLE_OP:
+			Assert(jump_eval_coercion == -1);
+			*op->resvalue = item;
+			*op->resnull = false;
+			break;
+
 		default:
 			elog(ERROR, "unrecognized SQL/JSON expression op %d",
 				 (int) jsexpr->op);

@@ -1776,6 +1776,7 @@ typedef struct JsonFuncExpr
 	JsonExprOp	op;				/* expression type */
 	JsonValueExpr *context_item;	/* context item expression */
 	Node	   *pathspec;		/* JSON path specification expression */
+	char	   *pathname;		/* path name, if any */
 	List	   *passing;		/* list of PASSING clause arguments, if any */
 	JsonOutput *output;			/* output clause, if specified */
 	JsonBehavior *on_empty;		/* ON EMPTY behavior */
@@ -1784,6 +1785,69 @@ typedef struct JsonFuncExpr
 	JsonQuotes	quotes;			/* omit or keep quotes? (JSON_QUERY only) */
 	int			location;		/* token location, or -1 if unknown */
 } JsonFuncExpr;
+
+/*
+ * JsonTablePathSpec
+ *		untransformed specification of JSON path expression with an optional
+ *		name
+ */
+typedef struct JsonTablePathSpec
+{
+	NodeTag		type;
+
+	Node	   *string;
+	char	   *name;
+	int			name_location;
+	int			location;		/* location of 'string' */
+} JsonTablePathSpec;
+
+/*
+ * JsonTableColumnType -
+ *		enumeration of JSON_TABLE column types
+ */
+typedef enum JsonTableColumnType
+{
+	JTC_FOR_ORDINALITY,
+	JTC_REGULAR,
+	JTC_EXISTS,
+	JTC_FORMATTED,
+} JsonTableColumnType;
+
+/*
+ * JsonTableColumn -
+ *		untransformed representation of JSON_TABLE column
+ */
+typedef struct JsonTableColumn
+{
+	NodeTag		type;
+	JsonTableColumnType coltype;	/* column type */
+	char	   *name;			/* column name */
+	TypeName   *typeName;		/* column type name */
+	JsonTablePathSpec *pathspec;	/* JSON path specification */
+	JsonFormat *format;			/* JSON format clause, if specified */
+	JsonWrapper wrapper;		/* WRAPPER behavior for formatted columns */
+	JsonQuotes	quotes;			/* omit or keep quotes on scalar strings? */
+	JsonBehavior *on_empty;		/* ON EMPTY behavior */
+	JsonBehavior *on_error;		/* ON ERROR behavior */
+	int			location;		/* token location, or -1 if unknown */
+} JsonTableColumn;
+
+/*
+ * JsonTable -
+ *		untransformed representation of JSON_TABLE
+ */
+typedef struct JsonTable
+{
+	NodeTag		type;
+	JsonValueExpr *context_item;	/* context item expression */
+	JsonTablePathSpec *pathspec;	/* JSON path specification */
+	List	   *passing;		/* list of PASSING clause arguments, if any */
+	List	   *columns;		/* list of JsonTableColumn */
+	JsonBehavior *on_error;		/* ON ERROR behavior */
+	Alias	   *alias;			/* table alias in FROM clause */
+	bool		lateral;		/* does it have LATERAL prefix? */
+	int			location;		/* token location, or -1 if unknown */
+} JsonTable;
 
 /*
  * JsonKeyValue -

@@ -94,8 +94,14 @@ typedef struct RangeVar
 	ParseLoc	location;
 } RangeVar;
 
+typedef enum TableFuncType
+{
+	TFT_XMLTABLE,
+	TFT_JSON_TABLE,
+} TableFuncType;
+
 /*
- * TableFunc - node for a table function, such as XMLTABLE.
+ * TableFunc - node for a table function, such as XMLTABLE or JSON_TABLE.
  *
  * Entries in the ns_names list are either String nodes containing
  * literal namespace names, or NULL pointers to represent DEFAULT.
@@ -103,6 +109,8 @@ typedef struct RangeVar
 typedef struct TableFunc
 {
 	NodeTag		type;
+	/* XMLTABLE or JSON_TABLE */
+	TableFuncType functype;
 	/* list of namespace URI expressions */
 	List	   *ns_uris pg_node_attr(query_jumble_ignore);
 	/* list of namespace names or NULL */
@@ -123,8 +131,14 @@ typedef struct TableFunc
 	List	   *colexprs;
 	/* list of column default expressions */
 	List	   *coldefexprs pg_node_attr(query_jumble_ignore);
+	/* list of column value expressions */
+	List	   *colvalexprs pg_node_attr(query_jumble_ignore);
+	/* list of PASSING argument expressions */
+	List	   *passingvalexprs pg_node_attr(query_jumble_ignore);
 	/* nullability flag for each output column */
 	Bitmapset  *notnulls pg_node_attr(query_jumble_ignore);
+	/* JSON_TABLE plan */
+	Node	   *plan pg_node_attr(query_jumble_ignore);
 	/* counts from 0; -1 if none specified */
 	int			ordinalitycol pg_node_attr(query_jumble_ignore);
 	/* token location, or -1 if unknown */
@@ -1754,6 +1768,7 @@ typedef enum JsonExprOp
 	JSON_EXISTS_OP,				/* JSON_EXISTS() */
 	JSON_QUERY_OP,				/* JSON_QUERY() */
 	JSON_VALUE_OP,				/* JSON_VALUE() */
+	JSON_TABLE_OP,				/* JSON_TABLE() */
 } JsonExprOp;
 
 /*
@@ -1812,6 +1827,31 @@ typedef struct JsonExpr
 	/* Original JsonFuncExpr's location */
 	int			location;
 } JsonExpr;
+
+/*
+ * JsonTablePath
+ *		A JSON path expression to be computed as part of evaluating
+ *		a JSON_TABLE plan node
+ */
+typedef struct JsonTablePath
+{
+	NodeTag		type;
+
+	Const	   *value;
+	char	   *name;
+} JsonTablePath;
+
+/*
+ * JsonTableSpec -
+ *		transformed representation of a JSON_TABLE plan
+ */
+typedef struct JsonTablePlan
+{
+	NodeTag		type;
+
+	JsonTablePath *path;
+	bool		errorOnError;	/* ERROR/EMPTY ON ERROR behavior */
+} JsonTablePlan;
 
 /* ----------------
  * NullTest

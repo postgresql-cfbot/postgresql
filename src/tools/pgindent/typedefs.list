@@ -1332,6 +1332,13 @@ JsonReturning
 JsonScalarExpr
 JsonSemAction
 JsonSerializeExpr
+JsonTable
+JsonTableColumn
+JsonTableColumnType
+JsonTableExecContext
+JsonTablePath
+JsonTablePathSpec
+JsonTablePlan
 JsonTokenType
 JsonTransformStringValuesAction
 JsonTypeCategory
@@ -2806,6 +2813,7 @@ TableFunc
 TableFuncRoutine
 TableFuncScan
 TableFuncScanState
+TableFuncType
 TableInfo
 TableLikeClause
 TableSampleClause

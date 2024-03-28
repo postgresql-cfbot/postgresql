@@ -538,6 +538,22 @@ makeFuncExpr(Oid funcid, Oid rettype, List *args,
 }
 
 /*
+ * makeStringConst -
+ * 	build a A_Const node of type T_String for given string
+ */
+Node *
+makeStringConst(char *str, int location)
+{
+	A_Const    *n = makeNode(A_Const);
+
+	n->val.sval.type = T_String;
+	n->val.sval.sval = str;
+	n->location = location;
+
+	return (Node *) n;
+}
+
+/*
  * makeDefElem -
  *	build a DefElem node
  *
@@ -870,6 +886,44 @@ makeJsonBehavior(JsonBehaviorType btype, Node *expr, int location)
 	behavior->location = location;
 
 	return behavior;
+}
+
+/*
+ * makeJsonTablePath -
+ *		Make JsonTablePath node from given path string and name (if any)
+ */
+JsonTablePath *
+makeJsonTablePath(Const *pathvalue, char *pathname)
+{
+	JsonTablePath *path = makeNode(JsonTablePath);
+
+	Assert(IsA(pathvalue, Const));
+	path->value = pathvalue;
+	if (pathname)
+		path->name = pathname;
+
+	return path;
+}
+
+/*
+ * makeJsonTablePathSpec -
+ *		Make JsonTablePathSpec node from given path string and name (if any)
+ */
+Node *
+makeJsonTablePathSpec(char *string, char *name, int string_location,
+					  int name_location)
+{
+	JsonTablePathSpec *pathspec = makeNode(JsonTablePathSpec);
+
+	Assert(string != NULL);
+	pathspec->string = makeStringConst(string, string_location);
+	if (name != NULL)
+		pathspec->name = pstrdup(name);
+
+	pathspec->name_location = name_location;
+	pathspec->location = string_location;
+
+	return (Node *) pathspec;
 }
 
 /*

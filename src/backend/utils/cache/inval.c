@@ -272,6 +272,11 @@ static struct RELCACHECALLBACK
 
 static int	relcache_callback_count = 0;
 
+
+static inline void LocalExecuteInvalidationMessageIternal(SharedInvalidationMessage *msg,
+								bool localMsg);
+static void LocalExecuteLocalInvalidationMessage(SharedInvalidationMessage *msg);
+
 /* ----------------------------------------------------------------
  *				Invalidation subgroup support functions
  * ----------------------------------------------------------------
@@ -695,20 +700,21 @@ InvalidateSystemCachesExtended(bool debug_discard)
 }
 
 /*
- * LocalExecuteInvalidationMessage
+ * LocalExecuteInvalidationMessageInternal
  *
  * Process a single invalidation message (which could be of any type).
  * Only the local caches are flushed; this does not transmit the message
  * to other backends.
  */
-void
-LocalExecuteInvalidationMessage(SharedInvalidationMessage *msg)
+static inline void
+LocalExecuteInvalidationMessageIternal(SharedInvalidationMessage *msg, bool localMsg)
 {
 	if (msg->id >= 0)
 	{
 		if (msg->cc.dbId == MyDatabaseId || msg->cc.dbId == InvalidOid)
 		{
-			InvalidateCatalogSnapshot();
+			if (!localMsg)
+				InvalidateCatalogSnapshot();
 
 			SysCacheInvalidate(msg->cc.id, msg->cc.hashValue);
 
@@ -719,7 +725,8 @@ LocalExecuteInvalidationMessage(SharedInvalidationMessage *msg)
 	{
 		if (msg->cat.dbId == MyDatabaseId || msg->cat.dbId == InvalidOid)
 		{
-			InvalidateCatalogSnapshot();
+			if (!localMsg)
+				InvalidateCatalogSnapshot();
 
 			CatalogCacheFlushCatalog(msg->cat.catId);
 
@@ -768,14 +775,32 @@ LocalExecuteInvalidationMessage(SharedInvalidationMessage *msg)
 	else if (msg->id == SHAREDINVALSNAPSHOT_ID)
 	{
 		/* We only care about our own database and shared catalogs */
-		if (msg->sn.dbId == InvalidOid)
-			InvalidateCatalogSnapshot();
-		else if (msg->sn.dbId == MyDatabaseId)
+		if ((msg->sn.dbId == InvalidOid || msg->sn.dbId == MyDatabaseId) && !localMsg)
 			InvalidateCatalogSnapshot();
 	}
 	else
 		elog(FATAL, "unrecognized SI message ID: %d", msg->id);
 }
+
+/*
+ * Execute InvalidationMessage from other backend
+ */
+
+void
+LocalExecuteInvalidationMessage(SharedInvalidationMessage *msg)
+{
+	LocalExecuteInvalidationMessageIternal(msg, false);
+}
+
+/*
+ * Execute InvalidationMessage from local backend
+ */
+static void
+LocalExecuteLocalInvalidationMessage(SharedInvalidationMessage *msg)
+{
+	LocalExecuteInvalidationMessageIternal(msg, true);
+}
+
 
 /*
  *		InvalidateSystemCaches
@@ -1053,7 +1078,7 @@ AtEOXact_Inval(bool isCommit)
 	else
 	{
 		ProcessInvalidationMessages(&transInvalInfo->PriorCmdInvalidMsgs,
-									LocalExecuteInvalidationMessage);
+									LocalExecuteLocalInvalidationMessage);
 	}
 
 	/* Need not free anything explicitly */
@@ -1141,7 +1166,7 @@ AtEOSubXact_Inval(bool isCommit)
 	else
 	{
 		ProcessInvalidationMessages(&myInfo->PriorCmdInvalidMsgs,
-									LocalExecuteInvalidationMessage);
+									LocalExecuteLocalInvalidationMessage);
 
 		/* Pop the transaction state stack */
 		transInvalInfo = myInfo->parent;
@@ -1178,7 +1203,7 @@ CommandEndInvalidationMessages(void)
 		return;
 
 	ProcessInvalidationMessages(&transInvalInfo->CurrentCmdInvalidMsgs,
-								LocalExecuteInvalidationMessage);
+								LocalExecuteLocalInvalidationMessage);
 
 	/* WAL Log per-command invalidation messages for wal_level=logical */
 	if (XLogLogicalInfoActive())

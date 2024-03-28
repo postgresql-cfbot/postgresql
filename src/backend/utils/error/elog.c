@@ -111,6 +111,7 @@ int			Log_error_verbosity = PGERROR_DEFAULT;
 char	   *Log_line_prefix = NULL; /* format for extra log line info */
 int			Log_destination = LOG_DESTINATION_STDERR;
 char	   *Log_destination_string = NULL;
+int			log_backtrace = LOGBACKTRACE_INTERNAL;
 bool		syslog_sequence_numbers = true;
 bool		syslog_split_messages = true;
 
@@ -181,6 +182,7 @@ static void set_stack_entry_domain(ErrorData *edata, const char *domain);
 static void set_stack_entry_location(ErrorData *edata,
 									 const char *filename, int lineno,
 									 const char *funcname);
+static bool matches_backtrace_gucs(ErrorData *edata);
 static bool matches_backtrace_functions(const char *funcname);
 static pg_noinline void set_backtrace(ErrorData *edata, int num_skip);
 static void set_errdata_field(MemoryContextData *cxt, char **ptr, const char *str);
@@ -496,12 +498,7 @@ errfinish(const char *filename, int lineno, const char *funcname)
 	oldcontext = MemoryContextSwitchTo(ErrorContext);
 
 	/* Collect backtrace, if enabled and we didn't already */
-	if (!edata->backtrace &&
-		((edata->funcname &&
-		  backtrace_functions &&
-		  matches_backtrace_functions(edata->funcname)) ||
-		 (edata->sqlerrcode == ERRCODE_INTERNAL_ERROR &&
-		  backtrace_on_internal_error)))
+	if (!edata->backtrace && matches_backtrace_gucs(edata))
 		set_backtrace(edata, 2);
 
 	/*
@@ -822,6 +819,26 @@ set_stack_entry_location(ErrorData *edata,
 }
 
 /*
+ * matches_backtrace_gucs --- checks whether the log entry matches
+ * log_backtrace, backtrace_min_level and backtrace_functions.
+ */
+static bool
+matches_backtrace_gucs(ErrorData *edata)
+{
+	if (log_backtrace == LOGBACKTRACE_NONE)
+		return false;
+
+	if (log_backtrace == LOGBACKTRACE_INTERNAL &&
+		edata->sqlerrcode != ERRCODE_INTERNAL_ERROR)
+		return false;
+
+	if (backtrace_min_level > edata->elevel)
+		return false;
+
+	return matches_backtrace_functions(edata->funcname);
+}
+
+/*
  * matches_backtrace_functions --- checks whether the given funcname matches
  * backtrace_functions
  *
@@ -831,6 +848,9 @@ static bool
 matches_backtrace_functions(const char *funcname)
 {
 	const char *p;
+
+	if (!backtrace_functions || backtrace_functions[0] == '\0')
+		return true;
 
 	if (!backtrace_function_list || funcname == NULL || funcname[0] == '\0')
 		return false;

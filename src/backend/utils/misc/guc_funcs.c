@@ -177,6 +177,32 @@ ExtractSetVariableArgs(VariableSetStmt *stmt)
 	}
 }
 
+
+/*
+ * Get the source file and line associated with the given option, if it was set
+ * by a file.
+ *
+ * If the option doesn't exist, throw an ereport and don't return.
+ */
+char *
+GetConfigSourceFile(const char *name, int *linenum)
+{
+	struct config_generic *record;
+
+	record = find_option(name, false, false, ERROR);
+
+	/* Should not happen */
+	if (record == NULL)
+		return NULL;
+
+	if (record->source != PGC_S_FILE)
+		return NULL;
+
+	*linenum = record->sourceline;
+	return record->sourcefile;
+}
+
+
 /*
  * flatten_set_variable_args
  *		Given a parsenode List as emitted by the grammar for SET,

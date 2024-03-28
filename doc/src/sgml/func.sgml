@@ -28260,6 +28260,115 @@ postgres=# SELECT '0/0'::pg_lsn + pd.segment_number * ps.setting::int + :offset 
     the pause, the rate of WAL generation and available disk space.
    </para>
 
+   <para>
+    There are also procedures to control the progress of recovery.
+    They are shown in <xref linkend="procedures-recovery-control-table"/>.
+    These procedures may be executed only during recovery.
+   </para>
+
+   <table id="procedures-recovery-control-table">
+    <title>Recovery Control Procedures</title>
+    <tgroup cols="1">
+     <thead>
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        Procedure
+       </para>
+       <para>
+        Description
+       </para></entry>
+      </row>
+     </thead>
+
+     <tbody>
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_wait_for_wal_replay_lsn</primary>
+        </indexterm>
+        <function>pg_wait_for_wal_replay_lsn</function> (
+          <parameter>target_lsn</parameter> <type>pg_lsn</type>,
+          <parameter>timeout</parameter> <type>float8</type> <literal>DEFAULT</literal> <literal>0</literal>)
+        <returnvalue>void</returnvalue>
+       </para>
+       <para>
+        Throws an ERROR if the target <acronym>lsn</acronym> was not replayed
+        on standby within given timeout.  Parameter <parameter>timeout</parameter>
+        is the time in seconds to wait for the <parameter>target_lsn</parameter>
+        replay. When <parameter>timeout</parameter> value equals to zero no
+        timeout is applied.
+       </para></entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
+   <para>
+    <function>pg_wait_for_wal_replay_lsn</function> waits till
+    <parameter>target_lsn</parameter> to be replayed on standby.
+    That is, after this function execution, the value returned by
+    <function>pg_last_wal_replay_lsn</function> should be greater or equal
+    to the <parameter>target_lsn</parameter> value.  This is useful to achieve
+    read-your-writes-consistency, while using async replica for reads and
+    primary for writes.  In that case <acronym>lsn</acronym> of the last
+    modification should be stored on the client application side or the
+    connection pooler side.
+   </para>
+
+   <para>
+    You can use <function>pg_wait_for_wal_replay_lsn</function> to wait for
+    the <type>pg_lsn</type> value.  For example, an application could update
+    the <literal>movie</literal> table and get the <acronym>lsn</acronym> after
+    changes just made.  This example uses <function>pg_current_wal_insert_lsn</function>
+    to get the <acronym>lsn</acronym> given that <varname>synchronous_commit</varname>
+    could be set to <literal>off</literal>.
+
+   <programlisting>
+postgres=# UPDATE movie SET genre = 'Dramatic' WHERE genre = 'Drama';
+UPDATE 100
+postgres=# SELECT pg_current_wal_insert_lsn();
+pg_current_wal_insert_lsn
+--------------------
+0/306EE20
+(1 row)
+   </programlisting>
+
+   Then an application could run <function>pg_wait_for_wal_replay_lsn</function>
+   with the <acronym>lsn</acronym> obtained from primary.  After that the
+   changes made of primary should be guaranteed to be visible on replica.
+
+   <programlisting>
+postgres=# CALL pg_wait_for_wal_replay_lsn('0/306EE20');
+CALL
+postgres=# SELECT * FROM movie WHERE genre = 'Drama';
+ genre
+-------
+(0 rows)
+   </programlisting>
+
+   It may also happen that target <acronym>lsn</acronym> is not achieved
+   within the timeout.  In that case the error is thrown.
+
+   <programlisting>
+postgres=# CALL pg_wait_for_wal_replay_lsn('0/306EE20', 0.1);
+ERROR:  canceling waiting for LSN due to timeout
+   </programlisting>
+
+   </para>
+
+   <para>
+     <function>pg_wait_for_wal_replay_lsn</function> can't be used within
+     the transaction, another procedure or function.  Any of them holds a
+     snapshot, which could prevent the replay of WAL records.
+
+   <programlisting>
+postgres=# begin;
+BEGIN
+postgres=*# CALL pg_wait_for_wal_replay_lsn('0/306EE20');
+ERROR:  pg_wait_for_wal_replay_lsn() must be only called in non-atomic context
+   </programlisting>
+
+   </para>
   </sect2>
 
   <sect2 id="functions-snapshot-synchronization">

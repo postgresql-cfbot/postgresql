@@ -12150,6 +12150,11 @@
   prorettype => 'bytea', proargtypes => 'pg_brin_minmax_multi_summary',
   prosrc => 'brin_minmax_multi_summary_send' },
 
+{ oid => '16387', descr => 'wait for LSN with timeout',
+  proname => 'pg_wait_for_wal_replay_lsn', prokind => 'p', prorettype => 'void',
+  proargtypes => 'pg_lsn float8', proargnames => '{target_lsn,timeout}',
+  prosrc => 'pg_wait_for_wal_replay_lsn' },
+
 { oid => '6291', descr => 'arbitrary value from among input values',
   proname => 'any_value', prokind => 'a', proisstrict => 'f',
   prorettype => 'anyelement', proargtypes => 'anyelement',

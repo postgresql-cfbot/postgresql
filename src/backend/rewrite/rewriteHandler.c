@@ -1854,6 +1854,7 @@ ApplyRetrieveRule(Query *parsetree,
 	rte = rt_fetch(rt_index, parsetree->rtable);
 
 	rte->rtekind = RTE_SUBQUERY;
+	rte->reftype = ROW_REF_COPY;
 	rte->subquery = rule_action;
 	rte->security_barrier = RelationIsSecurityView(relation);
 

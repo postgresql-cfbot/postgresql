@@ -2309,7 +2309,7 @@ preprocess_rowmarks(PlannerInfo *root)
 		 * Ignore RowMarkClauses for subqueries; they aren't real tables and
 		 * can't support true locking.  Subqueries that got flattened into the
 		 * main query should be ignored completely.  Any that didn't will get
-		 * ROW_MARK_COPY items in the next loop.
+		 * ROW_REF_COPY items in the next loop.
 		 */
 		if (rte->rtekind != RTE_RELATION)
 			continue;
@@ -2319,8 +2319,8 @@ preprocess_rowmarks(PlannerInfo *root)
 		newrc = makeNode(PlanRowMark);
 		newrc->rti = newrc->prti = rc->rti;
 		newrc->rowmarkId = ++(root->glob->lastRowMarkId);
-		newrc->markType = select_rowmark_type(rte, rc->strength);
-		newrc->allMarkTypes = (1 << newrc->markType);
+		newrc->markType = select_rowmark_type(rte, rc->strength, &newrc->refType);
+		newrc->allRefTypes = (1 << newrc->refType);
 		newrc->strength = rc->strength;
 		newrc->waitPolicy = rc->waitPolicy;
 		newrc->isParent = false;
@@ -2344,8 +2344,8 @@ preprocess_rowmarks(PlannerInfo *root)
 		newrc = makeNode(PlanRowMark);
 		newrc->rti = newrc->prti = i;
 		newrc->rowmarkId = ++(root->glob->lastRowMarkId);
-		newrc->markType = select_rowmark_type(rte, LCS_NONE);
-		newrc->allMarkTypes = (1 << newrc->markType);
+		newrc->markType = select_rowmark_type(rte, LCS_NONE, &newrc->refType);
+		newrc->allRefTypes = (1 << newrc->refType);
 		newrc->strength = LCS_NONE;
 		newrc->waitPolicy = LockWaitBlock;	/* doesn't matter */
 		newrc->isParent = false;
@@ -2357,29 +2357,43 @@ preprocess_rowmarks(PlannerInfo *root)
 }
 
 /*
- * Select RowMarkType to use for a given table
+ * Select RowMarkType and RowRefType to use for a given table
  */
 RowMarkType
-select_rowmark_type(RangeTblEntry *rte, LockClauseStrength strength)
+select_rowmark_type(RangeTblEntry *rte, LockClauseStrength strength,
+					RowRefType *refType)
 {
 	if (rte->rtekind != RTE_RELATION)
 	{
-		/* If it's not a table at all, use ROW_MARK_COPY */
-		return ROW_MARK_COPY;
+		/*
+		 * If it's not a table at all, use ROW_MARK_REFERENCE and
+		 * ROW_REF_COPY.
+		 */
+		*refType = ROW_REF_COPY;
+		return ROW_MARK_REFERENCE;
 	}
 	else if (rte->relkind == RELKIND_FOREIGN_TABLE)
 	{
 		/* Let the FDW select the rowmark type, if it wants to */
 		FdwRoutine *fdwroutine = GetFdwRoutineByRelId(rte->relid);
+		RowMarkType result = ROW_MARK_REFERENCE;
+
+		/* Set row reference type as ROW_REF_COPY by default */
+		*refType = ROW_REF_COPY;
 
 		if (fdwroutine->GetForeignRowMarkType != NULL)
-			return fdwroutine->GetForeignRowMarkType(rte, strength);
-		/* Otherwise, use ROW_MARK_COPY by default */
-		return ROW_MARK_COPY;
+			result = fdwroutine->GetForeignRowMarkType(rte, strength, refType);
+
+		/* XXX: should we fill this before? */
+		rte->reftype = *refType;
+
+		/* Otherwise, use ROW_MARK_REFERENCE by default */
+		return result;
 	}
 	else
 	{
 		/* Regular table, apply the appropriate lock type */
+		*refType = rte->reftype;
 		switch (strength)
 		{
 			case LCS_NONE:

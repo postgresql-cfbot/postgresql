@@ -13,6 +13,7 @@
 #define FDWAPI_H
 
 #include "access/parallel.h"
+#include "commands/vacuum.h"
 #include "nodes/execnodes.h"
 #include "nodes/pathnodes.h"
 
@@ -128,7 +129,8 @@ typedef TupleTableSlot *(*IterateDirectModify_function) (ForeignScanState *node)
 typedef void (*EndDirectModify_function) (ForeignScanState *node);
 
 typedef RowMarkType (*GetForeignRowMarkType_function) (RangeTblEntry *rte,
-													   LockClauseStrength strength);
+													   LockClauseStrength strength,
+													   RowRefType *refType);
 
 typedef void (*RefetchForeignRow_function) (EState *estate,
 											ExecRowMark *erm,
@@ -147,11 +149,6 @@ typedef void (*ExplainForeignModify_function) (ModifyTableState *mtstate,
 
 typedef void (*ExplainDirectModify_function) (ForeignScanState *node,
 											  struct ExplainState *es);
-
-typedef int (*AcquireSampleRowsFunc) (Relation relation, int elevel,
-									  HeapTuple *rows, int targrows,
-									  double *totalrows,
-									  double *totaldeadrows);
 
 typedef bool (*AnalyzeForeignTable_function) (Relation relation,
 											  AcquireSampleRowsFunc *func,

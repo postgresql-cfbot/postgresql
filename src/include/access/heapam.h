@@ -282,7 +282,7 @@ extern void heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 						int options, BulkInsertState bistate);
 extern void heap_multi_insert(Relation relation, struct TupleTableSlot **slots,
 							  int ntuples, CommandId cid, int options,
-							  BulkInsertState bistate);
+							  BulkInsertState bistate, bool *insert_indexes);
 extern TM_Result heap_delete(Relation relation, ItemPointer tid,
 							 CommandId cid, Snapshot crosscheck, int options,
 							 struct TM_FailureData *tmfd, bool changingPart,
@@ -368,6 +368,15 @@ extern void HeapTupleSetHintBits(HeapTupleHeader tuple, Buffer buffer,
 extern bool HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple);
 extern bool HeapTupleIsSurelyDead(HeapTuple htup,
 								  struct GlobalVisState *vistest);
+
+/* in heap/heapam_handler.c*/
+extern void heapam_scan_analyze_next_block(TableScanDesc scan,
+										   BlockNumber blockno,
+										   BufferAccessStrategy bstrategy);
+extern bool heapam_scan_analyze_next_tuple(TableScanDesc scan,
+										   TransactionId OldestXmin,
+										   double *liverows, double *deadrows,
+										   TupleTableSlot *slot);
 
 /*
  * To avoid leaking too much knowledge about reorderbuffer implementation

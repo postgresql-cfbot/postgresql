@@ -17,10 +17,13 @@
 #ifndef TABLEAM_H
 #define TABLEAM_H
 
+#include "access/amapi.h"
 #include "access/relscan.h"
 #include "access/sdir.h"
 #include "access/xact.h"
+#include "commands/vacuum.h"
 #include "executor/tuptable.h"
+#include "nodes/execnodes.h"
 #include "utils/rel.h"
 #include "utils/snapshot.h"
 
@@ -473,7 +476,7 @@ typedef struct TableAmRoutine
 	 * test, returns true, false otherwise.
 	 */
 	bool		(*tuple_fetch_row_version) (Relation rel,
-											ItemPointer tid,
+											Datum tupleid,
 											Snapshot snapshot,
 											TupleTableSlot *slot);
 
@@ -511,29 +514,28 @@ typedef struct TableAmRoutine
 	/* see table_tuple_insert() for reference about parameters */
 	TupleTableSlot *(*tuple_insert) (Relation rel, TupleTableSlot *slot,
 									 CommandId cid, int options,
-									 struct BulkInsertStateData *bistate);
+									 struct BulkInsertStateData *bistate,
+									 bool *insert_indexes);
 
-	/* see table_tuple_insert_speculative() for reference about parameters */
-	void		(*tuple_insert_speculative) (Relation rel,
-											 TupleTableSlot *slot,
-											 CommandId cid,
-											 int options,
-											 struct BulkInsertStateData *bistate,
-											 uint32 specToken);
-
-	/* see table_tuple_complete_speculative() for reference about parameters */
-	void		(*tuple_complete_speculative) (Relation rel,
-											   TupleTableSlot *slot,
-											   uint32 specToken,
-											   bool succeeded);
+	/* see table_tuple_insert_with_arbiter() for reference about parameters */
+	TupleTableSlot *(*tuple_insert_with_arbiter) (ResultRelInfo *resultRelInfo,
+												  TupleTableSlot *slot,
+												  CommandId cid, int options,
+												  struct BulkInsertStateData *bistate,
+												  List *arbiterIndexes,
+												  EState *estate,
+												  LockTupleMode lockmode,
+												  TupleTableSlot *lockedSlot,
+												  TupleTableSlot *tempSlot);
 
 	/* see table_multi_insert() for reference about parameters */
 	void		(*multi_insert) (Relation rel, TupleTableSlot **slots, int nslots,
-								 CommandId cid, int options, struct BulkInsertStateData *bistate);
+								 CommandId cid, int options, struct BulkInsertStateData *bistate,
+								 bool *insert_indexes);
 
 	/* see table_tuple_delete() for reference about parameters */
 	TM_Result	(*tuple_delete) (Relation rel,
-								 ItemPointer tid,
+								 Datum tupleid,
 								 CommandId cid,
 								 Snapshot snapshot,
 								 Snapshot crosscheck,
@@ -544,7 +546,7 @@ typedef struct TableAmRoutine
 
 	/* see table_tuple_update() for reference about parameters */
 	TM_Result	(*tuple_update) (Relation rel,
-								 ItemPointer otid,
+								 Datum tupleid,
 								 TupleTableSlot *slot,
 								 CommandId cid,
 								 Snapshot snapshot,
@@ -557,7 +559,7 @@ typedef struct TableAmRoutine
 
 	/* see table_tuple_lock() for reference about parameters */
 	TM_Result	(*tuple_lock) (Relation rel,
-							   ItemPointer tid,
+							   Datum tupleid,
 							   Snapshot snapshot,
 							   TupleTableSlot *slot,
 							   CommandId cid,
@@ -658,41 +660,6 @@ typedef struct TableAmRoutine
 									struct VacuumParams *params,
 									BufferAccessStrategy bstrategy);
 
-	/*
-	 * Prepare to analyze block `blockno` of `scan`. The scan has been started
-	 * with table_beginscan_analyze().  See also
-	 * table_scan_analyze_next_block().
-	 *
-	 * The callback may acquire resources like locks that are held until
-	 * table_scan_analyze_next_tuple() returns false. It e.g. can make sense
-	 * to hold a lock until all tuples on a block have been analyzed by
-	 * scan_analyze_next_tuple.
-	 *
-	 * The callback can return false if the block is not suitable for
-	 * sampling, e.g. because it's a metapage that could never contain tuples.
-	 *
-	 * XXX: This obviously is primarily suited for block-based AMs. It's not
-	 * clear what a good interface for non block based AMs would be, so there
-	 * isn't one yet.
-	 */
-	bool		(*scan_analyze_next_block) (TableScanDesc scan,
-											BlockNumber blockno,
-											BufferAccessStrategy bstrategy);
-
-	/*
-	 * See table_scan_analyze_next_tuple().
-	 *
-	 * Not every AM might have a meaningful concept of dead rows, in which
-	 * case it's OK to not increment *deadrows - but note that that may
-	 * influence autovacuum scheduling (see comment for relation_vacuum
-	 * callback).
-	 */
-	bool		(*scan_analyze_next_tuple) (TableScanDesc scan,
-											TransactionId OldestXmin,
-											double *liverows,
-											double *deadrows,
-											TupleTableSlot *slot);
-
 	/* see table_index_build_range_scan for reference about parameters */
 	double		(*index_build_range_scan) (Relation table_rel,
 										   Relation index_rel,
@@ -713,11 +680,32 @@ typedef struct TableAmRoutine
 										Snapshot snapshot,
 										struct ValidateIndexState *state);
 
+	/* See table_relation_analyze() */
+	void		(*relation_analyze) (Relation relation,
+									 AcquireSampleRowsFunc *func,
+									 BlockNumber *totalpages,
+									 BufferAccessStrategy bstrategy);
+
+	/* See table_define_index_validate() */
+	bool		(*define_index_validate) (Relation rel, IndexStmt *stmt,
+										  bool skip_build, void **arg);
+
+	/* See table_define_index() */
+	bool		(*define_index) (Relation rel, Oid indoid, bool reindex,
+								 bool skip_constraint_checks, bool skip_build,
+								 void *arg);
+
+
 
 	/* ------------------------------------------------------------------------
 	 * Miscellaneous functions.
 	 * ------------------------------------------------------------------------
 	 */
+
+	/*
+	 * Get the type of row identifier in the table.
+	 */
+	RowRefType	(*get_row_ref_type) (Relation rel);
 
 	/*
 	 * This callback frees relation private cache data stored in rd_amcache.
@@ -764,6 +752,35 @@ typedef struct TableAmRoutine
 											   int32 sliceoffset,
 											   int32 slicelength,
 											   struct varlena *result);
+
+	/*
+	 * This callback parses and validates the reloptions array for a table.
+	 *
+	 * This is called only when a non-null reloptions array exists for the
+	 * table.  'reloptions' is a text array containing entries of the form
+	 * "name=value".  The function should construct a bytea value, which will
+	 * be copied into the rd_options field of the table's relcache entry. The
+	 * data contents of the bytea value are open for the access method to
+	 * define.
+	 *
+	 * When 'validate' is true, the function should report a suitable error
+	 * message if any of the options are unrecognized or have invalid values;
+	 * when 'validate' is false, invalid entries should be silently ignored.
+	 * ('validate' is false when loading options already stored in pg_catalog;
+	 * an invalid entry could only be found if the access method has changed
+	 * its rules for options, and in that case ignoring obsolete entries is
+	 * appropriate.)
+	 *
+	 * It is OK to return NULL if default behavior is wanted.
+	 */
+	bytea	   *(*reloptions) (char relkind, Datum reloptions, bool validate);
+
+	/*
+	 * Parse table AM-specific index options.  Useful for table AM to define
+	 * new index options or override existing index options.
+	 */
+	bytea	   *(*indexoptions) (amoptions_function amoptions, char relkind,
+								 Datum reloptions, bool validate);
 
 
 	/* ------------------------------------------------------------------------
@@ -1006,19 +1023,6 @@ table_beginscan_tid(Relation rel, Snapshot snapshot)
 	uint32		flags = SO_TYPE_TIDSCAN;
 
 	return rel->rd_tableam->scan_begin(rel, snapshot, 0, NULL, NULL, flags);
-}
-
-/*
- * table_beginscan_analyze is an alternative entry point for setting up a
- * TableScanDesc for an ANALYZE scan.  As with bitmap scans, it's worth using
- * the same data structure although the behavior is rather different.
- */
-static inline TableScanDesc
-table_beginscan_analyze(Relation rel)
-{
-	uint32		flags = SO_TYPE_ANALYZE;
-
-	return rel->rd_tableam->scan_begin(rel, NULL, 0, NULL, NULL, flags);
 }
 
 /*
@@ -1285,9 +1289,9 @@ extern bool table_index_fetch_tuple_check(Relation rel,
 
 
 /*
- * Fetch tuple at `tid` into `slot`, after doing a visibility test according to
- * `snapshot`. If a tuple was found and passed the visibility test, returns
- * true, false otherwise.
+ * Fetch tuple identified by `tupleid` into `slot`, after doing a visibility
+ * test according to `snapshot`. If a tuple was found and passed the visibility
+ * test, returns true, false otherwise.
  *
  * See table_index_fetch_tuple's comment about what the difference between
  * these functions is. It is correct to use this function outside of index
@@ -1295,7 +1299,7 @@ extern bool table_index_fetch_tuple_check(Relation rel,
  */
 static inline bool
 table_tuple_fetch_row_version(Relation rel,
-							  ItemPointer tid,
+							  Datum tupleid,
 							  Snapshot snapshot,
 							  TupleTableSlot *slot)
 {
@@ -1307,7 +1311,8 @@ table_tuple_fetch_row_version(Relation rel,
 	if (unlikely(TransactionIdIsValid(CheckXidAlive) && !bsysscan))
 		elog(ERROR, "unexpected table_tuple_fetch_row_version call during logical decoding");
 
-	return rel->rd_tableam->tuple_fetch_row_version(rel, tid, snapshot, slot);
+	return rel->rd_tableam->tuple_fetch_row_version(rel, tupleid,
+													snapshot, slot);
 }
 
 /*
@@ -1403,6 +1408,11 @@ table_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
  * behavior) is also just passed through to RelationGetBufferForTuple. If
  * `bistate` is provided, table_finish_bulk_insert() needs to be called.
  *
+ * Tableam implementation of tuple_insert should set `*insert_indexes` to true
+ * if it expects the caller to insert the relevant index tuples (as heap
+ * implementation does).  It should set `*insert_indexes` to false if it cares
+ * about index inserts itself and doesn't want the caller to do index inserts.
+ *
  * Returns the slot containing the inserted tuple, which may differ from the
  * given slot. For instance, the source slot may be VirtualTupleTableSlot, but
  * the result slot may correspond to the table AM. On return the slot's
@@ -1412,43 +1422,50 @@ table_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
  */
 static inline TupleTableSlot *
 table_tuple_insert(Relation rel, TupleTableSlot *slot, CommandId cid,
-				   int options, struct BulkInsertStateData *bistate)
+				   int options, struct BulkInsertStateData *bistate,
+				   bool *insert_indexes)
 {
 	return rel->rd_tableam->tuple_insert(rel, slot, cid, options,
-										 bistate);
+										 bistate, insert_indexes);
 }
 
 /*
- * Perform a "speculative insertion". These can be backed out afterwards
- * without aborting the whole transaction.  Other sessions can wait for the
- * speculative insertion to be confirmed, turning it into a regular tuple, or
- * aborted, as if it never existed.  Speculatively inserted tuples behave as
- * "value locks" of short duration, used to implement INSERT .. ON CONFLICT.
+ * Insert a tuple from a slot into table AM routine with arbiter indexes.
  *
- * A transaction having performed a speculative insertion has to either abort,
- * or finish the speculative insertion with
- * table_tuple_complete_speculative(succeeded = ...).
+ * This function is similar to table_tuple_insert(), but it takes into account
+ * `arbiterIndexes`, which comprises the list of oids of arbiter indexes.
+ *
+ * If tuple doesn't violates uniqueness on all arbiter indexes, then it should
+ * be inserted and the slot containing inserted tuple is returned.
+ *
+ * If tuple violates uniqueness on any arbiter index, then this function
+ * returns NULL and doesn't insert the tuple.  Also, if 'lockedSlot' is
+ * provided, then conflicting tuple gets locked in `lockmode` and placed into
+ * `lockedSlot`.
+ *
+ * Executor state `estate` is passed to this method to provide ability to
+ * calculate index tuples.  Temporary tuple table slot `tempSlot` is passed
+ * for holding of potentially conflicing tuple.
  */
-static inline void
-table_tuple_insert_speculative(Relation rel, TupleTableSlot *slot,
-							   CommandId cid, int options,
-							   struct BulkInsertStateData *bistate,
-							   uint32 specToken)
+static inline TupleTableSlot *
+table_tuple_insert_with_arbiter(ResultRelInfo *resultRelInfo,
+								TupleTableSlot *slot,
+								CommandId cid, int options,
+								struct BulkInsertStateData *bistate,
+								List *arbiterIndexes,
+								EState *estate,
+								LockTupleMode lockmode,
+								TupleTableSlot *lockedSlot,
+								TupleTableSlot *tempSlot)
 {
-	rel->rd_tableam->tuple_insert_speculative(rel, slot, cid, options,
-											  bistate, specToken);
-}
+	Relation	rel = resultRelInfo->ri_RelationDesc;
 
-/*
- * Complete "speculative insertion" started in the same transaction. If
- * succeeded is true, the tuple is fully inserted, if false, it's removed.
- */
-static inline void
-table_tuple_complete_speculative(Relation rel, TupleTableSlot *slot,
-								 uint32 specToken, bool succeeded)
-{
-	rel->rd_tableam->tuple_complete_speculative(rel, slot, specToken,
-												succeeded);
+	return rel->rd_tableam->tuple_insert_with_arbiter(resultRelInfo,
+													  slot, cid, options,
+													  bistate, arbiterIndexes,
+													  estate,
+													  lockmode, lockedSlot,
+													  tempSlot);
 }
 
 /*
@@ -1467,10 +1484,11 @@ table_tuple_complete_speculative(Relation rel, TupleTableSlot *slot,
  */
 static inline void
 table_multi_insert(Relation rel, TupleTableSlot **slots, int nslots,
-				   CommandId cid, int options, struct BulkInsertStateData *bistate)
+				   CommandId cid, int options, struct BulkInsertStateData *bistate,
+				   bool *insert_indexes)
 {
 	rel->rd_tableam->multi_insert(rel, slots, nslots,
-								  cid, options, bistate);
+								  cid, options, bistate, insert_indexes);
 }
 
 /*
@@ -1481,7 +1499,7 @@ table_multi_insert(Relation rel, TupleTableSlot **slots, int nslots,
  *
  * Input parameters:
  *	relation - table to be modified (caller must hold suitable lock)
- *	tid - TID of tuple to be deleted
+ *	tupleid - identifier of tuple to be deleted
  *	cid - delete command ID (used for visibility test, and stored into
  *		cmax if successful)
  *	crosscheck - if not InvalidSnapshot, also check tuple against this
@@ -1510,12 +1528,12 @@ table_multi_insert(Relation rel, TupleTableSlot **slots, int nslots,
  * TM_FailureData for additional info.
  */
 static inline TM_Result
-table_tuple_delete(Relation rel, ItemPointer tid, CommandId cid,
+table_tuple_delete(Relation rel, Datum tupleid, CommandId cid,
 				   Snapshot snapshot, Snapshot crosscheck, int options,
 				   TM_FailureData *tmfd, bool changingPart,
 				   TupleTableSlot *oldSlot)
 {
-	return rel->rd_tableam->tuple_delete(rel, tid, cid,
+	return rel->rd_tableam->tuple_delete(rel, tupleid, cid,
 										 snapshot, crosscheck,
 										 options, tmfd, changingPart,
 										 oldSlot);
@@ -1529,7 +1547,7 @@ table_tuple_delete(Relation rel, ItemPointer tid, CommandId cid,
  *
  * Input parameters:
  *	relation - table to be modified (caller must hold suitable lock)
- *	otid - TID of old tuple to be replaced
+ *	tupleid - identifier of old tuple to be replaced
  *	slot - newly constructed tuple data to store
  *	cid - update command ID (used for visibility test, and stored into
  *		cmax/cmin if successful)
@@ -1566,13 +1584,13 @@ table_tuple_delete(Relation rel, ItemPointer tid, CommandId cid,
  * for additional info.
  */
 static inline TM_Result
-table_tuple_update(Relation rel, ItemPointer otid, TupleTableSlot *slot,
+table_tuple_update(Relation rel, Datum tupleid, TupleTableSlot *slot,
 				   CommandId cid, Snapshot snapshot, Snapshot crosscheck,
 				   int options, TM_FailureData *tmfd, LockTupleMode *lockmode,
 				   TU_UpdateIndexes *update_indexes,
 				   TupleTableSlot *oldSlot)
 {
-	return rel->rd_tableam->tuple_update(rel, otid, slot,
+	return rel->rd_tableam->tuple_update(rel, tupleid, slot,
 										 cid, snapshot, crosscheck,
 										 options, tmfd,
 										 lockmode, update_indexes,
@@ -1584,7 +1602,7 @@ table_tuple_update(Relation rel, ItemPointer otid, TupleTableSlot *slot,
  *
  * Input parameters:
  *	relation: relation containing tuple (caller must hold suitable lock)
- *	tid: TID of tuple to lock
+ *	tupleid: identifier of tuple to lock
  *	snapshot: snapshot to use for visibility determinations
  *	cid: current command ID (used for visibility test, and stored into
  *		tuple's cmax if lock is successful)
@@ -1613,12 +1631,12 @@ table_tuple_update(Relation rel, ItemPointer otid, TupleTableSlot *slot,
  * comments for struct TM_FailureData for additional info.
  */
 static inline TM_Result
-table_tuple_lock(Relation rel, ItemPointer tid, Snapshot snapshot,
+table_tuple_lock(Relation rel, Datum tupleid, Snapshot snapshot,
 				 TupleTableSlot *slot, CommandId cid, LockTupleMode mode,
 				 LockWaitPolicy wait_policy, uint8 flags,
 				 TM_FailureData *tmfd)
 {
-	return rel->rd_tableam->tuple_lock(rel, tid, snapshot, slot,
+	return rel->rd_tableam->tuple_lock(rel, tupleid, snapshot, slot,
 									   cid, mode, wait_policy,
 									   flags, tmfd);
 }
@@ -1747,42 +1765,6 @@ table_relation_vacuum(Relation rel, struct VacuumParams *params,
 }
 
 /*
- * Prepare to analyze block `blockno` of `scan`. The scan needs to have been
- * started with table_beginscan_analyze().  Note that this routine might
- * acquire resources like locks that are held until
- * table_scan_analyze_next_tuple() returns false.
- *
- * Returns false if block is unsuitable for sampling, true otherwise.
- */
-static inline bool
-table_scan_analyze_next_block(TableScanDesc scan, BlockNumber blockno,
-							  BufferAccessStrategy bstrategy)
-{
-	return scan->rs_rd->rd_tableam->scan_analyze_next_block(scan, blockno,
-															bstrategy);
-}
-
-/*
- * Iterate over tuples in the block selected with
- * table_scan_analyze_next_block() (which needs to have returned true, and
- * this routine may not have returned false for the same block before). If a
- * tuple that's suitable for sampling is found, true is returned and a tuple
- * is stored in `slot`.
- *
- * *liverows and *deadrows are incremented according to the encountered
- * tuples.
- */
-static inline bool
-table_scan_analyze_next_tuple(TableScanDesc scan, TransactionId OldestXmin,
-							  double *liverows, double *deadrows,
-							  TupleTableSlot *slot)
-{
-	return scan->rs_rd->rd_tableam->scan_analyze_next_tuple(scan, OldestXmin,
-															liverows, deadrows,
-															slot);
-}
-
-/*
  * table_index_build_scan - scan the table to find tuples to be indexed
  *
  * This is called back from an access-method-specific index build procedure
@@ -1887,11 +1869,74 @@ table_index_validate_scan(Relation table_rel,
 											   state);
 }
 
+/*
+ * table_relation_analyze - fill the infromation for a sampling statistics
+ *							acquisition
+ *
+ * The pointer to a function that will collect sample rows from the table
+ * should be stored to `*func`, plus the estimated size of the table in pages
+ * should br stored to `*totalpages`.
+ */
+static inline void
+table_relation_analyze(Relation relation, AcquireSampleRowsFunc *func,
+					   BlockNumber *totalpages, BufferAccessStrategy bstrategy)
+{
+	relation->rd_tableam->relation_analyze(relation, func,
+										   totalpages, bstrategy);
+}
+
+/*
+ * Let table AM validate the index to be created on `rel` with statement
+ * `*stmt`.  `skip_build` indicates that only catalog entries are to be
+ * created without index data.  This method can save some information into
+ * `arg`, and it shoud be passed to table_define_index().
+ */
+static inline bool
+table_define_index_validate(Relation rel, IndexStmt *stmt,
+							bool skip_build, void **arg)
+{
+	if (rel->rd_tableam && rel->rd_tableam->define_index_validate)
+		return rel->rd_tableam->define_index_validate(rel, stmt,
+													  skip_build, arg);
+	else
+		return true;
+}
+
+/*
+ * Notifies table AM about index creation on `rel` with oid `indoid`.
+ */
+static inline bool
+table_define_index(Relation rel, Oid indoid, bool reindex,
+				   bool skip_constraint_checks, bool skip_build, void *arg)
+{
+	if (rel->rd_tableam && rel->rd_tableam->define_index)
+		return rel->rd_tableam->define_index(rel, indoid, reindex,
+											 skip_constraint_checks,
+											 skip_build, arg);
+	else
+		return true;
+}
 
 /* ----------------------------------------------------------------------------
  * Miscellaneous functionality
  * ----------------------------------------------------------------------------
  */
+
+/*
+ * Get the type of row identifier.  Returns ROW_REF_TID when table AM routine
+ * is not accessible.  This happens during catalog initialization.  All catalog
+ * tables are known to use heap.
+ */
+static inline RowRefType
+table_get_row_ref_type(Relation rel)
+{
+	if (rel->rd_tableam)
+		return rel->rd_tableam->get_row_ref_type(rel);
+	else if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+		return ROW_REF_COPY;
+	else
+		return ROW_REF_TID;
+}
 
 /*
  * Frees relation private cache data stored in rd_amcache.  Uses
@@ -1985,6 +2030,44 @@ table_relation_fetch_toast_slice(Relation toastrel, Oid valueid,
 													 attrsize,
 													 sliceoffset, slicelength,
 													 result);
+}
+
+/*
+ * Parse options for given table.
+ */
+static inline bytea *
+table_reloptions(Relation rel, char relkind,
+				 Datum reloptions, bool validate)
+{
+	return rel->rd_tableam->reloptions(relkind, reloptions, validate);
+}
+
+/*
+ * Parse table options without knowledge of particular table.
+ */
+static inline bytea *
+tableam_reloptions(const TableAmRoutine *tableam, char relkind,
+				   Datum reloptions, bool validate)
+{
+	return tableam->reloptions(relkind, reloptions, validate);
+}
+
+extern bytea *index_reloptions(amoptions_function amoptions, Datum reloptions,
+							   bool validate);
+
+/*
+ * Parse index options.  Gives table AM a chance to override index-specific
+ * options defined in 'amoptions'.
+ */
+static inline bytea *
+tableam_indexoptions(const TableAmRoutine *tableam,
+					 amoptions_function amoptions, char relkind,
+					 Datum reloptions, bool validate)
+{
+	if (tableam)
+		return tableam->indexoptions(amoptions, relkind, reloptions, validate);
+	else
+		return index_reloptions(amoptions, reloptions, validate);
 }
 
 
@@ -2116,7 +2199,8 @@ table_scan_sample_next_tuple(TableScanDesc scan,
  * ----------------------------------------------------------------------------
  */
 
-extern void simple_table_tuple_insert(Relation rel, TupleTableSlot *slot);
+extern void simple_table_tuple_insert(Relation rel, TupleTableSlot *slot,
+									  bool *insert_indexes);
 extern void simple_table_tuple_delete(Relation rel, ItemPointer tid,
 									  Snapshot snapshot,
 									  TupleTableSlot *oldSlot);
@@ -2164,6 +2248,7 @@ extern void table_block_relation_estimate_size(Relation rel,
  */
 
 extern const TableAmRoutine *GetTableAmRoutine(Oid amhandler);
+extern const TableAmRoutine *GetTableAmRoutineByAmOid(Oid amoid);
 
 /* ----------------------------------------------------------------------------
  * Functions in heapam_handler.c

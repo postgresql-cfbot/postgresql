@@ -2211,4 +2211,26 @@ typedef struct OnConflictExpr
 	List	   *exclRelTlist;	/* tlist of the EXCLUDED pseudo relation */
 } OnConflictExpr;
 
+/*
+ * RowRefType -
+ *	  enums for types of row identifiers
+ *
+ * For plain tables we can just fetch the TID, much as for a target relation;
+ * this case is represented by ROW_REF_TID.  Otherwise (for example for VALUES
+ * or FUNCTION scans) we have to copy the whole row value.  ROW_REF_COPY is
+ * pretty inefficient, since most of the time we'll never need the data; but
+ * fortunately the overhead is usually not performance-critical in practice.
+ * By default we use ROW_REF_COPY for foreign tables, but if the FDW has
+ * a concept of rowid it can request to use ROW_REF_TID instead.
+ * (Again, this probably doesn't make sense if a physical remote fetch is
+ * needed, but for FDWs that map to local storage it might be credible.)
+ * In future we may allow more types of row identifiers.
+ */
+typedef enum RowRefType
+{
+	ROW_REF_TID,				/* Item pointer (block, offset) */
+	ROW_REF_ROWID,				/* Bytea row id */
+	ROW_REF_COPY				/* Full row copy */
+} RowRefType;
+
 #endif							/* PRIMNODES_H */

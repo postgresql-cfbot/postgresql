@@ -867,30 +867,29 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 			Oid			relid;
 			Relation	relation;
 			ExecRowMark *erm;
+			RangeTblEntry *rangeEntry;
 
 			/* ignore "parent" rowmarks; they are irrelevant at runtime */
 			if (rc->isParent)
 				continue;
 
 			/* get relation's OID (will produce InvalidOid if subquery) */
-			relid = exec_rt_fetch(rc->rti, estate)->relid;
+			rangeEntry = exec_rt_fetch(rc->rti, estate);
+			relid = rangeEntry->relid;
 
-			/* open relation, if we need to access it for this mark type */
-			switch (rc->markType)
+			/*
+			 * Open relation, if we need to access it for this reference type.
+			 */
+			switch (rc->refType)
 			{
-				case ROW_MARK_EXCLUSIVE:
-				case ROW_MARK_NOKEYEXCLUSIVE:
-				case ROW_MARK_SHARE:
-				case ROW_MARK_KEYSHARE:
-				case ROW_MARK_REFERENCE:
+				case ROW_REF_TID:
 					relation = ExecGetRangeTableRelation(estate, rc->rti);
 					break;
-				case ROW_MARK_COPY:
-					/* no physical table access is required */
+				case ROW_REF_COPY:
 					relation = NULL;
 					break;
 				default:
-					elog(ERROR, "unrecognized markType: %d", rc->markType);
+					elog(ERROR, "unrecognized refType: %d", rc->refType);
 					relation = NULL;	/* keep compiler quiet */
 					break;
 			}
@@ -906,6 +905,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 			erm->prti = rc->prti;
 			erm->rowmarkId = rc->rowmarkId;
 			erm->markType = rc->markType;
+			erm->refType = rangeEntry->reftype;
 			erm->strength = rc->strength;
 			erm->waitPolicy = rc->waitPolicy;
 			erm->ermActive = false;
@@ -1269,6 +1269,7 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 	resultRelInfo->ri_ChildToRootMap = NULL;
 	resultRelInfo->ri_ChildToRootMapValid = false;
 	resultRelInfo->ri_CopyMultiInsertBuffer = NULL;
+	resultRelInfo->ri_RowRefType = table_get_row_ref_type(resultRelationDesc);
 }
 
 /*
@@ -2402,10 +2403,14 @@ ExecBuildAuxRowMark(ExecRowMark *erm, List *targetlist)
 
 	aerm->rowmark = erm;
 
-	/* Look up the resjunk columns associated with this rowmark */
-	if (erm->markType != ROW_MARK_COPY)
+	/*
+	 * Look up the resjunk columns associated with this rowmark's reference
+	 * type.
+	 */
+	if (erm->refType != ROW_REF_COPY)
 	{
 		/* need ctid for all methods other than COPY */
+		Assert(erm->refType == ROW_REF_TID);
 		snprintf(resname, sizeof(resname), "ctid%u", erm->rowmarkId);
 		aerm->ctidAttNo = ExecFindJunkAttributeInTlist(targetlist,
 													   resname);
@@ -2656,7 +2661,12 @@ EvalPlanQualFetchRowMark(EPQState *epqstate, Index rti, TupleTableSlot *slot)
 		}
 	}
 
-	if (erm->markType == ROW_MARK_REFERENCE)
+	/*
+	 * For non-locked relation, the row mark type should be
+	 * ROW_MARK_REFERENCE.  Fetch the tuple accodring to reference type.
+	 */
+	Assert(erm->markType == ROW_MARK_REFERENCE);
+	if (erm->refType == ROW_REF_TID)
 	{
 		Assert(erm->relation != NULL);
 
@@ -2701,7 +2711,7 @@ EvalPlanQualFetchRowMark(EPQState *epqstate, Index rti, TupleTableSlot *slot)
 		{
 			/* ordinary table, fetch the tuple */
 			if (!table_tuple_fetch_row_version(erm->relation,
-											   (ItemPointer) DatumGetPointer(datum),
+											   datum,
 											   SnapshotAny, slot))
 				elog(ERROR, "failed to fetch tuple for EvalPlanQual recheck");
 			return true;
@@ -2709,7 +2719,7 @@ EvalPlanQualFetchRowMark(EPQState *epqstate, Index rti, TupleTableSlot *slot)
 	}
 	else
 	{
-		Assert(erm->markType == ROW_MARK_COPY);
+		Assert(erm->refType == ROW_REF_COPY);
 
 		/* fetch the whole-row Var for the relation */
 		datum = ExecGetJunkAttribute(epqstate->origslot,

@@ -1160,13 +1160,16 @@ ExecForeignTruncate(List *rels,
 <programlisting>
 RowMarkType
 GetForeignRowMarkType(RangeTblEntry *rte,
-                      LockClauseStrength strength);
+                      LockClauseStrength strength,
+                      RowRefType *refType);
 </programlisting>
 
      Report which row-marking option to use for a foreign table.
-     <literal>rte</literal> is the <structname>RangeTblEntry</structname> node for the table
-     and <literal>strength</literal> describes the lock strength requested by the
-     relevant <literal>FOR UPDATE/SHARE</literal> clause, if any.  The result must be
+     <literal>rte</literal> is the <structname>RangeTblEntry</structname> node for the table;
+     <literal>strength</literal> describes the lock strength requested by the
+     relevant <literal>FOR UPDATE/SHARE</literal> clause, if any;
+     <literal>refType</literal> point to the value of <literal>RowRefType</literal>
+     specifying the way to reference the row.  The result must be
      a member of the <literal>RowMarkType</literal> enum type.
     </para>
 
@@ -1178,8 +1181,15 @@ GetForeignRowMarkType(RangeTblEntry *rte,
     </para>
 
     <para>
+     If the value pointed by <literal>refType</literal> is not changed,
+     the <literal>ROW_REF_COPY</literal> option is used.
+    </para>
+
+    <para>
      If the <function>GetForeignRowMarkType</function> pointer is set to
-     <literal>NULL</literal>, the <literal>ROW_MARK_COPY</literal> option is always used.
+     <literal>NULL</literal>, the <literal>ROW_MARK_REFERENCE</literal> option
+     for row mark type and <literal>ROW_REF_COPY</literal> option for the row
+     reference type are always used.
      (This implies that <function>RefetchForeignRow</function> will never be called,
      so it need not be provided either.)
     </para>
@@ -1213,7 +1223,7 @@ RefetchForeignRow(EState *estate,
      defined by <literal>erm-&gt;markType</literal>, which is the value
      previously returned by <function>GetForeignRowMarkType</function>.
      (<literal>ROW_MARK_REFERENCE</literal> means to just re-fetch the tuple
-     without acquiring any lock, and <literal>ROW_MARK_COPY</literal> will
+     without acquiring any lock.  This shouldn't and <literal>ROW_MARK_COPY</literal> will
      never be seen by this routine.)
     </para>
 

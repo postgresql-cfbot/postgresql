@@ -2433,6 +2433,7 @@ RowExpr
 RowIdentityVarInfo
 RowMarkClause
 RowMarkType
+RowRefType
 RowSecurityDesc
 RowSecurityPolicy
 RtlGetLastNtStatus_t

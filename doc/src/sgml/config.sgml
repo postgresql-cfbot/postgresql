@@ -1918,11 +1918,6 @@ include_dir 'conf.d'
         too high.  It may be useful to control for this by separately
         setting <xref linkend="guc-autovacuum-work-mem"/>.
        </para>
-       <para>
-        Note that for the collection of dead tuple identifiers,
-        <command>VACUUM</command> is only able to utilize up to a maximum of
-        <literal>1GB</literal> of memory.
-       </para>
       </listitem>
      </varlistentry>
 

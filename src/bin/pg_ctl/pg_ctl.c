@@ -45,6 +45,11 @@ typedef enum
 {
 	POSTMASTER_READY,
 	POSTMASTER_STILL_STARTING,
+	/*
+	 * postmaster no longer running, because it stopped after recovery
+	 * completed.
+	 */
+	POSTMASTER_SHUTDOWN_IN_RECOVERY,
 	POSTMASTER_FAILED,
 } WaitPMResult;
 
@@ -662,11 +667,21 @@ wait_for_postmaster_start(pid_t pm_pid, bool do_checkpoint)
 			int			exitstatus;
 
 			if (waitpid(pm_pid, &exitstatus, WNOHANG) == pm_pid)
-				return POSTMASTER_FAILED;
+			{
+				if (get_control_dbstate() == DB_SHUTDOWNED_IN_RECOVERY)
+					return POSTMASTER_SHUTDOWN_IN_RECOVERY;
+				else
+					return POSTMASTER_FAILED;
+			}
 		}
 #else
 		if (WaitForSingleObject(postmasterProcess, 0) == WAIT_OBJECT_0)
-			return POSTMASTER_FAILED;
+		{
+			if (get_control_dbstate() == DB_SHUTDOWNED_IN_RECOVERY)
+				return POSTMASTER_SHUTDOWN_IN_RECOVERY;
+			else
+				return POSTMASTER_FAILED;
+		}
 #endif
 
 		/* Startup still in process; wait, printing a dot once per second */
@@ -990,6 +1005,10 @@ do_start(void)
 				write_stderr(_("%s: server did not start in time\n"),
 							 progname);
 				exit(1);
+				break;
+			case POSTMASTER_SHUTDOWN_IN_RECOVERY:
+				print_msg(_(" done, automatically shut down after recovery\n"));
+				print_msg(_("server shut down because of recovery target settings\n"));
 				break;
 			case POSTMASTER_FAILED:
 				print_msg(_(" stopped waiting\n"));

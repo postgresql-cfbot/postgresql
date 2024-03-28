@@ -7,6 +7,7 @@
 #include "btree_utils_num.h"
 #include "utils/builtins.h"
 #include "utils/inet.h"
+#include "utils/sortsupport.h"
 
 typedef struct
 {
@@ -25,6 +26,34 @@ PG_FUNCTION_INFO_V1(gbt_macad_picksplit);
 PG_FUNCTION_INFO_V1(gbt_macad_consistent);
 PG_FUNCTION_INFO_V1(gbt_macad_penalty);
 PG_FUNCTION_INFO_V1(gbt_macad_same);
+PG_FUNCTION_INFO_V1(gbt_macaddr_sortsupport);
+
+/* sortsupport functions */
+static int
+gbt_macaddr_ssup_cmp(Datum x, Datum y, SortSupport ssup)
+{
+	macKEY *arg1 = (macKEY *) DatumGetPointer(x);
+	macKEY *arg2 = (macKEY *) DatumGetPointer(y);
+
+	/* macKEY lower and upper members are always equal here,
+	 * so its enough to compare just lower.
+	 */
+	return DatumGetInt32(DirectFunctionCall2(macaddr_cmp,
+											 MacaddrPGetDatum(&arg1->lower),
+											 MacaddrPGetDatum(&arg2->lower)));
+
+}
+
+Datum
+gbt_macaddr_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = gbt_macaddr_ssup_cmp;
+	ssup->ssup_extra = NULL;
+
+	PG_RETURN_VOID();
+}
 
 
 static bool

@@ -6,6 +6,7 @@
 #include "btree_gist.h"
 #include "btree_utils_num.h"
 #include "utils/builtins.h"
+#include "utils/sortsupport.h"
 #include "utils/timestamp.h"
 
 typedef struct
@@ -27,7 +28,20 @@ PG_FUNCTION_INFO_V1(gbt_intv_consistent);
 PG_FUNCTION_INFO_V1(gbt_intv_distance);
 PG_FUNCTION_INFO_V1(gbt_intv_penalty);
 PG_FUNCTION_INFO_V1(gbt_intv_same);
+PG_FUNCTION_INFO_V1(gbt_intv_sortsupport);
 
+
+static int
+gbt_intv_ssup_cmp(Datum x, Datum y, SortSupport ssup)
+{
+	intvKEY *arg1 = (intvKEY *) DatumGetPointer(x);
+	intvKEY *arg2 = (intvKEY *) DatumGetPointer(y);
+
+	/* intvKEY lower and upper are always equal here, so compare just lower members is enough */
+	return DatumGetInt32(DirectFunctionCall2(interval_cmp,
+											 IntervalPGetDatum(&arg1->lower),
+											 IntervalPGetDatum(&arg2->lower)));
+}
 
 static bool
 gbt_intvgt(const void *a, const void *b, FmgrInfo *flinfo)
@@ -294,4 +308,15 @@ gbt_intv_same(PG_FUNCTION_ARGS)
 
 	*result = gbt_num_same((void *) b1, (void *) b2, &tinfo, fcinfo->flinfo);
 	PG_RETURN_POINTER(result);
+}
+
+Datum
+gbt_intv_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = gbt_intv_ssup_cmp;
+	ssup->ssup_extra = NULL;
+
+	PG_RETURN_VOID();
 }

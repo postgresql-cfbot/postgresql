@@ -5,6 +5,7 @@
 
 #include "btree_gist.h"
 #include "btree_utils_num.h"
+#include "utils/sortsupport.h"
 #include "common/int.h"
 
 typedef struct int16key
@@ -24,6 +25,31 @@ PG_FUNCTION_INFO_V1(gbt_int2_consistent);
 PG_FUNCTION_INFO_V1(gbt_int2_distance);
 PG_FUNCTION_INFO_V1(gbt_int2_penalty);
 PG_FUNCTION_INFO_V1(gbt_int2_same);
+PG_FUNCTION_INFO_V1(gbt_int2_sortsupport);
+
+/* sortsupport functions */
+static int
+gbt_int2_ssup_cmp(Datum x, Datum y, SortSupport ssup)
+{
+	int16KEY *arg1 = (int16KEY *) DatumGetPointer(x);
+	int16KEY *arg2 = (int16KEY *) DatumGetPointer(y);
+
+	if (arg1->lower < arg2->lower)
+		return -1;
+	else if (arg1->lower > arg2->lower)
+		return 1;
+	else
+		return 0;
+}
+
+Datum
+gbt_int2_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = gbt_int2_ssup_cmp;
+	PG_RETURN_VOID();
+}
 
 static bool
 gbt_int2gt(const void *a, const void *b, FmgrInfo *flinfo)

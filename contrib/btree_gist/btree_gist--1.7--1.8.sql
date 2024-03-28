@@ -85,3 +85,4 @@ ALTER OPERATOR FAMILY gist_enum_ops USING gist ADD
 
 ALTER OPERATOR FAMILY gist_bool_ops USING gist ADD
 	FUNCTION 12 (bool, bool) gist_stratnum_btree (int2) ;
+

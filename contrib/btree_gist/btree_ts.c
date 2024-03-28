@@ -10,6 +10,7 @@
 #include "utils/builtins.h"
 #include "utils/datetime.h"
 #include "utils/float.h"
+#include "utils/sortsupport.h"
 
 typedef struct
 {
@@ -31,6 +32,7 @@ PG_FUNCTION_INFO_V1(gbt_tstz_consistent);
 PG_FUNCTION_INFO_V1(gbt_tstz_distance);
 PG_FUNCTION_INFO_V1(gbt_ts_penalty);
 PG_FUNCTION_INFO_V1(gbt_ts_same);
+PG_FUNCTION_INFO_V1(gbt_ts_sortsupport);
 
 
 #ifdef USE_FLOAT8_BYVAL
@@ -39,6 +41,29 @@ PG_FUNCTION_INFO_V1(gbt_ts_same);
 #define TimestampGetDatumFast(X) PointerGetDatum(&(X))
 #endif
 
+/* Sortsupport functions */
+static int
+gbt_ts_ssup_cmp(Datum x, Datum y, SortSupport ssup)
+{
+	tsKEY *arg1 = (tsKEY *) DatumGetPointer(x);
+	tsKEY *arg2 = (tsKEY *) DatumGetPointer(y);
+
+	/* Sortsupport always gets the same lower and upper value for input keys */
+	return DatumGetInt32(DirectFunctionCall2(timestamp_cmp,
+											 TimestampGetDatumFast(arg1->lower),
+											 TimestampGetDatumFast(arg2->lower)));
+}
+
+Datum
+gbt_ts_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = gbt_ts_ssup_cmp;
+	ssup->ssup_extra = NULL;
+
+	PG_RETURN_VOID();
+}
 
 static bool
 gbt_tsgt(const void *a, const void *b, FmgrInfo *flinfo)

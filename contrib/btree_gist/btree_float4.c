@@ -5,6 +5,7 @@
 
 #include "btree_gist.h"
 #include "btree_utils_num.h"
+#include "utils/sortsupport.h"
 #include "utils/float.h"
 
 typedef struct float4key
@@ -24,6 +25,33 @@ PG_FUNCTION_INFO_V1(gbt_float4_consistent);
 PG_FUNCTION_INFO_V1(gbt_float4_distance);
 PG_FUNCTION_INFO_V1(gbt_float4_penalty);
 PG_FUNCTION_INFO_V1(gbt_float4_same);
+PG_FUNCTION_INFO_V1(gbt_float4_sortsupport);
+
+extern Datum btfloat4cmp(PG_FUNCTION_ARGS);
+
+/* sortsupport functions */
+static int
+gbt_float4_ssup_cmp(Datum x, Datum y, SortSupport ssup)
+{
+	float4KEY *arg1 = (float4KEY *) DatumGetPointer(x);
+	float4KEY *arg2 = (float4KEY *) DatumGetPointer(y);
+
+	/* Since lower and upper for float4KEYs here are always equal it is okay to compare them only */
+	return DatumGetInt32(DirectFunctionCall2(btfloat4cmp,
+	                                         Float4GetDatum(arg1->lower),
+	                                         Float4GetDatum(arg2->lower)));
+}
+
+Datum
+gbt_float4_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = gbt_float4_ssup_cmp;
+	ssup->ssup_extra = NULL;
+
+	PG_RETURN_VOID();
+}
 
 static bool
 gbt_float4gt(const void *a, const void *b, FmgrInfo *flinfo)

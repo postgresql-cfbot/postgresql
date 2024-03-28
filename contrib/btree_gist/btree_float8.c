@@ -5,6 +5,7 @@
 
 #include "btree_gist.h"
 #include "btree_utils_num.h"
+#include "utils/sortsupport.h"
 #include "utils/float.h"
 
 typedef struct float8key
@@ -24,7 +25,33 @@ PG_FUNCTION_INFO_V1(gbt_float8_consistent);
 PG_FUNCTION_INFO_V1(gbt_float8_distance);
 PG_FUNCTION_INFO_V1(gbt_float8_penalty);
 PG_FUNCTION_INFO_V1(gbt_float8_same);
+PG_FUNCTION_INFO_V1(gbt_float8_sortsupport);
 
+extern Datum btfloat8cmp(PG_FUNCTION_ARGS);
+
+/* sortsupport functions */
+static int
+gbt_float8_ssup_cmp(Datum x, Datum y, SortSupport ssup)
+{
+	float8KEY *arg1 = (float8KEY *) DatumGetPointer(x);
+	float8KEY *arg2 = (float8KEY *) DatumGetPointer(y);
+
+	/* upper and lower for input keys are equal here */
+	return DatumGetInt32(DirectFunctionCall2(btfloat8cmp,
+	                                         Float8GetDatum(arg1->lower),
+											 Float8GetDatum(arg2->lower)));
+}
+
+Datum
+gbt_float8_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = gbt_float8_ssup_cmp;
+	ssup->ssup_extra = NULL;
+
+	PG_RETURN_VOID();
+}
 
 static bool
 gbt_float8gt(const void *a, const void *b, FmgrInfo *flinfo)

@@ -8,6 +8,7 @@
 #include "catalog/pg_type.h"
 #include "utils/builtins.h"
 #include "utils/inet.h"
+#include "utils/sortsupport.h"
 
 typedef struct inetkey
 {
@@ -24,7 +25,22 @@ PG_FUNCTION_INFO_V1(gbt_inet_picksplit);
 PG_FUNCTION_INFO_V1(gbt_inet_consistent);
 PG_FUNCTION_INFO_V1(gbt_inet_penalty);
 PG_FUNCTION_INFO_V1(gbt_inet_same);
+PG_FUNCTION_INFO_V1(gbt_inet_sortsupport);
 
+
+static int
+gbt_inet_ssup_cmp(Datum x, Datum y, SortSupport ssup)
+{
+	inetKEY *arg1 = (inetKEY *) DatumGetPointer(x);
+	inetKEY *arg2 = (inetKEY *) DatumGetPointer(y);
+
+	if (arg1->lower == arg2->lower)
+		return 0;
+	else if (arg1->lower > arg2->lower)
+		return 1;
+	else
+		return -1;
+}
 
 static bool
 gbt_inetgt(const void *a, const void *b, FmgrInfo *flinfo)
@@ -184,4 +200,15 @@ gbt_inet_same(PG_FUNCTION_ARGS)
 
 	*result = gbt_num_same((void *) b1, (void *) b2, &tinfo, fcinfo->flinfo);
 	PG_RETURN_POINTER(result);
+}
+
+Datum
+gbt_inet_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = gbt_inet_ssup_cmp;
+	ssup->ssup_extra = NULL;
+
+	PG_RETURN_VOID();
 }

@@ -9,6 +9,12 @@
 
 #define BtreeGistNotEqualStrategyNumber 6
 
+typedef struct int32key
+{
+  int32		lower;
+  int32		upper;
+} int32KEY;
+
 /* indexed types */
 
 enum gbtree_type

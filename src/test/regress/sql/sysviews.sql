@@ -13,9 +13,22 @@ select count(*) >= 0 as ok from pg_available_extension_versions;
 select count(*) >= 0 as ok from pg_available_extensions;
 
 -- The entire output of pg_backend_memory_contexts is not stable,
--- we test only the existence and basic condition of TopMemoryContext.
+-- we test the existence and basic condition of TopMemoryContext.
 select name, ident, parent, level, total_bytes >= free_bytes
   from pg_backend_memory_contexts where level = 0;
+
+-- Test whether there are contexts with CacheMemoryContext in their path.
+-- There should be multiple children of CacheMemoryContext.
+with contexts as (
+  select * from pg_backend_memory_contexts
+)
+select count(*) > 0
+from contexts
+where array[(select context_id from contexts where name = 'CacheMemoryContext')] <@ path;
+
+-- TopMemoryContext should have the largest total_bytes_including_children.
+select name from pg_backend_memory_contexts
+  order by total_bytes_including_children desc limit 1;
 
 -- At introduction, pg_config had 23 entries; it may grow
 select count(*) > 20 as ok from pg_config;

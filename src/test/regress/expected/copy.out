@@ -42,6 +42,84 @@ copy copytest3 to stdout csv header;
 c1,"col with , comma","col with "" quote"
 1,a,1
 2,b,2
+--- test copying in JSON mode with various styles
+copy copytest to stdout json;
+{"style":"DOS","test":"abc\r\ndef","filler":1}
+{"style":"Unix","test":"abc\ndef","filler":2}
+{"style":"Mac","test":"abc\rdef","filler":3}
+{"style":"esc\\ape","test":"a\\r\\\r\\\n\\nb","filler":4}
+copy copytest to stdout (format json);
+{"style":"DOS","test":"abc\r\ndef","filler":1}
+{"style":"Unix","test":"abc\ndef","filler":2}
+{"style":"Mac","test":"abc\rdef","filler":3}
+{"style":"esc\\ape","test":"a\\r\\\r\\\n\\nb","filler":4}
+-- Error
+copy copytest to stdout (format json, header);
+ERROR:  cannot specify HEADER in JSON mode
+-- Error
+copy copytest from stdout (format json);
+ERROR:  cannot use JSON mode in COPY FROM
+--Error
+copy copytest to stdout (format csv, force_array false);
+ERROR:  COPY FORCE_ARRAY only available in JSON mode
+copy copytest from stdin (format json, force_array true);
+ERROR:  cannot use JSON mode in COPY FROM
+copy copytest to stdout (format json, force_array);
+[
+ {"style":"DOS","test":"abc\r\ndef","filler":1}
+,{"style":"Unix","test":"abc\ndef","filler":2}
+,{"style":"Mac","test":"abc\rdef","filler":3}
+,{"style":"esc\\ape","test":"a\\r\\\r\\\n\\nb","filler":4}
+]
+copy copytest to stdout (format json, force_array true);
+[
+ {"style":"DOS","test":"abc\r\ndef","filler":1}
+,{"style":"Unix","test":"abc\ndef","filler":2}
+,{"style":"Mac","test":"abc\rdef","filler":3}
+,{"style":"esc\\ape","test":"a\\r\\\r\\\n\\nb","filler":4}
+]
+copy copytest to stdout (format json, force_array false);
+{"style":"DOS","test":"abc\r\ndef","filler":1}
+{"style":"Unix","test":"abc\ndef","filler":2}
+{"style":"Mac","test":"abc\rdef","filler":3}
+{"style":"esc\\ape","test":"a\\r\\\r\\\n\\nb","filler":4}
+-- embedded escaped characters
+create temp table copyjsontest (
+    id bigserial,
+    f1 text,
+    f2 timestamptz);
+insert into copyjsontest
+  select g.i,
+         CASE WHEN g.i % 2 = 0 THEN
+           'line with '' in it: ' || g.i::text
+         ELSE
+           'line with " in it: ' || g.i::text
+         END,
+         'Mon Feb 10 17:32:01 1997 PST'
+  from generate_series(1,5) as g(i);
+insert into copyjsontest (f1) values
+(E'aaa\"bbb'::text),
+(E'aaa\\bbb'::text),
+(E'aaa\/bbb'::text),
+(E'aaa\bbbb'::text),
+(E'aaa\fbbb'::text),
+(E'aaa\nbbb'::text),
+(E'aaa\rbbb'::text),
+(E'aaa\tbbb'::text);
+copy copyjsontest to stdout json;
+{"id":1,"f1":"line with \" in it: 1","f2":"1997-02-10T17:32:01-08:00"}
+{"id":2,"f1":"line with ' in it: 2","f2":"1997-02-10T17:32:01-08:00"}
+{"id":3,"f1":"line with \" in it: 3","f2":"1997-02-10T17:32:01-08:00"}
+{"id":4,"f1":"line with ' in it: 4","f2":"1997-02-10T17:32:01-08:00"}
+{"id":5,"f1":"line with \" in it: 5","f2":"1997-02-10T17:32:01-08:00"}
+{"id":1,"f1":"aaa\"bbb","f2":null}
+{"id":2,"f1":"aaa\\bbb","f2":null}
+{"id":3,"f1":"aaa/bbb","f2":null}
+{"id":4,"f1":"aaa\bbbb","f2":null}
+{"id":5,"f1":"aaa\fbbb","f2":null}
+{"id":6,"f1":"aaa\nbbb","f2":null}
+{"id":7,"f1":"aaa\rbbb","f2":null}
+{"id":8,"f1":"aaa\tbbb","f2":null}
 create temp table copytest4 (
 	c1 int,
 	"colname with tab: 	" text);

@@ -448,6 +448,7 @@ ProcessCopyOptions(ParseState *pstate,
 	bool		freeze_specified = false;
 	bool		header_specified = false;
 	bool		on_error_specified = false;
+	bool		force_array_specified = false;
 	ListCell   *option;
 
 	/* Support external use for option sanity checking */
@@ -472,6 +473,8 @@ ProcessCopyOptions(ParseState *pstate,
 				 /* default format */ ;
 			else if (strcmp(fmt, "csv") == 0)
 				opts_out->csv_mode = true;
+			else if (strcmp(fmt, "json") == 0)
+				opts_out->json_mode = true;
 			else if (strcmp(fmt, "binary") == 0)
 				opts_out->binary = true;
 			else
@@ -600,6 +603,13 @@ ProcessCopyOptions(ParseState *pstate,
 								defel->defname),
 						 parser_errposition(pstate, defel->location)));
 		}
+		else if (strcmp(defel->defname, "force_array") == 0)
+		{
+			if (force_array_specified)
+				errorConflictingDefElem(defel, pstate);
+			force_array_specified = true;
+			opts_out->force_array = defGetBoolean(defel);
+		}
 		else if (strcmp(defel->defname, "on_error") == 0)
 		{
 			if (on_error_specified)
@@ -708,6 +718,11 @@ ProcessCopyOptions(ParseState *pstate,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot specify HEADER in BINARY mode")));
 
+	if (opts_out->json_mode && opts_out->header_line)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot specify HEADER in JSON mode")));
+
 	/* Check quote */
 	if (!opts_out->csv_mode && opts_out->quote != NULL)
 		ereport(ERROR,
@@ -784,6 +799,21 @@ ProcessCopyOptions(ParseState *pstate,
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("COPY FREEZE cannot be used with COPY TO")));
+
+	/* Check json format  */
+	if (opts_out->json_mode && is_from)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot use JSON mode in COPY FROM")));
+
+	if (!opts_out->json_mode && opts_out->force_array)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("COPY FORCE_ARRAY requires JSON mode")));
+	if (!opts_out->json_mode && force_array_specified)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("COPY FORCE_ARRAY only available in JSON mode")));
 
 	if (opts_out->default_print)
 	{

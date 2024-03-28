@@ -54,6 +54,53 @@ this is just a line full of junk that would error out if parsed
 
 copy copytest3 to stdout csv header;
 
+--- test copying in JSON mode with various styles
+copy copytest to stdout json;
+
+copy copytest to stdout (format json);
+
+-- Error
+copy copytest to stdout (format json, header);
+-- Error
+copy copytest from stdout (format json);
+
+--Error
+copy copytest to stdout (format csv, force_array false);
+copy copytest from stdin (format json, force_array true);
+
+copy copytest to stdout (format json, force_array);
+
+copy copytest to stdout (format json, force_array true);
+
+copy copytest to stdout (format json, force_array false);
+-- embedded escaped characters
+create temp table copyjsontest (
+    id bigserial,
+    f1 text,
+    f2 timestamptz);
+
+insert into copyjsontest
+  select g.i,
+         CASE WHEN g.i % 2 = 0 THEN
+           'line with '' in it: ' || g.i::text
+         ELSE
+           'line with " in it: ' || g.i::text
+         END,
+         'Mon Feb 10 17:32:01 1997 PST'
+  from generate_series(1,5) as g(i);
+
+insert into copyjsontest (f1) values
+(E'aaa\"bbb'::text),
+(E'aaa\\bbb'::text),
+(E'aaa\/bbb'::text),
+(E'aaa\bbbb'::text),
+(E'aaa\fbbb'::text),
+(E'aaa\nbbb'::text),
+(E'aaa\rbbb'::text),
+(E'aaa\tbbb'::text);
+
+copy copyjsontest to stdout json;
+
 create temp table copytest4 (
 	c1 int,
 	"colname with tab: 	" text);

@@ -20,6 +20,7 @@
 #include "commands/prepare.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
+#include "libpq/pqformat.h"
 #include "nodes/extensible.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -32,6 +33,7 @@
 #include "utils/guc_tables.h"
 #include "utils/json.h"
 #include "utils/lsyscache.h"
+#include "utils/memdebug.h"
 #include "utils/rel.h"
 #include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
@@ -46,6 +48,15 @@ ExplainOneQuery_hook_type ExplainOneQuery_hook = NULL;
 /* Hook for plugins to get control in explain_get_index_name() */
 explain_get_index_name_hook_type explain_get_index_name_hook = NULL;
 
+/* Instrumentation structures for EXPLAIN's SERIALIZE option */
+typedef struct ExplSerInstrumentation
+{
+	uint64				bytesSent;		/* # of bytes serialized */
+	instr_time			timeSpent;		/* time spent serializing */
+	MemoryContextCounters memory;		/* memory context counters */
+	MemoryContextCounters emptyMemory;		/* memory context counters */
+	ExplainSerializeFormat format;		/* serialization format */
+} ExplSerInstrumentation;
 
 /* OR-able flags for ExplainXMLTag() */
 #define X_OPENING 0
@@ -59,6 +70,8 @@ static void ExplainOneQuery(Query *query, int cursorOptions,
 							QueryEnvironment *queryEnv);
 static void ExplainPrintJIT(ExplainState *es, int jit_flags,
 							JitInstrumentation *ji);
+static void ExplainPrintSerialize(ExplainState *es,
+								  ExplSerInstrumentation *instr);
 static void report_triggers(ResultRelInfo *rInfo, bool show_relname,
 							ExplainState *es);
 static double elapsed_time(instr_time *starttime);
@@ -154,7 +167,8 @@ static void ExplainJSONLineEnding(ExplainState *es);
 static void ExplainYAMLLineStarting(ExplainState *es);
 static void escape_yaml(StringInfo buf, const char *str);
 
-
+static DestReceiver *CreateExplainSerializeDestReceiver(ExplainState *es);
+static ExplSerInstrumentation GetSerializationMetrics(DestReceiver *dest);
 
 /*
  * ExplainQuery -
@@ -192,6 +206,34 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 			es->settings = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "generic_plan") == 0)
 			es->generic = defGetBoolean(opt);
+		else if (strcmp(opt->defname, "serialize") == 0)
+		{
+			/* check the optional argument, if defined */
+			if (opt->arg)
+			{
+				char *p = defGetString(opt);
+				if (strcmp(p, "off") == 0)
+					es->serialize = EXPLAIN_SERIALIZE_NONE;
+				else if (strcmp(p, "text") == 0)
+					es->serialize = EXPLAIN_SERIALIZE_TEXT;
+				else if (strcmp(p, "binary") == 0)
+					es->serialize = EXPLAIN_SERIALIZE_BINARY;
+				else
+					ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("unrecognized value for EXPLAIN option \"%s\": \"%s\"",
+								opt->defname, p),
+						 parser_errposition(pstate, opt->location)));
+			}
+			else
+			{
+				/*
+				 * The default serialization mode when the option is specified
+				 * is 'text'.
+				 */
+				es->serialize = EXPLAIN_SERIALIZE_TEXT;
+			}
+		}
 		else if (strcmp(opt->defname, "timing") == 0)
 		{
 			timing_set = true;
@@ -245,6 +287,12 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("EXPLAIN option TIMING requires ANALYZE")));
+
+	/* check that serialize is used with EXPLAIN ANALYZE */
+	if (es->serialize != EXPLAIN_SERIALIZE_NONE && !es->analyze)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("EXPLAIN option SERIALIZE requires ANALYZE")));
 
 	/* check that GENERIC_PLAN is not used with EXPLAIN ANALYZE */
 	if (es->generic && es->analyze)
@@ -576,6 +624,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	double		totaltime = 0;
 	int			eflags;
 	int			instrument_option = 0;
+	ExplSerInstrumentation serializeMetrics = {0};
 
 	Assert(plannedstmt->commandType != CMD_UTILITY);
 
@@ -604,11 +653,15 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	UpdateActiveSnapshotCommandId();
 
 	/*
-	 * Normally we discard the query's output, but if explaining CREATE TABLE
-	 * AS, we'd better use the appropriate tuple receiver.
+	 * We discard the output if we have no use for it.
+	 * If we're explaining CREATE TABLE AS, we'd better use the appropriate
+	 * tuple receiver, and when we EXPLAIN (ANALYZE, SERIALIZE) we better set
+	 * up a serializing (but discarding) DestReceiver.
 	 */
 	if (into)
 		dest = CreateIntoRelDestReceiver(into);
+	else if (es->analyze && es->serialize != EXPLAIN_SERIALIZE_NONE)
+		dest = CreateExplainSerializeDestReceiver(es);
 	else
 		dest = None_Receiver;
 
@@ -646,6 +699,13 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 		/* run cleanup too */
 		ExecutorFinish(queryDesc);
+
+		/* grab the metrics before we destroy the DestReceiver */
+		if (es->serialize)
+			serializeMetrics = GetSerializationMetrics(dest);
+
+		/* call the DestReceiver's destroy method even during explain */
+		dest->rDestroy(dest);
 
 		/* We can't run ExecutorEnd 'till we're done printing the stats... */
 		totaltime += elapsed_time(&starttime);
@@ -727,6 +787,10 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	if (es->summary && es->analyze)
 		ExplainPropertyFloat("Execution Time", "ms", 1000.0 * totaltime, 3,
 							 es);
+
+	/* print the info about serialization of data */
+	if (es->summary && es->analyze && es->serialize != EXPLAIN_SERIALIZE_NONE)
+		ExplainPrintSerialize(es, &serializeMetrics);
 
 	ExplainCloseGroup("Query", NULL, true, es);
 }
@@ -5160,4 +5224,445 @@ static void
 escape_yaml(StringInfo buf, const char *str)
 {
 	escape_json(buf, str);
+}
+
+
+/*
+ * Serializing DestReceiver functions
+ *
+ * EXPLAIN (ANALYZE) can fail to provide accurate results for some queries,
+ * which can usually be attributed to a lack of deTOASTing when the resultset
+ * isn't fully serialized, or other features usually only accessed in the
+ * DestReceiver functions. To measure the overhead of transferring the
+ * resulting dataset of a query, the SERIALIZE option is added, which can show
+ * and measure the relevant metrics available to a PostgreSQL server. This
+ * allows the measuring of server time spent on deTOASTing, serialization and
+ * copying of data.
+ * 
+ * However, this critically does not measure the network performance: All
+ * measured timings are about processes inside the database.
+ */
+
+/* an attribute info cached for each column */
+typedef struct SerializeAttrInfo
+{								/* Per-attribute information */
+	Oid			typoutput;		/* Oid for the type's text output fn */
+	Oid			typsend;		/* Oid for the type's binary output fn */
+	bool		typisvarlena;	/* is it varlena (ie possibly toastable)? */
+	int8		format;			/* text of binary, like pq wire protocol */
+	FmgrInfo	finfo;			/* Precomputed call info for output fn */
+} SerializeAttrInfo;
+
+typedef struct SerializeDestReceiver
+{
+	/* receiver for the tuples, that just serializes */
+	DestReceiver		destRecevier;
+	MemoryContext		memoryContext;
+	ExplainState	   *es;					/* this EXPLAIN-statement's ExplainState */
+	int8				format;				/* text of binary, like pq wire protocol */
+	TupleDesc			attrinfo;
+	int					nattrs;
+	StringInfoData		buf;				/* serialization buffer to hold temporary data */
+	ExplSerInstrumentation metrics;			/* metrics */
+	SerializeAttrInfo	*infos;				/* Cached info about each attr */
+} SerializeDestReceiver;
+
+/*
+ * Get the lookup info that the row-callback of the receiver needs. this code
+ * is similar to the code from printup.c except that it doesn't do any actual
+ * output.
+ */
+static void
+serialize_prepare_info(SerializeDestReceiver *receiver, TupleDesc typeinfo,
+					   int nattrs)
+{
+	/* get rid of any old data */
+	if (receiver->infos)
+		pfree(receiver->infos);
+	receiver->infos = NULL;
+
+	receiver->attrinfo = typeinfo;
+	receiver->nattrs = nattrs;
+	if (nattrs <= 0)
+		return;
+
+	receiver->infos = (SerializeAttrInfo *)
+		palloc0(nattrs * sizeof(SerializeAttrInfo));
+
+	for (int i = 0; i < nattrs; i++)
+	{
+		SerializeAttrInfo *info = &receiver->infos[i];
+		Form_pg_attribute attr = TupleDescAttr(typeinfo, i);
+
+		info->format = receiver->format;
+
+		if (info->format == 0)
+		{
+			/* wire protocol format text */
+			getTypeOutputInfo(attr->atttypid,
+							  &info->typoutput,
+							  &info->typisvarlena);
+			fmgr_info(info->typoutput, &info->finfo);
+		}
+		else if (info->format == 1) 
+		{
+			/* wire protocol format binary */
+			getTypeBinaryOutputInfo(attr->atttypid,
+									&info->typsend,
+									&info->typisvarlena);
+			fmgr_info(info->typsend, &info->finfo);
+		}
+		else
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("unsupported format code: %d", info->format)));
+		}
+	}
+}
+
+
+
+/*
+ * serializeAnalyzeReceive - process tuples for EXPLAIN (SERIALIZE)
+ *
+ * This method receives the tuples/records during EXPLAIN (ANALYZE, SERIALIZE)
+ * and serializes them while measuring various things about that
+ * serialization, in a way that should be as close as possible to printtup.c
+ * without actually sending the data; thus capturing the overhead of
+ * deTOASTing and type's out/sendfuncs, which are not otherwise exercisable
+ * without actually hitting the network, thus increasing the number of paths
+ * you can exercise with EXPLAIN.
+ * 
+ * See also: printtup() in printtup.c, the older twin of this code.
+ */
+static bool
+serializeAnalyzeReceive(TupleTableSlot *slot, DestReceiver *self)
+{
+	TupleDesc		tupdesc;
+	MemoryContext	oldcontext;
+	SerializeDestReceiver *receiver = (SerializeDestReceiver*) self;
+	StringInfo		buf = &receiver->buf;
+	instr_time		start, end;
+
+	tupdesc  = slot->tts_tupleDescriptor;
+
+	/* only measure time if requested */
+	if (receiver->es->timing)
+		INSTR_TIME_SET_CURRENT(start);
+
+	/* Cache attribute infos and function oid if outdated */
+	if (receiver->attrinfo != tupdesc || receiver->nattrs != tupdesc->natts)
+		serialize_prepare_info(receiver, tupdesc, tupdesc->natts);
+
+	/* Fill all the slot's attributes, we can now use slot->tts_values
+	 * and its tts_isnull array which should be long enough even if added
+	 * a null-column to the table */
+	slot_getallattrs(slot);
+
+	oldcontext = MemoryContextSwitchTo(receiver->memoryContext);
+
+	/*
+	 * Note that we us an actual StringInfo buffer. This is to include the
+	 * cost of memory accesses and copy operations, reducing the number of
+	 * operations unique to the true printtup path vs the EXPLAIN (SERIALIZE)
+	 * path.
+	 */
+	pq_beginmessage_reuse(buf, 'D');
+	pq_sendint16(buf, receiver->nattrs);
+
+	/*
+	 * Iterate over all attributes of the tuple and invoke the output func
+	 * (or send function in case of a binary format). We'll completely ignore
+	 * the result. The MemoryContext is reset at the end of this per-tuple
+	 * callback anyhow.
+	 */
+	for (int i = 0; i < tupdesc->natts; i++)
+	{
+		SerializeAttrInfo *thisState = receiver->infos + i;
+		Datum		attr = slot->tts_values[i];
+
+		if (slot->tts_isnull[i])
+		{
+			pq_sendint32(buf, -1);
+			continue;
+		}
+
+		/*
+		 * Here we catch undefined bytes in datums that are returned to the
+		 * client without hitting disk; see comments at the related check in
+		 * PageAddItem().  This test is most useful for uncompressed,
+		 * non-external datums, but we're quite likely to see such here when
+		 * testing new C functions.
+		 */
+		if (thisState->typisvarlena)
+			VALGRIND_CHECK_MEM_IS_DEFINED(DatumGetPointer(attr),
+										  VARSIZE_ANY(attr));
+
+		if (thisState->format == 0)
+		{
+			/* Text output */
+			char	   *outputstr;
+
+			outputstr = OutputFunctionCall(&thisState->finfo, attr);
+			pq_sendcountedtext(buf, outputstr, strlen(outputstr));
+		}
+		else
+		{
+			/* Binary output */
+			bytea	   *outputbytes;
+			Assert(thisState->format == 1);
+
+			outputbytes = SendFunctionCall(&thisState->finfo, attr);
+			pq_sendint32(buf, VARSIZE(outputbytes) - VARHDRSZ);
+			pq_sendbytes(buf, VARDATA(outputbytes),
+						 VARSIZE(outputbytes) - VARHDRSZ);
+		}
+	}
+
+	/* finalize the timers */
+	if (receiver->es->timing)
+	{
+		INSTR_TIME_SET_CURRENT(end);
+		INSTR_TIME_ACCUM_DIFF(receiver->metrics.timeSpent, end, start);
+	}
+
+	/*
+	 * Register the size of the packet we would've sent to the client. The
+	 * buffer will be dropped on the next iteration.
+	 */
+	receiver->metrics.bytesSent += buf->len;
+
+	/*
+	 * Now that we're done processing we profile memory usage, if that was
+	 * requested by the user.
+	 */
+	if (receiver->es->memory)
+	{
+		MemoryContextCounters counters;
+		MemoryContextMemConsumed(receiver->memoryContext, &counters);
+
+		/*
+		 * Note: Although the freespace counter can (and likely does!)
+		 * underflow, that won't be an issue for the printed results: this
+		 * will only add used memory if more total space was allocated for
+		 * the context due to excessive allocations, but will always increase
+		 * the difference between the total totalspace and freespace by the
+		 * amount of bytes allocated each iteration by underflowing the
+		 * freespace counter. As memory used = totalspace - freespace, a
+		 * negative value for freespace also adds to the used counter, even
+		 * if it may be meaningless (and even nonsense!) on its own.
+		 *
+		 * However, it was decided to do it this way, to not overwhelm the
+		 * user with stats of at least 8kiB of Memory Allocated per output
+		 * tuple when that memory was actually retained in the Memory Context.
+		 */
+		receiver->metrics.memory.totalspace +=
+			counters.totalspace - receiver->metrics.emptyMemory.totalspace;
+		receiver->metrics.memory.freespace +=
+			counters.freespace - receiver->metrics.emptyMemory.freespace;
+		receiver->metrics.memory.freechunks +=
+			counters.freechunks - receiver->metrics.emptyMemory.freechunks;
+		receiver->metrics.memory.nblocks +=
+			counters.nblocks - receiver->metrics.emptyMemory.nblocks;
+	}
+
+	/* cleanup and reset */
+	MemoryContextSwitchTo(oldcontext);
+	MemoryContextReset(receiver->memoryContext);
+
+	return true;
+}
+
+static void
+serializeAnalyzeStartup(DestReceiver *self, int operation, TupleDesc typeinfo)
+{
+	SerializeDestReceiver *receiver = (SerializeDestReceiver*) self;
+	/* memory context for our work */
+	receiver->memoryContext = AllocSetContextCreate(CurrentMemoryContext,
+		"SerializeTupleReceive", ALLOCSET_DEFAULT_SIZES);
+
+	/* initialize various fields */
+	INSTR_TIME_SET_ZERO(receiver->metrics.timeSpent);
+	initStringInfo(&receiver->buf);
+
+	/*
+	 * We ensure our memory accounting is accurate by subtracting the memory
+	 * usage of the empty memory context from measurements, so that we don't
+	 * count these allocations every time we receive a tuple: we don't
+	 * re-allocate the memory context every iteration; we only reset it.
+	 */
+	if (receiver->es->memory)
+	{
+		MemoryContextMemConsumed(receiver->memoryContext,
+								 &receiver->metrics.emptyMemory);
+		/*
+		 * ... But do count this memory context's empty allocations once at
+		 * the start, so that using a memory context with lower base overhead
+		 * shows up in these metrics.
+		 */
+		receiver->metrics.memory = receiver->metrics.emptyMemory;
+	}
+
+	/*
+	 * Note that we don't actually serialize the RowDescriptor message here.
+	 * It is assumed that this has negligible overhead in the grand scheme of
+	 * things; but if so desired it can be updated without much issue.
+	 */
+
+	/* account for the attribute headers for send bytes */
+	receiver->metrics.bytesSent += 3; /* protocol message type and attribute-count */
+	for (int i = 0; i < typeinfo->natts; ++i)
+	{
+		Form_pg_attribute att = TupleDescAttr(typeinfo, i);
+		char	   *name = NameStr(att->attname);
+		Size		namelen = strlen(name);
+
+		/* convert from server encoding to client encoding if needed */
+		char *converted = pg_server_to_client(name, (int) namelen);
+
+		if (converted != name)
+		{
+			namelen = strlen(converted);
+			pfree(converted); /* don't leak it */
+		}
+
+		/* see printtup.h why we add 18 bytes here. These are the infos
+		 * needed for each attribute plus the attribute's name */
+		receiver->metrics.bytesSent += (int64) namelen + 1 + 18;
+	}
+}
+
+/*
+ * serializeAnalyzeShutdown - shut down the serializeAnalyze receiver
+ */
+static void
+serializeAnalyzeShutdown(DestReceiver *self)
+{
+	SerializeDestReceiver *receiver = (SerializeDestReceiver*) self;
+
+	if (receiver->infos)
+		pfree(receiver->infos);
+	receiver->infos = NULL;
+
+	if (receiver->buf.data)
+		pfree(receiver->buf.data);
+	receiver->buf.data = NULL;
+
+	if (receiver->memoryContext)
+		MemoryContextDelete(receiver->memoryContext);
+	receiver->memoryContext = NULL;
+}
+
+/*
+ * serializeAnalyzeShutdown - shut down the serializeAnalyze receiver
+ */
+static void
+serializeAnalyzeDestroy(DestReceiver *self)
+{
+	pfree(self);
+}
+
+/* Build a DestReceiver with EXPLAIN (SERIALIZE) instrumentation. */
+static DestReceiver *
+CreateExplainSerializeDestReceiver(ExplainState *es)
+{
+	SerializeDestReceiver *self;
+
+	self = (SerializeDestReceiver*) palloc0(sizeof(SerializeDestReceiver));
+
+	self->destRecevier.receiveSlot = serializeAnalyzeReceive;
+	self->destRecevier.rStartup = serializeAnalyzeStartup;
+	self->destRecevier.rShutdown = serializeAnalyzeShutdown;
+	self->destRecevier.rDestroy = serializeAnalyzeDestroy;
+	self->destRecevier.mydest = DestNone;
+
+	switch (es->serialize)
+	{
+		case EXPLAIN_SERIALIZE_NONE:
+			Assert(false);
+			elog(ERROR, "Invalid explain serialization format code %d", es->serialize);
+			break;
+		case EXPLAIN_SERIALIZE_TEXT:
+			self->format = 0; /* wire protocol format text */
+			break;
+		case EXPLAIN_SERIALIZE_BINARY:
+			self->format = 1; /* wire protocol format binary */
+			break;
+	}
+
+	/* store the ExplainState, for easier access to various fields */
+	self->es = es;
+
+	self->metrics.format = es->serialize;
+
+	return (DestReceiver *) self;
+}
+
+static ExplSerInstrumentation
+GetSerializationMetrics(DestReceiver *dest)
+{
+	return ((SerializeDestReceiver*) dest)->metrics;
+}
+
+/* Print data for the SERIALIZE option */
+static void
+ExplainPrintSerialize(ExplainState *es, ExplSerInstrumentation *instr)
+{
+	char	   *format;
+	if (instr->format == EXPLAIN_SERIALIZE_TEXT)
+		format = "text";
+	else
+	{
+		/* We shouldn't get called for EXPLAIN_SERIALIZE_NONE */
+		Assert(instr->format == EXPLAIN_SERIALIZE_BINARY);
+		format = "binary";
+	}
+
+	ExplainOpenGroup("Serialization", "Serialization", true, es);
+
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+		ExplainIndentText(es);
+		appendStringInfoString(es->str, "Serialization:");
+		appendStringInfoChar(es->str, '\n');
+		es->indent++;
+		ExplainIndentText(es);
+
+		/* timing is optional */
+		if (es->timing)
+			appendStringInfo(es->str, "Serialize: time=%.3f ms  produced=%lld bytes  format=%s",
+							 1000.0 * INSTR_TIME_GET_DOUBLE(instr->timeSpent),
+							 (long long) instr->bytesSent,
+							 format);
+		else
+			appendStringInfo(es->str, "Serialize: produced=%lld bytes  format=%s",
+							 (long long) instr->bytesSent,
+							 format);
+
+		appendStringInfoChar(es->str, '\n');
+
+		/* output memory stats, if applicable */
+		if (es->memory)
+			show_memory_counters(es, &instr->memory);
+		es->indent--;
+	}
+	else
+	{
+		if (es->timing)
+		{
+			ExplainPropertyFloat("Time", "ms",
+								 1000.0 * INSTR_TIME_GET_DOUBLE(instr->timeSpent),
+								 3, es);
+		}
+
+		ExplainPropertyUInteger("Produced", "bytes",
+								instr->bytesSent, es);
+		ExplainPropertyText("Format", format, es);
+
+		if (es->memory)
+			show_memory_counters(es, &instr->memory);
+	}
+
+	ExplainCloseGroup("Serialization", "Serialization", true, es);
 }

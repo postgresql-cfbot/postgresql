@@ -753,7 +753,7 @@ SELECT count(*) FROM dupindexcols
   WHERE f1 BETWEEN 'WA' AND 'ZZZ' and id < 1000 and f1 ~<~ 'YX';
 
 --
--- Check ordering of =ANY indexqual results (bug in 9.2.0)
+-- Check that index scans with =ANY indexquals return rows in index order
 --
 
 explain (costs off)
@@ -765,6 +765,7 @@ SELECT unique1 FROM tenk1
 WHERE unique1 IN (1,42,7)
 ORDER BY unique1;
 
+-- Non-required array scan key on "tenthous":
 explain (costs off)
 SELECT thousand, tenthous FROM tenk1
 WHERE thousand < 2 AND tenthous IN (1001,3000)
@@ -774,18 +775,15 @@ SELECT thousand, tenthous FROM tenk1
 WHERE thousand < 2 AND tenthous IN (1001,3000)
 ORDER BY thousand;
 
-SET enable_indexonlyscan = OFF;
-
+-- Non-required array scan key on "tenthous", backward scan:
 explain (costs off)
 SELECT thousand, tenthous FROM tenk1
 WHERE thousand < 2 AND tenthous IN (1001,3000)
-ORDER BY thousand;
+ORDER BY thousand DESC, tenthous DESC;
 
 SELECT thousand, tenthous FROM tenk1
 WHERE thousand < 2 AND tenthous IN (1001,3000)
-ORDER BY thousand;
-
-RESET enable_indexonlyscan;
+ORDER BY thousand DESC, tenthous DESC;
 
 --
 -- Check elimination of constant-NULL subexpressions

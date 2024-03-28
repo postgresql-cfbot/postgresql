@@ -47,7 +47,6 @@
  * to a new page; some process can start doing that.
  *
  * BTPARALLEL_DONE indicates that the scan is complete (including error exit).
- * We reach this state once for every distinct combination of array keys.
  */
 typedef enum
 {
@@ -67,8 +66,6 @@ typedef struct BTParallelScanDescData
 	BTPS_State	btps_pageStatus;	/* indicates whether next page is
 									 * available for scan. see above for
 									 * possible states of parallel scan. */
-	int			btps_arrayKeyCount; /* count indicating number of array scan
-									 * keys processed by parallel scan */
 	slock_t		btps_mutex;		/* protects above variables */
 	ConditionVariable btps_cv;	/* used to synchronize parallel scan */
 }			BTParallelScanDescData;
@@ -204,21 +201,7 @@ btgettuple(IndexScanDesc scan, ScanDirection dir)
 	/* btree indexes are never lossy */
 	scan->xs_recheck = false;
 
-	/*
-	 * If we have any array keys, initialize them during first call for a
-	 * scan.  We can't do this in btrescan because we don't know the scan
-	 * direction at that time.
-	 */
-	if (so->numArrayKeys && !BTScanPosIsValid(so->currPos))
-	{
-		/* punt if we have any unsatisfiable array keys */
-		if (so->numArrayKeys < 0)
-			return false;
-
-		_bt_start_array_keys(scan, dir);
-	}
-
-	/* This loop handles advancing to the next array elements, if any */
+	/* Each loop iteration performs another primitive index scan */
 	do
 	{
 		/*
@@ -260,8 +243,8 @@ btgettuple(IndexScanDesc scan, ScanDirection dir)
 		/* If we have a tuple, return it ... */
 		if (res)
 			break;
-		/* ... otherwise see if we have more array keys to deal with */
-	} while (so->numArrayKeys && _bt_advance_array_keys(scan, dir));
+		/* ... otherwise see if we need another primitive index scan */
+	} while (so->numArrayKeys && _bt_start_prim_scan(scan, dir));
 
 	return res;
 }
@@ -276,19 +259,7 @@ btgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 	int64		ntids = 0;
 	ItemPointer heapTid;
 
-	/*
-	 * If we have any array keys, initialize them.
-	 */
-	if (so->numArrayKeys)
-	{
-		/* punt if we have any unsatisfiable array keys */
-		if (so->numArrayKeys < 0)
-			return ntids;
-
-		_bt_start_array_keys(scan, ForwardScanDirection);
-	}
-
-	/* This loop handles advancing to the next array elements, if any */
+	/* Each loop iteration performs another primitive index scan */
 	do
 	{
 		/* Fetch the first page & tuple */
@@ -318,8 +289,8 @@ btgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 				ntids++;
 			}
 		}
-		/* Now see if we have more array keys to deal with */
-	} while (so->numArrayKeys && _bt_advance_array_keys(scan, ForwardScanDirection));
+		/* Now see if we need another primitive index scan */
+	} while (so->numArrayKeys && _bt_start_prim_scan(scan, ForwardScanDirection));
 
 	return ntids;
 }
@@ -348,10 +319,11 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
 	else
 		so->keyData = NULL;
 
-	so->arrayKeyData = NULL;	/* assume no array keys for now */
-	so->arraysStarted = false;
 	so->numArrayKeys = 0;
+	so->needPrimScan = false;
+	so->scanBehind = false;
 	so->arrayKeys = NULL;
+	so->orderProcs = NULL;
 	so->arrayContext = NULL;
 
 	so->killedItems = NULL;		/* until needed */
@@ -391,7 +363,9 @@ btrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 	}
 
 	so->markItemIndex = -1;
-	so->arrayKeyCount = 0;
+	so->numArrayKeys = 0;
+	so->needPrimScan = false;
+	so->scanBehind = false;
 	BTScanPosUnpinIfPinned(so->markPos);
 	BTScanPosInvalidate(so->markPos);
 
@@ -425,9 +399,6 @@ btrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 				scankey,
 				scan->numberOfKeys * sizeof(ScanKeyData));
 	so->numberOfKeys = 0;		/* until _bt_preprocess_keys sets it */
-
-	/* If any keys are SK_SEARCHARRAY type, set up array-key info */
-	_bt_preprocess_array_keys(scan);
 }
 
 /*
@@ -455,7 +426,7 @@ btendscan(IndexScanDesc scan)
 	/* Release storage */
 	if (so->keyData != NULL)
 		pfree(so->keyData);
-	/* so->arrayKeyData and so->arrayKeys are in arrayContext */
+	/* so->arrayKeys is in arrayContext */
 	if (so->arrayContext != NULL)
 		MemoryContextDelete(so->arrayContext);
 	if (so->killedItems != NULL)
@@ -490,10 +461,6 @@ btmarkpos(IndexScanDesc scan)
 		BTScanPosInvalidate(so->markPos);
 		so->markItemIndex = -1;
 	}
-
-	/* Also record the current positions of any array keys */
-	if (so->numArrayKeys)
-		_bt_mark_array_keys(scan);
 }
 
 /*
@@ -503,10 +470,6 @@ void
 btrestrpos(IndexScanDesc scan)
 {
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
-
-	/* Restore the marked positions of any array keys */
-	if (so->numArrayKeys)
-		_bt_restore_array_keys(scan);
 
 	if (so->markItemIndex >= 0)
 	{
@@ -546,6 +509,13 @@ btrestrpos(IndexScanDesc scan)
 			if (so->currTuples)
 				memcpy(so->currTuples, so->markTuples,
 					   so->markPos.nextTupleOffset);
+			/* Reset the scan's array keys (see _bt_steppage for why) */
+			if (so->numArrayKeys)
+			{
+				_bt_start_array_keys(scan, so->currPos.dir);
+				so->needPrimScan = false;
+				so->scanBehind = false;
+			}
 		}
 		else
 			BTScanPosInvalidate(so->currPos);
@@ -572,7 +542,6 @@ btinitparallelscan(void *target)
 	SpinLockInit(&bt_target->btps_mutex);
 	bt_target->btps_scanPage = InvalidBlockNumber;
 	bt_target->btps_pageStatus = BTPARALLEL_NOT_INITIALIZED;
-	bt_target->btps_arrayKeyCount = 0;
 	ConditionVariableInit(&bt_target->btps_cv);
 }
 
@@ -598,7 +567,6 @@ btparallelrescan(IndexScanDesc scan)
 	SpinLockAcquire(&btscan->btps_mutex);
 	btscan->btps_scanPage = InvalidBlockNumber;
 	btscan->btps_pageStatus = BTPARALLEL_NOT_INITIALIZED;
-	btscan->btps_arrayKeyCount = 0;
 	SpinLockRelease(&btscan->btps_mutex);
 }
 
@@ -609,7 +577,7 @@ btparallelrescan(IndexScanDesc scan)
  *
  * The return value is true if we successfully seized the scan and false
  * if we did not.  The latter case occurs if no pages remain for the current
- * set of scankeys.
+ * primitive index scan.
  *
  * If the return value is true, *pageno returns the next or current page
  * of the scan (depending on the scan direction).  An invalid block number
@@ -617,6 +585,11 @@ btparallelrescan(IndexScanDesc scan)
  * The first time a participating process reaches the last page, it will return
  * true and set *pageno to P_NONE; after that, further attempts to seize the
  * scan will return false.
+ *
+ * If the return value is false, it's possible that caller's scan is one with
+ * array keys, and that caller is supposed to start the next primitive scan.
+ * It's not appropriate for such a caller to wait, since they're already
+ * advancing the scan (next primitive index scan determines the next page).
  *
  * Callers should ignore the value of pageno if the return value is false.
  */
@@ -632,6 +605,13 @@ _bt_parallel_seize(IndexScanDesc scan, BlockNumber *pageno)
 
 	*pageno = P_NONE;
 
+	/*
+	 * Force another primitive index scan when caller succesfully seized the
+	 * scan for that purpose already
+	 */
+	if (so->needPrimScan)
+		return false;
+
 	btscan = (BTParallelScanDesc) OffsetToPointer((void *) parallel_scan,
 												  parallel_scan->ps_offset);
 
@@ -640,17 +620,9 @@ _bt_parallel_seize(IndexScanDesc scan, BlockNumber *pageno)
 		SpinLockAcquire(&btscan->btps_mutex);
 		pageStatus = btscan->btps_pageStatus;
 
-		if (so->arrayKeyCount < btscan->btps_arrayKeyCount)
+		if (pageStatus == BTPARALLEL_DONE)
 		{
-			/* Parallel scan has already advanced to a new set of scankeys. */
-			status = false;
-		}
-		else if (pageStatus == BTPARALLEL_DONE)
-		{
-			/*
-			 * We're done with this set of scankeys.  This may be the end, or
-			 * there could be more sets to try.
-			 */
+			/* We're done with this parallel index scan */
 			status = false;
 		}
 		else if (pageStatus != BTPARALLEL_ADVANCING)
@@ -704,7 +676,6 @@ _bt_parallel_release(IndexScanDesc scan, BlockNumber scan_page)
 void
 _bt_parallel_done(IndexScanDesc scan)
 {
-	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 	ParallelIndexScanDesc parallel_scan = scan->parallel_scan;
 	BTParallelScanDesc btscan;
 	bool		status_changed = false;
@@ -717,13 +688,11 @@ _bt_parallel_done(IndexScanDesc scan)
 												  parallel_scan->ps_offset);
 
 	/*
-	 * Mark the parallel scan as done for this combination of scan keys,
-	 * unless some other process already did so.  See also
-	 * _bt_advance_array_keys.
+	 * Mark the parallel scan as done, unless some other process did so
+	 * already
 	 */
 	SpinLockAcquire(&btscan->btps_mutex);
-	if (so->arrayKeyCount >= btscan->btps_arrayKeyCount &&
-		btscan->btps_pageStatus != BTPARALLEL_DONE)
+	if (btscan->btps_pageStatus != BTPARALLEL_DONE)
 	{
 		btscan->btps_pageStatus = BTPARALLEL_DONE;
 		status_changed = true;
@@ -736,31 +705,38 @@ _bt_parallel_done(IndexScanDesc scan)
 }
 
 /*
- * _bt_parallel_advance_array_keys() -- Advances the parallel scan for array
- *			keys.
+ * _bt_parallel_primscan_advance() -- Advance the scan's primitive index.
  *
- * Updates the count of array keys processed for both local and parallel
- * scans.
+ * Caller passes the block number most recently passed to _bt_parallel_release
+ * by its backend.  Caller is only permitted to start another primitive scan
+ * when the scan is now idle, and has the same scan_page that caller set most
+ * recently.
+ *
+ * If the return value is true, caller starts the next primitive index scan on
+ * behalf of the parallel scan as a whole.  Otherwise caller continues with
+ * the scan, seizing the next block in the usual way.
  */
-void
-_bt_parallel_advance_array_keys(IndexScanDesc scan)
+bool
+_bt_parallel_primscan_advance(IndexScanDesc scan, BlockNumber prev_scan_page)
 {
-	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 	ParallelIndexScanDesc parallel_scan = scan->parallel_scan;
 	BTParallelScanDesc btscan;
+	bool		advanced = false;
 
 	btscan = (BTParallelScanDesc) OffsetToPointer((void *) parallel_scan,
 												  parallel_scan->ps_offset);
 
-	so->arrayKeyCount++;
 	SpinLockAcquire(&btscan->btps_mutex);
-	if (btscan->btps_pageStatus == BTPARALLEL_DONE)
+	if (btscan->btps_pageStatus == BTPARALLEL_IDLE &&
+		btscan->btps_scanPage == prev_scan_page)
 	{
 		btscan->btps_scanPage = InvalidBlockNumber;
-		btscan->btps_pageStatus = BTPARALLEL_NOT_INITIALIZED;
-		btscan->btps_arrayKeyCount++;
+		btscan->btps_pageStatus = BTPARALLEL_ADVANCING;
+		advanced = true;
 	}
 	SpinLockRelease(&btscan->btps_mutex);
+
+	return advanced;
 }
 
 /*

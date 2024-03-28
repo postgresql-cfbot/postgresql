@@ -222,7 +222,7 @@ extern void ExecARDeleteTriggers(EState *estate,
 								 bool is_crosspart_update);
 extern bool ExecIRDeleteTriggers(EState *estate,
 								 ResultRelInfo *relinfo,
-								 HeapTuple trigtuple);
+								 TupleTableSlot *slot);
 extern void ExecBSUpdateTriggers(EState *estate,
 								 ResultRelInfo *relinfo);
 extern void ExecASUpdateTriggers(EState *estate,

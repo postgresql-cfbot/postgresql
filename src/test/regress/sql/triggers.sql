@@ -960,6 +960,23 @@ $$;
 CREATE TRIGGER city_update_trig INSTEAD OF UPDATE ON city_view
 FOR EACH ROW EXECUTE PROCEDURE city_update();
 
+-- DELETE .. RETURNING setup.
+CREATE TABLE test_ins_del(a int, b text);
+INSERT INTO test_ins_del VALUES (1,repeat('x', 1000));
+CREATE VIEW test_ins_del_view AS SELECT a as a,b as b from test_ins_del;
+CREATE OR REPLACE FUNCTION view_ins_del_trig_trig() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  if (TG_OP = 'DELETE') then
+      OLD.a := OLD.a + 3;
+      raise notice 'old.a %',old.a;
+      RETURN OLD;
+  end if;
+end
+$$;
+
+CREATE OR REPLACE TRIGGER tv_delete_trig
+INSTEAD OF DELETE ON test_ins_del_view
+FOR EACH ROW EXECUTE PROCEDURE view_ins_del_trig_trig();
 \set QUIET false
 
 -- INSERT .. RETURNING
@@ -983,9 +1000,12 @@ UPDATE city_view v1 SET country_name = v2.country_name FROM city_view v2
 
 -- DELETE .. RETURNING
 DELETE FROM city_view WHERE city_name = 'Birmingham' RETURNING *;
+DELETE FROM test_ins_del_view where a = 1 returning a;
 
 \set QUIET true
 
+DROP TABLE test_ins_del cascade;
+DROP FUNCTION view_ins_del_trig_trig;
 -- read-only view with WHERE clause
 CREATE VIEW european_city_view AS
     SELECT * FROM city_view WHERE continent = 'Europe';

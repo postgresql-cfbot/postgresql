@@ -428,8 +428,15 @@ CREATE [ OR REPLACE ] FUNCTION
     <term><literal>PARALLEL</literal></term>
 
     <listitem>
+
+     <indexterm>
+       <primary>parallel safety</primary>
+       <secondary>functions</secondary>
+     </indexterm>
+
      <para><literal>PARALLEL UNSAFE</literal> indicates that the function
-      can't be executed in parallel mode and the presence of such a
+      can't be executed in <link linkend="parallel-labeling">parallel
+      mode</link> and the presence of such a
       function in an SQL statement forces a serial execution plan.  This is
       the default.  <literal>PARALLEL RESTRICTED</literal> indicates that
       the function can be executed in parallel mode, but the execution is

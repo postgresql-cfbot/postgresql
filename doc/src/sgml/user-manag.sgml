@@ -7,11 +7,42 @@
   <productname>PostgreSQL</productname> manages database access permissions
   using the concept of <firstterm>roles</firstterm>.  A role can be thought of as
   either a database user, or a group of database users, depending on how
-  the role is set up.  Roles can own database objects (for example, tables
-  and functions) and can assign privileges on those objects to other roles to
-  control who has access to which objects.  Furthermore, it is possible
-  to grant <firstterm>membership</firstterm> in a role to another role, thus
-  allowing the member role to use privileges assigned to another role.
+  the role is set up.
+  Roles can own database objects (for example, tables and functions).
+  They can assign privileges on the owned objects, and thus the permissions
+  the privileges carry, to other roles.
+  Roles therefore control who has what access to which objects.
+ </para>
+
+ <indexterm>
+   <primary>role</primary>
+   <secondary>inheriting permissions</secondary>
+ </indexterm>
+
+ <indexterm>
+   <primary>role</primary>
+   <secondary>attributes</secondary>
+ </indexterm>
+
+ <indexterm>
+   <primary>role</primary>
+   <secondary>current role</secondary>
+ </indexterm>
+
+ <para>
+  It is possible to grant <firstterm>membership</firstterm> in a role to
+  another role, thus allowing the member role to use the privileges assigned
+  to another role.
+  This acquisition of privilege can happen automatically, if the role given
+  membership has the <literal>INHERIT</literal> attribute, or manually, via
+  a <literal>SET ROLE</literal> to the granted role.
+  But it is important to distinguish between privileges, which are assigned
+  with <literal>GRANT</literal>, and role attributes,
+  like <literal>INHERIT</literal>, <literal>SUPERUSER</literal>, and
+  <literal>CREATEDB</literal>, which are assigned with <literal>CREATE
+  ROLE</literal> or <literal>ALTER ROLE</literal>.
+  Privileges may be inherited, role attributes cannot and are only effective
+  when <literal>SET ROLE</literal> changes the current role.
  </para>
 
  <para>
@@ -19,6 +50,15 @@
   <quote>groups</quote>.  In <productname>PostgreSQL</productname> versions
   before 8.1, users and groups were distinct kinds of entities, but now
   there are only roles.  Any role can act as a user, a group, or both.
+ </para>
+
+ <para>
+   The managment of most database objects is by way of granting some role
+   ownership, but roles don't have owners.
+   Instead, roles are <link linkend="role-creation">managed</link> by
+   those roles having the <literal>CREATEROLE</literal> attribute, that
+   are also granted <literal>ADMIN</literal> privileges to the roles
+   which are managed.
  </para>
 
  <para>

@@ -10,9 +10,47 @@
 
   <para>
    There are many configuration parameters that affect the behavior of
-   the database system. In the first section of this chapter we
-   describe how to interact with configuration parameters. The subsequent sections
-   discuss each parameter in detail.
+   the database system.
+   A single master list of all parameters and their characteristics is not
+   provided in this document.
+   Use the <link linkend="bookindex">index</link> (or web search) to find
+   configuration parameter documentation by name.
+  </para>
+
+  <indexterm>
+    <primary>pg_settings</primary>
+    <secondary>example queries</secondary>
+  </indexterm>
+
+  <indexterm>
+    <primary>configuration</primary>
+    <secondary>query the current settings</secondary>
+  </indexterm>
+
+  <para>
+   The <link linkend="view-pg-settings">pg_settings</link>
+   <link linkend="tutorial-views">view</link> into
+   the <link linkend="catalogs">system catalogs</link> provides summaries of
+   all, or selected, configuration parameters, e.g:
+  </para>
+
+<programlisting>
+-- Describe all configuration parameters.
+SELECT name, short_desc FROM pg_settings ORDER BY name;
+
+-- Show the current configuration of the connected cluster, database,
+-- and session.
+SELECT name, setting, unit FROM pg_settings ORDER BY name;
+
+-- Show the means available to change the setting; whether the setting is
+-- per-cluster, per-database, per-session, etc.
+SELECT name, context FROM pg_settings ORDER BY name;
+</programlisting>
+  
+  <para>
+   The first section of this chapter describes how to interact with
+   configuration parameters.
+   Subsequent sections discuss each parameter in detail.
   </para>
 
   <sect1 id="config-setting">

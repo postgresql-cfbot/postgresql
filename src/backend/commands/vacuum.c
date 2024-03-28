@@ -604,9 +604,6 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 		VacuumFailsafeActive = false;
 		VacuumUpdateCosts();
 		VacuumCostBalance = 0;
-		VacuumPageHit = 0;
-		VacuumPageMiss = 0;
-		VacuumPageDirty = 0;
 		VacuumCostBalanceLocal = 0;
 		VacuumSharedCostBalance = NULL;
 		VacuumActiveNWorkers = NULL;

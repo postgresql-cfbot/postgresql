@@ -537,6 +537,29 @@ COPY check_ign_err FROM STDIN WITH (on_error ignore);
 1	{1}	3	abc
 \.
 
+
+truncate check_ign_err;
+COPY check_ign_err FROM STDIN WITH (on_error set_to_null);
+1	{1}	a
+2	{2}	1
+3	{3}	2
+4	{4}	b
+a	{5}	c
+\.
+
+\pset null NULL
+SELECT * FROM check_ign_err;
+
+--should fail.
+COPY check_ign_err FROM STDIN WITH (delimiter ',', on_error set_to_null);
+1,
+\.
+
+--should fail.
+COPY check_ign_err FROM STDIN WITH (delimiter ',', on_error set_to_null);
+1,{1},1,1
+\.
+
 -- clean up
 DROP TABLE forcetest;
 DROP TABLE vistest;

@@ -25,6 +25,7 @@
 #include "storage/bufpage.h"
 #include "storage/dsm.h"
 #include "storage/lockdefs.h"
+#include "storage/read_stream.h"
 #include "storage/shm_toc.h"
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
@@ -65,6 +66,20 @@ typedef struct HeapScanDescData
 	BufferAccessStrategy rs_strategy;	/* access strategy for reads */
 
 	HeapTupleData rs_ctup;		/* current tuple in scan, if any */
+
+	/* For scans that stream reads */
+	ReadStream *rs_read_stream;
+
+	/*
+	 * For sequential scans and TID range scans to stream reads. The read
+	 * stream is allocated at the beginning of the scan and reset on rescan or
+	 * when the scan direction changes. The scan direction is saved each time
+	 * a new page is requested. If the scan direction changes from one page to
+	 * the next, the read stream releases all previously pinned buffers and
+	 * resets the prefetch block.
+	 */
+	ScanDirection rs_dir;
+	BlockNumber rs_prefetch_block;
 
 	/*
 	 * For parallel scans to store page allocation data.  NULL when not
@@ -254,7 +269,7 @@ extern TableScanDesc heap_beginscan(Relation relation, Snapshot snapshot,
 									uint32 flags);
 extern void heap_setscanlimits(TableScanDesc sscan, BlockNumber startBlk,
 							   BlockNumber numBlks);
-extern void heapgetpage(TableScanDesc sscan, BlockNumber block);
+extern void heapbuildvis(TableScanDesc sscan);
 extern void heap_rescan(TableScanDesc sscan, ScanKey key, bool set_params,
 						bool allow_strat, bool allow_sync, bool allow_pagemode);
 extern void heap_endscan(TableScanDesc sscan);

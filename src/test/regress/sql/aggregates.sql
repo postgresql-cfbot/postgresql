@@ -497,6 +497,36 @@ drop table t3;
 drop table p_t1;
 
 --
+-- Test removal of redundant GROUP BY columns using unique not null index.
+-- materialized view
+--
+create temp table t1 (a int, b int, c int, primary key (a, b), unique(c));
+create temp table t2 (a int, b int, c int not null, primary key (a, b), unique(c));
+create temp table t3 (a int, b int, c int not null, d int not null, primary key (a, b), unique(c, d));
+create temp table t4 (a int, b int not null, c int not null, d int not null, primary key (a, b), unique(b, c), unique(d));
+create temp table t5 (a int not null, b int not null, c int not null, d int not null, unique (a, b), unique(b, c), unique(a, c, d));
+
+-- Test unique index without not null constraint should not be used.
+explain (costs off) select * from t1 group by a,b,c;
+
+-- Test unique not null index beats primary key.
+explain (costs off) select * from t2 group by a,b,c;
+
+-- Test primary key beats unique not null index.
+explain (costs off) select * from t3 group by a,b,c,d;
+
+-- Test unique not null index with less columns wins.
+explain (costs off) select * from t4 group by a,b,c,d;
+
+-- Test unique not null indices have overlap.
+explain (costs off) select * from t5 group by a,b,c,d;
+
+drop table t1; 
+drop table t2;
+drop table t3;
+drop table t4;
+
+--
 -- Test GROUP BY matching of join columns that are type-coerced due to USING
 --
 

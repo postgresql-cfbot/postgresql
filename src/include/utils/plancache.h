@@ -30,6 +30,7 @@ struct RawStmt;
 typedef enum
 {
 	PLAN_CACHE_MODE_AUTO,
+	PLAN_CACHE_MODE_STAT_ADAPTIVE_PLAN,
 	PLAN_CACHE_MODE_FORCE_GENERIC_PLAN,
 	PLAN_CACHE_MODE_FORCE_CUSTOM_PLAN,
 }			PlanCacheMode;
@@ -124,6 +125,7 @@ typedef struct CachedPlanSource
 	bool		is_complete;	/* has CompleteCachedPlan been done? */
 	bool		is_saved;		/* has CachedPlanSource been "saved"? */
 	bool		is_valid;		/* is the query_list currently valid? */
+	bool		hasSkewedparam; /* see the definition of PARAM FLAG SKEWEDSTAT */
 	int			generation;		/* increments each time we create a plan */
 	/* If CachedPlanSource has been saved, it is a member of a global list */
 	dlist_node	node;			/* list link, if is_saved */

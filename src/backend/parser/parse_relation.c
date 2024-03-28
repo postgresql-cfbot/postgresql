@@ -91,11 +91,13 @@ static void markRTEForSelectPriv(ParseState *pstate,
 								 int rtindex, AttrNumber col);
 static void expandRelation(Oid relid, Alias *eref,
 						   int rtindex, int sublevels_up,
+						   VarReturningType returning_type,
 						   int location, bool include_dropped,
 						   List **colnames, List **colvars);
 static void expandTupleDesc(TupleDesc tupdesc, Alias *eref,
 							int count, int offset,
 							int rtindex, int sublevels_up,
+							VarReturningType returning_type,
 							int location, bool include_dropped,
 							List **colnames, List **colvars);
 static int	specialAttNum(const char *attname);
@@ -763,6 +765,9 @@ scanNSItemForColumn(ParseState *pstate, ParseNamespaceItem *nsitem,
 	}
 	var->location = location;
 
+	/* Mark Var for RETURNING OLD/NEW, as necessary */
+	var->varreturningtype = nsitem->p_returning_type;
+
 	/* Mark Var if it's nulled by any outer joins */
 	markNullableIfNeeded(pstate, var);
 
@@ -1336,6 +1341,7 @@ buildNSItemFromTupleDesc(RangeTblEntry *rte, Index rtindex,
 	nsitem->p_cols_visible = true;
 	nsitem->p_lateral_only = false;
 	nsitem->p_lateral_ok = true;
+	nsitem->p_returning_type = VAR_RETURNING_DEFAULT;
 
 	return nsitem;
 }
@@ -1399,6 +1405,7 @@ buildNSItemFromLists(RangeTblEntry *rte, Index rtindex,
 	nsitem->p_cols_visible = true;
 	nsitem->p_lateral_only = false;
 	nsitem->p_lateral_ok = true;
+	nsitem->p_returning_type = VAR_RETURNING_DEFAULT;
 
 	return nsitem;
 }
@@ -2300,6 +2307,7 @@ addRangeTableEntryForJoin(ParseState *pstate,
 	nsitem->p_cols_visible = true;
 	nsitem->p_lateral_only = false;
 	nsitem->p_lateral_ok = true;
+	nsitem->p_returning_type = VAR_RETURNING_DEFAULT;
 
 	return nsitem;
 }
@@ -2647,9 +2655,10 @@ addNSItemToQuery(ParseState *pstate, ParseNamespaceItem *nsitem,
  * results.  If include_dropped is true then empty strings and NULL constants
  * (not Vars!) are returned for dropped columns.
  *
- * rtindex, sublevels_up, and location are the varno, varlevelsup, and location
- * values to use in the created Vars.  Ordinarily rtindex should match the
- * actual position of the RTE in its rangetable.
+ * rtindex, sublevels_up, returning_type, and location are the varno,
+ * varlevelsup, varreturningtype, and location values to use in the created
+ * Vars.  Ordinarily rtindex should match the actual position of the RTE in
+ * its rangetable.
  *
  * The output lists go into *colnames and *colvars.
  * If only one of the two kinds of output list is needed, pass NULL for the
@@ -2657,6 +2666,7 @@ addNSItemToQuery(ParseState *pstate, ParseNamespaceItem *nsitem,
  */
 void
 expandRTE(RangeTblEntry *rte, int rtindex, int sublevels_up,
+		  VarReturningType returning_type,
 		  int location, bool include_dropped,
 		  List **colnames, List **colvars)
 {
@@ -2672,7 +2682,7 @@ expandRTE(RangeTblEntry *rte, int rtindex, int sublevels_up,
 		case RTE_RELATION:
 			/* Ordinary relation RTE */
 			expandRelation(rte->relid, rte->eref,
-						   rtindex, sublevels_up, location,
+						   rtindex, sublevels_up, returning_type, location,
 						   include_dropped, colnames, colvars);
 			break;
 		case RTE_SUBQUERY:
@@ -2719,6 +2729,7 @@ expandRTE(RangeTblEntry *rte, int rtindex, int sublevels_up,
 										  exprTypmod((Node *) te->expr),
 										  exprCollation((Node *) te->expr),
 										  sublevels_up);
+						varnode->varreturningtype = returning_type;
 						varnode->location = location;
 
 						*colvars = lappend(*colvars, varnode);
@@ -2751,7 +2762,8 @@ expandRTE(RangeTblEntry *rte, int rtindex, int sublevels_up,
 						Assert(tupdesc);
 						expandTupleDesc(tupdesc, rte->eref,
 										rtfunc->funccolcount, atts_done,
-										rtindex, sublevels_up, location,
+										rtindex, sublevels_up,
+										returning_type, location,
 										include_dropped, colnames, colvars);
 					}
 					else if (functypclass == TYPEFUNC_SCALAR)
@@ -2771,6 +2783,7 @@ expandRTE(RangeTblEntry *rte, int rtindex, int sublevels_up,
 											  exprTypmod(rtfunc->funcexpr),
 											  exprCollation(rtfunc->funcexpr),
 											  sublevels_up);
+							varnode->varreturningtype = returning_type;
 							varnode->location = location;
 
 							*colvars = lappend(*colvars, varnode);
@@ -2813,6 +2826,7 @@ expandRTE(RangeTblEntry *rte, int rtindex, int sublevels_up,
 												  attrtypmod,
 												  attrcollation,
 												  sublevels_up);
+								varnode->varreturningtype = returning_type;
 								varnode->location = location;
 								*colvars = lappend(*colvars, varnode);
 							}
@@ -2842,6 +2856,7 @@ expandRTE(RangeTblEntry *rte, int rtindex, int sublevels_up,
 													  InvalidOid,
 													  sublevels_up);
 
+						varnode->varreturningtype = returning_type;
 						*colvars = lappend(*colvars, varnode);
 					}
 				}
@@ -2924,6 +2939,7 @@ expandRTE(RangeTblEntry *rte, int rtindex, int sublevels_up,
 											  exprTypmod(avar),
 											  exprCollation(avar),
 											  sublevels_up);
+						varnode->varreturningtype = returning_type;
 						varnode->location = location;
 
 						*colvars = lappend(*colvars, varnode);
@@ -2979,6 +2995,7 @@ expandRTE(RangeTblEntry *rte, int rtindex, int sublevels_up,
 							varnode = makeVar(rtindex, varattno,
 											  coltype, coltypmod, colcoll,
 											  sublevels_up);
+							varnode->varreturningtype = returning_type;
 							varnode->location = location;
 
 							*colvars = lappend(*colvars, varnode);
@@ -3010,6 +3027,7 @@ expandRTE(RangeTblEntry *rte, int rtindex, int sublevels_up,
  */
 static void
 expandRelation(Oid relid, Alias *eref, int rtindex, int sublevels_up,
+			   VarReturningType returning_type,
 			   int location, bool include_dropped,
 			   List **colnames, List **colvars)
 {
@@ -3018,7 +3036,7 @@ expandRelation(Oid relid, Alias *eref, int rtindex, int sublevels_up,
 	/* Get the tupledesc and turn it over to expandTupleDesc */
 	rel = relation_open(relid, AccessShareLock);
 	expandTupleDesc(rel->rd_att, eref, rel->rd_att->natts, 0,
-					rtindex, sublevels_up,
+					rtindex, sublevels_up, returning_type,
 					location, include_dropped,
 					colnames, colvars);
 	relation_close(rel, AccessShareLock);
@@ -3036,6 +3054,7 @@ expandRelation(Oid relid, Alias *eref, int rtindex, int sublevels_up,
 static void
 expandTupleDesc(TupleDesc tupdesc, Alias *eref, int count, int offset,
 				int rtindex, int sublevels_up,
+				VarReturningType returning_type,
 				int location, bool include_dropped,
 				List **colnames, List **colvars)
 {
@@ -3096,6 +3115,7 @@ expandTupleDesc(TupleDesc tupdesc, Alias *eref, int count, int offset,
 							  attr->atttypid, attr->atttypmod,
 							  attr->attcollation,
 							  sublevels_up);
+			varnode->varreturningtype = returning_type;
 			varnode->location = location;
 
 			*colvars = lappend(*colvars, varnode);
@@ -3148,6 +3168,7 @@ expandNSItemVars(ParseState *pstate, ParseNamespaceItem *nsitem,
 						  nscol->p_varcollid,
 						  sublevels_up);
 			/* makeVar doesn't offer parameters for these, so set by hand: */
+			var->varreturningtype = nscol->p_varreturningtype;
 			var->varnosyn = nscol->p_varnosyn;
 			var->varattnosyn = nscol->p_varattnosyn;
 			var->location = location;

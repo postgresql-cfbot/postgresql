@@ -279,7 +279,10 @@ adjust_appendrel_attrs_mutator(Node *node,
 					elog(ERROR, "attribute %d of relation \"%s\" does not exist",
 						 var->varattno, get_rel_name(appinfo->parent_reloid));
 				if (IsA(newnode, Var))
+				{
+					((Var *) newnode)->varreturningtype = var->varreturningtype;
 					((Var *) newnode)->varnullingrels = var->varnullingrels;
+				}
 				else if (var->varnullingrels != NULL)
 					elog(ERROR, "failed to apply nullingrels to a non-Var");
 				return newnode;

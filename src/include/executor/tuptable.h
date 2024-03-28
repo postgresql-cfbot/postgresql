@@ -417,12 +417,27 @@ slot_getsysattr(TupleTableSlot *slot, int attnum, bool *isnull)
 {
 	Assert(attnum < 0);			/* caller error */
 
+	/*
+	 * tableoid may be requested when tid is not valid (e.g., in a CHECK
+	 * contstraint), so handle it before checking the tid.
+	 */
 	if (attnum == TableOidAttributeNumber)
 	{
-		*isnull = false;
+		*isnull = !OidIsValid(slot->tts_tableOid);
 		return ObjectIdGetDatum(slot->tts_tableOid);
 	}
-	else if (attnum == SelfItemPointerAttributeNumber)
+
+	/*
+	 * Otherwise, if tid is not valid, treat it and all other system
+	 * attributes as NULL.
+	 */
+	if (!ItemPointerIsValid(&slot->tts_tid))
+	{
+		*isnull = true;
+		return PointerGetDatum(NULL);
+	}
+
+	if (attnum == SelfItemPointerAttributeNumber)
 	{
 		*isnull = false;
 		return PointerGetDatum(&slot->tts_tid);

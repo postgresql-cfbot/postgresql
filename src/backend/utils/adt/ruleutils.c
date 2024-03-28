@@ -166,6 +166,8 @@ typedef struct
 	List	   *subplans;		/* List of Plan trees for SubPlans */
 	List	   *ctes;			/* List of CommonTableExpr nodes */
 	AppendRelInfo **appendrels; /* Array of AppendRelInfo nodes, or NULL */
+	char	   *returningOld;	/* alias for OLD in RETURNING list */
+	char	   *returningNew;	/* alias for NEW in RETURNING list */
 	/* Workspace for column alias assignment: */
 	bool		unique_using;	/* Are we making USING names globally unique */
 	List	   *using_names;	/* List of assigned names for USING columns */
@@ -416,6 +418,8 @@ static void get_basic_select_query(Query *query, deparse_context *context,
 								   TupleDesc resultDesc, bool colNamesVisible);
 static void get_target_list(List *targetList, deparse_context *context,
 							TupleDesc resultDesc, bool colNamesVisible);
+static void get_returning_clause(Query *query, deparse_context *context,
+								 bool colNamesVisible);
 static void get_setop_query(Node *setOp, Query *query,
 							deparse_context *context,
 							TupleDesc resultDesc, bool colNamesVisible);
@@ -3781,6 +3785,10 @@ deparse_context_for_plan_tree(PlannedStmt *pstmt, List *rtable_names)
  * the most-closely-nested first.  This is needed to resolve PARAM_EXEC
  * Params.  Note we assume that all the Plan nodes share the same rtable.
  *
+ * For a ModifyTable plan, we might also need to resolve references to OLD/NEW
+ * variables in the RETURNING list, so we copy the alias names of the OLD and
+ * NEW rows from the ModifyTable plan node.
+ *
  * Once this function has been called, deparse_expression() can be called on
  * subsidiary expression(s) of the specified Plan node.  To deparse
  * expressions of a different Plan node in the same Plan tree, re-call this
@@ -3800,6 +3808,13 @@ set_deparse_context_plan(List *dpcontext, Plan *plan, List *ancestors)
 	/* Set our attention on the specific plan node passed in */
 	dpns->ancestors = ancestors;
 	set_deparse_plan(dpns, plan);
+
+	/* For ModifyTable, set aliases for OLD and NEW in RETURNING */
+	if (IsA(plan, ModifyTable))
+	{
+		dpns->returningOld = ((ModifyTable *) plan)->returningOld;
+		dpns->returningNew = ((ModifyTable *) plan)->returningNew;
+	}
 
 	return dpcontext;
 }
@@ -3998,6 +4013,8 @@ set_deparse_for_query(deparse_namespace *dpns, Query *query,
 	dpns->subplans = NIL;
 	dpns->ctes = query->cteList;
 	dpns->appendrels = NULL;
+	dpns->returningOld = query->returningOld;
+	dpns->returningNew = query->returningNew;
 
 	/* Assign a unique relation alias to each RTE */
 	set_rtable_names(dpns, parent_namespaces, NULL);
@@ -4385,8 +4402,8 @@ set_relation_column_names(deparse_namespace *dpns, RangeTblEntry *rte,
 		if (rte->rtekind == RTE_FUNCTION && rte->functions != NIL)
 		{
 			/* Since we're not creating Vars, rtindex etc. don't matter */
-			expandRTE(rte, 1, 0, -1, true /* include dropped */ ,
-					  &colnames, NULL);
+			expandRTE(rte, 1, 0, VAR_RETURNING_DEFAULT, -1,
+					  true /* include dropped */ , &colnames, NULL);
 		}
 		else
 			colnames = rte->eref->colnames;
@@ -6036,7 +6053,7 @@ get_basic_select_query(Query *query, deparse_context *context,
 /* ----------
  * get_target_list			- Parse back a SELECT target list
  *
- * This is also used for RETURNING lists in INSERT/UPDATE/DELETE.
+ * This is also used for RETURNING lists in INSERT/UPDATE/DELETE/MERGE.
  *
  * resultDesc and colNamesVisible are as for get_query_def()
  * ----------
@@ -6175,6 +6192,44 @@ get_target_list(List *targetList, deparse_context *context,
 
 	/* clean up */
 	pfree(targetbuf.data);
+}
+
+static void
+get_returning_clause(Query *query, deparse_context *context,
+					 bool colNamesVisible)
+{
+	StringInfo	buf = context->buf;
+
+	if (query->returningList)
+	{
+		bool		have_with = false;
+
+		appendContextKeyword(context, " RETURNING",
+							 -PRETTYINDENT_STD, PRETTYINDENT_STD, 1);
+
+		/* Add WITH options, if they're not the defaults */
+		if (query->returningOld && strcmp(query->returningOld, "old") != 0)
+		{
+			appendStringInfo(buf, " WITH (OLD AS %s", query->returningOld);
+			have_with = true;
+		}
+		if (query->returningNew && strcmp(query->returningNew, "new") != 0)
+		{
+			if (have_with)
+				appendStringInfo(buf, ", ");
+			else
+			{
+				appendStringInfo(buf, " WITH (");
+				have_with = true;
+			}
+			appendStringInfo(buf, "NEW AS %s", query->returningNew);
+		}
+		if (have_with)
+			appendStringInfo(buf, ")");
+
+		/* Add the returning expressions themselves */
+		get_target_list(query->returningList, context, NULL, colNamesVisible);
+	}
 }
 
 static void
@@ -6831,12 +6886,7 @@ get_insert_query_def(Query *query, deparse_context *context,
 	}
 
 	/* Add RETURNING if present */
-	if (query->returningList)
-	{
-		appendContextKeyword(context, " RETURNING",
-							 -PRETTYINDENT_STD, PRETTYINDENT_STD, 1);
-		get_target_list(query->returningList, context, NULL, colNamesVisible);
-	}
+	get_returning_clause(query, context, colNamesVisible);
 }
 
 
@@ -6888,12 +6938,7 @@ get_update_query_def(Query *query, deparse_context *context,
 	}
 
 	/* Add RETURNING if present */
-	if (query->returningList)
-	{
-		appendContextKeyword(context, " RETURNING",
-							 -PRETTYINDENT_STD, PRETTYINDENT_STD, 1);
-		get_target_list(query->returningList, context, NULL, colNamesVisible);
-	}
+	get_returning_clause(query, context, colNamesVisible);
 }
 
 
@@ -7092,12 +7137,7 @@ get_delete_query_def(Query *query, deparse_context *context,
 	}
 
 	/* Add RETURNING if present */
-	if (query->returningList)
-	{
-		appendContextKeyword(context, " RETURNING",
-							 -PRETTYINDENT_STD, PRETTYINDENT_STD, 1);
-		get_target_list(query->returningList, context, NULL, colNamesVisible);
-	}
+	get_returning_clause(query, context, colNamesVisible);
 }
 
 
@@ -7219,12 +7259,7 @@ get_merge_query_def(Query *query, deparse_context *context,
 	}
 
 	/* Add RETURNING if present */
-	if (query->returningList)
-	{
-		appendContextKeyword(context, " RETURNING",
-							 -PRETTYINDENT_STD, PRETTYINDENT_STD, 1);
-		get_target_list(query->returningList, context, NULL, colNamesVisible);
-	}
+	get_returning_clause(query, context, colNamesVisible);
 }
 
 
@@ -7371,7 +7406,13 @@ get_variable(Var *var, int levelsup, bool istoplevel, deparse_context *context)
 		}
 
 		rte = rt_fetch(varno, dpns->rtable);
-		refname = (char *) list_nth(dpns->rtable_names, varno - 1);
+		if (var->varreturningtype == VAR_RETURNING_OLD)
+			refname = dpns->returningOld;
+		else if (var->varreturningtype == VAR_RETURNING_NEW)
+			refname = dpns->returningNew;
+		else
+			refname = (char *) list_nth(dpns->rtable_names, varno - 1);
+
 		colinfo = deparse_columns_fetch(varno, dpns);
 		attnum = varattno;
 	}
@@ -7485,7 +7526,10 @@ get_variable(Var *var, int levelsup, bool istoplevel, deparse_context *context)
 		attname = get_rte_attribute_name(rte, attnum);
 	}
 
-	if (refname && (context->varprefix || attname == NULL))
+	if (refname &&
+		(context->varprefix ||
+		 attname == NULL ||
+		 var->varreturningtype != VAR_RETURNING_DEFAULT))
 	{
 		appendStringInfoString(buf, quote_identifier(refname));
 		appendStringInfoChar(buf, '.');
@@ -8466,6 +8510,7 @@ isSimpleNode(Node *node, Node *parentNode, int prettyFlags)
 		case T_SQLValueFunction:
 		case T_XmlExpr:
 		case T_NextValueExpr:
+		case T_ReturningExpr:
 		case T_NullIfExpr:
 		case T_Aggref:
 		case T_GroupingFunc:
@@ -8588,6 +8633,7 @@ isSimpleNode(Node *node, Node *parentNode, int prettyFlags)
 				case T_CoalesceExpr:	/* own parentheses */
 				case T_MinMaxExpr:	/* own parentheses */
 				case T_XmlExpr: /* own parentheses */
+				case T_ReturningExpr:	/* own parentheses */
 				case T_NullIfExpr:	/* other separators */
 				case T_Aggref:	/* own parentheses */
 				case T_GroupingFunc:	/* own parentheses */
@@ -8640,6 +8686,7 @@ isSimpleNode(Node *node, Node *parentNode, int prettyFlags)
 				case T_CoalesceExpr:	/* own parentheses */
 				case T_MinMaxExpr:	/* own parentheses */
 				case T_XmlExpr: /* own parentheses */
+				case T_ReturningExpr:	/* own parentheses */
 				case T_NullIfExpr:	/* other separators */
 				case T_Aggref:	/* own parentheses */
 				case T_GroupingFunc:	/* own parentheses */
@@ -9988,6 +10035,17 @@ get_rule_expr(Node *node, deparse_context *context,
 					get_opclass_name(inferopclass, inferopcinputtype, buf);
 				}
 			}
+			break;
+
+		case T_ReturningExpr:
+			/* Returns old/new.(expression) */
+			if (((ReturningExpr *) node)->retold)
+				appendStringInfo(buf, "old.(");
+			else
+				appendStringInfo(buf, "new.(");
+			get_rule_expr((Node *) ((ReturningExpr *) node)->retexpr,
+						  context, showimplicit);
+			appendStringInfoChar(buf, ')');
 			break;
 
 		case T_PartitionBoundSpec:

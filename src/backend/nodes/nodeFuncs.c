@@ -278,6 +278,9 @@ exprType(const Node *expr)
 				type = exprType((Node *) n->expr);
 			}
 			break;
+		case T_ReturningExpr:
+			type = exprType((Node *) ((const ReturningExpr *) expr)->retexpr);
+			break;
 		case T_PlaceHolderVar:
 			type = exprType((Node *) ((const PlaceHolderVar *) expr)->phexpr);
 			break;
@@ -529,6 +532,8 @@ exprTypmod(const Node *expr)
 			return ((const CoerceToDomainValue *) expr)->typeMod;
 		case T_SetToDefault:
 			return ((const SetToDefault *) expr)->typeMod;
+		case T_ReturningExpr:
+			return exprTypmod((Node *) ((const ReturningExpr *) expr)->retexpr);
 		case T_PlaceHolderVar:
 			return exprTypmod((Node *) ((const PlaceHolderVar *) expr)->phexpr);
 		default:
@@ -1050,6 +1055,9 @@ exprCollation(const Node *expr)
 		case T_InferenceElem:
 			coll = exprCollation((Node *) ((const InferenceElem *) expr)->expr);
 			break;
+		case T_ReturningExpr:
+			coll = exprCollation((Node *) ((const ReturningExpr *) expr)->retexpr);
+			break;
 		case T_PlaceHolderVar:
 			coll = exprCollation((Node *) ((const PlaceHolderVar *) expr)->phexpr);
 			break;
@@ -1303,6 +1311,10 @@ exprSetCollation(Node *expr, Oid collation)
 		case T_NextValueExpr:
 			/* NextValueExpr's result is an integer type ... */
 			Assert(!OidIsValid(collation)); /* ... so never set a collation */
+			break;
+		case T_ReturningExpr:
+			exprSetCollation((Node *) ((ReturningExpr *) expr)->retexpr,
+							 collation);
 			break;
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(expr));
@@ -1629,6 +1641,9 @@ exprLocation(const Node *expr)
 			break;
 		case T_SetToDefault:
 			loc = ((const SetToDefault *) expr)->location;
+			break;
+		case T_ReturningExpr:
+			loc = exprLocation((Node *) ((const ReturningExpr *) expr)->retexpr);
 			break;
 		case T_TargetEntry:
 			/* just use argument's location */
@@ -2614,6 +2629,8 @@ expression_tree_walker_impl(Node *node,
 			return WALK(((PlaceHolderVar *) node)->phexpr);
 		case T_InferenceElem:
 			return WALK(((InferenceElem *) node)->expr);
+		case T_ReturningExpr:
+			return WALK(((ReturningExpr *) node)->retexpr);
 		case T_AppendRelInfo:
 			{
 				AppendRelInfo *appinfo = (AppendRelInfo *) node;
@@ -3437,6 +3454,16 @@ expression_tree_mutator_impl(Node *node,
 				return (Node *) newnode;
 			}
 			break;
+		case T_ReturningExpr:
+			{
+				ReturningExpr *rexpr = (ReturningExpr *) node;
+				ReturningExpr *newnode;
+
+				FLATCOPY(newnode, rexpr, ReturningExpr);
+				MUTATE(newnode->retexpr, rexpr->retexpr, Expr *);
+				return (Node *) newnode;
+			}
+			break;
 		case T_TargetEntry:
 			{
 				TargetEntry *targetentry = (TargetEntry *) node;
@@ -3978,6 +4005,7 @@ raw_expression_tree_walker_impl(Node *node,
 		case T_A_Const:
 		case T_A_Star:
 		case T_MergeSupportFunc:
+		case T_ReturningOption:
 			/* primitive node types with no subnodes */
 			break;
 		case T_Alias:
@@ -4174,7 +4202,7 @@ raw_expression_tree_walker_impl(Node *node,
 					return true;
 				if (WALK(stmt->onConflictClause))
 					return true;
-				if (WALK(stmt->returningList))
+				if (WALK(stmt->returningClause))
 					return true;
 				if (WALK(stmt->withClause))
 					return true;
@@ -4190,7 +4218,7 @@ raw_expression_tree_walker_impl(Node *node,
 					return true;
 				if (WALK(stmt->whereClause))
 					return true;
-				if (WALK(stmt->returningList))
+				if (WALK(stmt->returningClause))
 					return true;
 				if (WALK(stmt->withClause))
 					return true;
@@ -4208,7 +4236,7 @@ raw_expression_tree_walker_impl(Node *node,
 					return true;
 				if (WALK(stmt->fromClause))
 					return true;
-				if (WALK(stmt->returningList))
+				if (WALK(stmt->returningClause))
 					return true;
 				if (WALK(stmt->withClause))
 					return true;
@@ -4226,7 +4254,7 @@ raw_expression_tree_walker_impl(Node *node,
 					return true;
 				if (WALK(stmt->mergeWhenClauses))
 					return true;
-				if (WALK(stmt->returningList))
+				if (WALK(stmt->returningClause))
 					return true;
 				if (WALK(stmt->withClause))
 					return true;
@@ -4241,6 +4269,16 @@ raw_expression_tree_walker_impl(Node *node,
 				if (WALK(mergeWhenClause->targetList))
 					return true;
 				if (WALK(mergeWhenClause->values))
+					return true;
+			}
+			break;
+		case T_ReturningClause:
+			{
+				ReturningClause *returning = (ReturningClause *) node;
+
+				if (WALK(returning->options))
+					return true;
+				if (WALK(returning->exprs))
 					return true;
 			}
 			break;

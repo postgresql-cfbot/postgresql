@@ -1251,6 +1251,7 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 	resultRelInfo->ri_ReturningSlot = NULL;
 	resultRelInfo->ri_TrigOldSlot = NULL;
 	resultRelInfo->ri_TrigNewSlot = NULL;
+	resultRelInfo->ri_AllNullSlot = NULL;
 	resultRelInfo->ri_matchedMergeAction = NIL;
 	resultRelInfo->ri_notMatchedMergeAction = NIL;
 

@@ -21,6 +21,7 @@
 #include "access/sdir.h"
 #include "access/xact.h"
 #include "executor/tuptable.h"
+#include "storage/streaming_read.h"
 #include "utils/rel.h"
 #include "utils/snapshot.h"
 
@@ -659,9 +660,9 @@ typedef struct TableAmRoutine
 									BufferAccessStrategy bstrategy);
 
 	/*
-	 * Prepare to analyze block `blockno` of `scan`. The scan has been started
-	 * with table_beginscan_analyze().  See also
-	 * table_scan_analyze_next_block().
+	 * Prepare to analyze next block of `scan`. Next block is decided by
+	 * callback function of `pgsr`. The scan has been started with
+	 * table_beginscan_analyze(). See also table_scan_analyze_next_block().
 	 *
 	 * The callback may acquire resources like locks that are held until
 	 * table_scan_analyze_next_tuple() returns false. It e.g. can make sense
@@ -676,8 +677,7 @@ typedef struct TableAmRoutine
 	 * isn't one yet.
 	 */
 	bool		(*scan_analyze_next_block) (TableScanDesc scan,
-											BlockNumber blockno,
-											BufferAccessStrategy bstrategy);
+											StreamingRead *stream);
 
 	/*
 	 * See table_scan_analyze_next_tuple().
@@ -1755,11 +1755,9 @@ table_relation_vacuum(Relation rel, struct VacuumParams *params,
  * Returns false if block is unsuitable for sampling, true otherwise.
  */
 static inline bool
-table_scan_analyze_next_block(TableScanDesc scan, BlockNumber blockno,
-							  BufferAccessStrategy bstrategy)
+table_scan_analyze_next_block(TableScanDesc scan, StreamingRead *stream)
 {
-	return scan->rs_rd->rd_tableam->scan_analyze_next_block(scan, blockno,
-															bstrategy);
+	return scan->rs_rd->rd_tableam->scan_analyze_next_block(scan, stream);
 }
 
 /*

@@ -1053,10 +1053,10 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 }
 
 static bool
-heapam_scan_analyze_next_block(TableScanDesc scan, BlockNumber blockno,
-							   BufferAccessStrategy bstrategy)
+heapam_scan_analyze_next_block(TableScanDesc scan, StreamingRead *stream)
 {
 	HeapScanDesc hscan = (HeapScanDesc) scan;
+	BlockNumber *current_block;
 
 	/*
 	 * We must maintain a pin on the target page's buffer to ensure that
@@ -1067,10 +1067,11 @@ heapam_scan_analyze_next_block(TableScanDesc scan, BlockNumber blockno,
 	 * doing much work per tuple, the extra lock traffic is probably better
 	 * avoided.
 	 */
-	hscan->rs_cblock = blockno;
+	hscan->rs_cbuf = streaming_read_buffer_next(stream, (void **) &current_block);
+	hscan->rs_cblock = *current_block;
 	hscan->rs_cindex = FirstOffsetNumber;
-	hscan->rs_cbuf = ReadBufferExtended(scan->rs_rd, MAIN_FORKNUM,
-										blockno, RBM_NORMAL, bstrategy);
+
+	Assert(BufferIsValid(hscan->rs_cbuf));
 	LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_SHARE);
 
 	/* in heap all blocks can contain tuples, so always return true */

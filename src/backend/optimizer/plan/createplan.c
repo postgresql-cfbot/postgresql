@@ -287,9 +287,11 @@ static WindowAgg *make_windowagg(List *tlist, Index winref,
 								 int ordNumCols, AttrNumber *ordColIdx, Oid *ordOperators, Oid *ordCollations,
 								 int frameOptions, Node *startOffset, Node *endOffset,
 								 Oid startInRangeFunc, Oid endInRangeFunc,
-								 Oid inRangeColl, bool inRangeAsc, bool inRangeNullsFirst,
-								 List *runCondition, List *qual, bool topWindow,
-								 Plan *lefttree);
+								 Oid inRangeColl, bool inRangeAsc, bool inRangeNullsFirst, List *runCondition,
+								 RPSkipTo rpSkipTo, List *patternVariable, List *patternRegexp,
+								 List *defineClause,
+								 List *defineInitial,
+								 List *qual, bool topWindow, Plan *lefttree);
 static Group *make_group(List *tlist, List *qual, int numGroupCols,
 						 AttrNumber *grpColIdx, Oid *grpOperators, Oid *grpCollations,
 						 Plan *lefttree);
@@ -2699,6 +2701,11 @@ create_windowagg_plan(PlannerInfo *root, WindowAggPath *best_path)
 						  wc->inRangeAsc,
 						  wc->inRangeNullsFirst,
 						  wc->runCondition,
+						  wc->rpSkipTo,
+						  wc->patternVariable,
+						  wc->patternRegexp,
+						  wc->defineClause,
+						  wc->defineInitial,
 						  best_path->qual,
 						  best_path->topwindow,
 						  subplan);
@@ -6627,8 +6634,10 @@ make_windowagg(List *tlist, Index winref,
 			   int ordNumCols, AttrNumber *ordColIdx, Oid *ordOperators, Oid *ordCollations,
 			   int frameOptions, Node *startOffset, Node *endOffset,
 			   Oid startInRangeFunc, Oid endInRangeFunc,
-			   Oid inRangeColl, bool inRangeAsc, bool inRangeNullsFirst,
-			   List *runCondition, List *qual, bool topWindow, Plan *lefttree)
+			   Oid inRangeColl, bool inRangeAsc, bool inRangeNullsFirst, List *runCondition,
+			   RPSkipTo rpSkipTo, List *patternVariable, List *patternRegexp, List *defineClause,
+			   List *defineInitial,
+			   List *qual, bool topWindow, Plan *lefttree)
 {
 	WindowAgg  *node = makeNode(WindowAgg);
 	Plan	   *plan = &node->plan;
@@ -6654,6 +6663,11 @@ make_windowagg(List *tlist, Index winref,
 	node->inRangeAsc = inRangeAsc;
 	node->inRangeNullsFirst = inRangeNullsFirst;
 	node->topWindow = topWindow;
+	node->rpSkipTo = rpSkipTo,
+		node->patternVariable = patternVariable;
+	node->patternRegexp = patternRegexp;
+	node->defineClause = defineClause;
+	node->defineInitial = defineInitial;
 
 	plan->targetlist = tlist;
 	plan->lefttree = lefttree;

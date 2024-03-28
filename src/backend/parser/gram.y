@@ -671,6 +671,21 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				json_object_constructor_null_clause_opt
 				json_array_constructor_null_clause_opt
 
+%type <target>	row_pattern_measure_item
+				row_pattern_definition
+%type <node>	opt_row_pattern_common_syntax
+				opt_row_pattern_skip_to
+				row_pattern_subset_item
+				row_pattern_term
+%type <list>	opt_row_pattern_measures
+				row_pattern_measure_list
+				row_pattern_definition_list
+				opt_row_pattern_subset_clause
+				row_pattern_subset_list
+				row_pattern_subset_rhs
+				row_pattern
+%type <boolean>	opt_row_pattern_initial_or_seek
+				first_or_last
 
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
@@ -714,7 +729,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER CURSOR CYCLE
 
 	DATA_P DATABASE DAY_P DEALLOCATE DEC DECIMAL_P DECLARE DEFAULT DEFAULTS
-	DEFERRABLE DEFERRED DEFINER DELETE_P DELIMITER DELIMITERS DEPENDS DEPTH DESC
+	DEFERRABLE DEFERRED DEFINE DEFINER DELETE_P DELIMITER DELIMITERS DEPENDS DEPTH DESC
 	DETACH DICTIONARY DISABLE_P DISCARD DISTINCT DO DOCUMENT_P DOMAIN_P
 	DOUBLE_P DROP
 
@@ -730,7 +745,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	HANDLER HAVING HEADER_P HOLD HOUR_P
 
 	IDENTITY_P IF_P ILIKE IMMEDIATE IMMUTABLE IMPLICIT_P IMPORT_P IN_P INCLUDE
-	INCLUDING INCREMENT INDENT INDEX INDEXES INHERIT INHERITS INITIALLY INLINE_P
+	INCLUDING INCREMENT INDENT INDEX INDEXES INHERIT INHERITS INITIAL INITIALLY INLINE_P
 	INNER_P INOUT INPUT_P INSENSITIVE INSERT INSTEAD INT_P INTEGER
 	INTERSECT INTERVAL INTO INVOKER IS ISNULL ISOLATION
 
@@ -743,7 +758,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	LEADING LEAKPROOF LEAST LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
 	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED LOGGED
 
-	MAPPING MATCH MATCHED MATERIALIZED MAXVALUE MERGE MERGE_ACTION METHOD
+	MAPPING MATCH MATCHED MATERIALIZED MAXVALUE MEASURES MERGE MERGE_ACTION METHOD
 	MINUTE_P MINVALUE MODE MONTH_P MOVE
 
 	NAME_P NAMES NATIONAL NATURAL NCHAR NEW NEXT NFC NFD NFKC NFKD NO NONE
@@ -755,8 +770,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	ORDER ORDINALITY OTHERS OUT_P OUTER_P
 	OVER OVERLAPS OVERLAY OVERRIDING OWNED OWNER
 
-	PARALLEL PARAMETER PARSER PARTIAL PARTITION PASSING PASSWORD
-	PERIOD PLACING PLANS POLICY
+	PARALLEL PARAMETER PARSER PARTIAL PARTITION PASSING PASSWORD PAST
+	PATTERN_P PERIOD PERMUTE PLACING PLANS POLICY
 	POSITION PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
 	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROCEDURES PROGRAM PUBLICATION
 
@@ -767,12 +782,13 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	RESET RESTART RESTRICT RETURN RETURNING RETURNS REVOKE RIGHT ROLE ROLLBACK ROLLUP
 	ROUTINE ROUTINES ROW ROWS RULE
 
-	SAVEPOINT SCALAR SCHEMA SCHEMAS SCROLL SEARCH SECOND_P SECURITY SELECT
+	SAVEPOINT SCALAR SCHEMA SCHEMAS SCROLL SEARCH SECOND_P SECURITY SEEK SELECT
 	SEQUENCE SEQUENCES
+
 	SERIALIZABLE SERVER SESSION SESSION_USER SET SETS SETOF SHARE SHOW
 	SIMILAR SIMPLE SKIP SMALLINT SNAPSHOT SOME SQL_P STABLE STANDALONE_P
 	START STATEMENT STATISTICS STDIN STDOUT STORAGE STORED STRICT_P STRING_P STRIP_P
-	SUBSCRIPTION SUBSTRING SUPPORT SYMMETRIC SYSID SYSTEM_P SYSTEM_USER
+	SUBSCRIPTION SUBSET SUBSTRING SUPPORT SYMMETRIC SYSID SYSTEM_P SYSTEM_USER
 
 	TABLE TABLES TABLESAMPLE TABLESPACE TEMP TEMPLATE TEMPORARY TEXT_P THEN
 	TIES TIME TIMESTAMP TO TRAILING TRANSACTION TRANSFORM
@@ -878,6 +894,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %nonassoc	UNBOUNDED		/* ideally would have same precedence as IDENT */
 %nonassoc	IDENT PARTITION RANGE ROWS GROUPS PRECEDING FOLLOWING CUBE ROLLUP
 			SET KEYS OBJECT_P SCALAR VALUE_P WITH WITHOUT
+			MEASURES AFTER INITIAL SEEK PATTERN_P
 %left		Op OPERATOR		/* multi-character ops and user-defined operators */
 %left		'+' '-'
 %left		'*' '/' '%'
@@ -16037,7 +16054,8 @@ over_clause: OVER window_specification
 		;
 
 window_specification: '(' opt_existing_window_name opt_partition_clause
-						opt_sort_clause opt_frame_clause ')'
+						opt_sort_clause opt_row_pattern_measures opt_frame_clause
+						opt_row_pattern_common_syntax ')'
 				{
 					WindowDef  *n = makeNode(WindowDef);
 
@@ -16045,10 +16063,12 @@ window_specification: '(' opt_existing_window_name opt_partition_clause
 					n->refname = $2;
 					n->partitionClause = $3;
 					n->orderClause = $4;
+					n->rowPatternMeasures = $5;
 					/* copy relevant fields of opt_frame_clause */
-					n->frameOptions = $5->frameOptions;
-					n->startOffset = $5->startOffset;
-					n->endOffset = $5->endOffset;
+					n->frameOptions = $6->frameOptions;
+					n->startOffset = $6->startOffset;
+					n->endOffset = $6->endOffset;
+					n->rpCommonSyntax = (RPCommonSyntax *)$7;
 					n->location = @1;
 					$$ = n;
 				}
@@ -16070,6 +16090,31 @@ opt_existing_window_name: ColId						{ $$ = $1; }
 
 opt_partition_clause: PARTITION BY expr_list		{ $$ = $3; }
 			| /*EMPTY*/								{ $$ = NIL; }
+		;
+
+/*
+ * ROW PATTERN_P MEASURES
+ */
+opt_row_pattern_measures: MEASURES row_pattern_measure_list	{ $$ = $2; }
+			| /*EMPTY*/								{ $$ = NIL; }
+		;
+
+row_pattern_measure_list:
+			row_pattern_measure_item
+					{ $$ = list_make1($1); }
+			| row_pattern_measure_list ',' row_pattern_measure_item
+					{ $$ = lappend($1, $3); }
+		;
+
+row_pattern_measure_item:
+			a_expr AS ColLabel
+				{
+					$$ = makeNode(ResTarget);
+					$$->name = $3;
+					$$->indirection = NIL;
+					$$->val = (Node *) $1;
+					$$->location = @1;
+				}
 		;
 
 /*
@@ -16231,6 +16276,143 @@ opt_window_exclusion_clause:
 			| /*EMPTY*/				{ $$ = 0; }
 		;
 
+opt_row_pattern_common_syntax:
+opt_row_pattern_skip_to opt_row_pattern_initial_or_seek
+				PATTERN_P '(' row_pattern ')'
+				opt_row_pattern_subset_clause
+				DEFINE row_pattern_definition_list
+			{
+				RPCommonSyntax *n = makeNode(RPCommonSyntax);
+				n->rpSkipTo = ((RPCommonSyntax *)$1)->rpSkipTo;
+				n->rpSkipVariable = ((RPCommonSyntax *)$1)->rpSkipVariable;
+				n->initial = $2;
+				n->rpPatterns = $5;
+				n->rpSubsetClause = $7;
+				n->rpDefs = $9;
+				$$ = (Node *) n;
+			}
+			| /*EMPTY*/		{ $$ = NULL; }
+	;
+
+opt_row_pattern_skip_to:
+			AFTER MATCH SKIP TO NEXT ROW
+				{
+					RPCommonSyntax *n = makeNode(RPCommonSyntax);
+					n->rpSkipTo = ST_NEXT_ROW;
+					n->rpSkipVariable = NULL;
+					$$ = (Node *) n;
+			}
+			| AFTER MATCH SKIP PAST LAST_P ROW
+				{
+					RPCommonSyntax *n = makeNode(RPCommonSyntax);
+					n->rpSkipTo = ST_PAST_LAST_ROW;
+					n->rpSkipVariable = NULL;
+					$$ = (Node *) n;
+				}
+			| AFTER MATCH SKIP TO first_or_last ColId
+				{
+					RPCommonSyntax *n = makeNode(RPCommonSyntax);
+					n->rpSkipTo = $5? ST_FIRST_VARIABLE : ST_LAST_VARIABLE;
+					n->rpSkipVariable = $6;
+					$$ = (Node *) n;
+				}
+/*
+			| AFTER MATCH SKIP TO LAST_P ColId		%prec LAST_P
+				{
+					RPCommonSyntax *n = makeNode(RPCommonSyntax);
+					n->rpSkipTo = ST_LAST_VARIABLE;
+					n->rpSkipVariable = $6;
+					$$ = n;
+				}
+			| AFTER MATCH SKIP TO ColId
+				{
+					RPCommonSyntax *n = makeNode(RPCommonSyntax);
+					n->rpSkipTo = ST_VARIABLE;
+					n->rpSkipVariable = $5;
+					$$ = n;
+				}
+*/
+			| /*EMPTY*/
+				{
+					RPCommonSyntax *n = makeNode(RPCommonSyntax);
+					/* temporary set default to ST_NEXT_ROW */
+					n->rpSkipTo = ST_PAST_LAST_ROW;
+					n->rpSkipVariable = NULL;
+					$$ = (Node *) n;
+				}
+	;
+
+first_or_last:
+			FIRST_P		{ $$ = true; }
+			| LAST_P	{ $$ = false; }
+	;
+
+opt_row_pattern_initial_or_seek:
+			INITIAL			{ $$ = true; }
+			| SEEK
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("SEEK is not supported"),
+							 errhint("Use INITIAL."),
+							 parser_errposition(@1)));
+				}
+			| /*EMPTY*/		{ $$ = true; }
+		;
+
+row_pattern:
+			row_pattern_term							{ $$ = list_make1($1); }
+			| row_pattern row_pattern_term				{ $$ = lappend($1, $2); }
+		;
+
+row_pattern_term:
+			ColId	{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "", (Node *)makeString($1), NULL, @1); }
+			| ColId '*'	{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "*", (Node *)makeString($1), NULL, @1); }
+			| ColId '+'	{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "+", (Node *)makeString($1), NULL, @1); }
+			| ColId '?'	{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "?", (Node *)makeString($1), NULL, @1); }
+		;
+
+opt_row_pattern_subset_clause:
+			SUBSET row_pattern_subset_list	{ $$ = $2; }
+			| /*EMPTY*/												{ $$ = NIL; }
+		;
+
+row_pattern_subset_list:
+			row_pattern_subset_item									{ $$ = list_make1($1); }
+			| row_pattern_subset_list ',' row_pattern_subset_item	{ $$ = lappend($1, $3); }
+			| /*EMPTY*/												{ $$ = NIL; }
+		;
+
+row_pattern_subset_item: ColId '=' '(' row_pattern_subset_rhs ')'
+			{
+				RPSubsetItem *n = makeNode(RPSubsetItem);
+				n->name = $1;
+				n->rhsVariable = $4;
+				$$ = (Node *) n;
+			}
+		;
+
+row_pattern_subset_rhs:
+			ColId								{ $$ = list_make1(makeStringConst($1, @1)); }
+			| row_pattern_subset_rhs ',' ColId	{ $$ = lappend($1, makeStringConst($3, @1)); }
+			| /*EMPTY*/							{ $$ = NIL; }
+		;
+
+row_pattern_definition_list:
+			row_pattern_definition										{ $$ = list_make1($1); }
+			| row_pattern_definition_list ',' row_pattern_definition	{ $$ = lappend($1, $3); }
+		;
+
+row_pattern_definition:
+			ColId AS a_expr
+				{
+					$$ = makeNode(ResTarget);
+					$$->name = $1;
+					$$->indirection = NIL;
+					$$->val = (Node *) $3;
+					$$->location = @1;
+				}
+		;
 
 /*
  * Supporting nonterminals for expressions.
@@ -17441,6 +17623,7 @@ unreserved_keyword:
 			| INDEXES
 			| INHERIT
 			| INHERITS
+			| INITIAL
 			| INLINE_P
 			| INPUT_P
 			| INSENSITIVE
@@ -17469,6 +17652,7 @@ unreserved_keyword:
 			| MATCHED
 			| MATERIALIZED
 			| MAXVALUE
+			| MEASURES
 			| MERGE
 			| METHOD
 			| MINUTE_P
@@ -17512,7 +17696,10 @@ unreserved_keyword:
 			| PARTITION
 			| PASSING
 			| PASSWORD
+			| PAST
+			| PATTERN_P
 			| PERIOD
+			| PERMUTE
 			| PLANS
 			| POLICY
 			| PRECEDING
@@ -17564,6 +17751,7 @@ unreserved_keyword:
 			| SEARCH
 			| SECOND_P
 			| SECURITY
+			| SEEK
 			| SEQUENCE
 			| SEQUENCES
 			| SERIALIZABLE
@@ -17590,6 +17778,7 @@ unreserved_keyword:
 			| STRING_P
 			| STRIP_P
 			| SUBSCRIPTION
+			| SUBSET
 			| SUPPORT
 			| SYSID
 			| SYSTEM_P
@@ -17782,6 +17971,7 @@ reserved_keyword:
 			| CURRENT_USER
 			| DEFAULT
 			| DEFERRABLE
+			| DEFINE
 			| DESC
 			| DISTINCT
 			| DO
@@ -17945,6 +18135,7 @@ bare_label_keyword:
 			| DEFAULTS
 			| DEFERRABLE
 			| DEFERRED
+			| DEFINE
 			| DEFINER
 			| DELETE_P
 			| DELIMITER
@@ -18022,6 +18213,7 @@ bare_label_keyword:
 			| INDEXES
 			| INHERIT
 			| INHERITS
+			| INITIAL
 			| INITIALLY
 			| INLINE_P
 			| INNER_P
@@ -18075,6 +18267,7 @@ bare_label_keyword:
 			| MATCHED
 			| MATERIALIZED
 			| MAXVALUE
+			| MEASURES
 			| MERGE
 			| MERGE_ACTION
 			| METHOD
@@ -18130,7 +18323,10 @@ bare_label_keyword:
 			| PARTITION
 			| PASSING
 			| PASSWORD
+			| PAST
+			| PATTERN_P
 			| PERIOD
+			| PERMUTE
 			| PLACING
 			| PLANS
 			| POLICY
@@ -18188,6 +18384,7 @@ bare_label_keyword:
 			| SCROLL
 			| SEARCH
 			| SECURITY
+			| SEEK
 			| SELECT
 			| SEQUENCE
 			| SEQUENCES
@@ -18220,6 +18417,7 @@ bare_label_keyword:
 			| STRING_P
 			| STRIP_P
 			| SUBSCRIPTION
+			| SUBSET
 			| SUBSTRING
 			| SUPPORT
 			| SYMMETRIC

@@ -13,6 +13,9 @@
  */
 #include "postgres.h"
 
+#include "catalog/pg_collation_d.h"
+#include "executor/executor.h"
+#include "nodes/execnodes.h"
 #include "nodes/parsenodes.h"
 #include "nodes/supportnodes.h"
 #include "utils/fmgrprotos.h"
@@ -37,10 +40,18 @@ typedef struct
 	int64		remainder;		/* (total rows) % (bucket num) */
 } ntile_context;
 
+/*
+ * rpr process information.
+ * Used for AFTER MATCH SKIP PAST LAST ROW
+ */
+typedef struct SkipContext
+{
+	int64		pos;			/* last row absolute position */
+}			SkipContext;
+
 static bool rank_up(WindowObject winobj);
 static Datum leadlag_common(FunctionCallInfo fcinfo,
 							bool forward, bool withoffset, bool withdefault);
-
 
 /*
  * utility routine for *_rank functions.
@@ -674,7 +685,7 @@ window_last_value(PG_FUNCTION_ARGS)
 	bool		isnull;
 
 	result = WinGetFuncArgInFrame(winobj, 0,
-								  0, WINDOW_SEEK_TAIL, true,
+								  0, WINDOW_SEEK_TAIL, false,
 								  &isnull, NULL);
 	if (isnull)
 		PG_RETURN_NULL();
@@ -713,4 +724,26 @@ window_nth_value(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 
 	PG_RETURN_DATUM(result);
+}
+
+/*
+ * prev
+ * Dummy function to invoke RPR's navigation operator "PREV".
+ * This is *not* a window function.
+ */
+Datum
+window_prev(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_DATUM(PG_GETARG_DATUM(0));
+}
+
+/*
+ * next
+ * Dummy function to invoke RPR's navigation operation "NEXT".
+ * This is *not* a window function.
+ */
+Datum
+window_next(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_DATUM(PG_GETARG_DATUM(0));
 }

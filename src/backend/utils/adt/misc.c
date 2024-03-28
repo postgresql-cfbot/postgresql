@@ -565,6 +565,16 @@ pg_typeof(PG_FUNCTION_ARGS)
 	PG_RETURN_OID(get_fn_expr_argtype(fcinfo->flinfo, 0));
 }
 
+/*
+ * Return the base type of the argument.
+ * iff the argument is not a type of domain, Return the type of the argument as is.
+ */
+Datum
+pg_basetype(PG_FUNCTION_ARGS)
+{
+	Oid typid = PG_GETARG_OID(0);
+	PG_RETURN_OID(getBaseType(typid));
+}
 
 /*
  * Implementation of the COLLATE FOR expression; returns the collation

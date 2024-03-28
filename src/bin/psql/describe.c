@@ -4444,6 +4444,7 @@ listDomains(const char *pattern, bool verbose, bool showSystem)
 					  "SELECT n.nspname as \"%s\",\n"
 					  "       t.typname as \"%s\",\n"
 					  "       pg_catalog.format_type(t.typbasetype, t.typtypmod) as \"%s\",\n"
+					  "       pg_catalog.pg_basetype(t.typbasetype) as \"%s\",\n"
 					  "       (SELECT c.collname FROM pg_catalog.pg_collation c, pg_catalog.pg_type bt\n"
 					  "        WHERE c.oid = t.typcollation AND bt.oid = t.typbasetype AND t.typcollation <> bt.typcollation) as \"%s\",\n"
 					  "       CASE WHEN t.typnotnull THEN 'not null' END as \"%s\",\n"
@@ -4454,6 +4455,7 @@ listDomains(const char *pattern, bool verbose, bool showSystem)
 					  gettext_noop("Schema"),
 					  gettext_noop("Name"),
 					  gettext_noop("Type"),
+					  gettext_noop("Basetype"),
 					  gettext_noop("Collation"),
 					  gettext_noop("Nullable"),
 					  gettext_noop("Default"),

@@ -78,6 +78,7 @@
 #include "postmaster/syslogger.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
+#include "storage/s_lock.h"
 #include "tcop/tcopprot.h"
 #include "utils/guc_hooks.h"
 #include "utils/memutils.h"
@@ -349,6 +350,14 @@ errstart(int elevel, const char *domain)
 	bool		output_to_server;
 	bool		output_to_client = false;
 	int			i;
+
+	/*
+	 * Logging likely happens in many places without a outstanding attention,
+	 * and it's far more than a few dozen instructions, so it should be only
+	 * called when there is no spin lock is held. However it is allowed in the
+	 * quickdie process where it is possible that some spin lock being held.
+	 */
+	VerifyNoSpinLocksHeld(false);
 
 	/*
 	 * Check some cases in which we want to promote an error into a more

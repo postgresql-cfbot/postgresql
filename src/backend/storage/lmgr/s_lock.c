@@ -71,7 +71,7 @@ uint32	   *my_wait_event_info = &local_my_wait_event_info;
 #endif
 
 static int	spins_per_delay = DEFAULT_SPINS_PER_DELAY;
-
+SpinLockStatus spinStatus = {0, 0, 0, NULL, -1, NULL, false};
 
 /*
  * s_lock_stuck() - complain about a stuck spinlock
@@ -98,18 +98,17 @@ s_lock_stuck(const char *file, int line, const char *func)
 int
 s_lock(volatile slock_t *lock, const char *file, int line, const char *func)
 {
-	SpinDelayStatus delayStatus;
 
-	init_spin_delay(&delayStatus, file, line, func);
+	spinlock_prepare_spin(file, line, func);
 
 	while (TAS_SPIN(lock))
 	{
-		perform_spin_delay(&delayStatus);
+		spinlock_perform_delay();
 	}
 
-	finish_spin_delay(&delayStatus);
+	spinlock_finish_spin();
 
-	return delayStatus.delays;
+	return spinStatus.delays;
 }
 
 #ifdef USE_DEFAULT_S_UNLOCK
@@ -129,19 +128,19 @@ s_unlock(volatile slock_t *lock)
  * Wait while spinning on a contended spinlock.
  */
 void
-perform_spin_delay(SpinDelayStatus *status)
+spinlock_perform_delay()
 {
 	/* CPU-specific delay each time through the loop */
 	SPIN_DELAY();
 
 	/* Block the process every spins_per_delay tries */
-	if (++(status->spins) >= spins_per_delay)
+	if (++(spinStatus.spins) >= spins_per_delay)
 	{
-		if (++(status->delays) > NUM_DELAYS)
-			s_lock_stuck(status->file, status->line, status->func);
+		if (++(spinStatus.delays) > NUM_DELAYS)
+			s_lock_stuck(spinStatus.file, spinStatus.line, spinStatus.func);
 
-		if (status->cur_delay == 0) /* first time to delay? */
-			status->cur_delay = MIN_DELAY_USEC;
+		if (spinStatus.cur_delay == 0)	/* first time to delay? */
+			spinStatus.cur_delay = MIN_DELAY_USEC;
 
 		/*
 		 * Once we start sleeping, the overhead of reporting a wait event is
@@ -152,7 +151,7 @@ perform_spin_delay(SpinDelayStatus *status)
 		 * this is better than nothing.
 		 */
 		pgstat_report_wait_start(WAIT_EVENT_SPIN_DELAY);
-		pg_usleep(status->cur_delay);
+		pg_usleep(spinStatus.cur_delay);
 		pgstat_report_wait_end();
 
 #if defined(S_LOCK_TEST)
@@ -161,13 +160,13 @@ perform_spin_delay(SpinDelayStatus *status)
 #endif
 
 		/* increase delay by a random fraction between 1X and 2X */
-		status->cur_delay += (int) (status->cur_delay *
-									pg_prng_double(&pg_global_prng_state) + 0.5);
+		spinStatus.cur_delay += (int) (spinStatus.cur_delay *
+									   pg_prng_double(&pg_global_prng_state) + 0.5);
 		/* wrap back to minimum delay when max is exceeded */
-		if (status->cur_delay > MAX_DELAY_USEC)
-			status->cur_delay = MIN_DELAY_USEC;
+		if (spinStatus.cur_delay > MAX_DELAY_USEC)
+			spinStatus.cur_delay = MIN_DELAY_USEC;
 
-		status->spins = 0;
+		spinStatus.spins = 0;
 	}
 }
 
@@ -189,9 +188,9 @@ perform_spin_delay(SpinDelayStatus *status)
  * is handled by the two routines below.
  */
 void
-finish_spin_delay(SpinDelayStatus *status)
+spinlock_finish_spin()
 {
-	if (status->cur_delay == 0)
+	if (spinStatus.cur_delay == 0)
 	{
 		/* we never had to delay */
 		if (spins_per_delay < MAX_SPINS_PER_DELAY)
@@ -328,3 +327,25 @@ main()
 }
 
 #endif							/* S_LOCK_TEST */
+
+#ifdef USE_ASSERT_CHECKING
+void
+VerifyNoSpinLocksHeld(bool check_in_panic)
+{
+	if (!check_in_panic && spinStatus.in_panic)
+		return;
+
+	if (spinStatus.func != NULL)
+	{
+		/*
+		 * Now we have held a spin lock and then errstart is disallow, to
+		 * avoid the endless recursive call of VerifyNoSpinLocksHeld because
+		 * of the VerifyNoSpinLocksHeld checks in errstart, set
+		 * spinStatus.in_panic to true to break the cycle.
+		 */
+		spinStatus.in_panic = true;
+		elog(PANIC, "A spin lock has been held at %s:%d",
+			 spinStatus.func, spinStatus.line);
+	}
+}
+#endif

@@ -1233,6 +1233,13 @@ MemoryContextAllocExtended(MemoryContext context, Size size, int flags)
 		  AllocSizeIsValid(size)))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
 
+	/*
+	 * Memory allocation likely happens in many places without a outstanding
+	 * attention, and it's far more than a few dozen instructions, so it
+	 * should be only called when there is no spin lock is held.
+	 */
+	VerifyNoSpinLocksHeld(false);
+
 	context->isReset = false;
 
 	ret = context->methods->alloc(context, size, flags);
@@ -1310,6 +1317,9 @@ palloc(Size size)
 	Assert(MemoryContextIsValid(context));
 	AssertNotInCriticalSection(context);
 
+	/* see comments in MemoryContextAlloc. */
+	VerifyNoSpinLocksHeld(false);
+
 	context->isReset = false;
 
 	/*
@@ -1360,6 +1370,9 @@ palloc_extended(Size size, int flags)
 
 	Assert(MemoryContextIsValid(context));
 	AssertNotInCriticalSection(context);
+
+	/* see comments in MemoryContextAlloc. */
+	VerifyNoSpinLocksHeld(false);
 
 	context->isReset = false;
 
@@ -1630,6 +1643,9 @@ MemoryContextAllocHuge(MemoryContext context, Size size)
 
 	Assert(MemoryContextIsValid(context));
 	AssertNotInCriticalSection(context);
+
+	/* see comments in MemoryContextAlloc. */
+	VerifyNoSpinLocksHeld(false);
 
 	context->isReset = false;
 

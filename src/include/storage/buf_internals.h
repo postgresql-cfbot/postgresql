@@ -363,6 +363,7 @@ UnlockBufHdr(BufferDesc *desc, uint32 buf_state)
 {
 	pg_write_barrier();
 	pg_atomic_write_u32(&desc->state, buf_state & (~BM_LOCKED));
+	spinlock_finish_release();
 }
 
 /* in bufmgr.c */

@@ -815,8 +815,13 @@ extern void set_spins_per_delay(int shared_spins_per_delay);
 extern int	update_spins_per_delay(int shared_spins_per_delay);
 
 /*
- * Support for spin delay which is useful in various places where
- * spinlock-like procedures take place.
+ * Support for spin delay and spin misuse detection purpose.
+ *
+ * spin delay which is useful in various places where spinlock-like
+ * procedures take place.
+ *
+ * spin misuse is based on global spinStatus to know if a spin lock
+ * is held when a heavy operation is taking.
  */
 typedef struct
 {
@@ -826,22 +831,50 @@ typedef struct
 	const char *file;
 	int			line;
 	const char *func;
-} SpinDelayStatus;
+	bool		in_panic; /* works for spin lock misuse purpose. */
+} SpinLockStatus;
 
+extern PGDLLIMPORT SpinLockStatus spinStatus;
+
+#ifdef USE_ASSERT_CHECKING
+extern void VerifyNoSpinLocksHeld(bool check_in_panic);
 static inline void
-init_spin_delay(SpinDelayStatus *status,
-				const char *file, int line, const char *func)
+spinlock_prepare_acquire(const char *file, int line, const char *func)
 {
-	status->spins = 0;
-	status->delays = 0;
-	status->cur_delay = 0;
-	status->file = file;
-	status->line = line;
-	status->func = func;
+	/* it is not allowed to spin another lock when holding one already. */
+	VerifyNoSpinLocksHeld(true);
+	spinStatus.file = file;
+	spinStatus.line = line;
+	spinStatus.func = func;
+}
+static inline void
+spinlock_finish_release(void)
+{
+	spinStatus.file = NULL;
+	spinStatus.line = -1;
+	spinStatus.func = NULL;
 }
 
-#define init_local_spin_delay(status) init_spin_delay(status, __FILE__, __LINE__, __func__)
-extern void perform_spin_delay(SpinDelayStatus *status);
-extern void finish_spin_delay(SpinDelayStatus *status);
+#else
+#define VerifyNoSpinLocksHeld(check_in_panic) ((void) true)
+#define spinlock_prepare_acquire(file, line, func) ((void) true)
+#define spinlock_finish_release() ((void) true)
+#endif
+
+static inline void
+spinlock_prepare_spin(const char *file, int line, const char *func)
+{
+	spinStatus.spins = 0;
+	spinStatus.delays = 0;
+	spinStatus.cur_delay = 0;
+	spinStatus.file = file;
+	spinStatus.line = line;
+	spinStatus.func = func;
+	spinStatus.in_panic = false;
+}
+
+#define spinlock_local_prepare_spin() spinlock_prepare_spin( __FILE__, __LINE__, __func__)
+extern void spinlock_perform_delay(void);
+extern void spinlock_finish_spin(void);
 
 #endif	 /* S_LOCK_H */

@@ -50,13 +50,20 @@ typedef uint32 pg_crc32c;
 extern pg_crc32c pg_comp_crc32c_sse42(pg_crc32c crc, const void *data, size_t len);
 
 #elif defined(USE_ARMV8_CRC32C)
-/* Use ARMv8 CRC Extension instructions. */
 
-#define COMP_CRC32C(crc, data, len)							\
-	((crc) = pg_comp_crc32c_armv8((crc), (data), (len)))
 #define FIN_CRC32C(crc) ((crc) ^= 0xFFFFFFFF)
 
+#ifdef USE_ARMV8_CRYPTO
+/* Use ARMv8 CRC Extension and CRYPTO Extentsion instructions. */
+#define COMP_CRC32C(crc, data, len)							\
+	((crc) = pg_comp_crc32c_armv8_parallel((crc), (data), (len)))
+extern pg_crc32c pg_comp_crc32c_armv8_parallel(pg_crc32c crc, const void *data, size_t len);
+#else
+/* Use ARMv8 CRC Extension instructions. */
+#define COMP_CRC32C(crc, data, len)							\
+	((crc) = pg_comp_crc32c_armv8((crc), (data), (len)))
 extern pg_crc32c pg_comp_crc32c_armv8(pg_crc32c crc, const void *data, size_t len);
+#endif
 
 #elif defined(USE_LOONGARCH_CRC32C)
 /* Use LoongArch CRCC instructions. */
@@ -85,6 +92,7 @@ extern pg_crc32c pg_comp_crc32c_sse42(pg_crc32c crc, const void *data, size_t le
 #endif
 #ifdef USE_ARMV8_CRC32C_WITH_RUNTIME_CHECK
 extern pg_crc32c pg_comp_crc32c_armv8(pg_crc32c crc, const void *data, size_t len);
+extern pg_crc32c pg_comp_crc32c_armv8_parallel(pg_crc32c crc, const void *data, size_t len);
 #endif
 
 #else

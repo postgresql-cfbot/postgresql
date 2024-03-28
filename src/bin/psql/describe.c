@@ -1586,9 +1586,10 @@ describeOneTableDetails(const char *schemaname,
 	initPQExpBuffer(&tmpbuf);
 
 	/* Get general table info */
+	printfPQExpBuffer(&buf, _("/* Get general table information */\n"));
 	if (pset.sversion >= 120000)
 	{
-		printfPQExpBuffer(&buf,
+		appendPQExpBuffer(&buf,
 						  "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, "
 						  "c.relhastriggers, c.relrowsecurity, c.relforcerowsecurity, "
 						  "false AS relhasoids, c.relispartition, %s, c.reltablespace, "
@@ -1606,7 +1607,7 @@ describeOneTableDetails(const char *schemaname,
 	}
 	else if (pset.sversion >= 100000)
 	{
-		printfPQExpBuffer(&buf,
+		appendPQExpBuffer(&buf,
 						  "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, "
 						  "c.relhastriggers, c.relrowsecurity, c.relforcerowsecurity, "
 						  "c.relhasoids, c.relispartition, %s, c.reltablespace, "
@@ -1623,7 +1624,7 @@ describeOneTableDetails(const char *schemaname,
 	}
 	else if (pset.sversion >= 90500)
 	{
-		printfPQExpBuffer(&buf,
+		appendPQExpBuffer(&buf,
 						  "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, "
 						  "c.relhastriggers, c.relrowsecurity, c.relforcerowsecurity, "
 						  "c.relhasoids, false as relispartition, %s, c.reltablespace, "
@@ -1640,7 +1641,7 @@ describeOneTableDetails(const char *schemaname,
 	}
 	else if (pset.sversion >= 90400)
 	{
-		printfPQExpBuffer(&buf,
+		appendPQExpBuffer(&buf,
 						  "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, "
 						  "c.relhastriggers, false, false, c.relhasoids, "
 						  "false as relispartition, %s, c.reltablespace, "
@@ -1657,7 +1658,7 @@ describeOneTableDetails(const char *schemaname,
 	}
 	else
 	{
-		printfPQExpBuffer(&buf,
+		appendPQExpBuffer(&buf,
 						  "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, "
 						  "c.relhastriggers, false, false, c.relhasoids, "
 						  "false as relispartition, %s, c.reltablespace, "
@@ -1718,9 +1719,10 @@ describeOneTableDetails(const char *schemaname,
 		printQueryOpt myopt = pset.popt;
 		char	   *footers[2] = {NULL, NULL};
 
+		printfPQExpBuffer(&buf, _("/* Get general sequence information */\n"));
 		if (pset.sversion >= 100000)
 		{
-			printfPQExpBuffer(&buf,
+			appendPQExpBuffer(&buf,
 							  "SELECT pg_catalog.format_type(seqtypid, NULL) AS \"%s\",\n"
 							  "       seqstart AS \"%s\",\n"
 							  "       seqmin AS \"%s\",\n"
@@ -1744,7 +1746,7 @@ describeOneTableDetails(const char *schemaname,
 		}
 		else
 		{
-			printfPQExpBuffer(&buf,
+			appendPQExpBuffer(&buf,
 							  "SELECT 'bigint' AS \"%s\",\n"
 							  "       start_value AS \"%s\",\n"
 							  "       min_value AS \"%s\",\n"
@@ -1771,7 +1773,8 @@ describeOneTableDetails(const char *schemaname,
 			goto error_return;
 
 		/* Get the column that owns this sequence */
-		printfPQExpBuffer(&buf, "SELECT pg_catalog.quote_ident(nspname) || '.' ||"
+		printfPQExpBuffer(&buf, _("/* Get the column that owns this sequence */\n"));
+		appendPQExpBuffer(&buf, "SELECT pg_catalog.quote_ident(nspname) || '.' ||"
 						  "\n   pg_catalog.quote_ident(relname) || '.' ||"
 						  "\n   pg_catalog.quote_ident(attname),"
 						  "\n   d.deptype"
@@ -1850,7 +1853,8 @@ describeOneTableDetails(const char *schemaname,
 	 * duplicative test logic below.
 	 */
 	cols = 0;
-	printfPQExpBuffer(&buf, "SELECT a.attname");
+	printfPQExpBuffer(&buf, _("/* Get information about each column */\n"));
+	appendPQExpBuffer(&buf, "SELECT a.attname");
 	attname_col = cols++;
 	appendPQExpBufferStr(&buf, ",\n  pg_catalog.format_type(a.atttypid, a.atttypmod)");
 	atttype_col = cols++;
@@ -2150,7 +2154,8 @@ describeOneTableDetails(const char *schemaname,
 		/* Footer information for a partition child table */
 		PGresult   *result;
 
-		printfPQExpBuffer(&buf,
+		printfPQExpBuffer(&buf, _("/* Get partition information for this table */\n"));
+		appendPQExpBuffer(&buf,
 						  "SELECT inhparent::pg_catalog.regclass,\n"
 						  "  pg_catalog.pg_get_expr(c.relpartbound, c.oid),\n  ");
 
@@ -2205,7 +2210,8 @@ describeOneTableDetails(const char *schemaname,
 		/* Footer information for a partitioned table (partitioning parent) */
 		PGresult   *result;
 
-		printfPQExpBuffer(&buf,
+		printfPQExpBuffer(&buf, _("/* Get the partition key for this table */\n"));
+		appendPQExpBuffer(&buf,
 						  "SELECT pg_catalog.pg_get_partkeydef('%s'::pg_catalog.oid);",
 						  oid);
 		result = PSQLexec(buf.data);
@@ -2227,7 +2233,8 @@ describeOneTableDetails(const char *schemaname,
 		/* For a TOAST table, print name of owning table */
 		PGresult   *result;
 
-		printfPQExpBuffer(&buf,
+		printfPQExpBuffer(&buf, _("/* Find which table owns this TOAST table */\n"));
+		appendPQExpBuffer(&buf,
 						  "SELECT n.nspname, c.relname\n"
 						  "FROM pg_catalog.pg_class c"
 						  " JOIN pg_catalog.pg_namespace n"
@@ -2255,7 +2262,8 @@ describeOneTableDetails(const char *schemaname,
 		/* Footer information about an index */
 		PGresult   *result;
 
-		printfPQExpBuffer(&buf,
+		printfPQExpBuffer(&buf, _("/* Get information about this index */\n"));
+		appendPQExpBuffer(&buf,
 						  "SELECT i.indisunique, i.indisprimary, i.indisclustered, "
 						  "i.indisvalid,\n"
 						  "  (NOT i.indimmediate) AND "
@@ -2372,7 +2380,8 @@ describeOneTableDetails(const char *schemaname,
 		/* print indexes */
 		if (tableinfo.hasindex)
 		{
-			printfPQExpBuffer(&buf,
+			printfPQExpBuffer(&buf, _("/* Get information about each index */\n"));
+			appendPQExpBuffer(&buf,
 							  "SELECT c2.relname, i.indisprimary, i.indisunique, "
 							  "i.indisclustered, i.indisvalid, "
 							  "pg_catalog.pg_get_indexdef(i.indexrelid, 0, true),\n  "
@@ -2510,6 +2519,8 @@ describeOneTableDetails(const char *schemaname,
 		if (tableinfo.hastriggers ||
 			tableinfo.relkind == RELKIND_PARTITIONED_TABLE)
 		{
+			printfPQExpBuffer(&buf, _("/* Get information about foreign key constraints */\n"));
+
 			if (pset.sversion >= 120000 &&
 				(tableinfo.ispartition || tableinfo.relkind == RELKIND_PARTITIONED_TABLE))
 			{
@@ -2517,7 +2528,7 @@ describeOneTableDetails(const char *schemaname,
 				 * Put the constraints defined in this table first, followed
 				 * by the constraints defined in ancestor partitioned tables.
 				 */
-				printfPQExpBuffer(&buf,
+				appendPQExpBuffer(&buf,
 								  "SELECT conrelid = '%s'::pg_catalog.regclass AS sametable,\n"
 								  "       conname,\n"
 								  "       pg_catalog.pg_get_constraintdef(oid, true) AS condef,\n"
@@ -2530,7 +2541,7 @@ describeOneTableDetails(const char *schemaname,
 			}
 			else
 			{
-				printfPQExpBuffer(&buf,
+				appendPQExpBuffer(&buf,
 								  "SELECT true as sametable, conname,\n"
 								  "  pg_catalog.pg_get_constraintdef(r.oid, true) as condef,\n"
 								  "  conrelid::pg_catalog.regclass AS ontable\n"
@@ -2584,9 +2595,10 @@ describeOneTableDetails(const char *schemaname,
 		if (tableinfo.hastriggers ||
 			tableinfo.relkind == RELKIND_PARTITIONED_TABLE)
 		{
+			printfPQExpBuffer(&buf, _("/* Get information about incoming foreign key references */\n"));
 			if (pset.sversion >= 120000)
 			{
-				printfPQExpBuffer(&buf,
+				appendPQExpBuffer(&buf,
 								  "SELECT conname, conrelid::pg_catalog.regclass AS ontable,\n"
 								  "       pg_catalog.pg_get_constraintdef(oid, true) AS condef\n"
 								  "  FROM pg_catalog.pg_constraint c\n"
@@ -2598,7 +2610,7 @@ describeOneTableDetails(const char *schemaname,
 			}
 			else
 			{
-				printfPQExpBuffer(&buf,
+				appendPQExpBuffer(&buf,
 								  "SELECT conname, conrelid::pg_catalog.regclass AS ontable,\n"
 								  "       pg_catalog.pg_get_constraintdef(oid, true) AS condef\n"
 								  "  FROM pg_catalog.pg_constraint\n"
@@ -2636,7 +2648,8 @@ describeOneTableDetails(const char *schemaname,
 		/* print any row-level policies */
 		if (pset.sversion >= 90500)
 		{
-			printfPQExpBuffer(&buf, "SELECT pol.polname,");
+			printfPQExpBuffer(&buf, _("/* Get information about row-level policies */\n"));
+			appendPQExpBuffer(&buf, "SELECT pol.polname,");
 			if (pset.sversion >= 100000)
 				appendPQExpBufferStr(&buf,
 									 " pol.polpermissive,\n");
@@ -2716,9 +2729,10 @@ describeOneTableDetails(const char *schemaname,
 		}
 
 		/* print any extended statistics */
+		printfPQExpBuffer(&buf, _("/* Get information about extended statistics */\n"));
 		if (pset.sversion >= 140000)
 		{
-			printfPQExpBuffer(&buf,
+			appendPQExpBuffer(&buf,
 							  "SELECT oid, "
 							  "stxrelid::pg_catalog.regclass, "
 							  "stxnamespace::pg_catalog.regnamespace::pg_catalog.text AS nsp, "
@@ -2816,7 +2830,7 @@ describeOneTableDetails(const char *schemaname,
 		}
 		else if (pset.sversion >= 100000)
 		{
-			printfPQExpBuffer(&buf,
+			appendPQExpBuffer(&buf,
 							  "SELECT oid, "
 							  "stxrelid::pg_catalog.regclass, "
 							  "stxnamespace::pg_catalog.regnamespace AS nsp, "
@@ -2895,7 +2909,8 @@ describeOneTableDetails(const char *schemaname,
 		/* print rules */
 		if (tableinfo.hasrules && tableinfo.relkind != RELKIND_MATVIEW)
 		{
-			printfPQExpBuffer(&buf,
+			printfPQExpBuffer(&buf, _("/* Get information about each rule for this table */\n"));
+			appendPQExpBuffer(&buf,
 							  "SELECT r.rulename, trim(trailing ';' from pg_catalog.pg_get_ruledef(r.oid, true)), "
 							  "ev_enabled\n"
 							  "FROM pg_catalog.pg_rewrite r\n"
@@ -2978,9 +2993,10 @@ describeOneTableDetails(const char *schemaname,
 		/* print any publications */
 		if (pset.sversion >= 100000)
 		{
+			printfPQExpBuffer(&buf, _("/* Get information about each publication using this table */\n"));
 			if (pset.sversion >= 150000)
 			{
-				printfPQExpBuffer(&buf,
+				appendPQExpBuffer(&buf,
 								  "SELECT pubname\n"
 								  "     , NULL\n"
 								  "     , NULL\n"
@@ -3012,7 +3028,7 @@ describeOneTableDetails(const char *schemaname,
 			}
 			else
 			{
-				printfPQExpBuffer(&buf,
+				appendPQExpBuffer(&buf,
 								  "SELECT pubname\n"
 								  "     , NULL\n"
 								  "     , NULL\n"
@@ -3062,7 +3078,9 @@ describeOneTableDetails(const char *schemaname,
 		/* If verbose, print NOT NULL constraints */
 		if (verbose)
 		{
-			printfPQExpBuffer(&buf,
+			printfPQExpBuffer(&buf, _("/* Get information about NOT NULL constraints */\n"));
+			appendPQExpBuffer(&buf,
+							  "/* Find NOT NULL constraints */\n"
 							  "SELECT co.conname, at.attname, co.connoinherit, co.conislocal,\n"
 							  "co.coninhcount <> 0\n"
 							  "FROM pg_catalog.pg_constraint co JOIN\n"
@@ -3134,7 +3152,8 @@ describeOneTableDetails(const char *schemaname,
 		/* print rules */
 		if (tableinfo.hasrules)
 		{
-			printfPQExpBuffer(&buf,
+			printfPQExpBuffer(&buf, _("/* Get information about each rule for this view */\n"));
+			appendPQExpBuffer(&buf,
 							  "SELECT r.rulename, trim(trailing ';' from pg_catalog.pg_get_ruledef(r.oid, true))\n"
 							  "FROM pg_catalog.pg_rewrite r\n"
 							  "WHERE r.ev_class = '%s' AND r.rulename != '_RETURN' ORDER BY 1;",
@@ -3171,7 +3190,8 @@ describeOneTableDetails(const char *schemaname,
 		PGresult   *result;
 		int			tuples;
 
-		printfPQExpBuffer(&buf,
+		printfPQExpBuffer(&buf, _("/* Get information about each trigger on this table */\n"));
+		appendPQExpBuffer(&buf,
 						  "SELECT t.tgname, "
 						  "pg_catalog.pg_get_triggerdef(t.oid, true), "
 						  "t.tgenabled, t.tgisinternal,\n");
@@ -3390,6 +3410,7 @@ describeOneTableDetails(const char *schemaname,
 
 		/* print tables inherited from (exclude partitioned parents) */
 		printfPQExpBuffer(&buf,
+						  "/* Find tables inherited from */\n"
 						  "SELECT c.oid::pg_catalog.regclass\n"
 						  "FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i\n"
 						  "WHERE c.oid = i.inhparent AND i.inhrelid = '%s'\n"
@@ -3426,8 +3447,9 @@ describeOneTableDetails(const char *schemaname,
 		}
 
 		/* print child tables (with additional info if partitions) */
+		printfPQExpBuffer(&buf, _("/* Get information about child tables */\n"));
 		if (pset.sversion >= 140000)
-			printfPQExpBuffer(&buf,
+			appendPQExpBuffer(&buf,
 							  "SELECT c.oid::pg_catalog.regclass, c.relkind,"
 							  " inhdetachpending,"
 							  " pg_catalog.pg_get_expr(c.relpartbound, c.oid)\n"
@@ -3437,7 +3459,7 @@ describeOneTableDetails(const char *schemaname,
 							  " c.oid::pg_catalog.regclass::pg_catalog.text;",
 							  oid);
 		else if (pset.sversion >= 100000)
-			printfPQExpBuffer(&buf,
+			appendPQExpBuffer(&buf,
 							  "SELECT c.oid::pg_catalog.regclass, c.relkind,"
 							  " false AS inhdetachpending,"
 							  " pg_catalog.pg_get_expr(c.relpartbound, c.oid)\n"
@@ -3447,7 +3469,7 @@ describeOneTableDetails(const char *schemaname,
 							  " c.oid::pg_catalog.regclass::pg_catalog.text;",
 							  oid);
 		else
-			printfPQExpBuffer(&buf,
+			appendPQExpBuffer(&buf,
 							  "SELECT c.oid::pg_catalog.regclass, c.relkind,"
 							  " false AS inhdetachpending, NULL\n"
 							  "FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i\n"

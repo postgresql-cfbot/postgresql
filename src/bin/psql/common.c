@@ -42,6 +42,7 @@ static int	ExecQueryAndProcessResults(const char *query,
 static bool command_no_begin(const char *query);
 static bool is_select_command(const char *query);
 
+extern char *curcmd;
 
 /*
  * openQueryOutputFile --- attempt to open a query output file
@@ -581,6 +582,12 @@ PGresult *
 PSQLexec(const char *query)
 {
 	PGresult   *res;
+	char *label = "";
+	const char *asterisks = "********************"; /* ensure this is as long as the
+											   * longest command that might be
+											   * displayed */
+	int curcmd_length = 0;
+
 
 	if (!pset.db)
 	{
@@ -588,20 +595,29 @@ PSQLexec(const char *query)
 		return NULL;
 	}
 
+	if (curcmd)
+	{
+		label = psprintf(" (\\%s)", curcmd);
+		curcmd_length = strlen(label);
+	}
+
 	if (pset.echo_hidden != PSQL_ECHO_HIDDEN_OFF)
 	{
-		printf(_("/******** QUERY *********/\n"
+		printf(_("/******** QUERY%s *********/\n"
 				 "%s\n"
-				 "/************************/\n\n"), query);
+				 "/************************%.*s/\n\n"), label, query, curcmd_length, asterisks);
 		fflush(stdout);
 		if (pset.logfile)
 		{
 			fprintf(pset.logfile,
-					_("/******** QUERY *********/\n"
+					_("/******** QUERY%s *********/\n"
 					  "%s\n"
-					  "/************************/\n\n"), query);
+					  "/************************%.*s/\n\n"), label, query, curcmd_length, asterisks);
 			fflush(pset.logfile);
 		}
+
+		if (curcmd)
+			pfree(label);
 
 		if (pset.echo_hidden == PSQL_ECHO_HIDDEN_NOEXEC)
 			return NULL;

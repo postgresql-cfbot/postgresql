@@ -13,7 +13,9 @@
 #ifndef RECONSTRUCT_H
 #define RECONSTRUCT_H
 
+#include "c.h"
 #include "common/checksum_helper.h"
+#include "common/file_utils.h"
 #include "load_manifest.h"
 
 extern void reconstruct_from_incremental_file(char *input_filename,
@@ -28,6 +30,7 @@ extern void reconstruct_from_incremental_file(char *input_filename,
 											  int *checksum_length,
 											  uint8 **checksum_payload,
 											  bool debug,
-											  bool dry_run);
+											  bool dry_run,
+											  CopyMode copy_mode);
 
 #endif

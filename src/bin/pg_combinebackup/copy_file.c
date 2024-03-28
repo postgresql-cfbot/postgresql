@@ -14,6 +14,7 @@
 #include <copyfile.h>
 #endif
 #include <fcntl.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -23,6 +24,10 @@
 
 static void copy_file_blocks(const char *src, const char *dst,
 							 pg_checksum_context *checksum_ctx);
+
+static void copy_file_clone(const char *src, const char *dst);
+
+static void copy_file_by_range(const char *src, const char *dst);
 
 #ifdef WIN32
 static void copy_file_copyfile(const char *src, const char *dst);
@@ -35,8 +40,11 @@ static void copy_file_copyfile(const char *src, const char *dst);
  */
 void
 copy_file(const char *src, const char *dst,
-		  pg_checksum_context *checksum_ctx, bool dry_run)
+		  pg_checksum_context *checksum_ctx, bool dry_run,
+		  CopyMode copy_mode)
 {
+	char   *strategy_name = NULL;
+
 	/*
 	 * In dry-run mode, we don't actually copy anything, nor do we read any
 	 * data from the source file, but we do verify that we can open it.
@@ -52,57 +60,86 @@ copy_file(const char *src, const char *dst,
 	}
 
 	/*
+	 *
+	 * If we need to compute a checksum, but the user perhaps requested
+	 * a special copy method that does not support this, fallback to the
+	 * default block-by-block copy. We don't want to fail if just one of
+	 * many files requires checksum, etc.
+	 *
 	 * If we don't need to compute a checksum, then we can use any special
 	 * operating system primitives that we know about to copy the file; this
-	 * may be quicker than a naive block copy.
+	 * may be quicker than a naive block copy. We only do this for WIN32.
+	 * On other operating systems the user has to explicitly specify one of
+	 * the available primitives - there may be multiple, we don't know which
+	 * are reliable/preferred.
 	 */
-	if (checksum_ctx->type == CHECKSUM_TYPE_NONE)
+	if (checksum_ctx->type != CHECKSUM_TYPE_NONE)
 	{
-		char	   *strategy_name = NULL;
-		void		(*strategy_implementation) (const char *, const char *) = NULL;
-
+		/* fallback to block-by-block copy */
+		copy_mode = COPY_MODE_COPY;
+	}
 #ifdef WIN32
-		strategy_name = "CopyFile";
-		strategy_implementation = copy_file_copyfile;
+	else
+	{
+		copy_mode = COPY_MODE_COPYFILE;
+	}
 #endif
 
-		if (strategy_name != NULL)
-		{
-			if (dry_run)
-				pg_log_debug("would copy \"%s\" to \"%s\" using strategy %s",
-							 src, dst, strategy_name);
-			else
-			{
-				pg_log_debug("copying \"%s\" to \"%s\" using strategy %s",
-							 src, dst, strategy_name);
-				(*strategy_implementation) (src, dst);
-			}
-			return;
-		}
+	/* Determine the name of the copy strategy for use in log messages. */
+	switch (copy_mode)
+	{
+		case COPY_MODE_CLONE:
+			strategy_name = "clone";
+			break;
+		case COPY_MODE_COPY:
+			/* leave NULL for simple block-by-block copy */
+			break;
+		case COPY_MODE_COPY_FILE_RANGE:
+			strategy_name = "copy_file_range";
+			break;
+#ifdef WIN32
+		case COPY_MODE_COPYFILE:
+			strategy_name = "CopyFile";
+			break;
+#endif
 	}
 
-	/*
-	 * Fall back to the simple approach of reading and writing all the blocks,
-	 * feeding them into the checksum context as we go.
-	 */
 	if (dry_run)
 	{
-		if (checksum_ctx->type == CHECKSUM_TYPE_NONE)
+		if (strategy_name)
+			pg_log_debug("would copy \"%s\" to \"%s\" using strategy %s",
+						 src, dst, strategy_name);
+		else
 			pg_log_debug("would copy \"%s\" to \"%s\"",
 						 src, dst);
-		else
-			pg_log_debug("would copy \"%s\" to \"%s\" and checksum with %s",
-						 src, dst, pg_checksum_type_name(checksum_ctx->type));
 	}
 	else
 	{
-		if (checksum_ctx->type == CHECKSUM_TYPE_NONE)
+
+		if (strategy_name)
+			pg_log_debug("copying \"%s\" to \"%s\" using strategy %s",
+						 src, dst, strategy_name);
+		else
 			pg_log_debug("copying \"%s\" to \"%s\"",
 						 src, dst);
-		else
-			pg_log_debug("copying \"%s\" to \"%s\" and checksumming with %s",
-						 src, dst, pg_checksum_type_name(checksum_ctx->type));
-		copy_file_blocks(src, dst, checksum_ctx);
+
+		switch (copy_mode)
+		{
+			case COPY_MODE_CLONE:
+				copy_file_clone(src, dst);
+				break;
+			case COPY_MODE_COPY:
+				copy_file_blocks(src, dst, checksum_ctx);
+				break;
+			case COPY_MODE_COPY_FILE_RANGE:
+				copy_file_by_range(src, dst);
+				break;
+#ifdef WIN32
+			case COPY_MODE_COPYFILE:
+				copy_file_copyfile(src, dst);
+				break;
+#endif
+		}
 	}
 }
 
@@ -156,6 +193,67 @@ copy_file_blocks(const char *src, const char *dst,
 	close(dest_fd);
 }
 
+static void
+copy_file_clone(const char *src, const char *dest)
+{
+#if defined(HAVE_COPYFILE) && defined(COPYFILE_CLONE_FORCE)
+	if (copyfile(src, dest, NULL, COPYFILE_CLONE_FORCE) < 0)
+		pg_fatal("error while cloning file \"%s\" to \"%s\": %m", src, dest);
+#elif defined(__linux__) && defined(FICLONE)
+	{
+		if ((src_fd = open(src, O_RDONLY | PG_BINARY, 0)) < 0)
+			pg_fatal("could not open file \"%s\": %m", src);
+
+		if ((dest_fd = open(dest, O_RDWR | O_CREAT | O_EXCL | PG_BINARY,
+							pg_file_create_mode)) < 0)
+			pg_fatal("could not create file \"%s\": %m", dest);
+
+		if (ioctl(dest_fd, FICLONE, src_fd) < 0)
+		{
+			int			save_errno = errno;
+
+			unlink(dest);
+
+			pg_fatal("error while cloning file \"%s\" to \"%s\": %s",
+					 src, dest);
+		}
+	}
+#else
+	pg_fatal("file cloning not supported on this platform");
+#endif
+}
+
+static void
+copy_file_by_range(const char *src, const char *dest)
+{
+#if defined(HAVE_COPY_FILE_RANGE)
+	int			src_fd;
+	int			dest_fd;
+	ssize_t		nbytes;
+
+	if ((src_fd = open(src, O_RDONLY | PG_BINARY, 0)) < 0)
+		pg_fatal("could not open file \"%s\": %m", src);
+
+	if ((dest_fd = open(dest, O_RDWR | O_CREAT | O_EXCL | PG_BINARY,
+						pg_file_create_mode)) < 0)
+		pg_fatal("could not create file \"%s\": %m", dest);
+
+	do
+	{
+		nbytes = copy_file_range(src_fd, NULL, dest_fd, NULL, SSIZE_MAX, 0);
+		if (nbytes < 0)
+			pg_fatal("error while copying file range from \"%s\" to \"%s\": %m",
+					 src, dest);
+	} while (nbytes > 0);
+
+	close(src_fd);
+	close(dest_fd);
+#else
+	pg_fatal("copy_file_range not supported on this platform");
+#endif
+}
+
+/* XXX maybe this should do the check internally, same as the other functions? */
 #ifdef WIN32
 static void
 copy_file_copyfile(const char *src, const char *dst)

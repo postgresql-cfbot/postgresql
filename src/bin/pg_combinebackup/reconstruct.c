@@ -59,7 +59,8 @@ static void write_reconstructed_file(char *input_filename,
 									 off_t *offsetmap,
 									 pg_checksum_context *checksum_ctx,
 									 bool debug,
-									 bool dry_run);
+									 bool dry_run,
+									 CopyMode copy_mode);
 static void read_bytes(rfile *rf, void *buffer, unsigned length);
 
 /*
@@ -90,7 +91,8 @@ reconstruct_from_incremental_file(char *input_filename,
 								  int *checksum_length,
 								  uint8 **checksum_payload,
 								  bool debug,
-								  bool dry_run)
+								  bool dry_run,
+								  CopyMode copy_method)
 {
 	rfile	  **source;
 	rfile	   *latest_source = NULL;
@@ -319,12 +321,13 @@ reconstruct_from_incremental_file(char *input_filename,
 	 */
 	if (copy_source != NULL)
 		copy_file(copy_source->filename, output_filename,
-				  &checksum_ctx, dry_run);
+				  &checksum_ctx, dry_run, copy_method);
 	else
 	{
 		write_reconstructed_file(input_filename, output_filename,
 								 block_length, sourcemap, offsetmap,
-								 &checksum_ctx, debug, dry_run);
+								 &checksum_ctx, debug, dry_run,
+								 copy_method);
 		debug_reconstruction(n_prior_backups + 1, source, dry_run);
 	}
 
@@ -527,7 +530,8 @@ write_reconstructed_file(char *input_filename,
 						 off_t *offsetmap,
 						 pg_checksum_context *checksum_ctx,
 						 bool debug,
-						 bool dry_run)
+						 bool dry_run,
+						 CopyMode copy_mode)
 {
 	int			wfd = -1;
 	unsigned	i;
@@ -628,6 +632,30 @@ write_reconstructed_file(char *input_filename,
 		/* Skip the rest of this in dry-run mode. */
 		if (dry_run)
 			continue;
+
+		/*
+		 * If requested, copy the block using copy_file_range.
+		 *
+		 * We can'd do this if the block needs to be zero-filled or when we
+		 * need to update checksum.
+		 */
+		if ((copy_mode == COPY_MODE_COPY_FILE_RANGE) &&
+			(s != NULL) && (checksum_ctx->type == CHECKSUM_TYPE_NONE))
+		{
+#if defined(HAVE_COPY_FILE_RANGE)
+			wb = copy_file_range(s->fd, &offsetmap[i], wfd, NULL, BLCKSZ, 0);
+
+			if (wb < 0)
+				pg_fatal("error while copying file range from \"%s\" to \"%s\": %m",
+						 input_filename, output_filename);
+			else if (wb != BLCKSZ)
+				pg_fatal("could not write file \"%s\": wrote only %d of %d bytes",
+						 output_filename, wb, BLCKSZ);
+#else
+			pg_fatal("copy_file_range not supported on this platform");
+#endif
+			continue;
+		}
 
 		/* Read or zero-fill the block as appropriate. */
 		if (s == NULL)

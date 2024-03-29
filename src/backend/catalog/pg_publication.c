@@ -395,6 +395,7 @@ publication_add_relation(Oid pubid, PublicationRelInfo *pri,
 				referenced;
 	List	   *relids = NIL;
 	int			i;
+	bool		locked = false;
 
 	rel = table_open(PublicationRelRelationId, RowExclusiveLock);
 
@@ -457,10 +458,13 @@ publication_add_relation(Oid pubid, PublicationRelInfo *pri,
 
 	/* Add dependency on the publication */
 	ObjectAddressSet(referenced, PublicationRelationId, pubid);
+	LockNotPinnedObject(PublicationRelationId, pubid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
 
 	/* Add dependency on the relation */
 	ObjectAddressSet(referenced, RelationRelationId, relid);
+
+	LockNotPinnedObject(RelationRelationId, relid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
 
 	/* Add dependency on the objects mentioned in the qualifications */
@@ -474,6 +478,11 @@ publication_add_relation(Oid pubid, PublicationRelInfo *pri,
 	while ((i = bms_next_member(attnums, i)) >= 0)
 	{
 		ObjectAddressSubSet(referenced, RelationRelationId, relid, i);
+		if (!locked)
+		{
+			LockNotPinnedObject(RelationRelationId, relid);
+			locked = true;
+		}
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 	}
 
@@ -643,10 +652,12 @@ publication_add_schema(Oid pubid, Oid schemaid, bool if_not_exists)
 
 	/* Add dependency on the publication */
 	ObjectAddressSet(referenced, PublicationRelationId, pubid);
+	LockNotPinnedObject(PublicationRelationId, pubid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
 
 	/* Add dependency on the schema */
 	ObjectAddressSet(referenced, NamespaceRelationId, schemaid);
+	LockNotPinnedObject(NamespaceRelationId, schemaid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
 
 	/* Close the table */

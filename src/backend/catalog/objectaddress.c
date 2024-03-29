@@ -2591,6 +2591,63 @@ get_object_namespace(const ObjectAddress *address)
 }
 
 /*
+ * ObjectByIdExist
+ *
+ * Return whether the given object exists.
+ *
+ * Works for most catalogs, if no special processing is needed.
+ */
+bool
+ObjectByIdExist(const ObjectAddress *address)
+{
+	HeapTuple	tuple;
+	int			cache;
+	const ObjectPropertyType *property;
+
+	property = get_object_property_data(address->classId);
+
+	cache = property->oid_catcache_id;
+
+	if (cache >= 0)
+	{
+		/* Fetch tuple from syscache. */
+		tuple = SearchSysCache1(cache, ObjectIdGetDatum(address->objectId));
+
+		if (!HeapTupleIsValid(tuple))
+		{
+			return false;
+		}
+
+		ReleaseSysCache(tuple);
+
+		return true;
+	}
+	else
+	{
+		Relation	rel;
+		ScanKeyData skey[1];
+		SysScanDesc scan;
+
+		rel = table_open(address->classId, AccessShareLock);
+
+		ScanKeyInit(&skey[0],
+					get_object_attnum_oid(address->classId),
+					BTEqualStrategyNumber, F_OIDEQ,
+					ObjectIdGetDatum(address->objectId));
+
+		scan = systable_beginscan(rel, get_object_oid_index(address->classId), true,
+								  NULL, 1, skey);
+
+		/* we expect exactly one match */
+		tuple = systable_getnext(scan);
+		systable_endscan(scan);
+		table_close(rel, AccessShareLock);
+
+		return (HeapTupleIsValid(tuple));
+	}
+}
+
+/*
  * Return ObjectType for the given object type as given by
  * getObjectTypeDescription; if no valid ObjectType code exists, but it's a
  * possible output type from getObjectTypeDescription, return -1.

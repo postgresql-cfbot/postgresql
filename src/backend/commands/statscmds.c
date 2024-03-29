@@ -88,6 +88,7 @@ CreateStatistics(CreateStatsStmt *stmt)
 	bool		build_mcv;
 	bool		build_expressions;
 	bool		requested_type = false;
+	bool		locked_object = false;
 	int			i;
 	ListCell   *cell;
 	ListCell   *cell2;
@@ -536,6 +537,12 @@ CreateStatistics(CreateStatsStmt *stmt)
 	for (i = 0; i < nattnums; i++)
 	{
 		ObjectAddressSubSet(parentobject, RelationRelationId, relid, attnums[i]);
+
+		if (!locked_object)
+		{
+			LockNotPinnedObject(RelationRelationId, relid);
+			locked_object = true;
+		}
 		recordDependencyOn(&myself, &parentobject, DEPENDENCY_AUTO);
 	}
 
@@ -553,6 +560,8 @@ CreateStatistics(CreateStatsStmt *stmt)
 	if (!nattnums)
 	{
 		ObjectAddressSet(parentobject, RelationRelationId, relid);
+
+		LockNotPinnedObject(RelationRelationId, relid);
 		recordDependencyOn(&myself, &parentobject, DEPENDENCY_AUTO);
 	}
 
@@ -573,6 +582,7 @@ CreateStatistics(CreateStatsStmt *stmt)
 	 * than the underlying table(s).
 	 */
 	ObjectAddressSet(parentobject, NamespaceRelationId, namespaceId);
+	LockNotPinnedObject(NamespaceRelationId, namespaceId);
 	recordDependencyOn(&myself, &parentobject, DEPENDENCY_NORMAL);
 
 	recordDependencyOnOwner(StatisticExtRelationId, statoid, stxowner);

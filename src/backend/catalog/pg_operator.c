@@ -251,6 +251,16 @@ OperatorShellMake(const char *operatorName,
 	values[Anum_pg_operator_oprrest - 1] = ObjectIdGetDatum(InvalidOid);
 	values[Anum_pg_operator_oprjoin - 1] = ObjectIdGetDatum(InvalidOid);
 
+	/* Lock dependent objects */
+	if (OidIsValid(operatorNamespace))
+		LockNotPinnedObject(NamespaceRelationId, operatorNamespace);
+
+	if (OidIsValid(leftTypeId))
+		LockNotPinnedObject(TypeRelationId, leftTypeId);
+
+	if (OidIsValid(rightTypeId))
+		LockNotPinnedObject(TypeRelationId, rightTypeId);
+
 	/*
 	 * create a new operator tuple
 	 */
@@ -512,6 +522,15 @@ OperatorCreate(const char *operatorName,
 
 		CatalogTupleInsert(pg_operator_desc, tup);
 	}
+
+	/* Lock dependent objects */
+	LockNotPinnedObject(NamespaceRelationId, operatorNamespace);
+	LockNotPinnedObject(TypeRelationId, leftTypeId);
+	LockNotPinnedObject(TypeRelationId, rightTypeId);
+	LockNotPinnedObject(TypeRelationId, operResultType);
+	LockNotPinnedObject(ProcedureRelationId, procedureId);
+	LockNotPinnedObject(ProcedureRelationId, restrictionId);
+	LockNotPinnedObject(ProcedureRelationId, joinId);
 
 	/* Add dependencies for the entry */
 	address = makeOperatorDependencies(tup, true, isUpdate);

@@ -104,6 +104,7 @@ CreateAccessMethod(CreateAmStmt *stmt)
 	referenced.objectId = amhandler;
 	referenced.objectSubId = 0;
 
+	LockNotPinnedObject(ProcedureRelationId, amhandler);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 
 	recordDependencyOnCurrentExtension(&myself, false);

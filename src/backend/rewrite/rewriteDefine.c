@@ -155,6 +155,7 @@ InsertRule(const char *rulname,
 	referenced.objectId = eventrel_oid;
 	referenced.objectSubId = 0;
 
+	LockNotPinnedObject(RelationRelationId, eventrel_oid);
 	recordDependencyOn(&myself, &referenced,
 					   (evtype == CMD_SELECT) ? DEPENDENCY_INTERNAL : DEPENDENCY_AUTO);
 

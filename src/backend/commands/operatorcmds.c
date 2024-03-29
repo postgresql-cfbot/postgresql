@@ -33,6 +33,7 @@
 
 #include "access/htup_details.h"
 #include "access/table.h"
+#include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_namespace.h"
@@ -656,11 +657,15 @@ AlterOperator(AlterOperatorStmt *stmt)
 	{
 		replaces[Anum_pg_operator_oprrest - 1] = true;
 		values[Anum_pg_operator_oprrest - 1] = ObjectIdGetDatum(restrictionOid);
+		if (OidIsValid(restrictionOid))
+			LockNotPinnedObject(ProcedureRelationId, restrictionOid);
 	}
 	if (updateJoin)
 	{
 		replaces[Anum_pg_operator_oprjoin - 1] = true;
 		values[Anum_pg_operator_oprjoin - 1] = ObjectIdGetDatum(joinOid);
+		if (OidIsValid(joinOid))
+			LockNotPinnedObject(ProcedureRelationId, joinOid);
 	}
 	if (OidIsValid(commutatorOid))
 	{
@@ -687,6 +692,31 @@ AlterOperator(AlterOperatorStmt *stmt)
 							values, nulls, replaces);
 
 	CatalogTupleUpdate(catalog, &tup->t_self, tup);
+
+
+	/* Lock dependent objects */
+	oprForm = (Form_pg_operator) GETSTRUCT(tup);
+
+	if (OidIsValid(oprForm->oprnamespace))
+		LockNotPinnedObject(NamespaceRelationId, oprForm->oprnamespace);
+
+	if (OidIsValid(oprForm->oprleft))
+		LockNotPinnedObject(TypeRelationId, oprForm->oprleft);
+
+	if (OidIsValid(oprForm->oprright))
+		LockNotPinnedObject(TypeRelationId, oprForm->oprright);
+
+	if (OidIsValid(oprForm->oprresult))
+		LockNotPinnedObject(TypeRelationId, oprForm->oprresult);
+
+	if (OidIsValid(oprForm->oprcode))
+		LockNotPinnedObject(ProcedureRelationId, oprForm->oprcode);
+
+	if (OidIsValid(oprForm->oprrest))
+		LockNotPinnedObject(ProcedureRelationId, oprForm->oprrest);
+
+	if (OidIsValid(oprForm->oprjoin))
+		LockNotPinnedObject(ProcedureRelationId, oprForm->oprjoin);
 
 	address = makeOperatorDependencies(tup, false, true);
 

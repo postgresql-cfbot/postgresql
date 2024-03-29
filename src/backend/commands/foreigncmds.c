@@ -642,6 +642,7 @@ CreateForeignDataWrapper(ParseState *pstate, CreateFdwStmt *stmt)
 		referenced.classId = ProcedureRelationId;
 		referenced.objectId = fdwhandler;
 		referenced.objectSubId = 0;
+		LockNotPinnedObject(ProcedureRelationId, fdwhandler);
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 	}
 
@@ -650,6 +651,7 @@ CreateForeignDataWrapper(ParseState *pstate, CreateFdwStmt *stmt)
 		referenced.classId = ProcedureRelationId;
 		referenced.objectId = fdwvalidator;
 		referenced.objectSubId = 0;
+		LockNotPinnedObject(ProcedureRelationId, fdwvalidator);
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 	}
 
@@ -811,6 +813,7 @@ AlterForeignDataWrapper(ParseState *pstate, AlterFdwStmt *stmt)
 			referenced.classId = ProcedureRelationId;
 			referenced.objectId = fdwhandler;
 			referenced.objectSubId = 0;
+			LockNotPinnedObject(ProcedureRelationId, fdwhandler);
 			recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 		}
 
@@ -819,6 +822,7 @@ AlterForeignDataWrapper(ParseState *pstate, AlterFdwStmt *stmt)
 			referenced.classId = ProcedureRelationId;
 			referenced.objectId = fdwvalidator;
 			referenced.objectSubId = 0;
+			LockNotPinnedObject(ProcedureRelationId, fdwvalidator);
 			recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 		}
 	}
@@ -951,6 +955,7 @@ CreateForeignServer(CreateForeignServerStmt *stmt)
 	referenced.classId = ForeignDataWrapperRelationId;
 	referenced.objectId = fdw->fdwid;
 	referenced.objectSubId = 0;
+	LockNotPinnedObject(ForeignDataWrapperRelationId, fdw->fdwid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 
 	recordDependencyOnOwner(ForeignServerRelationId, srvId, ownerId);
@@ -1195,6 +1200,7 @@ CreateUserMapping(CreateUserMappingStmt *stmt)
 	referenced.classId = ForeignServerRelationId;
 	referenced.objectId = srv->serverid;
 	referenced.objectSubId = 0;
+	LockNotPinnedObject(ForeignServerRelationId, srv->serverid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 
 	if (OidIsValid(useId))
@@ -1472,6 +1478,7 @@ CreateForeignTable(CreateForeignTableStmt *stmt, Oid relid)
 	referenced.classId = ForeignServerRelationId;
 	referenced.objectId = server->serverid;
 	referenced.objectSubId = 0;
+	LockNotPinnedObject(ForeignServerRelationId, server->serverid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 
 	table_close(ftrel, RowExclusiveLock);

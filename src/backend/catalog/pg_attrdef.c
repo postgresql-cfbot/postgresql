@@ -178,6 +178,7 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 	colobject.objectId = RelationGetRelid(rel);
 	colobject.objectSubId = attnum;
 
+	LockNotPinnedObject(RelationRelationId, RelationGetRelid(rel));
 	recordDependencyOn(&defobject, &colobject,
 					   attgenerated ? DEPENDENCY_INTERNAL : DEPENDENCY_AUTO);
 

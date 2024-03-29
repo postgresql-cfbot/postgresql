@@ -501,7 +501,10 @@ ExecAlterObjectDependsStmt(AlterObjectDependsStmt *stmt, ObjectAddress *refAddre
 		currexts = getAutoExtensionsOfObject(address.classId,
 											 address.objectId);
 		if (!list_member_oid(currexts, refAddr.objectId))
+		{
+			LockNotPinnedObject(refAddr.classId, refAddr.objectId);
 			recordDependencyOn(&address, &refAddr, DEPENDENCY_AUTO_EXTENSION);
+		}
 	}
 
 	return address;
@@ -807,6 +810,7 @@ AlterObjectNamespace_internal(Relation rel, Oid objid, Oid nspOid)
 	pfree(replaces);
 
 	/* update dependency to point to the new schema */
+	LockNotPinnedObject(NamespaceRelationId, nspOid);
 	if (changeDependencyFor(classId, objid,
 							NamespaceRelationId, oldNspOid, nspOid) != 1)
 		elog(ERROR, "could not change schema dependency for object %u",

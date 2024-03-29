@@ -37,6 +37,8 @@ NOTICE:  in object access: superuser attempting create (subId=0x0) [internal]
 NOTICE:  in object access: superuser finished create (subId=0x0) [internal]
 NOTICE:  in object access: superuser attempting create (subId=0x0) [internal]
 NOTICE:  in object access: superuser finished create (subId=0x0) [internal]
+NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [no report on violation, allowed]
+NOTICE:  in object access: superuser finished namespace search (subId=0x0) [no report on violation, allowed]
 NOTICE:  in process utility: superuser finished CREATE TABLE
 CREATE RULE test_oat_notify AS
   ON UPDATE TO test_oat_schema.test_oat_tab
@@ -62,8 +64,6 @@ BEGIN
   END IF;
 END; $$;
 NOTICE:  in process utility: superuser attempting CREATE FUNCTION
-NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [no report on violation, allowed]
-NOTICE:  in object access: superuser finished namespace search (subId=0x0) [no report on violation, allowed]
 NOTICE:  in object access: superuser attempting create (subId=0x0) [explicit]
 NOTICE:  in object access: superuser finished create (subId=0x0) [explicit]
 NOTICE:  in process utility: superuser finished CREATE FUNCTION

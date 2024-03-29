@@ -1414,6 +1414,7 @@ SetDefaultACL(InternalDefaultACL *iacls)
 				referenced.objectId = iacls->nspid;
 				referenced.objectSubId = 0;
 
+				LockNotPinnedObject(NamespaceRelationId, iacls->nspid);
 				recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
 			}
 		}

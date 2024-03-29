@@ -1520,6 +1520,81 @@ AcquireDeletionLock(const ObjectAddress *object, int flags)
 }
 
 /*
+ * LockNotPinnedObjectById
+ *
+ * Lock the object that we are about to record a dependency on.
+ * After it's locked, verify that it hasn't been dropped while we
+ * weren't looking.  If the object has been dropped, this function
+ * does not return!
+ */
+void
+LockNotPinnedObjectById(const ObjectAddress *object)
+{
+	char	   *object_description = NULL;
+
+	if (isObjectPinned(object))
+		return;
+
+	object_description = getObjectDescription(object, true);
+
+	if (object->classId == RelationRelationId)
+	{
+		Assert(!IsSharedRelation(object->objectId));
+
+		/*
+		 * We must be in one of the two following cases that would already
+		 * prevent the relation to be dropped: 1. The relation is already
+		 * locked (could be an existing relation or a relation that we are
+		 * creating). 2. The relation is protected indirectly (i.e an index
+		 * protected by a lock on its table, a table protected by a lock on a
+		 * function that depends of the table...). To avoid any risks, acquire
+		 * a lock if there is none. That may add unnecessary lock for 2. but
+		 * that's worth it.
+		 */
+		if (!CheckRelationOidLockedByMe(object->objectId, AccessShareLock, true))
+			LockRelationOid(object->objectId, AccessShareLock);
+	}
+	else
+	{
+		/* assume we should lock the whole object not a sub-object */
+		LockDatabaseObject(object->classId, object->objectId, 0, AccessShareLock);
+	}
+
+	/* check if object still exists */
+	if (!ObjectByIdExist(object))
+	{
+		if (object_description)
+			ereport(ERROR,
+					(errcode(ERRCODE_DEPENDENT_OBJECTS_DOES_NOT_EXIST),
+					 errmsg("%s does not exist", object_description)));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_DEPENDENT_OBJECTS_DOES_NOT_EXIST),
+					 errmsg("a dependent object does not exist")));
+	}
+
+	if (object_description)
+		pfree(object_description);
+
+	return;
+}
+
+/*
+ * LockNotPinnedObject
+ *
+ * Lock the object that we are about to record a dependency on.
+ */
+void
+LockNotPinnedObject(Oid classid, Oid objid)
+{
+	ObjectAddress object;
+
+	ObjectAddressSet(object, classid, objid);
+
+	LockNotPinnedObjectById(&object);
+}
+
+/*
  * ReleaseDeletionLock - release an object deletion lock
  *
  * Companion to AcquireDeletionLock.
@@ -1730,6 +1805,7 @@ find_expr_references_walker(Node *node,
 		if (rte->rtekind == RTE_RELATION)
 		{
 			/* If it's a plain relation, reference this column */
+			LockNotPinnedObject(RelationRelationId, rte->relid);
 			add_object_address(RelationRelationId, rte->relid, var->varattno,
 							   context->addrs);
 		}
@@ -1756,6 +1832,7 @@ find_expr_references_walker(Node *node,
 		Oid			objoid;
 
 		/* A constant must depend on the constant's datatype */
+		LockNotPinnedObject(TypeRelationId, con->consttype);
 		add_object_address(TypeRelationId, con->consttype, 0,
 						   context->addrs);
 
@@ -1767,8 +1844,11 @@ find_expr_references_walker(Node *node,
 		 */
 		if (OidIsValid(con->constcollid) &&
 			con->constcollid != DEFAULT_COLLATION_OID)
+		{
+			LockNotPinnedObject(CollationRelationId, con->constcollid);
 			add_object_address(CollationRelationId, con->constcollid, 0,
 							   context->addrs);
+		}
 
 		/*
 		 * If it's a regclass or similar literal referring to an existing
@@ -1785,59 +1865,83 @@ find_expr_references_walker(Node *node,
 					objoid = DatumGetObjectId(con->constvalue);
 					if (SearchSysCacheExists1(PROCOID,
 											  ObjectIdGetDatum(objoid)))
+					{
+						LockNotPinnedObject(ProcedureRelationId, objoid);
 						add_object_address(ProcedureRelationId, objoid, 0,
 										   context->addrs);
+					}
 					break;
 				case REGOPEROID:
 				case REGOPERATOROID:
 					objoid = DatumGetObjectId(con->constvalue);
 					if (SearchSysCacheExists1(OPEROID,
 											  ObjectIdGetDatum(objoid)))
+					{
+						LockNotPinnedObject(OperatorRelationId, objoid);
 						add_object_address(OperatorRelationId, objoid, 0,
 										   context->addrs);
+					}
 					break;
 				case REGCLASSOID:
 					objoid = DatumGetObjectId(con->constvalue);
 					if (SearchSysCacheExists1(RELOID,
 											  ObjectIdGetDatum(objoid)))
+					{
+						LockNotPinnedObject(RelationRelationId, objoid);
 						add_object_address(RelationRelationId, objoid, 0,
 										   context->addrs);
+					}
 					break;
 				case REGTYPEOID:
 					objoid = DatumGetObjectId(con->constvalue);
 					if (SearchSysCacheExists1(TYPEOID,
 											  ObjectIdGetDatum(objoid)))
+					{
+						LockNotPinnedObject(TypeRelationId, objoid);
 						add_object_address(TypeRelationId, objoid, 0,
 										   context->addrs);
+					}
 					break;
 				case REGCOLLATIONOID:
 					objoid = DatumGetObjectId(con->constvalue);
 					if (SearchSysCacheExists1(COLLOID,
 											  ObjectIdGetDatum(objoid)))
+					{
+						LockNotPinnedObject(CollationRelationId, objoid);
 						add_object_address(CollationRelationId, objoid, 0,
 										   context->addrs);
+					}
 					break;
 				case REGCONFIGOID:
 					objoid = DatumGetObjectId(con->constvalue);
 					if (SearchSysCacheExists1(TSCONFIGOID,
 											  ObjectIdGetDatum(objoid)))
+					{
+						LockNotPinnedObject(TSConfigRelationId, objoid);
 						add_object_address(TSConfigRelationId, objoid, 0,
 										   context->addrs);
+					}
 					break;
 				case REGDICTIONARYOID:
 					objoid = DatumGetObjectId(con->constvalue);
 					if (SearchSysCacheExists1(TSDICTOID,
 											  ObjectIdGetDatum(objoid)))
+					{
+						LockNotPinnedObject(TSDictionaryRelationId, objoid);
 						add_object_address(TSDictionaryRelationId, objoid, 0,
 										   context->addrs);
+					}
 					break;
 
 				case REGNAMESPACEOID:
 					objoid = DatumGetObjectId(con->constvalue);
 					if (SearchSysCacheExists1(NAMESPACEOID,
 											  ObjectIdGetDatum(objoid)))
+					{
+						LockNotPinnedObject(NamespaceRelationId, objoid);
 						add_object_address(NamespaceRelationId, objoid, 0,
 										   context->addrs);
+					}
 					break;
 
 					/*
@@ -1859,18 +1963,23 @@ find_expr_references_walker(Node *node,
 		Param	   *param = (Param *) node;
 
 		/* A parameter must depend on the parameter's datatype */
+		LockNotPinnedObject(TypeRelationId, param->paramtype);
 		add_object_address(TypeRelationId, param->paramtype, 0,
 						   context->addrs);
 		/* and its collation, just as for Consts */
 		if (OidIsValid(param->paramcollid) &&
 			param->paramcollid != DEFAULT_COLLATION_OID)
+		{
+			LockNotPinnedObject(CollationRelationId, param->paramcollid);
 			add_object_address(CollationRelationId, param->paramcollid, 0,
 							   context->addrs);
+		}
 	}
 	else if (IsA(node, FuncExpr))
 	{
 		FuncExpr   *funcexpr = (FuncExpr *) node;
 
+		LockNotPinnedObject(ProcedureRelationId, funcexpr->funcid);
 		add_object_address(ProcedureRelationId, funcexpr->funcid, 0,
 						   context->addrs);
 		/* fall through to examine arguments */
@@ -1879,6 +1988,7 @@ find_expr_references_walker(Node *node,
 	{
 		OpExpr	   *opexpr = (OpExpr *) node;
 
+		LockNotPinnedObject(OperatorRelationId, opexpr->opno);
 		add_object_address(OperatorRelationId, opexpr->opno, 0,
 						   context->addrs);
 		/* fall through to examine arguments */
@@ -1887,6 +1997,7 @@ find_expr_references_walker(Node *node,
 	{
 		DistinctExpr *distinctexpr = (DistinctExpr *) node;
 
+		LockNotPinnedObject(OperatorRelationId, distinctexpr->opno);
 		add_object_address(OperatorRelationId, distinctexpr->opno, 0,
 						   context->addrs);
 		/* fall through to examine arguments */
@@ -1895,6 +2006,7 @@ find_expr_references_walker(Node *node,
 	{
 		NullIfExpr *nullifexpr = (NullIfExpr *) node;
 
+		LockNotPinnedObject(OperatorRelationId, nullifexpr->opno);
 		add_object_address(OperatorRelationId, nullifexpr->opno, 0,
 						   context->addrs);
 		/* fall through to examine arguments */
@@ -1903,6 +2015,7 @@ find_expr_references_walker(Node *node,
 	{
 		ScalarArrayOpExpr *opexpr = (ScalarArrayOpExpr *) node;
 
+		LockNotPinnedObject(OperatorRelationId, opexpr->opno);
 		add_object_address(OperatorRelationId, opexpr->opno, 0,
 						   context->addrs);
 		/* fall through to examine arguments */
@@ -1911,6 +2024,7 @@ find_expr_references_walker(Node *node,
 	{
 		Aggref	   *aggref = (Aggref *) node;
 
+		LockNotPinnedObject(ProcedureRelationId, aggref->aggfnoid);
 		add_object_address(ProcedureRelationId, aggref->aggfnoid, 0,
 						   context->addrs);
 		/* fall through to examine arguments */
@@ -1919,6 +2033,7 @@ find_expr_references_walker(Node *node,
 	{
 		WindowFunc *wfunc = (WindowFunc *) node;
 
+		LockNotPinnedObject(ProcedureRelationId, wfunc->winfnoid);
 		add_object_address(ProcedureRelationId, wfunc->winfnoid, 0,
 						   context->addrs);
 		/* fall through to examine arguments */
@@ -1935,8 +2050,11 @@ find_expr_references_walker(Node *node,
 		 */
 		if (sbsref->refrestype != sbsref->refcontainertype &&
 			sbsref->refrestype != sbsref->refelemtype)
+		{
+			LockNotPinnedObject(TypeRelationId, sbsref->refrestype);
 			add_object_address(TypeRelationId, sbsref->refrestype, 0,
 							   context->addrs);
+		}
 		/* fall through to examine arguments */
 	}
 	else if (IsA(node, SubPlan))
@@ -1960,16 +2078,25 @@ find_expr_references_walker(Node *node,
 		 * anywhere else in the expression.
 		 */
 		if (OidIsValid(reltype))
+		{
+			LockNotPinnedObject(RelationRelationId, reltype);
 			add_object_address(RelationRelationId, reltype, fselect->fieldnum,
 							   context->addrs);
+		}
 		else
+		{
+			LockNotPinnedObject(TypeRelationId, fselect->resulttype);
 			add_object_address(TypeRelationId, fselect->resulttype, 0,
 							   context->addrs);
+		}
 		/* the collation might not be referenced anywhere else, either */
 		if (OidIsValid(fselect->resultcollid) &&
 			fselect->resultcollid != DEFAULT_COLLATION_OID)
+		{
+			LockNotPinnedObject(CollationRelationId, fselect->resultcollid);
 			add_object_address(CollationRelationId, fselect->resultcollid, 0,
 							   context->addrs);
+		}
 	}
 	else if (IsA(node, FieldStore))
 	{
@@ -1980,53 +2107,76 @@ find_expr_references_walker(Node *node,
 		if (OidIsValid(reltype))
 		{
 			ListCell   *l;
+			bool	locked = false;
 
 			foreach(l, fstore->fieldnums)
+			{
+				if (!locked)
+				{
+					LockNotPinnedObject(RelationRelationId, reltype);
+					locked = true;
+				}
 				add_object_address(RelationRelationId, reltype, lfirst_int(l),
 								   context->addrs);
+			}
 		}
 		else
+		{
+			LockNotPinnedObject(TypeRelationId, fstore->resulttype);
 			add_object_address(TypeRelationId, fstore->resulttype, 0,
 							   context->addrs);
+		}
 	}
 	else if (IsA(node, RelabelType))
 	{
 		RelabelType *relab = (RelabelType *) node;
 
 		/* since there is no function dependency, need to depend on type */
+		LockNotPinnedObject(TypeRelationId, relab->resulttype);
 		add_object_address(TypeRelationId, relab->resulttype, 0,
 						   context->addrs);
 		/* the collation might not be referenced anywhere else, either */
 		if (OidIsValid(relab->resultcollid) &&
 			relab->resultcollid != DEFAULT_COLLATION_OID)
+		{
+			LockNotPinnedObject(CollationRelationId, relab->resultcollid);
 			add_object_address(CollationRelationId, relab->resultcollid, 0,
 							   context->addrs);
+		}
 	}
 	else if (IsA(node, CoerceViaIO))
 	{
 		CoerceViaIO *iocoerce = (CoerceViaIO *) node;
 
 		/* since there is no exposed function, need to depend on type */
+		LockNotPinnedObject(TypeRelationId, iocoerce->resulttype);
 		add_object_address(TypeRelationId, iocoerce->resulttype, 0,
 						   context->addrs);
 		/* the collation might not be referenced anywhere else, either */
 		if (OidIsValid(iocoerce->resultcollid) &&
 			iocoerce->resultcollid != DEFAULT_COLLATION_OID)
+		{
+			LockNotPinnedObject(CollationRelationId, iocoerce->resultcollid);
 			add_object_address(CollationRelationId, iocoerce->resultcollid, 0,
 							   context->addrs);
+		}
 	}
 	else if (IsA(node, ArrayCoerceExpr))
 	{
 		ArrayCoerceExpr *acoerce = (ArrayCoerceExpr *) node;
 
 		/* as above, depend on type */
+		LockNotPinnedObject(TypeRelationId, acoerce->resulttype);
 		add_object_address(TypeRelationId, acoerce->resulttype, 0,
 						   context->addrs);
 		/* the collation might not be referenced anywhere else, either */
 		if (OidIsValid(acoerce->resultcollid) &&
 			acoerce->resultcollid != DEFAULT_COLLATION_OID)
+		{
+			LockNotPinnedObject(CollationRelationId, acoerce->resultcollid);
 			add_object_address(CollationRelationId, acoerce->resultcollid, 0,
 							   context->addrs);
+		}
 		/* fall through to examine arguments */
 	}
 	else if (IsA(node, ConvertRowtypeExpr))
@@ -2034,6 +2184,7 @@ find_expr_references_walker(Node *node,
 		ConvertRowtypeExpr *cvt = (ConvertRowtypeExpr *) node;
 
 		/* since there is no function dependency, need to depend on type */
+		LockNotPinnedObject(TypeRelationId, cvt->resulttype);
 		add_object_address(TypeRelationId, cvt->resulttype, 0,
 						   context->addrs);
 	}
@@ -2041,6 +2192,7 @@ find_expr_references_walker(Node *node,
 	{
 		CollateExpr *coll = (CollateExpr *) node;
 
+		LockNotPinnedObject(CollationRelationId, coll->collOid);
 		add_object_address(CollationRelationId, coll->collOid, 0,
 						   context->addrs);
 	}
@@ -2048,6 +2200,7 @@ find_expr_references_walker(Node *node,
 	{
 		RowExpr    *rowexpr = (RowExpr *) node;
 
+		LockNotPinnedObject(TypeRelationId, rowexpr->row_typeid);
 		add_object_address(TypeRelationId, rowexpr->row_typeid, 0,
 						   context->addrs);
 	}
@@ -2058,11 +2211,13 @@ find_expr_references_walker(Node *node,
 
 		foreach(l, rcexpr->opnos)
 		{
+			LockNotPinnedObject(OperatorRelationId, lfirst_oid(l));
 			add_object_address(OperatorRelationId, lfirst_oid(l), 0,
 							   context->addrs);
 		}
 		foreach(l, rcexpr->opfamilies)
 		{
+			LockNotPinnedObject(OperatorFamilyRelationId, lfirst_oid(l));
 			add_object_address(OperatorFamilyRelationId, lfirst_oid(l), 0,
 							   context->addrs);
 		}
@@ -2072,6 +2227,7 @@ find_expr_references_walker(Node *node,
 	{
 		CoerceToDomain *cd = (CoerceToDomain *) node;
 
+		LockNotPinnedObject(TypeRelationId, cd->resulttype);
 		add_object_address(TypeRelationId, cd->resulttype, 0,
 						   context->addrs);
 	}
@@ -2079,6 +2235,7 @@ find_expr_references_walker(Node *node,
 	{
 		NextValueExpr *nve = (NextValueExpr *) node;
 
+		LockNotPinnedObject(RelationRelationId, nve->seqid);
 		add_object_address(RelationRelationId, nve->seqid, 0,
 						   context->addrs);
 	}
@@ -2087,19 +2244,26 @@ find_expr_references_walker(Node *node,
 		OnConflictExpr *onconflict = (OnConflictExpr *) node;
 
 		if (OidIsValid(onconflict->constraint))
+		{
+			LockNotPinnedObject(ConstraintRelationId, onconflict->constraint);
 			add_object_address(ConstraintRelationId, onconflict->constraint, 0,
 							   context->addrs);
+		}
 		/* fall through to examine arguments */
 	}
 	else if (IsA(node, SortGroupClause))
 	{
 		SortGroupClause *sgc = (SortGroupClause *) node;
 
+		LockNotPinnedObject(OperatorRelationId, sgc->eqop);
 		add_object_address(OperatorRelationId, sgc->eqop, 0,
 						   context->addrs);
 		if (OidIsValid(sgc->sortop))
+		{
+			LockNotPinnedObject(OperatorRelationId, sgc->sortop);
 			add_object_address(OperatorRelationId, sgc->sortop, 0,
 							   context->addrs);
+		}
 		return false;
 	}
 	else if (IsA(node, WindowClause))
@@ -2107,15 +2271,24 @@ find_expr_references_walker(Node *node,
 		WindowClause *wc = (WindowClause *) node;
 
 		if (OidIsValid(wc->startInRangeFunc))
+		{
+			LockNotPinnedObject(ProcedureRelationId, wc->startInRangeFunc);
 			add_object_address(ProcedureRelationId, wc->startInRangeFunc, 0,
 							   context->addrs);
+		}
 		if (OidIsValid(wc->endInRangeFunc))
+		{
+			LockNotPinnedObject(ProcedureRelationId, wc->endInRangeFunc);
 			add_object_address(ProcedureRelationId, wc->endInRangeFunc, 0,
 							   context->addrs);
+		}
 		if (OidIsValid(wc->inRangeColl) &&
 			wc->inRangeColl != DEFAULT_COLLATION_OID)
+		{
+			LockNotPinnedObject(CollationRelationId, wc->inRangeColl);
 			add_object_address(CollationRelationId, wc->inRangeColl, 0,
 							   context->addrs);
+		}
 		/* fall through to examine substructure */
 	}
 	else if (IsA(node, CTECycleClause))
@@ -2123,14 +2296,23 @@ find_expr_references_walker(Node *node,
 		CTECycleClause *cc = (CTECycleClause *) node;
 
 		if (OidIsValid(cc->cycle_mark_type))
+		{
+			LockNotPinnedObject(TypeRelationId, cc->cycle_mark_type);
 			add_object_address(TypeRelationId, cc->cycle_mark_type, 0,
 							   context->addrs);
+		}
 		if (OidIsValid(cc->cycle_mark_collation))
+		{
+			LockNotPinnedObject(CollationRelationId, cc->cycle_mark_collation);
 			add_object_address(CollationRelationId, cc->cycle_mark_collation, 0,
 							   context->addrs);
+		}
 		if (OidIsValid(cc->cycle_mark_neop))
+		{
+			LockNotPinnedObject(OperatorRelationId, cc->cycle_mark_neop);
 			add_object_address(OperatorRelationId, cc->cycle_mark_neop, 0,
 							   context->addrs);
+		}
 		/* fall through to examine substructure */
 	}
 	else if (IsA(node, Query))
@@ -2163,6 +2345,7 @@ find_expr_references_walker(Node *node,
 			switch (rte->rtekind)
 			{
 				case RTE_RELATION:
+					LockNotPinnedObject(RelationRelationId, rte->relid);
 					add_object_address(RelationRelationId, rte->relid, 0,
 									   context->addrs);
 					break;
@@ -2215,12 +2398,18 @@ find_expr_references_walker(Node *node,
 			rte = rt_fetch(query->resultRelation, query->rtable);
 			if (rte->rtekind == RTE_RELATION)
 			{
+				bool	locked = false;
 				foreach(lc, query->targetList)
 				{
 					TargetEntry *tle = (TargetEntry *) lfirst(lc);
 
 					if (tle->resjunk)
 						continue;	/* ignore junk tlist items */
+					if (!locked)
+					{
+						LockNotPinnedObject(RelationRelationId, rte->relid);
+						locked = true;
+					}
 					add_object_address(RelationRelationId, rte->relid, tle->resno,
 									   context->addrs);
 				}
@@ -2232,6 +2421,7 @@ find_expr_references_walker(Node *node,
 		 */
 		foreach(lc, query->constraintDeps)
 		{
+			LockNotPinnedObject(ConstraintRelationId, lfirst_oid(lc));
 			add_object_address(ConstraintRelationId, lfirst_oid(lc), 0,
 							   context->addrs);
 		}
@@ -2266,16 +2456,25 @@ find_expr_references_walker(Node *node,
 		 */
 		foreach(ct, rtfunc->funccoltypes)
 		{
+			LockNotPinnedObject(TypeRelationId, lfirst_oid(ct));
 			add_object_address(TypeRelationId, lfirst_oid(ct), 0,
 							   context->addrs);
 		}
 		foreach(ct, rtfunc->funccolcollations)
 		{
 			Oid			collid = lfirst_oid(ct);
+			bool	locked = false;
 
 			if (OidIsValid(collid) && collid != DEFAULT_COLLATION_OID)
+			{
+				if (!locked)
+				{
+					LockNotPinnedObject(CollationRelationId, collid);
+					locked = true;
+				}
 				add_object_address(CollationRelationId, collid, 0,
 								   context->addrs);
+			}
 		}
 	}
 	else if (IsA(node, TableFunc))
@@ -2288,22 +2487,32 @@ find_expr_references_walker(Node *node,
 		 */
 		foreach(ct, tf->coltypes)
 		{
+			LockNotPinnedObject(TypeRelationId, lfirst_oid(ct));
 			add_object_address(TypeRelationId, lfirst_oid(ct), 0,
 							   context->addrs);
 		}
 		foreach(ct, tf->colcollations)
 		{
 			Oid			collid = lfirst_oid(ct);
+			bool 	locked = false;
 
 			if (OidIsValid(collid) && collid != DEFAULT_COLLATION_OID)
+			{
+				if (!locked)
+				{
+					LockNotPinnedObject(CollationRelationId, collid);
+					locked = true;
+				}
 				add_object_address(CollationRelationId, collid, 0,
 								   context->addrs);
+			}
 		}
 	}
 	else if (IsA(node, TableSampleClause))
 	{
 		TableSampleClause *tsc = (TableSampleClause *) node;
 
+		LockNotPinnedObject(ProcedureRelationId, tsc->tsmhandler);
 		add_object_address(ProcedureRelationId, tsc->tsmhandler, 0,
 						   context->addrs);
 		/* fall through to examine arguments */
@@ -2354,9 +2563,12 @@ process_function_rte_ref(RangeTblEntry *rte, AttrNumber attnum,
 
 				Assert(attnum - atts_done <= tupdesc->natts);
 				if (OidIsValid(reltype))	/* can this fail? */
+				{
+					LockNotPinnedObject(RelationRelationId, reltype);
 					add_object_address(RelationRelationId, reltype,
 									   attnum - atts_done,
 									   context->addrs);
+				}
 				return;
 			}
 			/* Nothing to do; function's result type is handled elsewhere */

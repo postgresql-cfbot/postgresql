@@ -1019,14 +1019,19 @@ CreateTriggerFiringOn(CreateTrigStmt *stmt, const char *queryString,
 		((Form_pg_class) GETSTRUCT(tuple))->relhastriggers = true;
 
 		CatalogTupleUpdate(pgrel, &tuple->t_self, tuple);
-
-		CommandCounterIncrement();
 	}
 	else
 		CacheInvalidateRelcacheByTuple(tuple);
 
 	heap_freetuple(tuple);
 	table_close(pgrel, RowExclusiveLock);
+
+	/*
+	 * CommandCounterIncrement() here to ensure the new trigger entry is
+	 * visible when LockNotPinnedObject() will check its existence before
+	 * recording the dependencies.
+	 */
+	CommandCounterIncrement();
 
 	/*
 	 * If we're replacing a trigger, flush all the old dependencies before
@@ -1046,6 +1051,7 @@ CreateTriggerFiringOn(CreateTrigStmt *stmt, const char *queryString,
 	referenced.classId = ProcedureRelationId;
 	referenced.objectId = funcoid;
 	referenced.objectSubId = 0;
+	LockNotPinnedObject(ProcedureRelationId, funcoid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 
 	if (isInternal && OidIsValid(constraintOid))
@@ -1059,6 +1065,7 @@ CreateTriggerFiringOn(CreateTrigStmt *stmt, const char *queryString,
 		referenced.classId = ConstraintRelationId;
 		referenced.objectId = constraintOid;
 		referenced.objectSubId = 0;
+		LockNotPinnedObject(ConstraintRelationId, constraintOid);
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_INTERNAL);
 	}
 	else
@@ -1071,6 +1078,8 @@ CreateTriggerFiringOn(CreateTrigStmt *stmt, const char *queryString,
 		referenced.classId = RelationRelationId;
 		referenced.objectId = RelationGetRelid(rel);
 		referenced.objectSubId = 0;
+
+		LockNotPinnedObject(RelationRelationId, RelationGetRelid(rel));
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
 
 		if (OidIsValid(constrrelid))
@@ -1078,6 +1087,8 @@ CreateTriggerFiringOn(CreateTrigStmt *stmt, const char *queryString,
 			referenced.classId = RelationRelationId;
 			referenced.objectId = constrrelid;
 			referenced.objectSubId = 0;
+
+			LockNotPinnedObject(RelationRelationId, constrrelid);
 			recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
 		}
 		/* Not possible to have an index dependency in this case */
@@ -1092,6 +1103,7 @@ CreateTriggerFiringOn(CreateTrigStmt *stmt, const char *queryString,
 			referenced.classId = ConstraintRelationId;
 			referenced.objectId = constraintOid;
 			referenced.objectSubId = 0;
+			LockNotPinnedObject(TriggerRelationId, trigoid);
 			recordDependencyOn(&referenced, &myself, DEPENDENCY_INTERNAL);
 		}
 
@@ -1101,8 +1113,11 @@ CreateTriggerFiringOn(CreateTrigStmt *stmt, const char *queryString,
 		if (OidIsValid(parentTriggerOid))
 		{
 			ObjectAddressSet(referenced, TriggerRelationId, parentTriggerOid);
+			LockNotPinnedObject(TriggerRelationId, parentTriggerOid);
 			recordDependencyOn(&myself, &referenced, DEPENDENCY_PARTITION_PRI);
 			ObjectAddressSet(referenced, RelationRelationId, RelationGetRelid(rel));
+
+			LockNotPinnedObject(RelationRelationId, RelationGetRelid(rel));
 			recordDependencyOn(&myself, &referenced, DEPENDENCY_PARTITION_SEC);
 		}
 	}
@@ -1111,12 +1126,19 @@ CreateTriggerFiringOn(CreateTrigStmt *stmt, const char *queryString,
 	if (columns != NULL)
 	{
 		int			i;
+		bool		locked_object = false;
 
 		referenced.classId = RelationRelationId;
 		referenced.objectId = RelationGetRelid(rel);
 		for (i = 0; i < ncolumns; i++)
 		{
 			referenced.objectSubId = columns[i];
+
+			if (!locked_object)
+			{
+				LockNotPinnedObject(RelationRelationId, RelationGetRelid(rel));
+				locked_object = true;
+			}
 			recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 		}
 	}
@@ -1256,9 +1278,12 @@ TriggerSetParentTrigger(Relation trigRel,
 		ObjectAddressSet(depender, TriggerRelationId, childTrigId);
 
 		ObjectAddressSet(referenced, TriggerRelationId, parentTrigId);
+		LockNotPinnedObject(TriggerRelationId, parentTrigId);
 		recordDependencyOn(&depender, &referenced, DEPENDENCY_PARTITION_PRI);
 
 		ObjectAddressSet(referenced, RelationRelationId, childTableId);
+
+		LockNotPinnedObject(RelationRelationId, childTableId);
 		recordDependencyOn(&depender, &referenced, DEPENDENCY_PARTITION_SEC);
 	}
 	else

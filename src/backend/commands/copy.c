@@ -414,6 +414,8 @@ defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
 		return COPY_ON_ERROR_STOP;
 	if (pg_strcasecmp(sval, "ignore") == 0)
 		return COPY_ON_ERROR_IGNORE;
+	if (pg_strcasecmp(sval, "set_to_null") == 0)
+		return COPY_ON_ERROR_NULL;
 
 	ereport(ERROR,
 			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),

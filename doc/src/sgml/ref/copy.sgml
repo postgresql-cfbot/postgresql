@@ -393,6 +393,7 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       An <replaceable class="parameter">error_action</replaceable> value of
       <literal>stop</literal> means fail the command, while
       <literal>ignore</literal> means discard the input row and continue with the next one.
+      <literal>set_to_null</literal> means the input value will set to <literal>null</literal> and continue with the next field.
       The default is <literal>stop</literal>.
      </para>
      <para>

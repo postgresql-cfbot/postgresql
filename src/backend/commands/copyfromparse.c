@@ -880,6 +880,7 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 		int			fldct;
 		int			fieldno;
 		char	   *string;
+		bool		error_happened = false;
 
 		/* read raw fields in the next line */
 		if (!NextCopyFromRawFields(cstate, &field_strings, &fldct))
@@ -967,12 +968,35 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 											(Node *) cstate->escontext,
 											&values[m]))
 			{
-				cstate->num_errors++;
-				return true;
+				if (cstate->opts.on_error == COPY_ON_ERROR_NULL)
+				{
+
+					values[m] = (Datum) 0;
+					nulls[m] = true;
+					/* here, we need set error_occurred to false, so COPY will be continue */
+					cstate->escontext->error_occurred = false;
+
+					/* does any conversion error ever happened in all the fields */
+					if (!error_happened)
+						error_happened = true;
+				}
+				else
+				{
+					cstate->num_errors++;
+					return true;
+				}
+
 			}
 
 			cstate->cur_attname = NULL;
 			cstate->cur_attval = NULL;
+		}
+
+		/* update num_errors. one row with multiple errors field only count 1*/
+		if (error_happened)
+		{
+			cstate->num_errors++;
+			cstate->escontext->error_occurred = true;
 		}
 
 		Assert(fieldno == attr_count);

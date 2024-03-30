@@ -752,6 +752,28 @@ CONTEXT:  COPY check_ign_err, line 1: "1	{1}"
 COPY check_ign_err FROM STDIN WITH (on_error ignore);
 ERROR:  extra data after last expected column
 CONTEXT:  COPY check_ign_err, line 1: "1	{1}	3	abc"
+truncate check_ign_err;
+COPY check_ign_err FROM STDIN WITH (on_error set_to_null);
+NOTICE:  some columns of 3 rows, value were converted to NULL due to data type incompatibility
+\pset null NULL
+SELECT * FROM check_ign_err;
+  n   |  m  |  k   
+------+-----+------
+    1 | {1} | NULL
+    2 | {2} |    1
+    3 | {3} |    2
+    4 | {4} | NULL
+ NULL | {5} | NULL
+(5 rows)
+
+--should fail.
+COPY check_ign_err FROM STDIN WITH (delimiter ',', on_error set_to_null);
+ERROR:  missing data for column "k"
+CONTEXT:  COPY check_ign_err, line 1: "1,"
+--should fail.
+COPY check_ign_err FROM STDIN WITH (delimiter ',', on_error set_to_null);
+ERROR:  extra data after last expected column
+CONTEXT:  COPY check_ign_err, line 1: "1,{1},1,1"
 -- clean up
 DROP TABLE forcetest;
 DROP TABLE vistest;

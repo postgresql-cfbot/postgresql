@@ -1002,6 +1002,7 @@ CopyFrom(CopyFromState cstate)
 			 * information according to ON_ERROR.
 			 */
 			if (cstate->opts.on_error == COPY_ON_ERROR_IGNORE)
+			{
 
 				/*
 				 * Just make ErrorSaveContext ready for the next NextCopyFrom.
@@ -1010,11 +1011,18 @@ CopyFrom(CopyFromState cstate)
 				 */
 				cstate->escontext->error_occurred = false;
 
-			/* Report that this tuple was skipped by the ON_ERROR clause */
-			pgstat_progress_update_param(PROGRESS_COPY_TUPLES_SKIPPED,
-										 ++skipped);
+				/* Report that this tuple was skipped by the ON_ERROR clause */
+				pgstat_progress_update_param(PROGRESS_COPY_TUPLES_SKIPPED,
+											++skipped);
 
-			continue;
+				continue;
+			}
+			/*
+			 * Just make ErrorSaveContext ready for the next NextCopyFrom.
+			 *
+			*/
+			if (cstate->opts.on_error == COPY_ON_ERROR_NULL)
+				cstate->escontext->error_occurred = false;
 		}
 
 		ExecStoreVirtualTuple(myslot);
@@ -1309,11 +1317,19 @@ CopyFrom(CopyFromState cstate)
 	/* Done, clean up */
 	error_context_stack = errcallback.previous;
 
-	if (cstate->opts.on_error != COPY_ON_ERROR_STOP &&
+	if (cstate->opts.on_error == COPY_ON_ERROR_IGNORE &&
 		cstate->num_errors > 0)
 		ereport(NOTICE,
 				errmsg_plural("%llu row was skipped due to data type incompatibility",
 							  "%llu rows were skipped due to data type incompatibility",
+							  (unsigned long long) cstate->num_errors,
+							  (unsigned long long) cstate->num_errors));
+
+	if (cstate->opts.on_error == COPY_ON_ERROR_NULL &&
+		cstate->num_errors > 0)
+		ereport(NOTICE,
+				errmsg_plural("some columns of %llu rows, value was converted to NULL due to data type incompatibility",
+							  "some columns of %llu rows, value were converted to NULL due to data type incompatibility",
 							  (unsigned long long) cstate->num_errors,
 							  (unsigned long long) cstate->num_errors));
 
@@ -1460,10 +1476,12 @@ BeginCopyFrom(ParseState *pstate,
 		cstate->escontext->error_occurred = false;
 
 		/*
-		 * Currently we only support COPY_ON_ERROR_IGNORE. We'll add other
+		 * Currently we only support COPY_ON_ERROR_IGNORE, COPY_ON_ERROR_NULL. We'll add other
 		 * options later
 		 */
 		if (cstate->opts.on_error == COPY_ON_ERROR_IGNORE)
+			cstate->escontext->details_wanted = false;
+		else if (cstate->opts.on_error == COPY_ON_ERROR_NULL)
 			cstate->escontext->details_wanted = false;
 	}
 	else

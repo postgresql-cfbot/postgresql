@@ -607,6 +607,22 @@ ProcessCopyOptions(ParseState *pstate,
 			on_error_specified = true;
 			opts_out->on_error = defGetCopyOnErrorChoice(defel, pstate, is_from);
 		}
+		else if (strcmp(defel->defname, "reject_limit") == 0)
+		{
+			int64	reject_limit = defGetInt64(defel);
+
+			if (!opts_out->on_error)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("REJECT_LIMIT requires ON_ERROR to be set to other than stop")));
+			if (opts_out->reject_limit > 0)
+				errorConflictingDefElem(defel, pstate);
+			if (reject_limit <= 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("REJECT_LIMIT must be greater than zero")));
+			opts_out->reject_limit = reject_limit;
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),

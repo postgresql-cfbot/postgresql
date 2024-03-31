@@ -3032,6 +3032,7 @@ WALReadError
 WALSegmentCloseCB
 WALSegmentContext
 WALSegmentOpenCB
+WALSourceSwitchState
 WCHAR
 WCOKind
 WFW_WaitOption

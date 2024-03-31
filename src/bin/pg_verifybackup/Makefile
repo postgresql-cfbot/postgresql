@@ -17,7 +17,7 @@ top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
 # We need libpq only because fe_utils does.
-LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport)
+LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils -lpgcommon $(libpq_pgport)
 
 OBJS = \
 	$(WIN32RES) \

@@ -1039,10 +1039,13 @@ static int
 pqSocketCheck(PGconn *conn, int forRead, int forWrite, time_t end_time)
 {
 	int			result;
+	pgsocket	sock;
 
 	if (!conn)
 		return -1;
-	if (conn->sock == PGINVALID_SOCKET)
+
+	sock = (conn->altsock != PGINVALID_SOCKET) ? conn->altsock : conn->sock;
+	if (sock == PGINVALID_SOCKET)
 	{
 		libpq_append_conn_error(conn, "invalid socket");
 		return -1;
@@ -1059,7 +1062,7 @@ pqSocketCheck(PGconn *conn, int forRead, int forWrite, time_t end_time)
 
 	/* We will retry as long as we get EINTR */
 	do
-		result = pqSocketPoll(conn->sock, forRead, forWrite, end_time);
+		result = pqSocketPoll(sock, forRead, forWrite, end_time);
 	while (result < 0 && SOCK_ERRNO == EINTR);
 
 	if (result < 0)

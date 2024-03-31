@@ -17,7 +17,7 @@ endif
 
 pg_combinebackup = executable('pg_combinebackup',
   pg_combinebackup_sources,
-  dependencies: [frontend_code],
+  dependencies: [frontend_code, libpq],
   kwargs: default_bin_args,
 )
 bin_targets += pg_combinebackup

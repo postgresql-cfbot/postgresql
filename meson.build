@@ -841,6 +841,33 @@ endif
 
 
 ###############################################################
+# Library: oauth
+###############################################################
+
+oauth = not_found_dep
+oauth_library = 'none'
+oauthopt = get_option('oauth')
+
+if oauthopt == 'auto' and auto_features.disabled()
+  oauthopt = 'none'
+endif
+
+if oauthopt in ['auto', 'curl']
+  oauth = dependency('libcurl', required: (oauthopt == 'curl'))
+
+  if oauth.found()
+    oauth_library = 'curl'
+    cdata.set('USE_OAUTH', 1)
+    cdata.set('USE_OAUTH_CURL', 1)
+  endif
+endif
+
+if oauthopt == 'auto' and auto_features.enabled() and not oauth.found()
+  error('no OAuth implementation library found')
+endif
+
+
+###############################################################
 # Library: Tcl (for pltcl)
 #
 # NB: tclConfig.sh is used in autoconf build for getting
@@ -2845,6 +2872,7 @@ libpq_deps += [
   gssapi,
   ldap_r,
   libintl,
+  oauth,
   ssl,
 ]
 
@@ -3511,6 +3539,7 @@ if meson.version().version_compare('>=0.57')
       'llvm': llvm,
       'lz4': lz4,
       'nls': libintl,
+      'oauth': oauth,
       'openssl': ssl,
       'pam': pam,
       'plperl': perl_dep,

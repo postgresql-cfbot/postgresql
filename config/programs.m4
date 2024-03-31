@@ -142,7 +142,28 @@ if test "$pgac_cv_ldap_safe" != yes; then
 *** also uses LDAP will crash on exit.])
 fi])
 
+# PGAC_CHECK_LIBCURL
+# ------------------
+# Check for libcurl 8.4.0 or higher since earlier versions can be compiled
+# with a codepatch containing exit(), and PostgreSQL does not allow any lib
+# linked to libpq which can call exit.
 
+# PGAC_CHECK_LIBCURL
+AC_DEFUN([PGAC_CHECK_LIBCURL],
+[AC_CACHE_CHECK([for compatible libcurl], [pgac_cv_check_libcurl],
+[AC_COMPILE_IFELSE([AC_LANG_PROGRAM(
+[#include <curl/curlver.h>
+#if LIBCURL_VERSION_MAJOR <= 8 && LIBCURL_VERSION_MINOR < 4
+choke me
+#endif], [])],
+[pgac_cv_check_libcurl=yes],
+[pgac_cv_check_libcurl=no])])
+
+if test "$pgac_cv_check_libcurl" != yes; then
+    AC_MSG_ERROR([
+*** The installed version of libcurl is too old to use with PostgreSQL.
+*** libcurl version 8.4.0 or later is required.])
+fi])
 
 # PGAC_CHECK_READLINE
 # -------------------

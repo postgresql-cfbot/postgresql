@@ -18,6 +18,8 @@ include $(top_builddir)/src/Makefile.global
 
 override CPPFLAGS := -I$(libpq_srcdir) $(CPPFLAGS)
 LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils
+# TODO: fix this properly
+LDFLAGS_INTERNAL += -lpgcommon $(libpq_pgport)
 
 OBJS = \
 	$(WIN32RES) \
@@ -30,7 +32,7 @@ OBJS = \
 
 all: pg_combinebackup
 
-pg_combinebackup: $(OBJS) | submake-libpgport submake-libpgfeutils
+pg_combinebackup: $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 install: all installdirs

@@ -18,8 +18,12 @@
 #include "libpq-int.h"
 
 
+extern PQauthDataHook_type PQauthDataHook;
+
+
 /* Prototypes for functions in fe-auth.c */
-extern int	pg_fe_sendauth(AuthRequest areq, int payloadlen, PGconn *conn);
+extern int	pg_fe_sendauth(AuthRequest areq, int payloadlen, PGconn *conn,
+						   bool *async);
 extern char *pg_fe_getusername(uid_t user_id, PQExpBuffer errorMessage);
 extern char *pg_fe_getauthname(PQExpBuffer errorMessage);
 
@@ -28,5 +32,8 @@ extern const pg_fe_sasl_mech pg_scram_mech;
 extern char *pg_fe_scram_build_secret(const char *password,
 									  int iterations,
 									  const char **errstr);
+
+/* Mechanisms in fe-auth-oauth.c */
+extern const pg_fe_sasl_mech pg_oauth_mech;
 
 #endif							/* FE_AUTH_H */

@@ -4185,9 +4185,9 @@ PQescapeInternal(PGconn *conn, const char *str, size_t len, bool as_ident)
 
 	/* Allocate output buffer. */
 	input_len = s - str;
-	result_size = input_len + num_quotes + 3;	/* two quotes, plus a NUL */
+	result_size = input_len + (num_quotes * 2) + 3;	/* two quotes, plus a NUL */
 	if (!as_ident && num_backslashes > 0)
-		result_size += num_backslashes + 2;
+		result_size += (num_backslashes * 2) + 2;
 	result = rp = (char *) malloc(result_size);
 	if (rp == NULL)
 	{

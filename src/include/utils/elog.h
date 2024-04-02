@@ -167,6 +167,7 @@ struct Node;
 
 extern bool message_level_is_interesting(int elevel);
 
+extern PGDLLIMPORT bool ProcessLogQueryPlanInterruptActive;
 extern bool errstart(int elevel, const char *domain);
 extern pg_attribute_cold bool errstart_cold(int elevel, const char *domain);
 extern void errfinish(const char *filename, int lineno, const char *funcname);

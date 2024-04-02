@@ -60,6 +60,7 @@
 #include "storage/procarray.h"
 #include "storage/sinvaladt.h"
 #include "storage/smgr.h"
+#include "tcop/pquery.h"
 #include "utils/builtins.h"
 #include "utils/combocid.h"
 #include "utils/guc.h"
@@ -2807,6 +2808,14 @@ AbortTransaction(void)
 	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
 
 	/*
+	 * Reset pg_log_query_plan() related global variables.
+	 * When ActiveQueryDesc is referenced after abort, some of its elements
+	 * are freed. To avoid accessing them, reset ActiveQueryDesc here.
+	 */
+	ActiveQueryDesc = NULL;
+	ProcessLogQueryPlanInterruptActive = false;
+
+	/*
 	 * check the current transaction state
 	 */
 	is_parallel_worker = (s->blockState == TBLOCK_PARALLEL_INPROGRESS);
@@ -5225,6 +5234,14 @@ AbortSubTransaction(void)
 	 * infrastructure will be functional if needed while aborting.
 	 */
 	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
+
+	/*
+	 * Reset pg_log_query_plan() related global variables.
+	 * When ActiveQueryDesc is referenced after abort, some of its elements
+	 * are freed. To avoid accessing them, reset ActiveQueryDesc here.
+	 */
+	ActiveQueryDesc = NULL;
+	ProcessLogQueryPlanInterruptActive = false;
 
 	/*
 	 * check the current transaction state

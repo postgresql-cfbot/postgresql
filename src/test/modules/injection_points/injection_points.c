@@ -17,6 +17,7 @@
 
 #include "postgres.h"
 
+#include "commands/explain.h"
 #include "fmgr.h"
 #include "storage/condition_variable.h"
 #include "storage/dsm_registry.h"
@@ -54,6 +55,7 @@ static InjectionPointSharedState *inj_state = NULL;
 extern PGDLLEXPORT void injection_error(const char *name);
 extern PGDLLEXPORT void injection_notice(const char *name);
 extern PGDLLEXPORT void injection_wait(const char *name);
+extern PGDLLEXPORT void injection_HandleLogQueryPlanInterrupt(const char *name);
 
 
 /*
@@ -160,6 +162,13 @@ injection_wait(const char *name)
 	SpinLockRelease(&inj_state->lock);
 }
 
+void
+injection_HandleLogQueryPlanInterrupt(const char *name)
+{
+	HandleLogQueryPlanInterrupt();
+	elog(LOG, "triggered injection_HandleLogQueryPlanInterrupt for injection point %s", name);
+}
+
 /*
  * SQL function for creating an injection point.
  */
@@ -177,6 +186,8 @@ injection_points_attach(PG_FUNCTION_ARGS)
 		function = "injection_notice";
 	else if (strcmp(action, "wait") == 0)
 		function = "injection_wait";
+	else if (strcmp(action, "logqueryplan") == 0)
+		function = "injection_HandleLogQueryPlanInterrupt";
 	else
 		elog(ERROR, "incorrect action \"%s\" for injection point creation", action);
 

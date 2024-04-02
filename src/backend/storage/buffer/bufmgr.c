@@ -1092,7 +1092,6 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	{
 		/* Just need to update stats before we exit */
 		*hit = true;
-		VacuumPageHit++;
 		pgstat_count_io_op(io_object, io_context, IOOP_HIT);
 
 		if (VacuumCostActive)
@@ -1198,7 +1197,6 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		TerminateBufferIO(bufHdr, false, BM_VALID, true);
 	}
 
-	VacuumPageMiss++;
 	if (VacuumCostActive)
 		VacuumCostBalance += VacuumCostPageMiss;
 
@@ -2228,7 +2226,6 @@ MarkBufferDirty(Buffer buffer)
 	 */
 	if (!(old_buf_state & BM_DIRTY))
 	{
-		VacuumPageDirty++;
 		pgBufferUsage.shared_blks_dirtied++;
 		if (VacuumCostActive)
 			VacuumCostBalance += VacuumCostPageDirty;
@@ -4746,7 +4743,6 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 
 		if (dirtied)
 		{
-			VacuumPageDirty++;
 			pgBufferUsage.shared_blks_dirtied++;
 			if (VacuumCostActive)
 				VacuumCostBalance += VacuumCostPageDirty;

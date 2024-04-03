@@ -25,6 +25,13 @@ typedef enum ExplainFormat
 	EXPLAIN_FORMAT_YAML,
 } ExplainFormat;
 
+typedef enum ExplainSerializeFormat
+{
+	EXPLAIN_SERIALIZE_NONE,
+	EXPLAIN_SERIALIZE_TEXT,
+	EXPLAIN_SERIALIZE_BINARY,
+}			ExplainSerializeFormat;
+
 typedef struct ExplainWorkersState
 {
 	int			num_workers;	/* # of worker processes the plan used */
@@ -48,6 +55,8 @@ typedef struct ExplainState
 	bool		memory;			/* print planner's memory usage information */
 	bool		settings;		/* print modified settings */
 	bool		generic;		/* generate a generic plan */
+	ExplainSerializeFormat serialize;	/* do serialization (in ANALZYE) */
+
 	ExplainFormat format;		/* output format */
 	/* state for output formatting --- not reset for each new plan tree */
 	int			indent;			/* current indentation level */
@@ -131,5 +140,7 @@ extern void ExplainOpenGroup(const char *objtype, const char *labelname,
 							 bool labeled, ExplainState *es);
 extern void ExplainCloseGroup(const char *objtype, const char *labelname,
 							  bool labeled, ExplainState *es);
+
+extern DestReceiver *CreateExplainSerializeDestReceiver(ExplainState *es);
 
 #endif							/* EXPLAIN_H */

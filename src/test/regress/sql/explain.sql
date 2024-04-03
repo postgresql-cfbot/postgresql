@@ -66,7 +66,7 @@ select explain_filter('explain (analyze) select * from int8_tbl i8');
 select explain_filter('explain (analyze, verbose) select * from int8_tbl i8');
 select explain_filter('explain (analyze, buffers, format text) select * from int8_tbl i8');
 select explain_filter('explain (analyze, buffers, format xml) select * from int8_tbl i8');
-select explain_filter('explain (analyze, buffers, format yaml) select * from int8_tbl i8');
+select explain_filter('explain (analyze, serialize, buffers, format yaml) select * from int8_tbl i8');
 select explain_filter('explain (buffers, format text) select * from int8_tbl i8');
 select explain_filter('explain (buffers, format json) select * from int8_tbl i8');
 
@@ -162,3 +162,29 @@ select explain_filter('explain (verbose) select * from t1 where pg_temp.mysin(f1
 -- Test compute_query_id
 set compute_query_id = on;
 select explain_filter('explain (verbose) select * from int8_tbl i8');
+
+-- Test that SERIALIZE is accepted as a parameter to explain
+-- timings are filtered out by explain_filter
+create table test_serialize(id bigserial, val text);
+select explain_filter('explain (analyze,serialize) select * from test_serialize');
+drop table test_serialize;
+
+-- Test that SERIALIZE BINARY is accepted as a parameter to explain
+create table test_serialize(id bigserial, val text);
+select explain_filter('explain (analyze,serialize binary,buffers) select * from test_serialize');
+drop table test_serialize;
+
+-- Test that _SERIALIZE invalidparameter_ is not accepted as a parameter to explain
+create table test_serialize(id bigserial, val text);
+select explain_filter('explain (analyze,serialize invalidparameter) select * from test_serialize');
+drop table test_serialize;
+
+-- Test SERIALIZE is _not_ accepted as a parameter to explain unless ANALYZE is specified
+create table test_serialize(id bigserial, val text);
+select explain_filter('explain (serialize) select * from test_serialize');
+drop table test_serialize;
+
+-- Test SERIALIZEBINARY is _not_ accepted as a parameter to explain unless ANALYZE is specified
+create table test_serialize(id bigserial, val text);
+select explain_filter('explain (serialize binary) select * from test_serialize');
+drop table test_serialize;

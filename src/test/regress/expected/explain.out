@@ -135,7 +135,7 @@ select explain_filter('explain (analyze, buffers, format xml) select * from int8
  </explain>
 (1 row)
 
-select explain_filter('explain (analyze, buffers, format yaml) select * from int8_tbl i8');
+select explain_filter('explain (analyze, serialize, buffers, format yaml) select * from int8_tbl i8');
         explain_filter         
 -------------------------------
  - Plan:                      +
@@ -175,6 +175,20 @@ select explain_filter('explain (analyze, buffers, format yaml) select * from int
      Temp Written Blocks: N   +
    Planning Time: N.N         +
    Triggers:                  +
+   Serialization:             +
+     Time: N.N                +
+     Written Bytes: N         +
+     Format: "text"           +
+     Shared Hit Blocks: N     +
+     Shared Read Blocks: N    +
+     Shared Dirtied Blocks: N +
+     Shared Written Blocks: N +
+     Local Hit Blocks: N      +
+     Local Read Blocks: N     +
+     Local Dirtied Blocks: N  +
+     Local Written Blocks: N  +
+     Temp Read Blocks: N      +
+     Temp Written Blocks: N   +
    Execution Time: N.N
 (1 row)
 
@@ -639,3 +653,48 @@ select explain_filter('explain (verbose) select * from int8_tbl i8');
  Query Identifier: N
 (3 rows)
 
+-- Test that SERIALIZE is accepted as a parameter to explain
+-- timings are filtered out by explain_filter
+create table test_serialize(id bigserial, val text);
+select explain_filter('explain (analyze,serialize) select * from test_serialize');
+                                          explain_filter                                          
+--------------------------------------------------------------------------------------------------
+ Seq Scan on test_serialize  (cost=N.N..N.N rows=N width=N) (actual time=N.N..N.N rows=N loops=N)
+ Planning Time: N.N ms
+ Serialization: time=N.N  produced=NkB  format=text
+ Execution Time: N.N ms
+(4 rows)
+
+drop table test_serialize;
+-- Test that SERIALIZE BINARY is accepted as a parameter to explain
+create table test_serialize(id bigserial, val text);
+select explain_filter('explain (analyze,serialize binary,buffers) select * from test_serialize');
+                                          explain_filter                                          
+--------------------------------------------------------------------------------------------------
+ Seq Scan on test_serialize  (cost=N.N..N.N rows=N width=N) (actual time=N.N..N.N rows=N loops=N)
+ Planning Time: N.N ms
+ Serialization: time=N.N  produced=NkB  format=binary
+ Execution Time: N.N ms
+(4 rows)
+
+drop table test_serialize;
+-- Test that _SERIALIZE invalidparameter_ is not accepted as a parameter to explain
+create table test_serialize(id bigserial, val text);
+select explain_filter('explain (analyze,serialize invalidparameter) select * from test_serialize');
+ERROR:  unrecognized value for EXPLAIN option "serialize": "invalidparameter"
+LINE 1: select explain_filter('explain (analyze,serialize invalidpar...
+                         ^
+CONTEXT:  PL/pgSQL function explain_filter(text) line 5 at FOR over EXECUTE statement
+drop table test_serialize;
+-- Test SERIALIZE is _not_ accepted as a parameter to explain unless ANALYZE is specified
+create table test_serialize(id bigserial, val text);
+select explain_filter('explain (serialize) select * from test_serialize');
+ERROR:  EXPLAIN option SERIALIZE requires ANALYZE
+CONTEXT:  PL/pgSQL function explain_filter(text) line 5 at FOR over EXECUTE statement
+drop table test_serialize;
+-- Test SERIALIZEBINARY is _not_ accepted as a parameter to explain unless ANALYZE is specified
+create table test_serialize(id bigserial, val text);
+select explain_filter('explain (serialize binary) select * from test_serialize');
+ERROR:  EXPLAIN option SERIALIZE requires ANALYZE
+CONTEXT:  PL/pgSQL function explain_filter(text) line 5 at FOR over EXECUTE statement
+drop table test_serialize;

@@ -2536,6 +2536,7 @@ SerCommitSeqNo
 SerialControl
 SerialIOData
 SerializableXactHandle
+SerializeDestReceiver
 SerializedActiveRelMaps
 SerializedClientConnectionInfo
 SerializedRanges

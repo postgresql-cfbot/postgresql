@@ -41,6 +41,7 @@ EXPLAIN [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] <rep
     SETTINGS [ <replaceable class="parameter">boolean</replaceable> ]
     GENERIC_PLAN [ <replaceable class="parameter">boolean</replaceable> ]
     BUFFERS [ <replaceable class="parameter">boolean</replaceable> ]
+    SERIALIZE [ { NONE | TEXT | BINARY } ]
     WAL [ <replaceable class="parameter">boolean</replaceable> ]
     TIMING [ <replaceable class="parameter">boolean</replaceable> ]
     SUMMARY [ <replaceable class="parameter">boolean</replaceable> ]
@@ -202,6 +203,32 @@ ROLLBACK;
       upper-level node includes those used by all its child nodes.  In text
       format, only non-zero values are printed.  This parameter defaults to
       <literal>FALSE</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>SERIALIZE</literal></term>
+    <listitem>
+     <para>
+      Specifies whether the query's results should be serialized as if the
+      data was sent to the client using textual or binary representations.
+      If the value value is <literal>NONE</literal> we don't process output
+      tuples, so data from <acronym>TOAST</acronym>ed values is not accessed
+      and EXPLAIN timings may be unexpected.  If the value is
+      <literal>TEXT</literal> or <literal>BINARY</literal>,
+      <productname>PostgreSQL</productname> will measure the size of the
+      would-be transmitted data after serializing the rows to
+      <literal>DataRow</literal> packets, using each column type's
+      <literal>output</literal> (for <literal>TEXT</literal>) or
+      <literal>send</literal> (for <literal>BINARY</literal>) functions for
+      serializing the column's values.  When the <literal>TIMING</literal>
+      option is enabled, the output also includes how much time was spent to
+      serialize the data.
+      This parameter may only be used when <literal>ANALYZE</literal> is also
+      enabled.  The default value for this parameter is <literal>NONE</literal>,
+      but when <literal>SERIALIZE</literal> is provided without parameters,
+      <literal>TEXT</literal> is used instead.
      </para>
     </listitem>
    </varlistentry>

@@ -120,6 +120,7 @@ static char *dlpath = PKGLIBDIR;
 static char *user = NULL;
 static _stringlist *extraroles = NULL;
 static char *config_auth_datadir = NULL;
+static bool globals_check = false;
 
 /* internal variables */
 static const char *progname;
@@ -132,6 +133,8 @@ static char sockself[MAXPGPATH];
 static char socklock[MAXPGPATH];
 static StringInfo failed_tests = NULL;
 static bool in_note = false;
+static _stringlist *globals_before = NULL;
+static _stringlist *globals_after = NULL;
 
 static _resultmap *resultmap = NULL;
 
@@ -242,6 +245,57 @@ split_to_stringlist(const char *s, const char *delim, _stringlist **listhead)
 		token = strtok(NULL, delim);
 	}
 	free(sc);
+}
+
+/*
+ * Query the cluster and save the first column of the results into a
+ * stringlist.
+ */
+static void
+query_to_stringlist(const char *dbname, const char *query, _stringlist **listhead)
+{
+	PGconn	   *conn;
+	PGresult   *res;
+	StringInfo	buf = makeStringInfo();
+
+	appendStringInfo(buf, "dbname=%s", dbname);
+
+	conn = PQconnectdb(buf->data);
+	if (PQstatus(conn) != CONNECTION_OK)
+		bail("unable to connect to cluster: %s", PQerrorMessage(conn));
+
+	res = PQexec(conn, query);
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		bail("unable to query database: %s", PQerrorMessage(conn));
+
+	for (int i = 0; i < PQntuples(res); i++)
+		add_stringlist_item(listhead, pstrdup(PQgetvalue(res, i, 0)));
+
+	pfree(buf->data);
+	PQclear(res);
+	PQfinish(conn);
+}
+
+/*
+ * Compare two stringlists for string equality
+ */
+static bool
+diff_stringlist(_stringlist *a, _stringlist *b)
+{
+	_stringlist *sla = a;
+	_stringlist *slb = b;
+
+	for (; sla && slb; sla = sla->next, slb = slb->next)
+	{
+		if (strcmp(sla->str, slb->str) != 0)
+			return false;
+	}
+
+	/* If we reached the end of both lists at the same time, they are equal */
+	if (sla == NULL && slb == NULL)
+		return true;
+
+	return false;
 }
 
 /*
@@ -2041,6 +2095,7 @@ help(void)
 	printf(_("      --dlpath=DIR              look for dynamic libraries in DIR\n"));
 	printf(_("      --encoding=ENCODING       use ENCODING as the encoding\n"));
 	printf(_("      --expecteddir=DIR         take expected files from DIR (default \".\")\n"));
+	printf(_("      --globals-check           fail if global objects are left after test\n"));
 	printf(_("  -h, --help                    show this help, then exit\n"));
 	printf(_("      --inputdir=DIR            take input files from DIR (default \".\")\n"));
 	printf(_("      --launcher=CMD            use CMD as launcher of psql\n"));
@@ -2105,6 +2160,7 @@ regression_main(int argc, char *argv[],
 		{"config-auth", required_argument, NULL, 24},
 		{"max-concurrent-tests", required_argument, NULL, 25},
 		{"expecteddir", required_argument, NULL, 26},
+		{"globals-check", no_argument, NULL, 27},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -2232,6 +2288,9 @@ regression_main(int argc, char *argv[],
 				break;
 			case 26:
 				expecteddir = pg_strdup(optarg);
+				break;
+			case 27:
+				globals_check = true;
 				break;
 			default:
 				/* getopt_long already emitted a complaint */
@@ -2613,6 +2672,21 @@ regression_main(int argc, char *argv[],
 	}
 
 	/*
+	 * Store the global objects before the test starts such that we can check
+	 * for any objects left behind after the tests finish.
+	 */
+	if (globals_check)
+	{
+		query_to_stringlist("postgres",
+							"(SELECT rolname AS obj FROM pg_catalog.pg_roles ORDER BY 1) "
+							"UNION ALL "
+							"(SELECT spcname AS obj FROM pg_catalog.pg_tablespace ORDER BY 1) "
+							"UNION ALL "
+							"(SELECT subname AS obj FROM pg_catalog.pg_subscription ORDER BY 1)",
+							&globals_before);
+	}
+
+	/*
 	 * Ready to run the tests
 	 */
 	for (sl = schedulelist; sl != NULL; sl = sl->next)
@@ -2623,6 +2697,30 @@ regression_main(int argc, char *argv[],
 	for (sl = extra_tests; sl != NULL; sl = sl->next)
 	{
 		run_single_test(sl->str, startfunc, postfunc);
+	}
+
+	/*
+	 * Store the global objects again after the tests have finished and
+	 * compare with the list from before the tests.
+	 */
+	if (globals_check)
+	{
+		query_to_stringlist("postgres",
+							"(SELECT rolname AS obj FROM pg_catalog.pg_roles ORDER BY 1) "
+							"UNION ALL "
+							"(SELECT spcname AS obj FROM pg_catalog.pg_tablespace ORDER BY 1) "
+							"UNION ALL "
+							"(SELECT subname AS obj FROM pg_catalog.pg_subscription ORDER BY 1)",
+							&globals_after);
+
+		if (!diff_stringlist(globals_before, globals_after))
+		{
+			test_status_failed("global_objects", 0.0, false);
+		}
+		else
+		{
+			test_status_ok("global_objects", 0.0, false);
+		}
 	}
 
 	/*

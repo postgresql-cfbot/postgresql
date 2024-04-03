@@ -59,8 +59,36 @@ static void write_reconstructed_file(char *input_filename,
 									 off_t *offsetmap,
 									 pg_checksum_context *checksum_ctx,
 									 bool debug,
-									 bool dry_run);
+									 bool dry_run,
+									 CopyMethod copy_method,
+									 int prefetch_target);
 static void read_bytes(rfile *rf, void *buffer, unsigned length);
+static void write_blocks(int wfd, char *output_filename,
+						 uint8 *buffer, int nblocks,
+						 pg_checksum_context *checksum_ctx);
+static void read_blocks(rfile *s, off_t off, uint8 *buffer, int nblocks);
+
+/*
+ * state of the asynchronous prefetcher
+ */
+typedef struct prefetch_state
+{
+	unsigned	next_block;			/* block to prefetch next */
+	int			prefetch_distance;	/* current distance (<= target) */
+	int			prefetch_target;	/* target distance */
+
+	/* prefetch statistics - number of requests and prefetched blocks */
+	unsigned	prefetch_count;
+	unsigned	prefetch_blocks;
+} prefetch_state;
+
+static void prefetch_init(prefetch_state *state,
+						  int prefetch_target);
+static void prefetch_blocks(prefetch_state *state,
+							unsigned block,
+							unsigned block_length,
+							rfile **sourcemap,
+							off_t *offsetmap);
 
 /*
  * Reconstruct a full file from an incremental file and a chain of prior
@@ -90,7 +118,9 @@ reconstruct_from_incremental_file(char *input_filename,
 								  int *checksum_length,
 								  uint8 **checksum_payload,
 								  bool debug,
-								  bool dry_run)
+								  bool dry_run,
+								  CopyMethod copy_method,
+								  int prefetch_target)
 {
 	rfile	  **source;
 	rfile	   *latest_source = NULL;
@@ -319,12 +349,13 @@ reconstruct_from_incremental_file(char *input_filename,
 	 */
 	if (copy_source != NULL)
 		copy_file(copy_source->filename, output_filename,
-				  &checksum_ctx, dry_run);
+				  &checksum_ctx, dry_run, copy_method);
 	else
 	{
 		write_reconstructed_file(input_filename, output_filename,
 								 block_length, sourcemap, offsetmap,
-								 &checksum_ctx, debug, dry_run);
+								 &checksum_ctx, debug, dry_run,
+								 copy_method, prefetch_target);
 		debug_reconstruction(n_prior_backups + 1, source, dry_run);
 	}
 
@@ -472,6 +503,14 @@ make_incremental_rfile(char *filename)
 		sizeof(rf->truncation_block_length) +
 		sizeof(BlockNumber) * rf->num_blocks;
 
+	/*
+	 * Round header length to a multiple of BLCKSZ, so that blocks contents
+	 * are properly aligned. Only do this when the file actually has data for
+	 * some blocks.
+	 */
+	if ((rf->num_blocks > 0) && ((rf->header_length % BLCKSZ) != 0))
+		rf->header_length += (BLCKSZ - (rf->header_length % BLCKSZ));
+
 	return rf;
 }
 
@@ -527,11 +566,17 @@ write_reconstructed_file(char *input_filename,
 						 off_t *offsetmap,
 						 pg_checksum_context *checksum_ctx,
 						 bool debug,
-						 bool dry_run)
+						 bool dry_run,
+						 CopyMethod copy_method,
+						 int prefetch_target)
 {
 	int			wfd = -1;
-	unsigned	i;
+	unsigned	next_idx;
 	unsigned	zero_blocks = 0;
+	prefetch_state	prefetch;
+
+	/* initialize the block prefetcher */
+	prefetch_init(&prefetch, prefetch_target);
 
 	/* Debugging output. */
 	if (debug)
@@ -609,25 +654,51 @@ write_reconstructed_file(char *input_filename,
 		pg_fatal("could not open file \"%s\": %m", output_filename);
 
 	/* Read and write the blocks as required. */
-	for (i = 0; i < block_length; ++i)
+	next_idx = 0;
+	while (next_idx < block_length)
 	{
-		uint8		buffer[BLCKSZ];
-		rfile	   *s = sourcemap[i];
+#define	BLOCK_COUNT(first, last)	((last) - (first) + 1)
+#define	BATCH_SIZE		128			/* 1MB */
+		uint8		buffer[BATCH_SIZE * BLCKSZ];
+		int			first_idx = next_idx;
+		int			last_idx = next_idx;
+		rfile	   *s = sourcemap[first_idx];
 		int			wb;
+		int			nblocks;
+
+		/*
+		 * Determine the range of blocks coming from the same source file,
+		 * but not more than BLOCK_COUNT (1MB) at a time. The range starts
+		 * at first_idx, ends with last_idx (both are inclusive).
+		 */
+		while ((last_idx + 1 < block_length) &&			/* valid block */
+			   (sourcemap[last_idx+1] == s) &&			/* same file */
+			   (BLOCK_COUNT(first_idx, last_idx) < BATCH_SIZE))	/* 1MB */
+			last_idx += 1;
+
+		/* Calculate batch size, set start of the next loop. */
+		nblocks = BLOCK_COUNT(first_idx, last_idx);
+		next_idx += nblocks;
+
+		Assert(nblocks <= BATCH_SIZE);
+		Assert(next_idx == (last_idx + 1));
 
 		/* Update accounting information. */
 		if (s == NULL)
-			++zero_blocks;
+			zero_blocks += nblocks;
 		else
 		{
-			s->num_blocks_read++;
+			s->num_blocks_read += nblocks;
 			s->highest_offset_read = Max(s->highest_offset_read,
-										 offsetmap[i] + BLCKSZ);
+										 offsetmap[last_idx] + BLCKSZ);
 		}
 
 		/* Skip the rest of this in dry-run mode. */
 		if (dry_run)
 			continue;
+
+		/* do prefetching if enabled */
+		prefetch_blocks(&prefetch, last_idx, block_length, sourcemap, offsetmap);
 
 		/* Read or zero-fill the block as appropriate. */
 		if (s == NULL)
@@ -637,38 +708,57 @@ write_reconstructed_file(char *input_filename,
 			 * uninitialized block, so just zero-fill it.
 			 */
 			memset(buffer, 0, BLCKSZ);
-		}
-		else
-		{
-			int			rb;
 
-			/* Read the block from the correct source, except if dry-run. */
-			rb = pg_pread(s->fd, buffer, BLCKSZ, offsetmap[i]);
-			if (rb != BLCKSZ)
+			/* Write out the block(s), update checksum if needed. */
+			write_blocks(wfd, output_filename, buffer, nblocks, checksum_ctx);
+
+			continue;
+		}
+
+		/* now copy the blocks using either read/write or copy_file_range */
+		if (copy_method != COPY_METHOD_COPY_FILE_RANGE)
+		{
+			/*
+			 * Read the batch of blocks from the correct source file, and
+			 * then write them out, possibly with checksum update.
+			 */
+			read_blocks(s, offsetmap[first_idx], buffer, nblocks);
+			write_blocks(wfd, output_filename, buffer, nblocks, checksum_ctx);
+		}
+		else	/* use copy_file_range */
+		{
+			/* copy_file_range modifies the passed offset, so make a copy */
+			off_t	off = offsetmap[first_idx];
+			size_t	nwritten = 0;
+
+			/*
+			 * Retry until we've written all the bytes (the offset is updated
+			 * by copy_file_range, and so is the wfd file offset).
+			 */
+			do
 			{
-				if (rb < 0)
-					pg_fatal("could not read file \"%s\": %m", s->filename);
-				else
-					pg_fatal("could not read file \"%s\": read only %d of %d bytes at offset %llu",
-							 s->filename, rb, BLCKSZ,
-							 (unsigned long long) offsetmap[i]);
-			}
-		}
+				wb = copy_file_range(s->fd, &off, wfd, NULL, (BLCKSZ * nblocks) - nwritten, 0);
 
-		/* Write out the block. */
-		if ((wb = write(wfd, buffer, BLCKSZ)) != BLCKSZ)
-		{
-			if (wb < 0)
-				pg_fatal("could not write file \"%s\": %m", output_filename);
-			else
-				pg_fatal("could not write file \"%s\": wrote only %d of %d bytes",
-						 output_filename, wb, BLCKSZ);
-		}
+				if (wb < 0)
+					pg_fatal("error while copying file range from \"%s\" to \"%s\": %m",
+							 input_filename, output_filename);
 
-		/* Update the checksum computation. */
-		if (pg_checksum_update(checksum_ctx, buffer, BLCKSZ) < 0)
-			pg_fatal("could not update checksum of file \"%s\"",
-					 output_filename);
+				nwritten += wb;
+
+			} while ((nblocks * BLCKSZ) > nwritten);
+
+			/* when checksum calculation not needed, we're done */
+			if (checksum_ctx->type == CHECKSUM_TYPE_NONE)
+				continue;
+
+			/* read the block(s) and update the checksum */
+			read_blocks(s, offsetmap[first_idx], buffer, nblocks);
+
+			/* Update the checksum computation. */
+			if (pg_checksum_update(checksum_ctx, buffer, (nblocks * BLCKSZ)) < 0)
+				pg_fatal("could not update checksum of file \"%s\"",
+						 output_filename);
+		}
 	}
 
 	/* Debugging output. */
@@ -680,7 +770,164 @@ write_reconstructed_file(char *input_filename,
 			pg_log_debug("zero-filled %u blocks", zero_blocks);
 	}
 
+	if (prefetch.prefetch_blocks > 0)
+	{
+		/* print how many blocks we prefetched / skipped */
+		pg_log_debug("prefetch requests %u blocks %u (%u skipped)",
+					 prefetch.prefetch_count, prefetch.prefetch_blocks,
+					 (block_length - prefetch.prefetch_blocks));
+	}
+
 	/* Close the output file. */
 	if (wfd >= 0 && close(wfd) != 0)
 		pg_fatal("could not close \"%s\": %m", output_filename);
+}
+
+static void
+write_blocks(int fd, char *output_filename,
+			 uint8 *buffer, int nblocks, pg_checksum_context *checksum_ctx)
+{
+	int	wb;
+
+	if ((wb = write(fd, buffer, nblocks * BLCKSZ)) != (nblocks * BLCKSZ))
+	{
+		if (wb < 0)
+			pg_fatal("could not write file \"%s\": %m", output_filename);
+		else
+			pg_fatal("could not write file \"%s\": wrote only %d of %d bytes",
+					 output_filename, wb, (nblocks * BLCKSZ));
+	}
+
+	/* Update the checksum computation. */
+	if (pg_checksum_update(checksum_ctx, buffer, (nblocks * BLCKSZ)) < 0)
+		pg_fatal("could not update checksum of file \"%s\"",
+				 output_filename);
+}
+
+static void
+read_blocks(rfile *s, off_t off, uint8 *buffer, int nblocks)
+{
+	int			rb;
+
+	/* Read the block from the correct source, except if dry-run. */
+	rb = pg_pread(s->fd, buffer, (nblocks * BLCKSZ), off);
+	if (rb != (nblocks * BLCKSZ))
+	{
+		if (rb < 0)
+			pg_fatal("could not read file \"%s\": %m", s->filename);
+		else
+			pg_fatal("could not read file \"%s\": read only %d of %d bytes at offset %llu",
+					 s->filename, rb, (nblocks * BLCKSZ),
+					 (unsigned long long) off);
+	}
+}
+
+/*
+ * prefetch_init
+ *		Initializes state of the prefetcher.
+ *
+ * Initialize state of the prefetcher, to start with the first block and maximum
+ * prefetch distance (prefetch_target=0 means prefetching disabled). The actual
+ * prefetch distance will gradually increase, until it reaches the target.
+ */
+static void
+prefetch_init(prefetch_state *state, int prefetch_target)
+{
+	Assert(prefetch_target >= 0);
+
+	state->next_block = 0;
+
+	/* XXX Disables the gradual ramp-up, but we're reading data in batches and
+	 * we probably need to cover the whole next batch at once. */
+	state->prefetch_distance = prefetch_target;
+	state->prefetch_target = prefetch_target;
+
+	state->prefetch_count = 0;
+	state->prefetch_blocks = 0;
+}
+
+/*
+ * prefetch_blocks
+ *		Perform asynchronous prefetching of blocks to be reconstructed next.
+ *
+ * Initiates asynchronous prefetch of to be reconstructed blocks.
+ *
+ * current_block - The block to be reconstructed in the current loop, right
+ * after the prefetching. This means we're potentially prefetching blocks
+ * in the range [current_block+1, current_block+current_dinstance], with
+ * both values inclusive.
+ *
+ * block_length - Number of blocks to reconstruct, also length of sourcemap
+ * and offsetmap arrays.
+ */
+static void
+prefetch_blocks(prefetch_state *state, unsigned current_block,
+				unsigned block_length, rfile **sourcemap, off_t* offsetmap)
+{
+#ifdef USE_PREFETCH
+	/* end of prefetch range (first block to not prefetch) */
+	unsigned	max_block;
+
+	/* bail out if prefetching not enabled */
+	if (state->prefetch_target == 0)
+		return;
+
+	/* bail out if we've already prefetched the last block */
+	if (state->next_block == block_length)
+		return;
+
+	/* gradually increase prefetch distance until the target */
+	state->prefetch_distance = Min(state->prefetch_distance + 1,
+								   state->prefetch_target);
+
+	/*
+	 * Where should we start prefetching? We don't want to prefetch blocks
+	 * that we've already prefetched, that's pointless. And we also don't
+	 * want to prefetch the block we're just about to read. This can't
+	 * overflow because we know (current_block < block_length).
+	 */
+	state->next_block = Max(state->next_block, current_block + 1);
+
+	/*
+	 * How far to prefetch? Calculate the first block to not prefetch, i.e.
+	 * right after [current_block + current_distance]. It's possible the
+	 * second part overflows and wraps around, but in that case we just
+	 * don't prefetch a couple pages at the end.
+	 *
+	 * XXX But this also shouldn't be possible, thanks to the check of
+	 * (next_block == block_length) at the very beginning.
+	 */
+	max_block = Min(block_length, current_block + state->prefetch_distance + 1);
+
+	while (state->next_block < max_block)
+	{
+		/* range to prefetch in this round */
+		int			nblocks = 0;
+		unsigned	block = state->next_block;
+
+		rfile  *f = sourcemap[block];
+		off_t	off = offsetmap[block];
+
+		/* find the last block in this prefetch range */
+		while ((block + nblocks < max_block) &&
+			   (sourcemap[block + nblocks] == f))
+			nblocks++;
+
+		Assert(nblocks <= state->prefetch_distance);
+
+		/* remember how far we prefetched, even for f=NULL */
+		state->next_block = block + nblocks;
+
+		if (f == NULL)
+			continue;
+
+		state->prefetch_blocks += nblocks;
+		state->prefetch_count += 1;
+
+		/* We ignore errors because this is only a hint.*/
+		(void) posix_fadvise(f->fd, off, (nblocks * BLCKSZ), POSIX_FADV_WILLNEED);
+	}
+
+	Assert(state->next_block <= block_length);
+#endif
 }

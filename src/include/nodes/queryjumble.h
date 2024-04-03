@@ -77,10 +77,10 @@ extern PGDLLIMPORT int compute_query_id;
 extern const char *CleanQuerytext(const char *query, int *location, int *len);
 extern JumbleState *JumbleQuery(Query *query);
 extern void EnableQueryId(void);
-extern void SetQueryIdConstMerge(bool value);
+extern void SetQueryIdConstMerge(int threshold);
 
 extern PGDLLIMPORT bool query_id_enabled;
-extern PGDLLIMPORT bool query_id_const_merge;
+extern PGDLLIMPORT int 	query_id_const_merge_threshold;
 
 /*
  * Returns whether query identifier computation has been enabled, either

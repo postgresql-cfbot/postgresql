@@ -15,7 +15,7 @@ SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
 SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
 
 -- Normal scenario, too many simple constants for an IN query
-SET pg_stat_statements.query_id_const_merge = on;
+SET pg_stat_statements.query_id_const_merge_threshold = 1;
 
 SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 SELECT * FROM test_merge WHERE id IN (1);
@@ -68,4 +68,21 @@ WITH cte AS (
 SELECT ARRAY['a', 'b', 'c', const::varchar] AS result
 FROM cte;
 
-RESET pg_stat_statements.query_id_const_merge;
+-- With the threshold
+SET pg_stat_statements.query_id_const_merge_threshold = 10;
+
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+-- With gaps on the threshold
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+RESET pg_stat_statements.query_id_const_merge_threshold;

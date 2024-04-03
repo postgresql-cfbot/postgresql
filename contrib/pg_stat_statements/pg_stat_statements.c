@@ -265,8 +265,8 @@ static ExecutorFinish_hook_type prev_ExecutorFinish = NULL;
 static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
 static ProcessUtility_hook_type prev_ProcessUtility = NULL;
 
-/* An assign hook to keep query_id_const_merge in sync */
-static void pgss_query_id_const_merge_assign_hook(bool newvalue, void *extra);
+/* An assign hook to keep query_id_const_merge_threshold in sync */
+static void pgss_query_id_const_merge_assign_hook(int newvalue, void *extra);
 
 /* Links to shared memory state */
 static pgssSharedState *pgss = NULL;
@@ -295,8 +295,8 @@ static bool pgss_track_utility = true;	/* whether to track utility commands */
 static bool pgss_track_planning = false;	/* whether to track planning
 											 * duration */
 static bool pgss_save = true;	/* whether to save stats across shutdown */
-static bool pgss_query_id_const_merge = false;	/* request constants merging
-												 * when computing query_id */
+static int  pgss_query_id_const_merge_threshold = 0;	/* request constants merging
+														 * when computing query_id */
 
 #define pgss_enabled(level) \
 	(!IsParallelWorker() && \
@@ -458,20 +458,22 @@ _PG_init(void)
 							 NULL,
 							 NULL);
 
-	DefineCustomBoolVariable("pg_stat_statements.query_id_const_merge",
-							 "Whether to merge constants in a list when computing query_id.",
-							 NULL,
-							 &pgss_query_id_const_merge,
-							 false,
-							 PGC_SUSET,
-							 0,
-							 NULL,
-							 pgss_query_id_const_merge_assign_hook,
-							 NULL);
+	DefineCustomIntVariable("pg_stat_statements.query_id_const_merge_threshold",
+							"Whether to merge constants in a list when computing query_id.",
+							NULL,
+							&pgss_query_id_const_merge_threshold,
+							0,
+							0,
+							INT_MAX,
+							PGC_SUSET,
+							0,
+							NULL,
+							pgss_query_id_const_merge_assign_hook,
+							NULL);
 
 	MarkGUCPrefixReserved("pg_stat_statements");
 
-	SetQueryIdConstMerge(pgss_query_id_const_merge);
+	SetQueryIdConstMerge(pgss_query_id_const_merge_threshold);
 
 	/*
 	 * Install hooks.
@@ -3043,10 +3045,10 @@ comp_location(const void *a, const void *b)
 }
 
 /*
- * Notify query jumbling about query_id_const_merge status
+ * Notify query jumbling about query_id_const_merge_threshold status
  */
 static void
-pgss_query_id_const_merge_assign_hook(bool newvalue, void *extra)
+pgss_query_id_const_merge_assign_hook(int newvalue, void *extra)
 {
 	SetQueryIdConstMerge(newvalue);
 }

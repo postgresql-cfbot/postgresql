@@ -116,6 +116,7 @@ static backslashResult exec_command_lo(PsqlScanState scan_state, bool active_bra
 static backslashResult exec_command_out(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_print(PsqlScanState scan_state, bool active_branch,
 										  PQExpBuffer query_buf, PQExpBuffer previous_buf);
+static backslashResult exec_command_parameterset(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_password(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_prompt(PsqlScanState scan_state, bool active_branch,
 										   const char *cmd);
@@ -379,6 +380,8 @@ exec_command(const char *cmd,
 	else if (strcmp(cmd, "p") == 0 || strcmp(cmd, "print") == 0)
 		status = exec_command_print(scan_state, active_branch,
 									query_buf, previous_buf);
+	else if (strcmp(cmd, "parameterset") == 0)
+		status = exec_command_parameterset(scan_state, active_branch);
 	else if (strcmp(cmd, "password") == 0)
 		status = exec_command_password(scan_state, active_branch);
 	else if (strcmp(cmd, "prompt") == 0)
@@ -2094,6 +2097,48 @@ exec_command_print(PsqlScanState scan_state, bool active_branch,
 	}
 
 	return PSQL_CMD_SKIP_LINE;
+}
+
+/*
+ * \parameterset -- set query parameters
+ */
+static backslashResult
+exec_command_parameterset(PsqlScanState scan_state, bool active_branch)
+{
+	if (!active_branch)
+	{
+		ignore_slash_options(scan_state);
+		return PSQL_CMD_SKIP_LINE;
+	}
+
+	for (int i = 0; i < lengthof(pset.parameterset_args); i++)
+		pset.parameterset_args[i] = psql_scan_slash_option(scan_state,
+														   OT_NORMAL,
+														   NULL,
+														   true);
+
+	if (pset.parameterset_args[1] == NULL)
+	{
+		pg_log_error("\\parameterset needs two arguments");
+		goto error;
+	}
+
+	if (strncmp("_pq_.", pset.parameterset_args[0], 5) == 0)
+	{
+		pg_log_error("\\parameterset cannot be used to change protocol extensions parameters");
+		goto error;
+	}
+
+	pset.parameterset_flag = true;
+
+	return PSQL_CMD_SEND;
+
+error:
+	free(pset.parameterset_args[0]);
+	free(pset.parameterset_args[1]);
+	pset.parameterset_args[0] = NULL;
+	pset.parameterset_args[1] = NULL;
+	return PSQL_CMD_ERROR;
 }
 
 /*
@@ -3827,6 +3872,7 @@ connection_warnings(bool in_startup)
 		int			client_ver = PG_VERSION_NUM;
 		char		cverbuf[32];
 		char		sverbuf[32];
+		int			server_protocol_version;
 
 		if (pset.sversion != client_ver)
 		{
@@ -3862,6 +3908,42 @@ connection_warnings(bool in_startup)
 										 cverbuf, sizeof(cverbuf)),
 				   formatPGVersionNumber(pset.sversion, false,
 										 sverbuf, sizeof(sverbuf)));
+
+		server_protocol_version = PQprotocolVersion(pset.db);
+		if (server_protocol_version < PG_PROTOCOL_FULL(PG_PROTOCOL_LATEST))
+		{
+			int			client_major = PG_PROTOCOL_MAJOR(PG_PROTOCOL_LATEST);
+			int			client_minor = PG_PROTOCOL_MINOR(PG_PROTOCOL_LATEST);
+			int			server_major;
+			int			server_minor;
+
+			if (server_protocol_version == 3)
+			{
+				server_major = 3;
+				server_minor = 0;
+			}
+			else
+			{
+				server_major = server_protocol_version / 10000;
+				server_minor = server_protocol_version / 10000;
+			}
+			printf(_("WARNING: psql protocol version %d.%d, server protocol version %d.%d.\n"
+					 "         \\parameterset will not work.\n"),
+				   client_major, client_minor, server_major, server_minor);
+		}
+
+		if (PQunsupportedProtocolExtensionParameters(pset.db)[0] != NULL)
+		{
+			const char **unsupported_parameters = PQunsupportedProtocolExtensionParameters(pset.db);
+			int			i = 0;
+
+			printf(_("WARNING: Server does not support the following requested protocol extension parameters:\n"));
+			while (unsupported_parameters[i] != NULL)
+			{
+				printf("         %s\n", unsupported_parameters[i]);
+				i++;
+			}
+		}
 
 #ifdef WIN32
 		if (in_startup)

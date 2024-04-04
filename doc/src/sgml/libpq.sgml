@@ -2259,6 +2259,40 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
        </para>
       </listitem>
      </varlistentry>
+
+     <varlistentry id="libpq-max-protocol-version" xreflabel="load_balance_hosts">
+      <term><literal>max_protocol_version</literal></term>
+      <listitem>
+       <para>
+        Specifies the protocol version to request from the server. The argument
+        to this connection option is a single number: the result of multiplying
+        the major version number by 10000 and adding the minor version. For
+        example to request version 3.1 the provided argument should be 30001.
+        The default is to use the latest protocol version supported by libpq.
+        Normally there's no need to provide this argument, even when connecting
+        to PostgreSQL servers that don't support the latest protocol. The
+        reason for that is that all supported PostgreSQL server versions
+        automatically negotiate the highest minor protocol version supported by
+        both the client and server. But some servers might simply close
+        the connection when an unsupported protocol version is requested. This
+        problem only applies to unsupported <productname>PostgreSQL</productname>
+        versions, certain connection poolers and some other databases speaking
+        the <productname>PostgreSQL</productname> protocol. So this connection
+        option can be used as an escape hatch when connecting to such servers
+        with libpq.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="libpq-pq-protocol-managed-params" xreflabel="load_balance_hosts">
+      <term><literal>_pq_.protocol_managed_params</literal></term>
+      <listitem>
+       <para>
+        Specifies a value for the <xref linkend="guc-pq-protocol-managed-params"/>
+        configuration parameter.
+       </para>
+      </listitem>
+     </varlistentry>
     </variablelist>
    </para>
   </sect2>
@@ -2556,7 +2590,9 @@ const char *PQparameterStatus(const PGconn *conn, const char *paramName);
       </para>
 
       <para>
-       Parameters reported as of the current release include:
+       It's possible to choose for which parameter values are reported to the client
+       using <xref linkend="guc-pq-report-parameters"/>.
+       The parameters that are reported by default as of the current release include:
        <simplelist type="vert" columns="2">
         <member><varname>application_name</varname></member>
         <member><varname>client_encoding</varname></member>
@@ -2610,12 +2646,31 @@ const char *PQparameterStatus(const PGconn *conn, const char *paramName);
 int PQprotocolVersion(const PGconn *conn);
 </synopsis>
        Applications might wish to use this function to determine whether certain
-       features are supported.  Currently, the possible values are 3
-       (3.0 protocol), or zero (connection bad).  The protocol version will
-       not change after connection startup is complete, but it could
-       theoretically change during a connection reset.  The 3.0 protocol is
-       supported by <productname>PostgreSQL</productname> server versions 7.4
-       and above.
+       features are supported. The result is formed by multiplying the server's
+       major version number by 10000 and adding the minor version number.  For
+       example, version 3.1 will be returned as 30001, and version 4.0 will
+       be returned as 40000. The exception to this rule is protocol version
+       3.0, which will be returned as the value 3 for backwards compatibility
+       reasons. Zero is returned if the connection is bad.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="libpq-PQunsupportedProtocolExtensionParameters">
+     <term><function>PQunsupportedProtocolExtensionParameters</function><indexterm><primary>PQunsupportedProtocolExtensionParameters</primary></indexterm></term>
+
+     <listitem>
+      <para>
+       Returns a null-terminated array of protocol extensions that were
+       requested by the client but are not supported by the server.
+<synopsis>
+int PQunsupportedProtocolExtensionParameters(const PGconn *conn);
+</synopsis>
+       Applications might wish to use this function to determine whether certain
+       protocol extensions they intended to use are supported. Even when some
+       extension is not supported the connection can still be used, only the
+       unsupported extensions cannot be used. Returns NULL if the connection is
+       bad.
       </para>
      </listitem>
     </varlistentry>
@@ -3463,6 +3518,33 @@ PGresult *PQclosePortal(PGconn *conn, const char *portalName);
        </para>
       </listitem>
      </varlistentry>
+
+     <varlistentry id="libpq-PQparameterSet">
+      <term><function>PQparameterSet</function><indexterm><primary>PQparameterSet</primary></indexterm></term>
+
+      <listitem>
+       <para>
+        Submits a request to change a protocol parameter, and waits for completion.
+<synopsis>
+PGresult *PQparameterSet(PGconn *conn, const char *parameter, const char *value);
+</synopsis>
+       </para>
+
+       <para>
+        <xref linkend="libpq-PQparameterSet"/> allows a client to change
+        backend parameters on the current connection. This is identical to
+        sending a SET command, except that it is at the protocol level.
+       </para>
+
+       <para>
+        <parameter>parameter</parameter> is the name of the parameter to
+        change, and <parameter>value</parameter> is the value to which to
+        change it. On success, a <structname>PGresult</structname> with status
+        <literal>PGRES_COMMAND_OK</literal> is returned.
+       </para>
+      </listitem>
+     </varlistentry>
+
     </variablelist>
    </para>
 
@@ -5155,6 +5237,27 @@ int PQsendClosePortal(PGconn *conn, const char *portalName);
       </para>
      </listitem>
     </varlistentry>
+
+    <varlistentry id="libpq-PQsendParameterSet">
+     <term><function>PQsendParameterSet</function><indexterm><primary>PQsendParameterSet</primary></indexterm></term>
+
+     <listitem>
+      <para>
+        Submits a request to change a protocol parameter, without waiting for
+        completion.
+<synopsis>
+int PQsendParameterSet(PGconn *conn, const char *portalName);
+</synopsis>
+
+       This is an asynchronous version of <xref linkend="libpq-PQparameterSet"/>:
+       it returns 1 if it was able to dispatch the request, and 0 if not.
+       After a successful call, call <xref linkend="libpq-PQgetResult"/> to
+       obtain the results.  The function's parameters are handled
+       identically to <xref linkend="libpq-PQparameterSet"/>.
+      </para>
+     </listitem>
+    </varlistentry>
+
 
     <varlistentry id="libpq-PQgetResult">
      <term><function>PQgetResult</function><indexterm><primary>PQgetResult</primary></indexterm></term>

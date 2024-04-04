@@ -693,6 +693,413 @@ test_nosync(PGconn *conn)
 	fprintf(stderr, "ok\n");
 }
 
+static void
+test_parameter_set(PGconn *conn)
+{
+	PGresult   *res = NULL;
+	const char *val;
+
+	res = PQparameterSet(conn, "work_mem", "123MB");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+
+	res = PQexec(conn, "SHOW work_mem");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("Expected tuples, got %s: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	if (PQntuples(res) != 1)
+		pg_fatal("expected 1 result, got %d", PQntuples(res));
+
+	val = PQgetvalue(res, 0, 0);
+	if (strcmp(val, "123MB") != 0)
+		pg_fatal("expected 123MB, got %s", val);
+	PQclear(res);
+
+
+	/* Outside of a pipeline */
+	res = PQexec(conn, "SHOW _pq_.protocol_managed_params");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("Expected tuples, got %s: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	if (PQntuples(res) != 1)
+		pg_fatal("expected 1 result, got %d", PQntuples(res));
+	val = PQgetvalue(res, 0, 0);
+	if (strcmp(val, "") != 0)
+		pg_fatal("expected work_mem, got %s", val);
+
+	if (PQsendParameterSet(conn, "_pq_.protocol_managed_params", "work_mem") != 1)
+		pg_fatal("PQsendParameterSet failed: %s", PQerrorMessage(conn));
+	res = PQgetResult(conn);
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+	PQclear(res);
+	res = PQgetResult(conn);
+	if (res != NULL)
+		pg_fatal("did not receive terminating NULL");
+
+	res = PQexec(conn, "SHOW _pq_.protocol_managed_params");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("Expected tuples, got %s: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	if (PQntuples(res) != 1)
+		pg_fatal("expected 1 result, got %d", PQntuples(res));
+	val = PQgetvalue(res, 0, 0);
+	if (strcmp(val, "work_mem") != 0)
+		pg_fatal("expected work_mem, got %s", val);
+
+	if (PQsendParameterSet(conn, "work_mem", "42MB") != 1)
+		pg_fatal("PQsendParameterSet failed: %s", PQerrorMessage(conn));
+	res = PQgetResult(conn);
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+	PQclear(res);
+
+	res = PQexec(conn, "SHOW work_mem");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("Expected tuples, got %s: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	if (PQntuples(res) != 1)
+		pg_fatal("expected 1 result, got %d", PQntuples(res));
+
+	val = PQgetvalue(res, 0, 0);
+	if (strcmp(val, "42MB") != 0)
+		pg_fatal("expected 42MB, got %s", val);
+	PQclear(res);
+
+	res = PQexec(conn, "RESET ALL");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("Expected tuples, got %s: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+
+	res = PQexec(conn, "SHOW _pq_.protocol_managed_params");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("Expected tuples, got %s: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	if (PQntuples(res) != 1)
+		pg_fatal("expected 1 result, got %d", PQntuples(res));
+	val = PQgetvalue(res, 0, 0);
+	if (strcmp(val, "work_mem") != 0)
+		pg_fatal("expected 42MB, got %s", val);
+
+	res = PQexec(conn, "SHOW work_mem");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("Expected tuples, got %s: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	if (PQntuples(res) != 1)
+		pg_fatal("expected 1 result, got %d", PQntuples(res));
+
+	val = PQgetvalue(res, 0, 0);
+	if (strcmp(val, "42MB") != 0)
+		pg_fatal("expected 42MB, got %s", val);
+	PQclear(res);
+
+	/* In a pipeline with other queries */
+	if (PQenterPipelineMode(conn) != 1)
+		pg_fatal("failed to enter pipeline mode: %s", PQerrorMessage(conn));
+	if (PQsendParameterSet(conn, "work_mem", "10MB") != 1)
+		pg_fatal("PQsendParameterSet failed: %s", PQerrorMessage(conn));
+	PQsendFlushRequest(conn);
+	res = PQgetResult(conn);
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+	PQclear(res);
+	res = PQgetResult(conn);
+	if (res != NULL)
+		pg_fatal("did not receive terminating NULL");
+
+	/*
+	 * This is fine, but it opens an implicit transaction which should cause
+	 * the next ParameterSet message to fail
+	 */
+	if (PQsendQueryParams(conn, "SHOW work_mem", 0, NULL, NULL, NULL, NULL, 0) != 1)
+		pg_fatal("failed to send query: %s", PQerrorMessage(conn));
+	PQsendFlushRequest(conn);
+	res = PQgetResult(conn);
+	if (res == NULL)
+		pg_fatal("PQgetResult returned null when there's a pipeline item: %s",
+				 PQerrorMessage(conn));
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("unexpected result code %s from first pipeline item",
+				 PQresStatus(PQresultStatus(res)));
+
+	val = PQgetvalue(res, 0, 0);
+	if (strcmp(val, "10MB") != 0)
+		pg_fatal("expected 10MB, got %s", val);
+
+	res = PQgetResult(conn);
+	if (res != NULL)
+		pg_fatal("did not receive terminating NULL");
+
+	if (PQsendParameterSet(conn, "work_mem", "12MB") != 1)
+		pg_fatal("PQsendParameterSet failed: %s", PQerrorMessage(conn));
+	PQsendFlushRequest(conn);
+	res = PQgetResult(conn);
+	if (PQresultStatus(res) != PGRES_FATAL_ERROR)
+		pg_fatal("Should not be allowed to set work_mem anymore using ParameterSet in an implicit transaction");
+	res = PQgetResult(conn);
+	if (res != NULL)
+		pg_fatal("did not receive terminating NULL");
+
+	if (PQpipelineSync(conn) != 1)
+		pg_fatal("pipeline sync failed: %s", PQerrorMessage(conn));
+	res = PQgetResult(conn);
+	if (PQresultStatus(res) != PGRES_PIPELINE_SYNC)
+		pg_fatal("Unexpected result code %s instead of PGRES_PIPELINE_SYNC, error: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	res = PQgetResult(conn);
+	if (res != NULL)
+		pg_fatal("did not receive terminating NULL");
+	if (PQexitPipelineMode(conn) != 1)
+		pg_fatal("exiting pipeline failed: %s", PQerrorMessage(conn));
+
+	res = PQexec(conn, "SHOW work_mem");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("Expected tuples, got %s: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	if (PQntuples(res) != 1)
+		pg_fatal("expected 1 result, got %d", PQntuples(res));
+
+	val = PQgetvalue(res, 0, 0);
+	if (strcmp(val, "10MB") != 0)
+		pg_fatal("expected 10MB, got %s", val);
+	PQclear(res);
+
+	/* In transaction */
+	res = PQexec(conn, "BEGIN");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to begin transaction: %s", PQerrorMessage(conn));
+
+	res = PQparameterSet(conn, "work_mem", "30MB");
+	if (PQresultStatus(res) != PGRES_FATAL_ERROR)
+		pg_fatal("Should not be allowed to set work_mem anymore using ParameterSet in an explicit transaction");
+
+	res = PQexec(conn, "SHOW work_mem");
+	if (PQresultStatus(res) != PGRES_FATAL_ERROR)
+		pg_fatal("transaction should have been aborted");
+
+	res = PQexec(conn, "ROLLBACK");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+
+	/* it behaves transactionally */
+	res = PQexec(conn, "SHOW work_mem");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("Expected tuples, got %s: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	val = PQgetvalue(res, 0, 0);
+	if (strcmp(val, "10MB") != 0)
+		pg_fatal("expected 10MB, got %s", val);
+	PQclear(res);
+
+	/* In a failed pipeline */
+	if (PQenterPipelineMode(conn) != 1)
+		pg_fatal("failed to enter pipeline mode: %s", PQerrorMessage(conn));
+	if (PQsendQueryParams(conn, "SELECT 0/0", 0, NULL, NULL, NULL, NULL, 0) != 1)
+		pg_fatal("failed to send query: %s", PQerrorMessage(conn));
+	if (PQsendParameterSet(conn, "work_mem", "12MB") != 1)
+		pg_fatal("PQsendParameterSet failed: %s", PQerrorMessage(conn));
+	if (PQpipelineSync(conn) != 1)
+		pg_fatal("pipeline sync failed: %s", PQerrorMessage(conn));
+	res = PQgetResult(conn);
+	if (PQresultStatus(res) != PGRES_FATAL_ERROR)
+		pg_fatal("PQexec should have failed with division by zero");
+	res = PQgetResult(conn);
+	if (res != NULL)
+		pg_fatal("did not receive terminating NULL");
+	res = PQgetResult(conn);
+	if (PQresultStatus(res) != PGRES_PIPELINE_ABORTED)
+		pg_fatal("pipeline was not aborted");
+	res = PQgetResult(conn);
+	if (res != NULL)
+		pg_fatal("did not receive terminating NULL");
+	res = PQgetResult(conn);
+	if (PQresultStatus(res) != PGRES_PIPELINE_SYNC)
+		pg_fatal("Unexpected result code %s instead of PGRES_PIPELINE_SYNC, error: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	if (PQexitPipelineMode(conn) != 1)
+		pg_fatal("exiting pipeline failed: %s", PQerrorMessage(conn));
+
+	res = PQexec(conn, "SHOW work_mem");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("Expected tuples, got %s: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	val = PQgetvalue(res, 0, 0);
+	if (strcmp(val, "10MB") != 0)
+		pg_fatal("expected 10MB, got %s", val);
+	PQclear(res);
+
+	res = PQparameterSet(conn, "_pq_.protocol_managed_params", "role,session_authorization");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+
+	res = PQparameterSet(conn, "work_mem", "19MB");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+
+	/*
+	 * Now ParemeterSet for work_mem should be allowed again in transaction
+	 * and it should behave transactionally. First we show an implicit
+	 * transaction that commits.
+	 */
+	if (PQenterPipelineMode(conn) != 1)
+		pg_fatal("failed to enter pipeline mode: %s", PQerrorMessage(conn));
+	if (PQsendQueryParams(conn, "SHOW work_mem", 0, NULL, NULL, NULL, NULL, 0) != 1)
+		pg_fatal("failed to send query: %s", PQerrorMessage(conn));
+	PQsendFlushRequest(conn);
+	res = PQgetResult(conn);
+	if (res == NULL)
+		pg_fatal("PQgetResult returned null when there's a pipeline item: %s",
+				 PQerrorMessage(conn));
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("unexpected result code %s from first pipeline item",
+				 PQresStatus(PQresultStatus(res)));
+
+	val = PQgetvalue(res, 0, 0);
+	if (strcmp(val, "19MB") != 0)
+		pg_fatal("expected 19MB, got %s", val);
+
+	res = PQgetResult(conn);
+	if (res != NULL)
+		pg_fatal("did not receive terminating NULL");
+
+	if (PQsendParameterSet(conn, "work_mem", "12MB") != 1)
+		pg_fatal("PQsendParameterSet failed: %s", PQerrorMessage(conn));
+	PQsendFlushRequest(conn);
+	res = PQgetResult(conn);
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("Unexpected result code %s instead of PGRES_COMMAND_OK error: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	res = PQgetResult(conn);
+	if (res != NULL)
+		pg_fatal("did not receive terminating NULL");
+
+	if (PQpipelineSync(conn) != 1)
+		pg_fatal("pipeline sync failed: %s", PQerrorMessage(conn));
+	res = PQgetResult(conn);
+	if (PQresultStatus(res) != PGRES_PIPELINE_SYNC)
+		pg_fatal("Unexpected result code %s instead of PGRES_PIPELINE_SYNC, error: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	res = PQgetResult(conn);
+	if (res != NULL)
+		pg_fatal("did not receive terminating NULL");
+	if (PQexitPipelineMode(conn) != 1)
+		pg_fatal("exiting pipeline failed: %s", PQerrorMessage(conn));
+
+	res = PQexec(conn, "SHOW work_mem");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("Expected tuples, got %s: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	if (PQntuples(res) != 1)
+		pg_fatal("expected 1 result, got %d", PQntuples(res));
+
+	val = PQgetvalue(res, 0, 0);
+	if (strcmp(val, "12MB") != 0)
+		pg_fatal("expected 12MB, got %s", val);
+	PQclear(res);
+
+	/* Then we show an implicit transaction that rolls back ParameterSet  */
+	if (PQenterPipelineMode(conn) != 1)
+		pg_fatal("failed to enter pipeline mode: %s", PQerrorMessage(conn));
+	if (PQsendParameterSet(conn, "work_mem", "28MB") != 1)
+		pg_fatal("PQsendParameterSet failed: %s", PQerrorMessage(conn));
+	if (PQsendQueryParams(conn, "SELECT 0/0", 0, NULL, NULL, NULL, NULL, 0) != 1)
+		pg_fatal("failed to send query: %s", PQerrorMessage(conn));
+	if (PQpipelineSync(conn) != 1)
+		pg_fatal("pipeline sync failed: %s", PQerrorMessage(conn));
+	res = PQgetResult(conn);
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("Unexpected result code %s instead of PGRES_COMMAND_OK error: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	res = PQgetResult(conn);
+	if (res != NULL)
+		pg_fatal("did not receive terminating NULL");
+	res = PQgetResult(conn);
+	if (PQresultStatus(res) != PGRES_FATAL_ERROR)
+		pg_fatal("PQexec should have failed with division by zero");
+	res = PQgetResult(conn);
+	if (res != NULL)
+		pg_fatal("did not receive terminating NULL");
+
+	res = PQgetResult(conn);
+	if (PQresultStatus(res) != PGRES_PIPELINE_SYNC)
+		pg_fatal("Unexpected result code %s instead of PGRES_PIPELINE_SYNC, error: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	res = PQgetResult(conn);
+	if (res != NULL)
+		pg_fatal("did not receive terminating NULL");
+	if (PQexitPipelineMode(conn) != 1)
+		pg_fatal("exiting pipeline failed: %s", PQerrorMessage(conn));
+
+	/* check that it is rolled back */
+	res = PQexec(conn, "SHOW work_mem");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("Expected tuples, got %s: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	if (PQntuples(res) != 1)
+		pg_fatal("expected 1 result, got %d", PQntuples(res));
+
+	val = PQgetvalue(res, 0, 0);
+	if (strcmp(val, "12MB") != 0)
+		pg_fatal("expected 12MB, got %s", val);
+	PQclear(res);
+
+
+	/* Then we show an explicit transaction that rolls back ParameterSet  */
+	res = PQexec(conn, "BEGIN");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to begin transaction: %s", PQerrorMessage(conn));
+
+	res = PQparameterSet(conn, "work_mem", "30MB");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+
+	res = PQexec(conn, "SHOW work_mem");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("Expected tuples, got %s: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	if (PQntuples(res) != 1)
+		pg_fatal("expected 1 result, got %d", PQntuples(res));
+
+	val = PQgetvalue(res, 0, 0);
+	if (strcmp(val, "30MB") != 0)
+		pg_fatal("expected 30MB, got %s", val);
+	PQclear(res);
+
+	res = PQexec(conn, "ROLLBACK");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+
+	/* it behaves transactionally */
+	res = PQexec(conn, "SHOW work_mem");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_fatal("Expected tuples, got %s: %s",
+				 PQresStatus(PQresultStatus(res)), PQerrorMessage(conn));
+	val = PQgetvalue(res, 0, 0);
+	if (strcmp(val, "12MB") != 0)
+		pg_fatal("expected 12MB, got %s", val);
+	PQclear(res);
+
+
+	res = PQexec(conn, "SET SESSION AUTHORIZATION 'postgres'");
+	if (PQresultStatus(res) != PGRES_FATAL_ERROR)
+		pg_fatal("Should not be allowed to set SESSION AUTHORIZATION anymore using ParameterSet");
+
+	res = PQexec(conn, "SET ROLE 'postgres'");
+	if (PQresultStatus(res) != PGRES_FATAL_ERROR)
+		pg_fatal("Should not be allowed to set ROLE anymore using ParameterSet");
+	res = PQparameterSet(conn, "_pq_.protocol_managed_params", "doesnotexist");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("Using an unknown GUC should be allowed");
+
+	res = PQparameterSet(conn, "_pq_.protocol_managed_params", "work_mem,_pq_.protocol_managed_params");
+	if (PQresultStatus(res) != PGRES_FATAL_ERROR)
+		pg_fatal("Should not be allowed to use a protocol extension");
+
+	res = PQparameterSet(conn, "_pq_.protocol_managed_params", "\"");
+	if (PQresultStatus(res) != PGRES_FATAL_ERROR)
+		pg_fatal("Should not be allowed to use invalid list syntax");
+}
+
 /*
  * When an operation in a pipeline fails the rest of the pipeline is flushed. We
  * still have to get results for each pipeline item, but the item will just be
@@ -1487,6 +1894,76 @@ test_pipeline_idle(PGconn *conn)
 }
 
 static void
+test_report_parameters(PGconn *conn)
+{
+	PGresult   *res = NULL;
+	const char *val = NULL;
+
+	res = PQexec(conn, "SET application_name = 'test1'");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+
+	val = PQparameterStatus(conn, "application_name");
+	if (strcmp(val, "test1") != 0)
+		pg_fatal("expected application_name to tracked as 'test1', but was '%s'", val);
+
+	res = PQparameterSet(conn, "application_name", "test2");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+
+	val = PQparameterStatus(conn, "application_name");
+	if (strcmp(val, "test2") != 0)
+		pg_fatal("expected application_name to tracked as 'test2', but was '%s'", val);
+
+	res = PQparameterSet(conn, "_pq_.report_parameters", "lock_timeout");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+
+	/* Should have automatically received initial value */
+	val = PQparameterStatus(conn, "lock_timeout");
+	if (strcmp(val, "0") != 0)
+		pg_fatal("expected application_name to tracked as '123000', but was '%s'", val);
+
+	/*
+	 * Add some more parameters to track, including _pq_.report_parameters
+	 * itself.
+	 */
+	res = PQparameterSet(conn, "_pq_.report_parameters", "lock_timeout,_pq_.report_parameters,work_mem");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+
+	val = PQparameterStatus(conn, "lock_timeout");
+	if (strcmp(val, "0") != 0)
+		pg_fatal("expected application_name to tracked as '123000', but was '%s'", val);
+
+	val = PQparameterStatus(conn, "_pq_.report_parameters");
+	if (strcmp(val, "lock_timeout,_pq_.report_parameters,work_mem") != 0)
+		pg_fatal("_pq_.report_parameters was an unexpected value '%s'", val);
+
+	val = PQparameterStatus(conn, "work_mem");
+	if (strcmp(val, "4096") != 0)
+		pg_fatal("expected work_mem to be tracked as '4096', but was '%s'", val);
+
+	/* changes to application_name should not be tracked anymore */
+	res = PQparameterSet(conn, "application_name", "test3333");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+
+	val = PQparameterStatus(conn, "application_name");
+	if (strcmp(val, "test2") != 0)
+		pg_fatal("expected application_name to tracked as 'test2', but was '%s'", val);
+
+	/* changes to and work_mem lock_timeout should be tracked */
+	res = PQparameterSet(conn, "lock_timeout", "123s");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+
+	val = PQparameterStatus(conn, "lock_timeout");
+	if (strcmp(val, "123000") != 0)
+		pg_fatal("expected application_name to tracked as '123000', but was '%s'", val);
+}
+
+static void
 test_simple_pipeline(PGconn *conn)
 {
 	PGresult   *res = NULL;
@@ -2112,10 +2589,12 @@ print_test_list(void)
 	printf("disallowed_in_pipeline\n");
 	printf("multi_pipelines\n");
 	printf("nosync\n");
+	printf("parameter_set\n");
 	printf("pipeline_abort\n");
 	printf("pipeline_idle\n");
 	printf("pipelined_insert\n");
 	printf("prepared\n");
+	printf("report_parameters\n");
 	printf("simple_pipeline\n");
 	printf("singlerow\n");
 	printf("transaction\n");
@@ -2218,6 +2697,8 @@ main(int argc, char **argv)
 		test_multi_pipelines(conn);
 	else if (strcmp(testname, "nosync") == 0)
 		test_nosync(conn);
+	else if (strcmp(testname, "parameter_set") == 0)
+		test_parameter_set(conn);
 	else if (strcmp(testname, "pipeline_abort") == 0)
 		test_pipeline_abort(conn);
 	else if (strcmp(testname, "pipeline_idle") == 0)
@@ -2226,6 +2707,8 @@ main(int argc, char **argv)
 		test_pipelined_insert(conn, numrows);
 	else if (strcmp(testname, "prepared") == 0)
 		test_prepared(conn);
+	else if (strcmp(testname, "report_parameters") == 0)
+		test_report_parameters(conn);
 	else if (strcmp(testname, "simple_pipeline") == 0)
 		test_simple_pipeline(conn);
 	else if (strcmp(testname, "singlerow") == 0)

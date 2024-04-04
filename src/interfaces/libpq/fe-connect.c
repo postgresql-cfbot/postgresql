@@ -359,6 +359,19 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Load-Balance-Hosts", "", 8,	/* sizeof("disable") = 8 */
 	offsetof(struct pg_conn, load_balance_hosts)},
 
+	{"max_protocol_version", "PGMAXPROTOCOLVERSION",
+		NULL, NULL,
+		"Load-Balance-Hosts", "", 8,	/* sizeof("30001") = 8 */
+	offsetof(struct pg_conn, max_protocol_version)},
+
+	{"_pq_.protocol_managed_params", NULL, NULL, NULL,
+		"Pq-Protocol-Managed-Params", "", 40,
+	offsetof(struct pg_conn, pq_protocol_managed_params)},
+
+	{"_pq_.report_parameters", NULL, NULL, NULL,
+		"Pq-Report-Parameters", "", 40,
+	offsetof(struct pg_conn, pq_report_parameters)},
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}
@@ -381,6 +394,8 @@ static const PQEnvironmentOption EnvironmentOptions[] =
 		NULL, NULL
 	}
 };
+
+static const char *no_unsupported_protocol_extensions[1] = {NULL};
 
 /* The connection URI must start with either of the following designators: */
 static const char uri_designator[] = "postgresql://";
@@ -1772,6 +1787,34 @@ pqConnectOptions2(PGconn *conn)
 		}
 	}
 
+	if (conn->max_protocol_version)
+	{
+		char	   *end;
+		int			val;
+
+		val = strtol(conn->max_protocol_version, &end, 10);
+		if (*end)
+		{
+			conn->status = CONNECTION_BAD;
+			libpq_append_conn_error(conn, "invalid %s value: \"%s\"",
+									"max_protocol_version",
+									conn->max_protocol_version);
+			return false;
+		}
+		conn->max_pversion = PG_PROTOCOL(val / 10000, val % 10000);
+		if (conn->max_pversion > PG_PROTOCOL_LATEST ||
+			conn->max_pversion < PG_PROTOCOL_EARLIEST)
+		{
+			conn->status = CONNECTION_BAD;
+			libpq_append_conn_error(conn, "invalid %s value: \"%s\"",
+									"max_protocol_version",
+									conn->max_protocol_version);
+			return false;
+		}
+	}
+	else
+		conn->max_pversion = PG_PROTOCOL_LATEST;
+
 	/*
 	 * Resolve special "auto" client_encoding from the locale
 	 */
@@ -2787,7 +2830,7 @@ keep_going:						/* We will come back to here until there is
 		 * must persist across individual connection attempts, but we must
 		 * reset them when we start to consider a new server.
 		 */
-		conn->pversion = PG_PROTOCOL(3, 0);
+		conn->pversion = conn->max_pversion;
 		conn->send_appname = true;
 #ifdef USE_SSL
 		/* initialize these values based on SSL mode */
@@ -3815,9 +3858,25 @@ keep_going:						/* We will come back to here until there is
 						libpq_append_conn_error(conn, "received invalid protocol negotiation message");
 						goto error_return;
 					}
+
+					if (conn->pversion < PG_PROTOCOL_EARLIEST)
+					{
+						libpq_append_conn_error(conn, "protocol version not supported by server: client supports down to %u.%u, server supports up to %u.%u",
+												PG_PROTOCOL_MAJOR(PG_PROTOCOL_EARLIEST), PG_PROTOCOL_MINOR(PG_PROTOCOL_EARLIEST),
+												PG_PROTOCOL_MAJOR(conn->pversion), PG_PROTOCOL_MINOR(conn->pversion));
+						goto error_return;
+					}
+
+					/* neither -- server shouldn't have sent it */
+					if (!(conn->pversion < conn->max_pversion) && !conn->unsupported_pextension_params)
+					{
+						libpq_append_conn_error(conn, "invalid %s message", "NegotiateProtocolVersion");
+						goto error_return;
+					}
+
 					/* OK, we read the message; mark data consumed */
 					conn->inStart = conn->inCursor;
-					goto error_return;
+					goto keep_going;
 				}
 
 				/* It is an authentication request. */
@@ -4438,6 +4497,20 @@ freePGconn(PGconn *conn)
 
 	release_conn_addrinfo(conn);
 	pqReleaseConnHosts(conn);
+
+	if (conn->unsupported_pextension_params)
+	{
+		/* clean up unsupported_pextension_params entries */
+		int			i = 0;
+
+		while (conn->unsupported_pextension_params[i])
+		{
+			free(conn->unsupported_pextension_params[i]);
+			i++;
+		}
+		free(conn->unsupported_pextension_params);
+	}
+
 
 	free(conn->client_encoding_initial);
 	free(conn->events);
@@ -6931,7 +7004,21 @@ PQprotocolVersion(const PGconn *conn)
 		return 0;
 	if (conn->status == CONNECTION_BAD)
 		return 0;
-	return PG_PROTOCOL_MAJOR(conn->pversion);
+	if (conn->pversion == PG_PROTOCOL(3, 0))
+		return 3;
+	return PG_PROTOCOL_FULL(conn->pversion);
+}
+
+const char **
+PQunsupportedProtocolExtensionParameters(const PGconn *conn)
+{
+	if (!conn)
+		return NULL;
+	if (conn->status == CONNECTION_BAD)
+		return NULL;
+	if (!conn->unsupported_pextension_params)
+		return no_unsupported_protocol_extensions;
+	return (const char **) conn->unsupported_pextension_params;
 }
 
 int

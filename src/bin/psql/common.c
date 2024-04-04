@@ -1276,6 +1276,14 @@ sendquery_cleanup:
 		pset.ctv_args[i] = NULL;
 	}
 
+	/* reset \parameterset trigger */
+	pset.parameterset_flag = false;
+	for (i = 0; i < lengthof(pset.parameterset_args); i++)
+	{
+		pg_free(pset.parameterset_args[i]);
+		pset.parameterset_args[i] = NULL;
+	}
+
 	return OK;
 }
 
@@ -1439,6 +1447,8 @@ ExecQueryAndProcessResults(const char *query,
 
 	if (pset.bind_flag)
 		success = PQsendQueryParams(pset.db, query, pset.bind_nparams, NULL, (const char *const *) pset.bind_params, NULL, NULL, 0);
+	else if (pset.parameterset_flag)
+		success = PQsendParameterSet(pset.db, pset.parameterset_args[0], pset.parameterset_args[1]);
 	else
 		success = PQsendQuery(pset.db, query);
 

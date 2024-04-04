@@ -203,3 +203,6 @@ PQcancelErrorMessage      200
 PQcancelReset             201
 PQcancelFinish            202
 PQsocketPoll              203
+PQunsupportedProtocolExtensionParameters 204
+PQparameterSet            205
+PQsendParameterSet        206

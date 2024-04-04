@@ -118,6 +118,7 @@
 #include "tcop/backend_startup.h"
 #include "tcop/tcopprot.h"
 #include "utils/datetime.h"
+#include "utils/guc_tables.h"
 #include "utils/memutils.h"
 #include "utils/pidfile.h"
 #include "utils/timestamp.h"

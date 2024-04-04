@@ -514,6 +514,23 @@ pqTraceOutputW(FILE *f, const char *message, int *cursor, int length)
 		pqTraceOutputInt16(f, message, cursor);
 }
 
+/* ParameterSet(F) or ParameterSetComplete(B) */
+static void
+pqTraceOutputU(FILE *f, bool toServer, const char *message, int *cursor)
+{
+	if (toServer)
+	{
+		fprintf(f, "ParameterSet\t");
+		pqTraceOutputString(f, message, cursor, false);
+		pqTraceOutputString(f, message, cursor, false);
+	}
+	else
+	{
+		fprintf(f, "ParameterSetComplete");
+		/* No message content */
+	}
+}
+
 /* ReadyForQuery */
 static void
 pqTraceOutputZ(FILE *f, const char *message, int *cursor)
@@ -588,6 +605,10 @@ pqTraceOutputMessage(PGconn *conn, const char *message, bool toServer)
 			/* Close(F) and CommandComplete(B) use the same identifier. */
 			Assert(PqMsg_Close == PqMsg_CommandComplete);
 			pqTraceOutputC(conn->Pfdebug, toServer, message, &logCursor);
+			break;
+		case PqMsg_ParameterSet:
+			Assert(PqMsg_ParameterSet == PqMsg_ParameterSetComplete);
+			pqTraceOutputU(conn->Pfdebug, toServer, message, &logCursor);
 			break;
 		case PqMsg_CopyData:
 			/* Drop COPY data to reduce the overhead of logging. */

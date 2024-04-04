@@ -71,6 +71,8 @@ typedef enum
 	PGC_SIGHUP,
 	PGC_SU_BACKEND,
 	PGC_BACKEND,
+	PGC_SU_PROTOCOL,
+	PGC_PROTOCOL,
 	PGC_SUSET,
 	PGC_USERSET,
 } GucContext;
@@ -240,6 +242,9 @@ typedef enum
 
 
 /* GUC vars that are actually defined in guc_tables.c, rather than elsewhere */
+extern PGDLLIMPORT char *protocol_managed_params;
+extern PGDLLIMPORT char *report_parameters;
+
 extern PGDLLIMPORT bool Debug_print_plan;
 extern PGDLLIMPORT bool Debug_print_parse;
 extern PGDLLIMPORT bool Debug_print_rewritten;

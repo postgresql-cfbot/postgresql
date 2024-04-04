@@ -2779,6 +2779,19 @@ lo_import 152801
         </listitem>
       </varlistentry>
 
+      <varlistentry id="app-psql-meta-command-parameterset">
+        <term><literal>\parameterset <replaceable class="parameter">name</replaceable> <replaceable class="parameter">value</replaceable></literal></term>
+        <listitem>
+        <para>
+         This command can be used to change a server parameter using the
+         ParameterSet protocol message. This has the effect as using an
+         equivalent <literal>SET</literal> command. The main difference is that
+         Some connection poolers can only intercept parameter changes that are
+         changed using the ParameterSet message.
+        </para>
+        </listitem>
+      </varlistentry>
+
       <varlistentry id="app-psql-meta-command-password">
         <term><literal>\password [ <replaceable class="parameter">username</replaceable> ]</literal></term>
         <listitem>

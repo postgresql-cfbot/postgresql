@@ -64,6 +64,27 @@ static file_entry_t *lookup_filehash_entry(const char *path);
 static int	final_filemap_cmp(const void *a, const void *b);
 static bool check_file_excluded(const char *path, bool is_source);
 
+typedef struct skipwal_t {
+	const char *path;
+	uint32		status;
+} skipwal_t;
+
+#define SH_PREFIX		keepwalhash
+#define SH_ELEMENT_TYPE	skipwal_t
+#define SH_KEY_TYPE		const char *
+#define	SH_KEY			path
+#define SH_HASH_KEY(tb, key)	hash_string_pointer(key)
+#define SH_EQUAL(tb, a, b)		(strcmp(a, b) == 0)
+#define	SH_SCOPE		static inline
+#define SH_RAW_ALLOCATOR	pg_malloc0
+#define SH_DECLARE
+#define SH_DEFINE
+#include "lib/simplehash.h"
+
+static keepwalhash_hash *keepwalhash = NULL;
+
+static bool keepwalhash_entry_exists(const char *path);
+
 /*
  * Definition of one element part of an exclusion list, used to exclude
  * contents when rewinding.  "name" is the name of the file or path to
@@ -205,6 +226,35 @@ static file_entry_t *
 lookup_filehash_entry(const char *path)
 {
 	return filehash_lookup(filehash, path);
+}
+
+/* Initialize a hash table to store WAL file names that must be kept */
+void
+keepwalhash_init(void)
+{
+	keepwalhash = keepwalhash_create(FILEHASH_INITIAL_SIZE, NULL);
+}
+
+/* Prevent a given file deletion during rewind */
+void
+insert_keepwalhash_entry(const char *path)
+{
+	skipwal_t   *entry;
+	bool		found;
+
+	/* Should only be called with keepwalhash initialized */
+	Assert(keepwalhash);
+
+	entry = keepwalhash_insert(keepwalhash, path, &found);
+
+	if (!found)
+		entry->path = pg_strdup(path);
+}
+
+static bool
+keepwalhash_entry_exists(const char *path)
+{
+	return keepwalhash_lookup(keepwalhash, path) != NULL;
 }
 
 /*
@@ -686,7 +736,16 @@ decide_file_action(file_entry_t *entry)
 	}
 	else if (entry->target_exists && !entry->source_exists)
 	{
-		/* File exists in target, but not source. Remove it. */
+		/* File exists in target, but not source. */
+
+		if (keepwalhash_entry_exists(path))
+		{
+			/* This is a WAL file that should be kept. */
+			pg_log_debug("Not removing %s because it is required for recovery", path);
+			return FILE_ACTION_NONE;
+		}
+
+		/* Otherwise remove an unexpected file. */
 		return FILE_ACTION_REMOVE;
 	}
 	else if (!entry->target_exists && !entry->source_exists)
@@ -821,7 +880,6 @@ decide_file_actions(void)
 
 	return filemap;
 }
-
 
 /*
  * Helper function for filemap hash table.

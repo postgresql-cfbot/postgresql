@@ -234,6 +234,24 @@ DELETE FROM films
    In some cases the join style is easier to write or faster to
    execute than the sub-select style.
   </para>
+  <para id="delete-limit">
+   While there is no <literal>LIMIT</literal> clause for
+   <command>DELETE</command>, it is possible to get a similar effect
+   using the method for <command>UPDATE</command> operations described
+   <link linkend="update-limit">the documentation of <command>UPDATE</command></link>.
+<programlisting>
+WITH delete_batch AS (
+  SELECT l.ctid
+  FROM user_logs AS l
+  WHERE l.status = 'archived'
+  ORDER BY l.creation_date
+  LIMIT 10000
+  FOR UPDATE
+)
+DELETE FROM user_logs AS ul
+USING delete_branch AS del
+WHERE ul.ctid = del.ctid;
+</programlisting></para>
  </refsect1>
 
  <refsect1>

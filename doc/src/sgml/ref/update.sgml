@@ -442,6 +442,43 @@ COMMIT;
 <programlisting>
 UPDATE films SET kind = 'Dramatic' WHERE CURRENT OF c_films;
 </programlisting></para>
+  <para id="update-limit">
+   Updates affecting many rows can have negative effects on system performance,
+   such as table bloat, increased replica lag, increased lock contention,
+   and possible failure of the operation due to a deadlock. In such situations
+   it can make sense to perform the operation in smaller batches. Performing a
+   <command>VACUUM</command> operation on the table between batches can help
+   reduce table bloat. The
+   <glossterm linkend="glossary-sql-standard">SQL standard</glossterm> does
+   not define a <literal>LIMIT</literal> clause for <command>UPDATE</command>
+   operations, but it is possible get a similar effect through the use of a
+   <link linkend="queries-with">Common Table Expression</link> and an
+   efficient self-join via the system column
+   <link linkend="ddl-system-columns-ctid">ctid</link>:
+<programlisting>
+WITH exceeded_max_retries AS (
+  SELECT w.ctid
+  FROM work_item AS w
+  WHERE w.status = 'active'
+  AND w.num_retries > 10
+  ORDER BY w.retry_timestamp
+  FOR UPDATE
+  LIMIT 5000
+)
+UPDATE work_item
+SET status = 'failed'
+FROM exceeded_max_retries AS emr
+WHERE work_item.ctid = emr.ctid
+</programlisting>
+    If lock contention is a concern, then <literal>SKIP LOCKED</literal> can
+    be added to the <acronym>CTE</acronym>. However, one final
+    <command>UPDATE</command> without <literal>SKIP LOCKED</literal> or
+    <literal>LIMIT</literal> will be needed to ensure that no matching rows
+    were overlooked. The use of an <literal>ORDER BY</literal> clause allows
+    the command to prioritize which rows will be locked and updated. This can
+    also reduce contention with other update operations if they use the same
+    ordering.
+  </para>
  </refsect1>
 
  <refsect1>

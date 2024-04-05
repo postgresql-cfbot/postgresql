@@ -1366,6 +1366,17 @@ LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
 
 	recptr = XLogInsert(RM_STANDBY_ID, XLOG_RUNNING_XACTS);
 
+	/*
+	 * Ensure running_xacts information is synced to disk not too far in the
+	 * future. We don't want to stall anything though (i.e. use XLogFlush()),
+	 * so we let the wal writer do it during normal operation.
+	 * XLogSetAsyncXactLSN() conveniently will mark the LSN as to-be-synced
+	 * and nudge the WALWriter into action if sleeping. Check
+	 * XLogBackgroundFlush() for details why a record might not be flushed
+	 * without it.
+	 */
+	XLogSetAsyncXactLSN(recptr);
+
 	if (CurrRunningXacts->subxid_overflow)
 		elog(DEBUG2,
 			 "snapshot of %d running transactions overflowed (lsn %X/%X oldest xid %u latest complete %u next xid %u)",
@@ -1382,17 +1393,6 @@ LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
 			 CurrRunningXacts->oldestRunningXid,
 			 CurrRunningXacts->latestCompletedXid,
 			 CurrRunningXacts->nextXid);
-
-	/*
-	 * Ensure running_xacts information is synced to disk not too far in the
-	 * future. We don't want to stall anything though (i.e. use XLogFlush()),
-	 * so we let the wal writer do it during normal operation.
-	 * XLogSetAsyncXactLSN() conveniently will mark the LSN as to-be-synced
-	 * and nudge the WALWriter into action if sleeping. Check
-	 * XLogBackgroundFlush() for details why a record might not be flushed
-	 * without it.
-	 */
-	XLogSetAsyncXactLSN(recptr);
 
 	return recptr;
 }

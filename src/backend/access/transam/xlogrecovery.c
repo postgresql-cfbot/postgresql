@@ -4207,6 +4207,8 @@ XLogFileRead(XLogSegNo segno, TimeLineID tli,
 	char		activitymsg[MAXFNAMELEN + 16];
 	char		path[MAXPGPATH];
 	int			fd;
+	char	   *partialxlogfname;
+	bool		restoredArchivedFile;
 
 	XLogFileName(xlogfname, tli, segno, wal_segment_size);
 
@@ -4218,10 +4220,24 @@ XLogFileRead(XLogSegNo segno, TimeLineID tli,
 					 xlogfname);
 			set_ps_display(activitymsg);
 
-			if (!RestoreArchivedFile(path, xlogfname,
+			/*
+			 * Try to restore the normal wal segment first and, if not found,
+			 * then try to restore the .partial wal segment.
+			 */
+
+			partialxlogfname = psprintf("%s.partial", xlogfname);
+
+			restoredArchivedFile = !RestoreArchivedFile(path, xlogfname,
+														"RECOVERYXLOG",
+														wal_segment_size,
+														InRedo) &&
+				!RestoreArchivedFile(path, partialxlogfname,
 									 "RECOVERYXLOG",
 									 wal_segment_size,
-									 InRedo))
+									 InRedo);
+
+			pfree(partialxlogfname);
+			if (restoredArchivedFile)
 				return -1;
 			break;
 

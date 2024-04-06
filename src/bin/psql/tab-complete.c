@@ -2147,7 +2147,7 @@ psql_completion(const char *text, int start, int end)
 
 	/* ALTER DEFAULT PRIVILEGES */
 	else if (Matches("ALTER", "DEFAULT", "PRIVILEGES"))
-		COMPLETE_WITH("FOR ROLE", "IN SCHEMA");
+		COMPLETE_WITH("FOR", "GRANT", "IN SCHEMA", "REVOKE");
 	/* ALTER DEFAULT PRIVILEGES FOR */
 	else if (Matches("ALTER", "DEFAULT", "PRIVILEGES", "FOR"))
 		COMPLETE_WITH("ROLE");
@@ -3949,9 +3949,18 @@ psql_completion(const char *text, int start, int end)
 		 * privileges (can't grant roles)
 		 */
 		if (HeadMatches("ALTER", "DEFAULT", "PRIVILEGES"))
-			COMPLETE_WITH("SELECT", "INSERT", "UPDATE",
-						  "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER",
-						  "CREATE", "EXECUTE", "USAGE", "MAINTAIN", "ALL");
+		{
+			if (TailMatches("GRANT") ||
+				TailMatches("REVOKE", "GRANT", "OPTION", "FOR"))
+				COMPLETE_WITH("SELECT", "INSERT", "UPDATE",
+							  "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER",
+							  "CREATE", "EXECUTE", "USAGE", "MAINTAIN", "ALL");
+			else if (TailMatches("REVOKE"))
+				COMPLETE_WITH("SELECT", "INSERT", "UPDATE",
+							  "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER",
+							  "CREATE", "EXECUTE", "USAGE", "MAINTAIN",
+							  "GRANT OPTION FOR", "ALL");
+		}
 		else if (TailMatches("GRANT"))
 			COMPLETE_WITH_QUERY_PLUS(Query_for_list_of_roles,
 									 Privilege_options_of_grant_and_revoke);
@@ -4133,6 +4142,10 @@ psql_completion(const char *text, int start, int end)
 	else if (HeadMatches("ALTER", "DEFAULT", "PRIVILEGES") && TailMatches("TO|FROM"))
 		COMPLETE_WITH_QUERY_PLUS(Query_for_list_of_roles,
 								 Keywords_for_list_of_grant_roles);
+	/* Complete "ALTER DEFAULT PRIVILEGES ... GRANT ... TO ROLE */
+	else if (HeadMatches("ALTER", "DEFAULT", "PRIVILEGES") &&
+			 TailMatches("GRANT", MatchAny, MatchAny, MatchAny, "TO", MatchAny))
+		COMPLETE_WITH("WITH GRANT OPTION");
 	/* Complete "GRANT/REVOKE ... ON * *" with TO/FROM */
 	else if (HeadMatches("GRANT") && TailMatches("ON", MatchAny, MatchAny))
 		COMPLETE_WITH("TO");

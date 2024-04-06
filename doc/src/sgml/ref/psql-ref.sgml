@@ -274,6 +274,17 @@ EOF
       </listitem>
     </varlistentry>
 
+    <varlistentry id="app-psql-option-json">
+      <term><option>-J</option></term>
+      <term><option>--json</option></term>
+      <listitem>
+      <para>
+      Switches to <acronym>JSON</acronym> output mode.  This is
+      equivalent to <command>\pset format json</command>.
+      </para>
+      </listitem>
+    </varlistentry>
+
     <varlistentry id="app-psql-option-list">
       <term><option>-l</option></term>
       <term><option>--list</option></term>
@@ -2956,6 +2967,7 @@ lo_import 152801
           <literal>asciidoc</literal>,
           <literal>csv</literal>,
           <literal>html</literal>,
+          <literal>json</literal>,
           <literal>latex</literal>,
           <literal>latex-longtable</literal>, <literal>troff-ms</literal>,
           <literal>unaligned</literal>, or <literal>wrapped</literal>.
@@ -2972,7 +2984,7 @@ lo_import 152801
           in by other programs, for example, tab-separated or comma-separated
           format.  However, the field separator character is not treated
           specially if it appears in a column's value;
-          so <acronym>CSV</acronym> format may be better suited for such
+          the <acronym>CSV</acronym> or <acronym>JSON</acronym> formats may be better suited for such
           purposes.
           </para>
 
@@ -2995,6 +3007,18 @@ lo_import 152801
           (<literal>\r\n</literal>) for Microsoft Windows.
           Field separator characters other than comma can be selected with
           <command>\pset csv_fieldsep</command>.
+          </para>
+
+          <para><literal>json</literal> format
+          <indexterm>
+           <primary>JSON format</primary>
+           <secondary>in psql</secondary>
+          </indexterm>
+          writes output in JSON format, described in
+          <ulink url="https://www.ietf.org/rfc/rfc4627.txt">RFC 4627</ulink>.
+          The result is an array of JSON objects. In non-expanded mode, one
+          object per line is printed, while in expanded mode, each key-value
+          pair is a separate line.
           </para>
 
           <para><literal>wrapped</literal> format is like <literal>aligned</literal> but wraps

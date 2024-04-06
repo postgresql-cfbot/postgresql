@@ -99,6 +99,7 @@ usage(unsigned short int pager)
 		  "                           field separator for unaligned output (default: \"%s\")\n",
 		  DEFAULT_FIELD_SEP);
 	HELP0("  -H, --html               HTML table output mode\n");
+	HELP0("  -J, --json               JSON output mode\n");
 	HELP0("  -P, --pset=VAR[=ARG]     set printing option VAR to ARG (see \\pset command)\n");
 	HELP0("  -R, --record-separator=STRING\n"
 		  "                           record separator for unaligned output (default: newline)\n");

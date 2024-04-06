@@ -417,6 +417,16 @@ SELECT sessions AS db_stat_sessions FROM pg_stat_database WHERE datname = (SELEC
 SELECT pg_stat_force_next_flush();
 SELECT sessions > :db_stat_sessions FROM pg_stat_database WHERE datname = (SELECT current_database());
 
+-- Test that last_commit_lsn is incremented when a transaction commits
+SELECT last_commit_lsn AS db_stat_last_commit_lsn FROM pg_stat_database WHERE datname = (SELECT current_database()) \gset
+BEGIN;
+CREATE TABLE test_commit_increments(i int);
+COMMIT;
+SELECT pg_stat_force_next_flush();
+SELECT last_commit_lsn > :'db_stat_last_commit_lsn'::pg_lsn FROM pg_stat_database WHERE datname = (SELECT current_database());
+SELECT :'db_stat_last_commit_lsn'::pg_lsn < pg_current_wal_insert_lsn();
+DROP TABLE test_commit_increments;
+
 -- Test pg_stat_checkpointer checkpointer-related stats, together with pg_stat_wal
 SELECT num_requested AS rqst_ckpts_before FROM pg_stat_checkpointer \gset
 

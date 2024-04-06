@@ -197,7 +197,7 @@ static GlobalTransaction MyLockedGxact = NULL;
 
 static bool twophaseExitRegistered = false;
 
-static void RecordTransactionCommitPrepared(TransactionId xid,
+static XLogRecPtr RecordTransactionCommitPrepared(TransactionId xid,
 											int nchildren,
 											TransactionId *children,
 											int nrels,
@@ -1517,6 +1517,7 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 	xl_xact_stats_item *commitstats;
 	xl_xact_stats_item *abortstats;
 	SharedInvalidationMessage *invalmsgs;
+	XLogRecPtr commit_lsn = InvalidXLogRecPtr;
 
 	/*
 	 * Validate the GID, and lock the GXACT to ensure that two backends do not
@@ -1572,7 +1573,7 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 	 * callbacks will release the locks the transaction held.
 	 */
 	if (isCommit)
-		RecordTransactionCommitPrepared(xid,
+		commit_lsn = RecordTransactionCommitPrepared(xid,
 										hdr->nsubxacts, children,
 										hdr->ncommitrels, commitrels,
 										hdr->ncommitstats,
@@ -1667,7 +1668,7 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 	LWLockRelease(TwoPhaseStateLock);
 
 	/* Count the prepared xact as committed or aborted */
-	AtEOXact_PgStat(isCommit, false);
+	AtEOXact_PgStat(isCommit, commit_lsn, false);
 
 	/*
 	 * And now we can clean up any files we may have left.
@@ -2303,7 +2304,7 @@ ProcessTwoPhaseBuffer(TransactionId xid,
  * We know the transaction made at least one XLOG entry (its PREPARE),
  * so it is never possible to optimize out the commit record.
  */
-static void
+static XLogRecPtr
 RecordTransactionCommitPrepared(TransactionId xid,
 								int nchildren,
 								TransactionId *children,
@@ -2391,6 +2392,8 @@ RecordTransactionCommitPrepared(TransactionId xid,
 	 * in the procarray and continue to hold locks.
 	 */
 	SyncRepWaitForLSN(recptr, true);
+
+	return recptr;
 }
 
 /*

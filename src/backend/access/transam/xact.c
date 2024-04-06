@@ -1301,7 +1301,7 @@ AtSubStart_ResourceOwner(void)
  * If you change this function, see RecordTransactionCommitPrepared also.
  */
 static TransactionId
-RecordTransactionCommit(void)
+RecordTransactionCommit(XLogRecPtr *commit_lsn)
 {
 	TransactionId xid = GetTopTransactionIdIfAny();
 	bool		markXidCommitted = TransactionIdIsValid(xid);
@@ -1418,7 +1418,7 @@ RecordTransactionCommit(void)
 		/*
 		 * Insert the commit XLOG record.
 		 */
-		XactLogCommitRecord(GetCurrentTransactionStopTimestamp(),
+		*commit_lsn = XactLogCommitRecord(GetCurrentTransactionStopTimestamp(),
 							nchildren, children, nrels, rels,
 							ndroppedstats, droppedstats,
 							nmsgs, invalMessages,
@@ -2179,6 +2179,7 @@ CommitTransaction(void)
 {
 	TransactionState s = CurrentTransactionState;
 	TransactionId latestXid;
+	XLogRecPtr	commit_lsn = InvalidXLogRecPtr;
 	bool		is_parallel_worker;
 
 	is_parallel_worker = (s->blockState == TBLOCK_PARALLEL_INPROGRESS);
@@ -2312,7 +2313,7 @@ CommitTransaction(void)
 		 * We need to mark our XIDs as committed in pg_xact.  This is where we
 		 * durably commit.
 		 */
-		latestXid = RecordTransactionCommit();
+		latestXid = RecordTransactionCommit(&commit_lsn);
 	}
 	else
 	{
@@ -2417,7 +2418,7 @@ CommitTransaction(void)
 	AtEOXact_Files(true);
 	AtEOXact_ComboCid();
 	AtEOXact_HashTables(true);
-	AtEOXact_PgStat(true, is_parallel_worker);
+	AtEOXact_PgStat(true, commit_lsn, is_parallel_worker);
 	AtEOXact_Snapshot(true, false);
 	AtEOXact_ApplyLauncher(true);
 	AtEOXact_LogicalRepWorkers(true);
@@ -2926,7 +2927,7 @@ AbortTransaction(void)
 		AtEOXact_Files(false);
 		AtEOXact_ComboCid();
 		AtEOXact_HashTables(false);
-		AtEOXact_PgStat(false, is_parallel_worker);
+		AtEOXact_PgStat(false, InvalidXLogRecPtr, is_parallel_worker);
 		AtEOXact_ApplyLauncher(false);
 		AtEOXact_LogicalRepWorkers(false);
 		pgstat_report_xact_timestamp(0);

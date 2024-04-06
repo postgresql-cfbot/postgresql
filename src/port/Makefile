@@ -87,10 +87,15 @@ pg_crc32c_sse42.o: CFLAGS+=$(CFLAGS_CRC)
 pg_crc32c_sse42_shlib.o: CFLAGS+=$(CFLAGS_CRC)
 pg_crc32c_sse42_srv.o: CFLAGS+=$(CFLAGS_CRC)
 
-# all versions of pg_crc32c_armv8.o need CFLAGS_CRC
-pg_crc32c_armv8.o: CFLAGS+=$(CFLAGS_CRC)
-pg_crc32c_armv8_shlib.o: CFLAGS+=$(CFLAGS_CRC)
-pg_crc32c_armv8_srv.o: CFLAGS+=$(CFLAGS_CRC)
+# all versions of pg_crc32c_armv8.o need CFLAGS_CRC_CRYPTO
+pg_crc32c_armv8.o: CFLAGS+=$(CFLAGS_CRC_CRYPTO)
+pg_crc32c_armv8_shlib.o: CFLAGS+=$(CFLAGS_CRC_CRYPTO)
+pg_crc32c_armv8_srv.o: CFLAGS+=$(CFLAGS_CRC_CRYPTO)
+
+# all versions of pg_crc32c_armv8_choose.o need CFLAGS_CRYPTO
+pg_crc32c_armv8_choose.o: CFLAGS+=$(CFLAGS_CRYPTO)
+pg_crc32c_armv8_choose_shlib.o: CFLAGS+=$(CFLAGS_CRYPTO)
+pg_crc32c_armv8_choose_srv.o: CFLAGS+=$(CFLAGS_CRYPTO)
 
 #
 # Shared library versions of object files

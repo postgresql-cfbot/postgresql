@@ -23,6 +23,7 @@
 #define OPTIMIZER_H
 
 #include "nodes/parsenodes.h"
+#include "optimizer/restrictinfo.h"
 
 /*
  * We don't want to include nodes/pathnodes.h here, because non-planner
@@ -133,6 +134,8 @@ extern void extract_query_dependencies(Node *query,
 
 /* in prep/prepqual.c: */
 
+extern PGDLLIMPORT int or_transformation_limit;
+
 extern Node *negate_clause(Node *node);
 extern Expr *canonicalize_qual(Expr *qual, bool is_check);
 
@@ -159,6 +162,8 @@ extern List *expand_function_arguments(List *args, bool include_out_arguments,
 
 /* in util/predtest.c: */
 
+
+extern List *transform_saop_to_ors(PlannerInfo *root, RestrictInfo *rinfo);
 extern bool predicate_implied_by(List *predicate_list, List *clause_list,
 								 bool weak);
 extern bool predicate_refuted_by(List *predicate_list, List *clause_list,

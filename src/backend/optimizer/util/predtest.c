@@ -111,6 +111,43 @@ static bool operator_same_subexprs_lookup(Oid pred_op, Oid clause_op,
 static Oid	get_btree_test_op(Oid pred_op, Oid clause_op, bool refute_it);
 static void InvalidateOprProofCacheCallBack(Datum arg, int cacheid, uint32 hashvalue);
 
+/*
+ * Expand a SAOP operation into the list of OR expressions
+ */
+List *
+transform_saop_to_ors(PlannerInfo *root, RestrictInfo *rinfo)
+{
+	PredIterInfoData	clause_info;
+	List			   *orlist = NIL;
+	Node			   *saop = (Node *) rinfo->clause;
+
+	Assert(IsA(saop, ScalarArrayOpExpr));
+
+	if (predicate_classify(saop, &clause_info) != CLASS_OR)
+		return NIL;
+
+	iterate_begin(pitem, saop, clause_info)
+	{
+		RestrictInfo   *rinfo1;
+
+		/* Predicate is found. Add the elem to the saop clause */
+		Assert(IsA(pitem, OpExpr));
+
+		/* Extract constant from the expression */
+		rinfo1 = make_restrictinfo(root, (Expr *) copyObject(pitem),
+								   rinfo->is_pushed_down,
+								   rinfo->has_clone, rinfo->is_clone,
+								   rinfo->pseudoconstant,
+								   rinfo->security_level,
+								   rinfo->required_relids,
+								   rinfo->incompatible_relids,
+								   rinfo->outer_relids);
+		orlist = lappend(orlist, rinfo1);
+	}
+	iterate_end(clause_info);
+
+	return orlist;
+}
 
 /*
  * predicate_implied_by

@@ -31,16 +31,25 @@
 
 #include "postgres.h"
 
+#include "catalog/namespace.h"
+#include "catalog/pg_operator.h"
+#include "common/hashfn.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/queryjumble.h"
 #include "optimizer/optimizer.h"
+#include "parser/parse_coerce.h"
+#include "parser/parse_oper.h"
 #include "utils/lsyscache.h"
+#include "utils/syscache.h"
 
+int		or_transformation_limit = 0;
 
 static List *pull_ands(List *andlist);
 static List *pull_ors(List *orlist);
 static Expr *find_duplicate_ors(Expr *qual, bool is_check);
 static Expr *process_duplicate_ors(List *orlist);
+static List *or_transformation(List *orlist);
 
 
 /*
@@ -266,6 +275,357 @@ negate_clause(Node *node)
 	return (Node *) make_notclause((Expr *) node);
 }
 
+typedef struct OrClauseGroupKey
+{
+	NodeTag	type;
+
+	Expr   *expr; /* Pointer to the expression tree which has been a source for
+					the hashkey value */
+	Oid		opno;
+	Oid		consttype;
+	Oid		inputcollid; /* XXX: Could we lookup for common collation? */
+} OrClauseGroupKey;
+
+typedef struct OrClauseGroupEntry
+{
+	OrClauseGroupKey	key;
+
+	List			   *consts;
+	List 			   *exprs;
+} OrClauseGroupEntry;
+
+/*
+ * Hash function to find candidate clauses.
+ */
+static uint32
+orclause_hash(const void *data, Size keysize)
+{
+	OrClauseGroupKey   *key = (OrClauseGroupKey *) data;
+	uint64				exprHash;
+
+	Assert(keysize == sizeof(OrClauseGroupKey));
+	Assert(IsA(data, Invalid));
+
+	(void) JumbleExpr(key->expr, &exprHash);
+
+	return hash_combine((uint32) exprHash,
+						hash_combine((uint32) key->opno,
+							hash_combine((uint32) key->consttype,
+										 (uint32) key->inputcollid)));
+}
+
+static void *
+orclause_keycopy(void *dest, const void *src, Size keysize)
+{
+	OrClauseGroupKey *src_key = (OrClauseGroupKey *) src;
+	OrClauseGroupKey *dst_key = (OrClauseGroupKey *) dest;
+
+	Assert(sizeof(OrClauseGroupKey) == keysize);
+	Assert(IsA(src, Invalid));
+
+	dst_key->type = T_Invalid;
+	dst_key->expr = src_key->expr;
+	dst_key->opno = src_key->opno;
+	dst_key->consttype = src_key->consttype;
+	dst_key->inputcollid = src_key->inputcollid;
+
+	return dst_key;
+}
+
+/*
+ * Dynahash match function to use in or_group_htab
+ */
+static int
+orclause_match(const void *data1, const void *data2, Size keysize)
+{
+	OrClauseGroupKey   *key1 = (OrClauseGroupKey *) data1;
+	OrClauseGroupKey   *key2 = (OrClauseGroupKey *) data2;
+
+	Assert(sizeof(OrClauseGroupKey) == keysize);
+	Assert(IsA(key1, Invalid));
+	Assert(IsA(key2, Invalid));
+
+	if (key1->opno == key2->opno &&
+		key1->consttype == key2->consttype &&
+		key1->inputcollid == key2->inputcollid &&
+		equal(key1->expr, key2->expr))
+		return 0;
+
+	return 1;
+}
+
+/*
+ * or_transformation -
+ *	  Discover the args of an OR expression and try to group similar OR
+ *	  expressions to an SAOP operation.
+ *	  Transformation groups two-sided equality operations. One side of such an
+ *	  operation must be plain constant or constant expression. The other side of
+ *	  the clause must be a variable expression without volatile functions.
+ *	  To group quals, inputcollid, opno and constype of the OR OpExpr quals must
+ *	  be equal too.
+ *	  The grouping technique is based on an equivalence of variable sides of the
+ *	  expression: using queryId and equal() routine, it groups constant sides of
+ *	  similar clauses into an array. After the grouping procedure, each couple
+ *	  ('variable expression' and 'constant array') form a new SAOP operation,
+ *	  which is added to the args list of the returning expression.
+ */
+static List *
+or_transformation(List *orlist)
+{
+	List				   *neworlist = NIL;
+	List				   *entries = NIL;
+	ListCell			   *lc;
+	HASHCTL					info;
+	HTAB 				   *or_group_htab = NULL;
+	int 					len_ors = list_length(orlist);
+	OrClauseGroupEntry	   *entry = NULL;
+
+	Assert(or_transformation_limit >= 0 && len_ors > or_transformation_limit);
+
+	MemSet(&info, 0, sizeof(info));
+	info.keysize = sizeof(OrClauseGroupKey);
+	info.entrysize = sizeof(OrClauseGroupEntry);
+	info.hash = orclause_hash;
+	info.keycopy = orclause_keycopy;
+	info.match = orclause_match;
+	or_group_htab = hash_create("OR Groups",
+								len_ors,
+								&info,
+								HASH_ELEM | HASH_FUNCTION | HASH_COMPARE | HASH_KEYCOPY);
+
+	foreach(lc, orlist)
+	{
+		Node				   *orqual = lfirst(lc);
+		Node				   *const_expr;
+		Node				   *nconst_expr;
+		OrClauseGroupKey		hashkey;
+		bool					found;
+		Oid						opno;
+		Oid						consttype;
+		Node				   *leftop, *rightop;
+
+		if (!IsA(orqual, OpExpr))
+		{
+			entries = lappend(entries, orqual);
+			continue;
+		}
+
+		opno = ((OpExpr *) orqual)->opno;
+		if (get_op_rettype(opno) != BOOLOID)
+		{
+			/* Only operator returning boolean suits OR -> ANY transformation */
+			entries = lappend(entries, orqual);
+			continue;
+		}
+
+		/*
+		 * Detect the constant side of the clause. Recall non-constant
+		 * expression can be made not only with Vars, but also with Params,
+		 * which is not bonded with any relation. Thus, we detect the const
+		 * side - if another side is constant too, the orqual couldn't be
+		 * an OpExpr.
+		 * Get pointers to constant and expression sides of the qual.
+		 */
+		leftop = get_leftop(orqual);
+		if (IsA(leftop, RelabelType))
+			leftop = (Node *) ((RelabelType *) leftop)->arg;
+		rightop = get_rightop(orqual);
+		if (IsA(rightop, RelabelType))
+			rightop = (Node *) ((RelabelType *) rightop)->arg;
+
+		if (IsA(leftop, Const))
+		{
+			opno = get_commutator(opno);
+
+			if (!OidIsValid(opno))
+			{
+				/* commutator doesn't exist, we can't reverse the order */
+				entries = lappend(entries, orqual);
+				continue;
+			}
+
+			nconst_expr = get_rightop(orqual);
+			const_expr = get_leftop(orqual);
+		}
+		else if (IsA(rightop, Const))
+		{
+			const_expr = get_rightop(orqual);
+			nconst_expr = get_leftop(orqual);
+		}
+		else
+		{
+			entries = lappend(entries, orqual);
+			continue;
+		}
+
+		/*
+		 * Transformation only works with both side type is not
+		 * { array | composite | domain | record }.
+		 * Also, forbid it for volatile expressions.
+		 */
+		consttype = exprType(const_expr);
+		if (type_is_rowtype(exprType(const_expr)) ||
+			type_is_rowtype(consttype) ||
+			contain_volatile_functions((Node *) nconst_expr))
+		{
+			entries = lappend(entries, orqual);
+			continue;
+		}
+
+		/*
+		* At this point we definitely have a transformable clause.
+		* Classify it and add into specific group of clauses, or create new
+		* group.
+		*/
+		hashkey.type = T_Invalid;
+		hashkey.expr = (Expr *) nconst_expr;
+		hashkey.opno = opno;
+		hashkey.consttype = consttype;
+		hashkey.inputcollid = exprCollation(const_expr);
+		entry = hash_search(or_group_htab, &hashkey, HASH_ENTER, &found);
+
+		if (unlikely(found))
+		{
+			entry->consts = lappend(entry->consts, const_expr);
+			entry->exprs = lappend(entry->exprs, orqual);
+		}
+		else
+		{
+			entry->consts = list_make1(const_expr);
+			entry->exprs = list_make1(orqual);
+
+			/*
+			 * Add the entry to the list. It is needed exclusively to manage the
+			 * problem with the order of transformed clauses in explain.
+			 * Hash value can depend on the platform and version. Hence,
+			 * sequental scan of the hash table would prone to change the order
+			 * of clauses in lists and, as a result, break regression tests
+			 * accidentially.
+			 */
+			entries = lappend(entries, entry);
+		}
+	}
+
+	/* Let's convert each group of clauses to an IN operation. */
+
+	/*
+	 * Go through the list of groups and convert each, where number of
+	 * consts more than 1. trivial groups move to OR-list again
+	 */
+	foreach (lc, entries)
+	{
+		Oid				    scalar_type;
+		Oid					array_type;
+
+		if (!IsA(lfirst(lc), Invalid))
+		{
+			neworlist = lappend(neworlist, lfirst(lc));
+			continue;
+		}
+
+		entry = (OrClauseGroupEntry *) lfirst(lc);
+
+		Assert(list_length(entry->consts) > 0);
+		Assert(list_length(entry->exprs) == list_length(entry->consts));
+
+		if (list_length(entry->consts) == 1)
+		{
+			/*
+			 * Only one element returns origin expression into the BoolExpr args
+			 * list unchanged.
+			 */
+			list_free(entry->consts);
+			neworlist = list_concat(neworlist, entry->exprs);
+			continue;
+		}
+
+		/*
+		 * Do the transformation.
+		 */
+
+		scalar_type = entry->key.consttype;
+		array_type = OidIsValid(scalar_type) ? get_array_type(scalar_type) :
+											   InvalidOid;
+
+		if (OidIsValid(array_type))
+		{
+			/*
+			 * OK: coerce all the right-hand non-Var inputs to the common
+			 * type and build an ArrayExpr for them.
+			 */
+			List			   *aexprs = NIL;
+			ArrayExpr		   *newa = NULL;
+			ScalarArrayOpExpr  *saopexpr = NULL;
+			HeapTuple			opertup;
+			Form_pg_operator	operform;
+			List			   *namelist = NIL;
+
+			foreach(lc, entry->consts)
+			{
+				Node *node = (Node *) lfirst(lc);
+
+				node = coerce_to_common_type(NULL, node, scalar_type,
+											 "OR ANY Transformation");
+				aexprs = lappend(aexprs, node);
+			}
+
+			newa = makeNode(ArrayExpr);
+			/* array_collid will be set by parse_collate.c */
+			newa->element_typeid = scalar_type;
+			newa->array_typeid = array_type;
+			newa->multidims = false;
+			newa->elements = aexprs;
+			newa->location = -1;
+
+			/*
+			 * Try to cast this expression to Const. Due to current strict
+			 * transformation rules it should be done [almost] every time.
+			 */
+			newa = (ArrayExpr *) eval_const_expressions(NULL, (Node *) newa);
+
+			opertup = SearchSysCache1(OPEROID,
+									  ObjectIdGetDatum(entry->key.opno));
+			if (!HeapTupleIsValid(opertup))
+				elog(ERROR, "cache lookup failed for operator %u",
+					 entry->key.opno);
+
+			operform = (Form_pg_operator) GETSTRUCT(opertup);
+			if (!OperatorIsVisible(entry->key.opno))
+				namelist = lappend(namelist, makeString(get_namespace_name(operform->oprnamespace)));
+
+			namelist = lappend(namelist, makeString(pstrdup(NameStr(operform->oprname))));
+			ReleaseSysCache(opertup);
+
+			saopexpr =
+				(ScalarArrayOpExpr *)
+					make_scalar_array_op(NULL,
+										 namelist,
+										 true,
+										 (Node *) entry->key.expr,
+										 (Node *) newa,
+										 -1);
+			saopexpr->inputcollid = entry->key.inputcollid;
+
+			neworlist = lappend(neworlist, (void *) saopexpr);
+		}
+		else
+		{
+			/*
+			 * If the const node (right side of operator expression) 's type
+			 *  don't have “true” array type, then we cannnot do the transformation.
+			 * We simply concatenate the expression node.
+			 *
+			 */
+			list_free(entry->consts);
+			neworlist = list_concat(neworlist, entry->exprs);
+		}
+	}
+	hash_destroy(or_group_htab);
+	list_free(entries);
+
+	/* One more trick: assemble correct clause */
+	return neworlist;
+}
 
 /*
  * canonicalize_qual
@@ -604,7 +964,19 @@ process_duplicate_ors(List *orlist)
 	 * If no winners, we can't transform the OR
 	 */
 	if (winners == NIL)
-		return make_orclause(orlist);
+	{
+		/*
+		 * Make an attempt to group similar OR clauses into SAOP if the list is
+		 * lengthy enough.
+		 */
+		if (or_transformation_limit >= 0 &&
+			list_length(orlist) > or_transformation_limit)
+			orlist = or_transformation(orlist);
+
+		/* Transformation could group all OR clauses to a single SAOP */
+		return (list_length(orlist) == 1) ?
+							(Expr *) linitial(orlist) : make_orclause(orlist);
+	}
 
 	/*
 	 * Generate new OR list consisting of the remaining sub-clauses.
@@ -650,6 +1022,11 @@ process_duplicate_ors(List *orlist)
 			}
 		}
 	}
+
+	/* Make an attempt to group similar OR clauses into ANY operation */
+	if (or_transformation_limit >= 0 &&
+		list_length(neworlist) > or_transformation_limit)
+		neworlist = or_transformation(neworlist);
 
 	/*
 	 * Append reduced OR to the winners list, if it's not degenerate, handling

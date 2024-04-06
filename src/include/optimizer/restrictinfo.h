@@ -34,6 +34,7 @@ extern RestrictInfo *make_restrictinfo(PlannerInfo *root,
 									   Relids outer_relids);
 extern RestrictInfo *commute_restrictinfo(RestrictInfo *rinfo, Oid comm_op);
 extern bool restriction_is_or_clause(RestrictInfo *restrictinfo);
+extern bool restriction_is_saop_clause(RestrictInfo *restrictinfo);
 extern bool restriction_is_securely_promotable(RestrictInfo *restrictinfo,
 											   RelOptInfo *rel);
 extern List *get_actual_clauses(List *restrictinfo_list);

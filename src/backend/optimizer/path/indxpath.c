@@ -32,6 +32,7 @@
 #include "optimizer/paths.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
+#include "utils/array.h"
 #include "utils/lsyscache.h"
 #include "utils/selfuncs.h"
 
@@ -1221,10 +1222,72 @@ build_paths_for_OR(PlannerInfo *root, RelOptInfo *rel,
 }
 
 /*
+ * Expand SAOP node to use it in bitmapscan path building routine.
+ *
+ * If RestrictInfo is an OR bool expression, extract each SAOP from the list of
+ * arguments, if possible.
+ * Working jointly with the TransformOrExprToANY routine, it provides a user
+ * with some sort of independence of the query plan from the approach to writing
+ * alternatives for the same entity in the WHERE section.
+ */
+static List *
+extract_saop_ors(PlannerInfo *root, RestrictInfo *rinfo)
+{
+	List		   *orlist = NIL;
+	List		   *result = NIL;
+	ListCell	   *lc;
+
+	Assert(IsA(rinfo, RestrictInfo));
+
+	if (restriction_is_or_clause(rinfo))
+		orlist = ((BoolExpr *) rinfo->orclause)->args;
+
+	/*
+	 * Don't spend cycles here if the transformation is disabled.
+	 * We don't behave symmetrically here with the OR -> ANY transformation, see
+	 * the process_duplicate_ors routine, because origin list of ORs and
+	 * resulting SAOP args list lengths can differ significantly. Moreover,
+	 * Here we already limited by the MAX_SAOP_ARRAY_SIZE value.
+	 */
+	if (or_transformation_limit < 0)
+		return orlist;
+
+	if (restriction_is_saop_clause(rinfo))
+	{
+		result = transform_saop_to_ors(root, rinfo);
+		return result;
+	}
+
+	foreach(lc, orlist)
+	{
+		Expr *expr = (Expr *) lfirst(lc);
+
+		if (IsA(expr, RestrictInfo) && restriction_is_saop_clause((RestrictInfo *) expr))
+		{
+			List *sublist;
+
+			sublist = extract_saop_ors(root, (RestrictInfo *) lfirst(lc));
+			if (sublist != NIL)
+			{
+				result = list_concat(result, sublist);
+				continue;
+			}
+
+			/* Need to return expr to the result list */
+		}
+
+		result = lappend(result, expr);
+	}
+
+	return result;
+}
+
+/*
  * generate_bitmap_or_paths
- *		Look through the list of clauses to find OR clauses, and generate
- *		a BitmapOrPath for each one we can handle that way.  Return a list
- *		of the generated BitmapOrPaths.
+ *		Look through the list of clauses to find OR and SAOP clauses, and
+ *		Each saop clause are splitted to be covered by partial indexes.
+ *		generate a BitmapOrPath for each one we can handle that way.
+ *		Return a list of the generated BitmapOrPaths.
  *
  * other_clauses is a list of additional clauses that can be assumed true
  * for the purpose of generating indexquals, but are not to be searched for
@@ -1247,20 +1310,25 @@ generate_bitmap_or_paths(PlannerInfo *root, RelOptInfo *rel,
 	foreach(lc, clauses)
 	{
 		RestrictInfo *rinfo = lfirst_node(RestrictInfo, lc);
-		List	   *pathlist;
+		List	   *pathlist = NIL;
 		Path	   *bitmapqual;
 		ListCell   *j;
+		List	   *orlist = NIL;
 
-		/* Ignore RestrictInfos that aren't ORs */
-		if (!restriction_is_or_clause(rinfo))
+		orlist = extract_saop_ors(root, rinfo);
+		if (orlist == NIL)
+			/* Ignore RestrictInfo that doesn't provide proper OR list */
 			continue;
+
+		/* SAOP have splitted, remove already redundant clause */
+		all_clauses = list_delete(all_clauses, rinfo);
 
 		/*
 		 * We must be able to match at least one index to each of the arms of
 		 * the OR, else we can't use it.
 		 */
 		pathlist = NIL;
-		foreach(j, ((BoolExpr *) rinfo->orclause)->args)
+		foreach(j, orlist)
 		{
 			Node	   *orarg = (Node *) lfirst(j);
 			List	   *indlist;

@@ -5475,6 +5475,27 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-enable-or-transformation" xreflabel="or_transformation_limit">
+      <term><varname>or_transformation_limit</varname> (<type>boolean</type>)
+       <indexterm>
+        <primary><varname>or_transformation_limit</varname> configuration parameter</primary>
+       </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Sets the minimum length of arguments in an OR expression exceeding which
+        planner will try to lookup and group multiple similar OR expressions to
+        ANY (<xref linkend="functions-comparisons-any-some"/>) expressions.
+        The grouping technique of this transformation is based on the equivalence of variable sides.
+        One side of such an expression must be a constant clause, and the other must contain a variable clause.
+        The default is <literal>on</literal>.
+        Also, during BitmapScan paths generation it enables analysis of elements
+        of IN or ANY constant arrays to cover such clause with BitmapOr set of
+        partial index scans.
+        </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-enable-parallel-append" xreflabel="enable_parallel_append">
       <term><varname>enable_parallel_append</varname> (<type>boolean</type>)
       <indexterm>

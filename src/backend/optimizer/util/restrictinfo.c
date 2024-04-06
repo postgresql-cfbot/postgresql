@@ -421,6 +421,19 @@ restriction_is_or_clause(RestrictInfo *restrictinfo)
 		return false;
 }
 
+bool
+restriction_is_saop_clause(RestrictInfo *restrictinfo)
+{
+	if (restrictinfo->clause && IsA(restrictinfo->clause, ScalarArrayOpExpr))
+	{
+		ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) restrictinfo->clause;
+
+		if (saop->useOr)
+			return true;
+	}
+	return false;
+}
+
 /*
  * restriction_is_securely_promotable
  *

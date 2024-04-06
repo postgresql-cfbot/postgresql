@@ -21,6 +21,10 @@ explain (costs off) select * from lp where a is not null;
 explain (costs off) select * from lp where a is null;
 explain (costs off) select * from lp where a = 'a' or a = 'c';
 explain (costs off) select * from lp where a is not null and (a = 'a' or a = 'c');
+
+explain (costs off) select * from lp where a = 'a' or a = 'c';
+explain (costs off) select * from lp where a is not null and (a = 'a' or a = 'c');
+
 explain (costs off) select * from lp where a <> 'g';
 explain (costs off) select * from lp where a <> 'a' and a <> 'd';
 explain (costs off) select * from lp where a not in ('a', 'd');
@@ -94,6 +98,20 @@ explain (costs off) select * from rlp where a = 20 or a = 40;
 explain (costs off) select * from rlp3 where a = 20;   /* empty */
 
 -- redundant clauses are eliminated
+explain (costs off) select * from rlp where a > 1 and a = 10;	/* only default */
+explain (costs off) select * from rlp where a > 1 and a >=15;	/* rlp3 onwards, including default */
+explain (costs off) select * from rlp where a = 1 and a = 3;	/* empty */
+explain (costs off) select * from rlp where (a = 1 and a = 3) or (a > 1 and a = 15);
+
+
+explain (costs off) select * from rlp where a = 1 or a = 7;
+explain (costs off) select * from rlp where a = 1 or b = 'ab';
+explain (costs off) select * from rlp where a > 20 and a < 27;
+explain (costs off) select * from rlp where a = 29;
+explain (costs off) select * from rlp where a >= 29;
+explain (costs off) select * from rlp where a < 1 or (a > 20 and a < 25);
+explain (costs off) select * from rlp where a = 20 or a = 40;
+explain (costs off) select * from rlp3 where a = 20;   /* empty */
 explain (costs off) select * from rlp where a > 1 and a = 10;	/* only default */
 explain (costs off) select * from rlp where a > 1 and a >=15;	/* rlp3 onwards, including default */
 explain (costs off) select * from rlp where a = 1 and a = 3;	/* empty */

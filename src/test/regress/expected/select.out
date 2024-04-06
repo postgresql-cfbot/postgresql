@@ -907,6 +907,286 @@ select unique1, unique2 from onek2
        0 |     998
 (2 rows)
 
+SET enable_seqscan TO off;
+SET enable_indexscan TO off; -- Only BitmapScan is a subject matter here
+SET or_transformation_limit = -1;
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM onek2 WHERE stringu1 = 'A' OR stringu1 = 'J';
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on onek2
+         Recheck Cond: ((stringu1 < 'B'::name) OR (stringu1 = 'J'::name))
+         Filter: ((stringu1 = 'A'::name) OR (stringu1 = 'J'::name))
+         ->  BitmapOr
+               ->  Bitmap Index Scan on onek2_u2_prtl
+               ->  Bitmap Index Scan on onek2_stu1_prtl
+                     Index Cond: (stringu1 = 'J'::name)
+(8 rows)
+
+-- Without the transformation only seqscan possible here
+EXPLAIN (COSTS OFF)
+SELECT unique2, stringu1 FROM onek2
+WHERE unique2 < 1 AND stringu1 IN ('A','J') AND stringu1 < 'Z';
+                                         QUERY PLAN                                          
+---------------------------------------------------------------------------------------------
+ Seq Scan on onek2
+   Filter: ((unique2 < 1) AND (stringu1 = ANY ('{A,J}'::name[])) AND (stringu1 < 'Z'::name))
+(2 rows)
+
+-- Use partial indexes
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM onek2
+WHERE stringu1 IN ('B','J') AND (stringu1 = 'A' OR unique1 = 1);
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on onek2
+         Recheck Cond: ((stringu1 < 'B'::name) OR (unique1 = 1))
+         Filter: ((stringu1 = ANY ('{B,J}'::name[])) AND ((stringu1 = 'A'::name) OR (unique1 = 1)))
+         ->  BitmapOr
+               ->  Bitmap Index Scan on onek2_u2_prtl
+               ->  Bitmap Index Scan on onek2_u1_prtl
+                     Index Cond: (unique1 = 1)
+(8 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT unique2, stringu1 FROM onek2
+WHERE unique1 < 1 OR (stringu1 = 'A' OR stringu1 = 'J');
+                                     QUERY PLAN                                      
+-------------------------------------------------------------------------------------
+ Bitmap Heap Scan on onek2
+   Recheck Cond: ((unique1 < 1) OR (stringu1 < 'B'::name) OR (stringu1 = 'J'::name))
+   Filter: ((unique1 < 1) OR (stringu1 = 'A'::name) OR (stringu1 = 'J'::name))
+   ->  BitmapOr
+         ->  Bitmap Index Scan on onek2_u1_prtl
+               Index Cond: (unique1 < 1)
+         ->  Bitmap Index Scan on onek2_u2_prtl
+         ->  Bitmap Index Scan on onek2_stu1_prtl
+               Index Cond: (stringu1 = 'J'::name)
+(9 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT unique2, stringu1 FROM onek2
+WHERE unique1 = 1 OR unique2 = PI()::integer;
+                 QUERY PLAN                 
+--------------------------------------------
+ Seq Scan on onek2
+   Filter: ((unique1 = 1) OR (unique2 = 3))
+(2 rows)
+
+RESET or_transformation_limit;
+-- OR <-> ANY transformation must find a path with partial indexes scan
+-- regardless the clause representation.
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM onek2 WHERE stringu1 = 'A' OR stringu1 = 'J';
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on onek2
+         Recheck Cond: ((stringu1 < 'B'::name) OR (stringu1 = 'J'::name))
+         Filter: (stringu1 = ANY ('{A,J}'::name[]))
+         ->  BitmapOr
+               ->  Bitmap Index Scan on onek2_u2_prtl
+               ->  Bitmap Index Scan on onek2_stu1_prtl
+                     Index Cond: (stringu1 = 'J'::name)
+(8 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM onek2 WHERE stringu1 IN ('A','J');
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on onek2
+         Recheck Cond: ((stringu1 < 'B'::name) OR (stringu1 = 'J'::name))
+         Filter: (stringu1 = ANY ('{A,J}'::name[]))
+         ->  BitmapOr
+               ->  Bitmap Index Scan on onek2_u2_prtl
+               ->  Bitmap Index Scan on onek2_stu1_prtl
+                     Index Cond: (stringu1 = 'J'::name)
+(8 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM onek2 WHERE stringu1 = ANY ('{A,J}');
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on onek2
+         Recheck Cond: ((stringu1 < 'B'::name) OR (stringu1 = 'J'::name))
+         Filter: (stringu1 = ANY ('{A,J}'::name[]))
+         ->  BitmapOr
+               ->  Bitmap Index Scan on onek2_u2_prtl
+               ->  Bitmap Index Scan on onek2_stu1_prtl
+                     Index Cond: (stringu1 = 'J'::name)
+(8 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM onek2 WHERE stringu1 IN ('A') OR stringu1 IN ('J');
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on onek2
+         Recheck Cond: ((stringu1 < 'B'::name) OR (stringu1 = 'J'::name))
+         Filter: (stringu1 = ANY ('{A,J}'::name[]))
+         ->  BitmapOr
+               ->  Bitmap Index Scan on onek2_u2_prtl
+               ->  Bitmap Index Scan on onek2_stu1_prtl
+                     Index Cond: (stringu1 = 'J'::name)
+(8 rows)
+
+-- Don't scan partial indexes because of extra value.
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM onek2 WHERE stringu1 IN ('A', 'J', 'C');
+                      QUERY PLAN                      
+------------------------------------------------------
+ Aggregate
+   ->  Seq Scan on onek2
+         Filter: (stringu1 = ANY ('{A,J,C}'::name[]))
+(3 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT unique2 FROM onek2
+WHERE stringu1 IN ('A', 'A') AND (stringu1 = 'A' OR stringu1 = 'A');
+                                QUERY PLAN                                 
+---------------------------------------------------------------------------
+ Bitmap Heap Scan on onek2
+   Recheck Cond: (stringu1 < 'B'::name)
+   Filter: ((stringu1 = ANY ('{A,A}'::name[])) AND (stringu1 = 'A'::name))
+   ->  Bitmap Index Scan on onek2_u2_prtl
+(4 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT unique2, stringu1 FROM onek2
+WHERE unique2 < 1 AND stringu1 IN ('A','J') AND stringu1 < 'Z';
+                                                     QUERY PLAN                                                      
+---------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on onek2
+   Recheck Cond: (((unique2 < 1) AND (stringu1 < 'B'::name)) OR ((stringu1 = 'J'::name) AND (stringu1 < 'Z'::name)))
+   Filter: ((unique2 < 1) AND (stringu1 = ANY ('{A,J}'::name[])))
+   ->  BitmapOr
+         ->  Bitmap Index Scan on onek2_u2_prtl
+               Index Cond: (unique2 < 1)
+         ->  Bitmap Index Scan on onek2_stu1_prtl
+               Index Cond: ((stringu1 = 'J'::name) AND (stringu1 < 'Z'::name))
+(8 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT unique2, stringu1 FROM onek2
+WHERE unique1 = 1 OR unique1 = PI()::integer;
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Bitmap Heap Scan on onek2
+   Recheck Cond: (unique1 = ANY ('{1,3}'::integer[]))
+   ->  Bitmap Index Scan on onek2_u1_prtl
+         Index Cond: (unique1 = ANY ('{1,3}'::integer[]))
+(4 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT unique2, stringu1 FROM onek2
+WHERE unique1 IN (1, PI()::integer);
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Bitmap Heap Scan on onek2
+   Recheck Cond: (unique1 = ANY ('{1,3}'::integer[]))
+   ->  Bitmap Index Scan on onek2_u1_prtl
+         Index Cond: (unique1 = ANY ('{1,3}'::integer[]))
+(4 rows)
+
+-- Don't apply the optimization to clauses, containing volatile functions
+EXPLAIN (COSTS OFF)
+SELECT unique2,stringu1 FROM onek2
+WHERE unique1 = (random()*2)::integer OR unique1 = (random()*3)::integer;
+                                                             QUERY PLAN                                                             
+------------------------------------------------------------------------------------------------------------------------------------
+ Seq Scan on onek2
+   Filter: ((unique1 = ((random() * '2'::double precision))::integer) OR (unique1 = ((random() * '3'::double precision))::integer))
+(2 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT unique2,stringu1 FROM onek2
+WHERE unique1 IN ((random()*2)::integer, (random()*3)::integer);
+                                                           QUERY PLAN                                                            
+---------------------------------------------------------------------------------------------------------------------------------
+ Seq Scan on onek2
+   Filter: (unique1 = ANY (ARRAY[((random() * '2'::double precision))::integer, ((random() * '3'::double precision))::integer]))
+(2 rows)
+
+-- Combine different saops. Some of them doesnt' fit a set of partial indexes,
+-- but other fits.
+EXPLAIN (COSTS OFF)
+SELECT unique2,stringu1 FROM onek2
+WHERE
+  unique1 IN (1,2,21) AND
+  (stringu1 IN ('A','J') OR unique1 IN (3,4) OR stringu1 = 'J');
+                                                                           QUERY PLAN                                                                           
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on onek2
+   Recheck Cond: ((stringu1 < 'B'::name) OR (stringu1 = 'J'::name) OR (unique1 = 3) OR (unique1 = 4) OR (stringu1 = 'J'::name))
+   Filter: ((unique1 = ANY ('{1,2,21}'::integer[])) AND ((stringu1 = ANY ('{A,J}'::name[])) OR (unique1 = ANY ('{3,4}'::integer[])) OR (stringu1 = 'J'::name)))
+   ->  BitmapOr
+         ->  Bitmap Index Scan on onek2_u2_prtl
+         ->  Bitmap Index Scan on onek2_stu1_prtl
+               Index Cond: (stringu1 = 'J'::name)
+         ->  Bitmap Index Scan on onek2_u1_prtl
+               Index Cond: (unique1 = 3)
+         ->  Bitmap Index Scan on onek2_u1_prtl
+               Index Cond: (unique1 = 4)
+         ->  Bitmap Index Scan on onek2_stu1_prtl
+               Index Cond: (stringu1 = 'J'::name)
+(13 rows)
+
+-- Check recursive combination of OR and SAOP expressions
+EXPLAIN (COSTS OFF)
+SELECT unique2, stringu1 FROM onek2
+WHERE unique1 < 1 OR (stringu1 = 'A' OR stringu1 = 'J');
+                                     QUERY PLAN                                      
+-------------------------------------------------------------------------------------
+ Bitmap Heap Scan on onek2
+   Recheck Cond: ((unique1 < 1) OR (stringu1 < 'B'::name) OR (stringu1 = 'J'::name))
+   Filter: ((unique1 < 1) OR (stringu1 = ANY ('{A,J}'::name[])))
+   ->  BitmapOr
+         ->  Bitmap Index Scan on onek2_u1_prtl
+               Index Cond: (unique1 < 1)
+         ->  Bitmap Index Scan on onek2_u2_prtl
+         ->  Bitmap Index Scan on onek2_stu1_prtl
+               Index Cond: (stringu1 = 'J'::name)
+(9 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT unique2, stringu1 FROM onek2
+WHERE (unique1 < 1 OR stringu1 IN ('A','J'));
+                                     QUERY PLAN                                      
+-------------------------------------------------------------------------------------
+ Bitmap Heap Scan on onek2
+   Recheck Cond: ((unique1 < 1) OR (stringu1 < 'B'::name) OR (stringu1 = 'J'::name))
+   Filter: ((unique1 < 1) OR (stringu1 = ANY ('{A,J}'::name[])))
+   ->  BitmapOr
+         ->  Bitmap Index Scan on onek2_u1_prtl
+               Index Cond: (unique1 < 1)
+         ->  Bitmap Index Scan on onek2_u2_prtl
+         ->  Bitmap Index Scan on onek2_stu1_prtl
+               Index Cond: (stringu1 = 'J'::name)
+(9 rows)
+
+-- Although SAOP doesn't fit partial indexes fully, we can use anded OR clause
+-- to scan another couple of partial indexes.
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM onek2
+WHERE stringu1 IN ('B','J') AND (stringu1 = 'A' OR unique1 = 1);
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on onek2
+         Recheck Cond: ((stringu1 < 'B'::name) OR (unique1 = 1))
+         Filter: ((stringu1 = ANY ('{B,J}'::name[])) AND ((stringu1 = 'A'::name) OR (unique1 = 1)))
+         ->  BitmapOr
+               ->  Bitmap Index Scan on onek2_u2_prtl
+               ->  Bitmap Index Scan on onek2_u1_prtl
+                     Index Cond: (unique1 = 1)
+(8 rows)
+
+RESET enable_indexscan;
+RESET enable_seqscan;
 --
 -- Test some corner cases that have been known to confuse the planner
 --

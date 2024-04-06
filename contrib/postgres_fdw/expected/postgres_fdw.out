@@ -8854,18 +8854,18 @@ insert into utrtest values (2, 'qux');
 -- Check case where the foreign partition is a subplan target rel
 explain (verbose, costs off)
 update utrtest set a = 1 where a = 1 or a = 2 returning *;
-                                             QUERY PLAN                                             
-----------------------------------------------------------------------------------------------------
+                                                  QUERY PLAN                                                  
+--------------------------------------------------------------------------------------------------------------
  Update on public.utrtest
    Output: utrtest_1.a, utrtest_1.b
    Foreign Update on public.remp utrtest_1
    Update on public.locp utrtest_2
    ->  Append
          ->  Foreign Update on public.remp utrtest_1
-               Remote SQL: UPDATE public.loct SET a = 1 WHERE (((a = 1) OR (a = 2))) RETURNING a, b
+               Remote SQL: UPDATE public.loct SET a = 1 WHERE ((a = ANY ('{1,2}'::integer[]))) RETURNING a, b
          ->  Seq Scan on public.locp utrtest_2
                Output: 1, utrtest_2.tableoid, utrtest_2.ctid, NULL::record
-               Filter: ((utrtest_2.a = 1) OR (utrtest_2.a = 2))
+               Filter: (utrtest_2.a = ANY ('{1,2}'::integer[]))
 (10 rows)
 
 -- The new values are concatenated with ' triggered !'

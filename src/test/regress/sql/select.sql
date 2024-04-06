@@ -234,6 +234,88 @@ select unique1, unique2 from onek2
 select unique1, unique2 from onek2
   where (unique2 = 11 and stringu1 < 'B') or unique1 = 0;
 
+SET enable_seqscan TO off;
+SET enable_indexscan TO off; -- Only BitmapScan is a subject matter here
+SET or_transformation_limit = -1;
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM onek2 WHERE stringu1 = 'A' OR stringu1 = 'J';
+-- Without the transformation only seqscan possible here
+EXPLAIN (COSTS OFF)
+SELECT unique2, stringu1 FROM onek2
+WHERE unique2 < 1 AND stringu1 IN ('A','J') AND stringu1 < 'Z';
+-- Use partial indexes
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM onek2
+WHERE stringu1 IN ('B','J') AND (stringu1 = 'A' OR unique1 = 1);
+EXPLAIN (COSTS OFF)
+SELECT unique2, stringu1 FROM onek2
+WHERE unique1 < 1 OR (stringu1 = 'A' OR stringu1 = 'J');
+EXPLAIN (COSTS OFF)
+SELECT unique2, stringu1 FROM onek2
+WHERE unique1 = 1 OR unique2 = PI()::integer;
+RESET or_transformation_limit;
+
+-- OR <-> ANY transformation must find a path with partial indexes scan
+-- regardless the clause representation.
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM onek2 WHERE stringu1 = 'A' OR stringu1 = 'J';
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM onek2 WHERE stringu1 IN ('A','J');
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM onek2 WHERE stringu1 = ANY ('{A,J}');
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM onek2 WHERE stringu1 IN ('A') OR stringu1 IN ('J');
+
+-- Don't scan partial indexes because of extra value.
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM onek2 WHERE stringu1 IN ('A', 'J', 'C');
+EXPLAIN (COSTS OFF)
+SELECT unique2 FROM onek2
+WHERE stringu1 IN ('A', 'A') AND (stringu1 = 'A' OR stringu1 = 'A');
+
+EXPLAIN (COSTS OFF)
+SELECT unique2, stringu1 FROM onek2
+WHERE unique2 < 1 AND stringu1 IN ('A','J') AND stringu1 < 'Z';
+EXPLAIN (COSTS OFF)
+SELECT unique2, stringu1 FROM onek2
+WHERE unique1 = 1 OR unique1 = PI()::integer;
+EXPLAIN (COSTS OFF)
+SELECT unique2, stringu1 FROM onek2
+WHERE unique1 IN (1, PI()::integer);
+
+-- Don't apply the optimization to clauses, containing volatile functions
+EXPLAIN (COSTS OFF)
+SELECT unique2,stringu1 FROM onek2
+WHERE unique1 = (random()*2)::integer OR unique1 = (random()*3)::integer;
+EXPLAIN (COSTS OFF)
+SELECT unique2,stringu1 FROM onek2
+WHERE unique1 IN ((random()*2)::integer, (random()*3)::integer);
+
+-- Combine different saops. Some of them doesnt' fit a set of partial indexes,
+-- but other fits.
+
+EXPLAIN (COSTS OFF)
+SELECT unique2,stringu1 FROM onek2
+WHERE
+  unique1 IN (1,2,21) AND
+  (stringu1 IN ('A','J') OR unique1 IN (3,4) OR stringu1 = 'J');
+
+-- Check recursive combination of OR and SAOP expressions
+EXPLAIN (COSTS OFF)
+SELECT unique2, stringu1 FROM onek2
+WHERE unique1 < 1 OR (stringu1 = 'A' OR stringu1 = 'J');
+EXPLAIN (COSTS OFF)
+SELECT unique2, stringu1 FROM onek2
+WHERE (unique1 < 1 OR stringu1 IN ('A','J'));
+-- Although SAOP doesn't fit partial indexes fully, we can use anded OR clause
+-- to scan another couple of partial indexes.
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM onek2
+WHERE stringu1 IN ('B','J') AND (stringu1 = 'A' OR unique1 = 1);
+
+RESET enable_indexscan;
+RESET enable_seqscan;
+
 --
 -- Test some corner cases that have been known to confuse the planner
 --

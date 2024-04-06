@@ -3657,6 +3657,19 @@ struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"or_transformation_limit", PGC_USERSET, QUERY_TUNING_OTHER,
+			gettext_noop("Set the minimum length of the list of OR clauses to "
+						 "attempt the transformation."),
+			gettext_noop("The planner will try to replace expression like "
+						 "'x=c1 OR x=c2 ..' to the expression 'x = ANY(ARRAY[c1,c2,..])'"),
+			GUC_EXPLAIN
+		},
+		&or_transformation_limit,
+		0, -1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL

@@ -96,7 +96,7 @@ BitmapHeapNext(BitmapHeapScanState *node)
 	 */
 	if (!node->initialized)
 	{
-		TBMIterator *tbmiterator = NULL;
+		TBMPrivateIterator *tbmiterator = NULL;
 		TBMSharedIterator *shared_tbmiterator = NULL;
 
 		if (!pstate)
@@ -107,12 +107,12 @@ BitmapHeapNext(BitmapHeapScanState *node)
 				elog(ERROR, "unrecognized result from subplan");
 
 			node->tbm = tbm;
-			tbmiterator = tbm_begin_iterate(tbm);
+			tbmiterator = tbm_begin_private_iterate(tbm);
 
 #ifdef USE_PREFETCH
 			if (node->prefetch_maximum > 0)
 			{
-				node->prefetch_iterator = tbm_begin_iterate(tbm);
+				node->prefetch_iterator = tbm_begin_private_iterate(tbm);
 				node->prefetch_pages = 0;
 				node->prefetch_target = -1;
 			}
@@ -279,7 +279,7 @@ new_page:
 			break;
 
 		/*
-		 * If serial, we can error out if the the prefetch block doesn't stay
+		 * If private, we can error out if the the prefetch block doesn't stay
 		 * ahead of the current block.
 		 */
 		if (node->pstate == NULL &&
@@ -328,7 +328,7 @@ BitmapAdjustPrefetchIterator(BitmapHeapScanState *node)
 
 	if (pstate == NULL)
 	{
-		TBMIterator *prefetch_iterator = node->prefetch_iterator;
+		TBMPrivateIterator *prefetch_iterator = node->prefetch_iterator;
 
 		if (node->prefetch_pages > 0)
 		{
@@ -338,7 +338,7 @@ BitmapAdjustPrefetchIterator(BitmapHeapScanState *node)
 		else if (prefetch_iterator)
 		{
 			/* Do not let the prefetch iterator get behind the main one */
-			tbmpre = tbm_iterate(prefetch_iterator);
+			tbmpre = tbm_private_iterate(prefetch_iterator);
 			node->pfblockno = tbmpre ? tbmpre->blockno : InvalidBlockNumber;
 		}
 		return;
@@ -441,19 +441,19 @@ BitmapPrefetch(BitmapHeapScanState *node, TableScanDesc scan)
 
 	if (pstate == NULL)
 	{
-		TBMIterator *prefetch_iterator = node->prefetch_iterator;
+		TBMPrivateIterator *prefetch_iterator = node->prefetch_iterator;
 
 		if (prefetch_iterator)
 		{
 			while (node->prefetch_pages < node->prefetch_target)
 			{
-				TBMIterateResult *tbmpre = tbm_iterate(prefetch_iterator);
+				TBMIterateResult *tbmpre = tbm_private_iterate(prefetch_iterator);
 				bool		skip_fetch;
 
 				if (tbmpre == NULL)
 				{
 					/* No more pages to prefetch */
-					tbm_end_iterate(prefetch_iterator);
+					tbm_end_private_iterate(prefetch_iterator);
 					node->prefetch_iterator = NULL;
 					break;
 				}
@@ -589,7 +589,7 @@ ExecReScanBitmapHeapScan(BitmapHeapScanState *node)
 
 		if (scan->st.bts.tbmiterator)
 		{
-			tbm_end_iterate(scan->st.bts.tbmiterator);
+			tbm_end_private_iterate(scan->st.bts.tbmiterator);
 			scan->st.bts.tbmiterator = NULL;
 		}
 
@@ -599,7 +599,7 @@ ExecReScanBitmapHeapScan(BitmapHeapScanState *node)
 
 	/* release bitmaps and buffers if any */
 	if (node->prefetch_iterator)
-		tbm_end_iterate(node->prefetch_iterator);
+		tbm_end_private_iterate(node->prefetch_iterator);
 	if (node->shared_prefetch_iterator)
 		tbm_end_shared_iterate(node->shared_prefetch_iterator);
 	if (node->tbm)
@@ -680,7 +680,7 @@ ExecEndBitmapHeapScan(BitmapHeapScanState *node)
 
 		if (scanDesc->st.bts.tbmiterator)
 		{
-			tbm_end_iterate(scanDesc->st.bts.tbmiterator);
+			tbm_end_private_iterate(scanDesc->st.bts.tbmiterator);
 			scanDesc->st.bts.tbmiterator = NULL;
 		}
 
@@ -694,7 +694,7 @@ ExecEndBitmapHeapScan(BitmapHeapScanState *node)
 	 * release bitmaps and buffers if any
 	 */
 	if (node->prefetch_iterator)
-		tbm_end_iterate(node->prefetch_iterator);
+		tbm_end_private_iterate(node->prefetch_iterator);
 	if (node->tbm)
 		tbm_free(node->tbm);
 	if (node->shared_prefetch_iterator)

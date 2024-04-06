@@ -3332,7 +3332,7 @@ SELECT NOT(ROW(table.*) IS NOT NULL) FROM TABLE; -- detect at least one null in 
         </indexterm>
         <function>regexp_instr</function> ( <parameter>string</parameter> <type>text</type>, <parameter>pattern</parameter> <type>text</type>
          [, <parameter>start</parameter> <type>integer</type>
-         [, <parameter>N</parameter> <type>integer</type>
+         [, <parameter>count</parameter> <type>integer</type>
          [, <parameter>endoption</parameter> <type>integer</type>
          [, <parameter>flags</parameter> <type>text</type>
          [, <parameter>subexpr</parameter> <type>integer</type> ] ] ] ] ] )
@@ -3340,7 +3340,7 @@ SELECT NOT(ROW(table.*) IS NOT NULL) FROM TABLE; -- detect at least one null in 
        </para>
        <para>
         Returns the position within <parameter>string</parameter> where
-        the <parameter>N</parameter>'th match of the POSIX regular
+        the <parameter>count</parameter>'th match of the POSIX regular
         expression <parameter>pattern</parameter> occurs, or zero if there is
         no such match; see <xref linkend="functions-posix-regexp"/>.
        </para>
@@ -3446,14 +3446,14 @@ SELECT NOT(ROW(table.*) IS NOT NULL) FROM TABLE; -- detect at least one null in 
        <entry role="func_table_entry"><para role="func_signature">
         <function>regexp_replace</function> ( <parameter>string</parameter> <type>text</type>, <parameter>pattern</parameter> <type>text</type>, <parameter>replacement</parameter> <type>text</type>,
          <parameter>start</parameter> <type>integer</type>,
-         <parameter>N</parameter> <type>integer</type>
+         <parameter>count</parameter> <type>integer</type>
          [, <parameter>flags</parameter> <type>text</type> ] )
         <returnvalue>text</returnvalue>
        </para>
        <para>
-        Replaces the substring that is the <parameter>N</parameter>'th
+        Replaces the substring that is the <parameter>count</parameter>'th
         match to the POSIX regular expression <parameter>pattern</parameter>,
-        or all such matches if <parameter>N</parameter> is zero; see
+        or all such matches if <parameter>count</parameter> is zero; see
         <xref linkend="functions-posix-regexp"/>.
        </para>
        <para>
@@ -3511,14 +3511,14 @@ SELECT NOT(ROW(table.*) IS NOT NULL) FROM TABLE; -- detect at least one null in 
         </indexterm>
         <function>regexp_substr</function> ( <parameter>string</parameter> <type>text</type>, <parameter>pattern</parameter> <type>text</type>
          [, <parameter>start</parameter> <type>integer</type>
-         [, <parameter>N</parameter> <type>integer</type>
+         [, <parameter>count</parameter> <type>integer</type>
          [, <parameter>flags</parameter> <type>text</type>
          [, <parameter>subexpr</parameter> <type>integer</type> ] ] ] ] )
         <returnvalue>text</returnvalue>
        </para>
        <para>
         Returns the substring within <parameter>string</parameter> that
-        matches the <parameter>N</parameter>'th occurrence of the POSIX
+        matches the <parameter>count</parameter>'th occurrence of the POSIX
         regular expression <parameter>pattern</parameter>,
         or <literal>NULL</literal> if there is no such match; see
         <xref linkend="functions-posix-regexp"/>.
@@ -5921,13 +5921,13 @@ regexp_count('ABCABCAXYaxy', 'A.', 1, 'i')  <lineannotation>4</lineannotation>
 
     <para>
      The <function>regexp_instr</function> function returns the starting or
-     ending position of the <replaceable>N</replaceable>'th match of a
+     ending position of the <replaceable>count</replaceable>'th match of a
      POSIX regular expression pattern to a string, or zero if there is no
      such match.  It has the syntax
      <function>regexp_instr</function>(<replaceable>string</replaceable>,
      <replaceable>pattern</replaceable>
      <optional>, <replaceable>start</replaceable>
-     <optional>, <replaceable>N</replaceable>
+     <optional>, <replaceable>count</replaceable>
      <optional>, <replaceable>endoption</replaceable>
      <optional>, <replaceable>flags</replaceable>
      <optional>, <replaceable>subexpr</replaceable>
@@ -5936,8 +5936,8 @@ regexp_count('ABCABCAXYaxy', 'A.', 1, 'i')  <lineannotation>4</lineannotation>
      in <replaceable>string</replaceable>, normally from the beginning of
      the string, but if the <replaceable>start</replaceable> parameter is
      provided then beginning from that character index.
-     If <replaceable>N</replaceable> is specified
-     then the <replaceable>N</replaceable>'th match of the pattern
+     If <replaceable>count</replaceable> is specified
+     then the <replaceable>count</replaceable>'th match of the pattern
      is located, otherwise the first match is located.
      If the <replaceable>endoption</replaceable> parameter is omitted or
      specified as zero, the function returns the position of the first
@@ -6057,8 +6057,8 @@ SELECT (regexp_match('foobarbequebaz', 'bar.*que'))[1];
      expression pattern to a string.  It has the same syntax as
      <function>regexp_match</function>.
      This function returns no rows if there is no match, one row if there is
-     a match and the <literal>g</literal> flag is not given, or <replaceable>N</replaceable>
-     rows if there are <replaceable>N</replaceable> matches and the <literal>g</literal> flag
+     a match and the <literal>g</literal> flag is not given, or <replaceable>count</replaceable>
+     rows if there are <replaceable>count</replaceable> matches and the <literal>g</literal> flag
      is given.  Each returned row is a text array containing the whole
      matched substring or the substrings matching parenthesized
      subexpressions of the <replaceable>pattern</replaceable>, just as described above
@@ -6109,18 +6109,18 @@ SELECT col1, (SELECT regexp_matches(col2, '(bar)(beque)')) FROM tab;
      The <function>regexp_replace</function> function provides substitution of
      new text for substrings that match POSIX regular expression patterns.
      It has the syntax
-     <function>regexp_replace</function>(<replaceable>source</replaceable>,
+     <function>regexp_replace</function>(<replaceable>string</replaceable>,
      <replaceable>pattern</replaceable>, <replaceable>replacement</replaceable>
      <optional>, <replaceable>start</replaceable>
-     <optional>, <replaceable>N</replaceable>
+     <optional>, <replaceable>count</replaceable>
      </optional></optional>
      <optional>, <replaceable>flags</replaceable> </optional>).
-     (Notice that <replaceable>N</replaceable> cannot be specified
+     (Notice that <replaceable>count</replaceable> cannot be specified
      unless <replaceable>start</replaceable> is,
      but <replaceable>flags</replaceable> can be given in any case.)
-     The <replaceable>source</replaceable> string is returned unchanged if
+     The <replaceable>string</replaceable> is returned unchanged if
      there is no match to the <replaceable>pattern</replaceable>.  If there is a
-     match, the <replaceable>source</replaceable> string is returned with the
+     match, the <replaceable>string</replaceable> is returned with the
      <replaceable>replacement</replaceable> string substituted for the matching
      substring.  The <replaceable>replacement</replaceable> string can contain
      <literal>\</literal><replaceable>n</replaceable>, where <replaceable>n</replaceable> is 1
@@ -6135,14 +6135,14 @@ SELECT col1, (SELECT regexp_matches(col2, '(bar)(beque)')) FROM tab;
      the string, but if the <replaceable>start</replaceable> parameter is
      provided then beginning from that character index.
      By default, only the first match of the pattern is replaced.
-     If <replaceable>N</replaceable> is specified and is greater than zero,
-     then the <replaceable>N</replaceable>'th match of the pattern
+     If <replaceable>count</replaceable> is specified and is greater than zero,
+     then the <replaceable>count</replaceable>'th match of the pattern
      is replaced.
      If the <literal>g</literal> flag is given, or
-     if <replaceable>N</replaceable> is specified and is zero, then all
+     if <replaceable>count</replaceable> is specified and is zero, then all
      matches at or after the <replaceable>start</replaceable> position are
      replaced.  (The <literal>g</literal> flag is ignored
-     when <replaceable>N</replaceable> is specified.)
+     when <replaceable>count</replaceable> is specified.)
      The <replaceable>flags</replaceable> parameter is an optional text
      string containing zero or more single-letter flags that change the
      function's behavior.  Supported flags (though
@@ -6253,7 +6253,7 @@ SELECT foo FROM regexp_split_to_table('the quick brown fox', '\s*') AS foo;
      <function>regexp_substr</function>(<replaceable>string</replaceable>,
      <replaceable>pattern</replaceable>
      <optional>, <replaceable>start</replaceable>
-     <optional>, <replaceable>N</replaceable>
+     <optional>, <replaceable>count</replaceable>
      <optional>, <replaceable>flags</replaceable>
      <optional>, <replaceable>subexpr</replaceable>
      </optional></optional></optional></optional>).
@@ -6261,8 +6261,8 @@ SELECT foo FROM regexp_split_to_table('the quick brown fox', '\s*') AS foo;
      in <replaceable>string</replaceable>, normally from the beginning of
      the string, but if the <replaceable>start</replaceable> parameter is
      provided then beginning from that character index.
-     If <replaceable>N</replaceable> is specified
-     then the <replaceable>N</replaceable>'th match of the pattern
+     If <replaceable>count</replaceable> is specified
+     then the <replaceable>count</replaceable>'th match of the pattern
      is returned, otherwise the first match is returned.
      The <replaceable>flags</replaceable> parameter is an optional text
      string containing zero or more single-letter flags that change the

@@ -1515,7 +1515,33 @@ convert_EXISTS_sublink_to_join(PlannerInfo *root, SubLink *sublink,
 	result->join_using_alias = NULL;
 	result->quals = whereClause;
 	result->alias = NULL;
-	result->rtindex = 0;		/* we don't need an RTE for it */
+	result->rtindex = 0;		/* we don't need an RTE for JOIN_SEMI */
+
+	/*
+	 * Add a RTE for JOIN_ANTI
+	 */
+	if (result->jointype == JOIN_ANTI)
+	{
+		ParseNamespaceItem *jnsitem;
+		ParseState *pstate;
+
+		/* Create a dummy ParseState for addRangeTableEntryForJoin */
+		pstate = make_parsestate(NULL);
+
+		jnsitem = addRangeTableEntryForJoin(pstate,
+											NULL,
+											NULL,
+											JOIN_ANTI,
+											0,
+											NULL,
+											NIL,
+											NIL,
+											NULL,
+											NULL,
+											false);
+		parse->rtable = lappend(parse->rtable, jnsitem->p_rte);
+		result->rtindex = list_length(parse->rtable);
+	}
 
 	return result;
 }

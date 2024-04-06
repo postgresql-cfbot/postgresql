@@ -46,11 +46,6 @@ my $ctlcmd = [
 ];
 command_like($ctlcmd, qr/done.*server started/s, 'pg_ctl start');
 
-# sleep here is because Windows builds can't check postmaster.pid exactly,
-# so they may mistake a pre-existing postmaster.pid for one created by the
-# postmaster they start.  Waiting more than the 2 seconds slop time allowed
-# by wait_for_postmaster() prevents that mistake.
-sleep 3 if ($windows_os);
 command_fails([ 'pg_ctl', 'start', '-D', "$tempdir/data" ],
 	'second pg_ctl start fails');
 command_ok([ 'pg_ctl', 'stop', '-D', "$tempdir/data" ], 'pg_ctl stop');

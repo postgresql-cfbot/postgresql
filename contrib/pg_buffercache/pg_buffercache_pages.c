@@ -63,6 +63,7 @@ typedef struct
 PG_FUNCTION_INFO_V1(pg_buffercache_pages);
 PG_FUNCTION_INFO_V1(pg_buffercache_summary);
 PG_FUNCTION_INFO_V1(pg_buffercache_usage_counts);
+PG_FUNCTION_INFO_V1(pg_buffercache_invalidate);
 
 Datum
 pg_buffercache_pages(PG_FUNCTION_ARGS)
@@ -346,4 +347,23 @@ pg_buffercache_usage_counts(PG_FUNCTION_ARGS)
 	}
 
 	return (Datum) 0;
+}
+
+/*
+ * Try to invalidate a shared buffer.
+ */
+Datum
+pg_buffercache_invalidate(PG_FUNCTION_ARGS)
+{
+	Buffer		buf = PG_GETARG_INT32(0);
+
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("must be superuser to use pg_buffercache_invalidate function")));
+
+	if (buf < 1 || buf > NBuffers)
+		elog(ERROR, "bad buffer ID: %d", buf);
+
+	PG_RETURN_BOOL(InvalidateUnpinnedBuffer(buf));
 }

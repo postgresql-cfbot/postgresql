@@ -474,6 +474,16 @@
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>context_id</structfield> <type>int4</type>
+      </para>
+      <para>
+       Current context id. Note that the context id is a temporary id and may
+       change in each invocation
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>ident</structfield> <type>text</type>
       </para>
       <para>
@@ -501,10 +511,30 @@
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>path</structfield> <type>int4[]</type>
+      </para>
+      <para>
+       Path to reach the current context from TopMemoryContext. Context ids in
+       this list represents all parents of the current context. This can be
+       used to build the parent and child relation
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>total_bytes</structfield> <type>int8</type>
       </para>
       <para>
        Total bytes allocated for this memory context
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_bytes_including_children</structfield> <type>int8</type>
+      </para>
+      <para>
+       Total bytes allocated for this memory context including its children
       </para></entry>
      </row>
 

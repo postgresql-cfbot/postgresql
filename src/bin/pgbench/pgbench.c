@@ -824,6 +824,7 @@ static void setDoubleValue(PgBenchValue *pv, double dval);
 static bool evaluateExpr(CState *st, PgBenchExpr *expr,
 						 PgBenchValue *retval);
 static ConnectionStateEnum executeMetaCommand(CState *st, pg_time_usec_t *now);
+static void doLogHeader(FILE *logfile, double throttle_delay, uint32 retries);
 static void doLog(TState *thread, CState *st,
 				  StatsData *agg, bool skipped, double latency, double lag);
 static void processXactStats(TState *thread, CState *st, pg_time_usec_t *now,
@@ -4534,6 +4535,34 @@ getResultString(bool skipped, EStatus estatus)
 }
 
 /*
+ * Generates column headers for the log file
+ *
+ */
+void doLogHeader(FILE *logfile, double throttle_delay, uint32 retries)
+{
+    // header fields present in all cases
+    fprintf(logfile, "client_id transaction_no time script_no time_epoch time_us");
+    
+    // Append "schedule_lag" if the schedule_lag is true
+    if (throttle_delay)
+    {
+        fprintf(logfile, " schedule_lag");
+    }
+
+    // Append "retries" when set
+    if (retries > 1)
+    {
+        fprintf(logfile, " retries");
+    }
+
+    fprintf(logfile, "\n");
+
+	// flush the buffer to ensure the header is written immediately
+	fflush(logfile);
+}
+
+
+/*
  * Print log entry after completing one transaction.
  *
  * We print Unix-epoch timestamps in the log, so that entries can be
@@ -4550,7 +4579,6 @@ doLog(TState *thread, CState *st,
 	pg_time_usec_t now = pg_time_now() + epoch_shift;
 
 	Assert(use_log);
-
 	/*
 	 * Skip the log entry if sampling is enabled and this row doesn't belong
 	 * to the random sample.
@@ -7421,6 +7449,11 @@ threadRun(void *arg)
 
 		if (thread->logfile == NULL)
 			pg_fatal("could not open logfile \"%s\": %m", logpath);
+		else
+			// only log header from the main thread
+			if (thread->tid == 0) {
+				doLogHeader(thread->logfile, throttle_delay, max_tries);
+			}
 	}
 
 	/* explicitly initialize the state machines */

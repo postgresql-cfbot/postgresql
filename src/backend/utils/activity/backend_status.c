@@ -319,6 +319,8 @@ pgstat_bestart(void)
 	lbeentry.st_xact_start_timestamp = 0;
 	lbeentry.st_databaseid = MyDatabaseId;
 
+	MemSet(&lbeentry.st_session, 0, sizeof(lbeentry.st_session));
+
 	/* We have userid for client-backends, wal-sender and bgworker processes */
 	if (lbeentry.st_backendType == B_BACKEND
 		|| lbeentry.st_backendType == B_WAL_SENDER
@@ -507,6 +509,9 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 	TimestampTz current_timestamp;
 	int			len = 0;
 
+	PgBackendSessionStatus st_session_diff;
+	MemSet(&st_session_diff, 0, sizeof(st_session_diff));
+
 	TRACE_POSTGRESQL_STATEMENT_STATUS(cmd_str);
 
 	if (!beentry)
@@ -532,6 +537,7 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 			beentry->st_xact_start_timestamp = 0;
 			beentry->st_query_id = UINT64CONST(0);
 			proc->wait_event_info = 0;
+			MemSet(&beentry->st_session, 0, sizeof(beentry->st_session));
 			PGSTAT_END_WRITE_ACTIVITY(beentry);
 		}
 		return;
@@ -554,27 +560,45 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 	current_timestamp = GetCurrentTimestamp();
 
 	/*
-	 * If the state has changed from "active" or "idle in transaction",
-	 * calculate the duration.
+	 * If a client backend has changed state, update per-database and per-session counters.
 	 */
-	if ((beentry->st_state == STATE_RUNNING ||
-		 beentry->st_state == STATE_FASTPATH ||
-		 beentry->st_state == STATE_IDLEINTRANSACTION ||
-		 beentry->st_state == STATE_IDLEINTRANSACTION_ABORTED) &&
-		state != beentry->st_state)
+	if ((PGSTAT_IS_ACTIVE(beentry) ||
+		 PGSTAT_IS_IDLEINTRANSACTION(beentry) ||
+		 PGSTAT_IS_IDLEINTRANSACTION_ABORTED(beentry) ||
+		 PGSTAT_IS_IDLE(beentry)) &&
+		state != beentry->st_state &&
+		beentry->st_backendType == B_BACKEND)
 	{
 		long		secs;
 		int			usecs;
+		int64		usecs_diff;
 
 		TimestampDifference(beentry->st_state_start_timestamp,
 							current_timestamp,
 							&secs, &usecs);
+		usecs_diff = secs * 1000000 + usecs;
 
-		if (beentry->st_state == STATE_RUNNING ||
-			beentry->st_state == STATE_FASTPATH)
-			pgstat_count_conn_active_time((PgStat_Counter) secs * 1000000 + usecs);
-		else
-			pgstat_count_conn_txn_idle_time((PgStat_Counter) secs * 1000000 + usecs);
+		/* compute values for pg_stat_database */
+		if (PGSTAT_IS_ACTIVE(beentry))
+			pgstat_count_conn_active_time((PgStat_Counter) usecs_diff);
+		else if (PGSTAT_IS_IDLEINTRANSACTION(beentry) ||
+				 PGSTAT_IS_IDLEINTRANSACTION_ABORTED(beentry))
+			pgstat_count_conn_txn_idle_time((PgStat_Counter) usecs_diff);
+
+		/* compute values for pg_stat_session */
+		if (PGSTAT_IS_ACTIVE(beentry)) {
+			st_session_diff.active_time = usecs_diff;
+			st_session_diff.active_count += 1;
+		} else if (PGSTAT_IS_IDLE(beentry)){
+			st_session_diff.idle_time = usecs_diff;
+			st_session_diff.idle_count += 1;
+		} else if (PGSTAT_IS_IDLEINTRANSACTION(beentry)){
+			st_session_diff.idle_in_transaction_time = usecs_diff;
+			st_session_diff.idle_in_transaction_count += 1;
+		} else if (PGSTAT_IS_IDLEINTRANSACTION_ABORTED(beentry)){
+			st_session_diff.idle_in_transaction_aborted_time = usecs_diff;
+			st_session_diff.idle_in_transaction_aborted_count += 1;
+		}
 	}
 
 	/*
@@ -598,6 +622,20 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 		memcpy((char *) beentry->st_activity_raw, cmd_str, len);
 		beentry->st_activity_raw[len] = '\0';
 		beentry->st_activity_start_timestamp = start_timestamp;
+	}
+
+	if (beentry->st_backendType == B_BACKEND) {
+		beentry->st_session.active_time += st_session_diff.active_time;
+		beentry->st_session.active_count += st_session_diff.active_count;
+
+		beentry->st_session.idle_time += st_session_diff.idle_time;
+		beentry->st_session.idle_count += st_session_diff.idle_count;
+
+		beentry->st_session.idle_in_transaction_time += st_session_diff.idle_in_transaction_time;
+		beentry->st_session.idle_in_transaction_count += st_session_diff.idle_in_transaction_count;
+
+		beentry->st_session.idle_in_transaction_aborted_time += st_session_diff.idle_in_transaction_aborted_time;
+		beentry->st_session.idle_in_transaction_aborted_count += st_session_diff.idle_in_transaction_aborted_count;
 	}
 
 	PGSTAT_END_WRITE_ACTIVITY(beentry);

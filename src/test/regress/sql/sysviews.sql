@@ -72,3 +72,20 @@ set timezone_abbreviations = 'Australia';
 select count(distinct utc_offset) >= 24 as ok from pg_timezone_abbrevs;
 set timezone_abbreviations = 'India';
 select count(distinct utc_offset) >= 24 as ok from pg_timezone_abbrevs;
+
+select active_count as prev_active_count from pg_stat_session where pid = pg_backend_pid() \gset
+select (select active_count from pg_stat_session where pid = pg_backend_pid()) - :prev_active_count = 1 as ok;
+
+select idle_count as prev_idle_count from pg_stat_session where pid = pg_backend_pid() \gset
+select (select idle_count from pg_stat_session where pid = pg_backend_pid()) - :prev_idle_count = 1 as ok;
+
+select idle_in_transaction_count as prev_idle_in_transaction_count from pg_stat_session where pid = pg_backend_pid() \gset
+begin;
+commit;
+select (select idle_in_transaction_count from pg_stat_session where pid = pg_backend_pid()) - :prev_idle_in_transaction_count = 1 as ok;
+
+select idle_in_transaction_aborted_count as prev_idle_in_transaction_aborted_count from pg_stat_session where pid = pg_backend_pid() \gset
+begin;
+select non_existent_function();
+rollback;
+select (select idle_in_transaction_aborted_count from pg_stat_session where pid = pg_backend_pid()) - :prev_idle_in_transaction_aborted_count = 1 as ok;

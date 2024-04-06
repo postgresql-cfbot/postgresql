@@ -59,9 +59,20 @@
 
 #define SpinLockInit(lock)	S_INIT_LOCK(lock)
 
-#define SpinLockAcquire(lock) S_LOCK(lock)
+#define SpinLockAcquire(lock) \
+	do \
+	{ \
+		spinlock_prepare_acquire(__FILE__, __LINE__, __func__); \
+		S_LOCK(lock); \
+	} while (false)
 
-#define SpinLockRelease(lock) S_UNLOCK(lock)
+
+#define SpinLockRelease(lock) \
+	do \
+	{ \
+		S_UNLOCK(lock) ; \
+		spinlock_finish_release(); \
+	} while (false)
 
 #define SpinLockFree(lock)	S_LOCK_FREE(lock)
 

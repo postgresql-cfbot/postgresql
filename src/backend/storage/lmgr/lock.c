@@ -775,6 +775,12 @@ LockAcquireExtended(const LOCKTAG *locktag,
 	bool		found_conflict;
 	bool		log_lock = false;
 
+	/*
+	 * Spin lock should not be held for a long time, but the time needed here
+	 * may be too long, so let's make sure no spin lock is held now.
+	 */
+	VerifyNoSpinLocksHeld(true);
+
 	if (lockmethodid <= 0 || lockmethodid >= lengthof(LockMethods))
 		elog(ERROR, "unrecognized lock method: %d", lockmethodid);
 	lockMethodTable = LockMethods[lockmethodid];

@@ -2878,6 +2878,14 @@ quickdie(SIGNAL_ARGS)
 	sigprocmask(SIG_SETMASK, &BlockSig, NULL);
 
 	/*
+	 * It is possible that getting here when holding a spin lock already.
+	 * However current function needs some actions like elog which are
+	 * disallowed when holding a spin lock by spinlock misuse detection
+	 * system. So tell that system to treat this specially.
+	 */
+	spinStatus.in_panic = true;
+
+	/*
 	 * Prevent interrupts while exiting; though we just blocked signals that
 	 * would queue new interrupts, one may have been pending.  We don't want a
 	 * quickdie() downgraded to a mere query cancel.

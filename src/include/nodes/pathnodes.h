@@ -269,6 +269,13 @@ struct PlannerInfo
 	Relids		all_query_rels;
 
 	/*
+	 * nullable_sortgroup_refs is a Relids set of all the ressortgrouprefs of
+	 * TargetEntrys that are nullable by grouping sets.  This is computed in
+	 * preprocess_grouping_sets.
+	 */
+	Relids		nullable_sortgroup_refs;
+
+	/*
 	 * join_rel_list is a list of all join-relation RelOptInfos we have
 	 * considered in this planning run.  For small problems we just scan the
 	 * list to do lookups, but when there are many join relations we build a

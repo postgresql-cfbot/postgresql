@@ -634,6 +634,17 @@ check_max_wal_senders(int *newval, void **extra, GucSource source)
 }
 
 /*
+ * GUC check_hook for wal_sender_max_send_size
+ */
+bool
+check_wal_sender_max_send_size(int *newval, void **extra, GucSource source)
+{
+	if (*newval > wal_segment_size)
+		return false;
+	return true;
+}
+
+/*
  * Early initialization of a backend (either standalone or under postmaster).
  * This happens even before InitPostgres.
  *

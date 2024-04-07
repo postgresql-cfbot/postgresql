@@ -2972,6 +2972,17 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"wal_sender_max_send_size", PGC_SIGHUP, REPLICATION_SENDING,
+			gettext_noop("Sets size of the maximum data payload in a WAL data message."),
+			NULL,
+			GUC_UNIT_BYTE,
+		},
+		&wal_sender_max_send_size,
+		16 * XLOG_BLCKSZ, XLOG_BLCKSZ, INT_MAX,
+		check_wal_sender_max_send_size, NULL, NULL
+	},
+
+	{
 		{"commit_delay", PGC_SUSET, WAL_SETTINGS,
 			gettext_noop("Sets the delay in microseconds between transaction commit and "
 						 "flushing WAL to disk."),

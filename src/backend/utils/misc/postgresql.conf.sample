@@ -333,6 +333,7 @@
 #wal_keep_size = 0		# in megabytes; 0 disables
 #max_slot_wal_keep_size = -1	# in megabytes; -1 disables
 #wal_sender_timeout = 60s	# in milliseconds; 0 disables
+#wal_sender_max_send_size = 128kB	# min 8kB
 #track_commit_timestamp = off	# collect timestamp of transaction commit
 				# (change requires restart)
 

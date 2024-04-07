@@ -1,0 +1,5 @@
+# binaryheap_bench extension
+comment = 'benchmark tool for binary heap'
+default_version = '1.0'
+module_pathname = '$libdir/binaryheap_bench'
+relocatable = true

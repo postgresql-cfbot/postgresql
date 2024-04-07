@@ -26,6 +26,9 @@
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 
+#define PREWARM_PREFETCH_RANGE	RELSEG_SIZE
+#define PREWARM_READ_RANGE	8
+
 PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(pg_prewarm);
@@ -37,7 +40,7 @@ typedef enum
 	PREWARM_BUFFER,
 } PrewarmType;
 
-static PGIOAlignedBlock blockbuffer;
+static PGIOAlignedBlock blockbuffers[PREWARM_READ_RANGE];
 
 struct pg_prewarm_read_stream_private
 {
@@ -153,10 +156,11 @@ pg_prewarm(PG_FUNCTION_ARGS)
 	else
 	{
 		last_block = PG_GETARG_INT64(4);
-		if (last_block < 0 || last_block >= nblocks)
+		if (last_block < first_block || last_block >= nblocks)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("ending block number must be between 0 and %lld",
+					 errmsg("ending block number must be between %lld and %lld",
+							(long long) (first_block),
 							(long long) (nblocks - 1))));
 	}
 
@@ -175,11 +179,21 @@ pg_prewarm(PG_FUNCTION_ARGS)
 		 * no practical way to do that at present without a gross modularity
 		 * violation, so we just do this.
 		 */
-		for (block = first_block; block <= last_block; ++block)
+		for (block = first_block; block <= last_block;
+			 block += PREWARM_PREFETCH_RANGE)
 		{
+			int seek = Min(PREWARM_PREFETCH_RANGE, (last_block - block + 1));
+
+			/*
+			 * if handling a multi-TB relation, we need a way to interrupt the
+			 * prefetching: smgrprefetch (mdprefetch) will loop on all segments
+			 * without interruption so we use a range and keep the following
+			 * CHECK in place
+			 */
 			CHECK_FOR_INTERRUPTS();
-			PrefetchBuffer(rel, forkNumber, block);
-			++blocks_done;
+
+			smgrprefetch(RelationGetSmgr(rel), forkNumber, block, seek);
+			blocks_done += seek;
 		}
 #else
 		ereport(ERROR,
@@ -194,11 +208,19 @@ pg_prewarm(PG_FUNCTION_ARGS)
 		 * buffers.  This is more portable than prefetch mode (it works
 		 * everywhere) and is synchronous.
 		 */
-		for (block = first_block; block <= last_block; ++block)
+		char	*buffers[PREWARM_READ_RANGE];
+		for (int i=0; i < PREWARM_READ_RANGE; i++)
+			buffers[i] = blockbuffers[i].data;
+		for (block = first_block; block <= last_block;
+			 block += PREWARM_READ_RANGE)
 		{
+			int seek = Min(PREWARM_READ_RANGE, (last_block - block + 1));
+
 			CHECK_FOR_INTERRUPTS();
-			smgrread(RelationGetSmgr(rel), forkNumber, block, blockbuffer.data);
-			++blocks_done;
+
+			smgrreadv(RelationGetSmgr(rel), forkNumber, block, (void *) buffers,
+					  seek);
+			blocks_done += seek;
 		}
 	}
 	else if (ptype == PREWARM_BUFFER)

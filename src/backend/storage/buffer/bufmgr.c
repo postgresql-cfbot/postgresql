@@ -1104,7 +1104,7 @@ ZeroAndLockBuffer(Buffer buffer, ReadBufferMode mode, bool already_valid)
 static pg_attribute_always_inline Buffer
 PinBufferForBlock(Relation rel,
 				  SMgrRelation smgr,
-				  char smgr_persistence,
+				  char persistence,
 				  ForkNumber forkNum,
 				  BlockNumber blockNum,
 				  BufferAccessStrategy strategy,
@@ -1113,22 +1113,13 @@ PinBufferForBlock(Relation rel,
 	BufferDesc *bufHdr;
 	IOContext	io_context;
 	IOObject	io_object;
-	char		persistence;
 
 	Assert(blockNum != P_NEW);
 
-	/*
-	 * If there is no Relation it usually implies recovery and thus permanent,
-	 * but we take an argument because CreateAndCopyRelationData can reach us
-	 * with only an SMgrRelation for an unlogged relation that we don't want
-	 * to flag with BM_PERMANENT.
-	 */
-	if (rel)
-		persistence = rel->rd_rel->relpersistence;
-	else if (smgr_persistence == 0)
-		persistence = RELPERSISTENCE_PERMANENT;
-	else
-		persistence = smgr_persistence;
+	/* Persistence should be set before */
+	Assert((persistence == RELPERSISTENCE_TEMP ||
+			persistence == RELPERSISTENCE_PERMANENT ||
+			persistence == RELPERSISTENCE_UNLOGGED));
 
 	if (persistence == RELPERSISTENCE_TEMP)
 	{
@@ -1203,6 +1194,7 @@ ReadBuffer_common(Relation rel, SMgrRelation smgr, char smgr_persistence,
 	ReadBuffersOperation operation;
 	Buffer		buffer;
 	int			flags;
+	char		persistence;
 
 	/*
 	 * Backward compatibility path, most code should use ExtendBufferedRel()
@@ -1224,12 +1216,19 @@ ReadBuffer_common(Relation rel, SMgrRelation smgr, char smgr_persistence,
 		return ExtendBufferedRel(BMR_REL(rel), forkNum, strategy, flags);
 	}
 
+	if (rel)
+		persistence = rel->rd_rel->relpersistence;
+	else if (smgr_persistence == 0)
+		persistence = RELPERSISTENCE_PERMANENT;
+	else
+		persistence = smgr_persistence;
+
 	if (unlikely(mode == RBM_ZERO_AND_CLEANUP_LOCK ||
 				 mode == RBM_ZERO_AND_LOCK))
 	{
 		bool		found;
 
-		buffer = PinBufferForBlock(rel, smgr, smgr_persistence,
+		buffer = PinBufferForBlock(rel, smgr, persistence,
 								   forkNum, blockNum, strategy, &found);
 		ZeroAndLockBuffer(buffer, mode, found);
 		return buffer;
@@ -1241,7 +1240,7 @@ ReadBuffer_common(Relation rel, SMgrRelation smgr, char smgr_persistence,
 		flags = 0;
 	operation.smgr = smgr;
 	operation.rel = rel;
-	operation.smgr_persistence = smgr_persistence;
+	operation.persistence = persistence;
 	operation.forknum = forkNum;
 	operation.strategy = strategy;
 	if (StartReadBuffer(&operation,
@@ -1272,7 +1271,7 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
 
 		buffers[i] = PinBufferForBlock(operation->rel,
 									   operation->smgr,
-									   operation->smgr_persistence,
+									   operation->persistence,
 									   operation->forknum,
 									   blockNum + i,
 									   operation->strategy,
@@ -1418,10 +1417,8 @@ WaitReadBuffers(ReadBuffersOperation *operation)
 	buffers = &operation->buffers[0];
 	blocknum = operation->blocknum;
 	forknum = operation->forknum;
+	persistence = operation->persistence;
 
-	persistence = operation->rel
-		? operation->rel->rd_rel->relpersistence
-		: RELPERSISTENCE_PERMANENT;
 	if (persistence == RELPERSISTENCE_TEMP)
 	{
 		io_context = IOCONTEXT_NORMAL;

@@ -202,6 +202,18 @@ typedef struct JsonTablePlanState
 
 	/* Counter for ORDINAL columns */
 	int			ordinal;
+
+	/* Nested plan, if any */
+	struct JsonTablePlanState *nested;
+
+	/* Left sibling, if any */
+	struct JsonTablePlanState *left;
+
+	/* Right sibling, if any */
+	struct JsonTablePlanState *right;
+
+	/* Parent plan, if this is a nested plan */
+	struct JsonTablePlanState *parent;
 } JsonTablePlanState;
 
 /* Random number to identify JsonTableExecContext for sanity checking */
@@ -213,6 +225,12 @@ typedef struct JsonTableExecContext
 
 	/* State of the plan providing a row evaluated from "root" jsonpath */
 	JsonTablePlanState *rootplanstate;
+
+	/*
+	 * Per-column JsonTablePlanStates for all columns including the nested
+	 * ones.
+	 */
+	JsonTablePlanState **colplanstates;
 } JsonTableExecContext;
 
 /* strict/lax flags is decomposed into four [un]wrap/error flags */
@@ -337,14 +355,18 @@ static void checkTimezoneIsUsedForCast(bool useTz, const char *type1,
 static void JsonTableInitOpaque(TableFuncScanState *state, int natts);
 static JsonTablePlanState *JsonTableInitPlan(JsonTableExecContext *cxt,
 											 JsonTablePlan *plan,
+											 JsonTablePlanState *parentstate,
 											 List *args,
 											 MemoryContext mcxt);
 static void JsonTableSetDocument(TableFuncScanState *state, Datum value);
 static void JsonTableResetRowPattern(JsonTablePlanState *plan, Datum item);
+static void JsonTableResetNestedPlan(JsonTablePlanState *planstate);
 static bool JsonTableFetchRow(TableFuncScanState *state);
 static Datum JsonTableGetValue(TableFuncScanState *state, int colnum,
 							   Oid typid, int32 typmod, bool *isnull);
 static void JsonTableDestroyOpaque(TableFuncScanState *state);
+static bool JsonTablePlanScanNextRow(JsonTablePlanState *planstate);
+static bool JsonTablePlanJoinNextRow(JsonTablePlanState *planstate);
 static bool JsonTablePlanNextRow(JsonTablePlanState *planstate);
 
 const TableFuncRoutine JsonbTableRoutine =
@@ -4087,8 +4109,14 @@ JsonTableInitOpaque(TableFuncScanState *state, int natts)
 		}
 	}
 
-	/* Initialize plan */
-	cxt->rootplanstate = JsonTableInitPlan(cxt, rootplan, args,
+	cxt->colplanstates = palloc(sizeof(JsonTablePlanState *) *
+								list_length(tf->colvalexprs));
+
+	/*
+	 * Initialize plan for the root path and, recursively, also any child
+	 * plans that compute the NESTED paths.
+	 */
+	cxt->rootplanstate = JsonTableInitPlan(cxt, rootplan, NULL, args,
 										   CurrentMemoryContext);
 
 	state->opaque = cxt;
@@ -4113,19 +4141,22 @@ JsonTableDestroyOpaque(TableFuncScanState *state)
 /*
  * JsonTableInitPlan
  *		Initialize information for evaluating jsonpath in the given
- *		JsonTablePlan
+ *		JsonTablePlan and, recursively, in any child plans
  */
 static JsonTablePlanState *
 JsonTableInitPlan(JsonTableExecContext *cxt, JsonTablePlan *plan,
+				  JsonTablePlanState *parentstate,
 				  List *args, MemoryContext mcxt)
 {
 	JsonTablePlanState *planstate = palloc0(sizeof(*planstate));
 
 	planstate->plan = plan;
+	planstate->parent = parentstate;
 
 	if (IsA(plan, JsonTablePathScan))
 	{
 		JsonTablePathScan *scan = (JsonTablePathScan *) plan;
+		int			i;
 
 		planstate->path = DatumGetJsonPathP(scan->path->value->constvalue);
 		planstate->args = args;
@@ -4135,6 +4166,21 @@ JsonTableInitPlan(JsonTableExecContext *cxt, JsonTablePlan *plan,
 		/* No row pattern evaluated yet. */
 		planstate->current.value = PointerGetDatum(NULL);
 		planstate->current.isnull = true;
+
+		for (i = scan->colMin; i >= 0 && i <= scan->colMax; i++)
+			cxt->colplanstates[i] = planstate;
+
+		planstate->nested = scan->child ?
+			JsonTableInitPlan(cxt, scan->child, planstate, args, mcxt) : NULL;
+	}
+	else if (IsA(plan, JsonTableSiblingJoin))
+	{
+		JsonTableSiblingJoin *join = (JsonTableSiblingJoin *) plan;
+
+		planstate->left = JsonTableInitPlan(cxt, join->lplan, parentstate,
+											args, mcxt);
+		planstate->right = JsonTableInitPlan(cxt, join->rplan, parentstate,
+											 args, mcxt);
 	}
 
 	return planstate;
@@ -4193,15 +4239,55 @@ JsonTableResetRowPattern(JsonTablePlanState *planstate, Datum item)
 }
 
 /*
- * Fetch next row from a JsonTablePlan's path evaluation result.
+ * Fetch next row from a JsonTablePlan.
  *
- * Returns false if the plan has run out of rows, true otherwise.
+ * Returns true if plan still has rows.
  */
 static bool
 JsonTablePlanNextRow(JsonTablePlanState *planstate)
 {
-	JsonbValue *jbv = JsonValueListNext(&planstate->found, &planstate->iter);
+	if (IsA(planstate->plan, JsonTablePathScan))
+		return JsonTablePlanScanNextRow(planstate);
+	else if (IsA(planstate->plan, JsonTableSiblingJoin))
+		return JsonTablePlanJoinNextRow(planstate);
+	else
+		elog(ERROR, "invalid JsonTablePlan %d", (int) planstate->plan->type);
+
+	Assert(false);
+	/* Appease compiler */
+	return false;
+}
+
+/*
+ * Fetch next row from a JsonTablePlan's path evaluation result and from
+ * any child nested path(s).
+ *
+ * Returns true if the any of the paths (this or the nested) has more rows to
+ * return.
+ *
+ * By fetching the nested path(s)'s rows based on the parent row at each
+ * level, this essentially joins the rows of different levels.  If any level
+ * has no matching rows, the columns at that level will compute to NULL,
+ * making it an OUTER join.
+ */
+static bool
+JsonTablePlanScanNextRow(JsonTablePlanState *planstate)
+{
+	JsonbValue *jbv;
 	MemoryContext oldcxt;
+
+	/*
+	 * If planstate already has an active row and there is a nested plan,
+	 * check if it has an active row to join with the former.
+	 */
+	if (!planstate->current.isnull)
+	{
+		if (planstate->nested && JsonTablePlanNextRow(planstate->nested))
+			return true;
+	}
+
+	/* Fetch new row from the list of found values to set as active. */
+	jbv = JsonValueListNext(&planstate->found, &planstate->iter);
 
 	/* End of list? */
 	if (jbv == NULL)
@@ -4223,7 +4309,71 @@ JsonTablePlanNextRow(JsonTablePlanState *planstate)
 	/* Next row! */
 	planstate->ordinal++;
 
+	/* Update the nested plan(s)'s row(s) using this new row. */
+	if (planstate->nested)
+	{
+		JsonTableResetNestedPlan(planstate->nested);
+		if (JsonTablePlanNextRow(planstate->nested))
+			return true;
+	}
+
 	return true;
+}
+
+/*
+ * Fetch the next row from a JsonTableSiblingJoin.
+ *
+ * This is essentially a UNION between the rows from left and right siblings.
+ */
+static bool
+JsonTablePlanJoinNextRow(JsonTablePlanState *planstate)
+{
+
+	/* Fetch row from left sibling. */
+	if (!JsonTablePlanNextRow(planstate->left))
+	{
+		/*
+		 * Left sibling ran out of rows, so start fetching from the right
+		 * sibling.
+		 */
+		if (!JsonTablePlanNextRow(planstate->right))
+		{
+			/* Right sibling ran out of row, so there are more rows. */
+			return false;
+		}
+	}
+
+	return true;
+}
+
+/*
+ * Recursively recalculate the row pattern of a nested plan and its child
+ * plans.
+ */
+static void
+JsonTableResetNestedPlan(JsonTablePlanState *planstate)
+{
+	/* This better be a child plan. */
+	Assert(planstate->parent != NULL);
+	if (IsA(planstate->plan, JsonTablePathScan))
+	{
+		JsonTablePlanState *parent = planstate->parent;
+
+		/*
+		 * Re-evaluate a nested plan's row pattern using the new parent row
+		 * pattern, if present.
+		 */
+		if (!parent->current.isnull)
+			JsonTableResetRowPattern(planstate, parent->current.value);
+
+		if (planstate->nested)
+			JsonTableResetNestedPlan(planstate->nested);
+	}
+	else if (IsA(planstate->plan, JsonTableSiblingJoin))
+	{
+		JsonTableResetNestedPlan(planstate->left);
+		JsonTableResetNestedPlan(planstate->right);
+	}
 }
 
 /*
@@ -4256,7 +4406,7 @@ JsonTableGetValue(TableFuncScanState *state, int colnum,
 		GetJsonTableExecContext(state, "JsonTableGetValue");
 	ExprContext *econtext = state->ss.ps.ps_ExprContext;
 	ExprState  *estate = list_nth(state->colvalexprs, colnum);
-	JsonTablePlanState *planstate = cxt->rootplanstate;
+	JsonTablePlanState *planstate = cxt->colplanstates[colnum];
 	JsonTablePlanRowSource *current = &planstate->current;
 	Datum		result;
 

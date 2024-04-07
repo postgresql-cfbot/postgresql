@@ -302,7 +302,7 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 Datum
 pg_stat_get_activity(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_ACTIVITY_COLS	31
+#define PG_STAT_GET_ACTIVITY_COLS	33
 	int			num_backends = pgstat_fetch_stat_numbackends();
 	int			curr_backend;
 	int			pid = PG_ARGISNULL(0) ? -1 : PG_GETARG_INT32(0);
@@ -396,6 +396,9 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 			/* leader_pid */
 			nulls[29] = true;
 
+			/* authenticated user */
+			nulls[31] = nulls[32] = true;
+
 			proc = BackendPidGetProc(beentry->st_procpid);
 
 			if (proc == NULL && (beentry->st_backendType != B_BACKEND))
@@ -433,6 +436,22 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 				{
 					values[29] = Int32GetDatum(leader->pid);
 					nulls[29] = false;
+
+					/*
+					 * The authenticated user in a parallel worker is the same as the one in
+					 * the leader, so look it up there.
+					 */
+					if (leader->backendId)
+					{
+						LocalPgBackendStatus *leaderstat = pgstat_get_local_beentry_by_backend_id(leader->backendId);
+
+						if (leaderstat->backendStatus.st_auth_method != uaReject && leaderstat->backendStatus.st_auth_method != uaImplicitReject)
+						{
+							nulls[31] = nulls[32] = false;
+							values[31] = CStringGetTextDatum(hba_authname(leaderstat->backendStatus.st_auth_method));
+							values[32] = CStringGetTextDatum(leaderstat->backendStatus.st_auth_identity);
+						}
+					}
 				}
 				else if (beentry->st_backendType == B_BG_WORKER)
 				{
@@ -615,6 +634,14 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 				nulls[30] = true;
 			else
 				values[30] = UInt64GetDatum(beentry->st_query_id);
+
+			/* Authenticated user in regular processes */
+			if (beentry->st_auth_method != uaReject && beentry->st_auth_method != uaImplicitReject)
+			{
+				nulls[31] = nulls[32] = false;
+				values[31] = CStringGetTextDatum(hba_authname(beentry->st_auth_method));
+				values[32] = CStringGetTextDatum(beentry->st_auth_identity);
+			}
 		}
 		else
 		{
@@ -644,6 +671,8 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 			nulls[28] = true;
 			nulls[29] = true;
 			nulls[30] = true;
+			nulls[31] = true;
+			nulls[32] = true;
 		}
 
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);

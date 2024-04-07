@@ -320,6 +320,15 @@ select * from
 
 reset enable_material;
 
+-- test materialized form of the cheapest inner path
+set min_parallel_table_scan_size = '512kB';
+
+explain(costs off)
+select count(*) from tenk1, int4_tbl where tenk1.two < int4_tbl.f1;
+
+select count(*) from tenk1, int4_tbl where tenk1.two < int4_tbl.f1;
+
+set min_parallel_table_scan_size = 0;
 reset enable_hashagg;
 
 -- check parallelized int8 aggregate (bug #14897)

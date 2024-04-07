@@ -2208,6 +2208,42 @@ pathkeys_useful_for_setop(PlannerInfo *root, List *pathkeys)
 }
 
 /*
+ * pathkeys_useful_for_distinct
+ *		Count the number of pathkeys that are useful for DISTINCT clause.
+ *
+ * DISTINCT keys could also be reordered to benefit from the ordering.  As with
+ * pathkeys_useful_for_grouping, we return the number of leading keys in the
+ * list that are shared by the distinctClause pathkeys.
+ */
+static int
+pathkeys_useful_for_distinct(PlannerInfo *root, List *pathkeys)
+{
+	int			n_common_pathkeys;
+	ListCell   *lc;
+
+	if (root->distinct_pathkeys == NIL)
+		return 0;				/* no special ordering requested for DISTINCT */
+
+	if (pathkeys == NIL)
+		return 0;				/* unordered path */
+
+	/* walk the pathkeys and search for matching DISTINCT key */
+	n_common_pathkeys = 0;
+	foreach(lc, pathkeys)
+	{
+		PathKey   *pathkey = (PathKey *) lfirst(lc);
+
+		/* no matching group key, we're done */
+		if (!list_member_ptr(root->distinct_pathkeys, pathkey))
+			break;
+
+		n_common_pathkeys++;
+	}
+
+	return n_common_pathkeys;
+}
+
+/*
  * truncate_useless_pathkeys
  *		Shorten the given pathkey list to just the useful pathkeys.
  */
@@ -2224,6 +2260,9 @@ truncate_useless_pathkeys(PlannerInfo *root,
 	if (nuseful2 > nuseful)
 		nuseful = nuseful2;
 	nuseful2 = pathkeys_useful_for_grouping(root, pathkeys);
+	if (nuseful2 > nuseful)
+		nuseful = nuseful2;
+	nuseful2 = pathkeys_useful_for_distinct(root, pathkeys);
 	if (nuseful2 > nuseful)
 		nuseful = nuseful2;
 	nuseful2 = pathkeys_useful_for_setop(root, pathkeys);

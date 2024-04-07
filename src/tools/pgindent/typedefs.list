@@ -166,6 +166,7 @@ AttrMap
 AttrMissing
 AttrNumber
 AttributeOpts
+AuthConnRecord
 AuthRequest
 AuthToken
 AutoPrewarmSharedState

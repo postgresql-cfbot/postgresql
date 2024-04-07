@@ -123,7 +123,8 @@ PostgreSQL documentation
         described in <xref linkend="runtime-config"/>. Most of the
         other command line options are in fact short forms of such a
         parameter assignment.  <option>-c</option> can appear multiple times
-        to set multiple parameters.
+        to set multiple parameters.  See the <option>--name</option>
+        option below for an alternate syntax.
        </para>
       </listitem>
      </varlistentry>
@@ -342,8 +343,9 @@ PostgreSQL documentation
       <term><option>--<replaceable>name</replaceable>=<replaceable>value</replaceable></option></term>
       <listitem>
        <para>
-        Sets a named run-time parameter; a shorter form of
-        <option>-c</option>.
+        Sets the named run-time parameter; a shorter form of
+        <option>-c</option>.  See <xref linkend="runtime-config"/>
+        for a listing of parameters.
        </para>
       </listitem>
      </varlistentry>

@@ -32,7 +32,7 @@
 #include "storage/standbydefs.h"
 #include "utils/relmapper.h"
 
-#define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask,decode) \
+#define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask,decode,checkpoint) \
 	{ name, desc, identify},
 
 static const RmgrDescData RmgrDescTable[RM_N_BUILTIN_IDS] = {

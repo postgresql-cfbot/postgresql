@@ -325,6 +325,15 @@ typedef enum
 	RECOVERY_TARGET_ACTION_SHUTDOWN,
 }			RecoveryTargetAction;
 
+/* Checkpoint phases in which RmgrCheckpoint() is called. */
+typedef enum RmgrCheckpointPhase
+{
+	RMGR_CHECKPOINT_BEFORE_BUFFERS = 0,	/* RmgrCheckpoint() is called
+										 * before CheckPointBuffers() */
+	RMGR_CHECKPOINT_AFTER_BUFFERS,		/* RmgrCheckpoint() is called
+										 * after CheckPointBuffers() */
+} RmgrCheckpointPhase;
+
 struct LogicalDecodingContext;
 struct XLogRecordBuffer;
 
@@ -356,11 +365,13 @@ typedef struct RmgrData
 	void		(*rm_mask) (char *pagedata, BlockNumber blkno);
 	void		(*rm_decode) (struct LogicalDecodingContext *ctx,
 							  struct XLogRecordBuffer *buf);
+	void		(*rm_checkpoint) (int flags, RmgrCheckpointPhase phase);
 } RmgrData;
 
 extern PGDLLIMPORT RmgrData RmgrTable[];
 extern void RmgrStartup(void);
 extern void RmgrCleanup(void);
+extern void RmgrCheckpoint(int flags, RmgrCheckpointPhase phase);
 extern void RmgrNotFound(RmgrId rmid);
 extern void RegisterCustomRmgr(RmgrId rmid, const RmgrData *rmgr);
 

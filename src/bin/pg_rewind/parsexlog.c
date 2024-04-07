@@ -28,7 +28,7 @@
  * RmgrNames is an array of the built-in resource manager names, to make error
  * messages a bit nicer.
  */
-#define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask,decode) \
+#define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask,decode,checkpoint) \
   name,
 
 static const char *const RmgrNames[RM_MAX_ID + 1] = {

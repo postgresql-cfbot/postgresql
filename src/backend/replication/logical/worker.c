@@ -485,6 +485,10 @@ should_apply_changes_for_rel(LogicalRepRelMapEntry *rel)
 			return rel->state == SUBREL_STATE_READY;
 
 		case WORKERTYPE_APPLY:
+			elog(LOG, "should_apply_changes_for_rel relid %d return %d", RelationGetRelid(rel->localrel), (rel->state == SUBREL_STATE_READY ||
+					(rel->state == SUBREL_STATE_SYNCDONE &&
+					 rel->statelsn <= remote_final_lsn)));
+
 			return (rel->state == SUBREL_STATE_READY ||
 					(rel->state == SUBREL_STATE_SYNCDONE &&
 					 rel->statelsn <= remote_final_lsn));
@@ -2380,20 +2384,27 @@ apply_handle_insert(StringInfo s)
 	MemoryContext oldctx;
 	bool		run_as_owner;
 
+	elog(LOG, "apply_handle_insert");
+
 	/*
 	 * Quick return if we are skipping data modification changes or handling
 	 * streamed transactions.
 	 */
 	if (is_skipping_changes() ||
 		handle_streamed_transaction(LOGICAL_REP_MSG_INSERT, s))
+	{
+		elog(LOG, "apply_handle_insert / skipping changes or streaming");
 		return;
+	}
 
 	begin_replication_step();
 
 	relid = logicalrep_read_insert(s, &newtup);
 	rel = logicalrep_rel_open(relid, RowExclusiveLock);
+	elog(LOG, "apply_handle_insert relid %d state %c lsn %X/%X final %X/%X", RelationGetRelid(rel->localrel), rel->state, LSN_FORMAT_ARGS(rel->statelsn), LSN_FORMAT_ARGS(remote_final_lsn));
 	if (!should_apply_changes_for_rel(rel))
 	{
+		elog(LOG, "apply_handle_insert relid %d skipping", RelationGetRelid(rel->localrel));
 		/*
 		 * The relation can't become interesting in the middle of the
 		 * transaction so it's safe to unlock it.

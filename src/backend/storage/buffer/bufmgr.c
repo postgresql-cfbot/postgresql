@@ -1067,24 +1067,10 @@ PinBufferForBlock(Relation rel,
 	BufferDesc *bufHdr;
 	IOContext	io_context;
 	IOObject	io_object;
-	char		persistence;
 
 	Assert(blockNum != P_NEW);
 
-	/*
-	 * If there is no Relation it usually implies recovery and thus permanent,
-	 * but we take an argmument because CreateAndCopyRelationData can reach us
-	 * with only an SMgrRelation for an unlogged relation that we don't want
-	 * to flag with BM_PERMANENT.
-	 */
-	if (rel)
-		persistence = rel->rd_rel->relpersistence;
-	else if (smgr_persistence == 0)
-		persistence = RELPERSISTENCE_PERMANENT;
-	else
-		persistence = smgr_persistence;
-
-	if (persistence == RELPERSISTENCE_TEMP)
+	if (smgr_persistence == RELPERSISTENCE_TEMP)
 	{
 		io_context = IOCONTEXT_NORMAL;
 		io_object = IOOBJECT_TEMP_RELATION;
@@ -1101,7 +1087,7 @@ PinBufferForBlock(Relation rel,
 									   smgr->smgr_rlocator.locator.relNumber,
 									   smgr->smgr_rlocator.backend);
 
-	if (persistence == RELPERSISTENCE_TEMP)
+	if (smgr_persistence == RELPERSISTENCE_TEMP)
 	{
 		bufHdr = LocalBufferAlloc(smgr, forkNum, blockNum, foundPtr);
 		if (*foundPtr)
@@ -1109,7 +1095,7 @@ PinBufferForBlock(Relation rel,
 	}
 	else
 	{
-		bufHdr = BufferAlloc(smgr, persistence, forkNum, blockNum,
+		bufHdr = BufferAlloc(smgr, smgr_persistence, forkNum, blockNum,
 							 strategy, foundPtr, io_context);
 		if (*foundPtr)
 			pgBufferUsage.shared_blks_hit++;
@@ -1157,6 +1143,7 @@ ReadBuffer_common(Relation rel, SMgrRelation smgr, char smgr_persistence,
 	ReadBuffersOperation operation;
 	Buffer		buffer;
 	int			flags;
+	char		persistence;
 
 	/*
 	 * Backward compatibility path, most code should use ExtendBufferedRel()
@@ -1195,7 +1182,15 @@ ReadBuffer_common(Relation rel, SMgrRelation smgr, char smgr_persistence,
 		flags = 0;
 	operation.smgr = smgr;
 	operation.rel = rel;
-	operation.smgr_persistence = smgr_persistence;
+
+	if (rel)
+		persistence = rel->rd_rel->relpersistence;
+	else if (smgr_persistence == 0)
+		persistence = RELPERSISTENCE_PERMANENT;
+	else
+		persistence = smgr_persistence;
+	operation.smgr_persistence = persistence;
+
 	operation.forknum = forkNum;
 	operation.strategy = strategy;
 	if (StartReadBuffer(&operation,

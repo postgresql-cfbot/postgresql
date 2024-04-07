@@ -2323,6 +2323,68 @@ Tue Oct 26 21:40:57 CEST 1999
       </varlistentry>
 
 
+      <varlistentry id="app-psql-meta-command-gedit">
+        <term><literal>\gedit</literal></term>
+
+        <listitem>
+        <para>
+         Execute the SELECT query, edit the result with an editor, and send back
+         the changes as UPDATE statements.
+        </para>
+
+        <para>
+         If the current query buffer is empty, the most recently sent query
+         is described instead.
+        </para>
+
+        <para>
+         The SELECT query is executed normally on the server. The result is
+         rendered as JSON and opened in external editor. The user can then edit
+         the query result to change values. On saving, the changed fields are
+         sent back to the server as UPDATE statements. Newly added rows are sent
+         as INSERTs, deleted rows are sent as DELETEs.
+<programlisting>
+=&gt; <userinput>SELECT id, language, message FROM messages \gedit</userinput>
+-- editor opens, user edits data, saves and quits
+UPDATE messages SET message = 'Hello world' WHERE id = '2';
+</programlisting>
+        </para>
+
+        <para>
+         In non-expanded display mode, each result row is rendered as one line
+         of JSON. When expanded mode is enabled, result columns are rendered as
+         separate lines. Expanded mode can be forced for this query.
+<programlisting>
+=&gt; <userinput>\gedit (expanded)</userinput>
+</programlisting>
+        </para>
+
+        <para>
+         The table's primary key, or any unique key, must be part of the
+         selected columns. If the table does not have any (or none are
+         selected), and the user knows that the data is sufficiently selective,
+         a key can be manually selected by providing a <literal>key</literal>
+         argument to <literal>\gedit</literal>. It is the user's responsibility
+         to ensure that the provided key selects only the rows they want to
+         change when used in a WHERE clause.
+<programlisting>
+=&gt; <userinput>\gedit (key=language,message)</userinput>
+</programlisting>
+        </para>
+
+        <para>
+         Only SELECT statements on a single table are supported. A simple string
+         parser is used to determine the table name. If that fails, or if a
+         different base table is to be edited (perhaps the query references a
+         non-updatable view), a <literal>table</literal> argument can be provided.
+<programlisting>
+=&gt; <userinput>\gedit (table=documents)</userinput>
+</programlisting>
+        </para>
+        </listitem>
+      </varlistentry>
+
+
       <varlistentry id="app-psql-meta-command-getenv">
         <term><literal>\getenv <replaceable class="parameter">psql_var</replaceable> <replaceable class="parameter">env_var</replaceable></literal></term>
 

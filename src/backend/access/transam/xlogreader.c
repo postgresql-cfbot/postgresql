@@ -1670,11 +1670,11 @@ DecodeXLogRecord(XLogReaderState *state,
 	 */
 #define COPY_HEADER_FIELD(_dst, _size)			\
 	do {										\
-		if (remaining < _size)					\
+		if (remaining < (_size))				\
 			goto shortdata_err;					\
-		memcpy(_dst, ptr, _size);				\
-		ptr += _size;							\
-		remaining -= _size;						\
+		memcpy((_dst), ptr, (_size));			\
+		ptr += (_size);							\
+		remaining -= (_size);					\
 	} while(0)
 
 	char	   *ptr;
@@ -1700,7 +1700,12 @@ DecodeXLogRecord(XLogReaderState *state,
 	datatotal = 0;
 	while (remaining > datatotal)
 	{
+		XLogSizeClass sizeClass;
 		COPY_HEADER_FIELD(&block_id, sizeof(uint8));
+
+		sizeClass = (block_id & XLR_BLOCKID_SZCLASS_MASK) >>
+														  XLR_BLOCKID_SZCLASS_SHIFT;
+		block_id &= XLR_BLOCK_ID_MASK;
 
 		if (block_id == XLR_BLOCK_ID_DATA_SHORT)
 		{
@@ -1765,7 +1770,26 @@ DecodeXLogRecord(XLogReaderState *state,
 
 			blk->prefetch_buffer = InvalidBuffer;
 
-			COPY_HEADER_FIELD(&blk->data_len, sizeof(uint16));
+			{
+				int		read;
+				uint32	length = 0;
+				read = XLogReadLength(&length, sizeClass,
+									  XLS_UINT16,
+									  ptr, remaining);
+
+				if (read < 0)
+				{
+					report_invalid_record(state,
+										  "Could not read length from record at %X/%X",
+										  LSN_FORMAT_ARGS(state->ReadRecPtr));
+					goto err;
+				}
+
+				ptr += read;
+				remaining -= read;
+				blk->data_len = length;
+			}
+
 			/* cross-check that the HAS_DATA flag is set iff data_length > 0 */
 			if (blk->has_data && blk->data_len == 0)
 			{

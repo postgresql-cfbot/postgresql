@@ -946,6 +946,7 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 {
 	int			parentRTindex = rti;
 	bool		has_live_children;
+	double		parent_tuples;
 	double		parent_rows;
 	double		parent_size;
 	double	   *parent_attrsizes;
@@ -983,6 +984,7 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 	 * have zero rows and/or width, if they were excluded by constraints.
 	 */
 	has_live_children = false;
+	parent_tuples = 0;
 	parent_rows = 0;
 	parent_size = 0;
 	nattrs = rel->max_attr - rel->min_attr + 1;
@@ -1149,6 +1151,7 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		 */
 		Assert(childrel->rows > 0);
 
+		parent_tuples += childrel->tuples;
 		parent_rows += childrel->rows;
 		parent_size += childrel->reltarget->width * childrel->rows;
 
@@ -1201,10 +1204,10 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 			rel->attr_widths[i] = rint(parent_attrsizes[i] / parent_rows);
 
 		/*
-		 * Set "raw tuples" count equal to "rows" for the appendrel; needed
-		 * because some places assume rel->tuples is valid for any baserel.
+		 * Set "raw tuples" count for the appendrel; needed because some places
+		 * assume rel->tuples is valid for any baserel.
 		 */
-		rel->tuples = parent_rows;
+		rel->tuples = parent_tuples;
 
 		/*
 		 * Note that we leave rel->pages as zero; this is important to avoid

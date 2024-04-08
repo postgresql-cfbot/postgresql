@@ -2417,6 +2417,7 @@ ReorderBufferUpdateProgressTxnCB
 ReorderTuple
 RepOriginId
 ReparameterizeForeignPathByChild_function
+ReplaceReturningVarsFromTargetList_context
 ReplaceVarsFromTargetList_context
 ReplaceVarsNoMatchOption
 ReplicaIdentityStmt
@@ -2446,6 +2447,9 @@ RestrictInfo
 Result
 ResultRelInfo
 ResultState
+ReturningClause
+ReturningExpr
+ReturningOption
 ReturnSetInfo
 ReturnStmt
 RevmapContents
@@ -2595,6 +2599,7 @@ SetOperationStmt
 SetQuantifier
 SetToDefault
 SetupWorkerPtrType
+SetVarReturningType_context
 ShDependObjectInfo
 SharedAggInfo
 SharedBitmapState
@@ -3051,6 +3056,7 @@ VariableSpace
 VariableStatData
 VariableSubstituteHook
 Variables
+VarReturningType
 Vector32
 Vector8
 VersionedQuery

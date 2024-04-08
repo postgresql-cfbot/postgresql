@@ -7101,6 +7101,8 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 	}
 	node->updateColnosLists = updateColnosLists;
 	node->withCheckOptionLists = withCheckOptionLists;
+	node->returningOld = root->parse->returningOld;
+	node->returningNew = root->parse->returningNew;
 	node->returningLists = returningLists;
 	node->rowMarks = rowMarks;
 	node->mergeActionLists = mergeActionLists;
@@ -7169,7 +7171,8 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 		 * callback functions needed for that and (2) there are no local
 		 * structures that need to be run for each modified row: row-level
 		 * triggers on the foreign table, stored generated columns, WITH CHECK
-		 * OPTIONs from parent views.
+		 * OPTIONs from parent views, or Vars returning OLD/NEW in the
+		 * RETURNING list.
 		 */
 		direct_modify = false;
 		if (fdwroutine != NULL &&
@@ -7179,7 +7182,8 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 			fdwroutine->EndDirectModify != NULL &&
 			withCheckOptionLists == NIL &&
 			!has_row_triggers(root, rti, operation) &&
-			!has_stored_generated_columns(root, rti))
+			!has_stored_generated_columns(root, rti) &&
+			!contain_vars_returning_old_or_new((Node *) root->parse->returningList))
 			direct_modify = fdwroutine->PlanDirectModify(root, node, rti, i);
 		if (direct_modify)
 			direct_modify_plans = bms_add_member(direct_modify_plans, i);

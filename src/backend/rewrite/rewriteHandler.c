@@ -662,15 +662,18 @@ rewriteRuleAction(Query *parsetree,
 					 errmsg("cannot have RETURNING lists in multiple rules")));
 		*returning_flag = true;
 		rule_action->returningList = (List *)
-			ReplaceVarsFromTargetList((Node *) parsetree->returningList,
-									  parsetree->resultRelation,
-									  0,
-									  rt_fetch(parsetree->resultRelation,
-											   parsetree->rtable),
-									  rule_action->returningList,
-									  REPLACEVARS_REPORT_ERROR,
-									  0,
-									  &rule_action->hasSubLinks);
+			ReplaceReturningVarsFromTargetList((Node *) parsetree->returningList,
+											   parsetree->resultRelation,
+											   0,
+											   rt_fetch(parsetree->resultRelation,
+														parsetree->rtable),
+											   rule_action->returningList,
+											   rule_action->resultRelation,
+											   &rule_action->hasSubLinks);
+
+		/* use triggering query's aliases for OLD and NEW in RETURNING list */
+		rule_action->returningOld = parsetree->returningOld;
+		rule_action->returningNew = parsetree->returningNew;
 
 		/*
 		 * There could have been some SubLinks in parsetree's returningList,
@@ -3516,14 +3519,13 @@ rewriteTargetView(Query *parsetree, Relation view)
 	 * reference the appropriate column of the base relation instead.
 	 */
 	parsetree = (Query *)
-		ReplaceVarsFromTargetList((Node *) parsetree,
-								  parsetree->resultRelation,
-								  0,
-								  view_rte,
-								  view_targetlist,
-								  REPLACEVARS_REPORT_ERROR,
-								  0,
-								  NULL);
+		ReplaceReturningVarsFromTargetList((Node *) parsetree,
+										   parsetree->resultRelation,
+										   0,
+										   view_rte,
+										   view_targetlist,
+										   new_rt_index,
+										   NULL);
 
 	/*
 	 * Update all other RTI references in the query that point to the view

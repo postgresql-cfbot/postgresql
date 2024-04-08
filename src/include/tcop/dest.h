@@ -97,6 +97,7 @@ typedef enum
 	DestTransientRel,			/* results sent to transient relation */
 	DestTupleQueue,				/* results sent to tuple queue */
 	DestExplainSerialize,		/* results are serialized and discarded */
+	DestVariable,				/* results sents to session variable */
 } CommandDest;
 
 /* ----------------

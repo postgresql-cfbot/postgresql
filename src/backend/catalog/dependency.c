@@ -65,12 +65,14 @@
 #include "catalog/pg_ts_template.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_user_mapping.h"
+#include "catalog/pg_variable.h"
 #include "commands/comment.h"
 #include "commands/defrem.h"
 #include "commands/event_trigger.h"
 #include "commands/extension.h"
 #include "commands/policy.h"
 #include "commands/publicationcmds.h"
+#include "commands/schemacmds.h"
 #include "commands/seclabel.h"
 #include "commands/sequence.h"
 #include "commands/trigger.h"
@@ -1442,6 +1444,10 @@ doDeletion(const ObjectAddress *object, int flags)
 			RemovePublicationById(object->objectId);
 			break;
 
+		case VariableRelationId:
+			DropVariableById(object->objectId);
+			break;
+
 		case CastRelationId:
 		case CollationRelationId:
 		case ConversionRelationId:
@@ -1464,6 +1470,7 @@ doDeletion(const ObjectAddress *object, int flags)
 		case AuthMemRelationId:
 			DropObjectById(object);
 			break;
+
 
 			/*
 			 * These global object types are not supported here.
@@ -1855,6 +1862,11 @@ find_expr_references_walker(Node *node,
 	else if (IsA(node, Param))
 	{
 		Param	   *param = (Param *) node;
+
+		/* A variable parameter depends on the session variable */
+		if (param->paramkind == PARAM_VARIABLE)
+			add_object_address(VariableRelationId, param->paramvarid, 0,
+							   context->addrs);
 
 		/* A parameter must depend on the parameter's datatype */
 		add_object_address(TypeRelationId, param->paramtype, 0,

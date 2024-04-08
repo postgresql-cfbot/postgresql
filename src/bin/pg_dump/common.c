@@ -271,6 +271,9 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 	pg_log_info("reading subscription membership of tables");
 	getSubscriptionTables(fout);
 
+	pg_log_info("reading variables");
+	getVariables(fout);
+
 	free(inhinfo);				/* not needed any longer */
 
 	*numTablesPtr = numTables;

@@ -246,12 +246,12 @@ ERROR:  type "b" does not exist
 select tcl_eval('spi_prepare a "b {"');
 ERROR:  unmatched open brace in list
 select tcl_error_handling_test($tcl$spi_prepare "select moo" []$tcl$);
-       tcl_error_handling_test        
---------------------------------------
- SQLSTATE: 42703                     +
- condition: undefined_column         +
- cursor_position: 8                  +
- message: column "moo" does not exist+
+             tcl_error_handling_test              
+--------------------------------------------------
+ SQLSTATE: 42703                                 +
+ condition: undefined_column                     +
+ cursor_position: 8                              +
+ message: column or variable "moo" does not exist+
  statement: select moo
 (1 row)
 

@@ -16,21 +16,34 @@
 
 CREATE VIEW pg_roles AS
     SELECT
-        rolname,
-        rolsuper,
-        rolinherit,
-        rolcreaterole,
-        rolcreatedb,
-        rolcanlogin,
-        rolreplication,
-        rolconnlimit,
-        '********'::text as rolpassword,
-        rolvaliduntil,
-        rolbypassrls,
-        setconfig as rolconfig,
-        pg_authid.oid
-    FROM pg_authid LEFT JOIN pg_db_role_setting s
-    ON (pg_authid.oid = setrole AND setdatabase = 0);
+        r.rolname,
+        r.rolsuper,
+        r.rolinherit,
+        r.rolcreaterole,
+        r.rolcreatedb,
+        r.rolcanlogin,
+        r.rolreplication,
+        r.rolconnlimit,
+        CASE WHEN curr_user.rolsuper OR
+                 (curr_user.rolcreaterole AND m.admin_option)
+             THEN
+                  CASE WHEN r.rolpassword IS NULL
+                       THEN NULL::pg_catalog.text
+                       ELSE '********'::pg_catalog.text
+                  END
+             ELSE '<insufficient privileges>'::pg_catalog.text
+        END rolpassword,
+        r.rolvaliduntil,
+        r.rolbypassrls,
+        s.setconfig AS rolconfig,
+        r.oid
+    FROM pg_catalog.pg_authid r
+    JOIN pg_catalog.pg_authid curr_user
+        ON (curr_user.rolname = CURRENT_USER)
+    LEFT JOIN pg_catalog.pg_auth_members m
+        ON (curr_user.oid = m.member AND r.oid = m.roleid AND m.admin_option)
+    LEFT JOIN pg_catalog.pg_db_role_setting s
+        ON (r.oid = s.setrole AND s.setdatabase = 0);
 
 CREATE VIEW pg_shadow AS
     SELECT

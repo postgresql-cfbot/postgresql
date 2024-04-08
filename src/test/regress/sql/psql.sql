@@ -1834,10 +1834,18 @@ DROP FUNCTION psql_error;
 \dX "no.such.database"."no.such.schema"."no.such.extended.statistics"
 
 -- check \drg and \du
-CREATE ROLE regress_du_role0;
-CREATE ROLE regress_du_role1;
-CREATE ROLE regress_du_role2;
-CREATE ROLE regress_du_admin;
+CREATE ROLE regress_du_su LOGIN SUPERUSER CREATEROLE CREATEDB REPLICATION BYPASSRLS PASSWORD '123' CONNECTION LIMIT 3;
+CREATE ROLE regress_du_admin LOGIN CREATEROLE PASSWORD '123' VALID UNTIL 'infinity';
+CREATE ROLE regress_du_role0 LOGIN REPLICATION BYPASSRLS CREATEDB password '123' VALID UNTIL '2024-12-31';
+CREATE ROLE regress_du_role1 VALID UNTIL '2024-12-31' CONNECTION LIMIT 50;
+CREATE ROLE regress_du_role2 LOGIN PASSWORD '123' CONNECTION LIMIT 0;
+CREATE ROLE regress_du_role3 LOGIN NOINHERIT PASSWORD '123' CONNECTION LIMIT 10;
+
+COMMENT ON ROLE regress_du_su IS 'Superuser but with connection limit';
+COMMENT ON ROLE regress_du_admin IS 'User createrole attribute';
+COMMENT ON ROLE regress_du_role1 IS 'Group role without password but with valid until and conn limit';
+COMMENT ON ROLE regress_du_role2 IS 'No connections allowed';
+COMMENT ON ROLE regress_du_role3 IS 'User without attributes';
 
 GRANT regress_du_role0 TO regress_du_admin WITH ADMIN TRUE;
 GRANT regress_du_role1 TO regress_du_admin WITH ADMIN TRUE;
@@ -1845,19 +1853,28 @@ GRANT regress_du_role2 TO regress_du_admin WITH ADMIN TRUE;
 
 GRANT regress_du_role0 TO regress_du_role1 WITH ADMIN TRUE,  INHERIT TRUE,  SET TRUE  GRANTED BY regress_du_admin;
 GRANT regress_du_role0 TO regress_du_role2 WITH ADMIN TRUE,  INHERIT FALSE, SET FALSE GRANTED BY regress_du_admin;
-GRANT regress_du_role1 TO regress_du_role2 WITH ADMIN TRUE , INHERIT FALSE, SET TRUE  GRANTED BY regress_du_admin;
+GRANT regress_du_role1 TO regress_du_role2 WITH ADMIN TRUE,  INHERIT FALSE, SET TRUE  GRANTED BY regress_du_admin;
 GRANT regress_du_role0 TO regress_du_role1 WITH ADMIN FALSE, INHERIT TRUE,  SET FALSE GRANTED BY regress_du_role1;
 GRANT regress_du_role0 TO regress_du_role2 WITH ADMIN FALSE, INHERIT TRUE , SET TRUE  GRANTED BY regress_du_role1;
 GRANT regress_du_role0 TO regress_du_role1 WITH ADMIN FALSE, INHERIT FALSE, SET TRUE  GRANTED BY regress_du_role2;
 GRANT regress_du_role0 TO regress_du_role2 WITH ADMIN FALSE, INHERIT FALSE, SET FALSE GRANTED BY regress_du_role2;
 
 \drg regress_du_role*
-\du regress_du_role*
 
-DROP ROLE regress_du_role0;
-DROP ROLE regress_du_role1;
-DROP ROLE regress_du_role2;
-DROP ROLE regress_du_admin;
+-- run as superuser
+\du+ regress_du_*
+
+-- run as user with createrole attribute
+SET ROLE regress_du_admin;
+\du regress_du_*
+
+-- run as unprivileged user
+SET ROLE regress_du_role0;
+\du regress_du_*
+
+RESET ROLE;
+
+DROP ROLE regress_du_role0, regress_du_role1, regress_du_role2, regress_du_role3, regress_du_admin;
 
 -- Test display of empty privileges.
 BEGIN;

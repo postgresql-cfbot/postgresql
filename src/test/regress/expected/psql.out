@@ -6201,9 +6201,10 @@ List of text search templates
 (0 rows)
 
 \dg "no.such.role"
-     List of roles
- Role name | Attributes 
------------+------------
+                                List of roles
+ Role name | Login | Attributes | Password? | Valid until | Connection limit 
+-----------+-------+------------+-----------+-------------+------------------
+(0 rows)
 
 \dL "no.such.language"
           List of languages
@@ -6633,16 +6634,23 @@ cross-database references are not implemented: "no.such.database"."no.such.schem
 \dX "no.such.database"."no.such.schema"."no.such.extended.statistics"
 cross-database references are not implemented: "no.such.database"."no.such.schema"."no.such.extended.statistics"
 -- check \drg and \du
-CREATE ROLE regress_du_role0;
-CREATE ROLE regress_du_role1;
-CREATE ROLE regress_du_role2;
-CREATE ROLE regress_du_admin;
+CREATE ROLE regress_du_su LOGIN SUPERUSER CREATEROLE CREATEDB REPLICATION BYPASSRLS PASSWORD '123' CONNECTION LIMIT 3;
+CREATE ROLE regress_du_admin LOGIN CREATEROLE PASSWORD '123' VALID UNTIL 'infinity';
+CREATE ROLE regress_du_role0 LOGIN REPLICATION BYPASSRLS CREATEDB password '123' VALID UNTIL '2024-12-31';
+CREATE ROLE regress_du_role1 VALID UNTIL '2024-12-31' CONNECTION LIMIT 50;
+CREATE ROLE regress_du_role2 LOGIN PASSWORD '123' CONNECTION LIMIT 0;
+CREATE ROLE regress_du_role3 LOGIN NOINHERIT PASSWORD '123' CONNECTION LIMIT 10;
+COMMENT ON ROLE regress_du_su IS 'Superuser but with connection limit';
+COMMENT ON ROLE regress_du_admin IS 'User createrole attribute';
+COMMENT ON ROLE regress_du_role1 IS 'Group role without password but with valid until and conn limit';
+COMMENT ON ROLE regress_du_role2 IS 'No connections allowed';
+COMMENT ON ROLE regress_du_role3 IS 'User without attributes';
 GRANT regress_du_role0 TO regress_du_admin WITH ADMIN TRUE;
 GRANT regress_du_role1 TO regress_du_admin WITH ADMIN TRUE;
 GRANT regress_du_role2 TO regress_du_admin WITH ADMIN TRUE;
 GRANT regress_du_role0 TO regress_du_role1 WITH ADMIN TRUE,  INHERIT TRUE,  SET TRUE  GRANTED BY regress_du_admin;
 GRANT regress_du_role0 TO regress_du_role2 WITH ADMIN TRUE,  INHERIT FALSE, SET FALSE GRANTED BY regress_du_admin;
-GRANT regress_du_role1 TO regress_du_role2 WITH ADMIN TRUE , INHERIT FALSE, SET TRUE  GRANTED BY regress_du_admin;
+GRANT regress_du_role1 TO regress_du_role2 WITH ADMIN TRUE,  INHERIT FALSE, SET TRUE  GRANTED BY regress_du_admin;
 GRANT regress_du_role0 TO regress_du_role1 WITH ADMIN FALSE, INHERIT TRUE,  SET FALSE GRANTED BY regress_du_role1;
 GRANT regress_du_role0 TO regress_du_role2 WITH ADMIN FALSE, INHERIT TRUE , SET TRUE  GRANTED BY regress_du_role1;
 GRANT regress_du_role0 TO regress_du_role1 WITH ADMIN FALSE, INHERIT FALSE, SET TRUE  GRANTED BY regress_du_role2;
@@ -6660,18 +6668,76 @@ GRANT regress_du_role0 TO regress_du_role2 WITH ADMIN FALSE, INHERIT FALSE, SET 
  regress_du_role2 | regress_du_role1 | ADMIN, SET          | regress_du_admin
 (7 rows)
 
-\du regress_du_role*
-          List of roles
-    Role name     |  Attributes  
-------------------+--------------
- regress_du_role0 | Cannot login
- regress_du_role1 | Cannot login
- regress_du_role2 | Cannot login
+-- run as superuser
+\du+ regress_du_*
+                                                                             List of roles
+    Role name     | Login | Attributes  | Password? |         Valid until          | Connection limit |                           Description                           
+------------------+-------+-------------+-----------+------------------------------+------------------+-----------------------------------------------------------------
+ regress_du_admin | yes   | Create role+| yes       | infinity                     |                  | User createrole attribute
+                  |       | Inherit     |           |                              |                  | 
+ regress_du_role0 | yes   | Create DB  +| yes       | Tue Dec 31 00:00:00 2024 PST |                  | 
+                  |       | Inherit    +|           |                              |                  | 
+                  |       | Replication+|           |                              |                  | 
+                  |       | Bypass RLS  |           |                              |                  | 
+ regress_du_role1 | no    | Inherit     | no        | (irrelevant)                 | (irrelevant)     | Group role without password but with valid until and conn limit
+ regress_du_role2 | yes   | Inherit     | yes       |                              | (not allowed)    | No connections allowed
+ regress_du_role3 | yes   |             | yes       |                              | 10               | User without attributes
+ regress_du_su    | yes   | Superuser  +| yes       |                              | (irrelevant)     | Superuser but with connection limit
+                  |       | Create DB  +|           |                              |                  | 
+                  |       | Create role+|           |                              |                  | 
+                  |       | Inherit    +|           |                              |                  | 
+                  |       | Replication+|           |                              |                  | 
+                  |       | Bypass RLS  |           |                              |                  | 
+(6 rows)
 
-DROP ROLE regress_du_role0;
-DROP ROLE regress_du_role1;
-DROP ROLE regress_du_role2;
-DROP ROLE regress_du_admin;
+-- run as user with createrole attribute
+SET ROLE regress_du_admin;
+\du regress_du_*
+                                            List of roles
+    Role name     | Login | Attributes  | Password? |         Valid until          | Connection limit 
+------------------+-------+-------------+-----------+------------------------------+------------------
+ regress_du_admin | yes   | Create role+|           | infinity                     | 
+                  |       | Inherit     |           |                              | 
+ regress_du_role0 | yes   | Create DB  +| yes       | Tue Dec 31 00:00:00 2024 PST | 
+                  |       | Inherit    +|           |                              | 
+                  |       | Replication+|           |                              | 
+                  |       | Bypass RLS  |           |                              | 
+ regress_du_role1 | no    | Inherit     | no        | (irrelevant)                 | (irrelevant)
+ regress_du_role2 | yes   | Inherit     | yes       |                              | (not allowed)
+ regress_du_role3 | yes   |             |           |                              | 10
+ regress_du_su    | yes   | Superuser  +|           |                              | (irrelevant)
+                  |       | Create DB  +|           |                              | 
+                  |       | Create role+|           |                              | 
+                  |       | Inherit    +|           |                              | 
+                  |       | Replication+|           |                              | 
+                  |       | Bypass RLS  |           |                              | 
+(6 rows)
+
+-- run as unprivileged user
+SET ROLE regress_du_role0;
+\du regress_du_*
+                                            List of roles
+    Role name     | Login | Attributes  | Password? |         Valid until          | Connection limit 
+------------------+-------+-------------+-----------+------------------------------+------------------
+ regress_du_admin | yes   | Create role+|           | infinity                     | 
+                  |       | Inherit     |           |                              | 
+ regress_du_role0 | yes   | Create DB  +|           | Tue Dec 31 00:00:00 2024 PST | 
+                  |       | Inherit    +|           |                              | 
+                  |       | Replication+|           |                              | 
+                  |       | Bypass RLS  |           |                              | 
+ regress_du_role1 | no    | Inherit     |           | Tue Dec 31 00:00:00 2024 PST | (irrelevant)
+ regress_du_role2 | yes   | Inherit     |           |                              | (not allowed)
+ regress_du_role3 | yes   |             |           |                              | 10
+ regress_du_su    | yes   | Superuser  +|           |                              | (irrelevant)
+                  |       | Create DB  +|           |                              | 
+                  |       | Create role+|           |                              | 
+                  |       | Inherit    +|           |                              | 
+                  |       | Replication+|           |                              | 
+                  |       | Bypass RLS  |           |                              | 
+(6 rows)
+
+RESET ROLE;
+DROP ROLE regress_du_role0, regress_du_role1, regress_du_role2, regress_du_role3, regress_du_admin;
 -- Test display of empty privileges.
 BEGIN;
 -- Create an owner for tested objects because output contains owner name.

@@ -54,12 +54,6 @@ BlockSampler_Init(BlockSampler bs, BlockNumber nblocks, int samplesize,
 	return Min(bs->n, bs->N);
 }
 
-bool
-BlockSampler_HasMore(BlockSampler bs)
-{
-	return (bs->t < bs->N) && (bs->m < bs->n);
-}
-
 BlockNumber
 BlockSampler_Next(BlockSampler bs)
 {
@@ -68,7 +62,9 @@ BlockSampler_Next(BlockSampler bs)
 	double		p;				/* probability to skip block */
 	double		V;				/* random */
 
-	Assert(BlockSampler_HasMore(bs));	/* hence K > 0 and k > 0 */
+	/* Return if no remaining blocks or no blocks to sample */
+	if (K <= 0 || k <= 0)
+		return InvalidBlockNumber;
 
 	if ((BlockNumber) k >= K)
 	{

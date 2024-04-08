@@ -1111,9 +1111,7 @@ block_sampling_read_stream_next(ReadStream *stream,
 								void *callback_private_data,
 								void *per_buffer_data)
 {
-	BlockSamplerData *bs = callback_private_data;
-
-	return BlockSampler_HasMore(bs) ? BlockSampler_Next(bs) : InvalidBlockNumber;
+	return BlockSampler_Next(callback_private_data);
 }
 
 /*

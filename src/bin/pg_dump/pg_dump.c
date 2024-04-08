@@ -435,6 +435,7 @@ main(int argc, char **argv)
 		{"no-comments", no_argument, &dopt.no_comments, 1},
 		{"no-publications", no_argument, &dopt.no_publications, 1},
 		{"no-security-labels", no_argument, &dopt.no_security_labels, 1},
+		{"no-statistics", no_argument, &dopt.no_statistics, 1},
 		{"no-subscriptions", no_argument, &dopt.no_subscriptions, 1},
 		{"no-toast-compression", no_argument, &dopt.no_toast_compression, 1},
 		{"no-unlogged-table-data", no_argument, &dopt.no_unlogged_table_data, 1},
@@ -1151,6 +1152,7 @@ help(const char *progname)
 	printf(_("  --no-comments                do not dump comments\n"));
 	printf(_("  --no-publications            do not dump publications\n"));
 	printf(_("  --no-security-labels         do not dump security label assignments\n"));
+	printf(_("  --no-statistics              do not dump statistics\n"));
 	printf(_("  --no-subscriptions           do not dump subscriptions\n"));
 	printf(_("  --no-table-access-method     do not dump table access methods\n"));
 	printf(_("  --no-tablespaces             do not dump tablespace assignments\n"));
@@ -7067,6 +7069,7 @@ getTables(Archive *fout, int *numTables)
 
 		/* Tables have data */
 		tblinfo[i].dobj.components |= DUMP_COMPONENT_DATA;
+		tblinfo[i].dobj.components |= DUMP_COMPONENT_STATISTICS;
 
 		/* Mark whether table has an ACL */
 		if (!PQgetisnull(res, i, i_relacl))
@@ -7564,6 +7567,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 			indxinfo[j].dobj.catId.tableoid = atooid(PQgetvalue(res, j, i_tableoid));
 			indxinfo[j].dobj.catId.oid = atooid(PQgetvalue(res, j, i_oid));
 			AssignDumpId(&indxinfo[j].dobj);
+			indxinfo[j].dobj.components |= DUMP_COMPONENT_STATISTICS;
 			indxinfo[j].dobj.dump = tbinfo->dobj.dump;
 			indxinfo[j].dobj.name = pg_strdup(PQgetvalue(res, j, i_indexname));
 			indxinfo[j].dobj.namespace = tbinfo->dobj.namespace;
@@ -10311,6 +10315,283 @@ dumpComment(Archive *fout, const char *type,
 {
 	dumpCommentExtended(fout, type, name, namespace, owner,
 						catalogId, subid, dumpId, NULL);
+}
+
+/*
+ * Tabular description of the parameters to pg_set_relation_stats()
+ * required, param_name, param_type
+ */
+static const char *rel_stats_arginfo[][3] = {
+	{"t", "relation", "regclass"},
+	{"t", "version", "integer"},
+	{"f", "relpages", "integer"},
+	{"f", "reltuples", "real"},
+	{"f", "relallvisible", "integer"},
+};
+
+/*
+ * Tabular description of the parameters to pg_set_attribute_stats()
+ * required, param_name, param_type
+ */
+static const char *att_stats_arginfo[][3] = {
+	{"t", "relation", "regclass"},
+	{"t", "attname", "name"},
+	{"t", "inherited", "boolean"},
+	{"t", "version", "integer"},
+	{"f", "null_frac", "float4"},
+	{"f", "avg_width", "integer"},
+	{"f", "n_distinct", "float4"},
+	{"f", "most_common_vals", "text"},
+	{"f", "most_common_freqs", "float4[]"},
+	{"f", "histogram_bounds", "text"},
+	{"f", "correlation", "float4"},
+	{"f", "most_common_elems", "text"},
+	{"f", "most_common_elem_freqs", "float4[]"},
+	{"f", "elem_count_histogram", "float4[]"},
+	{"f", "range_length_histogram", "text"},
+	{"f", "range_empty_frac", "float4"},
+	{"f", "range_bounds_histogram", "text"},
+};
+
+/*
+ * getRelStatsExportQuery --
+ *
+ * Generate a query that will fetch all relation (e.g. pg_class)
+ * stats for a given relation.
+ */
+static void
+getRelStatsExportQuery(PQExpBuffer query, Archive *fout,
+					   const char *schemaname, const char *relname)
+{
+	resetPQExpBuffer(query);
+	appendPQExpBufferStr(query,
+						 "SELECT c.oid::regclass AS relation, "
+						 "current_setting('server_version_num') AS version, "
+						 "c.relpages, c.reltuples, c.relallvisible "
+						 "FROM pg_class c "
+						 "JOIN pg_namespace n "
+						 "ON n.oid = c.relnamespace "
+						 "WHERE n.nspname = ");
+	appendStringLiteralAH(query, schemaname, fout);
+	appendPQExpBufferStr(query, " AND c.relname = ");
+	appendStringLiteralAH(query, relname, fout);
+}
+
+/*
+ * getAttStatsExportQuery --
+ *
+ * Generate a query that will fetch all attribute (e.g. pg_statistic)
+ * stats for a given relation.
+ */
+static void
+getAttStatsExportQuery(PQExpBuffer query, Archive *fout,
+					   const char *schemaname, const char *relname)
+{
+	resetPQExpBuffer(query);
+	appendPQExpBufferStr(query,
+						 "SELECT c.oid::regclass AS relation, "
+						 "s.attname,"
+						 "s.inherited,"
+						 "current_setting('server_version_num') AS version, "
+						 "s.null_frac,"
+						 "s.avg_width,"
+						 "s.n_distinct,"
+						 "s.most_common_vals,"
+						 "s.most_common_freqs,"
+						 "s.histogram_bounds,"
+						 "s.correlation,"
+						 "s.most_common_elems,"
+						 "s.most_common_elem_freqs,"
+						 "s.elem_count_histogram,");
+
+	if (fout->remoteVersion >= 170000)
+		appendPQExpBufferStr(query,
+							 "s.range_length_histogram,"
+							 "s.range_empty_frac,"
+							 "s.range_bounds_histogram ");
+	else
+		appendPQExpBufferStr(query,
+							 "NULL AS range_length_histogram,"
+							 "NULL AS range_empty_frac,"
+							 "NULL AS range_bounds_histogram ");
+
+	appendPQExpBufferStr(query,
+						 "FROM pg_stats s "
+						 "JOIN pg_namespace n "
+						 "ON n.nspname = s.schemaname "
+						 "JOIN pg_class c "
+						 "ON c.relname = s.tablename "
+						 "AND c.relnamespace = n.oid "
+						 "WHERE s.schemaname = ");
+	appendStringLiteralAH(query, schemaname, fout);
+	appendPQExpBufferStr(query, " AND s.tablename = ");
+	appendStringLiteralAH(query, relname, fout);
+	appendPQExpBufferStr(query, " ORDER BY s.attname, s.inherited");
+}
+
+
+/*
+ * appendNamedArgument --
+ *
+ * Convenience routine for constructing parameters of the form:
+ * 'paraname', 'value'::type
+ */
+static void
+appendNamedArgument(PQExpBuffer out, Archive *fout,
+					const char *argname, bool positional,
+					const char *argval, const char *argtype)
+{
+	appendPQExpBufferStr(out, "\t");
+
+	if (!positional)
+	{
+		appendStringLiteralAH(out, argname, fout);
+		appendPQExpBufferStr(out, ", ");
+	}
+
+	appendStringLiteralAH(out, argval, fout);
+	appendPQExpBuffer(out, "::%s", argtype);
+}
+
+/*
+ * appendRelStatsImport --
+ *
+ * Append a formatted pg_set_relation_stats statement.
+ */
+static void
+appendRelStatsImport(PQExpBuffer out, Archive *fout, PGresult *res)
+{
+	const char *sep = "";
+
+	if (PQntuples(res) == 0)
+		return;
+
+	appendPQExpBufferStr(out, "SELECT pg_catalog.pg_set_relation_stats(\n");
+
+	for (int argno = 0; argno < lengthof(rel_stats_arginfo); argno++)
+	{
+		bool		positional = (rel_stats_arginfo[argno][0][0] == 't');
+		const char *argname = rel_stats_arginfo[argno][1];
+		const char *argtype = rel_stats_arginfo[argno][2];
+		int			fieldno = PQfnumber(res, argname);
+
+		if (fieldno < 0)
+			pg_fatal("relation stats export query missing field '%s'",
+					 argname);
+
+		if (PQgetisnull(res, 0, fieldno))
+		{
+			if (!positional)
+				pg_fatal("relation stats export query unexpected NULL in '%s'",
+						 argname);
+			else
+				continue;
+		}
+
+		appendPQExpBufferStr(out, sep);
+		appendNamedArgument(out, fout, argname, positional,
+							PQgetvalue(res, 0, fieldno), argtype);
+
+		sep = ",\n";
+	}
+	appendPQExpBufferStr(out, "\n);\n");
+}
+
+/*
+ * appendAttStatsImport --
+ *
+ * Append a series of formatted pg_set_attribute_stats statements.
+ */
+static void
+appendAttStatsImport(PQExpBuffer out, Archive *fout, PGresult *res)
+{
+	for (int rownum = 0; rownum < PQntuples(res); rownum++)
+	{
+		const char *sep = "";
+
+		appendPQExpBufferStr(out, "SELECT pg_catalog.pg_set_attribute_stats(\n");
+		for (int argno = 0; argno < lengthof(att_stats_arginfo); argno++)
+		{
+			bool		positional = (att_stats_arginfo[argno][0][0] == 't');
+			const char *argname = att_stats_arginfo[argno][1];
+			const char *argtype = att_stats_arginfo[argno][2];
+			int			fieldno = PQfnumber(res, argname);
+
+			if (fieldno < 0)
+				pg_fatal("attribute stats export query missing field '%s'",
+						 argname);
+
+			if (PQgetisnull(res, rownum, fieldno))
+			{
+				if (positional)
+					pg_fatal("attribute stats export query unexpected NULL in '%s'",
+							 argname);
+				else
+					continue;
+			}
+
+			appendPQExpBufferStr(out, sep);
+			appendNamedArgument(out, fout, argname, positional,
+								PQgetvalue(res, rownum, fieldno), argtype);
+			sep = ",\n";
+		}
+		appendPQExpBufferStr(out, "\n);\n");
+	}
+}
+
+/*
+ * dumpRelationStats --
+ *
+ * Dump command to import stats into the relation on the new database.
+ */
+static void
+dumpRelationStats(Archive *fout, const DumpableObject *dobj,
+				  const char *reltypename, DumpId dumpid)
+{
+	PGresult   *res;
+	PQExpBuffer query;
+	PQExpBuffer out;
+	PQExpBuffer tag;
+
+	/* do nothing, if --no-statistics is supplied */
+	if (fout->dopt->no_statistics)
+		return;
+
+	/* likewise, no stats on schema-only, unless in a binary upgrade */
+	if (fout->dopt->schemaOnly && !fout->dopt->binary_upgrade)
+		return;
+
+	tag = createPQExpBuffer();
+	appendPQExpBuffer(tag, "%s %s", reltypename, fmtId(dobj->name));
+
+	query = createPQExpBuffer();
+	out = createPQExpBuffer();
+
+	getRelStatsExportQuery(query, fout, dobj->namespace->dobj.name,
+						   dobj->name);
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+	appendRelStatsImport(out, fout, res);
+	PQclear(res);
+
+	getAttStatsExportQuery(query, fout, dobj->namespace->dobj.name,
+						   dobj->name);
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+	appendAttStatsImport(out, fout, res);
+	PQclear(res);
+
+
+	ArchiveEntry(fout, nilCatalogId, createDumpId(),
+				 ARCHIVE_OPTS(.tag = tag->data,
+							  .namespace = dobj->namespace->dobj.name,
+							  .description = "STATISTICS DATA",
+							  .section = SECTION_NONE,
+							  .createStmt = out->data,
+							  .deps = &dumpid,
+							  .nDeps = 1));
+
+	destroyPQExpBuffer(query);
+	destroyPQExpBuffer(out);
+	destroyPQExpBuffer(tag);
 }
 
 /*
@@ -16757,6 +17038,13 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 	if (tbinfo->dobj.dump & DUMP_COMPONENT_SECLABEL)
 		dumpTableSecLabel(fout, tbinfo, reltypename);
 
+	/* Statistics are dependent on the definition, not the data */
+	/* Views don't have stats */
+	if ((tbinfo->dobj.dump & DUMP_COMPONENT_STATISTICS) &&
+		(tbinfo->relkind != RELKIND_VIEW))
+		dumpRelationStats(fout, &tbinfo->dobj, reltypename,
+						  tbinfo->dobj.dumpId);
+
 	/* Dump comments on inlined table constraints */
 	for (j = 0; j < tbinfo->ncheck; j++)
 	{
@@ -16958,6 +17246,7 @@ dumpIndex(Archive *fout, const IndxInfo *indxinfo)
 	PQExpBuffer delq;
 	char	   *qindxname;
 	char	   *qqindxname;
+	DumpId		dumpid;
 
 	/* Do nothing in data-only dump */
 	if (dopt->dataOnly)
@@ -17070,14 +17359,21 @@ dumpIndex(Archive *fout, const IndxInfo *indxinfo)
 		free(indstatvalsarray);
 	}
 
+	/* Comments and stats share same .dep */
+	dumpid = is_constraint ? indxinfo->indexconstraint :
+		indxinfo->dobj.dumpId;
+
 	/* Dump Index Comments */
 	if (indxinfo->dobj.dump & DUMP_COMPONENT_COMMENT)
 		dumpComment(fout, "INDEX", qindxname,
 					tbinfo->dobj.namespace->dobj.name,
 					tbinfo->rolname,
 					indxinfo->dobj.catId, 0,
-					is_constraint ? indxinfo->indexconstraint :
-					indxinfo->dobj.dumpId);
+					dumpid);
+
+	/* Dump Index Stats */
+	if (indxinfo->dobj.dump & DUMP_COMPONENT_STATISTICS)
+		dumpRelationStats(fout, &indxinfo->dobj, "INDEX", dumpid);
 
 	destroyPQExpBuffer(q);
 	destroyPQExpBuffer(delq);

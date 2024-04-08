@@ -75,6 +75,7 @@ main(int argc, char **argv)
 	static int	no_publications = 0;
 	static int	no_security_labels = 0;
 	static int	no_subscriptions = 0;
+	static int  no_statistics = 0;
 	static int	strict_names = 0;
 
 	struct option cmdopts[] = {
@@ -127,6 +128,7 @@ main(int argc, char **argv)
 		{"no-security-labels", no_argument, &no_security_labels, 1},
 		{"no-subscriptions", no_argument, &no_subscriptions, 1},
 		{"filter", required_argument, NULL, 4},
+		{"no-statistics", no_argument, &no_statistics, 1},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -370,6 +372,7 @@ main(int argc, char **argv)
 	opts->no_publications = no_publications;
 	opts->no_security_labels = no_security_labels;
 	opts->no_subscriptions = no_subscriptions;
+	opts->no_statistics = no_statistics;
 
 	if (if_exists && !opts->dropSchema)
 		pg_fatal("option --if-exists requires option -c/--clean");

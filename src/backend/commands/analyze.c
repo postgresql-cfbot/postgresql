@@ -80,7 +80,8 @@ static BufferAccessStrategy vac_strategy;
 
 static void do_analyze_rel(Relation onerel,
 						   VacuumParams *params, List *va_cols,
-						   AcquireSampleRowsFunc acquirefunc, BlockNumber relpages,
+						   AcquireSampleRowsFunc acquirefunc,
+						   void *acquirefuncArg, BlockNumber relpages,
 						   bool inh, bool in_outer_xact, int elevel);
 static void compute_index_stats(Relation onerel, double totalrows,
 								AnlIndexData *indexdata, int nindexes,
@@ -88,9 +89,6 @@ static void compute_index_stats(Relation onerel, double totalrows,
 								MemoryContext col_context);
 static VacAttrStats *examine_attribute(Relation onerel, int attnum,
 									   Node *index_expr);
-static int	acquire_sample_rows(Relation onerel, int elevel,
-								HeapTuple *rows, int targrows,
-								double *totalrows, double *totaldeadrows);
 static int	compare_rows(const void *a, const void *b, void *arg);
 static int	acquire_inherited_sample_rows(Relation onerel, int elevel,
 										  HeapTuple *rows, int targrows,
@@ -116,6 +114,7 @@ analyze_rel(Oid relid, RangeVar *relation,
 	Relation	onerel;
 	int			elevel;
 	AcquireSampleRowsFunc acquirefunc = NULL;
+	void	   *acquirefuncArg = NULL;
 	BlockNumber relpages = 0;
 
 	/* Select logging level */
@@ -191,9 +190,12 @@ analyze_rel(Oid relid, RangeVar *relation,
 	if (onerel->rd_rel->relkind == RELKIND_RELATION ||
 		onerel->rd_rel->relkind == RELKIND_MATVIEW)
 	{
-		/* Use row acquisition function provided by table AM */
+		/*
+		 * Get row acquisition function, blocks and tuples iteration
+		 * callbacks provided by table AM
+		 */
 		table_relation_analyze(onerel, &acquirefunc,
-							   &relpages, vac_strategy);
+							   &relpages, vac_strategy, &acquirefuncArg);
 	}
 	else if (onerel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
 	{
@@ -209,7 +211,8 @@ analyze_rel(Oid relid, RangeVar *relation,
 		if (fdwroutine->AnalyzeForeignTable != NULL)
 			ok = fdwroutine->AnalyzeForeignTable(onerel,
 												 &acquirefunc,
-												 &relpages);
+												 &relpages,
+												 &acquirefuncArg);
 
 		if (!ok)
 		{
@@ -248,15 +251,15 @@ analyze_rel(Oid relid, RangeVar *relation,
 	 * tables, which don't contain any rows.
 	 */
 	if (onerel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
-		do_analyze_rel(onerel, params, va_cols, acquirefunc,
+		do_analyze_rel(onerel, params, va_cols, acquirefunc, acquirefuncArg,
 					   relpages, false, in_outer_xact, elevel);
 
 	/*
 	 * If there are child tables, do recursive ANALYZE.
 	 */
 	if (onerel->rd_rel->relhassubclass)
-		do_analyze_rel(onerel, params, va_cols, acquirefunc, relpages,
-					   true, in_outer_xact, elevel);
+		do_analyze_rel(onerel, params, va_cols, acquirefunc, acquirefuncArg,
+					   relpages, true, in_outer_xact, elevel);
 
 	/*
 	 * Close source relation now, but keep lock so that no one deletes it
@@ -272,15 +275,16 @@ analyze_rel(Oid relid, RangeVar *relation,
 /*
  *	do_analyze_rel() -- analyze one relation, recursively or not
  *
- * Note that "acquirefunc" is only relevant for the non-inherited case.
- * For the inherited case, acquire_inherited_sample_rows() determines the
- * appropriate acquirefunc for each child table.
+ * Note that "acquirefunc" and “acquirefuncArg” are only relevant for the
+ * non-inherited case. For the inherited case, acquire_inherited_sample_rows()
+ * determines the appropriate acquirefunc and acquirefuncArg for each child
+ * table.
  */
 static void
 do_analyze_rel(Relation onerel, VacuumParams *params,
 			   List *va_cols, AcquireSampleRowsFunc acquirefunc,
-			   BlockNumber relpages, bool inh, bool in_outer_xact,
-			   int elevel)
+			   void *acquirefuncArg, BlockNumber relpages, bool inh,
+			   bool in_outer_xact, int elevel)
 {
 	int			attr_cnt,
 				tcnt,
@@ -526,7 +530,8 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 	else
 		numrows = (*acquirefunc) (onerel, elevel,
 								  rows, targrows,
-								  &totalrows, &totaldeadrows);
+								  &totalrows, &totaldeadrows,
+								  acquirefuncArg);
 
 	/*
 	 * Compute the statistics.  Temporary results during the calculations for
@@ -1117,15 +1122,17 @@ block_sampling_read_stream_next(ReadStream *stream,
 }
 
 /*
- * acquire_sample_rows -- acquire a random sample of rows from the heap
+ * acquire_sample_rows -- acquire a random sample of rows from the
+ * block-based relation
  *
  * Selected rows are returned in the caller-allocated array rows[], which
  * must have at least targrows entries.
  * The actual number of rows selected is returned as the function result.
- * We also estimate the total numbers of live and dead rows in the heap,
+ * We also estimate the total numbers of live and dead rows in the relation,
  * and return them into *totalrows and *totaldeadrows, respectively.
  *
- * The returned list of tuples is in order by physical position in the heap.
+ * The returned list of tuples is in order by physical position in the
+ * relation.
  * (We will rely on this later to derive correlation estimates.)
  *
  * As of May 2004 we use a new two-stage method:  Stage one selects up
@@ -1147,13 +1154,15 @@ block_sampling_read_stream_next(ReadStream *stream,
  * look at a statistically unbiased set of blocks, we should get
  * unbiased estimates of the average numbers of live and dead rows per
  * block.  The previous sampling method put too much credence in the row
- * density near the start of the heap.
+ * density near the start of the relation.
  */
-static int
+int
 acquire_sample_rows(Relation onerel, int elevel,
 					HeapTuple *rows, int targrows,
-					double *totalrows, double *totaldeadrows)
+					double *totalrows, double *totaldeadrows,
+					void *arg)
 {
+	AcquireSampleRowsArg *cb = (AcquireSampleRowsArg *) arg;
 	int			numrows = 0;	/* # rows now in reservoir */
 	double		samplerows = 0; /* total # rows collected */
 	double		liverows = 0;	/* # live rows seen */
@@ -1188,7 +1197,7 @@ acquire_sample_rows(Relation onerel, int elevel,
 	/* Prepare for sampling rows */
 	reservoir_init_selection_state(&rstate, targrows);
 
-	scan = heap_beginscan(onerel, NULL, 0, NULL, NULL, SO_TYPE_ANALYZE);
+	scan = table_beginscan_analyze(onerel);
 	slot = table_slot_create(onerel, NULL);
 
 	stream = read_stream_begin_relation(READ_STREAM_MAINTENANCE,
@@ -1200,11 +1209,11 @@ acquire_sample_rows(Relation onerel, int elevel,
 										0);
 
 	/* Outer loop over blocks to sample */
-	while (heapam_scan_analyze_next_block(scan, stream))
+	while (cb->scan_analyze_next_block(scan, stream))
 	{
 		vacuum_delay_point();
 
-		while (heapam_scan_analyze_next_tuple(scan, OldestXmin, &liverows, &deadrows, slot))
+		while (cb->scan_analyze_next_tuple(scan, OldestXmin, &liverows, &deadrows, slot))
 		{
 			/*
 			 * The first targrows sample rows are simply copied into the
@@ -1256,7 +1265,7 @@ acquire_sample_rows(Relation onerel, int elevel,
 	read_stream_end(stream);
 
 	ExecDropSingleTupleTableSlot(slot);
-	heap_endscan(scan);
+	table_endscan(scan);
 
 	/*
 	 * If we didn't find as many tuples as we wanted then we're done. No sort
@@ -1333,10 +1342,18 @@ compare_rows(const void *a, const void *b, void *arg)
  */
 void
 heapam_analyze(Relation relation, AcquireSampleRowsFunc *func,
-			   BlockNumber *totalpages, BufferAccessStrategy bstrategy)
+			   BlockNumber *totalpages, BufferAccessStrategy bstrategy,
+			   void **arg)
 {
+	static AcquireSampleRowsArg cb =
+	{
+		.scan_analyze_next_block = heapam_scan_analyze_next_block,
+		.scan_analyze_next_tuple = heapam_scan_analyze_next_tuple
+	};
+
 	*func = acquire_sample_rows;
 	*totalpages = RelationGetNumberOfBlocks(relation);
+	*arg = &cb;
 	vac_strategy = bstrategy;
 }
 
@@ -1349,7 +1366,7 @@ heapam_analyze(Relation relation, AcquireSampleRowsFunc *func,
  * We fail and return zero if there are no inheritance children, or if all
  * children are foreign tables that don't support ANALYZE.
  */
-static int
+int
 acquire_inherited_sample_rows(Relation onerel, int elevel,
 							  HeapTuple *rows, int targrows,
 							  double *totalrows, double *totaldeadrows)
@@ -1357,6 +1374,7 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 	List	   *tableOIDs;
 	Relation   *rels;
 	AcquireSampleRowsFunc *acquirefuncs;
+	void	  **acquirefuncArgs;
 	double	   *relblocks;
 	double		totalblocks;
 	int			numrows,
@@ -1396,12 +1414,15 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 	}
 
 	/*
-	 * Identify acquirefuncs to use, and count blocks in all the relations.
+	 * Identify acquirefunc-s and acquirefuncArg-s to use, and count blocks
+	 * in all the relations.
 	 * The result could overflow BlockNumber, so we use double arithmetic.
 	 */
 	rels = (Relation *) palloc(list_length(tableOIDs) * sizeof(Relation));
 	acquirefuncs = (AcquireSampleRowsFunc *)
 		palloc(list_length(tableOIDs) * sizeof(AcquireSampleRowsFunc));
+	acquirefuncArgs = (void **)
+		palloc(list_length(tableOIDs) * sizeof(void *));
 	relblocks = (double *) palloc(list_length(tableOIDs) * sizeof(double));
 	totalblocks = 0;
 	nrels = 0;
@@ -1411,6 +1432,7 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 		Oid			childOID = lfirst_oid(lc);
 		Relation	childrel;
 		AcquireSampleRowsFunc acquirefunc = NULL;
+		void	   *acquirefuncArg = NULL;
 		BlockNumber relpages = 0;
 
 		/* We already got the needed lock */
@@ -1429,9 +1451,13 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 		if (childrel->rd_rel->relkind == RELKIND_RELATION ||
 			childrel->rd_rel->relkind == RELKIND_MATVIEW)
 		{
-			/* Use row acquisition function provided by table AM */
+			/*
+			 * Get row acquisition function, blocks and tuples iteration
+			 * callbacks provided by table AM
+			 */
 			table_relation_analyze(childrel, &acquirefunc,
-								   &relpages, vac_strategy);
+								   &relpages, vac_strategy,
+								   &acquirefuncArg);
 		}
 		else if (childrel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
 		{
@@ -1447,7 +1473,8 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 			if (fdwroutine->AnalyzeForeignTable != NULL)
 				ok = fdwroutine->AnalyzeForeignTable(childrel,
 													 &acquirefunc,
-													 &relpages);
+													 &relpages,
+													 &acquirefuncArg);
 
 			if (!ok)
 			{
@@ -1475,6 +1502,7 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 		has_child = true;
 		rels[nrels] = childrel;
 		acquirefuncs[nrels] = acquirefunc;
+		acquirefuncArgs[nrels] = acquirefuncArg;
 		relblocks[nrels] = (double) relpages;
 		totalblocks += (double) relpages;
 		nrels++;
@@ -1506,6 +1534,7 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 	{
 		Relation	childrel = rels[i];
 		AcquireSampleRowsFunc acquirefunc = acquirefuncs[i];
+		void	   *acquirefuncArg = acquirefuncArgs[i];
 		double		childblocks = relblocks[i];
 
 		/*
@@ -1544,7 +1573,8 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 				/* Fetch a random sample of the child's rows */
 				childrows = (*acquirefunc) (childrel, elevel,
 											rows + numrows, childtargrows,
-											&trows, &tdrows);
+											&trows, &tdrows,
+											acquirefuncArg);
 
 				/* We may need to convert from child's rowtype to parent's */
 				if (childrows > 0 &&

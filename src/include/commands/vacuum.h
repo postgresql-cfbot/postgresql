@@ -21,9 +21,11 @@
 #include "catalog/pg_class.h"
 #include "catalog/pg_statistic.h"
 #include "catalog/pg_type.h"
+#include "executor/tuptable.h"
 #include "parser/parse_node.h"
 #include "storage/buf.h"
 #include "storage/lock.h"
+#include "storage/read_stream.h"
 #include "utils/relcache.h"
 
 /*
@@ -189,7 +191,8 @@ typedef struct VacAttrStats
 typedef int (*AcquireSampleRowsFunc) (Relation relation, int elevel,
 									  HeapTuple *rows, int targrows,
 									  double *totalrows,
-									  double *totaldeadrows);
+									  double *totaldeadrows,
+									  void *arg);
 
 /* flag bits for VacuumParams->options */
 #define VACOPT_VACUUM 0x01		/* do VACUUM */
@@ -390,12 +393,64 @@ extern void parallel_vacuum_cleanup_all_indexes(ParallelVacuumState *pvs,
 extern void parallel_vacuum_main(dsm_segment *seg, shm_toc *toc);
 
 /* in commands/analyze.c */
+
+struct TableScanDescData;
+
+/* The struct to be passed as '*arg' to acquire_sample_rows */
+typedef struct
+{
+	/*
+	 * Prepare to analyze block from `stream` of `scan`. The scan has been
+	 * started with table_beginscan_analyze().
+	 *
+	 * The callback may acquire resources like locks that are held until
+	 * (*scan_analyze_next_tuple)() returns false. In some cases it could be
+	 * useful to hold a lock until all tuples in a block have been analyzed
+	 * by (*scan_analyze_next_tuple)().
+	 *
+	 * The callback can return false if the block is not suitable for
+	 * sampling, e.g. because it's a metapage that could never contain tuples.
+	 *
+	 * This is primarily suited for block-based AMs. It's not clear what a
+	 * good interface for non block-based AMs would be, so there isn't one
+	 * yet and sampling using a custom implementation of acquire_sample_rows
+	 * may be preferred.
+	 */
+	bool		(*scan_analyze_next_block) (struct TableScanDescData *scan,
+											ReadStream *stream);
+
+	/*
+	 * Iterate over tuples in the block selected with
+	 * (*scan_analyze_next_block)() (which needs to have returned true, and
+	 * this routine may not have returned false for the same block before). If
+	 * a tuple that's suitable for sampling is found, true is returned and a
+	 * tuple is stored in `slot`.
+	 *
+	 * *liverows and *deadrows are incremented according to the encountered
+	 * tuples.
+	 *
+	 * Not every AM might have a meaningful concept of dead rows, in which
+	 * case it's OK to not increment *deadrows - but note that that may
+	 * influence autovacuum scheduling (see comment for relation_vacuum
+	 * callback).
+	 */
+	bool		(*scan_analyze_next_tuple) (struct TableScanDescData *scan,
+											TransactionId OldestXmin,
+											double *liverows,
+											double *deadrows,
+											TupleTableSlot *slot);
+} AcquireSampleRowsArg;
+
 extern void analyze_rel(Oid relid, RangeVar *relation,
 						VacuumParams *params, List *va_cols, bool in_outer_xact,
 						BufferAccessStrategy bstrategy);
+extern int	acquire_sample_rows(Relation onerel, int elevel,
+								HeapTuple *rows, int targrows,
+								double *totalrows, double *totaldeadrows,
+								void *arg);
 extern void heapam_analyze(Relation relation, AcquireSampleRowsFunc *func,
 						   BlockNumber *totalpages,
-						   BufferAccessStrategy bstrategy);
+						   BufferAccessStrategy bstrategy, void **arg);
 
 extern bool std_typanalyze(VacAttrStats *stats);
 

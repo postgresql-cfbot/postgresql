@@ -139,7 +139,8 @@ static void fileReScanForeignScan(ForeignScanState *node);
 static void fileEndForeignScan(ForeignScanState *node);
 static bool fileAnalyzeForeignTable(Relation relation,
 									AcquireSampleRowsFunc *func,
-									BlockNumber *totalpages);
+									BlockNumber *totalpages,
+									void **arg);
 static bool fileIsForeignScanParallelSafe(PlannerInfo *root, RelOptInfo *rel,
 										  RangeTblEntry *rte);
 
@@ -162,7 +163,8 @@ static void estimate_costs(PlannerInfo *root, RelOptInfo *baserel,
 						   Cost *startup_cost, Cost *total_cost);
 static int	file_acquire_sample_rows(Relation onerel, int elevel,
 									 HeapTuple *rows, int targrows,
-									 double *totalrows, double *totaldeadrows);
+									 double *totalrows, double *totaldeadrows,
+									 void *arg);
 
 
 /*
@@ -806,7 +808,8 @@ fileEndForeignScan(ForeignScanState *node)
 static bool
 fileAnalyzeForeignTable(Relation relation,
 						AcquireSampleRowsFunc *func,
-						BlockNumber *totalpages)
+						BlockNumber *totalpages,
+						void **arg)
 {
 	char	   *filename;
 	bool		is_program;
@@ -845,6 +848,7 @@ fileAnalyzeForeignTable(Relation relation,
 		*totalpages = 1;
 
 	*func = file_acquire_sample_rows;
+	*arg = NULL;
 
 	return true;
 }
@@ -1122,7 +1126,8 @@ estimate_costs(PlannerInfo *root, RelOptInfo *baserel,
 static int
 file_acquire_sample_rows(Relation onerel, int elevel,
 						 HeapTuple *rows, int targrows,
-						 double *totalrows, double *totaldeadrows)
+						 double *totalrows, double *totaldeadrows,
+						 void *arg)
 {
 	int			numrows = 0;
 	double		rowstoskip = -1;	/* -1 means not set yet */

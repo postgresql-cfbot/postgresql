@@ -400,7 +400,8 @@ static void postgresExecForeignTruncate(List *rels,
 										bool restart_seqs);
 static bool postgresAnalyzeForeignTable(Relation relation,
 										AcquireSampleRowsFunc *func,
-										BlockNumber *totalpages);
+										BlockNumber *totalpages,
+										void **arg);
 static List *postgresImportForeignSchema(ImportForeignSchemaStmt *stmt,
 										 Oid serverOid);
 static void postgresGetForeignJoinPaths(PlannerInfo *root,
@@ -501,7 +502,8 @@ static void process_query_params(ExprContext *econtext,
 static int	postgresAcquireSampleRowsFunc(Relation relation, int elevel,
 										  HeapTuple *rows, int targrows,
 										  double *totalrows,
-										  double *totaldeadrows);
+										  double *totaldeadrows,
+										  void *arg);
 static void analyze_row_processor(PGresult *res, int row,
 								  PgFdwAnalyzeState *astate);
 static void produce_tuple_asynchronously(AsyncRequest *areq, bool fetch);
@@ -4921,7 +4923,8 @@ process_query_params(ExprContext *econtext,
 static bool
 postgresAnalyzeForeignTable(Relation relation,
 							AcquireSampleRowsFunc *func,
-							BlockNumber *totalpages)
+							BlockNumber *totalpages,
+							void **arg)
 {
 	ForeignTable *table;
 	UserMapping *user;
@@ -4931,6 +4934,7 @@ postgresAnalyzeForeignTable(Relation relation,
 
 	/* Return the row-analysis function pointer */
 	*func = postgresAcquireSampleRowsFunc;
+	*arg = NULL;
 
 	/*
 	 * Now we have to get the number of pages.  It's annoying that the ANALYZE
@@ -5057,7 +5061,8 @@ static int
 postgresAcquireSampleRowsFunc(Relation relation, int elevel,
 							  HeapTuple *rows, int targrows,
 							  double *totalrows,
-							  double *totaldeadrows)
+							  double *totaldeadrows,
+							  void *arg)
 {
 	PgFdwAnalyzeState astate;
 	ForeignTable *table;

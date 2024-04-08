@@ -692,7 +692,8 @@ typedef struct TableAmRoutine
 	void		(*relation_analyze) (Relation relation,
 									 AcquireSampleRowsFunc *func,
 									 BlockNumber *totalpages,
-									 BufferAccessStrategy bstrategy);
+									 BufferAccessStrategy bstrategy,
+									 void **arg);
 
 
 	/* ------------------------------------------------------------------------
@@ -1018,6 +1019,19 @@ table_beginscan_tid(Relation rel, Snapshot snapshot)
 	uint32		flags = SO_TYPE_TIDSCAN;
 
 	return rel->rd_tableam->scan_begin(rel, snapshot, 0, NULL, NULL, flags);
+}
+
+/*
+ * table_beginscan_analyze is an alternative entry point for setting up a
+ * TableScanDesc for an ANALYZE scan.  As with bitmap scans, it's worth using
+ * the same data structure although the behavior is rather different.
+ */
+static inline TableScanDesc
+table_beginscan_analyze(Relation rel)
+{
+	uint32		flags = SO_TYPE_ANALYZE;
+
+	return rel->rd_tableam->scan_begin(rel, NULL, 0, NULL, NULL, flags);
 }
 
 /*
@@ -1868,10 +1882,11 @@ table_index_validate_scan(Relation table_rel,
  */
 static inline void
 table_relation_analyze(Relation relation, AcquireSampleRowsFunc *func,
-					   BlockNumber *totalpages, BufferAccessStrategy bstrategy)
+					   BlockNumber *totalpages, BufferAccessStrategy bstrategy,
+					   void **arg)
 {
 	relation->rd_tableam->relation_analyze(relation, func,
-										   totalpages, bstrategy);
+										   totalpages, bstrategy, arg);
 }
 
 /* ----------------------------------------------------------------------------

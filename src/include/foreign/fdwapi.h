@@ -151,7 +151,8 @@ typedef void (*ExplainDirectModify_function) (ForeignScanState *node,
 
 typedef bool (*AnalyzeForeignTable_function) (Relation relation,
 											  AcquireSampleRowsFunc *func,
-											  BlockNumber *totalpages);
+											  BlockNumber *totalpages,
+											  void **arg);
 
 typedef List *(*ImportForeignSchema_function) (ImportForeignSchemaStmt *stmt,
 											   Oid serverOid);

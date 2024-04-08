@@ -654,7 +654,9 @@ hash_bytes_uint32_extended(uint32 k, uint64 seed)
 /*
  * string_hash: hash function for keys that are NUL-terminated strings.
  *
- * NOTE: this is the default hash function if none is specified.
+ * NOTE: this was the default string hash for dynahash until version 17,
+ * and is now here only for backward compatibility. It's more efficient
+ * to use hash_string_with_len instead.
  */
 uint32
 string_hash(const void *key, Size keysize)

@@ -117,7 +117,7 @@ extern dshash_hash dshash_memhash(const void *v, size_t size, void *arg);
 extern void dshash_memcpy(void *dest, const void *src, size_t size, void *arg);
 
 /*
- * Convenience hash, compare, and copy functions wrapping strcmp, string_hash,
+ * Convenience hash, compare, and copy functions wrapping strcmp, hash_string_with_len,
  * and strcpy.
  */
 extern int	dshash_strcmp(const void *a, const void *b, size_t size, void *arg);

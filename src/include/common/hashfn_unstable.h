@@ -450,4 +450,37 @@ hash_string(const char *s)
 	return fasthash_final32(&hs, s_len);
 }
 
+/*
+ * hash_string_with_len: Like hash_string but only hashes
+ * 'len' bytes. Callers will likely want to 'len' to be
+ * one less than the space they have in mind, to leave
+ * room for the NUL terminator.
+ */
+static inline uint32
+hash_string_with_len(const char *s, Size len)
+{
+	fasthash_state hs;
+	size_t		s_len = 0;
+
+	fasthash_init(&hs, 0);
+
+	while (*s && s_len < len)
+	{
+		int			chunk_len = 0;
+
+		while (s[chunk_len] != '\0' &&
+			   s_len < len &&
+			   chunk_len < FH_SIZEOF_ACCUM)
+		{
+			chunk_len++;
+			s_len++;
+		}
+
+		fasthash_accum(&hs, s, chunk_len);
+		s += chunk_len;
+	}
+
+	return fasthash_final32(&hs, s_len);
+}
+
 #endif							/* HASHFN_UNSTABLE_H */

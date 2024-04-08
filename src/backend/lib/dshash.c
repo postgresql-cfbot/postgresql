@@ -32,6 +32,7 @@
 #include "postgres.h"
 
 #include "common/hashfn.h"
+#include "common/hashfn_unstable.h"
 #include "lib/dshash.h"
 #include "storage/lwlock.h"
 #include "utils/dsa.h"
@@ -605,14 +606,14 @@ dshash_strcmp(const void *a, const void *b, size_t size, void *arg)
 }
 
 /*
- * A hash function that forwards to string_hash.
+ * A hash function that forwards to hash_string_with_len.
  */
 dshash_hash
 dshash_strhash(const void *v, size_t size, void *arg)
 {
 	Assert(strlen((const char *) v) < size);
 
-	return string_hash((const char *) v, size);
+	return hash_string_with_len((const char *) v, size - 1);
 }
 
 /*

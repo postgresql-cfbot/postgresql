@@ -98,6 +98,7 @@
 
 #include "access/xact.h"
 #include "common/hashfn.h"
+#include "common/hashfn_unstable.h"
 #include "port/pg_bitutils.h"
 #include "storage/shmem.h"
 #include "storage/spin.h"
@@ -309,6 +310,18 @@ string_compare(const char *key1, const char *key2, Size keysize)
 	return strncmp(key1, key2, keysize - 1);
 }
 
+/*
+ * hash function used when HASH_STRINGS is set
+ *
+ * If the string exceeds keysize-1 bytes, we want to hash only that many,
+ * because when it is copied into the hash table it will be truncated at
+ * that length.
+ */
+static uint32
+default_string_hash(const void *key, Size keysize)
+{
+	return hash_string_with_len((const char *) key, keysize - 1);
+}
 
 /************************** CREATE ROUTINES **********************/
 
@@ -420,8 +433,8 @@ hash_create(const char *tabname, long nelem, const HASHCTL *info, int flags)
 	else
 	{
 		/*
-		 * string_hash used to be considered the default hash method, and in a
-		 * non-assert build it effectively still is.  But we now consider it
+		 * string_hash used to be considered the default hash method, and
+		 * it effectively still was until version 17.  Since version 14 we consider it
 		 * an assertion error to not say HASH_STRINGS explicitly.  To help
 		 * catch mistaken usage of HASH_STRINGS, we also insist on a
 		 * reasonably long string length: if the keysize is only 4 or 8 bytes,
@@ -430,12 +443,12 @@ hash_create(const char *tabname, long nelem, const HASHCTL *info, int flags)
 		Assert(flags & HASH_STRINGS);
 		Assert(info->keysize > 8);
 
-		hashp->hash = string_hash;
+		hashp->hash = default_string_hash;
 	}
 
 	/*
 	 * If you don't specify a match function, it defaults to string_compare if
-	 * you used string_hash, and to memcmp otherwise.
+	 * you used default_string_hash, and to memcmp otherwise.
 	 *
 	 * Note: explicitly specifying string_hash is deprecated, because this
 	 * might not work for callers in loadable modules on some platforms due to
@@ -444,7 +457,7 @@ hash_create(const char *tabname, long nelem, const HASHCTL *info, int flags)
 	 */
 	if (flags & HASH_COMPARE)
 		hashp->match = info->match;
-	else if (hashp->hash == string_hash)
+	else if (hashp->hash == default_string_hash)
 		hashp->match = (HashCompareFunc) string_compare;
 	else
 		hashp->match = memcmp;
@@ -454,7 +467,7 @@ hash_create(const char *tabname, long nelem, const HASHCTL *info, int flags)
 	 */
 	if (flags & HASH_KEYCOPY)
 		hashp->keycopy = info->keycopy;
-	else if (hashp->hash == string_hash)
+	else if (hashp->hash == default_string_hash)
 	{
 		/*
 		 * The signature of keycopy is meant for memcpy(), which returns

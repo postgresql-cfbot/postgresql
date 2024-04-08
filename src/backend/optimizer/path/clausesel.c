@@ -22,6 +22,7 @@
 #include "statistics/statistics.h"
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
+#include "utils/memutils.h"
 #include "utils/selfuncs.h"
 
 /*
@@ -691,6 +692,7 @@ clause_selectivity_ext(PlannerInfo *root,
 	Selectivity s1 = 0.5;		/* default for any unhandled clause type */
 	RestrictInfo *rinfo = NULL;
 	bool		cacheable = false;
+	MemoryContext saved_cxt;
 
 	if (clause == NULL)			/* can this still happen? */
 		return s1;
@@ -753,6 +755,21 @@ clause_selectivity_ext(PlannerInfo *root,
 		else
 			clause = (Node *) rinfo->clause;
 	}
+
+	/*
+	 * Run all the remaining work in the short-lived planner_tmp_cxt, which
+	 * we'll reset at the bottom.  This allows selectivity-related code to not
+	 * be too concerned about leaking memory.
+	 */
+	saved_cxt = MemoryContextSwitchTo(root->glob->planner_tmp_cxt);
+
+	/*
+	 * This function can be called recursively, in which case we'd better not
+	 * reset planner_tmp_cxt until we exit the topmost level.  Use of
+	 * planner_tmp_cxt_depth also makes it safe for other places to use and
+	 * reset planner_tmp_cxt in the same fashion.
+	 */
+	root->glob->planner_tmp_cxt_depth++;
 
 	if (IsA(clause, Var))
 	{
@@ -963,6 +980,20 @@ clause_selectivity_ext(PlannerInfo *root,
 			rinfo->norm_selec = s1;
 		else
 			rinfo->outer_selec = s1;
+	}
+
+	/* Exit and optionally clean up the planner_tmp_cxt */
+	MemoryContextSwitchTo(saved_cxt);
+	root->glob->planner_tmp_cxt_usage++;
+	Assert(root->glob->planner_tmp_cxt_depth > 0);
+	if (--root->glob->planner_tmp_cxt_depth == 0)
+	{
+		/* It's safe to reset the tmp context, but do we want to? */
+		if (root->glob->planner_tmp_cxt_usage >= PLANNER_TMP_CXT_USAGE_RESET)
+		{
+			MemoryContextReset(root->glob->planner_tmp_cxt);
+			root->glob->planner_tmp_cxt_usage = 0;
+		}
 	}
 
 #ifdef SELECTIVITY_DEBUG

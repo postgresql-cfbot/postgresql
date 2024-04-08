@@ -27,6 +27,7 @@
 #endif
 
 #include "access/commit_ts.h"
+#include "access/detoast.h"
 #include "access/gin.h"
 #include "access/slru.h"
 #include "access/toast_compression.h"
@@ -1015,6 +1016,16 @@ struct config_bool ConfigureNamesBool[] =
 		},
 		&enable_group_by_reordering,
 		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"enable_toast_cache", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables caching of detoasted values."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&enable_toast_cache,
+		false,
 		NULL, NULL, NULL
 	},
 	{

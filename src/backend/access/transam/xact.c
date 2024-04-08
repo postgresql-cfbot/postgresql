@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #include "access/commit_ts.h"
+#include "access/detoast.h"
 #include "access/multixact.h"
 #include "access/parallel.h"
 #include "access/subtrans.h"
@@ -2422,6 +2423,7 @@ CommitTransaction(void)
 	AtEOXact_Snapshot(true, false);
 	AtEOXact_ApplyLauncher(true);
 	AtEOXact_LogicalRepWorkers(true);
+	AtEOXact_ToastCache();
 	pgstat_report_xact_timestamp(0);
 
 	ResourceOwnerDelete(TopTransactionResourceOwner);
@@ -2712,6 +2714,7 @@ PrepareTransaction(void)
 	/* we treat PREPARE as ROLLBACK so far as waking workers goes */
 	AtEOXact_ApplyLauncher(false);
 	AtEOXact_LogicalRepWorkers(false);
+	AtEOXact_ToastCache();
 	pgstat_report_xact_timestamp(0);
 
 	CurrentResourceOwner = NULL;
@@ -2935,6 +2938,7 @@ AbortTransaction(void)
 		AtEOXact_PgStat(false, is_parallel_worker);
 		AtEOXact_ApplyLauncher(false);
 		AtEOXact_LogicalRepWorkers(false);
+		AtEOXact_ToastCache();
 		pgstat_report_xact_timestamp(0);
 	}
 

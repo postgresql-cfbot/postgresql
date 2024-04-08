@@ -40,6 +40,7 @@
 #include "utils/timestamp.h"
 #include "utils/tzparser.h"
 #include "utils/varlena.h"
+#include <unistd.h>
 
 /*
  * DATESTYLE
@@ -1233,4 +1234,98 @@ check_ssl(bool *newval, void **extra, GucSource source)
 	}
 #endif
 	return true;
+}
+
+
+/*
+ * See also load_libraries() and internal_load_library().
+ */
+static bool
+check_preload_libraries(char **newval, void **extra, GucSource source,
+						bool restricted)
+{
+	char	   *rawstring;
+	List	   *elemlist;
+	ListCell   *l;
+
+	/* nothing to do if empty */
+	if (newval == NULL || *newval[0] == '\0')
+		return true;
+
+	/*
+	 * issue warnings only during an interactive SET, from ALTER
+	 * ROLE/DATABASE/SYSTEM.
+	 */
+	if (source != PGC_S_TEST)
+		return true;
+
+	/* Need a modifiable copy of string */
+	rawstring = pstrdup(*newval);
+
+	/* Parse string into list of filename paths */
+	if (!SplitDirectoriesString(rawstring, ',', &elemlist))
+	{
+		/* Should not happen ? */
+		return false;
+	}
+
+	foreach(l, elemlist)
+	{
+		/* Note that filename was already canonicalized */
+		char	   *filename = (char *) lfirst(l);
+		char	   *expanded = NULL;
+
+		/* If restricting, insert $libdir/plugins if not mentioned already */
+		if (restricted && first_dir_separator(filename) == NULL)
+		{
+			expanded = psprintf("$libdir/plugins/%s", filename);
+			filename = expanded;
+		}
+
+		/*
+		 * stat()/access() only check that the library exists, not that it has
+		 * the correct magic number or even a library.  But error messages
+		 * from dlopen() are not portable, so it'd be hard to report any
+		 * problem other than "does not exist".
+		 */
+		if (access(filename, R_OK) == 0)
+			continue;
+
+		if (source == PGC_S_FILE)
+			/* ALTER SYSTEM */
+			ereport(WARNING,
+					errcode_for_file_access(),
+					errmsg("could not access file \"%s\"", filename),
+					errdetail("The server will currently fail to start with this setting."),
+					errhint("If the server is shut down, it will be necessary to manually edit the %s file to allow it to start again.",
+							"postgresql.auto.conf"));
+		else
+			/* ALTER ROLE/DATABASE */
+			ereport(WARNING,
+					errcode_for_file_access(),
+					errmsg("could not access file \"%s\"", filename),
+					errdetail("New sessions will currently fail to connect with the new setting."));
+	}
+
+	list_free_deep(elemlist);
+	pfree(rawstring);
+	return true;
+}
+
+bool
+check_shared_preload_libraries(char **newval, void **extra, GucSource source)
+{
+	return check_preload_libraries(newval, extra, source, true);
+}
+
+bool
+check_local_preload_libraries(char **newval, void **extra, GucSource source)
+{
+	return check_preload_libraries(newval, extra, source, false);
+}
+
+bool
+check_session_preload_libraries(char **newval, void **extra, GucSource source)
+{
+	return check_preload_libraries(newval, extra, source, true);
 }

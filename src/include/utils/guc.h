@@ -120,6 +120,7 @@ typedef enum
 	PGC_S_INTERACTIVE,			/* dividing line for error reporting */
 	PGC_S_TEST,					/* test per-database or per-user setting */
 	PGC_S_SESSION,				/* SET command */
+	// PGC_S_TEST_FILE,			/* test global cluster settings (ALTER SYSTEM) */
 } GucSource;
 
 /*
@@ -365,6 +366,7 @@ extern const char *GetConfigOption(const char *name, bool missing_ok,
 								   bool restrict_privileged);
 extern const char *GetConfigOptionResetString(const char *name);
 extern int	GetConfigOptionFlags(const char *name, bool missing_ok);
+extern char *GetConfigSourceFile(const char *name, int *linenum);
 extern void ProcessConfigFile(GucContext context);
 extern char *convert_GUC_name_for_parameter_acl(const char *name);
 extern void check_GUC_name_for_parameter_acl(const char *name);

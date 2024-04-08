@@ -4645,7 +4645,7 @@ AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt)
 				void	   *newextra = NULL;
 
 				if (!parse_and_validate_value(record, name, value,
-											  PGC_S_FILE, ERROR,
+											  PGC_S_TEST, ERROR,
 											  &newval, &newextra))
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),

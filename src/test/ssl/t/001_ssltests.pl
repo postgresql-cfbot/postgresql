@@ -904,4 +904,202 @@ $node->connect_fails(
 	#	]
 );
 
+# Test ocsp stapling.
+# Use a stapled ocsp response with different status for certificate server-cn-only
+# so that the client can verify the ocsp response when sslocspstapling is set.
+# server-cn-only certificates status is 'good'
+switch_server_cert(
+	$node,
+	certfile => 'server-cn-only',
+	keyfile => 'server-cn-only',
+	cafile => 'root_ca',
+	ocspfile => 'server-ocsp-good');
+
+# Reset the common_connstr
+$common_connstr =
+  "$default_ssl_connstr user=ssltestuser dbname=trustdb hostaddr=$SERVERHOSTADDR host=ocsp-good.pg-ssltest.test";
+
+# Continue the TLS connection when certificate status is 'good' in stapled ocsp response.
+$node->connect_ok(
+	"$common_connstr sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslocspstapling=1",
+	"connect with valid stapled ocsp response when sslocspstapling=1");
+
+# Continue the TLS connection when no ocsp response is required.
+$node->connect_ok(
+	"$common_connstr sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslocspstapling=0",
+	"connect without requesting ocsp response when sslocspstapling=0");
+
+# server-cn-only certificates status is 'revoked'
+switch_server_cert(
+	$node,
+	certfile => 'server-cn-only',
+	keyfile => 'server-cn-only',
+	cafile => 'root_ca',
+	ocspfile => 'server-ocsp-revoked');
+
+# Fail the TLS connection when certificate status is 'revoked' in stapled ocsp response.
+$node->connect_fails(
+	"$common_connstr sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslocspstapling=1",
+	"failed with a revoked ocsp response when sslocspstapling=1");
+
+# Continue the TLS connection when no ocsp response is required.
+$node->connect_ok(
+	"$common_connstr sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslocspstapling=0",
+	"connect without requesting ocsp response when sslocspstapling=0");
+
+# server-cn-only certificates status is 'unknown'
+switch_server_cert(
+	$node,
+	certfile => 'server-cn-only',
+	keyfile => 'server-cn-only',
+	cafile => 'root_ca',
+	ocspfile => 'server-ocsp-unknown');
+
+# Fail the TLS connection when certificate status is 'unknown' in stapled ocsp response.
+$node->connect_fails(
+	"$common_connstr sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslocspstapling=1",
+	"failed with a revoked ocsp response when sslocspstapling=1");
+
+# Continue the TLS connection when no ocsp response is required.
+$node->connect_ok(
+	"$common_connstr sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslocspstapling=0",
+	"connect without requesting ocsp response when sslocspstapling=0");
+
+# server-cn-only certificates status is 'expired'
+switch_server_cert(
+	$node,
+	certfile => 'server-cn-only',
+	keyfile => 'server-cn-only',
+	cafile => 'root_ca',
+	ocspfile => 'server-ocsp-expired');
+
+# Fail the TLS connection when stapled ocsp response is 'expired'.
+$node->connect_fails(
+	"$common_connstr sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslocspstapling=1",
+	"failed with an expired ocsp response when sslocspstapling=1");
+
+# Continue the TLS connection when no ocsp response is required.
+$node->connect_ok(
+	"$common_connstr sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslocspstapling=0",
+	"connect without requesting ocsp response when sslocspstapling=0");
+
+# Use a stapled ocsp response with different status for certificate server-cn-only and server_ca
+# so that the client can verify the ocsp response when sslocspstapling is set.
+# server-cn-only, server_ca: 'good, good'
+switch_server_cert(
+	$node,
+	certfile => 'server-cn-only+server_ca',
+	keyfile => 'server-cn-only',
+	cafile => 'root_ca',
+	ocspfile => 'server-ca-ocsp-good');
+
+# Reset the common_connstr
+$common_connstr =
+  "$default_ssl_connstr user=ssltestuser dbname=trustdb hostaddr=$SERVERHOSTADDR host=ocsp-good.pg-ssltest.test";
+
+# Continue the TLS connection when certificate status is 'good' in stapled ocsp response.
+$node->connect_ok(
+	"$common_connstr sslrootcert=ssl/root_ca.crt sslmode=verify-ca sslocspstapling=1",
+	"connect with valid stapled ocsp response when sslocspstapling=1");
+
+# Continue the TLS connection when no ocsp response is required.
+$node->connect_ok(
+	"$common_connstr sslrootcert=ssl/root_ca.crt sslmode=verify-ca sslocspstapling=0",
+	"connect without requesting ocsp response when sslocspstapling=0");
+
+# server-cn-only, server_ca: 'good, revoked'
+switch_server_cert(
+	$node,
+	certfile => 'server-cn-only+server_ca',
+	keyfile => 'server-cn-only',
+	cafile => 'root_ca',
+	ocspfile => 'server-ca-ocsp-revoked');
+
+# Fail the TLS connection when certificate status is 'revoked' in stapled ocsp response.
+$node->connect_fails(
+	"$common_connstr sslrootcert=ssl/root_ca.crt sslmode=verify-ca sslocspstapling=1",
+	"failed with a revoked ocsp response when sslocspstapling=1");
+
+# Continue the TLS connection when no ocsp response is required.
+$node->connect_ok(
+	"$common_connstr sslrootcert=ssl/root_ca.crt sslmode=verify-ca sslocspstapling=0",
+	"connect without requesting ocsp response when sslocspstapling=0");
+
+# server-cn-only, server_ca: 'good, unknown'
+switch_server_cert(
+	$node,
+	certfile => 'server-cn-only+server_ca',
+	keyfile => 'server-cn-only',
+	cafile => 'root_ca',
+	ocspfile => 'server-ca-ocsp-unknown');
+
+# Fail the TLS connection when certificate status is 'unknown' in stapled ocsp response.
+$node->connect_fails(
+	"$common_connstr sslrootcert=ssl/root_ca.crt sslmode=verify-ca sslocspstapling=1",
+	"failed with a revoked ocsp response when sslocspstapling=1");
+
+# Continue the TLS connection when no ocsp response is required.
+$node->connect_ok(
+	"$common_connstr sslrootcert=ssl/root_ca.crt sslmode=verify-ca sslocspstapling=0",
+	"connect without requesting ocsp response when sslocspstapling=0");
+
+# server-cn-only, server_ca: 'good, expired'
+switch_server_cert(
+	$node,
+	certfile => 'server-cn-only+server_ca',
+	keyfile => 'server-cn-only',
+	cafile => 'root_ca',
+	ocspfile => 'server-ca-ocsp-expired');
+
+# Fail the TLS connection when stapled ocsp response is 'expired'.
+$node->connect_fails(
+	"$common_connstr sslrootcert=ssl/root_ca.crt sslmode=verify-ca sslocspstapling=1",
+	"failed with an expired ocsp response when sslocspstapling=1");
+
+# Continue the TLS connection when no ocsp response is required.
+$node->connect_ok(
+	"$common_connstr sslrootcert=ssl/root_ca.crt sslmode=verify-ca sslocspstapling=0",
+	"connect without requesting ocsp response when sslocspstapling=0");
+
+
+# Use a stapled ocsp response which doesn't match the certificate server-ip-cn-only
+# so that the client will fail the TLS connection when sslocspstapling is set.
+switch_server_cert(
+	$node,
+	certfile => 'server-ip-cn-only',
+	keyfile => 'server-ip-cn-only',
+	cafile => 'root_ca',
+	ocspfile => 'server-ocsp-good');
+
+# Fail the TLS connection when stapled ocsp response doesn't match certificate.
+$node->connect_fails(
+	"$common_connstr sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslocspstapling=1",
+	"failed with an expired ocsp response when sslocspstapling=1");
+
+# Continue the TLS connection when no ocsp response is required.
+$node->connect_ok(
+	"$common_connstr sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslocspstapling=0",
+	"connect without requesting ocsp response when sslocspstapling=0");
+
+
+# Use a stapled ocsp response which doesn't match the certificate server-ip-cn-only
+# so that the client will fail the TLS connection when sslocspstapling is set.
+switch_server_cert(
+	$node,
+	certfile => 'server-ip-cn-only+server_ca',
+	keyfile => 'server-ip-cn-only',
+	cafile => 'root_ca',
+	ocspfile => 'server-ca-ocsp-good');
+
+# Fail the TLS connection when stapled ocsp response doesn't match certificate.
+$node->connect_fails(
+	"$common_connstr sslrootcert=ssl/root_ca.crt sslmode=verify-ca sslocspstapling=1",
+	"failed with an expired ocsp response when sslocspstapling=1");
+
+# Continue the TLS connection when no ocsp response is required.
+$node->connect_ok(
+	"$common_connstr sslrootcert=ssl/root_ca.crt sslmode=verify-ca sslocspstapling=0",
+	"connect without requesting ocsp response when sslocspstapling=0");
+
+
 done_testing();

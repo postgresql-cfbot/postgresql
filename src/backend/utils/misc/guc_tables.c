@@ -4586,6 +4586,16 @@ struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		{"ssl_ocsp_file", PGC_SIGHUP, CONN_AUTH_SSL,
+			gettext_noop("Location of the SSL certificate OCSP stapling file."),
+			NULL
+		},
+		&ssl_ocsp_file,
+		"",
+		NULL, NULL, NULL
+	},
+
+	{
 		{"synchronous_standby_names", PGC_SIGHUP, REPLICATION_PRIMARY,
 			gettext_noop("Number of synchronous standbys and list of names of potential synchronous ones."),
 			NULL,

@@ -50,6 +50,7 @@
 #include <openssl/ec.h>
 #endif
 #include <openssl/x509v3.h>
+#include <openssl/ocsp.h>
 
 
 /* default init hook can be overridden by a shared library */
@@ -86,6 +87,8 @@ static bool ssl_is_server_start;
 
 static int	ssl_protocol_version_to_openssl(int v);
 static const char *ssl_protocol_version_to_string(int v);
+
+static int ocsp_stapling_cb(SSL *ssl);
 
 /* for passing data back from verify_cb() */
 static const char *cert_errdetail;
@@ -434,6 +437,9 @@ be_tls_open_server(Port *port)
 				 errmsg("could not initialize SSL connection: SSL context not set up")));
 		return -1;
 	}
+
+	/* set up OCSP stapling callback */
+	SSL_CTX_set_tlsext_status_cb(SSL_context, ocsp_stapling_cb);
 
 	/* set up debugging/info callback */
 	SSL_CTX_set_info_callback(SSL_context, info_cb);
@@ -1742,4 +1748,85 @@ default_openssl_tls_init(SSL_CTX *context, bool isServerStart)
 			 */
 			SSL_CTX_set_default_passwd_cb(context, dummy_ssl_passwd_cb);
 	}
+}
+
+/*
+ * OCSP stapling callback function for the server side.
+ *
+ * This function is responsible for providing the OCSP stapling response to
+ * the client during the SSL/TLS handshake, based on the client's request.
+ *
+ * Parameters:
+ *   - ssl: SSL/TLS connection object.
+ *
+ * Returns:
+ *   - SSL_TLSEXT_ERR_OK: OCSP stapling response successfully provided.
+ *   - SSL_TLSEXT_ERR_NOACK: OCSP stapling response not provided due to errors.
+ *
+ * Steps:
+ *   1. Check if the server-side OCSP stapling feature is enabled.
+ *   2. Read OCSP response from file if client requested OCSP stapling.
+ *   3. Set the OCSP stapling response in the SSL/TLS connection.
+ */
+static int ocsp_stapling_cb(SSL *ssl)
+{
+	int				resp_len = -1;
+	BIO				*bio = NULL;
+	OCSP_RESPONSE	*resp = NULL;
+	unsigned char 	*rspder = NULL;
+
+	/* return, if ssl_ocsp_file not enabled on server */
+	if (ssl_ocsp_file == NULL)
+	{
+		ereport(WARNING,
+				(errcode(ERRCODE_CONFIG_FILE_ERROR),
+				 errmsg("could not find ssl_ocsp_file")));
+		return SSL_TLSEXT_ERR_NOACK;
+	}
+
+	/* whether the client requested OCSP stapling */
+	if (SSL_get_tlsext_status_type(ssl) == TLSEXT_STATUSTYPE_ocsp)
+	{
+		bio = BIO_new_file(ssl_ocsp_file, "r");
+		if (bio == NULL)
+		{
+			ereport(WARNING,
+					(errcode(ERRCODE_CONFIG_FILE_ERROR),
+					 errmsg("could not read ssl_ocsp_file")));
+			return SSL_TLSEXT_ERR_NOACK;
+		}
+
+		resp = d2i_OCSP_RESPONSE_bio(bio, NULL);
+		BIO_free(bio);
+		if (resp == NULL)
+		{
+			ereport(WARNING,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("could not convert OCSP response to intarnal format")));
+			return SSL_TLSEXT_ERR_NOACK;
+		}
+
+		resp_len = i2d_OCSP_RESPONSE(resp, &rspder);
+		OCSP_RESPONSE_free(resp);
+		if (resp_len <= 0)
+		{
+			ereport(WARNING,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("could not convert OCSP response to der format")));
+			return SSL_TLSEXT_ERR_NOACK;
+		}
+
+		/* set up the OCSP stapling response */
+		if (SSL_set_tlsext_status_ocsp_resp(ssl, rspder, resp_len) != 1)
+		{
+			ereport(WARNING,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("could not set up OCSP stapling response")));
+			return SSL_TLSEXT_ERR_NOACK;
+		}
+
+		return SSL_TLSEXT_ERR_OK;
+	}
+
+	return SSL_TLSEXT_ERR_NOACK;
 }

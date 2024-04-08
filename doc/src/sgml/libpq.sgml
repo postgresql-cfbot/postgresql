@@ -1869,6 +1869,21 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       </listitem>
      </varlistentry>
 
+     <varlistentry id="libpq-connect-sslocspstapling" xreflabel="sslocspstapling">
+      <term><literal>sslocspstapling</literal></term>
+      <listitem>
+       <para>
+        If set to 1, an <acronym>SSL</acronym> connection to the server
+        will send a certificate status request.  <application>libpq</application>
+        will then refuse to connect if the server does not provide a valid OCSP
+         Stapling response. If set to 0 (default),
+        <application>libpq</application> will neither request the certificate
+        status nor check OCSP Stapling response.  This option is only available if
+        <productname>PostgreSQL</productname> is compiled with SSL support.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="libpq-connect-sslkey" xreflabel="sslkey">
       <term><literal>sslkey</literal></term>
       <listitem>
@@ -8754,6 +8769,16 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
     <listitem>
      <para>
       <indexterm>
+       <primary><envar>PGSSLOCSPSTAPLING</envar></primary>
+      </indexterm>
+      <envar>PGSSLOCSPSTAPLING</envar> behaves the same as the <xref
+      linkend="libpq-connect-sslocspstapling"/> connection parameter.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      <indexterm>
        <primary><envar>PGSSLNEGOTIATION</envar></primary>
       </indexterm>
       <envar>PGSSLNEGOTIATION</envar> behaves the same as the <xref
@@ -9509,6 +9534,11 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
    if the file <filename>~/.postgresql/root.crl</filename> exists
    (<filename>%APPDATA%\postgresql\root.crl</filename> on Microsoft
    Windows).
+  </para>
+
+  <para>
+   Stapled server certificate status (OCSP Stapling) will be checked,
+   if the parameter <literal>sslocspstapling</literal> is set to 1.
   </para>
 
   <para>

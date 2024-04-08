@@ -493,11 +493,19 @@ typedef enum
 	PGERROR_TERSE,				/* single-line error messages */
 	PGERROR_DEFAULT,			/* recommended style */
 	PGERROR_VERBOSE,			/* all the facts, ma'am */
-}			PGErrorVerbosity;
+} PGErrorVerbosity;
+
+typedef enum
+{
+	LOGBACKTRACE_NONE,			/* no backtrace */
+	LOGBACKTRACE_INTERNAL,		/* backtrace for internal error code */
+	LOGBACKTRACE_ALL,			/* backtrace for all logs */
+} LogBacktraceVerbosity;
 
 extern PGDLLIMPORT int Log_error_verbosity;
 extern PGDLLIMPORT char *Log_line_prefix;
 extern PGDLLIMPORT int Log_destination;
+extern PGDLLIMPORT int log_backtrace;
 extern PGDLLIMPORT char *Log_destination_string;
 extern PGDLLIMPORT bool syslog_sequence_numbers;
 extern PGDLLIMPORT bool syslog_split_messages;

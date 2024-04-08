@@ -7330,6 +7330,45 @@ local0.*    /var/log/postgresql
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-log-backtrace" xreflabel="backtrace_on_internal_error">
+      <term><varname>log_backtrace</varname> (<type>boolean</type>)
+      <indexterm>
+        <primary><varname>log_backtrace</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        If this parameter is set to <literal>all</literal> then for all log
+        entries a backtrace is written to the server log together with the log
+        message. If this parameter is set to <literal>internal</literal> (the default) then
+        such a backtrace is only written for logs with error code XX000
+        (internal error; see also <xref linkend="errcodes-appendix"/>).
+        This can be used to debug such internal errors (which should normally
+        not happen in production). Finally, if this parameter is set to
+        <literal>none</literal>, no backtraces are ever written
+        to the server log.
+       </para>
+
+       <para>
+        The logs for which a backtrace is written can be further restricted
+        using <xref linkend="guc-backtrace-min-level"/> (default:
+        <literal>error</literal>) and <xref linkend="guc-backtrace-functions"/>
+        (default: empty string, meaning all).
+       </para>
+
+       <para>
+        Backtrace support is not available on all platforms, and the quality
+        of the backtraces depends on compilation options.
+       </para>
+
+       <para>
+        Only superusers and users with the appropriate <literal>SET</literal>
+        privilege can change this setting.
+       </para>
+      </listitem>
+     </varlistentry>
+
+
      <varlistentry id="guc-log-checkpoints" xreflabel="log_checkpoints">
       <term><varname>log_checkpoints</varname> (<type>boolean</type>)
       <indexterm>
@@ -11419,43 +11458,45 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </term>
       <listitem>
        <para>
-        This parameter contains a comma-separated list of C function names.
-        If an error is raised and the name of the internal C function where
-        the error happens matches a value in the list, then a backtrace is
-        written to the server log together with the error message.  This can
-        be used to debug specific areas of the source code.
+        This parameter can contain a comma-separated list of C function names,
+        which can be used to filter for which logs a backtrace is written to
+        the server log.
+        If a log entry is raised and the name of the
+        internal C function where the error happens does not match any of the
+        values in the list, then no backtrace is written to the server log.
+        This can be used to only debug specific areas of the source code.
        </para>
 
        <para>
-        Backtrace support is not available on all platforms, and the quality
-        of the backtraces depends on compilation options.
-       </para>
-
-       <para>
-        Only superusers and users with the appropriate <literal>SET</literal>
-        privilege can change this setting.
+        The empty string (the default) disables any such filtering. So for any
+        logs that match both <xref linkend="guc-log-backtrace"/> and
+        <xref linkend="guc-backtrace-min-level"/> a backtrace is
+        written to the server log.
        </para>
       </listitem>
      </varlistentry>
 
-     <varlistentry id="guc-backtrace-on-internal-error" xreflabel="backtrace_on_internal_error">
-      <term><varname>backtrace_on_internal_error</varname> (<type>boolean</type>)
+     <varlistentry id="guc-backtrace-min-level" xreflabel="backtrace_min_level">
+      <term><varname>backtrace_min_level</varname> (<type>string</type>)
       <indexterm>
-        <primary><varname>backtrace_on_internal_error</varname> configuration parameter</primary>
+        <primary><varname>backtrace_min_level</varname> configuration parameter</primary>
       </indexterm>
       </term>
       <listitem>
        <para>
-        If this parameter is on and an error with error code XX000 (internal
-        error; see also <xref linkend="errcodes-appendix"/>) is raised, then a
-        backtrace is written to the server log together with the error
-        message.  This can be used to debug such internal errors (which should
-        normally not happen in production).  The default is off.
-       </para>
-
-       <para>
-        Backtrace support is not available on all platforms, and the quality
-        of the backtraces depends on compilation options.
+        Controls which <link linkend="runtime-config-severity-levels">message
+        levels</link> cause backtraces to be written to the log, for log
+        messages that match both <xref linkend="guc-log-backtrace"/> and
+        <xref linkend="guc-backtrace-functions"/>.
+        Valid values are <literal>DEBUG5</literal>, <literal>DEBUG4</literal>,
+        <literal>DEBUG3</literal>, <literal>DEBUG2</literal>, <literal>DEBUG1</literal>,
+        <literal>LOG</literal>, <literal>INFO</literal>, <literal>NOTICE</literal>,
+        <literal>WARNING</literal>, <literal>ERROR</literal>, <literal>FATAL</literal>,
+        and <literal>PANIC</literal>.  Each level includes all the levels that
+        follow it.  The later the level, the fewer messages result in a
+        backtrace.  The default is <literal>ERROR</literal>.  Note that
+        <literal>LOG</literal> has a different rank here than in
+        <xref linkend="guc-log-min-messages"/>.
        </para>
 
        <para>
@@ -11464,6 +11505,7 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
        </para>
       </listitem>
      </varlistentry>
+
 
      <varlistentry id="guc-debug-discard-caches" xreflabel="debug_discard_caches">
       <term><varname>debug_discard_caches</varname> (<type>integer</type>)

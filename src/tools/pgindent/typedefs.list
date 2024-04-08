@@ -1515,6 +1515,7 @@ LockTupleMode
 LockViewRecurse_context
 LockWaitPolicy
 LockingClause
+LogBacktraceVerbosity
 LogOpts
 LogStmtLevel
 LogicalDecodeBeginCB
@@ -1765,6 +1766,7 @@ PGAsyncStatusType
 PGCALL2
 PGChecksummablePage
 PGContextVisibility
+PGErrorVerbosity
 PGEvent
 PGEventConnDestroy
 PGEventConnReset

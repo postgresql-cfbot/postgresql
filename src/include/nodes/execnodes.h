@@ -1744,6 +1744,12 @@ typedef struct BitmapIndexScanState
 	struct IndexScanDescData *biss_ScanDesc;
 } BitmapIndexScanState;
 
+typedef struct BitmapHeapScanInstrumentation
+{
+	long lossy_pages;
+	long exact_pages;
+} BitmapHeapScanInstrumentation;
+
 /* ----------------
  *	 SharedBitmapState information
  *
@@ -1788,6 +1794,20 @@ typedef struct ParallelBitmapHeapState
 } ParallelBitmapHeapState;
 
 /* ----------------
+ *	 Instrumentation data for a parallel bitmap heap scan.
+ *
+ * During a parallel bitmap heap scan, this lives in shared memory.  At the
+ * end, each worker copies their own stats to the right slot.  Finally, the
+ * leader copies the data to its local memory
+  * ----------------
+ */
+typedef struct SharedBitmapHeapInstrumentation
+{
+	int			num_workers;
+	BitmapHeapScanInstrumentation sinstrument[FLEXIBLE_ARRAY_MEMBER];
+} SharedBitmapHeapInstrumentation;
+
+/* ----------------
  *	 BitmapHeapScanState information
  *
  *		bitmapqualorig	   execution state for bitmapqualorig expressions
@@ -1815,8 +1835,6 @@ typedef struct BitmapHeapScanState
 	TBMIterator *tbmiterator;
 	TBMIterateResult *tbmres;
 	Buffer		pvmbuffer;
-	long		exact_pages;
-	long		lossy_pages;
 	TBMIterator *prefetch_iterator;
 	int			prefetch_pages;
 	int			prefetch_target;
@@ -1825,6 +1843,17 @@ typedef struct BitmapHeapScanState
 	TBMSharedIterator *shared_tbmiterator;
 	TBMSharedIterator *shared_prefetch_iterator;
 	ParallelBitmapHeapState *pstate;
+
+	/*
+	 * In a parallelized bitmap heap scan, each worker sets their
+	 * instrumentaton data in pstate->sinstrument at the end.  The leader
+	 * copies the shared-memory info back to local storage before DSM
+	 * shutdown, and stores it here in 'instrument'.  It remains NULL in
+	 * workers and in non-parallel scans.
+	 */
+	SharedBitmapHeapInstrumentation *sinstrument;
+
+	BitmapHeapScanInstrumentation stats;
 } BitmapHeapScanState;
 
 /* ----------------

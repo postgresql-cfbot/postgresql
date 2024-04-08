@@ -193,6 +193,17 @@
       example, <literal>ICU_CFLAGS=' '</literal>.)
      </para>
     </listitem>
+
+    <listitem>
+     <para>
+      <indexterm>
+       <primary>Diff</primary>
+      </indexterm>
+
+      <productname>Diff</productname> is required to run the regression
+      tests. On Windows, it may not be available by default.
+     </para>
+    </listitem>
    </itemizedlist>
   </para>
 
@@ -339,6 +350,12 @@
    url="https://www.gnu.org/prep/ftp"></ulink>
    for a list) or at <ulink
    url="ftp://ftp.gnu.org/gnu/"></ulink>.
+  </para>
+
+  <para>
+   On Windows, you can find packages for build dependencies using
+   <ulink url="https://www.msys2.org/">MSYS2</ulink>
+   or <ulink url="https://chocolatey.org/">Chocolatey</ulink>.
   </para>
  </sect1>
 
@@ -3640,15 +3657,14 @@ xcrun --show-sdk-path
     MinGW, the Unix-like build tools, and MSYS, a collection
     of Unix tools required to run shell scripts
     like <command>configure</command>, can be downloaded
-    from <ulink url="http://www.mingw.org/"></ulink>.  Neither is
+    from <ulink url="https://www.mingw-w64.org/"></ulink>.  Neither is
     required to run the resulting binaries; they are needed only for
     creating the binaries.
    </para>
 
    <para>
      To build 64 bit binaries using MinGW, install the 64 bit tool set
-     from <ulink url="https://mingw-w64.org/"></ulink>, put its bin
-     directory in the <envar>PATH</envar>, and run
+     put its bin directory in the <envar>PATH</envar>, and run
      <command>configure</command> with the
      <command>--host=x86_64-w64-mingw32</command> option.
    </para>
@@ -3806,13 +3822,6 @@ make: *** [postgres] Error 1
    </para>
 
    <para>
-    Native builds of <application>psql</application> don't support command
-    line editing. The <productname>Cygwin</productname> build does support
-    command line editing, so it should be used where psql is needed for
-    interactive use on <productname>Windows</productname>.
-   </para>
-
-   <para>
     PostgreSQL can be built using the Visual C++ compiler suite from Microsoft.
     These compilers can be either from <productname>Visual Studio</productname>,
     <productname>Visual Studio Express</productname> or some versions of the
@@ -3861,174 +3870,6 @@ make: *** [postgres] Error 1
     Note that as of Version 8.0a the Windows SDK no longer ships with a
     complete command-line build environment.
    </para>
-
-   <sect3 id="windows-requirements">
-    <title>Requirements</title>
-    <para>
-     The following additional products are required to build
-     <productname>PostgreSQL</productname> on Windows.
-
-     <variablelist>
-      <varlistentry>
-       <term><productname>ActiveState Perl</productname></term>
-       <listitem><para>
-        ActiveState Perl is required to run the build generation scripts. MinGW
-        or Cygwin Perl will not work. It must also be present in the PATH.
-        Binaries can be downloaded from
-        <ulink url="https://www.activestate.com"></ulink>
-        (Note: version 5.14 or later is required,
-        the free Standard Distribution is sufficient).
-       </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term><productname>Bison</productname> and
-        <productname>Flex</productname></term>
-       <listitem>
-       <para>
-        <productname>Bison</productname> and <productname>Flex</productname> are
-        required.  Only <productname>Bison</productname> versions 2.3 and later
-        will work. <productname>Flex</productname> must be version 2.5.35 or later.
-       </para>
-
-       <para>
-        Both <productname>Bison</productname> and <productname>Flex</productname>
-        are included in the <productname>msys</productname> tool suite, available
-        from <ulink url="http://www.mingw.org/wiki/MSYS"></ulink> as part of the
-        <productname>MinGW</productname> compiler suite.
-       </para>
-
-       <para>
-        You will need to add the directory containing
-        <filename>flex.exe</filename> and <filename>bison.exe</filename> to the
-        PATH environment variable. In the case of MinGW, the directory is the
-        <filename>\msys\1.0\bin</filename> subdirectory of your MinGW
-        installation directory.
-       </para>
-
-       <note>
-        <para>
-          The Bison distribution from GnuWin32 appears to have a bug that
-          causes Bison to malfunction when installed in a directory with
-          spaces in the name, such as the default location on English
-          installations <filename>C:\Program Files\GnuWin32</filename>.
-          Consider installing into <filename>C:\GnuWin32</filename> or use the
-          NTFS short name path to GnuWin32 in your PATH environment setting
-          (e.g., <filename>C:\PROGRA~1\GnuWin32</filename>).
-         </para>
-       </note>
-
-       </listitem>
-      </varlistentry>
-     </variablelist>
-    </para>
-
-    <para>
-     The following additional products are not required to get started,
-     but are required to build the complete package.
-
-     <variablelist>
-      <varlistentry>
-       <term><productname>ActiveState Tcl</productname></term>
-       <listitem><para>
-        Required for building <application>PL/Tcl</application> (Note: version
-        8.4 is required, the free Standard Distribution is sufficient).
-       </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term><productname>Diff</productname></term>
-       <listitem><para>
-        Diff is required to run the regression tests, and can be downloaded
-        from <ulink url="http://gnuwin32.sourceforge.net"></ulink>.
-       </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term><productname>Gettext</productname></term>
-       <listitem><para>
-        Gettext is required to build with NLS support, and can be downloaded
-        from <ulink url="http://gnuwin32.sourceforge.net"></ulink>. Note that binaries,
-        dependencies and developer files are all needed.
-       </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term><productname>MIT Kerberos</productname></term>
-       <listitem><para>
-        Required for GSSAPI authentication support. MIT Kerberos can be
-        downloaded from
-        <ulink url="https://web.mit.edu/Kerberos/dist/index.html"></ulink>.
-       </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term><productname>libxml2</productname> and
-        <productname>libxslt</productname></term>
-       <listitem><para>
-        Required for XML support. Binaries can be downloaded from
-        <ulink url="https://zlatkovic.com/pub/libxml"></ulink> or source from
-        <ulink url="http://xmlsoft.org"></ulink>. Note that libxml2 requires iconv,
-        which is available from the same download location.
-       </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term><productname>LZ4</productname></term>
-       <listitem><para>
-        Required for supporting <productname>LZ4</productname> compression.
-        Binaries and source can be downloaded from
-        <ulink url="https://github.com/lz4/lz4/releases"></ulink>.
-       </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term><productname>Zstandard</productname></term>
-       <listitem><para>
-        Required for supporting <productname>Zstandard</productname> compression.
-        Binaries and source can be downloaded from
-        <ulink url="https://github.com/facebook/zstd/releases"></ulink>.
-       </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term><productname>OpenSSL</productname></term>
-       <listitem><para>
-        Required for SSL support. Binaries can be downloaded from
-        <ulink url="https://slproweb.com/products/Win32OpenSSL.html"></ulink>
-        or source from <ulink url="https://www.openssl.org"></ulink>.
-       </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term><productname>ossp-uuid</productname></term>
-       <listitem><para>
-        Required for UUID-OSSP support (contrib only). Source can be
-        downloaded from
-        <ulink url="http://www.ossp.org/pkg/lib/uuid/"></ulink>.
-       </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term><productname>Python</productname></term>
-       <listitem><para>
-        Required for building <application>PL/Python</application>. Binaries can
-        be downloaded from <ulink url="https://www.python.org"></ulink>.
-       </para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term><productname>zlib</productname></term>
-       <listitem><para>
-        Required for compression support in <application>pg_dump</application>
-        and <application>pg_restore</application>. Binaries can be downloaded
-        from <ulink url="https://www.zlib.net"></ulink>.
-       </para></listitem>
-      </varlistentry>
-
-     </variablelist>
-    </para>
-   </sect3>
 
    <sect3 id="install-windows-full-64-bit">
     <title>Special Considerations for 64-Bit Windows</title>

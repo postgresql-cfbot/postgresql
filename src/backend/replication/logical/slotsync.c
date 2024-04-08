@@ -362,7 +362,7 @@ drop_local_obsolete_slots(List *remote_slot_list)
 
 			if (synced_slot)
 			{
-				ReplicationSlotAcquire(NameStr(local_slot->data.name), true);
+				ReplicationSlotAcquire(NameStr(local_slot->data.name), true, false);
 				ReplicationSlotDropAcquired();
 			}
 
@@ -576,6 +576,13 @@ synchronize_one_slot(RemoteSlot *remote_slot, Oid remote_dbid)
 						   remote_slot->name));
 
 		/*
+		 * Skip the sync if the local slot is already invalidated. We do this
+		 * beforehand to avoid slot acquire and release.
+		 */
+		if (slot->data.invalidated != RS_INVAL_NONE)
+			return false;
+
+		/*
 		 * The slot has been synchronized before.
 		 *
 		 * It is important to acquire the slot here before checking
@@ -591,7 +598,7 @@ synchronize_one_slot(RemoteSlot *remote_slot, Oid remote_dbid)
 		 * pre-check to ensure that at least one of the slot properties is
 		 * changed before acquiring the slot.
 		 */
-		ReplicationSlotAcquire(remote_slot->name, true);
+		ReplicationSlotAcquire(remote_slot->name, true, false);
 
 		Assert(slot == MyReplicationSlot);
 

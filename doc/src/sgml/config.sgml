@@ -4547,6 +4547,39 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-replication-slot-inactive-timeout" xreflabel="replication_slot_inactive_timeout">
+      <term><varname>replication_slot_inactive_timeout</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>replication_slot_inactive_timeout</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Invalidates replication slots that are inactive for longer than
+        specified amount of time. If this value is specified without units,
+        it is taken as seconds. A value of zero (which is default) disables
+        the timeout mechanism. This parameter can only be set in
+        the <filename>postgresql.conf</filename> file or on the server
+        command line.
+       </para>
+
+       <para>
+        This invalidation check happens either when the slot is acquired
+        for use or during a checkpoint. The time since the slot has become
+        inactive is known from its
+        <structfield>inactive_since</structfield> value using which the
+        timeout is measured.
+       </para>
+
+       <para>
+        Note that the inactive timeout invalidation mechanism is not
+        applicable for slots on the standby that are being synced from a
+        primary server (whose <structfield>synced</structfield> field is
+        <literal>true</literal>).
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-track-commit-timestamp" xreflabel="track_commit_timestamp">
       <term><varname>track_commit_timestamp</varname> (<type>boolean</type>)
       <indexterm>

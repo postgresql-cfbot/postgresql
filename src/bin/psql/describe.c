@@ -26,6 +26,7 @@
 #include "fe_utils/mbprint.h"
 #include "fe_utils/print.h"
 #include "fe_utils/string_utils.h"
+#include "libpq/pqcomm.h"
 #include "settings.h"
 #include "variables.h"
 
@@ -901,6 +902,163 @@ error_return:
 	return false;
 }
 
+/*
+ * listConnectionInformation
+ *
+ * for \conninfo+
+ */
+bool
+listConnectionInformation(void)
+{
+	PGresult   *res;
+	PQExpBufferData buf;
+	printQueryOpt myopt = pset.popt;
+
+	char	   *host = PQhost(pset.db);
+	char	   *hostaddr = PQhostaddr(pset.db);
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+					  "SELECT\n"
+					  "  pg_catalog.current_database() AS \"%s\",\n"
+					  "  '%s' AS \"%s\",\n",
+					  _("Database"),
+					  PQuser(pset.db),
+					  _("Authenticated User"));
+	if (is_unixsock_path(host) && !(hostaddr && *hostaddr))
+		appendPQExpBuffer(&buf,
+					  "  '%s' AS \"%s\",\n",
+					  host,
+					  _("Socket Directory"));
+	else
+		appendPQExpBuffer(&buf,
+					  "  NULL AS \"%s\",\n",
+					  _("Socket Directory"));
+	appendPQExpBuffer(&buf,
+					  "  CASE\n"
+					  "    WHEN\n"
+					  "      pg_catalog.inet_server_addr() IS NULL\n"
+					  "      AND pg_catalog.inet_client_addr() IS NULL\n"
+					  "    THEN NULL\n"
+					  "    ELSE '%s'\n"
+					  "  END AS \"%s\",\n",
+					  host,
+					  _("Host"));
+	appendPQExpBuffer(&buf,
+					  "  pg_catalog.current_setting('port') AS \"%s\",\n"
+					  "  pg_catalog.inet_server_addr() AS \"%s\",\n"
+					  "  pg_catalog.inet_client_addr() AS \"%s\",\n"
+					  "  pg_catalog.inet_client_port() AS \"%s\",\n"
+					  "  pg_catalog.pg_backend_pid() AS \"%s\",\n",
+					  _("Server Port"),
+					  _("Server Address"),
+					  _("Client Address"),
+					  _("Client Port"),
+					  _("Backend PID"));
+	if (pset.sversion >= 160000)
+		appendPQExpBuffer(&buf,
+						  "  pg_catalog.system_user() AS \"%s\",\n",
+						  _("System User"));
+	else
+		appendPQExpBuffer(&buf,
+						  "  NULL AS \"%s\",\n",
+						  _("System User"));
+	appendPQExpBuffer(&buf,
+					  "  pg_catalog.current_user() AS \"%s\",\n"
+					  "  pg_catalog.session_user() AS \"%s\",\n",
+					  _("Current User"),
+					  _("Session User"));
+	if (pset.sversion >= 140000)
+		appendPQExpBuffer(&buf,
+						  "  ssl.ssl AS \"%s\",\n"
+						  "  ssl.version AS \"%s\",\n"
+						  "  ssl.cipher AS \"%s\",\n"
+						  "  NULL AS \"%s\",\n",
+						  _("SSL Connection"),
+						  _("SSL Protocol"),
+						  _("SSL Cipher"),
+						  _("SSL Compression"));
+	else if (pset.sversion >= 90500)
+		appendPQExpBuffer(&buf,
+						  "  ssl.ssl AS \"%s\",\n"
+						  "  ssl.version AS \"%s\",\n"
+						  "  ssl.cipher AS \"%s\",\n"
+						  "  ssl.compression AS \"%s\",\n",
+						  _("SSL Connection"),
+						  _("SSL Protocol"),
+						  _("SSL Cipher"),
+						  _("SSL Compression"));
+	else
+		appendPQExpBuffer(&buf,
+						  "  NULL AS \"%s\",\n"
+						  "  NULL AS \"%s\",\n"
+						  "  NULL AS \"%s\",\n"
+						  "  NULL AS \"%s\",\n",
+						  _("SSL Connection"),
+						  _("SSL Protocol"),
+						  _("SSL Cipher"),
+						  _("SSL Compression"));
+	if (pset.sversion >= 160000)
+		appendPQExpBuffer(&buf,
+						  "  gssapi.gss_authenticated AS \"%s\",\n"
+						  "  gssapi.principal AS \"%s\",\n"
+						  "  gssapi.\"encrypted\" AS \"%s\",\n"
+						  "  gssapi.credentials_delegated AS \"%s\"\n",
+						  _("GSSAPI Authenticated"),
+						  _("GSSAPI Principal"),
+						  _("GSSAPI Encrypted"),
+						  _("GSSAPI Credentials Delegated"));
+	else if (pset.sversion >= 120000)
+		appendPQExpBuffer(&buf,
+						  "  gssapi.gss_authenticated AS \"%s\",\n"
+						  "  gssapi.principal AS \"%s\",\n"
+						  "  gssapi.\"encrypted\" AS \"%s\",\n"
+						  "  NULL AS \"%s\"\n",
+						  _("GSSAPI Authenticated"),
+						  _("GSSAPI Principal"),
+						  _("GSSAPI Encrypted"),
+						  _("GSSAPI Credentials Delegated"));
+	else
+		appendPQExpBuffer(&buf,
+						  "  NULL AS \"%s\",\n"
+						  "  NULL AS \"%s\",\n"
+						  "  NULL AS \"%s\",\n"
+						  "  NULL AS \"%s\"\n",
+						  _("GSSAPI Authenticated"),
+						  _("GSSAPI Principal"),
+						  _("GSSAPI Encrypted"),
+						  _("GSSAPI Credentials Delegated"));
+	if (pset.sversion >= 120000)
+		appendPQExpBuffer(&buf,
+						  "FROM\n"
+						  "  pg_catalog.pg_stat_ssl ssl\n"
+						  "LEFT JOIN\n"
+						  "  pg_catalog.pg_stat_gssapi gssapi ON ssl.pid = gssapi.pid\n"
+						  "WHERE\n"
+						  "  ssl.pid = pg_catalog.pg_backend_pid()\n");
+	if (pset.sversion >= 90500 && pset.sversion < 120000)
+		appendPQExpBuffer(&buf,
+						  "FROM\n"
+						  "  pg_catalog.pg_stat_ssl ssl\n"
+						  "WHERE\n"
+						  "  ssl.pid = pg_catalog.pg_backend_pid()\n");
+	appendPQExpBuffer(&buf,
+					  ";");
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	myopt.title = _("Current Connection Information");
+	myopt.translate_header = true;
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+	PQclear(res);
+	return true;
+}
 
 /*
  * listAllDbs

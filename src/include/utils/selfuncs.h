@@ -187,6 +187,10 @@ extern double var_eq_const(VariableStatData *vardata,
 						   Oid oproid, Oid collation,
 						   Datum constval, bool constisnull,
 						   bool varonleft, bool negate);
+extern double var_eq_const_ext(VariableStatData *vardata,
+						   Oid oproid, Oid collation,
+						   Datum constval, bool constisnull,
+						   bool varonleft, bool negate, bool *skewed_stat);
 extern double var_eq_non_const(VariableStatData *vardata,
 							   Oid oproid, Oid collation,
 							   Node *other,

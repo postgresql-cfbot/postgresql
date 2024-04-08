@@ -406,6 +406,7 @@ static const struct config_enum_entry debug_parallel_query_options[] = {
 
 static const struct config_enum_entry plan_cache_mode_options[] = {
 	{"auto", PLAN_CACHE_MODE_AUTO, false},
+	{"stat_adaptive_plan", PLAN_CACHE_MODE_STAT_ADAPTIVE_PLAN, false},
 	{"force_generic_plan", PLAN_CACHE_MODE_FORCE_GENERIC_PLAN, false},
 	{"force_custom_plan", PLAN_CACHE_MODE_FORCE_CUSTOM_PLAN, false},
 	{NULL, 0, false}
@@ -3958,6 +3959,17 @@ struct config_real ConfigureNamesReal[] =
 		},
 		&log_xact_sample_rate,
 		0.0, 0.0, 1.0,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"skewed_param_factor", PGC_SUSET, LOGGING_WHEN,
+			gettext_noop("Sets the skewed factor for parameters of the prepare statement."),
+			gettext_noop("Use a thredhold to determine whether a skewed parameter exists."
+						 "If true, use the custom plan.")
+		},
+		&skewed_param_factor,
+		DEFAULT_SKEWED_PARAM_FACTOR, 2.0, 10000.0,
 		NULL, NULL, NULL
 	},
 

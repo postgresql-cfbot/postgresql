@@ -85,7 +85,13 @@ struct ParseState;
  *	  and paramCompileArg is rather arbitrary.
  */
 
-#define PARAM_FLAG_CONST	0x0001	/* parameter is constant */
+/* parameter is constant */
+#define PARAM_FLAG_CONST			0x0001
+/*
+ * The var side of 'var eq param' or 'param eq var' expression
+ * corresponding to the parameter contains skewed data.
+ */
+#define PARAM_FLAG_SKEWEDSTAT		0x0002
 
 typedef struct ParamExternData
 {

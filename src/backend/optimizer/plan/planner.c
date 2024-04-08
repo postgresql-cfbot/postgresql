@@ -2746,6 +2746,8 @@ remove_useless_groupby_columns(PlannerInfo *root)
 		Bitmapset  *relattnos;
 		Bitmapset  *pkattnos;
 		Oid			constraintOid;
+		Bitmapset  *unique_notnull_attnos;
+		bool 		use_pkattnos;
 
 		relid++;
 
@@ -2771,14 +2773,26 @@ remove_useless_groupby_columns(PlannerInfo *root)
 		 * (i.e., nondeferrable) primary key constraint.
 		 */
 		pkattnos = get_primary_key_attnos(rte->relid, false, &constraintOid);
-		if (pkattnos == NULL)
+		/* Check if there is unique not null index. */
+		unique_notnull_attnos = get_min_unique_not_null_attnos(rte->relid);
+		if ((pkattnos == NULL) && (unique_notnull_attnos == NULL))
 			continue;
+
+		/*
+		 * Choose primary key or unique index to remove useless group by columns.
+		 * If Both primary key and unique not null index exist, choose the one with less attnum.
+		 * Primary key is preferred if their column num are equal.
+		 */
+		if (pkattnos && unique_notnull_attnos)
+			use_pkattnos = bms_num_members(unique_notnull_attnos) >= bms_num_members(pkattnos);
+		else
+			use_pkattnos = (pkattnos != NULL);
 
 		/*
 		 * If the primary key is a proper subset of relattnos then we have
 		 * some items in the GROUP BY that can be removed.
 		 */
-		if (bms_subset_compare(pkattnos, relattnos) == BMS_SUBSET1)
+		if (use_pkattnos && bms_subset_compare(pkattnos, relattnos) == BMS_SUBSET1)
 		{
 			/*
 			 * To easily remember whether we've found anything to do, we don't
@@ -2790,6 +2804,16 @@ remove_useless_groupby_columns(PlannerInfo *root)
 
 			/* Remember the attnos of the removable columns */
 			surplusvars[relid] = bms_difference(relattnos, pkattnos);
+		}
+
+		/* Find removable columns using unique not null index. */
+		if (!use_pkattnos && bms_subset_compare(unique_notnull_attnos, relattnos) == BMS_SUBSET1)
+		{
+			if (surplusvars == NULL)
+				surplusvars = (Bitmapset **) palloc0(sizeof(Bitmapset *) *
+													 (list_length(parse->rtable) + 1));
+
+			surplusvars[relid] = bms_difference(relattnos, unique_notnull_attnos);
 		}
 	}
 

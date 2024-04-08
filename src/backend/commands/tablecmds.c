@@ -2704,7 +2704,7 @@ MergeAttributes(List *columns, const List *supers, char relpersistence,
 		 */
 		pkattrs = RelationGetIndexAttrBitmap(relation,
 											 INDEX_ATTR_BITMAP_PRIMARY_KEY);
-		nnconstrs = RelationGetNotNullConstraints(RelationGetRelid(relation), true);
+		nnconstrs = RelationGetNotNullConstraints(RelationGetRelid(relation), true, true);
 		foreach(lc1, nnconstrs)
 			nncols = bms_add_member(nncols,
 									((CookedConstraint *) lfirst(lc1))->attnum);

@@ -56,6 +56,8 @@ typedef enum EditableObjectType
 	EditableView,
 } EditableObjectType;
 
+char *curcmd = NULL;
+
 /* local function declarations */
 static backslashResult exec_command(const char *cmd,
 									PsqlScanState scan_state,
@@ -308,6 +310,7 @@ exec_command(const char *cmd,
 					   cmd);
 	}
 
+	curcmd = (char *)cmd;
 	if (strcmp(cmd, "a") == 0)
 		status = exec_command_a(scan_state, active_branch);
 	else if (strcmp(cmd, "bind") == 0)
@@ -423,6 +426,8 @@ exec_command(const char *cmd,
 		status = exec_command_slash_command_help(scan_state, active_branch);
 	else
 		status = PSQL_CMD_UNKNOWN;
+
+	curcmd = NULL;
 
 	/*
 	 * All the commands that return PSQL_CMD_SEND want to execute previous_buf

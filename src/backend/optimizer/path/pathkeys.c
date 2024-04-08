@@ -1311,6 +1311,9 @@ build_join_pathkeys(PlannerInfo *root,
 					JoinType jointype,
 					List *outer_pathkeys)
 {
+	/* RIGHT_SEMI should not come here */
+	Assert(jointype != JOIN_RIGHT_SEMI);
+
 	if (jointype == JOIN_FULL ||
 		jointype == JOIN_RIGHT ||
 		jointype == JOIN_RIGHT_ANTI)

@@ -70,6 +70,7 @@ GetForeignDataWrapperExtended(Oid fdwid, bits16 flags)
 	fdw->fdwname = pstrdup(NameStr(fdwform->fdwname));
 	fdw->fdwhandler = fdwform->fdwhandler;
 	fdw->fdwvalidator = fdwform->fdwvalidator;
+	fdw->fdwconnection = fdwform->fdwconnection;
 
 	/* Extract the fdwoptions */
 	datum = SysCacheGetAttr(FOREIGNDATAWRAPPEROID,
@@ -175,6 +176,31 @@ GetForeignServerExtended(Oid serverid, bits16 flags)
 
 
 /*
+ * ForeignServerName - get name of foreign server.
+ */
+char *
+ForeignServerName(Oid serverid)
+{
+	Form_pg_foreign_server serverform;
+	char *servername;
+	HeapTuple	tp;
+
+	tp = SearchSysCache1(FOREIGNSERVEROID, ObjectIdGetDatum(serverid));
+
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for foreign server %u", serverid);
+
+	serverform = (Form_pg_foreign_server) GETSTRUCT(tp);
+
+	servername = pstrdup(NameStr(serverform->srvname));
+
+	ReleaseSysCache(tp);
+
+	return servername;
+}
+
+
+/*
  * GetForeignServerByName - look up the foreign server definition by name.
  */
 ForeignServer *
@@ -186,6 +212,22 @@ GetForeignServerByName(const char *srvname, bool missing_ok)
 		return NULL;
 
 	return GetForeignServer(serverid);
+}
+
+
+/*
+ * Retrieve connection string from server's FDW.
+ */
+char *
+ForeignServerConnectionString(Oid userid, Oid serverid)
+{
+	/* TODO: clean up memory */
+	ForeignServer *server = GetForeignServer(serverid);
+	ForeignDataWrapper *fdw = GetForeignDataWrapper(server->fdwid);
+	Datum connection_text = OidFunctionCall2(fdw->fdwconnection,
+											 ObjectIdGetDatum(userid),
+											 ObjectIdGetDatum(serverid));
+	return text_to_cstring(DatumGetTextPP(connection_text));
 }
 
 

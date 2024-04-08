@@ -224,6 +224,7 @@ NOTICE:  checking pg_extension {extconfig} => pg_class {oid}
 NOTICE:  checking pg_foreign_data_wrapper {fdwowner} => pg_authid {oid}
 NOTICE:  checking pg_foreign_data_wrapper {fdwhandler} => pg_proc {oid}
 NOTICE:  checking pg_foreign_data_wrapper {fdwvalidator} => pg_proc {oid}
+NOTICE:  checking pg_foreign_data_wrapper {fdwconnection} => pg_proc {oid}
 NOTICE:  checking pg_foreign_server {srvowner} => pg_authid {oid}
 NOTICE:  checking pg_foreign_server {srvfdw} => pg_foreign_data_wrapper {oid}
 NOTICE:  checking pg_user_mapping {umuser} => pg_authid {oid}

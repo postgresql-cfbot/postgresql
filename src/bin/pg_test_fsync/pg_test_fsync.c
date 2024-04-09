@@ -93,9 +93,6 @@ static DWORD WINAPI process_alarm(LPVOID param);
 #endif
 static void signal_cleanup(SIGNAL_ARGS);
 
-#ifdef HAVE_FSYNC_WRITETHROUGH
-static int	pg_fsync_writethrough(int fd);
-#endif
 static void print_elapse(struct timeval start_t, struct timeval stop_t, int ops);
 
 #define die(msg) pg_fatal("%s: %m", _(msg))
@@ -298,7 +295,7 @@ test_sync(int writes_per_op)
 		printf(_("\nCompare file sync methods using one %dkB write:\n"), XLOG_BLCKSZ_K);
 	else
 		printf(_("\nCompare file sync methods using two %dkB writes:\n"), XLOG_BLCKSZ_K);
-	printf(_("(in wal_sync_method preference order, except fdatasync is Linux's default)\n"));
+	printf(_("(fdatasync is the default, but see docs for macOS)\n"));
 
 	/*
 	 * Test open_datasync if available
@@ -332,7 +329,7 @@ test_sync(int writes_per_op)
 #endif
 
 /*
- * Test fdatasync if available
+ * Test fdatasync
  */
 	printf(LABEL_FORMAT, "fdatasync");
 	fflush(stdout);
@@ -377,12 +374,13 @@ test_sync(int writes_per_op)
 	close(tmpfile);
 
 /*
- * If fsync_writethrough is available, test as well
+ * Test the macOS fcntl that use instead of fsync/fdatasync levels if
+ * fsync=full.
  */
-	printf(LABEL_FORMAT, "fsync_writethrough");
+	printf(LABEL_FORMAT, "fcntl(F_FULLFSYNC)");
 	fflush(stdout);
 
-#ifdef HAVE_FSYNC_WRITETHROUGH
+#ifdef F_FULLFSYNC
 	if ((tmpfile = open(filename, O_RDWR | PG_BINARY, 0)) == -1)
 		die("could not open output file");
 	START_TIMER;
@@ -394,8 +392,8 @@ test_sync(int writes_per_op)
 						  XLOG_BLCKSZ,
 						  writes * XLOG_BLCKSZ) != XLOG_BLCKSZ)
 				die("write failed");
-		if (pg_fsync_writethrough(tmpfile) != 0)
-			die("fsync failed");
+		if (fcntl(tmpfile, F_FULLFSYNC) != 0)
+			die("fcntl failed");
 	}
 	STOP_TIMER;
 	close(tmpfile);
@@ -510,8 +508,7 @@ test_file_descriptor_sync(void)
 	/*
 	 * Test whether fsync can sync data written on a different descriptor for
 	 * the same file.  This checks the efficiency of multi-process fsyncs
-	 * against the same file. Possibly this should be done with writethrough
-	 * on platforms which support it.
+	 * against the same file.
 	 */
 	printf(_("\nTest if fsync on non-write file descriptor is honored:\n"));
 	printf(_("(If the times are similar, fsync() can sync data written on a different\n"
@@ -608,20 +605,6 @@ signal_cleanup(SIGNAL_ARGS)
 	(void) rc;					/* silence compiler warnings */
 	_exit(1);
 }
-
-#ifdef HAVE_FSYNC_WRITETHROUGH
-
-static int
-pg_fsync_writethrough(int fd)
-{
-#if defined(F_FULLFSYNC)
-	return (fcntl(fd, F_FULLFSYNC, 0) == -1) ? -1 : 0;
-#else
-	errno = ENOSYS;
-	return -1;
-#endif
-}
-#endif
 
 /*
  * print out the writes per second for tests

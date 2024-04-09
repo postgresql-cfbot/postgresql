@@ -687,6 +687,12 @@ RelationCloseSmgr(Relation relation)
 #define RelationIsPopulated(relation) ((relation)->rd_rel->relispopulated)
 
 /*
+ * RelationIsIVM
+ *		True if relation is an incrementally maintainable materialized view.
+ */
+#define RelationIsIVM(relation) ((relation)->rd_rel->relisivm)
+
+/*
  * RelationIsAccessibleInLogicalDecoding
  *		True if we need to log enough information to have access via
  *		decoding snapshot.

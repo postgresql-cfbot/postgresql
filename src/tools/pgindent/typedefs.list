@@ -1132,6 +1132,8 @@ HeadlineParsedText
 HeadlineWordEntry
 HeapAlterRdOptions
 HeapCheckContext
+HeapInsertState
+HeapMultiInsertState
 HeapPageFreeze
 HeapRdOptions
 HeapScanDesc
@@ -2850,6 +2852,7 @@ TableFuncScanState
 TableFuncType
 TableInfo
 TableLikeClause
+TableModifyState
 TableSampleClause
 TableScanDesc
 TableScanDescData

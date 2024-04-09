@@ -21,6 +21,7 @@
 
 #include <math.h>
 
+#include "access/heapam.h"		/* just for BulkInsertState */
 #include "access/syncscan.h"
 #include "access/tableam.h"
 #include "access/xact.h"
@@ -29,6 +30,7 @@
 #include "storage/bufmgr.h"
 #include "storage/shmem.h"
 #include "storage/smgr.h"
+#include "utils/memutils.h"
 
 /*
  * Constants to control the behavior of block allocation to parallel workers
@@ -48,6 +50,7 @@
 char	   *default_table_access_method = DEFAULT_TABLE_ACCESS_METHOD;
 bool		synchronize_seqscans = true;
 
+static void default_table_modify_insert_end(TableModifyState *state);
 
 /* ----------------------------------------------------------------------------
  * Slot functions.
@@ -771,4 +774,87 @@ table_block_relation_estimate_size(Relation rel, int32 *attr_widths,
 		*allvisfrac = 1;
 	else
 		*allvisfrac = (double) relallvisible / curpages;
+}
+
+/*
+ * Initialize default table modify state.
+ */
+TableModifyState *
+default_table_modify_begin(Relation rel, int modify_flags, CommandId cid,
+						   int options)
+{
+	TableModifyState *state;
+	MemoryContext context;
+	MemoryContext oldcontext;
+
+	context = AllocSetContextCreate(CurrentMemoryContext,
+									"default_table_modify memory context",
+									ALLOCSET_DEFAULT_SIZES);
+
+	oldcontext = MemoryContextSwitchTo(context);
+	state = palloc0(sizeof(TableModifyState));
+	state->rel = rel;
+	state->modify_flags = modify_flags;
+	state->mctx = context;
+	state->cid = cid;
+	state->options = options;
+	state->insert_indexes = false;
+	state->modify_end_cb = NULL;	/* To be installed lazily */
+	MemoryContextSwitchTo(oldcontext);
+
+	return state;
+}
+
+/*
+ * Default table modify implementation for inserts.
+ */
+void
+default_table_modify_buffer_insert(TableModifyState *state,
+								   TupleTableSlot *slot)
+{
+	MemoryContext oldcontext;
+
+	oldcontext = MemoryContextSwitchTo(state->mctx);
+
+	/* First time through, initialize default table modify state */
+	if (state->data == NULL)
+	{
+		if ((state->modify_flags & TM_FLAG_BAS_BULKWRITE) != 0)
+			state->data = (BulkInsertState) GetBulkInsertState();
+
+		state->modify_end_cb = default_table_modify_insert_end;
+	}
+
+	/* Fallback to table AM single insert routine */
+	table_tuple_insert(state->rel,
+					   slot,
+					   state->cid,
+					   state->options,
+					   (BulkInsertState) state->data,
+					   &state->insert_indexes);
+
+	MemoryContextSwitchTo(oldcontext);
+}
+
+/*
+ * Default table modify insert specific callback used for performing work at
+ * the end like cleaning up the bulk insert state.
+ */
+static void
+default_table_modify_insert_end(TableModifyState *state)
+{
+	if (state->data != NULL)
+		FreeBulkInsertState((BulkInsertState) state->data);
+}
+
+/*
+ * Clean default table modify state.
+ */
+void
+default_table_modify_end(TableModifyState *state)
+{
+	if (state->modify_end_cb != NULL)
+		state->modify_end_cb(state);
+
+	MemoryContextDelete(state->mctx);
 }

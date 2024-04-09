@@ -255,6 +255,35 @@ typedef struct TM_IndexDeleteOp
 	TM_IndexStatus *status;
 } TM_IndexDeleteOp;
 
+/* Table modify flags */
+
+/* Use multi inserts, i.e. buffer multiple tuples and insert them at once */
+#define TM_FLAG_MULTI_INSERTS	0x000001
+
+/* Use BAS_BULKWRITE buffer access strategy */
+#define TM_FLAG_BAS_BULKWRITE	0x000002
+
+struct TableModifyState;
+
+/* Table AM specific callback that gets called in table_modify_end() */
+typedef void (*TableModifyEndCP) (struct TableModifyState *state);
+
+/* Holds table modify state */
+typedef struct TableModifyState
+{
+	Relation	rel;
+	int			modify_flags;
+	MemoryContext mctx;
+	CommandId	cid;
+	int			options;
+	bool		insert_indexes;
+
+	/* Table AM specific data starts here */
+	void	   *data;
+
+	TableModifyEndCP modify_end_cb;
+} TableModifyState;
+
 /* "options" flag bits for table_tuple_insert */
 /* TABLE_INSERT_SKIP_WAL was 0x0001; RelationNeedsWAL() now governs */
 #define TABLE_INSERT_SKIP_FSM		0x0002
@@ -590,6 +619,18 @@ typedef struct TableAmRoutine
 	 */
 	void		(*finish_bulk_insert) (Relation rel, int options);
 
+
+	/* ------------------------------------------------------------------------
+	 * Table Modify related functions.
+	 * ------------------------------------------------------------------------
+	 */
+	TableModifyState *(*tuple_modify_begin) (Relation rel,
+											 int modify_flags,
+											 CommandId cid,
+											 int options);
+	void		(*tuple_modify_buffer_insert) (TableModifyState *state,
+											   TupleTableSlot *slot);
+	void		(*tuple_modify_end) (TableModifyState *state);
 
 	/* ------------------------------------------------------------------------
 	 * DDL related functionality.
@@ -1655,6 +1696,73 @@ table_finish_bulk_insert(Relation rel, int options)
 		rel->rd_tableam->finish_bulk_insert(rel, options);
 }
 
+/* ------------------------------------------------------------------------
+ * Table Modify related functions.
+ * ------------------------------------------------------------------------
+ */
+extern TableModifyState *default_table_modify_begin(Relation rel, int modify_flags,
+													CommandId cid, int options);
+extern void	default_table_modify_buffer_insert(TableModifyState *state,
+											   TupleTableSlot *slot);
+extern void default_table_modify_end(TableModifyState *state);
+
+static inline TableModifyState *
+table_modify_begin(Relation rel, int modify_flags, CommandId cid, int options)
+{
+	if (rel->rd_tableam &&
+		rel->rd_tableam->tuple_modify_begin != NULL)
+	{
+		return rel->rd_tableam->tuple_modify_begin(rel, modify_flags,
+												   cid, options);
+	}
+	else if (rel->rd_tableam &&
+			 rel->rd_tableam->tuple_modify_begin == NULL)
+	{
+		/* Fallback to a default implementation */
+		return default_table_modify_begin(rel, modify_flags,
+										  cid, options);
+	}
+	else
+		Assert(false);
+
+	return NULL;
+}
+
+static inline void
+table_modify_buffer_insert(TableModifyState *state, TupleTableSlot *slot)
+{
+	if (state->rel->rd_tableam &&
+		state->rel->rd_tableam->tuple_modify_buffer_insert != NULL)
+	{
+		state->rel->rd_tableam->tuple_modify_buffer_insert(state, slot);
+	}
+	else if (state->rel->rd_tableam &&
+			 state->rel->rd_tableam->tuple_modify_buffer_insert == NULL)
+	{
+		/* Fallback to a default implementation */
+		default_table_modify_buffer_insert(state, slot);
+	}
+	else
+		Assert(false);
+}
+
+static inline void
+table_modify_end(TableModifyState *state)
+{
+	if (state->rel->rd_tableam &&
+		state->rel->rd_tableam->tuple_modify_end != NULL)
+	{
+		state->rel->rd_tableam->tuple_modify_end(state);
+	}
+	else if (state->rel->rd_tableam &&
+			 state->rel->rd_tableam->tuple_modify_end == NULL)
+	{
+		/* Fallback to a default implementation */
+		default_table_modify_end(state);
+	}
+	else
+		Assert(false);
+}
 
 /* ------------------------------------------------------------------------
  * DDL related functionality.

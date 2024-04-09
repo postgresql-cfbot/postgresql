@@ -1623,12 +1623,22 @@ BeginCopyFrom(ParseState *pstate,
 
 		/* Fetch the input function and typioparam info */
 		if (cstate->opts.binary)
+		{
 			getTypeBinaryInputInfo(att->atttypid,
 								   &in_func_oid, &typioparams[attnum - 1]);
+			fmgr_info(in_func_oid, &in_functions[attnum - 1]);
+		}
+		else if (cstate->routine)
+			cstate->routine->CopyFromInFunc(cstate, att->atttypid,
+											&in_functions[attnum - 1],
+											&typioparams[attnum - 1]);
+
 		else
+		{
 			getTypeInputInfo(att->atttypid,
 							 &in_func_oid, &typioparams[attnum - 1]);
-		fmgr_info(in_func_oid, &in_functions[attnum - 1]);
+			fmgr_info(in_func_oid, &in_functions[attnum - 1]);
+		}
 
 		/* Get default info if available */
 		defexprs[attnum - 1] = NULL;
@@ -1768,10 +1778,13 @@ BeginCopyFrom(ParseState *pstate,
 		/* Read and verify binary header */
 		ReceiveCopyBinaryHeader(cstate);
 	}
-
-	/* create workspace for CopyReadAttributes results */
-	if (!cstate->opts.binary)
+	else if (cstate->routine)
 	{
+		cstate->routine->CopyFromStart(cstate, tupDesc);
+	}
+	else
+	{
+		/* create workspace for CopyReadAttributes results */
 		AttrNumber	attr_count = list_length(cstate->attnumlist);
 
 		cstate->max_fields = attr_count;
@@ -1789,6 +1802,9 @@ BeginCopyFrom(ParseState *pstate,
 void
 EndCopyFrom(CopyFromState cstate)
 {
+	if (cstate->routine)
+		cstate->routine->CopyFromEnd(cstate);
+
 	/* No COPY FROM related resources except memory. */
 	if (cstate->is_program)
 	{

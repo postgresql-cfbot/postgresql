@@ -552,8 +552,11 @@ llvm_copy_attributes(LLVMValueRef v_from, LLVMValueRef v_to)
 	/* copy function attributes */
 	llvm_copy_attributes_at_index(v_from, v_to, LLVMAttributeFunctionIndex);
 
-	/* and the return value attributes */
-	llvm_copy_attributes_at_index(v_from, v_to, LLVMAttributeReturnIndex);
+	if (LLVMGetTypeKind(LLVMGetFunctionReturnType(v_to)) != LLVMVoidTypeKind)
+	{
+		/* and the return value attributes */
+		llvm_copy_attributes_at_index(v_from, v_to, LLVMAttributeReturnIndex);
+	}
 
 	/* and each function parameter's attribute */
 	param_count = LLVMCountParams(v_from);
@@ -700,10 +703,17 @@ llvm_optimize_module(LLVMJitContext *context, LLVMModuleRef module)
 	LLVMErrorRef err;
 	const char *passes;
 
+	/* In assertion builds, run the LLVM verify pass. */
+#ifdef USE_ASSERT_CHECKING
+#define PASSES_PREFIX "verify,"
+#else
+#define PASSES_PREFIX ""
+#endif
+
 	if (context->base.flags & PGJIT_OPT3)
-		passes = "default<O3>";
+		passes = PASSES_PREFIX "default<O3>";
 	else
-		passes = "default<O0>,mem2reg";
+		passes = PASSES_PREFIX "default<O0>,mem2reg";
 
 	options = LLVMCreatePassBuilderOptions();
 

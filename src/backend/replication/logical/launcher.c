@@ -89,6 +89,7 @@ static dsa_area *last_start_times_dsa = NULL;
 static dshash_table *last_start_times = NULL;
 
 static bool on_commit_launcher_wakeup = false;
+static bool launcher_wakeup = false;
 
 
 static void ApplyLauncherWakeup(void);
@@ -1085,13 +1086,22 @@ ApplyLauncherForgetWorkerStartTime(Oid subid)
 void
 AtEOXact_ApplyLauncher(bool isCommit)
 {
+	bool kicked = false;
+
 	if (isCommit)
 	{
 		if (on_commit_launcher_wakeup)
+		{
 			ApplyLauncherWakeup();
+			kicked = true;
+		}
 	}
 
+	if (!kicked && launcher_wakeup)
+		ApplyLauncherWakeup();
+
 	on_commit_launcher_wakeup = false;
+	launcher_wakeup = false;
 }
 
 /*
@@ -1102,10 +1112,16 @@ AtEOXact_ApplyLauncher(bool isCommit)
  * tuple was added to the pg_subscription catalog.
 */
 void
-ApplyLauncherWakeupAtCommit(void)
+ApplyLauncherWakeupAtEOXact(bool on_commit)
 {
-	if (!on_commit_launcher_wakeup)
-		on_commit_launcher_wakeup = true;
+	if (on_commit)
+	{
+		if (!on_commit_launcher_wakeup)
+			on_commit_launcher_wakeup = true;
+	}
+	else
+		if (!launcher_wakeup)
+			launcher_wakeup = true;
 }
 
 static void

@@ -16,6 +16,7 @@
 
 #include "access/htup_details.h"
 #include "access/table.h"
+#include "access/twophase.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
@@ -849,7 +850,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 			else if (opts.slot_name &&
 					 (opts.failover || walrcv_server_version(wrconn) >= 170000))
 			{
-				walrcv_alter_slot(wrconn, opts.slot_name, opts.failover);
+				walrcv_alter_slot(wrconn, opts.slot_name, opts.twophase, opts.failover);
 			}
 		}
 		PG_FINALLY();
@@ -868,7 +869,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	pgstat_create_subscription(subid);
 
 	if (opts.enabled)
-		ApplyLauncherWakeupAtCommit();
+		ApplyLauncherWakeupAtEOXact(true);
 
 	ObjectAddressSet(myself, SubscriptionRelationId, subid);
 
@@ -1165,13 +1166,39 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 			{
 				supported_opts = (SUBOPT_SLOT_NAME |
 								  SUBOPT_SYNCHRONOUS_COMMIT | SUBOPT_BINARY |
-								  SUBOPT_STREAMING | SUBOPT_DISABLE_ON_ERR |
+								  SUBOPT_STREAMING | SUBOPT_TWOPHASE_COMMIT |
+								  SUBOPT_DISABLE_ON_ERR |
 								  SUBOPT_PASSWORD_REQUIRED |
 								  SUBOPT_RUN_AS_OWNER | SUBOPT_FAILOVER |
 								  SUBOPT_ORIGIN);
 
 				parse_subscription_options(pstate, stmt->options,
 										   supported_opts, &opts);
+
+				/* XXX */
+				if (IsSet(opts.specified_opts, SUBOPT_TWOPHASE_COMMIT))
+				{
+					/* Stop corresponding worker */
+					logicalrep_worker_stop(subid, InvalidOid);
+
+					/* Request to start worker at the end of transaction */
+					ApplyLauncherWakeupAtEOXact(false);
+
+					/* Check whether the number of prepared transactions */
+					if (!opts.twophase &&
+						form->subtwophasestate == LOGICALREP_TWOPHASE_STATE_ENABLED &&
+						LookupGXactBySubid(subid))
+						ereport(ERROR,
+								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+								 errmsg("cannot disable two_phase when uncommitted prepared transactions present")));
+
+					/* Change system catalog acoordingly */
+					values[Anum_pg_subscription_subtwophasestate - 1] =
+						CharGetDatum(opts.twophase ?
+									 LOGICALREP_TWOPHASE_STATE_PENDING :
+									 LOGICALREP_TWOPHASE_STATE_DISABLED);
+					replaces[Anum_pg_subscription_subtwophasestate - 1] = true;
+				}
 
 				if (IsSet(opts.specified_opts, SUBOPT_SLOT_NAME))
 				{
@@ -1299,7 +1326,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 				replaces[Anum_pg_subscription_subenabled - 1] = true;
 
 				if (opts.enabled)
-					ApplyLauncherWakeupAtCommit();
+					ApplyLauncherWakeupAtEOXact(true);
 
 				update_tuple = true;
 				break;
@@ -1521,7 +1548,8 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 	 * doing the database operations we won't be able to rollback altered
 	 * slot.
 	 */
-	if (replaces[Anum_pg_subscription_subfailover - 1])
+	if (replaces[Anum_pg_subscription_subtwophasestate - 1] ||
+		replaces[Anum_pg_subscription_subfailover - 1])
 	{
 		bool		must_use_password;
 		char	   *err;
@@ -1541,7 +1569,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 
 		PG_TRY();
 		{
-			walrcv_alter_slot(wrconn, sub->slotname, opts.failover);
+			walrcv_alter_slot(wrconn, sub->slotname, opts.twophase, opts.failover);
 		}
 		PG_FINALLY();
 		{
@@ -1962,7 +1990,7 @@ AlterSubscriptionOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 							  form->oid, 0);
 
 	/* Wake up related background processes to handle this change quickly. */
-	ApplyLauncherWakeupAtCommit();
+	ApplyLauncherWakeupAtEOXact(true);
 	LogicalRepWorkersWakeupAtCommit(form->oid);
 }
 

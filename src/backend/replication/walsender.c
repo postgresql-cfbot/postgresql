@@ -1411,14 +1411,25 @@ DropReplicationSlot(DropReplicationSlotCmd *cmd)
  * Process extra options given to ALTER_REPLICATION_SLOT.
  */
 static void
-ParseAlterReplSlotOptions(AlterReplicationSlotCmd *cmd, bool *failover)
+ParseAlterReplSlotOptions(AlterReplicationSlotCmd *cmd,
+						  bool *two_phase, bool *failover)
 {
+	bool		two_phase_given = false;
 	bool		failover_given = false;
 
 	/* Parse options */
 	foreach_ptr(DefElem, defel, cmd->options)
 	{
-		if (strcmp(defel->defname, "failover") == 0)
+		if (strcmp(defel->defname, "two_phase") == 0)
+		{
+			if (two_phase_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			two_phase_given = true;
+			*two_phase = defGetBoolean(defel);
+		}
+		else if (strcmp(defel->defname, "failover") == 0)
 		{
 			if (failover_given)
 				ereport(ERROR,
@@ -1438,10 +1449,11 @@ ParseAlterReplSlotOptions(AlterReplicationSlotCmd *cmd, bool *failover)
 static void
 AlterReplicationSlot(AlterReplicationSlotCmd *cmd)
 {
+	bool		two_phase = false;
 	bool		failover = false;
 
-	ParseAlterReplSlotOptions(cmd, &failover);
-	ReplicationSlotAlter(cmd->slotname, failover);
+	ParseAlterReplSlotOptions(cmd, &two_phase, &failover);
+	ReplicationSlotAlter(cmd->slotname, two_phase, failover);
 }
 
 /*

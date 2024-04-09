@@ -24,7 +24,7 @@ extern void ApplyLauncherShmemInit(void);
 
 extern void ApplyLauncherForgetWorkerStartTime(Oid subid);
 
-extern void ApplyLauncherWakeupAtCommit(void);
+extern void ApplyLauncherWakeupAtEOXact(bool on_commit);
 extern void AtEOXact_ApplyLauncher(bool isCommit);
 
 extern bool IsLogicalLauncher(void);

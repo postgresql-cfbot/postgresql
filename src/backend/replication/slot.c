@@ -800,8 +800,10 @@ ReplicationSlotDrop(const char *name, bool nowait)
  * Change the definition of the slot identified by the specified name.
  */
 void
-ReplicationSlotAlter(const char *name, bool failover)
+ReplicationSlotAlter(const char *name, bool two_phase, bool failover)
 {
+	bool		update_slot = false;
+
 	Assert(MyReplicationSlot == NULL);
 
 	ReplicationSlotAcquire(name, false);
@@ -844,12 +846,27 @@ ReplicationSlotAlter(const char *name, bool failover)
 				errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				errmsg("cannot enable failover for a temporary replication slot"));
 
+	if (MyReplicationSlot->data.two_phase != two_phase)
+	{
+		SpinLockAcquire(&MyReplicationSlot->mutex);
+		MyReplicationSlot->data.two_phase = two_phase;
+		SpinLockRelease(&MyReplicationSlot->mutex);
+
+		update_slot = true;
+	}
+
+
 	if (MyReplicationSlot->data.failover != failover)
 	{
 		SpinLockAcquire(&MyReplicationSlot->mutex);
 		MyReplicationSlot->data.failover = failover;
 		SpinLockRelease(&MyReplicationSlot->mutex);
 
+		update_slot = true;
+	}
+
+	if (update_slot)
+	{
 		ReplicationSlotMarkDirty();
 		ReplicationSlotSave();
 	}

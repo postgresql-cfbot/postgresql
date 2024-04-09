@@ -2682,3 +2682,45 @@ LookupGXact(const char *gid, XLogRecPtr prepare_end_lsn,
 	LWLockRelease(TwoPhaseStateLock);
 	return found;
 }
+
+/*
+ * checkGid
+ */
+static bool
+checkGid(char *gid, Oid subid)
+{
+	int ret;
+	Oid subid_written, xid;
+
+	ret = sscanf(gid, "pg_gid_%u_%u", &subid_written, &xid);
+
+	if (ret != 2 || subid != subid_written)
+		return false;
+
+	return true;
+}
+
+/*
+ * LookupGXactBySubid
+ *		Check if the prepared transaction done by apply worker exists.
+ */
+bool
+LookupGXactBySubid(Oid subid)
+{
+	bool		found = false;
+
+	LWLockAcquire(TwoPhaseStateLock, LW_SHARED);
+	for (int i = 0; i < TwoPhaseState->numPrepXacts; i++)
+	{
+		GlobalTransaction gxact = TwoPhaseState->prepXacts[i];
+
+		/* Ignore not-yet-valid GIDs. */
+		if (gxact->valid &&	checkGid(gxact->gid, subid))
+		{
+			found = true;
+			break;
+		}
+	}
+	LWLockRelease(TwoPhaseStateLock);
+	return found;
+}

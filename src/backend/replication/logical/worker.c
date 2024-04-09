@@ -3911,9 +3911,6 @@ maybe_reread_subscription(void)
 	/* !slotname should never happen when enabled is true. */
 	Assert(newsub->slotname);
 
-	/* two-phase should not be altered */
-	Assert(newsub->twophasestate == MySubscription->twophasestate);
-
 	/*
 	 * Exit if any parameter that affects the remote connection was changed.
 	 * The launcher will start a new worker but note that the parallel apply

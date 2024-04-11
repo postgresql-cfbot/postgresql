@@ -817,6 +817,14 @@ IncrementVarSublevelsUp_walker(Node *node,
 			phv->phlevelsup += context->delta_sublevels_up;
 		/* fall through to recurse into argument */
 	}
+	if (IsA(node, ReturningExpr))
+	{
+		ReturningExpr *rexpr = (ReturningExpr *) node;
+
+		if (rexpr->retlevelsup >= context->min_sublevels_up)
+			rexpr->retlevelsup += context->delta_sublevels_up;
+		/* fall through to recurse into argument */
+	}
 	if (IsA(node, RangeTblEntry))
 	{
 		RangeTblEntry *rte = (RangeTblEntry *) node;
@@ -883,6 +891,68 @@ IncrementVarSublevelsUp_rtable(List *rtable, int delta_sublevels_up,
 					   QTW_EXAMINE_RTES_BEFORE);
 }
 
+/*
+ * SetVarReturningType - adjust Vars by setting their returning type.
+ *
+ * Find all Var nodes referring to the specified result relation in the given
+ * expression and set their varreturningtype to the specified value.
+ *
+ * NOTE: although this has the form of a walker, we cheat and modify the
+ * Var nodes in-place.  The given expression tree should have been copied
+ * earlier to ensure that no unwanted side-effects occur!
+ */
+
+typedef struct
+{
+	int			result_relation;
+	int			sublevels_up;
+	VarReturningType returning_type;
+} SetVarReturningType_context;
+
+static bool
+SetVarReturningType_walker(Node *node, SetVarReturningType_context *context)
+{
+	if (node == NULL)
+		return false;
+	if (IsA(node, Var))
+	{
+		Var		   *var = (Var *) node;
+
+		if (var->varno == context->result_relation &&
+			var->varlevelsup == context->sublevels_up)
+			var->varreturningtype = context->returning_type;
+
+		return false;
+	}
+
+	if (IsA(node, Query))
+	{
+		/* Recurse into subselects */
+		bool		result;
+
+		context->sublevels_up++;
+		result = query_tree_walker((Query *) node, SetVarReturningType_walker,
+								   (void *) context, 0);
+		context->sublevels_up--;
+		return result;
+	}
+	return expression_tree_walker(node, SetVarReturningType_walker,
+								  (void *) context);
+}
+
+static void
+SetVarReturningType(Node *node, int result_relation, int sublevels_up,
+					VarReturningType returning_type)
+{
+	SetVarReturningType_context context;
+
+	context.result_relation = result_relation;
+	context.sublevels_up = sublevels_up;
+	context.returning_type = returning_type;
+
+	/* Expect to start with an expression */
+	SetVarReturningType_walker(node, &context);
+}
 
 /*
  * rangeTableEntry_used - detect whether an RTE is referenced somewhere
@@ -1683,8 +1753,8 @@ ReplaceVarsFromTargetList_callback(Var *var,
 		 * the RowExpr for use of the executor and ruleutils.c.
 		 */
 		expandRTE(rcon->target_rte,
-				  var->varno, var->varlevelsup, var->location,
-				  (var->vartype != RECORDOID),
+				  var->varno, var->varlevelsup, var->varreturningtype,
+				  var->location, (var->vartype != RECORDOID),
 				  &colnames, &fields);
 		/* Adjust the generated per-field Vars... */
 		fields = (List *) replace_rte_variables_mutator((Node *) fields,
@@ -1785,4 +1855,138 @@ ReplaceVarsFromTargetList(Node *node,
 								 ReplaceVarsFromTargetList_callback,
 								 (void *) &context,
 								 outer_hasSubLinks);
+}
+
+
+/*
+ * ReplaceReturningVarsFromTargetList() replaces Vars with items from a
+ * targetlist, taking care to to handle RETURNING list Vars properly,
+ * respecting their varreturningtype property.
+ *
+ * This is equivalent to calling ReplaceVarsFromTargetList() with a
+ * nomatch_option of REPLACEVARS_REPORT_ERROR, but with the added effect that
+ * varreturningtype will be copied onto any Vars referring to the new target
+ * relation, and all other targetlist entries will be wrapped in ReturningExpr
+ * nodes, if varreturningtype is VAR_RETURNING_OLD/NEW.
+ *
+ * The arguments are the same as for ReplaceVarsFromTargetList(), except that
+ * there are no "nomatch" arguments, and "new_target_varno" should be the
+ * index of the target relation in the rewritten query (possibly different
+ * from target_varno).
+ */
+
+typedef struct
+{
+	RangeTblEntry *target_rte;
+	List	   *targetlist;
+	int			new_target_varno;
+} ReplaceReturningVarsFromTargetList_context;
+
+static Node *
+ReplaceReturningVarsFromTargetList_callback(Var *var,
+											replace_rte_variables_context *context)
+{
+	ReplaceReturningVarsFromTargetList_context *rcon = (ReplaceReturningVarsFromTargetList_context *) context->callback_arg;
+	TargetEntry *tle;
+	Expr	   *newnode;
+
+	/*
+	 * Much of the logic here is borrowed from ReplaceVarsFromTargetList().
+	 * Changes made there may need to be reflected here.  First deal with any
+	 * whole-row Vars.
+	 */
+	if (var->varattno == InvalidAttrNumber)
+	{
+		RowExpr    *rowexpr;
+		List	   *colnames;
+		List	   *fields;
+
+		/*
+		 * Expand the whole-row reference, copying this Var's varreturningtype
+		 * onto each field Var, so that it is handled correctly when we
+		 * recurse.
+		 */
+		expandRTE(rcon->target_rte,
+				  var->varno, var->varlevelsup, var->varreturningtype,
+				  var->location, (var->vartype != RECORDOID),
+				  &colnames, &fields);
+		/* Adjust the generated per-field Vars... */
+		fields = (List *) replace_rte_variables_mutator((Node *) fields,
+														context);
+		rowexpr = makeNode(RowExpr);
+		rowexpr->args = fields;
+		rowexpr->row_typeid = var->vartype;
+		rowexpr->row_format = COERCE_IMPLICIT_CAST;
+		rowexpr->colnames = (var->vartype == RECORDOID) ? colnames : NIL;
+		rowexpr->location = var->location;
+
+		return (Node *) rowexpr;
+	}
+
+	/*
+	 * Normal case referencing one targetlist element.  Here we mirror
+	 * ReplaceVarsFromTargetList() with REPLACEVARS_REPORT_ERROR.
+	 */
+	tle = get_tle_by_resno(rcon->targetlist, var->varattno);
+	if (tle == NULL || tle->resjunk)
+		elog(ERROR, "could not find replacement targetlist entry for attno %d",
+			 var->varattno);
+
+	newnode = copyObject(tle->expr);
+
+	if (var->varlevelsup > 0)
+		IncrementVarSublevelsUp((Node *) newnode, var->varlevelsup, 0);
+
+	if (contains_multiexpr_param((Node *) newnode, NULL))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("NEW variables in ON UPDATE rules cannot reference columns that are part of a multiple assignment in the subject UPDATE command")));
+
+	/*
+	 * Now make sure that any Vars in the tlist item that refer to the new
+	 * target relation have varreturningtype set correctly.  If the tlist item
+	 * is simply a Var referring to the new target relation, that's all we
+	 * need to do.  Any other expressions in the targetlist need to be wrapped
+	 * in ReturningExpr nodes, so that the executor evaluates them as NULL if
+	 * the OLD/NEW row doesn't exist.
+	 */
+	if (var->varreturningtype != VAR_RETURNING_DEFAULT)
+	{
+		SetVarReturningType((Node *) newnode, rcon->new_target_varno,
+							var->varlevelsup, var->varreturningtype);
+
+		if (!IsA(newnode, Var) ||
+			((Var *) newnode)->varno != rcon->new_target_varno ||
+			((Var *) newnode)->varlevelsup != var->varlevelsup)
+		{
+			ReturningExpr *rexpr = makeNode(ReturningExpr);
+
+			rexpr->retlevelsup = var->varlevelsup;
+			rexpr->retold = var->varreturningtype == VAR_RETURNING_OLD;
+			rexpr->retexpr = newnode;
+
+			newnode = (Expr *) rexpr;
+		}
+	}
+
+	return (Node *) newnode;
+}
+
+Node *
+ReplaceReturningVarsFromTargetList(Node *node,
+								   int target_varno, int sublevels_up,
+								   RangeTblEntry *target_rte,
+								   List *targetlist,
+								   int new_target_varno,
+								   bool *outer_hasSubLinks)
+{
+	ReplaceReturningVarsFromTargetList_context context;
+
+	context.target_rte = target_rte;
+	context.targetlist = targetlist;
+	context.new_target_varno = new_target_varno;
+
+	return replace_rte_variables(node, target_varno, sublevels_up,
+								 ReplaceReturningVarsFromTargetList_callback,
+								 (void *) &context, outer_hasSubLinks);
 }

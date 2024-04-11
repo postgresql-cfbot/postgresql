@@ -223,6 +223,11 @@ typedef struct Expr
  * Note that it affects the meaning of all of varno, varnullingrels, and
  * varnosyn, all of which refer to the range table of that query level.
  *
+ * varreturningtype is used for Vars in the RETURNING list of data-modifying
+ * queries that refer to the target relation.  For such Vars, there are 3
+ * possible behaviors, depending on whether the target relation was referred
+ * to directly, or via the OLD or NEW aliases.
+ *
  * In the parser, varnosyn and varattnosyn are either identical to
  * varno/varattno, or they specify the column's position in an aliased JOIN
  * RTE that hides the semantic referent RTE's refname.  This is a syntactic
@@ -243,6 +248,14 @@ typedef struct Expr
 /* Symbols for the indexes of the special RTE entries in rules */
 #define    PRS2_OLD_VARNO			1
 #define    PRS2_NEW_VARNO			2
+
+/* Returning behavior for Vars in RETURNING list */
+typedef enum VarReturningType
+{
+	VAR_RETURNING_DEFAULT,		/* return OLD for DELETE, else return NEW */
+	VAR_RETURNING_OLD,			/* return OLD for DELETE/UPDATE, else NULL */
+	VAR_RETURNING_NEW,			/* return NEW for INSERT/UPDATE, else NULL */
+} VarReturningType;
 
 typedef struct Var
 {
@@ -278,6 +291,9 @@ typedef struct Var
 	 * >0 means N levels up
 	 */
 	Index		varlevelsup;
+
+	/* returning type of this var (see above) */
+	VarReturningType varreturningtype;
 
 	/*
 	 * varnosyn/varattnosyn are ignored for equality, because Vars with
@@ -2094,6 +2110,29 @@ typedef struct InferenceElem
 	Oid			infercollid;	/* OID of collation, or InvalidOid */
 	Oid			inferopclass;	/* OID of att opclass, or InvalidOid */
 } InferenceElem;
+
+/*
+ * ReturningExpr - return OLD/NEW.(expression) in RETURNING list
+ *
+ * A ReturningExpr is a wrapper on top of another expression used in the
+ * RETURNING list of a data-modifying query when OLD or NEW values are
+ * requested.  It is inserted by the rewriter when the expression to be
+ * returned is not simply a Var referring to the target relation, as can
+ * happen when updating an auto-updatable view.
+ *
+ * When a ReturningExpr is evaluated, the result is NULL if the OLD/NEW row
+ * doesn't exist.  Otherwise it returns the contained expression.
+ *
+ * Note that this is never present in a parsed Query --- only the rewriter
+ * inserts these nodes.
+ */
+typedef struct ReturningExpr
+{
+	Expr		xpr;
+	int			retlevelsup;	/* > 0 if it belongs to outer query */
+	bool		retold;			/* true to return OLD, false to return NEW */
+	Expr	   *retexpr;		/* expression to be returned */
+} ReturningExpr;
 
 /*--------------------
  * TargetEntry -

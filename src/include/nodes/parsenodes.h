@@ -195,6 +195,8 @@ typedef struct Query
 
 	OnConflictExpr *onConflict; /* ON CONFLICT DO [NOTHING | UPDATE] */
 
+	char	   *returningOld;	/* alias for OLD in RETURNING list */
+	char	   *returningNew;	/* alias for NEW in RETURNING list */
 	List	   *returningList;	/* return-values list (of TargetEntry) */
 
 	List	   *groupClause;	/* a list of SortGroupClause's */
@@ -1732,6 +1734,32 @@ typedef struct MergeWhenClause
 } MergeWhenClause;
 
 /*
+ * ReturningOption -
+ *		Option in RETURNING WITH(...) list
+ *
+ * Currently, this is used only for specifying the OLD/NEW aliases available
+ * for use in the RETURNING expression list.
+ */
+typedef struct ReturningOption
+{
+	NodeTag		type;
+	bool		isNew;
+	char	   *name;
+	int			location;
+} ReturningOption;
+
+/*
+ * ReturningClause -
+ *		List of RETURNING expressions, together with any WITH(...) options
+ */
+typedef struct ReturningClause
+{
+	NodeTag		type;
+	List	   *options;		/* list of ReturningOption elements */
+	List	   *exprs;			/* list of expressions to return */
+} ReturningClause;
+
+/*
  * TriggerTransition -
  *	   representation of transition row or table naming clause
  *
@@ -2046,7 +2074,7 @@ typedef struct InsertStmt
 	List	   *cols;			/* optional: names of the target columns */
 	Node	   *selectStmt;		/* the source SELECT/VALUES, or NULL */
 	OnConflictClause *onConflictClause; /* ON CONFLICT clause */
-	List	   *returningList;	/* list of expressions to return */
+	ReturningClause *returningClause;	/* RETURNING clause */
 	WithClause *withClause;		/* WITH clause */
 	OverridingKind override;	/* OVERRIDING clause */
 } InsertStmt;
@@ -2061,7 +2089,7 @@ typedef struct DeleteStmt
 	RangeVar   *relation;		/* relation to delete from */
 	List	   *usingClause;	/* optional using clause for more tables */
 	Node	   *whereClause;	/* qualifications */
-	List	   *returningList;	/* list of expressions to return */
+	ReturningClause *returningClause;	/* RETURNING clause */
 	WithClause *withClause;		/* WITH clause */
 } DeleteStmt;
 
@@ -2076,7 +2104,7 @@ typedef struct UpdateStmt
 	List	   *targetList;		/* the target list (of ResTarget) */
 	Node	   *whereClause;	/* qualifications */
 	List	   *fromClause;		/* optional from clause for more tables */
-	List	   *returningList;	/* list of expressions to return */
+	ReturningClause *returningClause;	/* RETURNING clause */
 	WithClause *withClause;		/* WITH clause */
 } UpdateStmt;
 
@@ -2091,7 +2119,7 @@ typedef struct MergeStmt
 	Node	   *sourceRelation; /* source relation */
 	Node	   *joinCondition;	/* join condition between source and target */
 	List	   *mergeWhenClauses;	/* list of MergeWhenClause(es) */
-	List	   *returningList;	/* list of expressions to return */
+	ReturningClause *returningClause;	/* RETURNING clause */
 	WithClause *withClause;		/* WITH clause */
 } MergeStmt;
 

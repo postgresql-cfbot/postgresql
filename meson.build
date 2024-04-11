@@ -1362,6 +1362,7 @@ if sslopt in ['auto', 'openssl']
 
       # Function introduced in OpenSSL 1.1.1
       ['X509_get_signature_info'],
+      ['SSL_get0_peer_CA_list'],
     ]
 
     are_openssl_funcs_complete = true

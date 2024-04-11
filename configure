@@ -12602,6 +12602,17 @@ _ACEOF
 fi
 done
 
+  # Function introduced in OpenSSL 1.1.1 to allow client to obtain server's CA list
+  for ac_func in SSL_get0_peer_CA_list
+do :
+  ac_fn_c_check_func "$LINENO" "SSL_get0_peer_CA_list" "ac_cv_func_SSL_get0_peer_CA_list"
+if test "x$ac_cv_func_SSL_get0_peer_CA_list" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_SSL_GET0_PEER_CA_LIST 1
+_ACEOF
+
+fi
+done
 
 $as_echo "#define USE_OPENSSL 1" >>confdefs.h
 

@@ -454,22 +454,212 @@ verify_cb(int ok, X509_STORE_CTX *ctx)
 	return ok;
 }
 
+#ifdef HAVE_SSL_GET0_PEER_CA_LIST
+/*
+ * Helper function to read a certificate file
+ *
+ * This function tries to load 'filename' into X509 structure
+ */
+static STACK_OF(X509)*
+load_certificate(const char* filename)
+{
+	FILE *file = fopen(filename, "r");
+	STACK_OF(X509) *certchain = NULL;
+	X509 *cert = NULL;
+
+	if (!file)
+		return NULL;
+
+	certchain = sk_X509_new_null();
+
+	cert = PEM_read_X509(file, NULL, NULL, NULL);
+	while (cert != NULL)
+	{
+		sk_X509_push(certchain, cert);
+		cert = PEM_read_X509(file, NULL, NULL, NULL);
+	}
+
+	fclose(file);
+
+	return certchain;
+}
+
+/*
+ * Utility function to find a suitable client certificate
+ *
+ * This function tries to find a client certificate in conn->conncert by
+ * matching issuer name with trusted CA subject name in peercas. Returns
+ * the client certificate index if found, -1 otherwise.
+ */
+static int
+find_client_certificate_by_issuer(const STACK_OF(X509_NAME) * peercas,
+		PGconn * conn)
+{
+	STACK_OF(X509) *cert_candidate = NULL;
+	int numcas = sk_X509_NAME_num(peercas);
+	int i = 0, j = 0, k = 0;
+
+	for (i = 0; i < conn->nsslcert; i++)
+	{
+		cert_candidate = load_certificate(conn->conncert[i].sslcert);
+		if (cert_candidate)
+		{
+			/*
+			 * we should have a stack of one client certificate plus all
+			 * possible intermediate CA certificates if present in the
+			 * same certificate file. We will check if any of these
+			 * certificate's issuer matches any of the trusted CA names
+			 * provided by the server.
+			 */
+			for (j = 0; j < sk_X509_num(cert_candidate); j++)
+			{
+				X509 *cert = sk_X509_value(cert_candidate, j);
+
+				for (k = 0; k < numcas; k++)
+				{
+					X509_NAME *ca_name = sk_X509_NAME_value(peercas, k);
+					if(!X509_NAME_cmp(X509_get_issuer_name(cert), ca_name))
+					{
+						/*
+						 * one of the candidate client certificate's or
+						 * intermediate certificate's issuer matches one
+						 * of the trusted CA names, it should be trusted by
+						 * the server.
+						 */
+						conn->whichcert = i;
+						sk_X509_pop_free(cert_candidate, X509_free);
+						return conn->whichcert;
+					}
+				}
+
+			}
+			sk_X509_pop_free(cert_candidate, X509_free);
+		}
+	}
+	return -1;
+}
+#endif
+
 #ifdef HAVE_SSL_CTX_SET_CERT_CB
 /*
  * Certificate selection callback
  *
- * This callback lets us choose the client certificate we send to the server
- * after seeing its CertificateRequest.  We only support sending a single
- * hard-coded certificate via sslcert, so we don't actually set any certificates
- * here; we just use it to record whether or not the server has actually asked
- * for one and whether we have one to send.
+ * This callback lets us choose a client certificate to send to the server
+ * after receiving the CertificateRequest. If the server sends its CA list,
+ * we will be able to select the most suitable client certificate to send.
+ * Otherwise we just use this callback to record whether or not the server
+ * has actually asked for a client certificate and whether we have one to
+ * send.
  */
 static int
 cert_cb(SSL *ssl, void *arg)
 {
 	PGconn	   *conn = arg;
 
+#ifdef HAVE_SSL_GET0_PEER_CA_LIST
+	int			clientcertindex = -1;
+	/* obtain a list of CA list sent from the server, if any */
+	const STACK_OF(X509_NAME) * peercas = SSL_get0_peer_CA_list(ssl);
+	struct stat keystat;
+#endif
+
+	/* mark that the server has requested a client certificate */
 	conn->ssl_cert_requested = true;
+
+#ifdef HAVE_SSL_GET0_PEER_CA_LIST
+
+	if (strcmp(conn->sslcertmode, "disable") && conn->nsslcert > 1 && peercas)
+	{
+		clientcertindex = find_client_certificate_by_issuer(peercas, conn);
+		if (clientcertindex == -1)
+		{
+			libpq_append_conn_error(conn, "Server requests a client certificate but no suitable "
+					"certificate is found from sslcert list provided");
+			conn->ssl_cert_sent = false;
+			return 1;
+		}
+
+		/*
+		 * found a client certificate, load it to ssl. Note that we do not check
+		 * return value here because this client certificate has already been
+		 * checked inside find_client_certificate_by_issuer() function.
+		 */
+		SSL_use_certificate_chain_file(ssl, conn->conncert[clientcertindex].sslcert);
+
+		/*
+		 * we will load the private key at index clientcertindex
+		 */
+		if (conn->conncert[clientcertindex].sslkey[0] != '\0')
+		{
+			if (stat(conn->conncert[clientcertindex].sslkey, &keystat) != 0)
+			{
+				if (errno == ENOENT)
+					libpq_append_conn_error(conn, "certificate present, but not private key file \"%s\"",
+											conn->conncert[clientcertindex].sslkey);
+				else
+					libpq_append_conn_error(conn, "could not stat private key file \"%s\": %m",
+											conn->conncert[clientcertindex].sslkey);
+				return 1;
+
+			}
+			/* Key file must be a regular file */
+			if (!S_ISREG(keystat.st_mode))
+			{
+				libpq_append_conn_error(conn, "private key file \"%s\" is not a regular file",
+										conn->conncert[clientcertindex].sslkey);
+				return 1;
+			}
+#if !defined(WIN32) && !defined(__CYGWIN__)
+			if (keystat.st_uid == 0 ?
+				keystat.st_mode & (S_IWGRP | S_IXGRP | S_IRWXO) :
+				keystat.st_mode & (S_IRWXG | S_IRWXO))
+			{
+				libpq_append_conn_error(conn,
+										"private key file \"%s\" has group or world access; file must have permissions u=rw (0600) or less if owned by the current user, or permissions u=rw,g=r (0640) or less if owned by root",
+										conn->conncert[clientcertindex].sslkey);
+				return -1;
+			}
+#endif
+			if (SSL_use_PrivateKey_file(ssl, conn->conncert[clientcertindex].sslkey,
+				SSL_FILETYPE_PEM) != 1)
+			{
+				char	   *err = SSLerrmessage(ERR_get_error());
+				/*
+				 * We'll try to load the file in DER (binary ASN.1) format if PEM
+				 * format failed to load.
+				 */
+				if (SSL_use_PrivateKey_file(ssl, conn->conncert[clientcertindex].sslkey,
+					SSL_FILETYPE_ASN1) != 1)
+				{
+					libpq_append_conn_error(conn, "could not load private key file \"%s\": %s",
+							conn->conncert[clientcertindex].sslkey, err);
+					SSLerrfree(err);
+					conn->ssl_cert_sent = false;
+					return 1;
+				}
+				SSLerrfree(err);
+			}
+		}
+		else
+		{
+			libpq_append_conn_error(conn, "A suitable client certificate exists but "
+					"no matching private key is supplied");
+			conn->ssl_cert_sent = false;
+			return 1;
+		}
+
+		/* verify that the cert and key go together */
+		if (SSL_check_private_key(ssl) != 1)
+		{
+			char	   *err = SSLerrmessage(ERR_get_error());
+
+			libpq_append_conn_error(conn, "certificate does not match private key file \"%s\": %s",
+					conn->conncert[clientcertindex].sslcert, err);
+			SSLerrfree(err);
+			return 1;
+		}
+	}
+#endif
 
 	/* Do we have a certificate loaded to send back? */
 	if (SSL_get_certificate(ssl))
@@ -1129,8 +1319,10 @@ initialize_SSL(PGconn *conn)
 	}
 
 	/* Read the client certificate file */
-	if (conn->sslcert && strlen(conn->sslcert) > 0)
+	if (conn->sslcert && strlen(conn->sslcert) > 0 && conn->nsslcert == 1)
+	{
 		strlcpy(fnbuf, conn->sslcert, sizeof(fnbuf));
+	}
 	else if (have_homedir)
 		snprintf(fnbuf, sizeof(fnbuf), "%s/%s", homedir, USER_CERT_FILE);
 	else
@@ -1258,7 +1450,7 @@ initialize_SSL(PGconn *conn)
 	 * colon in the name. The exception is if the second character is a colon,
 	 * in which case it can be a Windows filename with drive specification.
 	 */
-	if (have_cert && conn->sslkey && strlen(conn->sslkey) > 0)
+	if (have_cert && conn->sslkey && strlen(conn->sslkey) > 0 && conn->nsslkey == 1)
 	{
 #ifdef USE_SSL_ENGINE
 		if (strchr(conn->sslkey, ':')
@@ -2069,12 +2261,28 @@ err:
 int
 PQdefaultSSLKeyPassHook_OpenSSL(char *buf, int size, PGconn *conn)
 {
-	if (conn && conn->sslpassword)
+	if (conn && conn->sslpassword && conn->nsslpassword > 0)
 	{
-		if (strlen(conn->sslpassword) + 1 > size)
-			fprintf(stderr, libpq_gettext("WARNING: sslpassword truncated\n"));
-		strncpy(buf, conn->sslpassword, size);
-		buf[size - 1] = '\0';
+		/* if there is only one password, use conn->sslpassword */
+		if (conn->nsslpassword == 1)
+		{
+			if (strlen(conn->sslpassword) + 1 > size)
+				fprintf(stderr, libpq_gettext("WARNING: sslpassword truncated\n"));
+			strncpy(buf, conn->sslpassword, size);
+			buf[size - 1] = '\0';
+		}
+		else
+		{
+			/*
+			 * if there are more than one passwords, choose one
+			 * from conn->conncert based on conn->whichcert
+			 */
+			if (conn->whichcert >= 0 &&
+				strlen(conn->conncert[conn->whichcert].sslpassword) + 1 > size)
+				fprintf(stderr, libpq_gettext("WARNING: sslpassword truncated\n"));
+			strncpy(buf, conn->conncert[conn->whichcert].sslpassword, size);
+			buf[size - 1] = '\0';
+		}
 		return strlen(buf);
 	}
 	else

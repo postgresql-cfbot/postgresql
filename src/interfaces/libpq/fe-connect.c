@@ -1733,6 +1733,100 @@ pqConnectOptions2(PGconn *conn)
 	}
 
 	/*
+	 * Allocate memory for details about each client certificate candidate that we
+	 * could choose to send to the server for verification.
+	 */
+	conn->whichcert = 0;
+	if (conn->sslcert && conn->sslcert[0] != '\0')
+		conn->nsslcert = count_comma_separated_elems(conn->sslcert);
+
+	if (conn->sslkey && conn->sslkey[0] != '\0')
+		conn->nsslkey = count_comma_separated_elems(conn->sslkey);
+
+	if (conn->sslpassword && conn->sslpassword[0] != '\0')
+		conn->nsslpassword = count_comma_separated_elems(conn->sslpassword);
+
+	if (conn->nsslcert > 0)
+	{
+		/*
+		 * conn->conncert is allocated only when multiple sslcert, sslkey or
+		 * sslpassword are provided separated by comma
+		 */
+		conn->conncert = (pg_conn_cert *)
+			calloc(conn->nsslcert, sizeof(pg_conn_cert));
+		if (conn->conncert == NULL)
+			goto oom_error;
+
+		/*
+		 * Now we have one pg_conn_cert structure per possible certificate candidate.
+		 * Fill in the sslcert, sslkey and sslpassword fields for each, by splitting
+		 * the parameter strings
+		 */
+		if (conn->sslcert && conn->sslcert[0] != '\0')
+		{
+			char	   *s = conn->sslcert;
+			bool		more = true;
+
+			for (i = 0; i < conn->nsslcert && more; i++)
+			{
+				conn->conncert[i].sslcert = parse_comma_separated_list(&s, &more);
+				if (conn->conncert[i].sslcert == NULL)
+					goto oom_error;
+			}
+
+			/*
+			 * Ensure the size matches
+			 */
+			Assert(!more);
+			Assert(i == conn->nsslcert);
+		}
+
+		if (conn->sslkey && conn->sslkey[0] != '\0')
+		{
+			char	   *s = conn->sslkey;
+			bool		more = true;
+
+			for (i = 0; i < conn->nsslkey && more; i++)
+			{
+				conn->conncert[i].sslkey = parse_comma_separated_list(&s, &more);
+				if (conn->conncert[i].sslkey == NULL)
+					goto oom_error;
+			}
+
+			/* Check for wrong number of sslkey items. */
+			if (more || i != conn->nsslcert)
+			{
+				conn->status = CONNECTION_BAD;
+				libpq_append_conn_error(conn, "could not match %d sslcert to %d sslkey values",
+										conn->nsslcert, conn->nsslkey);
+				return false;
+			}
+		}
+
+		if (conn->sslpassword && conn->sslpassword[0] != '\0')
+		{
+			char	   *s = conn->sslpassword;
+			bool		more = true;
+
+			for (i = 0; i < conn->nsslpassword && more; i++)
+			{
+				conn->conncert[i].sslpassword = parse_comma_separated_list(&s, &more);
+				if (conn->conncert[i].sslpassword == NULL)
+					goto oom_error;
+			}
+
+			/* Check for wrong number of sslkey items. */
+			if (more || i != conn->nsslkey)
+			{
+				conn->status = CONNECTION_BAD;
+				libpq_append_conn_error(conn, "could not match %d sslpassword to %d sslkey values",
+										conn->nsslpassword, conn->nsslkey);
+				return false;
+			}
+		}
+	}
+
+	/*
 	 * validate gssencmode option
 	 */
 	if (conn->gssencmode)
@@ -4701,6 +4795,24 @@ freePGconn(PGconn *conn)
 	free(conn->load_balance_hosts);
 	termPQExpBuffer(&conn->errorMessage);
 	termPQExpBuffer(&conn->workBuffer);
+
+	/* Clean up conn->conncert structure */
+	if (conn->conncert)
+	{
+		for (int i = 0; i < conn->nsslcert; i++)
+		{
+			free(conn->conncert[i].sslcert);
+			free(conn->conncert[i].sslkey);
+			if (conn->conncert[i].sslpassword != NULL)
+			{
+				explicit_bzero(conn->conncert[i].sslpassword,
+							   strlen(conn->conncert[i].sslpassword));
+				free(conn->conncert[i].sslpassword);
+			}
+		}
+		free(conn->conncert);
+		conn->conncert = NULL;
+	}
 
 	free(conn);
 }

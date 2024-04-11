@@ -373,10 +373,19 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 	}
 
 	/*
+	 * We must apply the partially filled in RelOptInfo before calling
+	 * apply_child_basequals due to some transformations within that function
+	 * which require the RelOptInfo to be available in the simple_rel_array.
+	 */
+	root->simple_rel_array[relid] = rel;
+
+	/*
 	 * Copy the parent's quals to the child, with appropriate substitution of
-	 * variables.  If any constant false or NULL clauses turn up, we can mark
-	 * the child as dummy right away.  (We must do this immediately so that
-	 * pruning works correctly when recursing in expand_partitioned_rtentry.)
+	 * variables.  If there are any resulting clauses that are constant false
+	 * or NULL, or proven always false, we can mark the child as dummy right
+	 * away.  (We must do this immediately so that pruning works correctly when
+	 * recursing in expand_partitioned_rtentry.)  For resulting clauses that
+	 * are proven always true, we just drop them.
 	 */
 	if (parent)
 	{
@@ -386,15 +395,13 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 		if (!apply_child_basequals(root, parent, rel, rte, appinfo))
 		{
 			/*
-			 * Some restriction clause reduced to constant FALSE or NULL after
-			 * substitution, so this child need not be scanned.
+			 * Some restriction clause reduced to constant FALSE or NULL, or
+			 * was proven always false after substitution, so this child need
+			 * not be scanned.
 			 */
 			mark_dummy_rel(rel);
 		}
 	}
-
-	/* Save the finished struct in the query's simple_rel_array */
-	root->simple_rel_array[relid] = rel;
 
 	return rel;
 }

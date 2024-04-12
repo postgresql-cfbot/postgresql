@@ -4512,6 +4512,8 @@ raw_expression_tree_walker_impl(Node *node,
 
 				if (WALK(coldef->typeName))
 					return true;
+				if (WALK(coldef->encryption))
+					return true;
 				if (WALK(coldef->raw_default))
 					return true;
 				if (WALK(coldef->collClause))

@@ -49,6 +49,7 @@ OBJS_COMMON = \
 	binaryheap.o \
 	blkreftable.o \
 	checksum_helper.o \
+	colenc.o \
 	compression.o \
 	config_info.o \
 	controldata_utils.o \

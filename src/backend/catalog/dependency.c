@@ -30,7 +30,10 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_auth_members.h"
 #include "catalog/pg_cast.h"
+#include "catalog/pg_colenckey.h"
+#include "catalog/pg_colenckeydata.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_colmasterkey.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_conversion.h"
 #include "catalog/pg_database.h"
@@ -1444,6 +1447,9 @@ doDeletion(const ObjectAddress *object, int flags)
 
 		case CastRelationId:
 		case CollationRelationId:
+		case ColumnEncKeyRelationId:
+		case ColumnEncKeyDataRelationId:
+		case ColumnMasterKeyRelationId:
 		case ConversionRelationId:
 		case LanguageRelationId:
 		case OperatorClassRelationId:

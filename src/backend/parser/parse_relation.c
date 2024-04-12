@@ -1945,7 +1945,7 @@ addRangeTableEntryForFunction(ParseState *pstate,
 			 * coldeflist doesn't represent anything that will be visible to
 			 * other sessions.
 			 */
-			CheckAttributeNamesTypes(tupdesc, RELKIND_COMPOSITE_TYPE,
+			CheckAttributeNamesTypes(tupdesc, NULL, RELKIND_COMPOSITE_TYPE,
 									 CHKATYPE_ANYRECORD);
 		}
 		else

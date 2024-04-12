@@ -29,6 +29,7 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
+#include "utils/syscache.h"
 
 static void checkViewColumns(TupleDesc newdesc, TupleDesc olddesc);
 
@@ -83,6 +84,24 @@ DefineVirtualRelation(RangeVar *relation, List *tlist, bool replace,
 			else
 				Assert(!OidIsValid(def->collOid));
 
+			if (type_is_encrypted(exprType((Node *) tle->expr)))
+			{
+				HeapTuple	tp;
+
+				if (!tle->resorigtbl || !tle->resorigcol)
+					ereport(ERROR,
+							errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+							errmsg("underlying table and column could not be determined for encrypted view column"));
+
+				tp = SearchSysCache2(ATTNUM, ObjectIdGetDatum(tle->resorigtbl), Int16GetDatum(tle->resorigcol));
+				if (!HeapTupleIsValid(tp))
+					elog(ERROR, "cache lookup failed for attribute %d of relation %u", tle->resorigcol, tle->resorigtbl);
+				def->typeName = makeTypeNameFromOid(DatumGetObjectId(SysCacheGetAttrNotNull(ATTNUM, tp, Anum_pg_attribute_attusertypid)),
+													DatumGetInt32(SysCacheGetAttrNotNull(ATTNUM, tp, Anum_pg_attribute_attusertypmod)));
+				def->encryption = makeColumnEncryption(tp);
+				ReleaseSysCache(tp);
+			}
+
 			attrList = lappend(attrList, def);
 		}
 	}
@@ -100,6 +119,7 @@ DefineVirtualRelation(RangeVar *relation, List *tlist, bool replace,
 	{
 		Relation	rel;
 		TupleDesc	descriptor;
+		FormExtraData_pg_attribute *desc_extra;
 		List	   *atcmds = NIL;
 		AlterTableCmd *atcmd;
 		ObjectAddress address;
@@ -129,7 +149,7 @@ DefineVirtualRelation(RangeVar *relation, List *tlist, bool replace,
 		 * verify that the old column list is an initial prefix of the new
 		 * column list.
 		 */
-		descriptor = BuildDescForRelation(attrList);
+		descriptor = BuildDescForRelation(attrList, &desc_extra);
 		checkViewColumns(descriptor, rel->rd_att);
 
 		/*

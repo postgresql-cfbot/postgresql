@@ -204,3 +204,7 @@ PQcancelReset             201
 PQcancelFinish            202
 PQsocketPoll              203
 PQsetChunkedRowsMode      204
+PQexecPreparedDescribed   205
+PQsendQueryPreparedDescribed 206
+PQfisencrypted            207
+PQparamisencrypted        208

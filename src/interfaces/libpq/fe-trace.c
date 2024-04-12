@@ -450,7 +450,8 @@ pqTraceOutputS(FILE *f, const char *message, int *cursor)
 
 /* ParameterDescription */
 static void
-pqTraceOutputt(FILE *f, const char *message, int *cursor, bool regress)
+pqTraceOutputt(FILE *f, const char *message, int *cursor, bool regress,
+			   bool column_encryption_enabled)
 {
 	int			nfields;
 
@@ -458,12 +459,21 @@ pqTraceOutputt(FILE *f, const char *message, int *cursor, bool regress)
 	nfields = pqTraceOutputInt16(f, message, cursor);
 
 	for (int i = 0; i < nfields; i++)
+	{
 		pqTraceOutputInt32(f, message, cursor, regress);
+		if (column_encryption_enabled)
+		{
+			pqTraceOutputInt32(f, message, cursor, regress);
+			pqTraceOutputInt32(f, message, cursor, false);
+			pqTraceOutputInt16(f, message, cursor);
+		}
+	}
 }
 
 /* RowDescription */
 static void
-pqTraceOutputT(FILE *f, const char *message, int *cursor, bool regress)
+pqTraceOutputT(FILE *f, const char *message, int *cursor, bool regress,
+			   bool column_encryption_enabled)
 {
 	int			nfields;
 
@@ -479,6 +489,12 @@ pqTraceOutputT(FILE *f, const char *message, int *cursor, bool regress)
 		pqTraceOutputInt16(f, message, cursor);
 		pqTraceOutputInt32(f, message, cursor, false);
 		pqTraceOutputInt16(f, message, cursor);
+		if (column_encryption_enabled)
+		{
+			pqTraceOutputInt32(f, message, cursor, regress);
+			pqTraceOutputInt32(f, message, cursor, false);
+			pqTraceOutputInt16(f, message, cursor);
+		}
 	}
 }
 
@@ -512,6 +528,30 @@ pqTraceOutputW(FILE *f, const char *message, int *cursor, int length)
 
 	while (length > *cursor)
 		pqTraceOutputInt16(f, message, cursor);
+}
+
+/* ColumnMasterKey */
+static void
+pqTraceOutputy(FILE *f, const char *message, int *cursor, bool regress)
+{
+	fprintf(f, "ColumnMasterKey\t");
+	pqTraceOutputInt32(f, message, cursor, regress);
+	pqTraceOutputString(f, message, cursor, false);
+	pqTraceOutputString(f, message, cursor, false);
+}
+
+/* ColumnEncryptionKey */
+static void
+pqTraceOutputY(FILE *f, const char *message, int *cursor, bool regress)
+{
+	int			len;
+
+	fprintf(f, "ColumnEncryptionKey\t");
+	pqTraceOutputInt32(f, message, cursor, regress);
+	pqTraceOutputInt32(f, message, cursor, regress);
+	pqTraceOutputInt32(f, message, cursor, false);
+	len = pqTraceOutputInt32(f, message, cursor, false);
+	pqTraceOutputNchar(f, len, message, cursor);
 }
 
 /* ReadyForQuery */
@@ -657,10 +697,12 @@ pqTraceOutputMessage(PGconn *conn, const char *message, bool toServer)
 				fprintf(conn->Pfdebug, "Sync"); /* no message content */
 			break;
 		case PqMsg_ParameterDescription:
-			pqTraceOutputt(conn->Pfdebug, message, &logCursor, regress);
+			pqTraceOutputt(conn->Pfdebug, message, &logCursor, regress,
+						   conn->column_encryption_enabled);
 			break;
 		case PqMsg_RowDescription:
-			pqTraceOutputT(conn->Pfdebug, message, &logCursor, regress);
+			pqTraceOutputT(conn->Pfdebug, message, &logCursor, regress,
+						   conn->column_encryption_enabled);
 			break;
 		case PqMsg_NegotiateProtocolVersion:
 			pqTraceOutputv(conn->Pfdebug, message, &logCursor);
@@ -674,6 +716,12 @@ pqTraceOutputMessage(PGconn *conn, const char *message, bool toServer)
 		case PqMsg_Terminate:
 			fprintf(conn->Pfdebug, "Terminate");
 			/* No message content */
+			break;
+		case PqMsg_ColumnMasterKey:
+			pqTraceOutputy(conn->Pfdebug, message, &logCursor, regress);
+			break;
+		case PqMsg_ColumnEncryptionKey:
+			pqTraceOutputY(conn->Pfdebug, message, &logCursor, regress);
 			break;
 		case PqMsg_ReadyForQuery:
 			pqTraceOutputZ(conn->Pfdebug, message, &logCursor);

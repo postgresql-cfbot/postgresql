@@ -184,6 +184,15 @@ CATALOG(pg_attribute,1249,AttributeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(75,
 	/* Column-level FDW options */
 	text		attfdwoptions[1] BKI_DEFAULT(_null_);
 
+	/* column encryption key */
+	Oid			attcek BKI_DEFAULT(_null_) BKI_FORCE_NULL BKI_LOOKUP_OPT(pg_colenckey);
+
+	/*
+	 * User-visible type and typmod, currently used for encrypted columns.
+	 */
+	Oid			attusertypid BKI_DEFAULT(_null_) BKI_FORCE_NULL BKI_LOOKUP_OPT(pg_type);
+	int32		attusertypmod BKI_DEFAULT(_null_) BKI_FORCE_NULL;
+
 	/*
 	 * Missing value for added columns. This is a one element array which lets
 	 * us store a value of the attribute type here.
@@ -199,7 +208,7 @@ CATALOG(pg_attribute,1249,AttributeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(75,
  * can access the variable-length fields except in a real tuple!
  */
 #define ATTRIBUTE_FIXED_PART_SIZE \
-	(offsetof(FormData_pg_attribute,attcollation) + sizeof(Oid))
+	(offsetof(FormData_pg_attribute,attcollation) + sizeof(int32))
 
 /* ----------------
  *		Form_pg_attribute corresponds to a pointer to a tuple with
@@ -220,6 +229,9 @@ typedef struct FormExtraData_pg_attribute
 {
 	NullableDatum attstattarget;
 	NullableDatum attoptions;
+	NullableDatum attcek;
+	NullableDatum attusertypid;
+	NullableDatum attusertypmod;
 } FormExtraData_pg_attribute;
 
 DECLARE_UNIQUE_INDEX(pg_attribute_relid_attnam_index, 2658, AttributeRelidNameIndexId, pg_attribute, btree(attrelid oid_ops, attname name_ops));

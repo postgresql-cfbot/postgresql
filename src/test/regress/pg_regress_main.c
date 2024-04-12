@@ -76,7 +76,7 @@ psql_start_test(const char *testname,
 					 bindir ? bindir : "",
 					 bindir ? "/" : "",
 					 dblist->str,
-					 "-v HIDE_TABLEAM=on -v HIDE_TOAST_COMPRESSION=on",
+					 "-v HIDE_TABLEAM=on -v HIDE_TOAST_COMPRESSION=on -v HIDE_COLUMN_ENCRYPTION=on",
 					 infile,
 					 outfile);
 

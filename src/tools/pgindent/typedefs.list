@@ -65,6 +65,8 @@ AllocSetFreeList
 AllocateDesc
 AllocateDescKind
 AlterCollationStmt
+AlterColumnEncryptionKeyStmt
+AlterColumnMasterKeyStmt
 AlterDatabaseRefreshCollStmt
 AlterDatabaseSetStmt
 AlterDatabaseStmt
@@ -378,6 +380,7 @@ CatCacheHeader
 CatalogId
 CatalogIdMapEntry
 CatalogIndexState
+CekInfo
 ChangeVarNodes_context
 ReplaceVarnoContext
 CheckPoint
@@ -403,6 +406,7 @@ ClusterInfo
 ClusterParams
 ClusterStmt
 CmdType
+CmkInfo
 CoalesceExpr
 CoerceParamHook
 CoerceToDomain
@@ -812,6 +816,9 @@ FormData_pg_authid
 FormData_pg_cast
 FormData_pg_class
 FormData_pg_collation
+FormData_pg_colenckey
+FormData_pg_colenckeydata
+FormData_pg_colmasterkey
 FormData_pg_constraint
 FormData_pg_conversion
 FormData_pg_database
@@ -1762,6 +1769,8 @@ PGAlignedBlock
 PGAlignedXLogBlock
 PGAsyncStatusType
 PGCALL2
+PGCEK
+PGCMK
 PGChecksummablePage
 PGContextVisibility
 PGEvent

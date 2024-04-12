@@ -27,7 +27,7 @@ struct AlterTableUtilityContext;	/* avoid including tcop/utility.h here */
 extern ObjectAddress DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 									ObjectAddress *typaddress, const char *queryString);
 
-extern TupleDesc BuildDescForRelation(const List *columns);
+extern TupleDesc BuildDescForRelation(const List *columns, FormExtraData_pg_attribute **tupdesc_extra_p);
 
 extern void RemoveRelations(DropStmt *drop);
 
@@ -106,5 +106,7 @@ extern void RangeVarCallbackOwnsRelation(const RangeVar *relation,
 										 Oid relId, Oid oldRelId, void *arg);
 extern bool PartConstraintImpliedByRelConstraint(Relation scanrel,
 												 List *partConstraint);
+
+extern List *makeColumnEncryption(HeapTuple attrtup);
 
 #endif							/* TABLECMDS_H */

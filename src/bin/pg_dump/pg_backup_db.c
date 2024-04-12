@@ -133,8 +133,8 @@ ConnectDatabase(Archive *AHX,
 	 */
 	do
 	{
-		const char *keywords[8];
-		const char *values[8];
+		const char *keywords[9];
+		const char *values[9];
 		int			i = 0;
 
 		/*
@@ -159,6 +159,11 @@ ConnectDatabase(Archive *AHX,
 		}
 		keywords[i] = "fallback_application_name";
 		values[i++] = progname;
+		if (cparams->column_encryption)
+		{
+			keywords[i] = "column_encryption";
+			values[i++] = "1";
+		}
 		keywords[i] = NULL;
 		values[i++] = NULL;
 		Assert(i <= lengthof(keywords));

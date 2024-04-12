@@ -529,6 +529,10 @@ AppendAttributeTuples(Relation indexRelation, const Datum *attopts, const Nullab
 				attrs_extra[i].attstattarget = stattargets[i];
 			else
 				attrs_extra[i].attstattarget.isnull = true;
+
+			attrs_extra[i].attcek.isnull = true;
+			attrs_extra[i].attusertypid.isnull = true;
+			attrs_extra[i].attusertypmod.isnull = true;
 		}
 	}
 

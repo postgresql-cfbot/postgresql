@@ -57,6 +57,8 @@
 #define PqMsg_PortalSuspended		's'
 #define PqMsg_ParameterDescription	't'
 #define PqMsg_NegotiateProtocolVersion 'v'
+#define PqMsg_ColumnMasterKey		'y'
+#define PqMsg_ColumnEncryptionKey	'Y'
 
 
 /* These are the codes sent by both the frontend and backend. */

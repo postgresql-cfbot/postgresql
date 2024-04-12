@@ -331,7 +331,7 @@ check_hash_func_signature(Oid funcid, int16 amprocnum, Oid argtype)
 				 argtype == BOOLOID)
 			 /* okay, allowed use of hashchar() */ ;
 		else if ((funcid == F_HASHVARLENA || funcid == F_HASHVARLENAEXTENDED) &&
-				 argtype == BYTEAOID)
+				 (argtype == BYTEAOID || argtype == PG_ENCRYPTED_DETOID))
 			 /* okay, allowed use of hashvarlena() */ ;
 		else
 			result = false;

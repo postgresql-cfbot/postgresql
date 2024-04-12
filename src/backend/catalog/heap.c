@@ -42,6 +42,7 @@
 #include "catalog/partition.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_attrdef.h"
+#include "catalog/pg_colenckey.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_foreign_table.h"
@@ -453,7 +454,7 @@ heap_create(const char *relname,
  * --------------------------------
  */
 void
-CheckAttributeNamesTypes(TupleDesc tupdesc, char relkind,
+CheckAttributeNamesTypes(TupleDesc tupdesc, const FormExtraData_pg_attribute tupdesc_extra[], char relkind,
 						 int flags)
 {
 	int			i;
@@ -512,7 +513,14 @@ CheckAttributeNamesTypes(TupleDesc tupdesc, char relkind,
 						   TupleDescAttr(tupdesc, i)->atttypid,
 						   TupleDescAttr(tupdesc, i)->attcollation,
 						   NIL, /* assume we're creating a new rowtype */
-						   flags);
+						   flags |
+
+		/*
+		 * Allow encrypted types if CEK has been provided, which means this
+		 * type has been internally generated.  We don't want to allow
+		 * explicitly using these types.
+		 */
+						   (tupdesc_extra && !tupdesc_extra[i].attcek.isnull ? CHKATYPE_ENCRYPTED : 0));
 	}
 }
 
@@ -658,6 +666,21 @@ CheckAttributeType(const char *attname,
 	}
 
 	/*
+	 * Encrypted types are not allowed explictly as column types.  Most
+	 * callers run this check before transforming the column definition to use
+	 * the encrypted types.  Some callers call it again after; those should
+	 * set the CHKATYPE_ENCRYPTED to let this pass.
+	 */
+	if (type_is_encrypted(atttypid) && !(flags & CHKATYPE_ENCRYPTED))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+				 errbacktrace(),
+				 errmsg("column \"%s\" has internal type %s",
+						attname, format_type_be(atttypid))));
+	}
+
+	/*
 	 * This might not be strictly invalid per SQL standard, but it is pretty
 	 * useless, and it cannot be dumped, so we must disallow it.
 	 */
@@ -763,11 +786,23 @@ InsertPgAttributeTuples(Relation pg_attribute_rel,
 
 			slot[slotCount]->tts_values[Anum_pg_attribute_attoptions - 1] = attrs_extra->attoptions.value;
 			slot[slotCount]->tts_isnull[Anum_pg_attribute_attoptions - 1] = attrs_extra->attoptions.isnull;
+
+			slot[slotCount]->tts_values[Anum_pg_attribute_attcek - 1] = attrs_extra->attcek.value;
+			slot[slotCount]->tts_isnull[Anum_pg_attribute_attcek - 1] = attrs_extra->attcek.isnull;
+
+			slot[slotCount]->tts_values[Anum_pg_attribute_attusertypid - 1] = attrs_extra->attusertypid.value;
+			slot[slotCount]->tts_isnull[Anum_pg_attribute_attusertypid - 1] = attrs_extra->attusertypid.isnull;
+
+			slot[slotCount]->tts_values[Anum_pg_attribute_attusertypmod - 1] = attrs_extra->attusertypmod.value;
+			slot[slotCount]->tts_isnull[Anum_pg_attribute_attusertypmod - 1] = attrs_extra->attusertypmod.isnull;
 		}
 		else
 		{
 			slot[slotCount]->tts_isnull[Anum_pg_attribute_attstattarget - 1] = true;
 			slot[slotCount]->tts_isnull[Anum_pg_attribute_attoptions - 1] = true;
+			slot[slotCount]->tts_isnull[Anum_pg_attribute_attcek - 1] = true;
+			slot[slotCount]->tts_isnull[Anum_pg_attribute_attusertypid - 1] = true;
+			slot[slotCount]->tts_isnull[Anum_pg_attribute_attusertypmod - 1] = true;
 		}
 
 		/*
@@ -819,6 +854,7 @@ InsertPgAttributeTuples(Relation pg_attribute_rel,
 static void
 AddNewAttributeTuples(Oid new_rel_oid,
 					  TupleDesc tupdesc,
+					  const FormExtraData_pg_attribute tupdesc_extra[],
 					  char relkind)
 {
 	Relation	rel;
@@ -834,7 +870,7 @@ AddNewAttributeTuples(Oid new_rel_oid,
 
 	indstate = CatalogOpenIndexes(rel);
 
-	InsertPgAttributeTuples(rel, tupdesc, new_rel_oid, NULL, indstate);
+	InsertPgAttributeTuples(rel, tupdesc, new_rel_oid, tupdesc_extra, indstate);
 
 	/* add dependencies on their datatypes and collations */
 	for (int i = 0; i < natts; i++)
@@ -851,6 +887,20 @@ AddNewAttributeTuples(Oid new_rel_oid,
 		{
 			ObjectAddressSet(referenced, CollationRelationId,
 							 tupdesc->attrs[i].attcollation);
+			recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		}
+
+		if (tupdesc_extra && !tupdesc_extra[i].attcek.isnull)
+		{
+			ObjectAddressSet(referenced, ColumnEncKeyRelationId,
+							 DatumGetObjectId(tupdesc_extra[i].attcek.value));
+			recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		}
+
+		if (tupdesc_extra && !tupdesc_extra[i].attusertypid.isnull)
+		{
+			ObjectAddressSet(referenced, TypeRelationId,
+							 DatumGetObjectId(tupdesc_extra[i].attusertypid.value));
 			recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 		}
 	}
@@ -1110,6 +1160,7 @@ heap_create_with_catalog(const char *relname,
 						 Oid ownerid,
 						 Oid accessmtd,
 						 TupleDesc tupdesc,
+						 const FormExtraData_pg_attribute tupdesc_extra[],
 						 List *cooked_constraints,
 						 char relkind,
 						 char relpersistence,
@@ -1147,7 +1198,7 @@ heap_create_with_catalog(const char *relname,
 	 * allow_system_table_mods is on, allow ANYARRAY to be used; this is a
 	 * hack to allow creating pg_statistic and cloning it during VACUUM FULL.
 	 */
-	CheckAttributeNamesTypes(tupdesc, relkind,
+	CheckAttributeNamesTypes(tupdesc, tupdesc_extra, relkind,
 							 allow_system_table_mods ? CHKATYPE_ANYARRAY : 0);
 
 	/*
@@ -1414,7 +1465,7 @@ heap_create_with_catalog(const char *relname,
 	/*
 	 * now add tuples to pg_attribute for the attributes in our new relation.
 	 */
-	AddNewAttributeTuples(relid, new_rel_desc->rd_att, relkind);
+	AddNewAttributeTuples(relid, new_rel_desc->rd_att, tupdesc_extra, relkind);
 
 	/*
 	 * Make a dependency link to force the relation to be deleted if its

@@ -21,5 +21,6 @@ extern void setup_parse_variable_parameters(ParseState *pstate,
 											Oid **paramTypes, int *numParams);
 extern void check_variable_parameters(ParseState *pstate, Query *query);
 extern bool query_contains_extern_params(Query *query);
+extern void find_param_origs(List *query_list, Oid **param_orig_tbls, AttrNumber **param_orig_cols);
 
 #endif							/* PARSE_PARAM_H */

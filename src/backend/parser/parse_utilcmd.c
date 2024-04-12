@@ -1092,6 +1092,20 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 		def = makeColumnDef(NameStr(attribute->attname), attribute->atttypid,
 							attribute->atttypmod, attribute->attcollation);
 
+		if (type_is_encrypted(attribute->atttypid))
+		{
+			HeapTuple	tp;
+
+			tp = SearchSysCache2(ATTNUM, ObjectIdGetDatum(attribute->attrelid), Int16GetDatum(attribute->attnum));
+			if (!HeapTupleIsValid(tp))
+				elog(ERROR, "cache lookup failed for attribute %d of relation %u", attribute->attnum, attribute->attrelid);
+			def->typeName = makeTypeNameFromOid(DatumGetObjectId(SysCacheGetAttrNotNull(ATTNUM, tp, Anum_pg_attribute_attusertypid)),
+												DatumGetInt32(SysCacheGetAttrNotNull(ATTNUM, tp, Anum_pg_attribute_attusertypmod)));
+			if (table_like_clause->options & CREATE_TABLE_LIKE_ENCRYPTED)
+				def->encryption = makeColumnEncryption(tp);
+			ReleaseSysCache(tp);
+		}
+
 		/*
 		 * For constraints, ONLY the not-null constraint is inherited by the
 		 * new column definition per SQL99; however we cannot do that

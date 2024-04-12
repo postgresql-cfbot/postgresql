@@ -21,7 +21,9 @@
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
+#include "catalog/pg_colenckey.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_colmasterkey.h"
 #include "catalog/pg_conversion.h"
 #include "catalog/pg_database_d.h"
 #include "catalog/pg_event_trigger.h"
@@ -115,6 +117,12 @@ report_namespace_conflict(Oid classId, const char *name, Oid nspOid)
 
 	switch (classId)
 	{
+		case ColumnEncKeyRelationId:
+			msgfmt = gettext_noop("column encryption key \"%s\" already exists in schema \"%s\"");
+			break;
+		case ColumnMasterKeyRelationId:
+			msgfmt = gettext_noop("column master key \"%s\" already exists in schema \"%s\"");
+			break;
 		case ConversionRelationId:
 			Assert(OidIsValid(nspOid));
 			msgfmt = gettext_noop("conversion \"%s\" already exists in schema \"%s\"");
@@ -400,6 +408,8 @@ ExecRenameStmt(RenameStmt *stmt)
 			return RenameType(stmt);
 
 		case OBJECT_AGGREGATE:
+		case OBJECT_CEK:
+		case OBJECT_CMK:
 		case OBJECT_COLLATION:
 		case OBJECT_CONVERSION:
 		case OBJECT_EVENT_TRIGGER:
@@ -548,6 +558,8 @@ ExecAlterObjectSchemaStmt(AlterObjectSchemaStmt *stmt,
 
 			/* generic code path */
 		case OBJECT_AGGREGATE:
+		case OBJECT_CEK:
+		case OBJECT_CMK:
 		case OBJECT_COLLATION:
 		case OBJECT_CONVERSION:
 		case OBJECT_FUNCTION:
@@ -861,6 +873,8 @@ ExecAlterOwnerStmt(AlterOwnerStmt *stmt)
 
 			/* Generic cases */
 		case OBJECT_AGGREGATE:
+		case OBJECT_CEK:
+		case OBJECT_CMK:
 		case OBJECT_COLLATION:
 		case OBJECT_CONVERSION:
 		case OBJECT_FUNCTION:

@@ -113,6 +113,9 @@ union pgresult_data
 typedef struct pgresParamDesc
 {
 	Oid			typid;			/* type id */
+	Oid			cekid;
+	int			cekalg;
+	int			flags;
 } PGresParamDesc;
 
 /*
@@ -359,6 +362,26 @@ typedef struct pg_conn_host
 } pg_conn_host;
 
 /*
+ * Column encryption support data
+ */
+
+/* column master key */
+typedef struct pg_cmk
+{
+	Oid			cmkid;
+	char	   *cmkname;
+	char	   *cmkrealm;
+} PGCMK;
+
+/* column encryption key */
+typedef struct pg_cek
+{
+	Oid			cekid;
+	unsigned char *cekdata;		/* (decrypted) */
+	size_t		cekdatalen;
+} PGCEK;
+
+/*
  * PGconn stores all the state data associated with a single connection
  * to a backend.
  */
@@ -416,6 +439,9 @@ struct pg_conn
 	char	   *ssl_max_protocol_version;	/* maximum TLS protocol version */
 	char	   *target_session_attrs;	/* desired session properties */
 	char	   *require_auth;	/* name of the expected auth method */
+	char	   *cmklookup;		/* CMK lookup specification */
+	char	   *column_encryption_setting;	/* column_encryption connection
+											 * parameter */
 	char	   *load_balance_hosts; /* load balance over hosts */
 
 	bool		cancelRequest;	/* true if this connection is used to send a
@@ -517,8 +543,15 @@ struct pg_conn
 	PGVerbosity verbosity;		/* error/notice message verbosity */
 	PGContextVisibility show_context;	/* whether to show CONTEXT field */
 	PGlobjfuncs *lobjfuncs;		/* private state for large-object access fns */
+	bool		column_encryption_enabled;	/* parsed version of
+											 * column_encryption_setting */
 	pg_prng_state prng_state;	/* prng state for load balancing connections */
 
+	/* Column encryption support data */
+	int			ncmks;
+	PGCMK	   *cmks;
+	int			nceks;
+	PGCEK	   *ceks;
 
 	/* Buffer for data received from backend and not yet processed */
 	char	   *inBuffer;		/* currently allocated buffer */
@@ -709,6 +742,10 @@ extern void pqSaveMessageField(PGresult *res, char code,
 							   const char *value);
 extern void pqSaveParameterStatus(PGconn *conn, const char *name,
 								  const char *value);
+extern int	pqSaveColumnMasterKey(PGconn *conn, int keyid, const char *keyname,
+								  const char *keyrealm);
+extern int	pqSaveColumnEncryptionKey(PGconn *conn, int keyid, int cmkid, int cmkalg,
+									  const unsigned char *value, int len);
 extern int	pqRowProcessor(PGconn *conn, const char **errmsgp);
 extern void pqCommandQueueAdvance(PGconn *conn, bool isReadyForQuery,
 								  bool gotSync);

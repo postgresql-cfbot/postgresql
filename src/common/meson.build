@@ -6,6 +6,7 @@ common_sources = files(
   'binaryheap.c',
   'blkreftable.c',
   'checksum_helper.c',
+  'colenc.c',
   'compression.c',
   'controldata_utils.c',
   'encnames.c',

@@ -27,6 +27,7 @@
 #include "commands/alter.h"
 #include "commands/async.h"
 #include "commands/cluster.h"
+#include "commands/colenccmds.h"
 #include "commands/collationcmds.h"
 #include "commands/comment.h"
 #include "commands/conversioncmds.h"
@@ -130,6 +131,8 @@ ClassifyUtilityCommandAsReadOnly(Node *parsetree)
 	switch (nodeTag(parsetree))
 	{
 		case T_AlterCollationStmt:
+		case T_AlterColumnEncryptionKeyStmt:
+		case T_AlterColumnMasterKeyStmt:
 		case T_AlterDatabaseRefreshCollStmt:
 		case T_AlterDatabaseSetStmt:
 		case T_AlterDatabaseStmt:
@@ -1434,6 +1437,14 @@ ProcessUtilitySlow(ParseState *pstate,
 															stmt->definition,
 															&secondaryObject);
 							break;
+						case OBJECT_CEK:
+							Assert(stmt->args == NIL);
+							address = CreateCEK(pstate, stmt);
+							break;
+						case OBJECT_CMK:
+							Assert(stmt->args == NIL);
+							address = CreateCMK(pstate, stmt);
+							break;
 						case OBJECT_COLLATION:
 							Assert(stmt->args == NIL);
 							address = DefineCollation(pstate,
@@ -1910,6 +1921,14 @@ ProcessUtilitySlow(ParseState *pstate,
 				address = AlterCollation((AlterCollationStmt *) parsetree);
 				break;
 
+			case T_AlterColumnEncryptionKeyStmt:
+				address = AlterColumnEncryptionKey(pstate, (AlterColumnEncryptionKeyStmt *) parsetree);
+				break;
+
+			case T_AlterColumnMasterKeyStmt:
+				address = AlterColumnMasterKey(pstate, (AlterColumnMasterKeyStmt *) parsetree);
+				break;
+
 			default:
 				elog(ERROR, "unrecognized node type: %d",
 					 (int) nodeTag(parsetree));
@@ -2230,6 +2249,12 @@ AlterObjectTypeCommandTag(ObjectType objtype)
 			break;
 		case OBJECT_COLUMN:
 			tag = CMDTAG_ALTER_TABLE;
+			break;
+		case OBJECT_CEK:
+			tag = CMDTAG_ALTER_COLUMN_ENCRYPTION_KEY;
+			break;
+		case OBJECT_CMK:
+			tag = CMDTAG_ALTER_COLUMN_MASTER_KEY;
 			break;
 		case OBJECT_CONVERSION:
 			tag = CMDTAG_ALTER_CONVERSION;
@@ -2646,6 +2671,12 @@ CreateCommandTag(Node *parsetree)
 				case OBJECT_STATISTIC_EXT:
 					tag = CMDTAG_DROP_STATISTICS;
 					break;
+				case OBJECT_CEK:
+					tag = CMDTAG_DROP_COLUMN_ENCRYPTION_KEY;
+					break;
+				case OBJECT_CMK:
+					tag = CMDTAG_DROP_COLUMN_MASTER_KEY;
+					break;
 				default:
 					tag = CMDTAG_UNKNOWN;
 			}
@@ -2765,6 +2796,12 @@ CreateCommandTag(Node *parsetree)
 					break;
 				case OBJECT_COLLATION:
 					tag = CMDTAG_CREATE_COLLATION;
+					break;
+				case OBJECT_CEK:
+					tag = CMDTAG_CREATE_COLUMN_ENCRYPTION_KEY;
+					break;
+				case OBJECT_CMK:
+					tag = CMDTAG_CREATE_COLUMN_MASTER_KEY;
 					break;
 				case OBJECT_ACCESS_METHOD:
 					tag = CMDTAG_CREATE_ACCESS_METHOD;
@@ -2923,6 +2960,9 @@ CreateCommandTag(Node *parsetree)
 				case DISCARD_ALL:
 					tag = CMDTAG_DISCARD_ALL;
 					break;
+				case DISCARD_COLUMN_ENCRYPTION_KEYS:
+					tag = CMDTAG_DISCARD_COLUMN_ENCRYPTION_KEYS;
+					break;
 				case DISCARD_PLANS:
 					tag = CMDTAG_DISCARD_PLANS;
 					break;
@@ -3067,6 +3107,14 @@ CreateCommandTag(Node *parsetree)
 
 		case T_AlterCollationStmt:
 			tag = CMDTAG_ALTER_COLLATION;
+			break;
+
+		case T_AlterColumnEncryptionKeyStmt:
+			tag = CMDTAG_ALTER_COLUMN_ENCRYPTION_KEY;
+			break;
+
+		case T_AlterColumnMasterKeyStmt:
+			tag = CMDTAG_ALTER_COLUMN_MASTER_KEY;
 			break;
 
 		case T_PrepareStmt:
@@ -3691,6 +3739,14 @@ GetCommandLogLevel(Node *parsetree)
 			break;
 
 		case T_AlterCollationStmt:
+			lev = LOGSTMT_DDL;
+			break;
+
+		case T_AlterColumnEncryptionKeyStmt:
+			lev = LOGSTMT_DDL;
+			break;
+
+		case T_AlterColumnMasterKeyStmt:
 			lev = LOGSTMT_DDL;
 			break;
 

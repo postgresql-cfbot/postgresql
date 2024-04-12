@@ -28,6 +28,8 @@ COMMENT ON
   CAST (<replaceable>source_type</replaceable> AS <replaceable>target_type</replaceable>) |
   COLLATION <replaceable class="parameter">object_name</replaceable> |
   COLUMN <replaceable class="parameter">relation_name</replaceable>.<replaceable class="parameter">column_name</replaceable> |
+  COLUMN ENCRYPTION KEY <replaceable class="parameter">object_name</replaceable> |
+  COLUMN MASTER KEY <replaceable class="parameter">object_name</replaceable> |
   CONSTRAINT <replaceable class="parameter">constraint_name</replaceable> ON <replaceable class="parameter">table_name</replaceable> |
   CONSTRAINT <replaceable class="parameter">constraint_name</replaceable> ON DOMAIN <replaceable class="parameter">domain_name</replaceable> |
   CONVERSION <replaceable class="parameter">object_name</replaceable> |

@@ -297,6 +297,7 @@ MAKE_SYSCACHE(TYPENAMENSP, pg_type_typname_nsp_index, 64);
 #define  TYPCATEGORY_USER		'U'
 #define  TYPCATEGORY_BITSTRING	'V' /* er ... "varbit"? */
 #define  TYPCATEGORY_UNKNOWN	'X'
+#define  TYPCATEGORY_ENCRYPTED	'Y'
 #define  TYPCATEGORY_INTERNAL	'Z'
 
 #define  TYPALIGN_CHAR			'c' /* char alignment (i.e. unaligned) */

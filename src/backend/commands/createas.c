@@ -45,6 +45,7 @@
 #include "utils/rel.h"
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
+#include "utils/syscache.h"
 
 typedef struct
 {
@@ -199,6 +200,24 @@ create_ctas_nodata(List *tlist, IntoClause *into)
 								col->colname,
 								format_type_be(col->typeName->typeOid)),
 						 errhint("Use the COLLATE clause to set the collation explicitly.")));
+
+			if (type_is_encrypted(exprType((Node *) tle->expr)))
+			{
+				HeapTuple	tp;
+
+				if (!tle->resorigtbl || !tle->resorigcol)
+					ereport(ERROR,
+							errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+							errmsg("underlying table and column could not be determined for encrypted table column"));
+
+				tp = SearchSysCache2(ATTNUM, ObjectIdGetDatum(tle->resorigtbl), Int16GetDatum(tle->resorigcol));
+				if (!HeapTupleIsValid(tp))
+					elog(ERROR, "cache lookup failed for attribute %d of relation %u", tle->resorigcol, tle->resorigtbl);
+				col->typeName = makeTypeNameFromOid(DatumGetObjectId(SysCacheGetAttrNotNull(ATTNUM, tp, Anum_pg_attribute_attusertypid)),
+													DatumGetInt32(SysCacheGetAttrNotNull(ATTNUM, tp, Anum_pg_attribute_attusertypmod)));
+				col->encryption = makeColumnEncryption(tp);
+				ReleaseSysCache(tp);
+			}
 
 			attrList = lappend(attrList, col);
 		}
@@ -508,6 +527,17 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 							col->colname,
 							format_type_be(col->typeName->typeOid)),
 					 errhint("Use the COLLATE clause to set the collation explicitly.")));
+
+		if (type_is_encrypted(attribute->atttypid))
+		{
+			/*
+			 * We don't have the required information available here, so
+			 * prevent it for now.
+			 */
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("encrypted columns not yet implemented for this command")));
+		}
 
 		attrList = lappend(attrList, col);
 	}

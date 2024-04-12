@@ -362,6 +362,7 @@ CV
 CachedExpression
 CachedPlan
 CachedPlanSource
+CachedRoleEntry
 CallContext
 CallStmt
 CancelRequestPacket

@@ -55,6 +55,12 @@ typedef struct
 	AclMode		value;
 } priv_map;
 
+typedef struct
+{
+	Oid			role;
+	int			depth;
+} CachedRoleEntry;
+
 /*
  * We frequently need to test whether a given role is a member of some other
  * role.  In most of these tests the "given role" is the same, namely the
@@ -76,16 +82,8 @@ enum RoleRecurseType
 	ROLERECURSE_SETROLE = 2		/* recurse through grants with set_option */
 };
 static Oid	cached_role[] = {InvalidOid, InvalidOid, InvalidOid};
-static List *cached_roles[] = {NIL, NIL, NIL};
+static HTAB *cached_roles[] = {NULL, NULL, NULL};
 static uint32 cached_db_hash;
-
-/*
- * If the list of roles gathered by roles_is_member_of() grows larger than the
- * below threshold, a Bloom filter is created to speed up list membership
- * checks.  This threshold is set arbitrarily high to avoid the overhead of
- * creating the Bloom filter until it seems likely to provide a net benefit.
- */
-#define ROLES_LIST_BLOOM_THRESHOLD 1024
 
 static const char *getid(const char *s, char *n, Node *escontext);
 static void putid(char *p, const char *s);
@@ -4927,53 +4925,6 @@ RoleMembershipCacheCallback(Datum arg, int cacheid, uint32 hashvalue)
 }
 
 /*
- * A helper function for roles_is_member_of() that provides an optimized
- * implementation of list_append_unique_oid() via a Bloom filter.  The caller
- * (i.e., roles_is_member_of()) is responsible for freeing bf once it is done
- * using this function.
- */
-static inline List *
-roles_list_append(List *roles_list, bloom_filter **bf, Oid role)
-{
-	unsigned char *roleptr = (unsigned char *) &role;
-
-	/*
-	 * If there is a previously-created Bloom filter, use it to try to
-	 * determine whether the role is missing from the list.  If it says yes,
-	 * that's a hard fact and we can go ahead and add the role.  If it says
-	 * no, that's only probabilistic and we'd better search the list.  Without
-	 * a filter, we must always do an ordinary linear search through the
-	 * existing list.
-	 */
-	if ((*bf && bloom_lacks_element(*bf, roleptr, sizeof(Oid))) ||
-		!list_member_oid(roles_list, role))
-	{
-		/*
-		 * If the list is large, we take on the overhead of creating and
-		 * populating a Bloom filter to speed up future calls to this
-		 * function.
-		 */
-		if (*bf == NULL &&
-			list_length(roles_list) > ROLES_LIST_BLOOM_THRESHOLD)
-		{
-			*bf = bloom_create(ROLES_LIST_BLOOM_THRESHOLD * 10, work_mem, 0);
-			foreach_oid(roleid, roles_list)
-				bloom_add_element(*bf, (unsigned char *) &roleid, sizeof(Oid));
-		}
-
-		/*
-		 * Finally, add the role to the list and the Bloom filter, if it
-		 * exists.
-		 */
-		roles_list = lappend_oid(roles_list, role);
-		if (*bf)
-			bloom_add_element(*bf, roleptr, sizeof(Oid));
-	}
-
-	return roles_list;
-}
-
-/*
  * Get a list of roles that the specified roleid is a member of
  *
  * Type ROLERECURSE_MEMBERS recurses through all grants; ROLERECURSE_PRIVS
@@ -4992,16 +4943,16 @@ roles_list_append(List *roles_list, bloom_filter **bf, Oid role)
  * ADMIN OPTION on the role corresponding to admin_of, or to InvalidOid if
  * there is no such role.
  */
-static List *
+static HTAB *
 roles_is_member_of(Oid roleid, enum RoleRecurseType type,
 				   Oid admin_of, Oid *admin_role)
 {
 	Oid			dba;
-	List	   *roles_list;
-	ListCell   *l;
-	List	   *new_cached_roles;
-	MemoryContext oldctx;
-	bloom_filter *bf = NULL;
+	HTAB	   *roles_list;
+	List	   *curr_list;
+	HASHCTL		ctl;
+	CachedRoleEntry *ent;
+	int			depth = 0;
 
 	Assert(OidIsValid(admin_of) == PointerIsValid(admin_role));
 	if (admin_role != NULL)
@@ -5041,74 +4992,88 @@ roles_is_member_of(Oid roleid, enum RoleRecurseType type,
 	 * This is a bit tricky but works because the foreach() macro doesn't
 	 * fetch the next list element until the bottom of the loop.
 	 */
-	roles_list = list_make1_oid(roleid);
+	ctl.keysize = sizeof(Oid);
+	ctl.entrysize = sizeof(CachedRoleEntry);
+	roles_list = hash_create("roles list", 16, &ctl, HASH_ELEM | HASH_BLOBS);
+	ent = (CachedRoleEntry *) hash_search(roles_list, &roleid, HASH_ENTER, NULL);
+	ent->depth = depth;
+	curr_list = list_make1_oid(roleid);
 
-	foreach(l, roles_list)
+	while (curr_list != NIL)
 	{
-		Oid			memberid = lfirst_oid(l);
-		CatCList   *memlist;
-		int			i;
+		List	   *next_list = NIL;
+		bool		found = false;
 
-		/* Find roles that memberid is directly a member of */
-		memlist = SearchSysCacheList1(AUTHMEMMEMROLE,
-									  ObjectIdGetDatum(memberid));
-		for (i = 0; i < memlist->n_members; i++)
+		depth++;
+
+		foreach_oid(memberid, curr_list)
 		{
-			HeapTuple	tup = &memlist->members[i]->tuple;
-			Form_pg_auth_members form = (Form_pg_auth_members) GETSTRUCT(tup);
-			Oid			otherid = form->roleid;
+			CatCList   *memlist;
+			int			i;
 
-			/*
-			 * While otherid==InvalidOid shouldn't appear in the catalog, the
-			 * OidIsValid() avoids crashing if that arises.
-			 */
-			if (otherid == admin_of && form->admin_option &&
-				OidIsValid(admin_of) && !OidIsValid(*admin_role))
-				*admin_role = memberid;
+			/* Find roles that memberid is directly a member of */
+			memlist = SearchSysCacheList1(AUTHMEMMEMROLE,
+										  ObjectIdGetDatum(memberid));
+			for (i = 0; i < memlist->n_members; i++)
+			{
+				HeapTuple	tup = &memlist->members[i]->tuple;
+				Form_pg_auth_members form = (Form_pg_auth_members) GETSTRUCT(tup);
+				Oid			otherid = form->roleid;
 
-			/* If we're supposed to ignore non-heritable grants, do so. */
-			if (type == ROLERECURSE_PRIVS && !form->inherit_option)
-				continue;
+				/*
+				 * While otherid==InvalidOid shouldn't appear in the catalog,
+				 * the OidIsValid() avoids crashing if that arises.
+				 */
+				if (otherid == admin_of && form->admin_option &&
+					OidIsValid(admin_of) && !OidIsValid(*admin_role))
+					*admin_role = memberid;
 
-			/* If we're supposed to ignore non-SET grants, do so. */
-			if (type == ROLERECURSE_SETROLE && !form->set_option)
-				continue;
+				/* If we're supposed to ignore non-heritable grants, do so. */
+				if (type == ROLERECURSE_PRIVS && !form->inherit_option)
+					continue;
 
-			/*
-			 * Even though there shouldn't be any loops in the membership
-			 * graph, we must test for having already seen this role. It is
-			 * legal for instance to have both A->B and A->C->B.
-			 */
-			roles_list = roles_list_append(roles_list, &bf, otherid);
+				/* If we're supposed to ignore non-SET grants, do so. */
+				if (type == ROLERECURSE_SETROLE && !form->set_option)
+					continue;
+
+				/*
+				 * Even though there shouldn't be any loops in the membership
+				 * graph, we must test for having already seen this role. It
+				 * is legal for instance to have both A->B and A->C->B.
+				 */
+				ent = (CachedRoleEntry *) hash_search(roles_list, &otherid, HASH_ENTER, &found);
+				if (!found)
+				{
+					ent->depth = depth;
+					next_list = lappend_oid(next_list, otherid);
+				}
+			}
+			ReleaseSysCacheList(memlist);
+
+			/* implement pg_database_owner implicit membership */
+			if (memberid == dba && OidIsValid(dba))
+			{
+				Oid			dbowner = ROLE_PG_DATABASE_OWNER;
+
+				hash_search(roles_list, &dbowner, HASH_ENTER, &found);
+				if (!found)
+				{
+					ent->depth = depth;
+					next_list = lappend_oid(next_list, dbowner);
+				}
+			}
 		}
-		ReleaseSysCacheList(memlist);
 
-		/* implement pg_database_owner implicit membership */
-		if (memberid == dba && OidIsValid(dba))
-			roles_list = roles_list_append(roles_list, &bf,
-										   ROLE_PG_DATABASE_OWNER);
+		list_free(curr_list);
+		curr_list = next_list;
 	}
-
-	/*
-	 * Free the Bloom filter created by roles_list_append(), if there is one.
-	 */
-	if (bf)
-		bloom_free(bf);
-
-	/*
-	 * Copy the completed list into TopMemoryContext so it will persist.
-	 */
-	oldctx = MemoryContextSwitchTo(TopMemoryContext);
-	new_cached_roles = list_copy(roles_list);
-	MemoryContextSwitchTo(oldctx);
-	list_free(roles_list);
 
 	/*
 	 * Now safe to assign to state variable
 	 */
 	cached_role[type] = InvalidOid; /* just paranoia */
-	list_free(cached_roles[type]);
-	cached_roles[type] = new_cached_roles;
+	hash_destroy(cached_roles[type]);
+	cached_roles[type] = roles_list;
 	cached_role[type] = roleid;
 
 	/* And now we can return the answer */
@@ -5127,6 +5092,8 @@ roles_is_member_of(Oid roleid, enum RoleRecurseType type,
 bool
 has_privs_of_role(Oid member, Oid role)
 {
+	HTAB	   *roles_list;
+
 	/* Fast path for simple case */
 	if (member == role)
 		return true;
@@ -5139,9 +5106,8 @@ has_privs_of_role(Oid member, Oid role)
 	 * Find all the roles that member has the privileges of, including
 	 * multi-level recursion, then see if target role is any one of them.
 	 */
-	return list_member_oid(roles_is_member_of(member, ROLERECURSE_PRIVS,
-											  InvalidOid, NULL),
-						   role);
+	roles_list = roles_is_member_of(member, ROLERECURSE_PRIVS, InvalidOid, NULL);
+	return hash_search(roles_list, &role, HASH_FIND, NULL) != NULL;
 }
 
 /*
@@ -5161,6 +5127,8 @@ has_privs_of_role(Oid member, Oid role)
 bool
 member_can_set_role(Oid member, Oid role)
 {
+	HTAB	   *roles_list;
+
 	/* Fast path for simple case */
 	if (member == role)
 		return true;
@@ -5173,9 +5141,8 @@ member_can_set_role(Oid member, Oid role)
 	 * Find all the roles that member can access via SET ROLE, including
 	 * multi-level recursion, then see if target role is any one of them.
 	 */
-	return list_member_oid(roles_is_member_of(member, ROLERECURSE_SETROLE,
-											  InvalidOid, NULL),
-						   role);
+	roles_list = roles_is_member_of(member, ROLERECURSE_SETROLE, InvalidOid, NULL);
+	return hash_search(roles_list, &role, HASH_FIND, NULL) != NULL;
 }
 
 /*
@@ -5207,6 +5174,8 @@ check_can_set_role(Oid member, Oid role)
 bool
 is_member_of_role(Oid member, Oid role)
 {
+	HTAB	   *roles_list;
+
 	/* Fast path for simple case */
 	if (member == role)
 		return true;
@@ -5219,9 +5188,8 @@ is_member_of_role(Oid member, Oid role)
 	 * Find all the roles that member is a member of, including multi-level
 	 * recursion, then see if target role is any one of them.
 	 */
-	return list_member_oid(roles_is_member_of(member, ROLERECURSE_MEMBERS,
-											  InvalidOid, NULL),
-						   role);
+	roles_list = roles_is_member_of(member, ROLERECURSE_MEMBERS, InvalidOid, NULL);
+	return hash_search(roles_list, &role, HASH_FIND, NULL) != NULL;
 }
 
 /*
@@ -5235,6 +5203,8 @@ is_member_of_role(Oid member, Oid role)
 bool
 is_member_of_role_nosuper(Oid member, Oid role)
 {
+	HTAB	   *roles_list;
+
 	/* Fast path for simple case */
 	if (member == role)
 		return true;
@@ -5243,9 +5213,8 @@ is_member_of_role_nosuper(Oid member, Oid role)
 	 * Find all the roles that member is a member of, including multi-level
 	 * recursion, then see if target role is any one of them.
 	 */
-	return list_member_oid(roles_is_member_of(member, ROLERECURSE_MEMBERS,
-											  InvalidOid, NULL),
-						   role);
+	roles_list = roles_is_member_of(member, ROLERECURSE_MEMBERS, InvalidOid, NULL);
+	return hash_search(roles_list, &role, HASH_FIND, NULL) != NULL;
 }
 
 
@@ -5340,9 +5309,11 @@ select_best_grantor(Oid roleId, AclMode privileges,
 					Oid *grantorId, AclMode *grantOptions)
 {
 	AclMode		needed_goptions = ACL_GRANT_OPTION_FOR(privileges);
-	List	   *roles_list;
+	HTAB	   *roles_list;
 	int			nrights;
-	ListCell   *l;
+	int			best_depth = -1;
+	CachedRoleEntry *otherrole;
+	HASH_SEQ_STATUS status;
 
 	/*
 	 * The object owner is always treated as having all grant options, so if
@@ -5371,20 +5342,13 @@ select_best_grantor(Oid roleId, AclMode privileges,
 	*grantOptions = ACL_NO_RIGHTS;
 	nrights = 0;
 
-	foreach(l, roles_list)
+	hash_seq_init(&status, roles_list);
+	while ((otherrole = (CachedRoleEntry *) hash_seq_search(&status)) != NULL)
 	{
-		Oid			otherrole = lfirst_oid(l);
 		AclMode		otherprivs;
 
-		otherprivs = aclmask_direct(acl, otherrole, ownerId,
+		otherprivs = aclmask_direct(acl, otherrole->role, ownerId,
 									needed_goptions, ACLMASK_ALL);
-		if (otherprivs == needed_goptions)
-		{
-			/* Found a suitable grantor */
-			*grantorId = otherrole;
-			*grantOptions = otherprivs;
-			return;
-		}
 
 		/*
 		 * If it has just some of the needed privileges, remember best
@@ -5394,11 +5358,15 @@ select_best_grantor(Oid roleId, AclMode privileges,
 		{
 			int			nnewrights = count_one_bits(otherprivs);
 
-			if (nnewrights > nrights)
+			if (nnewrights > nrights ||
+				(nnewrights > 0 &&
+				 nnewrights == nrights &&
+				 otherrole->depth < best_depth))
 			{
-				*grantorId = otherrole;
+				*grantorId = otherrole->role;
 				*grantOptions = otherprivs;
 				nrights = nnewrights;
+				best_depth = otherrole->depth;
 			}
 		}
 	}

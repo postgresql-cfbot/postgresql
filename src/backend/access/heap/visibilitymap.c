@@ -36,7 +36,7 @@
  *
  * Clearing visibility map bits is not separately WAL-logged.  The callers
  * must make sure that whenever a bit is cleared, the bit is cleared on WAL
- * replay of the updating operation as well.
+ * replay of the updating operation as well.  Truncate is a kind of clearing.
  *
  * When we *set* a visibility map during VACUUM, we must write WAL.  This may
  * seem counterintuitive, since the bit is basically a hint: if it is clear,
@@ -49,6 +49,10 @@
  * insert, update, or delete on the heap page will fail to realize that the
  * visibility map bit must be cleared, possibly causing index-only scans to
  * return wrong answers.
+ *
+ * Torn visibility map pages are fine.  Each bit is independent, and every
+ * read here uses RBM_ZERO_ON_ERROR to bypass checksum mismatches and other
+ * verification failures.  (Torn heap pages remain a concern.)
  *
  * VACUUM will normally skip pages for which the visibility map bit is set;
  * such pages can't contain any dead tuples and therefore don't need vacuuming.
@@ -93,6 +97,7 @@
 #include "miscadmin.h"
 #include "port/pg_bitutils.h"
 #include "storage/bufmgr.h"
+#include "storage/lmgr.h"
 #include "storage/smgr.h"
 #include "utils/inval.h"
 #include "utils/rel.h"
@@ -144,6 +149,7 @@ visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer vmbuf, uint8 flags
 	char	   *map;
 	bool		cleared = false;
 
+	Assert(CritSectionCount > 0 || InRecovery);
 	/* Must never clear all_visible bit while leaving all_frozen bit set */
 	Assert(flags & VISIBILITYMAP_VALID_BITS);
 	Assert(flags != VISIBILITYMAP_ALL_VISIBLE);
@@ -482,7 +488,25 @@ visibilitymap_prepare_truncate(Relation rel, BlockNumber nheapblocks)
 
 		LockBuffer(mapBuffer, BUFFER_LOCK_EXCLUSIVE);
 
-		/* NO EREPORT(ERROR) from here till changes are logged */
+		/*----------
+		 * Truncate is equivalent to multiple visibilitymap_clear() calls.
+		 * That function needs to prevent race conditions like this:
+		 *
+		 * - INSERT backend: visibilitymap_clear() unlocks the vm buffer
+		 * - VACUUM backend: sets the vm bit yet again
+		 * - INSERT backend: PageClearAllVisible()
+		 *
+		 * It prevents that by requiring its caller to hold a lock on the heap
+		 * page and to call it in the same critical section that logs the
+		 * PageClearAllVisible().  Here, we're not part of a caller critical
+		 * section, but the caller's AccessExclusiveLock prevents the same
+		 * trouble.  Use this critical section to prevent modifying a buffer
+		 * without also marking it dirty.  If we did let that happen, a future
+		 * visibilitymap_clear() for the same bit would return false without
+		 * dirtying the buffer, and the bit could reappear after a restart.
+		 */
+		Assert(InRecovery ||
+			   CheckRelationLockedByMe(rel, AccessExclusiveLock, true));
 		START_CRIT_SECTION();
 
 		/* Clear out the unwanted bytes. */
@@ -500,17 +524,14 @@ visibilitymap_prepare_truncate(Relation rel, BlockNumber nheapblocks)
 		 */
 		map[truncByte] &= (1 << truncOffset) - 1;
 
-		/*
-		 * Truncation of a relation is WAL-logged at a higher-level, and we
-		 * will be called at WAL replay. But if checksums are enabled, we need
-		 * to still write a WAL record to protect against a torn page, if the
-		 * page is flushed to disk before the truncation WAL record. We cannot
-		 * use MarkBufferDirtyHint here, because that will not dirty the page
-		 * during recovery.
-		 */
 		MarkBufferDirty(mapBuffer);
-		if (!InRecovery && RelationNeedsWAL(rel) && XLogHintBitIsNeeded())
-			log_newpage_buffer(mapBuffer, false);
+
+		/*
+		 * A higher-level operation calls us at WAL replay.  If we crash
+		 * before the XLOG_SMGR_TRUNCATE flushes to disk, main fork length has
+		 * not changed, and our fork remains valid.  If we crash after that
+		 * flush, redo will return here.
+		 */
 
 		END_CRIT_SECTION();
 

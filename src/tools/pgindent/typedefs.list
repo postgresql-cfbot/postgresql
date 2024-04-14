@@ -3876,7 +3876,6 @@ shared_ts_iter
 shared_ts_radix_tree
 shm_mq
 shm_mq_handle
-shm_mq_iovec
 shm_mq_result
 shm_toc
 shm_toc_entry

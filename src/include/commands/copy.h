@@ -62,6 +62,7 @@ typedef struct CopyFormatOptions
 	bool		binary;			/* binary format? */
 	bool		freeze;			/* freeze rows on loading? */
 	bool		csv_mode;		/* Comma Separated Value format? */
+	bool		json_mode;		/* JSON format? */
 	CopyHeaderChoice header_line;	/* header line? */
 	char	   *null_print;		/* NULL marker string (server encoding!) */
 	int			null_print_len; /* length of same */
@@ -80,6 +81,7 @@ typedef struct CopyFormatOptions
 	List	   *force_null;		/* list of column names */
 	bool		force_null_all; /* FORCE_NULL *? */
 	bool	   *force_null_flags;	/* per-column CSV FN flags */
+	bool		force_array;	/* add JSON array decorations */
 	bool		convert_selectively;	/* do selective binary conversion? */
 	CopyOnErrorChoice on_error; /* what to do when error happened */
 	CopyLogVerbosityChoice log_verbosity;	/* verbosity of logged messages */

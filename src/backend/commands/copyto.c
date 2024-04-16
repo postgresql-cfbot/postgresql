@@ -24,6 +24,7 @@
 #include "executor/execdesc.h"
 #include "executor/executor.h"
 #include "executor/tuptable.h"
+#include "funcapi.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "mb/pg_wchar.h"
@@ -31,6 +32,7 @@
 #include "pgstat.h"
 #include "storage/fd.h"
 #include "tcop/tcopprot.h"
+#include "utils/json.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
@@ -79,6 +81,7 @@ typedef struct CopyToStateData
 	List	   *attnumlist;		/* integer list of attnums to copy */
 	char	   *filename;		/* filename, or NULL for STDOUT */
 	bool		is_program;		/* is 'filename' a program to popen? */
+	bool		json_row_delim_needed;	/* need delimiter to start next json array element */
 	copy_data_dest_cb data_dest_cb; /* function for writing data */
 
 	CopyFormatOptions opts;
@@ -139,9 +142,20 @@ SendCopyBegin(CopyToState cstate)
 
 	pq_beginmessage(&buf, PqMsg_CopyOutResponse);
 	pq_sendbyte(&buf, format);	/* overall format */
-	pq_sendint16(&buf, natts);
-	for (i = 0; i < natts; i++)
-		pq_sendint16(&buf, format); /* per-column formats */
+	if (!cstate->opts.json_mode)
+	{
+		pq_sendint16(&buf, natts);
+		for (i = 0; i < natts; i++)
+			pq_sendint16(&buf, format); /* per-column formats */
+	}
+	else
+	{
+		/*
+		 * JSON mode is always one non-binary column
+		 */
+		pq_sendint16(&buf, 1);
+		pq_sendint16(&buf, 0);
+	}
 	pq_endmessage(&buf);
 	cstate->copy_dest = COPY_FRONTEND;
 }
@@ -840,6 +854,16 @@ DoCopyTo(CopyToState cstate)
 
 			CopySendEndOfRow(cstate);
 		}
+		/*
+		 * If JSON has been requested, and FORCE_ARRAY has been specified send
+		 * the opening bracket.
+		*/
+		if (cstate->opts.json_mode && cstate->opts.force_array)
+		{
+			CopySendChar(cstate, '[');
+			CopySendEndOfRow(cstate);
+		}
+
 	}
 
 	if (cstate->rel)
@@ -887,6 +911,15 @@ DoCopyTo(CopyToState cstate)
 		CopySendEndOfRow(cstate);
 	}
 
+	/*
+	 * If JSON has been requested, and FORCE_ARRAY has been specified send the
+	 * closing bracket.
+	*/
+	if (cstate->opts.json_mode && cstate->opts.force_array)
+	{
+		CopySendChar(cstate, ']');
+		CopySendEndOfRow(cstate);
+	}
 	MemoryContextDelete(cstate->rowcontext);
 
 	if (fe_copy)
@@ -901,11 +934,7 @@ DoCopyTo(CopyToState cstate)
 static void
 CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot)
 {
-	bool		need_delim = false;
-	FmgrInfo   *out_functions = cstate->out_functions;
 	MemoryContext oldcontext;
-	ListCell   *cur;
-	char	   *string;
 
 	MemoryContextReset(cstate->rowcontext);
 	oldcontext = MemoryContextSwitchTo(cstate->rowcontext);
@@ -916,52 +945,97 @@ CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot)
 		CopySendInt16(cstate, list_length(cstate->attnumlist));
 	}
 
-	/* Make sure the tuple is fully deconstructed */
-	slot_getallattrs(slot);
-
-	foreach(cur, cstate->attnumlist)
+	if (!cstate->opts.json_mode)
 	{
-		int			attnum = lfirst_int(cur);
-		Datum		value = slot->tts_values[attnum - 1];
-		bool		isnull = slot->tts_isnull[attnum - 1];
+		bool		need_delim = false;
+		FmgrInfo   *out_functions = cstate->out_functions;
+		ListCell   *cur;
+		char	   *string;
 
-		if (!cstate->opts.binary)
-		{
-			if (need_delim)
-				CopySendChar(cstate, cstate->opts.delim[0]);
-			need_delim = true;
-		}
+		/* Make sure the tuple is fully deconstructed */
+		slot_getallattrs(slot);
 
-		if (isnull)
+		foreach(cur, cstate->attnumlist)
 		{
-			if (!cstate->opts.binary)
-				CopySendString(cstate, cstate->opts.null_print_client);
-			else
-				CopySendInt32(cstate, -1);
-		}
-		else
-		{
+			int			attnum = lfirst_int(cur);
+			Datum		value = slot->tts_values[attnum - 1];
+			bool		isnull = slot->tts_isnull[attnum - 1];
+
 			if (!cstate->opts.binary)
 			{
-				string = OutputFunctionCall(&out_functions[attnum - 1],
-											value);
-				if (cstate->opts.csv_mode)
-					CopyAttributeOutCSV(cstate, string,
-										cstate->opts.force_quote_flags[attnum - 1]);
+				if (need_delim)
+					CopySendChar(cstate, cstate->opts.delim[0]);
+				need_delim = true;
+			}
+
+			if (isnull)
+			{
+				if (!cstate->opts.binary)
+					CopySendString(cstate, cstate->opts.null_print_client);
 				else
-					CopyAttributeOutText(cstate, string);
+					CopySendInt32(cstate, -1);
 			}
 			else
 			{
-				bytea	   *outputbytes;
+				if (!cstate->opts.binary)
+				{
+					string = OutputFunctionCall(&out_functions[attnum - 1],
+												value);
+					if (cstate->opts.csv_mode)
+						CopyAttributeOutCSV(cstate, string,
+											cstate->opts.force_quote_flags[attnum - 1]);
+					else
+						CopyAttributeOutText(cstate, string);
+				}
+				else
+				{
+					bytea	   *outputbytes;
 
-				outputbytes = SendFunctionCall(&out_functions[attnum - 1],
-											   value);
-				CopySendInt32(cstate, VARSIZE(outputbytes) - VARHDRSZ);
-				CopySendData(cstate, VARDATA(outputbytes),
-							 VARSIZE(outputbytes) - VARHDRSZ);
+					outputbytes = SendFunctionCall(&out_functions[attnum - 1],
+												   value);
+					CopySendInt32(cstate, VARSIZE(outputbytes) - VARHDRSZ);
+					CopySendData(cstate, VARDATA(outputbytes),
+								 VARSIZE(outputbytes) - VARHDRSZ);
+				}
 			}
 		}
+	}
+	else
+	{
+		Datum		rowdata;
+		StringInfo	result;
+
+		/*
+		 * if the COPY TO command's source data is from a query, not a table,
+		 * then we need to copy the TupleDesc from the cstate->queryDesc.
+		 * because returning slot's TupleDesc may change during query execution,
+		 * but composite_to_json requires correct TupleDesc.
+		 * so we need copy from cstate->queryDesc to make it bullet proof.
+		*/
+		if(!cstate->rel)
+		{
+			for (int i = 0; i < slot->tts_tupleDescriptor->natts; i++)
+			{
+				memcpy(TupleDescAttr(slot->tts_tupleDescriptor, i),
+					   TupleDescAttr(cstate->queryDesc->tupDesc, i),
+					   1 * sizeof(FormData_pg_attribute));
+			}
+			BlessTupleDesc(slot->tts_tupleDescriptor);
+		}
+		rowdata = ExecFetchSlotHeapTupleDatum(slot);
+		result = makeStringInfo();
+		composite_to_json(rowdata, result, false);
+
+		if (cstate->json_row_delim_needed && cstate->opts.force_array)
+			CopySendChar(cstate, ',');
+		else if (cstate->opts.force_array)
+		{
+			/* first row needs no delimiter */
+			CopySendChar(cstate, ' ');
+			cstate->json_row_delim_needed = true;
+		}
+
+		CopySendData(cstate, result->data, result->len);
 	}
 
 	CopySendEndOfRow(cstate);

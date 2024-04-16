@@ -883,7 +883,6 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 	BTStack		stack;
 	OffsetNumber offnum;
-	StrategyNumber strat;
 	BTScanInsertData inskey;
 	ScanKey		startKeys[INDEX_MAX_KEYS];
 	ScanKeyData notnullkeys[INDEX_MAX_KEYS];
@@ -983,7 +982,17 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	 * a > or < boundary or find an attribute with no boundary (which can be
 	 * thought of as the same as "> -infinity"), we can't use keys for any
 	 * attributes to its right, because it would break our simplistic notion
-	 * of what initial positioning strategy to use.
+	 * of what initial positioning strategy to use.  In practice skip scan
+	 * typically enables us to use all scan keys here, even with a set of
+	 * input keys that leave a "gap" between two index attributes (cases with
+	 * multiple gaps will even manage this without any special restrictions).
+	 *
+	 * Skip scan works by having _bt_preprocess_keys cons up = boundary keys
+	 * for any index columns that were missing a = key in scan->keyData[], the
+	 * input scan keys passed to us by the executor.  This happens for index
+	 * attributes prior to the attribute of our final input scan key.  The
+	 * underlying = keys use skip arrays.  A skip array key on the column x
+	 * can be thought of as "x = ANY('{every possible x value}')".
 	 *
 	 * When the scan keys include cross-type operators, _bt_preprocess_keys
 	 * may not be able to eliminate redundant keys; in such cases we will
@@ -1058,6 +1067,35 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 		{
 			if (i >= so->numberOfKeys || cur->sk_attno != curattr)
 			{
+				if (chosen && (chosen->sk_flags & SK_BT_NEGPOSINF))
+				{
+					/* -inf/+inf element from a skip array's scan key */
+					ScanKey		skiparraysk = chosen;
+					BTArrayKeyInfo *array = NULL;
+
+					for (int arridx = 0; arridx < so->numArrayKeys; arridx++)
+					{
+						array = &so->arrayKeys[arridx];
+						if (array->scan_key == skiparraysk - so->keyData)
+							break;
+					}
+
+					/* use array's inequality key in startKeys[] */
+					if (ScanDirectionIsForward(dir))
+						chosen = array->low_compare;
+					else
+						chosen = array->high_compare;
+
+					/*
+					 * If the skip array doesn't include a NULL element, it
+					 * implies a NOT NULL constraint
+					 */
+					if (!array->null_elem)
+						impliesNN = skiparraysk;
+					else
+						Assert(chosen == NULL && impliesNN == NULL);
+				}
+
 				/*
 				 * Done looking at keys for curattr.  If we didn't find a
 				 * usable boundary key, see if we can deduce a NOT NULL key.
@@ -1091,16 +1129,48 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 					break;
 				startKeys[keysz++] = chosen;
 
+				if (chosen->sk_flags & (SK_BT_NEXT | SK_BT_PRIOR))
+				{
+					/*
+					 * Next/prior key element from a skip array's scan key.
+					 * Adjust strat_total, so that our = key gets treated like
+					 * a > key (or like a < key) within _bt_search.
+					 *
+					 * Note: 'chosen' could be marked SK_ISNULL, in which case
+					 * startKeys[] will position us at first tuple ">" NULL
+					 * (for backwards scans it'll position us at _last_ tuple
+					 * "<" NULL instead).
+					 */
+					Assert(strat_total == BTEqualStrategyNumber);
+					Assert(!(chosen->sk_flags & SK_SEARCHNOTNULL));
+					if (ScanDirectionIsForward(dir))
+					{
+						Assert(!(chosen->sk_flags & SK_BT_PRIOR));
+						strat_total = BTGreaterStrategyNumber;
+					}
+					else
+					{
+						Assert(!(chosen->sk_flags & SK_BT_NEXT));
+						strat_total = BTLessStrategyNumber;
+					}
+
+					/*
+					 * We'll never find an exact = match for a NEXT or PRIOR
+					 * sentinel sk_argument value, so there's no reason to
+					 * save any later would-be boundary keys in startKeys[]
+					 */
+					break;
+				}
+
 				/*
 				 * Adjust strat_total, and quit if we have stored a > or <
 				 * key.
 				 */
-				strat = chosen->sk_strategy;
-				if (strat != BTEqualStrategyNumber)
+				if (chosen->sk_strategy != BTEqualStrategyNumber)
 				{
-					strat_total = strat;
-					if (strat == BTGreaterStrategyNumber ||
-						strat == BTLessStrategyNumber)
+					strat_total = chosen->sk_strategy;
+					if (chosen->sk_strategy == BTGreaterStrategyNumber ||
+						chosen->sk_strategy == BTLessStrategyNumber)
 						break;
 				}
 

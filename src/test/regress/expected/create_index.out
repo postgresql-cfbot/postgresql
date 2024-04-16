@@ -1938,7 +1938,7 @@ ORDER BY unique1;
       42
 (3 rows)
 
--- Non-required array scan key on "tenthous":
+-- Skip array on "thousand", SAOP array on "tenthous":
 explain (costs off)
 SELECT thousand, tenthous FROM tenk1
 WHERE thousand < 2 AND tenthous IN (1001,3000)
@@ -1958,7 +1958,7 @@ ORDER BY thousand;
         1 |     1001
 (2 rows)
 
--- Non-required array scan key on "tenthous", backward scan:
+-- Skip array on "thousand", SAOP array on "tenthous", backward scan:
 explain (costs off)
 SELECT thousand, tenthous FROM tenk1
 WHERE thousand < 2 AND tenthous IN (1001,3000)

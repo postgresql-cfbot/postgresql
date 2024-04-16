@@ -163,13 +163,24 @@ struct typedefs
 	struct typedefs *next;
 };
 
+/*
+ * Info about a defined symbol (macro), coming from a -D command line switch
+ * or a define command in the program.  These are stored in a simple list.
+ * Because ecpg supports compiling multiple files per run, we have to remember
+ * the command-line definitions and be able to revert to those; this motivates
+ * storing cmdvalue separately from value.
+ * used is NULL unless we are currently expanding the macro, in which case
+ * it points to the buffer before the one scanning the macro; we reset it
+ * to NULL upon returning to that buffer.  This is used to prevent recursive
+ * expansion of the macro.
+ */
 struct _defines
 {
-	char	   *olddef;
-	char	   *newdef;
-	int			pertinent;
-	void	   *used;
-	struct _defines *next;
+	char	   *name;			/* symbol name (malloc'd string) */
+	char	   *value;			/* current value, or NULL if undefined */
+	char	   *cmdvalue;		/* value set on command line, or NULL */
+	void	   *used;			/* buffer pointer, or NULL */
+	struct _defines *next;		/* list link */
 };
 
 /* This is a linked list of the variable names and types. */

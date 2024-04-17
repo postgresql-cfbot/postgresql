@@ -48,9 +48,6 @@
 
 #include "postgres_ext.h"
 
-/* Must undef pg_config_ext.h symbols before including pg_config.h */
-#undef PG_INT64_TYPE
-
 #include "pg_config.h"
 #include "pg_config_manual.h"	/* must be after pg_config.h */
 #include "pg_config_os.h"		/* must be before any system header files */
@@ -489,10 +486,13 @@ typedef char *Pointer;
  *		frontend/backend protocol.
  */
 #ifndef HAVE_INT8
-typedef signed char int8;		/* == 8 bits */
-typedef signed short int16;		/* == 16 bits */
-typedef signed int int32;		/* == 32 bits */
+typedef int8_t int8;			/* == 8 bits */
+typedef int16_t int16;			/* == 16 bits */
+typedef int32_t int32;			/* == 32 bits */
 #endif							/* not HAVE_INT8 */
+#ifndef HAVE_INT64
+typedef int64_t int64;			/* == 64 bits */
+#endif							/* not HAVE_INT64 */
 
 /*
  * uintN
@@ -501,10 +501,13 @@ typedef signed int int32;		/* == 32 bits */
  *		frontend/backend protocol.
  */
 #ifndef HAVE_UINT8
-typedef unsigned char uint8;	/* == 8 bits */
-typedef unsigned short uint16;	/* == 16 bits */
-typedef unsigned int uint32;	/* == 32 bits */
+typedef uint8_t uint8;			/* == 8 bits */
+typedef uint16_t uint16;		/* == 16 bits */
+typedef uint32_t uint32;		/* == 32 bits */
 #endif							/* not HAVE_UINT8 */
+#ifndef HAVE_UINT64
+typedef uint64_t uint64;		/* == 64 bits */
+#endif							/* not HAVE_UINT64 */
 
 /*
  * bitsN
@@ -517,32 +520,8 @@ typedef uint32 bits32;			/* >= 32 bits */
 /*
  * 64-bit integers
  */
-#ifdef HAVE_LONG_INT_64
-/* Plain "long int" fits, use it */
-
-#ifndef HAVE_INT64
-typedef long int int64;
-#endif
-#ifndef HAVE_UINT64
-typedef unsigned long int uint64;
-#endif
-#define INT64CONST(x)  (x##L)
-#define UINT64CONST(x) (x##UL)
-#elif defined(HAVE_LONG_LONG_INT_64)
-/* We have working support for "long long int", use that */
-
-#ifndef HAVE_INT64
-typedef long long int int64;
-#endif
-#ifndef HAVE_UINT64
-typedef unsigned long long int uint64;
-#endif
-#define INT64CONST(x)  (x##LL)
-#define UINT64CONST(x) (x##ULL)
-#else
-/* neither HAVE_LONG_INT_64 nor HAVE_LONG_LONG_INT_64 */
-#error must have a working 64-bit integer datatype
-#endif
+#define INT64CONST(x)  INT64_C(x)
+#define UINT64CONST(x) UINT64_C(x)
 
 /* snprintf format strings to use for 64-bit integers */
 #define INT64_FORMAT "%" INT64_MODIFIER "d"
@@ -575,22 +554,19 @@ typedef unsigned PG_INT128_TYPE uint128
 #endif
 #endif
 
-/*
- * stdint.h limits aren't guaranteed to have compatible types with our fixed
- * width types. So just define our own.
- */
-#define PG_INT8_MIN		(-0x7F-1)
-#define PG_INT8_MAX		(0x7F)
-#define PG_UINT8_MAX	(0xFF)
-#define PG_INT16_MIN	(-0x7FFF-1)
-#define PG_INT16_MAX	(0x7FFF)
-#define PG_UINT16_MAX	(0xFFFF)
-#define PG_INT32_MIN	(-0x7FFFFFFF-1)
-#define PG_INT32_MAX	(0x7FFFFFFF)
-#define PG_UINT32_MAX	(0xFFFFFFFFU)
-#define PG_INT64_MIN	(-INT64CONST(0x7FFFFFFFFFFFFFFF) - 1)
-#define PG_INT64_MAX	INT64CONST(0x7FFFFFFFFFFFFFFF)
-#define PG_UINT64_MAX	UINT64CONST(0xFFFFFFFFFFFFFFFF)
+/* Historical names for limits in stdint.h. */
+#define PG_INT8_MIN		INT8_MIN
+#define PG_INT8_MAX		INT8_MAX
+#define PG_UINT8_MAX	UINT8_MAX
+#define PG_INT16_MIN	INT16_MIN
+#define PG_INT16_MAX	INT16_MAX
+#define PG_UINT16_MAX	UINT16_MAX
+#define PG_INT32_MIN	INT32_MIN
+#define PG_INT32_MAX	INT32_MAX
+#define PG_UINT32_MAX	UINT32_MAX
+#define PG_INT64_MIN	INT64_MIN
+#define PG_INT64_MAX	INT64_MAX
+#define PG_UINT64_MAX	UINT64_MAX
 
 /*
  * We now always use int64 timestamps, but keep this symbol defined for the

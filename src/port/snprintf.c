@@ -568,12 +568,11 @@ nextch2:
 				goto nextch2;
 			case 'z':
 #if SIZEOF_SIZE_T == 8
-#ifdef HAVE_LONG_INT_64
+#if SIZEOF_LONG == 8
 				longflag = 1;
-#elif defined(HAVE_LONG_LONG_INT_64)
-				longlongflag = 1;
 #else
-#error "Don't know how to print 64bit integers"
+				StaticAssertStmt(sizeof(size_t) == sizeof(long long), "unexpected size");
+				longlongflag = 1;
 #endif
 #else
 				/* assume size_t is same size as int */
@@ -835,12 +834,11 @@ nextch1:
 				goto nextch1;
 			case 'z':
 #if SIZEOF_SIZE_T == 8
-#ifdef HAVE_LONG_INT_64
+#if SIZEOF_LONG == 8
 				longflag = 1;
-#elif defined(HAVE_LONG_LONG_INT_64)
-				longlongflag = 1;
 #else
-#error "Don't know how to print 64bit integers"
+				StaticAssertStmt(sizeof(size_t) == sizeof(long long), "unexpected size");
+				longlongflag = 1;
 #endif
 #else
 				/* assume size_t is same size as int */

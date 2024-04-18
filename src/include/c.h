@@ -485,14 +485,10 @@ typedef char *Pointer;
  *		used for numerical computations and the
  *		frontend/backend protocol.
  */
-#ifndef HAVE_INT8
 typedef int8_t int8;			/* == 8 bits */
 typedef int16_t int16;			/* == 16 bits */
 typedef int32_t int32;			/* == 32 bits */
-#endif							/* not HAVE_INT8 */
-#ifndef HAVE_INT64
 typedef int64_t int64;			/* == 64 bits */
-#endif							/* not HAVE_INT64 */
 
 /*
  * uintN
@@ -500,14 +496,10 @@ typedef int64_t int64;			/* == 64 bits */
  *		used for numerical computations and the
  *		frontend/backend protocol.
  */
-#ifndef HAVE_UINT8
 typedef uint8_t uint8;			/* == 8 bits */
 typedef uint16_t uint16;		/* == 16 bits */
 typedef uint32_t uint32;		/* == 32 bits */
-#endif							/* not HAVE_UINT8 */
-#ifndef HAVE_UINT64
 typedef uint64_t uint64;		/* == 64 bits */
-#endif							/* not HAVE_UINT64 */
 
 /*
  * bitsN

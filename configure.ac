@@ -1986,11 +1986,6 @@ if test $ac_cv_alignof_int64_t -gt $MAX_ALIGNOF ; then
 fi
 AC_DEFINE_UNQUOTED(MAXIMUM_ALIGNOF, $MAX_ALIGNOF, [Define as the maximum alignment requirement of any C data type.])
 
-# Some platforms predefine the types int8, int16, etc.  Only check
-# a (hopefully) representative subset.
-AC_CHECK_TYPES([int8, uint8, int64, uint64], [], [],
-[#include <stdio.h>])
-
 # Check how to format int64_t without warnings from printf.
 PGAC_PRINTF_INT64_MODIFIER
 

@@ -197,6 +197,8 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 
 	ExecDropSingleTupleTableSlot(slot);
 
+	index_insert_cleanup(indexRel, indexInfo);
+
 	index_close(indexRel, RowExclusiveLock);
 
 	return PointerGetDatum(NULL);

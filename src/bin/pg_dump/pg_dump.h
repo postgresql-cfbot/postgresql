@@ -670,6 +670,7 @@ typedef struct _SubscriptionInfo
 	char	   *subdisableonerr;
 	char	   *subpasswordrequired;
 	char	   *subrunasowner;
+	char	   *subservername;
 	char	   *subconninfo;
 	char	   *subslotname;
 	char	   *subsynccommit;

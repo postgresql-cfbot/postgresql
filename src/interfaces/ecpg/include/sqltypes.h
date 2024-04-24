@@ -46,7 +46,7 @@
 #define SQLINTERVAL		ECPGt_interval
 #define SQLNCHAR	ECPGt_char
 #define SQLNVCHAR	ECPGt_char
-#ifdef HAVE_LONG_LONG_INT_64
+#if SIZEOF_LONG < 8
 #define SQLINT8		ECPGt_long_long
 #define SQLSERIAL8	ECPGt_long_long
 #else

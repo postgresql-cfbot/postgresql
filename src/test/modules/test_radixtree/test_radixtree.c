@@ -23,7 +23,7 @@
 /* uncomment to use shared memory for the tree */
 /* #define TEST_SHARED_RT */
 
-#define UINT64_HEX_FORMAT "%" INT64_MODIFIER "X"
+#define UINT64_HEX_FORMAT "%" PRIX64
 
 /* Convenient macros to test results */
 #define EXPECT_TRUE(expr)	\

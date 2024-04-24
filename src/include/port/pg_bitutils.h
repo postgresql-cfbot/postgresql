@@ -74,13 +74,12 @@ pg_leftmost_one_pos64(uint64 word)
 #ifdef HAVE__BUILTIN_CLZ
 	Assert(word != 0);
 
-#if defined(HAVE_LONG_INT_64)
+#if SIZEOF_LONG == 8
 	return 63 - __builtin_clzl(word);
-#elif defined(HAVE_LONG_LONG_INT_64)
-	return 63 - __builtin_clzll(word);
 #else
-#error must have a working 64-bit integer datatype
-#endif							/* HAVE_LONG_INT_64 */
+	StaticAssertStmt(sizeof(word) == sizeof(long long), "unexpected size");
+	return 63 - __builtin_clzll(word);
+#endif
 
 #elif defined(_MSC_VER) && (defined(_M_AMD64) || defined(_M_ARM64))
 	unsigned long result;
@@ -147,13 +146,12 @@ pg_rightmost_one_pos64(uint64 word)
 #ifdef HAVE__BUILTIN_CTZ
 	Assert(word != 0);
 
-#if defined(HAVE_LONG_INT_64)
+#if SIZEOF_LONG == 8
 	return __builtin_ctzl(word);
-#elif defined(HAVE_LONG_LONG_INT_64)
-	return __builtin_ctzll(word);
 #else
-#error must have a working 64-bit integer datatype
-#endif							/* HAVE_LONG_INT_64 */
+	StaticAssertStmt(sizeof(word) == sizeof(long long), "unexpected size");
+	return __builtin_ctzll(word);
+#endif
 
 #elif defined(_MSC_VER) && (defined(_M_AMD64) || defined(_M_ARM64))
 	unsigned long result;

@@ -24,7 +24,7 @@ OBJS = \
 	relmapdesc.o \
 	replorigindesc.o \
 	rmgrdesc_utils.o \
-	seqdesc.o \
+	seqlocaldesc.o \
 	smgrdesc.o \
 	spgdesc.o \
 	standbydesc.o \

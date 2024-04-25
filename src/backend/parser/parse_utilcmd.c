@@ -26,6 +26,7 @@
 #include "access/htup_details.h"
 #include "access/relation.h"
 #include "access/reloptions.h"
+#include "access/sequenceam.h"
 #include "access/table.h"
 #include "access/toast_compression.h"
 #include "catalog/dependency.h"
@@ -489,6 +490,7 @@ generateSerialExtraStmts(CreateStmtContext *cxt, ColumnDef *column,
 	seqstmt->sequence = makeRangeVar(snamespace, sname, -1);
 	seqstmt->sequence->relpersistence = seqpersistence;
 	seqstmt->options = seqoptions;
+	seqstmt->accessMethod = NULL;
 
 	/*
 	 * If a sequence data type was specified, add it to the options.  Prepend

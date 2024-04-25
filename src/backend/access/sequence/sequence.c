@@ -13,7 +13,8 @@
  *
  * NOTES
  *	  This file contains sequence_ routines that implement access to sequences
- *	  (in contrast to other relation types like indexes).
+ *	  (in contrast to other relation types like indexes) that are independent
+ *	  of individual sequence access methods.
  *
  *-------------------------------------------------------------------------
  */

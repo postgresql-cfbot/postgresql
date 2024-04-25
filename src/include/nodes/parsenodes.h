@@ -3139,6 +3139,7 @@ typedef struct CreateSeqStmt
 	List	   *options;
 	Oid			ownerId;		/* ID of owner, or InvalidOid for default */
 	bool		for_identity;
+	char	   *accessMethod;	/* USING name of access method (eg. local) */
 	bool		if_not_exists;	/* just do nothing if it already exists? */
 } CreateSeqStmt;
 

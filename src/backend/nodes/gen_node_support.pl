@@ -59,6 +59,7 @@ my @all_input_files = qw(
   nodes/execnodes.h
   access/amapi.h
   access/sdir.h
+  access/sequenceam.h
   access/tableam.h
   access/tsmapi.h
   commands/event_trigger.h
@@ -83,6 +84,7 @@ my @nodetag_only_files = qw(
   nodes/execnodes.h
   access/amapi.h
   access/sdir.h
+  access/sequenceam.h
   access/tableam.h
   access/tsmapi.h
   commands/event_trigger.h

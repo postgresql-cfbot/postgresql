@@ -15,6 +15,7 @@
 
 #include "access/htup_details.h"
 #include "access/table.h"
+#include "access/sequenceam.h"
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
@@ -176,6 +177,16 @@ get_table_am_oid(const char *amname, bool missing_ok)
 }
 
 /*
+ * get_sequence_am_oid - given an access method name, look up its OID
+ *		and verify it corresponds to an sequence AM.
+ */
+Oid
+get_sequence_am_oid(const char *amname, bool missing_ok)
+{
+	return get_am_type_oid(amname, AMTYPE_SEQUENCE, missing_ok);
+}
+
+/*
  * get_am_oid - given an access method name, look up its OID.
  *		The type is not checked.
  */
@@ -215,6 +226,8 @@ get_am_type_string(char amtype)
 	{
 		case AMTYPE_INDEX:
 			return "INDEX";
+		case AMTYPE_SEQUENCE:
+			return "SEQUENCE";
 		case AMTYPE_TABLE:
 			return "TABLE";
 		default:
@@ -250,6 +263,9 @@ lookup_am_handler_func(List *handler_name, char amtype)
 	{
 		case AMTYPE_INDEX:
 			expectedType = INDEX_AM_HANDLEROID;
+			break;
+		case AMTYPE_SEQUENCE:
+			expectedType = SEQUENCE_AM_HANDLEROID;
 			break;
 		case AMTYPE_TABLE:
 			expectedType = TABLE_AM_HANDLEROID;

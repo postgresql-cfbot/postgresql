@@ -17,6 +17,7 @@
 
 #include "access/multixact.h"
 #include "access/seqlocalam.h"
+#include "access/sequenceam.h"
 #include "access/xact.h"
 #include "access/xloginsert.h"
 #include "access/xlogutils.h"
@@ -24,6 +25,7 @@
 #include "commands/tablecmds.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
+#include "utils/builtins.h"
 
 
 /*
@@ -230,10 +232,10 @@ fill_seq_fork_with_data(Relation rel, HeapTuple tuple, ForkNumber forkNum)
  * Allocate a new value for a local sequence, based on the sequence
  * configuration.
  */
-int64
+static int64
 seq_local_nextval(Relation rel, int64 incby, int64 maxv,
-				  int64 minv, int64 cache, bool cycle,
-				  int64 *last)
+			  int64 minv, int64 cache, bool cycle,
+			  int64 *last)
 {
 	int64		result;
 	int64		fetch;
@@ -417,7 +419,7 @@ seq_local_nextval(Relation rel, int64 incby, int64 maxv,
  *
  * Return the table access method used by this sequence.
  */
-const char *
+static const char *
 seq_local_get_table_am(void)
 {
 	return "heap";
@@ -432,7 +434,7 @@ seq_local_get_table_am(void)
  * inserted after the relation has been created, filling in its heap
  * table.
  */
-void
+static void
 seq_local_init(Relation rel, int64 last_value, bool is_called)
 {
 	Datum		value[SEQ_LOCAL_COL_LASTCOL];
@@ -499,7 +501,7 @@ seq_local_init(Relation rel, int64 last_value, bool is_called)
  *
  * Callback for setval().
  */
-void
+static void
 seq_local_setval(Relation rel, int64 next, bool iscalled)
 {
 	Buffer		buf;
@@ -547,7 +549,7 @@ seq_local_setval(Relation rel, int64 next, bool iscalled)
  * Perform a hard reset on the local sequence, rewriting its heap data
  * entirely.
  */
-void
+static void
 seq_local_reset(Relation rel, int64 startv, bool is_called, bool reset_state)
 {
 	Form_pg_seq_local_data seq;
@@ -600,7 +602,7 @@ seq_local_reset(Relation rel, int64 startv, bool is_called, bool reset_state)
  *
  * Retrieve the state of a local sequence.
  */
-void
+static void
 seq_local_get_state(Relation rel, int64 *last_value, bool *is_called)
 {
 	Buffer		buf;
@@ -621,7 +623,7 @@ seq_local_get_state(Relation rel, int64 *last_value, bool *is_called)
  *
  * Persistence change for the local sequence Relation.
  */
-void
+static void
 seq_local_change_persistence(Relation rel, char newrelpersistence)
 {
 	Buffer		buf;
@@ -631,4 +633,25 @@ seq_local_change_persistence(Relation rel, char newrelpersistence)
 	RelationSetNewRelfilenumber(rel, newrelpersistence);
 	fill_seq_with_data(rel, &seqdatatuple);
 	UnlockReleaseBuffer(buf);
+}
+
+/* ------------------------------------------------------------------------
+ * Definition of the local sequence access method.
+ * ------------------------------------------------------------------------
+ */
+static const SequenceAmRoutine seq_local_methods = {
+	.type = T_SequenceAmRoutine,
+	.get_table_am = seq_local_get_table_am,
+	.init = seq_local_init,
+	.nextval = seq_local_nextval,
+	.setval = seq_local_setval,
+	.reset = seq_local_reset,
+	.get_state = seq_local_get_state,
+	.change_persistence = seq_local_change_persistence
+};
+
+Datum
+seq_local_sequenceam_handler(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_POINTER(&seq_local_methods);
 }

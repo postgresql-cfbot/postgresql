@@ -2434,6 +2434,12 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
       <entry>client certificate must not be on this list</entry>
      </row>
 
+     <row>
+      <entry><filename>$PGDATA/pg_hosts.conf</filename></entry>
+      <entry>SNI configuration</entry>
+      <entry>defines which certificates to use for which server hostname</entry>
+     </row>
+
     </tbody>
    </tgroup>
   </table>
@@ -2561,6 +2567,40 @@ openssl x509 -req -in server.csr -text -days 365 \
    </para>
   </sect2>
 
+  <sect2 id="ssl-sni">
+   <title>SNI Configuration</title>
+
+   <para>
+    <productname>PostgreSQL</productname> can be configured for
+    <acronym>SNI</acronym> using the <filename>pg_hosts.conf</filename>
+    configuration file. <productname>PostgreSQL</productname> inspects the TLS
+    hostname extension in the SSL connection handshake, and selects the right
+    SSL certificate, key and CA certificate to use for the connection.
+   </para>
+
+   <para>
+    SNI configuration is defined in the hosts configuration file, which is
+    named <filename>pg_hosts.conf</filename> and is stored in the clusters
+    data directory.  The hosts configuration file contains lines of the general
+    forms:
+<synopsis>
+<replaceable>hostname</replaceable> <replaceable>SSL_certificate</replaceable> <replaceable>SSL_key</replaceable> <replaceable>SSL_CA_certificate</replaceable>
+<replaceable>include</replaceable> <replaceable>file</replaceable>
+<replaceable>include_if_exists</replaceable> <replaceable>file</replaceable>
+<replaceable>include_dir</replaceable> <replaceable>directory</replaceable>
+</synopsis>
+    Comments, whitespace and line continuations are handled in the same way as in
+    <filename>pg_hba.conf</filename>.  <replaceable>hostname</replaceable>
+    is matched againstt the hostname TLS extension in the SSL handshake.
+    <replaceable>SSL_certificate</replaceable>,
+    <replaceable>SSL_key</replaceable>, and
+    <replaceable>SSL_CA_certificate</replaceable>
+    are treated like
+    <xref linkend="guc-ssl-cert-file"/>,
+    <xref linkend="guc-ssl-key-file"/>, and
+    <xref linkend="guc-ssl-ca-file"/> respectively.
+   </para>
+  </sect2>
  </sect1>
 
  <sect1 id="gssapi-enc">

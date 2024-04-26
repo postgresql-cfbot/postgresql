@@ -51,6 +51,13 @@
 #endif
 #include <openssl/x509v3.h>
 
+typedef struct HostContext
+{
+	const char *hostname;
+	SSL_CTX    *context;
+	bool		default_host;
+	bool		ssl_loaded_verify_locations;
+} HostContext;
 
 /* default init hook can be overridden by a shared library */
 static void default_openssl_tls_init(SSL_CTX *context, bool isServerStart);
@@ -73,19 +80,23 @@ static int	alpn_cb(SSL *ssl,
 					const unsigned char *in,
 					unsigned int inlen,
 					void *userdata);
+static int	sni_servername_cb(SSL *ssl, int *al, void *arg);
 static bool initialize_dh(SSL_CTX *context, bool isServerStart);
 static bool initialize_ecdh(SSL_CTX *context, bool isServerStart);
 static const char *SSLerrmessage(unsigned long ecode);
 
 static char *X509_NAME_to_cstring(X509_NAME *name);
 
+static List *contexts = NIL;
 static SSL_CTX *SSL_context = NULL;
+static HostContext *Host_context = NULL;
 static bool SSL_initialized = false;
 static bool dummy_ssl_passwd_cb_called = false;
 static bool ssl_is_server_start;
 
 static int	ssl_protocol_version_to_openssl(int v);
 static const char *ssl_protocol_version_to_string(int v);
+static SSL_CTX *ssl_init_context(bool isServerStart, const char *ctx_ssl_cert_file, const char *ctx_ssl_key_file, const char *ctx_ssl_ca_file);
 
 /* for passing data back from verify_cb() */
 static const char *cert_errdetail;
@@ -97,9 +108,8 @@ static const char *cert_errdetail;
 int
 be_tls_init(bool isServerStart)
 {
-	SSL_CTX    *context;
-	int			ssl_ver_min = -1;
-	int			ssl_ver_max = -1;
+	SSL_CTX    *ctx;
+	List	   *sni_hosts = NIL;
 
 	/* This stuff need be done only once. */
 	if (!SSL_initialized)
@@ -113,6 +123,123 @@ be_tls_init(bool isServerStart)
 #endif
 		SSL_initialized = true;
 	}
+
+	/*
+	 * When ssl_snimode is off or default we load the certificate and key
+	 * specified in postgresql.conf and set that as the default host.
+	 */
+	if (ssl_snimode == SSL_SNIMODE_OFF || ssl_snimode == SSL_SNIMODE_DEFAULT)
+	{
+		HostContext *host_context;
+
+		ctx = ssl_init_context(isServerStart, ssl_cert_file, ssl_key_file, ssl_ca_file);
+		if (ctx == NULL)
+		{
+			ereport(isServerStart ? FATAL : LOG,
+					(errcode(ERRCODE_CONFIG_FILE_ERROR),
+					 errmsg("could not load default certificate")));
+			return -1;
+		}
+
+		host_context = palloc0(sizeof(HostContext));
+
+		host_context->hostname = pstrdup("*");
+		host_context->context = ctx;
+		host_context->default_host = true;
+
+		/*
+		 * Set flag to remember whether CA store has been loaded into
+		 * SSL_context.
+		 */
+		if (ssl_ca_file[0])
+			host_context->ssl_loaded_verify_locations = true;
+
+		/*
+		 * The contexts list is not used in ssl_snimode off but we add the
+		 * entry there anyways for consistency with the other modes.
+		 */
+		contexts = lappend(contexts, host_context);
+
+		/*
+		 * Install the default certificate which for ssl_snimode default can
+		 * be overridden in the callback if a hostname match is found.
+		 */
+		SSL_context = ctx;
+		Host_context = host_context;
+	}
+
+	/*
+	 * In default or strict ssl_snimode we load all certificates/keys which
+	 * are configured in pg_hosts.conf. In strict mode it is considered a
+	 * fatal error in case there are no configured entries.
+	 */
+	if (ssl_snimode == SSL_SNIMODE_STRICT || ssl_snimode == SSL_SNIMODE_DEFAULT)
+	{
+		ListCell   *line;
+
+		/*
+		 * Load pg_hosts.conf and parse each row, returning the set of hosts
+		 * as a list.
+		 */
+		sni_hosts = load_hosts();
+
+		/*
+		 * In strict ssl_snimode there needs to be a working pg_hosts file,
+		 */
+		if (sni_hosts == NIL && ssl_snimode == SSL_SNIMODE_STRICT)
+		{
+			ereport(isServerStart ? FATAL : LOG,
+					(errcode(ERRCODE_CONFIG_FILE_ERROR),
+					 errmsg("could not load pg_hosts.conf file")));
+			return -1;
+		}
+
+		foreach(line, sni_hosts)
+		{
+			HostContext *host_context;
+			HostsLine  *host = lfirst(line);
+			SSL_CTX    *tmp;
+
+			tmp = ssl_init_context(isServerStart, host->ssl_cert, host->ssl_key, host->ssl_ca);
+			if (tmp != NULL)
+			{
+				SSL_context = tmp;
+
+				host_context = palloc(sizeof(HostContext));
+				host_context->hostname = pstrdup(host->hostname);
+				host_context->context = tmp;
+				host_context->default_host = false;
+
+				/*
+				 * Set flag to remember whether CA store has been loaded into
+				 * SSL_context.
+				 */
+				if (host->ssl_ca)
+					host_context->ssl_loaded_verify_locations = true;
+
+				contexts = lappend(contexts, host_context);
+			}
+		}
+	}
+
+	/* Make sure we have at least one certificate loaded */
+	if (list_length(contexts) < 1)
+	{
+		ereport(isServerStart ? FATAL : LOG,
+				(errcode(ERRCODE_CONFIG_FILE_ERROR),
+				 errmsg("no SSL contexts loaded")));
+		return -1;
+	}
+
+	return 0;
+}
+
+static SSL_CTX *
+ssl_init_context(bool isServerStart, const char *ctx_ssl_cert_file, const char *ctx_ssl_key_file, const char *ctx_ssl_ca_file)
+{
+	SSL_CTX    *context;
+	int			ssl_ver_min = -1;
+	int			ssl_ver_max = -1;
 
 	/*
 	 * Create a new SSL context into which we'll load all the configuration
@@ -140,6 +267,13 @@ be_tls_init(bool isServerStart)
 	SSL_CTX_set_mode(context, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
 
 	/*
+	 * Install SNI TLS extension callback in case the server is configured to
+	 * validate hostnames.
+	 */
+	if (ssl_snimode != SSL_SNIMODE_OFF)
+		SSL_CTX_set_tlsext_servername_callback(context, sni_servername_cb);
+
+	/*
 	 * Call init hook (usually to set password callback)
 	 */
 	(*openssl_tls_init_hook) (context, isServerStart);
@@ -150,16 +284,16 @@ be_tls_init(bool isServerStart)
 	/*
 	 * Load and verify server's certificate and private key
 	 */
-	if (SSL_CTX_use_certificate_chain_file(context, ssl_cert_file) != 1)
+	if (SSL_CTX_use_certificate_chain_file(context, ctx_ssl_cert_file) != 1)
 	{
 		ereport(isServerStart ? FATAL : LOG,
 				(errcode(ERRCODE_CONFIG_FILE_ERROR),
 				 errmsg("could not load server certificate file \"%s\": %s",
-						ssl_cert_file, SSLerrmessage(ERR_get_error()))));
+						ctx_ssl_cert_file, SSLerrmessage(ERR_get_error()))));
 		goto error;
 	}
 
-	if (!check_ssl_key_file_permissions(ssl_key_file, isServerStart))
+	if (!check_ssl_key_file_permissions(ctx_ssl_key_file, isServerStart))
 		goto error;
 
 	/*
@@ -168,19 +302,19 @@ be_tls_init(bool isServerStart)
 	dummy_ssl_passwd_cb_called = false;
 
 	if (SSL_CTX_use_PrivateKey_file(context,
-									ssl_key_file,
+									ctx_ssl_key_file,
 									SSL_FILETYPE_PEM) != 1)
 	{
 		if (dummy_ssl_passwd_cb_called)
 			ereport(isServerStart ? FATAL : LOG,
 					(errcode(ERRCODE_CONFIG_FILE_ERROR),
 					 errmsg("private key file \"%s\" cannot be reloaded because it requires a passphrase",
-							ssl_key_file)));
+							ctx_ssl_key_file)));
 		else
 			ereport(isServerStart ? FATAL : LOG,
 					(errcode(ERRCODE_CONFIG_FILE_ERROR),
 					 errmsg("could not load private key file \"%s\": %s",
-							ssl_key_file, SSLerrmessage(ERR_get_error()))));
+							ctx_ssl_key_file, SSLerrmessage(ERR_get_error()))));
 		goto error;
 	}
 
@@ -316,17 +450,17 @@ be_tls_init(bool isServerStart)
 	/*
 	 * Load CA store, so we can verify client certificates if needed.
 	 */
-	if (ssl_ca_file[0])
+	if (ctx_ssl_ca_file[0])
 	{
 		STACK_OF(X509_NAME) * root_cert_list;
 
-		if (SSL_CTX_load_verify_locations(context, ssl_ca_file, NULL) != 1 ||
-			(root_cert_list = SSL_load_client_CA_file(ssl_ca_file)) == NULL)
+		if (SSL_CTX_load_verify_locations(context, ctx_ssl_ca_file, NULL) != 1 ||
+			(root_cert_list = SSL_load_client_CA_file(ctx_ssl_ca_file)) == NULL)
 		{
 			ereport(isServerStart ? FATAL : LOG,
 					(errcode(ERRCODE_CONFIG_FILE_ERROR),
 					 errmsg("could not load root certificate file \"%s\": %s",
-							ssl_ca_file, SSLerrmessage(ERR_get_error()))));
+							ctx_ssl_ca_file, SSLerrmessage(ERR_get_error()))));
 			goto error;
 		}
 
@@ -398,38 +532,29 @@ be_tls_init(bool isServerStart)
 		}
 	}
 
-	/*
-	 * Success!  Replace any existing SSL_context.
-	 */
-	if (SSL_context)
-		SSL_CTX_free(SSL_context);
-
-	SSL_context = context;
-
-	/*
-	 * Set flag to remember whether CA store has been loaded into SSL_context.
-	 */
-	if (ssl_ca_file[0])
-		ssl_loaded_verify_locations = true;
-	else
-		ssl_loaded_verify_locations = false;
-
-	return 0;
+	return context;
 
 	/* Clean up by releasing working context. */
 error:
 	if (context)
 		SSL_CTX_free(context);
-	return -1;
+	return NULL;
 }
 
 void
 be_tls_destroy(void)
 {
-	if (SSL_context)
-		SSL_CTX_free(SSL_context);
+	ListCell   *cell;
+
+	foreach(cell, contexts)
+	{
+		HostContext *host_context = lfirst(cell);
+
+		SSL_CTX_free(host_context->context);
+		pfree(host_context);
+	}
+
 	SSL_context = NULL;
-	ssl_loaded_verify_locations = false;
 }
 
 int
@@ -1358,6 +1483,60 @@ alpn_cb(SSL *ssl,
 	}
 }
 
+static int
+sni_servername_cb(SSL *ssl, int *al, void *arg)
+{
+	const char *tlsext_hostname;
+	ListCell   *cell;
+	HostContext *host_context;
+
+	Assert(ssl_snimode != SSL_SNIMODE_OFF);
+
+	tlsext_hostname = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
+
+	if (!tlsext_hostname)
+	{
+		if (ssl_snimode == SSL_SNIMODE_STRICT)
+		{
+			ereport(COMMERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("no hostname provided in callback")));
+			return SSL_TLSEXT_ERR_ALERT_FATAL;
+		}
+		else
+			return SSL_TLSEXT_ERR_OK;
+	}
+
+	foreach(cell, contexts)
+	{
+		host_context = lfirst(cell);
+
+		if (strcmp(host_context->hostname, tlsext_hostname) == 0)
+		{
+			Host_context = host_context;
+			SSL_context = host_context->context;
+			SSL_set_SSL_CTX(ssl, SSL_context);
+			return SSL_TLSEXT_ERR_OK;
+		}
+	}
+
+	if (ssl_snimode == SSL_SNIMODE_STRICT)
+	{
+		ereport(COMMERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("no matching pg_hosts entry found for hostname: \"%s\"",
+						tlsext_hostname)));
+		return SSL_TLSEXT_ERR_ALERT_FATAL;
+	}
+
+	/*
+	 * In ssl_snimode "default" we can return without doing anything since we
+	 * already installed the context for the default host when parsing the
+	 * hosts file.
+	 */
+	Assert(SSL_context);
+	return SSL_TLSEXT_ERR_OK;
+}
 
 /*
  * Set DH parameters for generating ephemeral DH keys.  The
@@ -1550,6 +1729,12 @@ be_tls_get_peer_serial(Port *port, char *ptr, size_t len)
 	}
 	else
 		ptr[0] = '\0';
+}
+
+bool
+be_tls_loaded_verify_locations(void)
+{
+	return Host_context->ssl_loaded_verify_locations;
 }
 
 char *

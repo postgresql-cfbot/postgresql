@@ -1617,6 +1617,68 @@ include_dir 'conf.d'
        </para>
       </listitem>
      </varlistentry>
+
+     <varlistentry id="guc-ssl-snimode" xreflabel="ssl_snimode">
+      <term><varname>ssl_snimode</varname> (<type>enum</type>)
+      <indexterm>
+       <primary><varname>ssl_snimode</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This parameter determines if the server will inspect the <acronym>SNI</acronym> TLS extension
+        when establishing the connection, and how it should be interpreted.
+        Valid values are currently: <literal>off</literal>, <literal>default</literal> and <literal>strict</literal>.
+       </para>
+       <para>
+        <variablelist>
+         <varlistentry id="guc-ssl-snimode-off">
+          <term><literal>off</literal></term>
+          <listitem>
+           <para>
+            SNI is not enabled and no configuration from
+            <filename>pg_hosts.conf</filename> is loaded.  Configuration of SSL
+            for all connections is done with <xref linkend="guc-ssl-cert-file"/>,
+            <xref linkend="guc-ssl-key-file"/> and <xref linkend="guc-ssl-ca-file"/>.
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry id="guc-ssl-snimode-default">
+          <term><literal>default</literal></term>
+          <listitem>
+           <para>
+            SNI is enabled and hostname configuration is loaded from
+            <filename>pg_hosts.conf</filename>. <xref linkend="guc-ssl-cert-file"/>,
+            <xref linkend="guc-ssl-key-file"/> and <xref linkend="guc-ssl-ca-file"/>
+            are loaded as the default configuration.  Any connection specifying
+            <xref linkend="libpq-connect-sslsni"/> to <literal>1</literal>
+            a hostname which is missing in <filename>pg_hosts.conf</filename>
+            will be attempted using the default configuration. If the hostname
+            matches an entry from <filename>pg_hosts.conf</filename>, then the
+            configuration from that entry will be used for setting up the
+            connection.
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry id="guc-ssl-snimode-strict">
+          <term><literal>strict</literal></term>
+          <listitem>
+           <para>
+            SNI is enabled and all connections are required to set <xref
+            linkend="libpq-connect-sslsni"/> to <literal>1</literal> and
+            specify a hostname matching an entry in
+            <filename>pg_hosts.conf</filename>. Any connection without <xref
+            linkend="libpq-connect-sslsni"/> or with a hostname missing from
+            <filename>pg_hosts.conf</filename> will be rejected.
+           </para>
+          </listitem>
+         </varlistentry>
+        </variablelist>
+       </para>
+      </listitem>
+     </varlistentry>
     </variablelist>
     </sect2>
    </sect1>

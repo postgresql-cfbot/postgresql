@@ -474,6 +474,13 @@ static const struct config_enum_entry wal_compression_options[] = {
 	{NULL, 0, false}
 };
 
+static const struct config_enum_entry ssl_snimode_options[] = {
+	{"off", SSL_SNIMODE_OFF, false},
+	{"default", SSL_SNIMODE_DEFAULT, false},
+	{"strict", SSL_SNIMODE_STRICT, false},
+	{NULL, 0, false}
+};
+
 /*
  * Options for enum values stored in other modules
  */
@@ -538,6 +545,7 @@ char	   *cluster_name = "";
 char	   *ConfigFileName;
 char	   *HbaFileName;
 char	   *IdentFileName;
+char	   *HostsFileName;
 char	   *external_pid_file;
 
 char	   *application_name;
@@ -4544,6 +4552,17 @@ struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		{"hosts_file", PGC_POSTMASTER, FILE_LOCATIONS,
+			gettext_noop("Sets the server's \"hosts\" configuration file."),
+			NULL,
+			GUC_SUPERUSER_ONLY
+		},
+		&HostsFileName,
+		NULL,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"external_pid_file", PGC_POSTMASTER, FILE_LOCATIONS,
 			gettext_noop("Writes the postmaster PID to the specified file."),
 			NULL,
@@ -5171,6 +5190,18 @@ struct config_enum ConfigureNamesEnum[] =
 		&ssl_max_protocol_version,
 		PG_TLS_ANY,
 		ssl_protocol_versions_info,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"ssl_snimode", PGC_SIGHUP, CONN_AUTH_SSL,
+			gettext_noop("Sets the SNI mode to use."),
+			NULL,
+			GUC_SUPERUSER_ONLY,
+		},
+		&ssl_snimode,
+		SSL_SNIMODE_DEFAULT,
+		ssl_snimode_options,
 		NULL, NULL, NULL
 	},
 

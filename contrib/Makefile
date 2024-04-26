@@ -42,6 +42,7 @@ SUBDIRS = \
 		pg_walinspect	\
 		postgres_fdw	\
 		seg		\
+		snowflake	\
 		spi		\
 		tablefunc	\
 		tcn		\

@@ -338,6 +338,9 @@ SELECT extract(epoch from '5000-01-01 00:00:00'::timestamp);
 SELECT timestamp '294276-12-31 23:59:59' - timestamp '1999-12-23 19:59:04.224193' AS ok;
 SELECT timestamp '294276-12-31 23:59:59' - timestamp '1999-12-23 19:59:04.224192' AS overflows;
 
+-- test edge-case overflow in timestamp plus interval
+SELECT timestamp '294276-12-31 23:59:59' + interval '9223372036854775807 microseconds';
+
 -- TO_CHAR()
 SELECT to_char(d1, 'DAY Day day DY Dy dy MONTH Month month RM MON Mon mon')
    FROM TIMESTAMP_TBL;

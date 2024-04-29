@@ -501,7 +501,7 @@ errfinish(const char *filename, int lineno, const char *funcname)
 		  backtrace_functions &&
 		  matches_backtrace_functions(edata->funcname)) ||
 		 (edata->sqlerrcode == ERRCODE_INTERNAL_ERROR &&
-		  backtrace_on_internal_error)))
+		  backtrace_mode == BACKTRACE_MODE_INTERNAL)))
 		set_backtrace(edata, 2);
 
 	/*

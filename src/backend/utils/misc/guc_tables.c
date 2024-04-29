@@ -79,6 +79,7 @@
 #include "tsearch/ts_cache.h"
 #include "utils/builtins.h"
 #include "utils/bytea.h"
+#include "utils/elog.h"
 #include "utils/float.h"
 #include "utils/guc_hooks.h"
 #include "utils/guc_tables.h"
@@ -116,6 +117,15 @@ extern bool optimize_bounded_sort;
  *
  * NOTE! Option values may not contain double quotes!
  */
+
+static const struct config_enum_entry backtrace_mode_options[] = {
+	{"none", BACKTRACE_MODE_NONE, false},
+	{"internal", BACKTRACE_MODE_INTERNAL, false},
+	{NULL, 0, false}
+};
+
+StaticAssertDecl(lengthof(backtrace_mode_options) == (BACKTRACE_MODE_INTERNAL + 2),
+				 "array length mismatch");
 
 static const struct config_enum_entry bytea_output_options[] = {
 	{"escape", BYTEA_OUTPUT_ESCAPE, false},
@@ -531,7 +541,7 @@ int			log_temp_files = -1;
 double		log_statement_sample_rate = 1.0;
 double		log_xact_sample_rate = 0;
 char	   *backtrace_functions;
-bool		backtrace_on_internal_error = false;
+int			backtrace_mode = BACKTRACE_MODE_NONE;
 
 int			temp_file_limit = -1;
 
@@ -770,16 +780,6 @@ StaticAssertDecl(lengthof(config_type_names) == (PGC_ENUM + 1),
 
 struct config_bool ConfigureNamesBool[] =
 {
-	{
-		{"backtrace_on_internal_error", PGC_SUSET, DEVELOPER_OPTIONS,
-			gettext_noop("Log backtrace for any error with error code XX000 (internal error)."),
-			NULL,
-			GUC_NOT_IN_SAMPLE
-		},
-		&backtrace_on_internal_error,
-		false,
-		NULL, NULL, NULL
-	},
 	{
 		{"enable_seqscan", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of sequential-scan plans."),
@@ -4742,6 +4742,17 @@ struct config_enum ConfigureNamesEnum[] =
 		},
 		&backslash_quote,
 		BACKSLASH_QUOTE_SAFE_ENCODING, backslash_quote_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"backtrace_mode", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Controls backtrace logging."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&backtrace_mode,
+		BACKTRACE_MODE_NONE, backtrace_mode_options,
 		NULL, NULL, NULL
 	},
 

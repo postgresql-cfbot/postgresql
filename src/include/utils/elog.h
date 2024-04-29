@@ -495,6 +495,12 @@ typedef enum
 	PGERROR_VERBOSE,			/* all the facts, ma'am */
 }			PGErrorVerbosity;
 
+typedef enum
+{
+	BACKTRACE_MODE_NONE,		/* no backtraces */
+	BACKTRACE_MODE_INTERNAL,	/* backtraces for internal error code */
+} BacktraceMode;
+
 extern PGDLLIMPORT int Log_error_verbosity;
 extern PGDLLIMPORT char *Log_line_prefix;
 extern PGDLLIMPORT int Log_destination;

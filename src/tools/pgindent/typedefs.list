@@ -240,6 +240,7 @@ BackgroundWorker
 BackgroundWorkerArray
 BackgroundWorkerHandle
 BackgroundWorkerSlot
+BacktraceMode
 BackupState
 Barrier
 BaseBackupCmd

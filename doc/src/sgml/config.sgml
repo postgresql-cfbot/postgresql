@@ -11381,19 +11381,22 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </listitem>
      </varlistentry>
 
-     <varlistentry id="guc-backtrace-on-internal-error" xreflabel="backtrace_on_internal_error">
-      <term><varname>backtrace_on_internal_error</varname> (<type>boolean</type>)
+     <varlistentry id="guc-backtrace-mode" xreflabel="backtrace_mode">
+      <term><varname>backtrace_mode</varname> (<type>enum</type>)
       <indexterm>
-        <primary><varname>backtrace_on_internal_error</varname> configuration parameter</primary>
+        <primary><varname>backtrace_mode</varname> configuration parameter</primary>
       </indexterm>
       </term>
       <listitem>
        <para>
-        If this parameter is on and an error with error code XX000 (internal
-        error; see also <xref linkend="errcodes-appendix"/>) is raised, then a
-        backtrace is written to the server log together with the error
-        message.  This can be used to debug such internal errors (which should
-        normally not happen in production).  The default is off.
+        Controls how backtraces should be logged.
+        If this parameter is <literal>internal</literal> and an error
+        with error code XX000 (internal error; see also
+        <xref linkend="errcodes-appendix"/>) is raised, then a backtrace
+        is written to the server log together with the error message.
+        This can be used to debug such internal errors (which should
+        normally not happen in production).  The default is
+        <literal>none</literal>, to not log backtraces.
        </para>
 
        <para>

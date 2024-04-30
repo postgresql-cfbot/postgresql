@@ -2514,7 +2514,7 @@ check_authmethod_valid(const char *authmethod, const char *const *valid_methods,
 			return;
 		/* with space = param */
 		if (strchr(authmethod, ' '))
-			if (strncmp(authmethod, *p, (authmethod - strchr(authmethod, ' '))) == 0)
+			if (strncmp(authmethod, *p, (strchr(authmethod, ' ') - authmethod)) == 0)
 				return;
 	}
 

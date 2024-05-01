@@ -5365,7 +5365,7 @@ WHERE ...
        <row>
         <entry><type>unknown</type></entry>
         <entry>Identifies a not-yet-resolved type, e.g., of an undecorated
-         string literal.</entry>
+         string literal.  Also, the <link linkend="nullvalues-usage">null value.</link></entry>
        </row>
       </tbody>
      </tgroup>

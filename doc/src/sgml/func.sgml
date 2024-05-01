@@ -23434,7 +23434,8 @@ MERGE INTO products p
    This section describes the <acronym>SQL</acronym>-compliant subquery
    expressions available in <productname>PostgreSQL</productname>.
    All of the expression forms documented in this section return
-   Boolean (true/false) results.
+   <link linkend="nullvalues">three-valued</link> typed
+   results (true, false, or null).
   </para>
 
   <sect2 id="functions-subquery-exists">
@@ -23496,19 +23497,17 @@ WHERE EXISTS (SELECT 1 FROM tab2 WHERE col2 = tab1.col2);
 
   <para>
    The right-hand side is a parenthesized
-   subquery, which must return exactly one column.  The left-hand expression
+   subquery, which must return exactly one column.  The result of <token>IN</token>
+   is <quote>false</quote> if the subquery returns no rows, otherwise the left-hand expression
    is evaluated and compared to each row of the subquery result.
-   The result of <token>IN</token> is <quote>true</quote> if any equal subquery row is found.
-   The result is <quote>false</quote> if no equal row is found (including the
-   case where the subquery returns no rows).
+   The result is <quote>true</quote> if any equal subquery row is found.
+   The result is <quote>false</quote> if no equal row is found.
   </para>
 
   <para>
-   Note that if the left-hand expression yields null, or if there are
-   no equal right-hand values and at least one right-hand row yields
-   null, the result of the <token>IN</token> construct will be null, not false.
-   This is in accordance with SQL's normal rules for Boolean combinations
-   of null values.
+   As explained in <xref linkend="nullvalues-multielement"/>, it is not possible to see
+   a <quote>false</quote> result in the presence of both rows and null values since the multiple equality
+   tests are AND'd together.
   </para>
 
   <para>
@@ -23525,21 +23524,18 @@ WHERE EXISTS (SELECT 1 FROM tab2 WHERE col2 = tab1.col2);
    as described in <xref linkend="sql-syntax-row-constructors"/>.
    The right-hand side is a parenthesized
    subquery, which must return exactly as many columns as there are
-   expressions in the left-hand row.  The left-hand expressions are
+   expressions in the left-hand row.
+   The result of <token>IN</token> is <quote>false</quote> if the subquery returns no rows,
+   otherwise the left-hand expressions are
    evaluated and compared row-wise to each row of the subquery result.
-   The result of <token>IN</token> is <quote>true</quote> if any equal subquery row is found.
-   The result is <quote>false</quote> if no equal row is found (including the
-   case where the subquery returns no rows).
+   The result is <quote>true</quote> if any equal subquery row is found.
+   The result is <quote>false</quote> if no equal row is found.
   </para>
 
   <para>
-   As usual, null values in the rows are combined per
-   the normal rules of SQL Boolean expressions.  Two rows are considered
-   equal if all their corresponding members are non-null and equal; the rows
-   are unequal if any corresponding members are non-null and unequal;
-   otherwise the result of that row comparison is unknown (null).
-   If all the per-row results are either unequal or null, with at least one
-   null, then the result of <token>IN</token> is null.
+   As explained in <xref linkend="nullvalues-multielement"/>, it is not possible to see
+   a <quote>false</quote> result in the presence of both rows and null values since the multiple equality
+   tests are OR'd together.
   </para>
   </sect2>
 
@@ -23551,20 +23547,17 @@ WHERE EXISTS (SELECT 1 FROM tab2 WHERE col2 = tab1.col2);
 </synopsis>
 
   <para>
-   The right-hand side is a parenthesized
-   subquery, which must return exactly one column.  The left-hand expression
-   is evaluated and compared to each row of the subquery result.
-   The result of <token>NOT IN</token> is <quote>true</quote> if only unequal subquery rows
-   are found (including the case where the subquery returns no rows).
+   The right-hand side is a parenthesized subquery, which must return exactly one column.
+   The result of <token>NOT IN</token> is <quote>true</quote> if the subquery returns no rows,
+   otherwise the left-hand expression is evaluated and compared to each row of the subquery result.
+   The result is <quote>true</quote> if only unequal subquery rows are found.
    The result is <quote>false</quote> if any equal row is found.
   </para>
 
   <para>
-   Note that if the left-hand expression yields null, or if there are
-   no equal right-hand values and at least one right-hand row yields
-   null, the result of the <token>NOT IN</token> construct will be null, not true.
-   This is in accordance with SQL's normal rules for Boolean combinations
-   of null values.
+   As explained in <xref linkend="nullvalues-multielement"/>, it is not possible to see
+   a <quote>true</quote> result in the presence of both rows and null values since the multiple inequality
+   tests are OR'd together.
   </para>
 
   <para>
@@ -23581,21 +23574,18 @@ WHERE EXISTS (SELECT 1 FROM tab2 WHERE col2 = tab1.col2);
    as described in <xref linkend="sql-syntax-row-constructors"/>.
    The right-hand side is a parenthesized
    subquery, which must return exactly as many columns as there are
-   expressions in the left-hand row.  The left-hand expressions are
+   expressions in the left-hand row.
+   The result of <token>NOT IN</token> is <quote>true</quote> if the subquery returns no rows,
+   otherwise the left-hand expressions are
    evaluated and compared row-wise to each row of the subquery result.
-   The result of <token>NOT IN</token> is <quote>true</quote> if only unequal subquery rows
-   are found (including the case where the subquery returns no rows).
+   The result is <quote>true</quote> if only unequal subquery rows are found.
    The result is <quote>false</quote> if any equal row is found.
   </para>
 
   <para>
-   As usual, null values in the rows are combined per
-   the normal rules of SQL Boolean expressions.  Two rows are considered
-   equal if all their corresponding members are non-null and equal; the rows
-   are unequal if any corresponding members are non-null and unequal;
-   otherwise the result of that row comparison is unknown (null).
-   If all the per-row results are either unequal or null, with at least one
-   null, then the result of <token>NOT IN</token> is null.
+   As explained in <xref linkend="nullvalues-multielement"/>, it is not possible to see
+   a <quote>true</quote> result in the presence of both rows and null values since the multiple inequality
+   tests are OR'd together.
   </para>
   </sect2>
 
@@ -23609,13 +23599,13 @@ WHERE EXISTS (SELECT 1 FROM tab2 WHERE col2 = tab1.col2);
 
   <para>
    The right-hand side is a parenthesized
-   subquery, which must return exactly one column.  The left-hand expression
+   subquery, which must return exactly one column.  The result of <token>ANY</token> is
+   <quote>false</quote> if the subquery returns no rows, otherwise the left-hand expression
    is evaluated and compared to each row of the subquery result using the
    given <replaceable>operator</replaceable>, which must yield a Boolean
    result.
-   The result of <token>ANY</token> is <quote>true</quote> if any true result is obtained.
-   The result is <quote>false</quote> if no true result is found (including the
-   case where the subquery returns no rows).
+   The result is <quote>true</quote> if any true result is obtained.
+   The result is <quote>false</quote> if no true result is found.
   </para>
 
   <para>
@@ -23624,11 +23614,10 @@ WHERE EXISTS (SELECT 1 FROM tab2 WHERE col2 = tab1.col2);
   </para>
 
   <para>
-   Note that if there are no successes and at least one right-hand row yields
-   null for the operator's result, the result of the <token>ANY</token> construct
-   will be null, not false.
-   This is in accordance with SQL's normal rules for Boolean combinations
-   of null values.
+   If <replaceable>operator</replaceable> can produce null valued booleans then, as explained in
+   <xref linkend="nullvalues-multielement"/>, it is not possible to see
+   a <quote>false</quote> result in the presence of both rows and null values since the multiple equality
+   tests are AND'd together.  Note that <literal>IS DISTINCT FROM</literal> is not an operator.
   </para>
 
   <para>
@@ -23646,16 +23635,19 @@ WHERE EXISTS (SELECT 1 FROM tab2 WHERE col2 = tab1.col2);
    as described in <xref linkend="sql-syntax-row-constructors"/>.
    The right-hand side is a parenthesized
    subquery, which must return exactly as many columns as there are
-   expressions in the left-hand row.  The left-hand expressions are
+   expressions in the left-hand row.  The result of <token>ANY</token> is
+   <quote>false</quote> if the subquery returns no rows, otherwise the left-hand expressions are
    evaluated and compared row-wise to each row of the subquery result,
    using the given <replaceable>operator</replaceable>.
-   The result of <token>ANY</token> is <quote>true</quote> if the comparison
-   returns true for any subquery row.
-   The result is <quote>false</quote> if the comparison returns false for every
-   subquery row (including the case where the subquery returns no
-   rows).
-   The result is NULL if no comparison with a subquery row returns true,
-   and at least one comparison returns NULL.
+   The result is <quote>true</quote> if the comparison returns true for any subquery row.
+   The result is <quote>false</quote> if the comparison returns false for every subquery row.
+  </para>
+
+  <para>
+   If <replaceable>operator</replaceable> can produce null valued booleans then, as explained in
+   <xref linkend="nullvalues-multielement"/>, it is not possible to see
+   a <quote>false</quote> result in the presence of both rows and null values since the multiple equality
+   tests are OR'd together.  Note that <literal>IS DISTINCT FROM</literal> is not an operator.
   </para>
 
   <para>
@@ -23673,15 +23665,20 @@ WHERE EXISTS (SELECT 1 FROM tab2 WHERE col2 = tab1.col2);
 
   <para>
    The right-hand side is a parenthesized
-   subquery, which must return exactly one column.  The left-hand expression
+   subquery, which must return exactly one column.  The result of <token>ALL</token> is
+   <quote>true</quote> if the subquery returns no rows, otherwise the left-hand expression
    is evaluated and compared to each row of the subquery result using the
    given <replaceable>operator</replaceable>, which must yield a Boolean
    result.
-   The result of <token>ALL</token> is <quote>true</quote> if all rows yield true
-   (including the case where the subquery returns no rows).
+   The result is <quote>true</quote> if all rows yield true.
    The result is <quote>false</quote> if any false result is found.
-   The result is NULL if no comparison with a subquery row returns false,
-   and at least one comparison returns NULL.
+  </para>
+
+  <para>
+   If <replaceable>operator</replaceable> can produce null valued booleans then, as explained in
+   <xref linkend="nullvalues-multielement"/>, it is not possible to see
+   a <quote>true</quote> result in the presence of both rows and null values since the multiple equality
+   tests are AND'd together.  Note that <literal>IS DISTINCT FROM</literal> is not an operator.
   </para>
 
   <para>
@@ -23702,22 +23699,21 @@ WHERE EXISTS (SELECT 1 FROM tab2 WHERE col2 = tab1.col2);
    as described in <xref linkend="sql-syntax-row-constructors"/>.
    The right-hand side is a parenthesized
    subquery, which must return exactly as many columns as there are
-   expressions in the left-hand row.  The left-hand expressions are
+   expressions in the left-hand row.  The result of <token>ALL</token> is
+   <quote>true</quote> if the subquery returns no rows, otherwise the left-hand expressions are
    evaluated and compared row-wise to each row of the subquery result,
    using the given <replaceable>operator</replaceable>.
-   The result of <token>ALL</token> is <quote>true</quote> if the comparison
-   returns true for all subquery rows (including the
-   case where the subquery returns no rows).
-   The result is <quote>false</quote> if the comparison returns false for any
-   subquery row.
-   The result is NULL if no comparison with a subquery row returns false,
-   and at least one comparison returns NULL.
+   The result is <quote>true</quote> if the comparison returns true for all subquery rows.
+   The result is <quote>false</quote> if the comparison returns false for any subquery row.
   </para>
 
   <para>
-   See <xref linkend="row-wise-comparison"/> for details about the meaning
-   of a row constructor comparison.
+   If <replaceable>operator</replaceable> can produce null valued booleans then, as explained in
+   <xref linkend="nullvalues-multielement"/>, it is not possible to see
+   a <quote>true</quote> result in the presence of both rows and null values since the multiple equality
+   tests are AND'd together.  Note that <literal>IS DISTINCT FROM</literal> is not an operator.
   </para>
+
   </sect2>
 
   <sect2 id="functions-subquery-single-row-comp">
@@ -23740,6 +23736,14 @@ WHERE EXISTS (SELECT 1 FROM tab2 WHERE col2 = tab1.col2);
    the subquery cannot return more than one row.  (If it returns zero rows,
    the result is taken to be null.)  The left-hand side is evaluated and
    compared row-wise to the single subquery result row.
+  </para>
+
+  <para>
+   If <replaceable>operator</replaceable> can produce null valued booleans then, as explained in
+   <xref linkend="nullvalues-multielement"/>, the result cannot be <quote>true</quote> in the
+   presence of null valued fields in either the row constructor or the subquery result row, as
+   the individual field tests are AND'd together.
+   Note that <literal>IS DISTINCT FROM</literal> is not an operator.
   </para>
 
   <para>
@@ -23809,7 +23813,8 @@ WHERE EXISTS (SELECT 1 FROM tab2 WHERE col2 = tab1.col2);
    <productname>PostgreSQL</productname> extensions; the rest are
    <acronym>SQL</acronym>-compliant.
    All of the expression forms documented in this section return
-   Boolean (true/false) results.
+   <link linkend="nullvalues">three-valued</link> boolean typed
+   results (true, false, or null).
   </para>
 
   <sect2 id="functions-comparisons-in-scalar">
@@ -23822,24 +23827,13 @@ WHERE EXISTS (SELECT 1 FROM tab2 WHERE col2 = tab1.col2);
   <para>
    The right-hand side is a parenthesized list
    of expressions.  The result is <quote>true</quote> if the left-hand expression's
-   result is equal to any of the right-hand expressions.  This is a shorthand
-   notation for
-
-<synopsis>
-<replaceable>expression</replaceable> = <replaceable>value1</replaceable>
-OR
-<replaceable>expression</replaceable> = <replaceable>value2</replaceable>
-OR
-...
-</synopsis>
+   result is equal to any of the right-hand expressions.
   </para>
 
   <para>
-   Note that if the left-hand expression yields null, or if there are
-   no equal right-hand values and at least one right-hand expression yields
-   null, the result of the <token>IN</token> construct will be null, not false.
-   This is in accordance with SQL's normal rules for Boolean combinations
-   of null values.
+   As explained in <xref linkend="nullvalues-multielement"/>, it is not possible to see
+   a <quote>false</quote> result in the presence null values since the multiple equality
+   tests are OR'd together.
   </para>
   </sect2>
 
@@ -23853,35 +23847,15 @@ OR
   <para>
    The right-hand side is a parenthesized list
    of expressions.  The result is <quote>true</quote> if the left-hand expression's
-   result is unequal to all of the right-hand expressions.  This is a shorthand
-   notation for
-
-<synopsis>
-<replaceable>expression</replaceable> &lt;&gt; <replaceable>value1</replaceable>
-AND
-<replaceable>expression</replaceable> &lt;&gt; <replaceable>value2</replaceable>
-AND
-...
-</synopsis>
+   result is unequal to all of the right-hand expressions.
   </para>
 
   <para>
-   Note that if the left-hand expression yields null, or if there are
-   no equal right-hand values and at least one right-hand expression yields
-   null, the result of the <token>NOT IN</token> construct will be null, not true
-   as one might naively expect.
-   This is in accordance with SQL's normal rules for Boolean combinations
-   of null values.
+   As explained in <xref linkend="nullvalues-multielement"/>, it is not possible to see
+   a <quote>true</quote> result in the presence of null values since the multiple inequality
+   tests are OR'd together.
   </para>
 
-  <tip>
-  <para>
-   <literal>x NOT IN y</literal> is equivalent to <literal>NOT (x IN y)</literal> in all
-   cases.  However, null values are much more likely to trip up the novice when
-   working with <token>NOT IN</token> than when working with <token>IN</token>.
-   It is best to express your condition positively if possible.
-  </para>
-  </tip>
   </sect2>
 
   <sect2 id="functions-comparisons-any-some">
@@ -23894,30 +23868,26 @@ AND
 
   <para>
    The right-hand side is a parenthesized expression, which must yield an
-   array value.
-   The left-hand expression
+   array value. The result of <token>ANY</token> is
+   <quote>false</quote> if the array has zero element, otherwise
+   the left-hand expression
    is evaluated and compared to each element of the array using the
    given <replaceable>operator</replaceable>, which must yield a Boolean
    result.
-   The result of <token>ANY</token> is <quote>true</quote> if any true result is obtained.
-   The result is <quote>false</quote> if no true result is found (including the
-   case where the array has zero elements).
+   The result is <quote>true</quote> if any true result is obtained.
+   The result is <quote>false</quote> if no true result is found.
   </para>
 
   <para>
-   If the array expression yields a null array, the result of
-   <token>ANY</token> will be null.  If the left-hand expression yields null,
-   the result of <token>ANY</token> is ordinarily null (though a non-strict
-   comparison operator could possibly yield a different result).
-   Also, if the right-hand array contains any null elements and no true
-   comparison result is obtained, the result of <token>ANY</token>
-   will be null, not false (again, assuming a strict comparison operator).
-   This is in accordance with SQL's normal rules for Boolean combinations
-   of null values.
+   If <replaceable>operator</replaceable> can produce null valued booleans then, as explained in
+   <xref linkend="nullvalues-multielement"/>, it is not possible to see
+   a <quote>false</quote> result in the presence of both elements and null values since the multiple equality
+   tests are AND'd together.  Note that <literal>IS DISTINCT FROM</literal> is not an operator.
   </para>
 
   <para>
    <token>SOME</token> is a synonym for <token>ANY</token>.
+   <token>IN</token> is equivalent to <literal>= ANY</literal>.
   </para>
   </sect2>
 
@@ -23931,26 +23901,27 @@ AND
   <para>
    The right-hand side is a parenthesized expression, which must yield an
    array value.
-   The left-hand expression
+   The result of <token>ALL</token> is
+   <quote>true</quote> if the array has zero elements, otherwise
+   the left-hand expression
    is evaluated and compared to each element of the array using the
    given <replaceable>operator</replaceable>, which must yield a Boolean
    result.
-   The result of <token>ALL</token> is <quote>true</quote> if all comparisons yield true
-   (including the case where the array has zero elements).
+   The result is <quote>true</quote> if all comparisons yield true.
    The result is <quote>false</quote> if any false result is found.
   </para>
 
   <para>
-   If the array expression yields a null array, the result of
-   <token>ALL</token> will be null.  If the left-hand expression yields null,
-   the result of <token>ALL</token> is ordinarily null (though a non-strict
-   comparison operator could possibly yield a different result).
-   Also, if the right-hand array contains any null elements and no false
-   comparison result is obtained, the result of <token>ALL</token>
-   will be null, not true (again, assuming a strict comparison operator).
-   This is in accordance with SQL's normal rules for Boolean combinations
-   of null values.
+   If <replaceable>operator</replaceable> can produce null valued booleans then, as explained in
+   <xref linkend="nullvalues-multielement"/>, it is not possible to see
+   a <quote>true</quote> result in the presence of both elements and null values since the multiple equality
+   tests are AND'd together.  Note that <literal>IS DISTINCT FROM</literal> is not an operator.
   </para>
+
+  <para>
+   <token>NOT IN</token> is equivalent to <literal>&lt;&gt; ALL</literal>.
+  </para>
+
   </sect2>
 
   <sect2 id="row-wise-comparison">
@@ -24001,6 +23972,11 @@ AND
    considered.
   </para>
 
+  <para>
+   See <xref linkend="nullvalues-multielementcomparison-rowconstructor"/>
+   and surrounding content for additional details and examples.
+  </para>
+
 <synopsis>
 <replaceable>row_constructor</replaceable> IS DISTINCT FROM <replaceable>row_constructor</replaceable>
 </synopsis>
@@ -24035,20 +24011,11 @@ AND
 </synopsis>
 
   <para>
-   The SQL specification requires row-wise comparison to return NULL if the
-   result depends on comparing two NULL values or a NULL and a non-NULL.
-   <productname>PostgreSQL</productname> does this only when comparing the
-   results of two row constructors (as in
-   <xref linkend="row-wise-comparison"/>) or comparing a row constructor
-   to the output of a subquery (as in <xref linkend="functions-subquery"/>).
-   In other contexts where two composite-type values are compared, two
-   NULL field values are considered equal, and a NULL is considered larger
-   than a non-NULL.  This is necessary in order to have consistent sorting
-   and indexing behavior for composite types.
-  </para>
-
-  <para>
-   Each side is evaluated and they are compared row-wise.  Composite type
+   Each side is evaluated and they are compared row-wise.
+   As discussed and shown in <xref linkend="nullvalues-multielementcomparison-composite"/>,
+   null values are treated as being equal to other null values and greater
+   than all non-null values.
+   Composite type
    comparisons are allowed when the <replaceable>operator</replaceable> is
    <literal>=</literal>,
    <literal>&lt;&gt;</literal>,

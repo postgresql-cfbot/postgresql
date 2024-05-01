@@ -129,6 +129,11 @@
   the corresponding <productname>PostgreSQL</productname> types.
  </para>
 
+ <indexterm>
+  <primary>null value</primary>
+  <secondary sortas="json">within JSON</secondary>
+ </indexterm>
+
   <table id="json-type-mapping-table">
      <title>JSON Primitive Types and Corresponding <productname>PostgreSQL</productname> Types</title>
      <tgroup cols="3">
@@ -162,7 +167,7 @@
        <row>
         <entry><type>null</type></entry>
         <entry>(none)</entry>
-        <entry>SQL <literal>NULL</literal> is a different concept</entry>
+        <entry>An SQL null value is similar, but see <xref linkend="nullvalues-json"/> for differences.</entry>
        </row>
       </tbody>
      </tgroup>

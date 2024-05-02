@@ -49,6 +49,8 @@ typedef struct GinStatsData
 	BlockNumber nDataPages;
 	int64		nEntries;
 	int32		ginVersion;
+	Size		sizeRaw;
+	Size		sizeCompressed;
 } GinStatsData;
 
 /*

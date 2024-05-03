@@ -71,6 +71,7 @@ static int	localNumBackends = 0;
 static MemoryContext backendStatusSnapContext;
 
 
+static void pgstat_bestart_internal(bool pre_auth);
 static void pgstat_beshutdown_hook(int code, Datum arg);
 static void pgstat_read_current_status(void);
 static void pgstat_setup_backend_status_context(void);
@@ -272,6 +273,34 @@ pgstat_beinit(void)
 void
 pgstat_bestart(void)
 {
+	pgstat_bestart_internal(false);
+}
+
+
+/* ----------
+ * pgstat_bestart_pre_auth() -
+ *
+ *	Like pgstat_beinit(), above, but it's designed to be called before
+ *	authentication has been performed (so we have no user or database IDs).
+ *	Called from InitPostgres.
+ *----------
+ */
+void
+pgstat_bestart_pre_auth(void)
+{
+	pgstat_bestart_internal(true);
+}
+
+
+/* ----------
+ * pgstat_bestart_internal() -
+ *
+ *	Implementation of both flavors of pgstat_bestart().
+ *----------
+ */
+static void
+pgstat_bestart_internal(bool pre_auth)
+{
 	volatile PgBackendStatus *vbeentry = MyBEEntry;
 	PgBackendStatus lbeentry;
 #ifdef USE_SSL
@@ -320,9 +349,9 @@ pgstat_bestart(void)
 	lbeentry.st_databaseid = MyDatabaseId;
 
 	/* We have userid for client-backends, wal-sender and bgworker processes */
-	if (lbeentry.st_backendType == B_BACKEND
-		|| lbeentry.st_backendType == B_WAL_SENDER
-		|| lbeentry.st_backendType == B_BG_WORKER)
+	if (!pre_auth && (lbeentry.st_backendType == B_BACKEND
+					  || lbeentry.st_backendType == B_WAL_SENDER
+					  || lbeentry.st_backendType == B_BG_WORKER))
 		lbeentry.st_userid = GetSessionUserId();
 	else
 		lbeentry.st_userid = InvalidOid;
@@ -377,7 +406,7 @@ pgstat_bestart(void)
 	lbeentry.st_gss = false;
 #endif
 
-	lbeentry.st_state = STATE_UNDEFINED;
+	lbeentry.st_state = pre_auth ? STATE_AUTHENTICATING : STATE_UNDEFINED;
 	lbeentry.st_progress_command = PROGRESS_COMMAND_INVALID;
 	lbeentry.st_progress_command_target = InvalidOid;
 	lbeentry.st_query_id = UINT64CONST(0);

@@ -355,6 +355,20 @@
    </para>
 
    <para>
+    <productname>PostgreSQL</productname> implements foreign key
+    constraints via system-defined <literal>AFTER</literal> triggers.
+    If a foreign key constraint specifies referential actions (that is,
+    cascading updates or deletes), these triggers issue ordinary SQL
+    update or delete commands on the referencing table to perform the
+    actions.  In particular, any user-defined triggers on the referencing
+    table will be fired.  If such a trigger modifies or blocks the effect
+    of one of these commands, the end result could be to break referential
+    integrity.  It is the trigger programmer's responsibility to avoid
+    that.  (Similar problems can arise in any case where different
+    triggers are working at cross-purposes.)
+   </para>
+
+   <para>
     <indexterm>
      <primary>trigger</primary>
      <secondary>arguments for trigger functions</secondary>

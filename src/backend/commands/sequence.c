@@ -1780,24 +1780,29 @@ pg_sequence_last_value(PG_FUNCTION_ARGS)
 	Buffer		buf;
 	HeapTupleData seqtuple;
 	Form_pg_sequence_data seq;
-	bool		is_called;
-	int64		result;
+	bool		is_called = false;
+	int64		result = 0;
 
 	/* open and lock sequence */
 	init_sequence(relid, &elm, &seqrel);
 
-	if (pg_class_aclcheck(relid, GetUserId(), ACL_SELECT | ACL_USAGE) != ACLCHECK_OK)
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("permission denied for sequence %s",
-						RelationGetRelationName(seqrel))));
+	/*
+	 * For the benefit of the pg_sequences system view, we return NULL for
+	 * temporary and unlogged sequences on standbys as well as for sequences
+	 * for which we lack USAGE or SELECT privileges.  We also always return
+	 * NULL for other sessions' temporary sequences.
+	 */
+	if (pg_class_aclcheck(relid, GetUserId(), ACL_SELECT | ACL_USAGE) == ACLCHECK_OK &&
+		(RelationIsPermanent(seqrel) || !RecoveryInProgress()) &&
+		!RELATION_IS_OTHER_TEMP(seqrel))
+	{
+		seq = read_seq_tuple(seqrel, &buf, &seqtuple);
 
-	seq = read_seq_tuple(seqrel, &buf, &seqtuple);
+		is_called = seq->is_called;
+		result = seq->last_value;
 
-	is_called = seq->is_called;
-	result = seq->last_value;
-
-	UnlockReleaseBuffer(buf);
+		UnlockReleaseBuffer(buf);
+	}
 	sequence_close(seqrel, NoLock);
 
 	if (is_called)

@@ -4547,6 +4547,29 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-wal-sender-max-send-size" xreflabel="wal_sender_max_send_size">
+      <term><varname>wal_sender_max_send_size</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>wal_sender_max_send_size</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Set the maximum size of a message sent by a WAL sender process during
+        physical replication. The default value is 16 times the WAL block size,
+        i.e. <literal>128kB</literal>. This parameter can be changed without
+        restarting the server.
+       </para>
+       <para>
+        Increasing this value can show performance benefits in some
+        environments. A larger value reduces the responsiveness of WAL sender
+        processes to signals as these are checked only between messages.
+        Setting smaller values increases the overhead of the messages both
+        in WAL senders and WAL receivers.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-track-commit-timestamp" xreflabel="track_commit_timestamp">
       <term><varname>track_commit_timestamp</varname> (<type>boolean</type>)
       <indexterm>

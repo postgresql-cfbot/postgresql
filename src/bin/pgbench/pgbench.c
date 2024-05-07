@@ -217,8 +217,8 @@ char	   *tablespace = NULL;
 char	   *index_tablespace = NULL;
 
 /*
- * Number of "pgbench_accounts" partitions.  0 is the default and means no
- * partitioning.
+ * Number of "pgbench_accounts" and "pgbench_history" partitions.
+ * 0 is the default and means no partitioning.
  */
 static int	partitions = 0;
 
@@ -891,8 +891,10 @@ usage(void)
 		   "  --index-tablespace=TABLESPACE\n"
 		   "                           create indexes in the specified tablespace\n"
 		   "  --partition-method=(range|hash)\n"
-		   "                           partition pgbench_accounts with this method (default: range)\n"
-		   "  --partitions=NUM         partition pgbench_accounts into NUM parts (default: 0)\n"
+		   "                           partition pgbench_accounts and pgbench_history with this method"
+		   "                           (default: range)\n"
+		   "  --partitions=NUM         partition pgbench_accounts and pgbench_history into NUM parts"
+		   "                           (default: 0)\n"
 		   "  --tablespace=TABLESPACE  create tables in the specified tablespace\n"
 		   "  --unlogged-tables        create tables as unlogged tables\n"
 		   "\nOptions to select what to run:\n"
@@ -4730,20 +4732,22 @@ initDropTables(PGconn *con)
 }
 
 /*
- * Create "pgbench_accounts" partitions if needed.
+ * Create "pgbench_accounts" and/or "pgbench_history" partitions if needed.
  *
- * This is the larger table of pgbench default tpc-b like schema
- * with a known size, so we choose to partition it.
+ * "pgbench_accounts" is the larger table of pgbench default tpc-b like schema
+ * with a known size, so we choose to partition it. "pgbench_history" on the
+ * contrary is dynamically populated when pgbench runs, and we partition it
+ * based on the same criteria used in "pgbench_accounts".
  */
 static void
-createPartitions(PGconn *con)
+createPartitions(PGconn *con, const char *table)
 {
 	PQExpBufferData query;
 
 	/* we must have to create some partitions */
 	Assert(partitions > 0);
 
-	fprintf(stderr, "creating %d partitions...\n", partitions);
+	fprintf(stderr, "creating %d partitions for table %s ...\n", partitions, table);
 
 	initPQExpBuffer(&query);
 
@@ -4754,10 +4758,10 @@ createPartitions(PGconn *con)
 			int64		part_size = (naccounts * (int64) scale + partitions - 1) / partitions;
 
 			printfPQExpBuffer(&query,
-							  "create%s table pgbench_accounts_%d\n"
-							  "  partition of pgbench_accounts\n"
+							  "create%s table %s_%d\n"
+							  "  partition of %s\n"
 							  "  for values from (",
-							  unlogged_tables ? " unlogged" : "", p);
+							  unlogged_tables ? " unlogged" : "", table, p, table);
 
 			/*
 			 * For RANGE, we use open-ended partitions at the beginning and
@@ -4781,11 +4785,11 @@ createPartitions(PGconn *con)
 		}
 		else if (partition_method == PART_HASH)
 			printfPQExpBuffer(&query,
-							  "create%s table pgbench_accounts_%d\n"
-							  "  partition of pgbench_accounts\n"
+							  "create%s table %s_%d\n"
+							  "  partition of %s\n"
 							  "  for values with (modulus %d, remainder %d)",
-							  unlogged_tables ? " unlogged" : "", p,
-							  partitions, p - 1);
+							  unlogged_tables ? " unlogged" : "", table, p,
+							  table, partitions, p - 1);
 		else					/* cannot get there */
 			Assert(0);
 
@@ -4793,7 +4797,8 @@ createPartitions(PGconn *con)
 		 * Per ddlinfo in initCreateTables, fillfactor is needed on table
 		 * pgbench_accounts.
 		 */
-		appendPQExpBuffer(&query, " with (fillfactor=%d)", fillfactor);
+		if (strcmp(table, "pgbench_accounts") == 0)
+			appendPQExpBuffer(&query, " with (fillfactor=%d)", fillfactor);
 
 		executeStatement(con, query.data);
 	}
@@ -4869,9 +4874,9 @@ initCreateTables(PGconn *con)
 						  (scale >= SCALE_32BIT_THRESHOLD) ? ddl->bigcols : ddl->smcols);
 
 		/* Partition pgbench_accounts table */
-		if (partition_method != PART_NONE && strcmp(ddl->table, "pgbench_accounts") == 0)
-			appendPQExpBuffer(&query,
-							  " partition by %s (aid)", PARTITION_METHOD[partition_method]);
+		if (partition_method != PART_NONE && (
+			strcmp(ddl->table, "pgbench_accounts") == 0 || strcmp(ddl->table, "pgbench_history") == 0))
+			appendPQExpBuffer(&query, " partition by %s (aid)", PARTITION_METHOD[partition_method]);
 		else if (ddl->declare_fillfactor)
 		{
 			/* fillfactor is only expected on actual tables */
@@ -4893,7 +4898,10 @@ initCreateTables(PGconn *con)
 	termPQExpBuffer(&query);
 
 	if (partition_method != PART_NONE)
-		createPartitions(con);
+	{
+		createPartitions(con, "pgbench_accounts");
+		createPartitions(con, "pgbench_history");
+	}
 }
 
 /*
@@ -7266,7 +7274,10 @@ main(int argc, char **argv)
 		fprintf(stderr, "starting vacuum...");
 		tryExecuteStatement(con, "vacuum pgbench_branches");
 		tryExecuteStatement(con, "vacuum pgbench_tellers");
-		tryExecuteStatement(con, "truncate pgbench_history");
+		if (partitions > 0)
+			tryExecuteStatement(con, "truncate pgbench_history CASCADE");
+		else
+			tryExecuteStatement(con, "truncate pgbench_history");
 		fprintf(stderr, "end.\n");
 
 		if (do_vacuum_accounts)

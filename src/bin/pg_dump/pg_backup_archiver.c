@@ -174,6 +174,7 @@ dumpOptionsFromRestoreOptions(RestoreOptions *ropt)
 	dopt->outputSuperuser = ropt->superuser;
 	dopt->outputCreateDB = ropt->createDB;
 	dopt->outputNoOwner = ropt->noOwner;
+	dopt->outputNoSequenceAm = ropt->noSequenceAm;
 	dopt->outputNoTableAm = ropt->noTableAm;
 	dopt->outputNoTablespaces = ropt->noTablespace;
 	dopt->disable_triggers = ropt->disable_triggers;
@@ -1224,6 +1225,7 @@ ArchiveEntry(Archive *AHX, CatalogId catalogId, DumpId dumpId,
 	newToc->tag = pg_strdup(opts->tag);
 	newToc->namespace = opts->namespace ? pg_strdup(opts->namespace) : NULL;
 	newToc->tablespace = opts->tablespace ? pg_strdup(opts->tablespace) : NULL;
+	newToc->sequenceam = opts->sequenceam ? pg_strdup(opts->sequenceam) : NULL;
 	newToc->tableam = opts->tableam ? pg_strdup(opts->tableam) : NULL;
 	newToc->relkind = opts->relkind;
 	newToc->owner = opts->owner ? pg_strdup(opts->owner) : NULL;
@@ -2376,6 +2378,7 @@ _allocAH(const char *FileSpec, const ArchiveFormat fmt,
 
 	AH->currUser = NULL;		/* unknown */
 	AH->currSchema = NULL;		/* ditto */
+	AH->currSequenceAm = NULL;	/* ditto */
 	AH->currTablespace = NULL;	/* ditto */
 	AH->currTableAm = NULL;		/* ditto */
 
@@ -2605,6 +2608,7 @@ WriteToc(ArchiveHandle *AH)
 		WriteStr(AH, te->copyStmt);
 		WriteStr(AH, te->namespace);
 		WriteStr(AH, te->tablespace);
+		WriteStr(AH, te->sequenceam);
 		WriteStr(AH, te->tableam);
 		WriteInt(AH, te->relkind);
 		WriteStr(AH, te->owner);
@@ -2708,6 +2712,9 @@ ReadToc(ArchiveHandle *AH)
 
 		if (AH->version >= K_VERS_1_10)
 			te->tablespace = ReadStr(AH);
+
+		if (AH->version >= K_VERS_1_17)
+			te->sequenceam = ReadStr(AH);
 
 		if (AH->version >= K_VERS_1_14)
 			te->tableam = ReadStr(AH);
@@ -3364,6 +3371,9 @@ _reconnectToDB(ArchiveHandle *AH, const char *dbname)
 	free(AH->currSchema);
 	AH->currSchema = NULL;
 
+	free(AH->currSequenceAm);
+	AH->currSequenceAm = NULL;
+
 	free(AH->currTableAm);
 	AH->currTableAm = NULL;
 
@@ -3524,6 +3534,57 @@ _selectTablespace(ArchiveHandle *AH, const char *tablespace)
 	AH->currTablespace = pg_strdup(want);
 
 	destroyPQExpBuffer(qry);
+}
+
+/*
+ * Set the proper default_sequence_access_method value for the sequence.
+ */
+static void
+_selectSequenceAccessMethod(ArchiveHandle *AH, const char *sequenceam)
+{
+	RestoreOptions *ropt = AH->public.ropt;
+	PQExpBuffer cmd;
+	const char *want,
+			   *have;
+
+	/* do nothing in --no-sequence-access-method mode */
+	if (ropt->noSequenceAm)
+		return;
+
+	have = AH->currSequenceAm;
+	want = sequenceam;
+
+	if (!want)
+		return;
+
+	if (have && strcmp(want, have) == 0)
+		return;
+
+	cmd = createPQExpBuffer();
+	appendPQExpBuffer(cmd,
+					  "SET default_sequence_access_method = %s;",
+					  fmtId(want));
+
+	if (RestoringToDB(AH))
+	{
+		PGresult   *res;
+
+		res = PQexec(AH->connection, cmd->data);
+
+		if (!res || PQresultStatus(res) != PGRES_COMMAND_OK)
+			warn_or_exit_horribly(AH,
+								  "could not set default_sequence_access_method: %s",
+								  PQerrorMessage(AH->connection));
+
+		PQclear(res);
+	}
+	else
+		ahprintf(AH, "%s\n\n", cmd->data);
+
+	destroyPQExpBuffer(cmd);
+
+	free(AH->currSequenceAm);
+	AH->currSequenceAm = pg_strdup(want);
 }
 
 /*
@@ -3735,6 +3796,7 @@ _printTocEntry(ArchiveHandle *AH, TocEntry *te, bool isData)
 	_becomeOwner(AH, te);
 	_selectOutputSchema(AH, te->namespace);
 	_selectTablespace(AH, te->tablespace);
+	_selectSequenceAccessMethod(AH, te->sequenceam);
 	if (te->relkind != RELKIND_PARTITIONED_TABLE)
 		_selectTableAccessMethod(AH, te->tableam);
 
@@ -4237,6 +4299,8 @@ restore_toc_entries_prefork(ArchiveHandle *AH, TocEntry *pending_list)
 	AH->currUser = NULL;
 	free(AH->currSchema);
 	AH->currSchema = NULL;
+	free(AH->currSequenceAm);
+	AH->currSequenceAm = NULL;
 	free(AH->currTablespace);
 	AH->currTablespace = NULL;
 	free(AH->currTableAm);
@@ -4976,6 +5040,7 @@ CloneArchive(ArchiveHandle *AH)
 	clone->connCancel = NULL;
 	clone->currUser = NULL;
 	clone->currSchema = NULL;
+	clone->currSequenceAm = NULL;
 	clone->currTableAm = NULL;
 	clone->currTablespace = NULL;
 
@@ -5035,6 +5100,7 @@ DeCloneArchive(ArchiveHandle *AH)
 	/* Clear any connection-local state */
 	free(AH->currUser);
 	free(AH->currSchema);
+	free(AH->currSequenceAm);
 	free(AH->currTablespace);
 	free(AH->currTableAm);
 	free(AH->savedPassword);

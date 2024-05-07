@@ -34,6 +34,7 @@
 #include "access/multixact.h"
 #include "access/parallel.h"
 #include "access/reloptions.h"
+#include "access/sequenceam.h"
 #include "access/sysattr.h"
 #include "access/table.h"
 #include "access/tableam.h"
@@ -64,6 +65,7 @@
 #include "catalog/pg_type.h"
 #include "catalog/schemapg.h"
 #include "catalog/storage.h"
+#include "commands/defrem.h"
 #include "commands/policy.h"
 #include "commands/publicationcmds.h"
 #include "commands/trigger.h"
@@ -300,6 +302,7 @@ static void RelationParseRelOptions(Relation relation, HeapTuple tuple);
 static void RelationBuildTupleDesc(Relation relation);
 static Relation RelationBuildDesc(Oid targetRelId, bool insertIt);
 static void RelationInitPhysicalAddr(Relation relation);
+static void RelationInitSequenceAccessMethod(Relation relation);
 static void load_critical_index(Oid indexoid, Oid heapoid);
 static TupleDesc GetPgClassDescriptor(void);
 static TupleDesc GetPgIndexDescriptor(void);
@@ -1205,8 +1208,7 @@ retry:
 	if (relation->rd_rel->relkind == RELKIND_INDEX ||
 		relation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
 		RelationInitIndexAccessInfo(relation);
-	else if (RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind) ||
-			 relation->rd_rel->relkind == RELKIND_SEQUENCE)
+	else if (RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind))
 		RelationInitTableAccessMethod(relation);
 	else if (relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
@@ -1215,6 +1217,8 @@ retry:
 		 * inherit.
 		 */
 	}
+	else if (RELKIND_HAS_SEQUENCE_AM(relation->rd_rel->relkind))
+		RelationInitSequenceAccessMethod(relation);
 	else
 		Assert(relation->rd_rel->relam == InvalidOid);
 
@@ -1811,17 +1815,9 @@ RelationInitTableAccessMethod(Relation relation)
 	HeapTuple	tuple;
 	Form_pg_am	aform;
 
-	if (relation->rd_rel->relkind == RELKIND_SEQUENCE)
-	{
-		/*
-		 * Sequences are currently accessed like heap tables, but it doesn't
-		 * seem prudent to show that in the catalog. So just overwrite it
-		 * here.
-		 */
-		Assert(relation->rd_rel->relam == InvalidOid);
-		relation->rd_amhandler = F_HEAP_TABLEAM_HANDLER;
-	}
-	else if (IsCatalogRelation(relation))
+	Assert(RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind));
+
+	if (IsCatalogRelation(relation))
 	{
 		/*
 		 * Avoid doing a syscache lookup for catalog tables.
@@ -1850,6 +1846,49 @@ RelationInitTableAccessMethod(Relation relation)
 	 * Now we can fetch the table AM's API struct
 	 */
 	InitTableAmRoutine(relation);
+}
+
+/*
+ * Initialize sequence-access-method support data for a sequence relation
+ */
+static void
+RelationInitSequenceAccessMethod(Relation relation)
+{
+	HeapTuple	tuple;
+	Form_pg_am	aform;
+	const char *tableam_name;
+	Oid			tableam_oid;
+	Oid			tableam_handler;
+
+	Assert(RELKIND_HAS_SEQUENCE_AM(relation->rd_rel->relkind));
+
+	/*
+	 * Look up the sequence access method, save the OID of its handler
+	 * function.
+	 */
+	Assert(relation->rd_rel->relam != InvalidOid);
+	relation->rd_amhandler = GetSequenceAmRoutineId(relation->rd_rel->relam);
+
+	/*
+	 * Now we can fetch the sequence AM's API struct.
+	 */
+	relation->rd_sequenceam = GetSequenceAmRoutine(relation->rd_amhandler);
+
+	/*
+	 * From the sequence AM, set its expected table access method.
+	 */
+	tableam_name = sequence_get_table_am(relation);
+	tableam_oid = get_table_am_oid(tableam_name, false);
+
+	tuple = SearchSysCache1(AMOID, ObjectIdGetDatum(tableam_oid));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for access method %u",
+			 tableam_oid);
+	aform = (Form_pg_am) GETSTRUCT(tuple);
+	tableam_handler = aform->amhandler;
+	ReleaseSysCache(tuple);
+
+	relation->rd_tableam = GetTableAmRoutine(tableam_handler);
 }
 
 /*
@@ -3670,14 +3709,17 @@ RelationBuildLocalRelation(const char *relname,
 	rel->rd_rel->relam = accessmtd;
 
 	/*
-	 * RelationInitTableAccessMethod will do syscache lookups, so we mustn't
-	 * run it in CacheMemoryContext.  Fortunately, the remaining steps don't
-	 * require a long-lived current context.
+	 * RelationInitTableAccessMethod() and RelationInitSequenceAccessMethod()
+	 * will do syscache lookups, so we mustn't run them in CacheMemoryContext.
+	 * Fortunately, the remaining steps don't require a long-lived current
+	 * context.
 	 */
 	MemoryContextSwitchTo(oldcxt);
 
-	if (RELKIND_HAS_TABLE_AM(relkind) || relkind == RELKIND_SEQUENCE)
+	if (RELKIND_HAS_TABLE_AM(relkind))
 		RelationInitTableAccessMethod(rel);
+	else if (relkind == RELKIND_SEQUENCE)
+		RelationInitSequenceAccessMethod(rel);
 
 	/*
 	 * Okay to insert into the relcache hash table.
@@ -4292,10 +4334,18 @@ RelationCacheInitializePhase3(void)
 
 		/* Reload tableam data if needed */
 		if (relation->rd_tableam == NULL &&
-			(RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind) || relation->rd_rel->relkind == RELKIND_SEQUENCE))
+			(RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind)))
 		{
 			RelationInitTableAccessMethod(relation);
 			Assert(relation->rd_tableam != NULL);
+
+			restart = true;
+		}
+		else if (relation->rd_sequenceam == NULL &&
+				 relation->rd_rel->relkind == RELKIND_SEQUENCE)
+		{
+			RelationInitSequenceAccessMethod(relation);
+			Assert(relation->rd_sequenceam != NULL);
 
 			restart = true;
 		}
@@ -6319,8 +6369,10 @@ load_relcache_init_file(bool shared)
 				nailed_rels++;
 
 			/* Load table AM data */
-			if (RELKIND_HAS_TABLE_AM(rel->rd_rel->relkind) || rel->rd_rel->relkind == RELKIND_SEQUENCE)
+			if (RELKIND_HAS_TABLE_AM(rel->rd_rel->relkind))
 				RelationInitTableAccessMethod(rel);
+			else if (rel->rd_rel->relkind == RELKIND_SEQUENCE)
+				RelationInitSequenceAccessMethod(rel);
 
 			Assert(rel->rd_index == NULL);
 			Assert(rel->rd_indextuple == NULL);
@@ -6332,6 +6384,7 @@ load_relcache_init_file(bool shared)
 			Assert(rel->rd_supportinfo == NULL);
 			Assert(rel->rd_indoption == NULL);
 			Assert(rel->rd_indcollation == NULL);
+			Assert(rel->rd_sequenceam == NULL);
 			Assert(rel->rd_opcoptions == NULL);
 		}
 

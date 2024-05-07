@@ -1,0 +1,80 @@
+<!-- doc/src/sgml/sequenceam.sgml -->
+
+<chapter id="sequenceam">
+ <title>Sequence Access Method Interface Definition</title>
+
+ <indexterm>
+  <primary>Sequence Access Method</primary>
+ </indexterm>
+ <indexterm>
+  <primary>sequenceam</primary>
+  <secondary>Sequence Access Method</secondary>
+ </indexterm>
+
+ <para>
+  This chapter explains the interface between the core
+  <productname>PostgreSQL</productname> system and <firstterm>sequence access
+  methods</firstterm>, which manage the operations around sequences . The core
+  system knows little about these access methods beyond what is specified here,
+  so it is possible to develop entirely new access method types by writing
+  add-on code.
+ </para>
+
+ <para>
+  Each sequence access method is described by a row in the
+  <link linkend="catalog-pg-am"><structname>pg_am</structname></link> system
+  catalog. The <structname>pg_am</structname> entry specifies a name and a
+  <firstterm>handler function</firstterm> for the sequence access method.  These
+  entries can be created and deleted using the
+  <xref linkend="sql-create-access-method"/> and
+  <xref linkend="sql-drop-access-method"/> SQL commands.
+ </para>
+
+ <para>
+  A sequence access method handler function must be declared to accept a single
+  argument of type <type>internal</type> and to return the pseudo-type
+  <type>sequence_am_handler</type>.  The argument is a dummy value that simply
+  serves to prevent handler functions from being called directly from SQL commands.
+
+  The result of the function must be a pointer to a struct of type
+  <structname>SequenceAmRoutine</structname>, which contains everything that the
+  core code needs to know to make use of the sequence access method. The return
+  value needs to be of server lifetime, which is typically achieved by
+  defining it as a <literal>static const</literal> variable in global
+  scope. The <structname>SequenceAmRoutine</structname> struct, also called the
+  access method's <firstterm>API struct</firstterm>, defines the behavior of
+  the access method using callbacks. These callbacks are pointers to plain C
+  functions and are not visible or callable at the SQL level. All the
+  callbacks and their behavior is defined in the
+  <structname>SequenceAmRoutine</structname> structure (with comments inside
+  the struct defining the requirements for callbacks). Most callbacks have
+  wrapper functions, which are documented from the point of view of a user
+  (rather than an implementor) of the sequence access method.  For details,
+  please refer to the <ulink url="https://git.postgresql.org/gitweb/?p=postgresql.git;a=blob;f=src/include/access/sequenceam.h;hb=HEAD">
+   <filename>src/include/access/sequenceam.h</filename></ulink> file.
+ </para>
+
+ <para>
+  Currently, the way a sequence access method stores data is fairly
+  unconstrained, and it is possible to use a predefined
+  <link linkend="tableam">Table Access Method</link> to store sequence
+  data.
+ </para>
+
+ <para>
+  For crash safety, a sequence access method can use
+  <link linkend="wal"><acronym>WAL</acronym></link>, or a custom
+  implementation.
+  If <acronym>WAL</acronym> is chosen, either
+  <link linkend="generic-wal">Generic WAL Records</link> can be used, or a
+  <link linkend="custom-rmgr">Custom WAL Resource Manager</link> can be
+  implemented.
+ </para>
+
+ <para>
+  Any developer of a new <literal>sequence access method</literal> can refer to
+  the existing <literal>local</literal> implementation present in
+  <filename>src/backend/access/sequence/local.c</filename> for details of
+  its implementation.
+ </para>
+</chapter>

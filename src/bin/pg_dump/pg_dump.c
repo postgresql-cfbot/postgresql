@@ -422,6 +422,7 @@ main(int argc, char **argv)
 		{"if-exists", no_argument, &dopt.if_exists, 1},
 		{"inserts", no_argument, NULL, 9},
 		{"lock-wait-timeout", required_argument, NULL, 2},
+		{"no-sequence-access-method", no_argument, &dopt.outputNoSequenceAm, 1},
 		{"no-table-access-method", no_argument, &dopt.outputNoTableAm, 1},
 		{"no-tablespaces", no_argument, &dopt.outputNoTablespaces, 1},
 		{"quote-all-identifiers", no_argument, &quote_all_identifiers, 1},
@@ -1036,6 +1037,7 @@ main(int argc, char **argv)
 	ropt->superuser = dopt.outputSuperuser;
 	ropt->createDB = dopt.outputCreateDB;
 	ropt->noOwner = dopt.outputNoOwner;
+	ropt->noSequenceAm = dopt.outputNoSequenceAm;
 	ropt->noTableAm = dopt.outputNoTableAm;
 	ropt->noTablespace = dopt.outputNoTablespaces;
 	ropt->disable_triggers = dopt.disable_triggers;
@@ -1152,6 +1154,7 @@ help(const char *progname)
 	printf(_("  --no-publications            do not dump publications\n"));
 	printf(_("  --no-security-labels         do not dump security label assignments\n"));
 	printf(_("  --no-subscriptions           do not dump subscriptions\n"));
+	printf(_("  --no-sequence-access-method  do not sequence table access methods\n"));
 	printf(_("  --no-table-access-method     do not dump table access methods\n"));
 	printf(_("  --no-tablespaces             do not dump tablespace assignments\n"));
 	printf(_("  --no-toast-compression       do not dump TOAST compression methods\n"));
@@ -13329,6 +13332,9 @@ dumpAccessMethod(Archive *fout, const AccessMethodInfo *aminfo)
 		case AMTYPE_INDEX:
 			appendPQExpBufferStr(q, "TYPE INDEX ");
 			break;
+		case AMTYPE_SEQUENCE:
+			appendPQExpBufferStr(q, "TYPE SEQUENCE ");
+			break;
 		case AMTYPE_TABLE:
 			appendPQExpBufferStr(q, "TYPE TABLE ");
 			break;
@@ -17571,7 +17577,8 @@ dumpSequence(Archive *fout, const TableInfo *tbinfo)
 			   *maxv,
 			   *minv,
 			   *cache,
-			   *seqtype;
+			   *seqtype,
+			   *seqam;
 	bool		cycled;
 	bool		is_ascending;
 	int64		default_minv,
@@ -17585,13 +17592,35 @@ dumpSequence(Archive *fout, const TableInfo *tbinfo)
 
 	qseqname = pg_strdup(fmtId(tbinfo->dobj.name));
 
-	if (fout->remoteVersion >= 100000)
+	if (fout->remoteVersion >= 170000)
 	{
+		/*
+		 * PostgreSQL 17 has added support for sequence access methods.
+		 */
+		appendPQExpBuffer(query,
+						  "SELECT format_type(s.seqtypid, NULL), "
+						  "s.seqstart, s.seqincrement, "
+						  "s.seqmax, s.seqmin, "
+						  "s.seqcache, s.seqcycle, "
+						  "a.amname AS seqam "
+						  "FROM pg_catalog.pg_sequence s "
+						  "JOIN pg_class c ON (c.oid = s.seqrelid) "
+						  "JOIN pg_am a ON (a.oid = c.relam) "
+						  "WHERE s.seqrelid = '%u'::oid",
+						  tbinfo->dobj.catId.oid);
+	}
+	else if (fout->remoteVersion >= 100000)
+	{
+		/*
+		 * PostgreSQL 10 has moved sequence metadata to the catalog
+		 * pg_sequence.
+		 */
 		appendPQExpBuffer(query,
 						  "SELECT format_type(seqtypid, NULL), "
 						  "seqstart, seqincrement, "
 						  "seqmax, seqmin, "
-						  "seqcache, seqcycle "
+						  "seqcache, seqcycle, "
+						  "'seqlocal' AS seqam "
 						  "FROM pg_catalog.pg_sequence "
 						  "WHERE seqrelid = '%u'::oid",
 						  tbinfo->dobj.catId.oid);
@@ -17607,7 +17636,7 @@ dumpSequence(Archive *fout, const TableInfo *tbinfo)
 		appendPQExpBuffer(query,
 						  "SELECT 'bigint' AS sequence_type, "
 						  "start_value, increment_by, max_value, min_value, "
-						  "cache_value, is_cycled FROM %s",
+						  "cache_value, is_cycled, 'seqlocal' as seqam FROM %s",
 						  fmtQualifiedDumpable(tbinfo));
 	}
 
@@ -17626,6 +17655,7 @@ dumpSequence(Archive *fout, const TableInfo *tbinfo)
 	minv = PQgetvalue(res, 0, 4);
 	cache = PQgetvalue(res, 0, 5);
 	cycled = (strcmp(PQgetvalue(res, 0, 6), "t") == 0);
+	seqam = PQgetvalue(res, 0, 7);
 
 	/* Calculate default limits for a sequence of this type */
 	is_ascending = (incby[0] != '-');
@@ -17757,6 +17787,7 @@ dumpSequence(Archive *fout, const TableInfo *tbinfo)
 					 ARCHIVE_OPTS(.tag = tbinfo->dobj.name,
 								  .namespace = tbinfo->dobj.namespace->dobj.name,
 								  .owner = tbinfo->rolname,
+								  .sequenceam = seqam,
 								  .description = "SEQUENCE",
 								  .section = SECTION_PRE_DATA,
 								  .createStmt = query->data,
@@ -17836,9 +17867,19 @@ dumpSequenceData(Archive *fout, const TableDataInfo *tdinfo)
 	bool		called;
 	PQExpBuffer query = createPQExpBuffer();
 
-	appendPQExpBuffer(query,
-					  "SELECT last_value, is_called FROM %s",
-					  fmtQualifiedDumpable(tbinfo));
+	/*
+	 * In versions 17 and up, pg_sequence_last_value() has been switched to
+	 * return a tuple with last_value and is_called.
+	 */
+	if (fout->remoteVersion >= 170000)
+		appendPQExpBuffer(query,
+						  "SELECT last_value, is_called "
+						  "FROM pg_sequence_last_value('%s')",
+						  fmtQualifiedDumpable(tbinfo));
+	else
+		appendPQExpBuffer(query,
+						  "SELECT last_value, is_called FROM %s",
+						  fmtQualifiedDumpable(tbinfo));
 
 	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
 

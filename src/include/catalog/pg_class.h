@@ -228,6 +228,12 @@ MAKE_SYSCACHE(RELNAMENSP, pg_class_relname_nsp_index, 128);
 	 (relkind) == RELKIND_TOASTVALUE || \
 	 (relkind) == RELKIND_MATVIEW)
 
+/*
+ * Relation kinds with a sequence access method (rd_sequenceam).
+ */
+#define RELKIND_HAS_SEQUENCE_AM(relkind) \
+	((relkind) == RELKIND_SEQUENCE)
+
 extern int	errdetail_relkind_not_supported(char relkind);
 
 #endif							/* EXPOSE_TO_CLIENT_CODE */

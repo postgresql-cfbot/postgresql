@@ -256,6 +256,7 @@ break is not needed in a wider output rendering.
   &geqo;
   &tableam;
   &indexam;
+  &sequenceam;
   &wal-for-extensions;
   &indextypes;
   &storage;

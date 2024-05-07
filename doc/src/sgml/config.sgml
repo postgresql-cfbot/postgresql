@@ -8955,6 +8955,22 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-default-sequence-access-method" xreflabel="default_sequence_access_method">
+      <term><varname>default_sequence_access_method</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>default_sequence_access_method</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This parameter specifies the default sequence access method to use when
+        creating sequences if the <command>CREATE SEQUENCE</command>
+        command does not explicitly specify an access method. The default is
+        <literal>local</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-default-tablespace" xreflabel="default_tablespace">
       <term><varname>default_tablespace</varname> (<type>string</type>)
       <indexterm>

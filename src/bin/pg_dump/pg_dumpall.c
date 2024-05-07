@@ -97,6 +97,7 @@ static int	disable_dollar_quoting = 0;
 static int	disable_triggers = 0;
 static int	if_exists = 0;
 static int	inserts = 0;
+static int	no_sequence_access_method = 0;
 static int	no_table_access_method = 0;
 static int	no_tablespaces = 0;
 static int	use_setsessauth = 0;
@@ -161,6 +162,7 @@ main(int argc, char *argv[])
 		{"if-exists", no_argument, &if_exists, 1},
 		{"inserts", no_argument, &inserts, 1},
 		{"lock-wait-timeout", required_argument, NULL, 2},
+		{"no-sequence-access-method", no_argument, &no_sequence_access_method, 1},
 		{"no-table-access-method", no_argument, &no_table_access_method, 1},
 		{"no-tablespaces", no_argument, &no_tablespaces, 1},
 		{"quote-all-identifiers", no_argument, &quote_all_identifiers, 1},
@@ -435,6 +437,8 @@ main(int argc, char *argv[])
 		appendPQExpBufferStr(pgdumpopts, " --disable-triggers");
 	if (inserts)
 		appendPQExpBufferStr(pgdumpopts, " --inserts");
+	if (no_sequence_access_method)
+		appendPQExpBufferStr(pgdumpopts, " --no-sequence-access-method");
 	if (no_table_access_method)
 		appendPQExpBufferStr(pgdumpopts, " --no-table-access-method");
 	if (no_tablespaces)
@@ -668,6 +672,7 @@ help(void)
 	printf(_("  --no-security-labels         do not dump security label assignments\n"));
 	printf(_("  --no-subscriptions           do not dump subscriptions\n"));
 	printf(_("  --no-sync                    do not wait for changes to be written safely to disk\n"));
+	printf(_("  --no-sequence-access-method  do not dump sequence access methods\n"));
 	printf(_("  --no-table-access-method     do not dump table access methods\n"));
 	printf(_("  --no-tablespaces             do not dump tablespace assignments\n"));
 	printf(_("  --no-toast-compression       do not dump TOAST compression methods\n"));

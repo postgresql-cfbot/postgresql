@@ -1,0 +1,73 @@
+CREATE EXTENSION snowflake;
+CREATE SEQUENCE snowflake_seq USING snowflake;
+SET snowflake.machine_id = 2000; -- error
+ERROR:  2000 is outside the valid range for parameter "snowflake.machine_id" (0 .. 1023)
+SET snowflake.machine_id = 4; -- ok
+SELECT machine, counter FROM snowflake_get(nextval('snowflake_seq'));
+ machine | counter 
+---------+---------
+       4 |       2
+(1 row)
+
+SELECT machine, counter FROM snowflake_get(lastval());
+ machine | counter 
+---------+---------
+       4 |       2
+(1 row)
+
+SELECT machine, counter FROM snowflake_get(nextval('snowflake_seq'));
+ machine | counter 
+---------+---------
+       4 |       3
+(1 row)
+
+SELECT machine, counter FROM snowflake_get(currval('snowflake_seq'));
+ machine | counter 
+---------+---------
+       4 |       3
+(1 row)
+
+-- Sequence relation exists, is unlogged and remains unlogged.
+SELECT * FROM snowflake_seq;
+ count | is_called 
+-------+-----------
+     3 | t
+(1 row)
+
+ALTER SEQUENCE snowflake_seq SET LOGGED;
+SELECT relpersistence FROM pg_class where relname = 'snowflake_seq';
+ relpersistence 
+----------------
+ u
+(1 row)
+
+ALTER SEQUENCE snowflake_seq RESTART;
+SELECT * FROM snowflake_seq;
+ count | is_called 
+-------+-----------
+     1 | f
+(1 row)
+
+-- Identity column, where cache affects value.
+SET default_sequence_access_method = 'snowflake';
+CREATE TABLE snowflake_tab (a int GENERATED ALWAYS AS IDENTITY, b int);
+INSERT INTO snowflake_tab VALUES (DEFAULT, generate_series(1, 10));
+SELECT data.machine, data.counter
+  FROM snowflake_tab, LATERAL snowflake_get(a) AS data;
+ machine | counter 
+---------+---------
+       4 |       2
+       4 |       3
+       4 |       4
+       4 |       5
+       4 |       6
+       4 |       7
+       4 |       8
+       4 |       9
+       4 |      10
+       4 |      11
+(10 rows)
+
+DROP TABLE snowflake_tab;
+DROP SEQUENCE snowflake_seq;
+DROP EXTENSION snowflake;

@@ -188,6 +188,11 @@ typedef struct RelationData
 	 */
 	const struct TableAmRoutine *rd_tableam;
 
+	/*
+	 * Sequence access method.
+	 */
+	const struct SequenceAmRoutine *rd_sequenceam;
+
 	/* These are non-NULL only for an index relation: */
 	Form_pg_index rd_index;		/* pg_index tuple describing this index */
 	/* use "struct" here to avoid needing to include htup.h: */

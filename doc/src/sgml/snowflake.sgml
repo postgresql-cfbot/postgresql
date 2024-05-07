@@ -1,0 +1,100 @@
+<!-- doc/src/sgml/snowflake.sgml -->
+
+<sect1 id="snowflake" xreflabel="snowflake">
+ <title>snowflake &mdash; sequence access method</title>
+
+ <indexterm zone="snowflake">
+  <primary>snowflake</primary>
+ </indexterm>
+
+ <para>
+  <literal>snowflake</literal> provides a sequence access method based on
+  <ulink url="https://en.wikipedia.org/wiki/Snowflake_ID">Snowflake IDs</ulink>.
+ </para>
+
+ <para>
+  A Snowflake ID (or snowflake) is a unique 64-bit identifier made of three
+  components:
+  <itemizedlist spacing="compact">
+   <listitem><para>41 bits for a timestamp, epoch-adjusted in milli-seconds</para></listitem>
+   <listitem><para>10 bits for machine ID</para></listitem>
+   <listitem><para>12 bits for a sequence number</para></listitem>
+  </itemizedlist>
+ </para>
+
+ <sect2 id="snowflake-functions">
+  <title>Functions</title>
+
+  <variablelist>
+   <varlistentry>
+    <term>
+     <function>snowflake_get(raw int8) returns record</function>
+     <indexterm>
+      <primary>snowflake_get</primary>
+      <secondary>function</secondary>
+     </indexterm>
+    </term>
+
+    <listitem>
+     <para>
+      Returns a record made of the timestamp in milli-seconds, the machine ID
+      and the sequence number for a single snowflake ID.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+ </sect2>
+
+ <sect2 id="snowflake-parameters">
+  <title>Configuration Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term>
+     <varname>snowflake.machine_id</varname>
+     <indexterm>
+      <primary><varname>snowflake.machine_id</varname> configuration parameter</primary>
+     </indexterm>
+    </term>
+    <listitem>
+     <para>
+      Machine ID assigned to the snowflake IDs used in the sequence. The
+      default value is <literal>1</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+ </sect2>
+
+ <sect2 id="snowflake-examples">
+  <title>Examples</title>
+
+  <para>
+   This is an example of creating a snowflake sequence:
+  </para>
+
+<programlisting>
+CREATE SEQUENCE snowflake_seq USING snowflake;
+</programlisting>
+
+  <para>
+   Similarly to the default sequence access method, snowflake sequences
+   can be queried as a table:
+  </para>
+
+<programlisting>
+ =# SELECT * FROM snowflake_seq;
+ count | is_called
+-------+-----------
+     1 | f
+(1 row)
+=# SELECT to_timestamp(time_ms / 1000), machine, counter
+     FROM snowflake_get(nextval('snowflake_seq'));
+      to_timestamp      | machine | counter
+------------------------+---------+---------
+ 2024-04-26 14:28:26+09 |       1 |       3
+(1 row)
+</programlisting>
+ </sect2>
+
+</sect1>

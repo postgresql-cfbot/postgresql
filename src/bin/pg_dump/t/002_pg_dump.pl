@@ -537,6 +537,13 @@ my %pgdump_runs = (
 			'postgres',
 		],
 	},
+	no_sequence_access_method => {
+		dump_cmd => [
+			'pg_dump', '--no-sync',
+			"--file=$tempdir/no_sequence_access_method.sql",
+			'--no-sequence-access-method', 'postgres',
+		],
+	},
 	no_table_access_method => {
 		dump_cmd => [
 			'pg_dump', '--no-sync',
@@ -711,6 +718,7 @@ my %full_runs = (
 	no_large_objects => 1,
 	no_owner => 1,
 	no_privs => 1,
+	no_sequence_access_method => 1,
 	no_table_access_method => 1,
 	pg_dumpall_dbprivs => 1,
 	pg_dumpall_exclude => 1,
@@ -3855,9 +3863,7 @@ my %tests = (
 		\QCREATE INDEX measurement_city_id_logdate_idx ON ONLY dump_test.measurement USING\E
 		/xm,
 		like => {
-			%full_runs,
-			%dump_test_schema_runs,
-			section_post_data => 1,
+			%full_runs, %dump_test_schema_runs, section_post_data => 1,
 		},
 		unlike => {
 			exclude_dump_test_schema => 1,
@@ -4526,6 +4532,18 @@ my %tests = (
 		},
 	},
 
+	'CREATE ACCESS METHOD regress_test_sequence_am' => {
+		create_order => 11,
+		create_sql =>
+		  'CREATE ACCESS METHOD regress_sequence_am TYPE SEQUENCE HANDLER seq_local_sequenceam_handler;',
+		regexp => qr/^
+			\QCREATE ACCESS METHOD regress_sequence_am TYPE SEQUENCE HANDLER seq_local_sequenceam_handler;\E
+			\n/xm,
+		like => {
+			%full_runs, section_pre_data => 1,
+		},
+	},
+
 	# It's a bit tricky to ensure that the proper SET of default table
 	# AM occurs. To achieve that we create a table with the standard
 	# AM, test AM, standard AM. That guarantees that there needs to be
@@ -4550,6 +4568,35 @@ my %tests = (
 		unlike => {
 			exclude_dump_test_schema => 1,
 			no_table_access_method => 1,
+			only_dump_measurement => 1,
+		},
+	},
+
+
+	# This uses the same trick as for materialized views and tables,
+	# but this time with a sequence access method, checking that a
+	# correct set of SET queries are created.
+	'CREATE SEQUENCE regress_pg_dump_seq_am' => {
+		create_order => 12,
+		create_sql => '
+			CREATE SEQUENCE dump_test.regress_pg_dump_seq_am_0 USING seqlocal;
+			CREATE SEQUENCE dump_test.regress_pg_dump_seq_am_1 USING regress_sequence_am;
+			CREATE SEQUENCE dump_test.regress_pg_dump_seq_am_2 USING seqlocal;',
+		regexp => qr/^
+			\QSET default_sequence_access_method = regress_sequence_am;\E
+			(\n(?!SET[^;]+;)[^\n]*)*
+			\n\QCREATE SEQUENCE dump_test.regress_pg_dump_seq_am_1\E
+			\n\s+\QSTART WITH 1\E
+			\n\s+\QINCREMENT BY 1\E
+			\n\s+\QNO MINVALUE\E
+			\n\s+\QNO MAXVALUE\E
+			\n\s+\QCACHE 1;\E\n/xm,
+		like => {
+			%full_runs, %dump_test_schema_runs, section_pre_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			no_sequence_access_method => 1,
 			only_dump_measurement => 1,
 		},
 	},
@@ -4783,10 +4830,8 @@ $node->command_fails_like(
 ##############################################################
 # Test dumping pg_catalog (for research -- cannot be reloaded)
 
-$node->command_ok(
-	[ 'pg_dump', '-p', "$port", '-n', 'pg_catalog' ],
-	'pg_dump: option -n pg_catalog'
-);
+$node->command_ok([ 'pg_dump', '-p', "$port", '-n', 'pg_catalog' ],
+	'pg_dump: option -n pg_catalog');
 
 #########################################
 # Test valid database exclusion patterns
@@ -4953,8 +4998,8 @@ foreach my $run (sort keys %pgdump_runs)
 		}
 		# Check for useless entries in "unlike" list.  Runs that are
 		# not listed in "like" don't need to be excluded in "unlike".
-		if ($tests{$test}->{unlike}->{$test_key} &&
-			!defined($tests{$test}->{like}->{$test_key}))
+		if ($tests{$test}->{unlike}->{$test_key}
+			&& !defined($tests{$test}->{like}->{$test_key}))
 		{
 			die "useless \"unlike\" entry \"$test_key\" in test \"$test\"";
 		}

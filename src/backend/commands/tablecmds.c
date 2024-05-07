@@ -23,6 +23,7 @@
 #include "access/reloptions.h"
 #include "access/relscan.h"
 #include "access/sysattr.h"
+#include "access/sequenceam.h"
 #include "access/tableam.h"
 #include "access/toast_compression.h"
 #include "access/xact.h"
@@ -966,14 +967,18 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	}
 
 	/*
-	 * For relations with table AM and partitioned tables, select access
-	 * method to use: an explicitly indicated one, or (in the case of a
+	 * For relations with table AM, partitioned tables or sequences, select
+	 * access method to use: an explicitly indicated one, or (in the case of a
 	 * partitioned table) the parent's, if it has one.
 	 */
 	if (stmt->accessMethod != NULL)
 	{
-		Assert(RELKIND_HAS_TABLE_AM(relkind) || relkind == RELKIND_PARTITIONED_TABLE);
-		accessMethodId = get_table_am_oid(stmt->accessMethod, false);
+		Assert(RELKIND_HAS_TABLE_AM(relkind) || relkind == RELKIND_PARTITIONED_TABLE ||
+			   RELKIND_HAS_SEQUENCE_AM(relkind));
+		if (RELKIND_HAS_SEQUENCE_AM(relkind))
+			accessMethodId = get_sequence_am_oid(stmt->accessMethod, false);
+		else
+			accessMethodId = get_table_am_oid(stmt->accessMethod, false);
 	}
 	else if (RELKIND_HAS_TABLE_AM(relkind) || relkind == RELKIND_PARTITIONED_TABLE)
 	{
@@ -985,6 +990,10 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 
 		if (RELKIND_HAS_TABLE_AM(relkind) && !OidIsValid(accessMethodId))
 			accessMethodId = get_table_am_oid(default_table_access_method, false);
+	}
+	else if (RELKIND_HAS_SEQUENCE_AM(relkind))
+	{
+		accessMethodId = get_sequence_am_oid(default_sequence_access_method, false);
 	}
 
 	/*
@@ -4561,6 +4570,7 @@ AlterTableGetLockLevel(List *cmds)
 				 * Subcommands that may be visible to concurrent SELECTs
 				 */
 			case AT_DropColumn: /* change visible to SELECT */
+			case AT_AddColumnToSequence:	/* CREATE SEQUENCE */
 			case AT_AddColumnToView:	/* CREATE VIEW */
 			case AT_DropOids:	/* used to equiv to DropColumn */
 			case AT_EnableAlwaysRule:	/* may change SELECT rules */
@@ -4859,6 +4869,13 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 		case AT_AddColumn:		/* ADD COLUMN */
 			ATSimplePermissions(cmd->subtype, rel,
 								ATT_TABLE | ATT_COMPOSITE_TYPE | ATT_FOREIGN_TABLE);
+			ATPrepAddColumn(wqueue, rel, recurse, recursing, false, cmd,
+							lockmode, context);
+			/* Recursion occurs during execution phase */
+			pass = AT_PASS_ADD_COL;
+			break;
+		case AT_AddColumnToSequence:	/* add column via CREATE SEQUENCE */
+			ATSimplePermissions(cmd->subtype, rel, ATT_SEQUENCE);
 			ATPrepAddColumn(wqueue, rel, recurse, recursing, false, cmd,
 							lockmode, context);
 			/* Recursion occurs during execution phase */
@@ -5293,6 +5310,7 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 	switch (cmd->subtype)
 	{
 		case AT_AddColumn:		/* ADD COLUMN */
+		case AT_AddColumnToSequence:	/* add column via CREATE SEQUENCE */
 		case AT_AddColumnToView:	/* add column via CREATE OR REPLACE VIEW */
 			address = ATExecAddColumn(wqueue, tab, rel, &cmd,
 									  cmd->recurse, false,
@@ -6473,6 +6491,7 @@ alter_table_type_to_string(AlterTableType cmdtype)
 	switch (cmdtype)
 	{
 		case AT_AddColumn:
+		case AT_AddColumnToSequence:
 		case AT_AddColumnToView:
 			return "ADD COLUMN";
 		case AT_ColumnDefault:

@@ -15,6 +15,8 @@
 #include "fe_utils/psqlscan.h"
 #include "libpq-fe.h"
 
+#define MAX_COMMENT_WIDTH 80
+
 extern bool openQueryOutputFile(const char *fname, FILE **fout, bool *is_pipe);
 extern bool setQFout(const char *fname);
 
@@ -43,5 +45,8 @@ extern const char *session_username(void);
 extern void expand_tilde(char **filename);
 
 extern bool recognized_connection_string(const char *connstr);
+
+extern void OutputComment(PQExpBufferData *buf, const char *string);
+extern void OutputCommentStars(PQExpBufferData *buf, const char *string);
 
 #endif							/* COMMON_H */

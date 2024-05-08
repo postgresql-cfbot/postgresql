@@ -40,6 +40,7 @@ static int	ExecQueryAndProcessResults(const char *query,
 									   FILE *printQueryFout);
 static bool command_no_begin(const char *query);
 
+extern char *curcmd;
 
 /*
  * openQueryOutputFile --- attempt to open a query output file
@@ -620,6 +621,8 @@ PGresult *
 PSQLexec(const char *query)
 {
 	PGresult   *res;
+	char *label = _("QUERY");
+
 
 	if (!pset.db)
 	{
@@ -627,20 +630,31 @@ PSQLexec(const char *query)
 		return NULL;
 	}
 
+	if (curcmd)
+		label = psprintf(_("QUERY (\\%s)"), curcmd);
+
 	if (pset.echo_hidden != PSQL_ECHO_HIDDEN_OFF)
 	{
-		printf(_("/******** QUERY *********/\n"
-				 "%s\n"
-				 "/************************/\n\n"), query);
+		PQExpBufferData buf;
+		initPQExpBuffer(&buf);
+
+		OutputCommentStars(&buf, label);
+		appendPQExpBufferStr(&buf, query);
+		appendPQExpBufferChar(&buf, '\n');
+		OutputCommentStars(&buf, NULL);
+
+		printf("%s", buf.data);
 		fflush(stdout);
 		if (pset.logfile)
 		{
-			fprintf(pset.logfile,
-					_("/******** QUERY *********/\n"
-					  "%s\n"
-					  "/************************/\n\n"), query);
+			fprintf(pset.logfile, "%s", buf.data);
 			fflush(pset.logfile);
 		}
+
+		pfree(buf.data);
+
+		if (curcmd)
+			pfree(label);
 
 		if (pset.echo_hidden == PSQL_ECHO_HIDDEN_NOEXEC)
 			return NULL;
@@ -2265,4 +2279,101 @@ bool
 recognized_connection_string(const char *connstr)
 {
 	return uri_prefix_length(connstr) != 0 || strchr(connstr, '=') != NULL;
+}
+
+/*
+ * OutputComment() outputs the given string to a buffer as a
+ * fixed width comment, wrapping the text given to the proper size and
+ * breaking at a space.  We assume there are no inner comments that need to be
+ * escaped.
+ */
+void
+OutputComment(PQExpBufferData *buf, const char *string)
+{
+    int len = strlen(string);
+	int lineStart = 0;
+    int lineEnd = MAX_COMMENT_WIDTH - 6; // Accounting for " * " at the start and " *" at the end of each line
+    static char spaces[MAX_COMMENT_WIDTH] = {0};
+
+    if (spaces[0] != ' ')
+        memset(spaces, ' ', MAX_COMMENT_WIDTH);
+
+    while (lineStart < len) {
+        // Adjust lineEnd if it's beyond the length of the string
+        if (lineEnd >= len) {
+            lineEnd = len - 1;
+        } else {
+            // Ensure we break the line at a space (if possible) to avoid breaking words
+            while (lineEnd > lineStart && string[lineEnd] != ' ') {
+                lineEnd--;
+            }
+            if (lineEnd == lineStart) {
+                // If we couldn't find a space, force a break at the maximum line width
+                lineEnd = lineStart + MAX_COMMENT_WIDTH - 6;
+            }
+        }
+
+		// output our data for the width we have, including the piece of the comment
+		printfPQExpBuffer(buf,
+						  "/* %.*s%.*s */\n",
+						  lineEnd - lineStart + 1, /* number of chars to output */
+						  string + lineStart,  /* offset of chars to copy */
+                          /* length of padding */
+                          MAX_COMMENT_WIDTH - 6 - (lineEnd - lineStart),
+                          spaces
+			);
+
+        // Move to the next line
+        lineStart = lineEnd + 1;
+        lineEnd = lineStart + MAX_COMMENT_WIDTH - 6;
+    }
+}
+
+
+/*
+ * OutputCommentStars() outputs the given single-line string wrapped in stars
+ * to the given width.
+ */
+void
+OutputCommentStars(PQExpBufferData *buf, const char *string)
+{
+    int len = string ? strlen(string) : 0;
+	char stars[MAX_COMMENT_WIDTH + 3];
+	int startOutputOffset;
+
+	/* This shouldn't happen based on current callers, but we'll truncate to a
+	 * safe size if need be. */
+
+	if (len > MAX_COMMENT_WIDTH) /* space for opening comment, closing comment, and spaces */
+		len = MAX_COMMENT_WIDTH;
+
+	/* If we have a zero-width string then this is a special-case where we
+	 * just want a line of stars. To minimize code disruption in this case,
+	 * we'll just set startOutputOffset to a value larger than
+	 * MAX_COMMENT_WIDTH. */
+
+	if (len > 0)
+		startOutputOffset = (((MAX_COMMENT_WIDTH - len - 2) / 2)); /* extra for space */
+	else
+		startOutputOffset = MAX_COMMENT_WIDTH * 2;
+
+	stars[0] = '/';
+	stars[MAX_COMMENT_WIDTH] = '/';
+	stars[MAX_COMMENT_WIDTH+1] = '\n';
+	stars[MAX_COMMENT_WIDTH+2] = '\0';
+
+	for (int i = 1; i < MAX_COMMENT_WIDTH; i++)
+	{
+		if (i >= startOutputOffset && i <= startOutputOffset + len + 1)
+		{
+			if (i == startOutputOffset || i == startOutputOffset + len + 1)
+				stars[i] = ' ';
+			else
+				stars[i] = string[i - startOutputOffset - 1];
+		}
+		else
+			stars[i] = '*';
+	}
+
+	appendPQExpBufferStr(buf, stars);
 }

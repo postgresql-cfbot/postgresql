@@ -496,6 +496,7 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 		{"field-separator-zero", no_argument, NULL, 'z'},
 		{"host", required_argument, NULL, 'h'},
 		{"html", no_argument, NULL, 'H'},
+		{"json", no_argument, NULL, 'J'},
 		{"list", no_argument, NULL, 'l'},
 		{"log-file", required_argument, NULL, 'L'},
 		{"no-readline", no_argument, NULL, 'n'},
@@ -528,7 +529,7 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 
 	memset(options, 0, sizeof *options);
 
-	while ((c = getopt_long(argc, argv, "aAbc:d:eEf:F:h:HlL:no:p:P:qR:sStT:U:v:VwWxXz?01",
+	while ((c = getopt_long(argc, argv, "aAbc:d:eEf:F:h:HJlL:no:p:P:qR:sStT:U:v:VwWxXz?01",
 							long_options, &optindex)) != -1)
 	{
 		switch (c)
@@ -575,6 +576,9 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 				break;
 			case 'H':
 				pset.popt.topt.format = PRINT_HTML;
+				break;
+			case 'J':
+				pset.popt.topt.format = PRINT_JSON;
 				break;
 			case 'l':
 				options->list_dbs = true;

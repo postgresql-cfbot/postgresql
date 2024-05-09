@@ -71,8 +71,6 @@ sid		\'([^']|\'\')*\'
 
 %%
 
-open			{ boot_yylval.kw = "open"; return OPEN; }
-
 close			{ boot_yylval.kw = "close"; return XCLOSE; }
 
 create			{ boot_yylval.kw = "create"; return XCREATE; }

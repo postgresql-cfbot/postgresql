@@ -35,8 +35,8 @@ extern PGDLLIMPORT int numattr;
 
 extern void BootstrapModeMain(int argc, char *argv[], bool check_only) pg_attribute_noreturn();
 
-extern void closerel(char *relname);
-extern void boot_openrel(char *relname);
+extern void boot_closerel(char *relname);
+extern void boot_openrel(Oid id);
 
 extern void DefineAttr(char *name, char *type, int attnum, int nullness);
 extern void InsertOneTuple(void);

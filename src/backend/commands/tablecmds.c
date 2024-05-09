@@ -11813,7 +11813,8 @@ ATExecAlterConstraint(Relation rel, AlterTableCmd *cmd, bool recurse,
 		}
 
 		ereport(ERROR,
-				(errmsg("cannot alter constraint \"%s\" on relation \"%s\"",
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("cannot alter constraint \"%s\" on relation \"%s\"",
 						cmdcon->conname, RelationGetRelationName(rel)),
 				 ancestorname && ancestortable ?
 				 errdetail("Constraint \"%s\" is derived from constraint \"%s\" of relation \"%s\".",
@@ -16721,6 +16722,7 @@ MergeConstraintsIntoExisting(Relation child_rel, Relation parent_rel)
 				 */
 				if (child_rel->rd_rel->relhassubclass)
 					ereport(ERROR,
+							errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 							errmsg("cannot add NOT NULL constraint to column \"%s\" of relation \"%s\" with inheritance children",
 								   get_attname(RelationGetRelid(child_rel),
 											   extractNotNullColumn(child_tuple),

@@ -1217,7 +1217,7 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 		 * constraints in expandTableLikeClause, so that we skip this for
 		 * those.
 		 */
-		foreach(lc, RelationGetNotNullConstraints(RelationGetRelid(relation), true))
+		foreach(lc, RelationGetNotNullConstraints(RelationGetRelid(relation), true, true))
 		{
 			CookedConstraint *cooked = (CookedConstraint *) lfirst(lc);
 
@@ -1495,7 +1495,7 @@ expandTableLikeClause(RangeVar *heapRel, TableLikeClause *table_like_clause)
 	 * Copy not-null constraints, too (these do not require any option to have
 	 * been given).
 	 */
-	foreach(lc, RelationGetNotNullConstraints(RelationGetRelid(relation), false))
+	foreach(lc, RelationGetNotNullConstraints(RelationGetRelid(relation), false, true))
 	{
 		AlterTableCmd *atsubcmd;
 

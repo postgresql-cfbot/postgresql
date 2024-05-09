@@ -858,11 +858,11 @@ AdjustNotNullInheritance(Oid relid, Bitmapset *columns, int count)
  *
  * This is seldom needed, so we just scan pg_constraint each time.
  *
- * XXX This is only used to create derived tables, so NO INHERIT constraints
- * are always skipped.
+ * XXX When used to create derived tables, set skip_no_inherit tp true,
+ * so that NO INHERIT constraints will be skipped.
  */
 List *
-RelationGetNotNullConstraints(Oid relid, bool cooked)
+RelationGetNotNullConstraints(Oid relid, bool cooked, bool skip_no_inherit)
 {
 	List	   *notnulls = NIL;
 	Relation	constrRel;
@@ -885,7 +885,7 @@ RelationGetNotNullConstraints(Oid relid, bool cooked)
 
 		if (conForm->contype != CONSTRAINT_NOTNULL)
 			continue;
-		if (conForm->connoinherit)
+		if (skip_no_inherit && conForm->connoinherit)
 			continue;
 
 		colnum = extractNotNullColumn(htup);
@@ -1898,4 +1898,109 @@ check_functional_grouping(Oid relid,
 	}
 
 	return false;
+}
+
+/*
+ * get_min_unique_not_null_attnos
+ *
+ * Identify the columns in a relation's unique index whose columns all have
+ * the NOT NULL constraint, if any.
+ * If there is more than one, return the one with the least column numbers.
+ */
+Bitmapset*
+get_min_unique_not_null_attnos(Oid relid)
+{
+	List	   *not_null_attnos = NIL;
+	ListCell   *lc = NULL;
+	Bitmapset  *unique_notnull_attnos = NULL;
+	Relation	pg_constraint;
+	HeapTuple	tuple;
+	SysScanDesc scan;
+	ScanKeyData skey[1];
+	int 		min_numkeys = 0;
+
+	/* Use cooked to fetch attnos. */
+	List* not_null_cs = RelationGetNotNullConstraints(relid, true, false);
+	if (not_null_cs == NIL)
+		return unique_notnull_attnos;
+	/* Fill a attno array to use it easily */
+	foreach (lc, not_null_cs)
+	{
+		CookedConstraint* cc = lfirst(lc);
+		not_null_attnos = list_append_unique_int(not_null_attnos, cc->attnum);
+	}
+
+	/* Scan pg_constraint for constraints of the target rel */
+	pg_constraint = table_open(ConstraintRelationId, AccessShareLock);
+
+	ScanKeyInit(&skey[0],
+				Anum_pg_constraint_conrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(relid));
+
+	scan = systable_beginscan(pg_constraint, ConstraintRelidTypidNameIndexId, true,
+							  NULL, 1, skey);
+
+	while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+	{
+		Form_pg_constraint con = (Form_pg_constraint) GETSTRUCT(tuple);
+		Datum		adatum;
+		bool		isNull;
+		ArrayType  *arr;
+		int16	   *attnums;
+		int			numkeys;
+		int			i;
+		bool all_notnull;
+		Bitmapset  *candidate = NULL;
+
+		/* Skip constraints that are not UNIQUE */
+		if (con->contype != CONSTRAINT_UNIQUE)
+			continue;
+
+		if (con->condeferrable)
+			break;
+
+		/* Extract the conkey array, ie, attnums of UNIQUE's columns */
+		adatum = heap_getattr(tuple, Anum_pg_constraint_conkey,
+							  RelationGetDescr(pg_constraint), &isNull);
+		if (isNull)
+			elog(ERROR, "null conkey for constraint %u",
+				 ((Form_pg_constraint) GETSTRUCT(tuple))->oid);
+		arr = DatumGetArrayTypeP(adatum);	/* ensure not toasted */
+		numkeys = ARR_DIMS(arr)[0];
+		if (ARR_NDIM(arr) != 1 ||
+			numkeys < 0 ||
+			ARR_HASNULL(arr) ||
+			ARR_ELEMTYPE(arr) != INT2OID)
+			elog(ERROR, "conkey is not a 1-D smallint array");
+		attnums = (int16 *) ARR_DATA_PTR(arr);
+
+		/* Skip if it has more columns than current one. */
+		if (min_numkeys > 0 && numkeys >= min_numkeys)
+			continue;
+
+		all_notnull = true;
+		/* Construct the result value */
+		for (i = 0; i < numkeys; i++)
+		{
+			/* Skip if unique key could be NULL. */
+			if (!list_member_int(not_null_attnos, attnums[i]))
+			{
+				all_notnull = false;
+				break;
+			}
+
+			candidate = bms_add_member(candidate,
+									  attnums[i] - FirstLowInvalidHeapAttributeNumber);
+		}
+		if(!all_notnull)
+			continue;
+		min_numkeys = numkeys;
+		unique_notnull_attnos = candidate;
+	}
+	systable_endscan(scan);
+
+	table_close(pg_constraint, AccessShareLock);
+
+	return unique_notnull_attnos;
 }

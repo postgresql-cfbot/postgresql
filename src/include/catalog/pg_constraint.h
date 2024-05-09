@@ -264,7 +264,7 @@ extern AttrNumber extractNotNullColumn(HeapTuple constrTup);
 extern int	AdjustNotNullInheritance1(Oid relid, AttrNumber attnum, int count,
 									  bool is_no_inherit, bool allow_noinherit_change);
 extern void AdjustNotNullInheritance(Oid relid, Bitmapset *columns, int count);
-extern List *RelationGetNotNullConstraints(Oid relid, bool cooked);
+extern List *RelationGetNotNullConstraints(Oid relid, bool cooked, bool skip_no_inherit);
 
 extern void RemoveConstraintById(Oid conId);
 extern void RenameConstraintById(Oid conId, const char *newname);
@@ -282,6 +282,8 @@ extern Oid	get_relation_idx_constraint_oid(Oid relationId, Oid indexId);
 
 extern Bitmapset *get_primary_key_attnos(Oid relid, bool deferrableOk,
 										 Oid *constraintOid);
+extern Bitmapset *get_min_unique_not_null_attnos(Oid relid);
+
 extern void DeconstructFkConstraintRow(HeapTuple tuple, int *numfks,
 									   AttrNumber *conkey, AttrNumber *confkey,
 									   Oid *pf_eq_oprs, Oid *pp_eq_oprs, Oid *ff_eq_oprs,

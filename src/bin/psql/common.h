@@ -16,6 +16,7 @@
 #include "libpq-fe.h"
 
 extern bool openQueryOutputFile(const char *fname, FILE **fout, bool *is_pipe);
+extern bool editFileWithCheck(const char *fname, int lineno, bool *edited);
 extern bool setQFout(const char *fname);
 
 extern char *psql_get_variable(const char *varname, PsqlScanQuoteType quote,

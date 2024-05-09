@@ -12,6 +12,8 @@
 #include <math.h>
 #include <pwd.h>
 #include <signal.h>
+#include <sys/stat.h>
+#include <utime.h>
 #ifndef WIN32
 #include <unistd.h>				/* for write() */
 #else
@@ -120,6 +122,63 @@ CloseGOutput(FILE *gfile_fout, bool is_pipe)
 			fclose(gfile_fout);
 	}
 }
+
+
+/*
+ * editFileWithCheck -- invoke editor and check if the file was touched
+ */
+bool
+editFileWithCheck(const char *fname, int lineno, bool *edited)
+{
+	bool		error = false;
+	struct stat before,
+				after;
+
+	{
+		struct utimbuf ut;
+
+		/*
+		 * Try to set the file modification time of the temporary file
+		 * a few seconds in the past.  Otherwise, the low granularity
+		 * (one second, or even worse on some filesystems) that we can
+		 * portably measure with stat(2) could lead us to not
+		 * recognize a modification, if the user typed very quickly.
+		 *
+		 * This is a rather unlikely race condition, so don't error
+		 * out if the utime(2) call fails --- that would make the cure
+		 * worse than the disease.
+		 */
+		ut.modtime = ut.actime = time(NULL) - 2;
+		(void) utime(fname, &ut);
+	}
+
+	if (!error && stat(fname, &before) != 0)
+	{
+		pg_log_error("%s: %m", fname);
+		error = true;
+	}
+
+	/* call editor */
+	if (!error)
+		error = !editFile(fname, lineno);
+
+	if (!error && stat(fname, &after) != 0)
+	{
+		pg_log_error("%s: %m", fname);
+		error = true;
+	}
+
+	/* file was edited if the size or modification time has changed */
+	if (!error &&
+		(before.st_size != after.st_size ||
+		 before.st_mtime != after.st_mtime))
+	{
+		*edited = true;
+	}
+
+	return !error;
+}
+
 
 /*
  * setQFout
@@ -1261,7 +1320,7 @@ sendquery_cleanup:
 	ResetCancelConn();
 
 	/* reset \g's output-to-filename trigger */
-	if (pset.gfname)
+	if (pset.gfname && !pset.gedit_flag)
 	{
 		free(pset.gfname);
 		pset.gfname = NULL;
@@ -1293,6 +1352,8 @@ sendquery_cleanup:
 
 	/* reset \gdesc trigger */
 	pset.gdesc_flag = false;
+
+	/* we don't reset gedit_flag here, it's still needed in the main loop */
 
 	/* reset \gexec trigger */
 	pset.gexec_flag = false;

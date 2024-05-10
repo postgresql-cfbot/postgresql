@@ -167,11 +167,8 @@ worker_spi_main(Datum main_arg)
 	BackgroundWorkerUnblockSignals();
 
 	/* Connect to our database */
-	if (OidIsValid(dboid))
-		BackgroundWorkerInitializeConnectionByOid(dboid, roleoid, flags);
-	else
-		BackgroundWorkerInitializeConnection(worker_spi_database,
-											 worker_spi_role, flags);
+	Assert(OidIsValid(dboid));
+	BackgroundWorkerInitializeConnectionByOid(dboid, roleoid, flags);
 
 	/*
 	 * Disable parallel query for workers started with BYPASS_ALLOWCONN or

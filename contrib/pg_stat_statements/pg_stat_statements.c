@@ -2789,6 +2789,8 @@ generate_normalized_query(JumbleState *jstate, const char *query,
 	bool		merged_interval = false;	/* Currently processed constants
 											   belong to a merged constants
 											   interval. */
+	int 		magnitude; 		/* Order of magnitute for number of merged
+								   constants */
 
 
 	/*
@@ -2803,8 +2805,13 @@ generate_normalized_query(JumbleState *jstate, const char *query,
 	 * certainly isn't more than 11 bytes, even if n reaches INT_MAX.  We
 	 * could refine that limit based on the max value of n for the current
 	 * query, but it hardly seems worth any extra effort to do so.
+	 *
+	 * On top of that, each pair of $n symbols representing a merged constants
+	 * interval will be decorated with the explanationary text, adding 14
+	 * bytes.
 	 */
-	norm_query_buflen = query_len + jstate->clocations_count * 10;
+	norm_query_buflen = query_len + jstate->clocations_count * 10 +
+		jstate->clocations_merged_count * 14;
 
 	/* Allocate result buffer */
 	norm_query = palloc(norm_query_buflen + 1);
@@ -2829,7 +2836,8 @@ generate_normalized_query(JumbleState *jstate, const char *query,
 		Assert(len_to_wrt >= 0);
 
 		/* Normal path, non merged constant */
-		if (!jstate->clocations[i].merged)
+		magnitude = jstate->clocations[i].magnitude;
+		if (magnitude == 0)
 		{
 			memcpy(norm_query + n_quer_loc, query + quer_loc, len_to_wrt);
 			n_quer_loc += len_to_wrt;
@@ -2846,13 +2854,23 @@ generate_normalized_query(JumbleState *jstate, const char *query,
 			/*
 			 * We are not inside a merged interval yet, which means it is the
 			 * the first merged constant.
-			 *
+			 */
+			static const uint32 powers_of_ten[] = {
+				1, 10, 100,
+				1000, 10000, 100000,
+				1000000, 10000000, 100000000,
+				1000000000
+			};
+			int lower_merged = powers_of_ten[magnitude - 1];
+			int upper_merged = powers_of_ten[magnitude];
+
+			/*
 			 * A merged constants interval must be represented via two
 			 * constants with the merged flag. Currently we are at the first,
 			 * verify there is another one.
 			 */
 			Assert(i + 1 < jstate->clocations_count);
-			Assert(jstate->clocations[i + 1].merged);
+			Assert(jstate->clocations[i + 1].magnitude > 0);
 
 			memcpy(norm_query + n_quer_loc, query + quer_loc, len_to_wrt);
 			n_quer_loc += len_to_wrt;
@@ -2861,7 +2879,8 @@ generate_normalized_query(JumbleState *jstate, const char *query,
 			merged_interval = true;
 
 			/* Mark the interval in the normalized query */
-			n_quer_loc += sprintf(norm_query + n_quer_loc, "...");
+			n_quer_loc += sprintf(norm_query + n_quer_loc, "... [%d-%d entries]",
+								  lower_merged, upper_merged - 1);
 		}
 
 		/* Otherwise the constant is merged away, move forward */

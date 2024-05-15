@@ -1802,9 +1802,6 @@ AC_CHECK_DECLS([strlcat, strlcpy, strnlen])
 AC_CHECK_DECLS([preadv], [], [], [#include <sys/uio.h>])
 AC_CHECK_DECLS([pwritev], [], [], [#include <sys/uio.h>])
 
-# This is probably only present on macOS, but may as well check always
-AC_CHECK_DECLS(F_FULLFSYNC, [], [], [#include <fcntl.h>])
-
 AC_REPLACE_FUNCS(m4_normalize([
 	explicit_bzero
 	getopt

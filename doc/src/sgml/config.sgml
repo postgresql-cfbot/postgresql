@@ -2951,7 +2951,7 @@ include_dir 'conf.d'
      </varlistentry>
 
      <varlistentry id="guc-fsync" xreflabel="fsync">
-      <term><varname>fsync</varname> (<type>boolean</type>)
+      <term><varname>fsync</varname> (<type>enum</type>)
       <indexterm>
        <primary><varname>fsync</varname> configuration parameter</primary>
       </indexterm>
@@ -2964,6 +2964,22 @@ include_dir 'conf.d'
         equivalent methods (see <xref linkend="guc-wal-sync-method"/>).
         This ensures that the database cluster can recover to a
         consistent state after an operating system or hardware crash.
+       </para>
+
+       <para>
+        On macOS only, the parameter can also be set to
+        <literal>full</literal>, and that is the default.
+        This value causes <productname>PostgreSQL</productname> to replace all
+        calls to <function>fsync()</function> with
+        <function>fcntl(fd, F_FULLFSYNC)</function>, as recommended by
+        Apple's documentation.  It also does the same for calls to
+        <function>fdatasync()</function>, a function that exists but is not
+        documented by Apple.
+        Setting it to <literal>on</literal> causes macOS's regular
+        <function>fsync()</function> and <function>fdatasync()</function>
+        functions to be used as on other platforms.  They are known to be
+        considerably faster, but users should consult the warnings in Apple's
+        manual page for <function>fsync</function> first.
        </para>
 
        <para>
@@ -3198,26 +3214,28 @@ include_dir 'conf.d'
         </listitem>
         <listitem>
         <para>
-         <literal>fsync_writethrough</literal> (call <function>fsync()</function> at each commit, forcing write-through of any disk write cache)
-        </para>
-        </listitem>
-        <listitem>
-        <para>
          <literal>open_sync</literal> (write WAL files with <function>open()</function> option <symbol>O_SYNC</symbol>)
         </para>
         </listitem>
        </itemizedlist>
        <para>
         Not all of these choices are available on all platforms.
-        The default is the first method in the above list that is supported
-        by the platform, except that <literal>fdatasync</literal> is the default on
-        Linux and FreeBSD.  The default is not necessarily ideal; it might be
+        The default is <literal>fdatasync</literal>.
+        The default is not necessarily ideal; it might be
         necessary to change this setting or other aspects of your system
         configuration in order to create a crash-safe configuration or
         achieve optimal performance.
         These aspects are discussed in <xref linkend="wal-reliability"/>.
         This parameter can only be set in the <filename>postgresql.conf</filename>
         file or on the server command line.
+       </para>
+       <para>
+        Note that on macOS, the <xref linkend="guc-fsync"/> setting can modify
+        the behavior of the <literal>fdatasync</literal> and
+        <literal>fsync</literal> levels, since
+        it can cause all calls to <function>fdatasync()</function> and
+        <function>fsync()</function> to be replaced with an Apple-specific
+        <function>fcntl()</function> call.
        </para>
       </listitem>
      </varlistentry>

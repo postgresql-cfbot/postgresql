@@ -170,9 +170,6 @@ static bool check_wal_consistency_checking_deferred = false;
  */
 const struct config_enum_entry wal_sync_method_options[] = {
 	{"fsync", WAL_SYNC_METHOD_FSYNC, false},
-#ifdef HAVE_FSYNC_WRITETHROUGH
-	{"fsync_writethrough", WAL_SYNC_METHOD_FSYNC_WRITETHROUGH, false},
-#endif
 	{"fdatasync", WAL_SYNC_METHOD_FDATASYNC, false},
 #ifdef O_SYNC
 	{"open_sync", WAL_SYNC_METHOD_OPEN, false},
@@ -2889,7 +2886,7 @@ XLogFlush(XLogRecPtr record)
 		 * We do not sleep if enableFsync is not turned on, nor if there are
 		 * fewer than CommitSiblings other backends with active transactions.
 		 */
-		if (CommitDelay > 0 && enableFsync &&
+		if (CommitDelay > 0 && enableFsync != ENABLE_FSYNC_OFF &&
 			MinimumActiveBackends(CommitSiblings))
 		{
 			pg_usleep(CommitDelay);
@@ -8524,7 +8521,7 @@ get_sync_bit(int method)
 		o_direct_flag = PG_O_DIRECT;
 
 	/* If fsync is disabled, never open in sync mode */
-	if (!enableFsync)
+	if (enableFsync == ENABLE_FSYNC_OFF)
 		return o_direct_flag;
 
 	switch (method)
@@ -8536,7 +8533,6 @@ get_sync_bit(int method)
 			 * be seen here.
 			 */
 		case WAL_SYNC_METHOD_FSYNC:
-		case WAL_SYNC_METHOD_FSYNC_WRITETHROUGH:
 		case WAL_SYNC_METHOD_FDATASYNC:
 			return o_direct_flag;
 #ifdef O_SYNC
@@ -8611,7 +8607,7 @@ issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli)
 	 * Quick exit if fsync is disabled or write() has already synced the WAL
 	 * file.
 	 */
-	if (!enableFsync ||
+	if (enableFsync == ENABLE_FSYNC_OFF ||
 		wal_sync_method == WAL_SYNC_METHOD_OPEN ||
 		wal_sync_method == WAL_SYNC_METHOD_OPEN_DSYNC)
 		return;
@@ -8626,15 +8622,9 @@ issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli)
 	switch (wal_sync_method)
 	{
 		case WAL_SYNC_METHOD_FSYNC:
-			if (pg_fsync_no_writethrough(fd) != 0)
+			if (pg_fsync(fd) != 0)
 				msg = _("could not fsync file \"%s\": %m");
 			break;
-#ifdef HAVE_FSYNC_WRITETHROUGH
-		case WAL_SYNC_METHOD_FSYNC_WRITETHROUGH:
-			if (pg_fsync_writethrough(fd) != 0)
-				msg = _("could not fsync write-through file \"%s\": %m");
-			break;
-#endif
 		case WAL_SYNC_METHOD_FDATASYNC:
 			if (pg_fdatasync(fd) != 0)
 				msg = _("could not fdatasync file \"%s\": %m");

@@ -1,12 +1,6 @@
 # Copyright (c) 2022-2024, PostgreSQL Global Development Group
 
-backend_build_deps = [backend_code]
-backend_sources = []
-backend_link_with = [pgport_srv, common_srv]
-
-generated_backend_sources = []
-post_export_backend_sources = []
-
+# NB: parser is entered directly from the meson file in the src directory
 subdir('access')
 subdir('archive')
 subdir('backup')
@@ -21,7 +15,6 @@ subdir('libpq')
 subdir('main')
 subdir('nodes')
 subdir('optimizer')
-subdir('parser')
 subdir('partitioning')
 subdir('port')
 subdir('postmaster')

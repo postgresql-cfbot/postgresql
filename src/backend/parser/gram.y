@@ -4390,7 +4390,7 @@ columnList:
 		;
 
 optionalPeriodName:
-			',' PERIOD columnElem { $$ = $3; }
+			',' columnElem { $$ = $2; }
 			| /*EMPTY*/               { $$ = NULL; }
 	;
 

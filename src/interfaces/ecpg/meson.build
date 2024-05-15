@@ -3,9 +3,9 @@
 ecpg_targets = []
 
 subdir('include')
+subdir('preproc')
 subdir('pgtypeslib')
 subdir('ecpglib')
 subdir('compatlib')
-subdir('preproc')
 
 alias_target('ecpg', ecpg_targets)

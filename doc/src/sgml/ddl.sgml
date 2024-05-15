@@ -2534,6 +2534,10 @@ GRANT SELECT (col1), UPDATE (col1) ON mytable TO miriam_rw;
    no rows are visible or can be modified.  Operations that apply to the
    whole table, such as <command>TRUNCATE</command> and <literal>REFERENCES</literal>,
    are not subject to row security.
+   Note that only members of the predefined role <literal>pg_read_all_stats</literal>
+   may run <command>EXPLAIN (ANALYZE)</command> for a statement that is subject
+   to row security, because the execution statistics can be used to reveal the
+   existence of rows the user is not allowed to see.
   </para>
 
   <para>

@@ -133,6 +133,25 @@ SELECT * FROM document TABLESAMPLE BERNOULLI(50) REPEATABLE(0)
 EXPLAIN (COSTS OFF) SELECT * FROM document WHERE f_leak(dtitle);
 EXPLAIN (COSTS OFF) SELECT * FROM document NATURAL JOIN category WHERE f_leak(dtitle);
 
+-- EXPLAIN (ANALYZE) is only allowed for members of pg_read_all_stats
+EXPLAIN (ANALYZE) SELECT * FROM document WHERE f_leak(dtitle);    -- error
+
+RESET SESSION AUTHORIZATION;
+GRANT pg_read_all_stats TO regress_rls_carol;
+SET SESSION AUTHORIZATION regress_rls_carol;
+
+DO
+$$DECLARE
+  t text;
+BEGIN
+  SET LOCAL client_min_messages = error;
+  -- should cause no error
+  EXECUTE 'EXPLAIN (ANALYZE) SELECT * FROM document WHERE f_leak(dtitle)' INTO t;
+END;$$;
+
+RESET SESSION AUTHORIZATION;
+REVOKE pg_read_all_stats FROM regress_rls_carol;
+
 -- viewpoint from regress_rls_dave
 SET SESSION AUTHORIZATION regress_rls_dave;
 SELECT * FROM document WHERE f_leak(dtitle) ORDER BY did;

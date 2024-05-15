@@ -2168,12 +2168,21 @@ CREATE VIEW phone_number WITH (security_barrier) AS
 </para>
 
 <para>
+    To prevent attackers from using <command>EXPLAIN (ANALYZE)</command> to
+    get information about data excluded by the definition of a view with the
+    <literal>security_barrier</literal> option, only superusers and members
+    of the predefined role <literal>pg_read_all_stats</literal> are allowed
+    to use the <literal>ANALYZE</literal> option of <command>EXPLAIN</command>
+    on a statement that involves such a view.
+</para>
+
+<para>
     It is important to understand that even a view created with the
     <literal>security_barrier</literal> option is intended to be secure only
     in the limited sense that the contents of the invisible tuples will not be
     passed to possibly-insecure functions.  The user may well have other means
-    of making inferences about the unseen data; for example, they can see the
-    query plan using <command>EXPLAIN</command>, or measure the run time of
+    of making inferences about the unseen data; for example, they can
+    measure the run time of
     queries against the view.  A malicious attacker might be able to infer
     something about the amount of unseen data, or even gain some information
     about the data distribution or most common values (since these things may

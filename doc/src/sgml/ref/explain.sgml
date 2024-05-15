@@ -84,7 +84,12 @@ EXPLAIN [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] <rep
    the display, including the total elapsed time expended within each plan
    node (in milliseconds) and the total number of rows it actually returned.
    This is useful for seeing whether the planner's estimates
-   are close to reality.
+   are close to reality.  Since the execution statistics of a statement
+   allow the user to infer if rows were excluded by a row-level security
+   policy or a condition in a <literal>security_barrier</literal> view,
+   only members of the predefined role <literal>pg_read_all_stats</literal>
+   can use <command>EXPLAIN ANALYZE</command> with statements that use these
+   features.
   </para>
 
   <important>

@@ -95,6 +95,26 @@ EXPLAIN (COSTS OFF) SELECT * FROM my_property_normal WHERE f_leak(passwd);
 SELECT * FROM my_property_secure WHERE f_leak(passwd);
 EXPLAIN (COSTS OFF) SELECT * FROM my_property_secure WHERE f_leak(passwd);
 
+-- EXPLAIN (ANALYZE) should only be allowed to members of pg_read_all_stats
+
+EXPLAIN (ANALYZE) SELECT * FROM my_property_secure WHERE f_leak(passwd);    -- error
+
+RESET SESSION AUTHORIZATION;
+GRANT pg_read_all_stats TO regress_alice;
+SET SESSION AUTHORIZATION regress_alice;
+
+DO
+$$DECLARE
+  t text;
+BEGIN
+  -- should cause no error
+  EXECUTE 'EXPLAIN (ANALYZE) SELECT * FROM my_property_secure WHERE f_leak(passwd)' INTO t;
+END;$$;
+
+RESET SESSION AUTHORIZATION;
+REVOKE pg_read_all_stats FROM regress_alice;
+SET SESSION AUTHORIZATION regress_alice;
+
 --
 -- scenario: qualifiers can be pushed down if they contain leaky functions,
 --           provided they aren't passed data from inside the view.

@@ -6,7 +6,7 @@
 #include "btree_gist.h"
 #include "btree_utils_var.h"
 #include "utils/builtins.h"
-#include "utils/bytea.h"
+#include "utils/sortsupport.h"
 #include "utils/varbit.h"
 
 
@@ -19,9 +19,32 @@ PG_FUNCTION_INFO_V1(gbt_bit_picksplit);
 PG_FUNCTION_INFO_V1(gbt_bit_consistent);
 PG_FUNCTION_INFO_V1(gbt_bit_penalty);
 PG_FUNCTION_INFO_V1(gbt_bit_same);
+PG_FUNCTION_INFO_V1(gbt_bit_sortsupport);
+PG_FUNCTION_INFO_V1(gbt_varbit_sortsupport);
 
 
 /* define for comparison */
+
+static int
+gbt_bit_ssup_cmp(Datum x, Datum y, SortSupport ssup)
+{
+	GBT_VARKEY *key1 = PG_DETOAST_DATUM(x);
+	GBT_VARKEY *key2 = PG_DETOAST_DATUM(y);
+
+	GBT_VARKEY_R arg1 = gbt_var_key_readable(key1);
+	GBT_VARKEY_R arg2 = gbt_var_key_readable(key2);
+	Datum result;
+
+	/* lower is always equal to upper, so just compare those fields */
+	result = DirectFunctionCall2(bitcmp,
+								 PointerGetDatum(arg1.lower),
+								 PointerGetDatum(arg2.lower));
+
+	GBT_FREE_IF_COPY(key1, x);
+	GBT_FREE_IF_COPY(key2, y);
+
+	return DatumGetInt32(result);
+}
 
 static bool
 gbt_bitgt(const void *a, const void *b, Oid collation, FmgrInfo *flinfo)
@@ -207,4 +230,26 @@ gbt_bit_penalty(PG_FUNCTION_ARGS)
 
 	PG_RETURN_POINTER(gbt_var_penalty(result, o, n, PG_GET_COLLATION(),
 									  &tinfo, fcinfo->flinfo));
+}
+
+Datum
+gbt_bit_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = gbt_bit_ssup_cmp;
+	ssup->ssup_extra = NULL;
+
+	PG_RETURN_VOID();
+}
+
+Datum
+gbt_varbit_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = gbt_bit_ssup_cmp;
+	ssup->ssup_extra = NULL;
+
+	PG_RETURN_VOID();
 }

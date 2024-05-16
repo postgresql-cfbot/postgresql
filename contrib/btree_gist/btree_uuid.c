@@ -6,6 +6,7 @@
 #include "btree_gist.h"
 #include "btree_utils_num.h"
 #include "port/pg_bswap.h"
+#include "utils/sortsupport.h"
 #include "utils/uuid.h"
 
 typedef struct
@@ -25,7 +26,31 @@ PG_FUNCTION_INFO_V1(gbt_uuid_picksplit);
 PG_FUNCTION_INFO_V1(gbt_uuid_consistent);
 PG_FUNCTION_INFO_V1(gbt_uuid_penalty);
 PG_FUNCTION_INFO_V1(gbt_uuid_same);
+PG_FUNCTION_INFO_V1(gbt_uuid_sortsupport);
 
+static int uuid_internal_cmp(const pg_uuid_t *arg1, const pg_uuid_t *arg2);
+
+/* Sortsupport functions */
+static int
+gbt_uuid_ssup_cmp(Datum x, Datum y, SortSupport ssup)
+{
+	uuidKEY *arg1 = (uuidKEY *) DatumGetPointer(x);
+	uuidKEY *arg2 = (uuidKEY *) DatumGetPointer(y);
+
+	/* Sortsupport gets equal upper and lower values for each key to compare */
+	return uuid_internal_cmp(&arg1->lower, &arg2->lower);
+}
+
+Datum
+gbt_uuid_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = gbt_uuid_ssup_cmp;
+	ssup->ssup_extra = NULL;
+
+	PG_RETURN_VOID();
+}
 
 static int
 uuid_internal_cmp(const pg_uuid_t *arg1, const pg_uuid_t *arg2)

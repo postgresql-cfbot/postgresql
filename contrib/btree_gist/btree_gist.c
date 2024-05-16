@@ -6,6 +6,9 @@
 #include "access/stratnum.h"
 #include "utils/builtins.h"
 
+#include "access/gist.h"
+#include "btree_gist.h"
+
 PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(gbt_decompress);

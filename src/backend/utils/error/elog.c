@@ -79,6 +79,7 @@
 #include "storage/ipc.h"
 #include "storage/proc.h"
 #include "tcop/tcopprot.h"
+#include "utils/guc.h"
 #include "utils/guc_hooks.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
@@ -113,6 +114,9 @@ int			Log_destination = LOG_DESTINATION_STDERR;
 char	   *Log_destination_string = NULL;
 bool		syslog_sequence_numbers = true;
 bool		syslog_split_messages = true;
+
+/* Whether the transaction id will appear in the log messages. */
+bool		Log_has_xid = false;
 
 /* Processed form of backtrace_functions GUC */
 static char *backtrace_function_list;
@@ -285,6 +289,50 @@ message_level_is_interesting(int elevel)
 	return false;
 }
 
+
+/*
+ * check_log_line_prefix: GUC check_hook for Log_line_prefix
+ */
+bool check_log_line_prefix(char **newval, void **extra, GucSource source)
+{
+	const char *p;
+
+	if ((*newval) == NULL)
+	{
+		Log_has_xid = false;
+		return true;
+	}
+
+	Log_has_xid = false;
+
+	for (p = (*newval); *p != '\0'; p++)
+	{
+		if (*p != '%')
+		{
+			/* literal char, just skip */
+			continue;
+		}
+
+		/* must be a '%', so skip to the next char */
+		p++;
+		if (*p == '\0')
+			break;				/* format error - ignore it */
+		else if (*p == '%')
+		{
+			/* string contains %% */
+			continue;
+		}
+
+		/* process the option */
+		if (*p == 'x')
+		{
+			Log_has_xid = true;
+			break;
+		}
+	}
+
+	return true;
+}
 
 /*
  * in_error_recursion_trouble --- are we at risk of infinite error recursion?

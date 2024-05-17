@@ -4082,7 +4082,7 @@ struct config_string ConfigureNamesString[] =
 		},
 		&Log_line_prefix,
 		"%m [%p] ",
-		NULL, NULL, NULL
+		check_log_line_prefix, NULL, NULL
 	},
 
 	{

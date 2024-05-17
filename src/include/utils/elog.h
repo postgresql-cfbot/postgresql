@@ -502,6 +502,8 @@ extern PGDLLIMPORT char *Log_destination_string;
 extern PGDLLIMPORT bool syslog_sequence_numbers;
 extern PGDLLIMPORT bool syslog_split_messages;
 
+extern PGDLLIMPORT bool	Log_has_xid;
+
 /* Log destination bitmap */
 #define LOG_DESTINATION_STDERR	 1
 #define LOG_DESTINATION_SYSLOG	 2

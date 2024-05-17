@@ -81,6 +81,20 @@ static void ProcessUtilitySlow(ParseState *pstate,
 							   QueryCompletion *qc);
 static void ExecDropStmt(DropStmt *stmt, bool isTopLevel);
 
+
+/*
+ * Check the state of the arguments given to entry points for utility
+ * processing.
+ */
+#define UTILITY_CHECKS \
+do { \
+	Assert(IsA(pstmt, PlannedStmt)); \
+	Assert(pstmt->commandType == CMD_UTILITY); \
+	Assert(queryString != NULL);	/* required as of 8.4 */ \
+	Assert(qc == NULL || qc->commandTag == CMDTAG_UNKNOWN); \
+} while (0)
+
+
 /*
  * CommandIsReadOnly: is an executable query read-only?
  *
@@ -505,10 +519,7 @@ ProcessUtility(PlannedStmt *pstmt,
 			   DestReceiver *dest,
 			   QueryCompletion *qc)
 {
-	Assert(IsA(pstmt, PlannedStmt));
-	Assert(pstmt->commandType == CMD_UTILITY);
-	Assert(queryString != NULL);	/* required as of 8.4 */
-	Assert(qc == NULL || qc->commandTag == CMDTAG_UNKNOWN);
+	UTILITY_CHECKS;
 
 	/*
 	 * We provide a function hook variable that lets loadable plugins get
@@ -551,6 +562,8 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 	bool		isAtomicContext = (!(context == PROCESS_UTILITY_TOPLEVEL || context == PROCESS_UTILITY_QUERY_NONATOMIC) || IsTransactionBlock());
 	ParseState *pstate;
 	int			readonly_flags;
+
+	UTILITY_CHECKS;
 
 	/* This can recurse, so check for excessive recursion */
 	check_stack_depth();

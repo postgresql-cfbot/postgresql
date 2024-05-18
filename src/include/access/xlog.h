@@ -197,6 +197,7 @@ typedef enum WALAvailability
 
 struct XLogRecData;
 struct XLogReaderState;
+struct ControlFileData;
 
 extern XLogRecPtr XLogInsertRecord(struct XLogRecData *rdata,
 								   XLogRecPtr fpw_lsn,
@@ -236,6 +237,10 @@ extern void XLOGShmemInit(void);
 extern void BootStrapXLOG(uint32 data_checksum_version);
 extern void InitializeWalConsistencyChecking(void);
 extern void LocalProcessControlFile(bool reset);
+#ifdef EXEC_BACKEND
+extern void ExportProtoControlFile(struct ControlFileData *copy);
+extern void ImportProtoControlFile(const struct ControlFileData *copy);
+#endif
 extern WalLevel GetActiveWalLevelOnStandby(void);
 extern void StartupXLOG(void);
 extern void ShutdownXLOG(int code, Datum arg);

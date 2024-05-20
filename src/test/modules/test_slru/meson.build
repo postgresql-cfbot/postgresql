@@ -32,4 +32,12 @@ tests += {
     'regress_args': ['--temp-config', files('test_slru.conf')],
     'runningcheck': false,
   },
+  'tap': {
+    'env': {
+       'enable_injection_points': get_option('injection_points') ? 'yes' : 'no',
+    },
+    'tests': [
+      't/001_multixact.pl'
+    ],
+  },
 }

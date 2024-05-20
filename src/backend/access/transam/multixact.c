@@ -88,6 +88,7 @@
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "utils/fmgrprotos.h"
+#include "utils/injection_point.h"
 #include "utils/guc_hooks.h"
 #include "utils/memutils.h"
 
@@ -866,7 +867,11 @@ MultiXactIdCreateFromMembers(int nmembers, MultiXactMember *members)
 	 * in vacuum.  During vacuum, in particular, it would be unacceptable to
 	 * keep OldestMulti set, in case it runs for long.
 	 */
+	INJECTION_POINT_LOAD("GetNewMultiXactId-done");
+
 	multi = GetNewMultiXactId(nmembers, &offset);
+
+	INJECTION_POINT("GetNewMultiXactId-done");
 
 	/* Make an XLOG entry describing the new MXID. */
 	xlrec.mid = multi;
@@ -1479,6 +1484,8 @@ retry:
 			/* Corner case 2: next multixact is still being filled in */
 			LWLockRelease(lock);
 			CHECK_FOR_INTERRUPTS();
+
+			INJECTION_POINT("GetMultiXactIdMembers-CV-sleep");
 
 			ConditionVariableSleep(&MultiXactState->nextoff_cv,
 								   WAIT_EVENT_MULTIXACT_CREATION);

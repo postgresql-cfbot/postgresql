@@ -2985,6 +2985,7 @@ else
 # --with-template not given
 
 case $host_os in
+     aix*) template=aix ;;
   cygwin*|msys*) template=cygwin ;;
   darwin*) template=darwin ;;
 dragonfly*) template=netbsd ;;
@@ -6838,7 +6839,6 @@ $as_echo "$pgac_cv_prog_CXX_cxxflags__fno_strict_aliasing" >&6; }
 if test x"$pgac_cv_prog_CXX_cxxflags__fno_strict_aliasing" = x"yes"; then
   CXXFLAGS="${CXXFLAGS} -fno-strict-aliasing"
 fi
-
 
 fi
 
@@ -12831,7 +12831,8 @@ fi
 
 fi
 
-# Note: We can test for libldap_r only after we know PTHREAD_LIBS
+# Note: We can test for libldap_r only after we know PTHREAD_LIBS;
+# also, on AIX, we may need to have openssl in LIBS for this step.
 if test "$with_ldap" = yes ; then
   _LIBS="$LIBS"
   if test "$PORTNAME" != "win32"; then
@@ -16945,28 +16946,18 @@ _ACEOF
 
 
 # Compute maximum alignment of any basic type.
-#
-# We require 'double' to have the strictest alignment among the basic types,
-# because otherwise the C ABI might impose 8-byte alignment on some of the
-# other C types that correspond to TYPALIGN_DOUBLE SQL types.  That could
-# cause a mismatch between the tuple layout and the C struct layout of a
-# catalog tuple.  We used to carefully order catalog columns such that any
-# fixed-width, attalign=4 columns were at offsets divisible by 8 regardless
-# of MAXIMUM_ALIGNOF to avoid that, but we no longer support any platforms
-# where TYPALIGN_DOUBLE != MAXIMUM_ALIGNOF.
-#
-# We assume without checking that long's alignment is at least as strong as
-# char, short, or int.  Note that we intentionally do not consider any types
-# wider than 64 bits, as allowing MAXIMUM_ALIGNOF to exceed 8 would be too
-# much of a penalty for disk and memory space.
+# We assume long's alignment is at least as strong as char, short, or int;
+# but we must check long long (if it is being used for int64) and double.
+# Note that we intentionally do not consider any types wider than 64 bits,
+# as allowing MAXIMUM_ALIGNOF to exceed 8 would be too much of a penalty
+# for disk and memory space.
 
-MAX_ALIGNOF=$ac_cv_alignof_double
-
-if test $ac_cv_alignof_long -gt $MAX_ALIGNOF ; then
-  as_fn_error $? "alignment of 'long' is greater than the alignment of 'double'" "$LINENO" 5
+MAX_ALIGNOF=$ac_cv_alignof_long
+if test $MAX_ALIGNOF -lt $ac_cv_alignof_double ; then
+  MAX_ALIGNOF=$ac_cv_alignof_double
 fi
-if test x"$HAVE_LONG_LONG_INT_64" = xyes && test $ac_cv_alignof_long_long_int -gt $MAX_ALIGNOF ; then
-  as_fn_error $? "alignment of 'long long int' is greater than the alignment of 'double'" "$LINENO" 5
+if test x"$HAVE_LONG_LONG_INT_64" = xyes && test $MAX_ALIGNOF -lt $ac_cv_alignof_long_long_int ; then
+  MAX_ALIGNOF="$ac_cv_alignof_long_long_int"
 fi
 
 cat >>confdefs.h <<_ACEOF
@@ -17084,7 +17075,7 @@ else
 /* end confdefs.h.  */
 
 /* This must match the corresponding code in c.h: */
-#if defined(__GNUC__) || defined(__SUNPRO_C)
+#if defined(__GNUC__) || defined(__SUNPRO_C) || defined(__IBMC__)
 #define pg_attribute_aligned(a) __attribute__((aligned(a)))
 #elif defined(_MSC_VER)
 #define pg_attribute_aligned(a) __declspec(align(a))

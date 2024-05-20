@@ -415,17 +415,15 @@ tas(volatile slock_t *lock)
 	__asm__ __volatile__(
 "	lwarx   %0,0,%3,1	\n"
 "	cmpwi   %0,0		\n"
-"	bne     1f			\n"
+"	bne     $+16		\n"		/* branch to li %1,1 */
 "	addi    %0,%0,1		\n"
 "	stwcx.  %0,0,%3		\n"
-"	beq     2f			\n"
-"1: \n"
+"	beq     $+12		\n"		/* branch to lwsync */
 "	li      %1,1		\n"
-"	b       3f			\n"
-"2: \n"
+"	b       $+12		\n"		/* branch to end of asm sequence */
 "	lwsync				\n"
 "	li      %1,0		\n"
-"3: \n"
+
 :	"=&b"(_t), "=r"(_res), "+m"(*lock)
 :	"r"(lock)
 :	"memory", "cc");
@@ -587,6 +585,21 @@ tas(volatile slock_t *lock)
  */
 
 #if !defined(HAS_TEST_AND_SET)	/* We didn't trigger above, let's try here */
+
+#if defined(_AIX)	/* AIX */
+/*
+ * AIX (POWER)
+ */
+#define HAS_TEST_AND_SET
+
+#include <sys/atomic_op.h>
+
+typedef int slock_t;
+
+#define TAS(lock)			_check_lock((slock_t *) (lock), 0, 1)
+#define S_UNLOCK(lock)		_clear_lock((slock_t *) (lock), 0)
+#endif	 /* _AIX */
+
 
 /* These are in sunstudio_(sparc|x86).s */
 

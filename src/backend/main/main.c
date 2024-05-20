@@ -340,7 +340,7 @@ help(const char *progname)
 	printf(_("  -s                 show statistics after each query\n"));
 	printf(_("  -S WORK-MEM        set amount of memory for sorts (in kB)\n"));
 	printf(_("  -V, --version      output version information, then exit\n"));
-	printf(_("  --NAME=VALUE       set run-time parameter\n"));
+	printf(_("  --NAME=VALUE       set run-time parameter, a shorter form of -c\n"));
 	printf(_("  --describe-config  describe configuration parameters, then exit\n"));
 	printf(_("  -?, --help         show this help, then exit\n"));
 

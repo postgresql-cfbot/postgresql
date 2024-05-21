@@ -260,6 +260,35 @@ BEGIN
 END;
 $$;
 
+-- againt with session_variables_ambiguity_warning(on)
+
+SET session_variables_ambiguity_warning TO on;
+
+DO $$
+<<myblock>>
+DECLARE plpgsql_sv_var1 int;
+BEGIN
+  LET plpgsql_sv_var1 = 100;
+
+  -- should be ok without warning
+  plpgsql_sv_var1 := 1000;
+
+  -- should be ok without warning
+  -- print 100;
+  RAISE NOTICE 'session variable is %', public.plpgsql_sv_var1;
+
+  -- should be ok without warning
+  -- print 1000
+  RAISE NOTICE 'plpgsql variable is %', myblock.plpgsql_sv_var1;
+
+  -- should to print plpgsql variable with warning
+  -- print 1000
+  RAISE NOTICE 'variable is %', plpgsql_sv_var1;
+END;
+$$;
+
+SET session_variables_ambiguity_warning TO off;
+
 DROP VARIABLE plpgsql_sv_var1;
 
 -- the value should not be corrupted

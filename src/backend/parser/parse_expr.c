@@ -47,6 +47,7 @@
 
 /* GUC parameters */
 bool		Transform_null_equals = false;
+bool		session_variables_ambiguity_warning = false;
 
 
 static Node *transformExprRecurse(ParseState *pstate, Node *expr);
@@ -962,11 +963,51 @@ transformColumnRef(ParseState *pstate, ColumnRef *cref)
 		 *
 		 * SELECT foo.a, foo.b, foo.c FROM foo;
 		 *
-		 * However, that is very confusing, so we disallow it.  We don't try to
-		 * identify a variable if we know that it would be shadowed.
-		 * -----
+		 * However, that is very confusing, so we disallow it.
+		 *
+		 * When session_variables_ambiguity_warning is requested, then we
+		 * need to identify a variable although we know, so this variable
+		 * would be shadowed.
 		 */
-		if (!node && !(relname && crerr == CRERR_NO_COLUMN))
+		if (node || (relname && crerr == CRERR_NO_COLUMN))
+		{
+			/*
+			 * In this path we just try (if it is wanted) detect if session
+			 * variable is shadowed.
+			 */
+			if (session_variables_ambiguity_warning)
+			{
+				/*
+				 * The AccessShareLock is created on related session variable.
+				 * The lock will be kept for the whole transaction.
+				 */
+				varid = IdentifyVariable(cref->fields, &attrname, &not_unique, true);
+
+				if (OidIsValid(varid))
+				{
+					/* this path will ending by WARNING. Unlock variable first */
+					UnlockDatabaseObject(VariableRelationId, varid, 0, AccessShareLock);
+
+					if (node)
+						ereport(WARNING,
+								(errcode(ERRCODE_AMBIGUOUS_COLUMN),
+								 errmsg("session variable \"%s\" is shadowed",
+										NameListToString(cref->fields)),
+								 errdetail("Session variables can be shadowed by columns, routine's variables and routine's arguments with the same name."),
+								 parser_errposition(pstate, cref->location)));
+					else
+						/* session variable is shadowed by RTE */
+						ereport(WARNING,
+								(errcode(ERRCODE_AMBIGUOUS_COLUMN),
+								 errmsg("session variable \"%s.%s\" is shadowed",
+										get_namespace_name(get_session_variable_namespace(varid)),
+										get_session_variable_name(varid)),
+								 errdetail("Session variables can be shadowed by tables or table's aliases with the same name."),
+								 parser_errposition(pstate, cref->location)));
+				}
+			}
+		}
+		else
 		{
 			/* takes an AccessShareLock on the session variable */
 			varid = IdentifyVariable(cref->fields, &attrname, &not_unique, false);

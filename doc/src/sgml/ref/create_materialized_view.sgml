@@ -21,7 +21,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-CREATE MATERIALIZED VIEW [ IF NOT EXISTS ] <replaceable>table_name</replaceable>
+CREATE [ OR REPLACE ] MATERIALIZED VIEW [ IF NOT EXISTS ] <replaceable>table_name</replaceable>
     [ (<replaceable>column_name</replaceable> [, ...] ) ]
     [ USING <replaceable class="parameter">method</replaceable> ]
     [ WITH ( <replaceable class="parameter">storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
@@ -61,13 +61,24 @@ CREATE MATERIALIZED VIEW [ IF NOT EXISTS ] <replaceable>table_name</replaceable>
 
   <variablelist>
    <varlistentry>
+    <term><literal>OR REPLACE</literal></term>
+    <listitem>
+     <para>
+      Replaces a materialized view if it already exists.
+      Specifying <literal>OR REPLACE</literal> together with
+      <literal>IF NOT EXISTS</literal> is an error.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><literal>IF NOT EXISTS</literal></term>
     <listitem>
      <para>
       Do not throw an error if a materialized view with the same name already
       exists. A notice is issued in this case.  Note that there is no guarantee
       that the existing materialized view is anything like the one that would
-      have been created.
+      have been created, unless you use <literal>OR REPLACE</literal> instead.
      </para>
     </listitem>
    </varlistentry>

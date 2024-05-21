@@ -4831,6 +4831,21 @@ CreateMatViewStmt:
 					$8->skipData = !($11);
 					$$ = (Node *) ctas;
 				}
+		| CREATE OR REPLACE OptNoLog MATERIALIZED VIEW create_mv_target AS SelectStmt opt_with_data
+				{
+					CreateTableAsStmt *ctas = makeNode(CreateTableAsStmt);
+
+					ctas->query = $9;
+					ctas->into = $7;
+					ctas->objtype = OBJECT_MATVIEW;
+					ctas->is_select_into = false;
+					ctas->if_not_exists = false;
+					/* cram additional flags into the IntoClause */
+					$7->rel->relpersistence = $4;
+					$7->skipData = !($10);
+					$7->replace = true;
+					$$ = (Node *) ctas;
+				}
 		;
 
 create_mv_target:

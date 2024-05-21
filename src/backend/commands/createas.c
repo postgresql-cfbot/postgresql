@@ -79,55 +79,151 @@ static void intorel_destroy(DestReceiver *self);
 static ObjectAddress
 create_ctas_internal(List *attrList, IntoClause *into)
 {
-	CreateStmt *create = makeNode(CreateStmt);
-	bool		is_matview;
+	bool		is_matview,
+				replace = false;
 	char		relkind;
-	Datum		toast_options;
-	const char *const validnsps[] = HEAP_RELOPT_NAMESPACES;
+	Oid			matviewOid = InvalidOid;
 	ObjectAddress intoRelationAddr;
 
 	/* This code supports both CREATE TABLE AS and CREATE MATERIALIZED VIEW */
 	is_matview = (into->viewQuery != NULL);
 	relkind = is_matview ? RELKIND_MATVIEW : RELKIND_RELATION;
 
-	/*
-	 * Create the target relation by faking up a CREATE TABLE parsetree and
-	 * passing it to DefineRelation.
-	 */
-	create->relation = into->rel;
-	create->tableElts = attrList;
-	create->inhRelations = NIL;
-	create->ofTypename = NULL;
-	create->constraints = NIL;
-	create->options = into->options;
-	create->oncommit = into->onCommit;
-	create->tablespacename = into->tableSpaceName;
-	create->if_not_exists = false;
-	create->accessMethod = into->accessMethod;
+	/* Check if an existing materialized view needs to be replaced. */
+	if (is_matview)
+	{
+		LOCKMODE	lockmode;
 
-	/*
-	 * Create the relation.  (This will error out if there's an existing view,
-	 * so we don't need more code to complain if "replace" is false.)
-	 */
-	intoRelationAddr = DefineRelation(create, relkind, InvalidOid, NULL, NULL);
+		lockmode = into->replace ? AccessExclusiveLock : NoLock;
+		(void) RangeVarGetAndCheckCreationNamespace(into->rel, lockmode,
+													&matviewOid);
+		replace = OidIsValid(matviewOid) && into->replace;
+	}
 
-	/*
-	 * If necessary, create a TOAST table for the target table.  Note that
-	 * NewRelationCreateToastTable ends with CommandCounterIncrement(), so
-	 * that the TOAST table will be visible for insertion.
-	 */
-	CommandCounterIncrement();
+	if (is_matview && replace)
+	{
+		Relation	rel;
+		List	   *atcmds = NIL;
+		AlterTableCmd *atcmd;
+		TupleDesc	descriptor;
 
-	/* parse and validate reloptions for the toast table */
-	toast_options = transformRelOptions((Datum) 0,
-										create->options,
-										"toast",
-										validnsps,
-										true, false);
+		rel = relation_open(matviewOid, NoLock);
 
-	(void) heap_reloptions(RELKIND_TOASTVALUE, toast_options, true);
+		if (rel->rd_rel->relkind != RELKIND_MATVIEW)
+			ereport(ERROR,
+					errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					errmsg("\"%s\" is not a materialized view",
+						   RelationGetRelationName(rel)));
 
-	NewRelationCreateToastTable(intoRelationAddr.objectId, toast_options);
+		CheckTableNotInUse(rel, "CREATE OR REPLACE MATERIALIZED VIEW");
+
+		descriptor = BuildDescForRelation(attrList);
+		checkViewColumns(descriptor, rel->rd_att, true);
+
+		/* Add new attributes via ALTER TABLE. */
+		if (list_length(attrList) > rel->rd_att->natts)
+		{
+			ListCell   *c;
+			int			skip = rel->rd_att->natts;
+
+			foreach(c, attrList)
+			{
+				if (skip > 0)
+				{
+					skip--;
+					continue;
+				}
+				atcmd = makeNode(AlterTableCmd);
+				atcmd->subtype = AT_AddColumnToView;
+				atcmd->def = (Node *) lfirst(c);
+				atcmds = lappend(atcmds, atcmd);
+			}
+		}
+
+		/* Set access method via ALTER TABLE. */
+		if (into->accessMethod != NULL)
+		{
+			atcmd = makeNode(AlterTableCmd);
+			atcmd->subtype = AT_SetAccessMethod;
+			atcmd->name = into->accessMethod;
+			atcmds = lappend(atcmds, atcmd);
+		}
+
+		/* Set tablespace via ALTER TABLE. */
+		if (into->tableSpaceName != NULL)
+		{
+			atcmd = makeNode(AlterTableCmd);
+			atcmd->subtype = AT_SetTableSpace;
+			atcmd->name = into->tableSpaceName;
+			atcmds = lappend(atcmds, atcmd);
+		}
+
+		/* Set storage parameters via ALTER TABLE. */
+		if (into->options != NIL)
+		{
+			atcmd = makeNode(AlterTableCmd);
+			atcmd->subtype = AT_ReplaceRelOptions;
+			atcmd->def = (Node *) into->options;
+			atcmds = lappend(atcmds, atcmd);
+		}
+
+		if (atcmds != NIL)
+		{
+			AlterTableInternal(matviewOid, atcmds, true);
+			CommandCounterIncrement();
+		}
+
+		relation_close(rel, NoLock);
+
+		ObjectAddressSet(intoRelationAddr, RelationRelationId, matviewOid);
+	}
+	else
+	{
+		CreateStmt *create = makeNode(CreateStmt);
+		Datum		toast_options;
+		const static char *validnsps[] = HEAP_RELOPT_NAMESPACES;
+
+		/*
+		 * Create the target relation by faking up a CREATE TABLE parsetree
+		 * and passing it to DefineRelation.
+		 */
+		create->relation = into->rel;
+		create->tableElts = attrList;
+		create->inhRelations = NIL;
+		create->ofTypename = NULL;
+		create->constraints = NIL;
+		create->options = into->options;
+		create->oncommit = into->onCommit;
+		create->tablespacename = into->tableSpaceName;
+		create->if_not_exists = false;
+		create->accessMethod = into->accessMethod;
+
+		/*
+		 * Create the relation.  (This will error out if there's an existing
+		 * view, so we don't need more code to complain if "replace" is
+		 * false.)
+		 */
+		intoRelationAddr = DefineRelation(create, relkind, InvalidOid, NULL,
+										  NULL);
+
+		/*
+		 * If necessary, create a TOAST table for the target table.  Note that
+		 * NewRelationCreateToastTable ends with CommandCounterIncrement(), so
+		 * that the TOAST table will be visible for insertion.
+		 */
+		CommandCounterIncrement();
+
+		/* parse and validate reloptions for the toast table */
+		toast_options = transformRelOptions((Datum) 0,
+											create->options,
+											"toast",
+											validnsps,
+											true, false);
+
+		(void) heap_reloptions(RELKIND_TOASTVALUE, toast_options, true);
+
+		NewRelationCreateToastTable(intoRelationAddr.objectId, toast_options);
+	}
 
 	/* Create the "view" part of a materialized view. */
 	if (is_matview)
@@ -135,7 +231,7 @@ create_ctas_internal(List *attrList, IntoClause *into)
 		/* StoreViewQuery scribbles on tree, so make a copy */
 		Query	   *query = (Query *) copyObject(into->viewQuery);
 
-		StoreViewQuery(intoRelationAddr.objectId, query, false);
+		StoreViewQuery(intoRelationAddr.objectId, query, replace);
 		CommandCounterIncrement();
 	}
 
@@ -231,7 +327,26 @@ ExecCreateTableAs(ParseState *pstate, CreateTableAsStmt *stmt,
 
 	/* Check if the relation exists or not */
 	if (CreateTableAsRelExists(stmt))
+	{
+		/* An existing materialized view can be replaced. */
+		if (is_matview && into->replace)
+		{
+			RefreshMatViewStmt *refresh;
+
+			/* Change the relation to match the new query and other options. */
+			(void) create_ctas_nodata(query->targetList, into);
+
+			/* Refresh the materialized view with a fake statement. */
+			refresh = makeNode(RefreshMatViewStmt);
+			refresh->relation = into->rel;
+			refresh->skipData = into->skipData;
+			refresh->concurrent = false;
+
+			return ExecRefreshMatView(refresh, NULL, NULL);
+		}
+
 		return InvalidObjectAddress;
+	}
 
 	/*
 	 * Create the tuple receiver object and insert info it will need
@@ -392,14 +507,15 @@ CreateTableAsRelExists(CreateTableAsStmt *ctas)
 	oldrelid = get_relname_relid(into->rel->relname, nspid);
 	if (OidIsValid(oldrelid))
 	{
-		if (!ctas->if_not_exists)
+		if (!ctas->if_not_exists && !into->replace)
 			ereport(ERROR,
 					(errcode(ERRCODE_DUPLICATE_TABLE),
 					 errmsg("relation \"%s\" already exists",
 							into->rel->relname)));
 
 		/*
-		 * The relation exists and IF NOT EXISTS has been specified.
+		 * The relation exists and IF NOT EXISTS or OR REPLACE has been
+		 * specified.
 		 *
 		 * If we are in an extension script, insist that the pre-existing
 		 * object be a member of the extension, to avoid security risks.
@@ -407,11 +523,12 @@ CreateTableAsRelExists(CreateTableAsStmt *ctas)
 		ObjectAddressSet(address, RelationRelationId, oldrelid);
 		checkMembershipInCurrentExtension(&address);
 
-		/* OK to skip */
-		ereport(NOTICE,
-				(errcode(ERRCODE_DUPLICATE_TABLE),
-				 errmsg("relation \"%s\" already exists, skipping",
-						into->rel->relname)));
+		if (ctas->if_not_exists)
+			/* OK to skip */
+			ereport(NOTICE,
+					(errcode(ERRCODE_DUPLICATE_TABLE),
+					 errmsg("relation \"%s\" already exists, skipping",
+							into->rel->relname)));
 		return true;
 	}
 

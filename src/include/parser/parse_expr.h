@@ -17,6 +17,7 @@
 
 /* GUC parameters */
 extern PGDLLIMPORT bool Transform_null_equals;
+extern PGDLLIMPORT bool session_variables_ambiguity_warning;
 
 extern Node *transformExpr(ParseState *pstate, Node *expr, ParseExprKind exprKind);
 

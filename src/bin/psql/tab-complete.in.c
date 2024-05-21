@@ -1305,6 +1305,8 @@ static const pgsql_thing_t words_after_create[] = {
 																			 * TABLE ... */
 	{"TEXT SEARCH", NULL, NULL, NULL},
 	{"TRANSFORM", NULL, NULL, NULL, NULL, THING_NO_ALTER},
+	{"TRANSACTIONAL", NULL, NULL, NULL, NULL, THING_NO_DROP | THING_NO_ALTER}, /* for CREATE TRANSACTIONAL
+																				* VARIABLE ... */
 	{"TRIGGER", "SELECT tgname FROM pg_catalog.pg_trigger WHERE tgname LIKE '%s' AND NOT tgisinternal"},
 	{"TYPE", NULL, NULL, &Query_for_list_of_datatypes},
 	{"UNIQUE", NULL, NULL, NULL, NULL, THING_NO_DROP | THING_NO_ALTER}, /* for CREATE UNIQUE
@@ -3947,8 +3949,11 @@ match_previous_words(int pattern_id,
 	}
 /* CREATE VARIABLE --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	/* Complete CREATE VARIABLE <name> with AS */
+	else if (Matches("CREATE", "TRANSACTION|TRANSACTIONAL"))
+		COMPLETE_WITH("IMMUTABLE", "VARIABLE");
 	else if (TailMatches("CREATE", "VARIABLE", MatchAny) ||
 			 TailMatches("TEMP|TEMPORARY", "VARIABLE", MatchAny) ||
+			 TailMatches("TRANSACTION|TRANSACTIONAL", "VARIABLE", MatchAny) ||
 			 TailMatches("IMMUTABLE", "VARIABLE", MatchAny))
 		COMPLETE_WITH("AS");
 	else if (TailMatches("VARIABLE", MatchAny, "AS"))

@@ -9863,6 +9863,18 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
      </row>
 
      <row>
+      <entry><structfield>varistransact</structfield></entry>
+      <entry><type>boolean</type></entry>
+      <entry></entry>
+      <entry>
+       True, when the variable is <quote>transactional</quote>. In the case
+       of a transaction rollback, transactional variables are reset to the
+       value they had when the transaction started. The default value is
+       <literal>false</literal>.
+      </entry>
+     </row>
+
+     <row>
       <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>vareoxaction</structfield> <type>char</type>
        <structfield>varxactendaction</structfield> <type>char</type>

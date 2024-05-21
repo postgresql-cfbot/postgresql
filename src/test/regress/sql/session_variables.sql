@@ -1207,3 +1207,61 @@ SELECT var1;
 LET var1 = 30;
 
 DROP VARIABLE var1;
+
+-- test transactional variables
+CREATE TRANSACTION VARIABLE tv AS int DEFAULT 0;
+
+BEGIN;
+  LET tv = 100;
+  SELECT tv;
+ROLLBACK;
+
+SELECT tv;
+
+LET tv = 100;
+BEGIN;
+  LET tv = 1000;
+COMMIT;
+
+SELECT tv;
+
+BEGIN;
+  LET tv = 0;
+  SELECT tv;
+ROLLBACK;
+
+SELECT tv;
+
+-- test subtransactions
+
+BEGIN;
+  LET tv = 1;
+SAVEPOINT x1;
+  LET tv = 2;
+SAVEPOINT x2;
+  LET tv = 3;
+ROLLBACK TO x2;
+  SELECT tv;
+  LET tv = 10;
+ROLLBACK TO x1;
+  SELECT tv;
+ROLLBACK;
+
+SELECT tv;
+
+BEGIN;
+  LET tv = 1;
+SAVEPOINT x1;
+  LET tv = 2;
+SAVEPOINT x2;
+  LET tv = 3;
+ROLLBACK TO x2;
+  SELECT tv;
+  LET tv = 10;
+ROLLBACK TO x1;
+  SELECT tv;
+COMMIT;
+
+SELECT tv;
+
+DROP VARIABLE tv;

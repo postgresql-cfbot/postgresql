@@ -5163,7 +5163,7 @@ listVariables(const char *pattern, bool verbose)
 	PQExpBufferData buf;
 	PGresult   *res;
 	printQueryOpt myopt = pset.popt;
-	static const bool translate_columns[] = {false, false, false, false, false, false, false, false, false, false, false};
+	static const bool translate_columns[] = {false, false, false, false, false, false, false, false, false, false, false, false};
 
 	if (pset.sversion < 180000)
 	{
@@ -5186,6 +5186,7 @@ listVariables(const char *pattern, bool verbose)
 					  "  pg_catalog.pg_get_userbyid(v.varowner) as \"%s\",\n"
 					  "  NOT v.varnotnull as \"%s\",\n"
 					  "  NOT v.varisimmutable as \"%s\",\n"
+					  "  v.varistransact as \"%s\",\n"
 					  "  pg_catalog.pg_get_expr(v.vardefexpr, 0) as \"%s\",\n"
 					  "  CASE v.varxactendaction\n"
 					  "    WHEN 'd' THEN 'ON COMMIT DROP'\n"
@@ -5198,6 +5199,7 @@ listVariables(const char *pattern, bool verbose)
 					  gettext_noop("Owner"),
 					  gettext_noop("Nullable"),
 					  gettext_noop("Mutable"),
+					  gettext_noop("Transactional"),
 					  gettext_noop("Default"),
 					  gettext_noop("Transactional end action"));
 

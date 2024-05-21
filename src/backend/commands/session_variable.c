@@ -48,6 +48,19 @@ typedef struct SVariableXActDropItem
 } SVariableXActDropItem;
 
 /*
+ * Used for transactional variables. Holds prev version.
+ */
+typedef struct PrevValue
+{
+	Datum		value;
+	bool		isnull;
+
+	SubTransactionId modify_subid;
+
+	struct PrevValue *prev_value;
+} PrevValue;
+
+/*
  * The values of session variables are stored in the backend's private memory
  * in the dedicated memory context SVariableMemoryContext in binary format.
  * They are stored in the "sessionvars" hash table, whose key is the OID of the
@@ -68,6 +81,25 @@ typedef struct SVariableData
 	bool		isnull;
 	Datum		value;
 
+	/*
+	 * We don't need stack versions modified in same subtransaction.
+	 * Used by transactional variables only. The value of transactional
+	 * variable can be returned immediately when modify_subid is same
+	 * like current subid.
+	 */
+	SubTransactionId modify_subid;
+
+	/*
+	 * When the modify_subid is different than current subid, then
+	 * we need to recheck versions and throw versions related to
+	 * reverted transactions. When purge_subid is same like current subid
+	 * we can return the value of transaction variable without this
+	 * recheck.
+	 */
+	SubTransactionId purge_subid;
+
+	PrevValue  *prev_value;
+
 	Oid			typid;
 	int16		typlen;
 	bool		typbyval;
@@ -86,6 +118,7 @@ typedef struct SVariableData
 
 	bool		not_null;
 	bool		is_immutable;
+	bool		is_transact;
 
 	bool		reset_at_eox;
 
@@ -125,6 +158,9 @@ static bool needs_validation = false;
  */
 static bool has_session_variables_with_reset_at_eox = false;
 
+/* true, when transactional variables was modified */
+static bool has_modified_transactional_variables = false;
+
 /*
  * The content of session variables is not removed immediately. When it
  * is possible we do this at the transaction end. But when the transaction failed,
@@ -140,6 +176,7 @@ static List *xact_drop_items = NIL;
 
 static void register_session_variable_xact_drop(Oid varid);
 static void unregister_session_variable_xact_drop(Oid varid);
+static bool purge_session_variable(SVariable svar);
 
 /*
  * Callback function for session variable invalidation.
@@ -293,8 +330,25 @@ unregister_session_variable_xact_drop(Oid varid)
  * Release stored value, free memory
  */
 static void
-free_session_variable_value(SVariable svar)
+free_session_variable_value(SVariable svar, bool deep_free)
 {
+	if (deep_free)
+	{
+		PrevValue *prev_value = svar->prev_value;
+		PrevValue *next_value;
+
+		while (prev_value)
+		{
+			if (!svar->typbyval)
+				pfree(DatumGetPointer(prev_value->value));
+
+			next_value = prev_value->prev_value;
+			pfree(prev_value);
+
+			prev_value = next_value;
+		}
+	}
+
 	/* clean the current value */
 	if (!svar->isnull)
 	{
@@ -393,7 +447,7 @@ remove_invalid_session_variables(bool atEOX)
 			{
 				Oid			varid = svar->varid;
 
-				free_session_variable_value(svar);
+				free_session_variable_value(svar, true);
 				hash_search(sessionvars, &varid, HASH_REMOVE, NULL);
 				svar = NULL;
 			}
@@ -427,6 +481,94 @@ remove_session_variables_with_reset_at_eox(void)
 	}
 
 	has_session_variables_with_reset_at_eox = false;
+}
+
+/*
+ * remove prev values at eox
+ */
+static void
+remove_prev_values_at_eox(bool isCommit)
+{
+	HASH_SEQ_STATUS status;
+	SVariable	svar;
+
+	if (!sessionvars)
+		return;
+
+	/* leave quckly, when there are not that variables */
+	if (!has_modified_transactional_variables)
+		return;
+
+	hash_seq_init(&status, sessionvars);
+	while ((svar = (SVariable) hash_seq_search(&status)) != NULL)
+	{
+		if (svar->is_transact && svar->modify_subid != InvalidSubTransactionId)
+		{
+			if (isCommit)
+			{
+				if (purge_session_variable(svar))
+				{
+					PrevValue *prev_value = svar->prev_value;
+
+					while (prev_value)
+					{
+						PrevValue *current_pv = prev_value;
+
+						if (!svar->typbyval && !current_pv->isnull)
+							pfree(DatumGetPointer(current_pv->value));
+
+						prev_value = current_pv->prev_value;
+						pfree(current_pv);
+					}
+				}
+				else
+				{
+					hash_search(sessionvars, &svar->varid, HASH_REMOVE, NULL);
+					svar = NULL;
+				}
+			}
+			else
+			{
+				PrevValue *prev_value = svar->prev_value;
+
+				while (prev_value)
+				{
+					PrevValue *current_pv = prev_value;
+
+					if (current_pv->modify_subid == InvalidSubTransactionId)
+						break;
+
+					if (!svar->typbyval && !current_pv->isnull)
+						pfree(DatumGetPointer(current_pv->value));
+
+					prev_value = current_pv->prev_value;
+					pfree(current_pv);
+				}
+
+				if (prev_value)
+				{
+					svar->value = prev_value->value;
+					svar->isnull = prev_value->isnull;
+
+					pfree(prev_value);
+				}
+				else
+				{
+					hash_search(sessionvars, &svar->varid, HASH_REMOVE, NULL);
+					svar = NULL;
+				}
+			}
+
+			/* when svar is still valid (not removed from sessionvars */
+			if (svar)
+			{
+				svar->modify_subid = InvalidSubTransactionId;
+				svar->prev_value = NULL;
+			}
+		}
+	}
+
+	has_modified_transactional_variables = false;
 }
 
 /*
@@ -475,6 +617,8 @@ AtPreEOXact_SessionVariables(bool isCommit)
 
 		remove_invalid_session_variables(true);
 	}
+
+	remove_prev_values_at_eox(isCommit);
 
 	/*
 	 * We have to clean xact_drop_items. All related variables are dropped
@@ -621,6 +765,7 @@ setup_session_variable(SVariable svar, Oid varid, bool is_write)
 
 	svar->not_null = varform->varnotnull;
 	svar->is_immutable = varform->varisimmutable;
+	svar->is_transact = varform->varistransact;
 
 	svar->is_domain = (get_typtype(varform->vartype) == TYPTYPE_DOMAIN);
 	svar->domain_check_extra = NULL;
@@ -645,6 +790,17 @@ setup_session_variable(SVariable svar, Oid varid, bool is_write)
 
 	svar->isnull = true;
 	svar->value = (Datum) 0;
+
+	if (svar->is_transact)
+	{
+		svar->modify_subid = GetCurrentSubTransactionId();
+		has_modified_transactional_variables = true;
+	}
+	else
+		svar->modify_subid = InvalidSubTransactionId;
+
+	svar->purge_subid = InvalidSubTransactionId;
+	svar->prev_value = NULL;
 
 	svar->is_valid = true;
 
@@ -680,6 +836,69 @@ setup_session_variable(SVariable svar, Oid varid, bool is_write)
 }
 
 /*
+ * Try to remove all previous versions related to reverted transactions.
+ * Returns true, when valid version was found.
+ */
+static bool
+purge_session_variable(SVariable svar)
+{
+	SubTransactionId current_subid;
+	PrevValue	   *prev_value;
+	bool			found = true;
+
+	Assert(svar->is_transact);
+
+	if (svar->modify_subid == InvalidSubTransactionId)
+		return true;
+
+	current_subid = GetCurrentSubTransactionId();
+
+	if (svar->modify_subid == current_subid)
+		return true;
+
+	if (svar->purge_subid == current_subid)
+		return true;
+
+	if (SubTransactionIsActive(svar->modify_subid))
+	{
+		svar->purge_subid = current_subid;
+		return true;
+	}
+
+	prev_value = svar->prev_value;
+
+	while (prev_value)
+	{
+		PrevValue *current_pv = prev_value;
+
+		if (current_pv->modify_subid == InvalidSubTransactionId ||
+			SubTransactionIsActive(current_pv->modify_subid))
+		{
+			svar->value = current_pv->value;
+			svar->isnull = current_pv->isnull;
+			svar->modify_subid = current_pv->modify_subid;
+
+			prev_value = current_pv->prev_value;
+			pfree(current_pv);
+
+			found = true;
+			break;
+		}
+
+		if (!svar->typbyval && !current_pv->isnull)
+			pfree(DatumGetPointer(current_pv->value));
+
+		prev_value = current_pv->prev_value;
+		pfree(current_pv);
+	}
+
+	svar->prev_value = prev_value;
+	svar->purge_subid = current_subid;
+
+	return found;
+}
+
+/*
  * Assign a new value to the session variable.  It is copied to
  * SVariableMemoryContext if necessary.
  *
@@ -691,6 +910,10 @@ set_session_variable(SVariable svar, Datum value, bool isnull)
 	Datum		newval;
 	SVariableData locsvar,
 			   *_svar;
+	SubTransactionId current_subid = GetCurrentSubTransactionId();
+	SubTransactionId prev_purge_subid = InvalidSubTransactionId;
+	bool		save_prev_value;
+	PrevValue  *prev_value;
 
 	Assert(svar);
 	Assert(!isnull || value == (Datum) 0);
@@ -726,6 +949,21 @@ set_session_variable(SVariable svar, Datum value, bool isnull)
 	else
 		_svar = svar;
 
+	if (_svar->is_transact && _svar->create_lsn == svar->create_lsn)
+	{
+		Assert(svar->typid == _svar->typid);
+		Assert(svar->typbyval == _svar->typbyval);
+		Assert(svar->typlen == _svar->typlen);
+
+		save_prev_value = svar->modify_subid != current_subid;
+		prev_value = svar->prev_value;
+	}
+	else
+	{
+		save_prev_value = false;
+		prev_value = NULL;
+	}
+
 	if (!isnull)
 	{
 		MemoryContext oldcxt = MemoryContextSwitchTo(SVariableMemoryContext);
@@ -737,7 +975,37 @@ set_session_variable(SVariable svar, Datum value, bool isnull)
 	else
 		newval = value;
 
-	free_session_variable_value(svar);
+	if (save_prev_value)
+	{
+		volatile PrevValue *new_prev_value;
+
+		PG_TRY();
+		{
+			new_prev_value = MemoryContextAlloc(SVariableMemoryContext,
+												sizeof(PrevValue));
+		}
+		PG_CATCH();
+		{
+			/* release mem from persistent content */
+			if (newval != value)
+				pfree(DatumGetPointer(newval));
+			PG_RE_THROW();
+		}
+		PG_END_TRY();
+
+		new_prev_value->value = svar->value;
+		new_prev_value->isnull = svar->isnull;
+		new_prev_value->modify_subid = svar->modify_subid;
+		new_prev_value->prev_value = prev_value;
+
+		prev_value = (PrevValue *) new_prev_value;
+		prev_purge_subid = svar->purge_subid;
+
+		has_modified_transactional_variables = true;
+
+	}
+	else
+		free_session_variable_value(svar, prev_value == NULL);
 
 	elog(DEBUG1, "session variable \"%s.%s\" (oid:%u) has new value",
 		 get_namespace_name(get_session_variable_namespace(svar->varid)),
@@ -750,6 +1018,9 @@ set_session_variable(SVariable svar, Datum value, bool isnull)
 
 	svar->value = newval;
 	svar->isnull = isnull;
+	svar->modify_subid = current_subid;
+	svar->purge_subid = prev_purge_subid;
+	svar->prev_value = prev_value;
 
 	/* don't allow more changes of value when variable is IMMUTABLE */
 	if (svar->is_immutable)
@@ -853,6 +1124,8 @@ get_session_variable(Oid varid)
 	else
 		svar->is_valid = false;
 
+reinit:
+
 	/*
 	 * Force setup for not yet initialized variables or variables that cannot
 	 * be validated.
@@ -883,6 +1156,28 @@ get_session_variable(Oid varid)
 			 get_namespace_name(get_session_variable_namespace(varid)),
 			 get_session_variable_name(varid),
 			 varid);
+	}
+
+	/*
+	 * Transactional variables should be purged before (remove
+	 * versions created by possibly reverted subtransactions).
+	 */
+	if (svar->is_transact &&
+		svar->modify_subid != GetCurrentSubTransactionId() &&
+		svar->modify_subid != InvalidSubTransactionId)
+	{
+		if (!purge_session_variable(svar))
+		{
+			/* force reinit */
+			svar->is_valid = false;
+
+			/*
+			 * In next iteration modify_subid should be
+			 * InvalidSubTransactionId or current subid,
+			 * so there is not risk of infinity cycle.
+			 */
+			goto reinit;
+		}
 	}
 
 	/* ensure the returned data is still of the correct domain */

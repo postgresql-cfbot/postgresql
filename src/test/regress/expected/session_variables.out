@@ -45,11 +45,11 @@ SET ROLE TO regress_variable_owner;
 CREATE VARIABLE svartest.var1 AS int;
 SET ROLE TO DEFAULT;
 \dV+ svartest.var1
-                                                                                     List of variables
-  Schema  | Name |  Type   | Collation |         Owner          | Nullable | Mutable | Default | Transactional end action |                Access privileges                 | Description 
-----------+------+---------+-----------+------------------------+----------+---------+---------+--------------------------+--------------------------------------------------+-------------
- svartest | var1 | integer |           | regress_variable_owner | t        | t       |         |                          | regress_variable_owner=rw/regress_variable_owner+| 
-          |      |         |           |                        |          |         |         |                          | regress_variable_reader=r/regress_variable_owner | 
+                                                                                             List of variables
+  Schema  | Name |  Type   | Collation |         Owner          | Nullable | Mutable | Transactional | Default | Transactional end action |                Access privileges                 | Description 
+----------+------+---------+-----------+------------------------+----------+---------+---------------+---------+--------------------------+--------------------------------------------------+-------------
+ svartest | var1 | integer |           | regress_variable_owner | t        | t       | f             |         |                          | regress_variable_owner=rw/regress_variable_owner+| 
+          |      |         |           |                        |          |         |               |         |                          | regress_variable_reader=r/regress_variable_owner | 
 (1 row)
 
 DROP VARIABLE svartest.var1;
@@ -1760,3 +1760,103 @@ SELECT var1;
 LET var1 = 30;
 ERROR:  session variable "public.var1" is declared IMMUTABLE
 DROP VARIABLE var1;
+-- test transactional variables
+CREATE TRANSACTION VARIABLE tv AS int DEFAULT 0;
+BEGIN;
+  LET tv = 100;
+  SELECT tv;
+ tv  
+-----
+ 100
+(1 row)
+
+ROLLBACK;
+SELECT tv;
+ tv 
+----
+  0
+(1 row)
+
+LET tv = 100;
+BEGIN;
+  LET tv = 1000;
+COMMIT;
+SELECT tv;
+  tv  
+------
+ 1000
+(1 row)
+
+BEGIN;
+  LET tv = 0;
+  SELECT tv;
+ tv 
+----
+  0
+(1 row)
+
+ROLLBACK;
+SELECT tv;
+  tv  
+------
+ 1000
+(1 row)
+
+-- test subtransactions
+BEGIN;
+  LET tv = 1;
+SAVEPOINT x1;
+  LET tv = 2;
+SAVEPOINT x2;
+  LET tv = 3;
+ROLLBACK TO x2;
+  SELECT tv;
+ tv 
+----
+  2
+(1 row)
+
+  LET tv = 10;
+ROLLBACK TO x1;
+  SELECT tv;
+ tv 
+----
+  1
+(1 row)
+
+ROLLBACK;
+SELECT tv;
+  tv  
+------
+ 1000
+(1 row)
+
+BEGIN;
+  LET tv = 1;
+SAVEPOINT x1;
+  LET tv = 2;
+SAVEPOINT x2;
+  LET tv = 3;
+ROLLBACK TO x2;
+  SELECT tv;
+ tv 
+----
+  2
+(1 row)
+
+  LET tv = 10;
+ROLLBACK TO x1;
+  SELECT tv;
+ tv 
+----
+  1
+(1 row)
+
+COMMIT;
+SELECT tv;
+ tv 
+----
+  1
+(1 row)
+
+DROP VARIABLE tv;

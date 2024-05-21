@@ -713,6 +713,7 @@
 #default_transaction_read_only = off
 #default_transaction_deferrable = off
 #session_replication_role = 'origin'
+#session_variables_ambiguity_warning = off
 #statement_timeout = 0				# in milliseconds, 0 is disabled
 #transaction_timeout = 0			# in milliseconds, 0 is disabled
 #lock_timeout = 0				# in milliseconds, 0 is disabled

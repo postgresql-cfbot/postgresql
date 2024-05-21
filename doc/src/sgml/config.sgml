@@ -11242,6 +11242,20 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-num-os-semaphores" xreflabel="num_os_semaphores">
+      <term><varname>num_os_semaphores</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>num_os_semaphores</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Reports the number of semaphores that are needed for the server based
+        on the number of allowed connections, worker processes, etc.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-ssl-library" xreflabel="ssl_library">
       <term><varname>ssl_library</varname> (<type>string</type>)
       <indexterm>

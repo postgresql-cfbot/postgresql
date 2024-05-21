@@ -5324,6 +5324,16 @@ SELECT current_user_id;
     the schema name, columns can use table aliases, routine variables can use
     block labels, and routine arguments can use the routine name.
    </para>
+
+   <para>
+    When a query contains identifiers or qualified identifiers that could be
+    used as both a session variable identifiers and as column identifier,
+    then the column identifier is preferred every time.  Warnings can be
+    emitted when this situation happens by enabling configuration parameter <xref
+    linkend="guc-session-variables-ambiguity-warning"/>. User can explicitly
+    qualify the source object by syntax <literal>table.column</literal> or
+    <literal>schema.variable</literal>.
+   </para>
   </sect1>
 
  <sect1 id="ddl-others">

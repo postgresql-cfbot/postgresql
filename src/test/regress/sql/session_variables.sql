@@ -853,3 +853,23 @@ BEGIN; DROP VARIABLE var1; ROLLBACK;
 SELECT var1;
 
 DROP VARIABLE var1, var2;
+
+-- test session_variables_ambiguity_warning
+CREATE SCHEMA xxtab;
+
+CREATE VARIABLE xxtab.avar int;
+
+CREATE TABLE public.xxtab(avar int);
+
+INSERT INTO public.xxtab VALUES(1);
+
+LET xxtab.avar = 20;
+
+SET session_variables_ambiguity_warning TO on;
+--- should to raise warning, show 1
+SELECT xxtab.avar FROM public.xxtab;
+
+SET session_variables_ambiguity_warning TO off;
+
+DROP TABLE public.xxtab;
+DROP SCHEMA xxtab CASCADE;

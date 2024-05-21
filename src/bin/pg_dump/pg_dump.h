@@ -714,6 +714,7 @@ typedef struct _VariableInfo
 	const char *rolname;		/* name of owner, or empty string */
 	bool		varnotnull;
 	bool		varisimmutable;
+	bool		varistransact;
 } VariableInfo;
 
 /*

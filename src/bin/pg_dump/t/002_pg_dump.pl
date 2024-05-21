@@ -4067,6 +4067,42 @@ my %tests = (
 		},
 	},
 
+	'CREATE TRANSACTIONAL VARIABLE test_variable' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 61,
+		create_sql   => 'CREATE TRANSACTIONAL VARIABLE dump_test.variable8 AS integer',
+		regexp => qr/^
+			\QCREATE TRANSACTIONAL VARIABLE dump_test.variable8 AS integer;\E/xm,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			section_pre_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement    => 1,
+		},
+	},
+
+	'CREATE TRANSACTIONAL IMMUTABLE VARIABLE test_variable' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 61,
+		create_sql   => 'CREATE TRANSACTIONAL IMMUTABLE VARIABLE dump_test.variable9 AS integer',
+		regexp => qr/^
+			\QCREATE TRANSACTIONAL IMMUTABLE VARIABLE dump_test.variable9 AS integer;\E/xm,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			section_pre_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement    => 1,
+		},
+	},
+
 	'CREATE VIEW test_view' => {
 		create_order => 61,
 		create_sql => 'CREATE VIEW dump_test.test_view

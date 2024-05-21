@@ -3,7 +3,8 @@
  * shell_restore.c
  *
  * These restore functions use a user-specified shell command (e.g., the
- * restore_command GUC).
+ * restore_command GUC).  It is used as the default, but other modules may
+ * define their own restore logic.
  *
  * Copyright (c) 2024, PostgreSQL Global Development Group
  *
@@ -22,11 +23,25 @@
 #include "common/archive.h"
 #include "common/percentrepl.h"
 #include "postmaster/startup.h"
+#include "restore/restore_module.h"
 #include "restore/shell_restore.h"
 #include "storage/ipc.h"
 #include "utils/wait_event.h"
 
+static void shell_restore_startup(RestoreModuleState *state);
+static bool shell_restore_file_configured(RestoreModuleState *state);
 static bool shell_restore_file(const char *file, const char *path,
+							   const char *lastRestartPointFileName);
+static bool shell_restore_wal_segment(RestoreModuleState *state,
+									  const char *file, const char *path,
+									  const char *lastRestartPointFileName);
+static bool shell_restore_timeline_history(RestoreModuleState *state,
+										   const char *file, const char *path);
+static bool shell_archive_cleanup_configured(RestoreModuleState *state);
+static void shell_archive_cleanup(RestoreModuleState *state,
+								  const char *lastRestartPointFileName);
+static bool shell_recovery_end_configured(RestoreModuleState *state);
+static void shell_recovery_end(RestoreModuleState *state,
 							   const char *lastRestartPointFileName);
 static void ExecuteRecoveryCommand(const char *command,
 								   const char *commandName,
@@ -34,13 +49,50 @@ static void ExecuteRecoveryCommand(const char *command,
 								   uint32 wait_event_info,
 								   const char *lastRestartPointFileName);
 
+static const RestoreModuleCallbacks shell_restore_callbacks = {
+	.startup_cb = shell_restore_startup,
+	.restore_wal_segment_configured_cb = shell_restore_file_configured,
+	.restore_wal_segment_cb = shell_restore_wal_segment,
+	.restore_timeline_history_configured_cb = shell_restore_file_configured,
+	.restore_timeline_history_cb = shell_restore_timeline_history,
+	.timeline_history_exists_configured_cb = shell_restore_file_configured,
+	.timeline_history_exists_cb = shell_restore_timeline_history,
+	.archive_cleanup_configured_cb = shell_archive_cleanup_configured,
+	.archive_cleanup_cb = shell_archive_cleanup,
+	.recovery_end_configured_cb = shell_recovery_end_configured,
+	.recovery_end_cb = shell_recovery_end,
+	.shutdown_cb = NULL
+};
+
+/*
+ * shell_restore_init
+ *
+ * Returns the callbacks for restoring via shell.
+ */
+const RestoreModuleCallbacks *
+shell_restore_init(void)
+{
+	return &shell_restore_callbacks;
+}
+
+/*
+ * Indicates that our timeline_history_exists_cb only attempts to retrieve the
+ * file, so the caller should verify the file exists afterwards.
+ */
+static void
+shell_restore_startup(RestoreModuleState *state)
+{
+	state->timeline_history_exists_cb_copies = true;
+}
+
 /*
  * Attempt to execute a shell-based restore command to retrieve a WAL segment.
  *
  * Returns true if the command has succeeded, false otherwise.
  */
-bool
-shell_restore_wal_segment(const char *file, const char *path,
+static bool
+shell_restore_wal_segment(RestoreModuleState *state,
+						  const char *file, const char *path,
 						  const char *lastRestartPointFileName)
 {
 	return shell_restore_file(file, path, lastRestartPointFileName);
@@ -52,8 +104,9 @@ shell_restore_wal_segment(const char *file, const char *path,
  *
  * Returns true if the command has succeeded, false otherwise.
  */
-bool
-shell_restore_timeline_history(const char *file, const char *path)
+static bool
+shell_restore_timeline_history(RestoreModuleState *state,
+							   const char *file, const char *path)
 {
 	char		lastRestartPointFname[MAXPGPATH];
 
@@ -64,8 +117,8 @@ shell_restore_timeline_history(const char *file, const char *path)
 /*
  * Check whether restore_command is supplied.
  */
-bool
-shell_restore_file_configured(void)
+static bool
+shell_restore_file_configured(RestoreModuleState *state)
 {
 	return recoveryRestoreCommand[0] != '\0';
 }
@@ -152,8 +205,8 @@ shell_restore_file(const char *file, const char *path,
 /*
  * Check whether archive_cleanup_command is supplied.
  */
-bool
-shell_archive_cleanup_configured(void)
+static bool
+shell_archive_cleanup_configured(RestoreModuleState *state)
 {
 	return archiveCleanupCommand[0] != '\0';
 }
@@ -161,8 +214,9 @@ shell_archive_cleanup_configured(void)
 /*
  * Attempt to execute a shell-based archive cleanup command.
  */
-void
-shell_archive_cleanup(const char *lastRestartPointFileName)
+static void
+shell_archive_cleanup(RestoreModuleState *state,
+					  const char *lastRestartPointFileName)
 {
 	ExecuteRecoveryCommand(archiveCleanupCommand, "archive_cleanup_command",
 						   false, WAIT_EVENT_ARCHIVE_CLEANUP_COMMAND,
@@ -172,8 +226,8 @@ shell_archive_cleanup(const char *lastRestartPointFileName)
 /*
  * Check whether recovery_end_command is supplied.
  */
-bool
-shell_recovery_end_configured(void)
+static bool
+shell_recovery_end_configured(RestoreModuleState *state)
 {
 	return recoveryEndCommand[0] != '\0';
 }
@@ -181,8 +235,9 @@ shell_recovery_end_configured(void)
 /*
  * Attempt to execute a shell-based end-of-recovery command.
  */
-void
-shell_recovery_end(const char *lastRestartPointFileName)
+static void
+shell_recovery_end(RestoreModuleState *state,
+				   const char *lastRestartPointFileName)
 {
 	ExecuteRecoveryCommand(recoveryEndCommand, "recovery_end_command", true,
 						   WAIT_EVENT_RECOVERY_END_COMMAND,

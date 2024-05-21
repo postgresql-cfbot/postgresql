@@ -26,6 +26,7 @@
 #include "miscadmin.h"
 #include "postmaster/auxprocess.h"
 #include "postmaster/startup.h"
+#include "restore/restore_module.h"
 #include "storage/ipc.h"
 #include "storage/pmsignal.h"
 #include "storage/procsignal.h"
@@ -119,13 +120,17 @@ StartupProcShutdownHandler(SIGNAL_ARGS)
  * Re-read the config file.
  *
  * If one of the critical walreceiver options has changed, flag xlog.c
- * to restart it.
+ * to restart it.  Also, check for invalid combinations of the command/library
+ * parameters and reload the restore callbacks if necessary.
  */
 static void
 StartupRereadConfig(void)
 {
 	char	   *conninfo = pstrdup(PrimaryConnInfo);
 	char	   *slotname = pstrdup(PrimarySlotName);
+	char	   *prevRestoreLibrary = pstrdup(restoreLibrary);
+	char	   *prevRestoreCommand = pstrdup(recoveryRestoreCommand);
+	char	   *prevRecoveryEndCommand = pstrdup(recoveryEndCommand);
 	bool		tempSlot = wal_receiver_create_temp_slot;
 	bool		conninfoChanged;
 	bool		slotnameChanged;
@@ -147,6 +152,30 @@ StartupRereadConfig(void)
 
 	if (conninfoChanged || slotnameChanged || tempSlotChanged)
 		StartupRequestWalReceiverRestart();
+
+	/*
+	 * If the restore settings have changed, call the currently loaded
+	 * shutdown callback and load the new callbacks.  There's presently no
+	 * good way to unload a library besides restarting the process, and there
+	 * should be little harm in leaving it around, so we just leave it loaded.
+	 */
+	(void) CheckMutuallyExclusiveStringGUCs(restoreLibrary, "restore_library",
+											recoveryRestoreCommand, "restore_command",
+											ERROR);
+	(void) CheckMutuallyExclusiveStringGUCs(restoreLibrary, "restore_library",
+											recoveryEndCommand, "recovery_end_command",
+											ERROR);
+	if (strcmp(prevRestoreLibrary, restoreLibrary) != 0 ||
+		strcmp(prevRestoreCommand, recoveryRestoreCommand) != 0 ||
+		strcmp(prevRecoveryEndCommand, recoveryEndCommand) != 0)
+	{
+		call_restore_module_shutdown_cb(0, (Datum) 0);
+		LoadRestoreCallbacks();
+	}
+
+	pfree(prevRestoreLibrary);
+	pfree(prevRestoreCommand);
+	pfree(prevRecoveryEndCommand);
 }
 
 /* Handle various signals that might be sent to the startup process */
@@ -260,6 +289,19 @@ StartupProcessMain(char *startup_data, size_t startup_data_len)
 	 * Unblock signals (they were blocked when the postmaster forked us)
 	 */
 	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
+
+	/*
+	 * Check for invalid combinations of the command/library parameters and
+	 * load the callbacks.
+	 */
+	before_shmem_exit(call_restore_module_shutdown_cb, 0);
+	(void) CheckMutuallyExclusiveStringGUCs(restoreLibrary, "restore_library",
+											recoveryRestoreCommand, "restore_command",
+											ERROR);
+	(void) CheckMutuallyExclusiveStringGUCs(restoreLibrary, "restore_library",
+											recoveryEndCommand, "recovery_end_command",
+											ERROR);
+	LoadRestoreCallbacks();
 
 	/*
 	 * Do what we came for.

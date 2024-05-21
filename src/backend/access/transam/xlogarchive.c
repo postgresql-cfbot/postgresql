@@ -23,14 +23,21 @@
 #include "access/xlog_internal.h"
 #include "access/xlogarchive.h"
 #include "common/archive.h"
+#include "fmgr.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/pgarch.h"
 #include "postmaster/startup.h"
 #include "replication/walsender.h"
+#include "restore/restore_module.h"
 #include "restore/shell_restore.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "utils/memutils.h"
+
+char	   *restoreLibrary = "";
+const RestoreModuleCallbacks *RestoreCallbacks = NULL;
+RestoreModuleState *restore_module_state;
 
 /*
  * Attempt to retrieve the specified file from off-line archival storage.
@@ -74,15 +81,15 @@ RestoreArchivedFile(char *path, const char *xlogfname,
 	switch (archive_type)
 	{
 		case ARCHIVE_TYPE_WAL_SEGMENT:
-			if (!shell_restore_file_configured())
+			if (!restore_wal_segment_configured())
 				goto not_available;
 			break;
 		case ARCHIVE_TYPE_TIMELINE_HISTORY:
-			if (!shell_restore_file_configured())
+			if (!restore_timeline_history_configured())
 				goto not_available;
 			break;
 		case ARCHIVE_TYPE_TIMELINE_HISTORY_EXISTS:
-			if (!shell_restore_file_configured())
+			if (!timeline_history_exists_configured())
 				goto not_available;
 			break;
 	}
@@ -174,14 +181,17 @@ RestoreArchivedFile(char *path, const char *xlogfname,
 	switch (archive_type)
 	{
 		case ARCHIVE_TYPE_WAL_SEGMENT:
-			ret = shell_restore_wal_segment(xlogfname, xlogpath,
-											lastRestartPointFname);
+			ret = RestoreCallbacks->restore_wal_segment_cb(restore_module_state,
+														   xlogfname, xlogpath,
+														   lastRestartPointFname);
 			break;
 		case ARCHIVE_TYPE_TIMELINE_HISTORY:
-			ret = shell_restore_timeline_history(xlogfname, xlogpath);
+			ret = RestoreCallbacks->restore_timeline_history_cb(restore_module_state,
+																xlogfname, xlogpath);
 			break;
 		case ARCHIVE_TYPE_TIMELINE_HISTORY_EXISTS:
-			ret = shell_restore_timeline_history(xlogfname, xlogpath);
+			ret = RestoreCallbacks->timeline_history_exists_cb(restore_module_state,
+															   xlogfname, xlogpath);
 			break;
 	}
 
@@ -189,6 +199,16 @@ RestoreArchivedFile(char *path, const char *xlogfname,
 
 	if (ret)
 	{
+		/*
+		 * Some restore functions might not copy the file (e.g., checking
+		 * whether a timeline history file exists), but they can set a flag to
+		 * tell us if they do.  We only need to verify file existence if this
+		 * flag is enabled.
+		 */
+		if (archive_type == ARCHIVE_TYPE_TIMELINE_HISTORY_EXISTS &&
+			!restore_module_state->timeline_history_exists_cb_copies)
+			return true;
+
 		/*
 		 * command apparently succeeded, but let's make sure the file is
 		 * really there now and has the correct size.
@@ -629,4 +649,66 @@ XLogArchiveCleanup(const char *xlog)
 	StatusFilePath(archiveStatusPath, xlog, ".ready");
 	unlink(archiveStatusPath);
 	/* should we complain about failure? */
+}
+
+/*
+ * Loads all the restore callbacks into our global RestoreCallbacks.  The
+ * caller is responsible for validating the combination of library/command
+ * parameters that are set (e.g., restore_command and restore_library cannot
+ * both be set).
+ */
+void
+LoadRestoreCallbacks(void)
+{
+	RestoreModuleInit init;
+
+	/*
+	 * If the shell command is enabled, use our special initialization
+	 * function.  Otherwise, load the library and call its
+	 * _PG_restore_module_init().
+	 */
+	if (restoreLibrary[0] == '\0')
+		init = shell_restore_init;
+	else
+		init = (RestoreModuleInit)
+			load_external_function(restoreLibrary, "_PG_restore_module_init",
+								   false, NULL);
+
+	if (init == NULL)
+		ereport(ERROR,
+				(errmsg("restore modules have to define the symbol "
+						"_PG_restore_module_init")));
+
+	RestoreCallbacks = (*init) ();
+
+	/* restore state should be freed before calling this function */
+	Assert(restore_module_state == NULL);
+	restore_module_state = (RestoreModuleState *)
+		MemoryContextAllocZero(TopMemoryContext,
+							   sizeof(RestoreModuleState));
+
+	if (RestoreCallbacks->startup_cb != NULL)
+		RestoreCallbacks->startup_cb(restore_module_state);
+}
+
+/*
+ * Call the shutdown callback of the loaded restore module, if defined.  Also,
+ * free the restore module state if it was allocated.
+ *
+ * Processes that load restore libraries should register this via
+ * before_shmem_exit().
+ */
+void
+call_restore_module_shutdown_cb(int code, Datum arg)
+{
+	if (RestoreCallbacks != NULL &&
+		RestoreCallbacks->shutdown_cb != NULL &&
+		restore_module_state != NULL)
+		RestoreCallbacks->shutdown_cb(restore_module_state);
+
+	if (restore_module_state != NULL)
+	{
+		pfree(restore_module_state);
+		restore_module_state = NULL;
+	}
 }

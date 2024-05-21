@@ -83,7 +83,7 @@
 #include "replication/snapbuild.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
-#include "restore/shell_restore.h"
+#include "restore/restore_module.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -5258,18 +5258,19 @@ CleanupAfterArchiveRecovery(TimeLineID EndOfLogTLI, XLogRecPtr EndOfLog,
 							TimeLineID newTLI)
 {
 	/*
-	 * Execute the recovery_end_command, if any.
+	 * Execute the recovery-end callback, if any.
 	 *
-	 * The command is provided the archive file cutoff point for use during
+	 * The callback is provided the archive file cutoff point for use during
 	 * log shipping replication.  All files earlier than this point can be
 	 * deleted from the archive, though there is no requirement to do so.
 	 */
-	if (shell_recovery_end_configured())
+	if (recovery_end_configured())
 	{
 		char		lastRestartPointFname[MAXFNAMELEN];
 
 		GetOldestRestartPointFileName(lastRestartPointFname);
-		shell_recovery_end(lastRestartPointFname);
+		RestoreCallbacks->recovery_end_cb(restore_module_state,
+										  lastRestartPointFname);
 	}
 
 	/*
@@ -7770,18 +7771,19 @@ CreateRestartPoint(int flags)
 							   timestamptz_to_str(xtime)) : 0));
 
 	/*
-	 * Finally, execute archive_cleanup_command, if any.
+	 * Finally, execute archive-cleanup callback, if any.
 	 *
-	 * The command is provided the archive file cutoff point for use during
+	 * The callback is provided the archive file cutoff point for use during
 	 * log shipping replication.  All files earlier than this point can be
 	 * deleted from the archive, though there is no requirement to do so.
 	 */
-	if (shell_archive_cleanup_configured())
+	if (archive_cleanup_configured())
 	{
 		char		lastRestartPointFname[MAXFNAMELEN];
 
 		GetOldestRestartPointFileName(lastRestartPointFname);
-		shell_archive_cleanup(lastRestartPointFname);
+		RestoreCallbacks->archive_cleanup_cb(restore_module_state,
+											 lastRestartPointFname);
 	}
 
 	return true;

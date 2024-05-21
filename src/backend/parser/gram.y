@@ -12121,7 +12121,8 @@ ExplainableStmt:
 			| CreateAsStmt
 			| CreateMatViewStmt
 			| RefreshMatViewStmt
-			| ExecuteStmt					/* by default all are $$=$1 */
+			| ExecuteStmt
+			| LetStmt						/* by default all are $$=$1 */
 		;
 
 /*****************************************************************************

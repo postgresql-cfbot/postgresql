@@ -873,3 +873,24 @@ SET session_variables_ambiguity_warning TO off;
 
 DROP TABLE public.xxtab;
 DROP SCHEMA xxtab CASCADE;
+
+CREATE VARIABLE var1 bigint;
+
+CREATE TABLE var_tab_test_table(a int);
+
+INSERT INTO var_tab_test_table SELECT * FROM generate_series(1,10);
+
+VACUUM ANALYZE var_tab_test_table;
+
+EXPLAIN (COSTS OFF) LET var1 = (SELECT count(*) FROM var_tab_test_table);
+
+-- should be NULL
+SELECT var1;
+
+EXPLAIN (COSTS OFF, TIMING OFF, ANALYZE, SUMMARY OFF) LET var1 = (SELECT count(*) FROM var_tab_test_table);
+
+-- should be 10
+SELECT var1;
+
+DROP VARIABLE var1;
+DROP TABLE var_tab_test_table;

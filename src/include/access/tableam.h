@@ -956,16 +956,12 @@ static inline TableScanDesc
 table_beginscan_bm(Relation rel, Snapshot snapshot,
 				   int nkeys, struct ScanKeyData *key, bool need_tuple)
 {
-	TableScanDesc result;
 	uint32		flags = SO_TYPE_BITMAPSCAN | SO_ALLOW_PAGEMODE;
 
 	if (need_tuple)
 		flags |= SO_NEED_TUPLES;
 
-	result = rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key, NULL, flags);
-	result->st.bts.shared_tbmiterator = NULL;
-	result->st.bts.tbmiterator = NULL;
-	return result;
+	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key, NULL, flags);
 }
 
 /*

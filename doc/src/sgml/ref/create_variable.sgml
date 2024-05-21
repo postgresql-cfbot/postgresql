@@ -26,7 +26,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-CREATE [ { TEMPORARY | TEMP } ] [ IMMUTABLE ] VARIABLE [ IF NOT EXISTS ] <replaceable class="parameter">name</replaceable> [ AS ] <replaceable class="parameter">data_type</replaceable> ] [ COLLATE <replaceable class="parameter">collation</replaceable> ]
+CREATE [ { TEMPORARY | TEMP } ] [ { TRANSACTIONAL | TRANSACTION } ] [ IMMUTABLE ] VARIABLE [ IF NOT EXISTS ] <replaceable class="parameter">name</replaceable> [ AS ] <replaceable class="parameter">data_type</replaceable> ] [ COLLATE <replaceable class="parameter">collation</replaceable> ]
     [ NOT NULL ] [ DEFAULT <replaceable class="parameter">default_expr</replaceable> ] [ { ON COMMIT DROP | ON TRANSACTION END RESET } ]
 </synopsis>
  </refsynopsisdiv>
@@ -45,6 +45,14 @@ CREATE [ { TEMPORARY | TEMP } ] [ IMMUTABLE ] VARIABLE [ IF NOT EXISTS ] <replac
    is set to something else in the current session with a <command>LET</command>
    command.  The content of a session variable is not transactional.  This is the
    same as regular variables in procedural languages.
+  </para>
+
+  <para>
+   When a schema variable is created with a
+   <command>CREATE TRANSACTIONAL VARIABLE</command> command, the variables
+   content changes are transactional: in case of rollback, they are reset to
+   their value at the beginning of the transaction or the latest subtransaction.
+   The variable content is only hold in memory, and thus is not persistent.
   </para>
 
   <para>

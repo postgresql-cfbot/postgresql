@@ -3471,6 +3471,7 @@ typedef struct CreateSessionVarStmt
 	bool		if_not_exists;	/* do nothing if it already exists */
 	bool		not_null;		/* disallow nulls */
 	bool		is_immutable;	/* don't allow changes */
+	bool		is_transact;	/* supports transactions */
 	Node	   *defexpr;		/* default expression */
 	char		XactEndAction;	/* on transaction end action */
 } CreateSessionVarStmt;

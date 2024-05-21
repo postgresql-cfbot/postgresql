@@ -681,7 +681,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				json_object_constructor_null_clause_opt
 				json_array_constructor_null_clause_opt
 
-%type <boolean>		OptNotNull OptImmutable
+%type <boolean>		OptNotNull OptImmutable OptTransactional
 
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
@@ -786,7 +786,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	SUBSCRIPTION SUBSTRING SUPPORT SYMMETRIC SYSID SYSTEM_P SYSTEM_USER
 
 	TABLE TABLES TABLESAMPLE TABLESPACE TARGET TEMP TEMPLATE TEMPORARY TEXT_P THEN
-	TIES TIME TIMESTAMP TO TRAILING TRANSACTION TRANSFORM
+	TIES TIME TIMESTAMP TO TRAILING TRANSACTION TRANSACTIONAL TRANSFORM
 	TREAT TRIGGER TRIM TRUE_P
 	TRUNCATE TRUSTED TYPE_P TYPES_P
 
@@ -5239,31 +5239,33 @@ create_extension_opt_item:
  *****************************************************************************/
 
 CreateSessionVarStmt:
-			CREATE OptTemp OptImmutable VARIABLE qualified_name opt_as Typename opt_collate_clause OptNotNull OptSessionVarDefExpr XactEndActionOption
+			CREATE OptTemp OptTransactional OptImmutable VARIABLE qualified_name opt_as Typename opt_collate_clause OptNotNull OptSessionVarDefExpr XactEndActionOption
 				{
 					CreateSessionVarStmt *n = makeNode(CreateSessionVarStmt);
-					$5->relpersistence = $2;
-					n->is_immutable = $3;
-					n->variable = $5;
-					n->typeName = $7;
-					n->collClause = (CollateClause *) $8;
-					n->not_null = $9;
-					n->defexpr = $10;
-					n->XactEndAction = $11;
+					$6->relpersistence = $2;
+					n->is_immutable = $4;
+					n->is_transact = $3;
+					n->variable = $6;
+					n->typeName = $8;
+					n->collClause = (CollateClause *) $9;
+					n->not_null = $10;
+					n->defexpr = $11;
+					n->XactEndAction = $12;
 					n->if_not_exists = false;
 					$$ = (Node *) n;
 				}
-			| CREATE OptTemp OptImmutable VARIABLE IF_P NOT EXISTS qualified_name opt_as Typename opt_collate_clause OptNotNull OptSessionVarDefExpr XactEndActionOption
+			| CREATE OptTemp OptTransactional OptImmutable VARIABLE IF_P NOT EXISTS qualified_name opt_as Typename opt_collate_clause OptNotNull OptSessionVarDefExpr XactEndActionOption
 				{
 					CreateSessionVarStmt *n = makeNode(CreateSessionVarStmt);
-					$8->relpersistence = $2;
-					n->is_immutable = $3;
-					n->variable = $8;
-					n->typeName = $10;
-					n->collClause = (CollateClause *) $11;
-					n->not_null = $12;
-					n->defexpr = $13;
-					n->XactEndAction = $14;
+					$9->relpersistence = $2;
+					n->is_immutable = $4;
+					n->is_transact = $3;
+					n->variable = $9;
+					n->typeName = $11;
+					n->collClause = (CollateClause *) $12;
+					n->not_null = $13;
+					n->defexpr = $14;
+					n->XactEndAction = $15;
 					n->if_not_exists = true;
 					$$ = (Node *) n;
 				}
@@ -5288,6 +5290,12 @@ OptNotNull: NOT NULL_P								{ $$ = true; }
 		;
 
 OptImmutable: IMMUTABLE								{ $$ = true; }
+			| /* EMPTY */							{ $$ = false; }
+		;
+
+OptTransactional:
+			TRANSACTION								{ $$ = true; }
+			| TRANSACTIONAL							{ $$ = true; }
 			| /* EMPTY */							{ $$ = false; }
 		;
 
@@ -18032,6 +18040,7 @@ unreserved_keyword:
 			| TEXT_P
 			| TIES
 			| TRANSACTION
+			| TRANSACTIONAL
 			| TRANSFORM
 			| TRIGGER
 			| TRUNCATE
@@ -18680,6 +18689,7 @@ bare_label_keyword:
 			| TIMESTAMP
 			| TRAILING
 			| TRANSACTION
+			| TRANSACTIONAL
 			| TRANSFORM
 			| TREAT
 			| TRIGGER

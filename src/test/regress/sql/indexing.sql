@@ -29,10 +29,30 @@ select relname, relkind, relhassubclass, inhparent::regclass
 	where relname like 'idxpart%' order by relname;
 drop table idxpart;
 
--- Some unsupported features
+-- CIC on partitioned table
 create table idxpart (a int, b int, c text) partition by range (a);
-create table idxpart1 partition of idxpart for values from (0) to (10);
-create index concurrently on idxpart (a);
+create table idxpart1 partition of idxpart for values from (0) to (10) partition by range(a);
+create table idxpart11 partition of idxpart1 for values from (0) to (10) partition by range(a);
+create table idxpart111 partition of idxpart11 default partition by range(a);
+create table idxpart1111 partition of idxpart111 default partition by range(a);
+create table idxpart2 partition of idxpart for values from (10) to (20);
+create table idxpart3 partition of idxpart for values from (30) to (40) partition by range(a);
+create table idxpart31 partition of idxpart3 default;
+
+insert into idxpart2 values(10),(10); -- not unique
+create index concurrently on idxpart11 (a); -- partitioned and partition, with no leaves
+create index concurrently on idxpart1 (a); -- partitioned and partition
+create index concurrently on idxpart2 (a); -- leaf
+create index concurrently on idxpart (a); -- partitioned
+create unique index concurrently on idxpart (a); -- partitioned, unique failure
+\d idxpart
+\d idxpart1
+\d idxpart11
+\d idxpart111
+\d idxpart1111
+\d idxpart2
+\d idxpart3
+\d idxpart31
 drop table idxpart;
 
 -- Verify bugfix with query on indexed partitioned table with no partitions

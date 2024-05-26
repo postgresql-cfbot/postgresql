@@ -20,6 +20,7 @@
 #include "lib/pairingheap.h"
 #include "storage/bufmgr.h"
 #include "storage/buffile.h"
+#include "storage/shm_toc.h"
 #include "utils/hsearch.h"
 #include "access/genam.h"
 
@@ -254,6 +255,7 @@ typedef struct
 	Relation	heapRel;
 	Size		freespace;		/* free space to be left */
 	bool		is_build;
+	bool		is_parallel;
 
 	GISTInsertStack *stack;
 } GISTInsertState;
@@ -413,7 +415,8 @@ extern void gistdoinsert(Relation r,
 						 Size freespace,
 						 GISTSTATE *giststate,
 						 Relation heapRel,
-						 bool is_build);
+						 bool is_build,
+						 bool is_parallel);
 
 /* A List of these is returned from gistplacetopage() in *splitinfo */
 typedef struct
@@ -430,7 +433,8 @@ extern bool gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 							List **splitinfo,
 							bool markfollowright,
 							Relation heapRel,
-							bool is_build);
+							bool is_build,
+							bool is_parallel);
 
 extern SplitPageLayout *gistSplit(Relation r, Page page, IndexTuple *itup,
 								  int len, GISTSTATE *giststate);
@@ -531,7 +535,7 @@ extern void gistMakeUnionKey(GISTSTATE *giststate, int attno,
 							 GISTENTRY *entry2, bool isnull2,
 							 Datum *dst, bool *dstisnull);
 
-extern XLogRecPtr gistGetFakeLSN(Relation rel);
+extern XLogRecPtr gistGetFakeLSN(Relation rel, bool is_parallel);
 
 /* gistvacuum.c */
 extern IndexBulkDeleteResult *gistbulkdelete(IndexVacuumInfo *info,
@@ -567,5 +571,7 @@ extern void gistRelocateBuildBuffersOnSplit(GISTBuildBuffers *gfbb,
 											int level, Buffer buffer,
 											List *splitinfo);
 extern void gistUnloadNodeBuffers(GISTBuildBuffers *gfbb);
+
+extern void _gist_parallel_build_main(dsm_segment *seg, shm_toc *toc);
 
 #endif							/* GIST_PRIVATE_H */

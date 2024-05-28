@@ -85,7 +85,7 @@ CreateTemplateTupleDesc(int natts)
 	 * could be less due to trailing padding, although with the current
 	 * definition of pg_attribute there probably isn't any padding.
 	 */
-	desc = (TupleDesc) palloc(offsetof(struct TupleDescData, attrs) +
+	desc = (TupleDesc) palloc(MAXALIGN(sizeof(TupleDescData)) +
 							  natts * sizeof(FormData_pg_attribute));
 
 	/*
@@ -96,6 +96,7 @@ CreateTemplateTupleDesc(int natts)
 	desc->tdtypeid = RECORDOID;
 	desc->tdtypmod = -1;
 	desc->tdrefcount = -1;		/* assume not reference-counted */
+	desc->attrs = TupleDescAttrAddress(desc);
 
 	return desc;
 }
@@ -252,8 +253,14 @@ TupleDescCopy(TupleDesc dst, TupleDesc src)
 {
 	int			i;
 
-	/* Flat-copy the header and attribute array */
+	/* Flat-copy the header */
 	memcpy(dst, src, TupleDescSize(src));
+
+	/* restore original attribute array pointer and replace contents from src */
+	dst->attrs = TupleDescAttrAddress(dst);
+	memcpy(TupleDescAttr(dst, 0),
+		   TupleDescAttr(src, 0),
+		   sizeof(FormData_pg_attribute) * dst->natts);
 
 	/*
 	 * Since we're not copying constraints and defaults, clear fields

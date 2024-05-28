@@ -4830,6 +4830,20 @@ CreateMatViewStmt:
 					$8->rel->relpersistence = $2;
 					$8->skipData = !($11);
 					$$ = (Node *) ctas;
+
+					if (ctas->into->rel->schemaname)
+							ereport(WARNING,
+									errmsg("IF NOT EXISTS is deprecated in materialized view creation"),
+									errhint("Use CREATE OR REPLACE MATERIALIZED VIEW %s.%s.",
+											ctas->into->rel->schemaname,
+											ctas->into->rel->relname),
+									parser_errposition(@1));
+					else
+							ereport(WARNING,
+									errmsg("IF NOT EXISTS is deprecated in materialized view creation"),
+									errhint("Use CREATE OR REPLACE MATERIALIZED VIEW %s.",
+											ctas->into->rel->relname),
+									parser_errposition(@1));
 				}
 		| CREATE OR REPLACE OptNoLog MATERIALIZED VIEW create_mv_target AS SelectStmt opt_with_data
 				{

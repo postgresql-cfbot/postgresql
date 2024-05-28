@@ -565,6 +565,10 @@ CREATE MATERIALIZED VIEW mvtest_mv_foo AS SELECT * FROM mvtest_foo_data;
 CREATE MATERIALIZED VIEW mvtest_mv_foo AS SELECT * FROM mvtest_foo_data;
 ERROR:  relation "mvtest_mv_foo" already exists
 CREATE MATERIALIZED VIEW IF NOT EXISTS mvtest_mv_foo AS SELECT * FROM mvtest_foo_data;
+WARNING:  IF NOT EXISTS is deprecated in materialized view creation
+LINE 1: CREATE MATERIALIZED VIEW IF NOT EXISTS mvtest_mv_foo AS SELE...
+        ^
+HINT:  Use CREATE OR REPLACE MATERIALIZED VIEW mvtest_mv_foo.
 NOTICE:  relation "mvtest_mv_foo" already exists, skipping
 CREATE UNIQUE INDEX ON mvtest_mv_foo (i);
 RESET ROLE;
@@ -662,12 +666,20 @@ CREATE MATERIALIZED VIEW matview_ine_tab AS SELECT 1 / 0; -- error
 ERROR:  relation "matview_ine_tab" already exists
 CREATE MATERIALIZED VIEW IF NOT EXISTS matview_ine_tab AS
   SELECT 1 / 0; -- ok
+WARNING:  IF NOT EXISTS is deprecated in materialized view creation
+LINE 1: CREATE MATERIALIZED VIEW IF NOT EXISTS matview_ine_tab AS
+        ^
+HINT:  Use CREATE OR REPLACE MATERIALIZED VIEW matview_ine_tab.
 NOTICE:  relation "matview_ine_tab" already exists, skipping
 CREATE MATERIALIZED VIEW matview_ine_tab AS
   SELECT 1 / 0 WITH NO DATA; -- error
 ERROR:  relation "matview_ine_tab" already exists
 CREATE MATERIALIZED VIEW IF NOT EXISTS matview_ine_tab AS
   SELECT 1 / 0 WITH NO DATA; -- ok
+WARNING:  IF NOT EXISTS is deprecated in materialized view creation
+LINE 1: CREATE MATERIALIZED VIEW IF NOT EXISTS matview_ine_tab AS
+        ^
+HINT:  Use CREATE OR REPLACE MATERIALIZED VIEW matview_ine_tab.
 NOTICE:  relation "matview_ine_tab" already exists, skipping
 EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
   CREATE MATERIALIZED VIEW matview_ine_tab AS
@@ -676,6 +688,10 @@ ERROR:  relation "matview_ine_tab" already exists
 EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
   CREATE MATERIALIZED VIEW IF NOT EXISTS matview_ine_tab AS
     SELECT 1 / 0; -- ok
+WARNING:  IF NOT EXISTS is deprecated in materialized view creation
+LINE 2:   CREATE MATERIALIZED VIEW IF NOT EXISTS matview_ine_tab AS
+          ^
+HINT:  Use CREATE OR REPLACE MATERIALIZED VIEW matview_ine_tab.
 NOTICE:  relation "matview_ine_tab" already exists, skipping
  QUERY PLAN 
 ------------
@@ -688,6 +704,10 @@ ERROR:  relation "matview_ine_tab" already exists
 EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
   CREATE MATERIALIZED VIEW IF NOT EXISTS matview_ine_tab AS
     SELECT 1 / 0 WITH NO DATA; -- ok
+WARNING:  IF NOT EXISTS is deprecated in materialized view creation
+LINE 2:   CREATE MATERIALIZED VIEW IF NOT EXISTS matview_ine_tab AS
+          ^
+HINT:  Use CREATE OR REPLACE MATERIALIZED VIEW matview_ine_tab.
 NOTICE:  relation "matview_ine_tab" already exists, skipping
  QUERY PLAN 
 ------------

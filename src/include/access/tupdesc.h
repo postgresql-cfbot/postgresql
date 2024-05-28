@@ -46,6 +46,26 @@ typedef struct TupleConstr
 } TupleConstr;
 
 /*
+ * CompactAttribute
+ *		Cut-down version of FormData_pg_attribute for faster access for tasks
+ *		such as tuple deformation.
+ */
+typedef struct CompactAttribute
+{
+	int32		attcacheoff;	/* fixed offset into tuple, if known, or -1 */
+	int16		attlen;			/* attr len in bytes or -1 = varlen, -2 =
+								 * cstring */
+	bool		attbyval:1;		/* as FormData_pg_attribute.attbyval */
+	bool		attispackable:1;	/* FormData_pg_attribute.attstorage !=
+									 * TYPSTORAGE_PLAIN */
+	bool		atthasmissing:1;	/* as FormData_pg_attribute.atthasmissing */
+	bool		attisdropped:1; /* as FormData_pg_attribute.attisdropped */
+	bool		attgenerated:1; /* FormData_pg_attribute.attgenerated != '\0' */
+	bool		attnotnull:1;	/* as FormData_pg_attribute.attnotnull */
+	char		attalign;		/* alignment requirement */
+} CompactAttribute;
+
+/*
  * This struct is passed around within the backend to describe the structure
  * of tuples.  For tuples coming from on-disk relations, the information is
  * collected from the pg_attribute, pg_attrdef, and pg_constraint catalogs.
@@ -75,6 +95,18 @@ typedef struct TupleConstr
  * context and go away when the context is freed.  We set the tdrefcount
  * field of such a descriptor to -1, while reference-counted descriptors
  * always have tdrefcount >= 0.
+ *
+ * The attrs field stores the fixed-sized portion of FormData_pg_attribute.
+ * Because that struct is large, we also store a corresponding
+ * CompactAttribute for each attribute in compact_attrs.  This is stored
+ * inline with the struct.  Because CompactAttribute is significantly smaller
+ * than FormData_pg_attribute, code, especially performance-critical code
+ * should prioritize using the fields from the CompactAttribute over the
+ * equivalent fields in FormData_pg_attribute whenever possible.
+ *
+ * Any code making changes manually to the fields in 'attrs' must subsequently
+ * call populate_compact_attribute() to flush the changes out to the
+ * corresponding 'compact_attrs' element.
  */
 typedef struct TupleDescData
 {
@@ -85,11 +117,51 @@ typedef struct TupleDescData
 	TupleConstr *constr;		/* constraints, or NULL if none */
 	/* attrs[N] is the description of Attribute Number N+1 */
 	FormData_pg_attribute *attrs;
+	CompactAttribute compact_attrs[FLEXIBLE_ARRAY_MEMBER];
 }			TupleDescData;
 typedef struct TupleDescData *TupleDesc;
 
-/* Accessor for the i'th attribute of tupdesc. */
+extern void populate_compact_attribute(TupleDesc tupdesc, int i);
+
+/* Accessor for the i'th FormData_pg_attribute of tupdesc. */
 #define TupleDescAttr(tupdesc, i) (&(tupdesc)->attrs[(i)])
+
+/*
+ * Accessor for the i'th CompactAttribute of tupdesc.
+ */
+static inline CompactAttribute *
+TupleDescCompactAttr(TupleDesc tupdesc, int i)
+{
+	CompactAttribute *cattr = &tupdesc->compact_attrs[i];
+#ifdef USE_ASSERT_CHECKING
+	CompactAttribute snapshot;
+
+	/*
+	 * In Assert enabled builds we verify that the CompactAttribute is
+	 * populated correctly.  This helps find bugs in places such as ALTER
+	 * TABLE where code makes changes to the FormData_pg_attribute but forgets
+	 * to call populate_compact_attribute.
+	 */
+
+	/*
+	 * Take a snapshot of how the CompactAttribute is now before calling
+	 * populate_compact_attribute to make it up-to-date with the
+	 * FormData_pg_attribute.
+	 */
+	memcpy(&snapshot, cattr, sizeof(CompactAttribute));
+
+	populate_compact_attribute(tupdesc, i);
+
+	/* reset attcacheoff back to what it was */
+	cattr->attcacheoff = snapshot.attcacheoff;
+
+	/* Ensure the snapshot matches the freshly populated CompactAttribute */
+	Assert(memcmp(&snapshot, cattr, sizeof(CompactAttribute)) == 0);
+#endif
+
+	return cattr;
+}
+
 
 extern TupleDesc CreateTemplateTupleDesc(int natts);
 
@@ -99,13 +171,15 @@ extern TupleDesc CreateTupleDescCopy(TupleDesc tupdesc);
 
 extern TupleDesc CreateTupleDescCopyConstr(TupleDesc tupdesc);
 
-#define TupleDescSize(src) MAXALIGN(sizeof(TupleDescData))
+#define TupleDescSize(src) \
+	(offsetof(struct TupleDescData, compact_attrs) + \
+	 (src)->natts * sizeof(CompactAttribute))
 
 #define TupleDescFullSize(src) \
-	(MAXALIGN(sizeof(TupleDescData)) + sizeof(FormData_pg_attribute) * (src)->natts)
+	(TupleDescSize(src) + sizeof(FormData_pg_attribute) * (src)->natts)
 
 #define TupleDescAttrAddress(desc) \
-	(Form_pg_attribute) ((char *) (desc) + MAXALIGN(sizeof(TupleDescData)))
+	(Form_pg_attribute) ((char *) (desc) + TupleDescSize(desc))
 
 extern void TupleDescCopy(TupleDesc dst, TupleDesc src);
 

@@ -222,12 +222,18 @@ shared_record_table_compare(const void *a, const void *b, size_t size,
 	TupleDesc	t2;
 
 	if (k1->shared)
+	{
 		t1 = (TupleDesc) dsa_get_address(area, k1->u.shared_tupdesc);
+		t1->attrs = TupleDescAttrAddress(t1);
+	}
 	else
 		t1 = k1->u.local_tupdesc;
 
 	if (k2->shared)
+	{
 		t2 = (TupleDesc) dsa_get_address(area, k2->u.shared_tupdesc);
+		t2->attrs = TupleDescAttrAddress(t2);
+	}
 	else
 		t2 = k2->u.local_tupdesc;
 
@@ -245,7 +251,10 @@ shared_record_table_hash(const void *a, size_t size, void *arg)
 	TupleDesc	t;
 
 	if (k->shared)
+	{
 		t = (TupleDesc) dsa_get_address(area, k->u.shared_tupdesc);
+		t->attrs = TupleDescAttrAddress(t);
+	}
 	else
 		t = k->u.local_tupdesc;
 
@@ -1797,6 +1806,7 @@ lookup_rowtype_tupdesc_internal(Oid type_id, int32 typmod, bool noError)
 					tupdesc = (TupleDesc)
 						dsa_get_address(CurrentSession->area,
 										entry->shared_tupdesc);
+					tupdesc->attrs = TupleDescAttrAddress(tupdesc);
 					Assert(typmod == tupdesc->tdtypmod);
 
 					/* We may need to extend the local RecordCacheArray. */
@@ -2762,7 +2772,7 @@ share_tupledesc(dsa_area *area, TupleDesc tupdesc, uint32 typmod)
 	dsa_pointer shared_dp;
 	TupleDesc	shared;
 
-	shared_dp = dsa_allocate(area, TupleDescSize(tupdesc));
+	shared_dp = dsa_allocate(area, TupleDescFullSize(tupdesc));
 	shared = (TupleDesc) dsa_get_address(area, shared_dp);
 	TupleDescCopy(shared, tupdesc);
 	shared->tdtypmod = typmod;
@@ -2805,6 +2815,7 @@ find_or_make_matching_shared_tupledesc(TupleDesc tupdesc)
 		result = (TupleDesc)
 			dsa_get_address(CurrentSession->area,
 							record_table_entry->key.u.shared_tupdesc);
+		result->attrs = TupleDescAttrAddress(result);
 		Assert(result->tdrefcount == -1);
 
 		return result;
@@ -2868,6 +2879,7 @@ find_or_make_matching_shared_tupledesc(TupleDesc tupdesc)
 		result = (TupleDesc)
 			dsa_get_address(CurrentSession->area,
 							record_table_entry->key.u.shared_tupdesc);
+		result->attrs = TupleDescAttrAddress(result);
 		Assert(result->tdrefcount == -1);
 
 		return result;
@@ -2880,6 +2892,7 @@ find_or_make_matching_shared_tupledesc(TupleDesc tupdesc)
 						record_table_entry);
 	result = (TupleDesc)
 		dsa_get_address(CurrentSession->area, shared_dp);
+	result->attrs = TupleDescAttrAddress(result);
 	Assert(result->tdrefcount == -1);
 
 	return result;

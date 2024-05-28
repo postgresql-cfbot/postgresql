@@ -588,7 +588,7 @@ index_truncate_tuple(TupleDesc sourceDescriptor, IndexTuple source,
 		return CopyIndexTuple(source);
 
 	/* Create temporary descriptor to scribble on */
-	truncdesc = palloc(TupleDescSize(sourceDescriptor));
+	truncdesc = CreateTemplateTupleDesc(sourceDescriptor->natts);
 	TupleDescCopy(truncdesc, sourceDescriptor);
 	truncdesc->natts = leavenatts;
 

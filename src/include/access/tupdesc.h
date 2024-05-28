@@ -84,7 +84,7 @@ typedef struct TupleDescData
 	int			tdrefcount;		/* reference count, or -1 if not counting */
 	TupleConstr *constr;		/* constraints, or NULL if none */
 	/* attrs[N] is the description of Attribute Number N+1 */
-	FormData_pg_attribute attrs[FLEXIBLE_ARRAY_MEMBER];
+	FormData_pg_attribute *attrs;
 }			TupleDescData;
 typedef struct TupleDescData *TupleDesc;
 
@@ -99,9 +99,13 @@ extern TupleDesc CreateTupleDescCopy(TupleDesc tupdesc);
 
 extern TupleDesc CreateTupleDescCopyConstr(TupleDesc tupdesc);
 
-#define TupleDescSize(src) \
-	(offsetof(struct TupleDescData, attrs) + \
-	 (src)->natts * sizeof(FormData_pg_attribute))
+#define TupleDescSize(src) MAXALIGN(sizeof(TupleDescData))
+
+#define TupleDescFullSize(src) \
+	(MAXALIGN(sizeof(TupleDescData)) + sizeof(FormData_pg_attribute) * (src)->natts)
+
+#define TupleDescAttrAddress(desc) \
+	(Form_pg_attribute) ((char *) (desc) + MAXALIGN(sizeof(TupleDescData)))
 
 extern void TupleDescCopy(TupleDesc dst, TupleDesc src);
 

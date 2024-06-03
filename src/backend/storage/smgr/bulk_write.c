@@ -8,7 +8,7 @@
  * the regular buffer manager and the bulk loading interface!
  *
  * We bypass the buffer manager to avoid the locking overhead, and call
- * smgrextend() directly.  A downside is that the pages will need to be
+ * smgrwritev() directly.  A downside is that the pages will need to be
  * re-read into shared buffers on first use after the build finishes.  That's
  * usually a good tradeoff for large relations, and for small relations, the
  * overhead isn't very significant compared to creating the relation in the
@@ -36,6 +36,7 @@
 
 #include "access/xloginsert.h"
 #include "access/xlogrecord.h"
+#include "lib/ilist.h"
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
 #include "storage/bulk_write.h"
@@ -47,9 +48,15 @@
 
 static const PGIOAlignedBlock zero_buffer = {{0}};	/* worth BLCKSZ */
 
+typedef union BufferSlot
+{
+	PGIOAlignedBlock buffer;
+	dlist_node	freelist_node;
+} BufferSlot;
+
 typedef struct PendingWrite
 {
-	BulkWriteBuffer buf;
+	BufferSlot *slot;
 	BlockNumber blkno;
 	bool		page_std;
 } PendingWrite;
@@ -59,6 +66,14 @@ typedef struct PendingWrite
  */
 struct BulkWriteState
 {
+	/*
+	 * This must come first so that it is correctly aligned for I/O.  We have
+	 * one extra slot for the write that has been allocated but not yet
+	 * submitted to smgr_bulk_write() yet.
+	 */
+	BufferSlot	buffer_slots[MAX_PENDING_WRITES + 1];
+	dlist_head	buffer_slots_freelist;
+
 	/* Information about the target relation we're writing */
 	SMgrRelation smgr;
 	ForkNumber	forknum;
@@ -73,8 +88,6 @@ struct BulkWriteState
 
 	/* The RedoRecPtr at the time that the bulk operation started */
 	XLogRecPtr	start_RedoRecPtr;
-
-	MemoryContext memcxt;
 };
 
 static void smgr_bulk_flush(BulkWriteState *bulkstate);
@@ -100,7 +113,7 @@ smgr_bulk_start_smgr(SMgrRelation smgr, ForkNumber forknum, bool use_wal)
 {
 	BulkWriteState *state;
 
-	state = palloc(sizeof(BulkWriteState));
+	state = palloc_aligned(sizeof(BulkWriteState), PG_IO_ALIGN_SIZE, 0);
 	state->smgr = smgr;
 	state->forknum = forknum;
 	state->use_wal = use_wal;
@@ -110,11 +123,11 @@ smgr_bulk_start_smgr(SMgrRelation smgr, ForkNumber forknum, bool use_wal)
 
 	state->start_RedoRecPtr = GetRedoRecPtr();
 
-	/*
-	 * Remember the memory context.  We will use it to allocate all the
-	 * buffers later.
-	 */
-	state->memcxt = CurrentMemoryContext;
+	/* Set up the free-list of buffers. */
+	dlist_init(&state->buffer_slots_freelist);
+	for (int i = 0; i < lengthof(state->buffer_slots); ++i)
+		dlist_push_tail(&state->buffer_slots_freelist,
+						&state->buffer_slots[i].freelist_node);
 
 	return state;
 }
@@ -208,7 +221,7 @@ smgr_bulk_flush(BulkWriteState *bulkstate)
 		for (int i = 0; i < npending; i++)
 		{
 			blknos[i] = pending_writes[i].blkno;
-			pages[i] = pending_writes[i].buf->data;
+			pages[i] = pending_writes[i].slot->buffer.data;
 
 			/*
 			 * If any of the pages use !page_std, we log them all as such.
@@ -225,35 +238,85 @@ smgr_bulk_flush(BulkWriteState *bulkstate)
 
 	for (int i = 0; i < npending; i++)
 	{
-		BlockNumber blkno = pending_writes[i].blkno;
-		Page		page = pending_writes[i].buf->data;
+		Page		page;
+		const void *pages[MAX_IO_COMBINE_LIMIT];
+		BlockNumber blkno;
+		int			nblocks;
+		int			max_nblocks;
 
+		/* Prepare to write the first block. */
+		blkno = pending_writes[i].blkno;
+		page = pending_writes[i].slot->buffer.data;
 		PageSetChecksumInplace(page, blkno);
+		pages[0] = page;
+		nblocks = 1;
 
-		if (blkno >= bulkstate->pages_written)
+		/*
+		 * If we have to write pages nonsequentially, fill in the space with
+		 * zeroes until we come back and overwrite.  This is not logically
+		 * necessary on standard Unix filesystems (unwritten space will read
+		 * as zeroes anyway), but it should help to avoid fragmentation.  The
+		 * dummy pages aren't WAL-logged though.
+		 */
+		while (blkno > bulkstate->pages_written)
+		{
+			/* don't set checksum for all-zero page */
+			smgrextend(bulkstate->smgr, bulkstate->forknum,
+					   bulkstate->pages_written++,
+					   &zero_buffer,
+					   true);
+		}
+
+		if (blkno < bulkstate->pages_written)
 		{
 			/*
-			 * If we have to write pages nonsequentially, fill in the space
-			 * with zeroes until we come back and overwrite.  This is not
-			 * logically necessary on standard Unix filesystems (unwritten
-			 * space will read as zeroes anyway), but it should help to avoid
-			 * fragmentation.  The dummy pages aren't WAL-logged though.
+			 * We're overwriting.  Clamp at the existing size, because we
+			 * can't mix writing and extending in a single operation.
 			 */
-			while (blkno > bulkstate->pages_written)
-			{
-				/* don't set checksum for all-zero page */
-				smgrextend(bulkstate->smgr, bulkstate->forknum,
-						   bulkstate->pages_written++,
-						   &zero_buffer,
-						   true);
-			}
-
-			smgrextend(bulkstate->smgr, bulkstate->forknum, blkno, page, true);
-			bulkstate->pages_written = pending_writes[i].blkno + 1;
+			max_nblocks = Min(io_combine_limit,
+							  bulkstate->pages_written - blkno);
 		}
 		else
-			smgrwrite(bulkstate->smgr, bulkstate->forknum, blkno, page, true);
-		pfree(page);
+		{
+			/* We're extending. */
+			Assert(blkno == bulkstate->pages_written);
+			max_nblocks = io_combine_limit;
+		}
+
+		/* Collect as many consecutive blocks as we can. */
+		while (i + 1 < npending &&
+			   pending_writes[i + 1].blkno == blkno + nblocks &&
+			   nblocks < max_nblocks)
+		{
+			page = pending_writes[++i].slot->buffer.data;
+			PageSetChecksumInplace(page, pending_writes[i].blkno);
+			pages[nblocks++] = page;
+		}
+
+		/* Extend or overwrite. */
+		if (blkno == bulkstate->pages_written)
+		{
+			smgrwritev(bulkstate->smgr, bulkstate->forknum, blkno,
+					   pages, nblocks,
+					   SMGR_WRITE_SKIP_FSYNC | SMGR_WRITE_EXTEND);
+			bulkstate->pages_written += nblocks;
+		}
+		else
+		{
+			Assert(blkno + nblocks <= bulkstate->pages_written);
+			smgrwritev(bulkstate->smgr, bulkstate->forknum, blkno,
+					   pages, nblocks,
+					   SMGR_WRITE_SKIP_FSYNC);
+		}
+
+		/*
+		 * Maintain FIFO ordering in the free list, so that users who write
+		 * blocks in sequential order tend to get sequential chunks of buffer
+		 * memory, which may be slight more efficient for vectored writes.
+		 */
+		for (int j = i - nblocks + 1; j <= i; ++j)
+			dlist_push_tail(&bulkstate->buffer_slots_freelist,
+							&pending_writes[j].slot->freelist_node);
 	}
 
 	bulkstate->npending = 0;
@@ -273,11 +336,12 @@ smgr_bulk_write(BulkWriteState *bulkstate, BlockNumber blocknum, BulkWriteBuffer
 	PendingWrite *w;
 
 	w = &bulkstate->pending_writes[bulkstate->npending++];
-	w->buf = buf;
+	w->slot = (BufferSlot *) buf;
 	w->blkno = blocknum;
 	w->page_std = page_std;
 
-	if (bulkstate->npending == MAX_PENDING_WRITES)
+	if (bulkstate->npending == MAX_PENDING_WRITES ||
+		bulkstate->npending == io_combine_limit)
 		smgr_bulk_flush(bulkstate);
 }
 
@@ -287,12 +351,21 @@ smgr_bulk_write(BulkWriteState *bulkstate, BlockNumber blocknum, BulkWriteBuffer
  * There is no function to free the buffer.  When you pass it to
  * smgr_bulk_write(), it takes ownership and frees it when it's no longer
  * needed.
- *
- * This is currently implemented as a simple palloc, but could be implemented
- * using a ring buffer or larger chunks in the future, so don't rely on it.
  */
 BulkWriteBuffer
 smgr_bulk_get_buf(BulkWriteState *bulkstate)
 {
-	return MemoryContextAllocAligned(bulkstate->memcxt, BLCKSZ, PG_IO_ALIGN_SIZE, 0);
+	BufferSlot *slot;
+
+	if (dlist_is_empty(&bulkstate->buffer_slots_freelist))
+	{
+		smgr_bulk_flush(bulkstate);
+		if (dlist_is_empty(&bulkstate->buffer_slots_freelist))
+			elog(ERROR, "too many bulk write buffers used but not yet written");
+	}
+
+	slot = dlist_head_element(BufferSlot, freelist_node, &bulkstate->buffer_slots_freelist);
+	dlist_pop_head_node(&bulkstate->buffer_slots_freelist);
+
+	return &slot->buffer;
 }

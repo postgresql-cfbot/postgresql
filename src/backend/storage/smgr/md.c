@@ -448,78 +448,9 @@ mdunlinkfork(RelFileLocatorBackend rlocator, ForkNumber forknum, bool isRedo)
 }
 
 /*
- * mdextend() -- Add a block to the specified relation.
- *
- * The semantics are nearly the same as mdwrite(): write at the
- * specified position.  However, this is to be used for the case of
- * extending a relation (i.e., blocknum is at or beyond the current
- * EOF).  Note that we assume writing a block beyond current EOF
- * causes intervening file space to become filled with zeroes.
- */
-void
-mdextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-		 const void *buffer, bool skipFsync)
-{
-	off_t		seekpos;
-	int			nbytes;
-	MdfdVec    *v;
-
-	/* If this build supports direct I/O, the buffer must be I/O aligned. */
-	if (PG_O_DIRECT != 0 && PG_IO_ALIGN_SIZE <= BLCKSZ)
-		Assert((uintptr_t) buffer == TYPEALIGN(PG_IO_ALIGN_SIZE, buffer));
-
-	/* This assert is too expensive to have on normally ... */
-#ifdef CHECK_WRITE_VS_EXTEND
-	Assert(blocknum >= mdnblocks(reln, forknum));
-#endif
-
-	/*
-	 * If a relation manages to grow to 2^32-1 blocks, refuse to extend it any
-	 * more --- we mustn't create a block whose number actually is
-	 * InvalidBlockNumber.  (Note that this failure should be unreachable
-	 * because of upstream checks in bufmgr.c.)
-	 */
-	if (blocknum == InvalidBlockNumber)
-		ereport(ERROR,
-				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-				 errmsg("cannot extend file \"%s\" beyond %u blocks",
-						relpath(reln->smgr_rlocator, forknum),
-						InvalidBlockNumber)));
-
-	v = _mdfd_getseg(reln, forknum, blocknum, skipFsync, EXTENSION_CREATE);
-
-	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
-
-	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
-
-	if ((nbytes = FileWrite(v->mdfd_vfd, buffer, BLCKSZ, seekpos, WAIT_EVENT_DATA_FILE_EXTEND)) != BLCKSZ)
-	{
-		if (nbytes < 0)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not extend file \"%s\": %m",
-							FilePathName(v->mdfd_vfd)),
-					 errhint("Check free disk space.")));
-		/* short write: complain appropriately */
-		ereport(ERROR,
-				(errcode(ERRCODE_DISK_FULL),
-				 errmsg("could not extend file \"%s\": wrote only %d of %d bytes at block %u",
-						FilePathName(v->mdfd_vfd),
-						nbytes, BLCKSZ, blocknum),
-				 errhint("Check free disk space.")));
-	}
-
-	if (!skipFsync && !SmgrIsTemp(reln))
-		register_dirty_segment(reln, forknum, v);
-
-	Assert(_mdnblocks(reln, forknum, v) <= ((BlockNumber) RELSEG_SIZE));
-}
-
-/*
  * mdzeroextend() -- Add new zeroed out blocks to the specified relation.
  *
- * Similar to mdextend(), except the relation can be extended by multiple
- * blocks at once and the added blocks will be filled with zeroes.
+ * The added blocks will be filled with zeroes.
  */
 void
 mdzeroextend(SMgrRelation reln, ForkNumber forknum,
@@ -919,19 +850,30 @@ mdreadv(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 
 /*
  * mdwritev() -- Write the supplied blocks at the appropriate location.
- *
- * This is to be used only for updating already-existing blocks of a
- * relation (ie, those before the current EOF).  To extend a relation,
- * use mdextend().
  */
 void
 mdwritev(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-		 const void **buffers, BlockNumber nblocks, bool skipFsync)
+		 const void **buffers, BlockNumber nblocks, int flags)
 {
 	/* This assert is too expensive to have on normally ... */
 #ifdef CHECK_WRITE_VS_EXTEND
-	Assert(blocknum < mdnblocks(reln, forknum));
+	if (flags & SMGR_WRITE_EXTEND)
+		Assert(blocknum >= mdnblocks(reln, forknum));
+	else
+		Assert(blocknum + nblocks <= mdnblocks(reln, forknum));
 #endif
+
+	/*
+	 * If a relation manages to grow to 2^32-1 blocks, refuse to extend it any
+	 * more --- we mustn't create a block whose number actually is
+	 * InvalidBlockNumber or larger.
+	 */
+	if ((uint64) blocknum + nblocks >= (uint64) InvalidBlockNumber)
+		ereport(ERROR,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("cannot extend file \"%s\" beyond %u blocks",
+						relpath(reln->smgr_rlocator, forknum),
+						InvalidBlockNumber)));
 
 	while (nblocks > 0)
 	{
@@ -944,7 +886,9 @@ mdwritev(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		size_t		transferred_this_segment;
 		size_t		size_this_segment;
 
-		v = _mdfd_getseg(reln, forknum, blocknum, skipFsync,
+		v = _mdfd_getseg(reln, forknum, blocknum, flags & SMGR_WRITE_SKIP_FSYNC,
+						 (flags & SMGR_WRITE_EXTEND) ?
+						 EXTENSION_CREATE :
 						 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
 
 		seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
@@ -992,7 +936,9 @@ mdwritev(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 
 				ereport(ERROR,
 						(errcode_for_file_access(),
-						 errmsg("could not write blocks %u..%u in file \"%s\": %m",
+						 errmsg((flags & SMGR_WRITE_EXTEND) ?
+								"could not extend blocks %u..%u in file \"%s\": %m" :
+								"could not write blocks %u..%u in file \"%s\": %m",
 								blocknum,
 								blocknum + nblocks_this_segment - 1,
 								FilePathName(v->mdfd_vfd)),
@@ -1010,7 +956,7 @@ mdwritev(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 			iovcnt = compute_remaining_iovec(iov, iov, iovcnt, nbytes);
 		}
 
-		if (!skipFsync && !SmgrIsTemp(reln))
+		if ((flags & SMGR_WRITE_SKIP_FSYNC) == 0 && !SmgrIsTemp(reln))
 			register_dirty_segment(reln, forknum, v);
 
 		nblocks -= nblocks_this_segment;
@@ -1638,11 +1584,11 @@ _mdfd_getseg(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 		{
 			/*
 			 * Normally we will create new segments only if authorized by the
-			 * caller (i.e., we are doing mdextend()).  But when doing WAL
-			 * recovery, create segments anyway; this allows cases such as
-			 * replaying WAL data that has a write into a high-numbered
-			 * segment of a relation that was later deleted. We want to go
-			 * ahead and create the segments so we can finish out the replay.
+			 * caller (i.e., we are extending).  But when doing WAL recovery,
+			 * create segments anyway; this allows cases such as replaying WAL
+			 * data that has a write into a high-numbered segment of a
+			 * relation that was later deleted. We want to go ahead and create
+			 * the segments so we can finish out the replay.
 			 *
 			 * We have to maintain the invariant that segments before the last
 			 * active segment are of size RELSEG_SIZE; therefore, if
@@ -1655,9 +1601,9 @@ _mdfd_getseg(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 				char	   *zerobuf = palloc_aligned(BLCKSZ, PG_IO_ALIGN_SIZE,
 													 MCXT_ALLOC_ZERO);
 
-				mdextend(reln, forknum,
-						 nextsegno * ((BlockNumber) RELSEG_SIZE) - 1,
-						 zerobuf, skipFsync);
+				smgrextend(reln, forknum,
+						   nextsegno * ((BlockNumber) RELSEG_SIZE) - 1,
+						   zerobuf, skipFsync);
 				pfree(zerobuf);
 			}
 			flags = O_CREAT;

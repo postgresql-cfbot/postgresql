@@ -73,6 +73,9 @@ typedef SMgrRelationData *SMgrRelation;
 #define SmgrIsTemp(smgr) \
 	RelFileLocatorBackendIsTemp((smgr)->smgr_rlocator)
 
+#define SMGR_WRITE_SKIP_FSYNC 0x01
+#define SMGR_WRITE_EXTEND 0x02
+
 extern void smgrinit(void);
 extern SMgrRelation smgropen(RelFileLocator rlocator, ProcNumber backend);
 extern bool smgrexists(SMgrRelation reln, ForkNumber forknum);
@@ -86,8 +89,6 @@ extern void smgrreleaserellocator(RelFileLocatorBackend rlocator);
 extern void smgrcreate(SMgrRelation reln, ForkNumber forknum, bool isRedo);
 extern void smgrdosyncall(SMgrRelation *rels, int nrels);
 extern void smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo);
-extern void smgrextend(SMgrRelation reln, ForkNumber forknum,
-					   BlockNumber blocknum, const void *buffer, bool skipFsync);
 extern void smgrzeroextend(SMgrRelation reln, ForkNumber forknum,
 						   BlockNumber blocknum, int nblocks, bool skipFsync);
 extern bool smgrprefetch(SMgrRelation reln, ForkNumber forknum,
@@ -98,7 +99,7 @@ extern void smgrreadv(SMgrRelation reln, ForkNumber forknum,
 extern void smgrwritev(SMgrRelation reln, ForkNumber forknum,
 					   BlockNumber blocknum,
 					   const void **buffer, BlockNumber nblocks,
-					   bool skipFsync);
+					   int flags);
 extern void smgrwriteback(SMgrRelation reln, ForkNumber forknum,
 						  BlockNumber blocknum, BlockNumber nblocks);
 extern BlockNumber smgrnblocks(SMgrRelation reln, ForkNumber forknum);
@@ -121,7 +122,17 @@ static inline void
 smgrwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		  const void *buffer, bool skipFsync)
 {
-	smgrwritev(reln, forknum, blocknum, &buffer, 1, skipFsync);
+	smgrwritev(reln, forknum, blocknum, &buffer, 1,
+			   skipFsync ? SMGR_WRITE_SKIP_FSYNC : 0);
+}
+
+static inline void
+smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+		   const void *buffer, bool skipFsync)
+{
+	smgrwritev(reln, forknum, blocknum, &buffer, 1,
+			   SMGR_WRITE_EXTEND |
+			   (skipFsync ? SMGR_WRITE_SKIP_FSYNC : 0));
 }
 
 #endif							/* SMGR_H */

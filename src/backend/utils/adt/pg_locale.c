@@ -114,10 +114,8 @@ char	   *localized_full_days[7 + 1];
 char	   *localized_abbrev_months[12 + 1];
 char	   *localized_full_months[12 + 1];
 
-/* is the databases's LC_CTYPE the C locale? */
-bool		database_ctype_is_c = false;
-
 static struct pg_locale_struct default_locale;
+static struct pg_locale_struct database_env_locale;
 
 /* indicates whether locale information cache is valid */
 static bool CurrentLocaleConvValid = false;
@@ -1472,6 +1470,42 @@ pg_locale_deterministic(pg_locale_t locale)
 }
 
 /*
+ * Initialize the database environment locale and store in a pg_locale_t.
+ */
+void
+init_db_env_locale(const char *datcollate, const char *datctype)
+{
+	Assert(database_env_locale.provider == (char) 0);
+
+	database_env_locale.provider = COLLPROVIDER_LIBC;
+	database_env_locale.deterministic = true;
+	database_env_locale.collate_is_c = (strcmp(datcollate, "C") == 0) ||
+		(strcmp(datcollate, "POSIX") == 0);
+	database_env_locale.ctype_is_c = (strcmp(datctype, "C") == 0) ||
+		(strcmp(datctype, "POSIX") == 0);
+
+	make_libc_collator(datcollate, datctype, &database_env_locale);
+}
+
+/*
+ * Return pg_locale_t representing the database environment locale.
+ *
+ * The provider is always libc, and it represents the server environment
+ * LC_COLLATE and LC_CTYPE.
+ *
+ * Most callers should use pg_newlocale_from_collation(DEFAULT_COLLATION_OID)
+ * instead to get a pg_locale_t representing the database default collation
+ * (which might be any provider). Use get_db_env_locale() only if the libc
+ * provider is needed, such as with wchar2char()/char2wchar().
+ */
+pg_locale_t
+get_db_env_locale(void)
+{
+	Assert(database_env_locale.provider != (char) 0);
+	return &database_env_locale;
+}
+
+/*
  * Initialize default_locale with database locale settings.
  */
 void
@@ -1481,6 +1515,8 @@ init_database_collation(void)
 	Form_pg_database dbform;
 	Datum		datum;
 	bool		isnull;
+
+	Assert(default_locale.provider == (char) 0);
 
 	/* Fetch our pg_database row normally, via syscache */
 	tup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
@@ -1571,7 +1607,10 @@ pg_newlocale_from_collation(Oid collid)
 	Assert(OidIsValid(collid));
 
 	if (collid == DEFAULT_COLLATION_OID)
+	{
+		Assert(default_locale.provider != (char) 0);
 		return &default_locale;
+	}
 
 	cache_entry = lookup_collation_cache(collid);
 

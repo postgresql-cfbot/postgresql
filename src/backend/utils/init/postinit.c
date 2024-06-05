@@ -577,7 +577,7 @@ InitializeMaxBackends(void)
 	Assert(MaxBackends == 0);
 
 	/* the extra unit accounts for the autovacuum launcher */
-	MaxBackends = MaxConnections + autovacuum_max_workers + 1 +
+	MaxBackends = MaxConnections + AUTOVAC_MAX_WORKER_SLOTS + 1 +
 		max_worker_processes + max_wal_senders;
 
 	/* internal error because the values were all checked previously */
@@ -591,19 +591,7 @@ InitializeMaxBackends(void)
 bool
 check_max_connections(int *newval, void **extra, GucSource source)
 {
-	if (*newval + autovacuum_max_workers + 1 +
-		max_worker_processes + max_wal_senders > MAX_BACKENDS)
-		return false;
-	return true;
-}
-
-/*
- * GUC check_hook for autovacuum_max_workers
- */
-bool
-check_autovacuum_max_workers(int *newval, void **extra, GucSource source)
-{
-	if (MaxConnections + *newval + 1 +
+	if (*newval + AUTOVAC_MAX_WORKER_SLOTS + 1 +
 		max_worker_processes + max_wal_senders > MAX_BACKENDS)
 		return false;
 	return true;
@@ -615,7 +603,7 @@ check_autovacuum_max_workers(int *newval, void **extra, GucSource source)
 bool
 check_max_worker_processes(int *newval, void **extra, GucSource source)
 {
-	if (MaxConnections + autovacuum_max_workers + 1 +
+	if (MaxConnections + AUTOVAC_MAX_WORKER_SLOTS + 1 +
 		*newval + max_wal_senders > MAX_BACKENDS)
 		return false;
 	return true;
@@ -627,7 +615,7 @@ check_max_worker_processes(int *newval, void **extra, GucSource source)
 bool
 check_max_wal_senders(int *newval, void **extra, GucSource source)
 {
-	if (MaxConnections + autovacuum_max_workers + 1 +
+	if (MaxConnections + AUTOVAC_MAX_WORKER_SLOTS + 1 +
 		max_worker_processes + *newval > MAX_BACKENDS)
 		return false;
 	return true;

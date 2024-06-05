@@ -8535,7 +8535,8 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
        <para>
         Specifies the maximum number of autovacuum processes (other than the
         autovacuum launcher) that may be running at any one time.  The default
-        is three.  This parameter can only be set at server start.
+        is three.  This parameter can only be set in the
+        <filename>postgresql.conf</filename> file or on the server command line.
        </para>
       </listitem>
      </varlistentry>

@@ -3380,14 +3380,13 @@ struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 	{
-		/* see max_connections */
-		{"autovacuum_max_workers", PGC_POSTMASTER, AUTOVACUUM,
+		{"autovacuum_max_workers", PGC_SIGHUP, AUTOVACUUM,
 			gettext_noop("Sets the maximum number of simultaneously running autovacuum worker processes."),
 			NULL
 		},
 		&autovacuum_max_workers,
-		3, 1, MAX_BACKENDS,
-		check_autovacuum_max_workers, NULL, NULL
+		3, 1, AUTOVAC_MAX_WORKER_SLOTS,
+		NULL, NULL, NULL
 	},
 
 	{

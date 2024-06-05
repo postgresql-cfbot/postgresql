@@ -66,4 +66,12 @@ extern bool AutoVacuumRequestWork(AutoVacuumWorkItemType type,
 extern Size AutoVacuumShmemSize(void);
 extern void AutoVacuumShmemInit(void);
 
+/*
+ * Number of autovacuum worker slots to allocate.  This is the upper limit of
+ * autovacuum_max_workers.
+ *
+ * NB: This must be less than MAX_BACKENDS.
+ */
+#define AUTOVAC_MAX_WORKER_SLOTS	(256)
+
 #endif							/* AUTOVACUUM_H */

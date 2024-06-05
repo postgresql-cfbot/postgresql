@@ -4144,7 +4144,7 @@ CreateOptsFile(int argc, char *argv[], char *fullprogname)
 int
 MaxLivePostmasterChildren(void)
 {
-	return 2 * (MaxConnections + autovacuum_max_workers + 1 +
+	return 2 * (MaxConnections + AUTOVAC_MAX_WORKER_SLOTS + 1 +
 				max_wal_senders + max_worker_processes);
 }
 

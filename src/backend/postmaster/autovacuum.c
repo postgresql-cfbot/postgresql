@@ -208,8 +208,7 @@ typedef struct autovac_table
 
 /*-------------
  * This struct holds information about a single worker's whereabouts.  We keep
- * an array of these in shared memory, sized according to
- * autovacuum_max_workers.
+ * an array of these in shared memory.
  *
  * wi_links		entry into free list or running list
  * wi_dboid		OID of the database this worker is supposed to work on
@@ -289,7 +288,7 @@ typedef struct
 {
 	sig_atomic_t av_signal[AutoVacNumSignals];
 	pid_t		av_launcherpid;
-	dlist_head	av_freeWorkers;
+	dclist_head av_freeWorkers;
 	dlist_head	av_runningWorkers;
 	WorkerInfo	av_startingWorker;
 	AutoVacuumWorkItem av_workItems[NUM_WORKITEMS];
@@ -347,6 +346,7 @@ static void autovac_report_activity(autovac_table *tab);
 static void autovac_report_workitem(AutoVacuumWorkItem *workitem,
 									const char *nspname, const char *relname);
 static void avl_sigusr2_handler(SIGNAL_ARGS);
+static bool av_worker_available(void);
 
 
 
@@ -575,8 +575,7 @@ AutoVacLauncherMain(char *startup_data, size_t startup_data_len)
 		 * wakening conditions.
 		 */
 
-		launcher_determine_sleep(!dlist_is_empty(&AutoVacuumShmem->av_freeWorkers),
-								 false, &nap);
+		launcher_determine_sleep(av_worker_available(), false, &nap);
 
 		/*
 		 * Wait until naptime expires or we get some type of signal (all the
@@ -636,7 +635,7 @@ AutoVacLauncherMain(char *startup_data, size_t startup_data_len)
 		current_time = GetCurrentTimestamp();
 		LWLockAcquire(AutovacuumLock, LW_SHARED);
 
-		can_launch = !dlist_is_empty(&AutoVacuumShmem->av_freeWorkers);
+		can_launch = av_worker_available();
 
 		if (AutoVacuumShmem->av_startingWorker != NULL)
 		{
@@ -679,8 +678,8 @@ AutoVacLauncherMain(char *startup_data, size_t startup_data_len)
 					worker->wi_sharedrel = false;
 					worker->wi_proc = NULL;
 					worker->wi_launchtime = 0;
-					dlist_push_head(&AutoVacuumShmem->av_freeWorkers,
-									&worker->wi_links);
+					dclist_push_head(&AutoVacuumShmem->av_freeWorkers,
+									 &worker->wi_links);
 					AutoVacuumShmem->av_startingWorker = NULL;
 					ereport(WARNING,
 							errmsg("autovacuum worker took too long to start; canceled"));
@@ -1087,7 +1086,7 @@ do_start_worker(void)
 
 	/* return quickly when there are no free workers */
 	LWLockAcquire(AutovacuumLock, LW_SHARED);
-	if (dlist_is_empty(&AutoVacuumShmem->av_freeWorkers))
+	if (!av_worker_available())
 	{
 		LWLockRelease(AutovacuumLock);
 		return InvalidOid;
@@ -1240,7 +1239,7 @@ do_start_worker(void)
 		 * Get a worker entry from the freelist.  We checked above, so there
 		 * really should be a free slot.
 		 */
-		wptr = dlist_pop_head_node(&AutoVacuumShmem->av_freeWorkers);
+		wptr = dclist_pop_head_node(&AutoVacuumShmem->av_freeWorkers);
 
 		worker = dlist_container(WorkerInfoData, wi_links, wptr);
 		worker->wi_dboid = avdb->adw_datid;
@@ -1609,8 +1608,8 @@ FreeWorkerInfo(int code, Datum arg)
 		MyWorkerInfo->wi_proc = NULL;
 		MyWorkerInfo->wi_launchtime = 0;
 		pg_atomic_clear_flag(&MyWorkerInfo->wi_dobalance);
-		dlist_push_head(&AutoVacuumShmem->av_freeWorkers,
-						&MyWorkerInfo->wi_links);
+		dclist_push_head(&AutoVacuumShmem->av_freeWorkers,
+						 &MyWorkerInfo->wi_links);
 		/* not mine anymore */
 		MyWorkerInfo = NULL;
 
@@ -3265,7 +3264,7 @@ AutoVacuumShmemSize(void)
 	 */
 	size = sizeof(AutoVacuumShmemStruct);
 	size = MAXALIGN(size);
-	size = add_size(size, mul_size(autovacuum_max_workers,
+	size = add_size(size, mul_size(AUTOVAC_MAX_WORKER_SLOTS,
 								   sizeof(WorkerInfoData)));
 	return size;
 }
@@ -3292,7 +3291,7 @@ AutoVacuumShmemInit(void)
 		Assert(!found);
 
 		AutoVacuumShmem->av_launcherpid = 0;
-		dlist_init(&AutoVacuumShmem->av_freeWorkers);
+		dclist_init(&AutoVacuumShmem->av_freeWorkers);
 		dlist_init(&AutoVacuumShmem->av_runningWorkers);
 		AutoVacuumShmem->av_startingWorker = NULL;
 		memset(AutoVacuumShmem->av_workItems, 0,
@@ -3302,10 +3301,10 @@ AutoVacuumShmemInit(void)
 							   MAXALIGN(sizeof(AutoVacuumShmemStruct)));
 
 		/* initialize the WorkerInfo free list */
-		for (i = 0; i < autovacuum_max_workers; i++)
+		for (i = 0; i < AUTOVAC_MAX_WORKER_SLOTS; i++)
 		{
-			dlist_push_head(&AutoVacuumShmem->av_freeWorkers,
-							&worker[i].wi_links);
+			dclist_push_head(&AutoVacuumShmem->av_freeWorkers,
+							 &worker[i].wi_links);
 			pg_atomic_init_flag(&worker[i].wi_dobalance);
 		}
 
@@ -3340,4 +3339,15 @@ check_autovacuum_work_mem(int *newval, void **extra, GucSource source)
 		*newval = 1024;
 
 	return true;
+}
+
+/*
+ * Returns whether there is a free autovacuum worker slot available.
+ */
+static bool
+av_worker_available(void)
+{
+	int			reserved_slots = AUTOVAC_MAX_WORKER_SLOTS - autovacuum_max_workers;
+
+	return dclist_count(&AutoVacuumShmem->av_freeWorkers) > reserved_slots;
 }

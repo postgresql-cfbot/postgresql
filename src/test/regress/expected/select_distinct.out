@@ -464,3 +464,115 @@ SELECT null IS NOT DISTINCT FROM null as "yes";
  t
 (1 row)
 
+--
+-- Test the planner's ability to reorder the distinctClause Pathkeys to match
+-- the input path's ordering
+--
+CREATE TABLE distinct_tbl (x int, y int, z int);
+INSERT INTO distinct_tbl SELECT i%10, i%10, i FROM generate_series(1, 1000) AS i;
+CREATE INDEX distinct_tbl_x_y_idx ON distinct_tbl(x, y);
+ANALYZE distinct_tbl;
+SET enable_hashagg TO OFF;
+SET enable_seqscan TO OFF;
+-- Ensure we avoid the Sort operation by reordering the distinctClause Pathkeys
+-- to match the ordering of index scan
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT y, x FROM distinct_tbl;
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Unique
+   ->  Index Only Scan using distinct_tbl_x_y_idx on distinct_tbl
+(2 rows)
+
+-- Ensure we leverage incremental sort to avoid full Sort operation by
+-- reordering the distinctClause Pathkeys to partially match the ordering of
+-- index scan
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT z, y, x FROM distinct_tbl;
+                            QUERY PLAN                             
+-------------------------------------------------------------------
+ Unique
+   ->  Incremental Sort
+         Sort Key: x, y, z
+         Presorted Key: x, y
+         ->  Index Scan using distinct_tbl_x_y_idx on distinct_tbl
+(5 rows)
+
+-- Ensure we avoid the Sort operation by reordering the distinctClause Pathkeys
+-- to match the ordering of subquery scan
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT x, z, y
+	FROM (SELECT * FROM distinct_tbl ORDER BY x, y, z) AS s;
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ Unique
+   ->  Subquery Scan on s
+         ->  Incremental Sort
+               Sort Key: distinct_tbl.x, distinct_tbl.y, distinct_tbl.z
+               Presorted Key: distinct_tbl.x, distinct_tbl.y
+               ->  Index Scan using distinct_tbl_x_y_idx on distinct_tbl
+(6 rows)
+
+-- Ensure we leverage incremental sort to avoid full Sort operation by
+-- reordering the distinctClause Pathkeys to partially match the ordering of
+-- merge join
+SET enable_nestloop TO OFF;
+SET enable_hashjoin TO OFF;
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT t1.x, t1.z, t1.y
+	FROM distinct_tbl t1 JOIN distinct_tbl t2 ON t1.x = t2.x AND t1.y = t2.y;
+                                      QUERY PLAN                                       
+---------------------------------------------------------------------------------------
+ Unique
+   ->  Incremental Sort
+         Sort Key: t1.x, t1.y, t1.z
+         Presorted Key: t1.x, t1.y
+         ->  Merge Join
+               Merge Cond: ((t1.x = t2.x) AND (t1.y = t2.y))
+               ->  Index Scan using distinct_tbl_x_y_idx on distinct_tbl t1
+               ->  Materialize
+                     ->  Index Only Scan using distinct_tbl_x_y_idx on distinct_tbl t2
+(9 rows)
+
+RESET enable_hashjoin;
+RESET enable_nestloop;
+-- Ensure we avoid the Sort operation by reordering the distinctClause Pathkeys
+-- to match the ordering of index scan in parallel plan
+SET parallel_tuple_cost=0;
+SET parallel_setup_cost=0;
+SET min_parallel_table_scan_size=0;
+SET min_parallel_index_scan_size=0;
+SET max_parallel_workers_per_gather=2;
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT y, x FROM distinct_tbl limit 10;
+                                         QUERY PLAN                                          
+---------------------------------------------------------------------------------------------
+ Limit
+   ->  Unique
+         ->  Gather Merge
+               Workers Planned: 1
+               ->  Unique
+                     ->  Parallel Index Only Scan using distinct_tbl_x_y_idx on distinct_tbl
+(6 rows)
+
+RESET max_parallel_workers_per_gather;
+RESET min_parallel_index_scan_size;
+RESET min_parallel_table_scan_size;
+RESET parallel_setup_cost;
+RESET parallel_tuple_cost;
+-- Ensure we reorder the distinctClause Pathkeys to match the ordering of index
+-- scan even if there is ORDER BY clause
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT y, x FROM distinct_tbl ORDER BY y limit 1;
+                                  QUERY PLAN                                  
+------------------------------------------------------------------------------
+ Limit
+   ->  Sort
+         Sort Key: y
+         ->  Unique
+               ->  Index Only Scan using distinct_tbl_x_y_idx on distinct_tbl
+(5 rows)
+
+RESET enable_seqscan;
+RESET enable_hashagg;
+DROP TABLE distinct_tbl;

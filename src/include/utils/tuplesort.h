@@ -29,7 +29,6 @@
 #include "utils/relcache.h"
 #include "utils/sortsupport.h"
 
-
 /*
  * Tuplesortstate and Sharedsort are opaque types whose details are not
  * known outside tuplesort.c.
@@ -79,9 +78,10 @@ typedef enum
 	SORT_TYPE_QUICKSORT = 1 << 1,
 	SORT_TYPE_EXTERNAL_SORT = 1 << 2,
 	SORT_TYPE_EXTERNAL_MERGE = 1 << 3,
+	SORT_TYPE_MK_QSORT = 1 << 4,
 } TuplesortMethod;
 
-#define NUM_TUPLESORTMETHODS 4
+#define NUM_TUPLESORTMETHODS 5
 
 typedef enum
 {
@@ -154,6 +154,23 @@ typedef struct
 
 typedef int (*SortTupleComparator) (const SortTuple *a, const SortTuple *b,
 									Tuplesortstate *state);
+
+/* Multi-key quick sort */
+
+typedef Datum
+(*MkqsGetDatumFunc) (SortTuple      *x,
+					 const int       tupleIndex,
+					 const int       depth,
+					 Tuplesortstate *state,
+					 Datum          *datum,
+					 bool           *isNull,
+					 bool            useFullKey);
+
+typedef void
+(*MkqsHandleDupFunc) (SortTuple      *x,
+					  const int       tupleCount,
+					  const bool      seenNull,
+					  Tuplesortstate *state);
 
 /*
  * The public part of a Tuple sort operation state.  This data structure
@@ -249,6 +266,21 @@ typedef struct
 	bool		tuples;			/* Can SortTuple.tuple ever be set? */
 
 	void	   *arg;			/* Specific information for the sort variant */
+
+	/*
+	 * Function pointer, referencing a function to get specified datum from
+	 * SortTuple list with multi-key.
+	 * Used by mk_qsort_tuple().
+	*/
+	MkqsGetDatumFunc mkqsGetDatumFunc;
+
+	/*
+	 * Function pointer, referencing a function to handle duplicated tuple
+	 * from SortTuple list with multi-key.
+	 * Used by mk_qsort_tuple().
+	 * For now, the function pointer is filled for only btree index tuple.
+	*/
+	MkqsHandleDupFunc mkqsHandleDupFunc;
 } TuplesortPublic;
 
 /* Sort parallel code from state for sort__start probes */

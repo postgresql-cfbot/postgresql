@@ -857,12 +857,14 @@ typedef NameData *Name;
 
 #define Assert(condition)	((void)true)
 #define AssertMacro(condition)	((void)true)
+#define AssertImply(condition1, condition2) ((void)true)
 
 #elif defined(FRONTEND)
 
 #include <assert.h>
 #define Assert(p) assert(p)
 #define AssertMacro(p)	((void) assert(p))
+#define AssertImply(cond1, cond2) Assert(!(cond1) || (cond2))
 
 #else							/* USE_ASSERT_CHECKING && !FRONTEND */
 
@@ -885,6 +887,8 @@ typedef NameData *Name;
 #define AssertMacro(condition) \
 	((void) ((condition) || \
 			 (ExceptionalCondition(#condition, __FILE__, __LINE__), 0)))
+
+#define AssertImply(cond1, cond2) Assert(!(cond1) || (cond2))
 
 #endif							/* USE_ASSERT_CHECKING && !FRONTEND */
 

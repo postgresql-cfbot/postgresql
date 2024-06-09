@@ -2115,8 +2115,8 @@ raise_error_of_dup_index(IndexTuple      x,
 	bool        isnull[INDEX_MAX_KEYS];
 	TupleDesc   tupDesc;
 	char       *key_desc;
-    TuplesortPublic *base = TuplesortstateGetPublic(state);
-    TuplesortIndexBTreeArg *arg = (TuplesortIndexBTreeArg *) base->arg;
+	TuplesortPublic *base = TuplesortstateGetPublic(state);
+	TuplesortIndexBTreeArg *arg = (TuplesortIndexBTreeArg *) base->arg;
 
 	tupDesc = RelationGetDescr(arg->index.indexRel);
 	index_deform_tuple((IndexTuple)x, tupDesc, values, isnull);

@@ -341,7 +341,7 @@ struct Tuplesortstate
 #endif
 
 	/* Whether multi-key quick sort is used */
-	bool mkqsUsed;
+	bool		mkqsUsed;
 };
 
 /*
@@ -2730,23 +2730,19 @@ tuplesort_sort_memtuples(Tuplesortstate *state)
 	if (state->memtupcount > 1)
 	{
 		/*
-		 * Apply multi-key quick sort when:
-		 *   1. enable_mk_sort is set
-		 *   2. There are multiple keys available
-		 *   3. mkqsGetDatumFunc is filled, which implies that current tuple
-		 *      type is supported by mk qsort. (By now only Heap tuple and Btree
-		 *      Index tuple are supported, and more types may be supported in
-		 *      future.)
+		 * Apply multi-key quick sort when: 1. enable_mk_sort is set 2. There
+		 * are multiple keys available 3. mkqsGetDatumFunc is filled, which
+		 * implies that current tuple type is supported by mk qsort. (By now
+		 * only Heap tuple and Btree Index tuple are supported, and more types
+		 * may be supported in future.)
 		 *
 		 * A summary of tuple types supported by mk qsort:
 		 *
-		 *   HeapTuple: supported
-		 *   IndexTuple(btree): supported
-		 *   IndexTuple(hash): not supported because there is only one key
-		 *   DatumTuple: not supported because there is only one key
-		 *   HeapTuple(for cluster): not supported yet
-		 *   IndexTuple(gist): not supported yet
-		 *   IndexTuple(brin): not supported yet
+		 * HeapTuple: supported IndexTuple(btree): supported IndexTuple(hash):
+		 * not supported because there is only one key DatumTuple: not
+		 * supported because there is only one key HeapTuple(for cluster): not
+		 * supported yet IndexTuple(gist): not supported yet IndexTuple(brin):
+		 * not supported yet
 		 */
 		if (enable_mk_sort &&
 			state->base.nKeys > 1 &&

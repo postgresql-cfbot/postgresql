@@ -22,11 +22,11 @@
 
 /* Swap two tuples in sort tuple array */
 static inline void
-mkqs_swap(int        a,
-		  int        b,
+mkqs_swap(int a,
+		  int b,
 		  SortTuple *x)
 {
-	SortTuple t;
+	SortTuple	t;
 
 	if (a == b)
 		return;
@@ -37,9 +37,9 @@ mkqs_swap(int        a,
 
 /* Swap tuples by batch in sort tuple array */
 static inline void
-mkqs_vec_swap(int        a,
-			  int        b,
-			  int        size,
+mkqs_vec_swap(int a,
+			  int b,
+			  int size,
 			  SortTuple *x)
 {
 	while (size-- > 0)
@@ -56,12 +56,12 @@ mkqs_vec_swap(int        a,
  * a tuple array, so tupleIndex is unnecessary
  */
 static inline bool
-check_datum_null(SortTuple      *x,
-				 int             depth,
+check_datum_null(SortTuple *x,
+				 int depth,
 				 Tuplesortstate *state)
 {
-	Datum datum;
-	bool isNull;
+	Datum		datum;
+	bool		isNull;
 
 	Assert(depth < state->base.nKeys);
 
@@ -94,15 +94,17 @@ check_datum_null(SortTuple      *x,
  * See comparetup_heap() for details.
  */
 static inline int
-mkqs_compare_datum(SortTuple      *tuple1,
-				   SortTuple      *tuple2,
-				   int			 depth,
+mkqs_compare_datum(SortTuple *tuple1,
+				   SortTuple *tuple2,
+				   int depth,
 				   Tuplesortstate *state)
 {
-	Datum datum1, datum2;
-	bool isNull1, isNull2;
+	Datum		datum1,
+				datum2;
+	bool		isNull1,
+				isNull2;
 	SortSupport sortKey;
-	int ret = 0;
+	int			ret = 0;
 
 	Assert(state->base.mkqsGetDatumFunc);
 	Assert(depth < state->base.nKeys);
@@ -120,10 +122,10 @@ mkqs_compare_datum(SortTuple      *tuple1,
 							  sortKey);
 
 	/*
-	 * If "abbreviated key" is enabled, and we are in the first depth, it means
-	 * only "abbreviated keys" are compared. If the two datums are determined to
-	 * be equal by ApplySortComparator(), we need to perform an extra "full"
-	 * comparing by ApplySortAbbrevFullComparator().
+	 * If "abbreviated key" is enabled, and we are in the first depth, it
+	 * means only "abbreviated keys" are compared. If the two datums are
+	 * determined to be equal by ApplySortComparator(), we need to perform an
+	 * extra "full" comparing by ApplySortAbbrevFullComparator().
 	 */
 	if (sortKey->abbrev_converter &&
 		depth == 0 &&
@@ -150,14 +152,14 @@ mkqs_compare_datum(SortTuple      *tuple1,
  * Verify whether the SortTuple list is ordered or not at specified depth
  */
 static void
-mkqs_verify(SortTuple      *x,
-			int				n,
-			int				depth,
+mkqs_verify(SortTuple *x,
+			int n,
+			int depth,
 			Tuplesortstate *state)
 {
-	int ret;
+	int			ret;
 
-	for (int i = 0;i < n - 1;i++)
+	for (int i = 0; i < n - 1; i++)
 	{
 		ret = mkqs_compare_datum(x + i,
 								 x + i + 1,
@@ -174,27 +176,31 @@ mkqs_verify(SortTuple      *x,
  * seenNull indicates whether we have seen NULL in any datum we checked
  */
 static void
-mk_qsort_tuple(SortTuple           *x,
-			   size_t               n,
-			   int                  depth,
-			   Tuplesortstate      *state,
-			   bool                 seenNull)
+mk_qsort_tuple(SortTuple *x,
+			   size_t n,
+			   int depth,
+			   Tuplesortstate *state,
+			   bool seenNull)
 {
 	/*
-	 * In the process, the tuple array consists of five parts:
-	 * left equal, less, not-processed, greater, right equal
+	 * In the process, the tuple array consists of five parts: left equal,
+	 * less, not-processed, greater, right equal
 	 *
-	 * lessStart indicates the first position of less part
-	 * lessEnd indicates the next position after less part
-	 * greaterStart indicates the prior position before greater part
-	 * greaterEnd indicates the latest position of greater part
-	 * the range between lessEnd and greaterStart (inclusive) is not-processed
+	 * lessStart indicates the first position of less part lessEnd indicates
+	 * the next position after less part greaterStart indicates the prior
+	 * position before greater part greaterEnd indicates the latest position
+	 * of greater part the range between lessEnd and greaterStart (inclusive)
+	 * is not-processed
 	 */
-	int lessStart, lessEnd, greaterStart, greaterEnd, tupCount;
-	int32 dist;
-	SortTuple *pivot;
-	bool isDatumNull;
-	bool strictOrdered = true;
+	int			lessStart,
+				lessEnd,
+				greaterStart,
+				greaterEnd,
+				tupCount;
+	int32		dist;
+	SortTuple  *pivot;
+	bool		isDatumNull;
+	bool		strictOrdered = true;
 
 	Assert(depth <= state->base.nKeys);
 	Assert(state->base.sortKeys);
@@ -212,12 +218,12 @@ mk_qsort_tuple(SortTuple           *x,
 	/*
 	 * Check if the array is ordered already. If yes, return immediately.
 	 * Different from qsort_tuple(), the array must be strict ordered (no
-	 * equal datums). If there are equal datums, we must continue the mk
-	 * qsort process to check datums on lower depth.
+	 * equal datums). If there are equal datums, we must continue the mk qsort
+	 * process to check datums on lower depth.
 	 */
-	for (int i = 0;i < n - 1;i++)
+	for (int i = 0; i < n - 1; i++)
 	{
-		int ret;
+		int			ret;
 
 		CHECK_FOR_INTERRUPTS();
 		ret = mkqs_compare_datum(x + i,
@@ -299,8 +305,7 @@ mk_qsort_tuple(SortTuple           *x,
 	}
 
 	/*
-	 * Now the array has four parts:
-	 *   left equal, lesser, greater, right equal
+	 * Now the array has four parts: left equal, lesser, greater, right equal
 	 * Note greaterStart is less than lessEnd now
 	 */
 
@@ -313,9 +318,8 @@ mk_qsort_tuple(SortTuple           *x,
 	mkqs_vec_swap(lessEnd, n - dist, dist, x);
 
 	/*
-	 * Now the array has three parts:
-	 *   lesser, equal, greater
-	 * Note that one or two parts may have no element at all.
+	 * Now the array has three parts: lesser, equal, greater Note that one or
+	 * two parts may have no element at all.
 	 */
 
 	/* Recursively sort the lesser part */
@@ -331,9 +335,9 @@ mk_qsort_tuple(SortTuple           *x,
 	/* Recursively sort the equal part */
 
 	/*
-	 * (x + dist) means the first tuple in the equal part
-	 * Since all tuples have equal datums at current depth, we just check any one
-	 * of them to determine whether we have seen null datum.
+	 * (x + dist) means the first tuple in the equal part Since all tuples
+	 * have equal datums at current depth, we just check any one of them to
+	 * determine whether we have seen null datum.
 	 */
 	isDatumNull = check_datum_null(x + dist, depth, state);
 
@@ -347,7 +351,9 @@ mk_qsort_tuple(SortTuple           *x,
 					   depth + 1,
 					   state,
 					   seenNull || isDatumNull);
-	} else {
+	}
+	else
+	{
 		/*
 		 * We have reach the max depth: Call mkqsHandleDupFunc to handle
 		 * duplicated tuples if necessary, e.g. checking uniqueness or extra
@@ -355,9 +361,8 @@ mk_qsort_tuple(SortTuple           *x,
 		 */
 
 		/*
-		 * Call mkqsHandleDupFunc if:
-		 *   1. mkqsHandleDupFunc is filled
-		 *   2. the size of equal part > 1
+		 * Call mkqsHandleDupFunc if: 1. mkqsHandleDupFunc is filled 2. the
+		 * size of equal part > 1
 		 */
 		if (state->base.mkqsHandleDupFunc &&
 			(tupCount > 1))

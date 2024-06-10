@@ -274,7 +274,7 @@ new_page:
 		if (node->pstate == NULL &&
 			!tbm_exhausted(&node->prefetch_iterator) &&
 			node->pfblockno < node->blockno)
-			elog(ERROR, "prefetch and main iterators are out of sync");
+			elog(ERROR, "prefetch and main iterators are out of sync. pfblockno: %d. blockno: %d", node->pfblockno, node->blockno);
 
 		/* Adjust the prefetch target */
 		BitmapAdjustPrefetchTarget(node);

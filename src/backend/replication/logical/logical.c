@@ -1844,7 +1844,8 @@ LogicalConfirmReceivedLocation(XLogRecPtr lsn)
 
 		SpinLockAcquire(&MyReplicationSlot->mutex);
 
-		MyReplicationSlot->data.confirmed_flush = lsn;
+		if (lsn > MyReplicationSlot->data.confirmed_flush)
+			MyReplicationSlot->data.confirmed_flush = lsn;
 
 		/* if we're past the location required for bumping xmin, do so */
 		if (MyReplicationSlot->candidate_xmin_lsn != InvalidXLogRecPtr &&
@@ -1909,7 +1910,8 @@ LogicalConfirmReceivedLocation(XLogRecPtr lsn)
 	else
 	{
 		SpinLockAcquire(&MyReplicationSlot->mutex);
-		MyReplicationSlot->data.confirmed_flush = lsn;
+		if (lsn > MyReplicationSlot->data.confirmed_flush)
+			MyReplicationSlot->data.confirmed_flush = lsn;		
 		SpinLockRelease(&MyReplicationSlot->mutex);
 	}
 }

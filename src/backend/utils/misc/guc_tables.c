@@ -930,6 +930,16 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"enable_eager_aggregate", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables eager aggregation."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&enable_eager_aggregate,
+		false,
+		NULL, NULL, NULL
+	},
+	{
 		{"enable_parallel_append", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of parallel append plans."),
 			NULL,

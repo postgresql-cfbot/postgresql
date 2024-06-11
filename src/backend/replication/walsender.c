@@ -27,14 +27,14 @@
  * If the server is shut down, checkpointer sends us
  * PROCSIG_WALSND_INIT_STOPPING after all regular backends have exited.  If
  * the backend is idle or runs an SQL query this causes the backend to
- * shutdown, if logical replication is in progress all existing WAL records
- * are processed followed by a shutdown.  Otherwise this causes the walsender
- * to switch to the "stopping" state. In this state, the walsender will reject
- * any further replication commands. The checkpointer begins the shutdown
- * checkpoint once all walsenders are confirmed as stopping. When the shutdown
- * checkpoint finishes, the postmaster sends us SIGUSR2. This instructs
- * walsender to send any outstanding WAL, including the shutdown checkpoint
- * record, wait for it to be replicated to the standby, and then exit.
+ * shutdown. If logical replication is in progress, the walsender switches to a
+ * "stopping" state. In this state, the walsender will reject any further
+ * replication commands - but all existing WAL records are processed - followed
+ * by a shutdown. The checkpointer begins the shutdown checkpoint once all
+ * walsenders are confirmed as stopping. When the shutdown checkpoint finishes,
+ * the postmaster sends us SIGUSR2. This instructs walsender to send any
+ * outstanding WAL, including the shutdown checkpoint record, wait for it to be
+ * replicated to the standby, and then exit.
  *
  *
  * Portions Copyright (c) 2010-2024, PostgreSQL Global Development Group

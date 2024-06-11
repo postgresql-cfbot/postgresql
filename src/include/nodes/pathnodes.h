@@ -80,6 +80,25 @@ typedef enum UpperRelationKind
 	/* NB: UPPERREL_FINAL must be last enum entry; it's used to size arrays */
 } UpperRelationKind;
 
+/*
+ * A structure consisting of a list and a hash table to store relations.
+ *
+ * For small problems we just scan the list to do lookups, but when there are
+ * many relations we build a hash table for faster lookups.  The hash table is
+ * present and valid when 'hash' is not NULL.  Note that we still maintain the
+ * list even when using the hash table for lookups; this simplifies life for
+ * GEQO.
+ */
+typedef struct RelInfoList
+{
+	pg_node_attr(no_copy_equal, no_read)
+
+	NodeTag		type;
+
+	List	   *items;
+	struct HTAB *hash pg_node_attr(read_write_ignore);
+} RelInfoList;
+
 /*----------
  * PlannerGlobal
  *		Global information for planning/optimization
@@ -270,15 +289,16 @@ struct PlannerInfo
 
 	/*
 	 * join_rel_list is a list of all join-relation RelOptInfos we have
-	 * considered in this planning run.  For small problems we just scan the
-	 * list to do lookups, but when there are many join relations we build a
-	 * hash table for faster lookups.  The hash table is present and valid
-	 * when join_rel_hash is not NULL.  Note that we still maintain the list
-	 * even when using the hash table for lookups; this simplifies life for
-	 * GEQO.
+	 * considered in this planning run.
 	 */
-	List	   *join_rel_list;
-	struct HTAB *join_rel_hash pg_node_attr(read_write_ignore);
+	RelInfoList *join_rel_list; /* list of join-relation RelOptInfos */
+
+	/*
+	 * grouped_rel_list is a list of all grouped-relation RelOptInfos we have
+	 * considered in this planning run.  This is only used by eager
+	 * aggregation.
+	 */
+	RelInfoList *grouped_rel_list;	/* list of grouped-relation RelOptInfos */
 
 	/*
 	 * When doing a dynamic-programming-style join search, join_rel_level[k]
@@ -372,6 +392,15 @@ struct PlannerInfo
 
 	/* list of PlaceHolderInfos */
 	List	   *placeholder_list;
+
+	/* list of AggClauseInfos */
+	List	   *agg_clause_list;
+
+	/* list of GroupExprInfos */
+	List	   *group_expr_list;
+
+	/* list of plain Vars contained in targetlist and havingQual */
+	List	   *tlist_vars;
 
 	/* array of PlaceHolderInfos indexed by phid */
 	struct PlaceHolderInfo **placeholder_array pg_node_attr(read_write_ignore, array_size(placeholder_array_size));
@@ -999,6 +1028,12 @@ typedef struct RelOptInfo
 	bool		consider_partitionwise_join;
 
 	/*
+	 * used by eager aggregation:
+	 */
+	/* information needed to create grouped paths */
+	struct RelAggInfo *agg_info;
+
+	/*
 	 * inheritance links, if this is an otherrel (otherwise NULL):
 	 */
 	/* Immediate parent relation (dumping it would be too verbose) */
@@ -1070,6 +1105,68 @@ typedef struct RelOptInfo
 #define REL_HAS_ALL_PART_PROPS(rel)	\
 	((rel)->part_scheme && (rel)->boundinfo && (rel)->nparts > 0 && \
 	 (rel)->part_rels && (rel)->partexprs && (rel)->nullable_partexprs)
+
+/*
+ * Is the given relation a grouped relation?
+ */
+#define IS_GROUPED_REL(rel) \
+	((rel)->agg_info != NULL)
+
+/*
+ * RelAggInfo
+ *		Information needed to create grouped paths for base and join rels.
+ *
+ * "relids" is the set of relation identifiers (RT indexes).
+ *
+ * "target" is the output tlist for the grouped paths.
+ *
+ * "agg_input" is the output tlist for the paths that provide input to the
+ * grouped paths.  One difference from the reltarget of the non-grouped
+ * relation is that agg_input has its sortgrouprefs[] initialized.
+ *
+ * "grouped_rows" is the estimated number of result tuples of the grouped
+ * relation.
+ *
+ * "group_clauses", "group_exprs" and "group_pathkeys" are lists of
+ * SortGroupClauses, the corresponding grouping expressions and PathKeys
+ * respectively.
+ *
+ * "agg_useful" is a flag to indicate whether the grouped paths are considered
+ * useful.
+ */
+typedef struct RelAggInfo
+{
+	pg_node_attr(no_copy_equal, no_read, no_query_jumble)
+
+	NodeTag		type;
+
+	/* set of base + OJ relids (rangetable indexes) */
+	Relids		relids;
+
+	/*
+	 * default result targetlist for Paths scanning this grouped relation;
+	 * list of Vars/Exprs, cost, width
+	 */
+	struct PathTarget *target;
+
+	/*
+	 * the targetlist for Paths that provide input to the grouped paths
+	 */
+	struct PathTarget *agg_input;
+
+	/* estimated number of result tuples */
+	Cardinality grouped_rows;
+
+	/* a list of SortGroupClauses */
+	List	   *group_clauses;
+	/* a list of grouping expressions */
+	List	   *group_exprs;
+	/* a list of PathKeys */
+	List	   *group_pathkeys;
+
+	/* the grouped paths are considered useful? */
+	bool		agg_useful;
+} RelAggInfo;
 
 /*
  * IndexOptInfo
@@ -3142,6 +3239,41 @@ typedef struct MinMaxAggInfo
 	/* param for subplan's output */
 	Param	   *param;
 } MinMaxAggInfo;
+
+/*
+ * The aggregate expressions that appear in targetlist and having clauses
+ */
+typedef struct AggClauseInfo
+{
+	pg_node_attr(no_read, no_query_jumble)
+
+	NodeTag		type;
+
+	/* the Aggref expr */
+	Aggref	   *aggref;
+
+	/* lowest level we can evaluate this aggregate at */
+	Relids		agg_eval_at;
+} AggClauseInfo;
+
+/*
+ * The grouping expressions that appear in grouping clauses
+ */
+typedef struct GroupExprInfo
+{
+	pg_node_attr(no_read, no_query_jumble)
+
+	NodeTag		type;
+
+	/* the represented expression */
+	Expr	   *expr;
+
+	/* the tleSortGroupRef of the corresponding SortGroupClause */
+	Index		sortgroupref;
+
+	/* btree opfamily defining the ordering */
+	Oid			btree_opfamily;
+} GroupExprInfo;
 
 /*
  * At runtime, PARAM_EXEC slots are used to pass values around from one plan

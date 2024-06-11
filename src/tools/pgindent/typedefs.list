@@ -41,6 +41,7 @@ AfterTriggersTableData
 AfterTriggersTransData
 Agg
 AggClauseCosts
+AggClauseInfo
 AggInfo
 AggPath
 AggSplit
@@ -1063,6 +1064,7 @@ GrantTargetType
 Group
 GroupByOrdering
 GroupClause
+GroupExprInfo
 GroupPath
 GroupPathExtraData
 GroupResultPath
@@ -1294,7 +1296,6 @@ Join
 JoinCostWorkspace
 JoinDomain
 JoinExpr
-JoinHashEntry
 JoinPath
 JoinPathExtraData
 JoinState
@@ -2374,12 +2375,16 @@ ReindexObjectType
 ReindexParams
 ReindexStmt
 ReindexType
+RelAggInfo
 RelFileLocator
 RelFileLocatorBackend
 RelFileNumber
+RelHashEntry
 RelIdCacheEnt
 RelInfo
 RelInfoArr
+RelInfoList
+RelInfoListInfo
 RelMapFile
 RelMapping
 RelOptInfo

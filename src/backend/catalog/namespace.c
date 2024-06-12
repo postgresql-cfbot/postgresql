@@ -853,6 +853,14 @@ RangeVarAdjustRelationPersistence(RangeVar *newRelation, Oid nspid)
 						(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 						 errmsg("cannot create relations in temporary schemas of other sessions")));
 			break;
+		case RELPERSISTENCE_INVALID:	/* persistence not specified by grammar */
+			if (isTempOrTempToastNamespace(nspid))
+				newRelation->relpersistence = RELPERSISTENCE_TEMP;
+			else if (isAnyTempNamespace(nspid))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+						 errmsg("only temporary relations may be created in temporary schemas")));
+			break;
 		default:
 			if (isAnyTempNamespace(nspid))
 				ereport(ERROR,

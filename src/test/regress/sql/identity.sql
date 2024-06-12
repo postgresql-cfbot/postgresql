@@ -214,6 +214,12 @@ SELECT seqtypid::regtype FROM pg_sequence WHERE seqrelid = 'itest3_a_seq'::regcl
 
 ALTER TABLE itest3 ALTER COLUMN a TYPE text;  -- error
 
+-- check that LOGGED propagates to sequence (for grammar)
+CREATE LOGGED TABLE itest16 (a int NOT NULL, b text);
+ALTER TABLE itest16 ALTER COLUMN a ADD GENERATED ALWAYS AS IDENTITY;
+\d itest16_a_seq
+DROP TABLE itest16;
+
 -- check that unlogged propagates to sequence
 CREATE UNLOGGED TABLE itest17 (a int NOT NULL, b text);
 ALTER TABLE itest17 ALTER COLUMN a ADD GENERATED ALWAYS AS IDENTITY;

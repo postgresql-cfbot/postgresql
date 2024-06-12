@@ -271,6 +271,11 @@ DROP SEQUENCE seq2;
 -- should fail
 SELECT lastval();
 
+-- logged sequences (for grammar)
+CREATE LOGGED SEQUENCE sequence_test_logged;
+\d sequence_test_logged
+DROP SEQUENCE sequence_test_logged;
+
 -- unlogged sequences
 -- (more tests in src/test/recovery/)
 CREATE UNLOGGED SEQUENCE sequence_test_unlogged;

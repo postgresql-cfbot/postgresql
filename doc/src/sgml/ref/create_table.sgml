@@ -21,7 +21,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXISTS ] <replaceable class="parameter">table_name</replaceable> ( [
+CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | LOGGED | UNLOGGED ] TABLE [ IF NOT EXISTS ] <replaceable class="parameter">table_name</replaceable> ( [
   { <replaceable class="parameter">column_name</replaceable> <replaceable class="parameter">data_type</replaceable> [ STORAGE { PLAIN | EXTERNAL | EXTENDED | MAIN | DEFAULT } ] [ COMPRESSION <replaceable>compression_method</replaceable> ] [ COLLATE <replaceable>collation</replaceable> ] [ <replaceable class="parameter">column_constraint</replaceable> [ ... ] ]
     | <replaceable>table_constraint</replaceable>
     | LIKE <replaceable>source_table</replaceable> [ <replaceable>like_option</replaceable> ... ] }
@@ -34,7 +34,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
 [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
 [ TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ]
 
-CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXISTS ] <replaceable class="parameter">table_name</replaceable>
+CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | LOGGED | UNLOGGED ] TABLE [ IF NOT EXISTS ] <replaceable class="parameter">table_name</replaceable>
     OF <replaceable class="parameter">type_name</replaceable> [ (
   { <replaceable class="parameter">column_name</replaceable> [ WITH OPTIONS ] [ <replaceable class="parameter">column_constraint</replaceable> [ ... ] ]
     | <replaceable>table_constraint</replaceable> }
@@ -46,7 +46,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
 [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
 [ TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ]
 
-CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXISTS ] <replaceable class="parameter">table_name</replaceable>
+CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | LOGGED | UNLOGGED ] TABLE [ IF NOT EXISTS ] <replaceable class="parameter">table_name</replaceable>
     PARTITION OF <replaceable class="parameter">parent_table</replaceable> [ (
   { <replaceable class="parameter">column_name</replaceable> [ WITH OPTIONS ] [ <replaceable class="parameter">column_constraint</replaceable> [ ... ] ]
     | <replaceable>table_constraint</replaceable> }
@@ -198,6 +198,27 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       This presently makes no difference in <productname>PostgreSQL</productname>
       and is deprecated; see
       <xref linkend="sql-createtable-compatibility"/> below.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-createtable-logged">
+    <term><literal>LOGGED</literal></term>
+    <listitem>
+     <para>
+      If specified, the table is created as an permanent table.  Data written
+      to permanent tables is written to the write-ahead log (see
+      <xref linkend="wal"/>).
+     </para>
+
+     <para>
+      If this is specified, any sequences created together with the permanent
+      table (for identity or serial columns) are also created as permanent.
+     </para>
+
+     <para>
+      When applied to a partitioned table, newly-created partitions and
+      their objects (sequences and indexes) will inherit this property.
      </para>
     </listitem>
    </varlistentry>

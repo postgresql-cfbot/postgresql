@@ -162,6 +162,13 @@ DefineSequence(ParseState *pstate, CreateSeqStmt *seq)
 		}
 	}
 
+	/*
+	 * If the grammar did not specify a relpersistence, assume that the
+	 * relation is permanent.
+	 */
+	if (seq->sequence->relpersistence == RELPERSISTENCE_INVALID)
+		seq->sequence->relpersistence = RELPERSISTENCE_PERMANENT;
+
 	/* Check and set all option values */
 	init_params(pstate, seq->options, seq->for_identity, true,
 				&seqform, &seqdataform,

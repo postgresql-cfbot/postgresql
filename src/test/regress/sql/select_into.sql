@@ -136,3 +136,16 @@ EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
 EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
   CREATE TABLE IF NOT EXISTS ctas_ine_tbl AS EXECUTE ctas_ine_query; -- ok
 DROP TABLE ctas_ine_tbl;
+
+-- CREATE TABLE AS with LOGGED and UNLOGGED.
+CREATE UNLOGGED TABLE ctas_unlogged_tbl AS SELECT 1 AS a;
+\d ctas_unlogged_tbl
+CREATE LOGGED TABLE ctas_logged_tbl AS SELECT 1 AS a;
+\d ctas_logged_tbl
+DROP TABLE ctas_logged_tbl, ctas_unlogged_tbl;
+-- SELECT INTO with LOGGED and UNLOGGED.
+SELECT 1 AS a INTO UNLOGGED ctas_unlogged_tbl;
+\d ctas_unlogged_tbl
+SELECT 1 AS a INTO LOGGED ctas_logged_tbl;
+\d ctas_logged_tbl
+DROP TABLE ctas_logged_tbl, ctas_unlogged_tbl;

@@ -175,6 +175,7 @@ MAKE_SYSCACHE(RELNAMENSP, pg_class_relname_nsp_index, 128);
 #define		  RELPERSISTENCE_PERMANENT	'p' /* regular table */
 #define		  RELPERSISTENCE_UNLOGGED	'u' /* unlogged permanent table */
 #define		  RELPERSISTENCE_TEMP		't' /* temporary table */
+#define		  RELPERSISTENCE_INVALID	'\0'	/* persistence not allowed */
 
 /* default selection for replica identity (primary key or nothing) */
 #define		  REPLICA_IDENTITY_DEFAULT	'd'

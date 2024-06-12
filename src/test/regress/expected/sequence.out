@@ -599,6 +599,15 @@ DROP SEQUENCE seq2;
 -- should fail
 SELECT lastval();
 ERROR:  lastval is not yet defined in this session
+-- logged sequences (for grammar)
+CREATE LOGGED SEQUENCE sequence_test_logged;
+\d sequence_test_logged
+                    Sequence "public.sequence_test_logged"
+  Type  | Start | Minimum |       Maximum       | Increment | Cycles? | Cache 
+--------+-------+---------+---------------------+-----------+---------+-------
+ bigint |     1 |       1 | 9223372036854775807 |         1 | no      |     1
+
+DROP SEQUENCE sequence_test_logged;
 -- unlogged sequences
 -- (more tests in src/test/recovery/)
 CREATE UNLOGGED SEQUENCE sequence_test_unlogged;

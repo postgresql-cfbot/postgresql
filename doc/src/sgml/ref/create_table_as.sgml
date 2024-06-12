@@ -21,7 +21,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXISTS ] <replaceable>table_name</replaceable>
+CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | LOGGED | UNLOGGED ] TABLE [ IF NOT EXISTS ] <replaceable>table_name</replaceable>
     [ (<replaceable>column_name</replaceable> [, ...] ) ]
     [ USING <replaceable class="parameter">method</replaceable> ]
     [ WITH ( <replaceable class="parameter">storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) | WITHOUT OIDS ]
@@ -81,6 +81,16 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
     <listitem>
      <para>
       If specified, the table is created as a temporary table.
+      Refer to <xref linkend="sql-createtable"/> for details.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>LOGGED</literal></term>
+    <listitem>
+     <para>
+      If specified, the table is created as a permanent table.
       Refer to <xref linkend="sql-createtable"/> for details.
      </para>
     </listitem>

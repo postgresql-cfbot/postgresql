@@ -239,6 +239,13 @@ ExecCreateTableAs(ParseState *pstate, CreateTableAsStmt *stmt,
 		return InvalidObjectAddress;
 
 	/*
+	 * If the grammar did not specify a relpersistence, assume that the
+	 * relation is permanent.
+	 */
+	if (into->rel->relpersistence == RELPERSISTENCE_INVALID)
+		into->rel->relpersistence = RELPERSISTENCE_PERMANENT;
+
+	/*
 	 * Create the tuple receiver object and insert info it will need
 	 */
 	dest = CreateIntoRelDestReceiver(into);

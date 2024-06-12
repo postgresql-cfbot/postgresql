@@ -21,7 +21,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-CREATE [ { TEMPORARY | TEMP } | UNLOGGED ] SEQUENCE [ IF NOT EXISTS ] <replaceable class="parameter">name</replaceable>
+CREATE [ { TEMPORARY | TEMP } | LOGGED | UNLOGGED ] SEQUENCE [ IF NOT EXISTS ] <replaceable class="parameter">name</replaceable>
     [ AS <replaceable class="parameter">data_type</replaceable> ]
     [ INCREMENT [ BY ] <replaceable class="parameter">increment</replaceable> ]
     [ MINVALUE <replaceable class="parameter">minvalue</replaceable> | NO MINVALUE ] [ MAXVALUE <replaceable class="parameter">maxvalue</replaceable> | NO MAXVALUE ]
@@ -88,6 +88,16 @@ SELECT * FROM <replaceable>name</replaceable>;
       permanent sequences with the same name are not visible (in this
       session) while the temporary sequence exists, unless they are
       referenced with schema-qualified names.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>LOGGED</literal></term>
+    <listitem>
+     <para>
+      If specified, the sequence is created as an permanent sequence.  Changes
+      to permanent sequences are written to the write-ahead log.
      </para>
     </listitem>
    </varlistentry>

@@ -389,6 +389,13 @@ DefineView(ViewStmt *stmt, const char *queryString,
 		elog(ERROR, "unexpected parse analysis result");
 
 	/*
+	 * If the grammar did not specify a relpersistence, assume that the
+	 * relation is permanent.
+	 */
+	if (stmt->view->relpersistence == RELPERSISTENCE_INVALID)
+		stmt->view->relpersistence = RELPERSISTENCE_PERMANENT;
+
+	/*
 	 * Check for unsupported cases.  These tests are redundant with ones in
 	 * DefineQueryRewrite(), but that function will complain about a bogus ON
 	 * SELECT rule, and we'd rather the message complain about a view.

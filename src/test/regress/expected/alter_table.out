@@ -3613,6 +3613,157 @@ ALTER TABLE logged1 SET UNLOGGED; -- silently do nothing
 DROP TABLE logged3;
 DROP TABLE logged2;
 DROP TABLE logged1;
+-- SET LOGGED/UNLOGGED with partitioned tables
+CREATE TABLE logged_part_1(f1 SERIAL PRIMARY KEY)
+  PARTITION BY LIST (f1); -- has sequence, index
+CREATE TABLE logged_part_2(f1 SERIAL PRIMARY KEY, f2 INTEGER REFERENCES logged_part_1)
+  PARTITION BY LIST (f1); -- foreign key
+CREATE TABLE logged_part_3(f1 SERIAL PRIMARY KEY, f2 INTEGER REFERENCES logged_part_3)
+  PARTITION BY LIST (f1); -- self-referencing foreign key
+-- Check relpersistence of all the objects created.
+SELECT relname, relpersistence FROM pg_class WHERE relname ~ '^logged_part'
+  ORDER BY relname;
+       relname        | relpersistence 
+----------------------+----------------
+ logged_part_1        | p
+ logged_part_1_f1_seq | p
+ logged_part_1_pkey   | p
+ logged_part_2        | p
+ logged_part_2_f1_seq | p
+ logged_part_2_pkey   | p
+ logged_part_3        | p
+ logged_part_3_f1_seq | p
+ logged_part_3_pkey   | p
+(9 rows)
+
+ALTER TABLE logged_part_1 SET UNLOGGED; -- fails as a foreign-key exists
+ERROR:  could not change table "logged_part_1" to unlogged because it references logged table "logged_part_2"
+ALTER TABLE logged_part_2 SET UNLOGGED;
+ALTER TABLE logged_part_3 SET UNLOGGED; -- skip self-referencing foreign key
+-- Re-check relpersistence of all the objects created.
+SELECT relname, relpersistence FROM pg_class WHERE relname ~ '^logged_part'
+  ORDER BY relname;
+       relname        | relpersistence 
+----------------------+----------------
+ logged_part_1        | p
+ logged_part_1_f1_seq | p
+ logged_part_1_pkey   | p
+ logged_part_2        | u
+ logged_part_2_f1_seq | u
+ logged_part_2_pkey   | u
+ logged_part_3        | u
+ logged_part_3_f1_seq | u
+ logged_part_3_pkey   | u
+(9 rows)
+
+ALTER TABLE logged_part_1 SET LOGGED; -- no-op
+ALTER TABLE logged_part_2 SET LOGGED;
+ALTER TABLE logged_part_3 SET LOGGED; -- skip self-referencing foreign key
+SELECT relname, relpersistence FROM pg_class WHERE relname ~ '^logged_part_[2|3]'
+  ORDER BY relname;
+       relname        | relpersistence 
+----------------------+----------------
+ logged_part_2        | p
+ logged_part_2_f1_seq | p
+ logged_part_2_pkey   | p
+ logged_part_3        | p
+ logged_part_3_f1_seq | p
+ logged_part_3_pkey   | p
+(6 rows)
+
+-- Partitions
+CREATE TABLE logged_part_2_1 PARTITION OF logged_part_2
+  FOR VALUES IN (1); -- permanent, inherited
+CREATE UNLOGGED TABLE logged_part_2_2 PARTITION OF logged_part_2
+  FOR VALUES IN (2); -- unlogged, not inherited
+ALTER TABLE logged_part_2 SET UNLOGGED;
+CREATE TABLE logged_part_2_3 PARTITION OF logged_part_2
+  FOR VALUES IN (3); -- unlogged, inherited
+CREATE LOGGED TABLE logged_part_2_4 PARTITION OF logged_part_2
+  FOR VALUES IN (4); -- logged, not inherited
+-- Partitions of partitions
+CREATE TABLE logged_part_2_56 PARTITION OF logged_part_2
+  FOR VALUES IN (5, 6) PARTITION BY LIST(f1);
+CREATE TABLE logged_part_2_5 PARTITION OF logged_part_2_56
+  FOR VALUES IN (5); -- unlogged, inherited
+CREATE LOGGED TABLE logged_part_2_6 PARTITION OF logged_part_2_56
+  FOR VALUES IN (6); -- logged, not inherited
+SELECT relname, relpersistence FROM pg_class WHERE relname ~ '^logged_part_2'
+  ORDER BY relname;
+        relname        | relpersistence 
+-----------------------+----------------
+ logged_part_2         | u
+ logged_part_2_1       | u
+ logged_part_2_1_pkey  | u
+ logged_part_2_2       | u
+ logged_part_2_2_pkey  | u
+ logged_part_2_3       | u
+ logged_part_2_3_pkey  | u
+ logged_part_2_4       | p
+ logged_part_2_4_pkey  | p
+ logged_part_2_5       | u
+ logged_part_2_56      | u
+ logged_part_2_56_pkey | u
+ logged_part_2_5_pkey  | u
+ logged_part_2_6       | p
+ logged_part_2_6_pkey  | p
+ logged_part_2_f1_seq  | u
+ logged_part_2_pkey    | u
+(17 rows)
+
+-- All partitions are logged.
+ALTER TABLE logged_part_2 SET LOGGED;
+SELECT relname, relpersistence FROM pg_class WHERE relname ~ '^logged_part_2'
+  ORDER BY relname;
+        relname        | relpersistence 
+-----------------------+----------------
+ logged_part_2         | p
+ logged_part_2_1       | p
+ logged_part_2_1_pkey  | p
+ logged_part_2_2       | p
+ logged_part_2_2_pkey  | p
+ logged_part_2_3       | p
+ logged_part_2_3_pkey  | p
+ logged_part_2_4       | p
+ logged_part_2_4_pkey  | p
+ logged_part_2_5       | p
+ logged_part_2_56      | p
+ logged_part_2_56_pkey | p
+ logged_part_2_5_pkey  | p
+ logged_part_2_6       | p
+ logged_part_2_6_pkey  | p
+ logged_part_2_f1_seq  | p
+ logged_part_2_pkey    | p
+(17 rows)
+
+-- Only the partitioned partition is unlogged.
+ALTER TABLE ONLY logged_part_2_56 SET UNLOGGED;
+SELECT relname, relpersistence FROM pg_class WHERE relname ~ '^logged_part_2'
+  ORDER BY relname;
+        relname        | relpersistence 
+-----------------------+----------------
+ logged_part_2         | p
+ logged_part_2_1       | p
+ logged_part_2_1_pkey  | p
+ logged_part_2_2       | p
+ logged_part_2_2_pkey  | p
+ logged_part_2_3       | p
+ logged_part_2_3_pkey  | p
+ logged_part_2_4       | p
+ logged_part_2_4_pkey  | p
+ logged_part_2_5       | p
+ logged_part_2_56      | u
+ logged_part_2_56_pkey | u
+ logged_part_2_5_pkey  | p
+ logged_part_2_6       | p
+ logged_part_2_6_pkey  | p
+ logged_part_2_f1_seq  | p
+ logged_part_2_pkey    | p
+(17 rows)
+
+DROP TABLE logged_part_3;
+DROP TABLE logged_part_2;
+DROP TABLE logged_part_1;
 -- test ADD COLUMN IF NOT EXISTS
 CREATE TABLE test_add_column(c1 integer);
 \d test_add_column

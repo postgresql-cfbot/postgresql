@@ -20,6 +20,7 @@
 #include "postgres.h"
 
 #include "access/brin_tuple.h"
+#include "access/gin_tuple.h"
 #include "access/hash.h"
 #include "access/htup_details.h"
 #include "access/nbtree.h"
@@ -46,6 +47,8 @@ static void removeabbrev_index(Tuplesortstate *state, SortTuple *stups,
 							   int count);
 static void removeabbrev_index_brin(Tuplesortstate *state, SortTuple *stups,
 									int count);
+static void removeabbrev_index_gin(Tuplesortstate *state, SortTuple *stups,
+								   int count);
 static void removeabbrev_datum(Tuplesortstate *state, SortTuple *stups,
 							   int count);
 static int	comparetup_heap(const SortTuple *a, const SortTuple *b,
@@ -74,6 +77,8 @@ static int	comparetup_index_hash_tiebreak(const SortTuple *a, const SortTuple *b
 										   Tuplesortstate *state);
 static int	comparetup_index_brin(const SortTuple *a, const SortTuple *b,
 								  Tuplesortstate *state);
+static int	comparetup_index_gin(const SortTuple *a, const SortTuple *b,
+								 Tuplesortstate *state);
 static void writetup_index(Tuplesortstate *state, LogicalTape *tape,
 						   SortTuple *stup);
 static void readtup_index(Tuplesortstate *state, SortTuple *stup,
@@ -82,6 +87,10 @@ static void writetup_index_brin(Tuplesortstate *state, LogicalTape *tape,
 								SortTuple *stup);
 static void readtup_index_brin(Tuplesortstate *state, SortTuple *stup,
 							   LogicalTape *tape, unsigned int len);
+static void writetup_index_gin(Tuplesortstate *state, LogicalTape *tape,
+							   SortTuple *stup);
+static void readtup_index_gin(Tuplesortstate *state, SortTuple *stup,
+							  LogicalTape *tape, unsigned int len);
 static int	comparetup_datum(const SortTuple *a, const SortTuple *b,
 							 Tuplesortstate *state);
 static int	comparetup_datum_tiebreak(const SortTuple *a, const SortTuple *b,
@@ -580,6 +589,35 @@ tuplesort_begin_index_brin(int workMem,
 	return state;
 }
 
+
+Tuplesortstate *
+tuplesort_begin_index_gin(int workMem, SortCoordinate coordinate,
+						  int sortopt)
+{
+	Tuplesortstate *state = tuplesort_begin_common(workMem, coordinate,
+												   sortopt);
+	TuplesortPublic *base = TuplesortstateGetPublic(state);
+
+#ifdef TRACE_SORT
+	if (trace_sort)
+		elog(LOG,
+			 "begin index sort: workMem = %d, randomAccess = %c",
+			 workMem,
+			 sortopt & TUPLESORT_RANDOMACCESS ? 't' : 'f');
+#endif
+
+	base->nKeys = 1;			/* Only the index key */
+
+	base->removeabbrev = removeabbrev_index_gin;
+	base->comparetup = comparetup_index_gin;
+	base->writetup = writetup_index_gin;
+	base->readtup = readtup_index_gin;
+	base->haveDatum1 = false;
+	base->arg = NULL;
+
+	return state;
+}
+
 Tuplesortstate *
 tuplesort_begin_datum(Oid datumType, Oid sortOperator, Oid sortCollation,
 					  bool nullsFirstFlag, int workMem,
@@ -817,6 +855,37 @@ tuplesort_putbrintuple(Tuplesortstate *state, BrinTuple *tuple, Size size)
 	MemoryContextSwitchTo(oldcontext);
 }
 
+void
+tuplesort_putgintuple(Tuplesortstate *state, GinTuple *tup, Size size)
+{
+	SortTuple	stup;
+	GinTuple   *ctup;
+	TuplesortPublic *base = TuplesortstateGetPublic(state);
+	MemoryContext oldcontext = MemoryContextSwitchTo(base->tuplecontext);
+	Size		tuplen;
+
+	/* copy the GinTuple into the right memory context */
+	ctup = palloc(size);
+	memcpy(ctup, tup, size);
+
+	stup.tuple = ctup;
+	stup.datum1 = (Datum) 0;
+	stup.isnull1 = false;
+
+	/* GetMemoryChunkSpace is not supported for bump contexts */
+	if (TupleSortUseBumpTupleCxt(base->sortopt))
+		tuplen = MAXALIGN(size);
+	else
+		tuplen = GetMemoryChunkSpace(ctup);
+
+	tuplesort_puttuple_common(state, &stup,
+							  base->sortKeys &&
+							  base->sortKeys->abbrev_converter &&
+							  !stup.isnull1, tuplen);
+
+	MemoryContextSwitchTo(oldcontext);
+}
+
 /*
  * Accept one Datum while collecting input data for sort.
  *
@@ -987,6 +1056,29 @@ tuplesort_getbrintuple(Tuplesortstate *state, Size *len, bool forward)
 	*len = btup->tuplen;
 
 	return &btup->tuple;
+}
+
+GinTuple *
+tuplesort_getgintuple(Tuplesortstate *state, Size *len, bool forward)
+{
+	TuplesortPublic *base = TuplesortstateGetPublic(state);
+	MemoryContext oldcontext = MemoryContextSwitchTo(base->sortcontext);
+	SortTuple	stup;
+	GinTuple   *tup;
+
+	if (!tuplesort_gettuple_common(state, forward, &stup))
+		stup.tuple = NULL;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	if (!stup.tuple)
+		return false;
+
+	tup = (GinTuple *) stup.tuple;
+
+	*len = tup->tuplen;
+
+	return tup;
 }
 
 /*
@@ -1776,6 +1868,68 @@ readtup_index_brin(Tuplesortstate *state, SortTuple *stup,
 	/* set up first-column key value, which is block number */
 	stup->datum1 = tuple->tuple.bt_blkno;
 }
+
+
+/*
+ * Routines specialized for GIN case
+ */
+
+static void
+removeabbrev_index_gin(Tuplesortstate *state, SortTuple *stups, int count)
+{
+	Assert(false);
+	elog(ERROR, "removeabbrev_index_gin not implemented");
+}
+
+static int
+comparetup_index_gin(const SortTuple *a, const SortTuple *b,
+					 Tuplesortstate *state)
+{
+	Assert(!TuplesortstateGetPublic(state)->haveDatum1);
+
+	return _gin_compare_tuples((GinTuple *) a->tuple,
+							   (GinTuple *) b->tuple);
+}
+
+static void
+writetup_index_gin(Tuplesortstate *state, LogicalTape *tape, SortTuple *stup)
+{
+	TuplesortPublic *base = TuplesortstateGetPublic(state);
+	GinTuple   *tuple = (GinTuple *) stup->tuple;
+	unsigned int tuplen = tuple->tuplen;
+
+	tuplen = tuplen + sizeof(tuplen);
+	LogicalTapeWrite(tape, &tuplen, sizeof(tuplen));
+	LogicalTapeWrite(tape, tuple, tuple->tuplen);
+	if (base->sortopt & TUPLESORT_RANDOMACCESS) /* need trailing length word? */
+		LogicalTapeWrite(tape, &tuplen, sizeof(tuplen));
+}
+
+static void
+readtup_index_gin(Tuplesortstate *state, SortTuple *stup,
+				  LogicalTape *tape, unsigned int len)
+{
+	GinTuple   *tuple;
+	TuplesortPublic *base = TuplesortstateGetPublic(state);
+	unsigned int tuplen = len - sizeof(unsigned int);
+
+	/*
+	 * Allocate space for the GIN sort tuple, which already has the proper
+	 * length included in the header.
+	 */
+	tuple = (GinTuple *) tuplesort_readtup_alloc(state, tuplen);
+
+	tuple->tuplen = tuplen;
+
+	LogicalTapeReadExact(tape, tuple, tuplen);
+	if (base->sortopt & TUPLESORT_RANDOMACCESS) /* need trailing length word? */
+		LogicalTapeReadExact(tape, &tuplen, sizeof(tuplen));
+	stup->tuple = (void *) tuple;
+
+	/* no abbreviations (FIXME maybe use attrnum for this?) */
+	stup->datum1 = (Datum) 0;
+}
+
 
 /*
  * Routines specialized for DatumTuple case

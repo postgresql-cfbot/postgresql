@@ -154,6 +154,13 @@ ginInsertBAEntry(BuildAccumulator *accum,
 	bool		isNew;
 
 	/*
+	 * FIXME prevents writes of uninitialized bytes reported by valgrind in
+	 * writetup (likely that build_gin_tuple copies some fields that are only
+	 * initialized for a certain category, or something similar)
+	 */
+	memset(&eatmp, 0, sizeof(GinEntryAccumulator));
+
+	/*
 	 * For the moment, fill only the fields of eatmp that will be looked at by
 	 * cmpEntryAccumulator or ginCombineData.
 	 */

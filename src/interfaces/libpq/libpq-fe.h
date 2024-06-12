@@ -202,6 +202,9 @@ typedef struct pgNotify
 	struct pgNotify *next;		/* list link */
 } PGnotify;
 
+/* pg_usec_time_t is like time_t, but with microsecond resolution */
+typedef pg_int64 pg_usec_time_t;
+
 /* Function types for notice-handling callbacks */
 typedef void (*PQnoticeReceiver) (void *arg, const PGresult *res);
 typedef void (*PQnoticeProcessor) (void *arg, const char *message);
@@ -673,7 +676,11 @@ extern int	lo_export(PGconn *conn, Oid lobjId, const char *filename);
 extern int	PQlibVersion(void);
 
 /* Poll a socket for reading and/or writing with an optional timeout */
-extern int	PQsocketPoll(int sock, int forRead, int forWrite, time_t end_time);
+extern int	PQsocketPoll(int sock, int forRead, int forWrite,
+						 pg_usec_time_t end_time);
+
+/* Get current time in the form PQsocketPoll wants */
+extern pg_usec_time_t PQgetCurrentTimeUSec(void);
 
 /* Determine length of multibyte encoded char at *s */
 extern int	PQmblen(const char *s, int encoding);

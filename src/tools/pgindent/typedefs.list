@@ -2230,6 +2230,7 @@ ProjectSetState
 ProjectionInfo
 ProjectionPath
 PromptInterruptContext
+ProtocolParameter
 ProtocolVersion
 PrsStorage
 PruneFreezeResult
@@ -3695,6 +3696,7 @@ pg_mb_radix_tree
 pg_md5_ctx
 pg_on_exit_callback
 pg_prng_state
+pg_protocol_parameter
 pg_re_flags
 pg_saslprep_rc
 pg_sha1_ctx

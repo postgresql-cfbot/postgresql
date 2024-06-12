@@ -328,7 +328,8 @@ typedef enum
 	PGQUERY_PREPARE,			/* Parse only (PQprepare) */
 	PGQUERY_DESCRIBE,			/* Describe Statement or Portal */
 	PGQUERY_SYNC,				/* Sync (at end of a pipeline) */
-	PGQUERY_CLOSE				/* Close Statement or Portal */
+	PGQUERY_CLOSE,				/* Close Statement or Portal */
+	PGQUERY_SET_PROTOCOL_PARAMETER, /* Set a protocol parameter */
 } PGQueryClass;
 
 /*
@@ -415,6 +416,9 @@ struct pg_conn
 	char	   *target_session_attrs;	/* desired session properties */
 	char	   *require_auth;	/* name of the expected auth method */
 	char	   *load_balance_hosts; /* load balance over hosts */
+	char	   *max_protocol_version;	/* maximum used protocol version */
+	char	   *c_report_parameters;	/* report_parameters value from the
+										 * connection string */
 
 	bool		cancelRequest;	/* true if this connection is used to send a
 								 * cancel request, instead of being a normal
@@ -475,6 +479,11 @@ struct pg_conn
 	SockAddr	laddr;			/* Local address */
 	SockAddr	raddr;			/* Remote address */
 	ProtocolVersion pversion;	/* FE/BE protocol version in use */
+	char	   *report_parameters;	/* report_parameters value of the server,
+									 * NULL if not supported */
+	char	   *report_parameters_support;	/* report_parameters server
+											 * support string, NULL if not
+											 * supported */
 	int			sversion;		/* server version, e.g. 70401 for 7.4.1 */
 	bool		auth_req_received;	/* true if any type of auth req received */
 	bool		password_needed;	/* true if server demanded a password */
@@ -503,6 +512,7 @@ struct pg_conn
 	AddrInfo   *addr;			/* the array of addresses for the currently
 								 * tried host */
 	bool		send_appname;	/* okay to send application_name? */
+	ProtocolVersion max_pversion;	/* protocol version to request */
 
 	/* Miscellaneous stuff */
 	int			be_pid;			/* PID of backend --- needed for cancels */
@@ -637,6 +647,24 @@ struct pg_conn
 	PQExpBufferData workBuffer; /* expansible string */
 };
 
+typedef struct pg_protocol_parameter
+{
+	const char *name;
+	const char *default_value;
+
+	/*
+	 * Offset of the "connection string value" string in the connection
+	 * structure
+	 */
+	off_t		conn_connection_string_value_offset;
+	/* Offset of the "server value" in the connection structure */
+	off_t		conn_server_value_offset;
+	/* Offset of the "server support string" in the connection structure */
+	off_t		conn_server_support_offset;
+} pg_protocol_parameter;
+
+extern const struct pg_protocol_parameter KnownProtocolParameters[];
+
 
 /* String descriptions of the ExecStatusTypes.
  * direct use of this array is deprecated; call PQresStatus() instead.
@@ -721,6 +749,7 @@ extern int	pqGetErrorNotice3(PGconn *conn, bool isError);
 extern void pqBuildErrorMessage3(PQExpBuffer msg, const PGresult *res,
 								 PGVerbosity verbosity, PGContextVisibility show_context);
 extern int	pqGetNegotiateProtocolVersion3(PGconn *conn);
+extern int	pqGetNegotiateProtocolParameter(PGconn *conn);
 extern int	pqGetCopyData3(PGconn *conn, char **buffer, int async);
 extern int	pqGetline3(PGconn *conn, char *s, int maxlen);
 extern int	pqGetlineAsync3(PGconn *conn, char *buffer, int bufsize);

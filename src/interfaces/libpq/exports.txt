@@ -204,3 +204,7 @@ PQcancelReset             201
 PQcancelFinish            202
 PQsocketPoll              203
 PQsetChunkedRowsMode      204
+PQsetReportParameters     205
+PQsendSetReportParameters 206
+PQreportParameters        207
+PQreportParametersSupport 208

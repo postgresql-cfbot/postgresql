@@ -27,7 +27,8 @@ OBJS = \
 	pqcomm.o \
 	pqformat.o \
 	pqmq.o \
-	pqsignal.o
+	pqsignal.o \
+	protocol-parameters.o
 
 ifeq ($(with_ssl),openssl)
 OBJS += be-secure-openssl.o

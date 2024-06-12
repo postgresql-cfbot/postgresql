@@ -35,6 +35,7 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_parameter_acl.h"
 #include "guc_internal.h"
+#include "libpq/libpq-be.h"
 #include "libpq/pqformat.h"
 #include "libpq/protocol.h"
 #include "miscadmin.h"
@@ -50,6 +51,7 @@
 #include "utils/guc_tables.h"
 #include "utils/memutils.h"
 #include "utils/timestamp.h"
+#include "utils/varlena.h"
 
 
 #define CONFIG_FILENAME "postgresql.conf"
@@ -228,7 +230,8 @@ static slist_head guc_stack_list;	/* list of variables that have non-NULL
 static slist_head guc_report_list;	/* list of variables that have the
 									 * GUC_NEEDS_REPORT bit set in status */
 
-static bool reporting_enabled;	/* true to enable GUC_REPORT */
+static bool reporting_enabled;	/* true to enable GUC_REPORT and
+								 * GUC_REPORT_DYNAMIC */
 
 static int	GUCNestLevel = 0;	/* 1 when in main transaction */
 
@@ -2094,7 +2097,7 @@ ResetAllOptions(void)
 		gconf->scontext = gconf->reset_scontext;
 		gconf->srole = gconf->reset_srole;
 
-		if ((gconf->flags & GUC_REPORT) && !(gconf->status & GUC_NEEDS_REPORT))
+		if ((gconf->flags & (GUC_REPORT | GUC_REPORT_DYNAMIC)) && !(gconf->status & GUC_NEEDS_REPORT))
 		{
 			gconf->status |= GUC_NEEDS_REPORT;
 			slist_push_head(&guc_report_list, &gconf->report_link);
@@ -2526,7 +2529,7 @@ AtEOXact_GUC(bool isCommit, int nestLevel)
 			pfree(stack);
 
 			/* Report new value if we changed it */
-			if (changed && (gconf->flags & GUC_REPORT) &&
+			if (changed && (gconf->flags & (GUC_REPORT | GUC_REPORT_DYNAMIC)) &&
 				!(gconf->status & GUC_NEEDS_REPORT))
 			{
 				gconf->status |= GUC_NEEDS_REPORT;
@@ -2576,7 +2579,7 @@ BeginReportingGUCOptions(void)
 	{
 		struct config_generic *conf = hentry->gucvar;
 
-		if (conf->flags & GUC_REPORT)
+		if (conf->flags & (GUC_REPORT | GUC_REPORT_DYNAMIC))
 			ReportGUCOption(conf);
 	}
 }
@@ -2619,8 +2622,16 @@ ReportChangedGUCOptions(void)
 		struct config_generic *conf = slist_container(struct config_generic,
 													  report_link, iter.cur);
 
-		Assert((conf->flags & GUC_REPORT) && (conf->status & GUC_NEEDS_REPORT));
-		ReportGUCOption(conf);
+		Assert(conf->status & GUC_NEEDS_REPORT);
+
+		/*
+		 * The GUC_REPORT or GUC_REPORT_DYNAMIC is usually set if we reach
+		 * here, but it's possible that GUC_REPORT_DYNAMIC was cleared just
+		 * before due to a change in the value of report_parameter.
+		 */
+		if (conf->flags & (GUC_REPORT | GUC_REPORT_DYNAMIC))
+			ReportGUCOption(conf);
+
 		conf->status &= ~GUC_NEEDS_REPORT;
 		slist_delete_current(&iter);
 	}
@@ -4218,7 +4229,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 			}
 	}
 
-	if (changeVal && (record->flags & GUC_REPORT) &&
+	if (changeVal && (record->flags & (GUC_REPORT | GUC_REPORT_DYNAMIC)) &&
 		!(record->status & GUC_NEEDS_REPORT))
 	{
 		record->status |= GUC_NEEDS_REPORT;
@@ -6938,4 +6949,88 @@ call_enum_check_hook(struct config_enum *conf, int *newval, void **extra,
 	}
 
 	return true;
+}
+
+/*
+ * GUC check_hook for report_parameters
+ */
+const char *
+report_parameters_handler(ProtocolParameter *param, const char *new_value)
+{
+	List	   *old_name_list,
+			   *name_list;
+	char	   *old_protocol_params_str = pstrdup(param->value);
+	char	   *protocol_params_str = pstrdup(new_value);
+	StringInfo	cleaned_value = makeStringInfo();
+
+	if (!SplitIdentifierString(old_protocol_params_str, ',', &old_name_list))
+	{
+		elog(ERROR, "Previous list syntax is invalid.");
+	}
+
+	if (!SplitIdentifierString(protocol_params_str, ',', &name_list))
+	{
+		ereport(WARNING,
+				(errmsg("invalid list syntax for \"report_parameters\"")));
+		return NULL;
+	}
+
+	/*
+	 * Filter out the invalid GUCs from the new list and build a new
+	 * normalized string.
+	 */
+	foreach_ptr(char, pname, name_list)
+	{
+		struct config_generic *config = find_option(pname, false, true, ERROR);
+
+		if (!config || config->flags & GUC_SUPERUSER_ONLY)
+			continue;
+		if (cleaned_value->len > 0)
+			appendStringInfoString(cleaned_value, ",");
+		appendStringInfoString(cleaned_value, quote_identifier(config->name));
+	}
+
+	if (!SplitIdentifierString(old_protocol_params_str, ',', &old_name_list))
+	{
+		elog(WARNING, "Normalized string is invalid");
+		return NULL;
+	}
+
+	/*
+	 * First reset the flags for the previous list
+	 */
+	foreach_ptr(char, pname, old_name_list)
+	{
+		struct config_generic *config = find_option(pname, false, true, ERROR);
+
+		if (!config || config->flags & GUC_SUPERUSER_ONLY)
+			continue;
+
+		config->flags &= ~GUC_REPORT_DYNAMIC;
+	}
+
+	/*
+	 * Then apply the flags to the new list
+	 */
+	foreach_ptr(char, pname, name_list)
+	{
+		struct config_generic *config = find_option(pname, false, true, ERROR);
+
+		if (!config || config->flags & GUC_SUPERUSER_ONLY)
+			continue;
+
+		config->flags |= GUC_REPORT_DYNAMIC;
+
+		/* force a report of this GUC */
+		guc_free(config->last_reported);
+		config->last_reported = NULL;
+		if (!(config->status & GUC_NEEDS_REPORT) && IsNormalProcessingMode())
+		{
+			config->status |= GUC_NEEDS_REPORT;
+			slist_push_head(&guc_report_list, &config->report_link);
+		}
+
+	}
+
+	return cleaned_value->data;
 }

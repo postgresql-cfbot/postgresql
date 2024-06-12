@@ -72,6 +72,7 @@
 #include "tcop/tcopprot.h"
 #include "tcop/utility.h"
 #include "utils/guc_hooks.h"
+#include "utils/guc_tables.h"
 #include "utils/injection_point.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
@@ -416,6 +417,20 @@ SocketBackend(StringInfo inBuf)
 			maxmsglen = PQ_SMALL_MESSAGE_LIMIT;
 			doing_extended_query_message = false;
 			ignore_till_sync = false;
+			break;
+
+		case PqMsg_SetProtocolParameter:
+			maxmsglen = PQ_LARGE_MESSAGE_LIMIT;
+			if (FrontendProtocol < PG_PROTOCOL(3, 2))
+				ereport(FATAL,
+						(errcode(ERRCODE_PROTOCOL_VIOLATION),
+						 errmsg("SetProtocolParameter requires protocol version 3.2 or later, but the connection uses %d.%d",
+								FrontendProtocol >> 16, FrontendProtocol & 0xFFFF)));
+			if (doing_extended_query_message)
+				ereport(FATAL,
+						(errcode(ERRCODE_PROTOCOL_VIOLATION),
+						 errmsg("unexpected SetProtocolParameter message during extended query protocol")));
+			doing_extended_query_message = false;
 			break;
 
 		case PqMsg_Bind:
@@ -4876,6 +4891,22 @@ PostgresMain(const char *dbname, const char *username)
 				finish_xact_command();
 				valgrind_report_error_query("SYNC message");
 				send_ready_for_query = true;
+				break;
+
+			case PqMsg_SetProtocolParameter:
+				{
+					const char *parameter_name;
+					const char *parameter_value;
+
+					forbidden_in_wal_sender(firstchar);
+
+					parameter_name = pq_getmsgstring(&input_message);
+					parameter_value = pq_getmsgstring(&input_message);
+
+					set_protocol_parameter(parameter_name, parameter_value);
+					valgrind_report_error_query("SetProtocolParameter message");
+					send_ready_for_query = true;
+				}
 				break;
 
 				/*

@@ -210,7 +210,7 @@
    appear in <xref linkend="protocol-message-formats"/>.)  There are
    several different sub-protocols depending on the state of the
    connection: start-up, query, function call,
-   <command>COPY</command>, and termination.  There are also special
+   <command>COPY</command>, protocol parameter, and termination.  There are also special
    provisions for asynchronous operations (including notification
    responses and command cancellation), which can occur at any time
    after the start-up phase.
@@ -405,8 +405,22 @@
         this message indicates the highest supported minor version.  This
         message will also be sent if the client requested unsupported protocol
         options (i.e., beginning with <literal>_pq_.</literal>) in the
-        startup packet.  This message will be followed by an ErrorResponse or
-        a message indicating the success or failure of authentication.
+        startup packet.  This message will be followed by an ErrorResponse, a
+        NegotiateProtocolParameter or a message indicating the success or
+        failure of authentication.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term>NegotiateProtocolParameter</term>
+      <listitem>
+       <para>
+        The server supports the requested protocol parameter. This message lets
+        the client know to which value the server has set the parameter, which
+        may be different than the value requested by the client. It also tells
+        the client what values it accepts for future SetProtocolParameter
+        messages involving this parameter.
        </para>
       </listitem>
      </varlistentry>
@@ -1312,9 +1326,8 @@ SELCT 1/0;<!-- this typo is intentional -->
     effective value.
    </para>
 
-   <para>
-    At present there is a hard-wired set of parameters for which
-    ParameterStatus will be generated.  They are:
+   <para id="protocol-parameter-status-default">
+    The default parameters for which ParameterStatus will be generated are:
     <simplelist type="vert" columns="2">
      <member><varname>application_name</varname></member>
      <member><varname>client_encoding</varname></member>
@@ -1340,7 +1353,11 @@ SELCT 1/0;<!-- this typo is intentional -->
     <varname>server_encoding</varname> and
     <varname>integer_datetimes</varname>
     are pseudo-parameters that cannot change after startup.
-    This set might change in the future, or even become configurable.
+    It's possible to choose additional parameters for which the values should
+    be reported using the
+    <xref linkend="protocol-parameter-report-parameters"/> protocol parameter.
+    Since this set is configurable, a frontend can not assume that it only
+    gets these specific defaults.
     Accordingly, a frontend should simply ignore ParameterStatus for
     parameters that it does not understand or care about.
    </para>
@@ -1668,6 +1685,76 @@ SELCT 1/0;<!-- this typo is intentional -->
     configure the server to reject unencrypted sessions as a byproduct
     of authentication checking.
    </para>
+  </sect2>
+
+  <sect2 id="protocol-parameters">
+   <title>Protocol parameters</title>
+   <para>
+    The behaviour of the protocol can be modified by configuring protocol
+    parameters in the StartupMessage. A '<literal>_pq_.</literal>' prefix needs
+    to be added to indicate to the server that this is a protocol parameter,
+    and not a regular parameter. It's optional for a server to implement
+    support for these protocol parameters, so a client is expected to
+    gracefully fallback to not using the feature that these parameters might
+    enable when the server indicates non-support using NegotiateProtocolVersion
+    or NegotiateProtocolParameter.
+   </para>
+
+   <para>
+    Since protocol version 3.2, it is possible to change protocol parameters
+    after the StartupMessage by using the SetProtocolParameter. The server will
+    respond with a SetProtocolParameterComplete message of result type
+    '<literal>S</literal>', followed by a ReadyForQuery message. On most failures
+    (e.g. syntax errors in the value) the server will respond with an
+    SetProtocolParameterComplete message of result type '<literal>E</literal>',
+    followed by a ReadyForQuery message. The reason for these failures can be
+    found in the NoticeResponse message that precedes the
+    SetProtocolParameterComplete message. This is not using an ErrorResponse,
+    to avoid rolling back a possibly in progress transaction. However, in some
+    cases (e.g. out of memory, or unknown parameter) the server will still
+    respond with an ErrorResponse message, again followed by a ReadyForQuery
+    message.
+   </para>
+
+   <note>
+    <para>
+     The SetProtocolParameter message is not part of the
+     extended query protocol and thus cannot be sent as part of an already
+     started extended query pipeline. Though it is allowed to have multiple
+     SetProtocolParameter messages in flight at the same time.
+    </para>
+   </note>
+
+   <variablelist>
+    <varlistentry id="protocol-parameter-report-parameters" xreflabel="report_parameters">
+     <term><varname>report_parameters</varname>
+     <indexterm>
+      <primary><varname>report_parameters</varname> configuration parameter</primary>
+     </indexterm>
+     </term>
+     <listitem>
+      <para>
+       This protocol parameter can be used to add parameters to the default
+       list of parameters that the server reports values for using the
+       ParameterStatus message.
+       This <literal>report_parameters</literal> can be used to
+       to report changes for additional parameters that are not reported by
+       default. The parameters that are in this list by default can be found in
+       <xref linkend="protocol-parameter-status-default"/>.
+      </para>
+
+      <para>
+       The value of this parameter is a comma separated list of parameter
+       names. Unknown parameters, and parameters that require the
+       <literal>pg_read_all_settings</literal> to be viewed are ignored. The
+       default value is the empty string. The server will use the literal value
+       '<literal>L</literal>' as the supported version string in the
+       NegotiateProtocolParameter message.
+      </para>
+     </listitem>
+    </varlistentry>
+
+   </variablelist>
   </sect2>
  </sect1>
 
@@ -5136,6 +5223,50 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
     </listitem>
    </varlistentry>
 
+   <varlistentry id="protocol-message-formats-NegotiateProtocolParameter">
+    <term>NegotiateProtocolParameter (B)</term>
+    <listitem>
+     <variablelist>
+      <varlistentry>
+       <term>Byte1('P')</term>
+       <listitem>
+        <para>
+         Identifies the message as a protocol parameter negotiation message.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int32</term>
+       <listitem>
+        <para>
+         Length of message contents in bytes, including self.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>String</term>
+       <listitem>
+        <para>
+         The name of the protocol parameter that the client attempted to set.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>String</term>
+       <listitem>
+        <para>
+         The new value of the protocol parameter.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+    </listitem>
+   </varlistentry>
+
+
    <varlistentry id="protocol-message-formats-NoData">
     <term>NoData (B)</term>
     <listitem>
@@ -5356,6 +5487,102 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
        <listitem>
         <para>
          The current value of the parameter.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="protocol-message-formats-SetProtocolParameter">
+    <term>SetProtocolParameter (F)</term>
+    <listitem>
+     <variablelist>
+      <varlistentry>
+       <term>Byte1('O')</term>
+       <listitem>
+        <para>
+         Identifies the message as a protocol parameter change.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int32</term>
+       <listitem>
+        <para>
+         Length of message contents in bytes, including self.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>String</term>
+       <listitem>
+        <para>
+         The name of the protocol parameter to change.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>String</term>
+       <listitem>
+        <para>
+         The new value of the parameter.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="protocol-message-formats-SetProtocolParameterComplete">
+    <term>SetProtocolParameterComplete (B)</term>
+    <listitem>
+     <variablelist>
+      <varlistentry>
+       <term>Byte1('O')</term>
+       <listitem>
+        <para>
+         Identifies the message as a SetProtocolParameter-complete indicator.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int32</term>
+       <listitem>
+        <para>
+         Length of message contents in bytes, including self.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>String</term>
+       <listitem>
+        <para>
+         The name of the protocol parameter that the client attempted to set.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>String</term>
+       <listitem>
+        <para>
+         The new value of the protocol parameter.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Byte1</term>
+       <listitem>
+        <para>
+         Result type of the request. The possible values '<literal>S</literal>' if the
+         value was changed successfully; '<literal>E</literal>' if the requested value could not be set;
         </para>
        </listitem>
       </varlistentry>

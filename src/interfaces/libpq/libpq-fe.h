@@ -583,6 +583,11 @@ extern PGresult *PQclosePortal(PGconn *conn, const char *portal);
 extern int	PQsendClosePrepared(PGconn *conn, const char *stmt);
 extern int	PQsendClosePortal(PGconn *conn, const char *portal);
 
+extern const char *PQreportParameters(PGconn *conn);
+const char *PQreportParametersSupport(PGconn *conn);
+extern PGresult *PQsetReportParameters(PGconn *conn, const char *params);
+extern int	PQsendSetReportParameters(PGconn *conn, const char *params);
+
 /* Delete a PGresult */
 extern void PQclear(PGresult *res);
 

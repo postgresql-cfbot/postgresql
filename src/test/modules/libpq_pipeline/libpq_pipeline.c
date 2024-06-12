@@ -1487,6 +1487,124 @@ test_pipeline_idle(PGconn *conn)
 }
 
 static void
+test_report_parameters(PGconn *conn)
+{
+	PGresult   *res = NULL;
+	const char *val = NULL;
+
+	res = PQexec(conn, "SET application_name = 'test1'");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+
+	val = PQparameterStatus(conn, "application_name");
+	if (val == NULL)
+		pg_fatal("expected application_name to be tracked, but wasn't");
+	if (strcmp(val, "test1") != 0)
+		pg_fatal("expected application_name to tracked as 'test1', but was '%s'", val);
+
+	res = PQexec(conn, "SET application_name = 'test2'");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+
+	val = PQparameterStatus(conn, "application_name");
+	if (strcmp(val, "test2") != 0)
+		pg_fatal("expected application_name to tracked as 'test2', but was '%s'", val);
+
+	res = PQsetReportParameters(conn, "lock_timeout");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set report_parameters: %s", PQerrorMessage(conn));
+
+	val = PQreportParameters(conn);
+	if (strcmp(val, "lock_timeout") != 0)
+		pg_fatal("expected report_parameters to be 'lock_timeout', but was '%s'", val);
+
+	/* Should have automatically received initial value */
+	val = PQparameterStatus(conn, "lock_timeout");
+	if (strcmp(val, "0") != 0)
+		pg_fatal("expected application_name to tracked as '123000', but was '%s'", val);
+
+	/*
+	 * Add some more parameters to track, including a GUC_SUPERUSER_ONLY and a
+	 * non-existent one.
+	 */
+	if (PQsendSetReportParameters(conn, "\"lock_timeout\"  ,   shared_preload_libraries,work_mem    ,does_not_exist") != 1)
+		pg_fatal("PQsendSetReportParameters failed: %s", PQerrorMessage(conn));
+	res = PQgetResult(conn);
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set report_parameters: %s", PQerrorMessage(conn));
+	res = PQgetResult(conn);
+	if (res != NULL)
+		pg_fatal("expected null result");
+
+	/*
+	 * Should have filtered out the does_not_exist & shared_preload_libraries,
+	 * and should have removed spaces
+	 */
+	val = PQreportParameters(conn);
+	if (strcmp(val, "lock_timeout,work_mem") != 0)
+		pg_fatal("expected report_parameters to be 'lock_timeout,work_mem', but was '%s'", val);
+
+	val = PQparameterStatus(conn, "lock_timeout");
+	if (strcmp(val, "0") != 0)
+		pg_fatal("expected application_name to tracked as '123000', but was '%s'", val);
+
+	val = PQparameterStatus(conn, "work_mem");
+	if (strcmp(val, "4096") != 0)
+		pg_fatal("expected work_mem to be tracked as '4096', but was '%s'", val);
+
+	/*
+	 * changes to application_name should always be tracked even if it is not
+	 * in report_parameters
+	 */
+	res = PQexec(conn, "SET application_name = 'test3333'");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+
+	val = PQparameterStatus(conn, "application_name");
+	if (strcmp(val, "test3333") != 0)
+		pg_fatal("expected application_name to tracked as 'test2', but was '%s'", val);
+
+	/* changes to and work_mem lock_timeout should be tracked */
+	res = PQexec(conn, "SET lock_timeout = '123s'");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+
+	val = PQparameterStatus(conn, "lock_timeout");
+	if (strcmp(val, "123000") != 0)
+		pg_fatal("expected application_name to tracked as '123000', but was '%s'", val);
+
+	/* only track work_mem again */
+	res = PQsetReportParameters(conn, "work_mem");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set report_parameters: %s", PQerrorMessage(conn));
+
+	/* changes to lock_timeout should not be tracked anymore now */
+	res = PQexec(conn, "SET lock_timeout = '345s'");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+
+	val = PQparameterStatus(conn, "lock_timeout");
+	if (strcmp(val, "123000") != 0)
+		pg_fatal("expected application_name to tracked as '123000', but was '%s'", val);
+
+	/* soft-failure case */
+	res = PQsetReportParameters(conn, ",");
+	if (PQresultStatus(res) == PGRES_FATAL_ERROR)
+		pg_fatal("failed to set report_parameters: %s", PQerrorMessage(conn));
+	if (PQresultStatus(res) != PGRES_NONFATAL_ERROR)
+		pg_fatal("expected to receive a non-fatal error when changing report_parameters");
+
+	res = PQexec(conn, "SET work_mem = '123456'");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pg_fatal("failed to set parameter: %s", PQerrorMessage(conn));
+
+	/* work_mem should still be tracked because of failure */
+	val = PQparameterStatus(conn, "work_mem");
+	if (strcmp(val, "123456") != 0)
+		pg_fatal("expected application_name to tracked as '123000', but was '%s'", val);
+}
+
+static void
 test_simple_pipeline(PGconn *conn)
 {
 	PGresult   *res = NULL;
@@ -2156,6 +2274,7 @@ print_test_list(void)
 	printf("pipeline_idle\n");
 	printf("pipelined_insert\n");
 	printf("prepared\n");
+	printf("report_parameters\n");
 	printf("simple_pipeline\n");
 	printf("singlerow\n");
 	printf("transaction\n");
@@ -2165,13 +2284,19 @@ print_test_list(void)
 int
 main(int argc, char **argv)
 {
-	const char *conninfo = "";
 	PGconn	   *conn;
 	FILE	   *trace;
 	char	   *testname;
 	int			numrows = 10000;
 	PGresult   *res;
 	int			c;
+
+	/*
+	 * dbname = "" because we use expand_dbname, so it's a no-op unless the
+	 * user provides something else
+	 */
+	char	   *conn_keywords[3] = {"dbname", "max_protocol_version"};
+	char	   *conn_values[3] = {"", "latest"};
 
 	while ((c = getopt(argc, argv, "r:t:")) != -1)
 	{
@@ -2210,14 +2335,17 @@ main(int argc, char **argv)
 		exit(0);
 	}
 
+	/* We use expand_dbname to parse the user-provided conninfo string */
 	if (optind < argc)
 	{
-		conninfo = pg_strdup(argv[optind]);
+		conn_values[0] = pg_strdup(argv[optind]);
 		optind++;
 	}
 
 	/* Make a connection to the database */
-	conn = PQconnectdb(conninfo);
+	conn = PQconnectdbParams((const char *const *) &conn_keywords,
+							 (const char *const *) &conn_values,
+							 1);
 	if (PQstatus(conn) != CONNECTION_OK)
 	{
 		fprintf(stderr, "Connection to database failed: %s\n",
@@ -2266,6 +2394,8 @@ main(int argc, char **argv)
 		test_pipelined_insert(conn, numrows);
 	else if (strcmp(testname, "prepared") == 0)
 		test_prepared(conn);
+	else if (strcmp(testname, "report_parameters") == 0)
+		test_report_parameters(conn);
 	else if (strcmp(testname, "simple_pipeline") == 0)
 		test_simple_pipeline(conn);
 	else if (strcmp(testname, "singlerow") == 0)

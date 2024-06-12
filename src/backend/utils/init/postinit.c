@@ -1262,6 +1262,8 @@ process_startup_options(Port *port, bool am_superuser)
 {
 	GucContext	gucctx;
 	ListCell   *gucopts;
+	ListCell   *protocol_parameter;
+	ListCell   *protocol_parameter_value;
 
 	gucctx = am_superuser ? PGC_SU_BACKEND : PGC_BACKEND;
 
@@ -1314,7 +1316,20 @@ process_startup_options(Port *port, bool am_superuser)
 
 		SetConfigOption(name, value, gucctx, PGC_S_CLIENT);
 	}
+
+	/*
+	 * Process any protocol parameters.
+	 */
+	forboth(protocol_parameter, port->protocol_parameter, protocol_parameter_value, port->protocol_parameter_values)
+	{
+		ProtocolParameter *param = lfirst(protocol_parameter);
+		char	   *value = lfirst(protocol_parameter_value);
+
+		init_protocol_parameter(param, value);
+		SendNegotiateProtocolParameter(param);
+	}
 }
+
 
 /*
  * Load GUC settings from pg_db_role_setting.

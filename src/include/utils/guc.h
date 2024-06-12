@@ -13,6 +13,7 @@
 #define GUC_H
 
 #include "nodes/parsenodes.h"
+#include "libpq/libpq-be.h"
 #include "tcop/dest.h"
 #include "utils/array.h"
 
@@ -223,6 +224,8 @@ typedef enum
 #define GUC_DISALLOW_IN_AUTO_FILE \
 							   0x002000 /* can't set in PG_AUTOCONF_FILENAME */
 #define GUC_RUNTIME_COMPUTED   0x004000 /* delay processing in 'postgres -C' */
+#define GUC_REPORT_DYNAMIC	   0x008000 /* used by report_parameters to
+										 * auto-report */
 
 #define GUC_UNIT_KB			 0x01000000 /* value is in kilobytes */
 #define GUC_UNIT_BLOCKS		 0x02000000 /* value is in blocks */
@@ -240,6 +243,8 @@ typedef enum
 
 
 /* GUC vars that are actually defined in guc_tables.c, rather than elsewhere */
+extern PGDLLIMPORT char *report_parameters;
+
 extern PGDLLIMPORT bool Debug_print_plan;
 extern PGDLLIMPORT bool Debug_print_parse;
 extern PGDLLIMPORT bool Debug_print_rewritten;
@@ -414,6 +419,7 @@ extern void *guc_malloc(int elevel, size_t size);
 extern pg_nodiscard void *guc_realloc(int elevel, void *old, size_t size);
 extern char *guc_strdup(int elevel, const char *src);
 extern void guc_free(void *ptr);
+extern const char *report_parameters_handler(ProtocolParameter *param, const char *new_value);
 
 #ifdef EXEC_BACKEND
 extern void write_nondefault_variables(GucContext context);

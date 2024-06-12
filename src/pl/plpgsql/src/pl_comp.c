@@ -84,6 +84,23 @@ static const ExceptionLabelMap exception_label_map[] = {
 	{NULL, 0}
 };
 
+static const PLpgSQL_parse_modes default_parse_modes = {
+	RAW_PARSE_PLPGSQL_EXPR,
+	RAW_PARSE_PLPGSQL_EXPR,
+	RAW_PARSE_PLPGSQL_EXPR,
+	RAW_PARSE_PLPGSQL_ASSIGN1,
+	RAW_PARSE_PLPGSQL_ASSIGN2,
+	RAW_PARSE_PLPGSQL_ASSIGN3
+};
+
+static const PLpgSQL_parse_modes strict_expr_parse_modes = {
+	RAW_PARSE_PLPGSQL_STRICT_EXPR,
+	RAW_PARSE_PLPGSQL_STRICT_EXPR_LIST,
+	RAW_PARSE_PLPGSQL_STRICT_NAMED_EXPR_LIST,
+	RAW_PARSE_PLPGSQL_STRICT_EXPR_ASSIGN1,
+	RAW_PARSE_PLPGSQL_STRICT_EXPR_ASSIGN2,
+	RAW_PARSE_PLPGSQL_STRICT_EXPR_ASSIGN3
+};
 
 /* ----------
  * static prototypes
@@ -354,6 +371,11 @@ do_compile(FunctionCallInfo fcinfo,
 	/* only promote extra warnings and errors at CREATE FUNCTION time */
 	function->extra_warnings = forValidator ? plpgsql_extra_warnings : 0;
 	function->extra_errors = forValidator ? plpgsql_extra_errors : 0;
+
+	if (function->extra_errors & PLPGSQL_XCHECK_STRICTEXPRCHECK)
+		function->pmodes = &strict_expr_parse_modes;
+	else
+		function->pmodes = &default_parse_modes;
 
 	if (is_dml_trigger)
 		function->fn_is_trigger = PLPGSQL_DML_TRIGGER;
@@ -897,6 +919,15 @@ plpgsql_compile_inline(char *proc_source)
 	 */
 	function->extra_warnings = 0;
 	function->extra_errors = 0;
+
+	/*
+	 * Although function->extra_errors is disabled, we want to
+	 * do strict_expr_check inside annoymous block too.
+	 */
+	if (plpgsql_extra_errors & PLPGSQL_XCHECK_STRICTEXPRCHECK)
+		function->pmodes = &strict_expr_parse_modes;
+	else
+		function->pmodes = &default_parse_modes;
 
 	function->nstatements = 0;
 	function->requires_procedure_resowner = false;

@@ -472,10 +472,57 @@ pqTraceOutput_Query(FILE *f, const char *message, int *cursor)
 }
 
 static void
-pqTraceOutput_Authentication(FILE *f, const char *message, int *cursor)
+pqTraceOutput_Authentication(FILE *f, const char *message, int *cursor, int length, bool regress)
 {
-	fprintf(f, "Authentication\t");
-	pqTraceOutputInt32(f, message, cursor, false);
+	int			authType = 0;
+
+	memcpy(&authType, message + *cursor, 4);
+	authType = (int) pg_ntoh32(authType);
+	*cursor += 4;
+	switch (authType)
+	{
+		case AUTH_REQ_OK:
+			fprintf(f, "AuthenticationOk");
+			break;
+		case AUTH_REQ_KRB5:
+			fprintf(f, "AuthenticationKerberosV5");
+			break;
+		case AUTH_REQ_PASSWORD:
+			fprintf(f, "AuthenticationCleartextPassword");
+			break;
+		case AUTH_REQ_MD5:
+			fprintf(f, "AuthenticationMD5Password");
+			break;
+		case AUTH_REQ_GSS:
+			fprintf(f, "AuthenticationGSS");
+			break;
+		case AUTH_REQ_GSS_CONT:
+			fprintf(f, "AuthenticationGSSContinue");
+			pqTraceOutputNchar(f, length - *cursor + 1, message, cursor, regress);
+			break;
+		case AUTH_REQ_SSPI:
+			fprintf(f, "AuthenticationSSPI");
+			break;
+		case AUTH_REQ_SASL:
+			fprintf(f, "AuthenticationSASL");
+			while (message[*cursor] != '\0')
+			{
+				pqTraceOutputString(f, message, cursor, false);
+			}
+			pqTraceOutputString(f, message, cursor, false);
+
+			break;
+		case AUTH_REQ_SASL_CONT:
+			fprintf(f, "AuthenticationSASLContinue");
+			pqTraceOutputNchar(f, length - *cursor + 1, message, cursor, regress);
+			break;
+		case AUTH_REQ_SASL_FIN:
+			fprintf(f, "AuthenticationSASLFinal");
+			pqTraceOutputNchar(f, length - *cursor + 1, message, cursor, regress);
+			break;
+		default:
+			fprintf(f, "Unknown authentication message %d", authType);
+	}
 }
 
 static void
@@ -714,7 +761,7 @@ pqTraceOutputMessage(PGconn *conn, const char *message, bool toServer)
 			pqTraceOutput_Query(conn->Pfdebug, message, &logCursor);
 			break;
 		case PqMsg_AuthenticationRequest:
-			pqTraceOutput_Authentication(conn->Pfdebug, message, &logCursor);
+			pqTraceOutput_Authentication(conn->Pfdebug, message, &logCursor, length, regress);
 			break;
 		case PqMsg_PortalSuspended:
 			fprintf(conn->Pfdebug, "PortalSuspended");

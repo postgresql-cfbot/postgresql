@@ -40,6 +40,7 @@
 #include "catalog/pg_inherits.h"
 #include "commands/cluster.h"
 #include "commands/defrem.h"
+#include "commands/progress.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -2380,12 +2381,26 @@ vacuum_delay_point(void)
 	/* Nap if appropriate */
 	if (msec > 0)
 	{
+		instr_time	delay_start;
+		instr_time	delay_time;
+
 		if (msec > vacuum_cost_delay * 4)
 			msec = vacuum_cost_delay * 4;
 
 		pgstat_report_wait_start(WAIT_EVENT_VACUUM_DELAY);
+		INSTR_TIME_SET_CURRENT(delay_start);
 		pg_usleep(msec * 1000);
+		INSTR_TIME_SET_CURRENT(delay_time);
 		pgstat_report_wait_end();
+
+		/* Report the amount of time we slept */
+		INSTR_TIME_SUBTRACT(delay_time, delay_start);
+		if (VacuumSharedCostBalance != NULL)
+			pgstat_progress_parallel_incr_param(PROGRESS_VACUUM_TIME_DELAYED,
+												INSTR_TIME_GET_MILLISEC(delay_time));
+		else
+			pgstat_progress_incr_param(PROGRESS_VACUUM_TIME_DELAYED,
+									   INSTR_TIME_GET_MILLISEC(delay_time));
 
 		/*
 		 * We don't want to ignore postmaster death during very long vacuums

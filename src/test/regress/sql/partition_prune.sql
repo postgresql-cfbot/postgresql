@@ -21,6 +21,7 @@ explain (costs off) select * from lp where a is not null;
 explain (costs off) select * from lp where a is null;
 explain (costs off) select * from lp where a = 'a' or a = 'c';
 explain (costs off) select * from lp where a is not null and (a = 'a' or a = 'c');
+
 explain (costs off) select * from lp where a <> 'g';
 explain (costs off) select * from lp where a <> 'a' and a <> 'd';
 explain (costs off) select * from lp where a not in ('a', 'd');

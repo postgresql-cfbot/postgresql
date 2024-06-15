@@ -1714,6 +1714,7 @@ NumericVar
 OM_uint32
 OP
 OSAPerGroupState
+OrClauseGroup
 OSAPerQueryState
 OSInfo
 OSSLCipher

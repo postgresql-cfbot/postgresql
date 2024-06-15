@@ -2709,6 +2709,35 @@ typedef struct RestrictInfo
 } RestrictInfo;
 
 /*
+ * The group of similar operator expressions in transform_or_to_any().
+ */
+typedef struct OrClauseGroup
+{
+	pg_node_attr(nodetag_only)
+
+	NodeTag		type;
+
+	/* The expression of the variable side of operator */
+	Expr	   *expr;
+	/* The operator of the operator expression */
+	Oid			opno;
+	/* The collation of the operator expression */
+	Oid			inputcollid;
+	/* The type of constant side of operator */
+	Oid			consttype;
+
+	/* The list of constant sides of operators */
+	List	   *consts;
+
+	/*
+	 * List of source expressions.  We need this for convenience in case we
+	 * will give up on transformation.
+	 */
+	List	   *exprs;
+} OrClauseGroup;
+
+
+/*
  * This macro embodies the correct way to test whether a RestrictInfo is
  * "pushed down" to a given outer join, that is, should be treated as a filter
  * clause rather than a join clause at that outer join.  This is certainly so

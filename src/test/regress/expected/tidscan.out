@@ -43,11 +43,12 @@ SELECT ctid, * FROM tidscan WHERE '(0,1)' = ctid;
 -- OR'd clauses
 EXPLAIN (COSTS OFF)
 SELECT ctid, * FROM tidscan WHERE ctid = '(0,2)' OR '(0,1)' = ctid;
-                          QUERY PLAN                          
---------------------------------------------------------------
+                         QUERY PLAN                         
+------------------------------------------------------------
  Tid Scan on tidscan
-   TID Cond: ((ctid = '(0,2)'::tid) OR ('(0,1)'::tid = ctid))
-(2 rows)
+   TID Cond: (ctid = ANY ('{"(0,2)","(0,1)"}'::tid[]))
+   Filter: ((ctid = '(0,2)'::tid) OR ('(0,1)'::tid = ctid))
+(3 rows)
 
 SELECT ctid, * FROM tidscan WHERE ctid = '(0,2)' OR '(0,1)' = ctid;
  ctid  | id 

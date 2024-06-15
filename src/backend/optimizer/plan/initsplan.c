@@ -14,9 +14,13 @@
  */
 #include "postgres.h"
 
+#include "catalog/namespace.h"
+#include "catalog/pg_operator.h"
 #include "catalog/pg_type.h"
+#include "common/hashfn.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/queryjumble.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/inherit.h"
@@ -29,15 +33,17 @@
 #include "optimizer/planner.h"
 #include "optimizer/restrictinfo.h"
 #include "parser/analyze.h"
+#include "parser/parse_coerce.h"
+#include "parser/parse_oper.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/lsyscache.h"
+#include "utils/syscache.h"
 #include "utils/rel.h"
 #include "utils/typcache.h"
 
 /* These parameters are set by GUC */
 int			from_collapse_limit;
 int			join_collapse_limit;
-
 
 /*
  * deconstruct_jointree requires multiple passes over the join tree, because we
@@ -2618,6 +2624,296 @@ check_redundant_nullability_qual(PlannerInfo *root, Node *clause)
 }
 
 /*
+ * transform_or_to_any -
+ *	  Discover the args of an OR expression and try to group similar OR
+ *	  expressions to SAOP expressions.
+ *
+ * This transformation groups two-sided equality expression.  One side of
+ * such an expression must be a plain constant or constant expression.  The
+ * other side must be a variable expression without volatile functions.
+ * To group quals, opno, inputcollid of variable expression, and type of
+ * constant expression must be equal too.
+ *
+ * The grouping technique is based on the equivalence of variable sides of
+ * the expression: using exprId and equal() routine, it groups constant sides
+ * of similar clauses into an array.  After the grouping procedure, each
+ * couple ('variable expression' and 'constant array') forms a new SAOP
+ * operation, which is added to the args list of the returning expression.
+ */
+static List *
+transform_or_to_any(PlannerInfo *root, List *orlist)
+{
+	List	   *neworlist = NIL;
+	List	   *entries = NIL;
+	ListCell   *lc;
+	int			len_ors = list_length(orlist);
+	OrClauseGroup *entry = NULL;
+
+	Assert(len_ors >= 2);
+
+	foreach(lc, orlist)
+	{
+		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+		OpExpr	   *orqual;
+		Node	   *const_expr;
+		Node	   *nconst_expr;
+		bool		found = false;
+		Oid			opno;
+		Oid			consttype;
+		Node	   *leftop,
+				   *rightop;
+		ListCell   *lc2;
+
+		if (!IsA(rinfo, RestrictInfo) || !IsA(rinfo->clause, OpExpr))
+		{
+			entries = lappend(entries, rinfo);
+			continue;
+		}
+
+		orqual = (OpExpr *) rinfo->clause;
+		opno = orqual->opno;
+		if (get_op_rettype(opno) != BOOLOID)
+		{
+			/* Only operator returning boolean suits OR -> ANY transformation */
+			entries = lappend(entries, rinfo);
+			continue;
+		}
+
+		/*
+		 * Detect the constant side of the clause. Recall non-constant
+		 * expression can be made not only with Vars, but also with Params,
+		 * which is not bonded with any relation. Thus, we detect the const
+		 * side - if another side is constant too, the orqual couldn't be an
+		 * OpExpr.  Get pointers to constant and expression sides of the qual.
+		 */
+		leftop = get_leftop(orqual);
+		if (IsA(leftop, RelabelType))
+			leftop = (Node *) ((RelabelType *) leftop)->arg;
+		rightop = get_rightop(orqual);
+		if (IsA(rightop, RelabelType))
+			rightop = (Node *) ((RelabelType *) rightop)->arg;
+
+		if (IsA(leftop, Const) || IsA(leftop, Param))
+		{
+			opno = get_commutator(opno);
+
+			if (!OidIsValid(opno))
+			{
+				/* commutator doesn't exist, we can't reverse the order */
+				entries = lappend(entries, rinfo);
+				continue;
+			}
+
+			nconst_expr = get_rightop(orqual);
+			const_expr = get_leftop(orqual);
+		}
+		else if (IsA(rightop, Const) || IsA(rightop, Param))
+		{
+			const_expr = get_rightop(orqual);
+			nconst_expr = get_leftop(orqual);
+		}
+		else
+		{
+			entries = lappend(entries, rinfo);
+			continue;
+		}
+
+		/*
+		 * Forbid transformation for composite types, records, and volatile
+		 * expressions.
+		 */
+		consttype = exprType(const_expr);
+		if (type_is_rowtype(exprType(const_expr)) ||
+			type_is_rowtype(consttype) ||
+			contain_volatile_functions((Node *) nconst_expr))
+		{
+			entries = lappend(entries, rinfo);
+			continue;
+		}
+
+		foreach(lc2, entries)
+		{
+			if (!IsA(lfirst(lc2), OrClauseGroup))
+				continue;
+
+			entry = (OrClauseGroup *) lfirst(lc2);
+
+			if (entry->opno == opno &&
+				entry->consttype == consttype &&
+				entry->inputcollid == exprCollation(const_expr) &&
+				equal(entry->expr, nconst_expr))
+			{
+				found = true;
+				break;
+			}
+		}
+
+		if (unlikely(found))
+		{
+			entry->consts = lappend(entry->consts, const_expr);
+			entry->exprs = lappend(entry->exprs, rinfo);
+		}
+		else
+		{
+			entry = makeNode(OrClauseGroup);
+			entry->expr = (Expr *) nconst_expr;
+			entry->opno = opno;
+			entry->consttype = consttype;
+			entry->inputcollid = exprCollation(const_expr);
+
+			entry->consts = list_make1(const_expr);
+			entry->exprs = list_make1(rinfo);
+
+			/*
+			 * Add the entry to the list.  It is needed exclusively to manage
+			 * the problem with the order of transformed clauses in explain.
+			 * Hash value can depend on the platform and version.  Hence,
+			 * sequental scan of the hash table would prone to change the
+			 * order of clauses in lists and, as a result, break regression
+			 * tests accidentially.
+			 */
+			entries = lappend(entries, entry);
+		}
+	}
+
+	/* Let's convert each group of clauses to an ANY expression. */
+
+	/*
+	 * Go through the list of groups and convert each, where number of consts
+	 * more than 1. trivial groups move to OR-list again
+	 */
+	foreach(lc, entries)
+	{
+		Oid			scalar_type;
+		Oid			array_type;
+
+		if (!IsA(lfirst(lc), OrClauseGroup))
+		{
+			neworlist = lappend(neworlist, lfirst(lc));
+			continue;
+		}
+
+		entry = (OrClauseGroup *) lfirst(lc);
+
+		Assert(list_length(entry->consts) > 0);
+		Assert(list_length(entry->exprs) == list_length(entry->consts));
+
+		if (list_length(entry->consts) == 1)
+		{
+			/*
+			 * Only one element returns origin expression into the BoolExpr
+			 * args list unchanged.
+			 */
+			list_free(entry->consts);
+			neworlist = list_concat(neworlist, entry->exprs);
+			continue;
+		}
+
+		/*
+		 * Do the transformation.
+		 */
+		scalar_type = entry->consttype;
+		array_type = OidIsValid(scalar_type) ? get_array_type(scalar_type) :
+			InvalidOid;
+
+		if (OidIsValid(array_type))
+		{
+			/*
+			 * OK: coerce all the right-hand non-Var inputs to the common type
+			 * and build an ArrayExpr for them.
+			 */
+			List	   *aexprs = NIL;
+			ArrayExpr  *newa = NULL;
+			ScalarArrayOpExpr *saopexpr = NULL;
+			HeapTuple	opertup;
+			Form_pg_operator operform;
+			List	   *namelist = NIL;
+			bool		is_pushed_down = false;
+			bool		has_clone = false;
+			Index		security_level = 0;
+			Relids		required_relids = NULL;
+			Relids		incompatible_relids = NULL;
+			Relids		outer_relids = NULL;
+			ListCell   *lc2;
+
+			foreach(lc2, entry->consts)
+			{
+				Node	   *node = (Node *) lfirst(lc2);
+
+				node = coerce_to_common_type(NULL, node, scalar_type,
+											 "OR ANY Transformation");
+				aexprs = lappend(aexprs, node);
+			}
+
+			foreach(lc2, entry->exprs)
+			{
+				RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc2);
+
+				is_pushed_down = is_pushed_down || rinfo->is_pushed_down;
+				has_clone = has_clone || rinfo->is_pushed_down;
+				security_level = Max(security_level, rinfo->security_level);
+				required_relids = bms_union(required_relids, rinfo->required_relids);
+				incompatible_relids = bms_union(incompatible_relids, rinfo->incompatible_relids);
+				outer_relids = bms_union(outer_relids, rinfo->outer_relids);
+			}
+
+			newa = makeNode(ArrayExpr);
+			/* array_collid will be set by parse_collate.c */
+			newa->element_typeid = scalar_type;
+			newa->array_typeid = array_type;
+			newa->multidims = false;
+			newa->elements = aexprs;
+			newa->location = -1;
+
+			/*
+			 * Try to cast this expression to Const. Due to current strict
+			 * transformation rules it should be done [almost] every time.
+			 */
+			newa = (ArrayExpr *) eval_const_expressions(NULL, (Node *) newa);
+
+			opertup = SearchSysCache1(OPEROID,
+									  ObjectIdGetDatum(entry->opno));
+			if (!HeapTupleIsValid(opertup))
+				elog(ERROR, "cache lookup failed for operator %u",
+					 entry->opno);
+
+			operform = (Form_pg_operator) GETSTRUCT(opertup);
+			if (!OperatorIsVisible(entry->opno))
+				namelist = lappend(namelist, makeString(get_namespace_name(operform->oprnamespace)));
+
+			namelist = lappend(namelist, makeString(pstrdup(NameStr(operform->oprname))));
+			ReleaseSysCache(opertup);
+
+			saopexpr =
+				(ScalarArrayOpExpr *)
+				make_scalar_array_op(NULL,
+									 namelist,
+									 true,
+									 (Node *) entry->expr,
+									 (Node *) newa,
+									 -1);
+			saopexpr->inputcollid = entry->inputcollid;
+
+			neworlist = lappend(neworlist, make_restrictinfo(root, (Expr *) saopexpr, is_pushed_down, has_clone, false, false, security_level, required_relids, incompatible_relids, outer_relids));
+		}
+		else
+		{
+			/*
+			 * If the const node's (right side of operator expression) type
+			 * don't have “true” array type, then we cannnot do the
+			 * transformation. We simply concatenate the expression node.
+			 */
+			list_free(entry->consts);
+			neworlist = list_concat(neworlist, entry->exprs);
+		}
+	}
+	list_free(entries);
+
+	/* One more trick: assemble correct clause */
+	return neworlist;
+}
+
+/*
  * add_base_clause_to_rel
  *		Add 'restrictinfo' as a baserestrictinfo to the base relation denoted
  *		by 'relid'.  We offer some simple prechecks to try to determine if the
@@ -2674,6 +2970,18 @@ add_base_clause_to_rel(PlannerInfo *root, Index relid,
 											 restrictinfo->incompatible_relids,
 											 restrictinfo->outer_relids);
 			restrictinfo->rinfo_serial = save_rinfo_serial;
+		}
+	}
+
+	if (restriction_is_or_clause(restrictinfo))
+	{
+		BoolExpr   *orExpr = (BoolExpr *) restrictinfo->orclause;
+
+		Assert(is_orclause(restrictinfo->orclause));
+
+		if (list_length(orExpr->args) >= 2)
+		{
+			orExpr->args = transform_or_to_any(root, orExpr->args);
 		}
 	}
 

@@ -578,11 +578,6 @@ struct pg_conn
 	void	   *engine;			/* dummy field to keep struct the same if
 								 * OpenSSL version changes */
 #endif
-	bool		crypto_loaded;	/* Track if libcrypto locking callbacks have
-								 * been done for this connection. This can be
-								 * removed once support for OpenSSL 1.0.2 is
-								 * removed as this locking is handled
-								 * internally in OpenSSL >= 1.1.0. */
 #endif							/* USE_OPENSSL */
 #endif							/* USE_SSL */
 
@@ -761,7 +756,6 @@ extern int	pqWriteReady(PGconn *conn);
 
 /* === in fe-secure.c === */
 
-extern int	pqsecure_initialize(PGconn *, bool, bool);
 extern PostgresPollingStatusType pqsecure_open_client(PGconn *);
 extern void pqsecure_close(PGconn *);
 extern ssize_t pqsecure_read(PGconn *, void *ptr, size_t len);
@@ -784,19 +778,18 @@ extern void pq_reset_sigpipe(sigset_t *osigset, bool sigpipe_pending,
 /*
  *	Implementation of PQinitSSL().
  */
-extern void pgtls_init_library(bool do_ssl, int do_crypto);
+extern void pgtls_init_library(bool do_ssl);
 
 /*
  * Initialize SSL library.
  *
  * The conn parameter is only used to be able to pass back an error
  * message - no connection-local setup is made here.  do_ssl controls
- * if SSL is initialized, and do_crypto does the same for the crypto
- * part.
+ * if SSL is initialized.
  *
  * Returns 0 if OK, -1 on failure (adding a message to conn->errorMessage).
  */
-extern int	pgtls_init(PGconn *conn, bool do_ssl, bool do_crypto);
+extern int	pgtls_init(PGconn *conn, bool do_ssl);
 
 /*
  *	Begin or continue negotiating a secure session.

@@ -108,6 +108,9 @@ typedef enum NodeTag
  * - query_jumble_location: Mark the field as a location to track.  This is
  *   only allowed for integer fields that include "location" in their name.
  *
+ * - query_jumble_merge: Allow to merge the field values for the query
+ *   jumbling.
+ *
  * - read_as(VALUE): In nodeRead(), replace the field's value with VALUE.
  *
  * - read_write_ignore: Ignore the field for read/write.  This is only allowed

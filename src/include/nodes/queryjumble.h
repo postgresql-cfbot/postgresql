@@ -23,6 +23,15 @@ typedef struct LocationLen
 {
 	int			location;		/* start offset in query text */
 	int			length;			/* length in bytes, or -1 to ignore */
+
+	/*
+	 * Indicates the constant represents the beginning or the end of a merged
+	 * constants interval. The value shows how many constants were merged away
+	 * (up to a power of 10), or in other words the order of manitude for
+	 * number of merged constants (i.e. how many digits it has). Otherwise the
+	 * value is 0, indicating that no merging was performed.
+	 */
+	int			magnitude;
 } LocationLen;
 
 /*
@@ -46,6 +55,9 @@ typedef struct JumbleState
 	/* Current number of valid entries in clocations array */
 	int			clocations_count;
 
+	/* Current number of entries with merged constants interval */
+	int			clocations_merged_count;
+
 	/* highest Param id we've seen, in order to start normalization correctly */
 	int			highest_extern_param_id;
 } JumbleState;
@@ -62,12 +74,13 @@ enum ComputeQueryIdType
 /* GUC parameters */
 extern PGDLLIMPORT int compute_query_id;
 
-
 extern const char *CleanQuerytext(const char *query, int *location, int *len);
 extern JumbleState *JumbleQuery(Query *query);
 extern void EnableQueryId(void);
+extern void SetQueryIdConstMerge(int threshold);
 
 extern PGDLLIMPORT bool query_id_enabled;
+extern PGDLLIMPORT int 	query_id_const_merge_threshold;
 
 /*
  * Returns whether query identifier computation has been enabled, either

@@ -21,7 +21,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-DISCARD { ALL | PLANS | SEQUENCES | TEMPORARY | TEMP }
+DISCARD { ALL | PLANS | SEQUENCES | TEMPORARY | TEMP | VARIABLES }
 </synopsis>
  </refsynopsisdiv>
 
@@ -67,6 +67,17 @@ DISCARD { ALL | PLANS | SEQUENCES | TEMPORARY | TEMP }
    </varlistentry>
 
    <varlistentry>
+    <term><literal>VARIABLES</literal></term>
+    <listitem>
+     <para>
+      Resets the value of all session variables. If a variable
+      is later reused, it is re-initialized to either
+      <literal>NULL</literal> or its default value.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><literal>TEMPORARY</literal> or <literal>TEMP</literal></term>
     <listitem>
      <para>
@@ -93,6 +104,7 @@ SELECT pg_advisory_unlock_all();
 DISCARD PLANS;
 DISCARD TEMP;
 DISCARD SEQUENCES;
+DISCARD VARIABLES;
 </programlisting></para>
     </listitem>
    </varlistentry>

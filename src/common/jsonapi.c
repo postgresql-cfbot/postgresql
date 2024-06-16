@@ -380,10 +380,9 @@ makeJsonLexContextIncremental(JsonLexContext *lex, int encoding,
 	lex->incremental = true;
 	lex->inc_state = palloc0(sizeof(JsonIncrementalState));
 	initStringInfo(&(lex->inc_state->partial_token));
-	lex->pstack = palloc(sizeof(JsonParserStack));
+	lex->pstack = palloc0(sizeof(JsonParserStack));
 	lex->pstack->stack_size = JS_STACK_CHUNK_SIZE;
 	lex->pstack->prediction = palloc(JS_STACK_CHUNK_SIZE * JS_MAX_PROD_LEN);
-	lex->pstack->pred_index = 0;
 	lex->pstack->fnames = palloc(JS_STACK_CHUNK_SIZE * sizeof(char *));
 	lex->pstack->fnull = palloc(JS_STACK_CHUNK_SIZE * sizeof(bool));
 	if (need_escapes)
@@ -495,6 +494,8 @@ freeJsonLexContext(JsonLexContext *lex)
 		pfree(lex->pstack->prediction);
 		pfree(lex->pstack->fnames);
 		pfree(lex->pstack->fnull);
+		if (lex->pstack->scalar_val)
+			pfree(lex->pstack->scalar_val);
 		pfree(lex->pstack);
 	}
 
@@ -912,6 +913,13 @@ pg_parse_json_incremental(JsonLexContext *lex,
 						if (sfunc != NULL)
 						{
 							result = (*sfunc) (sem->semstate, pstack->scalar_val, pstack->scalar_tok);
+
+							/*
+							 * Ownership of the token allocation has passed to
+							 * the callback; don't free it later.
+							 */
+							pstack->scalar_val = NULL;
+
 							if (result != JSON_SUCCESS)
 								return result;
 						}
@@ -1040,9 +1048,13 @@ parse_scalar(JsonLexContext *lex, JsonSemAction *sem)
 	/* consume the token */
 	result = json_lex(lex);
 	if (result != JSON_SUCCESS)
+	{
+		if (val)
+			pfree(val);
 		return result;
+	}
 
-	/* invoke the callback */
+	/* invoke the callback, which takes ownership of val */
 	result = (*sfunc) (sem->semstate, val, tok);
 
 	return result;

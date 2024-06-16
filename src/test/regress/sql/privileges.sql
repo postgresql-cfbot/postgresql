@@ -1487,11 +1487,58 @@ ALTER DEFAULT PRIVILEGES REVOKE ALL ON SCHEMAS FROM regress_priv_user2;
 
 COMMIT;
 
+--
+-- Test for default privileges on large objects. This is done in a
+-- separate, rollbacked, transaction to avoid any trouble with other
+-- regression sessions.
+--
+\c -
+SET SESSION AUTHORIZATION regress_priv_user1;
+SELECT lo_create(1007);
+SET SESSION AUTHORIZATION regress_priv_user2;
+SELECT loread(lo_open(1007, x'40000'::int), 32); -- to be denied
+SELECT lowrite(lo_open(1007, x'20000'::int), 'abcd'); -- to be denied
+
+BEGIN;
+SET SESSION AUTHORIZATION regress_priv_user1;
+ALTER DEFAULT PRIVILEGES GRANT SELECT ON LARGE OBJECTS TO public;
+SELECT lo_unlink(1007);
+SELECT lo_create(1007);
+SET SESSION AUTHORIZATION regress_priv_user2;
+SELECT loread(lo_open(1007, x'40000'::int), 32); -- ok
+SELECT lowrite(lo_open(1007, x'20000'::int), 'abcd'); -- to be denied
+ROLLBACK;
+
+BEGIN;
+
+SET SESSION AUTHORIZATION regress_priv_user1;
+ALTER DEFAULT PRIVILEGES GRANT SELECT, UPDATE ON LARGE OBJECTS TO regress_priv_user2;
+SELECT lo_unlink(1007);
+SELECT lo_create(1007);
+SET SESSION AUTHORIZATION regress_priv_user2;
+SELECT loread(lo_open(1007, x'40000'::int), 32); -- ok
+SELECT lowrite(lo_open(1007, x'20000'::int), 'abcd'); -- ok
+
+SET SESSION AUTHORIZATION regress_priv_user1;
+ALTER DEFAULT PRIVILEGES REVOKE UPDATE ON LARGE OBJECTS FROM regress_priv_user2;
+SELECT lo_unlink(1007);
+SELECT lo_create(1007);
+SET SESSION AUTHORIZATION regress_priv_user2;
+SELECT loread(lo_open(1007, x'40000'::int), 32); -- ok
+SELECT lowrite(lo_open(1007, x'20000'::int), 'abcd');	-- to be denied
+
+ROLLBACK;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON LARGE OBJECTS TO public; -- error
+
+\c -
+
 -- Test for DROP OWNED BY with shared dependencies.  This is done in a
 -- separate, rollbacked, transaction to avoid any trouble with other
 -- regression sessions.
 BEGIN;
 ALTER DEFAULT PRIVILEGES GRANT ALL ON FUNCTIONS TO regress_priv_user2;
+ALTER DEFAULT PRIVILEGES GRANT ALL ON LARGE OBJECTS TO regress_priv_user2;
 ALTER DEFAULT PRIVILEGES GRANT ALL ON SCHEMAS TO regress_priv_user2;
 ALTER DEFAULT PRIVILEGES GRANT ALL ON SEQUENCES TO regress_priv_user2;
 ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO regress_priv_user2;

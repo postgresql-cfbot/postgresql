@@ -510,6 +510,11 @@ struct PlannerInfo
 	bool		hasRecursion;
 
 	/*
+	 * The rangetable index for the GROUP RTE, or 0 if there is no GROUP RTE.
+	 */
+	int			group_rtindex;
+
+	/*
 	 * Information about aggregates. Filled by preprocess_aggrefs().
 	 */
 	/* AggInfo structs */

@@ -380,6 +380,7 @@ markTargetListOrigin(ParseState *pstate, TargetEntry *tle,
 		case RTE_TABLEFUNC:
 		case RTE_NAMEDTUPLESTORE:
 		case RTE_RESULT:
+		case RTE_GROUP:
 			/* not a simple relation, leave it unmarked */
 			break;
 		case RTE_CTE:
@@ -1579,6 +1580,7 @@ expandRecordVariable(ParseState *pstate, Var *var, int levelsup)
 		case RTE_VALUES:
 		case RTE_NAMEDTUPLESTORE:
 		case RTE_RESULT:
+		case RTE_GROUP:
 
 			/*
 			 * This case should not occur: a column of a table, values list,

@@ -160,6 +160,8 @@ typedef struct Query
 	bool		hasForUpdate pg_node_attr(query_jumble_ignore);
 	/* rewriter has applied some RLS policy */
 	bool		hasRowSecurity pg_node_attr(query_jumble_ignore);
+	/* parser has added a GROUP RTE */
+	bool		hasGroupRTE pg_node_attr(query_jumble_ignore);
 	/* is a RETURN statement */
 	bool		isReturn pg_node_attr(query_jumble_ignore);
 
@@ -1036,6 +1038,7 @@ typedef enum RTEKind
 	RTE_RESULT,					/* RTE represents an empty FROM clause; such
 								 * RTEs are added by the planner, they're not
 								 * present during parsing or rewriting */
+	RTE_GROUP,					/* the grouping step */
 } RTEKind;
 
 typedef struct RangeTblEntry
@@ -1241,6 +1244,12 @@ typedef struct RangeTblEntry
 	char	   *enrname;
 	/* estimated or actual from caller */
 	Cardinality enrtuples pg_node_attr(query_jumble_ignore);
+
+	/*
+	 * Fields valid for GROUP RTEs (else NULL/zero):
+	 */
+	/* list of expressions grouped on */
+	List	   *groupexprs pg_node_attr(query_jumble_ignore);
 
 	/*
 	 * Fields valid in all RTEs:

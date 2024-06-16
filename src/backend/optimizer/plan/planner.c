@@ -58,6 +58,7 @@
 #include "parser/parse_relation.h"
 #include "parser/parsetree.h"
 #include "partitioning/partdesc.h"
+#include "rewrite/rewriteManip.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/selfuncs.h"
@@ -88,6 +89,7 @@ create_upper_paths_hook_type create_upper_paths_hook = NULL;
 #define EXPRKIND_ARBITER_ELEM		10
 #define EXPRKIND_TABLEFUNC			11
 #define EXPRKIND_TABLEFUNC_LATERAL	12
+#define EXPRKIND_GROUPEXPR			13
 
 /*
  * Data specific to grouping sets
@@ -748,6 +750,7 @@ subquery_planner(PlannerGlobal *glob, Query *parse, PlannerInfo *parent_root,
 	 */
 	root->hasJoinRTEs = false;
 	root->hasLateralRTEs = false;
+	root->group_rtindex = 0;
 	hasOuterJoins = false;
 	hasResultRTEs = false;
 	foreach(l, parse->rtable)
@@ -781,6 +784,10 @@ subquery_planner(PlannerGlobal *glob, Query *parse, PlannerInfo *parent_root,
 			case RTE_RESULT:
 				hasResultRTEs = true;
 				break;
+			case RTE_GROUP:
+				Assert(parse->hasGroupRTE);
+				root->group_rtindex = list_cell_number(parse->rtable, l) + 1;
+				break;
 			default:
 				/* No work here for other RTE types */
 				break;
@@ -811,6 +818,30 @@ subquery_planner(PlannerGlobal *glob, Query *parse, PlannerInfo *parent_root,
 		if (!rte->inh)
 			root->leaf_result_relids =
 				bms_make_singleton(parse->resultRelation);
+	}
+
+	/*
+	 * Replace any Vars in the subquery's targetlist and havingQual that
+	 * reference GROUP outputs with the underlying grouping expressions.
+	 *
+	 * Note that we need to preprocess the grouping expressions before we
+	 * perform the replacement.  This is because we want to have only one
+	 * instance of SubPlan for each SubLink contained in the grouping
+	 * expressions.
+	 */
+	if (parse->hasGroupRTE)
+	{
+		RangeTblEntry *rte = rt_fetch(root->group_rtindex, parse->rtable);
+
+		/* Preprocess the groupexprs list fully */
+		rte->groupexprs = (List *)
+			preprocess_expression(root, (Node *) rte->groupexprs,
+								  EXPRKIND_GROUPEXPR);
+
+		parse->targetList = (List *)
+			flatten_group_exprs(root, root->parse, (Node *) parse->targetList);
+		parse->havingQual =
+			flatten_group_exprs(root, root->parse, parse->havingQual);
 	}
 
 	/*
@@ -3454,9 +3485,22 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 
 		if (grouping_is_sortable(groupClause))
 		{
-			root->group_pathkeys = make_pathkeys_for_sortclauses(root,
-																 groupClause,
-																 tlist);
+			bool		sortable;
+
+			/*
+			 * The groupClause is logically below the grouping step.  So we
+			 * need to remove the RT index of the grouping step from the sort
+			 * expressions before we make PathKeys for them.
+			 */
+			root->group_pathkeys =
+				make_pathkeys_for_sortclauses_extended(root,
+													   &groupClause,
+													   tlist,
+													   false,
+													   true,
+													   &sortable,
+													   false);
+			Assert(sortable);
 			root->num_groupby_pathkeys = list_length(root->group_pathkeys);
 		}
 		else
@@ -3486,6 +3530,7 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 												   &root->processed_groupClause,
 												   tlist,
 												   true,
+												   false,
 												   &sortable,
 												   true);
 		if (!sortable)
@@ -3537,6 +3582,7 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 												   &root->processed_distinctClause,
 												   tlist,
 												   true,
+												   false,
 												   &sortable,
 												   false);
 		if (!sortable)
@@ -3563,6 +3609,7 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 			make_pathkeys_for_sortclauses_extended(root,
 												   &groupClauses,
 												   tlist,
+												   false,
 												   false,
 												   &sortable,
 												   false);
@@ -5450,6 +5497,9 @@ make_group_input_target(PlannerInfo *root, PathTarget *final_target)
 	int			i;
 	ListCell   *lc;
 
+	/* Shouldn't get here unless query has grouping nodes */
+	Assert(root->group_rtindex > 0);
+
 	/*
 	 * We must build a target containing all grouping columns, plus any other
 	 * Vars mentioned in the query's targetlist and HAVING qual.
@@ -5469,7 +5519,16 @@ make_group_input_target(PlannerInfo *root, PathTarget *final_target)
 		{
 			/*
 			 * It's a grouping column, so add it to the input target as-is.
+			 *
+			 * Note that the target is logically below the grouping step.  So
+			 * with grouping sets we need to remove the RT index of the
+			 * grouping step from the target expression.
 			 */
+			if (parse->groupingSets)
+				expr = (Expr *)
+					remove_nulling_relids((Node *) expr,
+										  bms_make_singleton(root->group_rtindex),
+										  NULL);
 			add_column_to_pathtarget(input_target, expr, sgref);
 		}
 		else
@@ -5497,11 +5556,20 @@ make_group_input_target(PlannerInfo *root, PathTarget *final_target)
 	 * includes Vars used in resjunk items, so we are covering the needs of
 	 * ORDER BY and window specifications.  Vars used within Aggrefs and
 	 * WindowFuncs will be pulled out here, too.
+	 *
+	 * Note that the target is logically below the grouping step.  So with
+	 * grouping sets we need to remove the RT index of the grouping step from
+	 * the non-group Vars.
 	 */
 	non_group_vars = pull_var_clause((Node *) non_group_cols,
 									 PVC_RECURSE_AGGREGATES |
 									 PVC_RECURSE_WINDOWFUNCS |
 									 PVC_INCLUDE_PLACEHOLDERS);
+	if (parse->groupingSets)
+		non_group_vars = (List *)
+			remove_nulling_relids((Node *) non_group_vars,
+								  bms_make_singleton(root->group_rtindex),
+								  NULL);
 	add_new_columns_to_pathtarget(input_target, non_group_vars);
 
 	/* clean up cruft */
@@ -6150,6 +6218,7 @@ make_pathkeys_for_window(PlannerInfo *root, WindowClause *wc,
 																 &wc->partitionClause,
 																 tlist,
 																 true,
+																 false,
 																 &sortable,
 																 false);
 

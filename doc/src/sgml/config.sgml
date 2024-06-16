@@ -10370,6 +10370,22 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-extension-destdir" xreflabel="extension_destdir">
+      <term><varname>extension_destdir</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>extension_destdir</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This directory is prepended to paths when loading extensions (control
+        and SQL files), and to the '$libdir' directive when loading modules
+        that back functions. This parameter can only be set at server start.
+        For more information see <xref linkend="extend-extensions-files-directory"/>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
     </sect2>
    </sect1>

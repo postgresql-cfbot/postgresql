@@ -600,7 +600,7 @@ CreateAnonymousSegment(Size *size)
 {
 	Size		allocsize = *size;
 	void	   *ptr = MAP_FAILED;
-	int			mmap_errno = 0;
+	int			mmap_errno = 0, madv_errno = 0;
 
 #ifndef MAP_HUGETLB
 	/* PGSharedMemoryCreate should have dealt with this case */
@@ -625,6 +625,28 @@ CreateAnonymousSegment(Size *size)
 		if (huge_pages == HUGE_PAGES_TRY && ptr == MAP_FAILED)
 			elog(DEBUG1, "mmap(%zu) with MAP_HUGETLB failed, huge pages disabled: %m",
 				 allocsize);
+
+#ifdef MADV_POPULATE_READ
+		/*
+		 * Verifying if huge pages are available is done in two steps: first
+		 * mmap with MAP_HUGETLB, then madvise with MADV_POPULATE_READ. For the
+		 * latter the MADV_POPULATE_READ flag will tell kernel to populate page
+		 * tables by triggering read faults if required, revealing potential
+		 * access issues that otherwise would result in SIGBUS.
+		 *
+		 * If mmap fails, no huge pages are available; if it does not, there is
+		 * still possibility that huge pages are limited via cgroups. If
+		 * madvise fails, there are some huge pages, but we cannot access them
+		 * due to cgroup limitations. If both succeeds, we're good to go.
+		 */
+		if(ptr != MAP_FAILED && madvise(ptr, allocsize, MADV_POPULATE_READ) != 0)
+		{
+			elog(DEBUG1, "madvise(%zu) with MAP_HUGETLB and MADV_POPULATE_READ "
+						 "failed, huge pages disabled: %m", allocsize);
+			madv_errno = errno;
+			ptr = MAP_FAILED;
+		}
+#endif
 	}
 #endif
 
@@ -650,7 +672,11 @@ CreateAnonymousSegment(Size *size)
 
 	if (ptr == MAP_FAILED)
 	{
-		errno = mmap_errno;
+		if (mmap_errno != 0)
+			errno = mmap_errno;
+		else
+			errno = madv_errno;
+
 		ereport(FATAL,
 				(errmsg("could not map anonymous shared memory: %m"),
 				 (mmap_errno == ENOMEM) ?

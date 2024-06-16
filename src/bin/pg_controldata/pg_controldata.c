@@ -1,7 +1,7 @@
 /*
  * pg_controldata
  *
- * reads the data from $PGDATA/global/pg_control
+ * reads the data from $PGDATA/<control file>
  *
  * copyright (c) Oliver Elphick <olly@lfix.co.uk>, 2001;
  * license: BSD

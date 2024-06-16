@@ -18,6 +18,7 @@
 #include <sys/stat.h>
 #include <time.h>
 
+#include "access/xlog_internal.h"
 #include "common/controldata_utils.h"
 #include "common/hashfn_unstable.h"
 #include "common/logging.h"
@@ -735,7 +736,7 @@ verify_backup_file(verifier_context *context, char *relpath, char *fullpath)
 	 * version 1.
 	 */
 	if (context->manifest->version != 1 &&
-		strcmp(relpath, "global/pg_control") == 0)
+		strcmp(relpath, XLOG_CONTROL_FILE) == 0)
 		verify_control_file(fullpath, context->manifest->system_identifier);
 
 	/* Update statistics for progress report, if necessary */

@@ -1227,6 +1227,7 @@ IndxInfo
 InferClause
 InferenceElem
 InfoItem
+InfoState
 InhInfo
 InheritableSocket
 InitSampleScan_function

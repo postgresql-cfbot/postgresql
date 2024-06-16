@@ -33,7 +33,7 @@ $node->safe_psql(
 	'postgres', q{
 DO $$
 DECLARE
-    wal_segsize int := setting::int FROM pg_settings WHERE name = 'wal_segment_size';
+    wal_segsize int := (SELECT setting::int FROM pg_settings WHERE name = 'wal_segment_size');
     remain int;
     iters  int := 0;
 BEGIN
@@ -43,7 +43,7 @@ BEGIN
         from generate_series(1, 10) g;
 
         remain := wal_segsize - (pg_current_wal_insert_lsn() - '0/0') % wal_segsize;
-        IF remain < 2 * setting::int from pg_settings where name = 'block_size' THEN
+        IF (SELECT remain < 2 * setting::int from pg_settings where name = 'block_size') THEN
             RAISE log 'exiting after % iterations, % bytes to end of WAL segment', iters, remain;
             EXIT;
         END IF;

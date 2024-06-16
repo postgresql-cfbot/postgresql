@@ -320,7 +320,7 @@ rollback;
 
 -- Now the same test with plpgsql (since it depends on SPI which is different)
 create or replace function max_xacttest() returns smallint language plpgsql as
-'begin return max(a) from xacttest; end' stable;
+'begin return (select max(a) from xacttest); end' stable;
 
 begin;
 update xacttest set a = max_xacttest() + 10 where a > 0;
@@ -328,7 +328,7 @@ select * from xacttest;
 rollback;
 
 create or replace function max_xacttest() returns smallint language plpgsql as
-'begin return max(a) from xacttest; end' volatile;
+'begin return (select max(a) from xacttest); end' volatile;
 
 begin;
 update xacttest set a = max_xacttest() + 10 where a > 0;

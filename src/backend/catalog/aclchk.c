@@ -4847,6 +4847,124 @@ recordExtensionInitPrivWorker(Oid objoid, Oid classoid, int objsubid,
 }
 
 /*
+ * ReplaceRoleInInitPriv
+ *
+ * Used by shdepReassignOwned to replace mentions of a role in pg_init_privs.
+ */
+void
+ReplaceRoleInInitPriv(Oid oldroleid, Oid newroleid,
+					  Oid classid, Oid objid, int32 objsubid)
+{
+	Relation	rel;
+	ScanKeyData key[3];
+	SysScanDesc scan;
+	HeapTuple	oldtuple;
+	Datum		oldAclDatum;
+	bool		isNull;
+	Acl		   *old_acl;
+	Acl		   *new_acl;
+	HeapTuple	newtuple;
+	int			noldmembers;
+	int			nnewmembers;
+	Oid		   *oldmembers;
+	Oid		   *newmembers;
+
+	/* Search for existing pg_init_privs entry for the target object. */
+	rel = table_open(InitPrivsRelationId, RowExclusiveLock);
+
+	ScanKeyInit(&key[0],
+				Anum_pg_init_privs_objoid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(objid));
+	ScanKeyInit(&key[1],
+				Anum_pg_init_privs_classoid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(classid));
+	ScanKeyInit(&key[2],
+				Anum_pg_init_privs_objsubid,
+				BTEqualStrategyNumber, F_INT4EQ,
+				Int32GetDatum(objsubid));
+
+	scan = systable_beginscan(rel, InitPrivsObjIndexId, true,
+							  NULL, 3, key);
+
+	/* There should exist only one entry or none. */
+	oldtuple = systable_getnext(scan);
+
+	if (!HeapTupleIsValid(oldtuple))
+	{
+		/*
+		 * Hmm, why are we here if there's no entry?  But pack up and go away
+		 * quietly.
+		 */
+		systable_endscan(scan);
+		table_close(rel, RowExclusiveLock);
+		return;
+	}
+
+	/* Get a writable copy of the existing ACL. */
+	oldAclDatum = heap_getattr(oldtuple, Anum_pg_init_privs_initprivs,
+							   RelationGetDescr(rel), &isNull);
+	if (isNull)
+	{
+		/* Nothing needs to be changed; pack up and go away quietly. */
+		systable_endscan(scan);
+		table_close(rel, RowExclusiveLock);
+		return;
+	}
+	old_acl = DatumGetAclPCopy(oldAclDatum);
+
+	/*
+	 * Generate new ACL.  This usage of aclnewowner is a bit off-label when
+	 * oldroleid isn't the owner; but it does the job fine.
+	 */
+	new_acl = aclnewowner(old_acl, oldroleid, newroleid);
+
+	/*
+	 * If we end with an empty ACL, delete the pg_init_privs entry.  (That
+	 * probably can't happen here, but we may as well cover the case.)
+	 */
+	if (new_acl == NULL || ACL_NUM(new_acl) == 0)
+	{
+		CatalogTupleDelete(rel, &oldtuple->t_self);
+	}
+	else
+	{
+		Datum		values[Natts_pg_init_privs] = {0};
+		bool		nulls[Natts_pg_init_privs] = {0};
+		bool		replaces[Natts_pg_init_privs] = {0};
+
+		/* Update existing entry. */
+		values[Anum_pg_init_privs_initprivs - 1] = PointerGetDatum(new_acl);
+		replaces[Anum_pg_init_privs_initprivs - 1] = true;
+
+		newtuple = heap_modify_tuple(oldtuple, RelationGetDescr(rel),
+									 values, nulls, replaces);
+		CatalogTupleUpdate(rel, &newtuple->t_self, newtuple);
+	}
+
+	/*
+	 * Update the shared dependency ACL info.  We rely on the knowledge that
+	 * updateInitAclDependencies doesn't really pay attention to its ownerId
+	 * argument, so it doesn't matter whether that's accurate or not.
+	 */
+	noldmembers = aclmembers(old_acl, &oldmembers);
+	nnewmembers = aclmembers(new_acl, &newmembers);
+
+	updateInitAclDependencies(classid, objid, objsubid,
+							  oldroleid,
+							  noldmembers, oldmembers,
+							  nnewmembers, newmembers);
+
+	systable_endscan(scan);
+
+	/* prevent error when processing objects multiple times */
+	CommandCounterIncrement();
+
+	table_close(rel, RowExclusiveLock);
+}
+
+/*
  * RemoveRoleFromInitPriv
  *
  * Used by shdepDropOwned to remove mentions of a role in pg_init_privs.

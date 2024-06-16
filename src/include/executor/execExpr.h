@@ -237,6 +237,10 @@ typedef enum ExprEvalOp
 	EEOP_CONVERT_ROWTYPE,
 	EEOP_SCALARARRAYOP,
 	EEOP_HASHED_SCALARARRAYOP,
+	EEOP_HASHDATUM_FIRST,
+	EEOP_HASHDATUM_FIRST_STRICT,
+	EEOP_HASHDATUM_NEXT32,
+	EEOP_HASHDATUM_NEXT32_STRICT,
 	EEOP_XMLEXPR,
 	EEOP_JSON_CONSTRUCTOR,
 	EEOP_IS_JSON,
@@ -592,6 +596,16 @@ typedef struct ExprEvalStep
 			FunctionCallInfo fcinfo_data;	/* arguments etc */
 			ScalarArrayOpExpr *saop;
 		}			hashedscalararrayop;
+
+		/* for EEOP_HASHDATUM_(FIRST|NEXT32)[_STRICT] */
+		struct
+		{
+			FmgrInfo   *finfo;	/* function's lookup data */
+			FunctionCallInfo fcinfo_data;	/* arguments etc */
+			/* faster to access without additional indirection: */
+			PGFunction	fn_addr;	/* actual call address */
+			int			jumpdone;	/* jump here on null */
+		}			hashdatum;
 
 		/* for EEOP_XMLEXPR */
 		struct

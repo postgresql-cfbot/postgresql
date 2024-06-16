@@ -24,8 +24,7 @@ extern Node *MultiExecHash(HashState *node);
 extern void ExecEndHash(HashState *node);
 extern void ExecReScanHash(HashState *node);
 
-extern HashJoinTable ExecHashTableCreate(HashState *state, List *hashOperators, List *hashCollations,
-										 bool keepNulls);
+extern HashJoinTable ExecHashTableCreate(HashState *state);
 extern void ExecParallelHashTableAlloc(HashJoinTable hashtable,
 									   int batchno);
 extern void ExecHashTableDestroy(HashJoinTable hashtable);

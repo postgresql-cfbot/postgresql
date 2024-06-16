@@ -1912,6 +1912,133 @@ llvm_compile_expr(ExprState *state)
 				LLVMBuildBr(b, opblocks[opno + 1]);
 				break;
 
+			case EEOP_HASHDATUM_FIRST:
+			case EEOP_HASHDATUM_FIRST_STRICT:
+			case EEOP_HASHDATUM_NEXT32:
+			case EEOP_HASHDATUM_NEXT32_STRICT:
+				{
+					FunctionCallInfo fcinfo = op->d.hashdatum.fcinfo_data;
+					LLVMValueRef v_fcinfo_isnull;
+					LLVMValueRef v_retval;
+					LLVMBasicBlockRef b_checkargnull;
+					LLVMValueRef v_fcinfo;
+					LLVMBasicBlockRef b_ifnotnull;
+					LLVMBasicBlockRef b_ifnullblock;
+					LLVMValueRef v_argisnull;
+					LLVMValueRef v_prevhash = NULL;
+
+					/*
+					 * Block for the actual function call, if args are
+					 * non-NULL.
+					 */
+					b_ifnotnull = l_bb_before_v(opblocks[opno + 1],
+												"b.%d.ifnotnull",
+												opno);
+
+					/* we expect the hash function to have 1 argument */
+					if (fcinfo->nargs != 1)
+						elog(ERROR, "incorrect number of function arguments");
+
+					v_fcinfo = l_ptr_const(fcinfo,
+										   l_ptr(StructFunctionCallInfoData));
+
+					b_checkargnull = l_bb_before_v(b_ifnotnull,
+												   "b.%d.isnull.0", opno);
+
+					/* jump to checking if the arg is NULL */
+					LLVMBuildBr(b, b_checkargnull);
+
+					/*
+					 * Determine what to do if we find the argument to be
+					 * NULL.  When processing a strict opcode we set resnull
+					 * to true and goto jumpdone.  Otherwise, goto the next
+					 * opblock.
+					 */
+					if (opcode == EEOP_HASHDATUM_FIRST_STRICT ||
+						opcode == EEOP_HASHDATUM_NEXT32_STRICT)
+					{
+						b_ifnullblock = l_bb_before_v(b_ifnotnull,
+													  "b.%d.strictnull",
+													  opno);
+
+						LLVMPositionBuilderAtEnd(b, b_ifnullblock);
+
+						/* set resnull to true and jumpdone */
+						LLVMBuildStore(b, l_sbool_const(1), v_resnullp);
+						LLVMBuildStore(b, l_sizet_const(0), v_resvaluep);
+						LLVMBuildBr(b, opblocks[op->d.hashdatum.jumpdone]);
+					}
+					else
+						b_ifnullblock = opblocks[opno + 1];
+
+					LLVMPositionBuilderAtEnd(b, b_checkargnull);
+
+					/* check if the input parameter is NULL */
+					v_argisnull = l_funcnull(b, v_fcinfo, 0);
+					LLVMBuildCondBr(b,
+									LLVMBuildICmp(b,
+												  LLVMIntEQ,
+												  v_argisnull,
+												  l_sbool_const(1),
+												  ""),
+									b_ifnullblock,
+									b_ifnotnull);
+
+					LLVMPositionBuilderAtEnd(b, b_ifnotnull);
+
+					/*
+					 * If not hashing the first value then we must load the
+					 * previous hash value and rotate it left one bit.
+					 */
+					if (opcode == EEOP_HASHDATUM_NEXT32 ||
+						opcode == EEOP_HASHDATUM_NEXT32_STRICT)
+					{
+						LLVMValueRef v_tmp1;
+						LLVMValueRef v_tmp2;
+
+						/*
+						 * Fetch the previously hashed value from where the
+						 * EEOP_HASHDATUM_FIRST* operation stored it.
+						 */
+						v_prevhash = l_load(b, TypeSizeT, v_resvaluep, "");
+
+						/*
+						 * Rotate bits left by 1 bit.  Be careful not to
+						 * overflow uint32 when working with size_t.
+						 */
+						v_tmp1 = LLVMBuildShl(b, v_prevhash, l_sizet_const(1),
+											  "");
+						v_tmp1 = LLVMBuildAnd(b, v_tmp1,
+											  l_sizet_const(0xffffffff), "");
+						v_tmp2 = LLVMBuildLShr(b, v_prevhash,
+											   l_sizet_const(31), "");
+						v_prevhash = LLVMBuildOr(b, v_tmp1, v_tmp2, "");
+					}
+
+					/* call the hash function */
+					v_retval = BuildV1Call(context,
+										   b,
+										   mod,
+										   fcinfo,
+										   &v_fcinfo_isnull);
+
+					if (opcode == EEOP_HASHDATUM_NEXT32 ||
+						opcode == EEOP_HASHDATUM_NEXT32_STRICT)
+					{
+						/*
+						 * Perform XOR (^) operation to combine the previous
+						 * and the just calculated hash value.
+						 */
+						v_retval = LLVMBuildXor(b, v_prevhash, v_retval, "");
+					}
+
+					LLVMBuildStore(b, v_retval, v_resvaluep);
+					LLVMBuildStore(b, l_sbool_const(0), v_resnullp);
+
+					LLVMBuildBr(b, opblocks[opno + 1]);
+					break;
+				}
+
 			case EEOP_XMLEXPR:
 				build_EvalXFunc(b, mod, "ExecEvalXmlExpr",
 								v_state, op);

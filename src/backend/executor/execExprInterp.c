@@ -240,7 +240,8 @@ ExecReadyInterpretedExpr(ExprState *state)
 
 	/* Simple validity checks on expression */
 	Assert(state->steps_len >= 1);
-	Assert(state->steps[state->steps_len - 1].opcode == EEOP_DONE);
+	Assert(state->steps[state->steps_len - 1].opcode == EEOP_DONE_RETURN ||
+		   state->steps[state->steps_len - 1].opcode == EEOP_DONE_NO_RETURN);
 
 	/*
 	 * Don't perform redundant initialization. This is unreachable in current
@@ -315,7 +316,9 @@ ExecReadyInterpretedExpr(ExprState *state)
 			return;
 		}
 		else if (step0 == EEOP_CASE_TESTVAL &&
-				 step1 == EEOP_FUNCEXPR_STRICT &&
+				 (step1 == EEOP_FUNCEXPR_STRICT ||
+				  step1 == EEOP_FUNCEXPR_STRICT_1 ||
+				  step1 == EEOP_FUNCEXPR_STRICT_2) &&
 				 state->steps[0].d.casetest.value)
 		{
 			state->evalfunc_private = (void *) ExecJustApplyFuncToCase;
@@ -406,7 +409,8 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 	 */
 #if defined(EEO_USE_COMPUTED_GOTO)
 	static const void *const dispatch_table[] = {
-		&&CASE_EEOP_DONE,
+		&&CASE_EEOP_DONE_RETURN,
+		&&CASE_EEOP_DONE_NO_RETURN,
 		&&CASE_EEOP_INNER_FETCHSOME,
 		&&CASE_EEOP_OUTER_FETCHSOME,
 		&&CASE_EEOP_SCAN_FETCHSOME,
@@ -425,6 +429,8 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		&&CASE_EEOP_CONST,
 		&&CASE_EEOP_FUNCEXPR,
 		&&CASE_EEOP_FUNCEXPR_STRICT,
+		&&CASE_EEOP_FUNCEXPR_STRICT_1,
+		&&CASE_EEOP_FUNCEXPR_STRICT_2,
 		&&CASE_EEOP_FUNCEXPR_FUSAGE,
 		&&CASE_EEOP_FUNCEXPR_STRICT_FUSAGE,
 		&&CASE_EEOP_BOOL_AND_STEP_FIRST,
@@ -493,6 +499,7 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		&&CASE_EEOP_AGG_STRICT_DESERIALIZE,
 		&&CASE_EEOP_AGG_DESERIALIZE,
 		&&CASE_EEOP_AGG_STRICT_INPUT_CHECK_ARGS,
+		&&CASE_EEOP_AGG_STRICT_INPUT_CHECK_ARGS_1,
 		&&CASE_EEOP_AGG_STRICT_INPUT_CHECK_NULLS,
 		&&CASE_EEOP_AGG_PLAIN_PERGROUP_NULLCHECK,
 		&&CASE_EEOP_AGG_PLAIN_TRANS_INIT_STRICT_BYVAL,
@@ -530,9 +537,16 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 
 	EEO_SWITCH()
 	{
-		EEO_CASE(EEOP_DONE)
+		EEO_CASE(EEOP_DONE_RETURN)
 		{
-			goto out;
+			*isnull = state->resnull;
+			return state->resvalue;
+		}
+
+		EEO_CASE(EEOP_DONE_NO_RETURN)
+		{
+			Assert(isnull == NULL);
+			return 0;
 		}
 
 		EEO_CASE(EEOP_INNER_FETCHSOME)
@@ -744,12 +758,15 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			EEO_NEXT();
 		}
 
+		/* strict function call with more than two arguments */
 		EEO_CASE(EEOP_FUNCEXPR_STRICT)
 		{
 			FunctionCallInfo fcinfo = op->d.func.fcinfo_data;
 			NullableDatum *args = fcinfo->args;
 			int			nargs = op->d.func.nargs;
 			Datum		d;
+
+			Assert(nargs > 2);
 
 			/* strict function, so check for NULL args */
 			for (int argno = 0; argno < nargs; argno++)
@@ -766,6 +783,54 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			*op->resnull = fcinfo->isnull;
 
 	strictfail:
+			EEO_NEXT();
+		}
+
+		/* strict function call with one argument */
+		EEO_CASE(EEOP_FUNCEXPR_STRICT_1)
+		{
+			FunctionCallInfo fcinfo = op->d.func.fcinfo_data;
+			NullableDatum *args = fcinfo->args;
+
+			Assert(op->d.func.nargs == 1);
+
+			/* strict function, so check for NULL args */
+			if (args[0].isnull)
+				*op->resnull = true;
+			else
+			{
+				Datum		d;
+
+				fcinfo->isnull = false;
+				d = op->d.func.fn_addr(fcinfo);
+				*op->resvalue = d;
+				*op->resnull = fcinfo->isnull;
+			}
+
+			EEO_NEXT();
+		}
+
+		/* strict function call with two arguments */
+		EEO_CASE(EEOP_FUNCEXPR_STRICT_2)
+		{
+			FunctionCallInfo fcinfo = op->d.func.fcinfo_data;
+			NullableDatum *args = fcinfo->args;
+
+			Assert(op->d.func.nargs == 2);
+
+			/* strict function, so check for NULL args */
+			if (args[0].isnull || args[1].isnull)
+				*op->resnull = true;
+			else
+			{
+				Datum		d;
+
+				fcinfo->isnull = false;
+				d = op->d.func.fn_addr(fcinfo);
+				*op->resvalue = d;
+				*op->resnull = fcinfo->isnull;
+			}
+
 			EEO_NEXT();
 		}
 
@@ -1670,16 +1735,32 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		 * input is not NULL.
 		 */
 
+		/* when checking more than one argument */
 		EEO_CASE(EEOP_AGG_STRICT_INPUT_CHECK_ARGS)
 		{
 			NullableDatum *args = op->d.agg_strict_input_check.args;
 			int			nargs = op->d.agg_strict_input_check.nargs;
+
+			Assert(nargs > 1);
 
 			for (int argno = 0; argno < nargs; argno++)
 			{
 				if (args[argno].isnull)
 					EEO_JUMP(op->d.agg_strict_input_check.jumpnull);
 			}
+			EEO_NEXT();
+		}
+
+		/* special case for just one argument */
+		EEO_CASE(EEOP_AGG_STRICT_INPUT_CHECK_ARGS_1)
+		{
+			NullableDatum *args = op->d.agg_strict_input_check.args;
+			PG_USED_FOR_ASSERTS_ONLY int nargs = op->d.agg_strict_input_check.nargs;
+
+			Assert(nargs == 1);
+
+			if (args[0].isnull)
+				EEO_JUMP(op->d.agg_strict_input_check.jumpnull);
 			EEO_NEXT();
 		}
 
@@ -1885,13 +1966,13 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		{
 			/* unreachable */
 			Assert(false);
-			goto out;
+			goto out_error;
 		}
 	}
 
-out:
-	*isnull = state->resnull;
-	return state->resvalue;
+out_error:
+	pg_unreachable();
+	return (Datum) 0;
 }
 
 /*

@@ -1834,10 +1834,12 @@ DROP FUNCTION psql_error;
 \dX "no.such.database"."no.such.schema"."no.such.extended.statistics"
 
 -- check \drg and \du
-CREATE ROLE regress_du_role0;
-CREATE ROLE regress_du_role1;
-CREATE ROLE regress_du_role2;
-CREATE ROLE regress_du_admin;
+CREATE ROLE regress_du_role0 LOGIN PASSWORD '123' VALID UNTIL '2024-06-04' CONNECTION LIMIT 0;
+CREATE ROLE regress_du_role1 CREATEROLE CONNECTION LIMIT -1 VALID UNTIL 'infinity';
+CREATE ROLE regress_du_role2 LOGIN REPLICATION BYPASSRLS CONNECTION LIMIT 42;
+CREATE ROLE regress_du_admin LOGIN SUPERUSER CREATEROLE CREATEDB BYPASSRLS REPLICATION INHERIT;
+
+COMMENT ON ROLE regress_du_admin IS 'some description';
 
 GRANT regress_du_role0 TO regress_du_admin WITH ADMIN TRUE;
 GRANT regress_du_role1 TO regress_du_admin WITH ADMIN TRUE;
@@ -1852,7 +1854,7 @@ GRANT regress_du_role0 TO regress_du_role1 WITH ADMIN FALSE, INHERIT FALSE, SET 
 GRANT regress_du_role0 TO regress_du_role2 WITH ADMIN FALSE, INHERIT FALSE, SET FALSE GRANTED BY regress_du_role2;
 
 \drg regress_du_role*
-\du regress_du_role*
+\du+ regress_du*
 
 DROP ROLE regress_du_role0;
 DROP ROLE regress_du_role1;

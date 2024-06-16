@@ -36,7 +36,6 @@ static bool describeOneTableDetails(const char *schemaname,
 									bool verbose);
 static void add_tablespace_footer(printTableContent *const cont, char relkind,
 								  Oid tablespace, const bool newline);
-static void add_role_attribute(PQExpBuffer buf, const char *const str);
 static bool listTSParsersVerbose(const char *pattern);
 static bool describeOneTSParser(const char *oid, const char *nspname,
 								const char *prsname);
@@ -3615,34 +3614,47 @@ describeRoles(const char *pattern, bool verbose, bool showSystem)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
-	printTableContent cont;
-	printTableOpt myopt = pset.popt.topt;
-	int			ncols = 2;
-	int			nrows = 0;
-	int			i;
-	int			conns;
-	const char	align = 'l';
-	char	  **attr;
-
-	myopt.default_footer = false;
+	printQueryOpt myopt = pset.popt;
 
 	initPQExpBuffer(&buf);
-
 	printfPQExpBuffer(&buf,
-					  "SELECT r.rolname, r.rolsuper, r.rolinherit,\n"
-					  "  r.rolcreaterole, r.rolcreatedb, r.rolcanlogin,\n"
-					  "  r.rolconnlimit, r.rolvaliduntil");
+					  "SELECT r.rolname AS \"%s\",\n"
+					  "  CASE WHEN r.rolcanlogin THEN '%s' ELSE '%s' END \"%s\",\n"
+					  "  pg_catalog.concat_ws(E'\\n',\n"
+					  "    CASE WHEN r.rolsuper THEN '%s' END,\n"
+					  "    CASE WHEN r.rolcreatedb THEN '%s' END,\n"
+					  "    CASE WHEN r.rolcreaterole THEN '%s' END,\n"
+					  "    CASE WHEN r.rolinherit THEN '%s' END,\n"
+					  "    CASE WHEN r.rolreplication THEN '%s' END",
+					  gettext_noop("Role name"),
+					  gettext_noop("yes"), gettext_noop("no"),
+					  gettext_noop("Login"),
+					  gettext_noop("Superuser"),
+					  gettext_noop("Create DB"),
+					  gettext_noop("Create role"),
+					  gettext_noop("Inherit"),
+					  gettext_noop("Replication"));
+
+	if (pset.sversion >= 90500)
+		appendPQExpBuffer(&buf,
+						  ",\n    CASE WHEN r.rolbypassrls THEN '%s' END",
+						  gettext_noop("Bypass RLS"));
+
+	appendPQExpBuffer(&buf, "\n  ) AS \"%s\"", gettext_noop("Attributes"));
+
+	appendPQExpBuffer(&buf,
+					  ",\n  r.rolvaliduntil AS \"%s\",\n"
+					  "  CASE WHEN r.rolconnlimit = -1 THEN NULL\n"
+					  "       ELSE r.rolconnlimit\n"
+					  "  END \"%s\"",
+					  gettext_noop("Valid until"),
+					  gettext_noop("Connection limit"));
 
 	if (verbose)
 	{
-		appendPQExpBufferStr(&buf, "\n, pg_catalog.shobj_description(r.oid, 'pg_authid') AS description");
-		ncols++;
-	}
-	appendPQExpBufferStr(&buf, "\n, r.rolreplication");
-
-	if (pset.sversion >= 90500)
-	{
-		appendPQExpBufferStr(&buf, "\n, r.rolbypassrls");
+		appendPQExpBuffer(&buf,
+						  ",\n  pg_catalog.shobj_description(r.oid, 'pg_authid') AS \"%s\"",
+						  gettext_noop("Description"));
 	}
 
 	appendPQExpBufferStr(&buf, "\nFROM pg_catalog.pg_roles r\n");
@@ -3661,97 +3673,17 @@ describeRoles(const char *pattern, bool verbose, bool showSystem)
 	appendPQExpBufferStr(&buf, "ORDER BY 1;");
 
 	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
 	if (!res)
 		return false;
 
-	nrows = PQntuples(res);
-	attr = pg_malloc0((nrows + 1) * sizeof(*attr));
+	myopt.title = _("List of roles");
+	myopt.translate_header = true;
 
-	printTableInit(&cont, &myopt, _("List of roles"), ncols, nrows);
-
-	printTableAddHeader(&cont, gettext_noop("Role name"), true, align);
-	printTableAddHeader(&cont, gettext_noop("Attributes"), true, align);
-
-	if (verbose)
-		printTableAddHeader(&cont, gettext_noop("Description"), true, align);
-
-	for (i = 0; i < nrows; i++)
-	{
-		printTableAddCell(&cont, PQgetvalue(res, i, 0), false, false);
-
-		resetPQExpBuffer(&buf);
-		if (strcmp(PQgetvalue(res, i, 1), "t") == 0)
-			add_role_attribute(&buf, _("Superuser"));
-
-		if (strcmp(PQgetvalue(res, i, 2), "t") != 0)
-			add_role_attribute(&buf, _("No inheritance"));
-
-		if (strcmp(PQgetvalue(res, i, 3), "t") == 0)
-			add_role_attribute(&buf, _("Create role"));
-
-		if (strcmp(PQgetvalue(res, i, 4), "t") == 0)
-			add_role_attribute(&buf, _("Create DB"));
-
-		if (strcmp(PQgetvalue(res, i, 5), "t") != 0)
-			add_role_attribute(&buf, _("Cannot login"));
-
-		if (strcmp(PQgetvalue(res, i, (verbose ? 9 : 8)), "t") == 0)
-			add_role_attribute(&buf, _("Replication"));
-
-		if (pset.sversion >= 90500)
-			if (strcmp(PQgetvalue(res, i, (verbose ? 10 : 9)), "t") == 0)
-				add_role_attribute(&buf, _("Bypass RLS"));
-
-		conns = atoi(PQgetvalue(res, i, 6));
-		if (conns >= 0)
-		{
-			if (buf.len > 0)
-				appendPQExpBufferChar(&buf, '\n');
-
-			if (conns == 0)
-				appendPQExpBufferStr(&buf, _("No connections"));
-			else
-				appendPQExpBuffer(&buf, ngettext("%d connection",
-												 "%d connections",
-												 conns),
-								  conns);
-		}
-
-		if (strcmp(PQgetvalue(res, i, 7), "") != 0)
-		{
-			if (buf.len > 0)
-				appendPQExpBufferChar(&buf, '\n');
-			appendPQExpBufferStr(&buf, _("Password valid until "));
-			appendPQExpBufferStr(&buf, PQgetvalue(res, i, 7));
-		}
-
-		attr[i] = pg_strdup(buf.data);
-
-		printTableAddCell(&cont, attr[i], false, false);
-
-		if (verbose)
-			printTableAddCell(&cont, PQgetvalue(res, i, 8), false, false);
-	}
-	termPQExpBuffer(&buf);
-
-	printTable(&cont, pset.queryFout, false, pset.logfile);
-	printTableCleanup(&cont);
-
-	for (i = 0; i < nrows; i++)
-		free(attr[i]);
-	free(attr);
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
 
 	PQclear(res);
 	return true;
-}
-
-static void
-add_role_attribute(PQExpBuffer buf, const char *const str)
-{
-	if (buf->len > 0)
-		appendPQExpBufferStr(buf, ", ");
-
-	appendPQExpBufferStr(buf, str);
 }
 
 /*

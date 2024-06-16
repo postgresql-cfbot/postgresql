@@ -174,6 +174,11 @@ extern void RestoreReindexState(const void *reindexstate);
 
 extern void IndexSetParentIndex(Relation partitionIdx, Oid parentOid);
 
+extern void SafeICStateShmemInit(void);
+// TODO: bound by relation or database
+extern void UpdateNumSafeConcurrentlyBuiltIndexes(bool increment);
+extern bool IsAnySafeIndexBuildsConcurrently(void);
+
 
 /*
  * itemptr_encode - Encode ItemPointer as int64/int8

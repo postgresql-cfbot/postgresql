@@ -152,6 +152,7 @@ typedef struct RelationData
 	List	   *rd_indexlist;	/* list of OIDs of indexes on relation */
 	Oid			rd_pkindex;		/* OID of (deferrable?) primary key, if any */
 	bool		rd_ispkdeferrable;	/* is rd_pkindex a deferrable PK? */
+	bool		rd_safeindexconcurrentlybuilding; /* is safe concurrent index building in progress for relation */
 	Oid			rd_replidindex; /* OID of replica identity index, if any */
 
 	/* data managed by RelationGetStatExtList: */

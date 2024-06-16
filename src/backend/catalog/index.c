@@ -97,6 +97,11 @@ typedef struct
 	Oid			pendingReindexedIndexes[FLEXIBLE_ARRAY_MEMBER];
 } SerializedReindexState;
 
+typedef struct {
+	pg_atomic_uint32 numSafeConcurrentlyBuiltIndexes;
+} SafeICSharedState;
+static SafeICSharedState *SafeICStateShmem;
+
 /* non-export function prototypes */
 static bool relationHasPrimaryKey(Relation rel);
 static TupleDesc ConstructTupleDescriptor(Relation heapRelation,
@@ -174,6 +179,37 @@ relationHasPrimaryKey(Relation rel)
 	list_free(indexoidlist);
 
 	return result;
+}
+
+
+void SafeICStateShmemInit(void)
+{
+	bool		found;
+
+	SafeICStateShmem = (SafeICSharedState *)
+			ShmemInitStruct("Safe Concurrently Build Indexes",
+							sizeof(SafeICSharedState),
+							&found);
+
+	if (!IsUnderPostmaster)
+	{
+		Assert(!found);
+		pg_atomic_init_u32(&SafeICStateShmem->numSafeConcurrentlyBuiltIndexes, 0);
+	} else
+		Assert(found);
+}
+
+void UpdateNumSafeConcurrentlyBuiltIndexes(bool increment)
+{
+	if (increment)
+		pg_atomic_fetch_add_u32(&SafeICStateShmem->numSafeConcurrentlyBuiltIndexes, 1);
+	else
+		pg_atomic_fetch_sub_u32(&SafeICStateShmem->numSafeConcurrentlyBuiltIndexes, 1);
+}
+
+bool IsAnySafeIndexBuildsConcurrently()
+{
+	return pg_atomic_read_u32(&SafeICStateShmem->numSafeConcurrentlyBuiltIndexes) > 0;
 }
 
 /*

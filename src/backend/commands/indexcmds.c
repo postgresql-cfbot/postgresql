@@ -1622,6 +1622,8 @@ DefineIndex(Oid tableId,
 	 * hold lock on the parent table.  This might need to change later.
 	 */
 	LockRelationIdForSession(&heaprelid, ShareUpdateExclusiveLock);
+	if (safe_index && concurrent)
+		UpdateNumSafeConcurrentlyBuiltIndexes(true);
 
 	PopActiveSnapshot();
 	CommitTransactionCommand();
@@ -1790,7 +1792,15 @@ DefineIndex(Oid tableId,
 	 * to replan; so relcache flush on the index itself was sufficient.)
 	 */
 	CacheInvalidateRelcacheByRelid(heaprelid.relId);
+	/* Commit index as valid before reducing counter of safe concurrently build indexes */
+	CommitTransactionCommand();
 
+	Assert(concurrent);
+	if (safe_index)
+		UpdateNumSafeConcurrentlyBuiltIndexes(false);
+
+	/* Start a new transaction to finish process properly */
+	StartTransactionCommand();
 	/*
 	 * Last thing to do is release the session-level lock on the parent table.
 	 */
@@ -3782,6 +3792,8 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 					 indexRel->rd_indpred == NIL);
 		idx->tableId = RelationGetRelid(heapRel);
 		idx->amId = indexRel->rd_rel->relam;
+		if (idx->safe)
+			UpdateNumSafeConcurrentlyBuiltIndexes(true);
 
 		/* This function shouldn't be called for temporary relations. */
 		if (indexRel->rd_rel->relpersistence == RELPERSISTENCE_TEMP)
@@ -4223,6 +4235,14 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 		LockRelId  *lockrelid = (LockRelId *) lfirst(lc);
 
 		UnlockRelationIdForSession(lockrelid, ShareUpdateExclusiveLock);
+	}
+
+	// now we may clear safe index building flags
+	foreach(lc, newIndexIds)
+	{
+		ReindexIndexInfo *newidx = lfirst(lc);
+		if (newidx->safe)
+			UpdateNumSafeConcurrentlyBuiltIndexes(false);
 	}
 
 	/* Start a new transaction to finish process properly */

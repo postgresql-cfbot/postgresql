@@ -53,6 +53,7 @@
 #include "access/xact.h"
 #include "access/xlogutils.h"
 #include "catalog/catalog.h"
+#include "catalog/index.h"
 #include "catalog/pg_authid.h"
 #include "commands/dbcommands.h"
 #include "miscadmin.h"
@@ -237,6 +238,12 @@ typedef struct ComputeXidHorizonsResult
 	TransactionId data_oldest_nonremovable;
 
 	/*
+	 * Oldest xid for which deleted tuples need to be retained in normal user
+	 * defined tables with index building in progress by process with PROC_INSAFE_IC.
+	 */
+	TransactionId data_safe_ic_oldest_nonremovable;
+
+	/*
 	 * Oldest xid for which deleted tuples need to be retained in this
 	 * session's temporary tables.
 	 */
@@ -251,6 +258,7 @@ typedef enum GlobalVisHorizonKind
 	VISHORIZON_SHARED,
 	VISHORIZON_CATALOG,
 	VISHORIZON_DATA,
+	VISHORIZON_DATA_SAFE_IC,
 	VISHORIZON_TEMP,
 } GlobalVisHorizonKind;
 
@@ -297,6 +305,7 @@ static TransactionId standbySnapshotPendingXmin;
 static GlobalVisState GlobalVisSharedRels;
 static GlobalVisState GlobalVisCatalogRels;
 static GlobalVisState GlobalVisDataRels;
+static GlobalVisState GlobalVisDataSafeIcRels;
 static GlobalVisState GlobalVisTempRels;
 
 /*
@@ -1727,9 +1736,6 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h)
 	bool		in_recovery = RecoveryInProgress();
 	TransactionId *other_xids = ProcGlobal->xids;
 
-	/* inferred after ProcArrayLock is released */
-	h->catalog_oldest_nonremovable = InvalidTransactionId;
-
 	LWLockAcquire(ProcArrayLock, LW_SHARED);
 
 	h->latest_completed = TransamVariables->latestCompletedXid;
@@ -1749,7 +1755,9 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h)
 
 		h->oldest_considered_running = initial;
 		h->shared_oldest_nonremovable = initial;
+		h->catalog_oldest_nonremovable = initial;
 		h->data_oldest_nonremovable = initial;
+		h->data_safe_ic_oldest_nonremovable = initial;
 
 		/*
 		 * Only modifications made by this backend affect the horizon for
@@ -1847,10 +1855,27 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h)
 			(statusFlags & PROC_AFFECTS_ALL_HORIZONS) ||
 			in_recovery)
 		{
-			h->data_oldest_nonremovable =
-				TransactionIdOlder(h->data_oldest_nonremovable, xmin);
+			h->data_safe_ic_oldest_nonremovable =
+					TransactionIdOlder(h->data_safe_ic_oldest_nonremovable, xmin);
+
+			if (!(statusFlags & PROC_IN_SAFE_IC))
+				h->data_oldest_nonremovable =
+					TransactionIdOlder(h->data_oldest_nonremovable, xmin);
+
+			/* Catalog tables need to consider all backends in this db */
+			h->catalog_oldest_nonremovable =
+				TransactionIdOlder(h->catalog_oldest_nonremovable, xmin);
+
 		}
 	}
+
+	/* catalog horizon should never be later than data */
+	Assert(TransactionIdPrecedesOrEquals(h->catalog_oldest_nonremovable,
+										 h->data_oldest_nonremovable));
+
+	/* data horizon should never be later than safe index building horizon */
+	Assert(TransactionIdPrecedesOrEquals(h->data_safe_ic_oldest_nonremovable,
+										 h->data_oldest_nonremovable));
 
 	/*
 	 * If in recovery fetch oldest xid in KnownAssignedXids, will be applied
@@ -1873,6 +1898,10 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h)
 			TransactionIdOlder(h->shared_oldest_nonremovable, kaxmin);
 		h->data_oldest_nonremovable =
 			TransactionIdOlder(h->data_oldest_nonremovable, kaxmin);
+		h->data_safe_ic_oldest_nonremovable =
+				TransactionIdOlder(h->data_safe_ic_oldest_nonremovable, kaxmin);
+		h->catalog_oldest_nonremovable =
+			TransactionIdOlder(h->catalog_oldest_nonremovable, kaxmin);
 		/* temp relations cannot be accessed in recovery */
 	}
 
@@ -1880,6 +1909,8 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h)
 										 h->shared_oldest_nonremovable));
 	Assert(TransactionIdPrecedesOrEquals(h->shared_oldest_nonremovable,
 										 h->data_oldest_nonremovable));
+	Assert(TransactionIdPrecedesOrEquals(h->shared_oldest_nonremovable,
+										 h->data_safe_ic_oldest_nonremovable));
 
 	/*
 	 * Check whether there are replication slots requiring an older xmin.
@@ -1888,6 +1919,8 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h)
 		TransactionIdOlder(h->shared_oldest_nonremovable, h->slot_xmin);
 	h->data_oldest_nonremovable =
 		TransactionIdOlder(h->data_oldest_nonremovable, h->slot_xmin);
+	h->data_safe_ic_oldest_nonremovable =
+			TransactionIdOlder(h->data_safe_ic_oldest_nonremovable, h->slot_xmin);
 
 	/*
 	 * The only difference between catalog / data horizons is that the slot's
@@ -1900,7 +1933,9 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h)
 	h->shared_oldest_nonremovable =
 		TransactionIdOlder(h->shared_oldest_nonremovable,
 						   h->slot_catalog_xmin);
-	h->catalog_oldest_nonremovable = h->data_oldest_nonremovable;
+	h->catalog_oldest_nonremovable =
+		TransactionIdOlder(h->catalog_oldest_nonremovable,
+						   h->slot_xmin);
 	h->catalog_oldest_nonremovable =
 		TransactionIdOlder(h->catalog_oldest_nonremovable,
 						   h->slot_catalog_xmin);
@@ -1918,6 +1953,9 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h)
 	h->oldest_considered_running =
 		TransactionIdOlder(h->oldest_considered_running,
 						   h->data_oldest_nonremovable);
+	h->oldest_considered_running =
+			TransactionIdOlder(h->oldest_considered_running,
+							   h->data_safe_ic_oldest_nonremovable);
 
 	/*
 	 * shared horizons have to be at least as old as the oldest visible in
@@ -1925,6 +1963,8 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h)
 	 */
 	Assert(TransactionIdPrecedesOrEquals(h->shared_oldest_nonremovable,
 										 h->data_oldest_nonremovable));
+	Assert(TransactionIdPrecedesOrEquals(h->shared_oldest_nonremovable,
+										 h->data_safe_ic_oldest_nonremovable));
 	Assert(TransactionIdPrecedesOrEquals(h->shared_oldest_nonremovable,
 										 h->catalog_oldest_nonremovable));
 
@@ -1938,6 +1978,8 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h)
 										 h->catalog_oldest_nonremovable));
 	Assert(TransactionIdPrecedesOrEquals(h->oldest_considered_running,
 										 h->data_oldest_nonremovable));
+	Assert(TransactionIdPrecedesOrEquals(h->oldest_considered_running,
+										 h->data_safe_ic_oldest_nonremovable));
 	Assert(TransactionIdPrecedesOrEquals(h->oldest_considered_running,
 										 h->temp_oldest_nonremovable));
 	Assert(!TransactionIdIsValid(h->slot_xmin) ||
@@ -1973,7 +2015,21 @@ GlobalVisHorizonKindForRel(Relation rel)
 			 RelationIsAccessibleInLogicalDecoding(rel))
 		return VISHORIZON_CATALOG;
 	else if (!RELATION_IS_LOCAL(rel))
+	{
+		// TODO: do we need to do something special about the TOAST?
+		if (!rel->rd_indexvalid)
+		{
+			// skip loading indexes if we know there is not safe concurrent index builds in the cluster
+			if (IsAnySafeIndexBuildsConcurrently())
+			{
+				RelationGetIndexList(rel);
+				Assert(rel->rd_indexvalid);
+			} else return VISHORIZON_DATA;
+		}
+		if (rel->rd_safeindexconcurrentlybuilding)
+			return VISHORIZON_DATA_SAFE_IC;
 		return VISHORIZON_DATA;
+	}
 	else
 		return VISHORIZON_TEMP;
 }
@@ -2004,6 +2060,8 @@ GetOldestNonRemovableTransactionId(Relation rel)
 			return horizons.catalog_oldest_nonremovable;
 		case VISHORIZON_DATA:
 			return horizons.data_oldest_nonremovable;
+		case VISHORIZON_DATA_SAFE_IC:
+			return horizons.data_safe_ic_oldest_nonremovable;
 		case VISHORIZON_TEMP:
 			return horizons.temp_oldest_nonremovable;
 	}
@@ -2454,6 +2512,9 @@ GetSnapshotData(Snapshot snapshot)
 		GlobalVisDataRels.definitely_needed =
 			FullTransactionIdNewer(def_vis_fxid_data,
 								   GlobalVisDataRels.definitely_needed);
+		GlobalVisDataSafeIcRels.definitely_needed =
+				FullTransactionIdNewer(def_vis_fxid_data,
+									   GlobalVisDataSafeIcRels.definitely_needed);
 		/* See temp_oldest_nonremovable computation in ComputeXidHorizons() */
 		if (TransactionIdIsNormal(myxid))
 			GlobalVisTempRels.definitely_needed =
@@ -2478,6 +2539,9 @@ GetSnapshotData(Snapshot snapshot)
 		GlobalVisCatalogRels.maybe_needed =
 			FullTransactionIdNewer(GlobalVisCatalogRels.maybe_needed,
 								   oldestfxid);
+		GlobalVisDataSafeIcRels.maybe_needed =
+				FullTransactionIdNewer(GlobalVisDataSafeIcRels.maybe_needed,
+									   oldestfxid);
 		GlobalVisDataRels.maybe_needed =
 			FullTransactionIdNewer(GlobalVisDataRels.maybe_needed,
 								   oldestfxid);
@@ -4109,6 +4173,9 @@ GlobalVisTestFor(Relation rel)
 		case VISHORIZON_DATA:
 			state = &GlobalVisDataRels;
 			break;
+		case VISHORIZON_DATA_SAFE_IC:
+			state = &GlobalVisDataSafeIcRels;
+			break;
 		case VISHORIZON_TEMP:
 			state = &GlobalVisTempRels;
 			break;
@@ -4161,6 +4228,9 @@ GlobalVisUpdateApply(ComputeXidHorizonsResult *horizons)
 	GlobalVisDataRels.maybe_needed =
 		FullXidRelativeTo(horizons->latest_completed,
 						  horizons->data_oldest_nonremovable);
+	GlobalVisDataSafeIcRels.maybe_needed =
+			FullXidRelativeTo(horizons->latest_completed,
+							  horizons->data_safe_ic_oldest_nonremovable);
 	GlobalVisTempRels.maybe_needed =
 		FullXidRelativeTo(horizons->latest_completed,
 						  horizons->temp_oldest_nonremovable);
@@ -4179,6 +4249,9 @@ GlobalVisUpdateApply(ComputeXidHorizonsResult *horizons)
 	GlobalVisDataRels.definitely_needed =
 		FullTransactionIdNewer(GlobalVisDataRels.maybe_needed,
 							   GlobalVisDataRels.definitely_needed);
+	GlobalVisDataSafeIcRels.definitely_needed =
+			FullTransactionIdNewer(GlobalVisDataSafeIcRels.maybe_needed,
+								   GlobalVisDataSafeIcRels.definitely_needed);
 	GlobalVisTempRels.definitely_needed = GlobalVisTempRels.maybe_needed;
 
 	ComputeXidHorizonsResultLastXmin = RecentXmin;

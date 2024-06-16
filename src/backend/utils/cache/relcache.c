@@ -41,6 +41,7 @@
 #include "access/xact.h"
 #include "catalog/binary_upgrade.h"
 #include "catalog/catalog.h"
+#include "catalog/index.h"
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
@@ -4809,6 +4810,7 @@ RelationGetIndexList(Relation relation)
 	Oid			pkeyIndex = InvalidOid;
 	Oid			candidateIndex = InvalidOid;
 	bool		pkdeferrable = false;
+	bool 		safeindexconcurrentlybuilding = false;
 	MemoryContext oldcxt;
 
 	/* Quick exit if we already computed the list. */
@@ -4850,6 +4852,14 @@ RelationGetIndexList(Relation relation)
 		result = lappend_oid(result, index->indexrelid);
 
 		/*
+		 * Consider index as building if it is not yet valid.
+		 * Also, we must deal only with indexes which are built using the
+		 * concurrent safe mode.
+		 */
+		if (!index->indisvalid)
+			safeindexconcurrentlybuilding |= IsAnySafeIndexBuildsConcurrently();
+
+		/*
 		 * Invalid, non-unique, non-immediate or predicate indexes aren't
 		 * interesting for either oid indexes or replication identity indexes,
 		 * so don't check them.
@@ -4881,6 +4891,7 @@ RelationGetIndexList(Relation relation)
 	relation->rd_indexlist = list_copy(result);
 	relation->rd_pkindex = pkeyIndex;
 	relation->rd_ispkdeferrable = pkdeferrable;
+	relation->rd_safeindexconcurrentlybuilding = safeindexconcurrentlybuilding;
 	if (replident == REPLICA_IDENTITY_DEFAULT && OidIsValid(pkeyIndex) && !pkdeferrable)
 		relation->rd_replidindex = pkeyIndex;
 	else if (replident == REPLICA_IDENTITY_INDEX && OidIsValid(candidateIndex))

@@ -24,6 +24,7 @@
 #include "access/twophase.h"
 #include "access/xlogprefetcher.h"
 #include "access/xlogrecovery.h"
+#include "catalog/index.h"
 #include "commands/async.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -357,6 +358,7 @@ CreateOrAttachShmemStructs(void)
 	StatsShmemInit();
 	WaitEventExtensionShmemInit();
 	InjectionPointShmemInit();
+	SafeICStateShmemInit();
 }
 
 /*

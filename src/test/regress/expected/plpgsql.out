@@ -121,7 +121,7 @@ create trigger tg_room_ad after delete
 -- ************************************************************
 create function tg_wslot_biu() returns trigger as $$
 begin
-    if count(*) = 0 from Room where roomno = new.roomno then
+    if (select count(*) = 0 from Room where roomno = new.roomno) then
         raise exception 'Room % does not exist', new.roomno;
     end if;
     return new;
@@ -286,7 +286,7 @@ begin
         raise exception ''no manual manipulation of HSlot'';
     end if;
     if tg_op = ''UPDATE'' and new.hubname != old.hubname then
-	if count(*) > 0 from Hub where name = old.hubname then
+	if (select count(*) > 0 from Hub where name = old.hubname) then
 	    raise exception ''no manual manipulation of HSlot'';
 	end if;
     end if;
@@ -942,12 +942,12 @@ begin
 	return retval || pslot_backlink_view(psrec.slotlink);
     end if;
     if sltype = ''HS'' then
-        retval := comment from Hub H, HSlot HS
+        retval := (select comment from Hub H, HSlot HS
 			where HS.slotname = psrec.slotlink
-			  and H.name = HS.hubname;
+			  and H.name = HS.hubname);
         retval := retval || '' slot '';
-	retval := retval || slotno::text from HSlot
-			where slotname = psrec.slotlink;
+	retval := (select retval || slotno::text from HSlot
+			where slotname = psrec.slotlink);
 	return retval;
     end if;
     return psrec.slotlink;

@@ -4741,9 +4741,13 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 		memcpy(dstPage, srcPage, BLCKSZ);
 		MarkBufferDirty(dstBuf);
 
-		/* WAL-log the copied page. */
+		/*
+		 * WAL-log the copied page.
+		 * Note that we don't know about the type of data contained in the
+		 * page, so we can't report that the buffer is a standard page.
+		 */
 		if (use_wal)
-			log_newpage_buffer(dstBuf, true);
+			log_newpage_buffer(dstBuf, false);
 
 		END_CRIT_SECTION();
 

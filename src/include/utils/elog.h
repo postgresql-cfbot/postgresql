@@ -145,8 +145,11 @@ struct Node;
 			errstart_cold(elevel, domain) : \
 			errstart(elevel, domain)) \
 			__VA_ARGS__, errfinish(__FILE__, __LINE__, __func__); \
-		if (__builtin_constant_p(elevel) && (elevel) >= ERROR) \
+		if (__builtin_constant_p(elevel) && (elevel) >= ERROR) { \
+			volatile char fix_backtrace_addr; \
+			(void) fix_backtrace_addr; \
 			pg_unreachable(); \
+		} \
 	} while(0)
 #else							/* !HAVE__BUILTIN_CONSTANT_P */
 #define ereport_domain(elevel, domain, ...)	\
@@ -155,8 +158,11 @@ struct Node;
 		pg_prevent_errno_in_scope(); \
 		if (errstart(elevel_, domain)) \
 			__VA_ARGS__, errfinish(__FILE__, __LINE__, __func__); \
-		if (elevel_ >= ERROR) \
+		if (elevel_ >= ERROR) {\
+			volatile char fix_backtrace_addr; \
+			(void) fix_backtrace_addr; \
 			pg_unreachable(); \
+		} \
 	} while(0)
 #endif							/* HAVE__BUILTIN_CONSTANT_P */
 

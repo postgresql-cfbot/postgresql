@@ -82,11 +82,15 @@ ALTER TABLE test_oat_schema.test_oat_tab ENABLE ROW LEVEL SECURITY;
 NOTICE:  in process utility: superuser attempting ALTER TABLE
 NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser finished namespace search (subId=0x0) [report on violation, allowed]
+NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [report on violation, allowed]
+NOTICE:  in object access: superuser finished namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser attempting alter (subId=0x0) [explicit without auxiliary object]
 NOTICE:  in object access: superuser finished alter (subId=0x0) [explicit without auxiliary object]
 NOTICE:  in process utility: superuser finished ALTER TABLE
 ALTER TABLE test_oat_schema.test_oat_tab DISABLE ROW LEVEL SECURITY;
 NOTICE:  in process utility: superuser attempting ALTER TABLE
+NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [report on violation, allowed]
+NOTICE:  in object access: superuser finished namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser finished namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser attempting alter (subId=0x0) [explicit without auxiliary object]
@@ -96,11 +100,15 @@ ALTER TABLE test_oat_schema.test_oat_tab FORCE ROW LEVEL SECURITY;
 NOTICE:  in process utility: superuser attempting ALTER TABLE
 NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser finished namespace search (subId=0x0) [report on violation, allowed]
+NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [report on violation, allowed]
+NOTICE:  in object access: superuser finished namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser attempting alter (subId=0x0) [explicit without auxiliary object]
 NOTICE:  in object access: superuser finished alter (subId=0x0) [explicit without auxiliary object]
 NOTICE:  in process utility: superuser finished ALTER TABLE
 ALTER TABLE test_oat_schema.test_oat_tab NO FORCE ROW LEVEL SECURITY;
 NOTICE:  in process utility: superuser attempting ALTER TABLE
+NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [report on violation, allowed]
+NOTICE:  in object access: superuser finished namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser finished namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser attempting alter (subId=0x0) [explicit without auxiliary object]
@@ -111,6 +119,8 @@ ALTER TABLE test_oat_schema.test_oat_tab DISABLE RULE test_oat_notify;
 NOTICE:  in process utility: superuser attempting ALTER TABLE
 NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser finished namespace search (subId=0x0) [report on violation, allowed]
+NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [report on violation, allowed]
+NOTICE:  in object access: superuser finished namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser attempting alter (subId=0x0) [explicit without auxiliary object]
 NOTICE:  in object access: superuser finished alter (subId=0x0) [explicit without auxiliary object]
 NOTICE:  in object access: superuser attempting alter (subId=0x0) [explicit without auxiliary object]
@@ -118,6 +128,8 @@ NOTICE:  in object access: superuser finished alter (subId=0x0) [explicit withou
 NOTICE:  in process utility: superuser finished ALTER TABLE
 ALTER TABLE test_oat_schema.test_oat_tab ENABLE RULE test_oat_notify;
 NOTICE:  in process utility: superuser attempting ALTER TABLE
+NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [report on violation, allowed]
+NOTICE:  in object access: superuser finished namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser finished namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser attempting alter (subId=0x0) [explicit without auxiliary object]
@@ -130,6 +142,8 @@ ALTER TABLE test_oat_schema.test_oat_tab DISABLE TRIGGER test_oat_trigger;
 NOTICE:  in process utility: superuser attempting ALTER TABLE
 NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser finished namespace search (subId=0x0) [report on violation, allowed]
+NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [report on violation, allowed]
+NOTICE:  in object access: superuser finished namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser attempting alter (subId=0x0) [explicit without auxiliary object]
 NOTICE:  in object access: superuser finished alter (subId=0x0) [explicit without auxiliary object]
 NOTICE:  in object access: superuser attempting alter (subId=0x0) [explicit without auxiliary object]
@@ -137,6 +151,8 @@ NOTICE:  in object access: superuser finished alter (subId=0x0) [explicit withou
 NOTICE:  in process utility: superuser finished ALTER TABLE
 ALTER TABLE test_oat_schema.test_oat_tab ENABLE TRIGGER test_oat_trigger;
 NOTICE:  in process utility: superuser attempting ALTER TABLE
+NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [report on violation, allowed]
+NOTICE:  in object access: superuser finished namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser finished namespace search (subId=0x0) [report on violation, allowed]
 NOTICE:  in object access: superuser attempting alter (subId=0x0) [explicit without auxiliary object]

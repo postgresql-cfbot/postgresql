@@ -24,8 +24,13 @@
 
 #include "common/percentrepl.h"
 #include "common/string.h"
+#include "libpq/hba.h"
 #include "libpq/libpq.h"
 #include "storage/fd.h"
+#include "utils/guc.h"
+#include "utils/memutils.h"
+
+static HostsLine *parse_hosts_line(TokenizedAuthLine *tok_line, int elevel);
 
 /*
  * Run ssl_passphrase_command
@@ -174,4 +179,155 @@ check_ssl_key_file_permissions(const char *ssl_key_file, bool isServerStart)
 #endif
 
 	return true;
+}
+
+/*
+ * parse_hosts_line
+ *
+ * Parses a loaded line from the pg_hosts.conf configuration and pulls out the
+ * hostname, certificate, key and CA parts in order to build an SNI config in
+ * the TLS backend. Validation of the parsed values is left for the TLS backend
+ * to implement.
+ */
+static HostsLine *
+parse_hosts_line(TokenizedAuthLine *tok_line, int elevel)
+{
+	HostsLine  *parsedline;
+	List	   *tokens;
+	ListCell   *field;
+	AuthToken  *token;
+
+	parsedline = palloc0(sizeof(HostsLine));
+	parsedline->sourcefile = pstrdup(tok_line->file_name);
+	parsedline->linenumber = tok_line->line_num;
+	parsedline->rawline = pstrdup(tok_line->raw_line);
+
+	/* Hostname */
+	field = list_head(tok_line->fields);
+	tokens = lfirst(field);
+	token = linitial(tokens);
+	parsedline->hostname = pstrdup(token->string);
+
+	/* SSL Certificate */
+	field = lnext(tok_line->fields, field);
+	if (!field)
+	{
+		ereport(elevel,
+				errcode(ERRCODE_CONFIG_FILE_ERROR),
+				errmsg("missing entry at end of line"),
+				errcontext("line %d of configuration file \"%s\"",
+						   tok_line->line_num, tok_line->file_name));
+		return NULL;
+	}
+	tokens = lfirst(field);
+	token = linitial(tokens);
+	parsedline->ssl_cert = pstrdup(token->string);
+
+	/* SSL key */
+	field = lnext(tok_line->fields, field);
+	if (!field)
+	{
+		ereport(elevel,
+				errcode(ERRCODE_CONFIG_FILE_ERROR),
+				errmsg("missing entry at end of line"),
+				errcontext("line %d of configuration file \"%s\"",
+						   tok_line->line_num, tok_line->file_name));
+		return NULL;
+	}
+	tokens = lfirst(field);
+	token = linitial(tokens);
+	parsedline->ssl_key = pstrdup(token->string);
+
+	/* SSL CA */
+	field = lnext(tok_line->fields, field);
+	if (!field)
+	{
+		ereport(elevel,
+				errcode(ERRCODE_CONFIG_FILE_ERROR),
+				errmsg("missing entry at end of line"),
+				errcontext("line %d of configuration file \"%s\"",
+						   tok_line->line_num, tok_line->file_name));
+		return NULL;
+	}
+	tokens = lfirst(field);
+	token = linitial(tokens);
+	parsedline->ssl_ca = pstrdup(token->string);
+
+	return parsedline;
+}
+
+/*
+ * load_hosts
+ *
+ * Reads pg_hosts.conf and passes back a List of parsed lines, or NIL in case
+ * of errors.
+ */
+List *
+load_hosts(void)
+{
+	FILE	   *file;
+	ListCell   *line;
+	List	   *hosts_lines = NIL;
+	List	   *parsed_lines = NIL;
+	HostsLine  *newline;
+	bool		ok = true;
+	MemoryContext oldcxt;
+	MemoryContext hostcxt;
+
+	file = open_auth_file(HostsFileName, LOG, 0, NULL);
+	if (file == NULL)
+	{
+		/* An error has already been logged so no need to add one here. */
+		return NIL;
+	}
+
+	tokenize_auth_file(HostsFileName, file, &hosts_lines, LOG, 0);
+
+	hostcxt = AllocSetContextCreate(PostmasterContext,
+									"hosts file parser context",
+									ALLOCSET_SMALL_SIZES);
+	oldcxt = MemoryContextSwitchTo(hostcxt);
+
+	foreach(line, hosts_lines)
+	{
+		TokenizedAuthLine *tok_line = (TokenizedAuthLine *) lfirst(line);
+
+		if (tok_line->err_msg != NULL)
+		{
+			ok = false;
+			continue;
+		}
+
+		if ((newline = parse_hosts_line(tok_line, LOG)) == NULL)
+		{
+			ok = false;
+			continue;
+		}
+
+		parsed_lines = lappend(parsed_lines, newline);
+	}
+
+	free_auth_file(file, 0);
+	MemoryContextSwitchTo(oldcxt);
+
+	/*
+	 * If we didn't find any SNI configuration then that's not an error since
+	 * the pg_hosts file is additive to the default SSL configuration.
+	 */
+	if (ok && parsed_lines == NIL)
+	{
+		ereport(DEBUG1,
+				errmsg("no SNI configuration added from configuration file  \"%s\"",
+					   HostsFileName));
+		MemoryContextDelete(hostcxt);
+		return NIL;
+	}
+
+	if (!ok)
+	{
+		MemoryContextDelete(hostcxt);
+		return NIL;
+	}
+
+	return parsed_lines;
 }

@@ -122,6 +122,7 @@ extern PGDLLIMPORT char *SSLECDHCurve;
 extern PGDLLIMPORT bool SSLPreferServerCiphers;
 extern PGDLLIMPORT int ssl_min_protocol_version;
 extern PGDLLIMPORT int ssl_max_protocol_version;
+extern PGDLLIMPORT int ssl_snimode;
 
 enum ssl_protocol_versions
 {
@@ -132,6 +133,13 @@ enum ssl_protocol_versions
 	PG_TLS1_3_VERSION,
 };
 
+enum ssl_snimode
+{
+	SSL_SNIMODE_OFF = 0,
+	SSL_SNIMODE_DEFAULT,
+	SSL_SNIMODE_STRICT
+};
+
 /*
  * prototypes for functions in be-secure-common.c
  */
@@ -139,5 +147,6 @@ extern int	run_ssl_passphrase_command(const char *prompt, bool is_server_start,
 									   char *buf, int size);
 extern bool check_ssl_key_file_permissions(const char *ssl_key_file,
 										   bool isServerStart);
+extern List *load_hosts(void);
 
 #endif							/* LIBPQ_H */

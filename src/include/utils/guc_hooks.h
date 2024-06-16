@@ -178,4 +178,11 @@ extern bool check_standby_slot_names(char **newval, void **extra,
 									 GucSource source);
 extern void assign_standby_slot_names(const char *newval, void *extra);
 
+extern bool check_local_preload_libraries(char **newval, void **extra,
+										  GucSource source);
+extern bool check_session_preload_libraries(char **newval, void **extra,
+											GucSource source);
+extern bool check_shared_preload_libraries(char **newval, void **extra,
+										   GucSource source);
+
 #endif							/* GUC_HOOKS_H */

@@ -599,8 +599,7 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 			TimestampDifferenceExceeds(starttime, endtime,
 									   params->log_min_duration))
 		{
-			long		secs_dur;
-			int			usecs_dur;
+			long		delay_in_ms;
 			WalUsage	walusage;
 			BufferUsage bufferusage;
 			StringInfoData buf;
@@ -609,7 +608,7 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 			double		read_rate = 0,
 						write_rate = 0;
 
-			TimestampDifference(starttime, endtime, &secs_dur, &usecs_dur);
+			delay_in_ms = TimestampDifferenceMilliseconds(starttime, endtime);
 			memset(&walusage, 0, sizeof(WalUsage));
 			WalUsageAccumDiff(&walusage, &pgWalUsage, &startwalusage);
 			memset(&bufferusage, 0, sizeof(BufferUsage));
@@ -738,17 +737,17 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 				appendStringInfo(&buf, _("I/O timings: read: %.3f ms, write: %.3f ms\n"),
 								 read_ms, write_ms);
 			}
-			if (secs_dur > 0 || usecs_dur > 0)
+			if (delay_in_ms > 0)
 			{
 				read_rate = (double) BLCKSZ * (bufferusage.shared_blks_read + bufferusage.local_blks_read) /
-					(1024 * 1024) / (secs_dur + usecs_dur / 1000000.0);
+					(1024 * 1024) / (delay_in_ms / 1000.0);
 				write_rate = (double) BLCKSZ * (bufferusage.shared_blks_dirtied + bufferusage.local_blks_dirtied) /
-					(1024 * 1024) / (secs_dur + usecs_dur / 1000000.0);
+					(1024 * 1024) / (delay_in_ms / 1000.0);
 			}
 			appendStringInfo(&buf, _("avg read rate: %.3f MB/s, avg write rate: %.3f MB/s\n"),
 							 read_rate, write_rate);
 			appendStringInfo(&buf,
-							 _("buffer usage: %lld hits, %lld misses, %lld dirtied\n"),
+							 _("buffer usage: %lld hits, %lld reads, %lld dirtied\n"),
 							 (long long) (bufferusage.shared_blks_hit + bufferusage.local_blks_hit),
 							 (long long) (bufferusage.shared_blks_read + bufferusage.local_blks_read),
 							 (long long) (bufferusage.shared_blks_dirtied + bufferusage.local_blks_dirtied));

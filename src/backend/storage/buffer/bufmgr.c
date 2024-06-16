@@ -1173,7 +1173,6 @@ PinBufferForBlock(Relation rel,
 	}
 	if (*foundPtr)
 	{
-		VacuumPageHit++;
 		pgstat_count_io_op(io_object, io_context, IOOP_HIT);
 		if (VacuumCostActive)
 			VacuumCostBalance += VacuumCostPageHit;
@@ -1565,7 +1564,6 @@ WaitReadBuffers(ReadBuffersOperation *operation)
 											  false);
 		}
 
-		VacuumPageMiss += io_buffers_len;
 		if (VacuumCostActive)
 			VacuumCostBalance += VacuumCostPageMiss * io_buffers_len;
 	}
@@ -2559,7 +2557,6 @@ MarkBufferDirty(Buffer buffer)
 	 */
 	if (!(old_buf_state & BM_DIRTY))
 	{
-		VacuumPageDirty++;
 		pgBufferUsage.shared_blks_dirtied++;
 		if (VacuumCostActive)
 			VacuumCostBalance += VacuumCostPageDirty;
@@ -5082,7 +5079,6 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 
 		if (dirtied)
 		{
-			VacuumPageDirty++;
 			pgBufferUsage.shared_blks_dirtied++;
 			if (VacuumCostActive)
 				VacuumCostBalance += VacuumCostPageDirty;

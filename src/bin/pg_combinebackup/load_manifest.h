@@ -27,6 +27,7 @@ typedef struct manifest_file
 	pg_checksum_type checksum_type;
 	int			checksum_length;
 	uint8	   *checksum_payload;
+	bool		matched;		/* for caller use, initially false */
 } manifest_file;
 
 #define SH_PREFIX		manifest_files

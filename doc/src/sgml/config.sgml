@@ -7471,6 +7471,11 @@ local0.*    /var/log/postgresql
              <entry>yes</entry>
             </row>
             <row>
+             <entry><literal>%L</literal></entry>
+             <entry>Local address</entry>
+             <entry>yes</entry>
+            </row>
+            <row>
              <entry><literal>%b</literal></entry>
              <entry>Backend type</entry>
              <entry>no</entry>

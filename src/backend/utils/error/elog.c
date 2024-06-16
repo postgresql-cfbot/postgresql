@@ -67,6 +67,7 @@
 #endif
 
 #include "access/xact.h"
+#include "common/ip.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "mb/pg_wchar.h"
@@ -79,6 +80,7 @@
 #include "storage/ipc.h"
 #include "storage/proc.h"
 #include "tcop/tcopprot.h"
+#include "utils/builtins.h"
 #include "utils/guc_hooks.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
@@ -3022,6 +3024,29 @@ log_status_format(StringInfo buf, const char *format, ErrorData *edata)
 				else if (padding != 0)
 					appendStringInfoSpaces(buf,
 										   padding > 0 ? padding : -padding);
+				break;
+			case 'L':
+				if (MyProcPort
+					&& (MyProcPort->laddr.addr.ss_family == AF_INET
+						||
+						MyProcPort->laddr.addr.ss_family == AF_INET6)
+					)
+				{
+					Port *port = MyProcPort;
+					char local_host[NI_MAXHOST];
+
+					local_host[0] = '\0';
+
+					if (0 == pg_getnameinfo_all(&port->laddr.addr, port->laddr.salen,
+											   local_host, sizeof(local_host),
+											   NULL, 0,
+											   NI_NUMERICHOST | NI_NUMERICSERV)
+						)
+						appendStringInfo(buf, "%s", local_host);
+				}
+				else
+					appendStringInfo(buf, "[local]");
+
 				break;
 			case 'r':
 				if (MyProcPort && MyProcPort->remote_host)

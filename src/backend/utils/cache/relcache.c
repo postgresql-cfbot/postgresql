@@ -536,8 +536,6 @@ RelationBuildTupleDesc(Relation relation)
 
 	constr = (TupleConstr *) MemoryContextAllocZero(CacheMemoryContext,
 													sizeof(TupleConstr));
-	constr->has_not_null = false;
-	constr->has_generated_stored = false;
 
 	/*
 	 * Form a scan key that selects only user attributes (attnum > 0).
@@ -591,6 +589,8 @@ RelationBuildTupleDesc(Relation relation)
 			constr->has_not_null = true;
 		if (attp->attgenerated == ATTRIBUTE_GENERATED_STORED)
 			constr->has_generated_stored = true;
+		if (attp->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+			constr->has_generated_virtual = true;
 		if (attp->atthasdef)
 			ndef++;
 

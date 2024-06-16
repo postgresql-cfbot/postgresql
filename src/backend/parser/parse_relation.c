@@ -704,7 +704,11 @@ scanNSItemForColumn(ParseState *pstate, ParseNamespaceItem *nsitem,
 						colname),
 				 parser_errposition(pstate, location)));
 
-	/* In generated column, no system column is allowed except tableOid */
+	/*
+	 * In generated column, no system column is allowed except tableOid.
+	 * (Required for stored generated, but we also do it for virtual generated
+	 * for now for consistency.)
+	 */
 	if (pstate->p_expr_kind == EXPR_KIND_GENERATED_COLUMN &&
 		attnum < InvalidAttrNumber && attnum != TableOidAttributeNumber)
 		ereport(ERROR,
@@ -1510,6 +1514,9 @@ addRangeTableEntry(ParseState *pstate,
 	 */
 	rte->eref = makeAlias(refname, NIL);
 	buildRelationAliases(rel->rd_att, alias, rte->eref);
+
+	if (rel->rd_att->constr && rel->rd_att->constr->has_generated_virtual)
+		pstate->p_hasGeneratedVirtual = true;
 
 	/*
 	 * Set flags and initialize access permissions.

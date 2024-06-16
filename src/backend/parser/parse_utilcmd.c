@@ -754,10 +754,36 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 									column->colname, cxt->relation->relname),
 							 parser_errposition(cxt->pstate,
 												constraint->location)));
-				column->generated = ATTRIBUTE_GENERATED_STORED;
+				column->generated = constraint->generated_kind;
 				column->raw_default = constraint->raw_expr;
 				Assert(constraint->cooked_expr == NULL);
 				saw_generated = true;
+
+				/*
+				 * TODO: Prevent virtual generated columns from having a
+				 * domain type.  We would have to enforce domain constraints
+				 * when columns underlying the generated column change.  This
+				 * could possibly be implemented, but it's not.
+				 *
+				 * XXX If column->typeName is not set, then this column
+				 * definition is probably a partition definition and will
+				 * presumably get its pre-vetted type from elsewhere.  If that
+				 * doesn't hold, maybe this check needs to be moved elsewhere.
+				 */
+				if (column->generated == ATTRIBUTE_GENERATED_VIRTUAL && column->typeName)
+				{
+					Type		ctype;
+
+					ctype = typenameType(cxt->pstate, column->typeName, NULL);
+					if (((Form_pg_type) GETSTRUCT(ctype))->typtype == TYPTYPE_DOMAIN)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("virtual generated column \"%s\" cannot have a domain type",
+										column->colname),
+								 parser_errposition(cxt->pstate,
+													column->location)));
+					ReleaseSysCache(ctype);
+				}
 				break;
 
 			case CONSTR_CHECK:
@@ -842,6 +868,18 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 							column->colname, cxt->relation->relname),
 					 parser_errposition(cxt->pstate,
 										constraint->location)));
+
+		/*
+		 * TODO: Straightforward not-null constraints won't work on virtual
+		 * generated columns, because there is no support for expanding the
+		 * column when the constraint is checked.  Maybe we could convert the
+		 * not-null constraint into a full check constraint, so that the
+		 * generation expression can be expanded at check time.
+		 */
+		if (column->is_not_null && column->generated == ATTRIBUTE_GENERATED_VIRTUAL)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("not-null constraints are not supported on virtual generated columns")));
 	}
 
 	/*

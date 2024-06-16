@@ -246,6 +246,11 @@ CreateStatistics(CreateStatsStmt *stmt)
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("statistics creation on system columns is not supported")));
 
+			if (attForm->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("statistics creation on virtual generated columns is not supported")));
+
 			/* Disallow data types without a less-than operator */
 			type = lookup_type_cache(attForm->atttypid, TYPECACHE_LT_OPR);
 			if (type->lt_opr == InvalidOid)
@@ -268,6 +273,11 @@ CreateStatistics(CreateStatsStmt *stmt)
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("statistics creation on system columns is not supported")));
+
+			if (get_attgenerated(relid, var->varattno) == ATTRIBUTE_GENERATED_VIRTUAL)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("statistics creation on virtual generated columns is not supported")));
 
 			/* Disallow data types without a less-than operator */
 			type = lookup_type_cache(var->vartype, TYPECACHE_LT_OPR);

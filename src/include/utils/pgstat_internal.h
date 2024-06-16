@@ -200,6 +200,12 @@ typedef struct PgStat_KindInfo
 	bool		named_on_disk:1;
 
 	/*
+	 * The offset of the struct in the containing shared memory control
+	 * structure.
+	 */
+	uint32		shared_ctl_off;
+
+	/*
 	 * The size of an entry in the shared stats hash table (pointed to by
 	 * PgStatShared_HashEntry->body).
 	 */

@@ -881,6 +881,12 @@ typedef struct RelOptInfo
 	bool		consider_parallel;
 
 	/*
+	 * Params, if any, required to be provided when consider_parallel is true.
+	 * Note: if consider_parallel is false then this is not meaningful.
+	 */
+	Bitmapset	*params_req_for_parallel;
+
+	/*
 	 * default result targetlist for Paths scanning this relation; list of
 	 * Vars/Exprs, cost, width
 	 */

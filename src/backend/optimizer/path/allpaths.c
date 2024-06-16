@@ -629,7 +629,7 @@ set_rel_consider_parallel(PlannerInfo *root, RelOptInfo *rel,
 
 				if (proparallel != PROPARALLEL_SAFE)
 					return;
-				if (!is_parallel_safe(root, (Node *) rte->tablesample->args))
+				if (!is_parallel_safe_with_params(root, (Node *) rte->tablesample->args, &rel->params_req_for_parallel))
 					return;
 			}
 
@@ -695,7 +695,7 @@ set_rel_consider_parallel(PlannerInfo *root, RelOptInfo *rel,
 
 		case RTE_FUNCTION:
 			/* Check for parallel-restricted functions. */
-			if (!is_parallel_safe(root, (Node *) rte->functions))
+			if (!is_parallel_safe_with_params(root, (Node *) rte->functions, &rel->params_req_for_parallel))
 				return;
 			break;
 
@@ -705,7 +705,7 @@ set_rel_consider_parallel(PlannerInfo *root, RelOptInfo *rel,
 
 		case RTE_VALUES:
 			/* Check for parallel-restricted functions. */
-			if (!is_parallel_safe(root, (Node *) rte->values_lists))
+			if (!is_parallel_safe_with_params(root, (Node *) rte->values_lists, &rel->params_req_for_parallel))
 				return;
 			break;
 
@@ -742,14 +742,14 @@ set_rel_consider_parallel(PlannerInfo *root, RelOptInfo *rel,
 	 * outer join clauses work correctly.  It would likely break equivalence
 	 * classes, too.
 	 */
-	if (!is_parallel_safe(root, (Node *) rel->baserestrictinfo))
+	if (!is_parallel_safe_with_params(root, (Node *) rel->baserestrictinfo, &rel->params_req_for_parallel))
 		return;
 
 	/*
 	 * Likewise, if the relation's outputs are not parallel-safe, give up.
 	 * (Usually, they're just Vars, but sometimes they're not.)
 	 */
-	if (!is_parallel_safe(root, (Node *) rel->reltarget->exprs))
+	if (!is_parallel_safe_with_params(root, (Node *) rel->reltarget->exprs, &rel->params_req_for_parallel))
 		return;
 
 	/* We have a winner. */
@@ -3061,6 +3061,13 @@ generate_gather_paths(PlannerInfo *root, RelOptInfo *rel, bool override_rows)
 	if (rel->partial_pathlist == NIL)
 		return;
 
+	/*
+	 * Wait to insert Gather nodes until all PARAM_EXEC params are provided
+	 * within the current rel since we can't pass them to workers.
+	 */
+	if (!bms_is_empty(rel->params_req_for_parallel))
+		return;
+
 	/* Should we override the rel's rowcount estimate? */
 	if (override_rows)
 		rowsp = &rows;
@@ -3197,6 +3204,13 @@ generate_useful_gather_paths(PlannerInfo *root, RelOptInfo *rel, bool override_r
 
 	/* If there are no partial paths, there's nothing to do here. */
 	if (rel->partial_pathlist == NIL)
+		return;
+
+	/*
+	 * Wait to insert Gather nodes until all PARAM_EXEC params are provided
+	 * within the current rel since we can't pass them to workers.
+	 */
+	if (!bms_is_empty(rel->params_req_for_parallel))
 		return;
 
 	/* Should we override the rel's rowcount estimate? */

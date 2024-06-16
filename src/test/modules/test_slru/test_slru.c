@@ -14,13 +14,16 @@
 
 #include "postgres.h"
 
+#include "access/multixact.h"
 #include "access/slru.h"
+#include "access/xact.h"
 #include "access/transam.h"
 #include "miscadmin.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/shmem.h"
 #include "utils/builtins.h"
+#include "utils/injection_point.h"
 
 PG_MODULE_MAGIC;
 
@@ -36,6 +39,8 @@ PG_FUNCTION_INFO_V1(test_slru_page_sync);
 PG_FUNCTION_INFO_V1(test_slru_page_delete);
 PG_FUNCTION_INFO_V1(test_slru_page_truncate);
 PG_FUNCTION_INFO_V1(test_slru_delete_all);
+PG_FUNCTION_INFO_V1(test_create_multixact);
+PG_FUNCTION_INFO_V1(test_read_multixact);
 
 /* Number of SLRU page slots */
 #define NUM_TEST_BUFFERS		16
@@ -259,4 +264,37 @@ _PG_init(void)
 
 	prev_shmem_startup_hook = shmem_startup_hook;
 	shmem_startup_hook = test_slru_shmem_startup;
+}
+
+/*
+ * Produces multixact with 2 current xids
+ */
+Datum
+test_create_multixact(PG_FUNCTION_ARGS)
+{
+	MultiXactId id;
+	MultiXactIdSetOldestMember();
+	id = MultiXactIdCreate(GetCurrentTransactionId(), MultiXactStatusUpdate,
+						GetCurrentTransactionId(), MultiXactStatusForShare);
+	PG_RETURN_TRANSACTIONID(id);
+}
+
+/*
+ * Reads given multixact after running an injection point. Discards local cache
+ * to make real read.
+ * This function is expected to be used in conjunction with test_create_multixact
+ * to test CV sleep when reading recent multixact.
+ */
+Datum
+test_read_multixact(PG_FUNCTION_ARGS)
+{
+	MultiXactId id = PG_GETARG_TRANSACTIONID(0);
+	MultiXactMember *members;
+	INJECTION_POINT("test_read_multixact");
+	/* discard caches */
+	AtEOXact_MultiXact();
+
+	if (GetMultiXactIdMembers(id,&members,false, false) == -1)
+		elog(ERROR, "MultiXactId not found");
+	PG_RETURN_VOID();
 }

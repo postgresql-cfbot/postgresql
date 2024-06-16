@@ -117,7 +117,7 @@ mq_is_send_pending(void)
 static int
 mq_putmessage(char msgtype, const char *s, size_t len)
 {
-	shm_mq_iovec iov[2];
+	struct iovec iov[2];
 	shm_mq_result result;
 
 	/*
@@ -147,10 +147,10 @@ mq_putmessage(char msgtype, const char *s, size_t len)
 
 	pq_mq_busy = true;
 
-	iov[0].data = &msgtype;
-	iov[0].len = 1;
-	iov[1].data = s;
-	iov[1].len = len;
+	iov[0].iov_base = &msgtype;
+	iov[0].iov_len = 1;
+	iov[1].iov_base = unconstify(char *, s);
+	iov[1].iov_len = len;
 
 	Assert(pq_mq_handle != NULL);
 

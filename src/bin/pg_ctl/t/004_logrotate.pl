@@ -66,6 +66,7 @@ $node->append_conf(
 	'postgresql.conf', qq(
 logging_collector = on
 log_destination = 'stderr, csvlog, jsonlog'
+log_suppress_errcodes = '00000,P0000'
 # these ensure stability of test results:
 log_rotation_age = 0
 lc_messages = 'C'

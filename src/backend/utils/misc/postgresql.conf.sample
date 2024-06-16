@@ -539,6 +539,10 @@
 					#   fatal
 					#   panic (effectively off)
 
+#log_suppress_errcodes = '23505,3D000,3F000,42601,42704,42883,42P01,57P03'
+					# FATAL and ERROR messages with these error codes
+					# are not logged
+
 #log_min_duration_statement = -1	# -1 is disabled, 0 logs all statements
 					# and their durations, > 0 logs only
 					# statements running at least this number

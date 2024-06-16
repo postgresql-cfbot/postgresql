@@ -6883,6 +6883,41 @@ local0.*    /var/log/postgresql
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-log-suppress-errcodes" xreflabel="log_suppress_errcodes">
+      <term><varname>log_suppress_errcodes</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>log_suppress_errcodes</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Causes <literal>ERROR</literal> and <literal>FATAL</literal> messages
+        from client backend processes with certain error codes to be excluded
+        from the log.
+        The value is a comma-separated list of five-character error codes as
+        listed in <xref linkend="errcodes-appendix"/>.  An error code that
+        represents a class of errors (ends with three zeros) suppresses logging
+        of all error codes within that class.  For example, the entry
+        <literal>08000</literal> (<literal>connection_exception</literal>)
+        would suppress an error with code <literal>08P01</literal>
+        (<literal>protocol_violation</literal>).  The default setting is
+        <literal>23505,3D000,3F000,42601,42704,42883,42P01,57P03</literal>.
+        Only superusers and users with the appropriate <literal>SET</literal>
+        privilege can change this setting.
+       </para>
+
+       <para>
+        This setting is useful to exclude error messages from the log that are
+        frequent but irrelevant.  Supressing such messages makes it easier to
+        spot relevant messages in the log and keeps log files from growing too
+        big.  For example, if you have a monitoring system that regularly
+        establishes a TCP connection to the server without sending a correct
+        startup packet, you could suppress the protocol violation errors by
+        adding the error code <literal>08P01</literal> to the list.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-log-min-duration-statement" xreflabel="log_min_duration_statement">
       <term><varname>log_min_duration_statement</varname> (<type>integer</type>)
       <indexterm>

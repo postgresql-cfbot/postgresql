@@ -83,6 +83,7 @@ $node_subscriber->append_conf(
 	'postgresql.conf',
 	qq[
 max_prepared_transactions = 10
+log_suppress_errcodes = ''
 ]);
 $node_subscriber->start;
 

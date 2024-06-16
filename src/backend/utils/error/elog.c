@@ -111,11 +111,15 @@ int			Log_error_verbosity = PGERROR_DEFAULT;
 char	   *Log_line_prefix = NULL; /* format for extra log line info */
 int			Log_destination = LOG_DESTINATION_STDERR;
 char	   *Log_destination_string = NULL;
+char	   *log_suppress_errcodes = NULL;
 bool		syslog_sequence_numbers = true;
 bool		syslog_split_messages = true;
 
 /* Processed form of backtrace_functions GUC */
 static char *backtrace_function_list;
+
+/* Processed form form of log_suppress_errcodes (zero-terminated array) */
+static int *suppressed_errcodes;
 
 #ifdef HAVE_SYSLOG
 
@@ -862,6 +866,30 @@ errcode(int sqlerrcode)
 	CHECK_STACK_DEPTH();
 
 	edata->sqlerrcode = sqlerrcode;
+
+	/*
+	 * ERROR and FATAL messages with codes in log_suppress_errcodes don't get
+	 * logged.  We only want to suppress error messages from ordinary backend
+	 * processes.
+	 */
+	if ((MyBackendType == B_BACKEND ||
+		 MyBackendType == B_STANDALONE_BACKEND) &&
+		(edata->elevel == ERROR ||
+		 edata->elevel == FATAL) &&
+		suppressed_errcodes != NULL)
+	{
+		int *state;
+
+		for (state = suppressed_errcodes; *state != 0; state++)
+			/* error categories match all error codes in the category */
+			if (sqlerrcode == *state ||
+				(ERRCODE_IS_CATEGORY(*state) &&
+				 ERRCODE_TO_CATEGORY(sqlerrcode) == *state))
+			{
+				edata->output_to_server = false;
+				break;
+			}
+	}
 
 	return 0;					/* return value does not matter */
 }
@@ -2261,6 +2289,97 @@ void
 assign_log_destination(const char *newval, void *extra)
 {
 	Log_destination = *((int *) extra);
+}
+
+/*
+ * GUC check_hook for log_suppress_errcodes
+ */
+bool
+check_log_suppress_errcodes(char **newval, void **extra, GucSource source)
+{
+	/* SplitIdentifierString modifies the string */
+	char *new_copy = pstrdup(*newval);
+	int listlen;
+	int *statelist = NULL;
+	int index = 0;
+	List *states;
+	ListCell *c;
+
+	if (!SplitIdentifierString(new_copy, ',', &states))
+	{
+		GUC_check_errdetail("List syntax is invalid.");
+		goto failed;
+	}
+
+	listlen = list_length(states);
+	statelist = guc_malloc(ERROR, sizeof(int) * (listlen + 1));
+
+	/* check all error codes for validity and compile them into statelist */
+	foreach(c, states)
+	{
+		char *state = lfirst(c);
+		char *p;
+		int errcode;
+
+		if (strlen(state) != 5)
+		{
+			GUC_check_errdetail("error codes must have 5 characters.");
+			goto failed;
+		}
+
+		/*
+		 * Check the the values are alphanumeric and convert them to upper case
+		 * (SplitIdentifierString converted them to lower case).
+		 */
+		for (p = state; *p != '\0'; p++)
+			if (*p >= 'a' && *p <= 'z')
+				*p += 'A' - 'a';
+			else if (*p < '0' || *p > '9')
+			{
+				GUC_check_errdetail("error codes can only contain digits and ASCII letters.");
+				goto failed;
+			}
+
+		errcode = MAKE_SQLSTATE(state[0], state[1], state[2], state[3], state[4]);
+		/* ignore 0: it cannot be an error code, and we use it to end the list */
+		if (errcode == ERRCODE_SUCCESSFUL_COMPLETION)
+			continue;
+
+		statelist[index++] = errcode;
+	}
+	statelist[index] = 0;
+
+	list_free(states);
+	pfree(new_copy);
+
+	*extra = statelist;
+	return true;
+
+failed:
+	list_free(states);
+	pfree(new_copy);
+	guc_free(statelist);
+	return false;
+}
+
+/*
+ * GUC assign_hook for log_suppress_errcodes
+ */
+void
+assign_log_suppress_errcodes(const char *newval, void *extra)
+{
+	/* free the memory for the old entries */
+	if (suppressed_errcodes != NULL)
+		pfree(suppressed_errcodes);
+
+	/* store NULL instead of an empty array for performance */
+	if (*(int *)extra == 0)
+	{
+		guc_free(extra);
+		suppressed_errcodes = NULL;
+	}
+	else
+		suppressed_errcodes = extra;
 }
 
 /*

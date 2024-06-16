@@ -259,6 +259,7 @@ extern PGDLLIMPORT bool log_duration;
 extern PGDLLIMPORT int log_parameter_max_length;
 extern PGDLLIMPORT int log_parameter_max_length_on_error;
 extern PGDLLIMPORT int log_min_error_statement;
+extern PGDLLIMPORT char *log_suppress_errcodes;
 extern PGDLLIMPORT int log_min_messages;
 extern PGDLLIMPORT int client_min_messages;
 extern PGDLLIMPORT int log_min_duration_sample;

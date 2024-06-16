@@ -4488,6 +4488,17 @@ struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		{"log_suppress_errcodes", PGC_SUSET, LOGGING_WHEN,
+			gettext_noop("ERROR and FATAL messages with these error codes don't get logged."),
+			NULL,
+			GUC_LIST_INPUT
+		},
+		&log_suppress_errcodes,
+		DEFAULT_LOG_SUPPRESS_ERRCODES,
+		check_log_suppress_errcodes, assign_log_suppress_errcodes, NULL
+	},
+
+	{
 		{"ssl_library", PGC_INTERNAL, PRESET_OPTIONS,
 			gettext_noop("Shows the name of the SSL library."),
 			NULL,

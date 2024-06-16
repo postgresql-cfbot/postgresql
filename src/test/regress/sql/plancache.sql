@@ -81,7 +81,7 @@ create temp view v1 as
 
 create function cache_test_2() returns int as $$
 begin
-	return (select f1 from v1);
+	return f1 from v1;
 end$$ language plpgsql;
 
 select cache_test_2();

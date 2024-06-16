@@ -50,7 +50,7 @@ bool		plpgsql_check_asserts = true;
 static char *plpgsql_extra_warnings_string = NULL;
 static char *plpgsql_extra_errors_string = NULL;
 int			plpgsql_extra_warnings;
-int			plpgsql_extra_errors = PLPGSQL_XCHECK_STRICTEXPRCHECK;
+int			plpgsql_extra_errors;
 
 /* Hook for plugins */
 PLpgSQL_plugin **plpgsql_plugin_ptr = NULL;
@@ -193,7 +193,7 @@ _PG_init(void)
 							   gettext_noop("List of programming constructs that should produce an error."),
 							   NULL,
 							   &plpgsql_extra_errors_string,
-							   "strict_expr_check",
+							   "none",
 							   PGC_USERSET, GUC_LIST_INPUT,
 							   plpgsql_extra_checks_check_hook,
 							   plpgsql_extra_errors_assign_hook,

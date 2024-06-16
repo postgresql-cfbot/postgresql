@@ -1274,14 +1274,32 @@ sendquery_cleanup:
 		pset.gsavepopt = NULL;
 	}
 
-	/* clean up after \bind */
+	/* clean up after \bind or \bindx */
 	if (pset.bind_flag)
 	{
 		for (i = 0; i < pset.bind_nparams; i++)
 			free(pset.bind_params[i]);
 		free(pset.bind_params);
+		free(pset.stmtName);
 		pset.bind_params = NULL;
+		pset.stmtName = NULL;
 		pset.bind_flag = false;
+	}
+
+	/* clean up after \parse */
+	if (pset.parse_flag)
+	{
+		free(pset.stmtName);
+		pset.stmtName = NULL;
+		pset.parse_flag = false;
+	}
+
+	/* clean up after \close */
+	if (pset.close_flag)
+	{
+		free(pset.stmtName);
+		pset.stmtName = NULL;
+		pset.close_flag = false;
 	}
 
 	/* reset \gset trigger */
@@ -1469,8 +1487,14 @@ ExecQueryAndProcessResults(const char *query,
 	else
 		INSTR_TIME_SET_ZERO(before);
 
-	if (pset.bind_flag)
+	if (pset.bind_flag && pset.stmtName == NULL)
 		success = PQsendQueryParams(pset.db, query, pset.bind_nparams, NULL, (const char *const *) pset.bind_params, NULL, NULL, 0);
+	else if (pset.bind_flag && pset.stmtName != NULL)
+		success = PQsendQueryPrepared(pset.db, pset.stmtName, pset.bind_nparams, (const char *const *) pset.bind_params, NULL, NULL, 0);
+	else if (pset.close_flag)
+		success = PQsendClosePrepared(pset.db, pset.stmtName);
+	else if (pset.parse_flag)
+		success = PQsendPrepare(pset.db, pset.stmtName, query, 0, NULL);
 	else
 		success = PQsendQuery(pset.db, query);
 

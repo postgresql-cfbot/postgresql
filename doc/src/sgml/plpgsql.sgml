@@ -5347,6 +5347,24 @@ a_output := a_output || $$ if v_$$ || referrer_keys.kind || $$ like '$$
        </para>
       </listitem>
      </varlistentry>
+
+     <varlistentry id="plpgsql-extra-checks-strict-expr-check">
+      <term><varname>strict_expr_check</varname></term>
+      <listitem>
+       <para>
+        Enabling this check will cause <application>PL/pgSQL</application> to
+        check if a <application>PL/pgSQL</application> expression is just an
+        expression without any SQL clauses like <literal>FROM</literal>,
+        <literal>ORDER BY</literal>. This undocumented form of expressions
+        is allowed for compatibility reasons, but in some special cases
+        it doesn't to allow to detect broken code.
+       </para>
+
+       <para>
+        This check is allowed only <varname>plpgsql.extra_errors</varname>.
+       </para>
+      </listitem>
+     </varlistentry>
     </variablelist>
 
     The following example shows the effect of <varname>plpgsql.extra_warnings</varname>

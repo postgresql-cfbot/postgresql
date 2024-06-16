@@ -178,6 +178,7 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 %type <expr>	expr_until_semi
 %type <expr>	expr_until_then expr_until_loop opt_expr_until_when
 %type <expr>	opt_exitcond
+%type <expr>	expressions_until_then
 
 %type <var>		cursor_variable
 %type <datum>	decl_cursor_arg
@@ -957,13 +958,13 @@ stmt_assign		: T_DATUM
 						switch ($1.ident ? 1 : list_length($1.idents))
 						{
 							case 1:
-								pmode = RAW_PARSE_PLPGSQL_ASSIGN1;
+								pmode = plpgsql_curr_compile->pmodes->pmode_assign1;
 								break;
 							case 2:
-								pmode = RAW_PARSE_PLPGSQL_ASSIGN2;
+								pmode = plpgsql_curr_compile->pmodes->pmode_assign2;
 								break;
 							case 3:
-								pmode = RAW_PARSE_PLPGSQL_ASSIGN3;
+								pmode = plpgsql_curr_compile->pmodes->pmode_assign3;
 								break;
 							default:
 								elog(ERROR, "unexpected number of names");
@@ -1239,7 +1240,7 @@ case_when_list	: case_when_list case_when
 					}
 				;
 
-case_when		: K_WHEN expr_until_then proc_sect
+case_when		: K_WHEN expressions_until_then proc_sect
 					{
 						PLpgSQL_case_when *new = palloc(sizeof(PLpgSQL_case_when));
 
@@ -1266,6 +1267,14 @@ opt_case_else	:
 							$$ = $2;
 						else
 							$$ = list_make1(NULL);
+					}
+				;
+
+expressions_until_then :
+					{
+						$$ = read_sql_construct(K_THEN, 0, 0, "THEN",
+												plpgsql_curr_compile->pmodes->pmode_expr_list,
+												true, true, NULL, NULL);
 					}
 				;
 
@@ -1488,7 +1497,8 @@ for_control		: for_variable K_IN
 								 * Relabel first expression as an expression;
 								 * then we can check its syntax.
 								 */
-								expr1->parseMode = RAW_PARSE_PLPGSQL_EXPR;
+								expr1->parseMode = plpgsql_curr_compile->pmodes->pmode_expr;
+
 								check_sql_expr(expr1->query, expr1->parseMode,
 											   expr1loc);
 
@@ -1858,6 +1868,8 @@ stmt_raise		: K_RAISE
 							 */
 							if (tok == SCONST)
 							{
+								RawParseMode pmode_expr;
+
 								/* old style message and parameters */
 								new->message = yylval.str;
 								/*
@@ -1870,13 +1882,15 @@ stmt_raise		: K_RAISE
 								if (tok != ',' && tok != ';' && tok != K_USING)
 									yyerror("syntax error");
 
+								pmode_expr = plpgsql_curr_compile->pmodes->pmode_expr;
+
 								while (tok == ',')
 								{
 									PLpgSQL_expr *expr;
 
 									expr = read_sql_construct(',', ';', K_USING,
 															  ", or ; or USING",
-															  RAW_PARSE_PLPGSQL_EXPR,
+															  pmode_expr,
 															  true, true,
 															  NULL, &tok);
 									new->params = lappend(new->params, expr);
@@ -2010,10 +2024,13 @@ stmt_dynexecute : K_EXECUTE
 						PLpgSQL_stmt_dynexecute *new;
 						PLpgSQL_expr *expr;
 						int			endtoken;
+						RawParseMode pmode_expr;
+
+						pmode_expr = plpgsql_curr_compile->pmodes->pmode_expr;
 
 						expr = read_sql_construct(K_INTO, K_USING, ';',
 												  "INTO or USING or ;",
-												  RAW_PARSE_PLPGSQL_EXPR,
+												  pmode_expr,
 												  true, true,
 												  NULL, &endtoken);
 
@@ -2052,7 +2069,7 @@ stmt_dynexecute : K_EXECUTE
 								{
 									expr = read_sql_construct(',', ';', K_INTO,
 															  ", or ; or INTO",
-															  RAW_PARSE_PLPGSQL_EXPR,
+															  pmode_expr,
 															  true, true,
 															  NULL, &endtoken);
 									new->params = lappend(new->params, expr);
@@ -2637,7 +2654,7 @@ static PLpgSQL_expr *
 read_sql_expression(int until, const char *expected)
 {
 	return read_sql_construct(until, 0, 0, expected,
-							  RAW_PARSE_PLPGSQL_EXPR,
+							  plpgsql_curr_compile->pmodes->pmode_expr,
 							  true, true, NULL, NULL);
 }
 
@@ -2647,7 +2664,7 @@ read_sql_expression2(int until, int until2, const char *expected,
 					 int *endtoken)
 {
 	return read_sql_construct(until, until2, 0, expected,
-							  RAW_PARSE_PLPGSQL_EXPR,
+							  plpgsql_curr_compile->pmodes->pmode_expr,
 							  true, true, NULL, endtoken);
 }
 
@@ -3840,6 +3857,7 @@ read_cursor_args(PLpgSQL_var *cursor, int until)
 	char	  **argv;
 	StringInfoData ds;
 	bool		any_named = false;
+	RawParseMode pmode_expr;
 
 	tok = yylex();
 	if (cursor->cursor_explicit_argrow < 0)
@@ -3865,6 +3883,8 @@ read_cursor_args(PLpgSQL_var *cursor, int until)
 				 errmsg("cursor \"%s\" has arguments",
 						cursor->refname),
 				 parser_errposition(yylloc)));
+
+	pmode_expr = plpgsql_curr_compile->pmodes->pmode_expr;
 
 	/*
 	 * Read the arguments, one by one.
@@ -3936,7 +3956,7 @@ read_cursor_args(PLpgSQL_var *cursor, int until)
 		 */
 		item = read_sql_construct(',', ')', 0,
 								  ",\" or \")",
-								  RAW_PARSE_PLPGSQL_EXPR,
+								  pmode_expr,
 								  true, true,
 								  NULL, &endtoken);
 
@@ -3977,7 +3997,9 @@ read_cursor_args(PLpgSQL_var *cursor, int until)
 
 	expr = palloc0(sizeof(PLpgSQL_expr));
 	expr->query = pstrdup(ds.data);
-	expr->parseMode = RAW_PARSE_PLPGSQL_EXPR;
+	expr->parseMode = any_named ?
+						  plpgsql_curr_compile->pmodes->pmode_named_expr_list
+						  : plpgsql_curr_compile->pmodes->pmode_expr_list;
 	expr->plan = NULL;
 	expr->paramnos = NULL;
 	expr->target_param = -1;
@@ -4151,7 +4173,7 @@ make_case(int location, PLpgSQL_expr *t_expr,
 			StringInfoData ds;
 
 			/* We expect to have expressions not statements */
-			Assert(expr->parseMode == RAW_PARSE_PLPGSQL_EXPR);
+			Assert(expr->parseMode == plpgsql_curr_compile->pmodes->pmode_expr_list);
 
 			/* Do the string hacking */
 			initStringInfo(&ds);

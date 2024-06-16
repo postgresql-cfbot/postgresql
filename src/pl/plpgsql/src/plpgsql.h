@@ -961,6 +961,21 @@ typedef enum PLpgSQL_trigtype
 } PLpgSQL_trigtype;
 
 /*
+ * Raw parse modes, that should be used for expressions,
+ * assignment, expression's list. When extra_errors.strict_expr_check
+ * is active, then only a_expr parsing is allowed.
+ */
+typedef struct PLpgSQL_parse_modes
+{
+	RawParseMode pmode_expr;
+	RawParseMode pmode_expr_list;
+	RawParseMode pmode_named_expr_list;
+	RawParseMode pmode_assign1;
+	RawParseMode pmode_assign2;
+	RawParseMode pmode_assign3;
+} PLpgSQL_parse_modes;
+
+/*
  * Complete compiled function
  */
 typedef struct PLpgSQL_function
@@ -1009,6 +1024,9 @@ typedef struct PLpgSQL_function
 	/* data derived while parsing body */
 	unsigned int nstatements;	/* counter for assigning stmtids */
 	bool		requires_procedure_resowner;	/* contains CALL or DO? */
+
+	/* Raw parse modes configuration */
+	const PLpgSQL_parse_modes *pmodes;
 
 	/* these fields change when the function is used */
 	struct PLpgSQL_execstate *cur_estate;
@@ -1204,6 +1222,7 @@ extern bool plpgsql_check_asserts;
 #define PLPGSQL_XCHECK_SHADOWVAR				(1 << 1)
 #define PLPGSQL_XCHECK_TOOMANYROWS				(1 << 2)
 #define PLPGSQL_XCHECK_STRICTMULTIASSIGNMENT	(1 << 3)
+#define PLPGSQL_XCHECK_STRICTEXPRCHECK			(1 << 4)
 #define PLPGSQL_XCHECK_ALL						((int) ~0)
 
 extern int	plpgsql_extra_warnings;

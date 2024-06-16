@@ -324,6 +324,11 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	select_no_parens select_with_parens select_clause
 				simple_select values_clause
 				PLpgSQL_Expr PLAssignStmt
+				PLpgSQLStrictExpr PLpgSQLStrictExprs PLpgSQLStrictNamedExprs
+				PLAssignStmtStrictExpr
+
+%type <target>	plpgsql_strict_expr plpgsql_strict_named_expr
+%type <list>	plpgsql_strict_expr_list plpgsql_strict_named_expr_list
 
 %type <str>			opt_single_name
 %type <list>		opt_qualified_name
@@ -827,6 +832,12 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %token		MODE_PLPGSQL_ASSIGN1
 %token		MODE_PLPGSQL_ASSIGN2
 %token		MODE_PLPGSQL_ASSIGN3
+%token		MODE_PLPGSQL_STRICT_EXPR
+%token		MODE_PLPGSQL_STRICT_EXPR_LIST
+%token		MODE_PLPGSQL_STRICT_NAMED_EXPR_LIST
+%token		MODE_PLPGSQL_STRICT_EXPR_ASSIGN1
+%token		MODE_PLPGSQL_STRICT_EXPR_ASSIGN2
+%token		MODE_PLPGSQL_STRICT_EXPR_ASSIGN3
 
 
 /* Precedence: lowest to highest */
@@ -958,6 +969,46 @@ parse_toplevel:
 				pg_yyget_extra(yyscanner)->parsetree =
 					list_make1(makeRawStmt((Node *) n, 0));
 			}
+			| MODE_PLPGSQL_STRICT_EXPR PLpgSQLStrictExpr
+			{
+				pg_yyget_extra(yyscanner)->parsetree =
+					list_make1(makeRawStmt($2, 0));
+			}
+			| MODE_PLPGSQL_STRICT_EXPR_LIST PLpgSQLStrictExprs
+			{
+				pg_yyget_extra(yyscanner)->parsetree =
+					list_make1(makeRawStmt($2, 0));
+			}
+			| MODE_PLPGSQL_STRICT_NAMED_EXPR_LIST PLpgSQLStrictNamedExprs
+			{
+					pg_yyget_extra(yyscanner)->parsetree =
+					list_make1(makeRawStmt($2, 0));
+			}
+			| MODE_PLPGSQL_STRICT_EXPR_ASSIGN1 PLAssignStmtStrictExpr
+			{
+				PLAssignStmt *n = (PLAssignStmt *) $2;
+
+				n->nnames = 1;
+				pg_yyget_extra(yyscanner)->parsetree =
+					list_make1(makeRawStmt((Node *) n, 0));
+			}
+			| MODE_PLPGSQL_STRICT_EXPR_ASSIGN2 PLAssignStmtStrictExpr
+			{
+				PLAssignStmt *n = (PLAssignStmt *) $2;
+
+				n->nnames = 2;
+				pg_yyget_extra(yyscanner)->parsetree =
+					list_make1(makeRawStmt((Node *) n, 0));
+			}
+			| MODE_PLPGSQL_STRICT_EXPR_ASSIGN3 PLAssignStmtStrictExpr
+			{
+				PLAssignStmt *n = (PLAssignStmt *) $2;
+
+				n->nnames = 3;
+				pg_yyget_extra(yyscanner)->parsetree =
+					list_make1(makeRawStmt((Node *) n, 0));
+			}
+
 		;
 
 /*
@@ -17496,6 +17547,104 @@ plassign_equals: COLON_EQUALS
 			| '='
 		;
 
+/*
+ * In "strict" mode plpgsql expressions are just an a_expr. From compatibility
+ * reasons (with default mode) it returns SelectStmt still.
+ */
+PLpgSQLStrictExpr: a_expr
+				{
+					SelectStmt *n = makeNode(SelectStmt);
+					ResTarget *rt = makeNode(ResTarget);
+
+					rt->name = NULL;
+					rt->indirection = NIL;
+					rt->val = (Node *) $1;
+					rt->location = @1;
+
+					n->targetList = list_make1((Node *) rt);
+					$$ = (Node *) n;
+				}
+		;
+
+PLAssignStmtStrictExpr: plassign_target opt_indirection plassign_equals PLpgSQLStrictExpr
+				{
+					PLAssignStmt *n = makeNode(PLAssignStmt);
+
+					n->name = $1;
+					n->indirection = check_indirection($2, yyscanner);
+					/* nnames will be filled by calling production */
+					n->val = (SelectStmt *) $4;
+					n->location = @1;
+					$$ = (Node *) n;
+				}
+		;
+
+/*
+ * Used for unnamed plpgsql cursor's argument and plpgsql case in
+ * "strict" mode.
+ */
+PLpgSQLStrictExprs: plpgsql_strict_expr_list
+				{
+					SelectStmt *n = makeNode(SelectStmt);
+
+					n->targetList = $1;
+					$$ = (Node *) n;
+				}
+		;
+
+plpgsql_strict_expr_list:
+			plpgsql_strict_expr
+				{
+					$$ = list_make1($1);
+				}
+			| plpgsql_strict_expr_list ',' plpgsql_strict_expr
+				{
+					$$ = lappend($1, $3);
+				}
+		;
+
+plpgsql_strict_expr: a_expr
+				{
+					$$ = makeNode(ResTarget);
+					$$->name = NULL;
+					$$->indirection = NIL;
+					$$->val = (Node *) $1;
+					$$->location = @1;
+				}
+		;
+
+/*
+ * Used for named cursor's arguments in "strict" mode
+ */
+PLpgSQLStrictNamedExprs: plpgsql_strict_named_expr_list
+				{
+					SelectStmt *n = makeNode(SelectStmt);
+
+					n->targetList = $1;
+					$$ = (Node *) n;
+				}
+		;
+
+plpgsql_strict_named_expr_list:
+			plpgsql_strict_named_expr
+				{
+					$$ = list_make1($1);
+				}
+			| plpgsql_strict_named_expr_list ',' plpgsql_strict_named_expr
+				{
+					$$ = lappend($1, $3);
+				}
+		;
+
+plpgsql_strict_named_expr: a_expr AS ColLabel
+				{
+					$$ = makeNode(ResTarget);
+					$$->name = $3;
+					$$->indirection = NIL;
+					$$->val = (Node *) $1;
+					$$->location = @1;
+				}
+		;
 
 /*
  * Name classification hierarchy.

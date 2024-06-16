@@ -2976,11 +2976,18 @@ _SPI_error_callback(void *arg)
 		switch (carg->mode)
 		{
 			case RAW_PARSE_PLPGSQL_EXPR:
+			case RAW_PARSE_PLPGSQL_STRICT_EXPR:
+			case RAW_PARSE_PLPGSQL_STRICT_EXPR_LIST:
+			case RAW_PARSE_PLPGSQL_STRICT_NAMED_EXPR_LIST:
+				/* ToDo: fix to PL/pgSQL expression - in another patch */
 				errcontext("SQL expression \"%s\"", query);
 				break;
 			case RAW_PARSE_PLPGSQL_ASSIGN1:
 			case RAW_PARSE_PLPGSQL_ASSIGN2:
 			case RAW_PARSE_PLPGSQL_ASSIGN3:
+			case RAW_PARSE_PLPGSQL_STRICT_EXPR_ASSIGN1:
+			case RAW_PARSE_PLPGSQL_STRICT_EXPR_ASSIGN2:
+			case RAW_PARSE_PLPGSQL_STRICT_EXPR_ASSIGN3:
 				errcontext("PL/pgSQL assignment \"%s\"", query);
 				break;
 			default:

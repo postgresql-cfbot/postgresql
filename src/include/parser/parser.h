@@ -33,6 +33,22 @@
  * RAW_PARSE_PLPGSQL_ASSIGNn: parse a PL/pgSQL assignment statement,
  * and return a one-element List containing a RawStmt node.  "n"
  * gives the number of dotted names comprising the target ColumnRef.
+ *
+ * RAW_PARSE_PLPGSQL_STRICT_EXPR: parse a PL/pgSQL expression, and
+ * return a one-element List containing a RwaStmt node. The result is
+ * compatible with RAW_PARSE_PLPGSQL_EXPR, but parser allows only
+ * a_expr (instead almost all complete query).
+ *
+ * RAW_PARSE_PLPGSQL_STRICT_EXPR_LIST: parse a comma separated list
+ * of PL/pgSQL expressions (only a_expr are allowed). It is used by
+ * PLpGSQL CASE and OPEN commands.
+ *
+ * RAW_PARSE_PLPGSQL_STRICT_NAMED_EXPR_LIST: parse a comma separated
+ * list of a_expr node with labels. It is used for evaluation of
+ * named arguments of PLpgSQL OPEN (cursor) statement.
+ *
+ * RAW_PARSE_PLPGSQL_STRICT_EXPR_ASSIGNn: parse a PL/pgSQL assignment
+ * statement, but only a_expr are allowed).
  */
 typedef enum
 {
@@ -42,6 +58,12 @@ typedef enum
 	RAW_PARSE_PLPGSQL_ASSIGN1,
 	RAW_PARSE_PLPGSQL_ASSIGN2,
 	RAW_PARSE_PLPGSQL_ASSIGN3,
+	RAW_PARSE_PLPGSQL_STRICT_EXPR,
+	RAW_PARSE_PLPGSQL_STRICT_EXPR_LIST,
+	RAW_PARSE_PLPGSQL_STRICT_NAMED_EXPR_LIST,
+	RAW_PARSE_PLPGSQL_STRICT_EXPR_ASSIGN1,
+	RAW_PARSE_PLPGSQL_STRICT_EXPR_ASSIGN2,
+	RAW_PARSE_PLPGSQL_STRICT_EXPR_ASSIGN3,
 } RawParseMode;
 
 /* Values for the backslash_quote GUC */

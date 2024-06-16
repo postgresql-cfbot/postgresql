@@ -89,7 +89,15 @@ my %replace_types = (
 	'PLpgSQL_Expr' => 'ignore',
 	'PLAssignStmt' => 'ignore',
 	'plassign_target' => 'ignore',
-	'plassign_equals' => 'ignore',);
+	'plassign_equals' => 'ignore',
+	'plpgsql_strict_expr' => 'ignore',
+	'plpgsql_strict_named_expr' => 'ignore',
+	'plpgsql_strict_expr_list' => 'ignore',
+	'plpgsql_strict_named_expr_list' => 'ignore',
+	'PLpgSQLStrictExpr' => 'ignore',
+	'PLpgSQLStrictExprs' => 'ignore',
+	'PLpgSQLStrictNamedExprs' => 'ignore',
+	'PLAssignStmtStrictExpr' => 'ignore',);
 
 # these replace_line commands excise certain keywords from the core keyword
 # lists.  Be sure to account for these in ColLabel and related productions.

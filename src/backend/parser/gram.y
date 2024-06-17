@@ -679,6 +679,12 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				json_object_constructor_null_clause_opt
 				json_array_constructor_null_clause_opt
 
+%type <str>		listen_channel
+				listen_channel_inner_levels
+				listen_channel_inner_level
+				listen_channel_outer_level
+%type <str>		notify_channel
+
 
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
@@ -10979,7 +10985,7 @@ opt_instead:
  *
  *****************************************************************************/
 
-NotifyStmt: NOTIFY ColId notify_payload
+NotifyStmt: NOTIFY notify_channel notify_payload
 				{
 					NotifyStmt *n = makeNode(NotifyStmt);
 
@@ -10989,12 +10995,19 @@ NotifyStmt: NOTIFY ColId notify_payload
 				}
 		;
 
+notify_channel:
+			ColId
+					{ $$ = $1; }
+			| notify_channel '.' ColId
+					{ $$ = psprintf("%s.%s", $1, $3); }
+		;
+
 notify_payload:
 			',' Sconst							{ $$ = $2; }
 			| /*EMPTY*/							{ $$ = NULL; }
 		;
 
-ListenStmt: LISTEN ColId
+ListenStmt: LISTEN listen_channel
 				{
 					ListenStmt *n = makeNode(ListenStmt);
 
@@ -11004,7 +11017,7 @@ ListenStmt: LISTEN ColId
 		;
 
 UnlistenStmt:
-			UNLISTEN ColId
+			UNLISTEN listen_channel
 				{
 					UnlistenStmt *n = makeNode(UnlistenStmt);
 
@@ -11018,6 +11031,34 @@ UnlistenStmt:
 					n->conditionname = NULL;
 					$$ = (Node *) n;
 				}
+		;
+
+listen_channel:
+			listen_channel_outer_level
+					{ $$ = $1; }
+			| listen_channel_inner_levels '.' listen_channel_outer_level
+					{ $$ = psprintf("%s.%s", $1, $3); }
+		;
+
+listen_channel_inner_levels:
+			listen_channel_inner_level
+					{ $$ = $1; }
+			| listen_channel_inner_levels '.' listen_channel_inner_level
+					{ $$ = psprintf("%s.%s", $1, $3); }
+		;
+
+listen_channel_inner_level:
+			'%' 								{ $$ = "%"; }
+			| ColId 							{ $$ = $1; }
+			| ColId '%' 						{ $$ = psprintf("%s%%", $1); }
+		;
+
+listen_channel_outer_level:
+			'>'									{ $$ = ">"; }
+			| '%'								{ $$ = "%"; }
+			| ColId								{ $$ = $1; }
+			| ColId '>'							{ $$ = psprintf("%s>", $1); }
+			| ColId '%'							{ $$ = psprintf("%s%%", $1); }
 		;
 
 

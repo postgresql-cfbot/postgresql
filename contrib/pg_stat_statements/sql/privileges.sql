@@ -1,0 +1,52 @@
+--
+-- Superusers or roles with the privileges of pg_read_all_stats members
+-- can read query text and queryid
+--
+
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+CREATE ROLE regress_stats_user1;
+CREATE ROLE regress_stats_user2;
+GRANT pg_read_all_stats TO regress_stats_user2;
+
+SET ROLE regress_stats_user1;
+SELECT 1 AS "ONE";
+
+-- Superuser can read query text and queryid
+
+RESET ROLE;
+SELECT
+  CASE
+    WHEN queryid <> 0 THEN TRUE ELSE FALSE
+  END AS queryid_bool
+  ,query FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+--
+-- regress_stats_user1 can not read query text and queryid
+-- executed by other users
+--
+
+SET ROLE regress_stats_user1;
+SELECT
+  CASE
+    WHEN queryid <> 0 THEN TRUE ELSE FALSE
+  END AS queryid_bool
+  ,query FROM pg_stat_statements ORDER BY query COLLATE "C";
+RESET ROLE;
+
+-- regress_stats_user2 can read query text and queryid
+
+SET ROLE regress_stats_user2;
+SELECT
+  CASE
+    WHEN queryid <> 0 THEN TRUE ELSE FALSE
+  END AS queryid_bool
+  ,query FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+--
+-- cleanup
+--
+
+RESET ROLE;
+DROP ROLE regress_stats_user1;
+DROP ROLE regress_stats_user2;
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;

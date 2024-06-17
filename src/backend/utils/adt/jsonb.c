@@ -16,9 +16,15 @@
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
 #include "funcapi.h"
+#include "nodes/makefuncs.h"
+#include "nodes/supportnodes.h"
+#include "parser/parse_coerce.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
+#include "utils/date.h"
+#include "utils/datetime.h"
+#include "utils/fmgroids.h"
 #include "utils/json.h"
 #include "utils/jsonb.h"
 #include "utils/jsonfuncs.h"
@@ -2032,6 +2038,206 @@ cannotCastJsonbValue(enum jbvType type, const char *sqltype)
 
 	/* should be unreachable */
 	elog(ERROR, "unknown jsonb type: %d", (int) type);
+}
+
+
+/*
+ * jsonb_cast_support()
+ *
+ * Planner support function for extracting numeric or bool data type more
+ * effectively. After finding out the corresponding JsonbValue, instead of
+ * casting it to Jsonb as an intermediate type, we covert it to the desired
+ * data type directly.
+ */
+Datum
+jsonb_cast_support(PG_FUNCTION_ARGS)
+{
+	Node	   *rawreq = (Node *) PG_GETARG_POINTER(0);
+
+	if (IsA(rawreq, SupportRequestSimplify))
+	{
+		SupportRequestSimplify *req = (SupportRequestSimplify *) rawreq;
+		FuncExpr   *fexpr = req->fcall;
+		FuncExpr   *jsonb_start_func = NULL,
+				   *jsonb_finish_func = NULL,
+				   *final_func = NULL;
+		Node	   *input;
+		Oid			new_func_id = InvalidOid;
+		List	   *args;
+		Oid			input_func_id,
+					collid,
+					inputcollid;
+		bool		retset = false,
+					variadic = false;
+
+		Assert(list_length(fexpr->args) == 1);
+		input = (Node *) linitial(fexpr->args);
+
+		if (IsA(input, OpExpr))
+		{
+			OpExpr	   *opExpr = castNode(OpExpr, input);
+
+			input_func_id = opExpr->opfuncid;
+			collid = opExpr->opcollid;
+			inputcollid = opExpr->inputcollid;
+			args = opExpr->args;
+		}
+		else if (IsA(input, FuncExpr))
+		{
+			FuncExpr   *funcExpr = castNode(FuncExpr, input);
+
+			input_func_id = funcExpr->funcid;
+			collid = funcExpr->funccollid;
+			inputcollid = funcExpr->inputcollid;
+			args = funcExpr->args;
+		}
+		else
+			/* not the desired pattern. */
+			PG_RETURN_POINTER(NULL);
+
+		/* build a function to return the JsonbValue directly. */
+		switch (input_func_id)
+		{
+			case F_JSONB_OBJECT_FIELD:
+				new_func_id = F_JSONB_OBJECT_FIELD_START;
+				break;
+			case F_JSONB_ARRAY_ELEMENT:
+				new_func_id = F_JSONB_ARRAY_ELEMENT_START;
+				break;
+			case F_JSONB_EXTRACT_PATH:
+				new_func_id = F_JSONB_EXTRACT_PATH_START;
+				variadic = true;
+				break;
+			case F_JSONB_PATH_QUERY:
+				new_func_id = F_JSONB_PATH_QUERY_START;
+				retset = true;
+				break;
+			case F_JSONB_PATH_QUERY_FIRST:
+				new_func_id = F_JSONB_PATH_QUERY_FIRST_START;
+				break;
+			default:
+				new_func_id = InvalidOid;
+				break;
+		}
+
+		if (!OidIsValid(new_func_id))
+			PG_RETURN_POINTER(NULL);
+
+		/*
+		 * All the simplified functions have the same arguments as the
+		 * original one and return an internal object (actually a JsonbValue)
+		 * which will be casted desired type in the later function call.
+		 */
+		jsonb_start_func = makeFuncExpr(new_func_id, INTERNALOID, args,
+										collid, inputcollid,
+										COERCE_EXPLICIT_CALL);
+		jsonb_start_func->funcretset = retset;
+		jsonb_start_func->funcvariadic = variadic;
+
+		/*
+		 * relabel the first argument as 'internal' to follow our current
+		 * function signature checking system where if a function returns a
+		 * internal type, one of its arguments must be an internal type.
+		 */
+		linitial(jsonb_start_func->args) = makeRelabelType(linitial(jsonb_start_func->args),
+														   INTERNALOID, -1,
+														   InvalidOid,
+														   COERCE_IMPLICIT_CAST);
+
+		switch (fexpr->funcresulttype)
+		{
+			case INT2OID:
+			case INT4OID:
+			case INT8OID:
+			case FLOAT4OID:
+			case FLOAT8OID:
+			case NUMERICOID:
+				/* build another function to cast the JsonbValue into numeric */
+				jsonb_finish_func = makeFuncExpr(F_JSONB_FINISH_NUMERIC,
+												 NUMERICOID,
+												 list_make2(jsonb_start_func,
+															makeConst(OIDOID,
+																	  -1,
+																	  InvalidOid,
+																	  sizeof(Oid),
+																	  ObjectIdGetDatum(fexpr->funcresulttype),
+																	  false,
+																	  true)),
+												 collid,
+												 inputcollid,
+												 COERCE_EXPLICIT_CALL);
+
+				if (fexpr->funcresulttype != NUMERICOID)
+				{
+					/*
+					 * Leverage the casting system to cast the numeric to the
+					 * desired type.
+					 */
+					final_func = (FuncExpr *) coerce_type(NULL,
+														  (Node *) jsonb_finish_func,
+														  NUMERICOID,
+														  fexpr->funcresulttype,
+														  0,
+														  COERCION_EXPLICIT,
+														  COERCE_EXPLICIT_CAST,
+														  fexpr->location);
+				}
+				else
+					final_func = jsonb_finish_func;
+
+				PG_RETURN_POINTER(final_func);
+			case BOOLOID:
+				final_func = makeFuncExpr(F_JSONB_FINISH_BOOL, BOOLOID,
+										  list_make1(jsonb_start_func), collid,
+										  inputcollid, COERCE_EXPLICIT_CALL);
+				PG_RETURN_POINTER(final_func);
+			default:
+				PG_RETURN_POINTER(NULL);
+		}
+	}
+
+	PG_RETURN_POINTER(NULL);
+}
+
+
+/*
+ * jsonb_finish_numeric
+ *		convert the JsonbValue to a numeric datum and raise error if
+ * necessary.
+ */
+Datum
+jsonb_finish_numeric(PG_FUNCTION_ARGS)
+{
+	JsonbValue *v = (JsonbValue *) PG_GETARG_POINTER(0);
+
+	/*
+	 * XXX: when converting a non jbvNumeric JsonbValue to numeric, some error
+	 * like "cannot cast jsonb xxx to type yyy" should be raised, here the xxx
+	 * is the real type of jsonbvalue, yyy is the desired type. if we just
+	 * want to say yyy is "numeric", arg(1) is not needed, but if we have to
+	 * insist on the error message compatible, we have to input this extra
+	 * argument.
+	 */
+	Oid			final_oid = PG_GETARG_OID(1);
+
+	if (v->type != jbvNumeric)
+		cannotCastJsonbValue(v->type, format_type_be(final_oid));
+	PG_RETURN_NUMERIC(v->val.numeric);
+}
+
+/*
+ * jsonb_finish_numeric
+ *		convert the JsonbValue to a bool datum and raise error if
+ * necessary.
+ */
+Datum
+jsonb_finish_bool(PG_FUNCTION_ARGS)
+{
+	JsonbValue *v = (JsonbValue *) PG_GETARG_POINTER(0);
+
+	if (v->type != jbvBool)
+		cannotCastJsonbValue(v->type, "boolean");
+	PG_RETURN_BOOL(v->val.boolean);
 }
 
 Datum

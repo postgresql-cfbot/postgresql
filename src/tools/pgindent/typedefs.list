@@ -1305,6 +1305,7 @@ JsonArrayQueryConstructor
 JsonBaseObjectInfo
 JsonBehavior
 JsonBehaviorType
+JsonbValueTarget
 JsonConstructorExpr
 JsonConstructorExprState
 JsonConstructorType

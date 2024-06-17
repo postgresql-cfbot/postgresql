@@ -1435,6 +1435,21 @@ cost_tidrangescan(Path *path, PlannerInfo *root,
 	startup_cost += path->pathtarget->cost.startup;
 	run_cost += path->pathtarget->cost.per_tuple * path->rows;
 
+	/* Adjust costing for parallelism, if used. */
+	if (path->parallel_workers > 0)
+	{
+		double		parallel_divisor = get_parallel_divisor(path);
+
+		/* The CPU cost is divided among all the workers. */
+		run_cost /= parallel_divisor;
+
+		/*
+		 * In the case of a parallel plan, the row count needs to represent
+		 * the number of tuples processed per worker.
+		 */
+		path->rows = clamp_row_est(path->rows / parallel_divisor);
+	}
+
 	path->startup_cost = startup_cost;
 	path->total_cost = startup_cost + run_cost;
 }

@@ -81,6 +81,7 @@ typedef struct ParallelBlockTableScanDescData
 	BlockNumber phs_startblock; /* starting block number */
 	pg_atomic_uint64 phs_nallocated;	/* number of blocks allocated to
 										 * workers so far. */
+	BlockNumber phs_numblock; /* max number of blocks to scan */
 }			ParallelBlockTableScanDescData;
 typedef struct ParallelBlockTableScanDescData *ParallelBlockTableScanDesc;
 

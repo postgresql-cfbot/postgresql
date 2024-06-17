@@ -1866,6 +1866,7 @@ typedef struct TidRangeScanState
 	ItemPointerData trss_mintid;
 	ItemPointerData trss_maxtid;
 	bool		trss_inScan;
+	Size		pscan_len;		/* size of parallel tid range scan descriptor */
 } TidRangeScanState;
 
 /* ----------------

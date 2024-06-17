@@ -329,6 +329,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"SSL-Maximum-Protocol-Version", "", 8,	/* sizeof("TLSv1.x") == 8 */
 	offsetof(struct pg_conn, ssl_max_protocol_version)},
 
+	{"sslocspstapling", "PGSSLOCSPSTAPLING", "0", NULL,
+		"SSL-OCSP-Stapling", "", 1,
+	offsetof(struct pg_conn, sslocspstapling)},
+
 	/*
 	 * As with SSL, all GSS options are exposed even in builds that don't have
 	 * support.
@@ -449,6 +453,7 @@ static void pgpassfileWarning(PGconn *conn);
 static void default_threadlock(int acquire);
 static bool sslVerifyProtocolVersion(const char *version);
 static bool sslVerifyProtocolRange(const char *min, const char *max);
+static bool sslVerifyOcspStapling(const char *stapling);
 
 
 /* global variable because fe-auth.c needs to access it */
@@ -1683,6 +1688,18 @@ pqConnectOptions2(PGconn *conn)
 	{
 		conn->status = CONNECTION_BAD;
 		libpq_append_conn_error(conn, "invalid SSL protocol version range");
+		return false;
+	}
+
+	/*
+	 * Validate sslocspstapling settings
+	 */
+	if (!sslVerifyOcspStapling(conn->sslocspstapling))
+	{
+		conn->status = CONNECTION_BAD;
+		libpq_append_conn_error(conn, "invalid %s value: \"%s\"",
+								"sslocspstapling",
+								conn->sslocspstapling);
 		return false;
 	}
 
@@ -4687,6 +4704,7 @@ freePGconn(PGconn *conn)
 	free(conn->require_auth);
 	free(conn->ssl_min_protocol_version);
 	free(conn->ssl_max_protocol_version);
+	free(conn->sslocspstapling);
 	free(conn->gssencmode);
 	free(conn->krbsrvname);
 	free(conn->gsslib);
@@ -7639,6 +7657,25 @@ sslVerifyProtocolRange(const char *min, const char *max)
 	return true;
 }
 
+/*
+ * Check sslocspstapling is set properly
+ */
+static bool
+sslVerifyOcspStapling(const char *stapling)
+{
+	/*
+	 * An empty string or a NULL value is considered valid
+	*/
+	if (!stapling || strlen(stapling) == 0)
+		return true;
+
+	if (pg_strcasecmp(stapling, "0") == 0 ||
+			pg_strcasecmp(stapling, "1") == 0)
+		return true;
+
+	/* anything else is wrong */
+	return false;
+}
 
 /*
  * Obtain user's home directory, return in given buffer

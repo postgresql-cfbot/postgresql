@@ -35,6 +35,14 @@ SERVERS := server-cn-and-alt-names \
 	server-revoked
 CLIENTS := client client-dn client-revoked client_ext client-long \
 	client-revoked-utf8
+OCSPS := server-ocsp-good \
+	server-ocsp-revoked \
+	server-ocsp-expired \
+	server-ocsp-unknown \
+	server-ca-ocsp-good \
+	server-ca-ocsp-revoked \
+	server-ca-ocsp-expired \
+	server-ca-ocsp-unknown
 
 #
 # To add a new non-standard certificate, add it to SPECIAL_CERTS and then add
@@ -62,14 +70,16 @@ COMBINATIONS := \
 	ssl/root+client_ca.crt \
 	ssl/root+client.crl \
 	ssl/client+client_ca.crt \
-	ssl/server-cn-only+server_ca.crt
+	ssl/server-cn-only+server_ca.crt \
+	ssl/server-ip-cn-only+server_ca.crt
 
-CERTIFICATES := root_ca server_ca client_ca $(SERVERS) $(CLIENTS)
+CERTIFICATES := root_ca server_ca client_ca ocsp_ca $(SERVERS) $(CLIENTS)
 STANDARD_CERTS := $(CERTIFICATES:%=ssl/%.crt)
 STANDARD_KEYS := $(CERTIFICATES:%=ssl/%.key)
 CRLS := ssl/root.crl \
 	ssl/client.crl \
 	ssl/server.crl
+OCSPRES := $(OCSPS:%=ssl/%.res)
 
 SSLFILES := \
 	$(STANDARD_CERTS) \
@@ -77,7 +87,8 @@ SSLFILES := \
 	$(SPECIAL_CERTS) \
 	$(SPECIAL_KEYS) \
 	$(COMBINATIONS) \
-	$(CRLS)
+	$(CRLS) \
+	$(OCSPRES)
 SSLDIRS := ssl/client-crldir \
 	ssl/server-crldir \
 	ssl/root+client-crldir \
@@ -154,6 +165,9 @@ ssl/client+client_ca.crt: ssl/client.crt ssl/client_ca.crt
 # for the server, to present to a client that only knows the root
 ssl/server-cn-only+server_ca.crt: ssl/server-cn-only.crt ssl/server_ca.crt
 
+# for the server, to check when stapled ocsp response doesn't match server certificate
+ssl/server-ip-cn-only+server_ca.crt: ssl/server-ip-cn-only.crt ssl/server_ca.crt
+
 # If a CRL is used, OpenSSL requires a CRL file for *all* the CAs in the
 # chain, even if some of them are empty.
 ssl/root+server.crl: ssl/root.crl ssl/server.crl
@@ -174,7 +188,7 @@ $(STANDARD_KEYS):
 # Standard certificates
 #
 
-CA_CERTS     := ssl/server_ca.crt ssl/client_ca.crt
+CA_CERTS     := ssl/server_ca.crt ssl/client_ca.crt ssl/ocsp_ca.crt
 SERVER_CERTS := $(SERVERS:%=ssl/%.crt)
 CLIENT_CERTS := $(CLIENTS:%=ssl/%.crt)
 
@@ -228,6 +242,106 @@ ssl/%.srl:
 	date +%Y%m%d%H%M%S00 > $@
 
 #
+# OCSP
+#
+.INTERMEDIATE: $(OCSPS:%=ssl/%.idx)
+# given status 'V' without 'revocation date' to generate an ocsp response with status 'good' for 10000 days
+ssl/server-ocsp-good.idx: ssl/server-cn-only.crt
+	expiration_date=$$($(OPENSSL) x509 -in $< -noout -dates | grep "notAfter" | cut -d "=" -f 2 | xargs -I {} date --date="{}" --utc +'%Y%m%d%H%M%S'Z); \
+	serial_number=$$($(OPENSSL) x509 -in $< -noout -serial | cut -d "=" -f 2); \
+	cert_subject=$$($(OPENSSL) x509 -in $< -noout -subject | sed 's/subject=OU = /\/OU=/' | sed 's/, CN = /\/CN=/'); \
+	echo "V\t$$expiration_date\t\t$$serial_number\tunknown\t$$cert_subject" > $@
+
+# given status 'R' and 'revocation date' to generate an ocsp response with status 'revoked' for 10000 days
+ssl/server-ocsp-revoked.idx: ssl/server-cn-only.crt
+	expiration_date=$$($(OPENSSL) x509 -in $< -noout -dates | grep "notAfter" | cut -d "=" -f 2 | xargs -I {} date --date="{}" --utc +'%Y%m%d%H%M%S'Z); \
+	serial_number=$$($(OPENSSL) x509 -in $< -noout -serial | cut -d "=" -f 2); \
+	revocation_date=$$(date --utc +'%y%m%d%H%M%SZ'); \
+	cert_subject=$$($(OPENSSL) x509 -in $< -noout -subject | sed 's/subject=OU = /\/OU=/' | sed 's/, CN = /\/CN=/'); \
+	echo "R\t$$expiration_date\t$$revocation_date\t$$serial_number\tunknown\t$$cert_subject" > $@
+
+# generate an ocsp response with status 'unknown' using a none-existing certificate serial number 1970010100000000
+ssl/server-ocsp-unknown.idx: ssl/server-cn-only.crt
+	expiration_date=$$($(OPENSSL) x509 -in $< -noout -dates | grep "notAfter" | cut -d "=" -f 2 | xargs -I {} date --date="{}" --utc +'%Y%m%d%H%M%S'Z); \
+	serial_number="1970010100000000"; \
+	cert_subject=$$($(OPENSSL) x509 -in $< -noout -subject | sed 's/subject=OU = /\/OU=/' | sed 's/, CN = /\/CN=/'); \
+	echo "V\t$$expiration_date\t\t$$serial_number\tunknown\t$$cert_subject" > $@
+
+# generate an ocsp response with status 'good' but nextUpdate 'expired' in only 1 minute
+ssl/server-ocsp-expired.idx: ssl/server-cn-only.crt
+	expiration_date=$$($(OPENSSL) x509 -in $< -noout -dates | grep "notAfter" | cut -d "=" -f 2 | xargs -I {} date --date="{}" --utc +'%Y%m%d%H%M%S'Z); \
+	serial_number=$$($(OPENSSL) x509 -in $< -noout -serial | cut -d "=" -f 2); \
+	cert_subject=$$($(OPENSSL) x509 -in $< -noout -subject | sed 's/subject=OU = /\/OU=/' | sed 's/, CN = /\/CN=/'); \
+	echo "V\t$$expiration_date\t\t$$serial_number\tunknown\t$$cert_subject" > $@
+
+# server-cn-only.crt (good), ocsp response for server_ca.crt in (good|revoked|unknown|expired)
+# good, good
+ssl/server-ca-ocsp-good.idx: ssl/server_ca.crt ssl/server-ocsp-good.idx
+	expiration_date=$$($(OPENSSL) x509 -in $< -noout -dates | grep "notAfter" | cut -d "=" -f 2 | xargs -I {} date --date="{}" --utc +'%Y%m%d%H%M%S'Z); \
+	serial_number=$$($(OPENSSL) x509 -in $< -noout -serial | cut -d "=" -f 2); \
+	cert_subject=$$($(OPENSSL) x509 -in $< -noout -subject | sed 's/subject=OU = /\/OU=/' | sed 's/, CN = /\/CN=/'); \
+	cat ssl/server-ocsp-good.idx > $@; \
+	echo "V\t$$expiration_date\t\t$$serial_number\tunknown\t$$cert_subject" >> $@
+
+# good, revoked
+ssl/server-ca-ocsp-revoked.idx: ssl/server_ca.crt ssl/server-ocsp-good.idx
+	expiration_date=$$($(OPENSSL) x509 -in $< -noout -dates | grep "notAfter" | cut -d "=" -f 2 | xargs -I {} date --date="{}" --utc +'%Y%m%d%H%M%S'Z); \
+	serial_number=$$($(OPENSSL) x509 -in $< -noout -serial | cut -d "=" -f 2); \
+	revocation_date=$$(date --utc +'%y%m%d%H%M%SZ'); \
+	cert_subject=$$($(OPENSSL) x509 -in $< -noout -subject | sed 's/subject=OU = /\/OU=/' | sed 's/, CN = /\/CN=/'); \
+	cat ssl/server-ocsp-good.idx > $@; \
+	echo "R\t$$expiration_date\t$$revocation_date\t$$serial_number\tunknown\t$$cert_subject" >> $@
+
+# good, unknown
+ssl/server-ca-ocsp-unknown.idx: ssl/server_ca.crt ssl/server-ocsp-good.idx
+	expiration_date=$$($(OPENSSL) x509 -in $< -noout -dates | grep "notAfter" | cut -d "=" -f 2 | xargs -I {} date --date="{}" --utc +'%Y%m%d%H%M%S'Z); \
+	serial_number="1970010100000001"; \
+	cert_subject=$$($(OPENSSL) x509 -in $< -noout -subject | sed 's/subject=OU = /\/OU=/' | sed 's/, CN = /\/CN=/'); \
+	cat ssl/server-ocsp-good.idx > $@; \
+	echo "V\t$$expiration_date\t\t$$serial_number\tunknown\t$$cert_subject" >> $@
+
+# good, expired
+ssl/server-ca-ocsp-expired.idx: ssl/server_ca.crt ssl/server-ocsp-good.idx
+	expiration_date=$$($(OPENSSL) x509 -in $< -noout -dates | grep "notAfter" | cut -d "=" -f 2 | xargs -I {} date --date="{}" --utc +'%Y%m%d%H%M%S'Z); \
+	serial_number=$$($(OPENSSL) x509 -in $< -noout -serial | cut -d "=" -f 2); \
+	cert_subject=$$($(OPENSSL) x509 -in $< -noout -subject | sed 's/subject=OU = /\/OU=/' | sed 's/, CN = /\/CN=/'); \
+	cat ssl/server-ocsp-good.idx > $@; \
+	echo "V\t$$expiration_date\t\t$$serial_number\tunknown\t$$cert_subject" >> $@
+
+$(OCSPRES):
+# server-cn-only: 'good'
+ssl/server-ocsp-good.res: ssl/server-ocsp-good.idx ssl/server-cn-only.crt ssl/ocsp_ca.crt ssl/root+server_ca.crt
+	$(OPENSSL) ocsp -index $< -rsigner ssl/ocsp_ca.crt -rkey ssl/ocsp_ca.key -CA ssl/root+server_ca.crt -issuer ssl/server_ca.crt -ndays 10000 -cert ssl/server-cn-only.crt -respout $@
+
+# server-cn-only: 'revoked'
+ssl/server-ocsp-revoked.res: ssl/server-ocsp-revoked.idx ssl/server-cn-only.crt ssl/ocsp_ca.crt ssl/root+server_ca.crt
+	$(OPENSSL) ocsp -index $< -rsigner ssl/ocsp_ca.crt -rkey ssl/ocsp_ca.key -CA ssl/root+server_ca.crt -issuer ssl/server_ca.crt -ndays 10000 -cert ssl/server-cn-only.crt -respout $@
+
+# server-cn-only: 'unknown'
+ssl/server-ocsp-unknown.res: ssl/server-ocsp-unknown.idx ssl/server-cn-only.crt ssl/ocsp_ca.crt ssl/root+server_ca.crt
+	$(OPENSSL) ocsp -index $< -rsigner ssl/ocsp_ca.crt -rkey ssl/ocsp_ca.key -CA ssl/root+server_ca.crt -issuer ssl/server_ca.crt -ndays 10000 -cert ssl/server-cn-only.crt -respout $@
+
+# server-cn-only: 'expired'
+ssl/server-ocsp-expired.res: ssl/server-ocsp-expired.idx ssl/server-cn-only.crt ssl/ocsp_ca.crt ssl/root+server_ca.crt
+	$(OPENSSL) ocsp -index $< -rsigner ssl/ocsp_ca.crt -rkey ssl/ocsp_ca.key -CA ssl/root+server_ca.crt -issuer ssl/server_ca.crt -nmin 1 -cert ssl/server-cn-only.crt -respout $@
+
+# server-cn-only, server_ca: 'good, good'
+ssl/server-ca-ocsp-good.res: ssl/server-ca-ocsp-good.idx ssl/server-cn-only.crt ssl/ocsp_ca.crt ssl/root+server_ca.crt ssl/server_ca.crt
+	$(OPENSSL) ocsp -index $< -rsigner ssl/ocsp_ca.crt -rkey ssl/ocsp_ca.key -CA ssl/root+server_ca.crt -ndays 10000 -issuer ssl/server_ca.crt -cert ssl/server-cn-only.crt -issuer ssl/root_ca.crt -cert ssl/server_ca.crt -respout $@
+
+# server-cn-only, server_ca: 'good, revoked'
+ssl/server-ca-ocsp-revoked.res: ssl/server-ca-ocsp-revoked.idx ssl/server-cn-only.crt ssl/ocsp_ca.crt ssl/root+server_ca.crt ssl/server_ca.crt
+	$(OPENSSL) ocsp -index $< -rsigner ssl/ocsp_ca.crt -rkey ssl/ocsp_ca.key -CA ssl/root+server_ca.crt -ndays 10000 -issuer ssl/server_ca.crt -cert ssl/server-cn-only.crt -issuer ssl/root_ca.crt -cert ssl/server_ca.crt -respout $@
+
+# server-cn-only, server_ca: 'good, unknown'
+ssl/server-ca-ocsp-unknown.res: ssl/server-ca-ocsp-unknown.idx ssl/server-cn-only.crt ssl/ocsp_ca.crt ssl/root+server_ca.crt ssl/server_ca.crt
+	$(OPENSSL) ocsp -index $< -rsigner ssl/ocsp_ca.crt -rkey ssl/ocsp_ca.key -CA ssl/root+server_ca.crt -ndays 10000 -issuer ssl/server_ca.crt -cert ssl/server-cn-only.crt -issuer ssl/root_ca.crt -cert ssl/server_ca.crt -respout $@
+
+# server-cn-only, server_ca: 'good, expired'
+ssl/server-ca-ocsp-expired.res: ssl/server-ca-ocsp-expired.idx ssl/server-cn-only.crt ssl/ocsp_ca.crt ssl/root+server_ca.crt ssl/server_ca.crt
+	$(OPENSSL) ocsp -index $< -rsigner ssl/ocsp_ca.crt -rkey ssl/ocsp_ca.key -CA ssl/root+server_ca.crt -nmin 1 -issuer ssl/server_ca.crt -cert ssl/server-cn-only.crt -issuer ssl/root_ca.crt -cert ssl/server_ca.crt -respout $@
+
+#
 # CRLs
 #
 
@@ -262,7 +376,7 @@ ssl/%-crldir:
 
 .PHONY: sslfiles-clean
 sslfiles-clean:
-	rm -f $(SSLFILES) ssl/*.old ssl/*.csr ssl/*.srl ssl/*-certindex*
+	rm -f $(SSLFILES) ssl/*.old ssl/*.csr ssl/*.srl ssl/*-certindex* ssl/*.idx ssl/*.res
 	rm -rf $(SSLDIRS) ssl/new_certs_dir
 
 # The difference between the below clean targets and sslfiles-clean is that the

@@ -412,6 +412,7 @@ struct pg_conn
 	char	   *gssdelegation;	/* Try to delegate GSS credentials? (0 or 1) */
 	char	   *ssl_min_protocol_version;	/* minimum TLS protocol version */
 	char	   *ssl_max_protocol_version;	/* maximum TLS protocol version */
+	char	   *sslocspstapling;	/* request ocsp stapling from server */
 	char	   *target_session_attrs;	/* desired session properties */
 	char	   *require_auth;	/* name of the expected auth method */
 	char	   *load_balance_hosts; /* load balance over hosts */

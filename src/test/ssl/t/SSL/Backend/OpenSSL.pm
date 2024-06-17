@@ -73,6 +73,7 @@ sub init
 	_copy_files("ssl/root+client_ca.crt", $pgdata);
 	_copy_files("ssl/root_ca.crt", $pgdata);
 	_copy_files("ssl/root+client.crl", $pgdata);
+	_copy_files("ssl/server-*.res", $pgdata);
 	mkdir("$pgdata/root+client-crldir")
 	  or die "unable to create server CRL dir $pgdata/root+client-crldir: $!";
 	_copy_files("ssl/root+client-crldir/*", "$pgdata/root+client-crldir/");
@@ -186,6 +187,8 @@ sub set_server_cert
 	  . "ssl_crl_file='$params->{crlfile}'\n";
 	$sslconf .= "ssl_crl_dir='$params->{crldir}'\n"
 	  if defined $params->{crldir};
+	$sslconf .= "ssl_ocsp_file='$params->{ocspfile}.res'\n"
+	  if defined $params->{ocspfile};
 
 	return $sslconf;
 }

@@ -2408,6 +2408,12 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
      </row>
 
      <row>
+      <entry><xref linkend="guc-ssl-ocsp-file"/></entry>
+      <entry>server certificate status stapled by ocsp responder</entry>
+      <entry>sent to client to indicate server certificate status</entry>
+     </row>
+
+     <row>
       <entry><xref linkend="guc-ssl-key-file"/> (<filename>$PGDATA/server.key</filename>)</entry>
       <entry>server private key</entry>
       <entry>proves server certificate was sent by the owner; does not indicate

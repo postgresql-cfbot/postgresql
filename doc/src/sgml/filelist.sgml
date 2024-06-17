@@ -148,6 +148,7 @@
 <!ENTITY pgstatstatements SYSTEM "pgstatstatements.sgml">
 <!ENTITY pgstattuple     SYSTEM "pgstattuple.sgml">
 <!ENTITY pgsurgery       SYSTEM "pgsurgery.sgml">
+<!ENTITY pgtracing       SYSTEM "pgtracing.sgml">
 <!ENTITY pgtrgm          SYSTEM "pgtrgm.sgml">
 <!ENTITY pgvisibility    SYSTEM "pgvisibility.sgml">
 <!ENTITY pgwalinspect    SYSTEM "pgwalinspect.sgml">

@@ -541,6 +541,33 @@ offset_relid_set(Relids relids, int offset)
 }
 
 /*
+ * Substitute newId by oldId in relids.
+ *
+ * We must make a copy of the original Bitmapset before making any
+ * modifications, because the same pointer to it might be shared among
+ * different places.
+ * Also, this function can be used in 'delete only' mode (newId < 0).
+ * It allows us to utilise the same code in the remove_useless_joins and the
+ * remove_self_joins features.
+ */
+Bitmapset *
+replace_relid(Relids relids, int oldId, int newId)
+{
+	if (oldId < 0)
+		return relids;
+
+	/* Delete relid without substitution. */
+	if (newId < 0)
+		return bms_del_member(bms_copy(relids), oldId);
+
+	/* Substitute newId for oldId. */
+	if (bms_is_member(oldId, relids))
+		return bms_add_member(bms_del_member(bms_copy(relids), oldId), newId);
+
+	return relids;
+}
+
+/*
  * ChangeVarNodes - adjust Var nodes for a specific change of RT index
  *
  * Find all Var nodes in the given tree belonging to a specific relation
@@ -634,6 +661,74 @@ ChangeVarNodes_walker(Node *node, ChangeVarNodes_context *context)
 				rowmark->rti = context->new_index;
 			if (rowmark->prti == context->rt_index)
 				rowmark->prti = context->new_index;
+		}
+		return false;
+	}
+	if (IsA(node, RestrictInfo))
+	{
+		RestrictInfo *rinfo = (RestrictInfo *) node;
+		int			relid = -1;
+		bool		is_req_equal =
+			(rinfo->required_relids == rinfo->clause_relids);
+		bool		clause_relids_is_multiple =
+			(bms_membership(rinfo->clause_relids) == BMS_MULTIPLE);
+
+		if (bms_is_member(context->rt_index, rinfo->clause_relids))
+		{
+			expression_tree_walker((Node *) rinfo->clause, ChangeVarNodes_walker, (void *) context);
+			expression_tree_walker((Node *) rinfo->orclause, ChangeVarNodes_walker, (void *) context);
+
+			rinfo->clause_relids =
+				replace_relid(rinfo->clause_relids, context->rt_index, context->new_index);
+			rinfo->num_base_rels = bms_num_members(rinfo->clause_relids);
+			rinfo->left_relids =
+				replace_relid(rinfo->left_relids, context->rt_index, context->new_index);
+			rinfo->right_relids =
+				replace_relid(rinfo->right_relids, context->rt_index, context->new_index);
+		}
+
+		if (is_req_equal)
+			rinfo->required_relids = rinfo->clause_relids;
+		else
+			rinfo->required_relids =
+				replace_relid(rinfo->required_relids, context->rt_index, context->new_index);
+
+		rinfo->outer_relids =
+			replace_relid(rinfo->outer_relids, context->rt_index, context->new_index);
+		rinfo->incompatible_relids =
+			replace_relid(rinfo->incompatible_relids, context->rt_index, context->new_index);
+
+		if (rinfo->mergeopfamilies &&
+			bms_get_singleton_member(rinfo->clause_relids, &relid) &&
+			clause_relids_is_multiple &&
+			relid == context->new_index && IsA(rinfo->clause, OpExpr))
+		{
+			Expr	   *leftOp;
+			Expr	   *rightOp;
+
+			leftOp = (Expr *) get_leftop(rinfo->clause);
+			rightOp = (Expr *) get_rightop(rinfo->clause);
+
+			/* 
+			 * for SJE (self join elimination), changing varnos will make t1.a = t2.a
+			 * to "t1.a = t1.a", which is always true, later processing it will be
+			 * optimized out, but we also need to add a not null qual (NullTest).
+			 *
+			*/
+			if (leftOp != NULL && equal(leftOp, rightOp))
+			{
+				NullTest   *ntest = makeNode(NullTest);
+
+				ntest->arg = leftOp;
+				ntest->nulltesttype = IS_NOT_NULL;
+				ntest->argisrow = false;
+				ntest->location = -1;
+				rinfo->clause = (Expr *) ntest;
+				rinfo->mergeopfamilies = NIL;
+				rinfo->left_em = NULL;
+				rinfo->right_em = NULL;
+			}
+			Assert(rinfo->orclause == NULL);
 		}
 		return false;
 	}

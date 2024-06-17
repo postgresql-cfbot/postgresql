@@ -15,6 +15,7 @@
 #define REWRITEMANIP_H
 
 #include "nodes/parsenodes.h"
+#include "nodes/pathnodes.h"
 
 struct AttrMap;					/* avoid including attmap.h here */
 
@@ -41,6 +42,7 @@ typedef enum ReplaceVarsNoMatchOption
 } ReplaceVarsNoMatchOption;
 
 
+extern Bitmapset *replace_relid(Relids relids, int oldId, int newId);
 extern void CombineRangeTables(List **dst_rtable, List **dst_perminfos,
 							   List *src_rtable, List *src_perminfos);
 extern void OffsetVarNodes(Node *node, int offset, int sublevels_up);

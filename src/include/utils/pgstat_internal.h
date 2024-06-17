@@ -94,6 +94,14 @@ typedef struct PgStatShared_HashEntry
 	pg_atomic_uint32 refcount;
 
 	/*
+	 * Counter tracking the number of times the entry has been reused.
+	 *
+	 * Set to 0 when the entry is created, and incremented by one each time
+	 * the shared entry is reinitialized with pgstat_reinit_entry().
+	 */
+	pg_atomic_uint32 agecount;
+
+	/*
 	 * Pointer to shared stats. The stats entry always starts with
 	 * PgStatShared_Common, embedded in a larger struct containing the
 	 * PgStat_Kind specific stats fields.
@@ -131,6 +139,12 @@ typedef struct PgStat_EntryRef
 	 * as a local pointer, to avoid repeated dsa_get_address() calls.
 	 */
 	PgStatShared_Common *shared_stats;
+
+	/*
+	 * Copy of PgStatShared_HashEntry->agecount, keeping locally track of the
+	 * shared stats entry "age" retrieved (number of times reused).
+	 */
+	uint32		agecount;
 
 	/*
 	 * Pending statistics data that will need to be flushed to shared memory

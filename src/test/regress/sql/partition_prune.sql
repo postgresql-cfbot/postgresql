@@ -674,6 +674,8 @@ deallocate ab_q4;
 deallocate ab_q5;
 deallocate ab_q6;
 
+set enable_material = 0;
+
 -- UPDATE on a partition subtree has been seen to have problems.
 insert into ab values (1,2);
 explain (analyze, costs off, summary off, timing off)
@@ -685,6 +687,9 @@ truncate ab;
 insert into ab values (1, 1), (1, 2), (1, 3), (2, 1);
 explain (analyze, costs off, summary off, timing off)
 update ab_a1 set b = 3 from ab_a2 where ab_a2.b = (select 1);
+
+reset enable_material;
+
 select tableoid::regclass, * from ab;
 
 drop table ab, lprt_a;

@@ -867,7 +867,7 @@ BufFileSize(BufFile *file)
 {
 	int64		lastFileSize;
 
-	Assert(file->fileset != NULL);
+	Assert(file->files != NULL);
 
 	/* Get the size of the last physical file. */
 	lastFileSize = FileSize(file->files[file->numFiles - 1]);

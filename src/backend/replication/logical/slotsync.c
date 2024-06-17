@@ -962,14 +962,14 @@ validate_remote_info(WalReceiverConn *wrconn)
 
 	if (res->status != WALRCV_OK_TUPLES)
 		ereport(ERROR,
-				errmsg("could not fetch primary_slot_name \"%s\" info from the primary server: %s",
+				errmsg("could not fetch primary slot name \"%s\" info from the primary server: %s",
 					   PrimarySlotName, res->err),
-				errhint("Check if primary_slot_name is configured correctly."));
+				errhint("Check if \"primary_slot_name\" is configured correctly."));
 
 	tupslot = MakeSingleTupleTableSlot(res->tupledesc, &TTSOpsMinimalTuple);
 	if (!tuplestore_gettupleslot(res->tuplestore, true, false, tupslot))
 		elog(ERROR,
-			 "failed to fetch tuple for the primary server slot specified by primary_slot_name");
+			 "failed to fetch tuple for the primary server slot specified by \"primary_slot_name\"");
 
 	remote_in_recovery = DatumGetBool(slot_getattr(tupslot, 1, &isnull));
 	Assert(!isnull);
@@ -992,9 +992,9 @@ validate_remote_info(WalReceiverConn *wrconn)
 	if (!primary_slot_valid)
 		ereport(ERROR,
 				errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				errmsg("slot synchronization requires valid primary_slot_name"),
+				errmsg("slot synchronization requires valid \"primary_slot_name\""),
 		/* translator: second %s is a GUC variable name */
-				errdetail("The replication slot \"%s\" specified by %s does not exist on the primary server.",
+				errdetail("The replication slot \"%s\" specified by \"%s\" does not exist on the primary server.",
 						  PrimarySlotName, "primary_slot_name"));
 
 	ExecClearTuple(tupslot);
@@ -1060,7 +1060,7 @@ ValidateSlotSyncParams(int elevel)
 		ereport(elevel,
 		/* translator: %s is a GUC variable name */
 				errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				errmsg("slot synchronization requires %s to be defined", "primary_slot_name"));
+				errmsg("slot synchronization requires \"%s\" to be defined", "primary_slot_name"));
 		return false;
 	}
 
@@ -1074,7 +1074,7 @@ ValidateSlotSyncParams(int elevel)
 		ereport(elevel,
 		/* translator: %s is a GUC variable name */
 				errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				errmsg("slot synchronization requires %s to be enabled",
+				errmsg("slot synchronization requires \"%s\" to be enabled",
 					   "hot_standby_feedback"));
 		return false;
 	}
@@ -1126,7 +1126,7 @@ slotsync_reread_config(void)
 	{
 		ereport(LOG,
 		/* translator: %s is a GUC variable name */
-				errmsg("slot sync worker will shutdown because %s is disabled", "sync_replication_slots"));
+				errmsg("slot sync worker will shutdown because \"%s\" is disabled", "sync_replication_slots"));
 		proc_exit(0);
 	}
 

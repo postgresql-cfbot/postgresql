@@ -581,7 +581,8 @@ check_huge_page_size(int *newval, void **extra, GucSource source)
 	/* Recent enough Linux only, for now.  See GetHugePageSize(). */
 	if (*newval != 0)
 	{
-		GUC_check_errdetail("\"huge_page_size\" must be 0 on this platform.");
+		GUC_check_errdetail("\"%s\" must be 0 on this platform.",
+							"huge_page_size");
 		return false;
 	}
 #endif

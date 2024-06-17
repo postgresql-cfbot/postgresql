@@ -442,7 +442,8 @@ CheckpointerMain(char *startup_data, size_t startup_data_len)
 									   "checkpoints are occurring too frequently (%d seconds apart)",
 									   elapsed_secs,
 									   elapsed_secs),
-						 errhint("Consider increasing the configuration parameter \"%s\".", "max_wal_size")));
+						 errhint("Consider increasing the configuration parameter \"%s\".",
+								 "max_wal_size")));
 
 			/*
 			 * Initialize checkpointer-private variables used during
@@ -663,7 +664,7 @@ CheckArchiveTimeout(void)
 			 * assume nothing happened.
 			 */
 			if (XLogSegmentOffset(switchpoint, wal_segment_size) != 0)
-				elog(DEBUG1, "write-ahead log switch forced (archive_timeout=%d)",
+				elog(DEBUG1, "write-ahead log switch forced (\"archive_timeout\"=%d)",
 					 XLogArchiveTimeout);
 		}
 

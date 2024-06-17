@@ -257,7 +257,7 @@ BackgroundWorkerStateChange(bool allow_new_workers)
 	if (max_worker_processes != BackgroundWorkerData->total_slots)
 	{
 		ereport(LOG,
-				(errmsg("inconsistent background worker state (max_worker_processes=%d, total_slots=%d)",
+				(errmsg("inconsistent background worker state (\"max_worker_processes\"=%d, total slots=%d)",
 						max_worker_processes,
 						BackgroundWorkerData->total_slots)));
 		return;
@@ -928,7 +928,8 @@ RegisterBackgroundWorker(BackgroundWorker *worker)
 								  "Up to %d background workers can be registered with the current settings.",
 								  max_worker_processes,
 								  max_worker_processes),
-				 errhint("Consider increasing the configuration parameter \"max_worker_processes\".")));
+				 errhint("Consider increasing the configuration parameter \"%s\".",
+						 "max_worker_processes")));
 		return;
 	}
 

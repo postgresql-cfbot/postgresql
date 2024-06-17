@@ -358,8 +358,8 @@ incompatible_module_error(const char *libname,
 		if (details.len)
 			appendStringInfoChar(&details, '\n');
 		appendStringInfo(&details,
-						 _("Server has FUNC_MAX_ARGS = %d, library has %d."),
-						 magic_data.funcmaxargs,
+						 _("Server has %s = %d, library has %d."),
+						 "FUNC_MAX_ARGS", magic_data.funcmaxargs,
 						 module_magic_data->funcmaxargs);
 	}
 	if (module_magic_data->indexmaxkeys != magic_data.indexmaxkeys)
@@ -367,8 +367,8 @@ incompatible_module_error(const char *libname,
 		if (details.len)
 			appendStringInfoChar(&details, '\n');
 		appendStringInfo(&details,
-						 _("Server has INDEX_MAX_KEYS = %d, library has %d."),
-						 magic_data.indexmaxkeys,
+						 _("Server has %s = %d, library has %d."),
+						 "INDEX_MAX_KEYS", magic_data.indexmaxkeys,
 						 module_magic_data->indexmaxkeys);
 	}
 	if (module_magic_data->namedatalen != magic_data.namedatalen)
@@ -376,8 +376,8 @@ incompatible_module_error(const char *libname,
 		if (details.len)
 			appendStringInfoChar(&details, '\n');
 		appendStringInfo(&details,
-						 _("Server has NAMEDATALEN = %d, library has %d."),
-						 magic_data.namedatalen,
+						 _("Server has %s = %d, library has %d."),
+						 "NAMEDATALEN", magic_data.namedatalen,
 						 module_magic_data->namedatalen);
 	}
 	if (module_magic_data->float8byval != magic_data.float8byval)
@@ -385,8 +385,8 @@ incompatible_module_error(const char *libname,
 		if (details.len)
 			appendStringInfoChar(&details, '\n');
 		appendStringInfo(&details,
-						 _("Server has FLOAT8PASSBYVAL = %s, library has %s."),
-						 magic_data.float8byval ? "true" : "false",
+						 _("Server has %s = %s, library has %s."),
+						 "FLOAT8PASSBYVAL", magic_data.float8byval ? "true" : "false",
 						 module_magic_data->float8byval ? "true" : "false");
 	}
 

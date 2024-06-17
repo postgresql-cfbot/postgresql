@@ -511,7 +511,7 @@ connect_database(const char *conninfo, bool exit_on_error)
 	res = PQexec(conn, ALWAYS_SECURE_SEARCH_PATH_SQL);
 	if (PQresultStatus(res) != PGRES_TUPLES_OK)
 	{
-		pg_log_error("could not clear search_path: %s",
+		pg_log_error("could not clear \"search_path\": %s",
 					 PQresultErrorMessage(res));
 		PQclear(res);
 		PQfinish(conn);
@@ -884,7 +884,7 @@ check_publisher(const struct LogicalRepInfo *dbinfo)
 
 	if (strcmp(wal_level, "logical") != 0)
 	{
-		pg_log_error("publisher requires wal_level >= \"logical\"");
+		pg_log_error("publisher requires \"wal_level\" >= \"logical\"");
 		failed = true;
 	}
 
@@ -892,7 +892,8 @@ check_publisher(const struct LogicalRepInfo *dbinfo)
 	{
 		pg_log_error("publisher requires %d replication slots, but only %d remain",
 					 num_dbs, max_repslots - cur_repslots);
-		pg_log_error_hint("Consider increasing max_replication_slots to at least %d.",
+		pg_log_error_hint("Consider increasing \"%s\" to at least %d.",
+						  "max_replication_slots",
 						  cur_repslots + num_dbs);
 		failed = true;
 	}
@@ -901,7 +902,8 @@ check_publisher(const struct LogicalRepInfo *dbinfo)
 	{
 		pg_log_error("publisher requires %d wal sender processes, but only %d remain",
 					 num_dbs, max_walsenders - cur_walsenders);
-		pg_log_error_hint("Consider increasing max_wal_senders to at least %d.",
+		pg_log_error_hint("Consider increasing \"%s\" to at least %d.",
+						  "max_wal_senders",
 						  cur_walsenders + num_dbs);
 		failed = true;
 	}
@@ -991,7 +993,8 @@ check_subscriber(const struct LogicalRepInfo *dbinfo)
 	{
 		pg_log_error("subscriber requires %d replication slots, but only %d remain",
 					 num_dbs, max_repslots);
-		pg_log_error_hint("Consider increasing max_replication_slots to at least %d.",
+		pg_log_error_hint("Consider increasing \"%s\" to at least %d.",
+						  "max_replication_slots",
 						  num_dbs);
 		failed = true;
 	}
@@ -1000,7 +1003,8 @@ check_subscriber(const struct LogicalRepInfo *dbinfo)
 	{
 		pg_log_error("subscriber requires %d logical replication workers, but only %d remain",
 					 num_dbs, max_lrworkers);
-		pg_log_error_hint("Consider increasing max_logical_replication_workers to at least %d.",
+		pg_log_error_hint("Consider increasing \"%s\" to at least %d.",
+						  "max_logical_replication_workers",
 						  num_dbs);
 		failed = true;
 	}
@@ -1009,7 +1013,8 @@ check_subscriber(const struct LogicalRepInfo *dbinfo)
 	{
 		pg_log_error("subscriber requires %d worker processes, but only %d remain",
 					 num_dbs + 1, max_wprocs);
-		pg_log_error_hint("Consider increasing max_worker_processes to at least %d.",
+		pg_log_error_hint("Consider increasing \"%s\" to at least %d.",
+						  "max_worker_processes",
 						  num_dbs + 1);
 		failed = true;
 	}

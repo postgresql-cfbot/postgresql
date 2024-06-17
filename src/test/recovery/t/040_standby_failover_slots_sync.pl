@@ -529,7 +529,7 @@ $standby1->wait_for_log(
 	qr/slot sync worker will restart because of a parameter change/,
 	$log_offset);
 $standby1->wait_for_log(
-	qr/slot synchronization requires hot_standby_feedback to be enabled/,
+	qr/slot synchronization requires "hot_standby_feedback" to be enabled/,
 	$log_offset);
 
 $log_offset = -s $standby1->logfile;

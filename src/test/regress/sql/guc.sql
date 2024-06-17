@@ -2,7 +2,10 @@
 -- we can't rely on any specific default value of vacuum_cost_delay
 SHOW datestyle;
 
+-- Check output style of CamelCase enum options
+SET intervalstyle to 'asd';
 -- SET to some nondefault value
+
 SET vacuum_cost_delay TO 40;
 SET datestyle = 'ISO, YMD';
 SHOW vacuum_cost_delay;

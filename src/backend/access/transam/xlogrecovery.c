@@ -4782,7 +4782,7 @@ check_recovery_target(char **newval, void **extra, GucSource source)
 {
 	if (strcmp(*newval, "immediate") != 0 && strcmp(*newval, "") != 0)
 	{
-		GUC_check_errdetail("The only allowed value is \"immediate\".");
+		GUC_check_errdetail("The only allowed value is \"%s\".", "immediate");
 		return false;
 	}
 	return true;

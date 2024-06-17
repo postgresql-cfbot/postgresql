@@ -401,7 +401,8 @@ SKIP:
 {
 	my $tar = $ENV{TAR};
 	# don't check for a working tar here, to accommodate various odd
-	# cases. If tar doesn't work the init_from_backup below will fail.
+	# cases such as AIX. If tar doesn't work the init_from_backup below
+	# will fail.
 	skip "no tar program available", 1
 	  if (!defined $tar || $tar eq '');
 

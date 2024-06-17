@@ -14,6 +14,7 @@
 #include "postgres.h"
 
 #include "access/xact.h"
+#include "catalog/pg_authid_d.h"
 #include "catalog/pg_type.h"
 #include "commands/createas.h"
 #include "commands/defrem.h"
@@ -21,6 +22,7 @@
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
 #include "libpq/pqformat.h"
+#include "miscadmin.h"
 #include "nodes/extensible.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -29,6 +31,7 @@
 #include "rewrite/rewriteHandler.h"
 #include "storage/bufmgr.h"
 #include "tcop/tcopprot.h"
+#include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/guc_tables.h"
 #include "utils/json.h"
@@ -435,6 +438,36 @@ ExplainOneQuery(Query *query, int cursorOptions,
 		ExplainOneUtility(query->utilityStmt, into, es, queryString, params,
 						  queryEnv);
 		return;
+	}
+
+	/*
+	 * Since EXPLAIN (ANALYZE) shows data like the number of rows removed by a
+	 * filter, it can be used to work around security restrictions that hide
+	 * table data from the user, such as security barrier views and row-level
+	 * security.  Only members of pg_read_all_stats and superusers can see such
+	 * statistics.  The check is here rather than in standard_ExplainOneQuery
+	 * to keep plugins from inadvertently subverting security.
+	 */
+	if (es->analyze &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_READ_ALL_STATS))
+	{
+		ListCell   *rtable;
+
+		foreach(rtable, query->rtable)
+		{
+			RangeTblEntry *rte = lfirst(rtable);
+			if (rte->security_barrier)
+				ereport(ERROR,
+						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+						 errmsg("permission denied to use EXPLAIN (ANALYZE) with security_barrier views"),
+						 errdetail("Only members of pg_read_all_stats may see statement execution statistics.")));
+		}
+
+		if (query->hasRowSecurity)
+			ereport(ERROR,
+					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+					 errmsg("permission denied to use EXPLAIN (ANALYZE) with row-level security"),
+					 errdetail("Only members of pg_read_all_stats may see statement execution statistics.")));
 	}
 
 	/* if an advisor plugin is present, let it manage things */

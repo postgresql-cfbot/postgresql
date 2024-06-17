@@ -22,7 +22,7 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 ALTER SERVER <replaceable class="parameter">name</replaceable> [ VERSION '<replaceable class="parameter">new_version</replaceable>' ]
-    [ OPTIONS ( [ ADD | SET | DROP ] <replaceable class="parameter">option</replaceable> ['<replaceable class="parameter">value</replaceable>'] [, ... ] ) ]
+    [ OPTIONS ( [ ADD | SET | DROP | INCLUDE | EXCLUDE ] <replaceable class="parameter">option</replaceable> ['<replaceable class="parameter">value</replaceable>'] [, ... ] ) ]
 ALTER SERVER <replaceable class="parameter">name</replaceable> OWNER TO { <replaceable>new_owner</replaceable> | CURRENT_ROLE | CURRENT_USER | SESSION_USER }
 ALTER SERVER <replaceable class="parameter">name</replaceable> RENAME TO <replaceable>new_name</replaceable>
 </synopsis>
@@ -71,15 +71,43 @@ ALTER SERVER <replaceable class="parameter">name</replaceable> RENAME TO <replac
    </varlistentry>
 
    <varlistentry>
-    <term><literal>OPTIONS ( [ ADD | SET | DROP ] <replaceable class="parameter">option</replaceable> ['<replaceable class="parameter">value</replaceable>'] [, ... ] )</literal></term>
+    <term><literal>OPTIONS ( [ ADD | SET | DROP | INCLUDE | EXCLUDE ] <replaceable class="parameter">option</replaceable> ['<replaceable class="parameter">value</replaceable>'] [, ... ] )</literal></term>
     <listitem>
      <para>
       Change options for the
-      server.  <literal>ADD</literal>, <literal>SET</literal>, and <literal>DROP</literal>
-      specify the action to be performed.  <literal>ADD</literal> is assumed
-      if no operation is explicitly specified.  Option names must be
-      unique; names and values are also validated using the server's
-      foreign-data wrapper library.
+      server.  <literal>ADD</literal>, <literal>SET</literal>, <literal>DROP</literal>,
+      <literal>INCLUDE</literal> and <literal>EXCLUDE</literal> specify the action to be
+      performed.  <literal>ADD</literal> is assumed if no operation is explicitly
+      specified.  Option names must be unique; names and values are also validated
+      using the server's foreign-data wrapper library.
+     </para>
+
+     <para>
+      <literal>ADD</literal> can only be used for option names that don't already exist.
+      It sets the specified name's value as provided.
+     </para>
+
+     <para>
+      <literal>SET</literal> can only be used for option names that already exist.
+      It overwrites the entire existing value for the specified option.
+     </para>
+
+     <para>
+      <literal>DROP</literal> can only be used for option names that already exist.
+      It removes the specified name from the list of OPTIONS.
+     </para>
+
+     <para>
+      <literal>INCLUDE</literal> can be used regardless of whether the option name exists or not.
+      If the option name doesn't exist, it acts like <literal>ADD</literal>.
+      If it does exist, it adds the provided values to the existing ones.
+     </para>
+
+     <para>
+      <literal>EXCLUDE</literal> can only be used for option names that already exist.
+      It removes the provided values from the values of the specified option name.
+      If some provided values don't exist in the option values, they won't have any effect.
+      Only the values that exist in the options will be removed.
      </para>
     </listitem>
    </varlistentry>
@@ -111,6 +139,23 @@ ALTER SERVER <replaceable class="parameter">name</replaceable> RENAME TO <replac
    Alter server <literal>foo</literal>, add connection options:
 <programlisting>
 ALTER SERVER foo OPTIONS (host 'foo', dbname 'foodb');
+</programlisting>
+  </para>
+
+  <para>
+   Suppose a server already contains few extensions then to add 
+   more extensions into existing values use
+   Alter server <literal>foo</literal>, include extensions:
+<programlisting>
+ALTER SERVER foo OPTIONS (INCLUDE extensions 'ext1, ext2, ext3');
+</programlisting>
+  </para>
+
+  <para>
+   To remove some selected values from extensions use
+   Alter server <literal>foo</literal>, exclude extensions:
+<programlisting>
+ALTER SERVER foo OPTIONS (EXCLUDE extensions 'ext1, ext3');
 </programlisting>
   </para>
 

@@ -192,9 +192,12 @@ ALTER SERVER testserver1 OPTIONS (
 
 -- Error, invalid list syntax
 ALTER SERVER testserver1 OPTIONS (ADD extensions 'foo; bar');
+ALTER SERVER testserver1 OPTIONS (INCLUDE extensions 'foo; bar');
 
 -- OK but gets a warning
 ALTER SERVER testserver1 OPTIONS (ADD extensions 'foo, bar');
+ALTER SERVER testserver1 OPTIONS (INCLUDE extensions 'ext1, ext2');
+ALTER SERVER testserver1 OPTIONS (EXCLUDE extensions 'foo, ext2, ext3');
 ALTER SERVER testserver1 OPTIONS (DROP extensions);
 
 ALTER USER MAPPING FOR public SERVER testserver1

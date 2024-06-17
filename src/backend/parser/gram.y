@@ -5485,6 +5485,16 @@ alter_generic_option_elem:
 				{
 					$$ = makeDefElemExtended(NULL, $2, NULL, DEFELEM_DROP, @2);
 				}
+			| INCLUDE generic_option_elem
+				{
+					$$ = $2;
+					$$->defaction = DEFELEM_INCLUDE;
+				}
+			| EXCLUDE generic_option_elem
+				{
+					$$ = $2;
+					$$->defaction = DEFELEM_EXCLUDE;
+				}
 		;
 
 generic_option_elem:

@@ -806,6 +806,8 @@ typedef enum DefElemAction
 	DEFELEM_SET,
 	DEFELEM_ADD,
 	DEFELEM_DROP,
+	DEFELEM_INCLUDE,
+	DEFELEM_EXCLUDE
 } DefElemAction;
 
 typedef struct DefElem

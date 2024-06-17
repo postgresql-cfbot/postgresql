@@ -23,7 +23,7 @@ PostgreSQL documentation
 <synopsis>
 ALTER USER MAPPING FOR { <replaceable class="parameter">user_name</replaceable> | USER | CURRENT_ROLE | CURRENT_USER | SESSION_USER | PUBLIC }
     SERVER <replaceable class="parameter">server_name</replaceable>
-    OPTIONS ( [ ADD | SET | DROP ] <replaceable class="parameter">option</replaceable> ['<replaceable class="parameter">value</replaceable>'] [, ... ] )
+    OPTIONS ( [ ADD | SET | DROP | INCLUDE | EXCLUDE ] <replaceable class="parameter">option</replaceable> ['<replaceable class="parameter">value</replaceable>'] [, ... ] )
 </synopsis>
  </refsynopsisdiv>
 
@@ -69,16 +69,44 @@ ALTER USER MAPPING FOR { <replaceable class="parameter">user_name</replaceable> 
    </varlistentry>
 
    <varlistentry>
-    <term><literal>OPTIONS ( [ ADD | SET | DROP ] <replaceable class="parameter">option</replaceable> ['<replaceable class="parameter">value</replaceable>'] [, ... ] )</literal></term>
+    <term><literal>OPTIONS ( [ ADD | SET | DROP | INCLUDE | EXCLUDE ] <replaceable class="parameter">option</replaceable> ['<replaceable class="parameter">value</replaceable>'] [, ... ] )</literal></term>
     <listitem>
      <para>
       Change options for the user mapping. The new options override
       any previously specified
-      options.  <literal>ADD</literal>, <literal>SET</literal>, and <literal>DROP</literal>
-      specify the action to be performed.  <literal>ADD</literal> is assumed
-      if no operation is explicitly specified.  Option names must be
-      unique; options are also validated by the server's foreign-data
-      wrapper.
+      options.  <literal>ADD</literal>, <literal>SET</literal>, <literal>DROP</literal>,
+      <literal>INCLUDE</literal> and <literal>EXCLUDE</literal> specify the action to be
+      performed.  <literal>ADD</literal> is assumed if no operation is explicitly
+      specified.  Option names must be unique; options are also validated
+      by the server's foreign-data wrapper.
+     </para>
+
+     <para>
+      <literal>ADD</literal> can only be used for option names that don't already exist.
+      It sets the specified name's value as provided.
+     </para>
+
+     <para>
+      <literal>SET</literal> can only be used for option names that already exist.
+      It overwrites the entire existing value for the specified option.
+     </para>
+
+     <para>
+      <literal>DROP</literal> can only be used for option names that already exist.
+      It removes the specified name from the list of OPTIONS.
+     </para>
+
+     <para>
+      <literal>INCLUDE</literal> can be used regardless of whether the option name exists or not.
+      If the option name doesn't exist, it acts like <literal>ADD</literal>.
+      If it does exist, it adds the provided values to the existing ones.
+     </para>
+
+     <para>
+      <literal>EXCLUDE</literal> can only be used for option names that already exist.
+      It removes the provided values from the values of the specified option name.
+      If some provided values don't exist in the option values, they won't have any effect.
+      Only the values that exist in the options will be removed.
      </para>
     </listitem>
    </varlistentry>

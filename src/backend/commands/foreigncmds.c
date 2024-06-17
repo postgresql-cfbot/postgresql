@@ -38,6 +38,7 @@
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
+#include "utils/varlena.h"
 
 
 typedef struct
@@ -95,10 +96,10 @@ optionListToArray(List *options)
 
 /*
  * Transform a list of DefElem into text array format.  This is substantially
- * the same thing as optionListToArray(), except we recognize SET/ADD/DROP
- * actions for modifying an existing list of options, which is passed in
- * Datum form as oldOptions.  Also, if fdwvalidator isn't InvalidOid
- * it specifies a validator function to call on the result.
+ * the same thing as optionListToArray(), except we recognize
+ * SET/ADD/DROP/INCLUDE/EXCLUDE actions for modifying an existing list of
+ * options, which is passed in Datum form as oldOptions.  Also, if fdwvalidator
+ * isn't InvalidOid it specifies a validator function to call on the result.
  *
  * Returns the array in the form of a Datum, or PointerGetDatum(NULL)
  * if the list is empty.
@@ -157,6 +158,78 @@ transformGenericOptions(Oid catalogId,
 							 errmsg("option \"%s\" not found",
 									od->defname)));
 				lfirst(cell) = od;
+				break;
+
+			case DEFELEM_INCLUDE:
+				if (!cell)
+					resultOptions = lappend(resultOptions, od);
+				else
+				{
+					StringInfo	s;
+
+					s = makeStringInfo();
+
+					appendStringInfoString(s, defGetString(lfirst(cell)));
+
+					if (strlen(s->data) && strlen(defGetString(od)))
+						appendStringInfoChar(s, ',');
+
+					appendStringInfoString(s, defGetString(od));
+
+					((String *) od->arg)->sval = s->data;
+					lfirst(cell) = od;
+				}
+				break;
+
+			case DEFELEM_EXCLUDE:
+				if (!cell)
+					ereport(ERROR,
+							(errcode(ERRCODE_UNDEFINED_OBJECT),
+							 errmsg("option \"%s\" not found",
+									od->defname)));
+				else
+				{
+					StringInfo	s;
+					List	   *currentValues;
+					List	   *discardValues;
+					ListCell   *ev;
+					ListCell   *dv;
+
+					SplitIdentifierString(defGetString(lfirst(cell)), ',', &currentValues);
+					SplitIdentifierString(defGetString(od), ',', &discardValues);
+
+					foreach(ev, currentValues)
+					{
+						foreach(dv, discardValues)
+						{
+							if (strcmp((char *) lfirst(ev), (char *) lfirst(dv)) == 0)
+							{
+								currentValues = foreach_delete_current(currentValues, ev);
+								break;
+							}
+						}
+					}
+
+					s = makeStringInfo();
+
+					foreach(ev, currentValues)
+					{
+						appendStringInfoString(s, (char *) lfirst(ev));
+						appendStringInfoChar(s, ',');
+					}
+
+					if (s->len > 0)
+					{
+						s->data[s->len - 1] = '\0';
+						s->len = s->len - 1;
+					}
+
+					list_free(currentValues);
+					list_free(discardValues);
+
+					((String *) od->arg)->sval = s->data;
+					lfirst(cell) = od;
+				}
 				break;
 
 			case DEFELEM_ADD:

@@ -624,6 +624,28 @@ logicalrep_worker_stop(Oid subid, Oid relid)
 }
 
 /*
+ * Stop all the subscription workers.
+ */
+void
+logicalrep_workers_stop(Oid subid)
+{
+	List	   *subworkers;
+	ListCell   *lc;
+
+	LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
+	/* XXX clarify the reason why not only running workers are listed. */
+	subworkers = logicalrep_workers_find(subid, false);
+	LWLockRelease(LogicalRepWorkerLock);
+	foreach(lc, subworkers)
+	{
+		LogicalRepWorker *w = (LogicalRepWorker *) lfirst(lc);
+
+		logicalrep_worker_stop(w->subid, w->relid);
+	}
+	list_free(subworkers);
+}
+
+/*
  * Stop the given logical replication parallel apply worker.
  *
  * Node that the function sends SIGINT instead of SIGTERM to the parallel apply

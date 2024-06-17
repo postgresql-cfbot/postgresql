@@ -402,7 +402,6 @@ static void apply_handle_tuple_routing(ApplyExecutionData *edata,
 									   CmdType operation);
 
 /* Compute GID for two_phase transactions */
-static void TwoPhaseTransactionGid(Oid subid, TransactionId xid, char *gid, int szgid);
 
 /* Functions for skipping changes */
 static void maybe_start_skipping_changes(XLogRecPtr finish_lsn);
@@ -3911,7 +3910,7 @@ maybe_reread_subscription(void)
 	/* !slotname should never happen when enabled is true. */
 	Assert(newsub->slotname);
 
-	/* two-phase should not be altered */
+	/* two-phase cannot be altered while the worker exists */
 	Assert(newsub->twophasestate == MySubscription->twophasestate);
 
 	/*
@@ -4394,24 +4393,6 @@ cleanup_subxact_info()
 	subxact_data.subxact_last = InvalidTransactionId;
 	subxact_data.nsubxacts = 0;
 	subxact_data.nsubxacts_max = 0;
-}
-
-/*
- * Form the prepared transaction GID for two_phase transactions.
- *
- * Return the GID in the supplied buffer.
- */
-static void
-TwoPhaseTransactionGid(Oid subid, TransactionId xid, char *gid, int szgid)
-{
-	Assert(subid != InvalidRepOriginId);
-
-	if (!TransactionIdIsValid(xid))
-		ereport(ERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg_internal("invalid two-phase transaction ID")));
-
-	snprintf(gid, szgid, "pg_gid_%u_%u", subid, xid);
 }
 
 /*

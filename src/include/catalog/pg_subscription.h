@@ -98,6 +98,13 @@ CATALOG(pg_subscription,6100,SubscriptionRelationId) BKI_SHARED_RELATION BKI_ROW
 								 * slots) in the upstream database are enabled
 								 * to be synchronized to the standbys. */
 
+	bool		subforcealter;	/* True allows the ALTER SUBSCRIPTION command
+								 * to proceed under conditions that would
+								 * otherwise result in an error. Currently,
+								 * 'force_alter' only has an effect when
+								 * altering the two_phase option from "true" to
+								 * "false". */
+
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 	/* Connection string to the publisher */
 	text		subconninfo BKI_FORCE_NOT_NULL;
@@ -151,6 +158,12 @@ typedef struct Subscription
 								 * (i.e. the main slot and the table sync
 								 * slots) in the upstream database are enabled
 								 * to be synchronized to the standbys. */
+	bool		forcealter;		/* True allows the ALTER SUBSCRIPTION command
+								 * to proceed under conditions that would
+								 * otherwise result in an error. Currently,
+								 * 'force_alter' only has an effect when
+								 * altering the two_phase option from "true" to
+								 * "false". */
 	char	   *conninfo;		/* Connection string to the publisher */
 	char	   *slotname;		/* Name of the replication slot */
 	char	   *synccommit;		/* Synchronous commit setting for worker */

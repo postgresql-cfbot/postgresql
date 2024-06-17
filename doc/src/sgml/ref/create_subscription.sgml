@@ -428,6 +428,30 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
          </para>
         </listitem>
        </varlistentry>
+
+       <varlistentry id="sql-createsubscription-params-with-force-alter">
+        <term><literal>force_alter</literal> (<type>boolean</type>)</term>
+        <listitem>
+         <para>
+          Specifies if the <link linkend="sql-altersubscription"><command>ALTER SUBSCRIPTION</command></link>
+          can be forced to proceed instead of giving an error.
+         </para>
+         <para>
+          There is currently only one scenario where this parameter has any
+          effect: When altering <literal>two_phase</literal> option from
+          <literal>true</literal> to <literal>false</literal> it is possible
+          for there to be incomplete prepared transactions done by the logical
+          replication worker (from when <literal>two_phase</literal> parameter
+          was still <literal>true</literal>). If <literal>force_alter</literal>
+          is <literal>false</literal>, then this will give an error; if
+          <literal>force_alter</literal> is <literal>true</literal>, then the
+          incomplete prepared transactions are aborted and the alter will proceed.
+         </para>
+         <para>
+          The default is <literal>false</literal>.
+         </para>
+        </listitem>
+       </varlistentry>
       </variablelist></para>
 
     </listitem>

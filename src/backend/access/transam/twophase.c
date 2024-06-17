@@ -2682,3 +2682,62 @@ LookupGXact(const char *gid, XLogRecPtr prepare_end_lsn,
 	LWLockRelease(TwoPhaseStateLock);
 	return found;
 }
+
+/*
+ * TwoPhaseTransactionGid
+ *		Form the prepared transaction GID for two_phase transactions.
+ *
+ * Return the GID in the supplied buffer.
+ */
+void
+TwoPhaseTransactionGid(Oid subid, TransactionId xid, char *gid, int szgid)
+{
+	Assert(subid != InvalidRepOriginId);
+
+	if (!TransactionIdIsValid(xid))
+		ereport(ERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg_internal("invalid two-phase transaction ID")));
+
+	snprintf(gid, szgid, "pg_gid_%u_%u", subid, xid);
+}
+
+/*
+ * IsTwoPhaseTransactionGidForSubid
+ *		Check whether the given GID (as formed by TwoPhaseTransactionGid) is
+ *		for the specified 'subid'.
+ */
+static bool
+IsTwoPhaseTransactionGidForSubid(Oid subid, char *gid)
+{
+	int				ret;
+	Oid				subid_written;
+	TransactionId	xid;
+
+	ret = sscanf(gid, "pg_gid_%u_%u", &subid_written, &xid);
+
+	return (ret == 2 && subid == subid_written);
+}
+
+/*
+ * GetGidListBySubid
+ *      Get a list of GIDs which is PREPARE'd by the given subscription.
+ */
+List *
+GetGidListBySubid(Oid subid)
+{
+	List *list = NIL;
+
+	LWLockAcquire(TwoPhaseStateLock, LW_SHARED);
+	for (int i = 0; i < TwoPhaseState->numPrepXacts; i++)
+	{
+		GlobalTransaction gxact = TwoPhaseState->prepXacts[i];
+
+		/* Ignore not-yet-valid GIDs. */
+		if (gxact->valid &&
+			IsTwoPhaseTransactionGidForSubid(subid, gxact->gid))
+			list = lappend(list, pstrdup(gxact->gid));
+	}
+	LWLockRelease(TwoPhaseStateLock);
+	return list;
+}

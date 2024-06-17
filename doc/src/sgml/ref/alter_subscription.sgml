@@ -68,8 +68,9 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
   <para>
    Commands <command>ALTER SUBSCRIPTION ... REFRESH PUBLICATION</command>,
    <command>ALTER SUBSCRIPTION ... {SET|ADD|DROP} PUBLICATION ...</command>
-   with <literal>refresh</literal> option as <literal>true</literal> and
-   <command>ALTER SUBSCRIPTION ... SET (failover = true|false)</command>
+   with <literal>refresh</literal> option as <literal>true</literal>,
+   <command>ALTER SUBSCRIPTION ... SET (failover = true|false)</command> and
+   <command>ALTER SUBSCRIPTION ... SET (two_phase = off)</command>
    cannot be executed inside a transaction block.
 
    These commands also cannot be executed when the subscription has
@@ -228,8 +229,10 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
       <link linkend="sql-createsubscription-params-with-disable-on-error"><literal>disable_on_error</literal></link>,
       <link linkend="sql-createsubscription-params-with-password-required"><literal>password_required</literal></link>,
       <link linkend="sql-createsubscription-params-with-run-as-owner"><literal>run_as_owner</literal></link>,
-      <link linkend="sql-createsubscription-params-with-origin"><literal>origin</literal></link>, and
-      <link linkend="sql-createsubscription-params-with-failover"><literal>failover</literal></link>.
+      <link linkend="sql-createsubscription-params-with-origin"><literal>origin</literal></link>,
+      <link linkend="sql-createsubscription-params-with-failover"><literal>failover</literal></link>,
+      <link linkend="sql-createsubscription-params-with-two-phase"><literal>two_phase</literal></link>, and
+      <link linkend="sql-createsubscription-params-with-force-alter"><literal>force_alter</literal></link>
       Only a superuser can set <literal>password_required = false</literal>.
      </para>
 
@@ -251,6 +254,16 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
       even when the subscription's
       <link linkend="sql-createsubscription-params-with-failover"><literal>failover</literal></link>
       option is enabled.
+     </para>
+
+     <para>
+      The <literal>two_phase</literal> parameter can only be altered when the
+      subscription is disabled. Altering the parameter from <literal>true</literal>
+      to <literal>false</literal> will give an error when there are prepared
+      transactions done by the logical replication worker. If you want to alter
+      the parameter forcibly in this case,
+      <link linkend="sql-createsubscription-params-with-force-alter"><literal>force_alter</literal></link>
+      option must be set to <literal>true</literal>.
      </para>
     </listitem>
    </varlistentry>

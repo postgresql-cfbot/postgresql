@@ -16,6 +16,7 @@
 
 #include "access/htup_details.h"
 #include "access/table.h"
+#include "access/twophase.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
@@ -72,6 +73,7 @@
 #define SUBOPT_FAILOVER				0x00002000
 #define SUBOPT_LSN					0x00004000
 #define SUBOPT_ORIGIN				0x00008000
+#define SUBOPT_FORCE_ALTER			0x00010000
 
 /* check if the 'val' has 'bits' set */
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
@@ -99,6 +101,7 @@ typedef struct SubOpts
 	bool		failover;
 	char	   *origin;
 	XLogRecPtr	lsn;
+	bool		force_alter;
 } SubOpts;
 
 static List *fetch_table_list(WalReceiverConn *wrconn, List *publications);
@@ -161,6 +164,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 		opts->failover = false;
 	if (IsSet(supported_opts, SUBOPT_ORIGIN))
 		opts->origin = pstrdup(LOGICALREP_ORIGIN_ANY);
+	if (IsSet(supported_opts, SUBOPT_FORCE_ALTER))
+		opts->force_alter = false;
 
 	/* Parse options */
 	foreach(lc, stmt_options)
@@ -365,6 +370,15 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 
 			opts->specified_opts |= SUBOPT_LSN;
 			opts->lsn = lsn;
+		}
+		else if (IsSet(supported_opts, SUBOPT_FORCE_ALTER) &&
+				 strcmp(defel->defname, "force_alter") == 0)
+		{
+			if (IsSet(opts->specified_opts, SUBOPT_FORCE_ALTER))
+				errorConflictingDefElem(defel, pstate);
+
+			opts->specified_opts |= SUBOPT_FORCE_ALTER;
+			opts->force_alter = defGetBoolean(defel);
 		}
 		else
 			ereport(ERROR,
@@ -603,7 +617,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 					  SUBOPT_SYNCHRONOUS_COMMIT | SUBOPT_BINARY |
 					  SUBOPT_STREAMING | SUBOPT_TWOPHASE_COMMIT |
 					  SUBOPT_DISABLE_ON_ERR | SUBOPT_PASSWORD_REQUIRED |
-					  SUBOPT_RUN_AS_OWNER | SUBOPT_FAILOVER | SUBOPT_ORIGIN);
+					  SUBOPT_RUN_AS_OWNER | SUBOPT_FAILOVER | SUBOPT_ORIGIN |
+					  SUBOPT_FORCE_ALTER);
 	parse_subscription_options(pstate, stmt->options, supported_opts, &opts);
 
 	/*
@@ -710,6 +725,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	values[Anum_pg_subscription_subpasswordrequired - 1] = BoolGetDatum(opts.passwordrequired);
 	values[Anum_pg_subscription_subrunasowner - 1] = BoolGetDatum(opts.runasowner);
 	values[Anum_pg_subscription_subfailover - 1] = BoolGetDatum(opts.failover);
+	values[Anum_pg_subscription_subforcealter - 1] = BoolGetDatum(opts.force_alter);
 	values[Anum_pg_subscription_subconninfo - 1] =
 		CStringGetTextDatum(conninfo);
 	if (opts.slot_name)
@@ -1096,6 +1112,8 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 	Form_pg_subscription form;
 	bits32		supported_opts;
 	SubOpts		opts = {0};
+	bool		update_failover;
+	bool		update_two_phase;
 
 	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
 
@@ -1143,13 +1161,104 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 			{
 				supported_opts = (SUBOPT_SLOT_NAME |
 								  SUBOPT_SYNCHRONOUS_COMMIT | SUBOPT_BINARY |
-								  SUBOPT_STREAMING | SUBOPT_DISABLE_ON_ERR |
+								  SUBOPT_STREAMING | SUBOPT_TWOPHASE_COMMIT |
+								  SUBOPT_DISABLE_ON_ERR |
 								  SUBOPT_PASSWORD_REQUIRED |
 								  SUBOPT_RUN_AS_OWNER | SUBOPT_FAILOVER |
-								  SUBOPT_ORIGIN);
+								  SUBOPT_ORIGIN | SUBOPT_FORCE_ALTER);
 
 				parse_subscription_options(pstate, stmt->options,
 										   supported_opts, &opts);
+
+				if (IsSet(opts.specified_opts, SUBOPT_TWOPHASE_COMMIT))
+				{
+					/*
+					 * Do not allow changing the two_phase option if the
+					 * subscription is enabled. This is because the two_phase
+					 * option of the slot on the publisher cannot be modified
+					 * if the slot is currently acquired by the apply worker.
+					 */
+					if (form->subenabled)
+						ereport(ERROR,
+								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+								 errmsg("cannot set %s for enabled subscription",
+										"two_phase")));
+
+					/*
+					 * Stop all the subscription workers, just in case. Workers
+					 * may still survive even if the subscription is disabled.
+					 */
+					logicalrep_workers_stop(subid);
+
+					/*
+					 * If two_phase was previously enabled, there is a
+					 * possibility that transactions have already been
+					 * PREPARE'd. They must be checked and rolled back.
+					 */
+					if (!opts.twophase)
+					{
+						List *prepared_xacts;
+
+						/*
+						 * Altering the parameter from "true" to "false" within
+						 * a transaction is prohibited. Since the apply worker
+						 * does not alter the slot option to false, the backend
+						 * must connect to the publisher and expressly change
+						 * the parameter.
+						 *
+						 * There is no need to do something remarkable
+						 * regarding the "false" to "true" case; the backend
+						 * process alters subtwophase to
+						 * LOGICALREP_TWOPHASE_STATE_PENDING once. After the
+						 * subscription is enabled, a new logical replication
+						 * worker requests to change the two_phase option of
+						 * its slot from pending to true when the initial data
+						 * synchronization is done. The code path is the same
+						 * as the case in which two_phase is initially set to
+						 * true.
+						 */
+						PreventInTransactionBlock(isTopLevel,
+												  "ALTER SUBSCRIPTION ... SET (two_phase = false)");
+
+						/*
+						 * To prevent prepared transactions from being
+						 * isolated, they must manually be aborted.
+						 */
+						if (sub->twophasestate == LOGICALREP_TWOPHASE_STATE_ENABLED &&
+							(prepared_xacts = GetGidListBySubid(subid)) != NIL)
+						{
+							bool raise_error =
+								IsSet(opts.specified_opts, SUBOPT_FORCE_ALTER) ?
+									!opts.force_alter : !sub->forcealter;
+
+							/*
+							 * Abort prepared transactions only if
+							 * 'force_alter' option is true. Otherwise raise
+							 * an ERROR.
+							 */
+							if (raise_error)
+								ereport(ERROR,
+										(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+										 errmsg("cannot alter %s when there are prepared transactions",
+												"two_phase = false"),
+										 errhint("Resolve these transactions or set %s, and then try again.",
+												 "force_alter = true")));
+
+							/* Abort all listed transactions */
+							foreach_ptr(char, gid, prepared_xacts)
+								FinishPreparedTransaction(gid, false);
+
+							list_free_deep(prepared_xacts);
+						}
+					}
+
+					/* Change system catalog acoordingly */
+					values[Anum_pg_subscription_subtwophasestate - 1] =
+						CharGetDatum(opts.twophase ?
+									 LOGICALREP_TWOPHASE_STATE_PENDING :
+									 LOGICALREP_TWOPHASE_STATE_DISABLED);
+					replaces[Anum_pg_subscription_subtwophasestate - 1] = true;
+				}
 
 				if (IsSet(opts.specified_opts, SUBOPT_SLOT_NAME))
 				{
@@ -1499,13 +1608,24 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 	}
 
 	/*
-	 * Try to acquire the connection necessary for altering slot.
+	 * Check the need to alter the replication slot. Failover and two_phase
+	 * options are controlled by both the publisher (as a slot option) and the
+	 * subscriber (as a subscription option). The slot option must be altered
+	 * only when changing "true" to "false". The reason has already been
+	 * described in the ALTER_SUBSCRIPTION_OPTIONS section of this function.
+	 */
+	update_failover = replaces[Anum_pg_subscription_subfailover - 1];
+	update_two_phase = (replaces[Anum_pg_subscription_subtwophasestate - 1] &&
+						!opts.twophase);
+
+	/*
+	 * Try to acquire the connection necessary for altering slot, if needed.
 	 *
 	 * This has to be at the end because otherwise if there is an error while
 	 * doing the database operations we won't be able to rollback altered
 	 * slot.
 	 */
-	if (replaces[Anum_pg_subscription_subfailover - 1])
+	if (update_failover || update_two_phase)
 	{
 		bool		must_use_password;
 		char	   *err;
@@ -1525,7 +1645,9 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 
 		PG_TRY();
 		{
-			walrcv_alter_slot(wrconn, sub->slotname, opts.failover);
+			walrcv_alter_slot(wrconn, sub->slotname,
+							  update_failover ? &opts.failover : NULL,
+							  update_two_phase ? &opts.twophase : NULL);
 		}
 		PG_FINALLY();
 		{
@@ -1562,7 +1684,6 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	char	   *subname;
 	char	   *conninfo;
 	char	   *slotname;
-	List	   *subworkers;
 	ListCell   *lc;
 	char		originname[NAMEDATALEN];
 	char	   *err = NULL;
@@ -1672,16 +1793,7 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	 * New workers won't be started because we hold an exclusive lock on the
 	 * subscription till the end of the transaction.
 	 */
-	LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
-	subworkers = logicalrep_workers_find(subid, false);
-	LWLockRelease(LogicalRepWorkerLock);
-	foreach(lc, subworkers)
-	{
-		LogicalRepWorker *w = (LogicalRepWorker *) lfirst(lc);
-
-		logicalrep_worker_stop(w->subid, w->relid);
-	}
-	list_free(subworkers);
+	logicalrep_workers_stop(subid);
 
 	/*
 	 * Remove the no-longer-useful entry in the launcher's table of apply

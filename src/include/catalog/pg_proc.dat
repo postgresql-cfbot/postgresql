@@ -6764,6 +6764,9 @@
 { oid => '5099', descr => 'maximum value of all xid8 input values',
   proname => 'max', prokind => 'a', proisstrict => 'f', prorettype => 'xid8',
   proargtypes => 'xid8', prosrc => 'aggregate_dummy' },
+{ oid => '8595', descr => 'maximum value of all record input values',
+  proname => 'max', prokind => 'a', proisstrict => 'f', prorettype => 'record',
+  proargtypes => 'record', prosrc => 'aggregate_dummy' },
 
 { oid => '2131', descr => 'minimum value of all bigint input values',
   proname => 'min', prokind => 'a', proisstrict => 'f', prorettype => 'int8',
@@ -6834,6 +6837,9 @@
 { oid => '5100', descr => 'minimum value of all xid8 input values',
   proname => 'min', prokind => 'a', proisstrict => 'f', prorettype => 'xid8',
   proargtypes => 'xid8', prosrc => 'aggregate_dummy' },
+{ oid => '8596', descr => 'minimum value of all record input values',
+  proname => 'min', prokind => 'a', proisstrict => 'f', prorettype => 'record',
+  proargtypes => 'record', prosrc => 'aggregate_dummy' },
 
 # count has two forms: count(any) and count(*)
 { oid => '2147',
@@ -10347,6 +10353,12 @@
 { oid => '2987', descr => 'less-equal-greater',
   proname => 'btrecordcmp', prorettype => 'int4',
   proargtypes => 'record record', prosrc => 'btrecordcmp' },
+{ oid => '8597', descr => 'larger of two',
+  proname => 'record_larger', prorettype => 'record', proargtypes => 'record record',
+  prosrc => 'record_larger' },
+{ oid => '8598', descr => 'smaller of two',
+  proname => 'record_smaller', prorettype => 'record', proargtypes => 'record record',
+  prosrc => 'record_smaller' },
 
 { oid => '6192', descr => 'hash',
   proname => 'hash_record', prorettype => 'int4', proargtypes => 'record',

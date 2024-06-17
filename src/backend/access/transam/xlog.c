@@ -9048,10 +9048,29 @@ do_pg_backup_stop(BackupState *state, bool waitforarchive)
 	int			seconds_before_warning;
 	int			waits = 0;
 	bool		reported_waiting = false;
+	ControlFileData *controlFileCopy = (ControlFileData *)state->controlFile;
 
 	Assert(state != NULL);
 
 	backup_stopped_in_recovery = RecoveryInProgress();
+
+	/*
+	 * Create a copy of control data and update it to require a backup label
+	 * for recovery. Also recalculate the CRC.
+	 */
+	memset(
+		state->controlFile + sizeof(ControlFileData), 0,
+		PG_CONTROL_FILE_SIZE - sizeof(ControlFileData));
+
+	LWLockAcquire(ControlFileLock, LW_SHARED);
+	memcpy(controlFileCopy, ControlFile, sizeof(ControlFileData));
+	LWLockRelease(ControlFileLock);
+
+	controlFileCopy->backupLabelRequired = true;
+
+	INIT_CRC32C(controlFileCopy->crc);
+	COMP_CRC32C(controlFileCopy->crc, controlFileCopy, offsetof(ControlFileData, crc));
+	FIN_CRC32C(controlFileCopy->crc);
 
 	/*
 	 * During recovery, we don't need to check WAL level. Because, if WAL

@@ -13,6 +13,42 @@ use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
+# Decode hex to binary
+sub decode_hex
+{
+	my ($encoded) = @_;
+	my $decoded;
+
+	$encoded =~ s/^\s+|\s+$//g;
+
+	for (my $idx = 0; $idx < length($encoded); $idx += 2)
+	{
+		$decoded .= pack('C', hex(substr($encoded, $idx, 2)));
+	}
+
+	return $decoded;
+}
+
+# Get backup_label/pg_control from pg_stop_backup()
+sub stop_backup_result
+{
+	my ($psql) = @_;
+
+	my $encoded = $psql->query_safe(
+		"select encode(labelfile::bytea, 'hex') || ',' || " .
+		"       encode(controlfile, 'hex')" .
+		"  from pg_backup_stop()");
+
+	my @result;
+
+    foreach my $column (split(',', $encoded))
+	{
+		push(@result, decode_hex($column));
+	}
+
+	return @result;
+}
+
 # Start primary node with archiving.
 my $node_primary = PostgreSQL::Test::Cluster->new('primary');
 $node_primary->init(has_archiving => 1, allows_streaming => 1);
@@ -80,8 +116,7 @@ my $stop_segment_name = $node_primary->safe_psql('postgres',
 	'SELECT pg_walfile_name(pg_current_wal_lsn())');
 
 # Stop backup and get backup_label, the last segment is archived.
-my $backup_label =
-  $psql->query_safe("select labelfile from pg_backup_stop()");
+(my $backup_label, my $pg_control) = stop_backup_result($psql);
 
 $psql->quit;
 
@@ -118,10 +153,36 @@ ok( $node_replica->log_contains(
 $node_replica->teardown_node;
 $node_replica->clean_node;
 
+# Save only pg_control into the backup to demonstrate that pg_control returned
+# from pg_stop_backup() will only perform recovery when backup_label is present.
+open(my $fh, ">", "$backup_dir/global/pg_control")
+  or die "could not open pg_control";
+binmode($fh);
+syswrite($fh, $pg_control);
+close($fh);
+
+$node_replica = PostgreSQL::Test::Cluster->new('replica_fail2');
+$node_replica->init_from_backup($node_primary, $backup_name,
+	has_restoring => 1);
+
+my $res = run_log(
+	[
+		'pg_ctl', '-D', $node_replica->data_dir, '-l',
+		$node_replica->logfile, 'start'
+	]);
+ok(!$res, 'invalid recovery startup fails');
+
+my $logfile = slurp_file($node_replica->logfile());
+ok($logfile =~ qr/could not find backup_label required for recovery/,
+	'could not find backup_label required for recovery');
+
+$node_replica->teardown_node;
+$node_replica->clean_node;
+
 # Save backup_label into the backup directory and recover using the primary's
 # archive.  This time recovery will succeed and the canary table will be
 # present.
-open my $fh, ">>", "$backup_dir/backup_label"
+open $fh, ">>", "$backup_dir/backup_label"
   or die "could not open backup_label";
 # Binary mode is required for Windows, as the backup_label parsing is not
 # able to cope with CRLFs.

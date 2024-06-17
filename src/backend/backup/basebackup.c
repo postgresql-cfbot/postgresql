@@ -324,7 +324,6 @@ perform_base_backup(basebackup_options *opt, bbsink *sink,
 
 			if (ti->path == NULL)
 			{
-				struct stat statbuf;
 				bool		sendtblspclinks = true;
 				char	   *backup_label;
 
@@ -348,15 +347,14 @@ perform_base_backup(basebackup_options *opt, bbsink *sink,
 				sendDir(sink, ".", 1, false, state.tablespaces,
 						sendtblspclinks, &manifest, InvalidOid, ib);
 
+				/* End the backup before sending pg_control */
+				basebackup_progress_wait_wal_archive(&state);
+				do_pg_backup_stop(backup_state, !opt->nowait);
+
 				/* ... and pg_control after everything else. */
-				if (lstat(XLOG_CONTROL_FILE, &statbuf) != 0)
-					ereport(ERROR,
-							(errcode_for_file_access(),
-							 errmsg("could not stat file \"%s\": %m",
-									XLOG_CONTROL_FILE)));
-				sendFile(sink, XLOG_CONTROL_FILE, XLOG_CONTROL_FILE, &statbuf,
-						 false, InvalidOid, InvalidOid,
-						 InvalidRelFileNumber, 0, &manifest, 0, NULL, 0);
+				sendFileWithContent(sink, XLOG_CONTROL_FILE,
+									(char *)backup_state->controlFile,
+									PG_CONTROL_FILE_SIZE, &manifest);
 			}
 			else
 			{
@@ -389,9 +387,6 @@ perform_base_backup(basebackup_options *opt, bbsink *sink,
 				bbsink_end_archive(sink);
 			}
 		}
-
-		basebackup_progress_wait_wal_archive(&state);
-		do_pg_backup_stop(backup_state, !opt->nowait);
 
 		endptr = backup_state->stoppoint;
 		endtli = backup_state->stoptli;

@@ -1010,9 +1010,12 @@ SELECT * FROM pg_backup_stop(wait_for_archive => true);
      values. The second of these fields should be written to a file named
      <filename>backup_label</filename> in the root directory of the backup. The
      third field should be written to a file named
-     <filename>tablespace_map</filename> unless the field is empty. These files are
+     <filename>tablespace_map</filename> unless the field is empty. The fourth
+     field should be written into a file named
+     <filename>global/pg_control</filename> (overwriting the existing file when
+     present). These files are
      vital to the backup working and must be written byte for byte without
-     modification, which may require opening the file in binary mode.
+     modification, which will require opening the file in binary mode.
     </para>
    </listitem>
    <listitem>
@@ -1084,7 +1087,16 @@ SELECT * FROM pg_backup_stop(wait_for_archive => true);
    </para>
 
    <para>
-    You should, however, omit from the backup the files within the
+    You should exclude <filename>global/pg_control</filename> from your backup
+    and put the contents of the <parameter>controlfile</parameter> column
+    returned from <function>pg_backup_stop</function> in your backup at
+    <filename>global/pg_control</filename>. This version of pg_control contains
+    safeguards against recovery without backup_label present and is guaranteed
+    not to be torn.
+   </para>
+
+   <para>
+    You should also omit from the backup the files within the
     cluster's <filename>pg_wal/</filename> subdirectory.  This
     slight adjustment is worthwhile because it reduces the risk
     of mistakes when restoring.  This is easy to arrange if

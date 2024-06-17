@@ -27697,6 +27697,11 @@ SELECT currval(pg_get_serial_sequence('sometable', 'id'));
        <entry><type>boolean</type></entry>
       </row>
 
+      <row>
+       <entry><structfield>backup_label_required</structfield></entry>
+       <entry><type>boolean</type></entry>
+      </row>
+
      </tbody>
     </tgroup>
    </table>
@@ -28355,8 +28360,9 @@ LOG:  Grand total: 1651920 bytes in 201 blocks; 622360 free (88 chunks); 1029560
         The result of the function is a single record.
         The <parameter>lsn</parameter> column holds the backup's ending
         write-ahead log location (which again can be ignored).  The second
-        column returns the contents of the backup label file, and the third
-        column returns the contents of the tablespace map file.  These must be
+        column returns the contents of the backup label file, the third column
+        returns the contents of the tablespace map file, and the fourth column
+        returns the contents of pg_control.  These must be
         stored as part of the backup and are required as part of the restore
         process.
        </para>

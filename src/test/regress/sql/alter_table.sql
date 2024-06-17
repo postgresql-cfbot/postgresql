@@ -2891,7 +2891,9 @@ CREATE TABLE attmp(i integer);
 INSERT INTO attmp VALUES (1);
 ALTER TABLE attmp ALTER COLUMN i SET (n_distinct = 1, n_distinct_inherited = 2);
 ALTER TABLE attmp ALTER COLUMN i RESET (n_distinct_inherited);
+ALTER TABLE attmp ALTER COLUMN i SET (force_generic=on);
 ANALYZE attmp;
+ALTER TABLE attmp ALTER COLUMN i RESET (force_generic);
 DROP TABLE attmp;
 
 DROP USER regress_alter_table_user1;

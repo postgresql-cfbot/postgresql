@@ -125,6 +125,7 @@
 #include "storage/bufmgr.h"
 #include "utils/acl.h"
 #include "utils/array.h"
+#include "utils/attoptcache.h"
 #include "utils/builtins.h"
 #include "utils/date.h"
 #include "utils/datum.h"
@@ -213,7 +214,7 @@ static bool get_actual_variable_endpoint(Relation heapRel,
 										 MemoryContext outercontext,
 										 Datum *endpointDatum);
 static RelOptInfo *find_join_input_rel(PlannerInfo *root, Relids relids);
-
+static bool est_selectivity_generic(PlannerInfo *root, VariableStatData *vardata);
 
 /*
  *		eqsel			- Selectivity of "=" for any data types.
@@ -268,11 +269,11 @@ eqsel_internal(PG_FUNCTION_ARGS, bool negate)
 		return negate ? (1.0 - DEFAULT_EQ_SEL) : DEFAULT_EQ_SEL;
 
 	/*
-	 * We can do a lot better if the something is a constant.  (Note: the
-	 * Const might result from estimation rather than being a simple constant
-	 * in the query.)
+	 * We can do a lot better if the something is a constant unless user disallow
+	 * that.  (Note: the  Const might result from estimation rather than being a
+	 * simple constant in the query.)
 	 */
-	if (IsA(other, Const))
+	if (IsA(other, Const) && !est_selectivity_generic(root, &vardata))
 		selec = var_eq_const(&vardata, operator, collation,
 							 ((Const *) other)->constvalue,
 							 ((Const *) other)->constisnull,
@@ -8185,4 +8186,29 @@ brincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 		statsData.pagesPerRange;
 
 	*indexPages = index->pages;
+}
+
+/*
+ * Treat the vardata as generic, so that all the Const in the qual is treated
+ * as parameter. This logic is helpful when the interested statistics is likely
+ * missing.
+ */
+static bool
+est_selectivity_generic(PlannerInfo *root, VariableStatData *vardata)
+{
+	Var *var;
+	Oid relid;
+	AttributeOpts *opts;
+
+	if (!IsA(vardata->var, Var))
+		return false;
+
+	var = castNode(Var, vardata->var);
+
+	relid = root->simple_rte_array[var->varno]->relid;
+
+	opts = get_attribute_options(relid, var->varattno);
+
+	return opts ? opts->force_generic : false;
+
 }

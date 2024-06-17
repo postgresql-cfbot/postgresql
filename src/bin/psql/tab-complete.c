@@ -2515,7 +2515,7 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER TABLE ALTER [COLUMN] <foo> SET ( */
 	else if (Matches("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny, "SET", "(") ||
 			 Matches("ALTER", "TABLE", MatchAny, "ALTER", MatchAny, "SET", "("))
-		COMPLETE_WITH("n_distinct", "n_distinct_inherited");
+		COMPLETE_WITH("n_distinct", "n_distinct_inherited", "force_generic");
 	/* ALTER TABLE ALTER [COLUMN] <foo> SET COMPRESSION */
 	else if (Matches("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny, "SET", "COMPRESSION") ||
 			 Matches("ALTER", "TABLE", MatchAny, "ALTER", MatchAny, "SET", "COMPRESSION"))

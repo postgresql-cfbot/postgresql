@@ -28037,7 +28037,9 @@ SELECT currval(pg_get_serial_sequence('sometable', 'id'));
        <para>
         Cancels the current query of the session whose backend process has the
         specified process ID.  This is also allowed if the
-        calling role is a member of the role whose backend is being canceled or
+        calling role has privileges of the role whose backend is being canceled,
+        the backend process is an autovacuum worker and the calling role has
+        privileges of <literal>pg_signal_autovacuum_worker</literal>, or
         the calling role has privileges of <literal>pg_signal_backend</literal>,
         however only superusers can cancel superuser backends.
        </para></entry>
@@ -28111,7 +28113,9 @@ SELECT currval(pg_get_serial_sequence('sometable', 'id'));
        <para>
         Terminates the session whose backend process has the
         specified process ID.  This is also allowed if the calling role
-        is a member of the role whose backend is being terminated or the
+        has privileges of the role whose backend is being terminated,
+        the backend process is an autovacuum worker and the calling role has
+        privileges of <literal>pg_signal_autovacuum_worker</literal>, or the
         calling role has privileges of <literal>pg_signal_backend</literal>,
         however only superusers can terminate superuser backends.
        </para>

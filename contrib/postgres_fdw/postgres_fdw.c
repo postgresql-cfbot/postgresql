@@ -430,6 +430,7 @@ static void estimate_path_cost_size(PlannerInfo *root,
 									List *pathkeys,
 									PgFdwPathExtraData *fpextra,
 									double *p_rows, int *p_width,
+									int *p_disabled_nodes,
 									Cost *p_startup_cost, Cost *p_total_cost);
 static void get_remote_estimate(const char *sql,
 								PGconn *conn,
@@ -442,6 +443,7 @@ static void adjust_foreign_grouping_path_cost(PlannerInfo *root,
 											  double retrieved_rows,
 											  double width,
 											  double limit_tuples,
+											  int *disabled_nodes,
 											  Cost *p_startup_cost,
 											  Cost *p_run_cost);
 static bool ec_member_matches_foreign(PlannerInfo *root, RelOptInfo *rel,
@@ -735,6 +737,7 @@ postgresGetForeignRelSize(PlannerInfo *root,
 		 */
 		estimate_path_cost_size(root, baserel, NIL, NIL, NULL,
 								&fpinfo->rows, &fpinfo->width,
+								&fpinfo->disabled_nodes,
 								&fpinfo->startup_cost, &fpinfo->total_cost);
 
 		/* Report estimated baserel size to planner. */
@@ -765,6 +768,7 @@ postgresGetForeignRelSize(PlannerInfo *root,
 		/* Fill in basically-bogus cost estimates for use later. */
 		estimate_path_cost_size(root, baserel, NIL, NIL, NULL,
 								&fpinfo->rows, &fpinfo->width,
+								&fpinfo->disabled_nodes,
 								&fpinfo->startup_cost, &fpinfo->total_cost);
 	}
 
@@ -1030,6 +1034,7 @@ postgresGetForeignPaths(PlannerInfo *root,
 	path = create_foreignscan_path(root, baserel,
 								   NULL,	/* default pathtarget */
 								   fpinfo->rows,
+								   fpinfo->disabled_nodes,
 								   fpinfo->startup_cost,
 								   fpinfo->total_cost,
 								   NIL, /* no pathkeys */
@@ -1184,13 +1189,14 @@ postgresGetForeignPaths(PlannerInfo *root,
 		ParamPathInfo *param_info = (ParamPathInfo *) lfirst(lc);
 		double		rows;
 		int			width;
+		int			disabled_nodes;
 		Cost		startup_cost;
 		Cost		total_cost;
 
 		/* Get a cost estimate from the remote */
 		estimate_path_cost_size(root, baserel,
 								param_info->ppi_clauses, NIL, NULL,
-								&rows, &width,
+								&rows, &width, &disabled_nodes,
 								&startup_cost, &total_cost);
 
 		/*
@@ -1203,6 +1209,7 @@ postgresGetForeignPaths(PlannerInfo *root,
 		path = create_foreignscan_path(root, baserel,
 									   NULL,	/* default pathtarget */
 									   rows,
+									   disabled_nodes,
 									   startup_cost,
 									   total_cost,
 									   NIL, /* no pathkeys */
@@ -3078,12 +3085,14 @@ estimate_path_cost_size(PlannerInfo *root,
 						List *pathkeys,
 						PgFdwPathExtraData *fpextra,
 						double *p_rows, int *p_width,
+						int *p_disabled_nodes,
 						Cost *p_startup_cost, Cost *p_total_cost)
 {
 	PgFdwRelationInfo *fpinfo = (PgFdwRelationInfo *) foreignrel->fdw_private;
 	double		rows;
 	double		retrieved_rows;
 	int			width;
+	int			disabled_nodes = 0;
 	Cost		startup_cost;
 	Cost		total_cost;
 
@@ -3473,6 +3482,7 @@ estimate_path_cost_size(PlannerInfo *root,
 				adjust_foreign_grouping_path_cost(root, pathkeys,
 												  retrieved_rows, width,
 												  fpextra->limit_tuples,
+												  &disabled_nodes,
 												  &startup_cost, &run_cost);
 			}
 			else
@@ -3567,6 +3577,7 @@ estimate_path_cost_size(PlannerInfo *root,
 	/* Return results. */
 	*p_rows = rows;
 	*p_width = width;
+	*p_disabled_nodes = disabled_nodes;
 	*p_startup_cost = startup_cost;
 	*p_total_cost = total_cost;
 }
@@ -3627,6 +3638,7 @@ adjust_foreign_grouping_path_cost(PlannerInfo *root,
 								  double retrieved_rows,
 								  double width,
 								  double limit_tuples,
+								  int *p_disabled_nodes,
 								  Cost *p_startup_cost,
 								  Cost *p_run_cost)
 {
@@ -3646,6 +3658,7 @@ adjust_foreign_grouping_path_cost(PlannerInfo *root,
 		cost_sort(&sort_path,
 				  root,
 				  pathkeys,
+				  0,
 				  *p_startup_cost + *p_run_cost,
 				  retrieved_rows,
 				  width,
@@ -6137,13 +6150,15 @@ add_paths_with_pathkeys_for_rel(PlannerInfo *root, RelOptInfo *rel,
 	{
 		double		rows;
 		int			width;
+		int			disabled_nodes;
 		Cost		startup_cost;
 		Cost		total_cost;
 		List	   *useful_pathkeys = lfirst(lc);
 		Path	   *sorted_epq_path;
 
 		estimate_path_cost_size(root, rel, NIL, useful_pathkeys, NULL,
-								&rows, &width, &startup_cost, &total_cost);
+								&rows, &width, &disabled_nodes,
+								&startup_cost, &total_cost);
 
 		/*
 		 * The EPQ path must be at least as well sorted as the path itself, in
@@ -6165,6 +6180,7 @@ add_paths_with_pathkeys_for_rel(PlannerInfo *root, RelOptInfo *rel,
 					 create_foreignscan_path(root, rel,
 											 NULL,
 											 rows,
+											 disabled_nodes,
 											 startup_cost,
 											 total_cost,
 											 useful_pathkeys,
@@ -6178,6 +6194,7 @@ add_paths_with_pathkeys_for_rel(PlannerInfo *root, RelOptInfo *rel,
 					 create_foreign_join_path(root, rel,
 											  NULL,
 											  rows,
+											  disabled_nodes,
 											  startup_cost,
 											  total_cost,
 											  useful_pathkeys,
@@ -6325,6 +6342,7 @@ postgresGetForeignJoinPaths(PlannerInfo *root,
 	ForeignPath *joinpath;
 	double		rows;
 	int			width;
+	int			disabled_nodes;
 	Cost		startup_cost;
 	Cost		total_cost;
 	Path	   *epq_path;		/* Path to create plan to be executed when
@@ -6414,12 +6432,14 @@ postgresGetForeignJoinPaths(PlannerInfo *root,
 
 	/* Estimate costs for bare join relation */
 	estimate_path_cost_size(root, joinrel, NIL, NIL, NULL,
-							&rows, &width, &startup_cost, &total_cost);
+							&rows, &width, &disabled_nodes,
+							&startup_cost, &total_cost);
 	/* Now update this information in the joinrel */
 	joinrel->rows = rows;
 	joinrel->reltarget->width = width;
 	fpinfo->rows = rows;
 	fpinfo->width = width;
+	fpinfo->disabled_nodes = disabled_nodes;
 	fpinfo->startup_cost = startup_cost;
 	fpinfo->total_cost = total_cost;
 
@@ -6431,6 +6451,7 @@ postgresGetForeignJoinPaths(PlannerInfo *root,
 										joinrel,
 										NULL,	/* default pathtarget */
 										rows,
+										disabled_nodes,
 										startup_cost,
 										total_cost,
 										NIL,	/* no pathkeys */
@@ -6758,6 +6779,7 @@ add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	ForeignPath *grouppath;
 	double		rows;
 	int			width;
+	int			disabled_nodes;
 	Cost		startup_cost;
 	Cost		total_cost;
 
@@ -6808,11 +6830,13 @@ add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 
 	/* Estimate the cost of push down */
 	estimate_path_cost_size(root, grouped_rel, NIL, NIL, NULL,
-							&rows, &width, &startup_cost, &total_cost);
+							&rows, &width, &disabled_nodes,
+							&startup_cost, &total_cost);
 
 	/* Now update this information in the fpinfo */
 	fpinfo->rows = rows;
 	fpinfo->width = width;
+	fpinfo->disabled_nodes = disabled_nodes;
 	fpinfo->startup_cost = startup_cost;
 	fpinfo->total_cost = total_cost;
 
@@ -6821,6 +6845,7 @@ add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 										  grouped_rel,
 										  grouped_rel->reltarget,
 										  rows,
+										  disabled_nodes,
 										  startup_cost,
 										  total_cost,
 										  NIL,	/* no pathkeys */
@@ -6849,6 +6874,7 @@ add_foreign_ordered_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	PgFdwPathExtraData *fpextra;
 	double		rows;
 	int			width;
+	int			disabled_nodes;
 	Cost		startup_cost;
 	Cost		total_cost;
 	List	   *fdw_private;
@@ -6942,7 +6968,8 @@ add_foreign_ordered_paths(PlannerInfo *root, RelOptInfo *input_rel,
 
 	/* Estimate the costs of performing the final sort remotely */
 	estimate_path_cost_size(root, input_rel, NIL, root->sort_pathkeys, fpextra,
-							&rows, &width, &startup_cost, &total_cost);
+							&rows, &width, &disabled_nodes,
+							&startup_cost, &total_cost);
 
 	/*
 	 * Build the fdw_private list that will be used by postgresGetForeignPlan.
@@ -6955,6 +6982,7 @@ add_foreign_ordered_paths(PlannerInfo *root, RelOptInfo *input_rel,
 											 input_rel,
 											 root->upper_targets[UPPERREL_ORDERED],
 											 rows,
+											 disabled_nodes,
 											 startup_cost,
 											 total_cost,
 											 root->sort_pathkeys,
@@ -6988,6 +7016,7 @@ add_foreign_final_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	bool		save_use_remote_estimate = false;
 	double		rows;
 	int			width;
+	int			disabled_nodes;
 	Cost		startup_cost;
 	Cost		total_cost;
 	List	   *fdw_private;
@@ -7072,6 +7101,7 @@ add_foreign_final_paths(PlannerInfo *root, RelOptInfo *input_rel,
 													   path->parent,
 													   path->pathtarget,
 													   path->rows,
+													   path->disabled_nodes,
 													   path->startup_cost,
 													   path->total_cost,
 													   path->pathkeys,
@@ -7189,7 +7219,8 @@ add_foreign_final_paths(PlannerInfo *root, RelOptInfo *input_rel,
 		ifpinfo->use_remote_estimate = false;
 	}
 	estimate_path_cost_size(root, input_rel, NIL, pathkeys, fpextra,
-							&rows, &width, &startup_cost, &total_cost);
+							&rows, &width, &disabled_nodes,
+							&startup_cost, &total_cost);
 	if (!fpextra->has_final_sort)
 		ifpinfo->use_remote_estimate = save_use_remote_estimate;
 
@@ -7208,6 +7239,7 @@ add_foreign_final_paths(PlannerInfo *root, RelOptInfo *input_rel,
 										   input_rel,
 										   root->upper_targets[UPPERREL_FINAL],
 										   rows,
+										   disabled_nodes,
 										   startup_cost,
 										   total_cost,
 										   pathkeys,

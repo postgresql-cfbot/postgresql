@@ -162,6 +162,7 @@ ORDER BY v.a DESC;
 -- in-memory
 BEGIN;
 SET LOCAL enable_indexscan = false;
+SET LOCAL enable_indexonlyscan = false;
 -- unfortunately can't show analyze output confirming sort method,
 -- the memory used output wouldn't be stable
 EXPLAIN (COSTS OFF) DECLARE c SCROLL CURSOR FOR SELECT noabort_decreasing FROM abbrev_abort_uuids ORDER BY noabort_decreasing;
@@ -192,6 +193,7 @@ COMMIT;
 -- disk based
 BEGIN;
 SET LOCAL enable_indexscan = false;
+SET LOCAL enable_indexonlyscan = false;
 SET LOCAL work_mem = '100kB';
 -- unfortunately can't show analyze output confirming sort method,
 -- the memory used output wouldn't be stable

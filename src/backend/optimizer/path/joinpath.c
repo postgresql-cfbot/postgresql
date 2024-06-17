@@ -811,7 +811,7 @@ try_nestloop_path(PlannerInfo *root,
 	initial_cost_nestloop(root, &workspace, jointype,
 						  outer_path, inner_path, extra);
 
-	if (add_path_precheck(joinrel,
+	if (add_path_precheck(joinrel, workspace.disabled_nodes,
 						  workspace.startup_cost, workspace.total_cost,
 						  pathkeys, required_outer))
 	{
@@ -894,7 +894,8 @@ try_partial_nestloop_path(PlannerInfo *root,
 	 */
 	initial_cost_nestloop(root, &workspace, jointype,
 						  outer_path, inner_path, extra);
-	if (!add_partial_path_precheck(joinrel, workspace.total_cost, pathkeys))
+	if (!add_partial_path_precheck(joinrel, workspace.disabled_nodes,
+								   workspace.total_cost, pathkeys))
 		return;
 
 	/* Might be good enough to be worth trying, so let's try it. */
@@ -991,7 +992,7 @@ try_mergejoin_path(PlannerInfo *root,
 						   outersortkeys, innersortkeys,
 						   extra);
 
-	if (add_path_precheck(joinrel,
+	if (add_path_precheck(joinrel, workspace.disabled_nodes,
 						  workspace.startup_cost, workspace.total_cost,
 						  pathkeys, required_outer))
 	{
@@ -1067,7 +1068,8 @@ try_partial_mergejoin_path(PlannerInfo *root,
 						   outersortkeys, innersortkeys,
 						   extra);
 
-	if (!add_partial_path_precheck(joinrel, workspace.total_cost, pathkeys))
+	if (!add_partial_path_precheck(joinrel, workspace.disabled_nodes,
+								   workspace.total_cost, pathkeys))
 		return;
 
 	/* Might be good enough to be worth trying, so let's try it. */
@@ -1136,7 +1138,7 @@ try_hashjoin_path(PlannerInfo *root,
 	initial_cost_hashjoin(root, &workspace, jointype, hashclauses,
 						  outer_path, inner_path, extra, false);
 
-	if (add_path_precheck(joinrel,
+	if (add_path_precheck(joinrel, workspace.disabled_nodes,
 						  workspace.startup_cost, workspace.total_cost,
 						  NIL, required_outer))
 	{
@@ -1202,7 +1204,8 @@ try_partial_hashjoin_path(PlannerInfo *root,
 	 */
 	initial_cost_hashjoin(root, &workspace, jointype, hashclauses,
 						  outer_path, inner_path, extra, parallel_hash);
-	if (!add_partial_path_precheck(joinrel, workspace.total_cost, NIL))
+	if (!add_partial_path_precheck(joinrel, workspace.disabled_nodes,
+								   workspace.total_cost, NIL))
 		return;
 
 	/* Might be good enough to be worth trying, so let's try it. */

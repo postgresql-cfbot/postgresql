@@ -25,6 +25,7 @@
 #include "nodes/extensible.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/print.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
@@ -5408,6 +5409,7 @@ order_qual_clauses(PlannerInfo *root, List *clauses)
 static void
 copy_generic_path_info(Plan *dest, Path *src)
 {
+	dest->disabled_nodes = src->disabled_nodes;
 	dest->startup_cost = src->startup_cost;
 	dest->total_cost = src->total_cost;
 	dest->plan_rows = src->rows;
@@ -5423,6 +5425,7 @@ copy_generic_path_info(Plan *dest, Path *src)
 static void
 copy_plan_costsize(Plan *dest, Plan *src)
 {
+	dest->disabled_nodes = src->disabled_nodes;
 	dest->startup_cost = src->startup_cost;
 	dest->total_cost = src->total_cost;
 	dest->plan_rows = src->plan_rows;
@@ -5456,6 +5459,7 @@ label_sort_with_costsize(PlannerInfo *root, Sort *plan, double limit_tuples)
 
 	cost_sort(&sort_path, root, NIL,
 			  lefttree->total_cost,
+			  0,		/* a Plan contains no count of disabled nodes */
 			  lefttree->plan_rows,
 			  lefttree->plan_width,
 			  0.0,
@@ -6550,6 +6554,7 @@ materialize_finished_plan(Plan *subplan)
 
 	/* Set cost data */
 	cost_material(&matpath,
+				  0,		/* a Plan contains no count of disabled nodes */
 				  subplan->startup_cost,
 				  subplan->total_cost,
 				  subplan->plan_rows,

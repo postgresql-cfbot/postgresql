@@ -742,7 +742,13 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 		IndexPath  *ipath = (IndexPath *) lfirst(lc);
 
 		if (index->amhasgettuple)
-			add_path(rel, (Path *) ipath);
+		{
+			if (ipath->path.pathtype == T_IndexScan && enable_indexscan)
+				add_path(rel, (Path *) ipath);
+			else if (ipath->path.pathtype == T_IndexOnlyScan &&
+				enable_indexonlyscan)
+				add_path(rel, (Path *) ipath);
+		}
 
 		if (index->amhasgetbitmap &&
 			(ipath->path.pathkeys == NIL ||
@@ -830,6 +836,8 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	{
 		case ST_INDEXSCAN:
 			if (!index->amhasgettuple)
+				return NIL;
+			if (!enable_indexscan && !enable_indexonlyscan)
 				return NIL;
 			break;
 		case ST_BITMAPSCAN:
@@ -978,7 +986,8 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 		 */
 		if (index->amcanparallel &&
 			rel->consider_parallel && outer_relids == NULL &&
-			scantype != ST_BITMAPSCAN)
+			scantype != ST_BITMAPSCAN &&
+			(index_only_scan ? enable_indexonlyscan : enable_indexscan))
 		{
 			ipath = create_index_path(root, index,
 									  index_clauses,
@@ -1028,7 +1037,8 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 			/* If appropriate, consider parallel index scan */
 			if (index->amcanparallel &&
 				rel->consider_parallel && outer_relids == NULL &&
-				scantype != ST_BITMAPSCAN)
+				scantype != ST_BITMAPSCAN &&
+				(index_only_scan ? enable_indexonlyscan : enable_indexscan))
 			{
 				ipath = create_index_path(root, index,
 										  index_clauses,
@@ -1735,7 +1745,15 @@ check_index_only(RelOptInfo *rel, IndexOptInfo *index)
 	ListCell   *lc;
 	int			i;
 
-	/* Index-only scans must be enabled */
+	/*
+	 * Index-only scans must be enabled.
+	 *
+	 * NB: Returning false here means that an index scan will be considered
+	 * instead, so setting enable_indexscan=false causes to consider paths
+	 * that we wouldn't have considered otherwise. That seems OK, because our
+	 * only reason for not generating the index-scan paths is that we expect
+	 * them to lose on cost.
+	 */
 	if (!enable_indexonlyscan)
 		return false;
 

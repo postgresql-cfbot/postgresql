@@ -201,6 +201,7 @@ reset enable_indexscan;
 -- test parallel bitmap heap scan.
 set enable_seqscan to off;
 set enable_indexscan to off;
+set enable_indexonlyscan to off;
 set enable_hashjoin to off;
 set enable_mergejoin to off;
 set enable_material to off;
@@ -248,6 +249,7 @@ $$;
 select * from explain_parallel_sort_stats();
 
 reset enable_indexscan;
+reset enable_indexonlyscan;
 reset enable_hashjoin;
 reset enable_mergejoin;
 reset enable_material;

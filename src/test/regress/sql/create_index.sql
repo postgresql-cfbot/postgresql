@@ -246,6 +246,7 @@ SELECT point(x,x), (SELECT f1 FROM gpolygon_tbl ORDER BY f1 <-> point(x,x) LIMIT
 -- Now check the results from bitmap indexscan
 SET enable_seqscan = OFF;
 SET enable_indexscan = OFF;
+SET enable_indexonlyscan = OFF;
 SET enable_bitmapscan = ON;
 
 EXPLAIN (COSTS OFF)
@@ -254,6 +255,7 @@ SELECT * FROM point_tbl WHERE f1 <@ '(-10,-10),(10,10)':: box ORDER BY f1 <-> '0
 
 RESET enable_seqscan;
 RESET enable_indexscan;
+RESET enable_indexonlyscan;
 RESET enable_bitmapscan;
 
 --

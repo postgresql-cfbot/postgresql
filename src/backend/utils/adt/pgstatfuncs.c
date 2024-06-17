@@ -1393,6 +1393,7 @@ pg_stat_get_io(PG_FUNCTION_ARGS)
 			for (int io_context = 0; io_context < IOCONTEXT_NUM_TYPES; io_context++)
 			{
 				const char *context_name = pgstat_get_io_context_name(io_context);
+				int			op_bytes;
 
 				Datum		values[IO_NUM_COLUMNS] = {0};
 				bool		nulls[IO_NUM_COLUMNS] = {0};
@@ -1411,12 +1412,11 @@ pg_stat_get_io(PG_FUNCTION_ARGS)
 				values[IO_COL_RESET_TIME] = TimestampTzGetDatum(reset_time);
 
 				/*
-				 * Hard-code this to the value of BLCKSZ for now. Future
-				 * values could include XLOG_BLCKSZ, once WAL IO is tracked,
-				 * and constant multipliers, once non-block-oriented IO (e.g.
-				 * temporary file IO) is tracked.
+				 * op_bytes can change according to IOObject and IOContext.
+				 * Get the correct op_bytes.
 				 */
-				values[IO_COL_CONVERSION] = Int64GetDatum(BLCKSZ);
+				op_bytes = pgstat_get_io_op_bytes(io_obj, io_context);
+				values[IO_COL_CONVERSION] = Int64GetDatum(op_bytes);
 
 				for (int io_op = 0; io_op < IOOP_NUM_TYPES; io_op++)
 				{
@@ -1468,7 +1468,7 @@ pg_stat_get_io(PG_FUNCTION_ARGS)
 Datum
 pg_stat_get_wal(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_WAL_COLS	9
+#define PG_STAT_GET_WAL_COLS	7
 	TupleDesc	tupdesc;
 	Datum		values[PG_STAT_GET_WAL_COLS] = {0};
 	bool		nulls[PG_STAT_GET_WAL_COLS] = {0};
@@ -1489,11 +1489,7 @@ pg_stat_get_wal(PG_FUNCTION_ARGS)
 					   INT8OID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 6, "wal_sync",
 					   INT8OID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 7, "wal_write_time",
-					   FLOAT8OID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 8, "wal_sync_time",
-					   FLOAT8OID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 9, "stats_reset",
+	TupleDescInitEntry(tupdesc, (AttrNumber) 7, "stats_reset",
 					   TIMESTAMPTZOID, -1, 0);
 
 	BlessTupleDesc(tupdesc);
@@ -1516,11 +1512,7 @@ pg_stat_get_wal(PG_FUNCTION_ARGS)
 	values[4] = Int64GetDatum(wal_stats->wal_write);
 	values[5] = Int64GetDatum(wal_stats->wal_sync);
 
-	/* Convert counters from microsec to millisec for display */
-	values[6] = Float8GetDatum(((double) wal_stats->wal_write_time) / 1000.0);
-	values[7] = Float8GetDatum(((double) wal_stats->wal_sync_time) / 1000.0);
-
-	values[8] = TimestampTzGetDatum(wal_stats->stat_reset_timestamp);
+	values[6] = TimestampTzGetDatum(wal_stats->stat_reset_timestamp);
 
 	/* Returns the record as Datum */
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));

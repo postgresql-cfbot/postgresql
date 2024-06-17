@@ -2231,16 +2231,23 @@ pg_stat_user_tables| SELECT relid,
     autoanalyze_count
    FROM pg_stat_all_tables
   WHERE ((schemaname <> ALL (ARRAY['pg_catalog'::name, 'information_schema'::name])) AND (schemaname !~ '^pg_toast'::text));
-pg_stat_wal| SELECT wal_records,
-    wal_fpi,
-    wal_bytes,
-    wal_buffers_full,
-    wal_write,
-    wal_sync,
-    wal_write_time,
-    wal_sync_time,
-    stats_reset
-   FROM pg_stat_get_wal() w(wal_records, wal_fpi, wal_bytes, wal_buffers_full, wal_write, wal_sync, wal_write_time, wal_sync_time, stats_reset);
+pg_stat_wal| WITH pgsio_sum_write_fsync_time AS (
+         SELECT sum(pg_stat_io.write_time) AS sum_write_time,
+            sum(pg_stat_io.fsync_time) AS sum_fsync_time
+           FROM pg_stat_io
+          WHERE ((pg_stat_io.context = 'normal'::text) AND (pg_stat_io.object = 'wal'::text))
+        )
+ SELECT w.wal_records,
+    w.wal_fpi,
+    w.wal_bytes,
+    w.wal_buffers_full,
+    w.wal_write,
+    w.wal_sync,
+    p.sum_write_time AS write_time,
+    p.sum_fsync_time AS fsync_time,
+    w.stats_reset
+   FROM (pg_stat_get_wal() w(wal_records, wal_fpi, wal_bytes, wal_buffers_full, wal_write, wal_sync, stats_reset)
+     CROSS JOIN pgsio_sum_write_fsync_time p);
 pg_stat_wal_receiver| SELECT pid,
     status,
     receive_start_lsn,

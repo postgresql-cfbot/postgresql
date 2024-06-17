@@ -514,6 +514,12 @@ CREATE COLLATION testcoll_rulesx (provider = icu, locale = '', rules = '!!wrong!
 CREATE COLLATION ctest_det (provider = icu, locale = '', deterministic = true);
 CREATE COLLATION ctest_nondet (provider = icu, locale = '', deterministic = false);
 
+SELECT 'abc' LIKE 'abc' COLLATE ctest_det;
+SELECT 'abc' LIKE 'a\bc' COLLATE ctest_det;
+
+SELECT 'abc' LIKE 'abc' COLLATE ctest_nondet;
+SELECT 'abc' LIKE 'a\bc' COLLATE ctest_nondet;
+
 CREATE TABLE test6 (a int, b text);
 -- same string in different normal forms
 INSERT INTO test6 VALUES (1, U&'\00E4bc');
@@ -521,6 +527,9 @@ INSERT INTO test6 VALUES (2, U&'\0061\0308bc');
 SELECT * FROM test6;
 SELECT * FROM test6 WHERE b = 'äbc' COLLATE ctest_det;
 SELECT * FROM test6 WHERE b = 'äbc' COLLATE ctest_nondet;
+
+SELECT * FROM test6 WHERE b LIKE 'äbc' COLLATE ctest_det;
+SELECT * FROM test6 WHERE b LIKE 'äbc' COLLATE ctest_nondet;
 
 -- same with arrays
 CREATE TABLE test6a (a int, b text[]);
@@ -637,14 +646,14 @@ SELECT string_to_array('ABCDEFGHI'::char(9) COLLATE case_insensitive, NULL, 'b')
 -- This tests the issue described in match_pattern_prefix().  In the
 -- absence of that check, the case_insensitive tests below would
 -- return no rows where they should logically return one.
-CREATE TABLE test4c (x text COLLATE "C");
+CREATE TABLE test4c (x text COLLATE case_insensitive);
 INSERT INTO test4c VALUES ('abc');
 CREATE INDEX ON test4c (x);
 SET enable_seqscan = off;
 SELECT x FROM test4c WHERE x LIKE 'ABC' COLLATE case_sensitive;  -- ok, no rows
 SELECT x FROM test4c WHERE x LIKE 'ABC%' COLLATE case_sensitive;  -- ok, no rows
-SELECT x FROM test4c WHERE x LIKE 'ABC' COLLATE case_insensitive;  -- error
-SELECT x FROM test4c WHERE x LIKE 'ABC%' COLLATE case_insensitive;  -- error
+SELECT x FROM test4c WHERE x LIKE 'ABC' COLLATE case_insensitive;  -- ok
+SELECT x FROM test4c WHERE x LIKE 'ABC%' COLLATE case_insensitive;  -- ok
 RESET enable_seqscan;
 
 -- Unicode special case: different variants of Greek lower case sigma.
@@ -686,6 +695,14 @@ SELECT * FROM test4 WHERE b = 'cote';
 SELECT * FROM test4 WHERE b = 'cote' COLLATE ignore_accents;
 SELECT * FROM test4 WHERE b = 'Cote' COLLATE ignore_accents;  -- still case-sensitive
 SELECT * FROM test4 WHERE b = 'Cote' COLLATE case_insensitive;
+
+-- This is a tricky one.  A naive implementation would first test
+-- \00E4 matches \0061, which is true under ignore_accents, but then
+-- the rest of the string won't match anymore.  Therefore, the
+-- algorithm has to test whether the rest of the string matches, and
+-- if not try matching \00E4 against a longer substring like
+-- \0061\0308, which will then work out.
+SELECT U&'\0061\0308bc' LIKE U&'\00E4_c' COLLATE ignore_accents;
 
 -- foreign keys (should use collation of primary key)
 

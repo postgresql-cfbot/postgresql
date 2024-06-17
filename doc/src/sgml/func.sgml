@@ -5374,9 +5374,10 @@ cast(-44 as bit(12))           <lineannotation>111111010100</lineannotation>
    </caution>
 
    <para>
-    The pattern matching operators of all three kinds do not support
-    nondeterministic collations.  If required, apply a different collation to
-    the expression to work around this limitation.
+    <function>SIMILAR TO</function> and <acronym>POSIX</acronym>-style regular
+    expressions do not support nondeterministic collations.  If required, use
+    <function>LIKE</function> or apply a different collation to the expression
+    to work around this limitation.
    </para>
 
   <sect2 id="functions-like">

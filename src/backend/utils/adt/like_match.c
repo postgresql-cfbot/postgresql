@@ -198,6 +198,124 @@ MatchText(const char *t, int tlen, const char *p, int plen,
 			NextByte(p, plen);
 			continue;
 		}
+		else if (locale && !locale->deterministic)
+		{
+			/*
+			 * For nondeterministic locales, we find the next substring of the
+			 * pattern that does not contain wildcards and try to find a
+			 * matching substring in the text.  Crucially, we cannot do this
+			 * character by character, as in the normal case, but must do it
+			 * substring by substring, partitioned by the wildcard characters.
+			 */
+			const char *p1;
+			size_t		p1len;
+			const char *t1;
+			size_t		t1len;
+			bool		found_escape;
+			const char *subpat;
+			size_t		subpatlen;
+			char	   *buf = NULL;
+
+			/*
+			 * Determine next substring of pattern without wildcards.  p is
+			 * the start of the subpattern, p1 is one past the last byte. Also
+			 * track if we found an escape character.
+			 */
+			p1 = p;
+			p1len = plen;
+			found_escape = false;
+			while (p1len > 0)
+			{
+				if (*p1 == '\\')
+				{
+					found_escape = true;
+					NextByte(p1, p1len);
+				}
+				else if (*p1 == '_' || *p1 == '%')
+					break;
+				NextByte(p1, p1len);
+			}
+
+			/*
+			 * If we found an escape character, then make an unescaped copy of
+			 * the subpattern.
+			 */
+			if (found_escape)
+			{
+				char	   *b;
+
+				b = buf = palloc(p1 - p);
+				for (const char *c = p; c < p1; c++)
+				{
+					if (*c == '\\')
+						;
+					else
+						*(b++) = *c;
+				}
+
+				subpat = buf;
+				subpatlen = b - buf;
+			}
+			else
+			{
+				subpat = p;
+				subpatlen = p1 - p;
+			}
+
+			/*
+			 * Now build a substring of the text and try to match it against
+			 * the subpattern.  t is the start of the text, t1 is one past the
+			 * last byte.  We start with a zero-length string.
+			 */
+			t1 = t;
+			t1len = tlen;
+			for (;;)
+			{
+				int			cmp;
+
+				cmp = pg_strncoll(subpat, subpatlen, t, (t1 - t), locale);
+
+				/*
+				 * If we found a match, we have to test if the rest of pattern
+				 * can match against the rest of the string.  Otherwise we
+				 * have to continue here try matching with a longer substring.
+				 * (This is similar to the recursion for the '%' wildcard
+				 * above.)
+				 *
+				 * Note that we can't just wind forward p and t and continue
+				 * with the main loop.  This would fail for example with
+				 *
+				 * U&'\0061\0308bc' LIKE U&'\00E4_c' COLLATE ignore_accents
+				 *
+				 * You'd find that t=\0061 matches p=\00E4, but then the rest
+				 * won't match; but t=\0061\0308 also matches p=\00E4, and
+				 * then the rest will match.
+				 */
+				if (cmp == 0)
+				{
+					int			matched = MatchText(t1, t1len, p1, p1len, locale, locale_is_c);
+
+					if (matched != LIKE_FALSE)
+					{
+						if (buf)
+							pfree(buf);
+						return matched; /* TRUE or ABORT */
+					}
+				}
+
+				/*
+				 * Didn't match.  If we used up the whole text, then the match
+				 * fails.  Otherwise, try again with a longer substring.
+				 */
+				if (t1len == 0)
+					return LIKE_FALSE;
+				else
+					NextChar(t1, t1len);
+			}
+			if (buf)
+				pfree(buf);
+			continue;
+		}
 		else if (GETCHAR(*p) != GETCHAR(*t))
 		{
 			/* non-wildcard pattern char fails to match text char */

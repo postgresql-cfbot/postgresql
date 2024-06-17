@@ -27,6 +27,9 @@
 
 static void _bt_drop_lock_and_maybe_pin(IndexScanDesc scan, BTScanPos sp);
 static OffsetNumber _bt_binsrch(Relation rel, BTScanInsert key, Buffer buf);
+static Buffer _bt_moveright(Relation rel, Relation heaprel, BTScanInsert key,
+							Buffer buf, bool forupdate, BTStack stack,
+							int access, IndexTuple rightsep);
 static int	_bt_binsrch_posting(BTScanInsert key, Page page,
 								OffsetNumber offnum);
 static bool _bt_readpage(IndexScanDesc scan, ScanDirection dir,
@@ -47,6 +50,28 @@ static Buffer _bt_walk_left(Relation rel, Buffer buf);
 static bool _bt_endpoint(IndexScanDesc scan, ScanDirection dir);
 static inline void _bt_initialize_more_data(BTScanOpaque so, ScanDirection dir);
 
+static inline bool
+BTreeTupleDownlinkMatchesHikey(IndexTuple highkey, IndexTuple rightsep)
+{
+	int16		size = IndexTupleSize(highkey);
+	int			alt_tid;
+
+	if (size != IndexTupleSize(rightsep))
+		return false;
+
+	alt_tid = highkey->t_info & INDEX_ALT_TID_MASK;
+	if (alt_tid != (rightsep->t_info & INDEX_ALT_TID_MASK))
+		return false;
+
+	if (alt_tid && (ItemPointerGetOffsetNumberNoCheck(&highkey->t_tid) !=
+					ItemPointerGetOffsetNumberNoCheck(&rightsep->t_tid)))
+		return false;
+
+	if (memcmp(highkey + 1, rightsep + 1, size - sizeof(IndexTupleData)) != 0)
+		return false;
+
+	return true;
+}
 
 /*
  *	_bt_drop_lock_and_maybe_pin()
@@ -98,6 +123,15 @@ _bt_search(Relation rel, Relation heaprel, BTScanInsert key, Buffer *bufP,
 {
 	BTStack		stack_in = NULL;
 	int			page_access = BT_READ;
+	union {
+#if defined(pg_attribute_aligned)
+		pg_attribute_aligned(MAXIMUM_ALIGNOF)
+#endif
+		char	data[MAXALIGN_DOWN(BLCKSZ / 3)];
+		IndexTupleData tuple;
+		double	force_align_d;
+	}			rsepbuf;
+	IndexTuple	rightsep = NULL;
 
 	/* heaprel must be set whenever _bt_allocbuf is reachable */
 	Assert(access == BT_READ || access == BT_WRITE);
@@ -134,7 +168,7 @@ _bt_search(Relation rel, Relation heaprel, BTScanInsert key, Buffer *bufP,
 		 * opportunity to finish splits of internal pages too.
 		 */
 		*bufP = _bt_moveright(rel, heaprel, key, *bufP, (access == BT_WRITE),
-							  stack_in, page_access);
+							  stack_in, page_access, rightsep);
 
 		/* if this is a leaf page, we're done */
 		page = BufferGetPage(*bufP);
@@ -151,6 +185,25 @@ _bt_search(Relation rel, Relation heaprel, BTScanInsert key, Buffer *bufP,
 		itup = (IndexTuple) PageGetItem(page, itemid);
 		Assert(BTreeTupleIsPivot(itup) || !key->heapkeyspace);
 		child = BTreeTupleGetDownLink(itup);
+
+		if (offnum < PageGetMaxOffsetNumber(page))
+		{
+			ItemId	rightsepitem = PageGetItemId(page, offnum + 1);
+			IndexTuple pagerightsep = (IndexTuple) PageGetItem(page, rightsepitem);
+			memcpy(rsepbuf.data, pagerightsep, ItemIdGetLength(rightsepitem));
+			rightsep = &rsepbuf.tuple;
+		}
+		else if (!P_RIGHTMOST(opaque))
+		{
+			/*
+			 * The rightmost data tuple on inner page has P_HIKEY as its right
+			 * separator.
+			 */
+			ItemId	rightsepitem = PageGetItemId(page, P_HIKEY);
+			IndexTuple pagerightsep = (IndexTuple) PageGetItem(page, rightsepitem);
+			memcpy(rsepbuf.data, pagerightsep, ItemIdGetLength(rightsepitem));
+			rightsep = &rsepbuf.tuple;
+		}
 
 		/*
 		 * We need to save the location of the pivot tuple we chose in a new
@@ -194,7 +247,8 @@ _bt_search(Relation rel, Relation heaprel, BTScanInsert key, Buffer *bufP,
 		 * but before we acquired a write lock.  If it has, we may need to
 		 * move right to its new sibling.  Do that.
 		 */
-		*bufP = _bt_moveright(rel, heaprel, key, *bufP, true, stack_in, BT_WRITE);
+		*bufP = _bt_moveright(rel, heaprel, key, *bufP, true, stack_in, BT_WRITE,
+							  rightsep);
 	}
 
 	return stack_in;
@@ -238,7 +292,8 @@ _bt_moveright(Relation rel,
 			  Buffer buf,
 			  bool forupdate,
 			  BTStack stack,
-			  int access)
+			  int access,
+			  IndexTuple rightsep)
 {
 	Page		page;
 	BTPageOpaque opaque;
@@ -297,7 +352,26 @@ _bt_moveright(Relation rel,
 			continue;
 		}
 
-		if (P_IGNORE(opaque) || _bt_compare(rel, key, page, P_HIKEY) >= cmpval)
+		if (P_IGNORE(opaque))
+		{
+			buf = _bt_relandgetbuf(rel, buf, opaque->btpo_next, access);
+			continue;
+		}
+
+		if (PointerIsValid(rightsep))
+		{
+			/*
+			 * Note: we're not in the rightmost page (see branchpoint earlier in
+			 * the loop), so we always have a HIKEY on this page.
+			 */
+			ItemId	hikeyid = PageGetItemId(page, P_HIKEY);
+			IndexTuple highkey = (IndexTuple) PageGetItem(page, hikeyid);
+
+			if (BTreeTupleDownlinkMatchesHikey(highkey, rightsep))
+				break;
+		}
+
+		if (_bt_compare(rel, key, page, P_HIKEY) >= cmpval)
 		{
 			/* step right one page */
 			buf = _bt_relandgetbuf(rel, buf, opaque->btpo_next, access);

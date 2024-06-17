@@ -809,6 +809,19 @@ RETURNS anycompatible AS ...
       </listitem>
      </varlistentry>
 
+     <varlistentry id="extend-extensions-files-owned-schema">
+      <term><varname>owned_schema</varname> (<type>boolean</type>)</term>
+      <listitem>
+       <para>
+        An extension is <firstterm>owned_schema</firstterm> if it requires a
+        new dedicated schema for its objects. Such a requirement can make
+        security concerns related to <literal>search_path</literal> injection
+        much easier to reason about. The default is <literal>false</literal>,
+        i.e., the extension can be installed into an existing schema.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="extend-extensions-files-schema">
       <term><varname>schema</varname> (<type>string</type>)</term>
       <listitem>

@@ -626,3 +626,53 @@ SELECT test_s_dep.dep_req2();
 
 DROP EXTENSION test_ext_req_schema1 CASCADE;
 NOTICE:  drop cascades to extension test_ext_req_schema2
+--
+-- Test owned schema extensions
+--
+CREATE SCHEMA test_ext_owned_schema;
+-- Fails for an already existing schema to be provided
+CREATE EXTENSION test_ext_owned_schema SCHEMA test_ext_owned_schema;
+ERROR:  schema "test_ext_owned_schema" already exists
+-- Fails because a different schema is set in control file
+CREATE EXTENSION test_ext_owned_schema SCHEMA test_schema;
+ERROR:  extension "test_ext_owned_schema" must be installed in schema "test_ext_owned_schema"
+DROP SCHEMA test_ext_owned_schema;
+CREATE EXTENSION test_ext_owned_schema;
+\dx+ test_ext_owned_schema;
+Objects in extension "test_ext_owned_schema"
+           Object description            
+-----------------------------------------
+ function test_ext_owned_schema.owned1()
+ schema test_ext_owned_schema
+(2 rows)
+
+DROP EXTENSION test_ext_owned_schema;
+CREATE SCHEMA already_existing;
+-- Fails for an already existing schema to be provided
+CREATE EXTENSION test_ext_owned_schema_relocatable SCHEMA already_existing;
+ERROR:  schema "already_existing" already exists
+-- Fails because no schema is set in control file
+CREATE EXTENSION test_ext_owned_schema_relocatable;
+ERROR:  no schema has been selected to create in
+CREATE EXTENSION test_ext_owned_schema_relocatable SCHEMA test_schema;
+\dx+ test_ext_owned_schema_relocatable
+Objects in extension "test_ext_owned_schema_relocatable"
+      Object description       
+-------------------------------
+ function test_schema.owned2()
+ schema test_schema
+(2 rows)
+
+-- Fails because schema already exists
+ALTER EXTENSION test_ext_owned_schema_relocatable SET SCHEMA already_existing;
+ERROR:  schema "already_existing" already exists
+ALTER EXTENSION test_ext_owned_schema_relocatable SET SCHEMA some_other_name;
+\dx+ test_ext_owned_schema_relocatable
+Objects in extension "test_ext_owned_schema_relocatable"
+        Object description         
+-----------------------------------
+ function some_other_name.owned2()
+ schema some_other_name
+(2 rows)
+
+DROP EXTENSION test_ext_owned_schema_relocatable;

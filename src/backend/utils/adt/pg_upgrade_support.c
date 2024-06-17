@@ -238,6 +238,7 @@ binary_upgrade_create_empty_extension(PG_FUNCTION_ARGS)
 						 GetUserId(),
 						 get_namespace_oid(text_to_cstring(schemaName), false),
 						 relocatable,
+						 false, /* TODO: Maybe change this??? */
 						 text_to_cstring(extVersion),
 						 extConfig,
 						 extCondition,

@@ -102,7 +102,7 @@ CREATE EXTENSION [ IF NOT EXISTS ] <replaceable class="parameter">extension_name
        <para>
         The name of the schema in which to install the extension's
         objects, given that the extension allows its contents to be
-        relocated.  The named schema must already exist.
+        relocated.  The named schema must already exist if the extension's control file does not specify <literal>owned_schema</owned_schema>.
         If not specified, and the extension's control file does not specify a
         schema either, the current default object creation schema is used.
        </para>

@@ -7444,7 +7444,12 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	CheckPointSUBTRANS();
 	CheckPointMultiXact();
 	CheckPointPredicate();
+
+	RmgrCheckpoint(flags, RMGR_CHECKPOINT_BEFORE_BUFFERS);
+
 	CheckPointBuffers(flags);
+
+	RmgrCheckpoint(flags, RMGR_CHECKPOINT_AFTER_BUFFERS);
 
 	/* Perform all queued up fsyncs */
 	TRACE_POSTGRESQL_BUFFER_CHECKPOINT_SYNC_START();

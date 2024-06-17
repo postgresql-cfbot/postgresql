@@ -843,6 +843,7 @@ AddNewAttributeTuples(Oid new_rel_oid,
 		ObjectAddressSubSet(myself, RelationRelationId, new_rel_oid, i + 1);
 		ObjectAddressSet(referenced, TypeRelationId,
 						 tupdesc->attrs[i].atttypid);
+		LockNotPinnedObject(TypeRelationId, tupdesc->attrs[i].atttypid);
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 
 		/* The default collation is pinned, so don't bother recording it */
@@ -851,6 +852,7 @@ AddNewAttributeTuples(Oid new_rel_oid,
 		{
 			ObjectAddressSet(referenced, CollationRelationId,
 							 tupdesc->attrs[i].attcollation);
+			LockNotPinnedObject(CollationRelationId, tupdesc->attrs[i].attcollation);
 			recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 		}
 	}
@@ -1451,11 +1453,13 @@ heap_create_with_catalog(const char *relname,
 
 		ObjectAddressSet(referenced, NamespaceRelationId, relnamespace);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(NamespaceRelationId, relnamespace);
 
 		if (reloftypeid)
 		{
 			ObjectAddressSet(referenced, TypeRelationId, reloftypeid);
 			add_exact_object_address(&referenced, addrs);
+			LockNotPinnedObject(TypeRelationId, reloftypeid);
 		}
 
 		/*
@@ -1469,6 +1473,7 @@ heap_create_with_catalog(const char *relname,
 		{
 			ObjectAddressSet(referenced, AccessMethodRelationId, accessmtd);
 			add_exact_object_address(&referenced, addrs);
+			LockNotPinnedObject(AccessMethodRelationId, accessmtd);
 		}
 
 		record_object_address_dependencies(&myself, addrs, DEPENDENCY_NORMAL);
@@ -3383,6 +3388,7 @@ StorePartitionKey(Relation rel,
 	{
 		ObjectAddressSet(referenced, OperatorClassRelationId, partopclass[i]);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(OperatorClassRelationId, partopclass[i]);
 
 		/* The default collation is pinned, so don't bother recording it */
 		if (OidIsValid(partcollation[i]) &&
@@ -3390,6 +3396,7 @@ StorePartitionKey(Relation rel,
 		{
 			ObjectAddressSet(referenced, CollationRelationId, partcollation[i]);
 			add_exact_object_address(&referenced, addrs);
+			LockNotPinnedObject(CollationRelationId, partcollation[i]);
 		}
 	}
 
@@ -3409,6 +3416,7 @@ StorePartitionKey(Relation rel,
 
 		ObjectAddressSubSet(referenced, RelationRelationId,
 							RelationGetRelid(rel), partattrs[i]);
+		/* Do we need a lock on RelationRelationId? */
 		recordDependencyOn(&referenced, &myself, DEPENDENCY_INTERNAL);
 	}
 

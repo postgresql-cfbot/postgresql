@@ -438,10 +438,12 @@ publication_add_relation(Oid pubid, PublicationRelInfo *pri,
 
 	/* Add dependency on the publication */
 	ObjectAddressSet(referenced, PublicationRelationId, pubid);
+	LockNotPinnedObject(PublicationRelationId, pubid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
 
 	/* Add dependency on the relation */
 	ObjectAddressSet(referenced, RelationRelationId, relid);
+	/* XXX Do we need a lock for RelationRelationId? */
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
 
 	/* Add dependency on the objects mentioned in the qualifications */
@@ -454,6 +456,7 @@ publication_add_relation(Oid pubid, PublicationRelInfo *pri,
 	for (int i = 0; i < natts; i++)
 	{
 		ObjectAddressSubSet(referenced, RelationRelationId, relid, attarray[i]);
+		/* XXX Do we need a lock for RelationRelationId? */
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 	}
 
@@ -661,10 +664,12 @@ publication_add_schema(Oid pubid, Oid schemaid, bool if_not_exists)
 
 	/* Add dependency on the publication */
 	ObjectAddressSet(referenced, PublicationRelationId, pubid);
+	LockNotPinnedObject(PublicationRelationId, pubid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
 
 	/* Add dependency on the schema */
 	ObjectAddressSet(referenced, NamespaceRelationId, schemaid);
+	LockNotPinnedObject(NamespaceRelationId, schemaid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
 
 	/* Close the table */

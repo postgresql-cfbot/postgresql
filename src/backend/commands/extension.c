@@ -1924,6 +1924,7 @@ InsertExtensionTuple(const char *extName, Oid extOwner,
 
 	ObjectAddressSet(nsp, NamespaceRelationId, schemaOid);
 	add_exact_object_address(&nsp, refobjs);
+	LockNotPinnedObject(NamespaceRelationId, schemaOid);
 
 	foreach(lc, requiredExtensions)
 	{
@@ -1932,6 +1933,7 @@ InsertExtensionTuple(const char *extName, Oid extOwner,
 
 		ObjectAddressSet(otherext, ExtensionRelationId, reqext);
 		add_exact_object_address(&otherext, refobjs);
+		LockNotPinnedObject(ExtensionRelationId, reqext);
 	}
 
 	/* Record all of them (this includes duplicate elimination) */
@@ -2968,6 +2970,7 @@ AlterExtensionNamespace(const char *extensionName, const char *newschema, Oid *o
 	table_close(extRel, RowExclusiveLock);
 
 	/* update dependency to point to the new schema */
+	LockNotPinnedObject(NamespaceRelationId, nspOid);
 	if (changeDependencyFor(ExtensionRelationId, extensionOid,
 							NamespaceRelationId, oldNspOid, nspOid) != 1)
 		elog(ERROR, "could not change schema dependency for extension %s",
@@ -3258,6 +3261,7 @@ ApplyExtensionUpdates(Oid extensionOid,
 			otherext.objectId = reqext;
 			otherext.objectSubId = 0;
 
+			LockNotPinnedObject(ExtensionRelationId, reqext);
 			recordDependencyOn(&myself, &otherext, DEPENDENCY_NORMAL);
 		}
 
@@ -3414,6 +3418,7 @@ ExecAlterExtensionContentsRecurse(AlterExtensionContentsStmt *stmt,
 		/*
 		 * OK, add the dependency.
 		 */
+		LockNotPinnedObject(extension.classId, extension.objectId);
 		recordDependencyOn(&object, &extension, DEPENDENCY_EXTENSION);
 
 		/*

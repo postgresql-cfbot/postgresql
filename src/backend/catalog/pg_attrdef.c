@@ -178,6 +178,7 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 	colobject.objectId = RelationGetRelid(rel);
 	colobject.objectSubId = attnum;
 
+	/* XXX Do we need a lock for RelationRelationId? */
 	recordDependencyOn(&defobject, &colobject,
 					   attgenerated ? DEPENDENCY_INTERNAL : DEPENDENCY_AUTO);
 

@@ -722,6 +722,7 @@ CreatePolicy(CreatePolicyStmt *stmt)
 	myself.objectId = policy_id;
 	myself.objectSubId = 0;
 
+	/* XXX Do we need a lock for RelationRelationId? */
 	recordDependencyOn(&myself, &target, DEPENDENCY_AUTO);
 
 	recordDependencyOnExpr(&myself, qual, qual_pstate->p_rtable,
@@ -1053,6 +1054,7 @@ AlterPolicy(AlterPolicyStmt *stmt)
 	myself.objectId = policy_id;
 	myself.objectSubId = 0;
 
+	/* XXX Do we need a lock for RelationRelationId? */
 	recordDependencyOn(&myself, &target, DEPENDENCY_AUTO);
 
 	recordDependencyOnExpr(&myself, qual, qual_parse_rtable, DEPENDENCY_NORMAL);

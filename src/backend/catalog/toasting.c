@@ -367,6 +367,7 @@ create_toast_table(Relation rel, Oid toastOid, Oid toastIndexOid,
 		toastobject.objectId = toast_relid;
 		toastobject.objectSubId = 0;
 
+		/* XXX Do we need a lock for RelationRelationId? */
 		recordDependencyOn(&toastobject, &baseobject, DEPENDENCY_INTERNAL);
 	}
 

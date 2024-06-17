@@ -593,6 +593,13 @@ ProcedureCreate(const char *procedureName,
 	if (is_update)
 		deleteDependencyRecordsFor(ProcedureRelationId, retval, true);
 
+	/*
+	 * CommandCounterIncrement here to ensure the new function entry is
+	 * visible when we'll check of object existence when recording the
+	 * dependencies.
+	 */
+	CommandCounterIncrement();
+
 	addrs = new_object_addresses();
 
 	ObjectAddressSet(myself, ProcedureRelationId, retval);
@@ -600,20 +607,24 @@ ProcedureCreate(const char *procedureName,
 	/* dependency on namespace */
 	ObjectAddressSet(referenced, NamespaceRelationId, procNamespace);
 	add_exact_object_address(&referenced, addrs);
+	LockNotPinnedObject(NamespaceRelationId, procNamespace);
 
 	/* dependency on implementation language */
 	ObjectAddressSet(referenced, LanguageRelationId, languageObjectId);
 	add_exact_object_address(&referenced, addrs);
+	LockNotPinnedObject(LanguageRelationId, languageObjectId);
 
 	/* dependency on return type */
 	ObjectAddressSet(referenced, TypeRelationId, returnType);
 	add_exact_object_address(&referenced, addrs);
+	LockNotPinnedObject(TypeRelationId, returnType);
 
 	/* dependency on transform used by return type, if any */
 	if ((trfid = get_transform_oid(returnType, languageObjectId, true)))
 	{
 		ObjectAddressSet(referenced, TransformRelationId, trfid);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(TransformRelationId, trfid);
 	}
 
 	/* dependency on parameter types */
@@ -621,12 +632,14 @@ ProcedureCreate(const char *procedureName,
 	{
 		ObjectAddressSet(referenced, TypeRelationId, allParams[i]);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(TypeRelationId, allParams[i]);
 
 		/* dependency on transform used by parameter type, if any */
 		if ((trfid = get_transform_oid(allParams[i], languageObjectId, true)))
 		{
 			ObjectAddressSet(referenced, TransformRelationId, trfid);
 			add_exact_object_address(&referenced, addrs);
+			LockNotPinnedObject(TransformRelationId, trfid);
 		}
 	}
 
@@ -635,6 +648,7 @@ ProcedureCreate(const char *procedureName,
 	{
 		ObjectAddressSet(referenced, ProcedureRelationId, prosupport);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(ProcedureRelationId, prosupport);
 	}
 
 	record_object_address_dependencies(&myself, addrs, DEPENDENCY_NORMAL);
@@ -673,9 +687,6 @@ ProcedureCreate(const char *procedureName,
 	{
 		ArrayType  *set_items = NULL;
 		int			save_nestlevel = 0;
-
-		/* Advance command counter so new tuple can be seen by validator */
-		CommandCounterIncrement();
 
 		/*
 		 * Set per-function configuration parameters so that the validation is

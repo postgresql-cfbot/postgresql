@@ -157,6 +157,12 @@ TypeShellMake(const char *typeName, Oid typeNamespace, Oid ownerId)
 	 * Create dependencies.  We can/must skip this in bootstrap mode.
 	 */
 	if (!IsBootstrapProcessingMode())
+	{
+		/* Lock dependent objects */
+		LockNotPinnedObject(NamespaceRelationId, typeNamespace);
+		LockNotPinnedObject(ProcedureRelationId, F_SHELL_IN);
+		LockNotPinnedObject(ProcedureRelationId, F_SHELL_OUT);
+
 		GenerateTypeDependencies(tup,
 								 pg_type_desc,
 								 NULL,
@@ -166,6 +172,7 @@ TypeShellMake(const char *typeName, Oid typeNamespace, Oid ownerId)
 								 false,
 								 true,	/* make extension dependency */
 								 false);
+	}
 
 	/* Post creation hook for new shell type */
 	InvokeObjectPostCreateHook(TypeRelationId, typoid, 0);
@@ -494,6 +501,31 @@ TypeCreate(Oid newTypeOid,
 	 * Create dependencies.  We can/must skip this in bootstrap mode.
 	 */
 	if (!IsBootstrapProcessingMode())
+	{
+		/*
+		 * CommandCounterIncrement here to ensure the new type  entry is
+		 * visible when we'll check of object existence when recording the
+		 * dependencies.
+		 */
+		CommandCounterIncrement();
+
+		/* Lock dependent objects */
+		LockNotPinnedObject(NamespaceRelationId, typeNamespace);
+		LockNotPinnedObject(ProcedureRelationId, inputProcedure);
+		LockNotPinnedObject(ProcedureRelationId, outputProcedure);
+		LockNotPinnedObject(ProcedureRelationId, receiveProcedure);
+		LockNotPinnedObject(ProcedureRelationId, sendProcedure);
+		LockNotPinnedObject(ProcedureRelationId, typmodinProcedure);
+		LockNotPinnedObject(ProcedureRelationId, typmodoutProcedure);
+		LockNotPinnedObject(ProcedureRelationId, analyzeProcedure);
+		LockNotPinnedObject(ProcedureRelationId, subscriptProcedure);
+		LockNotPinnedObject(TypeRelationId, baseType);
+		LockNotPinnedObject(CollationRelationId, typeCollation);
+		LockNotPinnedObject(TypeRelationId, elementType);
+		/* XXX Do we need a lock for RelationRelationId? */
+		if (relationKind == RELKIND_COMPOSITE_TYPE)
+			LockNotPinnedObject(TypeRelationId, typeObjectId);
+
 		GenerateTypeDependencies(tup,
 								 pg_type_desc,
 								 (defaultTypeBin ?
@@ -505,6 +537,7 @@ TypeCreate(Oid newTypeOid,
 								 isDependentType,
 								 true,	/* make extension dependency */
 								 rebuildDeps);
+	}
 
 	/* Post creation hook for new type */
 	InvokeObjectPostCreateHook(TypeRelationId, typeObjectId, 0);

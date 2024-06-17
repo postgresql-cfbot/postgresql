@@ -70,26 +70,31 @@ RangeCreate(Oid rangeTypeOid, Oid rangeSubType, Oid rangeCollation,
 
 	ObjectAddressSet(referenced, TypeRelationId, rangeSubType);
 	add_exact_object_address(&referenced, addrs);
+	LockNotPinnedObject(TypeRelationId, rangeSubType);
 
 	ObjectAddressSet(referenced, OperatorClassRelationId, rangeSubOpclass);
 	add_exact_object_address(&referenced, addrs);
+	LockNotPinnedObject(OperatorClassRelationId, rangeSubOpclass);
 
 	if (OidIsValid(rangeCollation))
 	{
 		ObjectAddressSet(referenced, CollationRelationId, rangeCollation);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(CollationRelationId, rangeCollation);
 	}
 
 	if (OidIsValid(rangeCanonical))
 	{
 		ObjectAddressSet(referenced, ProcedureRelationId, rangeCanonical);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(ProcedureRelationId, rangeCanonical);
 	}
 
 	if (OidIsValid(rangeSubDiff))
 	{
 		ObjectAddressSet(referenced, ProcedureRelationId, rangeSubDiff);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(ProcedureRelationId, rangeSubDiff);
 	}
 
 	record_object_address_dependencies(&myself, addrs, DEPENDENCY_NORMAL);
@@ -99,6 +104,7 @@ RangeCreate(Oid rangeTypeOid, Oid rangeSubType, Oid rangeCollation,
 	referencing.classId = TypeRelationId;
 	referencing.objectId = multirangeTypeOid;
 	referencing.objectSubId = 0;
+	LockNotPinnedObject(TypeRelationId, rangeTypeOid);
 	recordDependencyOn(&referencing, &myself, DEPENDENCY_INTERNAL);
 
 	table_close(pg_range, RowExclusiveLock);

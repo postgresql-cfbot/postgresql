@@ -1794,6 +1794,7 @@ makeRangeConstructors(const char *name, Oid namespace,
 		 * that they go away silently when the type is dropped.  Note that
 		 * pg_dump depends on this choice to avoid dumping the constructors.
 		 */
+		LockNotPinnedObject(TypeRelationId, rangeOid);
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_INTERNAL);
 	}
 }
@@ -1859,6 +1860,7 @@ makeMultirangeConstructors(const char *name, Oid namespace,
 	 * that they go away silently when the type is dropped.  Note that pg_dump
 	 * depends on this choice to avoid dumping the constructors.
 	 */
+	LockNotPinnedObject(TypeRelationId, multirangeOid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_INTERNAL);
 	pfree(argtypes);
 
@@ -2671,6 +2673,45 @@ AlterDomainDefault(List *names, Node *defaultRaw)
 								 new_record_repl);
 
 	CatalogTupleUpdate(rel, &tup->t_self, newtuple);
+
+	/* Lock dependent objects */
+	typTup = (Form_pg_type) GETSTRUCT(newtuple);
+
+	if (OidIsValid(typTup->typnamespace))
+		LockNotPinnedObject(NamespaceRelationId, typTup->typnamespace);
+
+	if (OidIsValid(typTup->typinput))
+		LockNotPinnedObject(ProcedureRelationId, typTup->typinput);
+
+	if (OidIsValid(typTup->typoutput))
+		LockNotPinnedObject(ProcedureRelationId, typTup->typoutput);
+
+	if (OidIsValid(typTup->typreceive))
+		LockNotPinnedObject(ProcedureRelationId, typTup->typreceive);
+
+	if (OidIsValid(typTup->typsend))
+		LockNotPinnedObject(ProcedureRelationId, typTup->typsend);
+
+	if (OidIsValid(typTup->typmodin))
+		LockNotPinnedObject(ProcedureRelationId, typTup->typmodin);
+
+	if (OidIsValid(typTup->typmodout))
+		LockNotPinnedObject(ProcedureRelationId, typTup->typmodout);
+
+	if (OidIsValid(typTup->typanalyze))
+		LockNotPinnedObject(ProcedureRelationId, typTup->typanalyze);
+
+	if (OidIsValid(typTup->typsubscript))
+		LockNotPinnedObject(ProcedureRelationId, typTup->typsubscript);
+
+	if (OidIsValid(typTup->typbasetype))
+		LockNotPinnedObject(TypeRelationId, typTup->typbasetype);
+
+	if (OidIsValid(typTup->typcollation))
+		LockNotPinnedObject(CollationRelationId, typTup->typcollation);
+
+	if (OidIsValid(typTup->typelem))
+		LockNotPinnedObject(TypeRelationId, typTup->typelem);
 
 	/* Rebuild dependencies */
 	GenerateTypeDependencies(newtuple,
@@ -4276,10 +4317,13 @@ AlterTypeNamespaceInternal(Oid typeOid, Oid nspOid,
 	if (oldNspOid != nspOid &&
 		(isCompositeType || typform->typtype != TYPTYPE_COMPOSITE) &&
 		!isImplicitArray)
+	{
+		LockNotPinnedObject(NamespaceRelationId, nspOid);
 		if (changeDependencyFor(TypeRelationId, typeOid,
 								NamespaceRelationId, oldNspOid, nspOid) != 1)
 			elog(ERROR, "could not change schema dependency for type \"%s\"",
 				 format_type_be(typeOid));
+	}
 
 	InvokeObjectPostAlterHook(TypeRelationId, typeOid, 0);
 
@@ -4571,6 +4615,7 @@ AlterTypeRecurse(Oid typeOid, bool isImplicitArray,
 	SysScanDesc scan;
 	ScanKeyData key[1];
 	HeapTuple	domainTup;
+	Form_pg_type typeForm;
 
 	/* Since this function recurses, it could be driven to stack overflow */
 	check_stack_depth();
@@ -4618,6 +4663,45 @@ AlterTypeRecurse(Oid typeOid, bool isImplicitArray,
 
 	newtup = heap_modify_tuple(tup, RelationGetDescr(catalog),
 							   values, nulls, replaces);
+
+	/* Lock dependent objects */
+	typeForm = (Form_pg_type) GETSTRUCT(newtup);
+
+	if (OidIsValid(typeForm->typnamespace))
+		LockNotPinnedObject(NamespaceRelationId, typeForm->typnamespace);
+
+	if (OidIsValid(typeForm->typinput))
+		LockNotPinnedObject(ProcedureRelationId, typeForm->typinput);
+
+	if (OidIsValid(typeForm->typoutput))
+		LockNotPinnedObject(ProcedureRelationId, typeForm->typoutput);
+
+	if (OidIsValid(typeForm->typreceive))
+		LockNotPinnedObject(ProcedureRelationId, typeForm->typreceive);
+
+	if (OidIsValid(typeForm->typsend))
+		LockNotPinnedObject(ProcedureRelationId, typeForm->typsend);
+
+	if (OidIsValid(typeForm->typmodin))
+		LockNotPinnedObject(ProcedureRelationId, typeForm->typmodin);
+
+	if (OidIsValid(typeForm->typmodout))
+		LockNotPinnedObject(ProcedureRelationId, typeForm->typmodout);
+
+	if (OidIsValid(typeForm->typanalyze))
+		LockNotPinnedObject(ProcedureRelationId, typeForm->typanalyze);
+
+	if (OidIsValid(typeForm->typsubscript))
+		LockNotPinnedObject(ProcedureRelationId, typeForm->typsubscript);
+
+	if (OidIsValid(typeForm->typbasetype))
+		LockNotPinnedObject(TypeRelationId, typeForm->typbasetype);
+
+	if (OidIsValid(typeForm->typcollation))
+		LockNotPinnedObject(CollationRelationId, typeForm->typcollation);
+
+	if (OidIsValid(typeForm->typelem))
+		LockNotPinnedObject(TypeRelationId, typeForm->typelem);
 
 	CatalogTupleUpdate(catalog, &newtup->t_self, newtup);
 

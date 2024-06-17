@@ -3438,6 +3438,7 @@ StoreCatalogInheritance1(Oid relationId, Oid parentOid,
 	childobject.objectId = relationId;
 	childobject.objectSubId = 0;
 
+	/* XXX Do we need a lock for RelationRelationId? */
 	recordDependencyOn(&childobject, &parentobject,
 					   child_dependency_type(child_is_partition));
 
@@ -7349,7 +7350,9 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	/*
 	 * Add needed dependency entries for the new column.
 	 */
+	LockNotPinnedObject(TypeRelationId, attribute->atttypid);
 	add_column_datatype_dependency(myrelid, newattnum, attribute->atttypid);
+	LockNotPinnedObject(CollationRelationId, attribute->attcollation);
 	add_column_collation_dependency(myrelid, newattnum, attribute->attcollation);
 
 	/*
@@ -10174,6 +10177,7 @@ addFkRecurseReferenced(List **wqueue, Constraint *fkconstraint, Relation rel,
 		ObjectAddress referenced;
 
 		ObjectAddressSet(referenced, ConstraintRelationId, parentConstr);
+		LockNotPinnedObject(ConstraintRelationId, parentConstr);
 		recordDependencyOn(&address, &referenced, DEPENDENCY_INTERNAL);
 	}
 
@@ -10465,8 +10469,10 @@ addFkRecurseReferencing(List **wqueue, Constraint *fkconstraint, Relation rel,
 			 */
 			ObjectAddressSet(address, ConstraintRelationId, constrOid);
 			ObjectAddressSet(referenced, ConstraintRelationId, parentConstr);
+			LockNotPinnedObject(ConstraintRelationId, parentConstr);
 			recordDependencyOn(&address, &referenced, DEPENDENCY_PARTITION_PRI);
 			ObjectAddressSet(referenced, RelationRelationId, partitionId);
+			/* XXX Do we need a lock for RelationRelationId? */
 			recordDependencyOn(&address, &referenced, DEPENDENCY_PARTITION_SEC);
 
 			/* Make all this visible before recursing */
@@ -10967,9 +10973,11 @@ CloneFkReferencing(List **wqueue, Relation parentRel, Relation partRel)
 		/* Set up partition dependencies for the new constraint */
 		ObjectAddressSet(address, ConstraintRelationId, constrOid);
 		ObjectAddressSet(referenced, ConstraintRelationId, parentConstrOid);
+		LockDatabaseObject(ConstraintRelationId, parentConstrOid, 0, AccessShareLock);
 		recordDependencyOn(&address, &referenced, DEPENDENCY_PARTITION_PRI);
 		ObjectAddressSet(referenced, RelationRelationId,
 						 RelationGetRelid(partRel));
+		/* XXX Do we need a lock for RelationRelationId? */
 		recordDependencyOn(&address, &referenced, DEPENDENCY_PARTITION_SEC);
 
 		/* Done with the cloned constraint's tuple */
@@ -13254,7 +13262,9 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 	table_close(attrelation, RowExclusiveLock);
 
 	/* Install dependencies on new datatype and collation */
+	LockNotPinnedObject(TypeRelationId, targettype);
 	add_column_datatype_dependency(RelationGetRelid(rel), attnum, targettype);
+	LockNotPinnedObject(CollationRelationId, targetcollid);
 	add_column_collation_dependency(RelationGetRelid(rel), attnum, targetcollid);
 
 	/*
@@ -14816,6 +14826,7 @@ ATExecSetAccessMethodNoStorage(Relation rel, Oid newAccessMethodId)
 		 */
 		ObjectAddressSet(relobj, RelationRelationId, reloid);
 		ObjectAddressSet(referenced, AccessMethodRelationId, rd_rel->relam);
+		LockNotPinnedObject(AccessMethodRelationId, rd_rel->relam);
 		recordDependencyOn(&relobj, &referenced, DEPENDENCY_NORMAL);
 	}
 	else if (OidIsValid(oldAccessMethodId) &&
@@ -14835,6 +14846,7 @@ ATExecSetAccessMethodNoStorage(Relation rel, Oid newAccessMethodId)
 			   OidIsValid(rd_rel->relam));
 
 		/* Both are valid, so update the dependency */
+		LockNotPinnedObject(AccessMethodRelationId, rd_rel->relam);
 		changeDependencyFor(RelationRelationId, reloid,
 							AccessMethodRelationId,
 							oldAccessMethodId, rd_rel->relam);
@@ -16434,6 +16446,7 @@ ATExecAddOf(Relation rel, const TypeName *ofTypename, LOCKMODE lockmode)
 	typeobj.classId = TypeRelationId;
 	typeobj.objectId = typeid;
 	typeobj.objectSubId = 0;
+	LockNotPinnedObject(TypeRelationId, typeid);
 	recordDependencyOn(&tableobj, &typeobj, DEPENDENCY_NORMAL);
 
 	/* Update pg_class.reloftype */
@@ -17192,14 +17205,17 @@ AlterRelationNamespaceInternal(Relation classRel, Oid relOid,
 		CatalogTupleUpdate(classRel, &classTup->t_self, classTup);
 
 		/* Update dependency on schema if caller said so */
-		if (hasDependEntry &&
-			changeDependencyFor(RelationRelationId,
-								relOid,
-								NamespaceRelationId,
-								oldNspOid,
-								newNspOid) != 1)
-			elog(ERROR, "could not change schema dependency for relation \"%s\"",
-				 NameStr(classForm->relname));
+		if (hasDependEntry)
+		{
+			LockNotPinnedObject(NamespaceRelationId, newNspOid);
+			if (changeDependencyFor(RelationRelationId,
+									relOid,
+									NamespaceRelationId,
+									oldNspOid,
+									newNspOid) != 1)
+				elog(ERROR, "could not change schema dependency for relation \"%s\"",
+					 NameStr(classForm->relname));
+		}
 	}
 	if (!already_done)
 	{

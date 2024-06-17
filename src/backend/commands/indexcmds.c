@@ -4377,8 +4377,10 @@ IndexSetParentIndex(Relation partitionIdx, Oid parentOid)
 			ObjectAddressSet(parentIdx, RelationRelationId, parentOid);
 			ObjectAddressSet(partitionTbl, RelationRelationId,
 							 partitionIdx->rd_index->indrelid);
+			/* Do we lock for RelationRelationId?? */
 			recordDependencyOn(&partIdx, &parentIdx,
 							   DEPENDENCY_PARTITION_PRI);
+			/* Do we lock for RelationRelationId?? */
 			recordDependencyOn(&partIdx, &partitionTbl,
 							   DEPENDENCY_PARTITION_SEC);
 		}

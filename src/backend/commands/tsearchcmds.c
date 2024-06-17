@@ -66,12 +66,12 @@ static DefElem *buildDefItem(const char *name, const char *val,
 /* --------------------- TS Parser commands ------------------------ */
 
 /*
- * lookup a parser support function and return its OID (as a Datum)
+ * lookup a parser support function and return its OID
  *
  * attnum is the pg_ts_parser column the function will go into
  */
-static Datum
-get_ts_parser_func(DefElem *defel, int attnum)
+static Oid
+get_ts_parser_func_oid(DefElem *defel, int attnum)
 {
 	List	   *funcName = defGetQualifiedName(defel);
 	Oid			typeId[3];
@@ -125,7 +125,7 @@ get_ts_parser_func(DefElem *defel, int attnum)
 						func_signature_string(funcName, nargs, NIL, typeId),
 						format_type_be(retTypeId))));
 
-	return ObjectIdGetDatum(procOid);
+	return procOid;
 }
 
 /*
@@ -214,6 +214,7 @@ DefineTSParser(List *names, List *parameters)
 	namestrcpy(&pname, prsname);
 	values[Anum_pg_ts_parser_prsname - 1] = NameGetDatum(&pname);
 	values[Anum_pg_ts_parser_prsnamespace - 1] = ObjectIdGetDatum(namespaceoid);
+	LockNotPinnedObject(NamespaceRelationId, namespaceoid);
 
 	/*
 	 * loop over the definition list and extract the information we need.
@@ -224,28 +225,38 @@ DefineTSParser(List *names, List *parameters)
 
 		if (strcmp(defel->defname, "start") == 0)
 		{
-			values[Anum_pg_ts_parser_prsstart - 1] =
-				get_ts_parser_func(defel, Anum_pg_ts_parser_prsstart);
+			Oid			procoid = get_ts_parser_func_oid(defel, Anum_pg_ts_parser_prsstart);
+
+			values[Anum_pg_ts_parser_prsstart - 1] = ObjectIdGetDatum(procoid);
+			LockNotPinnedObject(ProcedureRelationId, procoid);
 		}
 		else if (strcmp(defel->defname, "gettoken") == 0)
 		{
-			values[Anum_pg_ts_parser_prstoken - 1] =
-				get_ts_parser_func(defel, Anum_pg_ts_parser_prstoken);
+			Oid			procoid = get_ts_parser_func_oid(defel, Anum_pg_ts_parser_prstoken);
+
+			values[Anum_pg_ts_parser_prstoken - 1] = ObjectIdGetDatum(procoid);
+			LockNotPinnedObject(ProcedureRelationId, procoid);
 		}
 		else if (strcmp(defel->defname, "end") == 0)
 		{
-			values[Anum_pg_ts_parser_prsend - 1] =
-				get_ts_parser_func(defel, Anum_pg_ts_parser_prsend);
+			Oid			procoid = get_ts_parser_func_oid(defel, Anum_pg_ts_parser_prsend);
+
+			values[Anum_pg_ts_parser_prsend - 1] = ObjectIdGetDatum(procoid);
+			LockNotPinnedObject(ProcedureRelationId, procoid);
 		}
 		else if (strcmp(defel->defname, "headline") == 0)
 		{
-			values[Anum_pg_ts_parser_prsheadline - 1] =
-				get_ts_parser_func(defel, Anum_pg_ts_parser_prsheadline);
+			Oid			procoid = get_ts_parser_func_oid(defel, Anum_pg_ts_parser_prsheadline);
+
+			values[Anum_pg_ts_parser_prsheadline - 1] = ObjectIdGetDatum(procoid);
+			LockNotPinnedObject(ProcedureRelationId, procoid);
 		}
 		else if (strcmp(defel->defname, "lextypes") == 0)
 		{
-			values[Anum_pg_ts_parser_prslextype - 1] =
-				get_ts_parser_func(defel, Anum_pg_ts_parser_prslextype);
+			Oid			procoid = get_ts_parser_func_oid(defel, Anum_pg_ts_parser_prslextype);
+
+			values[Anum_pg_ts_parser_prslextype - 1] = ObjectIdGetDatum(procoid);
+			LockNotPinnedObject(ProcedureRelationId, procoid);
 		}
 		else
 			ereport(ERROR,
@@ -474,6 +485,10 @@ DefineTSDictionary(List *names, List *parameters)
 
 	CatalogTupleInsert(dictRel, tup);
 
+	/* Lock objects */
+	LockNotPinnedObject(NamespaceRelationId, namespaceoid);
+	LockNotPinnedObject(TSTemplateRelationId, templId);
+
 	address = makeDictionaryDependencies(tup);
 
 	/* Post creation hook for new text search dictionary */
@@ -601,12 +616,12 @@ AlterTSDictionary(AlterTSDictionaryStmt *stmt)
 /* ---------------------- TS Template commands -----------------------*/
 
 /*
- * lookup a template support function and return its OID (as a Datum)
+ * lookup a template support function and return its OID
  *
  * attnum is the pg_ts_template column the function will go into
  */
-static Datum
-get_ts_template_func(DefElem *defel, int attnum)
+static Oid
+get_ts_template_func_oid(DefElem *defel, int attnum)
 {
 	List	   *funcName = defGetQualifiedName(defel);
 	Oid			typeId[4];
@@ -642,7 +657,7 @@ get_ts_template_func(DefElem *defel, int attnum)
 						func_signature_string(funcName, nargs, NIL, typeId),
 						format_type_be(retTypeId))));
 
-	return ObjectIdGetDatum(procOid);
+	return procOid;
 }
 
 /*
@@ -723,6 +738,7 @@ DefineTSTemplate(List *names, List *parameters)
 	namestrcpy(&dname, tmplname);
 	values[Anum_pg_ts_template_tmplname - 1] = NameGetDatum(&dname);
 	values[Anum_pg_ts_template_tmplnamespace - 1] = ObjectIdGetDatum(namespaceoid);
+	LockNotPinnedObject(NamespaceRelationId, namespaceoid);
 
 	/*
 	 * loop over the definition list and extract the information we need.
@@ -733,15 +749,19 @@ DefineTSTemplate(List *names, List *parameters)
 
 		if (strcmp(defel->defname, "init") == 0)
 		{
-			values[Anum_pg_ts_template_tmplinit - 1] =
-				get_ts_template_func(defel, Anum_pg_ts_template_tmplinit);
+			Oid			procoid = get_ts_template_func_oid(defel, Anum_pg_ts_template_tmplinit);
+
+			values[Anum_pg_ts_template_tmplinit - 1] = ObjectIdGetDatum(procoid);
 			nulls[Anum_pg_ts_template_tmplinit - 1] = false;
+			LockNotPinnedObject(ProcedureRelationId, procoid);
 		}
 		else if (strcmp(defel->defname, "lexize") == 0)
 		{
-			values[Anum_pg_ts_template_tmpllexize - 1] =
-				get_ts_template_func(defel, Anum_pg_ts_template_tmpllexize);
+			Oid			procoid = get_ts_template_func_oid(defel, Anum_pg_ts_template_tmpllexize);
+
+			values[Anum_pg_ts_template_tmpllexize - 1] = ObjectIdGetDatum(procoid);
 			nulls[Anum_pg_ts_template_tmpllexize - 1] = false;
+			LockNotPinnedObject(ProcedureRelationId, procoid);
 		}
 		else
 			ereport(ERROR,
@@ -879,6 +899,7 @@ makeConfigurationDependencies(HeapTuple tuple, bool removeOld,
 			referenced.objectId = cfgmap->mapdict;
 			referenced.objectSubId = 0;
 			add_exact_object_address(&referenced, addrs);
+			LockNotPinnedObject(TSDictionaryRelationId, cfgmap->mapdict);
 		}
 
 		systable_endscan(scan);
@@ -997,6 +1018,10 @@ DefineTSConfiguration(List *names, List *parameters, ObjectAddress *copied)
 	values[Anum_pg_ts_config_cfgnamespace - 1] = ObjectIdGetDatum(namespaceoid);
 	values[Anum_pg_ts_config_cfgowner - 1] = ObjectIdGetDatum(GetUserId());
 	values[Anum_pg_ts_config_cfgparser - 1] = ObjectIdGetDatum(prsOid);
+
+	/* Lock objects */
+	LockNotPinnedObject(NamespaceRelationId, namespaceoid);
+	LockNotPinnedObject(TSParserRelationId, prsOid);
 
 	tup = heap_form_tuple(cfgRel->rd_att, values, nulls);
 
@@ -1156,6 +1181,7 @@ ObjectAddress
 AlterTSConfiguration(AlterTSConfigurationStmt *stmt)
 {
 	HeapTuple	tup;
+	Form_pg_ts_config cfg;
 	Oid			cfgId;
 	Relation	relMap;
 	ObjectAddress address;
@@ -1168,7 +1194,8 @@ AlterTSConfiguration(AlterTSConfigurationStmt *stmt)
 				 errmsg("text search configuration \"%s\" does not exist",
 						NameListToString(stmt->cfgname))));
 
-	cfgId = ((Form_pg_ts_config) GETSTRUCT(tup))->oid;
+	cfg = (Form_pg_ts_config) GETSTRUCT(tup);
+	cfgId = cfg->oid;
 
 	/* must be owner */
 	if (!object_ownercheck(TSConfigRelationId, cfgId, GetUserId()))
@@ -1182,6 +1209,10 @@ AlterTSConfiguration(AlterTSConfigurationStmt *stmt)
 		MakeConfigurationMapping(stmt, tup, relMap);
 	else if (stmt->tokentype)
 		DropConfigurationMapping(stmt, tup, relMap);
+
+	/* Lock dependent objects */
+	LockNotPinnedObject(NamespaceRelationId, cfg->cfgnamespace);
+	LockNotPinnedObject(TSParserRelationId, cfg->cfgparser);
 
 	/* Update dependencies */
 	makeConfigurationDependencies(tup, true, relMap);
@@ -1414,6 +1445,8 @@ MakeConfigurationMapping(AlterTSConfigurationStmt *stmt,
 				repl_val[Anum_pg_ts_config_map_mapdict - 1] = ObjectIdGetDatum(dictNew);
 				repl_repl[Anum_pg_ts_config_map_mapdict - 1] = true;
 
+				LockNotPinnedObject(TSDictionaryRelationId, dictNew);
+
 				newtup = heap_modify_tuple(maptup,
 										   RelationGetDescr(relMap),
 										   repl_val, repl_null, repl_repl);
@@ -1455,6 +1488,8 @@ MakeConfigurationMapping(AlterTSConfigurationStmt *stmt,
 				slot[slotCount]->tts_values[Anum_pg_ts_config_map_maptokentype - 1] = Int32GetDatum(ts->num);
 				slot[slotCount]->tts_values[Anum_pg_ts_config_map_mapseqno - 1] = Int32GetDatum(j + 1);
 				slot[slotCount]->tts_values[Anum_pg_ts_config_map_mapdict - 1] = ObjectIdGetDatum(dictIds[j]);
+
+				LockNotPinnedObject(TSDictionaryRelationId, dictIds[j]);
 
 				ExecStoreVirtualTuple(slot[slotCount]);
 				slotCount++;

@@ -327,6 +327,7 @@ insert_event_trigger_tuple(const char *trigname, const char *eventname, Oid evtO
 	referenced.classId = ProcedureRelationId;
 	referenced.objectId = funcoid;
 	referenced.objectSubId = 0;
+	LockNotPinnedObject(ProcedureRelationId, funcoid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 
 	/* Depend on extension, if any. */

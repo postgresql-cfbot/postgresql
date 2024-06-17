@@ -97,16 +97,19 @@ CastCreate(Oid sourcetypeid, Oid targettypeid,
 	/* dependency on source type */
 	ObjectAddressSet(referenced, TypeRelationId, sourcetypeid);
 	add_exact_object_address(&referenced, addrs);
+	LockNotPinnedObject(TypeRelationId, sourcetypeid);
 
 	/* dependency on target type */
 	ObjectAddressSet(referenced, TypeRelationId, targettypeid);
 	add_exact_object_address(&referenced, addrs);
+	LockNotPinnedObject(TypeRelationId, targettypeid);
 
 	/* dependency on function */
 	if (OidIsValid(funcid))
 	{
 		ObjectAddressSet(referenced, ProcedureRelationId, funcid);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(ProcedureRelationId, funcid);
 	}
 
 	/* dependencies on casts required for function */
@@ -114,11 +117,13 @@ CastCreate(Oid sourcetypeid, Oid targettypeid,
 	{
 		ObjectAddressSet(referenced, CastRelationId, incastid);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(CastRelationId, incastid);
 	}
 	if (OidIsValid(outcastid))
 	{
 		ObjectAddressSet(referenced, CastRelationId, outcastid);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(CastRelationId, outcastid);
 	}
 
 	record_object_address_dependencies(&myself, addrs, behavior);

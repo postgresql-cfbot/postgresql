@@ -1272,6 +1272,7 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 	 */
 	if (relam1 != relam2)
 	{
+		LockNotPinnedObject(AccessMethodRelationId, relam2);
 		if (changeDependencyFor(RelationRelationId,
 								r1,
 								AccessMethodRelationId,
@@ -1280,6 +1281,8 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 			elog(ERROR, "could not change access method dependency for relation \"%s.%s\"",
 				 get_namespace_name(get_rel_namespace(r1)),
 				 get_rel_name(r1));
+
+		LockNotPinnedObject(AccessMethodRelationId, relam1);
 		if (changeDependencyFor(RelationRelationId,
 								r2,
 								AccessMethodRelationId,
@@ -1381,6 +1384,7 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 			{
 				baseobject.objectId = r1;
 				toastobject.objectId = relform1->reltoastrelid;
+				/* XXX Do we need a lock for RelationRelationId? */
 				recordDependencyOn(&toastobject, &baseobject,
 								   DEPENDENCY_INTERNAL);
 			}
@@ -1389,6 +1393,7 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 			{
 				baseobject.objectId = r2;
 				toastobject.objectId = relform2->reltoastrelid;
+				/* XXX Do we need a lock for RelationRelationId? */
 				recordDependencyOn(&toastobject, &baseobject,
 								   DEPENDENCY_INTERNAL);
 			}

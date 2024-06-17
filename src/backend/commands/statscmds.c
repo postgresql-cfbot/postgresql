@@ -536,6 +536,7 @@ CreateStatistics(CreateStatsStmt *stmt)
 	for (i = 0; i < nattnums; i++)
 	{
 		ObjectAddressSubSet(parentobject, RelationRelationId, relid, attnums[i]);
+		/* XXX Do we need a lock for RelationRelationId? */
 		recordDependencyOn(&myself, &parentobject, DEPENDENCY_AUTO);
 	}
 
@@ -553,6 +554,7 @@ CreateStatistics(CreateStatsStmt *stmt)
 	if (!nattnums)
 	{
 		ObjectAddressSet(parentobject, RelationRelationId, relid);
+		/* XXX Do we need a lock for RelationRelationId? */
 		recordDependencyOn(&myself, &parentobject, DEPENDENCY_AUTO);
 	}
 
@@ -573,6 +575,7 @@ CreateStatistics(CreateStatsStmt *stmt)
 	 * than the underlying table(s).
 	 */
 	ObjectAddressSet(parentobject, NamespaceRelationId, namespaceId);
+	LockNotPinnedObject(NamespaceRelationId, namespaceId);
 	recordDependencyOn(&myself, &parentobject, DEPENDENCY_NORMAL);
 
 	recordDependencyOnOwner(StatisticExtRelationId, statoid, stxowner);

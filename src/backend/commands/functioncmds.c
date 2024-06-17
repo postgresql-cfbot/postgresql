@@ -1446,6 +1446,7 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 		/* Add or replace dependency on support function */
 		if (OidIsValid(procForm->prosupport))
 		{
+			LockNotPinnedObject(ProcedureRelationId, newsupport);
 			if (changeDependencyFor(ProcedureRelationId, funcOid,
 									ProcedureRelationId, procForm->prosupport,
 									newsupport) != 1)
@@ -1459,6 +1460,7 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 			referenced.classId = ProcedureRelationId;
 			referenced.objectId = newsupport;
 			referenced.objectSubId = 0;
+			LockNotPinnedObject(ProcedureRelationId, newsupport);
 			recordDependencyOn(&address, &referenced, DEPENDENCY_NORMAL);
 		}
 
@@ -1962,21 +1964,25 @@ CreateTransform(CreateTransformStmt *stmt)
 	/* dependency on language */
 	ObjectAddressSet(referenced, LanguageRelationId, langid);
 	add_exact_object_address(&referenced, addrs);
+	LockNotPinnedObject(LanguageRelationId, langid);
 
 	/* dependency on type */
 	ObjectAddressSet(referenced, TypeRelationId, typeid);
 	add_exact_object_address(&referenced, addrs);
+	LockNotPinnedObject(TypeRelationId, typeid);
 
 	/* dependencies on functions */
 	if (OidIsValid(fromsqlfuncid))
 	{
 		ObjectAddressSet(referenced, ProcedureRelationId, fromsqlfuncid);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(ProcedureRelationId, fromsqlfuncid);
 	}
 	if (OidIsValid(tosqlfuncid))
 	{
 		ObjectAddressSet(referenced, ProcedureRelationId, tosqlfuncid);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(ProcedureRelationId, tosqlfuncid);
 	}
 
 	record_object_address_dependencies(&myself, addrs, DEPENDENCY_NORMAL);

@@ -1520,6 +1520,84 @@ AcquireDeletionLock(const ObjectAddress *object, int flags)
 }
 
 /*
+ * LockNotPinnedObjectById
+ *
+ * Lock the object that we are about to record a dependency on.
+ * After it's locked, verify that it hasn't been dropped while we
+ * weren't looking.  If the object has been dropped, this function
+ * does not return!
+ */
+void
+LockNotPinnedObjectById(const ObjectAddress *object)
+{
+	char	   *object_description;
+
+	if (isObjectPinned(object))
+		return;
+
+	/*
+	 * Those don't rely on LockDatabaseObject() when being dropped (see
+	 * AcquireDeletionLock()). Also it looks like they can not produce
+	 * orphaned dependent objects when being dropped.
+	 */
+	if (object->classId == RelationRelationId || object->classId == AuthMemRelationId)
+		return;
+
+	object_description = getObjectDescription(object, true);
+
+	/* assume we should lock the whole object not a sub-object */
+	LockDatabaseObject(object->classId, object->objectId, 0, AccessShareLock);
+
+	/* check if object still exists */
+	if (!ObjectByIdExist(object))
+	{
+		if (object_description)
+			ereport(ERROR,
+					(errcode(ERRCODE_DEPENDENT_OBJECTS_DOES_NOT_EXIST),
+					 errmsg("%s does not exist", object_description)));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_DEPENDENT_OBJECTS_DOES_NOT_EXIST),
+					 errmsg("a dependent object does not exist")));
+	}
+
+	if (object_description)
+		pfree(object_description);
+
+	return;
+}
+
+void
+LockNotPinnedObjectsById(const ObjectAddress *object, int nobject)
+{
+	int			i;
+
+	if (nobject < 0)
+		return;
+
+	for (i = 0; i < nobject; i++, object++)
+		LockNotPinnedObjectById(object);
+
+	return;
+}
+
+
+/*
+ * LockNotPinnedObject
+ *
+ * Lock the object that we are about to record a dependency on.
+ */
+void
+LockNotPinnedObject(Oid classid, Oid objid)
+{
+	ObjectAddress object;
+
+	ObjectAddressSet(object, classid, objid);
+
+	LockNotPinnedObjectById(&object);
+}
+
+/*
  * ReleaseDeletionLock - release an object deletion lock
  *
  * Companion to AcquireDeletionLock.
@@ -1564,13 +1642,8 @@ recordDependencyOnExpr(const ObjectAddress *depender,
 	/* Scan the expression tree for referenceable objects */
 	find_expr_references_walker(expr, &context);
 
-	/* Remove any duplicates */
-	eliminate_duplicate_dependencies(context.addrs);
-
-	/* And record 'em */
-	recordMultipleDependencies(depender,
-							   context.addrs->refs, context.addrs->numrefs,
-							   behavior);
+	/* Record all of them (this includes duplicate elimination) */
+	lock_record_object_address_dependencies(depender, context.addrs, behavior);
 
 	free_object_addresses(context.addrs);
 }
@@ -1654,13 +1727,18 @@ recordDependencyOnSingleRelExpr(const ObjectAddress *depender,
 
 		/* Record the self-dependencies with the appropriate direction */
 		if (!reverse_self)
+		{
+			LockNotPinnedObjectsById(self_addrs->refs, self_addrs->numrefs);
 			recordMultipleDependencies(depender,
 									   self_addrs->refs, self_addrs->numrefs,
 									   self_behavior);
+		}
 		else
 		{
 			/* Can't use recordMultipleDependencies, so do it the hard way */
 			int			selfref;
+
+			LockNotPinnedObjectById(depender);
 
 			for (selfref = 0; selfref < self_addrs->numrefs; selfref++)
 			{
@@ -1674,6 +1752,7 @@ recordDependencyOnSingleRelExpr(const ObjectAddress *depender,
 	}
 
 	/* Record the external dependencies */
+	LockNotPinnedObjectsById(context.addrs->refs, context.addrs->numrefs);
 	recordMultipleDependencies(depender,
 							   context.addrs->refs, context.addrs->numrefs,
 							   behavior);
@@ -2732,6 +2811,22 @@ stack_address_present_add_flags(const ObjectAddress *object,
 	}
 
 	return result;
+}
+
+/*
+ * Record multiple dependencies from an ObjectAddresses array and lock the
+ * referenced objects, after first removing any duplicates.
+ */
+void
+lock_record_object_address_dependencies(const ObjectAddress *depender,
+										ObjectAddresses *referenced,
+										DependencyType behavior)
+{
+	eliminate_duplicate_dependencies(referenced);
+	LockNotPinnedObjectsById(referenced->refs, referenced->numrefs);
+	recordMultipleDependencies(depender,
+							   referenced->refs, referenced->numrefs,
+							   behavior);
 }
 
 /*

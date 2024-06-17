@@ -257,12 +257,14 @@ CreateConstraintEntry(const char *constraintName,
 				ObjectAddressSubSet(relobject, RelationRelationId, relId,
 									constraintKey[i]);
 				add_exact_object_address(&relobject, addrs_auto);
+				/* XXX Do we need a lock for RelationRelationId?? */
 			}
 		}
 		else
 		{
 			ObjectAddressSet(relobject, RelationRelationId, relId);
 			add_exact_object_address(&relobject, addrs_auto);
+			/* XXX Do we need a lock for RelationRelationId?? */
 		}
 	}
 
@@ -275,6 +277,7 @@ CreateConstraintEntry(const char *constraintName,
 
 		ObjectAddressSet(domobject, TypeRelationId, domainId);
 		add_exact_object_address(&domobject, addrs_auto);
+		LockNotPinnedObject(TypeRelationId, domainId);
 	}
 
 	record_object_address_dependencies(&conobject, addrs_auto,
@@ -299,12 +302,14 @@ CreateConstraintEntry(const char *constraintName,
 				ObjectAddressSubSet(relobject, RelationRelationId,
 									foreignRelId, foreignKey[i]);
 				add_exact_object_address(&relobject, addrs_normal);
+				/* XXX Do we need a lock for RelationRelationId? */
 			}
 		}
 		else
 		{
 			ObjectAddressSet(relobject, RelationRelationId, foreignRelId);
 			add_exact_object_address(&relobject, addrs_normal);
+			/* XXX Do we need a lock for RelationRelationId? */
 		}
 	}
 
@@ -320,6 +325,7 @@ CreateConstraintEntry(const char *constraintName,
 
 		ObjectAddressSet(relobject, RelationRelationId, indexRelId);
 		add_exact_object_address(&relobject, addrs_normal);
+		/* XXX Do we need a lock for RelationRelationId?? */
 	}
 
 	if (foreignNKeys > 0)
@@ -339,15 +345,18 @@ CreateConstraintEntry(const char *constraintName,
 		{
 			oprobject.objectId = pfEqOp[i];
 			add_exact_object_address(&oprobject, addrs_normal);
+			LockNotPinnedObject(OperatorRelationId, pfEqOp[i]);
 			if (ppEqOp[i] != pfEqOp[i])
 			{
 				oprobject.objectId = ppEqOp[i];
 				add_exact_object_address(&oprobject, addrs_normal);
+				LockNotPinnedObject(OperatorRelationId, ppEqOp[i]);
 			}
 			if (ffEqOp[i] != pfEqOp[i])
 			{
 				oprobject.objectId = ffEqOp[i];
 				add_exact_object_address(&oprobject, addrs_normal);
+				LockNotPinnedObject(OperatorRelationId, ffEqOp[i]);
 			}
 		}
 	}
@@ -858,9 +867,11 @@ ConstraintSetParentConstraint(Oid childConstrId,
 		ObjectAddressSet(depender, ConstraintRelationId, childConstrId);
 
 		ObjectAddressSet(referenced, ConstraintRelationId, parentConstrId);
+		LockNotPinnedObject(ConstraintRelationId, parentConstrId);
 		recordDependencyOn(&depender, &referenced, DEPENDENCY_PARTITION_PRI);
 
 		ObjectAddressSet(referenced, RelationRelationId, childTableId);
+		/* XXX Do we need a lock for RelationRelationId? */
 		recordDependencyOn(&depender, &referenced, DEPENDENCY_PARTITION_SEC);
 	}
 	else

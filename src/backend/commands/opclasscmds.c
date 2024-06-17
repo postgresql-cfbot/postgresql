@@ -298,12 +298,14 @@ CreateOpFamily(CreateOpFamilyStmt *stmt, const char *opfname,
 	referenced.classId = AccessMethodRelationId;
 	referenced.objectId = amoid;
 	referenced.objectSubId = 0;
+	LockNotPinnedObject(AccessMethodRelationId, amoid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
 
 	/* dependency on namespace */
 	referenced.classId = NamespaceRelationId;
 	referenced.objectId = namespaceoid;
 	referenced.objectSubId = 0;
+	LockNotPinnedObject(NamespaceRelationId, namespaceoid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 
 	/* dependency on owner */
@@ -725,18 +727,21 @@ DefineOpClass(CreateOpClassStmt *stmt)
 	referenced.classId = NamespaceRelationId;
 	referenced.objectId = namespaceoid;
 	referenced.objectSubId = 0;
+	LockNotPinnedObject(NamespaceRelationId, namespaceoid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 
 	/* dependency on opfamily */
 	referenced.classId = OperatorFamilyRelationId;
 	referenced.objectId = opfamilyoid;
 	referenced.objectSubId = 0;
+	LockNotPinnedObject(OperatorFamilyRelationId, opfamilyoid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
 
 	/* dependency on indexed datatype */
 	referenced.classId = TypeRelationId;
 	referenced.objectId = typeoid;
 	referenced.objectSubId = 0;
+	LockNotPinnedObject(TypeRelationId, typeoid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 
 	/* dependency on storage datatype */
@@ -745,6 +750,7 @@ DefineOpClass(CreateOpClassStmt *stmt)
 		referenced.classId = TypeRelationId;
 		referenced.objectId = storageoid;
 		referenced.objectSubId = 0;
+		LockNotPinnedObject(TypeRelationId, storageoid);
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 	}
 
@@ -1486,6 +1492,13 @@ storeOperators(List *opfamilyname, Oid amoid, Oid opfamilyoid,
 
 		heap_freetuple(tup);
 
+		/*
+		 * CommandCounterIncrement here to ensure the new operator entry is
+		 * visible when we'll check of object existence when recording the
+		 * dependencies.
+		 */
+		CommandCounterIncrement();
+
 		/* Make its dependencies */
 		myself.classId = AccessMethodOperatorRelationId;
 		myself.objectId = entryoid;
@@ -1496,6 +1509,7 @@ storeOperators(List *opfamilyname, Oid amoid, Oid opfamilyoid,
 		referenced.objectSubId = 0;
 
 		/* see comments in amapi.h about dependency strength */
+		LockNotPinnedObject(OperatorRelationId, op->object);
 		recordDependencyOn(&myself, &referenced,
 						   op->ref_is_hard ? DEPENDENCY_NORMAL : DEPENDENCY_AUTO);
 
@@ -1504,6 +1518,7 @@ storeOperators(List *opfamilyname, Oid amoid, Oid opfamilyoid,
 		referenced.objectId = op->refobjid;
 		referenced.objectSubId = 0;
 
+		LockNotPinnedObject(referenced.classId, op->refobjid);
 		recordDependencyOn(&myself, &referenced,
 						   op->ref_is_hard ? DEPENDENCY_INTERNAL : DEPENDENCY_AUTO);
 
@@ -1514,6 +1529,7 @@ storeOperators(List *opfamilyname, Oid amoid, Oid opfamilyoid,
 			referenced.objectId = op->sortfamily;
 			referenced.objectSubId = 0;
 
+			LockNotPinnedObject(OperatorFamilyRelationId, op->sortfamily);
 			recordDependencyOn(&myself, &referenced,
 							   op->ref_is_hard ? DEPENDENCY_NORMAL : DEPENDENCY_AUTO);
 		}
@@ -1597,6 +1613,7 @@ storeProcedures(List *opfamilyname, Oid amoid, Oid opfamilyoid,
 		referenced.objectSubId = 0;
 
 		/* see comments in amapi.h about dependency strength */
+		LockNotPinnedObject(ProcedureRelationId, proc->object);
 		recordDependencyOn(&myself, &referenced,
 						   proc->ref_is_hard ? DEPENDENCY_NORMAL : DEPENDENCY_AUTO);
 
@@ -1605,6 +1622,7 @@ storeProcedures(List *opfamilyname, Oid amoid, Oid opfamilyoid,
 		referenced.objectId = proc->refobjid;
 		referenced.objectSubId = 0;
 
+		LockNotPinnedObject(referenced.classId, proc->refobjid);
 		recordDependencyOn(&myself, &referenced,
 						   proc->ref_is_hard ? DEPENDENCY_INTERNAL : DEPENDENCY_AUTO);
 

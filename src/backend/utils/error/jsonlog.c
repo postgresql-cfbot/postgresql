@@ -49,11 +49,11 @@ appendJSONKeyValue(StringInfo buf, const char *key, const char *value,
 		return;
 
 	appendStringInfoChar(buf, ',');
-	escape_json(buf, key);
+	escape_json_cstring(buf, key);
 	appendStringInfoChar(buf, ':');
 
 	if (escape_value)
-		escape_json(buf, value);
+		escape_json_cstring(buf, value);
 	else
 		appendStringInfoString(buf, value);
 }
@@ -143,9 +143,9 @@ write_jsonlog(ErrorData *edata)
 	 * First property does not use appendJSONKeyValue as it does not have
 	 * comma prefix.
 	 */
-	escape_json(&buf, "timestamp");
+	escape_json(&buf, "timestamp", strlen("timestamp"));
 	appendStringInfoChar(&buf, ':');
-	escape_json(&buf, log_time);
+	escape_json_cstring(&buf, log_time);
 
 	/* username */
 	if (MyProcPort)

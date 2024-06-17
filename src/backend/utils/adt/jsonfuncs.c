@@ -3139,7 +3139,10 @@ populate_scalar(ScalarIOData *io, Oid typid, int32 typmod, JsValue *jsv,
 			str[len] = '\0';
 		}
 		else
-			str = json;			/* string is already null-terminated */
+		{
+			str = json; /* string is already null-terminated */
+			len = strlen(str);
+		}
 
 		/* If converting to json/jsonb, make string into valid JSON literal */
 		if ((typid == JSONOID || typid == JSONBOID) &&
@@ -3148,7 +3151,7 @@ populate_scalar(ScalarIOData *io, Oid typid, int32 typmod, JsValue *jsv,
 			StringInfoData buf;
 
 			initStringInfo(&buf);
-			escape_json(&buf, str);
+			escape_json(&buf, str, len);
 			/* free temporary buffer */
 			if (str != json)
 				pfree(str);
@@ -4425,7 +4428,7 @@ sn_object_field_start(void *state, char *fname, bool isnull)
 	 * Unfortunately we don't have the quoted and escaped string any more, so
 	 * we have to re-escape it.
 	 */
-	escape_json(_state->strval, fname);
+	escape_json_cstring(_state->strval, fname);
 
 	appendStringInfoCharMacro(_state->strval, ':');
 
@@ -4456,7 +4459,7 @@ sn_scalar(void *state, char *token, JsonTokenType tokentype)
 	}
 
 	if (tokentype == JSON_TOKEN_STRING)
-		escape_json(_state->strval, token);
+		escape_json_cstring(_state->strval, token);
 	else
 		appendStringInfoString(_state->strval, token);
 
@@ -5888,7 +5891,7 @@ transform_string_values_object_field_start(void *state, char *fname, bool isnull
 	 * Unfortunately we don't have the quoted and escaped string any more, so
 	 * we have to re-escape it.
 	 */
-	escape_json(_state->strval, fname);
+	escape_json_cstring(_state->strval, fname);
 	appendStringInfoCharMacro(_state->strval, ':');
 
 	return JSON_SUCCESS;
@@ -5914,7 +5917,7 @@ transform_string_values_scalar(void *state, char *token, JsonTokenType tokentype
 	{
 		text	   *out = _state->action(_state->action_state, token, strlen(token));
 
-		escape_json(_state->strval, text_to_cstring(out));
+		escape_json_from_text(_state->strval, out);
 	}
 	else
 		appendStringInfoString(_state->strval, token);

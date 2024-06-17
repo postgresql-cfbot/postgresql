@@ -427,7 +427,7 @@ transformJsonTableColumn(JsonTableColumn *jtc, Node *contextItemExpr,
 		initStringInfo(&path);
 
 		appendStringInfoString(&path, "$.");
-		escape_json(&path, jtc->name);
+		escape_json_cstring(&path, jtc->name);
 
 		pathspec = makeStringConst(path.data, -1);
 	}

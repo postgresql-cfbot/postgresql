@@ -17,7 +17,9 @@
 #include "lib/stringinfo.h"
 
 /* functions in json.c */
-extern void escape_json(StringInfo buf, const char *str);
+extern void escape_json_cstring(StringInfo buf, const char *str);
+extern void escape_json(StringInfo buf, const char *str, int len);
+extern void escape_json_from_text(StringInfo buf, const text *t);
 extern char *JsonEncodeDateTime(char *buf, Datum value, Oid typid,
 								const int *tzp);
 extern bool to_json_is_immutable(Oid typoid);

@@ -4661,13 +4661,15 @@ ExplainPropertyList(const char *qlabel, List *data, ExplainState *es)
 		case EXPLAIN_FORMAT_JSON:
 			ExplainJSONLineEnding(es);
 			appendStringInfoSpaces(es->str, es->indent * 2);
-			escape_json(es->str, qlabel);
+			escape_json_cstring(es->str, qlabel);
 			appendStringInfoString(es->str, ": [");
 			foreach(lc, data)
 			{
+				const char *str = (const char *) lfirst(lc);
+
 				if (!first)
 					appendStringInfoString(es->str, ", ");
-				escape_json(es->str, (const char *) lfirst(lc));
+				escape_json_cstring(es->str, str);
 				first = false;
 			}
 			appendStringInfoChar(es->str, ']');
@@ -4678,10 +4680,12 @@ ExplainPropertyList(const char *qlabel, List *data, ExplainState *es)
 			appendStringInfo(es->str, "%s: ", qlabel);
 			foreach(lc, data)
 			{
+				const char *str = (const char *) lfirst(lc);
+
 				appendStringInfoChar(es->str, '\n');
 				appendStringInfoSpaces(es->str, es->indent * 2 + 2);
 				appendStringInfoString(es->str, "- ");
-				escape_yaml(es->str, (const char *) lfirst(lc));
+				escape_yaml(es->str, str);
 			}
 			break;
 	}
@@ -4710,9 +4714,11 @@ ExplainPropertyListNested(const char *qlabel, List *data, ExplainState *es)
 			appendStringInfoChar(es->str, '[');
 			foreach(lc, data)
 			{
+				const char *str = (const char *) lfirst(lc);
+
 				if (!first)
 					appendStringInfoString(es->str, ", ");
-				escape_json(es->str, (const char *) lfirst(lc));
+				escape_json_cstring(es->str, str);
 				first = false;
 			}
 			appendStringInfoChar(es->str, ']');
@@ -4723,9 +4729,11 @@ ExplainPropertyListNested(const char *qlabel, List *data, ExplainState *es)
 			appendStringInfoString(es->str, "- [");
 			foreach(lc, data)
 			{
+				const char *str = (const char *) lfirst(lc);
+
 				if (!first)
 					appendStringInfoString(es->str, ", ");
-				escape_yaml(es->str, (const char *) lfirst(lc));
+				escape_yaml(es->str, str);
 				first = false;
 			}
 			appendStringInfoChar(es->str, ']');
@@ -4775,12 +4783,12 @@ ExplainProperty(const char *qlabel, const char *unit, const char *value,
 		case EXPLAIN_FORMAT_JSON:
 			ExplainJSONLineEnding(es);
 			appendStringInfoSpaces(es->str, es->indent * 2);
-			escape_json(es->str, qlabel);
+			escape_json_cstring(es->str, qlabel);
 			appendStringInfoString(es->str, ": ");
 			if (numeric)
 				appendStringInfoString(es->str, value);
 			else
-				escape_json(es->str, value);
+				escape_json_cstring(es->str, value);
 			break;
 
 		case EXPLAIN_FORMAT_YAML:
@@ -4882,7 +4890,7 @@ ExplainOpenGroup(const char *objtype, const char *labelname,
 			appendStringInfoSpaces(es->str, 2 * es->indent);
 			if (labelname)
 			{
-				escape_json(es->str, labelname);
+				escape_json_cstring(es->str, labelname);
 				appendStringInfoString(es->str, ": ");
 			}
 			appendStringInfoChar(es->str, labeled ? '{' : '[');
@@ -5090,10 +5098,10 @@ ExplainDummyGroup(const char *objtype, const char *labelname, ExplainState *es)
 			appendStringInfoSpaces(es->str, 2 * es->indent);
 			if (labelname)
 			{
-				escape_json(es->str, labelname);
+				escape_json_cstring(es->str, labelname);
 				appendStringInfoString(es->str, ": ");
 			}
-			escape_json(es->str, objtype);
+			escape_json_cstring(es->str, objtype);
 			break;
 
 		case EXPLAIN_FORMAT_YAML:
@@ -5297,7 +5305,7 @@ ExplainYAMLLineStarting(ExplainState *es)
 static void
 escape_yaml(StringInfo buf, const char *str)
 {
-	escape_json(buf, str);
+	escape_json_cstring(buf, str);
 }
 
 

@@ -55,6 +55,50 @@ SELECT ('"'||repeat('.', 12)||'abc\n"')::json; -- OK, legal escapes
  "............abc\n"
 (1 row)
 
+-- Stress testing of JSON escape code
+CREATE TABLE json_escape (very_long_column_name_to_test_json_escape text);
+INSERT INTO json_escape SELECT repeat('a', a) FROM generate_series(0,33) a;
+-- Test various lengths of strings to validate SIMD processing to escape
+-- special chars in the JSON.
+SELECT row_to_json(j)::jsonb FROM json_escape j;
+                                    row_to_json                                     
+------------------------------------------------------------------------------------
+ {"very_long_column_name_to_test_json_escape": ""}
+ {"very_long_column_name_to_test_json_escape": "a"}
+ {"very_long_column_name_to_test_json_escape": "aa"}
+ {"very_long_column_name_to_test_json_escape": "aaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+ {"very_long_column_name_to_test_json_escape": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+(34 rows)
+
 -- see json_encoding test for input with unicode escapes
 -- Numbers.
 SELECT '1'::json;				-- OK

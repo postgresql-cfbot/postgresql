@@ -151,6 +151,8 @@ $ for DBNAME in template0 template1 postgres; do
  <sect2 id="sepgsql-regression">
   <title>Regression Tests</title>
 
+  <!-- FIXME: update this section -->
+
   <para>
    Due to the nature of <productname>SELinux</productname>, running the
    regression tests for <filename>sepgsql</filename> requires several extra

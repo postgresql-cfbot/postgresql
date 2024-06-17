@@ -3410,6 +3410,7 @@ foreach test_dir : tests
       # Add temporary install, the build directory for non-installed binaries and
       # also test/ for non-installed test binaries built separately.
       env = test_env
+      env.set('builddir', test_dir['bd'])
       env.prepend('PATH', temp_install_bindir, test_dir['bd'], test_dir['bd'] / 'test')
 
       foreach name, value : t.get('env', {})

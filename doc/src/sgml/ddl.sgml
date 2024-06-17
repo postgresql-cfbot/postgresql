@@ -4314,14 +4314,12 @@ ALTER TABLE measurement ATTACH PARTITION measurement_y2008m02
      As mentioned earlier, it is possible to create indexes on partitioned
      tables so that they are applied automatically to the entire hierarchy.
      This can be very convenient as not only will all existing partitions be
-     indexed, but any future partitions will be as well.  However, one
-     limitation when creating new indexes on partitioned tables is that it
-     is not possible to use the <literal>CONCURRENTLY</literal>
-     qualifier, which could lead to long lock times.  To avoid this, you can
-     use <command>CREATE INDEX ON ONLY</command> the partitioned table, which
+     indexed, but any future partitions will be as well. For more control over
+     locking of the partitions you can use <command>CREATE INDEX ON ONLY</command>
+     on the partitioned table, which
      creates the new index marked as invalid, preventing automatic application
      to existing partitions.  Instead, indexes can then be created individually
-     on each partition using <literal>CONCURRENTLY</literal> and
+     on each partition and
      <firstterm>attached</firstterm> to the partitioned index on the parent
      using <command>ALTER INDEX ... ATTACH PARTITION</command>.  Once indexes for
      all the partitions are attached to the parent index, the parent index will

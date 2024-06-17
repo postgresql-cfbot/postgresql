@@ -95,6 +95,11 @@ static char *ChooseIndexName(const char *tabname, Oid namespaceId,
 							 bool primary, bool isconstraint);
 static char *ChooseIndexNameAddition(const List *colnames);
 static List *ChooseIndexColumnNames(const List *indexElems);
+static void DefineIndexConcurrentInternal(Oid relationId,
+										  Oid indexRelationId,
+										  IndexInfo *indexInfo,
+										  LOCKTAG heaplocktag,
+										  LockRelId heaprelid);
 static void ReindexIndex(const ReindexStmt *stmt, const ReindexParams *params,
 						 bool isTopLevel);
 static void RangeVarCallbackForReindexIndex(const RangeVar *relation,
@@ -113,6 +118,7 @@ static bool ReindexRelationConcurrently(const ReindexStmt *stmt,
 										const ReindexParams *params);
 static void update_relispartition(Oid relationId, bool newval);
 static inline void set_indexsafe_procflags(void);
+static inline void progress_index_partition_done(void);
 
 /*
  * callback argument type for RangeVarCallbackForReindexIndex()
@@ -561,7 +567,6 @@ DefineIndex(Oid tableId,
 	bool		amissummarizing;
 	amoptions_function amoptions;
 	bool		partitioned;
-	bool		safe_index;
 	Datum		reloptions;
 	int16	   *coloptions;
 	IndexInfo  *indexInfo;
@@ -569,12 +574,10 @@ DefineIndex(Oid tableId,
 	bits16		constr_flags;
 	int			numberOfAttributes;
 	int			numberOfKeyAttributes;
-	TransactionId limitXmin;
 	ObjectAddress address;
 	LockRelId	heaprelid;
 	LOCKTAG		heaplocktag;
 	LOCKMODE	lockmode;
-	Snapshot	snapshot;
 	Oid			root_save_userid;
 	int			root_save_sec_context;
 	int			root_save_nestlevel;
@@ -706,20 +709,6 @@ DefineIndex(Oid tableId,
 	 * partition.
 	 */
 	partitioned = rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE;
-	if (partitioned)
-	{
-		/*
-		 * Note: we check 'stmt->concurrent' rather than 'concurrent', so that
-		 * the error is thrown also for temporary tables.  Seems better to be
-		 * consistent, even though we could do it on temporary table because
-		 * we're not actually doing it concurrently.
-		 */
-		if (stmt->concurrent)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot create index on partitioned table \"%s\" concurrently",
-							RelationGetRelationName(rel))));
-	}
 
 	/*
 	 * Don't try to CREATE INDEX on temp tables of other backends.
@@ -1116,10 +1105,6 @@ DefineIndex(Oid tableId,
 		}
 	}
 
-	/* Is index safe for others to ignore?  See set_indexsafe_procflags() */
-	safe_index = indexInfo->ii_Expressions == NIL &&
-		indexInfo->ii_Predicate == NIL;
-
 	/*
 	 * Report index creation if appropriate (delay this till after most of the
 	 * error checks)
@@ -1183,6 +1168,11 @@ DefineIndex(Oid tableId,
 
 		if (pd->nparts != 0)
 			flags |= INDEX_CREATE_INVALID;
+	}
+	else if (concurrent && OidIsValid(parentIndexId))
+	{
+		/* If concurrent, initially build index partitions as "invalid" */
+		flags |= INDEX_CREATE_INVALID;
 	}
 
 	if (stmt->deferrable)
@@ -1533,21 +1523,7 @@ DefineIndex(Oid tableId,
 			 */
 			if (invalidate_parent)
 			{
-				Relation	pg_index = table_open(IndexRelationId, RowExclusiveLock);
-				HeapTuple	tup,
-							newtup;
-
-				tup = SearchSysCache1(INDEXRELID,
-									  ObjectIdGetDatum(indexRelationId));
-				if (!HeapTupleIsValid(tup))
-					elog(ERROR, "cache lookup failed for index %u",
-						 indexRelationId);
-				newtup = heap_copytuple(tup);
-				((Form_pg_index) GETSTRUCT(newtup))->indisvalid = false;
-				CatalogTupleUpdate(pg_index, &tup->t_self, newtup);
-				ReleaseSysCache(tup);
-				table_close(pg_index, RowExclusiveLock);
-				heap_freetuple(newtup);
+				index_set_state_flags(indexRelationId, INDEX_DROP_CLEAR_VALID);
 
 				/*
 				 * CCI here to make this update visible, in case this recurses
@@ -1559,38 +1535,50 @@ DefineIndex(Oid tableId,
 
 		/*
 		 * Indexes on partitioned tables are not themselves built, so we're
-		 * done here.
+		 * done here in the non-concurrent case.
 		 */
-		AtEOXact_GUC(false, root_save_nestlevel);
-		SetUserIdAndSecContext(root_save_userid, root_save_sec_context);
-		table_close(rel, NoLock);
-		if (!OidIsValid(parentIndexId))
-			pgstat_progress_end_command();
-		else
+		if (!concurrent)
 		{
-			/* Update progress for an intermediate partitioned index itself */
-			pgstat_progress_incr_param(PROGRESS_CREATEIDX_PARTITIONS_DONE, 1);
-		}
+			AtEOXact_GUC(false, root_save_nestlevel);
+			SetUserIdAndSecContext(root_save_userid, root_save_sec_context);
+			table_close(rel, NoLock);
 
-		return address;
+			if (!OidIsValid(parentIndexId))
+				pgstat_progress_end_command();
+			else
+			{
+				/*
+				 * Update progress for an intermediate partitioned index
+				 * itself
+				 */
+				progress_index_partition_done();
+			}
+
+			return address;
+		}
 	}
 
 	AtEOXact_GUC(false, root_save_nestlevel);
 	SetUserIdAndSecContext(root_save_userid, root_save_sec_context);
 
-	if (!concurrent)
+	/*
+	 * All done in the non-concurrent case, and when building catalog entries
+	 * of partitions for CIC.
+	 */
+	if (!concurrent || OidIsValid(parentIndexId))
 	{
-		/* Close the heap and we're done, in the non-concurrent case */
 		table_close(rel, NoLock);
 
 		/*
 		 * If this is the top-level index, the command is done overall;
-		 * otherwise, increment progress to report one child index is done.
+		 * otherwise (when being called recursively), increment progress to
+		 * report that one child index is done.  Except in the concurrent
+		 * (catalog-only) case, which is handled later.
 		 */
 		if (!OidIsValid(parentIndexId))
 			pgstat_progress_end_command();
-		else
-			pgstat_progress_incr_param(PROGRESS_CREATEIDX_PARTITIONS_DONE, 1);
+		else if (!concurrent)
+			progress_index_partition_done();
 
 		return address;
 	}
@@ -1599,6 +1587,137 @@ DefineIndex(Oid tableId,
 	heaprelid = rel->rd_lockInfo.lockRelId;
 	SET_LOCKTAG_RELATION(heaplocktag, heaprelid.dbId, heaprelid.relId);
 	table_close(rel, NoLock);
+
+	if (!partitioned)
+	{
+		/* CREATE INDEX CONCURRENTLY on a nonpartitioned table */
+		DefineIndexConcurrentInternal(tableId, indexRelationId,
+									  indexInfo, heaplocktag, heaprelid);
+		pgstat_progress_end_command();
+		return address;
+	}
+	else
+	{
+		/*
+		 * For CIC on a partitioned table, finish by building indexes on
+		 * partitions
+		 */
+
+		ListCell   *lc;
+		List	   *childs;
+		List	   *tosetvalid = NIL;
+		MemoryContext cic_context,
+					old_context;
+
+		/* Create special memory context for cross-transaction storage */
+		cic_context = AllocSetContextCreate(PortalContext,
+											"Create index concurrently",
+											ALLOCSET_DEFAULT_SIZES);
+
+		old_context = MemoryContextSwitchTo(cic_context);
+		childs = find_all_inheritors(indexRelationId, ShareUpdateExclusiveLock, NULL);
+		MemoryContextSwitchTo(old_context);
+
+		foreach(lc, childs)
+		{
+			Oid			indrelid = lfirst_oid(lc);
+			Oid			tabrelid;
+			char		relkind;
+
+			/*
+			 * Pre-existing partitions which were ATTACHED were already
+			 * counted in the progress report.
+			 */
+			if (get_index_isvalid(indrelid))
+				continue;
+
+			/*
+			 * Partitioned indexes are counted in the progress report, but
+			 * don't need to be further processed.
+			 */
+			relkind = get_rel_relkind(indrelid);
+			if (!RELKIND_HAS_STORAGE(relkind))
+			{
+				/* The toplevel index doesn't count towards "partitions done" */
+				if (indrelid != indexRelationId)
+					pgstat_progress_incr_param(PROGRESS_CREATEIDX_PARTITIONS_DONE, 1);
+
+				/*
+				 * Build up a list of all the intermediate partitioned tables
+				 * which will later need to be set valid.
+				 */
+				old_context = MemoryContextSwitchTo(cic_context);
+				tosetvalid = lappend_oid(tosetvalid, indrelid);
+				MemoryContextSwitchTo(old_context);
+				continue;
+			}
+
+			/*
+			 * Partition could have been dropped, since we looked it up. In
+			 * this case consider it done and go to the next one.
+			 */
+			tabrelid = IndexGetRelation(indrelid, true);
+			if (!tabrelid)
+			{
+				pgstat_progress_incr_param(PROGRESS_CREATEIDX_PARTITIONS_DONE, 1);
+				continue;
+			}
+			rel = try_table_open(tabrelid, ShareUpdateExclusiveLock);
+			if (!rel)
+			{
+				pgstat_progress_incr_param(PROGRESS_CREATEIDX_PARTITIONS_DONE, 1);
+				continue;
+			}
+
+			heaprelid = rel->rd_lockInfo.lockRelId;
+
+			/*
+			 * Close the table but retain the lock, that should be extended to
+			 * session level in DefineIndexConcurrentInternal.
+			 */
+			table_close(rel, NoLock);
+			SET_LOCKTAG_RELATION(heaplocktag, heaprelid.dbId, heaprelid.relId);
+
+			/* Process each partition in a separate transaction */
+			DefineIndexConcurrentInternal(tabrelid, indrelid, indexInfo,
+										  heaplocktag, heaprelid);
+
+			PushActiveSnapshot(GetTransactionSnapshot());
+			progress_index_partition_done();
+		}
+
+		/* Set as valid all partitioned indexes, including the parent */
+		foreach(lc, tosetvalid)
+		{
+			Oid			indrelid = lfirst_oid(lc);
+			Relation	indrel = try_index_open(indrelid, ShareUpdateExclusiveLock);
+
+			if (!indrel)
+				continue;
+			index_set_state_flags(indrelid, INDEX_CREATE_SET_READY);
+			CommandCounterIncrement();
+			index_set_state_flags(indrelid, INDEX_CREATE_SET_VALID);
+			index_close(indrel, ShareUpdateExclusiveLock);
+		}
+
+		MemoryContextDelete(cic_context);
+		pgstat_progress_end_command();
+		PopActiveSnapshot();
+		return address;
+	}
+}
+
+
+static void
+DefineIndexConcurrentInternal(Oid tableId, Oid indexRelationId, IndexInfo *indexInfo,
+							  LOCKTAG heaplocktag, LockRelId heaprelid)
+{
+	TransactionId limitXmin;
+	Snapshot	snapshot;
+
+	/* Is index safe for others to ignore?  See set_indexsafe_procflags() */
+	bool		safe_index = indexInfo->ii_Expressions == NIL &&
+		indexInfo->ii_Predicate == NIL;
 
 	/*
 	 * For a concurrent build, it's important to make the catalog entries
@@ -1795,10 +1914,6 @@ DefineIndex(Oid tableId,
 	 * Last thing to do is release the session-level lock on the parent table.
 	 */
 	UnlockRelationIdForSession(&heaprelid, ShareUpdateExclusiveLock);
-
-	pgstat_progress_end_command();
-
-	return address;
 }
 
 
@@ -3213,6 +3328,14 @@ ReindexPartitions(const ReindexStmt *stmt, Oid relid, const ReindexParams *param
 	ListCell   *lc;
 	ErrorContextCallback errcallback;
 	ReindexErrorInfo errinfo;
+	ReindexParams newparams;
+	int			progress_params[3] = {
+		PROGRESS_CREATEIDX_COMMAND,
+		PROGRESS_CREATEIDX_PHASE,
+		PROGRESS_CREATEIDX_PARTITIONS_TOTAL
+	};
+	int64		progress_values[3];
+	Oid			heapId = relid;
 
 	Assert(RELKIND_HAS_PARTITIONS(relkind));
 
@@ -3274,11 +3397,28 @@ ReindexPartitions(const ReindexStmt *stmt, Oid relid, const ReindexParams *param
 		MemoryContextSwitchTo(old_context);
 	}
 
+	if (relkind == RELKIND_PARTITIONED_INDEX)
+	{
+		heapId = IndexGetRelation(relid, true);
+	}
+
+	progress_values[0] = (params->options & REINDEXOPT_CONCURRENTLY) != 0 ?
+		PROGRESS_CREATEIDX_COMMAND_REINDEX_CONCURRENTLY :
+		PROGRESS_CREATEIDX_COMMAND_REINDEX;
+	progress_values[1] = 0;
+	progress_values[2] = list_length(partitions);
+	pgstat_progress_start_command(PROGRESS_COMMAND_CREATE_INDEX, heapId);
+	pgstat_progress_update_multi_param(3, progress_params, progress_values);
+
 	/*
 	 * Process each partition listed in a separate transaction.  Note that
 	 * this commits and then starts a new transaction immediately.
 	 */
-	ReindexMultipleInternal(stmt, partitions, params);
+	newparams = *params;
+	newparams.options |= REINDEXOPT_PARTITION;
+	ReindexMultipleInternal(stmt, partitions, &newparams);
+
+	pgstat_progress_end_command();
 
 	/*
 	 * Clean up working storage --- note we must do this after
@@ -3299,6 +3439,7 @@ static void
 ReindexMultipleInternal(const ReindexStmt *stmt, const List *relids, const ReindexParams *params)
 {
 	ListCell   *l;
+	bool		partitions = ((params->options & REINDEXOPT_PARTITION) != 0);
 
 	PopActiveSnapshot();
 	CommitTransactionCommand();
@@ -3392,6 +3533,9 @@ ReindexMultipleInternal(const ReindexStmt *stmt, const List *relids, const Reind
 		}
 
 		CommitTransactionCommand();
+
+		if (partitions)
+			progress_index_partition_done();
 	}
 
 	StartTransactionCommand();
@@ -3444,6 +3588,7 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 	char	   *relationName = NULL;
 	char	   *relationNamespace = NULL;
 	PGRUsage	ru0;
+	bool		partition = ((params->options & REINDEXOPT_PARTITION) != 0);
 	const int	progress_index[] = {
 		PROGRESS_CREATEIDX_COMMAND,
 		PROGRESS_CREATEIDX_PHASE,
@@ -3787,7 +3932,8 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 		if (indexRel->rd_rel->relpersistence == RELPERSISTENCE_TEMP)
 			elog(ERROR, "cannot reindex a temporary table concurrently");
 
-		pgstat_progress_start_command(PROGRESS_COMMAND_CREATE_INDEX, idx->tableId);
+		if (!partition)
+			pgstat_progress_start_command(PROGRESS_COMMAND_CREATE_INDEX, idx->tableId);
 
 		progress_vals[0] = PROGRESS_CREATEIDX_COMMAND_REINDEX_CONCURRENTLY;
 		progress_vals[1] = 0;	/* initializing */
@@ -4261,7 +4407,8 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 
 	MemoryContextDelete(private_context);
 
-	pgstat_progress_end_command();
+	if (!partition)
+		pgstat_progress_end_command();
 
 	return true;
 }
@@ -4450,4 +4597,22 @@ set_indexsafe_procflags(void)
 	MyProc->statusFlags |= PROC_IN_SAFE_IC;
 	ProcGlobal->statusFlags[MyProc->pgxactoff] = MyProc->statusFlags;
 	LWLockRelease(ProcArrayLock);
+}
+
+static inline void
+progress_index_partition_done(void)
+{
+	int			nparam = 6;
+	const int	progress_idx[] = {
+		PROGRESS_CREATEIDX_INDEX_OID,
+		PROGRESS_CREATEIDX_ACCESS_METHOD_OID,
+		PROGRESS_CREATEIDX_PHASE,
+		PROGRESS_CREATEIDX_SUBPHASE,
+		PROGRESS_CREATEIDX_TUPLES_TOTAL,
+		PROGRESS_CREATEIDX_TUPLES_DONE
+	};
+	const int64 progress_vals[] = {0, 0, 0, 0, 0, 0};
+
+	pgstat_progress_update_multi_param(nparam, progress_idx, progress_vals);
+	pgstat_progress_incr_param(PROGRESS_CREATEIDX_PARTITIONS_DONE, 1);
 }

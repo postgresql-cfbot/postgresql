@@ -5010,6 +5010,177 @@ timestamptz_trunc_zone(PG_FUNCTION_ARGS)
 	PG_RETURN_TIMESTAMPTZ(result);
 }
 
+/*
+ * Common code for timestamptz_trunc_int() and timestamptz_trunc_int_zone().
+ *
+ * tzp identifies the zone to truncate with respect to.  We assume
+ * infinite timestamps have already been rejected.
+ */
+static TimestampTz
+timestamptz_trunc_int_internal(Interval *interval, TimestampTz timestamp, pg_tz *tzp)
+{
+	TimestampTz result;
+	int			tz;
+	int			interval_parts = 0;
+	bool		bad_interval = false;
+	bool		redotz = false;
+	fsec_t		fsec;
+	struct pg_tm tt,
+			   *tm = &tt;
+
+	if (interval->month != 0)
+	{
+		interval_parts++;
+		/* 1200 = hundred years */
+		if ((1200/interval->month) * interval->month != 1200)
+			bad_interval = true;
+	}
+	if (interval->day != 0)
+	{
+		interval_parts++;
+		if (interval->day != 1 && interval->day != 7)
+			bad_interval = true;
+	}
+	if (interval->time != 0)
+	{
+		interval_parts++;
+		if (interval->time > USECS_PER_SEC)
+		{
+			if ((interval->time % USECS_PER_SEC) != 0)
+				bad_interval = true;
+			if ((USECS_PER_DAY/interval->time) * interval->time != USECS_PER_DAY)
+				bad_interval = true;
+		}
+		else if (interval->time < USECS_PER_SEC && (USECS_PER_SEC/interval->time) * interval->time != USECS_PER_SEC)
+			bad_interval = true;
+	}
+	if (interval_parts != 1 || bad_interval)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("interval has to be a divisor of a day, week or century.")));
+		return 0;
+	}
+
+	if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, tzp) != 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("timestamp out of range")));
+
+	if (interval->month != 0)
+	{
+		int			months;
+		months = (tm->tm_year - 1) * 12 + tm->tm_mon - 1;
+		months -= months % interval->month;
+		tm->tm_year = (months / 12) + 1;
+		tm->tm_mon = (months % 12) + 1;
+		tm->tm_mday = 1;
+		tm->tm_hour = 0;
+		tm->tm_min = 0;
+		tm->tm_sec = 0;
+		fsec = 0;
+		redotz = true;
+	}
+	else if (interval->day == 7)
+	{
+		int			woy;
+		woy = date2isoweek(tm->tm_year, tm->tm_mon, tm->tm_mday);
+
+		/*
+		 * If it is week 52/53 and the month is January, then the
+		 * week must belong to the previous year. Also, some
+		 * December dates belong to the next year.
+		 */
+		if (woy >= 52 && tm->tm_mon == 1)
+			--tm->tm_year;
+		if (woy <= 1 && tm->tm_mon == MONTHS_PER_YEAR)
+			++tm->tm_year;
+		isoweek2date(woy, &(tm->tm_year), &(tm->tm_mon), &(tm->tm_mday));
+		tm->tm_hour = 0;
+		tm->tm_min = 0;
+		tm->tm_sec = 0;
+		fsec = 0;
+		redotz = true;
+	}
+	else if (interval->day == 1)
+	{
+		tm->tm_hour = 0;
+		tm->tm_min = 0;
+		tm->tm_sec = 0;
+		fsec = 0;
+		redotz = true;	/* for all cases > HOUR */
+	}
+	else if (interval->time > USECS_PER_SEC)
+	{
+		int			seconds;
+		seconds = tm->tm_hour * 3600 + tm->tm_min * 60 + tm->tm_sec;
+		seconds -= seconds % (interval->time / USECS_PER_SEC);
+		tm->tm_hour = seconds / 3600;
+		tm->tm_min = (seconds / 60) % 60;
+		tm->tm_sec = seconds % 60;
+		fsec = 0;
+		redotz = (interval->time > USECS_PER_HOUR);
+	}
+	else if (interval->time == USECS_PER_SEC)
+		fsec = 0;
+	else if (interval->time > 0)
+		fsec -= fsec % interval->time;
+
+	if (redotz)
+		tz = DetermineTimeZoneOffset(tm, tzp);
+
+	if (tm2timestamp(tm, fsec, &tz, &result) != 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("timestamp out of range")));
+
+	return result;
+}
+
+/* timestamptz_trunc_int()
+ * Truncate timestamptz to specified interval in session timezone.
+ */
+Datum
+timestamptz_trunc_int(PG_FUNCTION_ARGS)
+{
+	Interval   *interval = PG_GETARG_INTERVAL_P(0);
+	TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(1);
+	TimestampTz result;
+
+	if (TIMESTAMP_NOT_FINITE(timestamp))
+		PG_RETURN_TIMESTAMPTZ(timestamp);
+
+	result = timestamptz_trunc_int_internal(interval, timestamp, session_timezone);
+
+	PG_RETURN_TIMESTAMPTZ(result);
+}
+
+/* timestamptz_trunc_int_zone()
+ * Truncate timestamptz to specified interval in specified timezone.
+ */
+Datum
+timestamptz_trunc_int_zone(PG_FUNCTION_ARGS)
+{
+	Interval   *interval = PG_GETARG_INTERVAL_P(0);
+	TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(1);
+	text	   *zone = PG_GETARG_TEXT_PP(2);
+	TimestampTz result;
+	pg_tz	   *tzp;
+
+	/*
+	 * timestamptz_zone() doesn't look up the zone for infinite inputs, so we
+	 * don't do so here either.
+	 */
+	if (TIMESTAMP_NOT_FINITE(timestamp))
+		PG_RETURN_TIMESTAMP(timestamp);
+
+	tzp = lookup_timezone(zone);
+
+	result = timestamptz_trunc_int_internal(interval, timestamp, tzp);
+
+	PG_RETURN_TIMESTAMPTZ(result);
+}
+
 /* interval_trunc()
  * Extract specified field from interval.
  */

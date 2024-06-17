@@ -199,17 +199,33 @@ SELECT d1 FROM TIMESTAMPTZ_TBL
 SELECT d1 - timestamp with time zone '1997-01-02' AS diff
    FROM TIMESTAMPTZ_TBL WHERE d1 BETWEEN '1902-01-01' AND '2038-01-01';
 
-SELECT date_trunc( 'week', timestamp with time zone '2004-02-29 15:44:17.71393' ) AS week_trunc;
-
+SELECT date_trunc('week', timestamp with time zone '2004-02-29 15:44:17.71393') AS week_trunc;
 SELECT date_trunc('day', timestamp with time zone '2001-02-16 20:38:40+00', 'Australia/Sydney') as sydney_trunc;  -- zone name
 SELECT date_trunc('day', timestamp with time zone '2001-02-16 20:38:40+00', 'GMT') as gmt_trunc;  -- fixed-offset abbreviation
 SELECT date_trunc('day', timestamp with time zone '2001-02-16 20:38:40+00', 'VET') as vet_trunc;  -- variable-offset abbreviation
+
+SELECT date_trunc('7 day'::interval, timestamp with time zone '2004-02-29 15:44:17.71393') AS week_trunc;
+SELECT date_trunc('3 month'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Australia/Sydney') as sydney_trunc;  -- zone name
+SELECT date_trunc('12 hour'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'GMT') as gmt_trunc;  -- fixed-offset abbreviation
+SELECT date_trunc('6 hour'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'VET') as vet_trunc;  -- variable-offset abbreviation
+SELECT date_trunc('6 minutes'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'VET') as vet_trunc;  -- variable-offset abbreviation
+SELECT date_trunc('10 second'::interval, timestamp with time zone '2004-02-29 15:44:17.71393') AS tensec_trunc;
+SELECT date_trunc('500 msecond'::interval, timestamp with time zone '2004-02-29 15:44:17.71393') AS halfsec_trunc;
+
+-- errors
+SELECT date_trunc('1 month 7 day'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval1;
+SELECT date_trunc('1 month 01:00:00'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval2;
+SELECT date_trunc('1 day 00:30:00'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval3;
+SELECT date_trunc('7 month'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval4;
+SELECT date_trunc('3 day'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval5;
+SELECT date_trunc('00:23:00'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval6;
 
 -- verify date_bin behaves the same as date_trunc for relevant intervals
 SELECT
   str,
   interval,
-  date_trunc(str, ts, 'Australia/Sydney') = date_bin(interval::interval, ts, timestamp with time zone '2001-01-01+11') AS equal
+  date_trunc(str, ts, 'Australia/Sydney') = date_bin(interval::interval, ts, timestamp with time zone '2001-01-01+11') AS equal_str,
+  date_trunc(interval::interval, ts, 'Australia/Sydney') = date_bin(interval::interval, ts, timestamp with time zone '2001-01-01+11') AS equal_interval
 FROM (
   VALUES
   ('day', '1 d'),
@@ -486,6 +502,26 @@ SELECT * FROM generate_series('2021-12-31 23:00:00+00'::timestamptz,
                               '2020-12-31 23:00:00+00'::timestamptz,
                               '-1 month'::interval,
                               'Europe/Warsaw');
+SET TimeZone to 'Europe/Warsaw';
+-- DST - 23 hours in day
+SELECT ts,
+       date_trunc('1 hour'::interval, ts, 'Europe/Warsaw') AS one_hour_bin,
+       date_trunc('2 hour'::interval, ts, 'Europe/Warsaw') AS two_hours_bin,
+       date_trunc('3 hour'::interval, ts, 'Europe/Warsaw') AS three_hours_bin
+   FROM generate_series('2022-03-26 21:00:00+00'::timestamptz,
+                        '2022-03-27 07:00:00+00'::timestamptz,
+                        '30 min'::interval,
+                        'Europe/Warsaw') AS ts;
+-- DST - 25 hours in day
+SELECT ts,
+       date_trunc('1 hour'::interval, ts, 'Europe/Warsaw') AS one_hour_bin,
+       date_trunc('2 hour'::interval, ts, 'Europe/Warsaw') AS two_hours_bin,
+       date_trunc('3 hour'::interval, ts, 'Europe/Warsaw') AS three_hours_bin
+   FROM generate_series('2022-10-29 21:00:00+00'::timestamptz,
+                        '2022-10-30 07:00:00+00'::timestamptz,
+                        '30 min'::interval,
+                        'Europe/Warsaw') AS ts;
+
 RESET TimeZone;
 
 --

@@ -9507,6 +9507,23 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
 
        <row>
         <entry role="func_table_entry"><para role="func_signature">
+         <indexterm>
+          <primary>date_trunc</primary>
+         </indexterm>
+         <function>date_trunc</function> ( <type>interval</type>, <type>timestamp with time zone</type> )
+         <returnvalue>timestamp with time zone</returnvalue>
+        </para>
+        <para>
+         Truncate to specified precision in the specified time zone. Interval has to be a divisor of a day, week or century.
+        </para>
+        <para>
+         <literal>date_trunc('30 minutes'::interval, timestamp '2001-02-16 20:38:40+00')</literal>
+         <returnvalue>2001-02-16 20:30:00+00</returnvalue>
+        </para></entry>
+       </row>
+
+       <row>
+        <entry role="func_table_entry"><para role="func_signature">
          <function>date_trunc</function> ( <type>text</type>, <type>timestamp with time zone</type>, <type>text</type> )
          <returnvalue>timestamp with time zone</returnvalue>
         </para>
@@ -9517,6 +9534,24 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
         <para>
          <literal>date_trunc('day', timestamptz '2001-02-16 20:38:40+00', 'Australia/Sydney')</literal>
          <returnvalue>2001-02-16 13:00:00+00</returnvalue>
+        </para></entry>
+       </row>
+
+       <row>
+        <entry role="func_table_entry"><para role="func_signature">
+         <function>date_trunc</function> ( <type>interval</type>, <type>timestamp with time zone</type>, <type>text</type> )
+         <returnvalue>timestamp with time zone</returnvalue>
+        </para>
+        <para>
+         Truncate to specified precision in the specified time zone. Interval has to be a divisor of a day, week or century.
+        </para>
+        <para>
+         <literal>date_trunc('3 hour'::interval, timestamptz '2001-02-16 21:38:40+00', 'Europe/Warsaw')</literal>
+         <returnvalue>2001-02-16 20:00:00+00</returnvalue>
+        </para>
+        <para>
+         <literal>date_trunc('15 minutes'::interval, timestamptz '2001-02-16 21:38:40+00', 'Europe/Warsaw')</literal>
+         <returnvalue>2001-02-16 21:30:00+00</returnvalue>
         </para></entry>
        </row>
 

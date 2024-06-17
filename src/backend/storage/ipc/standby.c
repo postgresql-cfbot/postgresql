@@ -1261,6 +1261,7 @@ standby_redo(XLogReaderState *record)
  * an entry are expected and must not cause an error when we are in state
  * STANDBY_INITIALIZED. This is implemented in StandbyReleaseLocks() and
  * KnownAssignedXidsRemove().
+ * XXX: KnownAssignedXids is gone so the above comment needs updating.
  *
  * Later, when we apply the running xact data we must be careful to ignore
  * transactions already committed, since those commits raced ahead when

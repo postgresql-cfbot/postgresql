@@ -1465,6 +1465,7 @@ RecordTransactionCommit(void)
 	 * KnownAssignedXids machinery requires tracking every XID assignment.  It
 	 * might be OK to skip it only when wal_level < replica, but for now we
 	 * don't.)
+	 * XXX: KnownAssignedXids is gone so the above comment needs updating.
 	 *
 	 * However, if we're doing cleanup of any non-temp rels or committing any
 	 * command that wanted to force sync commit, then we must flush XLOG

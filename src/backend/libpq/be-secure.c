@@ -48,6 +48,7 @@ bool		ssl_loaded_verify_locations = false;
 
 /* GUC variable controlling SSL cipher list */
 char	   *SSLCipherSuites = NULL;
+char	   *SSLCipherLists = NULL;
 
 /* GUC variable for default ECHD curve. */
 char	   *SSLECDHCurve;

@@ -4575,7 +4575,22 @@ struct config_string ConfigureNamesString[] =
 
 	{
 		{"ssl_ciphers", PGC_SIGHUP, CONN_AUTH_SSL,
-			gettext_noop("Sets the list of allowed SSL ciphers."),
+			gettext_noop("Sets the list of allowed SSL ciphers for TLS1.2 and lower."),
+			NULL,
+			GUC_SUPERUSER_ONLY
+		},
+		&SSLCipherLists,
+#ifdef USE_OPENSSL
+		"HIGH:MEDIUM:+3DES:!aNULL",
+#else
+		"none",
+#endif
+		NULL, NULL, NULL
+	},
+
+	{
+		{"ssl_cipher_suites", PGC_SIGHUP, CONN_AUTH_SSL,
+			gettext_noop("Sets the list of allowed SSL cipher suites for TLS1.3."),
 			NULL,
 			GUC_SUPERUSER_ONLY
 		},

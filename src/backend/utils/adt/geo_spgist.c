@@ -100,6 +100,17 @@ compareDoubles(const void *a, const void *b)
 	return (x > y) ? 1 : -1;
 }
 
+ /*
+ * Instantiating a Sorting Template for float8 Arrays
+ * enhancing speed performance.
+ */
+#define ST_SORT sort_float8_arr
+#define ST_ELEMENT_TYPE float8
+#define ST_COMPARE(a, b) compareDoubles(a, b)
+#define ST_SCOPE static
+#define ST_DEFINE
+#include <lib/sort_template.h>
+
 typedef struct
 {
 	float8		low;
@@ -461,10 +472,10 @@ spg_box_quad_picksplit(PG_FUNCTION_ARGS)
 		highYs[i] = box->high.y;
 	}
 
-	qsort(lowXs, in->nTuples, sizeof(float8), compareDoubles);
-	qsort(highXs, in->nTuples, sizeof(float8), compareDoubles);
-	qsort(lowYs, in->nTuples, sizeof(float8), compareDoubles);
-	qsort(highYs, in->nTuples, sizeof(float8), compareDoubles);
+	sort_float8_arr(lowXs, in->nTuples);
+	sort_float8_arr(highXs, in->nTuples);
+	sort_float8_arr(lowYs, in->nTuples);
+	sort_float8_arr(highYs, in->nTuples);
 
 	median = in->nTuples / 2;
 

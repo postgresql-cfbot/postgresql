@@ -1312,3 +1312,36 @@ pg_ultostr(char *str, uint32 value)
 
 	return str + len;
 }
+
+/*
+ * compare_int16: Compare two int16 values.
+ *
+ * This function compares two int16 values passed as pointers. It first
+ * dereferences the pointers to obtain the actual int16 values, then
+ * subtracts one from the other to determine their relative ordering.
+ * Note:
+ *   - This function assumes that the underlying architecture represents
+ *     int16 values using a two's complement representation.
+ *   - It does not perform overflow checking, assuming that 'int' is
+ *     wider than 'int16'.
+ */
+static int
+compare_int16(const void *a, const void *b)
+{
+	int			av = *(const int16 *) a;
+	int			bv = *(const int16 *) b;
+
+	/* this can't overflow if int is wider than int16 */
+	return (av - bv);
+}
+
+ /* 
+ * Instantiating a Sorting Template for int16 Arrays
+ * enhancing speed performance.
+ */
+#define ST_SORT sort_int_16_arr
+#define ST_ELEMENT_TYPE int16
+#define ST_COMPARE(a, b) compare_int16(a, b)
+#define ST_SCOPE extern
+#define ST_DEFINE
+#include <lib/sort_template.h>

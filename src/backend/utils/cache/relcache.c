@@ -4873,7 +4873,7 @@ RelationGetIndexList(Relation relation)
 	table_close(indrel, AccessShareLock);
 
 	/* Sort the result list into OID order, per API spec. */
-	list_sort(result, list_oid_cmp);
+	list_oid_sort(result);
 
 	/* Now save a copy of the completed list in the relcache entry. */
 	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
@@ -4965,7 +4965,7 @@ RelationGetStatExtList(Relation relation)
 	table_close(indrel, AccessShareLock);
 
 	/* Sort the result list into OID order, per API spec. */
-	list_sort(result, list_oid_cmp);
+	list_oid_sort(result);
 
 	/* Now save a copy of the completed list in the relcache entry. */
 	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);

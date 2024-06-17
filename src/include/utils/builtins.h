@@ -42,6 +42,7 @@ extern uint64 hex_decode_safe(const char *src, size_t len, char *dst,
 
 /* int.c */
 extern int2vector *buildint2vector(const int16 *int2s, int n);
+extern void sort_int_16_arr(int16 *arr, size_t n);
 
 /* name.c */
 extern void namestrcpy(Name name, const char *str);

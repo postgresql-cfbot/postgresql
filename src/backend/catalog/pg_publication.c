@@ -476,17 +476,6 @@ publication_add_relation(Oid pubid, PublicationRelInfo *pri,
 	return myself;
 }
 
-/* qsort comparator for attnums */
-static int
-compare_int16(const void *a, const void *b)
-{
-	int			av = *(const int16 *) a;
-	int			bv = *(const int16 *) b;
-
-	/* this can't overflow if int is wider than int16 */
-	return (av - bv);
-}
-
 /*
  * Translate a list of column names to an array of attribute numbers
  * and a Bitmapset with them; verify that each attribute is appropriate
@@ -551,7 +540,7 @@ publication_translate_columns(Relation targetrel, List *columns,
 	}
 
 	/* Be tidy, so that the catalog representation is always sorted */
-	qsort(attarray, n, sizeof(AttrNumber), compare_int16);
+	sort_int_16_arr(attarray, n);
 
 	*natts = n;
 	*attrs = attarray;
@@ -746,7 +735,7 @@ GetPublicationRelations(Oid pubid, PublicationPartOpt pub_partopt)
 	table_close(pubrelsrel, AccessShareLock);
 
 	/* Now sort and de-duplicate the result list */
-	list_sort(result, list_oid_cmp);
+	list_oid_sort(result);
 	list_deduplicate_oid(result);
 
 	return result;

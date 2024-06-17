@@ -43,18 +43,6 @@ static char *ChooseExtendedStatisticName(const char *name1, const char *name2,
 										 const char *label, Oid namespaceid);
 static char *ChooseExtendedStatisticNameAddition(List *exprs);
 
-
-/* qsort comparator for the attnums in CreateStatistics */
-static int
-compare_int16(const void *a, const void *b)
-{
-	int			av = *(const int16 *) a;
-	int			bv = *(const int16 *) b;
-
-	/* this can't overflow if int is wider than int16 */
-	return (av - bv);
-}
-
 /*
  *		CREATE STATISTICS
  */
@@ -404,7 +392,7 @@ CreateStatistics(CreateStatsStmt *stmt)
 	 * it does not hurt (it does not matter for the contents, unlike for
 	 * indexes, for example).
 	 */
-	qsort(attnums, nattnums, sizeof(int16), compare_int16);
+	sort_int_16_arr(attnums, nattnums);
 
 	/*
 	 * Check for duplicates in the list of columns. The attnums are sorted so

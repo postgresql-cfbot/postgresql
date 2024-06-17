@@ -393,15 +393,3 @@ int_to_intset(int32 elem)
 	aa[0] = elem;
 	return result;
 }
-
-int
-compASC(const void *a, const void *b)
-{
-	return pg_cmp_s32(*(const int32 *) a, *(const int32 *) b);
-}
-
-int
-compDESC(const void *a, const void *b)
-{
-	return pg_cmp_s32(*(const int32 *) b, *(const int32 *) a);
-}

@@ -198,7 +198,6 @@ sort(PG_FUNCTION_ARGS)
 	text	   *dirstr = (fcinfo->nargs == 2) ? PG_GETARG_TEXT_PP(1) : NULL;
 	int32		dc = (dirstr) ? VARSIZE_ANY_EXHDR(dirstr) : 0;
 	char	   *d = (dirstr) ? VARDATA_ANY(dirstr) : NULL;
-	int			dir = -1;
 
 	CHECKARRVALID(a);
 	if (ARRNELEMS(a) < 2)
@@ -208,18 +207,18 @@ sort(PG_FUNCTION_ARGS)
 						   && (d[0] == 'A' || d[0] == 'a')
 						   && (d[1] == 'S' || d[1] == 's')
 						   && (d[2] == 'C' || d[2] == 'c')))
-		dir = 1;
+		sort_int32_asc(ARRPTR(a), ARRNELEMS(a));
 	else if (dc == 4
 			 && (d[0] == 'D' || d[0] == 'd')
 			 && (d[1] == 'E' || d[1] == 'e')
 			 && (d[2] == 'S' || d[2] == 's')
 			 && (d[3] == 'C' || d[3] == 'c'))
-		dir = 0;
-	if (dir == -1)
+		sort_int32_desc(ARRPTR(a), ARRNELEMS(a));
+	else
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("second parameter must be \"ASC\" or \"DESC\"")));
-	QSORT(a, dir);
+
 	PG_RETURN_POINTER(a);
 }
 
@@ -229,7 +228,7 @@ sort_asc(PG_FUNCTION_ARGS)
 	ArrayType  *a = PG_GETARG_ARRAYTYPE_P_COPY(0);
 
 	CHECKARRVALID(a);
-	QSORT(a, 1);
+	sort_int32_asc(ARRPTR(a), ARRNELEMS(a));
 	PG_RETURN_POINTER(a);
 }
 
@@ -239,7 +238,7 @@ sort_desc(PG_FUNCTION_ARGS)
 	ArrayType  *a = PG_GETARG_ARRAYTYPE_P_COPY(0);
 
 	CHECKARRVALID(a);
-	QSORT(a, 0);
+	sort_int32_desc(ARRPTR(a), ARRNELEMS(a));
 	PG_RETURN_POINTER(a);
 }
 
@@ -381,7 +380,7 @@ intset_union_elem(PG_FUNCTION_ARGS)
 
 	result = intarray_add_elem(a, PG_GETARG_INT32(1));
 	PG_FREE_IF_COPY(a, 0);
-	QSORT(result, 1);
+	sort_int32_asc(ARRPTR(result), ARRNELEMS(result));
 	PG_RETURN_POINTER(_int_unique(result));
 }
 
@@ -403,10 +402,10 @@ intset_subtract(PG_FUNCTION_ARGS)
 	CHECKARRVALID(a);
 	CHECKARRVALID(b);
 
-	QSORT(a, 1);
+	sort_int32_asc(ARRPTR(a), ARRNELEMS(a));
 	a = _int_unique(a);
 	ca = ARRNELEMS(a);
-	QSORT(b, 1);
+	sort_int32_asc(ARRPTR(b), ARRNELEMS(b));
 	b = _int_unique(b);
 	cb = ARRNELEMS(b);
 	result = new_intArrayType(ca);

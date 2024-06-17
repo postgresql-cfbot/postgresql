@@ -1,0 +1,5 @@
+# fuzzystrmatch extension
+comment = 'test extension'
+default_version = '1.0'
+module_pathname = '$libdir/bench_sort_improvements'
+relocatable = true

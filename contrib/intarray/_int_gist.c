@@ -150,7 +150,7 @@ g_int_union(PG_FUNCTION_ARGS)
 		ptr += nel;
 	}
 
-	QSORT(res, 1);
+	sort_int32_asc(ARRPTR(res), ARRNELEMS(res));
 	res = _int_unique(res);
 	*size = VARSIZE(res);
 	PG_RETURN_POINTER(res);

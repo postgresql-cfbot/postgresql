@@ -10,6 +10,7 @@ SUBDIRS = \
 		auto_explain	\
 		basic_archive	\
 		basebackup_to_shell	\
+		bench_sort_improvements \
 		bloom		\
 		btree_gin	\
 		btree_gist	\

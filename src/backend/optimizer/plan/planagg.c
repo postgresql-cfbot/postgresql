@@ -254,6 +254,16 @@ can_minmax_aggs(PlannerInfo *root, List **context)
 			return false;		/* it couldn't be MIN/MAX */
 
 		/*
+		 * We might implement the optimization when a FILTER clause is present
+		 * by adding the filter to the quals of the generated subquery.  For
+		 * now, just punt.
+		 */
+		if (aggref->aggfilter != NULL)
+			return false;
+
+		curTarget = (TargetEntry *) linitial(aggref->args);
+
+		/*
 		 * ORDER BY is usually irrelevant for MIN/MAX, but it can change the
 		 * outcome if the aggsortop's operator class recognizes non-identical
 		 * values as equal.  For example, 4.0 and 4.00 are equal according to
@@ -267,22 +277,71 @@ can_minmax_aggs(PlannerInfo *root, List **context)
 		 * quickly.
 		 */
 		if (aggref->aggorder != NIL)
-			return false;
+		{
+			SortGroupClause *orderClause;
+
+			/*
+			 * If the order clause is the same column as the one we're
+			 * aggregating, we can still use the index: It is undefined which
+			 * value is MIN() or MAX(), as well as which value is first or
+			 * last when sorted. So, we can still use the index IFF the
+			 * aggregated expression equals the expression used in the
+			 * ordering operation.
+			 */
+
+			/*
+			 * We only accept a single argument to min/max aggregates,
+			 * orderings that have more clauses won't provide correct results.
+			 */
+			if (list_length(aggref->aggorder) > 1)
+				return false;
+
+			orderClause = castNode(SortGroupClause, linitial(aggref->aggorder));
+
+			if (orderClause->tleSortGroupRef != curTarget->ressortgroupref)
+				return false;
+
+			aggsortop = fetch_agg_sort_op(aggref->aggfnoid);
+			if (!OidIsValid(aggsortop))
+				return false;		/* not a MIN/MAX aggregate */
+
+			if (orderClause->sortop != aggsortop)
+			{
+				List   *btclasses;
+				ListCell *cell;
+				bool	match = false;
+
+				btclasses = get_op_btree_interpretation(orderClause->sortop);
+
+				foreach(cell, btclasses)
+				{
+					OpBtreeInterpretation *interpretation;
+					interpretation = (OpBtreeInterpretation *) lfirst(cell);
+
+					if (!match)
+					{
+						if (op_in_opfamily(aggsortop, interpretation->opfamily_id))
+							match = true;
+					}
+					/* Now useless */
+					pfree(interpretation);
+				}
+
+				/* Now not useful anymore */
+				pfree(btclasses);
+
+				if (!match)
+					return false;
+			}
+		}
+		else
+		{
+			aggsortop = fetch_agg_sort_op(aggref->aggfnoid);
+			if (!OidIsValid(aggsortop))
+				return false;		/* not a MIN/MAX aggregate */
+		}
 		/* note: we do not care if DISTINCT is mentioned ... */
 
-		/*
-		 * We might implement the optimization when a FILTER clause is present
-		 * by adding the filter to the quals of the generated subquery.  For
-		 * now, just punt.
-		 */
-		if (aggref->aggfilter != NULL)
-			return false;
-
-		aggsortop = fetch_agg_sort_op(aggref->aggfnoid);
-		if (!OidIsValid(aggsortop))
-			return false;		/* not a MIN/MAX aggregate */
-
-		curTarget = (TargetEntry *) linitial(aggref->args);
 
 		if (contain_mutable_functions((Node *) curTarget->expr))
 			return false;		/* not potentially indexable */

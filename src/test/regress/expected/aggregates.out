@@ -978,6 +978,71 @@ select max(unique1) from tenk1 where unique1 > 42;
  9999
 (1 row)
 
+-- When sorting on the column that's being aggregated, indexes can also be
+-- used, but only when the aggregate's operator has the same ordering behavior
+-- as the ORDER BY-clause, i.e. if it is in the same btree opclass as the one
+-- chosen for the ORDER BY clause.
+explain (costs off)
+  select min(unique1 ORDER BY unique1 ASC NULLS LAST) from tenk1;
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Result
+   InitPlan 1
+     ->  Limit
+           ->  Index Only Scan using tenk1_unique1 on tenk1
+                 Index Cond: (unique1 IS NOT NULL)
+(5 rows)
+
+select min(unique1 ORDER BY unique1 ASC NULLS LAST) from tenk1;
+ min 
+-----
+   0
+(1 row)
+
+explain (costs off)
+  select max(unique1 ORDER BY unique1 USING <) from tenk1;
+                             QUERY PLAN                              
+---------------------------------------------------------------------
+ Result
+   InitPlan 1
+     ->  Limit
+           ->  Index Only Scan Backward using tenk1_unique1 on tenk1
+                 Index Cond: (unique1 IS NOT NULL)
+(5 rows)
+
+select max(unique1 ORDER BY unique1 USING <) from tenk1;
+ max  
+------
+ 9999
+(1 row)
+
+explain (costs off)
+  select max(unique1 ORDER BY tenthous) from tenk1;
+          QUERY PLAN           
+-------------------------------
+ Aggregate
+   ->  Sort
+         Sort Key: tenthous
+         ->  Seq Scan on tenk1
+(4 rows)
+
+select max(unique1 ORDER BY tenthous) from tenk1;
+ max  
+------
+ 9999
+(1 row)
+
+--  But even then, the index can't be used if we order by multiple columns.
+explain (costs off)
+  select max(unique1 ORDER BY unique1, tenthous) from tenk1;
+             QUERY PLAN              
+-------------------------------------
+ Aggregate
+   ->  Sort
+         Sort Key: unique1, tenthous
+         ->  Seq Scan on tenk1
+(4 rows)
+
 -- the planner may choose a generic aggregate here if parallel query is
 -- enabled, since that plan will be parallel safe and the "optimized"
 -- plan, which has almost identical cost, will not be.  we want to test

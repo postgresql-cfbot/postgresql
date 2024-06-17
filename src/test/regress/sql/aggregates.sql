@@ -362,6 +362,24 @@ explain (costs off)
   select max(unique1) from tenk1 where unique1 > 42;
 select max(unique1) from tenk1 where unique1 > 42;
 
+-- When sorting on the column that's being aggregated, indexes can also be
+-- used, but only when the aggregate's operator has the same ordering behavior
+-- as the ORDER BY-clause, i.e. if it is in the same btree opclass as the one
+-- chosen for the ORDER BY clause.
+explain (costs off)
+  select min(unique1 ORDER BY unique1 ASC NULLS LAST) from tenk1;
+select min(unique1 ORDER BY unique1 ASC NULLS LAST) from tenk1;
+explain (costs off)
+  select max(unique1 ORDER BY unique1 USING <) from tenk1;
+select max(unique1 ORDER BY unique1 USING <) from tenk1;
+explain (costs off)
+  select max(unique1 ORDER BY tenthous) from tenk1;
+select max(unique1 ORDER BY tenthous) from tenk1;
+
+--  But even then, the index can't be used if we order by multiple columns.
+explain (costs off)
+  select max(unique1 ORDER BY unique1, tenthous) from tenk1;
+
 -- the planner may choose a generic aggregate here if parallel query is
 -- enabled, since that plan will be parallel safe and the "optimized"
 -- plan, which has almost identical cost, will not be.  we want to test

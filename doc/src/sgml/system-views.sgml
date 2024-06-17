@@ -2580,6 +2580,21 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
           perform logical decoding.  It is set only for logical slots.
          </para>
         </listitem>
+        <listitem>
+         <para>
+          <literal>inactive_timeout</literal> means that the slot has been
+          inactive for the duration specified by
+          <xref linkend="guc-replication-slot-inactive-timeout"/> parameter.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>xid_aged</literal> means that the slot's
+          <literal>xmin</literal> or <literal>catalog_xmin</literal>
+          has reached the age specified by
+          <xref linkend="guc-replication-slot-xid-age"/> parameter.
+         </para>
+        </listitem>
        </itemizedlist>
       </para></entry>
      </row>

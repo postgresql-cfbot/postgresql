@@ -10,6 +10,7 @@ tests += {
        'enable_injection_points': get_option('injection_points') ? 'yes' : 'no',
     },
     'tests': [
+      't/050_invalidate_slots.pl',
       't/001_stream_rep.pl',
       't/002_archiving.pl',
       't/003_recovery_targets.pl',

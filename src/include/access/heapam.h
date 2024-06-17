@@ -91,22 +91,45 @@ typedef struct HeapScanDescData
 	 */
 	ParallelBlockTableScanWorkerData *rs_parallelworkerdata;
 
-	/*
-	 * These fields are only used for bitmap scans for the "skip fetch"
-	 * optimization. Bitmap scans needing no fields from the heap may skip
-	 * fetching an all visible block, instead using the number of tuples per
-	 * block reported by the bitmap to determine how many NULL-filled tuples
-	 * to return.
-	 */
-	Buffer		rs_vmbuffer;
-	int			rs_empty_tuples_pending;
-
 	/* these fields only used in page-at-a-time mode and for bitmap scans */
 	int			rs_cindex;		/* current tuple's index in vistuples */
 	int			rs_ntuples;		/* number of visible tuples on page */
 	OffsetNumber rs_vistuples[MaxHeapTuplesPerPage];	/* their offsets */
 }			HeapScanDescData;
 typedef struct HeapScanDescData *HeapScanDesc;
+
+typedef struct BitmapHeapScanDesc
+{
+	BitmapTableScanDesc base;
+
+	BlockNumber nblocks;		/* total number of blocks in rel */
+
+	int			vis_idx;		/* current tuple's index in vistuples */
+	int			vis_ntuples;	/* number of visible tuples on page */
+	OffsetNumber vis_tuples[MaxHeapTuplesPerPage];	/* their offsets */
+
+	Buffer		cbuf;			/* current buffer in scan, if any */
+	/* NB: if cbuf is not InvalidBuffer, we hold a pin on that buffer */
+	HeapTupleData ctup;			/* current tuple in scan, if any */
+
+	BlockNumber cblock;			/* current block # in scan, if any */
+
+	ReadStream *read_stream;
+
+	/*
+	 * These fields are only used for bitmap scans for the "skip fetch"
+	 * optimization. Bitmap scans needing no fields from the heap may skip
+	 * fetching an all visible block, instead using the number of tuples per
+	 * block reported by the bitmap to determine how many NULL-filled tuples
+	 * to return. They are common to parallel and serial BitmapHeapScans
+	 */
+
+	/* page of VM containing info for current block */
+	Buffer		vmbuffer;
+	/* page of VM containing info for prefetch block */
+	Buffer		pvmbuffer;
+	int			empty_tuples_pending;
+} BitmapHeapScanDesc;
 
 /*
  * Descriptor for fetches from heap via an index.
@@ -296,6 +319,12 @@ extern void heap_prepare_pagescan(TableScanDesc sscan);
 extern void heap_rescan(TableScanDesc sscan, ScanKey key, bool set_params,
 						bool allow_strat, bool allow_sync, bool allow_pagemode);
 extern void heap_endscan(TableScanDesc sscan);
+
+extern BitmapTableScanDesc *heap_beginscan_bm(Relation relation,
+											  Snapshot snapshot, uint32 flags);
+extern void heap_rescan_bm(BitmapTableScanDesc *sscan);
+void		heap_endscan_bm(BitmapTableScanDesc *sscan);
+
 extern HeapTuple heap_getnext(TableScanDesc sscan, ScanDirection direction);
 extern bool heap_getnextslot(TableScanDesc sscan,
 							 ScanDirection direction, struct TupleTableSlot *slot);

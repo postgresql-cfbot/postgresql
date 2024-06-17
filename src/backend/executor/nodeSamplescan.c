@@ -123,7 +123,7 @@ ExecInitSampleScan(SampleScan *node, EState *estate, int eflags)
 							 eflags);
 
 	/* we won't set up the HeapScanDesc till later */
-	scanstate->ss.ss_currentScanDesc = NULL;
+	scanstate->scandesc = NULL;
 
 	/* and create slot with appropriate rowtype */
 	ExecInitScanTupleSlot(estate, &scanstate->ss,
@@ -187,8 +187,8 @@ ExecEndSampleScan(SampleScanState *node)
 	/*
 	 * close heap scan
 	 */
-	if (node->ss.ss_currentScanDesc)
-		table_endscan(node->ss.ss_currentScanDesc);
+	if (node->scandesc)
+		table_endscan(node->scandesc);
 }
 
 /* ----------------------------------------------------------------
@@ -289,9 +289,9 @@ tablesample_init(SampleScanState *scanstate)
 	allow_sync = (tsm->NextSampleBlock == NULL);
 
 	/* Now we can create or reset the HeapScanDesc */
-	if (scanstate->ss.ss_currentScanDesc == NULL)
+	if (scanstate->scandesc == NULL)
 	{
-		scanstate->ss.ss_currentScanDesc =
+		scanstate->scandesc =
 			table_beginscan_sampling(scanstate->ss.ss_currentRelation,
 									 scanstate->ss.ps.state->es_snapshot,
 									 0, NULL,
@@ -301,7 +301,7 @@ tablesample_init(SampleScanState *scanstate)
 	}
 	else
 	{
-		table_rescan_set_params(scanstate->ss.ss_currentScanDesc, NULL,
+		table_rescan_set_params(scanstate->scandesc, NULL,
 								scanstate->use_bulkread,
 								allow_sync,
 								scanstate->use_pagemode);
@@ -319,7 +319,7 @@ tablesample_init(SampleScanState *scanstate)
 static TupleTableSlot *
 tablesample_getnext(SampleScanState *scanstate)
 {
-	TableScanDesc scan = scanstate->ss.ss_currentScanDesc;
+	TableScanDesc scan = scanstate->scandesc;
 	TupleTableSlot *slot = scanstate->ss.ss_ScanTupleSlot;
 
 	ExecClearTuple(slot);

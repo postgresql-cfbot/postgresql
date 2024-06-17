@@ -1555,7 +1555,6 @@ typedef struct BitmapOrState
  *		retrieved from the subplan.
  *
  *		currentRelation    relation being scanned (NULL if none)
- *		currentScanDesc    current scan descriptor for scan (NULL if none)
  *		ScanTupleSlot	   pointer to slot in tuple table holding scan tuple
  * ----------------
  */
@@ -1563,7 +1562,6 @@ typedef struct ScanState
 {
 	PlanState	ps;				/* its first field is NodeTag */
 	Relation	ss_currentRelation;
-	struct TableScanDescData *ss_currentScanDesc;
 	TupleTableSlot *ss_ScanTupleSlot;
 } ScanState;
 
@@ -1574,6 +1572,7 @@ typedef struct ScanState
 typedef struct SeqScanState
 {
 	ScanState	ss;				/* its first field is NodeTag */
+	struct TableScanDescData *scandesc; /* current scan descriptor */
 	Size		pscan_len;		/* size of parallel heap scan descriptor */
 } SeqScanState;
 
@@ -1584,6 +1583,7 @@ typedef struct SeqScanState
 typedef struct SampleScanState
 {
 	ScanState	ss;
+	struct TableScanDescData *scandesc; /* current scan descriptor */
 	List	   *args;			/* expr states for TABLESAMPLE params */
 	ExprState  *repeatable;		/* expr state for REPEATABLE expr */
 	/* use struct pointer to avoid including tsmapi.h here */
@@ -1770,11 +1770,8 @@ typedef enum
 /* ----------------
  *	 ParallelBitmapHeapState information
  *		tbmiterator				iterator for scanning current pages
- *		prefetch_iterator		iterator for prefetching ahead of current page
  *		mutex					mutual exclusion for the prefetching variable
  *								and state
- *		prefetch_pages			# pages prefetch iterator is ahead of current
- *		prefetch_target			current target prefetch distance
  *		state					current state of the TIDBitmap
  *		cv						conditional wait variable
  * ----------------
@@ -1782,10 +1779,7 @@ typedef enum
 typedef struct ParallelBitmapHeapState
 {
 	dsa_pointer tbmiterator;
-	dsa_pointer prefetch_iterator;
 	slock_t		mutex;
-	int			prefetch_pages;
-	int			prefetch_target;
 	SharedBitmapState state;
 	ConditionVariable cv;
 } ParallelBitmapHeapState;
@@ -1793,46 +1787,35 @@ typedef struct ParallelBitmapHeapState
 /* ----------------
  *	 BitmapHeapScanState information
  *
+ *      scandesc		   current scan descriptor for scan (NULL if none)
  *		bitmapqualorig	   execution state for bitmapqualorig expressions
  *		tbm				   bitmap obtained from child index scan(s)
- *		tbmiterator		   iterator for scanning current pages
- *		tbmres			   current-page data
- *		pvmbuffer		   buffer for visibility-map lookups of prefetched pages
  *		exact_pages		   total number of exact pages retrieved
  *		lossy_pages		   total number of lossy pages retrieved
- *		prefetch_iterator  iterator for prefetching ahead of current page
- *		prefetch_pages	   # pages prefetch iterator is ahead of current
- *		prefetch_target    current target prefetch distance
- *		prefetch_maximum   maximum value for prefetch_target
  *		initialized		   is node is ready to iterate
- *		shared_tbmiterator	   shared iterator
- *		shared_prefetch_iterator shared iterator for prefetching
+ *		scan_in_progress   is this a rescan
  *		pstate			   shared state for parallel bitmap scan
+ *		recheck			   do current page's tuples need recheck
  * ----------------
  */
 typedef struct BitmapHeapScanState
 {
 	ScanState	ss;				/* its first field is NodeTag */
+	struct BitmapTableScanDesc *scandesc;
 	ExprState  *bitmapqualorig;
 	TIDBitmap  *tbm;
-	TBMIterator *tbmiterator;
-	TBMIterateResult *tbmres;
-	Buffer		pvmbuffer;
 	long		exact_pages;
 	long		lossy_pages;
-	TBMIterator *prefetch_iterator;
-	int			prefetch_pages;
-	int			prefetch_target;
-	int			prefetch_maximum;
 	bool		initialized;
-	TBMSharedIterator *shared_tbmiterator;
-	TBMSharedIterator *shared_prefetch_iterator;
+	bool		scan_in_progress;
 	ParallelBitmapHeapState *pstate;
+	bool		recheck;
 } BitmapHeapScanState;
 
 /* ----------------
  *	 TidScanState information
  *
+ *      scandesc	   current scan descriptor for scan (NULL if none)
  *		tidexprs	   list of TidExpr structs (see nodeTidscan.c)
  *		isCurrentOf    scan has a CurrentOfExpr qual
  *		NumTids		   number of tids in this scan
@@ -1843,6 +1826,7 @@ typedef struct BitmapHeapScanState
 typedef struct TidScanState
 {
 	ScanState	ss;				/* its first field is NodeTag */
+	struct TableScanDescData *scandesc;
 	List	   *tss_tidexprs;
 	bool		tss_isCurrentOf;
 	int			tss_NumTids;
@@ -1853,6 +1837,7 @@ typedef struct TidScanState
 /* ----------------
  *	 TidRangeScanState information
  *
+ *      scandesc			current scan descriptor for scan (NULL if none)
  *		trss_tidexprs		list of TidOpExpr structs (see nodeTidrangescan.c)
  *		trss_mintid			the lowest TID in the scan range
  *		trss_maxtid			the highest TID in the scan range
@@ -1862,6 +1847,7 @@ typedef struct TidScanState
 typedef struct TidRangeScanState
 {
 	ScanState	ss;				/* its first field is NodeTag */
+	struct TableScanDescData *scandesc;
 	List	   *trss_tidexprs;
 	ItemPointerData trss_mintid;
 	ItemPointerData trss_maxtid;

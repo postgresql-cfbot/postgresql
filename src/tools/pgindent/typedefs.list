@@ -261,12 +261,14 @@ BitmapAndPath
 BitmapAndState
 BitmapHeapPath
 BitmapHeapScan
+BitmapHeapScanDesc
 BitmapHeapScanState
 BitmapIndexScan
 BitmapIndexScanState
 BitmapOr
 BitmapOrPath
 BitmapOrState
+BitmapTableScanDesc
 Bitmapset
 Block
 BlockId
@@ -2795,6 +2797,7 @@ TAR_MEMBER
 TBMIterateResult
 TBMIteratingState
 TBMIterator
+TBMPrivateIterator
 TBMSharedIterator
 TBMSharedIteratorState
 TBMStatus

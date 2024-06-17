@@ -225,7 +225,6 @@ ExecInitBitmapIndexScan(BitmapIndexScan *node, EState *estate, int eflags)
 	 */
 
 	indexstate->ss.ss_currentRelation = NULL;
-	indexstate->ss.ss_currentScanDesc = NULL;
 
 	/*
 	 * Miscellaneous initialization

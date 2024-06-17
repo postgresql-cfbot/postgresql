@@ -57,7 +57,7 @@ SeqNext(SeqScanState *node)
 	/*
 	 * get information from the estate and scan state
 	 */
-	scandesc = node->ss.ss_currentScanDesc;
+	scandesc = node->scandesc;
 	estate = node->ss.ps.state;
 	direction = estate->es_direction;
 	slot = node->ss.ss_ScanTupleSlot;
@@ -71,7 +71,7 @@ SeqNext(SeqScanState *node)
 		scandesc = table_beginscan(node->ss.ss_currentRelation,
 								   estate->es_snapshot,
 								   0, NULL);
-		node->ss.ss_currentScanDesc = scandesc;
+		node->scandesc = scandesc;
 	}
 
 	/*
@@ -188,7 +188,7 @@ ExecEndSeqScan(SeqScanState *node)
 	/*
 	 * get information from node
 	 */
-	scanDesc = node->ss.ss_currentScanDesc;
+	scanDesc = node->scandesc;
 
 	/*
 	 * close heap scan
@@ -213,7 +213,7 @@ ExecReScanSeqScan(SeqScanState *node)
 {
 	TableScanDesc scan;
 
-	scan = node->ss.ss_currentScanDesc;
+	scan = node->scandesc;
 
 	if (scan != NULL)
 		table_rescan(scan,		/* scan desc */
@@ -264,7 +264,7 @@ ExecSeqScanInitializeDSM(SeqScanState *node,
 								  pscan,
 								  estate->es_snapshot);
 	shm_toc_insert(pcxt->toc, node->ss.ps.plan->plan_node_id, pscan);
-	node->ss.ss_currentScanDesc =
+	node->scandesc =
 		table_beginscan_parallel(node->ss.ss_currentRelation, pscan);
 }
 
@@ -280,7 +280,7 @@ ExecSeqScanReInitializeDSM(SeqScanState *node,
 {
 	ParallelTableScanDesc pscan;
 
-	pscan = node->ss.ss_currentScanDesc->rs_parallel;
+	pscan = node->scandesc->rs_parallel;
 	table_parallelscan_reinitialize(node->ss.ss_currentRelation, pscan);
 }
 
@@ -297,6 +297,6 @@ ExecSeqScanInitializeWorker(SeqScanState *node,
 	ParallelTableScanDesc pscan;
 
 	pscan = shm_toc_lookup(pwcxt->toc, node->ss.ps.plan->plan_node_id, false);
-	node->ss.ss_currentScanDesc =
+	node->scandesc =
 		table_beginscan_parallel(node->ss.ss_currentRelation, pscan);
 }

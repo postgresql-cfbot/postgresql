@@ -227,7 +227,7 @@ TidRangeNext(TidRangeScanState *node)
 	/*
 	 * extract necessary information from TID scan node
 	 */
-	scandesc = node->ss.ss_currentScanDesc;
+	scandesc = node->scandesc;
 	estate = node->ss.ps.state;
 	slot = node->ss.ss_ScanTupleSlot;
 	direction = estate->es_direction;
@@ -244,7 +244,7 @@ TidRangeNext(TidRangeScanState *node)
 												estate->es_snapshot,
 												&node->trss_mintid,
 												&node->trss_maxtid);
-			node->ss.ss_currentScanDesc = scandesc;
+			node->scandesc = scandesc;
 		}
 		else
 		{
@@ -326,7 +326,7 @@ ExecReScanTidRangeScan(TidRangeScanState *node)
 void
 ExecEndTidRangeScan(TidRangeScanState *node)
 {
-	TableScanDesc scan = node->ss.ss_currentScanDesc;
+	TableScanDesc scan = node->scandesc;
 
 	if (scan != NULL)
 		table_endscan(scan);
@@ -375,7 +375,7 @@ ExecInitTidRangeScan(TidRangeScan *node, EState *estate, int eflags)
 	currentRelation = ExecOpenScanRelation(estate, node->scan.scanrelid, eflags);
 
 	tidrangestate->ss.ss_currentRelation = currentRelation;
-	tidrangestate->ss.ss_currentScanDesc = NULL;	/* no table scan here */
+	tidrangestate->scandesc = NULL; /* no table scan here */
 
 	/*
 	 * get the scan type from the relation descriptor.

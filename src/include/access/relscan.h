@@ -16,6 +16,7 @@
 
 #include "access/htup_details.h"
 #include "access/itup.h"
+#include "nodes/tidbitmap.h"
 #include "port/atomics.h"
 #include "storage/buf.h"
 #include "storage/spin.h"
@@ -50,6 +51,23 @@ typedef struct TableScanDescData
 													 * information */
 } TableScanDescData;
 typedef struct TableScanDescData *TableScanDesc;
+
+typedef struct BitmapTableScanDesc
+{
+	Relation	rel;			/* heap relation descriptor */
+	struct SnapshotData *snapshot;	/* snapshot to see */
+
+	/*
+	 * Members common to Parallel and Serial BitmapTableScans
+	 */
+	TBMIterator iterator;
+
+	/*
+	 * Information about type and behaviour of the scan, a bitmask of members
+	 * of the ScanOptions enum (see tableam.h).
+	 */
+	uint32		flags;
+} BitmapTableScanDesc;
 
 /*
  * Shared state for parallel table scan.

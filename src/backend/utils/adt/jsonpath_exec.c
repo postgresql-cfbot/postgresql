@@ -2004,8 +2004,10 @@ executeAnyItem(JsonPathExecContext *cxt, JsonPathItem *jsp, JsonbContainer *jbc,
 					if (res == jperOk && !found)
 						break;
 				}
-				else if (found)
+				else if (found) {
 					JsonValueListAppend(found, copyJsonbValue(&v));
+					res = jperOk;
+				}
 				else
 					return jperOk;
 			}
@@ -2978,7 +2980,8 @@ getJsonPathItem(JsonPathExecContext *cxt, JsonPathItem *item,
 }
 
 /*
- * Returns the computed value of a JSON path variable with given name.
+ * Definition of JsonPathGetVarCallback for when JsonPathExecContext.vars
+ * is specified as a List value.
  */
 static JsonbValue *
 GetJsonPathVar(void *cxt, char *varName, int varNameLen,
@@ -3024,6 +3027,10 @@ GetJsonPathVar(void *cxt, char *varName, int varNameLen,
 	return result;
 }
 
+/*
+ * Definition of JsonPathCountVarsCallback for when JsonPathExecContext.vars
+ * is specified as a List value.
+ */
 static int
 CountJsonPathVars(void *cxt)
 {

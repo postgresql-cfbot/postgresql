@@ -1116,3 +1116,13 @@ SELECT
 	jsonb_path_query_first(s1.j, '$.s > $s', vars => s2.j) gt
 FROM str s1, str s2
 ORDER BY s1.num, s2.num;
+
+-- Test any key on arrays with and without unwrapping.
+select jsonb_path_query('{"a": [1,2,3], "b": [3,4,5]}', '$.*');
+select jsonb_path_query('[1,2,3]', '$.*');
+select jsonb_path_query('[1,2,3,{"b": [3,4,5]}]', '$.*');
+select jsonb_path_query('[1,2,3,{"b": [3,4,5]}]', 'strict $.*');
+select jsonb '{"a": [1,2,3], "b": [3,4,5]}' @? '$.*';
+select jsonb '[1,2,3]' @? '$.*';
+select jsonb '[1,2,3,{"b": [3,4,5]}]' @? '$.*';
+select jsonb '[1,2,3,{"b": [3,4,5]}]' @? 'strict $.*';

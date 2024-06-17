@@ -3682,6 +3682,56 @@ extern bool InjectionPointDetach(const char *name);
     </para>
    </sect2>
 
+   <sect2 id="xfunc-addin-custom-cumulative-statistics">
+    <title>Custom Cumulative Statistics</title>
+
+    <para>
+     Is is possible for add-ins written in C-language to use custom types
+     of statistics registered in the
+     <link linkend="monitoring-stats-setup">Cumulative Statistics System</link>.
+    </para>
+
+    <para>
+     First, define a <literal>PgStat_KindInfo</literal> that includes all
+     the information related to the custom type registered. For example:
+<programlisting>
+static const PgStat_KindInfo custom_stats = {
+    .name = "custom_stats",
+    .fixed_amount = false,
+    .shared_size = sizeof(PgStatShared_Custom),
+    .shared_data_off = offsetof(PgStatShared_Custom, stats),
+    .shared_data_len = sizeof(((PgStatShared_Custom *) 0)->stats),
+    .pending_size = sizeof(PgStat_StatCustomEntry),
+}
+</programlisting>
+
+    Then, each backend that needs to use this custom type needs to register
+    it with <literal>pgstat_add_kind</literal>, that returns a unique ID
+    used to store the entries related to this type of statistics:
+<programlisting>
+extern PgStat_Kind pgstat_add_kind(const PgStat_KindInfo *kind_info);
+</programlisting>
+    </para>
+
+    <para>
+     The details of the API for <literal>PgStat_KindInfo</literal> can
+     be found in <filename>src/include/utils/pgstat_internal.h</filename>.
+    </para>
+
+    <para>
+     The type of statistics registered is associated with a name and a unique
+     ID shared across the server in shared memory. Each backend using a
+     custom type of statistics maintains a local cache storing the information
+     of each PgStat_KindInfo.
+    </para>
+
+    <para>
+     An example describing how to register and use custom statistics can be
+     found in
+     <filename>src/test/modules/injection_points/injection_stats.c</filename>.
+    </para>
+   </sect2>
+
    <sect2 id="extend-cpp">
     <title>Using C++ for Extensibility</title>
 

@@ -6,6 +6,7 @@ endif
 
 injection_points_sources = files(
   'injection_points.c',
+  'injection_stats.c',
 )
 
 if host_system == 'windows'
@@ -36,5 +37,13 @@ tests += {
     'regress_args': ['--dlpath', meson.build_root() / 'src/test/regress'],
     # The injection points are cluster-wide, so disable installcheck
     'runningcheck': false,
+  },
+  'tap': {
+    'env': {
+      'enable_injection_points': get_option('injection_points') ? 'yes' : 'no',
+    },
+    'tests': [
+      't/001_stats.pl',
+    ],
   },
 }

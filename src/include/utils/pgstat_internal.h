@@ -503,6 +503,7 @@ static inline void *pgstat_get_entry_data(PgStat_Kind kind, PgStatShared_Common 
  */
 
 extern const PgStat_KindInfo *pgstat_get_kind_info(PgStat_Kind kind);
+extern PgStat_Kind pgstat_add_kind(const PgStat_KindInfo *kind_info);
 
 #ifdef USE_ASSERT_CHECKING
 extern void pgstat_assert_is_up(void);

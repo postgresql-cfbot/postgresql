@@ -66,5 +66,20 @@ SELECT injection_points_detach('TestConditionError');
 SELECT injection_points_attach('TestConditionLocal1', 'error');
 SELECT injection_points_detach('TestConditionLocal1');
 
+-- Statistics
+SELECT injection_points_stats_numcalls('TestConditionStats'); -- nothing
+SELECT injection_points_attach('TestConditionStats', 'notice');
+SELECT injection_points_stats_numcalls('TestConditionStats'); -- returns 0
+SELECT injection_points_run('TestConditionStats');
+SELECT injection_points_stats_numcalls('TestConditionStats'); -- returns 1
+-- Check transactions with stats snapshots
+BEGIN;
+SET stats_fetch_consistency TO snapshot;
+SELECT injection_points_stats_numcalls('TestConditionStats'); -- returns 1
+SELECT injection_points_run('TestConditionStats');
+SELECT injection_points_stats_numcalls('TestConditionStats'); -- still 1
+COMMIT;
+SELECT injection_points_stats_numcalls('TestConditionStats'); -- now 2
+SELECT injection_points_detach('TestConditionStats');
 DROP EXTENSION injection_points;
 DROP FUNCTION wait_pid;

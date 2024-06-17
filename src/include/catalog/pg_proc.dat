@@ -12185,4 +12185,23 @@
   proargnames => '{summarized_tli,summarized_lsn,pending_lsn,summarizer_pid}',
   prosrc => 'pg_get_wal_summarizer_state' },
 
+# Statistics Import
+{ oid => '8048',
+  descr => 'set statistics on relation',
+  proname => 'pg_set_relation_stats', provariadic => 'any',
+  proisstrict => 't', provolatile => 'v',
+  proparallel => 'u', prorettype => 'bool',
+  proargtypes => 'regclass int4 any',
+  proargnames => '{relation,version,stats}',
+  proargmodes => '{i,i,v}',
+  prosrc => 'pg_set_relation_stats' },
+{ oid => '8049',
+  descr => 'set statistics on attribute',
+  proname => 'pg_set_attribute_stats', provariadic => 'any',
+  proisstrict => 't', provolatile => 'v',
+  proparallel => 'u', prorettype => 'bool',
+  proargtypes => 'regclass name bool int4 any',
+  proargnames => '{relation,attname,inherited,version,stats}',
+  proargmodes => '{i,i,i,i,v}',
+  prosrc => 'pg_set_attribute_stats' },
 ]

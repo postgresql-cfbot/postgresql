@@ -75,6 +75,7 @@ main(int argc, char **argv)
 	static int	no_publications = 0;
 	static int	no_security_labels = 0;
 	static int	no_subscriptions = 0;
+	static int  no_statistics = 0;
 	static int	strict_names = 0;
 
 	struct option cmdopts[] = {
@@ -107,6 +108,7 @@ main(int argc, char **argv)
 		{"username", 1, NULL, 'U'},
 		{"verbose", 0, NULL, 'v'},
 		{"single-transaction", 0, NULL, '1'},
+		{"statistics-only", no_argument, NULL, 'P'},
 
 		/*
 		 * the following options don't have an equivalent short option letter
@@ -127,6 +129,7 @@ main(int argc, char **argv)
 		{"no-security-labels", no_argument, &no_security_labels, 1},
 		{"no-subscriptions", no_argument, &no_subscriptions, 1},
 		{"filter", required_argument, NULL, 4},
+		{"no-statistics", no_argument, &no_statistics, 1},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -270,6 +273,10 @@ main(int argc, char **argv)
 				opts->aclsSkip = 1;
 				break;
 
+			case 'X':			/* Restore statistics only */
+				opts->statisticsOnly = 1;
+				break;
+
 			case '1':			/* Restore data in a single transaction */
 				opts->single_txn = true;
 				opts->exit_on_error = true;
@@ -360,6 +367,10 @@ main(int argc, char **argv)
 	if (opts->single_txn && numWorkers > 1)
 		pg_fatal("cannot specify both --single-transaction and multiple jobs");
 
+	/* set derivative flags */
+	opts->dumpSchema = (opts->dataOnly != 1);
+	opts->dumpData = (opts->schemaOnly != 1);
+
 	opts->disable_triggers = disable_triggers;
 	opts->enable_row_security = enable_row_security;
 	opts->noDataForFailedTables = no_data_for_failed_tables;
@@ -370,6 +381,7 @@ main(int argc, char **argv)
 	opts->no_publications = no_publications;
 	opts->no_security_labels = no_security_labels;
 	opts->no_subscriptions = no_subscriptions;
+	opts->no_statistics = no_statistics;
 
 	if (if_exists && !opts->dropSchema)
 		pg_fatal("option --if-exists requires option -c/--clean");

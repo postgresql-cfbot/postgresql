@@ -46,14 +46,20 @@ command_fails_like(
 
 command_fails_like(
 	[ 'pg_dump', '-s', '-a' ],
-	qr/\Qpg_dump: error: options -s\/--schema-only and -a\/--data-only cannot be used together\E/,
-	'pg_dump: options -s/--schema-only and -a/--data-only cannot be used together'
+	qr/\Qpg_dump: error: options -s\/--schema-only, -a\/--data-only, and -X\/--statistics-only cannot be used together\E/,
+	'pg_dump: options -s/--schema-only, -a/--data-only, and -X/--statistics-only cannot be used together'
 );
 
 command_fails_like(
 	[ 'pg_dump', '-s', '--include-foreign-data=xxx' ],
 	qr/\Qpg_dump: error: options -s\/--schema-only and --include-foreign-data cannot be used together\E/,
 	'pg_dump: options -s/--schema-only and --include-foreign-data cannot be used together'
+);
+
+command_fails_like(
+	[ 'pg_dump', '--statistics-only', '--no-statistics' ],
+	qr/\Qpg_dump: error: options -X\/--statistics-only and --no-statistics cannot be used together\E/,
+	'pg_dump: options -X\/--statistics-only and --no-statistics cannot be used together'
 );
 
 command_fails_like(

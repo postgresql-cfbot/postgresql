@@ -127,4 +127,6 @@ extern StatisticExtInfo *choose_best_statistics(List *stats, char requiredkind,
 												int nclauses);
 extern HeapTuple statext_expressions_load(Oid stxoid, bool inh, int idx);
 
+extern Datum pg_set_relation_stats(PG_FUNCTION_ARGS);
+extern Datum pg_set_attribute_stats(PG_FUNCTION_ARGS);
 #endif							/* STATISTICS_H */

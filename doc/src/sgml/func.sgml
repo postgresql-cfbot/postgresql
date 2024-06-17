@@ -29632,6 +29632,273 @@ postgres=# SELECT '0/0'::pg_lsn + pd.segment_number * ps.setting::int + :offset 
     in identifying the specific disk files associated with database objects.
    </para>
 
+   <table id="functions-admin-statsimport">
+    <title>Database Object Statistics Import Functions</title>
+    <tgroup cols="1">
+     <thead>
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        Function
+       </para>
+       <para>
+        Description
+       </para></entry>
+      </row>
+     </thead>
+
+     <tbody>
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_set_relation_stats</primary>
+        </indexterm>
+        <function>pg_set_relation_stats</function> (
+         <parameter>relation</parameter> <type>regclass</type>,
+         <parameter>version</parameter> <type>integer</type>,
+         <literal>VARIADIC</literal> <parameter>stats</parameter> <type>"any"</type> )
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Updates the <structname>pg_class</structname> row for the specified
+        <parameter>relation</parameter>, values from the variadic list of
+        name-value pairs. Each parameter name corresponds to the same-named
+        attribute in <structname>pg_class</structname>:
+       </para>
+       <variablelist>
+        <varlistentry>
+         <term><literal>relpages</literal></term>
+         <listitem>
+          <para>
+           Must be followed by a parameter of type <type>integer</type>.
+           This parameter is currently required.
+          </para>
+         </listitem>
+        </varlistentry>
+        <varlistentry>
+         <term><literal>reltuples</literal></term>
+         <listitem>
+          <para>
+           Must be followed by a parameter of type <type>real</type>.
+           This parameter is currently required.
+          </para>
+         </listitem>
+        </varlistentry>
+        <varlistentry>
+         <term><literal>relalltuples</literal></term>
+         <listitem>
+          <para>
+           Must be followed by a parameter of type <type>integer</type>.
+           This parameter is currently required.
+          </para>
+         </listitem>
+        </varlistentry>
+       </variablelist>
+       <para>
+        Any other parameter names given must also have a value pair, but will emit
+        a warning and thereafter be ignored.
+       </para>
+       <para>
+        The <parameter>version</parameter> is meant to reflect the server version
+        number of the system where this data was generated, as that may in the
+        future change how the data is imported.
+       </para>
+       <para>
+        To avoid table bloat in <structname>pg_class</structname>, this change
+        is made with an in-place update, and therefore cannot be rolled back
+        through normal transaction processing.
+       </para>
+       <para>
+        This function mimics the behavior of <command>ANALYZE</command> in its
+        effects on the values in <structname>pg_class</structname>, except that
+        the values are supplied as parameters rather than derived from table
+        sampling.
+       </para>
+       <para>
+        The caller must either be the owner of the relation, or have superuser
+        privileges.
+       </para>
+       <para>
+        The parameters given are checked for type validity and must all be
+        NOT NULL.
+       </para>
+       <para>
+        The parameters will return true if stats were updated and false if not.
+       </para>
+       </entry>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_set_attribute_stats</primary>
+        </indexterm>
+        <function>pg_set_attribute_stats</function> (
+         <parameter>relation</parameter> <type>regclass</type>
+         , <parameter>attname</parameter> <type>name</type>
+         , <parameter>inherited</parameter> <type>boolean</type>
+         , <parameter>version</parameter> <type>integer</type>
+         , <literal>VARIADIC</literal> <parameter>stats</parameter> <type>"any"</type> )
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Replaces the <structname>pg_statistic</structname> row for the
+        <structname>pg_attribute</structname> row specified by
+        <parameter>relation</parameter>, <parameter>attname</parameter>
+        and <parameter>inherited</parameter>. The <parameter>version</parameter>
+        should be set to the server version number of the server where
+        the variadic <parameter>stats</parameter> originated, as it may in the
+        future affect how the stats are imported. Values from the variadic
+        list form name-value pairs. Each parameter name corresponds to the
+        same-named attribute in
+        <link linkend="view-pg-stats"><structname>pg_stats</structname></link>:
+       </para>
+       <variablelist>
+        <varlistentry>
+         <term><literal>null_frac</literal></term>
+         <listitem>
+          <para>
+           Must be followed by a parameter of type <type>real</type>.
+           This parameter is currently required.
+          </para>
+         </listitem>
+        </varlistentry>
+        <varlistentry>
+         <term><literal>avg_width</literal></term>
+         <listitem>
+          <para>
+           Must be followed by a parameter of type <type>integer</type>.
+           This parameter is currently required.
+          </para>
+         </listitem>
+        </varlistentry>
+        <varlistentry>
+         <term><literal>n_distinct</literal></term>
+         <listitem>
+          <para>
+           Must be followed by a parameter of type <type>real</type>.
+           This parameter is currently required.
+          </para>
+         </listitem>
+        </varlistentry>
+        <varlistentry>
+         <term><literal>most_common_vals</literal></term>
+         <listitem>
+          <para>
+          <literal>most_common_vals</literal>
+           Must be followed by a parameter of type <type>text</type>. If this
+           parameter is specified then <literal>most_common_freqs</literal>
+           must also be specified.
+          </para>
+         </listitem>
+        </varlistentry>
+        <varlistentry>
+         <term><literal>most_common_freqs</literal></term>
+         <listitem>
+          <para>
+           Must be followed by a parameter of <type>real[]</type>, and can only
+           be specified if <literal>most_common_vals</literal> is also specified.
+          </para>
+         </listitem>
+        </varlistentry>
+        <varlistentry>
+         <term><literal>histogram_bounds</literal></term>
+         <listitem>
+          <para>
+           Must be followed by a parameter of type <type>text</type>.
+          </para>
+         </listitem>
+        </varlistentry>
+        <varlistentry>
+         <term><literal>correlation</literal></term>
+         <listitem>
+          <para>
+           Must be followed by a parameter of type <type>real</type>.
+          </para>
+         </listitem>
+        </varlistentry>
+        <varlistentry>
+         <term><literal>most_common_elems</literal></term>
+         <listitem>
+          <para>
+           Must be followed by a parameter of type <type>text</type>. If this
+           parameter is specified then <literal>most_common_elem_freqs</literal>
+           must also be specified.
+          </para>
+         </listitem>
+        </varlistentry>
+        <varlistentry>
+         <term><literal>most_common_elem_freqs</literal></term>
+         <listitem>
+          <para>
+           Must be followed by a parameter of type <type>real[]</type>, and can
+           only be specified if <literal>most_common_elems</literal> is also
+           specified.
+          </para>
+         </listitem>
+        </varlistentry>
+        <varlistentry>
+         <term><literal>elem_count_histogram</literal></term>
+         <listitem>
+          <para>
+           Must be followed by a parameter of type <type>real[]</type>.
+          </para>
+         </listitem>
+        </varlistentry>
+        <varlistentry>
+         <term><literal>range_length_histogram</literal></term>
+         <listitem>
+          <para>
+           Must be followed by a parameter of type <type>text</type>. If this
+           parameter is specified then <literal>range_empty_frac</literal>
+           must also be specified.
+          </para>
+         </listitem>
+        </varlistentry>
+        <varlistentry>
+         <term><literal>range_empty_frac</literal></term>
+         <listitem>
+          <para>
+           Must be followed by a parameter of type <type>real</type>, and can
+           only be specified if <literal>range_length_histogram</literal>
+           is also specified.
+          </para>
+         </listitem>
+        </varlistentry>
+        <varlistentry>
+         <term><literal>range_bounds_histogram</literal></term>
+         <listitem>
+          <para>
+           Must be followed by a parameter of type <type>text</type>
+          </para>
+         </listitem>
+        </varlistentry>
+       </variablelist>
+       <para>
+        Any other parameter names given must also have a value pair, but will emit
+        a warning and thereafter be ignored.
+       </para>
+       <para>
+        The parameters will return true if stats were updated and false if not.
+       </para>
+       <para>
+        This function mimics the behavior of <command>ANALYZE</command> in its
+        effects on the values in <structname>pg_statistic</structname>, except
+        that the values are supplied as parameters rather than derived from
+        table sampling.
+       </para>
+       <para>
+        The purpose of this function is to apply statistics values in an
+        upgrade situation that are "good enough" for system operation until
+        they are replaced by the next <command>ANALYZE</command>, usually via
+        <command>autovacuum</command>.
+       </para>
+       <para>
+        The caller must either be the owner of the relation, or have superuser
+        privileges.
+       </para>
+       </entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
    <table id="functions-admin-dblocation">
     <title>Database Object Location Functions</title>
     <tgroup cols="1">

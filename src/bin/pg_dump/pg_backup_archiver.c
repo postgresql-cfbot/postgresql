@@ -2958,6 +2958,10 @@ _tocEntryRequired(TocEntry *te, teSection curSection, ArchiveHandle *AH)
 	if (ropt->no_subscriptions && strcmp(te->desc, "SUBSCRIPTION") == 0)
 		return 0;
 
+	/* If it's a stats dump, maybe ignore it */
+	if (ropt->no_statistics && strcmp(te->desc, "STATISTICS") == 0)
+		return 0;
+
 	/* Ignore it if section is not to be dumped/restored */
 	switch (curSection)
 	{
@@ -2987,6 +2991,7 @@ _tocEntryRequired(TocEntry *te, teSection curSection, ArchiveHandle *AH)
 	 */
 	if (strcmp(te->desc, "ACL") == 0 ||
 		strcmp(te->desc, "COMMENT") == 0 ||
+		strcmp(te->desc, "STATISTICS") == 0 ||
 		strcmp(te->desc, "SECURITY LABEL") == 0)
 	{
 		/* Database properties react to createDB, not selectivity options. */

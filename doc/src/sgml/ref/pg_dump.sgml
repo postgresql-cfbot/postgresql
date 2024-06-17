@@ -119,7 +119,7 @@ PostgreSQL documentation
       <term><option>--data-only</option></term>
       <listitem>
        <para>
-        Dump only the data, not the schema (data definitions).
+        Dump only the data, not the schema (data definitions) or statistics.
         Table data, large objects, and sequence values are dumped.
        </para>
 
@@ -137,8 +137,9 @@ PostgreSQL documentation
       <listitem>
        <para>
         Include large objects in the dump.  This is the default behavior
-        except when <option>--schema</option>, <option>--table</option>, or
-        <option>--schema-only</option> is specified.  The <option>-b</option>
+        except when <option>--schema</option>, <option>--table</option>,
+        <option>--schema-only</option>, or
+        <option>--statistics-only</option> is specified.  The <option>-b</option>
         switch is therefore only useful to add large objects to dumps
         where a specific schema or table has been requested.  Note that
         large objects are considered data and therefore will be included when
@@ -512,10 +513,11 @@ PostgreSQL documentation
       <term><option>--schema-only</option></term>
       <listitem>
        <para>
-        Dump only the object definitions (schema), not data.
+        Dump only the object definitions (schema), not data or statistics.
        </para>
        <para>
-        This option is the inverse of <option>--data-only</option>.
+        This option is mutually exclusive to <option>--data-only</option>
+        and <option>--statistics-only</option>.
         It is similar to, but for historical reasons not identical to,
         specifying
         <option>--section=pre-data --section=post-data</option>.
@@ -645,6 +647,18 @@ PostgreSQL documentation
        <para>
         Prevent dumping of access privileges (grant/revoke commands).
        </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-X</option></term>
+      <term><option>--statistics-only</option></term>
+      <listitem>
+       <para>
+        Dump only the statistics, not the schema (data definitions) or data.
+        Statistics for tables, materialized views, and indexes are dumped.
+       </para>
+
       </listitem>
      </varlistentry>
 
@@ -829,7 +843,8 @@ PostgreSQL documentation
         though you do not need the data in it.
        </para>
        <para>
-        To exclude data for all tables in the database, see <option>--schema-only</option>.
+        To exclude data for all tables in the database, see <option>--schema-only</option>
+        or <option>--statistics-only</option>.
        </para>
       </listitem>
      </varlistentry>
@@ -1082,6 +1097,15 @@ PostgreSQL documentation
       <listitem>
        <para>
         Do not dump security labels.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>--no-statistics</option></term>
+      <listitem>
+       <para>
+        Do not dump statistics.
        </para>
       </listitem>
      </varlistentry>

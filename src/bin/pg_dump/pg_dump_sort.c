@@ -1490,6 +1490,11 @@ describeDumpableObject(DumpableObject *obj, char *buf, int bufsize)
 					 "POST-DATA BOUNDARY  (ID %d)",
 					 obj->dumpId);
 			return;
+		case DO_REL_STATS:
+			snprintf(buf, bufsize,
+					 "RELATION STATISTICS FOR %s  (ID %d OID %u)",
+					 obj->name, obj->dumpId, obj->catId.oid);
+			return;
 	}
 	/* shouldn't get here */
 	snprintf(buf, bufsize,

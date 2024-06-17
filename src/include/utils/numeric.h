@@ -97,6 +97,8 @@ extern Numeric numeric_sub_opt_error(Numeric num1, Numeric num2,
 									 bool *have_error);
 extern Numeric numeric_mul_opt_error(Numeric num1, Numeric num2,
 									 bool *have_error);
+extern Numeric numeric_mul_karatsuba_opt_error(Numeric num1, Numeric num2,
+									 bool *have_error);
 extern Numeric numeric_div_opt_error(Numeric num1, Numeric num2,
 									 bool *have_error);
 extern Numeric numeric_mod_opt_error(Numeric num1, Numeric num2,

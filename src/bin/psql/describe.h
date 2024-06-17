@@ -64,6 +64,9 @@ extern bool listTSDictionaries(const char *pattern, bool verbose);
 /* \dFt */
 extern bool listTSTemplates(const char *pattern, bool verbose);
 
+/* \conninfo */
+extern bool listConnectionInformation(void);
+
 /* \l */
 extern bool listAllDbs(const char *pattern, bool verbose);
 

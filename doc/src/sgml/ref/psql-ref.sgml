@@ -1029,12 +1029,61 @@ INSERT INTO tbl1 VALUES ($1, $2) \bind 'first value' 'second value' \g
       </varlistentry>
 
       <varlistentry id="app-psql-meta-command-conninfo">
-        <term><literal>\conninfo</literal></term>
-        <listitem>
-        <para>
-        Outputs information about the current database connection.
-        </para>
-        </listitem>
+      <term><literal>\conninfo[+]</literal></term>
+      <listitem>
+      <para>
+      Outputs a string displaying information about the current
+      database connection. When <literal>+</literal> is appended,
+      more details about the connection are displayed in table
+      format:
+      <simplelist>
+      <member><literal>Database:</literal> The database name of the connection.</member>
+      <member><literal>Authenticated User:</literal> The authenticated database user of
+        the connection.</member>
+      <member><literal>Socket Directory:</literal> The Unix socket directory of the connection.
+        NULL if host or hostaddr are specified.</member>
+      <member><literal>Host:</literal> The host name or address of the connection. NULL if
+        a Unix socket is used.</member>
+      <member><literal>Server Port:</literal> The IP address of the connection. NULL if a
+        Unix socket is used.</member>
+      <member><literal>Server Address:</literal> The IP address of the host name. NULL if a
+        Unix socket is used.</member>
+      <member><literal>Client Address:</literal> The IP address of the client connected to
+        this backend. NULL if a Unix socket is used.</member>
+      <member><literal>Client Port:</literal> The port of the client connected to this
+        backend. NULL if a Unix socket is used.</member>
+      <member><literal>Backend PID:</literal> The process id of the backend for the
+        connection.</member>
+      <member><literal>System User:</literal> The authentication data provided for this
+        connection; see the <function>system_user()</function> function in
+        <xref linkend="functions-info-session-table"/> for more details.</member>
+      <member><literal>Current User:</literal> The user name of the current execution context;
+        see the <function>current_user()</function> function in
+        <xref linkend="functions-info-session-table"/> for more details.</member>
+      <member><literal>Session User:</literal> The session user's name;
+        see the <function>session_user()</function> function in
+        <xref linkend="functions-info-session-table"/> for more details.</member>
+      <member><literal>SSL Connection:</literal> True if the current connection to the server
+        uses SSL, and false otherwise.</member>
+      <member><literal>SSL Protocol:</literal> The name of the protocol used for the SSL
+        connection (e.g., TLSv1.0, TLSv1.1, TLSv1.2 or TLSv1.3).</member>
+      <member><literal>SSL Cipher:</literal> Displays the name of the cipher used for the SSL
+        connection (e.g., DHE-RSA-AES256-SHA).</member>
+      <member><literal>SLL Compression:</literal> On if SSL compression is in use, off if not,
+        or NULL if SSL is not in use on this connection.</member>
+      <member><literal>GSSAPI Authenticated:</literal> True if GSSAPI is in use, or false if
+        GSSAPI is not in use on this connection.</member>
+      <member><literal>GSSAPI Principal:</literal> "Principal" used to authenticate this
+        connection, or NULL if GSSAPI was not used to authenticate this connection. This
+        field is truncated if the principal is longer than NAMEDATALEN (64 characters in
+        a standard build).</member>
+      <member><literal>GSSAPI Encrypted:</literal> True if GSSAPI encryption is in use on
+        this connection, or false if encryption is not in use.</member>
+      <member><literal>GSSAPI Credentials Delegated:</literal> True if GSSAPI credentials
+        were delegated on this connection, or false if were not delegated.</member>
+      </simplelist>
+      </para>
+      </listitem>
       </varlistentry>
 
       <varlistentry id="app-psql-meta-commands-copy">

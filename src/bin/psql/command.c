@@ -68,7 +68,8 @@ static backslashResult exec_command_C(PsqlScanState scan_state, bool active_bran
 static backslashResult exec_command_connect(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_cd(PsqlScanState scan_state, bool active_branch,
 									   const char *cmd);
-static backslashResult exec_command_conninfo(PsqlScanState scan_state, bool active_branch);
+static backslashResult exec_command_conninfo(PsqlScanState scan_state, bool active_branch,
+											 const char *cmd);
 static backslashResult exec_command_copy(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_copyright(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_crosstabview(PsqlScanState scan_state, bool active_branch);
@@ -318,8 +319,8 @@ exec_command(const char *cmd,
 		status = exec_command_connect(scan_state, active_branch);
 	else if (strcmp(cmd, "cd") == 0)
 		status = exec_command_cd(scan_state, active_branch, cmd);
-	else if (strcmp(cmd, "conninfo") == 0)
-		status = exec_command_conninfo(scan_state, active_branch);
+	else if (strcmp(cmd, "conninfo") == 0 || strcmp(cmd, "conninfo+") == 0)
+		status = exec_command_conninfo(scan_state, active_branch, cmd);
 	else if (pg_strcasecmp(cmd, "copy") == 0)
 		status = exec_command_copy(scan_state, active_branch);
 	else if (strcmp(cmd, "copyright") == 0)
@@ -644,47 +645,66 @@ exec_command_cd(PsqlScanState scan_state, bool active_branch, const char *cmd)
 }
 
 /*
- * \conninfo -- display information about the current connection
+ * \conninfo, \conninfo+ -- display information about the current connection
  */
 static backslashResult
-exec_command_conninfo(PsqlScanState scan_state, bool active_branch)
+exec_command_conninfo(PsqlScanState scan_state, bool active_branch, const char *cmd)
 {
+	bool		success = true;
+
 	if (active_branch)
 	{
 		char	   *db = PQdb(pset.db);
+		bool		show_verbose;
 
-		if (db == NULL)
-			printf(_("You are currently not connected to a database.\n"));
+		show_verbose = strchr(cmd, '+') ? true : false;
+
+		/*
+		 * \conninfo+
+		 */
+		if (show_verbose)
+			success = listConnectionInformation();
+
+		/*
+		 * \conninfo
+		 */
 		else
 		{
-			char	   *host = PQhost(pset.db);
-			char	   *hostaddr = PQhostaddr(pset.db);
-
-			if (is_unixsock_path(host))
-			{
-				/* hostaddr overrides host */
-				if (hostaddr && *hostaddr)
-					printf(_("You are connected to database \"%s\" as user \"%s\" on address \"%s\" at port \"%s\".\n"),
-						   db, PQuser(pset.db), hostaddr, PQport(pset.db));
-				else
-					printf(_("You are connected to database \"%s\" as user \"%s\" via socket in \"%s\" at port \"%s\".\n"),
-						   db, PQuser(pset.db), host, PQport(pset.db));
-			}
+			if (db == NULL)
+				printf(_("You are currently not connected to a database.\n"));
 			else
 			{
-				if (hostaddr && *hostaddr && strcmp(host, hostaddr) != 0)
-					printf(_("You are connected to database \"%s\" as user \"%s\" on host \"%s\" (address \"%s\") at port \"%s\".\n"),
-						   db, PQuser(pset.db), host, hostaddr, PQport(pset.db));
+				char	   *host = PQhost(pset.db);
+				char	   *hostaddr = PQhostaddr(pset.db);
+
+				if (is_unixsock_path(host))
+				{
+					/* hostaddr overrides host */
+					if (hostaddr && *hostaddr)
+						printf(_("You are connected to database \"%s\" as user \"%s\" on address \"%s\" at port \"%s\".\n"),
+							   db, PQuser(pset.db), hostaddr, PQport(pset.db));
+					else
+						printf(_("You are connected to database \"%s\" as user \"%s\" via socket in \"%s\" at port \"%s\".\n"),
+							   db, PQuser(pset.db), host, PQport(pset.db));
+				}
 				else
-					printf(_("You are connected to database \"%s\" as user \"%s\" on host \"%s\" at port \"%s\".\n"),
-						   db, PQuser(pset.db), host, PQport(pset.db));
+				{
+					if (hostaddr && *hostaddr && strcmp(host, hostaddr) != 0)
+						printf(_("You are connected to database \"%s\" as user \"%s\" on host \"%s\" (address \"%s\") at port \"%s\".\n"),
+							   db, PQuser(pset.db), host, hostaddr, PQport(pset.db));
+					else
+						printf(_("You are connected to database \"%s\" as user \"%s\" on host \"%s\" at port \"%s\".\n"),
+							   db, PQuser(pset.db), host, PQport(pset.db));
+				}
+				printSSLInfo();
+				printGSSInfo();
 			}
-			printSSLInfo();
-			printGSSInfo();
 		}
 	}
+	else
+		ignore_slash_options(scan_state);
 
-	return PSQL_CMD_SKIP_LINE;
+	return success ? PSQL_CMD_SKIP_LINE : PSQL_CMD_ERROR;
 }
 
 /*

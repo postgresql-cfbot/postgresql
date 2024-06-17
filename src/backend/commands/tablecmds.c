@@ -199,6 +199,7 @@ typedef struct AlteredTableInfo
 	/* Objects to rebuild after completing ALTER TYPE operations */
 	List	   *changedConstraintOids;	/* OIDs of constraints to rebuild */
 	List	   *changedConstraintDefs;	/* string definitions of same */
+	bool		verify_new_collation; /* T if we need recheck the new collation */
 	List	   *changedIndexOids;	/* OIDs of indexes to rebuild */
 	List	   *changedIndexDefs;	/* string definitions of same */
 	char	   *replicaIdentityIndex;	/* index to reset as REPLICA IDENTITY */
@@ -573,12 +574,13 @@ static void ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab,
 								   LOCKMODE lockmode);
 static void ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId,
 								 char *cmd, List **wqueue, LOCKMODE lockmode,
-								 bool rewrite);
+								 bool rewrite,
+								 bool verify_new_collation);
 static void RebuildConstraintComment(AlteredTableInfo *tab, AlterTablePass pass,
 									 Oid objid, Relation rel, List *domname,
 									 const char *conname);
 static void TryReuseIndex(Oid oldId, IndexStmt *stmt);
-static void TryReuseForeignKey(Oid oldId, Constraint *con);
+static void TryReuseForeignKey(Oid oldId, Constraint *con, bool verify_new_collation);
 static ObjectAddress ATExecAlterColumnGenericOptions(Relation rel, const char *colName,
 													 List *options, LOCKMODE lockmode);
 static void change_owner_fix_column_acls(Oid relationOid,
@@ -9892,6 +9894,15 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		}
 		if (old_check_ok)
 		{
+			/*
+			 * collation_recheck is true then we need to
+			 * revalidate the foreign key and primary key value ties.
+			 * see also TryReuseForeignKey.
+			*/
+			old_check_ok = !fkconstraint->collation_recheck;
+		}
+		if (old_check_ok)
+		{
 			Oid			old_fktype;
 			Oid			new_fktype;
 			CoercionPathType old_pathtype;
@@ -9935,10 +9946,6 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			 * the foreign side necessarily exist on the primary side and in
 			 * turn conform to the domain.  Consequently, we need not treat
 			 * domains specially here.
-			 *
-			 * Since we require that all collations share the same notion of
-			 * equality (which they do, because texteq reduces to bitwise
-			 * equality), we don't compare collation here.
 			 *
 			 * We need not directly consider the PK type.  It's necessarily
 			 * binary coercible to the opcintype of the unique index column,
@@ -13069,6 +13076,29 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 	/* And the collation */
 	targetcollid = GetColumnDefCollation(NULL, def, targettype);
 
+	if (OidIsValid(targetcollid))
+	{
+		Oid			typid;
+		int32		typmod;
+		Oid			source_collid;
+
+		get_atttypetypmodcoll(RelationGetRelid(tab->rel), attnum,
+							&typid, &typmod, &source_collid);
+		/*
+		* All deterministic collations use bitwise equality to resolve
+		* PK-FK ties. But if the primary key (source) collation was indeterministic,
+		* and ALTER COLUMN .. SET DATA TYPE changes the primary key collation, then
+		* we must re-check the PK-FK ties, because some references
+		* that used to be "equal" may not be anymore.
+		* We add a flag in AlteredTableInfo to signify
+		* that we need to verify the new collation for PK-FK ties.
+		* see ATAddForeignKeyConstraint also.
+		*/
+		if (OidIsValid(source_collid) &&
+				!get_collation_isdeterministic(source_collid) &&
+				(targetcollid != source_collid))
+			tab->verify_new_collation = true;
+	}
 	/*
 	 * If there is a default expression for the column, get it and ensure we
 	 * can coerce it to the new datatype.  (We must do this before changing
@@ -13776,7 +13806,8 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 
 		ATPostAlterTypeParse(oldId, relid, confrelid,
 							 (char *) lfirst(def_item),
-							 wqueue, lockmode, tab->rewrite);
+							 wqueue, lockmode, tab->rewrite,
+							 tab->verify_new_collation);
 	}
 	forboth(oid_item, tab->changedIndexOids,
 			def_item, tab->changedIndexDefs)
@@ -13787,7 +13818,8 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 		relid = IndexGetRelation(oldId, false);
 		ATPostAlterTypeParse(oldId, relid, InvalidOid,
 							 (char *) lfirst(def_item),
-							 wqueue, lockmode, tab->rewrite);
+							 wqueue, lockmode, tab->rewrite,
+							 tab->verify_new_collation);
 
 		ObjectAddressSet(obj, RelationRelationId, oldId);
 		add_exact_object_address(&obj, objects);
@@ -13803,7 +13835,8 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 		relid = StatisticsGetRelation(oldId, false);
 		ATPostAlterTypeParse(oldId, relid, InvalidOid,
 							 (char *) lfirst(def_item),
-							 wqueue, lockmode, tab->rewrite);
+							 wqueue, lockmode, tab->rewrite,
+							 tab->verify_new_collation);
 
 		ObjectAddressSet(obj, StatisticExtRelationId, oldId);
 		add_exact_object_address(&obj, objects);
@@ -13866,7 +13899,8 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
  */
 static void
 ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, char *cmd,
-					 List **wqueue, LOCKMODE lockmode, bool rewrite)
+					 List **wqueue, LOCKMODE lockmode, bool rewrite,
+					 bool verify_new_collation)
 {
 	List	   *raw_parsetree_list;
 	List	   *querytree_list;
@@ -13993,7 +14027,7 @@ ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, char *cmd,
 					/* rewriting neither side of a FK */
 					if (con->contype == CONSTR_FOREIGN &&
 						!rewrite && tab->rewrite == 0)
-						TryReuseForeignKey(oldId, con);
+						TryReuseForeignKey(oldId, con, verify_new_collation);
 					con->reset_default_tblspc = true;
 					cmd->subtype = AT_ReAddConstraint;
 					tab->subcmds[AT_PASS_OLD_CONSTR] =
@@ -14153,7 +14187,7 @@ TryReuseIndex(Oid oldId, IndexStmt *stmt)
  * this constraint can be skipped.
  */
 static void
-TryReuseForeignKey(Oid oldId, Constraint *con)
+TryReuseForeignKey(Oid oldId, Constraint *con, bool verify_new_collation)
 {
 	HeapTuple	tup;
 	Datum		adatum;
@@ -14185,6 +14219,9 @@ TryReuseForeignKey(Oid oldId, Constraint *con)
 		con->old_conpfeqop = lappend_oid(con->old_conpfeqop, rawarr[i]);
 
 	ReleaseSysCache(tup);
+
+	/* verify_new_collation is computed at ATExecAlterColumnType */
+	con->collation_recheck = verify_new_collation;
 }
 
 /*

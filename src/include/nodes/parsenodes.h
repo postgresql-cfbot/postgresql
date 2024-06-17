@@ -2773,7 +2773,8 @@ typedef struct Constraint
 	List	   *old_conpfeqop;	/* pg_constraint.conpfeqop of my former self */
 	Oid			old_pktable_oid;	/* pg_constraint.confrelid of my former
 									 * self */
-
+	bool		collation_recheck; /* does primary key columns collation changes need
+									* foreign key constraint recheck */
 	ParseLoc	location;		/* token location, or -1 if unknown */
 } Constraint;
 

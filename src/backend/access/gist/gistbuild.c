@@ -36,17 +36,27 @@
 
 #include "access/genam.h"
 #include "access/gist_private.h"
+#include "access/table.h"
 #include "access/tableam.h"
 #include "access/xloginsert.h"
+#include "catalog/index.h"
+#include "commands/vacuum.h"
 #include "miscadmin.h"
 #include "nodes/execnodes.h"
+#include "pgstat.h"
 #include "optimizer/optimizer.h"
 #include "storage/bufmgr.h"
 #include "storage/bulk_write.h"
-
+#include "tcop/tcopprot.h"		/* pgrminclude ignore */
 #include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/tuplesort.h"
+
+/* Magic numbers for parallel state sharing */
+#define PARALLEL_KEY_GIST_SHARED		UINT64CONST(0xB000000000000001)
+#define PARALLEL_KEY_QUERY_TEXT			UINT64CONST(0xB000000000000002)
+#define PARALLEL_KEY_WAL_USAGE			UINT64CONST(0xB000000000000003)
+#define PARALLEL_KEY_BUFFER_USAGE		UINT64CONST(0xB000000000000004)
 
 /* Step of index tuples for check whether to switch to buffering build mode */
 #define BUFFERING_MODE_SWITCH_CHECK_STEP 256
@@ -78,6 +88,106 @@ typedef enum
 	GIST_BUFFERING_ACTIVE,		/* in buffering build mode */
 } GistBuildMode;
 
+/*
+ * Status for index builds performed in parallel.  This is allocated in a
+ * dynamic shared memory segment.
+ */
+typedef struct GISTShared
+{
+	/*
+	 * These fields are not modified during the build.  They primarily exist
+	 * for the benefit of worker processes that need to create state
+	 * corresponding to that used by the leader.
+	 *
+	 * XXX nparticipants is the number or workers we expect to participage in
+	 * the build, possibly including the leader process.
+	 */
+	Oid			heaprelid;
+	Oid			indexrelid;
+	bool		isconcurrent;
+	int			nparticipants;
+
+	/* Parameters determined by the leader, passed to the workers. */
+	GistBuildMode buildMode;
+	int			freespace;
+
+	/*
+	 * workersdonecv is used to monitor the progress of workers.  All parallel
+	 * participants must indicate that they are done before leader can finish
+	 * building the index.
+	 */
+	ConditionVariable workersdonecv;
+
+	/*
+	 * mutex protects all fields before heapdesc.
+	 *
+	 * These fields contain status information of interest to GIST index
+	 * builds that must work just the same when an index is built in parallel.
+	 */
+	slock_t		mutex;
+
+	/*
+	 * Mutable state that is maintained by workers, and reported back to
+	 * leader at end of the scans.
+	 *
+	 * nparticipantsdone is number of worker processes finished.
+	 *
+	 * reltuples is the total number of input heap tuples.
+	 *
+	 * indtuples is the total number of tuples that made it into the index.
+	 */
+	int			nparticipantsdone;
+	double		reltuples;
+	double		indtuples;
+
+	/*
+	 * ParallelTableScanDescData data follows. Can't directly embed here, as
+	 * implementations of the parallel table scan desc interface might need
+	 * stronger alignment.
+	 */
+} GISTShared;
+
+/*
+ * Return pointer to a GISTShared's parallel table scan.
+ *
+ * c.f. shm_toc_allocate as to why BUFFERALIGN is used, rather than just
+ * MAXALIGN.
+ */
+#define ParallelTableScanFromGistShared(shared) \
+	(ParallelTableScanDesc) ((char *) (shared) + BUFFERALIGN(sizeof(GISTShared)))
+
+/*
+ * Status for leader in parallel index build.
+ */
+typedef struct GISTLeader
+{
+	/* parallel context itself */
+	ParallelContext *pcxt;
+
+	/*
+	 * nparticipants is the exact number of worker processes successfully
+	 * launched, plus one leader process if it participates as a worker (only
+	 * DISABLE_LEADER_PARTICIPATION builds avoid leader participating as a
+	 * worker).
+	 *
+	 * XXX Seems a bit redundant with nparticipants in GISTShared. Although
+	 * that is the expected number, this is what we actually got.
+	 */
+	int			nparticipants;
+
+	/*
+	 * Leader process convenience pointers to shared state (leader avoids TOC
+	 * lookups).
+	 *
+	 * GISTShared is the shared state for entire build. snapshot is the
+	 * snapshot used by the scan iff an MVCC snapshot is required.
+	 */
+	GISTShared *gistshared;
+	Snapshot	snapshot;
+	WalUsage   *walusage;
+	BufferUsage *bufferusage;
+} GISTLeader;
+
 /* Working state for gistbuild and its callback */
 typedef struct
 {
@@ -99,6 +209,14 @@ typedef struct
 	int64		indtuplesSize;	/* total size of all indexed tuples */
 	GISTBuildBuffers *gfbb;
 	HTAB	   *parentMap;
+
+	/*
+	 * gist_leader is only present when a parallel index build is performed,
+	 * and only in the leader process. (Actually, only the leader process has
+	 * a GISTBuildState.)
+	 */
+	bool		is_parallel;
+	GISTLeader *gist_leader;
 
 	/*
 	 * Extra data structures used during a sorting build.
@@ -148,6 +266,12 @@ static void gistBuildCallback(Relation index,
 							  bool *isnull,
 							  bool tupleIsAlive,
 							  void *state);
+static void gistBuildParallelCallback(Relation index,
+									  ItemPointer tid,
+									  Datum *values,
+									  bool *isnull,
+									  bool tupleIsAlive,
+									  void *state);
 static void gistBufferingBuildInsert(GISTBuildState *buildstate,
 									 IndexTuple itup);
 static bool gistProcessItup(GISTBuildState *buildstate, IndexTuple itup,
@@ -171,6 +295,18 @@ static void gistMemorizeAllDownlinks(GISTBuildState *buildstate,
 									 Buffer parentbuf);
 static BlockNumber gistGetParent(GISTBuildState *buildstate, BlockNumber child);
 
+/* parallel index builds */
+static void _gist_begin_parallel(GISTBuildState *buildstate, Relation heap, Relation index,
+								 bool isconcurrent, int request);
+static void _gist_end_parallel(GISTLeader *gistleader, GISTBuildState *state);
+static Size _gist_parallel_estimate_shared(Relation heap, Snapshot snapshot);
+static double _gist_parallel_heapscan(GISTBuildState *buildstate);
+static void _gist_leader_participate_as_worker(GISTBuildState *buildstate,
+											   Relation heap, Relation index);
+static void _gist_parallel_scan_and_build(GISTBuildState *buildstate,
+										  GISTShared *gistshared,
+										  Relation heap, Relation index,
+										  int workmem, bool progress);
 
 /*
  * Main entry point to GiST index build.
@@ -198,6 +334,10 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	buildstate.heaprel = heap;
 	buildstate.sortstate = NULL;
 	buildstate.giststate = initGISTstate(index);
+
+	/* assume serial build */
+	buildstate.is_parallel = false;
+	buildstate.gist_leader = NULL;
 
 	/*
 	 * Create a temporary memory context that is reset once for each tuple
@@ -309,37 +449,79 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 
 		END_CRIT_SECTION();
 
-		/* Scan the table, inserting all the tuples to the index. */
-		reltuples = table_index_build_scan(heap, index, indexInfo, true, true,
-										   gistBuildCallback,
-										   (void *) &buildstate, NULL);
+		/*
+		 * Attempt to launch parallel worker scan when required
+		 *
+		 * XXX plan_create_index_workers makes the number of workers dependent
+		 * on maintenance_work_mem, requiring 32MB for each worker. That makes
+		 * sense for btree, but maybe not for GIST (at least when not using
+		 * buffering)? So maybe make that somehow less strict, optionally?
+		 */
+		if (indexInfo->ii_ParallelWorkers > 0)
+			_gist_begin_parallel(&buildstate, heap,
+								 index, indexInfo->ii_Concurrent,
+								 indexInfo->ii_ParallelWorkers);
 
 		/*
-		 * If buffering was used, flush out all the tuples that are still in
-		 * the buffers.
+		 * If parallel build requested and at least one worker process was
+		 * successfully launched, set up coordination state, wait for workers
+		 * to complete and end the parallel build.
+		 *
+		 * In serial mode, simply scan the table and build the index one index
+		 * tuple at a time.
 		 */
-		if (buildstate.buildMode == GIST_BUFFERING_ACTIVE)
+		if (buildstate.gist_leader)
 		{
-			elog(DEBUG1, "all tuples processed, emptying buffers");
-			gistEmptyAllBuffers(&buildstate);
-			gistFreeBuildBuffers(buildstate.gfbb);
+			/* scan the relation and wait for parallel workers to finish */
+			reltuples = _gist_parallel_heapscan(&buildstate);
+
+			_gist_end_parallel(buildstate.gist_leader, &buildstate);
+
+			/*
+			 * We didn't write WAL records as we built the index, so if WAL-logging is
+			 * required, write all pages to the WAL now.
+			 */
+			if (RelationNeedsWAL(index))
+			{
+				log_newpage_range(index, MAIN_FORKNUM,
+								  0, RelationGetNumberOfBlocks(index),
+								  true);
+			}
 		}
-
-		/*
-		 * We didn't write WAL records as we built the index, so if
-		 * WAL-logging is required, write all pages to the WAL now.
-		 */
-		if (RelationNeedsWAL(index))
+		else
 		{
-			log_newpage_range(index, MAIN_FORKNUM,
-							  0, RelationGetNumberOfBlocks(index),
-							  true);
+			/* Scan the table, inserting all the tuples to the index. */
+			reltuples = table_index_build_scan(heap, index, indexInfo, true, true,
+											   gistBuildCallback,
+											   (void *) &buildstate, NULL);
+
+			/*
+			 * If buffering was used, flush out all the tuples that are still
+			 * in the buffers.
+			 */
+			if (buildstate.buildMode == GIST_BUFFERING_ACTIVE)
+			{
+				elog(DEBUG1, "all tuples processed, emptying buffers");
+				gistEmptyAllBuffers(&buildstate);
+				gistFreeBuildBuffers(buildstate.gfbb);
+			}
+
+			/*
+			 * We didn't write WAL records as we built the index, so if
+			 * WAL-logging is required, write all pages to the WAL now.
+			 */
+			if (RelationNeedsWAL(index))
+			{
+				log_newpage_range(index, MAIN_FORKNUM,
+								  0, RelationGetNumberOfBlocks(index),
+								  true);
+			}
+
+			/* okay, all heap tuples are indexed */
+			MemoryContextSwitchTo(oldcxt);
+			MemoryContextDelete(buildstate.giststate->tempCxt);
 		}
 	}
-
-	/* okay, all heap tuples are indexed */
-	MemoryContextSwitchTo(oldcxt);
-	MemoryContextDelete(buildstate.giststate->tempCxt);
 
 	freeGISTstate(buildstate.giststate);
 
@@ -861,7 +1043,7 @@ gistBuildCallback(Relation index,
 		 * locked, we call gistdoinsert directly.
 		 */
 		gistdoinsert(index, itup, buildstate->freespace,
-					 buildstate->giststate, buildstate->heaprel, true);
+					 buildstate->giststate, buildstate->heaprel, true, false);
 	}
 
 	MemoryContextSwitchTo(oldCtx);
@@ -898,6 +1080,48 @@ gistBuildCallback(Relation index,
 		 */
 		gistInitBuffering(buildstate);
 	}
+}
+
+/*
+ * Per-tuple callback for table_index_build_scan.
+ *
+ * XXX Almost the same as gistBuildCallback, but with is_build=false when
+ * calling gistdoinsert. Otherwise we get assert failures due to workers
+ * modifying the index concurrently.
+ */
+static void
+gistBuildParallelCallback(Relation index,
+						  ItemPointer tid,
+						  Datum *values,
+						  bool *isnull,
+						  bool tupleIsAlive,
+						  void *state)
+{
+	GISTBuildState *buildstate = (GISTBuildState *) state;
+	IndexTuple	itup;
+	MemoryContext oldCtx;
+
+	oldCtx = MemoryContextSwitchTo(buildstate->giststate->tempCxt);
+
+	/* form an index tuple and point it at the heap tuple */
+	itup = gistFormTuple(buildstate->giststate, index,
+						 values, isnull,
+						 true);
+	itup->t_tid = *tid;
+
+	/* Update tuple count and total size. */
+	buildstate->indtuples += 1;
+	buildstate->indtuplesSize += IndexTupleSize(itup);
+
+	/*
+	 * There's no buffers (yet). Since we already have the index relation
+	 * locked, we call gistdoinsert directly.
+	 */
+	gistdoinsert(index, itup, buildstate->freespace,
+				 buildstate->giststate, buildstate->heaprel, true, true);
+
+	MemoryContextSwitchTo(oldCtx);
+	MemoryContextReset(buildstate->giststate->tempCxt);
 }
 
 /*
@@ -1068,7 +1292,8 @@ gistbufferinginserttuples(GISTBuildState *buildstate, Buffer buffer, int level,
 							   InvalidBuffer,
 							   &splitinfo,
 							   false,
-							   buildstate->heaprel, true);
+							   buildstate->heaprel, true,
+							   buildstate->is_parallel);
 
 	/*
 	 * If this is a root split, update the root path item kept in memory. This
@@ -1576,4 +1801,440 @@ gistGetParent(GISTBuildState *buildstate, BlockNumber child)
 		elog(ERROR, "could not find parent of block %u in lookup table", child);
 
 	return entry->parentblkno;
+}
+
+/*
+ * Create parallel context, and launch workers for leader.
+ *
+ * buildstate argument should be initialized
+ *
+ * isconcurrent indicates if operation is CREATE INDEX CONCURRENTLY.
+ *
+ * request is the target number of parallel worker processes to launch.
+ *
+ * Sets buildstate's gistLeader, which caller must use to shut down parallel
+ * mode by passing it to _gist_end_parallel() at the very end of its index
+ * build.  If not even a single worker process can be launched, this is
+ * never set, and caller should proceed with a serial index build.
+ */
+static void
+_gist_begin_parallel(GISTBuildState *buildstate, Relation heap, Relation index,
+					 bool isconcurrent, int request)
+{
+	ParallelContext *pcxt;
+	int			nparticipants;
+	Snapshot	snapshot;
+	Size		estgistshared;
+	GISTShared *gistshared;
+	GISTLeader *gistleader = (GISTLeader *) palloc0(sizeof(GISTLeader));
+	WalUsage   *walusage;
+	BufferUsage *bufferusage;
+	bool		leaderparticipates = true;
+	int			querylen;
+
+#ifdef DISABLE_LEADER_PARTICIPATION
+	leaderparticipates = false;
+#endif
+
+	/*
+	 * Enter parallel mode, and create context for parallel build of GIST
+	 * index
+	 */
+	EnterParallelMode();
+	Assert(request > 0);
+	pcxt = CreateParallelContext("postgres", "_gist_parallel_build_main",
+								 request);
+
+	nparticipants = leaderparticipates ? request + 1 : request;
+
+	/*
+	 * Prepare for scan of the base relation.  In a normal index build, we use
+	 * SnapshotAny because we must retrieve all tuples and do our own time
+	 * qual checks (because we have to index RECENTLY_DEAD tuples).  In a
+	 * concurrent build, we take a regular MVCC snapshot and index whatever's
+	 * live according to that.
+	 */
+	if (!isconcurrent)
+		snapshot = SnapshotAny;
+	else
+		snapshot = RegisterSnapshot(GetTransactionSnapshot());
+
+	/*
+	 * Estimate size for our own PARALLEL_KEY_GIST_SHARED workspace.
+	 */
+	estgistshared = _gist_parallel_estimate_shared(heap, snapshot);
+	shm_toc_estimate_chunk(&pcxt->estimator, estgistshared);
+
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+
+	/*
+	 * Estimate space for WalUsage and BufferUsage -- PARALLEL_KEY_WAL_USAGE
+	 * and PARALLEL_KEY_BUFFER_USAGE.
+	 *
+	 * If there are no extensions loaded that care, we could skip this.  We
+	 * have no way of knowing whether anyone's looking at pgWalUsage or
+	 * pgBufferUsage, so do it unconditionally.
+	 */
+	shm_toc_estimate_chunk(&pcxt->estimator,
+						   mul_size(sizeof(WalUsage), pcxt->nworkers));
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+	shm_toc_estimate_chunk(&pcxt->estimator,
+						   mul_size(sizeof(BufferUsage), pcxt->nworkers));
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+
+	/* Finally, estimate PARALLEL_KEY_QUERY_TEXT space */
+	if (debug_query_string)
+	{
+		querylen = strlen(debug_query_string);
+		shm_toc_estimate_chunk(&pcxt->estimator, querylen + 1);
+		shm_toc_estimate_keys(&pcxt->estimator, 1);
+	}
+	else
+		querylen = 0;			/* keep compiler quiet */
+
+	/* Everyone's had a chance to ask for space, so now create the DSM */
+	InitializeParallelDSM(pcxt);
+
+	/* If no DSM segment was available, back out (do serial build) */
+	if (pcxt->seg == NULL)
+	{
+		if (IsMVCCSnapshot(snapshot))
+			UnregisterSnapshot(snapshot);
+		DestroyParallelContext(pcxt);
+		ExitParallelMode();
+		return;
+	}
+
+	/* Store shared build state, for which we reserved space */
+	gistshared = (GISTShared *) shm_toc_allocate(pcxt->toc, estgistshared);
+	/* Initialize immutable state */
+	gistshared->heaprelid = RelationGetRelid(heap);
+	gistshared->indexrelid = RelationGetRelid(index);
+	gistshared->isconcurrent = isconcurrent;
+	gistshared->nparticipants = nparticipants;
+
+	/* */
+	gistshared->buildMode = buildstate->buildMode;
+	gistshared->freespace = buildstate->freespace;
+
+	ConditionVariableInit(&gistshared->workersdonecv);
+	SpinLockInit(&gistshared->mutex);
+
+	/* Initialize mutable state */
+	gistshared->nparticipantsdone = 0;
+	gistshared->reltuples = 0.0;
+	gistshared->indtuples = 0.0;
+
+	table_parallelscan_initialize(heap,
+								  ParallelTableScanFromGistShared(gistshared),
+								  snapshot);
+
+	/* Store shared state, for which we reserved space. */
+	shm_toc_insert(pcxt->toc, PARALLEL_KEY_GIST_SHARED, gistshared);
+
+	/* Store query string for workers */
+	if (debug_query_string)
+	{
+		char	   *sharedquery;
+
+		sharedquery = (char *) shm_toc_allocate(pcxt->toc, querylen + 1);
+		memcpy(sharedquery, debug_query_string, querylen + 1);
+		shm_toc_insert(pcxt->toc, PARALLEL_KEY_QUERY_TEXT, sharedquery);
+	}
+
+	/*
+	 * Allocate space for each worker's WalUsage and BufferUsage; no need to
+	 * initialize.
+	 */
+	walusage = shm_toc_allocate(pcxt->toc,
+								mul_size(sizeof(WalUsage), pcxt->nworkers));
+	shm_toc_insert(pcxt->toc, PARALLEL_KEY_WAL_USAGE, walusage);
+	bufferusage = shm_toc_allocate(pcxt->toc,
+								   mul_size(sizeof(BufferUsage), pcxt->nworkers));
+	shm_toc_insert(pcxt->toc, PARALLEL_KEY_BUFFER_USAGE, bufferusage);
+
+	/* Launch workers, saving status for leader/caller */
+	LaunchParallelWorkers(pcxt);
+	gistleader->pcxt = pcxt;
+	gistleader->nparticipants = pcxt->nworkers_launched;
+	if (leaderparticipates)
+		gistleader->nparticipants++;
+	gistleader->gistshared = gistshared;
+	gistleader->snapshot = snapshot;
+	gistleader->walusage = walusage;
+	gistleader->bufferusage = bufferusage;
+
+	/* If no workers were successfully launched, back out (do serial build) */
+	if (pcxt->nworkers_launched == 0)
+	{
+		_gist_end_parallel(gistleader, NULL);
+		return;
+	}
+
+	/* Save leader state now that it's clear build will be parallel */
+	buildstate->is_parallel = true;
+	buildstate->gist_leader = gistleader;
+
+	/* Join heap scan ourselves */
+	if (leaderparticipates)
+		_gist_leader_participate_as_worker(buildstate, heap, index);
+
+	/*
+	 * Caller needs to wait for all launched workers when we return.  Make
+	 * sure that the failure-to-start case will not hang forever.
+	 */
+	WaitForParallelWorkersToAttach(pcxt);
+}
+
+/*
+ * Shut down workers, destroy parallel context, and end parallel mode.
+ */
+static void
+_gist_end_parallel(GISTLeader *gistleader, GISTBuildState *state)
+{
+	int			i;
+
+	/* Shutdown worker processes */
+	WaitForParallelWorkersToFinish(gistleader->pcxt);
+
+	/*
+	 * Next, accumulate WAL usage.  (This must wait for the workers to finish,
+	 * or we might get incomplete data.)
+	 */
+	for (i = 0; i < gistleader->pcxt->nworkers_launched; i++)
+		InstrAccumParallelQuery(&gistleader->bufferusage[i], &gistleader->walusage[i]);
+
+	/* Free last reference to MVCC snapshot, if one was used */
+	if (IsMVCCSnapshot(gistleader->snapshot))
+		UnregisterSnapshot(gistleader->snapshot);
+	DestroyParallelContext(gistleader->pcxt);
+	ExitParallelMode();
+}
+
+/*
+ * Within leader, wait for end of heap scan.
+ *
+ * When called, parallel heap scan started by _gist_begin_parallel() will
+ * already be underway within worker processes (when leader participates
+ * as a worker, we should end up here just as workers are finishing).
+ *
+ * Returns the total number of heap tuples scanned.
+ *
+ * FIXME Maybe needs to flush data if GIST_BUFFERING_ACTIVE, a bit like in
+ * the serial build?
+ */
+static double
+_gist_parallel_heapscan(GISTBuildState *state)
+{
+	GISTShared *gistshared = state->gist_leader->gistshared;
+	int			nparticipants;
+
+	nparticipants = state->gist_leader->nparticipants;
+	for (;;)
+	{
+		SpinLockAcquire(&gistshared->mutex);
+		if (gistshared->nparticipantsdone == nparticipants)
+		{
+			/* copy the data into leader state */
+			state->indtuples = gistshared->indtuples;
+
+			SpinLockRelease(&gistshared->mutex);
+			break;
+		}
+		SpinLockRelease(&gistshared->mutex);
+
+		ConditionVariableSleep(&gistshared->workersdonecv,
+							   WAIT_EVENT_PARALLEL_CREATE_INDEX_SCAN);
+	}
+
+	ConditionVariableCancelSleep();
+
+	return state->indtuples;
+}
+
+
+
+/*
+ * Returns size of shared memory required to store state for a parallel
+ * gist index build based on the snapshot its parallel scan will use.
+ */
+static Size
+_gist_parallel_estimate_shared(Relation heap, Snapshot snapshot)
+{
+	/* c.f. shm_toc_allocate as to why BUFFERALIGN is used */
+	return add_size(BUFFERALIGN(sizeof(GISTShared)),
+					table_parallelscan_estimate(heap, snapshot));
+}
+
+/*
+ * Within leader, participate as a parallel worker.
+ */
+static void
+_gist_leader_participate_as_worker(GISTBuildState *buildstate,
+								   Relation heap, Relation index)
+{
+	GISTLeader *gistleader = buildstate->gist_leader;
+	int			workmem;
+
+	/*
+	 * Might as well use reliable figure when doling out maintenance_work_mem
+	 * (when requested number of workers were not launched, this will be
+	 * somewhat higher than it is for other workers).
+	 */
+	workmem = maintenance_work_mem / gistleader->nparticipants;
+
+	/* Perform work common to all participants */
+	_gist_parallel_scan_and_build(buildstate, gistleader->gistshared,
+								  heap, index, workmem, true);
+}
+
+/*
+ * Perform a worker's portion of a parallel scan and insert.
+ *
+ * When this returns, workers are done, and need only release resources.
+ */
+static void
+_gist_parallel_scan_and_build(GISTBuildState *state,
+							  GISTShared *gistshared,
+							  Relation heap, Relation index,
+							  int workmem, bool progress)
+{
+	TableScanDesc scan;
+	double		reltuples;
+	IndexInfo  *indexInfo;
+	MemoryContext oldcxt = CurrentMemoryContext;
+
+	/* Join parallel scan */
+	indexInfo = BuildIndexInfo(index);
+	indexInfo->ii_Concurrent = gistshared->isconcurrent;
+
+	scan = table_beginscan_parallel(heap,
+									ParallelTableScanFromGistShared(gistshared));
+
+	reltuples = table_index_build_scan(heap, index, indexInfo, true, true,
+									   gistBuildParallelCallback, state, scan);
+
+	/*
+	 * If buffering was used, flush out all the tuples that are still in the
+	 * buffers.
+	 */
+	if (state->buildMode == GIST_BUFFERING_ACTIVE)
+	{
+		elog(DEBUG1, "all tuples processed, emptying buffers");
+		gistEmptyAllBuffers(state);
+		gistFreeBuildBuffers(state->gfbb);
+	}
+
+	/* okay, all heap tuples are indexed */
+	MemoryContextSwitchTo(oldcxt);
+	MemoryContextDelete(state->giststate->tempCxt);
+
+	/* FIXME Do we need to do something else with active buffering? */
+
+	/*
+	 * Done.  Record ambuild statistics.
+	 */
+	SpinLockAcquire(&gistshared->mutex);
+	gistshared->nparticipantsdone++;
+	gistshared->reltuples += reltuples;
+	gistshared->indtuples += state->indtuples;
+	SpinLockRelease(&gistshared->mutex);
+
+	/* Notify leader */
+	ConditionVariableSignal(&gistshared->workersdonecv);
+}
+
+/*
+ * Perform work within a launched parallel process.
+ */
+void
+_gist_parallel_build_main(dsm_segment *seg, shm_toc *toc)
+{
+	char	   *sharedquery;
+	GISTShared *gistshared;
+	GISTBuildState buildstate;
+	Relation	heapRel;
+	Relation	indexRel;
+	LOCKMODE	heapLockmode;
+	LOCKMODE	indexLockmode;
+	WalUsage   *walusage;
+	BufferUsage *bufferusage;
+	int			workmem;
+
+	/*
+	 * The only possible status flag that can be set to the parallel worker is
+	 * PROC_IN_SAFE_IC.
+	 */
+	Assert((MyProc->statusFlags == 0) ||
+		   (MyProc->statusFlags == PROC_IN_SAFE_IC));
+
+	/* Set debug_query_string for individual workers first */
+	sharedquery = shm_toc_lookup(toc, PARALLEL_KEY_QUERY_TEXT, true);
+	debug_query_string = sharedquery;
+
+	/* Report the query string from leader */
+	pgstat_report_activity(STATE_RUNNING, debug_query_string);
+
+	/* Look up GIST shared state */
+	gistshared = shm_toc_lookup(toc, PARALLEL_KEY_GIST_SHARED, false);
+
+	/* Open relations using lock modes known to be obtained by index.c */
+	if (!gistshared->isconcurrent)
+	{
+		heapLockmode = ShareLock;
+		indexLockmode = AccessExclusiveLock;
+	}
+	else
+	{
+		heapLockmode = ShareUpdateExclusiveLock;
+		indexLockmode = RowExclusiveLock;
+	}
+
+	/* Open relations within worker */
+	heapRel = table_open(gistshared->heaprelid, heapLockmode);
+	indexRel = index_open(gistshared->indexrelid, indexLockmode);
+
+	buildstate.indexrel = indexRel;
+	buildstate.heaprel = heapRel;
+	buildstate.sortstate = NULL;
+	buildstate.giststate = initGISTstate(indexRel);
+
+	buildstate.is_parallel = true;
+	buildstate.gist_leader = NULL;
+
+	/*
+	 * Create a temporary memory context that is reset once for each tuple
+	 * processed.  (Note: we don't bother to make this a child of the
+	 * giststate's scanCxt, so we have to delete it separately at the end.)
+	 */
+	buildstate.giststate->tempCxt = createTempGistContext();
+
+	/* FIXME */
+	buildstate.buildMode = gistshared->buildMode;
+	buildstate.freespace = gistshared->freespace;
+
+	buildstate.indtuples = 0;
+	buildstate.indtuplesSize = 0;
+
+	/* Prepare to track buffer usage during parallel execution */
+	InstrStartParallelQuery();
+
+	/*
+	 * Might as well use reliable figure when doling out maintenance_work_mem
+	 * (when requested number of workers were not launched, this will be
+	 * somewhat higher than it is for other workers).
+	 */
+	workmem = maintenance_work_mem / gistshared->nparticipants;
+
+	_gist_parallel_scan_and_build(&buildstate, gistshared,
+								  heapRel, indexRel, workmem, false);
+
+	/* Report WAL/buffer usage during parallel execution */
+	bufferusage = shm_toc_lookup(toc, PARALLEL_KEY_BUFFER_USAGE, false);
+	walusage = shm_toc_lookup(toc, PARALLEL_KEY_WAL_USAGE, false);
+	InstrEndParallelQuery(&bufferusage[ParallelWorkerNumber],
+						  &walusage[ParallelWorkerNumber]);
+
+	index_close(indexRel, indexLockmode);
+	table_close(heapRel, heapLockmode);
 }

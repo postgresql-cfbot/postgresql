@@ -5733,12 +5733,13 @@ rlocator_comparator(const void *p1, const void *p2)
 uint32
 LockBufHdr(BufferDesc *desc)
 {
-	SpinDelayStatus delayStatus;
 	uint32		old_buf_state;
 
 	Assert(!BufferIsLocal(BufferDescriptorGetBuffer(desc)));
 
-	init_local_spin_delay(&delayStatus);
+	VerifyNoSpinLocksHeld(true);
+
+	spinlock_local_prepare_spin();
 
 	while (true)
 	{
@@ -5747,9 +5748,9 @@ LockBufHdr(BufferDesc *desc)
 		/* if it wasn't set before we're OK */
 		if (!(old_buf_state & BM_LOCKED))
 			break;
-		perform_spin_delay(&delayStatus);
+		spinlock_perform_delay();
 	}
-	finish_spin_delay(&delayStatus);
+	spinlock_finish_spin();
 	return old_buf_state | BM_LOCKED;
 }
 
@@ -5763,20 +5764,21 @@ LockBufHdr(BufferDesc *desc)
 static uint32
 WaitBufHdrUnlocked(BufferDesc *buf)
 {
-	SpinDelayStatus delayStatus;
 	uint32		buf_state;
 
-	init_local_spin_delay(&delayStatus);
+	spinlock_local_prepare_spin();
 
 	buf_state = pg_atomic_read_u32(&buf->state);
 
 	while (buf_state & BM_LOCKED)
 	{
-		perform_spin_delay(&delayStatus);
+		spinlock_perform_delay();
 		buf_state = pg_atomic_read_u32(&buf->state);
 	}
 
-	finish_spin_delay(&delayStatus);
+	spinlock_finish_spin();
+
+	spinlock_finish_release();
 
 	return buf_state;
 }

@@ -2708,7 +2708,7 @@ SpGistSearchItem
 SpGistState
 SpGistTypeDesc
 SpecialJoinInfo
-SpinDelayStatus
+SpinLockStatus
 SplitInterval
 SplitLR
 SplitPageLayout

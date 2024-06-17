@@ -108,6 +108,13 @@ extern PGDLLIMPORT volatile uint32 CritSectionCount;
 /* in tcop/postgres.c */
 extern void ProcessInterrupts(void);
 
+/* in storage/s_lock.h */
+#ifdef USE_ASSERT_CHECKING
+extern void VerifyNoSpinLocksHeld(bool check_in_panic);
+#else
+#define VerifyNoSpinLocksHeld(check_in_panic) ((void) true)
+#endif
+
 /* Test whether an interrupt is pending */
 #ifndef WIN32
 #define INTERRUPTS_PENDING_CONDITION() \
@@ -118,9 +125,21 @@ extern void ProcessInterrupts(void);
 	 unlikely(InterruptPending))
 #endif
 
-/* Service interrupt, if one is pending and it's safe to service it now */
+/*
+ * Service interrupt, if one is pending and it's safe to service it now
+ *
+ * Spin lock doesn't have a overall infrastructure to release all the locks
+ * on ERROR. and ProcessInterrupts likely raises some ERROR or FATAL which
+ * makes the code jump to some other places, then spin lock is leaked.
+ * Let's make sure no spin lock can be held at this point.
+ *
+ * However it is possible that when a spin lock is being held, but it get a
+ * signal. The known signal handler quickdie needs using elog system so we
+ * need to telling this to spin lock detection system to bypass some check.
+ */
 #define CHECK_FOR_INTERRUPTS() \
 do { \
+	VerifyNoSpinLocksHeld(false); \
 	if (INTERRUPTS_PENDING_CONDITION()) \
 		ProcessInterrupts(); \
 } while(0)

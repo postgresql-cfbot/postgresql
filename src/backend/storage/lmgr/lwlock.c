@@ -873,19 +873,19 @@ LWLockWaitListLock(LWLock *lock)
 
 		/* and then spin without atomic operations until lock is released */
 		{
-			SpinDelayStatus delayStatus;
-
-			init_local_spin_delay(&delayStatus);
+			spinlock_local_prepare_spin();
 
 			while (old_state & LW_FLAG_LOCKED)
 			{
-				perform_spin_delay(&delayStatus);
+				spinlock_perform_delay();
 				old_state = pg_atomic_read_u32(&lock->state);
 			}
 #ifdef LWLOCK_STATS
 			delays += delayStatus.delays;
 #endif
-			finish_spin_delay(&delayStatus);
+			spinlock_finish_spin();
+
+			spinlock_finish_release();
 		}
 
 		/*
@@ -1179,6 +1179,12 @@ LWLockAcquire(LWLock *lock, LWLockMode mode)
 #endif
 
 	Assert(mode == LW_SHARED || mode == LW_EXCLUSIVE);
+
+	/*
+	 * Spin lock should not be held for a long time, but the time needed here
+	 * may be too long, so let make sure no spin lock is held now.
+	 */
+	VerifyNoSpinLocksHeld(true);
 
 	PRINT_LWDEBUG("LWLockAcquire", lock, mode);
 

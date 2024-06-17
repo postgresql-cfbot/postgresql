@@ -136,6 +136,7 @@ ArchiveOpts
 ArchiveShutdownCB
 ArchiveStartupCB
 ArchiveStreamState
+ArchiveType
 ArchiverOutput
 ArchiverStage
 ArrayAnalyzeExtraData
@@ -2448,6 +2449,8 @@ ResourceReleaseCallback
 ResourceReleaseCallbackItem
 ResourceReleasePhase
 ResourceReleasePriority
+RestoreModuleCallbacks
+RestoreModuleState
 RestoreOptions
 RestorePass
 RestrictInfo

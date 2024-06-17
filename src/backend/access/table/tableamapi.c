@@ -97,6 +97,11 @@ GetTableAmRoutine(Oid amhandler)
 	Assert(routine->scan_sample_next_block != NULL);
 	Assert(routine->scan_sample_next_tuple != NULL);
 
+	Assert(routine->tuple_modify_begin != NULL);
+	Assert(routine->tuple_modify_buffer_insert != NULL);
+	Assert(routine->tuple_modify_buffer_flush != NULL);
+	Assert(routine->tuple_modify_end != NULL);
+
 	return routine;
 }
 

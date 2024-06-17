@@ -21,17 +21,42 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#ifdef HAVE_COPYFILE_H
+#include <copyfile.h>
+#endif
+
 #include "common/file_utils.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "storage/copydir.h"
 #include "storage/fd.h"
+#include "utils/guc.h"
+
+/* GUCs */
+int			file_copy_method = FILE_COPY_METHOD_COPY;
+
+/*
+ * GUC support
+ */
+const struct config_enum_entry file_copy_method_options[] = {
+	{"copy", FILE_COPY_METHOD_COPY, false},
+#if defined(HAVE_COPYFILE) && defined(COPYFILE_CLONE_FORCE) || defined(HAVE_COPY_FILE_RANGE)
+	{"clone", FILE_COPY_METHOD_CLONE, false},
+#endif
+	{NULL, 0, false}
+};
+
+static void clone_file(const char *fromfile, const char *tofile);
 
 /*
  * copydir: copy a directory
  *
  * If recurse is false, subdirectories are ignored.  Anything that's not
  * a directory or a regular file is ignored.
+ *
+ * This function uses a file_copy_method GUC to determine copy method.
+ * Uses of this function must be documented in the list of places
+ * affected by this GUC.
  */
 void
 copydir(const char *fromdir, const char *todir, bool recurse)
@@ -71,7 +96,12 @@ copydir(const char *fromdir, const char *todir, bool recurse)
 				copydir(fromfile, tofile, true);
 		}
 		else if (xlde_type == PGFILETYPE_REG)
-			copy_file(fromfile, tofile);
+		{
+			if (file_copy_method == FILE_COPY_METHOD_CLONE)
+				clone_file(fromfile, tofile);
+			else
+				copy_file(fromfile, tofile);
+		}
 	}
 	FreeDir(xldir);
 
@@ -213,4 +243,70 @@ copy_file(const char *fromfile, const char *tofile)
 				 errmsg("could not close file \"%s\": %m", fromfile)));
 
 	pfree(buffer);
+}
+
+/*
+ * clone one file
+ */
+static void
+clone_file(const char *fromfile, const char *tofile)
+{
+#if defined(HAVE_COPYFILE) && defined(COPYFILE_CLONE_FORCE)
+	if (copyfile(fromfile, tofile, NULL, COPYFILE_CLONE_FORCE) < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not clone file \"%s\" to \"%s\": %m",
+						fromfile, tofile)));
+#elif defined(HAVE_COPY_FILE_RANGE)
+	int			srcfd;
+	int			dstfd;
+	ssize_t		nbytes;
+
+	srcfd = OpenTransientFile(fromfile, O_RDONLY | PG_BINARY);
+	if (srcfd < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not open file \"%s\": %m", fromfile)));
+
+	dstfd = OpenTransientFile(tofile, O_WRONLY | O_CREAT | O_EXCL | PG_BINARY);
+	if (dstfd < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not create file \"%s\": %m", tofile)));
+
+	do
+	{
+		/* If we got a cancel signal during the copy of the file, quit */
+		CHECK_FOR_INTERRUPTS();
+
+		/*
+		 * Don't copy too much at once, so we can check for interrupts from
+		 * time to time if this falls back to a slow copy.
+		 */
+		pgstat_report_wait_start(WAIT_EVENT_COPY_FILE_COPY);
+		nbytes = copy_file_range(srcfd, NULL, dstfd, NULL, 1024 * 1024, 0);
+		if (nbytes < 0 && errno != EINTR)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not clone file \"%s\" to \"%s\": %m",
+							fromfile, tofile)));
+		pgstat_report_wait_end();
+	}
+	while (nbytes != 0);
+
+	if (CloseTransientFile(dstfd) != 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not close file \"%s\": %m", tofile)));
+
+	if (CloseTransientFile(srcfd) != 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not close file \"%s\": %m", fromfile)));
+#else
+	/*
+	 * If there is no CLONE support, this function should not be called.
+	 */
+	pg_unreachable();
+#endif
 }

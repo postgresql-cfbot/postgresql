@@ -71,6 +71,7 @@
 #include "replication/slotsync.h"
 #include "replication/syncrep.h"
 #include "storage/bufmgr.h"
+#include "storage/copydir.h"
 #include "storage/large_object.h"
 #include "storage/pg_shmem.h"
 #include "storage/predicate.h"
@@ -491,6 +492,7 @@ extern const struct config_enum_entry archive_mode_options[];
 extern const struct config_enum_entry recovery_target_action_options[];
 extern const struct config_enum_entry wal_sync_method_options[];
 extern const struct config_enum_entry dynamic_shared_memory_options[];
+extern const struct config_enum_entry file_copy_method_options[];
 
 /*
  * GUC option variables that are exported from this module
@@ -4971,6 +4973,16 @@ struct config_enum ConfigureNamesEnum[] =
 		},
 		&shared_memory_type,
 		DEFAULT_SHARED_MEMORY_TYPE, shared_memory_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"file_copy_method", PGC_USERSET, RESOURCES_DISK,
+			gettext_noop("Selects the file copy method."),
+			NULL
+		},
+		&file_copy_method,
+		FILE_COPY_METHOD_COPY, file_copy_method_options,
 		NULL, NULL, NULL
 	},
 

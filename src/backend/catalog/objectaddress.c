@@ -4363,6 +4363,49 @@ pg_identify_object_as_address(PG_FUNCTION_ARGS)
 }
 
 /*
+ * SQL-level callable function to obtain the Access Control List (ACL)
+ * of a specified object, given its catalog OID and object OID.
+ */
+Datum
+pg_get_acl(PG_FUNCTION_ARGS)
+{
+	Oid			classId = PG_GETARG_OID(0);
+	Oid			objectId = PG_GETARG_OID(1);
+	Oid			catalogId = (classId == LargeObjectRelationId) ? LargeObjectMetadataRelationId : classId;
+	AttrNumber	Anum_oid = get_object_attnum_oid(catalogId);
+	AttrNumber	Anum_acl = get_object_attnum_acl(catalogId);
+	Relation	rel;
+	HeapTuple	tup;
+	Datum		datum;
+	bool		isnull;
+
+	/* for "pinned" items in pg_depend, return null */
+	if (!OidIsValid(classId) && !OidIsValid(objectId))
+		PG_RETURN_NULL();
+
+	rel = table_open(catalogId, AccessShareLock);
+
+	tup = get_catalog_object_by_oid(rel, Anum_oid, objectId);
+	if (tup == NULL)
+		elog(ERROR, "cache lookup failed for object %u of catalog \"%s\"",
+			 objectId, RelationGetRelationName(rel));
+
+	if (Anum_acl != InvalidAttrNumber)
+	{
+		datum = heap_getattr(tup, Anum_acl, RelationGetDescr(rel), &isnull);
+		if (!isnull)
+		{
+			table_close(rel, AccessShareLock);
+			PG_RETURN_DATUM(datum);
+		}
+	}
+
+	table_close(rel, AccessShareLock);
+	PG_RETURN_NULL();
+}
+
+
+/*
  * Return a palloc'ed string that describes the type of object that the
  * passed address is for.
  *

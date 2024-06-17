@@ -1397,6 +1397,18 @@ pg_matviews| SELECT n.nspname AS schemaname,
      LEFT JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
      LEFT JOIN pg_tablespace t ON ((t.oid = c.reltablespace)))
   WHERE (c.relkind = 'm'::"char");
+pg_ownerships| SELECT (a.classid)::regclass AS classid,
+    a.objid,
+    a.objsubid,
+    (pg_identify_object(a.classid, a.objid, a.objsubid)).type AS type,
+    (pg_identify_object(a.classid, a.objid, a.objsubid)).schema AS schema,
+    (pg_identify_object(a.classid, a.objid, a.objsubid)).name AS name,
+    (pg_identify_object(a.classid, a.objid, a.objsubid)).identity AS identity,
+    (a.refobjid)::regrole AS owner
+   FROM ((pg_shdepend a
+     JOIN pg_database ON (((pg_database.datname = current_database()) AND (pg_database.oid = a.dbid))))
+     JOIN pg_authid ON (((pg_authid.oid = a.refobjid) AND (a.refclassid = ('pg_authid'::regclass)::oid))))
+  WHERE (a.deptype = 'o'::"char");
 pg_policies| SELECT n.nspname AS schemaname,
     c.relname AS tablename,
     pol.polname AS policyname,
@@ -1441,6 +1453,32 @@ pg_prepared_xacts| SELECT p.transaction,
    FROM ((pg_prepared_xact() p(transaction, gid, prepared, ownerid, dbid)
      LEFT JOIN pg_authid u ON ((p.ownerid = u.oid)))
      LEFT JOIN pg_database d ON ((p.dbid = d.oid)));
+pg_privileges| SELECT (classid)::regclass AS classid,
+    objid,
+    objsubid,
+    type,
+    schema,
+    name,
+    identity,
+    (grantor)::regrole AS grantor,
+    (grantee)::regrole AS grantee,
+    privilege_type,
+    is_grantable
+   FROM ( SELECT pg_shdepend.classid,
+            pg_shdepend.objid,
+            pg_shdepend.objsubid,
+            (pg_identify_object(pg_shdepend.classid, pg_shdepend.objid, pg_shdepend.objsubid)).type AS type,
+            (pg_identify_object(pg_shdepend.classid, pg_shdepend.objid, pg_shdepend.objsubid)).schema AS schema,
+            (pg_identify_object(pg_shdepend.classid, pg_shdepend.objid, pg_shdepend.objsubid)).name AS name,
+            (pg_identify_object(pg_shdepend.classid, pg_shdepend.objid, pg_shdepend.objsubid)).identity AS identity,
+            (aclexplode(pg_get_acl(pg_shdepend.classid, pg_shdepend.objid))).grantor AS grantor,
+            (aclexplode(pg_get_acl(pg_shdepend.classid, pg_shdepend.objid))).grantee AS grantee,
+            (aclexplode(pg_get_acl(pg_shdepend.classid, pg_shdepend.objid))).privilege_type AS privilege_type,
+            (aclexplode(pg_get_acl(pg_shdepend.classid, pg_shdepend.objid))).is_grantable AS is_grantable
+           FROM ((pg_shdepend
+             JOIN pg_database ON (((pg_database.datname = current_database()) AND (pg_database.oid = pg_shdepend.dbid))))
+             JOIN pg_authid ON (((pg_authid.oid = pg_shdepend.refobjid) AND (pg_shdepend.refclassid = ('pg_authid'::regclass)::oid))))
+          WHERE (pg_shdepend.deptype = 'a'::"char")) a;
 pg_publication_tables| SELECT p.pubname,
     n.nspname AS schemaname,
     c.relname AS tablename,

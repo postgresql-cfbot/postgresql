@@ -826,6 +826,13 @@ SnapBuildProcessNewCid(SnapBuild *builder, TransactionId xid,
 	 */
 	ReorderBufferXidSetCatalogChanges(builder->reorder, xid, lsn);
 
+	/*
+	 * If we don't have snapshot, the transaction won't be
+	 * replayed, just return here.
+	 */
+	if (builder->state < SNAPBUILD_FULL_SNAPSHOT)
+		return;
+
 	ReorderBufferAddNewTupleCids(builder->reorder, xlrec->top_xid, lsn,
 								 xlrec->target_locator, xlrec->target_tid,
 								 xlrec->cmin, xlrec->cmax,

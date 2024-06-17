@@ -206,10 +206,11 @@ xact_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	uint8		info = XLogRecGetInfo(r) & XLOG_XACT_OPMASK;
 
 	/*
-	 * If the snapshot isn't yet fully built, we cannot decode anything, so
-	 * bail out.
+	 * If the snapshot isn't yet fully built, we cannot decode anything.
+	 * But we need to track transactions committed in BUILDING_SNAPSHOT
+	 * state, or the snapshot will be incorrect.
 	 */
-	if (SnapBuildCurrentState(builder) < SNAPBUILD_FULL_SNAPSHOT)
+	if (SnapBuildCurrentState(builder) < SNAPBUILD_BUILDING_SNAPSHOT)
 		return;
 
 	switch (info)
@@ -282,9 +283,11 @@ xact_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 			{
 				TransactionId xid;
 				xl_xact_invals *invals;
+				bool		has_snapshot = false;
 
 				xid = XLogRecGetXid(r);
 				invals = (xl_xact_invals *) XLogRecGetData(r);
+				has_snapshot = SnapBuildCurrentState(builder) >= SNAPBUILD_FULL_SNAPSHOT;
 
 				/*
 				 * Execute the invalidations for xid-less transactions,
@@ -293,7 +296,7 @@ xact_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 				 */
 				if (TransactionIdIsValid(xid))
 				{
-					if (!ctx->fast_forward)
+					if (!ctx->fast_forward && has_snapshot)
 						ReorderBufferAddInvalidations(reorder, xid,
 													  buf->origptr,
 													  invals->nmsgs,
@@ -301,12 +304,13 @@ xact_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 					ReorderBufferXidSetCatalogChanges(ctx->reorder, xid,
 													  buf->origptr);
 				}
-				else if ((!ctx->fast_forward))
+				else if (!ctx->fast_forward && has_snapshot)
 					ReorderBufferImmediateInvalidation(ctx->reorder,
 													   invals->nmsgs,
 													   invals->msgs);
+
+				break;
 			}
-			break;
 		case XLOG_XACT_PREPARE:
 			{
 				xl_xact_parsed_prepare parsed;
@@ -411,9 +415,10 @@ heap2_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 
 	/*
 	 * If we don't have snapshot or we are just fast-forwarding, there is no
-	 * point in decoding changes.
+	 * point in decoding changes. If we are building snapshot, we need to
+	 * handle XLOG_HEAP2_NEW_CID which mark a transaction as catalog modifying.
 	 */
-	if (SnapBuildCurrentState(builder) < SNAPBUILD_FULL_SNAPSHOT ||
+	if (SnapBuildCurrentState(builder) < SNAPBUILD_BUILDING_SNAPSHOT ||
 		ctx->fast_forward)
 		return;
 
@@ -470,9 +475,10 @@ heap_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 
 	/*
 	 * If we don't have snapshot or we are just fast-forwarding, there is no
-	 * point in decoding data changes.
+	 * point in decoding data changes. If we are building snapshot, we need to
+	 * handle XLOG_HEAP_INPLACE which mark a transaction as catalog modifying.
 	 */
-	if (SnapBuildCurrentState(builder) < SNAPBUILD_FULL_SNAPSHOT ||
+	if (SnapBuildCurrentState(builder) < SNAPBUILD_BUILDING_SNAPSHOT ||
 		ctx->fast_forward)
 		return;
 
@@ -1300,6 +1306,7 @@ DecodeTXNNeedSkip(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 				  Oid txn_dbid, RepOriginId origin_id)
 {
 	if (SnapBuildXactNeedsSkip(ctx->snapshot_builder, buf->origptr) ||
+		SnapBuildCurrentState(ctx->snapshot_builder) < SNAPBUILD_CONSISTENT ||
 		(txn_dbid != InvalidOid && txn_dbid != ctx->slot->data.database) ||
 		FilterByOrigin(ctx, origin_id))
 		return true;

@@ -620,20 +620,32 @@ handleCopyIn(PGconn *conn, FILE *copystream, bool isbinary, PGresult **res)
 				/* current line is done? */
 				if (buf[buflen - 1] == '\n')
 				{
-					/* check for EOF marker, but not on a partial line */
-					if (at_line_begin)
+					/*
+					 * When at the beginning of the line, check for EOF marker.
+					 * If the marker is found and the data is inlined,
+					 * we must stop at this point.  If not, the \. line can be
+					 * sent to the server, and we let it decide whether
+					 * it's an EOF or not depending on the format: in
+					 * basic TEXT, \. is going to be interpreted as an EOF, in
+					 * CSV, it will not.
+					 */
+					if (at_line_begin && copystream == pset.cur_cmd_source)
 					{
-						/*
-						 * This code erroneously assumes '\.' on a line alone
-						 * inside a quoted CSV string terminates the \copy.
-						 * https://www.postgresql.org/message-id/E1TdNVQ-0001ju-GO@wrigleys.postgresql.org
-						 *
-						 * https://www.postgresql.org/message-id/bfcd57e4-8f23-4c3e-a5db-2571d09208e2@beta.fastmail.com
-						 */
 						if ((linelen == 3 && memcmp(fgresult, "\\.\n", 3) == 0) ||
 							(linelen == 4 && memcmp(fgresult, "\\.\r\n", 4) == 0))
 						{
 							copydone = true;
+							/*
+							 * Remove the EOF marker from the data sent.
+							 * In the case of CSV, the EOF marker must be
+							 * removed, otherwise it would be interpreted by
+							 * the server as valid data.
+							 */
+							if (copystream == pset.cur_cmd_source)
+							{
+								*fgresult='\0';
+								buflen -= linelen;
+							}
 						}
 					}
 

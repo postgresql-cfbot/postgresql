@@ -89,8 +89,13 @@ drop cascades to function get_all_persons()
 drop cascades to table persons2
 drop cascades to table persons3
 CREATE TABLE persons5 OF stuff; -- only CREATE TYPE AS types may be used
-ERROR:  type stuff is not a composite type
+ERROR:  type stuff must not be a row type of another table
+HINT:  Must be a stand-alone composite type created with CREATE TYPE.
 DROP TABLE stuff;
+CREATE TYPE simple AS ENUM ('a');
+CREATE TABLE of_simple OF simple; -- not a composite type
+ERROR:  type simple is not a composite type
+DROP TYPE simple;
 -- implicit casting
 CREATE TYPE person_type AS (id int, name text);
 CREATE TABLE persons OF person_type;

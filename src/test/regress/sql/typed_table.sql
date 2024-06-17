@@ -50,6 +50,10 @@ CREATE TABLE persons5 OF stuff; -- only CREATE TYPE AS types may be used
 
 DROP TABLE stuff;
 
+CREATE TYPE simple AS ENUM ('a');
+CREATE TABLE of_simple OF simple; -- not a composite type
+DROP TYPE simple;
+
 
 -- implicit casting
 

@@ -6969,8 +6969,15 @@ check_of_type(HeapTuple typetuple)
 		 * the type before the typed table creation/conversion commits.
 		 */
 		relation_close(typeRelation, NoLock);
+
+		if (!typeOk)
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("type %s must not be a row type of another table",
+							format_type_be(typ->oid)),
+					 errhint("Must be a stand-alone composite type created with CREATE TYPE.")));
 	}
-	if (!typeOk)
+	else
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("type %s is not a composite type",

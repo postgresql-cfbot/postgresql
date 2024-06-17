@@ -47,6 +47,7 @@ pgcrypto_regress = [
   'crypt-xdes',
   'pgp-armor',
   'pgp-decrypt',
+  'pgp-decrypt_utf8',
   'pgp-encrypt',
   'pgp-encrypt-md5',
   'pgp-pubkey-decrypt',

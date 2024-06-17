@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include "catalog/pg_collation.h"
 #include "common/string.h"
 #include "storage/fd.h"
 #include "tsearch/ts_locale.h"
@@ -36,7 +37,7 @@ t_isdigit(const char *ptr)
 {
 	int			clen = pg_mblen(ptr);
 	wchar_t		character[WC_BUF_LEN];
-	pg_locale_t mylocale = 0;	/* TODO */
+	pg_locale_t mylocale = pg_newlocale_from_collation(DEFAULT_COLLATION_OID);
 
 	if (clen == 1 || database_ctype_is_c)
 		return isdigit(TOUCHAR(ptr));
@@ -51,7 +52,7 @@ t_isspace(const char *ptr)
 {
 	int			clen = pg_mblen(ptr);
 	wchar_t		character[WC_BUF_LEN];
-	pg_locale_t mylocale = 0;	/* TODO */
+	pg_locale_t mylocale = pg_newlocale_from_collation(DEFAULT_COLLATION_OID);
 
 	if (clen == 1 || database_ctype_is_c)
 		return isspace(TOUCHAR(ptr));
@@ -66,7 +67,7 @@ t_isalpha(const char *ptr)
 {
 	int			clen = pg_mblen(ptr);
 	wchar_t		character[WC_BUF_LEN];
-	pg_locale_t mylocale = 0;	/* TODO */
+	pg_locale_t mylocale = pg_newlocale_from_collation(DEFAULT_COLLATION_OID);
 
 	if (clen == 1 || database_ctype_is_c)
 		return isalpha(TOUCHAR(ptr));
@@ -81,7 +82,7 @@ t_isalnum(const char *ptr)
 {
 	int			clen = pg_mblen(ptr);
 	wchar_t		character[WC_BUF_LEN];
-	pg_locale_t mylocale = 0;	/* TODO */
+	pg_locale_t mylocale = pg_newlocale_from_collation(DEFAULT_COLLATION_OID);
 
 	if (clen == 1 || database_ctype_is_c)
 		return isalnum(TOUCHAR(ptr));
@@ -96,7 +97,7 @@ t_isprint(const char *ptr)
 {
 	int			clen = pg_mblen(ptr);
 	wchar_t		character[WC_BUF_LEN];
-	pg_locale_t mylocale = 0;	/* TODO */
+	pg_locale_t mylocale = pg_newlocale_from_collation(DEFAULT_COLLATION_OID);;
 
 	if (clen == 1 || database_ctype_is_c)
 		return isprint(TOUCHAR(ptr));
@@ -266,7 +267,7 @@ char *
 lowerstr_with_len(const char *str, int len)
 {
 	char	   *out;
-	pg_locale_t mylocale = 0;	/* TODO */
+	pg_locale_t mylocale = pg_newlocale_from_collation(DEFAULT_COLLATION_OID);
 
 	if (len == 0)
 		return pstrdup("");

@@ -423,42 +423,13 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 		strcmp(ctype, "POSIX") == 0)
 		database_ctype_is_c = true;
 
-	if (dbform->datlocprovider == COLLPROVIDER_BUILTIN)
-	{
-		datum = SysCacheGetAttrNotNull(DATABASEOID, tup, Anum_pg_database_datlocale);
+	pg_init_database_collation();
+
+	datum = SysCacheGetAttr(DATABASEOID, tup, Anum_pg_database_datlocale, &isnull);
+	if (!isnull)
 		datlocale = TextDatumGetCString(datum);
-
-		builtin_validate_locale(dbform->encoding, datlocale);
-
-		default_locale.info.builtin.locale = MemoryContextStrdup(
-																 TopMemoryContext, datlocale);
-	}
-	else if (dbform->datlocprovider == COLLPROVIDER_ICU)
-	{
-		char	   *icurules;
-
-		datum = SysCacheGetAttrNotNull(DATABASEOID, tup, Anum_pg_database_datlocale);
-		datlocale = TextDatumGetCString(datum);
-
-		datum = SysCacheGetAttr(DATABASEOID, tup, Anum_pg_database_daticurules, &isnull);
-		if (!isnull)
-			icurules = TextDatumGetCString(datum);
-		else
-			icurules = NULL;
-
-		make_icu_collator(datlocale, icurules, &default_locale);
-	}
 	else
 		datlocale = NULL;
-
-	default_locale.provider = dbform->datlocprovider;
-
-	/*
-	 * Default locale is currently always deterministic.  Nondeterministic
-	 * locales currently don't support pattern matching, which would break a
-	 * lot of things if applied globally.
-	 */
-	default_locale.deterministic = true;
 
 	/*
 	 * Check collation version.  See similar code in

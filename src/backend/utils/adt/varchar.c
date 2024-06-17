@@ -1014,7 +1014,7 @@ hashbpchar(PG_FUNCTION_ARGS)
 	if (!lc_collate_is_c(collid))
 		mylocale = pg_newlocale_from_collation(collid);
 
-	if (pg_locale_deterministic(mylocale))
+	if (!mylocale || pg_locale_deterministic(mylocale))
 	{
 		result = hash_any((unsigned char *) keydata, keylen);
 	}
@@ -1069,7 +1069,7 @@ hashbpcharextended(PG_FUNCTION_ARGS)
 	if (!lc_collate_is_c(collid))
 		mylocale = pg_newlocale_from_collation(collid);
 
-	if (pg_locale_deterministic(mylocale))
+	if (!mylocale || pg_locale_deterministic(mylocale))
 	{
 		result = hash_any_extended((unsigned char *) keydata, keylen,
 								   PG_GETARG_INT64(1));

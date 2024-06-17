@@ -1732,7 +1732,7 @@ str_tolower(const char *buff, size_t nbytes, Oid collid)
 				for (curr_char = 0; workspace[curr_char] != 0; curr_char++)
 				{
 					if (mylocale)
-						workspace[curr_char] = towlower_l(workspace[curr_char], mylocale->info.lt);
+						workspace[curr_char] = towlower_l(workspace[curr_char], mylocale->info.libc.lt);
 					else
 						workspace[curr_char] = towlower(workspace[curr_char]);
 				}
@@ -1763,7 +1763,7 @@ str_tolower(const char *buff, size_t nbytes, Oid collid)
 				for (p = result; *p; p++)
 				{
 					if (mylocale)
-						*p = tolower_l((unsigned char) *p, mylocale->info.lt);
+						*p = tolower_l((unsigned char) *p, mylocale->info.libc.lt);
 					else
 						*p = pg_tolower((unsigned char) *p);
 				}
@@ -1880,7 +1880,7 @@ str_toupper(const char *buff, size_t nbytes, Oid collid)
 				for (curr_char = 0; workspace[curr_char] != 0; curr_char++)
 				{
 					if (mylocale)
-						workspace[curr_char] = towupper_l(workspace[curr_char], mylocale->info.lt);
+						workspace[curr_char] = towupper_l(workspace[curr_char], mylocale->info.libc.lt);
 					else
 						workspace[curr_char] = towupper(workspace[curr_char]);
 				}
@@ -1911,7 +1911,7 @@ str_toupper(const char *buff, size_t nbytes, Oid collid)
 				for (p = result; *p; p++)
 				{
 					if (mylocale)
-						*p = toupper_l((unsigned char) *p, mylocale->info.lt);
+						*p = toupper_l((unsigned char) *p, mylocale->info.libc.lt);
 					else
 						*p = pg_toupper((unsigned char) *p);
 				}
@@ -2084,10 +2084,10 @@ str_initcap(const char *buff, size_t nbytes, Oid collid)
 					if (mylocale)
 					{
 						if (wasalnum)
-							workspace[curr_char] = towlower_l(workspace[curr_char], mylocale->info.lt);
+							workspace[curr_char] = towlower_l(workspace[curr_char], mylocale->info.libc.lt);
 						else
-							workspace[curr_char] = towupper_l(workspace[curr_char], mylocale->info.lt);
-						wasalnum = iswalnum_l(workspace[curr_char], mylocale->info.lt);
+							workspace[curr_char] = towupper_l(workspace[curr_char], mylocale->info.libc.lt);
+						wasalnum = iswalnum_l(workspace[curr_char], mylocale->info.libc.lt);
 					}
 					else
 					{
@@ -2127,10 +2127,10 @@ str_initcap(const char *buff, size_t nbytes, Oid collid)
 					if (mylocale)
 					{
 						if (wasalnum)
-							*p = tolower_l((unsigned char) *p, mylocale->info.lt);
+							*p = tolower_l((unsigned char) *p, mylocale->info.libc.lt);
 						else
-							*p = toupper_l((unsigned char) *p, mylocale->info.lt);
-						wasalnum = isalnum_l((unsigned char) *p, mylocale->info.lt);
+							*p = toupper_l((unsigned char) *p, mylocale->info.libc.lt);
+						wasalnum = isalnum_l((unsigned char) *p, mylocale->info.libc.lt);
 					}
 					else
 					{

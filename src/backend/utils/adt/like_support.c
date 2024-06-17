@@ -1509,7 +1509,7 @@ pattern_char_isalpha(char c, bool is_multibyte,
 		return IS_HIGHBIT_SET(c) ||
 			(c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
 	else if (locale && locale->provider == COLLPROVIDER_LIBC)
-		return isalpha_l((unsigned char) c, locale->info.lt);
+		return isalpha_l((unsigned char) c, locale->info.libc.lt);
 	else
 		return isalpha((unsigned char) c);
 }

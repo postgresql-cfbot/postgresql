@@ -56,6 +56,7 @@
 
 #include "access/htup_details.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_database.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
@@ -116,6 +117,8 @@ char	   *localized_full_months[12 + 1];
 /* is the databases's LC_CTYPE the C locale? */
 bool		database_ctype_is_c = false;
 
+static struct pg_locale_struct default_locale;
+
 /* indicates whether locale information cache is valid */
 static bool CurrentLocaleConvValid = false;
 static bool CurrentLCTimeValid = false;
@@ -125,9 +128,6 @@ static bool CurrentLCTimeValid = false;
 typedef struct
 {
 	Oid			collid;			/* hash key: pg_collation OID */
-	bool		collate_is_c;	/* is collation's LC_COLLATE C? */
-	bool		ctype_is_c;		/* is collation's LC_CTYPE C? */
-	bool		flags_valid;	/* true if above flags are valid */
 	pg_locale_t locale;			/* locale_t struct, or 0 if not valid */
 } collation_cache_entry;
 
@@ -1227,7 +1227,7 @@ IsoLocaleName(const char *winlocname)
  */
 
 static collation_cache_entry *
-lookup_collation_cache(Oid collation, bool set_flags)
+lookup_collation_cache(Oid collation)
 {
 	collation_cache_entry *cache_entry;
 	bool		found;
@@ -1253,57 +1253,7 @@ lookup_collation_cache(Oid collation, bool set_flags)
 		 * Make sure cache entry is marked invalid, in case we fail before
 		 * setting things.
 		 */
-		cache_entry->flags_valid = false;
 		cache_entry->locale = 0;
-	}
-
-	if (set_flags && !cache_entry->flags_valid)
-	{
-		/* Attempt to set the flags */
-		HeapTuple	tp;
-		Form_pg_collation collform;
-
-		tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collation));
-		if (!HeapTupleIsValid(tp))
-			elog(ERROR, "cache lookup failed for collation %u", collation);
-		collform = (Form_pg_collation) GETSTRUCT(tp);
-
-		if (collform->collprovider == COLLPROVIDER_BUILTIN)
-		{
-			Datum		datum;
-			const char *colllocale;
-
-			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_colllocale);
-			colllocale = TextDatumGetCString(datum);
-
-			cache_entry->collate_is_c = true;
-			cache_entry->ctype_is_c = (strcmp(colllocale, "C") == 0);
-		}
-		else if (collform->collprovider == COLLPROVIDER_LIBC)
-		{
-			Datum		datum;
-			const char *collcollate;
-			const char *collctype;
-
-			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_collcollate);
-			collcollate = TextDatumGetCString(datum);
-			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_collctype);
-			collctype = TextDatumGetCString(datum);
-
-			cache_entry->collate_is_c = ((strcmp(collcollate, "C") == 0) ||
-										 (strcmp(collcollate, "POSIX") == 0));
-			cache_entry->ctype_is_c = ((strcmp(collctype, "C") == 0) ||
-									   (strcmp(collctype, "POSIX") == 0));
-		}
-		else
-		{
-			cache_entry->collate_is_c = false;
-			cache_entry->ctype_is_c = false;
-		}
-
-		cache_entry->flags_valid = true;
-
-		ReleaseSysCache(tp);
 	}
 
 	return cache_entry;
@@ -1324,47 +1274,6 @@ lc_collate_is_c(Oid collation)
 		return false;
 
 	/*
-	 * If we're asked about the default collation, we have to inquire of the C
-	 * library.  Cache the result so we only have to compute it once.
-	 */
-	if (collation == DEFAULT_COLLATION_OID)
-	{
-		static int	result = -1;
-		const char *localeptr;
-
-		if (result >= 0)
-			return (bool) result;
-
-		if (default_locale.provider == COLLPROVIDER_BUILTIN)
-		{
-			result = true;
-			return (bool) result;
-		}
-		else if (default_locale.provider == COLLPROVIDER_ICU)
-		{
-			result = false;
-			return (bool) result;
-		}
-		else if (default_locale.provider == COLLPROVIDER_LIBC)
-		{
-			localeptr = setlocale(LC_CTYPE, NULL);
-			if (!localeptr)
-				elog(ERROR, "invalid LC_CTYPE setting");
-		}
-		else
-			elog(ERROR, "unexpected collation provider '%c'",
-				 default_locale.provider);
-
-		if (strcmp(localeptr, "C") == 0)
-			result = true;
-		else if (strcmp(localeptr, "POSIX") == 0)
-			result = true;
-		else
-			result = false;
-		return (bool) result;
-	}
-
-	/*
 	 * If we're asked about the built-in C/POSIX collations, we know that.
 	 */
 	if (collation == C_COLLATION_OID ||
@@ -1374,7 +1283,7 @@ lc_collate_is_c(Oid collation)
 	/*
 	 * Otherwise, we have to consult pg_collation, but we cache that.
 	 */
-	return (lookup_collation_cache(collation, true))->collate_is_c;
+	return pg_newlocale_from_collation(collation)->collate_is_c;
 }
 
 /*
@@ -1391,46 +1300,6 @@ lc_ctype_is_c(Oid collation)
 		return false;
 
 	/*
-	 * If we're asked about the default collation, we have to inquire of the C
-	 * library.  Cache the result so we only have to compute it once.
-	 */
-	if (collation == DEFAULT_COLLATION_OID)
-	{
-		static int	result = -1;
-		const char *localeptr;
-
-		if (result >= 0)
-			return (bool) result;
-
-		if (default_locale.provider == COLLPROVIDER_BUILTIN)
-		{
-			localeptr = default_locale.info.builtin.locale;
-		}
-		else if (default_locale.provider == COLLPROVIDER_ICU)
-		{
-			result = false;
-			return (bool) result;
-		}
-		else if (default_locale.provider == COLLPROVIDER_LIBC)
-		{
-			localeptr = setlocale(LC_CTYPE, NULL);
-			if (!localeptr)
-				elog(ERROR, "invalid LC_CTYPE setting");
-		}
-		else
-			elog(ERROR, "unexpected collation provider '%c'",
-				 default_locale.provider);
-
-		if (strcmp(localeptr, "C") == 0)
-			result = true;
-		else if (strcmp(localeptr, "POSIX") == 0)
-			result = true;
-		else
-			result = false;
-		return (bool) result;
-	}
-
-	/*
 	 * If we're asked about the built-in C/POSIX collations, we know that.
 	 */
 	if (collation == C_COLLATION_OID ||
@@ -1440,10 +1309,8 @@ lc_ctype_is_c(Oid collation)
 	/*
 	 * Otherwise, we have to consult pg_collation, but we cache that.
 	 */
-	return (lookup_collation_cache(collation, true))->ctype_is_c;
+	return pg_newlocale_from_collation(collation)->ctype_is_c;
 }
-
-struct pg_locale_struct default_locale;
 
 void
 make_icu_collator(const char *iculocstr,
@@ -1530,11 +1397,132 @@ report_newlocale_failure(const char *localename)
 bool
 pg_locale_deterministic(pg_locale_t locale)
 {
-	/* default locale must always be deterministic */
-	if (locale == NULL)
-		return true;
+	return locale->deterministic;
+}
+
+void
+pg_init_database_collation()
+{
+	HeapTuple	tup;
+	Form_pg_database dbform;
+	Datum		datum;
+	bool		isnull;
+
+	/* Fetch our pg_database row normally, via syscache */
+	tup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
+	dbform = (Form_pg_database) GETSTRUCT(tup);
+
+	if (dbform->datlocprovider == COLLPROVIDER_BUILTIN)
+	{
+		char	*datlocale;
+
+		datum = SysCacheGetAttrNotNull(DATABASEOID, tup, Anum_pg_database_datlocale);
+		datlocale = TextDatumGetCString(datum);
+
+		builtin_validate_locale(dbform->encoding, datlocale);
+
+		default_locale.collate_is_c = true;
+		default_locale.ctype_is_c = (strcmp(datlocale, "C") == 0);
+
+		default_locale.info.builtin.locale = MemoryContextStrdup(
+																 TopMemoryContext, datlocale);
+	}
+	else if (dbform->datlocprovider == COLLPROVIDER_ICU)
+	{
+		char	*datlocale;
+		char	*icurules;
+
+		datum = SysCacheGetAttrNotNull(DATABASEOID, tup, Anum_pg_database_datlocale);
+		datlocale = TextDatumGetCString(datum);
+
+		default_locale.collate_is_c = false;
+		default_locale.ctype_is_c = false;
+
+		datum = SysCacheGetAttr(DATABASEOID, tup, Anum_pg_database_daticurules, &isnull);
+		if (!isnull)
+			icurules = TextDatumGetCString(datum);
+		else
+			icurules = NULL;
+
+		make_icu_collator(datlocale, icurules, &default_locale);
+	}
 	else
-		return locale->deterministic;
+	{
+		const char *datcollate;
+		const char *datctype pg_attribute_unused();
+		locale_t	loc;
+
+		Assert(dbform->datlocprovider == COLLPROVIDER_LIBC);
+
+		datum = SysCacheGetAttrNotNull(DATABASEOID, tup, Anum_pg_database_datcollate);
+		datcollate = TextDatumGetCString(datum);
+		datum = SysCacheGetAttrNotNull(DATABASEOID, tup, Anum_pg_database_datctype);
+		datctype = TextDatumGetCString(datum);
+
+		default_locale.collate_is_c = (strcmp(datcollate, "C") == 0) ||
+			(strcmp(datcollate, "POSIX") == 0);
+		default_locale.ctype_is_c = (strcmp(datctype, "C") == 0) ||
+			(strcmp(datctype, "POSIX") == 0);
+
+		if (strcmp(datcollate, datctype) == 0)
+		{
+			/* Normal case where they're the same */
+			errno = 0;
+#ifndef WIN32
+			loc = newlocale(LC_COLLATE_MASK | LC_CTYPE_MASK, datcollate,
+							NULL);
+#else
+			loc = _create_locale(LC_ALL, datcollate);
+#endif
+			if (!loc)
+				report_newlocale_failure(datcollate);
+		}
+		else
+		{
+#ifndef WIN32
+			/* We need two newlocale() steps */
+			locale_t	loc1;
+
+			errno = 0;
+			loc1 = newlocale(LC_COLLATE_MASK, datcollate, NULL);
+			if (!loc1)
+				report_newlocale_failure(datcollate);
+			errno = 0;
+			loc = newlocale(LC_CTYPE_MASK, datctype, loc1);
+			if (!loc)
+				report_newlocale_failure(datctype);
+#else
+
+			/*
+			 * XXX The _create_locale() API doesn't appear to support
+			 * this. Could perhaps be worked around by changing
+			 * pg_locale_t to contain two separate fields.
+			 */
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("collations with different collate and ctype values are not supported on this platform")));
+#endif
+		}
+
+		default_locale.info.libc.collate = MemoryContextStrdup(
+			TopMemoryContext, datcollate);
+		default_locale.info.libc.ctype = MemoryContextStrdup(
+			TopMemoryContext, datctype);
+		default_locale.info.libc.lt = loc;
+	}
+
+	default_locale.provider = dbform->datlocprovider;
+
+	/*
+	 * Default locale is currently always deterministic.  Nondeterministic
+	 * locales currently don't support pattern matching, which would break a
+	 * lot of things if applied globally.
+	 */
+	default_locale.deterministic = true;
+
+	ReleaseSysCache(tup);
 }
 
 /*
@@ -1556,14 +1544,9 @@ pg_newlocale_from_collation(Oid collid)
 	Assert(OidIsValid(collid));
 
 	if (collid == DEFAULT_COLLATION_OID)
-	{
-		if (default_locale.provider == COLLPROVIDER_LIBC)
-			return (pg_locale_t) 0;
-		else
-			return &default_locale;
-	}
+		return &default_locale;
 
-	cache_entry = lookup_collation_cache(collid, false);
+	cache_entry = lookup_collation_cache(collid);
 
 	if (cache_entry->locale == 0)
 	{
@@ -1592,6 +1575,9 @@ pg_newlocale_from_collation(Oid collid)
 			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_colllocale);
 			locstr = TextDatumGetCString(datum);
 
+			result.collate_is_c = true;
+			result.collate_is_c = (strcmp(locstr, "C") == 0);
+
 			builtin_validate_locale(GetDatabaseEncoding(), locstr);
 
 			result.info.builtin.locale = MemoryContextStrdup(TopMemoryContext,
@@ -1607,6 +1593,11 @@ pg_newlocale_from_collation(Oid collid)
 			collcollate = TextDatumGetCString(datum);
 			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_collctype);
 			collctype = TextDatumGetCString(datum);
+
+			result.collate_is_c = (strcmp(collcollate, "C") == 0) ||
+				(strcmp(collcollate, "POSIX") == 0);
+			result.ctype_is_c = (strcmp(collctype, "C") == 0) ||
+				(strcmp(collctype, "POSIX") == 0);
 
 			if (strcmp(collcollate, collctype) == 0)
 			{
@@ -1648,7 +1639,11 @@ pg_newlocale_from_collation(Oid collid)
 #endif
 			}
 
-			result.info.lt = loc;
+			result.info.libc.collate = MemoryContextStrdup(
+				TopMemoryContext, collcollate);
+			result.info.libc.ctype = MemoryContextStrdup(
+				TopMemoryContext, collctype);
+			result.info.libc.lt = loc;
 		}
 		else if (collform->collprovider == COLLPROVIDER_ICU)
 		{
@@ -1657,6 +1652,9 @@ pg_newlocale_from_collation(Oid collid)
 
 			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_colllocale);
 			iculocstr = TextDatumGetCString(datum);
+
+			result.collate_is_c = false;
+			result.ctype_is_c = false;
 
 			datum = SysCacheGetAttr(COLLOID, tp, Anum_pg_collation_collicurules, &isnull);
 			if (!isnull)
@@ -1848,7 +1846,7 @@ pg_strncoll_libc_win32_utf8(const char *arg1, size_t len1, const char *arg2,
 	int			r;
 	int			result;
 
-	Assert(!locale || locale->provider == COLLPROVIDER_LIBC);
+	Assert(locale->provider == COLLPROVIDER_LIBC);
 	Assert(GetDatabaseEncoding() == PG_UTF8);
 #ifndef WIN32
 	Assert(false);
@@ -1888,10 +1886,7 @@ pg_strncoll_libc_win32_utf8(const char *arg1, size_t len1, const char *arg2,
 	((LPWSTR) a2p)[r] = 0;
 
 	errno = 0;
-	if (locale)
-		result = wcscoll_l((LPWSTR) a1p, (LPWSTR) a2p, locale->info.lt);
-	else
-		result = wcscoll((LPWSTR) a1p, (LPWSTR) a2p);
+	result = wcscoll_l((LPWSTR) a1p, (LPWSTR) a2p, locale->info.libc.lt);
 	if (result == 2147483647)	/* _NLSCMPERROR; missing from mingw headers */
 		ereport(ERROR,
 				(errmsg("could not compare Unicode strings: %m")));
@@ -1917,7 +1912,7 @@ pg_strcoll_libc(const char *arg1, const char *arg2, pg_locale_t locale)
 {
 	int			result;
 
-	Assert(!locale || locale->provider == COLLPROVIDER_LIBC);
+	Assert(locale->provider == COLLPROVIDER_LIBC);
 #ifdef WIN32
 	if (GetDatabaseEncoding() == PG_UTF8)
 	{
@@ -1928,10 +1923,7 @@ pg_strcoll_libc(const char *arg1, const char *arg2, pg_locale_t locale)
 	}
 	else
 #endif							/* WIN32 */
-	if (locale)
-		result = strcoll_l(arg1, arg2, locale->info.lt);
-	else
-		result = strcoll(arg1, arg2);
+		result = strcoll_l(arg1, arg2, locale->info.libc.lt);
 
 	return result;
 }
@@ -1953,7 +1945,7 @@ pg_strncoll_libc(const char *arg1, size_t len1, const char *arg2, size_t len2,
 	char	   *arg2n;
 	int			result;
 
-	Assert(!locale || locale->provider == COLLPROVIDER_LIBC);
+	Assert(locale->provider == COLLPROVIDER_LIBC);
 
 #ifdef WIN32
 	/* check for this case before doing the work for nul-termination */
@@ -2099,7 +2091,7 @@ pg_strcoll(const char *arg1, const char *arg2, pg_locale_t locale)
 {
 	int			result;
 
-	if (!locale || locale->provider == COLLPROVIDER_LIBC)
+	if (locale->provider == COLLPROVIDER_LIBC)
 		result = pg_strcoll_libc(arg1, arg2, locale);
 #ifdef USE_ICU
 	else if (locale->provider == COLLPROVIDER_ICU)
@@ -2135,7 +2127,7 @@ pg_strncoll(const char *arg1, size_t len1, const char *arg2, size_t len2,
 {
 	int			result;
 
-	if (!locale || locale->provider == COLLPROVIDER_LIBC)
+	if (locale->provider == COLLPROVIDER_LIBC)
 		result = pg_strncoll_libc(arg1, len1, arg2, len2, locale);
 #ifdef USE_ICU
 	else if (locale->provider == COLLPROVIDER_ICU)
@@ -2153,13 +2145,10 @@ static size_t
 pg_strxfrm_libc(char *dest, const char *src, size_t destsize,
 				pg_locale_t locale)
 {
-	Assert(!locale || locale->provider == COLLPROVIDER_LIBC);
+	Assert(locale->provider == COLLPROVIDER_LIBC);
 
 #ifdef TRUST_STRXFRM
-	if (locale)
-		return strxfrm_l(dest, src, destsize, locale->info.lt);
-	else
-		return strxfrm(dest, src, destsize);
+	return strxfrm_l(dest, src, destsize, locale->info.libc.lt);
 #else
 	/* shouldn't happen */
 	PGLOCALE_SUPPORT_ERROR(locale->provider);
@@ -2176,7 +2165,7 @@ pg_strnxfrm_libc(char *dest, const char *src, size_t srclen, size_t destsize,
 	size_t		bufsize = srclen + 1;
 	size_t		result;
 
-	Assert(!locale || locale->provider == COLLPROVIDER_LIBC);
+	Assert(locale->provider == COLLPROVIDER_LIBC);
 
 	if (bufsize > TEXTBUFLEN)
 		buf = palloc(bufsize);
@@ -2348,7 +2337,7 @@ pg_strnxfrm_prefix_icu(char *dest, const char *src, int32_t srclen,
 bool
 pg_strxfrm_enabled(pg_locale_t locale)
 {
-	if (!locale || locale->provider == COLLPROVIDER_LIBC)
+	if (locale->provider == COLLPROVIDER_LIBC)
 #ifdef TRUST_STRXFRM
 		return true;
 #else
@@ -2382,7 +2371,7 @@ pg_strxfrm(char *dest, const char *src, size_t destsize, pg_locale_t locale)
 {
 	size_t		result = 0;		/* keep compiler quiet */
 
-	if (!locale || locale->provider == COLLPROVIDER_LIBC)
+	if (locale->provider == COLLPROVIDER_LIBC)
 		result = pg_strxfrm_libc(dest, src, destsize, locale);
 #ifdef USE_ICU
 	else if (locale->provider == COLLPROVIDER_ICU)
@@ -2419,7 +2408,7 @@ pg_strnxfrm(char *dest, size_t destsize, const char *src, size_t srclen,
 {
 	size_t		result = 0;		/* keep compiler quiet */
 
-	if (!locale || locale->provider == COLLPROVIDER_LIBC)
+	if (locale->provider == COLLPROVIDER_LIBC)
 		result = pg_strnxfrm_libc(dest, src, srclen, destsize, locale);
 #ifdef USE_ICU
 	else if (locale->provider == COLLPROVIDER_ICU)
@@ -2439,7 +2428,7 @@ pg_strnxfrm(char *dest, size_t destsize, const char *src, size_t srclen,
 bool
 pg_strxfrm_prefix_enabled(pg_locale_t locale)
 {
-	if (!locale || locale->provider == COLLPROVIDER_LIBC)
+	if (locale->provider == COLLPROVIDER_LIBC)
 		return false;
 	else if (locale->provider == COLLPROVIDER_ICU)
 		return true;
@@ -2469,13 +2458,11 @@ pg_strxfrm_prefix(char *dest, const char *src, size_t destsize,
 {
 	size_t		result = 0;		/* keep compiler quiet */
 
-	if (!locale)
-		PGLOCALE_SUPPORT_ERROR(COLLPROVIDER_LIBC);
 #ifdef USE_ICU
-	else if (locale->provider == COLLPROVIDER_ICU)
+	if (locale->provider == COLLPROVIDER_ICU)
 		result = pg_strnxfrm_prefix_icu(dest, src, -1, destsize, locale);
-#endif
 	else
+#endif
 		PGLOCALE_SUPPORT_ERROR(locale->provider);
 
 	return result;
@@ -2504,13 +2491,11 @@ pg_strnxfrm_prefix(char *dest, size_t destsize, const char *src,
 {
 	size_t		result = 0;		/* keep compiler quiet */
 
-	if (!locale)
-		PGLOCALE_SUPPORT_ERROR(COLLPROVIDER_LIBC);
 #ifdef USE_ICU
-	else if (locale->provider == COLLPROVIDER_ICU)
+	if (locale->provider == COLLPROVIDER_ICU)
 		result = pg_strnxfrm_prefix_icu(dest, src, -1, destsize, locale);
-#endif
 	else
+#endif
 		PGLOCALE_SUPPORT_ERROR(locale->provider);
 
 	return result;
@@ -3060,7 +3045,7 @@ wchar2char(char *to, const wchar_t *from, size_t tolen, pg_locale_t locale)
 {
 	size_t		result;
 
-	Assert(!locale || locale->provider == COLLPROVIDER_LIBC);
+	Assert(locale->provider == COLLPROVIDER_LIBC);
 
 	if (tolen == 0)
 		return 0;
@@ -3096,7 +3081,7 @@ wchar2char(char *to, const wchar_t *from, size_t tolen, pg_locale_t locale)
 	else
 	{
 		/* Use wcstombs_l for nondefault locales */
-		result = wcstombs_l(to, from, tolen, locale->info.lt);
+		result = wcstombs_l(to, from, tolen, locale->info.libc.lt);
 	}
 
 	return result;
@@ -3117,7 +3102,7 @@ char2wchar(wchar_t *to, size_t tolen, const char *from, size_t fromlen,
 {
 	size_t		result;
 
-	Assert(!locale || locale->provider == COLLPROVIDER_LIBC);
+	Assert(locale->provider == COLLPROVIDER_LIBC);
 
 	if (tolen == 0)
 		return 0;
@@ -3158,7 +3143,7 @@ char2wchar(wchar_t *to, size_t tolen, const char *from, size_t fromlen,
 		else
 		{
 			/* Use mbstowcs_l for nondefault locales */
-			result = mbstowcs_l(to, str, tolen, locale->info.lt);
+			result = mbstowcs_l(to, str, tolen, locale->info.libc.lt);
 		}
 
 		pfree(str);

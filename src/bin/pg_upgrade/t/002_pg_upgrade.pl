@@ -197,6 +197,7 @@ is( $result,
 my $srcdir = abs_path("../../..");
 
 # Set up the data of the old instance with a dump or pg_regress.
+my $db_from_regress;
 if (defined($ENV{olddump}))
 {
 	# Use the dump specified.
@@ -207,6 +208,7 @@ if (defined($ENV{olddump}))
 	# not exist yet, and we are done here.
 	$oldnode->command_ok([ 'psql', '-X', '-f', $olddumpfile, 'postgres' ],
 		'loaded old dump file');
+	$db_from_regress = 0;
 }
 else
 {
@@ -258,6 +260,7 @@ else
 		}
 	}
 	is($rc, 0, 'regression tests pass');
+	$db_from_regress = 1;
 }
 
 # Initialize a new node for the upgrade.
@@ -520,6 +523,120 @@ if ($compare_res != 0)
 	print "=== stderr ===\n";
 	print $stderr;
 	print "=== EOF ===\n";
+}
+
+# Test normal dump/restore of the objects left behind by regression. Ideally it
+# should be done in a separate test, but doing it here saves us one full
+# regression run.
+if ($db_from_regress)
+{
+	my $dst_node = PostgreSQL::Test::Cluster->new('dst_node');
+	my $dump3_file = "$tempdir/dump3.sql";
+	my $dump4_file = "$tempdir/dump4.sql";
+	my $dump5_file = "$tempdir/dump5.sql";
+
+	$dst_node->init();
+	$oldnode->start;
+
+	# Dump source database for comparison later
+	command_ok(
+		[
+			'pg_dump', '-s', '-d', 'regression',
+			'-h', $oldnode->host,
+			'-p', $oldnode->port,
+			'-f', $dump4_file
+		],
+		'pg_dump on source instance');
+
+	# Dump to be restored
+	command_ok(
+		[
+			'pg_dump', '-Fc', '-d', 'regression',
+			'-h', $oldnode->host,
+			'-p', $oldnode->port,
+			'-f', $dump3_file
+		],
+		'pg_dump on source instance');
+
+	$dst_node->start;
+	$dst_node->command_ok(
+			[ 'createdb', 'regression' ],
+			"created destination database");
+
+	# Restore into destination database
+	command_ok(
+		[
+			'pg_restore', '-d', 'regression',
+			'-h', $dst_node->host,
+			'-p', $dst_node->port,
+			$dump3_file
+		],
+		'pg_restore on destination instance');
+
+	# Dump from destination database for comparison
+	command_ok(
+		[
+			'pg_dump', '-s', '-d', 'regression',
+			'-h', $dst_node->host,
+			'-p', $dst_node->port,
+			'-f', $dump5_file
+		],
+		'pg_dump on destination instance');
+
+	# Compare the two dumps. Ideally there should be no difference in the two
+	# dumps. But the column order in the dumps differs for inheritance
+	# children. Some regression tests purposefully create the child table with
+	# columns in different order than the parent using CREATE TABLE ...
+	# followed by ALTER TABLE ... INHERIT. These child tables are dumped as a
+	# single CREATE TABLE ... INHERITS with column order same as the child.
+	# When the child table is restored using this command, it creates the child
+	# table with same column order as the parent. The restored table is dumped
+	# as CREATE TABLE ... INHERITS but with columns order same as parent. Thus
+	# the column orders differ between the two dumps. Treat this difference as
+	# an exception.
+	#
+	# We could avoid this by dumping the database loaded from original dump.
+	# But that would change the state of the objects as left behind by the
+	# regression.
+	my $expected_diff = " --
+ CREATE TABLE public.gtestxx_4 (
+-    b integer,
+-    a integer NOT NULL
++    a integer NOT NULL,
++    b integer
+ )
+ INHERITS (public.gtest1);
+ --
+ CREATE TABLE public.test_type_diff2_c1 (
++    int_two smallint,
+     int_four bigint,
+-    int_eight bigint,
+-    int_two smallint
++    int_eight bigint
+ )
+ INHERITS (public.test_type_diff2);
+ --
+ CREATE TABLE public.test_type_diff2_c2 (
+-    int_eight bigint,
+     int_two smallint,
+-    int_four bigint
++    int_four bigint,
++    int_eight bigint
+ )
+ INHERITS (public.test_type_diff2);
+ ";
+	my ($stdout, $stderr) =
+		run_command([ 'diff', '-u', $dump4_file, $dump5_file]);
+	# Clear file names, line numbers from the diffs; those are not going to
+	# remain the same always. Also clear empty lines and normalize new line
+	# characters across platforms.
+	$stdout =~ s/^\@\@.*$//mg;
+	$stdout =~ s/^.*$dump4_file.*$//mg;
+	$stdout =~ s/^.*$dump5_file.*$//mg;
+	$stdout =~ s/^\s*\n//mg;
+	$stdout =~ s/\r\n/\n/g;
+	$expected_diff =~ s/\r\n/\n/g;
+	is($stdout, $expected_diff, 'old and new dumps match after dump and restore');
 }
 
 done_testing();

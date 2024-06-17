@@ -989,6 +989,20 @@ BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
 	else
 		plan_context = CurrentMemoryContext;
 
+	if (boundParams)
+	{
+		int i;
+
+		for (i =0; i < boundParams->numParams; i++)
+		{
+			if (boundParams->params[i].pflags & PARAM_FLAG_SKEWEDSTAT)
+			{
+				plansource->hasSkewedparam = true;
+				break;
+			}
+		}
+	}
+
 	/*
 	 * Create and fill the CachedPlan struct within the new context.
 	 */
@@ -1063,6 +1077,12 @@ choose_custom_plan(CachedPlanSource *plansource, ParamListInfo boundParams)
 		return false;
 	if (plan_cache_mode == PLAN_CACHE_MODE_FORCE_CUSTOM_PLAN)
 		return true;
+
+	if (plan_cache_mode == PLAN_CACHE_MODE_STAT_ADAPTIVE_PLAN)
+	{
+		if (plansource->hasSkewedparam)
+			return true;
+	}
 
 	/* See if caller wants to force the decision */
 	if (plansource->cursor_options & CURSOR_OPT_GENERIC_PLAN)

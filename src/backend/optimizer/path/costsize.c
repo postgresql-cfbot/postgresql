@@ -153,6 +153,8 @@ bool		enable_partition_pruning = true;
 bool		enable_presorted_aggregate = true;
 bool		enable_async_append = true;
 
+double		skewed_param_factor = DEFAULT_SKEWED_PARAM_FACTOR;
+
 typedef struct
 {
 	PlannerInfo *root;

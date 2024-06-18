@@ -510,25 +510,30 @@ EXPLAIN (COSTS OFF)
 SELECT * FROM prt1 t1 JOIN LATERAL
 			  (SELECT * FROM prt1 t2 TABLESAMPLE SYSTEM (t1.a) REPEATABLE(t1.b)) s
 			  ON t1.a = s.a;
-                         QUERY PLAN                          
--------------------------------------------------------------
- Append
-   ->  Nested Loop
-         ->  Seq Scan on prt1_p1 t1_1
-         ->  Sample Scan on prt1_p1 t2_1
-               Sampling: system (t1_1.a) REPEATABLE (t1_1.b)
-               Filter: (t1_1.a = a)
-   ->  Nested Loop
-         ->  Seq Scan on prt1_p2 t1_2
-         ->  Sample Scan on prt1_p2 t2_2
-               Sampling: system (t1_2.a) REPEATABLE (t1_2.b)
-               Filter: (t1_2.a = a)
-   ->  Nested Loop
-         ->  Seq Scan on prt1_p3 t1_3
-         ->  Sample Scan on prt1_p3 t2_3
-               Sampling: system (t1_3.a) REPEATABLE (t1_3.b)
-               Filter: (t1_3.a = a)
-(16 rows)
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ Gather
+   Workers Planned: 2
+   ->  Parallel Append
+         ->  Nested Loop
+               ->  Parallel Seq Scan on prt1_p1 t1_1
+               ->  Materialize
+                     ->  Sample Scan on prt1_p1 t2_1
+                           Sampling: system (t1_1.a) REPEATABLE (t1_1.b)
+                           Filter: (t1_1.a = a)
+         ->  Nested Loop
+               ->  Parallel Seq Scan on prt1_p2 t1_2
+               ->  Materialize
+                     ->  Sample Scan on prt1_p2 t2_2
+                           Sampling: system (t1_2.a) REPEATABLE (t1_2.b)
+                           Filter: (t1_2.a = a)
+         ->  Nested Loop
+               ->  Parallel Seq Scan on prt1_p3 t1_3
+               ->  Materialize
+                     ->  Sample Scan on prt1_p3 t2_3
+                           Sampling: system (t1_3.a) REPEATABLE (t1_3.b)
+                           Filter: (t1_3.a = a)
+(21 rows)
 
 -- lateral reference in scan's restriction clauses
 EXPLAIN (COSTS OFF)
@@ -2041,35 +2046,42 @@ EXPLAIN (COSTS OFF)
 SELECT * FROM prt1_l t1 JOIN LATERAL
 			  (SELECT * FROM prt1_l t2 TABLESAMPLE SYSTEM (t1.a) REPEATABLE(t1.b)) s
 			  ON t1.a = s.a AND t1.b = s.b AND t1.c = s.c;
-                                       QUERY PLAN                                       
-----------------------------------------------------------------------------------------
- Append
-   ->  Nested Loop
-         ->  Seq Scan on prt1_l_p1 t1_1
-         ->  Sample Scan on prt1_l_p1 t2_1
-               Sampling: system (t1_1.a) REPEATABLE (t1_1.b)
-               Filter: ((t1_1.a = a) AND (t1_1.b = b) AND ((t1_1.c)::text = (c)::text))
-   ->  Nested Loop
-         ->  Seq Scan on prt1_l_p2_p1 t1_2
-         ->  Sample Scan on prt1_l_p2_p1 t2_2
-               Sampling: system (t1_2.a) REPEATABLE (t1_2.b)
-               Filter: ((t1_2.a = a) AND (t1_2.b = b) AND ((t1_2.c)::text = (c)::text))
-   ->  Nested Loop
-         ->  Seq Scan on prt1_l_p2_p2 t1_3
-         ->  Sample Scan on prt1_l_p2_p2 t2_3
-               Sampling: system (t1_3.a) REPEATABLE (t1_3.b)
-               Filter: ((t1_3.a = a) AND (t1_3.b = b) AND ((t1_3.c)::text = (c)::text))
-   ->  Nested Loop
-         ->  Seq Scan on prt1_l_p3_p1 t1_4
-         ->  Sample Scan on prt1_l_p3_p1 t2_4
-               Sampling: system (t1_4.a) REPEATABLE (t1_4.b)
-               Filter: ((t1_4.a = a) AND (t1_4.b = b) AND ((t1_4.c)::text = (c)::text))
-   ->  Nested Loop
-         ->  Seq Scan on prt1_l_p3_p2 t1_5
-         ->  Sample Scan on prt1_l_p3_p2 t2_5
-               Sampling: system (t1_5.a) REPEATABLE (t1_5.b)
-               Filter: ((t1_5.a = a) AND (t1_5.b = b) AND ((t1_5.c)::text = (c)::text))
-(26 rows)
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Gather
+   Workers Planned: 2
+   ->  Parallel Append
+         ->  Nested Loop
+               ->  Parallel Seq Scan on prt1_l_p1 t1_1
+               ->  Materialize
+                     ->  Sample Scan on prt1_l_p1 t2_1
+                           Sampling: system (t1_1.a) REPEATABLE (t1_1.b)
+                           Filter: ((t1_1.a = a) AND (t1_1.b = b) AND ((t1_1.c)::text = (c)::text))
+         ->  Nested Loop
+               ->  Parallel Seq Scan on prt1_l_p2_p2 t1_3
+               ->  Materialize
+                     ->  Sample Scan on prt1_l_p2_p2 t2_3
+                           Sampling: system (t1_3.a) REPEATABLE (t1_3.b)
+                           Filter: ((t1_3.a = a) AND (t1_3.b = b) AND ((t1_3.c)::text = (c)::text))
+         ->  Nested Loop
+               ->  Parallel Seq Scan on prt1_l_p2_p1 t1_2
+               ->  Materialize
+                     ->  Sample Scan on prt1_l_p2_p1 t2_2
+                           Sampling: system (t1_2.a) REPEATABLE (t1_2.b)
+                           Filter: ((t1_2.a = a) AND (t1_2.b = b) AND ((t1_2.c)::text = (c)::text))
+         ->  Nested Loop
+               ->  Parallel Seq Scan on prt1_l_p3_p1 t1_4
+               ->  Materialize
+                     ->  Sample Scan on prt1_l_p3_p1 t2_4
+                           Sampling: system (t1_4.a) REPEATABLE (t1_4.b)
+                           Filter: ((t1_4.a = a) AND (t1_4.b = b) AND ((t1_4.c)::text = (c)::text))
+         ->  Nested Loop
+               ->  Parallel Seq Scan on prt1_l_p3_p2 t1_5
+               ->  Materialize
+                     ->  Sample Scan on prt1_l_p3_p2 t2_5
+                           Sampling: system (t1_5.a) REPEATABLE (t1_5.b)
+                           Filter: ((t1_5.a = a) AND (t1_5.b = b) AND ((t1_5.c)::text = (c)::text))
+(33 rows)
 
 -- partitionwise join with lateral reference in scan's restriction clauses
 EXPLAIN (COSTS OFF)

@@ -868,6 +868,46 @@ select * from
 (12 rows)
 
 reset enable_material;
+-- test materialized form of the cheapest inner path
+set min_parallel_table_scan_size = '512kB';
+explain(costs off)
+select count(*) from tenk1, int4_tbl where tenk1.two < int4_tbl.f1;
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Finalize Aggregate
+   ->  Gather
+         Workers Planned: 4
+         ->  Partial Aggregate
+               ->  Nested Loop
+                     Join Filter: (tenk1.two < int4_tbl.f1)
+                     ->  Parallel Seq Scan on tenk1
+                     ->  Materialize
+                           ->  Seq Scan on int4_tbl
+(9 rows)
+
+select count(*) from tenk1, int4_tbl where tenk1.two < int4_tbl.f1;
+ count 
+-------
+ 20000
+(1 row)
+
+-- don't consider parallel nestloop if inner path is not parallel-safe
+set enable_memoize = off;
+explain(costs off)
+select * from tenk1,
+	lateral (select * from int4_tbl where tenk1.two < int4_tbl.f1 for share);
+                  QUERY PLAN                  
+----------------------------------------------
+ Nested Loop
+   ->  Seq Scan on tenk1
+   ->  Subquery Scan on unnamed_subquery
+         ->  LockRows
+               ->  Seq Scan on int4_tbl
+                     Filter: (tenk1.two < f1)
+(6 rows)
+
+set min_parallel_table_scan_size = 0;
+reset enable_memoize;
 reset enable_hashagg;
 -- check parallelized int8 aggregate (bug #14897)
 explain (costs off)

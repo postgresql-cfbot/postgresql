@@ -8349,10 +8349,11 @@ xlog_redo(XLogReaderState *record)
 		memcpy(&xlrec, XLogRecGetData(record), sizeof(xl_end_of_recovery));
 
 		/*
-		 * For Hot Standby, we could treat this like a Shutdown Checkpoint,
-		 * but this case is rarer and harder to test, so the benefit doesn't
-		 * outweigh the potential extra cost of maintenance.
+		 * In standby mode, we could treat this like an end-of-recovery
+		 * checkpoint.
 		 */
+		if (StandbyMode)
+			RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_WAIT);
 
 		/*
 		 * We should've already switched to the new TLI before replaying this

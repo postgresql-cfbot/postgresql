@@ -1333,8 +1333,8 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable, bool dontWait)
 					VirtualTransactionId *vxids;
 					int			cnt;
 
-					vxids = GetLockConflicts(&locallock->tag.lock,
-											 AccessExclusiveLock, &cnt);
+					vxids = GetLockers(&locallock->tag.lock,
+									   AccessExclusiveLock, true, &cnt);
 
 					/*
 					 * Log the recovery conflict and the list of PIDs of

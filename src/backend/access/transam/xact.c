@@ -2636,8 +2636,8 @@ PrepareTransaction(void)
 
 	/*
 	 * Transfer our locks to a dummy PGPROC.  This has to be done before
-	 * ProcArrayClearTransaction().  Otherwise, a GetLockConflicts() would
-	 * conclude "xact already committed or aborted" for our locks.
+	 * ProcArrayClearTransaction().  Otherwise, a GetLockers() would conclude
+	 * "xact already committed or aborted" for our locks.
 	 */
 	PostPrepare_Locks(xid);
 

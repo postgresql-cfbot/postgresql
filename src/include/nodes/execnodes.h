@@ -2554,6 +2554,11 @@ typedef enum WindowAggStatus
 									 * tuples during spool */
 } WindowAggStatus;
 
+#define	RF_NOT_DETERMINED	0
+#define	RF_FRAME_HEAD		1
+#define	RF_SKIPPED			2
+#define	RF_UNMATCHED		3
+
 typedef struct WindowAggState
 {
 	ScanState	ss;				/* its first field is NodeTag */
@@ -2602,6 +2607,19 @@ typedef struct WindowAggState
 	int64		groupheadpos;	/* current row's peer group head position */
 	int64		grouptailpos;	/* " " " " tail position (group end+1) */
 
+	/* these fields are used in Row pattern recognition: */
+	RPSkipTo	rpSkipTo;		/* Row Pattern Skip To type */
+	List	   *patternVariableList;	/* list of row pattern variables names
+										 * (list of String) */
+	List	   *patternRegexpList;	/* list of row pattern regular expressions
+									 * ('+' or ''. list of String) */
+	List	   *defineVariableList; /* list of row pattern definition
+									 * variables (list of String) */
+	List	   *defineClauseList;	/* expression for row pattern definition
+									 * search conditions ExprState list */
+	List	   *defineInitial;	/* list of row pattern definition variable
+								 * initials (list of String) */
+
 	MemoryContext partcontext;	/* context for partition-lifespan data */
 	MemoryContext aggcontext;	/* shared context for aggregate working data */
 	MemoryContext curaggcontext;	/* current aggregate's working data */
@@ -2638,6 +2656,18 @@ typedef struct WindowAggState
 	TupleTableSlot *agg_row_slot;
 	TupleTableSlot *temp_slot_1;
 	TupleTableSlot *temp_slot_2;
+
+	/* temporary slots for RPR */
+	TupleTableSlot *prev_slot;	/* PREV row navigation operator */
+	TupleTableSlot *next_slot;	/* NEXT row navigation operator */
+	TupleTableSlot *null_slot;	/* all NULL slot */
+
+	/*
+	 * Each byte corresponds to a row positioned at absolute its pos in
+	 * partition.  See above definition for RF_*
+	 */
+	char	   *reduced_frame_map;
+	int64		alloc_sz;		/* size of the map */
 } WindowAggState;
 
 /* ----------------

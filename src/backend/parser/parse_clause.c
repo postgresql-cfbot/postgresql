@@ -98,7 +98,14 @@ static WindowClause *findWindowClause(List *wclist, const char *name);
 static Node *transformFrameOffset(ParseState *pstate, int frameOptions,
 								  Oid rangeopfamily, Oid rangeopcintype, Oid *inRangeFunc,
 								  Node *clause);
-
+static void transformRPR(ParseState *pstate, WindowClause *wc, WindowDef *windef,
+						 List **targetlist);
+static List *transformDefineClause(ParseState *pstate, WindowClause *wc, WindowDef *windef,
+								   List **targetlist);
+static void transformPatternClause(ParseState *pstate, WindowClause *wc,
+								   WindowDef *windef);
+static List *transformMeasureClause(ParseState *pstate, WindowClause *wc,
+									WindowDef *windef);
 
 /*
  * transformFromClause -
@@ -2956,6 +2963,10 @@ transformWindowDefinitions(ParseState *pstate,
 											 rangeopfamily, rangeopcintype,
 											 &wc->endInRangeFunc,
 											 windef->endOffset);
+
+		/* Process Row Pattern Recognition related clauses */
+		transformRPR(pstate, wc, windef, targetlist);
+
 		wc->winref = winref;
 
 		result = lappend(result, wc);
@@ -3819,4 +3830,287 @@ transformFrameOffset(ParseState *pstate, int frameOptions,
 	checkExprIsVarFree(pstate, node, constructName);
 
 	return node;
+}
+
+/*
+ * transformRPR
+ *		Process Row Pattern Recognition related clauses
+ */
+static void
+transformRPR(ParseState *pstate, WindowClause *wc, WindowDef *windef,
+			 List **targetlist)
+{
+	/*
+	 * Window definition exists?
+	 */
+	if (windef == NULL)
+		return;
+
+	/*
+	 * Row Pattern Common Syntax clause exists?
+	 */
+	if (windef->rpCommonSyntax == NULL)
+		return;
+
+	/* Check Frame option. Frame must start at current row */
+	if ((wc->frameOptions & FRAMEOPTION_START_CURRENT_ROW) == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("FRAME must start at current row when row patttern recognition is used")));
+
+	/* Transform AFTER MACH SKIP TO clause */
+	wc->rpSkipTo = windef->rpCommonSyntax->rpSkipTo;
+
+	/* Transform AFTER MACH SKIP TO variable */
+	wc->rpSkipVariable = windef->rpCommonSyntax->rpSkipVariable;
+
+	/* Transform SEEK or INITIAL clause */
+	wc->initial = windef->rpCommonSyntax->initial;
+
+	/* Transform DEFINE clause into list of TargetEntry's */
+	wc->defineClause = transformDefineClause(pstate, wc, windef, targetlist);
+
+	/* Check PATTERN clause and copy to patternClause */
+	transformPatternClause(pstate, wc, windef);
+
+	/* Transform MEASURE clause */
+	transformMeasureClause(pstate, wc, windef);
+}
+
+/*
+ * transformDefineClause Process DEFINE clause and transform ResTarget into
+ *		list of TargetEntry.
+ *
+ * XXX we only support column reference in row pattern definition search
+ * condition, e.g. "price". <row pattern definition variable name>.<column
+ * reference> is not supported, e.g. "A.price".
+ */
+static List *
+transformDefineClause(ParseState *pstate, WindowClause *wc, WindowDef *windef,
+					  List **targetlist)
+{
+	/* DEFINE variable name initials */
+	static char *defineVariableInitials = "abcdefghijklmnopqrstuvwxyz";
+
+	ListCell   *lc,
+			   *l;
+	ResTarget  *restarget,
+			   *r;
+	List	   *restargets;
+	List	   *defineClause;
+	char	   *name;
+	int			initialLen;
+	int			i;
+
+	/*
+	 * If Row Definition Common Syntax exists, DEFINE clause must exist. (the
+	 * raw parser should have already checked it.)
+	 */
+	Assert(windef->rpCommonSyntax->rpDefs != NULL);
+
+	/*
+	 * Check and add "A AS A IS TRUE" if pattern variable is missing in DEFINE
+	 * per the SQL standard.
+	 */
+	restargets = NIL;
+	foreach(lc, windef->rpCommonSyntax->rpPatterns)
+	{
+		A_Expr	   *a;
+		bool		found = false;
+
+		if (!IsA(lfirst(lc), A_Expr))
+			ereport(ERROR,
+					errmsg("node type is not A_Expr"));
+
+		a = (A_Expr *) lfirst(lc);
+		name = strVal(a->lexpr);
+
+		foreach(l, windef->rpCommonSyntax->rpDefs)
+		{
+			restarget = (ResTarget *) lfirst(l);
+
+			if (!strcmp(restarget->name, name))
+			{
+				found = true;
+				break;
+			}
+		}
+
+		if (!found)
+		{
+			/*
+			 * "name" is missing. So create "name AS name IS TRUE" ResTarget
+			 * node and add it to the temporary list.
+			 */
+			A_Const    *n;
+
+			restarget = makeNode(ResTarget);
+			n = makeNode(A_Const);
+			n->val.boolval.type = T_Boolean;
+			n->val.boolval.boolval = true;
+			n->location = -1;
+			restarget->name = pstrdup(name);
+			restarget->indirection = NIL;
+			restarget->val = (Node *) n;
+			restarget->location = -1;
+			restargets = lappend((List *) restargets, restarget);
+		}
+	}
+
+	if (list_length(restargets) >= 1)
+	{
+		/* add missing DEFINEs */
+		windef->rpCommonSyntax->rpDefs =
+			list_concat(windef->rpCommonSyntax->rpDefs, restargets);
+		list_free(restargets);
+	}
+
+	/*
+	 * Check for duplicate row pattern definition variables.  The standard
+	 * requires that no two row pattern definition variable names shall be
+	 * equivalent.
+	 */
+	restargets = NIL;
+	foreach(lc, windef->rpCommonSyntax->rpDefs)
+	{
+		restarget = (ResTarget *) lfirst(lc);
+		name = restarget->name;
+
+		/*
+		 * Add DEFINE expression (Restarget->val) to the targetlist as a
+		 * TargetEntry if it does not exist yet. Planner will add the column
+		 * ref var node to the outer plan's target list later on. This makes
+		 * DEFINE expression could access the outer tuple while evaluating
+		 * PATTERN.
+		 *
+		 * XXX: adding whole expressions of DEFINE to the plan.targetlist is
+		 * not so good, because it's not necessary to evalute the expression
+		 * in the target list while running the plan. We should extract the
+		 * var nodes only then add them to the plan.targetlist.
+		 */
+		findTargetlistEntrySQL99(pstate, (Node *) restarget->val,
+								 targetlist, EXPR_KIND_RPR_DEFINE);
+
+		/*
+		 * Make sure that the row pattern definition search condition is a
+		 * boolean expression.
+		 */
+		transformWhereClause(pstate, restarget->val,
+							 EXPR_KIND_RPR_DEFINE, "DEFINE");
+
+		foreach(l, restargets)
+		{
+			char	   *n;
+
+			r = (ResTarget *) lfirst(l);
+			n = r->name;
+
+			if (!strcmp(n, name))
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("row pattern definition variable name \"%s\" appears more than once in DEFINE clause",
+								name),
+						 parser_errposition(pstate, exprLocation((Node *) r))));
+		}
+		restargets = lappend(restargets, restarget);
+	}
+	list_free(restargets);
+
+	/*
+	 * Create list of row pattern DEFINE variable name's initial. We assign
+	 * [a-z] to them (up to 26 variable names are allowed).
+	 */
+	restargets = NIL;
+	i = 0;
+	initialLen = strlen(defineVariableInitials);
+
+	foreach(lc, windef->rpCommonSyntax->rpDefs)
+	{
+		char		initial[2];
+
+		restarget = (ResTarget *) lfirst(lc);
+		name = restarget->name;
+
+		if (i >= initialLen)
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("number of row pattern definition variable names exceeds %d",
+							initialLen),
+					 parser_errposition(pstate,
+										exprLocation((Node *) restarget))));
+		}
+		initial[0] = defineVariableInitials[i++];
+		initial[1] = '\0';
+		wc->defineInitial = lappend(wc->defineInitial,
+									makeString(pstrdup(initial)));
+	}
+
+	defineClause = transformTargetList(pstate, windef->rpCommonSyntax->rpDefs,
+									   EXPR_KIND_RPR_DEFINE);
+
+	/* mark column origins */
+	markTargetListOrigins(pstate, defineClause);
+
+	/* mark all nodes in the DEFINE clause tree with collation information */
+	assign_expr_collations(pstate, (Node *) defineClause);
+
+	return defineClause;
+}
+
+/*
+ * transformPatternClause
+ *		Process PATTERN clause and return PATTERN clause in the raw parse tree
+ */
+static void
+transformPatternClause(ParseState *pstate, WindowClause *wc,
+					   WindowDef *windef)
+{
+	ListCell   *lc;
+
+	/*
+	 * Row Pattern Common Syntax clause exists?
+	 */
+	if (windef->rpCommonSyntax == NULL)
+		return;
+
+	wc->patternVariable = NIL;
+	wc->patternRegexp = NIL;
+	foreach(lc, windef->rpCommonSyntax->rpPatterns)
+	{
+		A_Expr	   *a;
+		char	   *name;
+		char	   *regexp;
+
+		if (!IsA(lfirst(lc), A_Expr))
+			ereport(ERROR,
+					errmsg("node type is not A_Expr"));
+
+		a = (A_Expr *) lfirst(lc);
+		name = strVal(a->lexpr);
+
+		wc->patternVariable = lappend(wc->patternVariable, makeString(pstrdup(name)));
+		regexp = strVal(lfirst(list_head(a->name)));
+
+		wc->patternRegexp = lappend(wc->patternRegexp, makeString(pstrdup(regexp)));
+	}
+}
+
+/*
+ * transformMeasureClause
+ *		Process MEASURE clause
+ *	XXX MEASURE clause is not supported yet
+ */
+static List *
+transformMeasureClause(ParseState *pstate, WindowClause *wc,
+					   WindowDef *windef)
+{
+	if (windef->rowPatternMeasures == NIL)
+		return NIL;
+
+	ereport(ERROR,
+			(errcode(ERRCODE_SYNTAX_ERROR),
+			 errmsg("%s", "MEASURE clause is not supported yet"),
+			 parser_errposition(pstate, exprLocation((Node *) windef->rowPatternMeasures))));
+	return NIL;
 }

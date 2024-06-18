@@ -21,6 +21,7 @@
  * allpaths.c
  */
 extern PGDLLIMPORT bool enable_geqo;
+extern PGDLLIMPORT bool enable_eager_aggregate;
 extern PGDLLIMPORT int geqo_threshold;
 extern PGDLLIMPORT int min_parallel_table_scan_size;
 extern PGDLLIMPORT int min_parallel_index_scan_size;
@@ -57,6 +58,10 @@ extern void generate_gather_paths(PlannerInfo *root, RelOptInfo *rel,
 								  bool override_rows);
 extern void generate_useful_gather_paths(PlannerInfo *root, RelOptInfo *rel,
 										 bool override_rows);
+extern void generate_grouped_paths(PlannerInfo *root,
+								   RelOptInfo *rel_grouped,
+								   RelOptInfo *rel_plain,
+								   RelAggInfo *agg_info);
 extern int	compute_parallel_worker(RelOptInfo *rel, double heap_pages,
 									double index_pages, int max_workers);
 extern void create_partial_bitmap_paths(PlannerInfo *root, RelOptInfo *rel,
@@ -158,7 +163,8 @@ extern List *generate_join_implied_equalities_for_ecs(PlannerInfo *root,
 													  Relids join_relids,
 													  Relids outer_relids,
 													  RelOptInfo *inner_rel);
-extern bool exprs_known_equal(PlannerInfo *root, Node *item1, Node *item2);
+extern bool exprs_known_equal(PlannerInfo *root, Node *item1, Node *item2,
+							  Oid opfamily);
 extern EquivalenceClass *match_eclasses_to_foreign_key_col(PlannerInfo *root,
 														   ForeignKeyOptInfo *fkinfo,
 														   int colno);

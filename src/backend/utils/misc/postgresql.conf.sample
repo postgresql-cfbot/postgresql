@@ -413,6 +413,7 @@
 #enable_sort = on
 #enable_tidscan = on
 #enable_group_by_reordering = on
+#enable_eager_aggregate = off
 
 # - Planner Cost Constants -
 

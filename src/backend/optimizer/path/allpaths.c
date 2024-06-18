@@ -40,6 +40,7 @@
 #include "optimizer/paths.h"
 #include "optimizer/plancat.h"
 #include "optimizer/planner.h"
+#include "optimizer/prep.h"
 #include "optimizer/tlist.h"
 #include "parser/parse_clause.h"
 #include "parser/parsetree.h"
@@ -47,6 +48,7 @@
 #include "port/pg_bitutils.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/lsyscache.h"
+#include "utils/selfuncs.h"
 
 
 /* Bitmask flags for pushdown_safety_info.unsafeFlags */
@@ -77,6 +79,7 @@ typedef enum pushdown_safe_type
 
 /* These parameters are set by GUC */
 bool		enable_geqo = false;	/* just in case GUC doesn't set it */
+bool		enable_eager_aggregate = false;
 int			geqo_threshold;
 int			min_parallel_table_scan_size;
 int			min_parallel_index_scan_size;
@@ -90,6 +93,7 @@ join_search_hook_type join_search_hook = NULL;
 
 static void set_base_rel_consider_startup(PlannerInfo *root);
 static void set_base_rel_sizes(PlannerInfo *root);
+static void setup_base_grouped_rels(PlannerInfo *root);
 static void set_base_rel_pathlists(PlannerInfo *root);
 static void set_rel_size(PlannerInfo *root, RelOptInfo *rel,
 						 Index rti, RangeTblEntry *rte);
@@ -114,6 +118,7 @@ static void set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 								Index rti, RangeTblEntry *rte);
 static void set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 									Index rti, RangeTblEntry *rte);
+static void set_grouped_rel_pathlist(PlannerInfo *root, RelOptInfo *rel);
 static void generate_orderedappend_paths(PlannerInfo *root, RelOptInfo *rel,
 										 List *live_childrels,
 										 List *all_child_pathkeys);
@@ -181,6 +186,11 @@ make_one_rel(PlannerInfo *root, List *joinlist)
 	 * Compute size estimates and consider_parallel flags for each base rel.
 	 */
 	set_base_rel_sizes(root);
+
+	/*
+	 * Build grouped base relations for each base rel if possible.
+	 */
+	setup_base_grouped_rels(root);
 
 	/*
 	 * We should now have size estimates for every actual table involved in
@@ -320,6 +330,59 @@ set_base_rel_sizes(PlannerInfo *root)
 			set_rel_consider_parallel(root, rel, rte);
 
 		set_rel_size(root, rel, rti, rte);
+	}
+}
+
+/*
+ * setup_base_grouped_rels
+ *	  For each "plain" base relation build a grouped base relation if eager
+ *	  aggregation is possible and if this relation can produce grouped paths.
+ */
+static void
+setup_base_grouped_rels(PlannerInfo *root)
+{
+	Index		rti;
+
+	/*
+	 * If there are no aggregate expressions or grouping expressions, eager
+	 * aggregation is not possible.
+	 */
+	if (root->agg_clause_list == NIL ||
+		root->group_expr_list == NIL)
+		return;
+
+	/*
+	 * Eager aggregation only makes sense if there are multiple base rels in
+	 * the query.
+	 */
+	if (bms_membership(root->all_baserels) != BMS_MULTIPLE)
+		return;
+
+	for (rti = 1; rti < root->simple_rel_array_size; rti++)
+	{
+		RelOptInfo	   *rel = root->simple_rel_array[rti];
+		RelOptInfo	   *rel_grouped;
+		RelAggInfo	   *agg_info;
+
+		/* there may be empty slots corresponding to non-baserel RTEs */
+		if (rel == NULL)
+			continue;
+
+		Assert(rel->relid == rti); /* sanity check on array */
+
+		/*
+		 * Ignore RTEs that are not simple rels.  Note that we need to consider
+		 * "other rels" here.
+		 */
+		if (!IS_SIMPLE_REL(rel))
+			continue;
+
+		rel_grouped = build_simple_grouped_rel(root, rel->relid, &agg_info);
+		if (rel_grouped)
+		{
+			/* Make the grouped relation available for joining. */
+			add_grouped_rel(root, rel_grouped, agg_info);
+		}
 	}
 }
 
@@ -558,6 +621,15 @@ set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 
 	/* Now find the cheapest of the paths for this rel */
 	set_cheapest(rel);
+
+	/*
+	 * If a grouped relation for this rel exists, build partial aggregation
+	 * paths for it.
+	 *
+	 * Note that this can only happen after we've called set_cheapest() for
+	 * this base rel, because we need its cheapest paths.
+	 */
+	set_grouped_rel_pathlist(root, rel);
 
 #ifdef OPTIMIZER_DEBUG
 	pprint(rel);
@@ -1284,6 +1356,28 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 
 	/* Add paths to the append relation. */
 	add_paths_to_append_rel(root, rel, live_childrels);
+}
+
+/*
+ * set_grouped_rel_pathlist
+ *	  If a grouped relation for the given 'rel' exists, build partial
+ *	  aggregation paths for it.
+ */
+static void
+set_grouped_rel_pathlist(PlannerInfo *root, RelOptInfo *rel)
+{
+	RelOptInfo   *rel_grouped;
+	RelAggInfo   *agg_info;
+
+	/* Add paths to the grouped base relation if one exists. */
+	rel_grouped = find_grouped_rel(root, rel->relids,
+								   &agg_info);
+	if (rel_grouped)
+	{
+		generate_grouped_paths(root, rel_grouped, rel,
+							   agg_info);
+		set_cheapest(rel_grouped);
+	}
 }
 
 
@@ -3296,6 +3390,311 @@ generate_useful_gather_paths(PlannerInfo *root, RelOptInfo *rel, bool override_r
 }
 
 /*
+ * generate_grouped_paths
+ *		Generate paths for a grouped relation by adding sorted and hashed
+ *		partial aggregation paths on top of paths of the plain base or join
+ *		relation.
+ *
+ * The information needed are provided by the RelAggInfo structure.
+ */
+void
+generate_grouped_paths(PlannerInfo *root, RelOptInfo *rel_grouped,
+					   RelOptInfo *rel_plain, RelAggInfo *agg_info)
+{
+	AggClauseCosts agg_costs;
+	bool		can_hash;
+	bool		can_sort;
+	Path	   *cheapest_total_path = NULL;
+	Path	   *cheapest_partial_path = NULL;
+	double		dNumGroups = 0;
+	double		dNumPartialGroups = 0;
+
+	if (IS_DUMMY_REL(rel_plain))
+	{
+		mark_dummy_rel(rel_grouped);
+		return;
+	}
+
+	MemSet(&agg_costs, 0, sizeof(AggClauseCosts));
+	get_agg_clause_costs(root, AGGSPLIT_INITIAL_SERIAL, &agg_costs);
+
+	/*
+	 * Determine whether it's possible to perform sort-based implementations of
+	 * grouping.
+	 */
+	can_sort = grouping_is_sortable(agg_info->group_clauses);
+
+	/*
+	 * Determine whether we should consider hash-based implementations of
+	 * grouping.
+	 */
+	Assert(root->numOrderedAggs == 0);
+	can_hash = (agg_info->group_clauses != NIL &&
+				grouping_is_hashable(agg_info->group_clauses));
+
+	/*
+	 * Consider whether we should generate partially aggregated non-partial
+	 * paths.  We can only do this if we have a non-partial path.
+	 */
+	if (rel_plain->pathlist != NIL)
+	{
+		cheapest_total_path = rel_plain->cheapest_total_path;
+		Assert(cheapest_total_path != NULL);
+	}
+
+	/*
+	 * If parallelism is possible for rel_grouped, then we should consider
+	 * generating partially-grouped partial paths.  However, if the plain rel
+	 * has no partial paths, then we can't.
+	 */
+	if (rel_grouped->consider_parallel && rel_plain->partial_pathlist != NIL)
+	{
+		cheapest_partial_path = linitial(rel_plain->partial_pathlist);
+		Assert(cheapest_partial_path != NULL);
+	}
+
+	/* Estimate number of partial groups. */
+	if (cheapest_total_path != NULL)
+		dNumGroups = estimate_num_groups(root,
+										 agg_info->group_exprs,
+										 cheapest_total_path->rows,
+										 NULL, NULL);
+	if (cheapest_partial_path != NULL)
+		dNumPartialGroups = estimate_num_groups(root,
+												agg_info->group_exprs,
+												cheapest_partial_path->rows,
+												NULL, NULL);
+
+	if (can_sort && cheapest_total_path != NULL)
+	{
+		ListCell   *lc;
+
+		/*
+		 * Use any available suitably-sorted path as input, and also consider
+		 * sorting the cheapest-total path.
+		 */
+		foreach(lc, rel_plain->pathlist)
+		{
+			Path	   *input_path = (Path *) lfirst(lc);
+			Path	   *path;
+			bool		is_sorted;
+			int			presorted_keys;
+
+			/*
+			 * Since the path originates from the non-grouped relation which is
+			 * not aware of eager aggregation, we must ensure that it provides
+			 * the correct input for the partial aggregation.
+			 */
+			path = (Path *) create_projection_path(root,
+												   rel_grouped,
+												   input_path,
+												   agg_info->agg_input);
+
+			is_sorted = pathkeys_count_contained_in(agg_info->group_pathkeys,
+													path->pathkeys,
+													&presorted_keys);
+			if (!is_sorted)
+			{
+				/*
+				 * Try at least sorting the cheapest path and also try
+				 * incrementally sorting any path which is partially sorted
+				 * already (no need to deal with paths which have presorted
+				 * keys when incremental sort is disabled unless it's the
+				 * cheapest input path).
+				 */
+				if (input_path != cheapest_total_path &&
+					(presorted_keys == 0 || !enable_incremental_sort))
+					continue;
+
+				/*
+				 * We've no need to consider both a sort and incremental sort.
+				 * We'll just do a sort if there are no presorted keys and an
+				 * incremental sort when there are presorted keys.
+				 */
+				if (presorted_keys == 0 || !enable_incremental_sort)
+					path = (Path *) create_sort_path(root,
+													 rel_grouped,
+													 path,
+													 agg_info->group_pathkeys,
+													 -1.0);
+				else
+					path = (Path *) create_incremental_sort_path(root,
+																 rel_grouped,
+																 path,
+																 agg_info->group_pathkeys,
+																 presorted_keys,
+																 -1.0);
+			}
+
+			/*
+			 * qual is NIL because the HAVING clause cannot be evaluated until the
+			 * final value of the aggregate is known.
+			 */
+			path = (Path *) create_agg_path(root,
+											rel_grouped,
+											path,
+											agg_info->target,
+											AGG_SORTED,
+											AGGSPLIT_INITIAL_SERIAL,
+											agg_info->group_clauses,
+											NIL,
+											&agg_costs,
+											dNumGroups);
+
+			add_path(rel_grouped, path);
+		}
+	}
+
+	if (can_sort && cheapest_partial_path != NULL)
+	{
+		ListCell   *lc;
+
+		/* Similar to above logic, but for partial paths. */
+		foreach(lc, rel_plain->partial_pathlist)
+		{
+			Path	   *input_path = (Path *) lfirst(lc);
+			Path	   *path;
+			bool		is_sorted;
+			int			presorted_keys;
+
+			/*
+			 * Since the path originates from the non-grouped relation which is
+			 * not aware of eager aggregation, we must ensure that it provides
+			 * the correct input for the partial aggregation.
+			 */
+			path = (Path *) create_projection_path(root,
+												   rel_grouped,
+												   input_path,
+												   agg_info->agg_input);
+
+			is_sorted = pathkeys_count_contained_in(agg_info->group_pathkeys,
+													path->pathkeys,
+													&presorted_keys);
+
+			if (!is_sorted)
+			{
+				/*
+				 * Try at least sorting the cheapest path and also try
+				 * incrementally sorting any path which is partially sorted
+				 * already (no need to deal with paths which have presorted
+				 * keys when incremental sort is disabled unless it's the
+				 * cheapest input path).
+				 */
+				if (input_path != cheapest_partial_path &&
+					(presorted_keys == 0 || !enable_incremental_sort))
+					continue;
+
+				/*
+				 * We've no need to consider both a sort and incremental sort.
+				 * We'll just do a sort if there are no presorted keys and an
+				 * incremental sort when there are presorted keys.
+				 */
+				if (presorted_keys == 0 || !enable_incremental_sort)
+					path = (Path *) create_sort_path(root,
+													 rel_grouped,
+													 path,
+													 agg_info->group_pathkeys,
+													 -1.0);
+				else
+					path = (Path *) create_incremental_sort_path(root,
+																 rel_grouped,
+																 path,
+																 agg_info->group_pathkeys,
+																 presorted_keys,
+																 -1.0);
+			}
+
+			/*
+			 * qual is NIL because the HAVING clause cannot be evaluated until the
+			 * final value of the aggregate is known.
+			 */
+			path = (Path *) create_agg_path(root,
+											rel_grouped,
+											path,
+											agg_info->target,
+											AGG_SORTED,
+											AGGSPLIT_INITIAL_SERIAL,
+											agg_info->group_clauses,
+											NIL,
+											&agg_costs,
+											dNumPartialGroups);
+
+			add_partial_path(rel_grouped, path);
+		}
+	}
+
+	/*
+	 * Add a partially-grouped HashAgg Path where possible
+	 */
+	if (can_hash && cheapest_total_path != NULL)
+	{
+		Path   *path;
+
+		/*
+		 * Since the path originates from the non-grouped relation which is
+		 * not aware of eager aggregation, we must ensure that it provides
+		 * the correct input for the partial aggregation.
+		 */
+		path = (Path *) create_projection_path(root,
+											   rel_grouped,
+											   cheapest_total_path,
+											   agg_info->agg_input);
+
+		/*
+		 * qual is NIL because the HAVING clause cannot be evaluated until
+		 * the final value of the aggregate is known.
+		 */
+		path = (Path *) create_agg_path(root,
+										rel_grouped,
+										path,
+										agg_info->target,
+										AGG_HASHED,
+										AGGSPLIT_INITIAL_SERIAL,
+										agg_info->group_clauses,
+										NIL,
+										&agg_costs,
+										dNumGroups);
+
+		add_path(rel_grouped, path);
+	}
+
+	/*
+	 * Now add a partially-grouped HashAgg partial Path where possible
+	 */
+	if (can_hash && cheapest_partial_path != NULL)
+	{
+		Path   *path;
+
+		/*
+		 * Since the path originates from the non-grouped relation which is
+		 * not aware of eager aggregation, we must ensure that it provides
+		 * the correct input for the partial aggregation.
+		 */
+		path = (Path *) create_projection_path(root,
+											   rel_grouped,
+											   cheapest_partial_path,
+											   agg_info->agg_input);
+
+		/*
+		 * qual is NIL because the HAVING clause cannot be evaluated until
+		 * the final value of the aggregate is known.
+		 */
+		path = (Path *) create_agg_path(root,
+										rel_grouped,
+										path,
+										agg_info->target,
+										AGG_HASHED,
+										AGGSPLIT_INITIAL_SERIAL,
+										agg_info->group_clauses,
+										NIL,
+										&agg_costs,
+										dNumPartialGroups);
+
+		add_partial_path(rel_grouped, path);
+	}
+}
+
+/*
  * make_rel_from_joinlist
  *	  Build access paths using a "joinlist" to guide the join path search.
  *
@@ -3403,9 +3802,10 @@ make_rel_from_joinlist(PlannerInfo *root, List *joinlist)
  * needed for these paths need have been instantiated.
  *
  * Note to plugin authors: the functions invoked during standard_join_search()
- * modify root->join_rel_list and root->join_rel_hash.  If you want to do more
- * than one join-order search, you'll probably need to save and restore the
- * original states of those data structures.  See geqo_eval() for an example.
+ * modify root->join_rel_list->items and root->join_rel_list->hash.  If you
+ * want to do more than one join-order search, you'll probably need to save and
+ * restore the original states of those data structures.  See geqo_eval() for
+ * an example.
  */
 RelOptInfo *
 standard_join_search(PlannerInfo *root, int levels_needed, List *initial_rels)
@@ -3454,6 +3854,10 @@ standard_join_search(PlannerInfo *root, int levels_needed, List *initial_rels)
 		 *
 		 * After that, we're done creating paths for the joinrel, so run
 		 * set_cheapest().
+		 *
+		 * In addition, we also run generate_grouped_paths() for the grouped
+		 * relation of each just-processed joinrel, and run set_cheapest() for
+		 * the grouped relation afterwards.
 		 */
 		foreach(lc, root->join_rel_level[lev])
 		{
@@ -3473,6 +3877,27 @@ standard_join_search(PlannerInfo *root, int levels_needed, List *initial_rels)
 
 			/* Find and save the cheapest paths for this rel */
 			set_cheapest(rel);
+
+			/*
+			 * Except for the topmost scan/join rel, consider generating
+			 * partial aggregation paths for the grouped relation on top of the
+			 * paths of this rel.  After that, we're done creating paths for
+			 * the grouped relation, so run set_cheapest().
+			 */
+			if (!bms_equal(rel->relids, root->all_query_rels))
+			{
+				RelOptInfo   *rel_grouped;
+				RelAggInfo   *agg_info;
+
+				rel_grouped = find_grouped_rel(root, rel->relids,
+											   &agg_info);
+				if (rel_grouped)
+				{
+					generate_grouped_paths(root, rel_grouped, rel,
+										   agg_info);
+					set_cheapest(rel_grouped);
+				}
+			}
 
 #ifdef OPTIMIZER_DEBUG
 			pprint(rel);
@@ -4341,6 +4766,29 @@ generate_partitionwise_join_paths(PlannerInfo *root, RelOptInfo *rel)
 		/* Dummy children need not be scanned, so ignore those. */
 		if (IS_DUMMY_REL(child_rel))
 			continue;
+
+		/*
+		 * Except for the topmost scan/join rel, consider generating partial
+		 * aggregation paths for the grouped relation on top of the paths of
+		 * this partitioned child-join.  After that, we're done creating paths
+		 * for the grouped relation, so run set_cheapest().
+		 */
+		if (!bms_equal(IS_OTHER_REL(rel) ?
+					   rel->top_parent_relids : rel->relids,
+					   root->all_query_rels))
+		{
+			RelOptInfo   *rel_grouped;
+			RelAggInfo   *agg_info;
+
+			rel_grouped = find_grouped_rel(root, child_rel->relids,
+										   &agg_info);
+			if (rel_grouped)
+			{
+				generate_grouped_paths(root, rel_grouped, child_rel,
+									   agg_info);
+				set_cheapest(rel_grouped);
+			}
+		}
 
 #ifdef OPTIMIZER_DEBUG
 		pprint(child_rel);

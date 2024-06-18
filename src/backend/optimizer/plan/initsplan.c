@@ -14,6 +14,7 @@
  */
 #include "postgres.h"
 
+#include "access/nbtree.h"
 #include "catalog/pg_type.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -80,6 +81,8 @@ typedef struct JoinTreeItem
 } JoinTreeItem;
 
 
+static void create_agg_clause_infos(PlannerInfo *root);
+static void create_grouping_expr_infos(PlannerInfo *root);
 static void extract_lateral_references(PlannerInfo *root, RelOptInfo *brel,
 									   Index rtindex);
 static List *deconstruct_recurse(PlannerInfo *root, Node *jtnode,
@@ -327,6 +330,257 @@ add_vars_to_targetlist(PlannerInfo *root, List *vars,
 	}
 }
 
+/*
+ * setup_eager_aggregation
+ *	  Check if eager aggregation is applicable, and if so collect suitable
+ *	  aggregate expressions and grouping expressions in the query.
+ */
+void
+setup_eager_aggregation(PlannerInfo *root)
+{
+	/*
+	 * Don't apply eager aggregation if disabled by user.
+	 */
+	if (!enable_eager_aggregate)
+		return;
+
+	/*
+	 * Don't apply eager aggregation if there are no GROUP BY clauses.
+	 */
+	if (!root->parse->groupClause)
+		return;
+
+	/*
+	 * For now we don't try to support grouping sets.
+	 */
+	if (root->parse->groupingSets)
+		return;
+
+	/*
+	 * For now we don't try to support DISTINCT or ORDER BY aggregates.
+	 */
+	if (root->numOrderedAggs > 0)
+		return;
+
+	/*
+	 * If there are any aggregates that do not support partial mode, or any
+	 * partial aggregates that are non-serializable, do not apply eager
+	 * aggregation.
+	 */
+	if (root->hasNonPartialAggs || root->hasNonSerialAggs)
+		return;
+
+	/*
+	 * SRF is not allowed in the aggregate argument and we don't even want it
+	 * in the GROUP BY clause, so forbid it in general. It needs to be
+	 * analyzed if evaluation of a GROUP BY clause containing SRF below the
+	 * query targetlist would be correct. Currently it does not seem to be an
+	 * important use case.
+	 */
+	if (root->parse->hasTargetSRFs)
+		return;
+
+	/*
+	 * Collect aggregate expressions and plain Vars that appear in targetlist
+	 * and having clauses.
+	 */
+	create_agg_clause_infos(root);
+
+	/*
+	 * If there are no suitable aggregate expressions, we cannot apply eager
+	 * aggregation.
+	 */
+	if (root->agg_clause_list == NIL)
+		return;
+
+	/*
+	 * Collect grouping expressions that appear in grouping clauses.
+	 */
+	create_grouping_expr_infos(root);
+}
+
+/*
+ * create_agg_clause_infos
+ *	  Search the targetlist and havingQual for Aggrefs and plain Vars, and
+ *	  create an AggClauseInfo for each Aggref node.
+ */
+static void
+create_agg_clause_infos(PlannerInfo *root)
+{
+	List	   *tlist_exprs;
+	ListCell   *lc;
+
+	Assert(root->agg_clause_list == NIL);
+	Assert(root->tlist_vars == NIL);
+
+	tlist_exprs = pull_var_clause((Node *) root->processed_tlist,
+								  PVC_INCLUDE_AGGREGATES |
+								  PVC_RECURSE_WINDOWFUNCS |
+								  PVC_RECURSE_PLACEHOLDERS);
+
+	/*
+	 * For now we don't try to support GROUPING() expressions.
+	 */
+	foreach(lc, tlist_exprs)
+	{
+		Expr	   *expr = (Expr *) lfirst(lc);
+
+		if (IsA(expr, GroupingFunc))
+			return;
+	}
+
+	/*
+	 * Aggregates within the HAVING clause need to be processed in the same way
+	 * as those in the targetlist.  Note that HAVING can contain Aggrefs but
+	 * not WindowFuncs.
+	 */
+	if (root->parse->havingQual != NULL)
+	{
+		List	   *having_exprs;
+
+		having_exprs = pull_var_clause((Node *) root->parse->havingQual,
+									   PVC_INCLUDE_AGGREGATES |
+									   PVC_RECURSE_PLACEHOLDERS);
+		if (having_exprs != NIL)
+		{
+			tlist_exprs = list_concat(tlist_exprs, having_exprs);
+			list_free(having_exprs);
+		}
+	}
+
+	foreach(lc, tlist_exprs)
+	{
+		Expr	   *expr = (Expr *) lfirst(lc);
+		Aggref	   *aggref;
+		AggClauseInfo *ac_info;
+
+		/*
+		 * collect plain Vars for future reference
+		 */
+		if (IsA(expr, Var))
+		{
+			root->tlist_vars = list_append_unique(root->tlist_vars, expr);
+			continue;
+		}
+
+		aggref = castNode(Aggref, expr);
+
+		Assert(aggref->aggorder == NIL);
+		Assert(aggref->aggdistinct == NIL);
+
+		ac_info = makeNode(AggClauseInfo);
+		ac_info->aggref = aggref;
+		ac_info->agg_eval_at = pull_varnos(root, (Node *) aggref);
+
+		root->agg_clause_list =
+			list_append_unique(root->agg_clause_list, ac_info);
+	}
+
+	list_free(tlist_exprs);
+}
+
+/*
+ * create_grouping_expr_infos
+ *	  Create GroupExprInfo for each expression usable as grouping key.
+ *
+ * If any grouping expression is not suitable, we will just return with
+ * root->group_expr_list being NIL.
+ */
+static void
+create_grouping_expr_infos(PlannerInfo *root)
+{
+	List	   *exprs = NIL;
+	List	   *sortgrouprefs = NIL;
+	List	   *btree_opfamilies = NIL;
+	ListCell   *lc,
+			   *lc1,
+			   *lc2,
+			   *lc3;
+
+	Assert(root->group_expr_list == NIL);
+
+	foreach(lc, root->parse->groupClause)
+	{
+		SortGroupClause *sgc = lfirst_node(SortGroupClause, lc);
+		TargetEntry *tle = get_sortgroupclause_tle(sgc, root->processed_tlist);
+		TypeCacheEntry *tce;
+		Oid				equalimageproc;
+		Oid				eq_op;
+		List		   *eq_opfamilies;
+		Oid				btree_opfamily;
+
+		Assert(tle->ressortgroupref > 0);
+
+		/*
+		 * For now we only support plain Vars as grouping expressions.
+		 */
+		if (!IsA(tle->expr, Var))
+			return;
+
+		/*
+		 * Eager aggregation is only possible if equality of grouping keys
+		 * per the equality operator implies bitwise equality. Otherwise, if
+		 * we put keys of different byte images into the same group, we lose
+		 * some information that may be needed to evaluate join clauses above
+		 * the pushed-down aggregate node, or the WHERE clause.
+		 *
+		 * For example, the NUMERIC data type is not supported because values
+		 * that fall into the same group according to the equality operator
+		 * (e.g. 0 and 0.0) can have different scale.
+		 */
+		tce = lookup_type_cache(exprType((Node *) tle->expr),
+								TYPECACHE_BTREE_OPFAMILY);
+		if (!OidIsValid(tce->btree_opf) ||
+			!OidIsValid(tce->btree_opintype))
+			return;
+
+		equalimageproc = get_opfamily_proc(tce->btree_opf,
+										   tce->btree_opintype,
+										   tce->btree_opintype,
+										   BTEQUALIMAGE_PROC);
+		if (!OidIsValid(equalimageproc) ||
+			!DatumGetBool(OidFunctionCall1Coll(equalimageproc,
+											   tce->typcollation,
+											   ObjectIdGetDatum(tce->btree_opintype))))
+			return;
+
+		/*
+		 * Get the operator in the btree's opfamily.
+		 */
+		eq_op = get_opfamily_member(tce->btree_opf,
+									tce->btree_opintype,
+									tce->btree_opintype,
+									BTEqualStrategyNumber);
+		if (!OidIsValid(eq_op))
+			return;
+		eq_opfamilies = get_mergejoin_opfamilies(eq_op);
+		if (!eq_opfamilies)
+			return;
+		btree_opfamily = linitial_oid(eq_opfamilies);
+
+		exprs = lappend(exprs, tle->expr);
+		sortgrouprefs = lappend_int(sortgrouprefs, tle->ressortgroupref);
+		btree_opfamilies = lappend_oid(btree_opfamilies, btree_opfamily);
+	}
+
+	/*
+	 * Construct GroupExprInfo for each expression.
+	 */
+	forthree(lc1, exprs, lc2, sortgrouprefs, lc3, btree_opfamilies)
+	{
+		Expr	   *expr = (Expr *) lfirst(lc1);
+		int			sortgroupref = lfirst_int(lc2);
+		Oid			btree_opfamily = lfirst_oid(lc3);
+		GroupExprInfo *ge_info;
+
+		ge_info = makeNode(GroupExprInfo);
+		ge_info->expr = (Expr *) copyObject(expr);
+		ge_info->sortgroupref = sortgroupref;
+		ge_info->btree_opfamily = btree_opfamily;
+
+		root->group_expr_list = lappend(root->group_expr_list, ge_info);
+	}
+}
 
 /*****************************************************************************
  *

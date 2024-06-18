@@ -64,8 +64,12 @@ query_planner(PlannerInfo *root,
 	 * NOTE: append_rel_list was set up by subquery_planner, so do not touch
 	 * here.
 	 */
-	root->join_rel_list = NIL;
-	root->join_rel_hash = NULL;
+	root->join_rel_list = makeNode(RelInfoList);
+	root->join_rel_list->items = NIL;
+	root->join_rel_list->hash = NULL;
+	root->agg_info_list = makeNode(RelInfoList);
+	root->agg_info_list->items = NIL;
+	root->agg_info_list->hash = NULL;
 	root->join_rel_level = NULL;
 	root->join_cur_level = 0;
 	root->canon_pathkeys = NIL;
@@ -76,6 +80,9 @@ query_planner(PlannerInfo *root,
 	root->placeholder_list = NIL;
 	root->placeholder_array = NULL;
 	root->placeholder_array_size = 0;
+	root->agg_clause_list = NIL;
+	root->group_expr_list = NIL;
+	root->tlist_vars = NIL;
 	root->fkey_list = NIL;
 	root->initial_rels = NIL;
 
@@ -256,6 +263,12 @@ query_planner(PlannerInfo *root,
 	 * restriction OR clauses from.
 	 */
 	extract_restriction_or_clauses(root);
+
+	/*
+	 * Check if eager aggregation is applicable, and if so, set up
+	 * root->agg_clause_list and root->group_expr_list.
+	 */
+	setup_eager_aggregation(root);
 
 	/*
 	 * Now expand appendrels by adding "otherrels" for their children.  We

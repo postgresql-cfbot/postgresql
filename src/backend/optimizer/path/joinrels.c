@@ -16,11 +16,13 @@
 
 #include "miscadmin.h"
 #include "optimizer/appendinfo.h"
+#include "optimizer/cost.h"
 #include "optimizer/joininfo.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "partitioning/partbounds.h"
 #include "utils/memutils.h"
+#include "utils/selfuncs.h"
 
 
 static void make_rels_by_clause_joins(PlannerInfo *root,
@@ -35,6 +37,9 @@ static bool has_legal_joinclause(PlannerInfo *root, RelOptInfo *rel);
 static bool restriction_is_constant_false(List *restrictlist,
 										  RelOptInfo *joinrel,
 										  bool only_pushed_down);
+static void make_grouped_join_rel(PlannerInfo *root, RelOptInfo *rel1,
+								  RelOptInfo *rel2, RelOptInfo *joinrel,
+								  SpecialJoinInfo *sjinfo, List *restrictlist);
 static void populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 										RelOptInfo *rel2, RelOptInfo *joinrel,
 										SpecialJoinInfo *sjinfo, List *restrictlist);
@@ -771,6 +776,10 @@ make_join_rel(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2)
 		return joinrel;
 	}
 
+	/* Build a grouped join relation for 'joinrel' if possible. */
+	make_grouped_join_rel(root, rel1, rel2, joinrel, sjinfo,
+						  restrictlist);
+
 	/* Add paths to the join relation. */
 	populate_joinrel_with_paths(root, rel1, rel2, joinrel, sjinfo,
 								restrictlist);
@@ -880,6 +889,128 @@ add_outer_joins_to_relids(PlannerInfo *root, Relids input_relids,
 	}
 
 	return input_relids;
+}
+
+/*
+ * make_grouped_join_rel
+ *	  Build a grouped join relation out of 'joinrel' if eager aggregation is
+ *	  possible and the 'joinrel' can produce grouped paths.
+ *
+ * We also generate partial aggregation paths for the grouped relation by
+ * joining the grouped paths of 'rel1' to the plain paths of 'rel2', or by
+ * joining the grouped paths of 'rel2' to the plain paths of 'rel1'.
+ */
+static void
+make_grouped_join_rel(PlannerInfo *root, RelOptInfo *rel1,
+					  RelOptInfo *rel2, RelOptInfo *joinrel,
+					  SpecialJoinInfo *sjinfo, List *restrictlist)
+{
+	RelOptInfo	   *rel_grouped;
+	RelAggInfo	   *agg_info = NULL;
+	RelOptInfo	   *rel1_grouped;
+	RelOptInfo	   *rel2_grouped;
+	bool			rel1_empty;
+	bool			rel2_empty;
+
+	/*
+	 * If there are no aggregate expressions or grouping expressions, eager
+	 * aggregation is not possible.
+	 */
+	if (root->agg_clause_list == NIL ||
+		root->group_expr_list == NIL)
+		return;
+
+	/*
+	 * See if we already have a grouped joinrel for this joinrel.
+	 */
+	rel_grouped = find_grouped_rel(root, joinrel->relids, &agg_info);
+
+	/*
+	 * Construct a new RelOptInfo for the grouped join relation if there is no
+	 * existing one.
+	 */
+	if (rel_grouped == NULL)
+	{
+		/*
+		 * Prepare the information we need to create grouped paths for this
+		 * join relation.
+		 */
+		agg_info = create_rel_agg_info(root, joinrel);
+		if (agg_info == NULL)
+			return;
+
+		/* build a grouped relation out of the plain relation */
+		rel_grouped = build_grouped_rel(root, joinrel);
+		rel_grouped->reltarget = agg_info->target;
+		rel_grouped->rows = agg_info->grouped_rows;
+
+		/*
+		 * Make the grouped relation available for further joining or for
+		 * acting as the upper rel representing the result of partial
+		 * aggregation.
+		 */
+		add_grouped_rel(root, rel_grouped, agg_info);
+	}
+
+	Assert(agg_info != NULL);
+
+	/*
+	 * If we've already proven this grouped join relation is empty, we needn't
+	 * consider any more paths for it.
+	 */
+	if (IS_DUMMY_REL(rel_grouped))
+		return;
+
+	/* retrieve the grouped relations for the two input rels */
+	rel1_grouped = find_grouped_rel(root, rel1->relids, NULL);
+	rel2_grouped = find_grouped_rel(root, rel2->relids, NULL);
+
+	rel1_empty = (rel1_grouped == NULL || IS_DUMMY_REL(rel1_grouped));
+	rel2_empty = (rel2_grouped == NULL || IS_DUMMY_REL(rel2_grouped));
+
+	/* Nothing to do if there's no grouped relation. */
+	if (rel1_empty && rel2_empty)
+		return;
+
+	/*
+	 * Join of two grouped relations is currently not supported.  In such a
+	 * case, grouping of one side would change the occurrence of the other
+	 * side's aggregate transient states on the input of the final aggregation.
+	 * This can be handled by adjusting the transient states, but it's not
+	 * worth the effort for now.
+	 */
+	if (!rel1_empty && !rel2_empty)
+		return;
+
+	/* generate partial aggregation paths for the grouped relation */
+	if (!rel1_empty)
+	{
+		set_joinrel_size_estimates(root, rel_grouped, rel1_grouped, rel2,
+								   sjinfo, restrictlist);
+		populate_joinrel_with_paths(root, rel1_grouped, rel2, rel_grouped,
+									sjinfo, restrictlist);
+		/*
+		 * It shouldn't happen that we have marked rel1_grouped as dummy in
+		 * populate_joinrel_with_paths due to provably constant-false join
+		 * restrictions, hence we wouldn't end up with a plan that has Aggref
+		 * in non-Agg plan node.
+		 */
+		Assert(!IS_DUMMY_REL(rel1_grouped));
+	}
+	else if (!rel2_empty)
+	{
+		set_joinrel_size_estimates(root, rel_grouped, rel1, rel2_grouped,
+								   sjinfo, restrictlist);
+		populate_joinrel_with_paths(root, rel1, rel2_grouped, rel_grouped,
+									sjinfo, restrictlist);
+		/*
+		 * It shouldn't happen that we have marked rel2_grouped as dummy in
+		 * populate_joinrel_with_paths due to provably constant-false join
+		 * restrictions, hence we wouldn't end up with a plan that has Aggref
+		 * in non-Agg plan node.
+		 */
+		Assert(!IS_DUMMY_REL(rel2_grouped));
+	}
 }
 
 /*
@@ -1670,6 +1801,11 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 		Assert(bms_equal(child_joinrel->relids,
 						 adjust_child_relids(joinrel->relids,
 											 nappinfos, appinfos)));
+
+		/* Build a grouped join relation for 'child_joinrel' if possible */
+		make_grouped_join_rel(root, child_rel1, child_rel2,
+							  child_joinrel, child_sjinfo,
+							  child_restrictlist);
 
 		/* And make paths for the child join */
 		populate_joinrel_with_paths(root, child_rel1, child_rel2,

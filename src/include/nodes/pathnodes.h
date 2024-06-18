@@ -80,6 +80,25 @@ typedef enum UpperRelationKind
 	/* NB: UPPERREL_FINAL must be last enum entry; it's used to size arrays */
 } UpperRelationKind;
 
+/*
+ * Hashed list to store relation specific info and to retrieve it by relids.
+ *
+ * For small problems we just scan the list to do lookups, but when there are
+ * many relations we build a hash table for faster lookups.  The hash table is
+ * present and valid when 'hash' is not NULL.  Note that we still maintain the
+ * list even when using the hash table for lookups; this simplifies life for
+ * GEQO.
+ */
+typedef struct RelInfoList
+{
+	pg_node_attr(no_copy_equal, no_read)
+
+	NodeTag		type;
+
+	List	   *items;
+	struct HTAB *hash pg_node_attr(read_write_ignore);
+} RelInfoList;
+
 /*----------
  * PlannerGlobal
  *		Global information for planning/optimization
@@ -270,15 +289,9 @@ struct PlannerInfo
 
 	/*
 	 * join_rel_list is a list of all join-relation RelOptInfos we have
-	 * considered in this planning run.  For small problems we just scan the
-	 * list to do lookups, but when there are many join relations we build a
-	 * hash table for faster lookups.  The hash table is present and valid
-	 * when join_rel_hash is not NULL.  Note that we still maintain the list
-	 * even when using the hash table for lookups; this simplifies life for
-	 * GEQO.
+	 * considered in this planning run.
 	 */
-	List	   *join_rel_list;
-	struct HTAB *join_rel_hash pg_node_attr(read_write_ignore);
+	RelInfoList *join_rel_list;	/* list of join-relation RelOptInfos */
 
 	/*
 	 * When doing a dynamic-programming-style join search, join_rel_level[k]
@@ -373,6 +386,15 @@ struct PlannerInfo
 	/* list of PlaceHolderInfos */
 	List	   *placeholder_list;
 
+	/* list of AggClauseInfos */
+	List	   *agg_clause_list;
+
+	/* list of GroupExprInfos */
+	List	   *group_expr_list;
+
+	/* list of plain Vars contained in targetlist and havingQual */
+	List	   *tlist_vars;
+
 	/* array of PlaceHolderInfos indexed by phid */
 	struct PlaceHolderInfo **placeholder_array pg_node_attr(read_write_ignore, array_size(placeholder_array_size));
 	/* allocated size of array */
@@ -413,7 +435,13 @@ struct PlannerInfo
 	 * Upper-rel RelOptInfos. Use fetch_upper_rel() to get any particular
 	 * upper rel.
 	 */
-	List	   *upper_rels[UPPERREL_FINAL + 1] pg_node_attr(read_write_ignore);
+	RelInfoList		upper_rels[UPPERREL_FINAL + 1] pg_node_attr(read_write_ignore);
+
+	/*
+	 * list of grouped relation RelAggInfos. One instance of RelAggInfo per
+	 * item of the upper_rels[UPPERREL_PARTIAL_GROUP_AGG] list.
+	 */
+	RelInfoList *agg_info_list;
 
 	/* Result tlists chosen by grouping_planner for upper-stage processing */
 	struct PathTarget *upper_targets[UPPERREL_FINAL + 1] pg_node_attr(read_write_ignore);
@@ -1064,6 +1092,73 @@ typedef struct RelOptInfo
 #define REL_HAS_ALL_PART_PROPS(rel)	\
 	((rel)->part_scheme && (rel)->boundinfo && (rel)->nparts > 0 && \
 	 (rel)->part_rels && (rel)->partexprs && (rel)->nullable_partexprs)
+
+/*
+ * RelAggInfo
+ *		Information needed to create grouped paths for base and join rels.
+ *
+ * "relids" is the set of relation identifiers (RT indexes), just like with
+ * RelOptInfo.
+ *
+ * "target" will be used as pathtarget if partial aggregation is applied to
+ * base relation or join. The same target will also --- if the relation is a
+ * join --- be used to join grouped path to a non-grouped one.  This target can
+ * contain plain-Var grouping expressions and Aggref nodes.
+ *
+ * Note: There's a convention that Aggref expressions are supposed to follow
+ * the other expressions of the target. Iterations of ->exprs may rely on this
+ * arrangement.
+ *
+ * "agg_input" contains Vars used either as grouping expressions or aggregate
+ * arguments. Paths providing the aggregation plan with input data should use
+ * this target. The only difference from reltarget of the non-grouped relation
+ * is that some items can have sortgroupref initialized.
+ *
+ * "input_rows" is the estimated number of input rows for AggPath. It's
+ * actually just a workspace for users of the structure, i.e. not initialized
+ * when instance of the structure is created.
+ *
+ * "grouped_rows" is the estimated number of result rows of the AggPath.
+ *
+ * "group_clauses", "group_exprs" and "group_pathkeys" are lists of
+ * SortGroupClause, the corresponding grouping expressions and PathKey
+ * respectively.
+ */
+typedef struct RelAggInfo
+{
+	pg_node_attr(no_copy_equal, no_read, no_query_jumble)
+
+	NodeTag		type;
+
+	/*
+	 * the same as in RelOptInfo; set of base + OJ relids (rangetable indexes)
+	 */
+	Relids		relids;
+
+	/*
+	 * the targetlist for Paths scanning this grouped rel; list of Vars/Exprs,
+	 * cost, width
+	 */
+	struct PathTarget *target;
+
+	/*
+	 * the targetlist for Paths that generate input for the grouped paths
+	 */
+	struct PathTarget *agg_input;
+
+	/* estimated number of input tuples for the grouped paths */
+	Cardinality		input_rows;
+
+	/* estimated number of result tuples of the grouped relation*/
+	Cardinality		grouped_rows;
+
+	/* a list of SortGroupClause's */
+	List	   *group_clauses;
+	/* a list of grouping expressions */
+	List	   *group_exprs;
+	/* a list of PathKeys */
+	List	   *group_pathkeys;
+} RelAggInfo;
 
 /*
  * IndexOptInfo
@@ -3132,6 +3227,41 @@ typedef struct MinMaxAggInfo
 	/* param for subplan's output */
 	Param	   *param;
 } MinMaxAggInfo;
+
+/*
+ * The aggregate expressions that appear in targetlist and having clauses
+ */
+typedef struct AggClauseInfo
+{
+	pg_node_attr(no_read, no_query_jumble)
+
+	NodeTag		type;
+
+	/* the Aggref expr */
+	Aggref	   *aggref;
+
+	/* lowest level we can evaluate this aggregate at */
+	Relids		agg_eval_at;
+} AggClauseInfo;
+
+/*
+ * The grouping expressions that appear in grouping clauses
+ */
+typedef struct GroupExprInfo
+{
+	pg_node_attr(no_read, no_query_jumble)
+
+	NodeTag		type;
+
+	/* the represented expression */
+	Expr	   *expr;
+
+	/* the tleSortGroupRef of the corresponding SortGroupClause */
+	Index		sortgroupref;
+
+	/* btree opfamily defining the ordering */
+	Oid			btree_opfamily;
+} GroupExprInfo;
 
 /*
  * At runtime, PARAM_EXEC slots are used to pass values around from one plan

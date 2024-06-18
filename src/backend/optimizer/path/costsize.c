@@ -218,6 +218,25 @@ clamp_row_est(double nrows)
 }
 
 /*
+ * gather_rows_estimate
+ *		Estimate the number of rows for gather nodes.
+ *
+ * When creating a gather (merge) path, we need to estimate the sum of rows
+ * distributed to all workers. A worker will have an estimated row set to
+ * (rows / parallel_divisor). Since parallel_divisor may include the leader
+ * contribution, we can't simply multiply workers' rows by the number of
+ * parallel_workers and instead need to reuse the parallel_divisor to get a
+ * more accurate estimation.
+ */
+double
+gather_rows_estimate(Path *partial_path)
+{
+	double		parallel_divisor = get_parallel_divisor(partial_path);
+
+	return clamp_row_est(partial_path->rows * parallel_divisor);
+}
+
+/*
  * clamp_width_est
  *		Force a tuple-width estimate to a sane value.
  *

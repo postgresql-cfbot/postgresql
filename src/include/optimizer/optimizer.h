@@ -23,6 +23,7 @@
 #define OPTIMIZER_H
 
 #include "nodes/parsenodes.h"
+#include "nodes/pathnodes.h"
 
 /*
  * We don't want to include nodes/pathnodes.h here, because non-planner
@@ -92,6 +93,7 @@ extern PGDLLIMPORT int effective_cache_size;
 extern double clamp_row_est(double nrows);
 extern int32 clamp_width_est(int64 tuple_width);
 extern long clamp_cardinality_to_long(Cardinality x);
+extern double gather_rows_estimate(Path *partial_path);
 
 /* in path/indxpath.c: */
 

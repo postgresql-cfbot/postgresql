@@ -7639,17 +7639,24 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 	check_stack_depth();
 
 	/*
-	 * If the rel is partitioned, we want to drop its existing paths and
-	 * generate new ones.  This function would still be correct if we kept the
-	 * existing paths: we'd modify them to generate the correct target above
-	 * the partitioning Append, and then they'd compete on cost with paths
-	 * generating the target below the Append.  However, in our current cost
-	 * model the latter way is always the same or cheaper cost, so modifying
-	 * the existing paths would just be useless work.  Moreover, when the cost
-	 * is the same, varying roundoff errors might sometimes allow an existing
-	 * path to be picked, resulting in undesirable cross-platform plan
-	 * variations.  So we drop old paths and thereby force the work to be done
-	 * below the Append, except in the case of a non-parallel-safe target.
+	 * If the rel is partitioned simple rel, we want to drop its existing
+	 * paths and generate new ones.  This function would still be correct if
+	 * we kept the existing paths: we'd modify them to generate the correct
+	 * target above the partitioning Append, and then they'd compete on cost
+	 * with paths generating the target below the Append.  However, in our
+	 * current cost model the latter way is always the same or cheaper cost,
+	 * so modifying the existing paths would just be useless work.  Moreover,
+	 * when the cost is the same, varying roundoff errors might sometimes
+	 * allow an existing path to be picked, resulting in undesirable
+	 * cross-platform plan variations.  So we drop old paths and thereby force
+	 * the work to be done below the Append, except in the case of a
+	 * non-parallel-safe target.
+	 *
+	 * Partitioned join relations have two types of paths: 1. Append paths
+	 * created by partitionwise join and 2. Join paths joining the partitioned
+	 * relations. The paths in the second set are similar to the paths for a
+	 * non-partitioned relation and should not be wiped out since they may
+	 * contain an optimal path.
 	 *
 	 * Some care is needed, because we have to allow
 	 * generate_useful_gather_paths to see the old partial paths in the next
@@ -7657,7 +7664,7 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 	 * generate_useful_gather_paths to add path(s) to the main list, and
 	 * finally zap the partial pathlist.
 	 */
-	if (rel_is_partitioned)
+	if (rel_is_partitioned && IS_SIMPLE_REL(rel))
 		rel->pathlist = NIL;
 
 	/*
@@ -7683,7 +7690,7 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 	}
 
 	/* Finish dropping old paths for a partitioned rel, per comment above */
-	if (rel_is_partitioned)
+	if (rel_is_partitioned && IS_SIMPLE_REL(rel))
 		rel->partial_pathlist = NIL;
 
 	/* Extract SRF-free scan/join target. */

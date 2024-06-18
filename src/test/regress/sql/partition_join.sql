@@ -1136,13 +1136,19 @@ CREATE TABLE plt3_adv_p2 PARTITION OF plt3_adv FOR VALUES IN ('0003', '0004');
 INSERT INTO plt3_adv SELECT i, i, to_char(i % 5, 'FM0000') FROM generate_series(0, 24) i WHERE i % 5 IN (1, 3, 4);
 ANALYZE plt3_adv;
 
--- This tests that when merging partitions from plt1_adv and plt2_adv in
--- merge_list_bounds(), process_outer_partition() returns an already-assigned
--- merged partition when re-called with plt1_adv_p1 for the second list value
--- '0001' of that partition
+-- Both the queries test that when merging partitions from plt1_adv and
+-- plt2_adv in merge_list_bounds(), process_outer_partition() returns an
+-- already-assigned merged partition when re-called with plt1_adv_p1 for the
+-- second list value '0001' of that partition. But the first query doesn't end
+-- up using partitionwise join since it's more costly whereas the second one
+-- use partitionwise join.
 EXPLAIN (COSTS OFF)
 SELECT t1.a, t1.c, t2.a, t2.c, t3.a, t3.c FROM (plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.c = t2.c)) FULL JOIN plt3_adv t3 ON (t1.c = t3.c) WHERE coalesce(t1.a, 0) % 5 != 3 AND coalesce(t1.a, 0) % 5 != 4 ORDER BY t1.c, t1.a, t2.a, t3.a;
 SELECT t1.a, t1.c, t2.a, t2.c, t3.a, t3.c FROM (plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.c = t2.c)) FULL JOIN plt3_adv t3 ON (t1.c = t3.c) WHERE coalesce(t1.a, 0) % 5 != 3 AND coalesce(t1.a, 0) % 5 != 4 ORDER BY t1.c, t1.a, t2.a, t3.a;
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM (plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.c = t2.c)) WHERE coalesce(t1.a, t2.a) IN (3, 4) ORDER BY t1.c, t1.a, t2.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM (plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.c = t2.c)) WHERE coalesce(t1.a, t2.a) IN (3, 4) ORDER BY t1.c, t1.a, t2.a;
 
 DROP TABLE plt1_adv;
 DROP TABLE plt2_adv;
@@ -1203,7 +1209,6 @@ ANALYZE fract_t;
 
 -- verify plan; nested index only scans
 SET max_parallel_workers_per_gather = 0;
-SET enable_partitionwise_join = on;
 
 EXPLAIN (COSTS OFF)
 SELECT x.id, y.id FROM fract_t x LEFT JOIN fract_t y USING (id) ORDER BY x.id ASC LIMIT 10;

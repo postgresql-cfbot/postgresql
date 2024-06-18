@@ -1254,7 +1254,28 @@ exec_simple_query(const char *query_string)
 					format = 1; /* BINARY */
 			}
 		}
-		PortalSetResultFormat(portal, 1, &format);
+
+		if (portal->commandTag == CMDTAG_EXECUTE)
+		{
+			/*
+			 * For EXECUTE queries we clear the tupDesc now, and it will be
+			 * filled in later by FillPortalStore, because the tupDesc might
+			 * change due to replanning when ExecuteQuery calls GetCachedPlan.
+			 * So we should only fetch the tupDesc after the query is actually
+			 * executed. This also means that we cannot set the result format
+			 * for the output tuple yet, so we temporarily store the desired
+			 * format in portal->formats. Then after creating the actual
+			 * tupDesc we call PortalSetResultFormat, using this format.
+			 */
+			Assert(portal->tupDesc == NULL);
+			portal->formats = (int16 *) MemoryContextAlloc(portal->portalContext,
+														   sizeof(int16));
+			portal->formats[0] = format;
+		}
+		else
+		{
+			PortalSetResultFormat(portal, 1, &format);
+		}
 
 		/*
 		 * Now we can create the destination receiver object.
@@ -1554,8 +1575,7 @@ exec_parse_message(const char *query_string,	/* string to execute */
 					   numParams,
 					   NULL,
 					   NULL,
-					   CURSOR_OPT_PARALLEL_OK,	/* allow parallel mode */
-					   true);	/* fixed result */
+					   CURSOR_OPT_PARALLEL_OK); /* allow parallel mode */
 
 	/* If we got a cancel signal during analysis, quit */
 	CHECK_FOR_INTERRUPTS();
@@ -2624,9 +2644,6 @@ exec_describe_statement_message(const char *stmt_name)
 					(errcode(ERRCODE_UNDEFINED_PSTATEMENT),
 					 errmsg("unnamed prepared statement does not exist")));
 	}
-
-	/* Prepared statements shouldn't have changeable result descs */
-	Assert(psrc->fixed_result);
 
 	/*
 	 * If we are in aborted transaction state, we can't run

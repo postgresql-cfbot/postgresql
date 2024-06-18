@@ -10,9 +10,10 @@
  * statistics.
  *
  * Statistics are loaded from the filesystem during startup (by the startup
- * process), unless preceded by a crash, in which case all stats are
- * discarded. They are written out by the checkpointer process just before
- * shutting down, except when shutting down in immediate mode.
+ * process) if the stats file has a redo LSN that matches with the . They
+ * are written out by the checkpointer during checkpoints and restart points,
+ * as well as before shutting down, except when shutting down in immediate
+ * mode.
  *
  * Fixed-numbered stats are stored in plain (non-dynamic) shared memory.
  *
@@ -94,6 +95,7 @@
 #include <unistd.h>
 
 #include "access/xact.h"
+#include "access/xlog.h"
 #include "lib/dshash.h"
 #include "pgstat.h"
 #include "port/atomics.h"
@@ -162,8 +164,8 @@ typedef struct PgStat_SnapshotEntry
  * ----------
  */
 
-static void pgstat_write_statsfile(void);
-static void pgstat_read_statsfile(void);
+static void pgstat_write_statsfile(XLogRecPtr redo);
+static void pgstat_read_statsfile(XLogRecPtr redo);
 
 static void pgstat_reset_after_failure(void);
 
@@ -404,59 +406,25 @@ static const PgStat_KindInfo pgstat_kind_infos[PGSTAT_NUM_KINDS] = {
  * Should only be called by the startup process or in single user mode.
  */
 void
-pgstat_restore_stats(void)
+pgstat_restore_stats(XLogRecPtr redo)
 {
-	pgstat_read_statsfile();
+	pgstat_read_statsfile(redo);
 }
 
 /*
- * Remove the stats file.  This is currently used only if WAL recovery is
- * needed after a crash.
+ * Write stats in memory to disk.
  *
- * Should only be called by the startup process or in single user mode.
+ * This is called by the checkpointer or in single-user mode.
  */
 void
-pgstat_discard_stats(void)
+pgstat_flush_stats(XLogRecPtr redo)
 {
-	int			ret;
-
-	/* NB: this needs to be done even in single user mode */
-
-	ret = unlink(PGSTAT_STAT_PERMANENT_FILENAME);
-	if (ret != 0)
-	{
-		if (errno == ENOENT)
-			elog(DEBUG2,
-				 "didn't need to unlink permanent stats file \"%s\" - didn't exist",
-				 PGSTAT_STAT_PERMANENT_FILENAME);
-		else
-			ereport(LOG,
-					(errcode_for_file_access(),
-					 errmsg("could not unlink permanent statistics file \"%s\": %m",
-							PGSTAT_STAT_PERMANENT_FILENAME)));
-	}
-	else
-	{
-		ereport(DEBUG2,
-				(errcode_for_file_access(),
-				 errmsg_internal("unlinked permanent statistics file \"%s\"",
-								 PGSTAT_STAT_PERMANENT_FILENAME)));
-	}
-
-	/*
-	 * Reset stats contents. This will set reset timestamps of fixed-numbered
-	 * stats to the current time (no variable stats exist).
-	 */
-	pgstat_reset_after_failure();
+	pgstat_write_statsfile(redo);
 }
 
 /*
  * pgstat_before_server_shutdown() needs to be called by exactly one process
- * during regular server shutdowns. Otherwise all stats will be lost.
- *
- * We currently only write out stats for proc_exit(0). We might want to change
- * that at some point... But right now pgstat_discard_stats() would be called
- * during the start after a disorderly shutdown, anyway.
+ * during regular server shutdowns.
  */
 void
 pgstat_before_server_shutdown(int code, Datum arg)
@@ -481,8 +449,11 @@ pgstat_before_server_shutdown(int code, Datum arg)
 	 */
 	if (code == 0)
 	{
+		/* we're shutting down, so it's ok to just override this */
+		pgstat_fetch_consistency = PGSTAT_FETCH_CONSISTENCY_NONE;
+
 		pgStatLocal.shmem->is_shutdown = true;
-		pgstat_write_statsfile();
+		pgstat_write_statsfile(GetRedoRecPtr());
 	}
 }
 
@@ -1301,11 +1272,11 @@ write_chunk(FILE *fpout, void *ptr, size_t len)
 #define write_chunk_s(fpout, ptr) write_chunk(fpout, ptr, sizeof(*ptr))
 
 /*
- * This function is called in the last process that is accessing the shared
- * stats so locking is not required.
+ * This function is called in the checkpointer or in single-user mode,
+ * so locking is not required.
  */
 static void
-pgstat_write_statsfile(void)
+pgstat_write_statsfile(XLogRecPtr redo)
 {
 	FILE	   *fpout;
 	int32		format_id;
@@ -1316,10 +1287,11 @@ pgstat_write_statsfile(void)
 
 	pgstat_assert_is_up();
 
-	/* we're shutting down, so it's ok to just override this */
-	pgstat_fetch_consistency = PGSTAT_FETCH_CONSISTENCY_NONE;
+	/* should be called only by the checkpointer or single user mode */
+	Assert(!IsUnderPostmaster || MyBackendType == B_CHECKPOINTER);
 
-	elog(DEBUG2, "writing stats file \"%s\"", statfile);
+	elog(DEBUG2, "writing stats file \"%s\" with redo %X/%X", statfile,
+		 LSN_FORMAT_ARGS(redo));
 
 	/*
 	 * Open the statistics temp file to write out the current values.
@@ -1339,6 +1311,9 @@ pgstat_write_statsfile(void)
 	 */
 	format_id = PGSTAT_FILE_FORMAT_ID;
 	write_chunk_s(fpout, &format_id);
+
+	/* Write the redo LSN, used to cross check the file loaded */
+	write_chunk_s(fpout, &redo);
 
 	/*
 	 * XXX: The following could now be generalized to just iterate over
@@ -1394,7 +1369,6 @@ pgstat_write_statsfile(void)
 		CHECK_FOR_INTERRUPTS();
 
 		/* we may have some "dropped" entries not yet removed, skip them */
-		Assert(!ps->dropped);
 		if (ps->dropped)
 			continue;
 
@@ -1480,18 +1454,20 @@ read_chunk(FILE *fpin, void *ptr, size_t len)
  * stats so locking is not required.
  */
 static void
-pgstat_read_statsfile(void)
+pgstat_read_statsfile(XLogRecPtr redo)
 {
 	FILE	   *fpin;
 	int32		format_id;
 	bool		found;
 	const char *statfile = PGSTAT_STAT_PERMANENT_FILENAME;
 	PgStat_ShmemControl *shmem = pgStatLocal.shmem;
+	XLogRecPtr	file_redo;
 
 	/* shouldn't be called from postmaster */
 	Assert(IsUnderPostmaster || !IsPostmasterEnvironment);
 
-	elog(DEBUG2, "reading stats file \"%s\"", statfile);
+	elog(DEBUG2, "reading stats file \"%s\" with redo %X/%X", statfile,
+		LSN_FORMAT_ARGS(redo));
 
 	/*
 	 * Try to open the stats file. If it doesn't exist, the backends simply
@@ -1518,6 +1494,13 @@ pgstat_read_statsfile(void)
 	 */
 	if (!read_chunk_s(fpin, &format_id) ||
 		format_id != PGSTAT_FILE_FORMAT_ID)
+		goto error;
+
+	/*
+	 * Read the redo LSN stored in the file.
+	 */
+	if (!read_chunk_s(fpin, &file_redo) ||
+		file_redo != redo)
 		goto error;
 
 	/*

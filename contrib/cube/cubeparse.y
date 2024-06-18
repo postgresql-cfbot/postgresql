@@ -11,6 +11,9 @@
 #include "utils/float.h"
 #include "varatt.h"
 
+extern int cube_yychar;
+extern int cube_yynerrs;
+
 /* All grammar constructs return strings */
 #define YYSTYPE char *
 

@@ -454,6 +454,11 @@ extern PGDLLIMPORT int TransactionTimeout;
 extern PGDLLIMPORT int IdleSessionTimeout;
 extern PGDLLIMPORT bool log_lock_waits;
 
+#ifdef EXEC_BACKEND
+extern slock_t *ProcStructLock;
+extern PGPROC *AuxiliaryProcs;
+#endif
+
 
 /*
  * Function Prototypes

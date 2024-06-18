@@ -23,6 +23,10 @@
 #include "replication/walsender_private.h"
 
 
+extern int replication_yychar;
+extern int replication_yynerrs;
+
+
 /* Result of the parsing is returned here */
 Node *replication_parse_result;
 

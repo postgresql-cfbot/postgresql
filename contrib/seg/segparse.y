@@ -13,6 +13,9 @@
 
 #include "segdata.h"
 
+extern int seg_yychar;
+extern int seg_yynerrs;
+
 /*
  * Bison doesn't allocate anything that needs to live across parser calls,
  * so we can easily have it use palloc instead of malloc.  This prevents

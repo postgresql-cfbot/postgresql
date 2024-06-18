@@ -24,6 +24,7 @@
 #include "access/multixact.h"
 #include "access/parallel.h"
 #include "access/subtrans.h"
+#include "access/simpleundolog.h"
 #include "access/transam.h"
 #include "access/twophase.h"
 #include "access/xact.h"
@@ -2267,6 +2268,9 @@ CommitTransaction(void)
 	 */
 	smgrDoPendingSyncs(true, is_parallel_worker);
 
+	/* Likewise perform uncommitted storage file deletion. */
+	smgrDoPendingCleanups(true);
+
 	/* close large objects before lower-level cleanup */
 	AtEOXact_LargeObject(true);
 
@@ -2414,6 +2418,7 @@ CommitTransaction(void)
 	AtEOXact_on_commit_actions(true);
 	AtEOXact_Namespace(true, is_parallel_worker);
 	AtEOXact_SMgr();
+	AtEOXact_SimpleUndoLog(true, GetCurrentTransactionIdIfAny());
 	AtEOXact_Files(true);
 	AtEOXact_ComboCid();
 	AtEOXact_HashTables(true);
@@ -2522,6 +2527,9 @@ PrepareTransaction(void)
 	 * committed-but-broken files after a crash and COMMIT PREPARED.
 	 */
 	smgrDoPendingSyncs(true, false);
+
+	/* Likewise perform uncommitted storage file deletion. */
+	smgrDoPendingCleanups(true);
 
 	/* close large objects before lower-level cleanup */
 	AtEOXact_LargeObject(true);
@@ -2856,6 +2864,7 @@ AbortTransaction(void)
 	AfterTriggerEndXact(false); /* 'false' means it's abort */
 	AtAbort_Portals();
 	smgrDoPendingSyncs(false, is_parallel_worker);
+	smgrDoPendingCleanups(false);
 	AtEOXact_LargeObject(false);
 	AtAbort_Notify();
 	AtEOXact_RelationMap(false, is_parallel_worker);
@@ -2923,6 +2932,7 @@ AbortTransaction(void)
 		AtEOXact_on_commit_actions(false);
 		AtEOXact_Namespace(false, is_parallel_worker);
 		AtEOXact_SMgr();
+		AtEOXact_SimpleUndoLog(false, GetCurrentTransactionIdIfAny());
 		AtEOXact_Files(false);
 		AtEOXact_ComboCid();
 		AtEOXact_HashTables(false);
@@ -5107,6 +5117,8 @@ CommitSubTransaction(void)
 	AtEOSubXact_Inval(true);
 	AtSubCommit_smgr();
 
+	AtEOXact_SimpleUndoLog(true, GetCurrentTransactionIdIfAny());
+
 	/*
 	 * The only lock we actually release here is the subtransaction XID lock.
 	 */
@@ -5287,6 +5299,7 @@ AbortSubTransaction(void)
 							 RESOURCE_RELEASE_AFTER_LOCKS,
 							 false, false);
 		AtSubAbort_smgr();
+		AtEOXact_SimpleUndoLog(false, GetCurrentTransactionIdIfAny());
 
 		AtEOXact_GUC(false, s->gucNestLevel);
 		AtEOSubXact_SPI(false, s->subTransactionId);
@@ -5777,7 +5790,10 @@ XactLogCommitRecord(TimestampTz commit_time,
 	if (!TransactionIdIsValid(twophase_xid))
 		info = XLOG_XACT_COMMIT;
 	else
+	{
+		elog(LOG, "COMMIT PREPARED: %d", twophase_xid);
 		info = XLOG_XACT_COMMIT_PREPARED;
+	}
 
 	/* First figure out and collect all the information needed */
 
@@ -6177,6 +6193,8 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 		DropRelationFiles(parsed->xlocators, parsed->nrels, true);
 	}
 
+	AtEOXact_SimpleUndoLog(true, xid);
+
 	if (parsed->nstats > 0)
 	{
 		/* see equivalent call for relations above */
@@ -6288,6 +6306,8 @@ xact_redo_abort(xl_xact_parsed_abort *parsed, TransactionId xid,
 		DropRelationFiles(parsed->xlocators, parsed->nrels, true);
 	}
 
+	AtEOXact_SimpleUndoLog(false, xid);
+
 	if (parsed->nstats > 0)
 	{
 		/* see equivalent call for relations above */
@@ -6353,6 +6373,10 @@ xact_redo(XLogReaderState *record)
 	}
 	else if (info == XLOG_XACT_PREPARE)
 	{
+		xl_xact_prepare *xlrec = (xl_xact_prepare *) XLogRecGetData(record);
+
+		AtEOXact_SimpleUndoLog(true, xlrec->xid);
+
 		/*
 		 * Store xid and start/end pointers of the WAL record in TwoPhaseState
 		 * gxact entry.

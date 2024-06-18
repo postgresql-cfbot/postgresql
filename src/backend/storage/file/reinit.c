@@ -34,6 +34,39 @@ typedef struct
 	RelFileNumber relnumber;	/* hash key */
 } unlogged_relation_entry;
 
+static char **ignore_files = NULL;
+static int nignore_elems = 0;
+static int nignore_files = 0;
+
+/*
+ * identify the file should be ignored during resetting unlogged relations.
+ */
+static bool
+reinit_ignore_file(const char *dirname, const char *name)
+{
+	char fnamebuf[MAXPGPATH];
+	int len;
+
+	if (nignore_files == 0)
+		return false;
+
+	strncpy(fnamebuf, dirname, MAXPGPATH - 1);
+	strncat(fnamebuf, "/", MAXPGPATH - 1);
+	strncat(fnamebuf, name, MAXPGPATH - 1);
+	fnamebuf[MAXPGPATH - 1] = 0;
+
+	for (int i = 0 ; i < nignore_files ; i++)
+	{
+		/* match ignoring fork part */
+		len = strlen(ignore_files[i]);
+		if (strncmp(fnamebuf, ignore_files[i], len) == 0 &&
+			(fnamebuf[len] == 0 || fnamebuf[len] == '_'))
+			return true;
+	}
+
+	return false;
+}
+
 /*
  * Reset unlogged relations from before the last restart.
  *
@@ -204,6 +237,10 @@ ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname, int op)
 													 &forkNum, &segno))
 				continue;
 
+			/* Skip anything that undo log suggested to ignore */
+			if (reinit_ignore_file(dbspacedirname, de->d_name))
+				continue;
+
 			/* Also skip it unless this is the init fork. */
 			if (forkNum != INIT_FORKNUM)
 				continue;
@@ -241,6 +278,10 @@ ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname, int op)
 			if (!parse_filename_for_nontemp_relation(de->d_name,
 													 &ent.relnumber,
 													 &forkNum, &segno))
+				continue;
+
+			/* Skip anything that undo log suggested to ignore */
+			if (reinit_ignore_file(dbspacedirname, de->d_name))
 				continue;
 
 			/* We never remove the init fork. */
@@ -294,6 +335,10 @@ ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname, int op)
 													 &forkNum, &segno))
 				continue;
 
+			/* Skip anything that undo log suggested to ignore */
+			if (reinit_ignore_file(dbspacedirname, de->d_name))
+				continue;
+
 			/* Also skip it unless this is the init fork. */
 			if (forkNum != INIT_FORKNUM)
 				continue;
@@ -337,6 +382,10 @@ ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname, int op)
 													 &forkNum, &segno))
 				continue;
 
+			/* Skip anything that undo log suggested to ignore */
+			if (reinit_ignore_file(dbspacedirname, de->d_name))
+				continue;
+
 			/* Also skip it unless this is the init fork. */
 			if (forkNum != INIT_FORKNUM)
 				continue;
@@ -364,6 +413,35 @@ ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname, int op)
 		 */
 		fsync_fname(dbspacedirname, true);
 	}
+}
+
+/*
+ * Record relfilenodes that should be left alone during reinitializing unlogged
+ * relations.
+ */
+void
+ResetUnloggedRelationIgnore(RelFileLocator rloc)
+{
+	RelFileLocatorBackend rbloc;
+
+	if (nignore_files >= nignore_elems)
+	{
+		if (ignore_files == NULL)
+		{
+			nignore_elems = 16;
+			ignore_files = palloc(sizeof(char *) * nignore_elems);
+		}
+		else
+		{
+			nignore_elems *= 2;
+			ignore_files = repalloc(ignore_files,
+									sizeof(char *) * nignore_elems);
+		}
+	}
+
+	rbloc.backend = INVALID_PROC_NUMBER;
+	rbloc.locator = rloc;
+	ignore_files[nignore_files++] = relpath(rbloc, MAIN_FORKNUM);
 }
 
 /*

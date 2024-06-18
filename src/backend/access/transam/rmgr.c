@@ -44,8 +44,8 @@
 
 
 /* must be kept in sync with RmgrData definition in xlog_internal.h */
-#define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask,decode) \
-	{ name, redo, desc, identify, startup, cleanup, mask, decode },
+#define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask,decode,undo) \
+	{ name, redo, desc, identify, startup, cleanup, mask, decode},
 
 RmgrData	RmgrTable[RM_MAX_ID + 1] = {
 #include "access/rmgrlist.h"

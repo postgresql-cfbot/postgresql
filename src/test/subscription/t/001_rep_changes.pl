@@ -331,11 +331,12 @@ is( $result, qq(1|bar
 2|baz),
 	'update works with REPLICA IDENTITY FULL and a primary key');
 
-# Check that subscriber handles cases where update/delete target tuple
-# is missing.  We have to look for the DEBUG1 log messages about that,
-# so temporarily bump up the log verbosity.
-$node_subscriber->append_conf('postgresql.conf', "log_min_messages = debug1");
-$node_subscriber->reload;
+# To check that subscriber handles cases where update/delete target tuple
+# is missing, detect_conflict is temporarily enabled to log conflicts
+# related to missing tuples.
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION tap_sub SET (detect_conflict = true)"
+);
 
 $node_subscriber->safe_psql('postgres', "DELETE FROM tab_full_pk");
 
@@ -352,10 +353,10 @@ $node_publisher->wait_for_catchup('tap_sub');
 
 my $logfile = slurp_file($node_subscriber->logfile, $log_location);
 ok( $logfile =~
-	  qr/logical replication did not find row to be updated in replication target relation "tab_full_pk"/,
+	  qr/conflict update_missing detected on relation "tab_full_pk".*\n.*DETAIL:.* Did not find the row to be updated./m,
 	'update target row is missing');
 ok( $logfile =~
-	  qr/logical replication did not find row to be deleted in replication target relation "tab_full_pk"/,
+	  qr/conflict delete_missing detected on relation "tab_full_pk".*\n.*DETAIL:.* Did not find the row to be deleted./m,
 	'delete target row is missing');
 
 $node_subscriber->append_conf('postgresql.conf',

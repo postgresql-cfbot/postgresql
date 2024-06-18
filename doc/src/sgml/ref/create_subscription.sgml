@@ -428,6 +428,49 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
          </para>
         </listitem>
        </varlistentry>
+
+      <varlistentry id="sql-createsubscription-params-with-detect-conflict">
+        <term><literal>detect_conflict</literal> (<type>boolean</type>)</term>
+        <listitem>
+         <para>
+          Specifies whether the subscription is enabled for conflict detection.
+          The default is <literal>false</literal>.
+         </para>
+         <para>
+          When conflict detection is enabled, additional logging is triggered
+          in the following scenarios:
+          <variablelist>
+           <varlistentry>
+            <term><literal>update_differ</literal></term>
+            <listitem>
+             <para>
+              Updating a row that was previously modified by another origin. Note that this
+              conflict only be detected when
+              <link linkend="guc-track-commit-timestamp"><varname>track_commit_timestamp</varname></link>
+              is enabled.
+             </para>
+            </listitem>
+           </varlistentry>
+           <varlistentry>
+            <term><literal>update_missing</literal></term>
+            <listitem>
+             <para>
+              The tuple to be updated is not found.
+             </para>
+            </listitem>
+           </varlistentry>
+           <varlistentry>
+            <term><literal>delete_missing</literal></term>
+            <listitem>
+             <para>
+              The tuple to be deleted is not found.
+             </para>
+            </listitem>
+           </varlistentry>
+          </variablelist>
+         </para>
+        </listitem>
+       </varlistentry>
       </variablelist></para>
 
     </listitem>

@@ -343,12 +343,12 @@ $result =
   $node_subscriber2->safe_psql('postgres', "SELECT a FROM tab1 ORDER BY 1");
 is($result, qq(), 'truncate of tab1 replicated');
 
-# Check that subscriber handles cases where update/delete target tuple
-# is missing.  We have to look for the DEBUG1 log messages about that,
-# so temporarily bump up the log verbosity.
-$node_subscriber1->append_conf('postgresql.conf',
-	"log_min_messages = debug1");
-$node_subscriber1->reload;
+# To check that subscriber handles cases where update/delete target tuple
+# is missing, detect_conflict is temporarily enabled to log conflicts
+# related to missing tuples.
+$node_subscriber1->safe_psql('postgres',
+	"ALTER SUBSCRIPTION sub1 SET (detect_conflict = true)"
+);
 
 $node_publisher->safe_psql('postgres',
 	"INSERT INTO tab1 VALUES (1, 'foo'), (4, 'bar'), (10, 'baz')");
@@ -372,21 +372,21 @@ $node_publisher->wait_for_catchup('sub2');
 
 my $logfile = slurp_file($node_subscriber1->logfile(), $log_location);
 ok( $logfile =~
-	  qr/logical replication did not find row to be updated in replication target relation's partition "tab1_2_2"/,
+	  qr/conflict update_missing detected on relation "tab1_2_2".*\n.*DETAIL:.* Did not find the row to be updated./,
 	'update target row is missing in tab1_2_2');
 ok( $logfile =~
-	  qr/logical replication did not find row to be deleted in replication target relation "tab1_1"/,
+	  qr/conflict delete_missing detected on relation "tab1_1".*\n.*DETAIL:.* Did not find the row to be deleted./,
 	'delete target row is missing in tab1_1');
 ok( $logfile =~
-	  qr/logical replication did not find row to be deleted in replication target relation "tab1_2_2"/,
+	  qr/conflict delete_missing detected on relation "tab1_2_2".*\n.*DETAIL:.* Did not find the row to be deleted./,
 	'delete target row is missing in tab1_2_2');
 ok( $logfile =~
-	  qr/logical replication did not find row to be deleted in replication target relation "tab1_def"/,
+	  qr/conflict delete_missing detected on relation "tab1_def".*\n.*DETAIL:.* Did not find the row to be deleted./,
 	'delete target row is missing in tab1_def');
 
-$node_subscriber1->append_conf('postgresql.conf',
-	"log_min_messages = warning");
-$node_subscriber1->reload;
+$node_subscriber1->safe_psql('postgres',
+	"ALTER SUBSCRIPTION sub1 SET (detect_conflict = false)"
+);
 
 # Tests for replication using root table identity and schema
 
@@ -773,12 +773,12 @@ pub_tab2|3|yyy
 pub_tab2|5|zzz
 xxx_c|6|aaa), 'inserts into tab2 replicated');
 
-# Check that subscriber handles cases where update/delete target tuple
-# is missing.  We have to look for the DEBUG1 log messages about that,
-# so temporarily bump up the log verbosity.
-$node_subscriber1->append_conf('postgresql.conf',
-	"log_min_messages = debug1");
-$node_subscriber1->reload;
+# To check that subscriber handles cases where update/delete target tuple
+# is missing, detect_conflict is temporarily enabled to log conflicts
+# related to missing tuples.
+$node_subscriber1->safe_psql('postgres',
+	"ALTER SUBSCRIPTION sub_viaroot SET (detect_conflict = true)"
+);
 
 $node_subscriber1->safe_psql('postgres', "DELETE FROM tab2");
 
@@ -796,15 +796,15 @@ $node_publisher->wait_for_catchup('sub2');
 
 $logfile = slurp_file($node_subscriber1->logfile(), $log_location);
 ok( $logfile =~
-	  qr/logical replication did not find row to be updated in replication target relation's partition "tab2_1"/,
+	  qr/conflict update_missing detected on relation "tab2_1".*\n.*DETAIL:.* Did not find the row to be updated./,
 	'update target row is missing in tab2_1');
 ok( $logfile =~
-	  qr/logical replication did not find row to be deleted in replication target relation "tab2_1"/,
+	  qr/conflict delete_missing detected on relation "tab2_1".*\n.*DETAIL:.* Did not find the row to be deleted./,
 	'delete target row is missing in tab2_1');
 
-$node_subscriber1->append_conf('postgresql.conf',
-	"log_min_messages = warning");
-$node_subscriber1->reload;
+$node_subscriber1->safe_psql('postgres',
+	"ALTER SUBSCRIPTION sub_viaroot SET (detect_conflict = false)"
+);
 
 # Test that replication continues to work correctly after altering the
 # partition of a partitioned target table.

@@ -70,8 +70,9 @@
 #define SUBOPT_PASSWORD_REQUIRED	0x00000800
 #define SUBOPT_RUN_AS_OWNER			0x00001000
 #define SUBOPT_FAILOVER				0x00002000
-#define SUBOPT_LSN					0x00004000
-#define SUBOPT_ORIGIN				0x00008000
+#define SUBOPT_DETECT_CONFLICT		0x00004000
+#define SUBOPT_LSN					0x00008000
+#define SUBOPT_ORIGIN				0x00010000
 
 /* check if the 'val' has 'bits' set */
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
@@ -97,6 +98,7 @@ typedef struct SubOpts
 	bool		passwordrequired;
 	bool		runasowner;
 	bool		failover;
+	bool		detectconflict;
 	char	   *origin;
 	XLogRecPtr	lsn;
 } SubOpts;
@@ -159,6 +161,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 		opts->runasowner = false;
 	if (IsSet(supported_opts, SUBOPT_FAILOVER))
 		opts->failover = false;
+	if (IsSet(supported_opts, SUBOPT_DETECT_CONFLICT))
+		opts->detectconflict = false;
 	if (IsSet(supported_opts, SUBOPT_ORIGIN))
 		opts->origin = pstrdup(LOGICALREP_ORIGIN_ANY);
 
@@ -315,6 +319,15 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 
 			opts->specified_opts |= SUBOPT_FAILOVER;
 			opts->failover = defGetBoolean(defel);
+		}
+		else if (IsSet(supported_opts, SUBOPT_DETECT_CONFLICT) &&
+				 strcmp(defel->defname, "detect_conflict") == 0)
+		{
+			if (IsSet(opts->specified_opts, SUBOPT_DETECT_CONFLICT))
+				errorConflictingDefElem(defel, pstate);
+
+			opts->specified_opts |= SUBOPT_DETECT_CONFLICT;
+			opts->detectconflict = defGetBoolean(defel);
 		}
 		else if (IsSet(supported_opts, SUBOPT_ORIGIN) &&
 				 strcmp(defel->defname, "origin") == 0)
@@ -603,7 +616,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 					  SUBOPT_SYNCHRONOUS_COMMIT | SUBOPT_BINARY |
 					  SUBOPT_STREAMING | SUBOPT_TWOPHASE_COMMIT |
 					  SUBOPT_DISABLE_ON_ERR | SUBOPT_PASSWORD_REQUIRED |
-					  SUBOPT_RUN_AS_OWNER | SUBOPT_FAILOVER | SUBOPT_ORIGIN);
+					  SUBOPT_RUN_AS_OWNER | SUBOPT_FAILOVER |
+					  SUBOPT_DETECT_CONFLICT | SUBOPT_ORIGIN);
 	parse_subscription_options(pstate, stmt->options, supported_opts, &opts);
 
 	/*
@@ -710,6 +724,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	values[Anum_pg_subscription_subpasswordrequired - 1] = BoolGetDatum(opts.passwordrequired);
 	values[Anum_pg_subscription_subrunasowner - 1] = BoolGetDatum(opts.runasowner);
 	values[Anum_pg_subscription_subfailover - 1] = BoolGetDatum(opts.failover);
+	values[Anum_pg_subscription_subdetectconflict - 1] =
+		BoolGetDatum(opts.detectconflict);
 	values[Anum_pg_subscription_subconninfo - 1] =
 		CStringGetTextDatum(conninfo);
 	if (opts.slot_name)
@@ -1146,7 +1162,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 								  SUBOPT_STREAMING | SUBOPT_DISABLE_ON_ERR |
 								  SUBOPT_PASSWORD_REQUIRED |
 								  SUBOPT_RUN_AS_OWNER | SUBOPT_FAILOVER |
-								  SUBOPT_ORIGIN);
+								  SUBOPT_DETECT_CONFLICT | SUBOPT_ORIGIN);
 
 				parse_subscription_options(pstate, stmt->options,
 										   supported_opts, &opts);
@@ -1254,6 +1270,13 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 					values[Anum_pg_subscription_subfailover - 1] =
 						BoolGetDatum(opts.failover);
 					replaces[Anum_pg_subscription_subfailover - 1] = true;
+				}
+
+				if (IsSet(opts.specified_opts, SUBOPT_DETECT_CONFLICT))
+				{
+					values[Anum_pg_subscription_subdetectconflict - 1] =
+						BoolGetDatum(opts.detectconflict);
+					replaces[Anum_pg_subscription_subdetectconflict - 1] = true;
 				}
 
 				if (IsSet(opts.specified_opts, SUBOPT_ORIGIN))

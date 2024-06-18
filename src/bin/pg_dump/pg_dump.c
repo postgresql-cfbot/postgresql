@@ -4739,6 +4739,7 @@ getSubscriptions(Archive *fout)
 	int			i_suboriginremotelsn;
 	int			i_subenabled;
 	int			i_subfailover;
+	int			i_subdetectconflict;
 	int			i,
 				ntups;
 
@@ -4811,11 +4812,17 @@ getSubscriptions(Archive *fout)
 
 	if (fout->remoteVersion >= 170000)
 		appendPQExpBufferStr(query,
-							 " s.subfailover\n");
+							 " s.subfailover,\n");
 	else
 		appendPQExpBuffer(query,
-						  " false AS subfailover\n");
+						  " false AS subfailover,\n");
 
+	if (fout->remoteVersion >= 170000)
+		appendPQExpBufferStr(query,
+							 " s.subdetectconflict\n");
+	else
+		appendPQExpBuffer(query,
+						  " false AS subdetectconflict\n");
 	appendPQExpBufferStr(query,
 						 "FROM pg_subscription s\n");
 
@@ -4854,6 +4861,7 @@ getSubscriptions(Archive *fout)
 	i_suboriginremotelsn = PQfnumber(res, "suboriginremotelsn");
 	i_subenabled = PQfnumber(res, "subenabled");
 	i_subfailover = PQfnumber(res, "subfailover");
+	i_subdetectconflict = PQfnumber(res, "subdetectconflict");
 
 	subinfo = pg_malloc(ntups * sizeof(SubscriptionInfo));
 
@@ -4900,6 +4908,8 @@ getSubscriptions(Archive *fout)
 			pg_strdup(PQgetvalue(res, i, i_subenabled));
 		subinfo[i].subfailover =
 			pg_strdup(PQgetvalue(res, i, i_subfailover));
+		subinfo[i].subdetectconflict =
+			pg_strdup(PQgetvalue(res, i, i_subdetectconflict));
 
 		/* Decide whether we want to dump it */
 		selectDumpableObject(&(subinfo[i].dobj), fout);
@@ -5139,6 +5149,9 @@ dumpSubscription(Archive *fout, const SubscriptionInfo *subinfo)
 
 	if (strcmp(subinfo->subfailover, "t") == 0)
 		appendPQExpBufferStr(query, ", failover = true");
+
+	if (strcmp(subinfo->subdetectconflict, "t") == 0)
+		appendPQExpBufferStr(query, ", detect_conflict = true");
 
 	if (strcmp(subinfo->subsynccommit, "off") != 0)
 		appendPQExpBuffer(query, ", synchronous_commit = %s", fmtId(subinfo->subsynccommit));

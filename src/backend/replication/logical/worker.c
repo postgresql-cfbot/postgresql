@@ -147,6 +147,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "access/commit_ts.h"
 #include "access/table.h"
 #include "access/tableam.h"
 #include "access/twophase.h"
@@ -273,6 +274,31 @@ typedef enum
 	TRANS_LEADER_PARTIAL_SERIALIZE,
 	TRANS_PARALLEL_APPLY,
 } TransApplyAction;
+
+/*
+ * Conflict types that could be encountered when applying remote changes.
+ *
+ * For now, this list includes conflict types that will prompt additional logging
+ * only if conflict detection is turned on. Other conflicts that already
+ * lead to constraint violation errors are excluded from this enumeration.
+ */
+typedef enum
+{
+	/* The row to be updated was modified by a different origin */
+	CT_UPDATE_DIFFER,
+
+	/* The row to be updated is missing */
+	CT_UPDATE_MISSING,
+
+	/* The row to be deleted is missing */
+	CT_DELETE_MISSING,
+} ConflictType;
+
+const char *const ConflictTypeNames[] = {
+	[CT_UPDATE_DIFFER] = "update_differ",
+	[CT_UPDATE_MISSING] = "update_missing",
+	[CT_DELETE_MISSING] = "delete_missing"
+};
 
 /* errcontext tracker */
 ApplyErrorCallbackArg apply_error_callback_arg =
@@ -415,6 +441,14 @@ static inline void reset_apply_error_context_info(void);
 
 static TransApplyAction get_transaction_apply_action(TransactionId xid,
 													 ParallelApplyWorkerInfo **winfo);
+
+static bool get_tuple_commit_ts(TupleTableSlot *localslot, TransactionId *xmin,
+								RepOriginId *localorigin,
+								TimestampTz *localts);
+static void report_apply_conflict(ConflictType type, Relation localrel,
+								  TransactionId localxmin,
+								  RepOriginId localorigin,
+								  TimestampTz localts);
 
 /*
  * Form the origin name for the subscription.
@@ -2664,6 +2698,20 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 	 */
 	if (found)
 	{
+		RepOriginId localorigin;
+		TransactionId localxmin;
+		TimestampTz localts;
+
+		/*
+		 * If conflict detection is enabled, check whether the local tuple was
+		 * modified by a different origin. If detected, report the conflict.
+		 */
+		if (MySubscription->detectconflict &&
+			get_tuple_commit_ts(localslot, &localxmin, &localorigin, &localts) &&
+			localorigin != replorigin_session_origin)
+			report_apply_conflict(CT_UPDATE_DIFFER, localrel, localxmin,
+								  localorigin, localts);
+
 		/* Process and store remote tuple in the slot */
 		oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
 		slot_modify_data(remoteslot, localslot, relmapentry, newtup);
@@ -2681,13 +2729,10 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 		/*
 		 * The tuple to be updated could not be found.  Do nothing except for
 		 * emitting a log message.
-		 *
-		 * XXX should this be promoted to ereport(LOG) perhaps?
 		 */
-		elog(DEBUG1,
-			 "logical replication did not find row to be updated "
-			 "in replication target relation \"%s\"",
-			 RelationGetRelationName(localrel));
+		if (MySubscription->detectconflict)
+			report_apply_conflict(CT_UPDATE_MISSING, localrel,
+								  InvalidTransactionId, InvalidRepOriginId, 0);
 	}
 
 	/* Cleanup. */
@@ -2821,13 +2866,10 @@ apply_handle_delete_internal(ApplyExecutionData *edata,
 		/*
 		 * The tuple to be deleted could not be found.  Do nothing except for
 		 * emitting a log message.
-		 *
-		 * XXX should this be promoted to ereport(LOG) perhaps?
 		 */
-		elog(DEBUG1,
-			 "logical replication did not find row to be deleted "
-			 "in replication target relation \"%s\"",
-			 RelationGetRelationName(localrel));
+		if (MySubscription->detectconflict)
+			report_apply_conflict(CT_DELETE_MISSING, localrel,
+								  InvalidTransactionId, InvalidRepOriginId, 0);
 	}
 
 	/* Cleanup. */
@@ -3005,13 +3047,13 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 					/*
 					 * The tuple to be updated could not be found.  Do nothing
 					 * except for emitting a log message.
-					 *
-					 * XXX should this be promoted to ereport(LOG) perhaps?
 					 */
-					elog(DEBUG1,
-						 "logical replication did not find row to be updated "
-						 "in replication target relation's partition \"%s\"",
-						 RelationGetRelationName(partrel));
+					if (MySubscription->detectconflict)
+						report_apply_conflict(CT_UPDATE_MISSING,
+											  partrel,
+											  InvalidTransactionId,
+											  InvalidRepOriginId, 0);
+
 					return;
 				}
 
@@ -5086,5 +5128,72 @@ get_transaction_apply_action(TransactionId xid, ParallelApplyWorkerInfo **winfo)
 	else
 	{
 		return TRANS_LEADER_APPLY;
+	}
+}
+
+/*
+ * Get the xmin and commit timestamp data (origin and timestamp) associated
+ * with the provided local tuple.
+ *
+ * Returns true if the commit timestamp data was found, false otherwise.
+ */
+static bool
+get_tuple_commit_ts(TupleTableSlot *localslot, TransactionId *xmin,
+					RepOriginId *localorigin, TimestampTz *localts)
+{
+	Datum		xminDatum;
+	bool		isnull;
+
+	xminDatum = slot_getsysattr(localslot, MinTransactionIdAttributeNumber,
+								&isnull);
+	*xmin = DatumGetTransactionId(xminDatum);
+	Assert(!isnull);
+
+	/*
+	 * The commit timestamp data is not available if track_commit_timestamp is
+	 * disabled.
+	 */
+	if (!track_commit_timestamp)
+	{
+		*localorigin = InvalidRepOriginId;
+		*localts = 0;
+		return false;
+	}
+
+	return TransactionIdGetCommitTsData(*xmin, localts, localorigin);
+}
+
+/*
+ * Report a conflict when applying remote changes.
+ */
+static void
+report_apply_conflict(ConflictType type, Relation localrel,
+					  TransactionId localxmin, RepOriginId localorigin,
+					  TimestampTz localts)
+{
+	switch (type)
+	{
+		case CT_UPDATE_DIFFER:
+			ereport(LOG,
+					errcode(ERRCODE_INTEGRITY_CONSTRAINT_VIOLATION),
+					errmsg("conflict %s detected on relation \"%s\"",
+						   ConflictTypeNames[type], RelationGetRelationName(localrel)),
+					errdetail("Updating a row that was modified by a different origin %u in transaction %u at %s.",
+							  localorigin, localxmin, timestamptz_to_str(localts)));
+			break;
+		case CT_UPDATE_MISSING:
+			ereport(LOG,
+					errcode(ERRCODE_INTEGRITY_CONSTRAINT_VIOLATION),
+					errmsg("conflict %s detected on relation \"%s\"",
+						   ConflictTypeNames[type], RelationGetRelationName(localrel)),
+					errdetail("Did not find the row to be updated."));
+			break;
+		case CT_DELETE_MISSING:
+			ereport(LOG,
+					errcode(ERRCODE_INTEGRITY_CONSTRAINT_VIOLATION),
+					errmsg("conflict %s detected on relation \"%s\"",
+						   ConflictTypeNames[type], RelationGetRelationName(localrel)),
+					errdetail("Did not find the row to be deleted."));
+			break;
 	}
 }

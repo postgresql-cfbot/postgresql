@@ -6529,7 +6529,7 @@ describeSubscriptions(const char *pattern, bool verbose)
 	printQueryOpt myopt = pset.popt;
 	static const bool translate_columns[] = {false, false, false, false,
 		false, false, false, false, false, false, false, false, false, false,
-	false};
+	false, false};
 
 	if (pset.sversion < 100000)
 	{
@@ -6597,6 +6597,10 @@ describeSubscriptions(const char *pattern, bool verbose)
 			appendPQExpBuffer(&buf,
 							  ", subfailover AS \"%s\"\n",
 							  gettext_noop("Failover"));
+		if (pset.sversion >= 170000)
+			appendPQExpBuffer(&buf,
+							  ", subdetectconflict AS \"%s\"\n",
+							  gettext_noop("Detect conflict"));
 
 		appendPQExpBuffer(&buf,
 						  ",  subsynccommit AS \"%s\"\n"

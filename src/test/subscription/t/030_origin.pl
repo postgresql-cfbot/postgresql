@@ -26,7 +26,12 @@ my $stderr;
 # node_A
 my $node_A = PostgreSQL::Test::Cluster->new('node_A');
 $node_A->init(allows_streaming => 'logical');
+
+# Enable the track_commit_timestamp to detect the conflict when attempting to
+# update a row that was previously modified by a different origin.
+$node_A->append_conf('postgresql.conf', 'track_commit_timestamp = on');
 $node_A->start;
+
 # node_B
 my $node_B = PostgreSQL::Test::Cluster->new('node_B');
 $node_B->init(allows_streaming => 'logical');
@@ -89,10 +94,31 @@ is( $result, qq(11
 	'Inserted successfully without leading to infinite recursion in bidirectional replication setup'
 );
 
+###############################################################################
+# Check that the conflict can be detected when attempting to update a row that
+# was previously modified by a different source.
+###############################################################################
+
+$node_A->safe_psql('postgres',
+	"ALTER SUBSCRIPTION $subname_AB SET (detect_conflict = true);");
+
+$node_B->safe_psql('postgres', "UPDATE tab SET a = 10 WHERE a = 11;");
+
+$node_A->wait_for_log(
+	qr/Updating a row that was modified by a different origin [0-9]+ in transaction [0-9]+ at .*/
+);
+
 $node_A->safe_psql('postgres', "DELETE FROM tab;");
 
 $node_A->wait_for_catchup($subname_BA);
 $node_B->wait_for_catchup($subname_AB);
+
+# The remaining tests no longer test conflict detection.
+$node_A->safe_psql('postgres',
+	"ALTER SUBSCRIPTION $subname_AB SET (detect_conflict = false);");
+
+$node_A->append_conf('postgresql.conf', 'track_commit_timestamp = off');
+$node_A->restart;
 
 ###############################################################################
 # Check that remote data of node_B (that originated from node_C) is not

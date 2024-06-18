@@ -2118,6 +2118,7 @@ PgStatShared_Function
 PgStatShared_HashEntry
 PgStatShared_IO
 PgStatShared_Relation
+PgStatShared_RelFileNode
 PgStatShared_ReplSlot
 PgStatShared_SLRU
 PgStatShared_Subscription

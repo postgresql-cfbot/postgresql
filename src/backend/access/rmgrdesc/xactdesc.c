@@ -319,10 +319,11 @@ xact_desc_stats(StringInfo buf, const char *label,
 		appendStringInfo(buf, "; %sdropped stats:", label);
 		for (i = 0; i < ndropped; i++)
 		{
-			appendStringInfo(buf, " %d/%u/%u",
+			appendStringInfo(buf, " %d/%u/%u/%u",
 							 dropped_stats[i].kind,
 							 dropped_stats[i].dboid,
-							 dropped_stats[i].objoid);
+							 dropped_stats[i].objoid,
+							 dropped_stats[i].relfile);
 		}
 	}
 }

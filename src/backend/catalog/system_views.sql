@@ -750,6 +750,7 @@ CREATE VIEW pg_statio_all_tables AS
             C.relname AS relname,
             pg_stat_get_blocks_fetched(C.oid) -
                     pg_stat_get_blocks_hit(C.oid) AS heap_blks_read,
+			pg_stat_get_blocks_written(C.oid) + pg_stat_get_relfilenode_blocks_written(d.oid, CASE WHEN C.reltablespace <> 0 THEN C.reltablespace ELSE d.dattablespace END, C.relfilenode) AS heap_blks_written,
             pg_stat_get_blocks_hit(C.oid) AS heap_blks_hit,
             I.idx_blks_read AS idx_blks_read,
             I.idx_blks_hit AS idx_blks_hit,
@@ -758,7 +759,7 @@ CREATE VIEW pg_statio_all_tables AS
             pg_stat_get_blocks_hit(T.oid) AS toast_blks_hit,
             X.idx_blks_read AS tidx_blks_read,
             X.idx_blks_hit AS tidx_blks_hit
-    FROM pg_class C LEFT JOIN
+    FROM pg_database d, pg_class C LEFT JOIN
             pg_class T ON C.reltoastrelid = T.oid
             LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace)
             LEFT JOIN LATERAL (
@@ -775,7 +776,7 @@ CREATE VIEW pg_statio_all_tables AS
                      sum(pg_stat_get_blocks_hit(indexrelid))::bigint
                      AS idx_blks_hit
               FROM pg_index WHERE indrelid = T.oid ) X ON true
-    WHERE C.relkind IN ('r', 't', 'm');
+    WHERE C.relkind IN ('r', 't', 'm') AND d.datname = current_database();
 
 CREATE VIEW pg_statio_sys_tables AS
     SELECT * FROM pg_statio_all_tables

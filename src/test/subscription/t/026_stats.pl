@@ -263,7 +263,7 @@ $node_subscriber->safe_psql($db, qq(DROP SUBSCRIPTION $sub1_name));
 
 # Subscription stats for sub1 should be gone
 is( $node_subscriber->safe_psql(
-		$db, qq(SELECT pg_stat_have_stats('subscription', 0, $sub1_oid))),
+		$db, qq(SELECT pg_stat_have_stats('subscription', 0, $sub1_oid, 0))),
 	qq(f),
 	qq(Subscription stats for subscription '$sub1_name' should be removed.));
 
@@ -282,7 +282,7 @@ DROP SUBSCRIPTION $sub2_name;
 
 # Subscription stats for sub2 should be gone
 is( $node_subscriber->safe_psql(
-		$db, qq(SELECT pg_stat_have_stats('subscription', 0, $sub2_oid))),
+		$db, qq(SELECT pg_stat_have_stats('subscription', 0, $sub2_oid, 0))),
 	qq(f),
 	qq(Subscription stats for subscription '$sub2_name' should be removed.));
 

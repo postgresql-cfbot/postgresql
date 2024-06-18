@@ -46,7 +46,8 @@ pgstat_create_function(Oid proid)
 {
 	pgstat_create_transactional(PGSTAT_KIND_FUNCTION,
 								MyDatabaseId,
-								proid);
+								proid,
+								InvalidOid);
 }
 
 /*
@@ -61,7 +62,8 @@ pgstat_drop_function(Oid proid)
 {
 	pgstat_drop_transactional(PGSTAT_KIND_FUNCTION,
 							  MyDatabaseId,
-							  proid);
+							  proid,
+							  InvalidOid);
 }
 
 /*
@@ -86,6 +88,7 @@ pgstat_init_function_usage(FunctionCallInfo fcinfo,
 	entry_ref = pgstat_prep_pending_entry(PGSTAT_KIND_FUNCTION,
 										  MyDatabaseId,
 										  fcinfo->flinfo->fn_oid,
+										  InvalidOid,
 										  &created_entry);
 
 	/*
@@ -113,7 +116,7 @@ pgstat_init_function_usage(FunctionCallInfo fcinfo,
 		if (!SearchSysCacheExists1(PROCOID, ObjectIdGetDatum(fcinfo->flinfo->fn_oid)))
 		{
 			pgstat_drop_entry(PGSTAT_KIND_FUNCTION, MyDatabaseId,
-							  fcinfo->flinfo->fn_oid);
+							  fcinfo->flinfo->fn_oid, InvalidOid);
 			ereport(ERROR, errcode(ERRCODE_UNDEFINED_FUNCTION),
 					errmsg("function call to dropped function"));
 		}
@@ -224,7 +227,7 @@ find_funcstat_entry(Oid func_id)
 {
 	PgStat_EntryRef *entry_ref;
 
-	entry_ref = pgstat_fetch_pending_entry(PGSTAT_KIND_FUNCTION, MyDatabaseId, func_id);
+	entry_ref = pgstat_fetch_pending_entry(PGSTAT_KIND_FUNCTION, MyDatabaseId, func_id, InvalidOid);
 
 	if (entry_ref)
 		return entry_ref->pending;
@@ -239,5 +242,5 @@ PgStat_StatFuncEntry *
 pgstat_fetch_stat_funcentry(Oid func_id)
 {
 	return (PgStat_StatFuncEntry *)
-		pgstat_fetch_entry(PGSTAT_KIND_FUNCTION, MyDatabaseId, func_id);
+		pgstat_fetch_entry(PGSTAT_KIND_FUNCTION, MyDatabaseId, func_id, InvalidOid);
 }

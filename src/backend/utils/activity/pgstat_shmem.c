@@ -395,10 +395,10 @@ pgstat_get_entry_ref_cached(PgStat_HashKey key, PgStat_EntryRef **entry_ref_p)
  * if the entry is newly created, false otherwise.
  */
 PgStat_EntryRef *
-pgstat_get_entry_ref(PgStat_Kind kind, Oid dboid, Oid objoid, bool create,
-					 bool *created_entry)
+pgstat_get_entry_ref(PgStat_Kind kind, Oid dboid, Oid objoid, RelFileNumber relfile,
+					 bool create, bool *created_entry)
 {
-	PgStat_HashKey key = {.kind = kind,.dboid = dboid,.objoid = objoid};
+	PgStat_HashKey key = {.kind = kind,.dboid = dboid,.objoid = objoid,.relfile = relfile};
 	PgStatShared_HashEntry *shhashent;
 	PgStatShared_Common *shheader = NULL;
 	PgStat_EntryRef *entry_ref;
@@ -611,12 +611,12 @@ pgstat_unlock_entry(PgStat_EntryRef *entry_ref)
  */
 PgStat_EntryRef *
 pgstat_get_entry_ref_locked(PgStat_Kind kind, Oid dboid, Oid objoid,
-							bool nowait)
+							RelFileNumber relfile, bool nowait)
 {
 	PgStat_EntryRef *entry_ref;
 
 	/* find shared table stats entry corresponding to the local entry */
-	entry_ref = pgstat_get_entry_ref(kind, dboid, objoid, true, NULL);
+	entry_ref = pgstat_get_entry_ref(kind, dboid, objoid, relfile, true, NULL);
 
 	/* lock the shared entry to protect the content, skip if failed */
 	if (!pgstat_lock_entry(entry_ref, nowait))
@@ -871,9 +871,9 @@ pgstat_drop_database_and_contents(Oid dboid)
  * pgstat_gc_entry_refs().
  */
 bool
-pgstat_drop_entry(PgStat_Kind kind, Oid dboid, Oid objoid)
+pgstat_drop_entry(PgStat_Kind kind, Oid dboid, Oid objoid, RelFileNumber relfile)
 {
-	PgStat_HashKey key = {.kind = kind,.dboid = dboid,.objoid = objoid};
+	PgStat_HashKey key = {.kind = kind,.dboid = dboid,.objoid = objoid,.relfile = relfile};
 	PgStatShared_HashEntry *shent;
 	bool		freed = true;
 
@@ -946,13 +946,12 @@ shared_stat_reset_contents(PgStat_Kind kind, PgStatShared_Common *header,
  * Reset one variable-numbered stats entry.
  */
 void
-pgstat_reset_entry(PgStat_Kind kind, Oid dboid, Oid objoid, TimestampTz ts)
+pgstat_reset_entry(PgStat_Kind kind, Oid dboid, Oid objoid, RelFileNumber relfile, TimestampTz ts)
 {
 	PgStat_EntryRef *entry_ref;
 
 	Assert(!pgstat_get_kind_info(kind)->fixed_amount);
-
-	entry_ref = pgstat_get_entry_ref(kind, dboid, objoid, false, NULL);
+	entry_ref = pgstat_get_entry_ref(kind, dboid, objoid, relfile, false, NULL);
 	if (!entry_ref || entry_ref->shared_entry->dropped)
 		return;
 

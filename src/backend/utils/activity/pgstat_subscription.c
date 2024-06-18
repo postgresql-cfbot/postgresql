@@ -30,7 +30,7 @@ pgstat_report_subscription_error(Oid subid, bool is_apply_error)
 	PgStat_BackendSubEntry *pending;
 
 	entry_ref = pgstat_prep_pending_entry(PGSTAT_KIND_SUBSCRIPTION,
-										  InvalidOid, subid, NULL);
+										  InvalidOid, subid, InvalidOid, NULL);
 	pending = entry_ref->pending;
 
 	if (is_apply_error)
@@ -47,12 +47,12 @@ pgstat_create_subscription(Oid subid)
 {
 	/* Ensures that stats are dropped if transaction rolls back */
 	pgstat_create_transactional(PGSTAT_KIND_SUBSCRIPTION,
-								InvalidOid, subid);
+								InvalidOid, subid, InvalidOid);
 
 	/* Create and initialize the subscription stats entry */
-	pgstat_get_entry_ref(PGSTAT_KIND_SUBSCRIPTION, InvalidOid, subid,
+	pgstat_get_entry_ref(PGSTAT_KIND_SUBSCRIPTION, InvalidOid, subid, InvalidOid,
 						 true, NULL);
-	pgstat_reset_entry(PGSTAT_KIND_SUBSCRIPTION, InvalidOid, subid, 0);
+	pgstat_reset_entry(PGSTAT_KIND_SUBSCRIPTION, InvalidOid, subid, InvalidOid, 0);
 }
 
 /*
@@ -64,7 +64,7 @@ void
 pgstat_drop_subscription(Oid subid)
 {
 	pgstat_drop_transactional(PGSTAT_KIND_SUBSCRIPTION,
-							  InvalidOid, subid);
+							  InvalidOid, subid, InvalidOid);
 }
 
 /*
@@ -75,7 +75,7 @@ PgStat_StatSubEntry *
 pgstat_fetch_stat_subscription(Oid subid)
 {
 	return (PgStat_StatSubEntry *)
-		pgstat_fetch_entry(PGSTAT_KIND_SUBSCRIPTION, InvalidOid, subid);
+		pgstat_fetch_entry(PGSTAT_KIND_SUBSCRIPTION, InvalidOid, subid, InvalidOid);
 }
 
 /*

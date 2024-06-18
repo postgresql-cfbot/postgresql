@@ -21,7 +21,9 @@
 #include "access/sdir.h"
 #include "access/xact.h"
 #include "executor/tuptable.h"
+#include "pgstat.h"
 #include "storage/read_stream.h"
+#include "utils/pgstat_internal.h"
 #include "utils/rel.h"
 #include "utils/snapshot.h"
 
@@ -1634,6 +1636,23 @@ table_relation_set_new_filelocator(Relation rel,
 								   TransactionId *freezeXid,
 								   MultiXactId *minmulti)
 {
+	PgStat_StatRelFileNodeEntry *relfileentry;
+	PgStat_StatTabEntry *tabentry = NULL;
+	PgStat_EntryRef *entry_ref = NULL;
+	PgStatShared_Relation *shtabentry;
+
+	entry_ref = pgstat_get_entry_ref(PGSTAT_KIND_RELATION, MyDatabaseId, rel->rd_id, InvalidOid, false, NULL);
+	if (entry_ref)
+	{
+		shtabentry = (PgStatShared_Relation *) entry_ref->shared_stats;
+		tabentry = &shtabentry->stats;
+	}
+
+	relfileentry = pgstat_fetch_stat_relfilenodeentry(rel->rd_locator.dbOid, rel->rd_locator.spcOid, rel->rd_locator.relNumber);
+
+	if (tabentry && relfileentry)
+		tabentry->blocks_written += relfileentry->blocks_written;
+
 	rel->rd_tableam->relation_set_new_filelocator(rel, newrlocator,
 												  persistence, freezeXid,
 												  minmulti);

@@ -43,7 +43,7 @@ static PgStat_Counter pgLastSessionReportTime = 0;
 void
 pgstat_drop_database(Oid databaseid)
 {
-	pgstat_drop_transactional(PGSTAT_KIND_DATABASE, databaseid, InvalidOid);
+	pgstat_drop_transactional(PGSTAT_KIND_DATABASE, databaseid, InvalidOid, InvalidOid);
 }
 
 /*
@@ -66,7 +66,7 @@ pgstat_report_autovac(Oid dboid)
 	 * operation so it doesn't matter if we get blocked here a little.
 	 */
 	entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_DATABASE,
-											dboid, InvalidOid, false);
+											dboid, InvalidOid, InvalidOid, false);
 
 	dbentry = (PgStatShared_Database *) entry_ref->shared_stats;
 	dbentry->stats.last_autovac_time = GetCurrentTimestamp();
@@ -150,7 +150,7 @@ pgstat_report_checksum_failures_in_db(Oid dboid, int failurecount)
 	 * common enough for that to be a problem.
 	 */
 	entry_ref =
-		pgstat_get_entry_ref_locked(PGSTAT_KIND_DATABASE, dboid, InvalidOid, false);
+		pgstat_get_entry_ref_locked(PGSTAT_KIND_DATABASE, dboid, InvalidOid, InvalidOid, false);
 
 	sharedent = (PgStatShared_Database *) entry_ref->shared_stats;
 	sharedent->stats.checksum_failures += failurecount;
@@ -242,7 +242,7 @@ PgStat_StatDBEntry *
 pgstat_fetch_stat_dbentry(Oid dboid)
 {
 	return (PgStat_StatDBEntry *)
-		pgstat_fetch_entry(PGSTAT_KIND_DATABASE, dboid, InvalidOid);
+		pgstat_fetch_entry(PGSTAT_KIND_DATABASE, dboid, InvalidOid, InvalidOid);
 }
 
 void
@@ -341,7 +341,7 @@ pgstat_prep_database_pending(Oid dboid)
 	Assert(!OidIsValid(dboid) || OidIsValid(MyDatabaseId));
 
 	entry_ref = pgstat_prep_pending_entry(PGSTAT_KIND_DATABASE, dboid, InvalidOid,
-										  NULL);
+										  InvalidOid, NULL);
 
 	return entry_ref->pending;
 }
@@ -357,7 +357,7 @@ pgstat_reset_database_timestamp(Oid dboid, TimestampTz ts)
 	PgStatShared_Database *dbentry;
 
 	dbref = pgstat_get_entry_ref_locked(PGSTAT_KIND_DATABASE, MyDatabaseId, InvalidOid,
-										false);
+										InvalidOid, false);
 
 	dbentry = (PgStatShared_Database *) dbref->shared_stats;
 	dbentry->stats.stat_reset_timestamp = ts;

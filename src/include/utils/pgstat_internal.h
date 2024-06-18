@@ -53,7 +53,8 @@ typedef struct PgStat_HashKey
 {
 	PgStat_Kind kind;			/* statistics entry kind */
 	Oid			dboid;			/* database ID. InvalidOid for shared objects. */
-	Oid			objoid;			/* object ID, either table or function. */
+	Oid			objoid;			/* object ID, either table or function or tablespace. */
+	RelFileNumber relfile;		/* relfilenumber for RelFileLocator. */
 } PgStat_HashKey;
 
 /*
@@ -376,6 +377,12 @@ typedef struct PgStatShared_Relation
 	PgStat_StatTabEntry stats;
 } PgStatShared_Relation;
 
+typedef struct PgStatShared_RelFileNode
+{
+	PgStatShared_Common header;
+	PgStat_StatRelFileNodeEntry stats;
+} PgStatShared_RelFileNode;
+
 typedef struct PgStatShared_Function
 {
 	PgStatShared_Common header;
@@ -498,6 +505,9 @@ static inline size_t pgstat_get_entry_len(PgStat_Kind kind);
 static inline void *pgstat_get_entry_data(PgStat_Kind kind, PgStatShared_Common *entry);
 
 
+extern PgStat_SubXactStatus *pgStatXactStack;
+extern void PgStat_RemoveRelFileNodeFromDroppedStats(PgStat_SubXactStatus *xact_state, RelFileLocator rlocator);
+
 /*
  * Functions in pgstat.c
  */
@@ -511,10 +521,12 @@ extern void pgstat_assert_is_up(void);
 #endif
 
 extern void pgstat_delete_pending_entry(PgStat_EntryRef *entry_ref);
-extern PgStat_EntryRef *pgstat_prep_pending_entry(PgStat_Kind kind, Oid dboid, Oid objoid, bool *created_entry);
-extern PgStat_EntryRef *pgstat_fetch_pending_entry(PgStat_Kind kind, Oid dboid, Oid objoid);
+extern PgStat_EntryRef *pgstat_prep_pending_entry(PgStat_Kind kind, Oid dboid,
+												  Oid objoid, RelFileNumber relfile,
+												  bool *created_entry);
+extern PgStat_EntryRef *pgstat_fetch_pending_entry(PgStat_Kind kind, Oid dboid, Oid objoid, RelFileNumber relfile);
 
-extern void *pgstat_fetch_entry(PgStat_Kind kind, Oid dboid, Oid objoid);
+extern void *pgstat_fetch_entry(PgStat_Kind kind, Oid dboid, Oid objoid, RelFileNumber relfile);
 extern void pgstat_snapshot_fixed(PgStat_Kind kind);
 
 
@@ -582,6 +594,7 @@ extern void AtPrepare_PgStat_Relations(PgStat_SubXactStatus *xact_state);
 extern void PostPrepare_PgStat_Relations(PgStat_SubXactStatus *xact_state);
 
 extern bool pgstat_relation_flush_cb(PgStat_EntryRef *entry_ref, bool nowait);
+extern bool pgstat_relfilenode_flush_cb(PgStat_EntryRef *entry_ref, bool nowait);
 extern void pgstat_relation_delete_pending_cb(PgStat_EntryRef *entry_ref);
 
 
@@ -602,15 +615,16 @@ extern void pgstat_attach_shmem(void);
 extern void pgstat_detach_shmem(void);
 
 extern PgStat_EntryRef *pgstat_get_entry_ref(PgStat_Kind kind, Oid dboid, Oid objoid,
-											 bool create, bool *created_entry);
+											 RelFileNumber relfile, bool create,
+											 bool *created_entry);
 extern bool pgstat_lock_entry(PgStat_EntryRef *entry_ref, bool nowait);
 extern bool pgstat_lock_entry_shared(PgStat_EntryRef *entry_ref, bool nowait);
 extern void pgstat_unlock_entry(PgStat_EntryRef *entry_ref);
-extern bool pgstat_drop_entry(PgStat_Kind kind, Oid dboid, Oid objoid);
+extern bool pgstat_drop_entry(PgStat_Kind kind, Oid dboid, Oid objoid, RelFileNumber relfile);
 extern void pgstat_drop_all_entries(void);
 extern PgStat_EntryRef *pgstat_get_entry_ref_locked(PgStat_Kind kind, Oid dboid, Oid objoid,
-													bool nowait);
-extern void pgstat_reset_entry(PgStat_Kind kind, Oid dboid, Oid objoid, TimestampTz ts);
+													RelFileNumber relfile, bool nowait);
+extern void pgstat_reset_entry(PgStat_Kind kind, Oid dboid, Oid objoid, RelFileNumber relfile, TimestampTz ts);
 extern void pgstat_reset_entries_of_kind(PgStat_Kind kind, TimestampTz ts);
 extern void pgstat_reset_matching_entries(bool (*do_reset) (PgStatShared_HashEntry *, Datum),
 										  Datum match_data,
@@ -655,8 +669,8 @@ extern void pgstat_subscription_reset_timestamp_cb(PgStatShared_Common *header, 
  */
 
 extern PgStat_SubXactStatus *pgstat_get_xact_stack_level(int nest_level);
-extern void pgstat_drop_transactional(PgStat_Kind kind, Oid dboid, Oid objoid);
-extern void pgstat_create_transactional(PgStat_Kind kind, Oid dboid, Oid objoid);
+extern void pgstat_drop_transactional(PgStat_Kind kind, Oid dboid, Oid objoid, RelFileNumber relfile);
+extern void pgstat_create_transactional(PgStat_Kind kind, Oid dboid, Oid objoid, RelFileNumber relfile);
 
 
 /*

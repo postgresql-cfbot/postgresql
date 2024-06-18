@@ -288,6 +288,19 @@ static const PgStat_KindInfo pgstat_kind_infos[PGSTAT_NUM_KINDS] = {
 		.delete_pending_cb = pgstat_relation_delete_pending_cb,
 	},
 
+	[PGSTAT_KIND_RELFILENODE] = {
+		.name = "relfilenode",
+
+		.fixed_amount = false,
+
+		.shared_size = sizeof(PgStatShared_RelFileNode),
+		.shared_data_off = offsetof(PgStatShared_RelFileNode, stats),
+		.shared_data_len = sizeof(((PgStatShared_RelFileNode *) 0)->stats),
+		.pending_size = sizeof(PgStat_StatRelFileNodeEntry),
+
+		.flush_pending_cb = pgstat_relfilenode_flush_cb,
+	},
+
 	[PGSTAT_KIND_FUNCTION] = {
 		.name = "function",
 
@@ -651,7 +664,7 @@ pgstat_report_stat(bool force)
 
 	partial_flush = false;
 
-	/* flush database / relation / function / ... stats */
+	/* flush database / relation / function / relfilenode / ... stats */
 	partial_flush |= pgstat_flush_pending_entries(nowait);
 
 	/* flush IO stats */
@@ -731,7 +744,7 @@ pgstat_reset_counters(void)
  * GRANT system.
  */
 void
-pgstat_reset(PgStat_Kind kind, Oid dboid, Oid objoid)
+pgstat_reset(PgStat_Kind kind, Oid dboid, Oid objoid, RelFileNumber relfile)
 {
 	const PgStat_KindInfo *kind_info = pgstat_get_kind_info(kind);
 	TimestampTz ts = GetCurrentTimestamp();
@@ -740,7 +753,7 @@ pgstat_reset(PgStat_Kind kind, Oid dboid, Oid objoid)
 	Assert(!pgstat_get_kind_info(kind)->fixed_amount);
 
 	/* reset the "single counter" */
-	pgstat_reset_entry(kind, dboid, objoid, ts);
+	pgstat_reset_entry(kind, dboid, objoid, relfile, ts);
 
 	if (!kind_info->accessed_across_databases)
 		pgstat_reset_database_timestamp(dboid, ts);
@@ -809,7 +822,7 @@ pgstat_clear_snapshot(void)
 }
 
 void *
-pgstat_fetch_entry(PgStat_Kind kind, Oid dboid, Oid objoid)
+pgstat_fetch_entry(PgStat_Kind kind, Oid dboid, Oid objoid, RelFileNumber relfile)
 {
 	PgStat_HashKey key;
 	PgStat_EntryRef *entry_ref;
@@ -825,6 +838,7 @@ pgstat_fetch_entry(PgStat_Kind kind, Oid dboid, Oid objoid)
 	key.kind = kind;
 	key.dboid = dboid;
 	key.objoid = objoid;
+	key.relfile = relfile;
 
 	/* if we need to build a full snapshot, do so */
 	if (pgstat_fetch_consistency == PGSTAT_FETCH_CONSISTENCY_SNAPSHOT)
@@ -850,7 +864,7 @@ pgstat_fetch_entry(PgStat_Kind kind, Oid dboid, Oid objoid)
 
 	pgStatLocal.snapshot.mode = pgstat_fetch_consistency;
 
-	entry_ref = pgstat_get_entry_ref(kind, dboid, objoid, false, NULL);
+	entry_ref = pgstat_get_entry_ref(kind, dboid, objoid, relfile, false, NULL);
 
 	if (entry_ref == NULL || entry_ref->shared_entry->dropped)
 	{
@@ -919,13 +933,13 @@ pgstat_get_stat_snapshot_timestamp(bool *have_snapshot)
 }
 
 bool
-pgstat_have_entry(PgStat_Kind kind, Oid dboid, Oid objoid)
+pgstat_have_entry(PgStat_Kind kind, Oid dboid, Oid objoid, RelFileNumber relfile)
 {
 	/* fixed-numbered stats always exist */
 	if (pgstat_get_kind_info(kind)->fixed_amount)
 		return true;
 
-	return pgstat_get_entry_ref(kind, dboid, objoid, false, NULL) != NULL;
+	return pgstat_get_entry_ref(kind, dboid, objoid, relfile, false, NULL) != NULL;
 }
 
 /*
@@ -1102,7 +1116,8 @@ pgstat_build_snapshot_fixed(PgStat_Kind kind)
  * created, false otherwise.
  */
 PgStat_EntryRef *
-pgstat_prep_pending_entry(PgStat_Kind kind, Oid dboid, Oid objoid, bool *created_entry)
+pgstat_prep_pending_entry(PgStat_Kind kind, Oid dboid, Oid objoid,
+						  RelFileNumber relfile, bool *created_entry)
 {
 	PgStat_EntryRef *entry_ref;
 
@@ -1117,7 +1132,7 @@ pgstat_prep_pending_entry(PgStat_Kind kind, Oid dboid, Oid objoid, bool *created
 								  ALLOCSET_SMALL_SIZES);
 	}
 
-	entry_ref = pgstat_get_entry_ref(kind, dboid, objoid,
+	entry_ref = pgstat_get_entry_ref(kind, dboid, objoid, relfile,
 									 true, created_entry);
 
 	if (entry_ref->pending == NULL)
@@ -1140,11 +1155,11 @@ pgstat_prep_pending_entry(PgStat_Kind kind, Oid dboid, Oid objoid, bool *created
  * that it shouldn't be needed.
  */
 PgStat_EntryRef *
-pgstat_fetch_pending_entry(PgStat_Kind kind, Oid dboid, Oid objoid)
+pgstat_fetch_pending_entry(PgStat_Kind kind, Oid dboid, Oid objoid, RelFileNumber relfile)
 {
 	PgStat_EntryRef *entry_ref;
 
-	entry_ref = pgstat_get_entry_ref(kind, dboid, objoid, false, NULL);
+	entry_ref = pgstat_get_entry_ref(kind, dboid, objoid, relfile, false, NULL);
 
 	if (entry_ref == NULL || entry_ref->pending == NULL)
 		return NULL;
@@ -1173,7 +1188,7 @@ pgstat_delete_pending_entry(PgStat_EntryRef *entry_ref)
 }
 
 /*
- * Flush out pending stats for database objects (databases, relations,
+ * Flush out pending stats for database objects (databases, relations, relfilenodes,
  * functions).
  */
 static bool

@@ -1447,11 +1447,15 @@ DropRelationFiles(RelFileLocator *delrels, int ndelrels, bool isRedo)
 {
 	SMgrRelation *srels;
 	int			i;
+	int         not_freed_count = 0;
 
 	srels = palloc(sizeof(SMgrRelation) * ndelrels);
 	for (i = 0; i < ndelrels; i++)
 	{
 		SMgrRelation srel = smgropen(delrels[i], INVALID_PROC_NUMBER);
+
+		if (!pgstat_drop_entry(PGSTAT_KIND_RELFILENODE, delrels[i].dbOid, delrels[i].spcOid, delrels[i].relNumber))
+			not_freed_count++;
 
 		if (isRedo)
 		{
@@ -1462,6 +1466,9 @@ DropRelationFiles(RelFileLocator *delrels, int ndelrels, bool isRedo)
 		}
 		srels[i] = srel;
 	}
+
+	if (not_freed_count > 0)
+		pgstat_request_entry_refs_gc();
 
 	smgrdounlinkall(srels, ndelrels, isRedo);
 

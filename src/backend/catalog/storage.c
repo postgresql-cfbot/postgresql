@@ -33,6 +33,7 @@
 #include "storage/smgr.h"
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
+#include "utils/pgstat_internal.h"
 #include "utils/rel.h"
 
 /* GUC variables */
@@ -152,6 +153,7 @@ RelationCreateStorage(RelFileLocator rlocator, char relpersistence,
 	if (needs_wal)
 		log_smgrcreate(&srel->smgr_rlocator.locator, MAIN_FORKNUM);
 
+	pgstat_create_transactional(PGSTAT_KIND_RELFILENODE, rlocator.dbOid, rlocator.spcOid, rlocator.relNumber);
 	/*
 	 * Add the relation to the list of stuff to delete at abort, if we are
 	 * asked to do so.
@@ -227,6 +229,8 @@ RelationDropStorage(Relation rel)
 	 * for now I'll keep the logic simple.
 	 */
 
+	pgstat_drop_transactional(PGSTAT_KIND_RELFILENODE, rel->rd_locator.dbOid, rel->rd_locator.spcOid,  rel->rd_locator.relNumber);
+
 	RelationCloseSmgr(rel);
 }
 
@@ -253,6 +257,9 @@ RelationPreserveStorage(RelFileLocator rlocator, bool atCommit)
 	PendingRelDelete *pending;
 	PendingRelDelete *prev;
 	PendingRelDelete *next;
+	PgStat_SubXactStatus *xact_state;
+
+	xact_state = pgStatXactStack;
 
 	prev = NULL;
 	for (pending = pendingDeletes; pending != NULL; pending = next)
@@ -267,6 +274,7 @@ RelationPreserveStorage(RelFileLocator rlocator, bool atCommit)
 			else
 				pendingDeletes = next;
 			pfree(pending);
+			PgStat_RemoveRelFileNodeFromDroppedStats(xact_state, rlocator);
 			/* prev does not change */
 		}
 		else

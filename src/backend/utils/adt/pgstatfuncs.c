@@ -106,6 +106,30 @@ PG_STAT_GET_RELENTRY_INT64(tuples_updated)
 /* pg_stat_get_vacuum_count */
 PG_STAT_GET_RELENTRY_INT64(vacuum_count)
 
+#define PG_STAT_GET_RELFILEENTRY_INT64(stat)						\
+Datum															\
+CppConcat(pg_stat_get_relfilenode_,stat)(PG_FUNCTION_ARGS)					\
+{																\
+	Oid			dboid = PG_GETARG_OID(0);						\
+	Oid			 spcOid = PG_GETARG_OID(1);						\
+	RelFileNumber			 relfile = PG_GETARG_OID(2);						\
+	int64		result;											\
+	PgStat_StatRelFileNodeEntry *relfileentry;								\
+																\
+	if ((relfileentry = pgstat_fetch_stat_relfilenodeentry(dboid, spcOid, relfile)) == NULL)	\
+		result = 0;												\
+	else														\
+		result = (int64) (relfileentry->stat);						\
+																\
+	PG_RETURN_INT64(result);									\
+}
+
+/* pg_stat_get_relfilenode_blocks_written */
+PG_STAT_GET_RELFILEENTRY_INT64(blocks_written)
+
+/* pg_stat_get_blocks_written */
+PG_STAT_GET_RELENTRY_INT64(blocks_written)
+
 #define PG_STAT_GET_RELENTRY_TIMESTAMPTZ(stat)					\
 Datum															\
 CppConcat(pg_stat_get_,stat)(PG_FUNCTION_ARGS)					\
@@ -1752,7 +1776,7 @@ pg_stat_reset_single_table_counters(PG_FUNCTION_ARGS)
 	Oid			taboid = PG_GETARG_OID(0);
 	Oid			dboid = (IsSharedRelation(taboid) ? InvalidOid : MyDatabaseId);
 
-	pgstat_reset(PGSTAT_KIND_RELATION, dboid, taboid);
+	pgstat_reset(PGSTAT_KIND_RELATION, dboid, taboid, InvalidOid);
 
 	PG_RETURN_VOID();
 }
@@ -1762,7 +1786,7 @@ pg_stat_reset_single_function_counters(PG_FUNCTION_ARGS)
 {
 	Oid			funcoid = PG_GETARG_OID(0);
 
-	pgstat_reset(PGSTAT_KIND_FUNCTION, MyDatabaseId, funcoid);
+	pgstat_reset(PGSTAT_KIND_FUNCTION, MyDatabaseId, funcoid, InvalidOid);
 
 	PG_RETURN_VOID();
 }
@@ -1820,7 +1844,7 @@ pg_stat_reset_subscription_stats(PG_FUNCTION_ARGS)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("invalid subscription OID %u", subid)));
-		pgstat_reset(PGSTAT_KIND_SUBSCRIPTION, InvalidOid, subid);
+		pgstat_reset(PGSTAT_KIND_SUBSCRIPTION, InvalidOid, subid, InvalidOid);
 	}
 
 	PG_RETURN_VOID();
@@ -2028,7 +2052,9 @@ pg_stat_have_stats(PG_FUNCTION_ARGS)
 	char	   *stats_type = text_to_cstring(PG_GETARG_TEXT_P(0));
 	Oid			dboid = PG_GETARG_OID(1);
 	Oid			objoid = PG_GETARG_OID(2);
+	Oid			relfile = PG_GETARG_OID(3);
+
 	PgStat_Kind kind = pgstat_get_kind_from_str(stats_type);
 
-	PG_RETURN_BOOL(pgstat_have_entry(kind, dboid, objoid));
+	PG_RETURN_BOOL(pgstat_have_entry(kind, dboid, objoid, relfile));
 }

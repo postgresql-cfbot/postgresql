@@ -30,7 +30,7 @@ static void AtEOXact_PgStat_DroppedStats(PgStat_SubXactStatus *xact_state, bool 
 static void AtEOSubXact_PgStat_DroppedStats(PgStat_SubXactStatus *xact_state,
 											bool isCommit, int nestDepth);
 
-static PgStat_SubXactStatus *pgStatXactStack = NULL;
+PgStat_SubXactStatus *pgStatXactStack = NULL;
 
 
 /*
@@ -84,7 +84,7 @@ AtEOXact_PgStat_DroppedStats(PgStat_SubXactStatus *xact_state, bool isCommit)
 			 * Transaction that dropped an object committed. Drop the stats
 			 * too.
 			 */
-			if (!pgstat_drop_entry(it->kind, it->dboid, it->objoid))
+			if (!pgstat_drop_entry(it->kind, it->dboid, it->objoid, it->relfile))
 				not_freed_count++;
 		}
 		else if (!isCommit && pending->is_create)
@@ -93,7 +93,7 @@ AtEOXact_PgStat_DroppedStats(PgStat_SubXactStatus *xact_state, bool isCommit)
 			 * Transaction that created an object aborted. Drop the stats
 			 * associated with the object.
 			 */
-			if (!pgstat_drop_entry(it->kind, it->dboid, it->objoid))
+			if (!pgstat_drop_entry(it->kind, it->dboid, it->objoid, it->relfile))
 				not_freed_count++;
 		}
 
@@ -103,6 +103,33 @@ AtEOXact_PgStat_DroppedStats(PgStat_SubXactStatus *xact_state, bool isCommit)
 
 	if (not_freed_count > 0)
 		pgstat_request_entry_refs_gc();
+}
+
+/*
+ * Remove a relfilenode stat from the list of stats to be dropped.
+ */
+void
+PgStat_RemoveRelFileNodeFromDroppedStats(PgStat_SubXactStatus *xact_state, RelFileLocator rlocator)
+{
+	dlist_mutable_iter iter;
+
+	if (dclist_count(&xact_state->pending_drops) == 0)
+		return;
+
+	dclist_foreach_modify(iter, &xact_state->pending_drops)
+	{
+		PgStat_PendingDroppedStatsItem *pending =
+			dclist_container(PgStat_PendingDroppedStatsItem, node, iter.cur);
+		xl_xact_stats_item *it = &pending->item;
+
+		if (it->kind == PGSTAT_KIND_RELFILENODE && it->dboid == rlocator.dbOid
+			&& it->objoid == rlocator.spcOid && it->relfile == rlocator.relNumber)
+		{
+			dclist_delete_from(&xact_state->pending_drops, &pending->node);
+			pfree(pending);
+			return;
+		}
+	}
 }
 
 /*
@@ -158,7 +185,7 @@ AtEOSubXact_PgStat_DroppedStats(PgStat_SubXactStatus *xact_state,
 			 * Subtransaction creating a new stats object aborted. Drop the
 			 * stats object.
 			 */
-			if (!pgstat_drop_entry(it->kind, it->dboid, it->objoid))
+			if (!pgstat_drop_entry(it->kind, it->dboid, it->objoid, it->relfile))
 				not_freed_count++;
 			pfree(pending);
 		}
@@ -320,7 +347,11 @@ pgstat_execute_transactional_drops(int ndrops, struct xl_xact_stats_item *items,
 	{
 		xl_xact_stats_item *it = &items[i];
 
-		if (!pgstat_drop_entry(it->kind, it->dboid, it->objoid))
+		/* leave it to pgstat_drop_transactional() in RelationDropStorage() */
+		if (it->kind == PGSTAT_KIND_RELFILENODE)
+			continue;
+
+		if (!pgstat_drop_entry(it->kind, it->dboid, it->objoid, it->relfile))
 			not_freed_count++;
 	}
 
@@ -329,7 +360,7 @@ pgstat_execute_transactional_drops(int ndrops, struct xl_xact_stats_item *items,
 }
 
 static void
-create_drop_transactional_internal(PgStat_Kind kind, Oid dboid, Oid objoid, bool is_create)
+create_drop_transactional_internal(PgStat_Kind kind, Oid dboid, Oid objoid, RelFileNumber relfile, bool is_create)
 {
 	int			nest_level = GetCurrentTransactionNestLevel();
 	PgStat_SubXactStatus *xact_state;
@@ -342,6 +373,7 @@ create_drop_transactional_internal(PgStat_Kind kind, Oid dboid, Oid objoid, bool
 	drop->item.kind = kind;
 	drop->item.dboid = dboid;
 	drop->item.objoid = objoid;
+	drop->item.relfile = relfile;
 
 	dclist_push_tail(&xact_state->pending_drops, &drop->node);
 }
@@ -354,18 +386,18 @@ create_drop_transactional_internal(PgStat_Kind kind, Oid dboid, Oid objoid, bool
  * dropped.
  */
 void
-pgstat_create_transactional(PgStat_Kind kind, Oid dboid, Oid objoid)
+pgstat_create_transactional(PgStat_Kind kind, Oid dboid, Oid objoid, RelFileNumber relfile)
 {
-	if (pgstat_get_entry_ref(kind, dboid, objoid, false, NULL))
+	if (pgstat_get_entry_ref(kind, dboid, objoid, relfile, false, NULL))
 	{
 		ereport(WARNING,
-				errmsg("resetting existing statistics for kind %s, db=%u, oid=%u",
-					   (pgstat_get_kind_info(kind))->name, dboid, objoid));
+				errmsg("resetting existing statistics for kind %s, db=%u, oid=%u, relfile=%u",
+					   (pgstat_get_kind_info(kind))->name, dboid, objoid, relfile));
 
-		pgstat_reset(kind, dboid, objoid);
+		pgstat_reset(kind, dboid, objoid, relfile);
 	}
 
-	create_drop_transactional_internal(kind, dboid, objoid, /* create */ true);
+	create_drop_transactional_internal(kind, dboid, objoid, relfile, /* create */ true);
 }
 
 /*
@@ -376,7 +408,7 @@ pgstat_create_transactional(PgStat_Kind kind, Oid dboid, Oid objoid)
  * alive.
  */
 void
-pgstat_drop_transactional(PgStat_Kind kind, Oid dboid, Oid objoid)
+pgstat_drop_transactional(PgStat_Kind kind, Oid dboid, Oid objoid, RelFileNumber relfile)
 {
-	create_drop_transactional_internal(kind, dboid, objoid, /* create */ false);
+	create_drop_transactional_internal(kind, dboid, objoid, relfile, /* create */ false);
 }

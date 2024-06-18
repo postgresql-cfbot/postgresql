@@ -1167,9 +1167,9 @@ PinBufferForBlock(Relation rel,
 		 * WaitReadBuffers() (so, not for hits, and not for buffers that are
 		 * zeroed instead), the per-relation stats always count them.
 		 */
-		pgstat_count_buffer_read(rel);
+		pgstat_report_relfilenode_buffer_read(rel);
 		if (*foundPtr)
-			pgstat_count_buffer_hit(rel);
+			pgstat_report_relfilenode_buffer_hit(rel);
 	}
 	if (*foundPtr)
 	{
@@ -3883,6 +3883,8 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 							IOOP_WRITE, io_start, 1);
 
 	pgBufferUsage.shared_blks_written++;
+
+	pgstat_report_relfilenode_blks_written(reln->smgr_rlocator.locator);
 
 	/*
 	 * Mark the buffer as clean (unless BM_JUST_DIRTIED has become set) and

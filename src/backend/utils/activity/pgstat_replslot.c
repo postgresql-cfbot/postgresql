@@ -62,7 +62,7 @@ pgstat_reset_replslot(const char *name)
 	 */
 	if (SlotIsLogical(slot))
 		pgstat_reset(PGSTAT_KIND_REPLSLOT, InvalidOid,
-					 ReplicationSlotIndex(slot));
+					 ReplicationSlotIndex(slot), InvalidOid);
 
 	LWLockRelease(ReplicationSlotControlLock);
 }
@@ -82,7 +82,7 @@ pgstat_report_replslot(ReplicationSlot *slot, const PgStat_StatReplSlotEntry *re
 	PgStat_StatReplSlotEntry *statent;
 
 	entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_REPLSLOT, InvalidOid,
-											ReplicationSlotIndex(slot), false);
+											ReplicationSlotIndex(slot), InvalidOid, false);
 	shstatent = (PgStatShared_ReplSlot *) entry_ref->shared_stats;
 	statent = &shstatent->stats;
 
@@ -116,7 +116,7 @@ pgstat_create_replslot(ReplicationSlot *slot)
 	Assert(LWLockHeldByMeInMode(ReplicationSlotAllocationLock, LW_EXCLUSIVE));
 
 	entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_REPLSLOT, InvalidOid,
-											ReplicationSlotIndex(slot), false);
+											ReplicationSlotIndex(slot), InvalidOid, false);
 	shstatent = (PgStatShared_ReplSlot *) entry_ref->shared_stats;
 
 	/*
@@ -146,7 +146,7 @@ void
 pgstat_acquire_replslot(ReplicationSlot *slot)
 {
 	pgstat_get_entry_ref(PGSTAT_KIND_REPLSLOT, InvalidOid,
-						 ReplicationSlotIndex(slot), true, NULL);
+						 ReplicationSlotIndex(slot), InvalidOid, true, NULL);
 }
 
 /*
@@ -158,7 +158,7 @@ pgstat_drop_replslot(ReplicationSlot *slot)
 	Assert(LWLockHeldByMeInMode(ReplicationSlotAllocationLock, LW_EXCLUSIVE));
 
 	if (!pgstat_drop_entry(PGSTAT_KIND_REPLSLOT, InvalidOid,
-						   ReplicationSlotIndex(slot)))
+						   ReplicationSlotIndex(slot), InvalidOid))
 		pgstat_request_entry_refs_gc();
 }
 
@@ -178,7 +178,7 @@ pgstat_fetch_replslot(NameData slotname)
 
 	if (idx != -1)
 		slotentry = (PgStat_StatReplSlotEntry *) pgstat_fetch_entry(PGSTAT_KIND_REPLSLOT,
-																	InvalidOid, idx);
+																	InvalidOid, idx, InvalidOid);
 
 	LWLockRelease(ReplicationSlotControlLock);
 
@@ -210,6 +210,7 @@ pgstat_replslot_from_serialized_name_cb(const NameData *name, PgStat_HashKey *ke
 	key->kind = PGSTAT_KIND_REPLSLOT;
 	key->dboid = InvalidOid;
 	key->objoid = idx;
+	key->relfile = InvalidOid;
 
 	return true;
 }

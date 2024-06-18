@@ -962,19 +962,16 @@ deconstruct_recurse(PlannerInfo *root, Node *jtnode,
 									child_domain->jd_relids);
 				jtitem->qualscope = bms_union(left_item->qualscope,
 											  right_item->qualscope);
-				/* caution: ANTI join derived from SEMI will lack rtindex */
-				if (j->rtindex != 0)
-				{
-					parent_domain->jd_relids =
-						bms_add_member(parent_domain->jd_relids,
-									   j->rtindex);
-					jtitem->qualscope = bms_add_member(jtitem->qualscope,
+				Assert(j->rtindex != 0);
+				parent_domain->jd_relids =
+					bms_add_member(parent_domain->jd_relids,
+								   j->rtindex);
+				jtitem->qualscope = bms_add_member(jtitem->qualscope,
+												   j->rtindex);
+				root->outer_join_rels = bms_add_member(root->outer_join_rels,
 													   j->rtindex);
-					root->outer_join_rels = bms_add_member(root->outer_join_rels,
-														   j->rtindex);
-					mark_rels_nulled_by_join(root, j->rtindex,
-											 right_item->qualscope);
-				}
+				mark_rels_nulled_by_join(root, j->rtindex,
+										 right_item->qualscope);
 				jtitem->inner_join_rels = bms_union(left_item->inner_join_rels,
 													right_item->inner_join_rels);
 				jtitem->left_rels = left_item->qualscope;
@@ -2208,7 +2205,6 @@ distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 						List **postponed_oj_qual_list)
 {
 	Relids		relids;
-	bool		is_pushed_down;
 	bool		pseudoconstant = false;
 	bool		maybe_equivalence;
 	bool		maybe_outer_join;
@@ -2318,37 +2314,9 @@ distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 		}
 	}
 
-	/*----------
+	/*
 	 * Check to see if clause application must be delayed by outer-join
 	 * considerations.
-	 *
-	 * A word about is_pushed_down: we mark the qual as "pushed down" if
-	 * it is (potentially) applicable at a level different from its original
-	 * syntactic level.  This flag is used to distinguish OUTER JOIN ON quals
-	 * from other quals pushed down to the same joinrel.  The rules are:
-	 *		WHERE quals and INNER JOIN quals: is_pushed_down = true.
-	 *		Non-degenerate OUTER JOIN quals: is_pushed_down = false.
-	 *		Degenerate OUTER JOIN quals: is_pushed_down = true.
-	 * A "degenerate" OUTER JOIN qual is one that doesn't mention the
-	 * non-nullable side, and hence can be pushed down into the nullable side
-	 * without changing the join result.  It is correct to treat it as a
-	 * regular filter condition at the level where it is evaluated.
-	 *
-	 * Note: it is not immediately obvious that a simple boolean is enough
-	 * for this: if for some reason we were to attach a degenerate qual to
-	 * its original join level, it would need to be treated as an outer join
-	 * qual there.  However, this cannot happen, because all the rels the
-	 * clause mentions must be in the outer join's min_righthand, therefore
-	 * the join it needs must be formed before the outer join; and we always
-	 * attach quals to the lowest level where they can be evaluated.  But
-	 * if we were ever to re-introduce a mechanism for delaying evaluation
-	 * of "expensive" quals, this area would need work.
-	 *
-	 * Note: generally, use of is_pushed_down has to go through the macro
-	 * RINFO_IS_PUSHED_DOWN, because that flag alone is not always sufficient
-	 * to tell whether a clause must be treated as pushed-down in context.
-	 * This seems like another reason why it should perhaps be rethought.
-	 *----------
 	 */
 	if (bms_overlap(relids, outerjoin_nonnullable))
 	{
@@ -2372,7 +2340,6 @@ distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 		 * deductions, if it is mergejoinable.  So consider adding it to the
 		 * lists of set-aside outer-join clauses.
 		 */
-		is_pushed_down = false;
 		maybe_equivalence = false;
 		maybe_outer_join = true;
 
@@ -2389,12 +2356,6 @@ distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 	}
 	else
 	{
-		/*
-		 * Normal qual clause or degenerate outer-join clause.  Either way, we
-		 * can mark it as pushed-down.
-		 */
-		is_pushed_down = true;
-
 		/*
 		 * It's possible that this is an IS NULL clause that's redundant with
 		 * a lower antijoin; if so we can just discard it.  We need not test
@@ -2419,7 +2380,6 @@ distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 	 */
 	restrictinfo = make_restrictinfo(root,
 									 (Expr *) clause,
-									 is_pushed_down,
 									 has_clone,
 									 is_clone,
 									 pseudoconstant,
@@ -2665,7 +2625,6 @@ add_base_clause_to_rel(PlannerInfo *root, Index relid,
 
 			restrictinfo = make_restrictinfo(root,
 											 (Expr *) makeBoolConst(false, false),
-											 restrictinfo->is_pushed_down,
 											 restrictinfo->has_clone,
 											 restrictinfo->is_clone,
 											 restrictinfo->pseudoconstant,
@@ -2991,7 +2950,6 @@ process_implied_equality(PlannerInfo *root,
 	 */
 	restrictinfo = make_restrictinfo(root,
 									 (Expr *) clause,
-									 true,	/* is_pushed_down */
 									 false, /* !has_clone */
 									 false, /* !is_clone */
 									 pseudoconstant,
@@ -3085,7 +3043,6 @@ build_implied_join_equality(PlannerInfo *root,
 	 */
 	restrictinfo = make_restrictinfo(root,
 									 clause,
-									 true,	/* is_pushed_down */
 									 false, /* !has_clone */
 									 false, /* !is_clone */
 									 false, /* pseudoconstant */

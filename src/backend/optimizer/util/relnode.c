@@ -58,6 +58,7 @@ static List *subbuild_joinrel_restrictlist(PlannerInfo *root,
 										   RelOptInfo *joinrel,
 										   RelOptInfo *input_rel,
 										   Relids both_input_relids,
+										   SpecialJoinInfo *sjinfo,
 										   List *new_restrictlist);
 static List *subbuild_joinrel_joinlist(RelOptInfo *joinrel,
 									   List *joininfo_list,
@@ -1311,9 +1312,9 @@ build_joinrel_restrictlist(PlannerInfo *root,
 	 * same clauses arriving from both input relations).
 	 */
 	result = subbuild_joinrel_restrictlist(root, joinrel, outer_rel,
-										   both_input_relids, NIL);
+										   both_input_relids, sjinfo, NIL);
 	result = subbuild_joinrel_restrictlist(root, joinrel, inner_rel,
-										   both_input_relids, result);
+										   both_input_relids, sjinfo, result);
 
 	/*
 	 * Add on any clauses derived from EquivalenceClasses.  These cannot be
@@ -1353,6 +1354,7 @@ subbuild_joinrel_restrictlist(PlannerInfo *root,
 							  RelOptInfo *joinrel,
 							  RelOptInfo *input_rel,
 							  Relids both_input_relids,
+							  SpecialJoinInfo *sjinfo,
 							  List *new_restrictlist)
 {
 	ListCell   *l;
@@ -1374,11 +1376,15 @@ subbuild_joinrel_restrictlist(PlannerInfo *root,
 			 */
 			if (rinfo->has_clone || rinfo->is_clone)
 			{
-				Assert(!RINFO_IS_PUSHED_DOWN(rinfo, joinrel->relids));
 				if (!bms_is_subset(rinfo->required_relids, both_input_relids))
 					continue;
 				if (bms_overlap(rinfo->incompatible_relids, both_input_relids))
 					continue;
+
+				Assert(!RINFO_IS_PUSHED_DOWN(rinfo,
+											 bms_difference(joinrel->relids,
+															both_input_relids),
+											 joinrel->relids));
 			}
 			else
 			{
@@ -1389,7 +1395,11 @@ subbuild_joinrel_restrictlist(PlannerInfo *root,
 				 * (There is little point in checking incompatible_relids,
 				 * because it'll be NULL.)
 				 */
-				Assert(RINFO_IS_PUSHED_DOWN(rinfo, joinrel->relids) ||
+				Assert(sjinfo->ojrelid == 0 ||
+					   RINFO_IS_PUSHED_DOWN(rinfo,
+											bms_difference(joinrel->relids,
+														   both_input_relids),
+											joinrel->relids) ||
 					   bms_is_subset(rinfo->required_relids,
 									 both_input_relids));
 			}
@@ -2096,6 +2106,9 @@ have_partkey_equi_join(PlannerInfo *root, RelOptInfo *joinrel,
 	int			cnt_pks;
 	bool		pk_has_clause[PARTITION_MAX_KEYS];
 	bool		strict_op;
+	Relids		ojrelids = CALC_OUTER_JOIN_RELIDS(joinrel->relids,
+												  rel1->relids,
+												  rel2->relids);
 
 	/*
 	 * This function must only be called when the joined relations have same
@@ -2116,7 +2129,7 @@ have_partkey_equi_join(PlannerInfo *root, RelOptInfo *joinrel,
 
 		/* If processing an outer join, only use its own join clauses. */
 		if (IS_OUTER_JOIN(jointype) &&
-			RINFO_IS_PUSHED_DOWN(rinfo, joinrel->relids))
+			RINFO_IS_PUSHED_DOWN(rinfo, ojrelids, joinrel->relids))
 			continue;
 
 		/* Skip clauses which can not be used for a join. */

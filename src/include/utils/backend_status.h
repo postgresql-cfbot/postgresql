@@ -24,6 +24,7 @@
 typedef enum BackendState
 {
 	STATE_UNDEFINED,
+	STATE_AUTHENTICATING,
 	STATE_IDLE,
 	STATE_RUNNING,
 	STATE_IDLEINTRANSACTION,
@@ -309,6 +310,7 @@ extern void CreateSharedBackendStatus(void);
 
 /* Initialization functions */
 extern void pgstat_beinit(void);
+extern void pgstat_bestart_pre_auth(void);
 extern void pgstat_bestart(void);
 
 extern void pgstat_clear_backend_activity_snapshot(void);

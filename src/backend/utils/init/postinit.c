@@ -921,6 +921,15 @@ InitPostgres(const char *in_dbname, Oid dboid,
 	{
 		/* normal multiuser case */
 		Assert(MyProcPort != NULL);
+
+		/*
+		 * Authentication can take a while, during which time we're holding a
+		 * transaction open. Fill in enough of a backend status so that DBAs can
+		 * observe what's going on. (The later call to pgstat_bestart() will
+		 * fill in the rest of the status after we've authenticated.)
+		 */
+		pgstat_bestart_pre_auth();
+
 		PerformAuthentication(MyProcPort);
 		InitializeSessionUserId(username, useroid, false);
 		/* ensure that auth_method is actually valid, aka authn_id is not NULL */

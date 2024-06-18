@@ -470,6 +470,12 @@ ExecutorEnd(QueryDesc *queryDesc)
 		(*ExecutorEnd_hook) (queryDesc);
 	else
 		standard_ExecutorEnd(queryDesc);
+
+	/*
+	 * Report at the end of query execution. Don't change it for nested
+	 * queries.
+	 */
+	pgstat_report_query_id(0, false);
 }
 
 void

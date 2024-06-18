@@ -58,6 +58,7 @@
 #include "parser/parse_relation.h"
 #include "parser/parsetree.h"
 #include "partitioning/partdesc.h"
+#include "pgstat.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/selfuncs.h"
@@ -280,6 +281,13 @@ planner(Query *parse, const char *query_string, int cursorOptions,
 		result = (*planner_hook) (parse, query_string, cursorOptions, boundParams);
 	else
 		result = standard_planner(parse, query_string, cursorOptions, boundParams);
+
+	/*
+	 * Reset queryId at the end of planning job. Executor code will set it up
+	 * again on the ExecutorStart call.
+	 */
+	pgstat_report_query_id(0, false);
+
 	return result;
 }
 

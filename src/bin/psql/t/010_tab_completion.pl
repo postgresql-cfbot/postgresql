@@ -414,12 +414,15 @@ check_completion(
 clear_query();
 
 # check completion for psql variable test
+# note: broken versions of libedit want to backslash curly braces and the question mark;
+# not much we can do about that
 check_completion(
 	"\\echo :{?VERB\t",
-	qr/:\{\?VERBOSITY} /,
+	qr/:\\?\{\\?\?VERBOSITY\\?} /,
 	"complete a psql variable test");
 
-clear_query();
+# broken versions of libedit require clear_line not clear_query here
+clear_line();
 
 # check no-completions code path
 check_completion("blarg \t\t", qr//, "check completion failure path");

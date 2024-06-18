@@ -703,3 +703,379 @@ EXPLAIN (COSTS OFF) :qry;
 (10 rows)
 
 COMMIT;
+-- Test cases for multi-key quick sort
+set work_mem='100MB';
+-- test simple sorting
+create table mksort_simple_tbl(a int, b int, c varchar);
+insert into mksort_simple_tbl
+    select g % 10, g % 15, left(md5(g::text), 4)
+    from generate_series(1, 20) g;
+select * from mksort_simple_tbl order by a, b, c;
+ a | b  |  c   
+---+----+------
+ 0 |  5 | 98f1
+ 0 | 10 | d3d9
+ 1 |  1 | c4ca
+ 1 | 11 | 6512
+ 2 |  2 | c81e
+ 2 | 12 | c20a
+ 3 |  3 | eccb
+ 3 | 13 | c51c
+ 4 |  4 | a87f
+ 4 | 14 | aab3
+ 5 |  0 | 9bf3
+ 5 |  5 | e4da
+ 6 |  1 | c74d
+ 6 |  6 | 1679
+ 7 |  2 | 70ef
+ 7 |  7 | 8f14
+ 8 |  3 | 6f49
+ 8 |  8 | c9f0
+ 9 |  4 | 1f0e
+ 9 |  9 | 45c4
+(20 rows)
+
+-- test sorting on distinct values, in which mk qsort is supposed to be
+-- not affective, but still can generate correct result
+truncate table mksort_simple_tbl;
+insert into mksort_simple_tbl
+    select 20 - g, g, g::text
+    from generate_series(1, 20) g;
+select * from mksort_simple_tbl order by a, b, c;
+ a  | b  | c  
+----+----+----
+  0 | 20 | 20
+  1 | 19 | 19
+  2 | 18 | 18
+  3 | 17 | 17
+  4 | 16 | 16
+  5 | 15 | 15
+  6 | 14 | 14
+  7 | 13 | 13
+  8 | 12 | 12
+  9 | 11 | 11
+ 10 | 10 | 10
+ 11 |  9 | 9
+ 12 |  8 | 8
+ 13 |  7 | 7
+ 14 |  6 | 6
+ 15 |  5 | 5
+ 16 |  4 | 4
+ 17 |  3 | 3
+ 18 |  2 | 2
+ 19 |  1 | 1
+(20 rows)
+
+drop table mksort_simple_tbl;
+-- test table with abbr keys
+create table abbr_tbl (a int, b varchar(100), c uuid);
+-- insert data with abbr keys (uuid)
+-- abbr keys of uuid are generated from the first `sizeof(Datum)` bytes of uuid data
+-- (see uuid_abbrev_convert()), so two uuids with only different tailed values should
+-- have same abbr keys but different "full" datum.
+insert into abbr_tbl values (generate_series(1,50), 'aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb');
+update abbr_tbl set b = 'aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb' || (a % 7)::text;
+update abbr_tbl set c = ('fffffffffffffffffffffffffffffff' || (a % 5)::text)::uuid where a % 4 = 0;
+update abbr_tbl set c = ('0000000000000000000000000000000' || (a % 5)::text)::uuid where a % 4 = 1;
+update abbr_tbl set c = ('1111111111111111111111111111111' || (a % 5)::text)::uuid where a % 4 = 2;
+update abbr_tbl set c = null where a % 4 = 3;
+select c, b, a from abbr_tbl order by c, b, a;
+                  c                   |                            b                            | a  
+--------------------------------------+---------------------------------------------------------+----
+ 00000000-0000-0000-0000-000000000000 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 45
+ 00000000-0000-0000-0000-000000000000 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 25
+ 00000000-0000-0000-0000-000000000000 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 |  5
+ 00000000-0000-0000-0000-000000000001 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 21
+ 00000000-0000-0000-0000-000000000001 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 |  1
+ 00000000-0000-0000-0000-000000000001 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 41
+ 00000000-0000-0000-0000-000000000002 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 37
+ 00000000-0000-0000-0000-000000000002 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 17
+ 00000000-0000-0000-0000-000000000003 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 33
+ 00000000-0000-0000-0000-000000000003 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 13
+ 00000000-0000-0000-0000-000000000004 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 49
+ 00000000-0000-0000-0000-000000000004 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 29
+ 00000000-0000-0000-0000-000000000004 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 |  9
+ 11111111-1111-1111-1111-111111111110 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 50
+ 11111111-1111-1111-1111-111111111110 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 30
+ 11111111-1111-1111-1111-111111111110 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 10
+ 11111111-1111-1111-1111-111111111111 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 46
+ 11111111-1111-1111-1111-111111111111 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 26
+ 11111111-1111-1111-1111-111111111111 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 |  6
+ 11111111-1111-1111-1111-111111111112 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 42
+ 11111111-1111-1111-1111-111111111112 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 22
+ 11111111-1111-1111-1111-111111111112 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 |  2
+ 11111111-1111-1111-1111-111111111113 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 38
+ 11111111-1111-1111-1111-111111111113 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 18
+ 11111111-1111-1111-1111-111111111114 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 14
+ 11111111-1111-1111-1111-111111111114 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 34
+ ffffffff-ffff-ffff-ffff-fffffffffff0 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 40
+ ffffffff-ffff-ffff-ffff-fffffffffff0 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 20
+ ffffffff-ffff-ffff-ffff-fffffffffff1 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 36
+ ffffffff-ffff-ffff-ffff-fffffffffff1 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 16
+ ffffffff-ffff-ffff-ffff-fffffffffff2 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 32
+ ffffffff-ffff-ffff-ffff-fffffffffff2 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 12
+ ffffffff-ffff-ffff-ffff-fffffffffff3 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 28
+ ffffffff-ffff-ffff-ffff-fffffffffff3 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 |  8
+ ffffffff-ffff-ffff-ffff-fffffffffff3 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 48
+ ffffffff-ffff-ffff-ffff-fffffffffff4 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 44
+ ffffffff-ffff-ffff-ffff-fffffffffff4 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 24
+ ffffffff-ffff-ffff-ffff-fffffffffff4 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 |  4
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 |  7
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 35
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 15
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 43
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 23
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 |  3
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 31
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 11
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 39
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 19
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 47
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 27
+(50 rows)
+
+select c, b, a from abbr_tbl order by c desc, b, a;
+                  c                   |                            b                            | a  
+--------------------------------------+---------------------------------------------------------+----
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 |  7
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 35
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 15
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 43
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 23
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 |  3
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 31
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 11
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 39
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 19
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 47
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 27
+ ffffffff-ffff-ffff-ffff-fffffffffff4 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 44
+ ffffffff-ffff-ffff-ffff-fffffffffff4 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 24
+ ffffffff-ffff-ffff-ffff-fffffffffff4 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 |  4
+ ffffffff-ffff-ffff-ffff-fffffffffff3 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 28
+ ffffffff-ffff-ffff-ffff-fffffffffff3 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 |  8
+ ffffffff-ffff-ffff-ffff-fffffffffff3 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 48
+ ffffffff-ffff-ffff-ffff-fffffffffff2 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 32
+ ffffffff-ffff-ffff-ffff-fffffffffff2 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 12
+ ffffffff-ffff-ffff-ffff-fffffffffff1 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 36
+ ffffffff-ffff-ffff-ffff-fffffffffff1 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 16
+ ffffffff-ffff-ffff-ffff-fffffffffff0 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 40
+ ffffffff-ffff-ffff-ffff-fffffffffff0 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 20
+ 11111111-1111-1111-1111-111111111114 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 14
+ 11111111-1111-1111-1111-111111111114 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 34
+ 11111111-1111-1111-1111-111111111113 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 38
+ 11111111-1111-1111-1111-111111111113 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 18
+ 11111111-1111-1111-1111-111111111112 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 42
+ 11111111-1111-1111-1111-111111111112 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 22
+ 11111111-1111-1111-1111-111111111112 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 |  2
+ 11111111-1111-1111-1111-111111111111 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 46
+ 11111111-1111-1111-1111-111111111111 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 26
+ 11111111-1111-1111-1111-111111111111 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 |  6
+ 11111111-1111-1111-1111-111111111110 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 50
+ 11111111-1111-1111-1111-111111111110 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 30
+ 11111111-1111-1111-1111-111111111110 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 10
+ 00000000-0000-0000-0000-000000000004 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 49
+ 00000000-0000-0000-0000-000000000004 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 29
+ 00000000-0000-0000-0000-000000000004 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 |  9
+ 00000000-0000-0000-0000-000000000003 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 33
+ 00000000-0000-0000-0000-000000000003 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 13
+ 00000000-0000-0000-0000-000000000002 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 37
+ 00000000-0000-0000-0000-000000000002 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 17
+ 00000000-0000-0000-0000-000000000001 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 21
+ 00000000-0000-0000-0000-000000000001 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 |  1
+ 00000000-0000-0000-0000-000000000001 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 41
+ 00000000-0000-0000-0000-000000000000 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 45
+ 00000000-0000-0000-0000-000000000000 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 25
+ 00000000-0000-0000-0000-000000000000 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 |  5
+(50 rows)
+
+select c, b, a from abbr_tbl order by c, b desc, a;
+                  c                   |                            b                            | a  
+--------------------------------------+---------------------------------------------------------+----
+ 00000000-0000-0000-0000-000000000000 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 |  5
+ 00000000-0000-0000-0000-000000000000 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 25
+ 00000000-0000-0000-0000-000000000000 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 45
+ 00000000-0000-0000-0000-000000000001 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 41
+ 00000000-0000-0000-0000-000000000001 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 |  1
+ 00000000-0000-0000-0000-000000000001 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 21
+ 00000000-0000-0000-0000-000000000002 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 17
+ 00000000-0000-0000-0000-000000000002 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 37
+ 00000000-0000-0000-0000-000000000003 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 13
+ 00000000-0000-0000-0000-000000000003 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 33
+ 00000000-0000-0000-0000-000000000004 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 |  9
+ 00000000-0000-0000-0000-000000000004 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 29
+ 00000000-0000-0000-0000-000000000004 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 49
+ 11111111-1111-1111-1111-111111111110 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 10
+ 11111111-1111-1111-1111-111111111110 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 30
+ 11111111-1111-1111-1111-111111111110 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 50
+ 11111111-1111-1111-1111-111111111111 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 |  6
+ 11111111-1111-1111-1111-111111111111 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 26
+ 11111111-1111-1111-1111-111111111111 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 46
+ 11111111-1111-1111-1111-111111111112 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 |  2
+ 11111111-1111-1111-1111-111111111112 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 22
+ 11111111-1111-1111-1111-111111111112 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 42
+ 11111111-1111-1111-1111-111111111113 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 18
+ 11111111-1111-1111-1111-111111111113 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 38
+ 11111111-1111-1111-1111-111111111114 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 34
+ 11111111-1111-1111-1111-111111111114 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 14
+ ffffffff-ffff-ffff-ffff-fffffffffff0 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 20
+ ffffffff-ffff-ffff-ffff-fffffffffff0 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 40
+ ffffffff-ffff-ffff-ffff-fffffffffff1 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 16
+ ffffffff-ffff-ffff-ffff-fffffffffff1 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 36
+ ffffffff-ffff-ffff-ffff-fffffffffff2 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 12
+ ffffffff-ffff-ffff-ffff-fffffffffff2 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 32
+ ffffffff-ffff-ffff-ffff-fffffffffff3 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 48
+ ffffffff-ffff-ffff-ffff-fffffffffff3 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 |  8
+ ffffffff-ffff-ffff-ffff-fffffffffff3 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 28
+ ffffffff-ffff-ffff-ffff-fffffffffff4 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 |  4
+ ffffffff-ffff-ffff-ffff-fffffffffff4 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 24
+ ffffffff-ffff-ffff-ffff-fffffffffff4 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 44
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 27
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 19
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 47
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 11
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 39
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 |  3
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 31
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 23
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 15
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 43
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 |  7
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 35
+(50 rows)
+
+select c, b, a from abbr_tbl order by c nulls first, b desc, a;
+                  c                   |                            b                            | a  
+--------------------------------------+---------------------------------------------------------+----
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 27
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 19
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 47
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 11
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 39
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 |  3
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 31
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 23
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 15
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 43
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 |  7
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 35
+ 00000000-0000-0000-0000-000000000000 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 |  5
+ 00000000-0000-0000-0000-000000000000 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 25
+ 00000000-0000-0000-0000-000000000000 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 45
+ 00000000-0000-0000-0000-000000000001 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 41
+ 00000000-0000-0000-0000-000000000001 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 |  1
+ 00000000-0000-0000-0000-000000000001 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 21
+ 00000000-0000-0000-0000-000000000002 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 17
+ 00000000-0000-0000-0000-000000000002 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 37
+ 00000000-0000-0000-0000-000000000003 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 13
+ 00000000-0000-0000-0000-000000000003 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 33
+ 00000000-0000-0000-0000-000000000004 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 |  9
+ 00000000-0000-0000-0000-000000000004 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 29
+ 00000000-0000-0000-0000-000000000004 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 49
+ 11111111-1111-1111-1111-111111111110 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 10
+ 11111111-1111-1111-1111-111111111110 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 30
+ 11111111-1111-1111-1111-111111111110 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 50
+ 11111111-1111-1111-1111-111111111111 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 |  6
+ 11111111-1111-1111-1111-111111111111 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 26
+ 11111111-1111-1111-1111-111111111111 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 46
+ 11111111-1111-1111-1111-111111111112 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 |  2
+ 11111111-1111-1111-1111-111111111112 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 22
+ 11111111-1111-1111-1111-111111111112 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 42
+ 11111111-1111-1111-1111-111111111113 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 18
+ 11111111-1111-1111-1111-111111111113 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 38
+ 11111111-1111-1111-1111-111111111114 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 34
+ 11111111-1111-1111-1111-111111111114 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 14
+ ffffffff-ffff-ffff-ffff-fffffffffff0 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 20
+ ffffffff-ffff-ffff-ffff-fffffffffff0 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 40
+ ffffffff-ffff-ffff-ffff-fffffffffff1 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 16
+ ffffffff-ffff-ffff-ffff-fffffffffff1 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 36
+ ffffffff-ffff-ffff-ffff-fffffffffff2 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 12
+ ffffffff-ffff-ffff-ffff-fffffffffff2 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 32
+ ffffffff-ffff-ffff-ffff-fffffffffff3 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 48
+ ffffffff-ffff-ffff-ffff-fffffffffff3 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 |  8
+ ffffffff-ffff-ffff-ffff-fffffffffff3 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 28
+ ffffffff-ffff-ffff-ffff-fffffffffff4 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 |  4
+ ffffffff-ffff-ffff-ffff-fffffffffff4 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 24
+ ffffffff-ffff-ffff-ffff-fffffffffff4 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 44
+(50 rows)
+
+select c, b, a from abbr_tbl order by c nulls last, b desc, a;
+                  c                   |                            b                            | a  
+--------------------------------------+---------------------------------------------------------+----
+ 00000000-0000-0000-0000-000000000000 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 |  5
+ 00000000-0000-0000-0000-000000000000 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 25
+ 00000000-0000-0000-0000-000000000000 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 45
+ 00000000-0000-0000-0000-000000000001 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 41
+ 00000000-0000-0000-0000-000000000001 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 |  1
+ 00000000-0000-0000-0000-000000000001 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 21
+ 00000000-0000-0000-0000-000000000002 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 17
+ 00000000-0000-0000-0000-000000000002 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 37
+ 00000000-0000-0000-0000-000000000003 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 13
+ 00000000-0000-0000-0000-000000000003 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 33
+ 00000000-0000-0000-0000-000000000004 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 |  9
+ 00000000-0000-0000-0000-000000000004 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 29
+ 00000000-0000-0000-0000-000000000004 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 49
+ 11111111-1111-1111-1111-111111111110 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 10
+ 11111111-1111-1111-1111-111111111110 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 30
+ 11111111-1111-1111-1111-111111111110 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 50
+ 11111111-1111-1111-1111-111111111111 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 |  6
+ 11111111-1111-1111-1111-111111111111 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 26
+ 11111111-1111-1111-1111-111111111111 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 46
+ 11111111-1111-1111-1111-111111111112 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 |  2
+ 11111111-1111-1111-1111-111111111112 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 22
+ 11111111-1111-1111-1111-111111111112 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 42
+ 11111111-1111-1111-1111-111111111113 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 18
+ 11111111-1111-1111-1111-111111111113 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 38
+ 11111111-1111-1111-1111-111111111114 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 34
+ 11111111-1111-1111-1111-111111111114 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 14
+ ffffffff-ffff-ffff-ffff-fffffffffff0 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 20
+ ffffffff-ffff-ffff-ffff-fffffffffff0 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 40
+ ffffffff-ffff-ffff-ffff-fffffffffff1 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 16
+ ffffffff-ffff-ffff-ffff-fffffffffff1 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 36
+ ffffffff-ffff-ffff-ffff-fffffffffff2 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 12
+ ffffffff-ffff-ffff-ffff-fffffffffff2 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 32
+ ffffffff-ffff-ffff-ffff-fffffffffff3 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 48
+ ffffffff-ffff-ffff-ffff-fffffffffff3 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 |  8
+ ffffffff-ffff-ffff-ffff-fffffffffff3 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 28
+ ffffffff-ffff-ffff-ffff-fffffffffff4 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 |  4
+ ffffffff-ffff-ffff-ffff-fffffffffff4 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 24
+ ffffffff-ffff-ffff-ffff-fffffffffff4 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 44
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb6 | 27
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 19
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb5 | 47
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 11
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb4 | 39
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 |  3
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3 | 31
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb2 | 23
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 15
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 43
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 |  7
+                                      | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb0 | 35
+(50 rows)
+
+-- CREATE INDEX will cover the scenario of sort IndexTuple
+drop index if exists idx_abbr_tbl;
+NOTICE:  index "idx_abbr_tbl" does not exist, skipping
+create index idx_abbr_tbl on abbr_tbl(c desc, b, a);
+analyze abbr_tbl;
+select c, b, a from abbr_tbl where c = 'ffffffff-ffff-ffff-ffff-fffffffffff3' and b = 'aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1' and a = 8;
+                  c                   |                            b                            | a 
+--------------------------------------+---------------------------------------------------------+---
+ ffffffff-ffff-ffff-ffff-fffffffffff3 | aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1 | 8
+(1 row)
+
+-- Uniqueness check of CREATE INDEX
+drop index if exists idx_abbr_tbl;
+-- insert a duplicated row with null
+insert into abbr_tbl (a, b, c) values (3, 'aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3', null);
+-- should succeed because uniquess check is not applicable for rows with null
+create unique index idx_abbr_tbl on abbr_tbl(c desc, b, a);
+drop index if exists idx_abbr_tbl;
+-- insert a duplicated row without null
+insert into abbr_tbl (a, b, c) values (1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1', '00000000-0000-0000-0000-000000000001');
+-- should fail because of duplicated rows
+create unique index idx_abbr_tbl on abbr_tbl(c desc, b, a);
+ERROR:  could not create unique index "idx_abbr_tbl"
+DETAIL:  Key (c, b, a)=(00000000-0000-0000-0000-000000000001, aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1, 1) is duplicated.
+drop table abbr_tbl;

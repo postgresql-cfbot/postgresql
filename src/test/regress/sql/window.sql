@@ -21,9 +21,9 @@ INSERT INTO empsalary VALUES
 ('develop', 8, 6000, '2006-10-01'),
 ('develop', 11, 5200, '2007-08-15');
 
-SELECT depname, empno, salary, sum(salary) OVER (PARTITION BY depname) FROM empsalary ORDER BY depname, salary;
+SELECT depname, empno, salary, sum(salary) OVER (PARTITION BY depname) FROM empsalary ORDER BY depname, salary, empno;
 
-SELECT depname, empno, salary, rank() OVER (PARTITION BY depname ORDER BY salary) FROM empsalary;
+SELECT depname, empno, salary, rank() OVER (PARTITION BY depname ORDER BY salary) FROM empsalary ORDER BY depname, salary, empno;
 
 -- with GROUP BY
 SELECT four, ten, SUM(SUM(four)) OVER (PARTITION BY four), AVG(ten) FROM tenk1
@@ -31,7 +31,7 @@ GROUP BY four, ten ORDER BY four, ten;
 
 SELECT depname, empno, salary, sum(salary) OVER w FROM empsalary WINDOW w AS (PARTITION BY depname);
 
-SELECT depname, empno, salary, rank() OVER w FROM empsalary WINDOW w AS (PARTITION BY depname ORDER BY salary) ORDER BY rank() OVER w;
+SELECT depname, empno, salary, rank() OVER w FROM empsalary WINDOW w AS (PARTITION BY depname ORDER BY salary) ORDER BY rank() OVER w, empno;
 
 -- empty window specification
 SELECT COUNT(*) OVER () FROM tenk1 WHERE unique2 < 10;
@@ -1146,11 +1146,12 @@ SELECT
     empno,
     depname,
     row_number() OVER (PARTITION BY depname ORDER BY enroll_date) rn,
-    rank() OVER (PARTITION BY depname ORDER BY enroll_date ROWS BETWEEN
+    rank() OVER (PARTITION BY depname ORDER BY enroll_date, empno ROWS BETWEEN
                  UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk,
-    count(*) OVER (PARTITION BY depname ORDER BY enroll_date RANGE BETWEEN
+    count(*) OVER (PARTITION BY depname ORDER BY enroll_date, empno RANGE BETWEEN
                    CURRENT ROW AND CURRENT ROW) cnt
-FROM empsalary;
+FROM empsalary
+ORDER BY empno, depname, rn;
 
 -- Test pushdown of quals into a subquery containing window functions
 
@@ -1332,7 +1333,7 @@ SELECT * FROM
           salary,
           count(empno) OVER (PARTITION BY depname ORDER BY salary DESC) c
    FROM empsalary) emp
-WHERE c <= 3;
+WHERE c <= 3 ORDER BY empno, depname, salary, c;
 
 -- Ensure we get the correct run condition when the window function is both
 -- monotonically increasing and decreasing.
@@ -1510,10 +1511,11 @@ SELECT * FROM
           empno,
           salary,
           enroll_date,
-          row_number() OVER (PARTITION BY depname ORDER BY enroll_date) AS first_emp,
-          row_number() OVER (PARTITION BY depname ORDER BY enroll_date DESC) AS last_emp
+          row_number() OVER (PARTITION BY depname ORDER BY enroll_date, empno) AS first_emp,
+          row_number() OVER (PARTITION BY depname ORDER BY enroll_date DESC, empno) AS last_emp
    FROM empsalary) emp
-WHERE first_emp = 1 OR last_emp = 1;
+WHERE first_emp = 1 OR last_emp = 1
+ORDER BY depname, empno, salary, enroll_date, first_emp, last_emp;
 
 -- cleanup
 DROP TABLE empsalary;

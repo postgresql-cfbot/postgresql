@@ -305,3 +305,69 @@ EXPLAIN (COSTS OFF) :qry;
 :qry;
 
 COMMIT;
+
+-- Test cases for multi-key quick sort
+
+set work_mem='100MB';
+
+-- test simple sorting
+create table mksort_simple_tbl(a int, b int, c varchar);
+
+insert into mksort_simple_tbl
+    select g % 10, g % 15, left(md5(g::text), 4)
+    from generate_series(1, 20) g;
+select * from mksort_simple_tbl order by a, b, c;
+
+-- test sorting on distinct values, in which mk qsort is supposed to be
+-- not affective, but still can generate correct result
+truncate table mksort_simple_tbl;
+insert into mksort_simple_tbl
+    select 20 - g, g, g::text
+    from generate_series(1, 20) g;
+select * from mksort_simple_tbl order by a, b, c;
+drop table mksort_simple_tbl;
+
+-- test table with abbr keys
+
+create table abbr_tbl (a int, b varchar(100), c uuid);
+
+-- insert data with abbr keys (uuid)
+-- abbr keys of uuid are generated from the first `sizeof(Datum)` bytes of uuid data
+-- (see uuid_abbrev_convert()), so two uuids with only different tailed values should
+-- have same abbr keys but different "full" datum.
+insert into abbr_tbl values (generate_series(1,50), 'aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb');
+update abbr_tbl set b = 'aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb' || (a % 7)::text;
+update abbr_tbl set c = ('fffffffffffffffffffffffffffffff' || (a % 5)::text)::uuid where a % 4 = 0;
+update abbr_tbl set c = ('0000000000000000000000000000000' || (a % 5)::text)::uuid where a % 4 = 1;
+update abbr_tbl set c = ('1111111111111111111111111111111' || (a % 5)::text)::uuid where a % 4 = 2;
+update abbr_tbl set c = null where a % 4 = 3;
+
+select c, b, a from abbr_tbl order by c, b, a;
+select c, b, a from abbr_tbl order by c desc, b, a;
+select c, b, a from abbr_tbl order by c, b desc, a;
+select c, b, a from abbr_tbl order by c nulls first, b desc, a;
+select c, b, a from abbr_tbl order by c nulls last, b desc, a;
+
+-- CREATE INDEX will cover the scenario of sort IndexTuple
+drop index if exists idx_abbr_tbl;
+create index idx_abbr_tbl on abbr_tbl(c desc, b, a);
+analyze abbr_tbl;
+select c, b, a from abbr_tbl where c = 'ffffffff-ffff-ffff-ffff-fffffffffff3' and b = 'aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1' and a = 8;
+
+-- Uniqueness check of CREATE INDEX
+
+drop index if exists idx_abbr_tbl;
+
+-- insert a duplicated row with null
+insert into abbr_tbl (a, b, c) values (3, 'aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb3', null);
+-- should succeed because uniquess check is not applicable for rows with null
+create unique index idx_abbr_tbl on abbr_tbl(c desc, b, a);
+
+drop index if exists idx_abbr_tbl;
+
+-- insert a duplicated row without null
+insert into abbr_tbl (a, b, c) values (1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbb1', '00000000-0000-0000-0000-000000000001');
+-- should fail because of duplicated rows
+create unique index idx_abbr_tbl on abbr_tbl(c desc, b, a);
+
+drop table abbr_tbl;

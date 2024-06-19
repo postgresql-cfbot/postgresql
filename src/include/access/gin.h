@@ -12,6 +12,8 @@
 
 #include "access/xlogreader.h"
 #include "lib/stringinfo.h"
+#include "nodes/execnodes.h"
+#include "storage/shm_toc.h"
 #include "storage/block.h"
 #include "utils/relcache.h"
 
@@ -87,5 +89,7 @@ extern PGDLLIMPORT int gin_pending_list_limit;
 extern void ginGetStats(Relation index, GinStatsData *stats);
 extern void ginUpdateStats(Relation index, const GinStatsData *stats,
 						   bool is_build);
+
+extern void _gin_parallel_build_main(dsm_segment *seg, shm_toc *toc);
 
 #endif							/* GIN_H */

@@ -55,6 +55,13 @@ CATALOG(pg_aggregate,2600,AggregateRelationId)
 	/* function to convert bytea to transtype (0 if none) */
 	regproc		aggdeserialfn BKI_DEFAULT(-) BKI_LOOKUP_OPT(pg_proc);
 
+	/* true if partial aggregate is fine to push down */
+	bool		aggpartialpushdownsafe BKI_DEFAULT(f);
+
+	/* function to check validity of aggregate's transition (state)
+	   data and to convert it from standard format to local format (0 if none) */
+	regproc		aggpartialimportfn BKI_DEFAULT(-) BKI_LOOKUP_OPT(pg_proc);
+
 	/* forward function for moving-aggregate mode (0 if none) */
 	regproc		aggmtransfn BKI_DEFAULT(-) BKI_LOOKUP_OPT(pg_proc);
 
@@ -163,6 +170,8 @@ extern ObjectAddress AggregateCreate(const char *aggName,
 									 List *aggcombinefnName,
 									 List *aggserialfnName,
 									 List *aggdeserialfnName,
+									 bool aggpartialpushdownsafe,
+									 List *aggpartialimportfnName,
 									 List *aggmtransfnName,
 									 List *aggminvtransfnName,
 									 List *aggmfinalfnName,

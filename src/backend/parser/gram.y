@@ -634,6 +634,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 %type <list>	within_group_clause
 %type <node>	filter_clause
+%type <boolean> partial_aggregate_clause
 %type <list>	window_clause window_definition_list opt_partition_clause
 %type <windef>	window_definition over_clause window_specification
 				opt_frame_clause frame_extent frame_bound
@@ -763,7 +764,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	ORDER ORDINALITY OTHERS OUT_P OUTER_P
 	OVER OVERLAPS OVERLAY OVERRIDING OWNED OWNER
 
-	PARALLEL PARAMETER PARSER PARTIAL PARTITION PARTITIONS PASSING PASSWORD PATH
+	PARALLEL PARAMETER PARSER PARTIAL PARTIAL_AGGREGATE PARTITION PARTITIONS PASSING PASSWORD PATH
 	PLACING PLAN PLANS POLICY
 	POSITION PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
 	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROCEDURES PROGRAM PUBLICATION
@@ -15616,10 +15617,11 @@ func_application: func_name '(' ')'
  * (Note that many of the special SQL functions wouldn't actually make any
  * sense as functional index entries, but we ignore that consideration here.)
  */
-func_expr: func_application within_group_clause filter_clause over_clause
+func_expr: func_application within_group_clause filter_clause partial_aggregate_clause over_clause
 				{
 					FuncCall   *n = (FuncCall *) $1;
 
+					n->agg_partial = $4;
 					/*
 					 * The order clause for WITHIN GROUP and the one for
 					 * plain-aggregate ORDER BY share a field, so we have to
@@ -15640,6 +15642,11 @@ func_expr: func_application within_group_clause filter_clause over_clause
 									(errcode(ERRCODE_SYNTAX_ERROR),
 									 errmsg("cannot use DISTINCT with WITHIN GROUP"),
 									 parser_errposition(@2)));
+						if (n->agg_partial)
+							ereport(ERROR,
+									(errcode(ERRCODE_SYNTAX_ERROR),
+									 errmsg("cannot use PARTIAL_AGGREGATE with WITHIN GROUP"),
+									 parser_errposition(@2)));
 						if (n->func_variadic)
 							ereport(ERROR,
 									(errcode(ERRCODE_SYNTAX_ERROR),
@@ -15649,7 +15656,7 @@ func_expr: func_application within_group_clause filter_clause over_clause
 						n->agg_within_group = true;
 					}
 					n->agg_filter = $3;
-					n->over = $4;
+					n->over = $5;
 					$$ = (Node *) n;
 				}
 			| json_aggregate_func filter_clause over_clause
@@ -16241,6 +16248,10 @@ filter_clause:
 			| /*EMPTY*/								{ $$ = NULL; }
 		;
 
+partial_aggregate_clause:
+			PARTIAL_AGGREGATE				{ $$ = true; }
+			| /*EMPTY*/								{ $$ = false; }
+		;
 
 /*
  * Window Definitions
@@ -17760,6 +17771,7 @@ unreserved_keyword:
 			| PARAMETER
 			| PARSER
 			| PARTIAL
+			| PARTIAL_AGGREGATE
 			| PARTITION
 			| PARTITIONS
 			| PASSING

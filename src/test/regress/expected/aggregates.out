@@ -3396,6 +3396,14 @@ set work_mem to default;
 ----+----+----
 (0 rows)
 
+-- PARTIAL_AGGREGATE tests
+-- Check return type of partial aggregate
+select pg_typeof(avg(a::int4) partial_aggregate), pg_typeof(avg(a::int4)) from aggtest;
+ pg_typeof | pg_typeof 
+-----------+-----------
+ bigint[]  | numeric
+(1 row)
+
 drop table agg_group_1;
 drop table agg_group_2;
 drop table agg_group_3;

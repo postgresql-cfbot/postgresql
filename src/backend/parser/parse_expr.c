@@ -3888,7 +3888,8 @@ transformJsonAggConstructor(ParseState *pstate, JsonAggConstructor *agg_ctor,
 		aggref->aggtransno = -1;
 		aggref->location = agg_ctor->location;
 
-		transformAggregateCall(pstate, aggref, args, agg_ctor->agg_order, false);
+		transformAggregateCall(pstate, aggref, args, agg_ctor->agg_order, false,
+							   false);
 
 		node = (Node *) aggref;
 	}

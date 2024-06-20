@@ -612,6 +612,7 @@ makeFuncCall(List *name, List *args, CoercionForm funcformat, int location)
 	n->agg_within_group = false;
 	n->agg_star = false;
 	n->agg_distinct = false;
+	n->agg_partial = false;
 	n->func_variadic = false;
 	n->funcformat = funcformat;
 	n->location = location;

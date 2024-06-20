@@ -619,7 +619,6 @@ static void accum_sum_final(NumericSumAccum *accum, NumericVar *result);
 static void accum_sum_copy(NumericSumAccum *dst, NumericSumAccum *src);
 static void accum_sum_combine(NumericSumAccum *accum, NumericSumAccum *accum2);
 
-
 /* ----------------------------------------------------------------------
  *
  * Input-, output- and rounding-functions
@@ -5905,7 +5904,6 @@ int8_avg_serialize(PG_FUNCTION_ARGS)
 		elog(ERROR, "aggregate function called in non-aggregate context");
 
 	state = (PolyNumAggState *) PG_GETARG_POINTER(0);
-
 	/*
 	 * If the platform supports int128 then sumX will be a 128 integer type.
 	 * Here we'll convert that into a numeric type so that the combine state
@@ -6755,6 +6753,25 @@ int4_avg_combine(PG_FUNCTION_ARGS)
 	state1->sum += state2->sum;
 
 	PG_RETURN_ARRAYTYPE_P(transarray1);
+}
+
+Datum
+int4_avg_import(PG_FUNCTION_ARGS)
+{
+	ArrayType  *transarray;
+	Int8TransTypeData *transdata;
+
+	transarray = PG_GETARG_ARRAYTYPE_P(0);
+
+	if (ARR_HASNULL(transarray) ||
+		ARR_SIZE(transarray) != ARR_OVERHEAD_NONULLS(1) + sizeof(Int8TransTypeData))
+		elog(ERROR, "expected 2-element int8 array");
+
+	transdata = (Int8TransTypeData *) ARR_DATA_PTR(transarray);
+	if (transdata->count <= 0)
+		elog(ERROR, "count must be positive");
+
+	PG_RETURN_ARRAYTYPE_P(transarray);
 }
 
 Datum

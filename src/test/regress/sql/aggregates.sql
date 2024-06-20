@@ -1565,6 +1565,10 @@ set work_mem to default;
   union all
 (select * from agg_group_4 except select * from agg_hash_4);
 
+-- PARTIAL_AGGREGATE tests
+-- Check return type of partial aggregate
+select pg_typeof(avg(a::int4) partial_aggregate), pg_typeof(avg(a::int4)) from aggtest;
+
 drop table agg_group_1;
 drop table agg_group_2;
 drop table agg_group_3;

@@ -66,6 +66,8 @@ DefineAggregate(ParseState *pstate,
 	List	   *combinefuncName = NIL;
 	List	   *serialfuncName = NIL;
 	List	   *deserialfuncName = NIL;
+	bool		aggpartialpushdownsafe = false;
+	List	   *importfuncName = NIL;
 	List	   *mtransfuncName = NIL;
 	List	   *minvtransfuncName = NIL;
 	List	   *mfinalfuncName = NIL;
@@ -139,6 +141,10 @@ DefineAggregate(ParseState *pstate,
 			serialfuncName = defGetQualifiedName(defel);
 		else if (strcmp(defel->defname, "deserialfunc") == 0)
 			deserialfuncName = defGetQualifiedName(defel);
+		else if (strcmp(defel->defname, "aggpartialpushdownsafe") == 0)
+			aggpartialpushdownsafe = defGetBoolean(defel);
+		else if (strcmp(defel->defname, "importfunc") == 0)
+			importfuncName = defGetQualifiedName(defel);
 		else if (strcmp(defel->defname, "msfunc") == 0)
 			mtransfuncName = defGetQualifiedName(defel);
 		else if (strcmp(defel->defname, "minvfunc") == 0)
@@ -454,6 +460,8 @@ DefineAggregate(ParseState *pstate,
 						   combinefuncName, /* combine function name */
 						   serialfuncName,	/* serial function name */
 						   deserialfuncName,	/* deserial function name */
+						   aggpartialpushdownsafe, /* partiall aggregate pushdown safe? */
+						   importfuncName, /* import function name */
 						   mtransfuncName,	/* fwd trans function name */
 						   minvtransfuncName,	/* inv trans function name */
 						   mfinalfuncName,	/* final function name */

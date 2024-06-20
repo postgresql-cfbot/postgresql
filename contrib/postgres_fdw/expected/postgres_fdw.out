@@ -10098,36 +10098,57 @@ RESET enable_partitionwise_join;
 -- ===================================================================
 -- test partitionwise aggregates
 -- ===================================================================
-CREATE TABLE pagg_tab (a int, b int, c text) PARTITION BY RANGE(a);
+ALTER SERVER loopback OPTIONS (ADD fdw_tuple_cost '0.1');
+CREATE TYPE mood AS enum ('sad', 'ok', 'happy');
+ALTER EXTENSION postgres_fdw ADD TYPE mood;
+CREATE TABLE pagg_tab (a int, b int, c text, c_serial int4,
+					c_int4array _int4, c_interval interval,
+					c_money money, c_1c text, c_1b bytea,
+					c_bit bit(2), c_1or3int2 int2,
+					c_1or3int4 int4, c_1or3int8 int8,
+					c_bool bool, c_enum mood, c_pg_lsn pg_lsn,
+					c_tid tid, c_int4range int4range,
+					c_int4multirange int4multirange,
+					c_time time, c_timetz timetz,
+					c_timestamp timestamp, c_timestamptz timestamptz,
+					c_xid8 xid8)
+	PARTITION BY RANGE(a);
 CREATE TABLE pagg_tab_p1 (LIKE pagg_tab);
 CREATE TABLE pagg_tab_p2 (LIKE pagg_tab);
 CREATE TABLE pagg_tab_p3 (LIKE pagg_tab);
-INSERT INTO pagg_tab_p1 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 10;
-INSERT INTO pagg_tab_p2 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 20 and (i % 30) >= 10;
-INSERT INTO pagg_tab_p3 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 30 and (i % 30) >= 20;
+SET TimeZone = 'UTC';
+INSERT INTO pagg_tab_p1 SELECT i % 30, i % 50, to_char(i/30, 'FM0000'), i, array[(i % 2), 0], ((i % 2) || ' seconds')::interval, (i % 2)::money, ((i - 1) % 10)::text, (((i - 1) % 10)::text)::bytea, case when (i % 2) = 0 then B'01' else B'11' end, case when (i % 2) = 0 then 1 else 3 end, case when (i % 2) = 0 then 1 else 3 end, case when (i % 2) = 0 then 1 else 3 end, case when (i % 2) = 0 then true else false end, (case when (i % 2) = 0 then 'sad' else 'happy' end)::mood, ('0/' || i)::pg_lsn, ('(0,' || i || ')')::tid, int4range(0, i), int4multirange(int4range(0, i), int4range(100, 100 + i)), '00:00:00'::time + (i || ' seconds')::interval, '00:00:00'::timetz + (i || ' seconds')::interval, '2000-01-01'::timestamp + (i || ' seconds')::interval, '2000-01-01'::timestamptz + (i || ' seconds')::interval, ((i % 10)::text)::xid8 FROM generate_series(1, 3000) i WHERE (i % 30) < 10;
+INSERT INTO pagg_tab_p2 SELECT i % 30, i % 50, to_char(i/30, 'FM0000'), i, array[(i % 2), 0], ((i % 2) || ' seconds')::interval, (i % 2)::money, ((i - 1) % 10)::text, (((i - 1) % 10)::text)::bytea, case when (i % 2) = 0 then B'01' else B'11' end, case when (i % 2) = 0 then 1 else 3 end, case when (i % 2) = 0 then 1 else 3 end, case when (i % 2) = 0 then 1 else 3 end, case when (i % 2) = 0 then true else false end, (case when (i % 2) = 0 then 'sad' else 'happy' end)::mood, ('0/' || i)::pg_lsn, ('(0,' || i || ')')::tid, int4range(0, i), int4multirange(int4range(0, i), int4range(100, 100 + i)), '00:00:00'::time + (i || ' seconds')::interval, '00:00:00'::timetz + (i || ' seconds')::interval, '2000-01-01'::timestamp + (i || ' seconds')::interval, '2000-01-01'::timestamptz + (i || ' seconds')::interval, ((i % 10)::text)::xid8 FROM generate_series(1, 3000) i WHERE (i % 30) < 20 and (i % 30) >= 10;
+INSERT INTO pagg_tab_p3 SELECT i % 30, i % 50, to_char(i/30, 'FM0000'), i, array[(i % 2), 0], ((i % 2) || ' seconds')::interval, (i % 2)::money, ((i - 1) % 10)::text, (((i - 1) % 10)::text)::bytea, case when (i % 2) = 0 then B'01' else B'11' end, case when (i % 2) = 0 then 1 else 3 end, case when (i % 2) = 0 then 1 else 3 end, case when (i % 2) = 0 then 1 else 3 end, case when (i % 2) = 0 then true else false end, (case when (i % 2) = 0 then 'sad' else 'happy' end)::mood, ('0/' || i)::pg_lsn, ('(0,' || i || ')')::tid, int4range(0, i), int4multirange(int4range(0, i), int4range(100, 100 + i)), '00:00:00'::time + (i || ' seconds')::interval, '00:00:00'::timetz + (i || ' seconds')::interval, '2000-01-01'::timestamp + (i || ' seconds')::interval, '2000-01-01'::timestamptz + (i || ' seconds')::interval, ((i % 10)::text)::xid8 FROM generate_series(1, 3000) i WHERE (i % 30) < 30 and (i % 30) >= 20;
 -- Create foreign partitions
 CREATE FOREIGN TABLE fpagg_tab_p1 PARTITION OF pagg_tab FOR VALUES FROM (0) TO (10) SERVER loopback OPTIONS (table_name 'pagg_tab_p1');
 CREATE FOREIGN TABLE fpagg_tab_p2 PARTITION OF pagg_tab FOR VALUES FROM (10) TO (20) SERVER loopback OPTIONS (table_name 'pagg_tab_p2');
 CREATE FOREIGN TABLE fpagg_tab_p3 PARTITION OF pagg_tab FOR VALUES FROM (20) TO (30) SERVER loopback OPTIONS (table_name 'pagg_tab_p3');
 ANALYZE pagg_tab;
+ANALYZE pagg_tab_p1;
+ANALYZE pagg_tab_p2;
+ANALYZE pagg_tab_p3;
 ANALYZE fpagg_tab_p1;
 ANALYZE fpagg_tab_p2;
 ANALYZE fpagg_tab_p3;
+SET extra_float_digits = 0;
 -- When GROUP BY clause matches with PARTITION KEY.
 -- Plan with partitionwise aggregates is disabled
 SET enable_partitionwise_aggregate TO false;
 EXPLAIN (COSTS OFF)
 SELECT a, sum(b), min(b), count(*) FROM pagg_tab GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
-                     QUERY PLAN                      
------------------------------------------------------
- GroupAggregate
-   Group Key: pagg_tab.a
-   Filter: (avg(pagg_tab.b) < '22'::numeric)
-   ->  Append
-         ->  Foreign Scan on fpagg_tab_p1 pagg_tab_1
-         ->  Foreign Scan on fpagg_tab_p2 pagg_tab_2
-         ->  Foreign Scan on fpagg_tab_p3 pagg_tab_3
-(7 rows)
+                        QUERY PLAN                         
+-----------------------------------------------------------
+ Sort
+   Sort Key: pagg_tab.a
+   ->  HashAggregate
+         Group Key: pagg_tab.a
+         Filter: (avg(pagg_tab.b) < '22'::numeric)
+         ->  Append
+               ->  Foreign Scan on fpagg_tab_p1 pagg_tab_1
+               ->  Foreign Scan on fpagg_tab_p2 pagg_tab_2
+               ->  Foreign Scan on fpagg_tab_p3 pagg_tab_3
+(9 rows)
 
 -- Plan with partitionwise aggregates is enabled
 SET enable_partitionwise_aggregate TO true;
@@ -10161,32 +10182,34 @@ SELECT a, sum(b), min(b), count(*) FROM pagg_tab GROUP BY a HAVING avg(b) < 22 O
 -- Should have all the columns in the target list for the given relation
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
-                                         QUERY PLAN                                         
---------------------------------------------------------------------------------------------
- Merge Append
+                                                                                                                                           QUERY PLAN                                                                                                                                            
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort
+   Output: t1.a, (count(((t1.*)::pagg_tab)))
    Sort Key: t1.a
-   ->  GroupAggregate
-         Output: t1.a, count(((t1.*)::pagg_tab))
-         Group Key: t1.a
-         Filter: (avg(t1.b) < '22'::numeric)
-         ->  Foreign Scan on public.fpagg_tab_p1 t1
-               Output: t1.a, t1.*, t1.b
-               Remote SQL: SELECT a, b, c FROM public.pagg_tab_p1 ORDER BY a ASC NULLS LAST
-   ->  GroupAggregate
-         Output: t1_1.a, count(((t1_1.*)::pagg_tab))
-         Group Key: t1_1.a
-         Filter: (avg(t1_1.b) < '22'::numeric)
-         ->  Foreign Scan on public.fpagg_tab_p2 t1_1
-               Output: t1_1.a, t1_1.*, t1_1.b
-               Remote SQL: SELECT a, b, c FROM public.pagg_tab_p2 ORDER BY a ASC NULLS LAST
-   ->  GroupAggregate
-         Output: t1_2.a, count(((t1_2.*)::pagg_tab))
-         Group Key: t1_2.a
-         Filter: (avg(t1_2.b) < '22'::numeric)
-         ->  Foreign Scan on public.fpagg_tab_p3 t1_2
-               Output: t1_2.a, t1_2.*, t1_2.b
-               Remote SQL: SELECT a, b, c FROM public.pagg_tab_p3 ORDER BY a ASC NULLS LAST
-(23 rows)
+   ->  Append
+         ->  HashAggregate
+               Output: t1.a, count(((t1.*)::pagg_tab))
+               Group Key: t1.a
+               Filter: (avg(t1.b) < '22'::numeric)
+               ->  Foreign Scan on public.fpagg_tab_p1 t1
+                     Output: t1.a, t1.*, t1.b
+                     Remote SQL: SELECT a, b, c, c_serial, c_int4array, c_interval, c_money, c_1c, c_1b, c_bit, c_1or3int2, c_1or3int4, c_1or3int8, c_bool, c_enum, c_pg_lsn, c_tid, c_int4range, c_int4multirange, c_time, c_timetz, c_timestamp, c_timestamptz, c_xid8 FROM public.pagg_tab_p1
+         ->  HashAggregate
+               Output: t1_1.a, count(((t1_1.*)::pagg_tab))
+               Group Key: t1_1.a
+               Filter: (avg(t1_1.b) < '22'::numeric)
+               ->  Foreign Scan on public.fpagg_tab_p2 t1_1
+                     Output: t1_1.a, t1_1.*, t1_1.b
+                     Remote SQL: SELECT a, b, c, c_serial, c_int4array, c_interval, c_money, c_1c, c_1b, c_bit, c_1or3int2, c_1or3int4, c_1or3int8, c_bool, c_enum, c_pg_lsn, c_tid, c_int4range, c_int4multirange, c_time, c_timetz, c_timestamp, c_timestamptz, c_xid8 FROM public.pagg_tab_p2
+         ->  HashAggregate
+               Output: t1_2.a, count(((t1_2.*)::pagg_tab))
+               Group Key: t1_2.a
+               Filter: (avg(t1_2.b) < '22'::numeric)
+               ->  Foreign Scan on public.fpagg_tab_p3 t1_2
+                     Output: t1_2.a, t1_2.*, t1_2.b
+                     Remote SQL: SELECT a, b, c, c_serial, c_int4array, c_interval, c_money, c_1c, c_1b, c_bit, c_1or3int2, c_1or3int4, c_1or3int8, c_bool, c_enum, c_pg_lsn, c_tid, c_int4range, c_int4multirange, c_time, c_timetz, c_timestamp, c_timestamptz, c_xid8 FROM public.pagg_tab_p3
+(25 rows)
 
 SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
  a  | count 
@@ -10199,27 +10222,557 @@ SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
  21 |   100
 (6 rows)
 
--- When GROUP BY clause does not match with PARTITION KEY.
-EXPLAIN (COSTS OFF)
+-- Partial aggregates are safe to push down when there is a HAVING clause
+EXPLAIN (VERBOSE, COSTS OFF)
 SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 700 ORDER BY 1;
-                        QUERY PLAN                         
------------------------------------------------------------
+                                                                 QUERY PLAN                                                                  
+---------------------------------------------------------------------------------------------------------------------------------------------
  Finalize GroupAggregate
+   Output: pagg_tab.b, avg(pagg_tab.a), max(pagg_tab.a), count(*)
    Group Key: pagg_tab.b
    Filter: (sum(pagg_tab.a) < 700)
+   ->  Sort
+         Output: pagg_tab.b, (PARTIAL avg(pagg_tab.a)), (PARTIAL max(pagg_tab.a)), (PARTIAL count(*)), (PARTIAL sum(pagg_tab.a))
+         Sort Key: pagg_tab.b
+         ->  Append
+               ->  Partial HashAggregate
+                     Output: pagg_tab.b, PARTIAL avg(pagg_tab.a), PARTIAL max(pagg_tab.a), PARTIAL count(*), PARTIAL sum(pagg_tab.a)
+                     Group Key: pagg_tab.b
+                     ->  Foreign Scan on public.fpagg_tab_p1 pagg_tab
+                           Output: pagg_tab.b, pagg_tab.a
+                           Remote SQL: SELECT a, b FROM public.pagg_tab_p1
+               ->  Partial HashAggregate
+                     Output: pagg_tab_1.b, PARTIAL avg(pagg_tab_1.a), PARTIAL max(pagg_tab_1.a), PARTIAL count(*), PARTIAL sum(pagg_tab_1.a)
+                     Group Key: pagg_tab_1.b
+                     ->  Foreign Scan on public.fpagg_tab_p2 pagg_tab_1
+                           Output: pagg_tab_1.b, pagg_tab_1.a
+                           Remote SQL: SELECT a, b FROM public.pagg_tab_p2
+               ->  Partial HashAggregate
+                     Output: pagg_tab_2.b, PARTIAL avg(pagg_tab_2.a), PARTIAL max(pagg_tab_2.a), PARTIAL count(*), PARTIAL sum(pagg_tab_2.a)
+                     Group Key: pagg_tab_2.b
+                     ->  Foreign Scan on public.fpagg_tab_p3 pagg_tab_2
+                           Output: pagg_tab_2.b, pagg_tab_2.a
+                           Remote SQL: SELECT a, b FROM public.pagg_tab_p3
+(26 rows)
+
+SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 700 ORDER BY 1;
+ b  |         avg         | max | count 
+----+---------------------+-----+-------
+  0 | 10.0000000000000000 |  20 |    60
+  1 | 11.0000000000000000 |  21 |    60
+ 10 | 10.0000000000000000 |  20 |    60
+ 11 | 11.0000000000000000 |  21 |    60
+ 20 | 10.0000000000000000 |  20 |    60
+ 21 | 11.0000000000000000 |  21 |    60
+ 30 | 10.0000000000000000 |  20 |    60
+ 31 | 11.0000000000000000 |  21 |    60
+ 40 | 10.0000000000000000 |  20 |    60
+ 41 | 11.0000000000000000 |  21 |    60
+(10 rows)
+
+-- Partial aggregates are safe to push down without having clause
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b ORDER BY 1;
+                                                    QUERY PLAN                                                    
+------------------------------------------------------------------------------------------------------------------
+ Finalize GroupAggregate
+   Output: pagg_tab.b, avg(pagg_tab.a), max(pagg_tab.a), count(*)
+   Group Key: pagg_tab.b
+   ->  Sort
+         Output: pagg_tab.b, (PARTIAL avg(pagg_tab.a)), (PARTIAL max(pagg_tab.a)), (PARTIAL count(*))
+         Sort Key: pagg_tab.b
+         ->  Append
+               ->  Partial HashAggregate
+                     Output: pagg_tab.b, PARTIAL avg(pagg_tab.a), PARTIAL max(pagg_tab.a), PARTIAL count(*)
+                     Group Key: pagg_tab.b
+                     ->  Foreign Scan on public.fpagg_tab_p1 pagg_tab
+                           Output: pagg_tab.b, pagg_tab.a
+                           Remote SQL: SELECT a, b FROM public.pagg_tab_p1
+               ->  Partial HashAggregate
+                     Output: pagg_tab_1.b, PARTIAL avg(pagg_tab_1.a), PARTIAL max(pagg_tab_1.a), PARTIAL count(*)
+                     Group Key: pagg_tab_1.b
+                     ->  Foreign Scan on public.fpagg_tab_p2 pagg_tab_1
+                           Output: pagg_tab_1.b, pagg_tab_1.a
+                           Remote SQL: SELECT a, b FROM public.pagg_tab_p2
+               ->  Partial HashAggregate
+                     Output: pagg_tab_2.b, PARTIAL avg(pagg_tab_2.a), PARTIAL max(pagg_tab_2.a), PARTIAL count(*)
+                     Group Key: pagg_tab_2.b
+                     ->  Foreign Scan on public.fpagg_tab_p3 pagg_tab_2
+                           Output: pagg_tab_2.b, pagg_tab_2.a
+                           Remote SQL: SELECT a, b FROM public.pagg_tab_p3
+(25 rows)
+
+SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b ORDER BY 1;
+ b  |         avg         | max | count 
+----+---------------------+-----+-------
+  0 | 10.0000000000000000 |  20 |    60
+  1 | 11.0000000000000000 |  21 |    60
+  2 | 12.0000000000000000 |  22 |    60
+  3 | 13.0000000000000000 |  23 |    60
+  4 | 14.0000000000000000 |  24 |    60
+  5 | 15.0000000000000000 |  25 |    60
+  6 | 16.0000000000000000 |  26 |    60
+  7 | 17.0000000000000000 |  27 |    60
+  8 | 18.0000000000000000 |  28 |    60
+  9 | 19.0000000000000000 |  29 |    60
+ 10 | 10.0000000000000000 |  20 |    60
+ 11 | 11.0000000000000000 |  21 |    60
+ 12 | 12.0000000000000000 |  22 |    60
+ 13 | 13.0000000000000000 |  23 |    60
+ 14 | 14.0000000000000000 |  24 |    60
+ 15 | 15.0000000000000000 |  25 |    60
+ 16 | 16.0000000000000000 |  26 |    60
+ 17 | 17.0000000000000000 |  27 |    60
+ 18 | 18.0000000000000000 |  28 |    60
+ 19 | 19.0000000000000000 |  29 |    60
+ 20 | 10.0000000000000000 |  20 |    60
+ 21 | 11.0000000000000000 |  21 |    60
+ 22 | 12.0000000000000000 |  22 |    60
+ 23 | 13.0000000000000000 |  23 |    60
+ 24 | 14.0000000000000000 |  24 |    60
+ 25 | 15.0000000000000000 |  25 |    60
+ 26 | 16.0000000000000000 |  26 |    60
+ 27 | 17.0000000000000000 |  27 |    60
+ 28 | 18.0000000000000000 |  28 |    60
+ 29 | 19.0000000000000000 |  29 |    60
+ 30 | 10.0000000000000000 |  20 |    60
+ 31 | 11.0000000000000000 |  21 |    60
+ 32 | 12.0000000000000000 |  22 |    60
+ 33 | 13.0000000000000000 |  23 |    60
+ 34 | 14.0000000000000000 |  24 |    60
+ 35 | 15.0000000000000000 |  25 |    60
+ 36 | 16.0000000000000000 |  26 |    60
+ 37 | 17.0000000000000000 |  27 |    60
+ 38 | 18.0000000000000000 |  28 |    60
+ 39 | 19.0000000000000000 |  29 |    60
+ 40 | 10.0000000000000000 |  20 |    60
+ 41 | 11.0000000000000000 |  21 |    60
+ 42 | 12.0000000000000000 |  22 |    60
+ 43 | 13.0000000000000000 |  23 |    60
+ 44 | 14.0000000000000000 |  24 |    60
+ 45 | 15.0000000000000000 |  25 |    60
+ 46 | 16.0000000000000000 |  26 |    60
+ 47 | 17.0000000000000000 |  27 |    60
+ 48 | 18.0000000000000000 |  28 |    60
+ 49 | 19.0000000000000000 |  29 |    60
+(50 rows)
+
+-- Partial aggregates are safe to push down even if we need both variable and variable-based expression
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT avg(a), max(a), count(*), (b/2)::numeric FROM pagg_tab GROUP BY b/2 ORDER BY 4;
+                                                                  QUERY PLAN                                                                  
+----------------------------------------------------------------------------------------------------------------------------------------------
+ Sort
+   Output: (avg(pagg_tab.a)), (max(pagg_tab.a)), (count(*)), ((((pagg_tab.b / 2)))::numeric), ((pagg_tab.b / 2))
+   Sort Key: ((((pagg_tab.b / 2)))::numeric)
+   ->  Finalize GroupAggregate
+         Output: avg(pagg_tab.a), max(pagg_tab.a), count(*), (((pagg_tab.b / 2)))::numeric, ((pagg_tab.b / 2))
+         Group Key: ((pagg_tab.b / 2))
+         ->  Sort
+               Output: ((pagg_tab.b / 2)), (PARTIAL avg(pagg_tab.a)), (PARTIAL max(pagg_tab.a)), (PARTIAL count(*)), pagg_tab.b
+               Sort Key: ((pagg_tab.b / 2))
+               ->  Append
+                     ->  Partial HashAggregate
+                           Output: ((pagg_tab.b / 2)), PARTIAL avg(pagg_tab.a), PARTIAL max(pagg_tab.a), PARTIAL count(*), pagg_tab.b
+                           Group Key: (pagg_tab.b / 2)
+                           ->  Foreign Scan on public.fpagg_tab_p1 pagg_tab
+                                 Output: (pagg_tab.b / 2), pagg_tab.a, pagg_tab.b
+                                 Remote SQL: SELECT a, b FROM public.pagg_tab_p1
+                     ->  Partial HashAggregate
+                           Output: ((pagg_tab_1.b / 2)), PARTIAL avg(pagg_tab_1.a), PARTIAL max(pagg_tab_1.a), PARTIAL count(*), pagg_tab_1.b
+                           Group Key: (pagg_tab_1.b / 2)
+                           ->  Foreign Scan on public.fpagg_tab_p2 pagg_tab_1
+                                 Output: (pagg_tab_1.b / 2), pagg_tab_1.a, pagg_tab_1.b
+                                 Remote SQL: SELECT a, b FROM public.pagg_tab_p2
+                     ->  Partial HashAggregate
+                           Output: ((pagg_tab_2.b / 2)), PARTIAL avg(pagg_tab_2.a), PARTIAL max(pagg_tab_2.a), PARTIAL count(*), pagg_tab_2.b
+                           Group Key: (pagg_tab_2.b / 2)
+                           ->  Foreign Scan on public.fpagg_tab_p3 pagg_tab_2
+                                 Output: (pagg_tab_2.b / 2), pagg_tab_2.a, pagg_tab_2.b
+                                 Remote SQL: SELECT a, b FROM public.pagg_tab_p3
+(28 rows)
+
+SELECT avg(a), max(a), count(*), (b/2)::numeric FROM pagg_tab GROUP BY b/2 ORDER BY 4;
+         avg         | max | count | numeric 
+---------------------+-----+-------+---------
+ 10.5000000000000000 |  21 |   120 |       0
+ 12.5000000000000000 |  23 |   120 |       1
+ 14.5000000000000000 |  25 |   120 |       2
+ 16.5000000000000000 |  27 |   120 |       3
+ 18.5000000000000000 |  29 |   120 |       4
+ 10.5000000000000000 |  21 |   120 |       5
+ 12.5000000000000000 |  23 |   120 |       6
+ 14.5000000000000000 |  25 |   120 |       7
+ 16.5000000000000000 |  27 |   120 |       8
+ 18.5000000000000000 |  29 |   120 |       9
+ 10.5000000000000000 |  21 |   120 |      10
+ 12.5000000000000000 |  23 |   120 |      11
+ 14.5000000000000000 |  25 |   120 |      12
+ 16.5000000000000000 |  27 |   120 |      13
+ 18.5000000000000000 |  29 |   120 |      14
+ 10.5000000000000000 |  21 |   120 |      15
+ 12.5000000000000000 |  23 |   120 |      16
+ 14.5000000000000000 |  25 |   120 |      17
+ 16.5000000000000000 |  27 |   120 |      18
+ 18.5000000000000000 |  29 |   120 |      19
+ 10.5000000000000000 |  21 |   120 |      20
+ 12.5000000000000000 |  23 |   120 |      21
+ 14.5000000000000000 |  25 |   120 |      22
+ 16.5000000000000000 |  27 |   120 |      23
+ 18.5000000000000000 |  29 |   120 |      24
+(25 rows)
+
+-- Partial aggregates pushdown behaves sane with non-shipped grouping elements
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT avg(a), (b/2)::numeric, 'test' test FROM pagg_tab GROUP BY 3, b/2 ORDER BY 1, 2 LIMIT 10;
+                                                        QUERY PLAN                                                        
+--------------------------------------------------------------------------------------------------------------------------
+ Limit
+   Output: (avg(pagg_tab.a)), ((((pagg_tab.b / 2)))::numeric), 'test'::text, ((pagg_tab.b / 2))
+   ->  Sort
+         Output: (avg(pagg_tab.a)), ((((pagg_tab.b / 2)))::numeric), 'test'::text, ((pagg_tab.b / 2))
+         Sort Key: (avg(pagg_tab.a)), ((((pagg_tab.b / 2)))::numeric)
+         ->  Finalize HashAggregate
+               Output: avg(pagg_tab.a), (((pagg_tab.b / 2)))::numeric, 'test'::text, ((pagg_tab.b / 2))
+               Group Key: ((pagg_tab.b / 2))
+               ->  Append
+                     ->  Foreign Scan
+                           Output: ((pagg_tab.b / 2)), (PARTIAL avg(pagg_tab.a)), pagg_tab.b
+                           Relations: Aggregate on (public.fpagg_tab_p1 pagg_tab)
+                           Remote SQL: SELECT (b / 2), b, avg(a) PARTIAL_AGGREGATE  FROM public.pagg_tab_p1 GROUP BY 1, 2
+                     ->  Foreign Scan
+                           Output: ((pagg_tab_1.b / 2)), (PARTIAL avg(pagg_tab_1.a)), pagg_tab_1.b
+                           Relations: Aggregate on (public.fpagg_tab_p2 pagg_tab_1)
+                           Remote SQL: SELECT (b / 2), b, avg(a) PARTIAL_AGGREGATE  FROM public.pagg_tab_p2 GROUP BY 1, 2
+                     ->  Foreign Scan
+                           Output: ((pagg_tab_2.b / 2)), (PARTIAL avg(pagg_tab_2.a)), pagg_tab_2.b
+                           Relations: Aggregate on (public.fpagg_tab_p3 pagg_tab_2)
+                           Remote SQL: SELECT (b / 2), b, avg(a) PARTIAL_AGGREGATE  FROM public.pagg_tab_p3 GROUP BY 1, 2
+(21 rows)
+
+SELECT avg(a), (b/2)::numeric, 'test' test FROM pagg_tab GROUP BY 3, b/2 ORDER BY 1, 2 LIMIT 10;
+         avg         | numeric | test 
+---------------------+---------+------
+ 10.5000000000000000 |       0 | test
+ 10.5000000000000000 |       5 | test
+ 10.5000000000000000 |      10 | test
+ 10.5000000000000000 |      15 | test
+ 10.5000000000000000 |      20 | test
+ 12.5000000000000000 |       1 | test
+ 12.5000000000000000 |       6 | test
+ 12.5000000000000000 |      11 | test
+ 12.5000000000000000 |      16 | test
+ 12.5000000000000000 |      21 | test
+(10 rows)
+
+-- Partial aggregates are safe to push down for all built-in aggregates
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT
+	/* The cases that don't require import or export functions */
+	bit_and(c_bit), bit_and(c_1or3int2), bit_and(c_1or3int4), bit_and(c_1or3int8),
+	bit_or(c_bit), bit_or(c_1or3int2), bit_or(c_1or3int4), bit_or(c_1or3int8),
+	bit_xor(c_bit), bit_xor(c_1or3int2), bit_xor(c_1or3int4), bit_xor(c_1or3int8),
+	bool_and(c_bool),
+	bool_or(c_bool),
+	every(c_bool),
+	max(c_1c::char(1)), max('2000-01-01'::date + b), max('0.0.0.0'::inet + b), max(b::float4), max(b::float8), max(b::int2), max(b::int4), max(b::int8), max(c_interval), max(c_money), max(b::numeric), max(b::oid), max(c_pg_lsn), max(c_tid), max(c_1c), max(c_time), max(c_timetz), max(c_timestamp), max(c_timestamptz), max(c_xid8),
+	min(c_1c::char(1)), min('2000-01-01'::date + b), min('0.0.0.0'::inet + b), min(b::float4), min(b::float8), min(b::int2), min(b::int4), min(b::int8), min(c_interval), min(c_money), min(b::numeric), min(b::oid), min(c_pg_lsn), min(c_tid), min(c_1c), min(c_time), min(c_timetz), min(c_timestamp), min(c_timestamptz), min(c_xid8),
+	/* The cases that require only import functions */
+	avg(b::int4)
+  FROM pagg_tab WHERE c_serial between 1 and 30;
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   QUERY PLAN                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate
+   Output: bit_and(pagg_tab.c_bit), bit_and(pagg_tab.c_1or3int2), bit_and(pagg_tab.c_1or3int4), bit_and(pagg_tab.c_1or3int8), bit_or(pagg_tab.c_bit), bit_or(pagg_tab.c_1or3int2), bit_or(pagg_tab.c_1or3int4), bit_or(pagg_tab.c_1or3int8), bit_xor(pagg_tab.c_bit), bit_xor(pagg_tab.c_1or3int2), bit_xor(pagg_tab.c_1or3int4), bit_xor(pagg_tab.c_1or3int8), bool_and(pagg_tab.c_bool), bool_or(pagg_tab.c_bool), every(pagg_tab.c_bool), max((pagg_tab.c_1c)::character(1)), max(('01-01-2000'::date + pagg_tab.b)), max(('0.0.0.0'::inet + (pagg_tab.b)::bigint)), max((pagg_tab.b)::real), max((pagg_tab.b)::double precision), max((pagg_tab.b)::smallint), max(pagg_tab.b), max((pagg_tab.b)::bigint), max(pagg_tab.c_interval), max(pagg_tab.c_money), max((pagg_tab.b)::numeric), max((pagg_tab.b)::oid), max(pagg_tab.c_pg_lsn), max(pagg_tab.c_tid), max(pagg_tab.c_1c), max(pagg_tab.c_time), max(pagg_tab.c_timetz), max(pagg_tab.c_timestamp), max(pagg_tab.c_timestamptz), max(pagg_tab.c_xid8), min((pagg_tab.c_1c)::character(1)), min(('01-01-2000'::date + pagg_tab.b)), min(('0.0.0.0'::inet + (pagg_tab.b)::bigint)), min((pagg_tab.b)::real), min((pagg_tab.b)::double precision), min((pagg_tab.b)::smallint), min(pagg_tab.b), min((pagg_tab.b)::bigint), min(pagg_tab.c_interval), min(pagg_tab.c_money), min((pagg_tab.b)::numeric), min((pagg_tab.b)::oid), min(pagg_tab.c_pg_lsn), min(pagg_tab.c_tid), min(pagg_tab.c_1c), min(pagg_tab.c_time), min(pagg_tab.c_timetz), min(pagg_tab.c_timestamp), min(pagg_tab.c_timestamptz), min(pagg_tab.c_xid8), avg(pagg_tab.b)
+   ->  Append
+         ->  Foreign Scan
+               Output: (PARTIAL bit_and(pagg_tab.c_bit)), (PARTIAL bit_and(pagg_tab.c_1or3int2)), (PARTIAL bit_and(pagg_tab.c_1or3int4)), (PARTIAL bit_and(pagg_tab.c_1or3int8)), (PARTIAL bit_or(pagg_tab.c_bit)), (PARTIAL bit_or(pagg_tab.c_1or3int2)), (PARTIAL bit_or(pagg_tab.c_1or3int4)), (PARTIAL bit_or(pagg_tab.c_1or3int8)), (PARTIAL bit_xor(pagg_tab.c_bit)), (PARTIAL bit_xor(pagg_tab.c_1or3int2)), (PARTIAL bit_xor(pagg_tab.c_1or3int4)), (PARTIAL bit_xor(pagg_tab.c_1or3int8)), (PARTIAL bool_and(pagg_tab.c_bool)), (PARTIAL bool_or(pagg_tab.c_bool)), (PARTIAL every(pagg_tab.c_bool)), (PARTIAL max((pagg_tab.c_1c)::character(1))), (PARTIAL max(('01-01-2000'::date + pagg_tab.b))), (PARTIAL max(('0.0.0.0'::inet + (pagg_tab.b)::bigint))), (PARTIAL max((pagg_tab.b)::real)), (PARTIAL max((pagg_tab.b)::double precision)), (PARTIAL max((pagg_tab.b)::smallint)), (PARTIAL max(pagg_tab.b)), (PARTIAL max((pagg_tab.b)::bigint)), (PARTIAL max(pagg_tab.c_interval)), (PARTIAL max(pagg_tab.c_money)), (PARTIAL max((pagg_tab.b)::numeric)), (PARTIAL max((pagg_tab.b)::oid)), (PARTIAL max(pagg_tab.c_pg_lsn)), (PARTIAL max(pagg_tab.c_tid)), (PARTIAL max(pagg_tab.c_1c)), (PARTIAL max(pagg_tab.c_time)), (PARTIAL max(pagg_tab.c_timetz)), (PARTIAL max(pagg_tab.c_timestamp)), (PARTIAL max(pagg_tab.c_timestamptz)), (PARTIAL max(pagg_tab.c_xid8)), (PARTIAL min((pagg_tab.c_1c)::character(1))), (PARTIAL min(('01-01-2000'::date + pagg_tab.b))), (PARTIAL min(('0.0.0.0'::inet + (pagg_tab.b)::bigint))), (PARTIAL min((pagg_tab.b)::real)), (PARTIAL min((pagg_tab.b)::double precision)), (PARTIAL min((pagg_tab.b)::smallint)), (PARTIAL min(pagg_tab.b)), (PARTIAL min((pagg_tab.b)::bigint)), (PARTIAL min(pagg_tab.c_interval)), (PARTIAL min(pagg_tab.c_money)), (PARTIAL min((pagg_tab.b)::numeric)), (PARTIAL min((pagg_tab.b)::oid)), (PARTIAL min(pagg_tab.c_pg_lsn)), (PARTIAL min(pagg_tab.c_tid)), (PARTIAL min(pagg_tab.c_1c)), (PARTIAL min(pagg_tab.c_time)), (PARTIAL min(pagg_tab.c_timetz)), (PARTIAL min(pagg_tab.c_timestamp)), (PARTIAL min(pagg_tab.c_timestamptz)), (PARTIAL min(pagg_tab.c_xid8)), (PARTIAL avg(pagg_tab.b))
+               Relations: Aggregate on (public.fpagg_tab_p1 pagg_tab)
+               Remote SQL: SELECT bit_and(c_bit) PARTIAL_AGGREGATE , bit_and(c_1or3int2) PARTIAL_AGGREGATE , bit_and(c_1or3int4) PARTIAL_AGGREGATE , bit_and(c_1or3int8) PARTIAL_AGGREGATE , bit_or(c_bit) PARTIAL_AGGREGATE , bit_or(c_1or3int2) PARTIAL_AGGREGATE , bit_or(c_1or3int4) PARTIAL_AGGREGATE , bit_or(c_1or3int8) PARTIAL_AGGREGATE , bit_xor(c_bit) PARTIAL_AGGREGATE , bit_xor(c_1or3int2) PARTIAL_AGGREGATE , bit_xor(c_1or3int4) PARTIAL_AGGREGATE , bit_xor(c_1or3int8) PARTIAL_AGGREGATE , bool_and(c_bool) PARTIAL_AGGREGATE , bool_or(c_bool) PARTIAL_AGGREGATE , every(c_bool) PARTIAL_AGGREGATE , max(c_1c::character(1)) PARTIAL_AGGREGATE , max(('01-01-2000'::date + b)) PARTIAL_AGGREGATE , max(('0.0.0.0'::inet + b)) PARTIAL_AGGREGATE , max(b::real) PARTIAL_AGGREGATE , max(b::double precision) PARTIAL_AGGREGATE , max(b::smallint) PARTIAL_AGGREGATE , max(b) PARTIAL_AGGREGATE , max(b::bigint) PARTIAL_AGGREGATE , max(c_interval) PARTIAL_AGGREGATE , max(c_money) PARTIAL_AGGREGATE , max(b::numeric) PARTIAL_AGGREGATE , max(b::oid) PARTIAL_AGGREGATE , max(c_pg_lsn) PARTIAL_AGGREGATE , max(c_tid) PARTIAL_AGGREGATE , max(c_1c) PARTIAL_AGGREGATE , max(c_time) PARTIAL_AGGREGATE , max(c_timetz) PARTIAL_AGGREGATE , max(c_timestamp) PARTIAL_AGGREGATE , max(c_timestamptz) PARTIAL_AGGREGATE , max(c_xid8) PARTIAL_AGGREGATE , min(c_1c::character(1)) PARTIAL_AGGREGATE , min(('01-01-2000'::date + b)) PARTIAL_AGGREGATE , min(('0.0.0.0'::inet + b)) PARTIAL_AGGREGATE , min(b::real) PARTIAL_AGGREGATE , min(b::double precision) PARTIAL_AGGREGATE , min(b::smallint) PARTIAL_AGGREGATE , min(b) PARTIAL_AGGREGATE , min(b::bigint) PARTIAL_AGGREGATE , min(c_interval) PARTIAL_AGGREGATE , min(c_money) PARTIAL_AGGREGATE , min(b::numeric) PARTIAL_AGGREGATE , min(b::oid) PARTIAL_AGGREGATE , min(c_pg_lsn) PARTIAL_AGGREGATE , min(c_tid) PARTIAL_AGGREGATE , min(c_1c) PARTIAL_AGGREGATE , min(c_time) PARTIAL_AGGREGATE , min(c_timetz) PARTIAL_AGGREGATE , min(c_timestamp) PARTIAL_AGGREGATE , min(c_timestamptz) PARTIAL_AGGREGATE , min(c_xid8) PARTIAL_AGGREGATE , avg(b) PARTIAL_AGGREGATE  FROM public.pagg_tab_p1 WHERE ((c_serial >= 1)) AND ((c_serial <= 30))
+         ->  Foreign Scan
+               Output: (PARTIAL bit_and(pagg_tab_1.c_bit)), (PARTIAL bit_and(pagg_tab_1.c_1or3int2)), (PARTIAL bit_and(pagg_tab_1.c_1or3int4)), (PARTIAL bit_and(pagg_tab_1.c_1or3int8)), (PARTIAL bit_or(pagg_tab_1.c_bit)), (PARTIAL bit_or(pagg_tab_1.c_1or3int2)), (PARTIAL bit_or(pagg_tab_1.c_1or3int4)), (PARTIAL bit_or(pagg_tab_1.c_1or3int8)), (PARTIAL bit_xor(pagg_tab_1.c_bit)), (PARTIAL bit_xor(pagg_tab_1.c_1or3int2)), (PARTIAL bit_xor(pagg_tab_1.c_1or3int4)), (PARTIAL bit_xor(pagg_tab_1.c_1or3int8)), (PARTIAL bool_and(pagg_tab_1.c_bool)), (PARTIAL bool_or(pagg_tab_1.c_bool)), (PARTIAL every(pagg_tab_1.c_bool)), (PARTIAL max((pagg_tab_1.c_1c)::character(1))), (PARTIAL max(('01-01-2000'::date + pagg_tab_1.b))), (PARTIAL max(('0.0.0.0'::inet + (pagg_tab_1.b)::bigint))), (PARTIAL max((pagg_tab_1.b)::real)), (PARTIAL max((pagg_tab_1.b)::double precision)), (PARTIAL max((pagg_tab_1.b)::smallint)), (PARTIAL max(pagg_tab_1.b)), (PARTIAL max((pagg_tab_1.b)::bigint)), (PARTIAL max(pagg_tab_1.c_interval)), (PARTIAL max(pagg_tab_1.c_money)), (PARTIAL max((pagg_tab_1.b)::numeric)), (PARTIAL max((pagg_tab_1.b)::oid)), (PARTIAL max(pagg_tab_1.c_pg_lsn)), (PARTIAL max(pagg_tab_1.c_tid)), (PARTIAL max(pagg_tab_1.c_1c)), (PARTIAL max(pagg_tab_1.c_time)), (PARTIAL max(pagg_tab_1.c_timetz)), (PARTIAL max(pagg_tab_1.c_timestamp)), (PARTIAL max(pagg_tab_1.c_timestamptz)), (PARTIAL max(pagg_tab_1.c_xid8)), (PARTIAL min((pagg_tab_1.c_1c)::character(1))), (PARTIAL min(('01-01-2000'::date + pagg_tab_1.b))), (PARTIAL min(('0.0.0.0'::inet + (pagg_tab_1.b)::bigint))), (PARTIAL min((pagg_tab_1.b)::real)), (PARTIAL min((pagg_tab_1.b)::double precision)), (PARTIAL min((pagg_tab_1.b)::smallint)), (PARTIAL min(pagg_tab_1.b)), (PARTIAL min((pagg_tab_1.b)::bigint)), (PARTIAL min(pagg_tab_1.c_interval)), (PARTIAL min(pagg_tab_1.c_money)), (PARTIAL min((pagg_tab_1.b)::numeric)), (PARTIAL min((pagg_tab_1.b)::oid)), (PARTIAL min(pagg_tab_1.c_pg_lsn)), (PARTIAL min(pagg_tab_1.c_tid)), (PARTIAL min(pagg_tab_1.c_1c)), (PARTIAL min(pagg_tab_1.c_time)), (PARTIAL min(pagg_tab_1.c_timetz)), (PARTIAL min(pagg_tab_1.c_timestamp)), (PARTIAL min(pagg_tab_1.c_timestamptz)), (PARTIAL min(pagg_tab_1.c_xid8)), (PARTIAL avg(pagg_tab_1.b))
+               Relations: Aggregate on (public.fpagg_tab_p2 pagg_tab_1)
+               Remote SQL: SELECT bit_and(c_bit) PARTIAL_AGGREGATE , bit_and(c_1or3int2) PARTIAL_AGGREGATE , bit_and(c_1or3int4) PARTIAL_AGGREGATE , bit_and(c_1or3int8) PARTIAL_AGGREGATE , bit_or(c_bit) PARTIAL_AGGREGATE , bit_or(c_1or3int2) PARTIAL_AGGREGATE , bit_or(c_1or3int4) PARTIAL_AGGREGATE , bit_or(c_1or3int8) PARTIAL_AGGREGATE , bit_xor(c_bit) PARTIAL_AGGREGATE , bit_xor(c_1or3int2) PARTIAL_AGGREGATE , bit_xor(c_1or3int4) PARTIAL_AGGREGATE , bit_xor(c_1or3int8) PARTIAL_AGGREGATE , bool_and(c_bool) PARTIAL_AGGREGATE , bool_or(c_bool) PARTIAL_AGGREGATE , every(c_bool) PARTIAL_AGGREGATE , max(c_1c::character(1)) PARTIAL_AGGREGATE , max(('01-01-2000'::date + b)) PARTIAL_AGGREGATE , max(('0.0.0.0'::inet + b)) PARTIAL_AGGREGATE , max(b::real) PARTIAL_AGGREGATE , max(b::double precision) PARTIAL_AGGREGATE , max(b::smallint) PARTIAL_AGGREGATE , max(b) PARTIAL_AGGREGATE , max(b::bigint) PARTIAL_AGGREGATE , max(c_interval) PARTIAL_AGGREGATE , max(c_money) PARTIAL_AGGREGATE , max(b::numeric) PARTIAL_AGGREGATE , max(b::oid) PARTIAL_AGGREGATE , max(c_pg_lsn) PARTIAL_AGGREGATE , max(c_tid) PARTIAL_AGGREGATE , max(c_1c) PARTIAL_AGGREGATE , max(c_time) PARTIAL_AGGREGATE , max(c_timetz) PARTIAL_AGGREGATE , max(c_timestamp) PARTIAL_AGGREGATE , max(c_timestamptz) PARTIAL_AGGREGATE , max(c_xid8) PARTIAL_AGGREGATE , min(c_1c::character(1)) PARTIAL_AGGREGATE , min(('01-01-2000'::date + b)) PARTIAL_AGGREGATE , min(('0.0.0.0'::inet + b)) PARTIAL_AGGREGATE , min(b::real) PARTIAL_AGGREGATE , min(b::double precision) PARTIAL_AGGREGATE , min(b::smallint) PARTIAL_AGGREGATE , min(b) PARTIAL_AGGREGATE , min(b::bigint) PARTIAL_AGGREGATE , min(c_interval) PARTIAL_AGGREGATE , min(c_money) PARTIAL_AGGREGATE , min(b::numeric) PARTIAL_AGGREGATE , min(b::oid) PARTIAL_AGGREGATE , min(c_pg_lsn) PARTIAL_AGGREGATE , min(c_tid) PARTIAL_AGGREGATE , min(c_1c) PARTIAL_AGGREGATE , min(c_time) PARTIAL_AGGREGATE , min(c_timetz) PARTIAL_AGGREGATE , min(c_timestamp) PARTIAL_AGGREGATE , min(c_timestamptz) PARTIAL_AGGREGATE , min(c_xid8) PARTIAL_AGGREGATE , avg(b) PARTIAL_AGGREGATE  FROM public.pagg_tab_p2 WHERE ((c_serial >= 1)) AND ((c_serial <= 30))
+         ->  Foreign Scan
+               Output: (PARTIAL bit_and(pagg_tab_2.c_bit)), (PARTIAL bit_and(pagg_tab_2.c_1or3int2)), (PARTIAL bit_and(pagg_tab_2.c_1or3int4)), (PARTIAL bit_and(pagg_tab_2.c_1or3int8)), (PARTIAL bit_or(pagg_tab_2.c_bit)), (PARTIAL bit_or(pagg_tab_2.c_1or3int2)), (PARTIAL bit_or(pagg_tab_2.c_1or3int4)), (PARTIAL bit_or(pagg_tab_2.c_1or3int8)), (PARTIAL bit_xor(pagg_tab_2.c_bit)), (PARTIAL bit_xor(pagg_tab_2.c_1or3int2)), (PARTIAL bit_xor(pagg_tab_2.c_1or3int4)), (PARTIAL bit_xor(pagg_tab_2.c_1or3int8)), (PARTIAL bool_and(pagg_tab_2.c_bool)), (PARTIAL bool_or(pagg_tab_2.c_bool)), (PARTIAL every(pagg_tab_2.c_bool)), (PARTIAL max((pagg_tab_2.c_1c)::character(1))), (PARTIAL max(('01-01-2000'::date + pagg_tab_2.b))), (PARTIAL max(('0.0.0.0'::inet + (pagg_tab_2.b)::bigint))), (PARTIAL max((pagg_tab_2.b)::real)), (PARTIAL max((pagg_tab_2.b)::double precision)), (PARTIAL max((pagg_tab_2.b)::smallint)), (PARTIAL max(pagg_tab_2.b)), (PARTIAL max((pagg_tab_2.b)::bigint)), (PARTIAL max(pagg_tab_2.c_interval)), (PARTIAL max(pagg_tab_2.c_money)), (PARTIAL max((pagg_tab_2.b)::numeric)), (PARTIAL max((pagg_tab_2.b)::oid)), (PARTIAL max(pagg_tab_2.c_pg_lsn)), (PARTIAL max(pagg_tab_2.c_tid)), (PARTIAL max(pagg_tab_2.c_1c)), (PARTIAL max(pagg_tab_2.c_time)), (PARTIAL max(pagg_tab_2.c_timetz)), (PARTIAL max(pagg_tab_2.c_timestamp)), (PARTIAL max(pagg_tab_2.c_timestamptz)), (PARTIAL max(pagg_tab_2.c_xid8)), (PARTIAL min((pagg_tab_2.c_1c)::character(1))), (PARTIAL min(('01-01-2000'::date + pagg_tab_2.b))), (PARTIAL min(('0.0.0.0'::inet + (pagg_tab_2.b)::bigint))), (PARTIAL min((pagg_tab_2.b)::real)), (PARTIAL min((pagg_tab_2.b)::double precision)), (PARTIAL min((pagg_tab_2.b)::smallint)), (PARTIAL min(pagg_tab_2.b)), (PARTIAL min((pagg_tab_2.b)::bigint)), (PARTIAL min(pagg_tab_2.c_interval)), (PARTIAL min(pagg_tab_2.c_money)), (PARTIAL min((pagg_tab_2.b)::numeric)), (PARTIAL min((pagg_tab_2.b)::oid)), (PARTIAL min(pagg_tab_2.c_pg_lsn)), (PARTIAL min(pagg_tab_2.c_tid)), (PARTIAL min(pagg_tab_2.c_1c)), (PARTIAL min(pagg_tab_2.c_time)), (PARTIAL min(pagg_tab_2.c_timetz)), (PARTIAL min(pagg_tab_2.c_timestamp)), (PARTIAL min(pagg_tab_2.c_timestamptz)), (PARTIAL min(pagg_tab_2.c_xid8)), (PARTIAL avg(pagg_tab_2.b))
+               Relations: Aggregate on (public.fpagg_tab_p3 pagg_tab_2)
+               Remote SQL: SELECT bit_and(c_bit) PARTIAL_AGGREGATE , bit_and(c_1or3int2) PARTIAL_AGGREGATE , bit_and(c_1or3int4) PARTIAL_AGGREGATE , bit_and(c_1or3int8) PARTIAL_AGGREGATE , bit_or(c_bit) PARTIAL_AGGREGATE , bit_or(c_1or3int2) PARTIAL_AGGREGATE , bit_or(c_1or3int4) PARTIAL_AGGREGATE , bit_or(c_1or3int8) PARTIAL_AGGREGATE , bit_xor(c_bit) PARTIAL_AGGREGATE , bit_xor(c_1or3int2) PARTIAL_AGGREGATE , bit_xor(c_1or3int4) PARTIAL_AGGREGATE , bit_xor(c_1or3int8) PARTIAL_AGGREGATE , bool_and(c_bool) PARTIAL_AGGREGATE , bool_or(c_bool) PARTIAL_AGGREGATE , every(c_bool) PARTIAL_AGGREGATE , max(c_1c::character(1)) PARTIAL_AGGREGATE , max(('01-01-2000'::date + b)) PARTIAL_AGGREGATE , max(('0.0.0.0'::inet + b)) PARTIAL_AGGREGATE , max(b::real) PARTIAL_AGGREGATE , max(b::double precision) PARTIAL_AGGREGATE , max(b::smallint) PARTIAL_AGGREGATE , max(b) PARTIAL_AGGREGATE , max(b::bigint) PARTIAL_AGGREGATE , max(c_interval) PARTIAL_AGGREGATE , max(c_money) PARTIAL_AGGREGATE , max(b::numeric) PARTIAL_AGGREGATE , max(b::oid) PARTIAL_AGGREGATE , max(c_pg_lsn) PARTIAL_AGGREGATE , max(c_tid) PARTIAL_AGGREGATE , max(c_1c) PARTIAL_AGGREGATE , max(c_time) PARTIAL_AGGREGATE , max(c_timetz) PARTIAL_AGGREGATE , max(c_timestamp) PARTIAL_AGGREGATE , max(c_timestamptz) PARTIAL_AGGREGATE , max(c_xid8) PARTIAL_AGGREGATE , min(c_1c::character(1)) PARTIAL_AGGREGATE , min(('01-01-2000'::date + b)) PARTIAL_AGGREGATE , min(('0.0.0.0'::inet + b)) PARTIAL_AGGREGATE , min(b::real) PARTIAL_AGGREGATE , min(b::double precision) PARTIAL_AGGREGATE , min(b::smallint) PARTIAL_AGGREGATE , min(b) PARTIAL_AGGREGATE , min(b::bigint) PARTIAL_AGGREGATE , min(c_interval) PARTIAL_AGGREGATE , min(c_money) PARTIAL_AGGREGATE , min(b::numeric) PARTIAL_AGGREGATE , min(b::oid) PARTIAL_AGGREGATE , min(c_pg_lsn) PARTIAL_AGGREGATE , min(c_tid) PARTIAL_AGGREGATE , min(c_1c) PARTIAL_AGGREGATE , min(c_time) PARTIAL_AGGREGATE , min(c_timetz) PARTIAL_AGGREGATE , min(c_timestamp) PARTIAL_AGGREGATE , min(c_timestamptz) PARTIAL_AGGREGATE , min(c_xid8) PARTIAL_AGGREGATE , avg(b) PARTIAL_AGGREGATE  FROM public.pagg_tab_p3 WHERE ((c_serial >= 1)) AND ((c_serial <= 30))
+(15 rows)
+
+SELECT
+	/* The cases that don't require import or export functions */
+	bit_and(c_bit), bit_and(c_1or3int2), bit_and(c_1or3int4), bit_and(c_1or3int8),
+	bit_or(c_bit), bit_or(c_1or3int2), bit_or(c_1or3int4), bit_or(c_1or3int8),
+	bit_xor(c_bit), bit_xor(c_1or3int2), bit_xor(c_1or3int4), bit_xor(c_1or3int8),
+	bool_and(c_bool),
+	bool_or(c_bool),
+	every(c_bool),
+	max(c_1c::char(1)), max('2000-01-01'::date + b), max('0.0.0.0'::inet + b), max(b::float4), max(b::float8), max(b::int2), max(b::int4), max(b::int8), max(c_interval), max(c_money), max(b::numeric), max(b::oid), max(c_pg_lsn), max(c_tid), max(c_1c), max(c_time), max(c_timetz), max(c_timestamp), max(c_timestamptz), max(c_xid8),
+	min(c_1c::char(1)), min('2000-01-01'::date + b), min('0.0.0.0'::inet + b), min(b::float4), min(b::float8), min(b::int2), min(b::int4), min(b::int8), min(c_interval), min(c_money), min(b::numeric), min(b::oid), min(c_pg_lsn), min(c_tid), min(c_1c), min(c_time), min(c_timetz), min(c_timestamp), min(c_timestamptz), min(c_xid8),
+	/* The cases that require only import functions */
+	avg(b::int4)
+  FROM pagg_tab WHERE c_serial between 1 and 30;
+ bit_and | bit_and | bit_and | bit_and | bit_or | bit_or | bit_or | bit_or | bit_xor | bit_xor | bit_xor | bit_xor | bool_and | bool_or | every | max |    max     |   max    | max | max | max | max | max |   max   |  max  | max | max | max  |  max   | max |   max    |     max     |           max            |             max              | max | min |    min     |   min   | min | min | min | min | min | min |  min  | min | min | min |  min  | min |   min    |     min     |           min            |             min              | min |         avg         
+---------+---------+---------+---------+--------+--------+--------+--------+---------+---------+---------+---------+----------+---------+-------+-----+------------+----------+-----+-----+-----+-----+-----+---------+-------+-----+-----+------+--------+-----+----------+-------------+--------------------------+------------------------------+-----+-----+------------+---------+-----+-----+-----+-----+-----+-----+-------+-----+-----+-----+-------+-----+----------+-------------+--------------------------+------------------------------+-----+---------------------
+ 01      |       1 |       1 |       1 | 11     |      3 |      3 |      3 | 10      |       2 |       2 |       2 | f        | t       | f     | 9   | 01-31-2000 | 0.0.0.30 |  30 |  30 |  30 |  30 |  30 | @ 1 sec | $1.00 |  30 |  30 | 0/30 | (0,30) | 9   | 00:00:30 | 00:00:30+00 | Sat Jan 01 00:00:30 2000 | Sat Jan 01 00:00:30 2000 UTC |   9 | 0   | 01-02-2000 | 0.0.0.1 |   1 |   1 |   1 |   1 |   1 | @ 0 | $0.00 |   1 |   1 | 0/1 | (0,1) | 0   | 00:00:01 | 00:00:01+00 | Sat Jan 01 00:00:01 2000 | Sat Jan 01 00:00:01 2000 UTC |   0 | 15.5000000000000000
+(1 row)
+
+-- Tests for partial_aggregate_support
+ALTER SERVER loopback OPTIONS (ADD partial_aggregate_support 'false');
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT b, max(a) FROM pagg_tab GROUP BY b ORDER BY 1;
+                                QUERY PLAN                                 
+---------------------------------------------------------------------------
+ Finalize GroupAggregate
+   Output: pagg_tab.b, max(pagg_tab.a)
+   Group Key: pagg_tab.b
+   ->  Sort
+         Output: pagg_tab.b, (PARTIAL max(pagg_tab.a))
+         Sort Key: pagg_tab.b
+         ->  Append
+               ->  Partial HashAggregate
+                     Output: pagg_tab.b, PARTIAL max(pagg_tab.a)
+                     Group Key: pagg_tab.b
+                     ->  Foreign Scan on public.fpagg_tab_p1 pagg_tab
+                           Output: pagg_tab.b, pagg_tab.a
+                           Remote SQL: SELECT a, b FROM public.pagg_tab_p1
+               ->  Partial HashAggregate
+                     Output: pagg_tab_1.b, PARTIAL max(pagg_tab_1.a)
+                     Group Key: pagg_tab_1.b
+                     ->  Foreign Scan on public.fpagg_tab_p2 pagg_tab_1
+                           Output: pagg_tab_1.b, pagg_tab_1.a
+                           Remote SQL: SELECT a, b FROM public.pagg_tab_p2
+               ->  Partial HashAggregate
+                     Output: pagg_tab_2.b, PARTIAL max(pagg_tab_2.a)
+                     Group Key: pagg_tab_2.b
+                     ->  Foreign Scan on public.fpagg_tab_p3 pagg_tab_2
+                           Output: pagg_tab_2.b, pagg_tab_2.a
+                           Remote SQL: SELECT a, b FROM public.pagg_tab_p3
+(25 rows)
+
+SELECT b, max(a) FROM pagg_tab GROUP BY b ORDER BY 1;
+ b  | max 
+----+-----
+  0 |  20
+  1 |  21
+  2 |  22
+  3 |  23
+  4 |  24
+  5 |  25
+  6 |  26
+  7 |  27
+  8 |  28
+  9 |  29
+ 10 |  20
+ 11 |  21
+ 12 |  22
+ 13 |  23
+ 14 |  24
+ 15 |  25
+ 16 |  26
+ 17 |  27
+ 18 |  28
+ 19 |  29
+ 20 |  20
+ 21 |  21
+ 22 |  22
+ 23 |  23
+ 24 |  24
+ 25 |  25
+ 26 |  26
+ 27 |  27
+ 28 |  28
+ 29 |  29
+ 30 |  20
+ 31 |  21
+ 32 |  22
+ 33 |  23
+ 34 |  24
+ 35 |  25
+ 36 |  26
+ 37 |  27
+ 38 |  28
+ 39 |  29
+ 40 |  20
+ 41 |  21
+ 42 |  22
+ 43 |  23
+ 44 |  24
+ 45 |  25
+ 46 |  26
+ 47 |  27
+ 48 |  28
+ 49 |  29
+(50 rows)
+
+ALTER SERVER loopback OPTIONS (SET partial_aggregate_support 'true');
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT b, max(a) FROM pagg_tab GROUP BY b ORDER BY 1;
+                                               QUERY PLAN                                               
+--------------------------------------------------------------------------------------------------------
+ Sort
+   Output: pagg_tab.b, (max(pagg_tab.a))
+   Sort Key: pagg_tab.b
+   ->  Finalize HashAggregate
+         Output: pagg_tab.b, max(pagg_tab.a)
+         Group Key: pagg_tab.b
+         ->  Append
+               ->  Foreign Scan
+                     Output: pagg_tab.b, (PARTIAL max(pagg_tab.a))
+                     Relations: Aggregate on (public.fpagg_tab_p1 pagg_tab)
+                     Remote SQL: SELECT b, max(a) PARTIAL_AGGREGATE  FROM public.pagg_tab_p1 GROUP BY 1
+               ->  Foreign Scan
+                     Output: pagg_tab_1.b, (PARTIAL max(pagg_tab_1.a))
+                     Relations: Aggregate on (public.fpagg_tab_p2 pagg_tab_1)
+                     Remote SQL: SELECT b, max(a) PARTIAL_AGGREGATE  FROM public.pagg_tab_p2 GROUP BY 1
+               ->  Foreign Scan
+                     Output: pagg_tab_2.b, (PARTIAL max(pagg_tab_2.a))
+                     Relations: Aggregate on (public.fpagg_tab_p3 pagg_tab_2)
+                     Remote SQL: SELECT b, max(a) PARTIAL_AGGREGATE  FROM public.pagg_tab_p3 GROUP BY 1
+(19 rows)
+
+SELECT b, max(a) FROM pagg_tab GROUP BY b ORDER BY 1;
+ b  | max 
+----+-----
+  0 |  20
+  1 |  21
+  2 |  22
+  3 |  23
+  4 |  24
+  5 |  25
+  6 |  26
+  7 |  27
+  8 |  28
+  9 |  29
+ 10 |  20
+ 11 |  21
+ 12 |  22
+ 13 |  23
+ 14 |  24
+ 15 |  25
+ 16 |  26
+ 17 |  27
+ 18 |  28
+ 19 |  29
+ 20 |  20
+ 21 |  21
+ 22 |  22
+ 23 |  23
+ 24 |  24
+ 25 |  25
+ 26 |  26
+ 27 |  27
+ 28 |  28
+ 29 |  29
+ 30 |  20
+ 31 |  21
+ 32 |  22
+ 33 |  23
+ 34 |  24
+ 35 |  25
+ 36 |  26
+ 37 |  27
+ 38 |  28
+ 39 |  29
+ 40 |  20
+ 41 |  21
+ 42 |  22
+ 43 |  23
+ 44 |  24
+ 45 |  25
+ 46 |  26
+ 47 |  27
+ 48 |  28
+ 49 |  29
+(50 rows)
+
+ALTER SERVER loopback OPTIONS (SET fdw_tuple_cost '1.0');
+SET enable_partitionwise_join=on;
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT max(t1.b) FROM pagg_tab t1 JOIN pagg_tab t2 USING(a);
+                                                                    QUERY PLAN                                                                    
+--------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate
+   Output: max(t1.b)
+   ->  Append
+         ->  Foreign Scan
+               Output: (PARTIAL max(t1.b))
+               Relations: Aggregate on ((public.fpagg_tab_p1 t1) INNER JOIN (public.fpagg_tab_p1 t2))
+               Remote SQL: SELECT max(r4.b) PARTIAL_AGGREGATE  FROM (public.pagg_tab_p1 r4 INNER JOIN public.pagg_tab_p1 r7 ON (((r4.a = r7.a))))
+         ->  Foreign Scan
+               Output: (PARTIAL max(t1_1.b))
+               Relations: Aggregate on ((public.fpagg_tab_p2 t1_1) INNER JOIN (public.fpagg_tab_p2 t2_1))
+               Remote SQL: SELECT max(r5.b) PARTIAL_AGGREGATE  FROM (public.pagg_tab_p2 r5 INNER JOIN public.pagg_tab_p2 r8 ON (((r5.a = r8.a))))
+         ->  Foreign Scan
+               Output: (PARTIAL max(t1_2.b))
+               Relations: Aggregate on ((public.fpagg_tab_p3 t1_2) INNER JOIN (public.fpagg_tab_p3 t2_2))
+               Remote SQL: SELECT max(r6.b) PARTIAL_AGGREGATE  FROM (public.pagg_tab_p3 r6 INNER JOIN public.pagg_tab_p3 r9 ON (((r6.a = r9.a))))
+(15 rows)
+
+SELECT max(t1.b) FROM pagg_tab t1 JOIN pagg_tab t2 USING(a);
+ max 
+-----
+  49
+(1 row)
+
+RESET enable_partitionwise_join;
+ALTER SERVER loopback OPTIONS (SET fdw_tuple_cost '0.1');
+ALTER SERVER loopback OPTIONS (DROP partial_aggregate_support);
+-- It is unsafe to push down partial aggregates which contain DISTINCT clauses
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT max(a), count(distinct b) FROM pagg_tab;
+                                       QUERY PLAN                                        
+-----------------------------------------------------------------------------------------
+ Aggregate
+   Output: max(pagg_tab.a), count(DISTINCT pagg_tab.b)
    ->  Merge Append
          Sort Key: pagg_tab.b
-         ->  Partial GroupAggregate
-               Group Key: pagg_tab.b
-               ->  Foreign Scan on fpagg_tab_p1 pagg_tab
-         ->  Partial GroupAggregate
-               Group Key: pagg_tab_1.b
-               ->  Foreign Scan on fpagg_tab_p2 pagg_tab_1
-         ->  Partial GroupAggregate
-               Group Key: pagg_tab_2.b
-               ->  Foreign Scan on fpagg_tab_p3 pagg_tab_2
-(14 rows)
+         ->  Foreign Scan on public.fpagg_tab_p1 pagg_tab_1
+               Output: pagg_tab_1.a, pagg_tab_1.b
+               Remote SQL: SELECT a, b FROM public.pagg_tab_p1 ORDER BY b ASC NULLS LAST
+         ->  Foreign Scan on public.fpagg_tab_p2 pagg_tab_2
+               Output: pagg_tab_2.a, pagg_tab_2.b
+               Remote SQL: SELECT a, b FROM public.pagg_tab_p2 ORDER BY b ASC NULLS LAST
+         ->  Foreign Scan on public.fpagg_tab_p3 pagg_tab_3
+               Output: pagg_tab_3.a, pagg_tab_3.b
+               Remote SQL: SELECT a, b FROM public.pagg_tab_p3 ORDER BY b ASC NULLS LAST
+(13 rows)
 
+SELECT max(a), count(distinct b) FROM pagg_tab;
+ max | count 
+-----+-------
+  29 |    50
+(1 row)
+
+-- It is unsafe to push down partial aggregates which contain ORDER BY clauses
+EXPLAIN (VERBOSE, COSTS OFF) SELECT array_agg(b order by b) FROM pagg_tab WHERE c_serial between 1 and 30;
+                                                   QUERY PLAN                                                    
+-----------------------------------------------------------------------------------------------------------------
+ Aggregate
+   Output: array_agg(pagg_tab.b ORDER BY pagg_tab.b)
+   ->  Sort
+         Output: pagg_tab.b
+         Sort Key: pagg_tab.b
+         ->  Append
+               ->  Foreign Scan on public.fpagg_tab_p1 pagg_tab_1
+                     Output: pagg_tab_1.b
+                     Remote SQL: SELECT b FROM public.pagg_tab_p1 WHERE ((c_serial >= 1)) AND ((c_serial <= 30))
+               ->  Foreign Scan on public.fpagg_tab_p2 pagg_tab_2
+                     Output: pagg_tab_2.b
+                     Remote SQL: SELECT b FROM public.pagg_tab_p2 WHERE ((c_serial >= 1)) AND ((c_serial <= 30))
+               ->  Foreign Scan on public.fpagg_tab_p3 pagg_tab_3
+                     Output: pagg_tab_3.b
+                     Remote SQL: SELECT b FROM public.pagg_tab_p3 WHERE ((c_serial >= 1)) AND ((c_serial <= 30))
+(15 rows)
+
+SELECT array_agg(b order by b) FROM pagg_tab WHERE c_serial between 1 and 30;
+                                     array_agg                                      
+------------------------------------------------------------------------------------
+ {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30}
+(1 row)
+
+ALTER SERVER loopback OPTIONS (DROP fdw_tuple_cost);
+RESET TimeZone;
 -- ===================================================================
 -- access rights and superuser
 -- ===================================================================

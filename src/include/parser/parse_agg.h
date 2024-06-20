@@ -17,7 +17,7 @@
 
 extern void transformAggregateCall(ParseState *pstate, Aggref *agg,
 								   List *args, List *aggorder,
-								   bool agg_distinct);
+								   bool agg_distinct, bool agg_partial);
 
 extern Node *transformGroupingFunc(ParseState *pstate, GroupingFunc *p);
 

@@ -411,6 +411,7 @@ find_compatible_agg(PlannerInfo *root, Aggref *newagg,
 		/* all of the following must be the same or it's no match */
 		if (newagg->inputcollid != existingRef->inputcollid ||
 			newagg->aggtranstype != existingRef->aggtranstype ||
+			newagg->agg_partial != existingRef->agg_partial ||
 			newagg->aggstar != existingRef->aggstar ||
 			newagg->aggvariadic != existingRef->aggvariadic ||
 			newagg->aggkind != existingRef->aggkind ||

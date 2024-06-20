@@ -399,6 +399,35 @@ SELECT a, sum(b order by a) FROM pagg_tab GROUP BY a ORDER BY 1, 2;
                      ->  Seq Scan on pagg_tab_p3 pagg_tab_3
 (10 rows)
 
+-- PARTIAL_AGGREGATE tests
+-- Check partial aggregate over partitioned table
+explain (verbose, costs off)
+select avg(a) partial_aggregate, avg(a) from pagg_tab;
+                                          QUERY PLAN                                          
+----------------------------------------------------------------------------------------------
+ Finalize Aggregate
+   Output: avg(PARTIAL_AGGREGATE pagg_tab.a), avg(pagg_tab.a)
+   ->  Append
+         ->  Partial Aggregate
+               Output: PARTIAL avg(PARTIAL_AGGREGATE pagg_tab.a), PARTIAL avg(pagg_tab.a)
+               ->  Seq Scan on public.pagg_tab_p1 pagg_tab
+                     Output: pagg_tab.a
+         ->  Partial Aggregate
+               Output: PARTIAL avg(PARTIAL_AGGREGATE pagg_tab_1.a), PARTIAL avg(pagg_tab_1.a)
+               ->  Seq Scan on public.pagg_tab_p2 pagg_tab_1
+                     Output: pagg_tab_1.a
+         ->  Partial Aggregate
+               Output: PARTIAL avg(PARTIAL_AGGREGATE pagg_tab_2.a), PARTIAL avg(pagg_tab_2.a)
+               ->  Seq Scan on public.pagg_tab_p3 pagg_tab_2
+                     Output: pagg_tab_2.a
+(15 rows)
+
+select avg(a) partial_aggregate, avg(a) from pagg_tab;
+     avg      |        avg         
+--------------+--------------------
+ {3000,28500} | 9.5000000000000000
+(1 row)
+
 -- JOIN query
 CREATE TABLE pagg_tab1(x int, y int) PARTITION BY RANGE(x);
 CREATE TABLE pagg_tab1_p1 PARTITION OF pagg_tab1 FOR VALUES FROM (0) TO (10);

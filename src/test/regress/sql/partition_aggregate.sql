@@ -92,6 +92,11 @@ SELECT c, sum(b order by a) FROM pagg_tab GROUP BY c ORDER BY 1, 2;
 EXPLAIN (COSTS OFF)
 SELECT a, sum(b order by a) FROM pagg_tab GROUP BY a ORDER BY 1, 2;
 
+-- PARTIAL_AGGREGATE tests
+-- Check partial aggregate over partitioned table
+explain (verbose, costs off)
+select avg(a) partial_aggregate, avg(a) from pagg_tab;
+select avg(a) partial_aggregate, avg(a) from pagg_tab;
 
 -- JOIN query
 

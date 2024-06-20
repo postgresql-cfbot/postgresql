@@ -473,6 +473,9 @@ typedef struct Aggref
 	/* DISTINCT (list of SortGroupClause) */
 	List	   *aggdistinct;
 
+	/* true if there is PARTIAL_AGGREGATE keyword */
+	bool        agg_partial;
+
 	/* FILTER expression, if any */
 	Expr	   *aggfilter;
 

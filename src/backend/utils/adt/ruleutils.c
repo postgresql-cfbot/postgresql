@@ -10513,7 +10513,8 @@ get_agg_expr_helper(Aggref *aggref, deparse_context *context,
 
 	/* Print the aggregate name, schema-qualified if needed */
 	appendStringInfo(buf, "%s(%s", funcname,
-					 (aggref->aggdistinct != NIL) ? "DISTINCT " : "");
+					 (aggref->aggdistinct != NIL) ? "DISTINCT " :
+					 aggref->agg_partial ? "PARTIAL_AGGREGATE " : "");
 
 	if (AGGKIND_IS_ORDERED_SET(aggref->aggkind))
 	{

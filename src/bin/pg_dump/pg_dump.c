@@ -14046,6 +14046,15 @@ dumpAgg(Archive *fout, const AggInfo *agginfo)
 								 "'-' AS aggdeserialfn,\n"
 								 "'u' AS proparallel,\n");
 
+		if (fout->remoteVersion >= 180000)
+			appendPQExpBufferStr(query,
+								 "aggpartialpushdownsafe,\n"
+								 "aggpartialimportfn,\n");
+		else
+			appendPQExpBufferStr(query,
+								 "false AS aggpartialpushdownsafe,\n"
+								 "'-' AS aggpartialimportfn,\n");
+
 		if (fout->remoteVersion >= 110000)
 			appendPQExpBufferStr(query,
 								 "aggfinalmodify,\n"

@@ -84,7 +84,16 @@ typedef struct PgFdwRelationInfo
 	/* Cached catalog information. */
 	ForeignTable *table;
 	ForeignServer *server;
-	UserMapping *user;			/* only set in use_remote_estimate mode */
+	UserMapping *user;			/* only set in use_remote_estimate/partial_aggregate_support mode */
+
+	/* for partial aggregate pushdown */
+	bool		partial_aggregate_support;
+
+	/*
+	 * If remoteversion is zero, it means the remote server version has not
+	 * been acquired.
+	 */
+	int			remoteversion;
 
 	int			fetch_size;		/* fetch size for this remote table */
 
@@ -110,6 +119,7 @@ typedef struct PgFdwRelationInfo
 
 	/* Grouping information */
 	List	   *grouped_tlist;
+	List	   *group_clause;
 
 	/* Subquery information */
 	bool		make_outerrel_subquery; /* do we deparse outerrel as a

@@ -1076,9 +1076,11 @@ finalize_aggregate(AggState *aggstate,
 	}
 
 	/*
-	 * Apply the agg's finalfn if one is provided, else return transValue.
+	 * Apply the agg's finalfn if one is provided and PARTIAL_AGGREGATE
+	 * keyword is not specified, else return transValue.
 	 */
-	if (OidIsValid(peragg->finalfn_oid))
+	if (OidIsValid(peragg->finalfn_oid) &&
+		(peragg->aggref->agg_partial == false))
 	{
 		int			numFinalArgs = peragg->numFinalArgs;
 

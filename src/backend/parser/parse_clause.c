@@ -541,6 +541,7 @@ transformRangeFunction(ParseState *pstate, RangeFunction *r)
 				fc->over == NULL &&
 				!fc->agg_star &&
 				!fc->agg_distinct &&
+				!fc->agg_partial &&
 				!fc->func_variadic &&
 				coldeflist == NIL)
 			{

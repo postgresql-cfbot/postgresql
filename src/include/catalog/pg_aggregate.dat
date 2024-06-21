@@ -16,6 +16,8 @@
 { aggfnoid => 'avg(int8)', aggtransfn => 'int8_avg_accum',
   aggfinalfn => 'numeric_poly_avg', aggcombinefn => 'int8_avg_combine',
   aggserialfn => 'int8_avg_serialize', aggdeserialfn => 'int8_avg_deserialize',
+  aggpartialpushdownsafe => 't', aggpartialexportfn => 'int8_avg_export',
+  aggpartialimportfn => 'int8_avg_import',
   aggmtransfn => 'int8_avg_accum', aggminvtransfn => 'int8_avg_accum_inv',
   aggmfinalfn => 'numeric_poly_avg', aggtranstype => 'internal',
   aggtransspace => '48', aggmtranstype => 'internal', aggmtransspace => '48' },

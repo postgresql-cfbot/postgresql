@@ -3243,7 +3243,9 @@ SELECT
 	max(c_1c::char(1)), max('2000-01-01'::date + b), max('0.0.0.0'::inet + b), max(b::float4), max(b::float8), max(b::int2), max(b::int4), max(b::int8), max(c_interval), max(c_money), max(b::numeric), max(b::oid), max(c_pg_lsn), max(c_tid), max(c_1c), max(c_time), max(c_timetz), max(c_timestamp), max(c_timestamptz), max(c_xid8),
 	min(c_1c::char(1)), min('2000-01-01'::date + b), min('0.0.0.0'::inet + b), min(b::float4), min(b::float8), min(b::int2), min(b::int4), min(b::int8), min(c_interval), min(c_money), min(b::numeric), min(b::oid), min(c_pg_lsn), min(c_tid), min(c_1c), min(c_time), min(c_timetz), min(c_timestamp), min(c_timestamptz), min(c_xid8),
 	/* The cases that require only import functions */
-	avg(b::int4)
+	avg(b::int4),
+	/* The cases that don't require import or export functions */
+	avg(b::int8)
   FROM pagg_tab WHERE c_serial between 1 and 30;
 
 SELECT
@@ -3257,7 +3259,9 @@ SELECT
 	max(c_1c::char(1)), max('2000-01-01'::date + b), max('0.0.0.0'::inet + b), max(b::float4), max(b::float8), max(b::int2), max(b::int4), max(b::int8), max(c_interval), max(c_money), max(b::numeric), max(b::oid), max(c_pg_lsn), max(c_tid), max(c_1c), max(c_time), max(c_timetz), max(c_timestamp), max(c_timestamptz), max(c_xid8),
 	min(c_1c::char(1)), min('2000-01-01'::date + b), min('0.0.0.0'::inet + b), min(b::float4), min(b::float8), min(b::int2), min(b::int4), min(b::int8), min(c_interval), min(c_money), min(b::numeric), min(b::oid), min(c_pg_lsn), min(c_tid), min(c_1c), min(c_time), min(c_timetz), min(c_timestamp), min(c_timestamptz), min(c_xid8),
 	/* The cases that require only import functions */
-	avg(b::int4)
+	avg(b::int4),
+	/* The cases that don't require import or export functions */
+	avg(b::int8)
   FROM pagg_tab WHERE c_serial between 1 and 30;
 
 -- Tests for partial_aggregate_support

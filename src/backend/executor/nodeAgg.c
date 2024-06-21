@@ -1077,7 +1077,10 @@ finalize_aggregate(AggState *aggstate,
 
 	/*
 	 * Apply the agg's finalfn if one is provided and PARTIAL_AGGREGATE
-	 * keyword is not specified, else return transValue.
+	 * keyword is not specified.
+	 * If exportfn is provided and PARTIAL_AGGREGATE keyword is
+	 * specified, apply the agg's exportfn.
+	 * Otherwise return transValue.
 	 */
 	if (OidIsValid(peragg->finalfn_oid) &&
 		(peragg->aggref->agg_partial == false))
@@ -1107,6 +1110,40 @@ finalize_aggregate(AggState *aggstate,
 			fcinfo->args[i].isnull = true;
 			anynull = true;
 		}
+
+		if (fcinfo->flinfo->fn_strict && anynull)
+		{
+			/* don't call a strict function with NULL inputs */
+			*resultVal = (Datum) 0;
+			*resultIsNull = true;
+		}
+		else
+		{
+			Datum		result;
+
+			result = FunctionCallInvoke(fcinfo);
+			*resultIsNull = fcinfo->isnull;
+			*resultVal = MakeExpandedObjectReadOnly(result,
+													fcinfo->isnull,
+													peragg->resulttypeLen);
+		}
+		aggstate->curperagg = NULL;
+	}
+	else if (peragg->aggref->agg_partial && OidIsValid(peragg->exportfn_oid))
+	{
+		/* set up aggstate->curperagg for AggGetAggref() */
+		aggstate->curperagg = peragg;
+
+		InitFunctionCallInfoData(*fcinfo, &peragg->exportfn, 1,
+								 InvalidOid, (void *) aggstate, NULL);
+
+		/* Fill in the transition state value */
+		fcinfo->args[0].value =
+			MakeExpandedObjectReadOnly(pergroupstate->transValue,
+									   pergroupstate->transValueIsNull,
+									   pertrans->transtypeLen);
+		fcinfo->args[0].isnull = pergroupstate->transValueIsNull;
+		anynull |= pergroupstate->transValueIsNull;
 
 		if (fcinfo->flinfo->fn_strict && anynull)
 		{
@@ -3664,7 +3701,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 		Oid			serialfn_oid,
 					deserialfn_oid;
 		Oid			aggOwner;
-		Expr	   *finalfnexpr;
+		Expr	   *finalfnexpr, *serialfnexpr, *exportfnexpr;
 		Oid			aggtranstype;
 
 		/* Planner should have assigned aggregate to correct level */
@@ -3702,8 +3739,10 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 		Assert(OidIsValid(aggtranstype));
 
 		/* Final function only required if we're finalizing the aggregates */
-		if (DO_AGGSPLIT_SKIPFINAL(aggstate->aggsplit))
+		if (DO_AGGSPLIT_SKIPFINAL(aggstate->aggsplit)){
 			peragg->finalfn_oid = finalfn_oid = InvalidOid;
+			peragg->exportfn_oid = aggform->aggpartialexportfn;
+		}
 		else
 			peragg->finalfn_oid = finalfn_oid = aggform->aggfinalfn;
 
@@ -3820,6 +3859,42 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 										 &finalfnexpr);
 			fmgr_info(finalfn_oid, &peragg->finalfn);
 			fmgr_info_set_expr((Node *) finalfnexpr, &peragg->finalfn);
+		}
+		/*
+		 * build expression trees for the serialfn, if it exists and is required.
+		 */
+		if (OidIsValid(aggform->aggserialfn))
+		{
+			build_aggregate_serialfn_expr(aggform->aggserialfn,
+										 &serialfnexpr);
+			peragg->serialfn_oid = aggform->aggserialfn;
+			fmgr_info(aggform->aggserialfn, &peragg->serialfn);
+			fmgr_info_set_expr((Node *) serialfnexpr, &peragg->serialfn);
+		}
+		/*
+		 * build expression trees for the exportfn, if it exists and is required.
+		 */
+		if (OidIsValid(aggform->aggpartialexportfn) && peragg->aggref->agg_partial)
+		{
+			HeapTuple	procTuple;
+			Form_pg_proc procform;
+
+			procTuple = SearchSysCache1(PROCOID,
+										ObjectIdGetDatum(aggform->aggpartialexportfn));
+			if (!HeapTupleIsValid(procTuple))
+				elog(ERROR, "cache lookup failed for function %u",
+					 aggform->aggpartialexportfn);
+			procform = (Form_pg_proc) GETSTRUCT(procTuple);
+			ReleaseSysCache(procTuple);
+
+			build_aggregate_exportfn_expr(aggform->aggpartialexportfn,
+										 aggtranstype,
+										 procform->prorettype,
+										 aggref->inputcollid,
+										 &exportfnexpr);
+			peragg->exportfn_oid = aggform->aggpartialexportfn;
+			fmgr_info(aggform->aggpartialexportfn, &peragg->exportfn);
+			fmgr_info_set_expr((Node *) exportfnexpr, &peragg->exportfn);
 		}
 
 		/* get info about the output value's datatype */

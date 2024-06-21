@@ -4245,7 +4245,7 @@ partial_agg_ok(Aggref *agg, PgFdwRelationInfo *fpinfo)
 	aggform = (Form_pg_aggregate) GETSTRUCT(aggtup);
 
 	partial_agg_ok = aggform->aggpartialpushdownsafe && fpinfo->partial_aggregate_support;
-	if(aggform->aggtranstype == INTERNALOID ||
+	if(aggform->aggtranstype != INTERNALOID &&
 		get_typtype(aggform->aggtranstype) == TYPTYPE_PSEUDO)
 		partial_agg_ok = false;
 	if(partial_agg_ok){

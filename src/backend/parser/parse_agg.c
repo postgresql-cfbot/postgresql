@@ -227,6 +227,8 @@ transformAggregateCall(ParseState *pstate, Aggref *agg, List *args,
 	if(agg->agg_partial){
 		HeapTuple	aggtup;
 		Form_pg_aggregate aggform;
+		HeapTuple	proctup;
+		Form_pg_proc procform;
 
 		aggtup = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(agg->aggfnoid));
 		if (!HeapTupleIsValid(aggtup))
@@ -235,8 +237,21 @@ transformAggregateCall(ParseState *pstate, Aggref *agg, List *args,
 		if (!aggform->aggpartialpushdownsafe)
 			elog(ERROR, "partial aggregate is unsafe for aggregate %u",
 				agg->aggfnoid);
+		if (aggform->aggtranstype == INTERNALOID &&
+			aggform->aggpartialexportfn == InvalidOid)
+			elog(ERROR, "definition of aggregate %u is invalid",
+				agg->aggfnoid);
 		ReleaseSysCache(aggtup);
-		agg->aggtype = aggform->aggtranstype;
+		if(aggform->aggpartialexportfn != InvalidOid){
+			proctup = SearchSysCache1(PROCOID,
+				ObjectIdGetDatum(aggform->aggpartialexportfn));
+			if (!HeapTupleIsValid(proctup))
+				elog(ERROR, "cache lookup failed for export function %u",
+					aggform->aggpartialexportfn);
+			procform = (Form_pg_proc) GETSTRUCT(proctup);
+			agg->aggtype = procform->prorettype;
+		} else
+			agg->aggtype = aggform->aggtranstype;
 	}
 
 	/*
@@ -2179,6 +2194,32 @@ build_aggregate_finalfn_expr(Oid *agg_input_types,
 										 agg_input_collation,
 										 COERCE_EXPLICIT_CALL);
 	/* finalfn is currently never treated as variadic */
+}
+
+/*
+ * Like build_aggregate_transfn_expr, but creates an expression tree for the
+ * export function of an aggregate.
+ */
+void
+build_aggregate_exportfn_expr(Oid exportfn_oid,
+							  Oid agg_state_type,
+							  Oid agg_result_type,
+							  Oid agg_input_collation,
+							  Expr **exportfnexpr)
+{
+	List	   *args;
+	FuncExpr   *fexpr;
+
+	/* Build expr tree for export function */
+	args = list_make1(make_agg_arg(agg_state_type, agg_input_collation));
+
+	fexpr = makeFuncExpr(exportfn_oid,
+						 agg_result_type,
+						 args,
+						 InvalidOid,
+						 agg_input_collation,
+						 COERCE_EXPLICIT_CALL);
+	*exportfnexpr = (Expr *) fexpr;
 }
 
 /*

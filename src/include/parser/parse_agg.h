@@ -62,4 +62,10 @@ extern void build_aggregate_finalfn_expr(Oid *agg_input_types,
 										 Oid finalfn_oid,
 										 Expr **finalfnexpr);
 
+extern void build_aggregate_exportfn_expr(Oid exportfn_oid,
+										 Oid agg_state_type,
+										 Oid agg_result_type,
+										 Oid agg_input_collation,
+										 Expr **exportfnexpr);
+
 #endif							/* PARSE_AGG_H */

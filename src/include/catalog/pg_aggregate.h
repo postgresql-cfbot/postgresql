@@ -58,6 +58,10 @@ CATALOG(pg_aggregate,2600,AggregateRelationId)
 	/* true if partial aggregate is fine to push down */
 	bool		aggpartialpushdownsafe BKI_DEFAULT(f);
 
+	/* function to convert aggregate's transition (state) data from local
+	   format to standard format (0 if none). */
+	regproc		aggpartialexportfn BKI_DEFAULT(-) BKI_LOOKUP_OPT(pg_proc);
+
 	/* function to check validity of aggregate's transition (state)
 	   data and to convert it from standard format to local format (0 if none) */
 	regproc		aggpartialimportfn BKI_DEFAULT(-) BKI_LOOKUP_OPT(pg_proc);

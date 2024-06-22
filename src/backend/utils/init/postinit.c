@@ -544,15 +544,15 @@ InitializeMaxBackends(void)
 	Assert(MaxBackends == 0);
 
 	/* the extra unit accounts for the autovacuum launcher */
-	MaxBackends = MaxConnections + autovacuum_max_workers + 1 +
+	MaxBackends = MaxConnections + autovacuum_worker_slots + 1 +
 		max_worker_processes + max_wal_senders;
 
 	if (MaxBackends > MAX_BACKENDS)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("too many server processes configured"),
-				 errdetail("\"max_connections\" (%d) plus \"autovacuum_max_workers\" (%d) plus \"max_worker_processes\" (%d) plus \"max_wal_senders\" (%d) must be less than %d.",
-						   MaxConnections, autovacuum_max_workers,
+				 errdetail("\"max_connections\" (%d) plus \"autovacuum_worker_slots\" (%d) plus \"max_worker_processes\" (%d) plus \"max_wal_senders\" (%d) must be less than %d.",
+						   MaxConnections, autovacuum_worker_slots,
 						   max_worker_processes, max_wal_senders,
 						   MAX_BACKENDS)));
 }

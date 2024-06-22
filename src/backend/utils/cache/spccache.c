@@ -149,7 +149,8 @@ get_tablespace(Oid spcid)
 			opts = NULL;
 		else
 		{
-			bytea	   *bytea_opts = tablespace_reloptions(datum, false);
+			bytea	   *bytea_opts = optionsTextArrayToBytea(
+															 get_tablespace_options_spec_set(), datum, 0);
 
 			opts = MemoryContextAlloc(CacheMemoryContext, VARSIZE(bytea_opts));
 			memcpy(opts, bytea_opts, VARSIZE(bytea_opts));

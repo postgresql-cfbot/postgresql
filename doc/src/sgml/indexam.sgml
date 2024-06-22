@@ -480,27 +480,12 @@ amcostestimate (PlannerInfo *root,
 
   <para>
 <programlisting>
-bytea *
-amoptions (ArrayType *reloptions,
-           bool validate);
+void *
+amreloptspecset(void);
 </programlisting>
-   Parse and validate the reloptions array for an index.  This is called only
-   when a non-null reloptions array exists for the index.
-   <parameter>reloptions</parameter> is a <type>text</type> array containing entries of the
-   form <replaceable>name</replaceable><literal>=</literal><replaceable>value</replaceable>.
-   The function should construct a <type>bytea</type> value, which will be copied
-   into the <structfield>rd_options</structfield> field of the index's relcache entry.
-   The data contents of the <type>bytea</type> value are open for the access
-   method to define; most of the standard access methods use struct
-   <structname>StdRdOptions</structname>.
-   When <parameter>validate</parameter> is true, the function should report a suitable
-   error message if any of the options are unrecognized or have invalid
-   values; when <parameter>validate</parameter> is false, invalid entries should be
-   silently ignored.  (<parameter>validate</parameter> is false when loading options
-   already stored in <structname>pg_catalog</structname>; an invalid entry could only
-   be found if the access method has changed its rules for options, and in
-   that case ignoring obsolete entries is appropriate.)
-   It is OK to return NULL if default behavior is wanted.
+   Returns pointer to Options Spec Set that defines options available for an
+   index relation. This Spec Set will be used for parsing and validating index
+   relation options.
   </para>
 
   <para>

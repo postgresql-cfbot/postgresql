@@ -13,7 +13,15 @@
 #include "storage/itemptr.h"
 #include "utils/sortsupport.h"
 
-/* XXX do we still need all the fields now that we use SortSupport? */
+/*
+ * Each worker sees tuples in CTID order, so if we track the first TID and
+ * compare that when combining results in the worker, we would not need to
+ * do an expensive sort in workers (the mergesort is already smart about
+ * detecting this and just concatenating the lists). We'd still need the
+ * full mergesort in the leader, but that's much cheaper.
+ *
+ * XXX do we still need all the fields now that we use SortSupport?
+ */
 typedef struct GinTuple
 {
 	Size		tuplen;			/* length of the whole tuple */
@@ -22,6 +30,7 @@ typedef struct GinTuple
 	bool		typbyval;		/* typbyval for key */
 	OffsetNumber attrnum;		/* attnum of index key */
 	signed char category;		/* category: normal or NULL? */
+	ItemPointerData first;		/* first TID in the array */
 	int			nitems;			/* number of TIDs in the data */
 	char		data[FLEXIBLE_ARRAY_MEMBER];
 } GinTuple;

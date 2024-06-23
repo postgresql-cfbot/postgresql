@@ -162,6 +162,14 @@ typedef struct
 	 * build callback etc.
 	 */
 	Tuplesortstate *bs_sortstate;
+
+	/*
+	 * The sortstate used only within a single worker for the first merge pass
+	 * happenning there. In principle it doesn't need to be part of the build
+	 * state and we could pass it around directly, but it's more convenient
+	 * this way. And it's part of the build state, after all.
+	 */
+	Tuplesortstate *bs_worker_sort;
 } GinBuildState;
 
 
@@ -472,23 +480,23 @@ ginBuildCallback(Relation index, ItemPointer tid, Datum *values,
  * except that instead of writing the accumulated entries into the index,
  * we write them into a tuplesort that is then processed by the leader.
  *
- * XXX Instead of writing the entries directly into the shared tuplesort,
- * we might write them into a local one, do a sort in the worker, combine
+ * Instead of writing the entries directly into the shared tuplesort, write
+ * them into a local one (in each worker), do a sort in the worker, combine
  * the results, and only then write the results into the shared tuplesort.
  * For large tables with many different keys that's going to work better
  * than the current approach where we don't get many matches in work_mem
  * (maybe this should use 32MB, which is what we use when planning, but
- * even that may not be sufficient). Which means we are likely to have
- * many entries with a small number of TIDs, forcing the leader to merge
- * the data, often amounting to ~50% of the serial part. By doing the
- * first sort workers, the leader then could do fewer merges with longer
- * TID lists, which is much cheaper. Also, the amount of data sent from
- * workers to the leader woiuld be lower.
+ * even that may not be sufficient). Which means we would end up with many
+ * entries with a small number of TIDs, forcing the leader to merge the data,
+ * often amounting to ~50% of the serial part. By doing the first sort in
+ * workers, this work is parallelized and the leader does fewer merges with
+ * longer TID lists, which is much cheaper and more efficient. Also, the
+ * amount of data sent from workers to the leader gets be lower.
  *
  * The disadvantage is increased disk space usage, possibly up to 2x, if
  * no entries get combined at the worker level.
  *
- * It would be possible to partition the data into multiple tuplesorts
+ * XXX It would be possible to partition the data into multiple tuplesorts
  * per worker (by hashing) - we don't need the data produced by workers
  * to be perfectly sorted, and we could even live with multiple entries
  * for the same key (in case it has multiple binary representations with
@@ -548,7 +556,7 @@ ginBuildCallbackParallel(Relation index, ItemPointer tid, Datum *values,
 								   key, attr->attlen, attr->attbyval,
 								   list, nlist, &tuplen);
 
-			tuplesort_putgintuple(buildstate->bs_sortstate, tup, tuplen);
+			tuplesort_putgintuple(buildstate->bs_worker_sort, tup, tuplen);
 
 			pfree(tup);
 		}
@@ -1146,7 +1154,6 @@ typedef struct GinBuffer
 
 	/* array of TID values */
 	int			nitems;
-	int			maxitems;
 	SortSupport ssup;			/* for sorting/comparing keys */
 	ItemPointerData *items;
 } GinBuffer;
@@ -1176,8 +1183,6 @@ static void
 AssertCheckGinBuffer(GinBuffer *buffer)
 {
 #ifdef USE_ASSERT_CHECKING
-	Assert(buffer->nitems <= buffer->maxitems);
-
 	/* if we have any items, the array must exist */
 	Assert(!((buffer->nitems > 0) && (buffer->items == NULL)));
 
@@ -1299,11 +1304,7 @@ GinBufferKeyEquals(GinBuffer *buffer, GinTuple *tup)
  * to the array, without sorting.
  *
  * XXX We expect the tuples to contain sorted TID lists, so maybe we should
- * check that's true with an assert. And we could also check if the values
- * are already in sorted order, in which case we can skip the sort later.
- * But it seems like a waste of time, because it won't be unnecessary after
- * switching to mergesort in a later patch, and also because it's reasonable
- * to expect the arrays to overlap.
+ * check that's true with an assert.
  */
 static void
 GinBufferStoreTuple(GinBuffer *buffer, GinTuple *tup)
@@ -1331,28 +1332,22 @@ GinBufferStoreTuple(GinBuffer *buffer, GinTuple *tup)
 			buffer->key = (Datum) 0;
 	}
 
-	/* enlarge the TID buffer, if needed */
-	if (buffer->nitems + tup->nitems > buffer->maxitems)
+	/* add the new TIDs into the buffer, combine using merge-sort */
 	{
-		/* 64 seems like a good init value */
-		buffer->maxitems = Max(buffer->maxitems, 64);
+		int			nnew;
+		ItemPointer new;
 
-		while (buffer->nitems + tup->nitems > buffer->maxitems)
-			buffer->maxitems *= 2;
+		new = ginMergeItemPointers(buffer->items, buffer->nitems,
+								   items, tup->nitems, &nnew);
 
-		if (buffer->items == NULL)
-			buffer->items = palloc(buffer->maxitems * sizeof(ItemPointerData));
-		else
-			buffer->items = repalloc(buffer->items,
-									 buffer->maxitems * sizeof(ItemPointerData));
+		Assert(nnew == buffer->nitems + tup->nitems);
+
+		if (buffer->items)
+			pfree(buffer->items);
+
+		buffer->items = new;
+		buffer->nitems = nnew;
 	}
-
-	/* now we should be guaranteed to have enough space for all the TIDs */
-	Assert(buffer->nitems + tup->nitems <= buffer->maxitems);
-
-	/* copy the new TIDs into the buffer */
-	memcpy(&buffer->items[buffer->nitems], items, sizeof(ItemPointerData) * tup->nitems);
-	buffer->nitems += tup->nitems;
 
 	/* we simply append the TID values, so don't check sorting */
 	AssertCheckItemPointers(buffer->items, buffer->nitems, false);
@@ -1414,6 +1409,24 @@ GinBufferReset(GinBuffer *buffer)
 
 	buffer->typlen = 0;
 	buffer->typbyval = 0;
+}
+
+/*
+ * GinBufferFree
+ *		Release memory associated with the GinBuffer (including TID array).
+ */
+static void
+GinBufferFree(GinBuffer *buffer)
+{
+	if (buffer->items)
+		pfree(buffer->items);
+
+	/* release byref values, do nothing for by-val ones */
+	if (!GinBufferIsEmpty(buffer) &&
+		(buffer->category == GIN_CAT_NORM_KEY) && !buffer->typbyval)
+		pfree(DatumGetPointer(buffer->key));
+
+	pfree(buffer);
 }
 
 /*
@@ -1497,7 +1510,7 @@ _gin_parallel_merge(GinBuildState *state)
 			 * the data into the insert, and start a new entry for current
 			 * GinTuple.
 			 */
-			GinBufferSortItems(buffer);
+			AssertCheckItemPointers(buffer->items, buffer->nitems, true);
 
 			ginEntryInsert(&state->ginstate,
 						   buffer->attnum, buffer->key, buffer->category,
@@ -1514,7 +1527,7 @@ _gin_parallel_merge(GinBuildState *state)
 	/* flush data remaining in the buffer (for the last key) */
 	if (!GinBufferIsEmpty(buffer))
 	{
-		GinBufferSortItems(buffer);
+		AssertCheckItemPointers(buffer->items, buffer->nitems, true);
 
 		ginEntryInsert(&state->ginstate,
 					   buffer->attnum, buffer->key, buffer->category,
@@ -1523,6 +1536,9 @@ _gin_parallel_merge(GinBuildState *state)
 		/* discard the existing data */
 		GinBufferReset(buffer);
 	}
+
+	/* relase all the memory */
+	GinBufferFree(buffer);
 
 	tuplesort_end(state->bs_sortstate);
 
@@ -1563,6 +1579,102 @@ _gin_leader_participate_as_worker(GinBuildState *buildstate, Relation heap, Rela
 }
 
 /*
+ * _gin_process_worker_data
+ *		First phase of the key merging, happening in the worker.
+ *
+ * Depending on the number of distinct keys, the TID lists produced by the
+ * callback may be very short (due to frequent evictions in the callback).
+ * But combining many tiny lists is expensive, so we try to do as much as
+ * possible in the workers and only then pass the results to the leader.
+ *
+ * We read the tuples sorted by the key, and merge them into larger lists.
+ * At the moment there's no memory limit, so this will just produce one
+ * huge (sorted) list per key in each worker. Which means the leader will
+ * do a very limited number of mergesorts, which is good.
+ */
+static void
+_gin_process_worker_data(GinBuildState *state, Tuplesortstate *worker_sort)
+{
+	GinTuple   *tup;
+	Size		tuplen;
+
+	GinBuffer  *buffer;
+
+	/* initialize buffer to combine entries for the same key */
+	buffer = GinBufferInit(state->ginstate.index);
+
+	/* sort the raw per-worker data */
+	tuplesort_performsort(state->bs_worker_sort);
+
+	/*
+	 * Read the GIN tuples from the shared tuplesort, sorted by the key, and
+	 * merge them into larger chunks for the leader to combine.
+	 */
+	while ((tup = tuplesort_getgintuple(worker_sort, &tuplen, true)) != NULL)
+	{
+
+		CHECK_FOR_INTERRUPTS();
+
+		/*
+		 * If the buffer can accept the new GIN tuple, just store it there and
+		 * we're done. If it's a different key (or maybe too much data) flush
+		 * the current contents into the index first.
+		 */
+		if (!GinBufferCanAddKey(buffer, tup))
+		{
+			GinTuple   *ntup;
+			Size		ntuplen;
+
+			/*
+			 * Buffer is not empty and it's storing a different key - flush
+			 * the data into the insert, and start a new entry for current
+			 * GinTuple.
+			 */
+			GinBufferSortItems(buffer);
+
+			ntup = _gin_build_tuple(buffer->attnum, buffer->category,
+									buffer->key, buffer->typlen, buffer->typbyval,
+									buffer->items, buffer->nitems, &ntuplen);
+
+			tuplesort_putgintuple(state->bs_sortstate, ntup, ntuplen);
+
+			pfree(ntup);
+
+			/* discard the existing data */
+			GinBufferReset(buffer);
+		}
+
+		/* now remember the new key */
+		GinBufferStoreTuple(buffer, tup);
+	}
+
+	/* flush data remaining in the buffer (for the last key) */
+	if (!GinBufferIsEmpty(buffer))
+	{
+		GinTuple   *ntup;
+		Size		ntuplen;
+
+		GinBufferSortItems(buffer);
+
+		ntup = _gin_build_tuple(buffer->attnum, buffer->category,
+								buffer->key, buffer->typlen, buffer->typbyval,
+								buffer->items, buffer->nitems, &ntuplen);
+
+		tuplesort_putgintuple(state->bs_sortstate, ntup, ntuplen);
+
+		pfree(ntup);
+
+		/* discard the existing data */
+		GinBufferReset(buffer);
+	}
+
+	/* relase all the memory */
+	GinBufferFree(buffer);
+
+	tuplesort_end(worker_sort);
+}
+
+/*
  * Perform a worker's portion of a parallel sort.
  *
  * This generates a tuplesort for the worker portion of the table.
@@ -1593,6 +1705,11 @@ _gin_parallel_scan_and_build(GinBuildState *state,
 	state->bs_sortstate = tuplesort_begin_index_gin(heap, index,
 													sortmem, coordinate,
 													TUPLESORT_NONE);
+
+	/* Local per-worker sort of raw-data */
+	state->bs_worker_sort = tuplesort_begin_index_gin(heap, index,
+													  sortmem, NULL,
+													  TUPLESORT_NONE);
 
 	/* Join parallel scan */
 	indexInfo = BuildIndexInfo(index);
@@ -1630,7 +1747,7 @@ _gin_parallel_scan_and_build(GinBuildState *state,
 								   key, attr->attlen, attr->attbyval,
 								   list, nlist, &len);
 
-			tuplesort_putgintuple(state->bs_sortstate, tup, len);
+			tuplesort_putgintuple(state->bs_worker_sort, tup, len);
 
 			pfree(tup);
 		}
@@ -1638,6 +1755,13 @@ _gin_parallel_scan_and_build(GinBuildState *state,
 		MemoryContextReset(state->tmpCtx);
 		ginInitBA(&state->accum);
 	}
+
+	/*
+	 * Do the first phase of in-worker processing - sort the data produced by
+	 * the callback, and combine them into much larger chunks and place that
+	 * into the shared tuplestore for leader to process.
+	 */
+	_gin_process_worker_data(state, state->bs_worker_sort);
 
 	/* sort the GIN tuples built by this worker */
 	tuplesort_performsort(state->bs_sortstate);

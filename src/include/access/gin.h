@@ -51,6 +51,7 @@ typedef struct GinStatsData
 	int32		ginVersion;
 	Size		sizeRaw;
 	Size		sizeCompressed;
+	int64		nTrims;
 } GinStatsData;
 
 /*

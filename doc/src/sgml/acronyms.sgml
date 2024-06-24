@@ -10,6 +10,23 @@
   <variablelist>
 
    <varlistentry>
+    <term><acronym>ACL</acronym></term>
+    <listitem>
+     <para>
+      <ulink url="https://en.wikipedia.org/wiki/Access-control_list">Access Control List</ulink>
+     </para>
+     <para>
+      The <productname>PostgreSQL</productname> documentation, and code, refers
+      to the specifications within the ACL as "privileges".  This has the same
+      meaning as "permissions" on the linked page.  Generally if we say
+      "permissions" we are referring to something that is not covered by the
+      ACL.  In routine communication the two words are often used
+      interchangeably.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><acronym>AM</acronym></term>
     <listitem>
      <para>

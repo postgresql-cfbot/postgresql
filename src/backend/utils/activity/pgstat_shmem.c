@@ -246,6 +246,13 @@ pgstat_detach_shmem(void)
 	pgStatLocal.shared_hash = NULL;
 
 	dsa_detach(pgStatLocal.dsa);
+
+	/*
+	 * Detach doesn't decrement dsa's refcnt and since no segment was provided
+	 * when attaching to the dsa, no cleanup callbacks are registered. We need
+	 * to manually release dsa to correctly decrement dsa's refcnt
+	 */
+	dsa_release_in_place(pgStatLocal.shmem->raw_dsa_area);
 	pgStatLocal.dsa = NULL;
 }
 

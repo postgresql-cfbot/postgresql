@@ -5150,22 +5150,33 @@ enable_statement_timeout(void)
 	if (StatementTimeout > 0
 		&& (StatementTimeout < TransactionTimeout || TransactionTimeout == 0))
 	{
-		if (!get_timeout_active(STATEMENT_TIMEOUT))
+		/*
+		 * We check both if it's active or if it's already triggered. If it's
+		 * already triggered we don't want to restart it because that clears
+		 * the indicator flag, which in turn would cause the wrong error
+		 * message to be used by ProcessInterrupts() on the next
+		 * CHECK_FOR_INTERRUPTS() call. Restarting the timer in that case
+		 * would be pointless anyway, because the statement timeout error is
+		 * going to trigger on the next CHECK_FOR_INTERRUPTS() call.
+		 */
+		if (!get_timeout_active(STATEMENT_TIMEOUT)
+			&& !get_timeout_indicator(STATEMENT_TIMEOUT, false))
 			enable_timeout_after(STATEMENT_TIMEOUT, StatementTimeout);
 	}
 	else
 	{
-		if (get_timeout_active(STATEMENT_TIMEOUT))
-			disable_timeout(STATEMENT_TIMEOUT, false);
+		disable_statement_timeout();
 	}
 }
 
 /*
- * Disable statement timeout, if active.
+ * Disable statement timeout, if active. We preserve the indicator flag
+ * though, otherwise we'd lose the knowledge in ProcessInterupts that the
+ * SIGINT came from a statement timeout.
  */
 static void
 disable_statement_timeout(void)
 {
 	if (get_timeout_active(STATEMENT_TIMEOUT))
-		disable_timeout(STATEMENT_TIMEOUT, false);
+		disable_timeout(STATEMENT_TIMEOUT, true);
 }

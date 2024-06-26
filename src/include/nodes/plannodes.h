@@ -169,6 +169,11 @@ typedef struct Plan
 	 */
 	Bitmapset  *extParam;
 	Bitmapset  *allParam;
+
+	/* info about applied statistics */
+	List	   *applied_stats;
+	List	   *applied_clauses;
+	List	   *applied_clauses_or;
 } Plan;
 
 /* ----------------

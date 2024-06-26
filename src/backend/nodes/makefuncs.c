@@ -733,6 +733,17 @@ make_ands_explicit(List *andclauses)
 		return make_andclause(andclauses);
 }
 
+Expr *
+make_ors_explicit(List *orclauses)
+{
+	if (orclauses == NIL)
+		return (Expr *) makeBoolConst(true, false);
+	else if (list_length(orclauses) == 1)
+		return (Expr *) linitial(orclauses);
+	else
+		return make_orclause(orclauses);
+}
+
 List *
 make_ands_implicit(Expr *clause)
 {

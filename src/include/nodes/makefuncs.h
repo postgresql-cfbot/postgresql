@@ -94,6 +94,8 @@ extern Node *make_and_qual(Node *qual1, Node *qual2);
 extern Expr *make_ands_explicit(List *andclauses);
 extern List *make_ands_implicit(Expr *clause);
 
+extern Expr *make_ors_explicit(List *orclauses);
+
 extern IndexInfo *makeIndexInfo(int numattrs, int numkeyattrs, Oid amoid,
 								List *expressions, List *predicates,
 								bool unique, bool nulls_not_distinct,

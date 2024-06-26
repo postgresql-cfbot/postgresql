@@ -238,6 +238,9 @@ typedef struct Query
 	ParseLoc	stmt_location;
 	/* length in bytes; 0 means "rest of string" */
 	ParseLoc	stmt_len pg_node_attr(query_jumble_ignore);
+
+	/* if true, query is explain with stats option */
+	bool        isExplain_Stats;
 } Query;
 
 

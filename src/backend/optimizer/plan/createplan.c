@@ -5408,12 +5408,27 @@ order_qual_clauses(PlannerInfo *root, List *clauses)
 static void
 copy_generic_path_info(Plan *dest, Path *src)
 {
+	ListCell *lc;
+
 	dest->startup_cost = src->startup_cost;
 	dest->total_cost = src->total_cost;
 	dest->plan_rows = src->rows;
 	dest->plan_width = src->pathtarget->width;
 	dest->parallel_aware = src->parallel_aware;
 	dest->parallel_safe = src->parallel_safe;
+
+	dest->applied_stats = src->parent->applied_stats;
+	dest->applied_clauses_or = src->parent->applied_clauses_or;
+
+	dest->applied_clauses = NIL;
+	foreach (lc, src->parent->applied_clauses)
+	{
+		List *clauses = (List *) lfirst(lc);
+
+		dest->applied_clauses
+			= lappend(dest->applied_clauses,
+					  maybe_extract_actual_clauses(clauses, false));
+	}
 }
 
 /*

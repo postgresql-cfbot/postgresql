@@ -575,6 +575,7 @@
 					# their durations, > 0 logs only
 					# actions running at least this number
 					# of milliseconds.
+#log_backtrace = 'none'
 #log_checkpoints = on
 #log_connections = off
 #log_disconnections = off

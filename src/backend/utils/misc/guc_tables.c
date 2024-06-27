@@ -154,6 +154,23 @@ static const struct config_enum_entry server_message_level_options[] = {
 	{NULL, 0, false}
 };
 
+static const struct config_enum_entry backtrace_level_options[] = {
+	{"debug5", DEBUG5, false},
+	{"debug4", DEBUG4, false},
+	{"debug3", DEBUG3, false},
+	{"debug2", DEBUG2, false},
+	{"debug1", DEBUG1, false},
+	{"debug", DEBUG2, true},
+	{"log", LOG, false},
+	{"info", INFO, true},
+	{"notice", NOTICE, false},
+	{"warning", WARNING, false},
+	{"error", ERROR, false},
+	{"fatal", FATAL, false},
+	{"panic", PANIC, false},
+	{NULL, 0, false}
+};
+
 static const struct config_enum_entry intervalstyle_options[] = {
 	{"postgres", INTSTYLE_POSTGRES, false},
 	{"postgres_verbose", INTSTYLE_POSTGRES_VERBOSE, false},
@@ -189,6 +206,16 @@ static const struct config_enum_entry log_error_verbosity_options[] = {
 };
 
 StaticAssertDecl(lengthof(log_error_verbosity_options) == (PGERROR_VERBOSE + 2),
+				 "array length mismatch");
+
+static const struct config_enum_entry log_backtrace_options[] = {
+	{"none", LOGBACKTRACE_NONE, false},
+	{"internal_error", LOGBACKTRACE_INTERNAL_ERROR, false},
+	{"all", LOGBACKTRACE_ALL, false},
+	{NULL, 0, false}
+};
+
+StaticAssertDecl(lengthof(log_backtrace_options) == (LOGBACKTRACE_ALL + 2),
 				 "array length mismatch");
 
 static const struct config_enum_entry log_statement_options[] = {
@@ -529,6 +556,7 @@ int			log_temp_files = -1;
 double		log_statement_sample_rate = 1.0;
 double		log_xact_sample_rate = 0;
 char	   *backtrace_functions;
+int			backtrace_min_level = ERROR;
 
 int			temp_file_limit = -1;
 
@@ -4803,6 +4831,18 @@ struct config_enum ConfigureNamesEnum[] =
 	},
 
 	{
+		{"backtrace_min_level", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Sets the message levels that create backtraces when log_backtrace is configured."),
+			gettext_noop("Each level includes all the levels that follow it. The later"
+						 " the level, the fewer backtraces are created."),
+			GUC_NOT_IN_SAMPLE
+		},
+		&backtrace_min_level,
+		ERROR, backtrace_level_options,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"bytea_output", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Sets the output format for bytea."),
 			NULL
@@ -4895,6 +4935,16 @@ struct config_enum ConfigureNamesEnum[] =
 		},
 		&icu_validation_level,
 		WARNING, icu_validation_level_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"log_backtrace", PGC_SUSET, LOGGING_WHAT,
+			gettext_noop("Sets if logs should include a backtrace."),
+			NULL
+		},
+		&log_backtrace,
+		LOGBACKTRACE_NONE, log_backtrace_options,
 		NULL, NULL, NULL
 	},
 

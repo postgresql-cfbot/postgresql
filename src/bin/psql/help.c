@@ -249,6 +249,7 @@ slashUsage(unsigned short int pager)
 	HELP0("  \\dFp[+] [PATTERN]      list text search parsers\n");
 	HELP0("  \\dFt[+] [PATTERN]      list text search templates\n");
 	HELP0("  \\dg[S+] [PATTERN]      list roles\n");
+	HELP0("  \\dG[S+] [PATTERN]      list property graphs");
 	HELP0("  \\di[S+] [PATTERN]      list indexes\n");
 	HELP0("  \\dl[+]                 list large objects, same as \\lo_list\n");
 	HELP0("  \\dL[S+] [PATTERN]      list procedural languages\n");

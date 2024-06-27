@@ -4170,3 +4170,24 @@ yyscan_t
 z_stream
 z_streamp
 zic_t
+
+# TODO
+AlterPropGraphElementKind
+AlterPropGraphStmt
+CreatePropGraphStmt
+FormData_pg_propgraph_element
+FormData_pg_propgraph_element_label
+FormData_pg_propgraph_label
+FormData_pg_propgraph_label_property
+FormData_pg_propgraph_property
+GraphElementPattern
+GraphElementPatternKind
+GraphLabelRef
+GraphPattern
+GraphPropertyRef
+GraphTableParseState
+PropGraphEdge
+PropGraphLabelAndProperties
+PropGraphProperties
+PropGraphVertex
+RangeGraphTable

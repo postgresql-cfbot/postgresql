@@ -67,7 +67,8 @@ my %replace_string = (
 	'EQUALS_GREATER' => '=>',
 	'LESS_EQUALS' => '<=',
 	'GREATER_EQUALS' => '>=',
-	'NOT_EQUALS' => '<>',);
+	'NOT_EQUALS' => '<>',
+	'RIGHT_ARROW' => '->',);
 
 # specific replace_types for specific non-terminals - never include the ':'
 # ECPG-only replace_types are defined in ecpg-replace_types
@@ -186,9 +187,9 @@ sub main
 
 		my $prec = 0;
 
-		# Make sure any braces are split
-		s/{/ { /g;
-		s/}/ } /g;
+		# Make sure any (unquoted) braces are split
+		s/(?<!')\{(?!')/ { /g;
+		s/(?<!')\}(?!')/ } /g;
 
 		# Any comments are split
 		s|\/\*| /* |g;

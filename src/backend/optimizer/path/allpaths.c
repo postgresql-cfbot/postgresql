@@ -728,6 +728,10 @@ set_rel_consider_parallel(PlannerInfo *root, RelOptInfo *rel,
 			 */
 			return;
 
+		case RTE_GRAPH_TABLE:
+			/* shouldn't happen here */
+			break;
+
 		case RTE_RESULT:
 			/* RESULT RTEs, in themselves, are no problem. */
 			break;

@@ -2912,6 +2912,17 @@ my %tests = (
 		},
 	},
 
+	'CREATE PROPERTY GRAPH propgraph' => {
+		create_order => 20,
+		create_sql   => 'CREATE PROPERTY GRAPH dump_test.propgraph;',
+		regexp => qr/^
+			\QCREATE PROPERTY GRAPH dump_test.propgraph\E;
+			/xm,
+		like =>
+		  { %full_runs, %dump_test_schema_runs, section_pre_data => 1, },
+		unlike => { exclude_dump_test_schema => 1, only_dump_measurement => 1, },
+	},
+
 	'CREATE PUBLICATION pub1' => {
 		create_order => 50,
 		create_sql => 'CREATE PUBLICATION pub1;',

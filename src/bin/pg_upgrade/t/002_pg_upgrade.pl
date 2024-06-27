@@ -13,6 +13,7 @@ use File::Path qw(rmtree);
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use PostgreSQL::Test::AdjustUpgrade;
+use PostgreSQL::Test::AdjustDump;
 use Test::More;
 
 # Can be changed to test the other modes.
@@ -36,9 +37,9 @@ sub generate_db
 		"created database with ASCII characters from $from_char to $to_char");
 }
 
-# Filter the contents of a dump before its use in a content comparison.
-# This returns the path to the filtered dump.
-sub filter_dump
+# Filter the contents of a dump before its use in a content comparison for
+# upgrade testing. This returns the path to the filtered dump.
+sub filter_dump_for_upgrade
 {
 	my ($is_old, $old_version, $dump_file) = @_;
 	my $dump_contents = slurp_file($dump_file);
@@ -59,6 +60,44 @@ sub filter_dump
 	close($dh);
 
 	return $dump_file_filtered;
+}
+
+# Test that the given two files match.  The files usually contain pg_dump
+# output in "plain" format. Output the difference if any.
+sub compare_dumps
+{
+	my ($dump1, $dump2, $testname) = @_;
+
+	my $compare_res = compare($dump1, $dump2);
+	is($compare_res, 0, $testname);
+
+	# Provide more context if the dumps do not match.
+	if ($compare_res != 0)
+	{
+		my ($stdout, $stderr) =
+		  run_command([ 'diff', '-u', $dump1, $dump2 ]);
+		print "=== diff of $dump1 and $dump2\n";
+		print "=== stdout ===\n";
+		print $stdout;
+		print "=== stderr ===\n";
+		print $stderr;
+		print "=== EOF ===\n";
+	}
+}
+
+# Adjust the contents of a dump before its use in a content comparison for dump
+# and restore testing. This returns the path to the adjusted dump.
+sub adjust_dump_for_restore
+{
+	my ($dump_file, $is_original) = @_;
+	my $dump_adjusted = "${dump_file}_adjusted";
+
+	open(my $dh, '>', $dump_adjusted)
+	  || die "opening $dump_adjusted ";
+	print $dh adjust_regress_dumpfile(slurp_file($dump_file), $is_original);
+	close($dh);
+
+	return $dump_adjusted;
 }
 
 # The test of pg_upgrade requires two clusters, an old one and a new one
@@ -258,6 +297,12 @@ else
 		}
 	}
 	is($rc, 0, 'regression tests pass');
+
+	# Test dump/restore of the objects left behind by regression. Ideally it
+	# should be done in a separate test, but doing it here saves us one full
+	# regression run. Do this while the old cluster remains usable before
+	# upgrading it.
+	test_regression_dump_restore($oldnode, %node_params);
 }
 
 # Initialize a new node for the upgrade.
@@ -502,24 +547,116 @@ push(@dump_command, '--extra-float-digits', '0')
 $newnode->command_ok(\@dump_command, 'dump after running pg_upgrade');
 
 # Filter the contents of the dumps.
-my $dump1_filtered = filter_dump(1, $oldnode->pg_version, $dump1_file);
-my $dump2_filtered = filter_dump(0, $oldnode->pg_version, $dump2_file);
+my $dump1_filtered =
+  filter_dump_for_upgrade(1, $oldnode->pg_version, $dump1_file);
+my $dump2_filtered =
+  filter_dump_for_upgrade(0, $oldnode->pg_version, $dump2_file);
 
 # Compare the two dumps, there should be no differences.
-my $compare_res = compare($dump1_filtered, $dump2_filtered);
-is($compare_res, 0, 'old and new dumps match after pg_upgrade');
+compare_dumps($dump1_filtered, $dump2_filtered,
+	'old and new dumps match after pg_upgrade');
 
-# Provide more context if the dumps do not match.
-if ($compare_res != 0)
+# Test dump and restore of objects left behind regression run.
+#
+# It is expected that regression tests, which create `regression` database, are
+# run on `src_node`, which in turn is left in running state. The dump is
+# restored on a fresh node created using given `node_params`. Plain dumps from
+# both the nodes are compared to make sure that all the dumped objects are
+# restored faithfully.
+sub test_regression_dump_restore
 {
-	my ($stdout, $stderr) =
-	  run_command([ 'diff', '-u', $dump1_filtered, $dump2_filtered ]);
-	print "=== diff of $dump1_filtered and $dump2_filtered\n";
-	print "=== stdout ===\n";
-	print $stdout;
-	print "=== stderr ===\n";
-	print $stderr;
-	print "=== EOF ===\n";
+	my ($src_node, %node_params) = @_;
+	my $dst_node = PostgreSQL::Test::Cluster->new('dst_node');
+
+	# Dump the original database in "plain" format for comparison later. The
+	# order of columns in COPY statements dumped from the original database and
+	# that from the restored database differs. These differences are hard to
+	# adjust. Hence we compare only schema dumps for now.
+	my $src_dump_file = "$tempdir/src_dump.sql";
+	command_ok(
+		[
+			'pg_dump', '-s',
+			'--no-sync', '-d',
+			$src_node->connstr('regression'), '-f',
+			$src_dump_file
+		],
+		'pg_dump on original instance');
+	my $src_adjusted_dump = adjust_dump_for_restore($src_dump_file, 1);
+
+	# Setup destination database
+	$dst_node->init(%node_params);
+	$dst_node->start;
+
+	# Testing all dump formats takes longer. Do it only when explicitly
+	# requested.
+	my @formats;
+	if (   $ENV{PG_TEST_EXTRA}
+		&& $ENV{PG_TEST_EXTRA} =~ /\bregress_dump_formats\b/)
+	{
+		@formats = ('tar', 'directory', 'custom', 'plain');
+	}
+	else
+	{
+		@formats = ('plain');
+	}
+
+	for my $format (@formats)
+	{
+		my $dump_file = "$tempdir/regression_dump.$format";
+		my $format_spec = substr($format, 0, 1);
+		my $restored_db = 'regression_' . $format;
+
+		# Even though we compare only schema from the original and the restored
+		# database, we dump and restore data as well to catch any errors while
+		# doing so.
+		command_ok(
+			[
+				'pg_dump', "-F$format_spec", '--no-sync',
+				'-d', $src_node->connstr('regression'),
+				'-f', $dump_file
+			],
+			"pg_dump on source instance in '$format' format");
+
+		$dst_node->command_ok([ 'createdb', $restored_db ],
+			"created destination database '$restored_db'");
+
+		# Restore into destination database.
+		my @restore_command;
+		if ($format eq 'plain')
+		{
+			# Restore dump in "plain" format using `psql`.
+			@restore_command = [
+				'psql', '-d', $dst_node->connstr($restored_db),
+				'-f', $dump_file
+			];
+		}
+		else
+		{
+			@restore_command = [
+				'pg_restore', '-d',
+				$dst_node->connstr($restored_db), $dump_file
+			];
+		}
+		command_ok(@restore_command,
+			"pg_restore on destination instance in '$format' format");
+
+		# Dump restored database for comparison
+		my $dst_dump_file = "$tempdir/dest_dump.$format.sql";
+		command_ok(
+			[
+				'pg_dump', '-s',
+				'--no-sync', '-d',
+				$dst_node->connstr($restored_db), '-f',
+				$dst_dump_file
+			],
+			"pg_dump on instance restored with '$format' format");
+		my $dst_adjusted_dump = adjust_dump_for_restore($dst_dump_file, 0);
+
+		# Compare adjusted dumps, there should be no differences.
+		compare_dumps($src_adjusted_dump, $dst_adjusted_dump,
+			"dump outputs of original and restored regression database, using format '$format', match"
+		);
+	}
 }
 
 done_testing();

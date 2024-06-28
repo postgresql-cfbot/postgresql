@@ -44,28 +44,28 @@
    but can be cast to any concrete data type.
   </para>
   <para>
-   <programlisting>
-   SELECT
-    NULL AS "Literal Null Value",
-    pg_typeof(null) AS "Type of Null",
-    pg_typeof(NuLl::text) AS "Type of Cast null",
-    cast(null as text) AS "Cast null value";
-   </programlisting>
-   <screen>
-     Literal Null Value | Type of Null | Type of Cast null | Cast null value
-    --------------------+--------------+-------------------+-----------------
-                        | unknown      | text              |
-    (1 row)
-   </screen>
+<programlisting>
+ SELECT
+  NULL AS "Literal Null Value",
+  pg_typeof(null) AS "Type of Null",
+  pg_typeof(NuLl::text) AS "Type of Cast null",
+  cast(null as text) AS "Cast null value";
+</programlisting>
+<screen>
+  Literal Null Value | Type of Null | Type of Cast null | Cast null value
+ --------------------+--------------+-------------------+-----------------
+                     | unknown      | text              |
+ (1 row)
+</screen>
   </para>
   <para>
-   <programlisting>
-   SELECT text NULL;
-   </programlisting>
-   <screen>
-   ERROR:  column "text" does not exist
-   LINE 1: select text NUll;
-   </screen>
+<programlisting>
+ SELECT text NULL;
+</programlisting>
+<screen>
+ ERROR:  column "text" does not exist
+ LINE 1: select text NUll;
+</screen>
   </para>
   <para>
    The presence of null values in the system results in three-valued logic.
@@ -92,34 +92,34 @@
     neither equal nor unequal
    </link>
    to any value, including other null values.
-   <programlisting>
-    SELECT
-     NULL = NULL AS "N = N",
-     NULL != NULL AS "N != N",
-     1 = NULL AS "1 = N",
-     1 != NULL AS "1 != N",
-     1 = 1 AS "1 = 1",
-     1 != 1 AS "1 != 1";
-   </programlisting>
-   <screen>
-     N = N | N != N | 1 = N | 1 != N | 1 = 1 | 1 != 1
-    -------+--------+-------+--------+-------+--------
-           |        |       |        | t     | f
-    (1 row)
-   </screen>
+<programlisting>
+ SELECT
+  NULL = NULL AS "N = N",
+  NULL != NULL AS "N != N",
+  1 = NULL AS "1 = N",
+  1 != NULL AS "1 != N",
+  1 = 1 AS "1 = 1",
+  1 != 1 AS "1 != 1";
+</programlisting>
+<screen>
+  N = N | N != N | 1 = N | 1 != N | 1 = 1 | 1 != 1
+ -------+--------+-------+--------+-------+--------
+        |        |       |        | t     | f
+ (1 row)
+</screen>
    However, as with many rules, there are exceptions, which are
    <link linkend="nullvalues-multielementcomparison">noted below</link>.  Specifically,
    when the two compared values are part of a larger multi-element value.
-   <programlisting>
-    SELECT
-     array[1,2]=array[1,null] AS "Array Equals";
-   </programlisting>
-   <screen>
-     Array Equals
-    --------------
-     f
-    (1 row)
-   </screen>
+<programlisting>
+ SELECT
+  array[1,2]=array[1,null] AS "Array Equals";
+</programlisting>
+<screen>
+  Array Equals
+ --------------
+  f
+ (1 row)
+</screen>
   </para>
   <para>
    Because of this SQL specification mandated rule, checking for a null value has an
@@ -128,21 +128,21 @@
    to any other value (e.g., <literal>IS DISTINCT</literal>, and <literal>IS TRUE</literal>.)
    These, and other predicates, are described in
    <xref linkend="functions-comparison-pred-table"/>
-   <programlisting>
-    SELECT id, value,
-     value IS NULL AS "IS N",
-     value IS DISTINCT FROM id AS "IS D",
-     value != id AS "IS !="
-    FROM null_examples;
-   </programlisting>
-   <screen>
-     id | value | IS N | IS D | IS !=
-    ----+-------+------+------+-------
-      1 |     1 | f    | f    | f
-      2 |       | t    | t    |
-      3 |     4 | f    | t    | t
-    (3 rows)
-   </screen>
+<programlisting>
+ SELECT id, value,
+  value IS NULL AS "IS N",
+  value IS DISTINCT FROM id AS "IS D",
+  value != id AS "IS !="
+ FROM null_examples;
+</programlisting>
+<screen>
+  id | value | IS N | IS D | IS !=
+ ----+-------+------+------+-------
+   1 |     1 | f    | f    | f
+   2 |       | t    | t    |
+   3 |     4 | f    | t    | t
+ (3 rows)
+</screen>
   </para>
   <para>
    There is also a cardinal warning: when dealing with
@@ -154,24 +154,24 @@
    (The case where all fields are null is indistinguishable
    from the composite as a whole being null.)
    Write <literal>NOT(composite IS NULL)</literal> instead.
-   <programlisting>
-    SELECT
-     c,
-     c IS NULL AS "c IS N",
-     NOT(c IS NULL) AS "NOT c IS N",
-     c IS NOT NULL AS "c IS NOT N",
-     ROW(value, value) IS NULL AS "ROW(v,v) IS N",
-     ROW(value, value) IS NOT NULL AS "ROW(v,v) IS NOT N"
-    FROM null_examples AS c;
-   </programlisting>
-   <screen>
-       c   | c IS N | NOT c IS N | c IS NOT N | ROW(v,v) IS N | ROW(v,v) IS NOT N
-    -------+--------+------------+------------+---------------+-------------------
-     (1,1) | f      | t          | t          | f             | t
-     (2,)  | f      | t          | f          | t             | f
-     (3,4) | f      | t          | t          | f             | t
-    (3 rows)
-   </screen>
+<programlisting>
+ SELECT
+  c,
+  c IS NULL AS "c IS N",
+  NOT(c IS NULL) AS "NOT c IS N",
+  c IS NOT NULL AS "c IS NOT N",
+  ROW(value, value) IS NULL AS "ROW(v,v) IS N",
+  ROW(value, value) IS NOT NULL AS "ROW(v,v) IS NOT N"
+ FROM null_examples AS c;
+</programlisting>
+<screen>
+    c   | c IS N | NOT c IS N | c IS NOT N | ROW(v,v) IS N | ROW(v,v) IS NOT N
+ -------+--------+------------+------------+---------------+-------------------
+  (1,1) | f      | t          | t          | f             | t
+  (2,)  | f      | t          | f          | t             | f
+  (3,4) | f      | t          | t          | f             | t
+ (3 rows)
+</screen>
    See the <link linkend="nullvalues-multielement">multi-element
    testing section</link> below for an explanation.
   </para>
@@ -182,35 +182,35 @@
   <para>
    As a general expectation, operator invocation expressions where one of inputs
    is a null value will result in a null-valued output.
-   <programlisting>
-    SELECT
-     1 + null AS "Add",
-     'text' || null AS "Concatenate";
-   </programlisting>
-   <screen>
-     Add | Concatenate
-    -----+-------------
-         |
-    (1 row)
-   </screen>
+<programlisting>
+ SELECT
+  1 + null AS "Add",
+  'text' || null AS "Concatenate";
+</programlisting>
+<screen>
+  Add | Concatenate
+ -----+-------------
+      |
+ (1 row)
+</screen>
    Operators that behave otherwise should document their deviation from this norm.
   </para>
   <para>
    A notable example of this is the <literal>IN</literal> operator, which
    uses equality, not distinctness, for testing.
-   <programlisting>
-    SELECT
-     1 IN (1, null) AS "In Present",
-     1 IN (2, null) AS "In MIssing",
-     null IN (1, 2) AS "N In Non-N",
-     null IN (null, 2) AS "N In N";
-   </programlisting>
-   <screen>
-     In Present | In Missing | N In Non-N | N In N
-    ------------+------------+------------+--------
-     t          |            |            |
-    (1 row)
-   </screen>
+<programlisting>
+ SELECT
+  1 IN (1, null) AS "In Present",
+  1 IN (2, null) AS "In MIssing",
+  null IN (1, 2) AS "N In Non-N",
+  null IN (null, 2) AS "N In N";
+</programlisting>
+<screen>
+  In Present | In Missing | N In Non-N | N In N
+ ------------+------------+------------+--------
+  t          |            |            |
+ (1 row)
+</screen>
    This is just an extension of the multi-element testing behavior described
    <link linkend="nullvalues-multielement">below</link>.
   </para>
@@ -218,44 +218,44 @@
    Experience shows that <literal>CASE</literal> expressions are also prone
    to bugs since their format encourages binary logic thinking while a
    <literal>WHEN</literal> test will not consider a null value to be a match.
-   <programlisting>
-    SELECT id, value,
-     CASE WHEN id = value THEN 'Equal' ELSE 'Not Equal' END AS "Affirm",
-     CASE WHEN id != value THEN 'Not Equal' ELSE 'Equal' END AS "Negate",
-     CASE WHEN value IS NULL THEN 'Null'
-          WHEN id = value THEN 'Equal'
-          ELSE 'Not Equal' END AS "Safe Affirm",
-     CASE WHEN value IS NULL THEN 'Null'
-          WHEN id != value THEN 'Not Equal'
-          ELSE 'Equal' END AS "Safe Negate"
-    FROM null_examples;
-   </programlisting>
-   <screen>
-     id | value |  Affirm   |  Negate   | Safe Affirm | Safe Negate
-    ----+-------+-----------+-----------+-------------+-------------
-      1 |     1 | Equal     | Equal     | Equal       | Equal
-      2 |       | Not Equal | Equal     | Null        | Null
-      3 |     4 | Not Equal | Not Equal | Not Equal   | Not Equal
-    (3 rows)
-   </screen>
+<programlisting>
+ SELECT id, value,
+  CASE WHEN id = value THEN 'Equal' ELSE 'Not Equal' END AS "Affirm",
+  CASE WHEN id != value THEN 'Not Equal' ELSE 'Equal' END AS "Negate",
+  CASE WHEN value IS NULL THEN 'Null'
+       WHEN id = value THEN 'Equal'
+       ELSE 'Not Equal' END AS "Safe Affirm",
+  CASE WHEN value IS NULL THEN 'Null'
+       WHEN id != value THEN 'Not Equal'
+       ELSE 'Equal' END AS "Safe Negate"
+ FROM null_examples;
+</programlisting>
+<screen>
+  id | value |  Affirm   |  Negate   | Safe Affirm | Safe Negate
+ ----+-------+-----------+-----------+-------------+-------------
+   1 |     1 | Equal     | Equal     | Equal       | Equal
+   2 |       | Not Equal | Equal     | Null        | Null
+   3 |     4 | Not Equal | Not Equal | Not Equal   | Not Equal
+ (3 rows)
+</screen>
   </para>
   <para>
    The boolean operators <literal>AND</literal> and <literal>OR</literal>
    will ignore the null value input if the other input is sufficient to
    to determine the outcome.
-   <programlisting>
-    SELECT
-     true OR null AS "T or N",
-     false OR null AS "F or N",
-     true AND null AS "T and N",
-     false AND null AS "F and N";
-   </programlisting>
-   <screen>
-     T or N | F or N | T and N | F and N
-    --------+--------+---------+---------
-     t      |        |         | f
-    (1 row)
-   </screen>
+<programlisting>
+ SELECT
+  true OR null AS "T or N",
+  false OR null AS "F or N",
+  true AND null AS "T and N",
+  false AND null AS "F and N";
+</programlisting>
+<screen>
+  T or N | F or N | T and N | F and N
+ --------+--------+---------+---------
+  t      |        |         | f
+ (1 row)
+</screen>
   </para>
  </sect2>
 
@@ -266,30 +266,30 @@
    However, some usages of domains will cause the resultant column to have the domain type but
    the value will be null.  The common way this happens is by including the domain column's table
    on the right side of a left join.
-   <programlisting>
-    BEGIN;
-    CREATE DOMAIN domain_example AS integer NOT NULL;
-    CREATE TABLE domain_examples (de_id bigint PRIMARY KEY, de_value domain_example);
-    INSERT INTO domain_examples VALUES (1, 1), (2, 2);
-    SELECT *, pg_typeof(de_value)
-    FROM null_examples AS ne
-    LEFT JOIN domain_examples AS de ON ne.id = de.de_id;
-    ROLLBACK;
-   </programlisting>
-   <screen>
-    BEGIN
-    CREATE DOMAIN
-    CREATE TABLE
-    INSERT 0 2
-     id | value | de_id | de_value |   pg_typeof
-    ----+-------+-------+----------+----------------
-      1 |     1 |     1 |        1 | domain_example
-      2 |       |     2 |        2 | domain_example
-      3 |     4 |       |          | domain_example
-    (3 rows)
+<programlisting>
+ BEGIN;
+ CREATE DOMAIN domain_example AS integer NOT NULL;
+ CREATE TABLE domain_examples (de_id bigint PRIMARY KEY, de_value domain_example);
+ INSERT INTO domain_examples VALUES (1, 1), (2, 2);
+ SELECT *, pg_typeof(de_value)
+ FROM null_examples AS ne
+ LEFT JOIN domain_examples AS de ON ne.id = de.de_id;
+ ROLLBACK;
+</programlisting>
+<screen>
+ BEGIN
+ CREATE DOMAIN
+ CREATE TABLE
+ INSERT 0 2
+  id | value | de_id | de_value |   pg_typeof
+ ----+-------+-------+----------+----------------
+   1 |     1 |     1 |        1 | domain_example
+   2 |       |     2 |        2 | domain_example
+   3 |     4 |       |          | domain_example
+ (3 rows)
 
-    ROLLBACK
-   </screen>
+ ROLLBACK
+</screen>
    Please see the details in the <link linkend="sql-createdomain-notes">
    notes on the create domain page</link> for another example, as well as
    commentary why this non-standard behavior exists.
@@ -353,6 +353,7 @@
 
  <sect2 id="nullvalues-multielementpredicates">
   <title>Multi-Element Predicates and Scalars</title>
+
   <sect3 id="nullvalues-multielementpredicates-composites">
    <title>Composite Fields</title>
    <para>
@@ -367,19 +368,19 @@
     as a non-null composite value.  Specifically, if the composite value has
     a null-valued field then both the <literal>IS NOT NULL</literal> predicate and the
     <literal>IS NULL</literal> predicate will return false.
-    <programlisting>
-     SELECT
-      ROW(1,2) IS NULL AS "Row Is Null",
-      ROW(1,2) IS NOT NULL AS "Row Is Not Null",
-      ROW(1,NULL) IS NULL AS "Row Is Null",
-      ROW(1,NULL) IS NOT NULL AS "Row Is Not Null";
-    </programlisting>
-    <screen>
-      Row Is Null | Row Is Not Null | Row Is Null | Row Is Not Null
-     -------------+-----------------+-------------+-----------------
-      f           | t               | f           | f
-     (1 row)
-    </screen>
+<programlisting>
+ SELECT
+  ROW(1,2) IS NULL AS "Row Is Null",
+  ROW(1,2) IS NOT NULL AS "Row Is Not Null",
+  ROW(1,NULL) IS NULL AS "Row Is Null",
+  ROW(1,NULL) IS NOT NULL AS "Row Is Not Null";
+</programlisting>
+<screen>
+  Row Is Null | Row Is Not Null | Row Is Null | Row Is Not Null
+ -------------+-----------------+-------------+-----------------
+  f           | t               | f           | f
+ (1 row)
+</screen>
    </para>
    <para>
     Please read <xref linkend="composite-type-comparison"/> for a complete treatment
@@ -388,6 +389,7 @@
     presence of null-valued fields, and also in terms of the SQL specification.
    </para>
   </sect3>
+
   <sect3 id="nullvalues-multielementpredicates-arrays">
    <title>Array Elements and IN Bag Members</title>
    <para>
@@ -396,51 +398,55 @@
     operators defined in <xref linkend="functions-comparisons"/>.
    </para>
    <para>
-    <programlisting>
-     SELECT
-      1 = ANY(array[1, 1, NULL]) AS "Any-Null-Match",
-      1 = ANY(array[1, 1]) AS "Any-NoNull-Match",
-      1 = ALL(array[1, 1, NULL]) AS "ALL-Null-Match",
-      1 = ALL(array[1, 1]) AS "All-NoNull-Match";
-     SELECT
-      2 = ANY(array[1, 1, NULL]) AS "Any-Null-NoMatch",
-      2 = ANY(array[1, 1]) AS "Any-NoNull-NoMatch",
-      2 = ALL(array[1, 1, NULL]) AS "ALL-Null-NoMatch",
-      2 = ALL(array[1, 1]) AS "All-NoNull-NoMatch";
-     SELECT
-      1 IN (1, 1, NULL) AS "IN-Null-Positive",
-      1 IN (1, 1) AS "IN-NoNull-Positive",
-      1 NOT IN (2, 2, NULL) AS "NotIN-Null-Positive",
-      1 NOT IN (2, 2) AS "NotIN-NoNull-Positive";
-     SELECT
-      2 IN (1, 1, NULL) AS "IN-Null-Negative",
-      2 IN (1, 1) AS "IN-NoNull-Negative",
-      2 NOT IN (2, 2, NULL) AS "NotIN-Null-Negative",
-      2 NOT IN (2, 2) AS "NotIN-NoNull-Negative";
-    </programlisting>
-    <screen>
-      Any-Null-Match | Any-NoNull-Match | ALL-Null-Match | All-NoNull-Match
-     ----------------+------------------+----------------+------------------
-      t              | t                |                | t
-     (1 row)
+<programlisting>
+ SELECT
+  1 = ANY(array[1, 1, NULL]) AS "Any-Null-Match",
+  1 = ANY(array[1, 1]) AS "Any-NoNull-Match",
+  1 = ALL(array[1, 1, NULL]) AS "ALL-Null-Match",
+  1 = ALL(array[1, 1]) AS "All-NoNull-Match";
 
-      Any-Null-NoMatch | Any-NoNull-NoMatch | ALL-Null-NoMatch | All-NoNull-NoMatch
-     ------------------+--------------------+------------------+--------------------
-                       | f                  | f                | f
-     (1 row)
+ SELECT
+  2 = ANY(array[1, 1, NULL]) AS "Any-Null-NoMatch",
+  2 = ANY(array[1, 1]) AS "Any-NoNull-NoMatch",
+  2 = ALL(array[1, 1, NULL]) AS "ALL-Null-NoMatch",
+  2 = ALL(array[1, 1]) AS "All-NoNull-NoMatch";
 
-      IN-Null-Positive | IN-NoNull-Positive | NotIN-Null-Positive | NotIN-NoNull-Positive
-     ------------------+--------------------+---------------------+-----------------------
-      t                | t                  |                     | t
-     (1 row)
+ SELECT
+  1 IN (1, 1, NULL) AS "IN-Null-Positive",
+  1 IN (1, 1) AS "IN-NoNull-Positive",
+  1 NOT IN (2, 2, NULL) AS "NotIN-Null-Positive",
+  1 NOT IN (2, 2) AS "NotIN-NoNull-Positive";
 
-      IN-Null-Negative | IN-NoNull-Negative | NotIN-Null-Negative | NotIN-NoNull-Negative
-     ------------------+--------------------+---------------------+-----------------------
-                       | f                  | f                   | f
-     (1 row)
-    </screen>
+ SELECT
+  2 IN (1, 1, NULL) AS "IN-Null-Negative",
+  2 IN (1, 1) AS "IN-NoNull-Negative",
+  2 NOT IN (2, 2, NULL) AS "NotIN-Null-Negative",
+  2 NOT IN (2, 2) AS "NotIN-NoNull-Negative";
+</programlisting>
+<screen>
+  Any-Null-Match | Any-NoNull-Match | ALL-Null-Match | All-NoNull-Match
+ ----------------+------------------+----------------+------------------
+  t              | t                |                | t
+ (1 row)
+
+  Any-Null-NoMatch | Any-NoNull-NoMatch | ALL-Null-NoMatch | All-NoNull-NoMatch
+ ------------------+--------------------+------------------+--------------------
+                   | f                  | f                | f
+ (1 row)
+
+  IN-Null-Positive | IN-NoNull-Positive | NotIN-Null-Positive | NotIN-NoNull-Positive
+ ------------------+--------------------+---------------------+-----------------------
+  t                | t                  |                     | t
+ (1 row)
+
+  IN-Null-Negative | IN-NoNull-Negative | NotIN-Null-Negative | NotIN-NoNull-Negative
+ ------------------+--------------------+---------------------+-----------------------
+                   | f                  | f                   | f
+ (1 row)
+</screen>
    </para>
   </sect3>
+
   <sect3 id="nullvalues-multielementpredicates-subqueries">
    <title>Single-Column Subquery Rows</title>
    <para>
@@ -450,34 +456,35 @@
     the column itself is multi-element then the thing being searched for must be a compatible
     multi-element value, and the corresponding comparison behavior described in
     <xref linkend="nullvalues-multielementcomparison"/> will also be applied.
-
    </para>
    <para>
-    <programlisting>
-     SELECT
-      1 = ANY(SELECT unnest(array[1, 1, NULL])) AS "Any-Null-Match",
-      1 = ANY(SELECT unnest(array[1, 1])) AS "Any-NoNull-Match",
-      1 = ALL(SELECT unnest(array[1, 1, NULL])) AS "ALL-Null-Match",
-      1 = ALL(SELECT unnest(array[1, 1])) AS "All-NoNull-Match";
-     SELECT
-      2 = ANY(SELECT unnest(array[1, 1, NULL])) AS "Any-Null-NoMatch",
-      2 = ANY(SELECT unnest(array[1, 1])) AS "Any-NoNull-NoMatch",
-      2 = ALL(SELECT unnest(array[1, 1, NULL])) AS "ALL-Null-NoMatch",
-      2 = ALL(SELECT unnest(array[1, 1])) AS "All-NoNull-NoMatch";
-    </programlisting>
-    <screen>
-      Any-Null-Match | Any-NoNull-Match | ALL-Null-Match | All-NoNull-Match
-     ----------------+------------------+----------------+------------------
-      t              | t                |                | t
-     (1 row)
+<programlisting>
+ SELECT
+  1 = ANY(SELECT unnest(array[1, 1, NULL])) AS "Any-Null-Match",
+  1 = ANY(SELECT unnest(array[1, 1])) AS "Any-NoNull-Match",
+  1 = ALL(SELECT unnest(array[1, 1, NULL])) AS "ALL-Null-Match",
+  1 = ALL(SELECT unnest(array[1, 1])) AS "All-NoNull-Match";
 
-      Any-Null-NoMatch | Any-NoNull-NoMatch | ALL-Null-NoMatch | All-NoNull-NoMatch
-     ------------------+--------------------+------------------+--------------------
-                       | f                  | f                | f
-     (1 row)
-    </screen>
+ SELECT
+  2 = ANY(SELECT unnest(array[1, 1, NULL])) AS "Any-Null-NoMatch",
+  2 = ANY(SELECT unnest(array[1, 1])) AS "Any-NoNull-NoMatch",
+  2 = ALL(SELECT unnest(array[1, 1, NULL])) AS "ALL-Null-NoMatch",
+  2 = ALL(SELECT unnest(array[1, 1])) AS "All-NoNull-NoMatch";
+</programlisting>
+<screen>
+  Any-Null-Match | Any-NoNull-Match | ALL-Null-Match | All-NoNull-Match
+ ----------------+------------------+----------------+------------------
+  t              | t                |                | t
+ (1 row)
+
+  Any-Null-NoMatch | Any-NoNull-NoMatch | ALL-Null-NoMatch | All-NoNull-NoMatch
+ ------------------+--------------------+------------------+--------------------
+                   | f                  | f                | f
+ (1 row)
+</screen>
    </para>
   </sect3>
+
  </sect2>
 
  <sect2 id="nullvalues-multielementcomparison">
@@ -502,69 +509,73 @@
    <xref linkend="composite-type-comparison"/> for a fuller treatment of this topic.  Here
    we briefly recap the five different situations in the presence of null values.
   </para>
+
   <sect3 id="nullvalues-multielementcomparison-array">
    <title>Element-wise Comparisons</title>
    <para>
     First situation, null values within an array compare as equal to each other and greater than all
     non-null values, regardless of whether the comparison involves
     <link linkend="sql-syntax-array-constructors">array constructors</link> or array typed values.
-    <programlisting>
-     SELECT
-      array[1,2]=array[1,null] AS "Constructors",
-      s, t,
-      s = t AS "Stored Equality",
-      t &gt; s AS "Stored Ordering"
-     FROM
-     (values (array[1,2])) AS sv (s),
-     (values (array[1,null::integer])) AS st (t);
-    </programlisting>
-    <screen>
-      Constructors |   s   |    t     | Stored Equality | Stored Ordering
-     --------------+-------+----------+-----------------+-----------------
-      f            | {1,2} | {1,NULL} | f               | t
-     (1 row)
-    </screen>
+<programlisting>
+ SELECT
+  array[1,2]=array[1,null] AS "Constructors",
+  s, t,
+  s = t AS "Stored Equality",
+  t &gt; s AS "Stored Ordering"
+ FROM
+ (values (array[1,2])) AS sv (s),
+ (values (array[1,null::integer])) AS st (t);
+</programlisting>
+<screen>
+  Constructors |   s   |    t     | Stored Equality | Stored Ordering
+ --------------+-------+----------+-----------------+-----------------
+  f            | {1,2} | {1,NULL} | f               | t
+ (1 row)
+</screen>
    </para>
   </sect3>
+
   <sect3 id="nullvalues-multielementcomparison-rowconstructor">
    <title>Row-wise Mutual Row Constructor Comparisons</title>
    <para>
     In this situation null values produce unknown when compared to all values.
-    <programlisting>
-     SELECT
-      (1,2)=(1,null) AS "NonNull=Null",
-      (1,null::integer)=(1,null) AS "Null=Null";
-    </programlisting>
-    <screen>
-      NonNull=Null | Null=Null
-     --------------+-----------
-                   |
-     (1 row)
-    </screen>
+<programlisting>
+ SELECT
+  (1,2)=(1,null) AS "NonNull=Null",
+  (1,null::integer)=(1,null) AS "Null=Null";
+</programlisting>
+<screen>
+  NonNull=Null | Null=Null
+ --------------+-----------
+               |
+ (1 row)
+</screen>
    </para>
   </sect3>
+
   <sect3 id="nullvalues-multielementcomparison-composite">
    <title>Row-wise Composite Involved Comparisons</title>
    <para>
     In these three situations null values are considered equal to each other and greater than
     all non-null value.
    </para>
-   <programlisting>
-    SELECT s, t,
-     s = t AS "Stored Equals Stored",
-     t &lt; (1,2) AS "Stored LT Constructor",
-     t = (1,null::integer) AS "Stored Equals Constructor"
-    FROM
-     (values (1,2)) AS s,
-     (values (1,null::integer)) AS t;
-   </programlisting>
-   <screen>
-       s   |  t   | Stored Equals Stored | Stored LT Constructor | Stored Equals Constructor
-    -------+------+----------------------+-----------------------+---------------------------
-     (1,2) | (1,) | f                    | f                     | t
-    (1 row)
-   </screen>
+<programlisting>
+ SELECT s, t,
+  s = t AS "Stored Equals Stored",
+  t &lt; (1,2) AS "Stored LT Constructor",
+  t = (1,null::integer) AS "Stored Equals Constructor"
+ FROM
+  (values (1,2)) AS s,
+  (values (1,null::integer)) AS t;
+</programlisting>
+<screen>
+    s   |  t   | Stored Equals Stored | Stored LT Constructor | Stored Equals Constructor
+ -------+------+----------------------+-----------------------+---------------------------
+  (1,2) | (1,) | f                    | f                     | t
+ (1 row)
+</screen>
   </sect3>
+
   <sect3 id="nullvalues-multielementcomparison-sqlconformance">
    <title>SQL Specification Conformance</title>
    <para>
@@ -576,6 +587,7 @@
     to the output of a subquery (as in <xref linkend="functions-subquery"/>).
    </para>
   </sect3>
+
  </sect2>
 
  <sect2 id="nullvalues-functions">
@@ -594,22 +606,22 @@
    like concatenate, null values often are simply ignored.
    This can be different than the choice made by a binary operator performing the same function,
    like for concatenating text, but not always, like concatenating an element onto an array.
-   <programlisting>
-    SELECT
-     lower(null::text) AS "Lower",
-     left('text', null) AS "Left",
-     'one' || null AS "|| Text Op",
-     concat('one', null) AS "concat Text Func",
-     array_append(array[1], null) AS "append([], null)",
-     array[1]::integer[] || null::integer AS "[] || null",
-     array[1]::integer[] || null::integer[] AS "[] || null[]";
-   </programlisting>
-   <screen>
-     Lower | Left | || Text Op | concat Text Func | append([], null) | [] || null | [] || null[]
-    -------+------+------------+------------------+------------------+------------+--------------
-           |      |            | one              | {1,NULL}         | {1,NULL}   | {1}
-    (1 row)
-   </screen>
+<programlisting>
+ SELECT
+  lower(null::text) AS "Lower",
+  left('text', null) AS "Left",
+  'one' || null AS "|| Text Op",
+  concat('one', null) AS "concat Text Func",
+  array_append(array[1], null) AS "append([], null)",
+  array[1]::integer[] || null::integer AS "[] || null",
+  array[1]::integer[] || null::integer[] AS "[] || null[]";
+</programlisting>
+<screen>
+  Lower | Left | || Text Op | concat Text Func | append([], null) | [] || null | [] || null[]
+ -------+------+------------+------------------+------------------+------------+--------------
+        |      |            | one              | {1,NULL}         | {1,NULL}   | {1}
+ (1 row)
+</screen>
    In short, please read the documentation for the functions you use if they may receive null inputs
    to understand how they will behave.  Send a documentation comment pointing out any functions
    that do not behave strictly but whose actual behavior in the presence of null-valued input
@@ -626,20 +638,20 @@
    or it simply returns a null value upon execution.  The aggregation
    routine will usually ignore the null value and continue processing,
    as demonstrated in <literal>count(value)</literal> below.
-   <programlisting>
-    SELECT
-     count(*) AS "Count",
-     count(value) AS "Count Value",
-     count(null_examples) AS "Count Composite",
-     count(row(value, value)) AS "Count Row"
-    FROM null_examples;
-   </programlisting>
-   <screen>
-     Count | Count Value | Count Composite | Count Row
-    -------+-------------+-----------------+-----------
-         3 |           2 |               3 |         3
-    (1 row)
-   </screen>
+<programlisting>
+ SELECT
+  count(*) AS "Count",
+  count(value) AS "Count Value",
+  count(null_examples) AS "Count Composite",
+  count(row(value, value)) AS "Count Row"
+ FROM null_examples;
+</programlisting>
+<screen>
+  Count | Count Value | Count Composite | Count Row
+ -------+-------------+-----------------+-----------
+      3 |           2 |               3 |         3
+ (1 row)
+</screen>
    Notice the "Count Row" outcome, though.  While we noted in the cardinal warning
    that a composite whose fields are all null values is indistinguishable from
    a null value of composite type, the count aggregate does indeed distinguish them,
@@ -653,26 +665,26 @@
   <title>Null Values in Where</title>
   <para>
    A <literal>WHERE</literal> clause that evaluates to a null value for a given row will exclude that row.
-   <programlisting>
-    SELECT id, value AS "Equals 1"
-    FROM null_examples
-    WHERE value = 1;
+<programlisting>
+ SELECT id, value AS "Equals 1"
+ FROM null_examples
+ WHERE value = 1;
 
-    SELECT id, value AS "Not Equal to 1"
-    FROM null_examples
-    WHERE value != 1;
-   </programlisting>
-   <screen>
-     id | Equals 1
-    ----+----------
-      1 |        1
-    (1 row)
+ SELECT id, value AS "Not Equal to 1"
+ FROM null_examples
+ WHERE value != 1;
+</programlisting>
+<screen>
+  id | Equals 1
+ ----+----------
+   1 |        1
+ (1 row)
 
-     id | Not Equal to 1
-    ----+----------------
-      3 |              4
-    (1 row)
-   </screen>
+  id | Not Equal to 1
+ ----+----------------
+   3 |              4
+ (1 row)
+</screen>
   </para>
  </sect2>
 
@@ -685,26 +697,26 @@
    While this seems like it would behave the same as a where clause, the choice here,
    when an expression evaulates to a null value, is to allow the row to be inserted
    - the same as a true result.
-   <programlisting>
-    BEGIN;
-    ALTER TABLE null_examples ADD CONSTRAINT value_not_1 CHECK (value != 1);
-    ROLLBACK;
-   </programlisting>
-   <screen>
-    BEGIN
-    ERROR:  check constraint "value_not_1" of relation "null_examples" is violated by some row
-    ROLLBACK
-   </screen>
-   <programlisting>
-    BEGIN;
-    ALTER TABLE null_examples ADD CONSTRAINT value_not_10 CHECK (value != 10);
-    ROLLBACK;
-   </programlisting>
-   <screen>
-    BEGIN
-    ALTER TABLE
-    ROLLBACK
-   </screen>
+<programlisting>
+ BEGIN;
+ ALTER TABLE null_examples ADD CONSTRAINT value_not_1 CHECK (value != 1);
+ ROLLBACK;
+</programlisting>
+<screen>
+ BEGIN
+ ERROR:  check constraint "value_not_1" of relation "null_examples" is violated by some row
+ ROLLBACK
+</screen>
+<programlisting>
+ BEGIN;
+ ALTER TABLE null_examples ADD CONSTRAINT value_not_10 CHECK (value != 10);
+ ROLLBACK;
+</programlisting>
+<screen>
+ BEGIN
+ ALTER TABLE
+ ROLLBACK
+</screen>
    We are using a transaction (begin and rollback) and the alter table command to add two
    constraints to our null_examples table.  The first constraint prohibits rows with a value
    of 1, which our row with an id of 1 violates.  Prohibiting the value 10 definitely allows
@@ -726,37 +738,37 @@
    other values.  These features use <link linkend="nullvalues-cardinalrule">distinctness</link>
    instead of simple equality in order to handle a null value like a definite value equal to
    another null vale and unequal to all other values.
-   <programlisting>
-    WITH vals (value) AS (VALUES (1), (NULL), (1), (2), (NULL))
-    SELECT
-     value,
-     count(*) AS "Count"
-    FROM vals
-    GROUP BY value
-    ORDER BY value;
-   </programlisting>
-   <screen>
-     value | Count
-    -------+-------
-         1 |     2
-         2 |     1
-           |     2
-    (3 rows)
-   </screen>
-   <programlisting>
-    WITH vals (value) AS (VALUES (1), (NULL), (1), (2), (NULL))
-    SELECT DISTINCT value
-    FROM vals
-    ORDER BY value NULLS FIRST;
-   </programlisting>
-   <screen>
-     value
-    -------
+<programlisting>
+ WITH vals (value) AS (VALUES (1), (NULL), (1), (2), (NULL))
+ SELECT
+  value,
+  count(*) AS "Count"
+ FROM vals
+ GROUP BY value
+ ORDER BY value;
+</programlisting>
+<screen>
+  value | Count
+ -------+-------
+      1 |     2
+      2 |     1
+        |     2
+ (3 rows)
+</screen>
+<programlisting>
+ WITH vals (value) AS (VALUES (1), (NULL), (1), (2), (NULL))
+ SELECT DISTINCT value
+ FROM vals
+ ORDER BY value NULLS FIRST;
+</programlisting>
+<screen>
+  value
+ -------
 
-         1
-         2
-    (3 rows)
-   </screen>
+      1
+      2
+ (3 rows)
+</screen>
   </para>
  </sect2>
 
@@ -768,21 +780,21 @@
    present null values before or after all non-null values.  To handle
    this, the <literal>ORDER BY</literal> clause will let you specify either
    <literal>NULLS FIRST</literal> or <literal>NULLS LAST</literal>.
-   <programlisting>
-    WITH vals (value) AS (VALUES (1), (NULL), (1), (2), (NULL))
-    SELECT value FROM vals
-    ORDER BY value DESC NULLS FIRST;
-   </programlisting>
-   <screen>
-     value
-    -------
+<programlisting>
+ WITH vals (value) AS (VALUES (1), (NULL), (1), (2), (NULL))
+ SELECT value FROM vals
+ ORDER BY value DESC NULLS FIRST;
+</programlisting>
+<screen>
+  value
+ -------
 
 
-         2
-         1
-         1
-    (5 rows)
-   </screen>
+      2
+      1
+      1
+ (5 rows)
+</screen>
   </para>
   <para>
    Note that when dealing with multi-element values the comparison behavior
@@ -804,33 +816,33 @@
    values are equal to each other.  This setting applies to all columns in the index.
   </para>
   <para>
-   <programlisting>
-    BEGIN;
-    CREATE UNIQUE INDEX value_nulls_distinct_implicit ON null_examples (value);
-    CREATE UNIQUE INDEX value_nulls_distinct_explicit ON null_examples (value) NULLS DISTINCT;
-    INSERT INTO null_examples VALUES (4, NULL);
-    ROLLBACK;
-   </programlisting>
-   <screen>
-    BEGIN
-    CREATE INDEX
-    CREATE INDEX
-    INSERT 0 1
-    ROLLBACK
-   </screen>
-   <programlisting>
-    BEGIN;
-    CREATE UNIQUE INDEX value_nulls_not_distinct_explicit ON null_examples (value) NULLS NOT DISTINCT;
-    INSERT INTO null_examples VALUES (4, NULL);
-    ROLLBACK;
-   </programlisting>
-   <screen>
-    BEGIN
-    CREATE INDEX
-    ERROR:  duplicate key value violates unique constraint "value_nulls_not_distinct_explicit"
-    DETAIL:  Key (value)=(null) already exists.
-    ROLLBACK
-   </screen>
+<programlisting>
+ BEGIN;
+ CREATE UNIQUE INDEX value_nulls_distinct_implicit ON null_examples (value);
+ CREATE UNIQUE INDEX value_nulls_distinct_explicit ON null_examples (value) NULLS DISTINCT;
+ INSERT INTO null_examples VALUES (4, NULL);
+ ROLLBACK;
+</programlisting>
+<screen>
+ BEGIN
+ CREATE INDEX
+ CREATE INDEX
+ INSERT 0 1
+ ROLLBACK
+</screen>
+<programlisting>
+ BEGIN;
+ CREATE UNIQUE INDEX value_nulls_not_distinct_explicit ON null_examples (value) NULLS NOT DISTINCT;
+ INSERT INTO null_examples VALUES (4, NULL);
+ ROLLBACK;
+</programlisting>
+<screen>
+ BEGIN
+ CREATE INDEX
+ ERROR:  duplicate key value violates unique constraint "value_nulls_not_distinct_explicit"
+ DETAIL:  Key (value)=(null) already exists.
+ ROLLBACK
+</screen>
   </para>
   <para>
    For ordering, each column in the index gets its own specification of
@@ -871,41 +883,41 @@
    thus this section focuses on <link linkend="config-setting-sql">SQL interaction</link>.
    Unlike settings created by extensions, custom settings can only be textual and the default
    value for text here is the empty string.
-   <programlisting>
-    SHOW example.string;
-    BEGIN;
-    SELECT set_config('example.string', NULL, true);
-    SELECT current_setting('example.string') IS NULL AS "Setting Is Null";
-    ROLLBACK;
-    SHOW example.string;
-    RESET example.string;
-    SHOW example.string;
-   </programlisting>
-   <screen>
-    ERROR:  unrecognized configuration parameter "example.string"
-    BEGIN
-     set_config
-    ------------
+<programlisting>
+ SHOW example.string;
+ BEGIN;
+ SELECT set_config('example.string', NULL, true);
+ SELECT current_setting('example.string') IS NULL AS "Setting Is Null";
+ ROLLBACK;
+ SHOW example.string;
+ RESET example.string;
+ SHOW example.string;
+</programlisting>
+<screen>
+ ERROR:  unrecognized configuration parameter "example.string"
+ BEGIN
+  set_config
+ ------------
 
-    (1 row)
+ (1 row)
 
-     Setting Is Null
-    -----------------
-     f
-    (1 row)
+  Setting Is Null
+ -----------------
+  f
+ (1 row)
 
-    ROLLBACK
-     example.string
-    ----------------
+ ROLLBACK
+  example.string
+ ----------------
 
-    (1 row)
+ (1 row)
 
-    RESET
-     example.string
-    ----------------
+ RESET
+  example.string
+ ----------------
 
-    (1 row)
-   </screen>
+ (1 row)
+</screen>
    Notice two important behaviors: first, even though we passed in a null value to
    to the <literal>set_config</literal> function, the <literal>current_setting</literal>
    function returned a non-null value, specifically the empty string.  Second, after ROLLBACK the
@@ -924,71 +936,72 @@
   <para>
    As noted in <xref linkend="json-type-mapping-table"/>, JSON has a null value
    that does not get exposed at the SQL level.
-   <programlisting>
-    SELECT 'null'::json IS NULL AS "JSON null is NULL";
-   </programlisting>
-   <screen>
-     JSON null is NULL
-    -------------------
-     f
-    (1 row)
-   </screen>
+<programlisting>
+ SELECT 'null'::json IS NULL AS "JSON null is NULL";
+</programlisting>
+<screen>
+  JSON null is NULL
+ -------------------
+  f
+ (1 row)
+</screen>
    Additionally, the SQL operators and functions involving JSON key or array element selection,
    or construction from literals, require that a number or text value be supplied as an operand
    and so JSON null values cannot be targeted by those operators and functions.
-   <programlisting>
-    SELECT to_json(null::text);
-   </programlisting>
-   <screen>
-     to_json
-    ---------
+<programlisting>
+ SELECT to_json(null::text);
+</programlisting>
+<screen>
+  to_json
+ ---------
 
-    (1 row)
-   </screen>
+ (1 row)
+</screen>
    That all said, the system will convert from SQL null values to JSON null values when in a
    composite type context.
-   <programlisting>
-    SELECT json_build_object('value', value)
-    FROM null_examples;
-   </programlisting>
-   <screen>
-     json_build_object
-    -------------------
-     {"value" : 1}
-     {"value" : null}
-     {"value" : 4}
-    (3 rows)
-   </screen>
+<programlisting>
+ SELECT json_build_object('value', value)
+ FROM null_examples;
+</programlisting>
+<screen>
+  json_build_object
+ -------------------
+  {"value" : 1}
+  {"value" : null}
+  {"value" : 4}
+ (3 rows)
+</screen>
    And vice versa.
-   <programlisting>
-    SELECT *
-    FROM jsonb_to_recordset('[{"value":1},{"value":null},{"value":4}]'::jsonb) AS jtr (value integer);
-   </programlisting>
-   <screen>
-     value
-    -------
-         1
+<programlisting>
+ SELECT *
+ FROM jsonb_to_recordset('[{"value":1},{"value":null},{"value":4}]'::jsonb) AS jtr (value integer);
+</programlisting>
+<screen>
+  value
+ -------
+      1
 
-         4
-    (3 rows)
-   </screen>
+      4
+ (3 rows)
+</screen>
   </para>
   <para>
    A more versatile way to process JSON is to use jsonpath.  Within this context, as noted in
    <xref linkend="functions-sqljson-filter-ex-table"/>, the JSON null value is considered equal
    to other JSON null values.  However, while equaltiy works as expected, ordering is not implemented.
-   <programlisting>
-    SELECT
-     jsonb_path_query_array('[1, 2, 3]', '$[*] ? (@ &gt; null)') AS "GT",
-     jsonb_path_query_array('[1, 2, 3]', '$[*] ? (@ &lt; null)') AS "LT",
-     jsonb_path_query_array('[1, 2, 3]', '$[*] ? (@ &lt;&gt; null)') AS "NE";
-   </programlisting>
-   <screen>
-     GT | LT |    NE
-    ----+----+-----------
-     [] | [] | [1, 2, 3]
-    (1 row)
-   </screen>
+<programlisting>
+ SELECT
+  jsonb_path_query_array('[1, 2, 3]', '$[*] ? (@ &gt; null)') AS "GT",
+  jsonb_path_query_array('[1, 2, 3]', '$[*] ? (@ &lt; null)') AS "LT",
+  jsonb_path_query_array('[1, 2, 3]', '$[*] ? (@ &lt;&gt; null)') AS "NE";
+</programlisting>
+<screen>
+  GT | LT |    NE
+ ----+----+-----------
+  [] | [] | [1, 2, 3]
+ (1 row)
+</screen>
   </para>
  </sect2>
+
 </sect1>

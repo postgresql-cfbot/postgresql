@@ -530,6 +530,7 @@ extern OffsetNumber SpGistPageAddNewItem(SpGistState *state, Page page,
 extern bool spgproperty(Oid index_oid, int attno,
 						IndexAMProperty prop, const char *propname,
 						bool *res, bool *isnull);
+extern options_spec_set *spggetreloptspecset(void);
 
 /* spgdoinsert.c */
 extern void spgUpdateNodeLink(SpGistInnerTuple tup, int nodeN,

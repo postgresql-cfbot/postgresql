@@ -109,6 +109,7 @@ extern IndexBulkDeleteResult *brinbulkdelete(IndexVacuumInfo *info,
 extern IndexBulkDeleteResult *brinvacuumcleanup(IndexVacuumInfo *info,
 												IndexBulkDeleteResult *stats);
 extern bytea *brinoptions(Datum reloptions, bool validate);
+extern options_spec_set *bringetreloptspecset(void);
 
 /* brin_validate.c */
 extern bool brinvalidate(Oid opclassoid);

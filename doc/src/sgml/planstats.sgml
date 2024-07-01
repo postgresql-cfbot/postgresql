@@ -729,6 +729,8 @@ EXPLAIN (ANALYZE, TIMING OFF) SELECT * FROM t WHERE a &lt;= 49 AND b &gt; 49;
    accurately, the function that the operator is based on).  If not, then the
    selectivity estimator will behave as if no statistics are available, and
    the planner will proceed with default or fall-back assumptions.
+   Use <xref linkend="app-psql"/>'s <command>\dAo+</command> command to list
+   operator families and tell which of their operators are marked as leak-proof.
   </para>
 
   <para>

@@ -318,6 +318,7 @@ UnlockRelation(Relation relation, LOCKMODE lockmode)
 	LockRelease(&tag, lockmode, false);
 }
 
+#ifdef USE_ASSERT_CHECKING
 /*
  *		CheckRelationLockedByMe
  *
@@ -352,6 +353,7 @@ CheckRelationOidLockedByMe(Oid relid, LOCKMODE lockmode, bool orstronger)
 
 	return LockHeldByMe(&tag, lockmode, orstronger);
 }
+#endif
 
 /*
  *		LockHasWaitersRelation

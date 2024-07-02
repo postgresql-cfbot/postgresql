@@ -84,10 +84,16 @@ static bool rotation_disabled = false;
 static FILE *syslogFile = NULL;
 static FILE *csvlogFile = NULL;
 static FILE *jsonlogFile = NULL;
+static FILE *durationFile = NULL;
+static FILE *durationcsvFile = NULL;
+static FILE *durationjsonFile = NULL;
 NON_EXEC_STATIC pg_time_t first_syslogger_file_time = 0;
 static char *last_sys_file_name = NULL;
 static char *last_csv_file_name = NULL;
 static char *last_json_file_name = NULL;
+static char *last_duration_file_name = NULL;
+static char *last_duration_csv_file_name = NULL;
+static char *last_duration_json_file_name = NULL;
 
 /*
  * Buffers for saving partial messages from different backends.
@@ -155,6 +161,9 @@ typedef struct
 	int			syslogFile;
 	int			csvlogFile;
 	int			jsonlogFile;
+	int			durationFile;
+	int			durationcsvFile;
+	int			durationjsonFile;
 } SysloggerStartupData;
 
 /*
@@ -189,6 +198,9 @@ SysLoggerMain(char *startup_data, size_t startup_data_len)
 		syslogFile = syslogger_fdopen(slsdata->syslogFile);
 		csvlogFile = syslogger_fdopen(slsdata->csvlogFile);
 		jsonlogFile = syslogger_fdopen(slsdata->jsonlogFile);
+		durationFile = syslogger_fdopen(slsdata->durationFile);
+		durationcsvFile = syslogger_fdopen(slsdata->durationcsvFile);
+		durationjsonFile = syslogger_fdopen(slsdata->durationjsonFile);
 	}
 #else
 	Assert(startup_data_len == 0);
@@ -311,6 +323,12 @@ SysLoggerMain(char *startup_data, size_t startup_data_len)
 		last_csv_file_name = logfile_getname(first_syslogger_file_time, ".csv");
 	if (jsonlogFile != NULL)
 		last_json_file_name = logfile_getname(first_syslogger_file_time, ".json");
+	if (durationFile != NULL)
+		last_duration_file_name = logfile_getname(first_syslogger_file_time, ".duration");
+	if (durationcsvFile != NULL)
+		last_duration_csv_file_name = logfile_getname(first_syslogger_file_time, ".duration.csv");
+	if (durationjsonFile != NULL)
+		last_duration_json_file_name = logfile_getname(first_syslogger_file_time, ".duration.json");
 
 	/* remember active logfile parameters */
 	currentLogDir = pstrdup(Log_directory);
@@ -390,20 +408,18 @@ SysLoggerMain(char *startup_data, size_t startup_data_len)
 			}
 
 			/*
-			 * Force a rotation if CSVLOG output was just turned on or off and
-			 * we need to open or close csvlogFile accordingly.
+			 * Force a rotation if any of the alternate outputs were turned on
+			 * or off and we need to open or close their filehandles
+			 * accordingly.
 			 */
-			if (((Log_destination & LOG_DESTINATION_CSVLOG) != 0) !=
-				(csvlogFile != NULL))
+			if ((((Log_destination & LOG_DESTINATION_CSVLOG) != 0) != (csvlogFile != NULL)) ||
+				(((Log_destination & LOG_DESTINATION_JSONLOG) != 0) != (jsonlogFile != NULL)) ||
+				(((Log_duration_destination & LOG_DESTINATION_STDERR) != 0) != (durationFile != NULL)) ||
+				(((Log_duration_destination & LOG_DESTINATION_CSVLOG) != 0) != (durationcsvFile != NULL)) ||
+				(((Log_duration_destination & LOG_DESTINATION_JSONLOG) != 0) != (durationjsonFile != NULL)))
+			{
 				rotation_requested = true;
-
-			/*
-			 * Force a rotation if JSONLOG output was just turned on or off
-			 * and we need to open or close jsonlogFile accordingly.
-			 */
-			if (((Log_destination & LOG_DESTINATION_JSONLOG) != 0) !=
-				(jsonlogFile != NULL))
-				rotation_requested = true;
+			}
 
 			/*
 			 * If rotation time parameter changed, reset next rotation time,
@@ -461,6 +477,24 @@ SysLoggerMain(char *startup_data, size_t startup_data_len)
 				rotation_requested = true;
 				size_rotation_for |= LOG_DESTINATION_JSONLOG;
 			}
+			if (durationFile != NULL &&
+				ftell(durationFile) >= Log_RotationSize * 1024L)
+			{
+				rotation_requested = true;
+				size_rotation_for |= LOG_DESTINATION_DURATION;
+			}
+			if (durationcsvFile != NULL &&
+				ftell(durationcsvFile) >= Log_RotationSize * 1024L)
+			{
+				rotation_requested = true;
+				size_rotation_for |= LOG_DESTINATION_DURATION_CSV;
+			}
+			if (durationjsonFile != NULL &&
+				ftell(durationjsonFile) >= Log_RotationSize * 1024L)
+			{
+				rotation_requested = true;
+				size_rotation_for |= LOG_DESTINATION_DURATION_JSON;
+			}
 		}
 
 		if (rotation_requested)
@@ -472,7 +506,10 @@ SysLoggerMain(char *startup_data, size_t startup_data_len)
 			if (!time_based_rotation && size_rotation_for == 0)
 				size_rotation_for = LOG_DESTINATION_STDERR |
 					LOG_DESTINATION_CSVLOG |
-					LOG_DESTINATION_JSONLOG;
+					LOG_DESTINATION_JSONLOG |
+					LOG_DESTINATION_DURATION |
+					LOG_DESTINATION_DURATION_CSV |
+					LOG_DESTINATION_DURATION_JSON;
 			logfile_rotate(time_based_rotation, size_rotation_for);
 		}
 
@@ -695,10 +732,35 @@ SysLogger_Start(void)
 		pfree(filename);
 	}
 
+	/*
+	 * Likewise for the initial duration log files, if enabled.
+	 */
+	if (Log_duration_destination & LOG_DESTINATION_STDERR)
+	{
+		filename = logfile_getname(first_syslogger_file_time, ".duration");
+		durationFile = logfile_open(filename, "a", false);
+		pfree(filename);
+	}
+	if (Log_duration_destination & LOG_DESTINATION_CSVLOG)
+	{
+		filename = logfile_getname(first_syslogger_file_time, ".duration.csv");
+		durationcsvFile = logfile_open(filename, "a", false);
+		pfree(filename);
+	}
+	if (Log_duration_destination & LOG_DESTINATION_JSONLOG)
+	{
+		filename = logfile_getname(first_syslogger_file_time, ".duration.json");
+		durationjsonFile = logfile_open(filename, "a", false);
+		pfree(filename);
+	}
+
 #ifdef EXEC_BACKEND
 	startup_data.syslogFile = syslogger_fdget(syslogFile);
 	startup_data.csvlogFile = syslogger_fdget(csvlogFile);
 	startup_data.jsonlogFile = syslogger_fdget(jsonlogFile);
+	startup_data.durationFile = syslogger_fdget(durationFile);
+	startup_data.durationcsvFile = syslogger_fdget(durationcsvFile);
+	startup_data.durationjsonFile = syslogger_fdget(durationjsonFile);
 	sysloggerPid = postmaster_child_launch(B_LOGGER, (char *) &startup_data, sizeof(startup_data), NULL);
 #else
 	sysloggerPid = postmaster_child_launch(B_LOGGER, NULL, 0, NULL);
@@ -783,6 +845,21 @@ SysLogger_Start(void)
 	{
 		fclose(jsonlogFile);
 		jsonlogFile = NULL;
+	}
+	if (durationFile != NULL)
+	{
+		fclose(durationFile);
+		durationFile = NULL;
+	}
+	if (durationcsvFile != NULL)
+	{
+		fclose(durationcsvFile);
+		durationcsvFile = NULL;
+	}
+	if (durationjsonFile != NULL)
+	{
+		fclose(durationjsonFile);
+		durationjsonFile = NULL;
 	}
 	return (int) sysloggerPid;
 }
@@ -886,17 +963,17 @@ process_pipe_input(char *logbuffer, int *bytes_in_logbuffer)
 	{
 		PipeProtoHeader p;
 		int			chunklen;
-		bits8		dest_flags;
 
 		/* Do we have a valid header? */
 		memcpy(&p, cursor, offsetof(PipeProtoHeader, data));
-		dest_flags = p.flags & (PIPE_PROTO_DEST_STDERR |
-								PIPE_PROTO_DEST_CSVLOG |
-								PIPE_PROTO_DEST_JSONLOG);
+
 		if (p.nuls[0] == '\0' && p.nuls[1] == '\0' &&
 			p.len > 0 && p.len <= PIPE_MAX_PAYLOAD &&
 			p.pid != 0 &&
-			pg_number_of_ones[dest_flags] == 1)
+			p.flags & (PIPE_PROTO_DEST_STDERR |
+					   PIPE_PROTO_DEST_CSVLOG |
+					   PIPE_PROTO_DEST_JSONLOG |
+					   PIPE_PROTO_DEST_DURATION))
 		{
 			List	   *buffer_list;
 			ListCell   *cell;
@@ -910,11 +987,21 @@ process_pipe_input(char *logbuffer, int *bytes_in_logbuffer)
 			if (count < chunklen)
 				break;
 
-			if ((p.flags & PIPE_PROTO_DEST_STDERR) != 0)
+			/* Duration is checked first as it has multiple flags */
+			if (p.flags & PIPE_PROTO_DEST_DURATION)
+			{
+				if (p.flags & PIPE_PROTO_DEST_CSVLOG)
+					dest = LOG_DESTINATION_DURATION_CSV;
+				else if (p.flags & PIPE_PROTO_DEST_JSONLOG)
+					dest = LOG_DESTINATION_DURATION_JSON;
+				else
+					dest = LOG_DESTINATION_DURATION;
+			}
+			else if (p.flags & PIPE_PROTO_DEST_STDERR)
 				dest = LOG_DESTINATION_STDERR;
-			else if ((p.flags & PIPE_PROTO_DEST_CSVLOG) != 0)
+			else if (p.flags & PIPE_PROTO_DEST_CSVLOG)
 				dest = LOG_DESTINATION_CSVLOG;
-			else if ((p.flags & PIPE_PROTO_DEST_JSONLOG) != 0)
+			else if (p.flags & PIPE_PROTO_DEST_JSONLOG)
 				dest = LOG_DESTINATION_JSONLOG;
 			else
 			{
@@ -1107,10 +1194,17 @@ write_syslogger_file(const char *buffer, int count, int destination)
 	 * Think not to improve this by trying to open logFile on-the-fly.  Any
 	 * failure in that would lead to recursion.
 	 */
+
 	if ((destination & LOG_DESTINATION_CSVLOG) && csvlogFile != NULL)
 		logfile = csvlogFile;
 	else if ((destination & LOG_DESTINATION_JSONLOG) && jsonlogFile != NULL)
 		logfile = jsonlogFile;
+	else if ((destination & LOG_DESTINATION_DURATION) && durationFile != NULL)
+		logfile = durationFile;
+	else if ((destination & LOG_DESTINATION_DURATION_CSV) && durationcsvFile != NULL)
+		logfile = durationcsvFile;
+	else if ((destination & LOG_DESTINATION_DURATION_JSON) && durationjsonFile != NULL)
+		logfile = durationjsonFile;
 	else
 		logfile = syslogFile;
 
@@ -1184,7 +1278,10 @@ pipeThread(void *arg)
 		{
 			if (ftell(syslogFile) >= Log_RotationSize * 1024L ||
 				(csvlogFile != NULL && ftell(csvlogFile) >= Log_RotationSize * 1024L) ||
-				(jsonlogFile != NULL && ftell(jsonlogFile) >= Log_RotationSize * 1024L))
+				(jsonlogFile != NULL && ftell(jsonlogFile) >= Log_RotationSize * 1024L) ||
+				(durationFile != NULL && ftell(durationFile) >= Log_RotationSize * 1024L) ||
+				(durationcsvFile != NULL && ftell(durationcsvFile) >= Log_RotationSize * 1024L) ||
+				(durationjsonFile != NULL && ftell(durationjsonFile) >= Log_RotationSize * 1024L))
 				SetLatch(MyLatch);
 		}
 		LeaveCriticalSection(&sysloggerSection);
@@ -1272,8 +1369,16 @@ logfile_rotate_dest(bool time_based_rotation, int size_rotation_for,
 	 * is assumed to be always opened even if stderr is disabled in
 	 * log_destination.
 	 */
-	if ((Log_destination & target_dest) == 0 &&
-		target_dest != LOG_DESTINATION_STDERR)
+	if (
+		(target_dest != LOG_DESTINATION_STDERR) /* never close stderr */
+		&& (
+	/* Close if it has been removed from Log_destination */
+			((target_dest < LOG_DESTINATION_DURATION) &&
+			 ((Log_destination & target_dest) == 0))
+			||
+	/* Close if it has been removed from Log_duration_destination */
+			((target_dest >= LOG_DESTINATION_DURATION) &&
+			 ((Log_duration_destination & target_dest) <= LOG_DESTINATION_DURATION))))
 	{
 		if (*logFile != NULL)
 			fclose(*logFile);
@@ -1285,9 +1390,10 @@ logfile_rotate_dest(bool time_based_rotation, int size_rotation_for,
 	}
 
 	/*
-	 * Leave if it is not time for a rotation or if the target destination has
-	 * no need to do a rotation based on the size of its file.
+	 * Leave if it is not time for a rotation and if the target destination
+	 * has no need to do a rotation based on the size of its file.
 	 */
+
 	if (!time_based_rotation && (size_rotation_for & target_dest) == 0)
 		return true;
 
@@ -1298,6 +1404,12 @@ logfile_rotate_dest(bool time_based_rotation, int size_rotation_for,
 		logFileExt = ".csv";
 	else if (target_dest == LOG_DESTINATION_JSONLOG)
 		logFileExt = ".json";
+	else if (target_dest == LOG_DESTINATION_DURATION)
+		logFileExt = ".duration";
+	else if (target_dest == LOG_DESTINATION_DURATION_CSV)
+		logFileExt = ".duration.csv";
+	else if (target_dest == LOG_DESTINATION_DURATION_JSON)
+		logFileExt = ".duration.json";
 	else
 	{
 		/* cannot happen */
@@ -1391,6 +1503,22 @@ logfile_rotate(bool time_based_rotation, int size_rotation_for)
 							 &jsonlogFile))
 		return;
 
+	/* file rotation for durations */
+	if (!logfile_rotate_dest(time_based_rotation, size_rotation_for, fntime,
+							 LOG_DESTINATION_DURATION, &last_duration_file_name,
+							 &durationFile))
+		return;
+
+	if (!logfile_rotate_dest(time_based_rotation, size_rotation_for, fntime,
+							 LOG_DESTINATION_DURATION_CSV,
+							 &last_duration_csv_file_name, &durationcsvFile))
+		return;
+
+	if (!logfile_rotate_dest(time_based_rotation, size_rotation_for, fntime,
+							 LOG_DESTINATION_DURATION_JSON,
+							 &last_duration_json_file_name, &durationjsonFile))
+		return;
+
 	update_metainfo_datafile();
 
 	set_next_rotation_time();
@@ -1478,7 +1606,10 @@ update_metainfo_datafile(void)
 
 	if (!(Log_destination & LOG_DESTINATION_STDERR) &&
 		!(Log_destination & LOG_DESTINATION_CSVLOG) &&
-		!(Log_destination & LOG_DESTINATION_JSONLOG))
+		!(Log_destination & LOG_DESTINATION_JSONLOG) &&
+		!(Log_duration_destination & LOG_DESTINATION_STDERR) &&
+		!(Log_duration_destination & LOG_DESTINATION_CSVLOG) &&
+		!(Log_duration_destination & LOG_DESTINATION_JSONLOG))
 	{
 		if (unlink(LOG_METAINFO_DATAFILE) < 0 && errno != ENOENT)
 			ereport(LOG,
@@ -1549,6 +1680,46 @@ update_metainfo_datafile(void)
 			return;
 		}
 	}
+
+	if (last_duration_file_name && (Log_duration_destination & LOG_DESTINATION_STDERR))
+	{
+		if (fprintf(fh, "duration %s\n", last_duration_file_name) < 0)
+		{
+			ereport(LOG,
+					(errcode_for_file_access(),
+					 errmsg("could not write file \"%s\": %m",
+							LOG_METAINFO_DATAFILE_TMP)));
+			fclose(fh);
+			return;
+		}
+	}
+
+	if (last_duration_csv_file_name && (Log_duration_destination & LOG_DESTINATION_CSVLOG))
+	{
+		if (fprintf(fh, "duration.csv %s\n", last_duration_csv_file_name) < 0)
+		{
+			ereport(LOG,
+					(errcode_for_file_access(),
+					 errmsg("could not write file \"%s\": %m",
+							LOG_METAINFO_DATAFILE_TMP)));
+			fclose(fh);
+			return;
+		}
+	}
+
+	if (last_duration_json_file_name && (Log_duration_destination & LOG_DESTINATION_JSONLOG))
+	{
+		if (fprintf(fh, "duration.json %s\n", last_duration_json_file_name) < 0)
+		{
+			ereport(LOG,
+					(errcode_for_file_access(),
+					 errmsg("could not write file \"%s\": %m",
+							LOG_METAINFO_DATAFILE_TMP)));
+			fclose(fh);
+			return;
+		}
+	}
+
 	fclose(fh);
 
 	if (rename(LOG_METAINFO_DATAFILE_TMP, LOG_METAINFO_DATAFILE) != 0)

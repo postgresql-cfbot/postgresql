@@ -294,6 +294,8 @@ write_jsonlog(ErrorData *edata)
 	/* If in the syslogger process, try to write messages direct to file */
 	if (MyBackendType == B_LOGGER)
 		write_syslogger_file(buf.data, buf.len, LOG_DESTINATION_JSONLOG);
+	else if (edata->message_type == LOG_MESSAGE_TYPE_DURATION)
+		write_pipe_chunks(buf.data, buf.len, LOG_DESTINATION_DURATION_JSON);
 	else
 		write_pipe_chunks(buf.data, buf.len, LOG_DESTINATION_JSONLOG);
 

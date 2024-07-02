@@ -220,6 +220,8 @@ extern int	errbacktrace(void);
 
 extern int	errposition(int cursorpos);
 
+extern int	errmessagetype(int type);
+
 extern int	internalerrposition(int cursorpos);
 extern int	internalerrquery(const char *query);
 
@@ -467,6 +469,7 @@ typedef struct ErrorData
 	int			internalpos;	/* cursor index into internalquery */
 	char	   *internalquery;	/* text of internally-generated query */
 	int			saved_errno;	/* errno at entry */
+	int			message_type;	/* type of message for potential routing */
 
 	/* context containing associated non-constant strings */
 	struct MemoryContextData *assoc_context;
@@ -499,7 +502,9 @@ typedef enum
 extern PGDLLIMPORT int Log_error_verbosity;
 extern PGDLLIMPORT char *Log_line_prefix;
 extern PGDLLIMPORT int Log_destination;
+extern PGDLLIMPORT int Log_duration_destination;
 extern PGDLLIMPORT char *Log_destination_string;
+extern PGDLLIMPORT char *Log_duration_destination_string;
 extern PGDLLIMPORT bool syslog_sequence_numbers;
 extern PGDLLIMPORT bool syslog_split_messages;
 
@@ -509,6 +514,13 @@ extern PGDLLIMPORT bool syslog_split_messages;
 #define LOG_DESTINATION_EVENTLOG 4
 #define LOG_DESTINATION_CSVLOG	 8
 #define LOG_DESTINATION_JSONLOG	16
+#define LOG_DESTINATION_DURATION	32
+#define LOG_DESTINATION_DURATION_CSV	64
+#define LOG_DESTINATION_DURATION_JSON	128
+
+/* Log message type */
+#define LOG_MESSAGE_TYPE_DEFAULT 0
+#define LOG_MESSAGE_TYPE_DURATION 1
 
 /* Other exported functions */
 extern void log_status_format(StringInfo buf, const char *format,

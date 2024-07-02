@@ -449,6 +449,41 @@ ALTER TABLE parted_fk_naming ATTACH PARTITION parted_fk_naming_1 FOR VALUES IN (
 SELECT conname FROM pg_constraint WHERE conrelid = 'parted_fk_naming_1'::regclass AND contype = 'f';
 DROP TABLE parted_fk_naming;
 
+--
+-- Test various ways to create primary keys on partitions, linked to unique
+-- indexes on the partitioned table.  These should all fail, but we don't dare
+-- change released behavior, so instead cope with it at DETACH time.
+CREATE TABLE t (a integer) PARTITION BY LIST (a);
+CREATE TABLE tp (a integer PRIMARY KEY);
+ALTER TABLE t ATTACH PARTITION tp FOR VALUES IN (1);
+CREATE UNIQUE INDEX t_a_idx ON t (a);
+ALTER INDEX t_a_idx ATTACH PARTITION tp_pkey;
+ALTER TABLE t DETACH PARTITION tp;
+DROP TABLE t, tp;
+
+CREATE TABLE t (a integer) PARTITION BY LIST (a);
+CREATE TABLE tp (a integer PRIMARY KEY);
+CREATE UNIQUE INDEX t_a_idx ON t (a);
+ALTER TABLE t ATTACH PARTITION tp FOR VALUES IN (1);
+ALTER TABLE t DETACH PARTITION tp;
+DROP TABLE t, tp;
+
+CREATE TABLE t (a integer) PARTITION BY LIST (a);
+CREATE TABLE tp (a integer PRIMARY KEY);
+CREATE UNIQUE INDEX t_a_idx ON ONLY t (a);
+ALTER TABLE t ATTACH PARTITION tp FOR VALUES IN (1);
+ALTER TABLE t DETACH PARTITION tp;
+DROP TABLE t, tp;
+
+CREATE TABLE regress_constr_partitioned (a integer) PARTITION BY LIST (a);
+CREATE TABLE regress_constr_partition1 PARTITION OF regress_constr_partitioned FOR VALUES IN (1);
+ALTER TABLE regress_constr_partition1 ADD PRIMARY KEY (a);
+CREATE UNIQUE INDEX ON regress_constr_partitioned (a);
+BEGIN;
+ALTER TABLE regress_constr_partitioned DETACH PARTITION regress_constr_partition1;
+ROLLBACK;
+--  Leave this one in funny state for pg_upgrade testing
+
 -- test a HOT update that invalidates the conflicting tuple.
 -- the trigger should still fire and catch the violation
 

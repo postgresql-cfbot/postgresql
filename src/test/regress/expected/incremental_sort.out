@@ -520,13 +520,13 @@ select * from (select * from t order by a) s order by a, b limit 55;
 
 -- Test EXPLAIN ANALYZE with only a fullsort group.
 select explain_analyze_without_memory('select * from (select * from t order by a) s order by a, b limit 55');
-                                        explain_analyze_without_memory                                         
----------------------------------------------------------------------------------------------------------------
+                                              explain_analyze_without_memory                                              
+--------------------------------------------------------------------------------------------------------------------------
  Limit (actual rows=55 loops=1)
    ->  Incremental Sort (actual rows=55 loops=1)
          Sort Key: t.a, t.b
          Presorted Key: t.a
-         Full-sort Groups: 2  Sort Methods: top-N heapsort, quicksort  Average Memory: NNkB  Peak Memory: NNkB
+         Full-sort Groups: 2  Sort Methods: top-N heapsort, multi-key quick sort  Average Memory: NNkB  Peak Memory: NNkB
          ->  Sort (actual rows=101 loops=1)
                Sort Key: t.a
                Sort Method: quicksort  Memory: NNkB
@@ -554,7 +554,7 @@ select jsonb_pretty(explain_analyze_inc_sort_nodes_without_memory('select * from
              "Group Count": 2,                  +
              "Sort Methods Used": [             +
                  "top-N heapsort",              +
-                 "quicksort"                    +
+                 "multi-key quick sort"         +
              ],                                 +
              "Sort Space Memory": {             +
                  "Peak Sort Space Used": "NN",  +
@@ -728,7 +728,7 @@ select explain_analyze_without_memory('select * from (select * from t order by a
    ->  Incremental Sort (actual rows=70 loops=1)
          Sort Key: t.a, t.b
          Presorted Key: t.a
-         Full-sort Groups: 1  Sort Method: quicksort  Average Memory: NNkB  Peak Memory: NNkB
+         Full-sort Groups: 1  Sort Method: multi-key quick sort  Average Memory: NNkB  Peak Memory: NNkB
          Pre-sorted Groups: 5  Sort Methods: top-N heapsort, quicksort  Average Memory: NNkB  Peak Memory: NNkB
          ->  Sort (actual rows=1000 loops=1)
                Sort Key: t.a
@@ -756,7 +756,7 @@ select jsonb_pretty(explain_analyze_inc_sort_nodes_without_memory('select * from
          "Full-sort Groups": {                  +
              "Group Count": 1,                  +
              "Sort Methods Used": [             +
-                 "quicksort"                    +
+                 "multi-key quick sort"         +
              ],                                 +
              "Sort Space Memory": {             +
                  "Peak Sort Space Used": "NN",  +

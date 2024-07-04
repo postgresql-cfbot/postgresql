@@ -905,7 +905,6 @@ CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot)
 	bool		need_delim = false;
 	FmgrInfo   *out_functions = cstate->out_functions;
 	MemoryContext oldcontext;
-	ListCell   *cur;
 	char	   *string;
 
 	MemoryContextReset(cstate->rowcontext);
@@ -920,30 +919,21 @@ CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot)
 	/* Make sure the tuple is fully deconstructed */
 	slot_getallattrs(slot);
 
-	foreach(cur, cstate->attnumlist)
+	if (!cstate->opts.binary)
 	{
-		int			attnum = lfirst_int(cur);
-		Datum		value = slot->tts_values[attnum - 1];
-		bool		isnull = slot->tts_isnull[attnum - 1];
-
-		if (!cstate->opts.binary)
+		foreach_int(attnum, cstate->attnumlist)
 		{
+			Datum		value = slot->tts_values[attnum - 1];
+			bool		isnull = slot->tts_isnull[attnum - 1];
+
 			if (need_delim)
 				CopySendChar(cstate, cstate->opts.delim[0]);
 			need_delim = true;
-		}
 
-		if (isnull)
-		{
-			if (!cstate->opts.binary)
+			if (isnull)
 				CopySendString(cstate, cstate->opts.null_print_client);
 			else
-				CopySendInt32(cstate, -1);
-		}
-		else
-		{
-			if (!cstate->opts.binary)
-			{
+			{			
 				string = OutputFunctionCall(&out_functions[attnum - 1],
 											value);
 				if (cstate->opts.csv_mode)
@@ -952,15 +942,25 @@ CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot)
 				else
 					CopyAttributeOutText(cstate, string);
 			}
-			else
-			{
-				bytea	   *outputbytes;
+		}
+	}
+	else
+	{
+		foreach_int(attnum, cstate->attnumlist)
+		{
+			Datum		value = slot->tts_values[attnum - 1];
+			bool		isnull = slot->tts_isnull[attnum - 1];
+			bytea	   *outputbytes;
 
+			if (isnull)
+				CopySendInt32(cstate, -1);
+			else
+			{		
 				outputbytes = SendFunctionCall(&out_functions[attnum - 1],
-											   value);
+												value);
 				CopySendInt32(cstate, VARSIZE(outputbytes) - VARHDRSZ);
 				CopySendData(cstate, VARDATA(outputbytes),
-							 VARSIZE(outputbytes) - VARHDRSZ);
+								VARSIZE(outputbytes) - VARHDRSZ);
 			}
 		}
 	}

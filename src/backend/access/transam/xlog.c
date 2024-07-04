@@ -8671,20 +8671,33 @@ assign_wal_sync_method(int new_wal_sync_method, void *extra)
 	}
 }
 
+/*
+ * Exported version of get_sync_bit()
+ *
+ * Note: The returned value may have the PG_O_DIRECT bit set.
+ */
+int
+XLogGetSyncBit(void)
+{
+	return get_sync_bit(wal_sync_method);
+}
+
 
 /*
- * Issue appropriate kind of fsync (if any) for an XLOG output file.
+ * Issue appropriate kind of fsync (if any) according to wal_sync_method.
  *
- * 'fd' is a file descriptor for the XLOG file to be fsync'd.
- * 'segno' is for error reporting purposes.
+ * Returns true if sucessfully fsync'ed, otherwise returns false and sets
+ * errmsg if it is not NULL.
+ * 'fd' is a file descriptor for the file to be fsync'd.
+ *
+ * Returns true if successfully synced. Returns false if failed and sets the
+ * error message to *errmsg.
  */
-void
-issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli)
+bool
+XLogFsyncFile(int fd, const char **errmsg)
 {
-	char	   *msg = NULL;
+	const char *msg = NULL;
 	instr_time	start;
-
-	Assert(tli != 0);
 
 	/*
 	 * Quick exit if fsync is disabled or write() has already synced the WAL
@@ -8693,7 +8706,7 @@ issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli)
 	if (!enableFsync ||
 		wal_sync_method == WAL_SYNC_METHOD_OPEN ||
 		wal_sync_method == WAL_SYNC_METHOD_OPEN_DSYNC)
-		return;
+		return true;
 
 	/* Measure I/O timing to sync the WAL file */
 	if (track_wal_io_timing)
@@ -8730,19 +8743,6 @@ issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli)
 			break;
 	}
 
-	/* PANIC if failed to fsync */
-	if (msg)
-	{
-		char		xlogfname[MAXFNAMELEN];
-		int			save_errno = errno;
-
-		XLogFileName(xlogfname, tli, segno, wal_segment_size);
-		errno = save_errno;
-		ereport(PANIC,
-				(errcode_for_file_access(),
-				 errmsg(msg, xlogfname)));
-	}
-
 	pgstat_report_wait_end();
 
 	/*
@@ -8756,7 +8756,44 @@ issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli)
 		INSTR_TIME_ACCUM_DIFF(PendingWalStats.wal_sync_time, end, start);
 	}
 
+	if (msg)
+	{
+		Assert (errmsg);
+
+		*errmsg = msg;
+		return false;
+	}
+
 	PendingWalStats.wal_sync++;
+
+	return true;
+}
+
+/*
+ * Issue appropriate kind of fsync (if any) for an XLOG output file.
+ *
+ * 'fd' is a file descriptor for the XLOG file to be fsync'd.
+ * 'segno' is for error reporting purposes.
+ */
+void
+issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli)
+{
+	const char	*msg;
+
+	Assert(tli != 0);
+
+	/* PANIC if failed to fsync */
+	if (!XLogFsyncFile(fd, &msg))
+	{
+		char		xlogfname[MAXFNAMELEN];
+		int			save_errno = errno;
+
+		XLogFileName(xlogfname, tli, segno, wal_segment_size);
+		errno = save_errno;
+		ereport(PANIC,
+				(errcode_for_file_access(),
+				 errmsg(msg, xlogfname)));
+	}
 }
 
 /*

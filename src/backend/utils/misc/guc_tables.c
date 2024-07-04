@@ -4941,6 +4941,17 @@ struct config_enum ConfigureNamesEnum[] =
 	},
 
 	{
+		{"log_transaction", PGC_SUSET, LOGGING_WHAT,
+			gettext_noop("Sets the type of statements logged when transaction is sampled."),
+			NULL
+		},
+		&log_transaction,
+		LOGSTMT_ALL, log_statement_options,
+		NULL, NULL, NULL
+	},
+
+
+	{
 		{"syslog_facility", PGC_SIGHUP, LOGGING_WHERE,
 			gettext_noop("Sets the syslog \"facility\" to be used when syslog enabled."),
 			NULL

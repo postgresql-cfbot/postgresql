@@ -95,6 +95,8 @@ bool		Log_disconnections = false;
 
 int			log_statement = LOGSTMT_NONE;
 
+int			log_transaction = LOGSTMT_ALL;
+
 /* GUC variable for maximum stack depth (measured in kilobytes) */
 int			max_stack_depth = 100;
 
@@ -184,6 +186,7 @@ static int	SocketBackend(StringInfo inBuf);
 static int	ReadCommand(StringInfo inBuf);
 static void forbidden_in_wal_sender(char firstchar);
 static bool check_log_statement(List *stmt_list);
+static bool	check_log_transaction_statement(List *stmt_list);
 static int	errdetail_execute(List *raw_parsetree_list);
 static int	errdetail_params(ParamListInfo params);
 static int	errdetail_abort(void);
@@ -1368,7 +1371,7 @@ exec_simple_query(const char *query_string)
 	/*
 	 * Emit duration logging if appropriate.
 	 */
-	switch (check_log_duration(msec_str, was_logged))
+	switch (check_log_duration(msec_str, was_logged, parsetree_list))
 	{
 		case 1:
 			ereport(LOG,
@@ -1604,7 +1607,7 @@ exec_parse_message(const char *query_string,	/* string to execute */
 	/*
 	 * Emit duration logging if appropriate.
 	 */
-	switch (check_log_duration(msec_str, false))
+	switch (check_log_duration(msec_str, false, NIL))
 	{
 		case 1:
 			ereport(LOG,
@@ -2070,7 +2073,7 @@ exec_bind_message(StringInfo input_message)
 	/*
 	 * Emit duration logging if appropriate.
 	 */
-	switch (check_log_duration(msec_str, false))
+	switch (check_log_duration(msec_str, false, NIL))
 	{
 		case 1:
 			ereport(LOG,
@@ -2332,7 +2335,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 	/*
 	 * Emit duration logging if appropriate.
 	 */
-	switch (check_log_duration(msec_str, was_logged))
+	switch (check_log_duration(msec_str, was_logged, portal->stmts))
 	{
 		case 1:
 			ereport(LOG,
@@ -2392,6 +2395,27 @@ check_log_statement(List *stmt_list)
 	return false;
 }
 
+static bool
+check_log_transaction_statement(List *stmt_list)
+{
+	ListCell *stmt_item;
+	if (log_transaction == LOGSTMT_NONE)
+		return false;
+	if (log_transaction == LOGSTMT_ALL)
+		return true;
+
+	/* Else we have to inspect the statement(s) to see whether to log */
+	foreach (stmt_item, stmt_list)
+	{
+		Node *stmt = (Node *)lfirst(stmt_item);
+
+		if (GetCommandLogLevel(stmt) <= log_transaction)
+			return true;
+	}
+
+	return false;
+}
+
 /*
  * check_log_duration
  *		Determine whether current command's duration should be logged
@@ -2408,9 +2432,13 @@ check_log_statement(List *stmt_list)
  *
  * was_logged should be true if caller already logged query details (this
  * essentially prevents 2 from being returned).
+ *
+ * stmts can be either raw grammar output or a list of planned
+ * statements that were executed during current transaction or NIL if
+ * tag could not be determined.
  */
 int
-check_log_duration(char *msec_str, bool was_logged)
+check_log_duration(char *msec_str, bool was_logged, List *stmts)
 {
 	if (log_duration || log_min_duration_sample >= 0 ||
 		log_min_duration_statement >= 0 || xact_is_sampled)
@@ -2452,11 +2480,20 @@ check_log_duration(char *msec_str, bool was_logged)
 				(log_statement_sample_rate == 1 ||
 				 pg_prng_double(&pg_global_prng_state) <= log_statement_sample_rate);
 
-		if (exceeded_duration || in_sample || log_duration || xact_is_sampled)
+		/*
+		 * Check than current statement should be logged as transaction sampled statement according
+		 * to log_transaction paramenter. Some statements' tags could not be determined (like PARSE or BIND),
+		 * for this kinds of statements NIL passed - this is indicator to log it without paramenter check
+		 * for compatibility with old code.
+		 */
+		if (!in_sample)
+			in_sample = (stmts == NIL || check_log_transaction_statement(stmts)) && xact_is_sampled;
+
+		if (exceeded_duration || in_sample || log_duration)
 		{
 			snprintf(msec_str, 32, "%ld.%03d",
 					 secs * 1000 + msecs, usecs % 1000);
-			if ((exceeded_duration || in_sample || xact_is_sampled) && !was_logged)
+			if ((exceeded_duration || in_sample) && !was_logged)
 				return 2;
 			else
 				return 1;

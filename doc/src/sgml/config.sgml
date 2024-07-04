@@ -7059,6 +7059,29 @@ local0.*    /var/log/postgresql
        </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-log-transaction" xreflabel="log_transaction">
+      <term><varname>log_transaction</varname> (<type>enum</type>)
+      <indexterm>
+       <primary><varname>log_transaction</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Controls which SQL statements in sampled transaction are logged. Transaction is
+        getting sampled according to <xref linkend="guc-log-transaction-sample-rate"/> setting.
+        Valid values are same as for <xref linkend="guc-log-statement"/>: <literal>none</literal> (off),
+        <literal>ddl</literal>, <literal>mod</literal>, and <literal>all</literal> (all statements).
+        Behaviour also similar to <xref linkend="guc-log-statement"/>.
+       </para>
+
+       <para>
+        The default is <literal>all</literal>.
+        Only superusers and users with the appropriate <literal>SET</literal>
+        privilege can change this setting.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-log-startup-progress-interval" xreflabel="log_startup_progress_interval">
       <term><varname>log_startup_progress_interval</varname> (<type>integer</type>)
       <indexterm>

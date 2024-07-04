@@ -285,7 +285,7 @@ llvm_compile_expr(ExprState *state)
 
 		switch (opcode)
 		{
-			case EEOP_DONE:
+			case EEOP_DONE_RETURN:
 				{
 					LLVMValueRef v_tmpisnull;
 					LLVMValueRef v_tmpvalue;
@@ -298,6 +298,10 @@ llvm_compile_expr(ExprState *state)
 					LLVMBuildRet(b, v_tmpvalue);
 					break;
 				}
+
+			case EEOP_DONE_NO_RETURN:
+				LLVMBuildRet(b, l_sizet_const(0));
+				break;
 
 			case EEOP_INNER_FETCHSOME:
 			case EEOP_OUTER_FETCHSOME:

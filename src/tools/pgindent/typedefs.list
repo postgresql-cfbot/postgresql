@@ -25,6 +25,7 @@ AclResult
 AcquireSampleRowsFunc
 ActionList
 ActiveSnapshotElt
+ActiveULog
 AddForeignUpdateTargets_function
 AddrInfo
 AffixNode
@@ -2659,6 +2660,7 @@ SimplePtrListCell
 SimpleStats
 SimpleStringList
 SimpleStringListCell
+SimpleUndoLogRecord
 SingleBoundSortItem
 Size
 SkipPages
@@ -3028,8 +3030,11 @@ UINT
 ULARGE_INTEGER
 ULONG
 ULONG_PTR
+ULogStateData
 UV
 UVersionInfo
+UndoDescData
+UndoLogFileHeader
 UnicodeNormalizationForm
 UnicodeNormalizationQC
 Unique

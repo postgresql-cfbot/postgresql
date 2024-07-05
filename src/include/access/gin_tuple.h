@@ -35,6 +35,16 @@ typedef struct GinTuple
 	char		data[FLEXIBLE_ARRAY_MEMBER];
 } GinTuple;
 
+typedef struct GinBuffer GinBuffer;
+
 extern int	_gin_compare_tuples(GinTuple *a, GinTuple *b, SortSupport ssup);
+
+extern GinBuffer *GinBufferInit(Relation index);
+extern bool GinBufferIsEmpty(GinBuffer *buffer);
+extern bool GinBufferCanAddKey(GinBuffer *buffer, GinTuple *tup);
+extern void GinBufferReset(GinBuffer *buffer);
+extern void GinBufferFree(GinBuffer *buffer);
+extern void GinBufferMergeTuple(GinBuffer *buffer, GinTuple *tup);
+extern GinTuple *GinBufferBuildTuple(GinBuffer *buffer);
 
 #endif							/* GIN_TUPLE_H */

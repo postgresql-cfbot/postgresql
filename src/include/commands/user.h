@@ -35,6 +35,7 @@ extern ObjectAddress RenameRole(const char *oldname, const char *newname);
 extern void DropOwnedObjects(DropOwnedStmt *stmt);
 extern void ReassignOwnedObjects(ReassignOwnedStmt *stmt);
 extern List *roleSpecsToIds(List *memberNames);
+extern void DropDatabaseSpecificRoles(Oid databaseId);
 
 extern bool check_createrole_self_grant(char **newval, void **extra,
 										GucSource source);

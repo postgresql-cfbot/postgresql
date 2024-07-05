@@ -34,7 +34,7 @@
 
 #define UINT32_ACCESS_ONCE(var)		 ((uint32)(*((volatile uint32 *)&(var))))
 
-#define HAS_PGSTAT_PERMISSIONS(role)	 (has_privs_of_role(GetUserId(), ROLE_PG_READ_ALL_STATS) || has_privs_of_role(GetUserId(), role))
+#define HAS_PGSTAT_PERMISSIONS(role)	 (has_cluster_privs_of_role(GetUserId(), ROLE_PG_READ_ALL_STATS) || has_cluster_privs_of_role(GetUserId(), role))
 
 #define PG_STAT_GET_RELENTRY_INT64(stat)						\
 Datum															\

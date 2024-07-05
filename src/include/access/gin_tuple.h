@@ -10,10 +10,12 @@
 #ifndef GIN_TUPLE_
 #define GIN_TUPLE_
 
+#include "access/ginblock.h"
 #include "storage/itemptr.h"
 #include "utils/sortsupport.h"
 
 /*
+ * XXX: Update description with new architecture
  * Each worker sees tuples in CTID order, so if we track the first TID and
  * compare that when combining results in the worker, we would not need to
  * do an expensive sort in workers (the mergesort is already smart about
@@ -24,16 +26,25 @@
  */
 typedef struct GinTuple
 {
-	Size		tuplen;			/* length of the whole tuple */
-	Size		keylen;			/* bytes in data for key value */
+	int			tuplen;			/* length of the whole tuple */
+	OffsetNumber attrnum;		/* attnum of index key */
+	uint16		keylen;			/* bytes in data for key value */
 	int16		typlen;			/* typlen for key */
 	bool		typbyval;		/* typbyval for key */
-	OffsetNumber attrnum;		/* attnum of index key */
 	signed char category;		/* category: normal or NULL? */
-	ItemPointerData first;		/* first TID in the array */
 	int			nitems;			/* number of TIDs in the data */
 	char		data[FLEXIBLE_ARRAY_MEMBER];
 } GinTuple;
+
+static inline ItemPointer
+GinTupleGetFirst(GinTuple *tup)
+{
+	GinPostingList *list;
+
+	list = (GinPostingList *) SHORTALIGN(tup->data + tup->keylen);
+
+	return &list->first;
+}
 
 typedef struct GinBuffer GinBuffer;
 

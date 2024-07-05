@@ -78,6 +78,7 @@
 
 #include "access/commit_ts.h"
 #include "access/htup_details.h"
+#include "access/simpleundolog.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
 #include "access/twophase.h"
@@ -1587,6 +1588,8 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 									   hdr->nabortstats,
 									   abortstats,
 									   gid);
+
+	SimpleUndoLog_UndoByXid(isCommit, xid, hdr->nsubxacts, children);
 
 	ProcArrayRemove(proc, latestXid);
 

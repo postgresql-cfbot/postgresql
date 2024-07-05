@@ -24,6 +24,7 @@
 #include "access/multixact.h"
 #include "access/parallel.h"
 #include "access/subtrans.h"
+#include "access/simpleundolog.h"
 #include "access/transam.h"
 #include "access/twophase.h"
 #include "access/xact.h"
@@ -2418,6 +2419,14 @@ CommitTransaction(void)
 
 	AtEOXact_MultiXact();
 
+	/*
+	 * Drop storage files. This has to happen after buffer pins are dropped,
+	 * required by DropRelationBuffers(). This is mainly for a requirement by
+	 * abort-time cleanup, but place this at the same place for commit for
+	 * consistency.
+	 */
+	AtEOXact_SimpleUndoLog(true);
+
 	ResourceOwnerRelease(TopTransactionResourceOwner,
 						 RESOURCE_RELEASE_LOCKS,
 						 true, true);
@@ -2656,6 +2665,7 @@ PrepareTransaction(void)
 	AtPrepare_PgStat();
 	AtPrepare_MultiXact();
 	AtPrepare_RelationMap();
+	AtPrepare_SimpleUndoLog();
 
 	/*
 	 * Here is where we really truly prepare.
@@ -2953,6 +2963,13 @@ AbortTransaction(void)
 		AtEOXact_RelationCache(false);
 		AtEOXact_Inval(false);
 		AtEOXact_MultiXact();
+
+		/*
+		 * Drop storage files. This has to happen after buffer pins are
+		 * dropped, required by DropRelationBuffers().
+		 */
+		AtEOXact_SimpleUndoLog(false);
+
 		ResourceOwnerRelease(TopTransactionResourceOwner,
 							 RESOURCE_RELEASE_LOCKS,
 							 false, true);
@@ -5155,6 +5172,7 @@ CommitSubTransaction(void)
 							  s->parent->subTransactionId);
 	AtEOSubXact_Inval(true);
 	AtSubCommit_smgr();
+	AtEOSubXact_SimpleUndoLog(true);
 
 	/*
 	 * The only lock we actually release here is the subtransaction XID lock.
@@ -5336,6 +5354,7 @@ AbortSubTransaction(void)
 							 RESOURCE_RELEASE_AFTER_LOCKS,
 							 false, false);
 		AtSubAbort_smgr();
+		AtEOSubXact_SimpleUndoLog(false);
 
 		AtEOXact_GUC(false, s->gucNestLevel);
 		AtEOSubXact_SPI(false, s->subTransactionId);
@@ -6226,6 +6245,8 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 		DropRelationFiles(parsed->xlocators, parsed->nrels, true);
 	}
 
+	SimpleUndoLog_UndoByXid(true, xid, parsed->nsubxacts, parsed->subxacts);
+
 	if (parsed->nstats > 0)
 	{
 		/* see equivalent call for relations above */
@@ -6336,6 +6357,8 @@ xact_redo_abort(xl_xact_parsed_abort *parsed, TransactionId xid,
 
 		DropRelationFiles(parsed->xlocators, parsed->nrels, true);
 	}
+
+	SimpleUndoLog_UndoByXid(false, xid, parsed->nsubxacts, parsed->subxacts);
 
 	if (parsed->nstats > 0)
 	{

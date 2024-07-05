@@ -9,6 +9,7 @@ backend_sources += files(
   'rmgr.c',
   'slru.c',
   'subtrans.c',
+  'simpleundolog.c',
   'timeline.c',
   'transam.c',
   'twophase.c',

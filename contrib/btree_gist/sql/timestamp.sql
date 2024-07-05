@@ -35,3 +35,10 @@ SELECT count(*) FROM timestamptmp WHERE a >  '2004-10-26 08:55:08'::timestamp;
 EXPLAIN (COSTS OFF)
 SELECT a, a <-> '2004-10-26 08:55:08' FROM timestamptmp ORDER BY a <-> '2004-10-26 08:55:08' LIMIT 3;
 SELECT a, a <-> '2004-10-26 08:55:08' FROM timestamptmp ORDER BY a <-> '2004-10-26 08:55:08' LIMIT 3;
+
+SET enable_seqscan=on;
+ANALYZE timestamptmp;
+
+-- It should use the index when comparing to a date:
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM timestamptmp WHERE a = date '2018-12-18';

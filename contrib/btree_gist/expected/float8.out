@@ -89,3 +89,15 @@ SELECT a, a <-> '-1890.0' FROM float8tmp ORDER BY a <-> '-1890.0' LIMIT 3;
   -1769.73634 | 120.26366000000007
 (3 rows)
 
+SET enable_seqscan=on;
+ANALYZE float8tmp;
+-- It should use the index with a different float width:
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM float8tmp WHERE a = real '42';
+                     QUERY PLAN                     
+----------------------------------------------------
+ Aggregate
+   ->  Index Only Scan using float8idx on float8tmp
+         Index Cond: (a = '42'::real)
+(3 rows)
+

@@ -89,3 +89,24 @@ SELECT a, a <-> '464571291354841' FROM int8tmp ORDER BY a <-> '464571291354841' 
  478227196042750 | 13655904687909
 (3 rows)
 
+SET enable_seqscan=on;
+ANALYZE int8tmp;
+-- It should use the index with a different integer width:
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM int8tmp WHERE a = integer '42';
+                   QUERY PLAN                   
+------------------------------------------------
+ Aggregate
+   ->  Index Only Scan using int8idx on int8tmp
+         Index Cond: (a = 42)
+(3 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM int8tmp WHERE a = smallint '42';
+                   QUERY PLAN                   
+------------------------------------------------
+ Aggregate
+   ->  Index Only Scan using int8idx on int8tmp
+         Index Cond: (a = '42'::smallint)
+(3 rows)
+

@@ -89,3 +89,15 @@ SELECT a, a <-> '2004-10-26 08:55:08' FROM timestamptmp ORDER BY a <-> '2004-10-
  Mon Nov 29 20:12:43 2004 | @ 34 days 11 hours 17 mins 35 secs
 (3 rows)
 
+SET enable_seqscan=on;
+ANALYZE timestamptmp;
+-- It should use the index when comparing to a date:
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM timestamptmp WHERE a = date '2018-12-18';
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Aggregate
+   ->  Index Only Scan using timestampidx on timestamptmp
+         Index Cond: (a = '12-18-2018'::date)
+(3 rows)
+

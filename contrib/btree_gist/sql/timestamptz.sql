@@ -78,3 +78,14 @@ SELECT count(*) FROM timestamptztmp WHERE a >  '2018-12-18 10:59:54 GMT+4'::time
 EXPLAIN (COSTS OFF)
 SELECT a, a <-> '2018-12-18 10:59:54 GMT+2' FROM timestamptztmp ORDER BY a <-> '2018-12-18 10:59:54 GMT+2' LIMIT 3;
 SELECT a, a <-> '2018-12-18 10:59:54 GMT+2' FROM timestamptztmp ORDER BY a <-> '2018-12-18 10:59:54 GMT+2' LIMIT 3;
+
+SET enable_seqscan=on;
+ANALYZE timestamptztmp;
+
+-- It should use the index when comparing to a timestamp:
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM timestamptztmp WHERE a = timestamp '2018-12-18 10:59:54 GMT+3';
+
+-- It should use the index when comparing to a date:
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM timestamptztmp WHERE a = date '2018-12-18';

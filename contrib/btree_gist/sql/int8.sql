@@ -35,3 +35,13 @@ SELECT count(*) FROM int8tmp WHERE a >  464571291354841::int8;
 EXPLAIN (COSTS OFF)
 SELECT a, a <-> '464571291354841' FROM int8tmp ORDER BY a <-> '464571291354841' LIMIT 3;
 SELECT a, a <-> '464571291354841' FROM int8tmp ORDER BY a <-> '464571291354841' LIMIT 3;
+
+SET enable_seqscan=on;
+ANALYZE int8tmp;
+
+-- It should use the index with a different integer width:
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM int8tmp WHERE a = integer '42';
+
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM int8tmp WHERE a = smallint '42';

@@ -35,3 +35,10 @@ SELECT count(*) FROM int4tmp WHERE a >  237::int4;
 EXPLAIN (COSTS OFF)
 SELECT a, a <-> '237' FROM int4tmp ORDER BY a <-> '237' LIMIT 3;
 SELECT a, a <-> '237' FROM int4tmp ORDER BY a <-> '237' LIMIT 3;
+
+SET enable_seqscan=on;
+ANALYZE int4tmp;
+
+-- It should use the index with a different integer width:
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM int4tmp WHERE a = smallint '42';

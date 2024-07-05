@@ -194,6 +194,14 @@ typedef struct
 	 */
 	void		(*writetup) (Tuplesortstate *state, LogicalTape *tape,
 							 SortTuple *stup);
+	/*
+	 * Flush any buffered writetup() writes.
+	 *
+	 * This is useful when writetup() buffers writes for more efficient
+	 * use of the tape's resources, e.g. when deduplicating or merging
+	 * values.
+	 */
+	void		(*flushwrites) (Tuplesortstate *state, LogicalTape *tape);
 
 	/*
 	 * Function to read a stored tuple from tape back into memory. 'len' is
@@ -461,7 +469,7 @@ extern void tuplesort_putindextuplevalues(Tuplesortstate *state,
 										  Relation rel, ItemPointer self,
 										  const Datum *values, const bool *isnull);
 extern void tuplesort_putbrintuple(Tuplesortstate *state, BrinTuple *tuple, Size size);
-extern void tuplesort_putgintuple(Tuplesortstate *state, GinTuple *tuple, Size size);
+extern void tuplesort_putgintuple(Tuplesortstate *state, struct GinTuple *tuple);
 extern void tuplesort_putdatum(Tuplesortstate *state, Datum val,
 							   bool isNull);
 

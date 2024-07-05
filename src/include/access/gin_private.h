@@ -475,6 +475,9 @@ extern int	ginPostingListDecodeAllSegmentsToTbm(GinPostingList *ptr, int len, TI
 
 extern ItemPointer ginPostingListDecodeAllSegments(GinPostingList *segment, int len,
 												   int *ndecoded_out);
+extern bool ginPostingListDecodeAllSegmentsInto(GinPostingList *segment, int len,
+												ItemPointer into, int capacity,
+												int *ndecoded_out);
 extern ItemPointer ginPostingListDecode(GinPostingList *plist, int *ndecoded_out);
 extern ItemPointer ginMergeItemPointers(ItemPointerData *a, uint32 na,
 										ItemPointerData *b, uint32 nb,

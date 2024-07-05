@@ -92,7 +92,7 @@ test: write_parallel
 test: vacuum_parallel
 
 # no relation related tests can be put in this group
-test: publication subscription
+test: publication subscription privs_in_db
 
 # ----------
 # Another group of parallel tests

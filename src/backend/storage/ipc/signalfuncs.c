@@ -92,14 +92,14 @@ pg_signal_backend(int pid, int sig)
 
 		if (procStatus && procStatus->st_backendType == B_AUTOVAC_WORKER)
 		{
-			if (!has_privs_of_role(GetUserId(), ROLE_PG_SIGNAL_AUTOVACUUM_WORKER))
+			if (!has_cluster_privs_of_role(GetUserId(), ROLE_PG_SIGNAL_AUTOVACUUM_WORKER))
 				return SIGNAL_BACKEND_NOAUTOVAC;
 		}
 		else if (!superuser())
 			return SIGNAL_BACKEND_NOSUPERUSER;
 	}
-	else if (!has_privs_of_role(GetUserId(), proc->roleId) &&
-			 !has_privs_of_role(GetUserId(), ROLE_PG_SIGNAL_BACKEND))
+	else if (!has_cluster_privs_of_role(GetUserId(), proc->roleId) &&
+			 !has_cluster_privs_of_role(GetUserId(), ROLE_PG_SIGNAL_BACKEND))
 		return SIGNAL_BACKEND_NOPERMISSION;
 
 	/*

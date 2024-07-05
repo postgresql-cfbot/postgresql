@@ -67,7 +67,7 @@ bbsink_server_new(bbsink *next, char *pathname)
 
 	/* Replication permission is not sufficient in this case. */
 	StartTransactionCommand();
-	if (!has_privs_of_role(GetUserId(), ROLE_PG_WRITE_SERVER_FILES))
+	if (!has_cluster_privs_of_role(GetUserId(), ROLE_PG_WRITE_SERVER_FILES))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied to create backup stored on server"),

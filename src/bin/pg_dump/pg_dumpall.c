@@ -58,7 +58,7 @@ static void help(void);
 
 static void dropRoles(PGconn *conn);
 static void dumpRoles(PGconn *conn);
-static void dumpRoleMembership(PGconn *conn);
+static void dumpRoleMembership(PGconn *conn, const char *databaseId);
 static void dumpRoleGUCPrivs(PGconn *conn);
 static void dropTablespaces(PGconn *conn);
 static void dumpTablespaces(PGconn *conn);
@@ -594,7 +594,7 @@ main(int argc, char *argv[])
 			dumpRoles(conn);
 
 			/* Dump role memberships */
-			dumpRoleMembership(conn);
+			dumpRoleMembership(conn, "0");
 
 			/* Dump role GUC privileges */
 			if (server_version >= 150000 && !skip_acls)
@@ -955,7 +955,7 @@ dumpRoles(PGconn *conn)
  * no membership yet.
  */
 static void
-dumpRoleMembership(PGconn *conn)
+dumpRoleMembership(PGconn *conn, const char *databaseId)
 {
 	PQExpBuffer buf = createPQExpBuffer();
 	PQExpBuffer optbuf = createPQExpBuffer();
@@ -995,7 +995,8 @@ dumpRoleMembership(PGconn *conn)
 					  "LEFT JOIN %s um on um.oid = a.member "
 					  "LEFT JOIN %s ug on ug.oid = a.grantor "
 					  "WHERE NOT (ur.rolname ~ '^pg_' AND um.rolname ~ '^pg_')"
-					  "ORDER BY 1,2,4", role_catalog, role_catalog, role_catalog);
+					  " AND a.dbid = %s "
+					  "ORDER BY 1,2,4", role_catalog, role_catalog, role_catalog, databaseId);
 	res = executeQuery(conn, buf->data);
 	i_inherit_option = PQfnumber(res, "inherit_option");
 	i_set_option = PQfnumber(res, "set_option");
@@ -1110,6 +1111,8 @@ dumpRoleMembership(PGconn *conn)
 				resetPQExpBuffer(optbuf);
 				fprintf(OPF, "GRANT %s", fmtId(role));
 				fprintf(OPF, " TO %s", fmtId(member));
+				if (strcmp(databaseId, "0") != 0)
+					fprintf(OPF, " IN CURRENT DATABASE");
 				if (*admin_option == 't')
 					appendPQExpBufferStr(optbuf, "ADMIN OPTION");
 				if (dump_grant_options)
@@ -1504,7 +1507,7 @@ dumpDatabases(PGconn *conn)
 	 * doesn't have some failure mode with --clean.
 	 */
 	res = executeQuery(conn,
-					   "SELECT datname "
+					   "SELECT datname, oid "
 					   "FROM pg_database d "
 					   "WHERE datallowconn AND datconnlimit != -2 "
 					   "ORDER BY (datname <> 'template1'), datname");
@@ -1515,6 +1518,7 @@ dumpDatabases(PGconn *conn)
 	for (i = 0; i < PQntuples(res); i++)
 	{
 		char	   *dbname = PQgetvalue(res, i, 0);
+		char	   *dbid = PQgetvalue(res, i, 1);
 		const char *create_opts;
 		int			ret;
 
@@ -1554,6 +1558,10 @@ dumpDatabases(PGconn *conn)
 		}
 		else
 			create_opts = "--create";
+
+		/* Dump database-specific roles if server is running 16.0 or later */
+		if (server_version >= 160000)
+			dumpRoleMembership(conn, dbid);
 
 		if (filename)
 			fclose(OPF);

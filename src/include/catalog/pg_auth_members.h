@@ -36,6 +36,8 @@ CATALOG(pg_auth_members,1261,AuthMemRelationId) BKI_SHARED_RELATION BKI_ROWTYPE_
 	bool		admin_option;	/* granted with admin option? */
 	bool		inherit_option; /* exercise privileges without SET ROLE? */
 	bool		set_option;		/* use SET ROLE to the target role? */
+	Oid			dbid BKI_LOOKUP_OPT(pg_database);	/* ID of a database this
+													 * mapping is effective in */
 } FormData_pg_auth_members;
 
 /* ----------------
@@ -46,11 +48,11 @@ CATALOG(pg_auth_members,1261,AuthMemRelationId) BKI_SHARED_RELATION BKI_ROWTYPE_
 typedef FormData_pg_auth_members *Form_pg_auth_members;
 
 DECLARE_UNIQUE_INDEX_PKEY(pg_auth_members_oid_index, 6303, AuthMemOidIndexId, pg_auth_members, btree(oid oid_ops));
-DECLARE_UNIQUE_INDEX(pg_auth_members_role_member_index, 2694, AuthMemRoleMemIndexId, pg_auth_members, btree(roleid oid_ops, member oid_ops, grantor oid_ops));
-DECLARE_UNIQUE_INDEX(pg_auth_members_member_role_index, 2695, AuthMemMemRoleIndexId, pg_auth_members, btree(member oid_ops, roleid oid_ops, grantor oid_ops));
+DECLARE_UNIQUE_INDEX(pg_auth_members_role_member_db_index, 2694, AuthMemRoleMemDbIndexId, pg_auth_members, btree(roleid oid_ops, member oid_ops, grantor oid_ops, dbid oid_ops));
+DECLARE_UNIQUE_INDEX(pg_auth_members_member_db_role_index, 2695, AuthMemMemRoleDbIndexId, pg_auth_members, btree(member oid_ops, dbid oid_ops, roleid oid_ops, grantor oid_ops));
 DECLARE_INDEX(pg_auth_members_grantor_index, 6302, AuthMemGrantorIndexId, pg_auth_members, btree(grantor oid_ops));
 
-MAKE_SYSCACHE(AUTHMEMROLEMEM, pg_auth_members_role_member_index, 8);
-MAKE_SYSCACHE(AUTHMEMMEMROLE, pg_auth_members_member_role_index, 8);
+MAKE_SYSCACHE(AUTHMEMROLEMEMDB, pg_auth_members_role_member_db_index, 8);
+MAKE_SYSCACHE(AUTHMEMMEMDBROLE, pg_auth_members_member_db_role_index, 8);
 
 #endif							/* PG_AUTH_MEMBERS_H */

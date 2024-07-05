@@ -924,7 +924,7 @@ check_role_for_policy(ArrayType *policy_roles, Oid user_id)
 
 	for (i = 0; i < ARR_DIMS(policy_roles)[0]; i++)
 	{
-		if (has_privs_of_role(user_id, roles[i]))
+		if (has_privs_of_role(user_id, roles[i], MyDatabaseId))
 			return true;
 	}
 

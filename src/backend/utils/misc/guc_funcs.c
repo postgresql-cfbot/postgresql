@@ -581,7 +581,7 @@ bool
 ConfigOptionIsVisible(struct config_generic *conf)
 {
 	if ((conf->flags & GUC_SUPERUSER_ONLY) &&
-		!has_privs_of_role(GetUserId(), ROLE_PG_READ_ALL_SETTINGS))
+		!has_cluster_privs_of_role(GetUserId(), ROLE_PG_READ_ALL_SETTINGS))
 		return false;
 	else
 		return true;
@@ -784,7 +784,7 @@ GetConfigOptionValues(struct config_generic *conf, const char **values)
 	 * insufficiently-privileged users.
 	 */
 	if (conf->source == PGC_S_FILE &&
-		has_privs_of_role(GetUserId(), ROLE_PG_READ_ALL_SETTINGS))
+		has_cluster_privs_of_role(GetUserId(), ROLE_PG_READ_ALL_SETTINGS))
 	{
 		values[14] = conf->sourcefile;
 		snprintf(buffer, sizeof(buffer), "%d", conf->sourceline);

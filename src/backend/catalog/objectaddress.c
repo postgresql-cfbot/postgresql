@@ -2521,7 +2521,7 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 							 errmsg("permission denied"),
 							 errdetail("The current user must have the %s attribute.",
 									   "CREATEROLE")));
-				if (!is_admin_of_role(roleid, address.objectId))
+				if (!is_admin_of_role(roleid, address.objectId, InvalidOid))
 					ereport(ERROR,
 							(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 							 errmsg("permission denied"),

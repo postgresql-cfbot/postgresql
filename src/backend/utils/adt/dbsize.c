@@ -130,7 +130,7 @@ calculate_database_size(Oid dbOid)
 	 */
 	aclresult = object_aclcheck(DatabaseRelationId, dbOid, GetUserId(), ACL_CONNECT);
 	if (aclresult != ACLCHECK_OK &&
-		!has_privs_of_role(GetUserId(), ROLE_PG_READ_ALL_STATS))
+		!has_cluster_privs_of_role(GetUserId(), ROLE_PG_READ_ALL_STATS))
 	{
 		aclcheck_error(aclresult, OBJECT_DATABASE,
 					   get_database_name(dbOid));
@@ -214,7 +214,7 @@ calculate_tablespace_size(Oid tblspcOid)
 	 * it is default for current database.
 	 */
 	if (tblspcOid != MyDatabaseTableSpace &&
-		!has_privs_of_role(GetUserId(), ROLE_PG_READ_ALL_STATS))
+		!has_cluster_privs_of_role(GetUserId(), ROLE_PG_READ_ALL_STATS))
 	{
 		aclresult = object_aclcheck(TableSpaceRelationId, tblspcOid, GetUserId(), ACL_CREATE);
 		if (aclresult != ACLCHECK_OK)

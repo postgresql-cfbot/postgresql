@@ -3899,8 +3899,8 @@ TerminateOtherDBBackends(Oid databaseId)
 							 errdetail("Only roles with the %s attribute may terminate processes of roles with the %s attribute.",
 									   "SUPERUSER", "SUPERUSER")));
 
-				if (!has_privs_of_role(GetUserId(), proc->roleId) &&
-					!has_privs_of_role(GetUserId(), ROLE_PG_SIGNAL_BACKEND))
+				if (!has_privs_of_role(GetUserId(), proc->roleId, databaseId) &&
+					!has_privs_of_role(GetUserId(), ROLE_PG_SIGNAL_BACKEND, databaseId))
 					ereport(ERROR,
 							(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 							 errmsg("permission denied to terminate process"),

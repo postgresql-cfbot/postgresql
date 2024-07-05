@@ -63,7 +63,7 @@ convert_and_check_filename(text *arg)
 	 * access any files on the server as the PG user, so no need to do any
 	 * further checks here.
 	 */
-	if (has_privs_of_role(GetUserId(), ROLE_PG_READ_SERVER_FILES))
+	if (has_cluster_privs_of_role(GetUserId(), ROLE_PG_READ_SERVER_FILES))
 		return filename;
 
 	/*

@@ -209,13 +209,14 @@ extern AclMode aclmask(const Acl *acl, Oid roleid, Oid ownerId,
 					   AclMode mask, AclMaskHow how);
 extern int	aclmembers(const Acl *acl, Oid **roleids);
 
-extern bool has_privs_of_role(Oid member, Oid role);
+extern bool has_privs_of_role(Oid member, Oid role, Oid database);
+extern bool has_cluster_privs_of_role(Oid member, Oid role);
 extern bool member_can_set_role(Oid member, Oid role);
 extern void check_can_set_role(Oid member, Oid role);
 extern bool is_member_of_role(Oid member, Oid role);
 extern bool is_member_of_role_nosuper(Oid member, Oid role);
-extern bool is_admin_of_role(Oid member, Oid role);
-extern Oid	select_best_admin(Oid member, Oid role);
+extern bool is_admin_of_role(Oid member, Oid role, Oid databaseId);
+extern Oid	select_best_admin(Oid member, Oid role, Oid databaseId);
 extern Oid	get_role_oid(const char *rolname, bool missing_ok);
 extern Oid	get_role_oid_or_public(const char *rolname);
 extern Oid	get_rolespec_oid(const RoleSpec *role, bool missing_ok);

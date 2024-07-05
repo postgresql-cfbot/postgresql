@@ -51,6 +51,7 @@
 #include "access/heaptoast.h"
 #include "access/multixact.h"
 #include "access/rewriteheap.h"
+#include "access/simpleundolog.h"
 #include "access/subtrans.h"
 #include "access/timeline.h"
 #include "access/transam.h"
@@ -5755,6 +5756,13 @@ StartupXLOG(void)
 		CheckRequiredParameterValues();
 
 		/*
+		 * Perform undo processing. To prevent uncommitted INIT forks from
+		 * mistakenly deleting data, this must be done before resetting
+		 * UNLOGGED relations.
+		 */
+		UndoLogCleanup();
+
+		/*
 		 * We're in recovery, so unlogged relations may be trashed and must be
 		 * reset.  This should be done BEFORE allowing Hot Standby
 		 * connections, so that read-only backends don't try to read whatever
@@ -5902,14 +5910,18 @@ StartupXLOG(void)
 	}
 
 	/*
-	 * Reset unlogged relations to the contents of their INIT fork. This is
-	 * done AFTER recovery is complete so as to include any unlogged relations
-	 * created during recovery, but BEFORE recovery is marked as having
-	 * completed successfully. Otherwise we'd not retry if any of the post
-	 * end-of-recovery steps fail.
+	 * Process undo logs left ater recovery to clean up uncommitted storage
+	 * files, including INIT forks, then reset unlogged relations to the
+	 * contents of their INIT fork. This is done AFTER recovery is complete so
+	 * as to include any file creations during recovery, but BEFORE recovery is
+	 * marked as having completed successfully. Otherwise we'd not retry if any
+	 * of the post end-of-recovery steps fail.
 	 */
 	if (InRecovery)
+	{
+		UndoLogCleanup();
 		ResetUnloggedRelations(UNLOGGED_RELATION_INIT);
+	}
 
 	/*
 	 * Pre-scan prepared transactions to find out the range of XIDs present.

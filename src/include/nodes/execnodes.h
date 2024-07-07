@@ -2644,6 +2644,7 @@ typedef struct WindowAggState
 	bool		all_first;		/* true if the scan is starting */
 	bool		partition_spooled;	/* true if all tuples in current partition
 									 * have been spooled into tuplestore */
+	bool		next_partition; /* true if begin_partition needs to be called */
 	bool		more_partitions;	/* true if there's more partitions after
 									 * this one */
 	bool		framehead_valid;	/* true if frameheadpos is known up to

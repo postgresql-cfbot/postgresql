@@ -15830,7 +15830,7 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 
 		if (dopt->binary_upgrade)
 			binary_upgrade_set_pg_class_oids(fout, q,
-											 tbinfo->dobj.catId.oid, false);
+											 tbinfo->dobj.catId.oid);
 
 		appendPQExpBuffer(query,
 						  "SELECT pg_catalog.pg_get_propgraphdef('%u'::pg_catalog.oid) AS pgdef",

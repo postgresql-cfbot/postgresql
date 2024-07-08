@@ -81,7 +81,7 @@ string. For C<interactive> sessions, IO::Pty is required.
 sub new
 {
 	my $class = shift;
-	my ($interactive, $psql_params, $timeout) = @_;
+	my ($interactive, $psql_params, $timeout, $wait) = @_;
 	my $psql = {
 		'stdin' => '',
 		'stdout' => '',
@@ -119,14 +119,25 @@ sub new
 
 	my $self = bless $psql, $class;
 
-	$self->_wait_connect();
+	$wait = 1 unless defined($wait);
+	if ($wait)
+	{
+		$self->wait_connect();
+	}
 
 	return $self;
 }
 
-# Internal routine for awaiting psql starting up and being ready to consume
-# input.
-sub _wait_connect
+=pod
+
+=item $session->wait_connect
+
+Returns once psql has started up and is ready to consume input.  This is called
+automatically for clients unless requested otherwise in the constructor.
+
+=cut
+
+sub wait_connect
 {
 	my ($self) = @_;
 
@@ -187,7 +198,7 @@ sub reconnect_and_clear
 	$self->{stdin} = '';
 	$self->{stdout} = '';
 
-	$self->_wait_connect();
+	$self->wait_connect();
 }
 
 =pod

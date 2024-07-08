@@ -237,6 +237,12 @@ create table e1_2 (id_1 int,
 					id_2_2 int,
 					ename varchar(10),
 					eprop1 int);
+-- edge connecting v2 and v1
+create table e2_1 (id_2_1 int,
+					id_2_2 int,
+                    id_1 int,
+					ename varchar(10),
+					eprop1 int);
 -- edge connecting v1 and v3
 create table e1_3 (id_1 int,
 					id_3 int,
@@ -268,6 +274,11 @@ edge tables (
 		destination key (id_2_1, id_2_2) references v2 (id1, id2)
 		label el1 properties (eprop1, ename)
         label l1 properties (ename as elname),
+	e2_1 key (id_2_1, id_2_2, id_1)
+		source key (id_2_1, id_2_2) references v2 (id1, id2)
+		destination key (id_1) references v1 (id)
+		label el1 properties (eprop1, ename)
+        label l1 properties (ename as elname),
 	e1_3
 		source key (id_1) references v1 (id)
 		destination key (id_3) references v3 (id)
@@ -296,17 +307,18 @@ insert into e1_2 values (1, 1000, 2, 'e121', 10001),
 insert into e1_3 values (1, 2003, 'e131', 10003),
                         (1, 2001, 'e132', 10004);
 insert into e2_3 values (1000, 2, 2002, 'e231', 10005);
+insert into e2_1 values (1000, 1, 2, 'e211', 10006);
 -- empty element path pattern, counts number of edges in the graph
 SELECT count(*) FROM GRAPH_TABLE (g1 MATCH ()-[]->() COLUMNS (1 as one));
  count 
 -------
-     5
+     6
 (1 row)
 
 SELECT count(*) FROM GRAPH_TABLE (g1 MATCH ()->() COLUMNS (1 as one));
  count 
 -------
-     5
+     6
 (1 row)
 
 -- Vertex element v2 has label vl3 which exposes property vprop1. But vl3 is
@@ -337,6 +349,14 @@ select src, conn, dest, lprop1, vprop2, vprop1 from graph_table (g1 match (a is 
  v11 | e132 | v31  | vl3_prop |        |   2010
 (4 rows)
 
+-- WHERE clause in graph pattern
+SELECT self, through FROM GRAPH_TABLE (g1 MATCH (a)->(b)->(c) WHERE a.vname = c.vname and a.vname <> b.vname COLUMNS (a.vname as self, b.vname as through));
+ self | through 
+------+---------
+ v12  | v21
+ v21  | v12
+(2 rows)
+
 -- Errors
 -- vl1 is not associated with property vprop2
 select src, src_vprop2, conn, dest from graph_table (g1 match (a is vl1)-[b is el1]->(c is vl2 | vl3) columns (a.vname as src, a.vprop2 as src_vprop2, b.ename as conn, c.vname as dest));
@@ -362,8 +382,9 @@ select * from graph_table (g1 match (src)-[conn]->(dest) columns (src.vname as s
  v11    | e121   | v22    |   10 |      |          | 1020 | 1200 | vl2_prop | 10001 |       
  v11    | e131   | v33    |   10 |      |          | 2030 |      | vl3_prop | 10003 |       
  v11    | e132   | v31    |   10 |      |          | 2010 |      | vl3_prop | 10004 |       
+ v21    | e211   | v12    | 1010 | 1100 | vl2_prop |   20 |      |          | 10006 |       
  v22    | e231   | v32    | 1020 | 1200 | vl2_prop | 2020 |      | vl3_prop |       | 100050
-(5 rows)
+(6 rows)
 
 -- three label disjunction
 select * from graph_table (g1 match (src IS vl1 | vl2 | vl3)-[conn]->(dest) columns (src.vname as svname, conn.ename as cename, dest.vname as dvname));
@@ -373,8 +394,9 @@ select * from graph_table (g1 match (src IS vl1 | vl2 | vl3)-[conn]->(dest) colu
  v11    | e121   | v22
  v11    | e131   | v33
  v11    | e132   | v31
+ v21    | e211   | v12
  v22    | e231   | v32
-(5 rows)
+(6 rows)
 
 -- graph'ical query: find a vertex which is not connected to any other vertex as a source or a destination.
 with all_connected_vertices as (select svn, dvn from graph_table (g1 match (src)-[conn]->(dest) columns (src.vname as svn, dest.vname as dvn))),
@@ -394,8 +416,9 @@ select sn, cn, dn from graph_table (g1 match (src : l1)-[conn : l1]->(dest : l1)
  v11 | e121 | v22
  v11 | e131 | v33
  v11 | e132 | v31
+ v21 | e211 | v12
  v22 | e231 | v32
-(5 rows)
+(6 rows)
 
 -- property graph with some of the elements, labels and properties same as the
 -- previous one. Test whether components from the specified property graph are

@@ -310,6 +310,15 @@ generate_query_for_graph_path(RangeTblEntry *rte, List *graph_path)
 		qual_exprs = list_concat(qual_exprs, gpe->qual_exprs);
 	}
 
+	if (rte->graph_pattern->whereClause)
+	{
+		Node	   *path_quals = replace_property_refs(rte->relid,
+													   (Node *) rte->graph_pattern->whereClause,
+													   graph_path);
+
+		qual_exprs = lappend(qual_exprs, path_quals);
+	}
+
 	path_query->jointree = makeFromExpr(fromlist,
 										(Node *) makeBoolExpr(AND_EXPR, qual_exprs, -1));
 

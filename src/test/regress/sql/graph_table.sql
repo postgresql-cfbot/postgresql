@@ -169,6 +169,12 @@ create table e1_2 (id_1 int,
 					id_2_2 int,
 					ename varchar(10),
 					eprop1 int);
+-- edge connecting v2 and v1
+create table e2_1 (id_2_1 int,
+					id_2_2 int,
+                    id_1 int,
+					ename varchar(10),
+					eprop1 int);
 
 -- edge connecting v1 and v3
 create table e1_3 (id_1 int,
@@ -201,6 +207,11 @@ edge tables (
 	e1_2 key (id_1, id_2_1, id_2_2)
 		source key (id_1) references v1 (id)
 		destination key (id_2_1, id_2_2) references v2 (id1, id2)
+		label el1 properties (eprop1, ename)
+        label l1 properties (ename as elname),
+	e2_1 key (id_2_1, id_2_2, id_1)
+		source key (id_2_1, id_2_2) references v2 (id1, id2)
+		destination key (id_1) references v1 (id)
 		label el1 properties (eprop1, ename)
         label l1 properties (ename as elname),
 	e1_3
@@ -236,6 +247,7 @@ insert into e1_2 values (1, 1000, 2, 'e121', 10001),
 insert into e1_3 values (1, 2003, 'e131', 10003),
                         (1, 2001, 'e132', 10004);
 insert into e2_3 values (1000, 2, 2002, 'e231', 10005);
+insert into e2_1 values (1000, 1, 2, 'e211', 10006);
 
 -- empty element path pattern, counts number of edges in the graph
 SELECT count(*) FROM GRAPH_TABLE (g1 MATCH ()-[]->() COLUMNS (1 as one));
@@ -250,6 +262,8 @@ SELECT * FROM GRAPH_TABLE (g1 MATCH (a IS vl1 | vl2) COLUMNS (a.vname,
 a.vprop1));
 -- vprop2 is associated with vl2 but not vl3
 select src, conn, dest, lprop1, vprop2, vprop1 from graph_table (g1 match (a is vl1)-[b is el1]->(c is vl2 | vl3) columns (a.vname as src, b.ename as conn, c.vname as dest, c.lprop1, c.vprop2, c.vprop1));
+-- WHERE clause in graph pattern
+SELECT self, through FROM GRAPH_TABLE (g1 MATCH (a)->(b)->(c) WHERE a.vname = c.vname and a.vname <> b.vname COLUMNS (a.vname as self, b.vname as through));
 
 -- Errors
 -- vl1 is not associated with property vprop2

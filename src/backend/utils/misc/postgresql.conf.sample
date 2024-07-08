@@ -771,6 +771,8 @@
 # - Other Defaults -
 
 #dynamic_library_path = '$libdir'
+#extension_destdir = ''			# prepend path when loading extensions
+					# and shared objects (added by Debian)
 #gin_fuzzy_search_limit = 0
 
 

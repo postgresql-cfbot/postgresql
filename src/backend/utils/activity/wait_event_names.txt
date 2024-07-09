@@ -116,6 +116,8 @@ CHECKPOINT_DELAY_START	"Waiting for a backend that blocks a checkpoint from star
 CHECKPOINT_DONE	"Waiting for a checkpoint to complete."
 CHECKPOINT_START	"Waiting for a checkpoint to start."
 EXECUTE_GATHER	"Waiting for activity from a child process while executing a <literal>Gather</literal> plan node."
+GIN_BUILD_SCAN	"Wait for scan of data during parallel GIN index build."
+GIN_BUILD_PARTITION	"Wait for partition of data during parallel GIN index build."
 HASH_BATCH_ALLOCATE	"Waiting for an elected Parallel Hash participant to allocate a hash table."
 HASH_BATCH_ELECT	"Waiting to elect a Parallel Hash participant to allocate a hash table."
 HASH_BATCH_LOAD	"Waiting for other Parallel Hash participants to finish loading a hash table."

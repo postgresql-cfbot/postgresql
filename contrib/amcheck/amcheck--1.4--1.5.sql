@@ -14,7 +14,7 @@ LANGUAGE C STRICT;
 REVOKE ALL ON FUNCTION gist_index_check(regclass, boolean) FROM PUBLIC;
 
 -- gin_index_parent_check()
---
+-- XXX why is this not called simply gin_index_check?
 CREATE FUNCTION gin_index_parent_check(index regclass)
 RETURNS VOID
 AS 'MODULE_PATHNAME', 'gin_index_parent_check'

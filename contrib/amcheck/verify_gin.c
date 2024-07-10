@@ -732,6 +732,7 @@ gin_refind_parent(Relation rel, BlockNumber parentblkno,
 	return result;
 }
 
+/* XXX yet another copy of this? */
 static ItemId
 PageGetItemIdCareful(Relation rel, BlockNumber block, Page page,
 					 OffsetNumber offset)

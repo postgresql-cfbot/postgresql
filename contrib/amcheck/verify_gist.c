@@ -54,7 +54,7 @@ typedef struct GistScanItem
 
 	/*
 	 * Reference to parent page for re-locking in case of found parent-child
-	 * tuple discrapencies.
+	 * tuple discrepencies.
 	 */
 	BlockNumber parentblk;
 
@@ -66,8 +66,11 @@ typedef struct GistCheckState
 {
 	/* Bloom filter fingerprints index tuples */
 	bloom_filter *filter;
-	/* Debug counter */
+
+	/* Debug counter	FIXME what does 'debug counter' mean?*/
 	int64		heaptuplespresent;
+
+	/* XXX nitpick: I'd move these 'generic' fields to the beginning */
 	/* GiST state */
 	GISTSTATE  *state;
 
@@ -106,8 +109,7 @@ static IndexTuple gistFormNormalizedTuple(GISTSTATE *giststate, Relation r,
 
 /*
  * gist_index_check(index regclass)
- *
- * Verify integrity of GiST index.
+ *		Verify integrity of GiST index.
  *
  * Acquires AccessShareLock on heap & index relations.
  */
@@ -126,6 +128,10 @@ gist_index_check(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
+/*
+ * XXX This talks about 'heapallindexed' but it initializes a snapshot too,
+ * but isn't that unrelated / confusing?
+ */
 static void
 gist_init_heapallindexed(Relation rel, GistCheckState * result)
 {
@@ -144,7 +150,6 @@ gist_init_heapallindexed(Relation rel, GistCheckState * result)
 	result->filter = bloom_create(total_elems, maintenance_work_mem, seed);
 
 	result->snapshot = RegisterSnapshot(GetTransactionSnapshot());
-
 
 	/*
 	 * GetTransactionSnapshot() always acquires a new MVCC snapshot in READ
@@ -171,7 +176,11 @@ gist_init_heapallindexed(Relation rel, GistCheckState * result)
  * Main entry point for GiST check. Allocates memory context and scans through
  * GiST graph. This scan is performed in a depth-first search using a stack of
  * GistScanItem-s. Initially this stack contains only root block number. On
- * each iteration top block numbmer is replcaed by referenced block numbers.
+ * each iteration the top block number is replaced by referenced block numbers.
+ *
+ * XXX I'd move the following paragraph right before "allocates memory". It
+ * describes what the function does, while the "allocates memory" is more
+ * a description of "how" it is done.
  *
  * This function verifies that tuples of internal pages cover all
  * the key space of each tuple on leaf page.  To do this we invoke
@@ -356,10 +365,12 @@ gist_check_parent_keys_consistency(Relation rel, Relation heaprel,
 	pfree(check_state);
 }
 
-static void gist_check_page(GistCheckState *check_state, GistScanItem *stack,
-							Page page, bool heapallindexed, BufferAccessStrategy strategy)
+static void
+gist_check_page(GistCheckState *check_state, GistScanItem *stack,
+				Page page, bool heapallindexed, BufferAccessStrategy strategy)
 {
 	OffsetNumber maxoff = PageGetMaxOffsetNumber(page);
+
 	/* Check that the tree has the same height in all branches */
 	if (GistPageIsLeaf(page))
 	{
@@ -468,7 +479,7 @@ static void gist_check_page(GistCheckState *check_state, GistScanItem *stack,
  */
 static IndexTuple
 gistFormNormalizedTuple(GISTSTATE *giststate, Relation r,
-			  Datum *attdata, bool *isnull, ItemPointerData tid)
+						Datum *attdata, bool *isnull, ItemPointerData tid)
 {
 	Datum		compatt[INDEX_MAX_KEYS];
 	IndexTuple	res;
@@ -525,6 +536,7 @@ gist_tuple_present_callback(Relation index, ItemPointer tid, Datum *values,
 	IndexTuple	itup = gistFormNormalizedTuple(state->state, index, values, isnull, *tid);
 
 	itup->t_tid = *tid;
+
 	/* Probe Bloom filter -- tuple should be present */
 	if (bloom_lacks_element(state->filter, (unsigned char *) itup,
 							IndexTupleSize(itup)))
@@ -602,9 +614,9 @@ gist_refind_parent(Relation rel,
 
 	if (GistPageIsLeaf(parentpage))
 	{
-		/* 
+		/*
 		 * Currently GiST never deletes internal pages, thus they can never
-		 * become leaf 
+		 * become leaf.
 		 */
 		ereport(ERROR,
 				(errcode(ERRCODE_INDEX_CORRUPTED),
@@ -635,6 +647,10 @@ gist_refind_parent(Relation rel,
 	return result;
 }
 
+/*
+ * XXX What does this do? Maybe it should be in core or some common file?
+ * Seems to be used in verify_btree.c too.
+ */
 static ItemId
 PageGetItemIdCareful(Relation rel, BlockNumber block, Page page,
 					 OffsetNumber offset)
@@ -656,6 +672,8 @@ PageGetItemIdCareful(Relation rel, BlockNumber block, Page page,
 	 * Verify that line pointer isn't LP_REDIRECT or LP_UNUSED, since nbtree
 	 * and gist never uses either.  Verify that line pointer has storage, too,
 	 * since even LP_DEAD items should.
+	 *
+	 * XXX why does this reference nbtree?
 	 */
 	if (ItemIdIsRedirected(itemid) || !ItemIdIsUsed(itemid) ||
 		ItemIdGetLength(itemid) == 0)

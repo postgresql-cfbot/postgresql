@@ -1348,6 +1348,24 @@ EXPLAIN (COSTS OFF) SELECT * FROM my_property_secure WHERE f_leak(passwd);
          Filter: (name = CURRENT_USER)
 (4 rows)
 
+-- EXPLAIN (ANALYZE) should only be allowed to members of pg_read_all_stats
+EXPLAIN (ANALYZE) SELECT * FROM my_property_secure WHERE f_leak(passwd);    -- error
+ERROR:  permission denied to use EXPLAIN (ANALYZE) with security_barrier views
+DETAIL:  Only members of pg_read_all_stats may see statement execution statistics.
+RESET SESSION AUTHORIZATION;
+GRANT pg_read_all_stats TO regress_alice;
+SET SESSION AUTHORIZATION regress_alice;
+DO
+$$DECLARE
+  t text;
+BEGIN
+  -- should cause no error
+  EXECUTE 'EXPLAIN (ANALYZE) SELECT * FROM my_property_secure WHERE f_leak(passwd)' INTO t;
+END;$$;
+NOTICE:  f_leak => passwd123
+RESET SESSION AUTHORIZATION;
+REVOKE pg_read_all_stats FROM regress_alice;
+SET SESSION AUTHORIZATION regress_alice;
 --
 -- scenario: qualifiers can be pushed down if they contain leaky functions,
 --           provided they aren't passed data from inside the view.

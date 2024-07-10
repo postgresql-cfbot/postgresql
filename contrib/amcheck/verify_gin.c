@@ -38,7 +38,7 @@ typedef struct GinScanItem
 	XLogRecPtr	parentlsn;
 	BlockNumber blkno;
 	struct GinScanItem *next;
-} GinScanItem;
+}			GinScanItem;
 
 /*
  * GinPostingTreeScanItem represents one item of depth-first scan of GIN  posting tree.
@@ -50,7 +50,7 @@ typedef struct GinPostingTreeScanItem
 	BlockNumber parentblk;
 	BlockNumber blkno;
 	struct GinPostingTreeScanItem *next;
-} GinPostingTreeScanItem;
+}			GinPostingTreeScanItem;
 
 
 PG_FUNCTION_INFO_V1(gin_index_parent_check);
@@ -434,11 +434,11 @@ gin_check_parent_keys_consistency(Relation rel,
 		if (stack->parenttup != NULL)
 		{
 			GinNullCategory parent_key_category;
-			Datum parent_key = gintuple_get_key(&state,
-												stack->parenttup,
-												&parent_key_category);
-			ItemId iid = PageGetItemIdCareful(rel, stack->blkno,
-											  page, maxoff);
+			Datum		parent_key = gintuple_get_key(&state,
+													  stack->parenttup,
+													  &parent_key_category);
+			ItemId		iid = PageGetItemIdCareful(rel, stack->blkno,
+												   page, maxoff);
 			IndexTuple	idxtuple = (IndexTuple) PageGetItem(page, iid);
 			OffsetNumber attnum = gintuple_get_attrnum(&state, idxtuple);
 			GinNullCategory page_max_key_category;
@@ -521,9 +521,9 @@ gin_check_parent_keys_consistency(Relation rel,
 				i == maxoff)
 			{
 				GinNullCategory parent_key_category;
-				Datum parent_key = gintuple_get_key(&state,
-													stack->parenttup,
-													&parent_key_category);
+				Datum		parent_key = gintuple_get_key(&state,
+														  stack->parenttup,
+														  &parent_key_category);
 
 				if (ginCompareEntries(&state, attnum, current_key,
 									  current_key_category, parent_key,

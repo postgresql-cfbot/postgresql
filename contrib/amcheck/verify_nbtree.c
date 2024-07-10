@@ -162,11 +162,11 @@ typedef struct BtreeLastVisibleEntry
  */
 typedef struct BTCallbackState
 {
-	bool	parentcheck;
-	bool	heapallindexed;
-	bool	rootdescend;
-	bool	checkunique;
-} BTCallbackState;
+	bool		parentcheck;
+	bool		heapallindexed;
+	bool		rootdescend;
+	bool		checkunique;
+}			BTCallbackState;
 
 PG_FUNCTION_INFO_V1(bt_index_check);
 PG_FUNCTION_INFO_V1(bt_index_parent_check);
@@ -330,13 +330,13 @@ bt_index_check_callback(Relation indrel, Relation heaprel, void *state, bool rea
 		for (int i = 0; i < IndexRelationGetNumberOfKeyAttributes(indrel); i++)
 			if (indrel->rd_opfamily[i] == INTERVAL_BTREE_FAM_OID)
 				has_interval_ops = true;
-				ereport(ERROR,
-					(errcode(ERRCODE_INDEX_CORRUPTED),
-					errmsg("index \"%s\" metapage incorrectly indicates that deduplication is safe",
+		ereport(ERROR,
+				(errcode(ERRCODE_INDEX_CORRUPTED),
+				 errmsg("index \"%s\" metapage incorrectly indicates that deduplication is safe",
 						RelationGetRelationName(indrel)),
-					has_interval_ops
-					? errhint("This is known of \"interval\" indexes last built on a version predating 2023-11.")
-					: 0));
+				 has_interval_ops
+				 ? errhint("This is known of \"interval\" indexes last built on a version predating 2023-11.")
+				 : 0));
 	}
 
 	/* Check index, possibly against table it is an index on */

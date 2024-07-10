@@ -158,9 +158,10 @@ index_checkable(Relation rel, Oid am_id)
 {
 	if (rel->rd_rel->relkind != RELKIND_INDEX ||
 		rel->rd_rel->relam != am_id)
+		/* FIXME name AM, shouldn't be hhard to lookup in AMOID syscache */
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("only B-Tree indexes are supported as targets for verification"), //FIXME name AM, shouldn't be hhard to lookup in AMOID syscache
+				 errmsg("only B-Tree indexes are supported as targets for verification"),
 				 errdetail("Relation \"%s\" is not a B-Tree index.",
 						   RelationGetRelationName(rel))));
 

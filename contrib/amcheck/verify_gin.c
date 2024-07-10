@@ -293,11 +293,14 @@ gin_check_posting_tree_parent_keys_consistency(Relation rel, BlockNumber posting
 			{
 				PostingItem *posting_item = GinDataPageGetPostingItem(page, i);
 
+/*
+ * triggers assert in ItemPointerGetOffsetNumber
+ *
 				elog(DEBUG3, "key (%u, %u) -> %u",
 					 ItemPointerGetBlockNumber(&posting_item->key),
 					 ItemPointerGetOffsetNumber(&posting_item->key),
 					 BlockIdGetBlockNumber(&posting_item->child_blkno));
-
+*/
 				if (i == maxoff &&
 					GinPageGetOpaque(page)->rightlink == InvalidBlockNumber)
 				{

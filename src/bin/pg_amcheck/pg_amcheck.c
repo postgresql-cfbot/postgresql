@@ -73,10 +73,9 @@ typedef struct AmcheckOptions
 
 	/*
 	 * As an optimization, if any pattern in the exclude list applies to heap
-	 * tables, or similarly if any such pattern applies to indexes, or
-	 * to schemas, then these will be true, otherwise false.  These should
-	 * always agree with what you'd conclude by grep'ing through the exclude
-	 * list.
+	 * tables, or similarly if any such pattern applies to indexes, or to
+	 * schemas, then these will be true, otherwise false.  These should always
+	 * agree with what you'd conclude by grep'ing through the exclude list.
 	 */
 	bool		excludetbl;
 	bool		excludeidx;
@@ -180,7 +179,7 @@ static void prepare_heap_command(PQExpBuffer sql, RelationInfo *rel,
 static void prepare_btree_command(PQExpBuffer sql, RelationInfo *rel,
 								  PGconn *conn);
 static void prepare_gist_command(PQExpBuffer sql, RelationInfo *rel,
-								  PGconn *conn);
+								 PGconn *conn);
 static void run_command(ParallelSlot *slot, const char *sql);
 static bool verify_heap_slot_handler(PGresult *res, PGconn *conn,
 									 void *context);
@@ -611,9 +610,8 @@ main(int argc, char *argv[])
 		amcheck_version = PQgetvalue(result, 0, 1);
 
 		/*
-		 * Now amcheck has only major and minor versions in the string but
-		 * we also support revision just in case. Now it is expected to be
-		 * zero.
+		 * Now amcheck has only major and minor versions in the string but we
+		 * also support revision just in case. Now it is expected to be zero.
 		 */
 		sscanf(amcheck_version, "%d.%d.%d", &vmaj, &vmin, &vrev);
 
@@ -625,7 +623,7 @@ main(int argc, char *argv[])
 		if (opts.checkunique && ((vmaj == 1 && vmin < 4) || vmaj == 0))
 		{
 			pg_log_warning("--checkunique option is not supported by amcheck "
-							"version \"%s\"", amcheck_version);
+						   "version \"%s\"", amcheck_version);
 			dat->is_checkunique = false;
 		}
 		else
@@ -944,16 +942,16 @@ prepare_gist_command(PQExpBuffer sql, RelationInfo *rel, PGconn *conn)
 	resetPQExpBuffer(sql);
 
 	appendPQExpBuffer(sql,
-						"SELECT %s.gist_index_check("
-						"index := c.oid, heapallindexed := %s)"
-						"\nFROM pg_catalog.pg_class c, pg_catalog.pg_index i "
-						"WHERE c.oid = %u "
-						"AND c.oid = i.indexrelid "
-						"AND c.relpersistence != 't' "
-						"AND i.indisready AND i.indisvalid AND i.indislive",
-						rel->datinfo->amcheck_schema,
-						(opts.heapallindexed ? "true" : "false"),
-						rel->reloid);
+					  "SELECT %s.gist_index_check("
+					  "index := c.oid, heapallindexed := %s)"
+					  "\nFROM pg_catalog.pg_class c, pg_catalog.pg_index i "
+					  "WHERE c.oid = %u "
+					  "AND c.oid = i.indexrelid "
+					  "AND c.relpersistence != 't' "
+					  "AND i.indisready AND i.indisvalid AND i.indislive",
+					  rel->datinfo->amcheck_schema,
+					  (opts.heapallindexed ? "true" : "false"),
+					  rel->reloid);
 }
 
 /*
@@ -1169,12 +1167,12 @@ verify_index_slot_handler(PGresult *res, PGconn *conn, void *context)
 		if (ntups > 1)
 		{
 			/*
-			 * We expect the checking functions to return one void row
-			 * each, or zero rows if the check was skipped due to the object
-			 * being in the wrong state to be checked, so we should output
-			 * some sort of warning if we get anything more, not because it
-			 * indicates corruption, but because it suggests a mismatch
-			 * between amcheck and pg_amcheck versions.
+			 * We expect the checking functions to return one void row each,
+			 * or zero rows if the check was skipped due to the object being
+			 * in the wrong state to be checked, so we should output some sort
+			 * of warning if we get anything more, not because it indicates
+			 * corruption, but because it suggests a mismatch between amcheck
+			 * and pg_amcheck versions.
 			 *
 			 * In conjunction with --progress, anything written to stderr at
 			 * this time would present strangely to the user without an extra
@@ -2155,11 +2153,11 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 						 "FROM relation");
 	if (!opts.no_toast_expansion)
 		appendPQExpBuffer(&sql,
-							 " UNION"
+						  " UNION"
 		/* Toast tables for primary relations */
-							 "\nSELECT NULL::INTEGER AS pattern_id, TRUE AS is_heap, "
-							 "FALSE AS is_index, oid, 0 as amoid, nspname, relname, relpages "
-							 "FROM toast");
+						  "\nSELECT NULL::INTEGER AS pattern_id, TRUE AS is_heap, "
+						  "FALSE AS is_index, oid, 0 as amoid, nspname, relname, relpages "
+						  "FROM toast");
 	if (!opts.no_index_expansion)
 		appendPQExpBufferStr(&sql,
 							 " UNION"
@@ -2169,11 +2167,11 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 							 "FROM index");
 	if (!opts.no_toast_expansion && !opts.no_index_expansion)
 		appendPQExpBuffer(&sql,
-							 " UNION"
+						  " UNION"
 		/* Indexes for toast relations */
-							 "\nSELECT NULL::INTEGER AS pattern_id, FALSE AS is_heap, "
-							 "TRUE AS is_index, oid, %u as amoid, nspname, relname, relpages "
-							 "FROM toast_index", BTREE_AM_OID);
+						  "\nSELECT NULL::INTEGER AS pattern_id, FALSE AS is_heap, "
+						  "TRUE AS is_index, oid, %u as amoid, nspname, relname, relpages "
+						  "FROM toast_index", BTREE_AM_OID);
 	appendPQExpBufferStr(&sql,
 						 "\n) AS combined_records "
 						 "ORDER BY relpages DESC NULLS FIRST, oid");

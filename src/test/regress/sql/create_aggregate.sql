@@ -328,3 +328,14 @@ CREATE AGGREGATE case_agg(float8)
 	"Finalfunc_modify" = read_write,
 	"Parallel" = safe
 );
+
+-- invalid: aggpartialpushdownsafe is false and importfunc is specified
+
+CREATE AGGREGATE udf_avg_invalid_aggpartialpushdownsafe(int4) (
+	sfunc = int4_avg_accum,
+	stype = _int8,
+	finalfunc = int8_avg,
+	combinefunc = int4_avg_combine,
+  initcond = '{0,0}',
+	importfunc = int4_avg_import
+);

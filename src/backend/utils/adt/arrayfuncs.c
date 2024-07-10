@@ -3727,6 +3727,12 @@ deconstruct_array_builtin(ArrayType *array,
 			elmalign = TYPALIGN_SHORT;
 			break;
 
+		case NUMERICOID:
+			elmlen = -1;
+			elmbyval = false;
+			elmalign = TYPALIGN_INT;
+			break;
+
 		default:
 			elog(ERROR, "type %u not supported by deconstruct_array_builtin()", elmtype);
 			/* keep compiler quiet */

@@ -3284,6 +3284,9 @@ typedef enum
  * havingQual gives list of quals to be applied after aggregation.
  * targetList gives list of columns to be projected.
  * patype is the type of partitionwise aggregation that is being performed.
+ * groupClausePartial is List of SortGroupClauses for partial aggregate
+ * 		pushdown by FDW
+ * partial_target is PathTarget for partial aggregate pushdown by FDW
  */
 typedef struct
 {
@@ -3298,6 +3301,8 @@ typedef struct
 	Node	   *havingQual;
 	List	   *targetList;
 	PartitionwiseAggregateType patype;
+	List	   *groupClausePartial;
+	PathTarget *partial_target;
 } GroupPathExtraData;
 
 /*

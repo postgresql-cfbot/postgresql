@@ -206,6 +206,24 @@ typedef struct AggStatePerAggData
 	 */
 	FmgrInfo	finalfn;
 
+	/* Optional Oid of serial function (may be InvalidOid) */
+	Oid			serialfn_oid;
+
+	/*
+	 * fmgr lookup data for serial function --- only valid when serialfn_oid is
+	 * not InvalidOid.
+	 */
+	FmgrInfo	serialfn;
+
+	/* Optional Oid of export function (may be InvalidOid) */
+	Oid			exportfn_oid;
+
+	/*
+	 * fmgr lookup data for export function --- only valid when exportfn_oid is
+	 * not InvalidOid.
+	 */
+	FmgrInfo	exportfn;
+
 	/*
 	 * Number of arguments to pass to the finalfn.  This is always at least 1
 	 * (the transition state value) plus any ordered-set direct args. If the

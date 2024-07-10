@@ -431,6 +431,7 @@ typedef struct FuncCall
 	bool		agg_within_group;	/* ORDER BY appeared in WITHIN GROUP */
 	bool		agg_star;		/* argument was really '*' */
 	bool		agg_distinct;	/* arguments were labeled DISTINCT */
+	bool		agg_partial;	/* arguments were labeled PARTIAL_AGGREGATE */
 	bool		func_variadic;	/* last argument was labeled VARIADIC */
 	CoercionForm funcformat;	/* how to display this node */
 	ParseLoc	location;		/* token location, or -1 if unknown */

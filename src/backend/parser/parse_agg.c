@@ -16,6 +16,7 @@
 
 #include "access/htup_details.h"
 #include "catalog/pg_aggregate.h"
+#include "catalog/pg_proc.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_type.h"
 #include "common/int.h"
@@ -101,8 +102,8 @@ static Node *make_agg_arg(Oid argtype, Oid argcollation);
  * pstate level.
  */
 void
-transformAggregateCall(ParseState *pstate, Aggref *agg,
-					   List *args, List *aggorder, bool agg_distinct)
+transformAggregateCall(ParseState *pstate, Aggref *agg, List *args,
+					   List *aggorder, bool agg_distinct, bool agg_partial)
 {
 	List	   *argtypes = NIL;
 	List	   *tlist = NIL;
@@ -147,8 +148,8 @@ transformAggregateCall(ParseState *pstate, Aggref *agg,
 										 torder, tlist, sortby);
 		}
 
-		/* Never any DISTINCT in an ordered-set agg */
-		Assert(!agg_distinct);
+		/* Never any DISTINCT and PARTIAL_AGG in an ordered-set agg */
+		Assert(!agg_distinct || !agg_partial);
 	}
 	else
 	{
@@ -222,6 +223,36 @@ transformAggregateCall(ParseState *pstate, Aggref *agg,
 	agg->args = tlist;
 	agg->aggorder = torder;
 	agg->aggdistinct = tdistinct;
+	agg->agg_partial = agg_partial;
+	if(agg->agg_partial){
+		HeapTuple	aggtup;
+		Form_pg_aggregate aggform;
+		HeapTuple	proctup;
+		Form_pg_proc procform;
+
+		aggtup = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(agg->aggfnoid));
+		if (!HeapTupleIsValid(aggtup))
+			elog(ERROR, "cache lookup failed for aggregate %u", agg->aggfnoid);
+		aggform = (Form_pg_aggregate) GETSTRUCT(aggtup);
+		if (!aggform->aggpartialpushdownsafe)
+			elog(ERROR, "partial aggregate is unsafe for aggregate %u",
+				agg->aggfnoid);
+		if (aggform->aggtranstype == INTERNALOID &&
+			aggform->aggpartialexportfn == InvalidOid)
+			elog(ERROR, "definition of aggregate %u is invalid",
+				agg->aggfnoid);
+		ReleaseSysCache(aggtup);
+		if(aggform->aggpartialexportfn != InvalidOid){
+			proctup = SearchSysCache1(PROCOID,
+				ObjectIdGetDatum(aggform->aggpartialexportfn));
+			if (!HeapTupleIsValid(proctup))
+				elog(ERROR, "cache lookup failed for export function %u",
+					aggform->aggpartialexportfn);
+			procform = (Form_pg_proc) GETSTRUCT(proctup);
+			agg->aggtype = procform->prorettype;
+		} else
+			agg->aggtype = aggform->aggtranstype;
+	}
 
 	/*
 	 * Now build the aggargtypes list with the type OIDs of the direct and
@@ -2163,6 +2194,32 @@ build_aggregate_finalfn_expr(Oid *agg_input_types,
 										 agg_input_collation,
 										 COERCE_EXPLICIT_CALL);
 	/* finalfn is currently never treated as variadic */
+}
+
+/*
+ * Like build_aggregate_transfn_expr, but creates an expression tree for the
+ * export function of an aggregate.
+ */
+void
+build_aggregate_exportfn_expr(Oid exportfn_oid,
+							  Oid agg_state_type,
+							  Oid agg_result_type,
+							  Oid agg_input_collation,
+							  Expr **exportfnexpr)
+{
+	List	   *args;
+	FuncExpr   *fexpr;
+
+	/* Build expr tree for export function */
+	args = list_make1(make_agg_arg(agg_state_type, agg_input_collation));
+
+	fexpr = makeFuncExpr(exportfn_oid,
+						 agg_result_type,
+						 args,
+						 InvalidOid,
+						 agg_input_collation,
+						 COERCE_EXPLICIT_CALL);
+	*exportfnexpr = (Expr *) fexpr;
 }
 
 /*

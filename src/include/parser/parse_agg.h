@@ -17,7 +17,7 @@
 
 extern void transformAggregateCall(ParseState *pstate, Aggref *agg,
 								   List *args, List *aggorder,
-								   bool agg_distinct);
+								   bool agg_distinct, bool agg_partial);
 
 extern Node *transformGroupingFunc(ParseState *pstate, GroupingFunc *p);
 
@@ -61,5 +61,11 @@ extern void build_aggregate_finalfn_expr(Oid *agg_input_types,
 										 Oid agg_input_collation,
 										 Oid finalfn_oid,
 										 Expr **finalfnexpr);
+
+extern void build_aggregate_exportfn_expr(Oid exportfn_oid,
+										 Oid agg_state_type,
+										 Oid agg_result_type,
+										 Oid agg_input_collation,
+										 Expr **exportfnexpr);
 
 #endif							/* PARSE_AGG_H */

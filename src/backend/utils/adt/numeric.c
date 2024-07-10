@@ -619,7 +619,6 @@ static void accum_sum_final(NumericSumAccum *accum, NumericVar *result);
 static void accum_sum_copy(NumericSumAccum *dst, NumericSumAccum *src);
 static void accum_sum_combine(NumericSumAccum *accum, NumericSumAccum *accum2);
 
-
 /* ----------------------------------------------------------------------
  *
  * Input-, output- and rounding-functions
@@ -5562,6 +5561,7 @@ typedef NumericAggState PolyNumAggState;
 #define makePolyNumAggState makeNumericAggState
 #define makePolyNumAggStateCurrentContext makeNumericAggStateCurrentContext
 #endif
+static bytea* int8_avg_serialize_internal(PolyNumAggState *state);
 
 Datum
 int2_accum(PG_FUNCTION_ARGS)
@@ -5888,23 +5888,14 @@ int8_avg_combine(PG_FUNCTION_ARGS)
 }
 
 /*
- * int8_avg_serialize
- *		Serialize PolyNumAggState into bytea using the standard
- *		recv-function infrastructure.
+ * core of int8_avg_serialize
  */
-Datum
-int8_avg_serialize(PG_FUNCTION_ARGS)
+bytea*
+int8_avg_serialize_internal(PolyNumAggState *state)
 {
-	PolyNumAggState *state;
 	StringInfoData buf;
 	bytea	   *result;
 	NumericVar	tmp_var;
-
-	/* Ensure we disallow calling when not in aggregate context */
-	if (!AggCheckCallContext(fcinfo, NULL))
-		elog(ERROR, "aggregate function called in non-aggregate context");
-
-	state = (PolyNumAggState *) PG_GETARG_POINTER(0);
 
 	/*
 	 * If the platform supports int128 then sumX will be a 128 integer type.
@@ -5934,7 +5925,25 @@ int8_avg_serialize(PG_FUNCTION_ARGS)
 
 	free_var(&tmp_var);
 
-	PG_RETURN_BYTEA_P(result);
+	return result;
+}
+
+/*
+ * int8_avg_serialize
+ *		Serialize PolyNumAggState into bytea using the standard
+ *		recv-function infrastructure.
+ */
+Datum
+int8_avg_serialize(PG_FUNCTION_ARGS)
+{
+	PolyNumAggState *state;
+
+	/* Ensure we disallow calling when not in aggregate context */
+	if (!AggCheckCallContext(fcinfo, NULL))
+		elog(ERROR, "aggregate function called in non-aggregate context");
+
+	state = (PolyNumAggState *) PG_GETARG_POINTER(0);
+	PG_RETURN_BYTEA_P(int8_avg_serialize_internal(state));
 }
 
 /*
@@ -5982,6 +5991,97 @@ int8_avg_deserialize(PG_FUNCTION_ARGS)
 
 	PG_RETURN_POINTER(result);
 }
+
+/*
+ * int8_avg_export
+ *		Convert PolyNumAggState into _numeric of count and sum.
+ */
+Datum
+int8_avg_export(PG_FUNCTION_ARGS)
+{
+	PolyNumAggState *state;
+	NumericVar	N_var, sumX_var;
+	ArrayBuildState *astate;
+
+	/* Ensure we disallow calling when not in aggregate context */
+	if (!AggCheckCallContext(fcinfo, NULL))
+		elog(ERROR, "aggregate function called in non-aggregate context");
+
+	state = (PolyNumAggState *) PG_GETARG_POINTER(0);
+
+	init_var(&N_var);
+	init_var(&sumX_var);
+
+	astate = initArrayResult(NUMERICOID, CurrentMemoryContext, false);
+
+	/* N */
+	int64_to_numericvar(state->N, &N_var);
+	accumArrayResult(astate, NumericGetDatum(make_result(&N_var)), false,
+		NUMERICOID,	CurrentMemoryContext);
+
+	/* sumX */
+#ifdef HAVE_INT128
+	int128_to_numericvar(state->sumX, &sumX_var);
+#else
+	accum_sum_final(&state->sumX, &sumX_var);
+#endif
+	accumArrayResult(astate, NumericGetDatum(make_result(&sumX_var)), false,
+		NUMERICOID,	CurrentMemoryContext);
+
+	PG_RETURN_DATUM(makeArrayResult(astate, CurrentMemoryContext));
+}
+
+/*
+ * int8_avg_import
+ *		Convert _numeric of count and sum into PolyNumAggState.
+ */
+Datum
+int8_avg_import(PG_FUNCTION_ARGS)
+{
+	PolyNumAggState *state;
+	Numeric	N_numeric, sumX_numeric;
+	NumericVar	N_var, sumX_var;
+	ArrayType  *transarray;
+
+	Datum	   *datums;
+	bool	   *nulls;
+	int			ndatum;
+
+	transarray = PG_GETARG_ARRAYTYPE_P(0);
+
+	if (ARR_HASNULL(transarray)
+	    || ArrayGetNItems(ARR_NDIM(transarray), ARR_DIMS(transarray)) != 2
+		|| ARR_NDIM(transarray) != 1
+		|| ARR_ELEMTYPE(transarray) != NUMERICOID)
+		elog(ERROR, "expected 2-element numeric array");
+
+	deconstruct_array_builtin(transarray, NUMERICOID, &datums, &nulls, &ndatum);
+	N_numeric = DatumGetNumeric(datums[0]);
+	sumX_numeric = DatumGetNumeric(datums[1]);
+	
+	if(NUMERIC_IS_SPECIAL(N_numeric) || NUMERIC_IS_SPECIAL(sumX_numeric))
+		elog(ERROR, "both of count and sum must be not special value of numeric.");
+	
+	if(cmp_numerics(N_numeric, int64_to_numeric(0)) <= 0)
+		elog(ERROR, "count must be positive");
+	
+	state = makePolyNumAggStateCurrentContext(false);
+
+	/* N */
+	init_var_from_num(N_numeric, &N_var);
+	if (!numericvar_to_int64(&N_var, &state->N))
+		elog(ERROR, "count must be in range in bigint");
+	
+	/* sumX */
+	init_var_from_num(sumX_numeric, &sumX_var);
+	#ifdef HAVE_INT128
+		numericvar_to_int128(&sumX_var, &state->sumX);
+	#else
+		accum_sum_add(&state->sumX, &sumX_var);
+	#endif
+	PG_RETURN_BYTEA_P(int8_avg_serialize_internal(state));
+}
+
 
 /*
  * Inverse transition functions to go with the above.
@@ -6755,6 +6855,25 @@ int4_avg_combine(PG_FUNCTION_ARGS)
 	state1->sum += state2->sum;
 
 	PG_RETURN_ARRAYTYPE_P(transarray1);
+}
+
+Datum
+int4_avg_import(PG_FUNCTION_ARGS)
+{
+	ArrayType  *transarray;
+	Int8TransTypeData *transdata;
+
+	transarray = PG_GETARG_ARRAYTYPE_P(0);
+
+	if (ARR_HASNULL(transarray) ||
+		ARR_SIZE(transarray) != ARR_OVERHEAD_NONULLS(1) + sizeof(Int8TransTypeData))
+		elog(ERROR, "expected 2-element int8 array");
+
+	transdata = (Int8TransTypeData *) ARR_DATA_PTR(transarray);
+	if (transdata->count <= 0)
+		elog(ERROR, "count must be positive");
+
+	PG_RETURN_ARRAYTYPE_P(transarray);
 }
 
 Datum

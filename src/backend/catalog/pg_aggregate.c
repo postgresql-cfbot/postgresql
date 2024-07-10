@@ -60,6 +60,8 @@ AggregateCreate(const char *aggName,
 				List *aggcombinefnName,
 				List *aggserialfnName,
 				List *aggdeserialfnName,
+				bool aggpartialpushdownsafe,
+				List *aggpartialimportfnName,
 				List *aggmtransfnName,
 				List *aggminvtransfnName,
 				List *aggmfinalfnName,
@@ -88,6 +90,7 @@ AggregateCreate(const char *aggName,
 	Oid			combinefn = InvalidOid; /* can be omitted */
 	Oid			serialfn = InvalidOid;	/* can be omitted */
 	Oid			deserialfn = InvalidOid;	/* can be omitted */
+	Oid			importfn = InvalidOid;	/* can be omitted */
 	Oid			mtransfn = InvalidOid;	/* can be omitted */
 	Oid			minvtransfn = InvalidOid;	/* can be omitted */
 	Oid			mfinalfn = InvalidOid;	/* can be omitted */
@@ -482,6 +485,28 @@ AggregateCreate(const char *aggName,
 	}
 
 	/*
+	 * Validate the import function, if present.
+	 */
+	if (aggpartialimportfnName)
+	{
+		if (!aggpartialpushdownsafe)
+			elog(ERROR, "aggpartialpushdownsafe must be true when aggpartialimportfunc is specified");
+
+		/* signature is always deserialize(bytea, internal) returns internal */
+		fnArgs[0] = aggTransType;
+
+		importfn = lookup_agg_function(aggpartialimportfnName, 1,
+										 fnArgs, InvalidOid,
+										 &rettype);
+
+		if (rettype != aggTransType)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATATYPE_MISMATCH),
+					 errmsg("return type of import function %s is not stype",
+							NameListToString(aggpartialimportfnName))));
+	}
+
+	/*
 	 * If finaltype (i.e. aggregate return type) is polymorphic, inputs must
 	 * be polymorphic also, else parser will fail to deduce result type.
 	 * (Note: given the previous test on transtype and inputs, this cannot
@@ -664,6 +689,8 @@ AggregateCreate(const char *aggName,
 	values[Anum_pg_aggregate_aggcombinefn - 1] = ObjectIdGetDatum(combinefn);
 	values[Anum_pg_aggregate_aggserialfn - 1] = ObjectIdGetDatum(serialfn);
 	values[Anum_pg_aggregate_aggdeserialfn - 1] = ObjectIdGetDatum(deserialfn);
+	values[Anum_pg_aggregate_aggpartialpushdownsafe - 1] = BoolGetDatum(aggpartialpushdownsafe);
+	values[Anum_pg_aggregate_aggpartialimportfn - 1] = ObjectIdGetDatum(importfn);
 	values[Anum_pg_aggregate_aggmtransfn - 1] = ObjectIdGetDatum(mtransfn);
 	values[Anum_pg_aggregate_aggminvtransfn - 1] = ObjectIdGetDatum(minvtransfn);
 	values[Anum_pg_aggregate_aggmfinalfn - 1] = ObjectIdGetDatum(mfinalfn);
@@ -774,6 +801,13 @@ AggregateCreate(const char *aggName,
 	if (OidIsValid(deserialfn))
 	{
 		ObjectAddressSet(referenced, ProcedureRelationId, deserialfn);
+		add_exact_object_address(&referenced, addrs);
+	}
+
+	/* Depends on import function, if any */
+	if (OidIsValid(importfn))
+	{
+		ObjectAddressSet(referenced, ProcedureRelationId, importfn);
 		add_exact_object_address(&referenced, addrs);
 	}
 

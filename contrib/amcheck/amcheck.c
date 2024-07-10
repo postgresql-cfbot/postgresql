@@ -8,6 +8,8 @@
  * IDENTIFICATION
  *	  contrib/amcheck/amcheck.c
  *
+ *
+ * XXX I'd probably call this verify_common.c or something like that.
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
@@ -29,6 +31,8 @@ static bool amcheck_index_mainfork_expected(Relation rel);
  * where there is simply nothing to verify.
  *
  * NB: Caller should call index_checkable() before calling here.
+ *
+ * XXX Wouldn't it be more natural to have this check in index_checkable?
  */
 static bool
 amcheck_index_mainfork_expected(Relation rel)
@@ -45,6 +49,9 @@ amcheck_index_mainfork_expected(Relation rel)
 	return false;
 }
 
+/*
+ * XXX missing comment, and it's the longest/most important function in the file
+ */
 void
 amcheck_lock_relation_and_check(Oid indrelid,
 								Oid am_id,
@@ -153,7 +160,7 @@ index_checkable(Relation rel, Oid am_id)
 		rel->rd_rel->relam != am_id)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("only B-Tree indexes are supported as targets for verification"), //TODO name AM
+				 errmsg("only B-Tree indexes are supported as targets for verification"), //FIXME name AM, shouldn't be hhard to lookup in AMOID syscache
 				 errdetail("Relation \"%s\" is not a B-Tree index.",
 						   RelationGetRelationName(rel))));
 

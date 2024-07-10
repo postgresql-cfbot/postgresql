@@ -606,7 +606,7 @@ main(int argc, char *argv[])
 												 strlen(amcheck_schema));
 
 		/*
-		 * Check the version of amcheck extension. 
+		 * Check the version of amcheck extension.
 		 */
 		amcheck_version = PQgetvalue(result, 0, 1);
 

@@ -40,15 +40,14 @@ typedef struct GistScanItem
 	BlockNumber blkno;
 
 	/*
-	 * Correctess of this parent tuple will be checked against contents of referenced page.
-	 * This tuple will be NULL for root block.
+	 * Correctess of this parent tuple will be checked against contents of
+	 * referenced page. This tuple will be NULL for root block.
 	 */
 	IndexTuple	parenttup;
 
 	/*
-	 * LSN to hande concurrent scan of the page.
-	 * It's necessary to avoid missing some subtrees from page, that was
-	 * split just before we read it.
+	 * LSN to hande concurrent scan of the page. It's necessary to avoid
+	 * missing some subtrees from page, that was split just before we read it.
 	 */
 	XLogRecPtr	parentlsn;
 
@@ -60,14 +59,14 @@ typedef struct GistScanItem
 
 	/* Pointer to a next stack item. */
 	struct GistScanItem *next;
-} GistScanItem;
+}			GistScanItem;
 
 typedef struct GistCheckState
 {
 	/* Bloom filter fingerprints index tuples */
 	bloom_filter *filter;
 
-	/* Debug counter	FIXME what does 'debug counter' mean?*/
+	/* Debug counter	FIXME what does 'debug counter' mean? */
 	int64		heaptuplespresent;
 
 	/* XXX nitpick: I'd move these 'generic' fields to the beginning */
@@ -84,15 +83,15 @@ typedef struct GistCheckState
 	BlockNumber scannedblocks;
 	BlockNumber deltablocks;
 
-	int leafdepth;
-} GistCheckState;
+	int			leafdepth;
+}			GistCheckState;
 
 PG_FUNCTION_INFO_V1(gist_index_check);
 
 static void gist_init_heapallindexed(Relation rel, GistCheckState * result);
 static void gist_check_parent_keys_consistency(Relation rel, Relation heaprel,
 											   void *callback_state, bool readonly);
-static void gist_check_page(GistCheckState *check_state,GistScanItem *stack,
+static void gist_check_page(GistCheckState * check_state, GistScanItem * stack,
 							Page page, bool heapallindexed,
 							BufferAccessStrategy strategy);
 static void check_index_page(Relation rel, Buffer buffer, BlockNumber blockNo);
@@ -105,7 +104,7 @@ static void gist_tuple_present_callback(Relation index, ItemPointer tid,
 										Datum *values, bool *isnull,
 										bool tupleIsAlive, void *checkstate);
 static IndexTuple gistFormNormalizedTuple(GISTSTATE *giststate, Relation r,
-			  Datum *attdata, bool *isnull, ItemPointerData tid);
+										  Datum *attdata, bool *isnull, ItemPointerData tid);
 
 /*
  * gist_index_check(index regclass)
@@ -292,6 +291,7 @@ gist_check_parent_keys_consistency(Relation rel, Relation heaprel,
 		if (!GistPageIsLeaf(page))
 		{
 			OffsetNumber maxoff = PageGetMaxOffsetNumber(page);
+
 			for (OffsetNumber i = FirstOffsetNumber; i <= maxoff; i = OffsetNumberNext(i))
 			{
 				/* Internal page, so recurse to the child */
@@ -327,7 +327,7 @@ gist_check_parent_keys_consistency(Relation rel, Relation heaprel,
 		TableScanDesc scan;
 
 		scan = table_beginscan_strat(heaprel,	/* relation */
-									 check_state->snapshot,	/* snapshot */
+									 check_state->snapshot, /* snapshot */
 									 0, /* number of keys */
 									 NULL,	/* scan key */
 									 true,	/* buffer access strategy OK */
@@ -366,7 +366,7 @@ gist_check_parent_keys_consistency(Relation rel, Relation heaprel,
 }
 
 static void
-gist_check_page(GistCheckState *check_state, GistScanItem *stack,
+gist_check_page(GistCheckState * check_state, GistScanItem * stack,
 				Page page, bool heapallindexed, BufferAccessStrategy strategy)
 {
 	OffsetNumber maxoff = PageGetMaxOffsetNumber(page);
@@ -379,13 +379,13 @@ gist_check_page(GistCheckState *check_state, GistScanItem *stack,
 		else if (stack->depth != check_state->leafdepth)
 			ereport(ERROR,
 					(errcode(ERRCODE_INDEX_CORRUPTED),
-						errmsg("index \"%s\": internal pages traversal encountered leaf page unexpectedly on block %u",
+					 errmsg("index \"%s\": internal pages traversal encountered leaf page unexpectedly on block %u",
 							RelationGetRelationName(check_state->rel), stack->blkno)));
 	}
 
 	/*
-	 * Check that each tuple looks valid, and is consistent with the
-	 * downlink we followed when we stepped on this page.
+	 * Check that each tuple looks valid, and is consistent with the downlink
+	 * we followed when we stepped on this page.
 	 */
 	for (OffsetNumber i = FirstOffsetNumber; i <= maxoff; i = OffsetNumberNext(i))
 	{
@@ -393,27 +393,26 @@ gist_check_page(GistCheckState *check_state, GistScanItem *stack,
 		IndexTuple	idxtuple = (IndexTuple) PageGetItem(page, iid);
 
 		/*
-		 * Check that it's not a leftover invalid tuple from pre-9.1 See
-		 * also gistdoinsert() and gistbulkdelete() handling of such
-		 * tuples. We do consider it error here.
+		 * Check that it's not a leftover invalid tuple from pre-9.1 See also
+		 * gistdoinsert() and gistbulkdelete() handling of such tuples. We do
+		 * consider it error here.
 		 */
 		if (GistTupleIsInvalid(idxtuple))
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						errmsg("index \"%s\" contains an inner tuple marked as invalid, block %u, offset %u",
+					 errmsg("index \"%s\" contains an inner tuple marked as invalid, block %u, offset %u",
 							RelationGetRelationName(check_state->rel), stack->blkno, i),
-						errdetail("This is caused by an incomplete page split at crash recovery before upgrading to PostgreSQL 9.1."),
-						errhint("Please REINDEX it.")));
+					 errdetail("This is caused by an incomplete page split at crash recovery before upgrading to PostgreSQL 9.1."),
+					 errhint("Please REINDEX it.")));
 
 		if (MAXALIGN(ItemIdGetLength(iid)) != MAXALIGN(IndexTupleSize(idxtuple)))
 			ereport(ERROR,
 					(errcode(ERRCODE_INDEX_CORRUPTED),
-						errmsg("index \"%s\" has inconsistent tuple sizes, block %u, offset %u",
+					 errmsg("index \"%s\" has inconsistent tuple sizes, block %u, offset %u",
 							RelationGetRelationName(check_state->rel), stack->blkno, i)));
 
 		/*
-		 * Check if this tuple is consistent with the downlink in the
-		 * parent.
+		 * Check if this tuple is consistent with the downlink in the parent.
 		 */
 		if (stack->parenttup &&
 			gistgetadjusted(check_state->rel, stack->parenttup, idxtuple, check_state->state))
@@ -421,26 +420,26 @@ gist_check_page(GistCheckState *check_state, GistScanItem *stack,
 			/*
 			 * There was a discrepancy between parent and child tuples. We
 			 * need to verify it is not a result of concurrent call of
-			 * gistplacetopage(). So, lock parent and try to find downlink
-			 * for current page. It may be missing due to concurrent page
-			 * split, this is OK.
+			 * gistplacetopage(). So, lock parent and try to find downlink for
+			 * current page. It may be missing due to concurrent page split,
+			 * this is OK.
 			 *
-			 * Note that when we aquire parent tuple now we hold lock for
-			 * both parent and child buffers. Thus parent tuple must
-			 * include keyspace of the child.
+			 * Note that when we aquire parent tuple now we hold lock for both
+			 * parent and child buffers. Thus parent tuple must include
+			 * keyspace of the child.
 			 */
 			pfree(stack->parenttup);
 			stack->parenttup = gist_refind_parent(check_state->rel, stack->parentblk,
-													stack->blkno, strategy);
+												  stack->blkno, strategy);
 
 			/* We found it - make a final check before failing */
 			if (!stack->parenttup)
 				elog(NOTICE, "Unable to find parent tuple for block %u on block %u due to concurrent split",
-						stack->blkno, stack->parentblk);
+					 stack->blkno, stack->parentblk);
 			else if (gistgetadjusted(check_state->rel, stack->parenttup, idxtuple, check_state->state))
 				ereport(ERROR,
 						(errcode(ERRCODE_INDEX_CORRUPTED),
-							errmsg("index \"%s\" has inconsistent records on page %u offset %u",
+						 errmsg("index \"%s\" has inconsistent records on page %u offset %u",
 								RelationGetRelationName(check_state->rel), stack->blkno, i)));
 			else
 			{
@@ -454,16 +453,17 @@ gist_check_page(GistCheckState *check_state, GistScanItem *stack,
 		{
 			if (heapallindexed)
 				bloom_add_element(check_state->filter,
-									(unsigned char *) idxtuple,
-									IndexTupleSize(idxtuple));
+								  (unsigned char *) idxtuple,
+								  IndexTupleSize(idxtuple));
 		}
 		else
 		{
 			OffsetNumber off = ItemPointerGetOffsetNumber(&(idxtuple->t_tid));
+
 			if (off != 0xffff)
 				ereport(ERROR,
 						(errcode(ERRCODE_INDEX_CORRUPTED),
-							errmsg("index \"%s\" has on page %u offset %u has item id not pointing to 0xffff, but %hu",
+						 errmsg("index \"%s\" has on page %u offset %u has item id not pointing to 0xffff, but %hu",
 								RelationGetRelationName(check_state->rel), stack->blkno, i, off)));
 		}
 	}
@@ -503,18 +503,18 @@ gistFormNormalizedTuple(GISTSTATE *giststate, Relation r,
 							RelationGetRelationName(r))));
 		if (VARATT_IS_COMPRESSED(DatumGetPointer(compatt[i])))
 		{
-			//Datum old = compatt[i];
+			/* Datum old = compatt[i]; */
 			/* Key attributes must never be compressed */
 			if (i < IndexRelationGetNumberOfKeyAttributes(r))
 				ereport(ERROR,
 						(errcode(ERRCODE_INDEX_CORRUPTED),
-							errmsg("compressed varlena datum in tuple key that references heap row (%u,%u) in index \"%s\"",
+						 errmsg("compressed varlena datum in tuple key that references heap row (%u,%u) in index \"%s\"",
 								ItemPointerGetBlockNumber(&tid),
 								ItemPointerGetOffsetNumber(&tid),
 								RelationGetRelationName(r))));
 
 			compatt[i] = PointerGetDatum(PG_DETOAST_DATUM(compatt[i]));
-			//pfree(DatumGetPointer(old)); // TODO: this fails. Why?
+			/* pfree(DatumGetPointer(old)); // TODO: this fails. Why? */
 		}
 	}
 
@@ -620,7 +620,7 @@ gist_refind_parent(Relation rel,
 		 */
 		ereport(ERROR,
 				(errcode(ERRCODE_INDEX_CORRUPTED),
-					errmsg("index \"%s\" internal page %d became leaf",
+				 errmsg("index \"%s\" internal page %d became leaf",
 						RelationGetRelationName(rel), parentblkno)));
 	}
 
@@ -634,8 +634,8 @@ gist_refind_parent(Relation rel,
 		{
 			/*
 			 * Found it! Make copy and return it while both parent and child
-			 * pages are locked. This guaranties that at this particular moment
-			 * tuples must be coherent to each other.
+			 * pages are locked. This guaranties that at this particular
+			 * moment tuples must be coherent to each other.
 			 */
 			result = CopyIndexTuple(itup);
 			break;

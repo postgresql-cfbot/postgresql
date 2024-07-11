@@ -195,6 +195,7 @@ WalReceiverMain(char *startup_data, size_t startup_data_len)
 	char	   *err;
 	char	   *sender_host = NULL;
 	int			sender_port = 0;
+	char	   *appname = NULL;
 
 	Assert(startup_data_len == 0);
 
@@ -297,14 +298,15 @@ WalReceiverMain(char *startup_data, size_t startup_data_len)
 	/* Unblock signals (they were blocked when the postmaster forked us) */
 	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
 
+	appname = cluster_name[0] ? cluster_name : "walreceiver";
+
 	/* Establish the connection to the primary for XLOG streaming */
-	wrconn = walrcv_connect(conninfo, true, false, false,
-							cluster_name[0] ? cluster_name : "walreceiver",
-							&err);
+	wrconn = walrcv_connect(conninfo, true, false, false, appname, &err);
+
 	if (!wrconn)
 		ereport(ERROR,
 				(errcode(ERRCODE_CONNECTION_FAILURE),
-				 errmsg("could not connect to the primary server: %s", err)));
+				 errmsg("streaming replication \"%s\" could not connect to the primary server: %s", appname, err)));
 
 	/*
 	 * Save user-visible connection string.  This clobbers the original

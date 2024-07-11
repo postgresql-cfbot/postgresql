@@ -18751,6 +18751,10 @@ AttachPartitionEnsureIndexes(List **wqueue, Relation rel, Relation attachrel)
 								 idxRel->rd_opfamily,
 								 attmap))
 			{
+				cldConstrOid =
+					get_relation_idx_constraint_oid(RelationGetRelid(attachrel),
+													cldIdxId);
+
 				/*
 				 * If this index is being created in the parent because of a
 				 * constraint, then the child needs to have a constraint also,
@@ -18759,9 +18763,6 @@ AttachPartitionEnsureIndexes(List **wqueue, Relation rel, Relation attachrel)
 				 */
 				if (OidIsValid(constraintOid))
 				{
-					cldConstrOid =
-						get_relation_idx_constraint_oid(RelationGetRelid(attachrel),
-														cldIdxId);
 					/* no dice */
 					if (!OidIsValid(cldConstrOid))
 						continue;
@@ -18770,6 +18771,22 @@ AttachPartitionEnsureIndexes(List **wqueue, Relation rel, Relation attachrel)
 					if (get_constraint_type(constraintOid) !=
 						get_constraint_type(cldConstrOid))
 						continue;
+				}
+				else
+				{
+					/*
+					 * If the parent does *not* have a constraint, then the
+					 * child must also not have one. Otherwise, things can get
+					 * ugly by detach time.
+					 */
+
+					if (OidIsValid(cldConstrOid))
+						ereport(ERROR,
+								errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+								errmsg("can't attach partition \"%s\" with constraint \"%s\" that matches non-constraint index \"%s\"",
+									   RelationGetRelationName(attachrel),
+									   get_constraint_name(cldConstrOid),
+									   RelationGetRelationName(idxRel)));
 				}
 
 				/* bingo. */
@@ -19281,22 +19298,32 @@ DetachPartitionFinalize(Relation rel, Relation partRel, bool concurrent,
 	foreach(cell, indexes)
 	{
 		Oid			idxid = lfirst_oid(cell);
+		Oid			parentidx;
 		Relation	idx;
 		Oid			constrOid;
+		Oid			parentConstrOid;
 
 		if (!has_superclass(idxid))
 			continue;
 
-		Assert((IndexGetRelation(get_partition_parent(idxid, false), false) ==
-				RelationGetRelid(rel)));
+		parentidx = get_partition_parent(idxid, false);
+		Assert((IndexGetRelation(parentidx, false) == RelationGetRelid(rel)));
 
 		idx = index_open(idxid, AccessExclusiveLock);
 		IndexSetParentIndex(idx, InvalidOid);
 
-		/* If there's a constraint associated with the index, detach it too */
+		/*
+		 * If there's a constraint associated with the index, detach it too.
+		 * Careful: in releases prior to 17, it was possible for a constraint
+		 * index in a partition to be the child of a non-constraint index, so
+		 * we verify whether the parent index does actually have a constraint
+		 * first.
+		 */
 		constrOid = get_relation_idx_constraint_oid(RelationGetRelid(partRel),
 													idxid);
-		if (OidIsValid(constrOid))
+		parentConstrOid = get_relation_idx_constraint_oid(RelationGetRelid(rel),
+														  parentidx);
+		if (OidIsValid(parentConstrOid) && OidIsValid(constrOid))
 			ConstraintSetParentConstraint(constrOid, InvalidOid, InvalidOid);
 
 		index_close(idx, NoLock);
@@ -19719,6 +19746,20 @@ ATExecAttachPartitionIdx(List **wqueue, Relation parentIdx, RangeVar *name)
 								   RelationGetRelationName(parentIdx),
 								   RelationGetRelationName(parentTbl),
 								   RelationGetRelationName(partIdx))));
+		}
+		else
+		{
+			Oid			constroid;
+
+			constroid = get_relation_idx_constraint_oid(RelationGetRelid(partTbl),
+														partIdxId);
+
+			if (OidIsValid(constroid))
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+						errmsg("can't attach constraint-supporting index \"%s\" to non-constraint index \"%s\"",
+							   get_constraint_name(constroid),
+							   RelationGetRelationName(partIdx)));
 		}
 
 		/* All good -- do it */

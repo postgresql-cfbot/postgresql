@@ -1378,7 +1378,11 @@ DefineIndex(Oid tableId,
 										 parentIndex->rd_opfamily,
 										 attmap))
 					{
-						Oid			cldConstrOid = InvalidOid;
+						Oid			cldConstrOid;
+
+						cldConstrOid =
+							get_relation_idx_constraint_oid(childRelid,
+															cldidxid);
 
 						/*
 						 * Found a match.
@@ -1387,19 +1391,29 @@ DefineIndex(Oid tableId,
 						 * because of a constraint, then the child needs to
 						 * have a constraint also, so look for one.  If there
 						 * is no such constraint, this index is no good, so
-						 * keep looking.
+						 * keep looking.  On the other hand, if the index that
+						 * exists on the child _is_ a constraint but this one
+						 * isn't, then we shouldn't match them.  XXX should we
+						 * instead choose to ignore the index?
 						 */
 						if (createdConstraintId != InvalidOid)
 						{
-							cldConstrOid =
-								get_relation_idx_constraint_oid(childRelid,
-																cldidxid);
 							if (cldConstrOid == InvalidOid)
 							{
 								index_close(cldidx, lockmode);
 								continue;
 							}
 						}
+						else if (OidIsValid(cldConstrOid))
+							ereport(ERROR,
+									errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+									errmsg("can't create index on partitioned table \"%s\" matching constraint \"%s\" on partition \"%s\"",
+										   RelationGetRelationName(rel),
+										   get_constraint_name(cldConstrOid),
+										   RelationGetRelationName(childrel)),
+									errhint("You can create the index on ONLY \"%s\", or create a constraint instead.",
+											RelationGetRelationName(rel)));
+
 
 						/* Attach index to parent and we're done. */
 						IndexSetParentIndex(cldidx, indexRelationId);

@@ -27,6 +27,7 @@ static void check_for_tables_with_oids(ClusterInfo *cluster);
 static void check_for_pg_role_prefix(ClusterInfo *cluster);
 static void check_for_new_tablespace_dir(void);
 static void check_for_user_defined_encoding_conversions(ClusterInfo *cluster);
+static void check_for_attached_part_idxs(ClusterInfo *cluster);
 static void check_new_cluster_logical_replication_slots(void);
 static void check_new_cluster_subscription_configuration(void);
 static void check_old_cluster_for_valid_slots(bool live_check);
@@ -598,6 +599,7 @@ check_and_dump_old_cluster(bool live_check)
 	check_proper_datallowconn(&old_cluster);
 	check_for_prepared_transactions(&old_cluster);
 	check_for_isn_and_int8_passing_mismatch(&old_cluster);
+	check_for_attached_part_idxs(&old_cluster);
 
 	if (GET_MAJOR_VERSION(old_cluster.major_version) >= 1700)
 	{
@@ -1707,6 +1709,84 @@ check_for_user_defined_encoding_conversions(ClusterInfo *cluster)
 				 "so this cluster cannot currently be upgraded.  You can remove the\n"
 				 "encoding conversions in the old cluster and restart the upgrade.\n"
 				 "A list of user-defined encoding conversions is in the file:\n"
+				 "    %s", output_path);
+	}
+	else
+		check_ok();
+}
+
+static void
+check_for_attached_part_idxs(ClusterInfo *cluster)
+{
+	FILE	   *script = NULL;
+	char		output_path[MAXPGPATH];
+
+	prep_status("Checking for undesirable indexes on partitions");
+
+	snprintf(output_path, sizeof(output_path), "%s/%s",
+			 log_opts.basedir,
+			 "invalid_partition_indexes.txt");
+
+	/*
+	 * Find any constraint indexes on partitions that are attached to non-
+	 * constraint indexes on their parent partitioned tables.
+	 */
+	for (int dbnum = 0; dbnum < cluster->dbarr.ndbs; dbnum++)
+	{
+		PGresult   *res;
+		bool		db_used = false;
+		int			ntups;
+		int			i_conoid,
+					i_conname,
+					i_tablename;
+		DbInfo 	   *active_db = &cluster->dbarr.dbs[dbnum];
+		PGconn     *conn = connectToServer(cluster, active_db->db_name);
+
+		res = executeQueryOrDie(conn,
+								"SELECT co.oid, co.conname, "
+								"       (SELECT format('%%I.%%I', nspname, relname) "
+								"          FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace "
+								"               ON (relnamespace = pg_namespace.oid) "
+								"         WHERE pg_class.oid = co.conrelid) AS tablename "
+								"	FROM pg_catalog.pg_constraint co JOIN pg_catalog.pg_class c "
+								"        ON (co.conrelid = c.oid) "
+								"	WHERE c.relispartition and conparentid = 0 AND "
+								"         EXISTS (SELECT 1 FROM pg_catalog.pg_inherits "
+								"                 WHERE inhrelid = co.conindid)");
+		ntups = PQntuples(res);
+		i_conoid = PQfnumber(res, "oid");
+		i_conname = PQfnumber(res, "conname");
+		i_tablename = PQfnumber(res, "tablename");
+		for (int rowno = 0; rowno < ntups; rowno++)
+		{
+			if (script == NULL &&
+				(script = fopen_priv(output_path, "w")) == NULL)
+				pg_fatal("could not open file \"%s\": %m", output_path);
+			if (!db_used)
+			{
+				fprintf(script, "In database: %s\n", active_db->db_name);
+				db_used = true;
+			}
+			fprintf(script, "  (oid=%s) %s on table \"%s\"\n",
+					PQgetvalue(res, rowno, i_conoid),
+					PQgetvalue(res, rowno, i_conname),
+					PQgetvalue(res, rowno, i_tablename));
+		}
+
+		PQclear(res);
+
+		PQfinish(conn);
+	}
+
+	if (script)
+	{
+		fclose(script);
+		pg_log(PG_REPORT, "fatal");
+		pg_fatal("Your installation contains badly defined indexes on partitions.\n"
+				 "It's no longer allowed to have constraint indexes on partitions\n"
+				 "when their parent tables have non-constraint indexes.\n"
+				 "Please fix or remove these constraints prior to upgrading.\n"
+				 "A list of such constraints is in the file:\n"
 				 "    %s", output_path);
 	}
 	else

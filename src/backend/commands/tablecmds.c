@@ -20335,15 +20335,16 @@ moveSplitTableRows(Relation rel, Relation splitRel, List *partlist, List *newPar
  * Emulates command: CREATE [TEMP] TABLE <newPartName> (LIKE <modelRel's name>
  * INCLUDING ALL EXCLUDING INDEXES EXCLUDING IDENTITY EXCLUDING STATISTICS)
  *
- * Also, this function sets the new partition access method same as parent
- * table access methods (similarly to CREATE TABLE ... PARTITION OF).  It
+ * The new partition will be created in the same tablespace as the parent if not
+ * specified.  Also, this function sets the new partition access method same as
+ * parent table access methods (similarly to CREATE TABLE ... PARTITION OF).  It
  * checks that parent and child tables have compatible persistence.
  *
  * Function returns the created relation (locked in AccessExclusiveLock mode).
  */
 static Relation
-createPartitionTable(RangeVar *newPartName, Relation modelRel,
-					 AlterTableUtilityContext *context)
+createPartitionTable(RangeVar *newPartName, char *tablespacename,
+					 Relation modelRel, AlterTableUtilityContext *context)
 {
 	CreateStmt *createStmt;
 	TableLikeClause *tlc;
@@ -20367,7 +20368,8 @@ createPartitionTable(RangeVar *newPartName, Relation modelRel,
 	createStmt->constraints = NIL;
 	createStmt->options = NIL;
 	createStmt->oncommit = ONCOMMIT_NOOP;
-	createStmt->tablespacename = get_tablespace_name(modelRel->rd_rel->reltablespace);
+	createStmt->tablespacename = tablespacename ? tablespacename :
+		get_tablespace_name(modelRel->rd_rel->reltablespace);;
 	createStmt->if_not_exists = false;
 	createStmt->accessMethod = get_am_name(modelRel->rd_rel->relam);
 
@@ -20527,7 +20529,7 @@ ATExecSplitPartition(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		SinglePartitionSpec *sps = (SinglePartitionSpec *) lfirst(listptr);
 		Relation	newPartRel;
 
-		newPartRel = createPartitionTable(sps->name, rel, context);
+		newPartRel = createPartitionTable(sps->name, sps->tablespacename, rel, context);
 		newPartRels = lappend(newPartRels, newPartRel);
 	}
 
@@ -20771,7 +20773,7 @@ ATExecMergePartitions(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	}
 
 	/* Create table for new partition, use partitioned table as model. */
-	newPartRel = createPartitionTable(cmd->name, rel, context);
+	newPartRel = createPartitionTable(cmd->name, cmd->tablespacename, rel, context);
 
 	/* Copy data from merged partitions to new partition. */
 	moveMergedTablesRows(rel, mergingPartitionsList, newPartRel);

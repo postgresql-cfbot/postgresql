@@ -39,11 +39,11 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
     DETACH PARTITION <replaceable class="parameter">partition_name</replaceable> [ CONCURRENTLY | FINALIZE ]
 ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
     SPLIT PARTITION <replaceable class="parameter">partition_name</replaceable> INTO
-        (PARTITION <replaceable class="parameter">partition_name1</replaceable> { FOR VALUES <replaceable class="parameter">partition_bound_spec</replaceable> | DEFAULT },
-         PARTITION <replaceable class="parameter">partition_name2</replaceable> { FOR VALUES <replaceable class="parameter">partition_bound_spec</replaceable> | DEFAULT } [, ...])
+        (PARTITION <replaceable class="parameter">partition_name1</replaceable> { FOR VALUES <replaceable class="parameter">partition_bound_spec</replaceable> | DEFAULT } [ TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ],
+         PARTITION <replaceable class="parameter">partition_name2</replaceable> { FOR VALUES <replaceable class="parameter">partition_bound_spec</replaceable> | DEFAULT } [ TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ] [, ...])
 ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
     MERGE PARTITIONS (<replaceable class="parameter">partition_name1</replaceable>, <replaceable class="parameter">partition_name2</replaceable> [, ...])
-        INTO <replaceable class="parameter">partition_name</replaceable>
+        INTO <replaceable class="parameter">partition_name</replaceable> [ TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ]
 
 <phrase>where <replaceable class="parameter">action</replaceable> is one of:</phrase>
 
@@ -1125,7 +1125,7 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
    </varlistentry>
 
    <varlistentry id="sql-altertable-split-partition">
-    <term><literal>SPLIT PARTITION <replaceable class="parameter">partition_name</replaceable> INTO (PARTITION <replaceable class="parameter">partition_name1</replaceable> { FOR VALUES <replaceable class="parameter">partition_bound_spec</replaceable> | DEFAULT }, PARTITION <replaceable class="parameter">partition_name2</replaceable> { FOR VALUES <replaceable class="parameter">partition_bound_spec</replaceable> | DEFAULT } [, ...])</literal></term>
+    <term><literal>SPLIT PARTITION <replaceable class="parameter">partition_name</replaceable> INTO (PARTITION <replaceable class="parameter">partition_name1</replaceable> { FOR VALUES <replaceable class="parameter">partition_bound_spec</replaceable> | DEFAULT } [ TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ], PARTITION <replaceable class="parameter">partition_name2</replaceable> { FOR VALUES <replaceable class="parameter">partition_bound_spec</replaceable> | DEFAULT } [ TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ] [, ...])</literal></term>
 
     <listitem>
      <para>
@@ -1163,8 +1163,8 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       New partitions will have the same table access method as the parent.
       If the parent table is persistent then new partitions are created
       persistent.  If the parent table is temporary then new partitions
-      are also created temporary.  New partitions will also be created in
-      the same tablespace as the parent.
+      are also created temporary.  New partitions will be created in
+      the same tablespace as the parent if <literal>TABLESPACE</literal> not specified.
      </para>
      <note>
       <para>
@@ -1177,7 +1177,7 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
    </varlistentry>
 
    <varlistentry id="sql-altertable-merge-partitions">
-    <term><literal>MERGE PARTITIONS (<replaceable class="parameter">partition_name1</replaceable>, <replaceable class="parameter">partition_name2</replaceable> [, ...]) INTO <replaceable class="parameter">partition_name</replaceable></literal></term>
+    <term><literal>MERGE PARTITIONS (<replaceable class="parameter">partition_name1</replaceable>, <replaceable class="parameter">partition_name2</replaceable> [, ...]) INTO <replaceable class="parameter">partition_name</replaceable> [ TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ]</literal></term>
 
     <listitem>
      <para>
@@ -1236,8 +1236,8 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       The new partition will have the same table access method as the parent.
       If the parent table is persistent then the new partition is created
       persistent.  If the parent table is temporary then the new partition
-      is also created temporary.  The new partition will also be created in
-      the same tablespace as the parent.
+      is also created temporary.  The new partition will be created in the
+      same tablespace as the parent if <literal>TABLESPACE</literal> not specified.
      </para>
      <note>
       <para>
@@ -1512,6 +1512,15 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
        <para>
         The partition bound specification for a new partition.  Refer to
         <xref linkend="sql-createtable"/> for more details on the syntax of the same.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="sql-altertable-parms-tablespace-name">
+      <term><replaceable class="parameter">tablespace_name</replaceable></term>
+      <listitem>
+       <para>
+        The name of the tablespace in which the split or merged partition will be created.
        </para>
       </listitem>
      </varlistentry>

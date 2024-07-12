@@ -551,6 +551,20 @@ SELECT tablename, indexname, tablespace FROM pg_indexes
   ORDER BY tablename, indexname, tablespace;
 DROP TABLE t;
 
+-- Check the merged partition can be set to a different tablespace
+SET search_path = partitions_merge_schema, public;
+CREATE TABLE t (i int PRIMARY KEY) PARTITION BY RANGE (i);
+CREATE TABLE tp_0_1 PARTITION OF t FOR VALUES FROM (0) TO (1);
+CREATE TABLE tp_1_2 PARTITION OF t FOR VALUES FROM (1) TO (2);
+ALTER TABLE t MERGE PARTITIONS (tp_0_1, tp_1_2) INTO tp_0_2 TABLESPACE regress_tblspace;
+SELECT tablename, tablespace FROM pg_tables
+  WHERE tablename IN ('t', 'tp_0_2') AND schemaname = 'partitions_merge_schema'
+  ORDER BY tablename, tablespace;
+SELECT tablename, indexname, tablespace FROM pg_indexes
+  WHERE tablename IN ('t', 'tp_0_2') AND schemaname = 'partitions_merge_schema'
+  ORDER BY tablename, indexname, tablespace;
+DROP TABLE t;
+
 -- Check the new partition inherits parent's table access method
 SET search_path = partitions_merge_schema, public;
 CREATE ACCESS METHOD partitions_merge_heap TYPE TABLE HANDLER heap_tableam_handler;

@@ -946,6 +946,7 @@ typedef struct SinglePartitionSpec
 	NodeTag		type;
 
 	RangeVar   *name;			/* name of partition */
+	char	   *tablespacename; /* name of tablespace, or NULL for default */
 	PartitionBoundSpec *bound;	/* FOR VALUES, if attaching */
 } SinglePartitionSpec;
 
@@ -960,6 +961,7 @@ typedef struct PartitionCmd
 	List	   *partlist;		/* list of partitions, for MERGE/SPLIT
 								 * PARTITION command */
 	bool		concurrent;
+	char	   *tablespacename; /* name of tablespace, or NULL for default */
 } PartitionCmd;
 
 /****************************************************************************

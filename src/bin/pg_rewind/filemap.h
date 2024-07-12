@@ -110,4 +110,7 @@ extern filemap_t *decide_file_actions(void);
 extern void calculate_totals(filemap_t *filemap);
 extern void print_filemap(filemap_t *filemap);
 
+extern void keepwalhash_init(void);
+extern void insert_keepwalhash_entry(const char *path);
+
 #endif							/* FILEMAP_H */

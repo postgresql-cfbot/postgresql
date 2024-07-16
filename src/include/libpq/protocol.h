@@ -64,6 +64,8 @@
 #define PqMsg_CopyDone				'c'
 #define PqMsg_CopyData				'd'
 
+/* These are the codes used by parallel leader/worker protocol. */
+#define PqMsg_Progress              'P'
 
 /* These are the authentication request codes sent by the backend. */
 

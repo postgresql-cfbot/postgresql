@@ -361,6 +361,7 @@ _readRangeTblEntry(void)
 			READ_INT_FIELD(rellockmode);
 			READ_UINT_FIELD(perminfoindex);
 			READ_NODE_FIELD(tablesample);
+			READ_BOOL_FIELD(relisivm);
 			break;
 		case RTE_SUBQUERY:
 			READ_NODE_FIELD(subquery);

@@ -3815,10 +3815,10 @@ CALL transaction_test2();
     raise errors.
 
 <synopsis>
-RAISE <optional> <replaceable class="parameter">level</replaceable> </optional> '<replaceable class="parameter">format</replaceable>' <optional>, <replaceable class="parameter">expression</replaceable> <optional>, ... </optional></optional> <optional> USING <replaceable class="parameter">option</replaceable> = <replaceable class="parameter">expression</replaceable> <optional>, ... </optional> </optional>;
-RAISE <optional> <replaceable class="parameter">level</replaceable> </optional> <replaceable class="parameter">condition_name</replaceable> <optional> USING <replaceable class="parameter">option</replaceable> = <replaceable class="parameter">expression</replaceable> <optional>, ... </optional> </optional>;
-RAISE <optional> <replaceable class="parameter">level</replaceable> </optional> SQLSTATE '<replaceable class="parameter">sqlstate</replaceable>' <optional> USING <replaceable class="parameter">option</replaceable> = <replaceable class="parameter">expression</replaceable> <optional>, ... </optional> </optional>;
-RAISE <optional> <replaceable class="parameter">level</replaceable> </optional> USING <replaceable class="parameter">option</replaceable> = <replaceable class="parameter">expression</replaceable> <optional>, ... </optional>;
+RAISE <optional> <replaceable class="parameter">level</replaceable> </optional> '<replaceable class="parameter">format</replaceable>' <optional>, <replaceable class="parameter">expression</replaceable> <optional>, ... </optional></optional> <optional> USING <replaceable class="parameter">option</replaceable> { = | := } <replaceable class="parameter">expression</replaceable> <optional>, ... </optional> </optional>;
+RAISE <optional> <replaceable class="parameter">level</replaceable> </optional> <replaceable class="parameter">condition_name</replaceable> <optional> USING <replaceable class="parameter">option</replaceable> { = | := } <replaceable class="parameter">expression</replaceable> <optional>, ... </optional> </optional>;
+RAISE <optional> <replaceable class="parameter">level</replaceable> </optional> SQLSTATE '<replaceable class="parameter">sqlstate</replaceable>' <optional> USING <replaceable class="parameter">option</replaceable> { = | := } <replaceable class="parameter">expression</replaceable> <optional>, ... </optional> </optional>;
+RAISE <optional> <replaceable class="parameter">level</replaceable> </optional> USING <replaceable class="parameter">option</replaceable> { = | := } <replaceable class="parameter">expression</replaceable> <optional>, ... </optional>;
 RAISE ;
 </synopsis>
 
@@ -3863,10 +3863,29 @@ RAISE NOTICE 'Calling cs_create_job(%)', v_job_id;
    </para>
 
    <para>
+    <replaceable class="parameter">condition_name</replaceable> and
+    <replaceable class="parameter">sqlstate</replaceable> specify
+    error condition name and the five-character SQLSTATE code, respectively.
+    See <xref linkend="errcodes-appendix"/> for more information.
+   </para>
+
+   <para>
+    The example below shows <replaceable class="parameter">condition_name</replaceable>
+    and <replaceable class="parameter">sqlstate</replaceable> options usage:
+<programlisting>
+RAISE division_by_zero;
+RAISE SQLSTATE '22012';
+</programlisting>
+   </para>
+
+   <para>
     You can attach additional information to the error report by writing
     <literal>USING</literal> followed by <replaceable
     class="parameter">option</replaceable> = <replaceable
-    class="parameter">expression</replaceable> items.  Each
+    class="parameter">expression</replaceable> or
+    <replaceable class="parameter">option</replaceable> :=
+    <replaceable class="parameter">expression</replaceable>
+    items, where
     <replaceable class="parameter">expression</replaceable> can be any
     string-valued expression.  The allowed <replaceable
     class="parameter">option</replaceable> key words are:
@@ -3935,15 +3954,11 @@ RAISE 'Duplicate user ID: %', user_id USING ERRCODE = '23505';
    </para>
 
    <para>
-    There is a second <command>RAISE</command> syntax in which the main argument
-    is the condition name or SQLSTATE to be reported, for example:
-<programlisting>
-RAISE division_by_zero;
-RAISE SQLSTATE '22012';
-</programlisting>
-    In this syntax, <literal>USING</literal> can be used to supply a custom
-    error message, detail, or hint.  Another way to do the earlier
-    example is
+    In the <command>RAISE</command> command syntax with
+    <replaceable class="parameter">condition_name</replaceable> or
+    <replaceable class="parameter">sqlstate</replaceable> you can
+    additionally use the <literal>USING</literal> clause too.
+    A variation of the above example is:
 <programlisting>
 RAISE unique_violation USING MESSAGE = 'Duplicate user ID: ' || user_id;
 </programlisting>

@@ -35,6 +35,7 @@
 #include "catalog/pg_publication.h"
 #include "catalog/pg_range.h"
 #include "catalog/pg_statistic.h"
+#include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_transform.h"
 #include "catalog/pg_type.h"
@@ -3713,4 +3714,52 @@ get_subscription_name(Oid subid, bool missing_ok)
 	ReleaseSysCache(tup);
 
 	return subname;
+}
+
+/*
+ * get_statistics_name
+ *		Returns the name of a given extended statistics
+ *
+ * Returns a palloc'd copy of the string, or NULL if no such namespace.
+ */
+char *
+get_statistics_name(Oid stxid)
+{
+	HeapTuple	tp;
+
+	tp = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(stxid));
+	if (HeapTupleIsValid(tp))
+	{
+		Form_pg_statistic_ext stxtup = (Form_pg_statistic_ext) GETSTRUCT(tp);
+		char	   *result;
+
+		result = pstrdup(NameStr(stxtup->stxname));
+		ReleaseSysCache(tp);
+		return result;
+	}
+	else
+		return NULL;
+}
+
+/*
+ * get_statistics_namespace
+ *		Returns the namespace OID of a given extended statistics
+ */
+Oid
+get_statistics_namespace(Oid stxid)
+{
+	HeapTuple	tp;
+
+	tp = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(stxid));
+	if (HeapTupleIsValid(tp))
+	{
+		Form_pg_statistic_ext stxtup = (Form_pg_statistic_ext) GETSTRUCT(tp);
+		Oid		result;
+
+		result = stxtup->stxnamespace;
+		ReleaseSysCache(tp);
+		return result;
+	}
+	else
+		return InvalidOid;
 }

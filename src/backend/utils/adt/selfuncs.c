@@ -4069,6 +4069,7 @@ estimate_multivariate_ndistinct(PlannerInfo *root, RelOptInfo *rel,
 		ListCell   *lc2;
 		Bitmapset  *matched = NULL;
 		AttrNumber	attnum_offset;
+		List	   *matched_exprs = NIL;
 
 		/*
 		 * How much we need to offset the attnums? If there are no
@@ -4116,6 +4117,9 @@ estimate_multivariate_ndistinct(PlannerInfo *root, RelOptInfo *rel,
 
 				matched = bms_add_member(matched, attnum);
 
+				/* track expressions matched by this statistics */
+				matched_exprs = lappend(matched_exprs, varinfo->var);
+
 				found = true;
 			}
 
@@ -4144,12 +4148,23 @@ estimate_multivariate_ndistinct(PlannerInfo *root, RelOptInfo *rel,
 
 					matched = bms_add_member(matched, attnum);
 
+					/* track expressions matched by this statistics */
+					matched_exprs = lappend(matched_exprs, expr);
+
 					/* there should be just one matching expression */
 					break;
 				}
 
 				idx++;
 			}
+		}
+
+		/* add it to the list of applied stats/clauses, if this flag is true */
+		if (root->parse->isExplain_Stats)
+		{
+			rel->applied_stats = lappend(rel->applied_stats, matched_info);
+			rel->applied_clauses = lappend(rel->applied_clauses, matched_exprs);
+			rel->applied_clauses_or = lappend_int(rel->applied_clauses_or, 2); /* 2: Use comma to deparse */
 		}
 
 		/* Find the specific item that exactly matches the combination */

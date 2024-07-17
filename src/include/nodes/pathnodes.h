@@ -1043,6 +1043,11 @@ typedef struct RelOptInfo
 	List	  **partexprs pg_node_attr(read_write_ignore);
 	/* Nullable partition key expressions */
 	List	  **nullable_partexprs pg_node_attr(read_write_ignore);
+
+	/* info about applied extended statistics */
+	List       *applied_stats;		/* list of StatisticExtInfo */
+	List       *applied_clauses;	/* list of lists of clauses */
+	List       *applied_clauses_or;	/* are the clauses AND, OR, or Comma */
 } RelOptInfo;
 
 /*

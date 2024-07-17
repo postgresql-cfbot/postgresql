@@ -509,6 +509,41 @@ extract_actual_clauses(List *restrictinfo_list,
 }
 
 /*
+ * maybe_extract_actual_clauses
+ *
+ * Just like extract_actual_clauses, but does not require the clauses to
+ * already be RestrictInfo.
+ *
+ * XXX Does not handle RestrictInfos nested in OR clauses.
+ */
+List *
+maybe_extract_actual_clauses(List *restrictinfo_list,
+							 bool pseudoconstant)
+{
+	List	   *result = NIL;
+	ListCell   *l;
+
+	foreach(l, restrictinfo_list)
+	{
+		RestrictInfo   *rinfo;
+		Node *node = (Node *) lfirst(l);
+
+		if (!IsA(node, RestrictInfo))
+		{
+			result = lappend(result, node);
+			continue;
+		}
+
+		rinfo = (RestrictInfo *) node;
+
+		if (rinfo->pseudoconstant == pseudoconstant)
+			result = lappend(result, rinfo->clause);
+	}
+
+	return result;
+}
+
+/*
  * extract_actual_join_clauses
  *
  * Extract bare clauses from 'restrictinfo_list', separating those that

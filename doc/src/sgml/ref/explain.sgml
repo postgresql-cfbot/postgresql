@@ -43,6 +43,7 @@ EXPLAIN [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] <rep
     BUFFERS [ <replaceable class="parameter">boolean</replaceable> ]
     SERIALIZE [ { NONE | TEXT | BINARY } ]
     WAL [ <replaceable class="parameter">boolean</replaceable> ]
+    STATS [ <replaceable class="parameter">boolean</replaceable> ]
     TIMING [ <replaceable class="parameter">boolean</replaceable> ]
     SUMMARY [ <replaceable class="parameter">boolean</replaceable> ]
     MEMORY [ <replaceable class="parameter">boolean</replaceable> ]
@@ -244,6 +245,18 @@ ROLLBACK;
       generated in bytes. In text format, only non-zero values are printed.
       This parameter may only be used when <literal>ANALYZE</literal> is also
       enabled.  It defaults to <literal>FALSE</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>STATS</literal></term>
+    <listitem>
+     <para>
+      Include information on applied <literal>Extended statistics</literal>.
+      Specifically, include the names of extended statistics and clauses.
+      See <xref linkend="planner-stats-extended"/> for details about extended
+      statistics. This parameter defaults to <literal>FALSE</literal>.
      </para>
     </listitem>
    </varlistentry>

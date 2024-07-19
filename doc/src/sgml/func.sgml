@@ -18016,7 +18016,9 @@ ERROR:  jsonpath member accessor can only be applied to an object
         <returnvalue><replaceable>string</replaceable></returnvalue>
        </para>
        <para>
-        String value converted from a JSON boolean, number, string, or datetime
+        String value converted from a JSON boolean, number, string, or
+        datetime. Note that the string output of datetimes is determined by
+        the <xref linkend="guc-datestyle"/> parameter.
        </para>
        <para>
         <literal>jsonb_path_query_array('[1.23, "xyz", false]', '$[*].string()')</literal>

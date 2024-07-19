@@ -726,7 +726,7 @@ insert_property_records(Oid graphid, Oid ellabeloid, Oid pgerelid, const PropGra
 			cr = makeNode(ColumnRef);
 			rt = makeNode(ResTarget);
 
-			cr->fields = list_make1(makeString(NameStr(att->attname)));
+			cr->fields = list_make1(makeString(pstrdup(NameStr(att->attname))));
 			cr->location = -1;
 
 			rt->name = pstrdup(NameStr(att->attname));

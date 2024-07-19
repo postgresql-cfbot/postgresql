@@ -1812,6 +1812,13 @@ SELECT regexp_match('foobarbequebaz'::citext, '(BAR)(BEQUE)'::citext, 'c'::citex
  
 (1 row)
 
+SELECT regexp_match(string=>'foobarbequebaz'::citext, pattern=>'(BAR)(BEQUE)'::citext, flags=>'c'::citext)
+               = ARRAY[ 'bar', 'beque' ] AS "no result";
+ no result 
+-----------
+ 
+(1 row)
+
 -- g is not allowed
 SELECT regexp_match('foobarbequebazmorebarbequetoo'::citext, '(BAR)(BEQUE)'::citext, 'g') AS "error";
 ERROR:  regexp_match() does not support the "global" option
@@ -1865,6 +1872,12 @@ SELECT regexp_matches('foobarbequebaz'::citext, '(BAR)(BEQUE)'::citext, 'c'::cit
 ---------
 (0 rows)
 
+SELECT regexp_matches(string=>'foobarbequebaz'::citext, pattern=>'(BAR)(BEQUE)'::citext, flags=>'c'::citext)
+                    = ARRAY[ 'bar', 'beque' ] AS "no rows";
+ no rows 
+---------
+(0 rows)
+
 -- g allows multiple output rows
 SELECT regexp_matches('foobarbequebazmorebarbequetoo'::citext, '(BAR)(BEQUE)'::citext, 'g'::citext) AS "two rows";
   two rows   
@@ -1899,6 +1912,12 @@ SELECT regexp_replace('Thomas'::citext, '.[MN]A.'::citext, 'M') = 'ThM' AS t;
 
 -- c forces case-sensitive
 SELECT regexp_replace('Thomas'::citext, '.[MN]A.'::citext, 'M', 'c') = 'Thomas' AS t;
+ t 
+---
+ t
+(1 row)
+
+SELECT regexp_replace(string=>'Thomas'::citext, pattern=>'.[MN]A.'::citext, replacement=>'M', flags=>'c') = 'Thomas' AS t;
  t 
 ---
  t
@@ -1953,6 +1972,12 @@ SELECT regexp_split_to_array('helloTworld'::citext, 't'::citext, 'c') = ARRAY[ '
  t
 (1 row)
 
+SELECT regexp_split_to_array(string=>'helloTworld'::citext, pattern=>'t'::citext, flags=>'c') = ARRAY[ 'helloTworld' ] AS t;
+ t 
+---
+ t
+(1 row)
+
 SELECT regexp_split_to_table('hello world'::citext, E'\\s+') AS words;
  words 
 -------
@@ -1983,6 +2008,12 @@ SELECT regexp_split_to_table('helloTworld'::citext, 't'::citext) AS words;
 
 -- c forces case-sensitive
 SELECT regexp_split_to_table('helloTworld'::citext, 't'::citext, 'c') AS word;
+    word     
+-------------
+ helloTworld
+(1 row)
+
+SELECT regexp_split_to_table(string=>'helloTworld'::citext, pattern=>'t'::citext, flags=>'c') AS word;
     word     
 -------------
  helloTworld

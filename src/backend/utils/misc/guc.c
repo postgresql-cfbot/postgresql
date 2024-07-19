@@ -2660,6 +2660,28 @@ ReportGUCOption(struct config_generic *record)
 }
 
 /*
+ * If both parameters are set, emits a log message at 'elevel' and returns
+ * false.  Otherwise, returns true.
+ */
+bool
+CheckMutuallyExclusiveStringGUCs(const char *p1val, const char *p1name,
+								 const char *p2val, const char *p2name,
+								 int elevel)
+{
+	if (p1val[0] != '\0' && p2val[0] != '\0')
+	{
+		ereport(elevel,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("both \"%s\" and \"%s\" set", p1name, p2name),
+				 errdetail("Only one of \"%s\", \"%s\" may be set.",
+						   p1name, p2name)));
+		return false;
+	}
+
+	return true;
+}
+
+/*
  * Convert a value from one of the human-friendly units ("kB", "min" etc.)
  * to the given base unit.  'value' and 'unit' are the input value and unit
  * to convert from (there can be trailing spaces in the unit string).

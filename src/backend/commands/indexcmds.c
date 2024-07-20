@@ -3327,8 +3327,15 @@ ReindexPartitions(const ReindexStmt *stmt, Oid relid, const ReindexParams *param
 	ListCell   *lc;
 	ErrorContextCallback errcallback;
 	ReindexErrorInfo errinfo;
+	ReindexParams newparams;
+	Oid			heapId = relid;
 
 	Assert(RELKIND_HAS_PARTITIONS(relkind));
+
+	if (relkind == RELKIND_PARTITIONED_INDEX)
+	{
+		heapId = IndexGetRelation(relid, true);
+	}
 
 	/*
 	 * Check if this runs in a transaction block, with an error callback to
@@ -3388,11 +3395,33 @@ ReindexPartitions(const ReindexStmt *stmt, Oid relid, const ReindexParams *param
 		MemoryContextSwitchTo(old_context);
 	}
 
+
+	{
+		int			progress_params[3] = {
+			PROGRESS_CREATEIDX_COMMAND,
+			PROGRESS_CREATEIDX_PHASE,
+			PROGRESS_CREATEIDX_PARTITIONS_TOTAL
+		};
+		int64		progress_values[3];
+
+		progress_values[0] = (params->options & REINDEXOPT_CONCURRENTLY) != 0 ?
+			PROGRESS_CREATEIDX_COMMAND_REINDEX_CONCURRENTLY :
+			PROGRESS_CREATEIDX_COMMAND_REINDEX;
+		progress_values[1] = 0;
+		progress_values[2] = list_length(partitions);
+		pgstat_progress_start_command(PROGRESS_COMMAND_CREATE_INDEX, heapId);
+		pgstat_progress_update_multi_param(3, progress_params, progress_values);
+	}
+
 	/*
 	 * Process each partition listed in a separate transaction.  Note that
 	 * this commits and then starts a new transaction immediately.
 	 */
-	ReindexMultipleInternal(stmt, partitions, params);
+	newparams = *params;
+	newparams.options |= REINDEXOPT_PARTITION;
+	ReindexMultipleInternal(stmt, partitions, &newparams);
+
+	pgstat_progress_end_command();
 
 	/*
 	 * Clean up working storage --- note we must do this after
@@ -3413,6 +3442,7 @@ static void
 ReindexMultipleInternal(const ReindexStmt *stmt, const List *relids, const ReindexParams *params)
 {
 	ListCell   *l;
+	bool		partitions = ((params->options & REINDEXOPT_PARTITION) != 0);
 
 	PopActiveSnapshot();
 	CommitTransactionCommand();
@@ -3506,6 +3536,9 @@ ReindexMultipleInternal(const ReindexStmt *stmt, const List *relids, const Reind
 		}
 
 		CommitTransactionCommand();
+
+		if (partitions)
+			pgstat_progress_incr_param(PROGRESS_CREATEIDX_PARTITIONS_DONE, 1);
 	}
 
 	StartTransactionCommand();
@@ -3558,6 +3591,7 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 	char	   *relationName = NULL;
 	char	   *relationNamespace = NULL;
 	PGRUsage	ru0;
+	bool		partition = ((params->options & REINDEXOPT_PARTITION) != 0);
 	const int	progress_index[] = {
 		PROGRESS_CREATEIDX_COMMAND,
 		PROGRESS_CREATEIDX_PHASE,
@@ -3909,7 +3943,8 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 		if (indexRel->rd_rel->relpersistence == RELPERSISTENCE_TEMP)
 			elog(ERROR, "cannot reindex a temporary table concurrently");
 
-		pgstat_progress_start_command(PROGRESS_COMMAND_CREATE_INDEX, idx->tableId);
+		if (!partition)
+			pgstat_progress_start_command(PROGRESS_COMMAND_CREATE_INDEX, idx->tableId);
 
 		progress_vals[0] = PROGRESS_CREATEIDX_COMMAND_REINDEX_CONCURRENTLY;
 		progress_vals[1] = 0;	/* initializing */
@@ -4084,7 +4119,8 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 		 * Update progress for the index to build, with the correct parent
 		 * table involved.
 		 */
-		pgstat_progress_start_command(PROGRESS_COMMAND_CREATE_INDEX, newidx->tableId);
+		if (!partition)
+			pgstat_progress_start_command(PROGRESS_COMMAND_CREATE_INDEX, newidx->tableId);
 		progress_vals[0] = PROGRESS_CREATEIDX_COMMAND_REINDEX_CONCURRENTLY;
 		progress_vals[1] = PROGRESS_CREATEIDX_PHASE_BUILD;
 		progress_vals[2] = newidx->indexId;
@@ -4148,7 +4184,8 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 		 * Update progress for the index to build, with the correct parent
 		 * table involved.
 		 */
-		pgstat_progress_start_command(PROGRESS_COMMAND_CREATE_INDEX, newidx->tableId);
+		if (!partition)
+			pgstat_progress_start_command(PROGRESS_COMMAND_CREATE_INDEX, newidx->tableId);
 		progress_vals[0] = PROGRESS_CREATEIDX_COMMAND_REINDEX_CONCURRENTLY;
 		progress_vals[1] = PROGRESS_CREATEIDX_PHASE_VALIDATE_IDXSCAN;
 		progress_vals[2] = newidx->indexId;
@@ -4399,7 +4436,8 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 
 	MemoryContextDelete(private_context);
 
-	pgstat_progress_end_command();
+	if (!partition)
+		pgstat_progress_end_command();
 
 	return true;
 }

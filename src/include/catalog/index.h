@@ -42,6 +42,7 @@ typedef struct ReindexParams
 #define REINDEXOPT_REPORT_PROGRESS 0x02 /* report pgstat progress */
 #define REINDEXOPT_MISSING_OK 	0x04	/* skip missing relations */
 #define REINDEXOPT_CONCURRENTLY	0x08	/* concurrent mode */
+#define REINDEXOPT_PARTITION 0x10 /* reindexing is done as part of partitioned table/index reindex */
 
 /* state info for validate_index bulkdelete callback */
 typedef struct ValidateIndexState

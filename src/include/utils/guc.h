@@ -119,6 +119,7 @@ typedef enum
 	PGC_S_OVERRIDE,				/* special case to forcibly set default */
 	PGC_S_INTERACTIVE,			/* dividing line for error reporting */
 	PGC_S_TEST,					/* test per-database or per-user setting */
+	PGC_S_TEST_FUNCTION,			/* function SET */
 	PGC_S_SESSION,				/* SET command */
 } GucSource;
 
@@ -435,9 +436,9 @@ extern void TransformGUCArray(ArrayType *array, List **names,
 							  List **values);
 extern void ProcessGUCArray(ArrayType *array,
 							GucContext context, GucSource source, GucAction action);
-extern ArrayType *GUCArrayAdd(ArrayType *array, const char *name, const char *value);
-extern ArrayType *GUCArrayDelete(ArrayType *array, const char *name);
-extern ArrayType *GUCArrayReset(ArrayType *array);
+extern ArrayType *GUCArrayAdd(ArrayType *array, const char *name, const char *value, int source);
+extern ArrayType *GUCArrayDelete(ArrayType *array, const char *name, int source);
+extern ArrayType *GUCArrayReset(ArrayType *array, int source);
 
 extern void *guc_malloc(int elevel, size_t size);
 extern pg_nodiscard void *guc_realloc(int elevel, void *old, size_t size);

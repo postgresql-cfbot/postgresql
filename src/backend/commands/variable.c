@@ -842,7 +842,7 @@ check_session_authorization(char **newval, void **extra, GucSource source)
 	roleTup = SearchSysCache1(AUTHNAME, PointerGetDatum(*newval));
 	if (!HeapTupleIsValid(roleTup))
 	{
-		if (source == PGC_S_TEST)
+		if (source == PGC_S_TEST || source == PGC_S_TEST_FUNCTION)
 		{
 			ereport(NOTICE,
 					(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -867,7 +867,7 @@ check_session_authorization(char **newval, void **extra, GucSource source)
 	if (roleid != GetAuthenticatedUserId() &&
 		!superuser_arg(GetAuthenticatedUserId()))
 	{
-		if (source == PGC_S_TEST)
+		if (source == PGC_S_TEST || source == PGC_S_TEST_FUNCTION)
 		{
 			ereport(NOTICE,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
@@ -950,7 +950,7 @@ check_role(char **newval, void **extra, GucSource source)
 		roleTup = SearchSysCache1(AUTHNAME, PointerGetDatum(*newval));
 		if (!HeapTupleIsValid(roleTup))
 		{
-			if (source == PGC_S_TEST)
+			if (source == PGC_S_TEST || source == PGC_S_TEST_FUNCTION)
 			{
 				ereport(NOTICE,
 						(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -975,7 +975,7 @@ check_role(char **newval, void **extra, GucSource source)
 		if (!InitializingParallelWorker &&
 			!member_can_set_role(GetSessionUserId(), roleid))
 		{
-			if (source == PGC_S_TEST)
+			if (source == PGC_S_TEST || source == PGC_S_TEST_FUNCTION)
 			{
 				ereport(NOTICE,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),

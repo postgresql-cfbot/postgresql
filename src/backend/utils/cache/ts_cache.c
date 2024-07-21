@@ -628,7 +628,7 @@ check_default_text_search_config(char **newval, void **extra, GucSource source)
 		 */
 		if (!OidIsValid(cfgId))
 		{
-			if (source == PGC_S_TEST)
+			if (source == PGC_S_TEST || source == PGC_S_TEST_FUNCTION)
 			{
 				ereport(NOTICE,
 						(errcode(ERRCODE_UNDEFINED_OBJECT),

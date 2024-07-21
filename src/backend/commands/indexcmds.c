@@ -624,6 +624,10 @@ DefineIndex(Oid tableId,
 									 PROGRESS_CREATEIDX_COMMAND_CREATE_CONCURRENTLY :
 									 PROGRESS_CREATEIDX_COMMAND_CREATE);
 	}
+	else
+	{
+		pgstat_progress_update_param(PROGRESS_CREATEIDX_PARTITION_RELID, tableId);
+	}
 
 	/*
 	 * No index OID to report yet
@@ -3596,9 +3600,10 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 		PROGRESS_CREATEIDX_COMMAND,
 		PROGRESS_CREATEIDX_PHASE,
 		PROGRESS_CREATEIDX_INDEX_OID,
-		PROGRESS_CREATEIDX_ACCESS_METHOD_OID
+		PROGRESS_CREATEIDX_ACCESS_METHOD_OID,
+		PROGRESS_CREATEIDX_PARTITION_RELID
 	};
-	int64		progress_vals[4];
+	int64		progress_vals[5];
 
 	/*
 	 * Create a memory context that will survive forced transaction commits we
@@ -3950,7 +3955,8 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 		progress_vals[1] = 0;	/* initializing */
 		progress_vals[2] = idx->indexId;
 		progress_vals[3] = idx->amId;
-		pgstat_progress_update_multi_param(4, progress_index, progress_vals);
+		progress_vals[4] = partition ? idx->tableId : 0;
+		pgstat_progress_update_multi_param(5, progress_index, progress_vals);
 
 		/* Choose a temporary relation name for the new index */
 		concurrentName = ChooseRelationName(get_rel_name(idx->indexId),
@@ -4125,7 +4131,8 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 		progress_vals[1] = PROGRESS_CREATEIDX_PHASE_BUILD;
 		progress_vals[2] = newidx->indexId;
 		progress_vals[3] = newidx->amId;
-		pgstat_progress_update_multi_param(4, progress_index, progress_vals);
+		progress_vals[4] = partition ? newidx->tableId : 0;
+		pgstat_progress_update_multi_param(5, progress_index, progress_vals);
 
 		/* Perform concurrent build of new index */
 		index_concurrently_build(newidx->tableId, newidx->indexId);
@@ -4190,7 +4197,8 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 		progress_vals[1] = PROGRESS_CREATEIDX_PHASE_VALIDATE_IDXSCAN;
 		progress_vals[2] = newidx->indexId;
 		progress_vals[3] = newidx->amId;
-		pgstat_progress_update_multi_param(4, progress_index, progress_vals);
+		progress_vals[4] = partition ? newidx->tableId : 0;
+		pgstat_progress_update_multi_param(5, progress_index, progress_vals);
 
 		validate_index(newidx->tableId, newidx->indexId, snapshot);
 

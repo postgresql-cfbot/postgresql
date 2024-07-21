@@ -133,7 +133,7 @@ task:
     DISK_SIZE: 50
 
     CCACHE_DIR: /tmp/ccache_dir
-    CPPFLAGS: -DRELCACHE_FORCE_RELEASE -DCOPY_PARSE_PLAN_TREES -DWRITE_READ_PARSE_PLAN_TREES -DRAW_EXPRESSION_COVERAGE_TEST -DENFORCE_REGRESSION_TEST_NAME_RESTRICTIONS
+    CPPFLAGS: -DRELCACHE_FORCE_RELEASE -DCOPY_PARSE_PLAN_TREES -DWRITE_READ_PARSE_PLAN_TREES -DRAW_EXPRESSION_COVERAGE_TEST -DENFORCE_REGRESSION_TEST_NAME_RESTRICTIONS -DDEBUG_SETLOCALE_MAP
     CFLAGS: -Og -ggdb
 
     PG_TEST_PG_UPGRADE_MODE: --link
@@ -174,7 +174,7 @@ task:
         --buildtype=debug \
         -Dcassert=true -Dinjection_points=true \
         -Duuid=bsd -Dtcl_version=tcl86 -Ddtrace=auto \
-        -DPG_TEST_EXTRA="$PG_TEST_EXTRA" \
+        -DPG_TEST_EXTRA="$PG_TEST_EXTRA DEBUG_SETLOCALE_MAP" \
         -Dextra_lib_dirs=/usr/local/lib -Dextra_include_dirs=/usr/local/include/ \
         build
     EOF

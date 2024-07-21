@@ -6109,6 +6109,15 @@ FROM pg_stat_get_backend_idset() AS backendid;
        <literal>0</literal> when the index is not partitioned.
       </para></entry>
      </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>partition_relid</structfield> <type>bigint</type>
+      </para>
+      <para>
+       OID of the partition on which the index is currently being created.
+       <literal>0</literal> when the index is not partitioned.
+      </para></entry>
+     </row>
     </tbody>
    </tgroup>
   </table>

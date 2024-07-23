@@ -435,7 +435,9 @@ static const CopyToRoutine CopyToRoutineBinary = {
 static const CopyToRoutine *
 CopyToGetRoutine(CopyFormatOptions opts)
 {
-	if (opts.csv_mode)
+	if (opts.routine)
+		return (const CopyToRoutine *) opts.routine;
+	else if (opts.csv_mode)
 		return &CopyToRoutineCSV;
 	else if (opts.binary)
 		return &CopyToRoutineBinary;

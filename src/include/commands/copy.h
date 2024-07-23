@@ -84,6 +84,8 @@ typedef struct CopyFormatOptions
 	CopyOnErrorChoice on_error; /* what to do when error happened */
 	CopyLogVerbosityChoice log_verbosity;	/* verbosity of logged messages */
 	List	   *convert_select; /* list of column names (can be NIL) */
+	Node	   *routine;		/* CopyToRoutine or CopyFromRoutine (can be
+								 * NULL) */
 } CopyFormatOptions;
 
 /* These are private in commands/copy[from|to].c */

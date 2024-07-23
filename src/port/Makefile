@@ -45,6 +45,7 @@ OBJS = \
 	noblock.o \
 	path.o \
 	pg_bitutils.o \
+	pg_hw_feat_check.o \
 	pg_strong_random.o \
 	pgcheckdir.o \
 	pgmkdirp.o \
@@ -92,10 +93,10 @@ pg_crc32c_armv8.o: CFLAGS+=$(CFLAGS_CRC)
 pg_crc32c_armv8_shlib.o: CFLAGS+=$(CFLAGS_CRC)
 pg_crc32c_armv8_srv.o: CFLAGS+=$(CFLAGS_CRC)
 
-# all versions of pg_popcount_avx512_choose.o need CFLAGS_XSAVE
-pg_popcount_avx512_choose.o: CFLAGS+=$(CFLAGS_XSAVE)
-pg_popcount_avx512_choose_shlib.o: CFLAGS+=$(CFLAGS_XSAVE)
-pg_popcount_avx512_choose_srv.o: CFLAGS+=$(CFLAGS_XSAVE)
+# all versions of pg_hw_feat_check.o need CFLAGS_XSAVE
+pg_hw_feat_check.o:	CFLAGS+=$(CFLAGS_XSAVE)
+pg_hw_feat_check_shlib.o:	CFLAGS+=$(CFLAGS_XSAVE)
+pg_hw_feat_check_srv.o:	CFLAGS+=$(CFLAGS_XSAVE)
 
 # all versions of pg_popcount_avx512.o need CFLAGS_POPCNT
 pg_popcount_avx512.o: CFLAGS+=$(CFLAGS_POPCNT)

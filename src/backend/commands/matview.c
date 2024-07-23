@@ -32,6 +32,7 @@
 #include "executor/spi.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "parser/analyze.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/lmgr.h"
 #include "tcop/tcopprot.h"
@@ -60,7 +61,8 @@ static bool transientrel_receive(TupleTableSlot *slot, DestReceiver *self);
 static void transientrel_shutdown(DestReceiver *self);
 static void transientrel_destroy(DestReceiver *self);
 static uint64 refresh_matview_datafill(DestReceiver *dest, Query *query,
-									   const char *queryString, bool is_create);
+									   ParseState *pstate, const char *queryString,
+									   bool is_create);
 static char *make_temptable_name_n(char *tempname, int n);
 static void refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 								   int save_sec_context);
@@ -118,7 +120,7 @@ SetMatViewPopulatedState(Relation relation, bool newstate)
  * skipData field shows whether the clause was used.
  */
 ObjectAddress
-ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
+ExecRefreshMatView(RefreshMatViewStmt *stmt, ParseState *pstate,
 				   QueryCompletion *qc)
 {
 	Oid			matviewOid;
@@ -136,7 +138,7 @@ ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 										  NULL);
 
 	return RefreshMatViewByOid(matviewOid, false, stmt->skipData,
-							   stmt->concurrent, queryString, qc);
+							   stmt->concurrent, pstate, qc);
 }
 
 /*
@@ -163,7 +165,7 @@ ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
  */
 ObjectAddress
 RefreshMatViewByOid(Oid matviewOid, bool is_create, bool skipData,
-					bool concurrent, const char *queryString,
+					bool concurrent, ParseState *pstate,
 					QueryCompletion *qc)
 {
 	Relation	matviewRel;
@@ -325,10 +327,11 @@ RefreshMatViewByOid(Oid matviewOid, bool is_create, bool skipData,
 	if (!skipData)
 	{
 		DestReceiver *dest;
+		const char *queryString = pstate->p_sourcetext;
 
 		dest = CreateTransientRelDestReceiver(OIDNewHeap);
-		processed = refresh_matview_datafill(dest, dataQuery, queryString,
-											 is_create);
+		processed = refresh_matview_datafill(dest, dataQuery, pstate,
+											 queryString, is_create);
 	}
 
 	/* Make the matview match the newly generated data. */
@@ -403,17 +406,25 @@ RefreshMatViewByOid(Oid matviewOid, bool is_create, bool skipData,
  */
 static uint64
 refresh_matview_datafill(DestReceiver *dest, Query *query,
-						 const char *queryString, bool is_create)
+						 ParseState *pstate, const char *queryString,
+						 bool is_create)
 {
 	List	   *rewritten;
 	PlannedStmt *plan;
 	QueryDesc  *queryDesc;
 	Query	   *copied_query;
 	uint64		processed;
+	JumbleState *jstate = NULL;
 
 	/* Lock and rewrite, using a copy to preserve the original query. */
 	copied_query = copyObject(query);
 	AcquireRewriteLocks(copied_query, true, false);
+
+	if (IsQueryIdEnabled())
+		jstate = JumbleQuery(copied_query);
+	if (post_parse_analyze_hook)
+		(*post_parse_analyze_hook) (pstate, copied_query, jstate);
+
 	rewritten = QueryRewrite(copied_query);
 
 	/* SELECT should never rewrite to more or less than one SELECT query */

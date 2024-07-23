@@ -187,4 +187,12 @@ typedef struct CopyFromStateData
 extern void ReceiveCopyBegin(CopyFromState cstate);
 extern void ReceiveCopyBinaryHeader(CopyFromState cstate);
 
+/* Callbacks for CopyFromRoutine->CopyFromOneRow */
+extern bool CopyFromTextOneRow(CopyFromState cstate, ExprContext *econtext,
+							   Datum *values, bool *nulls);
+extern bool CopyFromCSVOneRow(CopyFromState cstate, ExprContext *econtext,
+							  Datum *values, bool *nulls);
+extern bool CopyFromBinaryOneRow(CopyFromState cstate, ExprContext *econtext,
+								 Datum *values, bool *nulls);
+
 #endif							/* COPYFROM_INTERNAL_H */

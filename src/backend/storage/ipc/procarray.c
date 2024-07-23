@@ -1127,9 +1127,9 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 			else
 				elog(DEBUG1,
 					 "recovery snapshot waiting for non-overflowed snapshot or "
-					 "until oldest active xid on standby is at least %u (now %u)",
-					 standbySnapshotPendingXmin,
-					 running->oldestRunningXid);
+					 "until oldest active xid on standby is at least %llu (now %llu)",
+					 (unsigned long long) standbySnapshotPendingXmin,
+					 (unsigned long long) running->oldestRunningXid);
 			return;
 		}
 	}
@@ -1213,8 +1213,8 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 			if (i > 0 && TransactionIdEquals(xids[i - 1], xids[i]))
 			{
 				elog(DEBUG1,
-					 "found duplicated transaction %u for KnownAssignedXids insertion",
-					 xids[i]);
+					 "found duplicated transaction %llu for KnownAssignedXids insertion",
+					 (unsigned long long) xids[i]);
 				continue;
 			}
 			KnownAssignedXidsAdd(xids[i], xids[i], true);
@@ -1305,9 +1305,9 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 	else
 		elog(DEBUG1,
 			 "recovery snapshot waiting for non-overflowed snapshot or "
-			 "until oldest active xid on standby is at least %u (now %u)",
-			 standbySnapshotPendingXmin,
-			 running->oldestRunningXid);
+			 "until oldest active xid on standby is at least %llu (now %llu)",
+			 (unsigned long long) standbySnapshotPendingXmin,
+			 (unsigned long long) running->oldestRunningXid);
 }
 
 /*
@@ -3958,8 +3958,8 @@ ProcArraySetReplicationSlotXmin(TransactionId xmin, TransactionId catalog_xmin,
 	if (!already_locked)
 		LWLockRelease(ProcArrayLock);
 
-	elog(DEBUG1, "xmin required by slots: data %u, catalog %u",
-		 xmin, catalog_xmin);
+	elog(DEBUG1, "xmin required by slots: data %llu, catalog %llu",
+		 (unsigned long long) xmin, (unsigned long long) catalog_xmin);
 }
 
 /*
@@ -4047,7 +4047,8 @@ XidCacheRemoveRunningXids(TransactionId xid,
 		 * debug warning.
 		 */
 		if (j < 0 && !MyProc->subxidStatus.overflowed)
-			elog(WARNING, "did not find subXID %u in MyProc", anxid);
+			elog(WARNING, "did not find subXID %llu in MyProc",
+				 (unsigned long long) anxid);
 	}
 
 	for (j = MyProc->subxidStatus.count - 1; j >= 0; j--)
@@ -4063,7 +4064,8 @@ XidCacheRemoveRunningXids(TransactionId xid,
 	}
 	/* Ordinarily we should have found it, unless the cache has overflowed */
 	if (j < 0 && !MyProc->subxidStatus.overflowed)
-		elog(WARNING, "did not find subXID %u in MyProc", xid);
+		elog(WARNING, "did not find subXID %llu in MyProc",
+			 (unsigned long long) xid);
 
 	/* Also advance global latestCompletedXid while holding the lock */
 	MaintainLatestCompletedXid(latestXid);
@@ -4410,8 +4412,8 @@ RecordKnownAssignedTransactionIds(TransactionId xid)
 	Assert(TransactionIdIsValid(xid));
 	Assert(TransactionIdIsValid(latestObservedXid));
 
-	elog(DEBUG4, "record known xact %u latestObservedXid %u",
-		 xid, latestObservedXid);
+	elog(DEBUG4, "record known xact %llu latestObservedXid %llu",
+		 (unsigned long long) xid, (unsigned long long) latestObservedXid);
 
 	/*
 	 * When a newly observed xid arrives, it is frequently the case that it is
@@ -4968,7 +4970,7 @@ KnownAssignedXidsRemove(TransactionId xid)
 {
 	Assert(TransactionIdIsValid(xid));
 
-	elog(DEBUG4, "remove KnownAssignedXid %u", xid);
+	elog(DEBUG4, "remove KnownAssignedXid %llu", (unsigned long long) xid);
 
 	/*
 	 * Note: we cannot consider it an error to remove an XID that's not
@@ -5028,7 +5030,7 @@ KnownAssignedXidsRemovePreceding(TransactionId removeXid)
 		return;
 	}
 
-	elog(DEBUG4, "prune KnownAssignedXids to %u", removeXid);
+	elog(DEBUG4, "prune KnownAssignedXids to %llu", (unsigned long long) removeXid);
 
 	/*
 	 * Mark entries invalid starting at the tail.  Since array is sorted, we
@@ -5214,7 +5216,8 @@ KnownAssignedXidsDisplay(int trace_level)
 		if (KnownAssignedXidsValid[i])
 		{
 			nxids++;
-			appendStringInfo(&buf, "[%d]=%u ", i, KnownAssignedXids[i]);
+			appendStringInfo(&buf, "[%d]=%llu ", i,
+							 (unsigned long long) KnownAssignedXids[i]);
 		}
 	}
 

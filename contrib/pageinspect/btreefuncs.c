@@ -142,13 +142,12 @@ GetBTPageStatistics(BlockNumber blkno, Buffer buffer, BTPageStat *stat)
 		{
 			FullTransactionId safexid = BTPageGetDeleteXid(page);
 
-			elog(DEBUG2, "deleted page from block %u has safexid %u:%u",
-				 blkno, EpochFromFullTransactionId(safexid),
-				 XidFromFullTransactionId(safexid));
+			elog(DEBUG2, "deleted page from block %u has safexid %llu",
+				 blkno, (unsigned long long) U64FromFullTransactionId(safexid));
 		}
 		else
-			elog(DEBUG2, "deleted page from block %u has safexid %u",
-				 blkno, opaque->btpo_level);
+			elog(DEBUG2, "deleted page from block %u has safexid %llu",
+				 blkno, (unsigned long long) opaque->btpo_level);
 
 		/* Don't interpret BTDeletedPageData as index tuples */
 		maxoff = InvalidOffsetNumber;

@@ -136,16 +136,13 @@ consume_xids_common(FullTransactionId untilxid, uint64 nxids)
 		if (consumed - last_reported_at >= REPORT_INTERVAL)
 		{
 			if (nxids > 0)
-				elog(NOTICE, "consumed %llu / %llu XIDs, latest %u:%u",
+				elog(NOTICE, "consumed %llu / %llu XIDs, latest %llu",
 					 (unsigned long long) consumed, (unsigned long long) nxids,
-					 EpochFromFullTransactionId(lastxid),
-					 XidFromFullTransactionId(lastxid));
+					 (unsigned long long) U64FromFullTransactionId(lastxid));
 			else
-				elog(NOTICE, "consumed up to %u:%u / %u:%u",
-					 EpochFromFullTransactionId(lastxid),
-					 XidFromFullTransactionId(lastxid),
-					 EpochFromFullTransactionId(untilxid),
-					 XidFromFullTransactionId(untilxid));
+				elog(NOTICE, "consumed up to %llu / %llu",
+					 (unsigned long long) U64FromFullTransactionId(lastxid),
+					 (unsigned long long) U64FromFullTransactionId(untilxid));
 			last_reported_at = consumed;
 		}
 	}

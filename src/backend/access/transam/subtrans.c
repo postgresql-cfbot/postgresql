@@ -181,8 +181,9 @@ SubTransGetTopmostTransaction(TransactionId xid)
 		 * structure that could lead to an infinite loop, so exit.
 		 */
 		if (!TransactionIdPrecedes(parentXid, previousXid))
-			elog(ERROR, "pg_subtrans contains invalid entry: xid %u points to parent xid %u",
-				 previousXid, parentXid);
+			elog(ERROR, "pg_subtrans contains invalid entry: xid %llu points to parent xid %llu",
+				 (unsigned long long) previousXid,
+				 (unsigned long long) parentXid);
 	}
 
 	Assert(TransactionIdIsValid(previousXid));
@@ -243,7 +244,7 @@ SUBTRANSShmemInit(void)
 	SubTransCtl->PagePrecedes = SubTransPagePrecedes;
 	SimpleLruInit(SubTransCtl, "subtransaction", SUBTRANSShmemBuffers(), 0,
 				  "pg_subtrans", LWTRANCHE_SUBTRANS_BUFFER,
-				  LWTRANCHE_SUBTRANS_SLRU, SYNC_HANDLER_NONE, false);
+				  LWTRANCHE_SUBTRANS_SLRU, SYNC_HANDLER_NONE, true);
 	SlruPagePrecedesUnitTests(SubTransCtl, SUBTRANS_XACTS_PER_PAGE);
 }
 

@@ -669,23 +669,26 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 			diff = (int32) (ReadNextTransactionId() -
 							vacrel->cutoffs.OldestXmin);
 			appendStringInfo(&buf,
-							 _("removable cutoff: %u, which was %d XIDs old when operation ended\n"),
-							 vacrel->cutoffs.OldestXmin, diff);
+							 _("removable cutoff: %llu, which was %lld XIDs old when operation ended\n"),
+							 (unsigned long long) vacrel->cutoffs.OldestXmin,
+							 (long long) diff);
 			if (frozenxid_updated)
 			{
 				diff = (int32) (vacrel->NewRelfrozenXid -
 								vacrel->cutoffs.relfrozenxid);
 				appendStringInfo(&buf,
-								 _("new relfrozenxid: %u, which is %d XIDs ahead of previous value\n"),
-								 vacrel->NewRelfrozenXid, diff);
+								 _("new relfrozenxid: %llu, which is %lld XIDs ahead of previous value\n"),
+								 (unsigned long long) vacrel->NewRelfrozenXid,
+								 (long long) diff);
 			}
 			if (minmulti_updated)
 			{
 				diff = (int32) (vacrel->NewRelminMxid -
 								vacrel->cutoffs.relminmxid);
 				appendStringInfo(&buf,
-								 _("new relminmxid: %u, which is %d MXIDs ahead of previous value\n"),
-								 vacrel->NewRelminMxid, diff);
+								 _("new relminmxid: %llu, which is %lld MXIDs ahead of previous value\n"),
+								 (unsigned long long) vacrel->NewRelminMxid,
+								 (long long) diff);
 			}
 			appendStringInfo(&buf, _("frozen: %u pages from table (%.2f%% of total) had %lld tuples frozen\n"),
 							 vacrel->frozen_pages,

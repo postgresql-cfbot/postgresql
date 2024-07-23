@@ -1212,8 +1212,8 @@ pa_switch_to_partial_serialize(ParallelApplyWorkerInfo *winfo,
 							   bool stream_locked)
 {
 	ereport(LOG,
-			(errmsg("logical replication apply worker will serialize the remaining changes of remote transaction %u to a file",
-					winfo->shared->xid)));
+			(errmsg("logical replication apply worker will serialize the remaining changes of remote transaction %llu to a file",
+					(unsigned long long) winfo->shared->xid)));
 
 	/*
 	 * The parallel apply worker could be stuck for some reason (say waiting
@@ -1347,7 +1347,7 @@ pa_set_stream_apply_worker(ParallelApplyWorkerInfo *winfo)
 static void
 pa_savepoint_name(Oid suboid, TransactionId xid, char *spname, Size szsp)
 {
-	snprintf(spname, szsp, "pg_sp_%u_%u", suboid, xid);
+	snprintf(spname, szsp, "pg_sp_%u_%llu", suboid, (unsigned long long) xid);
 }
 
 /*

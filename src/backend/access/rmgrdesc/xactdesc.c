@@ -304,7 +304,7 @@ xact_desc_subxacts(StringInfo buf, int nsubxacts, TransactionId *subxacts)
 	{
 		appendStringInfoString(buf, "; subxacts:");
 		for (i = 0; i < nsubxacts; i++)
-			appendStringInfo(buf, " %u", subxacts[i]);
+			appendStringInfo(buf, " %llu", (unsigned long long) subxacts[i]);
 	}
 }
 
@@ -336,7 +336,7 @@ xact_desc_commit(StringInfo buf, uint8 info, xl_xact_commit *xlrec, RepOriginId 
 
 	/* If this is a prepared xact, show the xid of the original xact */
 	if (TransactionIdIsValid(parsed.twophase_xid))
-		appendStringInfo(buf, "%u: ", parsed.twophase_xid);
+		appendStringInfo(buf, "%llu: ", (unsigned long long) parsed.twophase_xid);
 
 	appendStringInfoString(buf, timestamptz_to_str(xlrec->xact_time));
 
@@ -372,7 +372,7 @@ xact_desc_abort(StringInfo buf, uint8 info, xl_xact_abort *xlrec, RepOriginId or
 
 	/* If this is a prepared xact, show the xid of the original xact */
 	if (TransactionIdIsValid(parsed.twophase_xid))
-		appendStringInfo(buf, "%u: ", parsed.twophase_xid);
+		appendStringInfo(buf, "%llu: ", (unsigned long long) parsed.twophase_xid);
 
 	appendStringInfoString(buf, timestamptz_to_str(xlrec->xact_time));
 
@@ -429,7 +429,7 @@ xact_desc_assignment(StringInfo buf, xl_xact_assignment *xlrec)
 	appendStringInfoString(buf, "subxacts:");
 
 	for (i = 0; i < xlrec->nsubxacts; i++)
-		appendStringInfo(buf, " %u", xlrec->xsub[i]);
+		appendStringInfo(buf, " %llu", (unsigned long long) xlrec->xsub[i]);
 }
 
 void
@@ -468,7 +468,7 @@ xact_desc(StringInfo buf, XLogReaderState *record)
 		 * interested in the top-level xid that issued the record and which
 		 * xids are being reported here.
 		 */
-		appendStringInfo(buf, "xtop %u: ", xlrec->xtop);
+		appendStringInfo(buf, "xtop %llu: ", (unsigned long long) xlrec->xtop);
 		xact_desc_assignment(buf, xlrec);
 	}
 	else if (info == XLOG_XACT_INVALIDATIONS)

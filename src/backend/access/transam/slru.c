@@ -1056,13 +1056,15 @@ SlruReportIOError(SlruCtl ctl, int64 pageno, TransactionId xid)
 		case SLRU_OPEN_FAILED:
 			ereport(ERROR,
 					(errcode_for_file_access(),
-					 errmsg("could not access status of transaction %u", xid),
+					 errmsg("could not access status of transaction %llu",
+							(unsigned long long) xid),
 					 errdetail("Could not open file \"%s\": %m.", path)));
 			break;
 		case SLRU_SEEK_FAILED:
 			ereport(ERROR,
 					(errcode_for_file_access(),
-					 errmsg("could not access status of transaction %u", xid),
+					 errmsg("could not access status of transaction %llu",
+							(unsigned long long) xid),
 					 errdetail("Could not seek in file \"%s\" to offset %d: %m.",
 							   path, offset)));
 			break;
@@ -1070,38 +1072,45 @@ SlruReportIOError(SlruCtl ctl, int64 pageno, TransactionId xid)
 			if (errno)
 				ereport(ERROR,
 						(errcode_for_file_access(),
-						 errmsg("could not access status of transaction %u", xid),
+						 errmsg("could not access status of transaction %llu",
+								(unsigned long long) xid),
 						 errdetail("Could not read from file \"%s\" at offset %d: %m.",
 								   path, offset)));
 			else
 				ereport(ERROR,
-						(errmsg("could not access status of transaction %u", xid),
-						 errdetail("Could not read from file \"%s\" at offset %d: read too few bytes.", path, offset)));
+						(errmsg("could not access status of transaction %llu",
+								(unsigned long long) xid),
+						 errdetail("Could not read from file \"%s\" at offset %d: read too few bytes.",
+								   path, offset)));
 			break;
 		case SLRU_WRITE_FAILED:
 			if (errno)
 				ereport(ERROR,
 						(errcode_for_file_access(),
-						 errmsg("could not access status of transaction %u", xid),
+						 errmsg("could not access status of transaction %llu",
+								(unsigned long long) xid),
 						 errdetail("Could not write to file \"%s\" at offset %d: %m.",
 								   path, offset)));
 			else
 				ereport(ERROR,
-						(errmsg("could not access status of transaction %u", xid),
+						(errmsg("could not access status of transaction %llu",
+								(unsigned long long) xid),
 						 errdetail("Could not write to file \"%s\" at offset %d: wrote too few bytes.",
 								   path, offset)));
 			break;
 		case SLRU_FSYNC_FAILED:
 			ereport(data_sync_elevel(ERROR),
 					(errcode_for_file_access(),
-					 errmsg("could not access status of transaction %u", xid),
+					 errmsg("could not access status of transaction %llu",
+							(unsigned long long) xid),
 					 errdetail("Could not fsync file \"%s\": %m.",
 							   path)));
 			break;
 		case SLRU_CLOSE_FAILED:
 			ereport(ERROR,
 					(errcode_for_file_access(),
-					 errmsg("could not access status of transaction %u", xid),
+					 errmsg("could not access status of transaction %llu",
+							(unsigned long long) xid),
 					 errdetail("Could not close file \"%s\": %m.",
 							   path)));
 			break;

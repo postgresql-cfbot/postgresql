@@ -1778,8 +1778,8 @@ RecordTransactionAbort(bool isSubXact)
 	 * Check that we haven't aborted halfway through RecordTransactionCommit.
 	 */
 	if (TransactionIdDidCommit(xid))
-		elog(PANIC, "cannot abort transaction %u, it was already committed",
-			 xid);
+		elog(PANIC, "cannot abort transaction %llu, it was already committed",
+			 (unsigned long long) xid);
 
 	/*
 	 * Are we using the replication origins feature?  Or, in other words, are
@@ -5662,18 +5662,20 @@ ShowTransactionStateRec(const char *str, TransactionState s)
 	{
 		int			i;
 
-		appendStringInfo(&buf, ", children: %u", s->childXids[0]);
+		appendStringInfo(&buf, ", children: %llu",
+						 (unsigned long long) s->childXids[0]);
 		for (i = 1; i < s->nChildXids; i++)
-			appendStringInfo(&buf, " %u", s->childXids[i]);
+			appendStringInfo(&buf, " %llu",
+							 (unsigned long long) s->childXids[i]);
 	}
 	ereport(DEBUG5,
-			(errmsg_internal("%s(%d) name: %s; blockState: %s; state: %s, xid/subid/cid: %u/%u/%u%s%s",
+			(errmsg_internal("%s(%d) name: %s; blockState: %s; state: %s, xid/subid/cid: %llu/%llu/%u%s%s",
 							 str, s->nestingLevel,
 							 PointerIsValid(s->name) ? s->name : "unnamed",
 							 BlockStateAsString(s->blockState),
 							 TransStateAsString(s->state),
-							 (unsigned int) XidFromFullTransactionId(s->fullTransactionId),
-							 (unsigned int) s->subTransactionId,
+							 (unsigned long long) XidFromFullTransactionId(s->fullTransactionId),
+							 (unsigned long long) s->subTransactionId,
 							 (unsigned int) currentCommandId,
 							 currentCommandIdUsed ? " (used)" : "",
 							 buf.data)));

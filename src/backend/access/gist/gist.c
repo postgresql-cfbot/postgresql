@@ -81,6 +81,14 @@ gisthandler(PG_FUNCTION_ARGS)
 	amroutine->amsummarizing = false;
 	amroutine->amparallelvacuumoptions =
 		VACUUM_OPTION_PARALLEL_BULKDEL | VACUUM_OPTION_PARALLEL_COND_CLEANUP;
+
+	/*
+	 * GiST uses page LSNs to figure out whether a block has been
+	 * modified. UNLOGGED GiST indexes use fake LSNs, which are incompatible
+	 * with the real LSNs used for LOGGED indexes.
+	 */
+	amroutine->amunloggedstoragecompatible = false;
+
 	amroutine->amkeytype = InvalidOid;
 
 	amroutine->ambuild = gistbuild;

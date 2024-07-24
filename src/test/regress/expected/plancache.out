@@ -49,14 +49,26 @@ EXECUTE prepstmt2(123);
  123 | 4567890123456789
 (2 rows)
 
--- prepared statements should prevent change in output tupdesc,
--- since clients probably aren't expecting that to change on the fly
-ALTER TABLE pcachetest ADD COLUMN q3 bigint;
+-- prepared statements should work even if the output tupdesc changes
+ALTER TABLE pcachetest ADD COLUMN q3 bigint DEFAULT 20;
 EXECUTE prepstmt;
-ERROR:  cached plan must not change result type
+        q1        |        q2         | q3 
+------------------+-------------------+----
+ 4567890123456789 | -4567890123456789 | 20
+ 4567890123456789 |               123 | 20
+              123 |               456 | 20
+              123 |  4567890123456789 | 20
+ 4567890123456789 |  4567890123456789 | 20
+(5 rows)
+
 EXECUTE prepstmt2(123);
-ERROR:  cached plan must not change result type
--- but we're nice guys and will let you undo your mistake
+ q1  |        q2        | q3 
+-----+------------------+----
+ 123 |              456 | 20
+ 123 | 4567890123456789 | 20
+(2 rows)
+
+-- changing it back should also work fine
 ALTER TABLE pcachetest DROP COLUMN q3;
 EXECUTE prepstmt;
         q1        |        q2         

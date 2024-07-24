@@ -272,6 +272,7 @@ brinhandler(PG_FUNCTION_ARGS)
 	amroutine->amsummarizing = true;
 	amroutine->amparallelvacuumoptions =
 		VACUUM_OPTION_PARALLEL_CLEANUP;
+	amroutine->amunloggedstoragecompatible = true;
 	amroutine->amkeytype = InvalidOid;
 
 	amroutine->ambuild = brinbuild;

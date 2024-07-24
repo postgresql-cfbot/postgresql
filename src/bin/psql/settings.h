@@ -64,6 +64,15 @@ typedef enum
 
 typedef enum
 {
+	PSQL_SEND_QUERY,
+	PSQL_SEND_EXTENDED_CLOSE,
+	PSQL_SEND_EXTENDED_PARSE,
+	PSQL_SEND_EXTENDED_QUERY_PARAMS,
+	PSQL_SEND_EXTENDED_QUERY_PREPARED,
+} PSQL_SEND_MODE;
+
+typedef enum
+{
 	hctl_none = 0,
 	hctl_ignorespace = 1,
 	hctl_ignoredups = 2,
@@ -96,14 +105,10 @@ typedef struct _psqlSettings
 	char	   *gset_prefix;	/* one-shot prefix argument for \gset */
 	bool		gdesc_flag;		/* one-shot request to describe query result */
 	bool		gexec_flag;		/* one-shot request to execute query result */
-	bool		bind_flag;		/* one-shot request to use extended query
-								 * protocol */
+	PSQL_SEND_MODE send_mode;	/* one-shot request to send query with normal
+								 * or extended query protocol */
 	int			bind_nparams;	/* number of parameters */
 	char	  **bind_params;	/* parameters for extended query protocol call */
-	bool		close_flag;		/* one-shot request to close a prepared
-								 * statement using extended query protocol */
-	bool		parse_flag;		/* one-shot request to parse query using
-								 * extended query protocol */
 	char	   *stmtName;		/* prepared statement name used for extended
 								 * query protocol commands */
 	bool		crosstab_flag;	/* one-shot request to crosstab result */

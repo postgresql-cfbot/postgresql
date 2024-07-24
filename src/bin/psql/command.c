@@ -498,7 +498,7 @@ exec_command_bind(PsqlScanState scan_state, bool active_branch)
 		}
 
 		pset.bind_nparams = nparams;
-		pset.bind_flag = true;
+		pset.send_mode = PSQL_SEND_EXTENDED_QUERY_PARAMS;
 	}
 	else
 		ignore_slash_options(scan_state);
@@ -534,7 +534,7 @@ exec_command_bind_named(PsqlScanState scan_state, bool active_branch,
 		else
 		{
 			pset.stmtName = opt;
-			pset.bind_flag = true;
+			pset.send_mode = PSQL_SEND_EXTENDED_QUERY_PREPARED;
 
 			/* set of parameters */
 			while ((opt = psql_scan_slash_option(scan_state, OT_NORMAL, NULL, false)))
@@ -728,7 +728,7 @@ exec_command_close(PsqlScanState scan_state, bool active_branch, const char *cmd
 		else
 		{
 			pset.stmtName = opt;
-			pset.close_flag = true;
+			pset.send_mode = PSQL_SEND_EXTENDED_CLOSE;
 			status = PSQL_CMD_SEND;
 		}
 	}
@@ -2214,7 +2214,7 @@ exec_command_parse(PsqlScanState scan_state, bool active_branch,
 		else
 		{
 			pset.stmtName = opt;
-			pset.parse_flag = true;
+			pset.send_mode = PSQL_SEND_EXTENDED_PARSE;
 			status = PSQL_CMD_SEND;
 		}
 	}

@@ -1359,6 +1359,7 @@ if test "$with_ssl" = openssl ; then
   AC_CHECK_FUNCS([CRYPTO_lock])
   # Function introduced in OpenSSL 1.1.1.
   AC_CHECK_FUNCS([X509_get_signature_info])
+  AC_CHECK_FUNCS([SSL_get0_peer_CA_list])
   AC_DEFINE([USE_OPENSSL], 1, [Define to 1 to build with OpenSSL support. (--with-ssl=openssl)])
 elif test "$with_ssl" != no ; then
   AC_MSG_ERROR([--with-ssl must specify openssl])

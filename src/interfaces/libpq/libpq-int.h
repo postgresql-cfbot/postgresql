@@ -358,6 +358,18 @@ typedef struct pg_conn_host
 } pg_conn_host;
 
 /*
+ * pg_conn_host stores all information about each of possibly several hosts
+ * mentioned in the connection string.  Most fields are derived by splitting
+ * the relevant connection parameter (e.g., pghost) at commas.
+ */
+typedef struct pg_conn_cert
+{
+	char	   *sslkey;			/* client key filename */
+	char	   *sslcert;		/* client certificate filename */
+	char	   *sslpassword;	/* client key file password */
+} pg_conn_cert;
+
+/*
  * PGconn stores all the state data associated with a single connection
  * to a backend.
  */
@@ -567,6 +579,13 @@ struct pg_conn
 	bool		ssl_handshake_started;
 	bool		ssl_cert_requested; /* Did the server ask us for a cert? */
 	bool		ssl_cert_sent;	/* Did we send one in reply? */
+
+	/* Support for multiple client certificate selection */
+	int			nsslcert;		/* # of client certificates provided */
+	int			nsslkey;		/* # of client keys provided */
+	int			nsslpassword;	/* # of client key passwords provided */
+	int			whichcert;		/* certificate selected to send to the server */
+	pg_conn_cert *conncert;		/* details about each certificate group */
 
 #ifdef USE_SSL
 #ifdef USE_OPENSSL

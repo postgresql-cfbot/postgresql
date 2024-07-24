@@ -587,6 +587,9 @@ SELECT regexp_match('foobarbequebaz', '(BAR)(BEQUE)'::citext, '') = ARRAY[ 'bar'
 SELECT regexp_match('foobarbequebaz'::citext, '(BAR)(BEQUE)'::citext, ''::citext) = ARRAY[ 'bar', 'beque' ] AS t;
 -- c forces case-sensitive
 SELECT regexp_match('foobarbequebaz'::citext, '(BAR)(BEQUE)'::citext, 'c'::citext) = ARRAY[ 'bar', 'beque' ] AS "no result";
+SELECT regexp_match(string=>'foobarbequebaz'::citext, pattern=>'(BAR)(BEQUE)'::citext, flags=>'c'::citext)
+               = ARRAY[ 'bar', 'beque' ] AS "no result";
+
 -- g is not allowed
 SELECT regexp_match('foobarbequebazmorebarbequetoo'::citext, '(BAR)(BEQUE)'::citext, 'g') AS "error";
 
@@ -599,6 +602,9 @@ SELECT regexp_matches('foobarbequebaz', '(BAR)(BEQUE)'::citext, '') = ARRAY[ 'ba
 SELECT regexp_matches('foobarbequebaz'::citext, '(BAR)(BEQUE)'::citext, ''::citext) = ARRAY[ 'bar', 'beque' ] AS t;
 -- c forces case-sensitive
 SELECT regexp_matches('foobarbequebaz'::citext, '(BAR)(BEQUE)'::citext, 'c'::citext) = ARRAY[ 'bar', 'beque' ] AS "no rows";
+SELECT regexp_matches(string=>'foobarbequebaz'::citext, pattern=>'(BAR)(BEQUE)'::citext, flags=>'c'::citext)
+                    = ARRAY[ 'bar', 'beque' ] AS "no rows";
+
 -- g allows multiple output rows
 SELECT regexp_matches('foobarbequebazmorebarbequetoo'::citext, '(BAR)(BEQUE)'::citext, 'g'::citext) AS "two rows";
 
@@ -608,6 +614,7 @@ SELECT regexp_replace('Thomas',         '.[MN]A.'::citext, 'M') = 'ThM' AS t;
 SELECT regexp_replace('Thomas'::citext, '.[MN]A.'::citext, 'M') = 'ThM' AS t;
 -- c forces case-sensitive
 SELECT regexp_replace('Thomas'::citext, '.[MN]A.'::citext, 'M', 'c') = 'Thomas' AS t;
+SELECT regexp_replace(string=>'Thomas'::citext, pattern=>'.[MN]A.'::citext, replacement=>'M', flags=>'c') = 'Thomas' AS t;
 
 SELECT regexp_split_to_array('hello world'::citext, E'\\s+') = ARRAY[ 'hello', 'world' ] AS t;
 SELECT regexp_split_to_array('helloTworld'::citext, 't') = ARRAY[ 'hello', 'world' ] AS t;
@@ -619,6 +626,7 @@ SELECT regexp_split_to_array('helloTworld'::citext, 't'::citext, 's') = ARRAY[ '
 
 -- c forces case-sensitive
 SELECT regexp_split_to_array('helloTworld'::citext, 't'::citext, 'c') = ARRAY[ 'helloTworld' ] AS t;
+SELECT regexp_split_to_array(string=>'helloTworld'::citext, pattern=>'t'::citext, flags=>'c') = ARRAY[ 'helloTworld' ] AS t;
 
 SELECT regexp_split_to_table('hello world'::citext, E'\\s+') AS words;
 SELECT regexp_split_to_table('helloTworld'::citext, 't') AS words;
@@ -626,6 +634,7 @@ SELECT regexp_split_to_table('helloTworld',         't'::citext) AS words;
 SELECT regexp_split_to_table('helloTworld'::citext, 't'::citext) AS words;
 -- c forces case-sensitive
 SELECT regexp_split_to_table('helloTworld'::citext, 't'::citext, 'c') AS word;
+SELECT regexp_split_to_table(string=>'helloTworld'::citext, pattern=>'t'::citext, flags=>'c') AS word;
 
 SELECT repeat('Pg'::citext, 4) = 'PgPgPgPg' AS t;
 

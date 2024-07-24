@@ -2315,6 +2315,7 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 	bool		ispartialpage;
 	bool		last_iteration;
 	bool		finishing_seg;
+	bool		full_cycle;
 	int			curridx;
 	int			npages;
 	int			startidx;
@@ -2407,29 +2408,53 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 
 		/*
 		 * Dump the set if this will be the last loop iteration, or if we are
-		 * at the last page of the cache area (since the next page won't be
-		 * contiguous in memory), or if we are at the end of the logfile
-		 * segment.
+		 * completed a full cycle in our circular wal buffers, or if we are at
+		 * the end of the logfile segment.
 		 */
 		last_iteration = WriteRqst.Write <= LogwrtResult.Write;
 
 		finishing_seg = !ispartialpage &&
 			(startoffset + npages * XLOG_BLCKSZ) >= wal_segment_size;
 
+		full_cycle = curridx == (startidx - 1);
+
 		if (last_iteration ||
-			curridx == XLogCtl->XLogCacheBlck ||
+			full_cycle ||
 			finishing_seg)
 		{
-			char	   *from;
-			Size		nbytes;
 			Size		nleft;
 			ssize_t		written;
 			instr_time	start;
+			struct iovec iov[2];
+			int			iovcnt;
+
+			if (curridx < startidx)
+			{
+				Assert(curridx + 1 + XLogCtl->XLogCacheBlck - startidx + 1 == npages);
+
+				/*
+				 * From startidx to the end until the next page is not
+				 * contiguous in memory anymore.
+				 */
+				iov[0].iov_base = XLogCtl->pages + startidx * (Size) XLOG_BLCKSZ;
+				iov[0].iov_len = (XLogCtl->XLogCacheBlck - startidx + 1) * (Size) XLOG_BLCKSZ;
+
+				/* From first wal buffer to the current idx */
+				iov[1].iov_base = XLogCtl->pages;
+				iov[1].iov_len = (curridx + 1) * (Size) XLOG_BLCKSZ;
+
+				iovcnt = 2;
+			}
+			else
+			{
+				/* Contiguous case */
+				iov[0].iov_base = XLogCtl->pages + startidx * (Size) XLOG_BLCKSZ;;
+				iov[0].iov_len = npages * (Size) XLOG_BLCKSZ;
+				iovcnt = 1;
+			}
 
 			/* OK to write the page(s) */
-			from = XLogCtl->pages + startidx * (Size) XLOG_BLCKSZ;
-			nbytes = npages * (Size) XLOG_BLCKSZ;
-			nleft = nbytes;
+			nleft = npages * (Size) XLOG_BLCKSZ;
 			do
 			{
 				errno = 0;
@@ -2441,7 +2466,7 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 					INSTR_TIME_SET_ZERO(start);
 
 				pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
-				written = pg_pwrite(openLogFile, from, nleft, startoffset);
+				written = pg_pwritev(openLogFile, iov, iovcnt, startoffset);
 				pgstat_report_wait_end();
 
 				/*
@@ -2476,9 +2501,10 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 									xlogfname, startoffset, nleft)));
 				}
 				nleft -= written;
-				from += written;
 				startoffset += written;
-			} while (nleft > 0);
+
+				iovcnt = compute_remaining_iovec(iov, iov, iovcnt, written);
+			} while (iovcnt > 0);
 
 			npages = 0;
 

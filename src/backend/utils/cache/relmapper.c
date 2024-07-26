@@ -1001,29 +1001,17 @@ write_relmap_file(RelMapFile *newmap, bool write_wal, bool send_sinval,
 		CacheInvalidateRelmap(dbid);
 
 	/*
-	 * Make sure that the files listed in the map are not deleted if the outer
-	 * transaction aborts.  This had better be within the critical section
-	 * too: it's not likely to fail, but if it did, we'd arrive at transaction
-	 * abort with the files still vulnerable.  PANICing will leave things in a
-	 * good state on-disk.
+	 * There was a call to RelationPreserveStorage(). It was originally
+	 * intended to ensure that storage files committed in subtransactions would
+	 * survive an outer transaction's abort. This was introduced by commit
+	 * b9b8831ad6 in 2010, but no use case has emerged since then. To simplify
+	 * the UNDO log system, this code has been removed. See
+	 * RelationMapUpdateMap() for more details.  Now, we only check that this
+	 * function is called in a top transaction.
 	 *
-	 * Note: we're cheating a little bit here by assuming that mapped files
-	 * are either in pg_global or the database's default tablespace.
+	 * During boot processing or recovery, the nest level will be zero.
 	 */
-	if (preserve_files)
-	{
-		int32		i;
-
-		for (i = 0; i < newmap->num_mappings; i++)
-		{
-			RelFileLocator rlocator;
-
-			rlocator.spcOid = tsid;
-			rlocator.dbOid = dbid;
-			rlocator.relNumber = newmap->mappings[i].mapfilenumber;
-			RelationPreserveStorage(rlocator, false);
-		}
-	}
+	Assert(!preserve_files || GetCurrentTransactionNestLevel() <= 1);
 
 	/* Critical section done */
 	if (write_wal)

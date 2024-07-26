@@ -254,6 +254,22 @@ RelationPreserveStorage(RelFileLocator rlocator, bool atCommit)
 	PendingRelDelete *prev;
 	PendingRelDelete *next;
 
+	/*
+	 * There is no caller that passes false for atCommit.
+	 *
+	 * The only caller that used to pass false for atCommit was
+	 * write_relmapper_file(), which intended to preserve committed storage
+	 * files for mapped relations if outer transactions aborted. However, this
+	 * has not occurred for more than ten years, and it is unlikely to be
+	 * needed in the future. The code to let storage files committed in
+	 * subtransactions survive after the top transaction aborts makes the UNDO
+	 * log system overly complex and inefficient. Therefore, this feature has
+	 * been removed.  The function signature is left unchanged to make this
+	 * change less invasive and to prevent the function from being mistakenly
+	 * called during transaction aborts.
+	 */
+	Assert (atCommit);
+
 	prev = NULL;
 	for (pending = pendingDeletes; pending != NULL; pending = next)
 	{

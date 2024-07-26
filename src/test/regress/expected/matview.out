@@ -751,6 +751,23 @@ SELECT * FROM mvtest_replace;
  3
 (1 row)
 
+-- replace query but keep old data
+CREATE OR REPLACE MATERIALIZED VIEW mvtest_replace AS
+  SELECT 5 AS a
+  WITH OLD DATA;
+SELECT * FROM mvtest_replace;
+ a 
+---
+ 3
+(1 row)
+
+REFRESH MATERIALIZED VIEW mvtest_replace;
+SELECT * FROM mvtest_replace;
+ a 
+---
+ 5
+(1 row)
+
 -- add column
 CREATE OR REPLACE MATERIALIZED VIEW mvtest_replace AS
   SELECT 4 AS a, 1 b;
@@ -905,3 +922,14 @@ ERROR:  syntax error at or near "NOT"
 LINE 1: CREATE OR REPLACE MATERIALIZED VIEW IF NOT EXISTS mvtest_rep...
                                                ^
 DROP MATERIALIZED VIEW mvtest_replace;
+-- Create new matview WITH OLD DATA.  This populates the new matview as if
+-- WITH DATA had been specified.
+CREATE OR REPLACE MATERIALIZED VIEW mvtest_replace AS
+  SELECT 17 AS a
+  WITH OLD DATA;
+SELECT * FROM mvtest_replace;
+ a  
+----
+ 17
+(1 row)
+

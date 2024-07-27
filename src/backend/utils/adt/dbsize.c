@@ -575,9 +575,10 @@ pg_size_pretty(PG_FUNCTION_ARGS)
 	for (unit = size_pretty_units; unit->name != NULL; unit++)
 	{
 		uint8		bits;
+		uint64		usize = size < 0 ? -(uint64) size : (uint64) size;
 
 		/* use this unit if there are no more units or we're below the limit */
-		if (unit[1].name == NULL || i64abs(size) < unit->limit)
+		if (unit[1].name == NULL || usize < unit->limit)
 		{
 			if (unit->round)
 				size = half_rounded(size);

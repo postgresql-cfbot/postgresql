@@ -64,6 +64,7 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 	DefElem    *deterministicEl = NULL;
 	DefElem    *rulesEl = NULL;
 	DefElem    *versionEl = NULL;
+	DefElem    *ctypeversionEl = NULL;
 	char	   *collcollate;
 	char	   *collctype;
 	const char *colllocale;
@@ -72,6 +73,7 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 	int			collencoding;
 	char		collprovider;
 	char	   *collversion = NULL;
+	char	   *collctypeversion = NULL;
 	Oid			newoid;
 	ObjectAddress address;
 
@@ -103,6 +105,8 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 			defelp = &rulesEl;
 		else if (strcmp(defel->defname, "version") == 0)
 			defelp = &versionEl;
+		else if (strcmp(defel->defname, "ctype_version") == 0)
+			defelp = &ctypeversionEl;
 		else
 		{
 			ereport(ERROR,
@@ -210,6 +214,9 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 
 		if (versionEl)
 			collversion = defGetString(versionEl);
+
+		if (ctypeversionEl)
+			collctypeversion = defGetString(ctypeversionEl);
 
 		if (collproviderstr)
 		{
@@ -360,6 +367,18 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 		collversion = get_collation_actual_version(collprovider, locale);
 	}
 
+	if (!collctypeversion)
+	{
+		const char *locale;
+
+		if (collprovider == COLLPROVIDER_LIBC)
+			locale = collctype;
+		else
+			locale = colllocale;
+
+		collctypeversion = get_ctype_actual_version(collprovider, locale);
+	}
+
 	newoid = CollationCreate(collName,
 							 collNamespace,
 							 GetUserId(),
@@ -371,6 +390,7 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 							 colllocale,
 							 collicurules,
 							 collversion,
+							 collctypeversion,
 							 if_not_exists,
 							 false);	/* not quiet */
 
@@ -578,6 +598,77 @@ pg_collation_actual_version(PG_FUNCTION_ARGS)
 }
 
 
+Datum
+pg_ctype_actual_version(PG_FUNCTION_ARGS)
+{
+	Oid			collid = PG_GETARG_OID(0);
+	char		provider;
+	char	   *locale;
+	char	   *version;
+	Datum		datum;
+
+	if (collid == DEFAULT_COLLATION_OID)
+	{
+		/* retrieve from pg_database */
+
+		HeapTuple	dbtup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
+
+		if (!HeapTupleIsValid(dbtup))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("database with OID %u does not exist", MyDatabaseId)));
+
+		provider = ((Form_pg_database) GETSTRUCT(dbtup))->datlocprovider;
+
+		if (provider == COLLPROVIDER_LIBC)
+		{
+			datum = SysCacheGetAttrNotNull(DATABASEOID, dbtup, Anum_pg_database_datcollate);
+			locale = TextDatumGetCString(datum);
+		}
+		else
+		{
+			datum = SysCacheGetAttrNotNull(DATABASEOID, dbtup, Anum_pg_database_datlocale);
+			locale = TextDatumGetCString(datum);
+		}
+
+		ReleaseSysCache(dbtup);
+	}
+	else
+	{
+		/* retrieve from pg_collation */
+
+		HeapTuple	colltp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
+
+		if (!HeapTupleIsValid(colltp))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("collation with OID %u does not exist", collid)));
+
+		provider = ((Form_pg_collation) GETSTRUCT(colltp))->collprovider;
+		Assert(provider != COLLPROVIDER_DEFAULT);
+
+		if (provider == COLLPROVIDER_LIBC)
+		{
+			datum = SysCacheGetAttrNotNull(COLLOID, colltp, Anum_pg_collation_collcollate);
+			locale = TextDatumGetCString(datum);
+		}
+		else
+		{
+			datum = SysCacheGetAttrNotNull(COLLOID, colltp, Anum_pg_collation_colllocale);
+			locale = TextDatumGetCString(datum);
+		}
+
+		ReleaseSysCache(colltp);
+	}
+
+	version = get_ctype_actual_version(provider, locale);
+	if (version)
+		PG_RETURN_TEXT_P(cstring_to_text(version));
+	else
+		PG_RETURN_NULL();
+}
+
+
 /* will we use "locale -a" in pg_import_system_collations? */
 #if !defined(WIN32)
 #define READ_LOCALE_A_OUTPUT
@@ -744,6 +835,7 @@ create_collation_from_locale(const char *locale, int nspid,
 							 COLLPROVIDER_LIBC, true, enc,
 							 locale, locale, NULL, NULL,
 							 get_collation_actual_version(COLLPROVIDER_LIBC, locale),
+							 get_ctype_actual_version(COLLPROVIDER_LIBC, locale),
 							 true, true);
 	if (OidIsValid(collid))
 	{
@@ -819,6 +911,7 @@ win32_read_locale(LPWSTR pStr, DWORD dwFlags, LPARAM lparam)
 								 COLLPROVIDER_LIBC, true, enc,
 								 localebuf, localebuf, NULL, NULL,
 								 get_collation_actual_version(COLLPROVIDER_LIBC, localebuf),
+								 get_ctype_actual_version(COLLPROVIDER_LIBC, localebuf),
 								 true, true);
 		if (OidIsValid(collid))
 		{
@@ -953,6 +1046,7 @@ pg_import_system_collations(PG_FUNCTION_ARGS)
 									 COLLPROVIDER_LIBC, true, enc,
 									 locale, locale, NULL, NULL,
 									 get_collation_actual_version(COLLPROVIDER_LIBC, locale),
+									 get_ctype_actual_version(COLLPROVIDER_LIBC, locale),
 									 true, true);
 			if (OidIsValid(collid))
 			{
@@ -1013,6 +1107,7 @@ pg_import_system_collations(PG_FUNCTION_ARGS)
 									 COLLPROVIDER_ICU, true, -1,
 									 NULL, NULL, langtag, NULL,
 									 get_collation_actual_version(COLLPROVIDER_ICU, langtag),
+									 get_ctype_actual_version(COLLPROVIDER_ICU, langtag),
 									 true, true);
 			if (OidIsValid(collid))
 			{

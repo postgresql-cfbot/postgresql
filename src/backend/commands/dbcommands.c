@@ -120,7 +120,8 @@ static bool get_db_info(const char *name, LOCKMODE lockmode,
 						Oid *dbTablespace, char **dbCollate, char **dbCtype, char **dbLocale,
 						char **dbIcurules,
 						char *dbLocProvider,
-						char **dbCollversion);
+						char **dbCollversion,
+						char **dbCtypeversion);
 static void remove_dbtablespaces(Oid db_id);
 static bool check_db_file_conflict(Oid db_id);
 static int	errdetail_busy_db(int notherbackends, int npreparedxacts);
@@ -690,6 +691,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	char	   *src_icurules = NULL;
 	char		src_locprovider = '\0';
 	char	   *src_collversion = NULL;
+	char	   *src_ctypeversion = NULL;
 	bool		src_istemplate;
 	bool		src_hasloginevt = false;
 	bool		src_allowconn;
@@ -719,6 +721,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	DefElem    *dallowconnections = NULL;
 	DefElem    *dconnlimit = NULL;
 	DefElem    *dcollversion = NULL;
+	DefElem	   *dctypeversion = NULL;
 	DefElem    *dstrategy = NULL;
 	char	   *dbname = stmt->dbname;
 	char	   *dbowner = NULL;
@@ -734,6 +737,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	bool		dballowconnections = true;
 	int			dbconnlimit = DATCONNLIMIT_UNLIMITED;
 	char	   *dbcollversion = NULL;
+	char	   *dbctypeversion = NULL;
 	int			notherbackends;
 	int			npreparedxacts;
 	CreateDBStrategy dbstrategy = CREATEDB_WAL_LOG;
@@ -833,6 +837,12 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 			if (dcollversion)
 				errorConflictingDefElem(defel, pstate);
 			dcollversion = defel;
+		}
+		else if (strcmp(defel->defname, "ctype_version") == 0)
+		{
+			if (dctypeversion)
+				errorConflictingDefElem(defel, pstate);
+			dctypeversion = defel;
 		}
 		else if (strcmp(defel->defname, "location") == 0)
 		{
@@ -957,6 +967,8 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	}
 	if (dcollversion)
 		dbcollversion = defGetString(dcollversion);
+	if (dctypeversion)
+		dbctypeversion = defGetString(dctypeversion);
 
 	/* obtain OID of proposed owner */
 	if (dbowner)
@@ -995,7 +1007,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 					 &src_istemplate, &src_allowconn, &src_hasloginevt,
 					 &src_frozenxid, &src_minmxid, &src_deftablespace,
 					 &src_collate, &src_ctype, &src_locale, &src_icurules, &src_locprovider,
-					 &src_collversion))
+					 &src_collversion, &src_ctypeversion))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_DATABASE),
 				 errmsg("template database \"%s\" does not exist",
@@ -1270,6 +1282,8 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 
 	if (dbcollversion == NULL)
 		dbcollversion = src_collversion;
+	if (dbctypeversion == NULL)
+		dbctypeversion = src_ctypeversion;
 
 	/*
 	 * Normally, we copy the collation version from the template database.
@@ -1286,6 +1300,23 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 			locale = dblocale;
 
 		dbcollversion = get_collation_actual_version(dblocprovider, locale);
+	}
+
+	/*
+	 * Normally, we copy the ctype version from the template database.
+	 * This last resort only applies if the template database does not have a
+	 * ctype version, which is normally only the case for template0.
+	 */
+	if (dbctypeversion == NULL)
+	{
+		const char *locale;
+
+		if (dblocprovider == COLLPROVIDER_LIBC)
+			locale = dbctype;
+		else
+			locale = dblocale;
+
+		dbctypeversion = get_ctype_actual_version(dblocprovider, locale);
 	}
 
 	/* Resolve default tablespace for new database */
@@ -1456,6 +1487,10 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 		new_record[Anum_pg_database_datcollversion - 1] = CStringGetTextDatum(dbcollversion);
 	else
 		new_record_nulls[Anum_pg_database_datcollversion - 1] = true;
+	if (dbctypeversion)
+		new_record[Anum_pg_database_datctypeversion - 1] = CStringGetTextDatum(dbctypeversion);
+	else
+		new_record_nulls[Anum_pg_database_datctypeversion - 1] = true;
 
 	/*
 	 * We deliberately set datacl to default (NULL), rather than copying it
@@ -1666,7 +1701,7 @@ dropdb(const char *dbname, bool missing_ok, bool force)
 	pgdbrel = table_open(DatabaseRelationId, RowExclusiveLock);
 
 	if (!get_db_info(dbname, AccessExclusiveLock, &db_id, NULL, NULL,
-					 &db_istemplate, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL))
+					 &db_istemplate, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL))
 	{
 		if (!missing_ok)
 		{
@@ -1881,7 +1916,7 @@ RenameDatabase(const char *oldname, const char *newname)
 	rel = table_open(DatabaseRelationId, RowExclusiveLock);
 
 	if (!get_db_info(oldname, AccessExclusiveLock, &db_id, NULL, NULL, NULL,
-					 NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL))
+					 NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_DATABASE),
 				 errmsg("database \"%s\" does not exist", oldname)));
@@ -1991,7 +2026,7 @@ movedb(const char *dbname, const char *tblspcname)
 	pgdbrel = table_open(DatabaseRelationId, RowExclusiveLock);
 
 	if (!get_db_info(dbname, AccessExclusiveLock, &db_id, NULL, NULL, NULL,
-					 NULL, NULL, NULL, NULL, &src_tblspcoid, NULL, NULL, NULL, NULL, NULL, NULL))
+					 NULL, NULL, NULL, NULL, &src_tblspcoid, NULL, NULL, NULL, NULL, NULL, NULL, NULL))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_DATABASE),
 				 errmsg("database \"%s\" does not exist", dbname)));
@@ -2507,8 +2542,11 @@ AlterDatabaseRefreshColl(AlterDatabaseRefreshCollStmt *stmt)
 	ObjectAddress address;
 	Datum		datum;
 	bool		isnull;
-	char	   *oldversion;
-	char	   *newversion;
+	bool		changed = false;
+	char	   *oldcollversion;
+	char	   *oldctypeversion;
+	char	   *newcollversion;
+	char	   *newctypeversion;
 
 	rel = table_open(DatabaseRelationId, RowExclusiveLock);
 	ScanKeyInit(&scankey,
@@ -2531,7 +2569,10 @@ AlterDatabaseRefreshColl(AlterDatabaseRefreshCollStmt *stmt)
 					   stmt->dbname);
 
 	datum = heap_getattr(tuple, Anum_pg_database_datcollversion, RelationGetDescr(rel), &isnull);
-	oldversion = isnull ? NULL : TextDatumGetCString(datum);
+	oldcollversion = isnull ? NULL : TextDatumGetCString(datum);
+
+	datum = heap_getattr(tuple, Anum_pg_database_datctypeversion, RelationGetDescr(rel), &isnull);
+	oldctypeversion = isnull ? NULL : TextDatumGetCString(datum);
 
 	if (datForm->datlocprovider == COLLPROVIDER_LIBC)
 	{
@@ -2546,31 +2587,72 @@ AlterDatabaseRefreshColl(AlterDatabaseRefreshCollStmt *stmt)
 			elog(ERROR, "unexpected null in pg_database");
 	}
 
-	newversion = get_collation_actual_version(datForm->datlocprovider,
-											  TextDatumGetCString(datum));
+	newcollversion = get_collation_actual_version(datForm->datlocprovider,
+												  TextDatumGetCString(datum));
+
+	if (datForm->datlocprovider == COLLPROVIDER_LIBC)
+	{
+		datum = heap_getattr(tuple, Anum_pg_database_datctype, RelationGetDescr(rel), &isnull);
+		if (isnull)
+			elog(ERROR, "unexpected null in pg_database");
+	}
+	else
+	{
+		datum = heap_getattr(tuple, Anum_pg_database_datlocale, RelationGetDescr(rel), &isnull);
+		if (isnull)
+			elog(ERROR, "unexpected null in pg_database");
+	}
+
+	newctypeversion = get_ctype_actual_version(datForm->datlocprovider,
+											   TextDatumGetCString(datum));
 
 	/* cannot change from NULL to non-NULL or vice versa */
-	if ((!oldversion && newversion) || (oldversion && !newversion))
+	if ((!oldcollversion && newcollversion) || (oldcollversion && !newcollversion))
 		elog(ERROR, "invalid collation version change");
-	else if (oldversion && newversion && strcmp(newversion, oldversion) != 0)
+	if ((!oldctypeversion && newctypeversion) || (oldctypeversion && !newctypeversion))
+		elog(ERROR, "invalid ctype version change");
+
+	if (oldcollversion && newcollversion && strcmp(newcollversion, oldcollversion) != 0)
 	{
 		bool		nulls[Natts_pg_database] = {0};
 		bool		replaces[Natts_pg_database] = {0};
 		Datum		values[Natts_pg_database] = {0};
 
 		ereport(NOTICE,
-				(errmsg("changing version from %s to %s",
-						oldversion, newversion)));
+				(errmsg("changing collation version from %s to %s",
+						oldcollversion, newcollversion)));
 
-		values[Anum_pg_database_datcollversion - 1] = CStringGetTextDatum(newversion);
+		values[Anum_pg_database_datcollversion - 1] = CStringGetTextDatum(newcollversion);
 		replaces[Anum_pg_database_datcollversion - 1] = true;
 
 		tuple = heap_modify_tuple(tuple, RelationGetDescr(rel),
 								  values, nulls, replaces);
 		CatalogTupleUpdate(rel, &tuple->t_self, tuple);
 		heap_freetuple(tuple);
+		changed = true;
 	}
-	else
+
+	if (oldctypeversion && newctypeversion && strcmp(newctypeversion, oldctypeversion) != 0)
+	{
+		bool		nulls[Natts_pg_database] = {0};
+		bool		replaces[Natts_pg_database] = {0};
+		Datum		values[Natts_pg_database] = {0};
+
+		ereport(NOTICE,
+				(errmsg("changing ctype version from %s to %s",
+						oldctypeversion, newctypeversion)));
+
+		values[Anum_pg_database_datctypeversion - 1] = CStringGetTextDatum(newctypeversion);
+		replaces[Anum_pg_database_datctypeversion - 1] = true;
+
+		tuple = heap_modify_tuple(tuple, RelationGetDescr(rel),
+								  values, nulls, replaces);
+		CatalogTupleUpdate(rel, &tuple->t_self, tuple);
+		heap_freetuple(tuple);
+		changed = true;
+	}
+
+	if (!changed)
 		ereport(NOTICE,
 				(errmsg("version has not changed")));
 
@@ -2758,6 +2840,39 @@ pg_database_collation_actual_version(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 }
 
+Datum
+pg_database_ctype_actual_version(PG_FUNCTION_ARGS)
+{
+	Oid			dbid = PG_GETARG_OID(0);
+	HeapTuple	tp;
+	char		datlocprovider;
+	Datum		datum;
+	char	   *version;
+
+	tp = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(dbid));
+	if (!HeapTupleIsValid(tp))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("database with OID %u does not exist", dbid)));
+
+	datlocprovider = ((Form_pg_database) GETSTRUCT(tp))->datlocprovider;
+
+	if (datlocprovider == COLLPROVIDER_LIBC)
+		datum = SysCacheGetAttrNotNull(DATABASEOID, tp, Anum_pg_database_datcollate);
+	else
+		datum = SysCacheGetAttrNotNull(DATABASEOID, tp, Anum_pg_database_datlocale);
+
+	version = get_ctype_actual_version(datlocprovider,
+									   TextDatumGetCString(datum));
+
+	ReleaseSysCache(tp);
+
+	if (version)
+		PG_RETURN_TEXT_P(cstring_to_text(version));
+	else
+		PG_RETURN_NULL();
+}
+
 
 /*
  * Helper functions
@@ -2777,7 +2892,8 @@ get_db_info(const char *name, LOCKMODE lockmode,
 			Oid *dbTablespace, char **dbCollate, char **dbCtype, char **dbLocale,
 			char **dbIcurules,
 			char *dbLocProvider,
-			char **dbCollversion)
+			char **dbCollversion,
+			char **dbCtypeversion)
 {
 	bool		result = false;
 	Relation	relation;
@@ -2908,6 +3024,14 @@ get_db_info(const char *name, LOCKMODE lockmode,
 						*dbCollversion = NULL;
 					else
 						*dbCollversion = TextDatumGetCString(datum);
+				}
+				if (dbCtypeversion)
+				{
+					datum = SysCacheGetAttr(DATABASEOID, tuple, Anum_pg_database_datctypeversion, &isnull);
+					if (isnull)
+						*dbCtypeversion = NULL;
+					else
+						*dbCtypeversion = TextDatumGetCString(datum);
 				}
 				ReleaseSysCache(tuple);
 				result = true;

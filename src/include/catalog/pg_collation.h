@@ -47,6 +47,7 @@ CATALOG(pg_collation,3456,CollationRelationId)
 	text		collversion BKI_DEFAULT(_null_);	/* provider-dependent
 													 * version of collation
 													 * data */
+	text		collctypeversion BKI_DEFAULT(_null_);
 #endif
 } FormData_pg_collation;
 
@@ -100,6 +101,7 @@ extern Oid	CollationCreate(const char *collname, Oid collnamespace,
 							const char *colllocale,
 							const char *collicurules,
 							const char *collversion,
+							const char *collctypeversion,
 							bool if_not_exists,
 							bool quiet);
 

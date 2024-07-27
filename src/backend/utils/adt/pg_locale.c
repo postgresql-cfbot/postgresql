@@ -56,6 +56,7 @@
 
 #include "access/htup_details.h"
 #include "catalog/pg_collation.h"
+#include "common/unicode_version.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
@@ -1827,6 +1828,43 @@ get_collation_actual_version(char collprovider, const char *collcollate)
 	}
 
 	return collversion;
+}
+
+/*
+ * Get provider-specific ctype version.
+ */
+char *
+get_ctype_actual_version(char collprovider, const char *collctype)
+{
+	if (collprovider == COLLPROVIDER_BUILTIN)
+	{
+		if (strcmp(collctype, "C") == 0)
+			return "1";
+		else if (strcmp(collctype, "C.UTF-8") == 0)
+			return PG_UNICODE_VERSION;
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("invalid locale name \"%s\" for builtin provider",
+							collctype)));
+	}
+	else if (collprovider == COLLPROVIDER_ICU)
+	{
+#ifdef USE_ICU
+		return U_UNICODE_VERSION;
+#else
+		/* could get here if a collation was created by a build with ICU */
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("ICU is not supported in this build")));
+#endif
+	}
+	else if (collprovider == COLLPROVIDER_LIBC)
+	{
+		return get_collation_actual_version(collprovider, collctype);
+	}
+
+	return NULL;
 }
 
 /*

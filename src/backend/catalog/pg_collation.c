@@ -48,6 +48,7 @@ CollationCreate(const char *collname, Oid collnamespace,
 				const char *colllocale,
 				const char *collicurules,
 				const char *collversion,
+				const char *collctypeversion,
 				bool if_not_exists,
 				bool quiet)
 {
@@ -202,6 +203,10 @@ CollationCreate(const char *collname, Oid collnamespace,
 		values[Anum_pg_collation_collversion - 1] = CStringGetTextDatum(collversion);
 	else
 		nulls[Anum_pg_collation_collversion - 1] = true;
+	if (collctypeversion)
+		values[Anum_pg_collation_collctypeversion - 1] = CStringGetTextDatum(collctypeversion);
+	else
+		nulls[Anum_pg_collation_collctypeversion - 1] = true;
 
 	tup = heap_form_tuple(tupDesc, values, nulls);
 

@@ -103,6 +103,7 @@ extern bool pg_locale_deterministic(pg_locale_t locale);
 extern pg_locale_t pg_newlocale_from_collation(Oid collid);
 
 extern char *get_collation_actual_version(char collprovider, const char *collcollate);
+extern char *get_ctype_actual_version(char collprovider, const char *collctype);
 extern int	pg_strcoll(const char *arg1, const char *arg2, pg_locale_t locale);
 extern int	pg_strncoll(const char *arg1, size_t len1,
 						const char *arg2, size_t len2, pg_locale_t locale);

@@ -1964,11 +1964,13 @@ make_template0(FILE *cmdfd)
 	 * a new database from it.
 	 */
 	PG_CMD_PUTS("UPDATE pg_database SET datcollversion = NULL WHERE datname = 'template0';\n\n");
+	PG_CMD_PUTS("UPDATE pg_database SET datctypeversion = NULL WHERE datname = 'template0';\n\n");
 
 	/*
 	 * While we are here, do set the collation version on template1.
 	 */
 	PG_CMD_PUTS("UPDATE pg_database SET datcollversion = pg_database_collation_actual_version(oid) WHERE datname = 'template1';\n\n");
+	PG_CMD_PUTS("UPDATE pg_database SET datctypeversion = pg_database_ctype_actual_version(oid) WHERE datname = 'template1';\n\n");
 
 	/*
 	 * Explicitly revoke public create-schema and create-temp-table privileges

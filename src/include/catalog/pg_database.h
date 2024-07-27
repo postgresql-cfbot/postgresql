@@ -83,6 +83,9 @@ CATALOG(pg_database,1262,DatabaseRelationId) BKI_SHARED_RELATION BKI_ROWTYPE_OID
 	/* provider-dependent version of collation data */
 	text		datcollversion BKI_DEFAULT(_null_);
 
+	/* provider-dependent version for ctype */
+	text		datctypeversion BKI_DEFAULT(_null_);
+
 	/* access permissions */
 	aclitem		datacl[1];
 #endif

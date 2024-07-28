@@ -11,6 +11,8 @@
 #include "postgres_fe.h"
 
 #include <fcntl.h>
+#include <inttypes.h>
+#include <stdint.h>
 #include <sys/stat.h>
 #include <time.h>
 
@@ -22,12 +24,16 @@
 #define	ZIC_VERSION_PRE_2013 '2'
 #define	ZIC_VERSION	'3'
 
-typedef int64 zic_t;
-#define ZIC_MIN PG_INT64_MIN
-#define ZIC_MAX PG_INT64_MAX
+typedef int_fast64_t zic_t;
+static zic_t const
+			ZIC_MIN = INT_FAST64_MIN,
+			ZIC_MAX = INT_FAST64_MAX,
+			ZIC32_MIN = INT32_MIN,
+			ZIC32_MAX = INT32_MAX;
+#define SCNdZIC SCNdFAST64
 
 #ifndef ZIC_MAX_ABBR_LEN_WO_WARN
-#define ZIC_MAX_ABBR_LEN_WO_WARN	6
+#define ZIC_MAX_ABBR_LEN_WO_WARN 6
 #endif							/* !defined ZIC_MAX_ABBR_LEN_WO_WARN */
 
 #ifndef WIN32
@@ -601,7 +607,7 @@ static zic_t comment_leapexpires = -1;
 static bool
 timerange_option(char *timerange)
 {
-	int64		lo = min_time,
+	intmax_t	lo = min_time,
 				hi = max_time;
 	char	   *lo_end = timerange,
 			   *hi_end;
@@ -610,7 +616,7 @@ timerange_option(char *timerange)
 	{
 		errno = 0;
 		lo = strtoimax(timerange + 1, &lo_end, 10);
-		if (lo_end == timerange + 1 || (lo == PG_INT64_MAX && errno == ERANGE))
+		if (lo_end == timerange + 1 || (lo == INTMAX_MAX && errno == ERANGE))
 			return false;
 	}
 	hi_end = lo_end;
@@ -618,9 +624,9 @@ timerange_option(char *timerange)
 	{
 		errno = 0;
 		hi = strtoimax(lo_end + 2, &hi_end, 10);
-		if (hi_end == lo_end + 2 || hi == PG_INT64_MIN)
+		if (hi_end == lo_end + 2 || hi == INTMAX_MIN)
 			return false;
-		hi -= !(hi == PG_INT64_MAX && errno == ERANGE);
+		hi -= !(hi == INTMAX_MAX && errno == ERANGE);
 	}
 	if (*hi_end || hi < lo || max_time < lo || hi < min_time)
 		return false;
@@ -1291,18 +1297,7 @@ infile(const char *name)
 		{
 			if (name == leapsec && *buf == '#')
 			{
-				/*
-				 * PG: INT64_FORMAT isn't portable for sscanf, so be content
-				 * with scanning a "long".  Once we are requiring C99 in all
-				 * live branches, it'd be sensible to adopt upstream's
-				 * practice of using the <inttypes.h> macros.  But for now, we
-				 * don't actually use this code, and it won't overflow before
-				 * 2038 anyway.
-				 */
-				long		cl_tmp;
-
-				sscanf(buf, "#expires %ld", &cl_tmp);
-				comment_leapexpires = cl_tmp;
+				sscanf(buf, "#expires %" SCNdZIC, &comment_leapexpires);
 			}
 		}
 		else if (wantcont)
@@ -1364,8 +1359,7 @@ infile(const char *name)
 static zic_t
 gethms(char const *string, char const *errstring)
 {
-	/* PG: make hh be int not zic_t to avoid sscanf portability issues */
-	int			hh;
+	zic_t		hh;
 	int			sign,
 				mm = 0,
 				ss = 0;
@@ -1387,7 +1381,7 @@ gethms(char const *string, char const *errstring)
 	else
 		sign = 1;
 	switch (sscanf(string,
-				   "%d%c%d%c%d%c%1d%*[0]%c%*[0123456789]%c",
+				   "%" SCNdZIC "%c%d%c%d%c%1d%*[0]%c%*[0123456789]%c",
 				   &hh, &hhx, &mm, &mmx, &ss, &ssx, &tenths, &xr, &xs))
 	{
 		default:
@@ -1424,7 +1418,7 @@ gethms(char const *string, char const *errstring)
 		return 0;
 	}
 	/* Some compilers warn that this test is unsatisfiable for 32-bit ints */
-#if INT_MAX > PG_INT32_MAX
+#if INT_MAX > INT32_MAX
 	if (ZIC_MAX / SECSPERHOUR < hh)
 	{
 		error(_("time overflow"));
@@ -1670,8 +1664,7 @@ getleapdatetime(char **fields, int nfields, bool expire_line)
 	zic_t		i,
 				j;
 
-	/* PG: make year be int not zic_t to avoid sscanf portability issues */
-	int			year;
+	zic_t		year;
 	int			month,
 				day;
 	zic_t		dayoff,
@@ -1681,7 +1674,7 @@ getleapdatetime(char **fields, int nfields, bool expire_line)
 
 	dayoff = 0;
 	cp = fields[LP_YEAR];
-	if (sscanf(cp, "%d%c", &year, &xs) != 1)
+	if (sscanf(cp, "%" SCNdZIC "%c", &year, &xs) != 1)
 	{
 		/*
 		 * Leapin' Lizards!
@@ -1830,9 +1823,6 @@ rulesub(struct rule *rp, const char *loyearp, const char *hiyearp,
 	char	   *ep;
 	char		xs;
 
-	/* PG: year_tmp is to avoid sscanf portability issues */
-	int			year_tmp;
-
 	if ((lp = byword(monthp, mon_names)) == NULL)
 	{
 		error(_("invalid month name"));
@@ -1890,9 +1880,7 @@ rulesub(struct rule *rp, const char *loyearp, const char *hiyearp,
 						progname, lp->l_value);
 				exit(EXIT_FAILURE);
 		}
-	else if (sscanf(cp, "%d%c", &year_tmp, &xs) == 1)
-		rp->r_loyear = year_tmp;
-	else
+	else if (sscanf(cp, "%" SCNdZIC "%c", &rp->r_loyear, &xs) != 1)
 	{
 		error(_("invalid starting year"));
 		return;
@@ -1918,9 +1906,7 @@ rulesub(struct rule *rp, const char *loyearp, const char *hiyearp,
 						progname, lp->l_value);
 				exit(EXIT_FAILURE);
 		}
-	else if (sscanf(cp, "%d%c", &year_tmp, &xs) == 1)
-		rp->r_hiyear = year_tmp;
-	else
+	else if (sscanf(cp, "%" SCNdZIC "%c", &rp->r_hiyear, &xs) != 1)
 	{
 		error(_("invalid ending year"));
 		return;
@@ -1989,7 +1975,7 @@ rulesub(struct rule *rp, const char *loyearp, const char *hiyearp,
 }
 
 static void
-convert(const int32 val, char *const buf)
+convert(const int_fast32_t val, char *const buf)
 {
 	int			i;
 	int			shift;
@@ -2000,7 +1986,7 @@ convert(const int32 val, char *const buf)
 }
 
 static void
-convert64(const zic_t val, char *const buf)
+convert64(uint_fast64_t val, char *const buf)
 {
 	int			i;
 	int			shift;
@@ -2011,7 +1997,7 @@ convert64(const zic_t val, char *const buf)
 }
 
 static void
-puttzcode(const int32 val, FILE *const fp)
+puttzcode(zic_t val, FILE *const fp)
 {
 	char		buf[4];
 
@@ -2201,7 +2187,7 @@ writezone(const char *const name, const char *const string, char version,
 	rangeall.count = timecnt;
 	rangeall.leapcount = leapcnt;
 	range64 = limitrange(rangeall, lo_time, hi_time, ats, types);
-	range32 = limitrange(range64, PG_INT32_MIN, PG_INT32_MAX, ats, types);
+	range32 = limitrange(range64, ZIC32_MIN, ZIC32_MAX, ats, types);
 
 	/*
 	 * Remove old file, if any, to snap links.
@@ -2263,7 +2249,7 @@ writezone(const char *const name, const char *const string, char version,
 			/*
 			 * Arguably the default time type in the 32-bit data should be
 			 * range32.defaulttype, which is suited for timestamps just before
-			 * PG_INT32_MIN.  However, zic traditionally used the time type of
+			 * INT32_MIN.  However, zic traditionally used the time type of
 			 * the indefinite past instead.  Internet RFC 8532 says readers
 			 * should ignore 32-bit data, so this discrepancy matters only to
 			 * obsolete readers where the traditional type might be more
@@ -2271,7 +2257,7 @@ writezone(const char *const name, const char *const string, char version,
 			 * value, unless -r specifies a low cutoff that excludes some
 			 * 32-bit timestamps.
 			 */
-			thisdefaulttype = (lo_time <= PG_INT32_MIN
+			thisdefaulttype = (lo_time <= INT32_MIN
 							   ? range64.defaulttype
 							   : range32.defaulttype);
 
@@ -2280,8 +2266,8 @@ writezone(const char *const name, const char *const string, char version,
 			toomanytimes = thistimecnt >> 31 >> 1 != 0;
 			thisleapi = range32.leapbase;
 			thisleapcnt = range32.leapcount;
-			locut = PG_INT32_MIN < lo_time;
-			hicut = hi_time < PG_INT32_MAX;
+			locut = INT32_MIN < lo_time;
+			hicut = hi_time < INT32_MAX;
 		}
 		else
 		{
@@ -2465,7 +2451,13 @@ writezone(const char *const name, const char *const string, char version,
 			continue;
 		}
 
-		/* PG: print current timezone abbreviations if requested */
+		/*
+		 * PG: print current timezone abbreviations if requested.  Note that
+		 * we cast to int64_t, because int_fast64_t is not required to be
+		 * compatible with INT64_FORMAT.  We can't use PRIdFAST64 here because
+		 * we override fprintf with our own implementation that might not
+		 * understand it.
+		 */
 		if (print_abbrevs && pass == 2)
 		{
 			/* Print "type" data for periods ending after print_cutoff */
@@ -2478,7 +2470,7 @@ writezone(const char *const name, const char *const string, char version,
 
 					fprintf(stdout, "%s\t" INT64_FORMAT "%s\n",
 							thisabbrev,
-							utoffs[tm],
+							(int64_t) utoffs[tm],
 							isdsts[tm] ? "\tD" : "");
 				}
 			}
@@ -2490,7 +2482,7 @@ writezone(const char *const name, const char *const string, char version,
 
 				fprintf(stdout, "%s\t" INT64_FORMAT "%s\n",
 						thisabbrev,
-						utoffs[tm],
+						(int64_t) utoffs[tm],
 						isdsts[tm] ? "\tD" : "");
 			}
 		}
@@ -2499,7 +2491,7 @@ writezone(const char *const name, const char *const string, char version,
 		 * Output a LO_TIME transition if needed; see limitrange. But do not
 		 * go below the minimum representable value for this pass.
 		 */
-		lo = pass == 1 && lo_time < PG_INT32_MIN ? PG_INT32_MIN : lo_time;
+		lo = pass == 1 && lo_time < ZIC32_MIN ? ZIC32_MIN : lo_time;
 
 		if (locut)
 			puttzcodepass(lo, fp, pass);

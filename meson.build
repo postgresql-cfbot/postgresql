@@ -1597,18 +1597,6 @@ endif
 
 sizeof_long = cc.sizeof('long', args: test_c_args)
 cdata.set('SIZEOF_LONG', sizeof_long)
-if sizeof_long == 8
-  cdata.set('HAVE_LONG_INT_64', 1)
-  pg_int64_type = 'long int'
-  cdata.set_quoted('INT64_MODIFIER', 'l')
-elif sizeof_long == 4 and cc.sizeof('long long', args: test_c_args) == 8
-  cdata.set('HAVE_LONG_LONG_INT_64', 1)
-  pg_int64_type = 'long long int'
-  cdata.set_quoted('INT64_MODIFIER', 'll')
-else
-  error('do not know how to get a 64bit int')
-endif
-cdata.set('PG_INT64_TYPE', pg_int64_type)
 
 if host_machine.endian() == 'big'
   cdata.set('WORDS_BIGENDIAN', 1)
@@ -1638,8 +1626,8 @@ endforeach
 # any types wider than 64 bits, as allowing MAXIMUM_ALIGNOF to exceed 8
 # would be too much of a penalty for disk and memory space.
 alignof_double = cdata.get('ALIGNOF_DOUBLE')
-if cc.alignment(pg_int64_type, args: test_c_args) > alignof_double
-  error('alignment of int64 is greater than the alignment of double')
+if cc.alignment('int64_t', args: test_c_args, prefix: '#include <stdint.h>') > alignof_double
+  error('alignment of int64_t is greater than the alignment of double')
 endif
 cdata.set('MAXIMUM_ALIGNOF', alignof_double)
 
@@ -1792,6 +1780,34 @@ foreach a : printf_attributes
 endforeach
 
 
+# Determine which printf format modifier to use for int64_t values, to avoid
+# warnings from the format string checker (if there is one).
+if cdata.get('SIZEOF_LONG') < 8
+  # long isn't wide enough, so use "ll"
+  cdata.set('INT64_MODIFIER', '"ll"')
+else
+  testsrc = '''
+#include <stdint.h>
+extern void emit_log(int ignore, const char *fmt,...) __attribute__((format(printf,2,3)));
+void
+f()
+{
+    emit_log(0, "%lld", (int64_t) 42);
+}
+'''
+  if cc.compiles(testsrc, args: test_c_args + attrib_error_args)
+	# this system understands the attribute, and accepted "ll" without warning,
+	# so go with that (example: macOS)
+    cdata.set('INT64_MODIFIER', '"ll"')
+  else
+	# either this system doesn't understand the attribute at all (and "l" should
+	# be fine because now we only care about getting the right size), or it
+	# rejected "ll" with warnings because it expected "l" (example: FreeBSD)
+    cdata.set('INT64_MODIFIER', '"l"')
+  endif
+endif
+
+
 if cc.has_function_attribute('visibility:default') and \
     cc.has_function_attribute('visibility:hidden')
   cdata.set('HAVE_VISIBILITY_ATTRIBUTE', 1)
@@ -1851,17 +1867,17 @@ endif
 # compile, and store the results in global variables so the compiler doesn't
 # optimize away the call.
 if cc.links('''
-    INT64 a = 1;
-    INT64 b = 1;
-    INT64 result;
+    #include <stdint.h>
+    int64_t a = 1;
+    int64_t b = 1;
+    int64_t result;
 
     int main(void)
     {
         return __builtin_mul_overflow(a, b, &result);
     }''',
     name: '__builtin_mul_overflow',
-    args: test_c_args + ['-DINT64=@0@'.format(cdata.get('PG_INT64_TYPE'))],
-    )
+    args: test_c_args)
   cdata.set('HAVE__BUILTIN_OP_OVERFLOW', 1)
 endif
 
@@ -2154,7 +2170,7 @@ int main(void)
     cdata.set(check['name'],
       cc.links(test,
         name: check['desc'],
-        args: test_c_args + ['-DINT64=@0@'.format(cdata.get('PG_INT64_TYPE'))]) ? 1 : false
+        args: test_c_args) ? 1 : false
     )
   endforeach
 
@@ -2198,11 +2214,12 @@ if host_cpu == 'x86_64'
 
   prog = '''
 #include <immintrin.h>
+#include <stdint.h>
 
 int main(void)
 {
     const char buf[sizeof(__m512i)];
-    INT64 popcnt = 0;
+    int64_t popcnt = 0;
     __m512i accum = _mm512_setzero_si512();
     const __m512i val = _mm512_maskz_loadu_epi8((__mmask64) 0xf0f0f0f0f0f0f0f0, (const __m512i *) buf);
     const __m512i cnt = _mm512_popcnt_epi64(val);
@@ -2214,10 +2231,10 @@ int main(void)
 '''
 
   if cc.links(prog, name: 'AVX-512 popcount without -mavx512vpopcntdq -mavx512bw',
-        args: test_c_args + ['-DINT64=@0@'.format(cdata.get('PG_INT64_TYPE'))])
+        args: test_c_args)
     cdata.set('USE_AVX512_POPCNT_WITH_RUNTIME_CHECK', 1)
   elif cc.links(prog, name: 'AVX-512 popcount with -mavx512vpopcntdq -mavx512bw',
-        args: test_c_args + ['-DINT64=@0@'.format(cdata.get('PG_INT64_TYPE'))] + ['-mavx512vpopcntdq'] + ['-mavx512bw'])
+        args: test_c_args + ['-mavx512vpopcntdq'] + ['-mavx512bw'])
     cdata.set('USE_AVX512_POPCNT_WITH_RUNTIME_CHECK', 1)
     cflags_popcnt += ['-mavx512vpopcntdq'] + ['-mavx512bw']
   endif

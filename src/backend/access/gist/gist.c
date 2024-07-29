@@ -510,7 +510,7 @@ gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 		if (is_build)
 		{
 			if (is_parallel)
-				recptr = gistGetFakeLSN(rel, is_parallel);
+				recptr = GetFakeLSNForUnloggedRel();
 			else
 				recptr = GistBuildLSN;
 		}
@@ -521,7 +521,7 @@ gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 									   dist, oldrlink, oldnsn, leftchildbuf,
 									   markfollowright);
 			else
-				recptr = gistGetFakeLSN(rel, false);
+				recptr = gistGetFakeLSN(rel);
 		}
 
 		for (ptr = dist; ptr; ptr = ptr->next)
@@ -582,7 +582,7 @@ gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 		if (is_build)
 		{
 			if (is_parallel)
-				recptr = gistGetFakeLSN(rel, is_parallel);
+				recptr = GetFakeLSNForUnloggedRel();
 			else
 				recptr = GistBuildLSN;
 		}
@@ -604,7 +604,7 @@ gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 										leftchildbuf);
 			}
 			else
-				recptr = gistGetFakeLSN(rel, false);
+				recptr = gistGetFakeLSN(rel);
 		}
 		PageSetLSN(page, recptr);
 
@@ -1740,7 +1740,7 @@ gistprunepage(Relation rel, Page page, Buffer buffer, Relation heapRel)
 			PageSetLSN(page, recptr);
 		}
 		else
-			PageSetLSN(page, gistGetFakeLSN(rel, false));
+			PageSetLSN(page, gistGetFakeLSN(rel));
 
 		END_CRIT_SECTION();
 	}

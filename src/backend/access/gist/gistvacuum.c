@@ -181,7 +181,7 @@ gistvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	if (RelationNeedsWAL(rel))
 		vstate.startNSN = GetInsertRecPtr();
 	else
-		vstate.startNSN = gistGetFakeLSN(rel, false);
+		vstate.startNSN = gistGetFakeLSN(rel);
 
 	/*
 	 * The outer loop iterates over all index pages, in physical order (we
@@ -376,7 +376,7 @@ restart:
 				PageSetLSN(page, recptr);
 			}
 			else
-				PageSetLSN(page, gistGetFakeLSN(rel, false));
+				PageSetLSN(page, gistGetFakeLSN(rel));
 
 			END_CRIT_SECTION();
 
@@ -664,7 +664,7 @@ gistdeletepage(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	if (RelationNeedsWAL(info->index))
 		recptr = gistXLogPageDelete(leafBuffer, txid, parentBuffer, downlink);
 	else
-		recptr = gistGetFakeLSN(info->index, false);
+		recptr = gistGetFakeLSN(info->index);
 	PageSetLSN(parentPage, recptr);
 	PageSetLSN(leafPage, recptr);
 

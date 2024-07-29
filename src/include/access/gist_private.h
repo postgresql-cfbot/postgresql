@@ -535,7 +535,7 @@ extern void gistMakeUnionKey(GISTSTATE *giststate, int attno,
 							 GISTENTRY *entry2, bool isnull2,
 							 Datum *dst, bool *dstisnull);
 
-extern XLogRecPtr gistGetFakeLSN(Relation rel, bool is_parallel);
+extern XLogRecPtr gistGetFakeLSN(Relation rel);
 
 /* gistvacuum.c */
 extern IndexBulkDeleteResult *gistbulkdelete(IndexVacuumInfo *info,

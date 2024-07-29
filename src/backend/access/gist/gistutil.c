@@ -1013,7 +1013,7 @@ gistproperty(Oid index_oid, int attno,
  * purpose.
  */
 XLogRecPtr
-gistGetFakeLSN(Relation rel, bool is_parallel)
+gistGetFakeLSN(Relation rel)
 {
 	if (rel->rd_rel->relpersistence == RELPERSISTENCE_TEMP)
 	{
@@ -1036,12 +1036,8 @@ gistGetFakeLSN(Relation rel, bool is_parallel)
 		static XLogRecPtr lastlsn = InvalidXLogRecPtr;
 		XLogRecPtr	currlsn = GetXLogInsertRecPtr();
 
-		/*
-		 * Shouldn't be called for WAL-logging relations, but parallell
-		 * builds are an exception - we need the fake LSN to detect
-		 * concurrent changes.
-		 */
-		Assert(is_parallel || !RelationNeedsWAL(rel));
+		/* Shouldn't be called for WAL-logging relations */
+		Assert(!RelationNeedsWAL(rel));
 
 		/* No need for an actual record if we already have a distinct LSN */
 		if (!XLogRecPtrIsInvalid(lastlsn) && lastlsn == currlsn)

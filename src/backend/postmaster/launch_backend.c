@@ -34,6 +34,7 @@
 #include <unistd.h>
 
 #include "access/xlog.h"
+#include "catalog/pg_control.h"
 #include "common/file_utils.h"
 #include "libpq/libpq-be.h"
 #include "libpq/pqsignal.h"
@@ -139,6 +140,14 @@ typedef struct
 #endif
 	char		my_exec_path[MAXPGPATH];
 	char		pkglib_path[MAXPGPATH];
+
+	/*
+	 * A copy of the ControlFileData from early in Postmaster startup.  We
+	 * need to access its contents it at a phase of initialization before we
+	 * are allowed to acquire LWLocks, so we can't just use shared memory or
+	 * read the file from disk.
+	 */
+	ControlFileData proto_controlfile;
 
 	/*
 	 * These are only used by backend processes, but are here because passing
@@ -656,12 +665,6 @@ SubPostmasterMain(int argc, char *argv[])
 	checkDataDir();
 
 	/*
-	 * (re-)read control file, as it contains config. The postmaster will
-	 * already have read this, but this process doesn't know about that.
-	 */
-	LocalProcessControlFile(false);
-
-	/*
 	 * Reload any libraries that were preloaded by the postmaster.  Since we
 	 * exec'd this process, those libraries didn't come along with us; but we
 	 * should load them into all child processes to be consistent with the
@@ -748,6 +751,8 @@ save_backend_variables(BackendParameters *param, ClientSocket *client_sock,
 	param->max_safe_fds = max_safe_fds;
 
 	param->MaxBackends = MaxBackends;
+
+	ExportProtoControlFile(&param->proto_controlfile);
 
 #ifdef WIN32
 	param->PostmasterHandle = PostmasterHandle;
@@ -1024,6 +1029,8 @@ restore_backend_variables(BackendParameters *param)
 	strlcpy(my_exec_path, param->my_exec_path, MAXPGPATH);
 
 	strlcpy(pkglib_path, param->pkglib_path, MAXPGPATH);
+
+	ImportProtoControlFile(&param->proto_controlfile);
 
 	/*
 	 * We need to restore fd.c's counts of externally-opened FDs; to avoid

@@ -5857,7 +5857,7 @@ foreign_join_ok(PlannerInfo *root, RelOptInfo *joinrel, JoinType jointype,
 													   rinfo->clause);
 
 		if (IS_OUTER_JOIN(jointype) &&
-			!RINFO_IS_PUSHED_DOWN(rinfo, joinrel->relids))
+			!RINFO_IS_PUSHED_DOWN(rinfo, extra->ojrelids, joinrel->relids))
 		{
 			if (!is_remote_clause)
 				return false;
@@ -6619,7 +6619,6 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
 			Assert(!IsA(expr, RestrictInfo));
 			rinfo = make_restrictinfo(root,
 									  expr,
-									  true,
 									  false,
 									  false,
 									  false,

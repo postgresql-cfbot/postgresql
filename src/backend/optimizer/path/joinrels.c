@@ -34,6 +34,7 @@ static bool has_join_restriction(PlannerInfo *root, RelOptInfo *rel);
 static bool has_legal_joinclause(PlannerInfo *root, RelOptInfo *rel);
 static bool restriction_is_constant_false(List *restrictlist,
 										  RelOptInfo *joinrel,
+										  Relids ojrelids,
 										  bool only_pushed_down);
 static void populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 										RelOptInfo *rel2, RelOptInfo *joinrel,
@@ -894,6 +895,10 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 							RelOptInfo *rel2, RelOptInfo *joinrel,
 							SpecialJoinInfo *sjinfo, List *restrictlist)
 {
+	Relids		ojrelids = CALC_OUTER_JOIN_RELIDS(joinrel->relids,
+												  rel1->relids,
+												  rel2->relids);
+
 	/*
 	 * Consider paths using each rel as both outer and inner.  Depending on
 	 * the join type, a provably empty outer or inner rel might mean the join
@@ -916,7 +921,7 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 	{
 		case JOIN_INNER:
 			if (is_dummy_rel(rel1) || is_dummy_rel(rel2) ||
-				restriction_is_constant_false(restrictlist, joinrel, false))
+				restriction_is_constant_false(restrictlist, joinrel, ojrelids, false))
 			{
 				mark_dummy_rel(joinrel);
 				break;
@@ -930,12 +935,12 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 			break;
 		case JOIN_LEFT:
 			if (is_dummy_rel(rel1) ||
-				restriction_is_constant_false(restrictlist, joinrel, true))
+				restriction_is_constant_false(restrictlist, joinrel, ojrelids, true))
 			{
 				mark_dummy_rel(joinrel);
 				break;
 			}
-			if (restriction_is_constant_false(restrictlist, joinrel, false) &&
+			if (restriction_is_constant_false(restrictlist, joinrel, ojrelids, false) &&
 				bms_is_subset(rel2->relids, sjinfo->syn_righthand))
 				mark_dummy_rel(rel2);
 			add_paths_to_joinrel(root, joinrel, rel1, rel2,
@@ -947,7 +952,7 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 			break;
 		case JOIN_FULL:
 			if ((is_dummy_rel(rel1) && is_dummy_rel(rel2)) ||
-				restriction_is_constant_false(restrictlist, joinrel, true))
+				restriction_is_constant_false(restrictlist, joinrel, ojrelids, true))
 			{
 				mark_dummy_rel(joinrel);
 				break;
@@ -983,7 +988,7 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 				bms_is_subset(sjinfo->min_righthand, rel2->relids))
 			{
 				if (is_dummy_rel(rel1) || is_dummy_rel(rel2) ||
-					restriction_is_constant_false(restrictlist, joinrel, false))
+					restriction_is_constant_false(restrictlist, joinrel, ojrelids, false))
 				{
 					mark_dummy_rel(joinrel);
 					break;
@@ -1009,7 +1014,7 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 								   sjinfo) != NULL)
 			{
 				if (is_dummy_rel(rel1) || is_dummy_rel(rel2) ||
-					restriction_is_constant_false(restrictlist, joinrel, false))
+					restriction_is_constant_false(restrictlist, joinrel, ojrelids, false))
 				{
 					mark_dummy_rel(joinrel);
 					break;
@@ -1024,12 +1029,12 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 			break;
 		case JOIN_ANTI:
 			if (is_dummy_rel(rel1) ||
-				restriction_is_constant_false(restrictlist, joinrel, true))
+				restriction_is_constant_false(restrictlist, joinrel, ojrelids, true))
 			{
 				mark_dummy_rel(joinrel);
 				break;
 			}
-			if (restriction_is_constant_false(restrictlist, joinrel, false) &&
+			if (restriction_is_constant_false(restrictlist, joinrel, ojrelids, false) &&
 				bms_is_subset(rel2->relids, sjinfo->syn_righthand))
 				mark_dummy_rel(rel2);
 			add_paths_to_joinrel(root, joinrel, rel1, rel2,
@@ -1426,6 +1431,7 @@ mark_dummy_rel(RelOptInfo *rel)
 static bool
 restriction_is_constant_false(List *restrictlist,
 							  RelOptInfo *joinrel,
+							  Relids ojrelids,
 							  bool only_pushed_down)
 {
 	ListCell   *lc;
@@ -1440,7 +1446,8 @@ restriction_is_constant_false(List *restrictlist,
 	{
 		RestrictInfo *rinfo = lfirst_node(RestrictInfo, lc);
 
-		if (only_pushed_down && !RINFO_IS_PUSHED_DOWN(rinfo, joinrel->relids))
+		if (only_pushed_down &&
+			!RINFO_IS_PUSHED_DOWN(rinfo, ojrelids, joinrel->relids))
 			continue;
 
 		if (rinfo->clause && IsA(rinfo->clause, Const))

@@ -104,6 +104,37 @@ typedef struct
 	RelFileNumber toast_index_relfilenumber;	/* toast table index filenode */
 } BinaryUpgradeClassOidItem;
 
+typedef enum SeqType
+{
+	SEQTYPE_SMALLINT,
+	SEQTYPE_INTEGER,
+	SEQTYPE_BIGINT,
+} SeqType;
+
+const char *const SeqTypeNames[] =
+{
+	[SEQTYPE_SMALLINT] = "smallint",
+	[SEQTYPE_INTEGER] = "integer",
+	[SEQTYPE_BIGINT] = "bigint",
+};
+
+StaticAssertDecl(lengthof(SeqTypeNames) == (SEQTYPE_BIGINT + 1),
+				 "array length mismatch");
+
+typedef struct
+{
+	Oid			oid;			/* sequence OID */
+	SeqType		seqtype;		/* data type of sequence */
+	bool		cycled;			/* whether sequence cycles */
+	int64		minv;			/* minimum value */
+	int64		maxv;			/* maximum value */
+	int64		startv;			/* start value */
+	int64		incby;			/* increment value */
+	int64		cache;			/* cache size */
+	int64		last_value;		/* last value of sequence */
+	bool		is_called;		/* whether nextval advances before returning */
+} SequenceItem;
+
 typedef enum OidOptions
 {
 	zeroIsError = 1,
@@ -172,6 +203,10 @@ static int	nseclabels = 0;
 /* sorted table of pg_class information for binary upgrade */
 static BinaryUpgradeClassOidItem *binaryUpgradeClassOids = NULL;
 static int	nbinaryUpgradeClassOids = 0;
+
+/* sorted table of sequences */
+static SequenceItem *sequences = NULL;
+static int	nsequences = 0;
 
 /*
  * The default number of rows per INSERT when
@@ -270,6 +305,7 @@ static void dumpTable(Archive *fout, const TableInfo *tbinfo);
 static void dumpTableSchema(Archive *fout, const TableInfo *tbinfo);
 static void dumpTableAttach(Archive *fout, const TableAttachInfo *attachinfo);
 static void dumpAttrDef(Archive *fout, const AttrDefInfo *adinfo);
+static void collectSequences(Archive *fout);
 static void dumpSequence(Archive *fout, const TableInfo *tbinfo);
 static void dumpSequenceData(Archive *fout, const TableDataInfo *tdinfo);
 static void dumpIndex(Archive *fout, const IndxInfo *indxinfo);
@@ -991,6 +1027,9 @@ main(int argc, char **argv)
 	/* For binary upgrade mode, collect required pg_class information. */
 	if (dopt.binary_upgrade)
 		collectBinaryUpgradeClassOids(fout);
+
+	/* Collect sequence information. */
+	collectSequences(fout);
 
 	/* Lastly, create dummy objects to represent the section boundaries */
 	boundaryObjs = createBoundaryObjects();
@@ -17251,6 +17290,94 @@ dumpTableConstraintComment(Archive *fout, const ConstraintInfo *coninfo)
 	free(qtabname);
 }
 
+static inline SeqType
+parse_sequence_type(const char *name)
+{
+	for (int i = 0; i < lengthof(SeqTypeNames); i++)
+	{
+		if (strcmp(SeqTypeNames[i], name) == 0)
+			return (SeqType) i;
+	}
+
+	pg_fatal("unrecognized sequence type: %s", name);
+	return (SeqType) 0;			/* keep compiler quiet */
+}
+
+/*
+ * bsearch() comparator for SequenceItem
+ */
+static int
+SequenceItemCmp(const void *p1, const void *p2)
+{
+	SequenceItem v1 = *((const SequenceItem *) p1);
+	SequenceItem v2 = *((const SequenceItem *) p2);
+
+	return pg_cmp_u32(v1.oid, v2.oid);
+}
+
+/*
+ * collectSequences
+ *
+ * Construct a table of sequence information.  This table is sorted by OID for
+ * speed in lookup.
+ */
+static void
+collectSequences(Archive *fout)
+{
+	PGresult   *res;
+	const char *query;
+
+	/*
+	 * Before Postgres 10, sequence metadata is in the sequence itself.  We
+	 * could likely make use of the sorted table with some extra effort, but
+	 * for now it seems unlikely to be worth it.
+	 *
+	 * Since version 18, we can gather the sequence data in this query with
+	 * pg_sequence_read_tuple(), but we only do so for non-schema-only dumps.
+	 */
+	if (fout->remoteVersion < 100000)
+		return;
+	else if (fout->remoteVersion < 180000 ||
+			 (fout->dopt->schemaOnly && !fout->dopt->sequence_data))
+		query = "SELECT seqrelid, format_type(seqtypid, NULL), "
+			"seqstart, seqincrement, "
+			"seqmax, seqmin, "
+			"seqcache, seqcycle, "
+			"NULL, 'f' "
+			"FROM pg_catalog.pg_sequence "
+			"ORDER BY seqrelid";
+	else
+		query = "SELECT seqrelid, format_type(seqtypid, NULL), "
+			"seqstart, seqincrement, "
+			"seqmax, seqmin, "
+			"seqcache, seqcycle, "
+			"last_value, is_called "
+			"FROM pg_catalog.pg_sequence, "
+			"pg_sequence_read_tuple(seqrelid) "
+			"ORDER BY seqrelid;";
+
+	res = ExecuteSqlQuery(fout, query, PGRES_TUPLES_OK);
+
+	nsequences = PQntuples(res);
+	sequences = (SequenceItem *) pg_malloc(nsequences * sizeof(SequenceItem));
+
+	for (int i = 0; i < nsequences; i++)
+	{
+		sequences[i].oid = atooid(PQgetvalue(res, i, 0));
+		sequences[i].seqtype = parse_sequence_type(PQgetvalue(res, i, 1));
+		sequences[i].startv = strtoi64(PQgetvalue(res, i, 2), NULL, 10);
+		sequences[i].incby = strtoi64(PQgetvalue(res, i, 3), NULL, 10);
+		sequences[i].maxv = strtoi64(PQgetvalue(res, i, 4), NULL, 10);
+		sequences[i].minv = strtoi64(PQgetvalue(res, i, 5), NULL, 10);
+		sequences[i].cache = strtoi64(PQgetvalue(res, i, 6), NULL, 10);
+		sequences[i].cycled = (strcmp(PQgetvalue(res, i, 7), "t") == 0);
+		sequences[i].last_value = strtoi64(PQgetvalue(res, i, 8), NULL, 10);
+		sequences[i].is_called = (strcmp(PQgetvalue(res, i, 9), "t") == 0);
+	}
+
+	PQclear(res);
+}
+
 /*
  * dumpSequence
  *	  write the declaration (not data) of one user-defined sequence
@@ -17259,19 +17386,10 @@ static void
 dumpSequence(Archive *fout, const TableInfo *tbinfo)
 {
 	DumpOptions *dopt = fout->dopt;
-	PGresult   *res;
-	char	   *startv,
-			   *incby,
-			   *maxv,
-			   *minv,
-			   *cache,
-			   *seqtype;
-	bool		cycled;
+	SequenceItem *seq;
 	bool		is_ascending;
 	int64		default_minv,
 				default_maxv;
-	char		bufm[32],
-				bufx[32];
 	PQExpBuffer query = createPQExpBuffer();
 	PQExpBuffer delqry = createPQExpBuffer();
 	char	   *qseqname;
@@ -17279,19 +17397,25 @@ dumpSequence(Archive *fout, const TableInfo *tbinfo)
 
 	qseqname = pg_strdup(fmtId(tbinfo->dobj.name));
 
+	/*
+	 * For versions >= 10, the sequence information is gathered in a sorted
+	 * table before any calls to dumpSequence().  See collectSequences() for
+	 * more information.
+	 */
 	if (fout->remoteVersion >= 100000)
 	{
-		appendPQExpBuffer(query,
-						  "SELECT format_type(seqtypid, NULL), "
-						  "seqstart, seqincrement, "
-						  "seqmax, seqmin, "
-						  "seqcache, seqcycle "
-						  "FROM pg_catalog.pg_sequence "
-						  "WHERE seqrelid = '%u'::oid",
-						  tbinfo->dobj.catId.oid);
+		SequenceItem key = {0};
+
+		Assert(sequences);
+
+		key.oid = tbinfo->dobj.catId.oid;
+		seq = bsearch(&key, sequences, nsequences,
+					  sizeof(SequenceItem), SequenceItemCmp);
 	}
 	else
 	{
+		PGresult   *res;
+
 		/*
 		 * Before PostgreSQL 10, sequence metadata is in the sequence itself.
 		 *
@@ -17303,59 +17427,49 @@ dumpSequence(Archive *fout, const TableInfo *tbinfo)
 						  "start_value, increment_by, max_value, min_value, "
 						  "cache_value, is_cycled FROM %s",
 						  fmtQualifiedDumpable(tbinfo));
+
+		res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+		if (PQntuples(res) != 1)
+			pg_fatal(ngettext("query to get data of sequence \"%s\" returned %d row (expected 1)",
+							  "query to get data of sequence \"%s\" returned %d rows (expected 1)",
+							  PQntuples(res)),
+					 tbinfo->dobj.name, PQntuples(res));
+
+		seq = pg_malloc0(sizeof(SequenceItem));
+		seq->seqtype = parse_sequence_type(PQgetvalue(res, 0, 0));
+		seq->startv = strtoi64(PQgetvalue(res, 0, 1), NULL, 10);
+		seq->incby = strtoi64(PQgetvalue(res, 0, 2), NULL, 10);
+		seq->maxv = strtoi64(PQgetvalue(res, 0, 3), NULL, 10);
+		seq->minv = strtoi64(PQgetvalue(res, 0, 4), NULL, 10);
+		seq->cache = strtoi64(PQgetvalue(res, 0, 5), NULL, 10);
+		seq->cycled = (strcmp(PQgetvalue(res, 0, 6), "t") == 0);
+
+		PQclear(res);
 	}
 
-	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
-
-	if (PQntuples(res) != 1)
-		pg_fatal(ngettext("query to get data of sequence \"%s\" returned %d row (expected 1)",
-						  "query to get data of sequence \"%s\" returned %d rows (expected 1)",
-						  PQntuples(res)),
-				 tbinfo->dobj.name, PQntuples(res));
-
-	seqtype = PQgetvalue(res, 0, 0);
-	startv = PQgetvalue(res, 0, 1);
-	incby = PQgetvalue(res, 0, 2);
-	maxv = PQgetvalue(res, 0, 3);
-	minv = PQgetvalue(res, 0, 4);
-	cache = PQgetvalue(res, 0, 5);
-	cycled = (strcmp(PQgetvalue(res, 0, 6), "t") == 0);
-
 	/* Calculate default limits for a sequence of this type */
-	is_ascending = (incby[0] != '-');
-	if (strcmp(seqtype, "smallint") == 0)
+	is_ascending = (seq->incby >= 0);
+	if (seq->seqtype == SEQTYPE_SMALLINT)
 	{
 		default_minv = is_ascending ? 1 : PG_INT16_MIN;
 		default_maxv = is_ascending ? PG_INT16_MAX : -1;
 	}
-	else if (strcmp(seqtype, "integer") == 0)
+	else if (seq->seqtype == SEQTYPE_INTEGER)
 	{
 		default_minv = is_ascending ? 1 : PG_INT32_MIN;
 		default_maxv = is_ascending ? PG_INT32_MAX : -1;
 	}
-	else if (strcmp(seqtype, "bigint") == 0)
+	else if (seq->seqtype == SEQTYPE_BIGINT)
 	{
 		default_minv = is_ascending ? 1 : PG_INT64_MIN;
 		default_maxv = is_ascending ? PG_INT64_MAX : -1;
 	}
 	else
 	{
-		pg_fatal("unrecognized sequence type: %s", seqtype);
+		pg_fatal("unrecognized sequence type: %d", seq->seqtype);
 		default_minv = default_maxv = 0;	/* keep compiler quiet */
 	}
-
-	/*
-	 * 64-bit strtol() isn't very portable, so convert the limits to strings
-	 * and compare that way.
-	 */
-	snprintf(bufm, sizeof(bufm), INT64_FORMAT, default_minv);
-	snprintf(bufx, sizeof(bufx), INT64_FORMAT, default_maxv);
-
-	/* Don't print minv/maxv if they match the respective default limit */
-	if (strcmp(minv, bufm) == 0)
-		minv = NULL;
-	if (strcmp(maxv, bufx) == 0)
-		maxv = NULL;
 
 	/*
 	 * Identity sequences are not to be dropped separately.
@@ -17404,27 +17518,27 @@ dumpSequence(Archive *fout, const TableInfo *tbinfo)
 						  "UNLOGGED " : "",
 						  fmtQualifiedDumpable(tbinfo));
 
-		if (strcmp(seqtype, "bigint") != 0)
-			appendPQExpBuffer(query, "    AS %s\n", seqtype);
+		if (seq->seqtype != SEQTYPE_BIGINT)
+			appendPQExpBuffer(query, "    AS %s\n", SeqTypeNames[seq->seqtype]);
 	}
 
-	appendPQExpBuffer(query, "    START WITH %s\n", startv);
+	appendPQExpBuffer(query, "    START WITH " INT64_FORMAT "\n", seq->startv);
 
-	appendPQExpBuffer(query, "    INCREMENT BY %s\n", incby);
+	appendPQExpBuffer(query, "    INCREMENT BY " INT64_FORMAT "\n", seq->incby);
 
-	if (minv)
-		appendPQExpBuffer(query, "    MINVALUE %s\n", minv);
+	if (seq->minv != default_minv)
+		appendPQExpBuffer(query, "    MINVALUE " INT64_FORMAT "\n", seq->minv);
 	else
 		appendPQExpBufferStr(query, "    NO MINVALUE\n");
 
-	if (maxv)
-		appendPQExpBuffer(query, "    MAXVALUE %s\n", maxv);
+	if (seq->maxv != default_maxv)
+		appendPQExpBuffer(query, "    MAXVALUE " INT64_FORMAT "\n", seq->maxv);
 	else
 		appendPQExpBufferStr(query, "    NO MAXVALUE\n");
 
 	appendPQExpBuffer(query,
-					  "    CACHE %s%s",
-					  cache, (cycled ? "\n    CYCLE" : ""));
+					  "    CACHE " INT64_FORMAT "%s",
+					  seq->cache, (seq->cycled ? "\n    CYCLE" : ""));
 
 	if (tbinfo->is_identity_sequence)
 	{
@@ -17510,8 +17624,8 @@ dumpSequence(Archive *fout, const TableInfo *tbinfo)
 					 tbinfo->dobj.namespace->dobj.name, tbinfo->rolname,
 					 tbinfo->dobj.catId, 0, tbinfo->dobj.dumpId);
 
-	PQclear(res);
-
+	if (fout->remoteVersion < 100000)
+		pg_free(seq);
 	destroyPQExpBuffer(query);
 	destroyPQExpBuffer(delqry);
 	free(qseqname);
@@ -17525,30 +17639,59 @@ static void
 dumpSequenceData(Archive *fout, const TableDataInfo *tdinfo)
 {
 	TableInfo  *tbinfo = tdinfo->tdtable;
-	PGresult   *res;
-	char	   *last;
+	int64		last;
 	bool		called;
 	PQExpBuffer query = createPQExpBuffer();
 
-	appendPQExpBuffer(query,
-					  "SELECT last_value, is_called FROM %s",
-					  fmtQualifiedDumpable(tbinfo));
+	/*
+	 * For versions >= 18, the sequence information is gathered in the sorted
+	 * array before any calls to dumpSequenceData().  See collectSequences()
+	 * for more information.
+	 *
+	 * For older versions, we have to query the sequence relations
+	 * individually.
+	 */
+	if (fout->remoteVersion < 180000)
+	{
+		PGresult   *res;
 
-	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+		appendPQExpBuffer(query,
+						  "SELECT last_value, is_called FROM %s",
+						  fmtQualifiedDumpable(tbinfo));
 
-	if (PQntuples(res) != 1)
-		pg_fatal(ngettext("query to get data of sequence \"%s\" returned %d row (expected 1)",
-						  "query to get data of sequence \"%s\" returned %d rows (expected 1)",
-						  PQntuples(res)),
-				 tbinfo->dobj.name, PQntuples(res));
+		res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
 
-	last = PQgetvalue(res, 0, 0);
-	called = (strcmp(PQgetvalue(res, 0, 1), "t") == 0);
+		if (PQntuples(res) != 1)
+			pg_fatal(ngettext("query to get data of sequence \"%s\" returned %d row (expected 1)",
+							  "query to get data of sequence \"%s\" returned %d rows (expected 1)",
+							  PQntuples(res)),
+					 tbinfo->dobj.name, PQntuples(res));
+
+		last = strtoi64(PQgetvalue(res, 0, 0), NULL, 10);
+		called = (strcmp(PQgetvalue(res, 0, 1), "t") == 0);
+
+		PQclear(res);
+	}
+	else
+	{
+		SequenceItem key = {0};
+		SequenceItem *entry;
+
+		Assert(sequences);
+		Assert(tbinfo->dobj.catId.oid);
+
+		key.oid = tbinfo->dobj.catId.oid;
+		entry = bsearch(&key, sequences, nsequences,
+						sizeof(SequenceItem), SequenceItemCmp);
+
+		last = entry->last_value;
+		called = entry->is_called;
+	}
 
 	resetPQExpBuffer(query);
 	appendPQExpBufferStr(query, "SELECT pg_catalog.setval(");
 	appendStringLiteralAH(query, fmtQualifiedDumpable(tbinfo), fout);
-	appendPQExpBuffer(query, ", %s, %s);\n",
+	appendPQExpBuffer(query, ", " INT64_FORMAT ", %s);\n",
 					  last, (called ? "true" : "false"));
 
 	if (tdinfo->dobj.dump & DUMP_COMPONENT_DATA)
@@ -17561,8 +17704,6 @@ dumpSequenceData(Archive *fout, const TableDataInfo *tdinfo)
 								  .createStmt = query->data,
 								  .deps = &(tbinfo->dobj.dumpId),
 								  .nDeps = 1));
-
-	PQclear(res);
 
 	destroyPQExpBuffer(query);
 }

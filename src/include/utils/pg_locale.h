@@ -48,9 +48,6 @@ extern PGDLLIMPORT char *localized_full_days[];
 extern PGDLLIMPORT char *localized_abbrev_months[];
 extern PGDLLIMPORT char *localized_full_months[];
 
-/* is the databases's LC_CTYPE the C locale? */
-extern PGDLLIMPORT bool database_ctype_is_c;
-
 extern bool check_locale(int category, const char *locale, char **canonname);
 extern char *pg_perm_setlocale(int category, const char *locale);
 
@@ -112,6 +109,8 @@ extern void make_icu_collator(const char *iculocstr,
 							  struct pg_locale_struct *resultp);
 
 extern bool pg_locale_deterministic(pg_locale_t locale);
+extern void init_db_env_locale(const char *datcollate, const char *datctype);
+extern pg_locale_t get_db_env_locale(void);
 extern void init_database_collation(void);
 extern pg_locale_t pg_newlocale_from_collation(Oid collid);
 

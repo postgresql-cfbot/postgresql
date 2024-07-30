@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include "catalog/pg_collation.h"
 #include "common/string.h"
 #include "storage/fd.h"
 #include "tsearch/ts_locale.h"
@@ -36,9 +37,11 @@ t_isdigit(const char *ptr)
 {
 	int			clen = pg_mblen(ptr);
 	wchar_t		character[WC_BUF_LEN];
-	pg_locale_t mylocale = 0;	/* TODO */
 
-	if (clen == 1 || database_ctype_is_c)
+	/* TODO: determine collation properly */
+	pg_locale_t mylocale = get_db_env_locale();
+
+	if (clen == 1 || mylocale->ctype_is_c)
 		return isdigit(TOUCHAR(ptr));
 
 	char2wchar(character, WC_BUF_LEN, ptr, clen, mylocale);
@@ -51,9 +54,11 @@ t_isspace(const char *ptr)
 {
 	int			clen = pg_mblen(ptr);
 	wchar_t		character[WC_BUF_LEN];
-	pg_locale_t mylocale = 0;	/* TODO */
 
-	if (clen == 1 || database_ctype_is_c)
+	/* TODO: determine collation properly */
+	pg_locale_t mylocale = get_db_env_locale();
+
+	if (clen == 1 || mylocale->ctype_is_c)
 		return isspace(TOUCHAR(ptr));
 
 	char2wchar(character, WC_BUF_LEN, ptr, clen, mylocale);
@@ -66,9 +71,11 @@ t_isalpha(const char *ptr)
 {
 	int			clen = pg_mblen(ptr);
 	wchar_t		character[WC_BUF_LEN];
-	pg_locale_t mylocale = 0;	/* TODO */
 
-	if (clen == 1 || database_ctype_is_c)
+	/* TODO: determine collation properly */
+	pg_locale_t mylocale = get_db_env_locale();
+
+	if (clen == 1 || mylocale->ctype_is_c)
 		return isalpha(TOUCHAR(ptr));
 
 	char2wchar(character, WC_BUF_LEN, ptr, clen, mylocale);
@@ -81,9 +88,11 @@ t_isalnum(const char *ptr)
 {
 	int			clen = pg_mblen(ptr);
 	wchar_t		character[WC_BUF_LEN];
-	pg_locale_t mylocale = 0;	/* TODO */
 
-	if (clen == 1 || database_ctype_is_c)
+	/* TODO: determine collation properly */
+	pg_locale_t mylocale = get_db_env_locale();
+
+	if (clen == 1 || mylocale->ctype_is_c)
 		return isalnum(TOUCHAR(ptr));
 
 	char2wchar(character, WC_BUF_LEN, ptr, clen, mylocale);
@@ -96,9 +105,11 @@ t_isprint(const char *ptr)
 {
 	int			clen = pg_mblen(ptr);
 	wchar_t		character[WC_BUF_LEN];
-	pg_locale_t mylocale = 0;	/* TODO */
 
-	if (clen == 1 || database_ctype_is_c)
+	/* TODO: determine collation properly */
+	pg_locale_t mylocale = get_db_env_locale();
+
+	if (clen == 1 || mylocale->ctype_is_c)
 		return isprint(TOUCHAR(ptr));
 
 	char2wchar(character, WC_BUF_LEN, ptr, clen, mylocale);
@@ -266,7 +277,9 @@ char *
 lowerstr_with_len(const char *str, int len)
 {
 	char	   *out;
-	pg_locale_t mylocale = 0;	/* TODO */
+
+	/* TODO: determine collation properly */
+	pg_locale_t mylocale = get_db_env_locale();
 
 	if (len == 0)
 		return pstrdup("");
@@ -277,7 +290,7 @@ lowerstr_with_len(const char *str, int len)
 	 * Also, for a C locale there is no need to process as multibyte. From
 	 * backend/utils/adt/oracle_compat.c Teodor
 	 */
-	if (pg_database_encoding_max_length() > 1 && !database_ctype_is_c)
+	if (pg_database_encoding_max_length() > 1 && !mylocale->ctype_is_c)
 	{
 		wchar_t    *wstr,
 				   *wptr;

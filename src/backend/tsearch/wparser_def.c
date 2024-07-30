@@ -17,6 +17,7 @@
 #include <limits.h>
 #include <wctype.h>
 
+#include "catalog/pg_collation.h"
 #include "commands/defrem.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
@@ -299,10 +300,11 @@ TParserInit(char *str, int len)
 	 */
 	if (prs->charmaxlen > 1)
 	{
-		pg_locale_t mylocale = 0;	/* TODO */
+		/* TODO: determine collation properly */
+		pg_locale_t mylocale = get_db_env_locale();
 
 		prs->usewide = true;
-		if (database_ctype_is_c)
+		if (mylocale->ctype_is_c)
 		{
 			/*
 			 * char2wchar doesn't work for C-locale and sizeof(pg_wchar) could

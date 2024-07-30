@@ -4673,6 +4673,7 @@ convert_string_datum(Datum value, Oid typid, Oid collid, bool *failure)
 
 	if (!lc_collate_is_c(collid))
 	{
+		pg_locale_t mylocale = pg_newlocale_from_collation(collid);
 		char	   *xfrmstr;
 		size_t		xfrmlen;
 		size_t		xfrmlen2 PG_USED_FOR_ASSERTS_ONLY;
@@ -4685,8 +4686,12 @@ convert_string_datum(Datum value, Oid typid, Oid collid, bool *failure)
 		 * bogus data or set an error. This is not really a problem unless it
 		 * crashes since it will only give an estimation error and nothing
 		 * fatal.
+		 *
+		 * XXX: we do not check pg_strxfrm_enabled(). On some platforms and in
+		 * some cases, libc strxfrm() may return the wrong results, but that
+		 * will only lead to an estimation error.
 		 */
-		xfrmlen = strxfrm(NULL, val, 0);
+		xfrmlen = pg_strxfrm(NULL, val, 0, mylocale);
 #ifdef WIN32
 
 		/*
@@ -4698,7 +4703,7 @@ convert_string_datum(Datum value, Oid typid, Oid collid, bool *failure)
 			return val;
 #endif
 		xfrmstr = (char *) palloc(xfrmlen + 1);
-		xfrmlen2 = strxfrm(xfrmstr, val, xfrmlen + 1);
+		xfrmlen2 = pg_strxfrm(xfrmstr, val, xfrmlen + 1, mylocale);
 
 		/*
 		 * Some systems (e.g., glibc) can return a smaller value from the

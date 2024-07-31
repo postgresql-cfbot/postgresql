@@ -143,7 +143,7 @@ static void load_relmap_file(bool shared, bool lock_held);
 static void read_relmap_file(RelMapFile *map, char *dbpath, bool lock_held,
 							 int elevel);
 static void write_relmap_file(RelMapFile *newmap, bool write_wal,
-							  bool send_sinval, bool preserve_files,
+							  bool send_sinval,
 							  Oid dbid, Oid tsid, const char *dbpath);
 static void perform_relmap_update(bool shared, const RelMapFile *updates);
 
@@ -309,7 +309,7 @@ RelationMapCopy(Oid dbid, Oid tsid, char *srcdbpath, char *dstdbpath)
 	 * file.
 	 */
 	LWLockAcquire(RelationMappingLock, LW_EXCLUSIVE);
-	write_relmap_file(&map, true, false, false, dbid, tsid, dstdbpath);
+	write_relmap_file(&map, true, false, dbid, tsid, dstdbpath);
 	LWLockRelease(RelationMappingLock);
 }
 
@@ -634,9 +634,9 @@ RelationMapFinishBootstrap(void)
 
 	/* Write the files; no WAL or sinval needed */
 	LWLockAcquire(RelationMappingLock, LW_EXCLUSIVE);
-	write_relmap_file(&shared_map, false, false, false,
+	write_relmap_file(&shared_map, false, false,
 					  InvalidOid, GLOBALTABLESPACE_OID, "global");
-	write_relmap_file(&local_map, false, false, false,
+	write_relmap_file(&local_map, false, false,
 					  MyDatabaseId, MyDatabaseTableSpace, DatabasePath);
 	LWLockRelease(RelationMappingLock);
 }
@@ -887,7 +887,7 @@ read_relmap_file(RelMapFile *map, char *dbpath, bool lock_held, int elevel)
  */
 static void
 write_relmap_file(RelMapFile *newmap, bool write_wal, bool send_sinval,
-				  bool preserve_files, Oid dbid, Oid tsid, const char *dbpath)
+				  Oid dbid, Oid tsid, const char *dbpath)
 {
 	int			fd;
 	char		mapfilename[MAXPGPATH];
@@ -1000,19 +1000,6 @@ write_relmap_file(RelMapFile *newmap, bool write_wal, bool send_sinval,
 	if (send_sinval)
 		CacheInvalidateRelmap(dbid);
 
-	/*
-	 * There was a call to RelationPreserveStorage(). It was originally
-	 * intended to ensure that storage files committed in subtransactions would
-	 * survive an outer transaction's abort. This was introduced by commit
-	 * b9b8831ad6 in 2010, but no use case has emerged since then. To simplify
-	 * the UNDO log system, this code has been removed. See
-	 * RelationMapUpdateMap() for more details.  Now, we only check that this
-	 * function is called in a top transaction.
-	 *
-	 * During boot processing or recovery, the nest level will be zero.
-	 */
-	Assert(!preserve_files || GetCurrentTransactionNestLevel() <= 1);
-
 	/* Critical section done */
 	if (write_wal)
 		END_CRIT_SECTION();
@@ -1058,8 +1045,20 @@ perform_relmap_update(bool shared, const RelMapFile *updates)
 	 */
 	merge_map_updates(&newmap, updates, allowSystemTableMods);
 
+	/*
+	 * write_relmap_file() had a feature to allow storage files committed in
+	 * subtransactions to survive the aborts of outer transactions. This was
+	 * introduced by commit b9b8831ad6 in 2010, but no use case has emerged
+	 * since then.  To keep the UNDO log system straightforward, this code has
+	 * been removed. See `RelationMapUpdateMap()` for more details. Now, we
+	 * only check that this function is called in a top-level transaction.
+	 *
+	 * During boot processing or recovery, the nest level will be zero.
+	 */
+	Assert (GetCurrentTransactionNestLevel() <= 1);
+
 	/* Write out the updated map and do other necessary tasks */
-	write_relmap_file(&newmap, true, true, true,
+	write_relmap_file(&newmap, true, true,
 					  (shared ? InvalidOid : MyDatabaseId),
 					  (shared ? GLOBALTABLESPACE_OID : MyDatabaseTableSpace),
 					  (shared ? "global" : DatabasePath));
@@ -1118,7 +1117,7 @@ relmap_redo(XLogReaderState *record)
 		 * performed.
 		 */
 		LWLockAcquire(RelationMappingLock, LW_EXCLUSIVE);
-		write_relmap_file(&newmap, false, true, false,
+		write_relmap_file(&newmap, false, true,
 						  xlrec->dbid, xlrec->tsid, dbpath);
 		LWLockRelease(RelationMappingLock);
 

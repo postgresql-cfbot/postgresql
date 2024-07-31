@@ -209,6 +209,10 @@ static int	nbinaryUpgradeClassOids = 0;
 static SequenceItem *sequences = NULL;
 static int	nsequences = 0;
 
+/* functions */
+static Oid *funcoids = NULL;
+static PGresult *funcs = NULL;
+
 /*
  * The default number of rows per INSERT when
  * --inserts is specified without --rows-per-insert
@@ -289,6 +293,7 @@ static void dumpCompositeTypeColComments(Archive *fout, const TypeInfo *tyinfo,
 										 PGresult *res);
 static void dumpShellType(Archive *fout, const ShellTypeInfo *stinfo);
 static void dumpProcLang(Archive *fout, const ProcLangInfo *plang);
+static void collectFuncs(Archive *fout);
 static void dumpFunc(Archive *fout, const FuncInfo *finfo);
 static void dumpCast(Archive *fout, const CastInfo *cast);
 static void dumpTransform(Archive *fout, const TransformInfo *transform);
@@ -1031,6 +1036,10 @@ main(int argc, char **argv)
 
 	/* Collect sequence information. */
 	collectSequences(fout);
+
+	/* Collect function information. */
+	if (!dopt.dataOnly)
+		collectFuncs(fout);
 
 	/* Lastly, create dummy objects to represent the section boundaries */
 	boundaryObjs = createBoundaryObjects();
@@ -12065,6 +12074,101 @@ format_function_signature(Archive *fout, const FuncInfo *finfo, bool honor_quote
 	return fn.data;
 }
 
+/*
+ * bsearch() comparator for Oid
+ */
+static int
+OidCmp(const void *p1, const void *p2)
+{
+	Oid			o1 = *((const Oid *) p1);
+	Oid			o2 = *((const Oid *) p2);
+
+	return pg_cmp_u32(o1, o2);
+}
+
+/*
+ * collectFuncs
+ *
+ * Obtain function metadata and construct an ordered array of function OIDs for
+ * use by dumpFunc() to quickly find the index of a function entry.
+ */
+static void
+collectFuncs(Archive *fout)
+{
+	PQExpBuffer query = createPQExpBuffer();
+
+	Assert(!funcs);
+
+	appendPQExpBufferStr(query,
+						 "SELECT\n"
+						 "p.oid\n"
+						 "proretset,\n"
+						 "prosrc,\n"
+						 "probin,\n"
+						 "provolatile,\n"
+						 "proisstrict,\n"
+						 "prosecdef,\n"
+						 "lanname,\n"
+						 "proconfig,\n"
+						 "procost,\n"
+						 "prorows,\n"
+						 "pg_catalog.pg_get_function_arguments(p.oid) AS funcargs,\n"
+						 "pg_catalog.pg_get_function_identity_arguments(p.oid) AS funciargs,\n"
+						 "pg_catalog.pg_get_function_result(p.oid) AS funcresult,\n"
+						 "proleakproof,\n");
+
+	if (fout->remoteVersion >= 90500)
+		appendPQExpBufferStr(query,
+							 "array_to_string(protrftypes, ' ') AS protrftypes,\n");
+	else
+		appendPQExpBufferStr(query,
+							 "NULL AS protrftypes,\n");
+
+	if (fout->remoteVersion >= 90600)
+		appendPQExpBufferStr(query,
+							 "proparallel,\n");
+	else
+		appendPQExpBufferStr(query,
+							 "'u' AS proparallel,\n");
+
+	if (fout->remoteVersion >= 110000)
+		appendPQExpBufferStr(query,
+							 "prokind,\n");
+	else
+		appendPQExpBufferStr(query,
+							 "CASE WHEN proiswindow THEN 'w' ELSE 'f' END AS prokind,\n");
+
+	if (fout->remoteVersion >= 120000)
+		appendPQExpBufferStr(query,
+							 "prosupport,\n");
+	else
+		appendPQExpBufferStr(query,
+							 "'-' AS prosupport,\n");
+
+	if (fout->remoteVersion >= 140000)
+		appendPQExpBufferStr(query,
+							 "pg_get_function_sqlbody(p.oid) AS prosqlbody\n");
+	else
+		appendPQExpBufferStr(query,
+							 "NULL AS prosqlbody\n");
+
+	appendPQExpBufferStr(query,
+						 "FROM pg_catalog.pg_proc p, pg_catalog.pg_language l\n"
+						 "WHERE l.oid = p.prolang\n"
+						 "ORDER BY p.oid");
+
+	funcs = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+	funcoids = (Oid *) pg_malloc(PQntuples(funcs) * sizeof(Oid));
+
+	for (int i = 0; i < PQntuples(funcs); i++)
+		funcoids[i] = atooid(PQgetvalue(funcs, i, 0));
+
+	/*
+	 * NB: we intentionally do not free the PGresult storage because
+	 * dumpFunc() will reference it.
+	 */
+	destroyPQExpBuffer(query);
+}
 
 /*
  * dumpFunc:
@@ -12074,11 +12178,9 @@ static void
 dumpFunc(Archive *fout, const FuncInfo *finfo)
 {
 	DumpOptions *dopt = fout->dopt;
-	PQExpBuffer query;
 	PQExpBuffer q;
 	PQExpBuffer delqry;
 	PQExpBuffer asPart;
-	PGresult   *res;
 	char	   *funcsig;		/* identity signature */
 	char	   *funcfullsig = NULL; /* full signature */
 	char	   *funcsig_tag;
@@ -12105,118 +12207,51 @@ dumpFunc(Archive *fout, const FuncInfo *finfo)
 	char	  **configitems = NULL;
 	int			nconfigitems = 0;
 	const char *keyword;
+	Oid		   *funcoid;
+	int			funcidx;
 
 	/* Do nothing in data-only dump */
 	if (dopt->dataOnly)
 		return;
 
-	query = createPQExpBuffer();
+	Assert(funcs);
+
 	q = createPQExpBuffer();
 	delqry = createPQExpBuffer();
 	asPart = createPQExpBuffer();
 
-	if (!fout->is_prepared[PREPQUERY_DUMPFUNC])
+	funcoid = bsearch(&finfo->dobj.catId.oid, funcoids,
+					  PQntuples(funcs), sizeof(Oid), OidCmp);
+	funcidx = funcoid - funcoids;
+
+	proretset = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "proretset"));
+	if (PQgetisnull(funcs, funcidx, PQfnumber(funcs, "prosqlbody")))
 	{
-		/* Set up query for function-specific details */
-		appendPQExpBufferStr(query,
-							 "PREPARE dumpFunc(pg_catalog.oid) AS\n");
-
-		appendPQExpBufferStr(query,
-							 "SELECT\n"
-							 "proretset,\n"
-							 "prosrc,\n"
-							 "probin,\n"
-							 "provolatile,\n"
-							 "proisstrict,\n"
-							 "prosecdef,\n"
-							 "lanname,\n"
-							 "proconfig,\n"
-							 "procost,\n"
-							 "prorows,\n"
-							 "pg_catalog.pg_get_function_arguments(p.oid) AS funcargs,\n"
-							 "pg_catalog.pg_get_function_identity_arguments(p.oid) AS funciargs,\n"
-							 "pg_catalog.pg_get_function_result(p.oid) AS funcresult,\n"
-							 "proleakproof,\n");
-
-		if (fout->remoteVersion >= 90500)
-			appendPQExpBufferStr(query,
-								 "array_to_string(protrftypes, ' ') AS protrftypes,\n");
-		else
-			appendPQExpBufferStr(query,
-								 "NULL AS protrftypes,\n");
-
-		if (fout->remoteVersion >= 90600)
-			appendPQExpBufferStr(query,
-								 "proparallel,\n");
-		else
-			appendPQExpBufferStr(query,
-								 "'u' AS proparallel,\n");
-
-		if (fout->remoteVersion >= 110000)
-			appendPQExpBufferStr(query,
-								 "prokind,\n");
-		else
-			appendPQExpBufferStr(query,
-								 "CASE WHEN proiswindow THEN 'w' ELSE 'f' END AS prokind,\n");
-
-		if (fout->remoteVersion >= 120000)
-			appendPQExpBufferStr(query,
-								 "prosupport,\n");
-		else
-			appendPQExpBufferStr(query,
-								 "'-' AS prosupport,\n");
-
-		if (fout->remoteVersion >= 140000)
-			appendPQExpBufferStr(query,
-								 "pg_get_function_sqlbody(p.oid) AS prosqlbody\n");
-		else
-			appendPQExpBufferStr(query,
-								 "NULL AS prosqlbody\n");
-
-		appendPQExpBufferStr(query,
-							 "FROM pg_catalog.pg_proc p, pg_catalog.pg_language l\n"
-							 "WHERE p.oid = $1 "
-							 "AND l.oid = p.prolang");
-
-		ExecuteSqlStatement(fout, query->data);
-
-		fout->is_prepared[PREPQUERY_DUMPFUNC] = true;
-	}
-
-	printfPQExpBuffer(query,
-					  "EXECUTE dumpFunc('%u')",
-					  finfo->dobj.catId.oid);
-
-	res = ExecuteSqlQueryForSingleRow(fout, query->data);
-
-	proretset = PQgetvalue(res, 0, PQfnumber(res, "proretset"));
-	if (PQgetisnull(res, 0, PQfnumber(res, "prosqlbody")))
-	{
-		prosrc = PQgetvalue(res, 0, PQfnumber(res, "prosrc"));
-		probin = PQgetvalue(res, 0, PQfnumber(res, "probin"));
+		prosrc = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "prosrc"));
+		probin = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "probin"));
 		prosqlbody = NULL;
 	}
 	else
 	{
 		prosrc = NULL;
 		probin = NULL;
-		prosqlbody = PQgetvalue(res, 0, PQfnumber(res, "prosqlbody"));
+		prosqlbody = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "prosqlbody"));
 	}
-	funcargs = PQgetvalue(res, 0, PQfnumber(res, "funcargs"));
-	funciargs = PQgetvalue(res, 0, PQfnumber(res, "funciargs"));
-	funcresult = PQgetvalue(res, 0, PQfnumber(res, "funcresult"));
-	protrftypes = PQgetvalue(res, 0, PQfnumber(res, "protrftypes"));
-	prokind = PQgetvalue(res, 0, PQfnumber(res, "prokind"));
-	provolatile = PQgetvalue(res, 0, PQfnumber(res, "provolatile"));
-	proisstrict = PQgetvalue(res, 0, PQfnumber(res, "proisstrict"));
-	prosecdef = PQgetvalue(res, 0, PQfnumber(res, "prosecdef"));
-	proleakproof = PQgetvalue(res, 0, PQfnumber(res, "proleakproof"));
-	proconfig = PQgetvalue(res, 0, PQfnumber(res, "proconfig"));
-	procost = PQgetvalue(res, 0, PQfnumber(res, "procost"));
-	prorows = PQgetvalue(res, 0, PQfnumber(res, "prorows"));
-	prosupport = PQgetvalue(res, 0, PQfnumber(res, "prosupport"));
-	proparallel = PQgetvalue(res, 0, PQfnumber(res, "proparallel"));
-	lanname = PQgetvalue(res, 0, PQfnumber(res, "lanname"));
+	funcargs = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "funcargs"));
+	funciargs = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "funciargs"));
+	funcresult = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "funcresult"));
+	protrftypes = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "protrftypes"));
+	prokind = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "prokind"));
+	provolatile = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "provolatile"));
+	proisstrict = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "proisstrict"));
+	prosecdef = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "prosecdef"));
+	proleakproof = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "proleakproof"));
+	proconfig = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "proconfig"));
+	procost = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "procost"));
+	prorows = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "prorows"));
+	prosupport = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "prosupport"));
+	proparallel = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "proparallel"));
+	lanname = PQgetvalue(funcs, funcidx, PQfnumber(funcs, "lanname"));
 
 	/*
 	 * See backend/commands/functioncmds.c for details of how the 'AS' clause
@@ -12469,9 +12504,6 @@ dumpFunc(Archive *fout, const FuncInfo *finfo)
 				finfo->dobj.namespace->dobj.name,
 				NULL, finfo->rolname, &finfo->dacl);
 
-	PQclear(res);
-
-	destroyPQExpBuffer(query);
 	destroyPQExpBuffer(q);
 	destroyPQExpBuffer(delqry);
 	destroyPQExpBuffer(asPart);

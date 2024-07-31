@@ -127,6 +127,12 @@
 #endif
 
 /*
+ * Define DEBUG_SETLOCALE_MAP to test the setlocale() replacement function on
+ * Unix sytems.  Normally it is used only on Windows.
+ */
+/* #define DEBUG_SETLOCALE_MAP */
+
+/*
  * USE_POSIX_FADVISE controls whether Postgres will attempt to use the
  * posix_fadvise() kernel call.  Usually the automatic configure tests are
  * sufficient, but some older Linux distributions had broken versions of

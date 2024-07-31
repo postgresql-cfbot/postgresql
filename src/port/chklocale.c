@@ -431,3 +431,10 @@ pg_get_encoding_from_locale(const char *ctype, bool write_message)
 }
 
 #endif							/* (HAVE_LANGINFO_H && CODESET) || WIN32 */
+
+/*
+ * An option allowing Unix developers to test the pgwin32_setlocale() function.
+ */
+#if !defined(WIN32) && defined(DEBUG_SETLOCALE_MAP)
+#include "win32setlocale.c"
+#endif

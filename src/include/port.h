@@ -506,6 +506,17 @@ extern bool wait_result_is_any_signal(int exit_status, bool include_command_not_
 extern int	wait_result_to_exit_code(int exit_status);
 
 /*
+ * Debug-only option to allow Unix systems to test the setlocale() replacement
+ * code we use on Windows.
+ */
+#ifdef DEBUG_SETLOCALE_MAP
+/* port/win32setlocale.c */
+#undef setlocale
+extern char *pgwin32_setlocale(int category, const char *locale);
+#define setlocale(a,b) pgwin32_setlocale(a,b)
+#endif
+
+/*
  * Interfaces that we assume all Unix system have.  We retain individual macros
  * for better documentation.
  *

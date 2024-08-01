@@ -2764,6 +2764,13 @@ typedef struct MergeScanSelCache
  * level of a PlaceHolderVar might be a join rather than a base relation.
  * Likewise, phnullingrels corresponds to varnullingrels.
  *
+ * remove_safe is true if it is safe to remove the PHV and use its contained
+ * expression instead when phnullingrels becomes empty.  This is set true in
+ * cases where the PHV is used to carry the nullingrel bit of the RTE_GROUP RT
+ * index.  In other cases we do not set this flag because PHVs might be used to
+ * enforce separate identity of subexpressions; see wrap_non_vars usages in
+ * prepjointree.c.
+ *
  * Although the planner treats this as an expression node type, it is not
  * recognized by the parser or executor, so we declare it here rather than
  * in primnodes.h.
@@ -2802,6 +2809,9 @@ typedef struct PlaceHolderVar
 
 	/* > 0 if PHV belongs to outer query */
 	Index		phlevelsup;
+
+	/* true if PHV is safe to be removed when phnullingrels becomes empty */
+	bool		remove_safe;
 } PlaceHolderVar;
 
 /*

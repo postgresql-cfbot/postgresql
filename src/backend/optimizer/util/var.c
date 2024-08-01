@@ -1119,6 +1119,8 @@ mark_nullable_by_grouping(PlannerInfo *root, Node *newnode, Var *oldvar)
 			/* newphv has zero phlevelsup and NULL phnullingrels; fix it */
 			newphv->phlevelsup = oldvar->varlevelsup;
 			newphv->phnullingrels = bms_copy(oldvar->varnullingrels);
+			/* It's safe to be removed when phnullingrels becomes empty */
+			newphv->remove_safe = true;
 			newnode = (Node *) newphv;
 		}
 	}

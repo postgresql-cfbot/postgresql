@@ -4020,6 +4020,7 @@ uint8
 uint8_t
 uint8x16_t
 uintptr_t
+ul_smgr_create
 unicodeStyleBorderFormat
 unicodeStyleColumnFormat
 unicodeStyleFormat

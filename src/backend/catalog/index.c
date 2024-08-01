@@ -3040,8 +3040,8 @@ index_build(Relation heapRelation,
 	if (indexRelation->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED &&
 		!smgrexists(RelationGetSmgr(indexRelation), INIT_FORKNUM))
 	{
-		smgrcreate(RelationGetSmgr(indexRelation), INIT_FORKNUM, false);
-		log_smgrcreate(&indexRelation->rd_locator, INIT_FORKNUM);
+		RelationCreateFork(RelationGetSmgr(indexRelation),
+						   INIT_FORKNUM, true, true);
 		indexRelation->rd_indam->ambuildempty(indexRelation);
 	}
 

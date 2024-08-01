@@ -25,6 +25,8 @@ extern PGDLLIMPORT int wal_skip_threshold;
 extern SMgrRelation RelationCreateStorage(RelFileLocator rlocator,
 										  char relpersistence,
 										  bool register_delete);
+extern void RelationCreateFork(SMgrRelation srel, ForkNumber forkNum,
+							   bool wal_log, bool undo_log);
 extern void RelationDropStorage(Relation rel);
 extern void RelationPreserveStorage(RelFileLocator rlocator, bool atCommit);
 extern void RelationPreTruncate(Relation rel);

@@ -4812,8 +4812,7 @@ CreateAndCopyRelationData(RelFileLocator src_rlocator,
 	/*
 	 * Create and copy all forks of the relation.  During create database we
 	 * have a separate cleanup mechanism which deletes complete database
-	 * directory.  Therefore, each individual relation doesn't need to be
-	 * registered for cleanup.
+	 * directory. Therefore, do not issue an UNDO log for this relation.
 	 */
 	RelationCreateStorage(dst_rlocator, relpersistence, false);
 
@@ -4827,6 +4826,7 @@ CreateAndCopyRelationData(RelFileLocator src_rlocator,
 	{
 		if (smgrexists(src_rel, forkNum))
 		{
+			/* Use smgrcreate() directly as no UNDO log is required. */
 			smgrcreate(dst_rel, forkNum, false);
 
 			/*

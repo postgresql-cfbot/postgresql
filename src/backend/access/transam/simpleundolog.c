@@ -25,6 +25,7 @@
 #include "access/twophase_rmgr.h"
 #include "access/xact.h"
 #include "access/xlog.h"
+#include "catalog/storage_ulog.h"
 #include "miscadmin.h"
 #include "storage/fd.h"
 #include "utils/memutils.h"

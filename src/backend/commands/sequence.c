@@ -31,6 +31,7 @@
 #include "catalog/objectaccess.h"
 #include "catalog/pg_sequence.h"
 #include "catalog/pg_type.h"
+#include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
 #include "commands/defrem.h"
 #include "commands/sequence.h"
@@ -344,8 +345,7 @@ fill_seq_with_data(Relation rel, HeapTuple tuple)
 		SMgrRelation srel;
 
 		srel = smgropen(rel->rd_locator, INVALID_PROC_NUMBER);
-		smgrcreate(srel, INIT_FORKNUM, false);
-		log_smgrcreate(&rel->rd_locator, INIT_FORKNUM);
+		RelationCreateFork(srel, INIT_FORKNUM, true, true);
 		fill_seq_fork_with_data(rel, tuple, INIT_FORKNUM);
 		FlushRelationBuffers(rel);
 		smgrclose(srel);

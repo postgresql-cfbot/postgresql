@@ -39,23 +39,44 @@
 
 
 /*
+ * Represents one path factor in a path.
+ *
+ * One path factor corresponds to one element pattern in a simple path.
+ *
+ * In a cyclic path, one path factor may correspond to one or more element
+ * patterns all pointing to the same graph element. The members of such a path
+ * factor are a combination of corresponding specifications in the element
+ * patterns.
+ */
+struct path_factor
+{
+	GraphElementPatternKind kind;
+	const char *variable;
+	Node	   *labelexpr;
+	Node	   *whereClause;
+	int			factorpos;		/* Position of this path factor in a path. */
+	List	   *labeloids;		/* OIDs of all the labels referenced in
+								 * labelexpr. */
+	/* Links to vertex path factors connected by this edge path factor. */
+	struct path_factor *src_pf;
+	struct path_factor *dest_pf;
+};
+
+/*
  * Represents one property graph element (vertex or edge) in the path.
  *
  * Label expression in an element pattern resolves into a set of elements. For
  * each of those elements we create one graph_path_element object.
  */
-struct graph_path_element
+struct path_element
 {
 	Oid			elemoid;
 	Oid			reloid;
-	int			rtindex;
-	List	   *labeloids;
 	Oid			srcvertexid;
-	int			srcelem_pos;
 	Oid			destvertexid;
-	int			destelem_pos;
 	List	   *qual_exprs;
-	GraphElementPattern *parent_gep;
+	/* Path factor from which this element is derived. */
+	struct path_factor *path_factor;
 };
 
 static Node *replace_property_refs(Oid propgraphid, Node *node, const List *mappings);
@@ -67,7 +88,7 @@ static List *generate_queries_for_path_pattern_recurse(RangeTblEntry *rte, List 
 static Query *generate_query_for_empty_path_pattern(RangeTblEntry *rte);
 static Query *generate_union_from_pathqueries(List **pathqueries);
 static const char *get_gep_kind_name(GraphElementPatternKind gepkind);
-static List *get_elements_for_gep(Oid propgraphid, GraphElementPattern *gep, int elempos);
+static List *get_path_elements_for_path_factor(Oid propgraphid, struct path_factor *pf);
 static bool is_property_associated_with_label(Oid labeloid, Oid propoid);
 static const char *get_graph_elem_kind_name(GraphElementPatternKind gepkind);
 static Node *get_element_property_expr(Oid elemoid, Oid propoid, int rtindex);
@@ -157,8 +178,9 @@ generate_queries_for_path_pattern(RangeTblEntry *rte, List *path_pattern)
 {
 	List	   *pathqueries = NIL;
 	List	   *path_elem_lists = NIL;
-	ListCell   *lc;
-	int			elempos = 0;
+	int			factorpos = 0;
+	List	   *path_factors = NIL;
+	struct path_factor *prev_pf = NULL;
 
 	Assert(list_length(path_pattern) > 0);
 
@@ -166,9 +188,9 @@ generate_queries_for_path_pattern(RangeTblEntry *rte, List *path_pattern)
 	 * For every element pattern in the given path pattern collect all the
 	 * graph elements that satisfy the element pattern.
 	 */
-	foreach(lc, path_pattern)
+	foreach_node(GraphElementPattern, gep, path_pattern)
 	{
-		GraphElementPattern *gep = lfirst_node(GraphElementPattern, lc);
+		struct path_factor *pf = NULL;
 
 		if (gep->kind != VERTEX_PATTERN &&
 			gep->kind != EDGE_PATTERN_LEFT && gep->kind != EDGE_PATTERN_RIGHT)
@@ -177,13 +199,132 @@ generate_queries_for_path_pattern(RangeTblEntry *rte, List *path_pattern)
 		if (gep->quantifier)
 			elog(ERROR, "element pattern quantifier not supported yet");
 
-		path_elem_lists = lappend(path_elem_lists,
-								  get_elements_for_gep(rte->relid, gep, elempos++));
+		/*
+		 * Element patterns with the same name represent the same element and
+		 * hence same path factor. They do not add a new graph element to the
+		 * query but affect the links of adjacent elements.
+		 */
+		foreach_ptr(struct path_factor, other, path_factors)
+		{
+			if (gep->variable && other->variable &&
+				strcmp(gep->variable, other->variable) == 0)
+			{
+				if (other->kind != gep->kind)
+					ereport(ERROR,
+					/* XXX: use correct error code. */
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("element patterns with same variable name \"%s\" but different element pattern types",
+									gep->variable)));
+
+				/*
+				 * If only one of the two element patterns has a label
+				 * expression use it. Otherwise make sure that both of them
+				 * have the same label expression. If they have different
+				 * label expressions they need to be conjuncted. Label
+				 * conjuction is not supported right now.
+				 */
+				if (!other->labelexpr)
+					other->labelexpr = gep->labelexpr;
+				else if (gep->labelexpr && !equal(other->labelexpr, gep->labelexpr))
+					ereport(ERROR,
+					/* XXX: Use correct error code. */
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("element patterns with same variable name \"%s\" but different label expressions",
+									gep->variable)));
+
+				/* Both sets of conditions apply to the element pattern. */
+				if (!other->whereClause)
+					other->whereClause = gep->whereClause;
+				else if (gep->whereClause)
+					other->whereClause = (Node *) makeBoolExpr(AND_EXPR,
+															   list_make2(other->whereClause, gep->whereClause),
+															   -1);
+				pf = other;
+				break;
+			}
+		}
+
+		if (!pf)
+		{
+			{
+				pf = palloc0_object(struct path_factor);
+				pf->factorpos = factorpos++;
+				pf->kind = gep->kind;
+				pf->labelexpr = gep->labelexpr;
+				pf->variable = gep->variable;
+				pf->whereClause = gep->whereClause;
+
+				path_factors = lappend(path_factors, pf);
+			}
+		}
+
+		/*
+		 * Setup adjacent path factors. If multiple edge patterns share the
+		 * same variable name, they constain the adjacent vertex patterns
+		 * since an edge can connect only one pair of vertexes and those
+		 * vertexes also need to repeated along with the edge (a walk). This
+		 * means that we have to coalesce the vertex patterns adjacent to a
+		 * repeated edge even though they have different variables.  E.g.
+		 * (a)-[b]->(c)-[b]<-(d) implies that (a) and (d) represent the same
+		 * vertex element pattern. This is slighly harder to implement and
+		 * probably less useful. Hence not supported for now.
+		 */
+		if (prev_pf)
+		{
+			if (prev_pf->kind == EDGE_PATTERN_RIGHT)
+			{
+				Assert(!IS_EDGE_PATTERN(pf->kind));
+				if (prev_pf->dest_pf && prev_pf->dest_pf != pf)
+					elog(ERROR, "An edge can not connect more than two vertexes even in a cyclic pattern.");
+				prev_pf->dest_pf = pf;
+			}
+			else if (prev_pf->kind == EDGE_PATTERN_LEFT)
+			{
+				Assert(!IS_EDGE_PATTERN(pf->kind));
+				if (prev_pf->src_pf && prev_pf->src_pf != pf)
+					elog(ERROR, "An edge can not connect more than two vertexes even in a cyclic pattern.");
+				prev_pf->src_pf = pf;
+			}
+			else if (prev_pf->kind == EDGE_PATTERN_ANY)
+			{
+				/* We don't support undirected edges yet. */
+				Assert(false);
+			}
+
+			if (pf->kind == EDGE_PATTERN_RIGHT)
+			{
+				Assert(!IS_EDGE_PATTERN(prev_pf->kind));
+				if (pf->src_pf && pf->src_pf != prev_pf)
+					elog(ERROR, "An edge can not connect more than two vertexes even in a cyclic pattern.");
+				pf->src_pf = prev_pf;
+			}
+			else if (pf->kind == EDGE_PATTERN_LEFT)
+			{
+				Assert(!IS_EDGE_PATTERN(prev_pf->kind));
+				if (pf->dest_pf && pf->dest_pf != prev_pf)
+					elog(ERROR, "An edge can not connect more than two vertexes even in a cyclic pattern.");
+				pf->dest_pf = prev_pf;
+			}
+			else if (pf->kind == EDGE_PATTERN_ANY)
+			{
+				/* We don't support undirected edges yet. */
+				Assert(false);
+			}
+		}
+
+		prev_pf = pf;
 	}
+
+	/*
+	 * Collect list of elements for each path factor. Do this after all the
+	 * edge links are setup correctly.
+	 */
+	foreach_ptr(struct path_factor, pf, path_factors)
+		path_elem_lists = lappend(path_elem_lists,
+								  get_path_elements_for_path_factor(rte->relid, pf));
 
 	pathqueries = generate_queries_for_path_pattern_recurse(rte, pathqueries,
 															NIL, path_elem_lists, 0);
-
 	if (!pathqueries)
 		pathqueries = list_make1(generate_query_for_empty_path_pattern(rte));
 
@@ -196,15 +337,12 @@ generate_queries_for_path_pattern(RangeTblEntry *rte, List *path_pattern)
 static List *
 generate_queries_for_path_pattern_recurse(RangeTblEntry *rte, List *pathqueries, List *cur_path, List *path_elem_lists, int elempos)
 {
-	List	   *gep_elems = list_nth_node(List, path_elem_lists, elempos);
-	ListCell   *lc;
+	List	   *path_elems = list_nth_node(List, path_elem_lists, elempos);
 
-	foreach(lc, gep_elems)
+	foreach_ptr(struct path_element, pe, path_elems)
 	{
-		struct graph_path_element *elem = lfirst(lc);
-
 		/* Update current path being built with current element. */
-		cur_path = lappend(cur_path, elem);
+		cur_path = lappend(cur_path, pe);
 
 		/*
 		 * If this is the last element in the path, generate query for the
@@ -238,50 +376,47 @@ generate_queries_for_path_pattern_recurse(RangeTblEntry *rte, List *pathqueries,
 static Query *
 generate_query_for_graph_path(RangeTblEntry *rte, List *graph_path)
 {
-	ListCell   *lc;
 	Query	   *path_query = makeNode(Query);
 	List	   *fromlist = NIL;
 	List	   *qual_exprs = NIL;
 
 	path_query->commandType = CMD_SELECT;
 
-	foreach(lc, graph_path)
+	foreach_ptr(struct path_element, pe, graph_path)
 	{
-		struct graph_path_element *gpe = (struct graph_path_element *) lfirst(lc);
-		GraphElementPattern *gep = gpe->parent_gep;
+		struct path_factor *pf = pe->path_factor;
 		RangeTblRef *rtr;
 		Relation	rel;
 		ParseNamespaceItem *pni;
 
-		Assert(gep->kind == VERTEX_PATTERN ||
-			   gep->kind == EDGE_PATTERN_LEFT || gep->kind == EDGE_PATTERN_RIGHT);
-		Assert(!gep->quantifier);
+		Assert(pf->kind == VERTEX_PATTERN ||
+			   pf->kind == EDGE_PATTERN_LEFT || pf->kind == EDGE_PATTERN_RIGHT);
 
-		if (gep->kind == EDGE_PATTERN_LEFT || gep->kind == EDGE_PATTERN_RIGHT)
+		if (pf->kind == EDGE_PATTERN_LEFT || pf->kind == EDGE_PATTERN_RIGHT)
 		{
-			struct graph_path_element *src_gpe = list_nth(graph_path, gpe->srcelem_pos);
-			struct graph_path_element *dest_gpe = list_nth(graph_path, gpe->destelem_pos);
+			struct path_element *src_pe;
+			struct path_element *dest_ge;
 
-			/*
-			 * Make sure that the source and destination elements of this edge
-			 * are placed at the expected position and have the corret
-			 * RangeTblEntry indexes as setup by create_gpe_for_element().
-			 */
-			Assert(gpe->srcelem_pos == src_gpe->rtindex - 1 &&
-				   gpe->destelem_pos == dest_gpe->rtindex - 1);
+			Assert(pf->src_pf && pf->dest_pf);
+			src_pe = list_nth(graph_path, pf->src_pf->factorpos);
+			dest_ge = list_nth(graph_path, pf->dest_pf->factorpos);
+
+			/* Make sure that the links of adjacent vertices are correct. */
+			Assert(pf->src_pf == src_pe->path_factor &&
+				   pf->dest_pf == dest_ge->path_factor);
 
 			/*
 			 * If the given edge element does not connect the adjacent vertex
 			 * elements in this path, the path is broken. Abandon this path as
 			 * it won't return any rows.
 			 */
-			if (src_gpe->elemoid != gpe->srcvertexid ||
-				dest_gpe->elemoid != gpe->destvertexid)
+			if (src_pe->elemoid != pe->srcvertexid ||
+				dest_ge->elemoid != pe->destvertexid)
 				return NULL;
 		}
 
 		/* Create RangeTblEntry for this element table. */
-		rel = table_open(gpe->reloid, AccessShareLock);
+		rel = table_open(pe->reloid, AccessShareLock);
 		pni = addRangeTableEntryForRelation(make_parsestate(NULL), rel, AccessShareLock,
 											NULL, true, false);
 		table_close(rel, NoLock);
@@ -297,17 +432,17 @@ generate_query_for_graph_path(RangeTblEntry *rte, List *graph_path)
 		 * holds true. That the elements' RangeTblEntrys are added in the
 		 * order in which they appear in the path.
 		 */
-		Assert(gpe->rtindex == rtr->rtindex);
+		Assert(pf->factorpos + 1 == rtr->rtindex);
 
-		if (gep->whereClause)
+		if (pf->whereClause)
 		{
 			Node	   *tr;
 
-			tr = replace_property_refs(rte->relid, gep->whereClause, list_make1(gpe));
+			tr = replace_property_refs(rte->relid, pf->whereClause, list_make1(pe));
 
 			qual_exprs = lappend(qual_exprs, tr);
 		}
-		qual_exprs = list_concat(qual_exprs, gpe->qual_exprs);
+		qual_exprs = list_concat(qual_exprs, pe->qual_exprs);
 	}
 
 	if (rte->graph_pattern->whereClause)
@@ -339,7 +474,6 @@ static Query *
 generate_query_for_empty_path_pattern(RangeTblEntry *rte)
 {
 	Query	   *query = makeNode(Query);
-	ListCell   *lc;
 
 	query->commandType = CMD_SELECT;
 
@@ -355,9 +489,8 @@ generate_query_for_empty_path_pattern(RangeTblEntry *rte)
 	 * columns as projected by GRAPH_TABLE clause. Do this by constructing a
 	 * target list full of NULL values.
 	 */
-	foreach(lc, rte->graph_table_columns)
+	foreach_node(TargetEntry, te, rte->graph_table_columns)
 	{
-		TargetEntry *te = copyObject(lfirst_node(TargetEntry, lc));
 		Node	   *nte = (Node *) te->expr;
 
 		te->expr = (Expr *) makeNullConst(exprType(nte), exprTypmod(nte), exprCollation(nte));
@@ -483,13 +616,9 @@ generate_setop_from_pathqueries(List *pathqueries, List **rtable, List **targetl
 		 */
 		if (targetlist)
 		{
-			ListCell   *tl;
-
 			*targetlist = NIL;
-			foreach(tl, lquery->targetList)
+			foreach_node(TargetEntry, tle, lquery->targetList)
 			{
-				TargetEntry *tle = (TargetEntry *) lfirst(tl);
-
 				if (!tle->resjunk)
 					*targetlist = lappend(*targetlist, tle);
 			}
@@ -516,29 +645,29 @@ generate_setop_from_pathqueries(List *pathqueries, List **rtable, List **targetl
  * If the type of graph element does not fit the element pattern kind, the
  * function returns NULL.
  */
-static struct graph_path_element *
-create_gpe_for_element(GraphElementPattern *gep, Oid elemoid, int elempos)
+static struct path_element *
+create_gpe_for_element(struct path_factor *pf, Oid elemoid)
 {
 	HeapTuple	eletup = SearchSysCache1(PROPGRAPHELOID, ObjectIdGetDatum(elemoid));
 	Form_pg_propgraph_element pgeform;
-	struct graph_path_element *gpe;
+	struct path_element *pe;
 
 	if (!eletup)
 		elog(ERROR, "cache lookup failed for property graph element %u", elemoid);
 	pgeform = ((Form_pg_propgraph_element) GETSTRUCT(eletup));
 
-	if ((pgeform->pgekind == PGEKIND_VERTEX && gep->kind != VERTEX_PATTERN) ||
-		(pgeform->pgekind == PGEKIND_EDGE && !IS_EDGE_PATTERN(gep->kind)))
+	if ((pgeform->pgekind == PGEKIND_VERTEX && pf->kind != VERTEX_PATTERN) ||
+		(pgeform->pgekind == PGEKIND_EDGE && !IS_EDGE_PATTERN(pf->kind)))
 	{
 		ReleaseSysCache(eletup);
 		return NULL;
 	}
 
-	gpe = palloc0_object(struct graph_path_element);
-	gpe->parent_gep = gep;
-	gpe->elemoid = elemoid;
-	gpe->reloid = pgeform->pgerelid;
-	gpe->qual_exprs = NIL;
+	pe = palloc0_object(struct path_element);
+	pe->path_factor = pf;
+	pe->elemoid = elemoid;
+	pe->reloid = pgeform->pgerelid;
+	pe->qual_exprs = NIL;
 
 	/*
 	 * When the path containing this element will be converted into a query
@@ -550,54 +679,40 @@ create_gpe_for_element(GraphElementPattern *gep, Oid elemoid, int elempos)
 	 * as the number of paths this element appears in. Hence save the assumed
 	 * rtindex so that it can be verified later.
 	 */
-	gpe->rtindex = elempos + 1;
-
-	if (IS_EDGE_PATTERN(gep->kind))
+	if (IS_EDGE_PATTERN(pf->kind))
 	{
-		int			src_rtindex;
-		int			dest_rtindex;
 		List	   *edge_qual;
 
-		gpe->srcvertexid = pgeform->pgesrcvertexid;
-		gpe->destvertexid = pgeform->pgedestvertexid;
+		pe->srcvertexid = pgeform->pgesrcvertexid;
+		pe->destvertexid = pgeform->pgedestvertexid;
+		Assert(pf->src_pf && pf->dest_pf);
 
-		if (gep->kind == EDGE_PATTERN_RIGHT)
-		{
-			gpe->srcelem_pos = elempos - 1;
-			gpe->destelem_pos = elempos + 1;
-			src_rtindex = gpe->rtindex - 1;
-			dest_rtindex = gpe->rtindex + 1;
-		}
-		else if (gep->kind == EDGE_PATTERN_LEFT)
-		{
-			gpe->srcelem_pos = elempos + 1;
-			gpe->destelem_pos = elempos - 1;
-			src_rtindex = gpe->rtindex + 1;
-			dest_rtindex = gpe->rtindex - 1;
-		}
-		else
-		{
-			/* We don't support undirected edges yet. */
-			Assert(false);
-			gpe->srcelem_pos = elempos;
-			gpe->destelem_pos = elempos;
-			src_rtindex = gpe->rtindex;
-			dest_rtindex = gpe->rtindex;
-		}
-
-		edge_qual = build_edge_vertex_link_quals(eletup, gpe->rtindex, src_rtindex,
+		/*
+		 * When the path containing this element will be converted into a
+		 * query (generate_query_for_graph_path()) this element will be
+		 * converted into a RangeTblEntry. The RangeTblEntrys are created in
+		 * the same order in which elements appear in the path and thus get
+		 * consecutive RangeTable indexes. So we can safely assign the
+		 * RangeTable index of this element before creating RangeTblEntry for
+		 * it. This helps crafting the quals linking an edge to the adjacent
+		 * vertexes only once while we have access to the catalog entry of the
+		 * element. Otherwise, we need to craft the quals as many times as the
+		 * number of paths this element appears in, fetching the catalog entry
+		 * each time.
+		 */
+		edge_qual = build_edge_vertex_link_quals(eletup, pf->factorpos + 1, pf->src_pf->factorpos + 1,
 												 Anum_pg_propgraph_element_pgesrckey,
 												 Anum_pg_propgraph_element_pgesrcref);
-		gpe->qual_exprs = list_concat(gpe->qual_exprs, edge_qual);
-		edge_qual = build_edge_vertex_link_quals(eletup, gpe->rtindex, dest_rtindex,
+		pe->qual_exprs = list_concat(pe->qual_exprs, edge_qual);
+		edge_qual = build_edge_vertex_link_quals(eletup, pf->factorpos + 1, pf->dest_pf->factorpos + 1,
 												 Anum_pg_propgraph_element_pgedestkey,
 												 Anum_pg_propgraph_element_pgedestref);
-		gpe->qual_exprs = list_concat(gpe->qual_exprs, edge_qual);
+		pe->qual_exprs = list_concat(pe->qual_exprs, edge_qual);
 	}
 
 	ReleaseSysCache(eletup);
 
-	return gpe;
+	return pe;
 }
 
 static const char *
@@ -669,15 +784,10 @@ get_labels_for_expr(Oid propgraphid, Node *labelexpr)
 	{
 		BoolExpr   *be = castNode(BoolExpr, labelexpr);
 		List	   *label_exprs = be->args;
-		ListCell   *llc;
 
 		label_oids = NIL;
-		foreach(llc, label_exprs)
-		{
-			GraphLabelRef *glr = lfirst_node(GraphLabelRef, llc);
-
+		foreach_node(GraphLabelRef, glr, label_exprs)
 			label_oids = lappend_oid(label_oids, glr->labelid);
-		}
 	}
 	else
 		elog(ERROR, "unsupported label expression type: %d", (int) nodeTag(labelexpr));
@@ -698,22 +808,21 @@ get_labels_for_expr(Oid propgraphid, Node *labelexpr)
  * `elempos` is position of the element pattern in the path pattern.
  */
 static List *
-get_elements_for_gep(Oid propgraphid, GraphElementPattern *gep, int elempos)
+get_path_elements_for_path_factor(Oid propgraphid, struct path_factor *pf)
 {
-	List	   *label_oids = get_labels_for_expr(propgraphid, gep->labelexpr);
+	List	   *label_oids = get_labels_for_expr(propgraphid, pf->labelexpr);
 	List	   *elem_oids_seen = NIL;
-	List	   *elem_gpe_oids = NIL;
-	List	   *elem_gpes = NIL;
-	ListCell   *lc;
+	List	   *pf_elem_oids = NIL;
+	List	   *path_elements = NIL;
+	List	   *unresolved_labels = NIL;
 	Relation	rel;
 	SysScanDesc scan;
 	ScanKeyData key[1];
 	HeapTuple	tup;
 
 	rel = table_open(PropgraphElementLabelRelationId, AccessShareLock);
-	foreach(lc, label_oids)
+	foreach_oid(labeloid, label_oids)
 	{
-		Oid			labeloid = lfirst_oid(lc);
 		bool		found = false;
 
 		ScanKeyInit(&key[0],
@@ -736,12 +845,12 @@ get_elements_for_gep(Oid propgraphid, GraphElementPattern *gep, int elempos)
 				 * the current label has at least one element, that satisfies
 				 * the given element pattern, associated with it.
 				 */
-				struct graph_path_element *gpe = create_gpe_for_element(gep, elem_oid, elempos);
+				struct path_element *pe = create_gpe_for_element(pf, elem_oid);
 
-				if (gpe)
+				if (pe)
 				{
-					elem_gpes = lappend(elem_gpes, gpe);
-					elem_gpe_oids = lappend_oid(elem_gpe_oids, elem_oid);
+					path_elements = lappend(path_elements, pe);
+					pf_elem_oids = lappend_oid(pf_elem_oids, elem_oid);
 					found = true;
 				}
 
@@ -749,11 +858,11 @@ get_elements_for_gep(Oid propgraphid, GraphElementPattern *gep, int elempos)
 				 * Add the graph element to the elements considered so far to
 				 * avoid processing same element associated with multiple
 				 * labels multiple times. Also avoids creating duplicate
-				 * GraphPathElements.
+				 * path_element structures.
 				 */
 				elem_oids_seen = lappend_oid(elem_oids_seen, label_elem->pgelelid);
 			}
-			else if (list_member_oid(elem_gpe_oids, elem_oid))
+			else if (list_member_oid(pf_elem_oids, elem_oid))
 			{
 				/*
 				 * The graph element is known to qualify the given element
@@ -774,30 +883,27 @@ get_elements_for_gep(Oid propgraphid, GraphElementPattern *gep, int elempos)
 			 * error if the label was explicitly specified in the element
 			 * pattern. Otherwise just Remove it from the list.
 			 */
-			if (!gep->labelexpr)
-				foreach_delete_current(label_oids, lc);
+			if (!pf->labelexpr)
+				unresolved_labels = lappend_oid(unresolved_labels, labeloid);
 			else
 				ereport(ERROR,
 						(errcode(ERRCODE_UNDEFINED_OBJECT),
 						 errmsg("can not find label \"%s\" in property graph \"%s\" for element type \"%s\"",
 								get_propgraph_label_name(labeloid),
 								get_rel_name(propgraphid),
-								get_graph_elem_kind_name(gep->kind))));
+								get_graph_elem_kind_name(pf->kind))));
 		}
 
 		systable_endscan(scan);
 	}
 	table_close(rel, AccessShareLock);
 
-	/* Update the filtered label list in each graph_path_element. */
-	foreach(lc, elem_gpes)
-	{
-		struct graph_path_element *gpe = lfirst(lc);
-
-		gpe->labeloids = label_oids;
-	}
-
-	return elem_gpes;
+	/*
+	 * Remember the OIDs of resolved labels for the given path factor for
+	 * later use .
+	 */
+	pf->labeloids = list_difference_oid(label_oids, unresolved_labels);
+	return path_elements;
 }
 
 static const char *
@@ -846,15 +952,13 @@ replace_property_refs_mutator(Node *node, struct replace_property_refs_context *
 	{
 		GraphPropertyRef *gpr = (GraphPropertyRef *) node;
 		Node	   *n = NULL;
-		ListCell   *lc;
-		struct graph_path_element *found_mapping = NULL;
+		struct path_element *found_mapping = NULL;
+		struct path_factor *mapping_factor = NULL;
 		List	   *unrelated_labels = NIL;
 
-		foreach(lc, context->mappings)
+		foreach_ptr(struct path_element, m, context->mappings)
 		{
-			struct graph_path_element *m = lfirst(lc);
-
-			if (m->parent_gep->variable && strcmp(gpr->elvarname, m->parent_gep->variable) == 0)
+			if (m->path_factor->variable && strcmp(gpr->elvarname, m->path_factor->variable) == 0)
 			{
 				found_mapping = m;
 				break;
@@ -863,13 +967,14 @@ replace_property_refs_mutator(Node *node, struct replace_property_refs_context *
 		if (!found_mapping)
 			elog(ERROR, "undefined element variable \"%s\"", gpr->elvarname);
 
+		mapping_factor = found_mapping->path_factor;
+
 		/*
 		 * Find property definition for given element through any of the
 		 * associated labels.
 		 */
-		foreach(lc, found_mapping->labeloids)
+		foreach_oid(labeloid, mapping_factor->labeloids)
 		{
-			Oid			labeloid = lfirst_oid(lc);
 			Oid			elem_labelid = GetSysCacheOid2(PROPGRAPHELEMENTLABELELEMENTLABEL,
 													   Anum_pg_propgraph_element_label_oid,
 													   ObjectIdGetDatum(found_mapping->elemoid),
@@ -892,7 +997,7 @@ replace_property_refs_mutator(Node *node, struct replace_property_refs_context *
 
 				n = stringToNode(TextDatumGetCString(SysCacheGetAttrNotNull(PROPGRAPHLABELPROP,
 																			tup, Anum_pg_propgraph_label_property_plpexpr)));
-				ChangeVarNodes(n, 1, found_mapping->rtindex, 0);
+				ChangeVarNodes(n, 1, mapping_factor->factorpos + 1, 0);
 
 				ReleaseSysCache(tup);
 			}
@@ -910,12 +1015,11 @@ replace_property_refs_mutator(Node *node, struct replace_property_refs_context *
 		/* See if we can resolve the property in some other way. */
 		if (!n)
 		{
-			ListCell   *lcu;
 			bool		prop_associated = false;
 
-			foreach(lcu, unrelated_labels)
+			foreach_oid(loid, unrelated_labels)
 			{
-				if (is_property_associated_with_label(lfirst_oid(lcu), gpr->propid))
+				if (is_property_associated_with_label(loid, gpr->propid))
 				{
 					prop_associated = true;
 					break;
@@ -941,7 +1045,7 @@ replace_property_refs_mutator(Node *node, struct replace_property_refs_context *
 				 * rows to the GRAPH_TABLE.
 				 */
 				n = get_element_property_expr(found_mapping->elemoid, gpr->propid,
-											  found_mapping->rtindex);
+											  mapping_factor->factorpos + 1);
 
 				if (!n)
 				{
@@ -954,7 +1058,7 @@ replace_property_refs_mutator(Node *node, struct replace_property_refs_context *
 
 		if (!n)
 			elog(ERROR, "property \"%s\" of element variable \"%s\" not found",
-				 get_propgraph_property_name(gpr->propid), found_mapping->parent_gep->variable);
+				 get_propgraph_property_name(gpr->propid), mapping_factor->variable);
 
 		return n;
 	}

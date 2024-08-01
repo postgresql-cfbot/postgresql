@@ -262,8 +262,6 @@ SELECT * FROM GRAPH_TABLE (g1 MATCH (a IS vl1 | vl2) COLUMNS (a.vname,
 a.vprop1));
 -- vprop2 is associated with vl2 but not vl3
 select src, conn, dest, lprop1, vprop2, vprop1 from graph_table (g1 match (a is vl1)-[b is el1]->(c is vl2 | vl3) columns (a.vname as src, b.ename as conn, c.vname as dest, c.lprop1, c.vprop2, c.vprop1));
--- WHERE clause in graph pattern
-SELECT self, through FROM GRAPH_TABLE (g1 MATCH (a)->(b)->(c) WHERE a.vname = c.vname and a.vname <> b.vname COLUMNS (a.vname as self, b.vname as through));
 
 -- Errors
 -- vl1 is not associated with property vprop2
@@ -288,6 +286,56 @@ with all_connected_vertices as (select svn, dvn from graph_table (g1 match (src)
 select vn from all_vertices except (select svn from all_connected_vertices union select dvn from all_connected_vertices);
 -- query all connections using a label shared by vertices and edges
 select sn, cn, dn from graph_table (g1 match (src : l1)-[conn : l1]->(dest : l1) columns (src.elname as sn, conn.elname as cn, dest.elname as dn));
+
+-- Tests for cyclic graph patterns
+-- Add some more cycles in graph
+CREATE TABLE e3_2 (id_3 int,
+                    id_2_1 int,
+                    id_2_2 int,
+                    ename varchar(10),
+                    eprop1 int);
+ALTER PROPERTY GRAPH g1 ADD EDGE TABLES (
+    e3_2 KEY (id_3, id_2_1, id_2_2)
+        SOURCE KEY (id_3) REFERENCES v3 (id)
+        DESTINATION KEY (id_2_1, id_2_2) REFERENCES v2 (id1, id2)
+        LABEL el2 PROPERTIES (ename, eprop1 * 10 AS lprop2)
+        LABEL l1 PROPERTIES (ename AS elname)
+);
+
+INSERT INTO e1_2 VALUES (3, 1000, 3, 'e123', 10007);
+INSERT INTO e2_1 VALUES (1000, 3, 3, 'e212', 10008);
+INSERT INTO e3_2 VALUES (2002, 1000, 2, 'e321', 10009);
+
+-- cyclic pattern using WHERE clause in graph pattern,
+SELECT * FROM GRAPH_TABLE (g1 MATCH (a)->(b)->(c) WHERE a.vname = c.vname COLUMNS (a.vname AS self, b.vname AS through, a.vprop1 AS self_p1, b.vprop1 AS through_p1)) ORDER BY self, through;
+-- cyclic pattern using elements with same variable name
+SELECT * FROM GRAPH_TABLE (g1 MATCH (a)->(b)->(a) COLUMNS (a.vname AS self, b.vname AS through, a.vprop1 AS self_p1, b.vprop1 AS through_p1)) ORDER BY self, through;
+-- cyclic pattern with WHERE clause
+SELECT * FROM GRAPH_TABLE (g1 MATCH (a where a.vprop1 < 2000)->(b where b.vprop1 > 20)->(a where a.vprop1 > 20) COLUMNS (a.vname AS self, b.vname AS through, a.vprop1 AS self_p1, b.vprop1 AS through_p1)) ORDER BY self, through;
+SELECT * FROM GRAPH_TABLE (g1 MATCH (a)->(b where b.vprop1 > 20)->(a where a.vprop1 between 20 and 2000) COLUMNS (a.vname AS self, b.vname AS through, a.vprop1 AS self_p1, b.vprop1 AS through_p1)) ORDER BY self, through;
+SELECT * FROM GRAPH_TABLE (g1 MATCH (a where a.vprop1 between 20 and 2000)->(b where b.vprop1 > 20)->(a where a.vprop1 between 20 and 2000) COLUMNS (a.vname AS self, b.vname AS through, a.vprop1 AS self_p1, b.vprop1 AS through_p1)) ORDER BY self, through;
+SELECT * FROM GRAPH_TABLE (g1 MATCH (a is l1)-[a is l1]->(b is l1) columns (a.ename AS aename, b.ename AS bename)) ORDER BY 1, 2; -- error
+SELECT * FROM GRAPH_TABLE (g1 MATCH (a is vl1)->(b)->(a is vl2) WHERE a.vname <> b.vname COLUMNS (a.vname AS self, b.vname AS through, a.vprop1 AS self_p1, b.vprop1 AS through_p1)) ORDER BY self, through;  -- error
+SELECT * FROM GRAPH_TABLE (g1 MATCH (a is vl1)->(b)->(a) COLUMNS (a.vname AS self, b.vname AS through, a.vprop1 AS self_p1, b.vprop1 AS through_p1)) ORDER BY self, through;
+SELECT * FROM GRAPH_TABLE (g1 MATCH (a)->(b)->(a is vl1) COLUMNS (a.vname AS self, b.vname AS through, a.vprop1 AS self_p1, b.vprop1 AS through_p1)) ORDER BY self, through;
+
+-- add an edge with same vertex as source and destination to test loops
+CREATE TABLE e3_3 (src_id int,
+                    dest_id int,
+                    ename varchar(10),
+                    eprop1 int);
+ALTER PROPERTY GRAPH g1 ADD EDGE TABLES (
+    e3_3 KEY (src_id, dest_id)
+        SOURCE KEY (src_id) REFERENCES v3 (id)
+        DESTINATION KEY (src_id) REFERENCES v3 (id)
+        LABEL el2 PROPERTIES (ename, eprop1 * 10 AS lprop2)
+        LABEL l1 PROPERTIES (ename AS elname)
+);
+
+INSERT INTO e3_3 VALUES (2003, 2003, 'e331', 10010);
+-- cyclic pattern with edge patterns with same variable name
+SELECT * FROM GRAPH_TABLE (g1 MATCH (a)-[b]->(a)-[b]->(a) COLUMNS (a.vname AS self, b.ename AS loop_name));
+SELECT * FROM GRAPH_TABLE (g1 MATCH (a)-[b]->(c)-[b]->(d) COLUMNS (a.vname AS aname, b.ename AS bname, c.vname AS cname, d.vname AS dname)); --error
 
 -- property graph with some of the elements, labels and properties same as the
 -- previous one. Test whether components from the specified property graph are

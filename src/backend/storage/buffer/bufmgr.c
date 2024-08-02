@@ -169,6 +169,16 @@ static BufMgrCleanup * cleanups = NULL; /* head of linked list */
 int			effective_io_concurrency = DEFAULT_EFFECTIVE_IO_CONCURRENCY;
 
 /*
+ * Helper struct for handling RelFileNOde and ForkNumber together in
+ * DropRelationsAllBuffers.
+ */
+typedef struct RelFileForks
+{
+	RelFileLocator rloc;	 /* key member for qsort */
+	ForkBitmap	   forks;	 /* fork number in bitmap */
+} RelFileForks;
+
+/*
  * Like effective_io_concurrency, but used by maintenance code paths that might
  * benefit from a higher setting because they work on behalf of many sessions.
  * Overridden by the tablespace setting of the same name.
@@ -4489,24 +4499,32 @@ CheckIfPersistenceChanged(void)
  *		This function removes from the buffer pool all the pages of all
  *		forks of the specified relations.  It's equivalent to calling
  *		DropRelationBuffers once per fork per relation with firstDelBlock = 0.
+ *		The additional parameter forks is used to identify forks if
+ *		provided.
  *		--------------------------------------------------------------------
  */
 void
-DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
+DropRelationsAllBuffers(SMgrRelation *smgr_reln, ForkBitmap *pforks,
+						int nlocators)
 {
 	int			i;
 	int			n = 0;
 	SMgrRelation *rels;
 	BlockNumber (*block)[MAX_FORKNUM + 1];
 	uint64		nBlocksToInvalidate = 0;
-	RelFileLocator *locators;
+	ForkBitmap  *forks = NULL;
+	RelFileForks *locators;
 	bool		cached = true;
 	bool		use_bsearch;
 
 	if (nlocators == 0)
 		return;
 
-	rels = palloc(sizeof(SMgrRelation) * nlocators);	/* non-local relations */
+	/* storages for non-local relations */
+	rels = palloc(sizeof(SMgrRelation) * nlocators);
+
+	if (pforks)
+		forks = palloc(sizeof(ForkBitmap) * nlocators);
 
 	/* If it's a local relation, it's localbuf.c's problem. */
 	for (i = 0; i < nlocators; i++)
@@ -4517,7 +4535,12 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 				DropRelationAllLocalBuffers(smgr_reln[i]->smgr_rlocator.locator);
 		}
 		else
-			rels[n++] = smgr_reln[i];
+		{
+			rels[n] = smgr_reln[i];
+			if (forks)
+				forks[n] = pforks[i];
+			n++;
+		}
 	}
 
 	/*
@@ -4527,6 +4550,10 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 	if (n == 0)
 	{
 		pfree(rels);
+
+		if (forks)
+			pfree(forks);
+
 		return;
 	}
 
@@ -4545,6 +4572,13 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 	{
 		for (int j = 0; j <= MAX_FORKNUM; j++)
 		{
+			/* Consider only the specified fork, if provided. */
+			if (forks && !FORKBITMAP_ISSET(forks[i], j))
+			{
+				block[i][j] = InvalidBlockNumber;
+				continue;
+			}
+
 			/* Get the number of blocks for a relation's fork. */
 			block[i][j] = smgrnblocks_cached(rels[i], j);
 
@@ -4572,7 +4606,7 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 		{
 			for (int j = 0; j <= MAX_FORKNUM; j++)
 			{
-				/* ignore relation forks that doesn't exist */
+				/* ignore relation forks that doesn't exist or is ignored */
 				if (!BlockNumberIsValid(block[i][j]))
 					continue;
 
@@ -4588,9 +4622,13 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 	}
 
 	pfree(block);
-	locators = palloc(sizeof(RelFileLocator) * n);	/* non-local relations */
+	locators = palloc(sizeof(RelFileForks) * n);	/* non-local relations */
+
 	for (i = 0; i < n; i++)
-		locators[i] = rels[i]->smgr_rlocator.locator;
+	{
+		locators[i].rloc  = rels[i]->smgr_rlocator.locator;
+		locators[i].forks = (forks ? forks[i] : FORKBITMAP_ALLFORKS());
+	}
 
 	/*
 	 * For low number of relations to drop just use a simple walk through, to
@@ -4600,13 +4638,34 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 	 */
 	use_bsearch = n > RELS_BSEARCH_THRESHOLD;
 
-	/* sort the list of rlocators if necessary */
-	if (use_bsearch)
-		qsort(locators, n, sizeof(RelFileLocator), rlocator_comparator);
+	/*
+	 * Sort and compress the list of RelFileForks if necessary. We believe the
+	 * caller passed unique rlocators if forks are not specified.
+	 */
+	if (use_bsearch || forks)
+	{
+		int j = 0;
+
+		qsort(locators, n, sizeof(RelFileForks), rlocator_comparator);
+
+		/*
+		 * Now the list is in rlocator increasing order, compress the list by
+		 * merging fork bitmaps so that all elements have unique rlocators.
+		 */
+		for (i = 1 ; i < n ; i++)
+		{
+			if (RelFileLocatorEquals(locators[j].rloc, locators[i].rloc))
+				locators[j].forks |= locators[i].forks;
+			else
+				locators[++j] = locators[i];
+		}
+
+		n = j + 1;
+	}
 
 	for (i = 0; i < NBuffers; i++)
 	{
-		RelFileLocator *rlocator = NULL;
+		RelFileForks *rlocator = NULL;
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
 		uint32		buf_state;
 
@@ -4621,7 +4680,8 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 
 			for (j = 0; j < n; j++)
 			{
-				if (BufTagMatchesRelFileLocator(&bufHdr->tag, &locators[j]))
+				if (BufTagMatchesRelFileLocator(&bufHdr->tag,
+												&locators[j].rloc))
 				{
 					rlocator = &locators[j];
 					break;
@@ -4634,16 +4694,18 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 
 			locator = BufTagGetRelFileLocator(&bufHdr->tag);
 			rlocator = bsearch((const void *) &(locator),
-							   locators, n, sizeof(RelFileLocator),
+							   locators, n, sizeof(RelFileForks),
 							   rlocator_comparator);
 		}
 
 		/* buffer doesn't belong to any of the given relfilelocators; skip it */
-		if (rlocator == NULL)
+		if (rlocator == NULL ||
+			!FORKBITMAP_ISSET(rlocator->forks, BufTagGetForkNum(&bufHdr->tag)))
 			continue;
 
 		buf_state = LockBufHdr(bufHdr);
-		if (BufTagMatchesRelFileLocator(&bufHdr->tag, rlocator))
+		if (BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator->rloc) &&
+			FORKBITMAP_ISSET(rlocator->forks, BufTagGetForkNum(&bufHdr->tag)))
 			InvalidateBuffer(bufHdr);	/* releases spinlock */
 		else
 			UnlockBufHdr(bufHdr, buf_state);

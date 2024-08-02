@@ -118,6 +118,7 @@ static void process_directory_recursively(Oid tsoid,
 										  cb_options *opt);
 static int	read_pg_version_file(char *directory);
 static void remember_to_cleanup_directory(char *target_path, bool rmtopdir);
+static void report_missing_files(manifest_data *manifest);
 static void reset_directory_cleanup_list(void);
 static cb_tablespace *scan_for_existing_tablespaces(char *pathname,
 													cb_options *opt);
@@ -406,6 +407,13 @@ main(int argc, char *argv[])
 									  NULL, n_prior_backups, prior_backup_dirs,
 									  manifests, mwriter, &opt);
 	}
+
+	/*
+	 * If we have a manifest for the latest backup, we can complain if any
+	 * files seem to be missing.
+	 */
+	if (manifests[n_prior_backups] != NULL)
+		report_missing_files(manifests[n_prior_backups]);
 
 	/* Finalize the backup_manifest, if we're generating one. */
 	if (mwriter != NULL)
@@ -999,12 +1007,11 @@ process_directory_recursively(Oid tsoid,
 		}
 
 		/*
-		 * Skip the backup_label and backup_manifest files; they require
-		 * special handling and are handled elsewhere.
+		 * Skip the backup_manifest file; it requires special handling and is
+		 * handled elsewhere.
 		 */
 		if (relative_path == NULL &&
-			(strcmp(de->d_name, "backup_label") == 0 ||
-			 strcmp(de->d_name, "backup_manifest") == 0))
+			strcmp(de->d_name, "backup_manifest") == 0)
 			continue;
 
 		/*
@@ -1019,10 +1026,36 @@ process_directory_recursively(Oid tsoid,
 			snprintf(ofullpath, MAXPGPATH, "%s/%s", ofulldir,
 					 de->d_name + INCREMENTAL_PREFIX_LENGTH);
 
-
-			/* Manifest path likewise omits incremental prefix. */
+			/*
+			 * The path that gets used in any new backup manifest that we
+			 * generate likewise omits incremental prefix, but it includes a
+			 * tablespace prefix if required.
+			 */
 			snprintf(manifest_path, MAXPGPATH, "%s%s", manifest_prefix,
 					 de->d_name + INCREMENTAL_PREFIX_LENGTH);
+
+			/*
+			 * If we have a backup_manifest for the final input directory,
+			 * check whether this file is present. If so, mark it as a file
+			 * we've seen already; if not, emit a warning, so that the user
+			 * knows that the directory is out of sync with the
+			 * backup_manifest.
+			 */
+			if (latest_manifest != NULL)
+			{
+				char		old_manifest_path[MAXPGPATH];
+				manifest_file *mfile;
+
+				snprintf(old_manifest_path, MAXPGPATH, "%s%s",
+						 manifest_prefix, de->d_name);
+				mfile = manifest_files_lookup(latest_manifest->files,
+											  old_manifest_path);
+				if (mfile != NULL)
+					mfile->matched = true;
+				else
+					pg_log_warning("\"%s\" is present on disk but not in the manifest",
+								   manifest_path);
+			}
 
 			/* Reconstruction logic will do the rest. */
 			reconstruct_from_incremental_file(ifullpath, ofullpath,
@@ -1041,44 +1074,54 @@ process_directory_recursively(Oid tsoid,
 		}
 		else
 		{
-			/* Construct the path that the backup_manifest will use. */
+			manifest_file *mfile;
+
+			/*
+			 * We need to copy the entire file to the output directory.
+			 *
+			 * Compute the path used for this file in the backup manifest.
+			 */
 			snprintf(manifest_path, MAXPGPATH, "%s%s", manifest_prefix,
 					 de->d_name);
 
 			/*
-			 * It's not an incremental file, so we need to copy the entire
-			 * file to the output directory.
-			 *
-			 * If a checksum of the required type already exists in the
-			 * backup_manifest for the final input directory, we can save some
-			 * work by reusing that checksum instead of computing a new one.
+			 * If we have a backup_manifest for the final input directory,
+			 * check whether this file is present. If so, mark it as a file
+			 * we've seen already; if not, emit a warning, so that the user
+			 * knows that the directory is out of sync with the
+			 * backup_manifest.
 			 */
-			if (checksum_type != CHECKSUM_TYPE_NONE &&
-				latest_manifest != NULL)
+			if (latest_manifest != NULL)
 			{
-				manifest_file *mfile;
+				mfile =
+					manifest_files_lookup(latest_manifest->files, manifest_path);
+				if (mfile != NULL)
+					mfile->matched = true;
+				else
+					pg_log_warning("\"%s\" is present on disk but not in the manifest",
+								   manifest_path);
+			}
 
-				mfile = manifest_files_lookup(latest_manifest->files,
-											  manifest_path);
-				if (mfile == NULL)
-				{
-					char	   *bmpath;
+			/*
+			 * The backup_label file is generated elsewhere by separate code,
+			 * so skip it here, but make sure that we do this after marking it
+			 * as matched in the manifest, so that report_missing_files
+			 * doesn't complain about it being missing.
+			 */
+			if (relative_path == NULL &&
+				strcmp(de->d_name, "backup_label") == 0)
+				continue;
 
-					/*
-					 * The directory is out of sync with the backup_manifest,
-					 * so emit a warning.
-					 */
-					bmpath = psprintf("%s/%s", input_directory,
-									  "backup_manifest");
-					pg_log_warning("\"%s\" contains no entry for \"%s\"",
-								   bmpath, manifest_path);
-					pfree(bmpath);
-				}
-				else if (mfile->checksum_type == checksum_type)
-				{
-					checksum_length = mfile->checksum_length;
-					checksum_payload = mfile->checksum_payload;
-				}
+			/*
+			 * If the backup manifest entry we just looked up happens to
+			 * contain a checksum of the required type, we can save some work
+			 * by reusing that checksum instead of computing a new one.
+			 */
+			if (checksum_type != CHECKSUM_TYPE_NONE && mfile != NULL &&
+				mfile->checksum_type == checksum_type)
+			{
+				checksum_length = mfile->checksum_length;
+				checksum_payload = mfile->checksum_payload;
 			}
 
 			/*
@@ -1210,6 +1253,31 @@ remember_to_cleanup_directory(char *target_path, bool rmtopdir)
 	dir->rmtopdir = rmtopdir;
 	dir->next = cleanup_dir_list;
 	cleanup_dir_list = dir;
+}
+
+/*
+ * Complain if any files are missing on disk.
+ */
+static void
+report_missing_files(manifest_data *manifest)
+{
+	manifest_files_iterator it;
+	manifest_file *mfile;
+	bool		die = false;
+
+	manifest_files_start_iterate(manifest->files, &it);
+	while ((mfile = manifest_files_iterate(manifest->files, &it)) != NULL)
+	{
+		if (!mfile->matched)
+		{
+			pg_log_error("\"%s\" is present in the manifest but not on disk",
+						 mfile->pathname);
+			die = true;
+		}
+	}
+
+	if (die)
+		exit(1);
 }
 
 /*

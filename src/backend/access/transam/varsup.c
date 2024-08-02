@@ -296,6 +296,17 @@ ReadNextFullTransactionId(void)
 	return fullXid;
 }
 
+FullTransactionId ReadLastCompletedFullTransactionId(void)
+{
+	FullTransactionId fullXid;
+
+	LWLockAcquire(XidGenLock, LW_SHARED);
+	fullXid = TransamVariables->latestCompletedXid;
+	LWLockRelease(XidGenLock);
+
+	return fullXid;
+}
+
 /*
  * Advance nextXid to the value after a given xid.  The epoch is inferred.
  * This must only be called during recovery or from two-phase start-up code.

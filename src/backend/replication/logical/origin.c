@@ -282,7 +282,7 @@ replorigin_create(const char *roname)
 	 * to the exclusive lock there's no danger that new rows can appear while
 	 * we're checking.
 	 */
-	InitDirtySnapshot(SnapshotDirty);
+	InitDirtySnapshot(SnapshotDirty, NULL);
 
 	rel = table_open(ReplicationOriginRelationId, ExclusiveLock);
 

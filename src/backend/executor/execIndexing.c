@@ -117,6 +117,7 @@
 #include "utils/multirangetypes.h"
 #include "utils/rangetypes.h"
 #include "utils/snapmgr.h"
+#include "utils/injection_point.h"
 
 /* waitMode argument to check_exclusion_or_unique_constraint() */
 typedef enum
@@ -711,6 +712,8 @@ check_exclusion_or_unique_constraint(Relation heap, Relation index,
 	IndexScanDesc index_scan;
 	ScanKeyData scankeys[INDEX_MAX_KEYS];
 	SnapshotData DirtySnapshot;
+	TransactionId maxXmax,
+				  latestCompletedXid;
 	int			i;
 	bool		conflict;
 	bool		found_self;
@@ -773,9 +776,10 @@ check_exclusion_or_unique_constraint(Relation heap, Relation index,
 
 	/*
 	 * Search the tuples that are in the index for any violations, including
-	 * tuples that aren't visible yet.
+	 * tuples that aren't visible yet. Also, detect cases index scan skip the
+	 * tuple in case of parallel update after index page content was cached.
 	 */
-	InitDirtySnapshot(DirtySnapshot);
+	InitDirtySnapshot(DirtySnapshot, &maxXmax);
 
 	for (i = 0; i < indnkeyatts; i++)
 	{
@@ -809,6 +813,12 @@ check_exclusion_or_unique_constraint(Relation heap, Relation index,
 retry:
 	conflict = false;
 	found_self = false;
+	/*
+	 * Each time we retry - remember last completed transaction before start
+	 * of the scan. Aso reset maxXmax.
+	 */
+	latestCompletedXid = XidFromFullTransactionId(ReadLastCompletedFullTransactionId());
+	maxXmax = InvalidTransactionId;
 	index_scan = index_beginscan(heap, index, &DirtySnapshot, indnkeyatts, 0);
 	index_rescan(index_scan, scankeys, indnkeyatts, NULL, 0);
 
@@ -924,6 +934,19 @@ retry:
 	}
 
 	index_endscan(index_scan);
+	/*
+	 * Check for the case when index scan fetched records before some other
+	 * transaction deleted tuple and inserted a new one.
+	 */
+	if (!conflict && TransactionIdIsValid(maxXmax) && !TransactionIdIsCurrentTransactionId(maxXmax))
+	{
+		/*
+		 * If we have skipped some tuple because it was deleted, but deletion happened after
+		 * start of the index scan - retry to be sure.
+		 */
+		if (TransactionIdPrecedes(latestCompletedXid, maxXmax))
+			goto retry;
+	}
 
 	/*
 	 * Ordinarily, at this point the search should have found the originally
@@ -937,6 +960,8 @@ retry:
 
 	ExecDropSingleTupleTableSlot(existing_slot);
 
+	if (!conflict)
+		INJECTION_POINT("check_exclusion_or_unique_constraint_no_conflict");
 	return !conflict;
 }
 

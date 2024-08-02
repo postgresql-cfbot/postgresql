@@ -1100,9 +1100,9 @@ StartPrepare(GlobalTransaction gxact)
 	hdr.prepared_at = gxact->prepared_at;
 	hdr.owner = gxact->owner;
 	hdr.nsubxacts = xactGetCommittedChildren(&children);
-	hdr.ncommitrels = smgrGetPendingDeletes(true, &commitrels);
+	hdr.ncommitrels = smgrGetPendingDeletes(true, &commitrels, &commitforks);
 	hdr.comhasforks = (commitforks != NULL);
-	hdr.nabortrels = smgrGetPendingDeletes(false, &abortrels);
+	hdr.nabortrels = smgrGetPendingDeletes(false, &abortrels, &abortforks);
 	hdr.abohasforks = (abortforks != NULL);
 	hdr.ncommitstats =
 		pgstat_get_transactional_drops(true, &commitstats);

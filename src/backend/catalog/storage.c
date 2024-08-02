@@ -80,6 +80,7 @@ int			wal_skip_threshold = 2048;	/* in kilobytes */
 typedef struct PendingRelDelete
 {
 	RelFileLocator rlocator;	/* relation that may need to be deleted */
+	ForkBitmap	forks;			/* fork bitmap */
 	ProcNumber	procNumber;		/* INVALID_PROC_NUMBER if not a temp rel */
 	bool		atCommit;		/* T=delete at commit; F=delete at abort */
 	int			nestLevel;		/* xact nesting level of request */
@@ -295,6 +296,7 @@ RelationDropStorage(Relation rel)
 	pending = (PendingRelDelete *)
 		MemoryContextAlloc(TopMemoryContext, sizeof(PendingRelDelete));
 	pending->rlocator = rel->rd_locator;
+	pending->forks	= FORKBITMAP_ALLFORKS();
 	pending->procNumber = rel->rd_backend;
 	pending->atCommit = true;	/* delete if commit */
 	pending->nestLevel = GetCurrentTransactionNestLevel();
@@ -360,6 +362,8 @@ RelationPreserveStorage(RelFileLocator rlocator, bool atCommit)
 		if (RelFileLocatorEquals(rlocator, pending->rlocator)
 			&& pending->atCommit == atCommit)
 		{
+			Assert(pending->forks == FORKBITMAP_ALLFORKS());
+
 			/* unlink and delete list entry */
 			if (prev)
 				prev->next = next;
@@ -683,7 +687,7 @@ SerializePendingSyncs(Size maxSize, char *startAddress)
 
 	/* remove deleted rnodes */
 	for (delete = pendingDeletes; delete != NULL; delete = delete->next)
-		if (delete->atCommit)
+		if (delete->atCommit && delete->forks == FORKBITMAP_ALLFORKS())
 			(void) hash_search(tmphash, &delete->rlocator,
 							   HASH_REMOVE, NULL);
 
@@ -737,6 +741,7 @@ smgrDoPendingDeletes(bool isCommit)
 	int			nrels = 0,
 				maxrels = 0;
 	SMgrRelation *srels = NULL;
+	ForkBitmap	 *forks = NULL;
 
 	prev = NULL;
 	for (pending = pendingDeletes; pending != NULL; pending = next)
@@ -759,6 +764,8 @@ smgrDoPendingDeletes(bool isCommit)
 			{
 				SMgrRelation srel;
 
+				Assert(pending->forks == FORKBITMAP_ALLFORKS());
+
 				srel = smgropen(pending->rlocator, pending->procNumber);
 
 				/* allocate the initial array, or extend it, if needed */
@@ -771,7 +778,25 @@ smgrDoPendingDeletes(bool isCommit)
 				{
 					maxrels *= 2;
 					srels = repalloc(srels, sizeof(SMgrRelation) * maxrels);
+
+					/* expand forks array if any */
+					if (forks)
+						forks = repalloc(forks, sizeof(ForkBitmap) * maxrels);
 				}
+
+				/* Create forks array on encountering partial forks. */
+				Assert((pending->forks & ~FORKBITMAP_ALLFORKS()) == 0);
+				if (!forks && pending->forks != FORKBITMAP_ALLFORKS())
+				{
+					forks = palloc(sizeof(ForkBitmap) * maxrels);
+
+					/* fill in the past elements */
+					for (int i = 0 ; i < nrels ; i++)
+						forks[i] = FORKBITMAP_ALLFORKS();
+				}
+
+				if (forks)
+					forks[nrels] = pending->forks;
 
 				srels[nrels++] = srel;
 			}
@@ -783,12 +808,15 @@ smgrDoPendingDeletes(bool isCommit)
 
 	if (nrels > 0)
 	{
-		smgrdounlinkall(srels, NULL, nrels, false);
+		smgrdounlinkall(srels, forks, nrels, false);
 
 		for (int i = 0; i < nrels; i++)
 			smgrclose(srels[i]);
 
 		pfree(srels);
+
+		if (forks)
+			pfree(forks);
 	}
 }
 
@@ -948,34 +976,53 @@ smgrDoPendingSyncs(bool isCommit, bool isParallelWorker)
  * by upper-level transactions.
  */
 int
-smgrGetPendingDeletes(bool forCommit, RelFileLocator **ptr)
+smgrGetPendingDeletes(bool forCommit, RelFileLocator **ptr, ForkBitmap **fptr)
 {
 	int			nestLevel = GetCurrentTransactionNestLevel();
 	int			nrels;
+	bool		hasforks = false;
 	RelFileLocator *rptr;
+	ForkBitmap	   *rfptr = NULL;
 	PendingRelDelete *pending;
 
 	nrels = 0;
 	for (pending = pendingDeletes; pending != NULL; pending = pending->next)
 	{
-		if (pending->nestLevel >= nestLevel && pending->atCommit == forCommit
-			&& pending->procNumber == INVALID_PROC_NUMBER)
+		Assert((pending->forks & ~FORKBITMAP_ALLFORKS()) == 0);
+
+		if (pending->nestLevel >= nestLevel && pending->atCommit == forCommit)
+		{
 			nrels++;
+
+			if (pending->forks != FORKBITMAP_ALLFORKS())
+				hasforks = true;
+		}
 	}
 	if (nrels == 0)
 	{
 		*ptr = NULL;
+		*fptr = NULL;
 		return 0;
 	}
 	rptr = (RelFileLocator *) palloc(nrels * sizeof(RelFileLocator));
 	*ptr = rptr;
+
+	if (hasforks)
+		rfptr = (ForkBitmap *) palloc(nrels * sizeof(ForkBitmap));
+	*fptr = rfptr;
+
 	for (pending = pendingDeletes; pending != NULL; pending = pending->next)
 	{
-		if (pending->nestLevel >= nestLevel && pending->atCommit == forCommit
-			&& pending->procNumber == INVALID_PROC_NUMBER)
+		if (pending->nestLevel >= nestLevel && pending->atCommit == forCommit)
 		{
 			*rptr = pending->rlocator;
 			rptr++;
+
+			if (rfptr)
+			{
+				*rfptr = pending->forks;
+				rfptr++;
+			}
 		}
 	}
 	return nrels;

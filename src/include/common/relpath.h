@@ -70,6 +70,17 @@ typedef enum ForkNumber
 
 #define MAX_FORKNUM		INIT_FORKNUM
 
+/* ForkBitmap holds multiple forks as a bitmap */
+StaticAssertDecl(MAX_FORKNUM < 8, "MAX_FORKNUM too large for ForkBitmap");
+
+typedef uint8 ForkBitmap;
+#define FORKBITMAP_BIT(f)	  (1 << (f))
+#define FORKBITMAP_INIT(m, f) ((m) = FORKBITMAP_BIT((f)))
+#define FORKBITMAP_SET(m, f) ((m) |= FORKBITMAP_BIT((f)))
+#define FORKBITMAP_RESET(m, f) ((m) &= ~(FORKBITMAP_BIT(f)))
+#define FORKBITMAP_ISSET(m, f) ((m) & FORKBITMAP_BIT(f))
+#define FORKBITMAP_ALLFORKS() ((1 << (MAX_FORKNUM + 1)) - 1)
+
 #define FORKNAMECHARS	4		/* max chars for a fork name */
 
 extern PGDLLIMPORT const char *const forkNames[];

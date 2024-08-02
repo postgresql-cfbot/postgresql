@@ -3860,7 +3860,7 @@ RelationSetNewRelfilenumber(Relation relation, char persistence)
 		 * anyway.
 		 */
 		srel = smgropen(relation->rd_locator, relation->rd_backend);
-		smgrdounlinkall(&srel, 1, false);
+		smgrdounlinkall(&srel, NULL, 1, false);
 		smgrclose(srel);
 	}
 	else

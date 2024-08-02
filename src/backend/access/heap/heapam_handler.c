@@ -402,7 +402,7 @@ tuple_lock_retry:
 			 *
 			 * Loop here to deal with updated or busy tuples
 			 */
-			InitDirtySnapshot(SnapshotDirty);
+			InitDirtySnapshot(SnapshotDirty, NULL);
 			for (;;)
 			{
 				if (ItemPointerIndicatesMovedPartitions(tid))

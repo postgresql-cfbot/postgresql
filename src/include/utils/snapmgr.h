@@ -36,9 +36,13 @@ extern PGDLLIMPORT SnapshotData CatalogSnapshotData;
  * We don't provide a static SnapshotDirty variable because it would be
  * non-reentrant.  Instead, users of that snapshot type should declare a
  * local variable of type SnapshotData, and initialize it with this macro.
+ * pxid is optional and can be NULL. If it is not NULL, pxid[0] will be set
+ * to the transaction ID of deleting transaction if the tuple is deleted
+ * and it newer than pxid[0].
  */
-#define InitDirtySnapshot(snapshotdata)  \
-	((snapshotdata).snapshot_type = SNAPSHOT_DIRTY)
+#define InitDirtySnapshot(snapshotdata, pxid)  \
+	((snapshotdata).snapshot_type = SNAPSHOT_DIRTY, \
+	 (snapshotdata).xip = (pxid))
 
 /*
  * Similarly, some initialization is required for a NonVacuumable snapshot.

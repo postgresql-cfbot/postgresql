@@ -336,7 +336,7 @@ pgstat_heap(Relation rel, FunctionCallInfo fcinfo)
 	scan = table_beginscan_strat(rel, SnapshotAny, 0, NULL, true, false);
 	hscan = (HeapScanDesc) scan;
 
-	InitDirtySnapshot(SnapshotDirty);
+	InitDirtySnapshot(SnapshotDirty, NULL);
 
 	nblocks = hscan->rs_nblocks;	/* # blocks to be scanned */
 

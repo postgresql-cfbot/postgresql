@@ -1346,7 +1346,7 @@ RecordTransactionCommit(void)
 		LogLogicalInvalidations();
 
 	/* Get data needed for commit record */
-	nrels = smgrGetPendingDeletes(true, &rels);
+	nrels = smgrGetPendingDeletes(true, &rels, &forks);
 	nchildren = xactGetCommittedChildren(&children);
 	ndroppedstats = pgstat_get_transactional_drops(true, &droppedstats);
 	if (XLogStandbyInfoActive())
@@ -1799,7 +1799,7 @@ RecordTransactionAbort(bool isSubXact)
 				  replorigin_session_origin != DoNotReplicateId);
 
 	/* Fetch the data we need for the abort record */
-	nrels = smgrGetPendingDeletes(false, &rels);
+	nrels = smgrGetPendingDeletes(false, &rels, &forks);
 	nchildren = xactGetCommittedChildren(&children);
 	ndroppedstats = pgstat_get_transactional_drops(false, &droppedstats);
 

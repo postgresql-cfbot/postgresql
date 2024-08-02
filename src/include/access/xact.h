@@ -196,6 +196,7 @@ typedef struct SavedTransactionCharacteristics
 #define XACT_XINFO_HAS_AE_LOCKS			(1U << 6)
 #define XACT_XINFO_HAS_GID				(1U << 7)
 #define XACT_XINFO_HAS_DROPPED_STATS	(1U << 8)
+#define XACT_XINFO_HAS_RELFILEFORKS		(1U << 9)
 
 /*
  * Also stored in xinfo, these indicating a variety of additional actions that
@@ -361,7 +362,9 @@ typedef struct xl_xact_prepare
 	Oid			owner;			/* user running the transaction */
 	int32		nsubxacts;		/* number of following subxact XIDs */
 	int32		ncommitrels;	/* number of delete-on-commit rels */
+	bool		comhasforks;	/* commitrels is accompanied by forknums */
 	int32		nabortrels;		/* number of delete-on-abort rels */
+	bool		abohasforks;	/* abortrels is accompanied by forknums */
 	int32		ncommitstats;	/* number of stats to drop on commit */
 	int32		nabortstats;	/* number of stats to drop on abort */
 	int32		ninvalmsgs;		/* number of cache invalidation messages */
@@ -389,6 +392,7 @@ typedef struct xl_xact_parsed_commit
 
 	int			nrels;
 	RelFileLocator *xlocators;
+	ForkBitmap	   *xforks;
 
 	int			nstats;
 	xl_xact_stats_item *stats;
@@ -400,6 +404,7 @@ typedef struct xl_xact_parsed_commit
 	char		twophase_gid[GIDSIZE];	/* only for 2PC */
 	int			nabortrels;		/* only for 2PC */
 	RelFileLocator *abortlocators;	/* only for 2PC */
+	ForkBitmap	   *abortforks;	/* only for 2PC */
 	int			nabortstats;	/* only for 2PC */
 	xl_xact_stats_item *abortstats; /* only for 2PC */
 
@@ -422,6 +427,7 @@ typedef struct xl_xact_parsed_abort
 
 	int			nrels;
 	RelFileLocator *xlocators;
+	ForkBitmap	   *xforks;
 
 	int			nstats;
 	xl_xact_stats_item *stats;
@@ -505,6 +511,7 @@ extern int	xactGetCommittedChildren(TransactionId **ptr);
 extern XLogRecPtr XactLogCommitRecord(TimestampTz commit_time,
 									  int nsubxacts, TransactionId *subxacts,
 									  int nrels, RelFileLocator *rels,
+									  ForkBitmap *forks,
 									  int ndroppedstats,
 									  xl_xact_stats_item *droppedstats,
 									  int nmsgs, SharedInvalidationMessage *msgs,
@@ -516,6 +523,7 @@ extern XLogRecPtr XactLogCommitRecord(TimestampTz commit_time,
 extern XLogRecPtr XactLogAbortRecord(TimestampTz abort_time,
 									 int nsubxacts, TransactionId *subxacts,
 									 int nrels, RelFileLocator *rels,
+									 ForkBitmap *forks,
 									 int ndroppedstats,
 									 xl_xact_stats_item *droppedstats,
 									 int xactflags, TransactionId twophase_xid,

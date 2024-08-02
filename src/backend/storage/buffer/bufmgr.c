@@ -175,7 +175,7 @@ int			effective_io_concurrency = DEFAULT_EFFECTIVE_IO_CONCURRENCY;
 typedef struct RelFileForks
 {
 	RelFileLocator rloc;	 /* key member for qsort */
-	ForkBitmap	   forks;	 /* fork number in bitmap */
+	ForkBitmap	   forks;	 /* fork numbers in bitmap */
 } RelFileForks;
 
 /*

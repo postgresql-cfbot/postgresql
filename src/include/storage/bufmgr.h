@@ -275,7 +275,7 @@ extern void DropRelationBuffers(struct SMgrRelationData *smgr_reln,
 								ForkNumber *forkNum,
 								int nforks, BlockNumber *firstDelBlock);
 extern void DropRelationsAllBuffers(struct SMgrRelationData **smgr_reln,
-									int nlocators);
+									ForkBitmap *forks, int nlocators);
 extern void DropDatabaseBuffers(Oid dbid);
 extern void SetRelationBuffersPersistence(struct SMgrRelationData *srel,
 										  bool permanent);

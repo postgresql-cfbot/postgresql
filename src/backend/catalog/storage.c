@@ -783,7 +783,7 @@ smgrDoPendingDeletes(bool isCommit)
 
 	if (nrels > 0)
 	{
-		smgrdounlinkall(srels, nrels, false);
+		smgrdounlinkall(srels, NULL, nrels, false);
 
 		for (int i = 0; i < nrels; i++)
 			smgrclose(srels[i]);

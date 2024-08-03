@@ -2222,6 +2222,29 @@ jsonb_float8(PG_FUNCTION_ARGS)
 	PG_RETURN_DATUM(retValue);
 }
 
+Datum
+jsonb_text(PG_FUNCTION_ARGS)
+{
+	Jsonb	   *in = PG_GETARG_JSONB_P(0);
+	JsonbValue	v;
+	StringInfoData jtext;
+
+	/* Convert scalar null to SQL null */
+	if (JsonbExtractScalar(&in->root, &v) && v.type == jbvNull)
+	{
+		PG_FREE_IF_COPY(in, 0);
+		PG_RETURN_NULL();
+	}
+
+	/* Every other case acts like jsonb_out() */
+	initStringInfo(&jtext);
+	(void) JsonbToCString(&jtext, &in->root, VARSIZE(in));
+
+	PG_FREE_IF_COPY(in, 0);
+
+	PG_RETURN_TEXT_P(cstring_to_text_with_len(jtext.data, jtext.len));
+}
+
 /*
  * Convert jsonb to a C-string stripping quotes from scalar strings.
  */

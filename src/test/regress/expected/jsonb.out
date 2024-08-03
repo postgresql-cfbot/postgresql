@@ -5781,3 +5781,75 @@ select '12345.0000000000000000000000000000000000000000000005'::jsonb::int8;
  12345
 (1 row)
 
+select 'true'::jsonb::text;
+ text 
+------
+ true
+(1 row)
+
+select '1.0'::jsonb::text;
+ text 
+------
+ 1.0
+(1 row)
+
+select '"hello"'::jsonb::text;
+  text   
+---------
+ "hello"
+(1 row)
+
+select 'null'::jsonb::text;
+ text 
+------
+ 
+(1 row)
+
+select '[1.0]'::jsonb::text;
+ text  
+-------
+ [1.0]
+(1 row)
+
+select '{"a": "b"}'::jsonb::text;
+    text    
+------------
+ {"a": "b"}
+(1 row)
+
+select 'true'::jsonb::varchar;
+ varchar 
+---------
+ true
+(1 row)
+
+select '1.0'::jsonb::varchar;
+ varchar 
+---------
+ 1.0
+(1 row)
+
+select '"hello"'::jsonb::varchar;
+ varchar 
+---------
+ "hello"
+(1 row)
+
+select 'null'::jsonb::varchar;  -- not the desired behavior
+ varchar 
+---------
+ null
+(1 row)
+
+select '[1.0]'::jsonb::varchar;
+ varchar 
+---------
+ [1.0]
+(1 row)
+
+select '{"a": "b"}'::jsonb::varchar;
+  varchar   
+------------
+ {"a": "b"}
+(1 row)
+

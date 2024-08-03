@@ -55,6 +55,54 @@ SELECT ('"'||repeat('.', 12)||'abc\n"')::json; -- OK, legal escapes
  "............abc\n"
 (1 row)
 
+-- Test various lengths of strings to validate SIMD processing to escape
+-- special chars in the JSON.
+SELECT row_to_json(j)::jsonb FROM (
+  SELECT left(E'abcdefghijklmnopqrstuvwxyz0123456"\t78', a) AS very_long_column_name_to_test_json_escape
+  FROM generate_series(0,37) a
+) j;
+                                       row_to_json                                        
+------------------------------------------------------------------------------------------
+ {"very_long_column_name_to_test_json_escape": ""}
+ {"very_long_column_name_to_test_json_escape": "a"}
+ {"very_long_column_name_to_test_json_escape": "ab"}
+ {"very_long_column_name_to_test_json_escape": "abc"}
+ {"very_long_column_name_to_test_json_escape": "abcd"}
+ {"very_long_column_name_to_test_json_escape": "abcde"}
+ {"very_long_column_name_to_test_json_escape": "abcdef"}
+ {"very_long_column_name_to_test_json_escape": "abcdefg"}
+ {"very_long_column_name_to_test_json_escape": "abcdefgh"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghi"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghij"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijk"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijkl"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklm"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmn"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmno"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnop"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopq"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqr"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrs"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrst"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrstu"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrstuv"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrstuvw"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrstuvwx"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrstuvwxy"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrstuvwxyz"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrstuvwxyz0"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrstuvwxyz01"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrstuvwxyz012"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrstuvwxyz0123"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrstuvwxyz01234"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrstuvwxyz012345"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrstuvwxyz0123456"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrstuvwxyz0123456\""}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrstuvwxyz0123456\"\t"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrstuvwxyz0123456\"\t7"}
+ {"very_long_column_name_to_test_json_escape": "abcdefghijklmnopqrstuvwxyz0123456\"\t78"}
+(38 rows)
+
 -- see json_encoding test for input with unicode escapes
 -- Numbers.
 SELECT '1'::json;				-- OK

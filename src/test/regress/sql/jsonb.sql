@@ -1572,3 +1572,15 @@ select '12345.0000000000000000000000000000000000000000000005'::jsonb::float8;
 select '12345.0000000000000000000000000000000000000000000005'::jsonb::int2;
 select '12345.0000000000000000000000000000000000000000000005'::jsonb::int4;
 select '12345.0000000000000000000000000000000000000000000005'::jsonb::int8;
+select 'true'::jsonb::text;
+select '1.0'::jsonb::text;
+select '"hello"'::jsonb::text;
+select 'null'::jsonb::text;
+select '[1.0]'::jsonb::text;
+select '{"a": "b"}'::jsonb::text;
+select 'true'::jsonb::varchar;
+select '1.0'::jsonb::varchar;
+select '"hello"'::jsonb::varchar;
+select 'null'::jsonb::varchar;  -- not the desired behavior
+select '[1.0]'::jsonb::varchar;
+select '{"a": "b"}'::jsonb::varchar;

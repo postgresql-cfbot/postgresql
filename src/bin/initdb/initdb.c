@@ -2228,9 +2228,6 @@ check_locale_encoding(const char *locale, int user_enc)
 	if (!(locale_enc == user_enc ||
 		  locale_enc == PG_SQL_ASCII ||
 		  locale_enc == -1 ||
-#ifdef WIN32
-		  user_enc == PG_UTF8 ||
-#endif
 		  user_enc == PG_SQL_ASCII))
 	{
 		pg_log_error("encoding mismatch");
@@ -2695,13 +2692,6 @@ setup_locale_encoding(void)
 			 * Windows, UTF-8 works with any locale, so we can fall back to
 			 * UTF-8.
 			 */
-#ifdef WIN32
-			encodingid = PG_UTF8;
-			printf(_("Encoding \"%s\" implied by locale is not allowed as a server-side encoding.\n"
-					 "The default database encoding will be set to \"%s\" instead.\n"),
-				   pg_encoding_to_char(ctype_enc),
-				   pg_encoding_to_char(encodingid));
-#else
 			pg_log_error("locale \"%s\" requires unsupported encoding \"%s\"",
 						 lc_ctype, pg_encoding_to_char(ctype_enc));
 			pg_log_error_detail("Encoding \"%s\" is not allowed as a server-side encoding.",
@@ -2709,7 +2699,6 @@ setup_locale_encoding(void)
 			pg_log_error_hint("Rerun %s with a different locale selection.",
 							  progname);
 			exit(1);
-#endif
 		}
 		else
 		{

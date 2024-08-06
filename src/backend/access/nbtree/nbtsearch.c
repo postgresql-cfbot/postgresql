@@ -27,6 +27,9 @@
 
 static void _bt_drop_lock_and_maybe_pin(IndexScanDesc scan, BTScanPos sp);
 static OffsetNumber _bt_binsrch(Relation rel, BTScanInsert key, Buffer buf);
+static Buffer _bt_moveright(Relation rel, Relation heaprel, BTScanInsert key,
+							Buffer buf, bool forupdate, BTStack stack,
+							int access, int *pagehikeysprefix);
 static int	_bt_binsrch_posting(BTScanInsert key, Page page,
 								OffsetNumber offnum);
 static bool _bt_readpage(IndexScanDesc scan, ScanDirection dir,
@@ -98,6 +101,7 @@ _bt_search(Relation rel, Relation heaprel, BTScanInsert key, Buffer *bufP,
 {
 	BTStack		stack_in = NULL;
 	int			page_access = BT_READ;
+	int			hikeysprefix = 0;
 
 	/* heaprel must be set whenever _bt_allocbuf is reachable */
 	Assert(access == BT_READ || access == BT_WRITE);
@@ -134,7 +138,7 @@ _bt_search(Relation rel, Relation heaprel, BTScanInsert key, Buffer *bufP,
 		 * opportunity to finish splits of internal pages too.
 		 */
 		*bufP = _bt_moveright(rel, heaprel, key, *bufP, (access == BT_WRITE),
-							  stack_in, page_access);
+							  stack_in, page_access, &hikeysprefix);
 
 		/* if this is a leaf page, we're done */
 		page = BufferGetPage(*bufP);
@@ -185,6 +189,8 @@ _bt_search(Relation rel, Relation heaprel, BTScanInsert key, Buffer *bufP,
 	 */
 	if (access == BT_WRITE && page_access == BT_READ)
 	{
+		hikeysprefix = 0;
+
 		/* trade in our read lock for a write lock */
 		_bt_unlockbuf(rel, *bufP);
 		_bt_lockbuf(rel, *bufP, BT_WRITE);
@@ -194,7 +200,8 @@ _bt_search(Relation rel, Relation heaprel, BTScanInsert key, Buffer *bufP,
 		 * but before we acquired a write lock.  If it has, we may need to
 		 * move right to its new sibling.  Do that.
 		 */
-		*bufP = _bt_moveright(rel, heaprel, key, *bufP, true, stack_in, BT_WRITE);
+		*bufP = _bt_moveright(rel, heaprel, key, *bufP, true, stack_in, BT_WRITE,
+							  &hikeysprefix);
 	}
 
 	return stack_in;
@@ -230,6 +237,9 @@ _bt_search(Relation rel, Relation heaprel, BTScanInsert key, Buffer *bufP,
  * On entry, we have the buffer pinned and a lock of the type specified by
  * 'access'.  If we move right, we release the buffer and lock and acquire
  * the same on the right sibling.  Return value is the buffer we stop at.
+ *
+ * On exit, we've updated *pagehikeysprefix with the shared prefix that
+ * the returned buffer's page's highkey shares with the search key.
  */
 Buffer
 _bt_moveright(Relation rel,
@@ -238,7 +248,8 @@ _bt_moveright(Relation rel,
 			  Buffer buf,
 			  bool forupdate,
 			  BTStack stack,
-			  int access)
+			  int access,
+			  int *pagehikeysprefix)
 {
 	Page		page;
 	BTPageOpaque opaque;
@@ -262,16 +273,34 @@ _bt_moveright(Relation rel,
 	 *
 	 * We also have to move right if we followed a link that brought us to a
 	 * dead page.
+	 *
+	 * Note: It is important that *pagehikeysprefix is set to an accurate
+	 * value at return.  Rightmost pages have no prefix, thus set it to 0.  In
+	 * all other cases, it must be updated with the prefix result of this
+	 * page's P_HIKEY's full _bt_compare.
 	 */
 	cmpval = key->nextkey ? 0 : 1;
 
 	for (;;)
 	{
+		/*
+		 * We explicitly don't reuse the prefix argument of this function,
+		 * as we may need to move multiple times, and we don't want to
+		 * overwrite the value stored in *prefix if we could reuse it.
+		 * Additionally, its value will be useless for any of our own
+		 * _bt_compare calls due to potential concurrent page splits. 
+		 */
+		int			hikeysprefix = 0;
+
 		page = BufferGetPage(buf);
 		opaque = BTPageGetOpaque(page);
 
 		if (P_RIGHTMOST(opaque))
+		{
+			/* set the compare column when breaking out of the loop */
+			*pagehikeysprefix = 0;
 			break;
+		}
 
 		/*
 		 * Finish any incomplete splits we encounter along the way.
@@ -297,14 +326,19 @@ _bt_moveright(Relation rel,
 			continue;
 		}
 
-		if (P_IGNORE(opaque) || _bt_compare(rel, key, page, P_HIKEY) >= cmpval)
+		if (P_IGNORE(opaque) ||
+			_bt_compare(rel, key, page, P_HIKEY, &hikeysprefix) >= cmpval)
 		{
-			/* step right one page */
+			/* set the compare column when breaking out of the loop */
 			buf = _bt_relandgetbuf(rel, buf, opaque->btpo_next, access);
 			continue;
 		}
 		else
+		{
+			/* make sure to communicate the established prefix */
+			*pagehikeysprefix = hikeysprefix;
 			break;
+		}
 	}
 
 	if (P_IGNORE(opaque))
@@ -344,6 +378,13 @@ _bt_binsrch(Relation rel,
 				high;
 	int32		result,
 				cmpval;
+	/*
+	 * Prefix bounds, for the high/low offset's compare columns.
+	 * "highkeyprefix" is the value for this page's high key (if any) or 1
+	 * (no established shared prefix)
+	 */
+	AttrNumber	highkeyprefix = 0,
+				lowkeyprefix = 0;
 
 	page = BufferGetPage(buf);
 	opaque = BTPageGetOpaque(page);
@@ -376,6 +417,10 @@ _bt_binsrch(Relation rel,
 	 * For nextkey=true (cmpval=0), the loop invariant is: all slots before
 	 * 'low' are <= scan key, all slots at or after 'high' are > scan key.
 	 *
+	 * We maintain highkeyprefix and lowkeyprefix to keep track of prefixes
+	 * that tuples share with the scan key, potentially allowing us to skip a
+	 * prefix in the midpoint comparison.
+	 *
 	 * We can fall out when high == low.
 	 */
 	high++;						/* establish the loop invariant for high */
@@ -385,15 +430,22 @@ _bt_binsrch(Relation rel,
 	while (high > low)
 	{
 		OffsetNumber mid = low + ((high - low) / 2);
+		int			prefix = Min(highkeyprefix, lowkeyprefix); /* update prefix bounds */
 
 		/* We have low <= mid < high, so mid points at a real slot */
 
-		result = _bt_compare(rel, key, page, mid);
+		result = _bt_compare(rel, key, page, mid, &prefix);
 
 		if (result >= cmpval)
+		{
 			low = mid + 1;
+			lowkeyprefix = prefix;
+		}
 		else
+		{
 			high = mid;
+			highkeyprefix = prefix;
+		}
 	}
 
 	/*
@@ -465,7 +517,8 @@ _bt_binsrch(Relation rel,
  * list split).
  */
 OffsetNumber
-_bt_binsrch_insert(Relation rel, BTInsertState insertstate)
+_bt_binsrch_insert(Relation rel, BTInsertState insertstate,
+				   int highkeyprefix)
 {
 	BTScanInsert key = insertstate->itup_key;
 	Page		page;
@@ -475,6 +528,7 @@ _bt_binsrch_insert(Relation rel, BTInsertState insertstate)
 				stricthigh;
 	int32		result,
 				cmpval;
+	int			lowkeyprefix = 0;
 
 	page = BufferGetPage(insertstate->buf);
 	opaque = BTPageGetOpaque(page);
@@ -525,16 +579,22 @@ _bt_binsrch_insert(Relation rel, BTInsertState insertstate)
 	while (high > low)
 	{
 		OffsetNumber mid = low + ((high - low) / 2);
+		int			prefix = Min(highkeyprefix, lowkeyprefix);
 
 		/* We have low <= mid < high, so mid points at a real slot */
 
-		result = _bt_compare(rel, key, page, mid);
+		result = _bt_compare(rel, key, page, mid, &prefix);
 
 		if (result >= cmpval)
+		{
 			low = mid + 1;
+			lowkeyprefix = prefix;
+		}
 		else
 		{
 			high = mid;
+			highkeyprefix = prefix;
+
 			if (result != 0)
 				stricthigh = high;
 		}
@@ -669,6 +729,13 @@ _bt_binsrch_posting(BTScanInsert key, Page page, OffsetNumber offnum)
  * matching TID in the posting tuple, which caller must handle
  * themselves (e.g., by splitting the posting list tuple).
  *
+ * NOTE: The "sprefix" argument must refer to the number of attributes of
+ * the index tuple of which the caller knows that are equal to the scankey's
+ * attributes. This means 0 for "no known matching attributes", up to the
+ * number of key attributes if the caller knows that all key attributes of
+ * the index tuple match those of the scan key.
+ * See also backend/access/nbtree/README for details.
+ *
  * CRUCIAL NOTE: on a non-leaf page, the first data key is assumed to be
  * "minus infinity": this routine will always claim it is less than the
  * scankey.  The actual key value stored is explicitly truncated to 0
@@ -682,7 +749,8 @@ int32
 _bt_compare(Relation rel,
 			BTScanInsert key,
 			Page page,
-			OffsetNumber offnum)
+			OffsetNumber offnum,
+			int *sprefix)
 {
 	TupleDesc	itupdesc = RelationGetDescr(rel);
 	BTPageOpaque opaque = BTPageGetOpaque(page);
@@ -722,8 +790,11 @@ _bt_compare(Relation rel,
 	ncmpkey = Min(ntupatts, key->keysz);
 	Assert(key->heapkeyspace || ncmpkey == key->keysz);
 	Assert(!BTreeTupleIsPosting(itup) || key->allequalimage);
-	scankey = key->scankeys;
-	for (int i = 1; i <= ncmpkey; i++)
+
+	scankey = key->scankeys + *sprefix;
+
+	/* get the first non-equal attribute number */
+	for (int i = *sprefix + 1; i <= ncmpkey; i++)
 	{
 		Datum		datum;
 		bool		isNull;
@@ -767,10 +838,19 @@ _bt_compare(Relation rel,
 
 		/* if the keys are unequal, return the difference */
 		if (result != 0)
+		{
+			*sprefix = i - 1;
 			return result;
+		}
 
 		scankey++;
 	}
+
+	/*
+	 * All tuple attributes are equal to the scan key, only later attributes
+	 * could potentially not equal the scan key.
+	 */
+	*sprefix = ntupatts;
 
 	/*
 	 * All non-truncated attributes (other than heap TID) were found to be

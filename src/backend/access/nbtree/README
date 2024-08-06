@@ -901,6 +901,43 @@ large groups of duplicates, maximizing space utilization.  Note also that
 deduplication more efficient.  Deduplication can be performed infrequently,
 without merging together existing posting list tuples too often.
 
+Notes about dynamic prefix truncation
+-------------------------------------
+
+When we do a binary search on a sorted set (such as a BTree), we know that a
+tuple will be smaller than its right neighbour, and larger than its left
+neighbour.  If we know that both the left and right neighbour share a prefix
+with the scan key, we deduce that the current tuple must also share this
+prefix with the scan key, which allows us to skip this shared prefix during
+tuple compare operations when we descend the btree.
+
+However, the BTree is not a static sorted list: It is a page-based dynamic
+data structure which changes over time.  Because of this, we cannot just reuse
+the established prefix from the parent page: concurrent page deletions may
+have moved in new tuples from the keyspace left of the left separator of this
+page's downlink on the parent page, and page splits may have moved tuples
+that were previously in this page's indicated keyspace away from the page.
+This means that we have to re-establish the prefix that is shared with the
+scan key at every level of the btree: the page we're about to visit could
+contain only values that would sort left of the parent page's left downlink,
+i.e. outside the range we've built a prefix for.
+
+NOTE: This optimization is most effective on indexes where a prefix of key
+columns has many duplicate values.  Compare operations on index tuples stop at
+the first non-equal attribute, so it is quite unlikely that an index on
+(unique_values, 1, 1, 1) will ever compare the latter columns during index
+descent(_bt_search), while one on (1, 1, 1, unique_values) will essentially
+always have to compare all attributes to hit an attribute that isn't equal to
+that of the scan key's (assuming the scan key is in the index's keyspace).
+The dynamic prefix truncation allows PostgreSQL to skip most compare
+operations on the (1, 1, 1 ...) prefix, but it cannot improve the
+(unique, ...) case because that has no "wasteful" prefix that we can skip.
+
+With the above optimizations, dynamic prefix truncation improves the worst
+case complexity of indexing from O(tree_height * natts * log(tups_per_page))
+to O(tree_height * (3*natts + log(tups_per_page))) attribute compare
+operations, which can improve performance significantly.
+
 Notes about deduplication
 -------------------------
 

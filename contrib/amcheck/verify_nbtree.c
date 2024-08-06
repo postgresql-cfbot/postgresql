@@ -1798,6 +1798,8 @@ bt_target_page_check(BtreeCheckState *state)
 		if (state->checkunique && state->indexinfo->ii_Unique &&
 			P_ISLEAF(topaque) && OffsetNumberNext(offset) <= max)
 		{
+			int		sprefix = 0;
+
 			/* Save current scankey tid */
 			scantid = skey->scantid;
 
@@ -1817,7 +1819,7 @@ bt_target_page_check(BtreeCheckState *state)
 			 * bt_entry_unique_check() call if it was postponed.
 			 */
 			if (_bt_compare(state->rel, skey, state->target,
-							OffsetNumberNext(offset)) != 0 || skey->anynullkeys)
+							OffsetNumberNext(offset), &sprefix) != 0 || skey->anynullkeys)
 			{
 				lVis.blkno = InvalidBlockNumber;
 				lVis.offset = InvalidOffsetNumber;
@@ -1900,6 +1902,7 @@ bt_target_page_check(BtreeCheckState *state)
 				rightkey && P_ISLEAF(topaque) && !P_RIGHTMOST(topaque))
 			{
 				BlockNumber rightblock_number = topaque->btpo_next;
+				int		sprefix = 0;
 
 				elog(DEBUG2, "check cross page unique condition");
 
@@ -1911,7 +1914,7 @@ bt_target_page_check(BtreeCheckState *state)
 				rightkey->scantid = NULL;
 
 				/* The first key on the next page is the same */
-				if (_bt_compare(state->rel, rightkey, state->target, max) == 0 &&
+				if (_bt_compare(state->rel, rightkey, state->target, max, &sprefix) == 0 &&
 					!rightkey->anynullkeys)
 				{
 					Page		rightpage;
@@ -3174,6 +3177,7 @@ bt_rootdescend(BtreeCheckState *state, IndexTuple itup)
 		BTInsertStateData insertstate;
 		OffsetNumber offnum;
 		Page		page;
+		int			sprefix = 0;
 
 		insertstate.itup = itup;
 		insertstate.itemsz = MAXALIGN(IndexTupleSize(itup));
@@ -3183,13 +3187,13 @@ bt_rootdescend(BtreeCheckState *state, IndexTuple itup)
 		insertstate.buf = lbuf;
 
 		/* Get matching tuple on leaf page */
-		offnum = _bt_binsrch_insert(state->rel, &insertstate);
+		offnum = _bt_binsrch_insert(state->rel, &insertstate, 1);
 		/* Compare first >= matching item on leaf page, if any */
 		page = BufferGetPage(lbuf);
 		/* Should match on first heap TID when tuple has a posting list */
 		if (offnum <= PageGetMaxOffsetNumber(page) &&
 			insertstate.postingoff <= 0 &&
-			_bt_compare(state->rel, key, page, offnum) == 0)
+			_bt_compare(state->rel, key, page, offnum, &sprefix) == 0)
 			exists = true;
 		_bt_relbuf(state->rel, lbuf);
 	}
@@ -3251,6 +3255,7 @@ invariant_l_offset(BtreeCheckState *state, BTScanInsert key,
 {
 	ItemId		itemid;
 	int32		cmp;
+	int			sprefix = 0;
 
 	Assert(!key->nextkey && key->backward);
 
@@ -3261,7 +3266,7 @@ invariant_l_offset(BtreeCheckState *state, BTScanInsert key,
 	if (!key->heapkeyspace)
 		return invariant_leq_offset(state, key, upperbound);
 
-	cmp = _bt_compare(state->rel, key, state->target, upperbound);
+	cmp = _bt_compare(state->rel, key, state->target, upperbound, &sprefix);
 
 	/*
 	 * _bt_compare() is capable of determining that a scankey with a
@@ -3313,10 +3318,11 @@ invariant_leq_offset(BtreeCheckState *state, BTScanInsert key,
 					 OffsetNumber upperbound)
 {
 	int32		cmp;
+	int			sprefix = 0;
 
 	Assert(!key->nextkey && key->backward);
 
-	cmp = _bt_compare(state->rel, key, state->target, upperbound);
+	cmp = _bt_compare(state->rel, key, state->target, upperbound, &sprefix);
 
 	return cmp <= 0;
 }
@@ -3336,10 +3342,11 @@ invariant_g_offset(BtreeCheckState *state, BTScanInsert key,
 				   OffsetNumber lowerbound)
 {
 	int32		cmp;
+	int			sprefix = 0;
 
 	Assert(!key->nextkey && key->backward);
 
-	cmp = _bt_compare(state->rel, key, state->target, lowerbound);
+	cmp = _bt_compare(state->rel, key, state->target, lowerbound, &sprefix);
 
 	/* pg_upgrade'd indexes may legally have equal sibling tuples */
 	if (!key->heapkeyspace)
@@ -3374,13 +3381,14 @@ invariant_l_nontarget_offset(BtreeCheckState *state, BTScanInsert key,
 {
 	ItemId		itemid;
 	int32		cmp;
+	int			sprefix = 0;
 
 	Assert(!key->nextkey && key->backward);
 
 	/* Verify line pointer before checking tuple */
 	itemid = PageGetItemIdCareful(state, nontargetblock, nontarget,
 								  upperbound);
-	cmp = _bt_compare(state->rel, key, nontarget, upperbound);
+	cmp = _bt_compare(state->rel, key, nontarget, upperbound, &sprefix);
 
 	/* pg_upgrade'd indexes may legally have equal sibling tuples */
 	if (!key->heapkeyspace)

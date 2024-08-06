@@ -1805,78 +1805,6 @@ get_collation_actual_version(char collprovider, const char *collcollate)
 }
 
 /*
- * pg_strncoll_libc_win32_utf8
- *
- * Win32 does not have UTF-8. Convert UTF8 arguments to wide characters and
- * invoke wcscoll_l().
- */
-#ifdef WIN32
-static int
-pg_strncoll_libc_win32_utf8(const char *arg1, size_t len1, const char *arg2,
-							size_t len2, pg_locale_t locale)
-{
-	char		sbuf[TEXTBUFLEN];
-	char	   *buf = sbuf;
-	char	   *a1p,
-			   *a2p;
-	int			a1len = len1 * 2 + 2;
-	int			a2len = len2 * 2 + 2;
-	int			r;
-	int			result;
-
-	Assert(locale->provider == COLLPROVIDER_LIBC);
-	Assert(GetDatabaseEncoding() == PG_UTF8);
-#ifndef WIN32
-	Assert(false);
-#endif
-
-	if (a1len + a2len > TEXTBUFLEN)
-		buf = palloc(a1len + a2len);
-
-	a1p = buf;
-	a2p = buf + a1len;
-
-	/* API does not work for zero-length input */
-	if (len1 == 0)
-		r = 0;
-	else
-	{
-		r = MultiByteToWideChar(CP_UTF8, 0, arg1, len1,
-								(LPWSTR) a1p, a1len / 2);
-		if (!r)
-			ereport(ERROR,
-					(errmsg("could not convert string to UTF-16: error code %lu",
-							GetLastError())));
-	}
-	((LPWSTR) a1p)[r] = 0;
-
-	if (len2 == 0)
-		r = 0;
-	else
-	{
-		r = MultiByteToWideChar(CP_UTF8, 0, arg2, len2,
-								(LPWSTR) a2p, a2len / 2);
-		if (!r)
-			ereport(ERROR,
-					(errmsg("could not convert string to UTF-16: error code %lu",
-							GetLastError())));
-	}
-	((LPWSTR) a2p)[r] = 0;
-
-	errno = 0;
-	result = wcscoll_l((LPWSTR) a1p, (LPWSTR) a2p, locale->info.lt);
-	if (result == 2147483647)	/* _NLSCMPERROR; missing from mingw headers */
-		ereport(ERROR,
-				(errmsg("could not compare Unicode strings: %m")));
-
-	if (buf != sbuf)
-		pfree(buf);
-
-	return result;
-}
-#endif							/* WIN32 */
-
-/*
  * pg_strcoll_libc
  *
  * Call strcoll_l() or wcscoll_l() as appropriate for the given locale,
@@ -1891,17 +1819,7 @@ pg_strcoll_libc(const char *arg1, const char *arg2, pg_locale_t locale)
 	int			result;
 
 	Assert(locale->provider == COLLPROVIDER_LIBC);
-#ifdef WIN32
-	if (GetDatabaseEncoding() == PG_UTF8)
-	{
-		size_t		len1 = strlen(arg1);
-		size_t		len2 = strlen(arg2);
-
-		result = pg_strncoll_libc_win32_utf8(arg1, len1, arg2, len2, locale);
-	}
-	else
-#endif							/* WIN32 */
-		result = strcoll_l(arg1, arg2, locale->info.lt);
+	result = strcoll_l(arg1, arg2, locale->info.lt);
 
 	return result;
 }
@@ -1924,12 +1842,6 @@ pg_strncoll_libc(const char *arg1, size_t len1, const char *arg2, size_t len2,
 	int			result;
 
 	Assert(locale->provider == COLLPROVIDER_LIBC);
-
-#ifdef WIN32
-	/* check for this case before doing the work for nul-termination */
-	if (GetDatabaseEncoding() == PG_UTF8)
-		return pg_strncoll_libc_win32_utf8(arg1, len1, arg2, len2, locale);
-#endif							/* WIN32 */
 
 	if (bufsize1 + bufsize2 > TEXTBUFLEN)
 		buf = palloc(bufsize1 + bufsize2);

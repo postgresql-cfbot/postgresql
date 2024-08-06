@@ -379,6 +379,21 @@ lsntime_insert(LSNTimeStream *stream, TimestampTz time,
 
 
 /*
+ * Utility function for inserting a new member into the LSNTimeStream member
+ * of WAL stats.
+ */
+void
+pgstat_wal_update_lsntime_stream(XLogRecPtr lsn, TimestampTz time)
+{
+	PgStatShared_Wal *stats_shmem = &pgStatLocal.shmem->wal;
+
+	LWLockAcquire(&stats_shmem->lock, LW_EXCLUSIVE);
+	lsntime_insert(&stats_shmem->stats.stream, time, lsn);
+	LWLockRelease(&stats_shmem->lock);
+}
+
+
+/*
  * Returns a range of LSNTimes starting at lower and ending at upper and
  * covering the target_time. If target_time is before the stream, lower will
  * contain the minimum values for the datatypes. If target_time is newer than

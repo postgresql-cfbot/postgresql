@@ -512,6 +512,7 @@ typedef struct PgStat_WalStats
 	PgStat_Counter wal_sync;
 	PgStat_Counter wal_write_time;
 	PgStat_Counter wal_sync_time;
+	LSNTimeStream stream;
 	TimestampTz stat_reset_timestamp;
 } PgStat_WalStats;
 
@@ -800,6 +801,10 @@ extern void lsn_bounds_for_time(const LSNTimeStream *stream,
 extern void time_bounds_for_lsn(const LSNTimeStream *stream,
 								XLogRecPtr target_lsn,
 								LSNTime *lower, LSNTime *upper);
+
+/* Helper for maintaining the global LSNTimeStream */
+extern void pgstat_wal_update_lsntime_stream(XLogRecPtr lsn,
+											 TimestampTz time);
 
 
 /*

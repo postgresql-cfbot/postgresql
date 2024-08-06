@@ -76,6 +76,21 @@ int			BgWriterDelay = 200;
 static TimestampTz last_snapshot_ts;
 static XLogRecPtr last_snapshot_lsn = InvalidXLogRecPtr;
 
+/*
+ * Interval at which new LSN, time pairs are added into the global
+ * LSNTimeStream, in milliseconds.
+ */
+#define LOG_STREAM_INTERVAL_MS 30000
+
+/*
+ * The timestamp at which we last checked whether or not to update the global
+ * LSNTimeStream.
+ */
+static TimestampTz last_stream_check_ts;
+
+/* The LSN we last updated the LSNTimeStream with */
+static XLogRecPtr last_stream_update_lsn = InvalidXLogRecPtr;
+
 
 /*
  * Main entry point for bgwriter process
@@ -118,6 +133,12 @@ BackgroundWriterMain(char *startup_data, size_t startup_data_len)
 	 * end-of-recovery snapshot.
 	 */
 	last_snapshot_ts = GetCurrentTimestamp();
+
+	/* Insert an entry to the global LSNTimeStream as soon as we can. */
+	last_stream_check_ts = last_snapshot_ts;
+	last_stream_update_lsn = GetXLogInsertRecPtr();
+	pgstat_wal_update_lsntime_stream(last_stream_update_lsn,
+									 last_stream_check_ts);
 
 	/*
 	 * Create a memory context that we will do all our work in.  We do this so
@@ -269,26 +290,62 @@ BackgroundWriterMain(char *startup_data, size_t startup_data_len)
 		 * Checkpointer, when active, is barely ever in its mainloop and thus
 		 * makes it hard to log regularly.
 		 */
-		if (XLogStandbyInfoActive() && !RecoveryInProgress())
+
+		if (!RecoveryInProgress())
 		{
 			TimestampTz timeout = 0;
 			TimestampTz now = GetCurrentTimestamp();
 
-			timeout = TimestampTzPlusMilliseconds(last_snapshot_ts,
-												  LOG_SNAPSHOT_INTERVAL_MS);
+			if (XLogStandbyInfoActive())
+			{
+				timeout = TimestampTzPlusMilliseconds(last_snapshot_ts,
+													  LOG_SNAPSHOT_INTERVAL_MS);
+
+				/*
+				 * Only log if enough time has passed and interesting records
+				 * have been inserted since the last snapshot.  Have to
+				 * compare with <= instead of < because
+				 * GetLastImportantRecPtr() points at the start of a record,
+				 * whereas last_snapshot_lsn points just past the end of the
+				 * record.
+				 */
+				if (now >= timeout &&
+					last_snapshot_lsn <= GetLastImportantRecPtr())
+				{
+					last_snapshot_lsn = LogStandbySnapshot();
+					last_snapshot_ts = now;
+				}
+			}
+
+			timeout = TimestampTzPlusMilliseconds(last_stream_check_ts,
+												  LOG_STREAM_INTERVAL_MS);
 
 			/*
-			 * Only log if enough time has passed and interesting records have
-			 * been inserted since the last snapshot.  Have to compare with <=
-			 * instead of < because GetLastImportantRecPtr() points at the
-			 * start of a record, whereas last_snapshot_lsn points just past
-			 * the end of the record.
+			 * Periodically insert a new LSNTime into the global
+			 * LSNTimeStream. It makes sense for the background writer to
+			 * maintain the global LSNTimeStream because it runs regularly and
+			 * returns to its main loop frequently.
 			 */
-			if (now >= timeout &&
-				last_snapshot_lsn <= GetLastImportantRecPtr())
+			if (now >= timeout)
 			{
-				last_snapshot_lsn = LogStandbySnapshot();
-				last_snapshot_ts = now;
+				XLogRecPtr	insert_lsn = GetXLogInsertRecPtr();
+
+				Assert(insert_lsn != InvalidXLogRecPtr);
+
+				/*
+				 * We only insert an LSNTime if the LSN has changed since the
+				 * last update. This sacrifices accuracy on LSN -> time
+				 * conversions but saves space, which increases the accuracy
+				 * of time -> LSN conversions.
+				 */
+				if (insert_lsn > last_stream_update_lsn)
+				{
+					pgstat_wal_update_lsntime_stream(insert_lsn,
+													 now);
+					last_stream_update_lsn = insert_lsn;
+				}
+
+				last_stream_check_ts = now;
 			}
 		}
 

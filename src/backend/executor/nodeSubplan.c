@@ -160,7 +160,7 @@ ExecHashSubPlan(SubPlanState *node,
 			FindTupleHashEntry(node->hashtable,
 							   slot,
 							   node->cur_eq_comp,
-							   node->lhs_hash_funcs) != NULL)
+							   node->cur_hash_expr) != NULL)
 		{
 			ExecClearTuple(slot);
 			return BoolGetDatum(true);
@@ -1042,6 +1042,15 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 													slot,
 													sstate->planstate,
 													NULL);
+
+		sstate->cur_hash_expr = ExecBuildHash32FromAttrs(tupDescLeft,
+														 &TTSOpsMinimalTuple,
+														 sstate->lhs_hash_funcs,
+														 sstate->tab_collations,
+														 sstate->numCols,
+														 sstate->keyColIdx,
+														 parent,
+														 0);
 
 		/*
 		 * Create comparator for lookups of rows in the table (potentially

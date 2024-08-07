@@ -3970,6 +3970,121 @@ ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 }
 
 /*
+ * Build an ExprState that calls the given hash function(s) on the attnums
+ * given by 'keyColIdx' .  When numCols > 1, the hash values returned by each
+ * hash function are combined to produce a single hash value.
+ *
+ * desc: tuple descriptor for the to-be-hashed expressions
+ * ops: TupleTableSlotOps for the TupleDesc
+ * hashfunctions: FmgrInfos for each hash function to call one per numCols
+ * collations: collation to use when calling the hash function.
+ * numCols: array length of hashfunctions, collations and keyColIdx.
+ * parent: PlanState node that the 'hash_exprs' will be evaluated at
+ * init_value: Normally 0, but can be set to other values to seed the hash
+ * with some other value.  Using non-zero is slightly less efficient but can
+ * be useful.
+ */
+ExprState *
+ExecBuildHash32FromAttrs(TupleDesc desc, const TupleTableSlotOps *ops,
+						 FmgrInfo *hashfunctions, Oid *collations,
+						 int numCols, AttrNumber *keyColIdx,
+						 PlanState *parent, uint32 init_value)
+{
+	ExprState  *state = makeNode(ExprState);
+	ExprEvalStep scratch = {0};
+	intptr_t	opcode;
+	AttrNumber	last_attnum = 0;
+
+	state->parent = parent;
+
+	/* find the highest attnum so we deform the tuple to that point */
+	for (int i = 0; i < numCols; i++)
+		last_attnum = Max(last_attnum, keyColIdx[i]);
+
+	scratch.opcode = EEOP_INNER_FETCHSOME;
+	scratch.d.fetch.last_var = last_attnum;
+	scratch.d.fetch.fixed = false;
+	scratch.d.fetch.kind = NULL;
+	scratch.d.fetch.known_desc = NULL;
+	ExprEvalPushStep(state, &scratch);
+
+	if (init_value == 0)
+	{
+		/*
+		 * No initial value, so we can assign the result of the hash function
+		 * for the first hash_expr without having to concern ourselves with
+		 * combining the result with any initial value.
+		 */
+		opcode = EEOP_HASHDATUM_FIRST;
+	}
+	else
+	{
+		/* Set up operation to set the initial value. */
+		scratch.opcode = EEOP_HASHDATUM_SET_INITVAL;
+		scratch.d.hashdatum_initvalue.init_value = UInt32GetDatum(init_value);
+		scratch.resvalue = &state->resvalue;
+		scratch.resnull = &state->resnull;
+
+		ExprEvalPushStep(state, &scratch);
+
+		/*
+		 * When using an initial value use the NEXT32 ops as the FIRST ops
+		 * would overwrite the stored initial value.
+		 */
+		opcode = EEOP_HASHDATUM_NEXT32;
+	}
+
+	for (int i = 0; i < numCols; i++)
+	{
+		FmgrInfo   *finfo;
+		FunctionCallInfo fcinfo;
+		Oid			inputcollid = collations[i];
+		AttrNumber	attnum = keyColIdx[i] - 1;
+
+		finfo = &hashfunctions[i];
+		fcinfo = palloc0(SizeForFunctionCallInfo(1));
+
+		/* Initialize function call parameter structure too */
+		InitFunctionCallInfoData(*fcinfo, finfo, 1, inputcollid, NULL, NULL);
+
+		/*
+		 * Fetch inner Var for this attnum and store it in the 1st arg of the
+		 * hash func.
+		 */
+		scratch.opcode = EEOP_INNER_VAR;
+		scratch.resvalue = &fcinfo->args[0].value;
+		scratch.resnull = &fcinfo->args[0].isnull;
+		scratch.d.var.attnum = attnum;
+		scratch.d.var.vartype = TupleDescAttr(desc, attnum)->atttypid;
+
+		ExprEvalPushStep(state, &scratch);
+
+		/* Call the hash function */
+		scratch.opcode = opcode;
+		scratch.resvalue = &state->resvalue;
+		scratch.resnull = &state->resnull;
+		scratch.d.hashdatum.finfo = finfo;
+		scratch.d.hashdatum.fcinfo_data = fcinfo;
+		scratch.d.hashdatum.fn_addr = finfo->fn_addr;
+		scratch.d.hashdatum.jumpdone = -1;
+
+		ExprEvalPushStep(state, &scratch);
+
+		/* subsequent attnums must be combined with the previous */
+		opcode = EEOP_HASHDATUM_NEXT32;
+	}
+
+	scratch.resvalue = NULL;
+	scratch.resnull = NULL;
+	scratch.opcode = EEOP_DONE;
+	ExprEvalPushStep(state, &scratch);
+
+	ExecReadyExpr(state);
+
+	return state;
+}
+
+/*
  * Build an ExprState that calls the given hash function(s) on the given
  * 'hash_exprs'.  When multiple expressions are present, the hash values
  * returned by each hash function are combined to produce a single hash value.

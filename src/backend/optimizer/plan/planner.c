@@ -8102,6 +8102,10 @@ create_partitionwise_grouping_paths(PlannerInfo *root,
 	}
 }
 
+/* XXX see PartCollMatchesExprColl */
+#define PartKeyCollMatchesExprColl(partcoll, exprcoll) \
+	((partcoll) == InvalidOid || (partcoll) == (exprcoll))
+
 /*
  * group_by_has_partkey
  *
@@ -8134,13 +8138,27 @@ group_by_has_partkey(RelOptInfo *input_rel,
 
 		foreach(lc, partexprs)
 		{
+			ListCell   *lg;
 			Expr	   *partexpr = lfirst(lc);
+			Oid			partcoll = input_rel->part_scheme->partcollation[cnt];
 
-			if (list_member(groupexprs, partexpr))
+			foreach (lg, groupexprs)
 			{
-				found = true;
-				break;
+				Expr *groupexpr = lfirst(lg);
+				Oid  groupexpr_coll = exprCollation((Node *) groupexpr);
+
+				/*
+				 * Partition key match also requires collation match.
+				 */
+				if (equal(groupexpr, partexpr) &&
+					PartKeyCollMatchesExprColl(partcoll, groupexpr_coll))
+				{
+					found = true;
+					break;
+				}
 			}
+			if (found)
+				break;
 		}
 
 		/*

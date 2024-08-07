@@ -30,6 +30,7 @@
 #include "storage/procarray.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/pg_lsn.h"
 #include "utils/timestamp.h"
 
 #define UINT32_ACCESS_ONCE(var)		 ((uint32)(*((volatile uint32 *)&(var))))
@@ -1536,6 +1537,112 @@ pg_stat_get_wal(PG_FUNCTION_ARGS)
 
 	/* Returns the record as Datum */
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+}
+
+/*
+ * Returns the LSN, time pairs making up the global LSNTimeStream maintained
+ * in WAL statistics.
+ */
+Datum
+pg_stat_lsntime_stream(PG_FUNCTION_ARGS)
+{
+	ReturnSetInfo *rsinfo;
+	PgStat_WalStats *stats;
+	LSNTimeStream *stream;
+
+	InitMaterializedSRF(fcinfo, 0);
+	rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+
+	stats = pgstat_fetch_stat_wal();
+	stream = &stats->stream;
+
+	for (size_t i = 0; i < stream->length; i++)
+	{
+		Datum		values[2] = {0};
+		bool		nulls[2] = {0};
+
+		values[0] = stream->data[i].lsn;
+		values[1] = stream->data[i].time;
+		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc,
+							 values, nulls);
+	}
+
+	return (Datum) 0;
+}
+
+/*
+ * Returns the upper and lower bounds of an LSN range covering the passed-in
+ * time. If the passed-in time is far enough in the past that we don't have
+ * data, the lower bound will be InvalidXLogRecPtr. If it is in the future,
+ * the upper bound will be FFFFFFFF/FFFFFFFF.
+ */
+Datum
+pg_stat_lsn_bounds_for_time(PG_FUNCTION_ARGS)
+{
+	PgStat_WalStats *wal_stats;
+	TimestampTz target_time;
+	LSNTime		lower,
+				upper;
+	TupleDesc	tupdesc;
+	Datum		values[2] = {0};
+	bool		nulls[2] = {0};
+
+	target_time = PG_GETARG_TIMESTAMPTZ(0);
+
+	tupdesc = CreateTemplateTupleDesc(2);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "lower",
+					   PG_LSNOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "upper",
+					   PG_LSNOID, -1, 0);
+	BlessTupleDesc(tupdesc);
+
+	wal_stats = pgstat_fetch_stat_wal();
+	lsn_bounds_for_time(&wal_stats->stream, target_time, &lower, &upper);
+
+	values[0] = lower.lsn;
+	values[1] = upper.lsn;
+
+	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc,
+													  values,
+													  nulls)));
+}
+
+
+/*
+ * Returns the upper and lower bounds of a TimestampTz range covering the
+ * passed-in LSN. If the passed-in LSN is far enough in the past that we don't
+ * have data, the lower bound will be -infinity. If the passed-in LSN is in
+ * the future, the upper bound will be infinity.
+ */
+Datum
+pg_stat_time_bounds_for_lsn(PG_FUNCTION_ARGS)
+{
+	PgStat_WalStats *wal_stats;
+	XLogRecPtr	target_lsn;
+	LSNTime		lower,
+				upper;
+	TupleDesc	tupdesc;
+	Datum		values[2] = {0};
+	bool		nulls[2] = {0};
+
+	target_lsn = PG_GETARG_LSN(0);
+
+	tupdesc = CreateTemplateTupleDesc(2);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "lower",
+					   TIMESTAMPTZOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "upper",
+					   TIMESTAMPTZOID, -1, 0);
+	BlessTupleDesc(tupdesc);
+
+	wal_stats = pgstat_fetch_stat_wal();
+	time_bounds_for_lsn(&wal_stats->stream, target_lsn, &lower, &upper);
+
+	values[0] = lower.time;
+	values[1] = upper.time;
+
+	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc,
+													  values,
+													  nulls)));
 }
 
 /*

@@ -3298,6 +3298,81 @@ description | Waiting for a newly initialized WAL file to reach durable storage
    </tgroup>
   </table>
 
+  <para>
+  In addition to these WAL stats, a stream of LSN-time pairs is accessible
+  via the functions shown in <xref linkend="functions-lsn-time-stream"/>.
+  </para>
+
+  <table id="functions-lsn-time-stream">
+   <title>LSN Time Stream Information Functions</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="func_table_entry"><para role="func_signature">
+       Function
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="func_table_entry"><para role="func_signature">
+       <indexterm>
+        <primary>pg_stat_lsn_bounds_for_time</primary>
+       </indexterm>
+       <function>pg_stat_lsn_bounds_for_time</function>
+       ( <type>timestamp with time zone</type> )
+       <returnvalue>record</returnvalue>
+       (<parameter>lsn</parameter> <type>pg_lsn</type>,
+       <parameter>lsn</parameter> <type>pg_lsn</type>)
+      </para>
+      <para>
+       Returns the upper and lower bound of the LSN range on the global
+       LSNTimeLine in which the time falls.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="func_table_entry"><para role="func_signature">
+       <indexterm>
+        <primary>pg_stat_time_bounds_for_lsn</primary>
+       </indexterm>
+       <function>pg_stat_time_bounds_for_lsn</function>
+       ( <type>pg_lsn</type> )
+       <returnvalue>record</returnvalue>
+       ( <parameter>time</parameter> <type>timestamp with time zone</type>,
+       <parameter>time</parameter> <type>timestamp with time zone</type>)
+      </para>
+      <para>
+       Returns the upper and lower bound of the time range on the global
+       LSNTimeLine in which the LSN falls.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="func_table_entry"><para role="func_signature">
+       <indexterm>
+        <primary>pg_stat_lsntime_stream</primary>
+       </indexterm>
+       <function>pg_stat_lsntime_stream</function> ()
+       <returnvalue>setof record</returnvalue>
+       ( <parameter>lsn</parameter> <type>pg_lsn</type>,
+       <parameter>time</parameter> <type>timestamp with time zone</type>)
+      </para>
+      <para>
+       Returns all of the LSN-time pairs currently in the global LSN time
+       stream.
+      </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+
+
 </sect2>
 
  <sect2 id="monitoring-pg-stat-database-view">

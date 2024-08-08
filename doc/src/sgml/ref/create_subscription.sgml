@@ -263,6 +263,12 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
           <literal>copy_data = true</literal> can interact with the
           <literal>origin</literal> parameter.
          </para>
+         <para>
+          See <xref linkend="sequence-definition-mismatches"/>
+          for recommendations on how to handle any warnings about differences in
+          the sequence definition between the publisher and the subscriber,
+          which might occur when <literal>copy_data = true</literal>.
+         </para>
         </listitem>
        </varlistentry>
 

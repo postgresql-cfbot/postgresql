@@ -73,6 +73,7 @@
 #include "replication/syncrep.h"
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
+#include "storage/copydir.h"
 #include "storage/large_object.h"
 #include "storage/pg_shmem.h"
 #include "storage/predicate.h"
@@ -471,6 +472,14 @@ static const struct config_enum_entry wal_compression_options[] = {
 	{"no", WAL_COMPRESSION_NONE, true},
 	{"1", WAL_COMPRESSION_PGLZ, true},
 	{"0", WAL_COMPRESSION_NONE, true},
+	{NULL, 0, false}
+};
+
+static const struct config_enum_entry file_copy_method_options[] = {
+	{"copy", FILE_COPY_METHOD_COPY, false},
+#if defined(HAVE_COPYFILE) && defined(COPYFILE_CLONE_FORCE) || defined(HAVE_COPY_FILE_RANGE)
+	{"clone", FILE_COPY_METHOD_CLONE, false},
+#endif
 	{NULL, 0, false}
 };
 
@@ -5049,6 +5058,16 @@ struct config_enum ConfigureNamesEnum[] =
 		},
 		&shared_memory_type,
 		DEFAULT_SHARED_MEMORY_TYPE, shared_memory_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"file_copy_method", PGC_USERSET, RESOURCES_DISK,
+			gettext_noop("Selects the file copy method."),
+			NULL
+		},
+		&file_copy_method,
+		FILE_COPY_METHOD_COPY, file_copy_method_options,
 		NULL, NULL, NULL
 	},
 

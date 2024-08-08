@@ -2286,6 +2286,52 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc_file_copy_method" xreflabel="file_copy_method">
+      <term><varname>file_copy_method</varname> (<type>enum</type>)
+      <indexterm>
+       <primary><varname>file_copy_method</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the copy method that will be used while copying files.
+        Possible values are <literal>COPY</literal> (default) and
+        <literal>CLONE</literal> (if your system supports).
+       </para>
+
+       <para>
+       This parameter controls the method of the copying process in:
+       </para>
+       <itemizedlist>
+        <listitem>
+        <para>
+         <literal>FILE_COPY</literal> strategy in <command>CREATE DATABASE ... STRATEGY=FILE_COPY</command>
+        </para>
+        </listitem>
+        <listitem>
+        <para>
+         <command> ALTER DATABASE ... SET TABLESPACE ... </command>
+        </para>
+        </listitem>
+       </itemizedlist>
+
+       <para>
+        The <literal>CLONE</literal> method works the same way as
+        <literal>COPY</literal> method, except that it uses efficient file
+        cloning (also known as <quote>reflinks</quote> on
+        some systems) instead of copying files to the new data directory,
+        which can result in near-instantaneous copying of the data files.
+       </para>
+
+       <para>
+        File cloning is only supported on some operating systems and file
+        systems.  At present, it is supported on Linux (kernel 4.5 or
+        later) with Btrfs and XFS (on file systems created with reflink
+        support), and on macOS with APFS.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-max-notify-queue-pages" xreflabel="max_notify_queue_pages">
       <term><varname>max_notify_queue_pages</varname> (<type>integer</type>)
       <indexterm>

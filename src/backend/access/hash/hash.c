@@ -394,8 +394,8 @@ hashbeginscan(Relation rel, int nkeys, int norderbys)
  *	hashrescan() -- rescan an index relation
  */
 void
-hashrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
-		   ScanKey orderbys, int norderbys)
+hashrescan(IndexScanDesc scan, const ScanKeyData *scankey, int nscankeys,
+		   const ScanKeyData *orderbys, int norderbys)
 {
 	HashScanOpaque so = (HashScanOpaque) scan->opaque;
 	Relation	rel = scan->indexRelation;

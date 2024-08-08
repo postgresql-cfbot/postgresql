@@ -377,8 +377,8 @@ spgbeginscan(Relation rel, int keysz, int orderbysz)
 }
 
 void
-spgrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
-		  ScanKey orderbys, int norderbys)
+spgrescan(IndexScanDesc scan, const ScanKeyData *scankey, int nscankeys,
+		  const ScanKeyData *orderbys, int norderbys)
 {
 	SpGistScanOpaque so = (SpGistScanOpaque) scan->opaque;
 

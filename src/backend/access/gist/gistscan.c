@@ -124,8 +124,8 @@ gistbeginscan(Relation r, int nkeys, int norderbys)
 }
 
 void
-gistrescan(IndexScanDesc scan, ScanKey key, int nkeys,
-		   ScanKey orderbys, int norderbys)
+gistrescan(IndexScanDesc scan, const ScanKeyData *key, int nkeys,
+		   const ScanKeyData *orderbys, int norderbys)
 {
 	/* nkeys and norderbys arguments are ignored */
 	GISTScanOpaque so = (GISTScanOpaque) scan->opaque;

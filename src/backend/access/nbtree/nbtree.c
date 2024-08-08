@@ -356,8 +356,8 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
  *	btrescan() -- rescan an index relation
  */
 void
-btrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
-		 ScanKey orderbys, int norderbys)
+btrescan(IndexScanDesc scan, const ScanKeyData *scankey, int nscankeys,
+		 const ScanKeyData *orderbys, int norderbys)
 {
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 

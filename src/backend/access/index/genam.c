@@ -386,7 +386,7 @@ systable_beginscan(Relation heapRelation,
 				   Oid indexId,
 				   bool indexOK,
 				   Snapshot snapshot,
-				   int nkeys, ScanKey key)
+				   int nkeys, const ScanKeyData *key)
 {
 	SysScanDesc sysscan;
 	Relation	irel;
@@ -649,7 +649,7 @@ SysScanDesc
 systable_beginscan_ordered(Relation heapRelation,
 						   Relation indexRelation,
 						   Snapshot snapshot,
-						   int nkeys, ScanKey key)
+						   int nkeys, const ScanKeyData *key)
 {
 	SysScanDesc sysscan;
 	int			i;

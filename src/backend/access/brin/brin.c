@@ -943,8 +943,8 @@ bringetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
  * Re-initialize state for a BRIN index scan
  */
 void
-brinrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
-		   ScanKey orderbys, int norderbys)
+brinrescan(IndexScanDesc scan, const ScanKeyData *scankey, int nscankeys,
+		   const ScanKeyData *orderbys, int norderbys)
 {
 	/*
 	 * Other index AMs preprocess the scan keys at this point, or sometime

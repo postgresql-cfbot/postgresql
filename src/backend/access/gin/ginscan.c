@@ -439,8 +439,8 @@ ginNewScanKey(IndexScanDesc scan)
 }
 
 void
-ginrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
-		  ScanKey orderbys, int norderbys)
+ginrescan(IndexScanDesc scan, const ScanKeyData *scankey, int nscankeys,
+		  const ScanKeyData *orderbys, int norderbys)
 {
 	GinScanOpaque so = (GinScanOpaque) scan->opaque;
 

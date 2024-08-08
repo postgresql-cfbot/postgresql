@@ -955,8 +955,7 @@ brinrescan(IndexScanDesc scan, const ScanKeyData *scankey, int nscankeys,
 	 */
 
 	if (scankey && scan->numberOfKeys > 0)
-		memmove(scan->keyData, scankey,
-				scan->numberOfKeys * sizeof(ScanKeyData));
+		memcpy(scan->keyData, scankey, scan->numberOfKeys * sizeof(ScanKeyData));
 }
 
 /*

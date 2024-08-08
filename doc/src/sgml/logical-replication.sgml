@@ -1567,6 +1567,201 @@ test_sub=# SELECT * FROM t1 ORDER BY id;
 
  </sect1>
 
+ <sect1 id="logical-replication-sequences">
+  <title>Replicating Sequences</title>
+
+  <para>
+   To replicate sequences from a publisher to a subscriber, first publish the
+   sequence using <link linkend="sql-createpublication-params-for-all-sequences">
+   <command>CREATE PUBLICATION ... FOR ALL SEQUENCES</command></link>.
+  </para>
+
+  <para>
+   At the subscriber side:
+   <itemizedlist>
+    <listitem>
+     <para>
+      use <link linkend="sql-createsubscription"><command>CREATE SUBSCRIPTION</command></link>
+      to initially synchronize the published sequences.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      use <link linkend="sql-altersubscription-params-refresh-publication">
+      <command>ALTER SUBSCRIPTION ... REFRESH PUBLICATION</command></link>
+      to synchronize any newly added sequences.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      use <link linkend="sql-altersubscription-params-refresh-publication-sequences">
+      <command>ALTER SUBSCRIPTION ... REFRESH PUBLICATION SEQUENCES</command></link>
+      to re-synchronize all sequences.
+     </para>
+    </listitem>
+   </itemizedlist>
+  </para>
+
+  <para>
+   A new sequence synchronization worker will be started to synchronize the
+   sequences after executing any of the above subscriber commands, and will
+   will exit once the sequences are synchronized.
+  </para>
+  <para>
+   The ability to launch a sequence synchronization worker will be limited by
+   the <link linkend="guc-max-sync-workers-per-subscription">
+   <varname>max_sync_workers_per_subscription</varname></link>
+   configuration.
+  </para>
+
+  <sect2 id="sequence-definition-mismatches">
+   <title>Sequence Definition Mismatches</title>
+   <warning>
+    <para>
+     If there are differences in sequence definitions between the publisher and
+     subscriber, a WARNING is logged.
+    </para>
+   </warning>
+   <para>
+    To resolve this, use
+    <link linkend="sql-altersequence"><command>ALTER SEQUENCE</command></link>
+    to align the subscriber's sequence parameters with those of the publisher.
+    Subsequently, execute <link linkend="sql-altersubscription-params-refresh-publication-sequences">
+    <command>ALTER SUBSCRIPTION ... REFRESH PUBLICATION SEQUENCES</command></link>.
+   </para>
+  </sect2>
+
+  <sect2 id="sequences-out-of-sync">
+   <title>Refreshing Stale Sequences</title>
+   <para>
+    Subscriber side sequence values may frequently become out of sync due to
+    updates on the publisher.
+   </para>
+   <para>
+    To verify this, compare the sequences values between the publisher and
+    subscriber and execute
+    <link linkend="sql-altersubscription-params-refresh-publication-sequences">
+    <command>ALTER SUBSCRIPTION ... REFRESH PUBLICATION SEQUENCES</command></link>
+    if required.
+   </para>
+  </sect2>
+
+  <sect2 id="logical-replication-sequences-examples">
+   <title>Examples</title>
+
+   <para>
+    Create some test sequences on the publisher.
+<programlisting>
+test_pub=# CREATE SEQUENCE s1 START WITH 10 INCREMENT BY 1;
+CREATE SEQUENCE
+test_pub=# CREATE SEQUENCE s2 START WITH 100 INCREMENT BY 10;
+CREATE SEQUENCE
+</programlisting></para>
+
+   <para>
+    Create the same sequences on the subscriber.
+<programlisting>
+test_sub=# CREATE SEQUENCE s1 START WITH 10 INCREMENT BY 1
+CREATE SEQUENCE
+test_sub=# CREATE SEQUENCE s2 START WITH 100 INCREMENT BY 10;
+CREATE SEQUENCE
+</programlisting></para>
+
+   <para>
+    Update the sequences at the publisher side few times.
+<programlisting>
+test_pub=# SELECT nextval('s1');
+ nextval
+---------
+      10
+(1 row)
+test_pub=# SELECT NEXTVAL('s1');
+ nextval
+---------
+      11
+(1 row)
+test_pub=# SELECT nextval('s2');
+ nextval
+---------
+     100
+(1 row)
+test_pub=# SELECT nextval('s2');
+ nextval
+---------
+     110
+(1 row)
+</programlisting></para>
+
+   <para>
+    Create a publication for the sequences.
+<programlisting>
+test_pub=# CREATE PUBLICATION pub1 FOR ALL SEQUENCES;
+CREATE PUBLICATION
+</programlisting></para>
+
+   <para>
+    Subscribe to the publication.
+<programlisting>
+test_sub=# CREATE SUBSCRIPTION sub1
+test_sub-# CONNECTION 'host=localhost dbname=test_pub application_name=sub1'
+test_sub-# PUBLICATION pub1;
+CREATE SUBSCRIPTION
+</programlisting></para>
+
+   <para>
+    Observe that initial sequence values are synchronized.
+<programlisting>
+test_sub=# SELECT * FROM s1;
+ last_value | log_cnt | is_called
+------------+---------+-----------
+         11 |      31 | t
+(1 row)
+
+test_sub=# SELECT * FROM s2;
+ last_value | log_cnt | is_called
+------------+---------+-----------
+        110 |      31 | t
+(1 row)
+</programlisting></para>
+
+   <para>
+    Update the sequences at the publisher side.
+<programlisting>
+test_pub=# SELECT nextval('s1');
+ nextval
+---------
+      12
+(1 row)
+test_pub=# SELECT nextval('s2');
+ nextval
+---------
+     120
+(1 row)
+</programlisting></para>
+
+   <para>
+    Re-synchronize all the sequences at the subscriber side using
+    <link linkend="sql-altersubscription-params-refresh-publication-sequences">
+    <command>ALTER SUBSCRIPTION ... REFRESH PUBLICATION SEQUENCES</command></link>.
+<programlisting>
+test_sub=# ALTER SUBSCRIPTION sub1 REFRESH PUBLICATION SEQUENCES;
+ALTER SUBSCRIPTION
+
+test_sub=# SELECT * FROM s1;
+ last_value | log_cnt | is_called
+------------+---------+-----------
+         12 |      30 | t
+(1 row)
+
+test_sub=# SELECT * FROM s2
+ last_value | log_cnt | is_called
+------------+---------+-----------
+        120 |      30 | t
+(1 row)
+</programlisting></para>
+  </sect2>
+ </sect1>
+
  <sect1 id="logical-replication-conflicts">
   <title>Conflicts</title>
 
@@ -1873,16 +2068,18 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
 
    <listitem>
     <para>
-     Sequence data is not replicated.  The data in serial or identity columns
-     backed by sequences will of course be replicated as part of the table,
-     but the sequence itself would still show the start value on the
-     subscriber.  If the subscriber is used as a read-only database, then this
-     should typically not be a problem.  If, however, some kind of switchover
-     or failover to the subscriber database is intended, then the sequences
-     would need to be updated to the latest values, either by copying the
-     current data from the publisher (perhaps
-     using <command>pg_dump</command>) or by determining a sufficiently high
-     value from the tables themselves.
+     Incremental sequence changes are not replicated.  The data in serial or
+     identity columns backed by sequences will of course be replicated as part
+     of the table, but the sequence itself would still show the start value on
+     the subscriber.  If the subscriber is used as a read-only database, then
+     this should typically not be a problem.  If, however, some kind of
+     switchover or failover to the subscriber database is intended, then the
+     sequences would need to be updated to the latest values, either by executing
+     <link linkend="sql-altersubscription-params-refresh-publication-sequences">
+     <command>ALTER SUBSCRIPTION ... REFRESH PUBLICATION SEQUENCES</command></link>
+     or by copying the current data from the publisher (perhaps using
+     <command>pg_dump</command>) or by determining a sufficiently high value
+     from the tables themselves.
     </para>
    </listitem>
 
@@ -2195,8 +2392,8 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
    <para>
     <link linkend="guc-max-logical-replication-workers"><varname>max_logical_replication_workers</varname></link>
     must be set to at least the number of subscriptions (for leader apply
-    workers), plus some reserve for the table synchronization workers and
-    parallel apply workers.
+    workers), plus some reserve for the parallel apply workers, table synchronization workers, and a sequence
+    synchronization worker.
    </para>
 
    <para>
@@ -2210,7 +2407,7 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
    <para>
     <link linkend="guc-max-sync-workers-per-subscription"><varname>max_sync_workers_per_subscription</varname></link>
      controls the amount of parallelism of the initial data copy during the
-     subscription initialization or when new tables are added.
+     subscription initialization or when new tables or sequences are added.
    </para>
 
    <para>

@@ -26,6 +26,7 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> SET PUBLICA
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> ADD PUBLICATION <replaceable class="parameter">publication_name</replaceable> [, ...] [ WITH ( <replaceable class="parameter">publication_option</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> DROP PUBLICATION <replaceable class="parameter">publication_name</replaceable> [, ...] [ WITH ( <replaceable class="parameter">publication_option</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> REFRESH PUBLICATION [ WITH ( <replaceable class="parameter">refresh_option</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
+ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> REFRESH PUBLICATION SEQUENCES
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> ENABLE
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> DISABLE
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> SET ( <replaceable class="parameter">subscription_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] )
@@ -67,6 +68,7 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
 
   <para>
    Commands <command>ALTER SUBSCRIPTION ... REFRESH PUBLICATION</command>,
+   <command>ALTER SUBSCRIPTION ... REFRESH PUBLICATION SEQUENCES</command>,
    <command>ALTER SUBSCRIPTION ... {SET|ADD|DROP} PUBLICATION ...</command>
    with <literal>refresh</literal> option as <literal>true</literal>,
    <command>ALTER SUBSCRIPTION ... SET (failover = true|false)</command> and
@@ -158,7 +160,7 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
     <term><literal>REFRESH PUBLICATION</literal></term>
     <listitem>
      <para>
-      Fetch missing table information from publisher.  This will start
+      Fetch missing table information from the publisher.  This will start
       replication of tables that were added to the subscribed-to publications
       since <link linkend="sql-createsubscription">
       <command>CREATE SUBSCRIPTION</command></link> or
@@ -166,21 +168,42 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
      </para>
 
      <para>
+      Also, fetch missing sequence information from the publisher.
+     </para>
+
+     <para>
+      The system catalog <link linkend="catalog-pg-subscription-rel">pg_subscription_rel</link>
+      is updated to record all tables and sequences known to the subscription,
+      that are still part of the publication.
+     </para>
+
+     <para>
       <replaceable>refresh_option</replaceable> specifies additional options for the
-      refresh operation.  The supported options are:
+      refresh operation.  The only supported option is:
 
       <variablelist>
        <varlistentry>
         <term><literal>copy_data</literal> (<type>boolean</type>)</term>
         <listitem>
          <para>
-          Specifies whether to copy pre-existing data in the publications
-          that are being subscribed to when the replication starts.
-          The default is <literal>true</literal>.
+          Specifies whether to copy pre-existing data for tables and synchronize
+          sequences in the publications that are being subscribed to when the replication
+          starts. The default is <literal>true</literal>.
          </para>
          <para>
           Previously subscribed tables are not copied, even if a table's row
           filter <literal>WHERE</literal> clause has since been modified.
+         </para>
+         <para>
+          Previously subscribed sequences are not re-synchronized. To do that,
+          see <link linkend="sql-altersubscription-params-refresh-publication-sequences">
+          <command>ALTER SUBSCRIPTION ... REFRESH PUBLICATION SEQUENCES</command></link>
+         </para>
+         <para>
+          See <xref linkend="sequence-definition-mismatches"/> for recommendations on how
+          to handle any warnings about differences in the sequence definition
+          between the publisher and the subscriber, which might occur when
+          <literal>copy_data = true</literal>.
          </para>
          <para>
           See <xref linkend="sql-createsubscription-notes"/> for details of
@@ -197,6 +220,28 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
         </listitem>
        </varlistentry>
       </variablelist></para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-altersubscription-params-refresh-publication-sequences">
+    <term><literal>REFRESH PUBLICATION SEQUENCES</literal></term>
+    <listitem>
+     <para>
+      Fetch missing sequence information from the publisher, then re-synchronize
+      sequence data with the publisher. Unlike <link linkend="sql-altersubscription-params-refresh-publication">
+      <literal>ALTER SUBSCRIPTION ... REFRESH PUBLICATION</literal></link> which
+      only synchronizes newly added sequences, <literal>REFRESH PUBLICATION SEQUENCES</literal>
+      will re-synchronize the sequence data for all subscribed sequences.
+     </para>
+     <para>
+      See <xref linkend="sequence-definition-mismatches"/> for
+      recommendations on how to handle any warnings about differences in the
+      sequence definition between the publisher and the subscriber.
+     </para>
+     <para>
+      See <xref linkend="sequences-out-of-sync"/> for recommendations on how
+      to identify sequences and handle out-of-sync sequences.
+     </para>
     </listitem>
    </varlistentry>
 

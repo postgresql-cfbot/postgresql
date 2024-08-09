@@ -132,9 +132,60 @@ bool PGDLLIMPORT pg_popcount_available(void)
 	return is_bit_set_in_exx(exx, ECX, 23);
  }
 
+/*
+ * Check for CPU supprt for CPUIDEX: avx512-f
+ */
+inline static bool
+avx512f_available(void)
+{
+	exx_t exx[4] = {0, 0, 0, 0};
+
+	pg_getcpuidex(7, 0, exx);
+	return is_bit_set_in_exx(exx, EBX, 16); /* avx512-f */
+}
+
+/*
+ * Check for CPU supprt for CPUIDEX: vpclmulqdq
+ */
+inline static bool
+vpclmulqdq_available(void)
+{
+	exx_t exx[4] = {0, 0, 0, 0};
+
+	pg_getcpuidex(7, 0, exx);
+	return is_bit_set_in_exx(exx, ECX, 10); /* vpclmulqdq */
+}
+
+/*
+ * Check for CPU supprt for CPUIDEX: vpclmulqdq
+ */
+inline static bool
+avx512vl_available(void)
+{
+	exx_t exx[4] = {0, 0, 0, 0};
+
+	pg_getcpuidex(7, 0, exx);
+	return is_bit_set_in_exx(exx, EBX, 31); /* avx512-vl */
+}
+
+/*
+ * Check for CPU supprt for CPUID: sse4.2
+ */
+inline static bool
+sse42_available(void)
+{
+	exx_t exx[4] = {0, 0, 0, 0};
+
+	pg_getcpuid(1, exx);
+	return is_bit_set_in_exx(exx, ECX, 20); /* sse4.2 */
+}
+
+/****************************************************************************/
+/*                               Public API                                 */
+/****************************************************************************/
  /*
-  * Returns true if the CPU supports the instructions required for the AVX-512
-  * pg_popcount() implementation.
+  * Returns true if the CPU supports the instructions required for the
+  * AVX-512 pg_popcount() implementation.
   *
   * PA: The call to 'osxsave_available' MUST preceed the call to
   *     'zmm_regs_available' function per NB above.
@@ -151,9 +202,17 @@ bool PGDLLIMPORT pg_popcount_avx512_available(void)
  */
 bool PGDLLIMPORT pg_crc32c_sse42_available(void)
 {
-	exx_t exx[4] = {0, 0, 0, 0};
+	return sse42_available();
+}
 
-	pg_getcpuid(1, exx);
-
-	return is_bit_set_in_exx(exx, ECX, 20);
+/*
+ * Returns true if the CPU supports the instructions required for the AVX-512
+ * pg_crc32c implementation.
+ */
+inline bool
+pg_crc32c_avx512_available(void)
+{
+	return sse42_available() && osxsave_available() &&
+		   avx512f_available() && vpclmulqdq_available() &&
+		   avx512vl_available() && zmm_regs_available();
 }

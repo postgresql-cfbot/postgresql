@@ -88,6 +88,11 @@ pg_crc32c_sse42.o: CFLAGS+=$(CFLAGS_CRC)
 pg_crc32c_sse42_shlib.o: CFLAGS+=$(CFLAGS_CRC)
 pg_crc32c_sse42_srv.o: CFLAGS+=$(CFLAGS_CRC)
 
+# all versions of pg_crc32c_avx512.o need CFLAGS_CRC
+pg_crc32c_avx512.o: CFLAGS+=$(CFLAGS_CRC)
+pg_crc32c_avx512_shlib.o: CFLAGS+=$(CFLAGS_CRC)
+pg_crc32c_avx512_srv.o: CFLAGS+=$(CFLAGS_CRC)
+
 # all versions of pg_crc32c_armv8.o need CFLAGS_CRC
 pg_crc32c_armv8.o: CFLAGS+=$(CFLAGS_CRC)
 pg_crc32c_armv8_shlib.o: CFLAGS+=$(CFLAGS_CRC)

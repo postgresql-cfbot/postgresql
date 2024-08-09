@@ -2242,6 +2242,34 @@ if host_cpu == 'x86' or host_cpu == 'x86_64'
     cdata.set('USE_SSE42_CRC32C_WITH_RUNTIME_CHECK', 1)
     have_optimized_crc = true
   else
+    avx_prog = '''
+#include <immintrin.h>
+
+int main(void)
+{
+  const unsigned long k1k2[8] = {
+  0xdcb17aa4, 0xb9e02b86, 0xdcb17aa4, 0xb9e02b86,
+  0xdcb17aa4, 0xb9e02b86, 0xdcb17aa4, 0xb9e02b86};
+  unsigned char buffer[512];
+  unsigned char *aligned = (unsigned char*)(((size_t)buffer + 64L) & 0xffffffffffc0L);
+  unsigned long val;
+  __m512i x0, x1, x2, x3, x4, x5, x6, x7, x8, y5, y6, y7, y8;
+  __m128i a1, a2;
+  unsigned int crc = 0xffffffff;
+  y8 = _mm512_load_si512((__m512i *)aligned);
+  x0 = _mm512_loadu_si512((__m512i *)k1k2);
+  x1 = _mm512_loadu_si512((__m512i *)(buffer + 0x00));
+  x1 = _mm512_xor_si512(x1, _mm512_castsi128_si512(_mm_cvtsi32_si128(crc)));
+  x5 = _mm512_clmulepi64_epi128(x1, x0, 0x00);
+  x1 = _mm512_ternarylogic_epi64(x1, x5, y5, 0x96);
+  a1 = _mm512_extracti32x4_epi32(x1, 3);
+  a1 = _mm_xor_epi64(a1, _mm512_castsi512_si128(x0));
+  x0 = _mm512_shuffle_i64x2(x1, x1, 0x4E);
+  val = _mm_crc32_u64(0, _mm_extract_epi64(a1, 0));
+  crc = (unsigned int)_mm_crc32_u64(val, _mm_extract_epi64(a1, 1));
+  return crc != 0;
+}
+'''
 
     prog = '''
 #include <nmmintrin.h>
@@ -2256,12 +2284,20 @@ int main(void)
 }
 '''
 
-    if cc.links(prog, name: '_mm_crc32_u8 and _mm_crc32_u32 without -msse4.2',
+    if cc.links(avx_prog,
+          name: '_mm512_clmulepi64_epi128 ... with -msse4.2 -mavx512vl -mvpclmulqdq',
+          args: test_c_args + ['-msse4.2', '-mavx512vl', '-mvpclmulqdq'])
+      cflags_crc += ['-msse4.2','-mavx512vl','-mvpclmulqdq']
+      cdata.set('USE_AVX512_CRC32C', false)
+      cdata.set('USE_AVX512_CRC32C_WITH_RUNTIME_CHECK', 1)
+      have_optimized_crc = true
+    endif
+    if have_optimized_crc == false and cc.links(prog, name: '_mm_crc32_u8 and _mm_crc32_u32 without -msse4.2',
           args: test_c_args)
       # Use Intel SSE 4.2 unconditionally.
       cdata.set('USE_SSE42_CRC32C', 1)
       have_optimized_crc = true
-    elif cc.links(prog, name: '_mm_crc32_u8 and _mm_crc32_u32 with -msse4.2',
+    elif have_optimized_crc == false and cc.links(prog, name: '_mm_crc32_u8 and _mm_crc32_u32 with -msse4.2',
           args: test_c_args + ['-msse4.2'])
       # Use Intel SSE 4.2, with runtime check. The CPUID instruction is needed for
       # the runtime check.

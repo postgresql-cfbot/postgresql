@@ -30,4 +30,11 @@ extern PGDLLIMPORT bool pg_popcount_available(void);
  * available.
  */
 extern PGDLLIMPORT bool pg_popcount_avx512_available(void);
-#endif							/* PG_HW_FEAT_CHECK_H */
+
+/*
+ * Test to see if all hardware features required by the AVX-512 SIMD
+ * algorithm are available.
+ */
+extern bool pg_crc32c_avx512_available(void);
+
+#endif						/* PG_HW_FEAT_CHECK_H */

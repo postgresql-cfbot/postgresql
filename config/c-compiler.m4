@@ -628,6 +628,54 @@ fi
 undefine([Ac_cachevar])dnl
 ])# PGAC_SSE42_CRC32_INTRINSICS
 
+# PGAC_AVX512_CRC32_INTRINSICS
+# ---------------------------
+# Check if the compiler supports the x86 CRC instructions added in AVX-512,
+# using the intrinsic functions:
+
+# (We don't test the 8-byte variant, _mm_crc32_u64, but it is assumed to
+# be present if the other ones are, on x86-64 platforms)
+#
+# An optional compiler flag can be passed as arguments (e.g. -msse4.2
+# -mavx512vl -mvpclmulqdq). If the intrinsics are supported, sets
+# pgac_avx512_crc32_intrinsics, and CFLAGS_CRC.
+AC_DEFUN([PGAC_AVX512_CRC32_INTRINSICS],
+[define([Ac_cachevar], [AS_TR_SH([pgac_cv_avx512_crc32_intrinsics_$1])])dnl
+AC_CACHE_CHECK([for _mm512_clmulepi64_epi128, _mm512_clmulepi64_epi128... with CFLAGS=$1], [Ac_cachevar],
+[pgac_save_CFLAGS=$CFLAGS
+CFLAGS="$pgac_save_CFLAGS $1"
+AC_LINK_IFELSE([AC_LANG_PROGRAM([#include <immintrin.h>],
+  [const unsigned long k1k2[[8]] = {
+  0xdcb17aa4, 0xb9e02b86, 0xdcb17aa4, 0xb9e02b86,
+  0xdcb17aa4, 0xb9e02b86, 0xdcb17aa4, 0xb9e02b86};
+  unsigned char buffer[[512]];
+  unsigned char *aligned = (unsigned char*)(((size_t)buffer + 64L) & 0xffffffffffc0L);
+  unsigned long val;
+  __m512i x0, x1, x2, x3, x4, x5, x6, x7, x8, y5, y6, y7, y8;
+  __m128i a1, a2;
+  unsigned int crc = 0xffffffff;
+  y8 = _mm512_load_si512((__m512i *)aligned);
+  x0 = _mm512_loadu_si512((__m512i *)k1k2);
+  x1 = _mm512_loadu_si512((__m512i *)(buffer + 0x00));
+  x1 = _mm512_xor_si512(x1, _mm512_castsi128_si512(_mm_cvtsi32_si128(crc)));
+  x5 = _mm512_clmulepi64_epi128(x1, x0, 0x00);
+  x1 = _mm512_ternarylogic_epi64(x1, x5, y5, 0x96);
+  a1 = _mm512_extracti32x4_epi32(x1, 3);
+  a1 = _mm_xor_epi64(a1, _mm512_castsi512_si128(x0));
+  x0 = _mm512_shuffle_i64x2(x1, x1, 0x4E);
+  val = _mm_crc32_u64(0, _mm_extract_epi64(a1, 0));
+  crc = (unsigned int)_mm_crc32_u64(val, _mm_extract_epi64(a1, 1));
+  return crc != 0;])],
+  [Ac_cachevar=yes],
+  [Ac_cachevar=no])
+CFLAGS="$pgac_save_CFLAGS"])
+if test x"$Ac_cachevar" = x"yes"; then
+  CFLAGS_CRC="$1"
+  pgac_avx512_crc32_intrinsics=yes
+fi
+undefine([Ac_cachevar])dnl
+])# PGAC_AVX512_CRC32_INTRINSICS
+
 
 # PGAC_ARMV8_CRC32C_INTRINSICS
 # ----------------------------

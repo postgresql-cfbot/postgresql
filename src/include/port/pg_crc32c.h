@@ -49,6 +49,14 @@ typedef uint32 pg_crc32c;
 
 extern pg_crc32c pg_comp_crc32c_sse42(pg_crc32c crc, const void *data, size_t len);
 
+#elif defined (USE_AVX512_CRC32)
+/* Use Intel AVX512 instructions. */
+#define COMP_CRC32C(crc, data, len) \
+	((crc) = pg_comp_crc32c_avx512((crc), (data), (len)))
+#define FIN_CRC32C(crc) ((crc) ^= 0xFFFFFFFF)
+
+extern pg_crc32c pg_comp_crc32c_avx512(pg_crc32c crc, const void *data, size_t len);
+
 #elif defined(USE_ARMV8_CRC32C)
 /* Use ARMv8 CRC Extension instructions. */
 
@@ -66,6 +74,21 @@ extern pg_crc32c pg_comp_crc32c_armv8(pg_crc32c crc, const void *data, size_t le
 #define FIN_CRC32C(crc) ((crc) ^= 0xFFFFFFFF)
 
 extern pg_crc32c pg_comp_crc32c_loongarch(pg_crc32c crc, const void *data, size_t len);
+
+#elif defined(USE_AVX512_CRC32C_WITH_RUNTIME_CHECK)
+
+/*
+ * Use Intel AVX-512 instructions, but perform a runtime check first to check that
+ * they are available.
+ */
+#define COMP_CRC32C(crc, data, len) \
+	((crc) = pg_comp_crc32c((crc), (data), (len)))
+#define FIN_CRC32C(crc) ((crc) ^= 0xFFFFFFFF)
+
+extern pg_crc32c pg_comp_crc32c_sb8(pg_crc32c crc, const void *data, size_t len);
+extern pg_crc32c (*pg_comp_crc32c)(pg_crc32c crc, const void *data, size_t len);
+
+extern pg_crc32c pg_comp_crc32c_avx512(pg_crc32c crc, const void *data, size_t len);
 
 #elif defined(USE_SSE42_CRC32C_WITH_RUNTIME_CHECK) || defined(USE_ARMV8_CRC32C_WITH_RUNTIME_CHECK)
 

@@ -152,7 +152,7 @@ clauselist_selectivity_ext(PlannerInfo *root,
 		 */
 		s1 = statext_clauselist_selectivity(root, clauses, varRelid,
 											jointype, sjinfo, rel,
-											&estimatedclauses, false);
+											&estimatedclauses, AND_CLAUSE);
 	}
 
 	/*
@@ -384,7 +384,7 @@ clauselist_selectivity_or(PlannerInfo *root,
 		 */
 		s1 = statext_clauselist_selectivity(root, clauses, varRelid,
 											jointype, sjinfo, rel,
-											&estimatedclauses, true);
+											&estimatedclauses, OR_CLAUSE);
 	}
 
 	/*
@@ -691,6 +691,7 @@ clause_selectivity_ext(PlannerInfo *root,
 	Selectivity s1 = 0.5;		/* default for any unhandled clause type */
 	RestrictInfo *rinfo = NULL;
 	bool		cacheable = false;
+	Node	   *src = clause;
 
 	if (clause == NULL)			/* can this still happen? */
 		return s1;
@@ -832,6 +833,7 @@ clause_selectivity_ext(PlannerInfo *root,
 	{
 		OpExpr	   *opclause = (OpExpr *) clause;
 		Oid			opno = opclause->opno;
+		List	   *clauses = list_make1(src);
 
 		if (treat_as_join_clause(root, clause, rinfo, varRelid, sjinfo))
 		{
@@ -841,6 +843,25 @@ clause_selectivity_ext(PlannerInfo *root,
 								  opclause->inputcollid,
 								  jointype,
 								  sjinfo);
+		}
+		else if(use_extended_stats)
+		{
+			/* Check whether clauses are from one relation  */
+			RelOptInfo *rel = find_single_rel_for_clauses(root, clauses);
+			Bitmapset  *estimatedclauses = NULL;
+			if (rel && rel->rtekind == RTE_RELATION && rel->statlist != NIL)
+				s1 = statext_clauselist_selectivity(root, clauses, varRelid,
+														jointype, sjinfo, rel,
+														&estimatedclauses, VAR_OP_VAR_CLAUSE);
+
+			if (bms_num_members(estimatedclauses) != 1)
+			{
+				/* If there is no multi-column MCV statistics */
+				s1 = restriction_selectivity(root, opno,
+											opclause->args,
+											opclause->inputcollid,
+											varRelid);
+			}
 		}
 		else
 		{

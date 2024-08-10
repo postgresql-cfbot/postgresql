@@ -94,6 +94,14 @@ typedef struct MCVList
 	MCVItem		items[FLEXIBLE_ARRAY_MEMBER];	/* array of MCV items */
 } MCVList;
 
+/* Clause types of MCV lists */
+typedef enum ClauseType
+{
+	        OR_CLAUSE,   /* OR-clause  */
+	       AND_CLAUSE,   /* AND-clause */
+	VAR_OP_VAR_CLAUSE,   /* Var op Var */
+} ClauseType;
+
 extern MVNDistinct *statext_ndistinct_load(Oid mvoid, bool inh);
 extern MVDependencies *statext_dependencies_load(Oid mvoid, bool inh);
 extern MCVList *statext_mcv_load(Oid mvoid, bool inh);
@@ -118,7 +126,7 @@ extern Selectivity statext_clauselist_selectivity(PlannerInfo *root,
 												  SpecialJoinInfo *sjinfo,
 												  RelOptInfo *rel,
 												  Bitmapset **estimatedclauses,
-												  bool is_or);
+												  enum ClauseType clause_type);
 extern bool has_stats_of_kind(List *stats, char requiredkind);
 extern StatisticExtInfo *choose_best_statistics(List *stats, char requiredkind,
 												bool inh,
@@ -126,5 +134,6 @@ extern StatisticExtInfo *choose_best_statistics(List *stats, char requiredkind,
 												List **clause_exprs,
 												int nclauses);
 extern HeapTuple statext_expressions_load(Oid stxoid, bool inh, int idx);
+extern bool is_opclause_var_op_var(List *args, Node **exprp_left, Node **exprp_right);
 
 #endif							/* STATISTICS_H */

@@ -1916,15 +1916,19 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 					}
 				}
 			}
+			/* When !continuescan, there can't be any more matches, so stop */
 			if (!pstate.continuescan)
-			{
-				/* there can't be any more matches, so stop */
-				so->currPos.moreLeft = false;
 				break;
-			}
 
 			offnum = OffsetNumberPrev(offnum);
 		}
+
+		/*
+		 * We don't need to visit page to the left when no more matches will
+		 * be found there
+		 */
+		if (!pstate.continuescan || P_LEFTMOST(opaque))
+			so->currPos.moreLeft = false;
 
 		Assert(itemIndex >= 0);
 		so->currPos.firstItem = itemIndex;
@@ -2230,6 +2234,15 @@ _bt_readnextpage(IndexScanDesc scan, BlockNumber blkno, ScanDirection dir)
 	}
 	else
 	{
+		/* Precheck: done if we know there are no matching keys to the left */
+		if (!so->currPos.moreLeft)
+		{
+			_bt_parallel_done(scan);
+			BTScanPosUnpinIfPinned(so->currPos);
+			BTScanPosInvalidate(so->currPos);
+			return false;
+		}
+
 		/*
 		 * Should only happen in parallel cases, when some other backend
 		 * advanced the scan.

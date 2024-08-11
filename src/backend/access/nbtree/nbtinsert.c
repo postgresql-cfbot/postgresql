@@ -328,6 +328,7 @@ _bt_search_insert(Relation rel, Relation heaprel, BTInsertState insertstate)
 		{
 			Page		page;
 			BTPageOpaque opaque;
+			int			hikey_sprefix = 0;
 
 			_bt_checkpage(rel, insertstate->buf);
 			page = BufferGetPage(insertstate->buf);
@@ -346,7 +347,8 @@ _bt_search_insert(Relation rel, Relation heaprel, BTInsertState insertstate)
 				!P_IGNORE(opaque) &&
 				PageGetFreeSpace(page) > insertstate->itemsz &&
 				PageGetMaxOffsetNumber(page) >= P_HIKEY &&
-				_bt_compare(rel, insertstate->itup_key, page, P_HIKEY) > 0)
+				_bt_compare(rel, insertstate->itup_key, page, P_HIKEY,
+							&hikey_sprefix) > 0)
 			{
 				/*
 				 * Caller can use the fastpath optimization because cached
@@ -440,7 +442,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 	 * in the fastpath below, but also in the _bt_findinsertloc() call later.
 	 */
 	Assert(!insertstate->bounds_valid);
-	offset = _bt_binsrch_insert(rel, insertstate);
+	offset = _bt_binsrch_insert(rel, insertstate, 0);
 
 	/*
 	 * Scan over all equal tuples, looking for live conflicts.
@@ -450,6 +452,8 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 	Assert(itup_key->scantid == NULL);
 	for (;;)
 	{
+		int			sprefix = 0;
+
 		/*
 		 * Each iteration of the loop processes one heap TID, not one index
 		 * tuple.  Current offset number for page isn't usually advanced on
@@ -485,7 +489,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 				Assert(insertstate->bounds_valid);
 				Assert(insertstate->low >= P_FIRSTDATAKEY(opaque));
 				Assert(insertstate->low <= insertstate->stricthigh);
-				Assert(_bt_compare(rel, itup_key, page, offset) < 0);
+				Assert(_bt_compare(rel, itup_key, page, offset, &sprefix) < 0);
 				break;
 			}
 
@@ -510,7 +514,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 				if (!inposting)
 				{
 					/* Plain tuple, or first TID in posting list tuple */
-					if (_bt_compare(rel, itup_key, page, offset) != 0)
+					if (_bt_compare(rel, itup_key, page, offset, &sprefix) != 0)
 						break;	/* we're past all the equal tuples */
 
 					/* Advanced curitup */
@@ -720,11 +724,12 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 		else
 		{
 			int			highkeycmp;
+			sprefix = 0;
 
 			/* If scankey == hikey we gotta check the next page too */
 			if (P_RIGHTMOST(opaque))
 				break;
-			highkeycmp = _bt_compare(rel, itup_key, page, P_HIKEY);
+			highkeycmp = _bt_compare(rel, itup_key, page, P_HIKEY, &sprefix);
 			Assert(highkeycmp <= 0);
 			if (highkeycmp != 0)
 				break;
@@ -823,6 +828,7 @@ _bt_findinsertloc(Relation rel,
 	Page		page = BufferGetPage(insertstate->buf);
 	BTPageOpaque opaque;
 	OffsetNumber newitemoff;
+	int			hikeysprefix = 0;
 
 	opaque = BTPageGetOpaque(page);
 
@@ -867,6 +873,8 @@ _bt_findinsertloc(Relation rel,
 
 			for (;;)
 			{
+				int		sprefix = 0;
+
 				/*
 				 * Does the new tuple belong on this page?
 				 *
@@ -884,8 +892,11 @@ _bt_findinsertloc(Relation rel,
 
 				/* Test '<=', not '!=', since scantid is set now */
 				if (P_RIGHTMOST(opaque) ||
-					_bt_compare(rel, itup_key, page, P_HIKEY) <= 0)
+					_bt_compare(rel, itup_key, page, P_HIKEY, &sprefix) <= 0)
+				{
+					hikeysprefix = sprefix;
 					break;
+				}
 
 				_bt_stepright(rel, heapRel, insertstate, stack);
 				/* Update local state after stepping right */
@@ -937,6 +948,8 @@ _bt_findinsertloc(Relation rel,
 		 */
 		while (PageGetFreeSpace(page) < insertstate->itemsz)
 		{
+			int		sprefix = 0;
+
 			/*
 			 * Before considering moving right, see if we can obtain enough
 			 * space by erasing LP_DEAD items
@@ -967,9 +980,12 @@ _bt_findinsertloc(Relation rel,
 				break;
 
 			if (P_RIGHTMOST(opaque) ||
-				_bt_compare(rel, itup_key, page, P_HIKEY) != 0 ||
+				_bt_compare(rel, itup_key, page, P_HIKEY, &sprefix) != 0 ||
 				pg_prng_uint32(&pg_global_prng_state) <= (PG_UINT32_MAX / 100))
+			{
+				hikeysprefix = sprefix;
 				break;
+			}
 
 			_bt_stepright(rel, heapRel, insertstate, stack);
 			/* Update local state after stepping right */
@@ -982,10 +998,13 @@ _bt_findinsertloc(Relation rel,
 	 * We should now be on the correct page.  Find the offset within the page
 	 * for the new tuple. (Possibly reusing earlier search bounds.)
 	 */
-	Assert(P_RIGHTMOST(opaque) ||
-		   _bt_compare(rel, itup_key, page, P_HIKEY) <= 0);
+	{
+		int			sprefix PG_USED_FOR_ASSERTS_ONLY = 0;
+		Assert(P_RIGHTMOST(opaque) ||
+			   _bt_compare(rel, itup_key, page, P_HIKEY, &sprefix) <= 0);
+	}
 
-	newitemoff = _bt_binsrch_insert(rel, insertstate);
+	newitemoff = _bt_binsrch_insert(rel, insertstate, hikeysprefix);
 
 	if (insertstate->postingoff == -1)
 	{
@@ -1004,7 +1023,7 @@ _bt_findinsertloc(Relation rel,
 		 */
 		Assert(!insertstate->bounds_valid);
 		insertstate->postingoff = 0;
-		newitemoff = _bt_binsrch_insert(rel, insertstate);
+		newitemoff = _bt_binsrch_insert(rel, insertstate, hikeysprefix);
 		Assert(insertstate->postingoff == 0);
 	}
 

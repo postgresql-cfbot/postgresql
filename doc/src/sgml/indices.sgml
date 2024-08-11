@@ -1194,6 +1194,17 @@ SELECT x FROM tab WHERE x = 'key' AND z &lt; 42;
   </para>
 
   <para>
+   B-tree indexes are also capable of optimizing <quote>nearest-neighbor</quote>
+   searches, such as
+<programlisting><![CDATA[
+SELECT * FROM events ORDER BY event_date <-> date '2017-05-05' LIMIT 10;
+]]>
+</programlisting>
+   which finds the ten events closest to a given target date.  The ability
+   to do this is again dependent on the particular operator class being used.
+  </para>
+
+  <para>
    <indexterm>
     <primary><literal>INCLUDE</literal></primary>
     <secondary>in index definitions</secondary>

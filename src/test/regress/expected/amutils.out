@@ -24,7 +24,7 @@ select prop,
  nulls_first        |    |       | f
  nulls_last         |    |       | t
  orderable          |    |       | t
- distance_orderable |    |       | f
+ distance_orderable |    |       | t
  returnable         |    |       | t
  search_array       |    |       | t
  search_nulls       |    |       | t
@@ -100,7 +100,7 @@ select prop,
  nulls_first        | f     | f    | f    | f            | f           | f   | f
  nulls_last         | t     | f    | f    | f            | f           | f   | f
  orderable          | t     | f    | f    | f            | f           | f   | f
- distance_orderable | f     | f    | t    | f            | t           | f   | f
+ distance_orderable | t     | f    | t    | f            | t           | f   | f
  returnable         | t     | f    | f    | t            | t           | f   | f
  search_array       | t     | f    | f    | f            | f           | f   | f
  search_nulls       | t     | f    | t    | t            | t           | f   | t
@@ -231,7 +231,7 @@ select col, prop, pg_index_column_has_property(o, col, prop)
    1 | desc               | f
    1 | nulls_first        | f
    1 | nulls_last         | t
-   1 | distance_orderable | f
+   1 | distance_orderable | t
    1 | returnable         | t
    1 | bogus              | 
    2 | orderable          | f

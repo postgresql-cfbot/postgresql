@@ -176,6 +176,9 @@ SELECT ||/ float8 '27' AS three;
 
 SELECT f.f1, ||/f.f1 AS cbrt_f1 FROM FLOAT8_TBL f;
 
+-- distance
+SELECT f.f1, f.f1 <-> '1004.3'::float8 AS dist FROM FLOAT8_TBL f;
+SELECT f.f1, f.f1 <-> '1004.3'::float4 AS dist FROM FLOAT8_TBL f;
 
 SELECT * FROM FLOAT8_TBL;
 

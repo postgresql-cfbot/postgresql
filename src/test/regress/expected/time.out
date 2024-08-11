@@ -229,3 +229,19 @@ SELECT date_part('epoch',       TIME '2020-05-26 13:30:25.575401');
  48625.575401
 (1 row)
 
+-- distance
+SELECT f1 <-> time '01:23:45' AS "Distance" FROM TIME_TBL;
+           Distance            
+-------------------------------
+ @ 1 hour 23 mins 45 secs
+ @ 23 mins 45 secs
+ @ 39 mins 15 secs
+ @ 10 hours 35 mins 15 secs
+ @ 10 hours 36 mins 15 secs
+ @ 10 hours 37 mins 15 secs
+ @ 22 hours 35 mins 15 secs
+ @ 22 hours 36 mins 14.99 secs
+ @ 14 hours 12 mins 54 secs
+ @ 14 hours 12 mins 54 secs
+(10 rows)
+

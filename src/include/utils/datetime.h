@@ -364,4 +364,6 @@ extern void InstallTimeZoneAbbrevs(TimeZoneAbbrevTable *tbl);
 extern bool AdjustTimestampForTypmod(Timestamp *time, int32 typmod,
 									 struct Node *escontext);
 
+extern Interval *abs_interval(Interval *a);
+
 #endif							/* DATETIME_H */

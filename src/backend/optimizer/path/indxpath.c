@@ -907,6 +907,10 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	 * many of them are actually useful for this query.  This is not relevant
 	 * if we are only trying to build bitmap indexscans.
 	 */
+	useful_pathkeys = NIL;
+	orderbyclauses = NIL;
+	orderbyclausecols = NIL;
+
 	pathkeys_possibly_useful = (scantype != ST_BITMAPSCAN &&
 								has_useful_pathkeys(root, rel));
 	index_is_ordered = (index->sortopfamily != NULL);
@@ -916,16 +920,19 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 											  ForwardScanDirection);
 		useful_pathkeys = truncate_useless_pathkeys(root, rel,
 													index_pathkeys);
-		orderbyclauses = NIL;
-		orderbyclausecols = NIL;
 	}
-	else if (index->amcanorderbyop && pathkeys_possibly_useful)
+
+	if (useful_pathkeys == NIL &&
+		index->amcanorderbyop && pathkeys_possibly_useful)
 	{
 		/*
 		 * See if we can generate ordering operators for query_pathkeys or at
 		 * least some prefix thereof.  Matching to just a prefix of the
 		 * query_pathkeys will allow an incremental sort to be considered on
 		 * the index's partially sorted results.
+		 * Index  access method can be both ordered and supporting ordering by
+		 * operator.  We're looking for ordering by operator only when native
+		 * ordering doesn't match.
 		 */
 		match_pathkeys_to_index(index, root->query_pathkeys,
 								&orderbyclauses,
@@ -935,12 +942,6 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 		else
 			useful_pathkeys = list_copy_head(root->query_pathkeys,
 											 list_length(orderbyclauses));
-	}
-	else
-	{
-		useful_pathkeys = NIL;
-		orderbyclauses = NIL;
-		orderbyclausecols = NIL;
 	}
 
 	/*
@@ -3030,6 +3031,10 @@ match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
 	if (!index->amcanorderbyop)
 		return;
 
+	/* Only the one pathkey is supported when amorderbyopfirstcol is true */
+	if (index->amorderbyopfirstcol && list_length(pathkeys) != 1)
+		return;
+
 	foreach(lc1, pathkeys)
 	{
 		PathKey    *pathkey = (PathKey *) lfirst(lc1);
@@ -3058,20 +3063,24 @@ match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
 		{
 			EquivalenceMember *member = (EquivalenceMember *) lfirst(lc2);
 			int			indexcol;
+			int			ncolumns;
 
 			/* No possibility of match if it references other relations */
 			if (!bms_equal(member->em_relids, index->rel->relids))
 				continue;
 
 			/*
-			 * We allow any column of the index to match each pathkey; they
-			 * don't have to match left-to-right as you might expect.  This is
-			 * correct for GiST, and it doesn't matter for SP-GiST because
-			 * that doesn't handle multiple columns anyway, and no other
-			 * existing AMs support amcanorderbyop.  We might need different
-			 * logic in future for other implementations.
+			 * We allow any column or only the first of the index to match
+			 * each pathkey; they don't have to match left-to-right as you
+			 * might expect.  This is correct for GiST, and it doesn't matter
+			 * for SP-GiST and B-Tree because they do not handle multiple
+			 * columns anyway, and no other existing AMs support
+			 * amcanorderbyop.  We might need different logic in future for
+			 * other implementations.
 			 */
-			for (indexcol = 0; indexcol < index->nkeycolumns; indexcol++)
+			ncolumns = index->amorderbyopfirstcol ? 1 : index->nkeycolumns;
+
+			for (indexcol = 0; indexcol < ncolumns; indexcol++)
 			{
 				Expr	   *expr;
 

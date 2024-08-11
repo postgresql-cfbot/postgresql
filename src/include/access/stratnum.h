@@ -32,7 +32,12 @@ typedef uint16 StrategyNumber;
 #define BTGreaterEqualStrategyNumber	4
 #define BTGreaterStrategyNumber			5
 
-#define BTMaxStrategyNumber				5
+#define BTMaxSearchStrategyNumber		5	/* number of B-tree search
+											 * strategies */
+
+#define BTNearestStrategyNumber			6	/* for ordering by <-> operator */
+#define BTMaxStrategyNumber				6	/* total numer of B-tree
+											 * strategies */
 
 /*
  *	Strategy numbers for hash indexes. There's only one valid strategy for

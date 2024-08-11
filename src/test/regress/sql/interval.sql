@@ -81,6 +81,8 @@ SELECT -('-9223372036854775808 us'::interval); -- should fail
 SELECT -('-9223372036854775807 us'::interval); -- ok
 SELECT -('-2147483647 months -2147483647 days -9223372036854775807 us'::interval); -- should fail
 
+SELECT f1 <-> interval '@ 2 day 3 hours' FROM INTERVAL_TBL;
+
 -- Test intervals that are large enough to overflow 64 bits in comparisons
 CREATE TEMP TABLE INTERVAL_TBL_OF (f1 interval);
 INSERT INTO INTERVAL_TBL_OF (f1) VALUES

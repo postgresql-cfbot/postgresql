@@ -141,11 +141,7 @@ PG_FUNCTION_INFO_V1(time_dist);
 Datum
 time_dist(PG_FUNCTION_ARGS)
 {
-	Datum		diff = DirectFunctionCall2(time_mi_time,
-										   PG_GETARG_DATUM(0),
-										   PG_GETARG_DATUM(1));
-
-	PG_RETURN_INTERVAL_P(abs_interval(DatumGetIntervalP(diff)));
+	return time_distance(fcinfo);
 }
 
 

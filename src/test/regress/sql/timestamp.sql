@@ -424,3 +424,12 @@ select age(timestamp 'infinity', timestamp 'infinity');
 select age(timestamp 'infinity', timestamp '-infinity');
 select age(timestamp '-infinity', timestamp 'infinity');
 select age(timestamp '-infinity', timestamp '-infinity');
+SELECT make_timestamp(2014,12,28,6,30,45.887);
+
+-- distance operators
+SELECT d1 <-> date '2001-02-03' AS "Distance" FROM TIMESTAMP_TBL;
+SELECT d1 <-> date '2001-02-03' AS "Distance" FROM TIMESTAMP_TBL WHERE isfinite(d1);
+SELECT d1 <-> timestamp '2001-02-03 01:23:45' AS "Distance" FROM TIMESTAMP_TBL;
+SELECT d1 <-> timestamp '2001-02-03 01:23:45' AS "Distance" FROM TIMESTAMP_TBL WHERE isfinite(d1);
+SELECT d1 <-> timestamptz '2001-02-03 01:23:45+03' AS "Distance" FROM TIMESTAMP_TBL;
+SELECT d1 <-> timestamptz '2001-02-03 01:23:45+03' AS "Distance" FROM TIMESTAMP_TBL WHERE isfinite(d1);

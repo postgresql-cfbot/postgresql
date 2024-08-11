@@ -546,6 +546,16 @@ date_mii(PG_FUNCTION_ARGS)
 	PG_RETURN_DATEADT(result);
 }
 
+Datum
+date_distance(PG_FUNCTION_ARGS)
+{
+	/* we assume the difference can't overflow */
+	Datum		diff = DirectFunctionCall2(date_mi,
+										   PG_GETARG_DATUM(0),
+										   PG_GETARG_DATUM(1));
+
+	PG_RETURN_INT32(abs(DatumGetInt32(diff)));
+}
 
 /*
  * Promote date to timestamp.
@@ -841,6 +851,29 @@ date_cmp_timestamptz_internal(DateADT dateVal, TimestampTz dt2)
 }
 
 Datum
+date_dist_timestamp(PG_FUNCTION_ARGS)
+{
+	DateADT		dateVal = PG_GETARG_DATEADT(0);
+	Timestamp	dt2 = PG_GETARG_TIMESTAMP(1);
+	Timestamp	dt1;
+
+	if (DATE_NOT_FINITE(dateVal) || TIMESTAMP_NOT_FINITE(dt2))
+	{
+		Interval   *r = palloc(sizeof(Interval));
+
+		r->day = INT_MAX;
+		r->month = INT_MAX;
+		r->time = PG_INT64_MAX;
+
+		PG_RETURN_INTERVAL_P(r);
+	}
+
+	dt1 = date2timestamp(dateVal);
+
+	PG_RETURN_INTERVAL_P(timestamp_dist_internal(dt1, dt2));
+}
+
+Datum
 date_eq_timestamptz(PG_FUNCTION_ARGS)
 {
 	DateADT		dateVal = PG_GETARG_DATEADT(0);
@@ -904,6 +937,30 @@ date_cmp_timestamptz(PG_FUNCTION_ARGS)
 }
 
 Datum
+date_dist_timestamptz(PG_FUNCTION_ARGS)
+{
+	DateADT		dateVal = PG_GETARG_DATEADT(0);
+	TimestampTz dt2 = PG_GETARG_TIMESTAMPTZ(1);
+	TimestampTz dt1;
+
+	if (DATE_NOT_FINITE(dateVal) || TIMESTAMP_NOT_FINITE(dt2))
+	{
+		Interval   *r = palloc(sizeof(Interval));
+
+		r->day = INT_MAX;
+		r->month = INT_MAX;
+		r->time = PG_INT64_MAX;
+
+		PG_RETURN_INTERVAL_P(r);
+	}
+
+	dt1 = date2timestamptz(dateVal);
+
+	PG_RETURN_INTERVAL_P(timestamptz_dist_internal(dt1, dt2));
+}
+
+
+Datum
 timestamp_eq_date(PG_FUNCTION_ARGS)
 {
 	Timestamp	dt1 = PG_GETARG_TIMESTAMP(0);
@@ -964,6 +1021,29 @@ timestamp_cmp_date(PG_FUNCTION_ARGS)
 	DateADT		dateVal = PG_GETARG_DATEADT(1);
 
 	PG_RETURN_INT32(-date_cmp_timestamp_internal(dateVal, dt1));
+}
+
+Datum
+timestamp_dist_date(PG_FUNCTION_ARGS)
+{
+	Timestamp	dt1 = PG_GETARG_TIMESTAMP(0);
+	DateADT		dateVal = PG_GETARG_DATEADT(1);
+	Timestamp	dt2;
+
+	if (DATE_NOT_FINITE(dateVal) || TIMESTAMP_NOT_FINITE(dt1))
+	{
+		Interval   *r = palloc(sizeof(Interval));
+
+		r->day = INT_MAX;
+		r->month = INT_MAX;
+		r->time = PG_INT64_MAX;
+
+		PG_RETURN_INTERVAL_P(r);
+	}
+
+	dt2 = date2timestamp(dateVal);
+
+	PG_RETURN_INTERVAL_P(timestamp_dist_internal(dt1, dt2));
 }
 
 Datum
@@ -1058,6 +1138,28 @@ in_range_date_interval(PG_FUNCTION_ARGS)
 							   BoolGetDatum(less));
 }
 
+Datum
+timestamptz_dist_date(PG_FUNCTION_ARGS)
+{
+	TimestampTz dt1 = PG_GETARG_TIMESTAMPTZ(0);
+	DateADT		dateVal = PG_GETARG_DATEADT(1);
+	TimestampTz dt2;
+
+	if (DATE_NOT_FINITE(dateVal) || TIMESTAMP_NOT_FINITE(dt1))
+	{
+		Interval   *r = palloc(sizeof(Interval));
+
+		r->day = INT_MAX;
+		r->month = INT_MAX;
+		r->time = PG_INT64_MAX;
+
+		PG_RETURN_INTERVAL_P(r);
+	}
+
+	dt2 = date2timestamptz(dateVal);
+
+	PG_RETURN_INTERVAL_P(timestamptz_dist_internal(dt1, dt2));
+}
 
 /* extract_date()
  * Extract specified field from date type.
@@ -2249,6 +2351,16 @@ Datum
 extract_time(PG_FUNCTION_ARGS)
 {
 	return time_part_common(fcinfo, true);
+}
+
+Datum
+time_distance(PG_FUNCTION_ARGS)
+{
+	Datum		diff = DirectFunctionCall2(time_mi_time,
+										   PG_GETARG_DATUM(0),
+										   PG_GETARG_DATUM(1));
+
+	PG_RETURN_INTERVAL_P(abs_interval(DatumGetIntervalP(diff)));
 }
 
 

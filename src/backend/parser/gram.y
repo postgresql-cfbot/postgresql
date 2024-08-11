@@ -704,7 +704,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 /* ordinary key words in alphabetical order */
 %token <keyword> ABORT_P ABSENT ABSOLUTE_P ACCESS ACTION ADD_P ADMIN AFTER
-	AGGREGATE ALL ALSO ALTER ALWAYS ANALYSE ANALYZE AND ANY ARRAY AS ASC
+	AGGREGATE ALL ALSO ALTER ALWAYS ANALYSE ANALYZE AND ANY APPEND ARRAY AS ASC
 	ASENSITIVE ASSERTION ASSIGNMENT ASYMMETRIC ATOMIC AT ATTACH ATTRIBUTE AUTHORIZATION
 
 	BACKWARD BEFORE BEGIN_P BETWEEN BIGINT BINARY BIT
@@ -769,7 +769,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	QUOTE QUOTES
 
 	RANGE READ REAL REASSIGN RECURSIVE REF_P REFERENCES REFERENCING
-	REFRESH REINDEX RELATIVE_P RELEASE RENAME REPEATABLE REPLACE REPLICA
+	REFRESH REINDEX RELATIVE_P RELEASE REMOVE RENAME REPEATABLE REPLACE REPLICA
 	RESET RESTART RESTRICT RETURN RETURNING RETURNS REVOKE RIGHT ROLE ROLLBACK ROLLUP
 	ROUTINE ROUTINES ROW ROWS RULE
 
@@ -5491,6 +5491,16 @@ alter_generic_option_elem:
 			| DROP generic_option_name
 				{
 					$$ = makeDefElemExtended(NULL, $2, NULL, DEFELEM_DROP, @2);
+				}
+			| APPEND generic_option_elem
+				{
+					$$ = $2;
+					$$->defaction = DEFELEM_APPEND;
+				}
+			| REMOVE generic_option_elem
+				{
+					$$ = $2;
+					$$->defaction = DEFELEM_REMOVE;
 				}
 		;
 
@@ -17565,6 +17575,7 @@ unreserved_keyword:
 			| ALSO
 			| ALTER
 			| ALWAYS
+            | APPEND
 			| ASENSITIVE
 			| ASSERTION
 			| ASSIGNMENT
@@ -17780,6 +17791,7 @@ unreserved_keyword:
 			| REINDEX
 			| RELATIVE_P
 			| RELEASE
+            | REMOVE
 			| RENAME
 			| REPEATABLE
 			| REPLACE
@@ -18108,6 +18120,7 @@ bare_label_keyword:
 			| ANALYZE
 			| AND
 			| ANY
+            | APPEND
 			| ASC
 			| ASENSITIVE
 			| ASSERTION
@@ -18409,6 +18422,7 @@ bare_label_keyword:
 			| REINDEX
 			| RELATIVE_P
 			| RELEASE
+            | REMOVE
 			| RENAME
 			| REPEATABLE
 			| REPLACE

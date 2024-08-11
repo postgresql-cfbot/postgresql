@@ -38,6 +38,7 @@
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
+#include "utils/varlena.h"
 
 
 typedef struct
@@ -95,10 +96,10 @@ optionListToArray(List *options)
 
 /*
  * Transform a list of DefElem into text array format.  This is substantially
- * the same thing as optionListToArray(), except we recognize SET/ADD/DROP
- * actions for modifying an existing list of options, which is passed in
- * Datum form as oldOptions.  Also, if fdwvalidator isn't InvalidOid
- * it specifies a validator function to call on the result.
+ * the same thing as optionListToArray(), except we recognize
+ * SET/ADD/DROP/APPEND/REMOVE actions for modifying an existing list of
+ * options, which is passed in Datum form as oldOptions.  Also, if fdwvalidator
+ * isn't InvalidOid it specifies a validator function to call on the result.
  *
  * Returns the array in the form of a Datum, or PointerGetDatum(NULL)
  * if the list is empty.
@@ -134,10 +135,10 @@ transformGenericOptions(Oid catalogId,
 		}
 
 		/*
-		 * It is possible to perform multiple SET/DROP actions on the same
-		 * option.  The standard permits this, as long as the options to be
-		 * added are unique.  Note that an unspecified action is taken to be
-		 * ADD.
+		 * It is possible to perform multiple SET/DROP/APPEND/REMOVE actions
+		 * on the same option.  The standard permits this, as long as the
+		 * options to be added are unique.  Note that an unspecified action is
+		 * taken to be ADD.
 		 */
 		switch (od->defaction)
 		{
@@ -157,6 +158,74 @@ transformGenericOptions(Oid catalogId,
 							 errmsg("option \"%s\" not found",
 									od->defname)));
 				lfirst(cell) = od;
+				break;
+
+			case DEFELEM_APPEND:
+				/* Should act like action ADD */
+				if (!cell)
+					resultOptions = lappend(resultOptions, od);
+				else
+				{
+					StringInfo	str = makeStringInfo();
+
+					appendStringInfoString(str, defGetString(lfirst(cell)));
+
+					if (strlen(str->data) && strlen(defGetString(od)))
+						appendStringInfoChar(str, ',');
+
+					appendStringInfoString(str, defGetString(od));
+
+					strVal(od->arg) = str->data;
+					lfirst(cell) = od;
+				}
+				break;
+
+			case DEFELEM_REMOVE:
+				if (!cell)
+					ereport(ERROR,
+							(errcode(ERRCODE_UNDEFINED_OBJECT),
+							 errmsg("option \"%s\" not found",
+									od->defname)));
+				else
+				{
+					StringInfo	str;
+					List	   *currentValues;
+					List	   *discardValues;
+					ListCell   *cv;
+					ListCell   *dv;
+
+					SplitIdentifierString(defGetString(lfirst(cell)), ',', &currentValues);
+					SplitIdentifierString(defGetString(od), ',', &discardValues);
+
+					foreach(cv, currentValues)
+					{
+						foreach(dv, discardValues)
+						{
+							if (strcmp((char *) lfirst(cv), (char *) lfirst(dv)) == 0)
+							{
+								currentValues = foreach_delete_current(currentValues, cv);
+								break;
+							}
+						}
+					}
+
+					str = makeStringInfo();
+
+					foreach(cv, currentValues)
+					{
+						appendStringInfoString(str, (char *) lfirst(cv));
+						appendStringInfoChar(str, ',');
+					}
+
+					/* Removing last added , */
+					trimLastNCharsStringInfo(str, 1);
+
+					list_free(currentValues);
+					list_free(discardValues);
+
+					strVal(od->arg) = str->data;
+					lfirst(cell) = od;
+				}
 				break;
 
 			case DEFELEM_ADD:

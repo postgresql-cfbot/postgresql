@@ -163,6 +163,14 @@ initStringInfoFromString(StringInfo str, char *data, int len)
 extern void resetStringInfo(StringInfo str);
 
 /*------------------------
+ * trimLastNCharsStringInfo
+ * Clears the last 'n' characters of the StringInfo. If the
+ * length of the StringInfo is less than 'n', the entire StringInfo
+ * is cleared. The StringInfo object remains valid after this operation.
+ */
+extern void trimLastNCharsStringInfo(StringInfo str, const int n);
+
+/*------------------------
  * appendStringInfo
  * Format text data under the control of fmt (an sprintf-style format string)
  * and append it to whatever is already in str.  More space is allocated

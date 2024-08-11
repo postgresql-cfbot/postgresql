@@ -85,6 +85,16 @@ resetStringInfo(StringInfo str)
 	str->cursor = 0;
 }
 
+void
+trimLastNCharsStringInfo(StringInfo str, const int n)
+{
+	/* don't allow trimming of read-only StringInfos */
+	Assert(str->maxlen != 0);
+
+	str->len = (str->len >= n) ? (str->len - n) : 0;
+	str->data[str->len] = '\0';
+}
+
 /*
  * appendStringInfo
  *

@@ -91,7 +91,7 @@
  * behave as if two_phase = off. When the apply worker detects that all
  * tablesyncs have become READY (while the tri-state was PENDING) it will
  * restart the apply worker process. This happens in
- * process_syncing_tables_for_apply.
+ * ProcessSyncingTablesForApply.
  *
  * When the (re-started) apply worker finds that all tablesyncs are READY for a
  * two_phase tri-state of PENDING it start streaming messages with the
@@ -1027,7 +1027,7 @@ apply_handle_commit(StringInfo s)
 	apply_handle_commit_internal(&commit_data);
 
 	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(commit_data.end_lsn);
+	SyncProcessRelations(commit_data.end_lsn);
 
 	pgstat_report_activity(STATE_IDLE, NULL);
 	reset_apply_error_context_info();
@@ -1149,7 +1149,7 @@ apply_handle_prepare(StringInfo s)
 	in_remote_transaction = false;
 
 	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(prepare_data.end_lsn);
+	SyncProcessRelations(prepare_data.end_lsn);
 
 	/*
 	 * Since we have already prepared the transaction, in a case where the
@@ -1205,7 +1205,7 @@ apply_handle_commit_prepared(StringInfo s)
 	in_remote_transaction = false;
 
 	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(prepare_data.end_lsn);
+	SyncProcessRelations(prepare_data.end_lsn);
 
 	clear_subscription_skip_lsn(prepare_data.end_lsn);
 
@@ -1271,7 +1271,7 @@ apply_handle_rollback_prepared(StringInfo s)
 	in_remote_transaction = false;
 
 	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(rollback_data.rollback_end_lsn);
+	SyncProcessRelations(rollback_data.rollback_end_lsn);
 
 	pgstat_report_activity(STATE_IDLE, NULL);
 	reset_apply_error_context_info();
@@ -1406,7 +1406,7 @@ apply_handle_stream_prepare(StringInfo s)
 	pgstat_report_stat(false);
 
 	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(prepare_data.end_lsn);
+	SyncProcessRelations(prepare_data.end_lsn);
 
 	/*
 	 * Similar to prepare case, the subskiplsn could be left in a case of
@@ -2248,7 +2248,7 @@ apply_handle_stream_commit(StringInfo s)
 	}
 
 	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(commit_data.end_lsn);
+	SyncProcessRelations(commit_data.end_lsn);
 
 	pgstat_report_activity(STATE_IDLE, NULL);
 
@@ -3717,7 +3717,7 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 			maybe_reread_subscription();
 
 			/* Process any table synchronization changes. */
-			process_syncing_tables(last_received);
+			SyncProcessRelations(last_received);
 		}
 
 		/* Cleanup the memory. */
@@ -4775,7 +4775,7 @@ SetupApplyOrSyncWorker(int worker_slot)
 	 * the subscription relation state.
 	 */
 	CacheRegisterSyscacheCallback(SUBSCRIPTIONRELMAP,
-								  invalidate_syncing_table_states,
+								  SyncInvalidateRelationStates,
 								  (Datum) 0);
 }
 

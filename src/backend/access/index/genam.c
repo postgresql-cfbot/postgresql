@@ -420,16 +420,14 @@ systable_beginscan(Relation heapRelation,
 	if (irel)
 	{
 		int			i;
-		ScanKey		idxkey;
-
-		idxkey = palloc_array(ScanKeyData, nkeys);
+		ScanKeyData idxkey[INDEX_MAX_KEYS];
 
 		/* Convert attribute numbers to be index column numbers. */
+		memcpy(idxkey, key, sizeof(ScanKeyData) * nkeys);
+
 		for (i = 0; i < nkeys; i++)
 		{
 			int			j;
-
-			memcpy(&idxkey[i], &key[i], sizeof(ScanKeyData));
 
 			for (j = 0; j < IndexRelationGetNumberOfAttributes(irel); j++)
 			{
@@ -653,7 +651,7 @@ systable_beginscan_ordered(Relation heapRelation,
 {
 	SysScanDesc sysscan;
 	int			i;
-	ScanKey		idxkey;
+	ScanKeyData idxkey[INDEX_MAX_KEYS];
 
 	/* REINDEX can probably be a hard error here ... */
 	if (ReindexIsProcessingIndex(RelationGetRelid(indexRelation)))
@@ -685,14 +683,12 @@ systable_beginscan_ordered(Relation heapRelation,
 		sysscan->snapshot = NULL;
 	}
 
-	idxkey = palloc_array(ScanKeyData, nkeys);
-
 	/* Convert attribute numbers to be index column numbers. */
+	memcpy(idxkey, key, sizeof(ScanKeyData) * nkeys);
+
 	for (i = 0; i < nkeys; i++)
 	{
 		int			j;
-
-		memcpy(&idxkey[i], &key[i], sizeof(ScanKeyData));
 
 		for (j = 0; j < IndexRelationGetNumberOfAttributes(indexRelation); j++)
 		{

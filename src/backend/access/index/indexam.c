@@ -57,6 +57,7 @@
 #include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
+#include "utils/injection_point.h"
 
 
 /* ----------------------------------------------------------------
@@ -696,6 +697,13 @@ index_getnext_slot(IndexScanDesc scan, ScanDirection direction, TupleTableSlot *
 		 * the index.
 		 */
 		Assert(ItemPointerIsValid(&scan->xs_heaptid));
+#ifdef USE_INJECTION_POINTS
+		if (!IsCatalogRelationOid(scan->indexRelation->rd_id))
+		{
+			INJECTION_POINT("index_getnext_slot_before_fetch");
+		}
+#endif
+
 		if (index_fetch_heap(scan, slot))
 			return true;
 	}

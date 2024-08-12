@@ -810,6 +810,7 @@ check_exclusion_or_unique_constraint(Relation heap, Relation index,
 	 * May have to restart scan from this point if a potential conflict is
 	 * found.
 	 */
+	INJECTION_POINT("check_exclusion_or_unique_constraint_before_index_scan");
 retry:
 	conflict = false;
 	found_self = false;

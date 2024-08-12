@@ -42,6 +42,9 @@
 /* GUC parameters */
 int			compute_query_id = COMPUTE_QUERY_ID_AUTO;
 
+/* Whether to merge constants in a list when computing query_id */
+bool		query_id_const_merge = false;
+
 /*
  * True when compute_query_id is ON or AUTO, and a module requests them.
  *
@@ -53,8 +56,10 @@ bool		query_id_enabled = false;
 
 static void AppendJumble(JumbleState *jstate,
 						 const unsigned char *item, Size size);
-static void RecordConstLocation(JumbleState *jstate, int location);
+static void RecordConstLocation(JumbleState *jstate,
+								int location, bool merged);
 static void _jumbleNode(JumbleState *jstate, Node *node);
+static void _jumbleElements(JumbleState *jstate, List *elements);
 static void _jumbleA_Const(JumbleState *jstate, Node *node);
 static void _jumbleList(JumbleState *jstate, Node *node);
 
@@ -154,6 +159,18 @@ EnableQueryId(void)
 }
 
 /*
+ * Controls constants merging for query identifier computation.
+ *
+ * Third-party plugins can use this function to enable/disable merging
+ * of constants in a list when query identifier is computed.
+ */
+void
+SetQueryIdConstMerge(bool value)
+{
+	query_id_const_merge = value;
+}
+
+/*
  * AppendJumble: Append a value that is substantive in a given query to
  * the current jumble.
  */
@@ -191,11 +208,15 @@ AppendJumble(JumbleState *jstate, const unsigned char *item, Size size)
 }
 
 /*
- * Record location of constant within query string of query tree
- * that is currently being walked.
+ * Record location of constant within query string of query tree that is
+ * currently being walked.
+ *
+ * Merged argument signals that the constant represents the first or the last
+ * element in a series of merged constants, and everything but the first/last
+ * element contributes nothing to the jumble hash.
  */
 static void
-RecordConstLocation(JumbleState *jstate, int location)
+RecordConstLocation(JumbleState *jstate, int location, bool merged)
 {
 	/* -1 indicates unknown or undefined location */
 	if (location >= 0)
@@ -211,15 +232,67 @@ RecordConstLocation(JumbleState *jstate, int location)
 		}
 		jstate->clocations[jstate->clocations_count].location = location;
 		/* initialize lengths to -1 to simplify third-party module usage */
+		jstate->clocations[jstate->clocations_count].merged = merged;
 		jstate->clocations[jstate->clocations_count].length = -1;
 		jstate->clocations_count++;
 	}
 }
 
+/*
+ * Verify if the provided list contains could be merged down, which means it
+ * contains only constant expressions.
+ *
+ * Return value indicates if merging is possible.
+ *
+ * Note that this function searches only for explicit Const nodes and does not
+ * try to simplify expressions.
+ */
+static bool
+IsMergeableConstList(List *elements, Const **firstConst, Const **lastConst)
+{
+	ListCell   *temp;
+	Node	   *firstExpr = NULL;
+
+	if (elements == NIL)
+		return false;
+
+	if (!query_id_const_merge)
+	{
+		/* Merging is disabled, process everything one by one */
+		return false;
+	}
+
+	firstExpr = linitial(elements);
+
+	/*
+	 * If the first expression is a constant, verify if the following elements
+	 * are constants as well. If yes, the list is eligible for merging, and the
+	 * order of magnitude need to be calculated.
+	 */
+	if (IsA(firstExpr, Const))
+	{
+		foreach(temp, elements)
+			if (!IsA(lfirst(temp), Const))
+				return false;
+
+		*firstConst = (Const *) firstExpr;
+		*lastConst = llast_node(Const, elements);
+		return true;
+	}
+
+	/*
+	 * If we end up here, it means no constants merging is possible, process
+	 * the list as usual.
+	 */
+	return false;
+}
+
 #define JUMBLE_NODE(item) \
 	_jumbleNode(jstate, (Node *) expr->item)
-#define JUMBLE_LOCATION(location) \
-	RecordConstLocation(jstate, expr->location)
+#define JUMBLE_ELEMENTS(list) \
+	_jumbleElements(jstate, (List *) expr->list)
+#define JUMBLE_LOCATION(location, merged) \
+	RecordConstLocation(jstate, expr->location, merged)
 #define JUMBLE_FIELD(item) \
 	AppendJumble(jstate, (const unsigned char *) &(expr->item), sizeof(expr->item))
 #define JUMBLE_FIELD_SINGLE(item) \
@@ -231,6 +304,26 @@ do { \
 } while(0)
 
 #include "queryjumblefuncs.funcs.c"
+
+static void
+_jumbleElements(JumbleState *jstate, List *elements)
+{
+	Const *first, *last;
+	if (IsMergeableConstList(elements, &first, &last))
+	{
+		/*
+		 * Both first and last constants have to be recorded. The first one
+		 * will indicate the merged interval, the last one will tell us the
+		 * length of the interval within the query text.
+		 */
+		RecordConstLocation(jstate, first->location, true);
+		RecordConstLocation(jstate, last->location, true);
+	}
+	else
+	{
+		_jumbleNode(jstate, (Node *) elements);
+	}
+}
 
 static void
 _jumbleNode(JumbleState *jstate, Node *node)

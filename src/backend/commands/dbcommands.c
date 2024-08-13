@@ -1555,11 +1555,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
  * 2. locale encoding = -1, which means that we couldn't determine the
  * locale's encoding and have to trust the user to get it right.
  *
- * 3. selected encoding is UTF8 and platform is win32. This is because
- * UTF8 is a pseudo codepage that is supported in all locales since it's
- * converted to UTF16 before being used.
- *
- * 4. selected encoding is SQL_ASCII, but only if you're a superuser. This
+ * 3. selected encoding is SQL_ASCII, but only if you're a superuser. This
  * is risky but we have historically allowed it --- notably, the
  * regression tests require it.
  *
@@ -1574,9 +1570,6 @@ check_encoding_locale_matches(int encoding, const char *collate, const char *cty
 	if (!(ctype_encoding == encoding ||
 		  ctype_encoding == PG_SQL_ASCII ||
 		  ctype_encoding == -1 ||
-#ifdef WIN32
-		  encoding == PG_UTF8 ||
-#endif
 		  (encoding == PG_SQL_ASCII && superuser())))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -1589,9 +1582,6 @@ check_encoding_locale_matches(int encoding, const char *collate, const char *cty
 	if (!(collate_encoding == encoding ||
 		  collate_encoding == PG_SQL_ASCII ||
 		  collate_encoding == -1 ||
-#ifdef WIN32
-		  encoding == PG_UTF8 ||
-#endif
 		  (encoding == PG_SQL_ASCII && superuser())))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),

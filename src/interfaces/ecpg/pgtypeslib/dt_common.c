@@ -8,6 +8,7 @@
 
 #include "common/string.h"
 #include "dt.h"
+#include "ecpg_poison.h"
 #include "pgtypes_timestamp.h"
 #include "pgtypeslib_extern.h"
 

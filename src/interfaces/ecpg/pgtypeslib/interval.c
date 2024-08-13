@@ -12,6 +12,7 @@
 
 #include "common/string.h"
 #include "dt.h"
+#include "ecpg_poison.h"
 #include "pgtypes_error.h"
 #include "pgtypes_interval.h"
 #include "pgtypeslib_extern.h"

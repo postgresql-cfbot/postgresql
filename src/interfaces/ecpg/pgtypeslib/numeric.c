@@ -6,6 +6,7 @@
 #include <float.h>
 #include <limits.h>
 
+#include "ecpg_poison.h"
 #include "pgtypes_error.h"
 #include "pgtypes_numeric.h"
 #include "pgtypeslib_extern.h"

@@ -6,6 +6,7 @@
 #include <math.h>
 
 #include "ecpgerrno.h"
+#include "ecpg_poison.h"
 #include "ecpglib.h"
 #include "ecpglib_extern.h"
 #include "ecpgtype.h"

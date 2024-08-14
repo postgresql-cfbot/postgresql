@@ -2686,12 +2686,12 @@ const char *PQparameterStatus(const PGconn *conn, const char *paramName);
 int PQprotocolVersion(const PGconn *conn);
 </synopsis>
        Applications might wish to use this function to determine whether certain
-       features are supported.  Currently, the possible values are 3
-       (3.0 protocol), or zero (connection bad).  The protocol version will
-       not change after connection startup is complete, but it could
-       theoretically change during a connection reset.  The 3.0 protocol is
-       supported by <productname>PostgreSQL</productname> server versions 7.4
-       and above.
+       features are supported. The result is formed by multiplying the server's
+       major version number by 10000 and adding the minor version number.  For
+       example, version 3.2 would be returned as 30002, and version 4.0 would
+       be returned as 40000. The exception to this rule is protocol version
+       3.0, which will be returned as the value 3 for backwards compatibility
+       reasons. Zero is returned if the connection is bad.
       </para>
      </listitem>
     </varlistentry>

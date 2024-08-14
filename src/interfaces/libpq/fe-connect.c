@@ -7154,7 +7154,9 @@ PQprotocolVersion(const PGconn *conn)
 		return 0;
 	if (conn->status == CONNECTION_BAD)
 		return 0;
-	return PG_PROTOCOL_MAJOR(conn->pversion);
+	if (conn->pversion == PG_PROTOCOL(3, 0))
+		return 3;
+	return PG_PROTOCOL_FULL(conn->pversion);
 }
 
 int

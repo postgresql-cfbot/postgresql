@@ -750,6 +750,16 @@ SELECT get_byte('\x1234567890abcdef00'::bytea, 3);
 SELECT get_byte('\x1234567890abcdef00'::bytea, 99);  -- error
 SELECT set_byte('\x1234567890abcdef00'::bytea, 7, 11);
 SELECT set_byte('\x1234567890abcdef00'::bytea, 99, 11);  -- error
+SELECT get_bytes('\x1122334455667788'::bytea, 0, 8) = 0x1122334455667788;
+SELECT get_bytes('\x1122334455667788'::bytea, 1, 2) = 0x2233;
+SELECT get_bytes('\x1122334455667788'::bytea, 0, 0); -- error
+SELECT get_bytes('\x1122334455667788'::bytea, 0, 9); -- error
+SELECT get_bytes('\x1122334455667788'::bytea, 1, 8); -- error
+SELECT set_bytes('\x0123456789abcdef'::bytea, 0, 8, 0x1122334455667788);
+SELECT set_bytes('\x1122334455667788'::bytea, 1, 2, 0xAABB);
+SELECT set_bytes('\x0123456789abcdef'::bytea, 0, 0, 123); -- error
+SELECT set_bytes('\x0123456789abcdef'::bytea, 0, 9, 123); -- error
+SELECT set_bytes('\x0123456789abcdef'::bytea, 1, 8, 123); -- error
 
 --
 -- test behavior of escape_string_warning and standard_conforming_strings options

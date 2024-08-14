@@ -753,6 +753,7 @@ extern PGresult *pqFunctionCall3(PGconn *conn, Oid fnid,
   */
 extern int	pqCheckOutBufferSpace(size_t bytes_needed, PGconn *conn);
 extern int	pqCheckInBufferSpace(size_t bytes_needed, PGconn *conn);
+extern void pqParseDone(PGconn *conn, int newInStart);
 extern int	pqGetc(char *result, PGconn *conn);
 extern int	pqPutc(char c, PGconn *conn);
 extern int	pqGets(PQExpBuffer buf, PGconn *conn);
@@ -889,6 +890,8 @@ extern ssize_t pg_GSS_read(PGconn *conn, void *ptr, size_t len);
 extern void pqTraceOutputMessage(PGconn *conn, const char *message,
 								 bool toServer);
 extern void pqTraceOutputNoTypeByteMessage(PGconn *conn, const char *message);
+extern void pqTraceOutputCharResponse(PGconn *conn, const char *requestType,
+									  char response);
 
 /* === miscellaneous macros === */
 

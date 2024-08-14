@@ -472,10 +472,57 @@ pqTraceOutput_Query(FILE *f, const char *message, int *cursor)
 }
 
 static void
-pqTraceOutput_Authentication(FILE *f, const char *message, int *cursor)
+pqTraceOutput_Authentication(FILE *f, const char *message, int *cursor, int length, bool regress)
 {
-	fprintf(f, "Authentication\t");
-	pqTraceOutputInt32(f, message, cursor, false);
+	int			authType = 0;
+
+	memcpy(&authType, message + *cursor, 4);
+	authType = (int) pg_ntoh32(authType);
+	*cursor += 4;
+	switch (authType)
+	{
+		case AUTH_REQ_OK:
+			fprintf(f, "AuthenticationOk");
+			break;
+		case AUTH_REQ_KRB5:
+			fprintf(f, "AuthenticationKerberosV5");
+			break;
+		case AUTH_REQ_PASSWORD:
+			fprintf(f, "AuthenticationCleartextPassword");
+			break;
+		case AUTH_REQ_MD5:
+			fprintf(f, "AuthenticationMD5Password");
+			break;
+		case AUTH_REQ_GSS:
+			fprintf(f, "AuthenticationGSS");
+			break;
+		case AUTH_REQ_GSS_CONT:
+			fprintf(f, "AuthenticationGSSContinue");
+			pqTraceOutputNchar(f, length - *cursor + 1, message, cursor, regress);
+			break;
+		case AUTH_REQ_SSPI:
+			fprintf(f, "AuthenticationSSPI");
+			break;
+		case AUTH_REQ_SASL:
+			fprintf(f, "AuthenticationSASL");
+			while (message[*cursor] != '\0')
+			{
+				pqTraceOutputString(f, message, cursor, false);
+			}
+			pqTraceOutputString(f, message, cursor, false);
+
+			break;
+		case AUTH_REQ_SASL_CONT:
+			fprintf(f, "AuthenticationSASLContinue");
+			pqTraceOutputNchar(f, length - *cursor + 1, message, cursor, regress);
+			break;
+		case AUTH_REQ_SASL_FIN:
+			fprintf(f, "AuthenticationSASLFinal");
+			pqTraceOutputNchar(f, length - *cursor + 1, message, cursor, regress);
+			break;
+		default:
+			fprintf(f, "Unknown authentication message %d", authType);
+	}
 }
 
 static void
@@ -521,9 +568,15 @@ pqTraceOutput_RowDescription(FILE *f, const char *message, int *cursor, bool reg
 static void
 pqTraceOutput_NegotiateProtocolVersion(FILE *f, const char *message, int *cursor)
 {
+	int			nparams;
+
 	fprintf(f, "NegotiateProtocolVersion\t");
 	pqTraceOutputInt32(f, message, cursor, false);
-	pqTraceOutputInt32(f, message, cursor, false);
+	nparams = pqTraceOutputInt32(f, message, cursor, false);
+	for (int i = 0; i < nparams; i++)
+	{
+		pqTraceOutputString(f, message, cursor, false);
+	}
 }
 
 static void
@@ -714,7 +767,7 @@ pqTraceOutputMessage(PGconn *conn, const char *message, bool toServer)
 			pqTraceOutput_Query(conn->Pfdebug, message, &logCursor);
 			break;
 		case PqMsg_AuthenticationRequest:
-			pqTraceOutput_Authentication(conn->Pfdebug, message, &logCursor);
+			pqTraceOutput_Authentication(conn->Pfdebug, message, &logCursor, length, regress);
 			break;
 		case PqMsg_PortalSuspended:
 			fprintf(conn->Pfdebug, "PortalSuspended");
@@ -839,4 +892,24 @@ pqTraceOutputNoTypeByteMessage(PGconn *conn, const char *message)
 	}
 
 	fputc('\n', conn->Pfdebug);
+}
+
+/*
+ * Trace a single-byte backend response received for a specific request
+ * type the frontend previously sent.  Only useful for the simplest of
+ * FE/BE interaction workflows such as authentication.
+ */
+void
+pqTraceOutputCharResponse(PGconn *conn, const char *requestType,
+						  char response)
+{
+	if ((conn->traceFlags & PQTRACE_SUPPRESS_TIMESTAMPS) == 0)
+	{
+		char		timestr[128];
+
+		pqTraceFormatTimestamp(timestr, sizeof(timestr));
+		fprintf(conn->Pfdebug, "%s\t", timestr);
+	}
+
+	fprintf(conn->Pfdebug, "B\t1\t%s\t %c\n", requestType, response);
 }

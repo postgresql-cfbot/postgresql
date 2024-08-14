@@ -70,6 +70,7 @@ typedef struct BTParallelScanDescData
 	BTPS_State	btps_pageStatus;	/* indicates whether next page is
 									 * available for scan. see above for
 									 * possible states of parallel scan. */
+	uint64		btps_nsearches;	/* instrumentation */
 	slock_t		btps_mutex;		/* protects above variables, btps_arrElems */
 	ConditionVariable btps_cv;	/* used to synchronize parallel scan */
 
@@ -550,6 +551,7 @@ btinitparallelscan(void *target)
 	SpinLockInit(&bt_target->btps_mutex);
 	bt_target->btps_scanPage = InvalidBlockNumber;
 	bt_target->btps_pageStatus = BTPARALLEL_NOT_INITIALIZED;
+	bt_target->btps_nsearches = 0;
 	ConditionVariableInit(&bt_target->btps_cv);
 }
 
@@ -575,6 +577,7 @@ btparallelrescan(IndexScanDesc scan)
 	SpinLockAcquire(&btscan->btps_mutex);
 	btscan->btps_scanPage = InvalidBlockNumber;
 	btscan->btps_pageStatus = BTPARALLEL_NOT_INITIALIZED;
+	/* deliberately don't reset btps_nsearches (matches index_rescan) */
 	SpinLockRelease(&btscan->btps_mutex);
 }
 
@@ -683,6 +686,11 @@ _bt_parallel_seize(IndexScanDesc scan, BlockNumber *pageno, bool first)
 			 * We have successfully seized control of the scan for the purpose
 			 * of advancing it to a new page!
 			 */
+			if (first && btscan->btps_pageStatus == BTPARALLEL_NOT_INITIALIZED)
+			{
+				/* count the first primitive scan for this btrescan */
+				btscan->btps_nsearches++;
+			}
 			btscan->btps_pageStatus = BTPARALLEL_ADVANCING;
 			*pageno = btscan->btps_scanPage;
 			exit_loop = true;
@@ -764,6 +772,8 @@ _bt_parallel_done(IndexScanDesc scan)
 		btscan->btps_pageStatus = BTPARALLEL_DONE;
 		status_changed = true;
 	}
+	/* Copy the authoritative shared primitive scan counter to local field */
+	scan->nsearches = btscan->btps_nsearches;
 	SpinLockRelease(&btscan->btps_mutex);
 
 	/* wake up all the workers associated with this parallel scan */
@@ -797,6 +807,7 @@ _bt_parallel_primscan_schedule(IndexScanDesc scan, BlockNumber prev_scan_page)
 	{
 		btscan->btps_scanPage = InvalidBlockNumber;
 		btscan->btps_pageStatus = BTPARALLEL_NEED_PRIMSCAN;
+		btscan->btps_nsearches++;
 
 		/* Serialize scan's current array keys */
 		for (int i = 0; i < so->numArrayKeys; i++)

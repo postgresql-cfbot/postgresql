@@ -896,8 +896,6 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 
 	Assert(!BTScanPosIsValid(so->currPos));
 
-	pgstat_count_index_scan(rel);
-
 	/*
 	 * Examine the scan keys and eliminate any redundant keys; also mark the
 	 * keys that must be matched to continue the scan.
@@ -959,6 +957,13 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 		 */
 		_bt_start_array_keys(scan, dir);
 	}
+
+	/*
+	 * We've established that we'll either call _bt_search or _bt_endpoint.
+	 * Count this as a primitive index scan/index search.
+	 */
+	pgstat_count_index_scan(rel);
+	scan->nsearches++;
 
 	/*----------
 	 * Examine the scan keys to discover where we need to start the scan.

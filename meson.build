@@ -121,7 +121,7 @@ cdata = configuration_data()
 
 pg_version = meson.project_version()
 
-if pg_version.endswith('devel')
+if pg_version.contains('devel')
   pg_version_arr = [pg_version.split('devel')[0], '0']
 elif pg_version.contains('beta')
   pg_version_arr = [pg_version.split('beta')[0], '0']

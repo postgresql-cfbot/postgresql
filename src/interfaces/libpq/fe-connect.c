@@ -1845,6 +1845,14 @@ pqConnectOptions2(PGconn *conn)
 		{
 			conn->max_pversion = PG_PROTOCOL_LATEST;
 		}
+		else if (strcmp(conn->max_protocol_version, "3.1") == 0)
+		{
+			conn->status = CONNECTION_BAD;
+			libpq_append_conn_error(conn, "invalid %s value: \"%s\"",
+									"max_protocol_version",
+									conn->max_protocol_version);
+			return false;
+		}
 		else
 		{
 			char	   *end;

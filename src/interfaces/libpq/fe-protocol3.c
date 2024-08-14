@@ -1431,7 +1431,13 @@ pqGetNegotiateProtocolVersion3(PGconn *conn)
 		libpq_append_conn_error(conn, "received invalid protocol negotiation message: server requests downgrade to pre-3.0 protocol version");
 		goto failure;
 	}
-	
+
+	if (their_version == PG_PROTOCOL(3, 1))
+	{
+		libpq_append_conn_error(conn, "received invalid protocol negotiation message: server requests downgrade to 3.1 protocol version");
+		goto failure;
+	}
+
 	if (num < 0)
 	{
 		libpq_append_conn_error(conn, "received invalid protocol negotiation message: server reported negative number of unsupported parameters");

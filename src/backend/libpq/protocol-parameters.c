@@ -18,6 +18,7 @@
 #include "libpq/pqformat.h"
 #include "tcop/tcopprot.h"
 #include "utils/memutils.h"
+#include "utils/guc.h"
 
 static void SendSetProtocolParameterComplete(ProtocolParameter *param, bool error);
 
@@ -25,6 +26,12 @@ static void SendSetProtocolParameterComplete(ProtocolParameter *param, bool erro
 static MemoryContext ProtocolParameterMemoryContext;
 
 struct ProtocolParameter SupportedProtocolParameters[] = {
+	{
+		"report_parameters",
+		"",
+		report_parameters_handler,
+		.supported_string = "L",
+	}
 };
 
 ProtocolParameter *

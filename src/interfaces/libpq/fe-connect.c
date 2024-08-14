@@ -369,6 +369,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Max-Protocol-Version", "", 6,	/* sizeof("latest") = 6 */
 	offsetof(struct pg_conn, max_protocol_version)},
 
+	{"report_parameters", NULL, NULL, NULL,
+		"Report-Parameters", "", 40,
+	offsetof(struct pg_conn, c_report_parameters)},
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}

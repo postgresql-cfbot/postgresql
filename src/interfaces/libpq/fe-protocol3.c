@@ -58,7 +58,11 @@ static int	build_startup_packet(const PGconn *conn, char *packet,
 								 const PQEnvironmentOption *options);
 
 const struct pg_protocol_parameter KnownProtocolParameters[] = {
-	{NULL, NULL, 0, 0}
+	{"report_parameters", "",
+		offsetof(PGconn, c_report_parameters),
+		offsetof(PGconn, report_parameters),
+	offsetof(PGconn, report_parameters_support)},
+	{NULL, NULL, 0, 0, 0}
 };
 
 /*

@@ -3415,6 +3415,67 @@ PQsendFlushRequest(PGconn *conn)
 }
 
 /*
+ * PQreportParameters
+ * 		Return the current server-side report_parameters string.
+ */
+const char *
+PQreportParameters(PGconn *conn)
+{
+	return conn->report_parameters;
+}
+
+/*
+ * PQreportParametersSupport
+ *		Return the server's support for the report_parameters protocol parameter.
+ */
+const char *
+PQreportParametersSupport(PGconn *conn)
+{
+	return conn->report_parameters_support;
+}
+
+/*
+ * PQsetReportParameters
+ *		Send a request for the server to report the given parameters.
+ *
+ * Params should be a comma separated list of parameter names. Overwrites any
+ * previous attempt list of parameters.
+ * If the request was not even sent, return NULL; conn->errorMessage is set
+ * to a relevant message.
+ * If the request was sent, a new PGresult is returned (which could indicate
+ * either success or failure).  On success, the PGresult contains status
+ * PGRES_COMMAND_OK. The user is responsible for freeing the PGresult via
+ * PQclear() when done with it.
+ */
+PGresult *
+PQsetReportParameters(PGconn *conn, const char *params)
+{
+	if (!PQreportParameters(conn))
+	{
+		libpq_append_conn_error(conn, "server does not support report_parameters");
+		return NULL;
+	}
+	return PQsetProtocolParameter(conn, "report_parameters", params);
+}
+
+/*
+ * PQsetReportParameters
+ *		Submit a request for the server to report the given parameters, but don't wait for it to finish.
+ *
+ * Returns 1 on success and 0 on failure.
+ */
+int
+PQsendSetReportParameters(PGconn *conn, const char *params)
+{
+	if (!PQreportParameters(conn))
+	{
+		libpq_append_conn_error(conn, "server does not support report_parameters");
+		return 0;
+	}
+	return PQsendSetProtocolParameter(conn, "report_parameters", params);
+}
+
+/*
  * PQsetProtocolParameter
  *		Send a request for the server to change a protocol parameter.
  *

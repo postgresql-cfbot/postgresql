@@ -2363,6 +2363,22 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
        </para>
       </listitem>
      </varlistentry>
+
+     <varlistentry id="libpq-connect-report-parameters" xreflabel="report_parameters">
+      <term><literal>report_parameters</literal></term>
+      <listitem>
+       <para>
+        Specifies the value that is requested at connection startup for the
+        <xref linkend="protocol-parameter-report-parameters"/> protocol
+        parameter. The connection attempt is not canceled if the server does
+        not support this protocol parameter, or if it only supports part of
+        the requested value.
+        Use the <xref linkend="libpq-PQreportParameters"/> function after
+        connection has completed to find out what actual value the server uses.
+       </para>
+
+      </listitem>
+     </varlistentry>
     </variablelist>
    </para>
   </sect2>
@@ -2660,7 +2676,7 @@ const char *PQparameterStatus(const PGconn *conn, const char *paramName);
       </para>
 
       <para>
-       Parameters reported as of the current release include:
+       The parameters that are reported by default as of the current release include:
        <simplelist type="vert" columns="2">
         <member><varname>application_name</varname></member>
         <member><varname>client_encoding</varname></member>
@@ -2686,6 +2702,10 @@ const char *PQparameterStatus(const PGconn *conn, const char *paramName);
        <varname>server_encoding</varname> and
        <varname>integer_datetimes</varname>
        cannot change after startup.
+       It's possible to choose additional parameters for which the values should
+       be reported by using the
+       <xref linkend="protocol-parameter-report-parameters"/> protocol
+       parameter.
       </para>
 
       <para>
@@ -7596,6 +7616,117 @@ PGContextVisibility PQsetErrorContextVisibility(PGconn *conn, PGContextVisibilit
       subsequently-created ones.
       (But see <xref linkend="libpq-PQresultVerboseErrorMessage"/> if you
       want to print a previous error with a different display mode.)
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="libpq-PQreportParameters">
+    <term><function>PQreportParameters</function><indexterm><primary>PQreportParameter</primary></indexterm></term>
+
+    <listitem>
+     <para>
+      Returns the server value of the
+      <xref linkend="protocol-parameter-report-parameters"/> protocol parameter.
+<synopsis>
+const char *PQreportParameters(const PGconn *<replaceable>conn</replaceable>);
+</synopsis>
+
+      This returns a string with a comma separated list of server parameter
+      names. If the protocol parameter is not supported by the server this
+      returns NULL instead. Checking this value for NULL is the recommended way
+      to check for server support of report_parameters.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="libpq-PQreportParametersSupport">
+    <term><function>PQreportParametersSupport</function><indexterm><primary>PQreportParametersSupport</primary></indexterm></term>
+
+    <listitem>
+     <para>
+      Returns the "supported values" of the
+      <xref linkend="protocol-parameter-report-parameters"/> protocol parameter.
+<synopsis>
+const char *PQreportParametersSupport(const PGconn *<replaceable>conn</replaceable>);
+</synopsis>
+
+      This returns a string indicating what features report_parameters supports,
+      on future protocol versions this might be more useful, but for now this
+      always returns '<literal>L</literal>' if the report_parameters protocol
+      parameter is supported by the server. If the protocol parameter is not
+      supported by the server this returns NULL instead.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="libpq-PQsetReportParameters">
+    <term><function>PQsetReportParameters</function><indexterm><primary>PQsetReportParameters</primary></indexterm></term>
+
+    <listitem>
+     <para>
+      Sends a request to set the value of the
+      <xref linkend="protocol-parameter-report-parameters"/> protocol parameter.
+<synopsis>
+PGresult *PQsetReportParameters(PGconn *<replaceable>conn</replaceable>, const char *<replaceable>params</replaceable>);
+</synopsis>
+
+      <replaceable>conn</replaceable> is a connection to the server,
+      and <replaceable>params</replaceable> is a comma separated list of
+      parameter names for which the server should report their values.
+      use. If the request was not even sent, the function returns NULL;
+      The error message can be retrieved using
+      <xref linkend="libpq-PQerrorMessage"/>.
+     </para>
+
+     <para>
+      Returns a <structname>PGresult</structname> pointer representing the
+      result of the command, or a null pointer if the routine failed before
+      issuing any command.
+      The <xref linkend="libpq-PQresultStatus"/> function should be called
+      to check the return value for any errors (including the value of a null
+      pointer, in which case it will return
+      <symbol>PGRES_FATAL_ERROR</symbol>). Use
+      <xref linkend="libpq-PQerrorMessage"/> to get more information about
+      such errors.
+     </para>
+
+     <para>
+      The status can be <literal>PGRES_COMMAND_OK</literal> if the command
+      succeeded, <literal>PGRES_FATAL_ERROR</literal> if it failed, or
+      <literal>PGRES_NONFATAL_ERROR</literal> if it failed but not in a way
+      that required aborting a running transaction. Use
+      <xref linkend="libpq-PQerrorMessage"/> to get more information about the
+      error when the status is <literal>PGRES_FATAL_ERROR</literal>.
+     </para>
+
+     <para>
+      In case of success, use <xref linkend="libpq-PQreportParameters"/> to
+      find the new value of the report_parameters protocol parameter. This new
+      value might be different than the value that was sent, due to e.g.
+      unknown parameters.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="libpq-PQsendSetReportParameters">
+    <term><function>PQsendSetReportParameters</function><indexterm><primary>PQsendSetReportParameters</primary></indexterm></term>
+
+    <listitem>
+     <para>
+      Sends a request to set the value of the
+      <xref linkend="protocol-parameter-report-parameters"/> protocol
+      parameter, without waiting for completion.
+<synopsis>
+int PQsendSetReportParameters(PGconn *conn, const char *params);
+</synopsis>
+
+      This is an asynchronous version of
+      <xref linkend="libpq-PQsetReportParameters"/>: it
+      returns 1 if it was able to dispatch the request, and 0 if not.
+      After a successful call, call <xref linkend="libpq-PQgetResult"/> to
+      determine whether the server successfully set report_parameters.  The
+      function's parameters are handled identically to
+      <xref linkend="libpq-PQsetReportParameters"/>.
      </para>
     </listitem>
    </varlistentry>

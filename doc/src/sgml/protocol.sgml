@@ -1326,9 +1326,8 @@ SELCT 1/0;<!-- this typo is intentional -->
     effective value.
    </para>
 
-   <para>
-    At present there is a hard-wired set of parameters for which
-    ParameterStatus will be generated.  They are:
+   <para id="protocol-parameter-status-default">
+    The default parameters for which ParameterStatus will be generated are:
     <simplelist type="vert" columns="2">
      <member><varname>application_name</varname></member>
      <member><varname>client_encoding</varname></member>
@@ -1354,7 +1353,11 @@ SELCT 1/0;<!-- this typo is intentional -->
     <varname>server_encoding</varname> and
     <varname>integer_datetimes</varname>
     are pseudo-parameters that cannot change after startup.
-    This set might change in the future, or even become configurable.
+    It's possible to choose additional parameters for which the values should
+    be reported using the
+    <xref linkend="protocol-parameter-report-parameters"/> protocol parameter.
+    Since this set is configurable, a frontend can not assume that it only
+    gets these specific defaults.
     Accordingly, a frontend should simply ignore ParameterStatus for
     parameters that it does not understand or care about.
    </para>
@@ -1724,6 +1727,33 @@ SELCT 1/0;<!-- this typo is intentional -->
    </note>
 
    <variablelist>
+    <varlistentry id="protocol-parameter-report-parameters" xreflabel="report_parameters">
+     <term><varname>report_parameters</varname>
+     <indexterm>
+      <primary><varname>report_parameters</varname> configuration parameter</primary>
+     </indexterm>
+     </term>
+     <listitem>
+      <para>
+       This protocol parameter can be used to add parameters to the default
+       list of parameters that the server reports values for using the
+       ParameterStatus message.
+       This <literal>report_parameters</literal> can be used to
+       to report changes for additional parameters that are not reported by
+       default. The parameters that are in this list by default can be found in
+       <xref linkend="protocol-parameter-status-default"/>.
+      </para>
+
+      <para>
+       The value of this parameter is a comma separated list of parameter
+       names. Unknown parameters, and parameters that require the
+       <literal>pg_read_all_settings</literal> to be viewed are ignored. The
+       default value is the empty string. The server will use the literal value
+       '<literal>L</literal>' as the supported version string in the
+       NegotiateProtocolParameter message.
+      </para>
+     </listitem>
+    </varlistentry>
 
    </variablelist>
   </sect2>

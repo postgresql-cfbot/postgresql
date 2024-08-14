@@ -2165,13 +2165,19 @@ print_test_list(void)
 int
 main(int argc, char **argv)
 {
-	const char *conninfo = "";
 	PGconn	   *conn;
 	FILE	   *trace;
 	char	   *testname;
 	int			numrows = 10000;
 	PGresult   *res;
 	int			c;
+
+	/*
+	 * dbname = "" because we use expand_dbname, so it's a no-op unless the
+	 * user provides something else
+	 */
+	char	   *conn_keywords[3] = {"dbname", "max_protocol_version"};
+	char	   *conn_values[3] = {"", "latest"};
 
 	while ((c = getopt(argc, argv, "r:t:")) != -1)
 	{
@@ -2210,14 +2216,17 @@ main(int argc, char **argv)
 		exit(0);
 	}
 
+	/* We use expand_dbname to parse the user-provided conninfo string */
 	if (optind < argc)
 	{
-		conninfo = pg_strdup(argv[optind]);
+		conn_values[0] = pg_strdup(argv[optind]);
 		optind++;
 	}
 
 	/* Make a connection to the database */
-	conn = PQconnectdb(conninfo);
+	conn = PQconnectdbParams((const char *const *) &conn_keywords,
+							 (const char *const *) &conn_values,
+							 1);
 	if (PQstatus(conn) != CONNECTION_OK)
 	{
 		fprintf(stderr, "Connection to database failed: %s\n",

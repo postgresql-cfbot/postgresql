@@ -2335,6 +2335,33 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
        </para>
       </listitem>
      </varlistentry>
+
+     <varlistentry id="libpq-connect-max-protocol-version" xreflabel="max_protocol_version">
+      <term><literal>max_protocol_version</literal></term>
+      <listitem>
+       <para>
+        Specifies the protocol version to request from the server.
+        The default is to use version <literal>3.0</literal> of the
+        <productname>PostgreSQL</productname> protocol, unless the connection
+        string specifies a feature that relies on a higher protocol version, in
+        that case the latest version supported by libpq is used. If the server
+        does not support the requested protocol version of the client the
+        connection will be automatically downgraded to a lower minor protocol
+        version, which the server does support. After the connection attempt has
+        completed you can use <xref linkend="libpq-PQprotocolVersion"/> to find
+        out which exact protocol version was negotiated.
+       </para>
+
+       <para>
+        The current supported values are
+        <literal>3.0</literal>
+        and <literal>latest</literal>. The <literal>latest</literal> value is
+        equivalent to the latest protocol version that is supported by the used
+        libpq version, which currently is <literal>3.0</literal>, but this will
+        change in future libpq releases.
+       </para>
+      </listitem>
+     </varlistentry>
     </variablelist>
    </para>
   </sect2>
@@ -9134,6 +9161,16 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
       </indexterm>
       <envar>PGLOADBALANCEHOSTS</envar> behaves the same as the <xref
       linkend="libpq-connect-load-balance-hosts"/> connection parameter.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      <indexterm>
+       <primary><envar>PGMAXPROTOCOLVERSION</envar></primary>
+      </indexterm>
+      <envar>PGMAXPROTOCOLVERSION</envar> behaves the same as the <xref
+      linkend="libpq-connect-max-protocol-version"/> connection parameter.
      </para>
     </listitem>
    </itemizedlist>

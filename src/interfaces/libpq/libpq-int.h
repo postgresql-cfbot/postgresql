@@ -427,6 +427,7 @@ struct pg_conn
 	char	   *target_session_attrs;	/* desired session properties */
 	char	   *require_auth;	/* name of the expected auth method */
 	char	   *load_balance_hosts; /* load balance over hosts */
+	char	   *max_protocol_version;	/* maximum used protocol version */
 
 	bool		cancelRequest;	/* true if this connection is used to send a
 								 * cancel request, instead of being a normal
@@ -517,6 +518,7 @@ struct pg_conn
 	AddrInfo   *addr;			/* the array of addresses for the currently
 								 * tried host */
 	bool		send_appname;	/* okay to send application_name? */
+	ProtocolVersion max_pversion;	/* protocol version to request */
 
 	/* Miscellaneous stuff */
 	int			be_pid;			/* PID of backend --- needed for cancels */

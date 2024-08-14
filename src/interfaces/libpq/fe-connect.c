@@ -364,6 +364,11 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Load-Balance-Hosts", "", 8,	/* sizeof("disable") = 8 */
 	offsetof(struct pg_conn, load_balance_hosts)},
 
+	{"max_protocol_version", "PGMAXPROTOCOLVERSION",
+		NULL, NULL,
+		"Max-Protocol-Version", "", 6,	/* sizeof("latest") = 6 */
+	offsetof(struct pg_conn, max_protocol_version)},
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}
@@ -1834,6 +1839,58 @@ pqConnectOptions2(PGconn *conn)
 		}
 	}
 
+	if (conn->max_protocol_version)
+	{
+		if (strcmp(conn->max_protocol_version, "latest") == 0)
+		{
+			conn->max_pversion = PG_PROTOCOL_LATEST;
+		}
+		else
+		{
+			char	   *end;
+			int			major,
+						minor;
+
+			major = strtol(conn->max_protocol_version, &end, 10);
+			if (*end != '.')
+			{
+				conn->status = CONNECTION_BAD;
+				libpq_append_conn_error(conn, "invalid %s value: \"%s\"",
+										"max_protocol_version",
+										conn->max_protocol_version);
+				return false;
+			}
+			minor = strtol(&end[1], &end, 10);
+			if (*end != '\0')
+			{
+				conn->status = CONNECTION_BAD;
+				libpq_append_conn_error(conn, "invalid %s value: \"%s\"",
+										"max_protocol_version",
+										conn->max_protocol_version);
+				return false;
+			}
+			conn->max_pversion = PG_PROTOCOL(major, minor);
+			if (conn->max_pversion > PG_PROTOCOL_LATEST ||
+				conn->max_pversion < PG_PROTOCOL_EARLIEST)
+			{
+				conn->status = CONNECTION_BAD;
+				libpq_append_conn_error(conn, "invalid %s value: \"%s\"",
+										"max_protocol_version",
+										conn->max_protocol_version);
+				return false;
+			}
+		}
+	}
+	else
+	{
+		/*
+		 * To not break connecting to older servers/poolers that do not yet
+		 * support NegotiateProtocolVersion, default to the 3.0 protocol at
+		 * least for a while longer.
+		 */
+		conn->max_pversion = PG_PROTOCOL(3, 0);
+	}
+
 	/*
 	 * Resolve special "auto" client_encoding from the locale
 	 */
@@ -2836,7 +2893,7 @@ keep_going:						/* We will come back to here until there is
 		 * must persist across individual connection attempts, but we must
 		 * reset them when we start to consider a new server.
 		 */
-		conn->pversion = PG_PROTOCOL(3, 0);
+		conn->pversion = conn->max_pversion;
 		conn->send_appname = true;
 		conn->failed_enc_methods = 0;
 		conn->current_enc_method = 0;

@@ -1,0 +1,41 @@
+F	35	Query	 "SET application_name = 'test1'"
+B	8	CommandComplete	 "SET"
+B	27	ParameterStatus	 "application_name" "test1"
+B	5	ReadyForQuery	 I
+F	35	Query	 "SET application_name = 'test2'"
+B	8	CommandComplete	 "SET"
+B	27	ParameterStatus	 "application_name" "test2"
+B	5	ReadyForQuery	 I
+F	35	SetProtocolParameter	 "report_parameters" "lock_timeout"
+B	36	SetProtocolParameterComplete "report_parameters" "lock_timeout" S
+B	19	ParameterStatus	 "lock_timeout" "0"
+B	5	ReadyForQuery	 I
+F	95	SetProtocolParameter	 "report_parameters" ""lock_timeout"  ,   shared_preload_libraries,work_mem    ,does_not_exist"
+B	45	SetProtocolParameterComplete "report_parameters" "lock_timeout,work_mem" S
+B	18	ParameterStatus	 "work_mem" "4096"
+B	19	ParameterStatus	 "lock_timeout" "0"
+B	5	ReadyForQuery	 I
+F	38	Query	 "SET application_name = 'test3333'"
+B	8	CommandComplete	 "SET"
+B	30	ParameterStatus	 "application_name" "test3333"
+B	5	ReadyForQuery	 I
+F	30	Query	 "SET lock_timeout = '123s'"
+B	8	CommandComplete	 "SET"
+B	24	ParameterStatus	 "lock_timeout" "123000"
+B	5	ReadyForQuery	 I
+F	31	SetProtocolParameter	 "report_parameters" "work_mem"
+B	32	SetProtocolParameterComplete "report_parameters" "work_mem" S
+B	18	ParameterStatus	 "work_mem" "4096"
+B	5	ReadyForQuery	 I
+F	30	Query	 "SET lock_timeout = '345s'"
+B	8	CommandComplete	 "SET"
+B	5	ReadyForQuery	 I
+F	24	SetProtocolParameter	 "report_parameters" ","
+B	NN	NoticeResponse	 S "WARNING" V "WARNING" C "01000" M "invalid list syntax for "report_parameters"" F "SSSS" L "SSSS" R "SSSS" \x00
+B	32	SetProtocolParameterComplete "report_parameters" "work_mem" E
+B	5	ReadyForQuery	 I
+F	28	Query	 "SET work_mem = '123456'"
+B	8	CommandComplete	 "SET"
+B	20	ParameterStatus	 "work_mem" "123456"
+B	5	ReadyForQuery	 I
+F	4	Terminate

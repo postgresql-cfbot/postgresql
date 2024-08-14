@@ -31,6 +31,7 @@
 #define PqMsg_PasswordMessage		'p'
 #define PqMsg_SASLInitialResponse	'p'
 #define PqMsg_SASLResponse			'p'
+#define PqMsg_SetProtocolParameter	'O'
 
 
 /* These are the response codes sent by the backend. */
@@ -57,6 +58,8 @@
 #define PqMsg_PortalSuspended		's'
 #define PqMsg_ParameterDescription	't'
 #define PqMsg_NegotiateProtocolVersion 'v'
+#define PqMsg_NegotiateProtocolParameter 'P'
+#define PqMsg_SetProtocolParameterComplete 'O'
 
 
 /* These are the codes sent by both the frontend and backend. */

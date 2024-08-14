@@ -205,3 +205,7 @@ PQcancelFinish            202
 PQsocketPoll              203
 PQsetChunkedRowsMode      204
 PQgetCurrentTimeUSec      205
+PQsetReportParameters     206
+PQsendSetReportParameters 207
+PQreportParameters        208
+PQreportParametersSupport 209

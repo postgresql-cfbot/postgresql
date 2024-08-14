@@ -527,6 +527,15 @@ pqTraceOutput_NegotiateProtocolVersion(FILE *f, const char *message, int *cursor
 }
 
 static void
+pqTraceOutput_NegotiateProtocolParameter(FILE *f, const char *message, int *cursor)
+{
+	fprintf(f, "NegotiateProtocolParameter\t");
+	pqTraceOutputString(f, message, cursor, false);
+	pqTraceOutputString(f, message, cursor, false);
+	pqTraceOutputString(f, message, cursor, false);
+}
+
+static void
 pqTraceOutput_FunctionCallResponse(FILE *f, const char *message, int *cursor)
 {
 	int			len;
@@ -545,6 +554,23 @@ pqTraceOutput_CopyBothResponse(FILE *f, const char *message, int *cursor, int le
 
 	while (length > *cursor)
 		pqTraceOutputInt16(f, message, cursor);
+}
+
+static void
+pqTraceOutput_SetProtocolParameter(FILE *f, bool toServer, const char *message, int *cursor)
+{
+	fprintf(f, "SetProtocolParameter\t");
+	pqTraceOutputString(f, message, cursor, false);
+	pqTraceOutputString(f, message, cursor, false);
+}
+
+static void
+pqTraceOutput_SetProtocolParameterComplete(FILE *f, bool toServer, const char *message, int *cursor)
+{
+	fprintf(f, "SetProtocolParameterComplete");
+	pqTraceOutputString(f, message, cursor, false);
+	pqTraceOutputString(f, message, cursor, false);
+	pqTraceOutputByte1(f, message, cursor);
 }
 
 static void
@@ -623,6 +649,18 @@ pqTraceOutputMessage(PGconn *conn, const char *message, bool toServer)
 				pqTraceOutput_Close(conn->Pfdebug, message, &logCursor);
 			else
 				pqTraceOutput_CommandComplete(conn->Pfdebug, message, &logCursor);
+			break;
+		case PqMsg_SetProtocolParameter:
+
+			/*
+			 * SetProtocolParameter(F) and SetProtocolParameterComplete(B) use
+			 * the same identifier.
+			 */
+			Assert(PqMsg_SetProtocolParameter == PqMsg_SetProtocolParameterComplete);
+			if (toServer)
+				pqTraceOutput_SetProtocolParameter(conn->Pfdebug, toServer, message, &logCursor);
+			else
+				pqTraceOutput_SetProtocolParameterComplete(conn->Pfdebug, toServer, message, &logCursor);
 			break;
 		case PqMsg_CopyData:
 			/* Drop COPY data to reduce the overhead of logging. */
@@ -708,7 +746,11 @@ pqTraceOutputMessage(PGconn *conn, const char *message, bool toServer)
 			pqTraceOutput_NoticeResponse(conn->Pfdebug, message, &logCursor, regress);
 			break;
 		case PqMsg_Parse:
-			pqTraceOutput_Parse(conn->Pfdebug, message, &logCursor, regress);
+			Assert(PqMsg_Parse == PqMsg_NegotiateProtocolParameter);
+			if (toServer)
+				pqTraceOutput_Parse(conn->Pfdebug, message, &logCursor, regress);
+			else
+				pqTraceOutput_NegotiateProtocolParameter(conn->Pfdebug, message, &logCursor);
 			break;
 		case PqMsg_Query:
 			pqTraceOutput_Query(conn->Pfdebug, message, &logCursor);

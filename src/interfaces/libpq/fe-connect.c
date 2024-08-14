@@ -364,6 +364,15 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Load-Balance-Hosts", "", 8,	/* sizeof("disable") = 8 */
 	offsetof(struct pg_conn, load_balance_hosts)},
 
+	{"max_protocol_version", "PGMAXPROTOCOLVERSION",
+		NULL, NULL,
+		"Max-Protocol-Version", "", 6,	/* sizeof("latest") = 6 */
+	offsetof(struct pg_conn, max_protocol_version)},
+
+	{"report_parameters", NULL, NULL, NULL,
+		"Report-Parameters", "", 40,
+	offsetof(struct pg_conn, c_report_parameters)},
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}
@@ -1834,6 +1843,85 @@ pqConnectOptions2(PGconn *conn)
 		}
 	}
 
+	if (conn->max_protocol_version)
+	{
+		if (strcmp(conn->max_protocol_version, "latest") == 0)
+		{
+			conn->max_pversion = PG_PROTOCOL_LATEST;
+		}
+		else if (strcmp(conn->max_protocol_version, "3.1") == 0)
+		{
+			conn->status = CONNECTION_BAD;
+			libpq_append_conn_error(conn, "invalid %s value: \"%s\"",
+									"max_protocol_version",
+									conn->max_protocol_version);
+			return false;
+		}
+		else
+		{
+			char	   *end;
+			int			major,
+						minor;
+
+			major = strtol(conn->max_protocol_version, &end, 10);
+			if (*end != '.')
+			{
+				conn->status = CONNECTION_BAD;
+				libpq_append_conn_error(conn, "invalid %s value: \"%s\"",
+										"max_protocol_version",
+										conn->max_protocol_version);
+				return false;
+			}
+			minor = strtol(&end[1], &end, 10);
+			if (*end != '\0')
+			{
+				conn->status = CONNECTION_BAD;
+				libpq_append_conn_error(conn, "invalid %s value: \"%s\"",
+										"max_protocol_version",
+										conn->max_protocol_version);
+				return false;
+			}
+			conn->max_pversion = PG_PROTOCOL(major, minor);
+			if (conn->max_pversion > PG_PROTOCOL_LATEST ||
+				conn->max_pversion < PG_PROTOCOL_EARLIEST)
+			{
+				conn->status = CONNECTION_BAD;
+				libpq_append_conn_error(conn, "invalid %s value: \"%s\"",
+										"max_protocol_version",
+										conn->max_protocol_version);
+				return false;
+			}
+		}
+	}
+	else
+	{
+		/*
+		 * Some old servers and poolers don't support the
+		 * NegotiateProtocolVersion message, so we don't want to send a
+		 * StartupMessage that contains protocol parameters or a non-3.0
+		 * protocol version by default, since either of those would cause a
+		 * failure to connect to an old server. But as soon as the provided
+		 * connection string requires a protocol parameter, we might as well
+		 * default to the latest protocol version too.
+		 */
+		bool		needs_new_protocol_features = false;
+
+		for (const pg_protocol_parameter *param = KnownProtocolParameters; param->name; param++)
+		{
+			const char *value = *(char **) ((char *) conn + param->conn_connection_string_value_offset);
+
+			if (value != NULL && value[0] != '\0')
+			{
+				needs_new_protocol_features = true;
+				break;
+			}
+		}
+		if (needs_new_protocol_features)
+			conn->max_pversion = PG_PROTOCOL_LATEST;
+		else
+			conn->max_pversion = PG_PROTOCOL(3, 0);
+	}
+
 	/*
 	 * Resolve special "auto" client_encoding from the locale
 	 */
@@ -2836,7 +2924,7 @@ keep_going:						/* We will come back to here until there is
 		 * must persist across individual connection attempts, but we must
 		 * reset them when we start to consider a new server.
 		 */
-		conn->pversion = PG_PROTOCOL(3, 0);
+		conn->pversion = conn->max_pversion;
 		conn->send_appname = true;
 		conn->failed_enc_methods = 0;
 		conn->current_enc_method = 0;
@@ -3720,7 +3808,8 @@ keep_going:						/* We will come back to here until there is
 				 */
 				if (beresp != PqMsg_AuthenticationRequest &&
 					beresp != PqMsg_ErrorResponse &&
-					beresp != PqMsg_NegotiateProtocolVersion)
+					beresp != PqMsg_NegotiateProtocolVersion &&
+					beresp != PqMsg_NegotiateProtocolParameter)
 				{
 					libpq_append_conn_error(conn, "expected authentication request from server, but received %c",
 											beresp);
@@ -3861,9 +3950,31 @@ keep_going:						/* We will come back to here until there is
 						libpq_append_conn_error(conn, "received invalid protocol negotiation message");
 						goto error_return;
 					}
+
+					if (conn->error_result)
+						goto error_return;
+
 					/* OK, we read the message; mark data consumed */
 					conn->inStart = conn->inCursor;
-					goto error_return;
+					goto keep_going;
+				}
+				else if (beresp == PqMsg_NegotiateProtocolParameter)
+				{
+					if (pqGetNegotiateProtocolParameter(conn))
+					{
+						libpq_append_conn_error(conn, "received invalid NegotiateProtocolParameter message");
+						goto error_return;
+					}
+
+					if (conn->error_result)
+						goto error_return;
+
+					if (conn->Pfdebug)
+						pqTraceOutputMessage(conn, conn->inBuffer + conn->inStart, false);
+
+					/* OK, we read the message; mark data consumed */
+					conn->inStart = conn->inCursor;
+					goto keep_going;
 				}
 
 				/* It is an authentication request. */
@@ -4656,6 +4767,17 @@ freePGconn(PGconn *conn)
 		(void) conn->events[i].proc(PGEVT_CONNDESTROY, &evt,
 									conn->events[i].passThrough);
 		free(conn->events[i].name);
+	}
+
+	for (const pg_protocol_parameter *param = KnownProtocolParameters; param->name; param++)
+	{
+		char	   *conn_string_value = *(char **) ((char *) conn + param->conn_connection_string_value_offset);
+		char	   *server_value = *(char **) ((char *) conn + param->conn_server_value_offset);
+		char	   *supported_value = *(char **) ((char *) conn + param->conn_server_support_offset);
+
+		free(conn_string_value);
+		free(server_value);
+		free(supported_value);
 	}
 
 	release_conn_addrinfo(conn);
@@ -7154,7 +7276,9 @@ PQprotocolVersion(const PGconn *conn)
 		return 0;
 	if (conn->status == CONNECTION_BAD)
 		return 0;
-	return PG_PROTOCOL_MAJOR(conn->pversion);
+	if (conn->pversion == PG_PROTOCOL(3, 0))
+		return 3;
+	return PG_PROTOCOL_FULL(conn->pversion);
 }
 
 int

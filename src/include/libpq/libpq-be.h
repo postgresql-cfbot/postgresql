@@ -152,6 +152,8 @@ typedef struct Port
 	char	   *user_name;
 	char	   *cmdline_options;
 	List	   *guc_options;
+	List	   *protocol_parameter;
+	List	   *protocol_parameter_values;
 
 	/*
 	 * The startup packet application name, only used here for the "connection
@@ -238,6 +240,59 @@ typedef struct ClientSocket
 	pgsocket	sock;			/* File descriptor */
 	SockAddr	raddr;			/* remote addr (client) */
 } ClientSocket;
+
+struct ProtocolParameter;
+
+typedef const char *(*ProtocolParameterHandler) (struct ProtocolParameter *param, const char *new_value);
+typedef const char *(*ProtocolParameterSupportedHandler) ();
+
+/*
+ *
+ */
+typedef struct ProtocolParameter
+{
+	/* Name of the protocol parameter without the _pq_. prefix */
+	const char *name;
+	/* Current value encoded as string, should be set to default */
+	char	   *value;
+
+	/*
+	 * Validates and parses the given string value. Returns the new
+	 * string_value if successful. This handler should be careful to not throw
+	 * an ERROR in case of invalid input, instead it should ignore the invalid
+	 * parts and return a new string containing only the valid parts. If the
+	 * string cannot be parsed at all NULL should be returned to indicate a
+	 * parsing error.
+	 *
+	 * The main reason for the handler to throw an ERROR should be for
+	 * out-of-memory errors.
+	 */
+	ProtocolParameterHandler handler;
+
+	/*
+	 * A hardcoded string, that can be used by the client to find out what
+	 * values are supported. The format of the string is parameter specific.
+	 */
+	const char *supported_string;
+
+	/*
+	 * A function that returns the supported values if a hardcoded string is
+	 * not possible.
+	 */
+	ProtocolParameterSupportedHandler supported_handler;
+
+	/* If the protocol parameter should be set before or after authentication */
+	bool		preauth;
+
+	/* If this parameter was requested by the client on connection startup */
+	bool		requested;
+
+} ProtocolParameter;
+
+extern ProtocolParameter *find_protocol_parameter(const char *name);
+extern void init_protocol_parameter(ProtocolParameter *param, const char *value);
+extern void set_protocol_parameter(const char *name, const char *value);
+extern void SendNegotiateProtocolParameter(ProtocolParameter *param);
 
 #ifdef USE_SSL
 /*

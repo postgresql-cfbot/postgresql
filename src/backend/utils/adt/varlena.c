@@ -3202,6 +3202,46 @@ byteaGetByte(PG_FUNCTION_ARGS)
 }
 
 /*-------------------------------------------------------------
+ * byteaGetBytes
+ *
+ * This routine treats "bytea" as an array of bytes.
+ * It returns the N bytes at a given offset as a bigint value.
+ *-------------------------------------------------------------
+ */
+Datum
+byteaGetBytes(PG_FUNCTION_ARGS)
+{
+	bytea	   *v = PG_GETARG_BYTEA_PP(0);
+	int32		offset = PG_GETARG_INT32(1);
+	int32		size = PG_GETARG_INT32(2);
+	int64		result = 0;
+	int			len;
+
+	if (size < 1 || size > 8)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("size %d out of valid range, 1..8",
+						size)));
+
+	len = VARSIZE_ANY_EXHDR(v);
+
+	if (offset < 0 || offset > (len-size))
+		ereport(ERROR,
+				(errcode(ERRCODE_ARRAY_SUBSCRIPT_ERROR),
+				 errmsg("index %d out of valid range, 0..%d",
+						offset, len - size)));
+
+	while (size--)
+	{
+		result = result << 8;
+		result |= ((unsigned char *) VARDATA_ANY(v))[offset];
+		offset++;
+	}
+
+	PG_RETURN_INT64(result);
+}
+
+/*-------------------------------------------------------------
  * byteaGetBit
  *
  * This routine treats a "bytea" type like an array of bits.
@@ -3267,6 +3307,46 @@ byteaSetByte(PG_FUNCTION_ARGS)
 	 * Now set the byte.
 	 */
 	((unsigned char *) VARDATA(res))[n] = newByte;
+
+	PG_RETURN_BYTEA_P(res);
+}
+
+/*-------------------------------------------------------------
+ * byteaSetBytes
+ *
+ * Given an instance of type 'bytea' creates a new one with
+ * the N bytes at a given offset set to the provided bigint value.
+ *
+ *-------------------------------------------------------------
+ */
+Datum
+byteaSetBytes(PG_FUNCTION_ARGS)
+{
+	bytea	   *res = PG_GETARG_BYTEA_P_COPY(0);
+	int32		offset = PG_GETARG_INT32(1);
+	int32		size = PG_GETARG_INT32(2);
+	int64		newValue = PG_GETARG_INT64(3);
+	int			len;
+
+	if (size < 1 || size > 8)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("size %d out of valid range, 1..8",
+						size)));
+
+	len = VARSIZE_ANY_EXHDR(res);
+
+	if (offset < 0 || offset > (len-size))
+		ereport(ERROR,
+				(errcode(ERRCODE_ARRAY_SUBSCRIPT_ERROR),
+				 errmsg("index %d out of valid range, 0..%d",
+						offset, len - size)));
+	while (size)
+	{
+		((unsigned char*) VARDATA_ANY(res))[offset+size-1] = newValue & 0xFF;
+		newValue = newValue >> 8;
+		size--;
+	}
 
 	PG_RETURN_BYTEA_P(res);
 }

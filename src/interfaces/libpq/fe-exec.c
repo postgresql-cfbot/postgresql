@@ -80,6 +80,8 @@ static bool PQexecStart(PGconn *conn);
 static PGresult *PQexecFinish(PGconn *conn);
 static int	PQsendTypedCommand(PGconn *conn, char command, char type,
 							   const char *target);
+static PGresult *PQsetProtocolParameter(PGconn *conn, const char *parameter, const char *value);
+static int	PQsendSetProtocolParameter(PGconn *conn, const char *parameter, const char *value);
 static int	check_field_number(const PGresult *res, int field_num);
 static void pqPipelineProcessQueue(PGconn *conn);
 static int	pqPipelineSyncInternal(PGconn *conn, bool immediate_flush);
@@ -3154,6 +3156,13 @@ pqCommandQueueAdvance(PGconn *conn, bool isReadyForQuery, bool gotSync)
 		return;
 
 	/*
+	 * If processing a set protocol parameter, we only advance the queue when
+	 * we receive the ReadyForQuery message for it.
+	 */
+	if (conn->cmd_queue_head->queryclass == PGQUERY_SET_PROTOCOL_PARAMETER && !isReadyForQuery)
+		return;
+
+	/*
 	 * If we're waiting for a SYNC, don't advance the queue until we get one.
 	 */
 	if (conn->cmd_queue_head->queryclass == PGQUERY_SYNC && !gotSync)
@@ -3404,6 +3413,73 @@ PQsendFlushRequest(PGconn *conn)
 
 	return 1;
 }
+
+/*
+ * PQsetProtocolParameter
+ *		Send a request for the server to change a protocol parameter.
+ *
+ * If the request was not even sent, return NULL; conn->errorMessage is set
+ * to a relevant message.
+ * If the request was sent, a new PGresult is returned (which could indicate
+ * either success or failure).  On success, the PGresult contains status
+ * PGRES_COMMAND_OK. The user is responsible for freeing the PGresult via
+ * PQclear() when done with it.
+ */
+static PGresult *
+PQsetProtocolParameter(PGconn *conn, const char *parameter, const char *value)
+{
+	if (!PQexecStart(conn))
+		return NULL;
+	if (!PQsendSetProtocolParameter(conn, parameter, value))
+		return NULL;
+	return PQexecFinish(conn);
+}
+
+/*
+ * PQsendSetProtocolParameter
+ *	 Send a request for the server to change a run-time parameter setting.
+ *
+ * Returns 1 on success and 0 on failure.
+ */
+static int
+PQsendSetProtocolParameter(PGconn *conn, const char *parameter, const char *value)
+{
+	PGcmdQueueEntry *entry = NULL;
+
+	if (!PQsendQueryStart(conn, true))
+		return 0;
+
+	entry = pqAllocCmdQueueEntry(conn);
+	if (entry == NULL)
+		return 0;				/* error msg already set */
+
+	/* construct the SetProtocolParameter message */
+	if (pqPutMsgStart(PqMsg_SetProtocolParameter, conn) < 0 ||
+		pqPuts(parameter, conn) < 0 ||
+		pqPuts(value, conn) < 0 ||
+		pqPutMsgEnd(conn) < 0)
+		goto sendFailed;
+
+	entry->queryclass = PGQUERY_SET_PROTOCOL_PARAMETER;
+
+	/*
+	 * Give the data a push.  In nonblock mode, don't complain if we're unable
+	 * to send it all; PQgetResult() will do any additional flushing needed.
+	 */
+	if (pqFlush(conn) < 0)
+		goto sendFailed;
+
+	/* OK, it's launched! */
+	pqAppendCmdQueueEntry(conn, entry);
+
+	return 1;
+
+sendFailed:
+	pqRecycleCmdQueueEntry(conn, entry);
+	/* error message should be set up already */
+	return 0;
+}
+
 
 /* ====== accessor funcs for PGresult ======== */
 

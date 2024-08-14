@@ -34,6 +34,7 @@
 #include "tcop/backend_startup.h"
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
+#include "utils/guc_tables.h"
 #include "utils/injection_point.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
@@ -719,6 +720,7 @@ ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done)
 	{
 		int32		offset = sizeof(ProtocolVersion);
 		List	   *unrecognized_protocol_options = NIL;
+		List	   *preauth_protocol_parameters = NIL;
 
 		/*
 		 * Scan packet body for name/option pairs.  We can assume any string
@@ -770,13 +772,27 @@ ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done)
 			}
 			else if (strncmp(nameptr, "_pq_.", 5) == 0)
 			{
-				/*
-				 * Any option beginning with _pq_. is reserved for use as a
-				 * protocol-level option, but at present no such options are
-				 * defined.
-				 */
-				unrecognized_protocol_options =
-					lappend(unrecognized_protocol_options, pstrdup(nameptr));
+				ProtocolParameter *param = find_protocol_parameter(&nameptr[5]);
+
+				if (!param)
+				{
+					/*
+					 * We report unknown protocol extensions using the
+					 * NegotiateProtocolVersion message instead of erroring
+					 */
+					unrecognized_protocol_options =
+						lappend(unrecognized_protocol_options, pstrdup(nameptr));
+				}
+				else if (param->preauth)
+				{
+					init_protocol_parameter(param, valptr);
+					preauth_protocol_parameters = lappend(preauth_protocol_parameters, param);
+				}
+				else
+				{
+					port->protocol_parameter = lappend(port->protocol_parameter, param);
+					port->protocol_parameter_values = lappend(port->protocol_parameter_values, pstrdup(valptr));
+				}
 			}
 			else
 			{
@@ -818,6 +834,11 @@ ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done)
 		if (PG_PROTOCOL_MINOR(proto) > PG_PROTOCOL_MINOR(PG_PROTOCOL_LATEST) ||
 			unrecognized_protocol_options != NIL)
 			SendNegotiateProtocolVersion(unrecognized_protocol_options);
+
+		foreach_ptr(ProtocolParameter, param, preauth_protocol_parameters)
+		{
+			SendNegotiateProtocolParameter(param);
+		}
 	}
 
 	/* Check a user name was given. */

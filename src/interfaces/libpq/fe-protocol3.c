@@ -47,6 +47,7 @@ static void handleSyncLoss(PGconn *conn, char id, int msgLength);
 static int	getRowDescriptions(PGconn *conn, int msgLength);
 static int	getParamDescriptions(PGconn *conn, int msgLength);
 static int	getAnotherTuple(PGconn *conn, int msgLength);
+static int	getSetProtocolParameterComplete(PGconn *conn);
 static int	getParameterStatus(PGconn *conn);
 static int	getNotify(PGconn *conn);
 static int	getCopyStart(PGconn *conn, ExecStatusType copytype);
@@ -56,6 +57,9 @@ static void reportErrorPosition(PQExpBuffer msg, const char *query,
 static int	build_startup_packet(const PGconn *conn, char *packet,
 								 const PQEnvironmentOption *options);
 
+const struct pg_protocol_parameter KnownProtocolParameters[] = {
+	{NULL, NULL, 0, 0}
+};
 
 /*
  * parseInput: if appropriate, parse input data from backend
@@ -297,6 +301,12 @@ pqParseInput3(PGconn *conn)
 						conn->asyncStatus = PGASYNC_READY;
 					}
 					break;
+				case PqMsg_SetProtocolParameter:
+					if (getSetProtocolParameterComplete(conn))
+						return;
+					conn->asyncStatus = PGASYNC_READY;
+
+					break;
 				case PqMsg_ParameterStatus:
 					if (getParameterStatus(conn))
 						return;
@@ -311,6 +321,16 @@ pqParseInput3(PGconn *conn)
 					if (pqGetInt(&(conn->be_pid), 4, conn))
 						return;
 					if (pqGetInt(&(conn->be_key), 4, conn))
+						return;
+					break;
+				case PqMsg_NegotiateProtocolParameter:
+
+					/*
+					 * This is expected only during backend startup, but it's
+					 * just as easy to handle it as part of the main loop.
+					 * Save the data and continue processing.
+					 */
+					if (pqGetNegotiateProtocolParameter(conn))
 						return;
 					break;
 				case PqMsg_RowDescription:
@@ -1453,6 +1473,8 @@ pqGetNegotiateProtocolVersion3(PGconn *conn)
 	conn->pversion = their_version;
 	for (int i = 0; i < num; i++)
 	{
+		bool		found = false;
+
 		if (pqGets(&conn->workBuffer, conn))
 		{
 			return EOF;
@@ -1462,8 +1484,24 @@ pqGetNegotiateProtocolVersion3(PGconn *conn)
 			libpq_append_conn_error(conn, "received invalid protocol negotiation message: server reported unsupported parameter name without a _pq_. prefix (\"%s\")", conn->workBuffer.data);
 			goto failure;
 		}
-		libpq_append_conn_error(conn, "received invalid protocol negotiation message: server reported an unsupported parameter that was not requested (\"%s\")", conn->workBuffer.data);
-		goto failure;
+
+		for (const pg_protocol_parameter *param = KnownProtocolParameters; param->name; param++)
+		{
+			if (strcmp(param->name, &conn->workBuffer.data[5]) == 0)
+			{
+				char	  **server_value = (char **) ((char *) conn + param->conn_server_value_offset);
+
+				*server_value = NULL;
+				found = true;
+				break;
+			}
+		}
+
+		if (!found)
+		{
+			libpq_append_conn_error(conn, "received invalid protocol negotiation message: server reported an unsupported parameter that was not requested (\"%s\")", conn->workBuffer.data);
+			goto failure;
+		}
 	}
 
 	return 0;
@@ -1472,6 +1510,165 @@ failure:
 	conn->asyncStatus = PGASYNC_READY;
 	pqSaveErrorResult(conn);
 	return 0;
+}
+
+/*
+ * Attempt to read a NegotiateProtocolParameter message.
+ * Entry: 'p' message type and length have already been consumed.
+ * Exit: returns 0 if successfully consumed message.
+ *		 returns EOF if not enough data.
+ */
+int
+pqGetNegotiateProtocolParameter(PGconn *conn)
+{
+	PQExpBufferData valueBuf;
+	PQExpBufferData supportedBuf;
+	bool		found = false;
+
+	initPQExpBuffer(&valueBuf);
+	initPQExpBuffer(&supportedBuf);
+
+	/* Get the parameter name */
+	if (pqGets(&conn->workBuffer, conn))
+		goto eof;
+	/* Get the parameter value (could be large) */
+	if (pqGets(&valueBuf, conn))
+		goto eof;
+	/* Get the supported parameter format */
+	if (pqGets(&supportedBuf, conn))
+		goto eof;
+
+	for (const pg_protocol_parameter *param = KnownProtocolParameters; param->name; param++)
+	{
+		if (strcmp(param->name, conn->workBuffer.data) == 0)
+		{
+			char	  **serverValue = (char **) ((char *) conn + param->conn_server_value_offset);
+			char	  **supportedValue = (char **) ((char *) conn + param->conn_server_support_offset);
+			char	   *valueCopy = strdup(valueBuf.data);
+			char	   *supportedCopy = strdup(valueBuf.data);
+
+			if (!valueCopy || !supportedCopy)
+			{
+				free(valueCopy);
+				free(supportedCopy);
+				libpq_append_conn_error(conn, "out of memory");
+				goto failure;
+			}
+			*serverValue = valueCopy;
+			*supportedValue = supportedCopy;
+			found = true;
+		}
+	}
+	if (!found)
+	{
+		libpq_append_conn_error(conn, "received NegotiateProtocolParameter for unknown parameter %s", valueBuf.data);
+		goto failure;
+	}
+
+	termPQExpBuffer(&valueBuf);
+	termPQExpBuffer(&supportedBuf);
+	return 0;
+
+failure:
+	conn->asyncStatus = PGASYNC_READY;
+	pqSaveErrorResult(conn);
+	termPQExpBuffer(&valueBuf);
+	termPQExpBuffer(&supportedBuf);
+	return 0;
+
+eof:
+	termPQExpBuffer(&valueBuf);
+	termPQExpBuffer(&supportedBuf);
+	return EOF;
+}
+
+/*
+ * Attempt to read a SetProtocolParameterComplete message.
+ * Entry: 'S' message type and length have already been consumed.
+ * Exit: returns 0 if successfully consumed message.
+ *		 returns EOF if not enough data.
+ */
+static int
+getSetProtocolParameterComplete(PGconn *conn)
+{
+	PQExpBufferData valueBuf;
+	char		result_code;
+	bool		found = false;
+
+	initPQExpBuffer(&valueBuf);
+
+	/* Get the parameter name */
+	if (pqGets(&conn->workBuffer, conn))
+	{
+		goto eof;
+	}
+	if (pqGets(&valueBuf, conn))
+	{
+		goto eof;
+	}
+	if (pqGetc(&result_code, conn))
+	{
+		goto eof;
+	}
+
+	for (const pg_protocol_parameter *param = KnownProtocolParameters; param->name; param++)
+	{
+		if (strcmp(param->name, conn->workBuffer.data) == 0)
+		{
+			char	  **server_value = (char **) ((char *) conn + param->conn_server_value_offset);
+
+			char	   *value_copy = strdup(valueBuf.data);
+
+			if (!value_copy)
+			{
+				libpq_append_conn_error(conn, "out of memory");
+				pqSaveErrorResult(conn);
+				goto failure;
+			}
+			free(*server_value);
+			*server_value = value_copy;
+			found = true;
+
+			break;
+		}
+	}
+
+	if (!found)
+	{
+		libpq_append_conn_error(conn, "received SetProtocolParameterComplete for unknown parameter");
+		pqSaveErrorResult(conn);
+		goto failure;
+	}
+
+	if (result_code == 'S')
+	{
+		conn->result = PQmakeEmptyPGresult(conn,
+										   PGRES_COMMAND_OK);
+	}
+	else if (result_code == 'E')
+	{
+		conn->result = PQmakeEmptyPGresult(conn,
+										   PGRES_NONFATAL_ERROR);
+	}
+	else
+	{
+		libpq_append_conn_error(conn, "received SetProtocolParameterComplete with unknown result code");
+		pqSaveErrorResult(conn);
+		goto failure;
+	}
+
+	termPQExpBuffer(&valueBuf);
+	return 0;
+
+failure:
+	conn->asyncStatus = PGASYNC_READY;
+	pqSaveErrorResult(conn);
+	termPQExpBuffer(&valueBuf);
+	return 0;
+
+eof:
+	termPQExpBuffer(&valueBuf);
+	return EOF;
 }
 
 
@@ -2328,6 +2525,34 @@ build_startup_packet(const PGconn *conn, char *packet,
 		{
 			if (pg_strcasecmp(val, "default") != 0)
 				ADD_STARTUP_OPTION(next_eo->pgName, val);
+		}
+	}
+
+	/*
+	 * If we are requesting protocol version that's higher than 3.0, also
+	 * request all known protocol parameters. That way, we can know which
+	 * parameters are supported by the server. We don't request any parameters
+	 * for older protocol versions, because not all old servers support the
+	 * negotiation mechanism that newer servers support.
+	 */
+	if (conn->max_pversion > PG_PROTOCOL(3, 0))
+	{
+		for (const pg_protocol_parameter *param = KnownProtocolParameters; param->name; param++)
+		{
+			const char *value = *(char **) ((char *) conn + param->conn_connection_string_value_offset);
+
+			if (!value || !value[0])
+				value = param->default_value;
+
+			/*
+			 * Add the _pq_. prefix to the parameter name. This is needed for
+			 * all protocol parameters.
+			 */
+			if (packet)
+				strcpy(packet + packet_len, "_pq_.");
+			packet_len += 5;
+
+			ADD_STARTUP_OPTION(param->name, value);
 		}
 	}
 

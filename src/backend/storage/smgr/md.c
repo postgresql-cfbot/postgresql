@@ -1486,8 +1486,6 @@ DropRelationFiles(RelFileLocator *delrels, int ndelrels, bool isRedo)
 
 	smgrdounlinkall(srels, ndelrels, isRedo);
 
-	for (i = 0; i < ndelrels; i++)
-		smgrclose(srels[i]);
 	pfree(srels);
 }
 

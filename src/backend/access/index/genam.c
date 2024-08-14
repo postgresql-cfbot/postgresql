@@ -118,6 +118,7 @@ RelationGetIndexScan(Relation indexRelation, int nkeys, int norderbys)
 	scan->xactStartedInRecovery = TransactionStartedDuringRecovery();
 	scan->ignore_killed_tuples = !scan->xactStartedInRecovery;
 
+	scan->nsearches = 0;		/* deliberately not reset by index_rescan */
 	scan->opaque = NULL;
 
 	scan->xs_itup = NULL;

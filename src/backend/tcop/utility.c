@@ -412,6 +412,24 @@ PreventCommandIfReadOnly(const char *cmdname)
 }
 
 /*
+ * PreventCommandIfPersistenceChanged: throw error if persistence changed was
+ * 		performed
+ */
+void
+PreventCommandIfPersistenceChanged(const char *cmdname, Oid relid)
+{
+	Relation rel;
+
+	rel = RelationIdGetRelation(relid);
+	if (rel->rd_firstPersistenceChangeSubid != InvalidSubTransactionId)
+		ereport(ERROR,
+				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				errmsg("cannot execute %s on relation \"%s\" because of its persistence change in the current transaction",
+					   cmdname, get_rel_name(relid)));
+	RelationClose(rel);
+}
+
+/*
  * PreventCommandIfParallelMode: throw error if current (sub)transaction is
  * in parallel mode.
  *

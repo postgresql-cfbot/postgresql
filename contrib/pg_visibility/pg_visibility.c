@@ -548,6 +548,8 @@ collect_visibility_data(Oid relid, bool include_pd)
  *    databases that were ignored before.
  * 2. Ignore KnownAssignedXids, because they are not database-aware. At the
  *    same time, the primary could compute its horizons database-aware.
+ *    XXX KnownAssignedXids is gone. But see how this plays out:
+ *    https://www.postgresql.org/message-id/42218c4f-2c8d-40a3-8743-4d34dd0e4cce%40iki.fi
  * 3. Ignore walsender xmin, because it could go backward if some replication
  *    connections don't use replication slots.
  *

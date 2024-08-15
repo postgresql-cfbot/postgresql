@@ -35,6 +35,9 @@ extern Node *ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 							   Node *last_srf, FuncCall *fn, bool proc_call,
 							   int location);
 
+extern Node *ParseJsonSimplifiedAccessorArrayElement(ParseState *pstate, A_Indices *subscript,
+													 Node *first_arg, int location);
+
 extern FuncDetailCode func_get_detail(List *funcname,
 									  List *fargs, List *fargnames,
 									  int nargs, Oid *argtypes,

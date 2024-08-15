@@ -301,6 +301,7 @@ extern bool stack_is_too_deep(void);
 extern void PreventCommandIfReadOnly(const char *cmdname);
 extern void PreventCommandIfParallelMode(const char *cmdname);
 extern void PreventCommandDuringRecovery(const char *cmdname);
+extern void PreventCommandIfPersistenceChanged(const char *cmdname, Oid relid);
 
 /*****************************************************************************
  *	  pdir.h --																 *

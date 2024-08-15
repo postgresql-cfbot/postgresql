@@ -1577,6 +1577,7 @@ typedef struct SQLValueFunction
  */
 typedef enum XmlExprOp
 {
+	IS_XMLCAST,					/* XMLCAST(op AS datatype) */
 	IS_XMLCONCAT,				/* XMLCONCAT(args) */
 	IS_XMLELEMENT,				/* XMLELEMENT(name, xml_attributes, args) */
 	IS_XMLFOREST,				/* XMLFOREST(xml_attributes) */
@@ -1613,6 +1614,8 @@ typedef struct XmlExpr
 	/* target type/typmod for XMLSERIALIZE */
 	Oid			type pg_node_attr(query_jumble_ignore);
 	int32		typmod pg_node_attr(query_jumble_ignore);
+	/* option for XMLCAST */
+	Oid 		targetType;
 	/* token location, or -1 if unknown */
 	ParseLoc	location;
 } XmlExpr;

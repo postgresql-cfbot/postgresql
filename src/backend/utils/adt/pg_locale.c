@@ -197,6 +197,36 @@ wcstombs_l(char *dest, const wchar_t *src, size_t n, locale_t loc)
 }
 #endif
 
+#ifndef WIN32
+/*
+ * The newlocale() function needs LC_xxx_MASK, but sometimes we have LC_xxx,
+ * and POSIX doesn't offer a way to translate.
+ */
+static int
+get_lc_category_mask(int category)
+{
+	switch (category)
+	{
+		case LC_COLLATE:
+			return LC_COLLATE_MASK;
+		case LC_CTYPE:
+			return LC_CTYPE_MASK;
+#ifdef LC_MESSAGES
+		case LC_MESSAGES:
+			return LC_MESSAGES_MASK;
+#endif
+		case LC_MONETARY:
+			return LC_MONETARY_MASK;
+		case LC_NUMERIC:
+			return LC_NUMERIC_MASK;
+		case LC_TIME:
+			return LC_TIME_MASK;
+		default:
+			return 0;
+	};
+}
+#endif
+
 /*
  * pg_perm_setlocale
  *
@@ -306,43 +336,48 @@ pg_perm_setlocale(int category, const char *locale)
 
 /*
  * Is the locale name valid for the locale category?
- *
- * If successful, and canonname isn't NULL, a palloc'd copy of the locale's
- * canonical name is stored there.  This is especially useful for figuring out
- * what locale name "" means (ie, the server environment value).  (Actually,
- * it seems that on most implementations that's the only thing it's good for;
- * we could wish that setlocale gave back a canonically spelled version of
- * the locale name, but typically it doesn't.)
  */
 bool
-check_locale(int category, const char *locale, char **canonname)
+check_locale(int category, const char *locale)
 {
-	char	   *save;
-	char	   *res;
+	locale_t	loc;
 
-	if (canonname)
-		*canonname = NULL;		/* in case of failure */
+	if (locale[0] == 0)
+	{
+		/*
+		 * We only accept explicit locale names, not "".  We don't want to
+		 * rely on environment variables in the backend.
+		 */
+		return false;
+	}
 
-	save = setlocale(category, NULL);
-	if (!save)
-		return false;			/* won't happen, we hope */
+	/*
+	 * See if we can open it.  Unfortunately we can't always distinguish
+	 * out-of-memory from invalid locale name.
+	 */
+	errno = ENOENT;
+#ifdef WIN32
+	loc = _create_locale(category, locale);
+	if (loc == (locale_t) 0)
+		_dosmaperr(GetLastError());
+#else
+	loc = newlocale(get_lc_category_mask(category), locale, (locale_t) 0);
+#endif
+	if (loc == (locale_t) 0)
+	{
+		if (errno == ENOMEM)
+			elog(ERROR, "out of memory");
 
-	/* save may be pointing at a modifiable scratch variable, see above. */
-	save = pstrdup(save);
+		/* Otherwise assume the locale doesn't exist. */
+		return false;
+	}
+#ifdef WIN32
+	_free_locale(loc);
+#else
+	freelocale(loc);
+#endif
 
-	/* set the locale with setlocale, to see if it accepts it. */
-	res = setlocale(category, locale);
-
-	/* save canonical name if requested. */
-	if (res && canonname)
-		*canonname = pstrdup(res);
-
-	/* restore old value. */
-	if (!setlocale(category, save))
-		elog(WARNING, "failed to restore old locale \"%s\"", save);
-	pfree(save);
-
-	return (res != NULL);
+	return true;
 }
 
 
@@ -360,7 +395,7 @@ check_locale(int category, const char *locale, char **canonname)
 bool
 check_locale_monetary(char **newval, void **extra, GucSource source)
 {
-	return check_locale(LC_MONETARY, *newval, NULL);
+	return check_locale(LC_MONETARY, *newval);
 }
 
 void
@@ -372,7 +407,7 @@ assign_locale_monetary(const char *newval, void *extra)
 bool
 check_locale_numeric(char **newval, void **extra, GucSource source)
 {
-	return check_locale(LC_NUMERIC, *newval, NULL);
+	return check_locale(LC_NUMERIC, *newval);
 }
 
 void
@@ -384,7 +419,7 @@ assign_locale_numeric(const char *newval, void *extra)
 bool
 check_locale_time(char **newval, void **extra, GucSource source)
 {
-	return check_locale(LC_TIME, *newval, NULL);
+	return check_locale(LC_TIME, *newval);
 }
 
 void
@@ -420,7 +455,7 @@ check_locale_messages(char **newval, void **extra, GucSource source)
 	 * On Windows, we can't even check the value, so accept blindly
 	 */
 #if defined(LC_MESSAGES) && !defined(WIN32)
-	return check_locale(LC_MESSAGES, *newval, NULL);
+	return check_locale(LC_MESSAGES, *newval);
 #else
 	return true;
 #endif

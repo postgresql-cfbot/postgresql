@@ -1855,3 +1855,432 @@ SELECT xmltext('x'|| '<P>73</P>'::xml || .42 || true || 'j'::char);
  x&lt;P&gt;73&lt;/P&gt;0.42truej
 (1 row)
 
+-- for xmlcast() tests
+INSERT INTO xmltest
+ VALUES (42,
+'<?xml version="1.0" encoding="utf-8"?>
+ <xmlcast>
+  <period1>P1Y2M3DT4H5M6S</period1>
+  <period2>1 year 2 mons 3 days 4 hours 5 minutes 6 seconds</period2>
+  <date1>2002-09-24</date1>
+  <date2>2002-09-24+06:00</date2>
+  <time>09:30:10.5</time>
+  <time_tz1>09:30:10Z</time_tz1>
+  <time_tz2>09:30:10-06:00</time_tz2>
+  <time_tz3>09:30:10+06:00</time_tz3>
+  <timestamp1>2002-05-30T09:00:00</timestamp1>
+  <timestamp2>2002-05-30T09:30:10.5</timestamp2>
+  <timestamp_tz1>2002-05-30T09:30:10Z</timestamp_tz1>
+  <timestamp_tz2>2002-05-30T09:30:10-06:00</timestamp_tz2>
+  <timestamp_tz3>2002-05-30T09:30:10+06:00</timestamp_tz3>
+  <text1>foo bar</text1>
+  <text2>       foo bar     </text2>
+  <text3>foo &amp; &lt;&quot;bar&quot;&gt;</text3>
+  <decimal1>42.7312345678910</decimal1>
+  <decimal2>+42.7312345678910</decimal2>
+  <decimal3>-42.7312345678910</decimal3>
+  <integer1>42</integer1>
+  <integer2>+42</integer2>
+  <integer3>-42</integer3>
+  <long1>4273535420162021</long1>
+  <long2>+4273535420162021</long2>
+  <long3>-4273535420162021</long3>
+  <bool1 att="true">42</bool1>
+  <bool2 att="false">73</bool2>
+  <empty></empty>
+ </xmlcast>'::xml
+);
+-- xmlcast exceptions
+\set VERBOSITY terse
+SELECT xmlcast((xpath('//text1/text()', data))[1] AS text[]) FROM xmltest WHERE id = 42;
+ERROR:  cannot cast from 'xml' to 'text[]' at character 8
+SELECT xmlcast((xpath('//text1/integer1()', data))[1] AS int[]) FROM xmltest WHERE id = 42;
+ERROR:  cannot cast from 'xml' to 'integer[]' at character 8
+SELECT xmlcast(NULL AS text);
+ERROR:  cannot cast from 'unknown' to 'text' at character 8
+SELECT xmlcast('foo'::text AS varchar);
+ERROR:  cannot cast from 'text' to 'character varying' at character 8
+SELECT xmlcast(42 AS text);
+ERROR:  cannot cast from 'integer' to 'text' at character 8
+SELECT xmlcast(array['foo','bar'] AS xml);
+ERROR:  cannot cast from 'text[]' to 'xml' at character 8
+\set VERBOSITY default
+-- xmlcast tests for "XML to non-XML" expressions
+SELECT
+  xmlcast((xpath('//date1/text()', data))[1] AS date), pg_typeof(xmlcast((xpath('//date1/text()', data))[1] AS date)),
+  xmlcast((xpath('//date2/text()', data))[1] AS date), pg_typeof(xmlcast((xpath('//date2/text()', data))[1] AS date))
+FROM xmltest WHERE id = 42;
+  xmlcast   | pg_typeof |  xmlcast   | pg_typeof 
+------------+-----------+------------+-----------
+ 09-24-2002 | date      | 09-24-2002 | date
+(1 row)
+
+SELECT
+  xmlcast((xpath('//period1/text()', data))[1] AS interval), pg_typeof(xmlcast((xpath('//period1/text()', data))[1] AS interval)),
+  xmlcast((xpath('//period2/text()', data))[1] AS interval), pg_typeof(xmlcast((xpath('//period2/text()', data))[1] AS interval))
+FROM xmltest WHERE id = 42;
+                   xmlcast                    | pg_typeof |                   xmlcast                    | pg_typeof 
+----------------------------------------------+-----------+----------------------------------------------+-----------
+ @ 1 year 2 mons 3 days 4 hours 5 mins 6 secs | interval  | @ 1 year 2 mons 3 days 4 hours 5 mins 6 secs | interval
+(1 row)
+
+SELECT
+  xmlcast((xpath('//time/text()', data))[1] AS time), pg_typeof(xmlcast((xpath('//time/text()', data))[1] AS time)),
+  xmlcast((xpath('//time_tz1/text()', data))[1] AS time with time zone), pg_typeof(xmlcast((xpath('//time_tz1/text()', data))[1] AS time with time zone)),
+  xmlcast((xpath('//time_tz2/text()', data))[1] AS time with time zone), pg_typeof(xmlcast((xpath('//time_tz2/text()', data))[1] AS time with time zone)),
+  xmlcast((xpath('//time_tz3/text()', data))[1] AS time with time zone), pg_typeof(xmlcast((xpath('//time_tz3/text()', data))[1] AS time with time zone))
+FROM xmltest WHERE id = 42;
+  xmlcast   |       pg_typeof        |   xmlcast   |      pg_typeof      |   xmlcast   |      pg_typeof      |   xmlcast   |      pg_typeof      
+------------+------------------------+-------------+---------------------+-------------+---------------------+-------------+---------------------
+ 09:30:10.5 | time without time zone | 09:30:10+00 | time with time zone | 09:30:10-06 | time with time zone | 09:30:10+06 | time with time zone
+(1 row)
+
+SELECT
+  xmlcast((xpath('//text1/text()', data))[1] AS text), pg_typeof(xmlcast((xpath('//text1/text()', data))[1] AS text)),
+  xmlcast((xpath('//text2/text()', data))[1] AS text), pg_typeof(xmlcast((xpath('//text2/text()', data))[1] AS text)),
+  xmlcast((xpath('//text3/text()', data))[1] AS text), pg_typeof(xmlcast((xpath('//text3/text()', data))[1] AS text))
+FROM xmltest WHERE id = 42;
+ xmlcast | pg_typeof |       xmlcast       | pg_typeof |    xmlcast    | pg_typeof 
+---------+-----------+---------------------+-----------+---------------+-----------
+ foo bar | text      |        foo bar      | text      | foo & <"bar"> | text
+(1 row)
+
+SELECT
+  xmlcast((xpath('//text1/text()', data))[1] AS varchar), pg_typeof(xmlcast((xpath('//text1/text()', data))[1] AS varchar)),
+  xmlcast((xpath('//text2/text()', data))[1] AS varchar), pg_typeof(xmlcast((xpath('//text2/text()', data))[1] AS varchar)),
+  xmlcast((xpath('//text3/text()', data))[1] AS varchar), pg_typeof(xmlcast((xpath('//text3/text()', data))[1] AS varchar))
+FROM xmltest WHERE id = 42;
+ xmlcast |     pg_typeof     |       xmlcast       |     pg_typeof     |    xmlcast    |     pg_typeof     
+---------+-------------------+---------------------+-------------------+---------------+-------------------
+ foo bar | character varying |        foo bar      | character varying | foo & <"bar"> | character varying
+(1 row)
+
+SELECT
+  xmlcast((xpath('//text1/text()', data))[1] AS name), pg_typeof(xmlcast((xpath('//text1/text()', data))[1] AS name)),
+  xmlcast((xpath('//text2/text()', data))[1] AS name), pg_typeof(xmlcast((xpath('//text2/text()', data))[1] AS name)),
+  xmlcast((xpath('//text3/text()', data))[1] AS name), pg_typeof(xmlcast((xpath('//text3/text()', data))[1] AS name))
+FROM xmltest WHERE id = 42;
+ xmlcast | pg_typeof |       xmlcast       | pg_typeof |    xmlcast    | pg_typeof 
+---------+-----------+---------------------+-----------+---------------+-----------
+ foo bar | name      |        foo bar      | name      | foo & <"bar"> | name
+(1 row)
+
+SELECT
+  xmlcast((xpath('//text1/text()', data))[1] AS bpchar), pg_typeof(xmlcast((xpath('//text1/text()', data))[1] AS bpchar)),
+  xmlcast((xpath('//text2/text()', data))[1] AS bpchar), pg_typeof(xmlcast((xpath('//text2/text()', data))[1] AS bpchar)),
+  xmlcast((xpath('//text3/text()', data))[1] AS bpchar), pg_typeof(xmlcast((xpath('//text3/text()', data))[1] AS bpchar))
+FROM xmltest WHERE id = 42;
+ xmlcast | pg_typeof |       xmlcast       | pg_typeof |    xmlcast    | pg_typeof 
+---------+-----------+---------------------+-----------+---------------+-----------
+ foo bar | character |        foo bar      | character | foo & <"bar"> | character
+(1 row)
+
+SELECT
+  xmlcast((xpath('//decimal1/text()', data))[1] AS numeric), pg_typeof(xmlcast((xpath('//decimal1/text()', data))[1] AS numeric)),
+  xmlcast((xpath('//decimal2/text()', data))[1] AS numeric), pg_typeof(xmlcast((xpath('//decimal2/text()', data))[1] AS numeric)),
+  xmlcast((xpath('//decimal3/text()', data))[1] AS numeric), pg_typeof(xmlcast((xpath('//decimal3/text()', data))[1] AS numeric))
+FROM xmltest WHERE id = 42;
+     xmlcast      | pg_typeof |     xmlcast      | pg_typeof |      xmlcast      | pg_typeof 
+------------------+-----------+------------------+-----------+-------------------+-----------
+ 42.7312345678910 | numeric   | 42.7312345678910 | numeric   | -42.7312345678910 | numeric
+(1 row)
+
+SELECT
+  xmlcast((xpath('//decimal1/text()', data))[1] AS double precision), pg_typeof(xmlcast((xpath('//decimal1/text()', data))[1] AS double precision)),
+  xmlcast((xpath('//decimal2/text()', data))[1] AS double precision), pg_typeof(xmlcast((xpath('//decimal2/text()', data))[1] AS double precision)),
+  xmlcast((xpath('//decimal3/text()', data))[1] AS double precision), pg_typeof(xmlcast((xpath('//decimal3/text()', data))[1] AS double precision))
+FROM xmltest WHERE id = 42;
+     xmlcast     |    pg_typeof     |     xmlcast     |    pg_typeof     |     xmlcast      |    pg_typeof     
+-----------------+------------------+-----------------+------------------+------------------+------------------
+ 42.731234567891 | double precision | 42.731234567891 | double precision | -42.731234567891 | double precision
+(1 row)
+
+SELECT
+  xmlcast((xpath('//integer1/text()', data))[1] AS int), pg_typeof(xmlcast((xpath('//integer1/text()', data))[1] AS int)),
+  xmlcast((xpath('//integer2/text()', data))[1] AS int), pg_typeof(xmlcast((xpath('//integer2/text()', data))[1] AS int)),
+  xmlcast((xpath('//integer3/text()', data))[1] AS int), pg_typeof(xmlcast((xpath('//integer3/text()', data))[1] AS int))
+FROM xmltest WHERE id = 42;
+ xmlcast | pg_typeof | xmlcast | pg_typeof | xmlcast | pg_typeof 
+---------+-----------+---------+-----------+---------+-----------
+      42 | integer   |      42 | integer   |     -42 | integer
+(1 row)
+
+SELECT
+  xmlcast((xpath('//long1/text()', data))[1] AS bigint), pg_typeof(xmlcast((xpath('//long1/text()', data))[1] AS bigint)),
+  xmlcast((xpath('//long2/text()', data))[1] AS bigint), pg_typeof(xmlcast((xpath('//long2/text()', data))[1] AS bigint)),
+  xmlcast((xpath('//long3/text()', data))[1] AS bigint), pg_typeof(xmlcast((xpath('//long3/text()', data))[1] AS bigint))
+FROM xmltest WHERE id = 42;
+     xmlcast      | pg_typeof |     xmlcast      | pg_typeof |      xmlcast      | pg_typeof 
+------------------+-----------+------------------+-----------+-------------------+-----------
+ 4273535420162021 | bigint    | 4273535420162021 | bigint    | -4273535420162021 | bigint
+(1 row)
+
+SELECT
+  xmlcast((xpath('//bool1/@att', data))[1] AS boolean), pg_typeof(xmlcast((xpath('//bool1/@att', data))[1] AS boolean)),
+  xmlcast((xpath('//bool2/@att', data))[1] AS boolean), pg_typeof(xmlcast((xpath('//bool1/@att', data))[1] AS boolean))
+FROM xmltest WHERE id = 42;
+ xmlcast | pg_typeof | xmlcast | pg_typeof 
+---------+-----------+---------+-----------
+ t       | boolean   | f       | boolean
+(1 row)
+
+SELECT xmlcast((xpath('//empty/text()', data))[1] AS text), pg_typeof(xmlcast((xpath('//empty/text()', data))[1] AS text))
+FROM xmltest WHERE id = 42;
+ xmlcast | pg_typeof 
+---------+-----------
+         | text
+(1 row)
+
+-- xmlcast tests for "XML to XML" expressions
+SELECT
+  xmlcast((xpath('//text1/text()', data))[1] AS xml), pg_typeof(xmlcast((xpath('//text1/text()', data))[1] AS xml)),
+  xmlcast((xpath('//text2/text()', data))[1] AS xml), pg_typeof(xmlcast((xpath('//text2/text()', data))[1] AS xml)),
+  xmlcast((xpath('//text3/text()', data))[1] AS xml), pg_typeof(xmlcast((xpath('//text3/text()', data))[1] AS xml))
+FROM xmltest WHERE id = 42;
+ xmlcast | pg_typeof |       xmlcast       | pg_typeof |         xmlcast         | pg_typeof 
+---------+-----------+---------------------+-----------+-------------------------+-----------
+ foo bar | xml       |        foo bar      | xml       | foo &amp; &lt;"bar"&gt; | xml
+(1 row)
+
+-- xmlcast tests for "non-XML to XML" expressions
+SELECT j, pg_typeof(j) FROM xmlcast(NULL AS xml) t(j);
+ j | pg_typeof 
+---+-----------
+   | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast('foo' AS xml) t(j);
+  j  | pg_typeof 
+-----+-----------
+ foo | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast(''::text AS xml) t(j);
+ j | pg_typeof 
+---+-----------
+   | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast(NULL::text AS xml) t(j);
+ j | pg_typeof 
+---+-----------
+   | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast(''::xml AS text) t(j);
+ j | pg_typeof 
+---+-----------
+   | text
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast(NULL::xml AS text) t(j);
+ j | pg_typeof 
+---+-----------
+   | text
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast('foo & <"bar">'::text AS xml) t(j);
+                 j                 | pg_typeof 
+-----------------------------------+-----------
+ foo &amp; &lt;&quot;bar&quot;&gt; | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast('foo & <"bar">'::varchar AS xml) t(j);
+                 j                 | pg_typeof 
+-----------------------------------+-----------
+ foo &amp; &lt;&quot;bar&quot;&gt; | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast('foo & <"bar">'::name AS xml) t(j);
+                 j                 | pg_typeof 
+-----------------------------------+-----------
+ foo &amp; &lt;&quot;bar&quot;&gt; | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast(to_date('29/05/2024','dd/mm/yyyy') AS xml) t(j);
+     j      | pg_typeof 
+------------+-----------
+ 2024-05-29 | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast('2024-05-29 12:04:10.703585+02'::timestamp with time zone AS xml) t(j);
+                j                 | pg_typeof 
+----------------------------------+-----------
+ 2024-05-29T03:04:10.703585-07:00 | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast('2024-05-29 12:04:10.703585+02'::timestamp without time zone AS xml) t(j);
+             j              | pg_typeof 
+----------------------------+-----------
+ 2024-05-29T12:04:10.703585 | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast('1 year 2 months 3 days 4 hours 5 minutes 6 seconds'::interval AS xml) t(j);
+       j        | pg_typeof 
+----------------+-----------
+ P1Y2M3DT4H5M6S | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast(427353542 AS xml) t(j);
+     j     | pg_typeof 
+-----------+-----------
+ 427353542 | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast(4273535420162021 AS xml) t(j);
+        j         | pg_typeof 
+------------------+-----------
+ 4273535420162021 | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast(42.007312345678910 AS xml) t(j);
+         j          | pg_typeof 
+--------------------+-----------
+ 42.007312345678910 | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast(42.007312345678910::double precision AS xml) t(j);
+         j         | pg_typeof 
+-------------------+-----------
+ 42.00731234567891 | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast(true AS xml) t(j);
+  j   | pg_typeof 
+------+-----------
+ true | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast(false AS xml) t(j);
+   j   | pg_typeof 
+-------+-----------
+ false | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast(42 = 73 AS xml) t(j);
+   j   | pg_typeof 
+-------+-----------
+ false | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast(42 <> 73 AS xml) t(j);
+  j   | pg_typeof 
+------+-----------
+ true | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast('11:11:11.5'::time AS xml) t(j);
+     j      | pg_typeof 
+------------+-----------
+ 11:11:11.5 | xml
+(1 row)
+
+SELECT j, pg_typeof(j) FROM xmlcast('11:11:11.5'::time with time zone AS xml) t(j);
+       j       | pg_typeof 
+---------------+-----------
+ 11:11:11.5-07 | xml
+(1 row)
+
+-- Convert an XML string to bytea and back to xml
+SELECT xmlcast(convert_from(xmlcast('&lt;&quot;foo&amp;bar&quot;&gt;'::xml AS bytea),'UTF8')::xml AS text);
+   xmlcast   
+-------------
+ <"foo&bar">
+(1 row)
+
+SET xmlbinary TO hex;
+SELECT xmlcast(E'\\xDEADBEEF'::bytea AS xml);
+ xmlcast  
+----------
+ DEADBEEF
+(1 row)
+
+SET xmlbinary TO base64;
+SELECT xmlcast(E'\\xDEADBEEF'::bytea AS xml);
+ xmlcast  
+----------
+ 3q2+7w==
+(1 row)
+
+-- The BY REF and BY VALUE clauses are accepted but ignored.
+-- This checks if the results are indeed the same as without the clauses.
+SELECT
+  xmlcast('foo' AS xml)::text = xmlcast('foo' AS xml BY REF)::text,
+  xmlcast('foo' AS xml)::text = xmlcast('foo' AS xml BY VALUE)::text,
+  xmlcast('foo'::xml AS text) = xmlcast('foo'::xml AS text BY REF),
+  xmlcast('foo'::xml AS text) = xmlcast('foo'::xml AS text BY VALUE);
+ ?column? | ?column? | ?column? | ?column? 
+----------+----------+----------+----------
+ t        | t        | t        | t
+(1 row)
+
+SELECT
+  xmlcast(42 AS xml)::text = xmlcast(42 AS xml BY REF)::text,
+  xmlcast(42 AS xml)::text = xmlcast(42 AS xml BY VALUE)::text,
+  xmlcast('42'::xml AS int) = xmlcast('42'::xml AS int BY REF),
+  xmlcast('42'::xml AS int) = xmlcast('42'::xml AS int BY VALUE);
+ ?column? | ?column? | ?column? | ?column? 
+----------+----------+----------+----------
+ t        | t        | t        | t
+(1 row)
+
+SELECT
+  xmlcast(42.73 AS xml)::text = xmlcast(42.73 AS xml BY REF)::text,
+  xmlcast(42.73 AS xml)::text = xmlcast(42.73 AS xml BY VALUE)::text,
+  xmlcast('42.73'::xml AS numeric) = xmlcast('42.73'::xml AS numeric BY REF),
+  xmlcast('42.73'::xml AS numeric) = xmlcast('42.73'::xml AS numeric BY VALUE);
+ ?column? | ?column? | ?column? | ?column? 
+----------+----------+----------+----------
+ t        | t        | t        | t
+(1 row)
+
+SELECT
+  xmlcast('2024-08-14'::date AS xml)::text = xmlcast('2024-08-14'::date AS xml BY REF)::text,
+  xmlcast('2024-08-14'::date AS xml)::text = xmlcast('2024-08-14'::date AS xml BY VALUE)::text,
+  xmlcast('2024-08-14'::xml AS date) = xmlcast('2024-08-14'::xml AS date BY REF),
+  xmlcast('2024-08-14'::xml AS date) = xmlcast('2024-08-14'::xml AS date BY VALUE);
+ ?column? | ?column? | ?column? | ?column? 
+----------+----------+----------+----------
+ t        | t        | t        | t
+(1 row)
+
+SELECT
+  xmlcast('12:30:45'::time without time zone AS xml)::text = xmlcast('12:30:45'::time without time zone AS xml BY REF)::text,
+  xmlcast('12:30:45'::time without time zone AS xml)::text = xmlcast('12:30:45'::time without time zone AS xml BY VALUE)::text,
+  xmlcast('12:30:45'::xml AS time without time zone) = xmlcast('12:30:45'::xml AS time without time zone BY REF),
+  xmlcast('12:30:45'::xml AS time without time zone) = xmlcast('12:30:45'::xml AS time without time zone BY VALUE);
+ ?column? | ?column? | ?column? | ?column? 
+----------+----------+----------+----------
+ t        | t        | t        | t
+(1 row)
+
+SELECT
+  xmlcast('09:30:10+06:00'::time with time zone AS xml)::text = xmlcast('09:30:10+06:00'::time with time zone AS xml BY REF)::text,
+  xmlcast('09:30:10+06:00'::time with time zone AS xml)::text = xmlcast('09:30:10+06:00'::time with time zone AS xml BY VALUE)::text,
+  xmlcast('09:30:10+06:00'::xml AS time with time zone) = xmlcast('09:30:10+06:00'::xml AS time with time zone BY REF),
+  xmlcast('09:30:10+06:00'::xml AS time with time zone) = xmlcast('09:30:10+06:00'::xml AS time with time zone BY VALUE);
+ ?column? | ?column? | ?column? | ?column? 
+----------+----------+----------+----------
+ t        | t        | t        | t
+(1 row)
+
+SELECT
+  xmlcast('2002-05-30 09:30:10+06:00'::timestamp with time zone AS xml)::text = xmlcast('2002-05-30 09:30:10+06:00'::timestamp with time zone AS xml BY REF)::text,
+  xmlcast('2002-05-30 09:30:10+06:00'::timestamp with time zone AS xml)::text = xmlcast('2002-05-30 09:30:10+06:00'::timestamp with time zone AS xml BY VALUE)::text,
+  xmlcast('2002-05-30T09:30:10+06:00'::xml AS timestamp with time zone) = xmlcast('2002-05-30T09:30:10+06:00'::xml AS timestamp with time zone BY REF),
+  xmlcast('2002-05-30T09:30:10+06:00'::xml AS timestamp with time zone) = xmlcast('2002-05-30T09:30:10+06:00'::xml AS timestamp with time zone BY VALUE);
+ ?column? | ?column? | ?column? | ?column? 
+----------+----------+----------+----------
+ t        | t        | t        | t
+(1 row)
+
+SELECT
+  xmlcast('1 year 2 mons'::interval AS xml)::text = xmlcast('1 year 2 mons'::interval AS xml BY REF)::text,
+  xmlcast('1 year 2 mons'::interval AS xml)::text = xmlcast('1 year 2 mons'::interval AS xml BY VALUE)::text,
+  xmlcast('1 year 2 mons'::xml AS interval) = xmlcast('1 year 2 mons'::xml AS interval BY REF),
+  xmlcast('1 year 2 mons'::xml AS interval) = xmlcast('1 year 2 mons'::xml AS interval BY VALUE);
+ ?column? | ?column? | ?column? | ?column? 
+----------+----------+----------+----------
+ t        | t        | t        | t
+(1 row)
+

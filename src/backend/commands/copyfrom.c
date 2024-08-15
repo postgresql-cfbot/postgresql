@@ -106,6 +106,159 @@ typedef struct CopyMultiInsertInfo
 /* non-export function prototypes */
 static void ClosePipeFromProgram(CopyFromState cstate);
 
+
+/*
+ * CopyFromRoutine implementations for text and CSV.
+ */
+
+/*
+ * CopyFromTextLikeInFunc
+ *
+ * Assign input function data for a relation's attribute in text/CSV format.
+ */
+static void
+CopyFromTextLikeInFunc(CopyFromState cstate, Oid atttypid,
+					   FmgrInfo *finfo, Oid *typioparam)
+{
+	Oid			func_oid;
+
+	getTypeInputInfo(atttypid, &func_oid, typioparam);
+	fmgr_info(func_oid, finfo);
+}
+
+/*
+ * CopyFromTextLikeStart
+ *
+ * Start of COPY FROM for text/CSV format.
+ */
+static void
+CopyFromTextLikeStart(CopyFromState cstate, TupleDesc tupDesc)
+{
+	AttrNumber	attr_count;
+
+	/*
+	 * If encoding conversion is needed, we need another buffer to hold the
+	 * converted input data.  Otherwise, we can just point input_buf to the
+	 * same buffer as raw_buf.
+	 */
+	if (cstate->need_transcoding)
+	{
+		cstate->input_buf = (char *) palloc(INPUT_BUF_SIZE + 1);
+		cstate->input_buf_index = cstate->input_buf_len = 0;
+	}
+	else
+		cstate->input_buf = cstate->raw_buf;
+	cstate->input_reached_eof = false;
+
+	initStringInfo(&cstate->line_buf);
+
+	/*
+	 * Create workspace for CopyReadAttributes results; used by CSV and text
+	 * format.
+	 */
+	attr_count = list_length(cstate->attnumlist);
+	cstate->max_fields = attr_count;
+	cstate->raw_fields = (char **) palloc(attr_count * sizeof(char *));
+}
+
+/*
+ * CopyFromTextLikeEnd
+ *
+ * End of COPY FROM for text/CSV format.
+ */
+static void
+CopyFromTextLikeEnd(CopyFromState cstate)
+{
+	/* nothing to do */
+}
+
+/*
+ * CopyFromRoutine implementation for "binary".
+ */
+
+/*
+ * CopyFromBinaryInFunc
+ *
+ * Assign input function data for a relation's attribute in binary format.
+ */
+static void
+CopyFromBinaryInFunc(CopyFromState cstate, Oid atttypid,
+					 FmgrInfo *finfo, Oid *typioparam)
+{
+	Oid			func_oid;
+
+	getTypeBinaryInputInfo(atttypid, &func_oid, typioparam);
+	fmgr_info(func_oid, finfo);
+}
+
+/*
+ * CopyFromBinaryStart
+ *
+ * Start of COPY FROM for binary format.
+ */
+static void
+CopyFromBinaryStart(CopyFromState cstate, TupleDesc tupDesc)
+{
+	/* Read and verify binary header */
+	ReceiveCopyBinaryHeader(cstate);
+}
+
+/*
+ * CopyFromBinaryEnd
+ *
+ * End of COPY FROM for binary format.
+ */
+static void
+CopyFromBinaryEnd(CopyFromState cstate)
+{
+	/* nothing to do */
+}
+
+/*
+ * Routines assigned to each format.
++
+ * CSV and text share the same implementation, at the exception of the
+ * per-row callback.
+ */
+static const CopyFromRoutine CopyFromRoutineText = {
+	.CopyFromInFunc = CopyFromTextLikeInFunc,
+	.CopyFromStart = CopyFromTextLikeStart,
+	.CopyFromOneRow = CopyFromTextOneRow,
+	.CopyFromEnd = CopyFromTextLikeEnd,
+};
+
+static const CopyFromRoutine CopyFromRoutineCSV = {
+	.CopyFromInFunc = CopyFromTextLikeInFunc,
+	.CopyFromStart = CopyFromTextLikeStart,
+	.CopyFromOneRow = CopyFromCSVOneRow,
+	.CopyFromEnd = CopyFromTextLikeEnd,
+};
+
+static const CopyFromRoutine CopyFromRoutineBinary = {
+	.CopyFromInFunc = CopyFromBinaryInFunc,
+	.CopyFromStart = CopyFromBinaryStart,
+	.CopyFromOneRow = CopyFromBinaryOneRow,
+	.CopyFromEnd = CopyFromBinaryEnd,
+};
+
+/*
+ * Define the COPY FROM routines to use for a format.
+ */
+static const CopyFromRoutine *
+CopyFromGetRoutine(CopyFormatOptions opts)
+{
+	if (opts.routine)
+		return (const CopyFromRoutine *) opts.routine;
+	else if (opts.csv_mode)
+		return &CopyFromRoutineCSV;
+	else if (opts.binary)
+		return &CopyFromRoutineBinary;
+
+	/* default is text */
+	return &CopyFromRoutineText;
+}
+
+
 /*
  * error context callback for COPY FROM
  *
@@ -1391,7 +1544,6 @@ BeginCopyFrom(ParseState *pstate,
 				num_defaults;
 	FmgrInfo   *in_functions;
 	Oid		   *typioparams;
-	Oid			in_func_oid;
 	int		   *defmap;
 	ExprState **defexprs;
 	MemoryContext oldcontext;
@@ -1422,6 +1574,9 @@ BeginCopyFrom(ParseState *pstate,
 
 	/* Extract options from the statement node tree */
 	ProcessCopyOptions(pstate, &cstate->opts, true /* is_from */ , options);
+
+	/* Set format routine */
+	cstate->routine = CopyFromGetRoutine(cstate->opts);
 
 	/* Process the target relation */
 	cstate->rel = rel;
@@ -1556,7 +1711,7 @@ BeginCopyFrom(ParseState *pstate,
 							pg_encoding_to_char(GetDatabaseEncoding()))));
 	}
 
-	cstate->copy_src = COPY_FILE;	/* default */
+	cstate->copy_src = COPY_SOURCE_FILE;	/* default */
 
 	cstate->whereClause = whereClause;
 
@@ -1577,25 +1732,6 @@ BeginCopyFrom(ParseState *pstate,
 	cstate->raw_buf = palloc(RAW_BUF_SIZE + 1);
 	cstate->raw_buf_index = cstate->raw_buf_len = 0;
 	cstate->raw_reached_eof = false;
-
-	if (!cstate->opts.binary)
-	{
-		/*
-		 * If encoding conversion is needed, we need another buffer to hold
-		 * the converted input data.  Otherwise, we can just point input_buf
-		 * to the same buffer as raw_buf.
-		 */
-		if (cstate->need_transcoding)
-		{
-			cstate->input_buf = (char *) palloc(INPUT_BUF_SIZE + 1);
-			cstate->input_buf_index = cstate->input_buf_len = 0;
-		}
-		else
-			cstate->input_buf = cstate->raw_buf;
-		cstate->input_reached_eof = false;
-
-		initStringInfo(&cstate->line_buf);
-	}
 
 	initStringInfo(&cstate->attribute_buf);
 
@@ -1629,13 +1765,9 @@ BeginCopyFrom(ParseState *pstate,
 			continue;
 
 		/* Fetch the input function and typioparam info */
-		if (cstate->opts.binary)
-			getTypeBinaryInputInfo(att->atttypid,
-								   &in_func_oid, &typioparams[attnum - 1]);
-		else
-			getTypeInputInfo(att->atttypid,
-							 &in_func_oid, &typioparams[attnum - 1]);
-		fmgr_info(in_func_oid, &in_functions[attnum - 1]);
+		cstate->routine->CopyFromInFunc(cstate, att->atttypid,
+										&in_functions[attnum - 1],
+										&typioparams[attnum - 1]);
 
 		/* Get default info if available */
 		defexprs[attnum - 1] = NULL;
@@ -1707,7 +1839,7 @@ BeginCopyFrom(ParseState *pstate,
 	if (data_source_cb)
 	{
 		progress_vals[1] = PROGRESS_COPY_TYPE_CALLBACK;
-		cstate->copy_src = COPY_CALLBACK;
+		cstate->copy_src = COPY_SOURCE_CALLBACK;
 		cstate->data_source_cb = data_source_cb;
 	}
 	else if (pipe)
@@ -1770,20 +1902,7 @@ BeginCopyFrom(ParseState *pstate,
 
 	pgstat_progress_update_multi_param(3, progress_cols, progress_vals);
 
-	if (cstate->opts.binary)
-	{
-		/* Read and verify binary header */
-		ReceiveCopyBinaryHeader(cstate);
-	}
-
-	/* create workspace for CopyReadAttributes results */
-	if (!cstate->opts.binary)
-	{
-		AttrNumber	attr_count = list_length(cstate->attnumlist);
-
-		cstate->max_fields = attr_count;
-		cstate->raw_fields = (char **) palloc(attr_count * sizeof(char *));
-	}
+	cstate->routine->CopyFromStart(cstate, tupDesc);
 
 	MemoryContextSwitchTo(oldcontext);
 
@@ -1796,6 +1915,8 @@ BeginCopyFrom(ParseState *pstate,
 void
 EndCopyFrom(CopyFromState cstate)
 {
+	cstate->routine->CopyFromEnd(cstate);
+
 	/* No COPY FROM related resources except memory. */
 	if (cstate->is_program)
 	{

@@ -1,0 +1,21 @@
+CREATE EXTENSION test_copy_format;
+CREATE TABLE public.test (a smallint, b integer, c bigint);
+INSERT INTO public.test VALUES (1, 2, 3), (12, 34, 56), (123, 456, 789);
+COPY public.test FROM stdin WITH (format 'test_copy_format');
+NOTICE:  test_copy_format: is_from=true
+NOTICE:  CopyFromInFunc: atttypid=21
+NOTICE:  CopyFromInFunc: atttypid=23
+NOTICE:  CopyFromInFunc: atttypid=20
+NOTICE:  CopyFromStart: natts=3
+NOTICE:  CopyFromOneRow
+NOTICE:  CopyFromEnd
+COPY public.test TO stdout WITH (format 'test_copy_format');
+NOTICE:  test_copy_format: is_from=false
+NOTICE:  CopyToOutFunc: atttypid=21
+NOTICE:  CopyToOutFunc: atttypid=23
+NOTICE:  CopyToOutFunc: atttypid=20
+NOTICE:  CopyToStart: natts=3
+NOTICE:  CopyToOneRow: tts_nvalid=3
+NOTICE:  CopyToOneRow: tts_nvalid=3
+NOTICE:  CopyToOneRow: tts_nvalid=3
+NOTICE:  CopyToEnd

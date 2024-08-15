@@ -1559,3 +1559,25 @@ select '12345.0000000000000000000000000000000000000000000005'::jsonb::float8;
 select '12345.0000000000000000000000000000000000000000000005'::jsonb::int2;
 select '12345.0000000000000000000000000000000000000000000005'::jsonb::int4;
 select '12345.0000000000000000000000000000000000000000000005'::jsonb::int8;
+
+-- simple dot notation
+drop table if exists test_jsonb_dot;
+create table test_jsonb_dot(id int, test_jsonb jsonb);
+insert into test_jsonb_dot select 1, '{"a": 1, "b": 42}'::json;
+insert into test_jsonb_dot select 1, '{"a": 2, "b": {"c": 42}}'::json;
+insert into test_jsonb_dot select 1, '{"a": 3, "b": {"c": "42"}, "d":[11, 12]}'::json;
+
+-- member object access
+select (test_jsonb_dot.test_jsonb).b from test_jsonb_dot;
+select (test_jsonb_dot.test_jsonb).b.c from test_jsonb_dot;
+select (test_jsonb_dot.test_jsonb).d from test_jsonb_dot;
+select (test_jsonb_dot.test_jsonb)."d" from test_jsonb_dot;
+select (test_jsonb_dot.test_jsonb).'d' from test_jsonb_dot;
+select (test_jsonb_dot.test_jsonb)['d'] from test_jsonb_dot;
+
+-- array element access
+select (test_jsonb_dot.test_jsonb).d[0] from test_jsonb_dot;
+select (test_jsonb_dot.test_jsonb).d[0:] from test_jsonb_dot;
+select (test_jsonb_dot.test_jsonb).d[0::int] from test_jsonb_dot;
+select (test_jsonb_dot.test_jsonb).d[0::float] from test_jsonb_dot;
+select (test_jsonb_dot.test_jsonb).d[0].x[1] from test_jsonb_dot;

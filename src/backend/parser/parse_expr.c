@@ -453,7 +453,13 @@ transformIndirection(ParseState *pstate, A_Indirection *ind)
 		Node	   *n = lfirst(i);
 
 		if (IsA(n, A_Indices))
-			subscripts = lappend(subscripts, n);
+			if (exprType(result) == JSONOID)
+				result = ParseJsonSimplifiedAccessorArrayElement(pstate,
+																 castNode(A_Indices, n),
+																 result,
+																 location);
+			else
+				subscripts = lappend(subscripts, n);
 		else if (IsA(n, A_Star))
 		{
 			ereport(ERROR,

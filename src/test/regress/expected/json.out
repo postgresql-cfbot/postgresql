@@ -2716,3 +2716,110 @@ select ts_headline('[]'::json, tsquery('aaa & bbb'));
  []
 (1 row)
 
+-- simple dot notation
+drop table if exists test_json_dot;
+NOTICE:  table "test_json_dot" does not exist, skipping
+create table test_json_dot(id int, test_json json);
+insert into test_json_dot select 1, '{"a": 1, "b": 42}'::json;
+insert into test_json_dot select 1, '{"a": 2, "b": {"c": 42}}'::json;
+insert into test_json_dot select 1, '{"a": 3, "b": {"c": "42"}, "d":[11, 12]}'::json;
+insert into test_json_dot select 1, '{"a": 3, "b": {"c": "42"}, "d":[{"x": [11, 12]}, {"y": [21, 22]}]}'::json;
+-- member object access
+select (test_json_dot.test_json).b, json_query(test_json, 'lax $.b' WITH CONDITIONAL WRAPPER NULL ON EMPTY NULL ON ERROR) as expected from test_json_dot;
+      b      |  expected   
+-------------+-------------
+ 42          | 42
+ {"c": 42}   | {"c": 42}
+ {"c": "42"} | {"c": "42"}
+ {"c": "42"} | {"c": "42"}
+(4 rows)
+
+select (test_json_dot.test_json).b.c, json_query(test_json, 'lax $.b.c' WITH CONDITIONAL WRAPPER NULL ON EMPTY NULL ON ERROR) as expected from test_json_dot;
+  c   | expected 
+------+----------
+      | 
+ 42   | 42
+ "42" | "42"
+ "42" | "42"
+(4 rows)
+
+select (test_json_dot.test_json).d, json_query(test_json, 'lax $.d' WITH CONDITIONAL WRAPPER NULL ON EMPTY NULL ON ERROR) as expected from test_json_dot;
+                 d                  |              expected              
+------------------------------------+------------------------------------
+                                    | 
+                                    | 
+ [11, 12]                           | [11, 12]
+ [{"x": [11, 12]}, {"y": [21, 22]}] | [{"x": [11, 12]}, {"y": [21, 22]}]
+(4 rows)
+
+select (test_json_dot.test_json)."d", json_query(test_json, 'lax $.d' WITH CONDITIONAL WRAPPER NULL ON EMPTY NULL ON ERROR) as expected from test_json_dot;
+                 d                  |              expected              
+------------------------------------+------------------------------------
+                                    | 
+                                    | 
+ [11, 12]                           | [11, 12]
+ [{"x": [11, 12]}, {"y": [21, 22]}] | [{"x": [11, 12]}, {"y": [21, 22]}]
+(4 rows)
+
+select (test_json_dot.test_json).'d' from test_json_dot;
+ERROR:  syntax error at or near "'d'"
+LINE 1: select (test_json_dot.test_json).'d' from test_json_dot;
+                                         ^
+select (test_json_dot.test_json)['d'] from test_json_dot;
+ERROR:  json subscript must be coercible to integer
+LINE 1: select (test_json_dot.test_json)['d'] from test_json_dot;
+                                         ^
+-- array element access
+select (test_json_dot.test_json).d->0 from test_json_dot;
+    ?column?     
+-----------------
+ 
+ 
+ 11
+ {"x": [11, 12]}
+(4 rows)
+
+select (test_json_dot.test_json).d[0], json_query(test_json, 'lax $.d[0]' WITH CONDITIONAL WRAPPER NULL ON EMPTY NULL ON ERROR) as expected from test_json_dot;
+        d        |    expected     
+-----------------+-----------------
+                 | 
+                 | 
+ 11              | 11
+ {"x": [11, 12]} | {"x": [11, 12]}
+(4 rows)
+
+select (test_json_dot.test_json).d[1], json_query(test_json, 'lax $.d[1]' WITH CONDITIONAL WRAPPER NULL ON EMPTY NULL ON ERROR) as expected from test_json_dot;
+        d        |    expected     
+-----------------+-----------------
+                 | 
+                 | 
+ 12              | 12
+ {"y": [21, 22]} | {"y": [21, 22]}
+(4 rows)
+
+select (test_json_dot.test_json).d[0:] from test_json_dot;
+ERROR:  json subscript does not support slices
+LINE 1: select (test_json_dot.test_json).d[0:] from test_json_dot;
+                ^
+select (test_json_dot.test_json).d[0::int] from test_json_dot;
+        d        
+-----------------
+ 
+ 
+ 11
+ {"x": [11, 12]}
+(4 rows)
+
+select (test_json_dot.test_json).d[0::float] from test_json_dot;
+ERROR:  json subscript must be coercible to integer
+LINE 1: select (test_json_dot.test_json).d[0::float] from test_json_...
+                                           ^
+select (test_json_dot.test_json).d[0].x[1], json_query(test_json, 'lax $.d[0].x[1]' WITH CONDITIONAL WRAPPER NULL ON EMPTY NULL ON ERROR) as expected from test_json_dot;
+ x  | expected 
+----+----------
+    | 
+    | 
+    | 
+ 12 | 12
+(4 rows)
+

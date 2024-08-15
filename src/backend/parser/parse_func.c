@@ -33,6 +33,8 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
+#include "parser/parse_oper.h"
+#include "catalog/pg_operator_d.h"
 
 
 /* Possible error codes from LookupFuncNameInternal */
@@ -48,6 +50,8 @@ static void unify_hypothetical_args(ParseState *pstate,
 static Oid	FuncNameAsType(List *funcname);
 static Node *ParseComplexProjection(ParseState *pstate, const char *funcname,
 									Node *first_arg, int location);
+static Node *ParseJsonSimplifiedAccessorObjectField(ParseState *pstate, const char *funcname,
+													Node *first_arg, int location);
 static Oid	LookupFuncNameInternal(ObjectType objtype, List *funcname,
 								   int nargs, const Oid *argtypes,
 								   bool include_out_arguments, bool missing_ok,
@@ -226,17 +230,24 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 						   !func_variadic && argnames == NIL &&
 						   list_length(funcname) == 1 &&
 						   (actual_arg_types[0] == RECORDOID ||
-							ISCOMPLEX(actual_arg_types[0])));
+							ISCOMPLEX(actual_arg_types[0]) ||
+							ISJSON(actual_arg_types[0])));
 
 	/*
 	 * If it's column syntax, check for column projection case first.
 	 */
 	if (could_be_projection && is_column)
 	{
-		retval = ParseComplexProjection(pstate,
-										strVal(linitial(funcname)),
-										first_arg,
-										location);
+		if (ISJSON(actual_arg_types[0]))
+			retval = ParseJsonSimplifiedAccessorObjectField(pstate,
+															strVal(linitial(funcname)),
+															first_arg,
+															location);
+		else
+			retval = ParseComplexProjection(pstate,
+											strVal(linitial(funcname)),
+											first_arg,
+											location);
 		if (retval)
 			return retval;
 
@@ -1900,6 +1911,83 @@ FuncNameAsType(List *funcname)
 
 	ReleaseSysCache(typtup);
 	return result;
+}
+
+/*
+ * ParseJsonSimplifiedAccessorArrayElement -
+ *	  transform json subscript into json_array_element operator.
+ */
+Node *
+ParseJsonSimplifiedAccessorArrayElement(ParseState *pstate, A_Indices *subscript,
+										Node *first_arg, int location)
+{
+	OpExpr	   *result;
+	Node	   *index;
+
+	Assert(exprType(first_arg) == JSONOID);
+
+	if (subscript->is_slice)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("json subscript does not support slices")),
+				parser_errposition(pstate, location));
+
+	index = transformExpr(pstate, subscript->uidx, pstate->p_expr_kind);
+	if (!IsA(index, Const) ||
+		castNode(Const, index)->consttype != INT4OID)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("json subscript must be coercible to integer")),
+				parser_errposition(pstate, exprLocation(index)));
+
+	result = makeNode(OpExpr);
+	result->opno = OID_JSON_ARRAY_ELEMENT_OP;
+	result->opresulttype = JSONOID;
+	result->opfuncid = get_opcode(result->opno);
+	result->args = list_make2(first_arg, index);
+	result->location = exprLocation(index);
+
+	return (Node *) result;
+}
+
+/*
+ * ParseJsonSimplifiedAccessorObjectField -
+ *	  handles function calls with a single argument that is of json type.
+ *	  If the function call is actually a column projection, return a suitably
+ *	  transformed expression tree.  If not, return NULL.
+ */
+Node *
+ParseJsonSimplifiedAccessorObjectField(ParseState *pstate, const char *funcname,
+									   Node *first_arg, int location)
+{
+	OpExpr	   *result;
+	Node	   *rexpr;
+
+	rexpr = (Node *) makeConst(
+							   TEXTOID,
+							   -1,
+							   InvalidOid,
+							   -1,
+							   CStringGetTextDatum(funcname),
+							   false,
+							   false);
+
+	result = makeNode(OpExpr);
+	if (exprType(first_arg) == JSONOID)
+	{
+		result->opno = OID_JSON_OBJECT_FIELD_OP;
+		result->opresulttype = JSONOID;
+	}
+	else
+	{
+		Assert(exprType(first_arg) == JSONBOID);
+		result->opno = OID_JSONB_OBJECT_FIELD_OP;
+		result->opresulttype = JSONBOID;
+	}
+	result->opfuncid = get_opcode(result->opno);
+	result->args = list_make2(first_arg, rexpr);
+	result->location = location;
+	return (Node *) result;
 }
 
 /*

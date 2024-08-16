@@ -192,11 +192,25 @@ RelationCreateStorage(RelFileLocator rlocator, char relpersistence,
  * aborts or server crashes later on, the fork will be removed. If the caller
  * plans to remove the fork in another way, it should pass false. Additionally,
  * it is WAL-logged if wal_log is true.
+ *
+ * Returns true if the storage file was actually created. False means the file
+ * already existed.
  */
 void
 RelationCreateFork(SMgrRelation srel, ForkNumber forkNum,
 				   bool wal_log, bool undo_log)
 {
+#ifdef USE_ASSERT_CHECKING
+	/* we must not have pending delete for the init fork. */
+	if (forkNum == INIT_FORKNUM)
+	{
+		for (PendingRelDelete *p = pendingDeletes ; p != NULL ; p = p->next)
+			Assert(!FORKBITMAP_ISSET(p->forks, INIT_FORKNUM) ||
+				   !RelFileLocatorEquals(srel->smgr_rlocator.locator,
+										 p->rlocator));
+	}
+#endif
+
 	/* Schedule the removal of this init fork at abort if requested. */
 	if (undo_log)
 		ulog_smgrcreate(srel, forkNum);
@@ -206,8 +220,31 @@ RelationCreateFork(SMgrRelation srel, ForkNumber forkNum,
 		log_smgrcreate(&srel->smgr_rlocator.locator, forkNum);
 
 	smgrcreate(srel, forkNum, false);
-
 }
+
+/*
+ * RelationDropInitFork
+ *		Delete physical storage for the init fork of a relation.
+ */
+void
+RelationDropInitFork(SMgrRelation srel)
+{
+	int 			nestLevel = GetCurrentTransactionNestLevel();
+	RelFileLocator	rlocator = srel->smgr_rlocator.locator;
+	ProcNumber		procNumber = srel->smgr_rlocator.backend;
+	PendingRelDelete *pending;
+
+	/* Schedule the removal of this init fork at commit. */
+	pending = (PendingRelDelete *)
+		MemoryContextAlloc(TopMemoryContext, sizeof(PendingRelDelete));
+	pending->rlocator = rlocator;
+	pending->procNumber = procNumber;
+	pending->forks = FORKBITMAP_BIT(INIT_FORKNUM);
+	pending->atCommit = true;
+	pending->nestLevel = nestLevel;
+	pending->next = pendingDeletes;
+	pendingDeletes = pending;
+ }
 
 /*
  * Perform XLogInsert of an XLOG_SMGR_CREATE record to WAL.
@@ -764,8 +801,6 @@ smgrDoPendingDeletes(bool isCommit)
 			{
 				SMgrRelation srel;
 
-				Assert(pending->forks == FORKBITMAP_ALLFORKS());
-
 				srel = smgropen(pending->rlocator, pending->procNumber);
 
 				/* allocate the initial array, or extend it, if needed */
@@ -1064,8 +1099,18 @@ AtSubCommit_smgr(void)
 
 	for (pending = pendingDeletes; pending != NULL; pending = pending->next)
 	{
-		if (pending->nestLevel >= nestLevel)
-			pending->nestLevel = nestLevel - 1;
+		if (pending->nestLevel < nestLevel)
+		{
+#ifdef USE_ASSERT_CHECKING
+			/* all the remaining entries must be of upper subtransactions */
+			for (; pending ; pending = pending->next)
+				Assert(pending->nestLevel < nestLevel);
+#endif
+			break;
+		}
+
+		/* move this entry to the immediately upper subtransaction */
+		pending->nestLevel = nestLevel - 1;
 	}
 }
 
@@ -1195,7 +1240,8 @@ smgr_redo(XLogReaderState *record)
 		SMgrRelation reln;
 
 		reln = smgropen(xlrec->rlocator, INVALID_PROC_NUMBER);
-		SetRelationBuffersPersistence(reln, xlrec->persistence);
+		SetRelationBuffersPersistenceRedo(reln, xlrec->persistence,
+										  XLogRecGetXid(record));
 	}
 	else
 		elog(PANIC, "smgr_redo: unknown op code %u", info);

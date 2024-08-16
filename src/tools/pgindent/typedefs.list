@@ -330,6 +330,7 @@ BtreeLastVisibleEntry
 BtreeLevel
 Bucket
 BufFile
+BufMgrCleanup
 Buffer
 BufferAccessStrategy
 BufferAccessStrategyType
@@ -4131,6 +4132,7 @@ xl_replorigin_set
 xl_restore_point
 xl_running_xacts
 xl_seq_rec
+xl_smgr_bufpersistence
 xl_smgr_create
 xl_smgr_truncate
 xl_standby_lock

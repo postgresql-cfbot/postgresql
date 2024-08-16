@@ -19,6 +19,7 @@
 #include "storage/buf.h"
 #include "storage/bufpage.h"
 #include "storage/relfilelocator.h"
+#include "storage/smgr.h"
 #include "utils/relcache.h"
 #include "utils/snapmgr.h"
 
@@ -250,7 +251,14 @@ extern Buffer ExtendBufferedRelTo(BufferManagerRelation bmr,
 								  ReadBufferMode mode);
 
 extern void InitBufferManagerAccess(void);
+extern void PreSubCommit_Buffers(bool isCommit);
+extern void PreCommit_Buffers(bool isCommit);
 extern void AtEOXact_Buffers(bool isCommit);
+extern void SetRelationBuffersPersistenceRedo(SMgrRelation srel, bool permanent,
+											  TransactionId xid);
+extern void AtEOXact_Buffers_Redo(bool isCommit, TransactionId xid,
+								  int nchildren, TransactionId *children);
+extern void BufmgrDoCleanupRedo(void);
 extern char *DebugPrintBufferRefcount(Buffer buffer);
 extern void CheckPointBuffers(int flags);
 extern BlockNumber BufferGetBlockNumber(Buffer buffer);
@@ -269,6 +277,8 @@ extern void DropRelationBuffers(struct SMgrRelationData *smgr_reln,
 extern void DropRelationsAllBuffers(struct SMgrRelationData **smgr_reln,
 									int nlocators);
 extern void DropDatabaseBuffers(Oid dbid);
+extern void SetRelationBuffersPersistence(struct SMgrRelationData *srel,
+										  bool permanent);
 
 #define RelationGetNumberOfBlocks(reln) \
 	RelationGetNumberOfBlocksInFork(reln, MAIN_FORKNUM)

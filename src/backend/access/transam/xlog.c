@@ -5919,6 +5919,7 @@ StartupXLOG(void)
 	 */
 	if (InRecovery)
 	{
+		BufmgrDoCleanupRedo();
 		UndoLogCleanup();
 		ResetUnloggedRelations(UNLOGGED_RELATION_INIT);
 	}

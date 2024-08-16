@@ -27,6 +27,7 @@ extern SMgrRelation RelationCreateStorage(RelFileLocator rlocator,
 										  bool register_delete);
 extern void RelationCreateFork(SMgrRelation srel, ForkNumber forkNum,
 							   bool wal_log, bool undo_log);
+extern void RelationDropInitFork(SMgrRelation srel);
 extern void RelationDropStorage(Relation rel);
 extern void RelationPreserveStorage(RelFileLocator rlocator, bool atCommit);
 extern void RelationPreTruncate(Relation rel);

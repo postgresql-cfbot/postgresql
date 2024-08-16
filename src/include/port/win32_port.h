@@ -421,6 +421,15 @@ extern int	_pglstat64(const char *name, struct stat *buf);
 #define strtok_r strtok_s
 
 /*
+ * Supplement to <time.h>.
+ */
+#ifdef _MSC_VER
+/* MinGW has these functions already */
+#define gmtime_r(clock, result) (gmtime_s(result, clock) ? NULL : (result))
+#define localtime_r(clock, result) (localtime_s(result, clock) ? NULL : (result))
+#endif
+
+/*
  * Locale stuff.
  *
  * Extended locale functions with gratuitous underscore prefixes.

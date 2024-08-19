@@ -410,6 +410,8 @@ defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
 	if (pg_strcasecmp(sval, "ignore") == 0)
 		return COPY_ON_ERROR_IGNORE;
 
+	if (pg_strcasecmp(sval, "table") == 0)
+		return COPY_ON_ERROR_TABLE;
 	ereport(ERROR,
 			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 	/*- translator: first %s is the name of a COPY option, e.g. ON_ERROR */
@@ -469,6 +471,7 @@ ProcessCopyOptions(ParseState *pstate,
 	bool		freeze_specified = false;
 	bool		header_specified = false;
 	bool		on_error_specified = false;
+	bool		on_error_tbl_specified = false;
 	bool		log_verbosity_specified = false;
 	ListCell   *option;
 
@@ -636,6 +639,14 @@ ProcessCopyOptions(ParseState *pstate,
 			log_verbosity_specified = true;
 			opts_out->log_verbosity = defGetCopyLogVerbosityChoice(defel, pstate);
 		}
+		else if (strcmp(defel->defname, "table") == 0)
+		{
+			if (on_error_tbl_specified)
+				errorConflictingDefElem(defel, pstate);
+			on_error_tbl_specified = true;
+
+			opts_out->on_error_tbl = defGetString(defel);
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -644,6 +655,15 @@ ProcessCopyOptions(ParseState *pstate,
 					 parser_errposition(pstate, defel->location)));
 	}
 
+	if (opts_out->on_error_tbl == NULL && opts_out->on_error == COPY_ON_ERROR_TABLE)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("COPY %s \"table\" requires a custom specified error saving table", "ON_ERROR")));
+
+	if (opts_out->on_error_tbl != NULL && opts_out->on_error != COPY_ON_ERROR_TABLE)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("COPY \"table\" option can only be used when %s option is specified as \"table\"", "ON_ERROR")));
 	/*
 	 * Check for incompatible options (must do these two before inserting
 	 * defaults)

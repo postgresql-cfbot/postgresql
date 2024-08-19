@@ -66,6 +66,7 @@
 #include "commands/copyfrom_internal.h"
 #include "commands/progress.h"
 #include "executor/executor.h"
+#include "access/heapam.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "mb/pg_wchar.h"
@@ -961,6 +962,51 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 			{
 				Assert(cstate->opts.on_error != COPY_ON_ERROR_STOP);
 
+				if (cstate->opts.on_error == COPY_ON_ERROR_TABLE)
+				{
+					/*
+					 * we mostly use ErrorSaveContext's info to form a tuple and
+					 * insert it to the error saving table. we already did lock
+					 * condition check in BeginCopyFrom.
+					*/
+					#define ERROR_TBL_COLUMNS	10
+					HeapTuple	on_error_tup;
+					TupleDesc	on_error_tupDesc;
+					char	*err_detail;
+					char	*err_code;
+					Datum	t_values[ERROR_TBL_COLUMNS] = {0};
+					bool	t_isnull[ERROR_TBL_COLUMNS] = {0};
+					int		j = 0;
+
+					Assert(cstate->rel != NULL);
+					t_values[j++] = ObjectIdGetDatum(GetUserId());
+					t_values[j++] = ObjectIdGetDatum(cstate->rel->rd_rel->oid);
+					t_values[j++] = CStringGetTextDatum(cstate->filename ? cstate->filename : "STDIN");
+					t_values[j++] = Int64GetDatum((long long) cstate->cur_lineno);
+					t_values[j++] = CStringGetTextDatum(cstate->line_buf.data);
+					t_values[j++] = CStringGetTextDatum(cstate->cur_attname);
+					t_values[j++] = CStringGetTextDatum(string);
+					t_values[j++] = CStringGetTextDatum(cstate->escontext->error_data->message);
+
+					if (!cstate->escontext->error_data->detail)
+						err_detail = NULL;
+					else
+						err_detail = cstate->escontext->error_data->detail;
+					t_values[j]   = err_detail ? CStringGetTextDatum(err_detail) : (Datum) 0;
+					t_isnull[j++] = err_detail ? false : true;
+
+					err_code = unpack_sql_state(cstate->escontext->error_data->sqlerrcode);
+					t_values[j++] = CStringGetTextDatum(err_code);
+
+					Assert(j == ERROR_TBL_COLUMNS);
+					#undef ERROR_TBL_COLUMNS
+
+					on_error_tupDesc =  cstate->error_saving_rel->rd_att;
+					on_error_tup = heap_form_tuple(on_error_tupDesc, t_values, t_isnull);
+					simple_heap_insert(cstate->error_saving_rel, on_error_tup);
+					cstate->num_errors++;
+					return true;
+				}
 				cstate->num_errors++;
 
 				if (cstate->opts.log_verbosity == COPY_LOG_VERBOSITY_VERBOSE)

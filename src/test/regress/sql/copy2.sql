@@ -557,6 +557,86 @@ COPY check_ign_err FROM STDIN WITH (on_error ignore);
 1	{1}	3	abc
 \.
 
+create table err_tbl(
+  userid oid, -- the user oid while copy generated this entry
+  copy_tbl oid, --copy table
+  filename text,
+  lineno  bigint,
+  line    text,
+  colname text,
+  raw_field_value text,
+  err_message text,
+  err_detail text,
+  errorcode text
+);
+create table err_tbl_1(
+  userid oid, -- the user oid while copy generated this entry
+  copy_tbl oid, --copy table
+  filename text,
+  lineno  bigint,
+  line    text,
+  colname text,
+  raw_field_value text,
+  err_message text,
+  err_detail text
+);
+create table t_copy_tbl(a int, b int, c int);
+
+--the folowing should all fails
+COPY t_copy_tbl FROM STDIN WITH (on_error 'table');
+COPY t_copy_tbl TO STDIN WITH (on_error 'table');
+COPY t_copy_tbl FROM STDIN WITH (table err_tbl);
+COPY t_copy_tbl TO STDIN WITH (table err_tbl);
+COPY t_copy_tbl(a,b) FROM STDIN WITH (on_error 'table', table not_exists);
+create view s1 as select 1 as a;
+COPY t_copy_tbl(a) FROM STDIN WITH (on_error 'table', table s1);
+drop view s1;
+
+--should fail. err_tbl_1 does not meet criteria
+COPY t_copy_tbl(a,b) FROM STDIN WITH (on_error 'table', table err_tbl_1);
+
+--should fail, extra columns
+COPY t_copy_tbl(a,b) FROM STDIN WITH (delimiter ',', on_error 'table', table err_tbl);
+1,2,3,4
+\.
+
+--should fail, less columns
+COPY t_copy_tbl(a,b) FROM STDIN WITH (delimiter ',', on_error 'table', table err_tbl);
+1,2,
+\.
+
+--ok cases.
+COPY t_copy_tbl FROM STDIN WITH (delimiter ',', on_error 'table', table err_tbl);
+1,2,a
+1,2,3
+1,_junk,test
+cola,colb,colc
+4,5,6
+8,9,10
+1,11,4238679732489879879
+\.
+
+--should fail. lack priviledge
+begin;
+create user regress_user20;
+grant insert(userid,copy_tbl,filename,lineno,line) on table err_tbl to regress_user20;
+grant insert on table t_copy_tbl to regress_user20;
+set role regress_user20;
+COPY t_copy_tbl FROM STDIN WITH (delimiter ',', on_error 'table', table err_tbl);
+ROLLBACK;
+
+select	pg_class.relname as copy_destination
+        ,filename
+        ,lineno
+        ,line
+        ,colname
+        ,raw_field_value
+        ,err_message
+        ,err_detail
+        ,errorcode
+from err_tbl join pg_class on copy_tbl = pg_class.oid;
+
+select * from t_copy_tbl;
 -- clean up
 DROP TABLE forcetest;
 DROP TABLE vistest;
@@ -575,6 +655,9 @@ DROP TABLE check_ign_err;
 DROP TABLE check_ign_err2;
 DROP DOMAIN dcheck_ign_err2;
 DROP TABLE hard_err;
+DROP TABLE err_tbl;
+DROP TABLE err_tbl_1;
+DROP TABLE t_copy_tbl;
 
 --
 -- COPY FROM ... DEFAULT

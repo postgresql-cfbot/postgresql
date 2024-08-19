@@ -133,32 +133,37 @@ pgstat_register_inj_fixed(void)
 	inj_fixed_loaded = true;
 }
 
-/*
- * Report fixed number of statistics for an injection point.
- */
-void
-pgstat_report_inj_fixed(uint32 numattach,
-						uint32 numdetach,
-						uint32 numrun,
-						uint32 numcached,
-						uint32 numloaded)
-{
-	PgStatShared_InjectionPointFixed *stats_shmem;
-
-	/* leave if disabled */
-	if (!inj_fixed_loaded)
-		return;
-
-	stats_shmem = pgstat_get_custom_shmem_data(PGSTAT_KIND_INJECTION_FIXED);
-
-	pgstat_begin_changecount_write(&stats_shmem->changecount);
-	stats_shmem->stats.numattach += numattach;
-	stats_shmem->stats.numdetach += numdetach;
-	stats_shmem->stats.numrun += numrun;
-	stats_shmem->stats.numcached += numcached;
-	stats_shmem->stats.numloaded += numloaded;
-	pgstat_end_changecount_write(&stats_shmem->changecount);
+#define PGSTAT_REPORT_INJ_FIXED_COUNTER(numstat)				\
+void															\
+CppConcat(pgstat_report_inj_fixed_,numstat)(uint32 numstat)		\
+{																\
+	PgStatShared_InjectionPointFixed *stats_shmem;				\
+																\
+	/* leave if disabled */										\
+	if (!inj_fixed_loaded)										\
+		return;													\
+																\
+	stats_shmem = pgstat_get_custom_shmem_data(PGSTAT_KIND_INJECTION_FIXED);	\
+																\
+	pgstat_begin_changecount_write(&stats_shmem->changecount);	\
+	stats_shmem->stats.numstat += numstat;						\
+	pgstat_end_changecount_write(&stats_shmem->changecount);	\
 }
+
+/* pgstat_report_inj_fixed_numattach */
+PGSTAT_REPORT_INJ_FIXED_COUNTER(numattach)
+
+/* pgstat_report_inj_fixed_numdetach */
+PGSTAT_REPORT_INJ_FIXED_COUNTER(numdetach)
+
+/* pgstat_report_inj_fixed_numrun */
+PGSTAT_REPORT_INJ_FIXED_COUNTER(numrun)
+
+/* pgstat_report_inj_fixed_numcached */
+PGSTAT_REPORT_INJ_FIXED_COUNTER(numcached)
+
+/* pgstat_report_inj_fixed_numloaded */
+PGSTAT_REPORT_INJ_FIXED_COUNTER(numloaded)
 
 /*
  * SQL function returning fixed-numbered statistics for injection points.

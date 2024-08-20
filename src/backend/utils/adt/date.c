@@ -257,7 +257,11 @@ make_date(PG_FUNCTION_ARGS)
 	if (tm.tm_year < 0)
 	{
 		bc = true;
-		tm.tm_year = -tm.tm_year;
+		if (pg_neg_s32_overflow(tm.tm_year, &tm.tm_year))
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_FIELD_OVERFLOW),
+					 errmsg("date field value out of range: %d-%02d-%02d",
+							tm.tm_year, tm.tm_mon, tm.tm_mday)));
 	}
 
 	dterr = ValidateDate(DTK_DATE_M, false, false, bc, &tm);

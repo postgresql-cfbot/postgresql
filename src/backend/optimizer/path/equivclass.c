@@ -38,10 +38,10 @@ static EquivalenceMember *make_eq_member(EquivalenceClass *ec,
 										 JoinDomain *jdomain,
 										 EquivalenceMember *parent,
 										 Oid datatype);
-static EquivalenceMember *add_eq_member(EquivalenceClass *ec,
-										Expr *expr, Relids relids,
-										JoinDomain *jdomain,
-										Oid datatype);
+static EquivalenceMember *add_parent_eq_member(EquivalenceClass *ec,
+											   Expr *expr, Relids relids,
+											   JoinDomain *jdomain,
+											   Oid datatype);
 static void add_eq_source(PlannerInfo *root, EquivalenceClass *ec,
 						  RestrictInfo *rinfo);
 static void add_eq_derive(PlannerInfo *root, EquivalenceClass *ec,
@@ -389,8 +389,8 @@ process_equivalence(PlannerInfo *root,
 	else if (ec1)
 	{
 		/* Case 3: add item2 to ec1 */
-		em2 = add_eq_member(ec1, item2, item2_relids,
-							jdomain, item2_type);
+		em2 = add_parent_eq_member(ec1, item2, item2_relids,
+								   jdomain, item2_type);
 		ec1->ec_min_security = Min(ec1->ec_min_security,
 								   restrictinfo->security_level);
 		ec1->ec_max_security = Max(ec1->ec_max_security,
@@ -407,8 +407,8 @@ process_equivalence(PlannerInfo *root,
 	else if (ec2)
 	{
 		/* Case 3: add item1 to ec2 */
-		em1 = add_eq_member(ec2, item1, item1_relids,
-							jdomain, item1_type);
+		em1 = add_parent_eq_member(ec2, item1, item1_relids,
+								   jdomain, item1_type);
 		ec2->ec_min_security = Min(ec2->ec_min_security,
 								   restrictinfo->security_level);
 		ec2->ec_max_security = Max(ec2->ec_max_security,
@@ -440,10 +440,10 @@ process_equivalence(PlannerInfo *root,
 		ec->ec_min_security = restrictinfo->security_level;
 		ec->ec_max_security = restrictinfo->security_level;
 		ec->ec_merged = NULL;
-		em1 = add_eq_member(ec, item1, item1_relids,
-							jdomain, item1_type);
-		em2 = add_eq_member(ec, item2, item2_relids,
-							jdomain, item2_type);
+		em1 = add_parent_eq_member(ec, item1, item1_relids,
+								   jdomain, item1_type);
+		em2 = add_parent_eq_member(ec, item2, item2_relids,
+								   jdomain, item2_type);
 
 		root->eq_classes = lappend(root->eq_classes, ec);
 
@@ -578,7 +578,7 @@ make_eq_member(EquivalenceClass *ec, Expr *expr, Relids relids,
 }
 
 /*
- * add_eq_member - build a new parent EquivalenceMember and add it to an EC
+ * add_parent_eq_member - build a new parent EquivalenceMember and add it to an EC
  *
  * Note: We don't have a function to add a child member like
  * add_child_eq_member() because how to do it depends on the relations they are
@@ -586,8 +586,8 @@ make_eq_member(EquivalenceClass *ec, Expr *expr, Relids relids,
  * add_child_join_rel_equivalences() to see how to add child members.
  */
 static EquivalenceMember *
-add_eq_member(EquivalenceClass *ec, Expr *expr, Relids relids,
-			  JoinDomain *jdomain, Oid datatype)
+add_parent_eq_member(EquivalenceClass *ec, Expr *expr, Relids relids,
+					 JoinDomain *jdomain, Oid datatype)
 {
 	EquivalenceMember *em = make_eq_member(ec, expr, relids, jdomain,
 										   NULL, datatype);
@@ -921,14 +921,14 @@ get_eclass_for_sort_expr(PlannerInfo *root,
 	 */
 	expr_relids = pull_varnos(root, (Node *) expr);
 
-	newem = add_eq_member(newec, copyObject(expr), expr_relids,
-						  jdomain, opcintype);
+	newem = add_parent_eq_member(newec, copyObject(expr), expr_relids,
+								 jdomain, opcintype);
 
 	/*
-	 * add_eq_member doesn't check for volatile functions, set-returning
-	 * functions, aggregates, or window functions, but such could appear in
-	 * sort expressions; so we have to check whether its const-marking was
-	 * correct.
+	 * add_parent_eq_member doesn't check for volatile functions,
+	 * set-returning functions, aggregates, or window functions, but such
+	 * could appear in sort expressions; so we have to check whether its
+	 * const-marking was correct.
 	 */
 	if (newec->ec_has_const)
 	{
@@ -3267,12 +3267,12 @@ add_setop_child_rel_equivalences(PlannerInfo *root, RelOptInfo *child_rel,
 		 * likewise, the JoinDomain can be that of the initial member of the
 		 * Pathkey's EquivalenceClass.
 		 */
-		add_eq_member(pk->pk_eclass,
-					  tle->expr,
-					  child_rel->relids,
-					  parent_em->em_jdomain,
-					  parent_em,
-					  exprType((Node *) tle->expr));
+		add_parent_eq_member(pk->pk_eclass,
+							 tle->expr,
+							 child_rel->relids,
+							 parent_em->em_jdomain,
+							 parent_em,
+							 exprType((Node *) tle->expr));
 
 		lc2 = lnext(setop_pathkeys, lc2);
 	}

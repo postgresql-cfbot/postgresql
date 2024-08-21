@@ -92,4 +92,20 @@ extern void SubPostmasterMain(int argc, char *argv[]) pg_attribute_noreturn();
  */
 #define MAX_BACKENDS	0x3FFFF
 
+/* special must-be-first options for dispatching to various subprograms */
+typedef enum Subprogram
+{
+	SUBPROGRAM_CHECK,
+	SUBPROGRAM_BOOT,
+	SUBPROGRAM_FORKCHILD,
+	SUBPROGRAM_DESCRIBE_CONFIG,
+	SUBPROGRAM_SINGLE,
+
+	/* put new subprograms above */
+
+	SUBPROGRAM_POSTMASTER,
+} Subprogram;
+
+extern Subprogram parse_subprogram(const char *name);
+
 #endif							/* _POSTMASTER_H */

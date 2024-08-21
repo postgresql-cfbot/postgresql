@@ -44,6 +44,18 @@
 const char *progname;
 static bool reached_main = false;
 
+static const char *const SubprogramNames[] =
+{
+	[SUBPROGRAM_CHECK] = "check",
+	[SUBPROGRAM_BOOT] = "boot",
+	[SUBPROGRAM_FORKCHILD] = "forkchild",
+	[SUBPROGRAM_DESCRIBE_CONFIG] = "describe-config",
+	[SUBPROGRAM_SINGLE] = "single",
+	/* SUBPROGRAM_POSTMASTER has no name */
+};
+
+StaticAssertDecl(lengthof(SubprogramNames) == SUBPROGRAM_POSTMASTER,
+				 "array length mismatch");
 
 static void startup_hacks(const char *progname);
 static void init_locale(const char *categoryname, int category, const char *locale);
@@ -58,6 +70,7 @@ int
 main(int argc, char *argv[])
 {
 	bool		do_check_root = true;
+	Subprogram	subprogram = SUBPROGRAM_POSTMASTER;
 
 	reached_main = true;
 
@@ -180,21 +193,36 @@ main(int argc, char *argv[])
 	 * Dispatch to one of various subprograms depending on first argument.
 	 */
 
-	if (argc > 1 && strcmp(argv[1], "--check") == 0)
-		BootstrapModeMain(argc, argv, true);
-	else if (argc > 1 && strcmp(argv[1], "--boot") == 0)
-		BootstrapModeMain(argc, argv, false);
+	if (argc > 1 && argv[1][0] == '-' && argv[1][1] == '-')
+		subprogram = parse_subprogram(&argv[1][2]);
+
+	switch (subprogram)
+	{
+		case SUBPROGRAM_CHECK:
+			BootstrapModeMain(argc, argv, true);
+			break;
+		case SUBPROGRAM_BOOT:
+			BootstrapModeMain(argc, argv, false);
+			break;
+		case SUBPROGRAM_FORKCHILD:
 #ifdef EXEC_BACKEND
-	else if (argc > 1 && strncmp(argv[1], "--forkchild", 11) == 0)
-		SubPostmasterMain(argc, argv);
+			SubPostmasterMain(argc, argv);
+#else
+			Assert(false);		/* should never happen */
 #endif
-	else if (argc > 1 && strcmp(argv[1], "--describe-config") == 0)
-		GucInfoMain();
-	else if (argc > 1 && strcmp(argv[1], "--single") == 0)
-		PostgresSingleUserMain(argc, argv,
-							   strdup(get_user_name_or_exit(progname)));
-	else
-		PostmasterMain(argc, argv);
+			break;
+		case SUBPROGRAM_DESCRIBE_CONFIG:
+			GucInfoMain();
+			break;
+		case SUBPROGRAM_SINGLE:
+			PostgresSingleUserMain(argc, argv,
+								   strdup(get_user_name_or_exit(progname)));
+			break;
+		case SUBPROGRAM_POSTMASTER:
+			PostmasterMain(argc, argv);
+			break;
+	}
+
 	/* the functions above should not return */
 	abort();
 }
@@ -440,4 +468,34 @@ __ubsan_default_options(void)
 		return "";
 
 	return getenv("UBSAN_OPTIONS");
+}
+
+Subprogram
+parse_subprogram(const char *name)
+{
+	for (int i = 0; i < lengthof(SubprogramNames); i++)
+	{
+		/*
+		 * Unlike the other subprogram options, "forkchild" takes an argument,
+		 * so we just look for the prefix for that one.
+		 *
+		 * For non-EXEC_BACKEND builds, we never want to return
+		 * SUBPROGRAM_FORKCHILD, so skip over it in that case.
+		 */
+		if (i == SUBPROGRAM_FORKCHILD)
+		{
+#ifdef EXEC_BACKEND
+			if (strncmp(SubprogramNames[SUBPROGRAM_FORKCHILD], name,
+						strlen(SubprogramNames[SUBPROGRAM_FORKCHILD])) == 0)
+				return SUBPROGRAM_FORKCHILD;
+#endif
+			continue;
+		}
+
+		if (strcmp(SubprogramNames[i], name) == 0)
+			return (Subprogram) i;
+	}
+
+	/* no match means this is a postmaster */
+	return SUBPROGRAM_POSTMASTER;
 }

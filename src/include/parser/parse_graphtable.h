@@ -14,18 +14,11 @@
 #ifndef PARSE_GRAPHTABLE_H
 #define PARSE_GRAPHTABLE_H
 
-#include "nodes/parsenodes.h"
 #include "nodes/pg_list.h"
 #include "parser/parse_node.h"
 
-typedef struct GraphTableParseState
-{
-	Oid			graphid;
-	List	   *variables;
-} GraphTableParseState;
+extern Node *transformGraphTablePropertyRef(ParseState *pstate, ColumnRef *cref);
 
-extern Node *graph_table_property_reference(ParseState *pstate, ColumnRef *cref, Node *var);
-
-extern Node *transformGraphPattern(ParseState *pstate, GraphTableParseState *gpstate, GraphPattern *graph_pattern);
+extern Node *transformGraphPattern(ParseState *pstate, GraphPattern *graph_pattern);
 
 #endif							/* PARSE_GRAPHTABLE_H */

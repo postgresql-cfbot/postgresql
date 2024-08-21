@@ -30,6 +30,7 @@
 #include "parser/parse_collate.h"
 #include "parser/parse_expr.h"
 #include "parser/parse_func.h"
+#include "parser/parse_graphtable.h"
 #include "parser/parse_oper.h"
 #include "parser/parse_relation.h"
 #include "parser/parse_target.h"
@@ -824,6 +825,10 @@ transformColumnRef(ParseState *pstate, ColumnRef *cref)
 			crerr = CRERR_TOO_MANY; /* too many dotted names */
 			break;
 	}
+
+	/* Try it as a graph table property reference. */
+	if (node == NULL)
+		node = transformGraphTablePropertyRef(pstate, cref);
 
 	/*
 	 * Now give the PostParseColumnRefHook, if any, a chance.  We pass the

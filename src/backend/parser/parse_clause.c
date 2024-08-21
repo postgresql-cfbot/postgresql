@@ -917,6 +917,7 @@ transformRangeGraphTable(ParseState *pstate, RangeGraphTable *rgt)
 	List	   *colnames = NIL;
 	ListCell   *lc;
 	int			resno = 0;
+	bool		saved_hasSublinks;
 
 	rel = parserOpenTable(pstate, rgt->graph_name, AccessShareLock);
 	if (rel->rd_rel->relkind != RELKIND_PROPGRAPH)
@@ -930,12 +931,21 @@ transformRangeGraphTable(ParseState *pstate, RangeGraphTable *rgt)
 
 	gpstate->graphid = graphid;
 
-	pstate->p_post_columnref_hook = graph_table_property_reference;
-	pstate->p_ref_hook_state = gpstate;
+	/*
+	 * The syntax does not allow nested GRAPH_TABLE and this function
+	 * prohibits subquery within GRAPH_TABLE. There should be only one
+	 * GRAPH_TABLE being transformed at a time.
+	 */
+	Assert(!pstate->p_graph_table_pstate);
+	pstate->p_graph_table_pstate = gpstate;
+
 	Assert(!pstate->p_lateral_active);
 	pstate->p_lateral_active = true;
 
-	gp = transformGraphPattern(pstate, gpstate, rgt->graph_pattern);
+	saved_hasSublinks = pstate->p_hasSubLinks;
+	pstate->p_hasSubLinks = false;
+
+	gp = transformGraphPattern(pstate, rgt->graph_pattern);
 
 	foreach(lc, rgt->columns)
 	{
@@ -970,9 +980,19 @@ transformRangeGraphTable(ParseState *pstate, RangeGraphTable *rgt)
 
 	table_close(rel, NoLock);
 
-	pstate->p_pre_columnref_hook = NULL;
-	pstate->p_ref_hook_state = NULL;
+	pstate->p_graph_table_pstate = NULL;
 	pstate->p_lateral_active = false;
+
+	/*
+	 * If we support subqueries within GRAPH_TABLE, those need to be
+	 * propagated to the queries resulting from rewriting graph table RTE. We
+	 * don't do that right now, hence prohibit it for now.
+	 */
+	if (pstate->p_hasSubLinks)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("subqueries within GRAPH_TABLE reference are not supported")));
+	pstate->p_hasSubLinks = saved_hasSublinks;
 
 	return addRangeTableEntryForGraphTable(pstate, graphid, castNode(GraphPattern, gp), columns, colnames, rgt->alias, false, true);
 }

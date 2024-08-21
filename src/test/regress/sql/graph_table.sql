@@ -262,6 +262,9 @@ SELECT * FROM GRAPH_TABLE (g1 MATCH (a IS vl1 | vl2) COLUMNS (a.vname,
 a.vprop1));
 -- vprop2 is associated with vl2 but not vl3
 select src, conn, dest, lprop1, vprop2, vprop1 from graph_table (g1 match (a is vl1)-[b is el1]->(c is vl2 | vl3) columns (a.vname as src, b.ename as conn, c.vname as dest, c.lprop1, c.vprop2, c.vprop1));
+-- edges directed in both ways - to and from v2
+SELECT * FROM GRAPH_TABLE (g1 MATCH (src IS vl2)-[conn]-(dest) COLUMNS (src.vname AS sname, conn.ename AS cname, dest.vname AS dname));
+SELECT * FROM GRAPH_TABLE (g1 MATCH (src IS vl2)-(dest) COLUMNS (src.vname AS sname, dest.vname AS dname));
 
 -- Errors
 -- vl1 is not associated with property vprop2
@@ -393,6 +396,48 @@ CREATE PROPERTY GRAPH myshop2
 CREATE VIEW customers_us_redacted AS SELECT * FROM GRAPH_TABLE (myshop2 MATCH (c IS customers WHERE c.address = 'US')-[IS customer_orders]->(o IS orders) COLUMNS (c.name_redacted AS customer_name_redacted));
 
 SELECT * FROM customers_us_redacted;
+
+-- GRAPH_TABLE in UDFs
+CREATE FUNCTION out_degree(sname varchar) RETURNS varchar AS $$
+DECLARE
+    out_degree int;
+BEGIN
+    SELECT count(*) INTO out_degree
+        FROM GRAPH_TABLE (g1 MATCH (src WHERE src.vname = sname)->() COLUMNS (src.vname));
+    RETURN out_degree;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE FUNCTION direct_connections(sname varchar)
+RETURNS TABLE (cname varchar, dname varchar)
+AS $$
+    SELECT cname, dname
+        FROM GRAPH_TABLE (g1 MATCH (src WHERE src.vname = sname)-[conn]->(dst)
+                             COLUMNS (conn.ename AS cname, dst.vname AS dname));
+$$ LANGUAGE SQL;
+
+SELECT sname, out_degree(sname) FROM GRAPH_TABLE (g1 MATCH (src IS vl1) COLUMNS (src.vname AS sname));
+SELECT sname, cname, dname
+    FROM GRAPH_TABLE (g1 MATCH (src IS vl1) COLUMNS (src.vname AS sname)),
+         LATERAL direct_connections(sname);
+
+-- GRAPH_TABLE joined to a regular table
+SELECT *
+    FROM customers co,
+         GRAPH_TABLE (myshop2 MATCH (cg IS customers WHERE cg.address = co.address)-[IS customer_orders]->(o IS orders)
+                              COLUMNS (cg.name_redacted AS customer_name_redacted))
+    WHERE co.customer_id = 1;
+
+-- query within graph table
+SELECT sname, dname
+    FROM GRAPH_TABLE (g1 MATCH (src)->(dest)
+                         WHERE src.vprop1 > (SELECT max(v1.vprop1) FROM v1)
+                         COLUMNS(src.vname as sname, dest.vname as dname));
+SELECT sname, dname
+    FROM GRAPH_TABLE (g1 MATCH (src)->(dest)
+                         WHERE out_degree(src.vname) > (SELECT max(out_degree(nname))
+                                                            FROM GRAPH_TABLE (g1 MATCH (node) COLUMNS (node.vname AS nname)))
+                         COLUMNS(src.vname as sname, dest.vname as dname));
 
 -- leave for pg_upgrade/pg_dump tests
 --DROP SCHEMA graph_table_tests CASCADE;

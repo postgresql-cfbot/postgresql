@@ -41,12 +41,11 @@
 /*
  * Represents one path factor in a path.
  *
- * One path factor corresponds to one element pattern in a simple path.
+ * In a non-cyclic path, one path factor corresponds to one element pattern.
  *
  * In a cyclic path, one path factor may correspond to one or more element
- * patterns all pointing to the same graph element. The members of such a path
- * factor are a combination of corresponding specifications in the element
- * patterns.
+ * patterns sharing the same variable name, thus pointing to the same graph
+ * element.
  */
 struct path_factor
 {
@@ -66,17 +65,20 @@ struct path_factor
  * Represents one property graph element (vertex or edge) in the path.
  *
  * Label expression in an element pattern resolves into a set of elements. For
- * each of those elements we create one graph_path_element object.
+ * each of those elements we create one path_element object.
  */
 struct path_element
 {
-	Oid			elemoid;
-	Oid			reloid;
-	Oid			srcvertexid;
-	Oid			destvertexid;
-	List	   *qual_exprs;
 	/* Path factor from which this element is derived. */
 	struct path_factor *path_factor;
+	Oid			elemoid;
+	Oid			reloid;
+	/* Source and destination vertex elements for an edge element. */
+	Oid			srcvertexid;
+	Oid			destvertexid;
+	/* Source and destination conditions for an edge element. */
+	List	   *src_quals;
+	List	   *dest_quals;
 };
 
 static Node *replace_property_refs(Oid propgraphid, Node *node, const List *mappings);
@@ -187,23 +189,22 @@ generate_queries_for_path_pattern(RangeTblEntry *rte, List *path_pattern)
 	/*
 	 * For every element pattern in the given path pattern collect all the
 	 * graph elements that satisfy the element pattern.
+	 *
+	 * Element patterns with the same name represent the same element and
+	 * hence same path factor. They do not add a new graph element to the
+	 * query but affect the links of adjacent elements. Merge such elements
+	 * patterns into a single path factor.
 	 */
 	foreach_node(GraphElementPattern, gep, path_pattern)
 	{
 		struct path_factor *pf = NULL;
 
-		if (gep->kind != VERTEX_PATTERN &&
-			gep->kind != EDGE_PATTERN_LEFT && gep->kind != EDGE_PATTERN_RIGHT)
-			elog(ERROR, "unsupported element pattern kind: %s", get_gep_kind_name(gep->kind));
+		if (gep->kind != VERTEX_PATTERN && !IS_EDGE_PATTERN(gep->kind))
+			elog(ERROR, "unsupported element pattern kind: \"%s\"", get_gep_kind_name(gep->kind));
 
 		if (gep->quantifier)
 			elog(ERROR, "element pattern quantifier not supported yet");
 
-		/*
-		 * Element patterns with the same name represent the same element and
-		 * hence same path factor. They do not add a new graph element to the
-		 * query but affect the links of adjacent elements.
-		 */
 		foreach_ptr(struct path_factor, other, path_factors)
 		{
 			if (gep->variable && other->variable &&
@@ -227,12 +228,14 @@ generate_queries_for_path_pattern(RangeTblEntry *rte, List *path_pattern)
 					other->labelexpr = gep->labelexpr;
 				else if (gep->labelexpr && !equal(other->labelexpr, gep->labelexpr))
 					ereport(ERROR,
-					/* XXX: Use correct error code. */
-							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							 errmsg("element patterns with same variable name \"%s\" but different label expressions",
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("element patterns with same variable name \"%s\" but different label expressions are not supported",
 									gep->variable)));
 
-				/* Both sets of conditions apply to the element pattern. */
+				/*
+				 * Conditions from both elements patterns constrain the graph
+				 * element. Combine by ANDing them.
+				 */
 				if (!other->whereClause)
 					other->whereClause = gep->whereClause;
 				else if (gep->whereClause)
@@ -259,19 +262,27 @@ generate_queries_for_path_pattern(RangeTblEntry *rte, List *path_pattern)
 		}
 
 		/*
-		 * Setup adjacent path factors. If multiple edge patterns share the
-		 * same variable name, they constain the adjacent vertex patterns
-		 * since an edge can connect only one pair of vertexes and those
-		 * vertexes also need to repeated along with the edge (a walk). This
-		 * means that we have to coalesce the vertex patterns adjacent to a
-		 * repeated edge even though they have different variables.  E.g.
-		 * (a)-[b]->(c)-[b]<-(d) implies that (a) and (d) represent the same
+		 * Setup links to the previous path factor. If the previous path
+		 * factor is an edge, this path factor represents an adjacent vertex;
+		 * source vertex for an edge pointing left or destination vertex for
+		 * an edge pointing right. Edge pointing in any direction is treated
+		 * similar to that pointing in right direction here. When constructing
+		 * a query, in generate_query_for_graph_path() we will swap source and
+		 * destination elements if the edge element turns out to be and edge
+		 * pointing in left direction.
+		 *
+		 * If multiple edge patterns share the same variable name, they
+		 * constain the adjacent vertex patterns since an edge can connect
+		 * only one pair of vertexes. Those vertex patterns also need to
+		 * repeated and merged along with the repeated edge (a walk of graph)
+		 * even though they have different variables.  E.g.
+		 * (a)-[b]->(c)<-[b]-(d) implies that (a) and (d) represent the same
 		 * vertex element pattern. This is slighly harder to implement and
 		 * probably less useful. Hence not supported for now.
 		 */
 		if (prev_pf)
 		{
-			if (prev_pf->kind == EDGE_PATTERN_RIGHT)
+			if (prev_pf->kind == EDGE_PATTERN_RIGHT || prev_pf->kind == EDGE_PATTERN_ANY)
 			{
 				Assert(!IS_EDGE_PATTERN(pf->kind));
 				if (prev_pf->dest_pf && prev_pf->dest_pf != pf)
@@ -285,13 +296,8 @@ generate_queries_for_path_pattern(RangeTblEntry *rte, List *path_pattern)
 					elog(ERROR, "An edge can not connect more than two vertexes even in a cyclic pattern.");
 				prev_pf->src_pf = pf;
 			}
-			else if (prev_pf->kind == EDGE_PATTERN_ANY)
-			{
-				/* We don't support undirected edges yet. */
-				Assert(false);
-			}
 
-			if (pf->kind == EDGE_PATTERN_RIGHT)
+			if (pf->kind == EDGE_PATTERN_RIGHT || pf->kind == EDGE_PATTERN_ANY)
 			{
 				Assert(!IS_EDGE_PATTERN(prev_pf->kind));
 				if (pf->src_pf && pf->src_pf != prev_pf)
@@ -304,11 +310,6 @@ generate_queries_for_path_pattern(RangeTblEntry *rte, List *path_pattern)
 				if (pf->dest_pf && pf->dest_pf != prev_pf)
 					elog(ERROR, "An edge can not connect more than two vertexes even in a cyclic pattern.");
 				pf->dest_pf = prev_pf;
-			}
-			else if (pf->kind == EDGE_PATTERN_ANY)
-			{
-				/* We don't support undirected edges yet. */
-				Assert(false);
 			}
 		}
 
@@ -389,31 +390,62 @@ generate_query_for_graph_path(RangeTblEntry *rte, List *graph_path)
 		Relation	rel;
 		ParseNamespaceItem *pni;
 
-		Assert(pf->kind == VERTEX_PATTERN ||
-			   pf->kind == EDGE_PATTERN_LEFT || pf->kind == EDGE_PATTERN_RIGHT);
+		Assert(pf->kind == VERTEX_PATTERN || IS_EDGE_PATTERN(pf->kind));
 
-		if (pf->kind == EDGE_PATTERN_LEFT || pf->kind == EDGE_PATTERN_RIGHT)
+		/* Add conditions representing edge connnections. */
+		if (IS_EDGE_PATTERN(pf->kind))
 		{
 			struct path_element *src_pe;
-			struct path_element *dest_ge;
+			struct path_element *dest_pe;
+			List	   *src_quals;
+			List	   *dest_quals;
 
 			Assert(pf->src_pf && pf->dest_pf);
 			src_pe = list_nth(graph_path, pf->src_pf->factorpos);
-			dest_ge = list_nth(graph_path, pf->dest_pf->factorpos);
+			dest_pe = list_nth(graph_path, pf->dest_pf->factorpos);
 
 			/* Make sure that the links of adjacent vertices are correct. */
 			Assert(pf->src_pf == src_pe->path_factor &&
-				   pf->dest_pf == dest_ge->path_factor);
+				   pf->dest_pf == dest_pe->path_factor);
 
 			/*
 			 * If the given edge element does not connect the adjacent vertex
 			 * elements in this path, the path is broken. Abandon this path as
 			 * it won't return any rows.
+			 *
+			 * For an edge element pattern pointing in any direction, try
+			 * swapping the source and destination vertex elements.
 			 */
 			if (src_pe->elemoid != pe->srcvertexid ||
-				dest_ge->elemoid != pe->destvertexid)
-				return NULL;
+				dest_pe->elemoid != pe->destvertexid)
+			{
+				if (pf->kind == EDGE_PATTERN_ANY &&
+					dest_pe->elemoid == pe->srcvertexid &&
+					src_pe->elemoid == pe->destvertexid)
+				{
+					dest_quals = copyObject(pe->src_quals);
+					src_quals = copyObject(pe->dest_quals);
+
+					/* Swap the source and destination varnos in the quals. */
+					ChangeVarNodes((Node *) dest_quals, pe->path_factor->src_pf->factorpos + 1,
+								   pe->path_factor->dest_pf->factorpos + 1, 0);
+					ChangeVarNodes((Node *) src_quals, pe->path_factor->dest_pf->factorpos + 1,
+								   pe->path_factor->src_pf->factorpos + 1, 0);
+				}
+				else
+					return NULL;
+			}
+			else
+			{
+				src_quals = copyObject(pe->src_quals);
+				dest_quals = copyObject(pe->dest_quals);
+			}
+
+			qual_exprs = list_concat(qual_exprs, src_quals);
+			qual_exprs = list_concat(qual_exprs, dest_quals);
 		}
+		else
+			Assert(!pe->src_quals && !pe->dest_quals);
 
 		/* Create RangeTblEntry for this element table. */
 		rel = table_open(pe->reloid, AccessShareLock);
@@ -442,7 +474,6 @@ generate_query_for_graph_path(RangeTblEntry *rte, List *graph_path)
 
 			qual_exprs = lappend(qual_exprs, tr);
 		}
-		qual_exprs = list_concat(qual_exprs, pe->qual_exprs);
 	}
 
 	if (rte->graph_pattern->whereClause)
@@ -457,7 +488,7 @@ generate_query_for_graph_path(RangeTblEntry *rte, List *graph_path)
 	path_query->jointree = makeFromExpr(fromlist,
 										(Node *) makeBoolExpr(AND_EXPR, qual_exprs, -1));
 
-	/* Each path query projects the columns specified in the GRAH_TABLE clause */
+	/* Each path query projects the COLUMNS specified in the GRAH_TABLE. */
 	path_query->targetList = castNode(List,
 									  replace_property_refs(rte->relid,
 															(Node *) rte->graph_table_columns,
@@ -667,7 +698,6 @@ create_gpe_for_element(struct path_factor *pf, Oid elemoid)
 	pe->path_factor = pf;
 	pe->elemoid = elemoid;
 	pe->reloid = pgeform->pgerelid;
-	pe->qual_exprs = NIL;
 
 	/*
 	 * When the path containing this element will be converted into a query
@@ -681,8 +711,6 @@ create_gpe_for_element(struct path_factor *pf, Oid elemoid)
 	 */
 	if (IS_EDGE_PATTERN(pf->kind))
 	{
-		List	   *edge_qual;
-
 		pe->srcvertexid = pgeform->pgesrcvertexid;
 		pe->destvertexid = pgeform->pgedestvertexid;
 		Assert(pf->src_pf && pf->dest_pf);
@@ -700,14 +728,12 @@ create_gpe_for_element(struct path_factor *pf, Oid elemoid)
 		 * number of paths this element appears in, fetching the catalog entry
 		 * each time.
 		 */
-		edge_qual = build_edge_vertex_link_quals(eletup, pf->factorpos + 1, pf->src_pf->factorpos + 1,
-												 Anum_pg_propgraph_element_pgesrckey,
-												 Anum_pg_propgraph_element_pgesrcref);
-		pe->qual_exprs = list_concat(pe->qual_exprs, edge_qual);
-		edge_qual = build_edge_vertex_link_quals(eletup, pf->factorpos + 1, pf->dest_pf->factorpos + 1,
-												 Anum_pg_propgraph_element_pgedestkey,
-												 Anum_pg_propgraph_element_pgedestref);
-		pe->qual_exprs = list_concat(pe->qual_exprs, edge_qual);
+		pe->src_quals = build_edge_vertex_link_quals(eletup, pf->factorpos + 1, pf->src_pf->factorpos + 1,
+													 Anum_pg_propgraph_element_pgesrckey,
+													 Anum_pg_propgraph_element_pgesrcref);
+		pe->dest_quals = build_edge_vertex_link_quals(eletup, pf->factorpos + 1, pf->dest_pf->factorpos + 1,
+													  Anum_pg_propgraph_element_pgedestkey,
+													  Anum_pg_propgraph_element_pgedestref);
 	}
 
 	ReleaseSysCache(eletup);
@@ -727,7 +753,7 @@ get_gep_kind_name(GraphElementPatternKind gepkind)
 		case EDGE_PATTERN_RIGHT:
 			return "edge pointing right";
 		case EDGE_PATTERN_ANY:
-			return "undirected edge";
+			return "edge pointing any direction";
 		case PAREN_EXPR:
 			return "nested path pattern";
 	}

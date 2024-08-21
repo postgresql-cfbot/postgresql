@@ -349,6 +349,25 @@ select src, conn, dest, lprop1, vprop2, vprop1 from graph_table (g1 match (a is 
  v11 | e132 | v31  | vl3_prop |        |   2010
 (4 rows)
 
+-- edges directed in both ways - to and from v2
+SELECT * FROM GRAPH_TABLE (g1 MATCH (src IS vl2)-[conn]-(dest) COLUMNS (src.vname AS sname, conn.ename AS cname, dest.vname AS dname));
+ sname | cname | dname 
+-------+-------+-------
+ v21   | e122  | v12
+ v22   | e121  | v11
+ v21   | e211  | v12
+ v22   | e231  | v32
+(4 rows)
+
+SELECT * FROM GRAPH_TABLE (g1 MATCH (src IS vl2)-(dest) COLUMNS (src.vname AS sname, dest.vname AS dname));
+ sname | dname 
+-------+-------
+ v21   | v12
+ v22   | v11
+ v21   | v12
+ v22   | v32
+(4 rows)
+
 -- Errors
 -- vl1 is not associated with property vprop2
 select src, src_vprop2, conn, dest from graph_table (g1 match (a is vl1)-[b is el1]->(c is vl2 | vl3) columns (a.vname as src, a.vprop2 as src_vprop2, b.ename as conn, c.vname as dest));
@@ -483,7 +502,7 @@ SELECT * FROM GRAPH_TABLE (g1 MATCH (a where a.vprop1 between 20 and 2000)->(b w
 SELECT * FROM GRAPH_TABLE (g1 MATCH (a is l1)-[a is l1]->(b is l1) columns (a.ename AS aename, b.ename AS bename)) ORDER BY 1, 2; -- error
 ERROR:  element patterns with same variable name "a" but different element pattern types
 SELECT * FROM GRAPH_TABLE (g1 MATCH (a is vl1)->(b)->(a is vl2) WHERE a.vname <> b.vname COLUMNS (a.vname AS self, b.vname AS through, a.vprop1 AS self_p1, b.vprop1 AS through_p1)) ORDER BY self, through;  -- error
-ERROR:  element patterns with same variable name "a" but different label expressions
+ERROR:  element patterns with same variable name "a" but different label expressions are not supported
 SELECT * FROM GRAPH_TABLE (g1 MATCH (a is vl1)->(b)->(a) COLUMNS (a.vname AS self, b.vname AS through, a.vprop1 AS self_p1, b.vprop1 AS through_p1)) ORDER BY self, through;
  self | through | self_p1 | through_p1 
 ------+---------+---------+------------
@@ -604,5 +623,65 @@ SELECT * FROM customers_us_redacted;
  redacted1
 (1 row)
 
+-- GRAPH_TABLE in UDFs
+CREATE FUNCTION out_degree(sname varchar) RETURNS varchar AS $$
+DECLARE
+    out_degree int;
+BEGIN
+    SELECT count(*) INTO out_degree
+        FROM GRAPH_TABLE (g1 MATCH (src WHERE src.vname = sname)->() COLUMNS (src.vname));
+    RETURN out_degree;
+END;
+$$ LANGUAGE plpgsql;
+CREATE FUNCTION direct_connections(sname varchar)
+RETURNS TABLE (cname varchar, dname varchar)
+AS $$
+    SELECT cname, dname
+        FROM GRAPH_TABLE (g1 MATCH (src WHERE src.vname = sname)-[conn]->(dst)
+                             COLUMNS (conn.ename AS cname, dst.vname AS dname));
+$$ LANGUAGE SQL;
+SELECT sname, out_degree(sname) FROM GRAPH_TABLE (g1 MATCH (src IS vl1) COLUMNS (src.vname AS sname));
+ sname | out_degree 
+-------+------------
+ v11   | 3
+ v12   | 1
+ v13   | 1
+(3 rows)
+
+SELECT sname, cname, dname
+    FROM GRAPH_TABLE (g1 MATCH (src IS vl1) COLUMNS (src.vname AS sname)),
+         LATERAL direct_connections(sname);
+ sname | cname | dname 
+-------+-------+-------
+ v11   | e121  | v22
+ v11   | e131  | v33
+ v11   | e132  | v31
+ v12   | e122  | v21
+ v13   | e123  | v23
+(5 rows)
+
+-- GRAPH_TABLE joined to a regular table
+SELECT *
+    FROM customers co,
+         GRAPH_TABLE (myshop2 MATCH (cg IS customers WHERE cg.address = co.address)-[IS customer_orders]->(o IS orders)
+                              COLUMNS (cg.name_redacted AS customer_name_redacted))
+    WHERE co.customer_id = 1;
+ customer_id |   name    | address | customer_name_redacted 
+-------------+-----------+---------+------------------------
+           1 | customer1 | US      | redacted1
+(1 row)
+
+-- query within graph table
+SELECT sname, dname
+    FROM GRAPH_TABLE (g1 MATCH (src)->(dest)
+                         WHERE src.vprop1 > (SELECT max(v1.vprop1) FROM v1)
+                         COLUMNS(src.vname as sname, dest.vname as dname));
+ERROR:  subqueries within GRAPH_TABLE reference are not supported
+SELECT sname, dname
+    FROM GRAPH_TABLE (g1 MATCH (src)->(dest)
+                         WHERE out_degree(src.vname) > (SELECT max(out_degree(nname))
+                                                            FROM GRAPH_TABLE (g1 MATCH (node) COLUMNS (node.vname AS nname)))
+                         COLUMNS(src.vname as sname, dest.vname as dname));
+ERROR:  subqueries within GRAPH_TABLE reference are not supported
 -- leave for pg_upgrade/pg_dump tests
 --DROP SCHEMA graph_table_tests CASCADE;

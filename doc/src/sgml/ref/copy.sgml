@@ -218,8 +218,13 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       Selects the data format to be read or written:
       <literal>text</literal>,
       <literal>csv</literal> (Comma Separated Values),
+      <literal>json</literal> (JavaScript Object Notation),
       or <literal>binary</literal>.
       The default is <literal>text</literal>.
+     </para>
+     <para>
+      The <literal>json</literal> option is allowed only in
+      <command>COPY TO</command>.
      </para>
     </listitem>
    </varlistentry>

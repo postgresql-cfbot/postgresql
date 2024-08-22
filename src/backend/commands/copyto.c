@@ -24,6 +24,7 @@
 #include "executor/execdesc.h"
 #include "executor/executor.h"
 #include "executor/tuptable.h"
+#include "funcapi.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "mb/pg_wchar.h"
@@ -31,6 +32,7 @@
 #include "pgstat.h"
 #include "storage/fd.h"
 #include "tcop/tcopprot.h"
+#include "utils/json.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
@@ -139,9 +141,20 @@ SendCopyBegin(CopyToState cstate)
 
 	pq_beginmessage(&buf, PqMsg_CopyOutResponse);
 	pq_sendbyte(&buf, format);	/* overall format */
-	pq_sendint16(&buf, natts);
-	for (i = 0; i < natts; i++)
-		pq_sendint16(&buf, format); /* per-column formats */
+	if (!cstate->opts.json_mode)
+	{
+		pq_sendint16(&buf, natts);
+		for (i = 0; i < natts; i++)
+			pq_sendint16(&buf, format); /* per-column formats */
+	}
+	else
+	{
+		/*
+		 * JSON mode is always one non-binary column
+		 */
+		pq_sendint16(&buf, 1);
+		pq_sendint16(&buf, 0);
+	}
 	pq_endmessage(&buf);
 	cstate->copy_dest = COPY_FRONTEND;
 }
@@ -917,7 +930,7 @@ CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot)
 	/* Make sure the tuple is fully deconstructed */
 	slot_getallattrs(slot);
 
-	if (!cstate->opts.binary)
+	if (!cstate->opts.binary && !cstate->opts.json_mode)
 	{
 		bool		need_delim = false;
 
@@ -945,7 +958,7 @@ CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot)
 			}
 		}
 	}
-	else
+	else if (!cstate->opts.json_mode)
 	{
 		foreach_int(attnum, cstate->attnumlist)
 		{
@@ -964,6 +977,34 @@ CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot)
 							 VARSIZE(outputbytes) - VARHDRSZ);
 			}
 		}
+	}
+	else
+	{
+		Datum		rowdata;
+		StringInfo	result;
+
+		/*
+		 * if COPY TO source data is from a query, not a table, then we need
+		 * copy CopyToState->TupleDesc->attrs to
+		 * slot->tts_tupleDescriptor->attrs because the slot's TupleDesc->attrs
+		 * may change during query execution, but composite_to_json requires
+		 * correct TupleDesc->attrs for constructing the json keys.
+		 * composite_to_json will iterate each TupleDesc->attrs so no need to
+		 * copy other filed in cstate->queryDesc->tupDesc.
+		*/
+		if(!cstate->rel)
+		{
+			memcpy(TupleDescAttr(slot->tts_tupleDescriptor, 0),
+				TupleDescAttr(cstate->queryDesc->tupDesc, 0),
+				cstate->queryDesc->tupDesc->natts * sizeof(FormData_pg_attribute));
+
+			BlessTupleDesc(slot->tts_tupleDescriptor);
+		}
+		rowdata = ExecFetchSlotHeapTupleDatum(slot);
+		result = makeStringInfo();
+		composite_to_json(rowdata, result, false);
+
+		CopySendData(cstate, result->data, result->len);
 	}
 
 	CopySendEndOfRow(cstate);

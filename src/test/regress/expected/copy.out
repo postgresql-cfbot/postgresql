@@ -90,6 +90,29 @@ ERROR:  cannot specify HEADER in JSON mode
 -- Error
 copy copytest from stdout (format json);
 ERROR:  COPY json mode cannot be used with COPY FROM
+--Error
+copy copytest to stdout (format csv, force_array true);
+ERROR:  COPY FORCE_ARRAY can only used with JSON mode
+--ok
+copy copytest to stdout (format json, force_array);
+[
+ {"style":"DOS","test":"abc\r\ndef","filler":1}
+,{"style":"Unix","test":"abc\ndef","filler":2}
+,{"style":"Mac","test":"abc\rdef","filler":3}
+,{"style":"esc\\ape","test":"a\\r\\\r\\\n\\nb","filler":4}
+]
+copy copytest to stdout (format json, force_array true);
+[
+ {"style":"DOS","test":"abc\r\ndef","filler":1}
+,{"style":"Unix","test":"abc\ndef","filler":2}
+,{"style":"Mac","test":"abc\rdef","filler":3}
+,{"style":"esc\\ape","test":"a\\r\\\r\\\n\\nb","filler":4}
+]
+copy copytest to stdout (format json, force_array false);
+{"style":"DOS","test":"abc\r\ndef","filler":1}
+{"style":"Unix","test":"abc\ndef","filler":2}
+{"style":"Mac","test":"abc\rdef","filler":3}
+{"style":"esc\\ape","test":"a\\r\\\r\\\n\\nb","filler":4}
 -- embedded escaped characters
 create temp table copyjsontest (
     id bigserial,

@@ -83,6 +83,7 @@ typedef struct CopyFormatOptions
 	List	   *force_null;		/* list of column names */
 	bool		force_null_all; /* FORCE_NULL *? */
 	bool	   *force_null_flags;	/* per-column CSV FN flags */
+	bool		force_array;	/* add JSON array decorations */
 	bool		convert_selectively;	/* do selective binary conversion? */
 	CopyOnErrorChoice on_error; /* what to do when error happened */
 	CopyLogVerbosityChoice log_verbosity;	/* verbosity of logged messages */

@@ -92,6 +92,15 @@ copy copytest to stdout (format json, header);
 -- Error
 copy copytest from stdout (format json);
 
+--Error
+copy copytest to stdout (format csv, force_array true);
+
+--ok
+copy copytest to stdout (format json, force_array);
+
+copy copytest to stdout (format json, force_array true);
+
+copy copytest to stdout (format json, force_array false);
 -- embedded escaped characters
 create temp table copyjsontest (
     id bigserial,

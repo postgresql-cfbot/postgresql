@@ -81,6 +81,7 @@ typedef struct CopyToStateData
 	List	   *attnumlist;		/* integer list of attnums to copy */
 	char	   *filename;		/* filename, or NULL for STDOUT */
 	bool		is_program;		/* is 'filename' a program to popen? */
+	bool		json_row_delim_needed;	/* need delimiter to start next json array element */
 	copy_data_dest_cb data_dest_cb; /* function for writing data */
 
 	CopyFormatOptions opts;
@@ -854,6 +855,15 @@ DoCopyTo(CopyToState cstate)
 
 			CopySendEndOfRow(cstate);
 		}
+		/*
+		 * If JSON has been requested, and FORCE_ARRAY has been specified send
+		 * the opening bracket.
+		*/
+		if (cstate->opts.json_mode && cstate->opts.force_array)
+		{
+			CopySendChar(cstate, '[');
+			CopySendEndOfRow(cstate);
+		}
 	}
 
 	if (cstate->rel)
@@ -901,6 +911,15 @@ DoCopyTo(CopyToState cstate)
 		CopySendEndOfRow(cstate);
 	}
 
+	/*
+	 * If JSON has been requested, and FORCE_ARRAY has been specified send the
+	 * closing bracket.
+	*/
+	if (cstate->opts.json_mode && cstate->opts.force_array)
+	{
+		CopySendChar(cstate, ']');
+		CopySendEndOfRow(cstate);
+	}
 	MemoryContextDelete(cstate->rowcontext);
 
 	if (fe_copy)
@@ -1003,6 +1022,15 @@ CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot)
 		rowdata = ExecFetchSlotHeapTupleDatum(slot);
 		result = makeStringInfo();
 		composite_to_json(rowdata, result, false);
+
+		if (cstate->json_row_delim_needed && cstate->opts.force_array)
+			CopySendChar(cstate, ',');
+		else if (cstate->opts.force_array)
+		{
+			/* first row needs no delimiter */
+			CopySendChar(cstate, ' ');
+			cstate->json_row_delim_needed = true;
+		}
 
 		CopySendData(cstate, result->data, result->len);
 	}

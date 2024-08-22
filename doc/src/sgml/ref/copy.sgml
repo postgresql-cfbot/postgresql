@@ -43,6 +43,7 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
     FORCE_QUOTE { ( <replaceable class="parameter">column_name</replaceable> [, ...] ) | * }
     FORCE_NOT_NULL { ( <replaceable class="parameter">column_name</replaceable> [, ...] ) | * }
     FORCE_NULL { ( <replaceable class="parameter">column_name</replaceable> [, ...] ) | * }
+    FORCE_ARRAY [ <replaceable class="parameter">boolean</replaceable> ]
     ON_ERROR <replaceable class="parameter">error_action</replaceable>
     ENCODING '<replaceable class="parameter">encoding_name</replaceable>'
     LOG_VERBOSITY <replaceable class="parameter">verbosity</replaceable>
@@ -386,6 +387,19 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       If <literal>*</literal> is specified, the option will be applied to all columns.
       This option is allowed only in <command>COPY FROM</command>, and only when
       using <literal>CSV</literal> format.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>FORCE_ARRAY</literal></term>
+    <listitem>
+     <para>
+      Force output of square brackets as array decorations at the beginning
+      and end of output, and commas between the rows. It is allowed only in
+      <command>COPY TO</command>, and only when using
+      <literal>JSON</literal> format. The default is
+      <literal>false</literal>.
      </para>
     </listitem>
    </varlistentry>

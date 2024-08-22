@@ -202,7 +202,8 @@ ExecuteQuery(ParseState *pstate,
 					  query_string,
 					  entry->plansource->commandTag,
 					  plan_list,
-					  cplan);
+					  cplan,
+					  entry->plansource);
 
 	/*
 	 * For CREATE TABLE ... AS EXECUTE, we must verify that the prepared
@@ -583,6 +584,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	MemoryContextCounters mem_counters;
 	MemoryContext planner_ctx = NULL;
 	MemoryContext saved_ctx = NULL;
+	int			i = 0;
 
 	if (es->memory)
 	{
@@ -655,8 +657,8 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 		PlannedStmt *pstmt = lfirst_node(PlannedStmt, p);
 
 		if (pstmt->commandType != CMD_UTILITY)
-			ExplainOnePlan(pstmt, cplan, into, es, query_string, paramLI,
-						   queryEnv,
+			ExplainOnePlan(pstmt, cplan, entry->plansource, i,
+						   into, es, query_string, paramLI, queryEnv,
 						   &planduration, (es->buffers ? &bufusage : NULL),
 						   es->memory ? &mem_counters : NULL);
 		else
@@ -668,6 +670,8 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 		/* Separate plans with an appropriate separator */
 		if (lnext(plan_list, p) != NULL)
 			ExplainSeparatePlans(es);
+
+		i++;
 	}
 
 	if (estate)

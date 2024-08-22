@@ -60,6 +60,7 @@
 #include "utils/backend_status.h"
 #include "utils/lsyscache.h"
 #include "utils/partcache.h"
+#include "utils/plancache.h"
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
 
@@ -136,6 +137,60 @@ ExecutorStart(QueryDesc *queryDesc, int eflags)
 		(*ExecutorStart_hook) (queryDesc, eflags);
 	else
 		standard_ExecutorStart(queryDesc, eflags);
+}
+
+/*
+ * A variant of ExecutorStart() that handles cleanup and replanning if the
+ * input CachedPlan becomes invalid due to locks being taken during
+ * ExecutorStartInternal().  If that happens, a new CachedPlan is created
+ * only for the at the index 'query_index' in plansource->query_list, which
+ * is released separately from the original CachedPlan.
+ */
+void
+ExecutorStartExt(QueryDesc *queryDesc, int eflags,
+				 CachedPlanSource *plansource,
+				 int query_index)
+{
+	if (queryDesc->cplan == NULL)
+	{
+		ExecutorStart(queryDesc, eflags);
+		return;
+	}
+
+	while (1)
+	{
+		ExecutorStart(queryDesc, eflags);
+		if (!CachedPlanValid(queryDesc->cplan))
+		{
+			CachedPlan *cplan;
+
+			/*
+			 * The plan got invalidated, so try with a new updated plan.
+			 *
+			 * But first undo what ExecutorStart() would've done.  Mark
+			 * execution as aborted to ensure that AFTER trigger state is
+			 * properly reset.
+			 */
+			queryDesc->estate->es_aborted = true;
+			ExecutorEnd(queryDesc);
+
+			cplan = GetSingleCachedPlan(plansource, query_index,
+										queryDesc->queryEnv);
+
+			/*
+			 * Install the new transient cplan into the QueryDesc replacing
+			 * the old one so that executor initialization code can see it.
+			 * Mark it as in use by us and ask FreeQueryDesc() to release it.
+			 */
+			cplan->refcount = 1;
+			queryDesc->cplan = cplan;
+			queryDesc->cplan_release = true;
+			queryDesc->plannedstmt = linitial_node(PlannedStmt,
+												   queryDesc->cplan->stmt_list);
+		}
+		else
+			break;	/* ExecutorStart() succeeded! */
+	}
 }
 
 void
@@ -321,6 +376,7 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	estate = queryDesc->estate;
 
 	Assert(estate != NULL);
+	Assert(!estate->es_aborted);
 	Assert(!(estate->es_top_eflags & EXEC_FLAG_EXPLAIN_ONLY));
 
 	/* caller must ensure the query's snapshot is active */
@@ -427,8 +483,11 @@ standard_ExecutorFinish(QueryDesc *queryDesc)
 	Assert(estate != NULL);
 	Assert(!(estate->es_top_eflags & EXEC_FLAG_EXPLAIN_ONLY));
 
-	/* This should be run once and only once per Executor instance */
-	Assert(!estate->es_finished);
+	/*
+	 * This should be run once and only once per Executor instance and never
+	 * if the execution was aborted.
+	 */
+	Assert(!estate->es_finished && !estate->es_aborted);
 
 	/* Switch into per-query memory context */
 	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
@@ -487,11 +546,10 @@ standard_ExecutorEnd(QueryDesc *queryDesc)
 	Assert(estate != NULL);
 
 	/*
-	 * Check that ExecutorFinish was called, unless in EXPLAIN-only mode. This
-	 * Assert is needed because ExecutorFinish is new as of 9.1, and callers
-	 * might forget to call it.
+	 * Check that ExecutorFinish was called, unless in EXPLAIN-only mode or if
+	 * execution was aborted.
 	 */
-	Assert(estate->es_finished ||
+	Assert(estate->es_finished || estate->es_aborted ||
 		   (estate->es_top_eflags & EXEC_FLAG_EXPLAIN_ONLY));
 
 	/*
@@ -504,6 +562,14 @@ standard_ExecutorEnd(QueryDesc *queryDesc)
 	/* do away with our snapshots */
 	UnregisterSnapshot(estate->es_snapshot);
 	UnregisterSnapshot(estate->es_crosscheck_snapshot);
+
+	/*
+	 * Reset AFTER trigger module if the query execution was aborted.
+	 */
+	if (estate->es_aborted &&
+		!(estate->es_top_eflags &
+		  (EXEC_FLAG_SKIP_TRIGGERS | EXEC_FLAG_EXPLAIN_ONLY)))
+		AfterTriggerAbortQuery();
 
 	/*
 	 * Must switch out of context before destroying it
@@ -962,6 +1028,9 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	 */
 	estate->es_part_prune_infos = plannedstmt->partPruneInfos;
 	ExecDoInitialPruning(estate);
+
+	if (!ExecPlanStillValid(estate))
+		return;
 
 	/*
 	 * Next, build the ExecRowMark array from the PlanRowMark(s), if any.
@@ -2955,6 +3024,9 @@ EvalPlanQualStart(EPQState *epqstate, Plan *planTree)
 	 * the snapshot, rangetable, and external Param info.  They need their own
 	 * copies of local state, including a tuple table, es_param_exec_vals,
 	 * result-rel info, etc.
+	 *
+	 * es_cachedplan is not copied because EPQ plan execution does not acquire
+	 * any new locks that could invalidate the CachedPlan.
 	 */
 	rcestate->es_direction = ForwardScanDirection;
 	rcestate->es_snapshot = parentestate->es_snapshot;

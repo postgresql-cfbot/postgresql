@@ -104,6 +104,7 @@ extern void ExplainOneUtility(Node *utilityStmt, IntoClause *into,
 							  ParamListInfo params, QueryEnvironment *queryEnv);
 
 extern void ExplainOnePlan(PlannedStmt *plannedstmt, CachedPlan *cplan,
+						   CachedPlanSource *plansource, int plan_index,
 						   IntoClause *into, ExplainState *es,
 						   const char *queryString,
 						   ParamListInfo params, QueryEnvironment *queryEnv,

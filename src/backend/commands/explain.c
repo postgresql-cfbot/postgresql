@@ -515,7 +515,8 @@ standard_ExplainOneQuery(Query *query, int cursorOptions,
 	}
 
 	/* run it (if needed) and produce output */
-	ExplainOnePlan(plan, NULL, into, es, queryString, params, queryEnv,
+	ExplainOnePlan(plan, NULL, NULL, -1, into, es, queryString, params,
+				   queryEnv,
 				   &planduration, (es->buffers ? &bufusage : NULL),
 				   es->memory ? &mem_counters : NULL);
 }
@@ -624,6 +625,7 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
  */
 void
 ExplainOnePlan(PlannedStmt *plannedstmt, CachedPlan *cplan,
+			   CachedPlanSource *plansource, int query_index,
 			   IntoClause *into, ExplainState *es,
 			   const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
@@ -694,8 +696,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, CachedPlan *cplan,
 	if (into)
 		eflags |= GetIntoRelEFlags(into);
 
-	/* call ExecutorStart to prepare the plan for execution */
-	ExecutorStart(queryDesc, eflags);
+	/* Call ExecutorStartExt to prepare the plan for execution. */
+	ExecutorStartExt(queryDesc, eflags, plansource, query_index);
 
 	/* Execute the plan for statistics if asked for */
 	if (es->analyze)

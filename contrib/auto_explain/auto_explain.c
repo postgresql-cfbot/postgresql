@@ -300,6 +300,10 @@ explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	else
 		standard_ExecutorStart(queryDesc, eflags);
 
+	/* The plan may have become invalid during standard_ExecutorStart() */
+	if (!ExecPlanStillValid(queryDesc->estate))
+		return;
+
 	if (auto_explain_enabled())
 	{
 		/*

@@ -5123,6 +5123,20 @@ AfterTriggerEndQuery(EState *estate)
 	afterTriggers.query_depth--;
 }
 
+/* ----------
+ * AfterTriggerAbortQuery()
+ *
+ * Called by ExecutorEnd() if the query execution was aborted due to the
+ * plan becoming invalid during initialization.
+ * ----------
+ */
+void
+AfterTriggerAbortQuery(void)
+{
+	/* Revert the actions of AfterTriggerBeginQuery(). */
+	afterTriggers.query_depth--;
+}
+
 
 /*
  * AfterTriggerFreeQuery

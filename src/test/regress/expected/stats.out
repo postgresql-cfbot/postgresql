@@ -1249,7 +1249,7 @@ SELECT pg_stat_get_subscription_stats(NULL);
  
 (1 row)
 
--- Test that the following operations are tracked in pg_stat_io:
+-- Test that the following operations are tracked in pg_[my]_stat_io:
 -- - reads of target blocks into shared buffers
 -- - writes of shared buffers to permanent storage
 -- - extends of relations using shared buffers
@@ -1261,9 +1261,14 @@ SELECT pg_stat_get_subscription_stats(NULL);
 -- extends.
 SELECT sum(extends) AS io_sum_shared_before_extends
   FROM pg_stat_io WHERE context = 'normal' AND object = 'relation' \gset
+SELECT sum(extends) AS my_io_sum_shared_before_extends
+  FROM pg_my_stat_io WHERE context = 'normal' AND object = 'relation' \gset
 SELECT sum(writes) AS writes, sum(fsyncs) AS fsyncs
   FROM pg_stat_io
   WHERE object = 'relation' \gset io_sum_shared_before_
+SELECT sum(writes) AS writes, sum(fsyncs) AS fsyncs
+  FROM pg_my_stat_io
+  WHERE object = 'relation' \gset my_io_sum_shared_before_
 CREATE TABLE test_io_shared(a int);
 INSERT INTO test_io_shared SELECT i FROM generate_series(1,100)i;
 SELECT pg_stat_force_next_flush();
@@ -1280,8 +1285,16 @@ SELECT :io_sum_shared_after_extends > :io_sum_shared_before_extends;
  t
 (1 row)
 
+SELECT sum(extends) AS my_io_sum_shared_after_extends
+  FROM pg_my_stat_io WHERE context = 'normal' AND object = 'relation' \gset
+SELECT :my_io_sum_shared_after_extends > :my_io_sum_shared_before_extends;
+ ?column? 
+----------
+ t
+(1 row)
+
 -- After a checkpoint, there should be some additional IOCONTEXT_NORMAL writes
--- and fsyncs.
+-- and fsyncs in the global stats (not for the backend).
 -- See comment above for rationale for two explicit CHECKPOINTs.
 CHECKPOINT;
 CHECKPOINT;
@@ -1296,6 +1309,23 @@ SELECT :io_sum_shared_after_writes > :io_sum_shared_before_writes;
 
 SELECT current_setting('fsync') = 'off'
   OR :io_sum_shared_after_fsyncs > :io_sum_shared_before_fsyncs;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT sum(writes) AS writes, sum(fsyncs) AS fsyncs
+  FROM pg_my_stat_io
+  WHERE object = 'relation' \gset my_io_sum_shared_after_
+SELECT :my_io_sum_shared_after_writes >= :my_io_sum_shared_before_writes;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT current_setting('fsync') = 'off'
+  OR (:my_io_sum_shared_after_fsyncs = :my_io_sum_shared_before_fsyncs
+      AND :my_io_sum_shared_after_fsyncs= 0);
  ?column? 
 ----------
  t
@@ -1521,6 +1551,8 @@ SELECT pg_stat_have_stats('io', 0, 0);
 
 SELECT sum(evictions) + sum(reuses) + sum(extends) + sum(fsyncs) + sum(reads) + sum(writes) + sum(writebacks) + sum(hits) AS io_stats_pre_reset
   FROM pg_stat_io \gset
+SELECT sum(evictions) + sum(reuses) + sum(extends) + sum(fsyncs) + sum(reads) + sum(writes) + sum(writebacks) + sum(hits) AS my_io_stats_pre_reset
+  FROM pg_my_stat_io \gset
 SELECT pg_stat_reset_shared('io');
  pg_stat_reset_shared 
 ----------------------
@@ -1530,6 +1562,14 @@ SELECT pg_stat_reset_shared('io');
 SELECT sum(evictions) + sum(reuses) + sum(extends) + sum(fsyncs) + sum(reads) + sum(writes) + sum(writebacks) + sum(hits) AS io_stats_post_reset
   FROM pg_stat_io \gset
 SELECT :io_stats_post_reset < :io_stats_pre_reset;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT sum(evictions) + sum(reuses) + sum(extends) + sum(fsyncs) + sum(reads) + sum(writes) + sum(writebacks) + sum(hits) AS my_io_stats_post_reset
+  FROM pg_my_stat_io \gset
+SELECT :my_io_stats_post_reset < :my_io_stats_pre_reset;
  ?column? 
 ----------
  t

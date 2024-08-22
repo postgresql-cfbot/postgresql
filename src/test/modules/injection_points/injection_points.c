@@ -297,7 +297,7 @@ injection_points_attach(PG_FUNCTION_ARGS)
 		condition.pid = MyProcPid;
 	}
 
-	pgstat_report_inj_fixed(1, 0, 0, 0, 0);
+	pgstat_report_inj_fixed_numattach(1);
 	InjectionPointAttach(name, "injection_points", function, &condition,
 						 sizeof(InjectionPointCondition));
 
@@ -329,7 +329,7 @@ injection_points_load(PG_FUNCTION_ARGS)
 	if (inj_state == NULL)
 		injection_init_shmem();
 
-	pgstat_report_inj_fixed(0, 0, 0, 0, 1);
+	pgstat_report_inj_fixed_numloaded(1);
 	INJECTION_POINT_LOAD(name);
 
 	PG_RETURN_VOID();
@@ -344,7 +344,7 @@ injection_points_run(PG_FUNCTION_ARGS)
 {
 	char	   *name = text_to_cstring(PG_GETARG_TEXT_PP(0));
 
-	pgstat_report_inj_fixed(0, 0, 1, 0, 0);
+	pgstat_report_inj_fixed_numrun(1);
 	INJECTION_POINT(name);
 
 	PG_RETURN_VOID();
@@ -359,7 +359,7 @@ injection_points_cached(PG_FUNCTION_ARGS)
 {
 	char	   *name = text_to_cstring(PG_GETARG_TEXT_PP(0));
 
-	pgstat_report_inj_fixed(0, 0, 0, 1, 0);
+	pgstat_report_inj_fixed_numcached(1);
 	INJECTION_POINT_CACHED(name);
 
 	PG_RETURN_VOID();
@@ -436,7 +436,7 @@ injection_points_detach(PG_FUNCTION_ARGS)
 {
 	char	   *name = text_to_cstring(PG_GETARG_TEXT_PP(0));
 
-	pgstat_report_inj_fixed(0, 1, 0, 0, 0);
+	pgstat_report_inj_fixed_numdetach(1);
 	if (!InjectionPointDetach(name))
 		elog(ERROR, "could not detach injection point \"%s\"", name);
 

@@ -23,10 +23,10 @@ extern void pgstat_report_inj(const char *name);
 
 /* injection_stats_fixed.c */
 extern void pgstat_register_inj_fixed(void);
-extern void pgstat_report_inj_fixed(uint32 numattach,
-									uint32 numdetach,
-									uint32 numrun,
-									uint32 numcached,
-									uint32 numloaded);
+extern void pgstat_report_inj_fixed_numattach(uint32 numattach);
+extern void pgstat_report_inj_fixed_numdetach(uint32 numdetach);
+extern void pgstat_report_inj_fixed_numrun(uint32 numrun);
+extern void pgstat_report_inj_fixed_numcached(uint32 numcached);
+extern void pgstat_report_inj_fixed_numloaded(uint32 numloaded);
 
 #endif

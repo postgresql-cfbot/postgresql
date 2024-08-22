@@ -147,6 +147,7 @@ CreateExecutorState(void)
 	estate->es_top_eflags = 0;
 	estate->es_instrument = 0;
 	estate->es_finished = false;
+	estate->es_aborted = false;
 
 	estate->es_exprcontexts = NIL;
 
@@ -759,7 +760,7 @@ ExecInitRangeTable(EState *estate, List *rangeTable, List *permInfos)
  * ExecGetRangeTableRelation
  *		Open the Relation for a range table entry, if not already done
  *
- * The Relations will be closed again in ExecEndPlan().
+ * The Relations will be closed in ExecEndPlan().
  */
 Relation
 ExecGetRangeTableRelation(EState *estate, Index rti)

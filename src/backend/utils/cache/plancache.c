@@ -95,6 +95,14 @@
 static dlist_head saved_plan_list = DLIST_STATIC_INIT(saved_plan_list);
 
 /*
+ * Head of the backend's list of "standalone" CachedPlans that are not
+ * associated with a CachedPlanSource, created by GetSingleCachedPlan() for
+ * transient use by the executor in certain scenarios where they're needed
+ * only for one execution of the plan.
+ */
+static dlist_head standalone_plan_list = DLIST_STATIC_INIT(standalone_plan_list);
+
+/*
  * This is the head of the backend's list of CachedExpressions.
  */
 static dlist_head cached_expression_list = DLIST_STATIC_INIT(cached_expression_list);
@@ -905,6 +913,8 @@ CheckCachedPlan(CachedPlanSource *plansource)
  * Planning work is done in the caller's memory context.  The finished plan
  * is in a child memory context, which typically should get reparented
  * (unless this is a one-shot plan, in which case we don't copy the plan).
+ *
+ * Note: When changing this, you should also look at GetSingleCachedPlan().
  */
 static CachedPlan *
 BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
@@ -1034,6 +1044,7 @@ BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
 	plan->is_generic = generic;
 	plan->is_saved = false;
 	plan->is_valid = true;
+	plan->is_standalone = false;
 
 	/* assign generation number to new plan */
 	plan->generation = ++(plansource->generation);
@@ -1283,6 +1294,121 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 }
 
 /*
+ * Create a fresh CachedPlan for the query_index'th query in the provided
+ * CachedPlanSource.
+ *
+ * The created CachedPlan is standalone, meaning it is not tracked in the
+ * CachedPlanSource. The CachedPlan and its plan trees are allocated in a
+ * child context of the caller's memory context. The caller must ensure they
+ * remain valid until execution is complete, after which the plan should be
+ * released by calling ReleaseCachedPlan().
+ *
+ * This function primarily supports ExecutorStartExt(), which handles cases
+ * where the original generic CachedPlan becomes invalid after prunable
+ * relations are locked.
+ */
+CachedPlan *
+GetSingleCachedPlan(CachedPlanSource *plansource, int query_index,
+					QueryEnvironment *queryEnv)
+{
+	List *query_list = plansource->query_list,
+		 *plan_list;
+	CachedPlan *plan = plansource->gplan;
+	MemoryContext oldcxt = CurrentMemoryContext,
+		plan_context;
+	PlannedStmt *plannedstmt;
+
+	Assert(ActiveSnapshotSet());
+
+	/* Sanity checks */
+	if (plan == NULL)
+		elog(ERROR, "GetSingleCachedPlan() called in the wrong context: plansource->gplan is NULL");
+	else if (plan->is_valid)
+		elog(ERROR, "GetSingleCachedPlan() called in the wrong context: plansource->gplan->is_valid");
+
+	/*
+	 * The plansource might have become invalid since GetCachedPlan(). See the
+	 * comment in BuildCachedPlan() for details on why this might happen.
+	 *
+	 * The risk is greater here because this function is called from the
+	 * executor, meaning much more processing may have occurred compared to
+	 * when BuildCachedPlan() is called from GetCachedPlan().
+	 */
+	if (!plansource->is_valid)
+		query_list = RevalidateCachedQuery(plansource, queryEnv);
+	Assert(query_list != NIL);
+
+	/*
+	 * Build a new generic plan for the query_index'th query, but make a copy
+	 * to be scribbled on by the planner
+	 */
+	query_list = list_make1(copyObject(list_nth_node(Query, query_list,
+													 query_index)));
+	plan_list = pg_plan_queries(query_list, plansource->query_string,
+								plansource->cursor_options, NULL);
+
+	list_free_deep(query_list);
+
+	/*
+	 * Make a dedicated memory context for the CachedPlan and its subsidiary
+	 * data so that we can release it in ReleaseCachedPlan() that will be
+	 * called in FreeQueryDesc().
+	 */
+	plan_context = AllocSetContextCreate(CurrentMemoryContext,
+										 "Standalone CachedPlan",
+										 ALLOCSET_START_SMALL_SIZES);
+	MemoryContextCopyAndSetIdentifier(plan_context, plansource->query_string);
+
+	/*
+	 * Copy plan into the new context.
+	 */
+	MemoryContextSwitchTo(plan_context);
+	plan_list = copyObject(plan_list);
+
+	/*
+	 * Create and fill the CachedPlan struct within the new context.
+	 */
+	plan = (CachedPlan *) palloc(sizeof(CachedPlan));
+	plan->magic = CACHEDPLAN_MAGIC;
+	plan->stmt_list = plan_list;
+
+	plan->planRoleId = GetUserId();
+	Assert(list_length(plan_list) == 1);
+	plannedstmt = linitial_node(PlannedStmt, plan_list);
+
+	/*
+	 * CachedPlan is dependent on role either if RLS affected the rewrite
+	 * phase or if a role dependency was injected during planning.  And it's
+	 * transient if any plan is marked so.
+	 */
+	plan->dependsOnRole = plansource->dependsOnRLS || plannedstmt->dependsOnRole;
+	if (plannedstmt->transientPlan)
+	{
+		Assert(TransactionIdIsNormal(TransactionXmin));
+		plan->saved_xmin = TransactionXmin;
+	}
+	else
+		plan->saved_xmin = InvalidTransactionId;
+	plan->refcount = 0;
+	plan->context = plan_context;
+	plan->is_oneshot = false;
+	plan->is_generic = true;
+	plan->is_saved = false;
+	plan->is_valid = true;
+	plan->is_standalone = true;
+	plan->generation = 1;
+	MemoryContextSwitchTo(oldcxt);
+
+	/*
+	 * Add the entry to the global list of "standalone" cached plans.  It is
+	 * removed from the list by ReleaseCachedPlan().
+	 */
+	dlist_push_tail(&standalone_plan_list, &plan->node);
+
+	return plan;
+}
+
+/*
  * ReleaseCachedPlan: release active use of a cached plan.
  *
  * This decrements the reference count, and frees the plan if the count
@@ -1308,6 +1434,10 @@ ReleaseCachedPlan(CachedPlan *plan, ResourceOwner owner)
 	{
 		/* Mark it no longer valid */
 		plan->magic = 0;
+
+		/* Remove from the global list if we are a standalone plan. */
+		if (plan->is_standalone)
+			dlist_delete(&plan->node);
 
 		/* One-shot plans do not own their context, so we can't free them */
 		if (!plan->is_oneshot)
@@ -2066,6 +2196,33 @@ PlanCacheRelCallback(Datum arg, Oid relid)
 			cexpr->is_valid = false;
 		}
 	}
+
+	/* Finally, invalidate any standalone cached plans */
+	dlist_foreach(iter, &standalone_plan_list)
+	{
+		CachedPlan *cplan = dlist_container(CachedPlan,
+											node, iter.cur);
+
+		Assert(cplan->magic == CACHEDPLAN_MAGIC);
+
+		if (cplan->is_valid)
+		{
+			ListCell   *lc;
+
+			foreach(lc, cplan->stmt_list)
+			{
+				PlannedStmt *plannedstmt = lfirst_node(PlannedStmt, lc);
+
+				if (plannedstmt->commandType == CMD_UTILITY)
+					continue;	/* Ignore utility statements */
+				if ((relid == InvalidOid) ? plannedstmt->relationOids != NIL :
+					list_member_oid(plannedstmt->relationOids, relid))
+					cplan->is_valid = false;
+				if (!cplan->is_valid)
+					break;		/* out of stmt_list scan */
+			}
+		}
+	}
 }
 
 /*
@@ -2176,6 +2333,44 @@ PlanCacheObjectCallback(Datum arg, int cacheid, uint32 hashvalue)
 			}
 		}
 	}
+
+	/* Finally, invalidate any standalone cached plans */
+	dlist_foreach(iter, &standalone_plan_list)
+	{
+		CachedPlan *cplan = dlist_container(CachedPlan,
+											node, iter.cur);
+
+		Assert(cplan->magic == CACHEDPLAN_MAGIC);
+
+		if (cplan->is_valid)
+		{
+			ListCell   *lc;
+
+			foreach(lc, cplan->stmt_list)
+			{
+				PlannedStmt *plannedstmt = lfirst_node(PlannedStmt, lc);
+				ListCell   *lc3;
+
+				if (plannedstmt->commandType == CMD_UTILITY)
+					continue;	/* Ignore utility statements */
+				foreach(lc3, plannedstmt->invalItems)
+				{
+					PlanInvalItem *item = (PlanInvalItem *) lfirst(lc3);
+
+					if (item->cacheId != cacheid)
+						continue;
+					if (hashvalue == 0 ||
+						item->hashValue == hashvalue)
+					{
+						cplan->is_valid = false;
+						break;	/* out of invalItems scan */
+					}
+				}
+				if (!cplan->is_valid)
+					break;		/* out of stmt_list scan */
+			}
+		}
+	}
 }
 
 /*
@@ -2234,6 +2429,17 @@ ResetPlanCache(void)
 		Assert(cexpr->magic == CACHEDEXPR_MAGIC);
 
 		cexpr->is_valid = false;
+	}
+
+	/* Finally, invalidate any standalone cached plans */
+	dlist_foreach(iter, &standalone_plan_list)
+	{
+		CachedPlan *cplan = dlist_container(CachedPlan,
+											node, iter.cur);
+
+		Assert(cplan->magic == CACHEDPLAN_MAGIC);
+
+		cplan->is_valid = false;
 	}
 }
 

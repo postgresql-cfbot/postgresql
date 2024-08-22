@@ -31,6 +31,7 @@ typedef struct PgStat_PendingIO
 static PgStat_PendingIO PendingIOStats;
 static bool have_iostats = false;
 
+void		pgstat_reset_io_counter_internal(int index, TimestampTz ts);
 
 /*
  * Check that stats have not been counted for any combination of IOObject,
@@ -154,11 +155,19 @@ pgstat_count_io_op_time(IOObject io_object, IOContext io_context, IOOp io_op,
 }
 
 PgStat_IO *
-pgstat_fetch_stat_io(void)
+pgstat_fetch_global_stat_io(void)
 {
 	pgstat_snapshot_fixed(PGSTAT_KIND_IO);
 
-	return &pgStatLocal.snapshot.io;
+	return &pgStatLocal.snapshot.global_io;
+}
+
+PgStat_Backend_IO *
+pgstat_fetch_my_stat_io(void)
+{
+	pgstat_snapshot_fixed(PGSTAT_KIND_IO);
+
+	return &pgStatLocal.snapshot.my_io;
 }
 
 /*
@@ -192,13 +201,16 @@ pgstat_io_flush_cb(bool nowait)
 {
 	LWLock	   *bktype_lock;
 	PgStat_BktypeIO *bktype_shstats;
+	PgStat_BktypeIO *global_bktype_shstats;
 
 	if (!have_iostats)
 		return false;
 
 	bktype_lock = &pgStatLocal.shmem->io.locks[MyBackendType];
 	bktype_shstats =
-		&pgStatLocal.shmem->io.stats.stats[MyBackendType];
+		&pgStatLocal.shmem->io.stat[MyProcNumber].stats;
+	global_bktype_shstats =
+		&pgStatLocal.shmem->io.global_stats.stats[MyBackendType];
 
 	if (!nowait)
 		LWLockAcquire(bktype_lock, LW_EXCLUSIVE);
@@ -212,19 +224,28 @@ pgstat_io_flush_cb(bool nowait)
 			for (int io_op = 0; io_op < IOOP_NUM_TYPES; io_op++)
 			{
 				instr_time	time;
+				PgStat_Counter counter;
 
-				bktype_shstats->counts[io_object][io_context][io_op] +=
-					PendingIOStats.counts[io_object][io_context][io_op];
+				counter = PendingIOStats.counts[io_object][io_context][io_op];
+
+				bktype_shstats->counts[io_object][io_context][io_op] += counter;
+
+				global_bktype_shstats->counts[io_object][io_context][io_op] +=
+					counter;
 
 				time = PendingIOStats.pending_times[io_object][io_context][io_op];
 
 				bktype_shstats->times[io_object][io_context][io_op] +=
+					INSTR_TIME_GET_MICROSEC(time);
+
+				global_bktype_shstats->times[io_object][io_context][io_op] +=
 					INSTR_TIME_GET_MICROSEC(time);
 			}
 		}
 	}
 
 	Assert(pgstat_bktype_io_stats_valid(bktype_shstats, MyBackendType));
+	Assert(pgstat_bktype_io_stats_valid(global_bktype_shstats, MyBackendType));
 
 	LWLockRelease(bktype_lock);
 
@@ -279,12 +300,34 @@ pgstat_io_init_shmem_cb(void *stats)
 }
 
 void
+pgstat_reset_io_counter_internal(int index, TimestampTz ts)
+{
+	LWLock	   *bktype_lock = &pgStatLocal.shmem->io.locks[0];
+	PgStat_BktypeIO *bktype_shstats = &pgStatLocal.shmem->io.stat[index].stats;
+
+
+	/*
+	 * Use the lock in the first BackendType's PgStat_BktypeIO to protect the
+	 * reset timestamp as well.
+	 */
+	LWLockAcquire(bktype_lock, LW_EXCLUSIVE);
+
+	pgStatLocal.shmem->io.stat[index].stat_reset_timestamp = ts;
+
+	memset(bktype_shstats, 0, sizeof(*bktype_shstats));
+	LWLockRelease(bktype_lock);
+}
+
+void
 pgstat_io_reset_all_cb(TimestampTz ts)
 {
+	for (int i = 0; i < NumProcStatSlots; i++)
+		pgstat_reset_io_counter_internal(i, ts);
+
 	for (int i = 0; i < BACKEND_NUM_TYPES; i++)
 	{
 		LWLock	   *bktype_lock = &pgStatLocal.shmem->io.locks[i];
-		PgStat_BktypeIO *bktype_shstats = &pgStatLocal.shmem->io.stats.stats[i];
+		PgStat_BktypeIO *bktype_shstats = &pgStatLocal.shmem->io.global_stats.stats[i];
 
 		LWLockAcquire(bktype_lock, LW_EXCLUSIVE);
 
@@ -293,7 +336,7 @@ pgstat_io_reset_all_cb(TimestampTz ts)
 		 * the reset timestamp as well.
 		 */
 		if (i == 0)
-			pgStatLocal.shmem->io.stats.stat_reset_timestamp = ts;
+			pgStatLocal.shmem->io.global_stats.stat_reset_timestamp = ts;
 
 		memset(bktype_shstats, 0, sizeof(*bktype_shstats));
 		LWLockRelease(bktype_lock);
@@ -303,11 +346,28 @@ pgstat_io_reset_all_cb(TimestampTz ts)
 void
 pgstat_io_snapshot_cb(void)
 {
+	/* First, our own stats */
+	PgStat_BktypeIO *bktype_shstats = &pgStatLocal.shmem->io.stat[MyProcNumber].stats;
+	PgStat_BktypeIO *bktype_snap = &pgStatLocal.snapshot.my_io.stats;
+	LWLock	   *mybktype_lock = &pgStatLocal.shmem->io.locks[0];
+
+	LWLockAcquire(mybktype_lock, LW_SHARED);
+
+	pgStatLocal.snapshot.my_io.stat_reset_timestamp =
+		pgStatLocal.shmem->io.stat[MyProcNumber].stat_reset_timestamp;
+
+	pgStatLocal.snapshot.my_io.bktype =
+		pgStatLocal.shmem->io.stat[MyProcNumber].bktype;
+
+	*bktype_snap = *bktype_shstats;
+	LWLockRelease(mybktype_lock);
+
+	/* Now, the global stats */
 	for (int i = 0; i < BACKEND_NUM_TYPES; i++)
 	{
 		LWLock	   *bktype_lock = &pgStatLocal.shmem->io.locks[i];
-		PgStat_BktypeIO *bktype_shstats = &pgStatLocal.shmem->io.stats.stats[i];
-		PgStat_BktypeIO *bktype_snap = &pgStatLocal.snapshot.io.stats[i];
+		PgStat_BktypeIO *bktype_global_shstats = &pgStatLocal.shmem->io.global_stats.stats[i];
+		PgStat_BktypeIO *bktype_global_snap = &pgStatLocal.snapshot.global_io.stats[i];
 
 		LWLockAcquire(bktype_lock, LW_SHARED);
 
@@ -316,11 +376,11 @@ pgstat_io_snapshot_cb(void)
 		 * the reset timestamp as well.
 		 */
 		if (i == 0)
-			pgStatLocal.snapshot.io.stat_reset_timestamp =
-				pgStatLocal.shmem->io.stats.stat_reset_timestamp;
+			pgStatLocal.snapshot.global_io.stat_reset_timestamp =
+				pgStatLocal.shmem->io.global_stats.stat_reset_timestamp;
 
 		/* using struct assignment due to better type safety */
-		*bktype_snap = *bktype_shstats;
+		*bktype_global_snap = *bktype_global_shstats;
 		LWLockRelease(bktype_lock);
 	}
 }
@@ -502,4 +562,13 @@ pgstat_tracks_io_op(BackendType bktype, IOObject io_object,
 
 
 	return true;
+}
+
+void
+pgstat_io_init_backend_cb(void)
+{
+	/* Initialize our backend type in the IO statistics */
+	pgStatLocal.shmem->io.stat[MyProcNumber].bktype = MyBackendType;
+	/* Set the stat_reset_timestamp to zero */
+	pgStatLocal.shmem->io.stat[MyProcNumber].stat_reset_timestamp = 0;
 }

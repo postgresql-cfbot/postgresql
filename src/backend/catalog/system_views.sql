@@ -1170,6 +1170,28 @@ SELECT
        b.stats_reset
 FROM pg_stat_get_io() b;
 
+CREATE VIEW pg_my_stat_io AS
+SELECT
+       b.backend_type,
+       b.object,
+       b.context,
+       b.reads,
+       b.read_time,
+       b.writes,
+       b.write_time,
+       b.writebacks,
+       b.writeback_time,
+       b.extends,
+       b.extend_time,
+       b.op_bytes,
+       b.hits,
+       b.evictions,
+       b.reuses,
+       b.fsyncs,
+       b.fsync_time,
+       b.stats_reset
+FROM pg_stat_get_my_io() b;
+
 CREATE VIEW pg_stat_wal AS
     SELECT
         w.wal_records,

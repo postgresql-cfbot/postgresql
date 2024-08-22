@@ -489,6 +489,16 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      </row>
 
      <row>
+      <entry><structname>pg_my_stat_io</structname><indexterm><primary>pg_my_stat_io</primary></indexterm></entry>
+      <entry>
+       One row for each combination of context and target object containing
+       my backend I/O statistics.
+       See <link linkend="monitoring-pg-my-stat-io-view">
+       <structname>pg_my_stat_io</structname></link> for details.
+     </entry>
+     </row>
+
+     <row>
       <entry><structname>pg_stat_replication_slots</structname><indexterm><primary>pg_stat_replication_slots</primary></indexterm></entry>
       <entry>One row per replication slot, showing statistics about the
        replication slot's usage. See
@@ -2947,6 +2957,24 @@ description | Waiting for a newly initialized WAL file to reach durable storage
   </note>
 
 
+
+ </sect2>
+
+ <sect2 id="monitoring-pg-my-stat-io-view">
+  <title><structname>pg_my_stat_io</structname></title>
+
+  <indexterm>
+   <primary>pg_my_stat_io</primary>
+  </indexterm>
+
+  <para>
+   The <structname>pg_my_stat_io</structname> view will contain one row for each
+   combination of target I/O object and I/O context, showing
+   my backend I/O statistics. Combinations which do not make sense are
+   omitted. The fields are exactly the same as the ones in the <link
+   linkend="monitoring-pg-stat-io-view"> <structname>pg_stat_io</structname></link>
+   view.
+  </para>
 
  </sect2>
 

@@ -406,10 +406,12 @@ static const PgStat_KindInfo pgstat_kind_builtin_infos[PGSTAT_KIND_BUILTIN_SIZE]
 
 		.fixed_amount = true,
 
-		.snapshot_ctl_off = offsetof(PgStat_Snapshot, io),
+		.init_backend_cb = pgstat_io_init_backend_cb,
+		.snapshot_ctl_off = offsetof(PgStat_Snapshot, global_io),
 		.shared_ctl_off = offsetof(PgStat_ShmemControl, io),
-		.shared_data_off = offsetof(PgStatShared_IO, stats),
-		.shared_data_len = sizeof(((PgStatShared_IO *) 0)->stats),
+		/* [de-]serialize global_stats only */
+		.shared_data_off = offsetof(PgStatShared_IO, global_stats),
+		.shared_data_len = sizeof(((PgStatShared_IO *) 0)->global_stats),
 
 		.flush_fixed_cb = pgstat_io_flush_cb,
 		.have_fixed_pending_cb = pgstat_io_have_pending_cb,
@@ -586,6 +588,9 @@ pgstat_shutdown_hook(int code, Datum arg)
 		pgstat_report_disconnect(MyDatabaseId);
 
 	pgstat_report_stat(true);
+
+	/* reset the pgstat_io counter related to this proc number */
+	pgstat_reset_io_counter_internal(MyProcNumber, 0);
 
 	/* there shouldn't be any pending changes left */
 	Assert(dlist_is_empty(&pgStatPending));

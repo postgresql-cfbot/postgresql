@@ -1398,6 +1398,25 @@ pg_matviews| SELECT n.nspname AS schemaname,
      LEFT JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
      LEFT JOIN pg_tablespace t ON ((t.oid = c.reltablespace)))
   WHERE (c.relkind = 'm'::"char");
+pg_my_stat_io| SELECT backend_type,
+    object,
+    context,
+    reads,
+    read_time,
+    writes,
+    write_time,
+    writebacks,
+    writeback_time,
+    extends,
+    extend_time,
+    op_bytes,
+    hits,
+    evictions,
+    reuses,
+    fsyncs,
+    fsync_time,
+    stats_reset
+   FROM pg_stat_get_my_io() b(backend_type, object, context, reads, read_time, writes, write_time, writebacks, writeback_time, extends, extend_time, op_bytes, hits, evictions, reuses, fsyncs, fsync_time, stats_reset);
 pg_policies| SELECT n.nspname AS schemaname,
     c.relname AS tablename,
     pol.polname AS policyname,

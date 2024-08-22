@@ -16,6 +16,7 @@
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"	/* for MAX_XFN_CHARS */
 #include "replication/conflict.h"
+#include "storage/proc.h"
 #include "utils/backend_progress.h" /* for backward compatibility */
 #include "utils/backend_status.h"	/* for backward compatibility */
 #include "utils/relcache.h"
@@ -75,6 +76,8 @@
  * https://wiki.postgresql.org/wiki/CustomCumulativeStats
  */
 #define PGSTAT_KIND_EXPERIMENTAL	128
+
+#define  NumProcStatSlots (MaxBackends + NUM_AUXILIARY_PROCS)
 
 static inline bool
 pgstat_is_kind_builtin(PgStat_Kind kind)
@@ -353,6 +356,12 @@ typedef struct PgStat_IO
 	PgStat_BktypeIO stats[BACKEND_NUM_TYPES];
 } PgStat_IO;
 
+typedef struct PgStat_Backend_IO
+{
+	TimestampTz stat_reset_timestamp;
+	BackendType bktype;
+	PgStat_BktypeIO stats;
+} PgStat_Backend_IO;
 
 typedef struct PgStat_StatDBEntry
 {
@@ -561,7 +570,8 @@ extern instr_time pgstat_prepare_io_time(bool track_io_guc);
 extern void pgstat_count_io_op_time(IOObject io_object, IOContext io_context,
 									IOOp io_op, instr_time start_time, uint32 cnt);
 
-extern PgStat_IO *pgstat_fetch_stat_io(void);
+extern PgStat_IO *pgstat_fetch_global_stat_io(void);
+extern PgStat_Backend_IO *pgstat_fetch_my_stat_io(void);
 extern const char *pgstat_get_io_context_name(IOContext io_context);
 extern const char *pgstat_get_io_object_name(IOObject io_object);
 
@@ -570,7 +580,7 @@ extern bool pgstat_tracks_io_object(BackendType bktype,
 									IOObject io_object, IOContext io_context);
 extern bool pgstat_tracks_io_op(BackendType bktype, IOObject io_object,
 								IOContext io_context, IOOp io_op);
-
+extern void pgstat_reset_io_counter_internal(int index, TimestampTz ts);
 
 /*
  * Functions in pgstat_database.c

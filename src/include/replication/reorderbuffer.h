@@ -742,6 +742,10 @@ extern TransactionId *ReorderBufferGetCatalogChangesXacts(ReorderBuffer *rb);
 
 extern void ReorderBufferSetRestartPoint(ReorderBuffer *rb, XLogRecPtr ptr);
 
+extern ReorderBufferTXN *ReorderBufferTXNByXid(ReorderBuffer *rb,
+											   TransactionId xid, bool create, bool *is_new,
+											   XLogRecPtr lsn, bool create_as_top);
+
 extern void StartupReorderBuffer(void);
 
 #endif

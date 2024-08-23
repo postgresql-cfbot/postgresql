@@ -12497,3 +12497,1067 @@ accum_sum_combine(NumericSumAccum *accum, NumericSumAccum *accum2)
 
 	free_var(&tmp_var);
 }
+
+
+/* ================= Test code, not intended for commit ================= */
+
+
+extern Numeric numeric_div_knuth_opt_error(Numeric num1, Numeric num2,
+										   int rscale, bool round,
+										   bool *have_error);
+extern Numeric numeric_div_fast_opt_error(Numeric num1, Numeric num2,
+										  int rscale, bool round,
+										  bool *have_error);
+extern Numeric numeric_div_new_opt_error(Numeric num1, Numeric num2,
+										 int rscale, bool round, bool exact,
+										 bool *have_error);
+
+
+/*
+ * div_var_knuth() -
+ *
+ *	Division on variable level. Quotient of var1 / var2 is stored in result.
+ *	The quotient is figured to exactly rscale fractional digits.
+ *	If round is true, it is rounded at the rscale'th digit; if false, it
+ *	is truncated (towards zero) at that digit.
+ */
+static void
+div_var_knuth(const NumericVar *var1, const NumericVar *var2,
+			  NumericVar *result, int rscale, bool round)
+{
+	int			div_ndigits;
+	int			res_ndigits;
+	int			res_sign;
+	int			res_weight;
+	int			carry;
+	int			borrow;
+	int			divisor1;
+	int			divisor2;
+	NumericDigit *dividend;
+	NumericDigit *divisor;
+	NumericDigit *res_digits;
+	int			i;
+	int			j;
+
+	/* copy these values into local vars for speed in inner loop */
+	int			var1ndigits = var1->ndigits;
+	int			var2ndigits = var2->ndigits;
+
+	/*
+	 * First of all division by zero check; we must not be handed an
+	 * unnormalized divisor.
+	 */
+	if (var2ndigits == 0 || var2->digits[0] == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DIVISION_BY_ZERO),
+				 errmsg("division by zero")));
+
+	/*
+	 * If the divisor has just one or two digits, delegate to div_var_int(),
+	 * which uses fast short division.
+	 *
+	 * Similarly, on platforms with 128-bit integer support, delegate to
+	 * div_var_int64() for divisors with three or four digits.
+	 */
+	if (var2ndigits <= 2)
+	{
+		int			idivisor;
+		int			idivisor_weight;
+
+		idivisor = var2->digits[0];
+		idivisor_weight = var2->weight;
+		if (var2ndigits == 2)
+		{
+			idivisor = idivisor * NBASE + var2->digits[1];
+			idivisor_weight--;
+		}
+		if (var2->sign == NUMERIC_NEG)
+			idivisor = -idivisor;
+
+		div_var_int(var1, idivisor, idivisor_weight, result, rscale, round);
+		return;
+	}
+#ifdef HAVE_INT128
+	if (var2ndigits <= 4)
+	{
+		int64		idivisor;
+		int			idivisor_weight;
+
+		idivisor = var2->digits[0];
+		idivisor_weight = var2->weight;
+		for (i = 1; i < var2ndigits; i++)
+		{
+			idivisor = idivisor * NBASE + var2->digits[i];
+			idivisor_weight--;
+		}
+		if (var2->sign == NUMERIC_NEG)
+			idivisor = -idivisor;
+
+		div_var_int64(var1, idivisor, idivisor_weight, result, rscale, round);
+		return;
+	}
+#endif
+
+	/*
+	 * Otherwise, perform full long division.
+	 */
+
+	/* Result zero check */
+	if (var1ndigits == 0)
+	{
+		zero_var(result);
+		result->dscale = rscale;
+		return;
+	}
+
+	/*
+	 * Determine the result sign, weight and number of digits to calculate.
+	 * The weight figured here is correct if the emitted quotient has no
+	 * leading zero digits; otherwise strip_var() will fix things up.
+	 */
+	if (var1->sign == var2->sign)
+		res_sign = NUMERIC_POS;
+	else
+		res_sign = NUMERIC_NEG;
+	res_weight = var1->weight - var2->weight;
+	/* The number of accurate result digits we need to produce: */
+	res_ndigits = res_weight + 1 + (rscale + DEC_DIGITS - 1) / DEC_DIGITS;
+	/* ... but always at least 1 */
+	res_ndigits = Max(res_ndigits, 1);
+	/* If rounding needed, figure one more digit to ensure correct result */
+	if (round)
+		res_ndigits++;
+
+	/*
+	 * The working dividend normally requires res_ndigits + var2ndigits
+	 * digits, but make it at least var1ndigits so we can load all of var1
+	 * into it.  (There will be an additional digit dividend[0] in the
+	 * dividend space, but for consistency with Knuth's notation we don't
+	 * count that in div_ndigits.)
+	 */
+	div_ndigits = res_ndigits + var2ndigits;
+	div_ndigits = Max(div_ndigits, var1ndigits);
+
+	/*
+	 * We need a workspace with room for the working dividend (div_ndigits+1
+	 * digits) plus room for the possibly-normalized divisor (var2ndigits
+	 * digits).  It is convenient also to have a zero at divisor[0] with the
+	 * actual divisor data in divisor[1 .. var2ndigits].  Transferring the
+	 * digits into the workspace also allows us to realloc the result (which
+	 * might be the same as either input var) before we begin the main loop.
+	 * Note that we use palloc0 to ensure that divisor[0], dividend[0], and
+	 * any additional dividend positions beyond var1ndigits, start out 0.
+	 */
+	dividend = (NumericDigit *)
+		palloc0((div_ndigits + var2ndigits + 2) * sizeof(NumericDigit));
+	divisor = dividend + (div_ndigits + 1);
+	memcpy(dividend + 1, var1->digits, var1ndigits * sizeof(NumericDigit));
+	memcpy(divisor + 1, var2->digits, var2ndigits * sizeof(NumericDigit));
+
+	/*
+	 * Now we can realloc the result to hold the generated quotient digits.
+	 */
+	alloc_var(result, res_ndigits);
+	res_digits = result->digits;
+
+	/*
+	 * The full multiple-place algorithm is taken from Knuth volume 2,
+	 * Algorithm 4.3.1D.
+	 *
+	 * We need the first divisor digit to be >= NBASE/2.  If it isn't, make it
+	 * so by scaling up both the divisor and dividend by the factor "d".  (The
+	 * reason for allocating dividend[0] above is to leave room for possible
+	 * carry here.)
+	 */
+	if (divisor[1] < HALF_NBASE)
+	{
+		int			d = NBASE / (divisor[1] + 1);
+
+		carry = 0;
+		for (i = var2ndigits; i > 0; i--)
+		{
+			carry += divisor[i] * d;
+			divisor[i] = carry % NBASE;
+			carry = carry / NBASE;
+		}
+		Assert(carry == 0);
+		carry = 0;
+		/* at this point only var1ndigits of dividend can be nonzero */
+		for (i = var1ndigits; i >= 0; i--)
+		{
+			carry += dividend[i] * d;
+			dividend[i] = carry % NBASE;
+			carry = carry / NBASE;
+		}
+		Assert(carry == 0);
+		Assert(divisor[1] >= HALF_NBASE);
+	}
+	/* First 2 divisor digits are used repeatedly in main loop */
+	divisor1 = divisor[1];
+	divisor2 = divisor[2];
+
+	/*
+	 * Begin the main loop.  Each iteration of this loop produces the j'th
+	 * quotient digit by dividing dividend[j .. j + var2ndigits] by the
+	 * divisor; this is essentially the same as the common manual procedure
+	 * for long division.
+	 */
+	for (j = 0; j < res_ndigits; j++)
+	{
+		/* Estimate quotient digit from the first two dividend digits */
+		int			next2digits = dividend[j] * NBASE + dividend[j + 1];
+		int			qhat;
+
+		/*
+		 * If next2digits are 0, then quotient digit must be 0 and there's no
+		 * need to adjust the working dividend.  It's worth testing here to
+		 * fall out ASAP when processing trailing zeroes in a dividend.
+		 */
+		if (next2digits == 0)
+		{
+			res_digits[j] = 0;
+			continue;
+		}
+
+		if (dividend[j] == divisor1)
+			qhat = NBASE - 1;
+		else
+			qhat = next2digits / divisor1;
+
+		/*
+		 * Adjust quotient digit if it's too large.  Knuth proves that after
+		 * this step, the quotient digit will be either correct or just one
+		 * too large.  (Note: it's OK to use dividend[j+2] here because we
+		 * know the divisor length is at least 2.)
+		 */
+		while (divisor2 * qhat >
+			   (next2digits - qhat * divisor1) * NBASE + dividend[j + 2])
+			qhat--;
+
+		/* As above, need do nothing more when quotient digit is 0 */
+		if (qhat > 0)
+		{
+			NumericDigit *dividend_j = &dividend[j];
+
+			/*
+			 * Multiply the divisor by qhat, and subtract that from the
+			 * working dividend.  The multiplication and subtraction are
+			 * folded together here, noting that qhat <= NBASE (since it might
+			 * be one too large), and so the intermediate result "tmp_result"
+			 * is in the range [-NBASE^2, NBASE - 1], and "borrow" is in the
+			 * range [0, NBASE].
+			 */
+			borrow = 0;
+			for (i = var2ndigits; i >= 0; i--)
+			{
+				int			tmp_result;
+
+				tmp_result = dividend_j[i] - borrow - divisor[i] * qhat;
+				borrow = (NBASE - 1 - tmp_result) / NBASE;
+				dividend_j[i] = tmp_result + borrow * NBASE;
+			}
+
+			/*
+			 * If we got a borrow out of the top dividend digit, then indeed
+			 * qhat was one too large.  Fix it, and add back the divisor to
+			 * correct the working dividend.  (Knuth proves that this will
+			 * occur only about 3/NBASE of the time; hence, it's a good idea
+			 * to test this code with small NBASE to be sure this section gets
+			 * exercised.)
+			 */
+			if (borrow)
+			{
+				qhat--;
+				carry = 0;
+				for (i = var2ndigits; i >= 0; i--)
+				{
+					carry += dividend_j[i] + divisor[i];
+					if (carry >= NBASE)
+					{
+						dividend_j[i] = carry - NBASE;
+						carry = 1;
+					}
+					else
+					{
+						dividend_j[i] = carry;
+						carry = 0;
+					}
+				}
+				/* A carry should occur here to cancel the borrow above */
+				Assert(carry == 1);
+			}
+		}
+
+		/* And we're done with this quotient digit */
+		res_digits[j] = qhat;
+	}
+
+	pfree(dividend);
+
+	/*
+	 * Finally, round or truncate the result to the requested precision.
+	 */
+	result->weight = res_weight;
+	result->sign = res_sign;
+
+	/* Round or truncate to target rscale (and set result->dscale) */
+	if (round)
+		round_var(result, rscale);
+	else
+		trunc_var(result, rscale);
+
+	/* Strip leading and trailing zeroes */
+	strip_var(result);
+}
+
+
+/*
+ * div_var_fast() -
+ *
+ *	This has the same API as div_var, but is implemented using the division
+ *	algorithm from the "FM" library, rather than Knuth's schoolbook-division
+ *	approach.  This is significantly faster but can produce inaccurate
+ *	results, because it sometimes has to propagate rounding to the left,
+ *	and so we can never be entirely sure that we know the requested digits
+ *	exactly.  We compute DIV_GUARD_DIGITS extra digits, but there is
+ *	no certainty that that's enough.  We use this only in the transcendental
+ *	function calculation routines, where everything is approximate anyway.
+ *
+ *	Although we provide a "round" argument for consistency with div_var,
+ *	it is unwise to use this function with round=false.  In truncation mode
+ *	it is possible to get a result with no significant digits, for example
+ *	with rscale=0 we might compute 0.99999... and truncate that to 0 when
+ *	the correct answer is 1.
+ */
+static void
+div_var_fast(const NumericVar *var1, const NumericVar *var2,
+			 NumericVar *result, int rscale, bool round)
+{
+	int			div_ndigits;
+	int			load_ndigits;
+	int			res_sign;
+	int			res_weight;
+	int		   *div;
+	int			qdigit;
+	int			carry;
+	int			maxdiv;
+	int			newdig;
+	NumericDigit *res_digits;
+	double		fdividend,
+				fdivisor,
+				fdivisorinverse,
+				fquotient;
+	int			qi;
+	int			i;
+
+	/* copy these values into local vars for speed in inner loop */
+	int			var1ndigits = var1->ndigits;
+	int			var2ndigits = var2->ndigits;
+	NumericDigit *var1digits = var1->digits;
+	NumericDigit *var2digits = var2->digits;
+
+	/*
+	 * First of all division by zero check; we must not be handed an
+	 * unnormalized divisor.
+	 */
+	if (var2ndigits == 0 || var2digits[0] == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DIVISION_BY_ZERO),
+				 errmsg("division by zero")));
+
+	/*
+	 * If the divisor has just one or two digits, delegate to div_var_int(),
+	 * which uses fast short division.
+	 *
+	 * Similarly, on platforms with 128-bit integer support, delegate to
+	 * div_var_int64() for divisors with three or four digits.
+	 */
+	if (var2ndigits <= 2)
+	{
+		int			idivisor;
+		int			idivisor_weight;
+
+		idivisor = var2->digits[0];
+		idivisor_weight = var2->weight;
+		if (var2ndigits == 2)
+		{
+			idivisor = idivisor * NBASE + var2->digits[1];
+			idivisor_weight--;
+		}
+		if (var2->sign == NUMERIC_NEG)
+			idivisor = -idivisor;
+
+		div_var_int(var1, idivisor, idivisor_weight, result, rscale, round);
+		return;
+	}
+#ifdef HAVE_INT128
+	if (var2ndigits <= 4)
+	{
+		int64		idivisor;
+		int			idivisor_weight;
+
+		idivisor = var2->digits[0];
+		idivisor_weight = var2->weight;
+		for (i = 1; i < var2ndigits; i++)
+		{
+			idivisor = idivisor * NBASE + var2->digits[i];
+			idivisor_weight--;
+		}
+		if (var2->sign == NUMERIC_NEG)
+			idivisor = -idivisor;
+
+		div_var_int64(var1, idivisor, idivisor_weight, result, rscale, round);
+		return;
+	}
+#endif
+
+	/*
+	 * Otherwise, perform full long division.
+	 */
+
+	/* Result zero check */
+	if (var1ndigits == 0)
+	{
+		zero_var(result);
+		result->dscale = rscale;
+		return;
+	}
+
+	/*
+	 * Determine the result sign, weight and number of digits to calculate
+	 */
+	if (var1->sign == var2->sign)
+		res_sign = NUMERIC_POS;
+	else
+		res_sign = NUMERIC_NEG;
+	res_weight = var1->weight - var2->weight + 1;
+	/* The number of accurate result digits we need to produce: */
+	div_ndigits = res_weight + 1 + (rscale + DEC_DIGITS - 1) / DEC_DIGITS;
+	/* Add guard digits for roundoff error */
+	div_ndigits += DIV_GUARD_DIGITS;
+	if (div_ndigits < DIV_GUARD_DIGITS)
+		div_ndigits = DIV_GUARD_DIGITS;
+
+	/*
+	 * We do the arithmetic in an array "div[]" of signed int's.  Since
+	 * INT_MAX is noticeably larger than NBASE*NBASE, this gives us headroom
+	 * to avoid normalizing carries immediately.
+	 *
+	 * We start with div[] containing one zero digit followed by the
+	 * dividend's digits (plus appended zeroes to reach the desired precision
+	 * including guard digits).  Each step of the main loop computes an
+	 * (approximate) quotient digit and stores it into div[], removing one
+	 * position of dividend space.  A final pass of carry propagation takes
+	 * care of any mistaken quotient digits.
+	 *
+	 * Note that div[] doesn't necessarily contain all of the digits from the
+	 * dividend --- the desired precision plus guard digits might be less than
+	 * the dividend's precision.  This happens, for example, in the square
+	 * root algorithm, where we typically divide a 2N-digit number by an
+	 * N-digit number, and only require a result with N digits of precision.
+	 */
+	div = (int *) palloc0((div_ndigits + 1) * sizeof(int));
+	load_ndigits = Min(div_ndigits, var1ndigits);
+	for (i = 0; i < load_ndigits; i++)
+		div[i + 1] = var1digits[i];
+
+	/*
+	 * We estimate each quotient digit using floating-point arithmetic, taking
+	 * the first four digits of the (current) dividend and divisor.  This must
+	 * be float to avoid overflow.  The quotient digits will generally be off
+	 * by no more than one from the exact answer.
+	 */
+	fdivisor = (double) var2digits[0];
+	for (i = 1; i < 4; i++)
+	{
+		fdivisor *= NBASE;
+		if (i < var2ndigits)
+			fdivisor += (double) var2digits[i];
+	}
+	fdivisorinverse = 1.0 / fdivisor;
+
+	/*
+	 * maxdiv tracks the maximum possible absolute value of any div[] entry;
+	 * when this threatens to exceed INT_MAX, we take the time to propagate
+	 * carries.  Furthermore, we need to ensure that overflow doesn't occur
+	 * during the carry propagation passes either.  The carry values may have
+	 * an absolute value as high as INT_MAX/NBASE + 1, so really we must
+	 * normalize when digits threaten to exceed INT_MAX - INT_MAX/NBASE - 1.
+	 *
+	 * To avoid overflow in maxdiv itself, it represents the max absolute
+	 * value divided by NBASE-1, ie, at the top of the loop it is known that
+	 * no div[] entry has an absolute value exceeding maxdiv * (NBASE-1).
+	 *
+	 * Actually, though, that holds good only for div[] entries after div[qi];
+	 * the adjustment done at the bottom of the loop may cause div[qi + 1] to
+	 * exceed the maxdiv limit, so that div[qi] in the next iteration is
+	 * beyond the limit.  This does not cause problems, as explained below.
+	 */
+	maxdiv = 1;
+
+	/*
+	 * Outer loop computes next quotient digit, which will go into div[qi]
+	 */
+	for (qi = 0; qi < div_ndigits; qi++)
+	{
+		/* Approximate the current dividend value */
+		fdividend = (double) div[qi];
+		for (i = 1; i < 4; i++)
+		{
+			fdividend *= NBASE;
+			if (qi + i <= div_ndigits)
+				fdividend += (double) div[qi + i];
+		}
+		/* Compute the (approximate) quotient digit */
+		fquotient = fdividend * fdivisorinverse;
+		qdigit = (fquotient >= 0.0) ? ((int) fquotient) :
+			(((int) fquotient) - 1);	/* truncate towards -infinity */
+
+		if (qdigit != 0)
+		{
+			/* Do we need to normalize now? */
+			maxdiv += abs(qdigit);
+			if (maxdiv > (INT_MAX - INT_MAX / NBASE - 1) / (NBASE - 1))
+			{
+				/*
+				 * Yes, do it.  Note that if var2ndigits is much smaller than
+				 * div_ndigits, we can save a significant amount of effort
+				 * here by noting that we only need to normalise those div[]
+				 * entries touched where prior iterations subtracted multiples
+				 * of the divisor.
+				 */
+				carry = 0;
+				for (i = Min(qi + var2ndigits - 2, div_ndigits); i > qi; i--)
+				{
+					newdig = div[i] + carry;
+					if (newdig < 0)
+					{
+						carry = -((-newdig - 1) / NBASE) - 1;
+						newdig -= carry * NBASE;
+					}
+					else if (newdig >= NBASE)
+					{
+						carry = newdig / NBASE;
+						newdig -= carry * NBASE;
+					}
+					else
+						carry = 0;
+					div[i] = newdig;
+				}
+				newdig = div[qi] + carry;
+				div[qi] = newdig;
+
+				/*
+				 * All the div[] digits except possibly div[qi] are now in the
+				 * range 0..NBASE-1.  We do not need to consider div[qi] in
+				 * the maxdiv value anymore, so we can reset maxdiv to 1.
+				 */
+				maxdiv = 1;
+
+				/*
+				 * Recompute the quotient digit since new info may have
+				 * propagated into the top four dividend digits
+				 */
+				fdividend = (double) div[qi];
+				for (i = 1; i < 4; i++)
+				{
+					fdividend *= NBASE;
+					if (qi + i <= div_ndigits)
+						fdividend += (double) div[qi + i];
+				}
+				/* Compute the (approximate) quotient digit */
+				fquotient = fdividend * fdivisorinverse;
+				qdigit = (fquotient >= 0.0) ? ((int) fquotient) :
+					(((int) fquotient) - 1);	/* truncate towards -infinity */
+				maxdiv += abs(qdigit);
+			}
+
+			/*
+			 * Subtract off the appropriate multiple of the divisor.
+			 *
+			 * The digits beyond div[qi] cannot overflow, because we know they
+			 * will fall within the maxdiv limit.  As for div[qi] itself, note
+			 * that qdigit is approximately trunc(div[qi] / vardigits[0]),
+			 * which would make the new value simply div[qi] mod vardigits[0].
+			 * The lower-order terms in qdigit can change this result by not
+			 * more than about twice INT_MAX/NBASE, so overflow is impossible.
+			 *
+			 * This inner loop is the performance bottleneck for division, so
+			 * code it in the same way as the inner loop of mul_var() so that
+			 * it can be auto-vectorized.  We cast qdigit to NumericDigit
+			 * before multiplying to allow the compiler to generate more
+			 * efficient code (using 16-bit multiplication), which is safe
+			 * since we know that the quotient digit is off by at most one, so
+			 * there is no overflow risk.
+			 */
+			if (qdigit != 0)
+			{
+				int			istop = Min(var2ndigits, div_ndigits - qi + 1);
+				int		   *div_qi = &div[qi];
+
+				for (i = 0; i < istop; i++)
+					div_qi[i] -= ((NumericDigit) qdigit) * var2digits[i];
+			}
+		}
+
+		/*
+		 * The dividend digit we are about to replace might still be nonzero.
+		 * Fold it into the next digit position.
+		 *
+		 * There is no risk of overflow here, although proving that requires
+		 * some care.  Much as with the argument for div[qi] not overflowing,
+		 * if we consider the first two terms in the numerator and denominator
+		 * of qdigit, we can see that the final value of div[qi + 1] will be
+		 * approximately a remainder mod (vardigits[0]*NBASE + vardigits[1]).
+		 * Accounting for the lower-order terms is a bit complicated but ends
+		 * up adding not much more than INT_MAX/NBASE to the possible range.
+		 * Thus, div[qi + 1] cannot overflow here, and in its role as div[qi]
+		 * in the next loop iteration, it can't be large enough to cause
+		 * overflow in the carry propagation step (if any), either.
+		 *
+		 * But having said that: div[qi] can be more than INT_MAX/NBASE, as
+		 * noted above, which means that the product div[qi] * NBASE *can*
+		 * overflow.  When that happens, adding it to div[qi + 1] will always
+		 * cause a canceling overflow so that the end result is correct.  We
+		 * could avoid the intermediate overflow by doing the multiplication
+		 * and addition in int64 arithmetic, but so far there appears no need.
+		 */
+		div[qi + 1] += div[qi] * NBASE;
+
+		div[qi] = qdigit;
+	}
+
+	/*
+	 * Approximate and store the last quotient digit (div[div_ndigits])
+	 */
+	fdividend = (double) div[qi];
+	for (i = 1; i < 4; i++)
+		fdividend *= NBASE;
+	fquotient = fdividend * fdivisorinverse;
+	qdigit = (fquotient >= 0.0) ? ((int) fquotient) :
+		(((int) fquotient) - 1);	/* truncate towards -infinity */
+	div[qi] = qdigit;
+
+	/*
+	 * Because the quotient digits might be off by one, some of them might be
+	 * -1 or NBASE at this point.  The represented value is correct in a
+	 * mathematical sense, but it doesn't look right.  We do a final carry
+	 * propagation pass to normalize the digits, which we combine with storing
+	 * the result digits into the output.  Note that this is still done at
+	 * full precision w/guard digits.
+	 */
+	alloc_var(result, div_ndigits + 1);
+	res_digits = result->digits;
+	carry = 0;
+	for (i = div_ndigits; i >= 0; i--)
+	{
+		newdig = div[i] + carry;
+		if (newdig < 0)
+		{
+			carry = -((-newdig - 1) / NBASE) - 1;
+			newdig -= carry * NBASE;
+		}
+		else if (newdig >= NBASE)
+		{
+			carry = newdig / NBASE;
+			newdig -= carry * NBASE;
+		}
+		else
+			carry = 0;
+		res_digits[i] = newdig;
+	}
+	Assert(carry == 0);
+
+	pfree(div);
+
+	/*
+	 * Finally, round the result to the requested precision.
+	 */
+	result->weight = res_weight;
+	result->sign = res_sign;
+
+	/* Round to target rscale (and set result->dscale) */
+	if (round)
+		round_var(result, rscale);
+	else
+		trunc_var(result, rscale);
+
+	/* Strip leading and trailing zeroes */
+	strip_var(result);
+}
+
+
+Numeric
+numeric_div_knuth_opt_error(Numeric num1, Numeric num2, int rscale,
+							bool round, bool *have_error)
+{
+	NumericVar	arg1;
+	NumericVar	arg2;
+	NumericVar	result;
+	Numeric		res;
+
+	if (have_error)
+		*have_error = false;
+
+	/*
+	 * Handle NaN and infinities
+	 */
+	if (NUMERIC_IS_SPECIAL(num1) || NUMERIC_IS_SPECIAL(num2))
+	{
+		if (NUMERIC_IS_NAN(num1) || NUMERIC_IS_NAN(num2))
+			return make_result(&const_nan);
+		if (NUMERIC_IS_PINF(num1))
+		{
+			if (NUMERIC_IS_SPECIAL(num2))
+				return make_result(&const_nan); /* Inf / [-]Inf */
+			switch (numeric_sign_internal(num2))
+			{
+				case 0:
+					if (have_error)
+					{
+						*have_error = true;
+						return NULL;
+					}
+					ereport(ERROR,
+							(errcode(ERRCODE_DIVISION_BY_ZERO),
+							 errmsg("division by zero")));
+					break;
+				case 1:
+					return make_result(&const_pinf);
+				case -1:
+					return make_result(&const_ninf);
+			}
+			Assert(false);
+		}
+		if (NUMERIC_IS_NINF(num1))
+		{
+			if (NUMERIC_IS_SPECIAL(num2))
+				return make_result(&const_nan); /* -Inf / [-]Inf */
+			switch (numeric_sign_internal(num2))
+			{
+				case 0:
+					if (have_error)
+					{
+						*have_error = true;
+						return NULL;
+					}
+					ereport(ERROR,
+							(errcode(ERRCODE_DIVISION_BY_ZERO),
+							 errmsg("division by zero")));
+					break;
+				case 1:
+					return make_result(&const_ninf);
+				case -1:
+					return make_result(&const_pinf);
+			}
+			Assert(false);
+		}
+		/* by here, num1 must be finite, so num2 is not */
+
+		/*
+		 * POSIX would have us return zero or minus zero if num1 is zero, and
+		 * otherwise throw an underflow error.  But the numeric type doesn't
+		 * really do underflow, so let's just return zero.
+		 */
+		return make_result(&const_zero);
+	}
+
+	/*
+	 * Unpack the arguments
+	 */
+	init_var_from_num(num1, &arg1);
+	init_var_from_num(num2, &arg2);
+
+	init_var(&result);
+
+	/*
+	 * If "have_error" is provided, check for division by zero here
+	 */
+	if (have_error && (arg2.ndigits == 0 || arg2.digits[0] == 0))
+	{
+		*have_error = true;
+		return NULL;
+	}
+
+	/*
+	 * Do the divide and return the result
+	 */
+	div_var_knuth(&arg1, &arg2, &result, rscale, round);
+
+	res = make_result_opt_error(&result, have_error);
+
+	free_var(&result);
+
+	return res;
+}
+
+
+Numeric
+numeric_div_fast_opt_error(Numeric num1, Numeric num2, int rscale,
+						   bool round, bool *have_error)
+{
+	NumericVar	arg1;
+	NumericVar	arg2;
+	NumericVar	result;
+	Numeric		res;
+
+	if (have_error)
+		*have_error = false;
+
+	/*
+	 * Handle NaN and infinities
+	 */
+	if (NUMERIC_IS_SPECIAL(num1) || NUMERIC_IS_SPECIAL(num2))
+	{
+		if (NUMERIC_IS_NAN(num1) || NUMERIC_IS_NAN(num2))
+			return make_result(&const_nan);
+		if (NUMERIC_IS_PINF(num1))
+		{
+			if (NUMERIC_IS_SPECIAL(num2))
+				return make_result(&const_nan); /* Inf / [-]Inf */
+			switch (numeric_sign_internal(num2))
+			{
+				case 0:
+					if (have_error)
+					{
+						*have_error = true;
+						return NULL;
+					}
+					ereport(ERROR,
+							(errcode(ERRCODE_DIVISION_BY_ZERO),
+							 errmsg("division by zero")));
+					break;
+				case 1:
+					return make_result(&const_pinf);
+				case -1:
+					return make_result(&const_ninf);
+			}
+			Assert(false);
+		}
+		if (NUMERIC_IS_NINF(num1))
+		{
+			if (NUMERIC_IS_SPECIAL(num2))
+				return make_result(&const_nan); /* -Inf / [-]Inf */
+			switch (numeric_sign_internal(num2))
+			{
+				case 0:
+					if (have_error)
+					{
+						*have_error = true;
+						return NULL;
+					}
+					ereport(ERROR,
+							(errcode(ERRCODE_DIVISION_BY_ZERO),
+							 errmsg("division by zero")));
+					break;
+				case 1:
+					return make_result(&const_ninf);
+				case -1:
+					return make_result(&const_pinf);
+			}
+			Assert(false);
+		}
+		/* by here, num1 must be finite, so num2 is not */
+
+		/*
+		 * POSIX would have us return zero or minus zero if num1 is zero, and
+		 * otherwise throw an underflow error.  But the numeric type doesn't
+		 * really do underflow, so let's just return zero.
+		 */
+		return make_result(&const_zero);
+	}
+
+	/*
+	 * Unpack the arguments
+	 */
+	init_var_from_num(num1, &arg1);
+	init_var_from_num(num2, &arg2);
+
+	init_var(&result);
+
+	/*
+	 * If "have_error" is provided, check for division by zero here
+	 */
+	if (have_error && (arg2.ndigits == 0 || arg2.digits[0] == 0))
+	{
+		*have_error = true;
+		return NULL;
+	}
+
+	/*
+	 * Do the divide and return the result
+	 */
+	div_var_fast(&arg1, &arg2, &result, rscale, round);
+
+	res = make_result_opt_error(&result, have_error);
+
+	free_var(&result);
+
+	return res;
+}
+
+
+Numeric
+numeric_div_new_opt_error(Numeric num1, Numeric num2, int rscale,
+						  bool round, bool exact, bool *have_error)
+{
+	NumericVar	arg1;
+	NumericVar	arg2;
+	NumericVar	result;
+	Numeric		res;
+
+	if (have_error)
+		*have_error = false;
+
+	/*
+	 * Handle NaN and infinities
+	 */
+	if (NUMERIC_IS_SPECIAL(num1) || NUMERIC_IS_SPECIAL(num2))
+	{
+		if (NUMERIC_IS_NAN(num1) || NUMERIC_IS_NAN(num2))
+			return make_result(&const_nan);
+		if (NUMERIC_IS_PINF(num1))
+		{
+			if (NUMERIC_IS_SPECIAL(num2))
+				return make_result(&const_nan); /* Inf / [-]Inf */
+			switch (numeric_sign_internal(num2))
+			{
+				case 0:
+					if (have_error)
+					{
+						*have_error = true;
+						return NULL;
+					}
+					ereport(ERROR,
+							(errcode(ERRCODE_DIVISION_BY_ZERO),
+							 errmsg("division by zero")));
+					break;
+				case 1:
+					return make_result(&const_pinf);
+				case -1:
+					return make_result(&const_ninf);
+			}
+			Assert(false);
+		}
+		if (NUMERIC_IS_NINF(num1))
+		{
+			if (NUMERIC_IS_SPECIAL(num2))
+				return make_result(&const_nan); /* -Inf / [-]Inf */
+			switch (numeric_sign_internal(num2))
+			{
+				case 0:
+					if (have_error)
+					{
+						*have_error = true;
+						return NULL;
+					}
+					ereport(ERROR,
+							(errcode(ERRCODE_DIVISION_BY_ZERO),
+							 errmsg("division by zero")));
+					break;
+				case 1:
+					return make_result(&const_ninf);
+				case -1:
+					return make_result(&const_pinf);
+			}
+			Assert(false);
+		}
+		/* by here, num1 must be finite, so num2 is not */
+
+		/*
+		 * POSIX would have us return zero or minus zero if num1 is zero, and
+		 * otherwise throw an underflow error.  But the numeric type doesn't
+		 * really do underflow, so let's just return zero.
+		 */
+		return make_result(&const_zero);
+	}
+
+	/*
+	 * Unpack the arguments
+	 */
+	init_var_from_num(num1, &arg1);
+	init_var_from_num(num2, &arg2);
+
+	init_var(&result);
+
+	/*
+	 * If "have_error" is provided, check for division by zero here
+	 */
+	if (have_error && (arg2.ndigits == 0 || arg2.digits[0] == 0))
+	{
+		*have_error = true;
+		return NULL;
+	}
+
+	/*
+	 * Do the divide and return the result
+	 */
+	div_var(&arg1, &arg2, &result, rscale, round, exact);
+
+	res = make_result_opt_error(&result, have_error);
+
+	free_var(&result);
+
+	return res;
+}
+
+
+/*
+ * numeric_div_knuth() -
+ *
+ *	Divide one numeric into another using the old Knuth algorithm
+ */
+Datum
+numeric_div_knuth(PG_FUNCTION_ARGS)
+{
+	Numeric		num1 = PG_GETARG_NUMERIC(0);
+	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	int			rscale = PG_GETARG_INT32(2);
+	bool		round = PG_GETARG_BOOL(3);
+	Numeric		res;
+
+	res = numeric_div_knuth_opt_error(num1, num2, rscale, round, NULL);
+
+	PG_RETURN_NUMERIC(res);
+}
+
+
+/*
+ * numeric_div_fast() -
+ *
+ *	Divide one numeric into another using the old "fast" algorithm
+ */
+Datum
+numeric_div_fast(PG_FUNCTION_ARGS)
+{
+	Numeric		num1 = PG_GETARG_NUMERIC(0);
+	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	int			rscale = PG_GETARG_INT32(2);
+	bool		round = PG_GETARG_BOOL(3);
+	Numeric		res;
+
+	res = numeric_div_fast_opt_error(num1, num2, rscale, round, NULL);
+
+	PG_RETURN_NUMERIC(res);
+}
+
+
+/*
+ * numeric_div_new() -
+ *
+ *	Divide one numeric into another using the new algorithm
+ */
+Datum
+numeric_div_new(PG_FUNCTION_ARGS)
+{
+	Numeric		num1 = PG_GETARG_NUMERIC(0);
+	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	int			rscale = PG_GETARG_INT32(2);
+	bool		round = PG_GETARG_BOOL(3);
+	bool		exact = PG_GETARG_BOOL(4);
+	Numeric		res;
+
+	res = numeric_div_new_opt_error(num1, num2, rscale, round, exact, NULL);
+
+	PG_RETURN_NUMERIC(res);
+}

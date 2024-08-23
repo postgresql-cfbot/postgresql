@@ -511,7 +511,7 @@ SELECT SUBSTRING('abcdefg' SIMILAR 'a#"%|ab#"g' ESCAPE '#') AS "bcdef";
 -- Can't have more than two part separators
 SELECT SUBSTRING('abcdefg' SIMILAR 'a*#"%#"g*#"x' ESCAPE '#') AS "error";
 ERROR:  SQL regular expression may not contain more than two escape-double-quote separators
-CONTEXT:  SQL function "substring" statement 1
+CONTEXT:  SQL function "substring" during startup
 -- Postgres extension: with 0 or 1 separator, assume parts 1 and 3 are empty
 SELECT SUBSTRING('abcdefg' SIMILAR 'a#"%g' ESCAPE '#') AS "bcdefg";
  bcdefg 

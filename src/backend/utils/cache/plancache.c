@@ -75,18 +75,6 @@
 
 
 /*
- * We must skip "overhead" operations that involve database access when the
- * cached plan's subject statement is a transaction control command or one
- * that requires a snapshot not to be set yet (such as SET or LOCK).  More
- * generally, statements that do not require parse analysis/rewrite/plan
- * activity never need to be revalidated, so we can treat them all like that.
- * For the convenience of postgres.c, treat empty statements that way too.
- */
-#define StmtPlanRequiresRevalidation(plansource)  \
-	((plansource)->raw_parse_tree != NULL && \
-	 stmt_requires_parse_analysis((plansource)->raw_parse_tree))
-
-/*
  * This is the head of the backend's list of "saved" CachedPlanSources (i.e.,
  * those that are in long-lived storage and are examined for sinval events).
  * We use a dlist instead of separate List cells so that we can guarantee
@@ -129,6 +117,38 @@ static const ResourceOwnerDesc planref_resowner_desc =
 	.ReleaseResource = ResOwnerReleaseCachedPlan,
 	.DebugPrint = NULL			/* the default message is fine */
 };
+
+/*
+ * We must skip "overhead" operations that involve database access when the
+ * cached plan's subject statement is a transaction control command or one
+ * that requires a snapshot not to be set yet (such as SET or LOCK).  More
+ * generally, statements that do not require parse analysis/rewrite/plan
+ * activity never need to be revalidated, so we can treat them all like that.
+ * For the convenience of postgres.c, treat empty statements that way too.
+ * If plansource doesn't have raw_parse_tree, look at query_list to find out
+ * if there are any non-utility statements.
+ */
+static inline bool
+StmtPlanRequiresRevalidation(CachedPlanSource *plansource)
+{
+	if (plansource->raw_parse_tree != NULL)
+	{
+		return stmt_requires_parse_analysis(plansource->raw_parse_tree);
+	}
+	else
+	{
+		ListCell *lc;
+
+		foreach (lc, plansource->query_list)
+		{
+			Query *query = castNode(Query, lfirst(lc));
+
+			if (query->commandType != CMD_UTILITY)
+				return true;
+		}
+	}
+	return false;
+}
 
 /* Convenience wrappers over ResourceOwnerRemember/Forget */
 static inline void

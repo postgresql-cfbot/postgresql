@@ -1367,7 +1367,7 @@ select set_and_report_role();
 
 select set_role_and_error(0);
 ERROR:  division by zero
-CONTEXT:  SQL function "set_role_and_error" statement 1
+CONTEXT:  SQL function "set_role_and_error" during startup
 set debug_parallel_query = 1;
 select set_and_report_role();
    set_and_report_role   
@@ -1377,7 +1377,7 @@ select set_and_report_role();
 
 select set_role_and_error(0);
 ERROR:  division by zero
-CONTEXT:  SQL function "set_role_and_error" statement 1
+CONTEXT:  SQL function "set_role_and_error" during startup
 parallel worker
 reset debug_parallel_query;
 drop function set_and_report_role();

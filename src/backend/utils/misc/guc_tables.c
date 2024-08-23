@@ -46,6 +46,7 @@
 #include "commands/vacuum.h"
 #include "common/file_utils.h"
 #include "common/scram-common.h"
+#include "executor/functions.h"
 #include "jit/jit.h"
 #include "libpq/auth.h"
 #include "libpq/libpq.h"
@@ -973,6 +974,17 @@ struct config_bool ConfigureNamesBool[] =
 			GUC_EXPLAIN
 		},
 		&enable_presorted_aggregate,
+		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"enable_sql_func_custom_plans", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enable plan cache machinery and custom plans for "
+						 "SQL language functions."),
+			NULL,
+			GUC_NOT_IN_SAMPLE | GUC_EXPLAIN
+		},
+		&enable_sql_func_custom_plans,
 		true,
 		NULL, NULL, NULL
 	},

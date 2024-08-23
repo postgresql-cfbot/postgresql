@@ -487,6 +487,273 @@ $result =
 is( $result, qq(2|f
 3|t), 'check replicated update on subscriber');
 
+# Clean up
+$node_publisher->safe_psql('postgres', "DROP PUBLICATION pub1");
+$node_subscriber->safe_psql('postgres', "DROP SUBSCRIPTION sub1");
+
+# The bug was that the incremental data synchronization was being skipped when
+# a new table is added to the publication in presence of a concurrent active
+# transaction performing the DML on the same table.
+
+# Initial setup.
+$node_publisher->safe_psql(
+	'postgres', qq(
+	CREATE TABLE tab_conc(a int);
+	CREATE SCHEMA sch3;
+	CREATE TABLE sch3.tab_conc(a int);
+	CREATE PUBLICATION regress_pub1;
+));
+
+$node_subscriber->safe_psql(
+	'postgres', qq(
+	CREATE TABLE tab_conc(a int);
+	CREATE SCHEMA sch3;
+	CREATE TABLE sch3.tab_conc(a int);
+	CREATE SUBSCRIPTION regress_sub1 CONNECTION '$publisher_connstr' PUBLICATION regress_pub1;
+));
+
+# Bump the query timeout to avoid false negatives on slow test systems.
+my $psql_timeout_secs = 4 * $PostgreSQL::Test::Utils::timeout_default;
+
+# Initiate 3 background sessions.
+my $background_psql1 = $node_publisher->background_psql(
+	'postgres',
+	on_error_stop => 0,
+	timeout => $psql_timeout_secs);
+$background_psql1->set_query_timer_restart();
+
+my $background_psql2 = $node_publisher->background_psql(
+	'postgres',
+	on_error_stop => 0,
+	timeout => $psql_timeout_secs);
+
+$background_psql2->set_query_timer_restart();
+
+my $background_psql3 = $node_publisher->background_psql(
+	'postgres',
+	on_error_stop => 0,
+	timeout => $psql_timeout_secs);
+$background_psql3->set_query_timer_restart();
+
+# Maintain an active transaction with the table that will be added to the
+# publication.
+$background_psql1->query_safe(
+	qq(
+	BEGIN;
+	INSERT INTO tab_conc VALUES (1);
+));
+
+# Maintain an active transaction with a schema table that will be added to the
+# publication.
+$background_psql2->query_safe(
+	qq(
+	BEGIN;
+	INSERT INTO sch3.tab_conc VALUES (1);
+));
+
+# Add the table to the publication using background_psql, as the alter
+# publication operation will distribute the invalidations to inprogress txns.
+$background_psql3->query_safe(
+	"ALTER PUBLICATION regress_pub1 ADD TABLE tab_conc, TABLES IN SCHEMA sch3"
+);
+
+# Complete the transaction on the tables.
+$background_psql1->query_safe("COMMIT");
+$background_psql2->query_safe("COMMIT");
+
+$node_publisher->safe_psql(
+	'postgres', qq(
+	INSERT INTO tab_conc VALUES (2);
+	INSERT INTO sch3.tab_conc VALUES (2);
+));
+
+# Refresh the publication.
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION regress_sub1 REFRESH PUBLICATION");
+
+$node_subscriber->wait_for_subscription_sync($node_publisher, 'regress_sub1');
+
+$result = $node_subscriber->safe_psql('postgres', "SELECT * FROM tab_conc");
+is( $result, qq(1
+2),
+	'Ensure that the data from the tab_conc table is synchronized to the subscriber after the subscription is refreshed'
+);
+
+$result =
+  $node_subscriber->safe_psql('postgres', "SELECT * FROM sch3.tab_conc");
+is( $result, qq(1
+2),
+	'Ensure that the data from the sch3.tab_conc table is synchronized to the subscriber after the subscription is refreshed'
+);
+
+# Perform an insert.
+$node_publisher->safe_psql(
+	'postgres', qq(
+	INSERT INTO tab_conc VALUES (3);
+	INSERT INTO sch3.tab_conc VALUES (3);
+));
+$node_publisher->wait_for_catchup('regress_sub1');
+
+# Verify that the insert is replicated to the subscriber.
+$result = $node_subscriber->safe_psql('postgres', "SELECT * FROM tab_conc");
+is( $result, qq(1
+2
+3),
+	'Verify that the incremental data for table tab_conc added after table synchronization is replicated to the subscriber'
+);
+
+$result =
+  $node_subscriber->safe_psql('postgres', "SELECT * FROM sch3.tab_conc");
+is( $result, qq(1
+2
+3),
+	'Verify that the incremental data for table sch3.tab_conc added after table synchronization is replicated to the subscriber'
+);
+
+# The bug was that the incremental data synchronization was happening even when
+# tables are dropped from the publication in presence of a concurrent active
+# transaction performing the DML on the same table.
+
+# Maintain an active transaction with the table that will be dropped from the
+# publication.
+$background_psql1->query_safe(
+	qq(
+	BEGIN;
+	INSERT INTO tab_conc VALUES (4);
+));
+
+# Maintain an active transaction with a schema table that will be dropped from the
+# publication.
+$background_psql2->query_safe(
+	qq(
+	BEGIN;
+	INSERT INTO sch3.tab_conc VALUES (4);
+));
+
+# Drop the table from the publication using background_psql, as the alter
+# publication operation will distribute the invalidations to inprogress txns.
+$background_psql3->query_safe(
+	"ALTER PUBLICATION regress_pub1 DROP TABLE tab_conc, TABLES IN SCHEMA sch3"
+);
+
+# Complete the transaction on the tables.
+$background_psql1->query_safe("COMMIT");
+$background_psql2->query_safe("COMMIT");
+
+# Perform an insert.
+$node_publisher->safe_psql(
+	'postgres', qq(
+	INSERT INTO tab_conc VALUES (5);
+	INSERT INTO sch3.tab_conc VALUES (5);
+));
+
+$node_publisher->wait_for_catchup('regress_sub1');
+
+# Verify that the insert is not replicated to the subscriber.
+$result = $node_subscriber->safe_psql('postgres', "SELECT * FROM tab_conc");
+is( $result, qq(1
+2
+3
+4),
+	'Verify that data for table tab_conc are not replicated to subscriber');
+
+$result =
+  $node_subscriber->safe_psql('postgres', "SELECT * FROM sch3.tab_conc");
+is( $result, qq(1
+2
+3
+4),
+	'Verify that the incremental data for table sch3.tab_conc are not replicated to subscriber'
+);
+
+# The bug was that the incremental data synchronization was happening even after
+# publication is dropped in a concurrent active transaction.
+
+# Add tables to the publication.
+$background_psql3->query_safe(
+	"ALTER PUBLICATION regress_pub1 ADD TABLE tab_conc, TABLES IN SCHEMA sch3"
+);
+
+# Maintain an active transaction with the table.
+$background_psql1->query_safe(
+	qq(
+	BEGIN;
+	INSERT INTO tab_conc VALUES (6);
+));
+
+# Maintain an active transaction with a schema table.
+$background_psql2->query_safe(
+	qq(
+	BEGIN;
+	INSERT INTO sch3.tab_conc VALUES (6);
+));
+
+# Drop publication.
+$background_psql3->query_safe("DROP PUBLICATION regress_pub1");
+
+# Perform an insert.
+$background_psql1->query_safe("INSERT INTO tab_conc VALUES (7)");
+$background_psql2->query_safe("INSERT INTO sch3.tab_conc VALUES (7)");
+
+# Complete the transaction on the tables.
+$background_psql1->query_safe("COMMIT");
+$background_psql2->query_safe("COMMIT");
+
+# ERROR should appear on subscriber.
+my $offset = -s $node_subscriber->logfile;
+$node_subscriber->wait_for_log(
+	qr/ERROR:  publication "regress_pub1" does not exist/, $offset);
+
+$node_subscriber->safe_psql('postgres', "DROP SUBSCRIPTION regress_sub1");
+
+# The bug was that the incremental data synchronization was happening even after
+# publication is renamed in a concurrent active transaction.
+
+# Create publication.
+$background_psql3->query_safe(
+	"CREATE PUBLICATION regress_pub1 FOR TABLE tab_conc, TABLES IN SCHEMA sch3"
+);
+
+# Create subscription.
+$node_subscriber->safe_psql('postgres',
+	"CREATE SUBSCRIPTION regress_sub1 CONNECTION '$publisher_connstr' PUBLICATION regress_pub1"
+);
+
+# Maintain an active transaction with the table.
+$background_psql1->query_safe(
+	qq(
+	BEGIN;
+	INSERT INTO tab_conc VALUES (8);
+));
+
+# Maintain an active transaction with a schema table.
+$background_psql2->query_safe(
+	qq(
+	BEGIN;
+	INSERT INTO sch3.tab_conc VALUES (8);
+));
+
+# Rename publication.
+$background_psql3->query_safe(
+	"ALTER PUBLICATION regress_pub1 RENAME TO regress_pub1_rename");
+
+# Perform an insert.
+$background_psql1->query_safe("INSERT INTO tab_conc VALUES (9)");
+$background_psql2->query_safe("INSERT INTO sch3.tab_conc VALUES (9)");
+
+# Complete the transaction on the tables.
+$background_psql1->query_safe("COMMIT");
+$background_psql2->query_safe("COMMIT");
+
+# ERROR should appear on subscriber.
+$offset = -s $node_subscriber->logfile;
+$node_subscriber->wait_for_log(
+	qr/ERROR:  publication "regress_pub1" does not exist/, $offset);
+
+$background_psql1->quit;
+$background_psql2->quit;
+$background_psql3->quit;
+
 $node_publisher->stop('fast');
 $node_subscriber->stop('fast');
 

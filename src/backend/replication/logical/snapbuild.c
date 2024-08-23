@@ -161,7 +161,7 @@ static void SnapBuildFreeSnapshot(Snapshot snap);
 
 static void SnapBuildSnapIncRefcount(Snapshot snap);
 
-static void SnapBuildDistributeNewCatalogSnapshot(SnapBuild *builder, XLogRecPtr lsn);
+static void SnapBuildDistributeSnapshotAndInval(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid);
 
 static inline bool SnapBuildXidHasCatalogChanges(SnapBuild *builder, TransactionId xid,
 												 uint32 xinfo);
@@ -720,18 +720,21 @@ SnapBuildProcessNewCid(SnapBuild *builder, TransactionId xid,
 }
 
 /*
- * Add a new Snapshot to all transactions we're decoding that currently are
- * in-progress so they can see new catalog contents made by the transaction
- * that just committed. This is necessary because those in-progress
- * transactions will use the new catalog's contents from here on (at the very
- * least everything they do needs to be compatible with newer catalog
- * contents).
+ * Add a new Snapshot and invalidation messages to all transactions we're
+ * decoding that currently are in-progress so they can see new catalog contents
+ * made by the transaction that just committed. This is necessary because those
+ * in-progress transactions will use the new catalog's contents from here on
+ * (at the very least everything they do needs to be compatible with newer
+ * catalog contents).
  */
 static void
-SnapBuildDistributeNewCatalogSnapshot(SnapBuild *builder, XLogRecPtr lsn)
+SnapBuildDistributeSnapshotAndInval(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid)
 {
 	dlist_iter	txn_i;
 	ReorderBufferTXN *txn;
+	ReorderBufferTXN *curr_txn;
+
+	curr_txn = ReorderBufferTXNByXid(builder->reorder, xid, false, NULL, InvalidXLogRecPtr, false);
 
 	/*
 	 * Iterate through all toplevel transactions. This can include
@@ -774,6 +777,14 @@ SnapBuildDistributeNewCatalogSnapshot(SnapBuild *builder, XLogRecPtr lsn)
 		SnapBuildSnapIncRefcount(builder->snapshot);
 		ReorderBufferAddSnapshot(builder->reorder, txn->xid, lsn,
 								 builder->snapshot);
+
+		/*
+		 * Add invalidation messages to the reorder buffer of inprogress
+		 * transactions except the current committed transaction
+		 */
+		if (txn->xid != xid && curr_txn->ninvalidations > 0)
+			ReorderBufferAddInvalidations(builder->reorder, txn->xid, lsn,
+										  curr_txn->ninvalidations, curr_txn->invalidations);
 	}
 }
 
@@ -1045,8 +1056,11 @@ SnapBuildCommitTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid,
 		/* refcount of the snapshot builder for the new snapshot */
 		SnapBuildSnapIncRefcount(builder->snapshot);
 
-		/* add a new catalog snapshot to all currently running transactions */
-		SnapBuildDistributeNewCatalogSnapshot(builder, lsn);
+		/*
+		 * add a new catalog snapshot and invalidations messages to all
+		 * currently running transactions
+		 */
+		SnapBuildDistributeSnapshotAndInval(builder, lsn, xid);
 	}
 }
 

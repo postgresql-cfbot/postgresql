@@ -7290,7 +7290,7 @@ CreateCheckPoint(int flags)
 	 * until after the above call that flushes the XLOG_CHECKPOINT_ONLINE
 	 * record.
 	 */
-	SetWalSummarizerLatch();
+	WakeupWalSummarizer();
 
 	/*
 	 * Let smgr do post-checkpoint cleanup (eg, deleting old files).

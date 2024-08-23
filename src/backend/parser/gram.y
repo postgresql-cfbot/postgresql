@@ -2317,12 +2317,13 @@ partitions_list:
 		;
 
 SinglePartitionSpec:
-			PARTITION qualified_name PartitionBoundSpec
+			PARTITION qualified_name PartitionBoundSpec OptTableSpace
 				{
 					SinglePartitionSpec *n = makeNode(SinglePartitionSpec);
 
 					n->name = $2;
 					n->bound = $3;
+					n->tablespacename = $4;
 
 					$$ = n;
 				}
@@ -2387,7 +2388,7 @@ partition_cmd:
 					$$ = (Node *) n;
 				}
 			/* ALTER TABLE <name> MERGE PARTITIONS () INTO <partition_name> */
-			| MERGE PARTITIONS '(' qualified_name_list ')' INTO qualified_name
+			| MERGE PARTITIONS '(' qualified_name_list ')' INTO qualified_name OptTableSpace
 				{
 					AlterTableCmd *n = makeNode(AlterTableCmd);
 					PartitionCmd *cmd = makeNode(PartitionCmd);
@@ -2397,6 +2398,7 @@ partition_cmd:
 					cmd->bound = NULL;
 					cmd->partlist = $4;
 					cmd->concurrent = false;
+					cmd->tablespacename = $8;
 					n->def = (Node *) cmd;
 					$$ = (Node *) n;
 				}

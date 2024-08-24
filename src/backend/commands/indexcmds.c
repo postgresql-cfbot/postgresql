@@ -70,6 +70,7 @@
 #include "utils/regproc.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
+#include "utils/injection_point.h"
 
 
 /* non-export function prototypes */
@@ -1777,6 +1778,7 @@ DefineIndex(Oid tableId,
 	pgstat_progress_update_param(PROGRESS_CREATEIDX_PHASE,
 								 PROGRESS_CREATEIDX_PHASE_WAIT_3);
 	WaitForOlderSnapshots(limitXmin, true);
+	INJECTION_POINT("define_index_before_set_valid");
 
 	/*
 	 * Index can now be marked valid -- update its pg_index entry
@@ -4091,7 +4093,7 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 	 * the same time to make sure we only get constraint violations from the
 	 * indexes with the correct names.
 	 */
-
+	INJECTION_POINT("reindex_relation_concurrently_before_swap");
 	StartTransactionCommand();
 
 	/*
@@ -4165,6 +4167,7 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 	pgstat_progress_update_param(PROGRESS_CREATEIDX_PHASE,
 								 PROGRESS_CREATEIDX_PHASE_WAIT_4);
 	WaitForLockersMultiple(lockTags, AccessExclusiveLock, true);
+	INJECTION_POINT("reindex_relation_concurrently_before_set_dead");
 
 	foreach(lc, indexIds)
 	{

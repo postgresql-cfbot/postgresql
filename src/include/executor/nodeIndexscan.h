@@ -28,6 +28,7 @@ extern void ExecIndexScanInitializeDSM(IndexScanState *node, ParallelContext *pc
 extern void ExecIndexScanReInitializeDSM(IndexScanState *node, ParallelContext *pcxt);
 extern void ExecIndexScanInitializeWorker(IndexScanState *node,
 										  ParallelWorkerContext *pwcxt);
+extern void ExecPrefetchIndexScan(IndexScanState *node);
 
 /*
  * These routines are exported to share code with nodeIndexonlyscan.c and

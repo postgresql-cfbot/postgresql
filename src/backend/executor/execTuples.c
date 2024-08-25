@@ -129,7 +129,8 @@ tts_virtual_clear(TupleTableSlot *slot)
 static void
 tts_virtual_getsomeattrs(TupleTableSlot *slot, int natts)
 {
-	elog(ERROR, "getsomeattrs is not required to be called on a virtual tuple table slot");
+	// we don't know if the slot is virtual or not
+	// elog(ERROR, "getsomeattrs is not required to be called on a virtual tuple table slot");
 }
 
 /*

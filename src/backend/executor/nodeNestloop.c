@@ -24,7 +24,9 @@
 #include "executor/execdebug.h"
 #include "executor/nodeNestloop.h"
 #include "miscadmin.h"
+#include "optimizer/cost.h"
 
+bool              enable_nestloop_prefetch = false;
 
 /* ----------------------------------------------------------------
  *		ExecNestLoop(node)
@@ -105,15 +107,107 @@ ExecNestLoop(PlanState *pstate)
 		if (node->nl_NeedNewOuter)
 		{
 			ENL1_printf("getting new outer tuple");
-			outerTupleSlot = ExecProcNode(outerPlan);
 
 			/*
-			 * if there are no more outer tuples, then the join is complete..
+			 * Without prefetching, get the next slot from the outer plan
+			 * directly. With prefetching get the next slot from the batch,
+			 * or fill the batch if needed.
 			 */
-			if (TupIsNull(outerTupleSlot))
+			if (node->nl_PrefetchCount == 0)	/* no prefetching */
 			{
-				ENL1_printf("no outer tuple, ending join");
-				return NULL;
+				outerTupleSlot = ExecProcNode(outerPlan);
+
+				/*
+				 * if there are no more outer tuples, then the join is complete.
+				 */
+				if (TupIsNull(outerTupleSlot))
+				{
+					ENL1_printf("no outer tuple, ending join");
+					return NULL;
+				}
+			}
+			else								/* prefetching */
+			{
+
+				/*
+				 * No more slots availabe in the queue - try to load from
+				 * the outer plan, unless we've already reached the end.
+				 */
+				if ((node->nl_PrefetchNext == node->nl_PrefetchUsed) &&
+					(!node->nl_PrefetchDone))
+				{
+					/* reset */
+					node->nl_PrefetchNext = 0;
+					node->nl_PrefetchUsed = 0;
+
+					while (node->nl_PrefetchUsed < node->nl_PrefetchCount)
+					{
+						outerTupleSlot = ExecProcNode(outerPlan);
+
+						/*
+						 * if there are no more outer tuples, then the join is complete.
+						 */
+						if (TupIsNull(outerTupleSlot))
+						{
+							node->nl_PrefetchDone = true;
+							break;
+						}
+
+						ExecClearTuple(node->nl_PrefetchSlots[node->nl_PrefetchUsed]);
+
+						ExecCopySlot(node->nl_PrefetchSlots[node->nl_PrefetchUsed],
+									 outerTupleSlot);
+
+						ENL1_printf("prefetching inner node");
+						econtext->ecxt_outertuple = node->nl_PrefetchSlots[node->nl_PrefetchUsed];
+
+						/*
+						 * fetch the values of any outer Vars that must be passed to the
+						 * inner scan, and store them in the appropriate PARAM_EXEC slots.
+						 */
+						foreach(lc, nl->nestParams)
+						{
+							NestLoopParam *nlp = (NestLoopParam *) lfirst(lc);
+							int			paramno = nlp->paramno;
+							ParamExecData *prm;
+
+							prm = &(econtext->ecxt_param_exec_vals[paramno]);
+							/* Param value should be an OUTER_VAR var */
+							Assert(IsA(nlp->paramval, Var));
+							Assert(nlp->paramval->varno == OUTER_VAR);
+							Assert(nlp->paramval->varattno > 0);
+							prm->value = slot_getattr(node->nl_PrefetchSlots[node->nl_PrefetchUsed],
+													  nlp->paramval->varattno,
+													  &(prm->isnull));
+							/* Flag parameter value as changed */
+							innerPlan->chgParam = bms_add_member(innerPlan->chgParam,
+																 paramno);
+						}
+
+						/*
+						 * now prefetch the inner plan
+						 */
+						ENL1_printf("prefetching inner plan");
+						ExecReScan(innerPlan);
+						ExecPrefetch(innerPlan);
+
+						node->nl_PrefetchUsed++;
+					}
+				}
+
+				/*
+				 * Now we should either have a slot in the queue, or know
+				 * that we've exhausted the outer side.
+				 */
+				if (node->nl_PrefetchNext == node->nl_PrefetchUsed)
+				{
+					Assert(node->nl_PrefetchDone);
+					ENL1_printf("no outer tuple, ending join");
+					return NULL;
+				}
+
+				/* get the next slot from the queue */
+				outerTupleSlot = node->nl_PrefetchSlots[node->nl_PrefetchNext++];
 			}
 
 			ENL1_printf("saving new outer tuple information");
@@ -345,6 +439,24 @@ ExecInitNestLoop(NestLoop *node, EState *estate, int eflags)
 	nlstate->nl_NeedNewOuter = true;
 	nlstate->nl_MatchedOuter = false;
 
+	/* with inner plan supporting prefetching, initialize the batch */
+	nlstate->nl_PrefetchCount = 0;
+	if (enable_nestloop_prefetch &&
+		ExecSupportsPrefetch(innerPlan(node)))
+	{
+		/* batch of 32 slots seem about right for now */
+#define NL_PREFETCH_BATCH_SIZE 32
+		nlstate->nl_PrefetchCount = NL_PREFETCH_BATCH_SIZE;
+		nlstate->nl_PrefetchSlots = palloc0(sizeof(TupleTableSlot *) * nlstate->nl_PrefetchCount);
+
+		for (int i = 0; i < nlstate->nl_PrefetchCount; i++)
+		{
+			nlstate->nl_PrefetchSlots[i]
+				= MakeSingleTupleTableSlot(ExecGetResultType(outerPlanState(nlstate)),
+										   &TTSOpsVirtual);
+		}
+	}
+
 	NL1_printf("ExecInitNestLoop: %s\n",
 			   "node initialized");
 
@@ -368,6 +480,12 @@ ExecEndNestLoop(NestLoopState *node)
 	 */
 	ExecEndNode(outerPlanState(node));
 	ExecEndNode(innerPlanState(node));
+
+	/* cleanup batch of prefetch slots */
+	for (int i = 0; i < node->nl_PrefetchCount; i++)
+	{
+		ExecDropSingleTupleTableSlot(node->nl_PrefetchSlots[i]);
+	}
 
 	NL1_printf("ExecEndNestLoop: %s\n",
 			   "node processing ended");
@@ -397,4 +515,9 @@ ExecReScanNestLoop(NestLoopState *node)
 
 	node->nl_NeedNewOuter = true;
 	node->nl_MatchedOuter = false;
+
+	/* reset the prefetch batch too */
+	node->nl_PrefetchNext = 0;
+	node->nl_PrefetchUsed = 0;
+	node->nl_PrefetchDone = false;
 }

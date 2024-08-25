@@ -1729,3 +1729,70 @@ ExecIndexScanInitializeWorker(IndexScanState *node,
 					 node->iss_ScanKeys, node->iss_NumScanKeys,
 					 node->iss_OrderByKeys, node->iss_NumOrderByKeys);
 }
+
+void
+ExecPrefetchIndexScan(IndexScanState *node)
+{
+	EState	   *estate;
+	ScanDirection direction;
+	IndexScanDesc scandesc;
+	ItemPointer tid;
+
+	/*
+	 * extract necessary information from index scan node
+	 */
+	estate = node->ss.ps.state;
+
+	/*
+	 * Determine which direction to scan the index in based on the plan's scan
+	 * direction and the current direction of execution.
+	 */
+	direction = ScanDirectionCombine(estate->es_direction,
+									 ((IndexScan *) node->ss.ps.plan)->indexorderdir);
+	scandesc = node->iss_ScanDesc;
+
+	if (scandesc == NULL)
+	{
+		/*
+		 * We reach here if the index scan is not parallel, or if we're
+		 * serially executing an index scan that was planned to be parallel.
+		 */
+		scandesc = index_beginscan(node->ss.ss_currentRelation,
+								   node->iss_RelationDesc,
+								   estate->es_snapshot,
+								   node->iss_NumScanKeys,
+								   node->iss_NumOrderByKeys);
+
+		node->iss_ScanDesc = scandesc;
+
+		/*
+		 * If no run-time keys to calculate or they are ready, go ahead and
+		 * pass the scankeys to the index AM.
+		 */
+		if (node->iss_NumRuntimeKeys == 0 || node->iss_RuntimeKeysReady)
+			index_rescan(scandesc,
+						 node->iss_ScanKeys, node->iss_NumScanKeys,
+						 node->iss_OrderByKeys, node->iss_NumOrderByKeys);
+	}
+
+	/*
+	 * XXX This should probably prefetch only a limited number of tuples for
+	 * each key, not all of them - the index can easily have millions of them
+	 * for some keys. And prefetching more of those items would be subject
+	 * to the "regular" index prefetching, if ever implemented.
+	 *
+	 * XXX The one question is how to communicate back how many items would
+	 * be prefetched. If we find a key with 1M TIDs, it probably dones not
+	 * make much sense to prefetch further in nestloop, because the 1M will
+	 * likely trash the cache anyway.
+	 *
+	 * XXX This should consider how many items we actually need. For semi
+	 * join we only need the first one, for example.
+	 */
+	while ((tid = index_getnext_tid(scandesc, direction)) != NULL)
+	{
+		CHECK_FOR_INTERRUPTS();
+
+		PrefetchBuffer(scandesc->heapRelation, MAIN_FORKNUM, ItemPointerGetBlockNumber(tid));
+	}
+}

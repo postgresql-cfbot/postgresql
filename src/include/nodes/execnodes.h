@@ -2142,6 +2142,13 @@ typedef struct NestLoopState
 	bool		nl_NeedNewOuter;
 	bool		nl_MatchedOuter;
 	TupleTableSlot *nl_NullInnerTupleSlot;
+
+	/* for prefetch of batch items */
+	int			nl_PrefetchCount;		/* maximum number of queued slots */
+	int			nl_PrefetchUsed;		/* current number of queued slots */
+	int			nl_PrefetchNext;		/* next slot to return from queue */
+	bool		nl_PrefetchDone;		/* no more outer slots */
+	TupleTableSlot **nl_PrefetchSlots;	/* array of virtual slots */
 } NestLoopState;
 
 /* ----------------

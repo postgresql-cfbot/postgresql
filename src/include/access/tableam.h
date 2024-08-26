@@ -255,6 +255,39 @@ typedef struct TM_IndexDeleteOp
 	TM_IndexStatus *status;
 } TM_IndexDeleteOp;
 
+/* Table modify flags */
+
+/* Use BAS_BULKWRITE buffer access strategy */
+#define TM_FLAG_BAS_BULKWRITE	0x000001
+
+struct TableModifyState;
+
+/* Callback invoked for each tuple that gets flushed to disk from buffer */
+typedef void (*TableModifyBufferFlushCallback) (void *context,
+												TupleTableSlot *slot);
+
+/* Table AM specific callback that gets called in table_modify_end() */
+typedef void (*TableModifyEndCallback) (struct TableModifyState *state);
+
+/* Holds table modify state */
+typedef struct TableModifyState
+{
+	Relation	rel;
+	int			modify_flags;
+	MemoryContext mem_cxt;
+	CommandId	cid;
+	int			options;
+
+	/* Flush callback and its context */
+	TableModifyBufferFlushCallback modify_buffer_flush_callback;
+	void	   *modify_buffer_flush_context;
+
+	/* Table AM specific data */
+	void	   *data;
+
+	TableModifyEndCallback modify_end_callback;
+} TableModifyState;
+
 /* "options" flag bits for table_tuple_insert */
 /* TABLE_INSERT_SKIP_WAL was 0x0001; RelationNeedsWAL() now governs */
 #define TABLE_INSERT_SKIP_FSM		0x0002
@@ -577,6 +610,21 @@ typedef struct TableAmRoutine
 	 */
 	void		(*finish_bulk_insert) (Relation rel, int options);
 
+
+	/* ------------------------------------------------------------------------
+	 * Table Modify related functions.
+	 * ------------------------------------------------------------------------
+	 */
+	TableModifyState *(*tuple_modify_begin) (Relation rel,
+											 int modify_flags,
+											 CommandId cid,
+											 int options,
+											 TableModifyBufferFlushCallback modify_buffer_flush_callback,
+											 void *modify_buffer_flush_context);
+	void		(*tuple_modify_buffer_insert) (TableModifyState *state,
+											   TupleTableSlot *slot);
+	void		(*tuple_modify_buffer_flush) (TableModifyState *state);
+	void		(*tuple_modify_end) (TableModifyState *state);
 
 	/* ------------------------------------------------------------------------
 	 * DDL related functionality.
@@ -1599,6 +1647,38 @@ table_finish_bulk_insert(Relation rel, int options)
 		rel->rd_tableam->finish_bulk_insert(rel, options);
 }
 
+/* ------------------------------------------------------------------------
+ * Table Modify related functions.
+ * ------------------------------------------------------------------------
+ */
+static inline TableModifyState *
+table_modify_begin(Relation rel, int modify_flags, CommandId cid, int options,
+				   TableModifyBufferFlushCallback modify_buffer_flush_callback,
+				   void *modify_buffer_flush_context)
+{
+	return rel->rd_tableam->tuple_modify_begin(rel, modify_flags,
+											   cid, options,
+											   modify_buffer_flush_callback,
+											   modify_buffer_flush_context);
+}
+
+static inline void
+table_modify_buffer_insert(TableModifyState *state, TupleTableSlot *slot)
+{
+	state->rel->rd_tableam->tuple_modify_buffer_insert(state, slot);
+}
+
+static inline void
+table_modify_buffer_flush(TableModifyState *state)
+{
+	state->rel->rd_tableam->tuple_modify_buffer_flush(state);
+}
+
+static inline void
+table_modify_end(TableModifyState *state)
+{
+	state->rel->rd_tableam->tuple_modify_end(state);
+}
 
 /* ------------------------------------------------------------------------
  * DDL related functionality.

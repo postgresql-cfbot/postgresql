@@ -848,3 +848,27 @@ SELECT unistr('wrong: \udb99\u0061');
 SELECT unistr('wrong: \U0000db99\U00000061');
 SELECT unistr('wrong: \U002FFFFF');
 SELECT unistr('wrong: \xyz');
+
+--
+-- Test coercions between bytea and integer types
+--
+SET bytea_output TO hex;
+
+SELECT 0x1234::int2::bytea;
+SELECT 0x12345678::int4::bytea;
+SELECT 0x1122334455667788::int8::bytea;
+
+SELECT ''::bytea::int2 = 0;
+SELECT '\x12'::bytea::int2 = 0x12;
+SELECT '\x1234'::bytea::int2 = 0x1234;
+SELECT '\x123456'::bytea::int2; -- error
+
+SELECT ''::bytea::int4 = 0;
+SELECT '\x12'::bytea::int4 = 0x12;
+SELECT '\x12345678'::bytea::int4 = 0x12345678;
+SELECT '\x123456789A'::bytea::int4; -- error
+
+SELECT ''::bytea::int8 = 0;
+SELECT '\x12'::bytea::int8 = 0x12;
+SELECT '\x1122334455667788'::bytea::int8 = 0x1122334455667788;
+SELECT '\x112233445566778899'::bytea::int8; -- error

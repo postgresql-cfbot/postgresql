@@ -162,6 +162,12 @@ CreateExecutorState(void)
 	estate->es_jit_flags = 0;
 	estate->es_jit = NULL;
 
+	estate->es_parallelized_nodes = 0;
+	estate->es_parallelized_nodes_success = 0;
+	estate->es_parallelized_nodes_no_workers = 0;
+	estate->es_workers_launched = 0;
+	estate->es_workers_planned = 0;
+
 	/*
 	 * Return the executor state structure
 	 */

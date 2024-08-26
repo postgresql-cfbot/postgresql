@@ -55,6 +55,17 @@
 
       <row>
        <entry role="func_table_entry"><para role="func_signature">
+        <function>rand_array</function> (<parameter>numvals</parameter> <type>integer</type>,<parameter>minlen</parameter> <type>int4</type>, <parameter>maxlen</parameter> <type>int4</type>,<parameter>minval</parameter> <type><replaceable>numeric_type</replaceable></type>, <parameter>maxval</parameter> <type><replaceable>numeric_type</replaceable></type> )
+        <returnvalue>setof <replaceable>numeric_type</replaceable>[]</returnvalue>
+       </para>
+       <para>
+        Produces a set of random numeric_type[], uses the same deterministic pseudo-random number generator as random().
+       </para>
+       </entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
         <function>crosstab</function> ( <parameter>sql</parameter> <type>text</type> )
         <returnvalue>setof record</returnvalue>
        </para>
@@ -849,7 +860,82 @@ SELECT * FROM connectby('connectby_tree', 'keyid', 'parent_keyid', 'pos', 'row2'
 (6 rows)
 </programlisting>
     </para>
-   </sect3>
+  </sect3>
+
+  <sect3 id="tablefunc-functions-rand-array">
+   <title><function>rand_array</function></title>
+
+   <indexterm>
+    <primary>rand_array</primary>
+   </indexterm>
+
+   <synopsis>
+     rand_array(int numvals, int minlen, int maxlen, int numeric, int numeric) returns setof numeric
+   </synopsis>
+
+    <para>
+      <function>rand_array</function> produces a set of array with its lenght belongs
+      to [minlen, maxlen] and each element in the array belongs to [minval, maxval].
+    </para>
+
+    <para>
+     <parameter>numvals</parameter> is the number of values to be returned
+     from the function. The array length is controlled in [<parameter>minlen</parameter>,
+     <parameter>maxlen</parameter>], and the value of each element in the array
+     is controlled in [<parameter>minval</parameter>, <parameter>maxval</parameter>]
+    </para>
+
+    <para>
+      For example, this call requests 10 arrays with each array's length is between
+      3 and 5, and each element in the array is between 2.1 and 3.5. The final value
+      follows the impact of setseed().
+    </para>
+
+    <screen>
+test=# SELECT * FROM rand_array(10, 3, 5, 3.0, 5.0);
+      rand_array       
+-----------------------
+ {5.0,3.2,3.6,3.7,4.7}
+ {5.0,4.0,5.0,4.8,4.3}
+ {3.5,4.3,4.3,3.7}
+ {3.8,3.9,4.8,5.0,4.2}
+ {5.0,4.7,4.9}
+ {3.5,5.0,3.5,4.8}
+ {4.9,3.8,3.6,4.2}
+ {4.0,4.5,3.5}
+ {4.2,3.4,3.8,3.8,3.9}
+ {4.4,4.2,4.0,4.1}
+(10 rows)
+    </screen>
+
+    <para>
+      Besides numeric, both int4 and int8 are supported.
+    </para>
+
+    <screen>
+test=# SELECT pg_typeof(rand_array), * FROM rand_array(5, 3, 5, 3::int4, 5.0::int4);
+ pg_typeof | rand_array  
+-----------+-------------
+ integer[] | {5,5,5,4,5}
+ integer[] | {4,5,3,4}
+ integer[] | {4,5,4,3}
+ integer[] | {5,4,4,3}
+ integer[] | {3,4,3,3,5}
+(5 rows)
+
+test=# SELECT pg_typeof(rand_array), * FROM rand_array(5, 3, 5, 3::int8, 5.0::int8);
+ pg_typeof | rand_array  
+-----------+-------------
+ bigint[]  | {3,5,5,4,4}
+ bigint[]  | {5,4,5,5}
+ bigint[]  | {3,4,3}
+ bigint[]  | {5,3,5,5}
+ bigint[]  | {5,5,5,4}
+(5 rows)
+    </screen>
+  </sect3>
+
+  
 
  </sect2>
 

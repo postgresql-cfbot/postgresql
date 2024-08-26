@@ -8,6 +8,17 @@ SELECT avg(normal_rand)::int, count(*) FROM normal_rand(100, 250, 0.2);
 -- negative number of tuples
 SELECT avg(normal_rand)::int, count(*) FROM normal_rand(-1, 250, 0.2);
 
+
+--
+-- random_array()
+-- produce the result with a stable seed.
+--
+select setseed(0);
+select rand_array(10, 0, 3, 50::int, 80::int);
+select rand_array(10, 0, 3, 50::bigint, 80::bigint);
+select rand_array(10, 0, 3, 50::numeric, 80::numeric);
+
+
 --
 -- crosstab()
 --

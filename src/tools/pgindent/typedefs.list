@@ -498,6 +498,7 @@ CopyHeaderChoice
 CopyInsertMethod
 CopyLogVerbosityChoice
 CopyMethod
+CopyModifyBufferFlushContext
 CopyMultiInsertBuffer
 CopyMultiInsertInfo
 CopyOnErrorChoice

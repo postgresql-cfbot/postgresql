@@ -168,6 +168,11 @@ do
 	# This produces a "no previous prototype" warning.
 	! $cplusplus && test "$f" = src/include/storage/checksum_impl.h && continue
 
+	# SectionMemoryManager.h is C++ code which includes <type_traits> through
+	# llvm/ADT/SmallVector.h so it won't compile with a C compiler neither with
+	# a C++ compiler under extern "C" linkage
+	test "$f" = src/include/jit/SectionMemoryManager.h && continue
+
 	# ppport.h is not under our control, so we can't make it standalone.
 	test "$f" = src/pl/plperl/ppport.h && continue
 

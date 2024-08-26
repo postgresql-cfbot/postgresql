@@ -480,6 +480,17 @@ exclude database <replaceable class="parameter">PATTERN</replaceable>
      </varlistentry>
 
      <varlistentry>
+      <term><option>--no-sequence-access-method</option></term>
+      <listitem>
+       <para>
+        Do not output commands to select sequence access methods.
+        With this option, all objects will be created with whichever
+        sequence access method is the default during restore.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--no-table-access-method</option></term>
       <listitem>
        <para>

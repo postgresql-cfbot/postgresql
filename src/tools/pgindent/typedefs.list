@@ -1185,6 +1185,7 @@ ImportForeignSchema_function
 ImportQual
 InProgressEnt
 InProgressIO
+InsertModifyBufferFlushContext
 IncludeWal
 InclusionOpaque
 IncrementVarSublevelsUp_context

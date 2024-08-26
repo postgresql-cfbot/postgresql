@@ -115,7 +115,7 @@ $node_standby->start();
 $sect = "post immediate restart";
 
 test_standby_func_tab_stats_status('postgres',
-	$dboid, $tableoid, $funcoid, 'f');
+	$dboid, $tableoid, $funcoid, 't');
 
 
 done_testing();

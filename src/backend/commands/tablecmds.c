@@ -5935,10 +5935,8 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 	int			i;
 	ListCell   *l;
 	EState	   *estate;
-	CommandId	mycid;
-	BulkInsertState bistate;
-	int			ti_options;
 	ExprState  *partqualstate = NULL;
+	TableModifyState *mstate = NULL;
 
 	/*
 	 * Open the relation(s).  We have surely already locked the existing
@@ -5957,18 +5955,14 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 	 * Prepare a BulkInsertState and options for table_tuple_insert.  The FSM
 	 * is empty, so don't bother using it.
 	 */
-	if (newrel)
+	if (newrel && mstate == NULL)
 	{
-		mycid = GetCurrentCommandId(true);
-		bistate = GetBulkInsertState();
-		ti_options = TABLE_INSERT_SKIP_FSM;
-	}
-	else
-	{
-		/* keep compiler quiet about using these uninitialized */
-		mycid = 0;
-		bistate = NULL;
-		ti_options = 0;
+		mstate = table_modify_begin(newrel,
+									TM_FLAG_BAS_BULKWRITE,
+									GetCurrentCommandId(true),
+									TABLE_INSERT_SKIP_FSM,
+									NULL,
+									NULL);
 	}
 
 	/*
@@ -6266,8 +6260,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 
 			/* Write the tuple out to the new relation */
 			if (newrel)
-				table_tuple_insert(newrel, insertslot, mycid,
-								   ti_options, bistate);
+				table_modify_buffer_insert(mstate, insertslot);
 
 			ResetExprContext(econtext);
 
@@ -6288,10 +6281,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 	table_close(oldrel, NoLock);
 	if (newrel)
 	{
-		FreeBulkInsertState(bistate);
-
-		table_finish_bulk_insert(newrel, ti_options);
-
+		table_modify_end(mstate);
 		table_close(newrel, NoLock);
 	}
 }

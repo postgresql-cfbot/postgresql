@@ -13,6 +13,61 @@ SELECT avg(normal_rand)::int, count(*) FROM normal_rand(100, 250, 0.2);
 SELECT avg(normal_rand)::int, count(*) FROM normal_rand(-1, 250, 0.2);
 ERROR:  number of rows cannot be negative
 --
+-- random_array()
+-- produce the result with a stable seed.
+--
+select setseed(0);
+ setseed 
+---------
+ 
+(1 row)
+
+select rand_array(10, 0, 3, 50::int, 80::int);
+ rand_array 
+------------
+ {63,71,66}
+ {64}
+ {54}
+ {72,64,60}
+ {75}
+ {53,73}
+ {69}
+ {74,67}
+ {65}
+ {73}
+(10 rows)
+
+select rand_array(10, 0, 3, 50::bigint, 80::bigint);
+ rand_array 
+------------
+ {}
+ {59,53}
+ {72}
+ {80,79}
+ {71}
+ {80,80}
+ {61,64}
+ {62,76,80}
+ {}
+ {}
+(10 rows)
+
+select rand_array(10, 0, 3, 50::numeric, 80::numeric);
+ rand_array 
+------------
+ {77,66,73}
+ {51,53}
+ {65,54}
+ {72}
+ {55,72}
+ {}
+ {55,70,64}
+ {75}
+ {}
+ {}
+(10 rows)
+
+--
 -- crosstab()
 --
 CREATE TABLE ct(id int, rowclass text, rowid text, attribute text, val text);

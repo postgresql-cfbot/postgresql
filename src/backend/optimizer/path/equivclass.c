@@ -3250,7 +3250,9 @@ add_setop_child_rel_equivalences(PlannerInfo *root, RelOptInfo *child_rel,
 	{
 		TargetEntry *tle = lfirst_node(TargetEntry, lc);
 		EquivalenceMember *parent_em;
+		EquivalenceMember *child_em;
 		PathKey    *pk;
+		Index		parent_relid;
 
 		if (tle->resjunk)
 			continue;
@@ -3267,12 +3269,49 @@ add_setop_child_rel_equivalences(PlannerInfo *root, RelOptInfo *child_rel,
 		 * likewise, the JoinDomain can be that of the initial member of the
 		 * Pathkey's EquivalenceClass.
 		 */
-		add_parent_eq_member(pk->pk_eclass,
-							 tle->expr,
-							 child_rel->relids,
-							 parent_em->em_jdomain,
-							 parent_em,
-							 exprType((Node *) tle->expr));
+		child_em = make_eq_member(pk->pk_eclass,
+								  tle->expr,
+								  child_rel->relids,
+								  parent_em->em_jdomain,
+								  parent_em,
+								  exprType((Node *) tle->expr));
+		child_rel->eclass_child_members =
+			lappend(child_rel->eclass_child_members, child_em);
+
+		/*
+		 * We save the knowledge that 'child_em' can be translated using
+		 * 'child_rel'. This knowledge is useful for
+		 * add_transformed_child_version() to find child members from the
+		 * given Relids.
+		 */
+		parent_em->em_child_relids =
+			bms_add_member(parent_em->em_child_relids, child_rel->relid);
+
+		/*
+		 * Make an UNION parent-child relationship between parent_em and
+		 * child_rel->relid. We record this relationship in
+		 * root->top_parent_relid_array, which generally has AppendRelInfo
+		 * relationships. We use the same array here to retrieve UNION child
+		 * members.
+		 *
+		 * XXX Here we treat the first member of parent_em->em_relids as a
+		 * parent of child_rel. Is this correct? What happens if
+		 * parent_em->em_relids has two or more members?
+		 */
+		parent_relid = bms_next_member(parent_em->em_relids, -1);
+		if (root->top_parent_relid_array == NULL)
+		{
+			/*
+			 * If the array is NULL, allocate it here.
+			 */
+			root->top_parent_relid_array = (Index *)
+				palloc(root->simple_rel_array_size * sizeof(Index));
+			MemSet(root->top_parent_relid_array, -1,
+				   sizeof(Index) * root->simple_rel_array_size);
+		}
+		Assert(root->top_parent_relid_array[child_rel->relid] == -1 ||
+			   root->top_parent_relid_array[child_rel->relid] == parent_relid);
+		root->top_parent_relid_array[child_rel->relid] = parent_relid;
 
 		lc2 = lnext(setop_pathkeys, lc2);
 	}

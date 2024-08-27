@@ -2534,6 +2534,12 @@ PrepareTransaction(void)
 			 TransStateAsString(s->state));
 	Assert(s->parent == NULL);
 
+
+	/* Check if any relation persistence flips have been performed. */
+	if (CheckIfPersistenceChanged())
+		ereport(ERROR,
+				errmsg("cannot prepare transaction if persistence change has been made to any relation"));
+
 	/*
 	 * Do pre-commit processing that involves calling user-defined code, such
 	 * as triggers.  Since closing cursors could queue trigger actions,

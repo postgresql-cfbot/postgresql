@@ -4470,6 +4470,19 @@ SetRelationBuffersPersistenceRedo(SMgrRelation srel, bool permanent,
 	cleanups = cu;
 }
 
+/*
+ *	CheckIfPersistenceChanged
+ *
+ *		Returns true if any relation's persistence change has occurred in the
+ *		current transaction.
+ *		--------------------------------------------------------------------
+ */
+bool
+CheckIfPersistenceChanged(void)
+{
+	return cleanups != NULL;
+}
+
 /* ---------------------------------------------------------------------
  *		DropRelationsAllBuffers
  *

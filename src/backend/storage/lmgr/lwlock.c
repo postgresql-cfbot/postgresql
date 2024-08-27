@@ -883,7 +883,6 @@ LWLockWaitListLock(LWLock *lock)
 #ifdef LWLOCK_STATS
 			delays += delayStatus.delays;
 #endif
-			finish_spin_delay(&delayStatus);
 		}
 
 		/*

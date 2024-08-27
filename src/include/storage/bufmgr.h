@@ -279,6 +279,7 @@ extern void DropRelationsAllBuffers(struct SMgrRelationData **smgr_reln,
 extern void DropDatabaseBuffers(Oid dbid);
 extern void SetRelationBuffersPersistence(struct SMgrRelationData *srel,
 										  bool permanent);
+extern bool CheckIfPersistenceChanged(void);
 
 #define RelationGetNumberOfBlocks(reln) \
 	RelationGetNumberOfBlocksInFork(reln, MAIN_FORKNUM)

@@ -260,7 +260,7 @@ struct PlannerInfo
 	/*
 	 * top_parent_relid_array is the same length as simple_rel_array and holds
 	 * the top-level parent indexes of the corresponding rels within
-	 * simple_rel_array. The element can be zero if the rel has no parents,
+	 * simple_rel_array. The element can be -1 if the rel has no parents,
 	 * i.e., is itself in a top-level.
 	 */
 	Index	   *top_parent_relid_array pg_node_attr(read_write_ignore);

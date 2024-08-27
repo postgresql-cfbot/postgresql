@@ -133,7 +133,9 @@ setup_simple_rel_arrays(PlannerInfo *root)
 	root->append_rel_array = (AppendRelInfo **)
 		palloc0(size * sizeof(AppendRelInfo *));
 	root->top_parent_relid_array = (Index *)
-		palloc0(size * sizeof(Index));
+		palloc(size * sizeof(Index));
+	MemSet(root->top_parent_relid_array, -1,
+		   sizeof(Index) * size);
 
 	/*
 	 * append_rel_array is filled with any already-existing AppendRelInfos,
@@ -206,7 +208,9 @@ expand_planner_arrays(PlannerInfo *root, int add_size)
 		root->append_rel_array =
 			repalloc0_array(root->append_rel_array, AppendRelInfo *, root->simple_rel_array_size, new_size);
 		root->top_parent_relid_array =
-			repalloc0_array(root->top_parent_relid_array, Index, root->simple_rel_array_size, new_size);
+			repalloc_array(root->top_parent_relid_array, Index, new_size);
+		MemSet(root->top_parent_relid_array + root->simple_rel_array_size, -1,
+			   sizeof(Index) * add_size);
 	}
 	else
 	{
@@ -1608,7 +1612,7 @@ find_relids_top_parents_slow(PlannerInfo *root, Relids relids)
 	{
 		int			top_parent_relid = (int) top_parent_relid_array[i];
 
-		if (top_parent_relid == 0)
+		if (top_parent_relid == -1)
 			top_parent_relid = i;	/* 'i' has no parents, so add itself */
 		else if (top_parent_relid != i)
 			is_top_parent = false;

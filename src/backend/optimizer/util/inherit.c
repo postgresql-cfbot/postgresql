@@ -582,9 +582,13 @@ expand_single_inheritance_child(PlannerInfo *root, RangeTblEntry *parentrte,
 	 * Find a top parent rel's index and save it to top_parent_relid_array.
 	 */
 	if (root->top_parent_relid_array == NULL)
+	{
 		root->top_parent_relid_array =
-			(Index *) palloc0(root->simple_rel_array_size * sizeof(Index));
-	Assert(root->top_parent_relid_array[childRTindex] == 0);
+			(Index *) palloc(root->simple_rel_array_size * sizeof(Index));
+		MemSet(root->top_parent_relid_array, -1,
+			   sizeof(Index) * root->simple_rel_array_size);
+	}
+	Assert(root->top_parent_relid_array[childRTindex] == -1);
 	topParentRTindex = parentRTindex;
 	while (root->append_rel_array[topParentRTindex] != NULL &&
 		   root->append_rel_array[topParentRTindex]->parent_relid != 0)

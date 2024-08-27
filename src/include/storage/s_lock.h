@@ -710,12 +710,6 @@ extern int	tas(volatile slock_t *lock);		/* in port/.../tas.s, or
  */
 extern int s_lock(volatile slock_t *lock, const char *file, int line, const char *func);
 
-/* Support for dynamic adjustment of spins_per_delay */
-#define DEFAULT_SPINS_PER_DELAY  100
-
-extern void set_spins_per_delay(int shared_spins_per_delay);
-extern int	update_spins_per_delay(int shared_spins_per_delay);
-
 /*
  * Support for spin delay which is useful in various places where
  * spinlock-like procedures take place.
@@ -744,6 +738,5 @@ init_spin_delay(SpinDelayStatus *status,
 
 #define init_local_spin_delay(status) init_spin_delay(status, __FILE__, __LINE__, __func__)
 extern void perform_spin_delay(SpinDelayStatus *status);
-extern void finish_spin_delay(SpinDelayStatus *status);
 
 #endif	 /* S_LOCK_H */

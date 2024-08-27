@@ -100,8 +100,8 @@ max_prepared_transactions = 2
 
 	# Check if SET LOGGED didn't change relfilenumbers and data survive a crash
 	my $relfilenodes3 = getrelfilenodes($node, \@relnames);
-	ok (!checkrelfilenodes($relfilenodes2, $relfilenodes3),
-		"crashed SET-LOGGED relations have sane relfilenodes transition");
+	ok (checkrelfilenodes($relfilenodes2, $relfilenodes3),
+	   "crashed SET-LOGGED relations have sane relfilenodes transition");
 
 	is ($node->safe_psql('postgres', "SELECT count(*) FROM t;"), 2000,
 		"crashed SET-LOGGED table does not lose data");
@@ -147,34 +147,35 @@ max_prepared_transactions = 2
 		"storages are reverted to logged state");
 
 	### Subtransactions
-	ok ($node->psql('postgres',
+	my ($ret, $stdout, $stderr) =
+	  $node->psql('postgres',
 				qq(
 				BEGIN;
 				ALTER TABLE t SET UNLOGGED;	-- committed
 				SAVEPOINT a;
-				ALTER TABLE t SET LOGGED;   -- aborted
+				ALTER TABLE t SET LOGGED;   -- ERROR
 				SAVEPOINT b;
 				ROLLBACK TO a;
 				COMMIT;
-				)) != 3,
-	   "command succeeds 1");
-
-	is ($node->safe_psql('postgres', "SELECT count(*) FROM t;"), 2000,
-	   "table data is not changed 1");
-	ok (check_storage_state(\&is_unlogged_state, $node, \@relnames),
-		"storages are changed to unlogged state");
+				));
+	ok ($stderr =~ m/persistence of this relation has been already changed/,
+		"errors out when double flip occured in a single transaction");
+	ok (check_storage_state(\&is_logged_state, $node, \@relnames),
+		"storages stay in logged state");
 
 	ok ($node->psql('postgres',
 				qq(
+				ALTER TABLE t SET UNLOGGED;
 				BEGIN;
-				ALTER TABLE t SET LOGGED;	-- aborted
 				SAVEPOINT a;
-				ALTER TABLE t SET UNLOGGED;   -- aborted
-				SAVEPOINT b;
+				ALTER TABLE t SET LOGGED;	-- aborted
+				ROLLBACK TO a;
+				SAVEPOINT a;
+				ALTER TABLE t SET LOGGED;   -- no error
 				RELEASE a;
 				ROLLBACK;
 				)) != 3,
-		"command succeeds 2");
+		"rolled-back persistence flip doesn't prevent subsequent flips");
 
 	is ($node->safe_psql('postgres', "SELECT count(*) FROM t;"), 2000,
 		"table data is not changed 2");
@@ -182,7 +183,7 @@ max_prepared_transactions = 2
 		"storages stay in unlogged state");
 
 	### Prepared transactions
-	my ($ret, $stdout, $stderr) =
+	($ret, $stdout, $stderr) =
 	  $node->psql('postgres',
 				  qq(
 					ALTER TABLE t SET LOGGED;
@@ -208,16 +209,17 @@ max_prepared_transactions = 2
 	ok ($stderr =~ m/cannot prepare transaction if persistence change/,
 		"errors out when persistence-flipped xact is prepared 2");
 	ok (check_storage_state(\&is_logged_state, $node, \@relnames),
-		"storages stay in logged state");
+		"storages stay in logged state 2");
 
 	### Error out DML
-	$node->psql('postgres',
+	ok($node->psql('postgres',
 				qq(
 					BEGIN;
-				  	ALTER TABLE t SET LOGGED;
+				  	ALTER TABLE t SET LOGGED;  -- no effect
 				  	INSERT INTO t VALUES(1); -- Succeeds
 				  	COMMIT;
-		  		  	));
+		  		  	)) != 3,
+	   "ineffective persistence change doesn't prevent DML");
 
 	($ret, $stdout, $stderr) =
 	  $node->psql('postgres',
@@ -233,7 +235,7 @@ max_prepared_transactions = 2
 				qq(
 				BEGIN;
 				SAVEPOINT a;
-	  			ALTER TABLE t SET UNLOGGED;
+				ALTER TABLE t SET LOGGED;
 				ROLLBACK TO a;
 				INSERT INTO t VALUES(3); -- Succeeds
 				COMMIT;
@@ -243,6 +245,7 @@ max_prepared_transactions = 2
 	($ret, $stdout, $stderr) =
 	  $node->psql('postgres',
 				  qq(
+				  ALTER TABLE t SET LOGGED;
 				  BEGIN;
 				  SAVEPOINT a;
 				  ALTER TABLE t SET UNLOGGED;

@@ -5804,9 +5804,6 @@ RelationChangePersistence(AlteredTableInfo *tab, char persistence,
 			continue;
 		}
 
-		/* Currently, only allowing changes to UNLOGGED. */
-		Assert(!persistent);
-
 		RelationAssumePersistenceChange(r);
 
 		/* switch buffer persistence */
@@ -5814,11 +5811,22 @@ RelationChangePersistence(AlteredTableInfo *tab, char persistence,
 		log_smgrbufpersistence(srel->smgr_rlocator.locator, persistent);
 		SetRelationBuffersPersistence(srel, persistent);
 
-		/* then create the init fork */
-		is_index = (r->rd_rel->relkind == RELKIND_INDEX);
-		RelationCreateFork(srel, INIT_FORKNUM, !is_index, true);
-		if (is_index)
-			r->rd_indam->ambuildempty(r);
+		/* then create or drop the init fork */
+		if (persistent)
+			RelationDropInitFork(srel);
+		else
+		{
+			is_index = (r->rd_rel->relkind == RELKIND_INDEX);
+
+			/*
+			 * If it is an index, have access methods initialize the file. In
+			 * that case, WAL-logging is expected to performed by the
+			 * ambuildempty() method.
+			 */
+			RelationCreateFork(srel, INIT_FORKNUM, !is_index, true);
+			if (is_index)
+				r->rd_indam->ambuildempty(r);
+		}
 
 		/* Update catalog */
 		tuple = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(reloid));
@@ -5977,8 +5985,7 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 										 tab->relid,
 										 tab->rewrite);
 
-			if (tab->rewrite == AT_REWRITE_ALTER_PERSISTENCE &&
-				persistence == RELPERSISTENCE_UNLOGGED)
+			if (tab->rewrite == AT_REWRITE_ALTER_PERSISTENCE)
 			{
 				/* Make in-place persistence change. */
 				RelationChangePersistence(tab, persistence, lockmode);

@@ -422,8 +422,6 @@ typedef struct PROC_HDR
 	Latch	   *walwriterLatch;
 	/* Checkpointer process's latch */
 	Latch	   *checkpointerLatch;
-	/* Current shared estimate of appropriate spins_per_delay value */
-	int			spins_per_delay;
 	/* Buffer id of the buffer that Startup process waits for pin on, or -1 */
 	int			startupBufferPinWaitBufId;
 } PROC_HDR;

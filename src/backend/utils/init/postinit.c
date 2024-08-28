@@ -592,7 +592,7 @@ BaseInit(void)
 	/* Do local initialization of storage and buffer managers */
 	InitSync();
 	smgrinit();
-	InitBufferPoolAccess();
+	InitBufferManagerAccess();
 
 	/*
 	 * Initialize temporary file access after pgstat, so that the temporary
@@ -605,6 +605,9 @@ BaseInit(void)
 	 * try to insert XLOG.
 	 */
 	InitXLogInsert();
+
+	/* Initialize lock manager's local structs */
+	InitLockManagerAccess();
 
 	/*
 	 * Initialize replication slots after pgstat. The exit hook might need to

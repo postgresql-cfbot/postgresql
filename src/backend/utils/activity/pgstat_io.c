@@ -170,6 +170,12 @@ pgstat_fetch_my_stat_io(void)
 	return &pgStatLocal.snapshot.my_io;
 }
 
+PgStat_Backend_IO *
+pgstat_fetch_proc_stat_io(ProcNumber procNumber)
+{
+	return &pgStatLocal.shmem->io.stat[procNumber];
+}
+
 /*
  * Check if there any IO stats waiting for flush.
  */

@@ -572,6 +572,7 @@ extern void pgstat_count_io_op_time(IOObject io_object, IOContext io_context,
 
 extern PgStat_IO *pgstat_fetch_global_stat_io(void);
 extern PgStat_Backend_IO *pgstat_fetch_my_stat_io(void);
+extern PgStat_Backend_IO *pgstat_fetch_proc_stat_io(ProcNumber procNumber);
 extern const char *pgstat_get_io_context_name(IOContext io_context);
 extern const char *pgstat_get_io_object_name(IOObject io_object);
 

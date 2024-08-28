@@ -1582,6 +1582,126 @@ pg_stat_get_my_io(PG_FUNCTION_ARGS)
 	return (Datum) 0;
 }
 
+Datum
+pg_stat_get_backend_io(PG_FUNCTION_ARGS)
+{
+	ReturnSetInfo *rsinfo;
+	PgStat_Backend_IO *backend_io_stats;
+	Datum		reset_time;
+	ProcNumber	procNumber;
+	PGPROC	   *proc;
+	BackendType bktype;
+	Datum		bktype_desc;
+	PgStat_BktypeIO *bktype_stats;
+
+	int			backend_pid = PG_GETARG_INT32(0);
+
+	rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	InitMaterializedSRF(fcinfo, 0);
+
+	proc = BackendPidGetProc(backend_pid);
+
+	/* Maybe an auxiliary process? */
+	if (proc == NULL)
+		proc = AuxiliaryPidGetProc(backend_pid);
+
+	/* This backend_pid does not exist */
+	if (proc != NULL)
+	{
+		procNumber = GetNumberFromPGProc(proc);
+		backend_io_stats = pgstat_fetch_proc_stat_io(procNumber);
+		bktype = backend_io_stats->bktype;
+		reset_time = TimestampTzGetDatum(backend_io_stats->stat_reset_timestamp);
+
+		bktype_desc = CStringGetTextDatum(GetBackendTypeDesc(bktype));
+		bktype_stats = &backend_io_stats->stats;
+
+		/*
+		 * In Assert builds, we can afford an extra loop through all of the
+		 * counters checking that only expected stats are non-zero, since it
+		 * keeps the non-Assert code cleaner.
+		 */
+		Assert(pgstat_bktype_io_stats_valid(bktype_stats, bktype));
+
+		for (int io_obj = 0; io_obj < IOOBJECT_NUM_TYPES; io_obj++)
+		{
+			const char *obj_name = pgstat_get_io_object_name(io_obj);
+
+			for (int io_context = 0; io_context < IOCONTEXT_NUM_TYPES; io_context++)
+			{
+				const char *context_name = pgstat_get_io_context_name(io_context);
+
+				Datum		values[IO_NUM_COLUMNS] = {0};
+				bool		nulls[IO_NUM_COLUMNS] = {0};
+
+				/*
+				 * Some combinations of BackendType, IOObject, and IOContext
+				 * are not valid for any type of IOOp. In such cases, omit the
+				 * entire row from the view.
+				 */
+				if (!pgstat_tracks_io_object(bktype, io_obj, io_context))
+					continue;
+
+				values[IO_COL_BACKEND_TYPE] = bktype_desc;
+				values[IO_COL_CONTEXT] = CStringGetTextDatum(context_name);
+				values[IO_COL_OBJECT] = CStringGetTextDatum(obj_name);
+				if (backend_io_stats->stat_reset_timestamp != 0)
+					values[IO_COL_RESET_TIME] = reset_time;
+				else
+					nulls[IO_COL_RESET_TIME] = true;
+
+				/*
+				 * Hard-code this to the value of BLCKSZ for now. Future
+				 * values could include XLOG_BLCKSZ, once WAL IO is tracked,
+				 * and constant multipliers, once non-block-oriented IO (e.g.
+				 * temporary file IO) is tracked.
+				 */
+				values[IO_COL_CONVERSION] = Int64GetDatum(BLCKSZ);
+
+				for (int io_op = 0; io_op < IOOP_NUM_TYPES; io_op++)
+				{
+					int			op_idx = pgstat_get_io_op_index(io_op);
+					int			time_idx = pgstat_get_io_time_index(io_op);
+
+					/*
+					 * Some combinations of BackendType and IOOp, of IOContext
+					 * and IOOp, and of IOObject and IOOp are not tracked. Set
+					 * these cells in the view NULL.
+					 */
+					if (pgstat_tracks_io_op(bktype, io_obj, io_context, io_op))
+					{
+						PgStat_Counter count =
+							bktype_stats->counts[io_obj][io_context][io_op];
+
+						values[op_idx] = Int64GetDatum(count);
+					}
+					else
+						nulls[op_idx] = true;
+
+					/* not every operation is timed */
+					if (time_idx == IO_COL_INVALID)
+						continue;
+
+					if (!nulls[op_idx])
+					{
+						PgStat_Counter time =
+							bktype_stats->times[io_obj][io_context][io_op];
+
+						values[time_idx] = Float8GetDatum(pg_stat_us_to_ms(time));
+					}
+					else
+						nulls[time_idx] = true;
+				}
+
+				tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc,
+									 values, nulls);
+			}
+		}
+	}
+
+	return (Datum) 0;
+}
+
 /*
  * Returns statistics of WAL activity
  */

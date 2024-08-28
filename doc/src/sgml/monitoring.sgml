@@ -4803,6 +4803,24 @@ description | Waiting for a newly initialized WAL file to reach durable storage
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>pg_stat_get_backend_io</primary>
+        </indexterm>
+        <function>pg_stat_get_backend_io</function> ( <type>integer</type> )
+        <returnvalue>setof record</returnvalue>
+       </para>
+       <para>
+        Returns I/O statistics about the backend with the specified
+        process ID. The output fields are exactly the same as the ones in the
+        <link linkend="monitoring-pg-stat-io-view"> <structname>pg_stat_io</structname></link>
+        view. This function behaves as if <varname>stats_fetch_consistency</varname>
+        is set to <literal>none</literal> (means each execution re-fetches
+        counters from shared memory).
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>pg_stat_get_activity</primary>
         </indexterm>
         <function>pg_stat_get_activity</function> ( <type>integer</type> )

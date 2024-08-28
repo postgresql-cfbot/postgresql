@@ -348,16 +348,29 @@ numericfail		{decinteger}\.\.
 real			({decinteger}|{numeric})[Ee][-+]?{decinteger}
 realfail		({decinteger}|{numeric})[Ee][-+]
 
-decinteger_junk	{decinteger}{ident_start}
-hexinteger_junk	{hexinteger}{ident_start}
-octinteger_junk	{octinteger}{ident_start}
-bininteger_junk	{bininteger}{ident_start}
-numeric_junk	{numeric}{ident_start}
-real_junk		{real}{ident_start}
-
 /* Positional parameters don't accept underscores. */
 param			\${decdigit}+
-param_junk		\${decdigit}+{ident_start}
+
+/*
+ * An identifier immediately following a numeric literal is disallowed because
+ * in some cases it's ambiguous what is meant: for example, 0x1234 could be
+ * either a hexinteger or a decinteger "0" and an identifier "x1234".  We can
+ * detect such problems by seeing if integer_junk matches a longer substring
+ * than any of the XXXinteger patterns (decinteger, hexinteger, octinteger,
+ * and bininteger). One "junk" pattern is sufficient because
+ * {decinteger}{identifier} will match all the same strings we'd match with
+ * {hexinteger}{identifier} etc.
+ *
+ * Note that the rule for integer_junk must appear after the ones for
+ * XXXinteger to make this work correctly.
+ *
+ * Also disallow strings matched by numeric_junk, real_junk and param_junk for
+ * consistency.
+ */
+integer_junk	{decinteger}{identifier}
+numeric_junk	{numeric}{identifier}
+real_junk		{real}{identifier}
+param_junk		\${decdigit}+{identifier}
 
 /* psql-specific: characters allowed in variable names */
 variable_char	[A-Za-z\200-\377_0-9]
@@ -898,16 +911,7 @@ other			.
 {realfail}		{
 					ECHO;
 				}
-{decinteger_junk}	{
-					ECHO;
-				}
-{hexinteger_junk}	{
-					ECHO;
-				}
-{octinteger_junk}	{
-					ECHO;
-				}
-{bininteger_junk}	{
+{integer_junk}	{
 					ECHO;
 				}
 {numeric_junk}	{

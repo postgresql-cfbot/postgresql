@@ -611,12 +611,18 @@ SELECT sum(extends) AS io_sum_shared_before_extends
   FROM pg_stat_io WHERE context = 'normal' AND object = 'relation' \gset
 SELECT sum(extends) AS my_io_sum_shared_before_extends
   FROM pg_my_stat_io WHERE context = 'normal' AND object = 'relation' \gset
+SELECT sum(extends) AS backend_io_sum_shared_before_extends
+  FROM pg_stat_get_backend_io(pg_backend_pid())
+  WHERE context = 'normal' AND object = 'relation' \gset
 SELECT sum(writes) AS writes, sum(fsyncs) AS fsyncs
   FROM pg_stat_io
   WHERE object = 'relation' \gset io_sum_shared_before_
 SELECT sum(writes) AS writes, sum(fsyncs) AS fsyncs
   FROM pg_my_stat_io
   WHERE object = 'relation' \gset my_io_sum_shared_before_
+SELECT sum(writes) AS writes, sum(fsyncs) AS fsyncs
+  FROM pg_stat_get_backend_io(pg_backend_pid())
+  WHERE object = 'relation' \gset backend_io_sum_shared_before_
 CREATE TABLE test_io_shared(a int);
 INSERT INTO test_io_shared SELECT i FROM generate_series(1,100)i;
 SELECT pg_stat_force_next_flush();
@@ -626,6 +632,10 @@ SELECT :io_sum_shared_after_extends > :io_sum_shared_before_extends;
 SELECT sum(extends) AS my_io_sum_shared_after_extends
   FROM pg_my_stat_io WHERE context = 'normal' AND object = 'relation' \gset
 SELECT :my_io_sum_shared_after_extends > :my_io_sum_shared_before_extends;
+SELECT sum(extends) AS backend_io_sum_shared_after_extends
+  FROM pg_stat_get_backend_io(pg_backend_pid())
+  WHERE context = 'normal' AND object = 'relation' \gset
+SELECT :backend_io_sum_shared_after_extends > :backend_io_sum_shared_before_extends;
 
 -- After a checkpoint, there should be some additional IOCONTEXT_NORMAL writes
 -- and fsyncs in the global stats (not for the backend).
@@ -778,6 +788,8 @@ SELECT sum(evictions) + sum(reuses) + sum(extends) + sum(fsyncs) + sum(reads) + 
   FROM pg_stat_io \gset
 SELECT sum(evictions) + sum(reuses) + sum(extends) + sum(fsyncs) + sum(reads) + sum(writes) + sum(writebacks) + sum(hits) AS my_io_stats_pre_reset
   FROM pg_my_stat_io \gset
+SELECT sum(evictions) + sum(reuses) + sum(extends) + sum(fsyncs) + sum(reads) + sum(writes) + sum(writebacks) + sum(hits) AS backend_io_stats_pre_reset
+  FROM pg_stat_get_backend_io(pg_backend_pid()) \gset
 SELECT pg_stat_reset_shared('io');
 SELECT sum(evictions) + sum(reuses) + sum(extends) + sum(fsyncs) + sum(reads) + sum(writes) + sum(writebacks) + sum(hits) AS io_stats_post_reset
   FROM pg_stat_io \gset
@@ -785,7 +797,9 @@ SELECT :io_stats_post_reset < :io_stats_pre_reset;
 SELECT sum(evictions) + sum(reuses) + sum(extends) + sum(fsyncs) + sum(reads) + sum(writes) + sum(writebacks) + sum(hits) AS my_io_stats_post_reset
   FROM pg_my_stat_io \gset
 SELECT :my_io_stats_post_reset < :my_io_stats_pre_reset;
-
+SELECT sum(evictions) + sum(reuses) + sum(extends) + sum(fsyncs) + sum(reads) + sum(writes) + sum(writebacks) + sum(hits) AS backend_io_stats_post_reset
+  FROM pg_stat_get_backend_io(pg_backend_pid()) \gset
+SELECT :backend_io_stats_post_reset < :backend_io_stats_pre_reset;
 
 -- test BRIN index doesn't block HOT update
 CREATE TABLE brin_hot (

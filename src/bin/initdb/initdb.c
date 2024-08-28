@@ -2132,18 +2132,42 @@ locale_date_order(const char *locale)
 static void
 check_locale_name(int category, const char *locale, char **canonname)
 {
+#ifdef WIN32
+	wchar_t    *save;
+#else
 	char	   *save;
+#endif
 	char	   *res;
+
+	/* Don't let Windows' non-ASCII locales names in. */
+	if (locale && !pg_is_ascii(locale))
+		pg_fatal("locale name \"%s\" contains non-ASCII characters", locale);
 
 	if (canonname)
 		*canonname = NULL;		/* in case of failure */
 
+	/*
+	 * We can't save-and-restore Windows' non-ASCII locales safely unless we
+	 * use the wchar_t variant, because the locale we switch to might change
+	 * the expected encoding of "save" when we restore.
+	 */
+#ifdef WIN32
+	save = _wsetlocale(category, NULL);
+	if (!save)
+		pg_fatal("_wsetlocale() failed");
+
+	/* save may be pointing at a modifiable scratch variable, so copy it. */
+	save = wcsdup(save);
+	if (save == NULL)
+		pg_fatal("out of memory");
+#else
 	save = setlocale(category, NULL);
 	if (!save)
-		pg_fatal("setlocale() failed");
+		pg_fatal("wsetlocale() failed");
 
 	/* save may be pointing at a modifiable scratch variable, so copy it. */
 	save = pg_strdup(save);
+#endif
 
 	/* for setlocale() call */
 	if (!locale)
@@ -2157,8 +2181,13 @@ check_locale_name(int category, const char *locale, char **canonname)
 		*canonname = pg_strdup(res);
 
 	/* restore old value. */
+#ifdef WIN32
+	if (!_wsetlocale(category, NULL))
+		pg_fatal("failed to restore old locale");
+#else
 	if (!setlocale(category, save))
 		pg_fatal("failed to restore old locale \"%s\"", save);
+#endif
 	free(save);
 
 	/* complain if locale wasn't valid */
@@ -2183,6 +2212,13 @@ check_locale_name(int category, const char *locale, char **canonname)
 			pg_fatal("invalid locale settings; check LANG and LC_* environment variables");
 		}
 	}
+
+	/*
+	 * Don't let Windows' non-ASCII locales out, in the unlikely event that an
+	 * ASCII input name was canonicalized to a non-ASCII name.
+	 */
+	if (canonname && !pg_is_ascii(*canonname))
+		pg_fatal("locale name \"%s\" contains non-ASCII characters", locale);
 }
 
 /*

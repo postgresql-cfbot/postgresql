@@ -20323,6 +20323,179 @@ moveSplitTableRows(Relation rel, Relation splitRel, List *partlist, List *newPar
 	}
 }
 
+
+/*
+ * getAttributesList: return list of columns (ColumnDef) like model table
+ * (modelRel)
+ */
+static List *
+getAttributesList(Relation modelRel)
+{
+	AttrNumber	parent_attno;
+	TupleDesc	modelDesc;
+	List	   *colList = NIL;
+
+	modelDesc = RelationGetDescr(modelRel);
+
+	for (parent_attno = 1; parent_attno <= modelDesc->natts;
+		 parent_attno++)
+	{
+		Form_pg_attribute attribute = TupleDescAttr(modelDesc,
+													parent_attno - 1);
+		ColumnDef  *def;
+
+		/* Ignore dropped columns in the parent. */
+		if (attribute->attisdropped)
+			continue;
+
+		def = makeColumnDef(NameStr(attribute->attname), attribute->atttypid,
+							attribute->atttypmod, attribute->attcollation);
+
+		def->is_not_null = attribute->attnotnull;
+
+		/* Add to column list */
+		colList = lappend(colList, def);
+
+		/*
+		 * Although we don't transfer the column's default/generation
+		 * expression now, we need to mark it GENERATED if appropriate.
+		 */
+		if (attribute->atthasdef && attribute->attgenerated)
+			def->generated = attribute->attgenerated;
+
+		def->storage = attribute->attstorage;
+
+		/* Likewise, copy compression if requested */
+		if (CompressionMethodIsValid(attribute->attcompression))
+			def->compression =
+				pstrdup(GetCompressionMethodName(attribute->attcompression));
+		else
+			def->compression = NULL;
+	}
+
+	return colList;
+}
+
+
+/*
+ * createTableConstraints: create constraints, default values and generated
+ * values (prototype is function expandTableLikeClause).
+ */
+static void
+createTableConstraints(Relation modelRel, Relation newRel)
+{
+	TupleDesc	tupleDesc;
+	TupleConstr *constr;
+	AttrMap    *attmap;
+	AttrNumber	parent_attno;
+	int			ccnum;
+
+	tupleDesc = RelationGetDescr(modelRel);
+	constr = tupleDesc->constr;
+
+	if (!constr)
+		return;
+
+	/*
+	 * Construct a map from the LIKE relation's attnos to the child rel's.
+	 * This re-checks type match etc, although it shouldn't be possible to
+	 * have a failure since both tables are locked.
+	 */
+	attmap = build_attrmap_by_name(RelationGetDescr(newRel),
+								   tupleDesc,
+								   false);
+
+	/* Cycle for default values. */
+	for (parent_attno = 1; parent_attno <= tupleDesc->natts; parent_attno++)
+	{
+		Form_pg_attribute attribute = TupleDescAttr(tupleDesc,
+													parent_attno - 1);
+
+		/* Ignore dropped columns in the parent. */
+		if (attribute->attisdropped)
+			continue;
+
+		/* Copy default, if present and it should be copied. */
+		if (attribute->atthasdef)
+		{
+			Node	   *this_default = NULL;
+			AttrDefault *attrdef = constr->defval;
+			bool		found_whole_row;
+			int16		num;
+			Node	   *def;
+
+			/* Find default in constraint structure */
+			for (int i = 0; i < constr->num_defval; i++)
+			{
+				if (attrdef[i].adnum == parent_attno)
+				{
+					this_default = stringToNode(attrdef[i].adbin);
+					break;
+				}
+			}
+			if (this_default == NULL)
+				elog(ERROR, "default expression not found for attribute %d of relation \"%s\"",
+					 parent_attno, RelationGetRelationName(modelRel));
+
+			num = attmap->attnums[parent_attno - 1];
+			def = map_variable_attnos(this_default, 1, 0, attmap, InvalidOid, &found_whole_row);
+
+			/*
+			 * Prevent this for the same reason as for constraints below. Note
+			 * that defaults cannot contain any vars, so it's OK that the
+			 * error message refers to generated columns.
+			 */
+			if (found_whole_row)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("cannot convert whole-row table reference"),
+						 errdetail("Generation expression for column \"%s\" contains a whole-row reference to table \"%s\".",
+								   NameStr(attribute->attname),
+								   RelationGetRelationName(modelRel))));
+
+			/* Add a pre-cooked default expression. */
+			(void) StoreAttrDefault(newRel, num, def, true, false);
+		}
+	}
+
+	/* Cycle for CHECK constraints. */
+	for (ccnum = 0; ccnum < constr->num_check; ccnum++)
+	{
+		char	   *ccname = constr->check[ccnum].ccname;
+		char	   *ccbin = constr->check[ccnum].ccbin;
+		bool		ccnoinherit = constr->check[ccnum].ccnoinherit;
+		Node	   *ccbin_node;
+		bool		found_whole_row;
+
+		ccbin_node = map_variable_attnos(stringToNode(ccbin),
+										 1, 0,
+										 attmap,
+										 InvalidOid, &found_whole_row);
+
+		/*
+		 * We reject whole-row variables because the whole point of LIKE is
+		 * that the new table's rowtype might later diverge from the parent's.
+		 * So, while translation might be possible right now, it wouldn't be
+		 * possible to guarantee it would work in future.
+		 */
+		if (found_whole_row)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot convert whole-row table reference"),
+					 errdetail("Constraint \"%s\" contains a whole-row reference to table \"%s\".",
+							   ccname,
+							   RelationGetRelationName(modelRel))));
+
+		/* We can skip validation, since the new table should be empty. */
+		(void) StoreRelCheck(newRel, ccname, ccbin_node, true, true,
+							 0, ccnoinherit, false);
+	}
+
+	/* Update the count of constraints in the relation's pg_class tuple. */
+	SetRelationNumChecks(newRel, constr->num_check);
+}
+
+
 /*
  * createPartitionTable: create table for a new partition with given name
  * (newPartName) like table (modelRel)
@@ -20337,13 +20510,14 @@ moveSplitTableRows(Relation rel, Relation splitRel, List *partlist, List *newPar
  * Function returns the created relation (locked in AccessExclusiveLock mode).
  */
 static Relation
-createPartitionTable(RangeVar *newPartName, Relation modelRel,
-					 AlterTableUtilityContext *context)
+createPartitionTable(RangeVar *newPartName, Relation modelRel)
 {
-	CreateStmt *createStmt;
-	TableLikeClause *tlc;
-	PlannedStmt *wrapper;
 	Relation	newRel;
+	Oid			newRelId;
+	TupleDesc	descriptor;
+	List	   *colList = NIL;
+	Oid			relamId;
+	Oid			namespaceId;
 
 	/* If existing rel is temp, it must belong to this session */
 	if (modelRel->rd_rel->relpersistence == RELPERSISTENCE_TEMP &&
@@ -20352,56 +20526,53 @@ createPartitionTable(RangeVar *newPartName, Relation modelRel,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("cannot create as partition of temporary relation of another session")));
 
-	/* New partition should have the same persistence as modelRel */
-	newPartName->relpersistence = modelRel->rd_rel->relpersistence;
+	/* Look up inheritance ancestors and generate relation schema. */
+	colList = getAttributesList(modelRel);
 
-	createStmt = makeNode(CreateStmt);
-	createStmt->relation = newPartName;
-	createStmt->tableElts = NIL;
-	createStmt->inhRelations = NIL;
-	createStmt->constraints = NIL;
-	createStmt->options = NIL;
-	createStmt->oncommit = ONCOMMIT_NOOP;
-	createStmt->tablespacename = get_tablespace_name(modelRel->rd_rel->reltablespace);
-	createStmt->if_not_exists = false;
-	createStmt->accessMethod = get_am_name(modelRel->rd_rel->relam);
+	/* Create a tuple descriptor from the relation schema. */
+	descriptor = BuildDescForRelation(colList);
 
-	tlc = makeNode(TableLikeClause);
-	tlc->relation = makeRangeVar(get_namespace_name(RelationGetNamespace(modelRel)),
-								 RelationGetRelationName(modelRel), -1);
+	/* Look up the access method for new relation. */
+	relamId = (modelRel->rd_rel->relam != InvalidOid) ? modelRel->rd_rel->relam : HEAP_TABLE_AM_OID;
+
+	/* Look up the namespace in which we are supposed to create the relation. */
+	namespaceId =
+		RangeVarGetAndCheckCreationNamespace(newPartName, NoLock, NULL);
+
+	/* Create the relation. */
+	newRelId = heap_create_with_catalog(newPartName->relname,
+										namespaceId,
+										modelRel->rd_rel->reltablespace,
+										InvalidOid,
+										InvalidOid,
+										InvalidOid,
+										GetUserId(),
+										relamId,
+										descriptor,
+										NIL,
+										RELKIND_RELATION,
+										newPartName->relpersistence,
+										false,
+										false,
+										ONCOMMIT_NOOP,
+										(Datum) 0,
+										true,
+										allowSystemTableMods,
+										false,
+										InvalidOid,
+										NULL);
 
 	/*
-	 * Indexes will be inherited on "attach new partitions" stage, after data
-	 * moving.  We also don't copy the extended statistics for consistency
-	 * with CREATE TABLE PARTITION OF.
+	 * We must bump the command counter to make the newly-created relation
+	 * tuple visible for opening.
 	 */
-	tlc->options = CREATE_TABLE_LIKE_ALL &
-		~(CREATE_TABLE_LIKE_INDEXES | CREATE_TABLE_LIKE_IDENTITY | CREATE_TABLE_LIKE_STATISTICS);
-	tlc->relationOid = InvalidOid;
-	createStmt->tableElts = lappend(createStmt->tableElts, tlc);
-
-	/* Need to make a wrapper PlannedStmt. */
-	wrapper = makeNode(PlannedStmt);
-	wrapper->commandType = CMD_UTILITY;
-	wrapper->canSetTag = false;
-	wrapper->utilityStmt = (Node *) createStmt;
-	wrapper->stmt_location = context->pstmt->stmt_location;
-	wrapper->stmt_len = context->pstmt->stmt_len;
-
-	ProcessUtility(wrapper,
-				   context->queryString,
-				   false,
-				   PROCESS_UTILITY_SUBCOMMAND,
-				   NULL,
-				   NULL,
-				   None_Receiver,
-				   NULL);
+	CommandCounterIncrement();
 
 	/*
 	 * Open the new partition with no lock, because we already have
 	 * AccessExclusiveLock placed there after creation.
 	 */
-	newRel = table_openrv(newPartName, NoLock);
+	newRel = table_open(newRelId, NoLock);
 
 	/*
 	 * We intended to create the partition with the same persistence as the
@@ -20423,6 +20594,9 @@ createPartitionTable(RangeVar *newPartName, Relation modelRel,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("cannot create a permanent relation as partition of temporary relation \"%s\"",
 						RelationGetRelationName(modelRel))));
+
+	/* Create constraints, default values and generated values */
+	createTableConstraints(modelRel, newRel);
 
 	return newRel;
 }
@@ -20521,7 +20695,7 @@ ATExecSplitPartition(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		SinglePartitionSpec *sps = (SinglePartitionSpec *) lfirst(listptr);
 		Relation	newPartRel;
 
-		newPartRel = createPartitionTable(sps->name, rel, context);
+		newPartRel = createPartitionTable(sps->name, rel);
 		newPartRels = lappend(newPartRels, newPartRel);
 	}
 
@@ -20765,7 +20939,7 @@ ATExecMergePartitions(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	}
 
 	/* Create table for new partition, use partitioned table as model. */
-	newPartRel = createPartitionTable(cmd->name, rel, context);
+	newPartRel = createPartitionTable(cmd->name, rel);
 
 	/* Copy data from merged partitions to new partition. */
 	moveMergedTablesRows(rel, mergingPartitionsList, newPartRel);

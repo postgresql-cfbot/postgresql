@@ -955,6 +955,27 @@ ALTER TABLE t SPLIT PARTITION tp_0 INTO
    PARTITION tp_1 FOR VALUES FROM (1) TO (2));
 DROP TABLE t;
 
+-- Check defaults and constraints of new partitions
+CREATE TABLE t_bigint (
+  b bigint,
+  i int DEFAULT (3+10),
+  j int DEFAULT 101,
+  k int GENERATED ALWAYS AS (b+10) STORED
+)
+PARTITION BY RANGE (b);
+CREATE TABLE t_bigint_default PARTITION OF t_bigint DEFAULT;
+-- Show defaults/constraints before SPLIT PARTITION
+\d+ t_bigint
+\d+ t_bigint_default
+ALTER TABLE t_bigint SPLIT PARTITION t_bigint_default INTO
+  (PARTITION t_bigint_01_10 FOR VALUES FROM (0) TO (10),
+   PARTITION t_bigint_default DEFAULT);
+-- Show defaults/constraints after SPLIT PARTITION
+\d+ t_bigint_default
+\d+ t_bigint_01_10
+DROP TABLE t_bigint;
+
+
 RESET search_path;
 
 --

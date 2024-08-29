@@ -101,16 +101,12 @@ static ObjectAddress AddNewRelationType(const char *typeName,
 										Oid new_row_type,
 										Oid new_array_type);
 static void RelationRemoveInheritance(Oid relid);
-static Oid	StoreRelCheck(Relation rel, const char *ccname, Node *expr,
-						  bool is_validated, bool is_local, int inhcount,
-						  bool is_no_inherit, bool is_internal);
 static void StoreConstraints(Relation rel, List *cooked_constraints,
 							 bool is_internal);
 static bool MergeWithExistingConstraint(Relation rel, const char *ccname, Node *expr,
 										bool allow_merge, bool is_local,
 										bool is_initially_valid,
 										bool is_no_inherit);
-static void SetRelationNumChecks(Relation rel, int numchecks);
 static Node *cookConstraint(ParseState *pstate,
 							Node *raw_constraint,
 							char *relname);
@@ -2070,7 +2066,7 @@ SetAttrMissing(Oid relid, char *attname, char *value)
  *
  * The OID of the new constraint is returned.
  */
-static Oid
+Oid
 StoreRelCheck(Relation rel, const char *ccname, Node *expr,
 			  bool is_validated, bool is_local, int inhcount,
 			  bool is_no_inherit, bool is_internal)
@@ -2657,7 +2653,7 @@ MergeWithExistingConstraint(Relation rel, const char *ccname, Node *expr,
  * relcache entries for the rel.  Also, this backend will rebuild its
  * own relcache entry at the next CommandCounterIncrement.
  */
-static void
+void
 SetRelationNumChecks(Relation rel, int numchecks)
 {
 	Relation	relrel;

@@ -663,6 +663,25 @@ SELECT xmlserialize(CONTENT  '<foo><bar><val x="y">42</val></bar></foo>' AS text
  t
 (1 row)
 
+-- indent xml strings containing blank nodes
+SELECT xmlserialize(DOCUMENT '<foo>   <bar></bar>    </foo>' AS text INDENT);
+ xmlserialize 
+--------------
+ <foo>       +
+   <bar/>    +
+ </foo>      +
+ 
+(1 row)
+
+SELECT xmlserialize(CONTENT  'text node<foo>    <bar></bar>   </foo>' AS text INDENT);
+ xmlserialize 
+--------------
+ text node   +
+ <foo>       +
+   <bar/>    +
+ </foo>
+(1 row)
+
 SELECT xml '<foo>bar</foo>' IS DOCUMENT;
  ?column? 
 ----------

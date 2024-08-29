@@ -677,8 +677,14 @@ xmltotext_with_options(xmltype *data, XmlOptionType xmloption_arg, bool indent)
 	}
 
 #ifdef USE_LIBXML
-	/* Parse the input according to the xmloption */
-	doc = xml_parse(data, xmloption_arg, true, GetDatabaseEncoding(),
+	/*
+	 * Parse the input according to the xmloption
+	 * preserve_whitespace is set to false in case the function should
+	 * return an indented xml, otherwise libxml2 will ignore the elements
+	 * that contain whitespaces between them.
+	 */
+	doc = xml_parse(data, xmloption_arg, !indent ? true : false,
+					GetDatabaseEncoding(),
 					&parsed_xmloptiontype, &content_nodes,
 					(Node *) &escontext);
 	if (doc == NULL || escontext.error_occurred)

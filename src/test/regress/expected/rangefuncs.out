@@ -2169,6 +2169,96 @@ LINE 1: select * from sin(3) as t(f1 int8,f2 int8);
 drop type rngfunc_type cascade;
 NOTICE:  drop cascades to function testrngfunc()
 --
+-- test use of PL/pgSQL functions returning setof record
+--
+create or replace function array_to_set2(anyarray) returns setof record as $$
+  begin
+  return query execute 'select i AS "index", $1[i] AS "value" from generate_subscripts($1, 1) i'
+    using $1;
+  end;
+$$ language plpgsql immutable;
+-- materialize mode requires a result TupleDesc:
+select array_to_set2(array['one', 'two']); -- fail
+ERROR:  materialize mode required, but it is not allowed in this context
+CONTEXT:  PL/pgSQL function array_to_set2(anyarray) line 3 at RETURN QUERY
+select * from array_to_set2(array['one', 'two']) as t(f1 int,f2 text);
+ f1 | f2  
+----+-----
+  1 | one
+  2 | two
+(2 rows)
+
+select * from array_to_set2(array['one', 'two']); -- fail
+ERROR:  a column definition list is required for functions returning "record"
+LINE 1: select * from array_to_set2(array['one', 'two']);
+                      ^
+select * from array_to_set2(array['one', 'two']) as t(f1 numeric(4,2),f2 text); -- fail
+ERROR:  structure of query does not match function result type
+DETAIL:  Returned type integer does not match expected type numeric(4,2) in column 1.
+CONTEXT:  SQL statement "select i AS "index", $1[i] AS "value" from generate_subscripts($1, 1) i"
+PL/pgSQL function array_to_set2(anyarray) line 3 at RETURN QUERY
+select * from array_to_set2(array['one', 'two']) as t(f1 point,f2 text); -- fail
+ERROR:  structure of query does not match function result type
+DETAIL:  Returned type integer does not match expected type point in column 1.
+CONTEXT:  SQL statement "select i AS "index", $1[i] AS "value" from generate_subscripts($1, 1) i"
+PL/pgSQL function array_to_set2(anyarray) line 3 at RETURN QUERY
+explain (verbose, costs off)
+  select * from array_to_set2(array['one', 'two']) as t(f1 int, f2 text);
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Function Scan on public.array_to_set2 t
+   Output: f1, f2
+   Function Call: array_to_set2('{one,two}'::text[])
+(3 rows)
+
+drop function array_to_set2;
+--
+-- test use of PL/pgSQL functions returning table
+--
+create or replace function array_to_set2(anyarray) returns table(index int, value anyelement) as $$
+  begin
+  return query execute 'select i AS "index", $1[i] AS "value" from generate_subscripts($1, 1) i'
+    using $1;
+  end;
+$$ language plpgsql immutable;
+-- materialize mode requires a result TupleDesc:
+select array_to_set2(array['one', 'two']);
+ array_to_set2 
+---------------
+ (1,one)
+ (2,two)
+(2 rows)
+
+select * from array_to_set2(array['one', 'two']) as t(f1 int,f2 text); -- fail
+ERROR:  a column definition list is redundant for a function with OUT parameters
+LINE 1: ...ct * from array_to_set2(array['one', 'two']) as t(f1 int,f2 ...
+                                                             ^
+select * from array_to_set2(array['one', 'two']);
+ index | value 
+-------+-------
+     1 | one
+     2 | two
+(2 rows)
+
+select * from array_to_set2(array['one', 'two']) as t(f1 numeric(4,2),f2 text); -- fail
+ERROR:  a column definition list is redundant for a function with OUT parameters
+LINE 1: ...ct * from array_to_set2(array['one', 'two']) as t(f1 numeric...
+                                                             ^
+select * from array_to_set2(array['one', 'two']) as t(f1 point,f2 text); -- fail
+ERROR:  a column definition list is redundant for a function with OUT parameters
+LINE 1: ...ct * from array_to_set2(array['one', 'two']) as t(f1 point,f...
+                                                             ^
+explain (verbose, costs off)
+  select * from array_to_set2(array['one', 'two']);
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Function Scan on public.array_to_set2
+   Output: index, value
+   Function Call: array_to_set2('{one,two}'::text[])
+(3 rows)
+
+drop function array_to_set2;
+--
 -- Check some cases involving added/dropped columns in a rowtype result
 --
 create temp table users (userid text, seq int, email text, todrop bool, moredrop int, enabled bool);

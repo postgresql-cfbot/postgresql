@@ -6177,7 +6177,7 @@ StartupXLOG(void)
 	 * Wake up all waiters for replay LSN.  They need to report an error that
 	 * recovery was ended before reaching the target LSN.
 	 */
-	WaitLSNSetLatches(InvalidXLogRecPtr);
+	WaitLSNWakeup(InvalidXLogRecPtr);
 
 	/*
 	 * Shutdown the recovery environment.  This must occur after

@@ -43,6 +43,7 @@ CXXFLAGS=${CXXFLAGS:- -fsyntax-only -Wall}
 # Pull some info from configure's results.
 MGLOB="$builddir/src/Makefile.global"
 CPPFLAGS=`sed -n 's/^CPPFLAGS[ 	]*=[ 	]*//p' "$MGLOB"`
+LLVM_CPPFLAGS=`sed -n 's/^LLVM_CPPFLAGS[ 	]*=[ 	]*//p' "$MGLOB"`
 CFLAGS=`sed -n 's/^CFLAGS[ 	]*=[ 	]*//p' "$MGLOB"`
 CC=`sed -n 's/^CC[ 	]*=[ 	]*//p' "$MGLOB"`
 CXX=`sed -n 's/^CXX[ 	]*=[ 	]*//p' "$MGLOB"`
@@ -242,6 +243,8 @@ do
 		EXTRAINCLUDES="$python_includespec" ;;
 	    src/interfaces/ecpg/*)
 		EXTRAINCLUDES="-I $builddir/src/interfaces/ecpg/include -I $srcdir/src/interfaces/ecpg/include" ;;
+	    src/include/jit/*)
+		EXTRAINCLUDES="$LLVM_CPPFLAGS" ;;
 	    src/backend/parser/*)
 		EXTRAINCLUDES="-I $builddir/src/backend/parser/" ;;
 	    src/backend/utils/adt/*)

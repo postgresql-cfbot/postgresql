@@ -29,6 +29,7 @@
 #include "commands/sequence.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
+#include "executor/functions.h"
 #include "executor/spi.h"
 #include "funcapi.h"
 #include "mb/pg_wchar.h"
@@ -39,11 +40,13 @@
 #include "parser/parse_coerce.h"
 #include "port/atomics.h"
 #include "storage/spin.h"
+#include "tcop/tcopprot.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/geo_decls.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+#include "utils/syscache.h"
 #include "utils/typcache.h"
 
 #define EXPECT_TRUE(expr)	\
@@ -986,6 +989,94 @@ test_support_func(PG_FUNCTION_ARGS)
 	}
 
 	PG_RETURN_POINTER(ret);
+}
+
+PG_FUNCTION_INFO_V1(test_inline_srf_support_func);
+Datum
+test_inline_srf_support_func(PG_FUNCTION_ARGS)
+{
+	Node	   *rawreq = (Node *) PG_GETARG_POINTER(0);
+
+	if (IsA(rawreq, SupportRequestInlineSRF))
+	{
+		/*
+		 * Assume that the target is foo_from_bar; that's safe as long
+		 * as we don't attach this to any other set-returning function.
+		 */
+		SupportRequestInlineSRF *req = (SupportRequestInlineSRF *) rawreq;
+		StringInfoData sql;
+		FuncExpr *expr = req->fcall;
+		Node *node;
+		Const *c;
+		char *colname;
+		char *tablename;
+		HeapTuple func_tuple;
+		SQLFunctionParseInfoPtr pinfo;
+		List *raw_parsetree_list;
+		List *querytree_list;
+		Query *querytree;
+
+		if (list_length(expr->args) != 3)
+			ereport(ERROR, (errmsg("test_inline_srf_support_func called with %d args but expected 3", list_length(expr->args))));
+
+		/* Get colname */
+		node = linitial(expr->args);
+		if (!IsA(node, Const))
+			ereport(ERROR, (errmsg("test_inline_srf_support_func called with non-Const parameters")));
+		c = (Const *) node;
+		if (c->consttype != TEXTOID)
+			ereport(ERROR, (errmsg("test_inline_srf_support_func called with non-TEXT parameters")));
+		colname = TextDatumGetCString(c->constvalue);
+
+		/* Get tablename */
+		node = lsecond(expr->args);
+		if (!IsA(node, Const))
+			ereport(ERROR, (errmsg("test_inline_srf_support_func called with non-Const parameters")));
+		c = (Const *) node;
+		if (c->consttype != TEXTOID)
+			ereport(ERROR, (errmsg("test_inline_srf_support_func called with non-TEXT parameters")));
+		tablename = TextDatumGetCString(c->constvalue);
+
+		initStringInfo(&sql);
+		appendStringInfo(&sql, "SELECT %s::text FROM %s", quote_identifier(colname), quote_identifier(tablename));
+
+		/* Get filter if present */
+		node = lthird(expr->args);
+		if (!(IsA(node, Const) && ((Const *) node)->constisnull))
+		{
+			appendStringInfo(&sql, " WHERE %s::text = $3", quote_identifier(colname));
+		}
+
+		func_tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(expr->funcid));
+		if (!HeapTupleIsValid(func_tuple))
+			elog(ERROR, "cache lookup failed for function %u", expr->funcid);
+
+		pinfo = prepare_sql_fn_parse_info(func_tuple,
+										  (Node *) expr,
+										  expr->inputcollid);
+
+		ReleaseSysCache(func_tuple);
+
+		raw_parsetree_list = pg_parse_query(sql.data);
+		if (list_length(raw_parsetree_list) != 1)
+			elog(ERROR, "test_inline_srf_support_func parsed to more than one node");
+
+		querytree_list = pg_analyze_and_rewrite_withcb(
+				linitial(raw_parsetree_list),
+				sql.data,
+				(ParserSetupHook) sql_fn_parser_setup,
+				pinfo, NULL);
+		if (list_length(querytree_list) != 1)
+			elog(ERROR, "test_inline_srf_support_func rewrote to more than one node");
+
+		querytree = linitial(querytree_list);
+		if (!IsA(querytree, Query))
+			ereport(ERROR, (errmsg("test_inline_srf_support_func didn't parse to a Query"),
+							errdetail("Got this instead: %s", nodeToString(querytree))));
+		PG_RETURN_POINTER(querytree);
+	}
+
+	PG_RETURN_POINTER(NULL);
 }
 
 PG_FUNCTION_INFO_V1(test_opclass_options_func);

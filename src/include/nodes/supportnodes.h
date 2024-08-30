@@ -70,6 +70,28 @@ typedef struct SupportRequestSimplify
 } SupportRequestSimplify;
 
 /*
+ * The InlineSRF request allows the support function to perform plan-time
+ * simplification of a call to its target set-returning function. For
+ * example a plpgsql function could build a dynamic SQL query and execute it.
+ * Normally only SQL functions can be inlined, but with this support function
+ * the dynamic query can be inlined as well.
+ *
+ * "fcall" will be a FuncExpr invoking the support function's target
+ * function.
+ *
+ * The result should be a semantically-equivalent transformed node tree,
+ * or NULL if no simplification could be performed.  Do *not* return or
+ * modify *fcall, as it isn't really a separately allocated Node.  But
+ * it's okay to use fcall->args, or parts of it, in the result tree.
+ */
+typedef struct SupportRequestInlineSRF
+{
+	NodeTag		type;
+
+	FuncExpr   *fcall;			/* Function call to be simplified */
+} SupportRequestInlineSRF;
+
+/*
  * The Selectivity request allows the support function to provide a
  * selectivity estimate for a function appearing at top level of a WHERE
  * clause (so it applies only to functions returning boolean).

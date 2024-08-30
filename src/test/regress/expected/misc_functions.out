@@ -595,6 +595,11 @@ CREATE FUNCTION test_support_func(internal)
     RETURNS internal
     AS :'regresslib', 'test_support_func'
     LANGUAGE C STRICT;
+-- With a support function that inlines SRFs
+CREATE FUNCTION test_inline_srf_support_func(internal)
+    RETURNS internal
+    AS :'regresslib', 'test_inline_srf_support_func'
+    LANGUAGE C STRICT;
 ALTER FUNCTION my_int_eq(int, int) SUPPORT test_support_func;
 EXPLAIN (COSTS OFF)
 SELECT * FROM tenk1 a JOIN tenk1 b ON a.unique1 = b.unique1
@@ -706,6 +711,213 @@ false, true, false, true);
 -- the support function.
 SELECT * FROM generate_series(TIMESTAMPTZ '2024-02-01', TIMESTAMPTZ '2024-03-01', INTERVAL '0 day') g(s);
 ERROR:  step size cannot equal zero
+--
+-- Test inlining PL/pgSQL functions
+--
+-- RETURNS SETOF TEXT:
+CREATE OR REPLACE FUNCTION foo_from_bar(colname TEXT, tablename TEXT, filter TEXT)
+RETURNS SETOF TEXT
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+  sql TEXT;
+BEGIN
+  sql := format('SELECT %I::text FROM %I', colname, tablename);
+  IF filter IS NOT NULL THEN
+    sql := CONCAT(sql, format(' WHERE %I::text = $1', colname));
+  END IF;
+  RETURN QUERY EXECUTE sql USING filter;
+END;
+$function$ STABLE LEAKPROOF;
+SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL);
+   foo_from_bar    
+-------------------
+ doh!
+ hi de ho neighbor
+(2 rows)
+
+SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!');
+ foo_from_bar 
+--------------
+ doh!
+(1 row)
+
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL);
+                              QUERY PLAN                              
+----------------------------------------------------------------------
+ Function Scan on foo_from_bar  (cost=0.25..10.25 rows=1000 width=32)
+(1 row)
+
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!');
+                              QUERY PLAN                              
+----------------------------------------------------------------------
+ Function Scan on foo_from_bar  (cost=0.25..10.25 rows=1000 width=32)
+(1 row)
+
+ALTER FUNCTION foo_from_bar(TEXT, TEXT, TEXT) SUPPORT test_inline_srf_support_func;
+SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL);
+   foo_from_bar    
+-------------------
+ doh!
+ hi de ho neighbor
+(2 rows)
+
+SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!');
+ foo_from_bar 
+--------------
+ doh!
+(1 row)
+
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL);
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Seq Scan on text_tbl  (cost=0.00..1.02 rows=2 width=32)
+(1 row)
+
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!');
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Seq Scan on text_tbl  (cost=0.00..1.02 rows=1 width=32)
+   Filter: (f1 = 'doh!'::text)
+(2 rows)
+
+DROP FUNCTION foo_from_bar;
+-- RETURNS SETOF RECORD:
+CREATE OR REPLACE FUNCTION foo_from_bar(colname TEXT, tablename TEXT, filter TEXT)
+RETURNS SETOF RECORD
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+  sql TEXT;
+BEGIN
+  sql := format('SELECT %I::text FROM %I', colname, tablename);
+  IF filter IS NOT NULL THEN
+    sql := CONCAT(sql, format(' WHERE %I::text = $1', colname));
+  END IF;
+  RETURN QUERY EXECUTE sql USING filter;
+END;
+$function$ STABLE LEAKPROOF;
+SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL) AS bar(foo TEXT);
+        foo        
+-------------------
+ doh!
+ hi de ho neighbor
+(2 rows)
+
+SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!') AS bar(foo TEXT);
+ foo  
+------
+ doh!
+(1 row)
+
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL) AS bar(foo TEXT);
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Function Scan on foo_from_bar bar  (cost=0.25..10.25 rows=1000 width=32)
+(1 row)
+
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!') AS bar(foo TEXT);
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Function Scan on foo_from_bar bar  (cost=0.25..10.25 rows=1000 width=32)
+(1 row)
+
+ALTER FUNCTION foo_from_bar(TEXT, TEXT, TEXT) SUPPORT test_inline_srf_support_func;
+SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL) AS bar(foo TEXT);
+        foo        
+-------------------
+ doh!
+ hi de ho neighbor
+(2 rows)
+
+SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!') AS bar(foo TEXT);
+ foo  
+------
+ doh!
+(1 row)
+
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL) AS bar(foo TEXT);
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Seq Scan on text_tbl  (cost=0.00..1.02 rows=2 width=32)
+(1 row)
+
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!') AS bar(foo TEXT);
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Seq Scan on text_tbl  (cost=0.00..1.02 rows=1 width=32)
+   Filter: (f1 = 'doh!'::text)
+(2 rows)
+
+DROP FUNCTION foo_from_bar;
+-- RETURNS TABLE:
+CREATE OR REPLACE FUNCTION foo_from_bar(colname TEXT, tablename TEXT, filter TEXT)
+RETURNS TABLE(foo TEXT)
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+  sql TEXT;
+BEGIN
+  sql := format('SELECT %I::text FROM %I', colname, tablename);
+  IF filter IS NOT NULL THEN
+    sql := CONCAT(sql, format(' WHERE %I::text = $1', colname));
+  END IF;
+  RETURN QUERY EXECUTE sql USING filter;
+END;
+$function$ STABLE LEAKPROOF;
+SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL);
+        foo        
+-------------------
+ doh!
+ hi de ho neighbor
+(2 rows)
+
+SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!');
+ foo  
+------
+ doh!
+(1 row)
+
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL);
+                              QUERY PLAN                              
+----------------------------------------------------------------------
+ Function Scan on foo_from_bar  (cost=0.25..10.25 rows=1000 width=32)
+(1 row)
+
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!');
+                              QUERY PLAN                              
+----------------------------------------------------------------------
+ Function Scan on foo_from_bar  (cost=0.25..10.25 rows=1000 width=32)
+(1 row)
+
+ALTER FUNCTION foo_from_bar(TEXT, TEXT, TEXT) SUPPORT test_inline_srf_support_func;
+SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL);
+        foo        
+-------------------
+ doh!
+ hi de ho neighbor
+(2 rows)
+
+SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!');
+ foo  
+------
+ doh!
+(1 row)
+
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL);
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Seq Scan on text_tbl  (cost=0.00..1.02 rows=2 width=32)
+(1 row)
+
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!');
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Seq Scan on text_tbl  (cost=0.00..1.02 rows=1 width=32)
+   Filter: (f1 = 'doh!'::text)
+(2 rows)
+
+DROP FUNCTION foo_from_bar;
 -- Test functions for control data
 SELECT count(*) > 0 AS ok FROM pg_control_checkpoint();
  ok 

@@ -1,0 +1,5 @@
+# PostgreSQL SNI Hostname mappings
+# ================================
+
+# HOSTNAME       SSL CERTIFICATE             SSL KEY
+

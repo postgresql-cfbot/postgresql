@@ -33,6 +33,13 @@ typedef Oid RelFileNumber;
 #define TABLESPACE_VERSION_DIRECTORY	"PG_" PG_MAJORVERSION "_" \
 									CppAsString2(CATALOG_VERSION_NO)
 
+/*
+ * Don't change the value of those pg_tblspc related macros, as many tools
+ * probably rely on it.
+ */
+#define PG_TBLSPC_DIR "pg_tblspc"
+#define PG_TBLSPC_DIR_SLASH "pg_tblspc/" /* needed for strings manipulations */
+
 /* Characters to allow for an OID in a relation path */
 #define OIDCHARS		10		/* max chars printed by %u */
 

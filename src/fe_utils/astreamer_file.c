@@ -19,6 +19,7 @@
 
 #include "common/file_perm.h"
 #include "common/logging.h"
+#include "common/relpath.h"
 #include "common/string.h"
 #include "fe_utils/astreamer.h"
 
@@ -295,23 +296,25 @@ astreamer_extractor_content(astreamer *streamer, astreamer_member *member,
 static bool
 should_allow_existing_directory(const char *pathname)
 {
+#define PG_TBLSPC_DIR_CONCAT "/" PG_TBLSPC_DIR "/"
 	const char *filename = last_dir_separator(pathname) + 1;
 
 	if (strcmp(filename, "pg_wal") == 0 ||
 		strcmp(filename, "pg_xlog") == 0 ||
 		strcmp(filename, "archive_status") == 0 ||
 		strcmp(filename, "summaries") == 0 ||
-		strcmp(filename, "pg_tblspc") == 0)
+		strcmp(filename, PG_TBLSPC_DIR) == 0)
 		return true;
 
 	if (strspn(filename, "0123456789") == strlen(filename))
 	{
-		const char *pg_tblspc = strstr(pathname, "/pg_tblspc/");
+		const char *pg_tblspc = strstr(pathname, PG_TBLSPC_DIR_CONCAT);
 
 		return pg_tblspc != NULL && pg_tblspc + 11 == filename;
 	}
 
 	return false;
+#undef PG_TBLSPC_DIR_CONCAT
 }
 
 /*

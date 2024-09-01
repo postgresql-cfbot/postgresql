@@ -6,7 +6,6 @@
 #include <limits.h>
 #include <unistd.h>
 
-#include "ecpg-pthread-win32.h"
 #include "ecpgerrno.h"
 #include "ecpglib.h"
 #include "ecpglib_extern.h"
@@ -16,6 +15,7 @@
 #include "pgtypes_interval.h"
 #include "pgtypes_numeric.h"
 #include "pgtypes_timestamp.h"
+#include "port/pg_threads.h"
 #include "sqlca.h"
 
 #ifndef LONG_LONG_MIN
@@ -55,11 +55,10 @@ static struct sqlca_t sqlca_init =
 	}
 };
 
-static pthread_key_t sqlca_key;
-static pthread_once_t sqlca_key_once = PTHREAD_ONCE_INIT;
-
-static pthread_mutex_t debug_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t debug_init_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pg_tss_t sqlca_key;
+static pg_once_flag ecpg_once = PG_ONCE_FLAG_INIT;
+static pg_mtx_t debug_mutex = PG_MTX_STATIC_INIT;
+static pg_mtx_t debug_init_mutex = PG_MTX_STATIC_INIT;
 static volatile int simple_debug = 0;
 static FILE *debugstream = NULL;
 
@@ -99,9 +98,9 @@ ecpg_sqlca_key_destructor(void *arg)
 }
 
 static void
-ecpg_sqlca_key_init(void)
+ecpg_init_once(void)
 {
-	pthread_key_create(&sqlca_key, ecpg_sqlca_key_destructor);
+	pg_tss_create(&sqlca_key, ecpg_sqlca_key_destructor);
 }
 
 struct sqlca_t *
@@ -109,16 +108,16 @@ ECPGget_sqlca(void)
 {
 	struct sqlca_t *sqlca;
 
-	pthread_once(&sqlca_key_once, ecpg_sqlca_key_init);
+	pg_call_once(&ecpg_once, ecpg_init_once);
 
-	sqlca = pthread_getspecific(sqlca_key);
+	sqlca = pg_tss_get(sqlca_key);
 	if (sqlca == NULL)
 	{
 		sqlca = malloc(sizeof(struct sqlca_t));
 		if (sqlca == NULL)
 			return NULL;
 		ecpg_init_sqlca(sqlca);
-		pthread_setspecific(sqlca_key, sqlca);
+		pg_tss_set(sqlca_key, sqlca);
 	}
 	return sqlca;
 }
@@ -204,10 +203,10 @@ void
 ECPGdebug(int n, FILE *dbgs)
 {
 	/* Interlock against concurrent executions of ECPGdebug() */
-	pthread_mutex_lock(&debug_init_mutex);
+	pg_mtx_lock(&debug_init_mutex);
 
 	/* Prevent ecpg_log() from printing while we change settings */
-	pthread_mutex_lock(&debug_mutex);
+	pg_mtx_lock(&debug_mutex);
 
 	if (n > 100)
 	{
@@ -220,12 +219,12 @@ ECPGdebug(int n, FILE *dbgs)
 	debugstream = dbgs;
 
 	/* We must release debug_mutex before invoking ecpg_log() ... */
-	pthread_mutex_unlock(&debug_mutex);
+	pg_mtx_unlock(&debug_mutex);
 
 	/* ... but keep holding debug_init_mutex to avoid racy printout */
 	ecpg_log("ECPGdebug: set to %d\n", simple_debug);
 
-	pthread_mutex_unlock(&debug_init_mutex);
+	pg_mtx_unlock(&debug_init_mutex);
 }
 
 void
@@ -262,7 +261,7 @@ ecpg_log(const char *format,...)
 	else
 		snprintf(fmt, bufsize, "[%d]: %s", (int) getpid(), intl_format);
 
-	pthread_mutex_lock(&debug_mutex);
+	pg_mtx_lock(&debug_mutex);
 
 	/* Now that we hold the mutex, recheck simple_debug */
 	if (simple_debug)
@@ -281,7 +280,7 @@ ecpg_log(const char *format,...)
 		fflush(debugstream);
 	}
 
-	pthread_mutex_unlock(&debug_mutex);
+	pg_mtx_unlock(&debug_mutex);
 
 	free(fmt);
 }
@@ -421,60 +420,6 @@ ECPGis_noind_null(enum ECPGttype type, const void *ptr)
 
 	return false;
 }
-
-#ifdef WIN32
-
-int
-pthread_mutex_init(pthread_mutex_t *mp, void *attr)
-{
-	mp->initstate = 0;
-	return 0;
-}
-
-int
-pthread_mutex_lock(pthread_mutex_t *mp)
-{
-	/* Initialize the csection if not already done */
-	if (mp->initstate != 1)
-	{
-		LONG		istate;
-
-		while ((istate = InterlockedExchange(&mp->initstate, 2)) == 2)
-			Sleep(0);			/* wait, another thread is doing this */
-		if (istate != 1)
-			InitializeCriticalSection(&mp->csection);
-		InterlockedExchange(&mp->initstate, 1);
-	}
-	EnterCriticalSection(&mp->csection);
-	return 0;
-}
-
-int
-pthread_mutex_unlock(pthread_mutex_t *mp)
-{
-	if (mp->initstate != 1)
-		return EINVAL;
-	LeaveCriticalSection(&mp->csection);
-	return 0;
-}
-
-static pthread_mutex_t win32_pthread_once_lock = PTHREAD_MUTEX_INITIALIZER;
-
-void
-win32_pthread_once(volatile pthread_once_t *once, void (*fn) (void))
-{
-	if (!*once)
-	{
-		pthread_mutex_lock(&win32_pthread_once_lock);
-		if (!*once)
-		{
-			fn();
-			*once = true;
-		}
-		pthread_mutex_unlock(&win32_pthread_once_lock);
-	}
-}
-#endif							/* WIN32 */
 
 #ifdef ENABLE_NLS
 

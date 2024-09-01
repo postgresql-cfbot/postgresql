@@ -6,6 +6,7 @@ ecpg_conf_keys = [
   'HAVE_INT64',
   'HAVE_LONG_INT_64',
   'HAVE_LONG_LONG_INT_64',
+  'HAVE_PTHREAD_BARRIER_WAIT',
   'PG_USE_STDBOOL',
 ]
 

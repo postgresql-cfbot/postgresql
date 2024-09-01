@@ -2,8 +2,8 @@
 
 #define POSTGRES_ECPG_INTERNAL
 #include "postgres_fe.h"
+#include "port/pg_threads.h"
 
-#include "ecpg-pthread-win32.h"
 #include "ecpgerrno.h"
 #include "ecpglib.h"
 #include "ecpglib_extern.h"
@@ -14,23 +14,10 @@
 locale_t	ecpg_clocale = (locale_t) 0;
 #endif
 
-static pthread_mutex_t connections_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_key_t actual_connection_key;
-static pthread_once_t actual_connection_key_once = PTHREAD_ONCE_INIT;
+static pg_mtx_t connections_mutex = PG_MTX_STATIC_INIT;
+static pg_thread_local struct connection *actual_connection_this_thread;
 static struct connection *actual_connection = NULL;
 static struct connection *all_connections = NULL;
-
-static void
-ecpg_actual_connection_init(void)
-{
-	pthread_key_create(&actual_connection_key, NULL);
-}
-
-void
-ecpg_pthreads_init(void)
-{
-	pthread_once(&actual_connection_key_once, ecpg_actual_connection_init);
-}
 
 static struct connection *
 ecpg_get_connection_nr(const char *connection_name)
@@ -39,9 +26,7 @@ ecpg_get_connection_nr(const char *connection_name)
 
 	if ((connection_name == NULL) || (strcmp(connection_name, "CURRENT") == 0))
 	{
-		ecpg_pthreads_init();	/* ensure actual_connection_key is valid */
-
-		ret = pthread_getspecific(actual_connection_key);
+		ret = actual_connection_this_thread;
 
 		/*
 		 * if no connection in TSD for this thread, get the global default
@@ -74,9 +59,7 @@ ecpg_get_connection(const char *connection_name)
 
 	if ((connection_name == NULL) || (strcmp(connection_name, "CURRENT") == 0))
 	{
-		ecpg_pthreads_init();	/* ensure actual_connection_key is valid */
-
-		ret = pthread_getspecific(actual_connection_key);
+		ret = actual_connection_this_thread;
 
 		/*
 		 * if no connection in TSD for this thread, get the global default
@@ -89,11 +72,11 @@ ecpg_get_connection(const char *connection_name)
 	}
 	else
 	{
-		pthread_mutex_lock(&connections_mutex);
+		pg_mtx_lock(&connections_mutex);
 
 		ret = ecpg_get_connection_nr(connection_name);
 
-		pthread_mutex_unlock(&connections_mutex);
+		pg_mtx_unlock(&connections_mutex);
 	}
 
 	return ret;
@@ -127,8 +110,8 @@ ecpg_finish(struct connection *act)
 				con->next = act->next;
 		}
 
-		if (pthread_getspecific(actual_connection_key) == act)
-			pthread_setspecific(actual_connection_key, all_connections);
+		if (actual_connection_this_thread == act)
+			actual_connection_this_thread = all_connections;
 		if (actual_connection == act)
 			actual_connection = all_connections;
 
@@ -194,7 +177,7 @@ ECPGsetconn(int lineno, const char *connection_name)
 	if (!ecpg_init(con, connection_name, lineno))
 		return false;
 
-	pthread_setspecific(actual_connection_key, con);
+	actual_connection_this_thread = con;
 	return true;
 }
 
@@ -481,7 +464,7 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 	}
 
 	/* add connection to our list */
-	pthread_mutex_lock(&connections_mutex);
+	pg_mtx_lock(&connections_mutex);
 
 	/*
 	 * ... but first, make certain we have created ecpg_clocale.  Rely on
@@ -493,7 +476,7 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 		ecpg_clocale = newlocale(LC_NUMERIC_MASK, "C", (locale_t) 0);
 		if (!ecpg_clocale)
 		{
-			pthread_mutex_unlock(&connections_mutex);
+			pg_mtx_unlock(&connections_mutex);
 			ecpg_raise(lineno, ECPG_OUT_OF_MEMORY,
 					   ECPG_SQLSTATE_ECPG_OUT_OF_MEMORY, NULL);
 			if (host)
@@ -530,7 +513,7 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 		this->next = all_connections;
 
 	all_connections = this;
-	pthread_setspecific(actual_connection_key, all_connections);
+	actual_connection_this_thread = all_connections;
 	actual_connection = all_connections;
 
 	ecpg_log("ECPGconnect: opening database %s on %s port %s %s%s %s%s\n",
@@ -648,7 +631,7 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 		ecpg_log("ECPGconnect: %s", errmsg);
 
 		ecpg_finish(this);
-		pthread_mutex_unlock(&connections_mutex);
+		pg_mtx_unlock(&connections_mutex);
 
 		ecpg_raise(lineno, ECPG_CONNECT, ECPG_SQLSTATE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION, db);
 		if (realname)
@@ -660,7 +643,7 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 	if (realname)
 		ecpg_free(realname);
 
-	pthread_mutex_unlock(&connections_mutex);
+	pg_mtx_unlock(&connections_mutex);
 
 	this->autocommit = autocommit;
 
@@ -682,7 +665,7 @@ ECPGdisconnect(int lineno, const char *connection_name)
 		return false;
 	}
 
-	pthread_mutex_lock(&connections_mutex);
+	pg_mtx_lock(&connections_mutex);
 
 	if (strcmp(connection_name, "ALL") == 0)
 	{
@@ -701,14 +684,14 @@ ECPGdisconnect(int lineno, const char *connection_name)
 
 		if (!ecpg_init(con, connection_name, lineno))
 		{
-			pthread_mutex_unlock(&connections_mutex);
+			pg_mtx_unlock(&connections_mutex);
 			return false;
 		}
 		else
 			ecpg_finish(con);
 	}
 
-	pthread_mutex_unlock(&connections_mutex);
+	pg_mtx_unlock(&connections_mutex);
 
 	return true;
 }

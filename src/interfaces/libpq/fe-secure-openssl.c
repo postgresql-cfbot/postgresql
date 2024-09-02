@@ -30,6 +30,7 @@
 #include "fe-auth.h"
 #include "fe-secure-common.h"
 #include "libpq-int.h"
+#include "common/openssl.h"
 
 #ifdef WIN32
 #include "win32.h"
@@ -50,13 +51,6 @@
 #include <pthread.h>
 #endif
 
-/*
- * These SSL-related #includes must come after all system-provided headers.
- * This ensures that OpenSSL can take care of conflicts with Windows'
- * <wincrypt.h> by #undef'ing the conflicting macros.  (We don't directly
- * include <wincrypt.h>, but some other Windows headers do.)
- */
-#include "common/openssl.h"
 #include <openssl/conf.h>
 #ifdef USE_SSL_ENGINE
 #include <openssl/engine.h>

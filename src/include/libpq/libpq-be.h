@@ -31,6 +31,15 @@
 #else
 #include <gssapi/gssapi.h>
 #endif							/* HAVE_GSSAPI_H */
+/*
+ * On Windows, <gssapi/gssapi.h> indirectly includes <wincrypt.h> and defines a macro 
+ * X509_NAME, which breaks our ability to use OpenSSL's version of that symbol 
+ * as <wincrypt.h> is bieng pulled after <openssl/ssl.h>. We can't reliably fix 
+ * that by re-ordering includes. Instead, just zap the #define again here.
+ */
+#ifdef X509_NAME
+#undef X509_NAME
+#endif
 #endif							/* ENABLE_GSS */
 
 #ifdef ENABLE_SSPI

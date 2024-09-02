@@ -271,6 +271,29 @@ static const char *const numTH[] = {"ST", "ND", "RD", "TH", NULL};
 static const char *const numth[] = {"st", "nd", "rd", "th", NULL};
 
 /* ----------
+ * MACRO: Check if the current and next characters
+ * form a valid subtraction combination for roman numerals
+ * ----------
+ */
+#define IS_VALID_SUB_COMB(curr, next) \
+	(((curr) == 'I' && ((next) == 'V' || (next) == 'X')) || \
+	 ((curr) == 'X' && ((next) == 'L' || (next) == 'C')) || \
+	 ((curr) == 'C' && ((next) == 'D' || (next) == 'M')))
+
+/* ----------
+ * MACRO: Roman number value
+ * ----------
+ */
+#define ROMAN_VAL(r) \
+	((r) == 'I' ? 1 : \
+	(r) == 'V' ? 5 : \
+	(r) == 'X' ? 10 : \
+	(r) == 'L' ? 50 : \
+	(r) == 'C' ? 100 : \
+	(r) == 'D' ? 500 : \
+	(r) == 'M' ? 1000 : 0)
+
+/* ----------
  * Flags & Options:
  * ----------
  */
@@ -1074,6 +1097,7 @@ static bool do_to_timestamp(text *date_txt, text *fmt, Oid collid, bool std,
 static char *fill_str(char *str, int c, int max);
 static FormatNode *NUM_cache(int len, NUMDesc *Num, text *pars_str, bool *shouldFree);
 static char *int_to_roman(int number);
+static int roman_to_int(char* s, int len);
 static void NUM_prepare_locale(NUMProc *Np);
 static char *get_last_relevant_decnum(char *num);
 static void NUM_numpart_from_char(NUMProc *Np, int id, int input_len);
@@ -5236,6 +5260,91 @@ int_to_roman(int number)
 }
 
 
+static int
+roman_to_int(char* s, int len) {
+	int repeatCount = 1;
+	int vCount = 0, lCount = 0, dCount = 0;
+	bool subtractionEncountered = false;
+	char lastSubtractedChar = 0;
+	int total = 0;
+
+	if (len == 0 || len > 15)
+		return 0;
+
+	for (int i = 0; i < len; ++i)
+	{
+		char currChar = toupper(s[i]);
+		int currValue = ROMAN_VAL(currChar);
+
+		if (currValue == 0)
+			return 0;
+
+		/* Ensure no character greater than or equal to the subtracted
+		 * character appears after the subtraction.
+		 */
+		if (subtractionEncountered && (currValue >= ROMAN_VAL(lastSubtractedChar)))
+			return 0;
+
+		/* Check for invalid repetitions of characters V, L, or D. */
+		if (currChar == 'V') vCount++;
+		if (currChar == 'L') lCount++;
+		if (currChar == 'D') dCount++;
+		if (vCount > 1 || lCount > 1 || dCount > 1)
+			return 0;
+
+		if (i < len - 1)
+		{
+			char nextChar = toupper(s[i + 1]);
+			int nextValue = ROMAN_VAL(nextChar);
+
+			if (nextValue == 0)
+				return 0;
+
+			/* If the current value is less than the next value,
+			 * handle subtraction. Verify valid subtractive
+			 * combinations and update the total accordingly.
+			 */
+			if (currValue < nextValue)
+			{
+				/* for cases where the same character is repeated
+				 * with subtraction. Like 'MCCM' or 'DCCCD'.
+				 */
+				if (repeatCount > 1)
+					return 0;
+
+				if (!IS_VALID_SUB_COMB(currChar, nextChar))
+					return 0;
+
+				/* Skip the next character as it is part of
+				 * the subtractive combination.
+				 */
+				i++;
+				repeatCount = 1;
+				subtractionEncountered = true;
+				lastSubtractedChar = currChar;
+				total += (nextValue - currValue);
+			}
+			else
+			{
+				/* for same characters, check for repetition */
+				if (currChar == nextChar)
+				{
+					repeatCount++;
+					if (repeatCount > 3)
+						return 0;
+				}
+				else
+					repeatCount = 1;
+				total += currValue;
+			}
+		}
+		/* add the value of the last character */
+		else
+			total += currValue;
+	}
+
+	return total;
+}
 
 /* ----------
  * Locale
@@ -5787,6 +5896,7 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 			   *Np = &_Np;
 	const char *pattern;
 	int			pattern_len;
+	int			roman_result;
 
 	MemSet(Np, 0, sizeof(NUMProc));
 
@@ -5817,9 +5927,19 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 	if (IS_ROMAN(Np->Num))
 	{
 		if (!Np->is_to_char)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("\"RN\" not supported for input")));
+		{
+			roman_result = roman_to_int(inout, input_len);
+			if (roman_result == 0)
+				ereport(ERROR,
+					(errcode(ERRCODE_INVALID_ROMAN_NUMERAL),
+					 errmsg("invalid roman numeral")));
+			else
+			{
+				Np->Num->pre = sprintf(number, "%d", roman_result);
+				Np->Num->post = 0;
+				return number;
+			}
+		}
 
 		Np->Num->lsign = Np->Num->pre_lsign_num = Np->Num->post =
 			Np->Num->pre = Np->out_pre_spaces = Np->sign = 0;

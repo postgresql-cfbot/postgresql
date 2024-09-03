@@ -452,6 +452,7 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		&&CASE_EEOP_PARAM_CALLBACK,
 		&&CASE_EEOP_PARAM_SET,
 		&&CASE_EEOP_CASE_TESTVAL,
+		&&CASE_EEOP_CASE_TESTVAL_EXT,
 		&&CASE_EEOP_MAKE_READONLY,
 		&&CASE_EEOP_IOCOERCE,
 		&&CASE_EEOP_IOCOERCE_SAFE,
@@ -475,6 +476,7 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		&&CASE_EEOP_SBSREF_ASSIGN,
 		&&CASE_EEOP_SBSREF_FETCH,
 		&&CASE_EEOP_DOMAIN_TESTVAL,
+		&&CASE_EEOP_DOMAIN_TESTVAL_EXT,
 		&&CASE_EEOP_DOMAIN_NOTNULL,
 		&&CASE_EEOP_DOMAIN_CHECK,
 		&&CASE_EEOP_HASHDATUM_SET_INITVAL,
@@ -1107,45 +1109,26 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		}
 
 		EEO_CASE(EEOP_CASE_TESTVAL)
+			EEO_CASE(EEOP_DOMAIN_TESTVAL)
 		{
-			/*
-			 * Normally upper parts of the expression tree have setup the
-			 * values to be returned here, but some parts of the system
-			 * currently misuse {caseValue,domainValue}_{datum,isNull} to set
-			 * run-time data.  So if no values have been set-up, use
-			 * ExprContext's.  This isn't pretty, but also not *that* ugly,
-			 * and this is unlikely to be performance sensitive enough to
-			 * worry about an extra branch.
-			 */
-			if (op->d.casetest.value)
-			{
-				*op->resvalue = *op->d.casetest.value;
-				*op->resnull = *op->d.casetest.isnull;
-			}
-			else
-			{
-				*op->resvalue = econtext->caseValue_datum;
-				*op->resnull = econtext->caseValue_isNull;
-			}
+			*op->resvalue = *op->d.casetest.value;
+			*op->resnull = *op->d.casetest.isnull;
 
 			EEO_NEXT();
 		}
 
-		EEO_CASE(EEOP_DOMAIN_TESTVAL)
+		EEO_CASE(EEOP_CASE_TESTVAL_EXT)
 		{
-			/*
-			 * See EEOP_CASE_TESTVAL comment.
-			 */
-			if (op->d.casetest.value)
-			{
-				*op->resvalue = *op->d.casetest.value;
-				*op->resnull = *op->d.casetest.isnull;
-			}
-			else
-			{
-				*op->resvalue = econtext->domainValue_datum;
-				*op->resnull = econtext->domainValue_isNull;
-			}
+			*op->resvalue = econtext->caseValue_datum;
+			*op->resnull = econtext->caseValue_isNull;
+
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_DOMAIN_TESTVAL_EXT)
+		{
+			*op->resvalue = econtext->domainValue_datum;
+			*op->resnull = econtext->domainValue_isNull;
 
 			EEO_NEXT();
 		}

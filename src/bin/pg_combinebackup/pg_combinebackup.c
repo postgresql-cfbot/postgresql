@@ -24,6 +24,7 @@
 #include <linux/fs.h>
 #endif
 
+#include "access/xlogfilepaths.h"
 #include "backup_label.h"
 #include "common/blkreftable.h"
 #include "common/checksum_helper.h"
@@ -296,7 +297,7 @@ main(int argc, char *argv[])
 		{
 			char	   *controlpath;
 
-			controlpath = psprintf("%s/%s", prior_backup_dirs[i], "global/pg_control");
+			controlpath = psprintf("%s/%s", prior_backup_dirs[i], XLOG_CONTROL_FILE);
 
 			pg_fatal("%s: manifest system identifier is %llu, but control file has %llu",
 					 controlpath,
@@ -605,7 +606,7 @@ check_control_files(int n_backups, char **backup_dirs)
 		bool		crc_ok;
 		char	   *controlpath;
 
-		controlpath = psprintf("%s/%s", backup_dirs[i], "global/pg_control");
+		controlpath = psprintf("%s/%s", backup_dirs[i], XLOG_CONTROL_FILE);
 		pg_log_debug("reading \"%s\"", controlpath);
 		control_file = get_controlfile_by_exact_path(controlpath, &crc_ok);
 

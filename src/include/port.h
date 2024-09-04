@@ -162,6 +162,7 @@ extern int	pg_disable_aslr(void);
 
 /* Portable delay handling */
 extern void pg_usleep(long microsec);
+extern void pg_usleep_non_interruptible(long microsec);
 
 /* Portable SQL-like case-independent comparisons and conversions */
 extern int	pg_strcasecmp(const char *s1, const char *s2);

@@ -2381,7 +2381,7 @@ vacuum_delay_point(void)
 			msec = vacuum_cost_delay * 4;
 
 		pgstat_report_wait_start(WAIT_EVENT_VACUUM_DELAY);
-		pg_usleep(msec * 1000);
+		pg_usleep_non_interruptible(msec * 1000);
 		pgstat_report_wait_end();
 
 		/*

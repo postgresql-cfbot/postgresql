@@ -73,6 +73,16 @@ pg_usleep(long microsec)
 	}
 }
 
+/*
+ * pg_usleep_non_interruptible --- delay the specified number of microseconds.
+ *
+ * Unlike pg_usleep, this relies on a non-interruptible sleep.
+ */
+void
+pg_usleep_non_interruptible(long microsec)
+{
+	SleepEx((microsec < 500 ? 1 : (microsec + 500) / 1000), FALSE);
+}
 
 /* Initialization */
 void

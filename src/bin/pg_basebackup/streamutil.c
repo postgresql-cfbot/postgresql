@@ -17,7 +17,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-#include "access/xlog_internal.h"
+#include "access/xlogfilepaths.h"
 #include "common/connect.h"
 #include "common/fe_memutils.h"
 #include "common/file_perm.h"

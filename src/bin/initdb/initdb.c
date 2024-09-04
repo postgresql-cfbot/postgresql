@@ -65,6 +65,7 @@
 #endif
 
 #include "access/xlog_internal.h"
+#include "lib/stringinfo.h"
 #include "catalog/pg_authid_d.h"
 #include "catalog/pg_class_d.h" /* pgrminclude ignore */
 #include "catalog/pg_collation_d.h"

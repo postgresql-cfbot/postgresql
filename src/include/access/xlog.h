@@ -16,6 +16,7 @@
 #include "datatype/timestamp.h"
 #include "lib/stringinfo.h"
 #include "nodes/pg_list.h"
+#include "access/xlogfilepaths.h"
 
 
 /* Sync methods */
@@ -296,17 +297,5 @@ extern void do_pg_backup_stop(BackupState *state, bool waitforarchive);
 extern void do_pg_abort_backup(int code, Datum arg);
 extern void register_persistent_abort_backup_handler(void);
 extern SessionBackupState get_backup_status(void);
-
-/* File path names (all relative to $PGDATA) */
-#define RECOVERY_SIGNAL_FILE	"recovery.signal"
-#define STANDBY_SIGNAL_FILE		"standby.signal"
-#define BACKUP_LABEL_FILE		"backup_label"
-#define BACKUP_LABEL_OLD		"backup_label.old"
-
-#define TABLESPACE_MAP			"tablespace_map"
-#define TABLESPACE_MAP_OLD		"tablespace_map.old"
-
-/* files to signal promotion to primary */
-#define PROMOTE_SIGNAL_FILE		"promote"
 
 #endif							/* XLOG_H */

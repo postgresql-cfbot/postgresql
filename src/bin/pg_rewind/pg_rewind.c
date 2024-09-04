@@ -15,7 +15,7 @@
 #include <unistd.h>
 
 #include "access/timeline.h"
-#include "access/xlog_internal.h"
+#include "access/xlogfilepaths.h"
 #include "catalog/catversion.h"
 #include "catalog/pg_control.h"
 #include "common/controldata_utils.h"

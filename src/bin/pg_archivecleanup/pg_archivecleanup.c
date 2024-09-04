@@ -15,7 +15,7 @@
 #include <signal.h>
 #include <sys/time.h>
 
-#include "access/xlog_internal.h"
+#include "access/xlogfilepaths.h"
 #include "common/logging.h"
 #include "getopt_long.h"
 

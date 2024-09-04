@@ -1814,29 +1814,22 @@ err:
 static int
 ssl_set_pgconn_bio(PGconn *conn)
 {
-	int			ret = 0;
 	BIO		   *bio;
 	BIO_METHOD *bio_method;
 
 	bio_method = pgconn_bio_method();
 	if (bio_method == NULL)
-	{
-		SSLerr(SSL_F_SSL_SET_FD, ERR_R_BUF_LIB);
-		goto err;
-	}
+		return 0;
+
 	bio = BIO_new(bio_method);
 	if (bio == NULL)
-	{
-		SSLerr(SSL_F_SSL_SET_FD, ERR_R_BUF_LIB);
-		goto err;
-	}
+		return 0;
+
 	BIO_set_data(bio, conn);
 	BIO_set_init(bio, 1);
 
 	SSL_set_bio(conn->ssl, bio, bio);
-	ret = 1;
-err:
-	return ret;
+	return 1;
 }
 
 /*

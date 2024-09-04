@@ -993,30 +993,22 @@ port_bio_method(void)
 static int
 ssl_set_port_bio(Port *port)
 {
-	int			ret = 0;
 	BIO		   *bio;
 	BIO_METHOD *bio_method;
 
 	bio_method = port_bio_method();
 	if (bio_method == NULL)
-	{
-		SSLerr(SSL_F_SSL_SET_FD, ERR_R_BUF_LIB);
-		goto err;
-	}
-	bio = BIO_new(bio_method);
+		return 0;
 
+	bio = BIO_new(bio_method);
 	if (bio == NULL)
-	{
-		SSLerr(SSL_F_SSL_SET_FD, ERR_R_BUF_LIB);
-		goto err;
-	}
+		return 0;
+
 	BIO_set_data(bio, port);
 	BIO_set_init(bio, 1);
 
 	SSL_set_bio(port->ssl, bio, bio);
-	ret = 1;
-err:
-	return ret;
+	return 1;
 }
 
 /*

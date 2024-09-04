@@ -468,6 +468,56 @@ static const NumericVar const_ninf =
 static const int round_powers[4] = {0, 1000, 100, 10};
 #endif
 
+/*
+ * Constants used to determine when the Karatsuba algorithm should be used
+ * for multiplication. These thresholds were determined empirically through
+ * benchmarking across various architectures, aiming to avoid performance
+ * regressions while capturing potential gains. The choice of these values
+ * involves trade-offs and balances simplicity and performance.
+ */
+#define KARATSUBA_BASE_LIMIT 384
+#define KARATSUBA_VAR1_MIN1 128
+#define KARATSUBA_VAR1_MIN2 2000
+#define KARATSUBA_VAR2_MIN1 2500
+#define KARATSUBA_VAR2_MIN2 9000
+#define KARATSUBA_SLOPE 0.764
+#define KARATSUBA_INTERCEPT 90.737
+
+#define KARATSUBA_LOW_RANGE_CONDITION(var1ndigits, var2ndigits) \
+	((var1ndigits) > (KARATSUBA_SLOPE) * (var2ndigits) + KARATSUBA_INTERCEPT)
+
+#define KARATSUBA_MIDDLE_RANGE_CONDITION(var1ndigits, var2ndigits) \
+	((var2ndigits) > KARATSUBA_VAR2_MIN1 && \
+	 (var1ndigits) > KARATSUBA_VAR1_MIN2)
+
+#define KARATSUBA_HIGH_RANGE_CONDITION(var1ndigits, var2ndigits) \
+	((var2ndigits) > KARATSUBA_VAR2_MIN2 && \
+	 (var1ndigits) > KARATSUBA_VAR1_MIN1)
+
+/*
+ * KARATSUBA_CONDITION() -
+ *
+ * This macro determines if the Karatsuba algorithm should be applied
+ * based on the number of digits in the multiplicands. It checks if
+ * the number of digits in the larger multiplicand exceeds a base limit
+ * and if the sizes of the multiplicands fall within specific ranges
+ * where Karatsuba multiplication is usually beneficial.
+ *
+ * The conditions encapsulated by KARATSUBA_CONDITION are:
+ * 1. The larger multiplicand has more digits than the base limit.
+ * 2. The sizes of the multiplicands fall within low, middle, or high range
+ *    conditions which were identified as performance beneficial regions during
+ *    benchmarks.
+ *
+ * The macro ensures that the algorithm is applied only when it is likely
+ * to provide performance benefits, considering the size and ratio of the
+ * factors.
+ */
+#define KARATSUBA_CONDITION(var1ndigits, var2ndigits) \
+	((var2ndigits) >= KARATSUBA_BASE_LIMIT && \
+	 (KARATSUBA_LOW_RANGE_CONDITION(var1ndigits, var2ndigits) || \
+	  KARATSUBA_MIDDLE_RANGE_CONDITION(var1ndigits, var2ndigits) || \
+	  KARATSUBA_HIGH_RANGE_CONDITION(var1ndigits, var2ndigits)))
 
 /* ----------
  * Local functions
@@ -557,6 +607,14 @@ static void add_var(const NumericVar *var1, const NumericVar *var2,
 					NumericVar *result);
 static void sub_var(const NumericVar *var1, const NumericVar *var2,
 					NumericVar *result);
+inline static void split_var_at(const NumericVar *var, int split_point,
+								NumericVar *low, NumericVar *high);
+static void mul_var_karatsuba_full(const NumericVar *var1, const NumericVar *var2,
+					NumericVar *result,
+					int rscale);
+static void mul_var_karatsuba_half(const NumericVar *var1, const NumericVar *var2,
+					NumericVar *result,
+					int rscale);
 static void mul_var(const NumericVar *var1, const NumericVar *var2,
 					NumericVar *result,
 					int rscale);
@@ -8660,6 +8718,237 @@ sub_var(const NumericVar *var1, const NumericVar *var2, NumericVar *result)
 
 
 /*
+ * split_var_at() -
+ *
+ * Split a NumericVar into two parts at a specified position.
+ */
+inline static void
+split_var_at(const NumericVar *var, int split_point,
+			 NumericVar *low, NumericVar *high)
+{
+	int high_ndigits = var->ndigits - split_point;
+	int low_ndigits = split_point;
+
+	init_var(high);
+	init_var(low);
+
+	high->ndigits = high_ndigits;
+	high->digits = var->digits;
+	high->buf = NULL;
+	high->weight = var->weight - low_ndigits;
+	high->sign = var->sign;
+	high->dscale = (var->ndigits - var->weight - 1) * DEC_DIGITS;
+
+	low->ndigits = low_ndigits;
+	low->digits = var->digits + high_ndigits;
+	low->buf = NULL;
+	low->weight = var->weight - high_ndigits;
+	low->sign = var->sign;
+	low->dscale = var->dscale;
+}
+
+
+/*
+ * mul_var_karatsuba_full() -
+ *
+ *	Multiplication using the Karatsuba algorithm.
+ *
+ *	The Karatsuba algorithm is a divide-and-conquer algorithm that reduces
+ *	the complexity of large number multiplication. It splits each number
+ *	into two halves and performs three multiplications on the parts,
+ *	rather than four as in the traditional method. This results in
+ *	a significant performance improvement for sufficiently large numbers.
+ *
+ *	The algorithm normally starts by checking if any of the inputs
+ *	are smaller than the NBASE, the base case for the recursion,
+ *	and if so, fall back to traditional multiplication.
+ *
+ *	That part is handled by the caller in our code, so when this function
+ *	is called, we know that var1 and var2 are large enough for Karatsuba
+ *	to be used. We also know that var1 is shorter or of equal length as var2,
+ *	which has been arranged by the caller by swapping them if necessary.
+ *
+ *	The algorithm then proceeds by splitting var1 and var2 into
+ *	two high and low parts, at half the length of the longer input:
+ *
+ *		m = max(size_NBASE(var1), size_NBASE(var2))
+ *		m2 = floor(m / 2)
+ *
+ *		high1, low1 = split_var_at(var1, m2)
+ *		high2, low2 = split_var_at(var2, m2)
+ *
+ *		z0 = (low1 * low2)
+ *		z1 = ((low1 + high1) * (low2 + high2))
+ *		z2 = (high1 * high2)
+ *
+ *		return (z2 * NBASE ^ (m2 × 2)) + ((z1 - z2 - z0) * NBASE ^ m2) + z0
+ *
+ *	For more details on the Karatsuba algorithm, see the Wikipedia article:
+ *	https://en.wikipedia.org/wiki/Karatsuba_algorithm
+ *
+ *	The Karatsuba algorithm is preferred over other divide-and-conquer methods
+ *	like Toom-Cook for this implementation due to its balance of complexity and
+ *	performance gains given Numeric's constraints.
+ *
+ *	For Toom-Cook to be worth the added complexity, the factors would need to
+ *	be much larger than supported by Numeric, making Karatsuba a more
+ *	appropriate choice.
+ *
+ */
+static void
+mul_var_karatsuba_full(const NumericVar *var1, const NumericVar *var2,
+		NumericVar *result, int rscale)
+{
+		NumericVar	high1, low1;
+		NumericVar	high2, low2;
+		NumericVar	z0, z1, z2;
+		NumericVar	temp1, temp2;
+		int			m2 = var2->ndigits / 2;
+
+		init_var(&low1);
+		init_var(&low2);
+		init_var(&high1);
+		init_var(&high2);
+		init_var(&z0);
+		init_var(&z1);
+		init_var(&z2);
+		init_var(&temp1);
+		init_var(&temp2);
+
+		split_var_at(var1, m2, &low1, &high1);
+		split_var_at(var2, m2, &low2, &high2);
+
+		mul_var(&low1, &low2, &z0, low1.dscale + low2.dscale);
+
+		add_var(&low1, &high1, &temp1);
+		add_var(&low2, &high2, &temp2);
+		mul_var(&temp1, &temp2, &z1, temp1.dscale + temp2.dscale);
+
+		mul_var(&high1, &high2, &z2, high1.dscale + high2.dscale);
+
+		set_var_from_var(&z2, &temp1);
+		temp1.weight += m2 * 2;
+
+		sub_var(&z1, &z2, &z1);
+		sub_var(&z1, &z0, &temp2);
+		temp2.weight += m2;
+
+		add_var(&temp1, &temp2, &temp2);
+		add_var(&temp2, &z0, result);
+
+		free_var(&low1);
+		free_var(&low2);
+		free_var(&high1);
+		free_var(&high2);
+		free_var(&z0);
+		free_var(&z1);
+		free_var(&z2);
+		free_var(&temp1);
+		free_var(&temp2);
+
+		/* Round to target rscale (and set result->dscale) */
+		round_var(result, rscale);
+
+		/* Strip leading and trailing zeroes */
+		strip_var(result);
+
+		return;
+}
+
+
+/*
+ * mul_var_karatsuba_half() -
+ *
+ *	Karatsuba Multiplication for factors with significant length disparity.
+ *
+ *	The Half-Karatsuba Multiplication Algorithm is a specialized case of
+ *	the normal Karatsuba multiplication algorithm, designed for the scenario
+ *	where var2 has at least twice as many base digits as var1.
+ *
+ *	In this case var2 (the longer input) is split into high2 and low1,
+ *	at m2 (half the length of var2) and var1 (the shorter input),
+ *	is used directly without splitting.
+ *
+ *	The algorithm then proceeds as follows:
+ *
+ *	1. Compute the product z0 = var1 * low2.
+ *	2. Compute the product temp2 = var1 * high2.
+ *	3. Adjust the weight of temp2 by adding m2 (* NBASE ^ m2)
+ *	4. Add temp2 and z0 to obtain the final result.
+ *
+ *	Proof:
+ *
+ *	The algorithm can be derived from the original Karatsuba algorithm by
+ *	simplifying the formula when the shorter factor var1 is not split into
+ *	high and low parts, as shown below.
+ *
+ *	Original Karatsuba formula:
+ *
+ *		result = (z2 * NBASE ^ (m2 × 2)) + ((z1 - z2 - z0) * NBASE ^ m2) + z0
+ *
+ *	Substitutions:
+ *
+ *		low1 = var1
+ *		high1 = 0
+ *
+ *	Applying substitutions:
+ *
+ *		z0 = (low1 * low2)
+ *		   = (var1 * low2)
+ *
+ *		z1 = ((low1 + high1) * (low2 + high2))
+ *		   = ((var1 + 0) * (low2 + high2))
+ *		   = (var1 * low2) + (var1 * high2)
+ *
+ *		z2 = (high1 * high2)
+ *		   = (0 * high2)
+ *		   = 0
+ *
+ *	Simplified using the above substitutions:
+ *
+ *		result = (z2 * NBASE ^ (m2 × 2)) + ((z1 - z2 - z0) * NBASE ^ m2) + z0
+ *			   = (0 * NBASE ^ (m2 × 2)) + ((z1 - 0 - z0) * NBASE ^ m2) + z0
+ *			   = ((z1 - z0) * NBASE ^ m2) + z0
+ *			   = ((z1 - z0) * NBASE ^ m2) + z0
+ *			   = (var1 * high2) * NBASE ^ m2 + z0
+ */
+static void
+mul_var_karatsuba_half(const NumericVar *var1, const NumericVar *var2,
+		NumericVar *result, int rscale)
+{
+	NumericVar	high2, low2;
+	NumericVar	z0;
+	NumericVar	temp2;
+	int			m2 = var2->ndigits / 2;
+
+	init_var(&high2);
+	init_var(&low2);
+	init_var(&z0);
+	init_var(&temp2);
+
+	split_var_at(var2, m2, &low2, &high2);
+
+	mul_var(var1, &low2, &z0, var1->dscale + low2.dscale);
+	mul_var(var1, &high2, &temp2, var1->dscale + high2.dscale);
+	temp2.weight += m2;
+	add_var(&temp2, &z0, result);
+
+	free_var(&high2);
+	free_var(&low2);
+	free_var(&z0);
+	free_var(&temp2);
+
+	/* Round to target rscale (and set result->dscale) */
+	round_var(result, rscale);
+
+	/* Strip leading and trailing zeroes */
+	strip_var(result);
+
+	return;
+}
+
+
+/*
  * mul_var() -
  *
  *	Multiplication on variable level. Product of var1 * var2 is stored
@@ -8739,6 +9028,18 @@ mul_var(const NumericVar *var1, const NumericVar *var2, NumericVar *result,
 		res_sign = NUMERIC_POS;
 	else
 		res_sign = NUMERIC_NEG;
+
+	/*
+	 * Use the Karatsuba algorithm for sufficiently large factors.
+	 */
+	if (KARATSUBA_CONDITION(var1ndigits, var2ndigits))
+	{
+		if (var1ndigits * 2 > var2ndigits)
+			mul_var_karatsuba_full(var1, var2, result, rscale);
+		else
+			mul_var_karatsuba_half(var1, var2, result, rscale);
+		return;
+	}
 
 	/*
 	 * Determine the number of result digits to compute and the (maximum

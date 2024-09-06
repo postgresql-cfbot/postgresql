@@ -1,0 +1,9 @@
+Parsed test spec with 1 sessions
+
+starting permutation: reindex
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+step reindex: REINDEX INDEX CONCURRENTLY test.tbl_pkey_not_safe;

@@ -18,7 +18,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "access/xlog_internal.h"
+#include "access/xlogfilepaths.h"
 #include "common/file_utils.h"
 #include "common/logging.h"
 #include "libpq-fe.h"

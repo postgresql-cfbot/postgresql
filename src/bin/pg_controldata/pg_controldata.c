@@ -1,7 +1,8 @@
 /*
  * pg_controldata
  *
- * reads the data from $PGDATA/global/pg_control
+ * reads the data from reads the data from the control file
+ * which is located at $PGDATA/XLOG_CONTROL_FILE
  *
  * copyright (c) Oliver Elphick <olly@lfix.co.uk>, 2001;
  * license: BSD
@@ -22,7 +23,6 @@
 
 #include "access/transam.h"
 #include "access/xlog.h"
-#include "access/xlog_internal.h"
 #include "catalog/pg_control.h"
 #include "common/controldata_utils.h"
 #include "common/logging.h"

@@ -30,7 +30,6 @@
 #include <unistd.h>
 
 #include "access/xlog.h"
-#include "access/xlog_internal.h"
 #include "archive/archive_module.h"
 #include "archive/shell_archive.h"
 #include "lib/binaryheap.h"

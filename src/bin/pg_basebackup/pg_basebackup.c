@@ -25,7 +25,7 @@
 #include <zlib.h>
 #endif
 
-#include "access/xlog_internal.h"
+#include "access/xlogfilepaths.h"
 #include "astreamer_inject.h"
 #include "backup/basebackup.h"
 #include "common/compression.h"
@@ -35,6 +35,8 @@
 #include "fe_utils/option_utils.h"
 #include "fe_utils/recovery_gen.h"
 #include "getopt_long.h"
+#include "pgtime.h"
+#include "port/pg_bswap.h"
 #include "receivelog.h"
 #include "streamutil.h"
 

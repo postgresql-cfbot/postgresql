@@ -808,7 +808,23 @@ xmltotext_with_options(xmltype *data, XmlOptionType xmloption_arg, bool indent)
 						"could not close xmlSaveCtxtPtr");
 		}
 
-		result = (text *) xmlBuffer_to_xmltype(buf);
+		/*
+		 * xmlDocContentDumpOutput adds a trailing newline by default
+		 * so we get rid of it here.
+		 */
+		if (xmloption_arg == XMLOPTION_DOCUMENT)
+		{
+			char *str = (char *) xmlBufferContent(buf);
+			int len = xmlBufferLength(buf);
+
+			while (len > 0 && (str[len - 1] == '\n' ||
+								str[len - 1] == '\r'))
+				str[--len] = '\0';
+
+			result = cstring_to_text_with_len(str, len);
+		}
+		else
+			result = (text *) xmlBuffer_to_xmltype(buf);
 	}
 	PG_CATCH();
 	{

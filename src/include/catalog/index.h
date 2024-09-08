@@ -26,6 +26,7 @@ typedef enum
 	INDEX_CREATE_SET_READY,
 	INDEX_CREATE_SET_VALID,
 	INDEX_DROP_CLEAR_VALID,
+	INDEX_DROP_CLEAR_READY,
 	INDEX_DROP_SET_DEAD,
 } IndexStateFlagsAction;
 
@@ -42,6 +43,8 @@ typedef struct ReindexParams
 #define REINDEXOPT_REPORT_PROGRESS 0x02 /* report pgstat progress */
 #define REINDEXOPT_MISSING_OK 	0x04	/* skip missing relations */
 #define REINDEXOPT_CONCURRENTLY	0x08	/* concurrent mode */
+
+#define VALIDATE_INDEX_SNAPSHOT_RESET_INTERVAL	50	/* 50 ms */
 
 /* state info for validate_index bulkdelete callback */
 typedef struct ValidateIndexState
@@ -86,7 +89,8 @@ extern Oid	index_create(Relation heapRelation,
 						 bits16 constr_flags,
 						 bool allow_system_table_mods,
 						 bool is_internal,
-						 Oid *constraintId);
+						 Oid *constraintId,
+						 char relpersistence);
 
 #define	INDEX_CONSTR_CREATE_MARK_AS_PRIMARY	(1 << 0)
 #define	INDEX_CONSTR_CREATE_DEFERRABLE		(1 << 1)
@@ -98,6 +102,11 @@ extern Oid	index_concurrently_create_copy(Relation heapRelation,
 										   Oid oldIndexId,
 										   Oid tablespaceOid,
 										   const char *newName);
+
+extern Oid	index_concurrently_create_aux(Relation heapRelation,
+											 Oid mainIndexId,
+											 Oid tablespaceOid,
+											 const char *newName);
 
 extern void index_concurrently_build(Oid heapRelationId,
 									 Oid indexRelationId);
@@ -144,7 +153,7 @@ extern void index_build(Relation heapRelation,
 						bool isreindex,
 						bool parallel);
 
-extern void validate_index(Oid heapId, Oid indexId, Snapshot snapshot);
+extern TransactionId validate_index(Oid heapId, Oid indexId, Oid auxIndexId);
 
 extern void index_set_state_flags(Oid indexId, IndexStateFlagsAction action);
 

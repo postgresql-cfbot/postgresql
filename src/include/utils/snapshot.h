@@ -183,6 +183,7 @@ typedef struct SnapshotData
 
 	bool		takenDuringRecovery;	/* recovery-shaped snapshot? */
 	bool		copied;			/* false if it's a static snapshot */
+	bool		catalog;		/* snapshot used to access catalog */
 
 	CommandId	curcid;			/* in my xact, CID < curcid are visible */
 

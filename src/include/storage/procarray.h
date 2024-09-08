@@ -45,6 +45,7 @@ extern int	GetMaxSnapshotXidCount(void);
 extern int	GetMaxSnapshotSubxidCount(void);
 
 extern Snapshot GetSnapshotData(Snapshot snapshot);
+extern Snapshot GetCatalogSnapshotData(Snapshot snapshot);
 
 extern bool ProcArrayInstallImportedXmin(TransactionId xmin,
 										 VirtualTransactionId *sourcevxid);
@@ -66,8 +67,8 @@ extern bool HaveVirtualXIDsDelayingChkpt(VirtualTransactionId *vxids,
 
 extern PGPROC *ProcNumberGetProc(int procNumber);
 extern void ProcNumberGetTransactionIds(int procNumber, TransactionId *xid,
-										TransactionId *xmin, int *nsubxid,
-										bool *overflowed);
+										TransactionId *xmin, TransactionId *catalogXmin,
+										int *nsubxid, bool *overflowed);
 extern PGPROC *BackendPidGetProc(int pid);
 extern PGPROC *BackendPidGetProcWithLock(int pid);
 extern int	BackendXidGetPid(TransactionId xid);

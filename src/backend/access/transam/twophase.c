@@ -459,7 +459,7 @@ MarkAsPreparingGuts(GlobalTransaction gxact, TransactionId xid, const char *gid,
 		proc->vxid.procNumber = INVALID_PROC_NUMBER;
 	}
 	proc->xid = xid;
-	Assert(proc->xmin == InvalidTransactionId);
+	Assert(proc->xmin == InvalidTransactionId && proc->catalogXmin == InvalidTransactionId);
 	proc->delayChkptFlags = 0;
 	proc->statusFlags = 0;
 	proc->pid = 0;

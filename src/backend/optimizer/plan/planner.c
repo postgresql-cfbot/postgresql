@@ -61,6 +61,7 @@
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/selfuncs.h"
+#include "utils/snapmgr.h"
 
 /* GUC parameters */
 double		cursor_tuple_fraction = DEFAULT_CURSOR_TUPLE_FRACTION;
@@ -6797,6 +6798,7 @@ plan_create_index_workers(Oid tableOid, Oid indexOid)
 	BlockNumber heap_blocks;
 	double		reltuples;
 	double		allvisfrac;
+	Snapshot	snapshot = InvalidSnapshot;
 
 	/*
 	 * We don't allow performing parallel operation in standalone backend or
@@ -6848,6 +6850,10 @@ plan_create_index_workers(Oid tableOid, Oid indexOid)
 	heap = table_open(tableOid, NoLock);
 	index = index_open(indexOid, NoLock);
 
+	if (!ActiveSnapshotSet()) {
+		snapshot = RegisterSnapshot(GetTransactionSnapshot());
+		PushActiveSnapshot(snapshot);
+	}
 	/*
 	 * Determine if it's safe to proceed.
 	 *
@@ -6905,6 +6911,12 @@ plan_create_index_workers(Oid tableOid, Oid indexOid)
 		parallel_workers--;
 
 done:
+	if (snapshot != InvalidSnapshot)
+	{
+		PopActiveSnapshot();
+		UnregisterSnapshot(snapshot);
+	}
+
 	index_close(index, NoLock);
 	table_close(heap, NoLock);
 

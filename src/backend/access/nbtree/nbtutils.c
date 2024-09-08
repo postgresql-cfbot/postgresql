@@ -100,8 +100,6 @@ static bool _bt_check_rowcompare(ScanKey skey,
 								 ScanDirection dir, bool *continuescan);
 static void _bt_checkkeys_look_ahead(IndexScanDesc scan, BTReadPageState *pstate,
 									 int tupnatts, TupleDesc tupdesc);
-static int	_bt_keep_natts(Relation rel, IndexTuple lastleft,
-						   IndexTuple firstright, BTScanInsert itup_key);
 
 
 /*
@@ -4775,6 +4773,14 @@ _bt_truncate(Relation rel, IndexTuple lastleft, IndexTuple firstright,
 	return tidpivot;
 }
 
+int
+_bt_keep_natts(Relation rel, IndexTuple lastleft, IndexTuple firstright,
+				BTScanInsert itup_key) {
+	bool ignored;
+	return _bt_keep_natts_wasnull(rel, lastleft, firstright, itup_key, &ignored);
+}
+
+
 /*
  * _bt_keep_natts - how many key attributes to keep when truncating.
  *
@@ -4786,9 +4792,10 @@ _bt_truncate(Relation rel, IndexTuple lastleft, IndexTuple firstright,
  * number of key attributes for the index relation.  This indicates that the
  * caller must use a heap TID as a unique-ifier in new pivot tuple.
  */
-static int
-_bt_keep_natts(Relation rel, IndexTuple lastleft, IndexTuple firstright,
-			   BTScanInsert itup_key)
+int
+_bt_keep_natts_wasnull(Relation rel, IndexTuple lastleft, IndexTuple firstright,
+			   BTScanInsert itup_key,
+			   bool *wasnull)
 {
 	int			nkeyatts = IndexRelationGetNumberOfKeyAttributes(rel);
 	TupleDesc	itupdesc = RelationGetDescr(rel);
@@ -4814,6 +4821,7 @@ _bt_keep_natts(Relation rel, IndexTuple lastleft, IndexTuple firstright,
 
 		datum1 = index_getattr(lastleft, attnum, itupdesc, &isNull1);
 		datum2 = index_getattr(firstright, attnum, itupdesc, &isNull2);
+		(*wasnull) |= (isNull1 || isNull2);
 
 		if (isNull1 != isNull2)
 			break;
@@ -4836,6 +4844,13 @@ _bt_keep_natts(Relation rel, IndexTuple lastleft, IndexTuple firstright,
 		   keepnatts == _bt_keep_natts_fast(rel, lastleft, firstright));
 
 	return keepnatts;
+}
+
+int
+_bt_keep_natts_fast(Relation rel, IndexTuple lastleft, IndexTuple firstright)
+{
+	bool ignored;
+	return _bt_keep_natts_fast_wasnull(rel, lastleft, firstright, &ignored);
 }
 
 /*
@@ -4861,7 +4876,8 @@ _bt_keep_natts(Relation rel, IndexTuple lastleft, IndexTuple firstright,
  * more balanced split point.
  */
 int
-_bt_keep_natts_fast(Relation rel, IndexTuple lastleft, IndexTuple firstright)
+_bt_keep_natts_fast_wasnull(Relation rel, IndexTuple lastleft, IndexTuple firstright,
+							bool *wasnull)
 {
 	TupleDesc	itupdesc = RelationGetDescr(rel);
 	int			keysz = IndexRelationGetNumberOfKeyAttributes(rel);
@@ -4878,6 +4894,7 @@ _bt_keep_natts_fast(Relation rel, IndexTuple lastleft, IndexTuple firstright)
 
 		datum1 = index_getattr(lastleft, attnum, itupdesc, &isNull1);
 		datum2 = index_getattr(firstright, attnum, itupdesc, &isNull2);
+		*wasnull |= (isNull1 | isNull2);
 		att = TupleDescAttr(itupdesc, attnum - 1);
 
 		if (isNull1 != isNull2)

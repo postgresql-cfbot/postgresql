@@ -2369,16 +2369,7 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 	leaderparticipates = false;
 #endif
 
-	/*
-	 * Enter parallel mode, and create context for parallel build of brin
-	 * index
-	 */
-	EnterParallelMode();
-	Assert(request > 0);
-	pcxt = CreateParallelContext("postgres", "_brin_parallel_build_main",
-								 request);
-
-	scantuplesortstates = leaderparticipates ? request + 1 : request;
+	Assert(!isconcurrent || !TransactionIdIsValid(MyProc->xmin));
 
 	/*
 	 * Prepare for scan of the base relation.  In a normal index build, we use
@@ -2390,7 +2381,21 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 	if (!isconcurrent)
 		snapshot = SnapshotAny;
 	else
+	{
 		snapshot = RegisterSnapshot(GetTransactionSnapshot());
+		PushActiveSnapshot(snapshot);
+	}
+
+	/*
+	 * Enter parallel mode, and create context for parallel build of brin
+	 * index
+	 */
+	EnterParallelMode();
+	Assert(request > 0);
+	pcxt = CreateParallelContext("postgres", "_brin_parallel_build_main",
+								 request);
+
+	scantuplesortstates = leaderparticipates ? request + 1 : request;
 
 	/*
 	 * Estimate size for our own PARALLEL_KEY_BRIN_SHARED workspace.
@@ -2429,6 +2434,8 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 
 	/* Everyone's had a chance to ask for space, so now create the DSM */
 	InitializeParallelDSM(pcxt);
+	if (IsMVCCSnapshot(snapshot))
+		PopActiveSnapshot();
 
 	/* If no DSM segment was available, back out (do serial build) */
 	if (pcxt->seg == NULL)
@@ -2458,7 +2465,7 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 
 	table_parallelscan_initialize(heap,
 								  ParallelTableScanFromBrinShared(brinshared),
-								  snapshot);
+								  isconcurrent ? InvalidSnapshot : snapshot);
 
 	/*
 	 * Store shared tuplesort-private state, for which we reserved space.
@@ -2504,7 +2511,7 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 		brinleader->nparticipanttuplesorts++;
 	brinleader->brinshared = brinshared;
 	brinleader->sharedsort = sharedsort;
-	brinleader->snapshot = snapshot;
+	brinleader->snapshot = isconcurrent ? InvalidSnapshot : snapshot;
 	brinleader->walusage = walusage;
 	brinleader->bufferusage = bufferusage;
 
@@ -2518,6 +2525,12 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 	/* Save leader state now that it's clear build will be parallel */
 	buildstate->bs_leader = brinleader;
 
+	if (isconcurrent)
+	{
+		WaitForParallelWorkersToAttach(pcxt, true);
+		UnregisterSnapshot(snapshot);
+	}
+
 	/* Join heap scan ourselves */
 	if (leaderparticipates)
 		_brin_leader_participate_as_worker(buildstate, heap, index);
@@ -2526,7 +2539,8 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 	 * Caller needs to wait for all launched workers when we return.  Make
 	 * sure that the failure-to-start case will not hang forever.
 	 */
-	WaitForParallelWorkersToAttach(pcxt);
+	if (!isconcurrent)
+		WaitForParallelWorkersToAttach(pcxt, false);
 }
 
 /*
@@ -2536,6 +2550,7 @@ static void
 _brin_end_parallel(BrinLeader *brinleader, BrinBuildState *state)
 {
 	int			i;
+	Snapshot 	snapshot = brinleader->snapshot;
 
 	/* Shutdown worker processes */
 	WaitForParallelWorkersToFinish(brinleader->pcxt);
@@ -2548,8 +2563,10 @@ _brin_end_parallel(BrinLeader *brinleader, BrinBuildState *state)
 		InstrAccumParallelQuery(&brinleader->bufferusage[i], &brinleader->walusage[i]);
 
 	/* Free last reference to MVCC snapshot, if one was used */
-	if (IsMVCCSnapshot(brinleader->snapshot))
-		UnregisterSnapshot(brinleader->snapshot);
+	Assert(!brinleader->brinshared->isconcurrent || snapshot == InvalidSnapshot);
+	Assert(brinleader->brinshared->isconcurrent || snapshot != InvalidSnapshot);
+	if (snapshot != InvalidSnapshot && IsMVCCSnapshot(snapshot))
+		UnregisterSnapshot(snapshot);
 	DestroyParallelContext(brinleader->pcxt);
 	ExitParallelMode();
 }
@@ -2800,6 +2817,7 @@ _brin_parallel_scan_and_build(BrinBuildState *state,
 	TableScanDesc scan;
 	double		reltuples;
 	IndexInfo  *indexInfo;
+	Snapshot	snapshot;
 
 	/* Initialize local tuplesort coordination state */
 	coordinate = palloc0(sizeof(SortCoordinateData));
@@ -2811,8 +2829,21 @@ _brin_parallel_scan_and_build(BrinBuildState *state,
 	state->bs_sortstate = tuplesort_begin_index_brin(sortmem, coordinate,
 													 TUPLESORT_NONE);
 
+	Assert(!brinshared->isconcurrent || !TransactionIdIsValid(MyProc->xmin));
+	/* Join parallel scan */
+	if (brinshared->isconcurrent)
+	{
+		snapshot = RegisterSnapshot(GetTransactionSnapshot());
+		PushActiveSnapshot(snapshot);
+	}
 	/* Join parallel scan */
 	indexInfo = BuildIndexInfo(index);
+	if (brinshared->isconcurrent)
+	{
+		PopActiveSnapshot();
+		UnregisterSnapshot(snapshot);
+	}
+	Assert(!brinshared->isconcurrent || !TransactionIdIsValid(MyProc->xmin));
 	indexInfo->ii_Concurrent = brinshared->isconcurrent;
 
 	scan = table_beginscan_parallel(heap,
@@ -2866,8 +2897,7 @@ _brin_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 	 * The only possible status flag that can be set to the parallel worker is
 	 * PROC_IN_SAFE_IC.
 	 */
-	Assert((MyProc->statusFlags == 0) ||
-		   (MyProc->statusFlags == PROC_IN_SAFE_IC));
+	Assert(MyProc->statusFlags == 0);
 
 	/* Set debug_query_string for individual workers first */
 	sharedquery = shm_toc_lookup(toc, PARALLEL_KEY_QUERY_TEXT, true);
@@ -2913,8 +2943,12 @@ _brin_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 	 */
 	sortmem = maintenance_work_mem / brinshared->scantuplesortstates;
 
+	if (brinshared->isconcurrent)
+		PopActiveSnapshot();
 	_brin_parallel_scan_and_build(buildstate, brinshared, sharedsort,
 								  heapRel, indexRel, sortmem, false);
+	if (brinshared->isconcurrent)
+		PushActiveSnapshot(GetLatestSnapshot());
 
 	/* Report WAL/buffer usage during parallel execution */
 	bufferusage = shm_toc_lookup(toc, PARALLEL_KEY_BUFFER_USAGE, false);

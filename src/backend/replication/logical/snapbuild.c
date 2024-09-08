@@ -564,6 +564,7 @@ SnapBuildBuildSnapshot(SnapBuild *builder)
 	snapshot->active_count = 0;
 	snapshot->regd_count = 0;
 	snapshot->snapXactCompletionCount = 0;
+	snapshot->catalog = false; // TODO: or true?
 
 	return snapshot;
 }
@@ -600,8 +601,8 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 		elog(ERROR, "cannot build an initial slot snapshot, not all transactions are monitored anymore");
 
 	/* so we don't overwrite the existing value */
-	if (TransactionIdIsValid(MyProc->xmin))
-		elog(ERROR, "cannot build an initial slot snapshot when MyProc->xmin already is valid");
+	if (TransactionIdIsValid(MyProc->xmin) || TransactionIdIsValid(MyProc->catalogXmin))
+		elog(ERROR, "cannot build an initial slot snapshot when MyProc->xmin or MyProc->catalogXmin already is valid");
 
 	snap = SnapBuildBuildSnapshot(builder);
 
@@ -622,7 +623,7 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 		elog(ERROR, "cannot build an initial slot snapshot as oldest safe xid %u follows snapshot's xmin %u",
 			 safeXid, snap->xmin);
 
-	MyProc->xmin = snap->xmin;
+	MyProc->xmin = MyProc->catalogXmin = snap->xmin;
 
 	/* allocate in transaction context */
 	newxip = (TransactionId *)

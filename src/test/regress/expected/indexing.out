@@ -1571,10 +1571,11 @@ select indexrelid::regclass, indisvalid,
 --------------------------------+------------+-----------------------+-------------------------------
  parted_isvalid_idx             | f          | parted_isvalid_tab    | 
  parted_isvalid_idx_11          | f          | parted_isvalid_tab_11 | parted_isvalid_tab_1_expr_idx
+ parted_isvalid_idx_11_ccaux    | f          | parted_isvalid_tab_11 | 
  parted_isvalid_tab_12_expr_idx | t          | parted_isvalid_tab_12 | parted_isvalid_tab_1_expr_idx
  parted_isvalid_tab_1_expr_idx  | f          | parted_isvalid_tab_1  | parted_isvalid_idx
  parted_isvalid_tab_2_expr_idx  | t          | parted_isvalid_tab_2  | parted_isvalid_idx
-(5 rows)
+(6 rows)
 
 drop table parted_isvalid_tab;
 -- Check state of replica indexes when attaching a partition.

@@ -488,4 +488,8 @@
 
 # no brin opclass for the geometric types except box
 
+{ oid => '5557', oid_symbol => 'RECORD_STIR_OPS_OID',
+  opcmethod => 'stir', opcname => 'record_ops', opcfamily => 'stir/record_ops',
+  opcintype => 'record' },
+
 ]

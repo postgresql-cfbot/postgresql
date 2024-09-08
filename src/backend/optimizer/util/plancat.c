@@ -720,6 +720,7 @@ infer_arbiter_indexes(PlannerInfo *root)
 
 	/* Results */
 	List	   *results = NIL;
+	bool	   foundValid = false;
 
 	/*
 	 * Quickly return NIL for ON CONFLICT DO NOTHING without an inference
@@ -813,7 +814,13 @@ infer_arbiter_indexes(PlannerInfo *root)
 		idxRel = index_open(indexoid, rte->rellockmode);
 		idxForm = idxRel->rd_index;
 
-		if (!idxForm->indisvalid)
+		/*
+		 * We need to consider both indisvalid and indisready indexes because
+		 * them may become indisvalid before execution phase. It is required
+		 * to keep set of indexes used as arbiter to be the same for all
+		 * concurrent transactions.
+		 */
+		if (!idxForm->indisready)
 			goto next;
 
 		/*
@@ -835,10 +842,9 @@ infer_arbiter_indexes(PlannerInfo *root)
 						 errmsg("ON CONFLICT DO UPDATE not supported with exclusion constraints")));
 
 			results = lappend_oid(results, idxForm->indexrelid);
-			list_free(indexList);
+			foundValid |= idxForm->indisvalid;
 			index_close(idxRel, NoLock);
-			table_close(relation, NoLock);
-			return results;
+			break;
 		}
 		else if (indexOidFromConstraint != InvalidOid)
 		{
@@ -932,6 +938,7 @@ infer_arbiter_indexes(PlannerInfo *root)
 			goto next;
 
 		results = lappend_oid(results, idxForm->indexrelid);
+		foundValid |= idxForm->indisvalid;
 next:
 		index_close(idxRel, NoLock);
 	}
@@ -939,7 +946,8 @@ next:
 	list_free(indexList);
 	table_close(relation, NoLock);
 
-	if (results == NIL)
+	/* It is required to have at least one indisvalid index during the planning. */
+	if (results == NIL || !foundValid)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
 				 errmsg("there is no unique or exclusion constraint matching the ON CONFLICT specification")));

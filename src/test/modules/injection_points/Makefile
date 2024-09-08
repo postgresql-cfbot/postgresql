@@ -13,7 +13,8 @@ PGFILEDESC = "injection_points - facility for injection points"
 REGRESS = injection_points
 REGRESS_OPTS = --dlpath=$(top_builddir)/src/test/regress
 
-ISOLATION = inplace
+ISOLATION = inplace \
+			reset_snapshots
 
 TAP_TESTS = 1
 

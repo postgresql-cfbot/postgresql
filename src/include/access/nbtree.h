@@ -1302,8 +1302,15 @@ extern bool btproperty(Oid index_oid, int attno,
 extern char *btbuildphasename(int64 phasenum);
 extern IndexTuple _bt_truncate(Relation rel, IndexTuple lastleft,
 							   IndexTuple firstright, BTScanInsert itup_key);
+extern int	_bt_keep_natts(Relation rel, IndexTuple lastleft,
+							 IndexTuple firstright, BTScanInsert itup_key);
+extern int	_bt_keep_natts_wasnull(Relation rel, IndexTuple lastleft,
+							 IndexTuple firstright, BTScanInsert itup_key,
+							 bool *wasnull);
 extern int	_bt_keep_natts_fast(Relation rel, IndexTuple lastleft,
 								IndexTuple firstright);
+extern int	_bt_keep_natts_fast_wasnull(Relation rel, IndexTuple lastleft,
+								  IndexTuple firstright, bool *wasnull);
 extern bool _bt_check_natts(Relation rel, bool heapkeyspace, Page page,
 							OffsetNumber offnum);
 extern void _bt_check_third_page(Relation rel, Relation heap,

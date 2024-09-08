@@ -1,0 +1,318 @@
+unused step name: sleep
+Parsed test spec with 2 sessions
+
+starting permutation: set_parallel_workers_1 create_index_concurrently_simple reindex_index_concurrently drop_index detach
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+step set_parallel_workers_1: ALTER TABLE test.tbl SET (parallel_workers=0);
+test: NOTICE:  notice triggered for injection point heap_reset_scan_snapshot_effective
+test: NOTICE:  notice triggered for injection point heapam_index_validate_scan_no_xid
+step create_index_concurrently_simple: CREATE INDEX CONCURRENTLY idx ON test.tbl(i, j);
+test: NOTICE:  notice triggered for injection point heap_reset_scan_snapshot_effective
+test: NOTICE:  notice triggered for injection point heapam_index_validate_scan_no_xid
+step reindex_index_concurrently: REINDEX INDEX CONCURRENTLY test.idx;
+step drop_index: DROP INDEX CONCURRENTLY test.idx;
+step detach: 
+	SELECT injection_points_detach('heapam_index_validate_scan_no_xid');
+	SELECT injection_points_detach('heap_reset_scan_snapshot_effective');
+	SELECT injection_points_detach('_bt_leader_participate_as_worker');
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+
+starting permutation: set_parallel_workers_1 create_unique_index_concurrently_simple reindex_index_concurrently drop_index detach
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+step set_parallel_workers_1: ALTER TABLE test.tbl SET (parallel_workers=0);
+test: NOTICE:  notice triggered for injection point heap_reset_scan_snapshot_effective
+test: NOTICE:  notice triggered for injection point heapam_index_validate_scan_no_xid
+step create_unique_index_concurrently_simple: CREATE UNIQUE INDEX CONCURRENTLY idx ON test.tbl(i);
+test: NOTICE:  notice triggered for injection point heap_reset_scan_snapshot_effective
+test: NOTICE:  notice triggered for injection point heapam_index_validate_scan_no_xid
+step reindex_index_concurrently: REINDEX INDEX CONCURRENTLY test.idx;
+step drop_index: DROP INDEX CONCURRENTLY test.idx;
+step detach: 
+	SELECT injection_points_detach('heapam_index_validate_scan_no_xid');
+	SELECT injection_points_detach('heap_reset_scan_snapshot_effective');
+	SELECT injection_points_detach('_bt_leader_participate_as_worker');
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+
+starting permutation: set_parallel_workers_1 create_index_concurrently_predicate_expression_mod reindex_index_concurrently drop_index detach
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+step set_parallel_workers_1: ALTER TABLE test.tbl SET (parallel_workers=0);
+test: NOTICE:  notice triggered for injection point heap_reset_scan_snapshot_effective
+test: NOTICE:  notice triggered for injection point heapam_index_validate_scan_no_xid
+step create_index_concurrently_predicate_expression_mod: CREATE INDEX CONCURRENTLY idx ON test.tbl(MOD(i, 2), j) WHERE MOD(i, 2) = 0;
+test: NOTICE:  notice triggered for injection point heap_reset_scan_snapshot_effective
+test: NOTICE:  notice triggered for injection point heapam_index_validate_scan_no_xid
+step reindex_index_concurrently: REINDEX INDEX CONCURRENTLY test.idx;
+step drop_index: DROP INDEX CONCURRENTLY test.idx;
+step detach: 
+	SELECT injection_points_detach('heapam_index_validate_scan_no_xid');
+	SELECT injection_points_detach('heap_reset_scan_snapshot_effective');
+	SELECT injection_points_detach('_bt_leader_participate_as_worker');
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+
+starting permutation: set_parallel_workers_1 create_index_concurrently_predicate_set_xid_no_param reindex_index_concurrently drop_index detach
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+step set_parallel_workers_1: ALTER TABLE test.tbl SET (parallel_workers=0);
+step create_index_concurrently_predicate_set_xid_no_param: CREATE INDEX CONCURRENTLY idx ON test.tbl(i, j) WHERE test.predicate_stable_no_param();
+step reindex_index_concurrently: REINDEX INDEX CONCURRENTLY test.idx;
+step drop_index: DROP INDEX CONCURRENTLY test.idx;
+step detach: 
+	SELECT injection_points_detach('heapam_index_validate_scan_no_xid');
+	SELECT injection_points_detach('heap_reset_scan_snapshot_effective');
+	SELECT injection_points_detach('_bt_leader_participate_as_worker');
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+
+starting permutation: set_parallel_workers_1 create_index_concurrently_predicate_set_xid reindex_index_concurrently drop_index detach
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+step set_parallel_workers_1: ALTER TABLE test.tbl SET (parallel_workers=0);
+test: NOTICE:  notice triggered for injection point heapam_index_validate_scan_no_xid
+step create_index_concurrently_predicate_set_xid: CREATE INDEX CONCURRENTLY idx ON test.tbl(i, j) WHERE test.predicate_stable(i);
+test: NOTICE:  notice triggered for injection point heapam_index_validate_scan_no_xid
+step reindex_index_concurrently: REINDEX INDEX CONCURRENTLY test.idx;
+step drop_index: DROP INDEX CONCURRENTLY test.idx;
+step detach: 
+	SELECT injection_points_detach('heapam_index_validate_scan_no_xid');
+	SELECT injection_points_detach('heap_reset_scan_snapshot_effective');
+	SELECT injection_points_detach('_bt_leader_participate_as_worker');
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+
+starting permutation: set_parallel_workers_2 create_index_concurrently_simple wakeup reindex_index_concurrently wakeup drop_index detach
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+step set_parallel_workers_2: ALTER TABLE test.tbl SET (parallel_workers=2);
+test: NOTICE:  notice triggered for injection point heap_reset_scan_snapshot_effective
+step create_index_concurrently_simple: CREATE INDEX CONCURRENTLY idx ON test.tbl(i, j); <waiting ...>
+step wakeup: SELECT injection_points_wakeup('_bt_leader_participate_as_worker');
+injection_points_wakeup
+-----------------------
+                       
+(1 row)
+
+test: NOTICE:  notice triggered for injection point heapam_index_validate_scan_no_xid
+step create_index_concurrently_simple: <... completed>
+test: NOTICE:  notice triggered for injection point heap_reset_scan_snapshot_effective
+step reindex_index_concurrently: REINDEX INDEX CONCURRENTLY test.idx; <waiting ...>
+step wakeup: SELECT injection_points_wakeup('_bt_leader_participate_as_worker');
+injection_points_wakeup
+-----------------------
+                       
+(1 row)
+
+test: NOTICE:  notice triggered for injection point heapam_index_validate_scan_no_xid
+step reindex_index_concurrently: <... completed>
+step drop_index: DROP INDEX CONCURRENTLY test.idx;
+step detach: 
+	SELECT injection_points_detach('heapam_index_validate_scan_no_xid');
+	SELECT injection_points_detach('heap_reset_scan_snapshot_effective');
+	SELECT injection_points_detach('_bt_leader_participate_as_worker');
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+
+starting permutation: set_parallel_workers_2 create_unique_index_concurrently_simple wakeup reindex_index_concurrently wakeup drop_index detach
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+step set_parallel_workers_2: ALTER TABLE test.tbl SET (parallel_workers=2);
+test: NOTICE:  notice triggered for injection point heap_reset_scan_snapshot_effective
+step create_unique_index_concurrently_simple: CREATE UNIQUE INDEX CONCURRENTLY idx ON test.tbl(i); <waiting ...>
+step wakeup: SELECT injection_points_wakeup('_bt_leader_participate_as_worker');
+injection_points_wakeup
+-----------------------
+                       
+(1 row)
+
+test: NOTICE:  notice triggered for injection point heapam_index_validate_scan_no_xid
+step create_unique_index_concurrently_simple: <... completed>
+test: NOTICE:  notice triggered for injection point heap_reset_scan_snapshot_effective
+step reindex_index_concurrently: REINDEX INDEX CONCURRENTLY test.idx; <waiting ...>
+step wakeup: SELECT injection_points_wakeup('_bt_leader_participate_as_worker');
+injection_points_wakeup
+-----------------------
+                       
+(1 row)
+
+test: NOTICE:  notice triggered for injection point heapam_index_validate_scan_no_xid
+step reindex_index_concurrently: <... completed>
+step drop_index: DROP INDEX CONCURRENTLY test.idx;
+step detach: 
+	SELECT injection_points_detach('heapam_index_validate_scan_no_xid');
+	SELECT injection_points_detach('heap_reset_scan_snapshot_effective');
+	SELECT injection_points_detach('_bt_leader_participate_as_worker');
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+
+starting permutation: set_parallel_workers_2 create_index_concurrently_predicate_expression_mod wakeup reindex_index_concurrently wakeup drop_index detach
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+step set_parallel_workers_2: ALTER TABLE test.tbl SET (parallel_workers=2);
+test: NOTICE:  notice triggered for injection point heap_reset_scan_snapshot_effective
+step create_index_concurrently_predicate_expression_mod: CREATE INDEX CONCURRENTLY idx ON test.tbl(MOD(i, 2), j) WHERE MOD(i, 2) = 0; <waiting ...>
+step wakeup: SELECT injection_points_wakeup('_bt_leader_participate_as_worker');
+injection_points_wakeup
+-----------------------
+                       
+(1 row)
+
+test: NOTICE:  notice triggered for injection point heapam_index_validate_scan_no_xid
+step create_index_concurrently_predicate_expression_mod: <... completed>
+test: NOTICE:  notice triggered for injection point heap_reset_scan_snapshot_effective
+step reindex_index_concurrently: REINDEX INDEX CONCURRENTLY test.idx; <waiting ...>
+step wakeup: SELECT injection_points_wakeup('_bt_leader_participate_as_worker');
+injection_points_wakeup
+-----------------------
+                       
+(1 row)
+
+test: NOTICE:  notice triggered for injection point heapam_index_validate_scan_no_xid
+step reindex_index_concurrently: <... completed>
+step drop_index: DROP INDEX CONCURRENTLY test.idx;
+step detach: 
+	SELECT injection_points_detach('heapam_index_validate_scan_no_xid');
+	SELECT injection_points_detach('heap_reset_scan_snapshot_effective');
+	SELECT injection_points_detach('_bt_leader_participate_as_worker');
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+

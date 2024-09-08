@@ -286,6 +286,9 @@ pgstat_relation(Relation rel, FunctionCallInfo fcinfo)
 			case BRIN_AM_OID:
 				err = "brin index";
 				break;
+			case STIR_AM_OID:
+				err = "stir index";
+				break;
 			default:
 				err = "unknown index";
 				break;
@@ -329,7 +332,7 @@ pgstat_heap(Relation rel, FunctionCallInfo fcinfo)
 				 errmsg("only heap AM is supported")));
 
 	/* Disable syncscan because we assume we scan from block zero upwards */
-	scan = table_beginscan_strat(rel, SnapshotAny, 0, NULL, true, false);
+	scan = table_beginscan_strat(rel, SnapshotAny, 0, NULL, true, false, false);
 	hscan = (HeapScanDesc) scan;
 
 	InitDirtySnapshot(SnapshotDirty);

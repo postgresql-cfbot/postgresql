@@ -55,6 +55,13 @@ compare_int16(const void *a, const void *b)
 	return (av - bv);
 }
 
+#define ST_SORT sort_int_16_arr
+#define ST_ELEMENT_TYPE int16
+#define ST_COMPARE(a, b) compare_int16(a, b)
+#define ST_SCOPE static
+#define ST_DEFINE
+#include <lib/sort_template.h>
+
 /*
  *		CREATE STATISTICS
  */
@@ -404,7 +411,7 @@ CreateStatistics(CreateStatsStmt *stmt)
 	 * it does not hurt (it does not matter for the contents, unlike for
 	 * indexes, for example).
 	 */
-	qsort(attnums, nattnums, sizeof(int16), compare_int16);
+	sort_int_16_arr(attnums, nattnums);
 
 	/*
 	 * Check for duplicates in the list of columns. The attnums are sorted so

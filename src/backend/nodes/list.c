@@ -1721,3 +1721,17 @@ list_oid_cmp(const ListCell *p1, const ListCell *p2)
 void list_oid_sort(List *data){
    sort_list_oids(list_head(data), list_length(data));
 }
+
+#define ST_SORT sort_list_ints
+#define ST_ELEMENT_TYPE ListCell
+#define ST_COMPARE(a, b) list_int_cmp(a, b)
+#define ST_SCOPE static
+#define ST_DEFINE
+#include <lib/sort_template.h>
+
+/*
+ * Sort list with int type optimization.
+ */
+void list_int_sort(List *data){
+   sort_list_ints(list_head(data), list_length(data));
+}

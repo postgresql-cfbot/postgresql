@@ -42,6 +42,7 @@ tests += {
   'isolation': {
     'specs': [
       'inplace',
+      'reindex_concurrently_safe_index',
     ],
   },
   'tap': {

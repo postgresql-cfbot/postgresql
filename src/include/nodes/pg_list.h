@@ -680,6 +680,7 @@ extern pg_nodiscard List *list_copy_deep(const List *oldlist);
 typedef int (*list_sort_comparator) (const ListCell *a, const ListCell *b);
 extern void list_sort(List *list, list_sort_comparator cmp);
 extern void list_oid_sort(List *list);
+extern void list_int_sort(List *list);
 
 extern int	list_int_cmp(const ListCell *p1, const ListCell *p2);
 extern int	list_oid_cmp(const ListCell *p1, const ListCell *p2);

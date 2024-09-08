@@ -24,6 +24,7 @@
 #include "storage/read_stream.h"
 #include "utils/rel.h"
 #include "utils/snapshot.h"
+#include "utils/injection_point.h"
 
 
 #define DEFAULT_TABLE_ACCESS_METHOD	"heap"
@@ -70,6 +71,7 @@ typedef enum ScanOptions
 	 * needed. If table data may be needed, set SO_NEED_TUPLES.
 	 */
 	SO_NEED_TUPLES = 1 << 10,
+	SO_RESET_SNAPSHOT = 1 << 11,
 }			ScanOptions;
 
 /*
@@ -703,11 +705,14 @@ typedef struct TableAmRoutine
 										   TableScanDesc scan);
 
 	/* see table_index_validate_scan for reference about parameters */
-	void		(*index_validate_scan) (Relation table_rel,
+	TransactionId 		(*index_validate_scan) (Relation table_rel,
 										Relation index_rel,
+										Relation aux_index_rel,
 										struct IndexInfo *index_info,
+										struct IndexInfo *aux_index_info,
 										Snapshot snapshot,
-										struct ValidateIndexState *state);
+										struct ValidateIndexState *state,
+										struct ValidateIndexState *aux_state);
 
 
 	/* ------------------------------------------------------------------------
@@ -931,7 +936,8 @@ extern TableScanDesc table_beginscan_catalog(Relation relation, int nkeys,
 static inline TableScanDesc
 table_beginscan_strat(Relation rel, Snapshot snapshot,
 					  int nkeys, struct ScanKeyData *key,
-					  bool allow_strat, bool allow_sync)
+					  bool allow_strat, bool allow_sync,
+					  bool reset_snapshot)
 {
 	uint32		flags = SO_TYPE_SEQSCAN | SO_ALLOW_PAGEMODE;
 
@@ -939,6 +945,11 @@ table_beginscan_strat(Relation rel, Snapshot snapshot,
 		flags |= SO_ALLOW_STRAT;
 	if (allow_sync)
 		flags |= SO_ALLOW_SYNC;
+	if (reset_snapshot)
+	{
+		INJECTION_POINT("table_beginscan_strat_reset_snapshots");
+		flags |= (SO_RESET_SNAPSHOT | SO_TEMP_SNAPSHOT);
+	}
 
 	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key, NULL, flags);
 }
@@ -1835,19 +1846,26 @@ table_index_build_range_scan(Relation table_rel,
  *
  * See validate_index() for an explanation.
  */
-static inline void
+static inline TransactionId
 table_index_validate_scan(Relation table_rel,
-						  Relation index_rel,
-						  struct IndexInfo *index_info,
-						  Snapshot snapshot,
-						  struct ValidateIndexState *state)
+								   Relation index_rel,
+								   Relation aux_index_rel,
+								   struct IndexInfo *index_info,
+								   struct IndexInfo *aux_index_info,
+								   Snapshot snapshot,
+								   struct ValidateIndexState *state,
+								   struct ValidateIndexState *auxstate)
 {
-	table_rel->rd_tableam->index_validate_scan(table_rel,
-											   index_rel,
-											   index_info,
-											   snapshot,
-											   state);
+	return table_rel->rd_tableam->index_validate_scan(table_rel,
+														index_rel,
+														aux_index_rel,
+														index_info,
+														aux_index_info,
+														snapshot,
+														state,
+														auxstate);
 }
+
 
 
 /* ----------------------------------------------------------------------------

@@ -56,10 +56,6 @@ struct XidCache
  */
 #define		PROC_IS_AUTOVACUUM	0x01	/* is it an autovac worker? */
 #define		PROC_IN_VACUUM		0x02	/* currently running lazy vacuum */
-#define		PROC_IN_SAFE_IC		0x04	/* currently running CREATE INDEX
-										 * CONCURRENTLY or REINDEX
-										 * CONCURRENTLY on non-expressional,
-										 * non-partial index */
 #define		PROC_VACUUM_FOR_WRAPAROUND	0x08	/* set by autovac only */
 #define		PROC_IN_LOGICAL_DECODING	0x10	/* currently doing logical
 												 * decoding outside xact */
@@ -69,13 +65,13 @@ struct XidCache
 
 /* flags reset at EOXact */
 #define		PROC_VACUUM_STATE_MASK \
-	(PROC_IN_VACUUM | PROC_IN_SAFE_IC | PROC_VACUUM_FOR_WRAPAROUND)
+	(PROC_IN_VACUUM | PROC_VACUUM_FOR_WRAPAROUND)
 
 /*
  * Xmin-related flags. Make sure any flags that affect how the process' Xmin
  * value is interpreted by VACUUM are included here.
  */
-#define		PROC_XMIN_FLAGS (PROC_IN_VACUUM | PROC_IN_SAFE_IC)
+#define		PROC_XMIN_FLAGS (PROC_IN_VACUUM)
 
 /*
  * We allow a small number of "weak" relation locks (AccessShareLock,
@@ -179,6 +175,7 @@ struct PGPROC
 								 * starting our xact, excluding LAZY VACUUM:
 								 * vacuum must not remove tuples deleted by
 								 * xid >= xmin ! */
+	TransactionId catalogXmin;
 
 	int			pid;			/* Backend's process ID; 0 if prepared xact */
 

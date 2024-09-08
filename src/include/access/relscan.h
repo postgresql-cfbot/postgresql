@@ -64,6 +64,7 @@ typedef struct ParallelTableScanDescData
 {
 	Oid			phs_relid;		/* OID of relation to scan */
 	bool		phs_syncscan;	/* report location to syncscan logic? */
+	bool		phs_snapshot_reset;
 	bool		phs_snapshot_any;	/* SnapshotAny, not phs_snapshot_data? */
 	Size		phs_snapshot_off;	/* data for snapshot */
 } ParallelTableScanDescData;

@@ -41,10 +41,12 @@
 #include "storage/bufpage.h"
 #include "storage/lmgr.h"
 #include "storage/predicate.h"
+#include "storage/proc.h"
 #include "storage/procarray.h"
 #include "storage/smgr.h"
 #include "utils/builtins.h"
 #include "utils/rel.h"
+#include "utils/injection_point.h"
 
 static void reform_and_rewrite_tuple(HeapTuple tuple,
 									 Relation OldHeap, Relation NewHeap,
@@ -1191,11 +1193,11 @@ heapam_index_build_range_scan(Relation heapRelation,
 	ExprContext *econtext;
 	Snapshot	snapshot;
 	bool		need_unregister_snapshot = false;
+	bool		pop_active_snapshot = false;
 	TransactionId OldestXmin;
 	BlockNumber previous_blkno = InvalidBlockNumber;
 	BlockNumber root_blkno = InvalidBlockNumber;
 	OffsetNumber root_offsets[MaxHeapTuplesPerPage];
-
 	/*
 	 * sanity checks
 	 */
@@ -1213,6 +1215,8 @@ heapam_index_build_range_scan(Relation heapRelation,
 	 * only one of those is requested.
 	 */
 	Assert(!(anyvisible && checking_uniqueness));
+	Assert(!(anyvisible && indexInfo->ii_Concurrent));
+	Assert(!indexInfo->ii_Concurrent || !HaveRegisteredOrActiveSnapshot() || scan);
 
 	/*
 	 * Need an EState for evaluation of index expressions and partial-index
@@ -1252,17 +1256,22 @@ heapam_index_build_range_scan(Relation heapRelation,
 		if (!TransactionIdIsValid(OldestXmin))
 		{
 			snapshot = RegisterSnapshot(GetTransactionSnapshot());
-			need_unregister_snapshot = true;
+			PushActiveSnapshot(snapshot);
+			need_unregister_snapshot = pop_active_snapshot = !indexInfo->ii_Concurrent;
 		}
 		else
+		{
+			Assert(!indexInfo->ii_Concurrent);
 			snapshot = SnapshotAny;
+		}
 
 		scan = table_beginscan_strat(heapRelation,	/* relation */
 									 snapshot,	/* snapshot */
 									 0, /* number of keys */
 									 NULL,	/* scan key */
 									 true,	/* buffer access strategy OK */
-									 allow_sync);	/* syncscan OK? */
+									 allow_sync,	/* syncscan OK? */
+									 indexInfo->ii_Concurrent);
 	}
 	else
 	{
@@ -1726,8 +1735,12 @@ heapam_index_build_range_scan(Relation heapRelation,
 	table_endscan(scan);
 
 	/* we can now forget our snapshot, if set and registered by us */
+	if (pop_active_snapshot)
+		PopActiveSnapshot();
 	if (need_unregister_snapshot)
 		UnregisterSnapshot(snapshot);
+	if (indexInfo->ii_Concurrent && !hscan)
+		Assert(!TransactionIdIsValid(MyProc->xmin));
 
 	ExecDropSingleTupleTableSlot(slot);
 
@@ -1740,245 +1753,206 @@ heapam_index_build_range_scan(Relation heapRelation,
 	return reltuples;
 }
 
-static void
-heapam_index_validate_scan(Relation heapRelation,
-						   Relation indexRelation,
-						   IndexInfo *indexInfo,
+static TransactionId
+heapam_index_validate_scan(Relation table_rel,
+						   Relation index_rel,
+						   Relation  aux_index_rel,
+						   struct IndexInfo *index_info,
+						   struct IndexInfo *aux_index_info,
 						   Snapshot snapshot,
-						   ValidateIndexState *state)
+						   struct ValidateIndexState *state,
+						   struct ValidateIndexState *aux_state)
 {
-	TableScanDesc scan;
-	HeapScanDesc hscan;
-	HeapTuple	heapTuple;
+	IndexFetchTableData *fetch;
+	TransactionId limitXmin;
+
 	Datum		values[INDEX_MAX_KEYS];
 	bool		isnull[INDEX_MAX_KEYS];
-	ExprState  *predicate;
-	TupleTableSlot *slot;
-	EState	   *estate;
-	ExprContext *econtext;
-	BlockNumber root_blkno = InvalidBlockNumber;
-	OffsetNumber root_offsets[MaxHeapTuplesPerPage];
-	bool		in_index[MaxHeapTuplesPerPage];
-	BlockNumber previous_blkno = InvalidBlockNumber;
+
+	TupleTableSlot  *slot;
+	EState			*estate;
+	ExprContext		*econtext;
 
 	/* state variables for the merge */
-	ItemPointer indexcursor = NULL;
-	ItemPointerData decoded;
-	bool		tuplesort_empty = false;
+	ItemPointer 	indexcursor = NULL,
+					auxindexcursor = NULL,
+					prev_indexcursor = NULL;
+	ItemPointerData decoded,
+					auxdecoded,
+					prev_decoded,
+					fetched;
+	bool			tuplesort_empty = false,
+					auxtuplesort_empty = false;
+	instr_time		snapshotTime,
+					currentTime,
+					elapsed;
+
+	Assert(!HaveRegisteredOrActiveSnapshot());
+	Assert(!TransactionIdIsValid(MyProc->xmin));
+
+	snapshot = RegisterSnapshot(GetLatestSnapshot());
+	PushActiveSnapshot(snapshot);
+	INSTR_TIME_SET_CURRENT(snapshotTime);
+	limitXmin = snapshot->xmin;
 
 	/*
 	 * sanity checks
 	 */
-	Assert(OidIsValid(indexRelation->rd_rel->relam));
+	Assert(OidIsValid(index_rel->rd_rel->relam));
+	Assert(OidIsValid(aux_index_rel->rd_rel->relam));
 
-	/*
-	 * Need an EState for evaluation of index expressions and partial-index
-	 * predicates.  Also a slot to hold the current tuple.
-	 */
 	estate = CreateExecutorState();
 	econtext = GetPerTupleExprContext(estate);
-	slot = MakeSingleTupleTableSlot(RelationGetDescr(heapRelation),
-									&TTSOpsHeapTuple);
+
+	slot = MakeSingleTupleTableSlot(RelationGetDescr(table_rel),
+									&TTSOpsBufferHeapTuple);
 
 	/* Arrange for econtext's scan tuple to be the tuple under test */
 	econtext->ecxt_scantuple = slot;
 
-	/* Set up execution state for predicate, if any. */
-	predicate = ExecPrepareQual(indexInfo->ii_Predicate, estate);
+	fetch = heapam_index_fetch_begin(table_rel);
 
-	/*
-	 * Prepare for scan of the base relation.  We need just those tuples
-	 * satisfying the passed-in reference snapshot.  We must disable syncscan
-	 * here, because it's critical that we read from block zero forward to
-	 * match the sorted TIDs.
-	 */
-	scan = table_beginscan_strat(heapRelation,	/* relation */
-								 snapshot,	/* snapshot */
-								 0, /* number of keys */
-								 NULL,	/* scan key */
-								 true,	/* buffer access strategy OK */
-								 false);	/* syncscan not OK */
-	hscan = (HeapScanDesc) scan;
+	ItemPointerSetInvalid(&decoded);
+	ItemPointerSetInvalid(&prev_decoded);
+	ItemPointerSetInvalid(&auxdecoded);
+	ItemPointerSetInvalid(&fetched);
 
-	pgstat_progress_update_param(PROGRESS_SCAN_BLOCKS_TOTAL,
-								 hscan->rs_nblocks);
+	prev_indexcursor = &prev_decoded;
 
-	/*
-	 * Scan all tuples matching the snapshot.
-	 */
-	while ((heapTuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	while (!auxtuplesort_empty)
 	{
-		ItemPointer heapcursor = &heapTuple->t_self;
-		ItemPointerData rootTuple;
-		OffsetNumber root_offnum;
-
 		CHECK_FOR_INTERRUPTS();
 
-		state->htups += 1;
-
-		if ((previous_blkno == InvalidBlockNumber) ||
-			(hscan->rs_cblock != previous_blkno))
+		INSTR_TIME_SET_CURRENT(currentTime);
+		elapsed = currentTime;
+		INSTR_TIME_SUBTRACT(elapsed, snapshotTime);
+		if (INSTR_TIME_GET_MILLISEC(elapsed) >= VALIDATE_INDEX_SNAPSHOT_RESET_INTERVAL)
 		{
-			pgstat_progress_update_param(PROGRESS_SCAN_BLOCKS_DONE,
-										 hscan->rs_cblock);
-			previous_blkno = hscan->rs_cblock;
+			PopActiveSnapshot();
+			UnregisterSnapshot(snapshot);
+
+			Assert(!TransactionIdIsValid(MyProc->xmin));
+
+			snapshot = RegisterSnapshot(GetLatestSnapshot());
+			PushActiveSnapshot(snapshot);
+			limitXmin = TransactionIdNewer(limitXmin, snapshot->xmin);
+			INSTR_TIME_SET_CURRENT(snapshotTime);
 		}
 
-		/*
-		 * As commented in table_index_build_scan, we should index heap-only
-		 * tuples under the TIDs of their root tuples; so when we advance onto
-		 * a new heap page, build a map of root item offsets on the page.
-		 *
-		 * This complicates merging against the tuplesort output: we will
-		 * visit the live tuples in order by their offsets, but the root
-		 * offsets that we need to compare against the index contents might be
-		 * ordered differently.  So we might have to "look back" within the
-		 * tuplesort output, but only within the current page.  We handle that
-		 * by keeping a bool array in_index[] showing all the
-		 * already-passed-over tuplesort output TIDs of the current page. We
-		 * clear that array here, when advancing onto a new heap page.
-		 */
-		if (hscan->rs_cblock != root_blkno)
 		{
-			Page		page = BufferGetPage(hscan->rs_cbuf);
-
-			LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_SHARE);
-			heap_get_root_tuples(page, root_offsets);
-			LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_UNLOCK);
-
-			memset(in_index, 0, sizeof(in_index));
-
-			root_blkno = hscan->rs_cblock;
-		}
-
-		/* Convert actual tuple TID to root TID */
-		rootTuple = *heapcursor;
-		root_offnum = ItemPointerGetOffsetNumber(heapcursor);
-
-		if (HeapTupleIsHeapOnly(heapTuple))
-		{
-			root_offnum = root_offsets[root_offnum - 1];
-			if (!OffsetNumberIsValid(root_offnum))
-				ereport(ERROR,
-						(errcode(ERRCODE_DATA_CORRUPTED),
-						 errmsg_internal("failed to find parent tuple for heap-only tuple at (%u,%u) in table \"%s\"",
-										 ItemPointerGetBlockNumber(heapcursor),
-										 ItemPointerGetOffsetNumber(heapcursor),
-										 RelationGetRelationName(heapRelation))));
-			ItemPointerSetOffsetNumber(&rootTuple, root_offnum);
-		}
-
-		/*
-		 * "merge" by skipping through the index tuples until we find or pass
-		 * the current root tuple.
-		 */
-		while (!tuplesort_empty &&
-			   (!indexcursor ||
-				ItemPointerCompare(indexcursor, &rootTuple) < 0))
-		{
-			Datum		ts_val;
-			bool		ts_isnull;
-
-			if (indexcursor)
+			Datum ts_val;
+			bool ts_isnull;
+			auxtuplesort_empty = !tuplesort_getdatum(aux_state->tuplesort, true,
+													 false, &ts_val, &ts_isnull,
+													 NULL);
+			Assert(auxtuplesort_empty || !ts_isnull);
+			if (!auxtuplesort_empty)
 			{
-				/*
-				 * Remember index items seen earlier on the current heap page
-				 */
-				if (ItemPointerGetBlockNumber(indexcursor) == root_blkno)
-					in_index[ItemPointerGetOffsetNumber(indexcursor) - 1] = true;
-			}
-
-			tuplesort_empty = !tuplesort_getdatum(state->tuplesort, true,
-												  false, &ts_val, &ts_isnull,
-												  NULL);
-			Assert(tuplesort_empty || !ts_isnull);
-			if (!tuplesort_empty)
-			{
-				itemptr_decode(&decoded, DatumGetInt64(ts_val));
-				indexcursor = &decoded;
+				itemptr_decode(&auxdecoded, DatumGetInt64(ts_val));
+				auxindexcursor = &auxdecoded;
 			}
 			else
 			{
-				/* Be tidy */
-				indexcursor = NULL;
+				auxindexcursor = NULL;
 			}
 		}
 
-		/*
-		 * If the tuplesort has overshot *and* we didn't see a match earlier,
-		 * then this tuple is missing from the index, so insert it.
-		 */
-		if ((tuplesort_empty ||
-			 ItemPointerCompare(indexcursor, &rootTuple) > 0) &&
-			!in_index[root_offnum - 1])
+		if (!auxtuplesort_empty)
 		{
-			MemoryContextReset(econtext->ecxt_per_tuple_memory);
-
-			/* Set up for predicate or expression evaluation */
-			ExecStoreHeapTuple(heapTuple, slot, false);
-
-			/*
-			 * In a partial index, discard tuples that don't satisfy the
-			 * predicate.
-			 */
-			if (predicate != NULL)
+			while (!tuplesort_empty && (indexcursor == NULL || /* null on first time here */
+						ItemPointerCompare(indexcursor, auxindexcursor) < 0))
 			{
-				if (!ExecQual(predicate, econtext))
-					continue;
+				Datum ts_val;
+				bool ts_isnull;
+				prev_decoded = decoded;
+				tuplesort_empty = !tuplesort_getdatum(state->tuplesort, true,
+													  false, &ts_val, &ts_isnull,
+													  NULL);
+				Assert(tuplesort_empty || !ts_isnull);
+				if (!tuplesort_empty)
+				{
+					itemptr_decode(&decoded, DatumGetInt64(ts_val));
+					indexcursor = &decoded;
+
+					if (ItemPointerCompare(prev_indexcursor, indexcursor) == 0)
+					{
+						elog(DEBUG5, "skipping duplicate tid in target index snapshot: (%u,%u)",
+							 ItemPointerGetBlockNumber(indexcursor),
+							 ItemPointerGetOffsetNumber(indexcursor));
+					}
+				}
+				else
+				{
+					indexcursor = NULL;
+				}
+
+				CHECK_FOR_INTERRUPTS();
 			}
 
-			/*
-			 * For the current heap tuple, extract all the attributes we use
-			 * in this index, and note which are null.  This also performs
-			 * evaluation of any expressions needed.
-			 */
-			FormIndexDatum(indexInfo,
-						   slot,
-						   estate,
-						   values,
-						   isnull);
+			if (tuplesort_empty || ItemPointerCompare(indexcursor, auxindexcursor) > 0)
+			{
+				bool call_again = false;
+				bool all_dead = false;
+				ItemPointer tid;
 
-			/*
-			 * You'd think we should go ahead and build the index tuple here,
-			 * but some index AMs want to do further processing on the data
-			 * first. So pass the values[] and isnull[] arrays, instead.
-			 */
+				fetched = *auxindexcursor;
+				tid = &fetched;
 
-			/*
-			 * If the tuple is already committed dead, you might think we
-			 * could suppress uniqueness checking, but this is no longer true
-			 * in the presence of HOT, because the insert is actually a proxy
-			 * for a uniqueness check on the whole HOT-chain.  That is, the
-			 * tuple we have here could be dead because it was already
-			 * HOT-updated, and if so the updating transaction will not have
-			 * thought it should insert index entries.  The index AM will
-			 * check the whole HOT-chain and correctly detect a conflict if
-			 * there is one.
-			 */
+				MemoryContextReset(econtext->ecxt_per_tuple_memory);
 
-			index_insert(indexRelation,
-						 values,
-						 isnull,
-						 &rootTuple,
-						 heapRelation,
-						 indexInfo->ii_Unique ?
-						 UNIQUE_CHECK_YES : UNIQUE_CHECK_NO,
-						 false,
-						 indexInfo);
+				if (heapam_index_fetch_tuple(fetch, tid, snapshot, slot, &call_again, &all_dead))
+				{
 
-			state->tups_inserted += 1;
+					FormIndexDatum(index_info,
+								   slot,
+								   estate,
+								   values,
+								   isnull);
+
+					index_insert(index_rel,
+								 values,
+								 isnull,
+								 auxindexcursor, /* insert root tuple */
+								 table_rel,
+								 index_info->ii_Unique ?
+								 UNIQUE_CHECK_YES : UNIQUE_CHECK_NO,
+								 false,
+								 index_info);
+
+					state->tups_inserted += 1;
+
+					elog(DEBUG5, "inserted tid: (%u,%u), root: (%u, %u)",
+						 					ItemPointerGetBlockNumber(auxindexcursor),
+											ItemPointerGetOffsetNumber(auxindexcursor),
+											ItemPointerGetBlockNumber(tid),
+											ItemPointerGetOffsetNumber(tid));
+				}
+				else
+				{
+					elog(DEBUG5, "skipping insert to target index because tid not visible: (%u,%u)",
+						 ItemPointerGetBlockNumber(auxindexcursor),
+						 ItemPointerGetOffsetNumber(auxindexcursor));
+				}
+			}
 		}
 	}
-
-	table_endscan(scan);
 
 	ExecDropSingleTupleTableSlot(slot);
 
 	FreeExecutorState(estate);
 
-	/* These may have been pointing to the now-gone estate */
-	indexInfo->ii_ExpressionsState = NIL;
-	indexInfo->ii_PredicateState = NULL;
+	heapam_index_fetch_end(fetch);
+
+	PopActiveSnapshot();
+	UnregisterSnapshot(snapshot);
+	InvalidateCatalogSnapshot();
+	Assert(MyProc->xmin == InvalidTransactionId);
+#if USE_INJECTION_POINTS
+	if (MyProc->xid == InvalidTransactionId)
+		INJECTION_POINT("heapam_index_validate_scan_no_xid");
+#endif
+
+	return limitXmin;
 }
 
 /*

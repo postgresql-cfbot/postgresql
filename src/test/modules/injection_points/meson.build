@@ -42,6 +42,7 @@ tests += {
   'isolation': {
     'specs': [
       'inplace',
+      'reset_snapshots',
     ],
   },
   'tap': {

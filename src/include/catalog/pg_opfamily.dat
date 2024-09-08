@@ -302,6 +302,8 @@
   opfmethod => 'btree', opfname => 'multirange_ops' },
 { oid => '4225',
   opfmethod => 'hash', opfname => 'multirange_ops' },
+{ oid => '5558',
+  opfmethod => 'stir', opfname => 'record_ops' },
 { oid => '6158',
   opfmethod => 'gist', opfname => 'multirange_ops' },
 

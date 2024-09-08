@@ -29,6 +29,7 @@
 #include "storage/bufmgr.h"
 #include "storage/shmem.h"
 #include "storage/smgr.h"
+#include "storage/proc.h"
 
 /*
  * Constants to control the behavior of block allocation to parallel workers
@@ -149,15 +150,23 @@ table_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan,
 
 	pscan->phs_snapshot_off = snapshot_off;
 
-	if (IsMVCCSnapshot(snapshot))
+
+	if (snapshot == InvalidSnapshot)
+	{
+		pscan->phs_snapshot_any = false;
+		pscan->phs_snapshot_reset = true;
+	}
+	else if (IsMVCCSnapshot(snapshot))
 	{
 		SerializeSnapshot(snapshot, (char *) pscan + pscan->phs_snapshot_off);
 		pscan->phs_snapshot_any = false;
+		pscan->phs_snapshot_reset = false;
 	}
 	else
 	{
 		Assert(snapshot == SnapshotAny);
 		pscan->phs_snapshot_any = true;
+		pscan->phs_snapshot_reset = false;
 	}
 }
 
@@ -170,7 +179,16 @@ table_beginscan_parallel(Relation relation, ParallelTableScanDesc pscan)
 
 	Assert(RelationGetRelid(relation) == pscan->phs_relid);
 
-	if (!pscan->phs_snapshot_any)
+	if (pscan->phs_snapshot_reset)
+	{
+		Assert(!ActiveSnapshotSet());
+		Assert(MyProc->xmin == InvalidTransactionId);
+
+		snapshot = RegisterSnapshot(GetLatestSnapshot());
+		PushActiveSnapshot(snapshot);
+		flags |= (SO_RESET_SNAPSHOT | SO_TEMP_SNAPSHOT);
+	}
+	else if (!pscan->phs_snapshot_any)
 	{
 		/* Snapshot was serialized -- restore it */
 		snapshot = RestoreSnapshot((char *) pscan + pscan->phs_snapshot_off);

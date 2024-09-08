@@ -305,7 +305,7 @@ InitWalSender(void)
 	 */
 	if (MyDatabaseId == InvalidOid)
 	{
-		Assert(MyProc->xmin == InvalidTransactionId);
+		Assert(MyProc->xmin == InvalidTransactionId && MyProc->catalogXmin == InvalidTransactionId);
 		LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
 		MyProc->statusFlags |= PROC_AFFECTS_ALL_HORIZONS;
 		ProcGlobal->statusFlags[MyProc->pgxactoff] = MyProc->statusFlags;
@@ -2498,7 +2498,7 @@ PhysicalReplicationSlotNewXmin(TransactionId feedbackXmin, TransactionId feedbac
 	ReplicationSlot *slot = MyReplicationSlot;
 
 	SpinLockAcquire(&slot->mutex);
-	MyProc->xmin = InvalidTransactionId;
+	MyProc->xmin = MyProc->catalogXmin = InvalidTransactionId;
 
 	/*
 	 * For physical replication we don't need the interlock provided by xmin
@@ -2627,7 +2627,7 @@ ProcessStandbyHSFeedbackMessage(void)
 	if (!TransactionIdIsNormal(feedbackXmin)
 		&& !TransactionIdIsNormal(feedbackCatalogXmin))
 	{
-		MyProc->xmin = InvalidTransactionId;
+		MyProc->xmin = MyProc->catalogXmin = InvalidTransactionId;
 		if (MyReplicationSlot != NULL)
 			PhysicalReplicationSlotNewXmin(feedbackXmin, feedbackCatalogXmin);
 		return;
@@ -2680,11 +2680,8 @@ ProcessStandbyHSFeedbackMessage(void)
 		PhysicalReplicationSlotNewXmin(feedbackXmin, feedbackCatalogXmin);
 	else
 	{
-		if (TransactionIdIsNormal(feedbackCatalogXmin)
-			&& TransactionIdPrecedes(feedbackCatalogXmin, feedbackXmin))
-			MyProc->xmin = feedbackCatalogXmin;
-		else
-			MyProc->xmin = feedbackXmin;
+		MyProc->catalogXmin = feedbackCatalogXmin;
+		MyProc->xmin = feedbackXmin;
 	}
 }
 

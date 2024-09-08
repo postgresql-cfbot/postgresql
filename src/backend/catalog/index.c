@@ -67,6 +67,7 @@
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
 #include "storage/predicate.h"
+#include "storage/proc.h"
 #include "storage/smgr.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
@@ -741,7 +742,8 @@ index_create(Relation heapRelation,
 			 bits16 constr_flags,
 			 bool allow_system_table_mods,
 			 bool is_internal,
-			 Oid *constraintId)
+			 Oid *constraintId,
+			 char relpersistence)
 {
 	Oid			heapRelationId = RelationGetRelid(heapRelation);
 	Relation	pg_class;
@@ -752,7 +754,6 @@ index_create(Relation heapRelation,
 	bool		is_exclusion;
 	Oid			namespaceId;
 	int			i;
-	char		relpersistence;
 	bool		isprimary = (flags & INDEX_CREATE_IS_PRIMARY) != 0;
 	bool		invalid = (flags & INDEX_CREATE_INVALID) != 0;
 	bool		concurrent = (flags & INDEX_CREATE_CONCURRENT) != 0;
@@ -782,7 +783,6 @@ index_create(Relation heapRelation,
 	namespaceId = RelationGetNamespace(heapRelation);
 	shared_relation = heapRelation->rd_rel->relisshared;
 	mapped_relation = RelationIsMapped(heapRelation);
-	relpersistence = heapRelation->rd_rel->relpersistence;
 
 	/*
 	 * check parameters
@@ -1459,12 +1459,150 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId,
 							  0,
 							  true, /* allow table to be a system catalog? */
 							  false,	/* is_internal? */
-							  NULL);
+							  NULL,
+							  heapRelation->rd_rel->relpersistence);
 
 	/* Close the relations used and clean up */
 	index_close(indexRelation, NoLock);
 	ReleaseSysCache(indexTuple);
 	ReleaseSysCache(classTuple);
+
+	return newIndexId;
+}
+
+Oid
+index_concurrently_create_aux(Relation heapRelation, Oid mainIndexId,
+							   Oid tablespaceOid, const char *newName)
+{
+	Relation	indexRelation;
+	IndexInfo  *oldInfo,
+			*newInfo;
+	Oid			newIndexId = InvalidOid;
+	HeapTuple	indexTuple;
+
+	List	   *indexColNames = NIL;
+	List	   *indexExprs = NIL;
+	List	   *indexPreds = NIL;
+
+	Oid *auxOpclassIds;
+	int16 *auxColoptions;
+
+	indexRelation = index_open(mainIndexId, RowExclusiveLock);
+
+	/* The new index needs some information from the old index */
+	oldInfo = BuildIndexInfo(indexRelation);
+
+	/*
+	 * Build of an auxiliary index with exclusion constraints is not
+	 * supported.
+	 */
+	if (oldInfo->ii_ExclusionOps != NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						errmsg("auxiliary index creation for exclusion constraints is not supported")));
+
+	/* Get the array of class and column options IDs from index info */
+	indexTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(mainIndexId));
+	if (!HeapTupleIsValid(indexTuple))
+		elog(ERROR, "cache lookup failed for index %u", mainIndexId);
+
+
+	/*
+	 * Fetch the list of expressions and predicates directly from the
+	 * catalogs.  This cannot rely on the information from IndexInfo of the
+	 * old index as these have been flattened for the planner.
+	 */
+	if (oldInfo->ii_Expressions != NIL)
+	{
+		Datum		exprDatum;
+		char	   *exprString;
+
+		exprDatum = SysCacheGetAttrNotNull(INDEXRELID, indexTuple,
+										   Anum_pg_index_indexprs);
+		exprString = TextDatumGetCString(exprDatum);
+		indexExprs = (List *) stringToNode(exprString);
+		pfree(exprString);
+	}
+	if (oldInfo->ii_Predicate != NIL)
+	{
+		Datum		predDatum;
+		char	   *predString;
+
+		predDatum = SysCacheGetAttrNotNull(INDEXRELID, indexTuple,
+										   Anum_pg_index_indpred);
+		predString = TextDatumGetCString(predDatum);
+		indexPreds = (List *) stringToNode(predString);
+
+		/* Also convert to implicit-AND format */
+		indexPreds = make_ands_implicit((Expr *) indexPreds);
+		pfree(predString);
+	}
+
+	/*
+	 * Build the index information for the new index.  Note that rebuild of
+	 * indexes with exclusion constraints is not supported, hence there is no
+	 * need to fill all the ii_Exclusion* fields.
+	 */
+	newInfo = makeIndexInfo(oldInfo->ii_NumIndexAttrs,
+							oldInfo->ii_NumIndexKeyAttrs,
+							STIR_AM_OID,
+							indexExprs,
+							indexPreds,
+							false, /* aux index are not unique */
+							oldInfo->ii_NullsNotDistinct,
+							false,	/* not ready for inserts */
+							true,
+							false); /* aux are not summarizing */
+
+	/*
+	 * Extract the list of column names and the column numbers for the new
+	 * index information.  All this information will be used for the index
+	 * creation.
+	 */
+	for (int i = 0; i < oldInfo->ii_NumIndexAttrs; i++)
+	{
+		TupleDesc	indexTupDesc = RelationGetDescr(indexRelation);
+		Form_pg_attribute att = TupleDescAttr(indexTupDesc, i);
+
+		indexColNames = lappend(indexColNames, NameStr(att->attname));
+		newInfo->ii_IndexAttrNumbers[i] = oldInfo->ii_IndexAttrNumbers[i];
+	}
+
+	auxOpclassIds = palloc0(sizeof(Oid) * newInfo->ii_NumIndexAttrs);
+	auxColoptions = palloc0(sizeof(int16) * newInfo->ii_NumIndexAttrs);
+
+	for (int i = 0; i < newInfo->ii_NumIndexAttrs; i++)
+	{
+		auxOpclassIds[i] = RECORD_STIR_OPS_OID;
+		auxColoptions[i] = 0;
+	}
+
+	newIndexId = index_create(heapRelation,
+							  newName,
+							  InvalidOid,    /* indexRelationId */
+							  InvalidOid,    /* parentIndexRelid */
+							  InvalidOid,    /* parentConstraintId */
+							  InvalidRelFileNumber, /* relFileNumber */
+							  newInfo,
+							  indexColNames,
+							  STIR_AM_OID,
+							  tablespaceOid,
+							  indexRelation->rd_indcollation,
+							  auxOpclassIds,
+							  NULL,
+							  auxColoptions,
+							  NULL,
+							  (Datum) 0,
+							  INDEX_CREATE_SKIP_BUILD | INDEX_CREATE_CONCURRENT,
+							  0,
+							  true, /* allow table to be a system catalog? */
+							  false,    /* is_internal? */
+							  NULL,
+							  RELPERSISTENCE_UNLOGGED);
+
+	/* Close the relations used and clean up */
+	index_close(indexRelation, NoLock);
+	ReleaseSysCache(indexTuple);
 
 	return newIndexId;
 }
@@ -1488,9 +1626,7 @@ index_concurrently_build(Oid heapRelationId,
 	int			save_nestlevel;
 	Relation	indexRelation;
 	IndexInfo  *indexInfo;
-
-	/* This had better make sure that a snapshot is active */
-	Assert(ActiveSnapshotSet());
+	Snapshot 	snapshot = InvalidSnapshot;
 
 	/* Open and lock the parent heap relation */
 	heapRel = table_open(heapRelationId, ShareUpdateExclusiveLock);
@@ -1508,6 +1644,12 @@ index_concurrently_build(Oid heapRelationId,
 
 	indexRelation = index_open(indexRelationId, RowExclusiveLock);
 
+	Assert(!TransactionIdIsValid(MyProc->xmin));
+	Assert(!TransactionIdIsValid(MyProc->xid));
+
+	/* BuildIndexInfo requires as snapshot for expressions and predicates */
+	snapshot = RegisterSnapshot(GetTransactionSnapshot());
+	PushActiveSnapshot(snapshot);
 	/*
 	 * We have to re-build the IndexInfo struct, since it was lost in the
 	 * commit of the transaction where this concurrent index was created at
@@ -1518,11 +1660,17 @@ index_concurrently_build(Oid heapRelationId,
 	indexInfo->ii_Concurrent = true;
 	indexInfo->ii_BrokenHotChain = false;
 
+	PopActiveSnapshot();
+	UnregisterSnapshot(snapshot);
+	snapshot = InvalidSnapshot;
+
 	/* Now build the index */
-	index_build(heapRel, indexRelation, indexInfo, false, true);
+ 	index_build(heapRel, indexRelation, indexInfo, false, true);
+
+	Assert(!TransactionIdIsValid(MyProc->xmin));
 
 	/* Roll back any GUC changes executed by index functions */
-	AtEOXact_GUC(false, save_nestlevel);
+ 	AtEOXact_GUC(false, save_nestlevel);
 
 	/* Restore userid and security context */
 	SetUserIdAndSecContext(save_userid, save_sec_context);
@@ -3177,7 +3325,8 @@ IndexCheckExclusion(Relation heapRelation,
 								 0, /* number of keys */
 								 NULL,	/* scan key */
 								 true,	/* buffer access strategy OK */
-								 true); /* syncscan OK */
+								 true,  /* syncscan OK */
+								 false);
 
 	while (table_scan_getnextslot(scan, ForwardScanDirection, slot))
 	{
@@ -3288,33 +3437,58 @@ IndexCheckExclusion(Relation heapRelation,
  * making the table append-only by setting use_fsm).  However that would
  * add yet more locking issues.
  */
-void
-validate_index(Oid heapId, Oid indexId, Snapshot snapshot)
+TransactionId
+validate_index(Oid heapId, Oid indexId, Oid auxIndexId)
 {
 	Relation	heapRelation,
-				indexRelation;
-	IndexInfo  *indexInfo;
-	IndexVacuumInfo ivinfo;
-	ValidateIndexState state;
+			indexRelation,
+			auxIndexRelation;
+	IndexInfo  *indexInfo,
+				*auxIndexInfo;
+	Snapshot snapshot;
+	TransactionId limitXmin;
+	IndexVacuumInfo ivinfo, auxivinfo;
+	ValidateIndexState state, auxState;
 	Oid			save_userid;
 	int			save_sec_context;
 	int			save_nestlevel;
+	int			main_work_mem_part = (maintenance_work_mem * 8) / 10;
 
 	{
 		const int	progress_index[] = {
-			PROGRESS_CREATEIDX_PHASE,
-			PROGRESS_CREATEIDX_TUPLES_DONE,
-			PROGRESS_CREATEIDX_TUPLES_TOTAL,
-			PROGRESS_SCAN_BLOCKS_DONE,
-			PROGRESS_SCAN_BLOCKS_TOTAL
+				PROGRESS_CREATEIDX_PHASE,
+				PROGRESS_CREATEIDX_TUPLES_DONE,
+				PROGRESS_CREATEIDX_TUPLES_TOTAL,
+				PROGRESS_SCAN_BLOCKS_DONE,
+				PROGRESS_SCAN_BLOCKS_TOTAL
 		};
 		const int64 progress_vals[] = {
-			PROGRESS_CREATEIDX_PHASE_VALIDATE_IDXSCAN,
-			0, 0, 0, 0
+				PROGRESS_CREATEIDX_PHASE_VALIDATE_IDXSCAN,
+				0, 0, 0, 0
 		};
 
 		pgstat_progress_update_multi_param(5, progress_index, progress_vals);
 	}
+
+	/*
+	 * Now take the "reference snapshot" that will be used by validate_index()
+	 * to filter candidate tuples.  Beware!  There might still be snapshots in
+	 * use that treat some transaction as in-progress that our reference
+	 * snapshot treats as committed.  If such a recently-committed transaction
+	 * deleted tuples in the table, we will not include them in the index; yet
+	 * those transactions which see the deleting one as still-in-progress will
+	 * expect such tuples to be there once we mark the index as valid.
+	 *
+	 * We solve this by waiting for all endangered transactions to exit before
+	 * we mark the index as valid.
+	 *
+	 * We also set ActiveSnapshot to this snap, since functions in indexes may
+	 * need a snapshot.
+	 */
+	snapshot = RegisterSnapshot(GetTransactionSnapshot());
+	PushActiveSnapshot(snapshot);
+
+	Assert(TransactionIdIsValid(MyProc->xmin));
 
 	/* Open and lock the parent heap relation */
 	heapRelation = table_open(heapId, ShareUpdateExclusiveLock);
@@ -3331,6 +3505,7 @@ validate_index(Oid heapId, Oid indexId, Snapshot snapshot)
 	RestrictSearchPath();
 
 	indexRelation = index_open(indexId, RowExclusiveLock);
+	auxIndexRelation = index_open(auxIndexId, RowExclusiveLock);
 
 	/*
 	 * Fetch info needed for index_insert.  (You might think this should be
@@ -3338,9 +3513,11 @@ validate_index(Oid heapId, Oid indexId, Snapshot snapshot)
 	 * been built in a previous transaction.)
 	 */
 	indexInfo = BuildIndexInfo(indexRelation);
+	auxIndexInfo = BuildIndexInfo(auxIndexRelation);
 
 	/* mark build is concurrent just for consistency */
 	indexInfo->ii_Concurrent = true;
+	auxIndexInfo->ii_Concurrent = true;
 
 	/*
 	 * Scan the index and gather up all the TIDs into a tuplesort object.
@@ -3353,6 +3530,10 @@ validate_index(Oid heapId, Oid indexId, Snapshot snapshot)
 	ivinfo.message_level = DEBUG2;
 	ivinfo.num_heap_tuples = heapRelation->rd_rel->reltuples;
 	ivinfo.strategy = NULL;
+	ivinfo.validate_index = true;
+
+	auxivinfo = ivinfo;
+	auxivinfo.index = auxIndexRelation;
 
 	/*
 	 * Encode TIDs as int8 values for the sort, rather than directly sorting
@@ -3360,9 +3541,27 @@ validate_index(Oid heapId, Oid indexId, Snapshot snapshot)
 	 * is a pass-by-reference type on all platforms, whereas int8 is
 	 * pass-by-value on most platforms.
 	 */
+	auxState.tuplesort = tuplesort_begin_datum(INT8OID, Int8LessOperator,
+											   InvalidOid, false,
+											   maintenance_work_mem - main_work_mem_part,
+											   NULL, TUPLESORT_NONE);
+	auxState.htups = auxState.itups = auxState.tups_inserted = 0;
+
+	(void) index_bulk_delete(&auxivinfo, NULL,
+							 validate_index_callback, (void *) &auxState);
+
+	PopActiveSnapshot();
+	UnregisterSnapshot(snapshot);
+
+	Assert(!TransactionIdIsValid(MyProc->xmin));
+
+	snapshot = RegisterSnapshot(GetLatestSnapshot());
+	PushActiveSnapshot(snapshot);
+
+
 	state.tuplesort = tuplesort_begin_datum(INT8OID, Int8LessOperator,
 											InvalidOid, false,
-											maintenance_work_mem,
+											main_work_mem_part,
 											NULL, TUPLESORT_NONE);
 	state.htups = state.itups = state.tups_inserted = 0;
 
@@ -3370,38 +3569,63 @@ validate_index(Oid heapId, Oid indexId, Snapshot snapshot)
 	(void) index_bulk_delete(&ivinfo, NULL,
 							 validate_index_callback, (void *) &state);
 
+
+
 	/* Execute the sort */
 	{
 		const int	progress_index[] = {
-			PROGRESS_CREATEIDX_PHASE,
-			PROGRESS_SCAN_BLOCKS_DONE,
-			PROGRESS_SCAN_BLOCKS_TOTAL
+				PROGRESS_CREATEIDX_PHASE,
+				PROGRESS_SCAN_BLOCKS_DONE,
+				PROGRESS_SCAN_BLOCKS_TOTAL
 		};
 		const int64 progress_vals[] = {
-			PROGRESS_CREATEIDX_PHASE_VALIDATE_SORT,
-			0, 0
+				PROGRESS_CREATEIDX_PHASE_VALIDATE_SORT,
+				0, 0
 		};
 
 		pgstat_progress_update_multi_param(3, progress_index, progress_vals);
 	}
 	tuplesort_performsort(state.tuplesort);
+	tuplesort_performsort(auxState.tuplesort);
+
+	/*
+	 * Drop the reference snapshot.  We must do this before waiting out other
+	 * snapshot holders, else we will deadlock against other processes also
+	 * doing CREATE INDEX CONCURRENTLY, which would see our snapshot as one
+	 * they must wait for.  But first, save the snapshot's xmin to use as
+	 * limitXmin for GetCurrentVirtualXIDs().
+ 	*/
+	limitXmin = snapshot->xmin;
+
+
+	PopActiveSnapshot();
+	UnregisterSnapshot(snapshot);
+	snapshot = InvalidSnapshot;
+
+	Assert(!TransactionIdIsValid(MyProc->xmin));
+
 
 	/*
 	 * Now scan the heap and "merge" it with the index
 	 */
 	pgstat_progress_update_param(PROGRESS_CREATEIDX_PHASE,
 								 PROGRESS_CREATEIDX_PHASE_VALIDATE_TABLESCAN);
-	table_index_validate_scan(heapRelation,
+	limitXmin = TransactionIdNewer(limitXmin, table_index_validate_scan(heapRelation,
 							  indexRelation,
+							  auxIndexRelation,
 							  indexInfo,
-							  snapshot,
-							  &state);
+							  auxIndexInfo,
+							  snapshot, /* may be invalid */
+							  &state,
+							  &auxState));
 
 	/* Done with tuplesort object */
 	tuplesort_end(state.tuplesort);
+	tuplesort_end(auxState.tuplesort);
 
 	/* Make sure to release resources cached in indexInfo (if needed). */
 	index_insert_cleanup(indexRelation, indexInfo);
+	index_insert_cleanup(auxIndexRelation, auxIndexInfo);
 
 	elog(DEBUG2,
 		 "validate_index found %.0f heap tuples, %.0f index tuples; inserted %.0f missing tuples",
@@ -3414,8 +3638,13 @@ validate_index(Oid heapId, Oid indexId, Snapshot snapshot)
 	SetUserIdAndSecContext(save_userid, save_sec_context);
 
 	/* Close rels, but keep locks */
+	index_close(auxIndexRelation, NoLock);
 	index_close(indexRelation, NoLock);
 	table_close(heapRelation, NoLock);
+
+	Assert(!HaveRegisteredOrActiveSnapshot());
+	Assert(!TransactionIdIsValid(MyProc->xmin));
+	return limitXmin;
 }
 
 /*
@@ -3466,6 +3695,12 @@ index_set_state_flags(Oid indexId, IndexStateFlagsAction action)
 			Assert(!indexForm->indisready);
 			Assert(!indexForm->indisvalid);
 			indexForm->indisready = true;
+			break;
+		case INDEX_DROP_CLEAR_READY:
+			Assert(indexForm->indislive);
+			Assert(indexForm->indisready);
+			Assert(!indexForm->indisvalid);
+			indexForm->indisready = false;
 			break;
 		case INDEX_CREATE_SET_VALID:
 			/* Set indisvalid during a CREATE INDEX CONCURRENTLY sequence */

@@ -3227,4 +3227,8 @@
   amoprighttype => 'point', amopstrategy => '7', amopopr => '@>(box,point)',
   amopmethod => 'brin' },
 
+{ amopfamily => 'stir/record_ops', amoplefttype => 'record',
+  amoprighttype => 'record', amopstrategy => '1', amopopr => '=(record,record)',
+  amopmethod => 'stir' },
+
 ]

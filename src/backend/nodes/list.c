@@ -1707,3 +1707,17 @@ list_oid_cmp(const ListCell *p1, const ListCell *p2)
 
 	return pg_cmp_u32(v1, v2);
 }
+
+#define ST_SORT sort_list_oids
+#define ST_ELEMENT_TYPE ListCell
+#define ST_COMPARE(a, b) list_oid_cmp(a, b)
+#define ST_SCOPE static
+#define ST_DEFINE
+#include <lib/sort_template.h>
+
+/*
+ * Sort list with Oid type optimization.
+ */
+void list_oid_sort(List *data){
+   sort_list_oids(list_head(data), list_length(data));
+}

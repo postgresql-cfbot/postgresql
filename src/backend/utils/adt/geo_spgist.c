@@ -472,10 +472,10 @@ spg_box_quad_picksplit(PG_FUNCTION_ARGS)
 		highYs[i] = box->high.y;
 	}
 
-	qsort(lowXs, in->nTuples, sizeof(float8), compareDoubles);
-	qsort(highXs, in->nTuples, sizeof(float8), compareDoubles);
-	qsort(lowYs, in->nTuples, sizeof(float8), compareDoubles);
-	qsort(highYs, in->nTuples, sizeof(float8), compareDoubles);
+	sort_float8_arr(lowXs, in->nTuples);
+	sort_float8_arr(highXs, in->nTuples);
+	sort_float8_arr(lowYs, in->nTuples);
+	sort_float8_arr(highYs, in->nTuples);
 
 	median = in->nTuples / 2;
 

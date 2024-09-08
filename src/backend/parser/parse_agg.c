@@ -1959,7 +1959,7 @@ expand_grouping_sets(List *groupingSets, bool groupDistinct, int limit)
 
 		/* Sort each groupset individually */
 		foreach(cell, result)
-			list_sort(lfirst(cell), list_int_cmp);
+			list_int_sort(lfirst(cell));
 
 		/* Now sort the list of groupsets by length and contents */
 		list_sort(result, cmp_list_len_contents_asc);

@@ -118,7 +118,6 @@ static void SyncRepGetNthLatestSyncRecPtr(XLogRecPtr *writePtr,
 										  uint8 nth);
 static int	SyncRepGetStandbyPriority(void);
 static int	standby_priority_comparator(const void *a, const void *b);
-static int	cmp_lsn(const void *a, const void *b);
 
 #ifdef USE_ASSERT_CHECKING
 static bool SyncRepQueueIsOrderedByLSN(int mode);
@@ -643,6 +642,16 @@ SyncRepGetOldestSyncRecPtr(XLogRecPtr *writePtr,
 }
 
 /*
+- * Compare lsn in order to sort array in descending order.
+-*/
+#define ST_SORT sort_cmp_lsn
+#define ST_ELEMENT_TYPE XLogRecPtr
+#define ST_COMPARE(a, b) pg_cmp_u64(*(b), *(a))  /* Dereference pointers for comparison */
+#define ST_SCOPE static
+#define ST_DEFINE
+#include <lib/sort_template.h>
+
+/*
  * Calculate the Nth latest Write, Flush and Apply positions among sync
  * standbys.
  */
@@ -674,9 +683,9 @@ SyncRepGetNthLatestSyncRecPtr(XLogRecPtr *writePtr,
 	}
 
 	/* Sort each array in descending order */
-	qsort(write_array, num_standbys, sizeof(XLogRecPtr), cmp_lsn);
-	qsort(flush_array, num_standbys, sizeof(XLogRecPtr), cmp_lsn);
-	qsort(apply_array, num_standbys, sizeof(XLogRecPtr), cmp_lsn);
+	sort_cmp_lsn(write_array, num_standbys);
+	sort_cmp_lsn(flush_array, num_standbys);
+	sort_cmp_lsn(apply_array, num_standbys);
 
 	/* Get Nth latest Write, Flush, Apply positions */
 	*writePtr = write_array[nth - 1];
@@ -686,18 +695,6 @@ SyncRepGetNthLatestSyncRecPtr(XLogRecPtr *writePtr,
 	pfree(write_array);
 	pfree(flush_array);
 	pfree(apply_array);
-}
-
-/*
- * Compare lsn in order to sort array in descending order.
- */
-static int
-cmp_lsn(const void *a, const void *b)
-{
-	XLogRecPtr	lsn1 = *((const XLogRecPtr *) a);
-	XLogRecPtr	lsn2 = *((const XLogRecPtr *) b);
-
-	return pg_cmp_u64(lsn2, lsn1);
 }
 
 /*

@@ -2006,6 +2006,19 @@ PQconsumeInput(PGconn *conn)
 	if (pqReadData(conn) < 0)
 		return 0;
 
+	#ifdef USE_SSL
+		/*
+		 * Ensure all buffered read bytes in the SSL library are processed,
+		 * which might be not the case, if the SSL record size exceeds 8k.
+		 * Otherwise parseInput can't process the data.
+		 */
+		while (conn->ssl_in_use && pgtls_read_pending(conn))
+		{
+			if (pqReadData(conn) < 0)
+				return 0;
+		}
+	#endif
+
 	/* Parsing of the data waits till later. */
 	return 1;
 }

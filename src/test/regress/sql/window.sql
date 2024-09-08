@@ -1951,3 +1951,123 @@ $$ LANGUAGE SQL STABLE;
 
 EXPLAIN (costs off) SELECT * FROM pg_temp.f(2);
 SELECT * FROM pg_temp.f(2);
+
+-- IGNORE NULLS tests
+
+CREATE TEMPORARY TABLE planets (
+    name text,
+    orbit integer
+);
+
+INSERT INTO planets VALUES
+  ('mercury', 88),
+  ('venus', 224),
+  ('earth', NULL),
+  ('mars', NULL),
+  ('jupiter', 4332),
+  ('saturn', 24491),
+  ('uranus', NULL),
+  ('neptune', 60182),
+  ('pluto', 90560),
+  ('xyzzy', NULL);
+
+-- test ruleutils
+CREATE VIEW planets_view AS
+SELECT name,
+       orbit,
+       lag(orbit) OVER w AS lag,
+       lag(orbit) RESPECT NULLS OVER w AS lag_respect,
+       lag(orbit) IGNORE NULLS OVER w AS lag_ignore
+FROM planets
+WINDOW w AS (ORDER BY name)
+;
+SELECT pg_get_viewdef('planets_view');
+
+-- lag
+SELECT name,
+       orbit,
+       lag(orbit) OVER w AS lag,
+       lag(orbit) RESPECT NULLS OVER w AS lag_respect,
+       lag(orbit) IGNORE NULLS OVER w AS lag_ignore
+FROM planets
+WINDOW w AS (ORDER BY name)
+;
+
+-- lead
+SELECT name,
+       orbit,
+       lead(orbit) OVER w AS lead,
+       lead(orbit) RESPECT NULLS OVER w AS lead_respect,
+       lead(orbit) IGNORE NULLS OVER w AS lead_ignore
+FROM planets
+WINDOW w AS (ORDER BY name)
+;
+
+-- first_value
+SELECT name,
+       orbit,
+       first_value(orbit) RESPECT NULLS OVER w1,
+       first_value(orbit) IGNORE NULLS OVER w1,
+       first_value(orbit) RESPECT NULLS OVER w2,
+       first_value(orbit) IGNORE NULLS OVER w2
+FROM planets
+WINDOW w1 AS (ORDER BY name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
+       w2 AS (ORDER BY name ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING)
+;
+
+-- nth_value
+SELECT name,
+       orbit,
+       nth_value(orbit, 2) RESPECT NULLS OVER w1,
+       nth_value(orbit, 2) IGNORE NULLS OVER w1,
+       nth_value(orbit, 2) RESPECT NULLS OVER w2,
+       nth_value(orbit, 2) IGNORE NULLS OVER w2
+FROM planets
+WINDOW w1 AS (ORDER BY name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
+       w2 AS (ORDER BY name ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING)
+;
+
+-- last_value
+SELECT name,
+       orbit,
+       last_value(orbit) RESPECT NULLS OVER w1,
+       last_value(orbit) IGNORE NULLS OVER w1,
+       last_value(orbit) RESPECT NULLS OVER w2,
+       last_value(orbit) IGNORE NULLS OVER w2
+FROM planets
+WINDOW w1 AS (ORDER BY name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
+       w2 AS (ORDER BY name ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING)
+;
+
+-- exclude current row
+SELECT name,
+       orbit,
+       first_value(orbit) IGNORE NULLS OVER w,
+       last_value(orbit) IGNORE NULLS OVER w,
+       nth_value(orbit, 2) IGNORE NULLS OVER w,
+       lead(orbit, 1) IGNORE NULLS OVER w AS lead_ignore,
+       lag(orbit, 1) IGNORE NULLS OVER w AS lag_ignore
+FROM planets
+WINDOW w AS (ORDER BY name ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING EXCLUDE CURRENT ROW)
+;
+
+-- regular aggregate
+SELECT sum(orbit) OVER () FROM planets; -- succeeds
+SELECT sum(orbit) RESPECT NULLS OVER () FROM planets; -- fails
+SELECT sum(orbit) IGNORE NULLS OVER () FROM planets; -- fails
+
+-- test two consecutive nulls
+update planets set orbit=null where name='jupiter';
+SELECT name,
+       orbit,
+       first_value(orbit) IGNORE NULLS OVER w,
+       last_value(orbit) IGNORE NULLS OVER w,
+       nth_value(orbit, 2) IGNORE NULLS OVER w,
+       lead(orbit, 1) IGNORE NULLS OVER w AS lead_ignore,
+       lag(orbit, 1) IGNORE NULLS OVER w AS lag_ignore
+FROM planets
+WINDOW w AS (ORDER BY name ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING)
+;
+
+--cleanup
+DROP TABLE planets CASCADE;

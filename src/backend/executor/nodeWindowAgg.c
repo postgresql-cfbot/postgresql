@@ -69,6 +69,10 @@ typedef struct WindowObjectData
 	int			readptr;		/* tuplestore read pointer for this fn */
 	int64		markpos;		/* row that markptr is positioned on */
 	int64		seekpos;		/* row that readptr is positioned on */
+	int			ignore_nulls;	/* ignore nulls */
+	int64		*win_nonnulls;	/* tracks non-nulls in ignore nulls mode */
+	int			nonnulls_size;	/* track size of the win_nonnulls array */
+	int			nonnulls_len;	/* track length of the win_nonnulls array */
 } WindowObjectData;
 
 /*
@@ -96,6 +100,7 @@ typedef struct WindowStatePerFuncData
 
 	bool		plain_agg;		/* is it just a plain aggregate function? */
 	int			aggno;			/* if so, index of its WindowStatePerAggData */
+	int			ignore_nulls;	/* ignore nulls */
 
 	WindowObject winobj;		/* object used in window function API */
 }			WindowStatePerFuncData;
@@ -2620,14 +2625,14 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 			elog(ERROR, "WindowFunc with winref %u assigned to WindowAgg with winref %u",
 				 wfunc->winref, node->winref);
 
-		/* Look for a previous duplicate window function */
+		/* Look for a previous duplicate window function, which needs the same ignore_nulls value */
 		for (i = 0; i <= wfuncno; i++)
 		{
 			if (equal(wfunc, perfunc[i].wfunc) &&
 				!contain_volatile_functions((Node *) wfunc))
 				break;
 		}
-		if (i <= wfuncno)
+		if (i <= wfuncno && wfunc->ignore_nulls == perfunc[i].ignore_nulls)
 		{
 			/* Found a match to an existing entry, so just mark it */
 			wfuncstate->wfuncno = i;
@@ -2680,6 +2685,13 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 			winobj->argstates = wfuncstate->args;
 			winobj->localmem = NULL;
 			perfuncstate->winobj = winobj;
+			winobj->ignore_nulls = wfunc->ignore_nulls;
+			if (winobj->ignore_nulls == 1)
+			{
+				winobj->win_nonnulls = palloc_array(int64, 16);
+				winobj->nonnulls_size = 16;
+				winobj->nonnulls_len = 0;
+			}
 
 			/* It's a real window function, so set up to call it. */
 			fmgr_info_cxt(wfunc->winfnoid, &perfuncstate->flinfo,
@@ -3355,6 +3367,244 @@ WinRowsArePeers(WindowObject winobj, int64 pos1, int64 pos2)
 	return res;
 }
 
+static void increment_notnulls(WindowObject winobj, int64 pos)
+{
+	if (winobj->nonnulls_len == winobj->nonnulls_size)
+	{
+		winobj->nonnulls_size *= 2;
+		winobj->win_nonnulls =
+			repalloc_array(winobj->win_nonnulls,
+							int64,
+							winobj->nonnulls_size);
+	}
+	winobj->win_nonnulls[winobj->nonnulls_len] = pos;
+	winobj->nonnulls_len++;
+}
+
+static Datum ignorenulls_getfuncarginpartition(WindowObject winobj, int argno,
+						int relpos, int seektype, bool set_mark, bool *isnull, bool *isout) {
+	WindowAggState *winstate;
+	ExprContext *econtext;
+	TupleTableSlot *slot;
+	Datum		datum;
+	bool		gottuple;
+	int64		abs_pos;
+	int			notnull_offset;
+	int			notnull_relpos;
+	int			forward;
+	int			i;
+
+	Assert(WindowObjectIsValid(winobj));
+	winstate = winobj->winstate;
+	econtext = winstate->ss.ps.ps_ExprContext;
+	slot = winstate->temp_slot_1;
+	notnull_offset = 0;
+	notnull_relpos = abs(relpos);
+	forward = relpos > 0 ? 1 : -1;
+
+	switch (seektype)
+	{
+	case WINDOW_SEEK_CURRENT:
+		abs_pos = winstate->currentpos;
+		break;
+	case WINDOW_SEEK_HEAD:
+		abs_pos = 0;
+		break;
+	case WINDOW_SEEK_TAIL:
+		spool_tuples(winstate, -1);
+		abs_pos = winstate->spooled_rows - 1;
+		break;
+	default:
+		elog(ERROR, "unrecognized window seek type: %d", seektype);
+		abs_pos = 0; /* keep compiler quiet */
+		break;
+	}
+
+	if (forward == -1)
+		goto check_partition;
+
+	/* if we're moving forward, store previous rows */
+	for (i=0; i < winobj->nonnulls_len; ++i)
+	{
+		if (winobj->win_nonnulls[i] > abs_pos)
+		{
+			abs_pos = winobj->win_nonnulls[i];
+			++notnull_offset;
+			if (notnull_offset == notnull_relpos)
+			{
+				if (isout)
+					*isout = false;
+				window_gettupleslot(winobj, abs_pos, slot);
+				econtext->ecxt_outertuple = slot;
+				return ExecEvalExpr((ExprState *)list_nth(winobj->argstates, argno),
+									econtext, isnull);
+			}
+		}
+	}
+
+check_partition:
+	do
+	{
+		abs_pos += forward;
+		gottuple = window_gettupleslot(winobj, abs_pos, slot);
+
+		if (!gottuple)
+		{
+			if (isout)
+				*isout = true;
+			*isnull = true;
+			return (Datum)0;
+		}
+
+		if (isout)
+			*isout = false;
+		econtext->ecxt_outertuple = slot;
+		datum = ExecEvalExpr((ExprState *)list_nth(winobj->argstates, argno),
+							 econtext, isnull);
+
+		if (!*isnull)
+		{
+			++notnull_offset;
+			increment_notnulls(winobj, abs_pos);
+		}
+	} while (notnull_offset < notnull_relpos);
+
+	if (set_mark)
+		WinSetMarkPosition(winobj, abs_pos);
+	return datum;
+}
+
+static Datum ignorenulls_getfuncarginframe(WindowObject winobj, int argno,
+						int relpos, int seektype, bool set_mark, bool *isnull, bool *isout) {
+	WindowAggState *winstate;
+	ExprContext *econtext;
+	TupleTableSlot *slot;
+	Datum		datum;
+	bool		gottuple;
+	int64		abs_pos;
+	int64		mark_pos;
+	int			notnull_offset;
+	int			notnull_relpos;
+	int			forward;
+	int			i;
+
+	Assert(WindowObjectIsValid(winobj));
+	winstate = winobj->winstate;
+	econtext = winstate->ss.ps.ps_ExprContext;
+	slot = winstate->temp_slot_1;
+	datum = (Datum)0;
+	notnull_offset = 0;
+	notnull_relpos = abs(relpos);
+
+	switch (seektype)
+	{
+		case WINDOW_SEEK_CURRENT:
+			elog(ERROR, "WINDOW_SEEK_CURRENT is not supported for WinGetFuncArgInFrame");
+			abs_pos = mark_pos = 0; /* keep compiler quiet */
+			break;
+		case WINDOW_SEEK_HEAD:
+			/* rejecting relpos < 0 is easy and simplifies code below */
+			if (relpos < 0)
+				goto out_of_frame;
+			update_frameheadpos(winstate);
+			abs_pos = winstate->frameheadpos;
+			forward = 1;
+			break;
+		case WINDOW_SEEK_TAIL:
+			/* rejecting relpos > 0 is easy and simplifies code below */
+			if (relpos > 0)
+				goto out_of_frame;
+			update_frametailpos(winstate);
+			abs_pos = winstate->frametailpos - 1;
+			forward = -1;
+			goto check_frame;
+			break;
+		default:
+			elog(ERROR, "unrecognized window seek type: %d", seektype);
+			abs_pos = mark_pos = 0; /* keep compiler quiet */
+			break;
+	}
+
+	/*
+	 * Store previous rows. Only possible in SEEK_HEAD mode
+	 */
+	for (i = 0; i < winobj->nonnulls_len; ++i)
+	{
+			int inframe;
+			if (winobj->win_nonnulls[i] < winobj->markpos)
+				continue;
+			if (!window_gettupleslot(winobj, winobj->win_nonnulls[i], slot))
+				continue;
+
+			inframe = row_is_in_frame(winstate, winobj->win_nonnulls[i], slot);
+			if (inframe <= 0)
+			{
+				if (inframe == -1 && set_mark)
+					WinSetMarkPosition(winobj, winobj->win_nonnulls[i]);
+				continue;
+			}
+
+			abs_pos = winobj->win_nonnulls[i] + 1;
+			++notnull_offset;
+
+			if (notnull_offset > notnull_relpos)
+			{
+				if (isout)
+				*isout = false;
+				econtext->ecxt_outertuple = slot;
+				return ExecEvalExpr((ExprState *)list_nth(winobj->argstates, argno),
+									econtext, isnull);
+			}
+	}
+
+check_frame:
+	do
+	{
+			int inframe;
+			if (!window_gettupleslot(winobj, abs_pos, slot))
+				goto out_of_frame;
+
+			inframe = row_is_in_frame(winstate, abs_pos, slot);
+			if (inframe == -1)
+				goto out_of_frame;
+			else if (inframe == 0)
+				goto advance;
+
+			gottuple = window_gettupleslot(winobj, abs_pos, slot);
+
+			if (!gottuple)
+			{
+				if (isout)
+					*isout = true;
+				*isnull = true;
+				return (Datum)0;
+			}
+
+			if (isout)
+				*isout = false;
+			econtext->ecxt_outertuple = slot;
+			datum = ExecEvalExpr((ExprState *)list_nth(winobj->argstates, argno),
+								 econtext, isnull);
+
+			if (!*isnull)
+			{
+				++notnull_offset;
+				increment_notnulls(winobj, abs_pos);
+			}
+
+advance:
+			abs_pos += forward;
+	} while (notnull_offset <= notnull_relpos);
+
+	return datum;
+
+out_of_frame:
+	if (isout)
+		*isout = true;
+	*isnull = true;
+	return (Datum) 0;
+}
+
 /*
  * WinGetFuncArgInPartition
  *		Evaluate a window function's argument expression on a specified
@@ -3388,6 +3638,10 @@ WinGetFuncArgInPartition(WindowObject winobj, int argno,
 	winstate = winobj->winstate;
 	econtext = winstate->ss.ps.ps_ExprContext;
 	slot = winstate->temp_slot_1;
+
+	if (winobj->ignore_nulls == 1 && relpos != 0)
+		return ignorenulls_getfuncarginpartition(winobj, argno, relpos, seektype,
+													set_mark, isnull, isout);
 
 	switch (seektype)
 	{
@@ -3476,6 +3730,10 @@ WinGetFuncArgInFrame(WindowObject winobj, int argno,
 	winstate = winobj->winstate;
 	econtext = winstate->ss.ps.ps_ExprContext;
 	slot = winstate->temp_slot_1;
+
+	if (winobj->ignore_nulls == 1)
+		return ignorenulls_getfuncarginframe(winobj, argno, relpos, seektype,
+												set_mark, isnull, isout);
 
 	switch (seektype)
 	{

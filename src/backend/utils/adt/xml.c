@@ -677,8 +677,14 @@ xmltotext_with_options(xmltype *data, XmlOptionType xmloption_arg, bool indent)
 	}
 
 #ifdef USE_LIBXML
-	/* Parse the input according to the xmloption */
-	doc = xml_parse(data, xmloption_arg, true, GetDatabaseEncoding(),
+	/*
+	 * Parse the input according to the xmloption
+	 * preserve_whitespace is set to false in case the function should
+	 * return an indented xml, otherwise libxml2 will ignore the elements
+	 * that contain whitespaces between them.
+	 */
+	doc = xml_parse(data, xmloption_arg, !indent ? true : false,
+					GetDatabaseEncoding(),
 					&parsed_xmloptiontype, &content_nodes,
 					(Node *) &escontext);
 	if (doc == NULL || escontext.error_occurred)
@@ -802,7 +808,23 @@ xmltotext_with_options(xmltype *data, XmlOptionType xmloption_arg, bool indent)
 						"could not close xmlSaveCtxtPtr");
 		}
 
-		result = (text *) xmlBuffer_to_xmltype(buf);
+		/*
+		 * xmlDocContentDumpOutput adds a trailing newline by default
+		 * so we get rid of it here.
+		 */
+		if (xmloption_arg == XMLOPTION_DOCUMENT)
+		{
+			char *str = (char *) xmlBufferContent(buf);
+			int len = xmlBufferLength(buf);
+
+			while (len > 0 && (str[len - 1] == '\n' ||
+								str[len - 1] == '\r'))
+				str[--len] = '\0';
+
+			result = cstring_to_text_with_len(str, len);
+		}
+		else
+			result = (text *) xmlBuffer_to_xmltype(buf);
 	}
 	PG_CATCH();
 	{

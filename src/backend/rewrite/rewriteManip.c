@@ -1281,9 +1281,10 @@ remove_nulling_relids_mutator(Node *node,
 		{
 			/*
 			 * Note: it might seem desirable to remove the PHV altogether if
-			 * phnullingrels goes to empty.  Currently we dare not do that
-			 * because we use PHVs in some cases to enforce separate identity
-			 * of subexpressions; see wrap_non_vars usages in prepjointree.c.
+			 * phnullingrels goes to empty.  Currently we only dare to do that
+			 * if the PHV is marked remove_safe, because we use PHVs in some
+			 * cases to enforce separate identity of subexpressions; see
+			 * wrap_non_vars usages in prepjointree.c.
 			 */
 			/* Copy the PlaceHolderVar and mutate what's below ... */
 			phv = (PlaceHolderVar *)
@@ -1297,6 +1298,14 @@ remove_nulling_relids_mutator(Node *node,
 			phv->phrels = bms_difference(phv->phrels,
 										 context->removable_relids);
 			Assert(!bms_is_empty(phv->phrels));
+
+			/*
+			 * Remove the PHV altogether if it's marked remove_safe and
+			 * phnullingrels goes to empty.
+			 */
+			if (phv->remove_safe && bms_is_empty(phv->phnullingrels))
+				return (Node *) phv->phexpr;
+
 			return (Node *) phv;
 		}
 		/* Otherwise fall through to copy the PlaceHolderVar normally */

@@ -379,6 +379,7 @@ ExecRenameStmt(RenameStmt *stmt)
 		case OBJECT_MATVIEW:
 		case OBJECT_INDEX:
 		case OBJECT_FOREIGN_TABLE:
+		case OBJECT_PROPGRAPH:
 			return RenameRelation(stmt);
 
 		case OBJECT_COLUMN:
@@ -535,6 +536,7 @@ ExecAlterObjectSchemaStmt(AlterObjectSchemaStmt *stmt,
 		case OBJECT_TABLE:
 		case OBJECT_VIEW:
 		case OBJECT_MATVIEW:
+		case OBJECT_PROPGRAPH:
 			address = AlterTableNamespace(stmt,
 										  oldSchemaAddr ? &oldNspOid : NULL);
 			break;
@@ -870,6 +872,7 @@ ExecAlterOwnerStmt(AlterOwnerStmt *stmt)
 		case OBJECT_OPCLASS:
 		case OBJECT_OPFAMILY:
 		case OBJECT_PROCEDURE:
+		case OBJECT_PROPGRAPH:
 		case OBJECT_ROUTINE:
 		case OBJECT_STATISTIC_EXT:
 		case OBJECT_TABLESPACE:
@@ -879,15 +882,28 @@ ExecAlterOwnerStmt(AlterOwnerStmt *stmt)
 				Relation	relation;
 				ObjectAddress address;
 
-				address = get_object_address(stmt->objectType,
-											 stmt->object,
-											 &relation,
-											 AccessExclusiveLock,
-											 false);
-				Assert(relation == NULL);
+				if (stmt->relation)
+					address = get_object_address_rv(stmt->objectType,
+													stmt->relation,
+													NIL,
+													&relation,
+													AccessExclusiveLock,
+													false);
+				else
+				{
+					address = get_object_address(stmt->objectType,
+												 stmt->object,
+												 &relation,
+												 AccessExclusiveLock,
+												 false);
+					Assert(relation == NULL);
+				}
 
 				AlterObjectOwner_internal(address.classId, address.objectId,
 										  newowner);
+
+				if (relation)
+					relation_close(relation, NoLock);
 
 				return address;
 			}

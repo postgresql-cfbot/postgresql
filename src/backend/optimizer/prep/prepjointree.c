@@ -1237,6 +1237,10 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 				case RTE_RESULT:
 					/* these can't contain any lateral references */
 					break;
+				case RTE_GRAPH_TABLE:
+					/* shouldn't happen here */
+					Assert(false);
+					break;
 			}
 		}
 	}
@@ -2294,6 +2298,10 @@ replace_vars_in_jointree(Node *jtnode,
 					case RTE_NAMEDTUPLESTORE:
 					case RTE_RESULT:
 						/* these shouldn't be marked LATERAL */
+						Assert(false);
+						break;
+					case RTE_GRAPH_TABLE:
+						/* shouldn't happen here */
 						Assert(false);
 						break;
 				}

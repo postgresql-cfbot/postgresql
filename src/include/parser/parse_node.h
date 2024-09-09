@@ -82,6 +82,7 @@ typedef enum ParseExprKind
 	EXPR_KIND_COPY_WHERE,		/* WHERE condition in COPY FROM */
 	EXPR_KIND_GENERATED_COLUMN, /* generation expression for a column */
 	EXPR_KIND_CYCLE_MARK,		/* cycle mark value */
+	EXPR_KIND_PROPGRAPH_PROPERTY,	/* derived property expression */
 } ParseExprKind;
 
 
@@ -176,6 +177,9 @@ typedef Node *(*CoerceParamHook) (ParseState *pstate, Param *param,
  * p_resolve_unknowns: resolve unknown-type SELECT output columns as type TEXT
  * (this is true by default).
  *
+ * p_graph_table_pstate: Namespace for the GRAPH_TABLE reference being
+ * transformed, if any.
+ *
  * p_hasAggs, p_hasWindowFuncs, etc: true if we've found any of the indicated
  * constructs in the query.
  *
@@ -218,6 +222,8 @@ struct ParseState
 									 * type text */
 
 	QueryEnvironment *p_queryEnv;	/* curr env, incl refs to enclosing env */
+	GraphTableParseState *p_graph_table_pstate; /* Current graph table
+												 * namespace, if any */
 
 	/* Flags telling about things found in the query: */
 	bool		p_hasAggs;

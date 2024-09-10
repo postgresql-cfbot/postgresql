@@ -4407,6 +4407,10 @@ set_relation_column_names(deparse_namespace *dpns, RangeTblEntry *rte,
 		}
 	}
 
+	/* If the RTE is wide enough, use a hash table to avoid O(N^2) costs */
+	if (ncolumns >= 32)
+		build_colinfo_names_hash(colinfo);
+
 	/*
 	 * Ensure colinfo->colnames has a slot for each column.  (It could be long
 	 * enough already, if we pushed down a name for the last column.)  Note:
@@ -4427,9 +4431,6 @@ set_relation_column_names(deparse_namespace *dpns, RangeTblEntry *rte,
 	 */
 	colinfo->new_colnames = (char **) palloc(ncolumns * sizeof(char *));
 	colinfo->is_new_col = (bool *) palloc(ncolumns * sizeof(bool));
-
-	/* If the RTE is wide enough, use a hash table to avoid O(N^2) costs */
-	build_colinfo_names_hash(colinfo);
 
 	/*
 	 * Scan the columns, select a unique alias for each one, and store it in
@@ -4542,6 +4543,11 @@ set_join_column_names(deparse_namespace *dpns, RangeTblEntry *rte,
 	leftcolinfo = deparse_columns_fetch(colinfo->leftrti, dpns);
 	rightcolinfo = deparse_columns_fetch(colinfo->rightrti, dpns);
 
+	/* If the RTE is wide enough, use a hash table to avoid O(N^2) costs */
+	noldcolumns = list_length(rte->eref->colnames);
+	if (noldcolumns >= 32)
+		build_colinfo_names_hash(colinfo);
+
 	/*
 	 * Ensure colinfo->colnames has a slot for each column.  (It could be long
 	 * enough already, if we pushed down a name for the last column.)  Note:
@@ -4549,12 +4555,8 @@ set_join_column_names(deparse_namespace *dpns, RangeTblEntry *rte,
 	 * were when the query was parsed, but we'll deal with that below.  We
 	 * only need entries in colnames for pre-existing columns.
 	 */
-	noldcolumns = list_length(rte->eref->colnames);
 	expand_colnames_array_to(colinfo, noldcolumns);
 	Assert(colinfo->num_cols == noldcolumns);
-
-	/* If the RTE is wide enough, use a hash table to avoid O(N^2) costs */
-	build_colinfo_names_hash(colinfo);
 
 	/*
 	 * Scan the join output columns, select an alias for each one, and store
@@ -4920,7 +4922,10 @@ expand_colnames_array_to(deparse_columns *colinfo, int n)
 }
 
 /*
- * build_colinfo_names_hash: optionally construct a hash table for colinfo
+ * build_colinfo_names_hash: construct a hash table for colinfo
+ *
+ * We use this only for sufficiently wide RTEs: currently, those with at
+ * least 32 columns.  That check is made at the callers though.
  */
 static void
 build_colinfo_names_hash(deparse_columns *colinfo)
@@ -4928,14 +4933,6 @@ build_colinfo_names_hash(deparse_columns *colinfo)
 	HASHCTL		hash_ctl;
 	int			i;
 	ListCell   *lc;
-
-	/*
-	 * Use a hash table only for RTEs with at least 32 columns.  (The cutoff
-	 * is somewhat arbitrary, but let's choose it so that this code does get
-	 * exercised in the regression tests.)
-	 */
-	if (colinfo->num_cols < 32)
-		return;
 
 	/*
 	 * Set up the hash table.  The entries are just strings with no other

@@ -1111,7 +1111,8 @@ json_object_agg_transfn_worker(FunctionCallInfo fcinfo,
 
 	if (unique_keys)
 	{
-		const char *key = &out->data[key_offset];
+		const char *key = MemoryContextStrdup(aggcontext,
+											  &out->data[key_offset]);
 
 		if (!json_unique_check_key(&state->unique_check.check, key, 0))
 			ereport(ERROR,
@@ -1275,7 +1276,8 @@ json_build_object_worker(int nargs, const Datum *args, const bool *nulls, const 
 		if (unique_keys)
 		{
 			/* check key uniqueness after key appending */
-			const char *key = &out->data[key_offset];
+			const char *key = MemoryContextStrdup(unique_check.mcxt,
+												  &out->data[key_offset]);
 
 			if (!json_unique_check_key(&unique_check.check, key, 0))
 				ereport(ERROR,

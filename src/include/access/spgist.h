@@ -205,8 +205,8 @@ extern bool spginsert(Relation index, Datum *values, bool *isnull,
 /* spgscan.c */
 extern IndexScanDesc spgbeginscan(Relation rel, int keysz, int orderbysz);
 extern void spgendscan(IndexScanDesc scan);
-extern void spgrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
-					  ScanKey orderbys, int norderbys);
+extern void spgrescan(IndexScanDesc scan, const ScanKeyData *scankey, int nscankeys,
+					  const ScanKeyData *orderbys, int norderbys);
 extern int64 spggetbitmap(IndexScanDesc scan, TIDBitmap *tbm);
 extern bool spggettuple(IndexScanDesc scan, ScanDirection dir);
 extern bool spgcanreturn(Relation index, int attno);

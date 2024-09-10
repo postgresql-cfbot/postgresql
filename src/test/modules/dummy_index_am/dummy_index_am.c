@@ -256,8 +256,8 @@ dibeginscan(Relation r, int nkeys, int norderbys)
  * Rescan of index AM.
  */
 static void
-direscan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
-		 ScanKey orderbys, int norderbys)
+direscan(IndexScanDesc scan, const ScanKeyData *scankey, int nscankeys,
+		 const ScanKeyData *orderbys, int norderbys)
 {
 	/* nothing to do */
 }

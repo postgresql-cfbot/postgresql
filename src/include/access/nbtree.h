@@ -1173,8 +1173,8 @@ extern Size btestimateparallelscan(int nkeys, int norderbys);
 extern void btinitparallelscan(void *target);
 extern bool btgettuple(IndexScanDesc scan, ScanDirection dir);
 extern int64 btgetbitmap(IndexScanDesc scan, TIDBitmap *tbm);
-extern void btrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
-					 ScanKey orderbys, int norderbys);
+extern void btrescan(IndexScanDesc scan, const ScanKeyData *scankey, int nscankeys,
+					 const ScanKeyData *orderbys, int norderbys);
 extern void btparallelrescan(IndexScanDesc scan);
 extern void btendscan(IndexScanDesc scan);
 extern void btmarkpos(IndexScanDesc scan);

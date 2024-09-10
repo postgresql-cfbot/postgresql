@@ -160,8 +160,8 @@ extern IndexScanDesc index_beginscan_bitmap(Relation indexRelation,
 											Snapshot snapshot,
 											int nkeys);
 extern void index_rescan(IndexScanDesc scan,
-						 ScanKey keys, int nkeys,
-						 ScanKey orderbys, int norderbys);
+						 const ScanKeyData *keys, int nkeys,
+						 const ScanKeyData *orderbys, int norderbys);
 extern void index_endscan(IndexScanDesc scan);
 extern void index_markpos(IndexScanDesc scan);
 extern void index_restrpos(IndexScanDesc scan);
@@ -222,14 +222,14 @@ extern SysScanDesc systable_beginscan(Relation heapRelation,
 									  Oid indexId,
 									  bool indexOK,
 									  Snapshot snapshot,
-									  int nkeys, ScanKey key);
+									  int nkeys, const ScanKeyData *key);
 extern HeapTuple systable_getnext(SysScanDesc sysscan);
 extern bool systable_recheck_tuple(SysScanDesc sysscan, HeapTuple tup);
 extern void systable_endscan(SysScanDesc sysscan);
 extern SysScanDesc systable_beginscan_ordered(Relation heapRelation,
 											  Relation indexRelation,
 											  Snapshot snapshot,
-											  int nkeys, ScanKey key);
+											  int nkeys, const ScanKeyData *key);
 extern HeapTuple systable_getnext_ordered(SysScanDesc sysscan,
 										  ScanDirection direction);
 extern void systable_endscan_ordered(SysScanDesc sysscan);

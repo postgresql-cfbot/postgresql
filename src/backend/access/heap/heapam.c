@@ -291,7 +291,7 @@ heap_scan_stream_read_next_serial(ReadStream *stream,
  * ----------------
  */
 static void
-initscan(HeapScanDesc scan, ScanKey key, bool keep_startblock)
+initscan(HeapScanDesc scan, const ScanKeyData *key, bool keep_startblock)
 {
 	ParallelBlockTableScanDesc bpscan = NULL;
 	bool		allow_strat;
@@ -1036,7 +1036,7 @@ continue_page:
 
 TableScanDesc
 heap_beginscan(Relation relation, Snapshot snapshot,
-			   int nkeys, ScanKey key,
+			   int nkeys, const ScanKeyData *key,
 			   ParallelTableScanDesc parallel_scan,
 			   uint32 flags)
 {
@@ -1149,7 +1149,7 @@ heap_beginscan(Relation relation, Snapshot snapshot,
 }
 
 void
-heap_rescan(TableScanDesc sscan, ScanKey key, bool set_params,
+heap_rescan(TableScanDesc sscan, const ScanKeyData *key, bool set_params,
 			bool allow_strat, bool allow_sync, bool allow_pagemode)
 {
 	HeapScanDesc scan = (HeapScanDesc) sscan;

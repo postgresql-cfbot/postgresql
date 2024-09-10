@@ -124,8 +124,8 @@ gistbeginscan(Relation r, int nkeys, int norderbys)
 }
 
 void
-gistrescan(IndexScanDesc scan, ScanKey key, int nkeys,
-		   ScanKey orderbys, int norderbys)
+gistrescan(IndexScanDesc scan, const ScanKeyData *key, int nkeys,
+		   const ScanKeyData *orderbys, int norderbys)
 {
 	/* nkeys and norderbys arguments are ignored */
 	GISTScanOpaque so = (GISTScanOpaque) scan->opaque;
@@ -233,8 +233,7 @@ gistrescan(IndexScanDesc scan, ScanKey key, int nkeys,
 				fn_extras[i] = scan->keyData[i].sk_func.fn_extra;
 		}
 
-		memmove(scan->keyData, key,
-				scan->numberOfKeys * sizeof(ScanKeyData));
+		memcpy(scan->keyData, key, scan->numberOfKeys * sizeof(ScanKeyData));
 
 		/*
 		 * Modify the scan key so that the Consistent method is called for all
@@ -289,8 +288,7 @@ gistrescan(IndexScanDesc scan, ScanKey key, int nkeys,
 				fn_extras[i] = scan->orderByData[i].sk_func.fn_extra;
 		}
 
-		memmove(scan->orderByData, orderbys,
-				scan->numberOfOrderBys * sizeof(ScanKeyData));
+		memcpy(scan->orderByData, orderbys, scan->numberOfOrderBys * sizeof(ScanKeyData));
 
 		so->orderByTypes = (Oid *) palloc(scan->numberOfOrderBys * sizeof(Oid));
 

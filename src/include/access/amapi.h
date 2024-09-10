@@ -168,9 +168,9 @@ typedef IndexScanDesc (*ambeginscan_function) (Relation indexRelation,
 
 /* (re)start index scan */
 typedef void (*amrescan_function) (IndexScanDesc scan,
-								   ScanKey keys,
+								   const ScanKeyData *keys,
 								   int nkeys,
-								   ScanKey orderbys,
+								   const ScanKeyData *orderbys,
 								   int norderbys);
 
 /* next valid tuple */

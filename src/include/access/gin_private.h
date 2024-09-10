@@ -387,8 +387,8 @@ typedef GinScanOpaqueData *GinScanOpaque;
 
 extern IndexScanDesc ginbeginscan(Relation rel, int nkeys, int norderbys);
 extern void ginendscan(IndexScanDesc scan);
-extern void ginrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
-					  ScanKey orderbys, int norderbys);
+extern void ginrescan(IndexScanDesc scan, const ScanKeyData *scankey, int nscankeys,
+					  const ScanKeyData *orderbys, int norderbys);
 extern void ginNewScanKey(IndexScanDesc scan);
 extern void ginFreeScanKeys(GinScanOpaque so);
 

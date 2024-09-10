@@ -377,23 +377,21 @@ spgbeginscan(Relation rel, int keysz, int orderbysz)
 }
 
 void
-spgrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
-		  ScanKey orderbys, int norderbys)
+spgrescan(IndexScanDesc scan, const ScanKeyData *scankey, int nscankeys,
+		  const ScanKeyData *orderbys, int norderbys)
 {
 	SpGistScanOpaque so = (SpGistScanOpaque) scan->opaque;
 
 	/* copy scankeys into local storage */
 	if (scankey && scan->numberOfKeys > 0)
-		memmove(scan->keyData, scankey,
-				scan->numberOfKeys * sizeof(ScanKeyData));
+		memcpy(scan->keyData, scankey, scan->numberOfKeys * sizeof(ScanKeyData));
 
 	/* initialize order-by data if needed */
 	if (orderbys && scan->numberOfOrderBys > 0)
 	{
 		int			i;
 
-		memmove(scan->orderByData, orderbys,
-				scan->numberOfOrderBys * sizeof(ScanKeyData));
+		memcpy(scan->orderByData, orderbys, scan->numberOfOrderBys * sizeof(ScanKeyData));
 
 		for (i = 0; i < scan->numberOfOrderBys; i++)
 		{

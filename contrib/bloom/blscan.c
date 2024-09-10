@@ -45,8 +45,8 @@ blbeginscan(Relation r, int nkeys, int norderbys)
  * Rescan a bloom index.
  */
 void
-blrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
-		 ScanKey orderbys, int norderbys)
+blrescan(IndexScanDesc scan, const ScanKeyData *scankey, int nscankeys,
+		 const ScanKeyData *orderbys, int norderbys)
 {
 	BloomScanOpaque so = (BloomScanOpaque) scan->opaque;
 
@@ -55,10 +55,7 @@ blrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 	so->sign = NULL;
 
 	if (scankey && scan->numberOfKeys > 0)
-	{
-		memmove(scan->keyData, scankey,
-				scan->numberOfKeys * sizeof(ScanKeyData));
-	}
+		memcpy(scan->keyData, scankey, scan->numberOfKeys * sizeof(ScanKeyData));
 }
 
 /*

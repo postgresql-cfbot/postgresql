@@ -394,8 +394,8 @@ hashbeginscan(Relation rel, int nkeys, int norderbys)
  *	hashrescan() -- rescan an index relation
  */
 void
-hashrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
-		   ScanKey orderbys, int norderbys)
+hashrescan(IndexScanDesc scan, const ScanKeyData *scankey, int nscankeys,
+		   const ScanKeyData *orderbys, int norderbys)
 {
 	HashScanOpaque so = (HashScanOpaque) scan->opaque;
 	Relation	rel = scan->indexRelation;
@@ -414,11 +414,7 @@ hashrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 
 	/* Update scan key, if a new one is given */
 	if (scankey && scan->numberOfKeys > 0)
-	{
-		memmove(scan->keyData,
-				scankey,
-				scan->numberOfKeys * sizeof(ScanKeyData));
-	}
+		memcpy(scan->keyData, scankey, scan->numberOfKeys * sizeof(ScanKeyData));
 
 	so->hashso_buc_populated = false;
 	so->hashso_buc_split = false;

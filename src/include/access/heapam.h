@@ -287,13 +287,13 @@ typedef enum
 #define HeapScanIsValid(scan) PointerIsValid(scan)
 
 extern TableScanDesc heap_beginscan(Relation relation, Snapshot snapshot,
-									int nkeys, ScanKey key,
+									int nkeys, const ScanKeyData *key,
 									ParallelTableScanDesc parallel_scan,
 									uint32 flags);
 extern void heap_setscanlimits(TableScanDesc sscan, BlockNumber startBlk,
 							   BlockNumber numBlks);
 extern void heap_prepare_pagescan(TableScanDesc sscan);
-extern void heap_rescan(TableScanDesc sscan, ScanKey key, bool set_params,
+extern void heap_rescan(TableScanDesc sscan, const ScanKeyData *key, bool set_params,
 						bool allow_strat, bool allow_sync, bool allow_pagemode);
 extern void heap_endscan(TableScanDesc sscan);
 extern HeapTuple heap_getnext(TableScanDesc sscan, ScanDirection direction);

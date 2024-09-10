@@ -195,8 +195,8 @@ extern bool blinsert(Relation index, Datum *values, bool *isnull,
 					 struct IndexInfo *indexInfo);
 extern IndexScanDesc blbeginscan(Relation r, int nkeys, int norderbys);
 extern int64 blgetbitmap(IndexScanDesc scan, TIDBitmap *tbm);
-extern void blrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
-					 ScanKey orderbys, int norderbys);
+extern void blrescan(IndexScanDesc scan, const ScanKeyData *scankey, int nscankeys,
+					 const ScanKeyData *orderbys, int norderbys);
 extern void blendscan(IndexScanDesc scan);
 extern IndexBuildResult *blbuild(Relation heap, Relation index,
 								 struct IndexInfo *indexInfo);

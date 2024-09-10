@@ -356,8 +356,8 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
  *	btrescan() -- rescan an index relation
  */
 void
-btrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
-		 ScanKey orderbys, int norderbys)
+btrescan(IndexScanDesc scan, const ScanKeyData *scankey, int nscankeys,
+		 const ScanKeyData *orderbys, int norderbys)
 {
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 
@@ -403,9 +403,7 @@ btrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 	 * Reset the scan keys
 	 */
 	if (scankey && scan->numberOfKeys > 0)
-		memmove(scan->keyData,
-				scankey,
-				scan->numberOfKeys * sizeof(ScanKeyData));
+		memcpy(scan->keyData, scankey, scan->numberOfKeys * sizeof(ScanKeyData));
 	so->numberOfKeys = 0;		/* until _bt_preprocess_keys sets it */
 	so->numArrayKeys = 0;		/* ditto */
 }

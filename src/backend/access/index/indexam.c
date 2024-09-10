@@ -350,8 +350,8 @@ index_beginscan_internal(Relation indexRelation,
  */
 void
 index_rescan(IndexScanDesc scan,
-			 ScanKey keys, int nkeys,
-			 ScanKey orderbys, int norderbys)
+			 const ScanKeyData *keys, int nkeys,
+			 const ScanKeyData *orderbys, int norderbys)
 {
 	SCAN_CHECKS;
 	CHECK_SCAN_PROCEDURE(amrescan);

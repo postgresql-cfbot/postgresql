@@ -99,8 +99,8 @@ extern bool brininsert(Relation idxRel, Datum *values, bool *nulls,
 extern void brininsertcleanup(Relation index, struct IndexInfo *indexInfo);
 extern IndexScanDesc brinbeginscan(Relation r, int nkeys, int norderbys);
 extern int64 bringetbitmap(IndexScanDesc scan, TIDBitmap *tbm);
-extern void brinrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
-					   ScanKey orderbys, int norderbys);
+extern void brinrescan(IndexScanDesc scan, const ScanKeyData *scankey, int nscankeys,
+					   const ScanKeyData *orderbys, int norderbys);
 extern void brinendscan(IndexScanDesc scan);
 extern IndexBulkDeleteResult *brinbulkdelete(IndexVacuumInfo *info,
 											 IndexBulkDeleteResult *stats,

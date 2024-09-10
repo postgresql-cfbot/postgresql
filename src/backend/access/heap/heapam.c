@@ -4131,19 +4131,10 @@ check_lock_if_inplace_updateable_rel(Relation relation,
 					dbid = InvalidOid;
 				else
 					dbid = MyDatabaseId;
-
-				if (classForm->relkind == RELKIND_INDEX)
-				{
-					Relation	irel = index_open(relid, AccessShareLock);
-
-					SET_LOCKTAG_RELATION(tag, dbid, irel->rd_index->indrelid);
-					index_close(irel, AccessShareLock);
-				}
-				else
-					SET_LOCKTAG_RELATION(tag, dbid, relid);
-
-				if (!LockHeldByMe(&tag, ShareUpdateExclusiveLock, false) &&
-					!LockHeldByMe(&tag, ShareRowExclusiveLock, true))
+				SET_LOCKTAG_RELATION(tag, dbid, relid);
+				if (classForm->relkind == RELKIND_INDEX ||
+					(!LockHeldByMe(&tag, ShareUpdateExclusiveLock, false) &&
+					 !LockHeldByMe(&tag, ShareRowExclusiveLock, true)))
 					elog(WARNING,
 						 "missing lock for relation \"%s\" (OID %u, relkind %c) @ TID (%u,%u)",
 						 NameStr(classForm->relname),
@@ -4181,21 +4172,14 @@ check_inplace_rel_lock(HeapTuple oldtup)
 	Oid			dbid;
 	LOCKTAG		tag;
 
+	if (classForm->relkind == RELKIND_INDEX)
+		return;
+
 	if (IsSharedRelation(relid))
 		dbid = InvalidOid;
 	else
 		dbid = MyDatabaseId;
-
-	if (classForm->relkind == RELKIND_INDEX)
-	{
-		Relation	irel = index_open(relid, AccessShareLock);
-
-		SET_LOCKTAG_RELATION(tag, dbid, irel->rd_index->indrelid);
-		index_close(irel, AccessShareLock);
-	}
-	else
-		SET_LOCKTAG_RELATION(tag, dbid, relid);
-
+	SET_LOCKTAG_RELATION(tag, dbid, relid);
 	if (!LockHeldByMe(&tag, ShareUpdateExclusiveLock, true))
 		elog(WARNING,
 			 "missing lock for relation \"%s\" (OID %u, relkind %c) @ TID (%u,%u)",

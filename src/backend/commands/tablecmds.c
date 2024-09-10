@@ -14302,7 +14302,7 @@ ATExecChangeOwner(Oid relationOid, Oid newOwnerId, bool recursing, LOCKMODE lock
 	/* Get its pg_class tuple, too */
 	class_rel = table_open(RelationRelationId, RowExclusiveLock);
 
-	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relationOid));
+	tuple = SearchSysCacheLocked1(RELOID, ObjectIdGetDatum(relationOid));
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for relation %u", relationOid);
 	tuple_class = (Form_pg_class) GETSTRUCT(tuple);
@@ -14392,7 +14392,9 @@ ATExecChangeOwner(Oid relationOid, Oid newOwnerId, bool recursing, LOCKMODE lock
 	 * If the new owner is the same as the existing owner, consider the
 	 * command to have succeeded.  This is for dump restoration purposes.
 	 */
-	if (tuple_class->relowner != newOwnerId)
+	if (tuple_class->relowner == newOwnerId)
+		UnlockTuple(class_rel, &tuple->t_self, InplaceUpdateTupleLock);
+	else
 	{
 		Datum		repl_val[Natts_pg_class];
 		bool		repl_null[Natts_pg_class];
@@ -14452,6 +14454,7 @@ ATExecChangeOwner(Oid relationOid, Oid newOwnerId, bool recursing, LOCKMODE lock
 		newtuple = heap_modify_tuple(tuple, RelationGetDescr(class_rel), repl_val, repl_null, repl_repl);
 
 		CatalogTupleUpdate(class_rel, &newtuple->t_self, newtuple);
+		UnlockTuple(class_rel, &tuple->t_self, InplaceUpdateTupleLock);
 
 		heap_freetuple(newtuple);
 

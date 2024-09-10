@@ -30,7 +30,7 @@ void
 pgstat_report_bgwriter(void)
 {
 	PgStatShared_BgWriter *stats_shmem = &pgStatLocal.shmem->bgwriter;
-	static const PgStat_BgWriterStats all_zeroes;
+	bool		is_all_zeroes;
 
 	Assert(!pgStatLocal.shmem->is_shutdown);
 	pgstat_assert_is_up();
@@ -39,7 +39,10 @@ pgstat_report_bgwriter(void)
 	 * This function can be called even if nothing at all has happened. In
 	 * this case, avoid unnecessarily modifying the stats entry.
 	 */
-	if (memcmp(&PendingBgWriterStats, &all_zeroes, sizeof(all_zeroes)) == 0)
+	pgstat_entry_all_zeros(&PendingBgWriterStats, PgStat_BgWriterStats,
+						   is_all_zeroes);
+
+	if (is_all_zeroes)
 		return;
 
 	pgstat_begin_changecount_write(&stats_shmem->changecount);

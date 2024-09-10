@@ -528,6 +528,16 @@ typedef struct PgStat_LocalState
 	PgStat_Snapshot snapshot;
 } PgStat_LocalState;
 
+/*
+ * Test if a memory region (representing a struct "s") starting
+ * at addr and of size sizeof(s) is full of zeroes.
+ */
+#define pgstat_entry_all_zeros(addr, s, r)									\
+	do {															\
+		/* We assume this initializes to zeroes */					\
+		static const s all_zeroes;									\
+		r = (memcmp(addr, &all_zeroes, sizeof(all_zeroes)) == 0);	\
+	} while (0)
 
 /*
  * Inline functions defined further below.

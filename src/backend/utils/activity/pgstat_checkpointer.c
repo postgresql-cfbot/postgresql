@@ -29,8 +29,7 @@ PgStat_CheckpointerStats PendingCheckpointerStats = {0};
 void
 pgstat_report_checkpointer(void)
 {
-	/* We assume this initializes to zeroes */
-	static const PgStat_CheckpointerStats all_zeroes;
+	bool		is_all_zeroes;
 	PgStatShared_Checkpointer *stats_shmem = &pgStatLocal.shmem->checkpointer;
 
 	Assert(!pgStatLocal.shmem->is_shutdown);
@@ -40,8 +39,10 @@ pgstat_report_checkpointer(void)
 	 * This function can be called even if nothing at all has happened. In
 	 * this case, avoid unnecessarily modifying the stats entry.
 	 */
-	if (memcmp(&PendingCheckpointerStats, &all_zeroes,
-			   sizeof(all_zeroes)) == 0)
+	pgstat_entry_all_zeros(&PendingCheckpointerStats, PgStat_CheckpointerStats,
+						   is_all_zeroes);
+
+	if (is_all_zeroes)
 		return;
 
 	pgstat_begin_changecount_write(&stats_shmem->changecount);

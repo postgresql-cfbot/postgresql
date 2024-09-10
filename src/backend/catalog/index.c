@@ -1558,6 +1558,8 @@ index_concurrently_swap(Oid newIndexId, Oid oldIndexId, const char *oldName)
 				newClassTuple;
 	Form_pg_class oldClassForm,
 				newClassForm;
+	ItemPointerData oldClassTid,
+				newClassTid;
 	HeapTuple	oldIndexTuple,
 				newIndexTuple;
 	Form_pg_index oldIndexForm,
@@ -1569,6 +1571,10 @@ index_concurrently_swap(Oid newIndexId, Oid oldIndexId, const char *oldName)
 
 	/*
 	 * Take a necessary lock on the old and new index before swapping them.
+	 * Since the caller holds session-level locks, this shouldn't deadlock.
+	 * The tuple locks come next, and deadlock is possible there.  There's no
+	 * good use case for altering the temporary index of a REINDEX
+	 * CONCURRENTLY, so don't put effort into avoiding said deadlock.
 	 */
 	oldClassRel = relation_open(oldIndexId, ShareUpdateExclusiveLock);
 	newClassRel = relation_open(newIndexId, ShareUpdateExclusiveLock);
@@ -1576,15 +1582,17 @@ index_concurrently_swap(Oid newIndexId, Oid oldIndexId, const char *oldName)
 	/* Now swap names and dependencies of those indexes */
 	pg_class = table_open(RelationRelationId, RowExclusiveLock);
 
-	oldClassTuple = SearchSysCacheCopy1(RELOID,
-										ObjectIdGetDatum(oldIndexId));
+	oldClassTuple = SearchSysCacheLockedCopy1(RELOID,
+											  ObjectIdGetDatum(oldIndexId));
 	if (!HeapTupleIsValid(oldClassTuple))
 		elog(ERROR, "could not find tuple for relation %u", oldIndexId);
-	newClassTuple = SearchSysCacheCopy1(RELOID,
-										ObjectIdGetDatum(newIndexId));
+	newClassTuple = SearchSysCacheLockedCopy1(RELOID,
+											  ObjectIdGetDatum(newIndexId));
 	if (!HeapTupleIsValid(newClassTuple))
 		elog(ERROR, "could not find tuple for relation %u", newIndexId);
 
+	oldClassTid = oldClassTuple->t_self;
+	newClassTid = newClassTuple->t_self;
 	oldClassForm = (Form_pg_class) GETSTRUCT(oldClassTuple);
 	newClassForm = (Form_pg_class) GETSTRUCT(newClassTuple);
 
@@ -1597,8 +1605,10 @@ index_concurrently_swap(Oid newIndexId, Oid oldIndexId, const char *oldName)
 	newClassForm->relispartition = oldClassForm->relispartition;
 	oldClassForm->relispartition = isPartition;
 
-	CatalogTupleUpdate(pg_class, &oldClassTuple->t_self, oldClassTuple);
-	CatalogTupleUpdate(pg_class, &newClassTuple->t_self, newClassTuple);
+	CatalogTupleUpdate(pg_class, &oldClassTid, oldClassTuple);
+	UnlockTuple(pg_class, &oldClassTid, InplaceUpdateTupleLock);
+	CatalogTupleUpdate(pg_class, &newClassTid, newClassTuple);
+	UnlockTuple(pg_class, &newClassTid, InplaceUpdateTupleLock);
 
 	heap_freetuple(oldClassTuple);
 	heap_freetuple(newClassTuple);
@@ -2785,7 +2795,9 @@ index_update_stats(Relation rel,
 {
 	Oid			relid = RelationGetRelid(rel);
 	Relation	pg_class;
+	ScanKeyData key[1];
 	HeapTuple	tuple;
+	void	   *state;
 	Form_pg_class rd_rel;
 	bool		dirty;
 
@@ -2819,33 +2831,12 @@ index_update_stats(Relation rel,
 
 	pg_class = table_open(RelationRelationId, RowExclusiveLock);
 
-	/*
-	 * Make a copy of the tuple to update.  Normally we use the syscache, but
-	 * we can't rely on that during bootstrap or while reindexing pg_class
-	 * itself.
-	 */
-	if (IsBootstrapProcessingMode() ||
-		ReindexIsProcessingHeap(RelationRelationId))
-	{
-		/* don't assume syscache will work */
-		TableScanDesc pg_class_scan;
-		ScanKeyData key[1];
-
-		ScanKeyInit(&key[0],
-					Anum_pg_class_oid,
-					BTEqualStrategyNumber, F_OIDEQ,
-					ObjectIdGetDatum(relid));
-
-		pg_class_scan = table_beginscan_catalog(pg_class, 1, key);
-		tuple = heap_getnext(pg_class_scan, ForwardScanDirection);
-		tuple = heap_copytuple(tuple);
-		table_endscan(pg_class_scan);
-	}
-	else
-	{
-		/* normal case, use syscache */
-		tuple = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(relid));
-	}
+	ScanKeyInit(&key[0],
+				Anum_pg_class_oid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(relid));
+	systable_inplace_update_begin(pg_class, ClassOidIndexId, true, NULL,
+								  1, key, &tuple, &state);
 
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "could not find tuple for relation %u", relid);
@@ -2908,11 +2899,12 @@ index_update_stats(Relation rel,
 	 */
 	if (dirty)
 	{
-		heap_inplace_update(pg_class, tuple);
+		systable_inplace_update_finish(state, tuple);
 		/* the above sends a cache inval message */
 	}
 	else
 	{
+		systable_inplace_update_cancel(state);
 		/* no need to change tuple, but force relcache inval anyway */
 		CacheInvalidateRelcacheByTuple(tuple);
 	}

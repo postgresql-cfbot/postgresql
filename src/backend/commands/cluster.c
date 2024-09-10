@@ -1074,20 +1074,28 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 				relfilenumber2;
 	RelFileNumber swaptemp;
 	char		swptmpchr;
+	ItemPointerData otid1,
+				otid2;
 	Oid			relam1,
 				relam2;
 
-	/* We need writable copies of both pg_class tuples. */
+	/*
+	 * We need writable copies of both pg_class tuples.  Since r2 is new in
+	 * this transaction, no other process should be getting the tuple lock for
+	 * that one.  Hence, order of tuple lock acquisition doesn't matter.
+	 */
 	relRelation = table_open(RelationRelationId, RowExclusiveLock);
 
-	reltup1 = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(r1));
+	reltup1 = SearchSysCacheLockedCopy1(RELOID, ObjectIdGetDatum(r1));
 	if (!HeapTupleIsValid(reltup1))
 		elog(ERROR, "cache lookup failed for relation %u", r1);
+	otid1 = reltup1->t_self;
 	relform1 = (Form_pg_class) GETSTRUCT(reltup1);
 
-	reltup2 = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(r2));
+	reltup2 = SearchSysCacheLockedCopy1(RELOID, ObjectIdGetDatum(r2));
 	if (!HeapTupleIsValid(reltup2))
 		elog(ERROR, "cache lookup failed for relation %u", r2);
+	otid2 = reltup2->t_self;
 	relform2 = (Form_pg_class) GETSTRUCT(reltup2);
 
 	relfilenumber1 = relform1->relfilenode;
@@ -1252,10 +1260,8 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 		CatalogIndexState indstate;
 
 		indstate = CatalogOpenIndexes(relRelation);
-		CatalogTupleUpdateWithInfo(relRelation, &reltup1->t_self, reltup1,
-								   indstate);
-		CatalogTupleUpdateWithInfo(relRelation, &reltup2->t_self, reltup2,
-								   indstate);
+		CatalogTupleUpdateWithInfo(relRelation, &otid1, reltup1, indstate);
+		CatalogTupleUpdateWithInfo(relRelation, &otid2, reltup2, indstate);
 		CatalogCloseIndexes(indstate);
 	}
 	else
@@ -1264,6 +1270,8 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 		CacheInvalidateRelcacheByTuple(reltup1);
 		CacheInvalidateRelcacheByTuple(reltup2);
 	}
+	UnlockTuple(relRelation, &otid1, InplaceUpdateTupleLock);
+	UnlockTuple(relRelation, &otid2, InplaceUpdateTupleLock);
 
 	/*
 	 * Now that pg_class has been updated with its relevant information for

@@ -3,14 +3,14 @@ define additional policies to be used.
 
 Functions
 =========
-test_rls_hooks_permissive(CmdType cmdtype, Relation relation)
-    RETURNS List*
+	test_rls_hooks_permissive(CmdType cmdtype, Relation relation)
+		RETURNS List*
 
 Returns a list of policies which should be added to any existing
 policies on the relation, combined with OR.
 
-test_rls_hooks_restrictive(CmdType cmdtype, Relation relation)
-    RETURNS List*
+	test_rls_hooks_restrictive(CmdType cmdtype, Relation relation)
+		RETURNS List*
 
 Returns a list of policies which should be added to any existing
 policies on the relation, combined with AND.

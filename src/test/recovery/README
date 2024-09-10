@@ -14,9 +14,13 @@ contrib/pg_prewarm, contrib/pg_stat_statements and contrib/test_decoding
 in addition to the core code.
 
 Run
+
     make check
+
 or
+
     make installcheck
+
 You can use "make installcheck" if you previously did "make install".
 In that case, the code in the installation tree is tested.  With
 "make check", a temporary installation tree is built from the current

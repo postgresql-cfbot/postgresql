@@ -9,11 +9,13 @@ General source-file layout
 
 There are six separately-compilable source files, five of which expose
 exactly one exported function apiece:
-	regcomp.c: pg_regcomp
-	regexec.c: pg_regexec
-	regerror.c: pg_regerror
-	regfree.c: pg_regfree
-	regprefix.c: pg_regprefix
+
+	regcomp.c	pg_regcomp
+	regexec.c	pg_regexec
+	regerror.c	pg_regerror
+	regfree.c	pg_regfree
+	regprefix.c	pg_regprefix
+
 (The pg_ prefixes were added by the Postgres project to distinguish this
 library version from any similar one that might be present on a particular
 system.  They'd need to be removed or replaced in any standalone version
@@ -38,19 +40,19 @@ structs.)
 
 What's where in src/backend/regex/:
 
-regcomp.c		Top-level regex compilation code
-regc_color.c		Color map management
-regc_cvec.c		Character vector (cvec) management
-regc_lex.c		Lexer
-regc_nfa.c		NFA handling
-regc_locale.c		Application-specific locale code from Tcl project
-regc_pg_locale.c	Postgres-added application-specific locale code
-regexec.c		Top-level regex execution code
-rege_dfa.c		DFA creation and execution
-regerror.c		pg_regerror: generate text for a regex error code
-regfree.c		pg_regfree: API to free a no-longer-needed regex_t
-regexport.c		Functions for extracting info from a regex_t
-regprefix.c		Code for extracting a common prefix from a regex_t
+	regcomp.c		Top-level regex compilation code
+	regc_color.c		Color map management
+	regc_cvec.c		Character vector (cvec) management
+	regc_lex.c		Lexer
+	regc_nfa.c		NFA handling
+	regc_locale.c		Application-specific locale code from Tcl project
+	regc_pg_locale.c	Postgres-added application-specific locale code
+	regexec.c		Top-level regex execution code
+	rege_dfa.c		DFA creation and execution
+	regerror.c		pg_regerror: generate text for a regex error code
+	regfree.c		pg_regfree: API to free a no-longer-needed regex_t
+	regexport.c		Functions for extracting info from a regex_t
+	regprefix.c		Code for extracting a common prefix from a regex_t
 
 The locale-specific code is concerned primarily with case-folding and with
 expanding locale-specific character classes, such as [[:alnum:]].  It
@@ -58,11 +60,11 @@ really needs refactoring if this is ever to become a standalone library.
 
 The header files for the library are in src/include/regex/:
 
-regcustom.h		Customizes library for particular application
-regerrs.h		Error message list
-regex.h			Exported API
-regexport.h		Exported API for regexport.c
-regguts.h		Internals declarations
+	regcustom.h		Customizes library for particular application
+	regerrs.h		Error message list
+	regex.h			Exported API
+	regexport.h		Exported API for regexport.c
+	regguts.h		Internals declarations
 
 
 DFAs, NFAs, and all that
@@ -261,15 +263,19 @@ an additional arc labeled 2 wherever there is an arc labeled 3; this
 action ensures that characters of color 2 (i.e., "x") will still be
 considered as allowing any transitions they did before.  We are now done
 parsing the regex, and we have these final color assignments:
+
 	color 1: "a"
 	color 2: "x"
 	color 3: other letters
 	color 4: digits
+
 and the NFA has these arcs:
+
 	states 1 -> 2 on color 1 (hence, "a" only)
 	states 2 -> 3 on color 4 (digits)
 	states 3 -> 4 on colors 1, 3, 4, and 2 (covering all \w characters)
 	states 4 -> 5 on color 2 ("x" only)
+
 which can be seen to be a correct representation of the regex.
 
 There is one more complexity, which is how to handle ".", that is a

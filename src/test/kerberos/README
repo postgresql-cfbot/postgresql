@@ -23,9 +23,13 @@ Also, to use "make installcheck", you must have built and installed
 contrib/dblink and contrib/postgres_fdw in addition to the core code.
 
 Run
+
     make check PG_TEST_EXTRA=kerberos
+
 or
+
     make installcheck PG_TEST_EXTRA=kerberos
+
 You can use "make installcheck" if you previously did "make install".
 In that case, the code in the installation tree is tested.  With
 "make check", a temporary installation tree is built from the current

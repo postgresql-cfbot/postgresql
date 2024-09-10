@@ -35,7 +35,7 @@ See also https://cirrus-ci.org/guide/quick-start/
 Once enabled on a repository, future commits and pull-requests in that
 repository will automatically trigger CI builds. These are visible from the
 commit history / PRs, and can also be viewed in the cirrus-ci UI at
-https://cirrus-ci.com/github/<username>/<reponame>/
+https://cirrus-ci.com/github/< username >/< reponame >/
 
 Hint: all build log files are uploaded to cirrus-ci and can be downloaded
 from the "Artifacts" section from the cirrus-ci UI after clicking into a
@@ -74,7 +74,7 @@ When running a lot of tests in a repository, cirrus-ci's free credits do not
 suffice. In those cases a repository can be configured to use other
 infrastructure for running tests. To do so, the REPO_CI_CONFIG_GIT_URL
 variable can be configured for the repository in the cirrus-ci web interface,
-at https://cirrus-ci.com/github/<user or organization>. The file referenced
+at https://cirrus-ci.com/github/< user or organization >. The file referenced
 (see https://cirrus-ci.org/guide/programming-tasks/#fs) by the variable can
 overwrite the default execution method for different operating systems,
 defined in .cirrus.yml, by redefining the relevant yaml anchors.

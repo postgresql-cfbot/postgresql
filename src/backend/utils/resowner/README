@@ -83,13 +83,13 @@ references, to name a few examples.
 To add a new kind of resource, define a ResourceOwnerDesc to describe it.
 For example:
 
-static const ResourceOwnerDesc myresource_desc = {
-	.name = "My fancy resource",
-	.release_phase = RESOURCE_RELEASE_AFTER_LOCKS,
-	.release_priority = RELEASE_PRIO_FIRST,
-	.ReleaseResource = ReleaseMyResource,
-	.DebugPrint = PrintMyResource
-};
+	static const ResourceOwnerDesc myresource_desc = {
+		.name = "My fancy resource",
+		.release_phase = RESOURCE_RELEASE_AFTER_LOCKS,
+		.release_priority = RELEASE_PRIO_FIRST,
+		.ReleaseResource = ReleaseMyResource,
+		.DebugPrint = PrintMyResource
+	};
 
 ResourceOwnerRemember() and ResourceOwnerForget() functions take a pointer
 to that struct, along with a Datum to represent the resource.  The meaning
@@ -139,28 +139,28 @@ within each phase.
 For example, imagine that you have two ResourceOwners, parent and child,
 as follows:
 
-Parent
-  parent resource BEFORE_LOCKS priority 1
-  parent resource BEFORE_LOCKS priority 2
-  parent resource AFTER_LOCKS priority 10001
-  parent resource AFTER_LOCKS priority 10002
-  Child
-    child resource BEFORE_LOCKS priority 1
-    child resource BEFORE_LOCKS priority 2
-    child resource AFTER_LOCKS priority 10001
-    child resource AFTER_LOCKS priority 10002
+	Parent
+	  parent resource BEFORE_LOCKS priority 1
+	  parent resource BEFORE_LOCKS priority 2
+	  parent resource AFTER_LOCKS priority 10001
+	  parent resource AFTER_LOCKS priority 10002
+	  Child
+	    child resource BEFORE_LOCKS priority 1
+	    child resource BEFORE_LOCKS priority 2
+	    child resource AFTER_LOCKS priority 10001
+	    child resource AFTER_LOCKS priority 10002
 
 These resources would be released in the following order:
 
-child resource BEFORE_LOCKS priority 1
-child resource BEFORE_LOCKS priority 2
-parent resource BEFORE_LOCKS priority 1
-parent resource BEFORE_LOCKS priority 2
-(locks)
-child resource AFTER_LOCKS priority 10001
-child resource AFTER_LOCKS priority 10002
-parent resource AFTER_LOCKS priority 10001
-parent resource AFTER_LOCKS priority 10002
+	child resource BEFORE_LOCKS priority 1
+	child resource BEFORE_LOCKS priority 2
+	parent resource BEFORE_LOCKS priority 1
+	parent resource BEFORE_LOCKS priority 2
+	(locks)
+	child resource AFTER_LOCKS priority 10001
+	child resource AFTER_LOCKS priority 10002
+	parent resource AFTER_LOCKS priority 10001
+	parent resource AFTER_LOCKS priority 10002
 
 To release all the resources, you need to call ResourceOwnerRelease() three
 times, once for each phase. You may perform additional tasks between the

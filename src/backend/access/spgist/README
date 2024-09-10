@@ -13,7 +13,7 @@ few disk pages, even if it traverses many nodes.
 
 
 COMMON STRUCTURE DESCRIPTION
-
+----------------------------
 Logically, an SP-GiST tree is a set of tuples, each of which can be either
 an inner or leaf tuple.  Each inner tuple contains "nodes", which are
 (label,pointer) pairs, where the pointer (ItemPointerData) is a pointer to
@@ -58,27 +58,27 @@ pages.
 
 An inner tuple consists of:
 
-  optional prefix value - all successors must be consistent with it.
-    Example:
-        radix tree   - prefix value is a common prefix string
-        quad tree    - centroid
-        k-d tree     - one coordinate
+    optional prefix value - all successors must be consistent with it.
+      Example:
+          radix tree   - prefix value is a common prefix string
+          quad tree    - centroid
+          k-d tree     - one coordinate
 
-  list of nodes, where node is a (label, pointer) pair.
-    Example of a label: a single character for radix tree
+    list of nodes, where node is a (label, pointer) pair.
+      Example of a label: a single character for radix tree
 
 A leaf tuple consists of:
 
-  a leaf value
-    Example:
-        radix tree - the rest of string (postfix)
-        quad and k-d tree - the point itself
+    a leaf value
+      Example:
+          radix tree - the rest of string (postfix)
+          quad and k-d tree - the point itself
 
-  ItemPointer to the corresponding heap tuple
-  nextOffset number of next leaf tuple in a chain on a leaf page
+    ItemPointer to the corresponding heap tuple
+    nextOffset number of next leaf tuple in a chain on a leaf page
 
-  optional nulls bitmask
-  optional INCLUDE-column values
+    optional nulls bitmask
+    optional INCLUDE-column values
 
 For compatibility with pre-v14 indexes, a leaf tuple has a nulls bitmask
 only if there are null values (among the leaf value and the INCLUDE values)
@@ -90,7 +90,7 @@ code can be used.
 
 
 NULLS HANDLING
-
+--------------
 We assume that SPGiST-indexable operators are strict (can never succeed for
 null inputs).  It is still desirable to index nulls, so that whole-table
 indexscans are possible and so that "x IS NULL" can be implemented by an
@@ -104,27 +104,27 @@ AllTheSame cases in the normal tree.
 
 
 INSERTION ALGORITHM
-
+-------------------
 Insertion algorithm is designed to keep the tree in a consistent state at
 any moment.  Here is a simplified insertion algorithm specification
 (numbers refer to notes below):
 
-  Start with the first tuple on the root page (1)
+    Start with the first tuple on the root page (1)
 
-  loop:
-    if (page is leaf) then
-        if (enough space)
-            insert on page and exit (5)
-        else (7)
-            call PickSplitFn() (2)
-        end if
-    else
-        switch (chooseFn())
-            case MatchNode  - descend through selected node
-            case AddNode    - add node and then retry chooseFn (3, 6)
-            case SplitTuple - split inner tuple to prefix and postfix, then
-                              retry chooseFn with the prefix tuple (4, 6)
-    end if
+    loop:
+      if (page is leaf) then
+          if (enough space)
+              insert on page and exit (5)
+          else (7)
+              call PickSplitFn() (2)
+          end if
+      else
+          switch (chooseFn())
+              case MatchNode  - descend through selected node
+              case AddNode    - add node and then retry chooseFn (3, 6)
+              case SplitTuple - split inner tuple to prefix and postfix, then
+                                retry chooseFn with the prefix tuple (4, 6)
+      end if
 
 Notes:
 
@@ -160,7 +160,7 @@ the following notation, where tuple's id is just for discussion (no such id
 is actually stored):
 
 inner tuple: {tuple id}(prefix string)[ comma separated list of node labels ]
-leaf tuple: {tuple id}<value>
+leaf tuple: {tuple id}< value >
 
 Suppose we need to insert string 'www.gogo.com' into inner tuple
 
@@ -215,7 +215,7 @@ space utilization, but doesn't change the basis of the algorithm.
 
 
 CONCURRENCY
-
+-----------
 While descending the tree, the insertion algorithm holds exclusive lock on
 two tree levels at a time, ie both parent and child pages (but parent and
 child pages can be the same, see notes above).  There is a possibility of
@@ -267,7 +267,7 @@ been flushed out of the system.
 
 
 DEAD TUPLES
-
+-----------
 Tuples on leaf pages can be in one of four states:
 
 SPGIST_LIVE: normal, live pointer to a heap tuple.
@@ -319,7 +319,7 @@ remove unused inner tuples.
 
 
 VACUUM
-
+------
 VACUUM (or more precisely, spgbulkdelete) performs a single sequential scan
 over the entire index.  On both leaf and inner pages, we can convert old
 REDIRECT tuples into PLACEHOLDER status, and then remove any PLACEHOLDERs
@@ -374,7 +374,7 @@ space map, and gather statistics.
 
 
 LAST USED PAGE MANAGEMENT
-
+-------------------------
 The list of last used pages contains four pages - a leaf page and three
 inner pages, one from each "triple parity" group.  (Actually, there's one
 such list for the main tree and a separate one for the nulls tree.)  This
@@ -384,6 +384,6 @@ critical, because we could allocate a new page at any moment.
 
 
 AUTHORS
-
+-------
     Teodor Sigaev <teodor@sigaev.ru>
     Oleg Bartunov <oleg@sai.msu.su>

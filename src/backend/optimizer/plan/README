@@ -6,32 +6,32 @@ Subselects
 Vadim B. Mikheev
 
 
-From owner-pgsql-hackers@hub.org Fri Feb 13 09:01:19 1998
-Received: from renoir.op.net (root@renoir.op.net [209.152.193.4])
-	by candle.pha.pa.us (8.8.5/8.8.5) with ESMTP id JAA11576
-	for <maillist@candle.pha.pa.us>; Fri, 13 Feb 1998 09:01:17 -0500 (EST)
-Received: from hub.org (hub.org [209.47.148.200]) by renoir.op.net (o1/$Revision: 1.14 $) with ESMTP id IAA09761 for <maillist@candle.pha.pa.us>; Fri, 13 Feb 1998 08:41:22 -0500 (EST)
-Received: from localhost (majordom@localhost) by hub.org (8.8.8/8.7.5) with SMTP id IAA08135; Fri, 13 Feb 1998 08:40:17 -0500 (EST)
-Received: by hub.org (TLB v0.10a (1.23 tibbs 1997/01/09 00:29:32)); Fri, 13 Feb 1998 08:38:42 -0500 (EST)
-Received: (from majordom@localhost) by hub.org (8.8.8/8.7.5) id IAA06646 for pgsql-hackers-outgoing; Fri, 13 Feb 1998 08:38:35 -0500 (EST)
-Received: from dune.krasnet.ru (dune.krasnet.ru [193.125.44.86]) by hub.org (8.8.8/8.7.5) with ESMTP id IAA04568 for <hackers@postgreSQL.org>; Fri, 13 Feb 1998 08:37:16 -0500 (EST)
-Received: from sable.krasnoyarsk.su (dune.krasnet.ru [193.125.44.86])
-	by dune.krasnet.ru (8.8.7/8.8.7) with ESMTP id UAA13717
-	for <hackers@postgreSQL.org>; Fri, 13 Feb 1998 20:51:03 +0700 (KRS)
-	(envelope-from vadim@sable.krasnoyarsk.su)
-Message-ID: <34E44FBA.D64E7997@sable.krasnoyarsk.su>
-Date: Fri, 13 Feb 1998 20:50:50 +0700
-From: "Vadim B. Mikheev" <vadim@sable.krasnoyarsk.su>
-Organization: ITTS (Krasnoyarsk)
-X-Mailer: Mozilla 4.04 [en] (X11; I; FreeBSD 2.2.5-RELEASE i386)
-MIME-Version: 1.0
-To: PostgreSQL Developers List <hackers@postgreSQL.org>
-Subject: [HACKERS] Subselects are in CVS...
-Content-Type: text/plain; charset=us-ascii
-Content-Transfer-Encoding: 7bit
-Sender: owner-pgsql-hackers@hub.org
-Precedence: bulk
-Status: OR
+	From owner-pgsql-hackers@hub.org Fri Feb 13 09:01:19 1998
+	Received: from renoir.op.net (root@renoir.op.net [209.152.193.4])
+		by candle.pha.pa.us (8.8.5/8.8.5) with ESMTP id JAA11576
+		for <maillist@candle.pha.pa.us>; Fri, 13 Feb 1998 09:01:17 -0500 (EST)
+	Received: from hub.org (hub.org [209.47.148.200]) by renoir.op.net (o1/$Revision: 1.14 $) with ESMTP id IAA09761 for <maillist@candle.pha.pa.us>; Fri, 13 Feb 1998 08:41:22 -0500 (EST)
+	Received: from localhost (majordom@localhost) by hub.org (8.8.8/8.7.5) with SMTP id IAA08135; Fri, 13 Feb 1998 08:40:17 -0500 (EST)
+	Received: by hub.org (TLB v0.10a (1.23 tibbs 1997/01/09 00:29:32)); Fri, 13 Feb 1998 08:38:42 -0500 (EST)
+	Received: (from majordom@localhost) by hub.org (8.8.8/8.7.5) id IAA06646 for pgsql-hackers-outgoing; Fri, 13 Feb 1998 08:38:35 -0500 (EST)
+	Received: from dune.krasnet.ru (dune.krasnet.ru [193.125.44.86]) by hub.org (8.8.8/8.7.5) with ESMTP id IAA04568 for <hackers@postgreSQL.org>; Fri, 13 Feb 1998 08:37:16 -0500 (EST)
+	Received: from sable.krasnoyarsk.su (dune.krasnet.ru [193.125.44.86])
+		by dune.krasnet.ru (8.8.7/8.8.7) with ESMTP id UAA13717
+		for <hackers@postgreSQL.org>; Fri, 13 Feb 1998 20:51:03 +0700 (KRS)
+		(envelope-from vadim@sable.krasnoyarsk.su)
+	Message-ID: <34E44FBA.D64E7997@sable.krasnoyarsk.su>
+	Date: Fri, 13 Feb 1998 20:50:50 +0700
+	From: "Vadim B. Mikheev" <vadim@sable.krasnoyarsk.su>
+	Organization: ITTS (Krasnoyarsk)
+	X-Mailer: Mozilla 4.04 [en] (X11; I; FreeBSD 2.2.5-RELEASE i386)
+	MIME-Version: 1.0
+	To: PostgreSQL Developers List <hackers@postgreSQL.org>
+	Subject: [HACKERS] Subselects are in CVS...
+	Content-Type: text/plain; charset=us-ascii
+	Content-Transfer-Encoding: 7bit
+	Sender: owner-pgsql-hackers@hub.org
+	Precedence: bulk
+	Status: OR
 
 This is some implementation notes and opened issues...
 
@@ -91,21 +91,21 @@ on each call) ExecReScan() now supports most of Plan types...
 
 Explanation of EXPLAIN.
 
-vac=> explain select * from tmp where x >= (select max(x2) from test2
-where y2 = y and exists (select * from tempx where tx = x));
-NOTICE:  QUERY PLAN:
+	vac=> explain select * from tmp where x >= (select max(x2) from test2
+	where y2 = y and exists (select * from tempx where tx = x));
+	NOTICE:  QUERY PLAN:
 
-Seq Scan on tmp  (cost=40.03 size=101 width=8)
-  SubPlan
-  ^^^^^^^ subquery is in Seq Scan' qual, its plan is below
-    ->  Aggregate  (cost=2.05 size=0 width=0)
-          InitPlan
-          ^^^^^^^^ EXISTS subsubquery is InitPlan of subquery
-            ->  Seq Scan on tempx  (cost=4.33 size=1 width=4)
-          ->  Result  (cost=2.05 size=0 width=0)
-              ^^^^^^ EXISTS subsubquery was transformed into Param
-                     and so we have Result node here
-                ->  Index Scan on test2  (cost=2.05 size=1 width=4)
+	Seq Scan on tmp  (cost=40.03 size=101 width=8)
+	  SubPlan
+	  ^^^^^^^ subquery is in Seq Scan' qual, its plan is below
+	    ->  Aggregate  (cost=2.05 size=0 width=0)
+	          InitPlan
+	          ^^^^^^^^ EXISTS subsubquery is InitPlan of subquery
+	            ->  Seq Scan on tempx  (cost=4.33 size=1 width=4)
+	          ->  Result  (cost=2.05 size=0 width=0)
+	              ^^^^^^ EXISTS subsubquery was transformed into Param
+	                     and so we have Result node here
+	                ->  Index Scan on test2  (cost=2.05 size=1 width=4)
 
 
 Opened issues.
@@ -131,28 +131,28 @@ Results of some test. TMP is table with x,y (int4-s), x in 0-9,
 y = 100 - x, 1000 tuples (10 duplicates of each tuple). TEST2 is table
 with x2, y2 (int4-s), x2 in 1-99, y2 = 100 -x2, 10000 tuples (100 dups).
 
-   Trying
+Trying
 
-select * from tmp where x >= (select max(x2) from test2 where y2 = y);
+	select * from tmp where x >= (select max(x2) from test2 where y2 = y);
 
-   and
+and
 
-begin;
-select y as ty, max(x2) as mx into table tsub from test2, tmp
-where y2 = y group by ty;
-vacuum tsub;
-select x, y from tmp, tsub where x >= mx and y = ty;
-drop table tsub;
-end;
+	begin;
+	select y as ty, max(x2) as mx into table tsub from test2, tmp
+	where y2 = y group by ty;
+	vacuum tsub;
+	select x, y from tmp, tsub where x >= mx and y = ty;
+	drop table tsub;
+	end;
 
-   Without index on test2(y2):
+Without index on test2(y2):
 
-SubSelect         -> 320 sec
-Using temp table  -> 32 sec
+	SubSelect         -> 320 sec
+	Using temp table  -> 32 sec
 
-   Having index
+Having index
 
-SubSelect         -> 17 sec (2M of memory)
-Using temp table  -> 32 sec (12M of memory: -S 8192)
+	SubSelect         -> 17 sec (2M of memory)
+	Using temp table  -> 32 sec (12M of memory: -S 8192)
 
 Vadim

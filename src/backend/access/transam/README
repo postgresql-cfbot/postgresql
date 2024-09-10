@@ -59,27 +59,27 @@ For example, consider the following sequence of user commands:
 In the main processing loop, this results in the following function call
 sequence:
 
-     /  StartTransactionCommand;
-    /       StartTransaction;
-1) <    ProcessUtility;                 << BEGIN
-    \       BeginTransactionBlock;
-     \  CommitTransactionCommand;
+	     /  StartTransactionCommand;
+	    /       StartTransaction;
+	1) <    ProcessUtility;                 << BEGIN
+	    \       BeginTransactionBlock;
+	     \  CommitTransactionCommand;
 
-    /   StartTransactionCommand;
-2) /    PortalRunSelect;                << SELECT ...
-   \    CommitTransactionCommand;
-    \       CommandCounterIncrement;
+	    /   StartTransactionCommand;
+	2) /    PortalRunSelect;                << SELECT ...
+	   \    CommitTransactionCommand;
+	    \       CommandCounterIncrement;
 
-    /   StartTransactionCommand;
-3) /    ProcessQuery;                   << INSERT ...
-   \    CommitTransactionCommand;
-    \       CommandCounterIncrement;
+	    /   StartTransactionCommand;
+	3) /    ProcessQuery;                   << INSERT ...
+	   \    CommitTransactionCommand;
+	    \       CommandCounterIncrement;
 
-     /  StartTransactionCommand;
-    /   ProcessUtility;                 << COMMIT
-4) <        EndTransactionBlock;
-    \   CommitTransactionCommand;
-     \      CommitTransaction;
+	     /  StartTransactionCommand;
+	    /   ProcessUtility;                 << COMMIT
+	4) <        EndTransactionBlock;
+	    \   CommitTransactionCommand;
+	     \      CommitTransaction;
 
 The point of this example is to demonstrate the need for
 StartTransactionCommand and CommitTransactionCommand to be state smart -- they
@@ -100,12 +100,12 @@ Transaction aborts can occur in two ways:
 The reason we have to distinguish them is illustrated by the following two
 situations:
 
-        case 1                                  case 2
-        ------                                  ------
-1) user types BEGIN                     1) user types BEGIN
-2) user does something                  2) user does something
-3) user does not like what              3) system aborts for some reason
-   she sees and types ABORT                (syntax error, etc)
+	        case 1                                  case 2
+	        ------                                  ------
+	1) user types BEGIN                     1) user types BEGIN
+	2) user does something                  2) user does something
+	3) user does not like what              3) system aborts for some reason
+	   she sees and types ABORT                (syntax error, etc)
 
 In case 1, we want to abort the transaction and return to the default state.
 In case 2, there may be more commands coming our way which are part of the
@@ -171,7 +171,7 @@ CommitTransactionCommand, the real work is done.  The main point of doing
 things this way is that if we get an error while popping state stack entries,
 the remaining stack entries still show what we need to do to finish up.
 
-In the case of ROLLBACK TO <savepoint>, we abort all the subtransactions up
+In the case of ROLLBACK TO < savepoint >, we abort all the subtransactions up
 through the one identified by the savepoint name, and then re-create that
 subtransaction level with the same name.  So it's a completely new
 subtransaction as far as the internals are concerned.

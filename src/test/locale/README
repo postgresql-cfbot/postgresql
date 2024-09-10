@@ -9,8 +9,11 @@ locale data.  Then there are test-sort.pl and test-sort.py that test
 collating.
 
 To run a test for some locale run
+
     make check-$locale
+
 for example
+
     make check-koi8-r
 
 Currently, there are only tests for a few locales available.  The script

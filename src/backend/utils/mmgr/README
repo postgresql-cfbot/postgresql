@@ -412,11 +412,11 @@ GetMemoryChunkMethodID() and finding the corresponding MemoryContextMethods
 in the mcxt_methods[] array.  For convenience, the MCXT_METHOD() macro is
 provided, making the code as simple as:
 
-void
-pfree(void *pointer)
-{
-	MCXT_METHOD(pointer, free_p)(pointer);
-}
+    void
+    pfree(void *pointer)
+    {
+	    MCXT_METHOD(pointer, free_p)(pointer);
+    }
 
 All of the current memory contexts make use of the MemoryChunk header type
 which is defined in memutils_memorychunk.h.  This suits all of the existing

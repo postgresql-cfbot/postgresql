@@ -254,7 +254,9 @@ the boundary, unless the proposed join is a LEFT join that can associate
 into the SpecialJoinInfo's RHS using identity 3.
 
 The use of minimum Relid sets has some pitfalls; consider a query like
+
 	A leftjoin (B leftjoin (C innerjoin D) on (Pbcd)) on Pa
+
 where Pa doesn't mention B/C/D at all.  In this case a naive computation
 would give the upper leftjoin's min LHS as {A} and min RHS as {C,D} (since
 we know that the innerjoin can't associate out of the leftjoin's RHS, and
@@ -262,7 +264,9 @@ enforce that by including its relids in the leftjoin's min RHS).  And the
 lower leftjoin has min LHS of {B} and min RHS of {C,D}.  Given such
 information, join_is_legal would think it's okay to associate the upper
 join into the lower join's RHS, transforming the query to
+
 	B leftjoin (A leftjoin (C innerjoin D) on Pa) on (Pbcd)
+
 which yields totally wrong answers.  We prevent that by forcing the min RHS
 for the upper join to include B.  This is perhaps overly restrictive, but
 such cases don't arise often so it's not clear that it's worth developing a
@@ -359,10 +363,12 @@ side of the full join a Var came from; but that information can be found
 elsewhere at need.)
 
 Notionally, a Var having nonempty varnullingrels can be thought of as
+
 	CASE WHEN any-of-these-outer-joins-produced-a-null-extended-row
 	  THEN NULL
 	  ELSE the-scan-level-value-of-the-column
 	  END
+
 It's only notional, because no such calculation is ever done explicitly.
 In a finished plan, Vars occurring in scan-level plan nodes represent
 the actual table column values, but upper-level Vars are always
@@ -375,14 +381,20 @@ otherwise be essential information for FULL JOIN cases.
 
 Outer join identity 3 (discussed above) complicates this picture
 a bit.  In the form
+
 	A leftjoin (B leftjoin C on (Pbc)) on (Pab)
+
 all of the Vars in clauses Pbc and Pab will have empty varnullingrels,
 but if we start with
+
 	(A leftjoin B on (Pab)) leftjoin C on (Pbc)
+
 then the parser will have marked Pbc's B Vars with the A/B join's
 RT index, making this form artificially different from the first.
 For discussion's sake, let's denote this marking with a star:
+
 	(A leftjoin B on (Pab)) leftjoin C on (Pb*c)
+
 To cope with this, once we have detected that commuting these joins
 is legal, we generate both the Pbc and Pb*c forms of that ON clause,
 by either removing or adding the first join's RT index in the B Vars
@@ -553,114 +565,114 @@ Optimizer Functions
 
 The primary entry point is planner().
 
-planner()
-set up for recursive handling of subqueries
--subquery_planner()
- pull up sublinks and subqueries from rangetable, if possible
- canonicalize qual
-     Attempt to simplify WHERE clause to the most useful form; this includes
-     flattening nested AND/ORs and detecting clauses that are duplicated in
-     different branches of an OR.
- simplify constant expressions
- process sublinks
- convert Vars of outer query levels into Params
---grouping_planner()
-  preprocess target list for non-SELECT queries
-  handle UNION/INTERSECT/EXCEPT, GROUP BY, HAVING, aggregates,
-	ORDER BY, DISTINCT, LIMIT
----query_planner()
-   make list of base relations used in query
-   split up the qual into restrictions (a=1) and joins (b=c)
-   find qual clauses that enable merge and hash joins
-----make_one_rel()
-     set_base_rel_pathlists()
-      find seqscan and all index paths for each base relation
-      find selectivity of columns used in joins
-     make_rel_from_joinlist()
-      hand off join subproblems to a plugin, GEQO, or standard_join_search()
-------standard_join_search()
-      call join_search_one_level() for each level of join tree needed
-      join_search_one_level():
-        For each joinrel of the prior level, do make_rels_by_clause_joins()
-        if it has join clauses, or make_rels_by_clauseless_joins() if not.
-        Also generate "bushy plan" joins between joinrels of lower levels.
-      Back at standard_join_search(), generate gather paths if needed for
-      each newly constructed joinrel, then apply set_cheapest() to extract
-      the cheapest path for it.
-      Loop back if this wasn't the top join level.
-  Back at grouping_planner:
-  do grouping (GROUP BY) and aggregation
-  do window functions
-  make unique (DISTINCT)
-  do sorting (ORDER BY)
-  do limit (LIMIT/OFFSET)
-Back at planner():
-convert finished Path tree into a Plan tree
-do final cleanup after planning
+	planner()
+	set up for recursive handling of subqueries
+	-subquery_planner()
+	 pull up sublinks and subqueries from rangetable, if possible
+	 canonicalize qual
+	     Attempt to simplify WHERE clause to the most useful form; this includes
+	     flattening nested AND/ORs and detecting clauses that are duplicated in
+	     different branches of an OR.
+	 simplify constant expressions
+	 process sublinks
+	 convert Vars of outer query levels into Params
+	--grouping_planner()
+	  preprocess target list for non-SELECT queries
+	  handle UNION/INTERSECT/EXCEPT, GROUP BY, HAVING, aggregates,
+		ORDER BY, DISTINCT, LIMIT
+	---query_planner()
+	   make list of base relations used in query
+	   split up the qual into restrictions (a=1) and joins (b=c)
+	   find qual clauses that enable merge and hash joins
+	----make_one_rel()
+	     set_base_rel_pathlists()
+	      find seqscan and all index paths for each base relation
+	      find selectivity of columns used in joins
+	     make_rel_from_joinlist()
+	      hand off join subproblems to a plugin, GEQO, or standard_join_search()
+	------standard_join_search()
+	      call join_search_one_level() for each level of join tree needed
+	      join_search_one_level():
+	        For each joinrel of the prior level, do make_rels_by_clause_joins()
+	        if it has join clauses, or make_rels_by_clauseless_joins() if not.
+	        Also generate "bushy plan" joins between joinrels of lower levels.
+	      Back at standard_join_search(), generate gather paths if needed for
+	      each newly constructed joinrel, then apply set_cheapest() to extract
+	      the cheapest path for it.
+	      Loop back if this wasn't the top join level.
+	  Back at grouping_planner:
+	  do grouping (GROUP BY) and aggregation
+	  do window functions
+	  make unique (DISTINCT)
+	  do sorting (ORDER BY)
+	  do limit (LIMIT/OFFSET)
+	Back at planner():
+	convert finished Path tree into a Plan tree
+	do final cleanup after planning
 
 
 Optimizer Data Structures
 -------------------------
 
-PlannerGlobal   - global information for a single planner invocation
+    PlannerGlobal   - global information for a single planner invocation
 
-PlannerInfo     - information for planning a particular Query (we make
-                  a separate PlannerInfo node for each sub-Query)
+    PlannerInfo     - information for planning a particular Query (we make
+                      a separate PlannerInfo node for each sub-Query)
 
-RelOptInfo      - a relation or joined relations
+    RelOptInfo      - a relation or joined relations
 
- RestrictInfo   - WHERE clauses, like "x = 3" or "y = z"
-                  (note the same structure is used for restriction and
-                   join clauses)
+     RestrictInfo   - WHERE clauses, like "x = 3" or "y = z"
+                      (note the same structure is used for restriction and
+                       join clauses)
 
- Path           - every way to generate a RelOptInfo(sequential,index,joins)
-  A plain Path node can represent several simple plans, per its pathtype:
-    T_SeqScan   - sequential scan
-    T_SampleScan - tablesample scan
-    T_FunctionScan - function-in-FROM scan
-    T_TableFuncScan - table function scan
-    T_ValuesScan - VALUES scan
-    T_CteScan   - CTE (WITH) scan
-    T_NamedTuplestoreScan - ENR scan
-    T_WorkTableScan - scan worktable of a recursive CTE
-    T_Result    - childless Result plan node (used for FROM-less SELECT)
-  IndexPath     - index scan
-  BitmapHeapPath - top of a bitmapped index scan
-  TidPath       - scan by CTID
-  TidRangePath  - scan a contiguous range of CTIDs
-  SubqueryScanPath - scan a subquery-in-FROM
-  ForeignPath   - scan a foreign table, foreign join or foreign upper-relation
-  CustomPath    - for custom scan providers
-  AppendPath    - append multiple subpaths together
-  MergeAppendPath - merge multiple subpaths, preserving their common sort order
-  GroupResultPath - childless Result plan node (used for degenerate grouping)
-  MaterialPath  - a Material plan node
-  MemoizePath   - a Memoize plan node for caching tuples from sub-paths
-  UniquePath    - remove duplicate rows (either by hashing or sorting)
-  GatherPath    - collect the results of parallel workers
-  GatherMergePath - collect parallel results, preserving their common sort order
-  ProjectionPath - a Result plan node with child (used for projection)
-  ProjectSetPath - a ProjectSet plan node applied to some sub-path
-  SortPath      - a Sort plan node applied to some sub-path
-  IncrementalSortPath - an IncrementalSort plan node applied to some sub-path
-  GroupPath     - a Group plan node applied to some sub-path
-  UpperUniquePath - a Unique plan node applied to some sub-path
-  AggPath       - an Agg plan node applied to some sub-path
-  GroupingSetsPath - an Agg plan node used to implement GROUPING SETS
-  MinMaxAggPath - a Result plan node with subplans performing MIN/MAX
-  WindowAggPath - a WindowAgg plan node applied to some sub-path
-  SetOpPath     - a SetOp plan node applied to some sub-path
-  RecursiveUnionPath - a RecursiveUnion plan node applied to two sub-paths
-  LockRowsPath  - a LockRows plan node applied to some sub-path
-  ModifyTablePath - a ModifyTable plan node applied to some sub-path(s)
-  LimitPath     - a Limit plan node applied to some sub-path
-  NestPath      - nested-loop joins
-  MergePath     - merge joins
-  HashPath      - hash joins
+     Path           - every way to generate a RelOptInfo(sequential,index,joins)
+      A plain Path node can represent several simple plans, per its pathtype:
+        T_SeqScan   - sequential scan
+        T_SampleScan - tablesample scan
+        T_FunctionScan - function-in-FROM scan
+        T_TableFuncScan - table function scan
+        T_ValuesScan - VALUES scan
+        T_CteScan   - CTE (WITH) scan
+        T_NamedTuplestoreScan - ENR scan
+        T_WorkTableScan - scan worktable of a recursive CTE
+        T_Result    - childless Result plan node (used for FROM-less SELECT)
+      IndexPath     - index scan
+      BitmapHeapPath - top of a bitmapped index scan
+      TidPath       - scan by CTID
+      TidRangePath  - scan a contiguous range of CTIDs
+      SubqueryScanPath - scan a subquery-in-FROM
+      ForeignPath   - scan a foreign table, foreign join or foreign upper-relation
+      CustomPath    - for custom scan providers
+      AppendPath    - append multiple subpaths together
+      MergeAppendPath - merge multiple subpaths, preserving their common sort order
+      GroupResultPath - childless Result plan node (used for degenerate grouping)
+      MaterialPath  - a Material plan node
+      MemoizePath   - a Memoize plan node for caching tuples from sub-paths
+      UniquePath    - remove duplicate rows (either by hashing or sorting)
+      GatherPath    - collect the results of parallel workers
+      GatherMergePath - collect parallel results, preserving their common sort order
+      ProjectionPath - a Result plan node with child (used for projection)
+      ProjectSetPath - a ProjectSet plan node applied to some sub-path
+      SortPath      - a Sort plan node applied to some sub-path
+      IncrementalSortPath - an IncrementalSort plan node applied to some sub-path
+      GroupPath     - a Group plan node applied to some sub-path
+      UpperUniquePath - a Unique plan node applied to some sub-path
+      AggPath       - an Agg plan node applied to some sub-path
+      GroupingSetsPath - an Agg plan node used to implement GROUPING SETS
+      MinMaxAggPath - a Result plan node with subplans performing MIN/MAX
+      WindowAggPath - a WindowAgg plan node applied to some sub-path
+      SetOpPath     - a SetOp plan node applied to some sub-path
+      RecursiveUnionPath - a RecursiveUnion plan node applied to two sub-paths
+      LockRowsPath  - a LockRows plan node applied to some sub-path
+      ModifyTablePath - a ModifyTable plan node applied to some sub-path(s)
+      LimitPath     - a Limit plan node applied to some sub-path
+      NestPath      - nested-loop joins
+      MergePath     - merge joins
+      HashPath      - hash joins
 
- EquivalenceClass - a data structure representing a set of values known equal
+     EquivalenceClass - a data structure representing a set of values known equal
 
- PathKey        - a data structure representing the sort ordering of a path
+     PathKey        - a data structure representing the sort ordering of a path
 
 The optimizer spends a good deal of its time worrying about the ordering
 of the tuples returned by a path.  The reason this is useful is that by
@@ -909,10 +921,10 @@ of the tuples generated by a particular Path.  A path's pathkeys field is a
 list of PathKey nodes, where the n'th item represents the n'th sort key of
 the result.  Each PathKey contains these fields:
 
-	* a reference to an EquivalenceClass
-	* a btree opfamily OID (must match one of those in the EC)
-	* a sort direction (ascending or descending)
-	* a nulls-first-or-last flag
+* a reference to an EquivalenceClass
+* a btree opfamily OID (must match one of those in the EC)
+* a sort direction (ascending or descending)
+* a nulls-first-or-last flag
 
 The EquivalenceClass represents the value being sorted on.  Since the
 various members of an EquivalenceClass are known equal according to the
@@ -997,9 +1009,11 @@ lists (sort orderings) do not mention the same EquivalenceClass more than
 once.  For example, in all these cases the second sort column is redundant,
 because it cannot distinguish values that are the same according to the
 first sort column:
+
 	SELECT ... ORDER BY x, x
 	SELECT ... ORDER BY x, x DESC
 	SELECT ... WHERE x = y ORDER BY x, y
+
 Although a user probably wouldn't write "ORDER BY x,x" directly, such
 redundancies are more probable once equivalence classes have been
 considered.  Also, the system may generate redundant pathkey lists when
@@ -1350,14 +1364,14 @@ RelOptInfos are mostly dummy, but their pathlist lists hold all the Paths
 considered useful for each step.  Currently, we may create these types of
 additional RelOptInfos during upper-level planning:
 
-UPPERREL_SETOP		result of UNION/INTERSECT/EXCEPT, if any
-UPPERREL_PARTIAL_GROUP_AGG	result of partial grouping/aggregation, if any
-UPPERREL_GROUP_AGG	result of grouping/aggregation, if any
-UPPERREL_WINDOW		result of window functions, if any
-UPPERREL_PARTIAL_DISTINCT	result of partial "SELECT DISTINCT", if any
-UPPERREL_DISTINCT	result of "SELECT DISTINCT", if any
-UPPERREL_ORDERED	result of ORDER BY, if any
-UPPERREL_FINAL		result of any remaining top-level actions
+    UPPERREL_SETOP		result of UNION/INTERSECT/EXCEPT, if any
+    UPPERREL_PARTIAL_GROUP_AGG	result of partial grouping/aggregation, if any
+    UPPERREL_GROUP_AGG	result of grouping/aggregation, if any
+    UPPERREL_WINDOW		result of window functions, if any
+    UPPERREL_PARTIAL_DISTINCT	result of partial "SELECT DISTINCT", if any
+    UPPERREL_DISTINCT	result of "SELECT DISTINCT", if any
+    UPPERREL_ORDERED	result of ORDER BY, if any
+    UPPERREL_FINAL		result of any remaining top-level actions
 
 UPPERREL_FINAL is used to represent any final processing steps, currently
 LockRows (SELECT FOR UPDATE), LIMIT/OFFSET, and ModifyTable.  There is no

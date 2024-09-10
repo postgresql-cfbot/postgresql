@@ -18,13 +18,13 @@ Usage
 
 Here's a simple example of usage:
 
-# postgresql.conf
-shared_preload_libraries = 'dummy_seclabel'
+	# postgresql.conf
+	shared_preload_libraries = 'dummy_seclabel'
 
-postgres=# CREATE TABLE t (a int, b text);
-CREATE TABLE
-postgres=# SECURITY LABEL ON TABLE t IS 'classified';
-SECURITY LABEL
+	postgres=# CREATE TABLE t (a int, b text);
+	CREATE TABLE
+	postgres=# SECURITY LABEL ON TABLE t IS 'classified';
+	SECURITY LABEL
 
 The dummy_seclabel module provides only four hardcoded
 labels: unclassified, classified,

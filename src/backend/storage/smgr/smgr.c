@@ -101,7 +101,7 @@ typedef struct f_smgr
 								   BlockNumber blocknum, BlockNumber nblocks);
 	BlockNumber (*smgr_nblocks) (SMgrRelation reln, ForkNumber forknum);
 	void		(*smgr_truncate) (SMgrRelation reln, ForkNumber forknum,
-								  BlockNumber nblocks);
+								  BlockNumber old_blocks, BlockNumber nblocks);
 	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
 	void		(*smgr_registersync) (SMgrRelation reln, ForkNumber forknum);
 } f_smgr;
@@ -724,6 +724,26 @@ smgrnblocks_cached(SMgrRelation reln, ForkNumber forknum)
 void
 smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nblocks)
 {
+	BlockNumber old_nblocks[MAX_FORKNUM + 1];
+
+	for (int i = 0; i < nforks; ++i)
+		old_nblocks[i] = smgrnblocks(reln, forknum[i]);
+
+	return smgrtruncatefrom(reln, forknum, nforks, old_nblocks, nblocks);
+}
+
+/*
+ * smgrtruncatefrom() -- Like sgmrtruncate(), but with caller-supplied old
+ *					 sizes, to allow usage in critical sections.
+ *
+ * See smgrtruncate() for requirements, and additionally the caller must call
+ * smgrnblocks() to obtain the size of each fork to be truncated, and not
+ * allow the relation to be invalidated in between.
+ */
+void
+smgrtruncatefrom(SMgrRelation reln, ForkNumber *forknum, int nforks,
+				 BlockNumber *old_nblocks, BlockNumber *nblocks)
+{
 	int			i;
 
 	/*
@@ -750,7 +770,8 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nb
 		/* Make the cached size is invalid if we encounter an error. */
 		reln->smgr_cached_nblocks[forknum[i]] = InvalidBlockNumber;
 
-		smgrsw[reln->smgr_which].smgr_truncate(reln, forknum[i], nblocks[i]);
+		smgrsw[reln->smgr_which].smgr_truncate(reln, forknum[i],
+											   old_nblocks[i], nblocks[i]);
 
 		/*
 		 * We might as well update the local smgr_cached_nblocks values. The

@@ -63,4 +63,10 @@ extern void ReportApplyConflict(EState *estate, ResultRelInfo *relinfo,
 								RepOriginId localorigin, TimestampTz localts);
 extern void InitConflictIndexes(ResultRelInfo *relInfo);
 
+extern void CheckAndReportConflict(ResultRelInfo *resultRelInfo,
+								   EState *estate, ConflictType type,
+								   List *recheckIndexes,
+								   TupleTableSlot *searchslot,
+								   TupleTableSlot *remoteslot);
+
 #endif

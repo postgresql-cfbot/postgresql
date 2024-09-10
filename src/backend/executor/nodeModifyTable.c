@@ -123,6 +123,18 @@ typedef struct UpdateContext
 	LockTupleMode lockmode;
 } UpdateContext;
 
+typedef struct InsertModifyBufferFlushContext
+{
+	ResultRelInfo *resultRelInfo;
+	EState	   *estate;
+	ModifyTableState *mtstate;
+} InsertModifyBufferFlushContext;
+
+static InsertModifyBufferFlushContext *insert_modify_buffer_flush_context = NULL;
+static TableModifyState *table_modify_state = NULL;
+
+static void InsertModifyBufferFlushCallback(void *context,
+											TupleTableSlot *slot);
 
 static void ExecBatchInsert(ModifyTableState *mtstate,
 							ResultRelInfo *resultRelInfo,
@@ -735,6 +747,55 @@ ExecGetUpdateNewTuple(ResultRelInfo *relinfo,
 	return ExecProject(newProj);
 }
 
+static void
+InsertModifyBufferFlushCallback(void *context, TupleTableSlot *slot)
+{
+	InsertModifyBufferFlushContext *ctx = (InsertModifyBufferFlushContext *) context;
+	ResultRelInfo *resultRelInfo = ctx->resultRelInfo;
+	EState	   *estate = ctx->estate;
+	ModifyTableState *mtstate = ctx->mtstate;
+
+	/* Quick exit if no indexes or no triggers */
+	if (!(resultRelInfo->ri_NumIndices > 0 ||
+		  (resultRelInfo->ri_TrigDesc != NULL &&
+		   (resultRelInfo->ri_TrigDesc->trig_insert_after_row ||
+			resultRelInfo->ri_TrigDesc->trig_insert_new_table))))
+		return;
+
+	/* Caller must take care of opening and closing the indices */
+
+	/*
+	 * If there are any indexes, update them for all the inserted tuples, and
+	 * run AFTER ROW INSERT triggers.
+	 */
+	if (resultRelInfo->ri_NumIndices > 0)
+	{
+		List	   *recheckIndexes;
+
+		recheckIndexes =
+			ExecInsertIndexTuples(resultRelInfo,
+								  slot, estate, false,
+								  false, NULL, NIL, false);
+		ExecARInsertTriggers(estate, resultRelInfo,
+							 slot, recheckIndexes,
+							 mtstate->mt_transition_capture);
+		list_free(recheckIndexes);
+	}
+
+	/*
+	 * There's no indexes, but see if we need to run AFTER ROW INSERT triggers
+	 * anyway.
+	 */
+	else if (resultRelInfo->ri_TrigDesc != NULL &&
+			 (resultRelInfo->ri_TrigDesc->trig_insert_after_row ||
+			  resultRelInfo->ri_TrigDesc->trig_insert_new_table))
+	{
+		ExecARInsertTriggers(estate, resultRelInfo,
+							 slot, NIL,
+							 mtstate->mt_transition_capture);
+	}
+}
+
 /* ----------------------------------------------------------------
  *		ExecInsert
  *
@@ -760,7 +821,8 @@ ExecInsert(ModifyTableContext *context,
 		   TupleTableSlot *slot,
 		   bool canSetTag,
 		   TupleTableSlot **inserted_tuple,
-		   ResultRelInfo **insert_destrel)
+		   ResultRelInfo **insert_destrel,
+		   bool canMultiInsert)
 {
 	ModifyTableState *mtstate = context->mtstate;
 	EState	   *estate = context->estate;
@@ -773,6 +835,7 @@ ExecInsert(ModifyTableContext *context,
 	OnConflictAction onconflict = node->onConflictAction;
 	PartitionTupleRouting *proute = mtstate->mt_partition_tuple_routing;
 	MemoryContext oldContext;
+	bool		ar_insert_triggers_executed = false;
 
 	/*
 	 * If the input result relation is a partitioned table, find the leaf
@@ -1138,17 +1201,53 @@ ExecInsert(ModifyTableContext *context,
 		}
 		else
 		{
-			/* insert the tuple normally */
-			table_tuple_insert(resultRelationDesc, slot,
-							   estate->es_output_cid,
-							   0, NULL);
+			if (canMultiInsert &&
+				proute == NULL &&
+				resultRelInfo->ri_WithCheckOptions == NIL &&
+				resultRelInfo->ri_projectReturning == NULL)
+			{
+				if (insert_modify_buffer_flush_context == NULL)
+				{
+					insert_modify_buffer_flush_context =
+						(InsertModifyBufferFlushContext *) palloc0(sizeof(InsertModifyBufferFlushContext));
+					insert_modify_buffer_flush_context->resultRelInfo = resultRelInfo;
+					insert_modify_buffer_flush_context->estate = estate;
+					insert_modify_buffer_flush_context->mtstate = mtstate;
+				}
 
-			/* insert index entries for tuple */
-			if (resultRelInfo->ri_NumIndices > 0)
-				recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
-													   slot, estate, false,
-													   false, NULL, NIL,
-													   false);
+				if (table_modify_state == NULL)
+				{
+					table_modify_state = table_modify_begin(resultRelInfo->ri_RelationDesc,
+															0,
+															estate->es_output_cid,
+															0,
+															InsertModifyBufferFlushCallback,
+															insert_modify_buffer_flush_context);
+				}
+
+				table_modify_buffer_insert(table_modify_state, slot);
+				ar_insert_triggers_executed = true;
+			}
+			else
+			{
+				/* insert the tuple normally */
+				table_tuple_insert(resultRelationDesc, slot,
+								   estate->es_output_cid,
+								   0, NULL);
+
+				/* insert index entries for tuple */
+				if (resultRelInfo->ri_NumIndices > 0)
+					recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
+														   slot, estate, false,
+														   false, NULL, NIL,
+														   false);
+
+				ExecARInsertTriggers(estate, resultRelInfo, slot, recheckIndexes,
+									 mtstate->mt_transition_capture);
+
+				list_free(recheckIndexes);
+				ar_insert_triggers_executed = true;
+			}
 		}
 	}
 
@@ -1182,10 +1281,12 @@ ExecInsert(ModifyTableContext *context,
 	}
 
 	/* AFTER ROW INSERT Triggers */
-	ExecARInsertTriggers(estate, resultRelInfo, slot, recheckIndexes,
-						 ar_insert_trig_tcs);
-
-	list_free(recheckIndexes);
+	if (!ar_insert_triggers_executed)
+	{
+		ExecARInsertTriggers(estate, resultRelInfo, slot, recheckIndexes,
+							 ar_insert_trig_tcs);
+		list_free(recheckIndexes);
+	}
 
 	/*
 	 * Check any WITH CHECK OPTION constraints from parent views.  We are
@@ -1881,7 +1982,7 @@ ExecCrossPartitionUpdate(ModifyTableContext *context,
 	/* Tuple routing starts from the root table. */
 	context->cpUpdateReturningSlot =
 		ExecInsert(context, mtstate->rootResultRelInfo, slot, canSetTag,
-				   inserted_tuple, insert_destrel);
+				   inserted_tuple, insert_destrel, false);
 
 	/*
 	 * Reset the transition state that may possibly have been written by
@@ -3385,7 +3486,7 @@ ExecMergeNotMatched(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 				mtstate->mt_merge_action = action;
 
 				rslot = ExecInsert(context, mtstate->rootResultRelInfo,
-								   newslot, canSetTag, NULL, NULL);
+								   newslot, canSetTag, NULL, NULL, false);
 				mtstate->mt_merge_inserted += 1;
 				break;
 			case CMD_NOTHING:
@@ -3770,6 +3871,10 @@ ExecModifyTable(PlanState *pstate)
 	HeapTupleData oldtupdata;
 	HeapTuple	oldtuple;
 	ItemPointer tupleid;
+	bool		canMultiInsert = false;
+
+	table_modify_state = NULL;
+	insert_modify_buffer_flush_context = NULL;
 
 	CHECK_FOR_INTERRUPTS();
 
@@ -3864,6 +3969,10 @@ ExecModifyTable(PlanState *pstate)
 		/* No more tuples to process? */
 		if (TupIsNull(context.planSlot))
 			break;
+
+		if (operation == CMD_INSERT &&
+			nodeTag(subplanstate) == T_SeqScanState)
+			canMultiInsert = true;
 
 		/*
 		 * When there are multiple result relations, each tuple contains a
@@ -4078,7 +4187,7 @@ ExecModifyTable(PlanState *pstate)
 					ExecInitInsertProjection(node, resultRelInfo);
 				slot = ExecGetInsertNewTuple(resultRelInfo, context.planSlot);
 				slot = ExecInsert(&context, resultRelInfo, slot,
-								  node->canSetTag, NULL, NULL);
+								  node->canSetTag, NULL, NULL, canMultiInsert);
 				break;
 
 			case CMD_UPDATE:
@@ -4135,6 +4244,17 @@ ExecModifyTable(PlanState *pstate)
 		 */
 		if (slot)
 			return slot;
+	}
+
+	if (table_modify_state != NULL)
+	{
+		Assert(operation == CMD_INSERT);
+
+		table_modify_end(table_modify_state);
+		table_modify_state = NULL;
+
+		pfree(insert_modify_buffer_flush_context);
+		insert_modify_buffer_flush_context = NULL;
 	}
 
 	/*
@@ -4248,6 +4368,9 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	mtstate->mt_merge_inserted = 0;
 	mtstate->mt_merge_updated = 0;
 	mtstate->mt_merge_deleted = 0;
+
+	table_modify_state = NULL;
+	insert_modify_buffer_flush_context = NULL;
 
 	/*----------
 	 * Resolve the target relation. This is the same as:
@@ -4701,6 +4824,17 @@ void
 ExecEndModifyTable(ModifyTableState *node)
 {
 	int			i;
+
+	if (table_modify_state != NULL)
+	{
+		Assert(node->operation == CMD_INSERT);
+
+		table_modify_end(table_modify_state);
+		table_modify_state = NULL;
+
+		pfree(insert_modify_buffer_flush_context);
+		insert_modify_buffer_flush_context = NULL;
+	}
 
 	/*
 	 * Allow any FDWs to shut down

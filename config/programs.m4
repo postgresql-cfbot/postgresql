@@ -142,7 +142,26 @@ if test "$pgac_cv_ldap_safe" != yes; then
 *** also uses LDAP will crash on exit.])
 fi])
 
+# PGAC_CHECK_LIBCURL
+# ------------------
+# Check for libcurl 7.61.0 or higher (corresponding to RHEL8 and the ability to
+# explicitly set TLS 1.3 ciphersuites).
 
+AC_DEFUN([PGAC_CHECK_LIBCURL],
+[AC_CACHE_CHECK([for compatible libcurl], [pgac_cv_check_libcurl],
+[AC_COMPILE_IFELSE([AC_LANG_PROGRAM(
+[#include <curl/curlver.h>
+#if LIBCURL_VERSION_MAJOR < 7 || (LIBCURL_VERSION_MAJOR == 7 && LIBCURL_VERSION_MINOR < 61)
+choke me
+#endif], [])],
+[pgac_cv_check_libcurl=yes],
+[pgac_cv_check_libcurl=no])])
+
+if test "$pgac_cv_check_libcurl" != yes; then
+    AC_MSG_ERROR([
+*** The installed version of libcurl is too old to use with PostgreSQL.
+*** libcurl version 7.61.0 or later is required.])
+fi])
 
 # PGAC_CHECK_READLINE
 # -------------------

@@ -2336,6 +2336,43 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
        </para>
       </listitem>
      </varlistentry>
+
+     <varlistentry id="libpq-connect-oauth-client-id" xreflabel="oauth_client_id">
+      <term><literal>oauth_client_id</literal></term>
+      <listitem>
+       <para>
+        TODO
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="libpq-connect-oauth-client-secret" xreflabel="oauth_client_secret">
+      <term><literal>oauth_client_secret</literal></term>
+      <listitem>
+       <para>
+        TODO
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="libpq-connect-oauth-issuer" xreflabel="oauth_issuer">
+      <term><literal>oauth_issuer</literal></term>
+      <listitem>
+       <para>
+        TODO
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="libpq-connect-oauth-scope" xreflabel="oauth_scope">
+      <term><literal>oauth_scope</literal></term>
+      <listitem>
+       <para>
+        TODO
+       </para>
+      </listitem>
+     </varlistentry>
+
     </variablelist>
    </para>
   </sect2>
@@ -9958,6 +9995,45 @@ void PQinitSSL(int do_ssl);
    </variablelist>
   </para>
  </sect2>
+
+ </sect1>
+
+ <sect1 id="libpq-oauth">
+  <title>OAuth Support</title>
+
+  <para>
+   TODO
+  </para>
+
+  <para>
+   <variablelist>
+    <varlistentry id="libpq-PQsetAuthDataHook">
+     <term><function>PQsetAuthDataHook</function><indexterm><primary>PQsetAuthDataHook</primary></indexterm></term>
+
+     <listitem>
+      <para>
+       TODO
+<synopsis>
+void PQsetAuthDataHook(PQauthDataHook_type hook);
+</synopsis>
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="libpq-PQgetAuthDataHook">
+     <term><function>PQgetAuthDataHook</function><indexterm><primary>PQgetAuthDataHook</primary></indexterm></term>
+
+     <listitem>
+      <para>
+       TODO
+<synopsis>
+PQauthDataHook_type PQgetAuthDataHook(void);
+</synopsis>
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </para>
 
  </sect1>
 

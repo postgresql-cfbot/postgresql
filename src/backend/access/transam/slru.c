@@ -77,42 +77,22 @@
  *
  * "path" should point to a buffer at least MAXPGPATH characters long.
  *
- * If ctl->long_segment_names is true, segno can be in the range [0, 2^60-1].
- * The resulting file name is made of 15 characters, e.g. dir/123456789ABCDEF.
- *
- * If ctl->long_segment_names is false, segno can be in the range [0, 2^24-1].
- * The resulting file name is made of 4 to 6 characters, as of:
- *
- *  dir/1234   for [0, 2^16-1]
- *  dir/12345  for [2^16, 2^20-1]
- *  dir/123456 for [2^20, 2^24-1]
+ * segno can be in the range [0, 2^60-1]. The resulting file name is made
+ * of 15 characters, e.g. dir/123456789ABCDEF.
  */
 static inline int
 SlruFileName(SlruCtl ctl, char *path, int64 segno)
 {
-	if (ctl->long_segment_names)
-	{
-		/*
-		 * We could use 16 characters here but the disadvantage would be that
-		 * the SLRU segments will be hard to distinguish from WAL segments.
-		 *
-		 * For this reason we use 15 characters. It is enough but also means
-		 * that in the future we can't decrease SLRU_PAGES_PER_SEGMENT easily.
-		 */
-		Assert(segno >= 0 && segno <= INT64CONST(0xFFFFFFFFFFFFFFF));
-		return snprintf(path, MAXPGPATH, "%s/%015llX", ctl->Dir,
-						(long long) segno);
-	}
-	else
-	{
-		/*
-		 * Despite the fact that %04X format string is used up to 24 bit
-		 * integers are allowed. See SlruCorrectSegmentFilenameLength()
-		 */
-		Assert(segno >= 0 && segno <= INT64CONST(0xFFFFFF));
-		return snprintf(path, MAXPGPATH, "%s/%04X", (ctl)->Dir,
-						(unsigned int) segno);
-	}
+	/*
+	 * We could use 16 characters here but the disadvantage would be that
+	 * the SLRU segments will be hard to distinguish from WAL segments.
+	 *
+	 * For this reason we use 15 characters. It is enough but also means
+	 * that in the future we can't decrease SLRU_PAGES_PER_SEGMENT easily.
+	 */
+	Assert(segno >= 0 && segno <= INT64CONST(0xFFFFFFFFFFFFFFF));
+	return snprintf(path, MAXPGPATH, "%s/%015llX", ctl->Dir,
+					(long long) segno);
 }
 
 /*
@@ -251,7 +231,7 @@ SimpleLruAutotuneBuffers(int divisor, int max)
 void
 SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 			  const char *subdir, int buffer_tranche_id, int bank_tranche_id,
-			  SyncRequestHandler sync_handler, bool long_segment_names)
+			  SyncRequestHandler sync_handler)
 {
 	SlruShared	shared;
 	bool		found;
@@ -342,7 +322,6 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 	 */
 	ctl->shared = shared;
 	ctl->sync_handler = sync_handler;
-	ctl->long_segment_names = long_segment_names;
 	ctl->bank_mask = (nslots / SLRU_BANK_SIZE) - 1;
 	strlcpy(ctl->Dir, subdir, sizeof(ctl->Dir));
 }
@@ -1749,30 +1728,6 @@ SlruScanDirCbDeleteAll(SlruCtl ctl, char *filename, int64 segpage, void *data)
 }
 
 /*
- * An internal function used by SlruScanDirectory().
- *
- * Returns true if a file with a name of a given length may be a correct
- * SLRU segment.
- */
-static inline bool
-SlruCorrectSegmentFilenameLength(SlruCtl ctl, size_t len)
-{
-	if (ctl->long_segment_names)
-		return (len == 15);		/* see SlruFileName() */
-	else
-
-		/*
-		 * Commit 638cf09e76d allowed 5-character lengths. Later commit
-		 * 73c986adde5 allowed 6-character length.
-		 *
-		 * Note: There is an ongoing plan to migrate all SLRUs to 64-bit page
-		 * numbers, and the corresponding 15-character file names, which may
-		 * eventually deprecate the support for 4, 5, and 6-character names.
-		 */
-		return (len == 4 || len == 5 || len == 6);
-}
-
-/*
  * Scan the SimpleLru directory and apply a callback to each file found in it.
  *
  * If the callback returns true, the scan is stopped.  The last return value
@@ -1803,7 +1758,7 @@ SlruScanDirectory(SlruCtl ctl, SlruScanCallback callback, void *data)
 
 		len = strlen(clde->d_name);
 
-		if (SlruCorrectSegmentFilenameLength(ctl, len) &&
+		if ((len == 15) &&
 			strspn(clde->d_name, "0123456789ABCDEF") == len)
 		{
 			segno = strtoi64(clde->d_name, NULL, 16);

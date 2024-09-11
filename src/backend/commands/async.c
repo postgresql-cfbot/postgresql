@@ -537,7 +537,7 @@ AsyncShmemInit(void)
 	NotifyCtl->PagePrecedes = asyncQueuePagePrecedes;
 	SimpleLruInit(NotifyCtl, "notify", notify_buffers, 0,
 				  "pg_notify", LWTRANCHE_NOTIFY_BUFFER, LWTRANCHE_NOTIFY_SLRU,
-				  SYNC_HANDLER_NONE, true);
+				  SYNC_HANDLER_NONE);
 
 	if (!found)
 	{

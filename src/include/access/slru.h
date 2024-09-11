@@ -134,13 +134,6 @@ typedef struct SlruCtlData
 	bits16		bank_mask;
 
 	/*
-	 * If true, use long segment file names.  Otherwise, use short file names.
-	 *
-	 * For details about the file name format, see SlruFileName().
-	 */
-	bool		long_segment_names;
-
-	/*
 	 * Which sync handler function to use when handing sync requests over to
 	 * the checkpointer.  SYNC_HANDLER_NONE to disable fsync (eg pg_notify).
 	 */
@@ -187,8 +180,7 @@ extern Size SimpleLruShmemSize(int nslots, int nlsns);
 extern int	SimpleLruAutotuneBuffers(int divisor, int max);
 extern void SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 						  const char *subdir, int buffer_tranche_id,
-						  int bank_tranche_id, SyncRequestHandler sync_handler,
-						  bool long_segment_names);
+						  int bank_tranche_id, SyncRequestHandler sync_handler);
 extern int	SimpleLruZeroPage(SlruCtl ctl, int64 pageno);
 extern int	SimpleLruReadPage(SlruCtl ctl, int64 pageno, bool write_ok,
 							  TransactionId xid);

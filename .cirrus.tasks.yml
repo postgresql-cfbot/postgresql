@@ -59,7 +59,7 @@ task:
   # push-wait-for-ci cycle time a bit when debugging operating system specific
   # failures. Uses skip instead of only_if, as cirrus otherwise warns about
   # only_if conditions not matching.
-  skip: $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:.*'
+  skip: $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-task-only:.*'
 
   env:
     CPUS: 4
@@ -142,7 +142,7 @@ task:
   <<: *freebsd_task_template
 
   depends_on: SanityCheck
-  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*freebsd.*'
+  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-task-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-task-only:[^\n]*freebsd.*'
 
   sysinfo_script: |
     id
@@ -282,7 +282,7 @@ task:
   <<: *linux_task_template
 
   depends_on: SanityCheck
-  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*linux.*'
+  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-task-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-task-only:[^\n]*linux.*'
 
   ccache_cache:
     folder: ${CCACHE_DIR}
@@ -441,7 +441,7 @@ task:
   <<: *macos_task_template
 
   depends_on: SanityCheck
-  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*(macos|darwin|osx).*'
+  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-task-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-task-only:[^\n]*(macos|darwin|osx).*'
 
   sysinfo_script: |
     id
@@ -560,7 +560,7 @@ task:
   <<: *windows_task_template
 
   depends_on: SanityCheck
-  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*windows.*'
+  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-task-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-task-only:[^\n]*windows.*'
 
   setup_additional_packages_script: |
     REM choco install -y --no-progress ...
@@ -598,8 +598,8 @@ task:
   # due to resource constraints we don't run this task by default for now
   trigger_type: manual
   # worth using only_if despite being manual, otherwise this task will show up
-  # when e.g. ci-os-only: linux is used.
-  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*mingw.*'
+  # when e.g. ci-task-only: linux is used.
+  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-task-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-task-only:[^\n]*mingw.*'
   # otherwise it'll be sorted before other tasks
   depends_on: SanityCheck
 
@@ -658,7 +658,7 @@ task:
   # use always: to continue after failures. Task that did not run count as a
   # success, so we need to recheck SanityChecks's condition here ...
   depends_on: SanityCheck
-  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*'
+  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-task-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-task-only:[^\n]*compilerwarnings.*'
 
   env:
     CPUS: 4

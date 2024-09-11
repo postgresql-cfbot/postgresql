@@ -125,6 +125,12 @@ extern char *output_files[];
  */
 #define JSONB_FORMAT_CHANGE_CAT_VER 201409291
 
+/*
+ * change of SLRU segment filenames length in 18.0
+ * TODO FIXME CHANGE TO THE ACTUAL VALUE BEFORE COMMITTING
+ */
+#define SLRU_SEG_FILENAMES_CHANGE_CAT_VER 20241001
+
 
 /*
  * Each relation is represented by a relinfo structure.

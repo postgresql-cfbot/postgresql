@@ -14327,6 +14327,54 @@ SELECT xmltext('< foo & bar >');
     </para>
    </sect3>
 
+<sect3 id="functions-producing-xml-xmlcanonicalize">
+    <title><literal>xmlcanonicalize</literal></title>
+
+    <indexterm>
+     <primary>xmlcanonicalize</primary>
+    </indexterm>
+
+<synopsis>
+<function>xmlcanonicalize</function> ( <parameter>doc</parameter> <type>xml</type>, <parameter>keep_comments</parameter> <type>boolean</type> ) <returnvalue>xml</returnvalue>
+</synopsis>
+
+    <para>
+     This function converts a given XML document into its <ulink url="https://www.w3.org/TR/xml-c14n11/#Terminology">canonical form</ulink>
+     based on the <ulink url="https://www.w3.org/TR/xml-c14n11/">W3C Canonical XML 1.1 Specification</ulink>.
+     It is basically designed to provide applications the ability to compare xml documents or test if they
+     have been changed. The parameter <parameter>keep_comments</parameter>, specifies if the XML comments from the given document should be kept or not.
+    </para>
+
+    <para>
+     Example:
+<screen><![CDATA[
+SELECT
+  xmlcanonicalize(
+    '<foo>
+       <!-- a comment -->
+       <bar c="3" b="2" a="1">42</bar>
+       <empty/>
+     </foo>'::xml, true);
+                               xmlcanonicalize
+-----------------------------------------------------------------------------
+ <foo><!-- a comment --><bar a="1" b="2" c="3">42</bar><empty></empty></foo>
+(1 row)
+
+SELECT
+  xmlcanonicalize(
+    '<foo>
+       <!-- a comment -->
+       <bar c="3" b="2" a="1">42</bar>
+       <empty/>
+     </foo>'::xml, false);
+                      xmlcanonicalize
+-----------------------------------------------------------
+ <foo><bar a="1" b="2" c="3">42</bar><empty></empty></foo>
+(1 row)
+]]></screen>
+    </para>
+   </sect3>
+
    <sect3 id="functions-producing-xml-xmlcomment">
     <title><literal>xmlcomment</literal></title>
 

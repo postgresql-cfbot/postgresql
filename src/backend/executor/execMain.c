@@ -46,6 +46,7 @@
 #include "commands/matview.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
+#include "executor/execPartition.h"
 #include "executor/nodeSubplan.h"
 #include "foreign/fdwapi.h"
 #include "mb/pg_wchar.h"
@@ -819,6 +820,54 @@ ExecCheckXactReadOnly(PlannedStmt *plannedstmt)
 		PreventCommandIfParallelMode(CreateCommandName((Node *) plannedstmt));
 }
 
+/*
+ * ExecDoInitialPruning
+ *		Perform runtime "initial" pruning, if necessary, to determine the set
+ *		of child subnodes that need to be initialized during ExecInitNode()
+ *		for plan nodes that support partition pruning.
+ *
+ * For each PartitionPruneInfo in estate->es_part_prune_infos, this function
+ * creates a PartitionPruneState (even if no initial pruning is done) and adds
+ * it to es_part_prune_states. For PartitionPruneInfo entries that include
+ * initial pruning steps, the result of those steps is saved as a bitmapset
+ * of indexes representing child subnodes that are "valid" and should be
+ * initialized for execution.
+ */
+static void
+ExecDoInitialPruning(EState *estate)
+{
+	ListCell *lc;
+
+	foreach(lc, estate->es_part_prune_infos)
+	{
+		PartitionPruneInfo *pruneinfo = lfirst_node(PartitionPruneInfo, lc);
+		PartitionPruneState *prunestate;
+		Bitmapset *validsubplans = NULL;
+
+		/*
+		 * Create the working data structure for pruning, and save it for use
+		 * later in ExecInitPartitionPruning(), which will be called by the
+		 * parent plan node's ExecInit* function.
+		 */
+		prunestate = ExecCreatePartitionPruneState(estate, pruneinfo);
+		estate->es_part_prune_states = lappend(estate->es_part_prune_states,
+											   prunestate);
+
+		/*
+		 * Perform an initial partition pruning pass, if necessary, and save
+		 * the bitmapset of valid subplans for use in
+		 * ExecInitPartitionPruning().  If no initial pruning is performed, we
+		 * still store a NULL to ensure that es_part_prune_results is the same
+		 * length as es_part_prune_infos.  This ensures that
+		 * ExecInitPartitionPruning() can use the same index to locate the
+		 * result.
+		 */
+		if (prunestate->do_initial_prune)
+			validsubplans = ExecFindMatchingSubPlans(prunestate, true);
+		estate->es_part_prune_results = lappend(estate->es_part_prune_results,
+												validsubplans);
+	}
+}
 
 /* ----------------------------------------------------------------
  *		InitPlan
@@ -851,7 +900,13 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	ExecInitRangeTable(estate, rangeTable, plannedstmt->permInfos);
 
 	estate->es_plannedstmt = plannedstmt;
+
+	/*
+	 * Perform runtime "initial" pruning to determine the plan nodes that will
+	 * not be executed.
+	 */
 	estate->es_part_prune_infos = plannedstmt->partPruneInfos;
+	ExecDoInitialPruning(estate);
 
 	/*
 	 * Next, build the ExecRowMark array from the PlanRowMark(s), if any.

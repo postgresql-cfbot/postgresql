@@ -67,12 +67,14 @@ COPY x from stdin (force_null (a), force_null (b));
 COPY x from stdin (convert_selectively (a), convert_selectively (b));
 COPY x from stdin (encoding 'sql_ascii', encoding 'sql_ascii');
 COPY x from stdin (on_error ignore, on_error ignore);
+COPY x from stdin (on_error set_to_null, on_error set_to_null);
 COPY x from stdin (log_verbosity default, log_verbosity verbose);
 
 -- incorrect options
 COPY x from stdin (format BINARY, delimiter ',');
 COPY x from stdin (format BINARY, null 'x');
 COPY x from stdin (format BINARY, on_error ignore);
+COPY x from stdin (format BINARY, on_error set_to_null);
 COPY x from stdin (on_error unsupported);
 COPY x from stdin (format TEXT, force_quote(a));
 COPY x from stdin (format TEXT, force_quote *);
@@ -87,6 +89,7 @@ COPY x from stdin (format TEXT, force_null *);
 COPY x to stdout (format CSV, force_null(a));
 COPY x to stdout (format CSV, force_null *);
 COPY x to stdout (format BINARY, on_error unsupported);
+COPY x to stdin (on_error set_to_null);
 COPY x from stdin (log_verbosity unsupported);
 COPY x from stdin with (reject_limit 1);
 COPY x from stdin with (on_error ignore, reject_limit 0);
@@ -534,6 +537,24 @@ a	{2}	2
 8	{8}	8
 \.
 
+create domain d_int_not_null as int not null check(value > 0);
+CREATE TABLE t_on_error_null (a d_int_not_null, c int not null, b int);
+
+--fail
+COPY t_on_error_null FROM STDIN WITH (on_error set_to_null);
+11	a	12
+\.
+
+--ok
+COPY t_on_error_null FROM STDIN WITH (on_error set_to_null);
+-1	11	13
+a	11	14
+\.
+
+select * from t_on_error_null;
+drop table t_on_error_null;
+drop domain d_int_not_null;
+
 -- tests for on_error option with log_verbosity and null constraint via domain
 CREATE DOMAIN dcheck_ign_err2 varchar(15) NOT NULL;
 CREATE TABLE check_ign_err2 (n int, m int[], k int, l dcheck_ign_err2);
@@ -586,6 +607,29 @@ a	{7}	7
 9	{a, 9}	9
 
 10	{10}	10
+\.
+
+-- tests for on_error set_to_null option
+truncate check_ign_err;
+COPY check_ign_err FROM STDIN WITH (on_error set_to_null);
+1	{1}	a
+2	{2}	1
+3	{3}	2
+4	{4}	b
+a	{5}	c
+\.
+
+\pset null NULL
+SELECT * FROM check_ign_err;
+
+--should fail.
+COPY check_ign_err FROM STDIN WITH (delimiter ',', on_error set_to_null);
+1,
+\.
+
+--should fail.
+COPY check_ign_err FROM STDIN WITH (delimiter ',', on_error set_to_null);
+1,{1},1,1
 \.
 
 -- clean up

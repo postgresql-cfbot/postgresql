@@ -831,7 +831,8 @@ coerce_function_result_tuple(PLpgSQL_execstate *estate, TupleDesc tupdesc)
 		/* check rowtype compatibility */
 		tupmap = convert_tuples_by_position(retdesc,
 											tupdesc,
-											gettext_noop("returned record type does not match expected record type"));
+											gettext_noop("returned record type does not match expected record type"),
+											false);
 
 		/* it might need conversion */
 		if (tupmap)
@@ -895,7 +896,8 @@ coerce_function_result_tuple(PLpgSQL_execstate *estate, TupleDesc tupdesc)
 		/* check rowtype compatibility */
 		tupmap = convert_tuples_by_position(retdesc,
 											tupdesc,
-											gettext_noop("returned record type does not match expected record type"));
+											gettext_noop("returned record type does not match expected record type"),
+											false);
 
 		/* it might need conversion */
 		if (tupmap)
@@ -1091,7 +1093,8 @@ plpgsql_exec_trigger(PLpgSQL_function *func,
 				/* check rowtype compatibility */
 				tupmap = convert_tuples_by_position(retdesc,
 													RelationGetDescr(trigdata->tg_relation),
-													gettext_noop("returned row structure does not match the structure of the triggering table"));
+													gettext_noop("returned row structure does not match the structure of the triggering table"),
+													false);
 				/* it might need conversion */
 				if (tupmap)
 					rettup = execute_attr_map_tuple(rettup, tupmap);
@@ -1119,7 +1122,8 @@ plpgsql_exec_trigger(PLpgSQL_function *func,
 			/* check rowtype compatibility */
 			tupmap = convert_tuples_by_position(retdesc,
 												RelationGetDescr(trigdata->tg_relation),
-												gettext_noop("returned row structure does not match the structure of the triggering table"));
+												gettext_noop("returned row structure does not match the structure of the triggering table"),
+												false);
 			/* it might need conversion */
 			if (tupmap)
 				rettup = execute_attr_map_tuple(rettup, tupmap);
@@ -3415,7 +3419,8 @@ exec_stmt_return_next(PLpgSQL_execstate *estate,
 					rec_tupdesc = expanded_record_get_tupdesc(rec->erh);
 					tupmap = convert_tuples_by_position(rec_tupdesc,
 														tupdesc,
-														gettext_noop("wrong record type supplied in RETURN NEXT"));
+														gettext_noop("wrong record type supplied in RETURN NEXT"),
+														false);
 					tuple = expanded_record_get_tuple(rec->erh);
 					if (tupmap)
 						tuple = execute_attr_map_tuple(tuple, tupmap);
@@ -3479,7 +3484,8 @@ exec_stmt_return_next(PLpgSQL_execstate *estate,
 				retvaldesc = deconstruct_composite_datum(retval, &tmptup);
 				tuple = &tmptup;
 				tupmap = convert_tuples_by_position(retvaldesc, tupdesc,
-													gettext_noop("returned record type does not match expected record type"));
+													gettext_noop("returned record type does not match expected record type"),
+													false);
 				if (tupmap)
 					tuple = execute_attr_map_tuple(tuple, tupmap);
 				tuplestore_puttuple(estate->tuple_store, tuple);

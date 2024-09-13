@@ -49,6 +49,7 @@ extern AttrMap *build_attrmap_by_name_if_req(TupleDesc indesc,
 											 bool missing_ok);
 extern AttrMap *build_attrmap_by_position(TupleDesc indesc,
 										  TupleDesc outdesc,
-										  const char *msg);
+										  const char *msg,
+										  bool extra);
 
 #endif							/* ATTMAP_H */

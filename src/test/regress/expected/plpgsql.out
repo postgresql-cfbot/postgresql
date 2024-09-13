@@ -3777,7 +3777,7 @@ end;
 $$ language plpgsql;
 select compos();
 ERROR:  returned record type does not match expected record type
-DETAIL:  Returned type unknown does not match expected type character varying in column 2.
+DETAIL:  Returned type unknown does not match expected type character varying in column position 2.
 CONTEXT:  PL/pgSQL function compos() while casting return value to function's return type
 -- ... but this does
 create or replace function compos() returns compostype as $$
@@ -5852,3 +5852,18 @@ END; $$ LANGUAGE plpgsql;
 ERROR:  "x" is not a scalar variable
 LINE 3:   GET DIAGNOSTICS x = ROW_COUNT;
                           ^
+--
+-- Check returned type with the declared type
+--
+create function my_f(a integer, b integer)
+returns table(first_col integer, lots_of_cols_later numeric) language plpgsql as
+$function$
+begin
+  return query select a, b;
+end;
+$function$;
+select * from my_f(1,1);
+ERROR:  structure of query does not match function result type
+DETAIL:  Returned type integer does not match expected type numeric in column "b" (position 2).
+CONTEXT:  SQL statement "select a, b"
+PL/pgSQL function my_f(integer,integer) line 3 at RETURN QUERY

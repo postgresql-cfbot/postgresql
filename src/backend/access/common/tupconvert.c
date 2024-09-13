@@ -58,14 +58,15 @@
 TupleConversionMap *
 convert_tuples_by_position(TupleDesc indesc,
 						   TupleDesc outdesc,
-						   const char *msg)
+						   const char *msg,
+						   bool extra)
 {
 	TupleConversionMap *map;
 	int			n;
 	AttrMap    *attrMap;
 
 	/* Verify compatibility and prepare attribute-number map */
-	attrMap = build_attrmap_by_position(indesc, outdesc, msg);
+	attrMap = build_attrmap_by_position(indesc, outdesc, msg, extra);
 
 	if (attrMap == NULL)
 	{

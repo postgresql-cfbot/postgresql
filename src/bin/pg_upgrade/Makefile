@@ -21,6 +21,7 @@ OBJS = \
 	info.o \
 	option.o \
 	parallel.o \
+	segresize.o \
 	pg_upgrade.o \
 	relfilenumber.o \
 	server.o \

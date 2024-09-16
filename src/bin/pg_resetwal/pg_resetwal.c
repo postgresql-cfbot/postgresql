@@ -264,7 +264,7 @@ main(int argc, char *argv[])
 
 			case 'O':
 				errno = 0;
-				set_mxoff = strtoul(optarg, &endptr, 0);
+				set_mxoff = strtou64(optarg, &endptr, 0);
 				if (endptr == optarg || *endptr != '\0' || errno != 0)
 				{
 					pg_log_error("invalid argument for option %s", "-O");
@@ -737,8 +737,8 @@ PrintControlValues(bool guessed)
 		   ControlFile.checkPointCopy.nextOid);
 	printf(_("Latest checkpoint's NextMultiXactId:  %u\n"),
 		   ControlFile.checkPointCopy.nextMulti);
-	printf(_("Latest checkpoint's NextMultiOffset:  %u\n"),
-		   ControlFile.checkPointCopy.nextMultiOffset);
+	printf(_("Latest checkpoint's NextMultiOffset:  %llu\n"),
+		   (unsigned long long) ControlFile.checkPointCopy.nextMultiOffset);
 	printf(_("Latest checkpoint's oldestXID:        %u\n"),
 		   ControlFile.checkPointCopy.oldestXid);
 	printf(_("Latest checkpoint's oldestXID's DB:   %u\n"),
@@ -809,8 +809,8 @@ PrintNewControlValues(void)
 
 	if (set_mxoff != -1)
 	{
-		printf(_("NextMultiOffset:                      %u\n"),
-			   ControlFile.checkPointCopy.nextMultiOffset);
+		printf(_("NextMultiOffset:                      %llu\n"),
+			   (unsigned long long) ControlFile.checkPointCopy.nextMultiOffset);
 	}
 
 	if (set_oid != 0)

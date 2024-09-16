@@ -115,6 +115,13 @@ extern char *output_files[];
 #define MULTIXACT_FORMATCHANGE_CAT_VER 201301231
 
 /*
+ * Swicth from 32-bit to 64-bit for multixid offsets.
+ *
+ * XXX: should be changed to the actual CATALOG_VERSION_NO on commit.
+ */
+#define MULTIXACTOFFSET_FORMATCHANGE_CAT_VER 202409041
+
+/*
  * large object chunk size added to pg_controldata,
  * commit 5f93c37805e7485488480916b4585e098d3cc883
  */
@@ -230,7 +237,7 @@ typedef struct
 	uint32		chkpnt_nxtepoch;
 	uint32		chkpnt_nxtoid;
 	uint32		chkpnt_nxtmulti;
-	uint32		chkpnt_nxtmxoff;
+	uint64		chkpnt_nxtmxoff;
 	uint32		chkpnt_oldstMulti;
 	uint32		chkpnt_oldstxid;
 	uint32		align;
@@ -494,3 +501,7 @@ void		parallel_transfer_all_new_dbs(DbInfoArr *old_db_arr, DbInfoArr *new_db_arr
 										  char *old_pgdata, char *new_pgdata,
 										  char *old_tablespace);
 bool		reap_child(bool wait_for_child);
+
+/* segresize.c */
+
+uint64		convert_multixact_offsets(void);

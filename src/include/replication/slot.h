@@ -56,6 +56,8 @@ typedef enum ReplicationSlotInvalidationCause
 	RS_INVAL_HORIZON,
 	/* wal_level insufficient for slot */
 	RS_INVAL_WAL_LEVEL,
+	/* inactive slot timeout has occurred */
+	RS_INVAL_INACTIVE_TIMEOUT,
 } ReplicationSlotInvalidationCause;
 
 extern PGDLLIMPORT const char *const SlotInvalidationCauses[];
@@ -225,6 +227,25 @@ typedef struct ReplicationSlotCtlData
 } ReplicationSlotCtlData;
 
 /*
+ * Set slot's inactive_since property unless it was previously invalidated.
+ */
+static inline void
+ReplicationSlotSetInactiveSince(ReplicationSlot *s, TimestampTz *now,
+								bool acquire_lock)
+{
+	if (s->data.invalidated != RS_INVAL_NONE)
+		return;
+
+	if (acquire_lock)
+		SpinLockAcquire(&s->mutex);
+
+	s->inactive_since = *now;
+
+	if (acquire_lock)
+		SpinLockRelease(&s->mutex);
+}
+
+/*
  * Pointers to shared memory
  */
 extern PGDLLIMPORT ReplicationSlotCtlData *ReplicationSlotCtl;
@@ -233,6 +254,7 @@ extern PGDLLIMPORT ReplicationSlot *MyReplicationSlot;
 /* GUCs */
 extern PGDLLIMPORT int max_replication_slots;
 extern PGDLLIMPORT char *synchronized_standby_slots;
+extern PGDLLIMPORT int replication_slot_inactive_timeout;
 
 /* shmem initialization functions */
 extern Size ReplicationSlotsShmemSize(void);
@@ -249,7 +271,8 @@ extern void ReplicationSlotDropAcquired(void);
 extern void ReplicationSlotAlter(const char *name, const bool *failover,
 								 const bool *two_phase);
 
-extern void ReplicationSlotAcquire(const char *name, bool nowait);
+extern void ReplicationSlotAcquire(const char *name, bool nowait,
+								   bool error_if_invalid);
 extern void ReplicationSlotRelease(void);
 extern void ReplicationSlotCleanup(bool synced_only);
 extern void ReplicationSlotSave(void);

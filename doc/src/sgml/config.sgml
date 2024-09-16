@@ -4556,6 +4556,41 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-replication-slot-inactive-timeout" xreflabel="replication_slot_inactive_timeout">
+      <term><varname>replication_slot_inactive_timeout</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>replication_slot_inactive_timeout</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Invalidate replication slots that are inactive for longer than this
+        amount of time. If this value is specified without units,
+        it is taken as seconds. A value of zero (which is default) disables
+        the inactive timeout invalidation mechanism. This parameter can only
+        be set in the <filename>postgresql.conf</filename> file or on the
+        server command line.
+       </para>
+
+       <para>
+        Slot invalidation due to inactive timeout occurs during checkpoint.
+        The duration of slot inactivity is calculated using the slot's
+        <link linkend="view-pg-replication-slots">pg_replication_slots</link>.<structfield>inactive_since</structfield>
+        value.
+       </para>
+
+       <para>
+        Note that the inactive timeout invalidation mechanism is not
+        applicable for slots on the standby server that are being synced
+        from the primary server (i.e., standby slots having
+        <link linkend="view-pg-replication-slots">pg_replication_slots</link>.<structfield>synced</structfield>
+        value <literal>true</literal>).
+        Synced slots are always considered to be inactive because they don't
+        perform logical decoding to produce changes.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-track-commit-timestamp" xreflabel="track_commit_timestamp">
       <term><varname>track_commit_timestamp</varname> (<type>boolean</type>)
       <indexterm>

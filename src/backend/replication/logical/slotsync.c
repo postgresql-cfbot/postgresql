@@ -448,7 +448,7 @@ drop_local_obsolete_slots(List *remote_slot_list)
 
 			if (synced_slot)
 			{
-				ReplicationSlotAcquire(NameStr(local_slot->data.name), true);
+				ReplicationSlotAcquire(NameStr(local_slot->data.name), true, false);
 				ReplicationSlotDropAcquired();
 			}
 
@@ -667,7 +667,7 @@ synchronize_one_slot(RemoteSlot *remote_slot, Oid remote_dbid)
 		 * pre-check to ensure that at least one of the slot properties is
 		 * changed before acquiring the slot.
 		 */
-		ReplicationSlotAcquire(remote_slot->name, true);
+		ReplicationSlotAcquire(remote_slot->name, true, false);
 
 		Assert(slot == MyReplicationSlot);
 
@@ -1510,7 +1510,7 @@ ReplSlotSyncWorkerMain(char *startup_data, size_t startup_data_len)
 static void
 update_synced_slots_inactive_since(void)
 {
-	TimestampTz now = 0;
+	TimestampTz now;
 
 	/*
 	 * We need to update inactive_since only when we are promoting standby to
@@ -1524,6 +1524,9 @@ update_synced_slots_inactive_since(void)
 
 	/* The slot sync worker or SQL function mustn't be running by now */
 	Assert((SlotSyncCtx->pid == InvalidPid) && !SlotSyncCtx->syncing);
+
+	/* Use same inactive_since time for all slots */
+	now = GetCurrentTimestamp();
 
 	LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
 
@@ -1539,13 +1542,7 @@ update_synced_slots_inactive_since(void)
 			/* The slot must not be acquired by any process */
 			Assert(s->active_pid == 0);
 
-			/* Use the same inactive_since time for all the slots. */
-			if (now == 0)
-				now = GetCurrentTimestamp();
-
-			SpinLockAcquire(&s->mutex);
-			s->inactive_since = now;
-			SpinLockRelease(&s->mutex);
+			ReplicationSlotSetInactiveSince(s, &now, true);
 		}
 	}
 

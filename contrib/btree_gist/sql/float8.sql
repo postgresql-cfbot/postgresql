@@ -35,3 +35,11 @@ SELECT count(*) FROM float8tmp WHERE a >  -1890.0::float8;
 EXPLAIN (COSTS OFF)
 SELECT a, a <-> '-1890.0' FROM float8tmp ORDER BY a <-> '-1890.0' LIMIT 3;
 SELECT a, a <-> '-1890.0' FROM float8tmp ORDER BY a <-> '-1890.0' LIMIT 3;
+
+SET enable_seqscan=on;
+ANALYZE float8tmp;
+
+-- It should use the index with a different float width:
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM float8tmp WHERE a = real '42';
+

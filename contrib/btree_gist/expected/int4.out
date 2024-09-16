@@ -89,3 +89,15 @@ SELECT a, a <-> '237' FROM int4tmp ORDER BY a <-> '237' LIMIT 3;
  228 |        9
 (3 rows)
 
+SET enable_seqscan=on;
+ANALYZE int4tmp;
+-- It should use the index with a different integer width:
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM int4tmp WHERE a = smallint '42';
+                   QUERY PLAN                   
+------------------------------------------------
+ Aggregate
+   ->  Index Only Scan using int4idx on int4tmp
+         Index Cond: (a = '42'::smallint)
+(3 rows)
+

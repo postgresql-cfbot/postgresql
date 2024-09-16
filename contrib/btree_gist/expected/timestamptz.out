@@ -209,3 +209,25 @@ SELECT a, a <-> '2018-12-18 10:59:54 GMT+2' FROM timestamptztmp ORDER BY a <-> '
  Thu Jan 24 12:28:12 2019 PST | @ 37 days 7 hours 28 mins 18 secs
 (3 rows)
 
+SET enable_seqscan=on;
+ANALYZE timestamptztmp;
+-- It should use the index when comparing to a timestamp:
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM timestamptztmp WHERE a = timestamp '2018-12-18 10:59:54 GMT+3';
+                                    QUERY PLAN                                     
+-----------------------------------------------------------------------------------
+ Aggregate
+   ->  Index Only Scan using timestamptzidx on timestamptztmp
+         Index Cond: (a = 'Tue Dec 18 10:59:54 2018'::timestamp without time zone)
+(3 rows)
+
+-- It should use the index when comparing to a date:
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM timestamptztmp WHERE a = date '2018-12-18';
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Aggregate
+   ->  Index Only Scan using timestamptzidx on timestamptztmp
+         Index Cond: (a = '12-18-2018'::date)
+(3 rows)
+

@@ -50,6 +50,7 @@
 #include "foreign/fdwapi.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "nodes/queryjumble.h"
 #include "parser/parse_relation.h"
 #include "rewrite/rewriteHandler.h"
 #include "tcop/utility.h"
@@ -119,10 +120,12 @@ void
 ExecutorStart(QueryDesc *queryDesc, int eflags)
 {
 	/*
-	 * In some cases (e.g. an EXECUTE statement) a query execution will skip
-	 * parse analysis, which means that the query_id won't be reported.  Note
-	 * that it's harmless to report the query_id multiple times, as the call
-	 * will be ignored if the top level query_id has already been reported.
+	 * In some cases (e.g. an EXECUTE statement or an execute message with the
+	 * extended query protocol) the query_id won't be reported, so do it now.
+	 *
+	 * Note that it's harmless to report the query_id multiple times, as the
+	 * call will be ignored if the top level query_id has already been
+	 * reported.
 	 */
 	pgstat_report_query_id(queryDesc->plannedstmt->queryId, false);
 
@@ -293,6 +296,9 @@ ExecutorRun(QueryDesc *queryDesc,
 			ScanDirection direction, uint64 count,
 			bool execute_once)
 {
+	/* If enabled, the query ID should be set. */
+	Assert(!IsQueryIdEnabled() || pgstat_get_my_query_id() != 0);
+
 	if (ExecutorRun_hook)
 		(*ExecutorRun_hook) (queryDesc, direction, count, execute_once);
 	else
@@ -401,6 +407,9 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 void
 ExecutorFinish(QueryDesc *queryDesc)
 {
+	/* If enabled, the query ID should be set. */
+	Assert(!IsQueryIdEnabled() || pgstat_get_my_query_id() != 0);
+
 	if (ExecutorFinish_hook)
 		(*ExecutorFinish_hook) (queryDesc);
 	else
@@ -415,6 +424,9 @@ standard_ExecutorFinish(QueryDesc *queryDesc)
 
 	/* sanity checks */
 	Assert(queryDesc != NULL);
+
+	/* If enabled, the query ID should be set. */
+	Assert(!IsQueryIdEnabled() || pgstat_get_my_query_id() != 0);
 
 	estate = queryDesc->estate;
 

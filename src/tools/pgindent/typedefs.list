@@ -2660,6 +2660,7 @@ SimpleStats
 SimpleStringList
 SimpleStringListCell
 SingleBoundSortItem
+SinglePartitionSpec
 Size
 SkipPages
 SlabBlock
@@ -2723,6 +2724,7 @@ SpecialJoinInfo
 SpinDelayStatus
 SplitInterval
 SplitLR
+SplitPartitionContext
 SplitPageLayout
 SplitPoint
 SplitTextOutputData

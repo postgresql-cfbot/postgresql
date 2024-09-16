@@ -52,6 +52,7 @@ tests += {
       't/041_checkpoint_at_promote.pl',
       't/042_low_level_backup.pl',
       't/043_wal_replay_wait.pl',
+      't/050_invalidate_slots.pl',
     ],
   },
 }

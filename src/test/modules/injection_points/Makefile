@@ -13,7 +13,12 @@ PGFILEDESC = "injection_points - facility for injection points"
 REGRESS = injection_points reindex_conc
 REGRESS_OPTS = --dlpath=$(top_builddir)/src/test/regress
 
-ISOLATION = inplace
+ISOLATION = inplace \
+			reindex_concurrently_upsert \
+			index_concurrently_upsert \
+			reindex_concurrently_upsert_partitioned \
+			reindex_concurrently_upsert_on_constraint \
+			index_concurrently_upsert_predicate
 
 TAP_TESTS = 1
 

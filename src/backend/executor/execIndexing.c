@@ -115,6 +115,7 @@
 #include "nodes/nodeFuncs.h"
 #include "storage/lmgr.h"
 #include "utils/snapmgr.h"
+#include "utils/injection_point.h"
 
 /* waitMode argument to check_exclusion_or_unique_constraint() */
 typedef enum
@@ -906,6 +907,8 @@ retry:
 	econtext->ecxt_scantuple = save_scantuple;
 
 	ExecDropSingleTupleTableSlot(existing_slot);
+	if (!conflict)
+		INJECTION_POINT("check_exclusion_or_unique_constraint_no_conflict");
 
 	return !conflict;
 }

@@ -519,6 +519,11 @@ CheckpointerMain(char *startup_data, size_t startup_data_len)
 		/* Report pending statistics to the cumulative stats system */
 		pgstat_report_checkpointer();
 		pgstat_report_wal(true);
+		/*
+		 *  No need to check for transaction state in checkpointer before
+		 *  calling pgstat_report_stat().
+		 */
+		pgstat_report_stat(true);
 
 		/*
 		 * If any checkpoint flags have been set, redo the loop to handle the

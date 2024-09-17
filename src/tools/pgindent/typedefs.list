@@ -2126,6 +2126,7 @@ PgStatShared_InjectionPoint
 PgStatShared_InjectionPointFixed
 PgStatShared_IO
 PgStatShared_Relation
+PgStatShared_RelFileNode
 PgStatShared_ReplSlot
 PgStatShared_SLRU
 PgStatShared_Subscription

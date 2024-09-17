@@ -44,6 +44,7 @@ typedef struct TwoPhasePgStatRecord
 
 
 static PgStat_TableStatus *pgstat_prep_relation_pending(Oid rel_id, bool isshared);
+PgStat_StatRelFileNodeEntry *pgstat_prep_relfilenode_pending(RelFileLocator locator);
 static void add_tabstat_xact_level(PgStat_TableStatus *pgstat_info, int nest_level);
 static void ensure_tabstat_xact_level(PgStat_TableStatus *pgstat_info);
 static void save_truncdrop_counters(PgStat_TableXactStatus *trans, bool is_drop);
@@ -69,6 +70,7 @@ pgstat_copy_relation_stats(Relation dst, Relation src)
 	dst_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_RELATION,
 										  dst->rd_rel->relisshared ? InvalidOid : MyDatabaseId,
 										  RelationGetRelid(dst),
+										  InvalidOid,
 										  false);
 
 	dstshstats = (PgStatShared_Relation *) dst_ref->shared_stats;
@@ -170,7 +172,7 @@ pgstat_create_relation(Relation rel)
 {
 	pgstat_create_transactional(PGSTAT_KIND_RELATION,
 								rel->rd_rel->relisshared ? InvalidOid : MyDatabaseId,
-								RelationGetRelid(rel));
+								RelationGetRelid(rel), InvalidOid);
 }
 
 /*
@@ -184,7 +186,7 @@ pgstat_drop_relation(Relation rel)
 
 	pgstat_drop_transactional(PGSTAT_KIND_RELATION,
 							  rel->rd_rel->relisshared ? InvalidOid : MyDatabaseId,
-							  RelationGetRelid(rel));
+							  RelationGetRelid(rel), InvalidOid);
 
 	if (!pgstat_should_count_relation(rel))
 		return;
@@ -225,7 +227,7 @@ pgstat_report_vacuum(Oid tableoid, bool shared,
 
 	/* block acquiring lock for the same reason as pgstat_report_autovac() */
 	entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_RELATION,
-											dboid, tableoid, false);
+											dboid, tableoid, InvalidOid, false);
 
 	shtabentry = (PgStatShared_Relation *) entry_ref->shared_stats;
 	tabentry = &shtabentry->stats;
@@ -318,6 +320,7 @@ pgstat_report_analyze(Relation rel,
 	/* block acquiring lock for the same reason as pgstat_report_autovac() */
 	entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_RELATION, dboid,
 											RelationGetRelid(rel),
+											InvalidOid,
 											false);
 	/* can't get dropped while accessed */
 	Assert(entry_ref != NULL && entry_ref->shared_stats != NULL);
@@ -459,6 +462,19 @@ pgstat_fetch_stat_tabentry(Oid relid)
 }
 
 /*
+ * Support function for the SQL-callable pgstat* functions. Returns
+ * the collected statistics for one relfilenode or NULL. NULL doesn't mean
+ * that the relfilenode doesn't exist, just that there are no statistics, so the
+ * caller is better off to report ZERO instead.
+ */
+PgStat_StatRelFileNodeEntry *
+pgstat_fetch_stat_relfilenodeentry(Oid dboid, Oid spcOid, RelFileNumber relfile)
+{
+	return (PgStat_StatRelFileNodeEntry *)
+		pgstat_fetch_entry(PGSTAT_KIND_RELFILENODE, dboid, spcOid, relfile);
+}
+
+/*
  * More efficient version of pgstat_fetch_stat_tabentry(), allowing to specify
  * whether the to-be-accessed table is a shared relation or not.
  */
@@ -468,7 +484,7 @@ pgstat_fetch_stat_tabentry_ext(bool shared, Oid reloid)
 	Oid			dboid = (shared ? InvalidOid : MyDatabaseId);
 
 	return (PgStat_StatTabEntry *)
-		pgstat_fetch_entry(PGSTAT_KIND_RELATION, dboid, reloid);
+		pgstat_fetch_entry(PGSTAT_KIND_RELATION, dboid, reloid, InvalidOid);
 }
 
 /*
@@ -491,10 +507,10 @@ find_tabstat_entry(Oid rel_id)
 	PgStat_TableStatus *tabentry = NULL;
 	PgStat_TableStatus *tablestatus = NULL;
 
-	entry_ref = pgstat_fetch_pending_entry(PGSTAT_KIND_RELATION, MyDatabaseId, rel_id);
+	entry_ref = pgstat_fetch_pending_entry(PGSTAT_KIND_RELATION, MyDatabaseId, rel_id, InvalidOid);
 	if (!entry_ref)
 	{
-		entry_ref = pgstat_fetch_pending_entry(PGSTAT_KIND_RELATION, InvalidOid, rel_id);
+		entry_ref = pgstat_fetch_pending_entry(PGSTAT_KIND_RELATION, InvalidOid, rel_id, InvalidOid);
 		if (!entry_ref)
 			return tablestatus;
 	}
@@ -881,6 +897,38 @@ pgstat_relation_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
 	return true;
 }
 
+/*
+ * Flush out pending stats for the relfilenode entry
+ *
+ * If nowait is true, this function returns false if lock could not
+ * immediately acquired, otherwise true is returned.
+ */
+bool
+pgstat_relfilenode_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
+{
+	PgStatShared_RelFileNode *sharedent;
+	PgStat_StatRelFileNodeEntry *pendingent;
+
+	pendingent = (PgStat_StatRelFileNodeEntry *) entry_ref->pending;
+	sharedent = (PgStatShared_RelFileNode *) entry_ref->shared_stats;
+
+	if (!pgstat_lock_entry(entry_ref, nowait))
+		return false;
+
+#define PGSTAT_ACCUM_RELFILENODECOUNT(item)      \
+		(sharedent)->stats.item += (pendingent)->item
+
+	PGSTAT_ACCUM_RELFILENODECOUNT(blocks_fetched);
+	PGSTAT_ACCUM_RELFILENODECOUNT(blocks_hit);
+	PGSTAT_ACCUM_RELFILENODECOUNT(blocks_written);
+
+	pgstat_unlock_entry(entry_ref);
+
+	memset(pendingent, 0, sizeof(*pendingent));
+
+	return true;
+}
+
 void
 pgstat_relation_delete_pending_cb(PgStat_EntryRef *entry_ref)
 {
@@ -902,12 +950,62 @@ pgstat_prep_relation_pending(Oid rel_id, bool isshared)
 
 	entry_ref = pgstat_prep_pending_entry(PGSTAT_KIND_RELATION,
 										  isshared ? InvalidOid : MyDatabaseId,
-										  rel_id, NULL);
+										  rel_id, InvalidOid, NULL);
 	pending = entry_ref->pending;
 	pending->id = rel_id;
 	pending->shared = isshared;
 
 	return pending;
+}
+
+PgStat_StatRelFileNodeEntry *
+pgstat_prep_relfilenode_pending(RelFileLocator locator)
+{
+	PgStat_EntryRef *entry_ref;
+
+	entry_ref = pgstat_prep_pending_entry(PGSTAT_KIND_RELFILENODE, locator.dbOid,
+										  locator.spcOid, locator.relNumber, NULL);
+
+	return entry_ref->pending;
+}
+
+void
+pgstat_report_relfilenode_blks_written(RelFileLocator locator)
+{
+	PgStat_StatRelFileNodeEntry *relfileentry = NULL;
+
+	relfileentry = pgstat_prep_relfilenode_pending(locator);
+
+	if (relfileentry)
+		relfileentry->blocks_written++;
+}
+
+void
+pgstat_report_relfilenode_buffer_read(Relation reln)
+{
+	PgStat_StatRelFileNodeEntry *relfileentry = NULL;
+
+	/* For relation stats to survive after a rewrite */
+	pgstat_count_buffer_read(reln);
+
+	relfileentry = pgstat_prep_relfilenode_pending(reln->rd_locator);
+
+	if (relfileentry)
+		relfileentry->blocks_fetched++;
+}
+
+void
+pgstat_report_relfilenode_buffer_hit(Relation reln)
+{
+	PgStat_StatRelFileNodeEntry *relfileentry = NULL;
+
+	/* For relation stats to survive after a rewrite */
+	pgstat_count_buffer_hit(reln);
+
+	relfileentry = pgstat_prep_relfilenode_pending(reln->rd_locator);
+
+	if (relfileentry)
+		relfileentry->blocks_hit++;
 }
 
 /*

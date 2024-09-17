@@ -539,12 +539,12 @@ ROLLBACK;
 -- pg_stat_have_stats behavior
 ----
 -- fixed-numbered stats exist
-SELECT pg_stat_have_stats('bgwriter', 0, 0);
+SELECT pg_stat_have_stats('bgwriter', 0, 0, 0);
 -- unknown stats kinds error out
-SELECT pg_stat_have_stats('zaphod', 0, 0);
+SELECT pg_stat_have_stats('zaphod', 0, 0, 0);
 -- db stats have objoid 0
-SELECT pg_stat_have_stats('database', :dboid, 1);
-SELECT pg_stat_have_stats('database', :dboid, 0);
+SELECT pg_stat_have_stats('database', :dboid, 1, 0);
+SELECT pg_stat_have_stats('database', :dboid, 0, 0);
 
 -- pg_stat_have_stats returns true for committed index creation
 CREATE table stats_test_tab1 as select generate_series(1,10) a;
@@ -552,40 +552,40 @@ CREATE index stats_test_idx1 on stats_test_tab1(a);
 SELECT 'stats_test_idx1'::regclass::oid AS stats_test_idx1_oid \gset
 SET enable_seqscan TO off;
 select a from stats_test_tab1 where a = 3;
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid, 0);
 
 -- pg_stat_have_stats returns false for dropped index with stats
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid, 0);
 DROP index stats_test_idx1;
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid, 0);
 
 -- pg_stat_have_stats returns false for rolled back index creation
 BEGIN;
 CREATE index stats_test_idx1 on stats_test_tab1(a);
 SELECT 'stats_test_idx1'::regclass::oid AS stats_test_idx1_oid \gset
 select a from stats_test_tab1 where a = 3;
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid, 0);
 ROLLBACK;
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid, 0);
 
 -- pg_stat_have_stats returns true for reindex CONCURRENTLY
 CREATE index stats_test_idx1 on stats_test_tab1(a);
 SELECT 'stats_test_idx1'::regclass::oid AS stats_test_idx1_oid \gset
 select a from stats_test_tab1 where a = 3;
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid, 0);
 REINDEX index CONCURRENTLY stats_test_idx1;
 -- false for previous oid
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid, 0);
 -- true for new oid
 SELECT 'stats_test_idx1'::regclass::oid AS stats_test_idx1_oid \gset
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid, 0);
 
 -- pg_stat_have_stats returns true for a rolled back drop index with stats
 BEGIN;
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid, 0);
 DROP index stats_test_idx1;
 ROLLBACK;
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid, 0);
 
 -- put enable_seqscan back to on
 SET enable_seqscan TO on;
@@ -759,7 +759,7 @@ SELECT sum(extends) AS io_sum_bulkwrite_strategy_extends_after
 SELECT :io_sum_bulkwrite_strategy_extends_after > :io_sum_bulkwrite_strategy_extends_before;
 
 -- Test IO stats reset
-SELECT pg_stat_have_stats('io', 0, 0);
+SELECT pg_stat_have_stats('io', 0, 0, 0);
 SELECT sum(evictions) + sum(reuses) + sum(extends) + sum(fsyncs) + sum(reads) + sum(writes) + sum(writebacks) + sum(hits) AS io_stats_pre_reset
   FROM pg_stat_io \gset
 SELECT pg_stat_reset_shared('io');

@@ -390,69 +390,55 @@ process_data_type_check(DbInfo *dbinfo, PGresult *res, void *arg)
 {
 	struct data_type_check_state *state = (struct data_type_check_state *) arg;
 	int			ntups = PQntuples(res);
+	char		output_path[MAXPGPATH];
+	int			i_nspname = PQfnumber(res, "nspname");
+	int			i_relname = PQfnumber(res, "relname");
+	int			i_attname = PQfnumber(res, "attname");
+	FILE	   *script = NULL;
 
 	AssertVariableIsOfType(&process_data_type_check, UpgradeTaskProcessCB);
 
-	if (ntups)
+	if (ntups == 0)
+		return;
+
+	snprintf(output_path, sizeof(output_path), "%s/%s",
+			 log_opts.basedir,
+			 state->check->report_filename);
+
+	/*
+	 * Make sure we have a buffer to save reports to now that we found a first
+	 * failing check.
+	 */
+	if (*state->report == NULL)
+		*state->report = createPQExpBuffer();
+
+	/*
+	 * If this is the first time we see an error for the check in question
+	 * then print a status message of the failure.
+	 */
+	if (!(*state->result))
 	{
-		char		output_path[MAXPGPATH];
-		int			i_nspname;
-		int			i_relname;
-		int			i_attname;
-		FILE	   *script = NULL;
-		bool		db_used = false;
-
-		snprintf(output_path, sizeof(output_path), "%s/%s",
-				 log_opts.basedir,
-				 state->check->report_filename);
-
-		/*
-		 * Make sure we have a buffer to save reports to now that we found a
-		 * first failing check.
-		 */
-		if (*state->report == NULL)
-			*state->report = createPQExpBuffer();
-
-		/*
-		 * If this is the first time we see an error for the check in question
-		 * then print a status message of the failure.
-		 */
-		if (!(*state->result))
-		{
-			pg_log(PG_REPORT, "failed check: %s", _(state->check->status));
-			appendPQExpBuffer(*state->report, "\n%s\n%s    %s\n",
-							  _(state->check->report_text),
-							  _("A list of the problem columns is in the file:"),
-							  output_path);
-		}
-		*state->result = true;
-
-		i_nspname = PQfnumber(res, "nspname");
-		i_relname = PQfnumber(res, "relname");
-		i_attname = PQfnumber(res, "attname");
-
-		for (int rowno = 0; rowno < ntups; rowno++)
-		{
-			if (script == NULL && (script = fopen_priv(output_path, "a")) == NULL)
-				pg_fatal("could not open file \"%s\": %m", output_path);
-
-			if (!db_used)
-			{
-				fprintf(script, "In database: %s\n", dbinfo->db_name);
-				db_used = true;
-			}
-			fprintf(script, "  %s.%s.%s\n",
-					PQgetvalue(res, rowno, i_nspname),
-					PQgetvalue(res, rowno, i_relname),
-					PQgetvalue(res, rowno, i_attname));
-		}
-
-		if (script)
-		{
-			fclose(script);
-			script = NULL;
-		}
+		pg_log(PG_REPORT, "failed check: %s", _(state->check->status));
+		appendPQExpBuffer(*state->report, "\n%s\n%s    %s\n",
+						  _(state->check->report_text),
+						  _("A list of the problem columns is in the file:"),
+						  output_path);
 	}
+	*state->result = true;
+
+	if (script == NULL &&
+		(script = fopen_priv(output_path, "a")) == NULL)
+		pg_fatal("could not open file \"%s\": %m", output_path);
+
+	fprintf(script, "In database: %s\n", dbinfo->db_name);
+
+	for (int rowno = 0; rowno < ntups; rowno++)
+		fprintf(script, "  %s.%s.%s\n",
+				PQgetvalue(res, rowno, i_nspname),
+				PQgetvalue(res, rowno, i_relname),
+				PQgetvalue(res, rowno, i_attname));
+
+	fclose(script);
 }
 
 /*
@@ -1234,7 +1220,6 @@ check_for_prepared_transactions(ClusterInfo *cluster)
 static void
 process_isn_and_int8_passing_mismatch(DbInfo *dbinfo, PGresult *res, void *arg)
 {
-	bool		db_used = false;
 	int			ntups = PQntuples(res);
 	int			i_nspname = PQfnumber(res, "nspname");
 	int			i_proname = PQfnumber(res, "proname");
@@ -1243,20 +1228,19 @@ process_isn_and_int8_passing_mismatch(DbInfo *dbinfo, PGresult *res, void *arg)
 	AssertVariableIsOfType(&process_isn_and_int8_passing_mismatch,
 						   UpgradeTaskProcessCB);
 
+	if (ntups == 0)
+		return;
+
+	if (report->file == NULL &&
+		(report->file = fopen_priv(report->path, "w")) == NULL)
+		pg_fatal("could not open file \"%s\": %m", report->path);
+
+	fprintf(report->file, "In database: %s\n", dbinfo->db_name);
+
 	for (int rowno = 0; rowno < ntups; rowno++)
-	{
-		if (report->file == NULL &&
-			(report->file = fopen_priv(report->path, "w")) == NULL)
-			pg_fatal("could not open file \"%s\": %m", report->path);
-		if (!db_used)
-		{
-			fprintf(report->file, "In database: %s\n", dbinfo->db_name);
-			db_used = true;
-		}
 		fprintf(report->file, "  %s.%s\n",
 				PQgetvalue(res, rowno, i_nspname),
 				PQgetvalue(res, rowno, i_proname));
-	}
 }
 
 /*
@@ -1324,7 +1308,6 @@ process_user_defined_postfix_ops(DbInfo *dbinfo, PGresult *res, void *arg)
 {
 	UpgradeTaskReport *report = (UpgradeTaskReport *) arg;
 	int			ntups = PQntuples(res);
-	bool		db_used = false;
 	int			i_oproid = PQfnumber(res, "oproid");
 	int			i_oprnsp = PQfnumber(res, "oprnsp");
 	int			i_oprname = PQfnumber(res, "oprname");
@@ -1334,26 +1317,22 @@ process_user_defined_postfix_ops(DbInfo *dbinfo, PGresult *res, void *arg)
 	AssertVariableIsOfType(&process_user_defined_postfix_ops,
 						   UpgradeTaskProcessCB);
 
-	if (!ntups)
+	if (ntups == 0)
 		return;
 
+	if (report->file == NULL &&
+		(report->file = fopen_priv(report->path, "w")) == NULL)
+		pg_fatal("could not open file \"%s\": %m", report->path);
+
+	fprintf(report->file, "In database: %s\n", dbinfo->db_name);
+
 	for (int rowno = 0; rowno < ntups; rowno++)
-	{
-		if (report->file == NULL &&
-			(report->file = fopen_priv(report->path, "w")) == NULL)
-			pg_fatal("could not open file \"%s\": %m", report->path);
-		if (!db_used)
-		{
-			fprintf(report->file, "In database: %s\n", dbinfo->db_name);
-			db_used = true;
-		}
 		fprintf(report->file, "  (oid=%s) %s.%s (%s.%s, NONE)\n",
 				PQgetvalue(res, rowno, i_oproid),
 				PQgetvalue(res, rowno, i_oprnsp),
 				PQgetvalue(res, rowno, i_oprname),
 				PQgetvalue(res, rowno, i_typnsp),
 				PQgetvalue(res, rowno, i_typname));
-	}
 }
 
 /*
@@ -1422,7 +1401,6 @@ static void
 process_incompat_polymorphics(DbInfo *dbinfo, PGresult *res, void *arg)
 {
 	UpgradeTaskReport *report = (UpgradeTaskReport *) arg;
-	bool		db_used = false;
 	int			ntups = PQntuples(res);
 	int			i_objkind = PQfnumber(res, "objkind");
 	int			i_objname = PQfnumber(res, "objname");
@@ -1430,21 +1408,19 @@ process_incompat_polymorphics(DbInfo *dbinfo, PGresult *res, void *arg)
 	AssertVariableIsOfType(&process_incompat_polymorphics,
 						   UpgradeTaskProcessCB);
 
-	for (int rowno = 0; rowno < ntups; rowno++)
-	{
-		if (report->file == NULL &&
-			(report->file = fopen_priv(report->path, "w")) == NULL)
-			pg_fatal("could not open file \"%s\": %m", report->path);
-		if (!db_used)
-		{
-			fprintf(report->file, "In database: %s\n", dbinfo->db_name);
-			db_used = true;
-		}
+	if (ntups == 0)
+		return;
 
+	if (report->file == NULL &&
+		(report->file = fopen_priv(report->path, "w")) == NULL)
+		pg_fatal("could not open file \"%s\": %m", report->path);
+
+	fprintf(report->file, "In database: %s\n", dbinfo->db_name);
+
+	for (int rowno = 0; rowno < ntups; rowno++)
 		fprintf(report->file, "  %s: %s\n",
 				PQgetvalue(res, rowno, i_objkind),
 				PQgetvalue(res, rowno, i_objname));
-	}
 }
 
 /*
@@ -1558,30 +1534,25 @@ static void
 process_with_oids_check(DbInfo *dbinfo, PGresult *res, void *arg)
 {
 	UpgradeTaskReport *report = (UpgradeTaskReport *) arg;
-	bool		db_used = false;
 	int			ntups = PQntuples(res);
 	int			i_nspname = PQfnumber(res, "nspname");
 	int			i_relname = PQfnumber(res, "relname");
 
 	AssertVariableIsOfType(&process_with_oids_check, UpgradeTaskProcessCB);
 
-	if (!ntups)
+	if (ntups == 0)
 		return;
 
+	if (report->file == NULL &&
+		(report->file = fopen_priv(report->path, "w")) == NULL)
+		pg_fatal("could not open file \"%s\": %m", report->path);
+
+	fprintf(report->file, "In database: %s\n", dbinfo->db_name);
+
 	for (int rowno = 0; rowno < ntups; rowno++)
-	{
-		if (report->file == NULL &&
-			(report->file = fopen_priv(report->path, "w")) == NULL)
-			pg_fatal("could not open file \"%s\": %m", report->path);
-		if (!db_used)
-		{
-			fprintf(report->file, "In database: %s\n", dbinfo->db_name);
-			db_used = true;
-		}
 		fprintf(report->file, "  %s.%s\n",
 				PQgetvalue(res, rowno, i_nspname),
 				PQgetvalue(res, rowno, i_relname));
-	}
 }
 
 /*
@@ -1693,7 +1664,6 @@ static void
 process_user_defined_encoding_conversions(DbInfo *dbinfo, PGresult *res, void *arg)
 {
 	UpgradeTaskReport *report = (UpgradeTaskReport *) arg;
-	bool		db_used = false;
 	int			ntups = PQntuples(res);
 	int			i_conoid = PQfnumber(res, "conoid");
 	int			i_conname = PQfnumber(res, "conname");
@@ -1702,24 +1672,20 @@ process_user_defined_encoding_conversions(DbInfo *dbinfo, PGresult *res, void *a
 	AssertVariableIsOfType(&process_user_defined_encoding_conversions,
 						   UpgradeTaskProcessCB);
 
-	if (!ntups)
+	if (ntups == 0)
 		return;
 
+	if (report->file == NULL &&
+		(report->file = fopen_priv(report->path, "w")) == NULL)
+		pg_fatal("could not open file \"%s\": %m", report->path);
+
+	fprintf(report->file, "In database: %s\n", dbinfo->db_name);
+
 	for (int rowno = 0; rowno < ntups; rowno++)
-	{
-		if (report->file == NULL &&
-			(report->file = fopen_priv(report->path, "w")) == NULL)
-			pg_fatal("could not open file \"%s\": %m", report->path);
-		if (!db_used)
-		{
-			fprintf(report->file, "In database: %s\n", dbinfo->db_name);
-			db_used = true;
-		}
 		fprintf(report->file, "  (oid=%s) %s.%s\n",
 				PQgetvalue(res, rowno, i_conoid),
 				PQgetvalue(res, rowno, i_nspname),
 				PQgetvalue(res, rowno, i_conname));
-	}
 }
 
 /*
@@ -1971,7 +1937,7 @@ static void
 process_old_sub_state_check(DbInfo *dbinfo, PGresult *res, void *arg)
 {
 	UpgradeTaskReport *report = (UpgradeTaskReport *) arg;
-	int			ntup = PQntuples(res);
+	int			ntups = PQntuples(res);
 	int			i_srsubstate = PQfnumber(res, "srsubstate");
 	int			i_subname = PQfnumber(res, "subname");
 	int			i_nspname = PQfnumber(res, "nspname");
@@ -1979,19 +1945,20 @@ process_old_sub_state_check(DbInfo *dbinfo, PGresult *res, void *arg)
 
 	AssertVariableIsOfType(&process_old_sub_state_check, UpgradeTaskProcessCB);
 
-	for (int i = 0; i < ntup; i++)
-	{
-		if (report->file == NULL &&
-			(report->file = fopen_priv(report->path, "w")) == NULL)
-			pg_fatal("could not open file \"%s\": %m", report->path);
+	if (ntups == 0)
+		return;
 
+	if (report->file == NULL &&
+		(report->file = fopen_priv(report->path, "w")) == NULL)
+		pg_fatal("could not open file \"%s\": %m", report->path);
+
+	for (int i = 0; i < ntups; i++)
 		fprintf(report->file, "The table sync state \"%s\" is not allowed for database:\"%s\" subscription:\"%s\" schema:\"%s\" relation:\"%s\"\n",
 				PQgetvalue(res, i, i_srsubstate),
 				dbinfo->db_name,
 				PQgetvalue(res, i, i_subname),
 				PQgetvalue(res, i, i_nspname),
 				PQgetvalue(res, i, i_relname));
-	}
 }
 
 /*

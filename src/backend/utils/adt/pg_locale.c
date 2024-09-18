@@ -66,6 +66,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
+#include "utils/resowner.h"
 #include "utils/syscache.h"
 
 #ifdef USE_ICU
@@ -148,6 +149,12 @@ typedef struct
 #define SH_DEFINE
 #include "lib/simplehash.h"
 
+/*
+ * Collator objects (UCollator for ICU or locale_t for libc) are allocated in
+ * an external library, so track them using a resource owner.
+ */
+static ResourceOwner CollationCacheOwner = NULL;
+
 static MemoryContext CollationCacheContext = NULL;
 static collation_cache_hash *CollationCache = NULL;
 
@@ -179,7 +186,34 @@ static int32_t uchar_convert(UConverter *converter,
 							 const char *src, int32_t srclen);
 static void icu_set_collation_attributes(UCollator *collator, const char *loc,
 										 UErrorCode *status);
+
+static void ResourceOwnerRememberUCollator(ResourceOwner owner,
+										   UCollator *collator);
+static void ResOwnerReleaseUCollator(Datum val);
+
+static const ResourceOwnerDesc UCollatorResourceKind =
+{
+	.name = "UCollator reference",
+	.release_phase = RESOURCE_RELEASE_AFTER_LOCKS,
+	.release_priority = RELEASE_PRIO_LAST,
+	.ReleaseResource = ResOwnerReleaseUCollator,
+	.DebugPrint = NULL                      /* the default message is fine */
+};
 #endif
+
+static void ResourceOwnerRememberLocaleT(ResourceOwner owner,
+										 locale_t locale);
+static void ResOwnerReleaseLocaleT(Datum val);
+
+static const ResourceOwnerDesc LocaleTResourceKind =
+{
+	.name = "locale_t reference",
+	.release_phase = RESOURCE_RELEASE_AFTER_LOCKS,
+	.release_priority = RELEASE_PRIO_LAST,
+	.ReleaseResource = ResOwnerReleaseLocaleT,
+	.DebugPrint = NULL                      /* the default message is fine */
+};
+
 
 /*
  * POSIX doesn't define _l-variants of these functions, but several systems
@@ -1257,6 +1291,20 @@ report_newlocale_failure(const char *localename)
 						localename) : 0)));
 }
 
+static void
+ResourceOwnerRememberLocaleT(ResourceOwner owner, locale_t locale)
+{
+	ResourceOwnerRemember(owner, PointerGetDatum(locale),
+						  &LocaleTResourceKind);
+}
+
+static void
+ResOwnerReleaseLocaleT(Datum val)
+{
+	locale_t locale = (locale_t) DatumGetPointer(val);
+	freelocale(locale);
+}
+
 /*
  * Create a locale_t with the given collation and ctype.
  *
@@ -1335,6 +1383,20 @@ make_libc_collator(const char *collate, const char *ctype)
  * Ensure that no path leaks a UCollator.
  */
 #ifdef USE_ICU
+static void
+ResourceOwnerRememberUCollator(ResourceOwner owner, UCollator *collator)
+{
+	ResourceOwnerRemember(owner, PointerGetDatum(collator),
+						  &UCollatorResourceKind);
+}
+
+static void
+ResOwnerReleaseUCollator(Datum val)
+{
+	UCollator *collator = (UCollator *) DatumGetPointer(val);
+	ucol_close(collator);
+}
+
 static UCollator *
 make_icu_collator(const char *iculocstr, const char *icurules)
 {
@@ -1495,7 +1557,7 @@ init_database_collation(void)
  * allocating memory.
  */
 static pg_locale_t
-create_pg_locale(MemoryContext context, Oid collid)
+create_pg_locale(MemoryContext context, ResourceOwner owner, Oid collid)
 {
 	/* We haven't computed this yet in this session, so do it */
 	HeapTuple	tp;
@@ -1582,7 +1644,10 @@ create_pg_locale(MemoryContext context, Oid collid)
 		datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_collctype);
 		collctype = TextDatumGetCString(datum);
 
+		ResourceOwnerEnlarge(owner);
 		locale = make_libc_collator(collcollate, collctype);
+		if (locale)
+			ResourceOwnerRememberLocaleT(owner, locale);
 
 		result = MemoryContextAllocZero(context,
 										sizeof(struct pg_locale_struct));
@@ -1610,7 +1675,9 @@ create_pg_locale(MemoryContext context, Oid collid)
 		else
 			icurules = NULL;
 
+		ResourceOwnerEnlarge(owner);
 		collator = make_icu_collator(iculocstr, icurules);
+		ResourceOwnerRememberUCollator(owner, collator);
 
 		result = MemoryContextAllocZero(context,
 										sizeof(struct pg_locale_struct));
@@ -1657,6 +1724,7 @@ pg_newlocale_from_collation(Oid collid)
 	 */
 	if (CollationCache == NULL)
 	{
+		CollationCacheOwner = ResourceOwnerCreate(NULL, "collation cache");
 		CollationCacheContext = AllocSetContextCreate(TopMemoryContext,
 													  "collation cache",
 													  ALLOCSET_DEFAULT_SIZES);
@@ -1675,7 +1743,9 @@ pg_newlocale_from_collation(Oid collid)
 	}
 
 	if (cache_entry->locale == 0)
-		cache_entry->locale = create_pg_locale(CollationCacheContext, collid);
+		cache_entry->locale = create_pg_locale(CollationCacheContext,
+											   CollationCacheOwner,
+											   collid);
 
 	last_collation_cache_oid = collid;
 	last_collation_cache_locale = cache_entry->locale;

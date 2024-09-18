@@ -1227,45 +1227,6 @@ IsoLocaleName(const char *winlocname)
 #endif							/* WIN32 && LC_MESSAGES */
 
 
-/*
- * Cache mechanism for collation information.
- *
- * Note that we currently lack any way to flush the cache.  Since we don't
- * support ALTER COLLATION, this is OK.  The worst case is that someone
- * drops a collation, and a useless cache entry hangs around in existing
- * backends.
- */
-static collation_cache_entry *
-lookup_collation_cache(Oid collation)
-{
-	collation_cache_entry *cache_entry;
-	bool		found;
-
-	Assert(OidIsValid(collation));
-	Assert(collation != DEFAULT_COLLATION_OID);
-
-	if (CollationCache == NULL)
-	{
-		CollationCacheContext = AllocSetContextCreate(TopMemoryContext,
-													  "collation cache",
-													  ALLOCSET_DEFAULT_SIZES);
-		CollationCache = collation_cache_create(CollationCacheContext,
-												16, NULL);
-	}
-
-	cache_entry = collation_cache_insert(CollationCache, collation, &found);
-	if (!found)
-	{
-		/*
-		 * Make sure cache entry is marked invalid, in case we fail before
-		 * setting things.
-		 */
-		cache_entry->locale = 0;
-	}
-
-	return cache_entry;
-}
-
 /* simple subroutine for reporting errors from newlocale() */
 static void
 report_newlocale_failure(const char *localename)
@@ -1530,17 +1491,152 @@ init_database_collation(void)
 }
 
 /*
- * Create a pg_locale_t from a collation OID.  Results are cached for the
- * lifetime of the backend.  Thus, do not free the result with freelocale().
- *
- * For simplicity, we always generate COLLATE + CTYPE even though we
- * might only need one of them.  Since this is called only once per session,
- * it shouldn't cost much.
+ * Create and initialize a pg_locale_t.  Be careful to check for errors before
+ * allocating memory.
+ */
+static pg_locale_t
+create_pg_locale(Oid collid)
+{
+	/* We haven't computed this yet in this session, so do it */
+	HeapTuple	tp;
+	Form_pg_collation collform;
+	pg_locale_t result;
+	Datum		datum;
+	bool		isnull;
+
+	tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for collation %u", collid);
+	collform = (Form_pg_collation) GETSTRUCT(tp);
+
+	/* compare version in catalog to version from provider */
+	datum = SysCacheGetAttr(COLLOID, tp, Anum_pg_collation_collversion,
+							&isnull);
+	if (!isnull)
+	{
+		char	   *actual_versionstr;
+		char	   *collversionstr;
+
+		collversionstr = TextDatumGetCString(datum);
+
+		if (collform->collprovider == COLLPROVIDER_LIBC)
+			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_collcollate);
+		else
+			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_colllocale);
+
+		actual_versionstr = get_collation_actual_version(collform->collprovider,
+														 TextDatumGetCString(datum));
+		if (!actual_versionstr)
+		{
+			/*
+			 * This could happen when specifying a version in CREATE
+			 * COLLATION but the provider does not support versioning, or
+			 * manually creating a mess in the catalogs.
+			 */
+			ereport(ERROR,
+					(errmsg("collation \"%s\" has no actual version, but a version was recorded",
+							NameStr(collform->collname))));
+		}
+
+		if (strcmp(actual_versionstr, collversionstr) != 0)
+			ereport(WARNING,
+					(errmsg("collation \"%s\" has version mismatch",
+							NameStr(collform->collname)),
+					 errdetail("The collation in the database was created using version %s, "
+							   "but the operating system provides version %s.",
+							   collversionstr, actual_versionstr),
+					 errhint("Rebuild all objects affected by this collation and run "
+							 "ALTER COLLATION %s REFRESH VERSION, "
+							 "or build PostgreSQL with the right library version.",
+							 quote_qualified_identifier(get_namespace_name(collform->collnamespace),
+														NameStr(collform->collname)))));
+	}
+
+	if (collform->collprovider == COLLPROVIDER_BUILTIN)
+	{
+		const char *locstr;
+
+		datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_colllocale);
+		locstr = TextDatumGetCString(datum);
+
+		builtin_validate_locale(GetDatabaseEncoding(), locstr);
+
+		result = MemoryContextAllocZero(TopMemoryContext,
+										sizeof(struct pg_locale_struct));
+
+		result->provider = collform->collprovider;
+		result->deterministic = collform->collisdeterministic;
+		result->collate_is_c = true;
+		result->ctype_is_c = (strcmp(locstr, "C") == 0);
+		result->info.builtin.locale = MemoryContextStrdup(TopMemoryContext,
+														 locstr);
+	}
+	else if (collform->collprovider == COLLPROVIDER_LIBC)
+	{
+		const char *collcollate;
+		const char *collctype;
+		locale_t	locale;
+
+		datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_collcollate);
+		collcollate = TextDatumGetCString(datum);
+		datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_collctype);
+		collctype = TextDatumGetCString(datum);
+
+		locale = make_libc_collator(collcollate, collctype);
+
+		result = MemoryContextAllocZero(TopMemoryContext,
+										sizeof(struct pg_locale_struct));
+
+		result->provider = collform->collprovider;
+		result->deterministic = collform->collisdeterministic;
+		result->collate_is_c = (strcmp(collcollate, "C") == 0) ||
+			(strcmp(collcollate, "POSIX") == 0);
+		result->ctype_is_c = (strcmp(collctype, "C") == 0) ||
+			(strcmp(collctype, "POSIX") == 0);
+		result->info.lt = locale;
+	}
+	else if (collform->collprovider == COLLPROVIDER_ICU)
+	{
+		const char *iculocstr;
+		const char *icurules;
+		UCollator  *collator;
+
+		datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_colllocale);
+		iculocstr = TextDatumGetCString(datum);
+
+		datum = SysCacheGetAttr(COLLOID, tp, Anum_pg_collation_collicurules, &isnull);
+		if (!isnull)
+			icurules = TextDatumGetCString(datum);
+		else
+			icurules = NULL;
+
+		collator = make_icu_collator(iculocstr, icurules);
+
+		result = MemoryContextAllocZero(TopMemoryContext,
+										sizeof(struct pg_locale_struct));
+
+		result->provider = collform->collprovider;
+		result->deterministic = collform->collisdeterministic;
+		result->collate_is_c = false;
+		result->ctype_is_c = false;
+		result->info.icu.locale = MemoryContextStrdup(TopMemoryContext, iculocstr);
+		result->info.icu.ucol = collator;
+	}
+
+	ReleaseSysCache(tp);
+
+	return result;
+}
+
+/*
+ * Create or retrieve a pg_locale_t for the given collation OID.  Results are
+ * cached for the lifetime of the backend.
  */
 pg_locale_t
 pg_newlocale_from_collation(Oid collid)
 {
-	collation_cache_entry *cache_entry;
+	collation_cache_entry	*cache_entry;
+	bool					 found;
 
 	if (collid == DEFAULT_COLLATION_OID)
 		return &default_locale;
@@ -1551,131 +1647,35 @@ pg_newlocale_from_collation(Oid collid)
 	if (last_collation_cache_oid == collid)
 		return last_collation_cache_locale;
 
-	cache_entry = lookup_collation_cache(collid);
+	/*
+	 * Cache mechanism for collation information.
+	 *
+	 * Note that we currently lack any way to flush the cache.  Since we don't
+	 * support ALTER COLLATION, this is OK.  The worst case is that someone
+	 * drops a collation, and a useless cache entry hangs around in existing
+	 * backends.
+	 */
+	if (CollationCache == NULL)
+	{
+		CollationCacheContext = AllocSetContextCreate(TopMemoryContext,
+													  "collation cache",
+													  ALLOCSET_DEFAULT_SIZES);
+		CollationCache = collation_cache_create(CollationCacheContext,
+												16, NULL);
+	}
+
+	cache_entry = collation_cache_insert(CollationCache, collid, &found);
+	if (!found)
+	{
+		/*
+		 * Make sure cache entry is marked invalid, in case we fail before
+		 * setting things.
+		 */
+		cache_entry->locale = 0;
+	}
 
 	if (cache_entry->locale == 0)
-	{
-		/* We haven't computed this yet in this session, so do it */
-		HeapTuple	tp;
-		Form_pg_collation collform;
-		struct pg_locale_struct result;
-		pg_locale_t resultp;
-		Datum		datum;
-		bool		isnull;
-
-		tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
-		if (!HeapTupleIsValid(tp))
-			elog(ERROR, "cache lookup failed for collation %u", collid);
-		collform = (Form_pg_collation) GETSTRUCT(tp);
-
-		/* We'll fill in the result struct locally before allocating memory */
-		memset(&result, 0, sizeof(result));
-		result.provider = collform->collprovider;
-		result.deterministic = collform->collisdeterministic;
-
-		if (collform->collprovider == COLLPROVIDER_BUILTIN)
-		{
-			const char *locstr;
-
-			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_colllocale);
-			locstr = TextDatumGetCString(datum);
-
-			result.collate_is_c = true;
-			result.ctype_is_c = (strcmp(locstr, "C") == 0);
-
-			builtin_validate_locale(GetDatabaseEncoding(), locstr);
-
-			result.info.builtin.locale = MemoryContextStrdup(TopMemoryContext,
-															 locstr);
-		}
-		else if (collform->collprovider == COLLPROVIDER_LIBC)
-		{
-			const char *collcollate;
-			const char *collctype;
-
-			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_collcollate);
-			collcollate = TextDatumGetCString(datum);
-			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_collctype);
-			collctype = TextDatumGetCString(datum);
-
-			result.collate_is_c = (strcmp(collcollate, "C") == 0) ||
-				(strcmp(collcollate, "POSIX") == 0);
-			result.ctype_is_c = (strcmp(collctype, "C") == 0) ||
-				(strcmp(collctype, "POSIX") == 0);
-
-			result.info.lt = make_libc_collator(collcollate, collctype);
-		}
-		else if (collform->collprovider == COLLPROVIDER_ICU)
-		{
-			const char *iculocstr;
-			const char *icurules;
-
-			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_colllocale);
-			iculocstr = TextDatumGetCString(datum);
-
-			result.collate_is_c = false;
-			result.ctype_is_c = false;
-
-			datum = SysCacheGetAttr(COLLOID, tp, Anum_pg_collation_collicurules, &isnull);
-			if (!isnull)
-				icurules = TextDatumGetCString(datum);
-			else
-				icurules = NULL;
-
-			result.info.icu.locale = MemoryContextStrdup(TopMemoryContext, iculocstr);
-			result.info.icu.ucol = make_icu_collator(iculocstr, icurules);
-		}
-
-		datum = SysCacheGetAttr(COLLOID, tp, Anum_pg_collation_collversion,
-								&isnull);
-		if (!isnull)
-		{
-			char	   *actual_versionstr;
-			char	   *collversionstr;
-
-			collversionstr = TextDatumGetCString(datum);
-
-			if (collform->collprovider == COLLPROVIDER_LIBC)
-				datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_collcollate);
-			else
-				datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_colllocale);
-
-			actual_versionstr = get_collation_actual_version(collform->collprovider,
-															 TextDatumGetCString(datum));
-			if (!actual_versionstr)
-			{
-				/*
-				 * This could happen when specifying a version in CREATE
-				 * COLLATION but the provider does not support versioning, or
-				 * manually creating a mess in the catalogs.
-				 */
-				ereport(ERROR,
-						(errmsg("collation \"%s\" has no actual version, but a version was recorded",
-								NameStr(collform->collname))));
-			}
-
-			if (strcmp(actual_versionstr, collversionstr) != 0)
-				ereport(WARNING,
-						(errmsg("collation \"%s\" has version mismatch",
-								NameStr(collform->collname)),
-						 errdetail("The collation in the database was created using version %s, "
-								   "but the operating system provides version %s.",
-								   collversionstr, actual_versionstr),
-						 errhint("Rebuild all objects affected by this collation and run "
-								 "ALTER COLLATION %s REFRESH VERSION, "
-								 "or build PostgreSQL with the right library version.",
-								 quote_qualified_identifier(get_namespace_name(collform->collnamespace),
-															NameStr(collform->collname)))));
-		}
-
-		ReleaseSysCache(tp);
-
-		/* We'll keep the pg_locale_t structures in TopMemoryContext */
-		resultp = MemoryContextAlloc(TopMemoryContext, sizeof(*resultp));
-		*resultp = result;
-
-		cache_entry->locale = resultp;
-	}
+		cache_entry->locale = create_pg_locale(collid);
 
 	last_collation_cache_oid = collid;
 	last_collation_cache_locale = cache_entry->locale;

@@ -1495,7 +1495,7 @@ init_database_collation(void)
  * allocating memory.
  */
 static pg_locale_t
-create_pg_locale(Oid collid)
+create_pg_locale(MemoryContext context, Oid collid)
 {
 	/* We haven't computed this yet in this session, so do it */
 	HeapTuple	tp;
@@ -1561,15 +1561,15 @@ create_pg_locale(Oid collid)
 
 		builtin_validate_locale(GetDatabaseEncoding(), locstr);
 
-		result = MemoryContextAllocZero(TopMemoryContext,
+		result = MemoryContextAllocZero(context,
 										sizeof(struct pg_locale_struct));
 
 		result->provider = collform->collprovider;
 		result->deterministic = collform->collisdeterministic;
 		result->collate_is_c = true;
 		result->ctype_is_c = (strcmp(locstr, "C") == 0);
-		result->info.builtin.locale = MemoryContextStrdup(TopMemoryContext,
-														 locstr);
+		result->info.builtin.locale = MemoryContextStrdup(context,
+														  locstr);
 	}
 	else if (collform->collprovider == COLLPROVIDER_LIBC)
 	{
@@ -1584,7 +1584,7 @@ create_pg_locale(Oid collid)
 
 		locale = make_libc_collator(collcollate, collctype);
 
-		result = MemoryContextAllocZero(TopMemoryContext,
+		result = MemoryContextAllocZero(context,
 										sizeof(struct pg_locale_struct));
 
 		result->provider = collform->collprovider;
@@ -1612,14 +1612,14 @@ create_pg_locale(Oid collid)
 
 		collator = make_icu_collator(iculocstr, icurules);
 
-		result = MemoryContextAllocZero(TopMemoryContext,
+		result = MemoryContextAllocZero(context,
 										sizeof(struct pg_locale_struct));
 
 		result->provider = collform->collprovider;
 		result->deterministic = collform->collisdeterministic;
 		result->collate_is_c = false;
 		result->ctype_is_c = false;
-		result->info.icu.locale = MemoryContextStrdup(TopMemoryContext, iculocstr);
+		result->info.icu.locale = MemoryContextStrdup(context, iculocstr);
 		result->info.icu.ucol = collator;
 	}
 
@@ -1675,7 +1675,7 @@ pg_newlocale_from_collation(Oid collid)
 	}
 
 	if (cache_entry->locale == 0)
-		cache_entry->locale = create_pg_locale(collid);
+		cache_entry->locale = create_pg_locale(CollationCacheContext, collid);
 
 	last_collation_cache_oid = collid;
 	last_collation_cache_locale = cache_entry->locale;

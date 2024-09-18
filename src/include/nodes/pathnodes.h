@@ -116,6 +116,12 @@ typedef struct PlannerGlobal
 	/* "flat" rangetable for executor */
 	List	   *finalrtable;
 
+	/*
+	 * RT indexes of relations subject to removal from the plan due to runtime
+	 * pruning at plan initialization time
+	 */
+	Bitmapset  *prunableRelids;
+
 	/* "flat" list of RTEPermissionInfos */
 	List	   *finalrteperminfos;
 

@@ -1257,8 +1257,15 @@ ExecParallelGetQueryDesc(shm_toc *toc, DestReceiver *receiver,
 	paramspace = shm_toc_lookup(toc, PARALLEL_KEY_PARAMLISTINFO, false);
 	paramLI = RestoreParamList(&paramspace);
 
-	/* Create a QueryDesc for the query. */
+	/*
+	 * Create a QueryDesc for the query.  We pass NULL for cachedplan, because
+	 * we don't have a pointer to the CachedPlan in the leader's process. It's
+	 * fine because the only reason the executor needs to see it is to decide
+	 * if it should take locks on certain relations, but paraller workers
+	 * always take locks anyway.
+	 */
 	return CreateQueryDesc(pstmt,
+						   NULL,
 						   queryString,
 						   GetActiveSnapshot(), InvalidSnapshot,
 						   receiver, paramLI, NULL, instrument_options);

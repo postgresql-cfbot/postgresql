@@ -42,6 +42,10 @@ extern void ExecCleanupTupleRouting(ModifyTableState *mtstate,
  * PartitionedRelPruneInfo (see plannodes.h); though note that here,
  * subpart_map contains indexes into PartitionPruningData.partrelprunedata[].
  *
+ * estate						The EState for the query doing runtime pruning
+ * partrel						Partitioned table Relation; points to
+ *								estate->es_relations[rti-1] where rti is
+ *								the table's RT index.
  * nparts						Length of subplan_map[] and subpart_map[].
  * subplan_map					Subplan index by partition index, or -1.
  * subpart_map					Subpart index by partition index, or -1.
@@ -51,6 +55,7 @@ extern void ExecCleanupTupleRouting(ModifyTableState *mtstate,
  *								perform executor startup pruning.
  * exec_pruning_steps			List of PartitionPruneSteps used to
  *								perform per-scan pruning.
+ * econtext						ExprContext to use for initial pruning steps
  * initial_context				If initial_pruning_steps isn't NIL, contains
  *								the details needed to execute those steps.
  * exec_context					If exec_pruning_steps isn't NIL, contains
@@ -58,12 +63,15 @@ extern void ExecCleanupTupleRouting(ModifyTableState *mtstate,
  */
 typedef struct PartitionedRelPruningData
 {
+	EState	   *estate;
+	Relation	partrel;
 	int			nparts;
 	int		   *subplan_map;
 	int		   *subpart_map;
 	Bitmapset  *present_parts;
 	List	   *initial_pruning_steps;
 	List	   *exec_pruning_steps;
+	ExprContext *econtext;
 	PartitionPruneContext initial_context;
 	PartitionPruneContext exec_context;
 } PartitionedRelPruningData;
@@ -105,6 +113,8 @@ typedef struct PartitionPruningData
  *						startup (at any hierarchy level).
  * do_exec_prune		true if pruning should be performed during
  *						executor run (at any hierarchy level).
+ * parent_plan			Parent plan node's PlanState used to initialize exec
+ *						pruning contexts
  * num_partprunedata	Number of items in "partprunedata" array.
  * partprunedata		Array of PartitionPruningData pointers for the plan's
  *						partitioned relation(s), one for each partitioning
@@ -117,6 +127,7 @@ typedef struct PartitionPruneState
 	MemoryContext prune_context;
 	bool		do_initial_prune;
 	bool		do_exec_prune;
+	PlanState  *parent_plan;
 	int			num_partprunedata;
 	PartitionPruningData *partprunedata[FLEXIBLE_ARRAY_MEMBER];
 } PartitionPruneState;

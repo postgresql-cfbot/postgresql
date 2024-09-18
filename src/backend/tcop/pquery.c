@@ -36,6 +36,7 @@ Portal		ActivePortal = NULL;
 
 
 static void ProcessQuery(PlannedStmt *plan,
+						 CachedPlan *cplan,
 						 const char *sourceText,
 						 ParamListInfo params,
 						 QueryEnvironment *queryEnv,
@@ -65,6 +66,7 @@ static void DoPortalRewind(Portal portal);
  */
 QueryDesc *
 CreateQueryDesc(PlannedStmt *plannedstmt,
+				CachedPlan *cplan,
 				const char *sourceText,
 				Snapshot snapshot,
 				Snapshot crosscheck_snapshot,
@@ -77,6 +79,7 @@ CreateQueryDesc(PlannedStmt *plannedstmt,
 
 	qd->operation = plannedstmt->commandType;	/* operation */
 	qd->plannedstmt = plannedstmt;	/* plan */
+	qd->cplan = cplan;			/* CachedPlan supplying the plannedstmt */
 	qd->sourceText = sourceText;	/* query text */
 	qd->snapshot = RegisterSnapshot(snapshot);	/* snapshot */
 	/* RI check snapshot */
@@ -122,6 +125,7 @@ FreeQueryDesc(QueryDesc *qdesc)
  *		PORTAL_ONE_RETURNING, or PORTAL_ONE_MOD_WITH portal
  *
  *	plan: the plan tree for the query
+ *	cplan: CachedPlan supplying the plan
  *	sourceText: the source text of the query
  *	params: any parameters needed
  *	dest: where to send results
@@ -134,6 +138,7 @@ FreeQueryDesc(QueryDesc *qdesc)
  */
 static void
 ProcessQuery(PlannedStmt *plan,
+			 CachedPlan *cplan,
 			 const char *sourceText,
 			 ParamListInfo params,
 			 QueryEnvironment *queryEnv,
@@ -145,7 +150,7 @@ ProcessQuery(PlannedStmt *plan,
 	/*
 	 * Create the QueryDesc object
 	 */
-	queryDesc = CreateQueryDesc(plan, sourceText,
+	queryDesc = CreateQueryDesc(plan, cplan, sourceText,
 								GetActiveSnapshot(), InvalidSnapshot,
 								dest, params, queryEnv, 0);
 
@@ -493,6 +498,7 @@ PortalStart(Portal portal, ParamListInfo params,
 				 * the destination to DestNone.
 				 */
 				queryDesc = CreateQueryDesc(linitial_node(PlannedStmt, portal->stmts),
+											portal->cplan,
 											portal->sourceText,
 											GetActiveSnapshot(),
 											InvalidSnapshot,
@@ -1276,6 +1282,7 @@ PortalRunMulti(Portal portal,
 			{
 				/* statement can set tag string */
 				ProcessQuery(pstmt,
+							 portal->cplan,
 							 portal->sourceText,
 							 portal->portalParams,
 							 portal->queryEnv,
@@ -1285,6 +1292,7 @@ PortalRunMulti(Portal portal,
 			{
 				/* stmt added by rewrite cannot set tag */
 				ProcessQuery(pstmt,
+							 portal->cplan,
 							 portal->sourceText,
 							 portal->portalParams,
 							 portal->queryEnv,

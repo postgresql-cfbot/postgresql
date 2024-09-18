@@ -54,6 +54,7 @@
 #include "nodes/queryjumble.h"
 #include "parser/parse_relation.h"
 #include "rewrite/rewriteHandler.h"
+#include "storage/lmgr.h"
 #include "tcop/utility.h"
 #include "utils/acl.h"
 #include "utils/backend_status.h"
@@ -91,6 +92,7 @@ static bool ExecCheckPermissionsModified(Oid relOid, Oid userid,
 										 AclMode requiredPerms);
 static void ExecCheckXactReadOnly(PlannedStmt *plannedstmt);
 static void EvalPlanQualStart(EPQState *epqstate, Plan *planTree);
+static inline bool ExecShouldLockRelations(EState *estate);
 
 /* end of local decls */
 
@@ -601,6 +603,21 @@ ExecCheckPermissions(List *rangeTable, List *rteperminfos,
 				   (rte->rtekind == RTE_SUBQUERY &&
 					rte->relkind == RELKIND_VIEW));
 
+			/*
+			 * Ensure that we have at least an AccessShareLock on relations
+			 * whose permissions need to be checked.
+			 *
+			 * Skip this check in a parallel worker because locks won't be
+			 * taken until ExecInitNode() performs plan initialization.
+			 *
+			 * XXX: ExecCheckPermissions() in a parallel worker may be
+			 * redundant with the checks done in the leader process, so this
+			 * should be reviewed to ensure it’s necessary.
+			 */
+			Assert(IsParallelWorker() ||
+				   CheckRelationOidLockedByMe(rte->relid, AccessShareLock,
+											  true));
+
 			(void) getRTEPermissionInfo(rteperminfos, rte);
 			/* Many-to-one mapping not allowed */
 			Assert(!bms_is_member(rte->perminfoindex, indexset));
@@ -863,10 +880,44 @@ ExecDoInitialPruning(EState *estate)
 		 * result.
 		 */
 		if (prunestate->do_initial_prune)
-			validsubplans = ExecFindMatchingSubPlans(prunestate, true);
+		{
+			Bitmapset *validsubplan_rtis = NULL;
+
+			validsubplans = ExecFindMatchingSubPlans(prunestate, true,
+													 &validsubplan_rtis);
+			if (ExecShouldLockRelations(estate))
+			{
+				int		rtindex = -1;
+
+				rtindex = -1;
+				while ((rtindex = bms_next_member(validsubplan_rtis,
+												  rtindex)) >= 0)
+				{
+					RangeTblEntry *rte = exec_rt_fetch(rtindex, estate);
+
+					Assert(rte->rtekind == RTE_RELATION &&
+						   rte->rellockmode != NoLock);
+					LockRelationOid(rte->relid, rte->rellockmode);
+				}
+			}
+			estate->es_unprunable_relids = bms_add_members(estate->es_unprunable_relids,
+														   validsubplan_rtis);
+		}
+
 		estate->es_part_prune_results = lappend(estate->es_part_prune_results,
 												validsubplans);
 	}
+}
+
+/*
+ * Locks might be needed only if running a cached plan that might contain
+ * unlocked relations, such as reused generic plans.
+ */
+static inline bool
+ExecShouldLockRelations(EState *estate)
+{
+	return estate->es_cachedplan == NULL ? false :
+		CachedPlanRequiresLocking(estate->es_cachedplan);
 }
 
 /* ----------------------------------------------------------------
@@ -881,6 +932,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 {
 	CmdType		operation = queryDesc->operation;
 	PlannedStmt *plannedstmt = queryDesc->plannedstmt;
+	CachedPlan *cachedplan = queryDesc->cplan;
 	Plan	   *plan = plannedstmt->planTree;
 	List	   *rangeTable = plannedstmt->rtable;
 	EState	   *estate = queryDesc->estate;
@@ -900,10 +952,13 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	ExecInitRangeTable(estate, rangeTable, plannedstmt->permInfos);
 
 	estate->es_plannedstmt = plannedstmt;
+	estate->es_cachedplan = cachedplan;
+	estate->es_unprunable_relids = bms_copy(plannedstmt->unprunableRelids);
 
 	/*
 	 * Perform runtime "initial" pruning to determine the plan nodes that will
-	 * not be executed.
+	 * not be executed.  This will also add the RT indexes of surviving leaf
+	 * partitions to es_unprunable_relids.
 	 */
 	estate->es_part_prune_infos = plannedstmt->partPruneInfos;
 	ExecDoInitialPruning(estate);
@@ -922,8 +977,13 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 			Relation	relation;
 			ExecRowMark *erm;
 
-			/* ignore "parent" rowmarks; they are irrelevant at runtime */
-			if (rc->isParent)
+			/*
+			 * Ignore "parent" rowmarks, because they are irrelevant at
+			 * runtime.  Also ignore the rowmarks belonging to child tables
+			 * that have been pruned in ExecDoInitialPruning().
+			 */
+			if (rc->isParent ||
+				!bms_is_member(rc->rti, estate->es_unprunable_relids))
 				continue;
 
 			/* get relation's OID (will produce InvalidOid if subquery) */
@@ -2965,6 +3025,13 @@ EvalPlanQualStart(EPQState *epqstate, Plan *planTree)
 				parentestate->es_param_exec_vals[i].isnull;
 		}
 	}
+
+	/*
+	 * Copy es_unprunable_relids so that RowMarks of pruned relations are
+	 * ignored in ExecInitLockRows() and ExecInitModifyTable() when
+	 * initializing the plan trees below.
+	 */
+	rcestate->es_unprunable_relids = parentestate->es_unprunable_relids;
 
 	/*
 	 * Initialize private state information for each SubPlan.  We must do this

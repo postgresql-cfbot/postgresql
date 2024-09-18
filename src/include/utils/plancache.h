@@ -149,6 +149,7 @@ typedef struct CachedPlan
 	int			magic;			/* should equal CACHEDPLAN_MAGIC */
 	List	   *stmt_list;		/* list of PlannedStmts */
 	bool		is_oneshot;		/* is it a "oneshot" plan? */
+	bool		is_generic;		/* is it a reusable generic plan? */
 	bool		is_saved;		/* is CachedPlan in a long-lived context? */
 	bool		is_valid;		/* is the stmt_list currently valid? */
 	Oid			planRoleId;		/* Role ID the plan was created for */
@@ -234,5 +235,14 @@ extern bool CachedPlanIsSimplyValid(CachedPlanSource *plansource,
 
 extern CachedExpression *GetCachedExpression(Node *expr);
 extern void FreeCachedExpression(CachedExpression *cexpr);
+
+/*
+ * CachedPlanRequiresLocking: should the executor acquire locks?
+ */
+static inline bool
+CachedPlanRequiresLocking(CachedPlan *cplan)
+{
+	return cplan->is_generic;
+}
 
 #endif							/* PLANCACHE_H */

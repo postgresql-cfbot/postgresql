@@ -715,7 +715,8 @@ typedef struct
 /* Hash table entry for RestrictInfo hash table. */
 typedef struct rinfo_tab_entry
 {
-	rinfo_tab_key key;			/* Key must be first. */
+	uint32		status;
+	rinfo_tab_key key;
 	RestrictInfo *rinfo;
 } rinfo_tab_entry;
 
@@ -724,12 +725,9 @@ typedef struct rinfo_tab_entry
  *		Computes hash of RestrictInfo hash table key.
  */
 static uint32
-rinfo_tab_key_hash(const void *key, Size size)
+rinfo_tab_key_hash(const rinfo_tab_key *rtabkey)
 {
-	rinfo_tab_key *rtabkey = (rinfo_tab_key *) key;
 	uint32		result;
-
-	Assert(sizeof(rinfo_tab_key) == size);
 
 	/* Combine hashes of all components of the key. */
 	result = hash_bytes_uint32(rtabkey->rinfo_serial);
@@ -743,13 +741,9 @@ rinfo_tab_key_hash(const void *key, Size size)
  *		Match function for RestrictInfo hash table.
  */
 static int
-rinfo_tab_key_match(const void *key1, const void *key2, Size size)
+rinfo_tab_key_match(const rinfo_tab_key *rtabkey1, const rinfo_tab_key *rtabkey2)
 {
-	rinfo_tab_key *rtabkey1 = (rinfo_tab_key *) key1;
-	rinfo_tab_key *rtabkey2 = (rinfo_tab_key *) key2;
 	int			result;
-
-	Assert(sizeof(rinfo_tab_key) == size);
 
 	result = rtabkey1->rinfo_serial - rtabkey2->rinfo_serial;
 	if (result)
@@ -759,28 +753,28 @@ rinfo_tab_key_match(const void *key1, const void *key2, Size size)
 }
 
 /*
+ * Define parameters for restrictinfo hash table code generation.
+ */
+#define SH_PREFIX rinfohash
+#define SH_ELEMENT_TYPE rinfo_tab_entry
+#define SH_KEY_TYPE rinfo_tab_key
+#define SH_KEY key
+#define SH_HASH_KEY(tb, key) rinfo_tab_key_hash(&key)
+#define SH_EQUAL(tb, a, b) rinfo_tab_key_match(&a, &b) == 0
+#define SH_SCOPE static inline
+#define SH_DECLARE
+#define SH_DEFINE
+#include "lib/simplehash.h"
+/*
  * get_child_rinfo_hash
- *		Returns the child RestrictInfo hash table from PlannerInfo, creating it if
+ *		Returns the RestrictInfo hash table from PlannerInfo, creating it if
  *		necessary.
  */
-static HTAB *
+static rinfohash_hash *
 get_child_rinfo_hash(PlannerInfo *root)
 {
 	if (!root->child_rinfo_hash)
-	{
-		HASHCTL		hash_ctl = {0};
-
-		hash_ctl.keysize = sizeof(rinfo_tab_key);
-		hash_ctl.entrysize = sizeof(rinfo_tab_entry);
-		hash_ctl.hcxt = root->planner_cxt;
-		hash_ctl.hash = rinfo_tab_key_hash;
-		hash_ctl.match = rinfo_tab_key_match;
-
-		root->child_rinfo_hash = hash_create("restrictinfo hash table",
-											 1000,
-											 &hash_ctl,
-											 HASH_ELEM | HASH_CONTEXT | HASH_FUNCTION | HASH_COMPARE);
-	}
+		root->child_rinfo_hash = rinfohash_create(root->planner_cxt, 1000, NULL);
 
 	return root->child_rinfo_hash;
 }
@@ -792,14 +786,14 @@ get_child_rinfo_hash(PlannerInfo *root)
 void
 add_restrictinfo(PlannerInfo *root, RestrictInfo *rinfo)
 {
-	HTAB	   *rinfo_hash = get_child_rinfo_hash(root);
+	rinfohash_hash *rinfo_tab = get_child_rinfo_hash(root);
 	rinfo_tab_key key;
 	rinfo_tab_entry *rinfo_entry;
 	bool		found;
 
 	key.rinfo_serial = rinfo->rinfo_serial;
 	key.required_relids = rinfo->required_relids;
-	rinfo_entry = hash_search(rinfo_hash, &key, HASH_ENTER, &found);
+	rinfo_entry = rinfohash_insert(rinfo_tab, key, &found);
 
 	/*
 	 * If the given RestrictInfo is already present in the hash table,
@@ -823,15 +817,14 @@ add_restrictinfo(PlannerInfo *root, RestrictInfo *rinfo)
 RestrictInfo *
 find_restrictinfo(PlannerInfo *root, int rinfo_serial, Relids required_relids)
 {
-	HTAB	   *rinfo_hash = get_child_rinfo_hash(root);
+	rinfohash_hash *rinfo_tab = get_child_rinfo_hash(root);
 	rinfo_tab_entry *rinfo_entry;
 	rinfo_tab_key key;
 
 	key.rinfo_serial = rinfo_serial;
 	key.required_relids = required_relids;
-	rinfo_entry = hash_search(rinfo_hash, &key,
-							  HASH_FIND,
-							  NULL);
+	rinfo_entry = rinfohash_lookup(rinfo_tab, key);
+
 	return (rinfo_entry ? rinfo_entry->rinfo : NULL);
 }
 

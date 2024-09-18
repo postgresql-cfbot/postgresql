@@ -1547,6 +1547,25 @@ SELECT c0 FROM ONLY expr_stats_incompatible_test WHERE
 
 DROP TABLE expr_stats_incompatible_test;
 
+-- Use the 'GROUP BY x' operator to claim 'x' as a unique column upstream.
+CREATE TABLE gu_1 (x real);
+CREATE TABLE gu_2 (x real);
+CREATE TABLE gu_3 (x numeric);
+INSERT INTO gu_1 (x) VALUES (1);
+INSERT INTO gu_2 (x) SELECT gs FROM generate_series(1,1000) AS gs;
+INSERT INTO gu_3 VALUES ('1.'), ('1.0'), ('1.00'), ('1.000'), ('1.0000');
+VACUUM ANALYZE gu_1,gu_2,gu_3;
+SELECT * FROM check_estimated_rows('
+  SELECT * FROM gu_1 LEFT JOIN (
+    SELECT x FROM gu_2 GROUP BY x) AS q1
+    ON gu_1.x=q1.x;');
+-- Special case when GROUP BY comparison operator differs from the upper one
+SELECT * FROM check_estimated_rows('
+SELECT * FROM gu_1 LEFT JOIN (
+select x::real from (SELECT x::text FROM gu_3) group by x) AS q1
+  ON gu_1.x=q1.x;');
+DROP TABLE gu_1,gu_2,gu_3;
+
 -- Permission tests. Users should not be able to see specific data values in
 -- the extended statistics, if they lack permission to see those values in
 -- the underlying table.

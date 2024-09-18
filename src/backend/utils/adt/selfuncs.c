@@ -321,8 +321,8 @@ var_eq_const(VariableStatData *vardata, Oid oproid, Oid collation,
 	}
 
 	/*
-	 * If we matched the var to a unique index or DISTINCT clause, assume
-	 * there is exactly one match regardless of anything else.  (This is
+	 * If we matched the var to a unique index, DISTINCT or GROUP-BY clause,
+	 * assume there is exactly one match regardless of anything else.  (This is
 	 * slightly bogus, since the index or clause's equality operator might be
 	 * different from ours, but it's much more likely to be right than
 	 * ignoring the information.)
@@ -483,8 +483,8 @@ var_eq_non_const(VariableStatData *vardata, Oid oproid, Oid collation,
 	}
 
 	/*
-	 * If we matched the var to a unique index or DISTINCT clause, assume
-	 * there is exactly one match regardless of anything else.  (This is
+	 * If we matched the var to a unique index, DISTINCT or GROUP-BY clause,
+	 * assume there is exactly one match regardless of anything else.  (This is
 	 * slightly bogus, since the index or clause's equality operator might be
 	 * different from ours, but it's much more likely to be right than
 	 * ignoring the information.)
@@ -5008,9 +5008,9 @@ ReleaseDummy(HeapTuple tuple)
  *	atttype, atttypmod: actual type/typmod of the "var" expression.  This is
  *		commonly the same as the exposed type of the variable argument,
  *		but can be different in binary-compatible-type cases.
- *	isunique: true if we were able to match the var to a unique index or a
- *		single-column DISTINCT clause, implying its values are unique for
- *		this query.  (Caution: this should be trusted for statistical
+ *	isunique: true if we were able to match the var to a unique index, a
+ *		single-column DISTINCT or GROUP-BY clause, implying its values are
+ *		unique for this query.  (Caution: this should be trusted for statistical
  *		purposes only, since we do not check indimmediate nor verify that
  *		the exact same definition of equality applies.)
  *	acl_ok: true if current user has permission to read the column(s)
@@ -5657,7 +5657,7 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 		Assert(IsA(subquery, Query));
 
 		/*
-		 * Punt if subquery uses set operations or GROUP BY, as these will
+		 * Punt if subquery uses set operations or grouping sets, as these will
 		 * mash underlying columns' stats beyond recognition.  (Set ops are
 		 * particularly nasty; if we forged ahead, we would return stats
 		 * relevant to only the leftmost subselect...)	DISTINCT is also
@@ -5665,7 +5665,6 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 		 * of learning something even with it.
 		 */
 		if (subquery->setOperations ||
-			subquery->groupClause ||
 			subquery->groupingSets)
 			return;
 
@@ -5690,6 +5689,16 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 		{
 			if (list_length(subquery->distinctClause) == 1 &&
 				targetIsInSortList(ste, InvalidOid, subquery->distinctClause))
+				vardata->isunique = true;
+			/* cannot go further */
+			return;
+		}
+
+		/* The same idea as with DISTINCT clause works for a GROUP-BY too */
+		if (subquery->groupClause)
+		{
+			if (list_length(subquery->groupClause) == 1 &&
+				targetIsInSortList(ste, InvalidOid, subquery->groupClause))
 				vardata->isunique = true;
 			/* cannot go further */
 			return;
@@ -5846,11 +5855,11 @@ get_variable_numdistinct(VariableStatData *vardata, bool *isdefault)
 	}
 
 	/*
-	 * If there is a unique index or DISTINCT clause for the variable, assume
-	 * it is unique no matter what pg_statistic says; the statistics could be
-	 * out of date, or we might have found a partial unique index that proves
-	 * the var is unique for this query.  However, we'd better still believe
-	 * the null-fraction statistic.
+	 * If there is a unique index, DISTINCT or GROUP-BY clause for the variable,
+	 * assume it is unique no matter what pg_statistic says; the statistics
+	 * could be out of date, or we might have found a partial unique index that
+	 * proves the var is unique for this query.  However, we'd better still
+	 * believe the null-fraction statistic.
 	 */
 	if (vardata->isunique)
 		stadistinct = -1.0 * (1.0 - stanullfrac);

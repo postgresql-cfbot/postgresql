@@ -320,7 +320,7 @@ struct PlannerInfo
 	int			last_rinfo_serial;
 
 	/* Hash table to store and retrieve child RestrictInfos. */
-	struct HTAB *child_rinfo_hash pg_node_attr(read_write_ignore);
+	struct rinfohash_hash *child_rinfo_hash pg_node_attr(read_write_ignore);
 
 	/* list of "canonical" PathKeys */
 	List	   *canon_pathkeys;

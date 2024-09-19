@@ -538,6 +538,88 @@ WHERE pos &lt; 3;
    </para>
 
    <para>
+    Row pattern common syntax can be used to perform row pattern recognition
+    in a query. The row pattern common syntax includes two sub
+    clauses: <literal>DEFINE</literal>
+    and <literal>PATTERN</literal>. <literal>DEFINE</literal> defines
+    definition variables along with an expression. The expression must be a
+    logical expression, which means it must
+    return <literal>TRUE</literal>, <literal>FALSE</literal>
+    or <literal>NULL</literal>. The expression may comprise column references
+    and functions. Window functions, aggregate functions and subqueries are
+    not allowed. An example of <literal>DEFINE</literal> is as follows.
+
+<programlisting>
+DEFINE
+ LOWPRICE AS price &lt;= 100,
+ UP AS price &gt; PREV(price),
+ DOWN AS price &lt; PREV(price)
+</programlisting>
+
+    Note that <function>PREV</function> returns the price column in the
+    previous row if it's called in a context of row pattern recognition. Thus in
+    the second line the definition variable "UP" is <literal>TRUE</literal>
+    when the price column in the current row is greater than the price column
+    in the previous row. Likewise, "DOWN" is <literal>TRUE</literal> when when
+    the price column in the current row is lower than the price column in the
+    previous row.
+   </para>
+   <para>
+    Once <literal>DEFINE</literal> exists, <literal>PATTERN</literal> can be
+    used. <literal>PATTERN</literal> defines a sequence of rows that satisfies
+    certain conditions.  For example following <literal>PATTERN</literal>
+    defines that a row starts with the condition "LOWPRICE", then one or more
+    rows satisfy "UP" and finally one or more rows satisfy "DOWN". Note that
+    "+" means one or more matches. Also you can use "*", which means zero or
+    more matches. If a sequence of rows which satisfies the PATTERN is found,
+    in the starting row of the sequence of rows all window functions and
+    aggregates are shown in the target list. Note that aggregations only look
+    into the matched rows, rather than whole frame. On the second or
+    subsequent rows all window functions are NULL. Aggregates are NULL or 0
+    (count case) depending on its aggregation definition. For rows that do not
+    match on the PATTERN, all window functions and aggregates are shown AS
+    NULL too, except count showing 0. This is because the rows do not match,
+    thus they are in an empty frame. Example of a <literal>SELECT</literal>
+    using the <literal>DEFINE</literal> and <literal>PATTERN</literal> clause
+    is as follows.
+
+<programlisting>
+SELECT company, tdate, price,
+ first_value(price) OVER w,
+ max(price) OVER w,
+ count(price) OVER w
+FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ORDER BY tdate
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ AFTER MATCH SKIP PAST LAST ROW
+ INITIAL
+ PATTERN (LOWPRICE UP+ DOWN+)
+ DEFINE
+  LOWPRICE AS price &lt;= 100,
+  UP AS price &gt; PREV(price),
+  DOWN AS price &lt; PREV(price)
+);
+</programlisting>
+<screen>
+ company  |   tdate    | price | first_value | max | count 
+----------+------------+-------+-------------+-----+-------
+ company1 | 2023-07-01 |   100 |         100 | 200 |     4
+ company1 | 2023-07-02 |   200 |             |     |     0
+ company1 | 2023-07-03 |   150 |             |     |     0
+ company1 | 2023-07-04 |   140 |             |     |     0
+ company1 | 2023-07-05 |   150 |             |     |     0
+ company1 | 2023-07-06 |    90 |          90 | 130 |     4
+ company1 | 2023-07-07 |   110 |             |     |     0
+ company1 | 2023-07-08 |   130 |             |     |     0
+ company1 | 2023-07-09 |   120 |             |     |     0
+ company1 | 2023-07-10 |   130 |             |     |     0
+(10 rows)
+</screen>
+   </para>
+
+   <para>
     When a query involves multiple window functions, it is possible to write
     out each one with a separate <literal>OVER</literal> clause, but this is
     duplicative and error-prone if the same windowing behavior is wanted

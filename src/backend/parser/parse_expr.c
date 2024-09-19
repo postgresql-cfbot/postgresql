@@ -577,6 +577,7 @@ transformColumnRef(ParseState *pstate, ColumnRef *cref)
 		case EXPR_KIND_COPY_WHERE:
 		case EXPR_KIND_GENERATED_COLUMN:
 		case EXPR_KIND_CYCLE_MARK:
+		case EXPR_KIND_RPR_DEFINE:
 			/* okay */
 			break;
 
@@ -1859,6 +1860,9 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 			break;
 		case EXPR_KIND_GENERATED_COLUMN:
 			err = _("cannot use subquery in column generation expression");
+			break;
+		case EXPR_KIND_RPR_DEFINE:
+			err = _("cannot use subquery in DEFINE expression");
 			break;
 
 			/*
@@ -3199,6 +3203,8 @@ ParseExprKindName(ParseExprKind exprKind)
 			return "GENERATED AS";
 		case EXPR_KIND_CYCLE_MARK:
 			return "CYCLE";
+		case EXPR_KIND_RPR_DEFINE:
+			return "DEFINE";
 
 			/*
 			 * There is intentionally no default: case here, so that the

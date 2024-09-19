@@ -20,6 +20,7 @@
 #include "lib/stringinfo.h"
 #include "nodes/bitmapset.h"
 #include "nodes/lockoptions.h"
+#include "nodes/parsenodes.h"
 #include "nodes/primnodes.h"
 
 
@@ -1098,6 +1099,24 @@ typedef struct WindowAgg
 
 	/* nulls sort first for in_range tests? */
 	bool		inRangeNullsFirst;
+
+	/* Row Pattern Recognition AFTER MACH SKIP clause */
+	RPSkipTo	rpSkipTo;		/* Row Pattern Skip To type */
+
+	/* Row Pattern PATTERN variable name (list of String) */
+	List	   *patternVariable;
+
+	/*
+	 * Row Pattern RPATTERN regular expression quantifier ('+' or ''. list of
+	 * String)
+	 */
+	List	   *patternRegexp;
+
+	/* Row Pattern DEFINE clause (list of TargetEntry) */
+	List	   *defineClause;
+
+	/* Row Pattern DEFINE variable initial names (list of String) */
+	List	   *defineInitial;
 
 	/*
 	 * false for all apart from the WindowAgg that's closest to the root of

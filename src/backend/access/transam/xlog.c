@@ -86,9 +86,9 @@
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
+#include "storage/interrupt.h"
 #include "storage/ipc.h"
 #include "storage/large_object.h"
-#include "storage/latch.h"
 #include "storage/predicate.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
@@ -2669,8 +2669,15 @@ XLogSetAsyncXactLSN(XLogRecPtr asyncXactLSN)
 			wakeup = true;
 	}
 
-	if (wakeup && ProcGlobal->walwriterLatch)
-		SetLatch(ProcGlobal->walwriterLatch);
+	if (wakeup)
+	{
+		volatile PROC_HDR *procglobal = ProcGlobal;
+		ProcNumber	walwriterProc;
+
+		walwriterProc = procglobal->walwriterProc;
+		if (walwriterProc != INVALID_PROC_NUMBER)
+			SendInterrupt(INTERRUPT_GENERAL_WAKEUP, ProcGlobal->walwriterProc);
+	}
 }
 
 /*
@@ -6170,7 +6177,7 @@ StartupXLOG(void)
 	 * Wake up all waiters for replay LSN.  They need to report an error that
 	 * recovery was ended before reaching the target LSN.
 	 */
-	WaitLSNSetLatches(InvalidXLogRecPtr);
+	WaitLSNWakeup(InvalidXLogRecPtr);
 
 	/*
 	 * Shutdown the recovery environment.  This must occur after
@@ -7290,7 +7297,7 @@ CreateCheckPoint(int flags)
 	 * until after the above call that flushes the XLOG_CHECKPOINT_ONLINE
 	 * record.
 	 */
-	SetWalSummarizerLatch();
+	WakeupWalSummarizer();
 
 	/*
 	 * Let smgr do post-checkpoint cleanup (eg, deleting old files).
@@ -9339,11 +9346,11 @@ do_pg_backup_stop(BackupState *state, bool waitforarchive)
 				reported_waiting = true;
 			}
 
-			(void) WaitLatch(MyLatch,
-							 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-							 1000L,
-							 WAIT_EVENT_BACKUP_WAIT_WAL_ARCHIVE);
-			ResetLatch(MyLatch);
+			(void) WaitInterrupt(1 << INTERRUPT_GENERAL_WAKEUP,
+								 WL_INTERRUPT | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+								 1000L,
+								 WAIT_EVENT_BACKUP_WAIT_WAL_ARCHIVE);
+			ClearInterrupt(INTERRUPT_GENERAL_WAKEUP);
 
 			if (++waits >= seconds_before_warning)
 			{

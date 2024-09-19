@@ -34,6 +34,7 @@
 #include "replication/slot.h"
 #include "replication/walreceiver.h"
 #include "replication/worker_internal.h"
+#include "storage/interrupt.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
@@ -56,7 +57,7 @@ LogicalRepWorker *MyLogicalRepWorker = NULL;
 typedef struct LogicalRepCtxStruct
 {
 	/* Supervisor process. */
-	pid_t		launcher_pid;
+	ProcNumber	launcher_procno;
 
 	/* Hash table holding last start times of subscriptions' apply workers. */
 	dsa_handle	last_start_dsa;
@@ -221,13 +222,13 @@ WaitForReplicationWorkerAttach(LogicalRepWorker *worker,
 		 * We need timeout because we generally don't get notified via latch
 		 * about the worker attach.  But we don't expect to have to wait long.
 		 */
-		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-					   10L, WAIT_EVENT_BGWORKER_STARTUP);
+		rc = WaitInterrupt(1 << INTERRUPT_GENERAL_WAKEUP,
+						   WL_INTERRUPT | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						   10L, WAIT_EVENT_BGWORKER_STARTUP);
 
-		if (rc & WL_LATCH_SET)
+		if (rc & WL_INTERRUPT)
 		{
-			ResetLatch(MyLatch);
+			ClearInterrupt(INTERRUPT_GENERAL_WAKEUP);
 			CHECK_FOR_INTERRUPTS();
 		}
 	}
@@ -553,13 +554,13 @@ logicalrep_worker_stop_internal(LogicalRepWorker *worker, int signo)
 		LWLockRelease(LogicalRepWorkerLock);
 
 		/* Wait a bit --- we don't expect to have to wait long. */
-		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-					   10L, WAIT_EVENT_BGWORKER_STARTUP);
+		rc = WaitInterrupt(1 << INTERRUPT_GENERAL_WAKEUP,
+						   WL_INTERRUPT | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						   10L, WAIT_EVENT_BGWORKER_STARTUP);
 
-		if (rc & WL_LATCH_SET)
+		if (rc & WL_INTERRUPT)
 		{
-			ResetLatch(MyLatch);
+			ClearInterrupt(INTERRUPT_GENERAL_WAKEUP);
 			CHECK_FOR_INTERRUPTS();
 		}
 
@@ -594,13 +595,13 @@ logicalrep_worker_stop_internal(LogicalRepWorker *worker, int signo)
 		LWLockRelease(LogicalRepWorkerLock);
 
 		/* Wait a bit --- we don't expect to have to wait long. */
-		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-					   10L, WAIT_EVENT_BGWORKER_SHUTDOWN);
+		rc = WaitInterrupt(1 << INTERRUPT_GENERAL_WAKEUP,
+						   WL_INTERRUPT | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						   10L, WAIT_EVENT_BGWORKER_SHUTDOWN);
 
-		if (rc & WL_LATCH_SET)
+		if (rc & WL_INTERRUPT)
 		{
-			ResetLatch(MyLatch);
+			ClearInterrupt(INTERRUPT_GENERAL_WAKEUP);
 			CHECK_FOR_INTERRUPTS();
 		}
 
@@ -703,7 +704,7 @@ logicalrep_worker_wakeup_ptr(LogicalRepWorker *worker)
 {
 	Assert(LWLockHeldByMe(LogicalRepWorkerLock));
 
-	SetLatch(&worker->proc->procLatch);
+	SendInterrupt(INTERRUPT_GENERAL_WAKEUP, GetNumberFromPGProc(worker->proc));
 }
 
 /*
@@ -812,7 +813,7 @@ logicalrep_worker_cleanup(LogicalRepWorker *worker)
 static void
 logicalrep_launcher_onexit(int code, Datum arg)
 {
-	LogicalRepCtx->launcher_pid = 0;
+	LogicalRepCtx->launcher_procno = INVALID_PROC_NUMBER;
 }
 
 /*
@@ -972,6 +973,7 @@ ApplyLauncherShmemInit(void)
 
 		memset(LogicalRepCtx, 0, ApplyLauncherShmemSize());
 
+		LogicalRepCtx->launcher_procno = INVALID_PROC_NUMBER;
 		LogicalRepCtx->last_start_dsa = DSA_HANDLE_INVALID;
 		LogicalRepCtx->last_start_dsh = DSHASH_HANDLE_INVALID;
 
@@ -1117,8 +1119,12 @@ ApplyLauncherWakeupAtCommit(void)
 static void
 ApplyLauncherWakeup(void)
 {
-	if (LogicalRepCtx->launcher_pid != 0)
-		kill(LogicalRepCtx->launcher_pid, SIGUSR1);
+	volatile LogicalRepCtxStruct *repctx = LogicalRepCtx;
+	ProcNumber launcher_procno;
+
+	launcher_procno = repctx->launcher_procno;
+	if (launcher_procno != INVALID_PROC_NUMBER)
+		SendInterrupt(INTERRUPT_SUBSCRIPTION_CHANGE, launcher_procno);
 }
 
 /*
@@ -1132,8 +1138,8 @@ ApplyLauncherMain(Datum main_arg)
 
 	before_shmem_exit(logicalrep_launcher_onexit, (Datum) 0);
 
-	Assert(LogicalRepCtx->launcher_pid == 0);
-	LogicalRepCtx->launcher_pid = MyProcPid;
+	Assert(LogicalRepCtx->launcher_procno == INVALID_PROC_NUMBER);
+	LogicalRepCtx->launcher_procno = MyProcNumber;
 
 	/* Establish signal handlers. */
 	pqsignal(SIGHUP, SignalHandlerForConfigReload);
@@ -1165,6 +1171,7 @@ ApplyLauncherMain(Datum main_arg)
 		oldctx = MemoryContextSwitchTo(subctx);
 
 		/* Start any missing workers for enabled subscriptions. */
+		ClearInterrupt(INTERRUPT_SUBSCRIPTION_CHANGE);
 		sublist = get_subscription_list();
 		foreach(lc, sublist)
 		{
@@ -1221,14 +1228,15 @@ ApplyLauncherMain(Datum main_arg)
 		MemoryContextDelete(subctx);
 
 		/* Wait for more work. */
-		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-					   wait_time,
-					   WAIT_EVENT_LOGICAL_LAUNCHER_MAIN);
+		rc = WaitInterrupt(1 << INTERRUPT_GENERAL_WAKEUP |
+						   1 << INTERRUPT_SUBSCRIPTION_CHANGE,
+						   WL_INTERRUPT | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						   wait_time,
+						   WAIT_EVENT_LOGICAL_LAUNCHER_MAIN);
 
-		if (rc & WL_LATCH_SET)
+		if (rc & WL_INTERRUPT)
 		{
-			ResetLatch(MyLatch);
+			ClearInterrupt(INTERRUPT_GENERAL_WAKEUP);
 			CHECK_FOR_INTERRUPTS();
 		}
 
@@ -1248,7 +1256,7 @@ ApplyLauncherMain(Datum main_arg)
 bool
 IsLogicalLauncher(void)
 {
-	return LogicalRepCtx->launcher_pid == MyProcPid;
+	return LogicalRepCtx->launcher_procno == MyProcNumber;
 }
 
 /*

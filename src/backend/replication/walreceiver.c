@@ -67,6 +67,7 @@
 #include "postmaster/interrupt.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
+#include "storage/interrupt.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
@@ -266,8 +267,8 @@ WalReceiverMain(char *startup_data, size_t startup_data_len)
 	walrcv->lastMsgSendTime =
 		walrcv->lastMsgReceiptTime = walrcv->latestWalEndTime = now;
 
-	/* Report the latch to use to awaken this process */
-	walrcv->latch = &MyProc->procLatch;
+	/* Report our PGPROC entry to use to awaken this process */
+	walrcv->procno = MyProcNumber;
 
 	SpinLockRelease(&walrcv->mutex);
 
@@ -546,15 +547,15 @@ WalReceiverMain(char *startup_data, size_t startup_data_len)
 				 * avoiding some system calls.
 				 */
 				Assert(wait_fd != PGINVALID_SOCKET);
-				rc = WaitLatchOrSocket(MyLatch,
-									   WL_EXIT_ON_PM_DEATH | WL_SOCKET_READABLE |
-									   WL_TIMEOUT | WL_LATCH_SET,
-									   wait_fd,
-									   nap,
-									   WAIT_EVENT_WAL_RECEIVER_MAIN);
-				if (rc & WL_LATCH_SET)
+				rc = WaitInterruptOrSocket(1 << INTERRUPT_GENERAL_WAKEUP,
+										   WL_EXIT_ON_PM_DEATH | WL_SOCKET_READABLE |
+										   WL_TIMEOUT | WL_INTERRUPT,
+										   wait_fd,
+										   nap,
+										   WAIT_EVENT_WAL_RECEIVER_MAIN);
+				if (rc & WL_INTERRUPT)
 				{
-					ResetLatch(MyLatch);
+					ClearInterrupt(INTERRUPT_GENERAL_WAKEUP);
 					ProcessWalRcvInterrupts();
 
 					if (walrcv->force_reply)
@@ -692,7 +693,7 @@ WalRcvWaitForStartPosition(XLogRecPtr *startpoint, TimeLineID *startpointTLI)
 	WakeupRecovery();
 	for (;;)
 	{
-		ResetLatch(MyLatch);
+		ClearInterrupt(INTERRUPT_GENERAL_WAKEUP);
 
 		ProcessWalRcvInterrupts();
 
@@ -724,8 +725,8 @@ WalRcvWaitForStartPosition(XLogRecPtr *startpoint, TimeLineID *startpointTLI)
 		}
 		SpinLockRelease(&walrcv->mutex);
 
-		(void) WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, 0,
-						 WAIT_EVENT_WAL_RECEIVER_WAIT_START);
+		(void) WaitInterrupt(1 << INTERRUPT_GENERAL_WAKEUP, WL_INTERRUPT | WL_EXIT_ON_PM_DEATH, 0,
+							 WAIT_EVENT_WAL_RECEIVER_WAIT_START);
 	}
 
 	if (update_process_title)
@@ -819,8 +820,8 @@ WalRcvDie(int code, Datum arg)
 	Assert(walrcv->pid == MyProcPid);
 	walrcv->walRcvState = WALRCV_STOPPED;
 	walrcv->pid = 0;
+	walrcv->procno = INVALID_PROC_NUMBER;
 	walrcv->ready_to_display = false;
-	walrcv->latch = NULL;
 	SpinLockRelease(&walrcv->mutex);
 
 	ConditionVariableBroadcast(&walrcv->walRcvStoppedCV);
@@ -1358,15 +1359,16 @@ WalRcvComputeNextWakeup(WalRcvWakeupReason reason, TimestampTz now)
 void
 WalRcvForceReply(void)
 {
-	Latch	   *latch;
+	ProcNumber	procno;
 
 	WalRcv->force_reply = true;
-	/* fetching the latch pointer might not be atomic, so use spinlock */
+
+	/* fetching the proc number is probably atomic, but don't rely on it */
 	SpinLockAcquire(&WalRcv->mutex);
-	latch = WalRcv->latch;
+	procno = WalRcv->procno;
 	SpinLockRelease(&WalRcv->mutex);
-	if (latch)
-		SetLatch(latch);
+	if (procno != INVALID_PROC_NUMBER)
+		SendInterrupt(INTERRUPT_GENERAL_WAKEUP, procno);
 }
 
 /*

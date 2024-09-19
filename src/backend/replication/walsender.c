@@ -80,6 +80,7 @@
 #include "replication/walsender_private.h"
 #include "storage/condition_variable.h"
 #include "storage/fd.h"
+#include "storage/interrupt.h"
 #include "storage/ipc.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
@@ -1042,7 +1043,7 @@ StartReplication(StartReplicationCmd *cmd)
  * walsender process.
  *
  * Inside the walsender we can do better than read_local_xlog_page,
- * which has to do a plain sleep/busy loop, because the walsender's latch gets
+ * which has to do a plain sleep/busy loop, because the walsender's interrupt gets
  * set every time WAL is flushed.
  */
 static int
@@ -1639,7 +1640,7 @@ ProcessPendingWrites(void)
 				   WAIT_EVENT_WAL_SENDER_WRITE_DATA);
 
 		/* Clear any already-pending wakeups */
-		ResetLatch(MyLatch);
+		ClearInterrupt(INTERRUPT_GENERAL_WAKEUP);
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -1657,7 +1658,7 @@ ProcessPendingWrites(void)
 	}
 
 	/* reactivate latch so WalSndLoop knows to continue */
-	SetLatch(MyLatch);
+	RaiseInterrupt(INTERRUPT_GENERAL_WAKEUP);
 }
 
 /*
@@ -1845,7 +1846,7 @@ WalSndWaitForWal(XLogRecPtr loc)
 		long		sleeptime;
 
 		/* Clear any already-pending wakeups */
-		ResetLatch(MyLatch);
+		ClearInterrupt(INTERRUPT_GENERAL_WAKEUP);
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -1966,7 +1967,7 @@ WalSndWaitForWal(XLogRecPtr loc)
 	}
 
 	/* reactivate latch so WalSndLoop knows to continue */
-	SetLatch(MyLatch);
+	RaiseInterrupt(INTERRUPT_GENERAL_WAKEUP);
 	return RecentFlushPtr;
 }
 
@@ -2783,7 +2784,7 @@ WalSndLoop(WalSndSendDataCallback send_data)
 	for (;;)
 	{
 		/* Clear any already-pending wakeups */
-		ResetLatch(MyLatch);
+		ClearInterrupt(INTERRUPT_GENERAL_WAKEUP);
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -2935,7 +2936,6 @@ InitWalSenderSlot(void)
 			walsnd->flushLag = -1;
 			walsnd->applyLag = -1;
 			walsnd->sync_standby_priority = 0;
-			walsnd->latch = &MyProc->procLatch;
 			walsnd->replyTime = 0;
 
 			/*
@@ -2979,8 +2979,6 @@ WalSndKill(int code, Datum arg)
 	MyWalSnd = NULL;
 
 	SpinLockAcquire(&walsnd->mutex);
-	/* clear latch while holding the spinlock, so it can safely be read */
-	walsnd->latch = NULL;
 	/* Mark WalSnd struct as no longer being in use. */
 	walsnd->pid = 0;
 	SpinLockRelease(&walsnd->mutex);
@@ -3585,7 +3583,7 @@ static void
 WalSndLastCycleHandler(SIGNAL_ARGS)
 {
 	got_SIGUSR2 = true;
-	SetLatch(MyLatch);
+	RaiseInterrupt(INTERRUPT_GENERAL_WAKEUP);
 }
 
 /* Set up signal handlers */
@@ -3691,7 +3689,7 @@ WalSndWait(uint32 socket_events, long timeout, uint32 wait_event)
 {
 	WaitEvent	event;
 
-	ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetSocketPos, socket_events, NULL);
+	ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetSocketPos, socket_events, 0);
 
 	/*
 	 * We use a condition variable to efficiently wake up walsenders in
@@ -3703,8 +3701,8 @@ WalSndWait(uint32 socket_events, long timeout, uint32 wait_event)
 	 * ConditionVariableSleep()). It still uses WaitEventSetWait() for
 	 * waiting, because we also need to wait for socket events. The processes
 	 * (startup process, walreceiver etc.) wanting to wake up walsenders use
-	 * ConditionVariableBroadcast(), which in turn calls SetLatch(), helping
-	 * walsenders come out of WaitEventSetWait().
+	 * ConditionVariableBroadcast(), which in turn calls SendInterrupt(),
+	 * helping walsenders come out of WaitEventSetWait().
 	 *
 	 * This approach is simple and efficient because, one doesn't have to loop
 	 * through all the walsenders slots, with a spinlock acquisition and

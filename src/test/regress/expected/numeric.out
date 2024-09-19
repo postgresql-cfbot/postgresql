@@ -2297,6 +2297,47 @@ SELECT to_number('42nd', '99th');
         42
 (1 row)
 
+-- Test for correct conversion between numbers and Roman numerals
+WITH rows AS
+  (SELECT i, to_char(i, 'FMRN') AS roman FROM generate_series(1, 3999) AS i)
+SELECT
+  bool_and(to_number(roman, 'RN') = i) as valid
+FROM rows;
+ valid 
+-------
+ t
+(1 row)
+
+SELECT to_number('CvIiI', 'rn');
+ to_number 
+-----------
+       108
+(1 row)
+
+SELECT to_number('viv', 'RN');
+ERROR:  invalid roman numeral
+SELECT to_number('DCCCD', 'RN');
+ERROR:  invalid roman numeral
+SELECT to_number('XIXL', 'RN');
+ERROR:  invalid roman numeral
+SELECT to_number('MCCM', 'RN');
+ERROR:  invalid roman numeral
+SELECT to_number('MMMM', 'RN');
+ERROR:  invalid roman numeral
+SELECT to_number('CM', 'MIRN');
+ERROR:  "RN" is incompatible with other formats
+SELECT to_number('CM', 'RNRN');
+ERROR:  cannot use "RN" twice
+SELECT to_number('  XIV  ', 'RN');
+ERROR:  invalid roman numeral
+SELECT to_number('MMXX  ', 'RN');
+ERROR:  invalid roman numeral
+SELECT to_number('M CC', 'RN');
+ERROR:  invalid roman numeral
+SELECT to_number('', 'RN');
+ERROR:  invalid roman numeral
+SELECT to_number(' ', 'RN');
+ERROR:  invalid roman numeral
 RESET lc_numeric;
 --
 -- Input syntax

@@ -49,7 +49,6 @@
  *	- better number building (formatting) / parsing, now it isn't
  *		  ideal code
  *	- use Assert()
- *	- add support for roman number to standard number conversion
  *	- add support for number spelling
  *	- add support for string to string formatting (we must be better
  *	  than Oracle :-),
@@ -269,6 +268,31 @@ static const char *const rm100[] = {"C", "CC", "CCC", "CD", "D", "DC", "DCC", "D
  */
 static const char *const numTH[] = {"ST", "ND", "RD", "TH", NULL};
 static const char *const numth[] = {"st", "nd", "rd", "th", NULL};
+
+/* ----------
+ * MACRO: Check if the current and next characters
+ * form a valid subtraction combination for roman numerals
+ * ----------
+ */
+#define IS_VALID_SUB_COMB(curr, next) \
+	(((curr) == 'I' && ((next) == 'V' || (next) == 'X')) || \
+	 ((curr) == 'X' && ((next) == 'L' || (next) == 'C')) || \
+	 ((curr) == 'C' && ((next) == 'D' || (next) == 'M')))
+
+/* ----------
+ * MACRO: Roman number value
+ * ----------
+ */
+#define ROMAN_VAL(r) \
+	((r) == 'I' ? 1 : \
+	(r) == 'V' ? 5 : \
+	(r) == 'X' ? 10 : \
+	(r) == 'L' ? 50 : \
+	(r) == 'C' ? 100 : \
+	(r) == 'D' ? 500 : \
+	(r) == 'M' ? 1000 : 0)
+
+#define MAX_ROMAN_LEN	15
 
 /* ----------
  * Flags & Options:
@@ -1074,6 +1098,7 @@ static bool do_to_timestamp(text *date_txt, text *fmt, Oid collid, bool std,
 static char *fill_str(char *str, int c, int max);
 static FormatNode *NUM_cache(int len, NUMDesc *Num, text *pars_str, bool *shouldFree);
 static char *int_to_roman(int number);
+static int roman_to_int(char* s, int len);
 static void NUM_prepare_locale(NUMProc *Np);
 static char *get_last_relevant_decnum(char *num);
 static void NUM_numpart_from_char(NUMProc *Np, int id, int input_len);
@@ -1284,6 +1309,15 @@ NUMDesc_prepare(NUMDesc *num, FormatNode *n)
 
 		case NUM_rn:
 		case NUM_RN:
+			if (IS_ROMAN(num))
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("cannot use \"RN\" twice")));
+			if (IS_BLANK(num) || IS_LSIGN(num) || IS_BRACKET(num) ||
+				IS_MINUS(num) || IS_PLUS(num) || IS_MULTI(num))
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("\"RN\" is incompatible with other formats")));
 			num->flag |= NUM_F_ROMAN;
 			break;
 
@@ -5232,7 +5266,107 @@ int_to_roman(int number)
 	return result;
 }
 
+/* Convert a standard roman numeral to an integer.
+ * Result is an integer between 1 and 3999.
+ *
+ * If input is invalid, return -1.
+ */
+static int
+roman_to_int(char* s, int len)
+{
+	int repeatCount = 1;
+	int vCount = 0, lCount = 0, dCount = 0;
+	bool subtractionEncountered = false;
+	char lastSubtractedChar = 0;
+	int total = 0;
 
+	/* Ensure the input is not too long or empty.
+	 * 'MMMDCCCLXXXVIII' (3888) is the longest valid roman numeral (15 chars).
+	 */
+	if (len == 0 || len > MAX_ROMAN_LEN)
+		return -1;
+
+	for (int i = 0; i < len; ++i)
+	{
+		char currChar = pg_ascii_toupper(s[i]);
+		int currValue = ROMAN_VAL(currChar);
+
+		if (currValue == 0)
+			return -1;
+
+		/* Ensure no character greater than or equal to the subtracted
+		 * character appears after the subtraction.
+		 */
+		if (subtractionEncountered && (currValue >= ROMAN_VAL(lastSubtractedChar)))
+			return -1;
+
+		/* Check for invalid repetitions of characters V, L, or D. */
+		if (currChar == 'V') vCount++;
+		if (currChar == 'L') lCount++;
+		if (currChar == 'D') dCount++;
+		if (vCount > 1 || lCount > 1 || dCount > 1)
+			return -1;
+
+		if (i < len - 1)
+		{
+			char nextChar = pg_ascii_toupper(s[i + 1]);
+			int nextValue = ROMAN_VAL(nextChar);
+
+			if (nextValue == 0)
+				return -1;
+
+			/* If the current value is less than the next value,
+			 * handle subtraction. Verify valid subtractive
+			 * combinations and update the total accordingly.
+			 */
+			if (currValue < nextValue)
+			{
+				/* Check for invalid repetitions of characters V, L, or D. */
+				if (nextChar == 'V') vCount++;
+				if (nextChar == 'L') lCount++;
+				if (nextChar == 'D') dCount++;
+				if (vCount > 1 || lCount > 1 || dCount > 1)
+					return -1;
+
+				/* For cases where the same character is repeated
+				 * with subtraction (e.g. 'MCCM' or 'DCCCD').
+				 */
+				if (repeatCount > 1)
+					return -1;
+
+				if (!IS_VALID_SUB_COMB(currChar, nextChar))
+					return -1;
+
+				/* Skip the next character as it is part of
+				 * the subtractive combination.
+				 */
+				i++;
+				repeatCount = 1;
+				subtractionEncountered = true;
+				lastSubtractedChar = currChar;
+				total += (nextValue - currValue);
+			}
+			else
+			{
+				/* For same characters, check for repetition. */
+				if (currChar == nextChar)
+				{
+					repeatCount++;
+					if (repeatCount > 3)
+						return -1;
+				}
+				else
+					repeatCount = 1;
+				total += currValue;
+			}
+		}
+		/* Add the value of the last character. */
+		else
+			total += currValue;
+	}
+
+	return total;
+}
 
 /* ----------
  * Locale
@@ -5814,9 +5948,21 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 	if (IS_ROMAN(Np->Num))
 	{
 		if (!Np->is_to_char)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("\"RN\" not supported for input")));
+		{
+			int			roman_result;
+
+			roman_result = roman_to_int(inout, input_len);
+			if (roman_result == -1)
+				ereport(ERROR,
+					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+					 errmsg("invalid roman numeral")));
+			else
+			{
+				Np->Num->pre = sprintf(number, "%d", roman_result);
+				Np->Num->post = 0;
+				return number;
+			}
+		}
 
 		Np->Num->lsign = Np->Num->pre_lsign_num = Np->Num->post =
 			Np->Num->pre = Np->out_pre_spaces = Np->sign = 0;

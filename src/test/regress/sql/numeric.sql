@@ -1070,6 +1070,27 @@ SELECT to_number('$1,234.56','L99,999.99');
 SELECT to_number('1234.56','L99,999.99');
 SELECT to_number('1,234.56','L99,999.99');
 SELECT to_number('42nd', '99th');
+
+-- Test for correct conversion between numbers and Roman numerals
+WITH rows AS
+  (SELECT i, to_char(i, 'FMRN') AS roman FROM generate_series(1, 3999) AS i)
+SELECT
+  bool_and(to_number(roman, 'RN') = i) as valid
+FROM rows;
+
+SELECT to_number('CvIiI', 'rn');
+SELECT to_number('viv', 'RN');
+SELECT to_number('DCCCD', 'RN');
+SELECT to_number('XIXL', 'RN');
+SELECT to_number('MCCM', 'RN');
+SELECT to_number('MMMM', 'RN');
+SELECT to_number('CM', 'MIRN');
+SELECT to_number('CM', 'RNRN');
+SELECT to_number('  XIV  ', 'RN');
+SELECT to_number('MMXX  ', 'RN');
+SELECT to_number('M CC', 'RN');
+SELECT to_number('', 'RN');
+SELECT to_number(' ', 'RN');
 RESET lc_numeric;
 
 --

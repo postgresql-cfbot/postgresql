@@ -63,6 +63,7 @@
 #include "utils/builtins.h"
 #include "utils/formatting.h"
 #include "utils/guc_hooks.h"
+#include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
@@ -1695,6 +1696,34 @@ create_pg_locale(MemoryContext context, ResourceOwner owner, Oid collid)
 	return result;
 }
 
+static void
+CollationCacheInvalidate(Datum arg, int cacheid, uint32 hashvalue)
+{
+	last_collation_cache_oid = InvalidOid;
+
+	if (CollationCache == NULL)
+		return;
+
+	ResourceOwnerRelease(CollationCacheOwner,
+						 RESOURCE_RELEASE_BEFORE_LOCKS,
+						 false, true);
+	ResourceOwnerRelease(CollationCacheOwner,
+						 RESOURCE_RELEASE_LOCKS,
+						 false, true);
+	ResourceOwnerRelease(CollationCacheOwner,
+						 RESOURCE_RELEASE_AFTER_LOCKS,
+						 false, true);
+	ResourceOwnerDelete(CollationCacheOwner);
+	CollationCacheOwner = ResourceOwnerCreate(NULL, "collation cache");
+
+	MemoryContextReset(CollationCacheContext);
+
+	/* free all memory and reset hash table */
+	CollationCache = collation_cache_create(CollationCacheContext,
+											16, NULL);
+}
+
+
 /*
  * Create or retrieve a pg_locale_t for the given collation OID.  Results are
  * cached for the lifetime of the backend.
@@ -1714,14 +1743,7 @@ pg_newlocale_from_collation(Oid collid)
 	if (last_collation_cache_oid == collid)
 		return last_collation_cache_locale;
 
-	/*
-	 * Cache mechanism for collation information.
-	 *
-	 * Note that we currently lack any way to flush the cache.  Since we don't
-	 * support ALTER COLLATION, this is OK.  The worst case is that someone
-	 * drops a collation, and a useless cache entry hangs around in existing
-	 * backends.
-	 */
+	/* cache mechanism for collation information */
 	if (CollationCache == NULL)
 	{
 		CollationCacheOwner = ResourceOwnerCreate(NULL, "collation cache");
@@ -1730,6 +1752,9 @@ pg_newlocale_from_collation(Oid collid)
 													  ALLOCSET_DEFAULT_SIZES);
 		CollationCache = collation_cache_create(CollationCacheContext,
 												16, NULL);
+		CacheRegisterSyscacheCallback(COLLOID,
+									  CollationCacheInvalidate,
+									  (Datum) 0);
 	}
 
 	cache_entry = collation_cache_insert(CollationCache, collid, &found);

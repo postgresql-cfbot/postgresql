@@ -435,6 +435,10 @@ static void get_rule_groupingset(GroupingSet *gset, List *targetlist,
 								 bool omit_parens, deparse_context *context);
 static void get_rule_orderby(List *orderList, List *targetList,
 							 bool force_colno, deparse_context *context);
+static void get_rule_pattern(List *patternVariable, List *patternRegexp,
+							 bool force_colno, deparse_context *context);
+static void get_rule_define(List *defineClause, List *patternVariables,
+							bool force_colno, deparse_context *context);
 static void get_rule_windowclause(Query *query, deparse_context *context);
 static void get_rule_windowspec(WindowClause *wc, List *targetList,
 								deparse_context *context);
@@ -6638,6 +6642,67 @@ get_rule_orderby(List *orderList, List *targetList,
 }
 
 /*
+ * Display a PATTERN clause.
+ */
+static void
+get_rule_pattern(List *patternVariable, List *patternRegexp,
+				 bool force_colno, deparse_context *context)
+{
+	StringInfo	buf = context->buf;
+	const char *sep;
+	ListCell   *lc_var,
+			   *lc_reg = list_head(patternRegexp);
+
+	sep = "";
+	appendStringInfoChar(buf, '(');
+	foreach(lc_var, patternVariable)
+	{
+		char	   *variable = strVal((String *) lfirst(lc_var));
+		char	   *regexp = NULL;
+
+		if (lc_reg != NULL)
+		{
+			regexp = strVal((String *) lfirst(lc_reg));
+
+			lc_reg = lnext(patternRegexp, lc_reg);
+		}
+
+		appendStringInfo(buf, "%s%s", sep, variable);
+		if (regexp !=NULL)
+			appendStringInfoString(buf, regexp);
+
+		sep = " ";
+	}
+	appendStringInfoChar(buf, ')');
+}
+
+/*
+ * Display a DEFINE clause.
+ */
+static void
+get_rule_define(List *defineClause, List *patternVariables,
+				bool force_colno, deparse_context *context)
+{
+	StringInfo	buf = context->buf;
+	const char *sep;
+	ListCell   *lc_var,
+			   *lc_def;
+
+	sep = "  ";
+	Assert(list_length(patternVariables) == list_length(defineClause));
+
+	forboth(lc_var, patternVariables, lc_def, defineClause)
+	{
+		char	   *varName = strVal(lfirst(lc_var));
+		TargetEntry *te = (TargetEntry *) lfirst(lc_def);
+
+		appendStringInfo(buf, "%s%s AS ", sep, varName);
+		get_rule_expr((Node *) te->expr, context, false);
+		sep = ",\n  ";
+	}
+}
+
+/*
  * Display a WINDOW clause.
  *
  * Note that the windowClause list might contain only anonymous window
@@ -6774,6 +6839,44 @@ get_rule_windowspec(WindowClause *wc, List *targetList,
 			appendStringInfoString(buf, "EXCLUDE GROUP ");
 		else if (wc->frameOptions & FRAMEOPTION_EXCLUDE_TIES)
 			appendStringInfoString(buf, "EXCLUDE TIES ");
+		/* RPR */
+		if (wc->rpSkipTo == ST_NEXT_ROW)
+			appendStringInfoString(buf,
+								   "\n  AFTER MATCH SKIP TO NEXT ROW ");
+		else if (wc->rpSkipTo == ST_PAST_LAST_ROW)
+			appendStringInfoString(buf,
+								   "\n  AFTER MATCH SKIP PAST LAST ROW ");
+		else if (wc->rpSkipTo == ST_FIRST_VARIABLE)
+			appendStringInfo(buf,
+							 "\n  AFTER MATCH SKIP TO FIRST %s ",
+							 wc->rpSkipVariable);
+		else if (wc->rpSkipTo == ST_LAST_VARIABLE)
+			appendStringInfo(buf,
+							 "\n  AFTER MATCH SKIP TO LAST %s ",
+							 wc->rpSkipVariable);
+		else if (wc->rpSkipTo == ST_VARIABLE)
+			appendStringInfo(buf,
+							 "\n  AFTER MATCH SKIP TO %s ",
+							 wc->rpSkipVariable);
+
+		if (wc->initial)
+			appendStringInfoString(buf, "\n  INITIAL");
+
+		if (wc->patternVariable)
+		{
+			appendStringInfoString(buf, "\n  PATTERN ");
+			get_rule_pattern(wc->patternVariable, wc->patternRegexp,
+							 false, context);
+		}
+
+		if (wc->defineClause)
+		{
+			appendStringInfoString(buf, "\n  DEFINE\n");
+			get_rule_define(wc->defineClause, wc->patternVariable,
+							false, context);
+			appendStringInfoChar(buf, ' ');
+		}
+
 		/* we will now have a trailing space; remove it */
 		buf->len--;
 	}

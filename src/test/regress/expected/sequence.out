@@ -161,6 +161,12 @@ SELECT nextval('serialTest2_f6_seq');
 CREATE SEQUENCE sequence_test;
 CREATE SEQUENCE IF NOT EXISTS sequence_test;
 NOTICE:  relation "sequence_test" already exists, skipping
+SELECT last_value, log_cnt, is_called  FROM  pg_sequence_state('sequence_test');
+ last_value | log_cnt | is_called 
+------------+---------+-----------
+          1 |       0 | f
+(1 row)
+
 SELECT nextval('sequence_test'::text);
  nextval 
 ---------
@@ -231,6 +237,12 @@ SELECT nextval('sequence_test'::text);
  nextval 
 ---------
       99
+(1 row)
+
+SELECT last_value, log_cnt, is_called  FROM  pg_sequence_state('sequence_test');
+ last_value | log_cnt | is_called 
+------------+---------+-----------
+         99 |      32 | t
 (1 row)
 
 DISCARD SEQUENCES;

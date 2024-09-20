@@ -233,6 +233,58 @@ BEGIN;  -- ANALYZE behaves differently inside a transaction block
 ANALYZE vactst, vactst;
 COMMIT;
 
+-- ANALYZE ONLY / VACUUM ONLY on partitioned table
+CREATE TABLE only_parted (a int, b char) PARTITION BY LIST (a);
+CREATE TABLE only_parted1 PARTITION OF only_parted FOR VALUES IN (1);
+INSERT INTO only_parted VALUES (1, 'a');
+
+-- Only partitioned table is analyzed
+ANALYZE ONLY only_parted;
+SELECT relname, last_analyze is not null as analyzed, last_vacuum is not null as vacuumed FROM pg_stat_user_tables
+  WHERE relname like 'only_parted%'
+  ORDER BY relname;
+
+-- Partitioned table and partitions are analyzed
+ANALYZE only_parted;
+SELECT relname, last_analyze is not null as analyzed, last_vacuum is not null as vacuumed FROM pg_stat_user_tables
+  WHERE relname like 'only_parted%'
+  ORDER BY relname;
+
+VACUUM ONLY vacparted; -- gives warning
+ANALYZE ONLY vacparted(a,b); -- combine ONLY with column list
+
+-- ANALYZE ONLY on inherited tables
+CREATE TABLE only_inh_parent (a int primary key, b TEXT);
+CREATE TABLE only_inh_child () INHERITS (only_inh_parent);
+INSERT INTO only_inh_child(a,b) VALUES (1, 'aaa'), (2, 'bbb'), (3, 'ccc');
+
+-- Only parent is ANALYZED
+ANALYZE ONLY only_inh_parent;
+SELECT relname, last_analyze is not null as analyzed, last_vacuum is not null as vacuumed FROM pg_stat_user_tables
+  WHERE relname like 'only_inh%'
+  ORDER BY relname;
+
+-- Parent and child are ANALYZED
+ANALYZE only_inh_parent;
+SELECT relname, last_analyze is not null as analyzed, last_vacuum is not null as vacuumed FROM pg_stat_user_tables
+  WHERE relname like 'only_inh%'
+  ORDER BY relname;
+
+-- Only parent is VACUUMED
+VACUUM ONLY only_inh_parent;
+SELECT relname, last_analyze is not null as analyzed, last_vacuum is not null as vacuumed FROM pg_stat_user_tables
+  WHERE relname like 'only_inh%'
+  ORDER BY relname;
+
+-- Parent and child are VACUUMED
+VACUUM only_inh_parent;
+SELECT relname, last_analyze is not null as analyzed, last_vacuum is not null as vacuumed FROM pg_stat_user_tables
+  WHERE relname like 'only_inh%'
+  ORDER BY relname;
+
+DROP TABLE only_parted CASCADE;
+DROP TABLE only_inh_parent CASCADE;
+
 -- parenthesized syntax for ANALYZE
 ANALYZE (VERBOSE) does_not_exist;
 ANALYZE (nonexistent-arg) does_not_exist;

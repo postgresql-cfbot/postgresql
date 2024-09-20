@@ -273,10 +273,32 @@ eqsel_internal(PG_FUNCTION_ARGS, bool negate)
 	 * in the query.)
 	 */
 	if (IsA(other, Const))
-		selec = var_eq_const(&vardata, operator, collation,
-							 ((Const *) other)->constvalue,
-							 ((Const *) other)->constisnull,
-							 varonleft, negate);
+	{
+		Const * con = (Const *) other;
+
+		if (con->paramid > 0)
+		{
+			bool	skewed_stat = false;
+
+			selec = var_eq_const_ext(&vardata, operator, collation,
+								((Const *) other)->constvalue,
+								((Const *) other)->constisnull,
+								varonleft, negate, &skewed_stat);
+
+			if (skewed_stat)
+			{
+				ParamExternData *prm;
+
+				prm = &root->glob->boundParams->params[con->paramid - 1];
+				prm->pflags |= PARAM_FLAG_SKEWEDSTAT;
+			}
+		}
+		else
+			selec = var_eq_const(&vardata, operator, collation,
+								((Const *) other)->constvalue,
+								((Const *) other)->constisnull,
+								varonleft, negate);
+	}
 	else
 		selec = var_eq_non_const(&vardata, operator, collation, other,
 								 varonleft, negate);
@@ -295,6 +317,16 @@ double
 var_eq_const(VariableStatData *vardata, Oid oproid, Oid collation,
 			 Datum constval, bool constisnull,
 			 bool varonleft, bool negate)
+{
+	return var_eq_const_ext(vardata, oproid, collation,
+			 constval, constisnull,
+			 varonleft, negate, NULL);
+}
+
+double
+var_eq_const_ext(VariableStatData *vardata, Oid oproid, Oid collation,
+			 Datum constval, bool constisnull,
+			 bool varonleft, bool negate, bool *skewed_stat)
 {
 	double		selec;
 	double		nullfrac = 0.0;
@@ -385,6 +417,39 @@ var_eq_const(VariableStatData *vardata, Oid oproid, Oid collation,
 				{
 					match = true;
 					break;
+				}
+			}
+
+			Assert(sslot.nvalues > 0);
+			if (skewed_stat)
+			{
+				/* Check whether the values of the field is skewed according to the MCVs. */
+				if (sslot.nvalues > 1 &&
+						sslot.numbers[0] > sslot.numbers[sslot.nvalues - 1] * skewed_param_factor)
+					/* Compare the maximum and minimum quantities in the MCVs. */
+					*skewed_stat = true;
+				else
+				{
+					/*
+					 * Compare the maximum number in the MCVs with the average number of
+					 * other values(not in the MCVs).
+					 */
+					int			j;
+					double		sumcommon = 0.0;
+					double		otherdistinct, avgselec;
+
+					for (j = 0; j < sslot.nnumbers; j++)
+						sumcommon += sslot.numbers[j];
+
+					otherdistinct = get_variable_numdistinct(vardata, &isdefault) -
+						sslot.nnumbers;
+
+					if (otherdistinct > 0)
+					{
+						avgselec = (1.0 - sumcommon - nullfrac) / otherdistinct;
+						if (sslot.numbers[0] > (avgselec * skewed_param_factor))
+							*skewed_stat = true;
+					}
 				}
 			}
 		}

@@ -2510,6 +2510,8 @@ eval_const_expressions_mutator(Node *node,
 											pval,
 											prm->isnull,
 											typByVal);
+							if (paramLI->paramFetch == NULL)
+								con->paramid = param->paramid;
 							con->location = param->location;
 							return (Node *) con;
 						}

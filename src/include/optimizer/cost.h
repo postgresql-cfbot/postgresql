@@ -28,6 +28,7 @@
 #define DEFAULT_CPU_OPERATOR_COST  0.0025
 #define DEFAULT_PARALLEL_TUPLE_COST 0.1
 #define DEFAULT_PARALLEL_SETUP_COST  1000.0
+#define DEFAULT_SKEWED_PARAM_FACTOR  10.0
 
 /* defaults for non-Cost parameters */
 #define DEFAULT_RECURSIVE_WORKTABLE_FACTOR  10.0
@@ -71,6 +72,7 @@ extern PGDLLIMPORT bool enable_partition_pruning;
 extern PGDLLIMPORT bool enable_presorted_aggregate;
 extern PGDLLIMPORT bool enable_async_append;
 extern PGDLLIMPORT int constraint_exclusion;
+extern PGDLLIMPORT double skewed_param_factor;
 
 extern double index_pages_fetched(double tuples_fetched, BlockNumber pages,
 								  double index_pages, PlannerInfo *root);

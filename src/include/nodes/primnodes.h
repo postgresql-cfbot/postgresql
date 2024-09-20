@@ -329,6 +329,12 @@ typedef struct Const
 	bool		constbyval pg_node_attr(query_jumble_ignore);
 
 	/*
+	 * >0 indicates that the constant is extracted from Param.
+	 * Its value is paramid of the Param struct.
+	 */
+	int			paramid pg_node_attr(query_jumble_ignore);
+
+	/*
 	 * token location, or -1 if unknown.  All constants are tracked as
 	 * locations in query jumbling, to be marked as parameters.
 	 */

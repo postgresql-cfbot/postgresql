@@ -715,10 +715,9 @@ pg_stat_get_backend_subxact(PG_FUNCTION_ARGS)
 	/* Initialise attributes information in the tuple descriptor */
 	tupdesc = CreateTemplateTupleDesc(PG_STAT_GET_SUBXACT_COLS);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "subxact_count",
-					   INT4OID, -1, 0);
+					   INT4OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "subxact_overflow",
-					   BOOLOID, -1, 0);
-
+					   BOOLOID, -1);
 	BlessTupleDesc(tupdesc);
 
 	if ((local_beentry = pgstat_get_local_beentry_by_proc_number(procNumber)) != NULL)
@@ -1490,24 +1489,23 @@ pg_stat_get_wal(PG_FUNCTION_ARGS)
 	/* Initialise attributes information in the tuple descriptor */
 	tupdesc = CreateTemplateTupleDesc(PG_STAT_GET_WAL_COLS);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "wal_records",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "wal_fpi",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "wal_bytes",
-					   NUMERICOID, -1, 0);
+					   NUMERICOID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 4, "wal_buffers_full",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 5, "wal_write",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 6, "wal_sync",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 7, "wal_write_time",
-					   FLOAT8OID, -1, 0);
+					   FLOAT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 8, "wal_sync_time",
-					   FLOAT8OID, -1, 0);
+					   FLOAT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 9, "stats_reset",
-					   TIMESTAMPTZOID, -1, 0);
-
+					   TIMESTAMPTZOID, -1);
 	BlessTupleDesc(tupdesc);
 
 	/* Get statistics about WAL activity */
@@ -1849,20 +1847,19 @@ pg_stat_get_archiver(PG_FUNCTION_ARGS)
 	/* Initialise attributes information in the tuple descriptor */
 	tupdesc = CreateTemplateTupleDesc(7);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "archived_count",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "last_archived_wal",
-					   TEXTOID, -1, 0);
+					   TEXTOID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "last_archived_time",
-					   TIMESTAMPTZOID, -1, 0);
+					   TIMESTAMPTZOID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 4, "failed_count",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 5, "last_failed_wal",
-					   TEXTOID, -1, 0);
+					   TEXTOID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 6, "last_failed_time",
-					   TIMESTAMPTZOID, -1, 0);
+					   TIMESTAMPTZOID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 7, "stats_reset",
-					   TIMESTAMPTZOID, -1, 0);
-
+					   TIMESTAMPTZOID, -1);
 	BlessTupleDesc(tupdesc);
 
 	/* Get statistics about the archiver process */
@@ -1919,25 +1916,25 @@ pg_stat_get_replication_slot(PG_FUNCTION_ARGS)
 	/* Initialise attributes information in the tuple descriptor */
 	tupdesc = CreateTemplateTupleDesc(PG_STAT_GET_REPLICATION_SLOT_COLS);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "slot_name",
-					   TEXTOID, -1, 0);
+					   TEXTOID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "spill_txns",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "spill_count",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 4, "spill_bytes",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 5, "stream_txns",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 6, "stream_count",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 7, "stream_bytes",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 8, "total_txns",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 9, "total_bytes",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 10, "stats_reset",
-					   TIMESTAMPTZOID, -1, 0);
+					   TIMESTAMPTZOID, -1);
 	BlessTupleDesc(tupdesc);
 
 	namestrcpy(&slotname, text_to_cstring(slotname_text));
@@ -1993,25 +1990,25 @@ pg_stat_get_subscription_stats(PG_FUNCTION_ARGS)
 	/* Initialise attributes information in the tuple descriptor */
 	tupdesc = CreateTemplateTupleDesc(PG_STAT_GET_SUBSCRIPTION_STATS_COLS);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "subid",
-					   OIDOID, -1, 0);
+					   OIDOID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "apply_error_count",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "sync_error_count",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 4, "confl_insert_exists",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 5, "confl_update_origin_differs",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 6, "confl_update_exists",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 7, "confl_update_missing",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 8, "confl_delete_origin_differs",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 9, "confl_delete_missing",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 10, "stats_reset",
-					   TIMESTAMPTZOID, -1, 0);
+					   TIMESTAMPTZOID, -1);
 	BlessTupleDesc(tupdesc);
 
 	if (!subentry)

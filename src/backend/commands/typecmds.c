@@ -599,7 +599,6 @@ DefineType(ParseState *pstate, List *names, List *parameters)
 				   alignment,	/* required alignment */
 				   storage,		/* TOAST strategy */
 				   -1,			/* typMod (Domains only) */
-				   0,			/* Array Dimensions of typbasetype */
 				   false,		/* Type NOT NULL */
 				   collation);	/* type's collation */
 	Assert(typoid == address.objectId);
@@ -641,7 +640,6 @@ DefineType(ParseState *pstate, List *names, List *parameters)
 			   alignment,		/* see above */
 			   TYPSTORAGE_EXTENDED, /* ARRAY is always toastable */
 			   -1,				/* typMod (Domains only) */
-			   0,				/* Array dimensions of typbasetype */
 			   false,			/* Type NOT NULL */
 			   collation);		/* type's collation */
 
@@ -719,7 +717,6 @@ DefineDomain(CreateDomainStmt *stmt)
 	bool		saw_default = false;
 	bool		typNotNull = false;
 	bool		nullDefined = false;
-	int32		typNDims = list_length(stmt->typeName->arrayBounds);
 	HeapTuple	typeTup;
 	List	   *schema = stmt->constraints;
 	ListCell   *listptr;
@@ -1050,7 +1047,6 @@ DefineDomain(CreateDomainStmt *stmt)
 				   alignment,	/* required alignment */
 				   storage,		/* TOAST strategy */
 				   basetypeMod, /* typeMod value */
-				   typNDims,	/* Array dimensions for base type */
 				   typNotNull,	/* Type NOT NULL */
 				   domaincoll); /* type's collation */
 
@@ -1091,7 +1087,6 @@ DefineDomain(CreateDomainStmt *stmt)
 			   alignment,		/* see above */
 			   TYPSTORAGE_EXTENDED, /* ARRAY is always toastable */
 			   -1,				/* typMod (Domains only) */
-			   0,				/* Array dimensions of typbasetype */
 			   false,			/* Type NOT NULL */
 			   domaincoll);		/* type's collation */
 
@@ -1213,7 +1208,6 @@ DefineEnum(CreateEnumStmt *stmt)
 				   TYPALIGN_INT,	/* int alignment */
 				   TYPSTORAGE_PLAIN,	/* TOAST strategy always plain */
 				   -1,			/* typMod (Domains only) */
-				   0,			/* Array dimensions of typbasetype */
 				   false,		/* Type NOT NULL */
 				   InvalidOid); /* type's collation */
 
@@ -1254,7 +1248,6 @@ DefineEnum(CreateEnumStmt *stmt)
 			   TYPALIGN_INT,	/* enums have int align, so do their arrays */
 			   TYPSTORAGE_EXTENDED, /* ARRAY is always toastable */
 			   -1,				/* typMod (Domains only) */
-			   0,				/* Array dimensions of typbasetype */
 			   false,			/* Type NOT NULL */
 			   InvalidOid);		/* type's collation */
 
@@ -1555,7 +1548,6 @@ DefineRange(ParseState *pstate, CreateRangeStmt *stmt)
 				   alignment,	/* alignment */
 				   TYPSTORAGE_EXTENDED, /* TOAST strategy (always extended) */
 				   -1,			/* typMod (Domains only) */
-				   0,			/* Array dimensions of typbasetype */
 				   false,		/* Type NOT NULL */
 				   InvalidOid); /* type's collation (ranges never have one) */
 	Assert(typoid == InvalidOid || typoid == address.objectId);
@@ -1622,7 +1614,6 @@ DefineRange(ParseState *pstate, CreateRangeStmt *stmt)
 				   alignment,	/* alignment */
 				   'x',			/* TOAST strategy (always extended) */
 				   -1,			/* typMod (Domains only) */
-				   0,			/* Array dimensions of typbasetype */
 				   false,		/* Type NOT NULL */
 				   InvalidOid); /* type's collation (ranges never have one) */
 	Assert(multirangeOid == mltrngaddress.objectId);
@@ -1665,7 +1656,6 @@ DefineRange(ParseState *pstate, CreateRangeStmt *stmt)
 			   alignment,		/* alignment - same as range's */
 			   TYPSTORAGE_EXTENDED, /* ARRAY is always toastable */
 			   -1,				/* typMod (Domains only) */
-			   0,				/* Array dimensions of typbasetype */
 			   false,			/* Type NOT NULL */
 			   InvalidOid);		/* typcollation */
 
@@ -1704,7 +1694,6 @@ DefineRange(ParseState *pstate, CreateRangeStmt *stmt)
 			   alignment,		/* alignment - same as range's */
 			   'x',				/* ARRAY is always toastable */
 			   -1,				/* typMod (Domains only) */
-			   0,				/* Array dimensions of typbasetype */
 			   false,			/* Type NOT NULL */
 			   InvalidOid);		/* typcollation */
 

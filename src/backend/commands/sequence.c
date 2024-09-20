@@ -45,6 +45,7 @@
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_lsn.h"
 #include "utils/resowner.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
@@ -102,7 +103,8 @@ static Relation lock_and_open_sequence(SeqTable seq);
 static void create_seq_hashtable(void);
 static void init_sequence(Oid relid, SeqTable *p_elm, Relation *p_rel);
 static Form_pg_sequence_data read_seq_tuple(Relation rel,
-											Buffer *buf, HeapTuple seqdatatuple);
+											Buffer *buf, HeapTuple seqdatatuple,
+											XLogRecPtr *lsn_ret);
 static void init_params(ParseState *pstate, List *options, bool for_identity,
 						bool isInit,
 						Form_pg_sequence seqform,
@@ -277,7 +279,7 @@ ResetSequence(Oid seq_relid)
 	 * indeed a sequence.
 	 */
 	init_sequence(seq_relid, &elm, &seq_rel);
-	(void) read_seq_tuple(seq_rel, &buf, &seqdatatuple);
+	(void) read_seq_tuple(seq_rel, &buf, &seqdatatuple, NULL);
 
 	pgstuple = SearchSysCache1(SEQRELID, ObjectIdGetDatum(seq_relid));
 	if (!HeapTupleIsValid(pgstuple))
@@ -476,7 +478,7 @@ AlterSequence(ParseState *pstate, AlterSeqStmt *stmt)
 	seqform = (Form_pg_sequence) GETSTRUCT(seqtuple);
 
 	/* lock page buffer and read tuple into new sequence structure */
-	(void) read_seq_tuple(seqrel, &buf, &datatuple);
+	(void) read_seq_tuple(seqrel, &buf, &datatuple, NULL);
 
 	/* copy the existing sequence data tuple, so it can be modified locally */
 	newdatatuple = heap_copytuple(&datatuple);
@@ -558,7 +560,7 @@ SequenceChangePersistence(Oid relid, char newrelpersistence)
 	if (RelationNeedsWAL(seqrel))
 		GetTopTransactionId();
 
-	(void) read_seq_tuple(seqrel, &buf, &seqdatatuple);
+	(void) read_seq_tuple(seqrel, &buf, &seqdatatuple, NULL);
 	RelationSetNewRelfilenumber(seqrel, newrelpersistence);
 	fill_seq_with_data(seqrel, &seqdatatuple);
 	UnlockReleaseBuffer(buf);
@@ -687,7 +689,7 @@ nextval_internal(Oid relid, bool check_permissions)
 	ReleaseSysCache(pgstuple);
 
 	/* lock page buffer and read tuple */
-	seq = read_seq_tuple(seqrel, &buf, &seqdatatuple);
+	seq = read_seq_tuple(seqrel, &buf, &seqdatatuple, NULL);
 	page = BufferGetPage(buf);
 
 	last = next = result = seq->last_value;
@@ -983,7 +985,7 @@ do_setval(Oid relid, int64 next, bool iscalled)
 	PreventCommandIfParallelMode("setval()");
 
 	/* lock page buffer and read tuple */
-	seq = read_seq_tuple(seqrel, &buf, &seqdatatuple);
+	seq = read_seq_tuple(seqrel, &buf, &seqdatatuple, NULL);
 
 	if ((next < minv) || (next > maxv))
 		ereport(ERROR,
@@ -1183,11 +1185,15 @@ init_sequence(Oid relid, SeqTable *p_elm, Relation *p_rel)
  * *buf receives the reference to the pinned-and-ex-locked buffer
  * *seqdatatuple receives the reference to the sequence tuple proper
  *		(this arg should point to a local variable of type HeapTupleData)
+ * *lsn_ret will be set to the page LSN if the caller requested it.
+ *		This allows the caller to determine which sequence changes are
+ *		before/after the returned sequence state.
  *
  * Function's return value points to the data payload of the tuple
  */
 static Form_pg_sequence_data
-read_seq_tuple(Relation rel, Buffer *buf, HeapTuple seqdatatuple)
+read_seq_tuple(Relation rel, Buffer *buf, HeapTuple seqdatatuple,
+			   XLogRecPtr *lsn_ret)
 {
 	Page		page;
 	ItemId		lp;
@@ -1203,6 +1209,10 @@ read_seq_tuple(Relation rel, Buffer *buf, HeapTuple seqdatatuple)
 	if (sm->magic != SEQ_MAGIC)
 		elog(ERROR, "bad magic number in sequence \"%s\": %08X",
 			 RelationGetRelationName(rel), sm->magic);
+
+	/* If the caller requested it, return the page LSN. */
+	if (lsn_ret)
+		*lsn_ret = PageGetLSN(page);
 
 	lp = PageGetItemId(page, FirstOffsetNumber);
 	Assert(ItemIdIsNormal(lp));
@@ -1817,7 +1827,7 @@ pg_get_sequence_data(PG_FUNCTION_ARGS)
 		HeapTupleData seqtuple;
 		Form_pg_sequence_data seq;
 
-		seq = read_seq_tuple(seqrel, &buf, &seqtuple);
+		seq = read_seq_tuple(seqrel, &buf, &seqtuple, NULL);
 
 		values[0] = Int64GetDatum(seq->last_value);
 		values[1] = BoolGetDatum(seq->is_called);
@@ -1870,7 +1880,7 @@ pg_sequence_last_value(PG_FUNCTION_ARGS)
 		HeapTupleData seqtuple;
 		Form_pg_sequence_data seq;
 
-		seq = read_seq_tuple(seqrel, &buf, &seqtuple);
+		seq = read_seq_tuple(seqrel, &buf, &seqtuple, NULL);
 
 		is_called = seq->is_called;
 		result = seq->last_value;
@@ -1885,6 +1895,72 @@ pg_sequence_last_value(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 }
 
+/*
+ * Return the current on-disk state of the sequence.
+ *
+ * Note: This is roughly equivalent to selecting the data from the sequence,
+ * except that it also returns the page LSN.
+ */
+Datum
+pg_sequence_state(PG_FUNCTION_ARGS)
+{
+	Oid			seq_relid = PG_GETARG_OID(0);
+	SeqTable	elm;
+	Relation	seqrel;
+	Buffer		buf;
+	HeapTupleData seqtuple;
+	Form_pg_sequence_data seq;
+	Datum		result;
+
+	XLogRecPtr	lsn;
+	int64		last_value;
+	int64		log_cnt;
+	bool		is_called;
+
+	TupleDesc	tupdesc;
+	HeapTuple	tuple;
+	Datum		values[4];
+	bool		nulls[4] = {false, false, false, false};
+
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	/* open and lock sequence */
+	init_sequence(seq_relid, &elm, &seqrel);
+
+	if (pg_class_aclcheck(elm->relid, GetUserId(),
+						  ACL_SELECT | ACL_USAGE) != ACLCHECK_OK)
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("permission denied for sequence %s",
+						RelationGetRelationName(seqrel))));
+
+	seq = read_seq_tuple(seqrel, &buf, &seqtuple, &lsn);
+
+	last_value = seq->last_value;
+	log_cnt = seq->log_cnt;
+	is_called = seq->is_called;
+
+	UnlockReleaseBuffer(buf);
+	relation_close(seqrel, NoLock);
+
+	/* Page LSN for the sequence */
+	values[0] = LSNGetDatum(lsn);
+
+	/* The value most recently returned by nextval in the current session */
+	values[1] = Int64GetDatum(last_value);
+
+	/* How many fetches remain before a new WAL record has to be written */
+	values[2] = Int64GetDatum(log_cnt);
+
+	/* Indicates whether the sequence has been used */
+	values[3] = BoolGetDatum(is_called);
+
+	tuple = heap_form_tuple(tupdesc, values, nulls);
+	result = HeapTupleGetDatum(tuple);
+
+	PG_RETURN_DATUM(result);
+}
 
 void
 seq_redo(XLogReaderState *record)

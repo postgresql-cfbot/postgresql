@@ -409,8 +409,7 @@ ExecInitFunctionScan(FunctionScan *node, EState *estate, int eflags)
 								   (AttrNumber) 1,
 								   NULL,	/* don't care about the name here */
 								   funcrettype,
-								   -1,
-								   0);
+								   -1);
 				TupleDescInitEntryCollation(tupdesc,
 											(AttrNumber) 1,
 											exprCollation(funcexpr));
@@ -481,8 +480,7 @@ ExecInitFunctionScan(FunctionScan *node, EState *estate, int eflags)
 							   ++attno,
 							   NULL,	/* don't care about the name here */
 							   INT8OID,
-							   -1,
-							   0);
+							   -1);
 		}
 
 		Assert(attno == natts);

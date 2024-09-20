@@ -190,7 +190,7 @@ gistrescan(IndexScanDesc scan, ScanKey key, int nkeys,
 		{
 			TupleDescInitEntry(so->giststate->fetchTupdesc, attno, NULL,
 							   scan->indexRelation->rd_opcintype[attno - 1],
-							   -1, 0);
+							   -1);
 		}
 
 		for (; attno <= natts; attno++)
@@ -199,7 +199,7 @@ gistrescan(IndexScanDesc scan, ScanKey key, int nkeys,
 			TupleDescInitEntry(so->giststate->fetchTupdesc, attno, NULL,
 							   TupleDescAttr(so->giststate->leafTupdesc,
 											 attno - 1)->atttypid,
-							   -1, 0);
+							   -1);
 		}
 		scan->xs_hitupdesc = so->giststate->fetchTupdesc;
 

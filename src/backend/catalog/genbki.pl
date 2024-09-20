@@ -947,8 +947,6 @@ sub morph_row_for_pgattr
 	$row->{attalign} = $type->{typalign};
 	$row->{attstorage} = $type->{typstorage};
 
-	# set attndims if it's an array type
-	$row->{attndims} = $type->{typcategory} eq 'A' ? '1' : '0';
 
 	# collation-aware catalog columns must use C collation
 	$row->{attcollation} =

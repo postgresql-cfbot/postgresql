@@ -1563,8 +1563,7 @@ expandRecordVariable(ParseState *pstate, Var *var, int levelsup)
 			TupleDescInitEntry(tupleDesc, i,
 							   label,
 							   exprType(varnode),
-							   exprTypmod(varnode),
-							   0);
+							   exprTypmod(varnode));
 			TupleDescInitEntryCollation(tupleDesc, i,
 										exprCollation(varnode));
 			i++;

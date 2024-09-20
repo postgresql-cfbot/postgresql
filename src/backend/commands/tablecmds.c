@@ -1297,7 +1297,6 @@ BuildDescForRelation(const List *columns)
 	Oid			atttypid;
 	int32		atttypmod;
 	Oid			attcollation;
-	int			attdim;
 
 	/*
 	 * allocate a new tuple descriptor
@@ -1328,11 +1327,6 @@ BuildDescForRelation(const List *columns)
 			aclcheck_error_type(aclresult, atttypid);
 
 		attcollation = GetColumnDefCollation(NULL, entry, atttypid);
-		attdim = list_length(entry->typeName->arrayBounds);
-		if (attdim > PG_INT16_MAX)
-			ereport(ERROR,
-					errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-					errmsg("too many array dimensions"));
 
 		if (entry->typeName->setof)
 			ereport(ERROR,
@@ -1341,7 +1335,7 @@ BuildDescForRelation(const List *columns)
 							attname)));
 
 		TupleDescInitEntry(desc, attnum, attname,
-						   atttypid, atttypmod, attdim);
+						   atttypid, atttypmod);
 		att = TupleDescAttr(desc, attnum - 1);
 
 		/* Override TupleDescInitEntry's settings as requested */
@@ -13378,11 +13372,6 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 	attTup->atttypid = targettype;
 	attTup->atttypmod = targettypmod;
 	attTup->attcollation = targetcollid;
-	if (list_length(typeName->arrayBounds) > PG_INT16_MAX)
-		ereport(ERROR,
-				errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-				errmsg("too many array dimensions"));
-	attTup->attndims = list_length(typeName->arrayBounds);
 	attTup->attlen = tform->typlen;
 	attTup->attbyval = tform->typbyval;
 	attTup->attalign = tform->typalign;

@@ -874,7 +874,7 @@ materializeResult(FunctionCallInfo fcinfo, PGconn *conn, PGresult *res)
 			 */
 			tupdesc = CreateTemplateTupleDesc(1);
 			TupleDescInitEntry(tupdesc, (AttrNumber) 1, "status",
-							   TEXTOID, -1, 0);
+							   TEXTOID, -1);
 			ntuples = 1;
 			nfields = 1;
 		}
@@ -1048,7 +1048,7 @@ materializeQueryResult(FunctionCallInfo fcinfo,
 			 */
 			tupdesc = CreateTemplateTupleDesc(1);
 			TupleDescInitEntry(tupdesc, (AttrNumber) 1, "status",
-							   TEXTOID, -1, 0);
+							   TEXTOID, -1);
 			attinmeta = TupleDescGetAttInMetadata(tupdesc);
 
 			oldcontext = MemoryContextSwitchTo(rsinfo->econtext->ecxt_per_query_memory);
@@ -1534,9 +1534,9 @@ dblink_get_pkey(PG_FUNCTION_ARGS)
 		 */
 		tupdesc = CreateTemplateTupleDesc(2);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "position",
-						   INT4OID, -1, 0);
+						   INT4OID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "colname",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 
 		/*
 		 * Generate attribute metadata needed later to produce tuples from raw

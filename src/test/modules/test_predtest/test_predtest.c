@@ -215,21 +215,21 @@ test_predtest(PG_FUNCTION_ARGS)
 
 	tupdesc = CreateTemplateTupleDesc(8);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1,
-					   "strong_implied_by", BOOLOID, -1, 0);
+					   "strong_implied_by", BOOLOID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 2,
-					   "weak_implied_by", BOOLOID, -1, 0);
+					   "weak_implied_by", BOOLOID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 3,
-					   "strong_refuted_by", BOOLOID, -1, 0);
+					   "strong_refuted_by", BOOLOID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 4,
-					   "weak_refuted_by", BOOLOID, -1, 0);
+					   "weak_refuted_by", BOOLOID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 5,
-					   "s_i_holds", BOOLOID, -1, 0);
+					   "s_i_holds", BOOLOID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 6,
-					   "w_i_holds", BOOLOID, -1, 0);
+					   "w_i_holds", BOOLOID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 7,
-					   "s_r_holds", BOOLOID, -1, 0);
+					   "s_r_holds", BOOLOID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 8,
-					   "w_r_holds", BOOLOID, -1, 0);
+					   "w_r_holds", BOOLOID, -1);
 	tupdesc = BlessTupleDesc(tupdesc);
 
 	values[0] = BoolGetDatum(strong_implied_by);

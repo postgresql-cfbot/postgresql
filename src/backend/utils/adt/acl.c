@@ -1794,14 +1794,13 @@ aclexplode(PG_FUNCTION_ARGS)
 		 */
 		tupdesc = CreateTemplateTupleDesc(4);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "grantor",
-						   OIDOID, -1, 0);
+						   OIDOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "grantee",
-						   OIDOID, -1, 0);
+						   OIDOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "privilege_type",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 4, "is_grantable",
-						   BOOLOID, -1, 0);
-
+						   BOOLOID, -1);
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
 
 		/* allocate memory for user context */

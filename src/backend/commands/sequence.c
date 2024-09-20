@@ -1798,9 +1798,9 @@ pg_get_sequence_data(PG_FUNCTION_ARGS)
 
 	resultTupleDesc = CreateTemplateTupleDesc(PG_GET_SEQUENCE_DATA_COLS);
 	TupleDescInitEntry(resultTupleDesc, (AttrNumber) 1, "last_value",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(resultTupleDesc, (AttrNumber) 2, "is_called",
-					   BOOLOID, -1, 0);
+					   BOOLOID, -1);
 	resultTupleDesc = BlessTupleDesc(resultTupleDesc);
 
 	init_sequence(relid, &elm, &seqrel);

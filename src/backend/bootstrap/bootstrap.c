@@ -517,11 +517,6 @@ DefineAttr(char *name, char *type, int attnum, int nullness)
 		attrtypes[attnum]->attstorage = Ap->am_typ.typstorage;
 		attrtypes[attnum]->attcompression = InvalidCompressionMethod;
 		attrtypes[attnum]->attcollation = Ap->am_typ.typcollation;
-		/* if an array type, assume 1-dimensional attribute */
-		if (Ap->am_typ.typelem != InvalidOid && Ap->am_typ.typlen < 0)
-			attrtypes[attnum]->attndims = 1;
-		else
-			attrtypes[attnum]->attndims = 0;
 	}
 	else
 	{
@@ -532,12 +527,6 @@ DefineAttr(char *name, char *type, int attnum, int nullness)
 		attrtypes[attnum]->attstorage = TypInfo[typeoid].storage;
 		attrtypes[attnum]->attcompression = InvalidCompressionMethod;
 		attrtypes[attnum]->attcollation = TypInfo[typeoid].collation;
-		/* if an array type, assume 1-dimensional attribute */
-		if (TypInfo[typeoid].elem != InvalidOid &&
-			attrtypes[attnum]->attlen < 0)
-			attrtypes[attnum]->attndims = 1;
-		else
-			attrtypes[attnum]->attndims = 0;
 	}
 
 	/*

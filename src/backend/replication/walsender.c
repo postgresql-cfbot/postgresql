@@ -421,13 +421,13 @@ IdentifySystem(void)
 	/* need a tuple descriptor representing four columns */
 	tupdesc = CreateTemplateTupleDesc(4);
 	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 1, "systemid",
-							  TEXTOID, -1, 0);
+							  TEXTOID, -1);
 	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 2, "timeline",
-							  INT8OID, -1, 0);
+							  INT8OID, -1);
 	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 3, "xlogpos",
-							  TEXTOID, -1, 0);
+							  TEXTOID, -1);
 	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 4, "dbname",
-							  TEXTOID, -1, 0);
+							  TEXTOID, -1);
 
 	/* prepare for projection of tuples */
 	tstate = begin_tup_output_tupdesc(dest, tupdesc, &TTSOpsVirtual);
@@ -467,12 +467,12 @@ ReadReplicationSlot(ReadReplicationSlotCmd *cmd)
 
 	tupdesc = CreateTemplateTupleDesc(READ_REPLICATION_SLOT_COLS);
 	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 1, "slot_type",
-							  TEXTOID, -1, 0);
+							  TEXTOID, -1);
 	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 2, "restart_lsn",
-							  TEXTOID, -1, 0);
+							  TEXTOID, -1);
 	/* TimeLineID is unsigned, so int4 is not wide enough. */
 	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 3, "restart_tli",
-							  INT8OID, -1, 0);
+							  INT8OID, -1);
 
 	memset(nulls, true, READ_REPLICATION_SLOT_COLS * sizeof(bool));
 
@@ -573,8 +573,8 @@ SendTimeLineHistory(TimeLineHistoryCmd *cmd)
 	 * the name of the history file, 2nd is the contents.
 	 */
 	tupdesc = CreateTemplateTupleDesc(2);
-	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 1, "filename", TEXTOID, -1, 0);
-	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 2, "content", TEXTOID, -1, 0);
+	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 1, "filename", TEXTOID, -1);
+	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 2, "content", TEXTOID, -1);
 
 	TLHistoryFileName(histfname, cmd->timeline);
 	TLHistoryFilePath(path, cmd->timeline);
@@ -989,9 +989,9 @@ StartReplication(StartReplicationCmd *cmd)
 		 */
 		tupdesc = CreateTemplateTupleDesc(2);
 		TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 1, "next_tli",
-								  INT8OID, -1, 0);
+								  INT8OID, -1);
 		TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 2, "next_tli_startpos",
-								  TEXTOID, -1, 0);
+								  TEXTOID, -1);
 
 		/* prepare for projection of tuple */
 		tstate = begin_tup_output_tupdesc(dest, tupdesc, &TTSOpsVirtual);
@@ -1332,13 +1332,13 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 	 */
 	tupdesc = CreateTemplateTupleDesc(4);
 	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 1, "slot_name",
-							  TEXTOID, -1, 0);
+							  TEXTOID, -1);
 	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 2, "consistent_point",
-							  TEXTOID, -1, 0);
+							  TEXTOID, -1);
 	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 3, "snapshot_name",
-							  TEXTOID, -1, 0);
+							  TEXTOID, -1);
 	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 4, "output_plugin",
-							  TEXTOID, -1, 0);
+							  TEXTOID, -1);
 
 	/* prepare for projection of tuples */
 	tstate = begin_tup_output_tupdesc(dest, tupdesc, &TTSOpsVirtual);

@@ -334,8 +334,7 @@ get_expr_result_type(Node *expr,
 			TupleDescInitEntry(tupdesc, i,
 							   colname,
 							   exprType(col),
-							   exprTypmod(col),
-							   0);
+							   exprTypmod(col));
 			TupleDescInitEntryCollation(tupdesc, i,
 										exprCollation(col));
 			i++;
@@ -978,32 +977,28 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 				TupleDescInitEntry(tupdesc, i + 1,
 								   NameStr(att->attname),
 								   poly_actuals.anyelement_type,
-								   -1,
-								   0);
+								   -1);
 				TupleDescInitEntryCollation(tupdesc, i + 1, anycollation);
 				break;
 			case ANYARRAYOID:
 				TupleDescInitEntry(tupdesc, i + 1,
 								   NameStr(att->attname),
 								   poly_actuals.anyarray_type,
-								   -1,
-								   0);
+								   -1);
 				TupleDescInitEntryCollation(tupdesc, i + 1, anycollation);
 				break;
 			case ANYRANGEOID:
 				TupleDescInitEntry(tupdesc, i + 1,
 								   NameStr(att->attname),
 								   poly_actuals.anyrange_type,
-								   -1,
-								   0);
+								   -1);
 				/* no collation should be attached to a range type */
 				break;
 			case ANYMULTIRANGEOID:
 				TupleDescInitEntry(tupdesc, i + 1,
 								   NameStr(att->attname),
 								   poly_actuals.anymultirange_type,
-								   -1,
-								   0);
+								   -1);
 				/* no collation should be attached to a multirange type */
 				break;
 			case ANYCOMPATIBLEOID:
@@ -1011,32 +1006,28 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 				TupleDescInitEntry(tupdesc, i + 1,
 								   NameStr(att->attname),
 								   anyc_actuals.anyelement_type,
-								   -1,
-								   0);
+								   -1);
 				TupleDescInitEntryCollation(tupdesc, i + 1, anycompatcollation);
 				break;
 			case ANYCOMPATIBLEARRAYOID:
 				TupleDescInitEntry(tupdesc, i + 1,
 								   NameStr(att->attname),
 								   anyc_actuals.anyarray_type,
-								   -1,
-								   0);
+								   -1);
 				TupleDescInitEntryCollation(tupdesc, i + 1, anycompatcollation);
 				break;
 			case ANYCOMPATIBLERANGEOID:
 				TupleDescInitEntry(tupdesc, i + 1,
 								   NameStr(att->attname),
 								   anyc_actuals.anyrange_type,
-								   -1,
-								   0);
+								   -1);
 				/* no collation should be attached to a range type */
 				break;
 			case ANYCOMPATIBLEMULTIRANGEOID:
 				TupleDescInitEntry(tupdesc, i + 1,
 								   NameStr(att->attname),
 								   anyc_actuals.anymultirange_type,
-								   -1,
-								   0);
+								   -1);
 				/* no collation should be attached to a multirange type */
 				break;
 			default:
@@ -1849,8 +1840,7 @@ build_function_result_tupdesc_d(char prokind,
 		TupleDescInitEntry(desc, i + 1,
 						   outargnames[i],
 						   outargtypes[i],
-						   -1,
-						   0);
+						   -1);
 	}
 
 	return desc;
@@ -1968,8 +1958,7 @@ TypeGetTupleDesc(Oid typeoid, List *colaliases)
 						   (AttrNumber) 1,
 						   attname,
 						   typeoid,
-						   -1,
-						   0);
+						   -1);
 	}
 	else if (functypclass == TYPEFUNC_RECORD)
 	{

@@ -443,17 +443,17 @@ pg_stat_file(PG_FUNCTION_ARGS)
 	 */
 	tupdesc = CreateTemplateTupleDesc(6);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1,
-					   "size", INT8OID, -1, 0);
+					   "size", INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 2,
-					   "access", TIMESTAMPTZOID, -1, 0);
+					   "access", TIMESTAMPTZOID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 3,
-					   "modification", TIMESTAMPTZOID, -1, 0);
+					   "modification", TIMESTAMPTZOID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 4,
-					   "change", TIMESTAMPTZOID, -1, 0);
+					   "change", TIMESTAMPTZOID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 5,
-					   "creation", TIMESTAMPTZOID, -1, 0);
+					   "creation", TIMESTAMPTZOID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 6,
-					   "isdir", BOOLOID, -1, 0);
+					   "isdir", BOOLOID, -1);
 	BlessTupleDesc(tupdesc);
 
 	memset(isnull, false, sizeof(isnull));

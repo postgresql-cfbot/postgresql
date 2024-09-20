@@ -644,11 +644,11 @@ tsvector_unnest(PG_FUNCTION_ARGS)
 
 		tupdesc = CreateTemplateTupleDesc(3);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "lexeme",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "positions",
-						   INT2ARRAYOID, -1, 0);
+						   INT2ARRAYOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "weights",
-						   TEXTARRAYOID, -1, 0);
+						   TEXTARRAYOID, -1);
 		if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
 			elog(ERROR, "return type must be a row type");
 		funcctx->tuple_desc = tupdesc;

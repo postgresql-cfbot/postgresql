@@ -1980,8 +1980,8 @@ build_row_from_vars(PLpgSQL_variable **vars, int numvars)
 
 		TupleDescInitEntry(row->rowtupdesc, i + 1,
 						   var->refname,
-						   typoid, typmod,
-						   0);
+						   typoid, typmod);
+
 		TupleDescInitEntryCollation(row->rowtupdesc, i + 1, typcoll);
 	}
 

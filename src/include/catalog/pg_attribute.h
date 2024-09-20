@@ -90,11 +90,6 @@ CATALOG(pg_attribute,1249,AttributeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(75,
 	 */
 	int32		atttypmod BKI_DEFAULT(-1);
 
-	/*
-	 * attndims is the declared number of dimensions, if an array type,
-	 * otherwise zero.
-	 */
-	int16		attndims;
 
 	/*
 	 * attbyval is a copy of the typbyval field from pg_type for this

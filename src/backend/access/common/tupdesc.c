@@ -452,8 +452,6 @@ equalTupleDescs(TupleDesc tupdesc1, TupleDesc tupdesc2)
 			return false;
 		if (attr1->attlen != attr2->attlen)
 			return false;
-		if (attr1->attndims != attr2->attndims)
-			return false;
 		if (attr1->atttypmod != attr2->atttypmod)
 			return false;
 		if (attr1->attbyval != attr2->attbyval)
@@ -575,9 +573,6 @@ equalTupleDescs(TupleDesc tupdesc1, TupleDesc tupdesc2)
  * This is used to check whether two record types are compatible, whether
  * function return row types are the same, and other similar situations.
  *
- * (XXX There was some discussion whether attndims should be checked here, but
- * for now it has been decided not to.)
- *
  * Note: We deliberately do not check the tdtypmod field.  This allows
  * typcache.c to use this routine to see if a cached record type matches a
  * requested type.
@@ -652,8 +647,7 @@ TupleDescInitEntry(TupleDesc desc,
 				   AttrNumber attributeNumber,
 				   const char *attributeName,
 				   Oid oidtypeid,
-				   int32 typmod,
-				   int attdim)
+				   int32 typmod)
 {
 	HeapTuple	tuple;
 	Form_pg_type typeForm;
@@ -665,8 +659,6 @@ TupleDescInitEntry(TupleDesc desc,
 	Assert(PointerIsValid(desc));
 	Assert(attributeNumber >= 1);
 	Assert(attributeNumber <= desc->natts);
-	Assert(attdim >= 0);
-	Assert(attdim <= PG_INT16_MAX);
 
 	/*
 	 * initialize the attribute fields
@@ -689,7 +681,6 @@ TupleDescInitEntry(TupleDesc desc,
 	att->atttypmod = typmod;
 
 	att->attnum = attributeNumber;
-	att->attndims = attdim;
 
 	att->attnotnull = false;
 	att->atthasdef = false;
@@ -727,8 +718,7 @@ TupleDescInitBuiltinEntry(TupleDesc desc,
 						  AttrNumber attributeNumber,
 						  const char *attributeName,
 						  Oid oidtypeid,
-						  int32 typmod,
-						  int attdim)
+						  int32 typmod)
 {
 	Form_pg_attribute att;
 
@@ -736,8 +726,7 @@ TupleDescInitBuiltinEntry(TupleDesc desc,
 	Assert(PointerIsValid(desc));
 	Assert(attributeNumber >= 1);
 	Assert(attributeNumber <= desc->natts);
-	Assert(attdim >= 0);
-	Assert(attdim <= PG_INT16_MAX);
+
 
 	/* initialize the attribute fields */
 	att = TupleDescAttr(desc, attributeNumber - 1);
@@ -751,7 +740,6 @@ TupleDescInitBuiltinEntry(TupleDesc desc,
 	att->atttypmod = typmod;
 
 	att->attnum = attributeNumber;
-	att->attndims = attdim;
 
 	att->attnotnull = false;
 	att->atthasdef = false;
@@ -885,7 +873,7 @@ BuildDescFromLists(const List *names, const List *types, const List *typmods, co
 
 		attnum++;
 
-		TupleDescInitEntry(desc, attnum, attname, atttypid, atttypmod, 0);
+		TupleDescInitEntry(desc, attnum, attname, atttypid, atttypmod);
 		TupleDescInitEntryCollation(desc, attnum, attcollation);
 	}
 

@@ -244,11 +244,13 @@ SELECT regexp_like('abc', 'a.c', 'g');  -- error
 -- regexp_instr tests
 SELECT regexp_instr('abcdefghi', 'd.f');
 SELECT regexp_instr('abcdefghi', 'd.q');
-SELECT regexp_instr('abcabcabc', 'a.c');
-SELECT regexp_instr('abcabcabc', 'a.c', 2);
-SELECT regexp_instr('abcabcabc', 'a.c', 1, 3);
-SELECT regexp_instr('abcabcabc', 'a.c', 1, 4);
-SELECT regexp_instr('abcabcabc', 'A.C', 1, 2, 0, 'i');
+SELECT regexp_instr('abcaXcaYc', 'a.c');
+SELECT regexp_instr('abcaXcaYc', 'a.c', 2);
+SELECT regexp_instr('abcaXcaYc', 'a.c', 1, 3);
+SELECT regexp_instr('abcaXcaYc', 'a.c', 1, 3, 1);
+SELECT regexp_instr('abcaXcaYc', 'a.c', 2, 2, 0);
+SELECT regexp_instr('abcaXcaYc', 'a.c', 1, 4);
+SELECT regexp_instr('abcaXcayc', 'A.C', 1, 2, 0, 'i');
 SELECT regexp_instr('1234567890', '(123)(4(56)(78))', 1, 1, 0, 'i', 0);
 SELECT regexp_instr('1234567890', '(123)(4(56)(78))', 1, 1, 0, 'i', 1);
 SELECT regexp_instr('1234567890', '(123)(4(56)(78))', 1, 1, 0, 'i', 2);
@@ -274,11 +276,12 @@ SELECT regexp_instr('abcabcabc', 'a.c', 1, 1, 0, '', -1);
 -- regexp_substr tests
 SELECT regexp_substr('abcdefghi', 'd.f');
 SELECT regexp_substr('abcdefghi', 'd.q') IS NULL AS t;
-SELECT regexp_substr('abcabcabc', 'a.c');
-SELECT regexp_substr('abcabcabc', 'a.c', 2);
-SELECT regexp_substr('abcabcabc', 'a.c', 1, 3);
+SELECT regexp_substr('abcaXcaYc', 'a.c');
+SELECT regexp_substr('abcaXcaYc', 'a.c', 2);
+SELECT regexp_substr('abcaXcaYc', 'a.c', 1, 3);
 SELECT regexp_substr('abcabcabc', 'a.c', 1, 4) IS NULL AS t;
-SELECT regexp_substr('abcabcabc', 'A.C', 1, 2, 'i');
+SELECT regexp_substr('abcaXcaYc', 'A.C', 1, 2, 'i');
+SELECT regexp_substr('abcaXcaYc', 'A.C', 2, 2, 'i');
 SELECT regexp_substr('1234567890', '(123)(4(56)(78))', 1, 1, 'i', 0);
 SELECT regexp_substr('1234567890', '(123)(4(56)(78))', 1, 1, 'i', 1);
 SELECT regexp_substr('1234567890', '(123)(4(56)(78))', 1, 1, 'i', 2);

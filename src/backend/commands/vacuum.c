@@ -851,8 +851,7 @@ vacuum_open_relation(Oid relid, RangeVar *relation, bits32 options,
 
 /*
  * Given a VacuumRelation, fill in the table OID if it wasn't specified,
- * and optionally add VacuumRelations for partitions or descendant tables
- * of the table.
+ * and optionally add VacuumRelations for partitions or inheritance children.
  *
  * If a VacuumRelation does not have an OID supplied and is a partitioned
  * table, an extra entry will be added to the output for each partition.
@@ -881,8 +880,8 @@ expand_vacuum_rel(VacuumRelation *vrel, MemoryContext vac_context,
 	else
 	{
 		/*
-		 * Process a specific relation, and possibly partitions and/or child
-		 * tables thereof
+		 * Process a specific relation, and possibly partitions or child
+		 * tables thereof.
 		 */
 		Oid			relid;
 		HeapTuple	tuple;
@@ -951,7 +950,7 @@ expand_vacuum_rel(VacuumRelation *vrel, MemoryContext vac_context,
 
 		/*
 		 * Vacuuming a partitioned table with ONLY will not do anything since
-		 * the partitioned table itself is empty. Issue a warning if the user
+		 * the partitioned table itself is empty.  Issue a warning if the user
 		 * requests this.
 		 */
 		include_children = vrel->relation->inh;
@@ -961,12 +960,11 @@ expand_vacuum_rel(VacuumRelation *vrel, MemoryContext vac_context,
 					(errmsg("VACUUM ONLY of partitioned table \"%s\" has no effect",
 							vrel->relation->relname)));
 
-
 		ReleaseSysCache(tuple);
 
 		/*
 		 * Unless the user has specified ONLY, make relation list entries for
-		 * its partitions and/or descendant tables.  Note that the list
+		 * its partitions or inheritance child tables.  Note that the list
 		 * returned by find_all_inheritors() includes the passed-in OID, so we
 		 * have to skip that.  There's no point in taking locks on the
 		 * individual partitions/tables yet, and doing so would just add

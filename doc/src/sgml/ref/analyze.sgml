@@ -142,12 +142,12 @@ ANALYZE [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] [ <r
       The name (possibly schema-qualified) of a specific table to
       analyze.  If omitted, all regular tables, partitioned tables, and
       materialized views in the current database are analyzed (but not
-      foreign tables). If <literal>ONLY</literal> is specified before
-      the table name, only that table is analyzed. If <literal>ONLY</literal>
-      is not specified, the table and all its descendant tables or partitions
-      (if any) are analyzed.  Optionally, <literal>*</literal>
+      foreign tables).  If <literal>ONLY</literal> is specified before
+      the table name, only that table is analyzed.  If <literal>ONLY</literal>
+      is not specified, the table and all its inheritance child tables or
+      partitions (if any) are analyzed.  Optionally, <literal>*</literal>
       can be specified after the table name to explicitly indicate that
-      descendant tables are included.
+      inheritance child tables (or partitions) are to be analyzed.
      </para>
     </listitem>
    </varlistentry>
@@ -287,23 +287,23 @@ ANALYZE [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] [ <r
     <command>ANALYZE</command> gathers two sets of statistics: one on the rows
     of the parent table only, and a second including rows of both the parent
     table and all of its children.  This second set of statistics is needed when
-    planning queries that process the inheritance tree as a whole.  If the
-    <literal>ONLY</literal> keyword is used, child tables themselves are not
-    individually analyzed. The autovacuum daemon, however, will only consider
-    inserts or updates on the parent table itself when deciding whether to
-    trigger an automatic analyze for that table.  If that table is rarely
-    inserted into or updated, the inheritance statistics will not be up to
-    date unless you run <command>ANALYZE</command> manually.
+    planning queries that process the inheritance tree as a whole.  The
+    autovacuum daemon, however, will only consider inserts or updates on the
+    parent table itself when deciding whether to trigger an automatic analyze
+    for that table.  If that table is rarely inserted into or updated, the
+    inheritance statistics will not be up to date unless you run
+    <command>ANALYZE</command> manually.  By default,
+    <command>ANALYZE</command> will also recursively collect and update the
+    statistics for each inheritance child table.  The <literal>ONLY</literal>
+    keyword may be used to disable this.
   </para>
 
   <para>
     For partitioned tables, <command>ANALYZE</command> gathers statistics by
-    sampling rows from all partitions. If <literal>ONLY</literal> is not
-    specified, it will also recurse into each partition and update its
-    statistics.  Each leaf partition is analyzed only once, even with
-    multi-level partitioning.  No statistics are collected for only the
-    parent table (without data from its partitions), because with
-    partitioning it is guaranteed to be empty.
+    sampling rows from all partitions.  By default,
+    <command>ANALYZE</command> will also recursively collect and update the
+    statistics for each partition.  The <literal>ONLY</literal> keyword may be
+    used to disable this.
   </para>
 
   <para>

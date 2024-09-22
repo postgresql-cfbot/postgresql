@@ -233,56 +233,70 @@ BEGIN;  -- ANALYZE behaves differently inside a transaction block
 ANALYZE vactst, vactst;
 COMMIT;
 
--- ANALYZE ONLY / VACUUM ONLY on partitioned table
-CREATE TABLE only_parted (a int, b char) PARTITION BY LIST (a);
+--
+-- Tests for ANALYZE ONLY / VACUUM ONLY on partitioned tables
+--
+CREATE TABLE only_parted (a int, b text) PARTITION BY LIST (a);
 CREATE TABLE only_parted1 PARTITION OF only_parted FOR VALUES IN (1);
 INSERT INTO only_parted VALUES (1, 'a');
 
--- Only partitioned table is analyzed
+-- Ensure only the partitioned table is analyzed
 ANALYZE ONLY only_parted;
-SELECT relname, last_analyze is not null as analyzed, last_vacuum is not null as vacuumed FROM pg_stat_user_tables
-  WHERE relname like 'only_parted%'
+SELECT relname, last_analyze IS NOT NULL AS analyzed, last_vacuum IS NOT NULL AS vacuumed
+  FROM pg_stat_user_tables
+  WHERE relid IN ('only_parted'::regclass, 'only_parted1'::regclass)
   ORDER BY relname;
 
--- Partitioned table and partitions are analyzed
+-- Ensure partitioned table and the partitions are analyzed
 ANALYZE only_parted;
-SELECT relname, last_analyze is not null as analyzed, last_vacuum is not null as vacuumed FROM pg_stat_user_tables
-  WHERE relname like 'only_parted%'
+SELECT relname, last_analyze IS NOT NULL AS analyzed, last_vacuum IS NOT NULL AS vacuumed
+  FROM pg_stat_user_tables
+  WHERE relid IN ('only_parted'::regclass, 'only_parted1'::regclass)
   ORDER BY relname;
 
-VACUUM ONLY vacparted; -- gives warning
-ANALYZE ONLY vacparted(a,b); -- combine ONLY with column list
+DROP TABLE only_parted;
 
--- ANALYZE ONLY on inherited tables
+-- VACUUM ONLY on a partitioned table does nothing, ensure we get a warning.
+VACUUM ONLY vacparted;
+
+-- Try ANALYZE ONLY with a column list
+ANALYZE ONLY vacparted(a,b);
+
+--
+-- Tests for VACUUM ONLY / ANALYZE ONLY on inheritance tables
+--
 CREATE TABLE only_inh_parent (a int primary key, b TEXT);
 CREATE TABLE only_inh_child () INHERITS (only_inh_parent);
 INSERT INTO only_inh_child(a,b) VALUES (1, 'aaa'), (2, 'bbb'), (3, 'ccc');
 
--- Only parent is ANALYZED
+-- Ensure only parent is analyzed
 ANALYZE ONLY only_inh_parent;
-SELECT relname, last_analyze is not null as analyzed, last_vacuum is not null as vacuumed FROM pg_stat_user_tables
-  WHERE relname like 'only_inh%'
+SELECT relname, last_analyze IS NOT NULL AS analyzed, last_vacuum IS NOT NULL AS vacuumed
+  FROM pg_stat_user_tables
+  WHERE relid IN ('only_inh_parent'::regclass, 'only_inh_child'::regclass)
   ORDER BY relname;
 
--- Parent and child are ANALYZED
+-- Ensure the parent and child are analyzed
 ANALYZE only_inh_parent;
-SELECT relname, last_analyze is not null as analyzed, last_vacuum is not null as vacuumed FROM pg_stat_user_tables
-  WHERE relname like 'only_inh%'
+SELECT relname, last_analyze IS NOT NULL AS analyzed, last_vacuum IS NOT NULL AS vacuumed
+  FROM pg_stat_user_tables
+  WHERE relid IN ('only_inh_parent'::regclass, 'only_inh_child'::regclass)
   ORDER BY relname;
 
--- Only parent is VACUUMED
+-- Ensure only the parent is vacuumed
 VACUUM ONLY only_inh_parent;
-SELECT relname, last_analyze is not null as analyzed, last_vacuum is not null as vacuumed FROM pg_stat_user_tables
-  WHERE relname like 'only_inh%'
+SELECT relname, last_analyze IS NOT NULL AS analyzed, last_vacuum IS NOT NULL AS vacuumed
+  FROM pg_stat_user_tables
+  WHERE relid IN ('only_inh_parent'::regclass, 'only_inh_child'::regclass)
   ORDER BY relname;
 
--- Parent and child are VACUUMED
+-- Ensure parent and child are vacuumed
 VACUUM only_inh_parent;
-SELECT relname, last_analyze is not null as analyzed, last_vacuum is not null as vacuumed FROM pg_stat_user_tables
-  WHERE relname like 'only_inh%'
+SELECT relname, last_analyze IS NOT NULL AS analyzed, last_vacuum IS NOT NULL AS vacuumed
+  FROM pg_stat_user_tables
+  WHERE relid IN ('only_inh_parent'::regclass, 'only_inh_child'::regclass)
   ORDER BY relname;
 
-DROP TABLE only_parted CASCADE;
 DROP TABLE only_inh_parent CASCADE;
 
 -- parenthesized syntax for ANALYZE

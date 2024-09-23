@@ -114,6 +114,7 @@ extern void cost_sort(Path *path, PlannerInfo *root,
 					  double limit_tuples);
 extern void cost_incremental_sort(Path *path,
 								  PlannerInfo *root, List *pathkeys, int presorted_keys,
+								  Relids relids,
 								  int input_disabled_nodes,
 								  Cost input_startup_cost, Cost input_total_cost,
 								  double input_tuples, int width, Cost comparison_cost, int sort_mem,

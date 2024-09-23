@@ -3055,6 +3055,7 @@ create_incremental_sort_path(PlannerInfo *root,
 
 	cost_incremental_sort(&pathnode->path,
 						  root, pathkeys, presorted_keys,
+						  subpath->parent->relids,
 						  subpath->disabled_nodes,
 						  subpath->startup_cost,
 						  subpath->total_cost,

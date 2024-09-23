@@ -12,12 +12,26 @@
 #ifndef _PG_LOCALE_
 #define _PG_LOCALE_
 
+#include "mb/pg_wchar.h"
 #if defined(LOCALE_T_IN_XLOCALE) || defined(WCSTOMBS_L_IN_XLOCALE)
 #include <xlocale.h>
 #endif
 #ifdef USE_ICU
 #include <unicode/ucol.h>
 #endif
+
+/*
+ * Character properties for regular expressions.
+ */
+#define PG_ISDIGIT	0x01
+#define PG_ISALPHA	0x02
+#define PG_ISALNUM	(PG_ISDIGIT | PG_ISALPHA)
+#define PG_ISUPPER	0x04
+#define PG_ISLOWER	0x08
+#define PG_ISGRAPH	0x10
+#define PG_ISPRINT	0x20
+#define PG_ISPUNCT	0x40
+#define PG_ISSPACE	0x80
 
 #ifdef USE_ICU
 /*
@@ -62,6 +76,28 @@ extern struct lconv *PGLC_localeconv(void);
 
 extern void cache_locale_time(void);
 
+struct pg_locale_struct;
+typedef struct pg_locale_struct *pg_locale_t;
+
+struct collate_methods
+{
+	int	(*strncoll)(const char *arg1, ssize_t len1,
+					const char *arg2, ssize_t len2,
+					pg_locale_t locale);
+	size_t (*strnxfrm)(char *dest, size_t destsize,
+					   const char *src, ssize_t srclen,
+					   pg_locale_t locale);
+	size_t (*strnxfrm_prefix)(char *dest, size_t destsize,
+							  const char *src, ssize_t srclen,
+							  pg_locale_t locale);
+};
+
+struct ctype_methods
+{
+	int (*char_props)(pg_wchar wc, int mask, pg_locale_t locale);
+	pg_wchar (*wc_toupper)(pg_wchar wc, pg_locale_t locale);
+	pg_wchar (*wc_tolower)(pg_wchar wc, pg_locale_t locale);
+};
 
 /*
  * We use a discriminated union to hold either a locale_t or an ICU collator.
@@ -85,6 +121,10 @@ struct pg_locale_struct
 	bool		deterministic;
 	bool		collate_is_c;
 	bool		ctype_is_c;
+
+	struct collate_methods *collate;
+	struct ctype_methods *ctype;
+
 	union
 	{
 		struct
@@ -102,29 +142,23 @@ struct pg_locale_struct
 	}			info;
 };
 
-typedef struct pg_locale_struct *pg_locale_t;
-
-extern void make_icu_collator(const char *iculocstr,
-							  const char *icurules,
-							  struct pg_locale_struct *resultp);
-
 extern void init_database_collation(void);
 extern pg_locale_t pg_newlocale_from_collation(Oid collid);
 
 extern char *get_collation_actual_version(char collprovider, const char *collcollate);
 extern int	pg_strcoll(const char *arg1, const char *arg2, pg_locale_t locale);
-extern int	pg_strncoll(const char *arg1, size_t len1,
-						const char *arg2, size_t len2, pg_locale_t locale);
+extern int	pg_strncoll(const char *arg1, ssize_t len1,
+						const char *arg2, ssize_t len2, pg_locale_t locale);
 extern bool pg_strxfrm_enabled(pg_locale_t locale);
 extern size_t pg_strxfrm(char *dest, const char *src, size_t destsize,
 						 pg_locale_t locale);
 extern size_t pg_strnxfrm(char *dest, size_t destsize, const char *src,
-						  size_t srclen, pg_locale_t locale);
+						  ssize_t srclen, pg_locale_t locale);
 extern bool pg_strxfrm_prefix_enabled(pg_locale_t locale);
 extern size_t pg_strxfrm_prefix(char *dest, const char *src, size_t destsize,
 								pg_locale_t locale);
 extern size_t pg_strnxfrm_prefix(char *dest, size_t destsize, const char *src,
-								 size_t srclen, pg_locale_t locale);
+								 ssize_t srclen, pg_locale_t locale);
 
 extern int	builtin_locale_encoding(const char *locale);
 extern const char *builtin_validate_locale(int encoding, const char *locale);
@@ -135,6 +169,8 @@ extern char *icu_language_tag(const char *loc_str, int elevel);
 extern int32_t icu_to_uchar(UChar **buff_uchar, const char *buff, size_t nbytes);
 extern int32_t icu_from_uchar(char **result, const UChar *buff_uchar, int32_t len_uchar);
 #endif
+
+extern int char_props(pg_wchar wc, int mask, pg_locale_t locale);
 
 /* These functions convert from/to libc's wchar_t, *not* pg_wchar_t */
 extern size_t wchar2char(char *to, const wchar_t *from, size_t tolen,

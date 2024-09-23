@@ -136,6 +136,8 @@ extern LLVMValueRef slot_compile_deform(struct LLVMJitContext *context, TupleDes
 extern LLVMTypeRef LLVMGetFunctionReturnType(LLVMValueRef r);
 extern LLVMTypeRef LLVMGetFunctionType(LLVMValueRef r);
 
+extern const char* llvm_version(bool *available);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

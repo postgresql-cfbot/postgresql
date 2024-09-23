@@ -70,12 +70,14 @@ typedef void (*JitProviderResetAfterErrorCB) (void);
 typedef void (*JitProviderReleaseContextCB) (JitContext *context);
 struct ExprState;
 typedef bool (*JitProviderCompileExprCB) (struct ExprState *state);
+typedef const char* (*JitProviderVersion) (bool *available);
 
 struct JitProviderCallbacks
 {
 	JitProviderResetAfterErrorCB reset_after_error;
 	JitProviderReleaseContextCB release_context;
 	JitProviderCompileExprCB compile_expr;
+	JitProviderVersion get_version;
 };
 
 
@@ -102,5 +104,11 @@ extern void jit_release_context(JitContext *context);
 extern bool jit_compile_expr(struct ExprState *state);
 extern void InstrJitAgg(JitInstrumentation *dst, JitInstrumentation *add);
 
+/*
+ * Get the provider's version string. The flag indicating availability is
+ * passed as an argument, and will be set accordingly if it's not possible to
+ * get the version.
+ */
+extern const char *jit_get_version(bool *available);
 
 #endif							/* JIT_H */

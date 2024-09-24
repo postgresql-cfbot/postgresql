@@ -547,6 +547,7 @@ int			tcp_keepalives_interval;
 int			tcp_keepalives_count;
 int			tcp_user_timeout;
 
+
 /*
  * SSL renegotiation was been removed in PostgreSQL 9.5, but we tolerate it
  * being set to zero (meaning never renegotiate) for backward compatibility.
@@ -3500,6 +3501,7 @@ struct config_int ConfigureNamesInt[] =
 		check_autovacuum_work_mem, NULL, NULL
 	},
 
+
 	{
 		{"tcp_keepalives_idle", PGC_USERSET, CONN_AUTH_TCP,
 			gettext_noop("Time between issuing TCP keepalives."),
@@ -4782,6 +4784,18 @@ struct config_string ConfigureNamesString[] =
 		"",
 		check_restrict_nonsystem_relation_kind, assign_restrict_nonsystem_relation_kind, NULL
 	},
+
+	{
+		{"disabled_indexes", PGC_USERSET, QUERY_TUNING_OTHER,
+			gettext_noop("Sets the list of indexes to be disabled for query planning."),
+			NULL,
+			GUC_LIST_INPUT | GUC_NOT_IN_SAMPLE
+		},
+		&disabled_indexes,
+		"",
+		NULL, assign_disabled_indexes, NULL
+	},
+
 
 	/* End-of-list marker */
 	{

@@ -35,6 +35,8 @@
 #include "utils/lsyscache.h"
 #include "utils/selfuncs.h"
 
+#include "utils/plancache.h"
+#include "utils/varlena.h"
 
 /* XXX see PartCollMatchesExprColl */
 #define IndexCollMatchesExprColl(idxcollation, exprcollation) \
@@ -263,6 +265,10 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 		 * them, but that's of no concern here.)
 		 */
 		if (index->indpred != NIL && !index->predOK)
+			continue;
+
+		// Ignore if index is asked to be disabled
+		if (is_index_disabled(index->indexoid))
 			continue;
 
 		/*
@@ -3756,4 +3762,50 @@ is_pseudo_constant_for_index(PlannerInfo *root, Node *expr, IndexOptInfo *index)
 	if (contain_volatile_functions(expr))
 		return false;			/* no good, volatile comparison value */
 	return true;
+}
+
+
+bool
+is_index_disabled(Oid indexId)
+{
+		char       *rawnames;
+		List       *namelist;
+		ListCell   *l;
+
+		if (!disabled_indexes || disabled_indexes[0] == '\0')
+			return false;
+
+		rawnames = pstrdup(disabled_indexes);
+		if (!SplitIdentifierString(rawnames, ',', &namelist))
+		{
+			/* syntax error in name list */
+			pfree(rawnames);
+			list_free(namelist);
+			return false;
+		}
+
+		foreach(l, namelist)
+		{
+			char	*curname = (char *) lfirst(l);
+			Oid		indexOid;
+
+			indexOid = get_relname_relid(curname, get_rel_namespace(indexId));
+			if (indexOid == indexId)
+				{
+					pfree(rawnames);
+					list_free(namelist);
+					return true;
+				}
+		}
+
+		pfree(rawnames);
+		list_free(namelist);
+		return false;
+}
+
+void
+assign_disabled_indexes(const char *newval, void *extra)
+{
+	if (disabled_indexes != newval)
+		ResetPlanCache();
 }

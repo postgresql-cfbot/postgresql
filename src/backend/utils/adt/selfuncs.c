@@ -5152,6 +5152,9 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 
 			for (pos = 0; pos < index->ncolumns; pos++)
 			{
+				if (is_index_disabled(index->indexoid))
+					continue;
+
 				if (index->indexkeys[pos] == 0)
 				{
 					Node	   *indexkey;

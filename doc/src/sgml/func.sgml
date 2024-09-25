@@ -8628,7 +8628,7 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
        </row>
        <row>
         <entry><literal>RN</literal></entry>
-        <entry>Roman numeral (input between 1 and 3999)</entry>
+        <entry>Roman numeral (valid for numbers 1 to 3999)</entry>
        </row>
        <row>
         <entry><literal>TH</literal> or <literal>th</literal></entry>
@@ -8754,6 +8754,17 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
        (e.g., <literal>9.99EEEE</literal> is a valid pattern).
       </para>
      </listitem>
+
+    <listitem>
+      <para>
+        In <function>to_number</function>, <literal>RN</literal> pattern converts
+        roman numerals to standard numbers. It is case-insensitive (e.g., <literal>'XIV'</literal>,
+        <literal>'xiv'</literal>, and <literal>'Xiv'</literal> are all seen as <literal>14</literal>).
+        <literal>RN</literal> cannot be used in combination with any other formatting patterns
+        or modifiers, with the exception of <literal>FM</literal>, which is applicable only in
+        <function>to_char()</function> and is ignored in <function>to_number()</function>.
+      </para>
+    </listitem>
     </itemizedlist>
    </para>
 

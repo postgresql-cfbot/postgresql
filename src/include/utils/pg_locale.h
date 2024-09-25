@@ -159,6 +159,30 @@ struct pg_locale_struct
 
 typedef struct pg_locale_struct *pg_locale_t;
 
+/*
+ * Hooks to enable custom locale providers.
+ */
+
+/*
+ * Hook create_pg_locale(). Return result (allocated in the given context) to
+ * override; or return NULL to return control to create_pg_locale(). When
+ * creating the default database collation, collid is DEFAULT_COLLATION_OID.
+ */
+typedef pg_locale_t (*create_pg_locale_hook_type) (Oid collid,
+												   MemoryContext context);
+
+/*
+ * Hook get_collation_actual_version(). Set *version out parameter and return
+ * true to override; or return false to return control to
+ * get_collation_actual_version().
+ */
+typedef bool (*collation_version_hook_type) (char collprovider,
+											 const char *collcollate,
+											 char **version);
+
+extern PGDLLIMPORT create_pg_locale_hook_type create_pg_locale_hook;
+extern PGDLLIMPORT collation_version_hook_type collation_version_hook;
+
 extern void init_database_collation(void);
 extern pg_locale_t pg_newlocale_from_collation(Oid collid);
 

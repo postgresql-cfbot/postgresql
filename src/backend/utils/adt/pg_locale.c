@@ -98,6 +98,9 @@
 extern pg_locale_t create_pg_locale_icu(Oid collid, MemoryContext context);
 extern pg_locale_t create_pg_locale_libc(Oid collid, MemoryContext context);
 
+create_pg_locale_hook_type create_pg_locale_hook = NULL;
+collation_version_hook_type collation_version_hook = NULL;
+
 /* pg_locale_icu.c */
 #ifdef USE_ICU
 extern UCollator *pg_ucol_open(const char *loc_str);
@@ -1395,7 +1398,7 @@ create_pg_locale(Oid collid, MemoryContext context)
 	/* We haven't computed this yet in this session, so do it */
 	HeapTuple	tp;
 	Form_pg_collation collform;
-	pg_locale_t result;
+	pg_locale_t result = NULL;
 	Datum		datum;
 	bool		isnull;
 
@@ -1404,15 +1407,21 @@ create_pg_locale(Oid collid, MemoryContext context)
 		elog(ERROR, "cache lookup failed for collation %u", collid);
 	collform = (Form_pg_collation) GETSTRUCT(tp);
 
-	if (collform->collprovider == COLLPROVIDER_BUILTIN)
-		result = create_pg_locale_builtin(collid, context);
-	else if (collform->collprovider == COLLPROVIDER_ICU)
-		result = create_pg_locale_icu(collid, context);
-	else if (collform->collprovider == COLLPROVIDER_LIBC)
-		result = create_pg_locale_libc(collid, context);
-	else
-		/* shouldn't happen */
-		PGLOCALE_SUPPORT_ERROR(collform->collprovider);
+	if (create_pg_locale_hook != NULL)
+		result = create_pg_locale_hook(collid, context);
+
+	if (result == NULL)
+	{
+		if (collform->collprovider == COLLPROVIDER_BUILTIN)
+			result = create_pg_locale_builtin(collid, context);
+		else if (collform->collprovider == COLLPROVIDER_ICU)
+			result = create_pg_locale_icu(collid, context);
+		else if (collform->collprovider == COLLPROVIDER_LIBC)
+			result = create_pg_locale_libc(collid, context);
+		else
+			/* shouldn't happen */
+			PGLOCALE_SUPPORT_ERROR(collform->collprovider);
+	}
 
 	datum = SysCacheGetAttr(COLLOID, tp, Anum_pg_collation_collversion,
 							&isnull);
@@ -1469,7 +1478,7 @@ init_database_collation(void)
 {
 	HeapTuple	tup;
 	Form_pg_database dbform;
-	pg_locale_t result;
+	pg_locale_t result = NULL;
 
 	Assert(default_locale == NULL);
 
@@ -1479,18 +1488,25 @@ init_database_collation(void)
 		elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
 	dbform = (Form_pg_database) GETSTRUCT(tup);
 
-	if (dbform->datlocprovider == COLLPROVIDER_BUILTIN)
-		result = create_pg_locale_builtin(DEFAULT_COLLATION_OID,
-										  TopMemoryContext);
-	else if (dbform->datlocprovider == COLLPROVIDER_ICU)
-		result = create_pg_locale_icu(DEFAULT_COLLATION_OID,
-									  TopMemoryContext);
-	else if (dbform->datlocprovider == COLLPROVIDER_LIBC)
-		result = create_pg_locale_libc(DEFAULT_COLLATION_OID,
+	if (create_pg_locale_hook != NULL)
+		result = create_pg_locale_hook(DEFAULT_COLLATION_OID,
 									   TopMemoryContext);
-	else
-		/* shouldn't happen */
-		PGLOCALE_SUPPORT_ERROR(dbform->datlocprovider);
+
+	if (result == NULL)
+	{
+		if (dbform->datlocprovider == COLLPROVIDER_BUILTIN)
+			result = create_pg_locale_builtin(DEFAULT_COLLATION_OID,
+											  TopMemoryContext);
+		else if (dbform->datlocprovider == COLLPROVIDER_ICU)
+			result = create_pg_locale_icu(DEFAULT_COLLATION_OID,
+										  TopMemoryContext);
+		else if (dbform->datlocprovider == COLLPROVIDER_LIBC)
+			result = create_pg_locale_libc(DEFAULT_COLLATION_OID,
+										   TopMemoryContext);
+		else
+			/* shouldn't happen */
+			PGLOCALE_SUPPORT_ERROR(dbform->datlocprovider);
+	}
 
 	ReleaseSysCache(tup);
 
@@ -1558,6 +1574,14 @@ char *
 get_collation_actual_version(char collprovider, const char *collcollate)
 {
 	char	   *collversion = NULL;
+
+	if (collation_version_hook != NULL)
+	{
+		char	   *version;
+
+		if (collation_version_hook(collprovider, collcollate, &version))
+			return version;
+	}
 
 	/*
 	 * The only two supported locales (C and C.UTF-8) are both based on memcmp

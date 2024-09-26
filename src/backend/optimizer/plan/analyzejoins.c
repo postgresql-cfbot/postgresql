@@ -628,6 +628,15 @@ remove_rel_from_eclass(EquivalenceClass *ec, int relid, int ojrelid)
 			bms_is_member(ojrelid, cur_em->em_relids))
 		{
 			Assert(!cur_em->em_is_const);
+
+			/*
+			 * The relation removal happens before any children are expanded.
+			 * Hence we do not see child EquivalenceMembers in this function.
+			 * Hence we bon't need to worry about removing child derived
+			 * clauses which are stored outside EquivalenceClass. Assert below
+			 * would trigger if things change.
+			 */
+			Assert(!cur_em->em_is_child);
 			cur_em->em_relids = bms_del_member(cur_em->em_relids, relid);
 			cur_em->em_relids = bms_del_member(cur_em->em_relids, ojrelid);
 			if (bms_is_empty(cur_em->em_relids))

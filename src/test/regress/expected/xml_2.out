@@ -662,6 +662,407 @@ SELECT xmlserialize(CONTENT  'text node<foo>    <bar></bar>   </foo>' AS text IN
  </foo>
 (1 row)
 
+-- 'including xmldeclaration' and 'excluding xmldeclaration'(DOCUMENT)
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION);
+                         xmlserialize                          
+---------------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8"?><foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text EXCLUDING XMLDECLARATION);
+       xmlserialize       
+--------------------------
+ <foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8"?><foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION);
+                         xmlserialize                          
+---------------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8"?><foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8"?><foo><bar>42</bar></foo>'::xml AS text EXCLUDING XMLDECLARATION);
+       xmlserialize       
+--------------------------
+ <foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8" standalone="no"?><foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION);
+                                 xmlserialize                                  
+-------------------------------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8" standalone="no"?><foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION);
+                                  xmlserialize                                  
+--------------------------------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8" standalone="yes"?><foo><bar>42</bar></foo>
+(1 row)
+
+-- 'including xmldeclaration' and 'excluding xmldeclaration'(CONTENT)
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION);
+                           xmlserialize                           
+------------------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8"?>txt<foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text EXCLUDING XMLDECLARATION);
+        xmlserialize         
+-----------------------------
+ txt<foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8"?>txt<foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION);
+                           xmlserialize                           
+------------------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8"?>txt<foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8"?>txt<foo><bar>42</bar></foo>'::xml AS text EXCLUDING XMLDECLARATION);
+        xmlserialize         
+-----------------------------
+ txt<foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8" standalone="no"?>txt<foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION);
+                                   xmlserialize                                   
+----------------------------------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8" standalone="no"?>txt<foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>txt<foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION);
+                                   xmlserialize                                    
+-----------------------------------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8" standalone="yes"?>txt<foo><bar>42</bar></foo>
+(1 row)
+
+-- 'indent' + 'including xmldeclaration' and 'excluding xmldeclaration' (DOCUMENT)
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION INDENT);
+             xmlserialize              
+---------------------------------------
+ <?xml version="1.0" encoding="UTF8"?>+
+ <foo>                                +
+   <bar>42</bar>                      +
+ </foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text EXCLUDING XMLDECLARATION INDENT);
+  xmlserialize   
+-----------------
+ <foo>          +
+   <bar>42</bar>+
+ </foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8"?><foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION INDENT);
+             xmlserialize              
+---------------------------------------
+ <?xml version="1.0" encoding="UTF8"?>+
+ <foo>                                +
+   <bar>42</bar>                      +
+ </foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8"?><foo><bar>42</bar></foo>'::xml AS text EXCLUDING XMLDECLARATION INDENT);
+  xmlserialize   
+-----------------
+ <foo>          +
+   <bar>42</bar>+
+ </foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8" standalone="no"?><foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION INDENT);
+                     xmlserialize                      
+-------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8" standalone="no"?>+
+ <foo>                                                +
+   <bar>42</bar>                                      +
+ </foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION INDENT);
+                      xmlserialize                      
+--------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8" standalone="yes"?>+
+ <foo>                                                 +
+   <bar>42</bar>                                       +
+ </foo>
+(1 row)
+
+-- 'indent' + 'including xmldeclaration' and 'excluding xmldeclaration'(CONTENT)
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION INDENT);
+             xmlserialize              
+---------------------------------------
+ <?xml version="1.0" encoding="UTF8"?>+
+ txt                                  +
+ <foo>                                +
+   <bar>42</bar>                      +
+ </foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text EXCLUDING XMLDECLARATION INDENT);
+  xmlserialize   
+-----------------
+ txt            +
+ <foo>          +
+   <bar>42</bar>+
+ </foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8"?>txt<foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION INDENT);
+             xmlserialize              
+---------------------------------------
+ <?xml version="1.0" encoding="UTF8"?>+
+ txt                                  +
+ <foo>                                +
+   <bar>42</bar>                      +
+ </foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8"?>txt<foo><bar>42</bar></foo>'::xml AS text EXCLUDING XMLDECLARATION INDENT);
+  xmlserialize   
+-----------------
+ txt            +
+ <foo>          +
+   <bar>42</bar>+
+ </foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8" standalone="no"?>txt<foo><bar>42</bar></foo>'::xml AS text  INCLUDING XMLDECLARATION INDENT);
+                     xmlserialize                      
+-------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8" standalone="no"?>+
+ txt                                                  +
+ <foo>                                                +
+   <bar>42</bar>                                      +
+ </foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>txt<foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION INDENT);
+                      xmlserialize                      
+--------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8" standalone="yes"?>+
+ txt                                                   +
+ <foo>                                                 +
+   <bar>42</bar>                                       +
+ </foo>
+(1 row)
+
+-- 'version' + 'including xmldeclaration' and 'excluding xmldeclaration'(DOCUMENT)
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION '1.0');
+       xmlserialize       
+--------------------------
+ <foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION '1.0' INCLUDING XMLDECLARATION);
+                         xmlserialize                          
+---------------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8"?><foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8" standalone="no"?><foo><bar>42</bar></foo>'::xml AS text VERSION '1.0');
+                                 xmlserialize                                  
+-------------------------------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8" standalone="no"?><foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><foo><bar>42</bar></foo>'::xml AS text VERSION '1.0' INCLUDING XMLDECLARATION);
+                                  xmlserialize                                  
+--------------------------------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8" standalone="yes"?><foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8"?><foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' EXCLUDING XMLDECLARATION);
+       xmlserialize       
+--------------------------
+ <foo><bar>42</bar></foo>
+(1 row)
+
+-- 'version' + 'including xmldeclaration' and 'excluding xmldeclaration'(CONTENT)
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1');
+        xmlserialize         
+-----------------------------
+ txt<foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' INCLUDING XMLDECLARATION);
+                           xmlserialize                           
+------------------------------------------------------------------
+ <?xml version="1.1" encoding="UTF8"?>txt<foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1');
+                                   xmlserialize                                    
+-----------------------------------------------------------------------------------
+ <?xml version="1.1" encoding="UTF8" standalone="yes"?>txt<foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8" standalone="no"?>txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' INCLUDING XMLDECLARATION);
+                                   xmlserialize                                   
+----------------------------------------------------------------------------------
+ <?xml version="1.1" encoding="UTF8" standalone="no"?>txt<foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8"?>txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' EXCLUDING XMLDECLARATION);
+        xmlserialize         
+-----------------------------
+ txt<foo><bar>42</bar></foo>
+(1 row)
+
+-- 'version' + 'indent' (DOCUMENT)
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION '1.0' INDENT);
+  xmlserialize   
+-----------------
+ <foo>          +
+   <bar>42</bar>+
+ </foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8" standalone="no"?><foo><bar>42</bar></foo>'::xml AS text VERSION '1.0' INDENT);
+                     xmlserialize                      
+-------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8" standalone="no"?>+
+ <foo>                                                +
+   <bar>42</bar>                                      +
+ </foo>
+(1 row)
+
+-- 'indent' + 'version' (CONTENT)
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' INDENT);
+  xmlserialize   
+-----------------
+ txt            +
+ <foo>          +
+   <bar>42</bar>+
+ </foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' INDENT);
+                      xmlserialize                      
+--------------------------------------------------------
+ <?xml version="1.1" encoding="UTF8" standalone="yes"?>+
+ txt                                                   +
+ <foo>                                                 +
+   <bar>42</bar>                                       +
+ </foo>
+(1 row)
+
+-- 'indent' + 'version' + 'including xmldeclaration' and 'excluding xmldeclaration'(DOCUMENT)
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION '1.0' INCLUDING XMLDECLARATION INDENT);
+             xmlserialize              
+---------------------------------------
+ <?xml version="1.0" encoding="UTF8"?>+
+ <foo>                                +
+   <bar>42</bar>                      +
+ </foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><foo><bar>42</bar></foo>'::xml AS text VERSION '1.0' INCLUDING XMLDECLARATION INDENT);
+                      xmlserialize                      
+--------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8" standalone="yes"?>+
+ <foo>                                                 +
+   <bar>42</bar>                                       +
+ </foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8"?><foo><bar>42</bar></foo>'::xml AS text VERSION '1.0' EXCLUDING XMLDECLARATION INDENT);
+  xmlserialize   
+-----------------
+ <foo>          +
+   <bar>42</bar>+
+ </foo>
+(1 row)
+
+-- 'indent' + 'version' + 'including xmldeclaration' and 'excluding xmldeclaration'(CONTENT)
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' INCLUDING XMLDECLARATION INDENT);
+             xmlserialize              
+---------------------------------------
+ <?xml version="1.1" encoding="UTF8"?>+
+ txt                                  +
+ <foo>                                +
+   <bar>42</bar>                      +
+ </foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' INCLUDING XMLDECLARATION INDENT);
+                      xmlserialize                      
+--------------------------------------------------------
+ <?xml version="1.1" encoding="UTF8" standalone="yes"?>+
+ txt                                                   +
+ <foo>                                                 +
+   <bar>42</bar>                                       +
+ </foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8"?>txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' EXCLUDING XMLDECLARATION INDENT);
+  xmlserialize   
+-----------------
+ txt            +
+ <foo>          +
+   <bar>42</bar>+
+ </foo>
+(1 row)
+
+--'version' with null value (DOCUMENT)
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION NULL);
+       xmlserialize       
+--------------------------
+ <foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION NULL EXCLUDING XMLDECLARATION);
+       xmlserialize       
+--------------------------
+ <foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION NULL INCLUDING XMLDECLARATION);
+                         xmlserialize                          
+---------------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8"?><foo><bar>42</bar></foo>
+(1 row)
+
+--'version' with null value (CONTENT)
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text VERSION NULL);
+        xmlserialize         
+-----------------------------
+ txt<foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text VERSION NULL EXCLUDING XMLDECLARATION);
+        xmlserialize         
+-----------------------------
+ txt<foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text VERSION NULL INCLUDING XMLDECLARATION);
+                           xmlserialize                           
+------------------------------------------------------------------
+ <?xml version="1.0" encoding="UTF8"?>txt<foo><bar>42</bar></foo>
+(1 row)
+
+-- 'version' + 'including xmldeclaration' warning and error messages
+\set VERBOSITY terse
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' INCLUDING XMLDECLARATION);
+WARNING:  line 1: Unsupported version '1.1'
+<?xml version="1.1" encoding="UTF8"?><foo><bar>42</bar></foo>
+                   ^
+                         xmlserialize                          
+---------------------------------------------------------------
+ <?xml version="1.1" encoding="UTF8"?><foo><bar>42</bar></foo>
+(1 row)
+
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION '2.0' INCLUDING XMLDECLARATION);
+ERROR:  Invalid XML declaration: VERSION '2.0'
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION ''    INCLUDING XMLDECLARATION);
+ERROR:  Invalid XML declaration: VERSION ''
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION '   ' INCLUDING XMLDECLARATION);
+ERROR:  Invalid XML declaration: VERSION '   '
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION 'foo' INCLUDING XMLDECLARATION);
+ERROR:  Invalid XML declaration: VERSION 'foo'
+\set VERBOSITY default
 SELECT xml '<foo>bar</foo>' IS DOCUMENT;
  ?column? 
 ----------

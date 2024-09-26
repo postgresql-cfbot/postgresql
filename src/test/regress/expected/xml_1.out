@@ -454,6 +454,281 @@ ERROR:  unsupported XML feature
 LINE 1: SELECT xmlserialize(CONTENT  'text node<foo>    <bar></bar> ...
                                      ^
 DETAIL:  This functionality requires the server to be built with libxml support.
+-- 'including xmldeclaration' and 'excluding xmldeclaration'(DOCUMENT)
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text EXCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8"?><foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8"?><foo><bar>42</bar></foo>'::xml AS text EXCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8" standalone="no"?><foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+-- 'including xmldeclaration' and 'excluding xmldeclaration'(CONTENT)
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::x...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text EXCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::x...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8"?>txt<foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="U...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8"?>txt<foo><bar>42</bar></foo>'::xml AS text EXCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="U...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8" standalone="no"?>txt<foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="U...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>txt<foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="U...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+-- 'indent' + 'including xmldeclaration' and 'excluding xmldeclaration' (DOCUMENT)
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text EXCLUDING XMLDECLARATION INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8"?><foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8"?><foo><bar>42</bar></foo>'::xml AS text EXCLUDING XMLDECLARATION INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8" standalone="no"?><foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+-- 'indent' + 'including xmldeclaration' and 'excluding xmldeclaration'(CONTENT)
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::x...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text EXCLUDING XMLDECLARATION INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::x...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8"?>txt<foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="U...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8"?>txt<foo><bar>42</bar></foo>'::xml AS text EXCLUDING XMLDECLARATION INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="U...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8" standalone="no"?>txt<foo><bar>42</bar></foo>'::xml AS text  INCLUDING XMLDECLARATION INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="U...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>txt<foo><bar>42</bar></foo>'::xml AS text INCLUDING XMLDECLARATION INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="U...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+-- 'version' + 'including xmldeclaration' and 'excluding xmldeclaration'(DOCUMENT)
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION '1.0');
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION '1.0' INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8" standalone="no"?><foo><bar>42</bar></foo>'::xml AS text VERSION '1.0');
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><foo><bar>42</bar></foo>'::xml AS text VERSION '1.0' INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8"?><foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' EXCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+-- 'version' + 'including xmldeclaration' and 'excluding xmldeclaration'(CONTENT)
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1');
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::x...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::x...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1');
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="U...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8" standalone="no"?>txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="U...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8"?>txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' EXCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="U...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+-- 'version' + 'indent' (DOCUMENT)
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION '1.0' INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8" standalone="no"?><foo><bar>42</bar></foo>'::xml AS text VERSION '1.0' INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+-- 'indent' + 'version' (CONTENT)
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::x...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="U...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+-- 'indent' + 'version' + 'including xmldeclaration' and 'excluding xmldeclaration'(DOCUMENT)
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION '1.0' INCLUDING XMLDECLARATION INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><foo><bar>42</bar></foo>'::xml AS text VERSION '1.0' INCLUDING XMLDECLARATION INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="UTF-8"?><foo><bar>42</bar></foo>'::xml AS text VERSION '1.0' EXCLUDING XMLDECLARATION INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<?xml version="1.0" encoding="...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+-- 'indent' + 'version' + 'including xmldeclaration' and 'excluding xmldeclaration'(CONTENT)
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' INCLUDING XMLDECLARATION INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::x...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' INCLUDING XMLDECLARATION INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="U...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="UTF-8"?>txt<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' EXCLUDING XMLDECLARATION INDENT);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT '<?xml version="1.0" encoding="U...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+--'version' with null value (DOCUMENT)
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION NULL);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION NULL EXCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION NULL INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml...
+                                     ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+--'version' with null value (CONTENT)
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text VERSION NULL);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::x...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text VERSION NULL EXCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::x...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::xml AS text VERSION NULL INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature
+LINE 1: SELECT xmlserialize(CONTENT 'txt<foo><bar>42</bar></foo>'::x...
+                                    ^
+DETAIL:  This functionality requires the server to be built with libxml support.
+-- 'version' + 'including xmldeclaration' warning and error messages
+\set VERBOSITY terse
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION '1.1' INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature at character 30
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION '2.0' INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature at character 30
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION ''    INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature at character 30
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION '   ' INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature at character 30
+SELECT xmlserialize(DOCUMENT '<foo><bar>42</bar></foo>'::xml AS text VERSION 'foo' INCLUDING XMLDECLARATION);
+ERROR:  unsupported XML feature at character 30
+\set VERBOSITY default
 SELECT xml '<foo>bar</foo>' IS DOCUMENT;
 ERROR:  unsupported XML feature
 LINE 1: SELECT xml '<foo>bar</foo>' IS DOCUMENT;

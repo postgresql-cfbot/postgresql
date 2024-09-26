@@ -182,7 +182,7 @@
 #define PG_USED_FOR_ASSERTS_ONLY pg_attribute_unused()
 #endif
 
-/* GCC supports format attributes */
+/* GCC support format attributes */
 #if defined(__GNUC__)
 #define pg_attribute_format_arg(a) __attribute__((format_arg(a)))
 #define pg_attribute_printf(f,a) __attribute__((format(PG_PRINTF_ATTRIBUTE, f, a)))
@@ -192,7 +192,7 @@
 #endif
 
 /* GCC and Sunpro support aligned, packed and noreturn */
-#if defined(__GNUC__) || defined(__SUNPRO_C)
+#if defined(__GNUC__) || defined(__SUNPRO_C) 
 #define pg_attribute_aligned(a) __attribute__((aligned(a)))
 #define pg_attribute_noreturn() __attribute__((noreturn))
 #define pg_attribute_packed() __attribute__((packed))

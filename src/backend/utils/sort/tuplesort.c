@@ -102,6 +102,7 @@
 #include <limits.h>
 
 #include "commands/tablespace.h"
+#include "common/int.h"
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "storage/shmem.h"
@@ -3138,12 +3139,18 @@ free_sort_tuple(Tuplesortstate *state, SortTuple *stup)
 int
 ssup_datum_unsigned_cmp(Datum x, Datum y, SortSupport ssup)
 {
+#if SIZEOF_DATUM == 4
+	return pg_cmp_u32(x, y);
+#elif SIZEOF_DATUM == 8
+	return pg_cmp_u64(x, y);
+#else
 	if (x < y)
 		return -1;
 	else if (x > y)
 		return 1;
 	else
 		return 0;
+#endif
 }
 
 #if SIZEOF_DATUM >= 8
@@ -3153,12 +3160,7 @@ ssup_datum_signed_cmp(Datum x, Datum y, SortSupport ssup)
 	int64		xx = DatumGetInt64(x);
 	int64		yy = DatumGetInt64(y);
 
-	if (xx < yy)
-		return -1;
-	else if (xx > yy)
-		return 1;
-	else
-		return 0;
+	return pg_cmp_s64(xx, yy);
 }
 #endif
 
@@ -3168,10 +3170,5 @@ ssup_datum_int32_cmp(Datum x, Datum y, SortSupport ssup)
 	int32		xx = DatumGetInt32(x);
 	int32		yy = DatumGetInt32(y);
 
-	if (xx < yy)
-		return -1;
-	else if (xx > yy)
-		return 1;
-	else
-		return 0;
+	return pg_cmp_s32(xx, yy);
 }

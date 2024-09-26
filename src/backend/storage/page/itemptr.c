@@ -14,6 +14,7 @@
  */
 #include "postgres.h"
 
+#include "common/int.h"
 #include "storage/itemptr.h"
 
 
@@ -57,18 +58,11 @@ ItemPointerCompare(ItemPointer arg1, ItemPointer arg2)
 	BlockNumber b1 = ItemPointerGetBlockNumberNoCheck(arg1);
 	BlockNumber b2 = ItemPointerGetBlockNumberNoCheck(arg2);
 
-	if (b1 < b2)
-		return -1;
-	else if (b1 > b2)
-		return 1;
-	else if (ItemPointerGetOffsetNumberNoCheck(arg1) <
-			 ItemPointerGetOffsetNumberNoCheck(arg2))
-		return -1;
-	else if (ItemPointerGetOffsetNumberNoCheck(arg1) >
-			 ItemPointerGetOffsetNumberNoCheck(arg2))
-		return 1;
-	else
-		return 0;
+	if (b1 != b2)
+		return pg_cmp_u32(b1, b2);
+
+	return pg_cmp_u16(ItemPointerGetOffsetNumberNoCheck(arg1),
+					  ItemPointerGetOffsetNumberNoCheck(arg2));
 }
 
 /*

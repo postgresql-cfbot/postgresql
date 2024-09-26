@@ -57,17 +57,16 @@
 
 #include <limits.h>
 
+#include "common/int.h"
 #include "utils/fmgrprotos.h"
 #include "utils/sortsupport.h"
 
-#ifdef STRESS_SORT_INT_MIN
-#define A_LESS_THAN_B		INT_MIN
-#define A_GREATER_THAN_B	INT_MAX
-#else
-#define A_LESS_THAN_B		(-1)
-#define A_GREATER_THAN_B	1
-#endif
-
+#define STRESS_SORT_INT_MIN_CMP(a, b) \
+( \
+	((a) > (b)) ? INT_MAX : \
+	((a) < (b)) ? INT_MIN : \
+	0 \
+)
 
 Datum
 btboolcmp(PG_FUNCTION_ARGS)
@@ -84,7 +83,11 @@ btint2cmp(PG_FUNCTION_ARGS)
 	int16		a = PG_GETARG_INT16(0);
 	int16		b = PG_GETARG_INT16(1);
 
-	PG_RETURN_INT32((int32) a - (int32) b);
+#ifdef STRESS_SORT_INT_MIN
+	PG_RETURN_INT32(STRESS_SORT_INT_MIN_CMP(a, b));
+#else
+	PG_RETURN_INT32(pg_cmp_s16(a, b));
+#endif
 }
 
 static int
@@ -93,7 +96,11 @@ btint2fastcmp(Datum x, Datum y, SortSupport ssup)
 	int16		a = DatumGetInt16(x);
 	int16		b = DatumGetInt16(y);
 
-	return (int) a - (int) b;
+#ifdef STRESS_SORT_INT_MIN
+	return STRESS_SORT_INT_MIN_CMP(a, b);
+#else
+	return pg_cmp_s16(a, b);
+#endif
 }
 
 Datum
@@ -111,12 +118,11 @@ btint4cmp(PG_FUNCTION_ARGS)
 	int32		a = PG_GETARG_INT32(0);
 	int32		b = PG_GETARG_INT32(1);
 
-	if (a > b)
-		PG_RETURN_INT32(A_GREATER_THAN_B);
-	else if (a == b)
-		PG_RETURN_INT32(0);
-	else
-		PG_RETURN_INT32(A_LESS_THAN_B);
+#ifdef STRESS_SORT_INT_MIN
+	PG_RETURN_INT32(STRESS_SORT_INT_MIN_CMP(a, b));
+#else
+	PG_RETURN_INT32(pg_cmp_s32(a, b));
+#endif
 }
 
 Datum
@@ -134,12 +140,11 @@ btint8cmp(PG_FUNCTION_ARGS)
 	int64		a = PG_GETARG_INT64(0);
 	int64		b = PG_GETARG_INT64(1);
 
-	if (a > b)
-		PG_RETURN_INT32(A_GREATER_THAN_B);
-	else if (a == b)
-		PG_RETURN_INT32(0);
-	else
-		PG_RETURN_INT32(A_LESS_THAN_B);
+#ifdef STRESS_SORT_INT_MIN
+	PG_RETURN_INT32(STRESS_SORT_INT_MIN_CMP(a, b));
+#else
+	PG_RETURN_INT32(pg_cmp_s64(a, b));
+#endif
 }
 
 #if SIZEOF_DATUM < 8
@@ -149,12 +154,11 @@ btint8fastcmp(Datum x, Datum y, SortSupport ssup)
 	int64		a = DatumGetInt64(x);
 	int64		b = DatumGetInt64(y);
 
-	if (a > b)
-		return A_GREATER_THAN_B;
-	else if (a == b)
-		return 0;
-	else
-		return A_LESS_THAN_B;
+#ifdef STRESS_SORT_INT_MIN
+	return STRESS_SORT_INT_MIN_CMP(a, b);
+#else
+	return pg_cmp_s64(a, b);
+#endif
 }
 #endif
 
@@ -177,12 +181,11 @@ btint48cmp(PG_FUNCTION_ARGS)
 	int32		a = PG_GETARG_INT32(0);
 	int64		b = PG_GETARG_INT64(1);
 
-	if (a > b)
-		PG_RETURN_INT32(A_GREATER_THAN_B);
-	else if (a == b)
-		PG_RETURN_INT32(0);
-	else
-		PG_RETURN_INT32(A_LESS_THAN_B);
+#ifdef STRESS_SORT_INT_MIN
+	PG_RETURN_INT32(STRESS_SORT_INT_MIN_CMP(a, b));
+#else
+	PG_RETURN_INT32(pg_cmp_s64(a, b));
+#endif
 }
 
 Datum
@@ -191,12 +194,11 @@ btint84cmp(PG_FUNCTION_ARGS)
 	int64		a = PG_GETARG_INT64(0);
 	int32		b = PG_GETARG_INT32(1);
 
-	if (a > b)
-		PG_RETURN_INT32(A_GREATER_THAN_B);
-	else if (a == b)
-		PG_RETURN_INT32(0);
-	else
-		PG_RETURN_INT32(A_LESS_THAN_B);
+#ifdef STRESS_SORT_INT_MIN
+	PG_RETURN_INT32(STRESS_SORT_INT_MIN_CMP(a, b));
+#else
+	PG_RETURN_INT32(pg_cmp_s64(a, b));
+#endif
 }
 
 Datum
@@ -205,12 +207,11 @@ btint24cmp(PG_FUNCTION_ARGS)
 	int16		a = PG_GETARG_INT16(0);
 	int32		b = PG_GETARG_INT32(1);
 
-	if (a > b)
-		PG_RETURN_INT32(A_GREATER_THAN_B);
-	else if (a == b)
-		PG_RETURN_INT32(0);
-	else
-		PG_RETURN_INT32(A_LESS_THAN_B);
+#ifdef STRESS_SORT_INT_MIN
+	PG_RETURN_INT32(STRESS_SORT_INT_MIN_CMP(a, b));
+#else
+	PG_RETURN_INT32(pg_cmp_s32(a, b));
+#endif
 }
 
 Datum
@@ -219,12 +220,11 @@ btint42cmp(PG_FUNCTION_ARGS)
 	int32		a = PG_GETARG_INT32(0);
 	int16		b = PG_GETARG_INT16(1);
 
-	if (a > b)
-		PG_RETURN_INT32(A_GREATER_THAN_B);
-	else if (a == b)
-		PG_RETURN_INT32(0);
-	else
-		PG_RETURN_INT32(A_LESS_THAN_B);
+#ifdef STRESS_SORT_INT_MIN
+	PG_RETURN_INT32(STRESS_SORT_INT_MIN_CMP(a, b));
+#else
+	PG_RETURN_INT32(pg_cmp_s32(a, b));
+#endif
 }
 
 Datum
@@ -233,12 +233,11 @@ btint28cmp(PG_FUNCTION_ARGS)
 	int16		a = PG_GETARG_INT16(0);
 	int64		b = PG_GETARG_INT64(1);
 
-	if (a > b)
-		PG_RETURN_INT32(A_GREATER_THAN_B);
-	else if (a == b)
-		PG_RETURN_INT32(0);
-	else
-		PG_RETURN_INT32(A_LESS_THAN_B);
+#ifdef STRESS_SORT_INT_MIN
+	PG_RETURN_INT32(STRESS_SORT_INT_MIN_CMP(a, b));
+#else
+	PG_RETURN_INT32(pg_cmp_s64(a, b));
+#endif
 }
 
 Datum
@@ -247,12 +246,11 @@ btint82cmp(PG_FUNCTION_ARGS)
 	int64		a = PG_GETARG_INT64(0);
 	int16		b = PG_GETARG_INT16(1);
 
-	if (a > b)
-		PG_RETURN_INT32(A_GREATER_THAN_B);
-	else if (a == b)
-		PG_RETURN_INT32(0);
-	else
-		PG_RETURN_INT32(A_LESS_THAN_B);
+#ifdef STRESS_SORT_INT_MIN
+	PG_RETURN_INT32(STRESS_SORT_INT_MIN_CMP(a, b));
+#else
+	PG_RETURN_INT32(pg_cmp_s64(a, b));
+#endif
 }
 
 Datum
@@ -261,12 +259,11 @@ btoidcmp(PG_FUNCTION_ARGS)
 	Oid			a = PG_GETARG_OID(0);
 	Oid			b = PG_GETARG_OID(1);
 
-	if (a > b)
-		PG_RETURN_INT32(A_GREATER_THAN_B);
-	else if (a == b)
-		PG_RETURN_INT32(0);
-	else
-		PG_RETURN_INT32(A_LESS_THAN_B);
+#ifdef STRESS_SORT_INT_MIN
+	PG_RETURN_INT32(STRESS_SORT_INT_MIN_CMP(a, b));
+#else
+	PG_RETURN_INT32(pg_cmp_u32(a, b));
+#endif
 }
 
 static int
@@ -275,12 +272,11 @@ btoidfastcmp(Datum x, Datum y, SortSupport ssup)
 	Oid			a = DatumGetObjectId(x);
 	Oid			b = DatumGetObjectId(y);
 
-	if (a > b)
-		return A_GREATER_THAN_B;
-	else if (a == b)
-		return 0;
-	else
-		return A_LESS_THAN_B;
+#ifdef STRESS_SORT_INT_MIN
+	return STRESS_SORT_INT_MIN_CMP(a, b);
+#else
+	return pg_cmp_u32(a, b);
+#endif
 }
 
 Datum
@@ -305,12 +301,16 @@ btoidvectorcmp(PG_FUNCTION_ARGS)
 
 	for (i = 0; i < a->dim1; i++)
 	{
-		if (a->values[i] != b->values[i])
+		Oid			aval = a->values[i];
+		Oid			bval = b->values[i];
+
+		if (aval != bval)
 		{
-			if (a->values[i] > b->values[i])
-				PG_RETURN_INT32(A_GREATER_THAN_B);
-			else
-				PG_RETURN_INT32(A_LESS_THAN_B);
+#ifdef STRESS_SORT_INT_MIN
+			PG_RETURN_INT32(STRESS_SORT_INT_MIN_CMP(aval, bval));
+#else
+			PG_RETURN_INT32(pg_cmp_u32(aval, bval));
+#endif
 		}
 	}
 	PG_RETURN_INT32(0);

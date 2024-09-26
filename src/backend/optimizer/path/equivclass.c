@@ -27,6 +27,7 @@
 #include "optimizer/optimizer.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
+#include "optimizer/cost.h"
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
 #include "rewrite/rewriteManip.h"
@@ -268,7 +269,12 @@ process_equivalence(PlannerInfo *root,
 		{
 			EquivalenceMember *cur_em = (EquivalenceMember *) lfirst(lc2);
 
-			Assert(!cur_em->em_is_child);	/* no children yet */
+			/*
+			 * No children yet and hence no child derived clauses to process.
+			 * Child derived clauses are stored outside an EquivalenceClass,
+			 * but we don't need to worry about them here.
+			 */
+			Assert(!cur_em->em_is_child);
 
 			/*
 			 * Match constants only within the same JoinDomain (see
@@ -1161,7 +1167,12 @@ generate_base_implied_equalities_const(PlannerInfo *root,
 		Oid			eq_op;
 		RestrictInfo *rinfo;
 
-		Assert(!cur_em->em_is_child);	/* no children yet */
+		/*
+		 * No children yet, and hence no child derived clauses. Child derived
+		 * clauses are stored outside EquivalenceClass but we don't need to
+		 * worry about those in this function.
+		 */
+		Assert(!cur_em->em_is_child);
 		if (cur_em == const_em)
 			continue;
 		eq_op = select_equality_operator(ec,
@@ -1824,6 +1835,53 @@ create_join_clause(PlannerInfo *root,
 	RestrictInfo *parent_rinfo = NULL;
 	ListCell   *lc;
 	MemoryContext oldcontext;
+	Relids		qualscope;
+
+	/*
+	 * The Relids computed here may be set in the RestrictInfo created in this
+	 * function. Hence allocate the memory for them in planner context where
+	 * the memory for RestrictInfo also gets allocated.
+	 */
+	oldcontext = MemoryContextSwitchTo(root->planner_cxt);
+	qualscope = bms_union(leftem->em_relids, rightem->em_relids);
+	MemoryContextSwitchTo(oldcontext);
+
+	/*
+	 * If either EM is a child, recursively create the corresponding
+	 * parent-to-parent clause, so that we can duplicate its rinfo_serial and
+	 * fetch the child clause if it already exists.
+	 */
+	if (leftem->em_is_child || rightem->em_is_child)
+	{
+		EquivalenceMember *leftp = leftem->em_parent ? leftem->em_parent : leftem;
+		EquivalenceMember *rightp = rightem->em_parent ? rightem->em_parent : rightem;
+
+		parent_rinfo = create_join_clause(root, ec, opno,
+										  leftp, rightp,
+										  parent_ec);
+
+		rinfo = find_restrictinfo(root, parent_rinfo->rinfo_serial, qualscope);
+		if (rinfo)
+		{
+			/*
+			 * Make sure that we got the child clause made from given
+			 * equivalence members which are part of the given equivalence
+			 * class.
+			 */
+			Assert((rinfo->left_em == leftem && rinfo->right_em == rightem) ||
+				   (rinfo->left_em == rightem && rinfo->right_em == leftem));
+			Assert(rinfo->parent_ec == parent_ec);
+			Assert(rinfo->left_ec == ec && rinfo->right_ec == ec);
+
+			/*
+			 * qualscope was just used for lookup and is not required anymore.
+			 * Free it to avoid accumulating memory in case the query involves
+			 * thousands of partitions.
+			 */
+			bms_free(qualscope);
+			return rinfo;
+		}
+	}
 
 	/*
 	 * Search to see if we already built a RestrictInfo for this pair of
@@ -1866,27 +1924,12 @@ create_join_clause(PlannerInfo *root,
 	 */
 	oldcontext = MemoryContextSwitchTo(root->planner_cxt);
 
-	/*
-	 * If either EM is a child, recursively create the corresponding
-	 * parent-to-parent clause, so that we can duplicate its rinfo_serial.
-	 */
-	if (leftem->em_is_child || rightem->em_is_child)
-	{
-		EquivalenceMember *leftp = leftem->em_parent ? leftem->em_parent : leftem;
-		EquivalenceMember *rightp = rightem->em_parent ? rightem->em_parent : rightem;
-
-		parent_rinfo = create_join_clause(root, ec, opno,
-										  leftp, rightp,
-										  parent_ec);
-	}
-
 	rinfo = build_implied_join_equality(root,
 										opno,
 										ec->ec_collation,
 										leftem->em_expr,
 										rightem->em_expr,
-										bms_union(leftem->em_relids,
-												  rightem->em_relids),
+										qualscope,
 										ec->ec_min_security);
 
 	/*
@@ -1904,10 +1947,6 @@ create_join_clause(PlannerInfo *root,
 		rinfo->clause_relids = bms_add_members(rinfo->clause_relids,
 											   rightem->em_relids);
 
-	/* If it's a child clause, copy the parent's rinfo_serial */
-	if (parent_rinfo)
-		rinfo->rinfo_serial = parent_rinfo->rinfo_serial;
-
 	/* Mark the clause as redundant, or not */
 	rinfo->parent_ec = parent_ec;
 
@@ -1921,10 +1960,34 @@ create_join_clause(PlannerInfo *root,
 	/* Mark it as usable with these EMs */
 	rinfo->left_em = leftem;
 	rinfo->right_em = rightem;
-	/* and save it for possible re-use */
-	ec->ec_derives = lappend(ec->ec_derives, rinfo);
+
+	/*
+	 * and save it for possible re-use. Parent clauses go into ec_derives but
+	 * child clauses are stored in a separate hash table separately for
+	 * performance reasons as explained in the EquivaleneClass prologue.
+	 */
+	if (!parent_rinfo)
+		ec->ec_derives = lappend(ec->ec_derives, rinfo);
 
 	MemoryContextSwitchTo(oldcontext);
+
+	if (parent_rinfo)
+	{
+		/* Copy parent's rinfo_serial to child RestrictInfo. */
+		rinfo->rinfo_serial = parent_rinfo->rinfo_serial;
+
+		/*
+		 * When merging EquivalencClasses we also merge ec_derives from. But
+		 * by the time we derive child clauses, EC merging should be complete
+		 * and hence it should be safe not to save child clauses in derived
+		 * list. If that's not the case we might miss merging child derived
+		 * clauses. Following Assert will trigger if things change.
+		 */
+		Assert(root->ec_merging_done);
+
+		/* Save child RestrictInfo for further re-use. */
+		add_restrictinfo(root, rinfo);
+	}
 
 	return rinfo;
 }
@@ -2654,6 +2717,16 @@ find_derived_clause_for_ec_member(EquivalenceClass *ec,
 
 	Assert(ec->ec_has_const);
 	Assert(!em->em_is_const);
+
+	/*
+	 * The child derived clauses are stored outside an EquivalenceClass. If
+	 * this function is passed a child EquivalenceMember, we have to find the
+	 * corresponding parent clause using the parent EquivalenceMember and then
+	 * find the child clause. But as of now this function does not receive
+	 * child EquivalenceMember's, so we don't worry about all that.  Following
+	 * Assert will let us know if things change.
+	 */
+	Assert(!em->em_is_child);
 	foreach(lc, ec->ec_derives)
 	{
 		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);

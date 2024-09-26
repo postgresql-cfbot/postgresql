@@ -342,6 +342,9 @@ struct PlannerInfo
 	/* counter for assigning RestrictInfo serial numbers */
 	int			last_rinfo_serial;
 
+	/* Hash table to store and retrieve child RestrictInfos. */
+	struct HTAB *child_rinfo_hash pg_node_attr(read_write_ignore);
+
 	/*
 	 * all_result_relids is empty for SELECT, otherwise it contains at least
 	 * parse->resultRelation.  For UPDATE/DELETE/MERGE across an inheritance

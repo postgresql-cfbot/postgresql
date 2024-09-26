@@ -14,12 +14,13 @@
  */
 #include "postgres.h"
 
+#include "common/hashfn.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "optimizer/appendinfo.h"
 #include "optimizer/clauses.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/restrictinfo.h"
-#include "common/hashfn.h"
 
 static RestrictInfo *make_restrictinfo_internal(PlannerInfo *root,
 												Expr *clause,
@@ -788,7 +789,7 @@ get_child_rinfo_hash(PlannerInfo *root)
  * add_restrictinfo
  *		Add the given RestrictInfo to the RestrictInfo hash table.
  */
-extern void
+void
 add_restrictinfo(PlannerInfo *root, RestrictInfo *rinfo)
 {
 	HTAB	   *rinfo_hash = get_child_rinfo_hash(root);
@@ -800,6 +801,13 @@ add_restrictinfo(PlannerInfo *root, RestrictInfo *rinfo)
 	key.required_relids = rinfo->required_relids;
 	rinfo_entry = hash_search(rinfo_hash, &key, HASH_ENTER, &found);
 
+	/*
+	 * If the given RestrictInfo is already present in the hash table,
+	 * multiple instances of the same RestrictInfo may have been created. This
+	 * function is a good place to flag that. While multiple instances of same
+	 * RestrictInfo being created is not a correctness issue, they consume
+	 * memory unnecessarily.
+	 */
 	Assert(!found);
 	rinfo_entry->rinfo = rinfo;
 }
@@ -825,4 +833,117 @@ find_restrictinfo(PlannerInfo *root, int rinfo_serial, Relids required_relids)
 							  HASH_FIND,
 							  NULL);
 	return (rinfo_entry ? rinfo_entry->rinfo : NULL);
+}
+
+/*
+ * get_child_restrictinfos
+ * 		Returns list of child RestrictInfos obtained by translating the given
+ *		parent RestrictInfos according to the given AppendRelInfos.
+ *
+ * RestrictInfos applicable to a child relation are obtained by translating the
+ * corresponding RestrictInfos applicable to the parent relation. The same
+ * parent RestictInfo appears in restrictlist or joininfo list of many parent
+ * join relations and thus may get translated multiple times producing multiple
+ * instances of the same child RestrictInfo. In order to avoid that we store the
+ * translated child RestrictInfos in a hash table and reused.
+ *
+ * If a required translated RestrictInfo is available in the RestrictInfo hash
+ * table, the function includes the available child RestrictInfo to the result
+ * list.  Otherwise, it translates the corresponding parent RestrictInfo and
+ * adds it to the RestrictInfo hash table and the result list.
+ */
+List *
+get_child_restrictinfos(PlannerInfo *root, List *parent_restrictinfos,
+						int nappinfos, AppendRelInfo **appinfos)
+{
+	List	   *child_clauselist = NIL;
+
+	foreach_node(RestrictInfo, parent_rinfo, parent_restrictinfos)
+	{
+		Relids		child_req_relids;
+		RestrictInfo *child_rinfo = NULL;
+
+		child_req_relids = adjust_child_relids(parent_rinfo->required_relids,
+											   nappinfos, appinfos);
+
+		if (bms_equal(child_req_relids, parent_rinfo->required_relids))
+		{
+			/*
+			 * If no relid was translated, child's RestrictInfo is same as
+			 * that of parent.
+			 */
+			child_rinfo = parent_rinfo;
+		}
+		else
+		{
+			child_rinfo = find_restrictinfo(root, parent_rinfo->rinfo_serial, child_req_relids);
+
+			/*
+			 * This function may be called thousands of times when there are
+			 * thousands of partitions involved. We won't require the
+			 * translated child relids further. Hence free those to avoid
+			 * accumulating huge amounts of memory.
+			 */
+			bms_free(child_req_relids);
+		}
+
+		if (!child_rinfo)
+		{
+			child_rinfo = castNode(RestrictInfo,
+								   adjust_appendrel_attrs(root, (Node *) parent_rinfo,
+														  nappinfos, appinfos));
+			add_restrictinfo(root, child_rinfo);
+		}
+
+		child_clauselist = lappend(child_clauselist, child_rinfo);
+	}
+
+	return child_clauselist;
+}
+
+/*
+ * get_child_restrictinfos_multilevel
+ *		Similar to get_child_restrictinfos() but for translations through multiple
+ *		levels of partitioning hierarchy.
+ *
+ * This function is similar to adjust_appendrel_attrs_multilevel() except that
+ * this function makes use of RestrictInfo hash table.
+ */
+List *
+get_child_restrictinfos_multilevel(PlannerInfo *root, List *parent_clauselist,
+								   RelOptInfo *child_rel, RelOptInfo *top_parent)
+{
+	AppendRelInfo **appinfos;
+	int			nappinfos;
+	List	   *tmp_clauselist = parent_clauselist;
+	List	   *child_clauselist;
+
+	/* Recursively traverse up the partition hierarchy. */
+	if (child_rel->parent != top_parent)
+	{
+		if (child_rel->parent)
+		{
+			tmp_clauselist = get_child_restrictinfos_multilevel(root,
+																parent_clauselist,
+																child_rel->parent,
+																top_parent);
+		}
+		else
+			elog(ERROR, "child_rel is not a child of top_parent");
+	}
+
+	appinfos = find_appinfos_by_relids(root, child_rel->relids, &nappinfos);
+	child_clauselist = get_child_restrictinfos(root, tmp_clauselist,
+											   nappinfos, appinfos);
+
+	/*
+	 * This function will be called thousands of times, if there are thousands
+	 * of partitions involved. Free temporary objects created in this function
+	 * to avoid accumulating huge memory.
+	 */
+	pfree(appinfos);
+	if (tmp_clauselist != parent_clauselist)
+		list_free(tmp_clauselist);
+
+	return child_clauselist;
 }

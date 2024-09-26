@@ -203,4 +203,12 @@ extern List *pull_var_clause(Node *node, int flags);
 extern Node *flatten_join_alias_vars(PlannerInfo *root, Query *query, Node *node);
 extern Node *flatten_group_exprs(PlannerInfo *root, Query *query, Node *node);
 
+// GUC support for disabled indexes
+/* Comma-separated list of indexes to be disabled for the planner */
+extern PGDLLIMPORT char *disabled_indexes;
+char 		*disabled_indexes;
+
+extern void assign_disabled_indexes(const char *newval, void *extra);
+extern bool is_index_disabled(Oid indexoid);
+
 #endif							/* OPTIMIZER_H */

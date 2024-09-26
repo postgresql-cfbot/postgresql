@@ -109,6 +109,50 @@ static int32_t u_strToTitle_default_BI(UChar *dest, int32_t destCapacity,
 									   const char *locale,
 									   UErrorCode *pErrorCode);
 
+static int
+char_properties_icu(pg_wchar wc, int mask, pg_locale_t locale)
+{
+	int			result = 0;
+
+	if ((mask & PG_ISDIGIT) && u_isdigit(wc))
+		result |= PG_ISDIGIT;
+	if ((mask & PG_ISALPHA) && u_isalpha(wc))
+		result |= PG_ISALPHA;
+	if ((mask & PG_ISUPPER) && u_isupper(wc))
+		result |= PG_ISUPPER;
+	if ((mask & PG_ISLOWER) && u_islower(wc))
+		result |= PG_ISLOWER;
+	if ((mask & PG_ISGRAPH) && u_isgraph(wc))
+		result |= PG_ISGRAPH;
+	if ((mask & PG_ISPRINT) && u_isprint(wc))
+		result |= PG_ISPRINT;
+	if ((mask & PG_ISPUNCT) && u_ispunct(wc))
+		result |= PG_ISPUNCT;
+	if ((mask & PG_ISSPACE) && u_isspace(wc))
+		result |= PG_ISSPACE;
+
+	return result;
+}
+
+static bool
+char_is_cased_icu(char ch, pg_locale_t locale)
+{
+	return IS_HIGHBIT_SET(ch) ||
+		(ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+}
+
+static pg_wchar
+toupper_icu(pg_wchar wc, pg_locale_t locale)
+{
+	return u_toupper(wc);
+}
+
+static pg_wchar
+tolower_icu(pg_wchar wc, pg_locale_t locale)
+{
+	return u_tolower(wc);
+}
+
 static const struct collate_methods collate_methods_icu = {
 	.strncoll = strncoll_icu,
 	.strnxfrm = strnxfrm_icu,
@@ -131,6 +175,13 @@ static const struct casemap_methods casemap_methods_icu = {
 	.strlower = strlower_icu,
 	.strtitle = strtitle_icu,
 	.strupper = strupper_icu,
+};
+
+static const struct ctype_methods ctype_methods_icu = {
+	.char_properties = char_properties_icu,
+	.char_is_cased = char_is_cased_icu,
+	.wc_toupper = toupper_icu,
+	.wc_tolower = tolower_icu,
 };
 #endif
 
@@ -203,6 +254,7 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 	else
 		result->collate = &collate_methods_icu;
 	result->casemap = &casemap_methods_icu;
+	result->ctype = &ctype_methods_icu;
 
 	return result;
 #else

@@ -90,6 +90,20 @@ struct collate_methods
 	bool		strxfrm_is_safe;
 };
 
+/* methods that define string case mapping behavior */
+struct casemap_methods
+{
+	size_t		(*strlower) (char *dest, size_t destsize,
+							 const char *src, ssize_t srclen,
+							 pg_locale_t locale);
+	size_t		(*strtitle) (char *dest, size_t destsize,
+							 const char *src, ssize_t srclen,
+							 pg_locale_t locale);
+	size_t		(*strupper) (char *dest, size_t destsize,
+							 const char *src, ssize_t srclen,
+							 pg_locale_t locale);
+};
+
 /*
  * We use a discriminated union to hold either a locale_t or an ICU collator.
  * pg_locale_t is occasionally checked for truth, so make it a pointer.
@@ -114,6 +128,7 @@ struct pg_locale_struct
 	bool		ctype_is_c;
 
 	const struct collate_methods *collate;	/* NULL if collate_is_c */
+	const struct casemap_methods *casemap;	/* NULL if ctype_is_c */
 
 	union
 	{
@@ -138,6 +153,15 @@ extern void init_database_collation(void);
 extern pg_locale_t pg_newlocale_from_collation(Oid collid);
 
 extern char *get_collation_actual_version(char collprovider, const char *collcollate);
+extern size_t pg_strlower(char *dest, size_t destsize,
+						  const char *src, ssize_t srclen,
+						  pg_locale_t locale);
+extern size_t pg_strtitle(char *dest, size_t destsize,
+						  const char *src, ssize_t srclen,
+						  pg_locale_t locale);
+extern size_t pg_strupper(char *dest, size_t destsize,
+						  const char *src, ssize_t srclen,
+						  pg_locale_t locale);
 extern int	pg_strcoll(const char *arg1, const char *arg2, pg_locale_t locale);
 extern int	pg_strncoll(const char *arg1, ssize_t len1,
 						const char *arg2, ssize_t len2, pg_locale_t locale);
@@ -156,11 +180,6 @@ extern int	builtin_locale_encoding(const char *locale);
 extern const char *builtin_validate_locale(int encoding, const char *locale);
 extern void icu_validate_locale(const char *loc_str);
 extern char *icu_language_tag(const char *loc_str, int elevel);
-
-#ifdef USE_ICU
-extern int32_t icu_to_uchar(UChar **buff_uchar, const char *buff, size_t nbytes);
-extern int32_t icu_from_uchar(char **result, const UChar *buff_uchar, int32_t len_uchar);
-#endif
 
 /* These functions convert from/to libc's wchar_t, *not* pg_wchar_t */
 extern size_t wchar2char(char *to, const wchar_t *from, size_t tolen,

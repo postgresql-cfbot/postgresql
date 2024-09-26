@@ -19,7 +19,7 @@
 #include "optimizer/clauses.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/restrictinfo.h"
-
+#include "common/hashfn.h"
 
 static RestrictInfo *make_restrictinfo_internal(PlannerInfo *root,
 												Expr *clause,
@@ -684,4 +684,145 @@ join_clause_is_movable_into(RestrictInfo *rinfo,
 		return false;
 
 	return true;
+}
+
+/* ----------------------------------------------------------------------------
+ * RestrictInfo hash table interface.
+ *
+ * For storing and retrieving child RestrictInfos. Though the interface is used
+ * for child RestrictInfos, it can be used for parent RestrictInfos as well.
+ * Hence the names of functions and structures do not mention child in it unless
+ * necessary.
+ *
+ * RestrictInfo::rinfo_serial is unique for a set of RestrictInfos, all of
+ * which, are versions of same condition.  RestrictInfo::required_relids
+ * identifies the relations to which the RestrictInfo is applicable.  Together
+ * they are used as a key into the hash table since they uniquely identify a
+ * RestictInfo.
+ * ----------------------------------------------------------------------------
+ */
+
+/*
+ * Hash key for RestrictInfo hash table.
+ */
+typedef struct
+{
+	int			rinfo_serial;	/* Same as RestrictInfo::rinfo_serial */
+	Relids		required_relids;	/* Same as RestrictInfo::required_relids */
+} rinfo_tab_key;
+
+/* Hash table entry for RestrictInfo hash table. */
+typedef struct rinfo_tab_entry
+{
+	rinfo_tab_key key;			/* Key must be first. */
+	RestrictInfo *rinfo;
+} rinfo_tab_entry;
+
+/*
+ * rinfo_tab_key_hash
+ *		Computes hash of RestrictInfo hash table key.
+ */
+static uint32
+rinfo_tab_key_hash(const void *key, Size size)
+{
+	rinfo_tab_key *rtabkey = (rinfo_tab_key *) key;
+	uint32		result;
+
+	Assert(sizeof(rinfo_tab_key) == size);
+
+	/* Combine hashes of all components of the key. */
+	result = hash_bytes_uint32(rtabkey->rinfo_serial);
+	result = hash_combine(result, bms_hash_value(rtabkey->required_relids));
+
+	return result;
+}
+
+/*
+ * rinfo_tab_key_match
+ *		Match function for RestrictInfo hash table.
+ */
+static int
+rinfo_tab_key_match(const void *key1, const void *key2, Size size)
+{
+	rinfo_tab_key *rtabkey1 = (rinfo_tab_key *) key1;
+	rinfo_tab_key *rtabkey2 = (rinfo_tab_key *) key2;
+	int			result;
+
+	Assert(sizeof(rinfo_tab_key) == size);
+
+	result = rtabkey1->rinfo_serial - rtabkey2->rinfo_serial;
+	if (result)
+		return result;
+
+	return !bms_equal(rtabkey1->required_relids, rtabkey2->required_relids);
+}
+
+/*
+ * get_child_rinfo_hash
+ *		Returns the child RestrictInfo hash table from PlannerInfo, creating it if
+ *		necessary.
+ */
+static HTAB *
+get_child_rinfo_hash(PlannerInfo *root)
+{
+	if (!root->child_rinfo_hash)
+	{
+		HASHCTL		hash_ctl = {0};
+
+		hash_ctl.keysize = sizeof(rinfo_tab_key);
+		hash_ctl.entrysize = sizeof(rinfo_tab_entry);
+		hash_ctl.hcxt = root->planner_cxt;
+		hash_ctl.hash = rinfo_tab_key_hash;
+		hash_ctl.match = rinfo_tab_key_match;
+
+		root->child_rinfo_hash = hash_create("restrictinfo hash table",
+											 1000,
+											 &hash_ctl,
+											 HASH_ELEM | HASH_CONTEXT | HASH_FUNCTION | HASH_COMPARE);
+	}
+
+	return root->child_rinfo_hash;
+}
+
+/*
+ * add_restrictinfo
+ *		Add the given RestrictInfo to the RestrictInfo hash table.
+ */
+extern void
+add_restrictinfo(PlannerInfo *root, RestrictInfo *rinfo)
+{
+	HTAB	   *rinfo_hash = get_child_rinfo_hash(root);
+	rinfo_tab_key key;
+	rinfo_tab_entry *rinfo_entry;
+	bool		found;
+
+	key.rinfo_serial = rinfo->rinfo_serial;
+	key.required_relids = rinfo->required_relids;
+	rinfo_entry = hash_search(rinfo_hash, &key, HASH_ENTER, &found);
+
+	Assert(!found);
+	rinfo_entry->rinfo = rinfo;
+}
+
+/*
+ * find_restrictinfo
+ *		Return the RestrictInfo with given rinfo_serial and
+ *		required_relids from RestrictInfo hash table.
+ *
+ * The function returns NULL if it does not find the required RestrictInfo in
+ * the hash table.
+ */
+RestrictInfo *
+find_restrictinfo(PlannerInfo *root, int rinfo_serial, Relids required_relids)
+{
+	HTAB	   *rinfo_hash = get_child_rinfo_hash(root);
+	rinfo_tab_entry *rinfo_entry;
+	rinfo_tab_key key;
+
+	key.rinfo_serial = rinfo_serial;
+	key.required_relids = required_relids;
+	rinfo_entry = hash_search(rinfo_hash, &key,
+							  HASH_FIND,
+							  NULL);
+	return (rinfo_entry ? rinfo_entry->rinfo : NULL);
 }

@@ -2025,6 +2025,7 @@ ParseLoc
 ParseNamespaceColumn
 ParseNamespaceItem
 ParseParamRefHook
+ParseSortOrderState
 ParseState
 ParsedLex
 ParsedScript

@@ -164,6 +164,17 @@ CREATE MATERIALIZED VIEW [ IF NOT EXISTS ] <replaceable>table_name</replaceable>
  </refsect1>
 
  <refsect1>
+  <title>Notes</title>
+
+  <para>
+   Unless <command>WITH NO DATA</command> is used, the <xref
+   linkend="guc-search-path"/> is temporarily changed to
+   <literal>pg_catalog, pg_temp</literal> while
+   <command>CREATE MATERIALIZED VIEW</command> is running.
+  </para>
+ </refsect1>
+
+ <refsect1>
   <title>Compatibility</title>
 
   <para>

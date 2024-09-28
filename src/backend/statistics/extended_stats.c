@@ -1309,8 +1309,10 @@ choose_best_statistics(List *stats, char requiredkind, bool inh,
  * (d) ScalarArrayOpExprs of the form (Var/Expr op ANY (Const)) or
  * (Var/Expr op ALL (Const))
  *
+ * (e) (Var op Var)
+ *
  * In the future, the range of supported clauses may be expanded to more
- * complex cases, for example (Var op Var).
+ * complex cases.
  *
  * Arguments:
  * clause: (sub)clause to be inspected (bare clause, not a RestrictInfo)
@@ -1359,19 +1361,17 @@ statext_is_compatible_clause_internal(PlannerInfo *root, Node *clause,
 		return true;
 	}
 
-	/* (Var/Expr op Const) or (Const op Var/Expr) */
+	/* (Var/Expr op Const), (Const op Var/Expr) or (Var op Var) */
 	if (is_opclause(clause))
 	{
 		RangeTblEntry *rte = root->simple_rte_array[relid];
 		OpExpr	   *expr = (OpExpr *) clause;
 		Node	   *clause_expr;
+		Node       *clause_expr_left = NULL;
+		Node       *clause_expr_right = NULL;
 
 		/* Only expressions with two arguments are considered compatible. */
 		if (list_length(expr->args) != 2)
-			return false;
-
-		/* Check if the expression has the right shape */
-		if (!examine_opclause_args(expr->args, &clause_expr, NULL, NULL))
 			return false;
 
 		/*
@@ -1411,14 +1411,29 @@ statext_is_compatible_clause_internal(PlannerInfo *root, Node *clause,
 			!get_func_leakproof(get_opcode(expr->opno)))
 			return false;
 
-		/* Check (Var op Const) or (Const op Var) clauses by recursing. */
-		if (IsA(clause_expr, Var))
-			return statext_is_compatible_clause_internal(root, clause_expr,
+		if (examine_opclause_args(expr->args, &clause_expr, NULL, NULL))
+		{
+			/* Check (Var op Const) or (Const op Var) clauses by recursing. */
+			if (IsA(clause_expr, Var))
+				return statext_is_compatible_clause_internal(root, clause_expr,
 														 relid, attnums, exprs);
 
-		/* Otherwise we have (Expr op Const) or (Const op Expr). */
-		*exprs = lappend(*exprs, clause_expr);
-		return true;
+			/* Otherwise we have (Expr op Const) or (Const op Expr). */
+			*exprs = lappend(*exprs, clause_expr);
+			return true;
+		}
+		else if (is_opclause_var_op_var(expr->args, &clause_expr_left, &clause_expr_right))
+		{
+			/* Check (Var op Var) clauses by recursing. */
+			if (!statext_is_compatible_clause_internal(root, clause_expr_left, relid, attnums, exprs))
+				return false;
+			if (!statext_is_compatible_clause_internal(root, clause_expr_right, relid, attnums, exprs))
+				return false;
+
+			return true;
+		}
+		else
+			return false;
 	}
 
 	/* Var/Expr IN Array */
@@ -1716,13 +1731,13 @@ static Selectivity
 statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varRelid,
 								   JoinType jointype, SpecialJoinInfo *sjinfo,
 								   RelOptInfo *rel, Bitmapset **estimatedclauses,
-								   bool is_or)
+								   enum ClauseType clause_type)
 {
 	ListCell   *l;
 	Bitmapset **list_attnums;	/* attnums extracted from the clause */
 	List	  **list_exprs;		/* expressions matched to any statistic */
 	int			listidx;
-	Selectivity sel = (is_or) ? 0.0 : 1.0;
+	Selectivity sel = (clause_type == OR_CLAUSE) ? 0.0 : 1.0;
 	RangeTblEntry *rte = planner_rt_fetch(rel->relid, root);
 
 	/* check if there's any stats that might be useful for us. */
@@ -1857,7 +1872,7 @@ statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varReli
 			list_exprs[listidx] = NULL;
 		}
 
-		if (is_or)
+		if (clause_type == OR_CLAUSE)
 		{
 			bool	   *or_matches = NULL;
 			Selectivity simple_or_sel = 0.0,
@@ -1957,7 +1972,7 @@ statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varReli
 			 */
 			sel = sel + stat_sel - sel * stat_sel;
 		}
-		else					/* Implicitly-ANDed list of clauses */
+		else if (clause_type == AND_CLAUSE)
 		{
 			Selectivity simple_sel,
 						mcv_sel,
@@ -1991,6 +2006,19 @@ statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varReli
 			/* Factor this into the overall result */
 			sel *= stat_sel;
 		}
+		else if (clause_type == VAR_OP_VAR_CLAUSE)
+		{
+			Selectivity mcv_basesel,
+						mcv_totalsel;
+			/*
+			 * Multi-column estimate using MCV statistics, along with base and
+			 * total selectivities.
+			 */
+			sel = mcv_clauselist_selectivity(root, stat, stat_clauses,
+												varRelid, jointype, sjinfo,
+												rel, &mcv_basesel,
+												&mcv_totalsel);
+		}
 	}
 
 	return sel;
@@ -2004,19 +2032,19 @@ Selectivity
 statext_clauselist_selectivity(PlannerInfo *root, List *clauses, int varRelid,
 							   JoinType jointype, SpecialJoinInfo *sjinfo,
 							   RelOptInfo *rel, Bitmapset **estimatedclauses,
-							   bool is_or)
+							   enum ClauseType clause_type)
 {
 	Selectivity sel;
 
 	/* First, try estimating clauses using a multivariate MCV list. */
 	sel = statext_mcv_clauselist_selectivity(root, clauses, varRelid, jointype,
-											 sjinfo, rel, estimatedclauses, is_or);
+											 sjinfo, rel, estimatedclauses, clause_type);
 
 	/*
 	 * Functional dependencies only work for clauses connected by AND, so for
 	 * OR clauses we're done.
 	 */
-	if (is_or)
+	if (clause_type == OR_CLAUSE)
 		return sel;
 
 	/*
@@ -2102,6 +2130,51 @@ examine_opclause_args(List *args, Node **exprp, Const **cstp,
 	return true;
 }
 
+/*
+ * is_opclause_var_op_var
+ *		Split an operator expression's arguments into Var and Var parts.
+ *
+ * Attempts to match the arguments to (Var op Var), possibly with
+ * a RelabelType on top. When the expression matches this
+ * form, returns true, otherwise returns false.
+ *
+ * Optionally returns pointers to the extracted Var nodes, when passed
+ * non-null pointers (exprp_left, exprp_right).
+ */
+bool
+is_opclause_var_op_var(List *args, Node **expr_left, Node **expr_right)
+{
+	Node	   *leftop,
+			   *rightop;
+	
+
+	/* enforced by statext_is_compatible_clause_internal */
+	Assert(list_length(args) == 2);
+
+	leftop = linitial(args);
+	rightop = lsecond(args);
+
+	if (IsA(leftop, RelabelType))
+		leftop = (Node *) ((RelabelType *) leftop)->arg;
+
+	if (IsA(rightop, RelabelType))
+		rightop = (Node *) ((RelabelType *) rightop)->arg;
+
+	if (IsA(rightop, Var) && IsA(leftop, Var))
+	{
+		if(expr_left && expr_right)
+		{
+			*expr_left = (Node *) leftop;
+			*expr_right = (Node *) rightop;
+		}
+	}
+	else
+		return false;
+
+	Assert(expr_left && expr_right);
+
+	return true;
+}
 
 /*
  * Compute statistics about expressions of a relation.

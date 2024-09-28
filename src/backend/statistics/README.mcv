@@ -39,12 +39,10 @@ Currently MCV lists support estimation of the following clause types:
     (b) inequality clauses    WHERE (a < 1) AND (b >= 2)
     (c) NULL clauses          WHERE (a IS NULL) AND (b IS NOT NULL)
     (d) OR clauses            WHERE (a < 1) OR (b >= 2)
-
-It's possible to add support for additional clauses, for example:
-
     (e) multi-var clauses     WHERE (a > b)
 
-and possibly others. These are tasks for the future, not yet implemented.
+It's possible to add support for additional clauses.
+These are tasks for the future, not yet implemented.
 
 
 Hashed MCV (not yet implemented)

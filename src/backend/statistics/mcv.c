@@ -1610,6 +1610,7 @@ mcv_get_match_bitmap(PlannerInfo *root, List *clauses,
 	Assert(mcvlist->nitems <= STATS_MCVLIST_MAX_ITEMS);
 
 	matches = palloc(sizeof(bool) * mcvlist->nitems);
+
 	memset(matches, !is_or, sizeof(bool) * mcvlist->nitems);
 
 	/*
@@ -1639,73 +1640,113 @@ mcv_get_match_bitmap(PlannerInfo *root, List *clauses,
 			bool		expronleft;
 			int			idx;
 			Oid			collid;
+			Node       *clause_expr_left,
+			           *clause_expr_right;
 
 			fmgr_info(get_opcode(expr->opno), &opproc);
 
 			/* extract the var/expr and const from the expression */
-			if (!examine_opclause_args(expr->args, &clause_expr, &cst, &expronleft))
-				elog(ERROR, "incompatible clause");
-
-			/* match the attribute/expression to a dimension of the statistic */
-			idx = mcv_match_expression(clause_expr, keys, exprs, &collid);
-
-			/*
-			 * Walk through the MCV items and evaluate the current clause. We
-			 * can skip items that were already ruled out, and terminate if
-			 * there are no remaining MCV items that might possibly match.
-			 */
-			for (int i = 0; i < mcvlist->nitems; i++)
+			if (examine_opclause_args(expr->args, &clause_expr, &cst, &expronleft))
 			{
-				bool		match = true;
-				MCVItem    *item = &mcvlist->items[i];
-
-				Assert(idx >= 0);
+				/* match the attribute/expression to a dimension of the statistic */
+				idx = mcv_match_expression(clause_expr, keys, exprs, &collid);
 
 				/*
-				 * When the MCV item or the Const value is NULL we can treat
-				 * this as a mismatch. We must not call the operator because
-				 * of strictness.
-				 */
-				if (item->isnull[idx] || cst->constisnull)
+				* Walk through the MCV items and evaluate the current clause. We
+				* can skip items that were already ruled out, and terminate if
+				* there are no remaining MCV items that might possibly match.
+				*/
+				for (int i = 0; i < mcvlist->nitems; i++)
 				{
-					matches[i] = RESULT_MERGE(matches[i], is_or, false);
-					continue;
+					bool		match = true;
+					MCVItem    *item = &mcvlist->items[i];
+
+					Assert(idx >= 0);
+
+					/*
+					* When the MCV item or the Const value is NULL we can treat
+					* this as a mismatch. We must not call the operator because
+					* of strictness.
+					*/
+					if (item->isnull[idx] || cst->constisnull)
+					{
+						matches[i] = RESULT_MERGE(matches[i], is_or, false);
+						continue;
+					}
+
+					/*
+					* Skip MCV items that can't change result in the bitmap. Once
+					* the value gets false for AND-lists, or true for OR-lists,
+					* we don't need to look at more clauses.
+					*/
+					if (RESULT_IS_FINAL(matches[i], is_or))
+						continue;
+
+					/*
+					* First check whether the constant is below the lower
+					* boundary (in that case we can skip the bucket, because
+					* there's no overlap).
+					*
+					* We don't store collations used to build the statistics, but
+					* we can use the collation for the attribute itself, as
+					* stored in varcollid. We do reset the statistics after a
+					* type change (including collation change), so this is OK.
+					* For expressions, we use the collation extracted from the
+					* expression itself.
+					*/
+					if (expronleft)
+						match = DatumGetBool(FunctionCall2Coll(&opproc,
+															collid,
+															item->values[idx],
+															cst->constvalue));
+					else
+						match = DatumGetBool(FunctionCall2Coll(&opproc,
+															collid,
+															cst->constvalue,
+															item->values[idx]));
+
+					/* update the match bitmap with the result */
+					matches[i] = RESULT_MERGE(matches[i], is_or, match);
 				}
-
-				/*
-				 * Skip MCV items that can't change result in the bitmap. Once
-				 * the value gets false for AND-lists, or true for OR-lists,
-				 * we don't need to look at more clauses.
-				 */
-				if (RESULT_IS_FINAL(matches[i], is_or))
-					continue;
-
-				/*
-				 * First check whether the constant is below the lower
-				 * boundary (in that case we can skip the bucket, because
-				 * there's no overlap).
-				 *
-				 * We don't store collations used to build the statistics, but
-				 * we can use the collation for the attribute itself, as
-				 * stored in varcollid. We do reset the statistics after a
-				 * type change (including collation change), so this is OK.
-				 * For expressions, we use the collation extracted from the
-				 * expression itself.
-				 */
-				if (expronleft)
-					match = DatumGetBool(FunctionCall2Coll(&opproc,
-														   collid,
-														   item->values[idx],
-														   cst->constvalue));
-				else
-					match = DatumGetBool(FunctionCall2Coll(&opproc,
-														   collid,
-														   cst->constvalue,
-														   item->values[idx]));
-
-				/* update the match bitmap with the result */
-				matches[i] = RESULT_MERGE(matches[i], is_or, match);
 			}
+			else if(is_opclause_var_op_var(expr->args, &clause_expr_left, &clause_expr_right))
+			{
+				/* extract the var/expr and const from the expression */
+				int idx_left = mcv_match_expression(clause_expr_left, keys, exprs, &collid);
+				int idx_right = mcv_match_expression(clause_expr_right, keys, exprs, &collid);
+
+				Assert((idx_left >= 0) && (idx_left < bms_num_members(keys) + list_length(exprs)));
+				Assert((idx_right >= 0) && (idx_right < bms_num_members(keys) + list_length(exprs)));
+
+				for (int i = 0; i < mcvlist->nitems; i++)
+				{
+					MCVItem    *item = &mcvlist->items[i];
+
+					/*
+					 * When either of the MCV items is NULL we can treat this
+					 * as a mismatch. We must not call the operator because
+					 * of strictness.
+					 */
+					if (item->isnull[idx_left] || item->isnull[idx_right])
+					{
+						matches[i] = false;
+						continue;
+					}
+
+					/*
+					 * We don't store collations used to build the statistics,
+					 * but we can use the collation for the attribute itself,
+					 * as stored in varcollid. We do reset the statistics after
+					 * a type change (including collation change), so this is OK.
+					 */
+					matches[i] = DatumGetBool(FunctionCall2Coll(&opproc,
+														   collid,
+														   item->values[idx_left],
+														   item->values[idx_right]));
+				}
+			}
+			else
+				elog(ERROR, "incompatible clause");
 		}
 		else if (IsA(clause, ScalarArrayOpExpr))
 		{

@@ -88,6 +88,7 @@ extern bool pq_check_connection(void);
  */
 extern PGDLLIMPORT char *ssl_library;
 extern PGDLLIMPORT char *ssl_cert_file;
+extern PGDLLIMPORT char *ssl_ocsp_file;
 extern PGDLLIMPORT char *ssl_key_file;
 extern PGDLLIMPORT char *ssl_ca_file;
 extern PGDLLIMPORT char *ssl_crl_file;

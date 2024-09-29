@@ -35,6 +35,10 @@ SERVERS := server-cn-and-alt-names \
 	server-revoked
 CLIENTS := client client-dn client-revoked client_ext client-long \
 	client-revoked-utf8
+OCSPS := server-ocsp-good \
+	server-ocsp-revoked \
+	server-ocsp-expired \
+	server-ocsp-unknown
 
 #
 # To add a new non-standard certificate, add it to SPECIAL_CERTS and then add
@@ -64,12 +68,13 @@ COMBINATIONS := \
 	ssl/client+client_ca.crt \
 	ssl/server-cn-only+server_ca.crt
 
-CERTIFICATES := root_ca server_ca client_ca $(SERVERS) $(CLIENTS)
+CERTIFICATES := root_ca server_ca client_ca ocsp_ca $(SERVERS) $(CLIENTS)
 STANDARD_CERTS := $(CERTIFICATES:%=ssl/%.crt)
 STANDARD_KEYS := $(CERTIFICATES:%=ssl/%.key)
 CRLS := ssl/root.crl \
 	ssl/client.crl \
 	ssl/server.crl
+OCSPRES := $(OCSPS:%=ssl/%.res)
 
 SSLFILES := \
 	$(STANDARD_CERTS) \
@@ -77,7 +82,8 @@ SSLFILES := \
 	$(SPECIAL_CERTS) \
 	$(SPECIAL_KEYS) \
 	$(COMBINATIONS) \
-	$(CRLS)
+	$(CRLS) \
+	$(OCSPRES)
 SSLDIRS := ssl/client-crldir \
 	ssl/server-crldir \
 	ssl/root+client-crldir \
@@ -175,13 +181,14 @@ $(STANDARD_KEYS):
 #
 
 CA_CERTS     := ssl/server_ca.crt ssl/client_ca.crt
-SERVER_CERTS := $(SERVERS:%=ssl/%.crt)
+SERVER_CERTS := $(SERVERS:%=ssl/%.crt) ssl/ocsp_ca.crt
 CLIENT_CERTS := $(CLIENTS:%=ssl/%.crt)
 
 # See the "CA State" section below.
 root_ca_state_files := ssl/root_ca-certindex ssl/root_ca-certindex.attr ssl/root_ca.srl
 server_ca_state_files := ssl/server_ca-certindex ssl/server_ca-certindex.attr ssl/server_ca.srl
 client_ca_state_files := ssl/client_ca-certindex ssl/client_ca-certindex.attr ssl/client_ca.srl
+ocsp_ca_state_files := ssl/ocsp-certindex ssl/ocsp-certindex.attr ssl/ocsp_ca.srl
 
 # These are the workhorse recipes. `openssl ca` can't be safely run from
 # parallel processes, so we must mark the entire Makefile .NOTPARALLEL.
@@ -210,6 +217,7 @@ ssl/%.csr: ssl/%.key conf/%.config
 #
 
 .INTERMEDIATE: $(root_ca_state_files) $(server_ca_state_files) $(client_ca_state_files)
+.INTERMEDIATE: $(ocsp_ca_state_files)
 
 # OpenSSL requires a directory to put all generated certificates in. We don't
 # use this for anything, but we need a location.
@@ -226,6 +234,49 @@ ssl/%-certindex.attr:
 # avoid collisions across Make runs.
 ssl/%.srl:
 	date +%Y%m%d%H%M%S00 > $@
+
+#
+# OCSP
+#
+.INTERMEDIATE: $(OCSPS:%=ssl/%.idx)
+
+# to generate an ocsp response with status 'good'
+ssl/server-ocsp-good.idx: conf/ocsp_ca.config ssl/server-cn-only.crt | $(ocsp_ca_state_files)
+	: > ssl/ocsp-certindex
+	openssl ca -config conf/ocsp_ca.config -valid ssl/server-cn-only.crt
+	cp ssl/ocsp-certindex $@
+
+# to generate an ocsp response with status 'revoked'
+ssl/server-ocsp-revoked.idx: conf/ocsp_ca.config ssl/server-cn-only.crt | $(ocsp_ca_state_files)
+	: > ssl/ocsp-certindex
+	openssl ca -config conf/ocsp_ca.config -revoke ssl/server-cn-only.crt
+	cp ssl/ocsp-certindex $@
+
+# to generate an ocsp response with status 'unknown'
+ssl/server-ocsp-unknown.idx:
+	touch $@
+
+# to generate an ocsp response with status 'good' but nextUpdate 'expired' in 1 minute
+ssl/server-ocsp-expired.idx: ssl/server-ocsp-good.idx
+	cp $< $@
+
+# All of the responses have the server cert in the chain.
+OCSPCHAIN = -issuer ssl/server_ca.crt -cert ssl/server-cn-only.crt
+$(OCSPRES): ssl/server_ca.crt ssl/server-cn-only.crt
+
+# Additionally, the server CA is part of the server-ca-* responses.
+ssl/server-ca-%.res: OCSPCHAIN += -issuer ssl/root_ca.crt -cert ssl/server_ca.crt
+ssl/server-ca-%.res: ssl/root_ca.crt
+
+# Most responses should "never" expire, except the ones being explicitly tested
+# for expiration.
+OCSPEXP = -ndays 10000
+ssl/%-ocsp-expired.res: OCSPEXP = -nmin 1
+
+$(OCSPRES): ssl/%.res: ssl/%.idx ssl/ocsp_ca.crt ssl/ocsp_ca.key ssl/root+server_ca.crt
+	$(OPENSSL) ocsp -index $< -respout $@ -rsigner ssl/ocsp_ca.crt \
+		-rkey ssl/ocsp_ca.key -CA ssl/root+server_ca.crt \
+		$(OCSPEXP) $(OCSPCHAIN)
 
 #
 # CRLs
@@ -262,7 +313,7 @@ ssl/%-crldir:
 
 .PHONY: sslfiles-clean
 sslfiles-clean:
-	rm -f $(SSLFILES) ssl/*.old ssl/*.csr ssl/*.srl ssl/*-certindex*
+	rm -f $(SSLFILES) ssl/*.old ssl/*.csr ssl/*.srl ssl/*-certindex* ssl/*.idx ssl/*.res
 	rm -rf $(SSLDIRS) ssl/new_certs_dir
 
 # The difference between the below clean targets and sslfiles-clean is that the

@@ -312,7 +312,6 @@ extern PGDLLIMPORT uint64 (*pg_popcount_masked_optimized) (const char *buf, int 
  * files.
  */
 #ifdef USE_AVX512_POPCNT_WITH_RUNTIME_CHECK
-extern bool pg_popcount_avx512_available(void);
 extern uint64 pg_popcount_avx512(const char *buf, int bytes);
 extern uint64 pg_popcount_masked_avx512(const char *buf, int bytes, bits8 mask);
 #endif

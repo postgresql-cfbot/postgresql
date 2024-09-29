@@ -20,7 +20,7 @@
 #endif
 
 #include "port/pg_bitutils.h"
-
+#include "port/pg_hw_feat_check.h"
 
 /*
  * Array giving the position of the left-most set bit for each possible
@@ -109,7 +109,6 @@ static uint64 pg_popcount_slow(const char *buf, int bytes);
 static uint64 pg_popcount_masked_slow(const char *buf, int bytes, bits8 mask);
 
 #ifdef TRY_POPCNT_FAST
-static bool pg_popcount_available(void);
 static int	pg_popcount32_choose(uint32 word);
 static int	pg_popcount64_choose(uint64 word);
 static uint64 pg_popcount_choose(const char *buf, int bytes);
@@ -126,25 +125,6 @@ uint64		(*pg_popcount_masked_optimized) (const char *buf, int bytes, bits8 mask)
 #endif							/* TRY_POPCNT_FAST */
 
 #ifdef TRY_POPCNT_FAST
-
-/*
- * Return true if CPUID indicates that the POPCNT instruction is available.
- */
-static bool
-pg_popcount_available(void)
-{
-	unsigned int exx[4] = {0, 0, 0, 0};
-
-#if defined(HAVE__GET_CPUID)
-	__get_cpuid(1, &exx[0], &exx[1], &exx[2], &exx[3]);
-#elif defined(HAVE__CPUID)
-	__cpuid(exx, 1);
-#else
-#error cpuid instruction not available
-#endif
-
-	return (exx[2] & (1 << 23)) != 0;	/* POPCNT */
-}
 
 /*
  * These functions get called on the first call to pg_popcount32 etc.

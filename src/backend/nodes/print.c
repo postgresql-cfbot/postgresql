@@ -25,6 +25,7 @@
 #include "nodes/pathnodes.h"
 #include "nodes/print.h"
 #include "parser/parsetree.h"
+#include "pgstat.h"
 #include "utils/lsyscache.h"
 
 
@@ -244,6 +245,24 @@ pretty_format_node_dump(const char *dump)
 #undef INDENTSTOP
 #undef MAXINDENT
 #undef LINELEN
+}
+
+char *
+format_datum(PGFunction outfunc, Datum val)
+{
+	FmgrInfo flinfo;
+
+	flinfo.fn_addr = outfunc;
+	flinfo.fn_oid = InvalidOid;
+	flinfo.fn_nargs = 1;
+	flinfo.fn_strict = true;
+	flinfo.fn_retset = false;
+	flinfo.fn_stats = TRACK_FUNC_ALL;
+	flinfo.fn_extra = NULL;
+	flinfo.fn_mcxt = CurrentMemoryContext;
+	flinfo.fn_expr = NULL;
+
+	return OutputFunctionCall(&flinfo, val);
 }
 
 /*

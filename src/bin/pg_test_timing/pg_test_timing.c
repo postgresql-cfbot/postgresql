@@ -9,18 +9,23 @@
 #include <limits.h>
 
 #include "getopt_long.h"
+#include "port/pg_bitutils.h"
 #include "portability/instr_time.h"
 
 static const char *progname;
 
 static unsigned int test_duration = 3;
 
+/* record duration in powers of 2 nanoseconds */
+static long long int histogram[32];
+
+/* record counts of first 128 durations directly */
+#define NUM_DIRECT 128
+static long long int direct_histogram[NUM_DIRECT];
+
 static void handle_args(int argc, char *argv[]);
 static uint64 test_timing(unsigned int duration);
 static void output(uint64 loop_count);
-
-/* record duration in powers of 2 microseconds */
-static long long int histogram[32];
 
 int
 main(int argc, char *argv[])
@@ -111,7 +116,6 @@ handle_args(int argc, char *argv[])
 		exit(1);
 	}
 
-
 	printf(ngettext("Testing timing overhead for %u second.\n",
 					"Testing timing overhead for %u seconds.\n",
 					test_duration),
@@ -130,19 +134,19 @@ test_timing(unsigned int duration)
 				end_time,
 				temp;
 
-	total_time = duration > 0 ? duration * INT64CONST(1000000) : 0;
+	total_time = duration > 0 ? duration * INT64CONST(1000000000) : 0;
 
 	INSTR_TIME_SET_CURRENT(start_time);
-	cur = INSTR_TIME_GET_MICROSEC(start_time);
+	cur = INSTR_TIME_GET_NANOSEC(start_time);
 
 	while (time_elapsed < total_time)
 	{
 		int32		diff,
-					bits = 0;
+					bits;
 
 		prev = cur;
 		INSTR_TIME_SET_CURRENT(temp);
-		cur = INSTR_TIME_GET_MICROSEC(temp);
+		cur = INSTR_TIME_GET_NANOSEC(temp);
 		diff = cur - prev;
 
 		/* Did time go backwards? */
@@ -154,18 +158,21 @@ test_timing(unsigned int duration)
 		}
 
 		/* What is the highest bit in the time diff? */
-		while (diff)
-		{
-			diff >>= 1;
-			bits++;
-		}
+		if (diff > 0)
+			bits = pg_leftmost_one_pos32(diff) + 1;
+		else
+			bits = 0;
 
 		/* Update appropriate duration bucket */
 		histogram[bits]++;
 
+		/* Update direct histogram of time diffs */
+		if (diff < NUM_DIRECT)
+			direct_histogram[diff]++;
+
 		loop_count++;
 		INSTR_TIME_SUBTRACT(temp, start_time);
-		time_elapsed = INSTR_TIME_GET_MICROSEC(temp);
+		time_elapsed = INSTR_TIME_GET_NANOSEC(temp);
 	}
 
 	INSTR_TIME_SET_CURRENT(end_time);
@@ -181,28 +188,65 @@ test_timing(unsigned int duration)
 static void
 output(uint64 loop_count)
 {
-	int64		max_bit = 31,
+	int			max_bit = 31,
 				i;
-	char	   *header1 = _("< us");
+	char	   *header1 = _("<= ns");
+	char	   *header1b = _("ns");
 	char	   *header2 = /* xgettext:no-c-format */ _("% of total");
-	char	   *header3 = _("count");
+	char	   *header3 = /* xgettext:no-c-format */ _("running %");
+	char	   *header4 = _("count");
 	int			len1 = strlen(header1);
 	int			len2 = strlen(header2);
 	int			len3 = strlen(header3);
+	int			len4 = strlen(header4);
+	double		rprct;
 
 	/* find highest bit value */
 	while (max_bit > 0 && histogram[max_bit] == 0)
 		max_bit--;
 
-	printf(_("Histogram of timing durations:\n"));
-	printf("%*s   %*s %*s\n",
-		   Max(6, len1), header1,
-		   Max(10, len2), header2,
-		   Max(10, len3), header3);
+	/* set minimum column widths */
+	len1 = Max(8, len1);
+	len2 = Max(10, len2);
+	len3 = Max(10, len3);
+	len4 = Max(10, len4);
 
-	for (i = 0; i <= max_bit; i++)
-		printf("%*ld    %*.5f %*lld\n",
-			   Max(6, len1), 1l << i,
-			   Max(10, len2) - 1, (double) histogram[i] * 100 / loop_count,
-			   Max(10, len3), histogram[i]);
+	printf(_("Histogram of timing durations:\n"));
+	printf("%*s   %*s %*s %*s\n",
+		   len1, header1,
+		   len2, header2,
+		   len3, header3,
+		   len4, header4);
+
+	for (i = 0, rprct = 0; i <= max_bit; i++)
+	{
+		double		prct = (double) histogram[i] * 100 / loop_count;
+
+		rprct += prct;
+		printf("%*ld   %*.4f %*.4f %*lld\n",
+			   len1, (1L << i) - 1,
+			   len2, prct,
+			   len3, rprct,
+			   len4, histogram[i]);
+	}
+
+	printf(_("\nTiming durations less than %d ns:\n"), NUM_DIRECT);
+	printf("%*s   %*s %*s %*s\n",
+		   len1, header1b,
+		   len2, header2,
+		   len3, header3,
+		   len4, header4);
+
+	for (i = 0, rprct = 0; i < NUM_DIRECT; i++)
+	{
+		double		prct = (double) direct_histogram[i] * 100 / loop_count;
+
+		rprct += prct;
+		if (direct_histogram[i])
+			printf("%*d   %*.4f %*.4f %*lld\n",
+				   len1, i,
+				   len2, prct,
+				   len3, rprct,
+				   len4, direct_histogram[i]);
+	}
 }

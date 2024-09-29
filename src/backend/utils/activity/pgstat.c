@@ -10,9 +10,10 @@
  * statistics.
  *
  * Statistics are loaded from the filesystem during startup (by the startup
- * process), unless preceded by a crash, in which case all stats are
- * discarded. They are written out by the checkpointer process just before
- * shutting down, except when shutting down in immediate mode.
+ * process) if the stats file has a redo LSN that matches with the one stored
+ * in the control file. They are written out by the checkpointer during
+ * checkpoints and restart points, as well as before shutting down, except
+ * when shutting down in immediate mode.
  *
  * Fixed-numbered stats are stored in plain (non-dynamic) shared memory.
  *
@@ -481,53 +482,19 @@ pgstat_restore_stats(XLogRecPtr redo)
 }
 
 /*
- * Remove the stats file.  This is currently used only if WAL recovery is
- * needed after a crash.
+ * Write stats in memory to disk.
  *
- * Should only be called by the startup process or in single user mode.
+ * This is called by the checkpointer or in single-user mode.
  */
 void
-pgstat_discard_stats(void)
+pgstat_flush_stats(XLogRecPtr redo)
 {
-	int			ret;
-
-	/* NB: this needs to be done even in single user mode */
-
-	ret = unlink(PGSTAT_STAT_PERMANENT_FILENAME);
-	if (ret != 0)
-	{
-		if (errno == ENOENT)
-			elog(DEBUG2,
-				 "didn't need to unlink permanent stats file \"%s\" - didn't exist",
-				 PGSTAT_STAT_PERMANENT_FILENAME);
-		else
-			ereport(LOG,
-					(errcode_for_file_access(),
-					 errmsg("could not unlink permanent statistics file \"%s\": %m",
-							PGSTAT_STAT_PERMANENT_FILENAME)));
-	}
-	else
-	{
-		ereport(DEBUG2,
-				(errcode_for_file_access(),
-				 errmsg_internal("unlinked permanent statistics file \"%s\"",
-								 PGSTAT_STAT_PERMANENT_FILENAME)));
-	}
-
-	/*
-	 * Reset stats contents. This will set reset timestamps of fixed-numbered
-	 * stats to the current time (no variable stats exist).
-	 */
-	pgstat_reset_after_failure();
+	pgstat_write_statsfile(redo);
 }
 
 /*
  * pgstat_before_server_shutdown() needs to be called by exactly one process
- * during regular server shutdowns. Otherwise all stats will be lost.
- *
- * We currently only write out stats for proc_exit(0). We might want to change
- * that at some point... But right now pgstat_discard_stats() would be called
- * during the start after a disorderly shutdown, anyway.
+ * during regular server shutdowns.
  */
 void
 pgstat_before_server_shutdown(int code, Datum arg)
@@ -552,6 +519,9 @@ pgstat_before_server_shutdown(int code, Datum arg)
 	 */
 	if (code == 0)
 	{
+		/* we're shutting down, so it's ok to just override this */
+		pgstat_fetch_consistency = PGSTAT_FETCH_CONSISTENCY_NONE;
+
 		pgStatLocal.shmem->is_shutdown = true;
 		pgstat_write_statsfile(GetRedoRecPtr());
 	}
@@ -1557,8 +1527,8 @@ write_chunk(FILE *fpout, void *ptr, size_t len)
 #define write_chunk_s(fpout, ptr) write_chunk(fpout, ptr, sizeof(*ptr))
 
 /*
- * This function is called in the last process that is accessing the shared
- * stats so locking is not required.
+ * This function is called in the checkpointer or in single-user mode,
+ * so locking is not required.
  */
 static void
 pgstat_write_statsfile(XLogRecPtr redo)
@@ -1574,9 +1544,6 @@ pgstat_write_statsfile(XLogRecPtr redo)
 
 	/* should be called only by the checkpointer or single user mode */
 	Assert(!IsUnderPostmaster || MyBackendType == B_CHECKPOINTER);
-
-	/* we're shutting down, so it's ok to just override this */
-	pgstat_fetch_consistency = PGSTAT_FETCH_CONSISTENCY_NONE;
 
 	elog(DEBUG2, "writing stats file \"%s\" with redo %X/%X", statfile,
 		 LSN_FORMAT_ARGS(redo));
@@ -1638,7 +1605,6 @@ pgstat_write_statsfile(XLogRecPtr redo)
 		CHECK_FOR_INTERRUPTS();
 
 		/* we may have some "dropped" entries not yet removed, skip them */
-		Assert(!ps->dropped);
 		if (ps->dropped)
 			continue;
 
@@ -2002,9 +1968,6 @@ pgstat_read_statsfile(XLogRecPtr redo)
 
 done:
 	FreeFile(fpin);
-
-	elog(DEBUG2, "removing permanent stats file \"%s\"", statfile);
-	unlink(statfile);
 
 	return;
 

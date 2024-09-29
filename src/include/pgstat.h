@@ -498,9 +498,9 @@ typedef struct PgStat_PendingWalStats
 extern Size StatsShmemSize(void);
 extern void StatsShmemInit(void);
 
-/* Functions called during server startup / shutdown */
+/* Functions called during server startup / checkpoint / shutdown */
 extern void pgstat_restore_stats(XLogRecPtr redo);
-extern void pgstat_discard_stats(void);
+extern void pgstat_flush_stats(XLogRecPtr redo);
 extern void pgstat_before_server_shutdown(int code, Datum arg);
 
 /* Functions for backend initialization */

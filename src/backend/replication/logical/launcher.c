@@ -62,6 +62,9 @@ typedef struct LogicalRepCtxStruct
 	dsa_handle	last_start_dsa;
 	dshash_table_handle last_start_dsh;
 
+	/* Flag to reload the subscription list and start worker if required */
+	bool launcher_reload_sub;
+
 	/* Background workers. */
 	LogicalRepWorker workers[FLEXIBLE_ARRAY_MEMBER];
 } LogicalRepCtxStruct;
@@ -1118,7 +1121,10 @@ static void
 ApplyLauncherWakeup(void)
 {
 	if (LogicalRepCtx->launcher_pid != 0)
+	{
+		LogicalRepCtx->launcher_reload_sub = true;
 		kill(LogicalRepCtx->launcher_pid, SIGUSR1);
+	}
 }
 
 /*
@@ -1163,6 +1169,8 @@ ApplyLauncherMain(Datum main_arg)
 									   "Logical Replication Launcher sublist",
 									   ALLOCSET_DEFAULT_SIZES);
 		oldctx = MemoryContextSwitchTo(subctx);
+
+		LogicalRepCtx->launcher_reload_sub = false;
 
 		/* Start any missing workers for enabled subscriptions. */
 		sublist = get_subscription_list();
@@ -1219,6 +1227,9 @@ ApplyLauncherMain(Datum main_arg)
 		MemoryContextSwitchTo(oldctx);
 		/* Clean the temporary memory. */
 		MemoryContextDelete(subctx);
+
+		if (LogicalRepCtx->launcher_reload_sub)
+			continue;
 
 		/* Wait for more work. */
 		rc = WaitLatch(MyLatch,

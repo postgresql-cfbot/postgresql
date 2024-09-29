@@ -18,7 +18,7 @@ teardown
 
 session "s1"
 setup		{ LOAD 'delay_execution';
-		  SET delay_execution.post_planning_lock_id = 12543; }
+		  SET delay_execution.post_planning_lock_id = 0x7766554433221100; }
 step "s1b"	{ BEGIN; }
 step "s1brr"	{ BEGIN ISOLATION LEVEL REPEATABLE READ; }
 step "s1exec"	{ SELECT * FROM partrem WHERE a <> 1 AND a <> (SELECT 3); }
@@ -33,8 +33,8 @@ session "s2"
 step "s2remp"	{ ALTER TABLE partrem DETACH PARTITION partrem2 CONCURRENTLY; }
 
 session "s3"
-step "s3lock"	{ SELECT pg_advisory_lock(12543); }
-step "s3unlock"	{ SELECT pg_advisory_unlock(12543); }
+step "s3lock"	{ SELECT pg_advisory_lock(0x7766554433221100); }
+step "s3unlock"	{ SELECT pg_advisory_unlock(0x7766554433221100); }
 step "s3check"	{ SELECT * FROM partrem; }
 
 # The SELECT will be planned with all three partitions shown above,

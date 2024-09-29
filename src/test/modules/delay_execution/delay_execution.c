@@ -31,7 +31,7 @@
 PG_MODULE_MAGIC;
 
 /* GUC: advisory lock ID to use.  Zero disables the feature. */
-static int	post_planning_lock_id = 0;
+static int64 post_planning_lock_id = 0;
 
 /* Save previous planner hook user to be a good citizen */
 static planner_hook_type prev_planner_hook = NULL;
@@ -56,9 +56,9 @@ delay_execution_planner(Query *parse, const char *query_string,
 	if (post_planning_lock_id != 0)
 	{
 		DirectFunctionCall1(pg_advisory_lock_int8,
-							Int64GetDatum((int64) post_planning_lock_id));
+							Int64GetDatum(post_planning_lock_id));
 		DirectFunctionCall1(pg_advisory_unlock_int8,
-							Int64GetDatum((int64) post_planning_lock_id));
+							Int64GetDatum(post_planning_lock_id));
 
 		/*
 		 * Ensure that we notice any pending invalidations, since the advisory
@@ -75,17 +75,17 @@ void
 _PG_init(void)
 {
 	/* Set up the GUC to control which lock is used */
-	DefineCustomIntVariable("delay_execution.post_planning_lock_id",
-							"Sets the advisory lock ID to be locked/unlocked after planning.",
-							"Zero disables the delay.",
-							&post_planning_lock_id,
-							0,
-							0, INT_MAX,
-							PGC_USERSET,
-							0,
-							NULL,
-							NULL,
-							NULL);
+	DefineCustomInt64Variable("delay_execution.post_planning_lock_id",
+							  "Sets the advisory lock ID to be locked/unlocked after planning.",
+							  "Zero disables the delay.",
+							  &post_planning_lock_id,
+							  0,
+							  0, PG_INT64_MAX,
+							  PGC_USERSET,
+							  0,
+							  NULL,
+							  NULL,
+							  NULL);
 
 	MarkGUCPrefixReserved("delay_execution");
 

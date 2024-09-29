@@ -1,7 +1,7 @@
 Parsed test spec with 3 sessions
 
 starting permutation: s3lock s1b s1exec s2remp s3check s3unlock s3check s1c
-step s3lock: SELECT pg_advisory_lock(12543);
+step s3lock: SELECT pg_advisory_lock(0x7766554433221100);
 pg_advisory_lock
 ----------------
                 
@@ -17,7 +17,7 @@ a|b
 3|DEF
 (2 rows)
 
-step s3unlock: SELECT pg_advisory_unlock(12543);
+step s3unlock: SELECT pg_advisory_unlock(0x7766554433221100);
 pg_advisory_unlock
 ------------------
 t                 
@@ -40,7 +40,7 @@ step s1c: COMMIT;
 step s2remp: <... completed>
 
 starting permutation: s3lock s1brr s1exec s2remp s3check s3unlock s3check s1c
-step s3lock: SELECT pg_advisory_lock(12543);
+step s3lock: SELECT pg_advisory_lock(0x7766554433221100);
 pg_advisory_lock
 ----------------
                 
@@ -56,7 +56,7 @@ a|b
 3|DEF
 (2 rows)
 
-step s3unlock: SELECT pg_advisory_unlock(12543);
+step s3unlock: SELECT pg_advisory_unlock(0x7766554433221100);
 pg_advisory_unlock
 ------------------
 t                 
@@ -79,7 +79,7 @@ step s1c: COMMIT;
 step s2remp: <... completed>
 
 starting permutation: s3lock s1b s1exec2 s2remp s3unlock s1c
-step s3lock: SELECT pg_advisory_lock(12543);
+step s3lock: SELECT pg_advisory_lock(0x7766554433221100);
 pg_advisory_lock
 ----------------
                 
@@ -88,7 +88,7 @@ pg_advisory_lock
 step s1b: BEGIN;
 step s1exec2: SELECT * FROM partrem WHERE a <> (SELECT 2) AND a <> 1; <waiting ...>
 step s2remp: ALTER TABLE partrem DETACH PARTITION partrem2 CONCURRENTLY; <waiting ...>
-step s3unlock: SELECT pg_advisory_unlock(12543);
+step s3unlock: SELECT pg_advisory_unlock(0x7766554433221100);
 pg_advisory_unlock
 ------------------
 t                 
@@ -104,7 +104,7 @@ step s1c: COMMIT;
 step s2remp: <... completed>
 
 starting permutation: s3lock s1brr s1exec2 s2remp s3unlock s1c
-step s3lock: SELECT pg_advisory_lock(12543);
+step s3lock: SELECT pg_advisory_lock(0x7766554433221100);
 pg_advisory_lock
 ----------------
                 
@@ -113,7 +113,7 @@ pg_advisory_lock
 step s1brr: BEGIN ISOLATION LEVEL REPEATABLE READ;
 step s1exec2: SELECT * FROM partrem WHERE a <> (SELECT 2) AND a <> 1; <waiting ...>
 step s2remp: ALTER TABLE partrem DETACH PARTITION partrem2 CONCURRENTLY; <waiting ...>
-step s3unlock: SELECT pg_advisory_unlock(12543);
+step s3unlock: SELECT pg_advisory_unlock(0x7766554433221100);
 pg_advisory_unlock
 ------------------
 t                 
@@ -129,7 +129,7 @@ step s1c: COMMIT;
 step s2remp: <... completed>
 
 starting permutation: s3lock s1brr s1prepare s2remp s1execprep s3unlock s1check s1c s1check s1dealloc
-step s3lock: SELECT pg_advisory_lock(12543);
+step s3lock: SELECT pg_advisory_lock(0x7766554433221100);
 pg_advisory_lock
 ----------------
                 
@@ -139,7 +139,7 @@ step s1brr: BEGIN ISOLATION LEVEL REPEATABLE READ;
 step s1prepare: PREPARE ins AS INSERT INTO partrem VALUES ($1, 'GHI');
 step s2remp: ALTER TABLE partrem DETACH PARTITION partrem2 CONCURRENTLY; <waiting ...>
 step s1execprep: EXECUTE ins(2); <waiting ...>
-step s3unlock: SELECT pg_advisory_unlock(12543);
+step s3unlock: SELECT pg_advisory_unlock(0x7766554433221100);
 pg_advisory_unlock
 ------------------
 t                 
@@ -165,14 +165,14 @@ starting permutation: s1brr s1prepare s2remp s3lock s1execprep s3unlock s1check 
 step s1brr: BEGIN ISOLATION LEVEL REPEATABLE READ;
 step s1prepare: PREPARE ins AS INSERT INTO partrem VALUES ($1, 'GHI');
 step s2remp: ALTER TABLE partrem DETACH PARTITION partrem2 CONCURRENTLY; <waiting ...>
-step s3lock: SELECT pg_advisory_lock(12543);
+step s3lock: SELECT pg_advisory_lock(0x7766554433221100);
 pg_advisory_lock
 ----------------
                 
 (1 row)
 
 step s1execprep: EXECUTE ins(2); <waiting ...>
-step s3unlock: SELECT pg_advisory_unlock(12543);
+step s3unlock: SELECT pg_advisory_unlock(0x7766554433221100);
 pg_advisory_unlock
 ------------------
 t                 
@@ -201,7 +201,7 @@ a|b
 -+-
 (0 rows)
 
-step s3lock: SELECT pg_advisory_lock(12543);
+step s3lock: SELECT pg_advisory_lock(0x7766554433221100);
 pg_advisory_lock
 ----------------
                 
@@ -210,7 +210,7 @@ pg_advisory_lock
 step s2remp: ALTER TABLE partrem DETACH PARTITION partrem2 CONCURRENTLY; <waiting ...>
 step s1prepare: PREPARE ins AS INSERT INTO partrem VALUES ($1, 'GHI');
 step s1execprep: EXECUTE ins(2); <waiting ...>
-step s3unlock: SELECT pg_advisory_unlock(12543);
+step s3unlock: SELECT pg_advisory_unlock(0x7766554433221100);
 pg_advisory_unlock
 ------------------
 t                 

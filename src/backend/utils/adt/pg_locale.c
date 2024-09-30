@@ -58,6 +58,7 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_database.h"
 #include "common/hashfn.h"
+#include "common/string.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
@@ -341,12 +342,30 @@ check_locale(int category, const char *locale, char **canonname)
 	char	   *save;
 	char	   *res;
 
+	/* Don't let Windows' non-ASCII locale names in. */
+	if (!pg_is_ascii(locale))
+	{
+		ereport(WARNING,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("locale name \"%s\" contains non-ASCII characters",
+						locale)));
+		return false;
+	}
+
 	if (canonname)
 		*canonname = NULL;		/* in case of failure */
 
 	save = setlocale(category, NULL);
 	if (!save)
 		return false;			/* won't happen, we hope */
+
+	/*
+	 * The global locale should already have been defended against Windows'
+	 * non-ASCII locale names that can't be safely saved-and-restored using C
+	 * strings, but just in case we see one here, we'll log a warning.
+	 */
+	if (!pg_is_ascii(save))
+		elog(WARNING, "locale name \"%s\" contains non-ASCII characters", save);
 
 	/* save may be pointing at a modifiable scratch variable, see above. */
 	save = pstrdup(save);
@@ -362,6 +381,18 @@ check_locale(int category, const char *locale, char **canonname)
 	if (!setlocale(category, save))
 		elog(WARNING, "failed to restore old locale \"%s\"", save);
 	pfree(save);
+
+	/* Don't let Windows' non-ASCII locale names out. */
+	if (canonname && *canonname && !pg_is_ascii(*canonname))
+	{
+		ereport(WARNING,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("locale name \"%s\" contains non-ASCII characters",
+						*canonname)));
+		pfree(*canonname);
+		*canonname = NULL;
+		return false;
+	}
 
 	return (res != NULL);
 }

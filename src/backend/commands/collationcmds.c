@@ -263,7 +263,6 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 						 errmsg("parameter \"%s\" must be specified",
 								"lc_collate")));
-
 			if (!collctype)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),

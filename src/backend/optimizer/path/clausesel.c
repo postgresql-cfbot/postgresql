@@ -692,9 +692,6 @@ clause_selectivity_ext(PlannerInfo *root,
 	RestrictInfo *rinfo = NULL;
 	bool		cacheable = false;
 
-	if (clause == NULL)			/* can this still happen? */
-		return s1;
-
 	if (IsA(clause, RestrictInfo))
 	{
 		rinfo = (RestrictInfo *) clause;

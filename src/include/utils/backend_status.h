@@ -11,6 +11,7 @@
 #define BACKEND_STATUS_H
 
 #include "datatype/timestamp.h"
+#include "libpq/hba.h"
 #include "libpq/pqcomm.h"
 #include "miscadmin.h"			/* for BackendType */
 #include "storage/procnumber.h"
@@ -131,6 +132,10 @@ typedef struct PgBackendStatus
 	Oid			st_userid;
 	SockAddr	st_clientaddr;
 	char	   *st_clienthostname;	/* MUST be null-terminated */
+
+	/* Information about the authenticated user */
+	UserAuth	st_auth_method;
+	char		st_auth_identity[NAMEDATALEN];
 
 	/* Information about SSL connection */
 	bool		st_ssl;

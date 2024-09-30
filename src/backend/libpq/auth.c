@@ -623,9 +623,20 @@ ClientAuthentication(Port *port)
 			status = CheckRADIUSAuth(port);
 			break;
 		case uaCert:
-			/* uaCert will be treated as if clientcert=verify-full (uaTrust) */
+
+			/*
+			 * uaCert will be treated as if clientcert=verify-full further
+			 * down
+			 */
+			break;
 		case uaTrust:
 			status = STATUS_OK;
+
+			/*
+			 * Trust doesn't set_authn_id(), but we still need to store the
+			 * auth_method
+			 */
+			MyClientConnectionInfo.auth_method = uaTrust;
 			break;
 	}
 
@@ -642,6 +653,12 @@ ClientAuthentication(Port *port)
 		Assert(false);
 #endif
 	}
+
+	/*
+	 * All auth methods should have either called set_authn_id() or manually
+	 * set the auth_method if they were successful.
+	 */
+	Assert(status != STATUS_OK || MyClientConnectionInfo.auth_method != 0);
 
 	if (Log_connections && status == STATUS_OK &&
 		!MyClientConnectionInfo.authn_id)

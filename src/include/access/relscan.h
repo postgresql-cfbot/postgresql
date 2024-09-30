@@ -205,6 +205,12 @@ typedef struct IndexScanBatchData
 	/* memory context for per-batch data */
 	MemoryContext ctx;
 
+	/*
+	 * Was this batch just restored by restrpos? if yes, we don't advance on
+	 * the first iteration.
+	 */
+	bool		restored;
+
 	/* batch prefetching */
 	int			prefetchTarget; /* current prefetch distance */
 	int			prefetchMaximum;	/* maximum prefetch distance */

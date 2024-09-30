@@ -108,7 +108,9 @@ emit_log_hook_type emit_log_hook = NULL;
 int			Log_error_verbosity = PGERROR_DEFAULT;
 char	   *Log_line_prefix = NULL; /* format for extra log line info */
 int			Log_destination = LOG_DESTINATION_STDERR;
+int			Log_duration_destination = 0;
 char	   *Log_destination_string = NULL;
+char	   *Log_duration_destination_string = NULL;
 bool		syslog_sequence_numbers = true;
 bool		syslog_split_messages = true;
 
@@ -441,6 +443,7 @@ errstart(int elevel, const char *domain)
 	/* Initialize data for this error frame */
 	edata = get_error_stack_entry();
 	edata->elevel = elevel;
+	edata->message_type = LOG_MESSAGE_TYPE_DEFAULT;
 	edata->output_to_server = output_to_server;
 	edata->output_to_client = output_to_client;
 	set_stack_entry_domain(edata, domain);
@@ -1456,6 +1459,24 @@ errposition(int cursorpos)
 }
 
 /*
+ * errmessagetype --- set type for possible future filtering
+ */
+int
+errmessagetype(int type)
+{
+	ErrorData  *edata = &errordata[errordata_stack_depth];
+
+	/* we don't bother incrementing recursion_depth */
+	CHECK_STACK_DEPTH();
+
+	Assert(type >= 0);
+
+	edata->message_type = type;
+
+	return 0;					/* return value does not matter */
+}
+
+/*
  * internalerrposition --- add internal cursor position to the current error
  */
 int
@@ -2294,6 +2315,69 @@ void
 assign_log_destination(const char *newval, void *extra)
 {
 	Log_destination = *((int *) extra);
+}
+
+/*
+ * GUC check_hook for log_duration_destination
+ */
+bool
+check_log_duration_destination(char **newval, void **extra, GucSource source)
+{
+	char	   *rawstring;
+	List	   *elemlist;
+	ListCell   *l;
+	int			newlogdest = 0;
+	int		   *myextra;
+
+	/* Need a modifiable copy of string */
+	rawstring = pstrdup(*newval);
+
+	/* Parse string into list of identifiers */
+	if (!SplitIdentifierString(rawstring, ',', &elemlist))
+	{
+		/* syntax error in list */
+		GUC_check_errdetail("List syntax is invalid.");
+		pfree(rawstring);
+		list_free(elemlist);
+		return false;
+	}
+
+	foreach(l, elemlist)
+	{
+		char	   *tok = (char *) lfirst(l);
+
+		if (pg_strcasecmp(tok, "stderr") == 0)
+			newlogdest |= LOG_DESTINATION_STDERR;
+		else if (pg_strcasecmp(tok, "csvlog") == 0)
+			newlogdest |= LOG_DESTINATION_CSVLOG;
+		else if (pg_strcasecmp(tok, "jsonlog") == 0)
+			newlogdest |= LOG_DESTINATION_JSONLOG;
+		else
+		{
+			GUC_check_errdetail("Unrecognized key word: \"%s\".", tok);
+			pfree(rawstring);
+			list_free(elemlist);
+			return false;
+		}
+	}
+
+	pfree(rawstring);
+	list_free(elemlist);
+
+	myextra = (int *) guc_malloc(ERROR, sizeof(int));
+	*myextra = newlogdest;
+	*extra = (void *) myextra;
+
+	return true;
+}
+
+/*
+ * GUC assign_hook for log_duration_destination
+ */
+void
+assign_log_duration_destination(const char *newval, void *extra)
+{
+	Log_duration_destination = *((int *) extra);
 }
 
 /*
@@ -3333,8 +3417,17 @@ send_message_to_server_log(ErrorData *edata)
 	}
 #endif							/* WIN32 */
 
-	/* Write to csvlog, if enabled */
-	if (Log_destination & LOG_DESTINATION_CSVLOG)
+	/*
+	 * Write to csvlog, if enabled. If this is a duration, only send if csv is
+	 * a duration destination, or if the duration destination is not set at
+	 * all.
+	 */
+	if ((((edata->message_type != LOG_MESSAGE_TYPE_DURATION) ||
+		  (Log_duration_destination == 0)) &&
+		 (Log_destination & LOG_DESTINATION_CSVLOG))
+		||
+		((edata->message_type == LOG_MESSAGE_TYPE_DURATION) &&
+		 (Log_duration_destination & LOG_DESTINATION_CSVLOG)))
 	{
 		/*
 		 * Send CSV data if it's safe to do so (syslogger doesn't need the
@@ -3348,7 +3441,12 @@ send_message_to_server_log(ErrorData *edata)
 	}
 
 	/* Write to JSON log, if enabled */
-	if (Log_destination & LOG_DESTINATION_JSONLOG)
+	if ((((edata->message_type != LOG_MESSAGE_TYPE_DURATION) ||
+		  (Log_duration_destination == 0)) &&
+		 (Log_destination & LOG_DESTINATION_JSONLOG))
+		||
+		((edata->message_type == LOG_MESSAGE_TYPE_DURATION) &&
+		 (Log_duration_destination & LOG_DESTINATION_JSONLOG)))
 	{
 		/*
 		 * Send JSON data if it's safe to do so (syslogger doesn't need the
@@ -3361,6 +3459,15 @@ send_message_to_server_log(ErrorData *edata)
 		}
 		else
 			fallback_to_stderr = true;
+	}
+
+
+	/* If this is a duration, make sure it goes somewhere */
+	if ((edata->message_type == LOG_MESSAGE_TYPE_DURATION) &&
+		!(Log_duration_destination & LOG_DESTINATION_CSVLOG) &&
+		!(Log_duration_destination & LOG_DESTINATION_JSONLOG))
+	{
+		fallback_to_stderr = true;
 	}
 
 	/*
@@ -3377,7 +3484,24 @@ send_message_to_server_log(ErrorData *edata)
 		 * Otherwise, just do a vanilla write to stderr.
 		 */
 		if (redirection_done && MyBackendType != B_LOGGER)
-			write_pipe_chunks(buf.data, buf.len, LOG_DESTINATION_STDERR);
+		{
+			/* Write to the duration file if explicitly asked to */
+			if ((edata->message_type == LOG_MESSAGE_TYPE_DURATION) &&
+				(Log_duration_destination & LOG_DESTINATION_STDERR))
+				write_pipe_chunks(buf.data, buf.len, LOG_DESTINATION_DURATION);
+
+			/*
+			 * If this is a duration and we have already written it above, do
+			 * nothing
+			 */
+			else if ((edata->message_type == LOG_MESSAGE_TYPE_DURATION) &&
+					 ((Log_duration_destination & LOG_DESTINATION_CSVLOG) ||
+					  (Log_duration_destination & LOG_DESTINATION_JSONLOG)))
+				;
+			/* Otherwise, fall back to stderr */
+			else
+				write_pipe_chunks(buf.data, buf.len, LOG_DESTINATION_STDERR);
+		}
 #ifdef WIN32
 
 		/*
@@ -3434,12 +3558,19 @@ write_pipe_chunks(char *data, int len, int dest)
 	p.proto.nuls[0] = p.proto.nuls[1] = '\0';
 	p.proto.pid = MyProcPid;
 	p.proto.flags = 0;
+
 	if (dest == LOG_DESTINATION_STDERR)
 		p.proto.flags |= PIPE_PROTO_DEST_STDERR;
 	else if (dest == LOG_DESTINATION_CSVLOG)
 		p.proto.flags |= PIPE_PROTO_DEST_CSVLOG;
 	else if (dest == LOG_DESTINATION_JSONLOG)
 		p.proto.flags |= PIPE_PROTO_DEST_JSONLOG;
+	else if (dest == LOG_DESTINATION_DURATION)
+		p.proto.flags |= PIPE_PROTO_DEST_DURATION;
+	else if (dest == LOG_DESTINATION_DURATION_CSV)
+		p.proto.flags |= (PIPE_PROTO_DEST_DURATION | PIPE_PROTO_DEST_CSVLOG);
+	else if (dest == LOG_DESTINATION_DURATION_JSON)
+		p.proto.flags |= (PIPE_PROTO_DEST_DURATION | PIPE_PROTO_DEST_JSONLOG);
 
 	/* write all but the last chunk */
 	while (len > PIPE_MAX_PAYLOAD)

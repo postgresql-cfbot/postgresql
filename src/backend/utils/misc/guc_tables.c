@@ -4421,6 +4421,18 @@ struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		{"log_duration_destination", PGC_SIGHUP, LOGGING_WHERE,
+			gettext_noop("Sets the destination for duration log entries."),
+			gettext_noop("Valid values are combinations of \"stderr\", "
+						 "\"csvlog\", and \"jsonlog\"."),
+			GUC_LIST_INPUT
+		},
+		&Log_duration_destination_string,
+		"",
+		check_log_duration_destination, assign_log_duration_destination, NULL
+	},
+
+	{
 		{"syslog_ident", PGC_SIGHUP, LOGGING_WHERE,
 			gettext_noop("Sets the program name used to identify PostgreSQL "
 						 "messages in syslog."),

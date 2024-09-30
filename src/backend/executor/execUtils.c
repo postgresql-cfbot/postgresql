@@ -591,7 +591,7 @@ tlist_matches_tupdesc(PlanState *ps, List *tlist, int varno, TupleDesc tupdesc)
 	/* Check the tlist attributes */
 	for (attrno = 1; attrno <= numattrs; attrno++)
 	{
-		Form_pg_attribute att_tup = TupleDescAttr(tupdesc, attrno - 1);
+		Form_pg_attribute att_tup;
 		Var		   *var;
 
 		if (tlist_item == NULL)
@@ -604,6 +604,7 @@ tlist_matches_tupdesc(PlanState *ps, List *tlist, int varno, TupleDesc tupdesc)
 		Assert(var->varlevelsup == 0);
 		if (var->varattno != attrno)
 			return false;		/* out of order */
+		att_tup = TupleDescAttr(tupdesc, attrno - 1);
 		if (att_tup->attisdropped)
 			return false;		/* table contains dropped columns */
 		if (att_tup->atthasmissing)

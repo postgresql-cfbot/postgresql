@@ -1654,7 +1654,7 @@ ExecHashJoinEstimate(HashJoinState *state, ParallelContext *pcxt)
 void
 ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 {
-	int			plan_node_id = state->js.ps.plan->plan_node_id;
+	int			plan_node_id;
 	HashState  *hashNode;
 	ParallelHashJoinState *pstate;
 
@@ -1671,6 +1671,7 @@ ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
 	 * Set up the state needed to coordinate access to the shared hash
 	 * table(s), using the plan node ID as the toc key.
 	 */
+	plan_node_id = state->js.ps.plan->plan_node_id;
 	pstate = shm_toc_allocate(pcxt->toc, sizeof(ParallelHashJoinState));
 	shm_toc_insert(pcxt->toc, plan_node_id, pstate);
 

@@ -409,9 +409,9 @@ group_keys_reorder_by_pathkeys(List *pathkeys, List **group_pathkeys,
 		 * Give up if we can't find the matching pointer.  Also give up if
 		 * there is no sortclause reference for some reason.
 		 */
-		if (foreach_current_index(lc) >= num_groupby_pathkeys ||
-			!list_member_ptr(grouping_pathkeys, pathkey) ||
-			pathkey->pk_eclass->ec_sortref == 0)
+		if (pathkey->pk_eclass->ec_sortref == 0 ||
+			foreach_current_index(lc) >= num_groupby_pathkeys ||
+			!list_member_ptr(grouping_pathkeys, pathkey))
 			break;
 
 		/*

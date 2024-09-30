@@ -679,8 +679,6 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 	 */
 	if (node && node->onConflictAction != ONCONFLICT_NONE)
 	{
-		TupleDesc	partrelDesc = RelationGetDescr(partrel);
-		ExprContext *econtext = mtstate->ps.ps_ExprContext;
 		ListCell   *lc;
 		List	   *arbiterIndexes = NIL;
 
@@ -771,6 +769,8 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 			}
 			else
 			{
+				TupleDesc	partrelDesc = RelationGetDescr(partrel);
+				ExprContext *econtext = mtstate->ps.ps_ExprContext;
 				List	   *onconflset;
 				List	   *onconflcols;
 

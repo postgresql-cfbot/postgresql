@@ -1044,7 +1044,7 @@ slot_deform_heap_tuple(TupleTableSlot *slot, HeapTuple tuple, uint32 *offp,
 
 	for (; attnum < natts; attnum++)
 	{
-		Form_pg_attribute thisatt = TupleDescAttr(tupleDesc, attnum);
+		Form_pg_attribute thisatt;
 
 		if (hasnulls && att_isnull(attnum, bp))
 		{
@@ -1056,6 +1056,7 @@ slot_deform_heap_tuple(TupleTableSlot *slot, HeapTuple tuple, uint32 *offp,
 
 		isnull[attnum] = false;
 
+		thisatt = TupleDescAttr(tupleDesc, attnum);
 		if (!slow && thisatt->attcacheoff >= 0)
 			off = thisatt->attcacheoff;
 		else if (thisatt->attlen == -1)

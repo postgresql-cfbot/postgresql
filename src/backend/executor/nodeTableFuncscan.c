@@ -400,11 +400,10 @@ tfuncInitialize(TableFuncScanState *tstate, ExprContext *econtext, Datum doc)
 	tupdesc = tstate->ss.ss_ScanTupleSlot->tts_tupleDescriptor;
 	foreach(lc1, tstate->colexprs)
 	{
-		char	   *colfilter;
-		Form_pg_attribute att = TupleDescAttr(tupdesc, colno);
-
 		if (colno != ordinalitycol)
 		{
+			char	   *colfilter;
+			Form_pg_attribute att = TupleDescAttr(tupdesc, colno);
 			ExprState  *colexpr = lfirst(lc1);
 
 			if (colexpr != NULL)
@@ -472,8 +471,6 @@ tfuncLoadRows(TableFuncScanState *tstate, ExprContext *econtext)
 		 */
 		for (colno = 0; colno < natts; colno++)
 		{
-			Form_pg_attribute att = TupleDescAttr(tupdesc, colno);
-
 			if (colno == ordinalitycol)
 			{
 				/* Fast path for ordinality column */
@@ -482,6 +479,7 @@ tfuncLoadRows(TableFuncScanState *tstate, ExprContext *econtext)
 			}
 			else
 			{
+				Form_pg_attribute att = TupleDescAttr(tupdesc, colno);
 				bool		isnull;
 
 				values[colno] = routine->GetValue(tstate,

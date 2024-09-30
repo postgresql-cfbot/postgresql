@@ -984,7 +984,7 @@ processSQLNamePattern(PGconn *conn, PQExpBuffer buf, const char *pattern,
 		/* We have a schema pattern, so constrain the schemavar */
 
 		/* Optimize away a "*" pattern */
-		if (strcmp(schemabuf.data, "^(.*)$") != 0 && schemavar)
+		if (strcmp(schemabuf.data, "^(.*)$") != 0)
 		{
 			WHEREAND();
 			appendPQExpBuffer(buf, "%s OPERATOR(pg_catalog.~) ", schemavar);

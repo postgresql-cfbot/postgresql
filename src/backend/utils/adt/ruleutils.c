@@ -4606,7 +4606,7 @@ set_join_column_names(deparse_namespace *dpns, RangeTblEntry *rte,
 		if (colname == NULL)
 		{
 			/* If user wrote an alias, prefer that over real column name */
-			if (rte->alias && i < list_length(rte->alias->colnames))
+			if (i < list_length(rte->alias->colnames))
 				colname = strVal(list_nth(rte->alias->colnames, i));
 			else
 				colname = real_colname;
